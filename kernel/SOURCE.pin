@@ -1,0 +1,15 @@
+# novadeck kernel source pin — Phase 1
+# The TARBALL + its sha256 is the canonical pin. Validated 2026-06-17.
+version:    7.0.11
+url:        https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.0.11.tar.xz
+sha256:     e56c8356dda01136a6041c6ef832bd0ec99bd2d35dff97832aa5ec10ed014304
+git_tag:    v7.0.11
+git_commit: bb532bfaf7919c7c98caab81864e9ce2646e11e3
+
+# Config validation (kernel/config/sm8650.config) against THIS tree:
+#   - all referenced CONFIG_* symbols exist in 7.0.11.
+# Corrections applied during validation:
+#   MFD_QCOM_SPMI_PMIC  -> MFD_SPMI_PMIC
+#   PHY_QCOM_SNPS_EUSB2 -> PHY_SNPS_EUSB2 (+ PHY_QCOM_EUSB2_REPEATER)
+#   SM_DISPCC_8650      -> SM_DISPCC_8550 (SM8650 reuses the 8550 display clock controller;
+#                          no separate _8650 dispcc upstream — symbols jump 8550 -> 8750)

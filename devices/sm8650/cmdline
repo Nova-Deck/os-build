@@ -1,0 +1,1 @@
+earlycon console=ttyMSM0,115200n8 clk_ignore_unused pd_ignore_unused rootwait rw

@@ -1,0 +1,18 @@
+# novadeck device manifest — SM8650 (lead bring-up target)
+soc: sm8650
+soc_name: "Qualcomm Snapdragon 8 Gen 3"
+gpu:
+  model: "Adreno 750"
+  kernel_driver: msm        # DRM/MSM in-kernel
+  vulkan: turnip            # Mesa userspace (ships in upstream base)
+kernel:
+  page_size: 4k             # REQUIRED for FEX-Emu (Phase 3)
+  config_fragment: kernel/config/sm8650.config
+  # Reference board DT from mainline; per-device board DT is TBD once target HW is chosen.
+  dtb: qcom/sm8650-mtp.dtb  # alt: qcom/sm8650-qrd.dtb
+boot:
+  backend: android-bootimg  # default; edk2/UEFI is the Phase 5 alternative
+  cmdline_file: devices/sm8650/cmdline
+firmware:
+  manifest: devices/sm8650/firmware-manifest.txt
+status: phase-1-scaffold

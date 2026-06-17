@@ -1,6 +1,12 @@
-# devices/sm8650
+# devices/sm8650 — Snapdragon 8 Gen 3 (lead target)
 
-Per-SoC enablement: device tree, kernel config delta, firmware manifest, and boot
-backend selection. GPU: Adreno-750. (Snapdragon 8-Gen-3.)
+GPU: **Adreno 750** (kernel `msm`, userspace **Turnip** Vulkan).
 
-_Phase 0 placeholder — populated in Phases 1 & 6._
+| File | Purpose |
+|---|---|
+| `device.yaml` | SoC manifest: GPU, kernel page size, DT, boot backend, firmware ref |
+| `cmdline` | Kernel command line (UART console + boot flags) |
+| `firmware-manifest.txt` | Required firmware: `linux-fw` (from base) vs `device` (extract) |
+| `bringup.md` | Ordered bring-up checklist + Phase 1 gate criteria |
+
+_Phase 1 scaffold._

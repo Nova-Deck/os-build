@@ -1,0 +1,19 @@
+# SM8650 firmware manifest — Phase 1 scaffold
+#
+# Source legend:
+#   linux-fw : ships in the upstream base's linux-firmware package (no extraction)
+#   device   : signed/vendor blob — MUST be extracted from the target device's own
+#              partitions (see firmware/extract.sh). NEVER committed to this repo.
+#
+# NOTE: exact filenames vary by kernel/firmware version and device — VERIFY against
+# the pinned kernel's `MODULE_FIRMWARE`/devicetree and the device's vendor partition.
+#
+# source     install-path (under /lib/firmware)        notes
+linux-fw     qcom/gen70900_sqe.fw                       Adreno 7xx SQE microcode (verify exact gen id)
+linux-fw     qcom/gen70900_gmu.bin                      Adreno GMU firmware (verify exact gen id)
+device       qcom/sm8650/a750_zap.mbn                   GPU zap shader — signed per device
+device       qcom/sm8650/adsp.mbn                       audio/sensors DSP image
+device       qcom/sm8650/adsp_dtb.mbn                   adsp devicetree blob
+device       qcom/sm8650/cdsp.mbn                       compute DSP image
+device       qcom/sm8650/cdsp_dtb.mbn                   cdsp devicetree blob
+# Wi-Fi/BT (ath12k/WCN7850-class) firmware path TBD — confirm on target hardware.

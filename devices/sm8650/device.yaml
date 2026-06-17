@@ -8,8 +8,17 @@ gpu:
 kernel:
   page_size: 4k             # REQUIRED for FEX-Emu (Phase 3)
   config_fragment: kernel/config/sm8650.config
-  # Reference board DT from mainline; per-device board DT is TBD once target HW is chosen.
-  dtb: qcom/sm8650-mtp.dtb  # alt: qcom/sm8650-qrd.dtb
+  patches: kernel/patches/  # applied in lexical order by kernel/build.sh
+  dts_dir: kernel/dts/qcom  # injected into arch/arm64/boot/dts/qcom at build
+boards:                     # SM8650 handheld targets
+  - name: "AYANEO Pocket S2"
+    compatible: ayaneo,pocket-s2
+    dts: kernel/dts/qcom/sm8650-ayaneo-ps2.dts
+    dtb: sm8650-ayaneo-ps2.dtb
+  - name: "KONKR Pocket FIT"
+    compatible: konkr,pocket-fit
+    dts: kernel/dts/qcom/sm8650-konkr-pf.dts
+    dtb: sm8650-konkr-pf.dtb
 boot:
   backend: android-bootimg  # default; edk2/UEFI is the Phase 5 alternative
   cmdline_file: devices/sm8650/cmdline

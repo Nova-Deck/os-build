@@ -1,0 +1,45 @@
+# Vendored upstream reference (cloned separately, has its own .git)
+/_vendor/
+
+# Build outputs
+/out/
+/build/
+/work/
+*.img
+*.img.*
+*.raw
+*.iso
+*.tar
+*.tar.*
+*.squashfs
+*.erofs
+*.caibx
+*.caidx
+*.castr/
+*.raucb
+
+# Pacman/devtools build artifacts
+*.pkg.tar.zst
+*.pkg.tar.xz
+src/
+pkg/
+/.makepkg/
+
+# Extracted vendor firmware blobs (never commit proprietary blobs)
+/firmware/blobs/
+/firmware/extracted/
+
+# Local Claude Code settings (keep .claude/plans/ tracked)
+/.claude/settings.local.json
+
+# Local secrets / signing material
+*.key
+*.pem
+cosign.key
+*.gpg
+/secrets/
+
+# Editor / OS noise
+*.swp
+*~
+.DS_Store

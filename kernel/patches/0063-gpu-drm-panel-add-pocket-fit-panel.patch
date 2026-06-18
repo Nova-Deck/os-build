@@ -4,17 +4,17 @@ Date: Tue, 13 Jan 2026 20:48:26 +0100
 Subject: [PATCH] gpu:drm:panel:add pocket fit panel
 
 ---
- drivers/gpu/drm/panel/Kconfig            |  13 +
+ drivers/gpu/drm/panel/Kconfig            |  16 +
  drivers/gpu/drm/panel/Makefile           |   1 +
  drivers/gpu/drm/panel/panel-ar14-144hz.c | 481 +++++++++++++++++++++++
- 3 files changed, 495 insertions(+)
+ 3 files changed, 498 insertions(+)
  create mode 100644 drivers/gpu/drm/panel/panel-ar14-144hz.c
 
 diff --git a/drivers/gpu/drm/panel/Kconfig b/drivers/gpu/drm/panel/Kconfig
 index 407c5f6a268b..6481e0100061 100644
 --- a/drivers/gpu/drm/panel/Kconfig
 +++ b/drivers/gpu/drm/panel/Kconfig
-@@ -17,6 +17,19 @@ config DRM_PANEL_ABT_Y030XX067A
+@@ -17,6 +17,22 @@ config DRM_PANEL_ABT_Y030XX067A
  	  Y030XX067A 320x480 3.0" panel as found in the YLM RG-280M, RG-300
  	  and RG-99 handheld gaming consoles.
  
@@ -24,6 +24,9 @@ index 407c5f6a268b..6481e0100061 100644
 +	depends on DRM_MIPI_DSI
 +	depends on BACKLIGHT_CLASS_DEVICE
 +	select VIDEOMODE_HELPERS
++	select DRM_KMS_HELPER
++	select DRM_DISPLAY_HELPER
++	select DRM_DISPLAY_DSC_HELPER
 +	help
 +	  Say Y here if you want to enable support for Ayaneo Pocket FIT
 +	  1080x1920 144Hz video mode display panels. These panels are

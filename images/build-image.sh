@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# novadeck Phase 1 image flow — base rootfs + device firmware + kernel -> rootfs.img.
+#
+# Chains the pieces into one bootable read-only Btrfs root:
+#   1. fetch the pinned upstream base userspace      (images/fetch-base.sh)
+#   2. stage device firmware — extract from a vendor dump if one is given here,
+#      else require a prior firmware/extract.sh run   (firmware/extract.sh)
+#   3. verify the firmware manifest vs the built kernel, non-fatal (firmware/manifest.sh)
+#   4. assemble the read-only Btrfs root              (images/assemble-rootfs.sh)
+#
+# Prereq: kernel already built (kernel/build.sh <soc>) so out/<soc>/ has Image.gz +
+# modroot. Firmware extraction needs a dump of YOUR device's vendor partitions — no
+# proprietary blobs ship in-repo. Steps 3-4 run in the novadeck-kbuild image.
+#
+#   images/build-image.sh <soc> [vendor-partition-tree]
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+SOC="${1:-sm8650}"
+VENDOR="${2:-}"
+OUT="$ROOT/out/$SOC"
+FW="$ROOT/firmware/extracted/$SOC"
+DK=(docker run --rm -v "$ROOT":/src -w /src novadeck-kbuild)
+
+[ -f "$OUT/Image.gz" ] \
+  || { echo "no kernel: out/$SOC/Image.gz — run kernel/build.sh $SOC first" >&2; exit 1; }
+
+# 1. base userspace (pinned, idempotent). Capture the exported tree path.
+BASE="$("$ROOT/images/fetch-base.sh" "$SOC")"
+
+# 2. device firmware. Extract now if a vendor dump was supplied; otherwise a prior
+#    extract must have populated firmware/extracted/<soc>/.
+if [ -n "$VENDOR" ]; then
+  echo "[novadeck] extracting firmware from $VENDOR"
+  "$ROOT/firmware/extract.sh" "$SOC" "$VENDOR"
+fi
+if [ ! -d "$FW" ]; then
+  echo "no extracted firmware for $SOC (firmware/extracted/$SOC missing)." >&2
+  echo "  supply a vendor-partition dump:  images/build-image.sh $SOC <vendor-tree>" >&2
+  echo "  (proprietary blobs come from YOUR device; none are shipped in-repo)" >&2
+  exit 1
+fi
+
+# 3. verify firmware coverage vs the built kernel's DTB/module references (non-fatal).
+"${DK[@]}" firmware/manifest.sh "$SOC" \
+  || echo "  (firmware manifest verify reported gaps — review above before flashing)"
+
+# 4. assemble the read-only Btrfs root.
+"${DK[@]}" images/assemble-rootfs.sh "$SOC" "$BASE"
+
+cat <<EOF
+
+Image flow done. Read-only root at out/$SOC/images/rootfs.img.
+Next — boot artifact + deploy:
+  ${DK[*]} boot/package.sh $SOC
+  boot/deploy.sh $SOC <board> <esp-mountpoint>     # copies KERNEL onto the ESP
+  # then write out/$SOC/images/rootfs.img to the device's rootfs partition
+EOF

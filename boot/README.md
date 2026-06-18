@@ -7,6 +7,7 @@ the artifact format, never the image content.
 | File | Purpose |
 |---|---|
 | `package.sh <soc> [backend]` | Read the staged kernel (`out/<soc>/Image.gz` + `dtbs/`), package one artifact per board DTB via the selected backend into `out/<soc>/boot/`. |
+| `deploy.sh <soc> <board> <esp>` | Phase 1 deploy: copy `out/<soc>/boot/<board>-boot.img` onto a mounted ESP as `/KERNEL` (atomic). Host-side; no fastboot. |
 | `backends/android-bootimg.sh` | **Default.** Android boot image (kernel + dtb [+ initramfs]) via AOSP `mkbootimg`; flash with `fastboot flash boot` / test with `fastboot boot`. |
 | `backends/edk2.sh` | edk2/UEFI — Phase 5 stretch, not yet implemented (selectable, fails loudly). |
 

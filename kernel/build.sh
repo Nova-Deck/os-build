@@ -58,4 +58,16 @@ CC=(${CROSS_COMPILE:+CROSS_COMPILE=$CROSS_COMPILE})
 OUT="$ROOT/out/$SOC"; mkdir -p "$OUT/dtbs"
 cp "$SRCDIR/arch/arm64/boot/Image.gz" "$OUT/"
 for b in "${BOARDS[@]}"; do cp "$QCOM_DTS/${b}.dtb" "$OUT/dtbs/"; done
-echo "[novadeck] staged Image.gz + ${#BOARDS[@]} dtbs in $OUT"
+
+# Install loadable modules into a staging tree consumed by images/assemble-rootfs.sh.
+# INSTALL_MOD_PATH yields a self-contained /lib/modules/<kver> (with depmod metadata)
+# and never writes the host's /lib. The =m drivers (e.g. handheld panels needed for
+# display bring-up) live here. Drop the build/source symlinks — they point back into
+# this throwaway source tree and would dangle in the rootfs.
+MODROOT="$OUT/modroot"
+rm -rf "$MODROOT"
+( cd "$SRCDIR"
+  make ARCH=arm64 "${CC[@]}" INSTALL_MOD_PATH="$MODROOT" INSTALL_MOD_STRIP=1 modules_install
+)
+find "$MODROOT/lib/modules" -maxdepth 2 -type l \( -name build -o -name source \) -delete
+echo "[novadeck] staged Image.gz + ${#BOARDS[@]} dtbs + modules in $OUT"

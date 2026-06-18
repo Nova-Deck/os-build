@@ -43,6 +43,16 @@ else cp -a "$BASE"/. "$stage"/; fi
 install -Dm0644 "$OUT/Image.gz" "$stage/boot/Image.gz"
 for dtb in "$OUT"/dtbs/*.dtb; do install -Dm0644 "$dtb" "$stage/boot/dtbs/$(basename "$dtb")"; done
 
+# 2b. loadable kernel modules under /lib/modules (from kernel/build.sh modules_install).
+# The =m drivers (e.g. handheld panels) live here; without them display won't probe.
+MODROOT="$OUT/modroot"
+if [ -d "$MODROOT/lib/modules" ]; then
+  mkdir -p "$stage/lib"
+  cp -a "$MODROOT/lib/modules" "$stage/lib/"
+else
+  echo "  (no staged modules at ${MODROOT#"$ROOT"/} — run kernel/build.sh; built-in drivers only)"
+fi
+
 # 3. extracted device firmware under /lib/firmware (paths are already /lib/firmware-relative)
 if [ -d "$FW" ]; then
   while IFS= read -r f; do

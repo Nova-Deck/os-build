@@ -21,10 +21,11 @@ device       qcom/sm8650/ayaneo/ps2/adsp.mbn                 audio/sensors DSP i
 device       qcom/sm8650/ayaneo/ps2/adsp_dtb.mbn             adsp devicetree blob (DT lists it alongside adsp.mbn)
 device       qcom/sm8650/ayaneo/ps2/cdsp.mbn                 compute DSP image (PS2)
 device       qcom/sm8650/ayaneo/ps2/cdsp_dtb.mbn             cdsp devicetree blob (DT lists it alongside cdsp.mbn)
+# KONKR Pocket FIT — board-scoped paths (firmware-name in sm8650-konkr-pf.dts).
+device       qcom/sm8650/konkr/pf/gen70900_zap.mbn           GPU zap shader — signed per device (KONKR)
+device       qcom/sm8650/konkr/pf/adsp.mbn                   audio/sensors DSP image (KONKR)
+device       qcom/sm8650/konkr/pf/adsp_dtb.mbn               adsp devicetree blob (KONKR)
+device       qcom/sm8650/konkr/pf/cdsp.mbn                   compute DSP image (KONKR)
+device       qcom/sm8650/konkr/pf/cdsp_dtb.mbn               cdsp devicetree blob (KONKR)
 # Wi-Fi/BT: WCN7850 (ath12k hw2.0); request_firmware globs a directory of blobs.
 device       ath12k/WCN7850/hw2.0/                           ath12k WCN7850 firmware dir (board-2.bin, amss, m3)
-
-# KNOWN GAP (Phase 1 bring-up):
-#  - common.dtsi hardcodes the ayaneo/ps2 firmware path, so the KONKR Pocket FIT
-#    DTB also requests PS2 blobs (verified via dtc on the built konkr-pf.dtb).
-#    Split firmware-name per board before konkr bring-up.

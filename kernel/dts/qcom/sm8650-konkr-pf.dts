@@ -52,3 +52,17 @@
 
 	status = "okay";
 };
+
+&gpu_zap_shader {
+	firmware-name = "qcom/sm8650/konkr/pf/gen70900_zap.mbn";
+};
+
+&remoteproc_adsp {
+	firmware-name = "qcom/sm8650/konkr/pf/adsp.mbn",
+			"qcom/sm8650/konkr/pf/adsp_dtb.mbn";
+};
+
+&remoteproc_cdsp {
+	firmware-name = "qcom/sm8650/konkr/pf/cdsp.mbn",
+			"qcom/sm8650/konkr/pf/cdsp_dtb.mbn";
+};

@@ -108,3 +108,17 @@
 
 	status = "okay";
 };
+
+&gpu_zap_shader {
+	firmware-name = "qcom/sm8650/ayaneo/ps2/gen70900_zap.mbn";
+};
+
+&remoteproc_adsp {
+	firmware-name = "qcom/sm8650/ayaneo/ps2/adsp.mbn",
+			"qcom/sm8650/ayaneo/ps2/adsp_dtb.mbn";
+};
+
+&remoteproc_cdsp {
+	firmware-name = "qcom/sm8650/ayaneo/ps2/cdsp.mbn",
+			"qcom/sm8650/ayaneo/ps2/cdsp_dtb.mbn";
+};

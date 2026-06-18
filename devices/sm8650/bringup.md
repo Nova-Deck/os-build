@@ -29,11 +29,12 @@ the ESP-root file `KERNEL` — an Android boot image. novadeck's `android-bootim
 is exactly that, so Phase 1 deploy is a file copy (no fastboot):
 
 ```
-boot/deploy.sh sm8650 sm8650-ayaneo-ps2 <esp-mountpoint>   # -> <esp>/KERNEL
+boot/deploy.sh sm8650 <esp-mountpoint>   # -> <esp>/KERNEL
 ```
 
-The board DTB is embedded in the image (Android header v2) and the cmdline mounts
-`root=LABEL=novadeck-root`. The UEFI/GRUB (`bootaa64.efi`) path is reserved for the
-Phase 4 A/B layout (`efi-a`/`efi-b` + RAUC).
+Every board's DTB is appended to the kernel payload (Android header v0), so a single
+`KERNEL` serves all SM8650 boards: ABL's DTB picker scans the trailing FDTs and lets you
+select the board at boot. The cmdline mounts `root=LABEL=novadeck-root`. The UEFI/GRUB
+(`bootaa64.efi`) path is reserved for the Phase 4 A/B layout (`efi-a`/`efi-b` + RAUC).
 
 _Phase 1 scaffold._

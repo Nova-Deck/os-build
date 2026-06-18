@@ -1,33 +1,31 @@
 #!/usr/bin/env bash
-# novadeck Phase 1 deploy — install a board boot image onto an ESP as /KERNEL.
+# novadeck Phase 1 deploy — install the SoC boot image onto an ESP as /KERNEL.
 #
 # Targets the ROCKNIX custom ABL boot flow: ABL boots /EFI/BOOT/bootaa64.efi when
 # present, else falls back to the ESP-root file `KERNEL`, an Android boot image.
-# novadeck's android-bootimg artifact (kernel + embedded board DTB + cmdline) is
-# exactly that — so deploy is a plain file copy: no fastboot, no partition flash.
-# The ESP may live on SD or internal storage; mount it, then point this at it.
+# novadeck's android-bootimg artifact (kernel + every board DTB appended + cmdline)
+# is exactly that — one image serves all boards on the SoC, and ABL's DTB picker
+# selects the board at boot. Deploy is a plain file copy: no fastboot, no partition
+# flash. The ESP may live on SD or internal storage; mount it, then point this at it.
 #
-#   boot/deploy.sh <soc> <board> <esp-mountpoint>
+#   boot/deploy.sh <soc> <esp-mountpoint>
 #
 # e.g. (host side, ESP already mounted):
-#   boot/deploy.sh sm8650 sm8650-ayaneo-ps2 /run/media/$USER/NOVADECK-ESP
+#   boot/deploy.sh sm8650 /run/media/$USER/NOVADECK-ESP
 set -euo pipefail
 shopt -s nullglob
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SOC="${1:-}"
-BOARD="${2:-}"
-ESP="${3:-}"
+ESP="${2:-}"
 OUT="$ROOT/out/$SOC/boot"
 
-[ -n "$SOC" ] && [ -n "$BOARD" ] && [ -n "$ESP" ] \
-  || { echo "usage: boot/deploy.sh <soc> <board> <esp-mountpoint>" >&2; exit 2; }
+[ -n "$SOC" ] && [ -n "$ESP" ] \
+  || { echo "usage: boot/deploy.sh <soc> <esp-mountpoint>" >&2; exit 2; }
 
-IMG="$OUT/${BOARD}-boot.img"
+IMG="$OUT/${SOC}-boot.img"
 if [ ! -f "$IMG" ]; then
   echo "no boot image: ${IMG#"$ROOT"/} (run boot/package.sh $SOC first)" >&2
-  echo "available boards in ${OUT#"$ROOT"/}:" >&2
-  for f in "$OUT"/*-boot.img; do echo "  - $(basename "${f%-boot.img}")" >&2; done
   exit 1
 fi
 

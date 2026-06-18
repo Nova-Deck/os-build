@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # novadeck boot-stage packager — Phase 5.
 #
-# Pluggable boot stage. Interface:  (kernel, DTB, initramfs, cmdline) -> artifact.
-# Reads the staged kernel from out/<soc>/ (produced by kernel/build.sh) and emits
-# one flashable artifact per board DTB via a selectable backend. Swapping backend
-# changes only the artifact format — never the image content fed in.
+# Pluggable boot stage. Interface:  (kernel, DTBs, initramfs, cmdline) -> artifact.
+# Reads the staged kernel from out/<soc>/ (produced by kernel/build.sh) and emits a
+# single flashable artifact holding ALL board DTBs via a selectable backend (ABL's
+# DTB picker selects the board at boot). Swapping backend changes only the artifact
+# format — never the image content fed in.
 #
 # Backend resolution order:  $2 arg  >  $BOOT_BACKEND  >  device.yaml boot.backend
 # >  android-bootimg.
@@ -52,17 +53,18 @@ BOOTDIR="$OUT/boot"; mkdir -p "$BOOTDIR"
 echo "[novadeck] boot package: soc=$SOC backend=$BACKEND pagesize=$PAGESIZE"
 [ -f "$INITRAMFS" ] || echo "  (no initramfs at ${INITRAMFS#"$ROOT"/} — packaging kernel+dtb only)"
 
-# Backend contract: defines backend_package <kernel> <dtb> <cmdline> <pagesize> <initramfs> <out>
+# Backend contract: defines backend_package <kernel> <dtbdir> <cmdline> <pagesize> <initramfs> <out>
 # shellcheck source=/dev/null
 . "$BACKEND_SH"
 
-n=0
-for dtb in "$OUT"/dtbs/*.dtb; do
-  board="$(basename "${dtb%.dtb}")"
-  artifact="$BOOTDIR/${board}-boot.img"
-  backend_package "$KERNEL" "$dtb" "$CMDLINE" "$PAGESIZE" "$INITRAMFS" "$artifact"
-  echo "  ok   $board -> ${artifact#"$ROOT"/}"
-  n=$((n + 1))
-done
+# One artifact per SoC: the backend bundles every board DTB in out/<soc>/dtbs/ into it.
+boards=()
+for dtb in "$OUT"/dtbs/*.dtb; do boards+=( "$(basename "${dtb%.dtb}")" ); done
+[ "${#boards[@]}" -gt 0 ] || { echo "no dtbs in ${OUT#"$ROOT"/}/dtbs (run kernel/build.sh)" >&2; exit 1; }
 
-echo "Done. Packaged $n board artifact(s) in ${BOOTDIR#"$ROOT"/}/ via '$BACKEND'."
+artifact="$BOOTDIR/${SOC}-boot.img"
+echo "  boards: ${boards[*]}"
+backend_package "$KERNEL" "$OUT/dtbs" "$CMDLINE" "$PAGESIZE" "$INITRAMFS" "$artifact"
+
+echo "  ok   $SOC (${#boards[@]} board DTB(s)) -> ${artifact#"$ROOT"/}"
+echo "Done. One '$BACKEND' image holds all boards; ABL's DTB picker selects at boot."

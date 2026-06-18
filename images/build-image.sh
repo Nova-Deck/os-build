@@ -26,7 +26,10 @@ DK=(docker run --rm -v "$ROOT":/src -w /src novadeck-kbuild)
   || { echo "no kernel: out/$SOC/Image.gz — run kernel/build.sh $SOC first" >&2; exit 1; }
 
 # 1. base userspace (pinned, idempotent). Capture the exported tree path.
+# fetch-base.sh prints a host absolute path; step 4 runs in a container with the repo
+# bind-mounted at /src, so translate the $ROOT prefix to /src for the in-container call.
 BASE="$("$ROOT/images/fetch-base.sh" "$SOC")"
+BASE_CTR="/src/${BASE#"$ROOT"/}"
 
 # 2. device firmware. Extract now if a vendor dump was supplied; otherwise a prior
 #    extract must have populated firmware/extracted/<soc>/.
@@ -46,13 +49,13 @@ fi
   || echo "  (firmware manifest verify reported gaps — review above before flashing)"
 
 # 4. assemble the read-only Btrfs root.
-"${DK[@]}" images/assemble-rootfs.sh "$SOC" "$BASE"
+"${DK[@]}" images/assemble-rootfs.sh "$SOC" "$BASE_CTR"
 
 cat <<EOF
 
 Image flow done. Read-only root at out/$SOC/images/rootfs.img.
 Next — boot artifact + deploy:
   ${DK[*]} boot/package.sh $SOC
-  boot/deploy.sh $SOC <board> <esp-mountpoint>     # copies KERNEL onto the ESP
+  boot/deploy.sh $SOC <esp-mountpoint>     # copies the all-boards KERNEL onto the ESP
   # then write out/$SOC/images/rootfs.img to the device's rootfs partition
 EOF

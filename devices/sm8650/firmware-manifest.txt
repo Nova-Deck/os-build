@@ -8,12 +8,23 @@
 # NOTE: exact filenames vary by kernel/firmware version and device — VERIFY against
 # the pinned kernel's `MODULE_FIRMWARE`/devicetree and the device's vendor partition.
 #
-# source     install-path (under /lib/firmware)        notes
-linux-fw     qcom/gen70900_sqe.fw                       Adreno 7xx SQE microcode (verify exact gen id)
-linux-fw     qcom/gen70900_gmu.bin                      Adreno GMU firmware (verify exact gen id)
-device       qcom/sm8650/a750_zap.mbn                   GPU zap shader — signed per device
-device       qcom/sm8650/adsp.mbn                       audio/sensors DSP image
-device       qcom/sm8650/adsp_dtb.mbn                   adsp devicetree blob
-device       qcom/sm8650/cdsp.mbn                       compute DSP image
-device       qcom/sm8650/cdsp_dtb.mbn                   cdsp devicetree blob
-# Wi-Fi/BT (ath12k/WCN7850-class) firmware path TBD — confirm on target hardware.
+# Paths below are DERIVED from the board DTS firmware-name properties and the
+# built modules' MODULE_FIRMWARE. Re-derive after any DT/config change with:
+#   docker run ... novadeck-kbuild firmware/manifest.sh sm8650
+#
+# source     install-path (under /lib/firmware)              notes
+linux-fw     qcom/gen70900_sqe.fw                            Adreno 750 SQE microcode (linux-firmware)
+linux-fw     qcom/gen70900_gmu.bin                           Adreno 750 GMU firmware (linux-firmware)
+# GPU/DSP images: DT requests board-scoped paths (firmware-name in the DTS).
+device       qcom/sm8650/ayaneo/ps2/gen70900_zap.mbn         GPU zap shader — signed per device (PS2)
+device       qcom/sm8650/ayaneo/ps2/adsp.mbn                 audio/sensors DSP image (PS2)
+device       qcom/sm8650/ayaneo/ps2/adsp_dtb.mbn             adsp devicetree blob (DT lists it alongside adsp.mbn)
+device       qcom/sm8650/ayaneo/ps2/cdsp.mbn                 compute DSP image (PS2)
+device       qcom/sm8650/ayaneo/ps2/cdsp_dtb.mbn             cdsp devicetree blob (DT lists it alongside cdsp.mbn)
+# Wi-Fi/BT: WCN7850 (ath12k hw2.0); request_firmware globs a directory of blobs.
+device       ath12k/WCN7850/hw2.0/                           ath12k WCN7850 firmware dir (board-2.bin, amss, m3)
+
+# KNOWN GAP (Phase 1 bring-up):
+#  - common.dtsi hardcodes the ayaneo/ps2 firmware path, so the KONKR Pocket FIT
+#    DTB also requests PS2 blobs (verified via dtc on the built konkr-pf.dtb).
+#    Split firmware-name per board before konkr bring-up.

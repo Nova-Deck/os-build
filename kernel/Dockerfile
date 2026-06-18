@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       bc bison flex \
       libssl-dev libelf-dev \
       kmod cpio rsync \
-      xz-utils patch \
+      xz-utils patch device-tree-compiler \
       curl ca-certificates \
       make python3 \
     && rm -rf /var/lib/apt/lists/*

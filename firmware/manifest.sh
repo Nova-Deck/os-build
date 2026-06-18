@@ -40,17 +40,30 @@ else
   echo "WARN: dtc not found — skipping DTB firmware-name check" >&2
 fi
 
-# --- 2. MODULE_FIRMWARE from the built modules (driver-driven loads) ---
+# --- 2. MODULE_FIRMWARE from built modules + built-in drivers (driver loads) ---
+# Loadable modules carry it in each .ko's .modinfo; built-in (=y) drivers record it
+# in modules.builtin.modinfo. Scan both, or a built-in driver (e.g. DRM_MSM=y with
+# its GPU GMU/SQE microcode) is invisible to a .ko-only scan. A directory request is
+# expressed as a glob 'dir/*'; normalize it to 'dir/' so it matches a manifest dir.
 mod_fw="$(mktemp)"
-if [ -n "$OBJCOPY" ] && [ -d "$KDIR" ]; then
-  while IFS= read -r ko; do
-    "$OBJCOPY" -O binary --only-section=.modinfo "$ko" /dev/stdout 2>/dev/null \
-      | tr '\0' '\n' | sed -n 's/^firmware=//p'
-  done < <(find "$KDIR" -name '*.ko' 2>/dev/null) \
-    | grep -E '^(qcom|ath1[12]k|qca)/' \
-    | sort -u >"$mod_fw"   # scope to Qualcomm SoC radios/DSPs; defconfig builds 100s more
+if [ -d "$KDIR" ]; then
+  {
+    if [ -n "$OBJCOPY" ]; then
+      while IFS= read -r ko; do
+        "$OBJCOPY" -O binary --only-section=.modinfo "$ko" /dev/stdout 2>/dev/null \
+          | tr '\0' '\n' | sed -n 's/^firmware=//p'
+      done < <(find "$KDIR" -name '*.ko' 2>/dev/null)
+    else
+      echo "WARN: objcopy missing — skipping loadable-module firmware scan" >&2
+    fi
+    # built-in drivers: NUL-separated '<modname>.firmware=<path>' entries.
+    [ -f "$KDIR/modules.builtin.modinfo" ] \
+      && tr '\0' '\n' <"$KDIR/modules.builtin.modinfo" | sed -n 's/.*\.firmware=//p'
+  } | grep -E '^(qcom|ath1[12]k|qca)/' \
+    | sed 's|/\*$|/|' \
+    | sort -u >"$mod_fw"   # scope to Qualcomm SoC radios/DSPs; normalize dir globs
 else
-  echo "WARN: objcopy or module tree missing — skipping MODULE_FIRMWARE check" >&2
+  echo "WARN: module tree missing ($KDIR) — skipping MODULE_FIRMWARE check" >&2
 fi
 
 # --- manifest install-paths (column 2 of non-comment lines) ---

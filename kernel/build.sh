@@ -47,6 +47,21 @@ for b in "${BOARDS[@]}"; do
 done
 
 # --- Configure + build ---
+# Cross-compile unless the build host is itself aarch64. Default to the standard GNU
+# aarch64 prefix when unset, and fail fast if the toolchain is missing — otherwise the
+# build silently uses the host gcc and dies deep in with a cryptic '-mlittle-endian'
+# error. Override CROSS_COMPILE to use a different toolchain.
+if [ "$(uname -m)" != "aarch64" ]; then
+  CROSS_COMPILE="${CROSS_COMPILE:-aarch64-linux-gnu-}"
+fi
+if [ -n "${CROSS_COMPILE:-}" ]; then
+  command -v "${CROSS_COMPILE}gcc" >/dev/null 2>&1 || {
+    echo "cross compiler not found: ${CROSS_COMPILE}gcc" >&2
+    echo "  install the aarch64 toolchain or set CROSS_COMPILE to its prefix" >&2
+    exit 1
+  }
+  echo "[novadeck] cross-compiling with ${CROSS_COMPILE}gcc"
+fi
 CC=(${CROSS_COMPILE:+CROSS_COMPILE=$CROSS_COMPILE})
 ( cd "$SRCDIR"
   scripts/kconfig/merge_config.sh -m arch/arm64/configs/defconfig "$FRAGMENT"

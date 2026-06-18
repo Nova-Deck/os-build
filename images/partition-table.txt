@@ -1,0 +1,18 @@
+# novadeck A/B image partition table — Phase 4.
+#
+# SteamOS-style 8-partition atomic-update layout (cf. iliana.fyi): a shared ESP,
+# A/B GRUB partitions, A/B read-only Btrfs roots, A/B /var, and a shared /home.
+# RAUC writes the inactive rootfs/var slot, then the bootloader switches on success.
+#
+# Consumed by images/genpart.sh to emit an sgdisk script. Row order = partition
+# number. 'rest' expands to fill the target device (done at install time).
+#
+# name      size  typecode  fs     label
+esp         256M  ef00      vfat   NOVADECK-ESP
+efi-a       64M   ef00      vfat   novadeck-efi-A
+efi-b       64M   ef00      vfat   novadeck-efi-B
+rootfs-a    5G    8300      btrfs  novadeck-root-A
+rootfs-b    5G    8300      btrfs  novadeck-root-B
+var-a       256M  8300      ext4   novadeck-var-A
+var-b       256M  8300      ext4   novadeck-var-B
+home        rest  8300      ext4   novadeck-home

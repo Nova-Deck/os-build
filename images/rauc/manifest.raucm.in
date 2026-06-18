@@ -1,0 +1,13 @@
+# novadeck RAUC update manifest template — Phase 4.
+# images/genbundle.sh fills @PLACEHOLDERS@; `rauc bundle` computes the rootfs hash/size.
+[update]
+compatible=novadeck-@SOC@
+version=@VERSION@
+
+[bundle]
+format=verity
+
+# A/B: RAUC installs this into the inactive 'rootfs' slot group (rootfs-a/-b),
+# then the bootloader marks it primary and rolls back if first boot fails.
+[image.rootfs]
+filename=rootfs.img

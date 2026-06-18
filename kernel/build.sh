@@ -33,7 +33,7 @@ echo "[novadeck] source ready at $SRCDIR"
 # --- Apply out-of-tree patches in lexical order (rename files to reorder) ---
 for p in "$ROOT"/kernel/patches/*.patch; do
   echo "[novadeck] applying $(basename "$p")"
-  ( cd "$SRCDIR" && git apply -p1 "$p" ) \
+  patch -p1 -d "$SRCDIR" --no-backup-if-mismatch <"$p" \
     || { echo "patch FAILED: $(basename "$p")" >&2; exit 1; }
 done
 

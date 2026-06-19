@@ -7,8 +7,9 @@ our own. Mainline/Linaro `sm8x50` base with vendor cherry-picks as needed.
 
 | Path | Purpose |
 |---|---|
-| `config/<soc>.config` | Per-SoC Kconfig fragment, merged onto an arm64 base defconfig |
-| `patches/` | Out-of-tree patches applied before build |
+| `<soc>/<soc>.config` | Per-SoC Kconfig fragment, merged onto an arm64 base defconfig |
+| `<soc>/patches/` | Per-SoC out-of-tree patches applied before build |
+| `<soc>/dts/qcom/` | Per-SoC device trees injected into the kernel source before build |
 | `build.sh <soc>` | Fetch pinned source → patch → inject DTs → merge config → build `Image.gz` + dtbs + modules; stage to `out/<soc>/` |
 
 ## Key decision: 4K pages
@@ -17,7 +18,7 @@ assumes 4K pages.** Standardized across all three SoCs.
 
 ## Status (Phase 1)
 - ✅ Source pinned: linux 7.0.11 (tarball URL + sha256 in `kernel/SOURCE.pin`).
-- ✅ Config symbols validated against that tree (see header of `config/sm8650.config`).
+- ✅ Config symbols validated against that tree (see header of `sm8650/sm8650.config`).
 - ✅ Builds `Image.gz` + board dtbs and stages loadable modules to `out/<soc>/modroot`
   for the rootfs assembler — the `=m` handheld-panel drivers (display) ride along.
 - ⏳ Remaining work is on-hardware: serial console (`ttyMSM0`) is the first milestone —

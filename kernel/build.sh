@@ -8,7 +8,10 @@ shopt -s nullglob
 
 SOC="${1:-sm8650}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-FRAGMENT="$ROOT/kernel/config/${SOC}.config"
+# Per-SoC home: config fragment, out-of-tree patches and device trees all live under
+# kernel/<soc>/ since different platforms need different patches and DTs.
+SOCDIR="$ROOT/kernel/$SOC"
+FRAGMENT="$SOCDIR/${SOC}.config"
 # BASE_CONFIG: path to a complete .config to use verbatim (copied in, then olddefconfig).
 # When set, the defconfig+fragment merge is skipped entirely — used to build a known-good
 # vendor config (e.g. ROCKNIX) exactly as-is rather than as a fragment overlay.
@@ -40,7 +43,7 @@ tar -C "$WORK" -xf "$TARBALL"
 echo "[novadeck] source ready at $SRCDIR"
 
 # --- Apply out-of-tree patches in lexical order (rename files to reorder) ---
-for p in "$ROOT"/kernel/patches/*.patch; do
+for p in "$SOCDIR"/patches/*.patch; do
   echo "[novadeck] applying $(basename "$p")"
   patch -p1 -d "$SRCDIR" --no-backup-if-mismatch <"$p" \
     || { echo "patch FAILED: $(basename "$p")" >&2; exit 1; }
@@ -48,7 +51,7 @@ done
 
 # --- Inject novadeck device trees + register board dtbs in the qcom Makefile ---
 QCOM_DTS="$SRCDIR/arch/arm64/boot/dts/qcom"
-cp "$ROOT"/kernel/dts/qcom/*.dtsi "$ROOT"/kernel/dts/qcom/*.dts "$QCOM_DTS"/
+cp "$SOCDIR"/dts/qcom/*.dtsi "$SOCDIR"/dts/qcom/*.dts "$QCOM_DTS"/
 BOARDS=(sm8650-ayaneo-ps2 sm8650-konkr-pf)
 for b in "${BOARDS[@]}"; do
   grep -q "${b}\.dtb" "$QCOM_DTS/Makefile" \

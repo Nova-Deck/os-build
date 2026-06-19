@@ -1,4 +1,4 @@
-# kernel/patches/
+# kernel/sm8650/patches/
 
 Out-of-tree kernel patches applied on top of the pinned source by `kernel/build.sh`.
 

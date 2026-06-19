@@ -1,1 +1,1 @@
-earlycon console=ttyMSM0,115200n8 console=tty0 video=efifb:off clk_ignore_unused pd_ignore_unused root=LABEL=novadeck-root rootfstype=btrfs rootwait rw
+video=efifb:off console=tty0 root=PARTLABEL=novadeck-root rootfstype=btrfs rootwait rw irqaffinity=0-1 cgroup.memory=nokmem,nosocket nosoftlockup usbcore.interrupt_interval_override=045e:028e:2 clk_ignore_unused pd_ignore_unused ignore_loglevel panic=5

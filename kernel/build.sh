@@ -9,6 +9,10 @@ shopt -s nullglob
 SOC="${1:-sm8650}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 FRAGMENT="$ROOT/kernel/config/${SOC}.config"
+# BASE_CONFIG: path to a complete .config to use verbatim (copied in, then olddefconfig).
+# When set, the defconfig+fragment merge is skipped entirely — used to build a known-good
+# vendor config (e.g. ROCKNIX) exactly as-is rather than as a fragment overlay.
+BASE_CONFIG="${BASE_CONFIG:-}"
 
 # Source is pinned in kernel/SOURCE.pin (tarball URL + sha256 = canonical pin).
 PIN="$ROOT/kernel/SOURCE.pin"
@@ -18,8 +22,13 @@ KVER="$(pin version)"; KURL="$(pin url)"; KSHA="$(pin sha256)"
 WORK="${WORK:-$ROOT/work/kernel}"
 TARBALL="$WORK/linux-${KVER}.tar.xz"
 
-echo "[novadeck] SoC=$SOC fragment=$FRAGMENT kernel=$KVER"
-[ -f "$FRAGMENT" ] || { echo "missing config fragment: $FRAGMENT" >&2; exit 1; }
+if [ -n "$BASE_CONFIG" ]; then
+  echo "[novadeck] SoC=$SOC base-config=$BASE_CONFIG (verbatim) kernel=$KVER"
+  [ -f "$BASE_CONFIG" ] || { echo "missing base config: $BASE_CONFIG" >&2; exit 1; }
+else
+  echo "[novadeck] SoC=$SOC fragment=$FRAGMENT kernel=$KVER"
+  [ -f "$FRAGMENT" ] || { echo "missing config fragment: $FRAGMENT" >&2; exit 1; }
+fi
 
 # Fetch + verify the pinned tarball (idempotent), then extract a clean tree.
 mkdir -p "$WORK"
@@ -46,6 +55,34 @@ for b in "${BOARDS[@]}"; do
     || echo "dtb-\$(CONFIG_ARCH_QCOM) += ${b}.dtb" >> "$QCOM_DTS/Makefile"
 done
 
+# --- Stage built-in firmware (CONFIG_EXTRA_FIRMWARE) ---
+# Like ROCKNIX, bake the Adreno GPU firmware (+ both boards' signed zap shaders) into the
+# Image so the GPU/display stack has its blobs before the SD-card rootfs mounts. The
+# config fragment lists these via CONFIG_EXTRA_FIRMWARE with the default
+# CONFIG_EXTRA_FIRMWARE_DIR="firmware", so copy them into the kernel tree's firmware/ dir
+# under the exact /lib/firmware-relative path the drivers request. Open Adreno blobs come
+# from the pinned linux-firmware (firmware/fetch-linux-fw.sh); the per-board zap shaders
+# come from the extracted device firmware (firmware/extract.sh).
+LFW="$ROOT/firmware/linux-fw/$SOC"
+FWX="$ROOT/firmware/extracted/$SOC"
+EMBED=(
+  "$LFW/qcom/gen70900_aqe.fw"
+  "$LFW/qcom/gen70900_sqe.fw"
+  "$LFW/qcom/gmu_gen70900.bin"
+  "$FWX/qcom/sm8650/ayaneo/ps2/gen70900_zap.mbn"
+  "$FWX/qcom/sm8650/konkr/pf/gen70900_zap.mbn"
+)
+echo "[novadeck] staging built-in firmware (CONFIG_EXTRA_FIRMWARE) into firmware/"
+for f in "${EMBED[@]}"; do
+  [ -f "$f" ] || {
+    echo "missing embed firmware: ${f#"$ROOT"/}" >&2
+    echo "  run firmware/fetch-linux-fw.sh $SOC (open blobs) + firmware/extract.sh $SOC <dump> (zap)" >&2
+    exit 1
+  }
+  rel="${f#"$LFW"/}"; rel="${rel#"$FWX"/}"   # path relative to its firmware root = /lib/firmware path
+  install -Dm0644 "$f" "$SRCDIR/firmware/$rel"
+done
+
 # --- Configure + build ---
 # Cross-compile unless the build host is itself aarch64. Default to the standard GNU
 # aarch64 prefix when unset, and fail fast if the toolchain is missing — otherwise the
@@ -64,8 +101,15 @@ if [ -n "${CROSS_COMPILE:-}" ]; then
 fi
 CC=(${CROSS_COMPILE:+CROSS_COMPILE=$CROSS_COMPILE})
 ( cd "$SRCDIR"
-  scripts/kconfig/merge_config.sh -m arch/arm64/configs/defconfig "$FRAGMENT"
-  make ARCH=arm64 "${CC[@]}" olddefconfig
+  if [ -n "$BASE_CONFIG" ]; then
+    # Verbatim full config: copy it in and let olddefconfig resolve any symbols that
+    # differ between the vendor build and this pinned tree (new/removed Kconfig options).
+    cp "$BASE_CONFIG" .config
+    make ARCH=arm64 "${CC[@]}" olddefconfig
+  else
+    scripts/kconfig/merge_config.sh -m arch/arm64/configs/defconfig "$FRAGMENT"
+    make ARCH=arm64 "${CC[@]}" olddefconfig
+  fi
   make ARCH=arm64 "${CC[@]}" -j"$(nproc)" Image.gz dtbs modules
 )
 

@@ -28,6 +28,8 @@ pkg/
 # Extracted vendor firmware blobs (never commit proprietary blobs)
 /firmware/blobs/
 /firmware/extracted/
+# Open linux-firmware blobs, fetched on demand + verified against firmware/LINUX_FW.pin
+/firmware/linux-fw/
 
 # Local Claude Code settings (keep .claude/plans/ tracked)
 /.claude/settings.local.json

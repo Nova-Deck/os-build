@@ -38,8 +38,13 @@ backend_package() {
 
   local args=(
     --kernel "$payload"
+    --base "${BOOT_BASE:-0x10000000}"
+    --kernel_offset "${BOOT_KERNEL_OFFSET:-0x00008000}"
+    --ramdisk_offset "${BOOT_RAMDISK_OFFSET:-0x06000000}"
+    --tags_offset "${BOOT_TAGS_OFFSET:-0x00000100}"
     --pagesize "$pagesize"
     --header_version "${BOOT_HEADER_VERSION:-0}"
+    --os_version "${BOOT_OS_VERSION:-12.0.0}"
     --cmdline "$cmdline"
     -o "$out"
   )

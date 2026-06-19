@@ -1,7 +1,9 @@
 # SM8650 firmware manifest — Phase 1 scaffold
 #
 # Source legend:
-#   linux-fw : ships in the upstream base's linux-firmware package (no extraction)
+#   linux-fw : open firmware from the official linux-firmware repo. The upstream Holo
+#              base ships NO /lib/firmware, so these are fetched + verified + staged by
+#              firmware/fetch-linux-fw.sh (pinned in firmware/LINUX_FW.pin).
 #   device   : signed/vendor blob — MUST be extracted from the target device's own
 #              partitions (see firmware/extract.sh). NEVER committed to this repo.
 #
@@ -13,8 +15,17 @@
 #   docker run ... novadeck-kbuild firmware/manifest.sh sm8650
 #
 # source     install-path (under /lib/firmware)              notes
+linux-fw     qcom/gen70900_aqe.fw                            Adreno 750 AQE firmware (linux-firmware)
 linux-fw     qcom/gen70900_sqe.fw                            Adreno 750 SQE microcode (linux-firmware)
-linux-fw     qcom/gen70900_gmu.bin                           Adreno 750 GMU firmware (linux-firmware)
+linux-fw     qcom/gmu_gen70900.bin                           Adreno 750 GMU firmware (linux-firmware)
+# Wi-Fi/BT: WCN7850 Bluetooth firmware + NVM (board ID selects the .bNN variant).
+linux-fw     qca/hmtbtfw20.tlv                               WCN7850 Bluetooth firmware (linux-firmware)
+linux-fw     qca/hmtnv20.bin                                 WCN7850 BT NVM, default (linux-firmware)
+linux-fw     qca/hmtnv20.b10f                                WCN7850 BT NVM variant (linux-firmware)
+linux-fw     qca/hmtnv20.b112                                WCN7850 BT NVM variant (linux-firmware)
+# Video: Iris VPU. Driver hard-requests vpu33_p4.mbn; upstream ships the _s7 signed
+# variant, installed under the requested name (see firmware/LINUX_FW.pin).
+linux-fw     qcom/vpu/vpu33_p4.mbn                           Iris VPU firmware, from vpu33_p4_s7.mbn (linux-firmware)
 # GPU/DSP images: DT requests board-scoped paths (firmware-name in the DTS).
 device       qcom/sm8650/ayaneo/ps2/gen70900_zap.mbn         GPU zap shader — signed per device (PS2)
 device       qcom/sm8650/ayaneo/ps2/adsp.mbn                 audio/sensors DSP image (PS2)

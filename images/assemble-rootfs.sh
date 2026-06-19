@@ -22,6 +22,7 @@ BASE="${2:-${BASE_ROOTFS:-}}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$ROOT/out/$SOC"
 FW="$ROOT/firmware/extracted/$SOC"
+LFW="$ROOT/firmware/linux-fw/$SOC"
 IMGDIR="$OUT/images"
 IMG="$IMGDIR/rootfs.img"
 SIZE="${ROOTFS_SIZE:-5G}"   # matches rootfs-a/-b in partition-table.txt; --shrink trims it
@@ -61,6 +62,18 @@ if [ -d "$FW" ]; then
   done < <(find "$FW" -type f ! -name sha256sums.txt 2>/dev/null)
 else
   echo "  (no extracted firmware at ${FW#"$ROOT"/} — run firmware/extract.sh; continuing)"
+fi
+
+# 3b. open linux-firmware blobs (Adreno GPU, WCN7850 Wi-Fi/BT, Iris VPU) under
+# /lib/firmware. The upstream base ships no /lib/firmware, so without this the GPU/BT/VPU
+# firmware is absent at runtime. Staged by firmware/fetch-linux-fw.sh from the pin.
+if [ -d "$LFW" ]; then
+  while IFS= read -r f; do
+    rel="${f#"$LFW"/}"
+    install -Dm0644 "$f" "$stage/lib/firmware/$rel"
+  done < <(find "$LFW" -type f 2>/dev/null)
+else
+  echo "  (no linux-firmware at ${LFW#"$ROOT"/} — run firmware/fetch-linux-fw.sh $SOC; GPU/BT/VPU firmware will be missing)"
 fi
 
 # 4. novadeck marker so the running system can identify the slot's provenance

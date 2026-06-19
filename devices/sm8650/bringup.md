@@ -5,16 +5,22 @@ Track in order — each step gates the next.
 
 | # | Subsystem | Kernel deps (config) | Validate | Status |
 |---|---|---|---|---|
-| 1 | UART console | `SERIAL_QCOM_GENI*`, `earlycon` | boot log on `ttyMSM0,115200` | ☐ |
-| 2 | Storage (UFS) | `SCSI_UFS_QCOM` | rootfs mounts from UFS | ☐ |
-| 3 | USB | `USB_DWC3_QCOM`, QMP/eUSB2 phys | enumerate over USB | ☐ |
-| 4 | Display (DSI/DP) | `DRM_MSM_DPU`, `DRM_MSM_DSI` | panel lights, fb console | ☐ |
-| 5 | Input | `INPUT_EVDEV` | `evtest` sees touch/keys | ☐ |
-| 6 | **GPU / Vulkan** | `DRM_MSM` + Turnip + zap shader | `vulkaninfo`, `vkcube` | ☐ |
-| 7 | Audio | `PINCTRL_SM8650_LPASS_LPI`, q6 DSP | playback | ☐ |
-| 8 | Thermals / cpufreq | `QCOM_TSENS`, `CPU_THERMAL` | throttles under load | ☐ |
+| 1 | UART console | `SERIAL_QCOM_GENI*`, `earlycon` | boot log on `ttyMSM0,115200` | ⊘ N/A — no serial on device ([[sm8650-no-uart]]); console is the panel (step 4) |
+| 2 | Storage | `SCSI_UFS_QCOM` | rootfs mounts | ✅ boots root off **SD** (`root=PARTLABEL=novadeck-root`, btrfs); UFS itself unverified |
+| 3 | USB | `USB_DWC3_QCOM`, QMP/eUSB2 phys | enumerate over USB | ◐ boot-hang HACK + xpad interrupt-interval override in tree; not yet confirmed on HW |
+| 4 | Display (DSI/DP) | `DRM_MSM_DPU`, `DRM_MSM_DSI` | panel lights, fb console | ✅ panel + fb console verified on Pocket S2 ([[sm8650-working-display-baseline]]) |
+| 5 | Input | `INPUT_EVDEV` | `evtest` sees touch/keys | ☐ not yet checked |
+| 6 | **GPU / Vulkan** | `DRM_MSM` + Turnip + zap shader | `vulkaninfo`, `vkcube` | ⏳ **LAST GATE ITEM** — zap shaders + Adreno blobs baked into Image; `vulkaninfo`/`vkcube` not yet run |
+| 7 | Audio | `PINCTRL_SM8650_LPASS_LPI`, q6 DSP | playback | ☐ post-gate |
+| 8 | Thermals / cpufreq | `QCOM_TSENS`, `CPU_THERMAL` | throttles under load | ☐ post-gate |
 
 **Gate exit:** steps 1–6 green + a native arm64 Vulkan title runs.
+
+**Current state (gate OPEN):** the custom kernel boots on real SM8650 hardware (ROCKNIX ABL
+→ KERNEL android-bootimg off SD) with a **working console on the internal panel** — the
+biggest enablement risk is retired. The **sole remaining gate blocker is step 6 (Turnip
+Vulkan)**: run `vulkaninfo` + `vkcube` and a native arm64 Vulkan title on the device. Steps
+3/5 are bring-up niceties off the gate's critical path.
 
 ## Prerequisites (hardware-dependent — not codeable here)
 - SM8650 device with **unlocked bootloader** + serial/UART access.

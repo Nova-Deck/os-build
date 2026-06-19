@@ -25,10 +25,12 @@ DK=(docker run --rm -v "$ROOT":/src -w /src novadeck-kbuild)
 [ -f "$OUT/Image.gz" ] \
   || { echo "no kernel: out/$SOC/Image.gz — run kernel/build.sh $SOC first" >&2; exit 1; }
 
-# 1. base userspace (pinned, idempotent). Capture the exported tree path.
-# fetch-base.sh prints a host absolute path; step 4 runs in a container with the repo
-# bind-mounted at /src, so translate the $ROOT prefix to /src for the in-container call.
-BASE="$("$ROOT/images/fetch-base.sh" "$SOC")"
+# 1. base userspace (pinned, idempotent) with the release runtime layered in (iwd,
+# dropbear, mesa+Turnip+vulkan-tools). customize-base.sh prints a host absolute path;
+# step 4 runs in a container with the repo bind-mounted at /src, so translate the $ROOT
+# prefix to /src for the in-container call. (For a bare base with no runtime added, use
+# images/fetch-base.sh instead.)
+BASE="$("$ROOT/images/customize-base.sh" "$SOC")"
 BASE_CTR="/src/${BASE#"$ROOT"/}"
 
 # 2. device firmware. Extract now if a vendor dump was supplied; otherwise a prior
@@ -48,8 +50,12 @@ fi
 "${DK[@]}" firmware/manifest.sh "$SOC" \
   || echo "  (firmware manifest verify reported gaps — review above before flashing)"
 
-# 4. assemble the read-only Btrfs root.
-"${DK[@]}" images/assemble-rootfs.sh "$SOC" "$BASE_CTR"
+# 4. assemble the read-only Btrfs root. Forward the TEST-ONLY credential env (a no-op
+# unless NOVADECK_TEST=1) so a test card can carry Wi-Fi + SSH creds; see assemble-rootfs.sh.
+# Env flags must precede the image name, so spell this docker run out rather than reuse DK.
+docker run --rm -v "$ROOT":/src -w /src \
+  -e NOVADECK_TEST -e NOVADECK_WIFI_SSID -e NOVADECK_WIFI_PSK -e NOVADECK_SSH_PUBKEY \
+  novadeck-kbuild images/assemble-rootfs.sh "$SOC" "$BASE_CTR"
 
 cat <<EOF
 

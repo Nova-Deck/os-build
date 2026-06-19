@@ -80,6 +80,94 @@ fi
 mkdir -p "$stage/etc"
 { echo "NOVADECK_SOC=$SOC"; echo "NOVADECK_BUILD=$(date -u +%Y%m%dT%H%M%SZ)"; } >"$stage/etc/novadeck-release"
 
+# 4b. TEST-ONLY Wi-Fi/SSH injection (NOVADECK_TEST=1). NEVER part of a release/RAUC build:
+# the release base is packages-only and first-boot networking is the SteamOS UI's job. Here
+# we add ALL the scaffolding a throwaway card needs to auto-join the LAN and accept an SSH
+# login to run vulkaninfo — interface config, regdom (via wpa country=), the Wi-Fi PSK + SSH
+# key (from the environment, so secrets never touch the repo), service enablement, and host
+# keys. The runtime packages (wpa_supplicant, openssh) come from the base (customize-base.sh).
+if [ "${NOVADECK_TEST:-}" = "1" ]; then
+  : "${NOVADECK_WIFI_SSID:?NOVADECK_TEST=1 requires NOVADECK_WIFI_SSID}"
+  : "${NOVADECK_WIFI_PSK:?NOVADECK_TEST=1 requires NOVADECK_WIFI_PSK}"
+  echo "  [TEST] injecting Wi-Fi + SSH scaffolding for '$NOVADECK_WIFI_SSID' (test-only)"
+
+  # Interface rename: WCN7850 is PCIe so predictable naming gives wlpXsY; pin it to wlan0 so
+  # wpa_supplicant@wlan0 + the .network below target it deterministically.
+  install -d -m0755 "$stage/etc/systemd/network"
+  cat >"$stage/etc/systemd/network/10-wlan.link" <<EOF
+[Match]
+Type=wlan
+[Link]
+Name=wlan0
+EOF
+  # systemd-networkd does DHCP on wlan0; wpa_supplicant handles the WPA association.
+  cat >"$stage/etc/systemd/network/25-wlan0.network" <<EOF
+[Match]
+Name=wlan0
+[Network]
+DHCP=yes
+EOF
+
+  # wpa_supplicant@wlan0 reads this. country=BE sets the regulatory domain (enables 5 GHz)
+  # at the supplicant layer, independent of the set-wireless-regdom udev helper.
+  install -d -m0755 "$stage/etc/wpa_supplicant"
+  ( umask 077; cat >"$stage/etc/wpa_supplicant/wpa_supplicant-wlan0.conf" <<EOF
+ctrl_interface=/run/wpa_supplicant
+update_config=1
+country=BE
+network={
+ssid="${NOVADECK_WIFI_SSID}"
+psk="${NOVADECK_WIFI_PSK}"
+}
+EOF
+  )
+
+  # Regulatory domain at the kernel layer: the 85-regulatory.rules udev rule runs
+  # set-wireless-regdom when cfg80211 loads; it sources this file and runs `iw reg set`.
+  # The packaged file (from wireless-regdb) has every country commented out, so without this
+  # the chip stays on the world domain (00) until wpa_supplicant's country= kicks in. Pin it
+  # so 5 GHz is enabled from the moment cfg80211 loads (and the helper stops exiting 1).
+  install -d -m0755 "$stage/etc/conf.d"
+  printf '\nWIRELESS_REGDOM="BE"\n' >>"$stage/etc/conf.d/wireless-regdom"
+
+  # Enable services. /etc/machine-id is empty, so systemd runs preset-all on first boot and
+  # the stock 99-default.preset is "disable *"; ship a high-priority preset (70 < 99) so our
+  # units stay enabled, plus pre-create the symlinks as a build-time fallback.
+  install -d -m0755 "$stage/usr/lib/systemd/system-preset"
+  cat >"$stage/usr/lib/systemd/system-preset/70-novadeck-test.preset" <<EOF
+enable sshd.service
+enable wpa_supplicant@wlan0.service
+enable systemd-networkd.service
+EOF
+  install -d -m0755 "$stage/etc/systemd/system/multi-user.target.wants"
+  ln -sf /usr/lib/systemd/system/sshd.service \
+         "$stage/etc/systemd/system/multi-user.target.wants/sshd.service"
+  ln -sf /usr/lib/systemd/system/wpa_supplicant@.service \
+         "$stage/etc/systemd/system/multi-user.target.wants/wpa_supplicant@wlan0.service"
+  ln -sf /usr/lib/systemd/system/systemd-networkd.service \
+         "$stage/etc/systemd/system/multi-user.target.wants/systemd-networkd.service"
+
+  # sshd needs host keys; a read-only root cannot generate them at boot, so pre-generate now.
+  if command -v ssh-keygen >/dev/null 2>&1; then
+    install -d -m0755 "$stage/etc/ssh"
+    for t in rsa ecdsa ed25519; do
+      f="$stage/etc/ssh/ssh_host_${t}_key"
+      [ -f "$f" ] || ssh-keygen -q -t "$t" -f "$f" -N "" -C "" </dev/null
+    done
+  else
+    echo "  [TEST] WARNING: ssh-keygen not found — sshd will have no host keys"
+  fi
+
+  # SSH authorized key (key-only root; default PermitRootLogin=prohibit-password).
+  if [ -n "${NOVADECK_SSH_PUBKEY:-}" ]; then
+    install -d -m0700 "$stage/root/.ssh"
+    printf '%s\n' "$NOVADECK_SSH_PUBKEY" >"$stage/root/.ssh/authorized_keys"
+    chmod 0600 "$stage/root/.ssh/authorized_keys"
+  else
+    echo "  [TEST] WARNING: NOVADECK_SSH_PUBKEY unset — sshd (key-only root) will reject login"
+  fi
+fi
+
 # 5. bake the Btrfs image (populate without mounting), then shrink to fit
 mkdir -p "$IMGDIR"
 rm -f "$IMG"

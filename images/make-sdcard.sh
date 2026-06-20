@@ -12,7 +12,7 @@
 # sgdisk, and dd's both filesystem images into their partition byte offsets — no loop
 # mounts, no root.
 #
-#   images/make-sdcard.sh [soc]
+#   images/make-sdcard.sh <soc>
 #
 # Run inside the build image (needs sgdisk + mkfs.vfat + mtools):
 #   docker run --rm -v "$PWD":/src -w /src novadeck-build images/make-sdcard.sh sm8650
@@ -22,7 +22,8 @@
 set -euo pipefail
 export MTOOLS_SKIP_CHECK=1   # mtools on a file image has no geometry; silence the warning
 
-SOC="${1:-sm8650}"
+SOC="${1:-}"
+[ -n "$SOC" ] || { echo "usage: ${0##*/} <soc>" >&2; exit 2; }
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$ROOT/out/$SOC"
 KERNEL="$OUT/boot/${SOC}-boot.img"

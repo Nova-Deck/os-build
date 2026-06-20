@@ -7,14 +7,15 @@
 # container is *run*, so `docker export` of a created container works on an x86 host
 # with no qemu (it only moves files, never executes the arm64 userspace).
 #
-#   images/fetch-base.sh [soc]
+#   images/fetch-base.sh <soc>
 #
 # Exports to work/base/<soc>/ (git-ignored) and prints that path on stdout so an
 # orchestrator can capture it. Idempotent; set FORCE=1 to re-export.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SOC="${1:-sm8650}"
+SOC="${1:-}"
+[ -n "$SOC" ] || { echo "usage: ${0##*/} <soc>" >&2; exit 2; }
 PINFILE="$ROOT/base.digest"
 DEST="$ROOT/work/base/$SOC"
 

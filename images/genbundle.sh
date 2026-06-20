@@ -14,7 +14,8 @@
 #   docker run --rm -v "$PWD":/src -w /src novadeck-build images/genbundle.sh sm8650
 set -euo pipefail
 
-SOC="${1:-sm8650}"
+SOC="${1:-}"
+[ -n "$SOC" ] || { echo "usage: ${0##*/} <soc>" >&2; exit 2; }
 VERSION="${2:-$(date -u +%Y%m%d)}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$ROOT/out/$SOC"

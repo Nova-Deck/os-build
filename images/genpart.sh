@@ -9,7 +9,8 @@
 #   images/genpart.sh <soc> <target>   # also apply to <target> (disk or image file)
 set -euo pipefail
 
-SOC="${1:-sm8650}"
+SOC="${1:-}"
+[ -n "$SOC" ] || { echo "usage: ${0##*/} <soc>" >&2; exit 2; }
 TARGET="${2:-}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TABLE="$ROOT/images/partition-table.txt"

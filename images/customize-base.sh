@@ -19,13 +19,14 @@
 # Unlike fetch-base.sh (a file copy, no qemu), this EXECUTES arm64 userspace, so it
 # needs qemu binfmt — registered on demand via tonistiigi/binfmt. Network required.
 #
-#   images/customize-base.sh [soc]
+#   images/customize-base.sh <soc>
 #
 # Prints the exported rootfs path on stdout (like fetch-base.sh). FORCE=1 re-runs.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SOC="${1:-sm8650}"
+SOC="${1:-}"
+[ -n "$SOC" ] || { echo "usage: ${0##*/} <soc>" >&2; exit 2; }
 PINFILE="$ROOT/base.digest"
 DEST="$ROOT/work/base/$SOC"
 

@@ -16,7 +16,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SOC="${1:-sm8650}"
+SOC="${1:-}"
+[ -n "$SOC" ] || { echo "usage: ${0##*/} <soc>" >&2; exit 2; }
 VENDOR="${2:-}"
 OUT="$ROOT/out/$SOC"
 FW="$ROOT/firmware/extracted/$SOC"

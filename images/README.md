@@ -7,12 +7,12 @@ recipes consume the staged kernel (`kernel/build.sh`), extracted firmware
 | File | Purpose |
 |---|---|
 | `build-image.sh <soc> [vendor-tree]` | **Phase 1 flow orchestrator.** Chains base fetch → firmware extract/verify → rootfs assembly into `out/<soc>/images/rootfs.img`. |
-| `fetch-base.sh [soc]` | Pull the pinned upstream base (`base.digest`) and export its **bare** rootfs to `work/base/<soc>/`. No qemu — `docker export` only moves files. |
-| `customize-base.sh [soc]` | Pin-pull the base, then under **arm64 emulation** (qemu binfmt) `pacman`-install the release runtime — iwd (Wi-Fi), openssh (SSH), mesa + Turnip + vulkan-tools — enable the services, and export to `work/base/<soc>/`. What `build-image.sh` uses. Network required; no credentials baked in. |
+| `fetch-base.sh <soc>` | Pull the pinned upstream base (`base.digest`) and export its **bare** rootfs to `work/base/<soc>/`. No qemu — `docker export` only moves files. |
+| `customize-base.sh <soc>` | Pin-pull the base, then under **arm64 emulation** (qemu binfmt) `pacman`-install the release runtime — iwd (Wi-Fi), openssh (SSH), mesa + Turnip + vulkan-tools — enable the services, and export to `work/base/<soc>/`. What `build-image.sh` uses. Network required; no credentials baked in. |
 | `partition-table.txt` | The 8-partition A/B layout (ESP, A/B GRUB, A/B root, A/B /var, shared /home). Single source of truth. |
 | `genpart.sh <soc> [target]` | Emit an `sgdisk` script from the table; apply it to a disk/image when `target` is given. |
 | `assemble-rootfs.sh <soc> <base-rootfs>` | Stage base + kernel + firmware and bake a read-only Btrfs root image (`mkfs.btrfs --rootdir`, unprivileged) → `out/<soc>/images/rootfs.img`. |
-| `make-sdcard.sh [soc]` | **Phase 1 SD-test image.** Wrap the boot image + root into one flashable card image (GPT: FAT32 ESP holding `/KERNEL` + the Btrfs root) → `out/<soc>/images/sdcard.img`. Unprivileged (mtools + sgdisk + `dd`, no loop). Not A/B — that is `partition-table.txt`. |
+| `make-sdcard.sh <soc>` | **Phase 1 SD-test image.** Wrap the boot image + root into one flashable card image (GPT: FAT32 ESP holding `/KERNEL` + the Btrfs root) → `out/<soc>/images/sdcard.img`. Unprivileged (mtools + sgdisk + `dd`, no loop). Not A/B — that is `partition-table.txt`. |
 | `rauc/manifest.raucm.in` | RAUC update-manifest template (`@SOC@`/`@VERSION@`). |
 | `genbundle.sh <soc> [version]` | Wrap the root image into a signed RAUC bundle (`.raucb`) for OTA. Dev builds mint an ephemeral cert; release builds pass `RAUC_CERT`/`RAUC_KEY`. |
 

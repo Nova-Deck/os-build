@@ -7,7 +7,7 @@
 # Device-signed blobs (GPU zap, adsp/cdsp) are NOT fetched here — those come from the
 # target device's own partitions via firmware/extract.sh.
 #
-#   firmware/fetch-linux-fw.sh [soc]
+#   firmware/fetch-linux-fw.sh <soc>
 #
 # Exports to firmware/linux-fw/<soc>/ (git-ignored). Runs on the host (needs network),
 # like images/fetch-base.sh. Idempotent — already-correct files are skipped; FORCE=1
@@ -15,7 +15,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SOC="${1:-sm8650}"
+SOC="${1:-}"
+[ -n "$SOC" ] || { echo "usage: ${0##*/} <soc>" >&2; exit 2; }
 PIN="$ROOT/firmware/LINUX_FW.pin"
 DEST="$ROOT/firmware/linux-fw/$SOC"
 

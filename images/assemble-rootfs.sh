@@ -17,7 +17,8 @@
 set -euo pipefail
 shopt -s nullglob
 
-SOC="${1:-sm8650}"
+SOC="${1:-}"
+[ -n "$SOC" ] || { echo "usage: ${0##*/} <soc>" >&2; exit 2; }
 BASE="${2:-${BASE_ROOTFS:-}}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$ROOT/out/$SOC"

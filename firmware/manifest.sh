@@ -13,7 +13,8 @@
 set -euo pipefail
 shopt -s nullglob
 
-SOC="${1:-sm8650}"
+SOC="${1:-}"
+[ -n "$SOC" ] || { echo "usage: ${0##*/} <soc>" >&2; exit 2; }
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MANIFEST="$ROOT/devices/$SOC/firmware-manifest.txt"
 OUT="$ROOT/out/$SOC"

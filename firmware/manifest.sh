@@ -9,7 +9,7 @@
 # Run AFTER kernel/build.sh (needs out/<soc>/dtbs + work/kernel/<ver> modules).
 # Reports manifest entries that are unbacked and required firmware the manifest
 # does not list. Run inside the build image (needs dtc + objcopy):
-#   docker run ... novadeck-kbuild firmware/manifest.sh sm8650
+#   docker run ... novadeck-build firmware/manifest.sh sm8650
 set -euo pipefail
 shopt -s nullglob
 

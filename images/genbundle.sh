@@ -11,7 +11,7 @@
 # release — production bundles must be signed with the release key, see ci/).
 #
 # Run inside the build image (needs rauc + openssl):
-#   docker run --rm -v "$PWD":/src -w /src novadeck-kbuild images/genbundle.sh sm8650
+#   docker run --rm -v "$PWD":/src -w /src novadeck-build images/genbundle.sh sm8650
 set -euo pipefail
 
 SOC="${1:-sm8650}"
@@ -23,7 +23,7 @@ ROOTFS="$IMGDIR/rootfs.img"
 TEMPLATE="$ROOT/images/rauc/manifest.raucm.in"
 BUNDLE="$IMGDIR/novadeck-${SOC}-${VERSION}.raucb"
 
-command -v rauc >/dev/null 2>&1 || { echo "rauc not found (run inside novadeck-kbuild)" >&2; exit 1; }
+command -v rauc >/dev/null 2>&1 || { echo "rauc not found (run inside novadeck-build)" >&2; exit 1; }
 [ -f "$ROOTFS" ]   || { echo "no rootfs image: $ROOTFS (run images/assemble-rootfs.sh first)" >&2; exit 1; }
 [ -f "$TEMPLATE" ] || { echo "no manifest template: $TEMPLATE" >&2; exit 1; }
 

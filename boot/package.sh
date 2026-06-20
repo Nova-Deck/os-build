@@ -13,7 +13,7 @@
 #   boot/package.sh <soc> [backend]
 #
 # Run inside the build image (needs the backend's tooling, e.g. mkbootimg):
-#   docker run --rm -v "$PWD":/src -w /src novadeck-kbuild boot/package.sh sm8650
+#   docker run --rm -v "$PWD":/src -w /src novadeck-build boot/package.sh sm8650
 set -euo pipefail
 shopt -s nullglob
 

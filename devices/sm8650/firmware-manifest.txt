@@ -12,7 +12,7 @@
 #
 # Paths below are DERIVED from the board DTS firmware-name properties and the
 # built modules' MODULE_FIRMWARE. Re-derive after any DT/config change with:
-#   docker run ... novadeck-kbuild firmware/manifest.sh sm8650
+#   docker run ... novadeck-build firmware/manifest.sh sm8650
 #
 # source     install-path (under /lib/firmware)              notes
 linux-fw     qcom/gen70900_aqe.fw                            Adreno 750 AQE firmware (linux-firmware)

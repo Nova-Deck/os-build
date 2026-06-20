@@ -13,7 +13,7 @@
 #   BASE_ROOTFS=<dir> images/assemble-rootfs.sh <soc>
 #
 # Run inside the build image (needs btrfs-progs + rsync):
-#   docker run --rm -v "$PWD":/src -w /src novadeck-kbuild images/assemble-rootfs.sh sm8650 /path/to/base
+#   docker run --rm -v "$PWD":/src -w /src novadeck-build images/assemble-rootfs.sh sm8650 /path/to/base
 set -euo pipefail
 shopt -s nullglob
 
@@ -30,7 +30,7 @@ SIZE="${ROOTFS_SIZE:-5G}"   # matches rootfs-a/-b in partition-table.txt; --shri
 [ -n "$BASE" ]        || { echo "usage: assemble-rootfs.sh <soc> <base-rootfs-dir>" >&2; exit 2; }
 [ -d "$BASE" ]        || { echo "no base rootfs dir: $BASE" >&2; exit 2; }
 [ -f "$OUT/Image.gz" ] || { echo "no kernel: $OUT/Image.gz (run kernel/build.sh first)" >&2; exit 1; }
-command -v mkfs.btrfs >/dev/null 2>&1 || { echo "mkfs.btrfs not found (run inside novadeck-kbuild)" >&2; exit 1; }
+command -v mkfs.btrfs >/dev/null 2>&1 || { echo "mkfs.btrfs not found (run inside novadeck-build)" >&2; exit 1; }
 
 stage="$(mktemp -d)"
 trap 'rm -rf "$stage"' EXIT

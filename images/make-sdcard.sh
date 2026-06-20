@@ -15,7 +15,7 @@
 #   images/make-sdcard.sh [soc]
 #
 # Run inside the build image (needs sgdisk + mkfs.vfat + mtools):
-#   docker run --rm -v "$PWD":/src -w /src novadeck-kbuild images/make-sdcard.sh sm8650
+#   docker run --rm -v "$PWD":/src -w /src novadeck-build images/make-sdcard.sh sm8650
 #
 # Prereqs: boot/package.sh (-> out/<soc>/boot/<soc>-boot.img) and images/build-image.sh
 # (-> out/<soc>/images/rootfs.img) have run.
@@ -35,7 +35,7 @@ ALIGN_MIB=1                            # 1 MiB partition alignment + GPT primary
 END_SLACK_MIB=2                        # tail room for the backup GPT (well over its ~17 KiB)
 
 for t in sgdisk mkfs.vfat mcopy; do
-  command -v "$t" >/dev/null 2>&1 || { echo "$t not found — run inside novadeck-kbuild" >&2; exit 1; }
+  command -v "$t" >/dev/null 2>&1 || { echo "$t not found — run inside novadeck-build" >&2; exit 1; }
 done
 [ -f "$KERNEL" ] || { echo "no boot image: ${KERNEL#"$ROOT"/} (run boot/package.sh $SOC)" >&2; exit 1; }
 [ -f "$ROOTFS" ] || { echo "no rootfs: ${ROOTFS#"$ROOT"/} (run images/build-image.sh $SOC)" >&2; exit 1; }

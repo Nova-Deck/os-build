@@ -44,6 +44,6 @@ if [ -z "$TARGET" ]; then
   exit 0
 fi
 
-command -v sgdisk >/dev/null 2>&1 || { echo "sgdisk not found (run inside novadeck-kbuild)" >&2; exit 1; }
+command -v sgdisk >/dev/null 2>&1 || { echo "sgdisk not found (run inside novadeck-build)" >&2; exit 1; }
 echo "[novadeck] applying A/B GPT to $TARGET (min ${minmib} MiB)" >&2
 DISK="$TARGET" bash -euo pipefail -c "$(emit)"

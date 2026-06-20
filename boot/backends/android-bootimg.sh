@@ -19,7 +19,7 @@
 backend_package() {
   local kernel="$1" dtbdir="$2" cmdline="$3" pagesize="$4" initramfs="$5" out="$6"
   command -v mkbootimg >/dev/null 2>&1 \
-    || { echo "mkbootimg not found — run inside novadeck-kbuild" >&2; return 1; }
+    || { echo "mkbootimg not found — run inside novadeck-build" >&2; return 1; }
 
   # Build the kernel payload: Image.gz with every board DTB appended. ABL scans the
   # trailing FDTs to build its device-select menu; glob order (sorted) sets the menu

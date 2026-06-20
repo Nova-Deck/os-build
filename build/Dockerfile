@@ -1,6 +1,7 @@
-# novadeck kernel build environment — aarch64 cross toolchain on x86_64 hosts.
-# Image carries only the toolchain + kernel build deps; source and artifacts stay
-# on the host via a bind mount (work/ and out/ are gitignored). Re-runnable.
+# novadeck-build — cross-compile build environment for the whole pipeline on x86_64
+# hosts (kernel, firmware extraction, rootfs/sdcard assembly, boot packaging, RAUC
+# bundle). Carries the aarch64 toolchain plus every container stage's deps; source and
+# artifacts stay on the host via a bind mount (work/ and out/ are gitignored). Re-runnable.
 FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive

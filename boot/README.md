@@ -21,7 +21,7 @@ payload); set `$BOOT_HEADER_VERSION` only if a bootloader needs a newer header.
 `mkbootimg` lives in the build image, so run there:
 
 ```
-docker run --rm -v "$PWD":/src -w /src novadeck-kbuild boot/package.sh sm8650
+docker run --rm -v "$PWD":/src -w /src novadeck-build boot/package.sh sm8650
 ```
 
 _Phase 5._

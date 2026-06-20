@@ -12,7 +12,7 @@
 #
 # Conventions:
 #   * SOC selects the target and is MANDATORY: `make kernel SOC=sm8650`.
-#   * Container stages run in the novadeck-kbuild image with the repo bind-mounted at
+#   * Container stages run in the novadeck-build image with the repo bind-mounted at
 #     /src; host stages either need the network or drive docker themselves (base
 #     customization registers qemu binfmt, so it cannot run nested in the container).
 #   * Stamp files live under the already-gitignored out/ work/ firmware/ trees.
@@ -30,7 +30,7 @@ $(error SOC is required — pass SOC=<soc>, e.g. `make kernel SOC=sm8650`)
 endif
 endif
 
-KBUILD_IMG ?= novadeck-kbuild
+BUILD_IMG ?= novadeck-build
 
 # Optional knobs forwarded to the underlying scripts:
 #   BASE_CONFIG  repo-relative path to a full verbatim kernel .config (e.g. a ROCKNIX
@@ -48,15 +48,15 @@ VERSION     ?=
 OUT := out/$(SOC)
 
 # --- where each stage runs ----------------------------------------------------
-# Container: repo bind-mounted at /src. INKBUILD is the plain run; DOCKER lets a
+# Container: repo bind-mounted at /src. INBUILD is the plain run; DOCKER lets a
 # recipe insert `-e VAR` flags (which must precede the image name) before the image.
 DOCKER   := docker run --rm -v $(CURDIR):/src -w /src
-INKBUILD := $(DOCKER) $(KBUILD_IMG)
+INBUILD := $(DOCKER) $(BUILD_IMG)
 # Test-only credential env, forwarded into the rootfs assembler (no-op unless TEST=1).
 TEST_ENV := -e NOVADECK_TEST -e NOVADECK_WIFI_SSID -e NOVADECK_WIFI_PSK -e NOVADECK_SSH_PUBKEY
 
 # --- artifacts (real file targets drive incremental rebuilds) -----------------
-KBUILD_STAMP := out/.kbuild-image.stamp
+BUILD_STAMP := out/.build-image.stamp
 FW_LINUX     := firmware/linux-fw/$(SOC)/.fetched.stamp
 FW_EXTRACT   := firmware/extracted/$(SOC)/sha256sums.txt
 BASE         := work/base/$(SOC)/usr/bin/sshd
@@ -90,8 +90,8 @@ all: sdcard ## Alias for `sdcard` (the full bring-up image)
 
 image: $(ROOTFS) ## Read-only Btrfs root only (out/<soc>/images/rootfs.img)
 
-toolchain: $(KBUILD_STAMP) ## Build the novadeck-kbuild cross-compile docker image
-kernel:    $(KERNEL)       ## Build Image.gz + dtbs + modules (in kbuild container)
+toolchain: $(BUILD_STAMP) ## Build the novadeck-build cross-compile docker image
+kernel:    $(KERNEL)       ## Build Image.gz + dtbs + modules (in build container)
 fw-linux:  $(FW_LINUX)     ## Fetch open linux-firmware blobs (host, network)
 fw-extract: $(FW_EXTRACT)  ## Stage device firmware from VENDOR=<vendor-partition-tree>
 base:      $(BASE)         ## Fetch + customize the pinned aarch64 base rootfs (host)
@@ -102,8 +102,8 @@ sdcard:    $(SDCARD)       ## Build the flashable SD-card image (in container)
 # ==============================================================================
 # Toolchain image
 # ==============================================================================
-$(KBUILD_STAMP): kernel/Dockerfile
-	docker build -t $(KBUILD_IMG) -f kernel/Dockerfile kernel
+$(BUILD_STAMP): build/Dockerfile
+	docker build -t $(BUILD_IMG) -f build/Dockerfile build
 	@mkdir -p $(@D) && touch $@
 
 # ==============================================================================
@@ -136,34 +136,34 @@ $(BASE): base.digest
 # ==============================================================================
 # Kernel (container) — needs both firmware sets baked in (CONFIG_EXTRA_FIRMWARE)
 # ==============================================================================
-$(KERNEL): $(KERNEL_SRC) $(FW_LINUX) $(FW_EXTRACT) | $(KBUILD_STAMP)
+$(KERNEL): $(KERNEL_SRC) $(FW_LINUX) $(FW_EXTRACT) | $(BUILD_STAMP)
 	$(DOCKER) $(if $(BASE_CONFIG),-e BASE_CONFIG=/src/$(BASE_CONFIG)) \
-	  $(KBUILD_IMG) kernel/build.sh $(SOC)
+	  $(BUILD_IMG) kernel/build.sh $(SOC)
 
 # Cross-check the device firmware manifest against the built kernel (non-fatal).
 manifest: $(KERNEL) ## Verify firmware-manifest.txt vs the built kernel (in container)
-	$(INKBUILD) firmware/manifest.sh $(SOC)
+	$(INBUILD) firmware/manifest.sh $(SOC)
 
 # ==============================================================================
 # Read-only root (container) — base userspace + kernel + firmware -> Btrfs image
 # ==============================================================================
-$(ROOTFS): $(KERNEL) $(BASE) $(FW_LINUX) $(FW_EXTRACT) | $(KBUILD_STAMP)
-	$(DOCKER) $(TEST_ENV) $(KBUILD_IMG) \
+$(ROOTFS): $(KERNEL) $(BASE) $(FW_LINUX) $(FW_EXTRACT) | $(BUILD_STAMP)
+	$(DOCKER) $(TEST_ENV) $(BUILD_IMG) \
 	  images/assemble-rootfs.sh $(SOC) /src/work/base/$(SOC)
 
 # ==============================================================================
 # Boot artifact + bootable media (container)
 # ==============================================================================
-$(BOOTIMG): $(KERNEL) | $(KBUILD_STAMP)
-	$(INKBUILD) boot/package.sh $(SOC)
+$(BOOTIMG): $(KERNEL) | $(BUILD_STAMP)
+	$(INBUILD) boot/package.sh $(SOC)
 
-$(SDCARD): $(BOOTIMG) $(ROOTFS) | $(KBUILD_STAMP)
-	$(INKBUILD) images/make-sdcard.sh $(SOC)
+$(SDCARD): $(BOOTIMG) $(ROOTFS) | $(BUILD_STAMP)
+	$(INBUILD) images/make-sdcard.sh $(SOC)
 
 # Signed RAUC OTA bundle (Phase 4). Dev builds mint an ephemeral cert; set
 # RAUC_CERT/RAUC_KEY (repo-relative, so they resolve under /src) for a real signature.
-bundle: $(ROOTFS) | $(KBUILD_STAMP) ## Build a signed RAUC update bundle (in container)
-	$(DOCKER) -e RAUC_CERT -e RAUC_KEY $(KBUILD_IMG) \
+bundle: $(ROOTFS) | $(BUILD_STAMP) ## Build a signed RAUC update bundle (in container)
+	$(DOCKER) -e RAUC_CERT -e RAUC_KEY $(BUILD_IMG) \
 	  images/genbundle.sh $(SOC) $(VERSION)
 
 # ==============================================================================

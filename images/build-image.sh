@@ -10,7 +10,7 @@
 #
 # Prereq: kernel already built (kernel/build.sh <soc>) so out/<soc>/ has Image.gz +
 # modroot. Firmware extraction needs a dump of YOUR device's vendor partitions — no
-# proprietary blobs ship in-repo. Steps 3-4 run in the novadeck-kbuild image.
+# proprietary blobs ship in-repo. Steps 3-4 run in the novadeck-build image.
 #
 #   images/build-image.sh <soc> [vendor-partition-tree]
 set -euo pipefail
@@ -20,7 +20,7 @@ SOC="${1:-sm8650}"
 VENDOR="${2:-}"
 OUT="$ROOT/out/$SOC"
 FW="$ROOT/firmware/extracted/$SOC"
-DK=(docker run --rm -v "$ROOT":/src -w /src novadeck-kbuild)
+DK=(docker run --rm -v "$ROOT":/src -w /src novadeck-build)
 
 [ -f "$OUT/Image.gz" ] \
   || { echo "no kernel: out/$SOC/Image.gz — run kernel/build.sh $SOC first" >&2; exit 1; }
@@ -55,7 +55,7 @@ fi
 # Env flags must precede the image name, so spell this docker run out rather than reuse DK.
 docker run --rm -v "$ROOT":/src -w /src \
   -e NOVADECK_TEST -e NOVADECK_WIFI_SSID -e NOVADECK_WIFI_PSK -e NOVADECK_SSH_PUBKEY \
-  novadeck-kbuild images/assemble-rootfs.sh "$SOC" "$BASE_CTR"
+  novadeck-build images/assemble-rootfs.sh "$SOC" "$BASE_CTR"
 
 cat <<EOF
 

@@ -27,7 +27,7 @@ images/build-image.sh sm8650 /path/to/vendor-partition-dump
 
 `customize-base.sh` runs on the host (needs `docker` + network + arm64 binfmt; it
 pacman-installs the release runtime under emulation); firmware extract/verify + assembly
-run in `novadeck-kbuild`. The vendor dump is your device's own partitions — omit it only
+run in `novadeck-build`. The vendor dump is your device's own partitions — omit it only
 if `firmware/extract.sh` has already populated `firmware/extracted/sm8650/`. Output is
 `out/sm8650/images/rootfs.img`; package + deploy per `boot/` (KERNEL onto the ESP, rootfs
 image onto the rootfs partition).
@@ -36,8 +36,8 @@ To test on hardware off an SD card first, package the boot image then wrap both 
 card image (ESP + root, no A/B):
 
 ```
-docker run --rm -v "$PWD":/src -w /src novadeck-kbuild boot/package.sh sm8650
-docker run --rm -v "$PWD":/src -w /src novadeck-kbuild images/make-sdcard.sh sm8650
+docker run --rm -v "$PWD":/src -w /src novadeck-build boot/package.sh sm8650
+docker run --rm -v "$PWD":/src -w /src novadeck-build images/make-sdcard.sh sm8650
 sudo dd if=out/sm8650/images/sdcard.img of=/dev/sdX bs=4M conv=fsync status=progress
 ```
 
@@ -52,9 +52,9 @@ build a throwaway card that joins your LAN and accepts SSH, to run `vulkaninfo` 
 docker run --rm -v "$PWD":/src -w /src \
   -e NOVADECK_TEST=1 -e NOVADECK_WIFI_SSID="$SSID" -e NOVADECK_WIFI_PSK="$PSK" \
   -e NOVADECK_SSH_PUBKEY="$(cat ~/.ssh/id_ed25519.pub)" \
-  novadeck-kbuild images/assemble-rootfs.sh sm8650 work/base/sm8650
-docker run --rm -v "$PWD":/src -w /src novadeck-kbuild boot/package.sh sm8650
-docker run --rm -v "$PWD":/src -w /src novadeck-kbuild images/make-sdcard.sh sm8650
+  novadeck-build images/assemble-rootfs.sh sm8650 work/base/sm8650
+docker run --rm -v "$PWD":/src -w /src novadeck-build boot/package.sh sm8650
+docker run --rm -v "$PWD":/src -w /src novadeck-build images/make-sdcard.sh sm8650
 ```
 
 `build-image.sh` forwards the same `NOVADECK_*` env, so the full flow honours it too. The
@@ -66,8 +66,8 @@ Individual tools (btrfs-progs, gdisk, dosfstools, mtools, rauc, casync, openssl)
 the build image, so run them there:
 
 ```
-docker run --rm -v "$PWD":/src -w /src novadeck-kbuild images/assemble-rootfs.sh sm8650 /path/to/base
-docker run --rm -v "$PWD":/src -w /src novadeck-kbuild images/genbundle.sh sm8650
+docker run --rm -v "$PWD":/src -w /src novadeck-build images/assemble-rootfs.sh sm8650 /path/to/base
+docker run --rm -v "$PWD":/src -w /src novadeck-build images/genbundle.sh sm8650
 ```
 
 **Done (Phase 4 assembly):** partition layout, read-only Btrfs root, signed RAUC bundle.

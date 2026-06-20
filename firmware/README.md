@@ -18,7 +18,7 @@ Per-SoC requirements live in `devices/<soc>/firmware-manifest.txt`. `manifest.sh
 needs `dtc` + `objcopy`, so run it inside the build image:
 
 ```
-docker run --rm -v "$PWD":/src -w /src novadeck-kbuild firmware/manifest.sh sm8650
+docker run --rm -v "$PWD":/src -w /src novadeck-build firmware/manifest.sh sm8650
 ```
 
 _Phase 1 scaffold._

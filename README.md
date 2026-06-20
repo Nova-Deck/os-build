@@ -27,6 +27,7 @@ Lead bring-up target: **SM8650** (Adreno 750). Two hard go/no-go gates:
 | `boot/` | Pluggable boot stage (android-bootimg / edk2-UEFI backends) |
 | `ci/` | GitHub Actions matrix builds + cosign signing |
 | `docs/` | Design notes (see [`docs/base-pin.md`](docs/base-pin.md)) |
+| `build/` | `Dockerfile` for the `novadeck-build` cross-compile image used by every container stage |
 | `Makefile` | Master build orchestrator — wires every stage into one incremental graph |
 
 ## Building
@@ -34,7 +35,7 @@ Lead bring-up target: **SM8650** (Adreno 750). Two hard go/no-go gates:
 The whole pipeline is driven from the top-level **`Makefile`**, which wires the per-stage
 scripts under `kernel/ firmware/ images/ boot/` into one incremental dependency graph. It
 also pins **where** each stage runs: kernel, rootfs assembly, boot packaging, SD-card and
-RAUC bundling all cross-compile **inside the `novadeck-kbuild` Docker image** (the repo is
+RAUC bundling all cross-compile **inside the `novadeck-build` Docker image** (the repo is
 bind-mounted at `/src`); base customization and firmware/base fetches run on the host
 because they drive Docker/qemu or the network themselves. Always go through `make` — don't
 invoke the stage scripts by hand — and keep the Makefile in step when a stage is added or

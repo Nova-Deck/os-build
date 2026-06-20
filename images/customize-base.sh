@@ -11,6 +11,12 @@
 # holo repo, then exporting the augmented rootfs to work/base/<soc> (the directory
 # images/assemble-rootfs.sh consumes).
 #
+# Components NOT in the holo repo (e.g. InputPlumber, the handheld input daemon) ship as
+# precompiled-package PINS: each packages/<name>/prebuilt.pin declares a tarball by
+# url + sha256 (+ tar strip-components). They are fetched + verified on the host and
+# extracted into the base here; add one by dropping a new pin file — no code change.
+# Per-component config / service enablement (if any) is injected later by assemble-rootfs.sh.
+#
 # This installs PACKAGES only — it writes NO network/SSH config and enables NO services.
 # First-boot networking is the SteamOS UI's responsibility on release. All Wi-Fi/SSH
 # scaffolding (.link/.network, regdom, wpa creds, sshd + host keys, enable-symlinks) is a
@@ -33,6 +39,23 @@ DEST="$ROOT/work/base/$SOC"
 # Release runtime packages — credentials are NEVER installed here (test-only at assemble).
 PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-tools mesa)
 
+# Precompiled external packages: every packages/<name>/prebuilt.pin (url + sha256 + strip)
+# is fetched on the host and extracted into the base. PREBUILT_DIR stages the verified
+# tarballs + a manifest; the manifest is also stored in the base as the reuse cache key.
+PREBUILT_DIR="$ROOT/work/prebuilt"
+PREBUILT_PINS=("$ROOT"/packages/*/prebuilt.pin)
+pin_field() { sed -n "s/^$2:[[:space:]]*//p" "$1" | head -1; }
+# "name sha256 strip" per pin, sorted — identifies exactly which prebuilts a base carries.
+prebuilt_manifest() {
+  local pin
+  for pin in "${PREBUILT_PINS[@]}"; do
+    [ -e "$pin" ] || continue
+    printf '%s %s %s\n' "$(pin_field "$pin" name)" "$(pin_field "$pin" sha256)" \
+                        "$(pin_field "$pin" strip)"
+  done | sort
+}
+EXPECTED_MANIFEST="$(prebuilt_manifest)"
+
 [ -f "$PINFILE" ] || { echo "no base pin: $PINFILE" >&2; exit 1; }
 # Pin = last non-comment, non-blank line: an image ref ending in @sha256:<digest>.
 REF="$(grep -vE '^[[:space:]]*(#|$)' "$PINFILE" | tail -1)"
@@ -42,8 +65,10 @@ case "$REF" in
 esac
 command -v docker >/dev/null 2>&1 || { echo "docker required for base customization" >&2; exit 1; }
 
-# Already customized? Reuse unless FORCE=1 (the emulated pacman run is slow).
-if [ -z "${FORCE:-}" ] && [ -f "$DEST/usr/bin/sshd" ] && [ -f "$DEST/usr/lib/firmware/regulatory.db" ]; then
+# Already customized? Reuse unless FORCE=1 (the emulated pacman run is slow). The stored
+# prebuilt manifest must match the current pins, else a pin bump/add would be silently missed.
+if [ -z "${FORCE:-}" ] && [ -f "$DEST/usr/bin/sshd" ] && [ -f "$DEST/usr/lib/firmware/regulatory.db" ] \
+   && [ "$(cat "$DEST/usr/lib/novadeck/prebuilt.manifest" 2>/dev/null)" = "$EXPECTED_MANIFEST" ]; then
   echo "[novadeck] customized base present: ${DEST#"$ROOT"/} (FORCE=1 to rebuild)" >&2
   echo "$DEST"; exit 0
 fi
@@ -57,13 +82,40 @@ if ! docker run --rm --platform linux/arm64 "$REF" /usr/bin/true >/dev/null 2>&1
   docker run --privileged --rm tonistiigi/binfmt --install arm64 >&2
 fi
 
+# Fetch + verify every pinned prebuilt on the host (network here); staged into PREBUILT_DIR,
+# mounted read-only into the customization container below so they land in the exported base.
+rm -rf "$PREBUILT_DIR"; mkdir -p "$PREBUILT_DIR"
+for pin in "${PREBUILT_PINS[@]}"; do
+  [ -e "$pin" ] || continue
+  name="$(pin_field "$pin" name)"; ver="$(pin_field "$pin" version)"
+  url="$(pin_field "$pin" url)";  sha="$(pin_field "$pin" sha256)"
+  : "${name:?$pin: missing name}"; : "${url:?$pin: missing url}"; : "${sha:?$pin: missing sha256}"
+  echo "[novadeck] fetching prebuilt $name $ver: $url" >&2
+  curl -fsSL "$url" -o "$PREBUILT_DIR/$name.tar.gz"
+  echo "$sha  $PREBUILT_DIR/$name.tar.gz" | sha256sum -c - \
+    || { echo "$name sha256 mismatch — refusing" >&2; exit 1; }
+done
+printf '%s\n' "$EXPECTED_MANIFEST" >"$PREBUILT_DIR/prebuilt.manifest"
+
 cid="nova-custom-$SOC-$$"
 trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
 
 echo "[novadeck] installing release runtime under arm64: ${PKGS[*]}" >&2
-docker run --name "$cid" --platform linux/arm64 "$REF" \
+docker run --name "$cid" --platform linux/arm64 -v "$PREBUILT_DIR":/prebuilt:ro "$REF" \
   bash -euo pipefail -c '
   pacman -Sy --noconfirm --needed --disable-download-timeout '"${PKGS[*]}"'
+
+  # Precompiled external packages staged + verified by the host (packages/*/prebuilt.pin):
+  # extract each into the rootfs with its pinned strip-components, then record the manifest
+  # in the base so the host reuse-check detects pin changes. Archive roots differ, so strip
+  # is per-package (InputPlumber is rooted at inputplumber/usr -> strip 1 lands at /usr).
+  if [ -s /prebuilt/prebuilt.manifest ]; then
+    while read -r p_name p_sha p_strip; do
+      [ -n "$p_name" ] || continue
+      tar -C / --strip-components="${p_strip:-0}" -xzf "/prebuilt/$p_name.tar.gz"
+    done < /prebuilt/prebuilt.manifest
+    install -Dm0644 /prebuilt/prebuilt.manifest /usr/lib/novadeck/prebuilt.manifest
+  fi
 
   # Release base ships the runtime PACKAGES only — no network/SSH config or service
   # enablement. First-boot networking is the SteamOS UI'\''s responsibility; all Wi-Fi/SSH

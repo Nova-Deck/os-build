@@ -1,0 +1,23 @@
+# InputPlumber — precompiled aarch64 package pin.
+#
+# Auto-discovered by images/customize-base.sh (every packages/*/prebuilt.pin is fetched,
+# sha256-verified on the host, and extracted into the release base). To add another external
+# package not in the holo repo, drop a sibling packages/<name>/prebuilt.pin — no code change.
+#
+# InputPlumber is NOT in the holo pacman repo, and its .rpm/.deb release assets don't fit
+# Arch — so novadeck uses the release's distro-agnostic tarball (rooted at inputplumber/usr,
+# hence strip: 1 to land at /usr).
+#
+# Fields:
+#   name     -> staged as work/prebuilt/<name>.tar.gz; also the manifest key
+#   url      -> release asset URL (the tarball)
+#   sha256   -> from the asset's .sha256.txt sidecar (verified before extract)
+#   strip    -> tar --strip-components when extracting into the rootfs
+#
+# To bump: pick a tag at https://github.com/ShadowBlip/InputPlumber/releases and set
+# version + url + sha256 together.
+name: inputplumber
+version: 0.77.6
+url: https://github.com/ShadowBlip/InputPlumber/releases/download/v0.77.6/inputplumber-aarch64.tar.gz
+sha256: 0e0f7600be84b923e4dcd7f2ecb551de733f17256df7327a14bdc98b293b189b
+strip: 1

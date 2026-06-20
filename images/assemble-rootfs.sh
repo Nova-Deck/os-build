@@ -81,7 +81,29 @@ fi
 mkdir -p "$stage/etc"
 { echo "NOVADECK_SOC=$SOC"; echo "NOVADECK_BUILD=$(date -u +%Y%m%dT%H%M%SZ)"; } >"$stage/etc/novadeck-release"
 
-# 4b. TEST-ONLY Wi-Fi/SSH injection (NOVADECK_TEST=1). NEVER part of a release/RAUC build:
+# 4b. RELEASE per-SoC input config: ship InputPlumber's device/profile config from
+# devices/<soc>/inputplumber/ into /etc/inputplumber/ and enable the daemon. Unlike the
+# TEST block below this is part of EVERY build — a handheld needs its gamepad/gyro mapping
+# at first boot. The inputplumber package itself comes from the base (customize-base.sh).
+# /etc/inputplumber overrides the package's /usr/share/inputplumber defaults.
+IPCONF="$ROOT/devices/$SOC/inputplumber"
+if [ -d "$IPCONF" ]; then
+  echo "  injecting InputPlumber config from ${IPCONF#"$ROOT"/}"
+  install -d -m0755 "$stage/etc/inputplumber"
+  cp -a "$IPCONF"/. "$stage/etc/inputplumber/"
+  # Enable on release: stock 99-default.preset is "disable *", so ship a higher-priority
+  # preset (60 < 99) plus a build-time symlink as a fallback (cf. the test preset at 70).
+  install -d -m0755 "$stage/usr/lib/systemd/system-preset"
+  echo "enable inputplumber.service" \
+    >"$stage/usr/lib/systemd/system-preset/60-novadeck.preset"
+  install -d -m0755 "$stage/etc/systemd/system/multi-user.target.wants"
+  ln -sf /usr/lib/systemd/system/inputplumber.service \
+         "$stage/etc/systemd/system/multi-user.target.wants/inputplumber.service"
+else
+  echo "  (no InputPlumber config at devices/$SOC/inputplumber — skipping; package defaults apply, daemon not force-enabled)"
+fi
+
+# 4c. TEST-ONLY Wi-Fi/SSH injection (NOVADECK_TEST=1). NEVER part of a release/RAUC build:
 # the release base is packages-only and first-boot networking is the SteamOS UI's job. Here
 # we add ALL the scaffolding a throwaway card needs to auto-join the LAN and accept an SSH
 # login to run vulkaninfo — interface config, regdom (via wpa country=), the Wi-Fi PSK + SSH

@@ -93,6 +93,19 @@ fi
 # Canonical (sorted, de-duped) install set — the reuse-cache key recorded in the base below.
 EXPECTED_PKGS="$(printf '%s\n' "${INSTALL_PKGS[@]}" | sort -u)"
 
+# From-source overlay packages (packages/*/source.pin -> work/repo/<soc>/, built by
+# packages/build-overlay.sh) override holo binaries via a higher pkgrel. They don't change the
+# install SET, so fold the repo db's content hash into the reuse key — a rebuilt overlay (new
+# pkgrel/patch) then busts the cache even though PKGS is unchanged.
+# Arch-scoped (aarch64), shared across SoCs — overlay packages are plain aarch64 binaries every
+# device reuses, so they are NOT under work/base/<soc>. See packages/build-overlay.sh.
+OVERLAY_REPO="$ROOT/work/repo/aarch64"
+OVERLAY_DB="$OVERLAY_REPO/novadeck.db.tar.zst"
+if [ -f "$OVERLAY_DB" ]; then
+  EXPECTED_PKGS="$EXPECTED_PKGS
+overlay:$(sha256sum "$OVERLAY_DB" | cut -d' ' -f1)"
+fi
+
 [ -f "$PINFILE" ] || { echo "no base pin: $PINFILE" >&2; exit 1; }
 # Pin = last non-comment, non-blank line: an image ref ending in @sha256:<digest>.
 REF="$(grep -vE '^[[:space:]]*(#|$)' "$PINFILE" | tail -1)"
@@ -142,9 +155,31 @@ printf '%s\n' "$EXPECTED_PKGS" >"$PREBUILT_DIR/pkgs"
 cid="nova-custom-$SOC-$$"
 trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
 
+# Mount the from-source overlay repo (if built) read-only so the in-container pacman can install
+# our patched packages from it. `pacman -S` resolves a package from the FIRST repo in pacman.conf
+# ORDER that provides it (version does NOT override order), so the overlay must be inserted AHEAD
+# of the holo repos; the higher pkgrel (e.g. 3.16.17-1.1) then also keeps it across any upgrade.
+OVERLAY_MOUNT=()
+if [ -f "$OVERLAY_DB" ] && ls "$OVERLAY_REPO"/*.pkg.tar.zst >/dev/null 2>&1; then
+  OVERLAY_MOUNT=(-v "$OVERLAY_REPO":/novarepo:ro)
+  echo "[novadeck] overlay repo present — patched packages will override holo binaries" >&2
+fi
+
 echo "[novadeck] installing runtime under arm64: ${INSTALL_PKGS[*]}" >&2
-docker run --name "$cid" --platform linux/arm64 -v "$PREBUILT_DIR":/prebuilt:ro "$REF" \
+docker run --name "$cid" --platform linux/arm64 -v "$PREBUILT_DIR":/prebuilt:ro \
+  "${OVERLAY_MOUNT[@]}" "$REF" \
   bash -euo pipefail -c '
+  # novadeck overlay: register our local pacman repo AHEAD of the holo repos (right after the
+  # [options] section) so patched from-source packages (e.g. gamescope rebuilt for the portrait-
+  # panel composite rotation) resolve from it instead of the holo binaries — pacman -S honours
+  # repo ORDER, not version. Unsigned (TrustAll): it is our own pinned build artifact.
+  if [ -d /novarepo ] && ls /novarepo/*.pkg.tar.zst >/dev/null 2>&1; then
+    awk "
+      /^\[/ && seen && !ins { print \"[novadeck]\"; print \"SigLevel = Optional TrustAll\"; print \"Server = file:///novarepo\"; print \"\"; ins=1 }
+      /^\[options\]/ { seen=1 }
+      { print }
+    " /etc/pacman.conf > /etc/pacman.conf.nova && mv /etc/pacman.conf.nova /etc/pacman.conf
+  fi
   pacman -Sy --noconfirm --needed --disable-download-timeout '"${INSTALL_PKGS[*]}"'
 
   # Precompiled external packages staged + verified by the host (packages/*/prebuilt.pin):

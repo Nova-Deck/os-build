@@ -1,0 +1,7 @@
+# Pinned holo base-devel image — the makepkg / base-devel build environment used to
+# rebuild holo packages FROM SOURCE with novadeck patches (packages/*/source.pin),
+# built under arm64 qemu emulation by packages/build-overlay.sh.
+#
+# Same namespace as base.digest (Phase 0). Resolved 2026-06-21 from
+# registry.gitlab.steamos.cloud (single arm64 manifest). Reference BY DIGEST, never by tag.
+registry.gitlab.steamos.cloud/holo/holo-core-aarch64-preview/base-devel@sha256:6192d72da679a9fc93c422ade17ddadb9b8023df4ccb600e7b80c193ddf62e05

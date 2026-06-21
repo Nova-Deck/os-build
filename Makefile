@@ -65,6 +65,16 @@ FW_EXTRACT   := firmware/extracted/$(SOC)/sha256sums.txt
 # touched after a successful customize, carries the real recency instead. It also lets a prebuilt-pin
 # bump propagate: the pins are listed as prerequisites so editing one re-runs customize-base.
 PREBUILT_PINS := $(wildcard packages/*/prebuilt.pin)
+# From-source overlay packages (packages/*/source.pin + patches) — rebuilt holo packages with
+# novadeck patches, landed in the local pacman repo work/repo/<soc>/ that customize-base.sh
+# prepends ahead of the holo repos. The repo db is the make target; the pins+patches are
+# prerequisites so a pin or patch change rebuilds the overlay (and then the base).
+OVERLAY_PINS    := $(wildcard packages/*/source.pin)
+OVERLAY_PATCHES := $(wildcard packages/*/patches/*.patch)
+# Overlay packages are ARCH-scoped, not SoC-scoped (a rebuilt aarch64 gamescope serves every
+# aarch64 device), so the repo is shared at work/repo/<arch>/ across all SoCs.
+OVERLAY_ARCH    ?= aarch64
+OVERLAY_DB      := work/repo/$(OVERLAY_ARCH)/novadeck.db.tar.zst
 BASE_STAMP   := work/base/$(SOC).stamp
 KERNEL       := $(OUT)/Image.gz
 ROOTFS       := $(OUT)/images/rootfs.img
@@ -81,8 +91,8 @@ KERNEL_SRC := kernel/SOURCE.pin kernel/$(SOC)/$(SOC).config \
 # ==============================================================================
 # Phony orchestration targets
 # ==============================================================================
-.PHONY: help all image toolchain kernel fw-linux fw-extract base rootfs manifest \
-        boot sdcard bundle deploy clean clean-base distclean
+.PHONY: help all image toolchain kernel fw-linux fw-extract base overlay rootfs manifest \
+        boot sdcard bundle deploy clean clean-base clean-overlay distclean
 
 help: ## Show this help
 	@echo "novadeck build — SOC=$(SOC)"
@@ -100,6 +110,7 @@ toolchain: $(BUILD_STAMP) ## Build the novadeck-build cross-compile docker image
 kernel:    $(KERNEL)       ## Build Image.gz + dtbs + modules (in build container)
 fw-linux:  $(FW_LINUX)     ## Fetch open linux-firmware blobs (host, network)
 fw-extract: $(FW_EXTRACT)  ## Stage device firmware from VENDOR=<vendor-partition-tree>
+overlay:   $(OVERLAY_DB)   ## Rebuild from-source overlay pkgs (patched gamescope) -> work/repo/<arch>/
 base:      $(BASE_STAMP)   ## Fetch + customize the pinned aarch64 base rootfs (host)
 rootfs:    $(ROOTFS)       ## Assemble the read-only root (kernel+fw+base, in container)
 boot:      $(BOOTIMG)      ## Package the all-boards boot artifact (in container)
@@ -133,12 +144,27 @@ $(FW_EXTRACT):
 	firmware/extract.sh $(SOC) $(VENDOR)
 
 # ==============================================================================
+# From-source overlay packages (host — build-overlay.sh drives docker + qemu binfmt)
+# ==============================================================================
+# Rebuild holo packages with novadeck patches into the local pacman repo work/repo/<soc>/.
+# Only when at least one source.pin exists does `base` depend on it (else nothing to build).
+$(OVERLAY_DB): base-devel.digest $(OVERLAY_PINS) $(OVERLAY_PATCHES)
+	packages/build-overlay.sh
+
+# ==============================================================================
 # Base rootfs (host — customize-base.sh drives docker + qemu binfmt itself)
 # ==============================================================================
 $(BASE_STAMP): base.digest $(PREBUILT_PINS)
 	images/customize-base.sh $(SOC)
 	@test -f work/base/$(SOC)/usr/bin/sshd   # sentinel: sshd present => release runtime layered in
 	@touch $@   # recency marker outside the root-owned base tree (its own mtimes are frozen)
+
+# A built overlay repo is an extra base input: customize-base installs the patched packages
+# from it and folds its content hash into the reuse-cache key. Wire it as a prerequisite only
+# when source.pin packages exist, so a repo with no overlay still builds normally.
+ifneq ($(OVERLAY_PINS),)
+$(BASE_STAMP): $(OVERLAY_DB)
+endif
 
 # ==============================================================================
 # Kernel (container) — needs both firmware sets baked in (CONFIG_EXTRA_FIRMWARE)
@@ -192,5 +218,8 @@ clean-base: ## Remove the (root-owned) cached base rootfs for SOC
 	docker run --rm -v $(CURDIR)/work/base:/wb busybox rm -rf /wb/$(SOC)
 	rm -f $(BASE_STAMP)   # drop the recency marker too, else the next build skips a gone base
 
-distclean: clean clean-base ## clean + drop fetched/extracted firmware + kernel work tree
+clean-overlay: ## Remove the built (arch-scoped) overlay pacman repo + build tree
+	rm -rf work/repo work/overlay-build
+
+distclean: clean clean-base clean-overlay ## clean + drop fetched/extracted firmware + kernel work tree
 	rm -rf work/kernel/linux-$(SOC)* firmware/linux-fw/$(SOC) firmware/extracted/$(SOC)

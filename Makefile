@@ -59,7 +59,13 @@ TEST_ENV := -e NOVADECK_TEST -e NOVADECK_WIFI_SSID -e NOVADECK_WIFI_PSK -e NOVAD
 BUILD_STAMP := out/.build-image.stamp
 FW_LINUX     := firmware/linux-fw/$(SOC)/.fetched.stamp
 FW_EXTRACT   := firmware/extracted/$(SOC)/sha256sums.txt
-BASE         := work/base/$(SOC)/usr/bin/sshd
+# The base tree is exported root-owned with the source image's FROZEN mtimes (e.g. sshd dates
+# to the image build, not to this run), so it can't be the make target — a content change
+# wouldn't bump any in-tree mtime and downstream stages would skip. A stamp outside that tree,
+# touched after a successful customize, carries the real recency instead. It also lets a prebuilt-pin
+# bump propagate: the pins are listed as prerequisites so editing one re-runs customize-base.
+PREBUILT_PINS := $(wildcard packages/*/prebuilt.pin)
+BASE_STAMP   := work/base/$(SOC).stamp
 KERNEL       := $(OUT)/Image.gz
 ROOTFS       := $(OUT)/images/rootfs.img
 BOOTIMG      := $(OUT)/boot/$(SOC)-boot.img
@@ -94,7 +100,7 @@ toolchain: $(BUILD_STAMP) ## Build the novadeck-build cross-compile docker image
 kernel:    $(KERNEL)       ## Build Image.gz + dtbs + modules (in build container)
 fw-linux:  $(FW_LINUX)     ## Fetch open linux-firmware blobs (host, network)
 fw-extract: $(FW_EXTRACT)  ## Stage device firmware from VENDOR=<vendor-partition-tree>
-base:      $(BASE)         ## Fetch + customize the pinned aarch64 base rootfs (host)
+base:      $(BASE_STAMP)   ## Fetch + customize the pinned aarch64 base rootfs (host)
 rootfs:    $(ROOTFS)       ## Assemble the read-only root (kernel+fw+base, in container)
 boot:      $(BOOTIMG)      ## Package the all-boards boot artifact (in container)
 sdcard:    $(SDCARD)       ## Build the flashable SD-card image (in container)
@@ -129,9 +135,10 @@ $(FW_EXTRACT):
 # ==============================================================================
 # Base rootfs (host — customize-base.sh drives docker + qemu binfmt itself)
 # ==============================================================================
-$(BASE): base.digest
+$(BASE_STAMP): base.digest $(PREBUILT_PINS)
 	images/customize-base.sh $(SOC)
-	@test -f $@   # sentinel: sshd present => release runtime layered in
+	@test -f work/base/$(SOC)/usr/bin/sshd   # sentinel: sshd present => release runtime layered in
+	@touch $@   # recency marker outside the root-owned base tree (its own mtimes are frozen)
 
 # ==============================================================================
 # Kernel (container) — needs both firmware sets baked in (CONFIG_EXTRA_FIRMWARE)
@@ -147,7 +154,7 @@ manifest: $(KERNEL) ## Verify firmware-manifest.txt vs the built kernel (in cont
 # ==============================================================================
 # Read-only root (container) — base userspace + kernel + firmware -> Btrfs image
 # ==============================================================================
-$(ROOTFS): $(KERNEL) $(BASE) $(FW_LINUX) $(FW_EXTRACT) | $(BUILD_STAMP)
+$(ROOTFS): $(KERNEL) $(BASE_STAMP) $(FW_LINUX) $(FW_EXTRACT) | $(BUILD_STAMP)
 	$(DOCKER) $(TEST_ENV) $(BUILD_IMG) \
 	  images/assemble-rootfs.sh $(SOC) /src/work/base/$(SOC)
 
@@ -183,6 +190,7 @@ clean: ## Remove built artifacts for SOC (out/<soc>), keep firmware/base caches
 # fails for the build user — remove it from inside a throwaway container as root.
 clean-base: ## Remove the (root-owned) cached base rootfs for SOC
 	docker run --rm -v $(CURDIR)/work/base:/wb busybox rm -rf /wb/$(SOC)
+	rm -f $(BASE_STAMP)   # drop the recency marker too, else the next build skips a gone base
 
 distclean: clean clean-base ## clean + drop fetched/extracted firmware + kernel work tree
 	rm -rf work/kernel/linux-$(SOC)* firmware/linux-fw/$(SOC) firmware/extracted/$(SOC)

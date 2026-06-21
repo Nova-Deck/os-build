@@ -210,6 +210,9 @@ EOF
 # novadeck Phase-2 smoke: bare gamescope on Turnip (DRM/KMS). TEST-ONLY. Run over SSH as root,
 # watch the panel.  Usage: nova-gamescope-smoke [client]   (default client: vkcube)
 set -eu
+# Force the real DRM/KMS backend: a stray WAYLAND_DISPLAY/DISPLAY in the env makes gamescope try
+# to nest under a (non-existent) parent compositor and fail with "Failed to connect to wayland socket".
+unset WAYLAND_DISPLAY DISPLAY
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/0}"
 mkdir -p "$XDG_RUNTIME_DIR"; chmod 700 "$XDG_RUNTIME_DIR"
 client="${1:-vkcube}"

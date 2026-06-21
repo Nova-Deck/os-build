@@ -22,9 +22,10 @@ Wayland WSI** + the modifiers/present features gamescope wants are all present o
 | # | Check | How | Status |
 |---|---|---|---|
 | 1a | gamescope present in base | `pacman -Si gamescope seatd` against the pinned base repo | ✅ both in `extra/aarch64`: gamescope 3.16.17-1, seatd 0.9.1-1 (verified 2026-06-21) |
-| 1b | gamescope opens DRM/KMS | `nova-gamescope-smoke` — DRM backend under `seatd-launch` (holo libseat has only logind+seatd backends, no `builtin`) | ◐ gamescope starts + selects Turnip Adreno 750 + DRM-modifier support; seat fixed (was `builtin` fail) — re-test DRM acquisition on HW |
-| 1c | Vulkan client renders under gamescope | default client `vkcube` → gamescope Wayland → Turnip WSI; cube on panel | ☐ on HW |
-| 1d | Input reaches the client | InputPlumber virtual gamepad (Phase-1 green) seen inside gamescope via libinput | ☐ on HW |
+| 1b | gamescope opens DRM/KMS | `nova-gamescope-smoke` — DRM backend under `seatd-launch` (holo libseat has only logind+seatd backends, no `builtin`) | ✅ seat via seatd; opens `/dev/dri/card0`, selects `DSI-1` @ native `1440x2560@60`; **first (modeset) atomic commit scans out a frame** (LINEAR XR24, bw OK) |
+| 1c | Vulkan client renders under gamescope | default client `vkcube` → gamescope Wayland → Turnip WSI; cube on panel | ◐ **client path proven** (Gamescope-WSI swapchain created on Turnip, BGRA8888) but **not visible — blocked by 1e** |
+| 1d | Input reaches the client | InputPlumber virtual gamepad (Phase-1 green) seen inside gamescope via libinput | ☐ blocked by 1e |
+| 1e | **Per-frame atomic flip** | steady-state plane-only flips to DSI-1 | ❌ **BLOCKER**: every flip after the first returns `EINVAL` (`xwm: Failed to prepare 1-layer flip (Invalid argument)`), rejected at DRM-core level (no DPU `atomic_check` log) |
 
 **How to run** (TEST build, SSH in, watch the panel):
 
@@ -39,13 +40,47 @@ SSH/console bring-up path on a throwaway card. `gamescope` + `seatd` themselves 
 **release** package set (`images/customize-base.sh` PKGS) — they are layer-B runtime, not test
 tooling.
 
-### Likely failure modes to watch (record findings here)
-- Turnip missing a Wayland-WSI / DMA-BUF modifier gamescope requires → contribute Mesa fix or
-  pin a known-good Turnip (mirrors the Phase-1 GPU-firmware risk).
-- `present_wait` / explicit-sync / VRR / HDR gaps → degrade gracefully; document as a layer-C
-  stub rather than blocking.
-- libseat `builtin` insufficient (some setups need a real seat) → fall back to running `seatd`
-  and `LIBSEAT_BACKEND=seatd`.
+### Findings (on-HW, 2026-06-21)
+What WORKS: seat (seatd-launch; libseat has no `builtin` backend so `seatd-launch` is required —
+the smoke helper does this and also `unset WAYLAND_DISPLAY` to force the DRM backend), DRM open,
+DSI-1 @ native mode, Turnip selected, **DRM format modifiers supported**, `vkcube` swapchain
+created through the **Gamescope WSI** on Turnip, and the **first atomic (modeset) commit presents
+one frame** (kernel: `dpu_plane_atomic_update … XR24 … ubwc 0`, `dpu_crtc_frame_event_work …
+event:1`). So the whole Turnip↔gamescope↔panel path is sound for a single modeset commit.
+
+RULED OUT as the blocker (tested on HW):
+- **Buffer format/modifier** — the first frame scanned out a plain LINEAR XR24 buffer fine; no
+  `Cannot import FB to DRM` / `AddFB2 … failed`.
+- **Plane scaling** — fails identically with `--disable-layers` + `GAMESCOPE_COMPOSITE_FORCE=1`
+  (full-res 1:1 composited buffer, no plane scaling).
+- **Async / immediate flips** — `--immediate-flips` is opt-in (never passed); also tried
+  `GAMESCOPE_DISABLE_ASYNC_FLIPS=1`.
+- **Explicit sync** — disabled via startup Lua convar
+  (`/etc/gamescope/scripts/*.lua: gamescope.convars.drm_debug_disable_explicit_sync.value = true`;
+  the `Using explicit sync when available` log line disappears, confirming it took) — flips still
+  EINVAL.
+
+### OPEN BLOCKER (1e): msm DPU rejects gamescope's steady-state atomic page-flips
+First blocking modeset commit succeeds; every subsequent **non-blocking, plane-only** atomic flip
+returns `EINVAL` *before* the DPU's `atomic_check` (no kernel driver log → rejected in DRM core /
+the atomic ioctl). gamescope's modeset-retry also fails "entirely". Net: one frame, then frozen.
+
+Investigation backlog (resume here — do offline/cheaply, not interactive roulette):
+1. **Isolate gamescope vs kernel**: drive a non-blocking atomic page-flip with `modetest` (libdrm,
+   `modetest -P` / `-v`) on DSI-1. If `modetest` page-flips work, it's gamescope's request; if it
+   also EINVALs, it's the msm DPU/panel (likely **command-mode DSI** non-blocking-flip handling).
+2. **Capture the failing flip**: `echo 0x14 > /sys/module/drm/parameters/debug` (KMS+ATOMIC) and
+   `strace -f -e trace=ioctl` around `DRM_IOCTL_MODE_ATOMIC` to see the exact flags/props on the
+   commit that returns EINVAL (the first capture only caught the *working* modeset).
+3. **Suspect: `DRM_MODE_ATOMIC_NONBLOCK` + OUT_FENCE / vblank event** on this msm DPU; or a CRTC
+   property gamescope sets only on flips. Check msm DPU `atomic_check`/`atomic_async_check` support
+   for plane-only nonblocking commits on the Pocket S2 panel; look for upstream msm patches.
+4. If kernel-side: pin/patch the kernel; if gamescope-side: a convar/flag or a small gamescope
+   patch. Either way this is the Phase-2 "gamescope needs DPU features that may be absent" risk
+   realized — fix or document as the layer-B gate.
+
+Note: the `/etc/gamescope/scripts/*.lua` explicit-sync convar is NOT a fix (ruled out) — do not
+bake it into the image.
 
 ## Step 2 — gamescope session (Deck UI shell) [NOT STARTED]
 Once bare gamescope renders, layer the Steam **gamescope-session** so the device boots into

@@ -22,7 +22,7 @@ Wayland WSI** + the modifiers/present features gamescope wants are all present o
 | # | Check | How | Status |
 |---|---|---|---|
 | 1a | gamescope present in base | `pacman -Si gamescope seatd` against the pinned base repo | ✅ both in `extra/aarch64`: gamescope 3.16.17-1, seatd 0.9.1-1 (verified 2026-06-21) |
-| 1b | gamescope opens DRM/KMS | `nova-gamescope-smoke` — DRM backend, libseat `builtin`, takes DRM master as root | ☐ on HW |
+| 1b | gamescope opens DRM/KMS | `nova-gamescope-smoke` — DRM backend under `seatd-launch` (holo libseat has only logind+seatd backends, no `builtin`) | ◐ gamescope starts + selects Turnip Adreno 750 + DRM-modifier support; seat fixed (was `builtin` fail) — re-test DRM acquisition on HW |
 | 1c | Vulkan client renders under gamescope | default client `vkcube` → gamescope Wayland → Turnip WSI; cube on panel | ☐ on HW |
 | 1d | Input reaches the client | InputPlumber virtual gamepad (Phase-1 green) seen inside gamescope via libinput | ☐ on HW |
 

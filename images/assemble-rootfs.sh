@@ -212,13 +212,21 @@ EOF
 set -eu
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/0}"
 mkdir -p "$XDG_RUNTIME_DIR"; chmod 700 "$XDG_RUNTIME_DIR"
-# Running as root over SSH there is no logind seat, so take DRM master directly via libseat's
-# builtin backend rather than requiring a seatd daemon / active login session.
-export LIBSEAT_BACKEND="${LIBSEAT_BACKEND:-builtin}"
 client="${1:-vkcube}"
-echo "[nova] gamescope DRM smoke: client=$client  XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR  LIBSEAT_BACKEND=$LIBSEAT_BACKEND"
+echo "[nova] gamescope DRM smoke: client=$client  XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR"
+# An SSH session has no graphical logind seat, and the holo libseat is built with only the
+# logind+seatd backends (no 'builtin'), so run under a seatd daemon. seatd-launch spawns seatd,
+# exports SEATD_SOCK + LIBSEAT_BACKEND=seatd for the child, and tears seatd down on exit.
 set -x
-exec gamescope --backend drm -- "$client"
+if command -v seatd-launch >/dev/null 2>&1; then
+  exec seatd-launch -- gamescope --backend drm -- "$client"
+fi
+# Fallback: hand-start seatd if seatd-launch is unavailable (don't exec, so the trap cleans up).
+seatd >/tmp/seatd.log 2>&1 & seatd_pid=$!
+trap 'kill "$seatd_pid" 2>/dev/null || true' EXIT INT TERM
+i=0; while [ ! -S /run/seatd.sock ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i+1)); done
+export LIBSEAT_BACKEND=seatd
+gamescope --backend drm -- "$client"
 SMOKE
   chmod 0755 "$stage/usr/local/bin/nova-gamescope-smoke"
 fi

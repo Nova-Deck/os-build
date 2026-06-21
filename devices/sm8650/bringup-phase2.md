@@ -23,9 +23,9 @@ Wayland WSI** + the modifiers/present features gamescope wants are all present o
 |---|---|---|---|
 | 1a | gamescope present in base | `pacman -Si gamescope seatd` against the pinned base repo | ✅ both in `extra/aarch64`: gamescope 3.16.17-1, seatd 0.9.1-1 (verified 2026-06-21) |
 | 1b | gamescope opens DRM/KMS | `nova-gamescope-smoke` — DRM backend under `seatd-launch` (holo libseat has only logind+seatd backends, no `builtin`) | ✅ seat via seatd; opens `/dev/dri/card0`, selects `DSI-1` @ native `1440x2560@60`; **first (modeset) atomic commit scans out a frame** (LINEAR XR24, bw OK) |
-| 1c | Vulkan client renders under gamescope | default client `vkcube` → gamescope Wayland → Turnip WSI; cube on panel | ◐ **client path proven** (Gamescope-WSI swapchain created on Turnip, BGRA8888) but **not visible — blocked by 1e** |
-| 1d | Input reaches the client | InputPlumber virtual gamepad (Phase-1 green) seen inside gamescope via libinput | ☐ blocked by 1e |
-| 1e | **Per-frame atomic flip** | steady-state plane-only flips to DSI-1 | ❌ **BLOCKER**: every flip after the first returns `EINVAL` (`xwm: Failed to prepare 1-layer flip (Invalid argument)`), rejected at DRM-core level (no DPU `atomic_check` log) |
+| 1c | Vulkan client renders under gamescope | default client `vkcube` → gamescope Wayland → Turnip WSI; cube on panel | ✅ **CLOSED (HW 2026-06-21)**: patched gamescope + `--use-rotation-shader --immediate-flips` → vkcube animates **upright landscape** on panel |
+| 1d | Input reaches the client | InputPlumber virtual gamepad (Phase-1 green) seen inside gamescope via libinput | ☐ next |
+| 1e | **Per-frame atomic flip** | steady-state plane-only flips to DSI-1 | ✅ **CLOSED (HW)**. Cause = gamescope's compensating **90° plane rotation** on a LINEAR buffer; msm DPU rejects `ROTATE_90` except on inline-rotation pipes w/ UBWC. Fix: patched gamescope (`3.16.17-1.1`, from-source overlay `packages/gamescope`) rotates in **GPU composite** via `--use-rotation-shader`, scanning out `ROTATE_0`. The composite-flip path stalls on this panel's vsync'd page-flip completion, so `--immediate-flips` is required for continuous frames (see follow-up below). |
 
 **How to run** (TEST build, SSH in, watch the panel):
 
@@ -60,24 +60,50 @@ RULED OUT as the blocker (tested on HW):
   the `Using explicit sync when available` log line disappears, confirming it took) — flips still
   EINVAL.
 
-### OPEN BLOCKER (1e): msm DPU rejects gamescope's steady-state atomic page-flips
-First blocking modeset commit succeeds; every subsequent **non-blocking, plane-only** atomic flip
-returns `EINVAL` *before* the DPU's `atomic_check` (no kernel driver log → rejected in DRM core /
-the atomic ioctl). gamescope's modeset-retry also fails "entirely". Net: one frame, then frozen.
+### RESOLVED (1e): root cause = panel `rotation = <90>` → gamescope plane `ROTATE_90` the DPU can't do
+**Confirmed on HW 2026-06-21.** `seatd-launch -- gamescope --backend drm --force-orientation normal
+-- vkcube` → vkcube animates steady-state (cube spins, displayed sideways). The earlier EINVAL was
+**not** a generic nonblocking-flip / command-mode-DSI problem — it was rotation:
 
-Investigation backlog (resume here — do offline/cheaply, not interactive roulette):
-1. **Isolate gamescope vs kernel**: drive a non-blocking atomic page-flip with `modetest` (libdrm,
-   `modetest -P` / `-v`) on DSI-1. If `modetest` page-flips work, it's gamescope's request; if it
-   also EINVALs, it's the msm DPU/panel (likely **command-mode DSI** non-blocking-flip handling).
-2. **Capture the failing flip**: `echo 0x14 > /sys/module/drm/parameters/debug` (KMS+ATOMIC) and
-   `strace -f -e trace=ioctl` around `DRM_IOCTL_MODE_ATOMIC` to see the exact flags/props on the
-   commit that returns EINVAL (the first capture only caught the *working* modeset).
-3. **Suspect: `DRM_MODE_ATOMIC_NONBLOCK` + OUT_FENCE / vblank event** on this msm DPU; or a CRTC
-   property gamescope sets only on flips. Check msm DPU `atomic_check`/`atomic_async_check` support
-   for plane-only nonblocking commits on the Pocket S2 panel; look for upstream msm patches.
-4. If kernel-side: pin/patch the kernel; if gamescope-side: a convar/flag or a small gamescope
-   patch. Either way this is the Phase-2 "gamescope needs DPU features that may be absent" risk
-   realized — fix or document as the layer-B gate.
+- The Pocket S2 panel node (`arch/arm64/boot/dts/qcom/sm8650-ayaneo-ps2.dts:59`,
+  `compatible = "ayaneo,wt0630-2k"`) declares `rotation = <90>`. The panel driver publishes that as
+  the connector **`panel orientation`** property.
+- gamescope reads it and applies a compensating **90° plane rotation** on every steady-state flip to
+  present upright landscape.
+- `dpu_plane.c` advertises only `ROTATE_0 | ROTATE_180 | REFLECT_*` on a normal pipe (line ~1797);
+  `ROTATE_90/270` exists **only** on inline-rotation pipes and **only** for a UBWC-tiled format list
+  (`dpu_plane_check_inline_rotation`, line ~693). gamescope's buffer is **LINEAR** → `ROTATE_90` is
+  an unsupported rotation value → **drm core rejects it before the driver `atomic_check`** (hence no
+  DPU log) → EINVAL on every flip. First modeset frame survived because it didn't carry the rotated
+  client plane; Phase-1 `vkcube --wsi display` worked because direct present is `ROTATE_0`.
+
+So the Turnip↔gamescope↔DPU path is sound. `--force-orientation normal` is the de-risk unblock (but
+the image is sideways — portrait panel, no compensation).
+
+### FIX (CLOSED on HW 2026-06-21): landscape-upright via a gamescope composite-rotation patch
+A portrait panel in a landscape chassis needs a 90° transform *somewhere*, and the msm DPU plane
+cannot do it for our LINEAR buffers — so the rotation is done in gamescope's **GPU composite** step
+(scanning out a `ROTATE_0` buffer) via a rotation-shader patch (from ROCKNIX). It is **opt-in**:
+`gamescope --use-rotation-shader` (the flag the patch adds).
+
+Because that is a gamescope **code** change, it ships as the first **from-source overlay package**
+(`packages/gamescope/source.pin` + `patches/0001-rotate-portrait-panel-in-composite.patch`):
+`make overlay` rebuilds the holo gamescope PKGBUILD with the patch (pkgrel `3.16.17-1.1`) into the
+local pacman repo `work/repo/aarch64/`, and `customize-base.sh` inserts that repo **ahead** of the
+holo repos so the patched build is installed (verified: base carries `gamescope-3.16.17-1.1`). See
+`packages/README.md` for the mechanism. The `nova-gamescope-smoke` helper now launches with
+`--use-rotation-shader --immediate-flips`.
+
+**On-HW result:** `--use-rotation-shader` alone presented one upright frame then froze; adding
+`--immediate-flips` gives continuous upright-landscape animation. (Plain `--force-orientation normal`
+spins fine but sideways.)
+
+**FOLLOW-UP (not blocking layer-B):** the shader composite-flip path freezes after the first frame
+under vsync'd flips and needs `--immediate-flips` — i.e. the panel's vsync'd page-flip completion
+isn't re-arming the next composite flip (the old command-mode-DSI vblank suspicion, now scoped to
+the composite path; the direct-scanout path paces fine). `--immediate-flips` means no vsync / possible
+tearing, so revisit before the real Deck-UI session: investigate the composite-path flip-done/vblank
+handling on this msm DPU (vs the direct path that works).
 
 Note: the `/etc/gamescope/scripts/*.lua` explicit-sync convar is NOT a fix (ruled out) — do not
 bake it into the image.

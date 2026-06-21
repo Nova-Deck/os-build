@@ -15,12 +15,16 @@ version: 0.77.6
 url: https://.../inputplumber-aarch64.tar.gz
 sha256: 0e0f7600…                  # from the asset's .sha256.txt sidecar
 strip: 1                           # tar --strip-components to land files at /usr
+deps: libiio                       # optional: holo-repo runtime deps (space-separated)
 ```
 
 `images/customize-base.sh` auto-discovers every `prebuilt.pin`, fetches + sha256-verifies
 it on the host, and extracts it into the release base — **adding a package is just a new
-pin file, no code change**. The set of installed prebuilts is recorded in the base at
-`/usr/lib/novadeck/prebuilt.manifest`, which keys the base reuse-cache (bump or add a pin
-→ the base rebuilds). Current pins: `inputplumber/` (InputPlumber input daemon).
+pin file, no code change**. Any `deps:` a pin declares are pacman-installed into the base
+alongside the prebuilt (e.g. shared libraries the binary links), so a prebuilt's runtime
+deps live with the pin instead of being hardcoded in the install list. The set of installed
+prebuilts **and their deps** is recorded in the base at `/usr/lib/novadeck/prebuilt.manifest`,
+which keys the base reuse-cache (bump a pin, or change its deps, → the base rebuilds).
+Current pins: `inputplumber/` (InputPlumber input daemon; `deps: libiio`).
 
 _Phase 0 placeholder — populated in Phases 2-3._

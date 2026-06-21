@@ -13,6 +13,8 @@
 #   url      -> release asset URL (the tarball)
 #   sha256   -> from the asset's .sha256.txt sidecar (verified before extract)
 #   strip    -> tar --strip-components when extracting into the rootfs
+#   deps     -> (optional) space-separated holo-repo packages this prebuilt needs at runtime;
+#               pacman-installed into the base alongside it (e.g. shared libraries it links)
 #
 # To bump: pick a tag at https://github.com/ShadowBlip/InputPlumber/releases and set
 # version + url + sha256 together.
@@ -21,3 +23,5 @@ version: 0.77.6
 url: https://github.com/ShadowBlip/InputPlumber/releases/download/v0.77.6/inputplumber-aarch64.tar.gz
 sha256: 0e0f7600be84b923e4dcd7f2ecb551de733f17256df7327a14bdc98b293b189b
 strip: 1
+# Binary links libiio.so.0 (IIO sensors/gyro) — pulled from the holo repo, not bundled.
+deps: libiio

@@ -42,8 +42,8 @@ DEST="$ROOT/work/base/$SOC"
 PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-tools mesa)
 
 # Test-only packages — installed ONLY under NOVADECK_TEST=1, NEVER in a release base.
-# On-device bring-up tools; evtest reads raw /dev/input events to verify the gamepad.
-TEST_PKGS=(evtest)
+# On-device bring-up tools: evtest reads raw /dev/input events; usbutils provides lsusb.
+TEST_PKGS=(evtest usbutils)
 
 # Precompiled external packages: every packages/<name>/prebuilt.pin (url + sha256 + strip)
 # is fetched on the host and extracted into the base. PREBUILT_DIR stages the verified

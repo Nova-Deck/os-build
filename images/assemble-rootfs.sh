@@ -85,7 +85,12 @@ mkdir -p "$stage/etc"
 # devices/<soc>/inputplumber/ into /etc/inputplumber/ and enable the daemon. Unlike the
 # TEST block below this is part of EVERY build — a handheld needs its gamepad/gyro mapping
 # at first boot. The inputplumber package itself comes from the base (customize-base.sh).
-# /etc/inputplumber overrides the package's /usr/share/inputplumber defaults.
+# /etc/inputplumber overrides the package's /usr/share/inputplumber defaults — but ONLY via
+# the `.d` override dirs InputPlumber actually scans under /etc: composite configs in
+# devices.d/ and capability maps in capability_maps.d/ (the un-suffixed `devices`/
+# `capability_maps` names apply only under the /usr/share base path). The repo tree is laid
+# out with those `.d` names so this plain mirror-copy lands them where the daemon reads them;
+# do NOT rename them back or the configs load from nowhere and no composite device is built.
 IPCONF="$ROOT/devices/$SOC/inputplumber"
 if [ -d "$IPCONF" ]; then
   echo "  injecting InputPlumber config from ${IPCONF#"$ROOT"/}"

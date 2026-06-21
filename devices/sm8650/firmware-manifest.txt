@@ -26,6 +26,11 @@ linux-fw     qca/hmtnv20.b112                                WCN7850 BT NVM vari
 # Video: Iris VPU. Driver hard-requests vpu33_p4.mbn; upstream ships the _s7 signed
 # variant, installed under the requested name (see firmware/LINUX_FW.pin).
 linux-fw     qcom/vpu/vpu33_p4.mbn                           Iris VPU firmware, from vpu33_p4_s7.mbn (linux-firmware)
+# USB host: Renesas uPD720201 xHCI controller (the internal gamepad sits on its bus)
+# needs its firmware uploaded by xhci-pci-renesas. The driver requests it by a fixed
+# name at the /lib/firmware root, so it is shared across all sm8650 boards (Pocket S2
+# + Pocket FIT), not board-scoped.
+device       renesas_usb_fw.mem                              Renesas uPD720201 USB host fw (internal gamepad bus) — common PS2+PF
 # GPU/DSP images: DT requests board-scoped paths (firmware-name in the DTS).
 device       qcom/sm8650/ayaneo/ps2/gen70900_zap.mbn         GPU zap shader — signed per device (PS2)
 device       qcom/sm8650/ayaneo/ps2/adsp.mbn                 audio/sensors DSP image (PS2)

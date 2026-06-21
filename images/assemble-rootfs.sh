@@ -220,16 +220,22 @@ echo "[nova] gamescope DRM smoke: client=$client  XDG_RUNTIME_DIR=$XDG_RUNTIME_D
 # An SSH session has no graphical logind seat, and the holo libseat is built with only the
 # logind+seatd backends (no 'builtin'), so run under a seatd daemon. seatd-launch spawns seatd,
 # exports SEATD_SOCK + LIBSEAT_BACKEND=seatd for the child, and tears seatd down on exit.
+# Patched gamescope (from-source overlay): --use-rotation-shader rotates the portrait-native
+# Pocket S2 panel in the GPU composite and scans out a ROTATE_0 buffer (the msm DPU can't
+# ROTATE_90 a LINEAR plane). That composite-flip path stalls on this panel's vsync'd page-flip
+# completion, so --immediate-flips is required for continuous frames. Verified upright + animating
+# on HW 2026-06-21. See devices/sm8650/bringup-phase2.md step 1e.
+gs_args="--backend drm --use-rotation-shader --immediate-flips"
 set -x
 if command -v seatd-launch >/dev/null 2>&1; then
-  exec seatd-launch -- gamescope --backend drm -- "$client"
+  exec seatd-launch -- gamescope $gs_args -- "$client"
 fi
 # Fallback: hand-start seatd if seatd-launch is unavailable (don't exec, so the trap cleans up).
 seatd >/tmp/seatd.log 2>&1 & seatd_pid=$!
 trap 'kill "$seatd_pid" 2>/dev/null || true' EXIT INT TERM
 i=0; while [ ! -S /run/seatd.sock ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i+1)); done
 export LIBSEAT_BACKEND=seatd
-gamescope --backend drm -- "$client"
+gamescope $gs_args -- "$client"
 SMOKE
   chmod 0755 "$stage/usr/local/bin/nova-gamescope-smoke"
 fi

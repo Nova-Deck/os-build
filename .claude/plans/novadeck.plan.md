@@ -7,16 +7,56 @@
 ## Summary
 
 novadeck is an immutable, A/B-updatable aarch64 Linux distribution that forks SteamOS 3
-"Holo" onto Qualcomm SM8550/8650/8750 mobile silicon. It runs x86/x86_64 Windows + Linux
-games via Proton -> Wine -> FEX-Emu, with native Vulkan via Mesa Turnip on Adreno (no GPU
-emulation). SM8650 is the first device brought up end-to-end to a full gaming session.
+"Holo" onto Qualcomm SM8550/8650/8750 mobile silicon. The Steam client / Deck UI runs
+**native arm64** (see Confirmed Decisions); x86/x86_64 Windows + Linux *games* run via
+Proton → Wine → FEX-Emu, with native Vulkan via Mesa Turnip on Adreno (no GPU emulation).
+SM8650 is the first device brought up end-to-end to a full gaming session.
+
+## Fidelity bar (the end goal, stated explicitly)
+
+The target is **UX-equivalence with official SteamOS handheld mode** — boot straight into the
+gamescope session / Deck UI, Quick Access menu, suspend/resume, power & refresh controls,
+atomic updates surfaced in-UI. **Library-equivalence is an explicit non-goal**: anti-cheat
+(EAC/BattlEye) and per-title FEX coverage mean some x86 titles will never run, so the library
+cannot match a native-x86 Deck. Measure novadeck against the *experience*, not the catalogue.
+
+### What "SteamOS" decomposes into, and where fidelity is won/lost
+
+SteamOS-the-experience is five layers stacked on the Arch/Holo base. Fidelity = how faithfully
+each is reproduced on Adreno/aarch64:
+
+| # | SteamOS layer | Gives the user | On Qualcomm |
+|---|---|---|---|
+| A | Holo userspace (mesa, gamescope, wine, rauc, casync, grub) | the substrate | ✅ ships in the aarch64 base |
+| B | gamescope session + Deck UI | boot → Steam Big Picture, Quick Access, OSK/OSD | Phase 2 — portable but Turnip/Wayland-feature gated |
+| C | `jupiter-*` (steamos-manager, hw-support, powerbuttond, oobe) | TDP/fan/refresh/suspend/brightness/gyro/rotation/OOBE | Phase 2 — **AMD/Deck-specific; the real porting work** |
+| D | Gaming stack (Steam shell + Proton + FEX) | the library actually runs | Phase 3 — shell native; FEX only for x86 games |
+| E | Atomic A/B + in-Steam updater | immutable root, OTA, rollback, "System Update" in UI | Phase 4 |
+
+### Layer-C fidelity matrix (Deck-UI affordances → Qualcomm backing)
+
+The Deck UI's polish lives in `jupiter-hw-support` + `steamos-manager`, which assume AMD APU
+knobs. Each affordance needs a Qualcomm backing or an honest stub — this is the Phase-2/3
+fidelity backlog:
+
+| Deck-UI affordance | SteamOS backing | Qualcomm equivalent / risk |
+|---|---|---|
+| TDP / power slider | AMD ryzenadj/pstate | cpufreq + GPU **devfreq**; no 1:1 TDP — shim maps slider → clocks/thermal |
+| Refresh-rate / VRR switch | gamescope + amdgpu | Turnip + DSI panel modes; VRR likely a **gap** |
+| Suspend / resume | s2idle | Qualcomm **s2idle** maturity = top HW risk after GPU |
+| Brightness / backlight | jupiter | ✅ SY7758 backlight driver in tree (kernel patch 0060) |
+| Gyro / haptics / rotation | jupiter-hw-support | gyro via IIO (libiio already pulled); **panel rotation** (Pocket S2 portrait-native) needs Deck-style handling |
+| Battery / charge | jupiter | fuel-gauge driver + UPower |
+| First-boot OOBE | steamos-oobe | adapt; SteamOS owns first-boot networking (network config is test-only today) |
 
 ## Confirmed Decisions
 
 | Decision | Choice | Rationale |
 |---|---|---|
 | Base/build strategy | Fork SteamOS Holo for aarch64 | Maximum SteamOS UX fidelity (gamescope session, Deck UI, atomic updater) |
-| x86 game support | FEX-Emu + Proton | Standard aarch64 gaming approach; native Vulkan passthrough to Turnip |
+| **Steam client / shell** | **Native arm64** (Valve build) | A native arm64 Steam exists (`repo.steampowered.com/steam/archive/stable/`) → Deck UI runs native, NOT under FEX. **Verify the archive serves arm64 client/runtime bits, not just the amd64-named launcher bootstrapper.** |
+| x86 game support | FEX-Emu + Proton (games only) | Standard aarch64 gaming approach; native Vulkan passthrough to Turnip. FEX is scoped to x86 game payloads, not the shell. |
+| **Kernel page size** | **4K** | FEX/Proton/Wine + most x86 game assets assume 4K pages; 16K breaks them. Cheap kernel-config choice now, catastrophic to retrofit — fix before Phase 3. |
 | Boot path | Pluggable per-device | Resolve fastboot/bootimg vs edk2/UEFI during per-SoC bring-up |
 | Lead device | SM8650 (Adreno 750) | Good balance of performance + mainline/Turnip momentum |
 | Update model | RAUC + casync + Btrfs (SteamOS-native) | Consistent with fork-Holo choice; matches iliana blueprint |
@@ -74,26 +114,41 @@ emulation). SM8650 is the first device brought up end-to-end to a full gaming se
   `holo-packages.steamos.cloud/holo-core-aarch64-preview` + Docker `base`/`base-devel`);
   map iliana casync-bootstrap as rootfs acquisition path; document firmware/license notes.
 - **Validate**: repo scaffolded; base image pulled & pinned reproducibly.
+- **Status**: ✅ done (repo scaffolded, base pinned by digest, build orchestrated via Makefile).
 
 ### Phase 1 — SM8650 generic bring-up [HARD GO/NO-GO GATE]
 - **Action**: boot plain aarch64 rootfs on hardware; bring up UART -> UFS -> USB -> display
   -> input -> Adreno/Turnip Vulkan -> audio -> Wi-Fi -> thermals; assemble firmware bundle
   from vendor partitions.
 - **Validate**: `vulkaninfo` + `vkcube` on Turnip; a native arm64 Vulkan title runs.
+- **Status**: ✅ **CLEARED (2026-06-21)**. On real SM8650 (AYANEO Pocket S2): ROCKNIX ABL boot,
+  panel + fb console, Wi-Fi + SSH (test-only), input via InputPlumber (controller incl. d-pad),
+  hardware Turnip Vulkan 1.4 (vulkaninfo), and `vkcube --wsi display` presenting a spinning cube
+  via KMS (`VK_KHR_display`, no compositor). Audio (step 7) and thermals (step 8) are post-gate;
+  USB-on-HW (step 3) and UFS are off the gate's critical path. See `devices/sm8650/bringup.md`.
 
-### Phase 2 — Adopt base + add SteamOS layer [now small]
+### Phase 2 — Adopt base + add SteamOS layer [now small] ← NEXT
 - **Action**: layer on prebuilt base; package/port jupiter-* + gamescope-session; replace
-  jupiter-hw-support with novadeck Qualcomm HW-support package.
-- **Validate**: gamescope session launches on SM8650.
+  jupiter-hw-support with a novadeck Qualcomm HW-support package (back the layer-C matrix above
+  with cpufreq/devfreq/IIO/UPower/backlight; stub honestly where no Qualcomm equivalent exists).
+- **De-risk first**: bring up **bare gamescope on Turnip** in a test build before the jupiter-*
+  port — isolates the Turnip↔gamescope Vulkan-feature question (present_wait, DMA-BUF modifiers,
+  HDR/VRR) from the porting work. The `vkcube --wsi display` KMS proof is gamescope's exact path.
+- **Validate**: gamescope session launches on SM8650; Deck UI renders; Quick Access + suspend
+  reach the layer-C affordances that have a Qualcomm backing (others documented as stubbed).
 
-### Phase 3 — Gaming stack (FEX-Emu + Proton) [HARD GO/NO-GO GATE]
-- **Action**: package FEX-Emu (+binfmt_misc, thunk/RootFS); bring up Steam (x86_64 under FEX)
-  + Proton; validate x86 game -> Proton -> FEX -> Turnip.
-- **Validate**: one real Proton (Windows) title interactive on SM8650.
+### Phase 3 — Gaming stack (native Steam + FEX/Proton for games) [HARD GO/NO-GO GATE]
+- **Action**: stand up the **native arm64 Steam shell**; package FEX-Emu (+binfmt_misc,
+  thunk/RootFS) and Proton for x86 game payloads; validate x86 game -> Proton -> FEX -> Turnip.
+- **Validate**: native arm64 Steam UI interactive on SM8650, **and** one real Proton (Windows)
+  x86 title playable through FEX → Turnip.
+- **Note**: anti-cheat / per-title FEX limits cap *library* parity (the fidelity-bar non-goal),
+  not the shell.
 
 ### Phase 4 — Immutability & atomic A/B updates [now concretely specified]
 - **Action**: implement iliana model on base's rauc+casync: 8-part A/B + Btrfs-ro +
-  overlayfs /etc + steamos-atomupd; atomic rollback on failed boot.
+  overlayfs /etc + steamos-atomupd; atomic rollback on failed boot. For full fidelity, surface
+  updates **in the Steam UI** ("System Update"), not just a CLI rauc.
 - **Validate**: install -> OTA update -> forced-failure auto-rollback to previous slot.
 
 ### Phase 5 — Pluggable boot stage
@@ -117,17 +172,21 @@ emulation). SM8650 is the first device brought up end-to-end to a full gaming se
 | Risk | Sev | Mitigation |
 |---|---|---|
 | Mobile SoC enablement mainline-immature (esp. SM8750) | CRITICAL | Lead with SM8650; reuse Linaro/pmOS branches; SM8750 last w/ known-gaps |
-| GPU firmware / Turnip feature gaps on Adreno 8xx | HIGH | Validate Vulkan early (Phase 1 gate); contribute Mesa fixes; pin known-good Turnip |
-| FEX perf/thunk coverage under mobile thermals | HIGH | Native GPU thunking; per-title tuning; thermal profiles; accept some titles unplayable |
-| 16K vs 4K page size breaks FEX/Proton/Wine | HIGH | Decide kernel page size early; standardize across devices |
+| gamescope needs Turnip features that may be absent (VRR/HDR/present timing/modifiers) | HIGH | De-risk in Phase 2 with bare gamescope before jupiter-*; contribute Mesa fixes |
+| GPU firmware / Turnip feature gaps on Adreno 8xx | HIGH | Validate Vulkan early (Phase 1 gate ✅); contribute Mesa fixes; pin known-good Turnip |
+| Qualcomm s2idle suspend/resume immaturity | HIGH | Suspend is core to the handheld feel; validate on SM8650 HW early in Phase 2 |
+| FEX perf/thunk coverage under mobile thermals (games) | HIGH | Native GPU thunking; per-title tuning; thermal profiles; accept some titles unplayable |
+| Panel rotation / portrait-native handling (Deck UI assumes landscape) | MEDIUM | Pocket S2 panel orientation; handle like Deck/handhelds in HW-support layer |
+| Native arm64 Steam runtime parity (the build exists, coverage unproven) | MEDIUM | Verify archive serves arm64 client/runtime bits, not just amd64 launcher; fall back to x86 Steam under FEX if gaps |
 | Base is unsupported preview pinned to 2025-11-18 snapshot | MEDIUM | Pin by digest; plan for it to move/vanish; mirror locally |
 | Firmware redistribution / bootloader unlock legality | MEDIUM | No proprietary blob redistribution; document per-device extraction; respect licenses |
-| No upstream arm64 Steam guarantee | MEDIUM | Steam runs x86_64 under FEX; native arm64 Steam is a non-goal |
 
 ## Acceptance
-- [ ] Phase 1 gate: SM8650 boots generic arm64 with Turnip Vulkan
-- [ ] Phase 3 gate: one Proton title interactive on SM8650
-- [ ] Immutable A/B with working OTA + auto-rollback
+- [x] Phase 1 gate: SM8650 boots generic arm64 with Turnip Vulkan (vkcube presents via KMS, 2026-06-21)
+- [ ] Fidelity bar: UX-equivalent to SteamOS handheld mode (library parity is a non-goal)
+- [ ] Phase 2: gamescope session + Deck UI on SM8650; layer-C affordances backed or stubbed
+- [ ] Phase 3 gate: native arm64 Steam shell interactive + one Proton x86 title playable on SM8650
+- [ ] Immutable A/B with working OTA + auto-rollback (updates surfaced in-UI)
 - [ ] Pluggable boot stage produces per-device flashable artifacts
 - [ ] All three SoCs boot to a gaming session
 - [ ] CI matrix builds cosign-signed images + update manifests
@@ -135,5 +194,7 @@ emulation). SM8650 is the first device brought up end-to-end to a full gaming se
 
 ## Effort Concentration
 ~80% of real effort is kernel/DT/firmware enablement (Phases 1, 6) + FEX/Proton/Turnip
-gaming (Phase 3) — both gated by upstream maturity more than novadeck recipes. The Holo
-userspace rebuild was dropped: Valve/Collabora already shipped the aarch64 base.
+gaming (Phase 3) + the jupiter-*/Qualcomm HW-support port (Phase 2, layer C) — gated by upstream
+maturity more than novadeck recipes. The Holo userspace rebuild was dropped: Valve/Collabora
+already shipped the aarch64 base, and a native arm64 Steam build removes the need to emulate the
+shell. FEX is now scoped to x86 *game* payloads, not the UI.

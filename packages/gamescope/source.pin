@@ -1,0 +1,33 @@
+# gamescope — built FROM SOURCE (holo PKGBUILD + a novadeck patch), NOT pulled from the
+# holo binary repo. This is the from-source counterpart of prebuilt.pin: instead of
+# extracting a pinned tarball, packages/build-overlay.sh fetches the holo PKGBUILD from the
+# monorepo raw endpoint at the pinned commit (anonymous read; the PKGBUILD in turn clones
+# gamescope itself from public GitHub at the upstream tag), applies our patches, bumps pkgrel
+# so the build outranks the holo binary, and `makepkg`s it under arm64 qemu in the pinned
+# base-devel image. The result lands in an arch-scoped local pacman repo (work/repo/<arch>/,
+# shared across SoCs) that customize-base.sh prepends ahead of the holo repos.
+#
+# Why source-built: the msm DPU cannot ROTATE_90 a LINEAR plane, so gamescope must rotate the
+# portrait-native Pocket S2 panel in its GPU composite step (a code change → a package
+# rebuild). See devices/sm8650/bringup-phase2.md step 1e + the gamescope-flip-blocker memory.
+#
+# Fields:
+#   name           pkgname (must match the PKGBUILD); also the work/ build-dir + repo entry
+#   pkgbuild_repo  GitLab project path (group/project) hosting the PKGBUILD monorepo
+#   pkgbuild_path  path to the package dir within that repo (the dir holding the PKGBUILD)
+#   pkgbuild_ref   commit SHA to pin (reproducible — never a moving branch like main)
+#   pkgrel_suffix  numeric suffix appended to upstream pkgrel (N -> N.<suffix>, e.g. 1 -> 1.1)
+#                  so pacman prefers our build. makepkg requires pkgrel of the form
+#                  integer[.integer], so this MUST be an integer (not a word like "nova1").
+#   patches        space-separated files under ./patches/, applied `patch -p1` in the
+#                  gamescope source root, in the order listed
+#
+# To bump gamescope: point pkgbuild_path at the new version dir, repin pkgbuild_ref to the
+# commit that introduced it (GitLab API: .../repository/commits?path=<path>&ref_name=main),
+# and re-roll the patch against the new upstream tag.
+name: gamescope
+pkgbuild_repo: holo/holo-core-aarch64-preview
+pkgbuild_path: extra-aarch64/g/gamescope/3.16.17-1
+pkgbuild_ref: 1a6f6e900e9e7957ab6ee3eeeb0d7beff70a13ad
+pkgrel_suffix: 1
+patches: 0001-rotate-portrait-panel-in-composite.patch

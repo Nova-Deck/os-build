@@ -19,9 +19,9 @@
 # To bump: pick a tag at https://github.com/ShadowBlip/InputPlumber/releases and set
 # version + url + sha256 together.
 name: inputplumber
-version: 0.77.6
-url: https://github.com/ShadowBlip/InputPlumber/releases/download/v0.77.6/inputplumber-aarch64.tar.gz
-sha256: 0e0f7600be84b923e4dcd7f2ecb551de733f17256df7327a14bdc98b293b189b
+version: 0.77.7
+url: https://github.com/ShadowBlip/InputPlumber/releases/download/v0.77.7/inputplumber-aarch64.tar.gz
+sha256: 8fdc71dc8259a9216669be00acd57bc584918cbbf24aadd89cc72df8b8770c83
 strip: 1
 # Binary links libiio.so.0 (IIO sensors/gyro) — pulled from the holo repo, not bundled.
 deps: libiio

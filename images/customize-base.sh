@@ -39,7 +39,11 @@ PINFILE="$ROOT/base.digest"
 DEST="$ROOT/work/base/$SOC"
 
 # Release runtime packages — credentials are NEVER installed here (test-only at assemble).
-PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-tools mesa)
+# gamescope + seatd are the Deck-UI session compositor (SteamOS layer B) and its seat manager:
+# Phase 2 brings up BARE gamescope on Turnip before the jupiter-* port to isolate the
+# Turnip↔gamescope Wayland-WSI question (see devices/<soc>/bringup-phase2.md). Both are genuine
+# release runtime (the gamescope session needs them), not test-only.
+PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-tools mesa gamescope seatd)
 
 # Test-only packages — installed ONLY under NOVADECK_TEST=1, NEVER in a release base.
 # On-device bring-up tools: evtest reads raw /dev/input events; usbutils provides lsusb.
@@ -75,17 +79,19 @@ for pin in "${PREBUILT_PINS[@]}"; do
   if [ -n "$pin_deps" ]; then PREBUILT_DEPS+=($pin_deps); fi   # word-split: deps is space-separated
 done
 
-# Test packages change the base contents, so the reuse cache must tell a test base apart
-# from a release one — else evtest leaks into a release base, or is missing from a test
-# rebuild. Track that with a SEPARATE marker file (/usr/lib/novadeck/test-pkgs): the
-# prebuilt.manifest must stay pure because the container also reads it as the tar-extraction
-# list, so a non-prebuilt line there would break extraction.
+# The reuse cache must bust whenever the installed package SET changes — a new release
+# package, a new prebuilt's declared deps, or the test-only packages toggling in/out. Probing
+# for one sentinel file per package doesn't scale (and silently misses any package without a
+# sentinel), so instead record the whole sorted install set in ONE marker file
+# (/usr/lib/novadeck/pkgs) and compare it. prebuilt.manifest stays a SEPARATE marker because
+# the container also reads it verbatim as the tar-extraction list, so it must hold only
+# prebuilt rows.
 INSTALL_PKGS=("${PKGS[@]}" "${PREBUILT_DEPS[@]}")
-EXPECTED_TESTPKGS=""
 if [ "${NOVADECK_TEST:-}" = "1" ]; then
   INSTALL_PKGS+=("${TEST_PKGS[@]}")
-  EXPECTED_TESTPKGS="${TEST_PKGS[*]}"
 fi
+# Canonical (sorted, de-duped) install set — the reuse-cache key recorded in the base below.
+EXPECTED_PKGS="$(printf '%s\n' "${INSTALL_PKGS[@]}" | sort -u)"
 
 [ -f "$PINFILE" ] || { echo "no base pin: $PINFILE" >&2; exit 1; }
 # Pin = last non-comment, non-blank line: an image ref ending in @sha256:<digest>.
@@ -96,11 +102,13 @@ case "$REF" in
 esac
 command -v docker >/dev/null 2>&1 || { echo "docker required for base customization" >&2; exit 1; }
 
-# Already customized? Reuse unless FORCE=1 (the emulated pacman run is slow). The stored
-# prebuilt manifest must match the current pins, else a pin bump/add would be silently missed.
-if [ -z "${FORCE:-}" ] && [ -f "$DEST/usr/bin/sshd" ] && [ -f "$DEST/usr/lib/firmware/regulatory.db" ] \
-   && [ "$(cat "$DEST/usr/lib/novadeck/prebuilt.manifest" 2>/dev/null)" = "$EXPECTED_MANIFEST" ] \
-   && [ "$(cat "$DEST/usr/lib/novadeck/test-pkgs" 2>/dev/null)" = "$EXPECTED_TESTPKGS" ]; then
+# Already customized? Reuse unless FORCE=1 (the emulated pacman run is slow). Both markers must
+# match the current inputs, else a package add/removal or a prebuilt pin bump would be silently
+# missed. The pkgs marker is written last in-container, so its presence also proves the
+# customization completed (no need for per-package existence sentinels).
+if [ -z "${FORCE:-}" ] \
+   && [ "$(cat "$DEST/usr/lib/novadeck/pkgs" 2>/dev/null)" = "$EXPECTED_PKGS" ] \
+   && [ "$(cat "$DEST/usr/lib/novadeck/prebuilt.manifest" 2>/dev/null)" = "$EXPECTED_MANIFEST" ]; then
   echo "[novadeck] customized base present: ${DEST#"$ROOT"/} (FORCE=1 to rebuild)" >&2
   echo "$DEST"; exit 0
 fi
@@ -128,8 +136,8 @@ for pin in "${PREBUILT_PINS[@]}"; do
     || { echo "$name sha256 mismatch — refusing" >&2; exit 1; }
 done
 printf '%s\n' "$EXPECTED_MANIFEST" >"$PREBUILT_DIR/prebuilt.manifest"
-# Test-package marker (reuse-cache key only; NOT a tar list) — empty string for release.
-printf '%s' "$EXPECTED_TESTPKGS" >"$PREBUILT_DIR/test-pkgs"
+# Install-set marker (reuse-cache key only; NOT a tar list) — the full sorted package set.
+printf '%s\n' "$EXPECTED_PKGS" >"$PREBUILT_DIR/pkgs"
 
 cid="nova-custom-$SOC-$$"
 trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
@@ -151,9 +159,9 @@ docker run --name "$cid" --platform linux/arm64 -v "$PREBUILT_DIR":/prebuilt:ro 
     done < /prebuilt/prebuilt.manifest
     install -Dm0644 /prebuilt/prebuilt.manifest /usr/lib/novadeck/prebuilt.manifest
   fi
-  # Record the test-package marker (empty for release) so the host reuse-check can tell a
-  # test base from a release one without re-running the slow emulated pacman.
-  install -Dm0644 /prebuilt/test-pkgs /usr/lib/novadeck/test-pkgs
+  # Record the install-set marker (written last) so the host reuse-check can detect any package
+  # add/removal — release, prebuilt-dep, or test-only — without re-running the slow emulated pacman.
+  install -Dm0644 /prebuilt/pkgs /usr/lib/novadeck/pkgs
 
   # Release base ships the runtime PACKAGES only — no network/SSH config or service
   # enablement. First-boot networking is the SteamOS UI'\''s responsibility; all Wi-Fi/SSH

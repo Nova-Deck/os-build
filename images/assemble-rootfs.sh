@@ -194,6 +194,33 @@ EOF
   else
     echo "  [TEST] WARNING: NOVADECK_SSH_PUBKEY unset — sshd (key-only root) will reject login"
   fi
+
+  # Phase-2 de-risk smoke (TEST-ONLY): bring up BARE gamescope on Turnip via DRM/KMS — the
+  # exact compositor path the Deck-UI session uses. SSH in and run `nova-gamescope-smoke`
+  # while watching the panel; it launches gamescope on the DRM backend with a Vulkan client
+  # (default vkcube) rendering through gamescope's Wayland display. This exercises Turnip's
+  # Wayland WSI under the compositor — the open question the plan flags before the jupiter-*
+  # port (the Phase-1 gate only proved the direct VK_KHR_display KMS path). It is launched
+  # by hand, not enabled as a unit, so it can't take the panel away from the SSH/console
+  # bring-up path on a throwaway test card.
+  echo "  [TEST] installing gamescope DRM smoke helper /usr/local/bin/nova-gamescope-smoke"
+  install -d -m0755 "$stage/usr/local/bin"
+  cat >"$stage/usr/local/bin/nova-gamescope-smoke" <<'SMOKE'
+#!/bin/sh
+# novadeck Phase-2 smoke: bare gamescope on Turnip (DRM/KMS). TEST-ONLY. Run over SSH as root,
+# watch the panel.  Usage: nova-gamescope-smoke [client]   (default client: vkcube)
+set -eu
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/0}"
+mkdir -p "$XDG_RUNTIME_DIR"; chmod 700 "$XDG_RUNTIME_DIR"
+# Running as root over SSH there is no logind seat, so take DRM master directly via libseat's
+# builtin backend rather than requiring a seatd daemon / active login session.
+export LIBSEAT_BACKEND="${LIBSEAT_BACKEND:-builtin}"
+client="${1:-vkcube}"
+echo "[nova] gamescope DRM smoke: client=$client  XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR  LIBSEAT_BACKEND=$LIBSEAT_BACKEND"
+set -x
+exec gamescope --backend drm -- "$client"
+SMOKE
+  chmod 0755 "$stage/usr/local/bin/nova-gamescope-smoke"
 fi
 
 # 5. bake the Btrfs image (populate without mounting), then shrink to fit

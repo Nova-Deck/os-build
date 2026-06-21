@@ -127,7 +127,11 @@ fidelity backlog:
   via KMS (`VK_KHR_display`, no compositor). Audio (step 7) and thermals (step 8) are post-gate;
   USB-on-HW (step 3) and UFS are off the gate's critical path. See `devices/sm8650/bringup.md`.
 
-### Phase 2 — Adopt base + add SteamOS layer [now small] ← NEXT
+### Phase 2 — Adopt base + add SteamOS layer [now small] ← IN PROGRESS (branch `phase-2/steamos-layer`)
+- **Status**: started 2026-06-21. De-risk step scaffolded: `gamescope` + `seatd` added to the
+  release base (layer B), a test-only `nova-gamescope-smoke` helper brings up bare gamescope on
+  the DRM/KMS backend with a Vulkan client. Tracked in `devices/sm8650/bringup-phase2.md`.
+  Pending on-HW: confirm gamescope renders a client through Turnip's Wayland WSI.
 - **Action**: layer on prebuilt base; package/port jupiter-* + gamescope-session; replace
   jupiter-hw-support with a novadeck Qualcomm HW-support package (back the layer-C matrix above
   with cpufreq/devfreq/IIO/UPower/backlight; stub honestly where no Qualcomm equivalent exists).

@@ -1,0 +1,43 @@
+#!/bin/sh
+# novadeck gamescope-session — boot the device into a gamescope compositor (SteamOS layer B).
+#
+# This is the SESSION PLUMBING: a long-running gamescope on the DRM/KMS backend that hosts the
+# Deck-UI client. The native arm64 Steam shell lands in Phase 3; until then the session runs a
+# liveness placeholder (see /etc/novadeck/session.conf — swap NOVADECK_SESSION_CMD to `steam ...`
+# in Phase 3, no unit change). It reuses the exact seat + rotation path the Phase-2 smoke
+# validated on HW (devices/sm8650/bringup-phase2.md step 1).
+set -eu
+
+CONF=/etc/novadeck/session.conf
+[ -r "$CONF" ] && . "$CONF"
+: "${NOVADECK_SESSION_CMD:=vkcube}"
+: "${NOVADECK_GAMESCOPE_EXTRA:=}"
+
+# Force the real DRM/KMS backend: a stray WAYLAND_DISPLAY/DISPLAY makes gamescope try to nest under
+# a (non-existent) parent compositor and fail with "Failed to connect to wayland socket".
+unset WAYLAND_DISPLAY DISPLAY
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/0}"
+mkdir -p "$XDG_RUNTIME_DIR"; chmod 700 "$XDG_RUNTIME_DIR"
+
+# Patched gamescope (from-source overlay): --use-rotation-shader rotates the portrait-native Pocket
+# S2 panel in the GPU composite and scans out a ROTATE_0 buffer (the msm DPU can't ROTATE_90 a
+# LINEAR plane). --immediate-flips is required because the composite-flip path stalls on this
+# panel's vsync'd page-flip completion (open follow-up). See bringup-phase2.md step 1e.
+GS_ARGS="--backend drm --use-rotation-shader --immediate-flips"
+
+# No graphical logind seat exists for a system service at boot, and the holo libseat is built with
+# only the logind+seatd backends (no 'builtin'), so run under seatd: seatd-launch spawns seatd,
+# exports SEATD_SOCK + LIBSEAT_BACKEND=seatd for the child, and tears seatd down on exit.
+#
+# seatd-launch refuses to start if /run/seatd.sock already exists ("Socket file found ... refusing
+# to start"), and an unclean exit can leave a stale socket behind — fatal for the next start (and
+# for the unit's Restart=on-failure). We own the only seatd, so if none is actually running, the
+# socket is stale: clear it.
+if [ -S /run/seatd.sock ]; then
+  if ! { command -v pgrep >/dev/null 2>&1 && pgrep -x seatd >/dev/null 2>&1; }; then
+    rm -f /run/seatd.sock
+  fi
+fi
+
+# Word-splitting on GS_ARGS / the session command is intentional (sh, not bash).
+exec seatd-launch -- gamescope $GS_ARGS $NOVADECK_GAMESCOPE_EXTRA -- $NOVADECK_SESSION_CMD

@@ -108,6 +108,23 @@ else
   echo "  (no InputPlumber config at devices/$SOC/inputplumber — skipping; package defaults apply, daemon not force-enabled)"
 fi
 
+# 4d. RELEASE gamescope-session (SteamOS layer B): the boot-to-compositor plumbing. A static,
+# SoC-agnostic overlay tree under session/ (launcher /usr/bin/novadeck-session, its config
+# /etc/novadeck/session.conf, and the novadeck-session.service unit) mirror-copied into the
+# rootfs. gamescope/seatd/vulkan-tools come from the base (customize-base.sh) — this adds no
+# package, only the session wiring. The unit ships installed-but-DISABLED (no preset/symlink):
+# Phase 2 validates it by hand (`systemctl start novadeck-session`) so it never seizes the panel
+# from the SSH/smoke bring-up path; flipping to boot-enabled is a one-line preset add once it is
+# proven on HW and the Phase-3 Steam shell lands. See devices/$SOC/bringup-phase2.md step 2.
+SESSION="$ROOT/session"
+if [ -d "$SESSION" ]; then
+  echo "  injecting novadeck gamescope-session from ${SESSION#"$ROOT"/} (installed, not auto-enabled)"
+  cp -a "$SESSION"/. "$stage/"
+  chmod 0755 "$stage/usr/bin/novadeck-session"
+else
+  echo "  (no session/ tree — skipping gamescope-session injection)"
+fi
+
 # 4c. TEST-ONLY Wi-Fi/SSH injection (NOVADECK_TEST=1). NEVER part of a release/RAUC build:
 # the release base is packages-only and first-boot networking is the SteamOS UI's job. Here
 # we add ALL the scaffolding a throwaway card needs to auto-join the LAN and accept an SSH

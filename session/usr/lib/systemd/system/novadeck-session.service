@@ -1,0 +1,27 @@
+[Unit]
+Description=novadeck gamescope session (SteamOS layer B — Deck UI shell)
+# (Design + validation notes: devices/<soc>/bringup-phase2.md step 2. No Documentation= URI —
+# systemd only accepts URIs there and rejects free text with "Invalid URL".)
+# Controllers should be present inside the session, and basic multi-user state up first.
+After=systemd-user-sessions.service inputplumber.service getty@tty1.service
+Wants=inputplumber.service
+# Own VT1: gamescope's DRM backend takes DRM master and the panel, so getty/fbcon must not fight it.
+Conflicts=getty@tty1.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/novadeck-session
+Restart=on-failure
+RestartSec=2
+# NO VT/TTY binding. The working manual run (and nova-gamescope-smoke) have no controlling VT —
+# seatd's VT-bound seat activates a VT itself. Binding the service to tty1 (TTYPath/StandardInput=tty)
+# clashed with that seat activation and made gamescope exit immediately at boot. Let seatd own the
+# VT; Conflicts=getty@tty1 (above) is enough to keep a getty off the panel.
+StandardInput=null
+StandardOutput=journal
+StandardError=journal
+
+# Phase-2: shipped installed-but-DISABLED. Validate first with `systemctl start novadeck-session`
+# (see bringup-phase2.md step 2); flip to boot-enabled (preset) once on-HW and Steam lands.
+[Install]
+WantedBy=graphical.target

@@ -94,24 +94,79 @@ holo repos so the patched build is installed (verified: base carries `gamescope-
 `packages/README.md` for the mechanism. The `nova-gamescope-smoke` helper now launches with
 `--use-rotation-shader --immediate-flips`.
 
-**On-HW result:** `--use-rotation-shader` alone presented one upright frame then froze; adding
-`--immediate-flips` gives continuous upright-landscape animation. (Plain `--force-orientation normal`
-spins fine but sideways.)
+**On-HW result:** `--use-rotation-shader` rotates correctly → **upright landscape**. (Plain
+`--force-orientation normal` spins fine but sideways.)
 
-**FOLLOW-UP (not blocking layer-B):** the shader composite-flip path freezes after the first frame
-under vsync'd flips and needs `--immediate-flips` — i.e. the panel's vsync'd page-flip completion
-isn't re-arming the next composite flip (the old command-mode-DSI vblank suspicion, now scoped to
-the composite path; the direct-scanout path paces fine). `--immediate-flips` means no vsync / possible
-tearing, so revisit before the real Deck-UI session: investigate the composite-path flip-done/vblank
-handling on this msm DPU (vs the direct path that works).
+**FOLLOW-UP (not blocking the plumbing; blocks a *steady* session) — REVISED 2026-06-22:** the
+composite-flip path **freezes after the first frame intermittently**: same command + build, it
+sometimes animates and sometimes stalls (a race on the command-mode-DSI page-flip completion / next
+composite-flip re-arm; the direct-scanout path always paces fine). NOTE the earlier belief that
+`--immediate-flips` deterministically fixes this was **wrong** — gamescope logs
+`drm: Immediate flips are not supported by the KMS driver` on every run, so the async-flip flag is
+*rejected* by this msm DPU and never actually applied. Real fix needs investigating the composite
+path's flip-done/vblank handling on this DPU (vs the working direct path), not the flag.
 
 Note: the `/etc/gamescope/scripts/*.lua` explicit-sync convar is NOT a fix (ruled out) — do not
 bake it into the image.
 
-## Step 2 — gamescope session (Deck UI shell) [NOT STARTED]
-Once bare gamescope renders, layer the Steam **gamescope-session** so the device boots into
-Big Picture / Deck UI rather than a hand-run client. Native arm64 Steam shell lands in Phase 3;
-Step 2 here is the *session plumbing* (compositor + session unit), not the Steam client.
+## Step 2 — gamescope session (Deck UI shell) [IN PROGRESS]
+Step 1 proved bare gamescope renders a client through Turnip's Wayland WSI when run **by hand**
+(`nova-gamescope-smoke`). Step 2 turns that into the **session plumbing**: a long-running gamescope
+compositor started by a **systemd unit**, so the device boots into the Deck-UI shell rather than a
+hand-run client. Native arm64 Steam lands in Phase 3 — Step 2 is the *compositor + session unit*,
+not the Steam client.
+
+### Plumbing (landed) — `session/` overlay tree
+A static, SoC-agnostic overlay (`session/`) mirror-copied into the rootfs by `images/assemble-rootfs.sh`
+(release block 4d):
+
+| File | Role |
+|---|---|
+| `/usr/bin/novadeck-session` | launcher: seat (`seatd-launch`) + env + patched gamescope (`--backend drm --use-rotation-shader --immediate-flips`, the HW-validated combo) → runs `$NOVADECK_SESSION_CMD` |
+| `/etc/novadeck/session.conf` | single config point — `NOVADECK_SESSION_CMD` (Phase-2 placeholder `vkcube`; Phase-3 → `steam -gamepadui …`), `NOVADECK_GAMESCOPE_EXTRA` |
+| `/usr/lib/systemd/system/novadeck-session.service` | boots the compositor on VT1 (`Conflicts=getty@tty1`, `After=inputplumber`), `Restart=on-failure` |
+
+**Design choices (Phase-2):**
+- **Runs as root via `seatd-launch`** — identical seat + rotation path Step 1 validated; the SteamOS
+  `deck` user / logind-seat model is a Phase-4 hardening concern, not session de-risk.
+- **Shipped installed-but-DISABLED** (no preset, no `.wants` symlink). Validate on HW by hand first —
+  `systemctl start novadeck-session` — so it never seizes the panel from the SSH/`nova-gamescope-smoke`
+  bring-up path, and because the `--immediate-flips` vsync follow-up (step 1e) is still open. Flipping
+  to boot-enabled is a one-line preset add (`enable novadeck-session.service` in a release preset, plus
+  switching the default target to `graphical.target`) once proven + Steam lands.
+- **No new packages** — gamescope/seatd/vulkan-tools (vkcube) already in the release set.
+
+### Validate (on HW, 2026-06-22) — plumbing ✅, two unit bugs found + fixed
+Running the unit at boot first **failed**: gamescope started then exited 0 right after `scriptmgr`.
+Bisected by running the launcher by hand (worked) → it was the **systemd unit context**, two bugs:
+
+1. **VT binding (FIXED).** The first unit bound the service to VT1 (`TTYPath=/dev/tty1` +
+   `StandardInput=tty`). seatd's VT-bound seat activates a VT itself; forcing the service onto tty1
+   clashed with that and gamescope bailed instantly. The working manual run / `nova-gamescope-smoke`
+   have **no controlling VT**. Fix: unit uses `StandardInput=null`, **no `TTYPath`/`TTY*`** — let
+   seatd own the VT (`Conflicts=getty@tty1` still keeps a getty off the panel). Confirmed via
+   `systemd-run -p StandardInput=null /usr/bin/novadeck-session` → renders upright.
+2. **`seatd-launch` socket leak (FIXED).** An unclean exit leaves `/run/seatd.sock`, so the next
+   `seatd-launch` refuses to start (`Socket file found … refusing to start`) — fatal under
+   `Restart=on-failure`. Fix: the launcher clears a stale socket (when no seatd is running) before
+   launch.
+
+**Result:** `novadeck-session` renders the placeholder (`vkcube`) **upright-landscape** under
+systemd — the byte-identical gamescope line to the smoke. Plumbing is sound.
+
+**Still open (NOT a Step-2 bug):** the composite-flip **freeze is intermittent** — same command, same
+build, sometimes animates, sometimes stalls on the first frame. And gamescope logs
+`drm: Immediate flips are not supported by the KMS driver` on **every** run, so `--immediate-flips`
+is *rejected* by this msm DPU and is **not** the deterministic fix step 1e believed — we are racing
+the vsync'd composite-flip / page-flip-completion on the command-mode DSI either way. This is the
+step-1e display follow-up, now reproduced; it gates a *usable* session (not the plumbing).
+
+### Remaining ☐
+- Chase the intermittent composite-flip freeze (vblank / page-flip-done re-arm on the command-mode
+  DSI; the direct-scanout path paces fine) — the real blocker for a steady session.
+- InputPlumber gamepad reaches the client inside the session (ties off step 1d).
+- Boot-enable (preset + default target → `graphical.target`) — deferred until the freeze is solved
+  and the Phase-3 Steam shell lands.
 
 ## Step 3 — novadeck Qualcomm HW-support (layer C) [NOT STARTED]
 Port/replace `jupiter-hw-support` + `steamos-manager` affordances onto Qualcomm backings per the

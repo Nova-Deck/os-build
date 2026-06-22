@@ -128,10 +128,13 @@ fidelity backlog:
   USB-on-HW (step 3) and UFS are off the gate's critical path. See `devices/sm8650/bringup.md`.
 
 ### Phase 2 — Adopt base + add SteamOS layer [now small] ← IN PROGRESS (branch `phase-2/steamos-layer`)
-- **Status**: started 2026-06-21. De-risk step scaffolded: `gamescope` + `seatd` added to the
-  release base (layer B), a test-only `nova-gamescope-smoke` helper brings up bare gamescope on
-  the DRM/KMS backend with a Vulkan client. Tracked in `devices/sm8650/bringup-phase2.md`.
-  Pending on-HW: confirm gamescope renders a client through Turnip's Wayland WSI.
+- **Status**: started 2026-06-21. Step 1 (de-risk) ✅ CLOSED on HW: patched gamescope (composite
+  rotation, from-source overlay) + `--use-rotation-shader --immediate-flips` renders a client through
+  Turnip's Wayland WSI, upright-landscape on the Pocket S2 panel. Step 2 (session plumbing) IN
+  PROGRESS: `session/` overlay ships `novadeck-session` launcher + `novadeck-session.service` +
+  `/etc/novadeck/session.conf` (release block 4d in assemble-rootfs.sh), installed-but-disabled —
+  validate by hand on HW (`systemctl start novadeck-session`), boot-enable deferred with the vsync
+  follow-up. Tracked in `devices/sm8650/bringup-phase2.md`.
 - **Action**: layer on prebuilt base; package/port jupiter-* + gamescope-session; replace
   jupiter-hw-support with a novadeck Qualcomm HW-support package (back the layer-C matrix above
   with cpufreq/devfreq/IIO/UPower/backlight; stub honestly where no Qualcomm equivalent exists).

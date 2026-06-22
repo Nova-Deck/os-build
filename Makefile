@@ -81,6 +81,11 @@ ROOTFS       := $(OUT)/images/rootfs.img
 BOOTIMG      := $(OUT)/boot/$(SOC)-boot.img
 SDCARD       := $(OUT)/images/sdcard.img
 
+# Repo sources the rootfs assembler reads directly (itself + the trees it copies in: the
+# gamescope-session overlay and per-SoC InputPlumber config). find recurses, so files added
+# under those trees are tracked automatically — no per-file Makefile edits as the image grows.
+ASSEMBLE_SRC := $(shell find images/assemble-rootfs.sh session devices/$(SOC)/inputplumber -type f 2>/dev/null)
+
 # Kernel inputs: any change re-triggers the (full, from-scratch) kernel build.
 KERNEL_SRC := kernel/SOURCE.pin kernel/$(SOC)/$(SOC).config \
               $(wildcard kernel/$(SOC)/patches/*.patch) \
@@ -180,7 +185,7 @@ manifest: $(KERNEL) ## Verify firmware-manifest.txt vs the built kernel (in cont
 # ==============================================================================
 # Read-only root (container) — base userspace + kernel + firmware -> Btrfs image
 # ==============================================================================
-$(ROOTFS): $(KERNEL) $(BASE_STAMP) $(FW_LINUX) $(FW_EXTRACT) | $(BUILD_STAMP)
+$(ROOTFS): $(KERNEL) $(BASE_STAMP) $(FW_LINUX) $(FW_EXTRACT) $(ASSEMBLE_SRC) | $(BUILD_STAMP)
 	$(DOCKER) $(TEST_ENV) $(BUILD_IMG) \
 	  images/assemble-rootfs.sh $(SOC) /src/work/base/$(SOC)
 

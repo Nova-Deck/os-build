@@ -13,6 +13,42 @@ CONF=/etc/novadeck/session.conf
 : "${NOVADECK_SESSION_CMD:=vkcube}"
 : "${NOVADECK_GAMESCOPE_EXTRA:=}"
 
+# --- Internal panel selection -> landscape LOGICAL output (--prefer-output/-W/-H/-r) -------------
+# The rotation-shader patch sizes gamescope's scanout buffer by SWAPPING g_nOutputWidth/Height for a
+# 90/270 panel, so the LOGICAL canvas (-W/-H) the client fills must be the panel's PORTRAIT native
+# mode swapped to LANDSCAPE. Omit it and gamescope adopts the portrait connector mode as the logical
+# size, covering only a min(W,H) square of the panel.
+#
+# Some devices wire two panels on DSI: pick the LARGEST connected one (by native area) and pin it
+# with --prefer-output so gamescope scans out that connector even when more than one is present. We
+# read all of this at runtime from sysfs; session.conf may override any of it, and we fall back to a
+# generic landscape default if detection finds nothing. (sysfs exposes the mode resolution but not
+# its refresh, so -r stays a configurable default; gamescope clamps it to the nearest supported rate.)
+detect_panel() {
+  best_area=0
+  for modes in /sys/class/drm/card*-DSI-*/modes; do
+    [ -r "$modes" ] || continue
+    dir=${modes%/modes}
+    [ "$(cat "$dir/status" 2>/dev/null)" = connected ] || continue
+    native=$(head -n1 "$modes" 2>/dev/null)   # preferred (native) mode, e.g. WIDTHxHEIGHT
+    case "$native" in [0-9]*x[0-9]*) ;; *) continue ;; esac
+    pw=${native%x*}; ph=${native#*x}
+    area=$(( pw * ph ))
+    [ "$area" -gt "$best_area" ] || continue
+    best_area=$area
+    NOVADECK_GAMESCOPE_W=$ph                   # swap portrait WxH -> landscape HxW
+    NOVADECK_GAMESCOPE_H=$pw
+    conn=${dir##*/}                            # card0-DSI-1
+    NOVADECK_GAMESCOPE_OUTPUT=${conn#card*-}   # -> DSI-1
+  done
+  [ "$best_area" -gt 0 ]
+}
+if [ -z "${NOVADECK_GAMESCOPE_W:-}" ] || [ -z "${NOVADECK_GAMESCOPE_H:-}" ]; then
+  detect_panel || { NOVADECK_GAMESCOPE_W=1920; NOVADECK_GAMESCOPE_H=1080; }
+fi
+: "${NOVADECK_GAMESCOPE_OUTPUT:=}"
+: "${NOVADECK_GAMESCOPE_REFRESH:=60}"
+
 # Force the real DRM/KMS backend: a stray WAYLAND_DISPLAY/DISPLAY makes gamescope try to nest under
 # a (non-existent) parent compositor and fail with "Failed to connect to wayland socket".
 unset WAYLAND_DISPLAY DISPLAY
@@ -38,7 +74,12 @@ export ENABLE_GAMESCOPE_WSI=0
 # LINEAR plane). NOTE: --immediate-flips is deliberately NOT passed — it is a no-op on this HW. The
 # msm DPU does not advertise DRM_CAP_ATOMIC_ASYNC_PAGE_FLIP, so gamescope logs "Immediate flips are
 # not supported by the KMS driver" and drops the async flag (SupportsTearing()==false).
-GS_ARGS="--backend drm --use-rotation-shader"
+GS_ARGS="--backend drm --use-rotation-shader -W $NOVADECK_GAMESCOPE_W -H $NOVADECK_GAMESCOPE_H -r $NOVADECK_GAMESCOPE_REFRESH"
+# Pin the chosen connector (DRM name, e.g. DSI-1) so gamescope scans out the intended panel on
+# multi-panel devices. -O takes a comma-separated preference list; a single name is fine.
+if [ -n "$NOVADECK_GAMESCOPE_OUTPUT" ]; then
+  GS_ARGS="$GS_ARGS --prefer-output $NOVADECK_GAMESCOPE_OUTPUT"
+fi
 
 # No graphical logind seat exists for a system service at boot, and the holo libseat is built with
 # only the logind+seatd backends (no 'builtin'), so run under seatd: seatd-launch spawns seatd,

@@ -1,0 +1,91 @@
+#!/bin/sh
+# novadeck-suspend — userspace suspend/resume engine (SteamOS layer C). The real "suspend": freeze
+# all of userland with the cgroup v2 freezer so the running game actually STOPS, instead of the
+# immature kernel s2idle path (which is out of scope on these SoCs — see the suspend-freeze-wake
+# design notes / devices/<soc>/bringup-phase2.md step 3).
+#
+# MUST run from an UN-FROZEN context — the novadeck-waked agent's slice (novadeck-wake.slice), which
+# is a sibling of system.slice and therefore NOT frozen. Run from anywhere in system.slice (e.g. an
+# SSH shell) and it would freeze itself mid-suspend. The wake agent (power key) is the resume path.
+#
+# Ordering is load-bearing:
+#   suspend: blank panel (gamescope must still be alive) -> freeze userland
+#   resume:  thaw userland (gamescope alive again) -> unblank panel
+# gamescope is inside the frozen set; it holds the blank KMS modeset statically while frozen, and the
+# wake agent reads the power key from its own evdev fd (the key is not EVIOCGRAB-exclusive), so a
+# frozen gamescope neither un-blanks the panel nor blocks the wake. v1 is panel+freeze only; the
+# cpu/rfkill/governor tweaks (novadeck-rest) layer on once this core path is proven.
+set -u
+
+CONF=/etc/novadeck/rest.conf
+[ -r "$CONF" ] && . "$CONF"
+: "${NOVADECK_REST_SCREEN:=internal}"
+: "${NOVADECK_SUSPEND_FREEZE_CGROUPS:=/sys/fs/cgroup/system.slice /sys/fs/cgroup/user.slice}"
+: "${NOVADECK_SUSPEND_AUTOTHAW:=0}"     # seconds; >0 arms a safety auto-thaw (testing). 0 = off.
+: "${XDG_RUNTIME_DIR:=/run/user/0}"
+export XDG_RUNTIME_DIR
+
+STATE=/run/novadeck/suspended
+LOG=/var/log/novadeck-suspend.log
+# Log to a FILE, never the journal, on the suspend/resume path: journald lives in the frozen set, so
+# writing to it could block the (un-frozen) engine on a frozen reader. /var is plain disk I/O.
+log() { echo "$(date '+%F %T') novadeck-suspend: $*" >> "$LOG" 2>/dev/null; }
+
+panel() {  # $1 = 1 (blank) | 0 (unblank) — via gamescope's own KMS modeset
+  command -v gamescopectl >/dev/null 2>&1 || return 0
+  gamescopectl "drm_sleep_${NOVADECK_REST_SCREEN}_screen" "$1" 2>/dev/null \
+    || log "gamescopectl unreachable; panel unchanged"
+}
+
+freeze() {  # $1 = 1 (freeze) | 0 (thaw) — direct sysfs write, no dbus/systemctl dependency
+  for cg in $NOVADECK_SUSPEND_FREEZE_CGROUPS; do
+    [ -w "$cg/cgroup.freeze" ] && echo "$1" > "$cg/cgroup.freeze" 2>/dev/null
+  done
+}
+
+do_suspend() {
+  [ -e "$STATE" ] && { log "already suspended"; return 0; }
+  mkdir -p "$(dirname "$STATE")"
+  # Arm the safety auto-thaw BEFORE freezing, while dbus/systemd-run still work. The timer lives in
+  # the un-frozen wake slice and fires novadeck-suspend resume if the wake key never comes.
+  if [ "$NOVADECK_SUSPEND_AUTOTHAW" -gt 0 ] 2>/dev/null; then
+    systemctl reset-failed novadeck-autothaw.timer novadeck-autothaw.service 2>/dev/null || true
+    systemd-run --slice=novadeck-wake.slice --on-active="${NOVADECK_SUSPEND_AUTOTHAW}s" \
+      --unit=novadeck-autothaw --description="novadeck suspend safety auto-thaw" \
+      /usr/bin/novadeck-suspend resume >/dev/null 2>&1 \
+      && log "safety auto-thaw armed (${NOVADECK_SUSPEND_AUTOTHAW}s)"
+  fi
+  log "suspending: blank panel"
+  panel 1
+  log "freezing userland: $NOVADECK_SUSPEND_FREEZE_CGROUPS"
+  freeze 1
+  : > "$STATE"
+  log "suspended"
+}
+
+do_resume() {
+  [ -e "$STATE" ] || { log "not suspended"; return 0; }
+  rm -f "$STATE"
+  systemctl stop novadeck-autothaw.timer 2>/dev/null || true   # cancel pending safety (PID1 socket)
+  log "resuming: thaw userland"
+  freeze 0
+  log "unblank panel"
+  panel 0
+  # post-resume hooks (run un-frozen, after thaw). Freezing pauses wpa_supplicant/networkd and the
+  # link may not re-associate on its own (same as after an rfkill cycle) — the test-card Wi-Fi re-up
+  # ships as a hook here. Keeps novadeck-suspend generic; networking specifics stay out of it.
+  for h in /etc/novadeck/resume.d/*; do
+    [ -x "$h" ] || continue
+    log "resume hook: $h"
+    "$h" >> "$LOG" 2>&1 || log "resume hook failed: $h"
+  done
+  log "resumed"
+}
+
+case "${1:-}" in
+  suspend) do_suspend ;;
+  resume)  do_resume ;;
+  toggle)  if [ -e "$STATE" ]; then do_resume; else do_suspend; fi ;;
+  status)  if [ -e "$STATE" ]; then echo suspended; else echo awake; fi ;;
+  *) echo "usage: novadeck-suspend {suspend|resume|toggle|status}" >&2; exit 2 ;;
+esac

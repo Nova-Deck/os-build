@@ -1,0 +1,35 @@
+#!/bin/sh
+# novadeck-waked — the wake/suspend agent (SteamOS layer C). Runs as a service pinned into the
+# top-level novadeck-wake.slice, which is a SIBLING of system.slice and so is NEVER frozen by
+# novadeck-suspend. It watches the power key and toggles suspend<->resume.
+#
+# Why this works while all of userland is frozen: input is delivered by the KERNEL (evdev). This
+# agent opens the power-key device with its own fd via libinput (already on the image — no compiled
+# binary, no new package) and the key is not EVIOCGRAB-exclusive, so it keeps receiving presses even
+# though gamescope/logind also hold the device open and are frozen. logind must be told to ignore
+# the key (HandlePowerKey=ignore drop-in) so it does not poweroff instead.
+set -u
+
+CONF=/etc/novadeck/rest.conf
+[ -r "$CONF" ] && . "$CONF"
+: "${NOVADECK_WAKE_DEV:=/dev/input/event0}"   # pmic_pwrkey on SM8650; override per board in rest.conf
+: "${NOVADECK_WAKE_KEY:=KEY_POWER}"
+: "${NOVADECK_WAKE_DEBOUNCE:=2}"              # seconds to ignore repeat presses after an action
+
+[ -e "$NOVADECK_WAKE_DEV" ] || { echo "novadeck-waked: $NOVADECK_WAKE_DEV not present" >&2; exit 1; }
+command -v libinput >/dev/null 2>&1 || { echo "novadeck-waked: libinput missing" >&2; exit 1; }
+
+echo "novadeck-waked: watching $NOVADECK_WAKE_DEV for $NOVADECK_WAKE_KEY" >&2
+last=0
+# debug-events prints one line per event; we act on the key-press edge only.
+libinput debug-events --device "$NOVADECK_WAKE_DEV" 2>/dev/null | while IFS= read -r line; do
+  case "$line" in
+    *"$NOVADECK_WAKE_KEY"*pressed*)
+      now=$(date +%s)
+      [ $((now - last)) -lt "$NOVADECK_WAKE_DEBOUNCE" ] && continue
+      last=$now
+      echo "novadeck-waked: $NOVADECK_WAKE_KEY -> suspend/resume toggle" >&2
+      novadeck-suspend toggle
+      ;;
+  esac
+done

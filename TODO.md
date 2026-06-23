@@ -36,3 +36,14 @@ investigation that produced it.
 - [ ] **Add a Bluetooth stack.** Pull BlueZ (+ bluez-utils) into the base/package set so the Deck UI
   can pair controllers/audio. Today rfkill sees a `bluetooth` radio but there is no userspace stack.
   Layer-C affordance; pairs with the gamepad/input work.
+
+- [ ] **Release Wi-Fi resume after userspace suspend.** The `resume.d` hook *mechanism* is generic
+  (`novadeck-suspend` runs `/etc/novadeck/resume.d/*` after thaw, ships in the overlay). The test card's
+  hook re-ups `wpa_supplicant@wlan0` (test-only, matches the test Wi-Fi stack). RELEASE uses
+  NetworkManager (Steam wizard-configured) — verify NM reconnects on thaw on its own; if not, ship an
+  NM-flavored resume hook. Don't leave release without a Wi-Fi resume path.
+
+- [ ] **Long-press power = clean shutdown (in `novadeck-waked`).** logind already ignores the key
+  (`HandlePowerKey=ignore`/`LongPress=ignore`); have the agent time the press: short = suspend/resume
+  toggle (done), long hold (software, ~2-4s before the PMIC hardware S2 reset) = `systemctl poweroff`.
+  Gives short/long/very-long = suspend / clean-shutdown / hardware-off.

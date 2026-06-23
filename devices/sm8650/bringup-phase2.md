@@ -395,6 +395,29 @@ toggle`) is a deliberate follow-up.
 governors all `powersave`; then `novadeck-rest leave` → panel returns and every value is restored to
 its pre-rest reading. Re-run enter→leave a few times to confirm idempotence and clean restore.
 
+### Suspend = userspace freeze + power-key wake [VALIDATED on HW 2026-06-24]
+Real suspend stops the *game*, not just the screen. Mechanism (overlay `hw-support/`):
+- **`novadeck-suspend`** — freezes all userland via the cgroup v2 freezer
+  (`echo 1 > /sys/fs/cgroup/{system,user}.slice/cgroup.freeze`) so the game halts; resume thaws,
+  runs `/etc/novadeck/resume.d/*` (generic hook point — the test card's Wi-Fi re-up lives here),
+  and a safety auto-thaw covers a missed wake. Panel blank/unblank via gamescope DPMS around the
+  freeze.
+- **`novadeck-waked`** — the wake agent: `libinput debug-events --device /dev/input/event0`
+  (pmic_pwrkey) → `KEY_POWER pressed` → `novadeck-suspend toggle`. Runs in a top-level
+  **`novadeck-wake.slice`** (sibling of system.slice) so it is NEVER frozen and can thaw the system.
+- logind `HandlePowerKey=ignore` drop-in so it does not poweroff; long-press → PMIC hardware off.
+
+**Proven (power-key cycle):** short-press froze the game (cube stopped on-panel, SSH dropped); a
+second short-press **resumed in 13s** — `novadeck-waked` read `KEY_POWER` *while all userland was
+frozen* (2 toggles logged), thawed, re-associated Wi-Fi via the resume hook, no reboot. The
+freezer halts the workload (cgroup CPU usage → 0) and the un-frozen agent reads the key from its own
+evdev fd (the key is not EVIOCGRAB-exclusive). The kernel s2idle path is never touched.
+
+**Open ☐:** panel blank needs gamescope's `gamescope-0` control socket (absent for the gamescope
+instance during the validated run → screen stayed on the frozen frame; degrades gracefully). cpu/
+rfkill/governor (novadeck-rest) to fold into the suspend path; release Wi-Fi resume (NetworkManager)
+and long-press=clean-shutdown — see TODO.md. Units ship installed-but-DISABLED (validate by hand).
+
 ## Validate (Phase-2 exit, per plan)
 gamescope session launches on SM8650; Deck UI renders; Quick Access + suspend reach the
 layer-C affordances that have a Qualcomm backing (the rest documented as stubbed).

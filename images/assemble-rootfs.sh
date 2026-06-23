@@ -135,9 +135,9 @@ fi
 # watcher / Deck-UI request drives it. See devices/$SOC/bringup-phase2.md step 3.
 HWSUPPORT="$ROOT/hw-support"
 if [ -d "$HWSUPPORT" ]; then
-  echo "  injecting novadeck HW-support from ${HWSUPPORT#"$ROOT"/} (rest-mode; hand-run, no trigger unit)"
+  echo "  injecting novadeck HW-support from ${HWSUPPORT#"$ROOT"/} (rest-mode + wake agent; hand-run, units disabled)"
   cp -a "$HWSUPPORT"/. "$stage/"
-  chmod 0755 "$stage/usr/bin/novadeck-rest"
+  chmod 0755 "$stage/usr/bin/novadeck-rest" "$stage/usr/bin/novadeck-suspend" "$stage/usr/bin/novadeck-waked"
 else
   echo "  (no hw-support/ tree — skipping HW-support injection)"
 fi
@@ -191,6 +191,24 @@ EOF
   # so 5 GHz is enabled from the moment cfg80211 loads (and the helper stops exiting 1).
   install -d -m0755 "$stage/etc/conf.d"
   printf '\nWIRELESS_REGDOM="BE"\n' >>"$stage/etc/conf.d/wireless-regdom"
+
+  # novadeck-suspend resume hook (test-only): a userspace suspend freezes wpa_supplicant/networkd, and
+  # the link may not re-associate on its own after thaw (same as after an rfkill cycle). Re-up wlan0
+  # the way the rfkill resume test validated. Release networking is the SteamOS UI's job, so this hook
+  # lives in the TEST block, not the hw-support overlay.
+  install -d -m0755 "$stage/etc/novadeck/resume.d"
+  cat >"$stage/etc/novadeck/resume.d/50-wlan-reup" <<'EOF'
+#!/bin/sh
+# Re-associate wlan0 after a novadeck-suspend resume (test-card Wi-Fi).
+ip link set wlan0 up 2>/dev/null
+if wpa_cli -i wlan0 status >/dev/null 2>&1; then
+  wpa_cli -i wlan0 reassociate >/dev/null 2>&1
+else
+  systemctl restart wpa_supplicant@wlan0
+fi
+networkctl renew wlan0 >/dev/null 2>&1 || true
+EOF
+  chmod 0755 "$stage/etc/novadeck/resume.d/50-wlan-reup"
 
   # Enable services. /etc/machine-id is empty, so systemd runs preset-all on first boot and
   # the stock 99-default.preset is "disable *"; ship a high-priority preset (70 < 99) so our

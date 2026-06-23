@@ -1,0 +1,13 @@
+[Unit]
+Description=novadeck power-key wake/suspend agent
+# The agent only needs the power-key evdev (present from boot), not the gamescope session, so it has
+# no hard dependency on novadeck-session — it manages suspend/resume whenever the device is up.
+
+[Service]
+Slice=novadeck-wake.slice
+ExecStart=/usr/bin/novadeck-waked
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

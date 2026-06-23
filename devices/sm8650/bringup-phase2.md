@@ -24,7 +24,7 @@ Wayland WSI** + the modifiers/present features gamescope wants are all present o
 | 1a | gamescope present in base | `pacman -Si gamescope seatd` against the pinned base repo | ✅ both in `extra/aarch64`: gamescope 3.16.17-1, seatd 0.9.1-1 (verified 2026-06-21) |
 | 1b | gamescope opens DRM/KMS | `nova-gamescope-smoke` — DRM backend under `seatd-launch` (holo libseat has only logind+seatd backends, no `builtin`) | ✅ seat via seatd; opens `/dev/dri/card0`, selects `DSI-1` @ native `1440x2560@60`; **first (modeset) atomic commit scans out a frame** (LINEAR XR24, bw OK) |
 | 1c | Vulkan client renders under gamescope | default client `vkcube` → gamescope Wayland → Turnip WSI; cube on panel | ✅ **CLOSED (HW 2026-06-21)**: patched gamescope + `--use-rotation-shader` → vkcube animates **upright landscape** on panel |
-| 1d | Input reaches the client | InputPlumber virtual gamepad (Phase-1 green) seen inside gamescope via libinput | ☐ next |
+| 1d | Input reaches the client | InputPlumber virtual gamepad (Phase-1 green) seen inside gamescope via libinput | ✅ **CLOSED (HW 2026-06-23)**: `gamescope --backend drm --use-rotation-shader -- evtest /dev/input/event7` — gamescope's hosted child reads the **InputPlumber virtual DualSense** (event7) while gamescope owns the seat/libinput. Physical presses landed: 33 `EV_KEY` (BTN_SOUTH/EAST/WEST/NORTH, BTN_TL/TR) + 103 `EV_ABS` (sticks/triggers) in a 30 s window. gamescope does **not** exclusively grab the pad — it passes through to the client, the exact path the Phase-3 Steam shell needs. |
 | 1e | **Per-frame atomic flip** | steady-state plane-only flips to DSI-1 | ✅ **rotation CLOSED; freeze CHARACTERIZED — re-launch/teardown contamination, NOT a fresh-boot race**. (a) gamescope's compensating **90° plane rotation** on a LINEAR buffer — msm DPU rejects `ROTATE_90` except on inline-rotation pipes w/ UBWC — fixed by patched gamescope (`3.16.23.2-1.1`, from-source overlay `packages/gamescope`) rotating in **GPU composite** via `--use-rotation-shader` (`ROTATE_0` scanout). (b) the "cold-start composite-flip freeze" is **a re-launch artefact**: the decisive 10-reboot experiment (session 3) shows the original WSI-on model spins **10/10 on a true power-on** (L1) and only wedges on **re-launch after a prior instance** (L2, 7/10) — a killed instance leaves stale explicit-sync syncobj/GPU state that wedges the next WSI client. So it is a non-issue at real boot; `ENABLE_GAMESCOPE_WSI=0` masks the restart-path wedge but the proper fix is clean teardown. `--immediate-flips` is a no-op here and was never the fix. (see DECISIVE EXPERIMENT below.) |
 
 **How to run** (TEST build, SSH in, watch the panel):
@@ -347,7 +347,7 @@ reboot (see the METHODOLOGY HOLE + DECISIVE EXPERIMENT in step 1e). `ENABLE_GAME
 mitigation, not a confirmed fix.
 
 ### Remaining ☐
-- InputPlumber gamepad reaches the client inside the session (ties off step 1d).
+- ~~InputPlumber gamepad reaches the client inside the session (ties off step 1d).~~ ✅ **CLOSED (HW 2026-06-23, step 1d)** — gamescope passes the InputPlumber virtual DualSense (event7) through to its hosted client; verified with `gamescope … -- evtest /dev/input/event7`.
 - Boot-enable (preset + default target → `graphical.target`) — unblocked in practice (freeze
   mitigated by `ENABLE_GAMESCOPE_WSI=0`; root cause still OPEN); deferred until the Phase-3 Steam shell lands.
 

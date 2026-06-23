@@ -351,19 +351,49 @@ mitigation, not a confirmed fix.
 - Boot-enable (preset + default target → `graphical.target`) — unblocked in practice (freeze
   mitigated by `ENABLE_GAMESCOPE_WSI=0`; root cause still OPEN); deferred until the Phase-3 Steam shell lands.
 
-## Step 3 — novadeck Qualcomm HW-support (layer C) [NOT STARTED]
+## Step 3 — novadeck Qualcomm HW-support (layer C) [IN PROGRESS]
 Port/replace `jupiter-hw-support` + `steamos-manager` affordances onto Qualcomm backings per the
-layer-C matrix in `.claude/plans/novadeck.plan.md`:
+layer-C matrix in `.claude/plans/novadeck.plan.md`. The backings ship as a static, SoC-agnostic
+overlay tree under `hw-support/` (mirror-copied into the rootfs by `images/assemble-rootfs.sh`
+block 4e), the same overlay mechanism as the layer-B `session/` tree.
 
 | Deck-UI affordance | Qualcomm backing | Notes |
 |---|---|---|
 | TDP / power slider | cpufreq + GPU devfreq | no 1:1 TDP — shim maps slider → clocks/thermal |
 | Refresh-rate / VRR | Turnip + DSI panel modes | VRR likely a gap; stub honestly |
-| Suspend / resume | Qualcomm s2idle | **top HW risk after GPU** — validate early on HW |
+| Suspend / resume | **userspace rest mode (fake suspend)** | real s2idle out of scope — see below |
 | Brightness | SY7758 backlight (kernel patch 0060) | driver in tree |
 | Gyro / rotation | IIO (libiio) | Pocket S2 is portrait-native — Deck-style rotation handling |
 | Battery / charge | fuel-gauge + UPower | |
 | First-boot OOBE | steamos-oobe (adapt) | SteamOS owns first-boot networking |
+
+### Suspend → userspace "rest mode" (`novadeck-rest`) [MECHANISM LANDED; pending on-HW validation]
+Real Qualcomm **s2idle** suspend/resume is immature on these SoCs and kernel-depth debugging it is
+out of scope. Decision (2026-06-23): stand in with a **reversible userspace rest state** instead of
+calling into the kernel sleep path at all. `hw-support/usr/bin/novadeck-rest`:
+
+- **enter** — blank the panel via **gamescope's own KMS modeset** (`gamescopectl drm_sleep_internal_screen 1`;
+  gamescope holds DRM-master and detaches the connector from its CRTC → the DSI link blanks, deeper
+  than a backlight-off), offline every CPU **but the boot CPU** (`/sys/devices/system/cpu/cpuN/online`),
+  soft-block all radios (`/sys/class/rfkill/*/soft`), and switch every cpufreq policy to **powersave**.
+- **leave** — restore each in reverse, from state captured at enter under `/run/novadeck/rest.d/`
+  (records *only* what it actually changed, so it restores the prior governor / CPU / radio state
+  rather than blindly onlining everything).
+- **toggle** / **status** — for the future single-button trigger.
+
+**Why these primitives:** `gamescopectl` is the clean panel lever — it ships in our from-source
+gamescope (`src/Apps/gamescopectl.cpp`, `install: true`) and the `drm_sleep_internal_screen` ConVar
+(`src/Backends/DRMBackend.cpp`) routes through the compositor that already owns DRM-master, so we
+never fight it for the panel. Everything else is pure sysfs — **no new package**.
+
+**Phase-2 scope = MECHANISM only**, shipped hand-run (no trigger unit), exactly like the session was
+de-risked. The trigger that fires it (a power-button watcher / Deck-UI request → `novadeck-rest
+toggle`) is a deliberate follow-up.
+
+**Validate ☐ (on HW):** with the session up, SSH in and run `novadeck-rest enter` → panel blanks,
+`grep -c 1 /sys/devices/system/cpu/cpu*/online` drops to 1, `cat /sys/class/rfkill/*/soft` all `1`,
+governors all `powersave`; then `novadeck-rest leave` → panel returns and every value is restored to
+its pre-rest reading. Re-run enter→leave a few times to confirm idempotence and clean restore.
 
 ## Validate (Phase-2 exit, per plan)
 gamescope session launches on SM8650; Deck UI renders; Quick Access + suspend reach the

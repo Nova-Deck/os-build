@@ -125,6 +125,23 @@ else
   echo "  (no session/ tree — skipping gamescope-session injection)"
 fi
 
+# 4e. RELEASE novadeck HW-support (SteamOS layer C): the Qualcomm backings for Deck-UI affordances
+# that AMD's jupiter-hw-support assumes. A static, SoC-agnostic overlay tree under hw-support/.
+# First backing: novadeck-rest — a userspace "rest mode" (fake suspend) standing in for s2idle,
+# whose maturity on these SoCs is the top HW risk; it blanks the panel (via gamescope's own KMS
+# modeset), offlines all but the boot CPU, soft-blocks radios, and drops cpufreq to powersave. No
+# package added — gamescopectl ships in our from-source gamescope; the rest is pure sysfs. Shipped
+# as a hand-run mechanism (no trigger unit yet): Phase 2 validates it over SSH before a power-button
+# watcher / Deck-UI request drives it. See devices/$SOC/bringup-phase2.md step 3.
+HWSUPPORT="$ROOT/hw-support"
+if [ -d "$HWSUPPORT" ]; then
+  echo "  injecting novadeck HW-support from ${HWSUPPORT#"$ROOT"/} (rest-mode; hand-run, no trigger unit)"
+  cp -a "$HWSUPPORT"/. "$stage/"
+  chmod 0755 "$stage/usr/bin/novadeck-rest"
+else
+  echo "  (no hw-support/ tree — skipping HW-support injection)"
+fi
+
 # 4c. TEST-ONLY Wi-Fi/SSH injection (NOVADECK_TEST=1). NEVER part of a release/RAUC build:
 # the release base is packages-only and first-boot networking is the SteamOS UI's job. Here
 # we add ALL the scaffolding a throwaway card needs to auto-join the LAN and accept an SSH

@@ -88,9 +88,10 @@ BOOTIMG      := $(OUT)/boot/$(SOC)-boot.img
 SDCARD       := $(OUT)/images/sdcard.img
 
 # Repo sources the rootfs assembler reads directly (itself + the trees it copies in: the
-# gamescope-session overlay and per-SoC InputPlumber config). find recurses, so files added
-# under those trees are tracked automatically — no per-file Makefile edits as the image grows.
-ASSEMBLE_SRC := $(shell find images/assemble-rootfs.sh session devices/$(SOC)/inputplumber -type f 2>/dev/null)
+# gamescope-session overlay, the HW-support overlay, and per-SoC InputPlumber config). find
+# recurses, so files added under those trees are tracked automatically — no per-file Makefile
+# edits as the image grows.
+ASSEMBLE_SRC := $(shell find images/assemble-rootfs.sh session hw-support devices/$(SOC)/inputplumber -type f 2>/dev/null)
 
 # Kernel inputs: any change re-triggers the (full, from-scratch) kernel build.
 KERNEL_SRC := kernel/SOURCE.pin kernel/$(SOC)/$(SOC).config \

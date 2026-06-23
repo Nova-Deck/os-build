@@ -24,3 +24,15 @@ investigation that produced it.
 
 - [ ] **`--ready-fd` HDR-preserving handshake** — only worth finishing if HDR is needed *and*
   clean teardown alone doesn't let us drop `ENABLE_GAMESCOPE_WSI=0`. See step 1e session-2 notes.
+
+## Phase 2 — HW-support (layer C)
+
+- [ ] **Rest-mode trigger (`novadeck-rest toggle`).** The rest-mode *mechanism* landed hand-run
+  (`hw-support/usr/bin/novadeck-rest`, validated by SSH per step 3). Wire something to fire it:
+  a power-button watcher (`HandlePowerKey=ignore` in logind + evdev on the power key → `toggle`),
+  the powerbuttond-equivalent, and/or the Deck-UI / steamos-manager suspend request once that lands.
+  Deferred until the mechanism is proven on HW. See `devices/sm8650/bringup-phase2.md` step 3.
+
+- [ ] **Add a Bluetooth stack.** Pull BlueZ (+ bluez-utils) into the base/package set so the Deck UI
+  can pair controllers/audio. Today rfkill sees a `bluetooth` radio but there is no userspace stack.
+  Layer-C affordance; pairs with the gamepad/input work.

@@ -3,8 +3,11 @@
 
 # Build outputs
 /out/
-/build/
 /work/
+# build/ is the docker build CONTEXT (a source dir, not an output): track its inputs
+# (Dockerfile) but ignore any stray artifacts that land in it.
+/build/*
+!/build/Dockerfile
 *.img
 *.img.*
 *.raw

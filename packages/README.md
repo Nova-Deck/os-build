@@ -54,7 +54,32 @@ folds the repo db's hash into the base reuse-cache key. `base` depends on `overl
 rebuild from scratch), upload that dir and point a pinned `[novadeck]` `Server` at the URL instead
 of `file://` — same mechanism, different `Server`.
 
-Current overlay: `gamescope/` (composite-rotation patch for the portrait Pocket S2 panel; needs the
-patch dropped at `packages/gamescope/patches/`).
+### Local (checked-in) PKGBUILD — `pkgbuild_local`
+
+When there is **no suitable holo PKGBUILD** to fetch — a version bump holo hasn't taken, or a
+build the holo recipe doesn't cover — point the pin at a novadeck-owned PKGBUILD committed next
+to it instead of the `pkgbuild_repo`/`pkgbuild_path`/`pkgbuild_ref` triple:
+
+```
+name: mesa
+pkgbuild_local: PKGBUILD                          # checked-in recipe (relative to this dir)
+pkgrel_suffix: 1
+patches: 0001-foo.patch                           # optional; same -p1 injection as fetched pins
+```
+
+Everything else is identical: `build-overlay.sh` bumps `pkgrel`, injects the `patches:` after the
+first `cd` in `prepare()`, and `makepkg`s it under arm64 qemu. The PKGBUILD still downloads its own
+upstream source (e.g. a release tarball), so this stays "from-source", just with a recipe we own.
+
+Current overlay:
+- `gamescope/` — composite-rotation patch for the portrait Pocket S2 panel (fetched holo PKGBUILD;
+  needs the patch dropped at `packages/gamescope/patches/`).
+- `mesa/` — **local PKGBUILD** building mesa `26.1.3` from the upstream tarball. It tracks the
+  Arch/holo recipe (same `arch-meson` invocation + meson options) as closely as possible; the only
+  deviations are `gallium-drivers`/`vulkan-drivers` narrowed to **freedreno** (GL) + **freedreno**
+  Vulkan (Turnip), plus `gallium-rusticl=false` (no OpenCL → no Rust crate chain) and
+  `html-docs=disabled`. LLVM/clang stay on, as upstream. Replaces holo's stale, all-driver
+  `mesa`/`vulkan-freedreno`. Carries SM8750 / Adreno a830 enablement patches under
+  `packages/mesa/patches/`.
 
 _Phase 0 placeholder — populated in Phases 2-3._

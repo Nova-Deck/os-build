@@ -1,0 +1,282 @@
+# novadeck mesa — built FROM SOURCE off the upstream release TARBALL (not a git clone, not the
+# holo binary repo). This tracks the stock Arch/holo mesa recipe AS CLOSELY AS POSSIBLE so the
+# freedreno driver is built exactly the way upstream builds it; the ONLY deliberate deviations are:
+#   * driver selection      — gallium-drivers / vulkan-drivers narrowed to `freedreno` (novadeck
+#                             only ever targets Qualcomm Adreno), which also drops every other
+#                             vulkan-*/opencl/docs split package and the NVK rust-crate machinery.
+#   * gallium-rusticl=false — no OpenCL on a handheld; avoids dragging the Rust toolchain + a
+#                             per-release rust-crate table that would need regenerating each bump.
+#   * html-docs=disabled    — no Sphinx HTML docs in the image.
+# Everything else (arch-meson invocation, --auto-features=enabled behaviour, the rest of the meson
+# options, the kept makedepends, and the package split for the components we DO build) mirrors
+# upstream. LLVM/clang stay ON, exactly as upstream ships mesa.
+#
+# packages/build-overlay.sh uses this via `pkgbuild_local` in packages/mesa/source.pin; the result
+# lands in the arch-scoped local pacman repo that customize-base.sh prepends ahead of the holo
+# repos, so this replaces holo's `mesa` and `vulkan-freedreno`. SM875x / a8xx enablement patches go
+# under packages/mesa/patches/ and are applied -p1 by build-overlay.sh (declared in source.pin).
+#
+# Maintainer: Laurent Carlier <lordheavym@gmail.com>   (upstream Arch mesa)
+# Maintainer: Felix Yan <felixonmars@archlinux.org>
+# Maintainer: Jan Alexander Steffens (heftig) <heftig@archlinux.org>
+
+pkgbase=mesa
+pkgname=(
+  mesa
+  vulkan-freedreno
+  vulkan-mesa-device-select
+  vulkan-mesa-layers
+)
+pkgver=26.1.3
+_pkgver=${pkgver/[a-z]/-&}
+pkgrel=1
+epoch=1
+pkgdesc="Open-source OpenGL drivers (novadeck freedreno-only build)"
+url="https://www.mesa3d.org/"
+arch=(aarch64)
+license=("MIT AND BSD-3-Clause AND SGI-B-2.0")
+makedepends=(
+  # Mirrors upstream makedepends, minus the Rust toolchain (rust, rust-bindgen, cbindgen — only
+  # needed by NVK/rusticl, both off) and Sphinx (python-sphinx, python-sphinx-hawkmoth — html-docs
+  # off). LLVM/clang/libclc/spirv-llvm-translator stay because arch-meson runs --auto-features=
+  # enabled and mesa-clc/llvm enable like they do upstream.
+  clang
+  directx-headers
+  expat
+  gcc-libs
+  glibc
+  libdisplay-info
+  libdrm
+  libelf
+  libglvnd
+  libpng
+  libva
+  libvdpau
+  libx11
+  libxcb
+  libxext
+  libxml2
+  libxrandr
+  libxshmfence
+  libxxf86vm
+  llvm
+  llvm-libs
+  lm_sensors
+  spirv-llvm-translator
+  spirv-tools
+  systemd-libs
+  vulkan-icd-loader
+  wayland
+  xcb-util-keysyms
+  zlib
+  zstd
+
+  cmake
+  elfutils
+  glslang
+  libclc
+  meson
+  python-mako
+  python-packaging
+  python-ply
+  python-pycparser
+  python-yaml
+  wayland-protocols
+  xorgproto
+
+  # mesa-only deps
+  libsysprof-capture
+  valgrind
+)
+options=(
+  # GCC LTO is considered broken by upstream until explicit notice.
+  !lto
+)
+source=(
+  "https://archive.mesa3d.org/mesa-$_pkgver.tar.xz"
+)
+# Provenance: sha256 of mesa-26.1.3.tar.xz. build-overlay.sh runs makepkg with --skipinteg (our
+# locally-added patch sources have no checksums), so this is recorded for human/CI verification and
+# matches the pinned URL+sha in packages/mesa/source.pin. The upstream .sig + validpgpkeys are
+# dropped (the pipeline does not do PGP verification).
+sha256sums=(
+  '7725004e724b34c6d4fbaf5c48fc6c6223aa9f2741d6d7782c699b049356fc45'
+)
+
+prepare() {
+  cd mesa-$_pkgver
+  # build-overlay.sh injects `patch -p1 < "$srcdir/<patch>"` lines right here (after the first
+  # `cd` in prepare()) for every file listed in source.pin's `patches:`. NOTE: unlike upstream we
+  # do NOT loop over source for *.patch here — the pipeline owns patch application.
+
+  # Include package release in the GL version string (matches upstream; helps clients invalidate
+  # GPU shader caches across rebuilds).
+  echo "$_pkgver-novadeck$epoch.$pkgrel" >VERSION
+}
+
+build() {
+  local meson_options=(
+    -D android-libbacktrace=disabled
+    -D b_ndebug=true
+    -D gallium-drivers=freedreno              # novadeck: Adreno only (upstream builds every vendor)
+    -D gallium-extra-hud=true
+    -D gallium-mediafoundation=disabled
+    -D gallium-rusticl=false                  # novadeck: no OpenCL (avoids LLVM/Rust crate chain)
+    -D gallium-va=disabled                    # novadeck: no VA-capable driver in a freedreno build
+    -D gles1=disabled
+    -D html-docs=disabled                     # novadeck: no Sphinx docs in the image
+    -D intel-rt=disabled                      # aarch64 (upstream disables on non-x86)
+    -D libunwind=disabled
+    -D microsoft-clc=disabled
+    -D sysprof=true
+    -D valgrind=enabled
+    -D video-codecs=all
+    -D vulkan-drivers=freedreno               # novadeck: Turnip only
+    -D vulkan-layers=device-select,intel-nullhw,overlay,screenshot,vram-report-limit
+  )
+
+  # Build only minimal debug info to reduce size (matches upstream).
+  CFLAGS+=" -g1"
+  CXXFLAGS+=" -g1"
+
+  arch-meson mesa-$_pkgver build "${meson_options[@]}"
+  meson compile -C build
+}
+
+_pick() {
+  local p="$1" f d; shift
+  for f; do
+    d="$srcdir/$p/${f#"$pkgdir"/}"
+    mkdir -p "$(dirname "$d")"
+    mv -v "$f" "$d"
+    rmdir -p --ignore-fail-on-non-empty "$(dirname "$f")"
+  done
+}
+
+package_mesa() {
+  depends=(
+    expat
+    gcc-libs
+    glibc
+    libdrm
+    libelf
+    libglvnd
+    libx11
+    libxcb
+    libxext
+    libxshmfence
+    libxxf86vm
+    llvm-libs
+    lm_sensors
+    spirv-tools
+    wayland
+    zlib
+    zstd
+  )
+  optdepends=("opengl-man-pages: for the OpenGL API man pages")
+  provides=(
+    "libva-mesa-driver=$epoch:$pkgver-$pkgrel"
+    "mesa-libgl=$epoch:$pkgver-$pkgrel"
+    "mesa-vdpau=$epoch:$pkgver-$pkgrel"
+    libva-driver
+    opengl-driver
+    vdpau-driver
+  )
+  conflicts=(
+    'libva-mesa-driver<1:24.2.7-1'
+    'mesa-libgl<17.0.1-2'
+    'mesa-vdpau<1:24.2.7-1'
+  )
+  replaces=(
+    'libva-mesa-driver<1:24.2.7-1'
+    'mesa-libgl<17.0.1-2'
+    'mesa-vdpau<1:24.2.7-1'
+  )
+
+  meson install -C build --destdir "$pkgdir" --no-rebuild
+
+  (
+    local libdir=usr/lib icddir=usr/share/vulkan/icd.d
+
+    cd "$pkgdir"
+
+    # Split out only the components we build (freedreno Vulkan + the Vulkan layers); everything
+    # else stays in `mesa`. (Upstream also splits radeon/intel/nouveau/etc. — not built here.)
+    _pick vkfdreno $icddir/freedreno_icd.*.json
+    _pick vkfdreno $libdir/libvulkan_freedreno.so
+
+    _pick vkdevice $libdir/libVkLayer_MESA_device_select.so
+    _pick vkdevice usr/share/vulkan/implicit_layer.d
+
+    _pick vklayer $libdir/libVkLayer_*.so
+    _pick vklayer usr/bin/mesa-*-control.py
+    _pick vklayer usr/share/vulkan/explicit_layer.d
+
+    # indirect rendering
+    ln -sr $libdir/libGLX_{mesa,indirect}.so.0
+  )
+
+  install -Dm644 mesa-$_pkgver/docs/license.rst -t "$pkgdir/usr/share/licenses/$pkgname"
+}
+
+package_vulkan-freedreno() {
+  pkgdesc="Open-source Vulkan driver for Adreno GPUs (Turnip)"
+  depends=(
+    expat
+    gcc-libs
+    glibc
+    libdisplay-info  # Turnip's WSI/EDID path links libdisplay-info.so.3 (upstream lists this too);
+                     # without it the ICD fails to load and the loader reports "no drivers".
+    libdrm
+    libx11
+    libxcb
+    libxshmfence
+    spirv-tools
+    systemd-libs
+    vulkan-icd-loader
+    vulkan-mesa-device-select
+    wayland
+    xcb-util-keysyms
+    zlib
+    zstd
+  )
+  optdepends=("vulkan-mesa-layers: additional vulkan layers")
+  provides=(vulkan-driver)
+
+  mv vkfdreno/* "$pkgdir"
+
+  install -Dm644 mesa-$_pkgver/docs/license.rst -t "$pkgdir/usr/share/licenses/$pkgname"
+}
+
+package_vulkan-mesa-device-select() {
+  pkgdesc="Mesa's Vulkan Device Select layer"
+  depends=(
+    glibc
+    libdrm
+    libxcb
+    wayland
+  )
+
+  mv vkdevice/* "$pkgdir"
+
+  install -Dm644 mesa-$_pkgver/docs/license.rst -t "$pkgdir/usr/share/licenses/$pkgname"
+}
+
+package_vulkan-mesa-layers() {
+  pkgdesc="Mesa's Vulkan layers"
+  depends=(
+    gcc-libs
+    glibc
+    libpng
+
+    python
+  )
+  conflicts=(vulkan-mesa-layer)
+  replaces=(vulkan-mesa-layer)
+
+  mv vklayer/* "$pkgdir"
+
+  install -Dm644 mesa-$_pkgver/docs/license.rst -t "$pkgdir/usr/share/licenses/$pkgname"
+}
+
+# vim:set sw=2 sts=-1 et:

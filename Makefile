@@ -20,11 +20,14 @@
 # Memory: builds cross-compile INSIDE docker, never on the host. Don't reorder the
 # kernel patches. work/base/<soc> is root-owned (clean-base uses docker to remove it).
 
-# SOC is mandatory — every artifact path and stage script is per-SoC, so there is no
-# safe default. An empty/unset SOC is a caller error; only `help` (and a bare `make`,
-# which defaults to help) is exempt so the target list is always reachable.
+# SOC is mandatory — every per-SoC artifact path and stage script needs it, so there is no
+# safe default. An empty/unset SOC is a caller error. Exempt are the goals that are NOT
+# per-SoC: `help` (and a bare `make`, which defaults to help) so the target list is always
+# reachable, plus the ARCH-scoped overlay goals `overlay`/`clean-overlay` (one aarch64 build
+# under work/repo/<arch>/ serves every SoC — see OVERLAY_ARCH below, never $(SOC)).
 SOC        ?=
-ifneq ($(filter-out help,$(MAKECMDGOALS)),)
+SOC_EXEMPT := help overlay clean-overlay
+ifneq ($(filter-out $(SOC_EXEMPT),$(MAKECMDGOALS)),)
 ifeq ($(strip $(SOC)),)
 $(error SOC is required — pass SOC=<soc>, e.g. `make kernel SOC=sm8650`)
 endif
@@ -71,6 +74,9 @@ PREBUILT_PINS := $(wildcard packages/*/prebuilt.pin)
 # prerequisites so a pin or patch change rebuilds the overlay (and then the base).
 OVERLAY_PINS    := $(wildcard packages/*/source.pin)
 OVERLAY_PATCHES := $(wildcard packages/*/patches/*.patch)
+# Checked-in local PKGBUILDs (pkgbuild_local in a source.pin, e.g. packages/mesa/PKGBUILD) are
+# build inputs too — track them so editing a recipe (deps, meson options) rebuilds the overlay.
+OVERLAY_PKGBUILDS := $(wildcard packages/*/PKGBUILD)
 # Overlay packages are ARCH-scoped, not SoC-scoped (a rebuilt aarch64 gamescope serves every
 # aarch64 device), so the repo is shared at work/repo/<arch>/ across all SoCs.
 OVERLAY_ARCH    ?= aarch64
@@ -153,7 +159,7 @@ $(FW_EXTRACT):
 # ==============================================================================
 # Rebuild holo packages with novadeck patches into the local pacman repo work/repo/<soc>/.
 # Only when at least one source.pin exists does `base` depend on it (else nothing to build).
-$(OVERLAY_DB): base-devel.digest $(OVERLAY_PINS) $(OVERLAY_PATCHES)
+$(OVERLAY_DB): base-devel.digest $(OVERLAY_PINS) $(OVERLAY_PATCHES) $(OVERLAY_PKGBUILDS)
 	packages/build-overlay.sh
 
 # ==============================================================================

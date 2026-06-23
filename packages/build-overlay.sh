@@ -53,14 +53,27 @@ for pin in "${PINS[@]}"; do
   repo="$(pin_field "$pin" pkgbuild_repo)"
   path="$(pin_field "$pin" pkgbuild_path)"
   ref="$(pin_field "$pin" pkgbuild_ref)"
+  local_pb="$(pin_field "$pin" pkgbuild_local)"
   suffix="$(pin_field "$pin" pkgrel_suffix)"
   patches="$(pin_field "$pin" patches)"
-  : "${name:?$pin: missing name}"; : "${repo:?$pin: missing pkgbuild_repo}"
-  : "${path:?$pin: missing pkgbuild_path}"; : "${ref:?$pin: missing pkgbuild_ref}"
+  : "${name:?$pin: missing name}"
 
   bd="$STAGE/$name"; mkdir -p "$bd"
-  echo "[overlay] $name: fetch PKGBUILD ${repo}@${ref:0:12} ($path)" >&2
-  curl -fsSL "$GL/$repo/-/raw/$ref/$path/PKGBUILD" -o "$bd/PKGBUILD"
+  if [ -n "$local_pb" ]; then
+    # Local PKGBUILD: a novadeck-owned recipe checked in at packages/<name>/<pkgbuild_local>,
+    # used when there is no suitable holo PKGBUILD to fetch (e.g. a version bump or a
+    # driver-trimmed build the holo recipe doesn't cover). makepkg still pulls the upstream
+    # source the PKGBUILD names (e.g. a release tarball) just the same.
+    lpb="$pdir/$local_pb"
+    [ -f "$lpb" ] || { echo "[overlay] $name: missing local PKGBUILD $lpb (declared in $pin)" >&2; exit 1; }
+    echo "[overlay] $name: local PKGBUILD ${local_pb}" >&2
+    cp "$lpb" "$bd/PKGBUILD"
+  else
+    : "${repo:?$pin: missing pkgbuild_repo}"
+    : "${path:?$pin: missing pkgbuild_path}"; : "${ref:?$pin: missing pkgbuild_ref}"
+    echo "[overlay] $name: fetch PKGBUILD ${repo}@${ref:0:12} ($path)" >&2
+    curl -fsSL "$GL/$repo/-/raw/$ref/$path/PKGBUILD" -o "$bd/PKGBUILD"
+  fi
 
   for p in $patches; do
     src="$pdir/patches/$p"

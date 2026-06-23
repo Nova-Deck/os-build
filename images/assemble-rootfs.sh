@@ -232,6 +232,13 @@ set -eu
 unset WAYLAND_DISPLAY DISPLAY
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/0}"
 mkdir -p "$XDG_RUNTIME_DIR"; chmod 700 "$XDG_RUNTIME_DIR"
+# Disable the gamescope WSI Vulkan layer — RESTART-PATH INSURANCE (matches the novadeck-session
+# launcher; not needed at a true boot). The layer's Wayland explicit-sync (linux-drm-syncobj) present
+# path wedges the client (drm_syncobj_array_wait_timeout) only on RE-LAUNCH after a prior instance —
+# the decisive 10-reboot experiment found L1 fresh-boot spins 10/10, L2 re-launch wedges 7/10, so it
+# is teardown contamination, not a fresh-boot race. Off => implicit-sync fallback masks the re-launch
+# wedge. See devices/sm8650/bringup-phase2.md (step 1e, session 3).
+export ENABLE_GAMESCOPE_WSI=0
 client="${1:-vkcube}"
 echo "[nova] gamescope DRM smoke: client=$client  XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR"
 # An SSH session has no graphical logind seat, and the holo libseat is built with only the
@@ -239,10 +246,11 @@ echo "[nova] gamescope DRM smoke: client=$client  XDG_RUNTIME_DIR=$XDG_RUNTIME_D
 # exports SEATD_SOCK + LIBSEAT_BACKEND=seatd for the child, and tears seatd down on exit.
 # Patched gamescope (from-source overlay): --use-rotation-shader rotates the portrait-native
 # Pocket S2 panel in the GPU composite and scans out a ROTATE_0 buffer (the msm DPU can't
-# ROTATE_90 a LINEAR plane). That composite-flip path stalls on this panel's vsync'd page-flip
-# completion, so --immediate-flips is required for continuous frames. Verified upright + animating
-# on HW 2026-06-21. See devices/sm8650/bringup-phase2.md step 1e.
-gs_args="--backend drm --use-rotation-shader --immediate-flips"
+# ROTATE_90 a LINEAR plane). Verified upright on HW 2026-06-21. NOTE: --immediate-flips is NOT
+# passed — it is a no-op here (the msm DPU does not advertise DRM_CAP_ATOMIC_ASYNC_PAGE_FLIP, so
+# gamescope drops the async flag). The intermittent composite-flip freeze is on the vsync'd path
+# and unrelated. See devices/sm8650/bringup-phase2.md.
+gs_args="--backend drm --use-rotation-shader"
 set -x
 if command -v seatd-launch >/dev/null 2>&1; then
   exec seatd-launch -- gamescope $gs_args -- "$client"

@@ -1,0 +1,130 @@
+# novadeck gamescope — built FROM SOURCE via a novadeck-owned PKGBUILD (pkgbuild_local in
+# packages/gamescope/source.pin), NOT fetched from the holo monorepo. This is a near-verbatim copy
+# of the upstream Arch / holo gamescope recipe (same maintainers) with ONE deliberate change: the
+# version is bumped from holo's pinned 3.16.17 to 3.16.23.2.
+#
+# Why we own + bump it: holo is pinned at gamescope 3.16.17, whose Wayland explicit-sync
+# (linux-drm-syncobj) WSI present path intermittently DEADLOCKS on the first frame on this HW
+# (Adreno 750 / Turnip), wedging the whole pipeline on ~2/3 of cold session starts (the client
+# blocks forever in drm_syncobj_array_wait_timeout on a buffer-release fence gamescope never
+# signals). See devices/sm8650/bringup-phase2.md step 1e and the gamescope-flip-blocker memory.
+# We were already rebuilding gamescope from source for the rotation-shader patch (the msm DPU can't
+# ROTATE_90 a LINEAR plane), so we apply the same medicine as mesa: pin a newer upstream release in
+# a checked-in PKGBUILD rather than carrying a runtime workaround.
+#
+# The git submodule commits are pinned by the gamescope tree at the tag itself (`git submodule
+# update` checks out the gitlinked commits recorded in gamescope@3.16.23.2), so bumping pkgver
+# auto-selects the matching wlroots/etc. The rotation patch is applied by packages/build-overlay.sh
+# (inserted after `cd gamescope` in prepare()); verified to apply -p1 cleanly against 3.16.23.2.
+#
+# To bump gamescope: change pkgver, re-verify the rotation patch applies against the new tag
+# (patch -p1 --dry-run against a shallow clone), and re-roll it only if a hunk fails.
+#
+# Maintainer: Maxime Gauduin <alucryd@archlinux.org>
+# Maintainer: Giancarlo Razzolini <grazzolini@archlinux.org>
+# Maintainer: Sven-Hendrik Haase <svenstaro@archlinux.org>
+# Contributor: Samuel "scrufulufugus" Monson <smonson@irbash.net>
+# Contributor: PedroHLC <root@pedrohlc.com>
+
+pkgname=gamescope
+pkgver=3.16.23.2
+pkgrel=1
+pkgdesc='SteamOS session compositing window manager'
+arch=(x86_64 aarch64)
+url=https://github.com/ValveSoftware/gamescope
+license=(
+  BSD-2-Clause
+  BSD-3-Clause
+  LicenseRef-Reshade
+)
+depends=(
+  gcc-libs
+  glibc
+  lcms2
+  libavif
+  libcap.so
+  libdecor
+  libdrm
+  libei
+  libinput
+  libpipewire-0.3.so
+  libx11
+  libxcb
+  libxcomposite
+  libxcursor
+  libxdamage
+  libxext
+  libxfixes
+  libxi
+  libxkbcommon.so
+  libxmu
+  libxrender
+  libxres
+  libxtst
+  libxxf86vm
+  luajit
+  pixman
+  sdl2
+  seatd
+  systemd-libs
+  vulkan-icd-loader
+  wayland
+  xcb-util-errors
+  xcb-util-wm
+  xorg-server-xwayland
+)
+makedepends=(
+  benchmark
+  cmake
+  git
+  glslang
+  meson
+  ninja
+  vulkan-headers
+  wayland-protocols
+)
+source=(
+  git+https://github.com/ValveSoftware/gamescope.git#commit=${pkgver}
+  git+https://gitlab.freedesktop.org/emersion/libdisplay-info.git
+  git+https://gitlab.freedesktop.org/emersion/libliftoff.git
+  git+https://github.com/ValveSoftware/openvr.git
+  git+https://github.com/Joshua-Ashton/reshade.git
+  git+https://github.com/KhronosGroup/SPIRV-Headers.git
+  git+https://github.com/Joshua-Ashton/vkroots.git
+  git+https://github.com/Joshua-Ashton/wlroots.git
+)
+b2sums=('SKIP'
+        'SKIP'
+        'SKIP'
+        'SKIP'
+        'SKIP'
+        'SKIP'
+        'SKIP'
+        'SKIP')
+
+prepare() {
+  cd gamescope
+
+  meson subprojects download
+
+  for submodule in src/reshade subprojects/{libdisplay-info,libliftoff,openvr,vkroots,wlroots} thirdparty/SPIRV-Headers; do
+    git submodule init ${submodule}
+    git config submodule.${submodule}.url ../${submodule##*/}
+  done
+  git -c protocol.file.allow=always submodule update
+}
+
+build() {
+  arch-meson gamescope build \
+    -Dforce_fallback_for=glm,stb,libdisplay-info,libliftoff,vkroots,wlroots \
+    -Dpipewire=enabled
+  meson compile -C build
+}
+
+package() {
+  DESTDIR="${pkgdir}" meson install -C build \
+    --skip-subprojects
+  install -Dm 644 gamescope/LICENSE -t "${pkgdir}"/usr/share/licenses/gamescope/
+}
+
+# vim: ts=2 sw=2 et:

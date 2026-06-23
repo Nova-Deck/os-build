@@ -19,11 +19,26 @@ unset WAYLAND_DISPLAY DISPLAY
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/0}"
 mkdir -p "$XDG_RUNTIME_DIR"; chmod 700 "$XDG_RUNTIME_DIR"
 
+# Disable the gamescope WSI Vulkan layer — RESTART-PATH INSURANCE (not needed at a true boot). The
+# layer routes the client swapchain through gamescope's Wayland explicit-sync (linux-drm-syncobj)
+# present path. The decisive 10-reboot experiment (devices/sm8650/bringup-phase2.md step 1e, session 3)
+# showed the WSI-on model spins 10/10 on a genuine power-on and only wedges on RE-LAUNCH after a prior
+# instance (7/10): a killed gamescope leaves stale explicit-sync syncobj/GPU state that wedges the next
+# client (it blocks forever in drm_syncobj_array_wait_timeout on a buffer-release fence that never
+# signals). So the freeze is teardown/re-launch contamination, NOT a fresh-boot race — it does not
+# happen the first time the session starts at boot. The proper root-cause fix is clean teardown; this
+# line is kept only to mask the wedge on the restart path (Restart=on-failure / systemctl restart),
+# where the layer-off client falls back to implicit sync (dma-fence on the buffer). Trade-off: loses
+# gamescope WSI HDR (not a Phase-2 concern). Distinct from the earlier crash
+# ValveSoftware/gamescope#1520 (fixed pre-3.16.17).
+export ENABLE_GAMESCOPE_WSI=0
+
 # Patched gamescope (from-source overlay): --use-rotation-shader rotates the portrait-native Pocket
 # S2 panel in the GPU composite and scans out a ROTATE_0 buffer (the msm DPU can't ROTATE_90 a
-# LINEAR plane). --immediate-flips is required because the composite-flip path stalls on this
-# panel's vsync'd page-flip completion (open follow-up). See bringup-phase2.md step 1e.
-GS_ARGS="--backend drm --use-rotation-shader --immediate-flips"
+# LINEAR plane). NOTE: --immediate-flips is deliberately NOT passed — it is a no-op on this HW. The
+# msm DPU does not advertise DRM_CAP_ATOMIC_ASYNC_PAGE_FLIP, so gamescope logs "Immediate flips are
+# not supported by the KMS driver" and drops the async flag (SupportsTearing()==false).
+GS_ARGS="--backend drm --use-rotation-shader"
 
 # No graphical logind seat exists for a system service at boot, and the holo libseat is built with
 # only the logind+seatd backends (no 'builtin'), so run under seatd: seatd-launch spawns seatd,

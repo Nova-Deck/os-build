@@ -442,9 +442,18 @@ decisive one for the suspend path.
    HW cycle: log shows `panel blank confirmed` → frozen window with **screen off** → auto-thaw →
    `panel restore confirmed` → `resumed`, `dpms=On`.
 
-**Open ☐:** cpu/rfkill/governor (novadeck-rest) to fold into the suspend path; release Wi-Fi resume
-(NetworkManager) and long-press=clean-shutdown — see TODO.md. Units ship installed-but-DISABLED
-(validate by hand).
+**Power ops folded in ✅ (HW-validated 2026-06-24).** The cpu-offline / rfkill / cpu+gpu
+cpufreq+devfreq powersave-governor primitives now live in a shared sourced lib
+`hw-support/usr/lib/novadeck/power-ops.sh` (`power_enter`/`power_leave`); `novadeck-rest` sources it
+(was its own copies) and `novadeck-suspend` applies `power_enter` AFTER the freeze and `power_leave`
+BEFORE the thaw, guarded by `NOVADECK_SUSPEND_SKIP` (keys `cpu rfkill governor gpugov`). HW
+(192.168.1.187): log `freezing → lowering power(skip='rfkill') → … → restoring power → thaw`;
+post-resume CPUs `0-7`, governors `performance`, GPU `simple_ondemand` all restored, gamescope (pid
+659) survived the freeze/thaw. `novadeck-rest` is now a dev/bring-up tool (lowers power WITHOUT the
+freeze, so it stays SSH-reachable), superseded by `novadeck-suspend` as the suspend affordance.
+
+**Open ☐:** release Wi-Fi resume (NetworkManager) and long-press=clean-shutdown — see TODO.md. Units
+ship installed-but-DISABLED (validate by hand).
 
 ## Validate (Phase-2 exit, per plan)
 gamescope session launches on SM8650; Deck UI renders; Quick Access + suspend reach the

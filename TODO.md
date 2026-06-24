@@ -28,13 +28,16 @@ investigation that produced it.
 
 ## Phase 2 — HW-support (layer C)
 
-- [ ] **Fold `novadeck-rest`'s power ops into the freeze suspend path.** The power-key path
-  (`novadeck-suspend` + `novadeck-waked`) is validated but does **panel-blank + cgroup-freeze only**;
-  it does not yet drop power like `novadeck-rest` does. Fold in the rest ops — cpu-offline, rfkill,
-  and the cpu+gpu cpufreq/devfreq **powersave governor** switch (all already implemented and HW-
-  validated in `novadeck-rest`) — applied before freeze and restored after thaw, so a real suspend
-  also lowers power, not just stops the game. Keep them guarded/skippable (the `novadeck-rest` skip
-  keys: `cpu rfkill governor gpugov`). See `devices/sm8650/bringup-phase2.md` step 3 "Open ☐".
+- [x] **Fold `novadeck-rest`'s power ops into the freeze suspend path.** ✅ **DONE + HW-validated
+  2026-06-24.** Extracted the four reversible power primitives (cpu-offline, rfkill, cpu+gpu
+  cpufreq/devfreq powersave governor) into a shared sourced lib `hw-support/usr/lib/novadeck/power-ops.sh`
+  (`power_enter` / `power_leave`); `novadeck-rest` now sources it instead of its own copies, and
+  `novadeck-suspend` applies `power_enter` **after** the freeze and `power_leave` **before** the thaw.
+  Guarded/skippable via `NOVADECK_SUSPEND_SKIP` (keys `cpu rfkill governor gpugov`; same as
+  `NOVADECK_REST_SKIP`). HW (192.168.1.187): suspend log shows `freezing → lowering power → … →
+  restoring power → thaw`; post-resume CPUs `0-7`, governors→`performance`, GPU→`simple_ondemand` all
+  restored, gamescope survived freeze/thaw. `novadeck-rest` documented as a dev/bring-up tool (its
+  header) — superseded by `novadeck-suspend` for the actual suspend affordance.
 
 - [ ] **Rest-mode trigger (`novadeck-rest toggle`).** The rest-mode *mechanism* landed hand-run
   (`hw-support/usr/bin/novadeck-rest`, validated by SSH per step 3). Wire something to fire it:

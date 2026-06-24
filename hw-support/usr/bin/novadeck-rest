@@ -14,6 +14,15 @@
 # SSH), exactly how the gamescope session was de-risked. The trigger that fires it (a power-button
 # watcher / Deck-UI request) lands as a follow-up. See devices/<soc>/bringup-phase2.md step 3.
 #
+# RELATIONSHIP TO novadeck-suspend (read before wiring a trigger to this): rest mode does NOT stop the
+# game — it only lowers power (panel off, CPUs offlined, governors->powersave) while userland keeps
+# running. novadeck-suspend is the actual product suspend: it cgroup-FREEZES userland (the game truly
+# halts) AND now applies these same power ops (via the shared power-ops.sh this script sources), so it
+# is a strict superset of rest mode plus the freeze, and it has the wake path (novadeck-waked). rest
+# mode therefore stands as a DEV / BRING-UP tool, not the suspend affordance: its niche is exercising
+# the power primitives over SSH WITHOUT the freeze (the freeze drops sshd, which is in the frozen set).
+# Do not wire the power-button / Deck-UI suspend trigger to novadeck-rest — wire it to novadeck-suspend.
+#
 # NOTE on errors: this is a sequence of independent, best-effort hardware pokes. We deliberately do
 # NOT `set -e` — a single failed sysfs write (EBUSY on a CPU, a missing knob) must not abort the
 # rest of enter, and must NEVER abort leave (resume has to run to completion). Each write is guarded
@@ -37,6 +46,14 @@ STATE_DIR=/run/novadeck/rest.d
 GS_LIB=/usr/lib/novadeck/gamescope-display.sh
 if [ -r "$GS_LIB" ]; then . "$GS_LIB"; else gs_resolve_display() { :; }; fi
 
+# Reversible power-lowering primitives (cpu offline / rfkill / cpufreq+devfreq governors) live in a
+# shared library so novadeck-rest and novadeck-suspend apply byte-identical ops. State records land
+# in our STATE_DIR; the skip keys (cpu rfkill governor gpugov) come from NOVADECK_REST_SKIP.
+POWER_STATE_DIR=$STATE_DIR
+POWER_SKIP=$NOVADECK_REST_SKIP
+POW_LIB=/usr/lib/novadeck/power-ops.sh
+if [ -r "$POW_LIB" ]; then . "$POW_LIB"; else power_enter() { :; }; power_leave() { :; }; fi
+
 log()  { echo "novadeck-rest: $*"; }
 warn() { echo "novadeck-rest: $*" >&2; }
 skip() { case " $NOVADECK_REST_SKIP " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
@@ -51,115 +68,25 @@ gs_sleep() {
     || warn "gamescopectl could not reach gamescope (no session?); panel unchanged"
 }
 
-# --- cpus: offline every CPU that has a writable `online` toggle (the boot CPU has none and stays
-# up); never touch cpu0. Record what we offlined so leave brings back exactly those.
-cpu_enter() {
-  : > "$STATE_DIR/cpus"
-  for f in /sys/devices/system/cpu/cpu[0-9]*/online; do
-    [ -w "$f" ] || continue
-    n=${f#/sys/devices/system/cpu/cpu}; n=${n%/online}
-    [ "$n" = 0 ] && continue
-    [ "$(cat "$f" 2>/dev/null)" = 1 ] || continue
-    echo 0 > "$f" 2>/dev/null && echo "$n" >> "$STATE_DIR/cpus"
-  done
-}
-cpu_leave() {
-  [ -r "$STATE_DIR/cpus" ] || return 0
-  while read -r n; do
-    f=/sys/devices/system/cpu/cpu$n/online
-    [ -w "$f" ] && echo 1 > "$f" 2>/dev/null
-  done < "$STATE_DIR/cpus"
-}
-
-# --- radios: soft-block via sysfs (no rfkill binary dependency). Record only those we actually
-# blocked (skip already-blocked ones) so leave restores the prior radio state.
-rf_enter() {
-  : > "$STATE_DIR/rfkill"
-  for d in /sys/class/rfkill/rfkill*; do
-    [ -w "$d/soft" ] || continue
-    [ "$(cat "$d/soft" 2>/dev/null)" = 0 ] || continue
-    echo 1 > "$d/soft" 2>/dev/null && basename "$d" >> "$STATE_DIR/rfkill"
-  done
-}
-rf_leave() {
-  [ -r "$STATE_DIR/rfkill" ] || return 0
-  while read -r r; do
-    f=/sys/class/rfkill/$r/soft
-    [ -w "$f" ] && echo 0 > "$f" 2>/dev/null
-  done < "$STATE_DIR/rfkill"
-}
-
-# --- governor: switch each cpufreq policy to powersave, recording the previous governor per policy.
-# Only touch a policy that actually advertises the target governor.
-gov_enter() {
-  : > "$STATE_DIR/governors"
-  for g in /sys/devices/system/cpu/cpufreq/policy*/scaling_governor; do
-    [ -w "$g" ] || continue
-    avail=$(cat "${g%scaling_governor}scaling_available_governors" 2>/dev/null || echo)
-    case " $avail " in *" $NOVADECK_REST_GOVERNOR "*) ;; *) continue ;; esac
-    cur=$(cat "$g" 2>/dev/null) || continue
-    [ "$cur" = "$NOVADECK_REST_GOVERNOR" ] && continue
-    p=${g#/sys/devices/system/cpu/cpufreq/}; p=${p%/scaling_governor}
-    echo "$NOVADECK_REST_GOVERNOR" > "$g" 2>/dev/null && echo "$p $cur" >> "$STATE_DIR/governors"
-  done
-}
-gov_leave() {
-  [ -r "$STATE_DIR/governors" ] || return 0
-  while read -r p cur; do
-    f=/sys/devices/system/cpu/cpufreq/$p/scaling_governor
-    [ -w "$f" ] && echo "$cur" > "$f" 2>/dev/null
-  done < "$STATE_DIR/governors"
-}
-
-# --- GPU governor: switch the GPU's devfreq governor to powersave, recording the previous one.
-# SoC-INDEPENDENT: the GPU's devfreq device is named after its OF node (gpu@<addr> -> "<addr>.gpu"),
-# so we select by the ".gpu" suffix rather than any fixed per-SoC address. That matches the Adreno
-# GPU on every Qualcomm SoC while skipping the other devfreq devices (UFS, DDR, …). Only touch a
-# device that actually advertises the target governor; no ".gpu" devfreq -> clean no-op.
-gpu_gov_enter() {
-  : > "$STATE_DIR/gpu_governors"
-  for g in /sys/class/devfreq/*/governor; do
-    d=${g%/governor}
-    case "${d##*/}" in *.gpu) ;; *) continue ;; esac
-    [ -w "$g" ] || continue
-    avail=$(cat "$d/available_governors" 2>/dev/null || echo)
-    case " $avail " in *" $NOVADECK_REST_GPU_GOVERNOR "*) ;; *) continue ;; esac
-    cur=$(cat "$g" 2>/dev/null) || continue
-    [ "$cur" = "$NOVADECK_REST_GPU_GOVERNOR" ] && continue
-    n=${d##*/}
-    echo "$NOVADECK_REST_GPU_GOVERNOR" > "$g" 2>/dev/null && echo "$n $cur" >> "$STATE_DIR/gpu_governors"
-  done
-}
-gpu_gov_leave() {
-  [ -r "$STATE_DIR/gpu_governors" ] || return 0
-  while read -r n cur; do
-    f=/sys/class/devfreq/$n/governor
-    [ -w "$f" ] && echo "$cur" > "$f" 2>/dev/null
-  done < "$STATE_DIR/gpu_governors"
-}
+# The power-lowering primitives (cpu offline / rfkill / cpufreq+devfreq governors) and their
+# record-and-restore state live in the shared library sourced above (power_enter / power_leave,
+# honouring POWER_SKIP). Only the panel lever (gamescope-specific) stays here.
 
 # Enter: blank first (immediate visible feedback) then lower power. Leave reverses the order, so the
 # panel comes back only once CPUs/radios/governor are restored.
 do_enter() {
   [ -e "$STATE_DIR/active" ] && { log "already resting"; return 0; }
   mkdir -p "$STATE_DIR"
-  skip panel    || gs_sleep 1
-  skip governor || gov_enter
-  skip gpugov   || gpu_gov_enter
-  skip cpu      || cpu_enter
-  skip rfkill   || rf_enter
+  skip panel || gs_sleep 1
+  power_enter
   : > "$STATE_DIR/active"
   log "resting (panel off, cpus offlined, radios blocked, cpu+gpu governor=$NOVADECK_REST_GOVERNOR/$NOVADECK_REST_GPU_GOVERNOR)"
 }
 do_leave() {
   [ -e "$STATE_DIR/active" ] || { log "not resting"; return 0; }
   rm -f "$STATE_DIR/active"
-  skip rfkill   || rf_leave
-  skip cpu      || cpu_leave
-  skip gpugov   || gpu_gov_leave
-  skip governor || gov_leave
-  skip panel    || gs_sleep 0
-  rm -f "$STATE_DIR/cpus" "$STATE_DIR/rfkill" "$STATE_DIR/governors" "$STATE_DIR/gpu_governors"
+  power_leave
+  skip panel || gs_sleep 0
   log "awake"
 }
 

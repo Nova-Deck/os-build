@@ -13,8 +13,9 @@
 #   resume:  thaw userland (gamescope alive again) -> unblank panel
 # gamescope is inside the frozen set; it holds the blank KMS modeset statically while frozen, and the
 # wake agent reads the power key from its own evdev fd (the key is not EVIOCGRAB-exclusive), so a
-# frozen gamescope neither un-blanks the panel nor blocks the wake. v1 is panel+freeze only; the
-# cpu/rfkill/governor tweaks (novadeck-rest) layer on once this core path is proven.
+# frozen gamescope neither un-blanks the panel nor blocks the wake. On top of panel+freeze it also
+# lowers power via the shared power-ops library (cpu offline / rfkill / cpufreq+devfreq powersave) —
+# the same primitives novadeck-rest uses — applied after the freeze and restored before the thaw.
 set -u
 
 CONF=/etc/novadeck/rest.conf
@@ -22,6 +23,7 @@ CONF=/etc/novadeck/rest.conf
 : "${NOVADECK_REST_SCREEN:=internal}"
 : "${NOVADECK_SUSPEND_FREEZE_CGROUPS:=/sys/fs/cgroup/system.slice /sys/fs/cgroup/user.slice}"
 : "${NOVADECK_SUSPEND_AUTOTHAW:=0}"     # seconds; >0 arms a safety auto-thaw (testing). 0 = off.
+: "${NOVADECK_SUSPEND_SKIP:=}"          # power ops to skip: cpu rfkill governor gpugov (e.g. "rfkill" to keep SSH up)
 : "${XDG_RUNTIME_DIR:=/run/user/0}"
 export XDG_RUNTIME_DIR
 
@@ -37,6 +39,16 @@ log() { echo "$(date '+%F %T') novadeck-suspend: $*" >> "$LOG" 2>/dev/null; }
 # /proc/<pid>/environ is readable. Fallback no-op keeps suspend working if the overlay lib is absent.
 GS_LIB=/usr/lib/novadeck/gamescope-display.sh
 if [ -r "$GS_LIB" ]; then . "$GS_LIB"; else gs_resolve_display() { :; }; fi
+
+# Reversible power-lowering primitives (cpu offline / rfkill / cpufreq+devfreq governors), shared
+# verbatim with novadeck-rest so a real suspend lowers power the same way rest mode does — not just
+# stops the game. Applied AFTER the freeze and restored BEFORE the thaw (see do_suspend/do_resume).
+# State records share novadeck-rest's dir (the two states are mutually exclusive). POWER_SKIP lets
+# bring-up keep, e.g., the Wi-Fi link up over SSH with NOVADECK_SUSPEND_SKIP="rfkill".
+POWER_STATE_DIR=/run/novadeck/rest.d
+POWER_SKIP=$NOVADECK_SUSPEND_SKIP
+POW_LIB=/usr/lib/novadeck/power-ops.sh
+if [ -r "$POW_LIB" ]; then . "$POW_LIB"; else power_enter() { :; }; power_leave() { :; }; fi
 
 panel() {  # $1 = 1 (blank) | 0 (unblank) — via gamescope's own KMS modeset
   command -v gamescopectl >/dev/null 2>&1 || return 0
@@ -92,6 +104,11 @@ do_suspend() {
   if wait_panel disabled; then log "panel blank confirmed"; else log "panel blank NOT confirmed in ${NOVADECK_PANEL_WAIT_DS}ds; freezing anyway"; fi
   log "freezing userland: $NOVADECK_SUSPEND_FREEZE_CGROUPS"
   freeze 1
+  # Lower power AFTER the freeze (no frozen workload left to schedule): offline non-boot CPUs, block
+  # radios, drop cpufreq + GPU devfreq governors to powersave. cpu0 stays up so the un-frozen wake
+  # agent keeps running. Each op records prior state for do_resume; honours NOVADECK_SUSPEND_SKIP.
+  log "lowering power (skip='${NOVADECK_SUSPEND_SKIP}')"
+  power_enter
   : > "$STATE"
   log "suspended"
 }
@@ -100,6 +117,11 @@ do_resume() {
   [ -e "$STATE" ] || { log "not suspended"; return 0; }
   rm -f "$STATE"
   systemctl stop novadeck-autothaw.timer 2>/dev/null || true   # cancel pending safety (PID1 socket)
+  # Restore power BEFORE the thaw so the workload wakes onto its full CPU/governor budget: bring the
+  # offlined CPUs back, unblock radios, restore prior cpufreq + GPU devfreq governors (reverse of
+  # power_enter; restores exactly what was changed). Then thaw.
+  log "restoring power"
+  power_leave
   log "resuming: thaw userland"
   freeze 0
   log "unblank panel"

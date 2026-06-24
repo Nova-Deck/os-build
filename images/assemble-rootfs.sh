@@ -130,12 +130,13 @@ fi
 # First backing: novadeck-rest — a userspace "rest mode" (fake suspend) standing in for s2idle,
 # whose maturity on these SoCs is the top HW risk; it blanks the panel (via gamescope's own KMS
 # modeset), offlines all but the boot CPU, soft-blocks radios, and drops cpufreq to powersave. No
-# package added — gamescopectl ships in our from-source gamescope; the rest is pure sysfs. Shipped
-# as a hand-run mechanism (no trigger unit yet): Phase 2 validates it over SSH before a power-button
-# watcher / Deck-UI request drives it. See devices/$SOC/bringup-phase2.md step 3.
+# package added — gamescopectl ships in our from-source gamescope; the rest is pure sysfs. The
+# power-key trigger (novadeck-waked) IS enabled here (preset + multi-user.target.wants symlink ship
+# inside the overlay) so the key drives suspend/resume + long-press poweroff at boot; novadeck-rest
+# stays a hand-run dev tool. See devices/$SOC/bringup-phase2.md step 3.
 HWSUPPORT="$ROOT/hw-support"
 if [ -d "$HWSUPPORT" ]; then
-  echo "  injecting novadeck HW-support from ${HWSUPPORT#"$ROOT"/} (rest-mode + wake agent; hand-run, units disabled)"
+  echo "  injecting novadeck HW-support from ${HWSUPPORT#"$ROOT"/} (rest-mode dev tool + wake agent enabled)"
   cp -a "$HWSUPPORT"/. "$stage/"
   chmod 0755 "$stage/usr/bin/novadeck-rest" "$stage/usr/bin/novadeck-suspend" "$stage/usr/bin/novadeck-waked"
 else

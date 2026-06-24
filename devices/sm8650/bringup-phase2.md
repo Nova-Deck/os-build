@@ -407,16 +407,30 @@ Real suspend stops the *game*, not just the screen. Mechanism (overlay `hw-suppo
   runs `/etc/novadeck/resume.d/*` (generic hook point — the test card's Wi-Fi re-up lives here),
   and a safety auto-thaw covers a missed wake. Panel blank/unblank via gamescope DPMS around the
   freeze.
-- **`novadeck-waked`** — the wake agent: `libinput debug-events --device /dev/input/event0`
-  (pmic_pwrkey) → `KEY_POWER pressed` → `novadeck-suspend toggle`. Runs in a top-level
-  **`novadeck-wake.slice`** (sibling of system.slice) so it is NEVER frozen and can thaw the system.
-- logind `HandlePowerKey=ignore` drop-in so it does not poweroff; long-press → PMIC hardware off.
+- **`novadeck-waked`** — the wake/power agent: `libinput debug-events --device /dev/input/event0`
+  (pmic_pwrkey) times the key from `KEY_POWER pressed` → `released`. A short **tap** →
+  `novadeck-suspend toggle`; a **hold ≥ `NOVADECK_WAKE_LONGPRESS_MS`** (default 2000ms) → thaw-then-
+  `systemctl poweroff`. Runs in a top-level **`novadeck-wake.slice`** (sibling of system.slice) so it
+  is NEVER frozen and can thaw the system. **Enabled at boot** via the overlay (preset
+  `60-novadeck-waked.preset` + `multi-user.target.wants` symlink) — no longer SSH-only.
+- logind `HandlePowerKey=ignore`/`HandlePowerKeyLongPress=ignore` drop-in so logind neither
+  poweroffs nor suspends. Press tiers: **tap** = suspend/resume, **~2s hold** = clean software
+  poweroff (above), **~8s+ hold** = PMIC hardware reset (escape hatch, below us).
 
 **Proven (power-key cycle):** short-press froze the game (cube stopped on-panel, SSH dropped); a
 second short-press **resumed in 13s** — `novadeck-waked` read `KEY_POWER` *while all userland was
 frozen* (2 toggles logged), thawed, re-associated Wi-Fi via the resume hook, no reboot. The
 freezer halts the workload (cgroup CPU usage → 0) and the un-frozen agent reads the key from its own
 evdev fd (the key is not EVIOCGRAB-exclusive). The kernel s2idle path is never touched.
+
+**Resume-latency bug — FIXED & HW-validated 2026-06-24 (IP .188).** That "resumed in 13s" was the
+tell: `do_resume` called `systemctl stop novadeck-autothaw.timer` *before* the thaw, so it blocked on
+the **frozen system D-Bus daemon** (in `system.slice`) until the bus call timed out — 13s in the
+light case, ~90s with the autothaw timer actually loaded, during which the device looks dead. Fix:
+thaw (`freeze 0`) first, *then* call systemctl; power-restore stays before the thaw (pure sysfs, safe
+while frozen). Rule: **never invoke systemctl/D-Bus while the freezer is engaged — thaw first.**
+Traced reproduce confirmed the wake agent fired the toggle correctly the whole time; resume is now
+~2-3s. The power-key trigger (`novadeck-waked`, enabled at boot) drives this; a ~2s hold → poweroff.
 
 **DPMS panel blank — FIXED & VALIDATED on HW 2026-06-24.** Two distinct bugs; the second was the
 decisive one for the suspend path.

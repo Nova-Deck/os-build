@@ -1,0 +1,5 @@
+# novadeck: enable the power-key wake/suspend/power agent on release. /etc/machine-id is empty on a
+# fresh image so systemd runs preset-all on first boot, where the stock 99-default.preset is
+# "disable *"; this higher-priority preset (60 < 99) keeps the agent enabled. A build-time
+# multi-user.target.wants symlink ships alongside as a fallback (cf. inputplumber's 60-novadeck).
+enable novadeck-waked.service

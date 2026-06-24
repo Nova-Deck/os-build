@@ -39,11 +39,14 @@ investigation that produced it.
   restored, gamescope survived freeze/thaw. `novadeck-rest` documented as a dev/bring-up tool (its
   header) — superseded by `novadeck-suspend` for the actual suspend affordance.
 
-- [ ] **Rest-mode trigger (`novadeck-rest toggle`).** The rest-mode *mechanism* landed hand-run
-  (`hw-support/usr/bin/novadeck-rest`, validated by SSH per step 3). Wire something to fire it:
-  a power-button watcher (`HandlePowerKey=ignore` in logind + evdev on the power key → `toggle`),
-  the powerbuttond-equivalent, and/or the Deck-UI / steamos-manager suspend request once that lands.
-  Deferred until the mechanism is proven on HW. See `devices/sm8650/bringup-phase2.md` step 3.
+- [x] **Power-key suspend trigger.** ✅ **DONE — wired at boot.** The power-button watcher is
+  `novadeck-waked` (`HandlePowerKey=ignore` logind drop-in + libinput on the power key → a short tap
+  fires `novadeck-suspend toggle`). The suspend path superseded rest mode, so the trigger drives
+  `novadeck-suspend`, not `novadeck-rest`. `novadeck-waked.service` is now **enabled** via the
+  overlay (`hw-support/usr/lib/systemd/system-preset/60-novadeck-waked.preset` + a
+  `multi-user.target.wants` symlink), so the SSH-only mechanism is a real on-device affordance.
+  The Deck-UI / steamos-manager suspend request remains a future alternate trigger. See
+  `devices/sm8650/bringup-phase2.md` step 3.
 
 - [ ] **Add a Bluetooth stack.** Pull BlueZ (+ bluez-utils) into the base/package set so the Deck UI
   can pair controllers/audio. Today rfkill sees a `bluetooth` radio but there is no userspace stack.
@@ -55,7 +58,21 @@ investigation that produced it.
   NetworkManager (Steam wizard-configured) — verify NM reconnects on thaw on its own; if not, ship an
   NM-flavored resume hook. Don't leave release without a Wi-Fi resume path.
 
-- [ ] **Long-press power = clean shutdown (in `novadeck-waked`).** logind already ignores the key
-  (`HandlePowerKey=ignore`/`LongPress=ignore`); have the agent time the press: short = suspend/resume
-  toggle (done), long hold (software, ~2-4s before the PMIC hardware S2 reset) = `systemctl poweroff`.
-  Gives short/long/very-long = suspend / clean-shutdown / hardware-off.
+- [x] **Long-press power = clean shutdown (in `novadeck-waked`).** ✅ **DONE.** The agent times the
+  press from its libinput pressed→released edges: a tap fires `novadeck-suspend toggle`; a hold
+  ≥ `NOVADECK_WAKE_LONGPRESS_MS` (default 2000ms, well under the PMIC ~8s+ hardware reset) thaws if
+  suspended then `systemctl poweroff`. Gives short/long/very-long = suspend / clean-shutdown /
+  hardware-off. Knob in `rest.conf`; 0 disables long-press. **HW-validated 2026-06-24 (IP .188):
+  long-press → clean poweroff works.**
+
+- [x] **`do_resume` must not call systemctl while userland is frozen.** ✅ **DONE + HW-validated
+  2026-06-24 (IP .188).** Surfaced validating the power-key trigger: a wake tap froze, but `do_resume`
+  ran `systemctl stop novadeck-autothaw.timer` BEFORE the thaw, so it blocked ~90s on the frozen
+  system D-Bus daemon (in `system.slice`) before resume continued — the device looked dead. Fix:
+  thaw (`freeze 0`) first, then call systemctl; power-restore stays before the thaw (pure sysfs, safe
+  while frozen). Resume now ~2-3s. The wake agent itself was never at fault. See `suspend-systemctl-
+  while-frozen-blocks` memory.
+
+- [ ] **No system clock / NTP on the device.** RTC starts near epoch and nothing syncs it (logs read
+  `1970-…`). Harmless for the suspend timing (it uses deltas) but ship a `systemd-timesyncd` config
+  (or chrony) so timestamps and TLS are sane. Low priority, unrelated to suspend.

@@ -116,14 +116,20 @@ do_suspend() {
 do_resume() {
   [ -e "$STATE" ] || { log "not suspended"; return 0; }
   rm -f "$STATE"
-  systemctl stop novadeck-autothaw.timer 2>/dev/null || true   # cancel pending safety (PID1 socket)
   # Restore power BEFORE the thaw so the workload wakes onto its full CPU/governor budget: bring the
   # offlined CPUs back, unblock radios, restore prior cpufreq + GPU devfreq governors (reverse of
-  # power_enter; restores exactly what was changed). Then thaw.
+  # power_enter; restores exactly what was changed). These are direct sysfs writes by this (un-frozen)
+  # agent, so they are safe to perform while userland is still frozen.
   log "restoring power"
   power_leave
   log "resuming: thaw userland"
   freeze 0
+  # Cancel the pending safety auto-thaw AFTER the thaw, NEVER before: systemctl has to reach
+  # systemd over D-Bus, and the system D-Bus daemon lives in the frozen set — calling it while
+  # userland is frozen blocks the whole resume for ~90s (HW-observed) until the bus call times out.
+  # Once thawed, dbus is responsive and this returns immediately. (Same rule governs panel() below,
+  # which needs the now-thawed gamescope.)
+  systemctl stop novadeck-autothaw.timer 2>/dev/null || true
   log "unblank panel"
   panel 0
   if wait_panel enabled; then log "panel restore confirmed"; else log "panel restore NOT confirmed in ${NOVADECK_PANEL_WAIT_DS}ds"; fi

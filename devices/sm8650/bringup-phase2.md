@@ -431,6 +431,8 @@ thaw (`freeze 0`) first, *then* call systemctl; power-restore stays before the t
 while frozen). Rule: **never invoke systemctl/D-Bus while the freezer is engaged — thaw first.**
 Traced reproduce confirmed the wake agent fired the toggle correctly the whole time; resume is now
 ~2-3s. The power-key trigger (`novadeck-waked`, enabled at boot) drives this; a ~2s hold → poweroff.
+Full flow HW-validated on a clean image 2026-06-24: tap → suspend/resume with gamescope panel
+blank/unblank, and long-press → clean poweroff, all confirmed.
 
 **DPMS panel blank — FIXED & VALIDATED on HW 2026-06-24.** Two distinct bugs; the second was the
 decisive one for the suspend path.

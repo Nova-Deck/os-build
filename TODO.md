@@ -20,12 +20,21 @@ investigation that produced it.
     cannot wedge the next client. Then re-test the re-launch path and consider dropping
     `ENABLE_GAMESCOPE_WSI=0` to recover the WSI HDR path.
   - Harness for re-validation lives on the test device at `/root/freeze-trial.sh`
-    (`192.168.1.193`, IP drifts); raw 10-boot data in `/root/freeze-results.log`.
+    (DHCP, IP drifts — `192.168.1.186` as of 2026-06-24, was `.193`); raw 10-boot data in
+    `/root/freeze-results.log`.
 
 - [ ] **`--ready-fd` HDR-preserving handshake** — only worth finishing if HDR is needed *and*
   clean teardown alone doesn't let us drop `ENABLE_GAMESCOPE_WSI=0`. See step 1e session-2 notes.
 
 ## Phase 2 — HW-support (layer C)
+
+- [ ] **Fold `novadeck-rest`'s power ops into the freeze suspend path.** The power-key path
+  (`novadeck-suspend` + `novadeck-waked`) is validated but does **panel-blank + cgroup-freeze only**;
+  it does not yet drop power like `novadeck-rest` does. Fold in the rest ops — cpu-offline, rfkill,
+  and the cpu+gpu cpufreq/devfreq **powersave governor** switch (all already implemented and HW-
+  validated in `novadeck-rest`) — applied before freeze and restored after thaw, so a real suspend
+  also lowers power, not just stops the game. Keep them guarded/skippable (the `novadeck-rest` skip
+  keys: `cpu rfkill governor gpugov`). See `devices/sm8650/bringup-phase2.md` step 3 "Open ☐".
 
 - [ ] **Rest-mode trigger (`novadeck-rest toggle`).** The rest-mode *mechanism* landed hand-run
   (`hw-support/usr/bin/novadeck-rest`, validated by SSH per step 3). Wire something to fire it:

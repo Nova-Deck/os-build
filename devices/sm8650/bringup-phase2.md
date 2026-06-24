@@ -367,7 +367,7 @@ block 4e), the same overlay mechanism as the layer-B `session/` tree.
 | Battery / charge | fuel-gauge + UPower | |
 | First-boot OOBE | steamos-oobe (adapt) | SteamOS owns first-boot networking |
 
-### Suspend → userspace "rest mode" (`novadeck-rest`) [MECHANISM LANDED; pending on-HW validation]
+### Suspend → userspace "rest mode" (`novadeck-rest`) [MECHANISM LANDED & VALIDATED on HW 2026-06-24]
 Real Qualcomm **s2idle** suspend/resume is immature on these SoCs and kernel-depth debugging it is
 out of scope. Decision (2026-06-23): stand in with a **reversible userspace rest state** instead of
 calling into the kernel sleep path at all. `hw-support/usr/bin/novadeck-rest`:
@@ -375,7 +375,9 @@ calling into the kernel sleep path at all. `hw-support/usr/bin/novadeck-rest`:
 - **enter** — blank the panel via **gamescope's own KMS modeset** (`gamescopectl drm_sleep_internal_screen 1`;
   gamescope holds DRM-master and detaches the connector from its CRTC → the DSI link blanks, deeper
   than a backlight-off), offline every CPU **but the boot CPU** (`/sys/devices/system/cpu/cpuN/online`),
-  soft-block all radios (`/sys/class/rfkill/*/soft`), and switch every cpufreq policy to **powersave**.
+  soft-block all radios (`/sys/class/rfkill/*/soft`), switch every cpufreq policy to **powersave**, and
+  switch the **GPU devfreq governor → powersave** (the GPU node is found SoC-independently by its
+  `.gpu` devfreq-name suffix — `gpu@<addr>` → `<addr>.gpu` — not a hardcoded per-SoC address).
 - **leave** — restore each in reverse, from state captured at enter under `/run/novadeck/rest.d/`
   (records *only* what it actually changed, so it restores the prior governor / CPU / radio state
   rather than blindly onlining everything).
@@ -390,10 +392,13 @@ never fight it for the panel. Everything else is pure sysfs — **no new package
 de-risked. The trigger that fires it (a power-button watcher / Deck-UI request → `novadeck-rest
 toggle`) is a deliberate follow-up.
 
-**Validate ☐ (on HW):** with the session up, SSH in and run `novadeck-rest enter` → panel blanks,
-`grep -c 1 /sys/devices/system/cpu/cpu*/online` drops to 1, `cat /sys/class/rfkill/*/soft` all `1`,
-governors all `powersave`; then `novadeck-rest leave` → panel returns and every value is restored to
-its pre-rest reading. Re-run enter→leave a few times to confirm idempotence and clean restore.
+**Validate ✅ (on HW 2026-06-24):** with the session up, `novadeck-rest enter` blanks the panel
+(connector `dpms On→Off`, `enabled→disabled`) and `leave` restores it (`→On`/`→enabled`); the GPU
+devfreq governor flips `simple_ondemand→powersave` on enter and restores on leave (state recorded
+per-device in `/run/novadeck/rest.d/gpu_governors`, e.g. `3d00000.gpu simple_ondemand`). cpu-offline,
+rfkill and cpufreq-governor ops use the same record-and-restore pattern (cpu/rfkill skipped during the
+SSH-safe runs so the link stays up on the no-UART device). Each op records *only* what it actually
+changed, so leave restores the prior reading.
 
 ### Suspend = userspace freeze + power-key wake [VALIDATED on HW 2026-06-24]
 Real suspend stops the *game*, not just the screen. Mechanism (overlay `hw-support/`):

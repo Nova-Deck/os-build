@@ -413,10 +413,33 @@ frozen* (2 toggles logged), thawed, re-associated Wi-Fi via the resume hook, no 
 freezer halts the workload (cgroup CPU usage → 0) and the un-frozen agent reads the key from its own
 evdev fd (the key is not EVIOCGRAB-exclusive). The kernel s2idle path is never touched.
 
-**Open ☐:** panel blank needs gamescope's `gamescope-0` control socket (absent for the gamescope
-instance during the validated run → screen stayed on the frozen frame; degrades gracefully). cpu/
-rfkill/governor (novadeck-rest) to fold into the suspend path; release Wi-Fi resume (NetworkManager)
-and long-press=clean-shutdown — see TODO.md. Units ship installed-but-DISABLED (validate by hand).
+**DPMS panel blank — FIXED & VALIDATED on HW 2026-06-24.** Two distinct bugs; the second was the
+decisive one for the suspend path.
+
+1. *gamescopectl couldn't always reach gamescope.* `gamescopectl` defaults to the `gamescope-0`
+   control socket, but gamescope binds the **first free slot** (`gamescope-0`, `gamescope-1`, … —
+   `wlserver.cpp`); a live overlapping instance (smoke + session) can push the real compositor onto
+   `gamescope-1`, leaving `gamescopectl` talking to the wrong/dead `gamescope-0`. Fix: a sourced
+   resolver `usr/lib/novadeck/gamescope-display.sh` (`gs_resolve_display`) finds the LIVE slot by the
+   `gamescope-N.lock` fd a wayland server keeps open (scan `/proc/*/fd`) — robust to the comm rename
+   (`gamescope-wl`) and to `setenv` not reaching `/proc/<pid>/environ`. NB a socket left by a *dead*
+   owner is reclaimed at the same slot (flock auto-releases on death), so pure stale-on-death stays on
+   slot 0 — the resolver still resolves it correctly. Both `novadeck-suspend` and `novadeck-rest`
+   export the resolved name before `gamescopectl`. (`novadeck-rest enter/leave` confirmed the panel
+   blanks/restores on HW: connector `dpms On→Off→On`, `enabled→disabled→enabled`.)
+
+2. *suspend froze gamescope before the blank landed.* gamescope applies the `drm_sleep` convar on its
+   OWN main loop — HW-measured **~324 ms** after `gamescopectl` returns — but `novadeck-suspend` did
+   `panel 1` then `freeze 1` back-to-back, trapping gamescope mid-apply so the panel stayed lit (the
+   screen-still-on symptom; `novadeck-rest` never froze, so it always blanked). Fix: `do_suspend`
+   now polls the connector's sysfs `enabled` attr (`wait_panel disabled`, plain attribute read, no
+   debugfs) and freezes only AFTER the blank is confirmed; `do_resume` confirms restore symmetrically.
+   HW cycle: log shows `panel blank confirmed` → frozen window with **screen off** → auto-thaw →
+   `panel restore confirmed` → `resumed`, `dpms=On`.
+
+**Open ☐:** cpu/rfkill/governor (novadeck-rest) to fold into the suspend path; release Wi-Fi resume
+(NetworkManager) and long-press=clean-shutdown — see TODO.md. Units ship installed-but-DISABLED
+(validate by hand).
 
 ## Validate (Phase-2 exit, per plan)
 gamescope session launches on SM8650; Deck UI renders; Quick Access + suspend reach the

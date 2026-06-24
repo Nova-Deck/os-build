@@ -29,6 +29,12 @@ export XDG_RUNTIME_DIR
 
 STATE_DIR=/run/novadeck/rest.d
 
+# Resolve the LIVE gamescope control socket (not a blind gamescope-0 default) — see the header of
+# the sourced helper for the DPMS bug this avoids. Fallback no-op keeps the script working if the
+# overlay lib is somehow absent (gamescopectl then uses its own gamescope-0 default).
+GS_LIB=/usr/lib/novadeck/gamescope-display.sh
+if [ -r "$GS_LIB" ]; then . "$GS_LIB"; else gs_resolve_display() { :; }; fi
+
 log()  { echo "novadeck-rest: $*"; }
 warn() { echo "novadeck-rest: $*" >&2; }
 skip() { case " $NOVADECK_REST_SKIP " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
@@ -38,6 +44,7 @@ skip() { case " $NOVADECK_REST_SKIP " in *" $1 "*) return 0 ;; *) return 1 ;; es
 # there is nothing to rest the display on, so we warn and let the power ops still run.
 gs_sleep() {
   command -v gamescopectl >/dev/null 2>&1 || { warn "gamescopectl not found; panel unchanged"; return 0; }
+  gs_resolve_display || warn "no live gamescope socket; trying ${GAMESCOPE_WAYLAND_DISPLAY:-gamescope-0}"
   gamescopectl "drm_sleep_${NOVADECK_REST_SCREEN}_screen" "$1" 2>/dev/null \
     || warn "gamescopectl could not reach gamescope (no session?); panel unchanged"
 }

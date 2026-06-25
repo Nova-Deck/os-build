@@ -73,7 +73,9 @@ investigation that produced it.
   Atheros OUI = WCN7850 BT radio), so bluetoothd runs, firmware loaded, and the overlay enablement
   took. **Remaining HW sub-check:** actually pair a controller (scan/pair/connect a gamepad).
 
-- [x] **Release Wi-Fi resume after userspace suspend.** ✅ **DONE (code) — HW UNVALIDATED.** Shipped a
+- [x] **Release Wi-Fi resume after userspace suspend.** ✅ **DONE + HW-validated 2026-06-25 (.186):**
+  fake suspend/resume on the NM-based test card brought Wi-Fi back (SSH stayed reachable across the
+  cycle). The NM resume path is exercised end-to-end. Shipped a
   defensive NM resume hook in the release overlay: `hw-support/etc/novadeck/resume.d/50-nm-reup`
   (`nmcli radio wifi on` after thaw). It is **inert unless NM is the active manager**
   (`command -v nmcli` + `systemctl is-active NetworkManager`), so it stays a no-op on the TEST card
@@ -90,8 +92,10 @@ investigation that produced it.
   - ✅ **HW-VALIDATED 2026-06-25 (IP 192.168.1.186):** the NM-based test card joined the LAN and
     accepts SSH — the `.nmconnection` + `NetworkManager.service` injection works on real hardware, so
     the test-vs-release stack is unified and the no-UART lockout risk of the rewrite is cleared.
-    (Still HW-TODO on this card: confirm `timedatectl` clock-step, `bluetoothctl` sees `hci0`, and
-    that `50-nm-reup` re-ups Wi-Fi across a suspend/resume.)
+  - ✅ **Suspend/resume Wi-Fi HW-VALIDATED 2026-06-25 (.186):** a fake suspend/resume reconnected
+    Wi-Fi (SSH survived the cycle), so the NM resume path works on HW. Still **open**: whether NM
+    recovers unaided on the rfkill-unblock (i.e. is `50-nm-reup` moot) — this test didn't isolate the
+    hook from NM's own auto-recovery; disable the hook and re-test to decide whether to drop it.
   - 🧹 **Stale docs:** `images/README.md` + a `build-image.sh` comment still describe an **iwd**
     Wi-Fi stack (`/var/lib/iwd/<SSID>.psk`) that the build never used in current code — reconcile to
     NetworkManager (release) / wpa_supplicant-was-the-prior-test-stack.

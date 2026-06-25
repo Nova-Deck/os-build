@@ -55,18 +55,17 @@ unset WAYLAND_DISPLAY DISPLAY
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/0}"
 mkdir -p "$XDG_RUNTIME_DIR"; chmod 700 "$XDG_RUNTIME_DIR"
 
-# Disable the gamescope WSI Vulkan layer — RESTART-PATH INSURANCE (not needed at a true boot). The
-# layer routes the client swapchain through gamescope's Wayland explicit-sync (linux-drm-syncobj)
-# present path. The decisive 10-reboot experiment (devices/sm8650/bringup-phase2.md step 1e, session 3)
-# showed the WSI-on model spins 10/10 on a genuine power-on and only wedges on RE-LAUNCH after a prior
-# instance (7/10): a killed gamescope leaves stale explicit-sync syncobj/GPU state that wedges the next
-# client (it blocks forever in drm_syncobj_array_wait_timeout on a buffer-release fence that never
-# signals). So the freeze is teardown/re-launch contamination, NOT a fresh-boot race — it does not
-# happen the first time the session starts at boot. The proper root-cause fix is clean teardown; this
-# line is kept only to mask the wedge on the restart path (Restart=on-failure / systemctl restart),
-# where the layer-off client falls back to implicit sync (dma-fence on the buffer). Trade-off: loses
-# gamescope WSI HDR (not a Phase-2 concern). Distinct from the earlier crash
-# ValveSoftware/gamescope#1520 (fixed pre-3.16.17).
+# Disable the gamescope WSI Vulkan layer — the ROOT-CAUSE FIX for the re-launch freeze (not a mask).
+# The layer routes the client swapchain through gamescope's Wayland explicit-sync (linux-drm-syncobj)
+# present path, which on this HW intermittently deadlocks on RE-LAUNCH: the next client blocks forever
+# in drm_syncobj_array_wait_timeout on a buffer-release fence that never signals. A true power-on (L1)
+# is always clean; the wedge only bites re-launch (Restart=on-failure / systemctl restart). HW testing
+# (devices/sm8650/bringup-phase2.md step 1e, session 4) proved this is a USERSPACE WSI syncobj-fence
+# race, not stale GPU/DRM-master state: a GRACEFUL SIGTERM teardown still wedges ~50% (same as SIGKILL),
+# dmesg shows zero GPU faults, and clean teardown does NOT help — so disabling WSI is the actual fix,
+# not insurance. Layer off -> client falls back to implicit sync (dma-fence on the buffer) -> 8/8 clean
+# re-launch. Only cost is gamescope WSI HDR — out of scope (no HDR panels in the fleet). Distinct from
+# the earlier crash ValveSoftware/gamescope#1520 (fixed pre-3.16.17).
 export ENABLE_GAMESCOPE_WSI=0
 
 # Patched gamescope (from-source overlay): --use-rotation-shader rotates the portrait-native Pocket

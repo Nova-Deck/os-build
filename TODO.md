@@ -5,26 +5,29 @@ investigation that produced it.
 
 ## Phase 2 — gamescope session
 
-- [ ] **Clean gamescope teardown (root-cause fix for the re-launch wedge).**
-  The decisive 10-reboot experiment (`devices/sm8650/bringup-phase2.md` step 1e, session 3)
-  proved the "cold-start freeze" is **teardown/re-launch contamination, not a fresh-boot race**:
-  the original WSI-on model spins **10/10 on a true power-on** (L1) and only wedges on
-  **re-launch after a prior instance** (L2, 7/10) — a killed gamescope leaves stale explicit-sync
-  **syncobj / GPU / DRM-master** state that wedges the next WSI client
-  (`drm_syncobj_array_wait_timeout`).
-  - `ENABLE_GAMESCOPE_WSI=0` (shipped in `session/usr/bin/novadeck-session` + the smoke helper)
-    only **masks** the wedge on the restart path; it is needless at boot and is **not** the
-    root-cause fix.
-  - **Do:** make gamescope release its syncobj/GPU/DRM-master state cleanly on exit (or have the
-    unit guarantee a clean slate before re-launch), so `Restart=on-failure` / `systemctl restart`
-    cannot wedge the next client. Then re-test the re-launch path and consider dropping
-    `ENABLE_GAMESCOPE_WSI=0` to recover the WSI HDR path.
-  - Harness for re-validation lives on the test device at `/root/freeze-trial.sh`
-    (DHCP, IP drifts — `192.168.1.186` as of 2026-06-24, was `.193`); raw 10-boot data in
-    `/root/freeze-results.log`.
+- [x] **Clean gamescope teardown (root-cause fix for the re-launch wedge).** ✅ **CLOSED —
+  WON'T-FIX, investigated + HW-disproven 2026-06-25.** The premise (make teardown clean → drop
+  `ENABLE_GAMESCOPE_WSI=0` → recover HDR) does not hold. On HW (`192.168.1.186`), the re-launch
+  path was re-measured with a **graceful SIGTERM** teardown (the real `systemctl restart` /
+  target-switch path, not the old SIGKILL harness), WSI **on**:
+  - **WSI on + graceful SIGTERM:** L2 re-launch wedged **4/8** — the *same* ~50% wedge as the
+    SIGKILL harness (step 1e's 7/10). **Teardown cleanliness is irrelevant** — a clean gamescope
+    exit leaves the same contamination.
+  - **WSI off (`ENABLE_GAMESCOPE_WSI=0`) on the identical path:** **8/8 SPIN, 0 wedge.**
+  - **dmesg across every trial: zero GPU faults / hangcheck / recovery / syncobj-timeout.** The
+    GPU never hangs and DRM-master is not stale (either would log and/or clear on a clean exit).
+    The wedge is an intermittent **never-signaling syncobj fence in gamescope's `linux-drm-syncobj`
+    WSI handshake on re-launch** — a userspace logical deadlock, not driver/HW state.
+  - **Conclusion:** `ENABLE_GAMESCOPE_WSI=0` is the **root-cause-level fix, not a mask** — implicit
+    sync (dma-fence on the buffer) sidesteps the racy syncobj entirely. It **stays**. Its only
+    cost (gamescope WSI HDR) is out of scope — no HDR panels in the fleet.
+  - Re-validation harness now lives on the test device at `/root/freeze-trial-graceful.sh`
+    (`WSI=0|ON TEARDOWN=TERM|KILL N=<trials>`; client-GPU oracle = `drm-engine-*` fdinfo delta).
+    DHCP IP drifts — `192.168.1.186` as of 2026-06-25.
 
-- [ ] **`--ready-fd` HDR-preserving handshake** — only worth finishing if HDR is needed *and*
-  clean teardown alone doesn't let us drop `ENABLE_GAMESCOPE_WSI=0`. See step 1e session-2 notes.
+- [x] **`--ready-fd` HDR-preserving handshake** ✅ **CLOSED — moot.** Was only worth it if HDR was
+  needed *and* clean teardown couldn't drop `ENABLE_GAMESCOPE_WSI=0`. Clean teardown is disproven
+  (above) and there are no HDR panels in the fleet, so there is nothing to preserve.
 
 ## Phase 2 — HW-support (layer C)
 

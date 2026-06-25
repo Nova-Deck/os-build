@@ -25,7 +25,7 @@ Wayland WSI** + the modifiers/present features gamescope wants are all present o
 | 1b | gamescope opens DRM/KMS | `nova-gamescope-smoke` — DRM backend under `seatd-launch` (holo libseat has only logind+seatd backends, no `builtin`) | ✅ seat via seatd; opens `/dev/dri/card0`, selects `DSI-1` @ native `1440x2560@60`; **first (modeset) atomic commit scans out a frame** (LINEAR XR24, bw OK) |
 | 1c | Vulkan client renders under gamescope | default client `vkcube` → gamescope Wayland → Turnip WSI; cube on panel | ✅ **CLOSED (HW 2026-06-21)**: patched gamescope + `--use-rotation-shader` → vkcube animates **upright landscape** on panel |
 | 1d | Input reaches the client | InputPlumber virtual gamepad (Phase-1 green) seen inside gamescope via libinput | ✅ **CLOSED (HW 2026-06-23)**: `gamescope --backend drm --use-rotation-shader -- evtest /dev/input/event7` — gamescope's hosted child reads the **InputPlumber virtual DualSense** (event7) while gamescope owns the seat/libinput. Physical presses landed: 33 `EV_KEY` (BTN_SOUTH/EAST/WEST/NORTH, BTN_TL/TR) + 103 `EV_ABS` (sticks/triggers) in a 30 s window. gamescope does **not** exclusively grab the pad — it passes through to the client, the exact path the Phase-3 Steam shell needs. |
-| 1e | **Per-frame atomic flip** | steady-state plane-only flips to DSI-1 | ✅ **rotation CLOSED; freeze CHARACTERIZED — re-launch/teardown contamination, NOT a fresh-boot race**. (a) gamescope's compensating **90° plane rotation** on a LINEAR buffer — msm DPU rejects `ROTATE_90` except on inline-rotation pipes w/ UBWC — fixed by patched gamescope (`3.16.23.2-1.1`, from-source overlay `packages/gamescope`) rotating in **GPU composite** via `--use-rotation-shader` (`ROTATE_0` scanout). (b) the "cold-start composite-flip freeze" is **a re-launch artefact**: the decisive 10-reboot experiment (session 3) shows the original WSI-on model spins **10/10 on a true power-on** (L1) and only wedges on **re-launch after a prior instance** (L2, 7/10) — a killed instance leaves stale explicit-sync syncobj/GPU state that wedges the next WSI client. So it is a non-issue at real boot; `ENABLE_GAMESCOPE_WSI=0` masks the restart-path wedge but the proper fix is clean teardown. `--immediate-flips` is a no-op here and was never the fix. (see DECISIVE EXPERIMENT below.) |
+| 1e | **Per-frame atomic flip** | steady-state plane-only flips to DSI-1 | ✅ **rotation CLOSED; freeze CHARACTERIZED — re-launch/teardown contamination, NOT a fresh-boot race**. (a) gamescope's compensating **90° plane rotation** on a LINEAR buffer — msm DPU rejects `ROTATE_90` except on inline-rotation pipes w/ UBWC — fixed by patched gamescope (`3.16.23.2-1.1`, from-source overlay `packages/gamescope`) rotating in **GPU composite** via `--use-rotation-shader` (`ROTATE_0` scanout). (b) the "cold-start composite-flip freeze" is **a re-launch artefact**: the decisive 10-reboot experiment (session 3) shows the original WSI-on model spins **10/10 on a true power-on** (L1) and only wedges on **re-launch after a prior instance** (L2, 7/10) — a killed instance leaves stale explicit-sync syncobj/GPU state that wedges the next WSI client. So it is a non-issue at real boot. **`ENABLE_GAMESCOPE_WSI=0` is the root-cause-level fix, NOT a mask, and stays** — clean teardown was tried and disproven on HW (2026-06-25): graceful SIGTERM re-launch wedged 4/8 (same as SIGKILL), WSI-off re-launch was 8/8 clean, and dmesg showed zero GPU faults/syncobj-timeouts, so the wedge is a userspace WSI syncobj-fence race, not stale GPU/DRM-master state. `--immediate-flips` is a no-op here and was never the fix. (see DECISIVE EXPERIMENT and CLEAN-TEARDOWN DISPROOF below.) |
 
 **How to run** (TEST build, SSH in, watch the panel):
 
@@ -158,11 +158,14 @@ seat`, DRM node opened, `DSI-1`, mode `1440x2560`, Xwayland up, swapchain create
   gamescope re-flipping a static composite — use the client `drm-engine-gpu` oracle for that; see the
   session-2 update.) Dropping `--immediate-flips` remains confirmed regression-free.
 
-### MITIGATED (1e cold-start freeze, root cause OPEN): gamescope WSI explicit-sync (`linux-drm-syncobj`) deadlock → `ENABLE_GAMESCOPE_WSI=0`
-> **Status note (session 2):** this block confirmed the *mechanism* (a syncobj fence never signals) but
-> NOT the *trigger*. It is superseded by the METHODOLOGY HOLE + DECISIVE EXPERIMENT below — the root
-> cause is **OPEN** (every measurement was a re-launch, never a true reboot) and `ENABLE_GAMESCOPE_WSI=0`
-> is a **mitigation**, not a confirmed fix.
+### FIXED (1e re-launch freeze): gamescope WSI explicit-sync (`linux-drm-syncobj`) deadlock → `ENABLE_GAMESCOPE_WSI=0`
+> **Status note (session 4, HW 2026-06-25):** root cause is now CLOSED as a **userspace WSI syncobj-fence
+> race on re-launch**, and `ENABLE_GAMESCOPE_WSI=0` is the **fix, not a mitigation**. The "clean teardown"
+> theory (session 3's IMPLICATION) was tested and disproven — see CLEAN-TEARDOWN DISPROOF below. Graceful
+> SIGTERM teardown leaves the same ~50% re-launch wedge as SIGKILL; WSI-off is 8/8 clean on the identical
+> path; dmesg shows zero GPU faults/syncobj-timeouts, so it is not stale GPU/DRM-master state.
+> Earlier session-2 framing (mechanism confirmed, trigger open) is retained below for the thread-stack
+> evidence.
 **Confirmed on HW 2026-06-23 (SM8650, Mesa 26.1.3 overlay, gamescope 3.16.17-1.1).** The earlier
 "WSI swapchain never receives its first refresh cycle" framing was a symptom, and the `received new
 refresh cycle` log line is NOT a reliable discriminator under 26.1.3 (wedged sessions log it too).
@@ -282,15 +285,41 @@ then stepped back. Findings, graded by confidence:
 
 - **IMPLICATION / what to do:** the product boots gamescope **once** per power-on = the L1 case = no wedge,
   so the freeze is a non-issue at real boot. It only bites the **re-launch** path (`Restart=on-failure`,
-  `systemctl restart`). The proper fix is **clean teardown** (ensure gamescope fully releases syncobj /
-  GPU / DRM-master on exit) rather than disabling the WSI layer. `ENABLE_GAMESCOPE_WSI=0` still validly
-  *masks* the re-launch wedge (implicit sync sidesteps the stale syncobj) so it can stay as cheap
-  insurance for the restart path — but it is NOT the root-cause fix and is needless at boot.
+  `systemctl restart`), and `ENABLE_GAMESCOPE_WSI=0` makes that path clean too. ~~The proper fix is clean
+  teardown~~ — **superseded: clean teardown was tested and disproven (session 4, below). Keep
+  `ENABLE_GAMESCOPE_WSI=0`; it is the fix.**
 
-- **Device state left behind (`192.168.1.193`, IP drifted off `.189`):** `/root/freeze-trial.sh` +
-  `/root/freeze-results.log` (10-boot raw data) remain. `novadeck-session` is the repo's shipped
-  `ENABLE_GAMESCOPE_WSI=0` simple model, **DISABLED** (nothing auto-runs). Reflash/redeploy from the tree
-  before trusting on-device behaviour.
+### CLEAN-TEARDOWN DISPROOF (session 4, HW `192.168.1.186`, 2026-06-25) — WSI=0 is the fix, not a mask
+Session 3's IMPLICATION conjectured that a **clean teardown** (gamescope releasing syncobj/GPU/DRM-master
+on exit) would let us drop `ENABLE_GAMESCOPE_WSI=0` and recover WSI HDR. Tested directly and **rejected**:
+
+- **Method:** `/root/freeze-trial-graceful.sh` re-launches gamescope+vkcube N times on one boot (trial 1 =
+  L1, rest = L2 re-launch), WSI selectable, teardown selectable. Oracle = client(vkcube) GPU activity =
+  sum of `drm-engine-*` from `/proc/<pid>/fdinfo` over a 6 s window (delta>0 ⇒ SPIN, 0 ⇒ WEDGE). The
+  teardown was **graceful SIGTERM** to the process group — the *real* `systemctl restart` / target-switch
+  path, not session 3's worst-case SIGKILL.
+
+  | Config (graceful SIGTERM, N=8) | L2 re-launch |
+  |---|---|
+  | **WSI on** (`linux-drm-syncobj`) | 3 SPIN / **4 WEDGE** |
+  | **WSI off** (`ENABLE_GAMESCOPE_WSI=0`) | **8 SPIN / 0 WEDGE** |
+
+- **Findings:** (1) **Teardown signal is irrelevant** — graceful SIGTERM wedges ~50%, the same order as
+  the SIGKILL harness (7/10). A clean gamescope exit does NOT prevent the wedge. (2) **No GPU hang** —
+  dmesg across every trial showed zero faults / hangcheck / recovery / syncobj-timeout, and the GMU
+  firmware loaded once at first GPU use and stayed up. So the contamination is **not** stale GPU or
+  DRM-master state (those would log and/or clear on a clean exit) — it is an intermittent
+  **never-signaling syncobj fence in gamescope's WSI explicit-sync handshake on re-launch** (userspace
+  logical deadlock). (3) **WSI off is 8/8 clean** on the identical path — implicit sync (dma-fence on the
+  buffer) sidesteps the racy syncobj entirely.
+- **Decision:** `ENABLE_GAMESCOPE_WSI=0` is the **root-cause-level fix and stays**. Its only cost (WSI
+  HDR) is out of scope — no HDR panels in the fleet. The "clean teardown" and `--ready-fd` HDR-handshake
+  TODO items are **closed** (won't-fix / moot).
+
+- **Device state left behind (`192.168.1.186`, IP drifts via DHCP):** `/root/freeze-trial-graceful.sh`
+  remains (the session-3 `/root/freeze-trial.sh` + `freeze-results.log` did not survive the reflash).
+  `novadeck-session` is the repo's shipped `ENABLE_GAMESCOPE_WSI=0` model, **DISABLED** (nothing
+  auto-runs). Reflash/redeploy from the tree before trusting on-device behaviour.
 
 ## Step 2 — gamescope session (Deck UI shell) [IN PROGRESS]
 Step 1 proved bare gamescope renders a client through Turnip's Wayland WSI when run **by hand**

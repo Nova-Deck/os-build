@@ -280,12 +280,13 @@ set -eu
 unset WAYLAND_DISPLAY DISPLAY
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/0}"
 mkdir -p "$XDG_RUNTIME_DIR"; chmod 700 "$XDG_RUNTIME_DIR"
-# Disable the gamescope WSI Vulkan layer — RESTART-PATH INSURANCE (matches the novadeck-session
-# launcher; not needed at a true boot). The layer's Wayland explicit-sync (linux-drm-syncobj) present
-# path wedges the client (drm_syncobj_array_wait_timeout) only on RE-LAUNCH after a prior instance —
-# the decisive 10-reboot experiment found L1 fresh-boot spins 10/10, L2 re-launch wedges 7/10, so it
-# is teardown contamination, not a fresh-boot race. Off => implicit-sync fallback masks the re-launch
-# wedge. See devices/sm8650/bringup-phase2.md (step 1e, session 3).
+# Disable the gamescope WSI Vulkan layer — the ROOT-CAUSE FIX for the re-launch freeze (matches the
+# novadeck-session launcher). The layer's Wayland explicit-sync (linux-drm-syncobj) present path wedges
+# the client (drm_syncobj_array_wait_timeout) only on RE-LAUNCH after a prior instance; a true power-on
+# is always clean. HW testing (step 1e, session 4) proved this is a userspace WSI syncobj-fence race,
+# not stale GPU/DRM-master state: graceful SIGTERM teardown still wedges ~50%, dmesg shows no GPU
+# faults, and WSI off (implicit-sync fallback) is 8/8 clean on re-launch. So this is the fix, not a
+# mask; only cost is WSI HDR (no HDR panels in the fleet). See devices/sm8650/bringup-phase2.md (step 1e).
 export ENABLE_GAMESCOPE_WSI=0
 client="${1:-vkcube}"
 echo "[nova] gamescope DRM smoke: client=$client  XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR"

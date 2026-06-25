@@ -43,5 +43,11 @@ device       qcom/sm8650/konkr/pf/adsp.mbn                   audio/sensors DSP i
 device       qcom/sm8650/konkr/pf/adsp_dtb.mbn               adsp devicetree blob (KONKR)
 device       qcom/sm8650/konkr/pf/cdsp.mbn                   compute DSP image (KONKR)
 device       qcom/sm8650/konkr/pf/cdsp_dtb.mbn               cdsp devicetree blob (KONKR)
+# Audio: AudioReach (q6apm) topology binaries. The qcom/sm8250 machine driver requests
+# qcom/sm8650/<card-model>-tplg.bin, where <card-model> is the DT `model` (sound_card node):
+# SM8650-APS2 (Pocket S2), SM8650-KPF (Konkr PF). NOT in linux-firmware — extracted from the
+# device's Android vendor image. The two boards' topologies are currently byte-identical.
+device       qcom/sm8650/SM8650-APS2-tplg.bin                AudioReach topology — Pocket S2 (model SM8650-APS2)
+device       qcom/sm8650/SM8650-KPF-tplg.bin                 AudioReach topology — Konkr PF (model SM8650-KPF)
 # Wi-Fi/BT: WCN7850 (ath12k hw2.0); request_firmware globs a directory of blobs.
 device       ath12k/WCN7850/hw2.0/                           ath12k WCN7850 firmware dir (board-2.bin, amss, m3)

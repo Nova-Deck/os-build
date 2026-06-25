@@ -121,10 +121,13 @@ CC=(${CROSS_COMPILE:+CROSS_COMPILE=$CROSS_COMPILE})
     make ARCH=arm64 "${CC[@]}" olddefconfig
   fi
   # Embed the staged blobs into the Image. Derive CONFIG_EXTRA_FIRMWARE from the EMBED
-  # list above (single source of truth; EXTRA_FIRMWARE_DIR stays its default "firmware"),
-  # so neither the fragment nor a verbatim BASE_CONFIG has to carry the per-file list.
-  # Re-run olddefconfig so the change settles.
+  # list above (single source of truth), so neither the fragment nor a verbatim
+  # BASE_CONFIG has to carry the per-file list. Pin EXTRA_FIRMWARE_DIR to the kernel
+  # tree's "firmware/" dir where the staging loop installs the blobs — the Kconfig
+  # default is "/lib/firmware" (absolute, not present in the build container), so it
+  # MUST be overridden or the embed can't find the files. Re-run olddefconfig to settle.
   scripts/config --file .config --set-str EXTRA_FIRMWARE "$EMBED_REL"
+  scripts/config --file .config --set-str EXTRA_FIRMWARE_DIR firmware
   make ARCH=arm64 "${CC[@]}" olddefconfig
   make ARCH=arm64 "${CC[@]}" -j"$(nproc)" Image.gz dtbs modules
 )

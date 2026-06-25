@@ -86,9 +86,11 @@ investigation that produced it.
     `systemd-networkd`. The throwaway card now runs the **same manager as release**, so this NM path
     — and the `50-nm-reup` resume hook — is now exercisable on HW. A plain release base still leaves
     NM inactive (no auto-enable preset); enabling it for release is the Phase-3 Steam-UI step.
-  - ⚠️ **No UART = lockout risk:** the NM rewrite replaces an HW-proven wpa_supplicant path on a
-    device with no serial console. Validate the next test image with the SD card re-flashable: a
-    typo'd `.nmconnection` (perms must be 0600 root) = card never joins = no SSH = physical re-flash.
+  - ✅ **HW-VALIDATED 2026-06-25 (IP 192.168.1.186):** the NM-based test card joined the LAN and
+    accepts SSH — the `.nmconnection` + `NetworkManager.service` injection works on real hardware, so
+    the test-vs-release stack is unified and the no-UART lockout risk of the rewrite is cleared.
+    (Still HW-TODO on this card: confirm `timedatectl` clock-step, `bluetoothctl` sees `hci0`, and
+    that `50-nm-reup` re-ups Wi-Fi across a suspend/resume.)
   - 🧹 **Stale docs:** `images/README.md` + a `build-image.sh` comment still describe an **iwd**
     Wi-Fi stack (`/var/lib/iwd/<SSID>.psk`) that the build never used in current code — reconcile to
     NetworkManager (release) / wpa_supplicant-was-the-prior-test-stack.

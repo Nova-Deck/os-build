@@ -60,13 +60,14 @@ for b in "${BOARDS[@]}"; do
 done
 
 # --- Stage built-in firmware (CONFIG_EXTRA_FIRMWARE) ---
-# Like ROCKNIX, bake the Adreno GPU firmware (+ both boards' signed zap shaders) into the
-# Image so the GPU/display stack has its blobs before the SD-card rootfs mounts. The
-# config fragment lists these via CONFIG_EXTRA_FIRMWARE with the default
-# CONFIG_EXTRA_FIRMWARE_DIR="firmware", so copy them into the kernel tree's firmware/ dir
-# under the exact /lib/firmware-relative path the drivers request. Open Adreno blobs come
-# from the pinned linux-firmware (firmware/fetch-linux-fw.sh); the per-board zap shaders
-# come from the extracted device firmware (firmware/extract.sh).
+# Like ROCKNIX, bake firmware into the Image so the blobs are present before the SD-card
+# rootfs mounts. Each EMBED entry is copied into the kernel tree's firmware/ dir (the
+# default CONFIG_EXTRA_FIRMWARE_DIR) under the exact /lib/firmware-relative path the driver
+# requests; CONFIG_EXTRA_FIRMWARE is then DERIVED from this same list after configuring
+# (see below) — single source of truth, works on both the fragment and BASE_CONFIG paths,
+# so nothing has to be hand-maintained in the kernel config. Open Adreno blobs come from
+# the pinned linux-firmware (firmware/fetch-linux-fw.sh); the per-board zap shaders + the
+# AudioReach tplg come from the extracted device firmware (firmware/extract.sh).
 LFW="$ROOT/firmware/linux-fw/$SOC"
 FWX="$ROOT/firmware/extracted/$SOC"
 EMBED=(
@@ -75,8 +76,12 @@ EMBED=(
   "$LFW/qcom/gmu_gen70900.bin"
   "$FWX/qcom/sm8650/ayaneo/ps2/gen70900_zap.mbn"
   "$FWX/qcom/sm8650/konkr/pf/gen70900_zap.mbn"
+  # AudioReach topology (q6apm) — both boards' card-model-named tplg (device-extracted).
+  "$FWX/qcom/sm8650/SM8650-APS2-tplg.bin"
+  "$FWX/qcom/sm8650/SM8650-KPF-tplg.bin"
 )
 echo "[novadeck] staging built-in firmware (CONFIG_EXTRA_FIRMWARE) into firmware/"
+EMBED_REL=""   # accumulates the /lib/firmware-relative paths -> CONFIG_EXTRA_FIRMWARE list
 for f in "${EMBED[@]}"; do
   [ -f "$f" ] || {
     echo "missing embed firmware: ${f#"$ROOT"/}" >&2
@@ -85,6 +90,7 @@ for f in "${EMBED[@]}"; do
   }
   rel="${f#"$LFW"/}"; rel="${rel#"$FWX"/}"   # path relative to its firmware root = /lib/firmware path
   install -Dm0644 "$f" "$SRCDIR/firmware/$rel"
+  EMBED_REL="${EMBED_REL:+$EMBED_REL }$rel"
 done
 
 # --- Configure + build ---
@@ -114,6 +120,12 @@ CC=(${CROSS_COMPILE:+CROSS_COMPILE=$CROSS_COMPILE})
     scripts/kconfig/merge_config.sh -m arch/arm64/configs/defconfig "$FRAGMENT"
     make ARCH=arm64 "${CC[@]}" olddefconfig
   fi
+  # Embed the staged blobs into the Image. Derive CONFIG_EXTRA_FIRMWARE from the EMBED
+  # list above (single source of truth; EXTRA_FIRMWARE_DIR stays its default "firmware"),
+  # so neither the fragment nor a verbatim BASE_CONFIG has to carry the per-file list.
+  # Re-run olddefconfig so the change settles.
+  scripts/config --file .config --set-str EXTRA_FIRMWARE "$EMBED_REL"
+  make ARCH=arm64 "${CC[@]}" olddefconfig
   make ARCH=arm64 "${CC[@]}" -j"$(nproc)" Image.gz dtbs modules
 )
 

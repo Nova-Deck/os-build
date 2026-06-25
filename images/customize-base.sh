@@ -54,7 +54,12 @@ DEST="$ROOT/work/base/$SOC"
 # drives NM. The TEST card (assemble-rootfs.sh NOVADECK_TEST block) DOES enable NM and drops a
 # connection profile, so the throwaway card exercises the same manager as release (no test-vs-release
 # stack split). bluez/networkmanager being added busts the install-set reuse marker — intended.
-PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-tools mesa gamescope seatd bluez bluez-utils networkmanager)
+# Audio (SteamOS layer C): PipeWire stack + ALSA UCM2 base. alsa-ucm-conf supplies the
+# /codecs/{wcd939x,qcom-lpass,wsa884x} + /lib snippets that the device UCM2 profiles
+# (audio/ overlay, cards SM8650-APS2/SM8650-KPF) Include; pipewire-pulse/-alsa give the
+# PA/ALSA shims so games + BlueZ (A2DP/HFP) route through PipeWire, wireplumber is the
+# session manager. (pipewire-jack omitted — not needed for game/BT audio.)
+PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-tools mesa gamescope seatd bluez bluez-utils networkmanager alsa-ucm-conf pipewire wireplumber pipewire-pulse pipewire-alsa)
 
 # Test-only packages — installed ONLY under NOVADECK_TEST=1, NEVER in a release base.
 # On-device bring-up tools: evtest reads raw /dev/input events; usbutils provides lsusb.

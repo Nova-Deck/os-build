@@ -169,6 +169,22 @@ else
   echo "  (no hw-support/ tree — skipping HW-support injection)"
 fi
 
+# 4b-audio. ALSA UCM2 machine profile (SteamOS layer C audio). A static overlay tree under
+# audio/ mirror-copied into the rootfs: the device's card-name-matched UCM2 profile so userland
+# knows the routing (speaker/headphone/DP paths, jack handling). The profile is the ROCKNIX
+# Pocket S2 config (card model SM8650-APS2, matching the DT sound_card model + the AudioReach
+# tplg). conf.d/sm8650/ ships two relative symlinks (SM8650-APS2 + the EFI-boot card-name
+# variant ayaneo-AYANEOPocketS2-) -> the profile; cp -a preserves them. The profile Includes
+# codec snippets (/codecs/wcd939x, /codecs/qcom-lpass/{wsa,rx}-macro, /codecs/wsa884x) that must
+# be provided by the base alsa-ucm-conf package — ensure it is in the release PKGS (layer-4 work).
+AUDIO="$ROOT/audio"
+if [ -d "$AUDIO" ]; then
+  echo "  injecting novadeck ALSA UCM2 profile from ${AUDIO#"$ROOT"/} (card SM8650-APS2)"
+  cp -a "$AUDIO"/. "$stage/"
+else
+  echo "  (no audio/ tree — skipping UCM2 injection)"
+fi
+
 # 4c. TEST-ONLY Wi-Fi/SSH injection (NOVADECK_TEST=1). NEVER part of a release/RAUC build:
 # the release base is packages-only and first-boot networking is the SteamOS UI's job. Here
 # we add ALL the scaffolding a throwaway card needs to auto-join the LAN and accept an SSH

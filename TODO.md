@@ -68,9 +68,10 @@ investigation that produced it.
   added to `PKGS` in `images/customize-base.sh`; `bluetoothd` enabled via the hw-support overlay
   (`60-novadeck-bluetooth.preset` + build-time `bluetooth.target.wants/bluetooth.service` and the
   `dbus-org.bluez.service` alias that also lets D-Bus activate it on demand). WCN7850 BT firmware
-  already ships (assemble-rootfs.sh block 3b). **TODO(HW):** boot a build, confirm `bluetoothctl`
-  sees the adapter (`hci0`) and pair a controller; verify `bluetooth.target` is actually reached at
-  boot (else rely on the D-Bus alias activation).
+  already ships (assemble-rootfs.sh block 3b). ✅ **HW-VALIDATED 2026-06-25:** `bluetoothctl list`
+  shows the adapter up — `Controller 00:03:7F:65:52:07 archlinux [default]` (00:03:7F = Qualcomm/
+  Atheros OUI = WCN7850 BT radio), so bluetoothd runs, firmware loaded, and the overlay enablement
+  took. **Remaining HW sub-check:** actually pair a controller (scan/pair/connect a gamepad).
 
 - [x] **Release Wi-Fi resume after userspace suspend.** ✅ **DONE (code) — HW UNVALIDATED.** Shipped a
   defensive NM resume hook in the release overlay: `hw-support/etc/novadeck/resume.d/50-nm-reup`

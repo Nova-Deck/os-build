@@ -114,5 +114,8 @@ investigation that produced it.
   `systemd-timesyncd` config + enablement in the hw-support overlay: `etc/systemd/timesyncd.conf`
   (NTP=pool.ntp.org), `60-novadeck-timesyncd.preset`, and the build-time
   `sysinit.target.wants/systemd-timesyncd.service` + `dbus-org.freedesktop.timesync1.service`
-  symlinks. **TODO(HW):** confirm the base actually ships `systemd-timesyncd` (part of the `systemd`
-  package on Arch/Holo) and that the clock steps once the network is up (`timedatectl`).
+  symlinks. ✅ **HW-VALIDATED 2026-06-25:** clock syncs after reflash. Initial boot showed time stuck
+  at epoch — root cause was NOT timesyncd config but `/.dockerenv` baked in by `docker export`, which
+  made `systemd-detect-virt`=`docker` so systemd skipped the unit's `ConditionVirtualization=!container`.
+  Fixed by `sanitize_base_provenance()` in `assemble-rootfs.sh` (strips the marker). See
+  [[dockerenv-systemd-container-misdetect]].

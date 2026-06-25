@@ -48,15 +48,34 @@ investigation that produced it.
   The Deck-UI / steamos-manager suspend request remains a future alternate trigger. See
   `devices/sm8650/bringup-phase2.md` step 3.
 
-- [ ] **Add a Bluetooth stack.** Pull BlueZ (+ bluez-utils) into the base/package set so the Deck UI
-  can pair controllers/audio. Today rfkill sees a `bluetooth` radio but there is no userspace stack.
-  Layer-C affordance; pairs with the gamepad/input work.
+- [x] **Add a Bluetooth stack.** ✅ **DONE (code) — HW pairing UNVALIDATED.** `bluez` + `bluez-utils`
+  added to `PKGS` in `images/customize-base.sh`; `bluetoothd` enabled via the hw-support overlay
+  (`60-novadeck-bluetooth.preset` + build-time `bluetooth.target.wants/bluetooth.service` and the
+  `dbus-org.bluez.service` alias that also lets D-Bus activate it on demand). WCN7850 BT firmware
+  already ships (assemble-rootfs.sh block 3b). **TODO(HW):** boot a build, confirm `bluetoothctl`
+  sees the adapter (`hci0`) and pair a controller; verify `bluetooth.target` is actually reached at
+  boot (else rely on the D-Bus alias activation).
 
-- [ ] **Release Wi-Fi resume after userspace suspend.** The `resume.d` hook *mechanism* is generic
-  (`novadeck-suspend` runs `/etc/novadeck/resume.d/*` after thaw, ships in the overlay). The test card's
-  hook re-ups `wpa_supplicant@wlan0` (test-only, matches the test Wi-Fi stack). RELEASE uses
-  NetworkManager (Steam wizard-configured) — verify NM reconnects on thaw on its own; if not, ship an
-  NM-flavored resume hook. Don't leave release without a Wi-Fi resume path.
+- [x] **Release Wi-Fi resume after userspace suspend.** ✅ **DONE (code) — HW UNVALIDATED.** Shipped a
+  defensive NM resume hook in the release overlay: `hw-support/etc/novadeck/resume.d/50-nm-reup`
+  (`nmcli radio wifi on` after thaw). It is **inert unless NM is the active manager**
+  (`command -v nmcli` + `systemctl is-active NetworkManager`), so it stays a no-op on the TEST card
+  where networkd + `wpa_supplicant` own wlan0; it sorts before the TEST-only `50-wlan-reup`, so that
+  re-association still runs. **TODO(HW):** the suspend path rfkill-blocks the radio and NM usually
+  re-enables Wi-Fi unaided on the unblock — confirm whether NM recovers on its own and drop this hook
+  if the nudge proves moot.
+  - ✅ **Resolved the test-vs-release stack split (2026-06-25):** `networkmanager` added to
+    `customize-base.sh` PKGS, and the TEST Wi-Fi injection rewritten to use NM (drops an
+    `.nmconnection` keyfile + enables `NetworkManager.service`) instead of `wpa_supplicant@wlan0` +
+    `systemd-networkd`. The throwaway card now runs the **same manager as release**, so this NM path
+    — and the `50-nm-reup` resume hook — is now exercisable on HW. A plain release base still leaves
+    NM inactive (no auto-enable preset); enabling it for release is the Phase-3 Steam-UI step.
+  - ⚠️ **No UART = lockout risk:** the NM rewrite replaces an HW-proven wpa_supplicant path on a
+    device with no serial console. Validate the next test image with the SD card re-flashable: a
+    typo'd `.nmconnection` (perms must be 0600 root) = card never joins = no SSH = physical re-flash.
+  - 🧹 **Stale docs:** `images/README.md` + a `build-image.sh` comment still describe an **iwd**
+    Wi-Fi stack (`/var/lib/iwd/<SSID>.psk`) that the build never used in current code — reconcile to
+    NetworkManager (release) / wpa_supplicant-was-the-prior-test-stack.
 
 - [x] **Long-press power = clean shutdown (in `novadeck-waked`).** ✅ **DONE.** The agent times the
   press from its libinput pressed→released edges: a tap fires `novadeck-suspend toggle`; a hold
@@ -73,6 +92,9 @@ investigation that produced it.
   while frozen). Resume now ~2-3s. The wake agent itself was never at fault. See `suspend-systemctl-
   while-frozen-blocks` memory.
 
-- [ ] **No system clock / NTP on the device.** RTC starts near epoch and nothing syncs it (logs read
-  `1970-…`). Harmless for the suspend timing (it uses deltas) but ship a `systemd-timesyncd` config
-  (or chrony) so timestamps and TLS are sane. Low priority, unrelated to suspend.
+- [x] **No system clock / NTP on the device.** ✅ **DONE (code) — HW UNVALIDATED.** Shipped
+  `systemd-timesyncd` config + enablement in the hw-support overlay: `etc/systemd/timesyncd.conf`
+  (NTP=pool.ntp.org), `60-novadeck-timesyncd.preset`, and the build-time
+  `sysinit.target.wants/systemd-timesyncd.service` + `dbus-org.freedesktop.timesync1.service`
+  symlinks. **TODO(HW):** confirm the base actually ships `systemd-timesyncd` (part of the `systemd`
+  package on Arch/Holo) and that the clock steps once the network is up (`timedatectl`).

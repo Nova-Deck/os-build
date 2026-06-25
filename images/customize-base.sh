@@ -3,7 +3,9 @@
 #
 # The upstream holo-core base is minimal: no Wi-Fi supplicant, no SSH server, no
 # Vulkan/Mesa userspace. This layers the runtime that ships in every build —
-#   wpa_supplicant   Wi-Fi WPA auth (systemd-networkd does the DHCP)
+#   networkmanager   Wi-Fi manager (release + test); does its own DHCP
+#   wpa_supplicant   NM's Wi-Fi WPA backend (optdepend of networkmanager, so installed explicitly)
+#   bluez/bluez-utils Bluetooth stack + bluetoothctl (Deck UI pairs controllers/audio)
 #   openssh          SSH server (dropbear isn't in the pinned holo repo)
 #   wireless-regdb   regulatory database — REQUIRED for 5 GHz (else channels are no-TX)
 #   mesa + vulkan-freedreno (Turnip) + vulkan-tools   GPU / Vulkan
@@ -43,7 +45,16 @@ DEST="$ROOT/work/base/$SOC"
 # Phase 2 brings up BARE gamescope on Turnip before the jupiter-* port to isolate the
 # Turnip↔gamescope Wayland-WSI question (see devices/<soc>/bringup-phase2.md). Both are genuine
 # release runtime (the gamescope session needs them), not test-only.
-PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-tools mesa gamescope seatd)
+# bluez + bluez-utils are the Bluetooth stack (layer C): the Deck UI pairs controllers/audio over
+# org.bluez, and the WCN7850 BT firmware already ships (assemble-rootfs.sh block 3b). bluetoothd is
+# enabled in the hw-support overlay (60-novadeck-bluetooth.preset); bluez-utils provides bluetoothctl.
+# networkmanager is the Wi-Fi manager (the SteamOS gamepadui default; uses wpa_supplicant as its
+# backend, already present). NM ships no auto-enable preset, so installing it here leaves it INACTIVE
+# in a plain release base — release first-boot networking is the Steam UI's job (Phase-3), which
+# drives NM. The TEST card (assemble-rootfs.sh NOVADECK_TEST block) DOES enable NM and drops a
+# connection profile, so the throwaway card exercises the same manager as release (no test-vs-release
+# stack split). bluez/networkmanager being added busts the install-set reuse marker — intended.
+PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-tools mesa gamescope seatd bluez bluez-utils networkmanager)
 
 # Test-only packages — installed ONLY under NOVADECK_TEST=1, NEVER in a release base.
 # On-device bring-up tools: evtest reads raw /dev/input events; usbutils provides lsusb.

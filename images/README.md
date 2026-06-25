@@ -8,7 +8,7 @@ recipes consume the staged kernel (`kernel/build.sh`), extracted firmware
 |---|---|
 | `build-image.sh <soc> [vendor-tree]` | **Phase 1 flow orchestrator.** Chains base fetch → firmware extract/verify → rootfs assembly into `out/<soc>/images/rootfs.img`. |
 | `fetch-base.sh <soc>` | Pull the pinned upstream base (`base.digest`) and export its **bare** rootfs to `work/base/<soc>/`. No qemu — `docker export` only moves files. |
-| `customize-base.sh <soc>` | Pin-pull the base, then under **arm64 emulation** (qemu binfmt) `pacman`-install the release runtime — iwd (Wi-Fi), openssh (SSH), mesa + Turnip + vulkan-tools — enable the services, and export to `work/base/<soc>/`. What `build-image.sh` uses. Network required; no credentials baked in. |
+| `customize-base.sh <soc>` | Pin-pull the base, then under **arm64 emulation** (qemu binfmt) `pacman`-install the release runtime — NetworkManager (Wi-Fi, with its wpa_supplicant backend), bluez (Bluetooth), openssh (SSH), mesa + Turnip + vulkan-tools — and export to `work/base/<soc>/`. What `build-image.sh` uses. Network required; no credentials baked in (NM is installed but inactive in a plain release base). |
 | `partition-table.txt` | The 8-partition A/B layout (ESP, A/B GRUB, A/B root, A/B /var, shared /home). Single source of truth. |
 | `genpart.sh <soc> [target]` | Emit an `sgdisk` script from the table; apply it to a disk/image when `target` is given. |
 | `assemble-rootfs.sh <soc> <base-rootfs>` | Stage base + kernel + firmware and bake a read-only Btrfs root image (`mkfs.btrfs --rootdir`, unprivileged) → `out/<soc>/images/rootfs.img`. Also injects per-SoC InputPlumber config (`devices/<soc>/inputplumber/` → `/etc/inputplumber/`) and enables the daemon on release, and the `session/` gamescope-session overlay (launcher + `novadeck-session.service`, installed but not auto-enabled — layer B). |
@@ -43,8 +43,8 @@ sudo dd if=out/sm8650/images/sdcard.img of=/dev/sdX bs=4M conv=fsync status=prog
 
 ### Test card: Wi-Fi + SSH (test-only)
 
-The release runtime (iwd, openssh, mesa/Turnip/vulkan-tools) ships in every build via
-`customize-base.sh`. **Credentials** are not — they are injected only when assembling with
+The release runtime (NetworkManager, openssh, mesa/Turnip/vulkan-tools) ships in every build
+via `customize-base.sh`. **Credentials** are not — they are injected only when assembling with
 `NOVADECK_TEST=1`, straight from the environment, so they never touch the repo. Use this to
 build a throwaway card that joins your LAN and accepts SSH, to run `vulkaninfo` on hardware:
 
@@ -58,9 +58,10 @@ docker run --rm -v "$PWD":/src -w /src novadeck-build images/make-sdcard.sh sm86
 ```
 
 `build-image.sh` forwards the same `NOVADECK_*` env, so the full flow honours it too. The
-injection drops `/var/lib/iwd/<SSID>.psk` + `/root/.ssh/authorized_keys`; iwd does its own
-DHCP and sshd allows key-only root login (`PermitRootLogin prohibit-password`). Then on the device: `ssh root@<dhcp-ip>` →
-`vulkaninfo | grep -E 'deviceName|driverName'` (expect Turnip / Adreno 750).
+injection drops a `0600` `/etc/NetworkManager/system-connections/<SSID>.nmconnection` +
+`/root/.ssh/authorized_keys` and enables `NetworkManager.service`; NM does its own DHCP and sshd
+allows key-only root login (`PermitRootLogin prohibit-password`). Then on the device:
+`ssh root@<dhcp-ip>` → `vulkaninfo | grep -E 'deviceName|driverName'` (expect Turnip / Adreno 750).
 
 Individual tools (btrfs-progs, gdisk, dosfstools, mtools, rauc, casync, openssl) live in
 the build image, so run them there:

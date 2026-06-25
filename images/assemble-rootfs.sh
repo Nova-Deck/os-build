@@ -133,10 +133,14 @@ fi
 # package added — gamescopectl ships in our from-source gamescope; the rest is pure sysfs. The
 # power-key trigger (novadeck-waked) IS enabled here (preset + multi-user.target.wants symlink ship
 # inside the overlay) so the key drives suspend/resume + long-press poweroff at boot; novadeck-rest
-# stays a hand-run dev tool. See devices/$SOC/bringup-phase2.md step 3.
+# stays a hand-run dev tool. The overlay also carries the SoC-agnostic release-system backings that
+# pair with the Deck UI: the Bluetooth stack (bluetoothd enabled via 60-novadeck-bluetooth.preset;
+# bluez packages come from customize-base.sh), systemd-timesyncd for a sane clock (no RTC sync
+# otherwise), and a defensive NetworkManager Wi-Fi resume hook (resume.d/50-nm-reup, inert unless NM
+# is the active manager). See devices/$SOC/bringup-phase2.md step 3.
 HWSUPPORT="$ROOT/hw-support"
 if [ -d "$HWSUPPORT" ]; then
-  echo "  injecting novadeck HW-support from ${HWSUPPORT#"$ROOT"/} (rest-mode dev tool + wake agent enabled)"
+  echo "  injecting novadeck HW-support from ${HWSUPPORT#"$ROOT"/} (wake agent + bluetooth + timesyncd enabled)"
   cp -a "$HWSUPPORT"/. "$stage/"
   chmod 0755 "$stage/usr/bin/novadeck-rest" "$stage/usr/bin/novadeck-suspend" "$stage/usr/bin/novadeck-waked"
 else
@@ -146,70 +150,56 @@ fi
 # 4c. TEST-ONLY Wi-Fi/SSH injection (NOVADECK_TEST=1). NEVER part of a release/RAUC build:
 # the release base is packages-only and first-boot networking is the SteamOS UI's job. Here
 # we add ALL the scaffolding a throwaway card needs to auto-join the LAN and accept an SSH
-# login to run vulkaninfo — interface config, regdom (via wpa country=), the Wi-Fi PSK + SSH
+# login to run vulkaninfo — a NetworkManager connection profile, regdom, the Wi-Fi PSK + SSH
 # key (from the environment, so secrets never touch the repo), service enablement, and host
-# keys. The runtime packages (wpa_supplicant, openssh) come from the base (customize-base.sh).
+# keys. The runtime packages (networkmanager + its wpa_supplicant backend, openssh) come from
+# the base (customize-base.sh). The test card deliberately uses the SAME manager as release —
+# NetworkManager — so this path validates the real release Wi-Fi stack (and the hw-support
+# 50-nm-reup resume hook) instead of a divergent test-only wpa_supplicant@wlan0 + networkd path.
 if [ "${NOVADECK_TEST:-}" = "1" ]; then
   : "${NOVADECK_WIFI_SSID:?NOVADECK_TEST=1 requires NOVADECK_WIFI_SSID}"
   : "${NOVADECK_WIFI_PSK:?NOVADECK_TEST=1 requires NOVADECK_WIFI_PSK}"
   echo "  [TEST] injecting Wi-Fi + SSH scaffolding for '$NOVADECK_WIFI_SSID' (test-only)"
 
-  # Interface rename: WCN7850 is PCIe so predictable naming gives wlpXsY; pin it to wlan0 so
-  # wpa_supplicant@wlan0 + the .network below target it deterministically.
-  install -d -m0755 "$stage/etc/systemd/network"
-  cat >"$stage/etc/systemd/network/10-wlan.link" <<EOF
-[Match]
-Type=wlan
-[Link]
-Name=wlan0
-EOF
-  # systemd-networkd does DHCP on wlan0; wpa_supplicant handles the WPA association.
-  cat >"$stage/etc/systemd/network/25-wlan0.network" <<EOF
-[Match]
-Name=wlan0
-[Network]
-DHCP=yes
-EOF
+  # NetworkManager connection profile (keyfile format). NM binds by SSID, not interface, so no
+  # interface rename is needed; NM also runs its own DHCP and drives wpa_supplicant itself (the
+  # plain wpa_supplicant.service, NOT the @wlan0 instance). The file MUST be 0600 root-owned or NM
+  # ignores it ("ignoring due to permissions"). autoconnect=true joins the LAN at boot.
+  install -d -m0755 "$stage/etc/NetworkManager/system-connections"
+  ( umask 077; cat >"$stage/etc/NetworkManager/system-connections/${NOVADECK_WIFI_SSID}.nmconnection" <<EOF
+[connection]
+id=${NOVADECK_WIFI_SSID}
+type=wifi
+autoconnect=true
 
-  # wpa_supplicant@wlan0 reads this. country=BE sets the regulatory domain (enables 5 GHz)
-  # at the supplicant layer, independent of the set-wireless-regdom udev helper.
-  install -d -m0755 "$stage/etc/wpa_supplicant"
-  ( umask 077; cat >"$stage/etc/wpa_supplicant/wpa_supplicant-wlan0.conf" <<EOF
-ctrl_interface=/run/wpa_supplicant
-update_config=1
-country=BE
-network={
-ssid="${NOVADECK_WIFI_SSID}"
-psk="${NOVADECK_WIFI_PSK}"
-}
+[wifi]
+mode=infrastructure
+ssid=${NOVADECK_WIFI_SSID}
+
+[wifi-security]
+key-mgmt=wpa-psk
+psk=${NOVADECK_WIFI_PSK}
+
+[ipv4]
+method=auto
+
+[ipv6]
+method=auto
 EOF
   )
+  chmod 0600 "$stage/etc/NetworkManager/system-connections/${NOVADECK_WIFI_SSID}.nmconnection"
 
   # Regulatory domain at the kernel layer: the 85-regulatory.rules udev rule runs
   # set-wireless-regdom when cfg80211 loads; it sources this file and runs `iw reg set`.
   # The packaged file (from wireless-regdb) has every country commented out, so without this
-  # the chip stays on the world domain (00) until wpa_supplicant's country= kicks in. Pin it
-  # so 5 GHz is enabled from the moment cfg80211 loads (and the helper stops exiting 1).
+  # the chip stays on the world domain (00) until something sets it. Pin it so 5 GHz is enabled
+  # from the moment cfg80211 loads (and the helper stops exiting 1). NM honours the kernel regdom.
   install -d -m0755 "$stage/etc/conf.d"
   printf '\nWIRELESS_REGDOM="BE"\n' >>"$stage/etc/conf.d/wireless-regdom"
 
-  # novadeck-suspend resume hook (test-only): a userspace suspend freezes wpa_supplicant/networkd, and
-  # the link may not re-associate on its own after thaw (same as after an rfkill cycle). Re-up wlan0
-  # the way the rfkill resume test validated. Release networking is the SteamOS UI's job, so this hook
-  # lives in the TEST block, not the hw-support overlay.
-  install -d -m0755 "$stage/etc/novadeck/resume.d"
-  cat >"$stage/etc/novadeck/resume.d/50-wlan-reup" <<'EOF'
-#!/bin/sh
-# Re-associate wlan0 after a novadeck-suspend resume (test-card Wi-Fi).
-ip link set wlan0 up 2>/dev/null
-if wpa_cli -i wlan0 status >/dev/null 2>&1; then
-  wpa_cli -i wlan0 reassociate >/dev/null 2>&1
-else
-  systemctl restart wpa_supplicant@wlan0
-fi
-networkctl renew wlan0 >/dev/null 2>&1 || true
-EOF
-  chmod 0755 "$stage/etc/novadeck/resume.d/50-wlan-reup"
+  # No test-only resume hook: the test card now runs NetworkManager, so the hw-support overlay's
+  # release hook (etc/novadeck/resume.d/50-nm-reup) covers Wi-Fi re-up after a novadeck-suspend
+  # thaw — which is exactly what this NM-based test path lets us validate on HW.
 
   # Enable services. /etc/machine-id is empty, so systemd runs preset-all on first boot and
   # the stock 99-default.preset is "disable *"; ship a high-priority preset (70 < 99) so our
@@ -217,16 +207,16 @@ EOF
   install -d -m0755 "$stage/usr/lib/systemd/system-preset"
   cat >"$stage/usr/lib/systemd/system-preset/70-novadeck-test.preset" <<EOF
 enable sshd.service
-enable wpa_supplicant@wlan0.service
-enable systemd-networkd.service
+enable NetworkManager.service
 EOF
   install -d -m0755 "$stage/etc/systemd/system/multi-user.target.wants"
   ln -sf /usr/lib/systemd/system/sshd.service \
          "$stage/etc/systemd/system/multi-user.target.wants/sshd.service"
-  ln -sf /usr/lib/systemd/system/wpa_supplicant@.service \
-         "$stage/etc/systemd/system/multi-user.target.wants/wpa_supplicant@wlan0.service"
-  ln -sf /usr/lib/systemd/system/systemd-networkd.service \
-         "$stage/etc/systemd/system/multi-user.target.wants/systemd-networkd.service"
+  ln -sf /usr/lib/systemd/system/NetworkManager.service \
+         "$stage/etc/systemd/system/multi-user.target.wants/NetworkManager.service"
+  # NM's D-Bus activation alias (what `systemctl enable NetworkManager` also creates).
+  ln -sf /usr/lib/systemd/system/NetworkManager.service \
+         "$stage/etc/systemd/system/dbus-org.freedesktop.NetworkManager.service"
 
   # sshd needs host keys; a read-only root cannot generate them at boot, so pre-generate now.
   if command -v ssh-keygen >/dev/null 2>&1; then

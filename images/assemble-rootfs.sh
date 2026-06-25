@@ -41,12 +41,26 @@ echo "[novadeck] assembling $SOC read-only root (base=$BASE)"
 if command -v rsync >/dev/null 2>&1; then rsync -aHAX --numeric-ids "$BASE"/ "$stage"/
 else cp -a "$BASE"/. "$stage"/; fi
 
-# Strip Docker/Podman container markers baked in by `docker export` of the base. `/.dockerenv`
-# makes `systemd-detect-virt` report "docker" on the real device, so systemd treats it as a
-# container and SILENTLY skips every `ConditionVirtualization=!container` unit (systemd-timesyncd
-# is the visible casualty — clock stuck at epoch — but it gates others too). HW-confirmed on
-# 192.168.1.186 (2026-06-25). They must never reach the sealed image.
-rm -f "$stage/.dockerenv" "$stage/run/.containerenv"
+# Scrub the container provenance that `docker export` of the base leaves behind, so the sealed
+# image looks like the bare-metal OS it is — not the build container it was assembled in. This is
+# the maintenance tax of bootstrapping from a Docker base (vs SteamOS's manifest-sealed image); keep
+# it explicit and named so a future base bump that leaks a new artifact has an obvious home. Phase-4
+# migrates to manifest-driven sealing, which removes the need for this entirely (see rootfs plan).
+#
+# Audited on the SM8650 base 2026-06-25 — only the marker below was actually harmful; the other
+# docker-export tells are benign and deliberately left alone:
+#   - /etc/{resolv.conf,hostname,hosts}: empty 0-byte stubs; NetworkManager populates resolv.conf at
+#     runtime (DNS verified working on HW), so blanking/owning them here would be churn for no gain.
+#   - /etc/machine-id: correctly empty — REQUIRED so systemd runs preset-all on first boot. Do NOT
+#     populate it here (that would disable our preset-based service enablement).
+sanitize_base_provenance() {
+  # /.dockerenv (and podman's /run/.containerenv) make `systemd-detect-virt` report a container on
+  # the real device, so systemd SILENTLY skips every `ConditionVirtualization=!container` unit —
+  # systemd-timesyncd is the visible casualty (clock stuck at epoch) but it gates ~13 units.
+  # HW-confirmed on 192.168.1.186 (2026-06-25). These must never reach the sealed image.
+  rm -f "$1/.dockerenv" "$1/run/.containerenv"
+}
+sanitize_base_provenance "$stage"
 
 # 2. novadeck kernel + dtbs under /boot
 install -Dm0644 "$OUT/Image.gz" "$stage/boot/Image.gz"

@@ -48,6 +48,22 @@ investigation that produced it.
   The Deck-UI / steamos-manager suspend request remains a future alternate trigger. See
   `devices/sm8650/bringup-phase2.md` step 3.
 
+- [ ] **Bring up audio (AudioReach TPLG + ALSA UCM2 + PipeWire/WirePlumber).** No sound path today —
+  a layer-C affordance (Deck UI volume slider + game/BT audio). SM8650 routes audio through the
+  Qualcomm DSP via the AudioReach (q6apm/q6prm) drivers, so the stack is:
+  - **Kernel:** enable the AudioReach/ASoC SM8650 sound drivers (q6apm-dai, q6prm, the SoundWire +
+    LPASS/audioreach bits) so a sound card actually probes. Add to the ROCKNIX-parity config audit.
+  - **Topology:** ship the device's **AudioReach `.tplg`** topology binary under `/lib/firmware/...`
+    (sourced like the other device firmware — pin it, don't hand-roll). Without the matching TPLG the
+    q6apm card won't expose usable PCMs/mixers.
+  - **ALSA UCM2:** ship a machine UCM2 profile (card-name-matched) so the userland knows the routing
+    (speaker/headset/HDMI paths, jack handling). Lands as an overlay under `/usr/share/alsa/ucm2/...`.
+  - **Userland:** add `pipewire wireplumber pipewire-pulse pipewire-alsa` (and `pipewire-jack` if
+    needed) to the release PKGS; enable the per-user PipeWire/WirePlumber sockets. Ties into the
+    Bluetooth work (BlueZ → `libspa-bluetooth` for A2DP/HFP) and the Steam gamepadui audio controls.
+  - **Validate (HW):** a PCM enumerates (`aplay -l` / `wpctl status`), speaker + 3.5mm + BT output
+    each play, and the Deck UI volume slider moves the right sink. Pairs with the Bluetooth HW test.
+
 - [x] **Add a Bluetooth stack.** ✅ **DONE (code) — HW pairing UNVALIDATED.** `bluez` + `bluez-utils`
   added to `PKGS` in `images/customize-base.sh`; `bluetoothd` enabled via the hw-support overlay
   (`60-novadeck-bluetooth.preset` + build-time `bluetooth.target.wants/bluetooth.service` and the

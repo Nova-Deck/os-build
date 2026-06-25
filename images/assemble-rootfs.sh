@@ -41,6 +41,13 @@ echo "[novadeck] assembling $SOC read-only root (base=$BASE)"
 if command -v rsync >/dev/null 2>&1; then rsync -aHAX --numeric-ids "$BASE"/ "$stage"/
 else cp -a "$BASE"/. "$stage"/; fi
 
+# Strip Docker/Podman container markers baked in by `docker export` of the base. `/.dockerenv`
+# makes `systemd-detect-virt` report "docker" on the real device, so systemd treats it as a
+# container and SILENTLY skips every `ConditionVirtualization=!container` unit (systemd-timesyncd
+# is the visible casualty — clock stuck at epoch — but it gates others too). HW-confirmed on
+# 192.168.1.186 (2026-06-25). They must never reach the sealed image.
+rm -f "$stage/.dockerenv" "$stage/run/.containerenv"
+
 # 2. novadeck kernel + dtbs under /boot
 install -Dm0644 "$OUT/Image.gz" "$stage/boot/Image.gz"
 for dtb in "$OUT"/dtbs/*.dtb; do install -Dm0644 "$dtb" "$stage/boot/dtbs/$(basename "$dtb")"; done

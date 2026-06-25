@@ -157,8 +157,9 @@ fi
 # stays a hand-run dev tool. The overlay also carries the SoC-agnostic release-system backings that
 # pair with the Deck UI: the Bluetooth stack (bluetoothd enabled via 60-novadeck-bluetooth.preset;
 # bluez packages come from customize-base.sh), systemd-timesyncd for a sane clock (no RTC sync
-# otherwise), and a defensive NetworkManager Wi-Fi resume hook (resume.d/50-nm-reup, inert unless NM
-# is the active manager). See devices/$SOC/bringup-phase2.md step 3.
+# otherwise). No Wi-Fi resume hook ships: NM re-associates unaided after the suspend rfkill-unblock
+# (the old resume.d/50-nm-reup nudge was HW-confirmed moot, 2026-06-25). The generic resume.d drop-in
+# point in novadeck-suspend remains for future fix-ups. See devices/$SOC/bringup-phase2.md step 3.
 HWSUPPORT="$ROOT/hw-support"
 if [ -d "$HWSUPPORT" ]; then
   echo "  injecting novadeck HW-support from ${HWSUPPORT#"$ROOT"/} (wake agent + bluetooth + timesyncd enabled)"
@@ -175,8 +176,8 @@ fi
 # key (from the environment, so secrets never touch the repo), service enablement, and host
 # keys. The runtime packages (networkmanager + its wpa_supplicant backend, openssh) come from
 # the base (customize-base.sh). The test card deliberately uses the SAME manager as release —
-# NetworkManager — so this path validates the real release Wi-Fi stack (and the hw-support
-# 50-nm-reup resume hook) instead of a divergent test-only wpa_supplicant@wlan0 + networkd path.
+# NetworkManager — so this path validates the real release Wi-Fi stack (incl. its unaided recovery
+# across a novadeck-suspend cycle) instead of a divergent test-only wpa_supplicant@wlan0 + networkd path.
 if [ "${NOVADECK_TEST:-}" = "1" ]; then
   : "${NOVADECK_WIFI_SSID:?NOVADECK_TEST=1 requires NOVADECK_WIFI_SSID}"
   : "${NOVADECK_WIFI_PSK:?NOVADECK_TEST=1 requires NOVADECK_WIFI_PSK}"
@@ -218,9 +219,9 @@ EOF
   install -d -m0755 "$stage/etc/conf.d"
   printf '\nWIRELESS_REGDOM="BE"\n' >>"$stage/etc/conf.d/wireless-regdom"
 
-  # No test-only resume hook: the test card now runs NetworkManager, so the hw-support overlay's
-  # release hook (etc/novadeck/resume.d/50-nm-reup) covers Wi-Fi re-up after a novadeck-suspend
-  # thaw — which is exactly what this NM-based test path lets us validate on HW.
+  # No resume hook needed: the test card runs NetworkManager (same as release), and NM re-associates
+  # Wi-Fi unaided after a novadeck-suspend thaw — HW-validated 2026-06-25, which is why the former
+  # 50-nm-reup hook was dropped as moot.
 
   # Enable services. /etc/machine-id is empty, so systemd runs preset-all on first boot and
   # the stock 99-default.preset is "disable *"; ship a high-priority preset (70 < 99) so our

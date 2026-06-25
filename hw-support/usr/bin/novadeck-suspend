@@ -133,9 +133,10 @@ do_resume() {
   log "unblank panel"
   panel 0
   if wait_panel enabled; then log "panel restore confirmed"; else log "panel restore NOT confirmed in ${NOVADECK_PANEL_WAIT_DS}ds"; fi
-  # post-resume hooks (run un-frozen, after thaw). Freezing pauses wpa_supplicant/networkd and the
-  # link may not re-associate on its own (same as after an rfkill cycle) — the test-card Wi-Fi re-up
-  # ships as a hook here. Keeps novadeck-suspend generic; networking specifics stay out of it.
+  # post-resume hooks (run un-frozen, after thaw): a generic drop-in extension point so resume-time
+  # fix-ups stay out of this engine. None ship by default — the NM Wi-Fi stack re-associates unaided
+  # after the rfkill-unblock (HW-validated 2026-06-25: a `nmcli radio wifi on` nudge was confirmed
+  # moot, and forcing `connection up` even bounced a healthy link). Missing dir = no hooks, no-op.
   for h in /etc/novadeck/resume.d/*; do
     [ -x "$h" ] || continue
     log "resume hook: $h"

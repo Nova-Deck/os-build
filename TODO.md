@@ -73,29 +73,26 @@ investigation that produced it.
   Atheros OUI = WCN7850 BT radio), so bluetoothd runs, firmware loaded, and the overlay enablement
   took. **Remaining HW sub-check:** actually pair a controller (scan/pair/connect a gamepad).
 
-- [x] **Release Wi-Fi resume after userspace suspend.** ✅ **DONE + HW-validated 2026-06-25 (.186):**
-  fake suspend/resume on the NM-based test card brought Wi-Fi back (SSH stayed reachable across the
-  cycle). The NM resume path is exercised end-to-end. Shipped a
-  defensive NM resume hook in the release overlay: `hw-support/etc/novadeck/resume.d/50-nm-reup`
-  (`nmcli radio wifi on` after thaw). It is **inert unless NM is the active manager**
-  (`command -v nmcli` + `systemctl is-active NetworkManager`), so it stays a no-op on the TEST card
-  where networkd + `wpa_supplicant` own wlan0; it sorts before the TEST-only `50-wlan-reup`, so that
-  re-association still runs. **TODO(HW):** the suspend path rfkill-blocks the radio and NM usually
-  re-enables Wi-Fi unaided on the unblock — confirm whether NM recovers on its own and drop this hook
-  if the nudge proves moot.
+- [x] **Release Wi-Fi resume after userspace suspend.** ✅ **DONE + HW-validated 2026-06-25 (.186) —
+  no hook needed.** NetworkManager re-associates Wi-Fi **unaided** after a `novadeck-suspend` cycle
+  (freeze + rfkill soft-block → unblock + thaw); no resume-time nudge ships. The generic `resume.d`
+  drop-in point in `novadeck-suspend` remains for future fix-ups, just empty by default.
   - ✅ **Resolved the test-vs-release stack split (2026-06-25):** `networkmanager` added to
     `customize-base.sh` PKGS, and the TEST Wi-Fi injection rewritten to use NM (drops an
     `.nmconnection` keyfile + enables `NetworkManager.service`) instead of `wpa_supplicant@wlan0` +
-    `systemd-networkd`. The throwaway card now runs the **same manager as release**, so this NM path
-    — and the `50-nm-reup` resume hook — is now exercisable on HW. A plain release base still leaves
-    NM inactive (no auto-enable preset); enabling it for release is the Phase-3 Steam-UI step.
+    `systemd-networkd`. The throwaway card now runs the **same manager as release**, so the real
+    release Wi-Fi stack (incl. suspend recovery) is exercisable on HW. A plain release base still
+    leaves NM inactive (no auto-enable preset); enabling it for release is the Phase-3 Steam-UI step.
   - ✅ **HW-VALIDATED 2026-06-25 (IP 192.168.1.186):** the NM-based test card joined the LAN and
     accepts SSH — the `.nmconnection` + `NetworkManager.service` injection works on real hardware, so
     the test-vs-release stack is unified and the no-UART lockout risk of the rewrite is cleared.
-  - ✅ **Suspend/resume Wi-Fi HW-VALIDATED 2026-06-25 (.186):** a fake suspend/resume reconnected
-    Wi-Fi (SSH survived the cycle), so the NM resume path works on HW. Still **open**: whether NM
-    recovers unaided on the rfkill-unblock (i.e. is `50-nm-reup` moot) — this test didn't isolate the
-    hook from NM's own auto-recovery; disable the hook and re-test to decide whether to drop it.
+  - ✅ **`50-nm-reup` dropped as moot 2026-06-25 (.186):** isolated the hook by disabling it and
+    re-running a real freeze+rfkill suspend/resume from an un-frozen `wake.slice` driver — NM came back
+    `connected` with a live gateway route in ~1s, no nudge. The suspend path pokes sysfs rfkill
+    directly and never flips NM's `WirelessEnabled` flag, so `nmcli radio wifi on` was a no-op anyway;
+    forcing `connection up` even bounced a healthy link. Hook removed from the overlay. (An established
+    SSH session rides through the cycle untouched — only NEW connections fail while frozen; see
+    `suspend-ssh-survives-established` memory.)
   - 🧹 **Stale docs:** `images/README.md` + a `build-image.sh` comment still describe an **iwd**
     Wi-Fi stack (`/var/lib/iwd/<SSID>.psk`) that the build never used in current code — reconcile to
     NetworkManager (release) / wpa_supplicant-was-the-prior-test-stack.

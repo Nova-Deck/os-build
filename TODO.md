@@ -93,9 +93,9 @@ investigation that produced it.
     forcing `connection up` even bounced a healthy link. Hook removed from the overlay. (An established
     SSH session rides through the cycle untouched — only NEW connections fail while frozen; see
     `suspend-ssh-survives-established` memory.)
-  - 🧹 **Stale docs:** `images/README.md` + a `build-image.sh` comment still describe an **iwd**
-    Wi-Fi stack (`/var/lib/iwd/<SSID>.psk`) that the build never used in current code — reconcile to
-    NetworkManager (release) / wpa_supplicant-was-the-prior-test-stack.
+  - ✅ **Docs reconciled to NetworkManager (2026-06-25):** the old iwd-stack mentions
+    (`/var/lib/iwd/<SSID>.psk`) in `images/README.md` + `build-image.sh` are gone — both now describe
+    the NM `.nmconnection` keyfile path. No stale iwd refs remain anywhere in the tree.
 
 - [x] **Long-press power = clean shutdown (in `novadeck-waked`).** ✅ **DONE.** The agent times the
   press from its libinput pressed→released edges: a tap fires `novadeck-suspend toggle`; a hold

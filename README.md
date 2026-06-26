@@ -54,8 +54,9 @@ make clean  SOC=sm8650          # drop out/<soc> (clean-base / distclean go furt
 
 Targets only rebuild when their inputs (source pins, patches, dts, config, firmware)
 change. Key knobs: `BASE_CONFIG=` (verbatim kernel `.config`, e.g. a ROCKNIX config),
-`VENDOR=` (device partition dump for the proprietary firmware extract), `VERSION=` (RAUC
-bundle), `ESP=` (deploy target), and `NOVADECK_TEST=1` + Wi-Fi/SSH creds for a test card.
+`VERSION=` (RAUC bundle), `ESP=` (deploy target), and `NOVADECK_TEST=1` + Wi-Fi/SSH creds
+for a test card. Device firmware is fetched from the pinned Nova-Deck/qcom-firmwares repo
+(`make fw-qcom`), so no device dump is needed.
 
 ## Upstream base
 

@@ -2,8 +2,8 @@
 # novadeck read-only root assembler — Phase 4.
 #
 # Builds the Btrfs root image RAUC writes to a slot: stages a base rootfs, injects
-# the novadeck kernel + dtbs (from kernel/build.sh) and the extracted device firmware
-# (from firmware/extract.sh), then bakes a single-subvolume Btrfs image with
+# the novadeck kernel + dtbs (from kernel/build.sh) and the device firmware
+# (from firmware/fetch-qcom-fw.sh), then bakes a single-subvolume Btrfs image with
 # `mkfs.btrfs --rootdir` — no root, no loop mount.
 #
 # The image content is read-only by construction; the subvolume's ro *property* is
@@ -22,7 +22,7 @@ SOC="${1:-}"
 BASE="${2:-${BASE_ROOTFS:-}}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$ROOT/out/$SOC"
-FW="$ROOT/firmware/extracted/$SOC"
+FW="$ROOT/firmware/qcom-fw"
 LFW="$ROOT/firmware/linux-fw/$SOC"
 IMGDIR="$OUT/images"
 IMG="$IMGDIR/rootfs.img"
@@ -76,14 +76,15 @@ else
   echo "  (no staged modules at ${MODROOT#"$ROOT"/} — run kernel/build.sh; built-in drivers only)"
 fi
 
-# 3. extracted device firmware under /lib/firmware (paths are already /lib/firmware-relative)
+# 3. device-proprietary firmware under /lib/firmware (paths are already /lib/firmware-relative).
+# Fetched from the qcom-firmwares repo by firmware/fetch-qcom-fw.sh.
 if [ -d "$FW" ]; then
   while IFS= read -r f; do
     rel="${f#"$FW"/}"
     install -Dm0644 "$f" "$stage/lib/firmware/$rel"
   done < <(find "$FW" -type f ! -name sha256sums.txt 2>/dev/null)
 else
-  echo "  (no extracted firmware at ${FW#"$ROOT"/} — run firmware/extract.sh; continuing)"
+  echo "  (no device firmware at ${FW#"$ROOT"/} — run firmware/fetch-qcom-fw.sh; continuing)"
 fi
 
 # 3b. open linux-firmware blobs (Adreno GPU, WCN7850 Wi-Fi/BT, Iris VPU) under

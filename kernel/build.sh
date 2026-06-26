@@ -67,16 +67,16 @@ done
 # (see below) — single source of truth, works on both the fragment and BASE_CONFIG paths,
 # so nothing has to be hand-maintained in the kernel config. Open Adreno blobs come from
 # the pinned linux-firmware (firmware/fetch-linux-fw.sh); the per-board zap shaders + the
-# AudioReach tplg come from the extracted device firmware (firmware/extract.sh).
+# AudioReach tplg come from the device-proprietary firmware repo (firmware/fetch-qcom-fw.sh).
 LFW="$ROOT/firmware/linux-fw/$SOC"
-FWX="$ROOT/firmware/extracted/$SOC"
+FWX="$ROOT/firmware/qcom-fw"
 EMBED=(
   "$LFW/qcom/gen70900_aqe.fw"
   "$LFW/qcom/gen70900_sqe.fw"
   "$LFW/qcom/gmu_gen70900.bin"
   "$FWX/qcom/sm8650/ayaneo/ps2/gen70900_zap.mbn"
   "$FWX/qcom/sm8650/konkr/pf/gen70900_zap.mbn"
-  # AudioReach topology (q6apm) — both boards' card-model-named tplg (device-extracted).
+  # AudioReach topology (q6apm) — both boards' card-model-named tplg (qcom-fw repo).
   "$FWX/qcom/sm8650/SM8650-APS2-tplg.bin"
   "$FWX/qcom/sm8650/SM8650-KPF-tplg.bin"
 )
@@ -85,7 +85,7 @@ EMBED_REL=""   # accumulates the /lib/firmware-relative paths -> CONFIG_EXTRA_FI
 for f in "${EMBED[@]}"; do
   [ -f "$f" ] || {
     echo "missing embed firmware: ${f#"$ROOT"/}" >&2
-    echo "  run firmware/fetch-linux-fw.sh $SOC (open blobs) + firmware/extract.sh $SOC <dump> (zap)" >&2
+    echo "  run firmware/fetch-linux-fw.sh $SOC (open blobs) + firmware/fetch-qcom-fw.sh (device blobs)" >&2
     exit 1
   }
   rel="${f#"$LFW"/}"; rel="${rel#"$FWX"/}"   # path relative to its firmware root = /lib/firmware path

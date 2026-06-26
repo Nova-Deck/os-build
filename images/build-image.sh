@@ -3,24 +3,22 @@
 #
 # Chains the pieces into one bootable read-only Btrfs root:
 #   1. fetch the pinned upstream base userspace      (images/fetch-base.sh)
-#   2. stage device firmware — extract from a vendor dump if one is given here,
-#      else require a prior firmware/extract.sh run   (firmware/extract.sh)
+#   2. fetch device-proprietary firmware (pinned)     (firmware/fetch-qcom-fw.sh)
 #   3. verify the firmware manifest vs the built kernel, non-fatal (firmware/manifest.sh)
 #   4. assemble the read-only Btrfs root              (images/assemble-rootfs.sh)
 #
 # Prereq: kernel already built (kernel/build.sh <soc>) so out/<soc>/ has Image.gz +
-# modroot. Firmware extraction needs a dump of YOUR device's vendor partitions — no
+# modroot. Device firmware is fetched from the pinned Nova-Deck/qcom-firmwares repo — no
 # proprietary blobs ship in-repo. Steps 3-4 run in the novadeck-build image.
 #
-#   images/build-image.sh <soc> [vendor-partition-tree]
+#   images/build-image.sh <soc>
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SOC="${1:-}"
 [ -n "$SOC" ] || { echo "usage: ${0##*/} <soc>" >&2; exit 2; }
-VENDOR="${2:-}"
 OUT="$ROOT/out/$SOC"
-FW="$ROOT/firmware/extracted/$SOC"
+FW="$ROOT/firmware/qcom-fw"
 DK=(docker run --rm -v "$ROOT":/src -w /src novadeck-build)
 
 [ -f "$OUT/Image.gz" ] \
@@ -34,16 +32,10 @@ DK=(docker run --rm -v "$ROOT":/src -w /src novadeck-build)
 BASE="$("$ROOT/images/customize-base.sh" "$SOC")"
 BASE_CTR="/src/${BASE#"$ROOT"/}"
 
-# 2. device firmware. Extract now if a vendor dump was supplied; otherwise a prior
-#    extract must have populated firmware/extracted/<soc>/.
-if [ -n "$VENDOR" ]; then
-  echo "[novadeck] extracting firmware from $VENDOR"
-  "$ROOT/firmware/extract.sh" "$SOC" "$VENDOR"
-fi
+# 2. device firmware — fetch the pinned device-proprietary blobs (idempotent).
+"$ROOT/firmware/fetch-qcom-fw.sh"
 if [ ! -d "$FW" ]; then
-  echo "no extracted firmware for $SOC (firmware/extracted/$SOC missing)." >&2
-  echo "  supply a vendor-partition dump:  images/build-image.sh $SOC <vendor-tree>" >&2
-  echo "  (proprietary blobs come from YOUR device; none are shipped in-repo)" >&2
+  echo "no device firmware ($FW missing) — firmware/fetch-qcom-fw.sh did not stage it." >&2
   exit 1
 fi
 

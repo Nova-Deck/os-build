@@ -4,8 +4,8 @@
 # no /lib/firmware, so these must be delivered by us. Sourced from the official
 # linux-firmware repo, pinned by commit + per-file sha256 in firmware/LINUX_FW.pin.
 #
-# Device-signed blobs (GPU zap, adsp/cdsp) are NOT fetched here — those come from the
-# target device's own partitions via firmware/extract.sh.
+# Device-proprietary blobs (GPU zap, adsp/cdsp) are NOT fetched here — those come from the
+# pinned Nova-Deck/qcom-firmwares repo via firmware/fetch-qcom-fw.sh.
 #
 #   firmware/fetch-linux-fw.sh <soc>
 #

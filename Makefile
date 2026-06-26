@@ -26,7 +26,7 @@
 # reachable, plus the ARCH-scoped overlay goals `overlay`/`clean-overlay` (one aarch64 build
 # under work/repo/<arch>/ serves every SoC — see OVERLAY_ARCH below, never $(SOC)).
 SOC        ?=
-SOC_EXEMPT := help overlay clean-overlay
+SOC_EXEMPT := help overlay clean-overlay fw-qcom
 ifneq ($(filter-out $(SOC_EXEMPT),$(MAKECMDGOALS)),)
 ifeq ($(strip $(SOC)),)
 $(error SOC is required — pass SOC=<soc>, e.g. `make kernel SOC=sm8650`)
@@ -38,14 +38,11 @@ BUILD_IMG ?= novadeck-build
 # Optional knobs forwarded to the underlying scripts:
 #   BASE_CONFIG  repo-relative path to a full verbatim kernel .config (e.g. a ROCKNIX
 #                config) — skips the defconfig+fragment merge in kernel/build.sh.
-#   VENDOR       path to a dump of YOUR device's vendor/modem partitions, for the
-#                proprietary firmware extract (none ship in-repo).
 #   VERSION      RAUC bundle version (defaults to the date inside genbundle.sh).
 #   ESP          mounted EFI System Partition, for `make deploy`.
 #   NOVADECK_TEST=1 + NOVADECK_WIFI_SSID/PSK + NOVADECK_SSH_PUBKEY  inject test-only
 #                Wi-Fi/SSH creds into the rootfs (never part of a release build).
 BASE_CONFIG ?=
-VENDOR      ?=
 VERSION     ?=
 
 OUT := out/$(SOC)
@@ -61,7 +58,9 @@ TEST_ENV := -e NOVADECK_TEST -e NOVADECK_WIFI_SSID -e NOVADECK_WIFI_PSK -e NOVAD
 # --- artifacts (real file targets drive incremental rebuilds) -----------------
 BUILD_STAMP := out/.build-image.stamp
 FW_LINUX     := firmware/linux-fw/$(SOC)/.fetched.stamp
-FW_EXTRACT   := firmware/extracted/$(SOC)/sha256sums.txt
+# Device-proprietary blobs are SoC-agnostic (the qcom-firmwares repo mirrors /lib/firmware,
+# blobs self-namespaced by their on-device path), so this is shared across all SoCs.
+FW_QCOM      := firmware/qcom-fw/sha256sums.txt
 # The base tree is exported root-owned with the source image's FROZEN mtimes (e.g. sshd dates
 # to the image build, not to this run), so it can't be the make target — a content change
 # wouldn't bump any in-tree mtime and downstream stages would skip. A stamp outside that tree,
@@ -103,7 +102,7 @@ KERNEL_SRC := kernel/SOURCE.pin kernel/$(SOC)/$(SOC).config \
 # ==============================================================================
 # Phony orchestration targets
 # ==============================================================================
-.PHONY: help all image toolchain kernel fw-linux fw-extract base overlay rootfs manifest \
+.PHONY: help all image toolchain kernel fw-linux fw-qcom base overlay rootfs manifest \
         boot sdcard bundle deploy clean clean-base clean-overlay distclean
 
 help: ## Show this help
@@ -112,7 +111,7 @@ help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
 	  | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-12s\033[0m %s\n",$$1,$$2}'
 	@echo
-	@echo "Knobs: SOC BASE_CONFIG VENDOR VERSION ESP NOVADECK_TEST(+creds)"
+	@echo "Knobs: SOC BASE_CONFIG VERSION ESP NOVADECK_TEST(+creds)"
 
 all: sdcard ## Alias for `sdcard` (the full bring-up image)
 
@@ -121,7 +120,7 @@ image: $(ROOTFS) ## Read-only Btrfs root only (out/<soc>/images/rootfs.img)
 toolchain: $(BUILD_STAMP) ## Build the novadeck-build cross-compile docker image
 kernel:    $(KERNEL)       ## Build Image.gz + dtbs + modules (in build container)
 fw-linux:  $(FW_LINUX)     ## Fetch open linux-firmware blobs (host, network)
-fw-extract: $(FW_EXTRACT)  ## Stage device firmware from VENDOR=<vendor-partition-tree>
+fw-qcom:   $(FW_QCOM)      ## Fetch device-proprietary firmware from the qcom-firmwares repo (host, network)
 overlay:   $(OVERLAY_DB)   ## Rebuild from-source overlay pkgs (patched gamescope) -> work/repo/<arch>/
 base:      $(BASE_STAMP)   ## Fetch + customize the pinned aarch64 base rootfs (host)
 rootfs:    $(ROOTFS)       ## Assemble the read-only root (kernel+fw+base, in container)
@@ -143,17 +142,12 @@ $(FW_LINUX): firmware/LINUX_FW.pin
 	firmware/fetch-linux-fw.sh $(SOC)
 	@touch $@
 
-# Proprietary device blobs (zap shaders, DSP/modem) — extracted from YOUR device dump.
-# No recipe can synthesize these; require a vendor tree. Once staged, the sha256 sidecar
-# satisfies the target and downstream stages stop asking for VENDOR.
-$(FW_EXTRACT):
-	@if [ -z "$(VENDOR)" ]; then \
-	  echo "extracted firmware missing for $(SOC)." >&2; \
-	  echo "  pass a dump of your device's vendor/modem partitions:" >&2; \
-	  echo "    make fw-extract SOC=$(SOC) VENDOR=/path/to/vendor-tree" >&2; \
-	  exit 1; \
-	fi
-	firmware/extract.sh $(SOC) $(VENDOR)
+# Device-proprietary blobs (zap shaders, DSP/modem, tplg, ath12k, Renesas) — fetched from the
+# pinned Nova-Deck/qcom-firmwares repo + verified against its sha256sums.txt. The repo's sha
+# sidecar lands as the target; @touch bumps recency past the pin (cp -a preserves old mtimes).
+$(FW_QCOM): firmware/QCOM_FW.pin
+	firmware/fetch-qcom-fw.sh
+	@touch $@
 
 # ==============================================================================
 # From-source overlay packages (host — build-overlay.sh drives docker + qemu binfmt)
@@ -181,7 +175,7 @@ endif
 # ==============================================================================
 # Kernel (container) — needs both firmware sets baked in (CONFIG_EXTRA_FIRMWARE)
 # ==============================================================================
-$(KERNEL): $(KERNEL_SRC) $(FW_LINUX) $(FW_EXTRACT) | $(BUILD_STAMP)
+$(KERNEL): $(KERNEL_SRC) $(FW_LINUX) $(FW_QCOM) | $(BUILD_STAMP)
 	$(DOCKER) $(if $(BASE_CONFIG),-e BASE_CONFIG=/src/$(BASE_CONFIG)) \
 	  $(BUILD_IMG) kernel/build.sh $(SOC)
 
@@ -192,7 +186,7 @@ manifest: $(KERNEL) ## Verify firmware-manifest.txt vs the built kernel (in cont
 # ==============================================================================
 # Read-only root (container) — base userspace + kernel + firmware -> Btrfs image
 # ==============================================================================
-$(ROOTFS): $(KERNEL) $(BASE_STAMP) $(FW_LINUX) $(FW_EXTRACT) $(ASSEMBLE_SRC) | $(BUILD_STAMP)
+$(ROOTFS): $(KERNEL) $(BASE_STAMP) $(FW_LINUX) $(FW_QCOM) $(ASSEMBLE_SRC) | $(BUILD_STAMP)
 	$(DOCKER) $(TEST_ENV) $(BUILD_IMG) \
 	  images/assemble-rootfs.sh $(SOC) /src/work/base/$(SOC)
 
@@ -221,8 +215,12 @@ deploy: $(BOOTIMG) ## Install the boot image onto ESP=<mountpoint>
 # ==============================================================================
 # Cleaning
 # ==============================================================================
+# out/<soc> is partly root-owned: the container stages (kernel modules_install, rootfs
+# assembly, sdcard) run as root in the build image, so a host-side rm fails on e.g.
+# out/<soc>/modroot. Remove it from inside a throwaway container as root, like clean-base.
+# (out/.build-image.stamp lives outside $(OUT) and is host-owned, so it survives.)
 clean: ## Remove built artifacts for SOC (out/<soc>), keep firmware/base caches
-	rm -rf $(OUT)
+	docker run --rm -v $(CURDIR)/out:/wo busybox rm -rf /wo/$(SOC)
 
 # work/base/<soc> is root-owned (customize-base exports it as root), so a plain rm
 # fails for the build user — remove it from inside a throwaway container as root.
@@ -233,5 +231,5 @@ clean-base: ## Remove the (root-owned) cached base rootfs for SOC
 clean-overlay: ## Remove the built (arch-scoped) overlay pacman repo + build tree
 	rm -rf work/repo work/overlay-build
 
-distclean: clean clean-base clean-overlay ## clean + drop fetched/extracted firmware + kernel work tree
-	rm -rf work/kernel/linux-$(SOC)* firmware/linux-fw/$(SOC) firmware/extracted/$(SOC)
+distclean: clean clean-base clean-overlay ## clean + drop fetched firmware + kernel work tree
+	rm -rf work/kernel/linux-$(SOC)* firmware/linux-fw/$(SOC) firmware/qcom-fw

@@ -1,12 +1,13 @@
 # images/
 
 A/B atomic-update image assembly (SteamOS-style: RAUC + Btrfs read-only root). The
-recipes consume the staged kernel (`kernel/build.sh`), extracted firmware
-(`firmware/extract.sh`), and a base rootfs, and emit a slot image + signed OTA bundle.
+recipes consume the staged kernel (`kernel/build.sh`), fetched firmware
+(`firmware/fetch-qcom-fw.sh` + `firmware/fetch-linux-fw.sh`), and a base rootfs, and emit
+a slot image + signed OTA bundle.
 
 | File | Purpose |
 |---|---|
-| `build-image.sh <soc> [vendor-tree]` | **Phase 1 flow orchestrator.** Chains base fetch → firmware extract/verify → rootfs assembly into `out/<soc>/images/rootfs.img`. |
+| `build-image.sh <soc>` | **Phase 1 flow orchestrator.** Chains base fetch → firmware fetch/verify → rootfs assembly into `out/<soc>/images/rootfs.img`. |
 | `fetch-base.sh <soc>` | Pull the pinned upstream base (`base.digest`) and export its **bare** rootfs to `work/base/<soc>/`. No qemu — `docker export` only moves files. |
 | `customize-base.sh <soc>` | Pin-pull the base, then under **arm64 emulation** (qemu binfmt) `pacman`-install the release runtime — NetworkManager (Wi-Fi, with its wpa_supplicant backend), bluez (Bluetooth), openssh (SSH), mesa + Turnip + vulkan-tools — and export to `work/base/<soc>/`. What `build-image.sh` uses. Network required; no credentials baked in (NM is installed but inactive in a plain release base). |
 | `partition-table.txt` | The 8-partition A/B layout (ESP, A/B GRUB, A/B root, A/B /var, shared /home). Single source of truth. |
@@ -22,15 +23,15 @@ Kernel first (`kernel/build.sh sm8650`), then one orchestrated flow that fetches
 base, stages firmware, and assembles the root:
 
 ```
-images/build-image.sh sm8650 /path/to/vendor-partition-dump
+images/build-image.sh sm8650
 ```
 
 `customize-base.sh` runs on the host (needs `docker` + network + arm64 binfmt; it
-pacman-installs the release runtime under emulation); firmware extract/verify + assembly
-run in `novadeck-build`. The vendor dump is your device's own partitions — omit it only
-if `firmware/extract.sh` has already populated `firmware/extracted/sm8650/`. Output is
-`out/sm8650/images/rootfs.img`; package + deploy per `boot/` (KERNEL onto the ESP, rootfs
-image onto the rootfs partition).
+pacman-installs the release runtime under emulation); firmware fetch/verify + assembly
+run in `novadeck-build`. Device-proprietary firmware is fetched from the pinned
+Nova-Deck/qcom-firmwares repo (`firmware/fetch-qcom-fw.sh`, idempotent — no device dump
+needed). Output is `out/sm8650/images/rootfs.img`; package + deploy per `boot/` (KERNEL
+onto the ESP, rootfs image onto the rootfs partition).
 
 To test on hardware off an SD card first, package the boot image then wrap both into one
 card image (ESP + root, no A/B):

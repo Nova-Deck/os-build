@@ -33,8 +33,9 @@ InputPlumber on Pocket S2).
 
 ## Prerequisites (hardware-dependent — not codeable here)
 - SM8650 device with **unlocked bootloader** + serial/UART access.
-- Dump of the device's vendor partitions to extract `device`-sourced firmware
-  (see `firmware/extract.sh` + `firmware-manifest.txt`).
+- Device-proprietary firmware is fetched from the pinned Nova-Deck/qcom-firmwares repo
+  (`firmware/fetch-qcom-fw.sh` + `firmware-manifest.txt`); originally extracted from a
+  dump of the device's Android vendor image.
 - Decide the concrete board DT (mainline `sm8650-mtp`/`-qrd` vs a community device DT).
 
 ## Deploy (ROCKNIX custom ABL)

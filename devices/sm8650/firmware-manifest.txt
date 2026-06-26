@@ -4,11 +4,13 @@
 #   linux-fw : open firmware from the official linux-firmware repo. The upstream Holo
 #              base ships NO /lib/firmware, so these are fetched + verified + staged by
 #              firmware/fetch-linux-fw.sh (pinned in firmware/LINUX_FW.pin).
-#   device   : signed/vendor blob — MUST be extracted from the target device's own
-#              partitions (see firmware/extract.sh). NEVER committed to this repo.
+#   qcom-fw  : device-proprietary Qualcomm/vendor blob (signed images + unsigned tplg),
+#              extracted from the device's Android vendor image and republished to the
+#              Nova-Deck/qcom-firmwares repo. Fetched + verified by firmware/fetch-qcom-fw.sh
+#              (pinned in firmware/QCOM_FW.pin). NEVER committed to this repo.
 #
 # NOTE: exact filenames vary by kernel/firmware version and device — VERIFY against
-# the pinned kernel's `MODULE_FIRMWARE`/devicetree and the device's vendor partition.
+# the pinned kernel's `MODULE_FIRMWARE`/devicetree and the device's vendor image.
 #
 # Paths below are DERIVED from the board DTS firmware-name properties and the
 # built modules' MODULE_FIRMWARE. Re-derive after any DT/config change with:
@@ -30,24 +32,24 @@ linux-fw     qcom/vpu/vpu33_p4.mbn                           Iris VPU firmware, 
 # needs its firmware uploaded by xhci-pci-renesas. The driver requests it by a fixed
 # name at the /lib/firmware root, so it is shared across all sm8650 boards (Pocket S2
 # + Pocket FIT), not board-scoped.
-device       renesas_usb_fw.mem                              Renesas uPD720201 USB host fw (internal gamepad bus) — common PS2+PF
+qcom-fw      renesas_usb_fw.mem                              Renesas uPD720201 USB host fw (internal gamepad bus) — common PS2+PF
 # GPU/DSP images: DT requests board-scoped paths (firmware-name in the DTS).
-device       qcom/sm8650/ayaneo/ps2/gen70900_zap.mbn         GPU zap shader — signed per device (PS2)
-device       qcom/sm8650/ayaneo/ps2/adsp.mbn                 audio/sensors DSP image (PS2)
-device       qcom/sm8650/ayaneo/ps2/adsp_dtb.mbn             adsp devicetree blob (DT lists it alongside adsp.mbn)
-device       qcom/sm8650/ayaneo/ps2/cdsp.mbn                 compute DSP image (PS2)
-device       qcom/sm8650/ayaneo/ps2/cdsp_dtb.mbn             cdsp devicetree blob (DT lists it alongside cdsp.mbn)
+qcom-fw      qcom/sm8650/ayaneo/ps2/gen70900_zap.mbn         GPU zap shader — signed per device (PS2)
+qcom-fw      qcom/sm8650/ayaneo/ps2/adsp.mbn                 audio/sensors DSP image (PS2)
+qcom-fw      qcom/sm8650/ayaneo/ps2/adsp_dtb.mbn             adsp devicetree blob (DT lists it alongside adsp.mbn)
+qcom-fw      qcom/sm8650/ayaneo/ps2/cdsp.mbn                 compute DSP image (PS2)
+qcom-fw      qcom/sm8650/ayaneo/ps2/cdsp_dtb.mbn             cdsp devicetree blob (DT lists it alongside cdsp.mbn)
 # KONKR Pocket FIT — board-scoped paths (firmware-name in sm8650-konkr-pf.dts).
-device       qcom/sm8650/konkr/pf/gen70900_zap.mbn           GPU zap shader — signed per device (KONKR)
-device       qcom/sm8650/konkr/pf/adsp.mbn                   audio/sensors DSP image (KONKR)
-device       qcom/sm8650/konkr/pf/adsp_dtb.mbn               adsp devicetree blob (KONKR)
-device       qcom/sm8650/konkr/pf/cdsp.mbn                   compute DSP image (KONKR)
-device       qcom/sm8650/konkr/pf/cdsp_dtb.mbn               cdsp devicetree blob (KONKR)
+qcom-fw      qcom/sm8650/konkr/pf/gen70900_zap.mbn           GPU zap shader — signed per device (KONKR)
+qcom-fw      qcom/sm8650/konkr/pf/adsp.mbn                   audio/sensors DSP image (KONKR)
+qcom-fw      qcom/sm8650/konkr/pf/adsp_dtb.mbn               adsp devicetree blob (KONKR)
+qcom-fw      qcom/sm8650/konkr/pf/cdsp.mbn                   compute DSP image (KONKR)
+qcom-fw      qcom/sm8650/konkr/pf/cdsp_dtb.mbn               cdsp devicetree blob (KONKR)
 # Audio: AudioReach (q6apm) topology binaries. The qcom/sm8250 machine driver requests
 # qcom/sm8650/<card-model>-tplg.bin, where <card-model> is the DT `model` (sound_card node):
 # SM8650-APS2 (Pocket S2), SM8650-KPF (Konkr PF). NOT in linux-firmware — extracted from the
 # device's Android vendor image. The two boards' topologies are currently byte-identical.
-device       qcom/sm8650/SM8650-APS2-tplg.bin                AudioReach topology — Pocket S2 (model SM8650-APS2)
-device       qcom/sm8650/SM8650-KPF-tplg.bin                 AudioReach topology — Konkr PF (model SM8650-KPF)
+qcom-fw      qcom/sm8650/SM8650-APS2-tplg.bin                AudioReach topology — Pocket S2 (model SM8650-APS2)
+qcom-fw      qcom/sm8650/SM8650-KPF-tplg.bin                 AudioReach topology — Konkr PF (model SM8650-KPF)
 # Wi-Fi/BT: WCN7850 (ath12k hw2.0); request_firmware globs a directory of blobs.
-device       ath12k/WCN7850/hw2.0/                           ath12k WCN7850 firmware dir (board-2.bin, amss, m3)
+qcom-fw      ath12k/WCN7850/hw2.0/                           ath12k WCN7850 firmware dir (board-2.bin, amss, m3)

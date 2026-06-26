@@ -3,7 +3,8 @@
 #
 # The upstream Holo aarch64 base ships NO /lib/firmware, so these `linux-fw`-class blobs
 # (Adreno GPU, WCN7850 Wi-Fi/BT, Iris VPU) must be delivered by us. Device-signed blobs
-# (GPU zap, adsp/cdsp) are NOT here — those come from the device via firmware/extract.sh.
+# (GPU zap, adsp/cdsp) are NOT here — those come from the Nova-Deck/qcom-firmwares repo
+# via firmware/fetch-qcom-fw.sh (firmware/QCOM_FW.pin).
 #
 # Columns:  <src-path-in-linux-firmware>  <install-path-under-/lib/firmware>  <sha256>
 # '#' and blank lines are ignored. install-path may rename the file (e.g. the VPU signed

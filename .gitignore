@@ -28,9 +28,10 @@ src/
 pkg/
 /.makepkg/
 
-# Extracted vendor firmware blobs (never commit proprietary blobs)
+# Device-proprietary firmware, fetched on demand from the pinned Nova-Deck/qcom-firmwares
+# repo + verified against its sha256sums.txt (never committed here — only in that repo).
 /firmware/blobs/
-/firmware/extracted/
+/firmware/qcom-fw/
 # Open linux-firmware blobs, fetched on demand + verified against firmware/LINUX_FW.pin
 /firmware/linux-fw/
 
@@ -43,6 +44,8 @@ pkg/
 cosign.key
 *.gpg
 /secrets/
+# Test-only Wi-Fi/SSH creds for throwaway test cards (NOVADECK_TEST=1) — never committed
+/test-wifi.env
 
 # Editor / OS noise
 *.swp

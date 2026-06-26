@@ -1,0 +1,14 @@
+# novadeck qcom-firmware pin — DEVICE-PROPRIETARY firmware blobs (GPU zap shaders,
+# adsp/cdsp DSP images, AudioReach tplg, ath12k Wi-Fi/BT, Renesas xHCI), republished
+# from each device's Android vendor image to the Nova-Deck/qcom-firmwares repo.
+#
+# Pinned by commit: a git commit SHA is content-addressed, so it nails the exact bytes.
+# fetch-qcom-fw.sh additionally verifies every fetched file against the repo's own
+# sha256sums.txt (belt-and-suspenders against a corrupt/tampered download).
+#
+# Open firmware (Adreno microcode, qca BT, Iris VPU) is NOT here — it comes from the
+# official linux-firmware repo via firmware/fetch-linux-fw.sh (firmware/LINUX_FW.pin).
+#
+# Fetch + verify with:  firmware/fetch-qcom-fw.sh
+repo:   https://github.com/Nova-Deck/qcom-firmwares
+commit: 95a7679e83dd35eb39557867c155158afd160676

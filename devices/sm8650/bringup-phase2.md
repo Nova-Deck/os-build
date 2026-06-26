@@ -504,4 +504,22 @@ ship installed-but-DISABLED (validate by hand).
 gamescope session launches on SM8650; Deck UI renders; Quick Access + suspend reach the
 layer-C affordances that have a Qualcomm backing (the rest documented as stubbed).
 
-_Phase 2 scaffold._
+### ✅ Exit sweep — HW-validated 2026-06-26 (IP `192.168.1.186`, kernel 7.0.11, Holo build 240949)
+
+- **gamescope session launches + scans out** — `systemctl start novadeck-session` brought up
+  `gamescope --backend drm --use-rotation-shader -W 2560 -H 1440 -r 60 --prefer-output DSI-1 -- vkcube`
+  via `seatd-launch`. DSI-1 `connected + enabled`; crtc-0 `total_framecount` advanced 523 → 644 over
+  2 s at 59–60 fps (native 60 Hz scanout); the vkcube client drove the GPU (`drm-engine-gpu` 85.7 ms /
+  9.2 M cycles on its render fd). Clean `systemctl stop` left no gamescope/seatd-launch residue.
+- **Layer-C affordances reaching their Qualcomm backing (all `active`):** `novadeck-waked`
+  (power-key wake agent, enabled+active; logind `HandlePowerKey=ignore` drop-in + `power-ops.sh`
+  present), `bluetooth` (adapter `00:03:7F:65:52:07` up), `NetworkManager`, `systemd-timesyncd`
+  (NTP synced). Suspend/resume itself was **not** re-run in this sweep — it is already HW-validated
+  (`.187`/`.188`, prior sessions) and `novadeck-suspend` must run from `novadeck-wake.slice`, not an
+  SSH shell (which lives in the frozen `user.slice`), so re-testing it headless without the physical
+  power key would strand the device.
+- **Out of scope (Phase 3):** "Deck UI renders" = native arm64 Steam shell; Step 2 delivers only the
+  compositor + session unit, validated above. Audio (L4 PipeWire start + HW play) deferred to the
+  user-session bring-up.
+
+_Phase 2 exit criteria met (compositor + layer-C affordances); Steam shell + audio carry into Phase 3._

@@ -7,25 +7,24 @@
 # Device-proprietary blobs (GPU zap, adsp/cdsp) are NOT fetched here — those come from the
 # pinned Nova-Deck/qcom-firmwares repo via firmware/fetch-qcom-fw.sh.
 #
-#   firmware/fetch-linux-fw.sh <soc>
+#   firmware/fetch-linux-fw.sh
 #
-# Exports to firmware/linux-fw/<soc>/ (git-ignored). Runs on the host (needs network),
+# Exports to firmware/linux-fw/ (git-ignored). Runs on the host (needs network),
 # like images/fetch-base.sh. Idempotent — already-correct files are skipped; FORCE=1
-# re-fetches everything.
+# re-fetches everything. The open blobs are SoC-agnostic (the unified kernel embeds the
+# union), so this is a single flat tree, not per-SoC.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SOC="${1:-}"
-[ -n "$SOC" ] || { echo "usage: ${0##*/} <soc>" >&2; exit 2; }
 PIN="$ROOT/firmware/LINUX_FW.pin"
-DEST="$ROOT/firmware/linux-fw/$SOC"
+DEST="$ROOT/firmware/linux-fw"
 
 [ -f "$PIN" ] || { echo "missing pin: $PIN" >&2; exit 1; }
 pin_hdr() { sed -n "s/^$1:[[:space:]]*//p" "$PIN" | head -1; }
 COMMIT="$(pin_hdr commit)"; BASE="$(pin_hdr base)"
 [ -n "$COMMIT" ] && [ -n "$BASE" ] || { echo "pin missing commit/base header" >&2; exit 1; }
 
-echo "[novadeck] linux-firmware $SOC @ ${COMMIT:0:12} -> ${DEST#"$ROOT"/}"
+echo "[novadeck] linux-firmware @ ${COMMIT:0:12} -> ${DEST#"$ROOT"/}"
 mkdir -p "$DEST"
 n=0 fetched=0
 while read -r src dst sha _rest; do

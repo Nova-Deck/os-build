@@ -7,31 +7,21 @@
 # file only wires them together and pins WHERE each one runs (host vs container).
 #
 # Quick start:
-#   make sdcard SOC=sm8650   # full bring-up image -> out/<soc>/images/sdcard.img
-#   make help                # list every target
+#   make sdcard        # full bring-up image -> out/images/sdcard.img
+#   make help          # list every target
 #
 # Conventions:
-#   * SOC selects the target and is MANDATORY: `make kernel SOC=sm8650`.
+#   * The build is UNIFIED — one image serves every supported SoC/board. There is no SOC
+#     argument: the kernel is built with the union of all config fragments, patches and
+#     device trees (kernel/), and the boot artifact bundles every board DTB (the ABL DTB
+#     picker selects at boot).
 #   * Container stages run in the novadeck-build image with the repo bind-mounted at
 #     /src; host stages either need the network or drive docker themselves (base
 #     customization registers qemu binfmt, so it cannot run nested in the container).
 #   * Stamp files live under the already-gitignored out/ work/ firmware/ trees.
 #
 # Memory: builds cross-compile INSIDE docker, never on the host. Don't reorder the
-# kernel patches. work/base/<soc> is root-owned (clean-base uses docker to remove it).
-
-# SOC is mandatory — every per-SoC artifact path and stage script needs it, so there is no
-# safe default. An empty/unset SOC is a caller error. Exempt are the goals that are NOT
-# per-SoC: `help` (and a bare `make`, which defaults to help) so the target list is always
-# reachable, plus the ARCH-scoped overlay goals `overlay`/`clean-overlay` (one aarch64 build
-# under work/repo/<arch>/ serves every SoC — see OVERLAY_ARCH below, never $(SOC)).
-SOC        ?=
-SOC_EXEMPT := help overlay clean-overlay fw-qcom
-ifneq ($(filter-out $(SOC_EXEMPT),$(MAKECMDGOALS)),)
-ifeq ($(strip $(SOC)),)
-$(error SOC is required — pass SOC=<soc>, e.g. `make kernel SOC=sm8650`)
-endif
-endif
+# kernel patches. work/base is root-owned (clean-base uses docker to remove it).
 
 BUILD_IMG ?= novadeck-build
 
@@ -45,7 +35,7 @@ BUILD_IMG ?= novadeck-build
 BASE_CONFIG ?=
 VERSION     ?=
 
-OUT := out/$(SOC)
+OUT := out
 
 # --- where each stage runs ----------------------------------------------------
 # Container: repo bind-mounted at /src. INBUILD is the plain run; DOCKER lets a
@@ -57,7 +47,9 @@ TEST_ENV := -e NOVADECK_TEST -e NOVADECK_WIFI_SSID -e NOVADECK_WIFI_PSK -e NOVAD
 
 # --- artifacts (real file targets drive incremental rebuilds) -----------------
 BUILD_STAMP := out/.build-image.stamp
-FW_LINUX     := firmware/linux-fw/$(SOC)/.fetched.stamp
+# Open linux-firmware blobs are SoC-agnostic — the unified kernel embeds the union — so this
+# is a single flat tree, not per-SoC.
+FW_LINUX     := firmware/linux-fw/.fetched.stamp
 # Device-proprietary blobs are SoC-agnostic (the qcom-firmwares repo mirrors /lib/firmware,
 # blobs self-namespaced by their on-device path), so this is shared across all SoCs.
 FW_QCOM      := firmware/qcom-fw/sha256sums.txt
@@ -68,7 +60,7 @@ FW_QCOM      := firmware/qcom-fw/sha256sums.txt
 # bump propagate: the pins are listed as prerequisites so editing one re-runs customize-base.
 PREBUILT_PINS := $(wildcard packages/*/prebuilt.pin)
 # From-source overlay packages (packages/*/source.pin + patches) — rebuilt holo packages with
-# novadeck patches, landed in the local pacman repo work/repo/<soc>/ that customize-base.sh
+# novadeck patches, landed in the local pacman repo work/repo/<arch>/ that customize-base.sh
 # prepends ahead of the holo repos. The repo db is the make target; the pins+patches are
 # prerequisites so a pin or patch change rebuilds the overlay (and then the base).
 OVERLAY_PINS    := $(wildcard packages/*/source.pin)
@@ -76,26 +68,27 @@ OVERLAY_PATCHES := $(wildcard packages/*/patches/*.patch)
 # Checked-in local PKGBUILDs (pkgbuild_local in a source.pin, e.g. packages/mesa/PKGBUILD) are
 # build inputs too — track them so editing a recipe (deps, meson options) rebuilds the overlay.
 OVERLAY_PKGBUILDS := $(wildcard packages/*/PKGBUILD)
-# Overlay packages are ARCH-scoped, not SoC-scoped (a rebuilt aarch64 gamescope serves every
-# aarch64 device), so the repo is shared at work/repo/<arch>/ across all SoCs.
+# Overlay packages are ARCH-scoped (a rebuilt aarch64 gamescope serves every aarch64 device),
+# so the repo is shared at work/repo/<arch>/.
 OVERLAY_ARCH    ?= aarch64
 OVERLAY_DB      := work/repo/$(OVERLAY_ARCH)/novadeck.db.tar.zst
-BASE_STAMP   := work/base/$(SOC).stamp
+BASE_STAMP   := work/.base.stamp
 KERNEL       := $(OUT)/Image.gz
 ROOTFS       := $(OUT)/images/rootfs.img
-BOOTIMG      := $(OUT)/boot/$(SOC)-boot.img
+BOOTIMG      := $(OUT)/boot/novadeck-boot.img
 SDCARD       := $(OUT)/images/sdcard.img
 
 # Repo sources the rootfs assembler reads directly (itself + the trees it copies in: the
-# gamescope-session overlay, the HW-support overlay, and per-SoC InputPlumber config). find
-# recurses, so files added under those trees are tracked automatically — no per-file Makefile
-# edits as the image grows.
-ASSEMBLE_SRC := $(shell find images/assemble-rootfs.sh session hw-support devices/$(SOC)/inputplumber -type f 2>/dev/null)
+# gamescope-session overlay, the HW-support overlay, and InputPlumber config). find recurses,
+# so files added under those trees are tracked automatically — no per-file Makefile edits.
+ASSEMBLE_SRC := $(shell find images/assemble-rootfs.sh session hw-support audio devices/inputplumber -type f 2>/dev/null)
 
-# Kernel inputs: any change re-triggers the (full, from-scratch) kernel build.
-KERNEL_SRC := kernel/SOURCE.pin kernel/$(SOC)/$(SOC).config \
-              $(wildcard kernel/$(SOC)/patches/*.patch) \
-              $(wildcard kernel/$(SOC)/dts/qcom/*)
+# Kernel inputs: any change re-triggers the (full, from-scratch) kernel build. The unified
+# kernel globs every fragment/patch/dts, and bakes the firmware embed list + common cmdline.
+KERNEL_SRC := kernel/SOURCE.pin kernel/embed.list boot/cmdline \
+              $(wildcard kernel/*.config) \
+              $(wildcard kernel/patches/*.patch) \
+              $(wildcard kernel/dts/qcom/*)
 
 .DEFAULT_GOAL := help
 
@@ -106,19 +99,19 @@ KERNEL_SRC := kernel/SOURCE.pin kernel/$(SOC)/$(SOC).config \
         boot sdcard bundle deploy clean clean-base clean-overlay distclean
 
 help: ## Show this help
-	@echo "novadeck build — SOC=$(SOC)"
+	@echo "novadeck build — unified image (all SoCs/boards)"
 	@echo
 	@grep -hE '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
 	  | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-12s\033[0m %s\n",$$1,$$2}'
 	@echo
-	@echo "Knobs: SOC BASE_CONFIG VERSION ESP NOVADECK_TEST(+creds)"
+	@echo "Knobs: BASE_CONFIG VERSION ESP NOVADECK_TEST(+creds)"
 
 all: sdcard ## Alias for `sdcard` (the full bring-up image)
 
-image: $(ROOTFS) ## Read-only Btrfs root only (out/<soc>/images/rootfs.img)
+image: $(ROOTFS) ## Read-only Btrfs root only (out/images/rootfs.img)
 
 toolchain: $(BUILD_STAMP) ## Build the novadeck-build cross-compile docker image
-kernel:    $(KERNEL)       ## Build Image.gz + dtbs + modules (in build container)
+kernel:    $(KERNEL)       ## Build Image.gz + all dtbs + modules (in build container)
 fw-linux:  $(FW_LINUX)     ## Fetch open linux-firmware blobs (host, network)
 fw-qcom:   $(FW_QCOM)      ## Fetch device-proprietary firmware from the qcom-firmwares repo (host, network)
 overlay:   $(OVERLAY_DB)   ## Rebuild from-source overlay pkgs (patched gamescope) -> work/repo/<arch>/
@@ -139,7 +132,7 @@ $(BUILD_STAMP): build/Dockerfile
 # ==============================================================================
 # Open blobs (Adreno GPU, WCN7850 Wi-Fi/BT, Iris VPU) — pinned + verified, host network.
 $(FW_LINUX): firmware/LINUX_FW.pin
-	firmware/fetch-linux-fw.sh $(SOC)
+	firmware/fetch-linux-fw.sh
 	@touch $@
 
 # Device-proprietary blobs (zap shaders, DSP/modem, tplg, ath12k, Renesas) — fetched from the
@@ -152,7 +145,7 @@ $(FW_QCOM): firmware/QCOM_FW.pin
 # ==============================================================================
 # From-source overlay packages (host — build-overlay.sh drives docker + qemu binfmt)
 # ==============================================================================
-# Rebuild holo packages with novadeck patches into the local pacman repo work/repo/<soc>/.
+# Rebuild holo packages with novadeck patches into the local pacman repo work/repo/<arch>/.
 # Only when at least one source.pin exists does `base` depend on it (else nothing to build).
 $(OVERLAY_DB): base-devel.digest $(OVERLAY_PINS) $(OVERLAY_PATCHES) $(OVERLAY_PKGBUILDS)
 	packages/build-overlay.sh
@@ -161,9 +154,9 @@ $(OVERLAY_DB): base-devel.digest $(OVERLAY_PINS) $(OVERLAY_PATCHES) $(OVERLAY_PK
 # Base rootfs (host — customize-base.sh drives docker + qemu binfmt itself)
 # ==============================================================================
 $(BASE_STAMP): base.digest $(PREBUILT_PINS)
-	images/customize-base.sh $(SOC)
-	@test -f work/base/$(SOC)/usr/bin/sshd   # sentinel: sshd present => release runtime layered in
-	@touch $@   # recency marker outside the root-owned base tree (its own mtimes are frozen)
+	images/customize-base.sh
+	@test -f work/base/usr/bin/sshd   # sentinel: sshd present => release runtime layered in
+	@mkdir -p $(@D) && touch $@   # recency marker outside the root-owned base tree (frozen mtimes)
 
 # A built overlay repo is an extra base input: customize-base installs the patched packages
 # from it and folds its content hash into the reuse-cache key. Wire it as a prerequisite only
@@ -177,59 +170,59 @@ endif
 # ==============================================================================
 $(KERNEL): $(KERNEL_SRC) $(FW_LINUX) $(FW_QCOM) | $(BUILD_STAMP)
 	$(DOCKER) $(if $(BASE_CONFIG),-e BASE_CONFIG=/src/$(BASE_CONFIG)) \
-	  $(BUILD_IMG) kernel/build.sh $(SOC)
+	  $(BUILD_IMG) kernel/build.sh
 
 # Cross-check the device firmware manifest against the built kernel (non-fatal).
 manifest: $(KERNEL) ## Verify firmware-manifest.txt vs the built kernel (in container)
-	$(INBUILD) firmware/manifest.sh $(SOC)
+	$(INBUILD) firmware/manifest.sh
 
 # ==============================================================================
 # Read-only root (container) — base userspace + kernel + firmware -> Btrfs image
 # ==============================================================================
 $(ROOTFS): $(KERNEL) $(BASE_STAMP) $(FW_LINUX) $(FW_QCOM) $(ASSEMBLE_SRC) | $(BUILD_STAMP)
 	$(DOCKER) $(TEST_ENV) $(BUILD_IMG) \
-	  images/assemble-rootfs.sh $(SOC) /src/work/base/$(SOC)
+	  images/assemble-rootfs.sh /src/work/base
 
 # ==============================================================================
 # Boot artifact + bootable media (container)
 # ==============================================================================
 $(BOOTIMG): $(KERNEL) | $(BUILD_STAMP)
-	$(INBUILD) boot/package.sh $(SOC)
+	$(INBUILD) boot/package.sh
 
 $(SDCARD): $(BOOTIMG) $(ROOTFS) | $(BUILD_STAMP)
-	$(INBUILD) images/make-sdcard.sh $(SOC)
+	$(INBUILD) images/make-sdcard.sh
 
 # Signed RAUC OTA bundle (Phase 4). Dev builds mint an ephemeral cert; set
 # RAUC_CERT/RAUC_KEY (repo-relative, so they resolve under /src) for a real signature.
 bundle: $(ROOTFS) | $(BUILD_STAMP) ## Build a signed RAUC update bundle (in container)
 	$(DOCKER) -e RAUC_CERT -e RAUC_KEY $(BUILD_IMG) \
-	  images/genbundle.sh $(SOC) $(VERSION)
+	  images/genbundle.sh $(VERSION)
 
 # ==============================================================================
 # Deploy (host) — copy the all-boards KERNEL onto a mounted ESP
 # ==============================================================================
 deploy: $(BOOTIMG) ## Install the boot image onto ESP=<mountpoint>
 	@test -n "$(ESP)" || { echo "pass ESP=<esp-mountpoint>" >&2; exit 2; }
-	boot/deploy.sh $(SOC) $(ESP)
+	boot/deploy.sh $(ESP)
 
 # ==============================================================================
 # Cleaning
 # ==============================================================================
-# out/<soc> is partly root-owned: the container stages (kernel modules_install, rootfs
-# assembly, sdcard) run as root in the build image, so a host-side rm fails on e.g.
-# out/<soc>/modroot. Remove it from inside a throwaway container as root, like clean-base.
-# (out/.build-image.stamp lives outside $(OUT) and is host-owned, so it survives.)
-clean: ## Remove built artifacts for SOC (out/<soc>), keep firmware/base caches
-	docker run --rm -v $(CURDIR)/out:/wo busybox rm -rf /wo/$(SOC)
+# out/ is partly root-owned: the container stages (kernel modules_install, rootfs assembly,
+# sdcard) run as root in the build image, so a host-side rm fails on e.g. out/modroot. Remove
+# the artifacts from inside a throwaway container as root, like clean-base. (out/.build-image.stamp
+# is host-owned and deliberately kept so the toolchain image isn't rebuilt.)
+clean: ## Remove built artifacts (out/), keep firmware/base caches + toolchain stamp
+	docker run --rm -v $(CURDIR)/out:/wo busybox rm -rf /wo/Image.gz /wo/dtbs /wo/modroot /wo/images /wo/boot
 
-# work/base/<soc> is root-owned (customize-base exports it as root), so a plain rm
-# fails for the build user — remove it from inside a throwaway container as root.
-clean-base: ## Remove the (root-owned) cached base rootfs for SOC
-	docker run --rm -v $(CURDIR)/work/base:/wb busybox rm -rf /wb/$(SOC)
+# work/base is root-owned (customize-base exports it as root), so a plain rm fails for the
+# build user — remove it from inside a throwaway container as root.
+clean-base: ## Remove the (root-owned) cached base rootfs
+	docker run --rm -v $(CURDIR)/work:/wb busybox rm -rf /wb/base
 	rm -f $(BASE_STAMP)   # drop the recency marker too, else the next build skips a gone base
 
 clean-overlay: ## Remove the built (arch-scoped) overlay pacman repo + build tree
 	rm -rf work/repo work/overlay-build
 
 distclean: clean clean-base clean-overlay ## clean + drop fetched firmware + kernel work tree
-	rm -rf work/kernel/linux-$(SOC)* firmware/linux-fw/$(SOC) firmware/qcom-fw
+	rm -rf work/kernel firmware/linux-fw firmware/qcom-fw

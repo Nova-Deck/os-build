@@ -1,0 +1,19 @@
+# novadeck built-in firmware list (CONFIG_EXTRA_FIRMWARE) — the union of blobs baked
+# into Image.gz so they are present before the rootfs mounts. One /lib/firmware-relative
+# path per line; kernel/build.sh resolves each against firmware/linux-fw/ (open blobs,
+# fetch-linux-fw.sh) then firmware/qcom-fw/ (device blobs, fetch-qcom-fw.sh) and derives
+# CONFIG_EXTRA_FIRMWARE from this list. Add a SoC/board by appending its early-boot blobs
+# here — no edit to build.sh. Comments (#) and blank lines ignored.
+
+# --- sm8650: Adreno 750 GPU microcode (open, linux-firmware) ---
+qcom/gen70900_aqe.fw
+qcom/gen70900_sqe.fw
+qcom/gmu_gen70900.bin
+
+# --- sm8650: per-board GPU zap shaders (device, qcom-firmwares) ---
+qcom/sm8650/ayaneo/ps2/gen70900_zap.mbn
+qcom/sm8650/konkr/pf/gen70900_zap.mbn
+
+# --- sm8650: AudioReach (q6apm) topology, per board card model (device) ---
+qcom/sm8650/SM8650-APS2-tplg.bin
+qcom/sm8650/SM8650-KPF-tplg.bin

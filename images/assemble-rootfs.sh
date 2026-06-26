@@ -9,33 +9,31 @@
 # The image content is read-only by construction; the subvolume's ro *property* is
 # set by RAUC at deploy time (needs a mount), so it is not applied here.
 #
-#   images/assemble-rootfs.sh <soc> <base-rootfs-dir>
-#   BASE_ROOTFS=<dir> images/assemble-rootfs.sh <soc>
+#   images/assemble-rootfs.sh <base-rootfs-dir>
+#   BASE_ROOTFS=<dir> images/assemble-rootfs.sh
 #
 # Run inside the build image (needs btrfs-progs + rsync):
 #   docker run --rm -v "$PWD":/src -w /src novadeck-build images/assemble-rootfs.sh sm8650 /path/to/base
 set -euo pipefail
 shopt -s nullglob
 
-SOC="${1:-}"
-[ -n "$SOC" ] || { echo "usage: ${0##*/} <soc>" >&2; exit 2; }
-BASE="${2:-${BASE_ROOTFS:-}}"
+BASE="${1:-${BASE_ROOTFS:-}}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-OUT="$ROOT/out/$SOC"
+OUT="$ROOT/out"
 FW="$ROOT/firmware/qcom-fw"
-LFW="$ROOT/firmware/linux-fw/$SOC"
+LFW="$ROOT/firmware/linux-fw"
 IMGDIR="$OUT/images"
 IMG="$IMGDIR/rootfs.img"
 SIZE="${ROOTFS_SIZE:-5G}"   # matches rootfs-a/-b in partition-table.txt; --shrink trims it
 
-[ -n "$BASE" ]        || { echo "usage: assemble-rootfs.sh <soc> <base-rootfs-dir>" >&2; exit 2; }
+[ -n "$BASE" ]        || { echo "usage: assemble-rootfs.sh <base-rootfs-dir>" >&2; exit 2; }
 [ -d "$BASE" ]        || { echo "no base rootfs dir: $BASE" >&2; exit 2; }
 [ -f "$OUT/Image.gz" ] || { echo "no kernel: $OUT/Image.gz (run kernel/build.sh first)" >&2; exit 1; }
 command -v mkfs.btrfs >/dev/null 2>&1 || { echo "mkfs.btrfs not found (run inside novadeck-build)" >&2; exit 1; }
 
 stage="$(mktemp -d)"
 trap 'rm -rf "$stage"' EXIT
-echo "[novadeck] assembling $SOC read-only root (base=$BASE)"
+echo "[novadeck] assembling unified read-only root (base=$BASE)"
 
 # 1. base userspace (the Holo aarch64 preview rootfs)
 if command -v rsync >/dev/null 2>&1; then rsync -aHAX --numeric-ids "$BASE"/ "$stage"/
@@ -96,16 +94,18 @@ if [ -d "$LFW" ]; then
     install -Dm0644 "$f" "$stage/lib/firmware/$rel"
   done < <(find "$LFW" -type f 2>/dev/null)
 else
-  echo "  (no linux-firmware at ${LFW#"$ROOT"/} — run firmware/fetch-linux-fw.sh $SOC; GPU/BT/VPU firmware will be missing)"
+  echo "  (no linux-firmware at ${LFW#"$ROOT"/} — run firmware/fetch-linux-fw.sh; GPU/BT/VPU firmware will be missing)"
 fi
 
 # 4. novadeck marker so the running system can identify the slot's provenance
 mkdir -p "$stage/etc"
-{ echo "NOVADECK_SOC=$SOC"; echo "NOVADECK_BUILD=$(date -u +%Y%m%dT%H%M%SZ)"; } >"$stage/etc/novadeck-release"
+{ echo "NOVADECK_VARIANT=unified"; echo "NOVADECK_BUILD=$(date -u +%Y%m%dT%H%M%SZ)"; } >"$stage/etc/novadeck-release"
 
-# 4b. RELEASE per-SoC input config: ship InputPlumber's device/profile config from
-# devices/<soc>/inputplumber/ into /etc/inputplumber/ and enable the daemon. Unlike the
-# TEST block below this is part of EVERY build — a handheld needs its gamepad/gyro mapping
+# 4b. RELEASE input config: ship InputPlumber's device/profile config from
+# devices/inputplumber/ into /etc/inputplumber/ and enable the daemon. This is the union of
+# every supported board's config; InputPlumber matches by hardware, so non-matching configs
+# are inert. Unlike the TEST block below this is part of EVERY build — a handheld needs its
+# gamepad/gyro mapping
 # at first boot. The inputplumber package itself comes from the base (customize-base.sh).
 # /etc/inputplumber overrides the package's /usr/share/inputplumber defaults — but ONLY via
 # the `.d` override dirs InputPlumber actually scans under /etc: composite configs in
@@ -113,7 +113,7 @@ mkdir -p "$stage/etc"
 # `capability_maps` names apply only under the /usr/share base path). The repo tree is laid
 # out with those `.d` names so this plain mirror-copy lands them where the daemon reads them;
 # do NOT rename them back or the configs load from nowhere and no composite device is built.
-IPCONF="$ROOT/devices/$SOC/inputplumber"
+IPCONF="$ROOT/devices/inputplumber"
 if [ -d "$IPCONF" ]; then
   echo "  injecting InputPlumber config from ${IPCONF#"$ROOT"/}"
   install -d -m0755 "$stage/etc/inputplumber"
@@ -127,7 +127,7 @@ if [ -d "$IPCONF" ]; then
   ln -sf /usr/lib/systemd/system/inputplumber.service \
          "$stage/etc/systemd/system/multi-user.target.wants/inputplumber.service"
 else
-  echo "  (no InputPlumber config at devices/$SOC/inputplumber — skipping; package defaults apply, daemon not force-enabled)"
+  echo "  (no InputPlumber config at devices/inputplumber — skipping; package defaults apply, daemon not force-enabled)"
 fi
 
 # 4d. RELEASE gamescope-session (SteamOS layer B): the boot-to-compositor plumbing. A static,
@@ -137,7 +137,7 @@ fi
 # package, only the session wiring. The unit ships installed-but-DISABLED (no preset/symlink):
 # Phase 2 validates it by hand (`systemctl start novadeck-session`) so it never seizes the panel
 # from the SSH/smoke bring-up path; flipping to boot-enabled is a one-line preset add once it is
-# proven on HW and the Phase-3 Steam shell lands. See devices/$SOC/bringup-phase2.md step 2.
+# proven on HW and the Phase-3 Steam shell lands. See devices/bringup-phase2.md step 2.
 SESSION="$ROOT/session"
 if [ -d "$SESSION" ]; then
   echo "  injecting novadeck gamescope-session from ${SESSION#"$ROOT"/} (installed, not auto-enabled)"
@@ -160,7 +160,7 @@ fi
 # bluez packages come from customize-base.sh), systemd-timesyncd for a sane clock (no RTC sync
 # otherwise). No Wi-Fi resume hook ships: NM re-associates unaided after the suspend rfkill-unblock
 # (the old resume.d/50-nm-reup nudge was HW-confirmed moot, 2026-06-25). The generic resume.d drop-in
-# point in novadeck-suspend remains for future fix-ups. See devices/$SOC/bringup-phase2.md step 3.
+# point in novadeck-suspend remains for future fix-ups. See devices/bringup-phase2.md step 3.
 HWSUPPORT="$ROOT/hw-support"
 if [ -d "$HWSUPPORT" ]; then
   echo "  injecting novadeck HW-support from ${HWSUPPORT#"$ROOT"/} (wake agent + bluetooth + timesyncd enabled)"
@@ -314,7 +314,7 @@ echo "[nova] gamescope DRM smoke: client=$client  XDG_RUNTIME_DIR=$XDG_RUNTIME_D
 # ROTATE_90 a LINEAR plane). Verified upright on HW 2026-06-21. NOTE: --immediate-flips is NOT
 # passed — it is a no-op here (the msm DPU does not advertise DRM_CAP_ATOMIC_ASYNC_PAGE_FLIP, so
 # gamescope drops the async flag). The intermittent composite-flip freeze is on the vsync'd path
-# and unrelated. See devices/sm8650/bringup-phase2.md.
+# and unrelated. See devices/bringup-phase2.md.
 gs_args="--backend drm --use-rotation-shader"
 set -x
 if command -v seatd-launch >/dev/null 2>&1; then

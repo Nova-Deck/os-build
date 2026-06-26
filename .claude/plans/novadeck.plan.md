@@ -20,6 +20,13 @@ atomic updates surfaced in-UI. **Library-equivalence is an explicit non-goal**: 
 (EAC/BattlEye) and per-title FEX coverage mean some x86 titles will never run, so the library
 cannot match a native-x86 Deck. Measure novadeck against the *experience*, not the catalogue.
 
+**Desktop mode is an explicit non-goal.** SteamOS's "switch to desktop" drops to a full KDE
+Plasma DE; novadeck ships **handheld/gamescope mode only** and will not pull Plasma (or any
+desktop environment). The scope cost — Plasma's package weight, an X/Wayland desktop session,
+and the SteamOS desktop-mode integration glue — isn't worth it for a gaming-first appliance.
+The Deck UI's in-session affordances (Quick Access, settings) stay; the desktop escape hatch
+does not.
+
 ### What "SteamOS" decomposes into, and where fidelity is won/lost
 
 SteamOS-the-experience is five layers stacked on the Arch/Holo base. Fidelity = how faithfully

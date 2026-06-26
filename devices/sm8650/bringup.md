@@ -49,7 +49,8 @@ boot/deploy.sh sm8650 <esp-mountpoint>   # -> <esp>/KERNEL
 
 Every board's DTB is appended to the kernel payload (Android header v0), so a single
 `KERNEL` serves all SM8650 boards: ABL's DTB picker scans the trailing FDTs and lets you
-select the board at boot. The cmdline mounts `root=LABEL=novadeck-root`. The UEFI/GRUB
+select the board at boot. The cmdline mounts `root=PARTLABEL=novadeck-root` (fs labels can't be
+resolved without an initramfs). The UEFI/GRUB
 (`bootaa64.efi`) path is reserved for the Phase 4 A/B layout (`efi-a`/`efi-b` + RAUC).
 
 _Phase 1 scaffold._

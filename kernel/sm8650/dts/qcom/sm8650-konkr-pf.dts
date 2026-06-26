@@ -66,3 +66,7 @@
 	firmware-name = "qcom/sm8650/konkr/pf/cdsp.mbn",
 			"qcom/sm8650/konkr/pf/cdsp_dtb.mbn";
 };
+
+&sound_card {
+	model = "SM8650-KPF";
+};

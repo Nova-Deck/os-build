@@ -1,0 +1,7 @@
+# novadeck: enable systemd-timesyncd so the clock is stepped from the network on release. /etc/
+# machine-id is empty on a fresh image, so systemd runs preset-all on first boot where the stock
+# 99-default.preset is "disable *"; this higher-priority preset (60 < 99) keeps it enabled. The
+# build-time sysinit.target.wants + dbus-org.freedesktop.timesync1 symlinks ship alongside as a
+# fallback (RO root can't write them at boot). NOTE: relies on the base shipping systemd-timesyncd
+# (part of the systemd package on Arch/Holo).
+enable systemd-timesyncd.service

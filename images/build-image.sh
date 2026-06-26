@@ -26,8 +26,8 @@ DK=(docker run --rm -v "$ROOT":/src -w /src novadeck-build)
 [ -f "$OUT/Image.gz" ] \
   || { echo "no kernel: out/$SOC/Image.gz — run kernel/build.sh $SOC first" >&2; exit 1; }
 
-# 1. base userspace (pinned, idempotent) with the release runtime layered in (iwd,
-# dropbear, mesa+Turnip+vulkan-tools). customize-base.sh prints a host absolute path;
+# 1. base userspace (pinned, idempotent) with the release runtime layered in (NetworkManager,
+# openssh, mesa+Turnip+vulkan-tools). customize-base.sh prints a host absolute path;
 # step 4 runs in a container with the repo bind-mounted at /src, so translate the $ROOT
 # prefix to /src for the in-container call. (For a bare base with no runtime added, use
 # images/fetch-base.sh instead.)

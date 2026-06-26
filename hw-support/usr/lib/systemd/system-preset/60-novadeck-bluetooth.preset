@@ -1,0 +1,6 @@
+# novadeck: enable bluetoothd on release so the Deck UI can pair controllers/audio over org.bluez.
+# /etc/machine-id is empty on a fresh image, so systemd runs preset-all on first boot where the
+# stock 99-default.preset is "disable *"; this higher-priority preset (60 < 99) keeps it enabled.
+# Build-time bluetooth.target.wants + dbus-org.bluez symlinks ship alongside as a fallback (RO root
+# can't write them at boot); the dbus-org.bluez alias also lets D-Bus activate bluetoothd on demand.
+enable bluetooth.service

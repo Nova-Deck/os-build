@@ -3,7 +3,9 @@
 #
 # The upstream holo-core base is minimal: no Wi-Fi supplicant, no SSH server, no
 # Vulkan/Mesa userspace. This layers the runtime that ships in every build —
-#   wpa_supplicant   Wi-Fi WPA auth (systemd-networkd does the DHCP)
+#   networkmanager   Wi-Fi manager (release + test); does its own DHCP
+#   wpa_supplicant   NM's Wi-Fi WPA backend (optdepend of networkmanager, so installed explicitly)
+#   bluez/bluez-utils Bluetooth stack + bluetoothctl (Deck UI pairs controllers/audio)
 #   openssh          SSH server (dropbear isn't in the pinned holo repo)
 #   wireless-regdb   regulatory database — REQUIRED for 5 GHz (else channels are no-TX)
 #   mesa + vulkan-freedreno (Turnip) + vulkan-tools   GPU / Vulkan
@@ -39,7 +41,25 @@ PINFILE="$ROOT/base.digest"
 DEST="$ROOT/work/base/$SOC"
 
 # Release runtime packages — credentials are NEVER installed here (test-only at assemble).
-PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-tools mesa)
+# gamescope + seatd are the Deck-UI session compositor (SteamOS layer B) and its seat manager:
+# Phase 2 brings up BARE gamescope on Turnip before the jupiter-* port to isolate the
+# Turnip↔gamescope Wayland-WSI question (see devices/<soc>/bringup-phase2.md). Both are genuine
+# release runtime (the gamescope session needs them), not test-only.
+# bluez + bluez-utils are the Bluetooth stack (layer C): the Deck UI pairs controllers/audio over
+# org.bluez, and the WCN7850 BT firmware already ships (assemble-rootfs.sh block 3b). bluetoothd is
+# enabled in the hw-support overlay (60-novadeck-bluetooth.preset); bluez-utils provides bluetoothctl.
+# networkmanager is the Wi-Fi manager (the SteamOS gamepadui default; uses wpa_supplicant as its
+# backend, already present). NM ships no auto-enable preset, so installing it here leaves it INACTIVE
+# in a plain release base — release first-boot networking is the Steam UI's job (Phase-3), which
+# drives NM. The TEST card (assemble-rootfs.sh NOVADECK_TEST block) DOES enable NM and drops a
+# connection profile, so the throwaway card exercises the same manager as release (no test-vs-release
+# stack split). bluez/networkmanager being added busts the install-set reuse marker — intended.
+# Audio (SteamOS layer C): PipeWire stack + ALSA UCM2 base. alsa-ucm-conf supplies the
+# /codecs/{wcd939x,qcom-lpass,wsa884x} + /lib snippets that the device UCM2 profiles
+# (audio/ overlay, cards SM8650-APS2/SM8650-KPF) Include; pipewire-pulse/-alsa give the
+# PA/ALSA shims so games + BlueZ (A2DP/HFP) route through PipeWire, wireplumber is the
+# session manager. (pipewire-jack omitted — not needed for game/BT audio.)
+PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-tools mesa gamescope seatd bluez bluez-utils networkmanager alsa-ucm-conf pipewire wireplumber pipewire-pulse pipewire-alsa)
 
 # Test-only packages — installed ONLY under NOVADECK_TEST=1, NEVER in a release base.
 # On-device bring-up tools: evtest reads raw /dev/input events; usbutils provides lsusb.
@@ -75,16 +95,31 @@ for pin in "${PREBUILT_PINS[@]}"; do
   if [ -n "$pin_deps" ]; then PREBUILT_DEPS+=($pin_deps); fi   # word-split: deps is space-separated
 done
 
-# Test packages change the base contents, so the reuse cache must tell a test base apart
-# from a release one — else evtest leaks into a release base, or is missing from a test
-# rebuild. Track that with a SEPARATE marker file (/usr/lib/novadeck/test-pkgs): the
-# prebuilt.manifest must stay pure because the container also reads it as the tar-extraction
-# list, so a non-prebuilt line there would break extraction.
+# The reuse cache must bust whenever the installed package SET changes — a new release
+# package, a new prebuilt's declared deps, or the test-only packages toggling in/out. Probing
+# for one sentinel file per package doesn't scale (and silently misses any package without a
+# sentinel), so instead record the whole sorted install set in ONE marker file
+# (/usr/lib/novadeck/pkgs) and compare it. prebuilt.manifest stays a SEPARATE marker because
+# the container also reads it verbatim as the tar-extraction list, so it must hold only
+# prebuilt rows.
 INSTALL_PKGS=("${PKGS[@]}" "${PREBUILT_DEPS[@]}")
-EXPECTED_TESTPKGS=""
 if [ "${NOVADECK_TEST:-}" = "1" ]; then
   INSTALL_PKGS+=("${TEST_PKGS[@]}")
-  EXPECTED_TESTPKGS="${TEST_PKGS[*]}"
+fi
+# Canonical (sorted, de-duped) install set — the reuse-cache key recorded in the base below.
+EXPECTED_PKGS="$(printf '%s\n' "${INSTALL_PKGS[@]}" | sort -u)"
+
+# From-source overlay packages (packages/*/source.pin -> work/repo/<soc>/, built by
+# packages/build-overlay.sh) override holo binaries via a higher pkgrel. They don't change the
+# install SET, so fold the repo db's content hash into the reuse key — a rebuilt overlay (new
+# pkgrel/patch) then busts the cache even though PKGS is unchanged.
+# Arch-scoped (aarch64), shared across SoCs — overlay packages are plain aarch64 binaries every
+# device reuses, so they are NOT under work/base/<soc>. See packages/build-overlay.sh.
+OVERLAY_REPO="$ROOT/work/repo/aarch64"
+OVERLAY_DB="$OVERLAY_REPO/novadeck.db.tar.zst"
+if [ -f "$OVERLAY_DB" ]; then
+  EXPECTED_PKGS="$EXPECTED_PKGS
+overlay:$(sha256sum "$OVERLAY_DB" | cut -d' ' -f1)"
 fi
 
 [ -f "$PINFILE" ] || { echo "no base pin: $PINFILE" >&2; exit 1; }
@@ -96,11 +131,13 @@ case "$REF" in
 esac
 command -v docker >/dev/null 2>&1 || { echo "docker required for base customization" >&2; exit 1; }
 
-# Already customized? Reuse unless FORCE=1 (the emulated pacman run is slow). The stored
-# prebuilt manifest must match the current pins, else a pin bump/add would be silently missed.
-if [ -z "${FORCE:-}" ] && [ -f "$DEST/usr/bin/sshd" ] && [ -f "$DEST/usr/lib/firmware/regulatory.db" ] \
-   && [ "$(cat "$DEST/usr/lib/novadeck/prebuilt.manifest" 2>/dev/null)" = "$EXPECTED_MANIFEST" ] \
-   && [ "$(cat "$DEST/usr/lib/novadeck/test-pkgs" 2>/dev/null)" = "$EXPECTED_TESTPKGS" ]; then
+# Already customized? Reuse unless FORCE=1 (the emulated pacman run is slow). Both markers must
+# match the current inputs, else a package add/removal or a prebuilt pin bump would be silently
+# missed. The pkgs marker is written last in-container, so its presence also proves the
+# customization completed (no need for per-package existence sentinels).
+if [ -z "${FORCE:-}" ] \
+   && [ "$(cat "$DEST/usr/lib/novadeck/pkgs" 2>/dev/null)" = "$EXPECTED_PKGS" ] \
+   && [ "$(cat "$DEST/usr/lib/novadeck/prebuilt.manifest" 2>/dev/null)" = "$EXPECTED_MANIFEST" ]; then
   echo "[novadeck] customized base present: ${DEST#"$ROOT"/} (FORCE=1 to rebuild)" >&2
   echo "$DEST"; exit 0
 fi
@@ -128,15 +165,37 @@ for pin in "${PREBUILT_PINS[@]}"; do
     || { echo "$name sha256 mismatch — refusing" >&2; exit 1; }
 done
 printf '%s\n' "$EXPECTED_MANIFEST" >"$PREBUILT_DIR/prebuilt.manifest"
-# Test-package marker (reuse-cache key only; NOT a tar list) — empty string for release.
-printf '%s' "$EXPECTED_TESTPKGS" >"$PREBUILT_DIR/test-pkgs"
+# Install-set marker (reuse-cache key only; NOT a tar list) — the full sorted package set.
+printf '%s\n' "$EXPECTED_PKGS" >"$PREBUILT_DIR/pkgs"
 
 cid="nova-custom-$SOC-$$"
 trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
 
+# Mount the from-source overlay repo (if built) read-only so the in-container pacman can install
+# our patched packages from it. `pacman -S` resolves a package from the FIRST repo in pacman.conf
+# ORDER that provides it (version does NOT override order), so the overlay must be inserted AHEAD
+# of the holo repos; the higher pkgrel (e.g. 3.16.17-1.1) then also keeps it across any upgrade.
+OVERLAY_MOUNT=()
+if [ -f "$OVERLAY_DB" ] && ls "$OVERLAY_REPO"/*.pkg.tar.zst >/dev/null 2>&1; then
+  OVERLAY_MOUNT=(-v "$OVERLAY_REPO":/novarepo:ro)
+  echo "[novadeck] overlay repo present — patched packages will override holo binaries" >&2
+fi
+
 echo "[novadeck] installing runtime under arm64: ${INSTALL_PKGS[*]}" >&2
-docker run --name "$cid" --platform linux/arm64 -v "$PREBUILT_DIR":/prebuilt:ro "$REF" \
+docker run --name "$cid" --platform linux/arm64 -v "$PREBUILT_DIR":/prebuilt:ro \
+  "${OVERLAY_MOUNT[@]}" "$REF" \
   bash -euo pipefail -c '
+  # novadeck overlay: register our local pacman repo AHEAD of the holo repos (right after the
+  # [options] section) so patched from-source packages (e.g. gamescope rebuilt for the portrait-
+  # panel composite rotation) resolve from it instead of the holo binaries — pacman -S honours
+  # repo ORDER, not version. Unsigned (TrustAll): it is our own pinned build artifact.
+  if [ -d /novarepo ] && ls /novarepo/*.pkg.tar.zst >/dev/null 2>&1; then
+    awk "
+      /^\[/ && seen && !ins { print \"[novadeck]\"; print \"SigLevel = Optional TrustAll\"; print \"Server = file:///novarepo\"; print \"\"; ins=1 }
+      /^\[options\]/ { seen=1 }
+      { print }
+    " /etc/pacman.conf > /etc/pacman.conf.nova && mv /etc/pacman.conf.nova /etc/pacman.conf
+  fi
   pacman -Sy --noconfirm --needed --disable-download-timeout '"${INSTALL_PKGS[*]}"'
 
   # Precompiled external packages staged + verified by the host (packages/*/prebuilt.pin):
@@ -151,9 +210,9 @@ docker run --name "$cid" --platform linux/arm64 -v "$PREBUILT_DIR":/prebuilt:ro 
     done < /prebuilt/prebuilt.manifest
     install -Dm0644 /prebuilt/prebuilt.manifest /usr/lib/novadeck/prebuilt.manifest
   fi
-  # Record the test-package marker (empty for release) so the host reuse-check can tell a
-  # test base from a release one without re-running the slow emulated pacman.
-  install -Dm0644 /prebuilt/test-pkgs /usr/lib/novadeck/test-pkgs
+  # Record the install-set marker (written last) so the host reuse-check can detect any package
+  # add/removal — release, prebuilt-dep, or test-only — without re-running the slow emulated pacman.
+  install -Dm0644 /prebuilt/pkgs /usr/lib/novadeck/pkgs
 
   # Release base ships the runtime PACKAGES only — no network/SSH config or service
   # enablement. First-boot networking is the SteamOS UI'\''s responsibility; all Wi-Fi/SSH

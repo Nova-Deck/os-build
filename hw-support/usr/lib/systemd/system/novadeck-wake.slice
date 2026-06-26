@@ -1,0 +1,7 @@
+[Unit]
+Description=novadeck wake-agent slice (top-level, never frozen by novadeck-suspend)
+Documentation=man:systemd.slice(5)
+Before=slices.target
+# A top-level slice (sibling of system.slice / user.slice, NOT a child) so that
+# `echo 1 > /sys/fs/cgroup/system.slice/cgroup.freeze` does not freeze the wake agent that has to
+# thaw it. novadeck-waked.service places itself here via Slice=.

@@ -122,3 +122,7 @@
 	firmware-name = "qcom/sm8650/ayaneo/ps2/cdsp.mbn",
 			"qcom/sm8650/ayaneo/ps2/cdsp_dtb.mbn";
 };
+
+&sound_card {
+	model = "SM8650-APS2";
+};

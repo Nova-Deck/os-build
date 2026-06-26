@@ -1,0 +1,31 @@
+# gamescope — built FROM SOURCE via a novadeck-owned PKGBUILD (packages/gamescope/PKGBUILD),
+# NOT fetched from the holo monorepo. build-overlay.sh sees `pkgbuild_local` below and uses that
+# checked-in recipe instead of curl'ing one; makepkg still clones the upstream git source (the
+# gamescope tag + its submodules) named in it.
+#
+# This switched from the holo `pkgbuild_repo` fetch (was pinned at holo's 3.16.17-1) to a local
+# PKGBUILD bumped to gamescope 3.16.23.2. Reason: 3.16.17's Wayland explicit-sync
+# (linux-drm-syncobj) WSI present path intermittently deadlocks on the first frame on this HW,
+# wedging ~2/3 of cold session starts. We already rebuild gamescope from source for the
+# rotation-shader patch, so we bump the version here (same medicine as packages/mesa) rather than
+# carry a runtime workaround. See devices/sm8650/bringup-phase2.md step 1e + the gamescope-flip-blocker
+# memory, and packages/README.md for the overlay mechanism.
+#
+# Why source-built at all: the msm DPU cannot ROTATE_90 a LINEAR plane, so gamescope must rotate the
+# portrait-native Pocket S2 panel in its GPU composite step (a code change → a package rebuild).
+#
+# Fields:
+#   name           pkgname (must match the PKGBUILD); also the work/ build-dir + repo entry
+#   pkgbuild_local path (relative to this dir) to the checked-in PKGBUILD to build
+#   pkgrel_suffix  numeric suffix appended to the PKGBUILD's pkgrel (N -> N.<suffix>) so pacman
+#                  prefers our build over holo's binary. Integer only (makepkg requires
+#                  pkgrel = integer[.integer]).
+#   patches        space-separated files under ./patches/, applied `patch -p1` in the gamescope
+#                  source root (after `cd gamescope` in prepare()), in the order listed.
+#
+# To bump gamescope: edit pkgver in packages/gamescope/PKGBUILD, re-verify the patch applies against
+# the new tag (patch -p1 --dry-run on a shallow clone), and re-roll it only if a hunk fails.
+name: gamescope
+pkgbuild_local: PKGBUILD
+pkgrel_suffix: 1
+patches: 0001-rotate-portrait-panel-in-composite.patch

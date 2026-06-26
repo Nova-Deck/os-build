@@ -1,0 +1,29 @@
+# mesa — built FROM SOURCE off the upstream RELEASE TARBALL via a novadeck-owned PKGBUILD,
+# NOT fetched from the holo monorepo and NOT a git clone. holo ships an old (25.2.7), all-driver
+# mesa; novadeck only targets Qualcomm Adreno, so packages/mesa/PKGBUILD builds just the freedreno
+# gallium (GL) driver + the freedreno Vulkan driver (Turnip) from the latest mesa release, LLVM/
+# rust and every other driver off. build-overlay.sh sees `pkgbuild_local` below and uses that
+# checked-in PKGBUILD instead of curl'ing one; makepkg still downloads the tarball named in it.
+#
+# This is the "local PKGBUILD" counterpart of gamescope/source.pin (which fetches a holo PKGBUILD).
+#
+# Fields:
+#   name           pkgbase (must match the PKGBUILD); also the work/ build-dir name
+#   pkgbuild_local path (relative to this dir) to the checked-in PKGBUILD to build
+#   pkgrel_suffix  numeric suffix appended to the PKGBUILD's pkgrel (N -> N.<suffix>) so pacman
+#                  prefers our build on later upgrades. Integer only (makepkg requires
+#                  pkgrel = integer[.integer]).
+#   patches        space-separated files under ./patches/, applied `patch -p1` in the mesa source
+#                  root (after the first `cd` in prepare()), in the order listed. EMPTY for now —
+#                  add SM875x / a8xx Adreno enablement patches here.
+#
+# Upstream source (informational; the URL + sha also live in the PKGBUILD):
+#   url:    https://archive.mesa3d.org/mesa-26.1.3.tar.xz
+#   sha256: 7725004e724b34c6d4fbaf5c48fc6c6223aa9f2741d6d7782c699b049356fc45
+#
+# To bump mesa: edit pkgver (and the tarball sha256) in packages/mesa/PKGBUILD, update the
+# url/sha256 lines above, and re-roll any patches under ./patches/ against the new tag.
+name: mesa
+pkgbuild_local: PKGBUILD
+pkgrel_suffix: 1
+patches: 0001-add-a830-chip-id.patch 0002-freedreno-ir3-vulkan-disable-bindless-ubo-const-lowering.patch

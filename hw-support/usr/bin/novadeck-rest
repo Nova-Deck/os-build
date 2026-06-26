@@ -1,0 +1,99 @@
+#!/bin/sh
+# novadeck-rest — userspace "rest mode" (fake suspend) for Qualcomm handhelds (SteamOS layer C).
+#
+# Real s2idle suspend/resume on these SoCs is immature and debugging it is out of our scope. Instead
+# this owns a reversible low-power state ENTIRELY in userspace, restoring exactly what it changed:
+#   enter   blank the panel via gamescope's own KMS modeset (gamescopectl drm_sleep_*_screen),
+#           offline every CPU but the boot CPU, soft-block all radios, switch cpufreq -> powersave,
+#           and switch the GPU devfreq governor -> powersave.
+#   leave   restore each from the state captured at enter, in reverse order.
+#   toggle  enter if resting, else leave (single-button friendly — for the future power-key trigger).
+#   status  print "resting" or "awake".
+#
+# Phase-2 scope is the MECHANISM only: validate by hand on HW (`novadeck-rest enter` / `leave` over
+# SSH), exactly how the gamescope session was de-risked. The trigger that fires it (a power-button
+# watcher / Deck-UI request) lands as a follow-up. See devices/<soc>/bringup-phase2.md step 3.
+#
+# RELATIONSHIP TO novadeck-suspend (read before wiring a trigger to this): rest mode does NOT stop the
+# game — it only lowers power (panel off, CPUs offlined, governors->powersave) while userland keeps
+# running. novadeck-suspend is the actual product suspend: it cgroup-FREEZES userland (the game truly
+# halts) AND now applies these same power ops (via the shared power-ops.sh this script sources), so it
+# is a strict superset of rest mode plus the freeze, and it has the wake path (novadeck-waked). rest
+# mode therefore stands as a DEV / BRING-UP tool, not the suspend affordance: its niche is exercising
+# the power primitives over SSH WITHOUT the freeze (the freeze drops sshd, which is in the frozen set).
+# Do not wire the power-button / Deck-UI suspend trigger to novadeck-rest — wire it to novadeck-suspend.
+#
+# NOTE on errors: this is a sequence of independent, best-effort hardware pokes. We deliberately do
+# NOT `set -e` — a single failed sysfs write (EBUSY on a CPU, a missing knob) must not abort the
+# rest of enter, and must NEVER abort leave (resume has to run to completion). Each write is guarded
+# and records into state only on success, so leave restores precisely what enter actually changed.
+set -u
+
+CONF=/etc/novadeck/rest.conf
+[ -r "$CONF" ] && . "$CONF"
+: "${NOVADECK_REST_GOVERNOR:=powersave}"
+: "${NOVADECK_REST_GPU_GOVERNOR:=powersave}"   # GPU devfreq governor on enter (restored on leave)
+: "${NOVADECK_REST_SCREEN:=internal}"   # gamescope target: drm_sleep_<internal|external>_screen
+: "${NOVADECK_REST_SKIP:=}"             # space-separated ops to skip: panel cpu rfkill governor gpugov
+: "${XDG_RUNTIME_DIR:=/run/user/0}"     # where gamescope's wayland socket lives (session runs as root)
+export XDG_RUNTIME_DIR
+
+STATE_DIR=/run/novadeck/rest.d
+
+# Resolve the LIVE gamescope control socket (not a blind gamescope-0 default) — see the header of
+# the sourced helper for the DPMS bug this avoids. Fallback no-op keeps the script working if the
+# overlay lib is somehow absent (gamescopectl then uses its own gamescope-0 default).
+GS_LIB=/usr/lib/novadeck/gamescope-display.sh
+if [ -r "$GS_LIB" ]; then . "$GS_LIB"; else gs_resolve_display() { :; }; fi
+
+# Reversible power-lowering primitives (cpu offline / rfkill / cpufreq+devfreq governors) live in a
+# shared library so novadeck-rest and novadeck-suspend apply byte-identical ops. State records land
+# in our STATE_DIR; the skip keys (cpu rfkill governor gpugov) come from NOVADECK_REST_SKIP.
+POWER_STATE_DIR=$STATE_DIR
+POWER_SKIP=$NOVADECK_REST_SKIP
+POW_LIB=/usr/lib/novadeck/power-ops.sh
+if [ -r "$POW_LIB" ]; then . "$POW_LIB"; else power_enter() { :; }; power_leave() { :; }; fi
+
+log()  { echo "novadeck-rest: $*"; }
+warn() { echo "novadeck-rest: $*" >&2; }
+skip() { case " $NOVADECK_REST_SKIP " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
+
+# --- panel: drive gamescope's DPMS convar; gamescope holds DRM-master so it does the actual KMS
+# modeset (detaches the connector from its CRTC -> DSI link blanks). Best-effort: with no session up
+# there is nothing to rest the display on, so we warn and let the power ops still run.
+gs_sleep() {
+  command -v gamescopectl >/dev/null 2>&1 || { warn "gamescopectl not found; panel unchanged"; return 0; }
+  gs_resolve_display || warn "no live gamescope socket; trying ${GAMESCOPE_WAYLAND_DISPLAY:-gamescope-0}"
+  gamescopectl "drm_sleep_${NOVADECK_REST_SCREEN}_screen" "$1" 2>/dev/null \
+    || warn "gamescopectl could not reach gamescope (no session?); panel unchanged"
+}
+
+# The power-lowering primitives (cpu offline / rfkill / cpufreq+devfreq governors) and their
+# record-and-restore state live in the shared library sourced above (power_enter / power_leave,
+# honouring POWER_SKIP). Only the panel lever (gamescope-specific) stays here.
+
+# Enter: blank first (immediate visible feedback) then lower power. Leave reverses the order, so the
+# panel comes back only once CPUs/radios/governor are restored.
+do_enter() {
+  [ -e "$STATE_DIR/active" ] && { log "already resting"; return 0; }
+  mkdir -p "$STATE_DIR"
+  skip panel || gs_sleep 1
+  power_enter
+  : > "$STATE_DIR/active"
+  log "resting (panel off, cpus offlined, radios blocked, cpu+gpu governor=$NOVADECK_REST_GOVERNOR/$NOVADECK_REST_GPU_GOVERNOR)"
+}
+do_leave() {
+  [ -e "$STATE_DIR/active" ] || { log "not resting"; return 0; }
+  rm -f "$STATE_DIR/active"
+  power_leave
+  skip panel || gs_sleep 0
+  log "awake"
+}
+
+case "${1:-}" in
+  enter)  do_enter ;;
+  leave)  do_leave ;;
+  toggle) if [ -e "$STATE_DIR/active" ]; then do_leave; else do_enter; fi ;;
+  status) if [ -e "$STATE_DIR/active" ]; then echo resting; else echo awake; fi ;;
+  *) echo "usage: novadeck-rest {enter|leave|toggle|status}" >&2; exit 2 ;;
+esac

@@ -1,0 +1,60 @@
+#!/bin/sh
+# novadeck-waked — the wake/suspend/power agent (SteamOS layer C). Runs as a service pinned into the
+# top-level novadeck-wake.slice, which is a SIBLING of system.slice and so is NEVER frozen by
+# novadeck-suspend. It owns the power key and maps press DURATION to an action:
+#   short tap   (< NOVADECK_WAKE_LONGPRESS_MS) -> novadeck-suspend toggle  (suspend <-> resume)
+#   long hold  (>= NOVADECK_WAKE_LONGPRESS_MS) -> clean systemctl poweroff
+# A very long hold past the software window still hits the PMIC hardware reset (~8s+), so the
+# hard power-off escape is preserved below us regardless of this agent.
+#
+# Why this works while all of userland is frozen: input is delivered by the KERNEL (evdev). This
+# agent opens the power-key device with its own fd via libinput (already on the image — no compiled
+# binary, no new package) and the key is not EVIOCGRAB-exclusive, so it keeps receiving presses even
+# though gamescope/logind also hold the device open and are frozen. logind must be told to ignore
+# the key (HandlePowerKey=ignore drop-in) so it does not poweroff/suspend instead.
+#
+# The action fires on the RELEASE edge, not the press edge: the hold duration is only known once the
+# key is let go, so short-vs-long is decided then. Wake latency is unaffected (the user lifts at once).
+set -u
+
+CONF=/etc/novadeck/rest.conf
+[ -r "$CONF" ] && . "$CONF"
+: "${NOVADECK_WAKE_DEV:=/dev/input/event0}"   # pmic_pwrkey on SM8650; override per board in rest.conf
+: "${NOVADECK_WAKE_KEY:=KEY_POWER}"
+: "${NOVADECK_WAKE_DEBOUNCE:=2}"              # seconds to ignore repeat actions after one fires
+: "${NOVADECK_WAKE_LONGPRESS_MS:=2000}"       # hold >= this (ms) = clean poweroff; shorter = toggle. 0 disables.
+
+[ -e "$NOVADECK_WAKE_DEV" ] || { echo "novadeck-waked: $NOVADECK_WAKE_DEV not present" >&2; exit 1; }
+command -v libinput >/dev/null 2>&1 || { echo "novadeck-waked: libinput missing" >&2; exit 1; }
+
+now_ms() { date +%s%3N; }   # GNU date, present on this userland; millisecond epoch for hold timing
+
+echo "novadeck-waked: watching $NOVADECK_WAKE_DEV for $NOVADECK_WAKE_KEY (longpress=${NOVADECK_WAKE_LONGPRESS_MS}ms)" >&2
+last=0       # epoch seconds of the last fired action (debounce)
+press_ms=0   # epoch ms of the current press, 0 when no press is open
+# debug-events prints one line per event; we time the key from its pressed edge to its released edge.
+libinput debug-events --device "$NOVADECK_WAKE_DEV" 2>/dev/null | while IFS= read -r line; do
+  case "$line" in
+    *"$NOVADECK_WAKE_KEY"*pressed*)
+      press_ms=$(now_ms)
+      ;;
+    *"$NOVADECK_WAKE_KEY"*released*)
+      [ "$press_ms" = 0 ] && continue          # release with no seen press (e.g. agent started mid-hold)
+      held=$(( $(now_ms) - press_ms ))
+      press_ms=0
+      now=$(date +%s)
+      [ $((now - last)) -lt "$NOVADECK_WAKE_DEBOUNCE" ] && continue
+      last=$now
+      if [ "$NOVADECK_WAKE_LONGPRESS_MS" -gt 0 ] && [ "$held" -ge "$NOVADECK_WAKE_LONGPRESS_MS" ]; then
+        echo "novadeck-waked: $NOVADECK_WAKE_KEY held ${held}ms -> poweroff" >&2
+        # Thaw first if suspended (no-op otherwise) so systemd can stop the frozen units cleanly,
+        # then power off. resume checks its own state file, so the unconditional call is safe.
+        novadeck-suspend resume
+        systemctl poweroff
+      else
+        echo "novadeck-waked: $NOVADECK_WAKE_KEY tap ${held}ms -> suspend/resume toggle" >&2
+        novadeck-suspend toggle
+      fi
+      ;;
+  esac
+done

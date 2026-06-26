@@ -15,6 +15,16 @@
 #
 # The action fires on the RELEASE edge, not the press edge: the hold duration is only known once the
 # key is let go, so short-vs-long is decided then. Wake latency is unaffected (the user lifts at once).
+#
+# Hold duration is measured with the shell's wall-clock (`date +%s%3N`) across the pressed->released
+# edges. The subtlety: the read loop must NEVER block between those two reads, or the clock collapses.
+# It originally blocked because each action ran synchronously in the loop, and novadeck-suspend takes
+# ~2s (freeze cgroups + lower power); a long-press that landed during a prior action had BOTH its
+# pressed and released lines queued in the pipe and read back-to-back -> held~=0 -> misread as a tap
+# (resume instead of poweroff). The fix: dispatch the action in the BACKGROUND so the loop returns to
+# reading immediately and every gesture is timed in real wall-time. (libinput's own "+N.NNNs" field is
+# NOT used: a fresh instance zeroes its first event but a long-running one carries an un-normalized
+# base, so cross-event subtraction there can underflow — exactly the held=-4294964826 we hit.)
 set -u
 
 CONF=/etc/novadeck/rest.conf
@@ -30,30 +40,30 @@ command -v libinput >/dev/null 2>&1 || { echo "novadeck-waked: libinput missing"
 now_ms() { date +%s%3N; }   # GNU date, present on this userland; millisecond epoch for hold timing
 
 echo "novadeck-waked: watching $NOVADECK_WAKE_DEV for $NOVADECK_WAKE_KEY (longpress=${NOVADECK_WAKE_LONGPRESS_MS}ms)" >&2
-last=0       # epoch seconds of the last fired action (debounce)
-press_ms=0   # epoch ms of the current press, 0 when no press is open
+last=0          # epoch seconds of the last fired action (debounce)
+have_press=0    # 1 while a press is open; a separate flag (not press_ms) so a legitimate 0ms read
+press_ms=0      # epoch ms of the current press; meaningful only when have_press=1
 # debug-events prints one line per event; we time the key from its pressed edge to its released edge.
 libinput debug-events --device "$NOVADECK_WAKE_DEV" 2>/dev/null | while IFS= read -r line; do
   case "$line" in
     *"$NOVADECK_WAKE_KEY"*pressed*)
-      press_ms=$(now_ms)
+      press_ms=$(now_ms); have_press=1
       ;;
     *"$NOVADECK_WAKE_KEY"*released*)
-      [ "$press_ms" = 0 ] && continue          # release with no seen press (e.g. agent started mid-hold)
+      [ "$have_press" = 1 ] || continue        # release with no seen press (e.g. agent started mid-hold)
       held=$(( $(now_ms) - press_ms ))
-      press_ms=0
+      have_press=0
       now=$(date +%s)
       [ $((now - last)) -lt "$NOVADECK_WAKE_DEBOUNCE" ] && continue
       last=$now
       if [ "$NOVADECK_WAKE_LONGPRESS_MS" -gt 0 ] && [ "$held" -ge "$NOVADECK_WAKE_LONGPRESS_MS" ]; then
         echo "novadeck-waked: $NOVADECK_WAKE_KEY held ${held}ms -> poweroff" >&2
-        # Thaw first if suspended (no-op otherwise) so systemd can stop the frozen units cleanly,
-        # then power off. resume checks its own state file, so the unconditional call is safe.
-        novadeck-suspend resume
-        systemctl poweroff
+        # Dispatch in the background so the read loop never blocks (see header). Thaw first if
+        # suspended (no-op otherwise) so systemd can stop the frozen units cleanly, then power off.
+        ( novadeck-suspend resume; systemctl poweroff ) &
       else
         echo "novadeck-waked: $NOVADECK_WAKE_KEY tap ${held}ms -> suspend/resume toggle" >&2
-        novadeck-suspend toggle
+        ( novadeck-suspend toggle ) &
       fi
       ;;
   esac

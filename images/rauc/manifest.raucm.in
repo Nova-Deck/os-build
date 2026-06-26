@@ -1,7 +1,7 @@
 # novadeck RAUC update manifest template — Phase 4.
 # images/genbundle.sh fills @PLACEHOLDERS@; `rauc bundle` computes the rootfs hash/size.
 [update]
-compatible=novadeck-@SOC@
+compatible=novadeck
 version=@VERSION@
 
 [bundle]

@@ -12,7 +12,7 @@
 # Runtime deps of precompiled packages (e.g. libiio for InputPlumber) are NOT hardcoded here —
 # each packages/<name>/prebuilt.pin declares its own `deps:`, aggregated into the install list.
 # — by running the pinned base under arm64 emulation and pacman-installing from the
-# holo repo, then exporting the augmented rootfs to work/base/<soc> (the directory
+# holo repo, then exporting the augmented rootfs to work/base/ (the directory
 # images/assemble-rootfs.sh consumes).
 #
 # Components NOT in the holo repo (e.g. InputPlumber, the handheld input daemon) ship as
@@ -29,21 +29,19 @@
 # Unlike fetch-base.sh (a file copy, no qemu), this EXECUTES arm64 userspace, so it
 # needs qemu binfmt — registered on demand via tonistiigi/binfmt. Network required.
 #
-#   images/customize-base.sh <soc>
+#   images/customize-base.sh
 #
 # Prints the exported rootfs path on stdout (like fetch-base.sh). FORCE=1 re-runs.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SOC="${1:-}"
-[ -n "$SOC" ] || { echo "usage: ${0##*/} <soc>" >&2; exit 2; }
 PINFILE="$ROOT/base.digest"
-DEST="$ROOT/work/base/$SOC"
+DEST="$ROOT/work/base"
 
 # Release runtime packages — credentials are NEVER installed here (test-only at assemble).
 # gamescope + seatd are the Deck-UI session compositor (SteamOS layer B) and its seat manager:
 # Phase 2 brings up BARE gamescope on Turnip before the jupiter-* port to isolate the
-# Turnip↔gamescope Wayland-WSI question (see devices/<soc>/bringup-phase2.md). Both are genuine
+# Turnip↔gamescope Wayland-WSI question (see devices/bringup-phase2.md). Both are genuine
 # release runtime (the gamescope session needs them), not test-only.
 # bluez + bluez-utils are the Bluetooth stack (layer C): the Deck UI pairs controllers/audio over
 # org.bluez, and the WCN7850 BT firmware already ships (assemble-rootfs.sh block 3b). bluetoothd is
@@ -109,12 +107,12 @@ fi
 # Canonical (sorted, de-duped) install set — the reuse-cache key recorded in the base below.
 EXPECTED_PKGS="$(printf '%s\n' "${INSTALL_PKGS[@]}" | sort -u)"
 
-# From-source overlay packages (packages/*/source.pin -> work/repo/<soc>/, built by
+# From-source overlay packages (packages/*/source.pin -> work/repo/<arch>/, built by
 # packages/build-overlay.sh) override holo binaries via a higher pkgrel. They don't change the
 # install SET, so fold the repo db's content hash into the reuse key — a rebuilt overlay (new
 # pkgrel/patch) then busts the cache even though PKGS is unchanged.
 # Arch-scoped (aarch64), shared across SoCs — overlay packages are plain aarch64 binaries every
-# device reuses, so they are NOT under work/base/<soc>. See packages/build-overlay.sh.
+# device reuses, so they are NOT under work/base/. See packages/build-overlay.sh.
 OVERLAY_REPO="$ROOT/work/repo/aarch64"
 OVERLAY_DB="$OVERLAY_REPO/novadeck.db.tar.zst"
 if [ -f "$OVERLAY_DB" ]; then
@@ -168,7 +166,7 @@ printf '%s\n' "$EXPECTED_MANIFEST" >"$PREBUILT_DIR/prebuilt.manifest"
 # Install-set marker (reuse-cache key only; NOT a tar list) — the full sorted package set.
 printf '%s\n' "$EXPECTED_PKGS" >"$PREBUILT_DIR/pkgs"
 
-cid="nova-custom-$SOC-$$"
+cid="nova-custom-$$"
 trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
 
 # Mount the from-source overlay repo (if built) read-only so the in-container pacman can install
@@ -238,8 +236,8 @@ echo "[novadeck] exporting customized base -> ${DEST#"$ROOT"/}" >&2
 # squashes the whole tree to that uid — which makes sshd refuse its non-root privsep dir
 # (/usr/share/empty.sshd) and is wrong for everything else too. Remove any prior export as
 # root as well (after this fix it is root-owned, so the build user can't unlink it).
-mkdir -p "$ROOT/work/base"
-docker run --rm -v "$ROOT/work/base":/wb "$REF" rm -rf "/wb/$SOC"
+mkdir -p "$ROOT/work"
+docker run --rm -v "$ROOT/work":/wb "$REF" rm -rf "/wb/base"
 mkdir -p "$DEST"
 docker export "$cid" | docker run --rm -i -v "$DEST":/dest "$REF" \
   tar -C /dest --numeric-owner -xf -

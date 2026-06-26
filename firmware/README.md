@@ -16,13 +16,13 @@ Two firmware sources:
 
 | File | Purpose |
 |---|---|
-| `fetch-linux-fw.sh <soc>` | Fetch the open `linux-fw` blobs at the pinned commit into `linux-fw/<soc>/`, per-file sha256-verified. Host, network. |
+| `fetch-linux-fw.sh` | Fetch the open `linux-fw` blobs at the pinned commit into `linux-fw/`, per-file sha256-verified. Host, network. SoC-agnostic flat tree. |
 | `fetch-qcom-fw.sh` | Fetch the device-proprietary `qcom-fw` tree from the pinned qcom-firmwares commit into `qcom-fw/`, verified against the repo's `sha256sums.txt`. Host, network. SoC-agnostic (blobs are self-namespaced by on-device path). |
-| `manifest.sh <soc>` | Verify the SoC manifest against the **built** kernel: cross-checks DTB `firmware-name` + module `MODULE_FIRMWARE` and reports missing/unbacked entries. Run after `kernel/build.sh`. |
+| `manifest.sh` | Verify the **union** manifest against the **built** kernel: cross-checks DTB `firmware-name` + module `MODULE_FIRMWARE` and reports missing/unbacked entries. Run after `kernel/build.sh`. |
 
-Per-SoC requirements live in `devices/<soc>/firmware-manifest.txt`. `manifest.sh`
-needs `dtc` + `objcopy`, so run it inside the build image:
+Firmware requirements live in `devices/firmware-manifest.txt` (union of all boards).
+`manifest.sh` needs `dtc` + `objcopy`, so run it inside the build image:
 
 ```
-docker run --rm -v "$PWD":/src -w /src novadeck-build firmware/manifest.sh sm8650
+docker run --rm -v "$PWD":/src -w /src novadeck-build firmware/manifest.sh
 ```

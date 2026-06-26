@@ -5,13 +5,11 @@
 # A/B GPT on a target disk/image. Prints the script to stdout; with a target it also
 # applies it. Side-effect-free unless a target is given.
 #
-#   images/genpart.sh <soc>            # print sgdisk script
-#   images/genpart.sh <soc> <target>   # also apply to <target> (disk or image file)
+#   images/genpart.sh            # print sgdisk script
+#   images/genpart.sh <target>   # also apply to <target> (disk or image file)
 set -euo pipefail
 
-SOC="${1:-}"
-[ -n "$SOC" ] || { echo "usage: ${0##*/} <soc>" >&2; exit 2; }
-TARGET="${2:-}"
+TARGET="${1:-}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TABLE="$ROOT/images/partition-table.txt"
 [ -f "$TABLE" ] || { echo "no partition table: $TABLE" >&2; exit 1; }
@@ -32,7 +30,7 @@ partlines="$(awk '
   }' "$TABLE")"
 
 emit() {
-  echo "# novadeck $SOC A/B GPT — generated from images/partition-table.txt"
+  echo "# novadeck A/B GPT — generated from images/partition-table.txt"
   echo "# minimum target size: ${minmib} MiB ('home' expands to fill the rest)"
   echo 'DISK="${DISK:?set DISK to the target disk or image}"'
   echo 'sgdisk -Z "$DISK"   # zap any existing GPT/MBR'

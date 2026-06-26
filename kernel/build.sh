@@ -1,18 +1,22 @@
 #!/usr/bin/env bash
-# novadeck kernel build. Requires an aarch64 build host (or CROSS_COMPILE) + toolchain.
+# novadeck unified kernel build. Requires an aarch64 build host (or CROSS_COMPILE) + toolchain.
 #
-# Steps: fetch+verify pinned tarball -> apply patches -> inject device trees ->
-# merge config fragment -> build Image.gz + dtbs -> stage for boot packaging.
+# One Image.gz serves EVERY supported SoC/board: a single arm64 kernel built with the union
+# of all config fragments, all out-of-tree patches, and all device trees. The boot stage
+# bundles every board DTB into one artifact and the bootloader's DTB picker selects at boot.
+#
+# Steps: fetch+verify pinned tarball -> apply all patches -> inject all device trees ->
+# merge all config fragments -> build Image.gz + every dtb + modules -> stage for boot packaging.
+#
+#   kernel/build.sh           # no SoC argument — the build is unified
 set -euo pipefail
 shopt -s nullglob
 
-SOC="${1:-}"
-[ -n "$SOC" ] || { echo "usage: ${0##*/} <soc>" >&2; exit 2; }
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-# Per-SoC home: config fragment, out-of-tree patches and device trees all live under
-# kernel/<soc>/ since different platforms need different patches and DTs.
-SOCDIR="$ROOT/kernel/$SOC"
-FRAGMENT="$SOCDIR/${SOC}.config"
+# Unified kernel home: config fragments (kernel/*.config), out-of-tree patches
+# (kernel/patches/) and device trees (kernel/dts/qcom/) — all SoCs folded into one tree.
+KDIR_REPO="$ROOT/kernel"
+FRAGMENTS=("$KDIR_REPO"/*.config)   # every fragment is merged (union across SoCs)
 # BASE_CONFIG: path to a complete .config to use verbatim (copied in, then olddefconfig).
 # When set, the defconfig+fragment merge is skipped entirely — used to build a known-good
 # vendor config (e.g. ROCKNIX) exactly as-is rather than as a fragment overlay.
@@ -27,11 +31,11 @@ WORK="${WORK:-$ROOT/work/kernel}"
 TARBALL="$WORK/linux-${KVER}.tar.xz"
 
 if [ -n "$BASE_CONFIG" ]; then
-  echo "[novadeck] SoC=$SOC base-config=$BASE_CONFIG (verbatim) kernel=$KVER"
+  echo "[novadeck] base-config=$BASE_CONFIG (verbatim) kernel=$KVER"
   [ -f "$BASE_CONFIG" ] || { echo "missing base config: $BASE_CONFIG" >&2; exit 1; }
 else
-  echo "[novadeck] SoC=$SOC fragment=$FRAGMENT kernel=$KVER"
-  [ -f "$FRAGMENT" ] || { echo "missing config fragment: $FRAGMENT" >&2; exit 1; }
+  [ "${#FRAGMENTS[@]}" -gt 0 ] || { echo "no config fragments in $KDIR_REPO/*.config" >&2; exit 1; }
+  echo "[novadeck] fragments=${FRAGMENTS[*]#"$ROOT"/} kernel=$KVER"
 fi
 
 # Fetch + verify the pinned tarball (idempotent), then extract a clean tree.
@@ -44,54 +48,52 @@ tar -C "$WORK" -xf "$TARBALL"
 echo "[novadeck] source ready at $SRCDIR"
 
 # --- Apply out-of-tree patches in lexical order (rename files to reorder) ---
-for p in "$SOCDIR"/patches/*.patch; do
+for p in "$KDIR_REPO"/patches/*.patch; do
   echo "[novadeck] applying $(basename "$p")"
   patch -p1 -d "$SRCDIR" --no-backup-if-mismatch <"$p" \
     || { echo "patch FAILED: $(basename "$p")" >&2; exit 1; }
 done
 
-# --- Inject novadeck device trees + register board dtbs in the qcom Makefile ---
+# --- Inject novadeck device trees + register every board dtb in the qcom Makefile ---
+# Boards are DISCOVERED from the top-level .dts files (one per board); .dtsi are includes.
 QCOM_DTS="$SRCDIR/arch/arm64/boot/dts/qcom"
-cp "$SOCDIR"/dts/qcom/*.dtsi "$SOCDIR"/dts/qcom/*.dts "$QCOM_DTS"/
-BOARDS=(sm8650-ayaneo-ps2 sm8650-konkr-pf)
+cp "$KDIR_REPO"/dts/qcom/*.dtsi "$KDIR_REPO"/dts/qcom/*.dts "$QCOM_DTS"/
+BOARDS=()
+for dts in "$KDIR_REPO"/dts/qcom/*.dts; do BOARDS+=( "$(basename "${dts%.dts}")" ); done
+[ "${#BOARDS[@]}" -gt 0 ] || { echo "no board .dts in kernel/dts/qcom/" >&2; exit 1; }
 for b in "${BOARDS[@]}"; do
   grep -q "${b}\.dtb" "$QCOM_DTS/Makefile" \
     || echo "dtb-\$(CONFIG_ARCH_QCOM) += ${b}.dtb" >> "$QCOM_DTS/Makefile"
 done
+echo "[novadeck] ${#BOARDS[@]} board(s): ${BOARDS[*]}"
 
 # --- Stage built-in firmware (CONFIG_EXTRA_FIRMWARE) ---
 # Like ROCKNIX, bake firmware into the Image so the blobs are present before the SD-card
-# rootfs mounts. Each EMBED entry is copied into the kernel tree's firmware/ dir (the
-# default CONFIG_EXTRA_FIRMWARE_DIR) under the exact /lib/firmware-relative path the driver
-# requests; CONFIG_EXTRA_FIRMWARE is then DERIVED from this same list after configuring
-# (see below) — single source of truth, works on both the fragment and BASE_CONFIG paths,
-# so nothing has to be hand-maintained in the kernel config. Open Adreno blobs come from
-# the pinned linux-firmware (firmware/fetch-linux-fw.sh); the per-board zap shaders + the
-# AudioReach tplg come from the device-proprietary firmware repo (firmware/fetch-qcom-fw.sh).
-LFW="$ROOT/firmware/linux-fw/$SOC"
+# rootfs mounts. The embed set is the UNION of every SoC's early-boot blobs, listed one
+# /lib/firmware-relative path per line in kernel/embed.list (single source of truth — add a
+# SoC/board by appending there, no edit here). Each path is resolved against the open
+# linux-firmware tree (firmware/linux-fw, fetch-linux-fw.sh) then the device-proprietary tree
+# (firmware/qcom-fw, fetch-qcom-fw.sh); it is copied into the kernel tree's firmware/ dir (the
+# pinned CONFIG_EXTRA_FIRMWARE_DIR) under that exact path, and CONFIG_EXTRA_FIRMWARE is DERIVED
+# from the list after configuring (below) — works on both the fragment and BASE_CONFIG paths.
+LFW="$ROOT/firmware/linux-fw"
 FWX="$ROOT/firmware/qcom-fw"
-EMBED=(
-  "$LFW/qcom/gen70900_aqe.fw"
-  "$LFW/qcom/gen70900_sqe.fw"
-  "$LFW/qcom/gmu_gen70900.bin"
-  "$FWX/qcom/sm8650/ayaneo/ps2/gen70900_zap.mbn"
-  "$FWX/qcom/sm8650/konkr/pf/gen70900_zap.mbn"
-  # AudioReach topology (q6apm) — both boards' card-model-named tplg (qcom-fw repo).
-  "$FWX/qcom/sm8650/SM8650-APS2-tplg.bin"
-  "$FWX/qcom/sm8650/SM8650-KPF-tplg.bin"
-)
+EMBED_LIST="$KDIR_REPO/embed.list"
+[ -f "$EMBED_LIST" ] || { echo "missing embed list: $EMBED_LIST" >&2; exit 1; }
 echo "[novadeck] staging built-in firmware (CONFIG_EXTRA_FIRMWARE) into firmware/"
 EMBED_REL=""   # accumulates the /lib/firmware-relative paths -> CONFIG_EXTRA_FIRMWARE list
-for f in "${EMBED[@]}"; do
-  [ -f "$f" ] || {
-    echo "missing embed firmware: ${f#"$ROOT"/}" >&2
-    echo "  run firmware/fetch-linux-fw.sh $SOC (open blobs) + firmware/fetch-qcom-fw.sh (device blobs)" >&2
+while read -r rel _rest; do
+  case "$rel" in ''|'#'*) continue ;; esac
+  if   [ -f "$LFW/$rel" ]; then src="$LFW/$rel"
+  elif [ -f "$FWX/$rel" ]; then src="$FWX/$rel"
+  else
+    echo "missing embed firmware: $rel" >&2
+    echo "  run firmware/fetch-linux-fw.sh (open blobs) + firmware/fetch-qcom-fw.sh (device blobs)" >&2
     exit 1
-  }
-  rel="${f#"$LFW"/}"; rel="${rel#"$FWX"/}"   # path relative to its firmware root = /lib/firmware path
-  install -Dm0644 "$f" "$SRCDIR/firmware/$rel"
+  fi
+  install -Dm0644 "$src" "$SRCDIR/firmware/$rel"
   EMBED_REL="${EMBED_REL:+$EMBED_REL }$rel"
-done
+done < "$EMBED_LIST"
 
 # --- Configure + build ---
 # Cross-compile unless the build host is itself aarch64. Default to the standard GNU
@@ -117,10 +119,11 @@ CC=(${CROSS_COMPILE:+CROSS_COMPILE=$CROSS_COMPILE})
     cp "$BASE_CONFIG" .config
     make ARCH=arm64 "${CC[@]}" olddefconfig
   else
-    scripts/kconfig/merge_config.sh -m arch/arm64/configs/defconfig "$FRAGMENT"
+    # Merge defconfig with EVERY novadeck fragment (union across SoCs).
+    scripts/kconfig/merge_config.sh -m arch/arm64/configs/defconfig "${FRAGMENTS[@]}"
     make ARCH=arm64 "${CC[@]}" olddefconfig
   fi
-  # Embed the staged blobs into the Image. Derive CONFIG_EXTRA_FIRMWARE from the EMBED
+  # Embed the staged blobs into the Image. Derive CONFIG_EXTRA_FIRMWARE from the embed
   # list above (single source of truth), so neither the fragment nor a verbatim
   # BASE_CONFIG has to carry the per-file list. Pin EXTRA_FIRMWARE_DIR to the kernel
   # tree's "firmware/" dir where the staging loop installs the blobs — the Kconfig
@@ -132,8 +135,8 @@ CC=(${CROSS_COMPILE:+CROSS_COMPILE=$CROSS_COMPILE})
   make ARCH=arm64 "${CC[@]}" -j"$(nproc)" Image.gz dtbs modules
 )
 
-# --- Stage artifacts for boot packaging (Phase 5) ---
-OUT="$ROOT/out/$SOC"; mkdir -p "$OUT/dtbs"
+# --- Stage artifacts for boot packaging ---
+OUT="$ROOT/out"; mkdir -p "$OUT/dtbs"
 cp "$SRCDIR/arch/arm64/boot/Image.gz" "$OUT/"
 for b in "${BOARDS[@]}"; do cp "$QCOM_DTS/${b}.dtb" "$OUT/dtbs/"; done
 

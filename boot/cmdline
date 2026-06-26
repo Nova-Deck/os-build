@@ -1,0 +1,1 @@
+quiet video=efifb:off console=tty0 root=PARTLABEL=novadeck-root rootfstype=btrfs rootwait rw cgroup.memory=nokmem,nosocket nosoftlockup panic=5

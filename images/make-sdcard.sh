@@ -12,21 +12,19 @@
 # sgdisk, and dd's both filesystem images into their partition byte offsets — no loop
 # mounts, no root.
 #
-#   images/make-sdcard.sh <soc>
+#   images/make-sdcard.sh
 #
 # Run inside the build image (needs sgdisk + mkfs.vfat + mtools):
 #   docker run --rm -v "$PWD":/src -w /src novadeck-build images/make-sdcard.sh sm8650
 #
-# Prereqs: boot/package.sh (-> out/<soc>/boot/<soc>-boot.img) and images/build-image.sh
-# (-> out/<soc>/images/rootfs.img) have run.
+# Prereqs: boot/package.sh (-> out/boot/novadeck-boot.img) and images/build-image.sh
+# (-> out/images/rootfs.img) have run.
 set -euo pipefail
 export MTOOLS_SKIP_CHECK=1   # mtools on a file image has no geometry; silence the warning
 
-SOC="${1:-}"
-[ -n "$SOC" ] || { echo "usage: ${0##*/} <soc>" >&2; exit 2; }
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-OUT="$ROOT/out/$SOC"
-KERNEL="$OUT/boot/${SOC}-boot.img"
+OUT="$ROOT/out"
+KERNEL="$OUT/boot/novadeck-boot.img"
 ROOTFS="$OUT/images/rootfs.img"
 IMGDIR="$OUT/images"
 IMG="$IMGDIR/sdcard.img"
@@ -38,15 +36,15 @@ END_SLACK_MIB=2                        # tail room for the backup GPT (well over
 for t in sgdisk mkfs.vfat mcopy; do
   command -v "$t" >/dev/null 2>&1 || { echo "$t not found — run inside novadeck-build" >&2; exit 1; }
 done
-[ -f "$KERNEL" ] || { echo "no boot image: ${KERNEL#"$ROOT"/} (run boot/package.sh $SOC)" >&2; exit 1; }
-[ -f "$ROOTFS" ] || { echo "no rootfs: ${ROOTFS#"$ROOT"/} (run images/build-image.sh $SOC)" >&2; exit 1; }
+[ -f "$KERNEL" ] || { echo "no boot image: ${KERNEL#"$ROOT"/} (run boot/package.sh)" >&2; exit 1; }
+[ -f "$ROOTFS" ] || { echo "no rootfs: ${ROOTFS#"$ROOT"/} (run images/build-image.sh)" >&2; exit 1; }
 
 MIB=$((1024 * 1024))
 rootfs_bytes=$(stat -c %s "$ROOTFS")
 rootfs_mib=$(( (rootfs_bytes + MIB - 1) / MIB ))                       # round up to MiB
 total_mib=$(( ALIGN_MIB + ESP_SIZE_MIB + rootfs_mib + END_SLACK_MIB ))
 
-echo "[novadeck] SD image $SOC: ESP ${ESP_SIZE_MIB}MiB + root ${rootfs_mib}MiB -> ${total_mib}MiB"
+echo "[novadeck] SD image: ESP ${ESP_SIZE_MIB}MiB + root ${rootfs_mib}MiB -> ${total_mib}MiB"
 
 # 1. ESP filesystem (FAT32) with the KERNEL boot image at its root.
 esp="$(mktemp)"; trap 'rm -f "$esp"' EXIT

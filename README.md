@@ -21,9 +21,9 @@ Lead bring-up target: **SM8650** (Adreno 750). Two hard go/no-go gates:
 |---|---|
 | `images/` | Image assembly recipes (A/B layout, Btrfs, RAUC bundles) |
 | `packages/` | novadeck-specific + ported SteamOS `jupiter-*` package builds |
-| `kernel/` | Kernel config, patches, per-SoC build |
+| `kernel/` | Unified kernel: config fragments, patches, all device trees, firmware embed list |
 | `firmware/` | Vendor firmware **extraction/bundling recipes** (no blobs committed) |
-| `devices/{sm8550,sm8650,sm8750}/` | Per-SoC device tree, config, firmware manifest, boot backend |
+| `devices/` | Shared device enablement: firmware manifest, InputPlumber config, bring-up notes |
 | `boot/` | Pluggable boot stage (android-bootimg / edk2-UEFI backends) |
 | `ci/` | GitHub Actions matrix builds + cosign signing |
 | `docs/` | Design notes (see [`docs/base-pin.md`](docs/base-pin.md)) |
@@ -41,15 +41,16 @@ because they drive Docker/qemu or the network themselves. Always go through `mak
 invoke the stage scripts by hand — and keep the Makefile in step when a stage is added or
 its inputs change.
 
-`SOC` is **mandatory** (no default — every artifact path is per-SoC); an empty or unset
-`SOC` is an error. `make help` lists every target.
+The build is **unified** — one image serves every supported SoC/board (SM8550 / SM8650 /
+SM8750), with a single kernel carrying the union of drivers/DTBs and all firmware. There is
+no `SOC` argument. `make help` lists every target.
 
 ```sh
 make help                       # list targets + knobs
-make sdcard SOC=sm8650          # full bring-up image -> out/sm8650/images/sdcard.img
-make kernel SOC=sm8650          # just Image.gz + dtbs + modules
-make image  SOC=sm8650          # just the read-only Btrfs root
-make clean  SOC=sm8650          # drop out/<soc> (clean-base / distclean go further)
+make sdcard                     # full bring-up image -> out/images/sdcard.img
+make kernel                     # just Image.gz + all dtbs + modules
+make image                      # just the read-only Btrfs root
+make clean                      # drop out/ (clean-base / distclean go further)
 ```
 
 Targets only rebuild when their inputs (source pins, patches, dts, config, firmware)

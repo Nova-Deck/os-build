@@ -4,7 +4,7 @@
 # For every packages/<name>/source.pin: fetch the holo PKGBUILD (raw, at the pinned commit —
 # anonymous read), drop our patches in, bump pkgrel so the build outranks the holo binary, and
 # `makepkg` it inside the pinned base-devel image under arm64 qemu emulation. The built
-# packages + a repo db land in work/repo/<soc>/, a local pacman repo that customize-base.sh
+# packages + a repo db land in work/repo/<arch>/, a local pacman repo that customize-base.sh
 # prepends ahead of the holo repos so the patched build is what actually gets installed.
 #
 # Host-side (drives docker, like customize-base.sh). Network required: the PKGBUILD comes from
@@ -44,7 +44,7 @@ esac
 
 pin_field() { sed -n "s/^$2:[[:space:]]*//p" "$1" | head -1; }
 
-# Fresh staging + repo each run, so no stale package versions linger in work/repo/<soc>/.
+# Fresh staging + repo each run, so no stale package versions linger in work/repo/<arch>/.
 rm -rf "$STAGE" "$REPO_DIR"; mkdir -p "$STAGE" "$REPO_DIR"
 
 for pin in "${PINS[@]}"; do

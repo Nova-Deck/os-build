@@ -6,18 +6,17 @@
 #   1. firmware-name properties in the built DTBs   (request_firmware via DT)
 #   2. MODULE_FIRMWARE entries in the built modules  (request_firmware in drivers)
 #
-# Run AFTER kernel/build.sh (needs out/<soc>/dtbs + work/kernel/<ver> modules).
-# Reports manifest entries that are unbacked and required firmware the manifest
-# does not list. Run inside the build image (needs dtc + objcopy):
-#   docker run ... novadeck-build firmware/manifest.sh sm8650
+# Run AFTER kernel/build.sh (needs out/dtbs + work/kernel/<ver> modules). The manifest is
+# the union of every board's firmware (devices/firmware-manifest.txt). Reports manifest
+# entries that are unbacked and required firmware the manifest does not list. Run inside the
+# build image (needs dtc + objcopy):
+#   docker run ... novadeck-build firmware/manifest.sh
 set -euo pipefail
 shopt -s nullglob
 
-SOC="${1:-}"
-[ -n "$SOC" ] || { echo "usage: ${0##*/} <soc>" >&2; exit 2; }
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-MANIFEST="$ROOT/devices/$SOC/firmware-manifest.txt"
-OUT="$ROOT/out/$SOC"
+MANIFEST="$ROOT/devices/firmware-manifest.txt"
+OUT="$ROOT/out"
 
 PIN="$ROOT/kernel/SOURCE.pin"
 KVER="$(sed -n 's/^version:[[:space:]]*//p' "$PIN" | head -1)"
@@ -71,7 +70,7 @@ fi
 man_fw="$(mktemp)"
 grep -vE '^[[:space:]]*(#|$)' "$MANIFEST" | awk '{print $2}' | sort -u >"$man_fw"
 
-echo "== novadeck firmware verify: $SOC (kernel $KVER) =="
+echo "== novadeck firmware verify: unified (kernel $KVER) =="
 echo "DTB firmware-name: $(wc -l <"$dt_fw")   MODULE_FIRMWARE: $(wc -l <"$mod_fw")   manifest entries: $(wc -l <"$man_fw")"
 
 echo "--- DT-requested firmware NOT in manifest (REQUIRED) ---"

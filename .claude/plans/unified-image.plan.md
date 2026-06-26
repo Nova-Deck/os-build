@@ -52,15 +52,18 @@ build axis, and the per-SoC directories are flattened.
 bash -n <every script>          # done — all pass
 make help                       # done — no SOC, unified banner
 grep -rn '$SOC' Makefile kernel/build.sh boot images firmware   # done — none
-# Pending (needs docker + toolchain + hardware):
-make sdcard                     # full unified build
-cat /proc/cmdline               # on sm8650 — confirm DT bootargs + common cmdline both present
+make sdcard                     # done — full unified build, out/images/sdcard.img (2840M)
+cat /proc/cmdline               # done — on sm8650, DT bootargs + common cmdline both present:
+#   irqaffinity=0-1 usbcore.interrupt_interval_override=045e:028e:2 \  (DTS chosen/bootargs)
+#   quiet video=efifb:off console=tty0 root=PARTLABEL=novadeck-root rootfstype=btrfs \
+#   rootwait rw cgroup.memory=nokmem,nosocket nosoftlockup panic=5      (boot/cmdline, common)
+# ABL APPENDS common after board args (disjoint, in order) — top risk retired.
 ```
 
 ## Risks
 | Risk | Mitigation |
 |---|---|
-| ABL replaces (not appends) chosen/bootargs → board args lost | post-boot `/proc/cmdline` check; fallback = full per-board DTS bootargs |
+| ~~ABL replaces (not appends) chosen/bootargs → board args lost~~ | **RETIRED** — on-device `/proc/cmdline` confirms ABL appends common after board args (both present, disjoint, in order) |
 | Future SoC config-fragment / patch conflicts | `merge_config.sh -m` reports overrides; only sm8650 populated today |
 | Embedded-firmware union inflates Image.gz | `embed.list` keeps the set curated, not the whole manifest |
 | On-device regression vs per-SoC image | sm8650 HW boot is the gate; kernel/dtb content for sm8650 is byte-equivalent |
@@ -71,5 +74,5 @@ cat /proc/cmdline               # on sm8650 — confirm DT bootargs + common cmd
 - [x] Kernel discovers boards/fragments/patches/dts; firmware embed unioned
 - [x] cmdline split (common → boot/cmdline, board → DTS chosen/bootargs)
 - [x] `bash -n` + `make help` pass; no residual `$SOC`
-- [ ] `make sdcard` full build (needs build host)
-- [ ] On-device sm8650 boot + `/proc/cmdline` verification
+- [x] `make sdcard` full build → `out/images/sdcard.img` (2840M: 256M ESP + 2.5G root)
+- [x] On-device sm8650 boot + `/proc/cmdline` verification — CONFIRMED (board+common args both present, in order)

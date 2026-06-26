@@ -296,14 +296,13 @@ set -eu
 unset WAYLAND_DISPLAY DISPLAY
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/0}"
 mkdir -p "$XDG_RUNTIME_DIR"; chmod 700 "$XDG_RUNTIME_DIR"
-# Disable the gamescope WSI Vulkan layer — the ROOT-CAUSE FIX for the re-launch freeze (matches the
-# novadeck-session launcher). The layer's Wayland explicit-sync (linux-drm-syncobj) present path wedges
-# the client (drm_syncobj_array_wait_timeout) only on RE-LAUNCH after a prior instance; a true power-on
-# is always clean. HW testing (step 1e, session 4) proved this is a userspace WSI syncobj-fence race,
-# not stale GPU/DRM-master state: graceful SIGTERM teardown still wedges ~50%, dmesg shows no GPU
-# faults, and WSI off (implicit-sync fallback) is 8/8 clean on re-launch. So this is the fix, not a
-# mask; only cost is WSI HDR (no HDR panels in the fleet). See devices/sm8650/bringup-phase2.md (step 1e).
-export ENABLE_GAMESCOPE_WSI=0
+# Keep the gamescope WSI Vulkan layer ON by default (matches the novadeck-session launcher + upstream
+# ChimeraOS gamescope-session-plus). NOTE: this smoke is a RE-LAUNCH-heavy bring-up tool, and with WSI
+# on, re-launching gamescope after a prior instance intermittently wedges (the client blocks in
+# drm_syncobj_array_wait_timeout on a never-signaling explicit-sync fence — a userspace race, NOT stale
+# GPU state; a fresh power-on is always clean). While iterating over SSH you can force the clean
+# implicit-sync path with `ENABLE_GAMESCOPE_WSI=0 nova-gamescope-smoke`. See bringup-phase2.md step 1e.
+export ENABLE_GAMESCOPE_WSI="${ENABLE_GAMESCOPE_WSI:-1}"
 client="${1:-vkcube}"
 echo "[nova] gamescope DRM smoke: client=$client  XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR"
 # An SSH session has no graphical logind seat, and the holo libseat is built with only the

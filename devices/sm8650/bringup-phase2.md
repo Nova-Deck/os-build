@@ -28,7 +28,7 @@ gamescope needs are all present on Adreno 750.
 | 1b | gamescope opens DRM/KMS | ✅ seat via `seatd-launch` (libseat has no `builtin` backend); opens `/dev/dri/card0`, DSI-1 @ native `1440x2560@60`, first modeset commit scans out a frame |
 | 1c | Vulkan client renders under gamescope | ✅ patched gamescope + `--use-rotation-shader` → vkcube animates upright-landscape on panel |
 | 1d | Input reaches the client | ✅ gamescope passes the InputPlumber virtual DualSense through to its hosted child (does NOT EVIOCGRAB the pad) — the path the Phase-3 Steam shell needs |
-| 1e | Per-frame atomic flip | ✅ rotation fixed (composite shader); re-launch freeze fixed (`ENABLE_GAMESCOPE_WSI=0`) — see below |
+| 1e | Per-frame atomic flip | ✅ rotation fixed (composite shader); re-launch freeze characterized — WSI kept **ON** (release launches once), see below |
 
 **How to run** (TEST build, SSH in, watch the panel): `nova-gamescope-smoke [client]` — gamescope
 `--backend drm --use-rotation-shader -- vkcube` (or a swapped nested client). Ships **test-only**
@@ -51,30 +51,39 @@ from-source overlay package (`packages/gamescope/`, see `packages/README.md`); t
 inserted ahead of the holo repos so the patched build wins. `novadeck-session` +
 `nova-gamescope-smoke` pass the flag.
 
-### Resolved 1e (b): re-launch freeze → `ENABLE_GAMESCOPE_WSI=0`
+### 1e (b): re-launch freeze — characterized; WSI kept ON
 A steady session intermittently wedged: the client (`vkcube`) blocks forever in
 `drm_syncobj_array_wait_timeout` on a **never-signaling explicit-sync fence** in gamescope's WSI
 `linux-drm-syncobj` present path, while `gamescope-kms` idles in `ppoll` — a userspace fence
-deadlock (this is the gamescope explicit-sync regression class, `linux_drm_syncobj` added in v3.15).
+deadlock (the gamescope explicit-sync regression class, `linux_drm_syncobj` added in v3.15).
 
 **It is a re-launch artefact, not a fresh-boot race:** a true first-gamescope-since-power-on (L1) is
-clean; only a re-launch after a prior instance (L2) wedges. dmesg shows zero GPU
-faults/hangcheck/recovery/syncobj-timeout across all trials, so it is **not** stale GPU or
-DRM-master state — and a clean teardown does **not** prevent it (graceful SIGTERM re-launch wedges
-the same ~50% as SIGKILL).
+clean (10/10); only a re-launch after a prior instance (L2) wedges (~50%). dmesg shows zero GPU
+faults/hangcheck/recovery/syncobj-timeout across all trials, so it is **not** stale GPU or DRM-master
+state — and a clean teardown does **not** prevent it (graceful SIGTERM re-launch wedges the same
+~50% as SIGKILL).
 
-**Fix: `ENABLE_GAMESCOPE_WSI=0`** (in `session/usr/bin/novadeck-session` + the smoke helper).
-Disabling the WSI Vulkan layer makes the client use a plain Wayland swapchain → **implicit sync**
-(dma-fence on the buffer), sidestepping the racy syncobj. This is the **root-cause-level fix, not a
-mask**. Only cost is the gamescope WSI HDR path — out of scope (no HDR panels in the fleet).
+**Decision: keep `ENABLE_GAMESCOPE_WSI=1`** (the upstream + ChimeraOS `gamescope-session-plus`
+default — see their [`gamescope-session-plus`](https://github.com/ChimeraOS/gamescope-session/blob/73d2da8/usr/share/gamescope-session-plus/gamescope-session-plus#L51)),
+set in `session/usr/bin/novadeck-session` + the smoke helper (env-overridable, defaults on). The FROG
+WSI layer is the **standard present path** — framerate limiter / frame pacing, latency control,
+adaptive-sync hints AND HDR — so disabling it is **not** just an HDR loss; it degrades all of those.
+Since the release product boots gamescope **once per power-on** (the clean L1 case), the re-launch
+wedge should not bite in normal use.
+
+**Residual risk (OPEN):** the session unit's `Restart=on-failure`, or any deliberate session restart,
+takes the L2 re-launch path and may wedge. If that proves a real problem in the field, the fallback is
+`ENABLE_GAMESCOPE_WSI=0` (implicit sync → 8/8 clean re-launch) at the cost of the WSI features above,
+or a genuine teardown/explicit-sync fix upstream. (A `--ready-fd` ready-then-launch handshake — run
+gamescope bare, launch the client only once it signals ready — was prototyped but never proven to
+reliably dodge the wedge.)
 
 **Dead ends (do not retry):** `--immediate-flips` is KMS-unsupported on msm (no
 `DRM_CAP_ATOMIC_ASYNC_PAGE_FLIP`) and never the fix; the `/etc/gamescope/scripts/*.lua`
 `drm_debug_disable_explicit_sync` convar toggles a different (KMS-side) layer and is not a fix; a
-Turnip/Mesa version bump does not fix the freeze (reproduced on newer Mesa than ROCKNIX); the
-`--ready-fd` HDR-preserving handshake is moot (no HDR panels). gamescope was bumped to 3.16.23.2 as
-a local-PKGBUILD overlay for newer-Turnip/ROCKNIX parity (it roughly halves but does not fix the
-wedge alone). For liveness probing without perturbing the display, see the GPU-liveness method
+Turnip/Mesa version bump does not fix the freeze (reproduced on newer Mesa than ROCKNIX). gamescope
+was bumped to 3.16.23.2 as a local-PKGBUILD overlay for newer-Turnip/ROCKNIX parity (it roughly
+halves but does not fix the wedge alone). For liveness probing without perturbing the display, see the GPU-liveness method
 (client `drm-engine-gpu` fdinfo delta + crtc framecount; never poll `/sys/kernel/debug/dri/0/gpu`).
 
 ## Step 2 — gamescope session (Deck UI shell) [DONE]
@@ -87,7 +96,7 @@ A static, SoC-agnostic overlay mirror-copied into the rootfs by `images/assemble
 
 | File | Role |
 |---|---|
-| `/usr/bin/novadeck-session` | launcher: `seatd-launch` + env (incl. `ENABLE_GAMESCOPE_WSI=0`) + patched gamescope (`--backend drm --use-rotation-shader`) → runs `$NOVADECK_SESSION_CMD` |
+| `/usr/bin/novadeck-session` | launcher: `seatd-launch` + env (`ENABLE_GAMESCOPE_WSI=1`, default) + patched gamescope (`--backend drm --use-rotation-shader`) → runs `$NOVADECK_SESSION_CMD` |
 | `/etc/novadeck/session.conf` | single config point — `NOVADECK_SESSION_CMD` (Phase-2 placeholder `vkcube`; Phase-3 → `steam -gamepadui …`), `NOVADECK_GAMESCOPE_EXTRA` |
 | `/usr/lib/systemd/system/novadeck-session.service` | `Conflicts=getty@tty1`, `After=inputplumber`, `Restart=on-failure` |
 

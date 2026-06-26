@@ -18,16 +18,23 @@ investigation that produced it.
     GPU never hangs and DRM-master is not stale (either would log and/or clear on a clean exit).
     The wedge is an intermittent **never-signaling syncobj fence in gamescope's `linux-drm-syncobj`
     WSI handshake on re-launch** — a userspace logical deadlock, not driver/HW state.
-  - **Conclusion:** `ENABLE_GAMESCOPE_WSI=0` is the **root-cause-level fix, not a mask** — implicit
-    sync (dma-fence on the buffer) sidesteps the racy syncobj entirely. It **stays**. Its only
-    cost (gamescope WSI HDR) is out of scope — no HDR panels in the fleet.
+  - **Conclusion (HW characterization):** the wedge is a userspace WSI explicit-sync syncobj race,
+    bites only re-launch (L2), and `ENABLE_GAMESCOPE_WSI=0` (implicit sync) makes re-launch 8/8 clean.
+  - **DECISION REVISED 2026-06-26 — keep `ENABLE_GAMESCOPE_WSI=1` (do NOT ship =0).** Upstream
+    gamescope + ChimeraOS `gamescope-session-plus` keep WSI on; the FROG WSI layer is the standard
+    present path (framerate limiter / frame pacing, latency, adaptive-sync hints AND HDR), so
+    disabling it is NOT only an HDR loss — it degrades all of those. The release product launches
+    gamescope ONCE per power-on (the clean L1 case, 10/10), so the re-launch wedge should not bite.
+    `=0` is the env-overridable **fallback** if `Restart=on-failure` / a session restart ever wedges
+    in the field. Launcher + smoke now default `ENABLE_GAMESCOPE_WSI=${...:-1}`. **Residual risk: OPEN.**
   - Re-validation harness now lives on the test device at `/root/freeze-trial-graceful.sh`
     (`WSI=0|ON TEARDOWN=TERM|KILL N=<trials>`; client-GPU oracle = `drm-engine-*` fdinfo delta).
     DHCP IP drifts — `192.168.1.186` as of 2026-06-25.
 
-- [x] **`--ready-fd` HDR-preserving handshake** ✅ **CLOSED — moot.** Was only worth it if HDR was
-  needed *and* clean teardown couldn't drop `ENABLE_GAMESCOPE_WSI=0`. Clean teardown is disproven
-  (above) and there are no HDR panels in the fleet, so there is nothing to preserve.
+- [ ] **`--ready-fd` ready-then-launch handshake (candidate mitigation for the residual L2 wedge).**
+  Run gamescope bare and launch the client only after it signals ready via `--ready-fd`. Prototyped
+  but never proven to reliably dodge the re-launch wedge. Only relevant now as a possible fix for the
+  residual-risk path (session restart with WSI on) — not needed unless that bites in the field.
 
 ## Phase 2 — HW-support (layer C)
 

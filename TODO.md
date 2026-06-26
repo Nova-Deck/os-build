@@ -74,7 +74,11 @@ investigation that produced it.
   already ships (assemble-rootfs.sh block 3b). ✅ **HW-VALIDATED 2026-06-25:** `bluetoothctl list`
   shows the adapter up — `Controller 00:03:7F:65:52:07 archlinux [default]` (00:03:7F = Qualcomm/
   Atheros OUI = WCN7850 BT radio), so bluetoothd runs, firmware loaded, and the overlay enablement
-  took. **Remaining HW sub-check:** actually pair a controller (scan/pair/connect a gamepad).
+  took. **Pairing sub-check — accepted as low-risk, no dedicated test (2026-06-26):** the WCN7850
+  radio + identical BlueZ stack already pair/connect controllers under ROCKNIX on this hardware, and
+  our adapter is confirmed up, so controller pairing is a known-good path rather than an open unknown.
+  It will be exercised for real in the Phase-3 Steam shell (gamepadui Bluetooth); no separate
+  bring-up test ships.
 
 - [x] **Release Wi-Fi resume after userspace suspend.** ✅ **DONE + HW-validated 2026-06-25 (.186) —
   no hook needed.** NetworkManager re-associates Wi-Fi **unaided** after a `novadeck-suspend` cycle

@@ -1,0 +1,23 @@
+[Unit]
+Description=novadeck native arm64 Steam bootstrap (SteamOS layer D — stage the Deck shell)
+# Stage the writable Steam tree once, before the gamescope session launches it. Needs the network
+# (fetches the client seed + arm64 runtime from Valve's CDN) and a synced clock for TLS — both come
+# up earlier in multi-user (NetworkManager + systemd-timesyncd, enabled in the hw-support overlay).
+After=network-online.target systemd-timesyncd.service
+Wants=network-online.target
+# Skip entirely once the native client is staged (idempotent; the script also self-skips).
+ConditionPathExists=!/home/deck/.local/share/Steam/steamrtarm64/steam
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/novadeck/steam-bootstrap.sh
+# First fetch can be large/slow on a cold cache; don't let the default kill it mid-download.
+TimeoutStartSec=900
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+# Pulled in by novadeck-session.service (Wants=). Not on its own preset: it runs only when we
+# actually boot to the Steam shell, mirroring how the session unit ships installed-but-disabled.
+WantedBy=novadeck-session.service

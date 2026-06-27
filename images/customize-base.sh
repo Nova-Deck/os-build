@@ -57,7 +57,9 @@ DEST="$ROOT/work/base"
 # (audio/ overlay, cards SM8650-APS2/SM8650-KPF) Include; pipewire-pulse/-alsa give the
 # PA/ALSA shims so games + BlueZ (A2DP/HFP) route through PipeWire, wireplumber is the
 # session manager. (pipewire-jack omitted — not needed for game/BT audio.)
-PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-tools mesa gamescope seatd bluez bluez-utils networkmanager alsa-ucm-conf pipewire wireplumber pipewire-pulse pipewire-alsa)
+# unzip: the native arm64 Steam client seed ships as a .zip the steam-bootstrap stages on first
+# boot (SteamOS layer D, steam/ overlay). curl/tar/xz are already in the base.
+PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-tools mesa gamescope seatd bluez bluez-utils networkmanager alsa-ucm-conf pipewire wireplumber pipewire-pulse pipewire-alsa unzip)
 
 # Test-only packages — installed ONLY under NOVADECK_TEST=1, NEVER in a release base.
 # On-device bring-up tools: evtest reads raw /dev/input events; usbutils provides lsusb.

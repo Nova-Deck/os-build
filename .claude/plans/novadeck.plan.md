@@ -159,6 +159,83 @@ fidelity backlog:
 - **Note**: anti-cheat / per-title FEX limits cap *library* parity (the fidelity-bar non-goal),
   not the shell.
 
+- **GATE CLEARED — native arm64 Steam confirmed live (2026-06-27)**, via ROCKNIX's
+  `Install Steam.sh` (`ROCKNIX/distribution` next branch). Verified artifacts (HTTP 200, serve
+  arm64 bins):
+  - **Runtime**: `https://repo.steampowered.com/steamrt3c/images/latest-public-beta/steam-runtime-steamrt-arm64.tar.xz`
+  - **Client** (**publicbeta channel ONLY**): manifest `https://client-update.fastly.steamstatic.com/steam_client_publicbeta_linuxarm64`
+    → parse `bins_linuxarm64_linuxarm64.zip.<hash>` → fetch from `https://client-update.steamstatic.com/`.
+    Client dir is `steamrtarm64/steam` (native aarch64); `echo publicbeta > package/beta`.
+  - **Proton**: **Proton-CachyOS arm64** (community), e.g.
+    `github.com/CachyOS/proton-cachyos/releases/.../proton-cachyos-11.0-*-arm64.tar.xz`,
+    plus a bundled "Proton 11.0 (ARM64)". (Stock Valve Proton has no arm64 build.)
+  - **Turnip→FEX passthrough**: copy `libvulkan_freedreno.so` into the FEX **x86 Arch RootFS**
+    `/usr/lib` so x86 games under FEX get native Adreno Vulkan (our Turnip; Vulkan gate already
+    cleared). FEX RootFS = `FEXRootFSFetcher --distro-name=arch --distro-version=rolling`.
+  - **First-launch dance**: disable x86/x86_64 binfmt, run x86 steam under FEX twice
+    (`-steamdeck -exitsteam`) to seed config, then run the **native** arm64 client once, then
+    `systemctl restart systemd-binfmt`.
+- **ROCKNIX is a TECHNICAL REFERENCE ONLY, not an architectural template.** It proves arm64
+  Steam runs and gives us the verified recipe above (URLs, channel, Turnip→FEX thunk,
+  Proton-CachyOS, first-launch dance). Its *integration UX* — a manual "Install Steam" entry in
+  an EmulationStation menu, installed into a `/storage` emulator-roms layout — is **explicitly
+  NOT our target**. novadeck's north star is SteamOS-on-Deck fidelity: boot straight into the
+  Deck UI with Steam already present, silent self-update, zero manual install step.
+- **What's settled vs SteamOS**: the Steam client self-updates, so on SteamOS too it lives in
+  the **writable home/var area** (`~/.local/share/Steam`, `~/.steam`), NOT the sealed `/usr`
+  rootfs — so "client blobs are not baked into the sealed image, the machinery is" holds for our
+  model as well (and baking publicbeta blobs would be wrong — they update frequently). The image
+  bakes the machinery: FEX + FEXRootFSFetcher, binfmt_misc reg, the `libvulkan_freedreno.so`
+  thunk, Proton bundle config/vdfs, plus the bootstrap glue.
+- **Bootstrap model — RESOLVED via Armada (`virtudude/armada`), our direct peer** (Fedora-bootc
+  SteamOS-like distro, SAME SoCs SM8550/8650/8750, boots straight into Deck UI). Armada
+  **bakes a pre-bootstrapped Steam tree into the image** rather than ROCKNIX's manual-menu
+  install or a cold first-boot fetch (`build_files/generate-steam-bootstrap.sh`):
+  - Channel `steamdeck_publicbeta` → manifest `steam_client_steamdeck_publicbeta_linuxarm64`
+    (note: differs from ROCKNIX's plain `publicbeta`). Fetch arm64 seed zip + runtime tarball,
+    then **run `steamrtarm64/steam -steamdeck -exitsteam` headless under Xvfb AT BUILD TIME** to
+    let Steam self-complete its tree (asserts `.installed` manifest + `steamui.so` exist), strip
+    logs/tokens/ssfn/caches (no per-user secrets baked), `touch .cef-enable-remote-debugging`.
+    Seed home `/var/home/<user>/.local/share/Steam`; Steam self-updates there at runtime.
+  - **Proton — NOT baked (novadeck divergence from Armada, per user)**: Proton stays a **user
+    choice**, not pre-staged. Path A: install an arm64 Proton from the Steam UI compat-tools
+    list (**verify Valve actually offers arm64 Proton there — stock Valve Proton is x86-only**;
+    if only x86 is listed, this path is unavailable). Path B: SSH-drop any Proton fork
+    (CachyOS arm64 etc.) into the writable `~/.../compatibilitytools.d`. novadeck ships none by
+    default → no `armada-proton-wrapper`/`set-steam-default-compat` baking. (Armada baked
+    Proton-CachyOS into the sealed `/usr` only because bootc's `/var` home is install-only and a
+    home copy would freeze — a Fedora-bootc constraint novadeck doesn't share.)
+  - **FEX Turnip passthrough via thunks** (cleaner than ROCKNIX's lib-copy): FEX `Config.json`
+    enables Vulkan/GL/EGL/drm/Wayland/asound thunks; erofs RootFS. Carries the SAME ROCKNIX
+    `--use-rotation-shader` gamescope patch novadeck already uses ([[sm8650-gamescope-flip-blocker]]).
+  - For novadeck this maps to: bake a pre-bootstrapped Steam tree into our writable-home seed +
+    Proton into the sealed rootfs; mirror SteamOS's seamless boot-into-Steam + self-update.
+- **ARCHITECTURAL DECISION — control layer (layer C, the AMD/Deck "real porting work") —
+  DOCUMENTED, DEFERRED to later in Phase 3 (per user 2026-06-27).** Not blocking the Steam/FEX
+  bring-up; revisit once the shell + one x86 game are validated.
+  - **Option A — port `jupiter-*`/`steamos-manager`**: maximum native fidelity (Performance tab
+    lives in Quick Access natively), but `steamos-manager` is a Rust D-Bus daemon and
+    `jupiter-hw-support` a pile of udev/firmware/scripts, both deeply tied to Deck ACPI + AMD
+    APU. Porting to Qualcomm = large, ongoing, fighting upstream assumptions.
+  - **Option B — Decky route: borrow the PATTERN, build novadeck's OWN plugin (per user)** — do
+    NOT fork `armada-control` 1:1; Armada just proves the shape works on our exact SoCs. Ship
+    **Decky Loader + our own small plugin**. Decisive finding from reading `armada-control`
+    (~28 KB Python): the plugin is **UI + plain config files only** — it writes
+    `/etc/armada/power-profiles.conf` (cpu_governor/cpu_max/gpu_max/gpu_min/fan_curve/underclock)
+    and `/etc/armada/game-tweaks.json` (per-game FEX/Proton), then calls a thin native actuator
+    `armada-power reload`; per-game FEX is applied by the Proton wrapper reading that JSON;
+    controller/gyro calibration goes through InputPlumber. So the work splits cleanly into:
+    (1) a **generic UI plugin** (portable, ~free), (2) a **thin SoC-specific actuator** that
+    writes Qualcomm cpufreq / Adreno devfreq / fan sysfs — *the only genuinely novadeck-specific
+    piece, and small*, (3) per-game tweaks via our Proton wrapper. It injects into the Steam QAM
+    (`qamFix.ts`) so integration is decent, though not pixel-native. Wiring:
+    `45-install-decky-plugins.sh` pulls upstream `SteamDeckHomebrew/decky-loader` PluginLoader +
+    a `armada-decky-loader.service`; a few `steamos-*` polkit helpers + stub `jupiter-biosupdate`
+    fill the rest.
+  - **Lean**: Option B. The fidelity gap is small (Decky QAM panel vs native Performance tab),
+    the effort gap is large, and only the tiny actuator is SoC-specific — the rest is reusable.
+    Confirm against the Deck-UX goal when we pick this up later in Phase 3.
+
 ### Phase 4 — Immutability & atomic A/B updates [now concretely specified]
 - **Action**: implement iliana model on base's rauc+casync: 8-part A/B + Btrfs-ro +
   overlayfs /etc + steamos-atomupd; atomic rollback on failed boot. For full fidelity, surface

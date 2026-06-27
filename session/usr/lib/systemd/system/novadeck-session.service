@@ -3,8 +3,10 @@ Description=novadeck gamescope session (SteamOS layer B — Deck UI shell)
 # (Design + validation notes: devices/<soc>/bringup-phase2.md step 2. No Documentation= URI —
 # systemd only accepts URIs there and rejects free text with "Invalid URL".)
 # Controllers should be present inside the session, and basic multi-user state up first.
-After=systemd-user-sessions.service inputplumber.service getty@tty1.service
-Wants=inputplumber.service
+# The Steam tree must be staged (novadeck-steam-bootstrap) before the shell launcher runs — pull
+# it in and order after it (the oneshot self-skips once staged, so steady-state boots pay nothing).
+After=systemd-user-sessions.service inputplumber.service getty@tty1.service novadeck-steam-bootstrap.service
+Wants=inputplumber.service novadeck-steam-bootstrap.service
 # Own VT1: gamescope's DRM backend takes DRM master and the panel, so getty/fbcon must not fight it.
 Conflicts=getty@tty1.service
 

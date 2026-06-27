@@ -170,6 +170,24 @@ else
   echo "  (no hw-support/ tree — skipping HW-support injection)"
 fi
 
+# 4f. RELEASE Steam shell (SteamOS layer D): the native arm64 Steam plumbing. A static,
+# SoC-agnostic overlay tree under steam/ mirror-copied into the rootfs: the bootstrap script
+# (/usr/lib/novadeck/steam-bootstrap.sh) that stages the native client+runtime into the WRITABLE
+# shared home, its first-boot oneshot (novadeck-steam-bootstrap.service), and the launcher
+# (/usr/bin/novadeck-steam) that NOVADECK_SESSION_CMD points at. No Steam blobs are baked into the
+# sealed RO root — Steam self-updates in /home across A/B slots; the seed is fetched on first boot.
+# The bootstrap unit is pulled in by novadeck-session.service (Wants=), so it ships installed and
+# only runs when we boot to the Steam shell — same install-but-don't-force pattern as the session.
+# curl/unzip/tar come from the base (customize-base.sh). See devices/bringup-phase3.md.
+STEAM="$ROOT/steam"
+if [ -d "$STEAM" ]; then
+  echo "  injecting novadeck Steam shell from ${STEAM#"$ROOT"/} (bootstrap + launcher, fetched on first boot)"
+  cp -a "$STEAM"/. "$stage/"
+  chmod 0755 "$stage/usr/bin/novadeck-steam" "$stage/usr/lib/novadeck/steam-bootstrap.sh"
+else
+  echo "  (no steam/ tree — skipping Steam shell injection)"
+fi
+
 # 4b-audio. ALSA UCM2 machine profile (SteamOS layer C audio). A static overlay tree under
 # audio/ mirror-copied into the rootfs: the device's card-name-matched UCM2 profile so userland
 # knows the routing (speaker/headphone/DP paths, jack handling). The profile is the ROCKNIX

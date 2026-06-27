@@ -1,0 +1,32 @@
+#!/bin/sh
+# novadeck Steam shell launcher (SteamOS layer D) — the client gamescope hosts.
+#
+# This is what NOVADECK_SESSION_CMD points at in Phase 3 (replacing the Phase-2 vkcube liveness
+# placeholder). novadeck-session execs gamescope, then gamescope execs THIS inside its Wayland
+# display. We run the NATIVE arm64 Steam client in Big Picture / gamepad UI mode — the same
+# -gamepadui/-steamdeck/-steamos3 flags SteamOS and our peers (ROCKNIX, Armada) pass for the
+# handheld Deck shell. x86 games launched from here go through FEX/Proton (later in Phase 3).
+#
+# Steam self-updates and downloads the rest of the UI on first launch; the bootstrap oneshot
+# (novadeck-steam-bootstrap.service) only staged the seed client+runtime into the writable home.
+set -eu
+
+STEAM_HOME="${STEAM_HOME:-/home/deck}"
+STEAM="${STEAM_HOME}/.local/share/Steam"
+CLIENT="${STEAM}/steamrtarm64/steam"
+
+export HOME="${STEAM_HOME}"
+
+if [ ! -x "$CLIENT" ]; then
+  echo "[novadeck-steam] native arm64 Steam not staged at ${STEAM}" >&2
+  echo "[novadeck-steam] run /usr/lib/novadeck/steam-bootstrap.sh (or its first-boot unit) first" >&2
+  exit 1
+fi
+
+# The native client links against its bundled runtime + the libibus shim the bootstrap symlinked.
+export LD_LIBRARY_PATH="${STEAM}/steamrtarm64:${STEAM}/lib/aarch64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
+# -steamdeck/-steamos3/-steampal: Deck handheld behaviour. -gamepadui: Big Picture as the shell.
+# Word-splitting on the extra-args is intentional (sh).
+: "${NOVADECK_STEAM_ARGS:=-gamepadui -steamos3 -steampal -steamdeck}"
+exec "$CLIENT" $NOVADECK_STEAM_ARGS "$@"

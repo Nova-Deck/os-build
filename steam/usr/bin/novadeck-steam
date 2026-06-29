@@ -43,11 +43,16 @@ if [ ! -x "$RUN" ]; then
   exit 1
 fi
 
-# steamrtarm64 also holds the client's OWN bundled libs (e.g. libavcodec.so.62, pulled in by the
-# first-launch self-update — the seed alone does not carry them) plus the libibus shim the bootstrap
-# symlinked into lib/aarch64-linux-gnu. Keep both on LD_LIBRARY_PATH; pressure-vessel passes the
-# environment through, so the client resolves its bundled libs inside the container too.
-export LD_LIBRARY_PATH="${STEAM}/steamrtarm64:${STEAM}/lib/aarch64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+# steamrtarm64 holds the client's OWN bundled libs — its media stack libvpx.so.6 +
+# libav{codec,format,util}.so.* (pulled in by the first-launch self-update; the seed lacks them),
+# which steamui.so NEEDs — plus the libibus shim the bootstrap symlinked into lib/aarch64-linux-gnu.
+# These must be on LD_LIBRARY_PATH, but pressure-vessel builds a FRESH container environment and
+# DROPS any LD_LIBRARY_PATH we export on the host. So set it INSIDE the container instead, via `env`
+# on the wrapped command below — the client (and its dlmopen of steamui.so) then sees steamrtarm64.
+# (gtk2/gdk_pixbuf come from the runtime's own /lib; with this path every steamui.so dep resolves —
+# HW-verified 2026-06-29, 0 "not found". Armada needs no such trick: it runs raw on the host where a
+# plain host LD_LIBRARY_PATH reaches the loader, but it has no pressure-vessel boundary to cross.)
+STEAM_LD_PATH="${STEAM}/steamrtarm64:${STEAM}/steamrtarm64/video:${STEAM}/lib/aarch64-linux-gnu"
 
 # -steamdeck/-steamos3/-steampal: Deck handheld behaviour. -gamepadui: Big Picture as the shell.
 # Word-splitting on the extra-args is intentional (sh).
@@ -61,14 +66,15 @@ export LD_LIBRARY_PATH="${STEAM}/steamrtarm64:${STEAM}/lib/aarch64-linux-gnu${LD
 # relaunch on 42 (mirrors SteamOS's steam-jupiter wrapper and the ROCKNIX/Armada launchers); any
 # other exit code is a genuine shutdown, so propagate it and let the session end as intended.
 #
-# Past the 42 restart the client previously failed to render the Big Picture UI with:
+# Past the 42 restart the client previously failed to render the Big Picture UI with
 #   dlmopen steamui.so failed: libgtk-x11-2.0.so.0: cannot open shared object file
-# That is fixed by entering the runtime via `${RUN} --` (see the mechanism note above): gtk2 lives in
-# the bundled runtime, not the host, and pressure-vessel makes it resolvable.
+# (gtk2) and then libvpx.so.6 (media stack). Both are fixed here: entering the runtime via
+# `${RUN} --` provides gtk2/gdk_pixbuf, and `env LD_LIBRARY_PATH=${STEAM_LD_PATH}` inside the
+# container provides steamrtarm64's bundled media libs (see the STEAM_LD_PATH note above).
 status=42
 while [ "$status" -eq 42 ]; do
   set +e
-  "$RUN" -- "$CLIENT" $NOVADECK_STEAM_ARGS "$@"
+  "$RUN" -- env "LD_LIBRARY_PATH=${STEAM_LD_PATH}" "$CLIENT" $NOVADECK_STEAM_ARGS "$@"
   status=$?
   set -e
 done

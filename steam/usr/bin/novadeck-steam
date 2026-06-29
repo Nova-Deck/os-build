@@ -23,10 +23,53 @@ if [ ! -x "$CLIENT" ]; then
   exit 1
 fi
 
-# The native client links against its bundled runtime + the libibus shim the bootstrap symlinked.
+# NOTE: do NOT route through ${STEAM}/steam.sh — that is the x86 wrapper; it execs ubuntu12_32/steam
+# and ubuntu12_32/steam-runtime/amd64/* which are amd64 ELFs ("Exec format error" on aarch64).
+#
+# We launch the native client THROUGH its bundled SR3 runtime via pressure-vessel, NOT raw on the
+# host. Reason: steamui.so NEEDs libgtk-x11-2.0.so.0 + libgdk_pixbuf-2.0.so.0, which holo does not
+# package — and SteamOS itself ships NO system gtk2 (verified against the SteamOS 3.8.10 rootfs:
+# absent from /usr/lib, /usr/lib32, and the pacman set). Those libs exist ONLY inside the bundled
+# steam-runtime-steamrt-arm64 tree, and only resolve (correct sonames, via ldconfig) when entered
+# through pressure-vessel. The runtime's generic runner `run -- <cmd>` sets up that container; inside
+# it `libgtk-x11-2.0.so.0 => /lib/aarch64-linux-gnu/...` resolves (HW-verified 2026-06-29). This is
+# the SteamOS-faithful path — SteamOS's own client likewise gets gtk2 from Steam's runtime, not the
+# OS. Armada's `dnf install gtk2` (system lib + raw ELF) is a Fedora-only shortcut we do NOT copy.
+RUNTIME="${STEAM}/steam-runtime-steamrt-arm64"
+RUN="${RUNTIME}/run"
+if [ ! -x "$RUN" ]; then
+  echo "[novadeck-steam] steam runtime runner missing: ${RUN}" >&2
+  echo "[novadeck-steam] run /usr/lib/novadeck/steam-bootstrap.sh (stages the runtime) first" >&2
+  exit 1
+fi
+
+# steamrtarm64 also holds the client's OWN bundled libs (e.g. libavcodec.so.62, pulled in by the
+# first-launch self-update — the seed alone does not carry them) plus the libibus shim the bootstrap
+# symlinked into lib/aarch64-linux-gnu. Keep both on LD_LIBRARY_PATH; pressure-vessel passes the
+# environment through, so the client resolves its bundled libs inside the container too.
 export LD_LIBRARY_PATH="${STEAM}/steamrtarm64:${STEAM}/lib/aarch64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
 # -steamdeck/-steamos3/-steampal: Deck handheld behaviour. -gamepadui: Big Picture as the shell.
 # Word-splitting on the extra-args is intentional (sh).
 : "${NOVADECK_STEAM_ARGS:=-gamepadui -steamos3 -steampal -steamdeck}"
-exec "$CLIENT" $NOVADECK_STEAM_ARGS "$@"
+
+# Steam's bootstrapper exits to relaunch itself whenever the client requests a restart — most
+# notably right after the first-launch self-update ("Update complete, launching... / Shutdown"),
+# and on every in-UI "Restart Steam". It signals this with exit code 42. gamescope hosts THIS
+# script as its `--` child, so a bare `exec` would let the process die on that first restart and
+# gamescope would tear the whole session down mid-update instead of entering Big Picture. Loop and
+# relaunch on 42 (mirrors SteamOS's steam-jupiter wrapper and the ROCKNIX/Armada launchers); any
+# other exit code is a genuine shutdown, so propagate it and let the session end as intended.
+#
+# Past the 42 restart the client previously failed to render the Big Picture UI with:
+#   dlmopen steamui.so failed: libgtk-x11-2.0.so.0: cannot open shared object file
+# That is fixed by entering the runtime via `${RUN} --` (see the mechanism note above): gtk2 lives in
+# the bundled runtime, not the host, and pressure-vessel makes it resolvable.
+status=42
+while [ "$status" -eq 42 ]; do
+  set +e
+  "$RUN" -- "$CLIENT" $NOVADECK_STEAM_ARGS "$@"
+  status=$?
+  set -e
+done
+exit "$status"

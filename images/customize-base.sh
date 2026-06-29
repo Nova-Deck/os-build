@@ -59,7 +59,17 @@ DEST="$ROOT/work/base"
 # session manager. (pipewire-jack omitted — not needed for game/BT audio.)
 # unzip: the native arm64 Steam client seed ships as a .zip the steam-bootstrap stages on first
 # boot (SteamOS layer D, steam/ overlay). curl/tar/xz are already in the base.
-PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-tools mesa gamescope seatd bluez bluez-utils networkmanager alsa-ucm-conf pipewire wireplumber pipewire-pulse pipewire-alsa unzip)
+# openal: a HOST system lib the native arm64 Steam client links (libopenal.so.1); it IS in the holo
+# repo, so install it. NOTE the client's OTHER UI libs — gtk2 (libgtk-x11-2.0.so.0 for steamui.so) +
+# gdk_pixbuf — are deliberately NOT installed here: holo has no gtk2 (SteamOS itself ships none —
+# verified against the SteamOS 3.8.10 rootfs), they exist only inside Steam's bundled SR3 runtime, and
+# novadeck-steam launches the client THROUGH that runtime via pressure-vessel so steamui.so resolves
+# them from the container, not the host. (Armada's raw-ELF + `dnf install gtk2` is a Fedora-only
+# shortcut we do NOT follow.) See steam/usr/bin/novadeck-steam.
+# xorg-xwayland: x86 games run under FEX/Proton render through Xwayland inside gamescope (the Deck
+# shell is native Wayland, but most Proton titles are X11 clients). Armada ships it for the same
+# reason (xorg-x11-server-Xwayland in 30-install-steam-session.sh).
+PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-tools mesa gamescope seatd bluez bluez-utils networkmanager alsa-ucm-conf pipewire wireplumber pipewire-pulse pipewire-alsa unzip openal xorg-xwayland)
 
 # Test-only packages — installed ONLY under NOVADECK_TEST=1, NEVER in a release base.
 # On-device bring-up tools: evtest reads raw /dev/input events; usbutils provides lsusb.
@@ -226,6 +236,18 @@ docker run --name "$cid" --platform linux/arm64 -v "$PREBUILT_DIR":/prebuilt:ro 
   # PID1'\''s builtin query, NOT this unit.) Mask it; machine-id is still generated on first
   # boot and preset-all still runs, so service enablement is unaffected.
   ln -sf /dev/null /etc/systemd/system/systemd-firstboot.service
+
+  # Network stack is NetworkManager, for every build (release + test) — see PKGS note above.
+  # The holo base ships systemd-networkd enabled too, so BOTH run: networkd manages nothing
+  # (NM owns the links) yet its wait-online never reaches "configured" and pins
+  # network-online.target until it times out EVERY boot, stalling anything ordered after it
+  # (the steam-bootstrap oneshot, hence the queued gamescope session). HW-confirmed 2026-06-27.
+  # Mask networkd + its socket + its wait-online so only NetworkManager-wait-online satisfies
+  # network-online.target. Masking (not disable) is preset-proof: nothing can socket-activate or
+  # Wants= them back. NM provides its own resolved/timesync paths; networkd is pure dead weight.
+  ln -sf /dev/null /etc/systemd/system/systemd-networkd.service
+  ln -sf /dev/null /etc/systemd/system/systemd-networkd.socket
+  ln -sf /dev/null /etc/systemd/system/systemd-networkd-wait-online.service
 
   pacman -Scc --noconfirm >/dev/null 2>&1 || true
 ' >&2

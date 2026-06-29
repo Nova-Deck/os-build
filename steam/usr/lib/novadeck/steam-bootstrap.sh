@@ -42,8 +42,9 @@ ln -sfn ../.local/share/Steam/linuxarm64 "${DOT_STEAM}/sdkarm64"
 # 1. Client seed: parse the arm64 bins package out of the publicbeta manifest, fetch + unpack.
 log "fetching client manifest"
 curl -fsSL -o "${STEAM}/package/${MANIFEST_NAME}.manifest" "${MANIFEST_URL}"
-seed=$(strings "${STEAM}/package/${MANIFEST_NAME}.manifest" \
-  | grep -oE 'bins_linuxarm64_linuxarm64\.zip\.[0-9a-f]+' \
+# grep -a (treat the part-binary VDF manifest as text) instead of strings(1): the base ships no
+# binutils, and strings is overkill — the seed token is a plain printable run grep extracts directly.
+seed=$(grep -aoE 'bins_linuxarm64_linuxarm64\.zip\.[0-9a-f]+' "${STEAM}/package/${MANIFEST_NAME}.manifest" \
   | grep -v '\.vz\.' | head -n1)
 [ -n "$seed" ] || { log "ERROR: no arm64 Steam seed package in manifest" >&2; exit 1; }
 log "fetching client seed ${seed}"

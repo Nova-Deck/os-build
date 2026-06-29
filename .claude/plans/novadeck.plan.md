@@ -197,6 +197,19 @@ fidelity backlog:
     let Steam self-complete its tree (asserts `.installed` manifest + `steamui.so` exist), strip
     logs/tokens/ssfn/caches (no per-user secrets baked), `touch .cef-enable-remote-debugging`.
     Seed home `/var/home/<user>/.local/share/Steam`; Steam self-updates there at runtime.
+  - **WHY build-time bake is REQUIRED for release, not an optimization (user, 2026-06-27):**
+    Steam OWNS first-boot networking (its OOBE has the Wi-Fi screen — cf. [[wifi-config-is-test-only]]).
+    So a first-boot *network fetch* of Steam deadlocks: no Wi-Fi until Steam runs, no Steam until
+    network. Steam must be present **offline** on first boot. The build-time tree must also be
+    **UI-complete** (`steamui.so` present) or first launch still needs network to download the UI
+    before it can show the OOBE — same deadlock one layer down. Hence the qemu/Xvfb `-exitsteam`
+    run at build time. novadeck mapping: bake the completed seed into the sealed RO root
+    (`/usr/share/novadeck/steam-seed/`), first-boot oneshot copies it OFFLINE into writable
+    `/home/deck/.local/share/Steam`, Steam self-updates once the user connects via its own OOBE.
+  - **Bring-up status (`phase-3/steam-shell-bringup`)**: the first slice ships a TEST/DEV
+    first-boot *fetch* (`novadeck-steam-bootstrap.service`) — valid only on the test card (baked
+    Wi-Fi) to prove the shell runs on-panel. It is NOT the release path; swap it for the
+    build-time bake + offline seed-copy above before release. Same test-only status as the Wi-Fi block.
   - **Proton — NOT baked (novadeck divergence from Armada, per user)**: Proton stays a **user
     choice**, not pre-staged. Path A: install an arm64 Proton from the Steam UI compat-tools
     list (**verify Valve actually offers arm64 Proton there — stock Valve Proton is x86-only**;

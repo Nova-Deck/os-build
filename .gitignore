@@ -1,5 +1,5 @@
-# Vendored upstream reference (cloned separately, has its own .git)
-/_vendor/
+# reference sources
+/_reference/
 
 # Build outputs
 /out/

@@ -1,0 +1,24 @@
+[Unit]
+Description=novadeck native arm64 Steam first-boot seeder (SteamOS layer D — seed the deck home)
+# Seed the writable /home/deck from the BAKED seed in the RO root — OFFLINE, no network (the seed
+# is fetched at build time, not here; Steam's OOBE owns first-boot Wi-Fi). Needs /home mounted and
+# grown first, and the deck user present (baked into the base).
+RequiresMountsFor=/home
+After=home.mount novadeck-grow-home.service systemd-sysusers.service
+# Always run: the script self-skips the ~1GB copy when already seeded but ALWAYS repairs /home/deck
+# ownership (a prior/older seed can leave the home present yet root-owned, blocking Steam). No
+# ConditionPathExists here — gating on "Steam present" is exactly what skipped the ownership repair.
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/novadeck/steam-bootstrap.sh
+# Local copy of a ~1GB seed onto a slow card; don't let the default kill it mid-copy.
+TimeoutStartSec=900
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+# Pulled in by novadeck-session.service (Wants=). Not on its own preset: it runs only when we
+# actually boot to the Steam shell, mirroring how the session unit ships installed-but-disabled.
+WantedBy=novadeck-session.service

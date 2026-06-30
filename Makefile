@@ -77,11 +77,14 @@ KERNEL       := $(OUT)/Image.gz
 ROOTFS       := $(OUT)/images/rootfs.img
 BOOTIMG      := $(OUT)/boot/novadeck-boot.img
 SDCARD       := $(OUT)/images/sdcard.img
+# Native arm64 Steam SEED baked into the RO root (steam/fetch-steam-seed.sh, host network). The
+# client binary it stages is the make target; the pin + fetcher are its prerequisites.
+STEAM_SEED   := work/steam-seed/steamrtarm64/steam
 
 # Repo sources the rootfs assembler reads directly (itself + the trees it copies in: the
 # gamescope-session overlay, the HW-support overlay, and InputPlumber config). find recurses,
 # so files added under those trees are tracked automatically — no per-file Makefile edits.
-ASSEMBLE_SRC := $(shell find images/assemble-rootfs.sh session hw-support audio devices/inputplumber -type f 2>/dev/null)
+ASSEMBLE_SRC := $(shell find images/assemble-rootfs.sh session hw-support steam audio devices/inputplumber -type f 2>/dev/null)
 
 # Kernel inputs: any change re-triggers the (full, from-scratch) kernel build. The unified
 # kernel globs every fragment/patch/dts, and bakes the firmware embed list + common cmdline.
@@ -142,6 +145,12 @@ $(FW_QCOM): firmware/QCOM_FW.pin
 	firmware/fetch-qcom-fw.sh
 	@touch $@
 
+# Native arm64 Steam seed (client + SR3 runtime) — fetched on the host, staged into work/steam-seed/
+# and baked into the RO root by assemble-rootfs. Pinned channel/runtime in steam/STEAM_SEED.pin.
+$(STEAM_SEED): steam/STEAM_SEED.pin steam/fetch-steam-seed.sh
+	steam/fetch-steam-seed.sh
+	@touch $@
+
 # ==============================================================================
 # From-source overlay packages (host — build-overlay.sh drives docker + qemu binfmt)
 # ==============================================================================
@@ -179,7 +188,7 @@ manifest: $(KERNEL) ## Verify firmware-manifest.txt vs the built kernel (in cont
 # ==============================================================================
 # Read-only root (container) — base userspace + kernel + firmware -> Btrfs image
 # ==============================================================================
-$(ROOTFS): $(KERNEL) $(BASE_STAMP) $(FW_LINUX) $(FW_QCOM) $(ASSEMBLE_SRC) | $(BUILD_STAMP)
+$(ROOTFS): $(KERNEL) $(BASE_STAMP) $(FW_LINUX) $(FW_QCOM) $(STEAM_SEED) $(ASSEMBLE_SRC) | $(BUILD_STAMP)
 	$(DOCKER) $(TEST_ENV) $(BUILD_IMG) \
 	  images/assemble-rootfs.sh /src/work/base
 
@@ -225,4 +234,9 @@ clean-overlay: ## Remove the built (arch-scoped) overlay pacman repo + build tre
 	rm -rf work/repo work/overlay-build
 
 distclean: clean clean-base clean-overlay ## clean + drop fetched firmware + kernel work tree
-	rm -rf work/kernel firmware/linux-fw firmware/qcom-fw
+	# work/kernel is root-owned (the kernel build's modules_install runs as root in the build
+	# image), so remove it from inside a throwaway container like clean/clean-base — a host-side
+	# rm fails with permission errors. work/steam-seed (host-fetched) goes the same way for
+	# uniformity. firmware/* are fetched on the host, so a plain rm is fine.
+	docker run --rm -v $(CURDIR)/work:/wb busybox rm -rf /wb/kernel /wb/steam-seed
+	rm -rf firmware/linux-fw firmware/qcom-fw

@@ -134,13 +134,19 @@ fi
 # SoC-agnostic overlay tree under session/ (launcher /usr/bin/novadeck-session, its config
 # /etc/novadeck/session.conf, and the novadeck-session.service unit) mirror-copied into the
 # rootfs. gamescope/seatd/vulkan-tools come from the base (customize-base.sh) — this adds no
-# package, only the session wiring. The unit ships installed-but-DISABLED (no preset/symlink):
-# Phase 2 validates it by hand (`systemctl start novadeck-session`) so it never seizes the panel
-# from the SSH/smoke bring-up path; flipping to boot-enabled is a one-line preset add once it is
-# proven on HW and the Phase-3 Steam shell lands. See devices/bringup-phase2.md step 2.
+# package, only the session wiring. As of Phase 3 the novadeck-session.service unit is ARMED: the
+# overlay ships 60-novadeck-session.preset (enable) + a graphical.target.wants symlink, and points
+# default.target at graphical.target, so the device boots straight into the Deck shell (Phase 2
+# validated it by hand with `systemctl start`). seatd.service (its seat broker) IS enabled here
+# (60-novadeck-seatd.preset + multi-user.target.wants symlink ship inside the overlay): the session
+# runs as the unprivileged deck user and opens the seat via the persistent root seatd. The overlay
+# also bakes /var/lib/systemd/linger/deck so logind starts the deck user manager (user@1000) at boot,
+# giving the session a real per-user runtime — /run/user/1000 + the user D-Bus session bus — instead
+# of a bare service RuntimeDirectory (what gamescope's Wayland socket, Steam/CEF's bus, and later
+# PipeWire audio expect). See devices/bringup-phase2.md step 2.
 SESSION="$ROOT/session"
 if [ -d "$SESSION" ]; then
-  echo "  injecting novadeck gamescope-session from ${SESSION#"$ROOT"/} (installed, not auto-enabled)"
+  echo "  injecting novadeck gamescope-session from ${SESSION#"$ROOT"/} (ARMED: boots to Deck shell)"
   cp -a "$SESSION"/. "$stage/"
   chmod 0755 "$stage/usr/bin/novadeck-session"
 else
@@ -170,6 +176,101 @@ else
   echo "  (no hw-support/ tree — skipping HW-support injection)"
 fi
 
+# 4f. RELEASE Steam shell (SteamOS layer D): the native arm64 Steam plumbing. Two parts:
+#  - the steam/usr overlay (SoC-agnostic): the first-boot SEEDER (/usr/lib/novadeck/
+#    steam-bootstrap.sh) + its oneshot (novadeck-steam-bootstrap.service) and the launcher
+#    (/usr/bin/novadeck-steam) NOVADECK_SESSION_CMD points at. ONLY usr/ is copied — the steam/
+#    top-level build files (STEAM_SEED.pin, fetch-steam-seed.sh) are NOT rootfs content.
+#  - the BAKED seed: the native client + SR3 runtime staged on the build host (steam/
+#    fetch-steam-seed.sh -> work/steam-seed) copied into the SEALED root at
+#    /usr/share/novadeck/steam-seed. UNLIKE the old curl-on-first-boot path, the client IS baked in;
+#    the first-boot seeder copies it into the writable /home/deck OFFLINE (Steam's OOBE owns Wi-Fi,
+#    so an OS-side first-boot fetch deadlocks — see steam-must-be-baked-offline). Steam still
+#    self-updates the rest of the UI on first launch (curl/unzip/tar stay in the base for that).
+# The seeder unit is pulled in by novadeck-session.service (Wants=), so it ships installed and only
+# runs when we boot to the Steam shell. See devices/bringup-phase3.md.
+STEAM="$ROOT/steam"
+if [ -d "$STEAM/usr" ]; then
+  echo "  injecting novadeck Steam shell from ${STEAM#"$ROOT"/}/usr (seeder + launcher)"
+  cp -a "$STEAM"/usr "$stage/"
+  chmod 0755 "$stage/usr/bin/novadeck-steam" "$stage/usr/lib/novadeck/steam-bootstrap.sh"
+  SEED="$ROOT/work/steam-seed"
+  if [ -x "$SEED/steamrtarm64/steam" ]; then
+    echo "  baking Steam seed from ${SEED#"$ROOT"/} -> /usr/share/novadeck/steam-seed ($(du -sh "$SEED" | cut -f1))"
+    install -d -m0755 "$stage/usr/share/novadeck"
+    cp -a "$SEED" "$stage/usr/share/novadeck/steam-seed"
+  else
+    echo "  WARNING: no baked Steam seed at ${SEED#"$ROOT"/} — run steam/fetch-steam-seed.sh (first boot will have no client)" >&2
+  fi
+else
+  echo "  (no steam/usr tree — skipping Steam shell injection)"
+fi
+
+# 4g. First-boot STORAGE (the deck user's growable home). SteamOS sizes /home to the disk at
+# install time; we dd a fixed image to a card, so we grow on first boot instead. Three pieces:
+#  - /etc/fstab mounts the dedicated home partition (LABEL=novadeck-home, ext4) at /home. nofail so
+#    a card without that partition (the old 2-partition test image) still boots.
+#  - novadeck-grow-home: a oneshot that extends the home partition + ext4 to fill the device on
+#    first boot (sfdisk/partx from util-linux + resize2fs from e2fsprogs, all in the base), once.
+#  - the deck user (uid 1000) is baked into the base /etc (customize-base.sh); the seeder above
+#    materializes + chowns /home/deck on first boot. Steam (self-update + games) lives on /home.
+echo "  injecting first-boot storage: /home mount + grow (deck user baked in base)"
+mkdir -p "$stage/etc"
+if ! grep -q 'LABEL=novadeck-home' "$stage/etc/fstab" 2>/dev/null; then
+  printf '%s\n' \
+    '# novadeck shared data partition — the deck user home + Steam library live here.' \
+    '# x-systemd.growfs grows the ext4 to the partition at mount; systemd-repart (novadeck-grow-' \
+    '# home.service) grows the partition itself to fill the device first, earlier in boot.' \
+    'LABEL=novadeck-home  /home  ext4  defaults,nofail,x-systemd.growfs  0 2' \
+    >>"$stage/etc/fstab"
+fi
+
+# Grow the home PARTITION to fill the device with systemd-repart (declarative, online — it issues
+# a BLKPG resize so it works while the disk is in use, and relocates the GPT backup header for us).
+# The stock systemd-repart.service is initrd-only (no [Install], Before=initrd-root-fs.target) and
+# we have no initramfs, so ship our own unit running the same tool early in real-root boot, before
+# /home mounts; x-systemd.growfs (fstab above) then grows the ext4 at mount. repart matches our
+# partition by its discoverable "Linux /home" GUID (make-sdcard gives p3 typecode 8302), so it can
+# never touch the root partition. Both steps are idempotent — no marker needed.
+install -d -m0755 "$stage/usr/lib/repart.d"
+cat >"$stage/usr/lib/repart.d/50-novadeck-home.conf" <<'REPART'
+[Partition]
+# Match the existing /home partition (Linux /home GUID) and grow it to claim free space at the end
+# of the disk. No SizeMinBytes/SizeMaxBytes -> repart expands it to take everything available.
+Type=home
+REPART
+
+install -d -m0755 "$stage/usr/lib/systemd/system"
+cat >"$stage/usr/lib/systemd/system/novadeck-grow-home.service" <<'UNIT'
+[Unit]
+Description=novadeck first-boot grow of /home to fill the storage device (systemd-repart)
+Documentation=man:systemd-repart(8)
+DefaultDependencies=no
+ConditionDirectoryNotEmpty=/usr/lib/repart.d
+After=systemd-udevd.service
+Before=local-fs-pre.target shutdown.target
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/systemd-repart --dry-run=no
+# 76 = no root block device found, 77 = no GPT (e.g. the old 2-partition test card): treat as OK.
+SuccessExitStatus=76 77
+
+[Install]
+WantedBy=sysinit.target
+UNIT
+
+# Enable on release: higher-priority preset (60 < 99 stock "disable *") + a build-time symlink
+# fallback. The unit runs early (Before=local-fs-pre.target), pulled in via sysinit.target.
+install -d -m0755 "$stage/usr/lib/systemd/system-preset"
+echo "enable novadeck-grow-home.service" \
+  >"$stage/usr/lib/systemd/system-preset/60-novadeck-storage.preset"
+install -d -m0755 "$stage/etc/systemd/system/sysinit.target.wants"
+ln -sf /usr/lib/systemd/system/novadeck-grow-home.service \
+       "$stage/etc/systemd/system/sysinit.target.wants/novadeck-grow-home.service"
+
 # 4b-audio. ALSA UCM2 machine profile (SteamOS layer C audio). A static overlay tree under
 # audio/ mirror-copied into the rootfs: the device's card-name-matched UCM2 profile so userland
 # knows the routing (speaker/headphone/DP paths, jack handling). The profile is the ROCKNIX
@@ -180,7 +281,7 @@ fi
 # be provided by the base alsa-ucm-conf package — ensure it is in the release PKGS (layer-4 work).
 AUDIO="$ROOT/audio"
 if [ -d "$AUDIO" ]; then
-  echo "  injecting novadeck ALSA UCM2 profile from ${AUDIO#"$ROOT"/} (card SM8650-APS2)"
+  echo "  injecting novadeck ALSA UCM2 profile from ${AUDIO#"$ROOT"/}"
   cp -a "$AUDIO"/. "$stage/"
 else
   echo "  (no audio/ tree — skipping UCM2 injection)"
@@ -242,20 +343,14 @@ EOF
 
   # Enable services. /etc/machine-id is empty, so systemd runs preset-all on first boot and
   # the stock 99-default.preset is "disable *"; ship a high-priority preset (70 < 99) so our
-  # units stay enabled, plus pre-create the symlinks as a build-time fallback.
+  # units stay enabled, plus pre-create the symlinks as a build-time fallback. Only sshd is
+  # test-only here — NetworkManager is enabled for EVERY build in customize-base.sh (the gamepadui
+  # needs it on release too), so it is NOT re-enabled here; this block only adds the test creds.
   install -d -m0755 "$stage/usr/lib/systemd/system-preset"
-  cat >"$stage/usr/lib/systemd/system-preset/70-novadeck-test.preset" <<EOF
-enable sshd.service
-enable NetworkManager.service
-EOF
+  echo "enable sshd.service" >"$stage/usr/lib/systemd/system-preset/70-novadeck-test.preset"
   install -d -m0755 "$stage/etc/systemd/system/multi-user.target.wants"
   ln -sf /usr/lib/systemd/system/sshd.service \
          "$stage/etc/systemd/system/multi-user.target.wants/sshd.service"
-  ln -sf /usr/lib/systemd/system/NetworkManager.service \
-         "$stage/etc/systemd/system/multi-user.target.wants/NetworkManager.service"
-  # NM's D-Bus activation alias (what `systemctl enable NetworkManager` also creates).
-  ln -sf /usr/lib/systemd/system/NetworkManager.service \
-         "$stage/etc/systemd/system/dbus-org.freedesktop.NetworkManager.service"
 
   # sshd needs host keys; a read-only root cannot generate them at boot, so pre-generate now.
   if command -v ssh-keygen >/dev/null 2>&1; then
@@ -336,5 +431,5 @@ rm -f "$IMG"
 truncate -s "$SIZE" "$IMG"
 mkfs.btrfs --rootdir "$stage" --shrink -L novadeck-root -f "$IMG" >/dev/null
 
-echo "  ok   rootfs -> ${IMG#"$ROOT"/}  ($(du -h "$IMG" | cut -f1), from $(du -sh "$stage" | cut -f1) staged)"
+echo "  ok   rootfs -> ${IMG#"$ROOT"/}  ($(du -h "$IMG" | cut -f1), from $(du -sh "$stage" 2>/dev/null | cut -f1) staged)"
 echo "Done. Read-only root ready for slot install / RAUC bundling (images/genbundle.sh)."

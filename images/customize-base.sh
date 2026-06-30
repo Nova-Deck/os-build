@@ -57,7 +57,34 @@ DEST="$ROOT/work/base"
 # (audio/ overlay, cards SM8650-APS2/SM8650-KPF) Include; pipewire-pulse/-alsa give the
 # PA/ALSA shims so games + BlueZ (A2DP/HFP) route through PipeWire, wireplumber is the
 # session manager. (pipewire-jack omitted — not needed for game/BT audio.)
-PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-tools mesa gamescope seatd bluez bluez-utils networkmanager alsa-ucm-conf pipewire wireplumber pipewire-pulse pipewire-alsa)
+# unzip: the native arm64 Steam client seed ships as a .zip the steam-bootstrap stages on first
+# boot (SteamOS layer D, steam/ overlay). curl/tar/xz are already in the base.
+# openal: a HOST system lib the native arm64 Steam client links (libopenal.so.1); it IS in the holo
+# repo, so install it.
+# gtk2: steamui.so links libgtk-x11-2.0.so.0. holo has NO gtk2 (SteamOS itself ships none — verified
+# against the SteamOS 3.8.10 rootfs), so we BUILD it from source as a novadeck overlay package
+# (packages/gtk2/) and install it HERE from that overlay — the client resolves its UI libs against
+# the host base, NOT from inside Steam's bundled SR3 runtime via pressure-vessel as earlier planned.
+# gtk2's own deps (gdk-pixbuf2, pango, cairo, …) come along via pacman. (Armada's raw-ELF +
+# `dnf install gtk2` is a Fedora-only shortcut; we build from source instead.) See packages/gtk2/.
+# ffmpeg: the native arm64 Steam client links libav*/libsw* (libavcodec, libavformat, libswscale,
+# libswresample) for in-client media/video (store trailers, intro/animated UI). It IS in the holo
+# repo, so install it.
+# xorg-xwayland: x86 games run under FEX/Proton render through Xwayland inside gamescope (the Deck
+# shell is native Wayland, but most Proton titles are X11 clients). Armada ships it for the same
+# reason (xorg-x11-server-Xwayland in 30-install-steam-session.sh).
+# e2fsprogs: the deck user's /home is a dedicated ext4 partition grown to fill the card on first
+# boot (novadeck-grow-home) — resize2fs (+ e2fsck) come from here; sfdisk/partx are in util-linux.
+# lsof: the native Steam client's WebUITransport authenticates the loopback websocket from
+# steamwebhelper by shelling out to `lsof` to verify the connecting peer's pid/uid. Without it
+# GetIPCConnectionDetails fails (exit 127) and steam REJECTS every GamepadUI connection, so the UI
+# never binds to the client and renders the 0x3008 "trouble connecting" error (a black panel + popup).
+# noto-fonts(+cjk+emoji): the GamepadUI renders text through CEF/fontconfig, NOT only Steam's bundled
+# fonts. The base drags in just adwaita-fonts (Latin), so every non-Latin language name on the
+# first-boot language-selection screen (简体中文, 日本語, 한국어, Русский, العربية, …) renders as tofu —
+# only "English" is readable. Noto gives broad Unicode coverage (noto-fonts: Latin/Cyrillic/Greek/
+# Arabic/Thai/…; -cjk: CJK; -emoji: UI emoji), matching SteamOS's font set.
+PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-tools mesa gamescope seatd bluez bluez-utils networkmanager alsa-ucm-conf pipewire wireplumber pipewire-pulse pipewire-alsa unzip openal gtk2 ffmpeg e2fsprogs xorg-xwayland lsof noto-fonts noto-fonts-cjk noto-fonts-emoji)
 
 # Test-only packages — installed ONLY under NOVADECK_TEST=1, NEVER in a release base.
 # On-device bring-up tools: evtest reads raw /dev/input events; usbutils provides lsusb.
@@ -225,6 +252,51 @@ docker run --name "$cid" --platform linux/arm64 -v "$PREBUILT_DIR":/prebuilt:ro 
   # boot and preset-all still runs, so service enablement is unaffected.
   ln -sf /dev/null /etc/systemd/system/systemd-firstboot.service
 
+  # Network stack is NetworkManager, for every build (release + test) — see PKGS note above.
+  # The holo base ships systemd-networkd enabled too, so BOTH run: networkd manages nothing
+  # (NM owns the links) yet its wait-online never reaches "configured" and pins
+  # network-online.target until it times out EVERY boot, stalling anything ordered after it
+  # (the steam-bootstrap oneshot, hence the queued gamescope session). HW-confirmed 2026-06-27.
+  # Mask networkd + its socket + its wait-online so only NetworkManager-wait-online satisfies
+  # network-online.target. Masking (not disable) is preset-proof: nothing can socket-activate or
+  # Wants= them back. NM provides its own resolved/timesync paths; networkd is pure dead weight.
+  ln -sf /dev/null /etc/systemd/system/systemd-networkd.service
+  ln -sf /dev/null /etc/systemd/system/systemd-networkd.socket
+  ln -sf /dev/null /etc/systemd/system/systemd-networkd-wait-online.service
+
+  # ...and ENABLE NetworkManager for every build. The holo base ships NM installed-but-disabled;
+  # with networkd now masked, a release image would have NO active network manager at all, so the
+  # Steam gamepadui lists zero Wi-Fi (HW-confirmed). The test block in assemble-rootfs.sh used to be
+  # the only place NM got enabled — wrong layer (test-only). Enable it here the preset-proof way:
+  # /etc/machine-id is empty so first boot runs preset-all where the stock 99-default.preset says
+  # "disable *"; a high-prio preset (60 < 99) keeps NM enabled, and the multi-user.target.wants +
+  # dbus-activation symlinks (what systemctl enable NetworkManager makes) are the build-time
+  # fallback. NM drives wpa_supplicant directly; no wpa_supplicant.service enable needed.
+  # NOTE: this whole block runs inside the single-quoted docker bash -c, and at this stage /usr is
+  # pacman-owned + read-only, so the preset goes in /etc (systemd reads /etc/systemd/system-preset/
+  # too, at higher priority than /usr/lib). Keep comments apostrophe-free — a bare single-quote
+  # closes the -c string and leaks the rest to the host shell (permission-denied on /etc + /usr).
+  mkdir -p /etc/systemd/system-preset
+  echo "enable NetworkManager.service" >/etc/systemd/system-preset/60-novadeck-network.preset
+  mkdir -p /etc/systemd/system/multi-user.target.wants
+  ln -sf /usr/lib/systemd/system/NetworkManager.service \
+         /etc/systemd/system/multi-user.target.wants/NetworkManager.service
+  ln -sf /usr/lib/systemd/system/NetworkManager.service \
+         /etc/systemd/system/dbus-org.freedesktop.NetworkManager.service
+
+  # deck user (uid/gid 1000) — owns the session home /home/deck (a dedicated growable partition)
+  # and, later, the gamescope session. SteamOS uses uid 1000 "deck"; bake the account into the RO
+  # root /etc HERE (the root is read-only at runtime, so a boot-time systemd-sysusers could not
+  # persist it). -M: do NOT create a home in the RO root — /home/deck lives on the /home partition
+  # and is materialized + chowned by the first-boot seeder (steam-bootstrap.sh). Supplementary
+  # groups are added only when they already exist in the base (hardware/seat access for the session).
+  if ! getent passwd deck >/dev/null 2>&1; then
+    useradd -M -u 1000 -U -s /bin/bash -c "Steam Deck User" deck
+  fi
+  for g in wheel video render input audio seat; do
+    if getent group "$g" >/dev/null 2>&1; then usermod -aG "$g" deck; fi
+  done
+
   pacman -Scc --noconfirm >/dev/null 2>&1 || true
 ' >&2
 # ^ redirect the container'\''s stdout (pacman progress) to stderr: this script'\''s stdout must
@@ -242,5 +314,7 @@ mkdir -p "$DEST"
 docker export "$cid" | docker run --rm -i -v "$DEST":/dest "$REF" \
   tar -C /dest --numeric-owner -xf -
 
-echo "[novadeck] customized base ready ($(du -sh "$DEST" | cut -f1) at ${DEST#"$ROOT"/})" >&2
+# du -sh on a root-owned export warns on 0700 dirs (/root, NM system-connections, gnupg keys) when
+# run as the host user; the size is just for the log line, so drop those stderr warnings.
+echo "[novadeck] customized base ready ($(du -sh "$DEST" 2>/dev/null | cut -f1) at ${DEST#"$ROOT"/})" >&2
 echo "$DEST"

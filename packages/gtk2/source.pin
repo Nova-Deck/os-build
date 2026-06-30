@@ -1,0 +1,26 @@
+# gtk2 — built FROM SOURCE via a novadeck-owned PKGBUILD (packages/gtk2/PKGBUILD), NOT fetched
+# from the holo monorepo: holo has NO gtk2 to fetch a PKGBUILD for (SteamOS ships none). This is
+# the "local PKGBUILD" form (like packages/mesa/source.pin); makepkg still clones the upstream
+# GNOME git tag named in the PKGBUILD.
+#
+# Why: the native arm64 Steam client's steamui.so links libgtk-x11-2.0.so.0. We now ship gtk2 on
+# the HOST (it's in customize-base.sh PKGS, installed from this overlay ahead of holo) instead of
+# resolving it from Steam's bundled SR3 runtime via pressure-vessel. See packages/README.md for
+# the overlay mechanism and the holo-pacman-no-gtk2 note.
+#
+# Fields:
+#   name           pkgname (must match the PKGBUILD); also the work/ build-dir + repo entry
+#   pkgbuild_local path (relative to this dir) to the checked-in PKGBUILD to build
+#   pkgrel_suffix  numeric suffix appended to the PKGBUILD's pkgrel (N -> N.<suffix>) so pacman
+#                  prefers our build on later upgrades. Integer only (makepkg requires
+#                  pkgrel = integer[.integer]).
+#   patches        space-separated files under ./patches/, applied `patch -p1` in the gtk source
+#                  root (after `cd gtk` in prepare()), in the order listed. These are the upstream
+#                  Arch patches (XID-warning severity; CVE-2024-6655 stop-loading-modules-from-cwd).
+#
+# To bump gtk2: edit pkgver in packages/gtk2/PKGBUILD, re-verify both patches apply against the new
+# tag (patch -p1 --dry-run on a shallow clone), and re-roll any patch whose hunk fails.
+name: gtk2
+pkgbuild_local: PKGBUILD
+pkgrel_suffix: 1
+patches: 0001-Lower-severity-of-XID-collision-warnings.patch 0002-Stop-looking-for-modules-in-cwd.patch

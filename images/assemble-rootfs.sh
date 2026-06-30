@@ -213,65 +213,57 @@ mkdir -p "$stage/etc"
 if ! grep -q 'LABEL=novadeck-home' "$stage/etc/fstab" 2>/dev/null; then
   printf '%s\n' \
     '# novadeck shared data partition — the deck user home + Steam library live here.' \
-    '# x-systemd.growfs is NOT used: novadeck-grow-home grows the partition AND the fs online.' \
-    'LABEL=novadeck-home  /home  ext4  defaults,nofail  0 2' \
+    '# x-systemd.growfs grows the ext4 to the partition at mount; systemd-repart (novadeck-grow-' \
+    '# home.service) grows the partition itself to fill the device first, earlier in boot.' \
+    'LABEL=novadeck-home  /home  ext4  defaults,nofail,x-systemd.growfs  0 2' \
     >>"$stage/etc/fstab"
 fi
 
-install -d -m0755 "$stage/usr/lib/novadeck"
-cat >"$stage/usr/lib/novadeck/novadeck-grow-home" <<'GROW'
-#!/bin/sh
-# novadeck first-boot /home grow — extend the home partition + ext4 to fill the storage device.
-# We dd a fixed-size image to cards of varying size, so claim the rest of the device once, on first
-# boot. Uses only base tools: blkid/lsblk/sfdisk/partx (util-linux) + resize2fs (e2fsprogs).
-set -eu
-MARK=/home/.novadeck-grown
-[ -e "$MARK" ] && exit 0
-dev=$(blkid -L novadeck-home 2>/dev/null) || { echo "[grow-home] no novadeck-home partition"; exit 0; }
-node=$(basename "$dev")
-parent=$(lsblk -ndo PKNAME "$dev" 2>/dev/null || true)
-num=$(cat "/sys/class/block/$node/partition" 2>/dev/null || true)
-{ [ -n "$parent" ] && [ -n "$num" ]; } || { echo "[grow-home] cannot resolve disk/partno for $dev"; exit 0; }
-disk="/dev/$parent"
-echo "[grow-home] growing $dev (partition $num on $disk) to fill the device"
-# Extend the partition to the end of the disk. --no-reread: /home is mounted so the kernel can't
-# re-read the whole table; partx -u then refreshes just this partition's size in the kernel.
-echo ', +' | sfdisk --no-reread --force -N "$num" "$disk" || { echo "[grow-home] sfdisk failed — leaving as-is"; exit 0; }
-partx -u "$disk" || true
-resize2fs "$dev" || { echo "[grow-home] resize2fs failed — leaving as-is"; exit 0; }
-touch "$MARK"
-echo "[grow-home] done"
-GROW
-chmod 0755 "$stage/usr/lib/novadeck/novadeck-grow-home"
+# Grow the home PARTITION to fill the device with systemd-repart (declarative, online — it issues
+# a BLKPG resize so it works while the disk is in use, and relocates the GPT backup header for us).
+# The stock systemd-repart.service is initrd-only (no [Install], Before=initrd-root-fs.target) and
+# we have no initramfs, so ship our own unit running the same tool early in real-root boot, before
+# /home mounts; x-systemd.growfs (fstab above) then grows the ext4 at mount. repart matches our
+# partition by its discoverable "Linux /home" GUID (make-sdcard gives p3 typecode 8302), so it can
+# never touch the root partition. Both steps are idempotent — no marker needed.
+install -d -m0755 "$stage/usr/lib/repart.d"
+cat >"$stage/usr/lib/repart.d/50-novadeck-home.conf" <<'REPART'
+[Partition]
+# Match the existing /home partition (Linux /home GUID) and grow it to claim free space at the end
+# of the disk. No SizeMinBytes/SizeMaxBytes -> repart expands it to take everything available.
+Type=home
+REPART
 
 install -d -m0755 "$stage/usr/lib/systemd/system"
 cat >"$stage/usr/lib/systemd/system/novadeck-grow-home.service" <<'UNIT'
 [Unit]
-Description=novadeck first-boot grow of /home to fill the storage device
-RequiresMountsFor=/home
-After=home.mount
-Before=novadeck-steam-bootstrap.service
-ConditionPathExists=!/home/.novadeck-grown
+Description=novadeck first-boot grow of /home to fill the storage device (systemd-repart)
+Documentation=man:systemd-repart(8)
+DefaultDependencies=no
+ConditionDirectoryNotEmpty=/usr/lib/repart.d
+After=systemd-udevd.service
+Before=local-fs-pre.target shutdown.target
+Conflicts=shutdown.target
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/usr/lib/novadeck/novadeck-grow-home
-StandardOutput=journal
-StandardError=journal
+ExecStart=/usr/bin/systemd-repart --dry-run=no
+# 76 = no root block device found, 77 = no GPT (e.g. the old 2-partition test card): treat as OK.
+SuccessExitStatus=76 77
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=sysinit.target
 UNIT
 
 # Enable on release: higher-priority preset (60 < 99 stock "disable *") + a build-time symlink
-# fallback, exactly like the InputPlumber block above.
+# fallback. The unit runs early (Before=local-fs-pre.target), pulled in via sysinit.target.
 install -d -m0755 "$stage/usr/lib/systemd/system-preset"
 echo "enable novadeck-grow-home.service" \
   >"$stage/usr/lib/systemd/system-preset/60-novadeck-storage.preset"
-install -d -m0755 "$stage/etc/systemd/system/multi-user.target.wants"
+install -d -m0755 "$stage/etc/systemd/system/sysinit.target.wants"
 ln -sf /usr/lib/systemd/system/novadeck-grow-home.service \
-       "$stage/etc/systemd/system/multi-user.target.wants/novadeck-grow-home.service"
+       "$stage/etc/systemd/system/sysinit.target.wants/novadeck-grow-home.service"
 
 # 4b-audio. ALSA UCM2 machine profile (SteamOS layer C audio). A static overlay tree under
 # audio/ mirror-copied into the rootfs: the device's card-name-matched UCM2 profile so userland

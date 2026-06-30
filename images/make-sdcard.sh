@@ -67,13 +67,14 @@ mkfs.ext4 -q -F -L novadeck-home -m0 "$home"
 echo "  home ${HOME_SIZE_MIB}MiB ext4 (novadeck-home) — grows to fill the card on first boot"
 
 # 3. blank disk image + GPT: p1 ESP (aligned), p2 rootfs (content-sized), p3 home filling the rest.
+# p3 uses typecode 8302 (Linux /home discoverable GUID) so systemd-repart can match + grow ONLY it.
 mkdir -p "$IMGDIR"; rm -f "$IMG"
 truncate -s "${total_mib}M" "$IMG"
 sgdisk -Z "$IMG" >/dev/null
 sgdisk -a $(( MIB / 512 )) \
   -n "1:0:+${ESP_SIZE_MIB}M" -t 1:ef00 -c 1:NOVADECK-ESP \
   -n "2:0:+${rootfs_mib}M"   -t 2:8300 -c 2:novadeck-root \
-  -n "3:0:0"                 -t 3:8300 -c 3:novadeck-home \
+  -n "3:0:0"                 -t 3:8302 -c 3:novadeck-home \
   "$IMG" >/dev/null
 sgdisk -p "$IMG"
 

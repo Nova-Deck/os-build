@@ -25,6 +25,5 @@ assumes 4K pages.** Standardized across all three SoCs.
 - ✅ Config symbols validated against that tree (see header of `kernel.config`).
 - ✅ Builds `Image.gz` + all board dtbs and stages loadable modules to `out/modroot`
   for the rootfs assembler — the `=m` handheld-panel drivers (display) ride along.
-- ⏳ Remaining work is on-hardware — see `devices/bringup.md`.
-
-_Phase 1 scaffold._
+- ✅ Boots on real SM8650 hardware; display, input, and Turnip Vulkan validated
+  (Phase 1 gate cleared) — see `devices/bringup.md`.

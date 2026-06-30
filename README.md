@@ -4,7 +4,10 @@ An **immutable, A/B-updatable aarch64 Linux distribution** that forks SteamOS 3 
 onto Qualcomm mobile silicon (**SM8550 / SM8650 / SM8750**). x86/x86_64 games run via
 **Proton → Wine → FEX-Emu**, with native Vulkan via **Mesa Turnip** on Adreno.
 
-> Status: **Phase 0 — scaffolding.** Nothing here boots yet.
+> Status: **Phase 3 — native arm64 Steam shell bring-up.** SM8650 boots on real
+> hardware with Turnip Vulkan (Phase 1 gate cleared), a gamescope session + Qualcomm
+> HW-support layer (Phase 2 cleared), and an offline GamepadUI Steam shell that renders
+> on-panel. Remaining: FEX/Proton x86 games, then Phase 4 A/B atomic updates.
 
 ## Plan
 
@@ -64,7 +67,7 @@ for a test card. Device firmware is fetched from the pinned Nova-Deck/qcom-firmw
 novadeck builds **on top of** Valve/Collabora's official aarch64 Arch port
 (`holo-core-aarch64-preview`) rather than rebuilding userspace. It is an unsupported
 technology preview pinned to a snapshot — see [`docs/base-pin.md`](docs/base-pin.md).
-The reference clone lives in `_vendor/` (git-ignored).
+Upstream and peer-distro reference clones live in `_reference/` (untracked, local-only).
 
 ## Licensing & firmware
 

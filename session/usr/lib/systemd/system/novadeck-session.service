@@ -5,13 +5,29 @@ Description=novadeck gamescope session (SteamOS layer B — Deck UI shell)
 # Controllers should be present inside the session, and basic multi-user state up first.
 # The Steam tree must be staged (novadeck-steam-bootstrap) before the shell launcher runs — pull
 # it in and order after it (the oneshot self-skips once staged, so steady-state boots pay nothing).
-After=systemd-user-sessions.service inputplumber.service getty@tty1.service novadeck-steam-bootstrap.service
-Wants=inputplumber.service novadeck-steam-bootstrap.service
+# seatd.service is the PERSISTENT root seat broker (seatd -g seat): the session runs as the
+# unprivileged deck user and connects to its socket (deck is in the `seat` group). Pull it in and
+# order after it so the socket exists before gamescope opens the seat.
+After=systemd-user-sessions.service inputplumber.service getty@tty1.service novadeck-steam-bootstrap.service seatd.service
+Wants=inputplumber.service novadeck-steam-bootstrap.service seatd.service
 # Own VT1: gamescope's DRM backend takes DRM master and the panel, so getty/fbcon must not fight it.
 Conflicts=getty@tty1.service
 
 [Service]
 Type=simple
+# Run the Deck shell as the unprivileged deck user (uid 1000), NOT root — matches SteamOS/Armada
+# (Steam refuses to run well as root, and /home/deck is deck-owned). Privileged seat/DRM-master
+# handoff is brokered by the root seatd.service; deck's `seat`/`video`/`render`/`input` group
+# membership (baked into the base) grants the socket + device access. systemd seeds HOME, USER and
+# the user's supplementary groups from the passwd db.
+User=deck
+Group=deck
+# No graphical logind session exists for this system service, so there is no /run/user/1000. Give
+# the session its own deck-owned XDG_RUNTIME_DIR (systemd creates /run/novadeck-session 0700, cleaned
+# on stop) for gamescope's wayland socket — avoids pulling in linger + a full user manager (PipeWire
+# audio, which wants /run/user/1000, is deferred to the user-session bring-up).
+RuntimeDirectory=novadeck-session
+Environment=XDG_RUNTIME_DIR=/run/novadeck-session
 ExecStart=/usr/bin/novadeck-session
 Restart=on-failure
 RestartSec=2

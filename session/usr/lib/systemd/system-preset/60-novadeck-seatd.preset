@@ -1,0 +1,9 @@
+# novadeck: enable seatd on release as the session's seat broker (SteamOS layer B). novadeck-session
+# runs as the unprivileged deck user and opens the seat via this persistent root seatd.service
+# (ExecStart=seatd -g seat); deck is in the `seat` group. /etc/machine-id is empty on a fresh image
+# so systemd runs preset-all on first boot, where the stock 99-default.preset is "disable *"; this
+# higher-priority preset (60 < 99) keeps seatd enabled. A build-time multi-user.target.wants symlink
+# ships alongside as a fallback (cf. inputplumber's 60-novadeck). The novadeck-session.service unit
+# itself stays installed-but-DISABLED (started by hand in bring-up); only its seatd dependency is
+# enabled here so the seat broker is up before the session launches.
+enable seatd.service

@@ -134,10 +134,13 @@ fi
 # SoC-agnostic overlay tree under session/ (launcher /usr/bin/novadeck-session, its config
 # /etc/novadeck/session.conf, and the novadeck-session.service unit) mirror-copied into the
 # rootfs. gamescope/seatd/vulkan-tools come from the base (customize-base.sh) — this adds no
-# package, only the session wiring. The unit ships installed-but-DISABLED (no preset/symlink):
+# package, only the session wiring. The novadeck-session.service unit ships installed-but-DISABLED:
 # Phase 2 validates it by hand (`systemctl start novadeck-session`) so it never seizes the panel
 # from the SSH/smoke bring-up path; flipping to boot-enabled is a one-line preset add once it is
-# proven on HW and the Phase-3 Steam shell lands. See devices/bringup-phase2.md step 2.
+# proven on HW and the Phase-3 Steam shell lands. seatd.service (its seat broker) IS enabled here
+# (60-novadeck-seatd.preset + multi-user.target.wants symlink ship inside the overlay): the session
+# runs as the unprivileged deck user and opens the seat via the persistent root seatd. See
+# devices/bringup-phase2.md step 2.
 SESSION="$ROOT/session"
 if [ -d "$SESSION" ]; then
   echo "  injecting novadeck gamescope-session from ${SESSION#"$ROOT"/} (installed, not auto-enabled)"

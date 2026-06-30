@@ -52,7 +52,10 @@ fi
 # Force the real DRM/KMS backend: a stray WAYLAND_DISPLAY/DISPLAY makes gamescope try to nest under
 # a (non-existent) parent compositor and fail with "Failed to connect to wayland socket".
 unset WAYLAND_DISPLAY DISPLAY
-export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/0}"
+# The unit provides a deck-owned XDG_RUNTIME_DIR via RuntimeDirectory= (/run/novadeck-session) for
+# gamescope's wayland socket. Fall back to it for manual runs. Note: the deck user cannot create
+# dirs under /run, so a bare manual invocation relies on the unit (or the tester) having made it.
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/novadeck-session}"
 mkdir -p "$XDG_RUNTIME_DIR"; chmod 700 "$XDG_RUNTIME_DIR"
 
 # Keep the gamescope WSI Vulkan layer ON, matching upstream gamescope and ChimeraOS
@@ -84,19 +87,18 @@ if [ -n "$NOVADECK_GAMESCOPE_OUTPUT" ]; then
   GS_ARGS="$GS_ARGS --prefer-output $NOVADECK_GAMESCOPE_OUTPUT"
 fi
 
-# No graphical logind seat exists for a system service at boot, and the holo libseat is built with
-# only the logind+seatd backends (no 'builtin'), so run under seatd: seatd-launch spawns seatd,
-# exports SEATD_SOCK + LIBSEAT_BACKEND=seatd for the child, and tears seatd down on exit.
+# No graphical logind seat exists for this system service, and the holo libseat is built with only
+# the logind+seatd backends (no 'builtin'), so connect to the PERSISTENT root seatd.service
+# (ExecStart=seatd -g seat, pulled in + ordered before us by the unit). We run as the unprivileged
+# deck user — deck is in the `seat` group, so it can open /run/seatd.sock, and seatd brokers the
+# privileged DRM-master/VT handoff to gamescope. Force the seatd backend (no logind session to
+# attach to) and point libseat at the daemon's socket.
 #
-# seatd-launch refuses to start if /run/seatd.sock already exists ("Socket file found ... refusing
-# to start"), and an unclean exit can leave a stale socket behind — fatal for the next start (and
-# for the unit's Restart=on-failure). We own the only seatd, so if none is actually running, the
-# socket is stale: clear it.
-if [ -S /run/seatd.sock ]; then
-  if ! { command -v pgrep >/dev/null 2>&1 && pgrep -x seatd >/dev/null 2>&1; }; then
-    rm -f /run/seatd.sock
-  fi
-fi
+# NOT seatd-launch: that spawns its OWN seatd as the calling user, which needs root — incompatible
+# with User=deck. The root seatd.service owns the socket's lifecycle, so no stale-socket cleanup
+# here (and deck could not remove it anyway).
+export LIBSEAT_BACKEND=seatd
+export SEATD_SOCK="${SEATD_SOCK:-/run/seatd.sock}"
 
 # Word-splitting on GS_ARGS / the session command is intentional (sh, not bash).
-exec seatd-launch -- gamescope $GS_ARGS $NOVADECK_GAMESCOPE_EXTRA -- $NOVADECK_SESSION_CMD
+exec gamescope $GS_ARGS $NOVADECK_GAMESCOPE_EXTRA -- $NOVADECK_SESSION_CMD

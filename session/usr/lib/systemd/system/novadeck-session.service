@@ -8,8 +8,13 @@ Description=novadeck gamescope session (SteamOS layer B — Deck UI shell)
 # seatd.service is the PERSISTENT root seat broker (seatd -g seat): the session runs as the
 # unprivileged deck user and connects to its socket (deck is in the `seat` group). Pull it in and
 # order after it so the socket exists before gamescope opens the seat.
-After=systemd-user-sessions.service inputplumber.service getty@tty1.service novadeck-steam-bootstrap.service seatd.service
-Wants=inputplumber.service novadeck-steam-bootstrap.service seatd.service
+# user@1000.service is the deck user's systemd --user manager. It is brought up at boot because deck
+# is configured to LINGER (/var/lib/systemd/linger/deck baked into the RO root); starting it gives us
+# a real per-user runtime: /run/user/1000 (created by user-runtime-dir@1000.service, which user@ pulls
+# in + orders before) AND the user D-Bus session bus (dbus.socket inside the manager, at
+# /run/user/1000/bus). Pull it in + order after it so both exist before gamescope/Steam start.
+After=systemd-user-sessions.service inputplumber.service getty@tty1.service novadeck-steam-bootstrap.service seatd.service user@1000.service
+Wants=inputplumber.service novadeck-steam-bootstrap.service seatd.service user@1000.service
 # Own VT1: gamescope's DRM backend takes DRM master and the panel, so getty/fbcon must not fight it.
 Conflicts=getty@tty1.service
 
@@ -22,12 +27,15 @@ Type=simple
 # the user's supplementary groups from the passwd db.
 User=deck
 Group=deck
-# No graphical logind session exists for this system service, so there is no /run/user/1000. Give
-# the session its own deck-owned XDG_RUNTIME_DIR (systemd creates /run/novadeck-session 0700, cleaned
-# on stop) for gamescope's wayland socket — avoids pulling in linger + a full user manager (PipeWire
-# audio, which wants /run/user/1000, is deferred to the user-session bring-up).
-RuntimeDirectory=novadeck-session
-Environment=XDG_RUNTIME_DIR=/run/novadeck-session
+# Give the session a REAL per-user runtime instead of a bare service RuntimeDirectory. deck lingers
+# (see After=user@1000.service above), so logind has already created /run/user/1000 (deck-owned, 0700)
+# and the user D-Bus session bus lives at /run/user/1000/bus. Point XDG_RUNTIME_DIR there — that is
+# where gamescope puts its Wayland socket, where PipeWire will land its sockets (audio bring-up), and
+# what Steam/CEF expect — and hand the client an explicit DBUS_SESSION_BUS_ADDRESS so it talks to the
+# user bus (without a session bus Steam's CEF transport fails, e.g. the 0x3008/0x3009 popup). The
+# user manager owns this dir's lifecycle, so no RuntimeDirectory= here.
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
 ExecStart=/usr/bin/novadeck-session
 Restart=on-failure
 RestartSec=2

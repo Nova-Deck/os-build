@@ -52,11 +52,18 @@ fi
 # Force the real DRM/KMS backend: a stray WAYLAND_DISPLAY/DISPLAY makes gamescope try to nest under
 # a (non-existent) parent compositor and fail with "Failed to connect to wayland socket".
 unset WAYLAND_DISPLAY DISPLAY
-# The unit provides a deck-owned XDG_RUNTIME_DIR via RuntimeDirectory= (/run/novadeck-session) for
-# gamescope's wayland socket. Fall back to it for manual runs. Note: the deck user cannot create
-# dirs under /run, so a bare manual invocation relies on the unit (or the tester) having made it.
-export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/novadeck-session}"
-mkdir -p "$XDG_RUNTIME_DIR"; chmod 700 "$XDG_RUNTIME_DIR"
+# deck lingers, so logind keeps a real per-user runtime up: /run/user/1000 (deck-owned, 0700) plus
+# the user D-Bus session bus at /run/user/1000/bus. The unit points XDG_RUNTIME_DIR here and exports
+# DBUS_SESSION_BUS_ADDRESS; default the same for manual `sudo -u deck` runs. The deck user cannot
+# create dirs under /run, so we do NOT mkdir it — it must already exist (the lingering user manager
+# makes it; for a manual run outside that, start user@1000 first). gamescope drops its Wayland socket
+# here, and Steam/CEF reach the session bus via DBUS_SESSION_BUS_ADDRESS.
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=${XDG_RUNTIME_DIR}/bus}"
+if [ ! -d "$XDG_RUNTIME_DIR" ]; then
+  echo "novadeck-session: $XDG_RUNTIME_DIR missing — is the deck user manager (user@$(id -u)) up?" >&2
+  exit 1
+fi
 
 # Keep the gamescope WSI Vulkan layer ON, matching upstream gamescope and ChimeraOS
 # gamescope-session-plus (which exports ENABLE_GAMESCOPE_WSI=1). The FROG WSI layer is the STANDARD

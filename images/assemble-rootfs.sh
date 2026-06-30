@@ -139,8 +139,11 @@ fi
 # from the SSH/smoke bring-up path; flipping to boot-enabled is a one-line preset add once it is
 # proven on HW and the Phase-3 Steam shell lands. seatd.service (its seat broker) IS enabled here
 # (60-novadeck-seatd.preset + multi-user.target.wants symlink ship inside the overlay): the session
-# runs as the unprivileged deck user and opens the seat via the persistent root seatd. See
-# devices/bringup-phase2.md step 2.
+# runs as the unprivileged deck user and opens the seat via the persistent root seatd. The overlay
+# also bakes /var/lib/systemd/linger/deck so logind starts the deck user manager (user@1000) at boot,
+# giving the session a real per-user runtime — /run/user/1000 + the user D-Bus session bus — instead
+# of a bare service RuntimeDirectory (what gamescope's Wayland socket, Steam/CEF's bus, and later
+# PipeWire audio expect). See devices/bringup-phase2.md step 2.
 SESSION="$ROOT/session"
 if [ -d "$SESSION" ]; then
   echo "  injecting novadeck gamescope-session from ${SESSION#"$ROOT"/} (installed, not auto-enabled)"

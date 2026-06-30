@@ -75,7 +75,16 @@ DEST="$ROOT/work/base"
 # reason (xorg-x11-server-Xwayland in 30-install-steam-session.sh).
 # e2fsprogs: the deck user's /home is a dedicated ext4 partition grown to fill the card on first
 # boot (novadeck-grow-home) — resize2fs (+ e2fsck) come from here; sfdisk/partx are in util-linux.
-PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-tools mesa gamescope seatd bluez bluez-utils networkmanager alsa-ucm-conf pipewire wireplumber pipewire-pulse pipewire-alsa unzip openal gtk2 ffmpeg e2fsprogs xorg-xwayland)
+# lsof: the native Steam client's WebUITransport authenticates the loopback websocket from
+# steamwebhelper by shelling out to `lsof` to verify the connecting peer's pid/uid. Without it
+# GetIPCConnectionDetails fails (exit 127) and steam REJECTS every GamepadUI connection, so the UI
+# never binds to the client and renders the 0x3008 "trouble connecting" error (a black panel + popup).
+# noto-fonts(+cjk+emoji): the GamepadUI renders text through CEF/fontconfig, NOT only Steam's bundled
+# fonts. The base drags in just adwaita-fonts (Latin), so every non-Latin language name on the
+# first-boot language-selection screen (简体中文, 日本語, 한국어, Русский, العربية, …) renders as tofu —
+# only "English" is readable. Noto gives broad Unicode coverage (noto-fonts: Latin/Cyrillic/Greek/
+# Arabic/Thai/…; -cjk: CJK; -emoji: UI emoji), matching SteamOS's font set.
+PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-tools mesa gamescope seatd bluez bluez-utils networkmanager alsa-ucm-conf pipewire wireplumber pipewire-pulse pipewire-alsa unzip openal gtk2 ffmpeg e2fsprogs xorg-xwayland lsof noto-fonts noto-fonts-cjk noto-fonts-emoji)
 
 # Test-only packages — installed ONLY under NOVADECK_TEST=1, NEVER in a release base.
 # On-device bring-up tools: evtest reads raw /dev/input events; usbutils provides lsusb.

@@ -1,0 +1,126 @@
+# gtk2 — built FROM SOURCE (GNOME git tag 2.24.33) via a novadeck-owned PKGBUILD, NOT fetched
+# from the holo monorepo: holo has NO gtk2 at all (SteamOS ships none — verified against the
+# 3.8.10 rootfs), so there is no PKGBUILD to curl. build-overlay.sh sees `pkgbuild_local` in
+# source.pin and uses this checked-in recipe; makepkg clones the upstream git source named here.
+#
+# Why novadeck needs gtk2: the native arm64 Steam client's steamui.so links libgtk-x11-2.0.so.0
+# (and pulls gdk-pixbuf2/pango/cairo via its deps). The earlier plan resolved these from inside
+# Steam's bundled SR3 runtime via pressure-vessel; we now provide gtk2 on the HOST from this
+# overlay instead, so the client resolves its UI libs against the release base. See
+# images/customize-base.sh (gtk2 is in PKGS) and the holo-pacman-no-gtk2 note.
+#
+# This tracks the Arch `gtk2` recipe (gitlab.archlinux.org/.../packages/gtk2) as closely as
+# possible. Deviations from Arch, all driven by the overlay build mechanism / our use case:
+#   - arch=(aarch64): one aarch64 build serves every aarch64 SoC (see packages/build-overlay.sh).
+#   - The two Arch patches (XID-warning severity; CVE-2024-6655 module-cwd) are delivered through
+#     build-overlay's `patches:` mechanism (packages/gtk2/patches/, listed in source.pin) instead
+#     of this PKGBUILD's own source array — build-overlay only stages the PKGBUILD + those patches
+#     into the build dir and injects `patch -p1` after the first `cd` in prepare(). So prepare()
+#     below drops Arch's `git apply -3` lines; the injected patches run between `cd gtk` and the
+#     autoreconf step.
+#   - The GTK2 input-method-modules pacman hook + install scriptlet are dropped: they only rebuild
+#     immodules.cache (IME modules), which the Steam client does not use, and they would need the
+#     local hook/scriptlet files that build-overlay does not stage.
+#
+# To bump gtk2: edit pkgver, re-verify both patches apply against the new tag (patch -p1 --dry-run
+# on a shallow clone), and re-roll any hunk that fails.
+
+pkgname=gtk2
+pkgver=2.24.33
+pkgrel=5
+pkgdesc="GObject-based multi-platform GUI toolkit (legacy)"
+url="https://www.gtk.org/"
+arch=(aarch64)
+license=(LGPL-2.1-or-later)
+depends=(
+  atk
+  cairo
+  desktop-file-utils
+  fontconfig
+  gdk-pixbuf2
+  glib2
+  glibc
+  gtk-update-icon-cache
+  libcups
+  librsvg
+  libx11
+  libxcomposite
+  libxcursor
+  libxdamage
+  libxext
+  libxfixes
+  libxi
+  libxinerama
+  libxrandr
+  libxrender
+  pango
+  shared-mime-info
+)
+makedepends=(
+  git
+  glib2-devel
+  gobject-introspection
+  gtk-doc
+)
+source=(
+  "git+https://gitlab.gnome.org/GNOME/gtk.git#tag=$pkgver"
+)
+b2sums=('SKIP')
+
+prepare() {
+  cd gtk
+  # build-overlay.sh injects `patch -p1 < "$srcdir/<patch>"` for each source.pin `patches:` entry
+  # right here, after the first `cd`. Keep this `cd gtk` as the first statement in prepare().
+  sed -i '/AM_INIT_AUTOMAKE/s/]/ foreign]/' configure.ac
+
+  # Don't build the demos/tests/perf programs (gtk-demo, the test suite, perf benchmarks): none
+  # are installed, and they roughly double the emulated build time. Trim them from the recursive
+  # SRC_SUBDIRS before autoreconf so the regenerated Makefiles never descend into them (build,
+  # install, dist). Keep gdk/gtk/modules — the library + loadable input/pixmap modules.
+  sed -i 's/^SRC_SUBDIRS = .*/SRC_SUBDIRS = gdk gtk modules/' Makefile.am
+
+  autoreconf -fvi
+}
+
+build() {
+  local configure_options=(
+    --prefix=/usr
+    --sysconfdir=/etc
+    --localstatedir=/var
+    --with-xinput=yes
+    --disable-gtk-doc
+  )
+
+  CFLAGS+=" -Wno-error=implicit-int -Wno-error=incompatible-pointer-types"
+
+  cd gtk
+  ./configure "${configure_options[@]}"
+  sed -i -e 's/ -shared / -Wl,-O1,--as-needed\0/g' libtool
+  make
+}
+
+package() {
+  optdepends=(
+    'adwaita-icon-theme: Default icon theme'
+    'gnome-themes-standard: Default widget theme'
+    'python: gtk-builder-convert'
+  )
+  provides=(
+    libgailutil.so
+    libgdk-x11-2.0.so
+    libgtk-x11-2.0.so
+  )
+
+  make -C gtk DESTDIR="$pkgdir" install
+
+  install -Dm644 /dev/stdin "$pkgdir/usr/share/gtk-2.0/gtkrc" <<END
+gtk-icon-theme-name = "Adwaita"
+gtk-theme-name = "Adwaita"
+gtk-font-name = "Cantarell 11"
+END
+
+  # Built by GTK 4, shared with GTK 2/3
+  rm "$pkgdir/usr/bin/gtk-update-icon-cache"
+}
+
+# vim:set sw=2 sts=-1 et:

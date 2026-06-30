@@ -81,5 +81,10 @@ Current overlay:
   `html-docs=disabled`. LLVM/clang stay on, as upstream. Replaces holo's stale, all-driver
   `mesa`/`vulkan-freedreno`. Carries SM8750 / Adreno a830 enablement patches under
   `packages/mesa/patches/`.
+- `gtk2/` — **local PKGBUILD** building gtk+ `2.24.33` from the GNOME git tag. holo ships NO gtk2
+  at all, but the native arm64 Steam client's `steamui.so` links `libgtk-x11-2.0.so.0`, so we build
+  it from source and install it on the host (it's in `customize-base.sh` PKGS) rather than resolving
+  it from Steam's bundled SR3 runtime via pressure-vessel. Tracks the Arch recipe; carries the two
+  upstream Arch patches (XID-warning severity; CVE-2024-6655 module-cwd) under `packages/gtk2/patches/`.
 
 _Phase 0 placeholder — populated in Phases 2-3._

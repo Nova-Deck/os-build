@@ -60,16 +60,20 @@ DEST="$ROOT/work/base"
 # unzip: the native arm64 Steam client seed ships as a .zip the steam-bootstrap stages on first
 # boot (SteamOS layer D, steam/ overlay). curl/tar/xz are already in the base.
 # openal: a HOST system lib the native arm64 Steam client links (libopenal.so.1); it IS in the holo
-# repo, so install it. NOTE the client's OTHER UI libs — gtk2 (libgtk-x11-2.0.so.0 for steamui.so) +
-# gdk_pixbuf — are deliberately NOT installed here: holo has no gtk2 (SteamOS itself ships none —
-# verified against the SteamOS 3.8.10 rootfs), they exist only inside Steam's bundled SR3 runtime, and
-# novadeck-steam launches the client THROUGH that runtime via pressure-vessel so steamui.so resolves
-# them from the container, not the host. (Armada's raw-ELF + `dnf install gtk2` is a Fedora-only
-# shortcut we do NOT follow.) See steam/usr/bin/novadeck-steam.
+# repo, so install it.
+# gtk2: steamui.so links libgtk-x11-2.0.so.0. holo has NO gtk2 (SteamOS itself ships none — verified
+# against the SteamOS 3.8.10 rootfs), so we BUILD it from source as a novadeck overlay package
+# (packages/gtk2/) and install it HERE from that overlay — the client resolves its UI libs against
+# the host base, NOT from inside Steam's bundled SR3 runtime via pressure-vessel as earlier planned.
+# gtk2's own deps (gdk-pixbuf2, pango, cairo, …) come along via pacman. (Armada's raw-ELF +
+# `dnf install gtk2` is a Fedora-only shortcut; we build from source instead.) See packages/gtk2/.
+# ffmpeg: the native arm64 Steam client links libav*/libsw* (libavcodec, libavformat, libswscale,
+# libswresample) for in-client media/video (store trailers, intro/animated UI). It IS in the holo
+# repo, so install it.
 # xorg-xwayland: x86 games run under FEX/Proton render through Xwayland inside gamescope (the Deck
 # shell is native Wayland, but most Proton titles are X11 clients). Armada ships it for the same
 # reason (xorg-x11-server-Xwayland in 30-install-steam-session.sh).
-PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-tools mesa gamescope seatd bluez bluez-utils networkmanager alsa-ucm-conf pipewire wireplumber pipewire-pulse pipewire-alsa unzip openal xorg-xwayland)
+PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-tools mesa gamescope seatd bluez bluez-utils networkmanager alsa-ucm-conf pipewire wireplumber pipewire-pulse pipewire-alsa unzip openal gtk2 ffmpeg xorg-xwayland)
 
 # Test-only packages — installed ONLY under NOVADECK_TEST=1, NEVER in a release base.
 # On-device bring-up tools: evtest reads raw /dev/input events; usbutils provides lsusb.

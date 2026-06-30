@@ -47,7 +47,8 @@ StandardInput=null
 StandardOutput=journal
 StandardError=journal
 
-# Phase-2: shipped installed-but-DISABLED. Validate first with `systemctl start novadeck-session`
-# (see bringup-phase2.md step 2); flip to boot-enabled (preset) once on-HW and Steam lands.
+# ARMED on release (Phase 3): enabled via 60-novadeck-session.preset + a graphical.target.wants
+# symlink, with default.target pointed at graphical.target (both in the session/ overlay). The device
+# boots straight into the Deck shell. (Phase 2 validated it by hand with `systemctl start`.)
 [Install]
 WantedBy=graphical.target

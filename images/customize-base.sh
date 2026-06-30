@@ -264,6 +264,26 @@ docker run --name "$cid" --platform linux/arm64 -v "$PREBUILT_DIR":/prebuilt:ro 
   ln -sf /dev/null /etc/systemd/system/systemd-networkd.socket
   ln -sf /dev/null /etc/systemd/system/systemd-networkd-wait-online.service
 
+  # ...and ENABLE NetworkManager for every build. The holo base ships NM installed-but-disabled;
+  # with networkd now masked, a release image would have NO active network manager at all, so the
+  # Steam gamepadui lists zero Wi-Fi (HW-confirmed). The test block in assemble-rootfs.sh used to be
+  # the only place NM got enabled — wrong layer (test-only). Enable it here the preset-proof way:
+  # /etc/machine-id is empty so first boot runs preset-all where the stock 99-default.preset says
+  # "disable *"; a high-prio preset (60 < 99) keeps NM enabled, and the multi-user.target.wants +
+  # dbus-activation symlinks (what systemctl enable NetworkManager makes) are the build-time
+  # fallback. NM drives wpa_supplicant directly; no wpa_supplicant.service enable needed.
+  # NOTE: this whole block runs inside the single-quoted docker bash -c, and at this stage /usr is
+  # pacman-owned + read-only, so the preset goes in /etc (systemd reads /etc/systemd/system-preset/
+  # too, at higher priority than /usr/lib). Keep comments apostrophe-free — a bare single-quote
+  # closes the -c string and leaks the rest to the host shell (permission-denied on /etc + /usr).
+  mkdir -p /etc/systemd/system-preset
+  echo "enable NetworkManager.service" >/etc/systemd/system-preset/60-novadeck-network.preset
+  mkdir -p /etc/systemd/system/multi-user.target.wants
+  ln -sf /usr/lib/systemd/system/NetworkManager.service \
+         /etc/systemd/system/multi-user.target.wants/NetworkManager.service
+  ln -sf /usr/lib/systemd/system/NetworkManager.service \
+         /etc/systemd/system/dbus-org.freedesktop.NetworkManager.service
+
   # deck user (uid/gid 1000) — owns the session home /home/deck (a dedicated growable partition)
   # and, later, the gamescope session. SteamOS uses uid 1000 "deck"; bake the account into the RO
   # root /etc HERE (the root is read-only at runtime, so a boot-time systemd-sysusers could not
@@ -294,5 +314,7 @@ mkdir -p "$DEST"
 docker export "$cid" | docker run --rm -i -v "$DEST":/dest "$REF" \
   tar -C /dest --numeric-owner -xf -
 
-echo "[novadeck] customized base ready ($(du -sh "$DEST" | cut -f1) at ${DEST#"$ROOT"/})" >&2
+# du -sh on a root-owned export warns on 0700 dirs (/root, NM system-connections, gnupg keys) when
+# run as the host user; the size is just for the log line, so drop those stderr warnings.
+echo "[novadeck] customized base ready ($(du -sh "$DEST" 2>/dev/null | cut -f1) at ${DEST#"$ROOT"/})" >&2
 echo "$DEST"

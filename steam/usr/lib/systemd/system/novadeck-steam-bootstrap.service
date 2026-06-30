@@ -5,8 +5,9 @@ Description=novadeck native arm64 Steam first-boot seeder (SteamOS layer D — s
 # grown first, and the deck user present (baked into the base).
 RequiresMountsFor=/home
 After=home.mount novadeck-grow-home.service systemd-sysusers.service
-# Skip entirely once the native client is seeded (idempotent; the script also self-skips).
-ConditionPathExists=!/home/deck/.local/share/Steam/steamrtarm64/steam
+# Always run: the script self-skips the ~1GB copy when already seeded but ALWAYS repairs /home/deck
+# ownership (a prior/older seed can leave the home present yet root-owned, blocking Steam). No
+# ConditionPathExists here — gating on "Steam present" is exactly what skipped the ownership repair.
 
 [Service]
 Type=oneshot

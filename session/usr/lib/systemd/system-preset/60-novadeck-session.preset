@@ -1,0 +1,9 @@
+# novadeck: ARM the Deck UI shell on release (SteamOS layer B). Phase 3 has landed (native arm64
+# Steam shell + offline seed), so novadeck-session.service flips from installed-but-disabled to
+# boot-enabled — the device now boots straight into gamescope+Steam instead of waiting for a hand-run
+# `systemctl start`. /etc/machine-id is empty on a fresh image so systemd runs preset-all on first
+# boot, where the stock 99-default.preset is "disable *"; this higher-priority preset (60 < 99) keeps
+# the session enabled. A build-time graphical.target.wants symlink ships alongside as a fallback (cf.
+# seatd's 60-novadeck-seatd). The unit is WantedBy=graphical.target, so the overlay also points
+# default.target at graphical.target (the base boots multi-user otherwise and never reaches it).
+enable novadeck-session.service

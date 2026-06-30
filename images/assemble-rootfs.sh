@@ -134,10 +134,10 @@ fi
 # SoC-agnostic overlay tree under session/ (launcher /usr/bin/novadeck-session, its config
 # /etc/novadeck/session.conf, and the novadeck-session.service unit) mirror-copied into the
 # rootfs. gamescope/seatd/vulkan-tools come from the base (customize-base.sh) — this adds no
-# package, only the session wiring. The novadeck-session.service unit ships installed-but-DISABLED:
-# Phase 2 validates it by hand (`systemctl start novadeck-session`) so it never seizes the panel
-# from the SSH/smoke bring-up path; flipping to boot-enabled is a one-line preset add once it is
-# proven on HW and the Phase-3 Steam shell lands. seatd.service (its seat broker) IS enabled here
+# package, only the session wiring. As of Phase 3 the novadeck-session.service unit is ARMED: the
+# overlay ships 60-novadeck-session.preset (enable) + a graphical.target.wants symlink, and points
+# default.target at graphical.target, so the device boots straight into the Deck shell (Phase 2
+# validated it by hand with `systemctl start`). seatd.service (its seat broker) IS enabled here
 # (60-novadeck-seatd.preset + multi-user.target.wants symlink ship inside the overlay): the session
 # runs as the unprivileged deck user and opens the seat via the persistent root seatd. The overlay
 # also bakes /var/lib/systemd/linger/deck so logind starts the deck user manager (user@1000) at boot,
@@ -146,7 +146,7 @@ fi
 # PipeWire audio expect). See devices/bringup-phase2.md step 2.
 SESSION="$ROOT/session"
 if [ -d "$SESSION" ]; then
-  echo "  injecting novadeck gamescope-session from ${SESSION#"$ROOT"/} (installed, not auto-enabled)"
+  echo "  injecting novadeck gamescope-session from ${SESSION#"$ROOT"/} (ARMED: boots to Deck shell)"
   cp -a "$SESSION"/. "$stage/"
   chmod 0755 "$stage/usr/bin/novadeck-session"
 else
@@ -281,7 +281,7 @@ ln -sf /usr/lib/systemd/system/novadeck-grow-home.service \
 # be provided by the base alsa-ucm-conf package — ensure it is in the release PKGS (layer-4 work).
 AUDIO="$ROOT/audio"
 if [ -d "$AUDIO" ]; then
-  echo "  injecting novadeck ALSA UCM2 profile from ${AUDIO#"$ROOT"/} (card SM8650-APS2)"
+  echo "  injecting novadeck ALSA UCM2 profile from ${AUDIO#"$ROOT"/}"
   cp -a "$AUDIO"/. "$stage/"
 else
   echo "  (no audio/ tree — skipping UCM2 injection)"
@@ -343,20 +343,14 @@ EOF
 
   # Enable services. /etc/machine-id is empty, so systemd runs preset-all on first boot and
   # the stock 99-default.preset is "disable *"; ship a high-priority preset (70 < 99) so our
-  # units stay enabled, plus pre-create the symlinks as a build-time fallback.
+  # units stay enabled, plus pre-create the symlinks as a build-time fallback. Only sshd is
+  # test-only here — NetworkManager is enabled for EVERY build in customize-base.sh (the gamepadui
+  # needs it on release too), so it is NOT re-enabled here; this block only adds the test creds.
   install -d -m0755 "$stage/usr/lib/systemd/system-preset"
-  cat >"$stage/usr/lib/systemd/system-preset/70-novadeck-test.preset" <<EOF
-enable sshd.service
-enable NetworkManager.service
-EOF
+  echo "enable sshd.service" >"$stage/usr/lib/systemd/system-preset/70-novadeck-test.preset"
   install -d -m0755 "$stage/etc/systemd/system/multi-user.target.wants"
   ln -sf /usr/lib/systemd/system/sshd.service \
          "$stage/etc/systemd/system/multi-user.target.wants/sshd.service"
-  ln -sf /usr/lib/systemd/system/NetworkManager.service \
-         "$stage/etc/systemd/system/multi-user.target.wants/NetworkManager.service"
-  # NM's D-Bus activation alias (what `systemctl enable NetworkManager` also creates).
-  ln -sf /usr/lib/systemd/system/NetworkManager.service \
-         "$stage/etc/systemd/system/dbus-org.freedesktop.NetworkManager.service"
 
   # sshd needs host keys; a read-only root cannot generate them at boot, so pre-generate now.
   if command -v ssh-keygen >/dev/null 2>&1; then
@@ -437,5 +431,5 @@ rm -f "$IMG"
 truncate -s "$SIZE" "$IMG"
 mkfs.btrfs --rootdir "$stage" --shrink -L novadeck-root -f "$IMG" >/dev/null
 
-echo "  ok   rootfs -> ${IMG#"$ROOT"/}  ($(du -h "$IMG" | cut -f1), from $(du -sh "$stage" | cut -f1) staged)"
+echo "  ok   rootfs -> ${IMG#"$ROOT"/}  ($(du -h "$IMG" | cut -f1), from $(du -sh "$stage" 2>/dev/null | cut -f1) staged)"
 echo "Done. Read-only root ready for slot install / RAUC bundling (images/genbundle.sh)."

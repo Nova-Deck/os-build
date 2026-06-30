@@ -8,8 +8,9 @@ patches, DTS, firmware manifest entries, InputPlumber config); the build discove
 |---|---|
 | `firmware-manifest.txt` | Required firmware (union of all boards): `linux-fw` (open) vs `device` (qcom-fw) |
 | `inputplumber/` | InputPlumber input config (gamepad/gyro) for all boards, synced to `/etc/inputplumber/` on release; matched by hardware at runtime |
-| `bringup.md` | Ordered bring-up checklist + Phase 1 gate criteria |
-| `bringup-phase2.md` | Phase 2 (gamescope session) bring-up notes |
+| `bringup.md` | Phase 1 bring-up checklist + gate criteria (CLEARED) |
+| `bringup-phase2.md` | Phase 2 (gamescope session + HW-support) bring-up notes (CLEARED) |
+| `bringup-phase3.md` | Phase 3 (native arm64 Steam shell) bring-up notes |
 
 ## Supported SoCs
 
@@ -21,5 +22,3 @@ patches, DTS, firmware manifest entries, InputPlumber config); the build discove
 
 The kernel command line is split: common args in `boot/cmdline`, board/SoC-specific args
 (e.g. `irqaffinity`, controller quirks) in each board's DTS `/chosen/bootargs`.
-
-_Phase 1 scaffold._

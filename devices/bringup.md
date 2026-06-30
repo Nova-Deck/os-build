@@ -53,5 +53,3 @@ Every board's DTB is appended to the kernel payload (Android header v0), so a si
 select the board at boot. The cmdline mounts `root=PARTLABEL=novadeck-root` (fs labels can't be
 resolved without an initramfs). The UEFI/GRUB
 (`bootaa64.efi`) path is reserved for the Phase 4 A/B layout (`efi-a`/`efi-b` + RAUC).
-
-_Phase 1 scaffold._

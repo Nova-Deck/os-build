@@ -1,8 +1,10 @@
 # packages/
 
-novadeck-specific packages and ported SteamOS `jupiter-*` builds layered on top
-of the upstream aarch64 base. Includes the `jupiter-hw-support` replacement for
-Qualcomm devices, plus `steam`, `proton`, and `fex` packaging.
+Pacman packages layered on top of the upstream aarch64 base — overlays rebuilt from
+source with novadeck patches (`source.pin`) and pinned precompiled tarballs
+(`prebuilt.pin`). (Static overlay trees baked straight into the rootfs — the Qualcomm
+HW-support layer and the Steam shell — live at top-level `hw-support/` and `steam/`, not
+here. FEX/Proton packaging is future Phase-3 work.)
 
 ## Precompiled external packages (`prebuilt.pin`)
 
@@ -72,8 +74,9 @@ first `cd` in `prepare()`, and `makepkg`s it under arm64 qemu. The PKGBUILD stil
 upstream source (e.g. a release tarball), so this stays "from-source", just with a recipe we own.
 
 Current overlay:
-- `gamescope/` — composite-rotation patch for the portrait Pocket S2 panel (fetched holo PKGBUILD;
-  needs the patch dropped at `packages/gamescope/patches/`).
+- `gamescope/` — **local PKGBUILD** building gamescope `3.16.23.2` (newer-Turnip/ROCKNIX parity)
+  with the composite-rotation patch for the portrait Pocket S2 panel under
+  `packages/gamescope/patches/`. (Was a fetched holo PKGBUILD at 3.16.17; moved local for the bump.)
 - `mesa/` — **local PKGBUILD** building mesa `26.1.3` from the upstream tarball. It tracks the
   Arch/holo recipe (same `arch-meson` invocation + meson options) as closely as possible; the only
   deviations are `gallium-drivers`/`vulkan-drivers` narrowed to **freedreno** (GL) + **freedreno**
@@ -86,5 +89,3 @@ Current overlay:
   it from source and install it on the host (it's in `customize-base.sh` PKGS) rather than resolving
   it from Steam's bundled SR3 runtime via pressure-vessel. Tracks the Arch recipe; carries the two
   upstream Arch patches (XID-warning severity; CVE-2024-6655 module-cwd) under `packages/gtk2/patches/`.
-
-_Phase 0 placeholder — populated in Phases 2-3._

@@ -131,6 +131,22 @@
 		pinctrl-names = "default";
 	};
 
+	sy7758_vdd33_reg: sy7758-vdd33-regulator {
+		compatible = "regulator-fixed";
+
+		regulator-name = "sy7758_vdd33";
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
+
+		gpios = <&tlmm 163 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+
+		vin-supply = <&vph_pwr>;
+
+		pinctrl-0 = <&sy7758_vdd33>;
+		pinctrl-names = "default";
+	};
+
 	gpio-keys {
 		compatible = "gpio-keys";
 
@@ -980,9 +996,7 @@
 		regulator-min-microvolt = <5000000>;
 		regulator-max-microvolt = <5000000>;
 		reset-gpios = <&tlmm 59 GPIO_ACTIVE_HIGH>,
-					<&tlmm 58 GPIO_ACTIVE_HIGH>,
-					<&tlmm 163 GPIO_ACTIVE_HIGH>,
-					<&tlmm 164 GPIO_ACTIVE_HIGH>;
+					<&tlmm 58 GPIO_ACTIVE_HIGH>;
 		status = "okay";
 	};
 
@@ -990,6 +1004,13 @@
 	sy7758_bl: sy7758@2e {
 		reg = <0x2e>;
 		compatible = "silergy,sy7758";
+
+		pinctrl-names = "default";
+		pinctrl-0 = <&sy7758_default>;
+
+		vdd-supply = <&sy7758_vdd33_reg>;
+		enable-gpios = <&tlmm 164 GPIO_ACTIVE_HIGH>;
+
 		status = "okay";
 	};
 };
@@ -1392,11 +1413,25 @@
 	};
 
 	panel_pwr_active: panel-pwr-active-state {
-		pins = "gpio58", "gpio59", "gpio164", "gpio163";
+		pins = "gpio58", "gpio59";
 		function = "gpio";
 		drive-strength = <8>;
 		bias-pull-up;
 		output-high;
+	};
+
+	sy7758_default: sy7758-default-state {
+		pins = "gpio164";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-disable;
+	};
+
+	sy7758_vdd33: sy7758-vdd33-state {
+		pins = "gpio163";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-disable;
 	};
 
 	disp0_reset_n_active: disp0-reset-n-active-state {

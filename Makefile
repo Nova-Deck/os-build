@@ -234,4 +234,9 @@ clean-overlay: ## Remove the built (arch-scoped) overlay pacman repo + build tre
 	rm -rf work/repo work/overlay-build
 
 distclean: clean clean-base clean-overlay ## clean + drop fetched firmware + kernel work tree
-	rm -rf work/kernel firmware/linux-fw firmware/qcom-fw
+	# work/kernel is root-owned (the kernel build's modules_install runs as root in the build
+	# image), so remove it from inside a throwaway container like clean/clean-base — a host-side
+	# rm fails with permission errors. work/steam-seed (host-fetched) goes the same way for
+	# uniformity. firmware/* are fetched on the host, so a plain rm is fine.
+	docker run --rm -v $(CURDIR)/work:/wb busybox rm -rf /wb/kernel /wb/steam-seed
+	rm -rf firmware/linux-fw firmware/qcom-fw

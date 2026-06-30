@@ -15,7 +15,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       xz-utils patch device-tree-compiler \
       curl ca-certificates \
       make python3 \
-      btrfs-progs gdisk dosfstools mtools \
+      btrfs-progs gdisk dosfstools mtools e2fsprogs \
       rauc casync openssl squashfs-tools \
     && rm -rf /var/lib/apt/lists/*
 

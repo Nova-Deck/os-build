@@ -32,8 +32,12 @@ IMG="$IMGDIR/sdcard.img"
 ESP_SIZE_MIB="${ESP_SIZE_MIB:-256}"   # FAT32 ESP; matches the A/B table's esp size
 ALIGN_MIB=1                            # 1 MiB partition alignment + GPT primary slack
 END_SLACK_MIB=2                        # tail room for the backup GPT (well over its ~17 KiB)
+# Initial /home (ext4) size baked into the image. Kept small to keep the flashable image lean —
+# novadeck-grow-home extends this partition + fs to fill the card on first boot. It only has to
+# hold ext4 metadata at flash time; the ~1GB Steam seed is copied in AFTER the grow.
+HOME_SIZE_MIB="${HOME_SIZE_MIB:-1024}"
 
-for t in sgdisk mkfs.vfat mcopy; do
+for t in sgdisk mkfs.vfat mcopy mkfs.ext4; do
   command -v "$t" >/dev/null 2>&1 || { echo "$t not found — run inside novadeck-build" >&2; exit 1; }
 done
 [ -f "$KERNEL" ] || { echo "no boot image: ${KERNEL#"$ROOT"/} (run boot/package.sh)" >&2; exit 1; }
@@ -42,9 +46,9 @@ done
 MIB=$((1024 * 1024))
 rootfs_bytes=$(stat -c %s "$ROOTFS")
 rootfs_mib=$(( (rootfs_bytes + MIB - 1) / MIB ))                       # round up to MiB
-total_mib=$(( ALIGN_MIB + ESP_SIZE_MIB + rootfs_mib + END_SLACK_MIB ))
+total_mib=$(( ALIGN_MIB + ESP_SIZE_MIB + rootfs_mib + HOME_SIZE_MIB + END_SLACK_MIB ))
 
-echo "[novadeck] SD image: ESP ${ESP_SIZE_MIB}MiB + root ${rootfs_mib}MiB -> ${total_mib}MiB"
+echo "[novadeck] SD image: ESP ${ESP_SIZE_MIB}MiB + root ${rootfs_mib}MiB + home ${HOME_SIZE_MIB}MiB -> ${total_mib}MiB"
 
 # 1. ESP filesystem (FAT32) with the KERNEL boot image at its root.
 esp="$(mktemp)"; trap 'rm -f "$esp"' EXIT
@@ -55,27 +59,38 @@ mkfs.vfat -F 32 -n NOVADECK "$esp" >/dev/null
 mcopy -i "$esp" "$KERNEL" ::/KERNEL
 echo "  esp  $(du -h "$KERNEL" | cut -f1) KERNEL -> ::/KERNEL"
 
-# 2. blank disk image + GPT: p1 ESP (aligned), p2 rootfs filling the rest.
+# 2. /home filesystem (ext4, label novadeck-home). Starts small; novadeck-grow-home extends the
+# partition + fs to fill the card on first boot. -m0: no reserved blocks (it's a data partition).
+home="$(mktemp)"; trap 'rm -f "$esp" "$home"' EXIT
+truncate -s "${HOME_SIZE_MIB}M" "$home"
+mkfs.ext4 -q -F -L novadeck-home -m0 "$home"
+echo "  home ${HOME_SIZE_MIB}MiB ext4 (novadeck-home) — grows to fill the card on first boot"
+
+# 3. blank disk image + GPT: p1 ESP (aligned), p2 rootfs (content-sized), p3 home filling the rest.
 mkdir -p "$IMGDIR"; rm -f "$IMG"
 truncate -s "${total_mib}M" "$IMG"
 sgdisk -Z "$IMG" >/dev/null
 sgdisk -a $(( MIB / 512 )) \
   -n "1:0:+${ESP_SIZE_MIB}M" -t 1:ef00 -c 1:NOVADECK-ESP \
-  -n "2:0:0"                 -t 2:8300 -c 2:novadeck-root \
+  -n "2:0:+${rootfs_mib}M"   -t 2:8300 -c 2:novadeck-root \
+  -n "3:0:0"                 -t 3:8300 -c 3:novadeck-home \
   "$IMG" >/dev/null
 sgdisk -p "$IMG"
 
-# 3. write each filesystem into its partition byte offset (notrunc; no loop device).
+# 4. write each filesystem into its partition byte offset (notrunc; no loop device).
 p1_start=$(sgdisk -i 1 "$IMG" | sed -n 's/^First sector: \([0-9]*\).*/\1/p')
 p2_start=$(sgdisk -i 2 "$IMG" | sed -n 's/^First sector: \([0-9]*\).*/\1/p')
+p3_start=$(sgdisk -i 3 "$IMG" | sed -n 's/^First sector: \([0-9]*\).*/\1/p')
 dd if="$esp"    of="$IMG" bs=512 seek="$p1_start" conv=notrunc status=none
 dd if="$ROOTFS" of="$IMG" bs=512 seek="$p2_start" conv=notrunc status=none
+dd if="$home"   of="$IMG" bs=512 seek="$p3_start" conv=notrunc status=none
 
 echo "  ok   $(du -h "$IMG" | cut -f1) -> ${IMG#"$ROOT"/}"
 cat <<EOF
 Done. Write it to the card (replace sdX with your device, ALL DATA LOST):
   sudo dd if=${IMG#"$ROOT"/} of=/dev/sdX bs=4M conv=fsync status=progress
 ABL boots /KERNEL off the ESP; its DTB picker selects the board; the kernel mounts
-root=LABEL=novadeck-root (partition 2). The root fs is smaller than its partition —
-after first boot, claim the space with:  btrfs filesystem resize max /
+root=LABEL=novadeck-root (partition 2). /home is partition 3 (LABEL=novadeck-home);
+novadeck-grow-home extends it + its ext4 to fill the card on first boot, then the Steam
+seeder populates /home/deck. (The btrfs root stays at its built size — it's read-only.)
 EOF

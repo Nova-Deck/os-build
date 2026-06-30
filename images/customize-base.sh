@@ -73,7 +73,9 @@ DEST="$ROOT/work/base"
 # xorg-xwayland: x86 games run under FEX/Proton render through Xwayland inside gamescope (the Deck
 # shell is native Wayland, but most Proton titles are X11 clients). Armada ships it for the same
 # reason (xorg-x11-server-Xwayland in 30-install-steam-session.sh).
-PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-tools mesa gamescope seatd bluez bluez-utils networkmanager alsa-ucm-conf pipewire wireplumber pipewire-pulse pipewire-alsa unzip openal gtk2 ffmpeg xorg-xwayland)
+# e2fsprogs: the deck user's /home is a dedicated ext4 partition grown to fill the card on first
+# boot (novadeck-grow-home) — resize2fs (+ e2fsck) come from here; sfdisk/partx are in util-linux.
+PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-tools mesa gamescope seatd bluez bluez-utils networkmanager alsa-ucm-conf pipewire wireplumber pipewire-pulse pipewire-alsa unzip openal gtk2 ffmpeg e2fsprogs xorg-xwayland)
 
 # Test-only packages — installed ONLY under NOVADECK_TEST=1, NEVER in a release base.
 # On-device bring-up tools: evtest reads raw /dev/input events; usbutils provides lsusb.
@@ -252,6 +254,19 @@ docker run --name "$cid" --platform linux/arm64 -v "$PREBUILT_DIR":/prebuilt:ro 
   ln -sf /dev/null /etc/systemd/system/systemd-networkd.service
   ln -sf /dev/null /etc/systemd/system/systemd-networkd.socket
   ln -sf /dev/null /etc/systemd/system/systemd-networkd-wait-online.service
+
+  # deck user (uid/gid 1000) — owns the session home /home/deck (a dedicated growable partition)
+  # and, later, the gamescope session. SteamOS uses uid 1000 "deck"; bake the account into the RO
+  # root /etc HERE (the root is read-only at runtime, so a boot-time systemd-sysusers could not
+  # persist it). -M: do NOT create a home in the RO root — /home/deck lives on the /home partition
+  # and is materialized + chowned by the first-boot seeder (steam-bootstrap.sh). Supplementary
+  # groups are added only when they already exist in the base (hardware/seat access for the session).
+  if ! getent passwd deck >/dev/null 2>&1; then
+    useradd -M -u 1000 -U -s /bin/bash -c "Steam Deck User" deck
+  fi
+  for g in wheel video render input audio seat; do
+    if getent group "$g" >/dev/null 2>&1; then usermod -aG "$g" deck; fi
+  done
 
   pacman -Scc --noconfirm >/dev/null 2>&1 || true
 ' >&2

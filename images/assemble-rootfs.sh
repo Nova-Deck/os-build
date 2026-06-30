@@ -170,23 +170,108 @@ else
   echo "  (no hw-support/ tree — skipping HW-support injection)"
 fi
 
-# 4f. RELEASE Steam shell (SteamOS layer D): the native arm64 Steam plumbing. A static,
-# SoC-agnostic overlay tree under steam/ mirror-copied into the rootfs: the bootstrap script
-# (/usr/lib/novadeck/steam-bootstrap.sh) that stages the native client+runtime into the WRITABLE
-# shared home, its first-boot oneshot (novadeck-steam-bootstrap.service), and the launcher
-# (/usr/bin/novadeck-steam) that NOVADECK_SESSION_CMD points at. No Steam blobs are baked into the
-# sealed RO root — Steam self-updates in /home across A/B slots; the seed is fetched on first boot.
-# The bootstrap unit is pulled in by novadeck-session.service (Wants=), so it ships installed and
-# only runs when we boot to the Steam shell — same install-but-don't-force pattern as the session.
-# curl/unzip/tar come from the base (customize-base.sh). See devices/bringup-phase3.md.
+# 4f. RELEASE Steam shell (SteamOS layer D): the native arm64 Steam plumbing. Two parts:
+#  - the steam/usr overlay (SoC-agnostic): the first-boot SEEDER (/usr/lib/novadeck/
+#    steam-bootstrap.sh) + its oneshot (novadeck-steam-bootstrap.service) and the launcher
+#    (/usr/bin/novadeck-steam) NOVADECK_SESSION_CMD points at. ONLY usr/ is copied — the steam/
+#    top-level build files (STEAM_SEED.pin, fetch-steam-seed.sh) are NOT rootfs content.
+#  - the BAKED seed: the native client + SR3 runtime staged on the build host (steam/
+#    fetch-steam-seed.sh -> work/steam-seed) copied into the SEALED root at
+#    /usr/share/novadeck/steam-seed. UNLIKE the old curl-on-first-boot path, the client IS baked in;
+#    the first-boot seeder copies it into the writable /home/deck OFFLINE (Steam's OOBE owns Wi-Fi,
+#    so an OS-side first-boot fetch deadlocks — see steam-must-be-baked-offline). Steam still
+#    self-updates the rest of the UI on first launch (curl/unzip/tar stay in the base for that).
+# The seeder unit is pulled in by novadeck-session.service (Wants=), so it ships installed and only
+# runs when we boot to the Steam shell. See devices/bringup-phase3.md.
 STEAM="$ROOT/steam"
-if [ -d "$STEAM" ]; then
-  echo "  injecting novadeck Steam shell from ${STEAM#"$ROOT"/} (bootstrap + launcher, fetched on first boot)"
-  cp -a "$STEAM"/. "$stage/"
+if [ -d "$STEAM/usr" ]; then
+  echo "  injecting novadeck Steam shell from ${STEAM#"$ROOT"/}/usr (seeder + launcher)"
+  cp -a "$STEAM"/usr "$stage/"
   chmod 0755 "$stage/usr/bin/novadeck-steam" "$stage/usr/lib/novadeck/steam-bootstrap.sh"
+  SEED="$ROOT/work/steam-seed"
+  if [ -x "$SEED/steamrtarm64/steam" ]; then
+    echo "  baking Steam seed from ${SEED#"$ROOT"/} -> /usr/share/novadeck/steam-seed ($(du -sh "$SEED" | cut -f1))"
+    install -d -m0755 "$stage/usr/share/novadeck"
+    cp -a "$SEED" "$stage/usr/share/novadeck/steam-seed"
+  else
+    echo "  WARNING: no baked Steam seed at ${SEED#"$ROOT"/} — run steam/fetch-steam-seed.sh (first boot will have no client)" >&2
+  fi
 else
-  echo "  (no steam/ tree — skipping Steam shell injection)"
+  echo "  (no steam/usr tree — skipping Steam shell injection)"
 fi
+
+# 4g. First-boot STORAGE (the deck user's growable home). SteamOS sizes /home to the disk at
+# install time; we dd a fixed image to a card, so we grow on first boot instead. Three pieces:
+#  - /etc/fstab mounts the dedicated home partition (LABEL=novadeck-home, ext4) at /home. nofail so
+#    a card without that partition (the old 2-partition test image) still boots.
+#  - novadeck-grow-home: a oneshot that extends the home partition + ext4 to fill the device on
+#    first boot (sfdisk/partx from util-linux + resize2fs from e2fsprogs, all in the base), once.
+#  - the deck user (uid 1000) is baked into the base /etc (customize-base.sh); the seeder above
+#    materializes + chowns /home/deck on first boot. Steam (self-update + games) lives on /home.
+echo "  injecting first-boot storage: /home mount + grow (deck user baked in base)"
+mkdir -p "$stage/etc"
+if ! grep -q 'LABEL=novadeck-home' "$stage/etc/fstab" 2>/dev/null; then
+  printf '%s\n' \
+    '# novadeck shared data partition — the deck user home + Steam library live here.' \
+    '# x-systemd.growfs is NOT used: novadeck-grow-home grows the partition AND the fs online.' \
+    'LABEL=novadeck-home  /home  ext4  defaults,nofail  0 2' \
+    >>"$stage/etc/fstab"
+fi
+
+install -d -m0755 "$stage/usr/lib/novadeck"
+cat >"$stage/usr/lib/novadeck/novadeck-grow-home" <<'GROW'
+#!/bin/sh
+# novadeck first-boot /home grow — extend the home partition + ext4 to fill the storage device.
+# We dd a fixed-size image to cards of varying size, so claim the rest of the device once, on first
+# boot. Uses only base tools: blkid/lsblk/sfdisk/partx (util-linux) + resize2fs (e2fsprogs).
+set -eu
+MARK=/home/.novadeck-grown
+[ -e "$MARK" ] && exit 0
+dev=$(blkid -L novadeck-home 2>/dev/null) || { echo "[grow-home] no novadeck-home partition"; exit 0; }
+node=$(basename "$dev")
+parent=$(lsblk -ndo PKNAME "$dev" 2>/dev/null || true)
+num=$(cat "/sys/class/block/$node/partition" 2>/dev/null || true)
+{ [ -n "$parent" ] && [ -n "$num" ]; } || { echo "[grow-home] cannot resolve disk/partno for $dev"; exit 0; }
+disk="/dev/$parent"
+echo "[grow-home] growing $dev (partition $num on $disk) to fill the device"
+# Extend the partition to the end of the disk. --no-reread: /home is mounted so the kernel can't
+# re-read the whole table; partx -u then refreshes just this partition's size in the kernel.
+echo ', +' | sfdisk --no-reread --force -N "$num" "$disk" || { echo "[grow-home] sfdisk failed — leaving as-is"; exit 0; }
+partx -u "$disk" || true
+resize2fs "$dev" || { echo "[grow-home] resize2fs failed — leaving as-is"; exit 0; }
+touch "$MARK"
+echo "[grow-home] done"
+GROW
+chmod 0755 "$stage/usr/lib/novadeck/novadeck-grow-home"
+
+install -d -m0755 "$stage/usr/lib/systemd/system"
+cat >"$stage/usr/lib/systemd/system/novadeck-grow-home.service" <<'UNIT'
+[Unit]
+Description=novadeck first-boot grow of /home to fill the storage device
+RequiresMountsFor=/home
+After=home.mount
+Before=novadeck-steam-bootstrap.service
+ConditionPathExists=!/home/.novadeck-grown
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/novadeck/novadeck-grow-home
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+# Enable on release: higher-priority preset (60 < 99 stock "disable *") + a build-time symlink
+# fallback, exactly like the InputPlumber block above.
+install -d -m0755 "$stage/usr/lib/systemd/system-preset"
+echo "enable novadeck-grow-home.service" \
+  >"$stage/usr/lib/systemd/system-preset/60-novadeck-storage.preset"
+install -d -m0755 "$stage/etc/systemd/system/multi-user.target.wants"
+ln -sf /usr/lib/systemd/system/novadeck-grow-home.service \
+       "$stage/etc/systemd/system/multi-user.target.wants/novadeck-grow-home.service"
 
 # 4b-audio. ALSA UCM2 machine profile (SteamOS layer C audio). A static overlay tree under
 # audio/ mirror-copied into the rootfs: the device's card-name-matched UCM2 profile so userland

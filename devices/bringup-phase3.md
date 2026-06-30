@@ -8,22 +8,28 @@ Phase 3 — see `.claude/plans/novadeck.plan.md`.
 
 | File | Role |
 |------|------|
-| `usr/lib/novadeck/steam-bootstrap.sh` | Stages the native arm64 client seed + arm64 runtime into the **writable** `/home/deck/.local/share/Steam` (channel `steamdeck_publicbeta`). Idempotent. |
-| `usr/lib/systemd/system/novadeck-steam-bootstrap.service` | First-boot oneshot that runs the bootstrap before the session (needs network + synced clock). Self-skips once staged. |
-| `usr/bin/novadeck-steam` | Launcher `NOVADECK_SESSION_CMD` points at: sets `HOME`/`LD_LIBRARY_PATH`, execs the native client in `-gamepadui -steamos3 -steampal -steamdeck`. |
+| `STEAM_SEED.pin` + `fetch-steam-seed.sh` | **Build host**: fetch the native arm64 client seed + SR3 runtime (channel `steamdeck_publicbeta`) into `work/steam-seed/`. `assemble-rootfs.sh` bakes that into the sealed root at `/usr/share/novadeck/steam-seed`. |
+| `usr/lib/novadeck/steam-bootstrap.sh` | First-boot **seeder**: copies the baked seed into the **writable** `/home/deck/.local/share/Steam` **OFFLINE** (no CDN), then `chown deck:deck`. Idempotent. |
+| `usr/lib/systemd/system/novadeck-steam-bootstrap.service` | First-boot oneshot, after `/home` is mounted + grown and the `deck` user exists. **No network dep.** Self-skips once seeded. |
+| `usr/bin/novadeck-steam` | Launcher `NOVADECK_SESSION_CMD` points at: sets `HOME`/`LD_LIBRARY_PATH`, execs the native client **raw on the host** (no pressure-vessel) in `-gamepadui -steamos3 -steampal -steamdeck`. |
 
-No Steam blobs are baked into the sealed RO root — Steam self-updates in `/home` across A/B slots.
-Runs as root (matches the Phase-2 session and ROCKNIX, which runs native arm Steam as root).
+The native client **is baked into the sealed RO root** (as a seed under `/usr/share/novadeck`); the
+seeder copies it into `/home` on first boot offline, and Steam self-updates the rest in `/home`
+across A/B slots. **Storage**: `/home` is a dedicated ext4 partition (`LABEL=novadeck-home`) mounted
+via `/etc/fstab`; `novadeck-grow-home.service` grows it + its fs to fill the card on first boot. The
+`deck` user (uid 1000) is baked into the base `/etc`. The launcher still runs as the session user
+(root today); moving the session to run as `deck` is a follow-up.
 
 ## Validate on HW (test card, session stays disabled by default)
 
 1. Flash a `NOVADECK_TEST=1` sdcard (Wi-Fi/SSH), boot, SSH in.
-2. Stage Steam by hand first (so a slow CDN fetch is observable, not racing the session):
+2. Confirm the home grew + the seed copied (both run on first boot, offline — no CDN):
    ```sh
-   /usr/lib/novadeck/steam-bootstrap.sh
-   ls /home/deck/.local/share/Steam/steamrtarm64/steam   # expect the native client
+   df -h /home                                           # expect the full card, not ~1GiB
+   ls /home/deck/.local/share/Steam/steamrtarm64/steam   # expect the native client (deck-owned)
    ```
-   (Or just `systemctl start novadeck-session` — it `Wants=` the bootstrap and orders after it.)
+   (Or re-run by hand: `/usr/lib/novadeck/novadeck-grow-home` then `/usr/lib/novadeck/steam-bootstrap.sh`.
+   `novadeck-session` `Wants=` the seeder and orders after it + the grow.)
 3. Launch the shell, watch the panel:
    ```sh
    systemctl start novadeck-session

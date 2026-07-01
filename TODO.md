@@ -5,6 +5,26 @@ rationale lives in the linked memories and commit history.
 
 ## Open
 
+- [ ] **OOBE timezone not set — polkit denies `timedate1.set-timezone`** (cosmetic; clock only).
+  HW logs: Steam calls systemd-timedated directly (not our helper) → `Failed to set time zone:
+  Permission denied` → Steam logs `JSSetTimeZone: system() failed, errno 11` (errno is STALE — the
+  real cause is the polkit deny; NOT a resource limit, all NPROC/pid_max/TasksMax ceilings are huge).
+  Puzzle: `50-novadeck-steamos.rules` grants `deck` and NM `connection-add` succeeds for the same
+  process, yet the structurally-identical `timedate1.set-timezone` clause is denied. `polkit.log()`
+  from a rule is NOT captured in our journal stream (even on the granted NM path), so it gave no data
+  on `subject.user`. Next step needs heavier instrumentation: run `polkitd --debug` with
+  `G_MESSAGES_DEBUG=all` to see the actual subject/decision. Suspect a short-lived-caller subject
+  resolution difference (timedatectl exits fast vs the long-lived NM caller). Low priority — Wi-Fi
+  (the real blocker) is fixed. See [[wifi-connect-fails-after-list]].
+
+- [ ] **Preseed `/home/deck` in the image instead of first-boot copy** — today the baked Steam seed
+  ships at `/usr/share/novadeck/steam-seed` on the RO root and `novadeck-steam-bootstrap.service`
+  copies it into the writable `/home/deck` on first boot (offline; see [[steam-must-be-baked-offline]],
+  [[steam-offline-sdl3-seed]]). Instead, stage the seed directly into the `/home` partition image at
+  build time (`images/assemble-rootfs.sh` / the home genpart) so first boot has nothing to copy —
+  faster first boot, and it drops the duplicate ~75M+ seed from the root. Watch: `/home` grows to
+  fill the card on first boot (`novadeck-grow-home`), and ownership must be `deck:deck`.
+
 - [ ] **Audio works on test build but not release** — REGRESSION / OPEN. Sound played once
   when the SteamUI session was started from a **test-build** SD card (deck user-session: ADSP
   loaded, per-user PipeWire + UCM ok). On a **release build there is no sound**. Stack is shipped

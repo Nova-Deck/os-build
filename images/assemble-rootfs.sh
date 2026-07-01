@@ -132,18 +132,20 @@ fi
 
 # 4d. RELEASE gamescope-session (SteamOS layer B): the boot-to-compositor plumbing. A static,
 # SoC-agnostic overlay tree under session/ (launcher /usr/bin/novadeck-session, its config
-# /etc/novadeck/session.conf, and the novadeck-session.service unit) mirror-copied into the
-# rootfs. gamescope/seatd/vulkan-tools come from the base (customize-base.sh) — this adds no
-# package, only the session wiring. As of Phase 3 the novadeck-session.service unit is ARMED: the
-# overlay ships 60-novadeck-session.preset (enable) + a graphical.target.wants symlink, and points
-# default.target at graphical.target, so the device boots straight into the Deck shell (Phase 2
-# validated it by hand with `systemctl start`). seatd.service (its seat broker) IS enabled here
-# (60-novadeck-seatd.preset + multi-user.target.wants symlink ship inside the overlay): the session
-# runs as the unprivileged deck user and opens the seat via the persistent root seatd. The overlay
-# also bakes /var/lib/systemd/linger/deck so logind starts the deck user manager (user@1000) at boot,
-# giving the session a real per-user runtime — /run/user/1000 + the user D-Bus session bus — instead
-# of a bare service RuntimeDirectory (what gamescope's Wayland socket, Steam/CEF's bus, and later
-# PipeWire audio expect). See devices/bringup-phase2.md step 2.
+# /etc/novadeck/session.conf, the SDDM autologin wiring, and PAM drop-ins) mirror-copied into the
+# rootfs. gamescope/seatd/vulkan-tools + sddm come from the base (customize-base.sh; sddm is built
+# into the [novadeck] overlay) — this adds no package here, only the session wiring.
+# The device boots through SDDM autologin, the SteamOS/armada way: sddm.service is enabled here
+# (60-novadeck-sddm.preset + an etc/systemd/system/display-manager.service symlink) and the overlay
+# points default.target at graphical.target, so on boot SDDM logs the deck user in through PAM
+# (pam_systemd → a REAL ACTIVE seat0 logind session) and launches the `novadeck` wayland session
+# (/usr/share/wayland-sessions/novadeck.desktop → the launcher). That active session is what lets
+# STOCK polkit authorize Wi-Fi (allow_active) and timezone (subject.active && wheel), so the old
+# "no-active" bypass rule is gone. Because it is a login session, logind provides /run/user/1000 +
+# the user D-Bus bus (no linger needed). seatd.service still IS enabled (60-novadeck-seatd.preset +
+# multi-user.target.wants symlink): the launcher keeps opening the DRM seat via the persistent root
+# seatd (armada runs seatd alongside SDDM too) — the HW-validated seat/DRM path is unchanged; SDDM
+# only wraps it in a login session. See devices/bringup-phase2.md step 2.
 SESSION="$ROOT/session"
 if [ -d "$SESSION" ]; then
   echo "  injecting novadeck gamescope-session from ${SESSION#"$ROOT"/} (ARMED: boots to Deck shell)"
@@ -179,20 +181,21 @@ fi
 # 4f. RELEASE Steam shell (SteamOS layer D): the native arm64 Steam plumbing. Two parts:
 #  - the steam/usr overlay (SoC-agnostic): the first-boot SEEDER (/usr/lib/novadeck/
 #    steam-bootstrap.sh) + its oneshot (novadeck-steam-bootstrap.service) and the launcher
-#    (/usr/bin/novadeck-steam) NOVADECK_SESSION_CMD points at. Also 50-novadeck-steamos.rules —
-#    the polkit grant that lets the unprivileged `deck` gamepadui manage NetworkManager (the OOBE
-#    Wi-Fi connect fails "Insufficient privileges" without it, since our lingering-service session
-#    has no logind session) and set the timezone via the steamos-set-timezone helper shipped here.
-#    ONLY usr/ is copied — the steam/ top-level build files (STEAM_SEED.pin, fetch-steam-seed.sh)
-#    are NOT rootfs content.
+#    (/usr/bin/novadeck-steam) NOVADECK_SESSION_CMD points at. Also 50-novadeck-timezone.rules —
+#    a small polkit grant for org.freedesktop.timedate1.set-timezone (active session + wheel), the
+#    ONE thing stock polkit still prompts for now that the shell runs in a real active logind
+#    session (Wi-Fi is covered by NetworkManager's allow_active, no rule needed). ONLY usr/ is
+#    copied — the steam/ top-level build files (STEAM_SEED.pin, fetch-steam-seed.sh) are NOT rootfs
+#    content.
 #  - the BAKED seed: the native client + SR3 runtime staged on the build host (steam/
 #    fetch-steam-seed.sh -> work/steam-seed) copied into the SEALED root at
 #    /usr/share/novadeck/steam-seed. UNLIKE the old curl-on-first-boot path, the client IS baked in;
 #    the first-boot seeder copies it into the writable /home/deck OFFLINE (Steam's OOBE owns Wi-Fi,
 #    so an OS-side first-boot fetch deadlocks — see steam-must-be-baked-offline). Steam still
 #    self-updates the rest of the UI on first launch (curl/unzip/tar stay in the base for that).
-# The seeder unit is pulled in by novadeck-session.service (Wants=), so it ships installed and only
-# runs when we boot to the Steam shell. See devices/bringup-phase3.md.
+# The seeder unit is enabled via the session overlay (60-novadeck-steam-bootstrap.preset +
+# graphical.target.wants symlink) and ordered Before=sddm.service, so its ~1GB seed lands in
+# /home/deck before SDDM autologins the shell. See devices/bringup-phase3.md.
 STEAM="$ROOT/steam"
 if [ -d "$STEAM/usr" ]; then
   echo "  injecting novadeck Steam shell from ${STEAM#"$ROOT"/}/usr (seeder + launcher)"
@@ -549,6 +552,20 @@ UNIT
   install -d -m0755 "$stage/etc/systemd/system/multi-user.target.wants"
   ln -sf /usr/lib/systemd/system/novadeck-debug-log.service \
          "$stage/etc/systemd/system/multi-user.target.wants/novadeck-debug-log.service"
+fi
+
+# 4z. Normalize overlay ownership to root. The overlay trees (session/, hw-support/, steam/usr,
+# audio/, inputplumber config) are injected with `cp -a`, which PRESERVES the host build user's
+# uid/gid (the repo checkout owner, typically 1000). In the image uid 1000 is `deck`, so /etc, /,
+# and every injected file end up deck-owned — a real bug (HW journal 2026-07-01: systemd-tmpfiles
+# "unsafe path transition /etc (owned by deck)"). Nothing in the read-only root legitimately belongs
+# to the build user, so reclaim every such file to root:root. Match the build uid dynamically off
+# this script (repo-owned) rather than hardcoding 1000. The sddm state dir (/var/lib/sddm, uid 965)
+# and other service-owned paths are a different uid and stay untouched. -h: fix symlinks too.
+ov_uid="$(stat -c %u "$0")"
+if [ "$ov_uid" != "0" ]; then
+  echo "  normalizing overlay ownership: uid $ov_uid -> root ($(find "$stage" -uid "$ov_uid" | wc -l) paths)"
+  find "$stage" -uid "$ov_uid" -exec chown -h 0:0 {} +
 fi
 
 # 5. bake the Btrfs image (populate without mounting), then shrink to fit

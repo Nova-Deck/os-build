@@ -1,0 +1,9 @@
+#%PAM-1.0
+# novadeck override of SDDM's daemon/greeter PAM stack, folded onto the system login stack (which
+# carries pam_systemd for logind session registration). The interactive greeter is never shown on
+# this appliance (pure autologin, see sddm.conf.d/zz-novadeck-autologin.conf), but ship a correct
+# stack anyway so sddm-helper never falls back to a broken default.
+auth        include     system-login
+account     include     system-login
+password    include     system-login
+session     include     system-login

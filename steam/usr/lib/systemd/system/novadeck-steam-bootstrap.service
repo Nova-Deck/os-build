@@ -5,6 +5,10 @@ Description=novadeck native arm64 Steam first-boot seeder (SteamOS layer D — s
 # grown first, and the deck user present (baked into the base).
 RequiresMountsFor=/home
 After=home.mount novadeck-grow-home.service systemd-sysusers.service
+# Must finish staging the seed into /home/deck BEFORE SDDM autologins deck into the Steam shell, so
+# order ahead of the display manager (this oneshot is RemainAfterExit, so sddm.service — which is
+# After= us by this Before= — waits for the copy to complete).
+Before=sddm.service
 # Always run: the script self-skips the ~1GB copy when already seeded but ALWAYS repairs /home/deck
 # ownership (a prior/older seed can leave the home present yet root-owned, blocking Steam). No
 # ConditionPathExists here — gating on "Steam present" is exactly what skipped the ownership repair.
@@ -19,6 +23,8 @@ StandardOutput=journal
 StandardError=journal
 
 [Install]
-# Pulled in by novadeck-session.service (Wants=). Not on its own preset: it runs only when we
-# actually boot to the Steam shell, mirroring how the session unit ships installed-but-disabled.
-WantedBy=novadeck-session.service
+# Enabled on release (SteamOS layer D boots to the Steam shell): the session overlay ships
+# 60-novadeck-steam-bootstrap.preset (enable) + a graphical.target.wants symlink, and Before=sddm
+# above sequences it ahead of the shell. (Previously WantedBy=novadeck-session.service, which SDDM
+# autologin replaced.)
+WantedBy=graphical.target

@@ -179,8 +179,12 @@ fi
 # 4f. RELEASE Steam shell (SteamOS layer D): the native arm64 Steam plumbing. Two parts:
 #  - the steam/usr overlay (SoC-agnostic): the first-boot SEEDER (/usr/lib/novadeck/
 #    steam-bootstrap.sh) + its oneshot (novadeck-steam-bootstrap.service) and the launcher
-#    (/usr/bin/novadeck-steam) NOVADECK_SESSION_CMD points at. ONLY usr/ is copied — the steam/
-#    top-level build files (STEAM_SEED.pin, fetch-steam-seed.sh) are NOT rootfs content.
+#    (/usr/bin/novadeck-steam) NOVADECK_SESSION_CMD points at. Also 50-novadeck-steamos.rules —
+#    the polkit grant that lets the unprivileged `deck` gamepadui manage NetworkManager (the OOBE
+#    Wi-Fi connect fails "Insufficient privileges" without it, since our lingering-service session
+#    has no logind session) and set the timezone via the steamos-set-timezone helper shipped here.
+#    ONLY usr/ is copied — the steam/ top-level build files (STEAM_SEED.pin, fetch-steam-seed.sh)
+#    are NOT rootfs content.
 #  - the BAKED seed: the native client + SR3 runtime staged on the build host (steam/
 #    fetch-steam-seed.sh -> work/steam-seed) copied into the SEALED root at
 #    /usr/share/novadeck/steam-seed. UNLIKE the old curl-on-first-boot path, the client IS baked in;
@@ -193,7 +197,8 @@ STEAM="$ROOT/steam"
 if [ -d "$STEAM/usr" ]; then
   echo "  injecting novadeck Steam shell from ${STEAM#"$ROOT"/}/usr (seeder + launcher)"
   cp -a "$STEAM"/usr "$stage/"
-  chmod 0755 "$stage/usr/bin/novadeck-steam" "$stage/usr/lib/novadeck/steam-bootstrap.sh"
+  chmod 0755 "$stage/usr/bin/novadeck-steam" "$stage/usr/lib/novadeck/steam-bootstrap.sh" \
+             "$stage/usr/bin/steamos-polkit-helpers/steamos-set-timezone"
   SEED="$ROOT/work/steam-seed"
   if [ -x "$SEED/steamrtarm64/steam" ]; then
     echo "  baking Steam seed from ${SEED#"$ROOT"/} -> /usr/share/novadeck/steam-seed ($(du -sh "$SEED" | cut -f1))"
@@ -423,6 +428,58 @@ export LIBSEAT_BACKEND=seatd
 gamescope $gs_args -- "$client"
 SMOKE
   chmod 0755 "$stage/usr/local/bin/nova-gamescope-smoke"
+fi
+
+# 4d. DEBUG log capture (NOVADECK_DEBUG=1) — INDEPENDENT of NOVADECK_TEST, applies to release too.
+# This device has no UART and is usually powered off abruptly, and journald's default
+# SyncIntervalSec=5min means a short boot's system logs (kernel/NetworkManager/wpa_supplicant/
+# regulatory) never reach disk before the power is cut — that is why a released card's persistent
+# journal held only the late gamescope session and none of the Wi-Fi bring-up. Under DEBUG, force
+# persistent storage, sync every few seconds so logs survive a power-yank, drop the rate limit so
+# gamescope's chatter cannot evict other units, and cap size generously. Diagnostic builds only —
+# never ship: the frequent fsync + unbounded logging beat on the SD card. See wifi diagnosis thread.
+if [ "${NOVADECK_DEBUG:-}" = "1" ]; then
+  echo "  [DEBUG] enabling persistent journald + live journal streamer to /home"
+  # (a) Nudge journald toward persistence too (belt for anything that DOES reach /var).
+  install -d -m0755 "$stage/etc/systemd/journald.conf.d"
+  cat >"$stage/etc/systemd/journald.conf.d/60-novadeck-debug.conf" <<'DBG'
+# NOVADECK_DEBUG build only — capture system logs on a no-UART, power-yanked device.
+[Journal]
+Storage=persistent
+SyncIntervalSec=5s
+RateLimitIntervalSec=0
+RateLimitBurst=0
+SystemMaxUse=500M
+DBG
+
+  # (b) The real capture: journald reliably RECEIVES system logs into its runtime journal but on
+  # this RO-root device it does not persist them to /var before power is cut (a released card kept
+  # only the late gamescope session). So stream the live journal to the ext4 /home partition, which
+  # IS writable and survives a power-yank. `journalctl -b -f` first dumps the WHOLE boot backlog
+  # (kernel/NM/wpa/regulatory, even though this unit starts at multi-user) then follows live — so it
+  # captures the OOBE Wi-Fi connect attempt on the RELEASE path. Plus a one-shot regdom/dmesg snapshot.
+  cat >"$stage/usr/lib/systemd/system/novadeck-debug-log.service" <<'UNIT'
+[Unit]
+Description=novadeck DEBUG log capture to /home (streams the journal + regdom snapshot)
+After=systemd-journald.service
+RequiresMountsFor=/home
+[Service]
+Type=simple
+ExecStartPre=/usr/bin/sh -c 'mkdir -p /home/novadeck-debug; { echo "== iw reg get =="; iw reg get; echo "== dmesg (wifi) =="; dmesg | grep -iE "ath12k|cfg80211|regulatory|wcn|wlan"; } >/home/novadeck-debug/snapshot.log 2>&1 || true'
+ExecStart=/usr/bin/sh -c 'exec journalctl -b -f -o short-precise --no-hostname >>/home/novadeck-debug/journal.log 2>&1'
+Restart=always
+RestartSec=1
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+  # Enable preset-proof: /etc/machine-id is empty so first boot runs preset-all where 99-default is
+  # "disable *"; a high-prio preset (60 < 99) keeps us enabled, plus the wants symlink as fallback.
+  install -d -m0755 "$stage/usr/lib/systemd/system-preset"
+  echo "enable novadeck-debug-log.service" >"$stage/usr/lib/systemd/system-preset/60-novadeck-debug.preset"
+  install -d -m0755 "$stage/etc/systemd/system/multi-user.target.wants"
+  ln -sf /usr/lib/systemd/system/novadeck-debug-log.service \
+         "$stage/etc/systemd/system/multi-user.target.wants/novadeck-debug-log.service"
 fi
 
 # 5. bake the Btrfs image (populate without mounting), then shrink to fit

@@ -1,0 +1,9 @@
+#!/usr/bin/bash
+# Steam's OOBE / Settings region picker calls this via pkexec:
+#   steamui.so -> /usr/bin/steamos-polkit-helpers/steamos-set-timezone <Area/City>
+# (confirmed in the baked seed's steamui.so strings). We ship no jupiter-hw-support, so provide
+# our own; it just applies the timezone. (An earlier version also derived the Wi-Fi regdom here —
+# dropped: the WCN7850 is a self-managed regulatory phy that learns its country from the AP, so
+# iw reg / WIRELESS_REGDOM never applied to it. See the wifi diagnosis thread.)
+set -eu
+exec /usr/bin/timedatectl set-timezone "${1:?usage: steamos-set-timezone <Area/City>}"

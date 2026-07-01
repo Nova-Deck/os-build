@@ -189,7 +189,7 @@ manifest: $(KERNEL) ## Verify firmware-manifest.txt vs the built kernel (in cont
 # Read-only root (container) — base userspace + kernel + firmware -> Btrfs image
 # ==============================================================================
 $(ROOTFS): $(KERNEL) $(BASE_STAMP) $(FW_LINUX) $(FW_QCOM) $(STEAM_SEED) $(ASSEMBLE_SRC) | $(BUILD_STAMP)
-	$(DOCKER) $(TEST_ENV) $(BUILD_IMG) \
+	$(DOCKER) $(TEST_ENV) -e NOVADECK_DEBUG $(BUILD_IMG) \
 	  images/assemble-rootfs.sh /src/work/base
 
 # ==============================================================================

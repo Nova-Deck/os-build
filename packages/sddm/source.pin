@@ -1,0 +1,23 @@
+# sddm — built FROM SOURCE via a novadeck-owned PKGBUILD (packages/sddm/PKGBUILD), NOT fetched
+# from the holo monorepo: the curated holo repos ship NO display manager at all (no sddm/greetd/
+# cage), so there is nothing to `pacman -S`. We add one ourselves, the SteamOS/armada way.
+#
+# Why a DM at all: the gamescope shell used to run as a plain systemd system service (User=deck),
+# which never goes through a PAM login, so logind registered NO session for it and polkit saw
+# `subject.active == false` — forcing a broad "no-active" polkit bypass to let the OOBE manage
+# Wi-Fi/timezone. SteamOS mints its privileged seat via SDDM autologin (armada is a faithful
+# clone). Booting the shell through SDDM autologin gives deck a real ACTIVE seat0 logind session,
+# so the stock `allow_active` / `subject.active && wheel` polkit rules apply and the bypass goes
+# away. See the plan + [[wifi-connect-fails-after-list]] / [[sm8650-gamescope-session-plumbing]].
+#
+# Recipe: sddm 0.21.0 (the exact version Fedora 44 / armada run — see _reference/sddm.spec),
+# Qt6 + journald. All Qt6 deps (qt6-base/-declarative/-tools) are already in the holo `extra`
+# repo, so this is a single clean makepkg, not a Qt6-stack build. No upstream patches.
+#
+# Fields (see packages/README.md and packages/gamescope/source.pin):
+#   name           pkgname (must match the PKGBUILD); build-dir + repo entry
+#   pkgbuild_local path (relative to this dir) to the checked-in PKGBUILD to build
+#   pkgrel_suffix  numeric suffix appended to pkgrel so pacman prefers our build
+name: sddm
+pkgbuild_local: PKGBUILD
+pkgrel_suffix: 1

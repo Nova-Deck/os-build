@@ -16,22 +16,33 @@ STEAM_HOME="${STEAM_HOME:-/home/deck}"
 STEAM="${STEAM_HOME}/.local/share/Steam"
 DOT_STEAM="${STEAM_HOME}/.steam"
 SEED="/usr/share/novadeck/steam-seed"
+# Completion sentinel — written ONLY after a full seed succeeds. Guarding on this (not on the
+# presence of steamrtarm64/steam) is what makes a partial/interrupted seed re-seed instead of
+# sticking: an ENOSPC'd cp leaves steamrtarm64/steam behind yet the tree is incomplete, so a binary
+# check would wrongly report "already seeded" (this exact trap killed a first boot — the /home ext4
+# had not grown, cp ran out of space, and the half-tree then blocked re-seeding). Lives inside the
+# seeded tree so wiping the tree also clears it.
+SEED_STAMP="${STEAM}/.novadeck-seed-complete"
 
 log() { echo "[novadeck-steam-bootstrap] $*"; }
 
-# Seed the Steam tree only if missing — but ALWAYS fix ownership below (see why). Not an early
-# `exit 0`: a prior/older seed can leave the home present yet wrongly-owned, and we must still repair
-# that or Steam cannot write its home.
-if [ -x "${STEAM}/steamrtarm64/steam" ]; then
-  log "native arm64 Steam already seeded at ${STEAM} — verifying ownership only"
+# Seed the Steam tree only if the completion sentinel is present AND the client binary exists — but
+# ALWAYS fix ownership below (see why). Not an early `exit 0`: a prior/older seed can leave the home
+# present yet wrongly-owned, and we must still repair that or Steam cannot write its home.
+if [ -e "$SEED_STAMP" ] && [ -x "${STEAM}/steamrtarm64/steam" ]; then
+  log "native arm64 Steam already seeded at ${STEAM} (sentinel present) — verifying ownership only"
 else
   [ -d "$SEED" ] || { log "ERROR: baked seed missing at ${SEED} (build-time bake skipped?)"; exit 1; }
 
+  # Clear any partial/stale tree first so a re-seed after an interrupted copy starts clean (no merge
+  # of a half-written tree with the fresh seed, no leftover files from an older seed).
   log "seeding native arm64 Steam into ${STEAM} from ${SEED} (offline)"
+  rm -rf "${STEAM}" "${DOT_STEAM}"
   mkdir -p "${STEAM}" "${DOT_STEAM}"
 
   # Copy the baked .local/share/Steam contents (client seed + runtime + package/beta + libibus shim
-  # + .cef marker) into the writable home. cp -a preserves the relative libibus symlink.
+  # + .cef marker) into the writable home. cp -a preserves the relative libibus symlink. set -e means
+  # a failed copy (e.g. ENOSPC) aborts BEFORE the sentinel is written, so the next run re-seeds.
   cp -a "${SEED}/." "${STEAM}/"
 
   # .steam/ compatibility symlinks Steam + tools expect (mirror SteamOS's ~/.steam layout). These are
@@ -39,6 +50,10 @@ else
   ln -sfn ../.local/share/Steam            "${DOT_STEAM}/steam"
   ln -sfn ../.local/share/Steam            "${DOT_STEAM}/root"
   ln -sfn ../.local/share/Steam/linuxarm64 "${DOT_STEAM}/sdkarm64"
+
+  # Mark the seed complete — LAST, only once every copy above has succeeded.
+  : >"$SEED_STAMP"
+  log "seed complete — wrote sentinel ${SEED_STAMP##*/}"
 fi
 
 # ALWAYS ensure the deck user owns its ENTIRE home — not just the seeded Steam subtree. Two traps make

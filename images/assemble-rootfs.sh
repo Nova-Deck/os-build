@@ -215,8 +215,8 @@ fi
 # install time; we dd a fixed image to a card, so we grow on first boot instead. Three pieces:
 #  - /etc/fstab mounts the dedicated home partition (LABEL=novadeck-home, ext4) at /home. nofail so
 #    a card without that partition (the old 2-partition test image) still boots.
-#  - novadeck-grow-home: a oneshot that extends the home partition + ext4 to fill the device on
-#    first boot (sfdisk/partx from util-linux + resize2fs from e2fsprogs, all in the base), once.
+#  - novadeck-grow-home: a oneshot that extends the home partition (systemd-repart) + its ext4
+#    (resize2fs from e2fsprogs, in the base) to fill the device on first boot, before /home mounts.
 #  - the deck user (uid 1000) is baked into the base /etc (customize-base.sh); the seeder above
 #    materializes + chowns /home/deck on first boot. Steam (self-update + games) lives on /home.
 echo "  injecting first-boot storage: /home mount + grow (deck user baked in base)"
@@ -224,8 +224,9 @@ mkdir -p "$stage/etc"
 if ! grep -q 'LABEL=novadeck-home' "$stage/etc/fstab" 2>/dev/null; then
   printf '%s\n' \
     '# novadeck shared data partition — the deck user home + Steam library live here.' \
-    '# x-systemd.growfs grows the ext4 to the partition at mount; systemd-repart (novadeck-grow-' \
-    '# home.service) grows the partition itself to fill the device first, earlier in boot.' \
+    '# novadeck-grow-home.service grows BOTH the partition (systemd-repart) and the ext4 (resize2fs)' \
+    '# before this mounts. x-systemd.growfs stays only as a belt-and-suspenders fallback (a no-op' \
+    '# once grow-home has already sized the fs to the partition).' \
     'LABEL=novadeck-home  /home  ext4  defaults,nofail,x-systemd.growfs  0 2' \
     >>"$stage/etc/fstab"
 fi
@@ -234,9 +235,16 @@ fi
 # a BLKPG resize so it works while the disk is in use, and relocates the GPT backup header for us).
 # The stock systemd-repart.service is initrd-only (no [Install], Before=initrd-root-fs.target) and
 # we have no initramfs, so ship our own unit running the same tool early in real-root boot, before
-# /home mounts; x-systemd.growfs (fstab above) then grows the ext4 at mount. repart matches our
-# partition by its discoverable "Linux /home" GUID (make-sdcard gives p3 typecode 8302), so it can
-# never touch the root partition. Both steps are idempotent — no marker needed.
+# /home mounts. repart matches our partition by its discoverable "Linux /home" GUID (make-sdcard
+# gives p3 typecode 8302), so it can never touch the root partition.
+#
+# The ext4 grow used to ride SOLELY on x-systemd.growfs (mount-time). That RACED home.mount: on HW
+# the mount+growfs ran before repart's enlargement was visible, so the fs was sized to the flashed
+# ~1G while the partition became 8.7G — /home then filled instantly and the Steam seed died with
+# ENOSPC (SteamUI never started). Fix: novadeck-grow-home now runs a wrapper that does repart THEN
+# resize2fs, ordered Before=home.mount so the fs grow is a race-free OFFLINE resize (partition
+# already enlarged, /home not yet mounted). Idempotent — resize2fs is a no-op once the fs fills the
+# partition, so it is safe to run every boot; x-systemd.growfs remains only as a fallback.
 install -d -m0755 "$stage/usr/lib/repart.d"
 cat >"$stage/usr/lib/repart.d/50-novadeck-home.conf" <<'REPART'
 [Partition]
@@ -245,23 +253,76 @@ cat >"$stage/usr/lib/repart.d/50-novadeck-home.conf" <<'REPART'
 Type=home
 REPART
 
+install -d -m0755 "$stage/usr/lib/novadeck"
+cat >"$stage/usr/lib/novadeck/grow-home.sh" <<'GROW'
+#!/bin/sh
+# novadeck first-boot grow: enlarge the /home partition to fill the device, THEN grow its ext4.
+# Runs from novadeck-grow-home.service, ordered Before=home.mount, so the fs grow is a race-free
+# offline resize2fs (partition already enlarged, /home not yet mounted) rather than the mount-time
+# x-systemd.growfs that lost a race to home.mount and left the ext4 at the flashed ~1G. Idempotent.
+set -eu
+
+HOME_DEV=/dev/disk/by-label/novadeck-home
+
+# Wait for udev to publish the home partition's by-label symlink. Even ordered After
+# systemd-udev-trigger, the probe that creates the symlink is async, so settle the queue and then
+# poll briefly. A card without a home partition (nofail / old 2-partition test image) never shows it,
+# so time out after ~10s and no-op (x-systemd.growfs covers any fs at mount) rather than hang boot.
+udevadm settle --timeout=30 2>/dev/null || true
+i=0
+while [ ! -b "$HOME_DEV" ] && [ "$i" -lt 50 ]; do
+  sleep 0.2
+  i=$((i + 1))
+done
+if [ ! -b "$HOME_DEV" ]; then
+  echo "[novadeck-grow-home] no ${HOME_DEV} after settle — nothing to grow (x-systemd.growfs covers any fs)"
+  exit 0
+fi
+HOME_PART=$(readlink -f "$HOME_DEV")
+
+# 1. Grow the partition to fill the disk (systemd-repart, declarative via /usr/lib/repart.d). Pass the
+#    parent DISK EXPLICITLY: with no device argument, repart auto-detects the disk from the ROOT fs,
+#    which fails on our btrfs root (mounted as the pseudo-device /dev/root — no initramfs) with
+#    "Cannot determine correct backing block device". That was the flaky red boot error ("Failed to
+#    start ... grow of /home"); deriving the disk from the home partition sidesteps root entirely.
+#    Non-fatal: log and press on to resize2fs rather than throwing a boot error if it ever fails.
+DISK=$(lsblk -no pkname "$HOME_PART" 2>/dev/null | head -n1)
+if [ -n "${DISK:-}" ] && [ -b "/dev/${DISK}" ]; then
+  systemd-repart --dry-run=no "/dev/${DISK}" \
+    || echo "[novadeck-grow-home] systemd-repart on /dev/${DISK} failed (non-fatal; resize2fs still runs)" >&2
+else
+  echo "[novadeck-grow-home] could not resolve parent disk of ${HOME_PART} — skipping partition grow" >&2
+fi
+
+# Let udev settle so the enlarged partition's size is current before resize2fs.
+udevadm settle 2>/dev/null || true
+
+# 2. Grow the ext4 to fill the (now enlarged) partition. No-op once it already fills it; non-fatal so
+#    a not-cleanly-unmounted fs can't block boot (x-systemd.growfs is the fallback).
+resize2fs "$HOME_PART" || echo "[novadeck-grow-home] resize2fs skipped/failed (non-fatal)" >&2
+GROW
+chmod 0755 "$stage/usr/lib/novadeck/grow-home.sh"
+
 install -d -m0755 "$stage/usr/lib/systemd/system"
 cat >"$stage/usr/lib/systemd/system/novadeck-grow-home.service" <<'UNIT'
 [Unit]
-Description=novadeck first-boot grow of /home to fill the storage device (systemd-repart)
+Description=novadeck first-boot grow of /home to fill the storage device (systemd-repart + resize2fs)
 Documentation=man:systemd-repart(8)
 DefaultDependencies=no
 ConditionDirectoryNotEmpty=/usr/lib/repart.d
-After=systemd-udevd.service
-Before=local-fs-pre.target shutdown.target
+# After systemd-udev-trigger (block coldplug), else the home partition's by-label symlink isn't
+# published yet when we run and the grow no-ops (HW: grow-home ran 1s before "Found device" and
+# bailed). Before home.mount (not just local-fs-pre.target): the ext4 resize must complete while
+# /home is still unmounted, else it races the mount-time x-systemd.growfs (see grow-home.sh).
+After=systemd-udevd.service systemd-udev-trigger.service
+Before=home.mount local-fs-pre.target shutdown.target
 Conflicts=shutdown.target
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/usr/bin/systemd-repart --dry-run=no
-# 76 = no root block device found, 77 = no GPT (e.g. the old 2-partition test card): treat as OK.
-SuccessExitStatus=76 77
+# Wrapper: systemd-repart (grow partition) THEN resize2fs (grow ext4). 76/77 tolerance is inside it.
+ExecStart=/usr/lib/novadeck/grow-home.sh
 
 [Install]
 WantedBy=sysinit.target
@@ -275,6 +336,14 @@ echo "enable novadeck-grow-home.service" \
 install -d -m0755 "$stage/etc/systemd/system/sysinit.target.wants"
 ln -sf /usr/lib/systemd/system/novadeck-grow-home.service \
        "$stage/etc/systemd/system/sysinit.target.wants/novadeck-grow-home.service"
+
+# Mask the stock systemd-repart.service. It's static but WantedBy=sysinit.target, so it also auto-runs
+# in real-root boot and FAILS the same way our old unit did: with no device argument it can't resolve
+# the btrfs /dev/root backing disk ("Cannot determine correct backing block device"), throwing a red
+# "Failed to start Repartition Root Disk" every boot. novadeck-grow-home replaces it (explicit disk +
+# resize2fs), so silence the duplicate. REVISIT at Phase-4 initramfs — the stock unit is meant to run
+# there (see the initramfs-phase4 note) and should be UNmasked when that path exists.
+ln -sf /dev/null "$stage/etc/systemd/system/systemd-repart.service"
 
 # 4b-audio. ALSA UCM2 machine profile (SteamOS layer C audio). A static overlay tree under
 # audio/ mirror-copied into the rootfs: the device's card-name-matched UCM2 profile so userland

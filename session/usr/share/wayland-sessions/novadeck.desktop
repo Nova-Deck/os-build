@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=novadeck
+Comment=novadeck gamescope Deck shell
+# SDDM autologins the deck user into this session (see /etc/sddm.conf.d/zz-novadeck-autologin.conf).
+# Exec is our existing gamescope launcher — SDDM runs it via sddm-helper-start-wayland inside a real
+# PAM/logind session on seat0, which is what makes the session ACTIVE for polkit. The launcher itself
+# is unchanged (still opens the seat through the root seatd; deck is in the `seat` group).
+Exec=/usr/bin/novadeck-session
+Type=Application
+DesktopNames=gamescope

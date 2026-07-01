@@ -84,7 +84,12 @@ DEST="$ROOT/work/base"
 # first-boot language-selection screen (简体中文, 日本語, 한국어, Русский, العربية, …) renders as tofu —
 # only "English" is readable. Noto gives broad Unicode coverage (noto-fonts: Latin/Cyrillic/Greek/
 # Arabic/Thai/…; -cjk: CJK; -emoji: UI emoji), matching SteamOS's font set.
-PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-tools mesa gamescope seatd bluez bluez-utils networkmanager alsa-ucm-conf pipewire wireplumber pipewire-pulse pipewire-alsa unzip openal gtk2 ffmpeg e2fsprogs xorg-xwayland lsof noto-fonts noto-fonts-cjk noto-fonts-emoji)
+# sddm: the display manager that autologins the deck user into the gamescope shell, giving it a real
+# ACTIVE seat0 logind session (SteamOS/armada parity) so stock polkit (allow_active / subject.active
+# && wheel) authorizes Wi-Fi + timezone — no "no-active" bypass rule. NOT in the holo repos, so it is
+# built from source into the [novadeck] overlay (packages/sddm) and resolves here. The `sddm` system
+# user it needs is baked below (the RO root can't run systemd-sysusers at boot to persist /etc/passwd).
+PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-tools mesa gamescope seatd sddm bluez bluez-utils networkmanager alsa-ucm-conf pipewire wireplumber pipewire-pulse pipewire-alsa unzip openal gtk2 ffmpeg e2fsprogs xorg-xwayland lsof noto-fonts noto-fonts-cjk noto-fonts-emoji)
 
 # Test-only packages — installed ONLY under NOVADECK_TEST=1, NEVER in a release base.
 # On-device bring-up tools: evtest reads raw /dev/input events; usbutils provides lsusb.
@@ -296,6 +301,17 @@ docker run --name "$cid" --platform linux/arm64 -v "$PREBUILT_DIR":/prebuilt:ro 
   for g in wheel video render input audio seat; do
     if getent group "$g" >/dev/null 2>&1; then usermod -aG "$g" deck; fi
   done
+
+  # sddm system user + its state dir. sddm ships /usr/lib/sysusers.d/sddm.conf and expects the
+  # `sddm` user/group to exist, but the RO root cannot run systemd-sysusers at boot to persist it
+  # (same reason deck is baked above). Materialize it now from the shipped sysusers config (falls
+  # back to a plain system account if the file name ever changes upstream), and pre-create the
+  # state dir the tmpfiles.d entry would otherwise make on a writable root.
+  if ! getent passwd sddm >/dev/null 2>&1; then
+    systemd-sysusers /usr/lib/sysusers.d/sddm.conf 2>/dev/null \
+      || useradd -r -U -M -d /var/lib/sddm -s /usr/bin/nologin -c "Simple Desktop Display Manager" sddm
+  fi
+  install -d -o sddm -g sddm -m 1770 /var/lib/sddm 2>/dev/null || true
 
   pacman -Scc --noconfirm >/dev/null 2>&1 || true
 ' >&2

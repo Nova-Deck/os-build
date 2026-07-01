@@ -52,12 +52,12 @@ fi
 # Force the real DRM/KMS backend: a stray WAYLAND_DISPLAY/DISPLAY makes gamescope try to nest under
 # a (non-existent) parent compositor and fail with "Failed to connect to wayland socket".
 unset WAYLAND_DISPLAY DISPLAY
-# deck lingers, so logind keeps a real per-user runtime up: /run/user/1000 (deck-owned, 0700) plus
-# the user D-Bus session bus at /run/user/1000/bus. The unit points XDG_RUNTIME_DIR here and exports
-# DBUS_SESSION_BUS_ADDRESS; default the same for manual `sudo -u deck` runs. The deck user cannot
-# create dirs under /run, so we do NOT mkdir it — it must already exist (the lingering user manager
-# makes it; for a manual run outside that, start user@1000 first). gamescope drops its Wayland socket
-# here, and Steam/CEF reach the session bus via DBUS_SESSION_BUS_ADDRESS.
+# SDDM autologins deck through PAM (pam_systemd), so we run inside a real logind session: logind has
+# created /run/user/1000 (deck-owned, 0700) and set XDG_RUNTIME_DIR + the user D-Bus session bus at
+# /run/user/1000/bus in our environment already. Default them defensively (e.g. for a manual `sudo -u
+# deck` run) but do NOT mkdir /run/user/1000 — the deck user can't create dirs under /run; it must
+# already exist (logind/pam_systemd makes it). gamescope drops its Wayland socket here, and Steam/CEF
+# reach the session bus via DBUS_SESSION_BUS_ADDRESS.
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=${XDG_RUNTIME_DIR}/bus}"
 if [ ! -d "$XDG_RUNTIME_DIR" ]; then
@@ -94,18 +94,14 @@ if [ -n "$NOVADECK_GAMESCOPE_OUTPUT" ]; then
   GS_ARGS="$GS_ARGS --prefer-output $NOVADECK_GAMESCOPE_OUTPUT"
 fi
 
-# No graphical logind seat exists for this system service, and the holo libseat is built with only
-# the logind+seatd backends (no 'builtin'), so connect to the PERSISTENT root seatd.service
-# (ExecStart=seatd -g seat, pulled in + ordered before us by the unit). We run as the unprivileged
-# deck user — deck is in the `seat` group, so it can open /run/seatd.sock, and seatd brokers the
-# privileged DRM-master/VT handoff to gamescope. Force the seatd backend (no logind session to
-# attach to) and point libseat at the daemon's socket.
-#
-# NOT seatd-launch: that spawns its OWN seatd as the calling user, which needs root — incompatible
-# with User=deck. The root seatd.service owns the socket's lifecycle, so no stale-socket cleanup
-# here (and deck could not remove it anyway).
-export LIBSEAT_BACKEND=seatd
-export SEATD_SOCK="${SEATD_SOCK:-/run/seatd.sock}"
+# Seat access: let libseat AUTO-PICK its backend — inside SDDM's logind session it selects the
+# LOGIND backend, exactly like armada/SteamOS (armada enables seatd but never forces it). This is
+# load-bearing for privileges: gamescope must take the seat/VT *through logind* so logind marks the
+# session ACTIVE; polkit's stock `subject.active` checks (Wi-Fi allow_active, timezone active+wheel)
+# then pass. Forcing LIBSEAT_BACKEND=seatd here made gamescope grab the VT behind logind's back, so
+# the session stayed INACTIVE and every privileged OOBE action (timezone) was denied — HW-confirmed
+# 2026-07-01. seatd.service stays enabled as an unused fallback (harmless, matches armada); do NOT
+# set LIBSEAT_BACKEND/SEATD_SOCK or libseat will prefer seatd again.
 
 # Word-splitting on GS_ARGS / the session command is intentional (sh, not bash).
 exec gamescope $GS_ARGS $NOVADECK_GAMESCOPE_EXTRA -- $NOVADECK_SESSION_CMD

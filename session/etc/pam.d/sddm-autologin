@@ -1,0 +1,9 @@
+#%PAM-1.0
+# novadeck override of SDDM's autologin PAM stack. The CRITICAL requirement: the session phase must
+# run pam_systemd so logind registers this as a real seat0 login session — that (and deck's `wheel`
+# membership) is the whole point of routing the shell through SDDM. `system-login`'s session stack
+# includes `pam_systemd.so`; we include it here. Auth is bypassed (autologin) via pam_permit.
+auth        required    pam_env.so
+auth        required    pam_permit.so
+account     include     system-login
+session     include     system-login

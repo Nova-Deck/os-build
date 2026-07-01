@@ -5,17 +5,16 @@ rationale lives in the linked memories and commit history.
 
 ## Open
 
-- [ ] **OOBE timezone not set — polkit denies `timedate1.set-timezone`** (cosmetic; clock only).
-  HW logs: Steam calls systemd-timedated directly (not our helper) → `Failed to set time zone:
-  Permission denied` → Steam logs `JSSetTimeZone: system() failed, errno 11` (errno is STALE — the
-  real cause is the polkit deny; NOT a resource limit, all NPROC/pid_max/TasksMax ceilings are huge).
-  Puzzle: `50-novadeck-steamos.rules` grants `deck` and NM `connection-add` succeeds for the same
-  process, yet the structurally-identical `timedate1.set-timezone` clause is denied. `polkit.log()`
-  from a rule is NOT captured in our journal stream (even on the granted NM path), so it gave no data
-  on `subject.user`. Next step needs heavier instrumentation: run `polkitd --debug` with
-  `G_MESSAGES_DEBUG=all` to see the actual subject/decision. Suspect a short-lived-caller subject
-  resolution difference (timedatectl exits fast vs the long-lived NM caller). Low priority — Wi-Fi
-  (the real blocker) is fixed. See [[wifi-connect-fails-after-list]].
+- [x] **OOBE timezone not set — polkit denies `timedate1.set-timezone`** — RESOLVED, HW-confirmed
+  2026-07-02. The real fix was giving the shell a real ACTIVE seat0 logind session: boot via **SDDM
+  autologin** and let gamescope use libseat's **logind** backend (NOT forced `LIBSEAT_BACKEND=seatd`,
+  which keeps the session inactive). Then the stock `subject.active && isInGroup("wheel")` rule
+  (`50-novadeck-timezone.rules`, deck∈wheel) grants it, and NM's OOBE Wi-Fi rides `allow_active` with
+  no rule at all — so the old broad `50-novadeck-steamos.rules` "no-active" bypass was deleted. Journal
+  proof: the OOBE tz picker set every zone (…→`Europe/Paris`) with ZERO "Permission denied". Also fixed
+  in the same pass: `/etc` was deck-owned (overlay `cp -a` preserved the build uid) → assemble-rootfs
+  now normalizes overlay ownership to root. See [[sm8650-gamescope-session-plumbing]],
+  [[wifi-connect-fails-after-list]].
 
 - [ ] **Preseed `/home/deck` in the image instead of first-boot copy** — today the baked Steam seed
   ships at `/usr/share/novadeck/steam-seed` on the RO root and `novadeck-steam-bootstrap.service`

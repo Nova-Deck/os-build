@@ -1,0 +1,69 @@
+# novadeck sddm — built FROM SOURCE via a novadeck-owned PKGBUILD (pkgbuild_local in
+# packages/sddm/source.pin), because the curated holo repos ship NO display manager to fetch.
+# This is a lean makepkg recipe for the same release Fedora 44 / armada run (sddm 0.21.0, Qt6 +
+# journald — see _reference/sddm.spec), with no patches. It exists to give the gamescope shell a
+# real ACTIVE seat0 logind session via SDDM autologin (SteamOS parity); see source.pin for the why.
+#
+# All Qt6 build/runtime deps resolve from the holo `extra` repo, so this is a single clean build.
+# build-overlay.sh bumps pkgrel via pkgrel_suffix so pacman prefers this over any future holo sddm,
+# and makepkg runs with --skipinteg (hence b2sums=SKIP; the source is pinned by the version tag).
+#
+# To bump sddm: change pkgver and re-verify the cmake options against the new release's CMakeLists.
+#
+# Contributor: novadeck
+
+pkgname=sddm
+pkgver=0.21.0
+pkgrel=1
+pkgdesc='QML based X11 and Wayland display/login manager'
+arch=(x86_64 aarch64)
+url='https://github.com/sddm/sddm'
+license=(GPL-2.0-or-later)
+depends=(
+  gcc-libs
+  glibc
+  libxcb
+  pam
+  qt6-base
+  qt6-declarative
+  systemd-libs
+  ttf-font
+)
+makedepends=(
+  cmake
+  extra-cmake-modules
+  qt6-declarative
+  qt6-tools
+)
+source=("$url/archive/v$pkgver/$pkgname-$pkgver.tar.gz")
+b2sums=('SKIP')
+
+prepare() {
+  # sddm 0.21.0 still declares cmake_minimum_required(VERSION < 3.5), which CMake 4 (in the
+  # base-devel image) rejects. Bump it IN-SOURCE (this is Fedora's Patch0, "Raise to cmake 3.5 for
+  # cmake4"). Do NOT use the global -DCMAKE_POLICY_VERSION_MINIMUM=3.5 flag instead: that cache var
+  # leaks into Qt6's own find_package config files and breaks transitive component resolution
+  # (Qt6Quick -> Qt6QmlMeta -> Qt6QmlWorkerScript all report NOT FOUND).
+  sed -i -E 's/^cmake_minimum_required\(VERSION [0-9.]+\)/cmake_minimum_required(VERSION 3.5)/' \
+    "$pkgname-$pkgver/CMakeLists.txt"
+}
+
+build() {
+  cmake -B build -S "$pkgname-$pkgver" \
+    -DCMAKE_INSTALL_PREFIX=/usr \
+    -DCMAKE_INSTALL_LIBEXECDIR=lib/sddm \
+    -DCMAKE_BUILD_TYPE=None \
+    -DBUILD_WITH_QT6=ON \
+    -DENABLE_JOURNALD=ON \
+    -DBUILD_MAN_PAGES=OFF \
+    -DDBUS_CONFIG_FILENAME=sddm_org.freedesktop.DisplayManager.conf \
+    -DRUNTIME_DIR=/run/sddm
+  cmake --build build
+}
+
+package() {
+  DESTDIR="$pkgdir" cmake --install build
+  install -Dm644 "$pkgname-$pkgver/LICENSE" -t "$pkgdir/usr/share/licenses/$pkgname/"
+}
+
+# vim: ts=2 sw=2 et:

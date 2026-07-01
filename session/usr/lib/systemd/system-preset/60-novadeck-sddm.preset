@@ -1,0 +1,7 @@
+# novadeck: enable SDDM on release — it autologins the deck user into the gamescope Deck shell
+# (SteamOS layer B). /etc/machine-id is empty on a fresh image so systemd runs preset-all on first
+# boot, where the stock 99-default.preset is "disable *"; this higher-priority preset (60 < 99) keeps
+# sddm enabled. A build-time etc/systemd/system/display-manager.service symlink ships alongside as a
+# fallback (cf. seatd's 60-novadeck-seatd). sddm.service is WantedBy=graphical.target and the overlay
+# points default.target at graphical.target, so the device boots straight into the Deck shell.
+enable sddm.service

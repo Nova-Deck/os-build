@@ -1,0 +1,5 @@
+#!/usr/bin/bash
+# No Steam Deck BIOS on NovaDeck hardware; SteamUI's "Check for updates" still
+# invokes this through the gamescope-session polkit wrapper
+# (/usr/bin/steamos-polkit-helpers/jupiter-biosupdate). No-op cleanly (exit 0).
+exit 0

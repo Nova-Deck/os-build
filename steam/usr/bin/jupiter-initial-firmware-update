@@ -1,0 +1,5 @@
+#!/usr/bin/bash
+# SteamUI's OOBE probes controller/dock firmware via `jupiter-initial-firmware-update
+# [check]` (via PATH). NovaDeck has no Jupiter firmware to flash, so no-op cleanly
+# (exit 0 = nothing to do), matching jupiter-biosupdate.
+exit 0

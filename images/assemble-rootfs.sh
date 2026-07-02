@@ -184,7 +184,11 @@ fi
 #    (/usr/bin/novadeck-steam) NOVADECK_SESSION_CMD points at. Also 50-novadeck-timezone.rules —
 #    a small polkit grant for org.freedesktop.timedate1.set-timezone (active session + wheel), the
 #    ONE thing stock polkit still prompts for now that the shell runs in a real active logind
-#    session (Wi-Fi is covered by NetworkManager's allow_active, no rule needed). ONLY usr/ is
+#    session (Wi-Fi is covered by NetworkManager's allow_active, no rule needed). Also the OOBE
+#    update-check stubs (steamos-update, steamos-mandatory-update, jupiter-biosupdate,
+#    jupiter-initial-firmware-update) — SteamUI shells to these past the Wi-Fi/timezone screens and
+#    a missing binary blocks onboarding with an "update check failed" error; we bake no
+#    jupiter-hw-support and have no OS updater in Phase 1, so they report "up to date". ONLY usr/ is
 #    copied — the steam/ top-level build files (STEAM_SEED.pin, fetch-steam-seed.sh) are NOT rootfs
 #    content.
 #  - the BAKED seed: the native client + SR3 runtime staged on the build host (steam/
@@ -201,7 +205,10 @@ if [ -d "$STEAM/usr" ]; then
   echo "  injecting novadeck Steam shell from ${STEAM#"$ROOT"/}/usr (seeder + launcher)"
   cp -a "$STEAM"/usr "$stage/"
   chmod 0755 "$stage/usr/bin/novadeck-steam" "$stage/usr/lib/novadeck/steam-bootstrap.sh" \
-             "$stage/usr/bin/steamos-polkit-helpers/steamos-set-timezone"
+             "$stage/usr/bin/steamos-mandatory-update" "$stage/usr/bin/jupiter-initial-firmware-update" \
+             "$stage/usr/bin/steamos-polkit-helpers/steamos-set-timezone" \
+             "$stage/usr/bin/steamos-polkit-helpers/steamos-update" \
+             "$stage/usr/bin/steamos-polkit-helpers/jupiter-biosupdate"
   SEED="$ROOT/work/steam-seed"
   if [ -x "$SEED/steamrtarm64/steam" ]; then
     echo "  baking Steam seed from ${SEED#"$ROOT"/} -> /usr/share/novadeck/steam-seed ($(du -sh "$SEED" | cut -f1))"

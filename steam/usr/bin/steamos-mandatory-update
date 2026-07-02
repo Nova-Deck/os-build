@@ -1,0 +1,13 @@
+#!/usr/bin/bash
+# SteamUI's first-boot OOBE runs `steamos-mandatory-update check` (via PATH) before
+# it lets you past the update screen. A missing binary surfaces in the UI as
+# "failed to run steamos-mandatory-update check" and blocks onboarding.
+# NovaDeck has no mandatory OS update in Phase 1, so report "none available":
+# exit 7 on check (same contract as steamos-update), 0 otherwise.
+set -u
+for arg in "$@"; do
+    case "${arg}" in
+        check) exit 7 ;;
+    esac
+done
+exit 0

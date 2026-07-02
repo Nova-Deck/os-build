@@ -1,0 +1,20 @@
+#!/usr/bin/bash
+# SteamUI's OOBE "System Update" step and Settings > System call this through the
+# gamescope-session polkit wrapper (confirmed in the baked seed's steamui.so):
+#   /usr/bin/steamos-polkit-helpers/steamos-update [check]
+# NovaDeck ships no OS-image updater in Phase 1 (no RAUC / bootc / atomupd), and
+# we bake no jupiter-hw-support, so the stock script is absent and SteamUI reports
+# "update check failed", blocking onboarding. Answer "you are up to date" instead.
+#
+# Exit-code contract (matches Valve's jupiter-hw-support and Armada's steamos-update):
+#   check → 0 = update available, 7 = none available
+#   apply → 0 = success
+# We always report no update: 7 on check, 0 otherwise.
+set -u
+for arg in "$@"; do
+    case "${arg}" in
+        --supports-duplicate-detection) exit 0 ;;
+        check) exit 7 ;;
+    esac
+done
+exit 0

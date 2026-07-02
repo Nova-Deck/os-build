@@ -37,6 +37,27 @@ rationale lives in the linked memories and commit history.
   it signals ready via `--ready-fd`. Prototyped, never proven to reliably dodge the wedge. Only
   relevant if a session restart (WSI on) actually wedges in the field.
 
+- [ ] **Stable Wi-Fi + Bluetooth MAC addresses (first-boot)** — the WCN7850 comes up without a
+  persistent MAC (no vendor NVRAM/`nvmem` MAC path on this SM8650 port), so the Wi-Fi and BT
+  addresses are non-deterministic across boots (random/locally-administered, and identical across
+  units flashed from the same image). Generate a **stable per-device MAC once on first boot** —
+  derive it from a hardware-unique seed (SoC serial / `machine-id`) with the locally-administered
+  bit set, persist it, and apply it: Wi-Fi via a NetworkManager `ethernet.cloned-mac-address` /
+  `wifi.cloned-mac-address` (or `.link` `MACAddress=`) keyfile, Bluetooth via a `btmgmt public-addr`
+  (or `hci0` `.link`) one-shot before `bluetoothd`. Must be idempotent (write-once, survive reboots)
+  and land on the writable side, not the RO root. Relates to [[wifi-config-is-test-only]].
+
+- [ ] 🍒 **Cherry on top: install to internal UFS + SD card as game library** — today NovaDeck
+  runs from a dd'd SD-card image (Phase 1). Ultimately we want a real **installer that lays the
+  image down on the device's internal UFS** (like SteamOS on the Deck's internal drive), and then
+  repurposes the **SD card as an external Steam game library**. SteamOS already ships the format
+  helpers for the library step — `steamos-format-sdcard` / `steamos-format-device` (seen in the
+  baked `steamui.so` strings next to the OOBE update helpers), called by Settings > Storage — which
+  we have NOT wired up yet (candidate to port). Our ext4 `novadeck-home` already matches SteamOS
+  (plain-dir libraries, no btrfs nodatacow dance — Armada's `steamapps` subvolume is Armada-only, do
+  not port). Fits the Phase-4 manifest/immutable model. See
+  [[install-to-ufs-sdcard-library-goal]], [[grow-home-repart-no-initramfs]], [[rootfs-build-approach]].
+
 ## Phase 2 — gamescope session (closed)
 
 - [x] **Clean gamescope teardown / re-launch wedge** — WON'T-FIX (HW-disproven 2026-06-25).

@@ -122,28 +122,47 @@ if ! docker run --rm --platform linux/arm64 "$DEVEL_REF" /usr/bin/true >/dev/nul
   docker run --privileged --rm tonistiigi/binfmt --install arm64 >&2
 fi
 
-echo "[overlay] building under arm64 qemu (this is slow — emulated C++ compile)" >&2
+# ONE FRESH CONTAINER PER PACKAGE. An earlier design built every package in a single shared
+# container (one `pacman -Sy`, then a loop over /stage/*/). That poisoned the LAST build, sddm:
+# its Qt6 find_package failed with Qt6Quick -> Qt6QmlMeta -> Qt6QmlWorkerScript all NOT FOUND,
+# even though sddm builds fine in isolation with the exact same cmake 4.1.2 + qt6 6.10 (proven:
+# the standalone build-sddm-only.sh, and a clean-container configure probe). The makedepends
+# installed for gamescope/gtk2/mesa left the container in a state that broke sddm's transitive
+# Qt6 module resolution. Isolating each build removes that cross-contamination at the cost of a
+# per-package dep re-sync (the emulated compile dwarfs it anyway).
+echo "[overlay] building each package in an isolated arm64 qemu container (slow — emulated)" >&2
+for d in "$STAGE"/*/; do
+  [ -f "$d/PKGBUILD" ] || continue
+  name="$(basename "$d")"
+  echo "[overlay] === build $name (isolated container) ===" >&2
+  docker run --rm --platform linux/arm64 \
+    -e HOSTUID="$(id -u)" -e HOSTGID="$(id -g)" -e PKG="$name" \
+    -v "$STAGE":/stage -v "$REPO_DIR":/repo "$DEVEL_REF" \
+    bash -euo pipefail -c '
+      useradd -m builder 2>/dev/null || true
+      printf "builder ALL=(ALL) NOPASSWD: ALL\n" > /etc/sudoers.d/builder
+      chmod 0440 /etc/sudoers.d/builder
+      pacman -Sy --noconfirm
+      chown -R builder "/stage/$PKG" /repo
+      echo "[overlay] makepkg in /stage/$PKG" >&2
+      ( cd "/stage/$PKG" && sudo -u builder \
+          makepkg -sf --noconfirm --nocheck --skipinteg --noprogressbar )
+      cp "/stage/$PKG"/*.pkg.tar.zst /repo/
+      chown -R "$HOSTUID:$HOSTGID" "/stage/$PKG" /repo
+    ' >&2
+done
+
+# Index the repo db once, in a final container (repo-add is an arm64 tool). Hand the artifacts
+# back to the host build user so re-runs (the initial rm -rf) and make clean-overlay work WITHOUT
+# root — the containers built them as root/builder.
+echo "[overlay] indexing repo db" >&2
 docker run --rm --platform linux/arm64 \
   -e HOSTUID="$(id -u)" -e HOSTGID="$(id -g)" \
-  -v "$STAGE":/stage -v "$REPO_DIR":/repo "$DEVEL_REF" \
+  -v "$REPO_DIR":/repo "$DEVEL_REF" \
   bash -euo pipefail -c '
-    useradd -m builder 2>/dev/null || true
-    printf "builder ALL=(ALL) NOPASSWD: ALL\n" > /etc/sudoers.d/builder
-    chmod 0440 /etc/sudoers.d/builder
-    pacman -Sy --noconfirm
-    chown -R builder /stage /repo
-    for d in /stage/*/; do
-      [ -f "$d/PKGBUILD" ] || continue
-      echo "[overlay] makepkg in ${d}" >&2
-      ( cd "$d" && sudo -u builder \
-          makepkg -sf --noconfirm --nocheck --skipinteg --noprogressbar )
-      cp "$d"/*.pkg.tar.zst /repo/
-    done
     cd /repo
     repo-add novadeck.db.tar.zst *.pkg.tar.zst
-    # Hand the artifacts back to the host build user so re-runs (the initial rm -rf) and
-    # make clean-overlay work WITHOUT root — the container built them as root/builder.
-    chown -R "$HOSTUID:$HOSTGID" /stage /repo
+    chown -R "$HOSTUID:$HOSTGID" /repo
   ' >&2
 
 echo "[overlay] built repo: ${REPO_DIR#"$ROOT"/}" >&2

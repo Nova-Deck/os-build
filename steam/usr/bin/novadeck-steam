@@ -47,6 +47,20 @@ export LD_LIBRARY_PATH="${STEAM_LD_PATH}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 # Word-splitting on the extra-args is intentional (sh).
 : "${NOVADECK_STEAM_ARGS:=-gamepadui -steamos3 -steampal -steamdeck}"
 
+# Optional CEF remote-debugging (OFF on release). Steam's Big Picture UI is CEF; touching this
+# sentinel makes the client open a DevTools port so the SteamUI (incl. the OOBE web views) can be
+# inspected from a browser. Gated on the NOVADECK_DEBUG build marker (/usr/lib/novadeck/debug, baked
+# only when the image is built with NOVADECK_DEBUG=1) so release launches never expose the port.
+# Mirrors Armada's launch-steam, which touches this unconditionally.
+if [ -e /usr/lib/novadeck/debug ]; then
+  : >"${STEAM}/.cef-enable-remote-debugging" 2>/dev/null \
+    && echo "[novadeck-steam] NOVADECK_DEBUG: CEF remote debugging enabled (${STEAM}/.cef-enable-remote-debugging)" >&2
+fi
+
+# Run from the client dir. Steam's bootstrapper resolves some helper paths relative to cwd, so launch
+# with steamrtarm64/ as the working directory (matches Armada's launch-steam `cd "${steam_arm_dir}"`).
+cd "${STEAM}/steamrtarm64"
+
 # Steam's bootstrapper exits to relaunch itself whenever the client requests a restart — most
 # notably right after the first-launch self-update ("Update complete, launching... / Shutdown"),
 # and on every in-UI "Restart Steam". It signals this with exit code 42. gamescope hosts THIS

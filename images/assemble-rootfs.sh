@@ -519,6 +519,10 @@ fi
 # never ship: the frequent fsync + unbounded logging beat on the SD card. See wifi diagnosis thread.
 if [ "${NOVADECK_DEBUG:-}" = "1" ]; then
   echo "  [DEBUG] enabling persistent journald + live journal streamer to /home"
+  # Runtime debug marker: NOVADECK_DEBUG is a build-time var, so bake a sentinel that on-device
+  # tools can key off. novadeck-steam checks this to enable Steam CEF remote-debugging (DevTools).
+  install -d -m0755 "$stage/usr/lib/novadeck"
+  : >"$stage/usr/lib/novadeck/debug"
   # (a) Nudge journald toward persistence too (belt for anything that DOES reach /var).
   install -d -m0755 "$stage/etc/systemd/journald.conf.d"
   cat >"$stage/etc/systemd/journald.conf.d/60-novadeck-debug.conf" <<'DBG'

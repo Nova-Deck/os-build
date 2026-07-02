@@ -16,6 +16,14 @@ rationale lives in the linked memories and commit history.
   now normalizes overlay ownership to root. See [[sm8650-gamescope-session-plumbing]],
   [[wifi-connect-fails-after-list]].
 
+- [x] **OOBE update-check error after Wi-Fi/timezone** — RESOLVED, HW-confirmed 2026-07-03. Past the
+  Wi-Fi/timezone screens SteamUI shells to update-check helpers (confirmed in `steamui.so`):
+  `steamos-update` + `jupiter-biosupdate` via the polkit-helpers wrapper, and `steamos-mandatory-update`
+  + `jupiter-initial-firmware-update` on PATH. We bake no jupiter-hw-support and have no Phase-1 OS
+  updater, so those were missing and OOBE errored. Fix: no-op stubs under `steam/usr/bin/` that report
+  "up to date" (exit 7 on `check`, else 0), matching Valve's/Armada's contract. First boot now clears
+  the update screen (the one post-Wi-Fi reboot is normal SteamOS first-run). Commit `8aa5283`.
+
 - [ ] **Preseed `/home/deck` in the image instead of first-boot copy** — today the baked Steam seed
   ships at `/usr/share/novadeck/steam-seed` on the RO root and `novadeck-steam-bootstrap.service`
   copies it into the writable `/home/deck` on first boot (offline; see [[steam-must-be-baked-offline]],

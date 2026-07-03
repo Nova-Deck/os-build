@@ -103,5 +103,66 @@ fi
 # 2026-07-01. seatd.service stays enabled as an unused fallback (harmless, matches armada); do NOT
 # set LIBSEAT_BACKEND/SEATD_SOCK or libseat will prefer seatd again.
 
-# Word-splitting on GS_ARGS / the session command is intentional (sh, not bash).
-exec gamescope $GS_ARGS $NOVADECK_GAMESCOPE_EXTRA -- $NOVADECK_SESSION_CMD
+# --- gamescope <-> Steam control channel (SteamOS / ChimeraOS "--steam" startup handshake) --------
+# Wire the runtime IPC SteamUI uses to DRIVE gamescope: the framerate limiter, brightness, refresh
+# switching AND the color / night-mode / saturation pipeline all talk to gamescope over the --steam
+# stats channel. Without it, those Quick-Access controls have nothing to attach to (they had none on
+# the bare-gamescope launch). See the memory chimeraos-gamescope-session-reference.
+#
+# The model changes vs a plain `exec gamescope ... -- steam`: gamescope no longer launches the client
+# as its `--` child. Instead gamescope runs STANDALONE in the background, reports its nested displays
+# over the startup socket (-R), and we then attach the client to those displays. -T is the stats pipe
+# (GAMESCOPE_STATS) SteamUI/mangoapp read. --xwayland-count 2 gives Steam the two nested Xwayland
+# displays (UI + game/overlay) the Deck shell expects.
+GS_RUNDIR="$(mktemp -d "${XDG_RUNTIME_DIR}/gamescope.XXXXXX")"
+GS_STARTUP="${GS_RUNDIR}/startup.socket"
+GS_STATS="${GS_RUNDIR}/stats.pipe"
+mkfifo "$GS_STARTUP" "$GS_STATS"
+export GAMESCOPE_STATS="$GS_STATS"
+GS_ARGS="$GS_ARGS --steam --xwayland-count 2 -R $GS_STARTUP -T $GS_STATS"
+
+# Persist the user's resolution/refresh pick across boots (gamescope writes it here).
+export GAMESCOPE_MODE_SAVE_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/gamescope/modes.cfg"
+mkdir -p "$(dirname "$GAMESCOPE_MODE_SAVE_FILE")" 2>/dev/null || true
+
+# Steam + gamescope open a large number of fds (per-app pipes, shader caches); raise the soft limit
+# to the SteamOS session value so we don't hit EMFILE under load.
+ulimit -n 524288 2>/dev/null || true
+
+# Tear gamescope + the rundir down whenever this script exits (client returned, or a signal).
+GS_PID=""
+cleanup() {
+  [ -n "$GS_PID" ] && kill "$GS_PID" 2>/dev/null || true
+  rm -rf "$GS_RUNDIR" 2>/dev/null || true
+}
+trap cleanup EXIT HUP INT TERM
+
+# Background gamescope (no `--` client) and wait for the startup handshake: gamescope writes
+# "<x-display> <wayland-display>" to the startup socket once it is up. Word-splitting on GS_ARGS is
+# intentional (sh, not bash).
+gamescope $GS_ARGS $NOVADECK_GAMESCOPE_EXTRA &
+GS_PID=$!
+
+# `timeout … head -n1` gives a bounded, POSIX-sh-safe read (no bash `read -t`): opening the FIFO for
+# read blocks until gamescope opens it for write, and timeout caps the wait if gamescope never comes
+# up. `set --` splits the line on whitespace regardless of spacing.
+if handshake="$(timeout 20 head -n1 "$GS_STARTUP")"; then
+  # shellcheck disable=SC2086  # intentional word-split of the handshake line
+  set -- $handshake
+  export DISPLAY="${1:-}"
+  # Export the Wayland socket under both names: Steam reads GAMESCOPE_WAYLAND_DISPLAY, a generic
+  # Wayland client (the vkcube fallback) reads WAYLAND_DISPLAY.
+  export GAMESCOPE_WAYLAND_DISPLAY="${2:-}"
+  export WAYLAND_DISPLAY="${2:-}"
+else
+  echo "novadeck-session: gamescope did not report a startup display within 20s — aborting" >&2
+  exit 1
+fi
+
+# Attach the client to gamescope's nested displays. When it returns, the EXIT trap stops gamescope
+# and the session ends (SDDM restarts it). Propagate the client's exit status.
+set +e
+$NOVADECK_SESSION_CMD
+status=$?
+set -e
+exit "$status"

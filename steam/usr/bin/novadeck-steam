@@ -45,6 +45,19 @@ fi
 STEAM_LD_PATH="${STEAM}/steamrtarm64:${STEAM}/steamrtarm64/video:${STEAM}/lib/aarch64-linux-gnu"
 export LD_LIBRARY_PATH="${STEAM_LD_PATH}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 
+# --- SteamUI QuickAccess / gamescope integration env (SteamOS "gamescope-session" parity) ---------
+# ENV GATES SteamUI reads to decide which Quick-Access controls to expose. They pair with the
+# gamescope --steam stats channel wired in novadeck-session — without the channel these do nothing,
+# and without these the controls may not appear even with the channel. Values mirror the Steam Deck
+# LCD device-quirk (a 60Hz handheld panel, like ours). HW-TBD: confirm the Pocket S2's real supported
+# refresh rates and whether it has an ambient-light sensor (dynamic backlight) before trusting these.
+export STEAM_ENABLE_DYNAMIC_BACKLIGHT=1        # adaptive-brightness toggle (needs an ambient sensor)
+export STEAM_DISPLAY_REFRESH_LIMITS=40,60      # refresh slider range; gamescope paces down to the low end
+
+# Client-side defaults SteamOS/gamescope sessions set for the Big Picture shell (harmless, standard).
+export SDL_VIDEO_MINIMIZE_ON_FOCUS_LOSS=0      # keep the shell up when it loses focus
+export vk_xwayland_wait_ready=false            # don't block on buffers idling before present to gamescope
+
 # -steamdeck/-steamos3/-steampal: Deck handheld behaviour. -gamepadui: Big Picture as the shell.
 #
 # -noverifyfiles: skip the client's startup file-verification pass. We bake a hand-assembled offline

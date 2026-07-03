@@ -76,6 +76,19 @@ rationale lives in the linked memories and commit history.
   [[holo-pacman-no-gtk2]] — don't assume a package resolves), and that gamescope was built with
   mangoapp support. See [[sm8650-gamescope-session-plumbing]].
 
+- [ ] **Faster arm64 package builds: qemu-master + native distcc cross-compiler** — the overlay
+  packages currently build inside an emulated aarch64 environment (slow — qemu runs the compiler
+  instruction-by-instruction). Restructure `packages/` into a **docker-compose** topology: a
+  **master aarch64 (qemu) container** runs `makepkg`/`pacman` so the build sees a native arm64
+  sysroot and resolves deps correctly, but delegates the actual compiles over **distcc** to one or
+  more **native amd64 daemon containers** running an `aarch64-linux-gnu` cross-toolchain — so the
+  heavy C/C++ compilation runs at native speed and only linking/configure/packaging stays under
+  qemu. Keeps our per-package isolation ([[overlay-isolate-per-package-container]]) — compose can
+  spin the master fresh per package while the distcc workers persist. Watch: distcc must use the
+  matching cross-gcc (ABI/version parity with the holo toolchain), and packages doing
+  arch-native codegen or running built binaries mid-build (tests, `-march=native`) won't offload
+  cleanly. Relates to [[builds-use-docker-crosscompile]], [[overlay-package-pipeline]].
+
 ## Phase 2 — gamescope session (closed)
 
 - [x] **Clean gamescope teardown / re-launch wedge** — WON'T-FIX (HW-disproven 2026-06-25).

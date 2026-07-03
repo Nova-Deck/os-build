@@ -32,13 +32,16 @@ rationale lives in the linked memories and commit history.
   faster first boot, and it drops the duplicate ~75M+ seed from the root. Watch: `/home` grows to
   fill the card on first boot (`novadeck-grow-home`), and ownership must be `deck:deck`.
 
-- [ ] **Audio works on test build but not release** — REGRESSION / OPEN. Sound played once
-  when the SteamUI session was started from a **test-build** SD card (deck user-session: ADSP
-  loaded, per-user PipeWire + UCM ok). On a **release build there is no sound**. Stack is shipped
-  (PipeWire / wireplumber / pipewire-pulse / -alsa + alsa-ucm-conf in PKGS; device UCM2 profiles in
-  the `audio/` overlay — cards SM8650-APS2 Pocket S2, SM8650-KPF Konkr), so the gap is in
-  release-vs-test session/runtime wiring, not the audio packages themselves. Diff the test session
-  path (what made it work once) against the release path. See [[audio-l4-deferred-to-user-session]].
+- [x] **Audio on release** — RESOLVED, HW-confirmed 2026-07-03. The "works on test, not release"
+  framing was a red herring: the real precondition is **session-alive + client-updated**. Earlier
+  release "no sound" stacked two causes — the grow-home ENOSPC crash (no session at all) and, later,
+  the pinned-client launch flags that blocked the Steam self-update. On the fixed release image sound
+  works once the client self-update lands (new logo); before the update a healthy session still has no
+  sound, because the offline-baked seed ships a stale/partial client audio path that the update
+  replaces. Audio packages/UCM were never the gap. See [[audio-l4-deferred-to-user-session]],
+  [[steam-launch-flags-no-pinned-client]]. Follow-up (minor, optional): make the SEED client produce
+  sound pre-update so first-boot-before-update isn't silent — likely needs the bundled `steamrtarm64/`
+  audio libs refreshed in the seed.
 
 - [ ] **`--ready-fd` ready-then-launch handshake** — candidate mitigation for the residual
   Phase-2 gamescope re-launch wedge (below). Run gamescope bare, launch the client only after

@@ -66,6 +66,16 @@ rationale lives in the linked memories and commit history.
   not port). Fits the Phase-4 manifest/immutable model. See
   [[install-to-ufs-sdcard-library-goal]], [[grow-home-repart-no-initramfs]], [[rootfs-build-approach]].
 
+- [ ] **MangoHud performance overlay via `--mangoapp`** — ship the Deck-style FPS/perf overlay.
+  Add `mangohud` (+ its `mangoapp` companion) to the image (`customize-base.sh` PKGS if it resolves
+  in the holo repo, else a `packages/` overlay build), and pass `--mangoapp` to gamescope in the
+  novadeck session launch (`session/` gamescope-session). This is how SteamOS/Armada/ROCKNIX drive
+  the overlay: gamescope spawns `mangoapp` as an in-session overlay window and SteamUI's
+  Performance settings toggle its level — so it wires up to the existing Deck UI, no extra config.
+  Confirm the arm64 `mangohud`/`mangoapp` packages exist in holo before adding (cf.
+  [[holo-pacman-no-gtk2]] — don't assume a package resolves), and that gamescope was built with
+  mangoapp support. See [[sm8650-gamescope-session-plumbing]].
+
 ## Phase 2 — gamescope session (closed)
 
 - [x] **Clean gamescope teardown / re-launch wedge** — WON'T-FIX (HW-disproven 2026-06-25).

@@ -77,8 +77,10 @@ KERNEL       := $(OUT)/Image.gz
 ROOTFS       := $(OUT)/images/rootfs.img
 BOOTIMG      := $(OUT)/boot/novadeck-boot.img
 SDCARD       := $(OUT)/images/sdcard.img
-# Native arm64 Steam SEED baked into the RO root (steam/fetch-steam-seed.sh, host network). The
-# client binary it stages is the make target; the pin + fetcher are its prerequisites.
+# Native arm64 Steam SEED (steam/fetch-steam-seed.sh, host network). Consumed TWICE: assemble-rootfs
+# bakes it into the RO root as the offline factory-reset RECOVERY source, and make-sdcard pre-seeds
+# the SAME tree directly into the /home partition (so a healthy boot does no copy). The client binary
+# it stages is the make target; the pin + fetcher are its prerequisites.
 STEAM_SEED   := work/steam-seed/steamrtarm64/steam
 
 # Repo sources the rootfs assembler reads directly (itself + the trees it copies in: the
@@ -145,8 +147,9 @@ $(FW_QCOM): firmware/QCOM_FW.pin
 	firmware/fetch-qcom-fw.sh
 	@touch $@
 
-# Native arm64 Steam seed (client + SR3 runtime) — fetched on the host, staged into work/steam-seed/
-# and baked into the RO root by assemble-rootfs. Pinned channel/runtime in steam/STEAM_SEED.pin.
+# Native arm64 Steam seed (client + SR3 runtime) — fetched on the host, staged into work/steam-seed/,
+# then baked into the RO root (recovery source) by assemble-rootfs AND pre-seeded into /home by
+# make-sdcard. Pinned channel/runtime in steam/STEAM_SEED.pin.
 $(STEAM_SEED): steam/STEAM_SEED.pin steam/fetch-steam-seed.sh
 	steam/fetch-steam-seed.sh
 	@touch $@
@@ -198,7 +201,7 @@ $(ROOTFS): $(KERNEL) $(BASE_STAMP) $(FW_LINUX) $(FW_QCOM) $(STEAM_SEED) $(ASSEMB
 $(BOOTIMG): $(KERNEL) | $(BUILD_STAMP)
 	$(INBUILD) boot/package.sh
 
-$(SDCARD): $(BOOTIMG) $(ROOTFS) | $(BUILD_STAMP)
+$(SDCARD): $(BOOTIMG) $(ROOTFS) $(STEAM_SEED) | $(BUILD_STAMP)
 	$(INBUILD) images/make-sdcard.sh
 
 # Signed RAUC OTA bundle (Phase 4). Dev builds mint an ephemeral cert; set

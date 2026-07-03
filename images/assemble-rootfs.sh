@@ -179,30 +179,34 @@ else
 fi
 
 # 4f. RELEASE Steam shell (SteamOS layer D): the native arm64 Steam plumbing. Two parts:
-#  - the steam/usr overlay (SoC-agnostic): the first-boot SEEDER (/usr/lib/novadeck/
-#    steam-bootstrap.sh) + its oneshot (novadeck-steam-bootstrap.service) and the launcher
-#    (/usr/bin/novadeck-steam) NOVADECK_SESSION_CMD points at. Also 50-novadeck-timezone.rules —
-#    a small polkit grant for org.freedesktop.timedate1.set-timezone (active session + wheel), the
-#    ONE thing stock polkit still prompts for now that the shell runs in a real active logind
-#    session (Wi-Fi is covered by NetworkManager's allow_active, no rule needed). Also the OOBE
-#    update-check stubs (steamos-update, steamos-mandatory-update, jupiter-biosupdate,
+#  - the steam/usr overlay (SoC-agnostic): the launcher (/usr/bin/novadeck-steam)
+#    NOVADECK_SESSION_CMD points at, plus the FACTORY-RESET re-seed tool (/usr/lib/novadeck/
+#    steam-bootstrap.sh + novadeck-steam-bootstrap.service). Also 50-novadeck-timezone.rules — a
+#    small polkit grant for org.freedesktop.timedate1.set-timezone (active session + wheel), the ONE
+#    thing stock polkit still prompts for now that the shell runs in a real active logind session
+#    (Wi-Fi is covered by NetworkManager's allow_active, no rule needed). Also the OOBE update-check
+#    stubs (steamos-update, steamos-mandatory-update, jupiter-biosupdate,
 #    jupiter-initial-firmware-update) — SteamUI shells to these past the Wi-Fi/timezone screens and
 #    a missing binary blocks onboarding with an "update check failed" error; we bake no
 #    jupiter-hw-support and have no OS updater in Phase 1, so they report "up to date". ONLY usr/ is
 #    copied — the steam/ top-level build files (STEAM_SEED.pin, fetch-steam-seed.sh) are NOT rootfs
 #    content.
-#  - the BAKED seed: the native client + SR3 runtime staged on the build host (steam/
+#  - the RECOVERY seed: the native client + SR3 runtime staged on the build host (steam/
 #    fetch-steam-seed.sh -> work/steam-seed) copied into the SEALED root at
-#    /usr/share/novadeck/steam-seed. UNLIKE the old curl-on-first-boot path, the client IS baked in;
-#    the first-boot seeder copies it into the writable /home/deck OFFLINE (Steam's OOBE owns Wi-Fi,
-#    so an OS-side first-boot fetch deadlocks — see steam-must-be-baked-offline). Steam still
-#    self-updates the rest of the UI on first launch (curl/unzip/tar stay in the base for that).
-# The seeder unit is enabled via the session overlay (60-novadeck-steam-bootstrap.preset +
-# graphical.target.wants symlink) and ordered Before=sddm.service, so its ~1GB seed lands in
-# /home/deck before SDDM autologins the shell. See devices/bringup-phase3.md.
+#    /usr/share/novadeck/steam-seed. This is the OFFLINE FACTORY-RESET source — a pristine,
+#    read-only copy that survives a /home wipe, so steam-bootstrap.sh can re-materialize
+#    /home/deck with NO network (Steam's OOBE owns Wi-Fi — see steam-must-be-baked-offline).
+#    NOTE: it is NOT used on a normal first boot — images/make-sdcard.sh already pre-seeds the SAME
+#    seed DIRECTLY into the /home partition at image-build time, so a healthy boot does zero copy
+#    (that removed the old first-boot ~1GB copy + its grow-race ENOSPC trap). The RO-root copy earns
+#    its bytes ONLY as the reset-proof recovery source; the seeder is therefore left UNENABLED (no
+#    boot-time run) and is invoked on demand by a factory-reset flow. Steam self-updates the rest of
+#    the UI on first launch (curl/unzip/tar stay in the base for that). See devices/bringup-phase3.md.
+#    Phase-4 refinement: in the A/B layout this seed should move to a SHARED recovery location, not be
+#    duplicated in both sealed root slots (2x1.4G) — see partition-table.txt.
 STEAM="$ROOT/steam"
 if [ -d "$STEAM/usr" ]; then
-  echo "  injecting novadeck Steam shell from ${STEAM#"$ROOT"/}/usr (seeder + launcher)"
+  echo "  injecting novadeck Steam shell from ${STEAM#"$ROOT"/}/usr (launcher + reset tool + OOBE stubs)"
   cp -a "$STEAM"/usr "$stage/"
   chmod 0755 "$stage/usr/bin/novadeck-steam" "$stage/usr/lib/novadeck/steam-bootstrap.sh" \
              "$stage/usr/bin/steamos-mandatory-update" "$stage/usr/bin/jupiter-initial-firmware-update" \
@@ -211,11 +215,11 @@ if [ -d "$STEAM/usr" ]; then
              "$stage/usr/bin/steamos-polkit-helpers/jupiter-biosupdate"
   SEED="$ROOT/work/steam-seed"
   if [ -x "$SEED/steamrtarm64/steam" ]; then
-    echo "  baking Steam seed from ${SEED#"$ROOT"/} -> /usr/share/novadeck/steam-seed ($(du -sh "$SEED" | cut -f1))"
+    echo "  baking Steam RECOVERY seed from ${SEED#"$ROOT"/} -> /usr/share/novadeck/steam-seed ($(du -sh "$SEED" | cut -f1), offline factory-reset source)"
     install -d -m0755 "$stage/usr/share/novadeck"
     cp -a "$SEED" "$stage/usr/share/novadeck/steam-seed"
   else
-    echo "  WARNING: no baked Steam seed at ${SEED#"$ROOT"/} — run steam/fetch-steam-seed.sh (first boot will have no client)" >&2
+    echo "  WARNING: no Steam seed at ${SEED#"$ROOT"/} — run steam/fetch-steam-seed.sh (no offline factory-reset source)" >&2
   fi
 else
   echo "  (no steam/usr tree — skipping Steam shell injection)"

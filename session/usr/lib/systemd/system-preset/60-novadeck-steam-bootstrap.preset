@@ -1,7 +1,0 @@
-# novadeck: enable the first-boot Steam seeder on release. It stages the baked Steam seed into the
-# writable /home/deck and is ordered Before=sddm.service, so the shell has its client before SDDM
-# autologins deck. /etc/machine-id is empty on a fresh image so systemd runs preset-all on first boot
-# (stock 99-default.preset is "disable *"); this higher-priority preset (60 < 99) keeps it enabled. A
-# build-time graphical.target.wants symlink ships alongside as a fallback. The seeder self-skips the
-# ~1GB copy once staged, so steady-state boots pay only the cheap ownership-repair.
-enable novadeck-steam-bootstrap.service

@@ -1,5 +1,12 @@
 #!/bin/sh
-# novadeck Steam first-boot seeder (SteamOS layer D) — seed the deck home from the BAKED seed.
+# novadeck Steam OFFLINE factory-reset re-seeder (SteamOS layer D) — re-materialize the deck home
+# from the pristine RO-root RECOVERY seed.
+#
+# NOTE: this does NOT run on a normal boot. make-sdcard.sh pre-seeds /home/deck at image-build time,
+# so a healthy first boot already has a ready-to-run client (no copy). This tool exists for OFFLINE
+# FACTORY RESET: it wipes /home/deck and rebuilds it from the reset-proof seed baked in the sealed
+# RO root at /usr/share/novadeck/steam-seed (which survives a /home wipe) — no network (Steam's OOBE
+# owns Wi-Fi). It is left UNENABLED and invoked on demand by a reset flow, not by graphical.target.
 #
 # OFFLINE analog of SteamOS's steamos-create-homedir: the native arm64 Steam client+runtime are
 # baked into the sealed RO root at /usr/share/novadeck/steam-seed/ (build-time, by

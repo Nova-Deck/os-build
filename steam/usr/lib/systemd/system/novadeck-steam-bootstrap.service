@@ -1,8 +1,10 @@
 [Unit]
-Description=novadeck native arm64 Steam first-boot seeder (SteamOS layer D — seed the deck home)
-# Seed the writable /home/deck from the BAKED seed in the RO root — OFFLINE, no network (the seed
-# is fetched at build time, not here; Steam's OOBE owns first-boot Wi-Fi). Needs /home mounted and
-# grown first, and the deck user present (baked into the base).
+Description=novadeck native arm64 Steam offline factory-reset re-seeder (SteamOS layer D)
+# NOTE: does NOT run on a normal boot. make-sdcard.sh pre-seeds /home/deck at image-build time, so a
+# healthy boot needs no copy. This unit is the OFFLINE FACTORY-RESET path: it rebuilds /home/deck
+# from the pristine RECOVERY seed baked in the RO root (/usr/share/novadeck/steam-seed) — OFFLINE, no
+# network (Steam's OOBE owns Wi-Fi). Left UNENABLED; a reset flow starts it on demand. Needs /home
+# mounted and the deck user present (baked into the base).
 RequiresMountsFor=/home
 After=home.mount novadeck-grow-home.service systemd-sysusers.service
 # Must finish staging the seed into /home/deck BEFORE SDDM autologins deck into the Steam shell, so
@@ -23,8 +25,7 @@ StandardOutput=journal
 StandardError=journal
 
 [Install]
-# Enabled on release (SteamOS layer D boots to the Steam shell): the session overlay ships
-# 60-novadeck-steam-bootstrap.preset (enable) + a graphical.target.wants symlink, and Before=sddm
-# above sequences it ahead of the shell. (Previously WantedBy=novadeck-session.service, which SDDM
-# autologin replaced.)
+# Intentionally left UNENABLED (no preset, no *.target.wants symlink): /home ships pre-seeded, so
+# nothing pulls this in at boot. A factory-reset flow starts it on demand (systemctl start). WantedBy
+# is retained only so a reset flow could optionally wire it in.
 WantedBy=graphical.target

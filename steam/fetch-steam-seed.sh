@@ -3,14 +3,15 @@
 #
 # Runs on the build HOST (network required), like firmware/fetch-*.sh. Fetches the native arm64
 # Steam client seed + the arm64 SR3 runtime named in steam/STEAM_SEED.pin and stages the
-# `.local/share/Steam` CONTENTS into work/steam-seed/. images/assemble-rootfs.sh then bakes that dir
-# into the sealed RO root at /usr/share/novadeck/steam-seed/; the first-boot seeder copies it into
-# the writable /home/deck with NO network (Steam's OOBE owns Wi-Fi). This is the build-time half of
-# what steam-bootstrap.sh used to do at first boot — moved offline. See steam/STEAM_SEED.pin.
+# `.local/share/Steam` CONTENTS into work/steam-seed/. That tree is consumed TWICE at image build:
+# images/make-sdcard.sh pre-seeds it DIRECTLY into the /home partition (a ready-to-run home, no
+# first-boot copy), and images/assemble-rootfs.sh bakes it into the RO root as the offline
+# factory-reset recovery source. Both are OFFLINE (Steam's OOBE owns Wi-Fi). See steam/STEAM_SEED.pin.
 #
 # Idempotent: re-running is a no-op once work/steam-seed/steamrtarm64/steam is present (delete the
-# dir to refetch). The HOME-relative ~/.steam compat symlinks are NOT staged here — they are
-# created against /home/deck by the first-boot seeder, not the bake path.
+# dir to refetch). The HOME-relative ~/.steam compat symlinks are NOT staged here — make-sdcard.sh
+# creates them against /home/deck when it builds the pre-seeded home fs (and steam-bootstrap.sh
+# recreates them on a factory reset).
 #
 #   steam/fetch-steam-seed.sh
 set -euo pipefail

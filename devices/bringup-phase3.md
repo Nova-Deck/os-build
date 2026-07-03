@@ -8,28 +8,38 @@ Phase 3 — see `.claude/plans/novadeck.plan.md`.
 
 | File | Role |
 |------|------|
-| `STEAM_SEED.pin` + `fetch-steam-seed.sh` | **Build host**: fetch the native arm64 client seed + SR3 runtime (channel `steamdeck_publicbeta`) into `work/steam-seed/`. `assemble-rootfs.sh` bakes that into the sealed root at `/usr/share/novadeck/steam-seed`. |
-| `usr/lib/novadeck/steam-bootstrap.sh` | First-boot **seeder**: copies the baked seed into the **writable** `/home/deck/.local/share/Steam` **OFFLINE** (no CDN), then `chown deck:deck`. Idempotent. |
-| `usr/lib/systemd/system/novadeck-steam-bootstrap.service` | First-boot oneshot, after `/home` is mounted + grown and the `deck` user exists. **No network dep.** Self-skips once seeded. |
+| `STEAM_SEED.pin` + `fetch-steam-seed.sh` | **Build host**: fetch the native arm64 client seed + SR3 runtime (channel `steamdeck_publicbeta`) into `work/steam-seed/`. Consumed twice: `make-sdcard.sh` pre-seeds it **into the `/home` partition**, and `assemble-rootfs.sh` bakes it into the RO root as the **recovery** source. |
+| `usr/lib/novadeck/steam-bootstrap.sh` | **Offline factory-reset re-seeder**: wipes `/home/deck` and rebuilds it from the pristine RO-root seed (`/usr/share/novadeck/steam-seed`), offline. Does **not** run on a normal boot. |
+| `usr/lib/systemd/system/novadeck-steam-bootstrap.service` | Oneshot for the reset tool above. **Left unenabled** (no preset, no `*.target.wants` symlink); a reset flow starts it on demand. |
 | `usr/bin/novadeck-steam` | Launcher `NOVADECK_SESSION_CMD` points at: sets `HOME`/`LD_LIBRARY_PATH`, execs the native client **raw on the host** (no pressure-vessel) in `-gamepadui -steamos3 -steampal -steamdeck`. |
 
-The native client **is baked into the sealed RO root** (as a seed under `/usr/share/novadeck`); the
-seeder copies it into `/home` on first boot offline, and Steam self-updates the rest in `/home`
-across A/B slots. **Storage**: `/home` is a dedicated ext4 partition (`LABEL=novadeck-home`) mounted
-via `/etc/fstab`; `novadeck-grow-home.service` grows it + its fs to fill the card on first boot. The
-`deck` user (uid 1000) is baked into the base `/etc`. The launcher still runs as the session user
-(root today); moving the session to run as `deck` is a follow-up.
+The native client is **pre-seeded directly into the `/home` partition** by `make-sdcard.sh` (a
+ready-to-run `/home/deck/.local/share/Steam`, owned `deck:deck` via `mkfs.ext4 -d`), so a healthy
+first boot does **no copy**. A **pristine copy is also baked into the RO root**
+(`/usr/share/novadeck/steam-seed`) as the **offline factory-reset** source — it survives a `/home`
+wipe, and `steam-bootstrap.sh` rebuilds `/home/deck` from it with no network. Steam self-updates the
+rest in `/home` on first launch. **Storage**: `/home` is a dedicated ext4 partition
+(`LABEL=novadeck-home`) mounted via `/etc/fstab`, sized at build to just fit the seed;
+`novadeck-grow-home.service` grows the partition + its fs to fill the card on first boot. The `deck`
+user (uid 1000) is baked into the base `/etc`. The launcher still runs as the session user (root
+today); moving the session to run as `deck` is a follow-up.
+
+> **Phase-4 (A/B) note:** the recovery seed currently lives in the sealed root, which would duplicate
+> it across both root slots. In the A/B layout it should move to a **shared** recovery location (see
+> `images/partition-table.txt`) rather than being baked into each slot.
 
 ## Validate on HW (test card, session stays disabled by default)
 
 1. Flash a `NOVADECK_TEST=1` sdcard (Wi-Fi/SSH), boot, SSH in.
-2. Confirm the home grew + the seed copied (both run on first boot, offline — no CDN):
+2. Confirm the home grew and the pre-seeded client is present (offline — no CDN):
    ```sh
-   df -h /home                                           # expect the full card, not ~1GiB
+   df -h /home                                           # expect the full card, not ~2GiB
    ls /home/deck/.local/share/Steam/steamrtarm64/steam   # expect the native client (deck-owned)
+   ls /usr/share/novadeck/steam-seed/steamrtarm64/steam  # recovery source (offline factory reset)
    ```
-   (Or re-run by hand: `/usr/lib/novadeck/novadeck-grow-home` then `/usr/lib/novadeck/steam-bootstrap.sh`.
-   `novadeck-session` `Wants=` the seeder and orders after it + the grow.)
+   (The client ships pre-seeded in the image; only the grow runs on first boot —
+   re-run by hand with `/usr/lib/novadeck/grow-home.sh` if needed. To exercise reset:
+   `systemctl start novadeck-steam-bootstrap` re-seeds `/home/deck` from the recovery seed.)
 3. Launch the shell, watch the panel:
    ```sh
    systemctl start novadeck-session

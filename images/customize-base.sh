@@ -57,8 +57,8 @@ DEST="$ROOT/work/base"
 # (audio/ overlay, cards SM8650-APS2/SM8650-KPF) Include; pipewire-pulse/-alsa give the
 # PA/ALSA shims so games + BlueZ (A2DP/HFP) route through PipeWire, wireplumber is the
 # session manager. (pipewire-jack omitted — not needed for game/BT audio.)
-# unzip: the native arm64 Steam client seed ships as a .zip the steam-bootstrap stages on first
-# boot (SteamOS layer D, steam/ overlay). curl/tar/xz are already in the base.
+# unzip: Steam's own first-launch self-update unpacks .zip payloads in /home (the pre-seeded client
+# is UI-incomplete and updates itself). curl/tar/xz are already in the base.
 # openal: a HOST system lib the native arm64 Steam client links (libopenal.so.1); it IS in the holo
 # repo, so install it.
 # gtk2: steamui.so links libgtk-x11-2.0.so.0. holo has NO gtk2 (SteamOS itself ships none — verified
@@ -292,8 +292,8 @@ docker run --name "$cid" --platform linux/arm64 -v "$PREBUILT_DIR":/prebuilt:ro 
   # deck user (uid/gid 1000) — owns the session home /home/deck (a dedicated growable partition)
   # and, later, the gamescope session. SteamOS uses uid 1000 "deck"; bake the account into the RO
   # root /etc HERE (the root is read-only at runtime, so a boot-time systemd-sysusers could not
-  # persist it). -M: do NOT create a home in the RO root — /home/deck lives on the /home partition
-  # and is materialized + chowned by the first-boot seeder (steam-bootstrap.sh). Supplementary
+  # persist it). -M: do NOT create a home in the RO root — /home/deck lives on the /home partition,
+  # which make-sdcard.sh pre-seeds (deck-owned) with the Steam client at image-build time. Supplementary
   # groups are added only when they already exist in the base (hardware/seat access for the session).
   if ! getent passwd deck >/dev/null 2>&1; then
     useradd -M -u 1000 -U -s /bin/bash -c "Steam Deck User" deck

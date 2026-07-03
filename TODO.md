@@ -38,7 +38,12 @@ rationale lives in the linked memories and commit history.
   `STEAM_ENABLE_DYNAMIC_BACKLIGHT=1` (+ `STEAM_DISPLAY_REFRESH_LIMITS=<lo,hi>` for the refresh
   slider). novadeck's `novadeck-steam` exports none of these, so the slider may not even appear
   regardless of the backlight sysfs work. Export the gate FIRST (free, no rebuild); it's orthogonal
-  to — and a precondition for — the `/sys/class/backlight` write-access piece above. See
+  to — and a precondition for — the `/sys/class/backlight` write-access piece above.
+  **HW 2026-07-04 (branch `feat/gamescope-steam-handshake`):** env gate CONFIRMED — with
+  `STEAM_ENABLE_DYNAMIC_BACKLIGHT=1` exported, the brightness slider now APPEARS in Quick Access, but
+  moving it has ZERO effect. So part (1) — the `/sys/class/backlight/*` write path — is now the entire
+  remaining task; the gate half is done and shipped on the branch. See
+  [[chimeraos-gamescope-session-reference]], [[steam-gamescope-handshake-hw-result]],
   [[sm8650-working-display-baseline]], [[sm8650-inputplumber-input]], [[suspend-freeze-wake-design]],
   [[sm8650-gamescope-session-plumbing]].
 
@@ -56,9 +61,20 @@ rationale lives in the linked memories and commit history.
   -T <stats.pipe>`** (+ `GAMESCOPE_STATS` exported). `novadeck-session` runs a BARE gamescope (no
   `--steam`, no sockets), so the color sliders have nothing to talk to regardless of vkroots/reshade.
   TEST `--steam` + the R/T sockets FIRST — it's a launch-flag change, no rebuild, and may light up
-  color AND brightness at once — before doing the gamescope.spec build work. See
-  [[sm8650-gamescope-flip-blocker]], [[overlay-package-pipeline]],
-  [[inspect-upstream-by-cloning-not-scraping]], [[mesa-freedreno-depends-libdisplay-info]].
+  color AND brightness at once — before doing the gamescope.spec build work.
+  **HW 2026-07-04 (branch `feat/gamescope-steam-handshake`) — channel CONFIRMED, transform BROKEN:**
+  with `--steam` + `-R/-T` sockets wired, the color controls now REACH gamescope (previously fully
+  inert), so the IPC-channel theory is CLOSED. But the output is wrong: baseline is a strong RED
+  filter over everything when night mode is ON; the night-mode **tint** slider and the **primary-hue**
+  slider have NO effect, and only **peak-saturation** modulates the cast. That selective response =
+  a DEGENERATE color-management transform, NOT a correct transform mangled downstream by our rotation
+  shader (a shader-mangle would scale ALL sliders proportionally). So the root cause is now firmly the
+  gamescope COLOR-MANAGEMENT BUILD (missing **vkroots** / color meson opts) — the rotation-shader
+  interaction is DEMOTED. Next actual work: the `packages/gamescope` vs Armada `gamescope.spec` diff
+  + rebuild + retest. See [[steam-gamescope-handshake-hw-result]],
+  [[chimeraos-gamescope-session-reference]], [[sm8650-gamescope-flip-blocker]],
+  [[overlay-package-pipeline]], [[inspect-upstream-by-cloning-not-scraping]],
+  [[mesa-freedreno-depends-libdisplay-info]].
 
 - [ ] **Adopt SteamUI-expected session defaults we omit** — `novadeck-session` runs a comparatively
   bare gamescope; ChimeraOS's SteamOS session sets several defaults SteamUI/gamescope expect that we

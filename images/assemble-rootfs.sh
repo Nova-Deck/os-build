@@ -92,7 +92,7 @@ if [ -d "$LFW" ]; then
   while IFS= read -r f; do
     rel="${f#"$LFW"/}"
     install -Dm0644 "$f" "$stage/lib/firmware/$rel"
-  done < <(find "$LFW" -type f 2>/dev/null)
+  done < <(find "$LFW" -type f ! -name .fetched.stamp 2>/dev/null)
 else
   echo "  (no linux-firmware at ${LFW#"$ROOT"/} — run firmware/fetch-linux-fw.sh; GPU/BT/VPU firmware will be missing)"
 fi

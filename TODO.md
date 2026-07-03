@@ -12,7 +12,15 @@ rationale lives in the linked memories and commit history.
   vs power-key tap→suspend vs long-press→poweroff vs resume/thaw) on a plain RELEASE image, via
   offline card-mount `journalctl -D` (no UART). Suspects to rule out: interaction with the
   SDDM-autologin / active-seat session model, and the dirmngr slow-shutdown stall. Grade findings
-  CONFIRMED/SUSPECT/OPEN and test true reboots, not just service re-launches. See
+  CONFIRMED/SUSPECT/OPEN and test true reboots, not just service re-launches.
+  **ChimeraOS reference (see [[chimeraos-gamescope-session-reference]]):** SteamUI's own
+  Restart/Shutdown menu items work via **reboot/shutdown sentinel files** — Steam writes
+  `$REBOOT_SENTINEL`/`$SHUTDOWN_SENTINEL` and exits, then the session script (after the client
+  returns) checks for them and calls `reboot`/`poweroff`. novadeck's launcher `exec`s Steam and has
+  no post-exit sentinel handler, so a SteamUI-initiated restart/poweroff likely has nowhere to land —
+  a prime suspect for the resurfacing symptom. Also cross-check our `novadeck-waked` power-key path
+  against ChimeraOS's `systemd-inhibit --what=handle-power-key… + powerbuttond` (validates our design,
+  not a replacement). See
   [[suspend-freeze-wake-design]], [[suspend-systemctl-while-frozen-blocks]],
   [[waked-holdtime-background-dispatch]], [[sm8650-gamescope-session-plumbing]],
   [[dirmngr-slow-shutdown-defer-phase4]], [[verify-before-concluding-reboot-vs-restart]].
@@ -24,7 +32,13 @@ rationale lives in the linked memories and commit history.
   the RO root). (2) Brightness up/down **hotkeys** — map them to backlight steps, following the
   `novadeck-waked` libinput pattern (power key) or an InputPlumber binding. Watch: match SteamUI's
   expected backlight interface (it uses the `steamos` backlight path, cf. the OOBE/format helper
-  strings in `steamui.so`), and clamp min brightness so the screen can't go fully dark. See
+  strings in `steamui.so`), and clamp min brightness so the screen can't go fully dark.
+  **ChimeraOS reference (see [[chimeraos-gamescope-session-reference]]):** the QuickAccess
+  brightness/adaptive-brightness control is ENV-GATED — SteamOS's session exports
+  `STEAM_ENABLE_DYNAMIC_BACKLIGHT=1` (+ `STEAM_DISPLAY_REFRESH_LIMITS=<lo,hi>` for the refresh
+  slider). novadeck's `novadeck-steam` exports none of these, so the slider may not even appear
+  regardless of the backlight sysfs work. Export the gate FIRST (free, no rebuild); it's orthogonal
+  to — and a precondition for — the `/sys/class/backlight` write-access piece above. See
   [[sm8650-working-display-baseline]], [[sm8650-inputplumber-input]], [[suspend-freeze-wake-design]],
   [[sm8650-gamescope-session-plumbing]].
 
@@ -35,9 +49,29 @@ rationale lives in the linked memories and commit history.
   specifically whether it pulls in **vkroots** (the Vulkan layer-interposition framework gamescope's
   color-mgmt / shader path relies on) and **reshade** (shader effects); we likely need those as build
   deps / the matching meson options enabled. Clone Armada into `_reference/` to diff (don't scrape).
-  Watch: preserve our rotation-shader / WSI patches when touching the build. See
+  Watch: preserve our rotation-shader / WSI patches when touching the build.
+  **ChimeraOS reference (see [[chimeraos-gamescope-session-reference]]) — likely mis-diagnosed:** the
+  build-flag theory may be secondary. SteamUI drives gamescope's color/reshade pipeline over a RUNTIME
+  IPC that only exists when gamescope is launched in **`--steam` mode with `-R <startup.socket>
+  -T <stats.pipe>`** (+ `GAMESCOPE_STATS` exported). `novadeck-session` runs a BARE gamescope (no
+  `--steam`, no sockets), so the color sliders have nothing to talk to regardless of vkroots/reshade.
+  TEST `--steam` + the R/T sockets FIRST — it's a launch-flag change, no rebuild, and may light up
+  color AND brightness at once — before doing the gamescope.spec build work. See
   [[sm8650-gamescope-flip-blocker]], [[overlay-package-pipeline]],
   [[inspect-upstream-by-cloning-not-scraping]], [[mesa-freedreno-depends-libdisplay-info]].
+
+- [ ] **Adopt SteamUI-expected session defaults we omit** — `novadeck-session` runs a comparatively
+  bare gamescope; ChimeraOS's SteamOS session sets several defaults SteamUI/gamescope expect that we
+  don't (all env/flag, no rebuild — see [[chimeraos-gamescope-session-reference]]). Port and
+  HW-validate: **`--xwayland-count 2`** (the nested overlay Xwayland the Steam UI + game/overlay model
+  expects — likely load-bearing, not cosmetic), **`GAMESCOPE_MODE_SAVE_FILE`** (persist the user's
+  resolution/refresh choice across boots), the **`short_session` crash-loop guard** (fall back / reset
+  after N sub-60s client deaths — robustness novadeck lacks; today we lean on the exit-42 loop +
+  systemd), **`ulimit -n 524288`**, and the client env defaults **`SDL_VIDEO_MINIMIZE_ON_FOCUS_LOSS=0`**
+  + **`vk_xwayland_wait_ready=false`**. (`ENABLE_GAMESCOPE_WSI=1` we already set.) Fold the display/power
+  ones in alongside the `--steam`+sockets + `STEAM_*` experiment above; introduce each deliberately and
+  watch for interaction with our rotation-shader / WSI re-launch caveat. See
+  [[sm8650-gamescope-session-plumbing]], [[sm8650-gamescope-flip-blocker]].
 
 - [x] **OOBE timezone not set — polkit denies `timedate1.set-timezone`** — RESOLVED, HW-confirmed
   2026-07-02. The real fix was giving the shell a real ACTIVE seat0 logind session: boot via **SDDM

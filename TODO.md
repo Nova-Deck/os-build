@@ -5,6 +5,40 @@ rationale lives in the linked memories and commit history.
 
 ## Open
 
+- [ ] **Poweroff / sleep issues resurfacing** — the Phase-2 suspend/poweroff path was closed
+  HW-validated 2026-06-24 (freeze+wake, power-key tap→suspend, long-press→poweroff, thaw-before-
+  systemctl — see the Phase-2 HW-support closed items below), but problems are showing again on
+  current images. NEEDS CHARACTERIZATION: capture the exact symptom and WHICH path (L1 cold poweroff
+  vs power-key tap→suspend vs long-press→poweroff vs resume/thaw) on a plain RELEASE image, via
+  offline card-mount `journalctl -D` (no UART). Suspects to rule out: interaction with the
+  SDDM-autologin / active-seat session model, and the dirmngr slow-shutdown stall. Grade findings
+  CONFIRMED/SUSPECT/OPEN and test true reboots, not just service re-launches. See
+  [[suspend-freeze-wake-design]], [[suspend-systemctl-while-frozen-blocks]],
+  [[waked-holdtime-background-dispatch]], [[sm8650-gamescope-session-plumbing]],
+  [[dirmngr-slow-shutdown-defer-phase4]], [[verify-before-concluding-reboot-vs-restart]].
+
+- [ ] **Wire brightness controls (+ hotkeys)** — make panel backlight adjustable from the Deck UX.
+  Two parts: (1) expose the SM8650 panel backlight so SteamUI's Quick-Access brightness slider drives
+  it — confirm the `/sys/class/backlight/*` device the DSI panel registers, and give the active
+  session write access (udev/logind `uaccess` or a small polkit/helper path, on the writable side, not
+  the RO root). (2) Brightness up/down **hotkeys** — map them to backlight steps, following the
+  `novadeck-waked` libinput pattern (power key) or an InputPlumber binding. Watch: match SteamUI's
+  expected backlight interface (it uses the `steamos` backlight path, cf. the OOBE/format helper
+  strings in `steamui.so`), and clamp min brightness so the screen can't go fully dark. See
+  [[sm8650-working-display-baseline]], [[sm8650-inputplumber-input]], [[suspend-freeze-wake-design]],
+  [[sm8650-gamescope-session-plumbing]].
+
+- [ ] **Display color controls not working (night mode / color temp, etc.)** — SteamUI's color
+  settings (night mode / color temperature, saturation, gamut) don't take effect. gamescope owns the
+  color pipeline, so suspect our from-source gamescope build is missing what Armada ships. Compare
+  **Armada's `gamescope.spec`** (build flags + deps) against our `packages/gamescope` PKGBUILD —
+  specifically whether it pulls in **vkroots** (the Vulkan layer-interposition framework gamescope's
+  color-mgmt / shader path relies on) and **reshade** (shader effects); we likely need those as build
+  deps / the matching meson options enabled. Clone Armada into `_reference/` to diff (don't scrape).
+  Watch: preserve our rotation-shader / WSI patches when touching the build. See
+  [[sm8650-gamescope-flip-blocker]], [[overlay-package-pipeline]],
+  [[inspect-upstream-by-cloning-not-scraping]], [[mesa-freedreno-depends-libdisplay-info]].
+
 - [x] **OOBE timezone not set — polkit denies `timedate1.set-timezone`** — RESOLVED, HW-confirmed
   2026-07-02. The real fix was giving the shell a real ACTIVE seat0 logind session: boot via **SDDM
   autologin** and let gamescope use libseat's **logind** backend (NOT forced `LIBSEAT_BACKEND=seatd`,
@@ -24,13 +58,15 @@ rationale lives in the linked memories and commit history.
   "up to date" (exit 7 on `check`, else 0), matching Valve's/Armada's contract. First boot now clears
   the update screen (the one post-Wi-Fi reboot is normal SteamOS first-run). Commit `8aa5283`.
 
-- [ ] **Preseed `/home/deck` in the image instead of first-boot copy** — today the baked Steam seed
-  ships at `/usr/share/novadeck/steam-seed` on the RO root and `novadeck-steam-bootstrap.service`
-  copies it into the writable `/home/deck` on first boot (offline; see [[steam-must-be-baked-offline]],
-  [[steam-offline-sdl3-seed]]). Instead, stage the seed directly into the `/home` partition image at
-  build time (`images/assemble-rootfs.sh` / the home genpart) so first boot has nothing to copy —
-  faster first boot, and it drops the duplicate ~75M+ seed from the root. Watch: `/home` grows to
-  fill the card on first boot (`novadeck-grow-home`), and ownership must be `deck:deck`.
+- [x] **Preseed `/home/deck` in the image instead of first-boot copy** — RESOLVED, HW-confirmed
+  2026-07-03 (commit `930058f`). `make-sdcard.sh` now populates the `/home` ext4 directly at build
+  (`mkfs.ext4 -d`, owned `deck:deck`, `.steam` symlinks + seed baked in), sized to the seed and grown
+  to fill the card on first boot by `novadeck-grow-home` — a healthy boot does ZERO copy (killed the
+  old ~1GB rootfs→home copy and its grow-race ENOSPC trap). The pristine seed stays baked in the RO
+  root (`/usr/share/novadeck/steam-seed`) as the **offline factory-reset** source (survives a `/home`
+  wipe); `steam-bootstrap.sh` is repurposed from first-boot seeder to the on-demand reset tool (left
+  unenabled). Phase-4: move the recovery seed to a SHARED partition, not duplicated per A/B slot. See
+  [[steam-must-be-baked-offline]], [[steam-offline-sdl3-seed]], [[grow-home-repart-no-initramfs]].
 
 - [x] **Audio on release** — RESOLVED, HW-confirmed 2026-07-03. The "works on test, not release"
   framing was a red herring: the real precondition is **session-alive + client-updated**. Earlier

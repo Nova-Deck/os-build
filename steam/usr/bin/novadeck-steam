@@ -46,12 +46,19 @@ STEAM_LD_PATH="${STEAM}/steamrtarm64:${STEAM}/steamrtarm64/video:${STEAM}/lib/aa
 export LD_LIBRARY_PATH="${STEAM_LD_PATH}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 
 # -steamdeck/-steamos3/-steampal: Deck handheld behaviour. -gamepadui: Big Picture as the shell.
-# -noverifyfiles: skip the client's startup file-verification/repair pass. We bake a hand-assembled
-# offline shell (see steam-bootstrap.sh) that won't checksum-match Valve's manifests, and there's no
-# network at first boot (Steam owns OOBE Wi-Fi) — so verification can only waste time re-hashing the
-# baked tree or stall trying to re-fetch "mismatched" UI files. Matches Armada's launch-steam.
+#
+# The remaining flags all tell the client NOT to do network/background work an offline appliance
+# can't do. We bake the whole shell offline from a hand-assembled tree (see steam-bootstrap.sh) that
+# won't checksum-match Valve's manifests, and there's no network at first boot (Steam owns OOBE
+# Wi-Fi) — so any verify/repair/bootstrap-update path can only waste time re-hashing the baked tree
+# or stall trying to re-fetch. Mirrors ROCKNIX's launch flags (Armada passes the -noverifyfiles subset):
+#   -noverifyfiles       skip the startup file-verification pass
+#   -norepairfiles       suppress the repair fetch that verification would otherwise feed
+#   -nobootstrapupdate   don't update the Steam bootstrapper itself on launch
+#   -skipinitialbootstrap  don't re-run the client's initial bootstrap (we already baked the tree)
+#   -noshaders           disable shader pre-caching (no network for caches; CPU/battery drain)
 # Word-splitting on the extra-args is intentional (sh).
-: "${NOVADECK_STEAM_ARGS:=-gamepadui -steamos3 -steampal -steamdeck -noverifyfiles}"
+: "${NOVADECK_STEAM_ARGS:=-gamepadui -steamos3 -steampal -steamdeck -noverifyfiles -norepairfiles -nobootstrapupdate -skipinitialbootstrap -noshaders}"
 
 # Optional CEF remote-debugging (OFF on release). Steam's Big Picture UI is CEF; touching this
 # sentinel makes the client open a DevTools port so the SteamUI (incl. the OOBE web views) can be

@@ -1,0 +1,66 @@
+#!/bin/sh
+# novadeck-powerbuttond — power-key -> Steam forwarder (SteamOS layer C). novadeck owns NO power-key
+# suspend logic: the key is forwarded to the running Steam client, which drives sleep/power itself by
+# calling a logind Suspend() (intercepted into novadeck-suspend's fake-suspend) — the same split a Deck
+# session uses. Short press -> steam://shortpowerpress (Steam sleeps); long hold ->
+# steam://longpowerpress (Steam's power menu: sleep / restart / shutdown). logind is told to ignore the
+# key so it neither suspends nor powers off, leaving this forwarder the ONLY handler while awake.
+#
+# Runs as a ROOT system service: it reads the power-key evdev directly (no session-ACL dependency) and
+# dispatches the steam:// URI into the deck user's session via runuser. While asleep novadeck-suspend
+# holds an EXCLUSIVE grab on the power key, so this forwarder sees no events then and cannot bounce the
+# device back into suspend on resume. Mirrors novadeck-hotkeyd's read-as-root / act-as-deck idiom.
+set -u
+
+CONF=/etc/novadeck/rest.conf
+[ -r "$CONF" ] && . "$CONF"
+: "${NOVADECK_WAKE_KEY:=KEY_POWER}"
+: "${NOVADECK_WAKE_LONGPRESS_MS:=1000}"  # hold >= this -> longpowerpress (power menu); shorter -> shortpowerpress. 0 = always short.
+: "${NOVADECK_WAKE_DEBOUNCE:=2}"         # seconds to ignore repeat forwards after one fires
+: "${NOVADECK_SESSION_USER:=deck}"
+: "${NOVADECK_SESSION_UID:=1000}"
+: "${NOVADECK_STEAM_HOME:=/home/deck}"
+
+command -v libinput >/dev/null 2>&1 || { echo "novadeck-powerbuttond: libinput missing" >&2; exit 1; }
+
+STEAM="${NOVADECK_STEAM_HOME}/.local/share/Steam"
+CLIENT="${STEAM}/steamrtarm64/steam"
+STEAM_LD="${STEAM}/steamrtarm64:${STEAM}/steamrtarm64/video:${STEAM}/lib/aarch64-linux-gnu"
+
+now_ms() { date +%s%3N; }
+
+# Send steam://$1 to the RUNNING client, inside the deck session. -ifrunning = silent no-op if Steam
+# is not up yet. Same LD_LIBRARY_PATH the launcher uses so the native arm64 client's loader resolves.
+steam_uri() {
+  [ -x "$CLIENT" ] || return 0
+  runuser -u "$NOVADECK_SESSION_USER" -- env \
+    HOME="$NOVADECK_STEAM_HOME" \
+    XDG_RUNTIME_DIR="/run/user/${NOVADECK_SESSION_UID}" \
+    LD_LIBRARY_PATH="$STEAM_LD" \
+    "$CLIENT" -ifrunning "steam://$1" >/dev/null 2>&1 || true
+}
+
+echo "novadeck-powerbuttond: forwarding $NOVADECK_WAKE_KEY -> steam:// (longpress=${NOVADECK_WAKE_LONGPRESS_MS}ms)" >&2
+last=0; have_press=0; press_ms=0
+# Watch all seat0 devices (the power key is not on a fixed node) and time it pressed->released, deciding
+# short-vs-long on release; the action is dispatched in the BACKGROUND so a slow runuser never stalls
+# the read loop (and the hold timing). stdbuf -oL forces line-buffering (piped libinput block-buffers).
+stdbuf -oL libinput debug-events 2>/dev/null | while IFS= read -r line; do
+  case "$line" in
+    *"$NOVADECK_WAKE_KEY"*pressed*)  press_ms=$(now_ms); have_press=1 ;;
+    *"$NOVADECK_WAKE_KEY"*released*)
+      [ "$have_press" = 1 ] || continue
+      held=$(( $(now_ms) - press_ms )); have_press=0
+      now=$(date +%s)
+      [ $((now - last)) -lt "$NOVADECK_WAKE_DEBOUNCE" ] && continue
+      last=$now
+      if [ "$NOVADECK_WAKE_LONGPRESS_MS" -gt 0 ] && [ "$held" -ge "$NOVADECK_WAKE_LONGPRESS_MS" ]; then
+        echo "novadeck-powerbuttond: held ${held}ms -> longpowerpress" >&2
+        ( steam_uri longpowerpress ) &
+      else
+        echo "novadeck-powerbuttond: tap ${held}ms -> shortpowerpress" >&2
+        ( steam_uri shortpowerpress ) &
+      fi
+      ;;
+  esac
+done

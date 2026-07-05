@@ -1,0 +1,13 @@
+[Unit]
+Description=novadeck power-key → Steam forwarder
+# Reads the power-key evdev (present from boot) and forwards it to the Steam client, which drives
+# sleep/power via logind (intercepted into novadeck-suspend). It does not require the session to be up:
+# the steam:// dispatch simply no-ops via -ifrunning until Steam is running.
+
+[Service]
+ExecStart=/usr/bin/novadeck-powerbuttond
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

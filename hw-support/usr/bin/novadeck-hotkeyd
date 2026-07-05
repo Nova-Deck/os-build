@@ -1,0 +1,78 @@
+#!/bin/sh
+# novadeck-hotkeyd — media-key agent (SteamOS layer C, sibling of novadeck-powerbuttond).
+#
+# The volume and brightness hardware keys DO reach the Steam client — it draws its Quick-Access
+# OSD — but the native arm64 client does not complete the change on this hardware (verified on a
+# Pocket S2: KEY_VOLUMEUP/DOWN moved neither the Speaker nor the DisplayPort PipeWire sink while the
+# QuickAccess slider did). No peer distro ships an OS-level handler for these keys — they rely on the
+# client — so there is nothing to port; we apply the change ourselves:
+#   KEY_VOLUMEUP / KEY_VOLUMEDOWN / KEY_MUTE -> wpctl on the deck PipeWire session. Steam's OSD is
+#       subscribed to the sink, so it follows our change (no double-OSD, no fighting the client).
+#   KEY_BRIGHTNESSUP / KEY_BRIGHTNESSDOWN    -> step /sys/class/backlight, clamped so the panel can
+#       never go fully dark. (Physical brightness keys may not exist on every board; harmless if so.)
+#
+# Same reason this works while gamescope/Steam also hold the devices open: evdev is delivered by the
+# KERNEL and these keys are not EVIOCGRAB-exclusive, so a second reader (this agent, via libinput)
+# still sees every press. Mirrors novadeck-powerbuttond's power-key approach, but performs the audio/
+# backlight write itself instead of forwarding the keypress to the client.
+#
+# Runs as a ROOT system service: it needs to write the backlight and to read every input device.
+# Volume changes are dispatched into the deck user's PipeWire instance via runuser (uid 1000 +
+# XDG_RUNTIME_DIR); if the session is not up yet the wpctl call is a silent no-op.
+set -u
+
+CONF=/etc/novadeck/rest.conf
+[ -r "$CONF" ] && . "$CONF"
+: "${NOVADECK_VOL_STEP:=5}"          # volume percent per press
+: "${NOVADECK_BRIGHT_STEP:=10}"      # brightness percent-of-max per press
+: "${NOVADECK_BRIGHT_MIN:=5}"        # brightness floor (percent of max) — never let the panel go black
+: "${NOVADECK_SESSION_USER:=deck}"
+: "${NOVADECK_SESSION_UID:=1000}"
+
+command -v libinput >/dev/null 2>&1 || { echo "novadeck-hotkeyd: libinput missing" >&2; exit 1; }
+command -v wpctl    >/dev/null 2>&1 || echo "novadeck-hotkeyd: wpctl missing — volume keys will no-op" >&2
+
+# First backlight device that exposes a writable brightness (SM8650 registers sy7758-backlight).
+BL=""
+for d in /sys/class/backlight/*/; do
+  [ -e "${d}brightness" ] && { BL="${d%/}"; break; }
+done
+
+# Run wpctl inside the deck user's PipeWire session. Silent no-op if the session/socket isn't there.
+wp() {
+  runuser -u "$NOVADECK_SESSION_USER" -- \
+    env XDG_RUNTIME_DIR="/run/user/${NOVADECK_SESSION_UID}" wpctl "$@" >/dev/null 2>&1 || true
+}
+
+# Step the panel backlight. $1 is '+' or '-'. Clamps to [MIN%, 100%] of max_brightness.
+bright_step() {
+  [ -n "$BL" ] || return 0
+  max=$(cat "$BL/max_brightness" 2>/dev/null) || return 0
+  cur=$(cat "$BL/brightness" 2>/dev/null) || return 0
+  [ "$max" -gt 0 ] 2>/dev/null || return 0
+  step=$(( max * NOVADECK_BRIGHT_STEP / 100 )); [ "$step" -lt 1 ] && step=1
+  min=$(( max * NOVADECK_BRIGHT_MIN / 100 ))
+  if [ "$1" = "+" ]; then new=$(( cur + step )); else new=$(( cur - step )); fi
+  [ "$new" -gt "$max" ] && new=$max
+  [ "$new" -lt "$min" ] && new=$min
+  echo "$new" > "$BL/brightness" 2>/dev/null || true
+}
+
+echo "novadeck-hotkeyd: watching input for volume/brightness keys (backlight=${BL:-none})" >&2
+
+# Watch ALL seat0 input devices in one libinput context (the volume/brightness keys are not on a
+# fixed evdev node — on AYANEO MCU boards they arrive on the MCU's keyboard/consumer interface, a
+# different device from the gamepad). Act on the pressed edge; one step per press. KEY_VOLUMEUP is
+# not a substring of any other keysym, and "KEY_MUTE" does not match "KEY_MICMUTE", so the globs are
+# unambiguous. stdbuf -oL forces libinput to line-buffer its stdout: piped (non-tty) it would other-
+# wise block-buffer, so a few key presses (~hundreds of bytes) would sit unflushed and never reach
+# the read loop until 4 KB accumulated.
+stdbuf -oL libinput debug-events 2>/dev/null | while IFS= read -r line; do
+  case "$line" in
+    *KEY_VOLUMEUP*pressed*)       wp set-volume -l 1.0 @DEFAULT_AUDIO_SINK@ "${NOVADECK_VOL_STEP}%+" ;;
+    *KEY_VOLUMEDOWN*pressed*)     wp set-volume        @DEFAULT_AUDIO_SINK@ "${NOVADECK_VOL_STEP}%-" ;;
+    *KEY_MUTE*pressed*)           wp set-mute          @DEFAULT_AUDIO_SINK@ toggle ;;
+    *KEY_BRIGHTNESSUP*pressed*)   bright_step + ;;
+    *KEY_BRIGHTNESSDOWN*pressed*) bright_step - ;;
+  esac
+done

@@ -161,9 +161,12 @@ fi
 # whose maturity on these SoCs is the top HW risk; it blanks the panel (via gamescope's own KMS
 # modeset), offlines all but the boot CPU, soft-blocks radios, and drops cpufreq to powersave. No
 # package added — gamescopectl ships in our from-source gamescope; the rest is pure sysfs. The
-# power-key trigger (novadeck-waked) IS enabled here (preset + multi-user.target.wants symlink ship
-# inside the overlay) so the key drives suspend/resume + long-press poweroff at boot; novadeck-rest
-# stays a hand-run dev tool. The overlay also carries the SoC-agnostic release-system backings that
+# suspend engine is driven by SUSPEND, not a bespoke daemon: a systemd-suspend.service drop-in
+# redirects every logind Suspend() into novadeck-suspend (fake-suspend), and the power key is forwarded
+# to Steam by novadeck-powerbuttond (enabled here via preset + multi-user.target.wants symlink), which
+# calls Suspend() like the Steam power menu does; novadeck-suspend grabs the power key to wake. logind
+# is told to ignore the raw power/suspend/lid keys. novadeck-rest stays a hand-run dev tool. The
+# overlay also carries the SoC-agnostic release-system backings that
 # pair with the Deck UI: the Bluetooth stack (bluetoothd enabled via 60-novadeck-bluetooth.preset;
 # bluez packages come from customize-base.sh), systemd-timesyncd for a sane clock (no RTC sync
 # otherwise). No Wi-Fi resume hook ships: NM re-associates unaided after the suspend rfkill-unblock
@@ -171,9 +174,9 @@ fi
 # point in novadeck-suspend remains for future fix-ups. See devices/bringup-phase2.md step 3.
 HWSUPPORT="$ROOT/hw-support"
 if [ -d "$HWSUPPORT" ]; then
-  echo "  injecting novadeck HW-support from ${HWSUPPORT#"$ROOT"/} (wake agent + bluetooth + timesyncd enabled)"
+  echo "  injecting novadeck HW-support from ${HWSUPPORT#"$ROOT"/} (power-key + media-key agents + fake-suspend + bluetooth + timesyncd enabled)"
   cp -a "$HWSUPPORT"/. "$stage/"
-  chmod 0755 "$stage/usr/bin/novadeck-rest" "$stage/usr/bin/novadeck-suspend" "$stage/usr/bin/novadeck-waked"
+  chmod 0755 "$stage/usr/bin/novadeck-rest" "$stage/usr/bin/novadeck-suspend" "$stage/usr/bin/novadeck-hotkeyd" "$stage/usr/bin/novadeck-powerbuttond"
 else
   echo "  (no hw-support/ tree — skipping HW-support injection)"
 fi

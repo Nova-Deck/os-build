@@ -1,0 +1,19 @@
+# novadeck HW-access ACLs — grant the gamescope session (deck user, member of `wheel`)
+# write access to the sysfs knobs SteamUI's Quick Access drives. The root is read-only, so
+# these can't be chmod'd at build time on a live device; a udev rule re-applies them each
+# time the device appears (deck is in wheel, see images/customize-base.sh) — covers CPU/GPU
+# perf sliders AND the panel-backlight brightness.
+#
+# Backlight is the one that unblocks the QuickAccess brightness slider: gamescope runs as the
+# unprivileged session and writes /sys/class/backlight/<panel>/brightness directly, but on the RO
+# root that file is root-only, so the slider appeared (env-gated) yet had zero effect. Granting
+# wheel g+w here gives gamescope the write path. See TODO "Wire brightness controls".
+
+SUBSYSTEM=="cpu", KERNEL=="cpu[0-9]*", \
+    RUN+="/bin/sh -c 'chgrp wheel /sys/devices/system/cpu/cpufreq/policy*/scaling_max_freq /sys/devices/system/cpu/cpufreq/policy*/scaling_min_freq /sys/devices/system/cpu/cpufreq/policy*/scaling_governor 2>/dev/null; chmod g+w /sys/devices/system/cpu/cpufreq/policy*/scaling_max_freq /sys/devices/system/cpu/cpufreq/policy*/scaling_min_freq /sys/devices/system/cpu/cpufreq/policy*/scaling_governor 2>/dev/null'"
+
+SUBSYSTEM=="devfreq", KERNEL=="*.gpu", \
+    RUN+="/bin/sh -c 'chgrp wheel /sys/class/devfreq/%k/governor /sys/class/devfreq/%k/max_freq /sys/class/devfreq/%k/min_freq 2>/dev/null; chmod g+w /sys/class/devfreq/%k/governor /sys/class/devfreq/%k/max_freq /sys/class/devfreq/%k/min_freq 2>/dev/null'"
+
+SUBSYSTEM=="backlight", \
+    RUN+="/bin/sh -c 'chgrp wheel /sys/class/backlight/%k/brightness 2>/dev/null; chmod g+w /sys/class/backlight/%k/brightness 2>/dev/null'"

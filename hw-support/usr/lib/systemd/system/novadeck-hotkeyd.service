@@ -1,0 +1,14 @@
+[Unit]
+Description=novadeck media-key agent (volume + brightness hardware keys)
+# Reads evdev directly (present from boot) and writes the deck PipeWire session / the backlight; it
+# does not require the gamescope session to be up — volume calls simply no-op until the session is
+# there. Media keys need no freeze-immunity (nothing presses them while asleep), so it stays in the
+# default system.slice (which novadeck-suspend leaves running — it freezes only user.slice).
+
+[Service]
+ExecStart=/usr/bin/novadeck-hotkeyd
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

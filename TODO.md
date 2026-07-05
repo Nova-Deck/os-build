@@ -25,30 +25,91 @@ rationale lives in the linked memories and commit history.
   [[waked-holdtime-background-dispatch]], [[sm8650-gamescope-session-plumbing]],
   [[dirmngr-slow-shutdown-defer-phase4]], [[verify-before-concluding-reboot-vs-restart]].
 
-- [ ] **Wire brightness controls (+ hotkeys)** — make panel backlight adjustable from the Deck UX.
-  Two parts: (1) expose the SM8650 panel backlight so SteamUI's Quick-Access brightness slider drives
-  it — confirm the `/sys/class/backlight/*` device the DSI panel registers, and give the active
-  session write access (udev/logind `uaccess` or a small polkit/helper path, on the writable side, not
-  the RO root). (2) Brightness up/down **hotkeys** — map them to backlight steps, following the
-  `novadeck-waked` libinput pattern (power key) or an InputPlumber binding. Watch: match SteamUI's
-  expected backlight interface (it uses the `steamos` backlight path, cf. the OOBE/format helper
-  strings in `steamui.so`), and clamp min brightness so the screen can't go fully dark.
-  **ChimeraOS reference (see [[chimeraos-gamescope-session-reference]]):** the QuickAccess
-  brightness/adaptive-brightness control is ENV-GATED — SteamOS's session exports
-  `STEAM_ENABLE_DYNAMIC_BACKLIGHT=1` (+ `STEAM_DISPLAY_REFRESH_LIMITS=<lo,hi>` for the refresh
-  slider). novadeck's `novadeck-steam` exports none of these, so the slider may not even appear
-  regardless of the backlight sysfs work. Export the gate FIRST (free, no rebuild); it's orthogonal
-  to — and a precondition for — the `/sys/class/backlight` write-access piece above.
-  **HW 2026-07-04 (branch `feat/gamescope-steam-handshake`):** env gate CONFIRMED — with
-  `STEAM_ENABLE_DYNAMIC_BACKLIGHT=1` exported, the brightness slider now APPEARS in Quick Access, but
-  moving it has ZERO effect. So part (1) — the `/sys/class/backlight/*` write path — is now the entire
-  remaining task; the gate half is done and shipped on the branch. See
-  [[chimeraos-gamescope-session-reference]], [[steam-gamescope-handshake-hw-result]],
-  [[sm8650-working-display-baseline]], [[sm8650-inputplumber-input]], [[suspend-freeze-wake-design]],
-  [[sm8650-gamescope-session-plumbing]].
+- [x] **Wire brightness controls** — RESOLVED, HW-validated 2026-07-05 (branch
+  `feat/brightness-volume-perf-acls`). Env gate (`STEAM_ENABLE_DYNAMIC_BACKLIGHT=1`) made the slider
+  appear but the write path was missing: `/sys/class/backlight/sy7758-backlight/brightness` is
+  `root:root 0644` on the RO root and gamescope runs as `deck`. Fix = `hw-support/usr/lib/udev/
+  rules.d/60-novadeck-perf-acls.rules` (chgrp `wheel` + `g+w` on backlight brightness — plus cpu/gpu
+  perf knobs; deck ∈ wheel). Live-validated: deck wrote brightness, panel responded. See
+  [[brightness-volume-keys-resolved]].
 
-- [ ] **Display color controls not working (night mode / color temp, etc.)** — SteamUI's color
-  settings (night mode / color temperature, saturation, gamut) don't take effect. gamescope owns the
+- [x] **Volume buttons don't change volume (OSD shows, no change)** — RESOLVED, HW-validated
+  2026-07-05 (same branch). The keys reach the Steam client (OSD draws) but the native arm64 client
+  never applies the change to PipeWire; the QuickAccess slider does. No OS-level volume-key handler
+  exists in SteamOS or Armada (client-only; SteamOS's is x86 and works) — nothing to port, confirmed
+  by mounting the SteamOS recovery image. Fix = NEW daemon `hw-support/usr/bin/novadeck-hotkeyd`:
+  `libinput debug-events` → `wpctl` in the deck PipeWire session on KEY_VOLUMEUP/DOWN/MUTE (Steam's
+  OSD follows the sink); also maps KEY_BRIGHTNESSUP/DOWN → backlight step (clamped). Keys come from
+  `gpio-keys`, not the DS5. HW: 0.45→0.55, OSD moved. `stdbuf -oL` on libinput was required (piped
+  block-buffering). See [[brightness-volume-keys-resolved]].
+
+- [x] **Rearchitect power/suspend to the Steam-driven model; retire `novadeck-waked`** — DONE +
+  **HW-VALIDATED 2026-07-05** (Pocket S2). Replaced our bespoke power-key daemon (which read the key AND drove
+  suspend/poweroff itself) with the reference handheld split, so Steam owns the power UX and we only
+  intercept the kernel suspend:
+  - **`novadeck-powerbuttond`** (NEW, root system service): forwards the power key to the running
+    Steam client — short → `steam://shortpowerpress` (sleep), long → `steam://longpowerpress` (power
+    menu). Reads evdev as root, dispatches via `runuser` into the deck session (mirrors `hotkeyd`).
+  - **logind drop-in**: expanded to ignore Power/Suspend/Hibernate/Lid keys (Steam owns them) while
+    still SERVICING the `Suspend()` D-Bus call — the path we intercept.
+  - **`systemd-suspend.service` drop-in** → `ExecStart=/usr/bin/novadeck-suspend sleep`,
+    `TimeoutStartSec=infinity`. EVERY logind `Suspend()` (Steam menu, idle, forwarded key) lands in
+    fake-suspend; kernel s2idle/s2ram is unreachable via the normal stack.
+  - **`novadeck-suspend` rewritten** into a self-contained blocking engine: freezes **user.slice only**
+    (engine/journald/dbus/logind stay live in system.slice → the whole thaw-before-dbus / autothaw /
+    wake.slice gotcha layer is GONE), lowers power, then **grabs the power key** (`libinput --grab`,
+    EVIOCGRAB) and blocks until KEY_POWER — it owns the wake. The grab stops the (un-frozen) forwarder
+    from bouncing us back into suspend on resume.
+  - **Deleted**: `novadeck-waked` + service + preset + wants, `novadeck-wake.slice`, the interim
+    `suspend-to-freeze` bridge, autothaw. **`novadeck-hotkeyd` unchanged** (separate volume/brightness
+    agent). `git` history keeps `waked` recoverable.
+
+  **Linchpin CONFIRMED (HW 2026-07-05):** short-press → `powerbuttond: tap 131ms -> shortpowerpress`
+  → Steam called a logind `Suspend()` → `novadeck-suspend` froze `user.slice`, grabbed the power key,
+  and the power key woke it — `journalctl -k` shows NO `PM: suspend`/`s2idle`/`/sys/power` write, so
+  kernel suspend never fired. Not exercised yet: the Steam "Sleep" menu and idle-timeout entry points
+  (same logind path, expected fine). NOT covered: hibernate/hybrid-sleep (Steam never calls them; mask
+  if a path appears). See [[suspend-freeze-wake-design]], [[waked-holdtime-background-dispatch]],
+  [[brightness-volume-keys-resolved]].
+
+- [ ] **Suspend polish: stop the fan + robust panel blank** — follow-ups from the 2026-07-05 HW pass,
+  both cosmetic (freeze/wake itself is solid):
+  - **Fan keeps spinning during fake-suspend.** There IS a controllable fan (`pwmfan` at
+    `/sys/class/hwmon/hwmon42/pwm1`); `power_enter`/`power_leave` don't touch it. Add a reversible
+    fan-off op to `power-ops.sh` (save `pwm1` + `pwm1_enable`, set 0 on enter, restore on leave — same
+    state-record pattern as the cpu/rfkill/governor ops), gated by a `NOVADECK_SUSPEND_SKIP`-style key.
+    Groundwork for later fan-curve work (steamos-manager `PerformanceProfile1`).
+  - **Our `gamescopectl` panel-blank path logs "unreachable"** when `novadeck-suspend` runs as
+    `systemd-suspend.service` (root, system.slice) — it can't resolve the live gamescope socket. Harmless
+    today because Steam blanks the panel itself as part of its sleep flow, but add a `bl_power` fallback
+    (`echo 4 > /sys/class/backlight/*/bl_power` on suspend, `0` on resume) so a blank still happens if
+    Steam's own blank ever regresses. See [[sm8650-gamescope-flip-blocker]].
+
+- [ ] **Provide `com.steampowered.SteamOSManager1` (steamos-manager) — SteamUI's privileged backend**
+  — SteamUI calls this D-Bus name for system actions it can't do as the unprivileged `deck` user;
+  when it's absent those controls silently no-op (the shape of our "SteamUI setting is inert" class).
+  Adopt the **reference-handheld pattern, NOT the upstream binary**: the upstream Rust project
+  (cloned at `_reference/steamos-manager/`, the authoritative interface spec — see its `data/*.xml`)
+  is jupiter/x86-oriented (Ryzen TDP, Deck fans, jupiter sysfs) so its method BODIES don't map to
+  SM8650/Adreno. Our peer ships a ~389-line Python reimplementation of just the interfaces SteamUI
+  needs, backed by its own hw daemons: `SessionManagement1` (SwitchToDesktop/GameMode + desktop/login
+  sessions), `PerformanceProfile1` + `GpuPerformanceLevel1` (perf tab), `Manager2` (ReloadConfig),
+  `ObjectManager`; power is delegated to a separate power daemon. Wins: **Desktop/Game-mode switching**
+  (a Deck-UX feature we lack) and the **Performance/GPU-level sliders** (currently inert, no backend);
+  it's the standard home for future "SteamUI toggle → OS action" wiring, replacing hand-rolled per-key
+  daemons (`novadeck-hotkeyd` etc.). ORTHOGONAL to the power/suspend work: the reference's manager does
+  NOT expose Suspend/Reboot/Shutdown — suspend still flows through the logind intercept we built. Scope:
+  a real D-Bus daemon (its own effort), a natural next layer AFTER power/suspend lands. See
+  [[inspect-upstream-by-cloning-not-scraping]], [[validate-architecture-vs-steamos-goal]].
+
+- [ ] **Brightness up/down hotkeys — unverified** — `novadeck-hotkeyd` maps KEY_BRIGHTNESSUP/DOWN, but
+  the Pocket S2 raw capture only showed `KEY_VOLUMEUP`, so the board likely has no physical brightness
+  keys (harmless if absent). Confirm whether any board emits brightness keysyms; if not, this is moot.
+
+- [x] **Display color controls — RESOLVED** — confirmed working (user, 2026-07-05): the `--steam`
+  handshake + R/T sockets (cabb498) gave SteamUI's color pipeline a channel, and the
+  `GAMESCOPE_COLOR_NIGHT_MODE` atom sanitize (ddbe201) fixed the RED cast → amber night mode. Original
+  investigation retained below for provenance. gamescope owns the
   color pipeline, so suspect our from-source gamescope build is missing what Armada ships. Compare
   **Armada's `gamescope.spec`** (build flags + deps) against our `packages/gamescope` PKGBUILD —
   specifically whether it pulls in **vkroots** (the Vulkan layer-interposition framework gamescope's
@@ -154,7 +215,9 @@ rationale lives in the linked memories and commit history.
   See [[sm8650-inputplumber-input]], [[suspend-freeze-wake-design]],
   [[sm8650-gamescope-session-plumbing]].
 
-- [ ] **Adopt SteamUI-expected session defaults we omit** — `novadeck-session` runs a comparatively
+- [x] **Adopt SteamUI-expected session defaults — DONE** — user-confirmed 2026-07-05; the defaults
+  below were ported alongside the `--steam` handshake + SteamUI env gates (cabb498, 0970590).
+  Historical scope: `novadeck-session` ran a comparatively
   bare gamescope; ChimeraOS's SteamOS session sets several defaults SteamUI/gamescope expect that we
   don't (all env/flag, no rebuild — see [[chimeraos-gamescope-session-reference]]). Port and
   HW-validate: **`--xwayland-count 2`** (the nested overlay Xwayland the Steam UI + game/overlay model
@@ -207,10 +270,10 @@ rationale lives in the linked memories and commit history.
   sound pre-update so first-boot-before-update isn't silent — likely needs the bundled `steamrtarm64/`
   audio libs refreshed in the seed.
 
-- [ ] **`--ready-fd` ready-then-launch handshake** — candidate mitigation for the residual
-  Phase-2 gamescope re-launch wedge (below). Run gamescope bare, launch the client only after
-  it signals ready via `--ready-fd`. Prototyped, never proven to reliably dodge the wedge. Only
-  relevant if a session restart (WSI on) actually wedges in the field.
+- [x] **`--ready-fd` ready-then-launch handshake — MOOT** — dropped (user, 2026-07-05). It only
+  mattered if a WSI-on session restart wedged in the field; the release shell launches once and WSI
+  stays `=1` (see [[sm8650-gamescope-flip-blocker]]), so the wedge is not a field problem. Prototype
+  abandoned.
 
 - [ ] **Stable Wi-Fi + Bluetooth MAC addresses (first-boot)** — the WCN7850 comes up without a
   persistent MAC (no vendor NVRAM/`nvmem` MAC path on this SM8650 port), so the Wi-Fi and BT

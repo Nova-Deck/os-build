@@ -18,7 +18,7 @@
 # game — it only lowers power (panel off, CPUs offlined, governors->powersave) while userland keeps
 # running. novadeck-suspend is the actual product suspend: it cgroup-FREEZES userland (the game truly
 # halts) AND now applies these same power ops (via the shared power-ops.sh this script sources), so it
-# is a strict superset of rest mode plus the freeze, and it has the wake path (novadeck-waked). rest
+# is a strict superset of rest mode plus the freeze, and it owns the wake path (grabs the power key). rest
 # mode therefore stands as a DEV / BRING-UP tool, not the suspend affordance: its niche is exercising
 # the power primitives over SSH WITHOUT the freeze (the freeze drops sshd, which is in the frozen set).
 # Do not wire the power-button / Deck-UI suspend trigger to novadeck-rest — wire it to novadeck-suspend.

@@ -1,0 +1,54 @@
+From 0000000000000000000000000000000000000002 Mon Sep 17 00:00:00 2001
+From: Philippe Simons <simons.philippe@gmail.com>
+Date: Sat, 4 Jul 2026 14:00:00 +0200
+Subject: [PATCH 2/2] fix: sanitize GAMESCOPE_COLOR_NIGHT_MODE atom
+
+On the Pocket S2's no-EDID DSI panel the Steam client sends a broken night-mode
+vector: the hue field only sweeps cold->red (~0.5 up to 1.0, HW-measured) and
+never a warm value, the saturation field is frozen garbage (~6.5e22), and only
+`amount` is usable (it tracks the intensity slider). gamescope renders
+HSV(hue, saturation*amount, 1.0) faithfully, so those values turn night mode
+into a magenta/red screen instead of the expected warm amber.
+
+Clamp amount/saturation into [0,1] and force hue to amber unless it lies in a
+tight warm band (excluding both hue extremes, since 0.0 and 1.0 are pure red),
+right where the atom is decoded. Night mode becomes a reliable warm cast whose
+strength follows the intensity slider, without a kernel-provided panel EDID.
+---
+ src/steamcompmgr.cpp | 22 ++++++++++++++++++++
+ 1 file changed, 22 insertions(+)
+
+diff --git a/src/steamcompmgr.cpp b/src/steamcompmgr.cpp
+--- a/src/steamcompmgr.cpp
++++ b/src/steamcompmgr.cpp
+@@ -6349,6 +6349,28 @@
+ 		nightmode.hue = vec[1];
+ 		nightmode.saturation = vec[2];
+ 
++		// novadeck: sanitize the night-mode vector before it drives the color pipeline.
++		// On our no-EDID DSI panel the Steam client sends a broken tint: the hue field only
++		// ever sweeps cold->red (~0.5 up to 1.0, HW-measured) and never a warm value, and the
++		// saturation field is frozen garbage (~6.5e22); only `amount` is usable (it tracks the
++		// intensity slider). gamescope renders HSV(hue, sat*amount, 1) faithfully, so those
++		// bogus values turn night mode magenta/red. Clamp amount/saturation into [0,1] and
++		// force hue to amber unless it lies in a tight warm band, so night mode is a reliable
++		// warm cast whose strength follows the intensity slider. The band is deliberately
++		// narrow and excludes both hue extremes (0.0 and 1.0 are pure red) — a value near 1.0
++		// is the client's garbage, NOT a "deep red" the user asked for. See TODO.md
++		// "Display color controls" + steam-gamescope-handshake HW notes.
++		{
++			constexpr float kNightModeAmberHue = 0.083f;  // amber, matches Steam Deck night mode
++			constexpr float kNightModeWarmHueMin = 0.02f; // exclude pure red (harsh) at hue 0
++			constexpr float kNightModeWarmHueMax = 0.20f; // amber .. yellow upper bound
++			const bool bWarmHue = nightmode.hue >= kNightModeWarmHueMin && nightmode.hue <= kNightModeWarmHueMax;
++			if ( !std::isfinite( nightmode.hue ) || !bWarmHue )
++				nightmode.hue = kNightModeAmberHue;
++			nightmode.saturation = std::isfinite( nightmode.saturation ) ? std::clamp( nightmode.saturation, 0.0f, 1.0f ) : 1.0f;
++			nightmode.amount = std::isfinite( nightmode.amount ) ? std::clamp( nightmode.amount, 0.0f, 1.0f ) : 0.0f;
++		}
++
+ 		if ( set_color_nightmode( nightmode ) )
+ 			hasRepaint = true;
+ 	}
+--
+2.54.0

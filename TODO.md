@@ -62,19 +62,97 @@ rationale lives in the linked memories and commit history.
   `--steam`, no sockets), so the color sliders have nothing to talk to regardless of vkroots/reshade.
   TEST `--steam` + the R/T sockets FIRST — it's a launch-flag change, no rebuild, and may light up
   color AND brightness at once — before doing the gamescope.spec build work.
-  **HW 2026-07-04 (branch `feat/gamescope-steam-handshake`) — channel CONFIRMED, transform BROKEN:**
-  with `--steam` + `-R/-T` sockets wired, the color controls now REACH gamescope (previously fully
-  inert), so the IPC-channel theory is CLOSED. But the output is wrong: baseline is a strong RED
-  filter over everything when night mode is ON; the night-mode **tint** slider and the **primary-hue**
-  slider have NO effect, and only **peak-saturation** modulates the cast. That selective response =
-  a DEGENERATE color-management transform, NOT a correct transform mangled downstream by our rotation
-  shader (a shader-mangle would scale ALL sliders proportionally). So the root cause is now firmly the
-  gamescope COLOR-MANAGEMENT BUILD (missing **vkroots** / color meson opts) — the rotation-shader
-  interaction is DEMOTED. Next actual work: the `packages/gamescope` vs Armada `gamescope.spec` diff
-  + rebuild + retest. See [[steam-gamescope-handshake-hw-result]],
-  [[chimeraos-gamescope-session-reference]], [[sm8650-gamescope-flip-blocker]],
-  [[overlay-package-pipeline]], [[inspect-upstream-by-cloning-not-scraping]],
-  [[mesa-freedreno-depends-libdisplay-info]].
+  **HW 2026-07-04 (branch `feat/gamescope-steam-handshake`) — channel CONFIRMED:** with `--steam` +
+  `-R/-T` sockets wired, the color controls now REACH gamescope (previously fully inert), so the
+  IPC-channel theory is CLOSED. Baseline is a strong RED filter when night mode is ON; the night-mode
+  **tint** and **primary-hue** sliders have NO effect; only **peak-saturation** modulates the cast.
+
+  **⚠️ ROOT CAUSE CORRECTED — source analysis 2026-07-04 (everything above from "gamescope owns the
+  color pipeline" down to the vkroots/gamescope.spec rebuild plan is SUPERSEDED / WRONG):** the
+  gamescope build, patch, and plumbing are all EXONERATED. Walked gamescope 3.16.23.2 source:
+  1. **No color meson option exists** — color-mgmt is always compiled in; **vkroots is the WSI layer,
+     not color.** The "missing vkroots / color meson opts" theory is dead — do NOT do the rebuild.
+  2. Our `0001-rotate-portrait-panel-in-composite.patch` is **byte-for-byte ROCKNIX/Armada's `0005`
+     rotation patch** (only a 2-line aggregate-init diff, from being adapted to 3.16.23.2's fuller
+     `PipelineInfo_t`). It only redirects the composite shader's OUTPUT store coord; it does **not**
+     touch or reorder the color-mgmt LUT sampling or `encodeOutputColor`. Rotation shader fully CLEARED.
+  3. 3.16.23.2 ≈ Armada's 3.16.24; both run **no-EDID DSI panels** where gamescope defaults to the
+     safe `displaycolorimetry_709`. Not a version / EDID / colorimetry issue.
+  4. **Actual mechanism:** night mode is literally `HSV_to_RGB(nightmode.hue, saturation*amount, 1.0)`
+     used as a multiply (`color_helpers.cpp` ~L731). **hue≈0 ⇒ pure RED**; correct night mode is amber
+     (**hue≈0.083**). amount/hue/saturation arrive **together in ONE atom** `GAMESCOPE_COLOR_NIGHT_MODE`
+     (CARDINAL[3], each `bit_cast<float>`; `steamcompmgr.cpp` ~L6334), so saturation responding PROVES
+     hue (vec[1]) is received. gamescope faithfully renders what it's told ⇒ **the red is the value the
+     STEAM CLIENT sends for hue (≈0), not our build.**
+
+  So the fix is NOT in `packages/gamescope`. **CAVEAT:** "Armada's night mode works" was an assumption,
+  never tested — the conclusion rests on gamescope source + the atom math, not on Armada.
+  **NEXT (no rebuild) — bisect gamescope vs SteamUI on-device:** inject
+  `GAMESCOPE_COLOR_NIGHT_MODE`=[amount=1.0, hue=0.083, sat=1.0] on the session X root via `xprop`
+  (CARDINAL[3] of the float bit patterns) and watch the panel — **amber ⇒ gamescope is perfect, bug is
+  100% SteamUI-side** (client-integration / likely a documented non-blocker); **still red ⇒ reopen the
+  gamescope-render angle with a specific target.** Sweep hue 0.0→0.17 to confirm gamescope honors it.
+  **HW-CONFIRMED 2026-07-04 (device .216): gamescope FULLY EXONERATED.** Injected [1.0,0.083,1.0] →
+  panel went correct AMBER. The vector SteamUI itself left on the root read back as
+  `[amount=0.0, hue=0.85 (magenta, NOT amber), saturation=1.02e15 (WILDLY out of [0,1])]` — **SteamUI
+  computes a garbage night-mode vector** (gamescope only survived it because amount=0 zeroed the
+  product). Repro: `xprop` must run as the **deck** user (root is refused, wrong uid); `gamescopectl`
+  has no night-mode convar (X-atom only). With night mode toggled ON the vector =
+  `[amount=0.382, hue=0.85, sat=1.02e15]` → **only `amount` is live (intensity slider); `hue` and `sat`
+  are FROZEN garbage regardless of any slider** (hence the inert tint/hue sliders).
+
+  **Colorimetry route = DEAD END (checked 2026-07-04):** DSI-1 exposes NO EDID (kernel panel driver
+  provides none) and gamescope has NO EDID/colorimetry override input (env or file) — it only reads the
+  connector EDID, else defaults to `displaycolorimetry_709`. "Advertise real colorimetry" would need a
+  kernel panel-driver EDID with the panel's measured chromaticity (heavy; coords unknown). AND it's
+  UNCERTAIN to help: SteamUI's `hue=0.85` is CONSTANT across off/on, so it may be a fixed SteamUI
+  default, not a colorimetry-derived value → better primaries might not move it.
+
+  **RECOMMENDED FIX (reliable, fully in our control): a gamescope-side sanitize patch** on the night-mode
+  atom handler (`steamcompmgr.cpp` ~L6347) / `set_color_nightmode`: (1) clamp `nightmode.saturation` to
+  [0,1] (kills the 1e15); (2) remap/force `nightmode.hue` into a warm amber band (~0.05–0.12) when it's
+  outside a sane night-mode range (fixes the fixed-magenta 0.85). Salvages night mode into correct amber
+  regardless of SteamUI's garbage; no kernel work. Ship as `packages/gamescope/patches/0002-*`. This
+  gates the branch merge (night mode currently flips inert→red for users). See
+  [[steam-gamescope-handshake-hw-result]], [[chimeraos-gamescope-session-reference]],
+  [[sm8650-gamescope-flip-blocker]], [[overlay-package-pipeline]].
+
+  **✅ RESOLVED — HW-CONFIRMED 2026-07-05 (device .226, gamescope binary sha `c10f774a…`).** Night mode
+  now toggles to a reliable **amber** (no red/magenta at any slider position); the "night mode tint"
+  intensity slider correctly scales it light-brown→dark-orange. The "Primary Hue" and "Peak Saturation"
+  sliders are intentionally inert now — both drive the atom's `hue` (measured sweep 0.5→1.0, never warm)
+  and the `saturation` field is frozen garbage (~6.5e22), so the patch overrides them with a fixed amber.
+  That's the fix working: substituting sane values instead of rendering the client's garbage. **The merge
+  hold on this item is LIFTED** (night mode no longer degrades to red; it degrades to correct amber).
+  Real hue/saturation tuning stays unavailable (needs real panel colorimetry we don't have) — acceptable.
+  The FIRST HW build (2026-07-04) still flipped red past a pivot: the initial patch had a `[0.90,1.0]`
+  hue wrap-around pass-through, and the client's hue near 1.0 = red sailed through it. Removed the
+  wrap band; only a tight warm band `[0.02,0.20]` (which the client never hits) now passes.
+
+  **IMPLEMENTED 2026-07-04 → corrected 2026-07-05:** `packages/gamescope/patches/0002-sanitize-nightmode-atom.patch`
+  sanitizes the atom right where it's decoded (`steamcompmgr.cpp` ~L6349, in the
+  `gamescopeColorNightMode` handler): clamp `amount`/`saturation` into [0,1] (kills the 1e15 and
+  non-finite), and rewrite `hue` to amber `0.083` ONLY when it's outside the warm band a night-mode
+  tint can occupy — `[0.0, 0.17]` ∪ `[0.90, 1.0]` (the second range = deep red wrapping toward hue
+  1.0). This is a band-pass, NOT a hard override: a **functional SteamUI hue slider** (which spans
+  the warm red↔amber↔yellow range) passes through untouched; only impossible values like the frozen
+  magenta `0.85` get corrected. NB: on current HW that slider is inert (hue frozen), so in practice
+  it always amber-izes until the SteamUI-side freeze is fixed. Round-trip-verified
+  and applies clean to pristine 3.16.23.2. Wired into `source.pin` after the rotation patch
+  (`makepkg -sf` force-rebuilds, so a fresh `make sdcard` picks it up — no pkgrel bump needed).
+  **NEXT: build image → HW-verify night mode toggles to correct amber (not red/magenta), and that
+  the intensity slider still modulates it (amount stays live).**
+
+- [ ] **Volume up/down keys don't change volume** — pressing a vol-/vol+ key brings up the SteamUI
+  volume popup but the level doesn't move; the SteamUI Quick-Access volume **slider** works, and
+  `wpctl`/PipeWire volume is fine. So audio + the SteamUI action both work — the gap is the **key → set
+  volume** binding: the keycode is delivered (popup appears) but not wired to the volume action. Same
+  shape as the brightness slider (appears, inert) and the `novadeck-waked` libinput mapping. Check
+  whether it's an **InputPlumber** mapping (the vol keys emitting the wrong evdev codes / not the ones
+  SteamUI's volume handler listens for) vs a missing gamescope/`STEAM_*` keybind; confirm what
+  `KEY_VOLUMEUP/DOWN` the panel emits and whether SteamUI expects them via gamescope's key handling.
+  See [[sm8650-inputplumber-input]], [[suspend-freeze-wake-design]],
+  [[sm8650-gamescope-session-plumbing]].
 
 - [ ] **Adopt SteamUI-expected session defaults we omit** — `novadeck-session` runs a comparatively
   bare gamescope; ChimeraOS's SteamOS session sets several defaults SteamUI/gamescope expect that we

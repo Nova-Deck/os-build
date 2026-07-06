@@ -5,6 +5,14 @@ rationale lives in the linked memories and commit history.
 
 ## Open
 
+- [ ] **Switch InputPlumber virtual device from DS5 to Xbox Elite** — `devices/inputplumber/devices.d/
+  01-ayaneo-controller.yaml` emulates a DualSense (`target_devices: [ds5, keyboard]`). Switch the
+  emulated pad to the Xbox Elite target (verify the exact InputPlumber target id, e.g. `xbox-elite`)
+  so the shell/games see an Xbox controller instead of a PlayStation one — better default glyphs and
+  broadest game compatibility on the arm64/Proton path. Keep `keyboard`. Re-validate on HW that all
+  buttons + dpad still map (the AYANEO MCU Xbox capability map is already in use) and that Steam Input
+  glyphs follow. See [[sm8650-inputplumber-input]].
+
 - [ ] **Fix automatic UI scale** — SteamUI's automatic scaling picks the wrong factor on the device
   panel (UI too small/large for the handheld's resolution/DPI), rather than the Deck-like scale a user
   expects. Characterize on HW first: capture what auto-scale resolves to vs. what looks right, at the

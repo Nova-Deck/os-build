@@ -26,24 +26,40 @@ shift
 # Steam install root. STEAM_COMPAT_CLIENT_INSTALL_PATH is exported by the client
 # for every compat-tool launch; fall back to the standard home path if unset.
 STEAM="${STEAM_COMPAT_CLIENT_INSTALL_PATH:-$HOME/.local/share/Steam}"
-COMMON="$STEAM/steamapps/common"
+STEAMAPPS="$STEAM/steamapps"
+COMMON="$STEAMAPPS/common"
 
 # Both runtimes are client-fetched by the user from their Steam library after OOBE
-# (Valve content — novadeck neither bakes nor redistributes it). The install-dir
-# names are Steam's own and are stable across versions.
-SLR4_ENTRY="$COMMON/SteamLinuxRuntime_4-arm64/_v2-entry-point"
-PROTON="$COMMON/Proton 11.0 (ARM64)/proton"
+# (Valve content — novadeck neither bakes nor redistributes it). Resolve each one's
+# on-disk install dir from its appmanifest by APPID rather than hardcoding the
+# human-readable dir name, so a Valve rename on a version bump doesn't break the
+# chain; fall back to the well-known name if the manifest is missing/unparseable.
+SLR4_APPID=4185400      # Steam Linux Runtime 4.0 (Arm64) — the aarch64 container
+PROTON_APPID=4628740    # Proton 11.0 (ARM64) — carries the bundled WoW64 FEX
+
+resolve_installdir() {
+	# $1 = appid, $2 = fallback dir name → prints the install dir (relative to common/)
+	acf="$STEAMAPPS/appmanifest_$1.acf"
+	dir=""
+	if [ -f "$acf" ]; then
+		dir=$(sed -n 's/^[[:space:]]*"installdir"[[:space:]]*"\(.*\)"[[:space:]]*$/\1/p' "$acf" | head -n1)
+	fi
+	if [ -n "$dir" ]; then printf '%s\n' "$dir"; else printf '%s\n' "$2"; fi
+}
+
+SLR4_ENTRY="$COMMON/$(resolve_installdir "$SLR4_APPID" 'SteamLinuxRuntime_4-arm64')/_v2-entry-point"
+PROTON="$COMMON/$(resolve_installdir "$PROTON_APPID" 'Proton 11.0 (ARM64)')/proton"
 
 if [ ! -x "$SLR4_ENTRY" ]; then
 	echo "novadeck-chain: Steam Linux Runtime 4.0 (Arm64) not found at" >&2
 	echo "  $SLR4_ENTRY" >&2
-	echo "  Install 'Steam Linux Runtime 4.0 (Arm64)' (appid 4185400) from your Steam library." >&2
+	echo "  Install 'Steam Linux Runtime 4.0 (Arm64)' (appid $SLR4_APPID) from your Steam library." >&2
 	exit 1
 fi
 if [ ! -x "$PROTON" ]; then
 	echo "novadeck-chain: Proton 11.0 (ARM64) not found at" >&2
 	echo "  $PROTON" >&2
-	echo "  Install 'Proton 11.0 (ARM64)' (appid 4628740) from your Steam library." >&2
+	echo "  Install 'Proton 11.0 (ARM64)' (appid $PROTON_APPID) from your Steam library." >&2
 	exit 1
 fi
 

@@ -324,6 +324,12 @@ rationale lives in the linked memories and commit history.
   Confirm the arm64 `mangohud`/`mangoapp` packages exist in holo before adding (cf.
   [[holo-pacman-no-gtk2]] — don't assume a package resolves), and that gamescope was built with
   mangoapp support. See [[sm8650-gamescope-session-plumbing]].
+  **Severity bump (HW 2026-07-07):** this isn't cosmetic — enabling the Quick Access performance
+  overlay currently *crashes game launches*. Steam prepends `mangohud` to the launch command
+  (`reaper … -- mangohud <compat-tool> …`); with no `mangohud` on the image the process is added
+  and removed in the same second (instant exec failure, before the compat tool runs). Confirmed on
+  Gravity Circuit via `proton11sc`: identical launch ran fine without the overlay, died the moment
+  the overlay was toggled on.
 
 - [ ] **Faster arm64 package builds: qemu-master + native distcc cross-compiler** — the overlay
   packages currently build inside an emulated aarch64 environment (slow — qemu runs the compiler

@@ -5,25 +5,27 @@ rationale lives in the linked memories and commit history.
 
 ## Open
 
-- [ ] **Poweroff / sleep issues resurfacing** — the Phase-2 suspend/poweroff path was closed
-  HW-validated 2026-06-24 (freeze+wake, power-key tap→suspend, long-press→poweroff, thaw-before-
-  systemctl — see the Phase-2 HW-support closed items below), but problems are showing again on
-  current images. NEEDS CHARACTERIZATION: capture the exact symptom and WHICH path (L1 cold poweroff
-  vs power-key tap→suspend vs long-press→poweroff vs resume/thaw) on a plain RELEASE image, via
-  offline card-mount `journalctl -D` (no UART). Suspects to rule out: interaction with the
-  SDDM-autologin / active-seat session model, and the dirmngr slow-shutdown stall. Grade findings
-  CONFIRMED/SUSPECT/OPEN and test true reboots, not just service re-launches.
-  **ChimeraOS reference (see [[chimeraos-gamescope-session-reference]]):** SteamUI's own
-  Restart/Shutdown menu items work via **reboot/shutdown sentinel files** — Steam writes
-  `$REBOOT_SENTINEL`/`$SHUTDOWN_SENTINEL` and exits, then the session script (after the client
-  returns) checks for them and calls `reboot`/`poweroff`. novadeck's launcher `exec`s Steam and has
-  no post-exit sentinel handler, so a SteamUI-initiated restart/poweroff likely has nowhere to land —
-  a prime suspect for the resurfacing symptom. Also cross-check our `novadeck-waked` power-key path
-  against ChimeraOS's `systemd-inhibit --what=handle-power-key… + powerbuttond` (validates our design,
-  not a replacement). See
+- [ ] **Replace our rotation-shader patch with upstream composited-output rotation** — our portrait
+  panel is rotated by a custom patch (`packages/gamescope/patches/0001-rotate-portrait-panel-in-composite.patch`,
+  driven by `--use-rotation-shader`; see [[sm8650-gamescope-flip-blocker]]). Upstream gamescope PR
+  [#2228](https://github.com/ValveSoftware/gamescope/pull/2228) adds this properly: rotation via a
+  composition pass for drivers/panels that can't rotate the plane at scanout, integrated into the
+  composite scenegraph (scene stays in logical space; only the final store coordinate is rotated, so
+  sampling/blending/input/cursor/EDID are untouched). Engages automatically when the primary plane
+  can't rotate, or via a new `--force-composition-rotation` flag. **It was tested on our exact device
+  (Ayaneo Pocket S2, SM8650) and the Ayn Thor (SM8550).** Action: adopt the PR (rebase our patch onto
+  it, or drop ours for the flag) so we ride upstream instead of carrying a bespoke shader. Preserve
+  our WSI patch when reworking the build; re-validate rotation + the re-launch flip behavior on HW.
+
+- [x] **Poweroff / sleep issues resurfacing** — RESOLVED by the Steam-driven power/suspend
+  rearchitecture (commit `86c88fa`, HW-validated on Pocket S2 2026-07-05): `novadeck-powerbuttond`
+  forwards the power key to Steam (`steam://shortpowerpress`/`longpowerpress`); logind ignores
+  power/suspend/lid keys but still services `Suspend()`; a `systemd-suspend.service` drop-in redirects
+  every logind `Suspend()` into `novadeck-suspend`'s userspace fake-suspend (freezes user.slice, grabs
+  the power key, blocks until wake); retired the old `novadeck-waked` + `novadeck-wake.slice`. This
+  puts the client in charge of the power menu, addressing the sentinel-handler suspicion. See
   [[suspend-freeze-wake-design]], [[suspend-systemctl-while-frozen-blocks]],
-  [[waked-holdtime-background-dispatch]], [[sm8650-gamescope-session-plumbing]],
-  [[dirmngr-slow-shutdown-defer-phase4]], [[verify-before-concluding-reboot-vs-restart]].
+  [[sm8650-gamescope-session-plumbing]], [[dirmngr-slow-shutdown-defer-phase4]].
 
 - [x] **Wire brightness controls** — RESOLVED, HW-validated 2026-07-05 (branch
   `feat/brightness-volume-perf-acls`). Env gate (`STEAM_ENABLE_DYNAMIC_BACKLIGHT=1`) made the slider

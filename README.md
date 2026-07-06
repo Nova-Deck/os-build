@@ -4,10 +4,11 @@ An **immutable, A/B-updatable aarch64 Linux distribution** that forks SteamOS 3 
 onto Qualcomm mobile silicon (**SM8550 / SM8650 / SM8750**). x86/x86_64 games run via
 **Proton → Wine → FEX-Emu**, with native Vulkan via **Mesa Turnip** on Adreno.
 
-> Status: **Phase 3 — native arm64 Steam shell bring-up.** SM8650 boots on real
-> hardware with Turnip Vulkan (Phase 1 gate cleared), a gamescope session + Qualcomm
-> HW-support layer (Phase 2 cleared), and an offline GamepadUI Steam shell that renders
-> on-panel. Remaining: FEX/Proton x86 games, then Phase 4 A/B atomic updates.
+> Status: **Phase 3 cleared — native arm64 Steam shell + Proton/FEX games.** SM8650
+> boots on real hardware with Turnip Vulkan (Phase 1 gate cleared), a gamescope session
+> + Qualcomm HW-support layer (Phase 2 cleared), a GamepadUI Steam shell, and an x86
+> **Windows** title running under Valve's Proton 11 ARM64 + FEX (Phase 3 gate cleared,
+> HW-validated 2026-07-07). Next: Phase 4 A/B atomic updates.
 
 ## Plan
 

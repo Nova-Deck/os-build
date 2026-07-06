@@ -29,7 +29,7 @@ Lead bring-up target: **SM8650** (Adreno 750). Two hard go/no-go gates:
 | `devices/` | Shared device enablement: firmware manifest, InputPlumber config, bring-up notes |
 | `boot/` | Pluggable boot stage (android-bootimg / edk2-UEFI backends) |
 | `ci/` | GitHub Actions matrix builds + cosign signing |
-| `docs/` | Design notes (see [`docs/base-pin.md`](docs/base-pin.md)) |
+| `docs/` | Design notes ([`docs/base-pin.md`](docs/base-pin.md), [`docs/windows-games-fex.md`](docs/windows-games-fex.md)) |
 | `build/` | `Dockerfile` for the `novadeck-build` cross-compile image used by every container stage |
 | `Makefile` | Master build orchestrator — wires every stage into one incremental graph |
 

@@ -1,0 +1,20 @@
+"compatibilitytools"
+{
+	"compat_tools"
+	{
+		// novadeck self-chaining Proton 11 ARM64 tool. Registers a USER-selectable
+		// compat tool so an x86 Windows game can be forced onto Valve's Proton 11
+		// ARM64 (appid 4628740) + its bundled WoW64 FEX (libwow64fex.dll) — Valve's
+		// precompiled x86->arm64 emulator, no -deckard and no own-shipped FEX.
+		//
+		// install_path is relative to compatibilitytools.d/; the tool's own files
+		// (toolmanifest.vdf + novadeck-chain) live in this subdir.
+		"proton11sc"
+		{
+			"install_path" "proton11sc"
+			"display_name" "Proton 11.0 (ARM64) [novadeck]"
+			"from_oslist"  "windows"
+			"to_oslist"    "linux"
+		}
+	}
+}

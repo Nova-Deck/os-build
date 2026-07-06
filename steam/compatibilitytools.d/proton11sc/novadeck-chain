@@ -1,0 +1,53 @@
+#!/bin/sh
+# novadeck-chain — self-chaining launcher for Valve's Proton 11 ARM64 + bundled FEX.
+#
+# Steam invokes this as the compat tool's command:  novadeck-chain <verb> <game cmd...>
+# It reproduces the two-tool chain the official Proton 11 ARM64 relies on —
+#   SLR 4.0 Arm64 container (_v2-entry-point)  ->  Proton 11 ARM64 (proton)
+# — as ONE local tool, so the client never has to resolve Proton's
+# require_tool_appid 4185400. That require_tool is platform-gated (Deckard-only):
+# on a normal arm64 client it is never registered as a compat tool even with the
+# runtime FILES installed, so the stock path fails with AppError_51. Chaining the
+# container ourselves avoids that layer completely. Proton's own WoW64 FEX
+# (libwow64fex.dll / libarm64ecfex.dll) then translates the x86 Windows game to
+# arm64 — Valve's precompiled FEX, no -deckard and no novadeck-shipped FEX.
+#
+# HW-proven on Pocket S2 (Gravity Circuit, appid 858710). See the
+# steam-deckard-fex-investigation memory for the full derivation.
+set -eu
+
+if [ "$#" -lt 1 ]; then
+	echo "novadeck-chain: no verb given (expected: novadeck-chain <verb> <command...>)" >&2
+	exit 2
+fi
+verb="$1"
+shift
+
+# Steam install root. STEAM_COMPAT_CLIENT_INSTALL_PATH is exported by the client
+# for every compat-tool launch; fall back to the standard home path if unset.
+STEAM="${STEAM_COMPAT_CLIENT_INSTALL_PATH:-$HOME/.local/share/Steam}"
+COMMON="$STEAM/steamapps/common"
+
+# Both runtimes are client-fetched by the user from their Steam library after OOBE
+# (Valve content — novadeck neither bakes nor redistributes it). The install-dir
+# names are Steam's own and are stable across versions.
+SLR4_ENTRY="$COMMON/SteamLinuxRuntime_4-arm64/_v2-entry-point"
+PROTON="$COMMON/Proton 11.0 (ARM64)/proton"
+
+if [ ! -x "$SLR4_ENTRY" ]; then
+	echo "novadeck-chain: Steam Linux Runtime 4.0 (Arm64) not found at" >&2
+	echo "  $SLR4_ENTRY" >&2
+	echo "  Install 'Steam Linux Runtime 4.0 (Arm64)' (appid 4185400) from your Steam library." >&2
+	exit 1
+fi
+if [ ! -x "$PROTON" ]; then
+	echo "novadeck-chain: Proton 11.0 (ARM64) not found at" >&2
+	echo "  $PROTON" >&2
+	echo "  Install 'Proton 11.0 (ARM64)' (appid 4628740) from your Steam library." >&2
+	exit 1
+fi
+
+# Run Proton inside the SLR 4.0 Arm64 container. The container's entry point takes
+# --verb=<verb> and, after --, the command to run within it; Proton is then handed
+# the same verb plus the game command/args Steam appended.
+exec "$SLR4_ENTRY" --verb="$verb" -- "$PROTON" "$verb" "$@"

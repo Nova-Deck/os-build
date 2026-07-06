@@ -1,0 +1,16 @@
+// novadeck self-chaining Proton 11 ARM64 manifest.
+//
+// Deliberately carries NO "require_tool_appid". Valve's official Proton 11 ARM64
+// declares require_tool_appid 4185400 (the Steam Linux Runtime 4.0 Arm64 container
+// it must run inside), but on a non-Deckard client that dependency is never
+// REGISTERED as a compat tool even when its FILES are installed — the launch then
+// dies with AppError_51 ("Tool 4185400 unknown", dependent tool cmdline wrap
+// failed). We sidestep that platform-gated require_tool wiring entirely: our
+// commandline points at novadeck-chain, which hand-invokes the SLR 4.0 Arm64
+// container itself and then Proton inside it (the same two-stage chain, collapsed
+// into one local tool). See the steam-deckard-fex-investigation memory.
+"manifest"
+{
+	"version"     "2"
+	"commandline" "/novadeck-chain %verb%"
+}

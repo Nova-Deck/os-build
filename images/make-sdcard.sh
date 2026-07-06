@@ -60,6 +60,18 @@ cp -a "$SEED" "$deckhome/.local/share/Steam"
 ln -sfn ../.local/share/Steam            "$deckhome/.steam/steam"
 ln -sfn ../.local/share/Steam            "$deckhome/.steam/root"
 ln -sfn ../.local/share/Steam/linuxarm64 "$deckhome/.steam/sdkarm64"
+# novadeck self-chaining Proton 11 ARM64 compat tool (proton11sc): a user-selectable
+# compat tool that runs Valve's Proton 11 ARM64 + bundled WoW64 FEX for x86 Windows
+# games, chaining the SLR 4.0 Arm64 container itself so the client never resolves
+# Proton's platform-gated require_tool 4185400 (AppError_51 on a non-Deckard client).
+# Our code, not Valve content — the Proton/SLR4 runtimes are client-fetched by the
+# user post-OOBE. Pre-seeded into the deck home so it's live on a healthy first boot.
+CTOOLS="$ROOT/steam/compatibilitytools.d"
+if [ -d "$CTOOLS" ]; then
+  install -d "$deckhome/.local/share/Steam/compatibilitytools.d"
+  cp -a "$CTOOLS"/. "$deckhome/.local/share/Steam/compatibilitytools.d/"
+  chmod 0755 "$deckhome/.local/share/Steam/compatibilitytools.d/proton11sc/novadeck-chain"
+fi
 chown -R "$DECK_UID:$DECK_GID" "$deckhome"
 
 # Size /home to the seed + headroom (ext4 metadata + a little slack so mkfs.ext4 -d has room), unless

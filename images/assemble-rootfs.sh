@@ -221,6 +221,21 @@ if [ -d "$STEAM/usr" ]; then
     echo "  baking Steam RECOVERY seed from ${SEED#"$ROOT"/} -> /usr/share/novadeck/steam-seed ($(du -sh "$SEED" | cut -f1), offline factory-reset source)"
     install -d -m0755 "$stage/usr/share/novadeck"
     cp -a "$SEED" "$stage/usr/share/novadeck/steam-seed"
+    # novadeck self-chaining Proton 11 ARM64 compat tool (proton11sc): registers a
+    # user-selectable compat tool that runs Valve's Proton 11 ARM64 + bundled WoW64
+    # FEX for x86 Windows games, chaining the SLR 4.0 Arm64 container itself so the
+    # client never resolves Proton's platform-gated require_tool 4185400 (which fails
+    # AppError_51 on a non-Deckard client). Our code, not Valve content — the Proton
+    # /SLR4 runtimes themselves are client-fetched by the user post-OOBE. Baked into
+    # the RECOVERY seed so a factory reset restores it (steam-bootstrap.sh copies the
+    # whole seed into ~deck/.local/share/Steam, where compatibilitytools.d/ lives).
+    CTOOLS="$STEAM/compatibilitytools.d"
+    if [ -d "$CTOOLS" ]; then
+      echo "  baking novadeck compat tool(s) from ${CTOOLS#"$ROOT"/} -> steam-seed/compatibilitytools.d"
+      install -d -m0755 "$stage/usr/share/novadeck/steam-seed/compatibilitytools.d"
+      cp -a "$CTOOLS"/. "$stage/usr/share/novadeck/steam-seed/compatibilitytools.d/"
+      chmod 0755 "$stage/usr/share/novadeck/steam-seed/compatibilitytools.d/proton11sc/novadeck-chain"
+    fi
   else
     echo "  WARNING: no Steam seed at ${SEED#"$ROOT"/} — run steam/fetch-steam-seed.sh (no offline factory-reset source)" >&2
   fi

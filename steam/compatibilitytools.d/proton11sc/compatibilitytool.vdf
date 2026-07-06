@@ -7,11 +7,13 @@
 		// ARM64 (appid 4628740) + its bundled WoW64 FEX (libwow64fex.dll) — Valve's
 		// precompiled x86->arm64 emulator, no -deckard and no own-shipped FEX.
 		//
-		// install_path is relative to compatibilitytools.d/; the tool's own files
-		// (toolmanifest.vdf + novadeck-chain) live in this subdir.
+		// install_path is resolved relative to the directory holding THIS vdf, so
+		// "." means this subdir (where toolmanifest.vdf + novadeck-chain live). A
+		// wrong value makes Steam miss toolmanifest.vdf and reject the tool at launch
+		// with "unsupported version 0" (it still registers from the fields here).
 		"proton11sc"
 		{
-			"install_path" "proton11sc"
+			"install_path" "."
 			"display_name" "Proton 11.0 (ARM64) [novadeck]"
 			"from_oslist"  "windows"
 			"to_oslist"    "linux"

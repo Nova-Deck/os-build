@@ -5,6 +5,15 @@ rationale lives in the linked memories and commit history.
 
 ## Open
 
+- [ ] **Fix automatic UI scale** — SteamUI's automatic scaling picks the wrong factor on the device
+  panel (UI too small/large for the handheld's resolution/DPI), rather than the Deck-like scale a user
+  expects. Characterize on HW first: capture what auto-scale resolves to vs. what looks right, at the
+  landscape logical output we hand gamescope (`-W/-H` from `session/etc/novadeck/session.conf` +
+  `session/usr/bin/novadeck-session`). Investigate the levers: the logical output geometry we pass
+  gamescope, gamescope's own scaling flags, and SteamUI's UI-scale (the Deck exposes a Display
+  "automatic/scale" setting driven by env/config). Decide whether to set a correct default per panel
+  vs. let SteamUI auto-compute it. See [[sm8650-working-display-baseline]], [[sm8650-gamescope-session-plumbing]].
+
 - [ ] **Replace our rotation-shader patch with upstream composited-output rotation** — our portrait
   panel is rotated by a custom patch (`packages/gamescope/patches/0001-rotate-portrait-panel-in-composite.patch`,
   driven by `--use-rotation-shader`; see [[sm8650-gamescope-flip-blocker]]). Upstream gamescope PR

@@ -1,0 +1,4 @@
+# Default root-only /dev/ntsync makes Proton fall back to the slower fsync path.
+# Grant the gamescope session (deck user, member of `wheel`) rw so Proton uses
+# the kernel NT-sync fast path. Kernel builds CONFIG_NTSYNC=y (see kernel/kernel.config).
+SUBSYSTEM=="misc", KERNEL=="ntsync", GROUP="wheel", MODE="0660"

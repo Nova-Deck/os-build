@@ -52,6 +52,18 @@ _pow_cpu_leave() {
 # --- radios: soft-block via sysfs (no rfkill binary dependency). Record only those we actually
 # blocked (skip already-blocked ones) so leave restores the prior radio state.
 _pow_rf_enter() {
+  # Save the connected AP's freq (while still associated) so _pow_rf_leave can prime the
+  # scan cache on that one channel at resume instead of eating ath12k/WCN7850's slow
+  # full-band (worst case 6 GHz) sweep on its first post-rfkill-reinit scan.
+  rm -f "$POWER_STATE_DIR/wifi-freq"
+  if command -v iw >/dev/null 2>&1; then
+    for _w in $(iw dev 2>/dev/null | awk '$1=="Interface"{print $2}'); do
+      iw dev "$_w" link 2>/dev/null | grep -q "Connected to" || continue
+      _f=$(iw dev "$_w" link 2>/dev/null | sed -n 's/^[[:space:]]*freq:[[:space:]]*\([0-9]\{1,\}\).*/\1/p' | head -1)
+      case "$_f" in ''|*[!0-9]*) ;; *) printf '%s %s\n' "$_w" "$_f" > "$POWER_STATE_DIR/wifi-freq"; break ;; esac
+    done
+  fi
+
   : > "$POWER_STATE_DIR/rfkill"
   for d in /sys/class/rfkill/rfkill*; do
     [ -w "$d/soft" ] || continue
@@ -65,6 +77,17 @@ _pow_rf_leave() {
     f=/sys/class/rfkill/$r/soft
     [ -w "$f" ] && echo 0 > "$f" 2>/dev/null
   done < "$POWER_STATE_DIR/rfkill"
+
+  # Prime the scan cache on the saved channel (see _pow_rf_enter). Detached via systemd-run
+  # so a slow scan can never gate resume/display-on; failure here is non-fatal.
+  if [ -r "$POWER_STATE_DIR/wifi-freq" ] && command -v iw >/dev/null 2>&1; then
+    read -r _w _f < "$POWER_STATE_DIR/wifi-freq"
+    case "$_f" in
+      ''|*[!0-9]*) ;;
+      *) systemd-run --collect --quiet --unit=novadeck-resume-scan \
+           iw dev "$_w" scan freq "$_f" >/dev/null 2>&1 || true ;;
+    esac
+  fi
 }
 
 # --- governor: switch each cpufreq policy to powersave, recording the previous governor per policy.
@@ -132,6 +155,6 @@ power_leave() {
   _pow_skip cpu      || _pow_cpu_leave
   _pow_skip gpugov   || _pow_gpu_gov_leave
   _pow_skip governor || _pow_gov_leave
-  rm -f "$POWER_STATE_DIR/cpus" "$POWER_STATE_DIR/rfkill" \
+  rm -f "$POWER_STATE_DIR/cpus" "$POWER_STATE_DIR/rfkill" "$POWER_STATE_DIR/wifi-freq" \
         "$POWER_STATE_DIR/governors" "$POWER_STATE_DIR/gpu_governors"
 }

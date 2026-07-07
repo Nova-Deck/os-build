@@ -11,6 +11,7 @@ root (the `gamescope/` checkout inside makepkg's `$srcdir`) by
 ```
 0001-composite-rotation-pr2228.patch
 0002-sanitize-nightmode-atom.patch
+0003-rotate-output-phys-dims.patch
 ```
 
 `0001` — rotate the portrait-native Pocket S2 panel in gamescope's **GPU composite** step
@@ -25,6 +26,17 @@ rotate at scanout (`--force-composition-rotation` can force it; we rely on auto-
 `session/usr/bin/novadeck-session`).
 
 `0002` — sanitize the night-mode color atom.
+
+`0003` — report a **landscape physical size** on the composite-rotation path. `0001` transposes
+the logical output to landscape when `g_bRotated`, but `wlserver_set_output_info()` still gets the
+connector's raw **portrait** `mmWidth/mmHeight`, so `wl_output` advertises a landscape resolution
+over a portrait physical size. The EDID that would carry the swap is absent (internal DSI panels
+ship no EDID; `PatchEdid()` bails on empty input), so this incoherent physical size is the only one
+Steam sees — and SteamUI's **automatic UI scale** derives a wrong, asymmetric DPI from it. `0003`
+swaps `phys_width/phys_height` when `g_bRotated`. Intended as a coherence fix; **HW showed it does
+NOT move SteamUI's auto-scale** (the swap is diagonal-invariant, and Steam keys off mm *magnitude* —
+the actual UI-scale fix is the panel-mm bump in `kernel/patches/0062`, see `TODO.md`). Kept for now
+as a defensible coherence change, slated for removal in a later session.
 
 Drop the patch files here with those exact names (or rename and update `source.pin`'s
 `patches:` line). **Until a declared patch is present, `make overlay` / `make base` fail fast**

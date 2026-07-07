@@ -28,4 +28,4 @@
 name: gamescope
 pkgbuild_local: PKGBUILD
 pkgrel_suffix: 1
-patches: 0001-composite-rotation-pr2228.patch 0002-sanitize-nightmode-atom.patch
+patches: 0001-composite-rotation-pr2228.patch 0002-sanitize-nightmode-atom.patch 0003-rotate-output-phys-dims.patch

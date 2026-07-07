@@ -1,0 +1,46 @@
+novadeck: report landscape physical size on the composite-rotation path.
+
+Companion to 0001 (composite rotation, upstream PR #2228). That patch transposes
+the LOGICAL output to landscape when g_bRotated (portrait-native panel, 90/270),
+but wlserver_set_output_info() is still handed the connector's raw PORTRAIT
+mmWidth/mmHeight. The result is an incoherent wl_output: a landscape 2560x1440
+mode advertised over a portrait 78x140mm physical size, so any client deriving DPI
+(SteamUI's automatic UI scale) gets a wrong, asymmetric value and mis-scales.
+
+The EDID channel that WOULD carry the swapped dims (WritePatchedEdid(.., g_bRotated))
+is a no-op here: internal DSI panels ship no EDID, and PatchEdid() bails on empty
+input. So wl_output geometry is the only physical size Steam sees, and it must be
+swapped to stay coherent with the rotated resolution.
+
+Swap phys_width/phys_height when g_bRotated, matching the transpose the resolution
+and (where present) the EDID already apply. Manual swap to mirror the existing
+g_bRotated tmp-swap in drm_set_refresh (no new header dependency).
+
+Applies -p1 on top of 0001 with line-offset fuzz (anchors verified).
+
+diff --git a/src/Backends/DRMBackend.cpp b/src/Backends/DRMBackend.cpp
+--- a/src/Backends/DRMBackend.cpp
++++ b/src/Backends/DRMBackend.cpp
+@@ -1138,10 +1138,20 @@ static bool setup_best_connector(struct drm_t *drm, bool force, bool initial)
+ 	// Don't allow rollback of mode_id after connector change
+ 	drm->current.mode_id = drm->pending.mode_id;
+
++	// The composite-rotation path (g_bRotated) transposes the LOGICAL output to
++	// landscape, but the connector reports the panel's PORTRAIT mmWidth/mmHeight.
++	// Internal DSI panels have no EDID for WritePatchedEdid() to swap, so wl_output
++	// geometry is the only physical size Steam sees; swap it too or DPI (and SteamUI's
++	// automatic UI scale) is derived from a portrait size over a landscape resolution.
++	int nPhysWidth  = (int) best->GetModeConnector()->mmWidth;
++	int nPhysHeight = (int) best->GetModeConnector()->mmHeight;
++	if ( g_bRotated ) {
++		int nTmp = nPhysWidth; nPhysWidth = nPhysHeight; nPhysHeight = nTmp;
++	}
+ 	const struct wlserver_output_info wlserver_output_info = {
+ 		.description = description,
+-		.phys_width = (int) best->GetModeConnector()->mmWidth,
+-		.phys_height = (int) best->GetModeConnector()->mmHeight,
++		.phys_width = nPhysWidth,
++		.phys_height = nPhysHeight,
+ 	};
+ 	wlserver_lock();
+ 	wlserver_set_output_info(&wlserver_output_info);

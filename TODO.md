@@ -22,17 +22,24 @@ rationale lives in the linked memories and commit history.
   "automatic/scale" setting driven by env/config). Decide whether to set a correct default per panel
   vs. let SteamUI auto-compute it. See [[sm8650-working-display-baseline]], [[sm8650-gamescope-session-plumbing]].
 
-- [ ] **Replace our rotation-shader patch with upstream composited-output rotation** — our portrait
-  panel is rotated by a custom patch (`packages/gamescope/patches/0001-rotate-portrait-panel-in-composite.patch`,
-  driven by `--use-rotation-shader`; see [[sm8650-gamescope-flip-blocker]]). Upstream gamescope PR
-  [#2228](https://github.com/ValveSoftware/gamescope/pull/2228) adds this properly: rotation via a
-  composition pass for drivers/panels that can't rotate the plane at scanout, integrated into the
-  composite scenegraph (scene stays in logical space; only the final store coordinate is rotated, so
-  sampling/blending/input/cursor/EDID are untouched). Engages automatically when the primary plane
-  can't rotate, or via a new `--force-composition-rotation` flag. **It was tested on our exact device
-  (Ayaneo Pocket S2, SM8650) and the Ayn Thor (SM8550).** Action: adopt the PR (rebase our patch onto
-  it, or drop ours for the flag) so we ride upstream instead of carrying a bespoke shader. Preserve
-  our WSI patch when reworking the build; re-validate rotation + the re-launch flip behavior on HW.
+- [x] **Replace our rotation-shader patch with upstream composited-output rotation** — DONE, rotation
+  HW-confirmed on Pocket S2 2026-07-07: orientation is upright-landscape and gamescope auto-engages
+  the composite pass off the connector orientation (no `--force-composition-rotation` needed). The UI
+  auto-scale bug is still open, tracked separately below. Swapped the ROCKNIX `--use-rotation-shader`
+  patch for upstream gamescope PR
+  [#2228](https://github.com/ValveSoftware/gamescope/pull/2228) (`packages/gamescope/patches/0001-composite-rotation-pr2228.patch`):
+  rotation via a composition pass (scene stays in logical landscape space; only the final store
+  coordinate is rotated, so sampling/blending/input/cursor/EDID stay coherent). We drop the launch
+  flag entirely and let gamescope AUTO-ENGAGE off the DRM connector panel orientation (our DTS
+  `rotation=<90>`) when the primary plane can't rotate at scanout — no `--use-rotation-shader`, no
+  `--force-composition-rotation` (`session/usr/bin/novadeck-session` + `images/assemble-rootfs.sh`
+  smoke both now launch bare `--backend drm`). `-W/-H` stay the landscape logical size (PR keeps
+  `g_nOutputWidth/Height` unswapped). The nightmode patch is renumbered `0002`. **HW to re-validate:**
+  (1) panel is upright-landscape, not 180°-flipped or blank (if flipped, the connector orientation /
+  rotation direction differs from ROCKNIX's shader — compensate via `--force-orientation`); (2) the
+  L2 re-launch flip behavior ([[sm8650-gamescope-flip-blocker]]); (3) whether this also fixes the
+  UI-scale bug below (the coherent EDID/phys-size orientation is the root-cause candidate). WSI +
+  version pin (3.16.23.2) preserved.
 
 - [x] **Poweroff / sleep issues resurfacing** — RESOLVED by the Steam-driven power/suspend
   rearchitecture (commit `86c88fa`, HW-validated on Pocket S2 2026-07-05): `novadeck-powerbuttond`

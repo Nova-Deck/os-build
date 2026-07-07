@@ -1,20 +1,31 @@
 # gamescope patches
 
-novadeck patches applied on top of the holo gamescope PKGBUILD source (Valve gamescope
-`3.16.17`), in the order listed by `patches:` in [`../source.pin`](../source.pin). Each is
-applied with `patch -p1` from the gamescope source root (the `gamescope/` checkout inside
-makepkg's `$srcdir`) by [`packages/build-overlay.sh`](../../build-overlay.sh).
+novadeck patches applied on top of the local gamescope PKGBUILD source (Valve gamescope
+`3.16.23.2`, see [`../PKGBUILD`](../PKGBUILD)), in the order listed by `patches:` in
+[`../source.pin`](../source.pin). Each is applied with `patch -p1` from the gamescope source
+root (the `gamescope/` checkout inside makepkg's `$srcdir`) by
+[`packages/build-overlay.sh`](../../build-overlay.sh).
 
 ## Expected here
 
 ```
-0001-rotate-portrait-panel-in-composite.patch
+0001-composite-rotation-pr2228.patch
+0002-sanitize-nightmode-atom.patch
 ```
 
-Rotate the portrait-native Pocket S2 panel in gamescope's **GPU composite** step and scan out
-a `ROTATE_0` buffer, instead of asking the msm DPU for a plane `ROTATE_90` it cannot do on
-LINEAR buffers (root cause in `devices/sm8650/bringup-phase2.md` step 1e). Tested on ROCKNIX.
+`0001` — rotate the portrait-native Pocket S2 panel in gamescope's **GPU composite** step
+(the msm DPU cannot `ROTATE_90` a LINEAR plane; root cause in
+`devices/sm8650/bringup-phase2.md` step 1e). This is upstream PR
+[#2228](https://github.com/ValveSoftware/gamescope/pull/2228): the scene stays in logical
+(landscape) space and only the final store coordinate is rotated, so sampling/blending/input/
+cursor/EDID stay coherent. It replaces the earlier ROCKNIX `--use-rotation-shader` patch and
+needs no launch flag: gamescope reads the panel orientation from the DRM connector (our DTS
+declares `rotation=<90>`) and auto-engages compositor rotation when the primary plane can't
+rotate at scanout (`--force-composition-rotation` can force it; we rely on auto-detect — see
+`session/usr/bin/novadeck-session`).
 
-Drop the patch file here with that exact name (or rename it and update `source.pin`'s
-`patches:` line). **Until the patch is present, `make overlay` / `make base` fail fast** with
-a clear "missing patch" message from `build-overlay.sh`.
+`0002` — sanitize the night-mode color atom.
+
+Drop the patch files here with those exact names (or rename and update `source.pin`'s
+`patches:` line). **Until a declared patch is present, `make overlay` / `make base` fail fast**
+with a clear "missing patch" message from `build-overlay.sh`.

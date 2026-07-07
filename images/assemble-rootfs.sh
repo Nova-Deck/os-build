@@ -510,13 +510,14 @@ echo "[nova] gamescope DRM smoke: client=$client  XDG_RUNTIME_DIR=$XDG_RUNTIME_D
 # An SSH session has no graphical logind seat, and the holo libseat is built with only the
 # logind+seatd backends (no 'builtin'), so run under a seatd daemon. seatd-launch spawns seatd,
 # exports SEATD_SOCK + LIBSEAT_BACKEND=seatd for the child, and tears seatd down on exit.
-# Patched gamescope (from-source overlay): --use-rotation-shader rotates the portrait-native
-# Pocket S2 panel in the GPU composite and scans out a ROTATE_0 buffer (the msm DPU can't
-# ROTATE_90 a LINEAR plane). Verified upright on HW 2026-06-21. NOTE: --immediate-flips is NOT
-# passed — it is a no-op here (the msm DPU does not advertise DRM_CAP_ATOMIC_ASYNC_PAGE_FLIP, so
-# gamescope drops the async flag). The intermittent composite-flip freeze is on the vsync'd path
-# and unrelated. See devices/bringup-phase2.md.
-gs_args="--backend drm --use-rotation-shader"
+# Patched gamescope (from-source overlay): composite rotation (upstream PR #2228) rotates the
+# portrait-native Pocket S2 panel in the GPU composite and scans out an unrotated buffer (the msm
+# DPU can't ROTATE_90 a LINEAR plane). No flag needed — gamescope reads the panel orientation from
+# the DRM connector (DTS rotation=<90>) and auto-engages compositor rotation when the primary plane
+# can't rotate at scanout. NOTE: --immediate-flips is NOT passed — it is a no-op here (the msm DPU
+# does not advertise DRM_CAP_ATOMIC_ASYNC_PAGE_FLIP, so gamescope drops the async flag). The
+# intermittent composite-flip freeze is on the vsync'd path and unrelated. See devices/bringup-phase2.md.
+gs_args="--backend drm"
 set -x
 if command -v seatd-launch >/dev/null 2>&1; then
   exec seatd-launch -- gamescope $gs_args -- "$client"

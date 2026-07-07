@@ -36,7 +36,14 @@ gamescope needs are all present on Adreno 750.
 never seizes the panel from the bring-up path. gamescope + seatd themselves are in the **release**
 set (layer-B runtime, not test tooling).
 
-### Resolved 1e (a): rotation flip EINVAL → patched gamescope `--use-rotation-shader`
+### Resolved 1e (a): rotation flip EINVAL → patched gamescope (composite rotation)
+
+> **Superseded (in-tree, HW-validation pending):** the ROCKNIX `--use-rotation-shader` patch below
+> was replaced by upstream gamescope PR #2228 (composite-rotation pass). The shipped launcher now
+> passes **no** rotation flag — gamescope auto-engages compositor rotation off the DRM connector
+> panel orientation (DTS `rotation=<90>`). See TODO.md and
+> `packages/gamescope/patches/0001-composite-rotation-pr2228.patch`. The historical account of the
+> original fix follows.
 The Pocket S2 panel (`sm8650-ayaneo-ps2.dts`, `compatible="ayaneo,wt0630-2k"`) declares
 `rotation = <90>`, published as the connector `panel orientation`. gamescope applied a compensating
 **90° plane rotation**; msm `dpu_plane.c` only advertises `ROTATE_0|180|REFLECT_*` on a normal pipe
@@ -96,7 +103,7 @@ A static, SoC-agnostic overlay mirror-copied into the rootfs by `images/assemble
 
 | File | Role |
 |---|---|
-| `/usr/bin/novadeck-session` | launcher: `seatd-launch` + env (`ENABLE_GAMESCOPE_WSI=1`, default) + patched gamescope (`--backend drm --use-rotation-shader`) → runs `$NOVADECK_SESSION_CMD` |
+| `/usr/bin/novadeck-session` | launcher: `seatd-launch` + env (`ENABLE_GAMESCOPE_WSI=1`, default) + patched gamescope (`--backend drm`; rotation auto-detected from the connector orientation) → runs `$NOVADECK_SESSION_CMD` |
 | `/etc/novadeck/session.conf` | single config point — `NOVADECK_SESSION_CMD` (Phase-2 placeholder `vkcube`; Phase-3 → `steam -gamepadui …`), `NOVADECK_GAMESCOPE_EXTRA` |
 | `/usr/lib/systemd/system/novadeck-session.service` | `Conflicts=getty@tty1`, `After=inputplumber`, `Restart=on-failure` |
 
@@ -172,7 +179,7 @@ a Qualcomm backing (the rest documented as stubbed). ("Deck UI renders" = Phase-
 ### ✅ Exit sweep — HW-validated 2026-06-26 (kernel 7.0.11, Holo build 240949)
 
 - **gamescope session launches + scans out** — `systemctl start novadeck-session` brought up
-  `gamescope --backend drm --use-rotation-shader -W 2560 -H 1440 -r 60 --prefer-output DSI-1 -- vkcube`
+  `gamescope --backend drm -W 2560 -H 1440 -r 60 --prefer-output DSI-1 -- vkcube`  (rotation auto-detected)
   via `seatd-launch`. DSI-1 `connected + enabled`; crtc-0 `total_framecount` advanced over 2s at
   59–60 fps (native 60 Hz scanout); the vkcube client drove the GPU (`drm-engine-gpu` advancing on
   its render fd). Clean `systemctl stop` left no gamescope/seatd-launch residue.

@@ -7,7 +7,7 @@
 # PKGBUILD bumped to gamescope 3.16.23.2. Reason: 3.16.17's Wayland explicit-sync
 # (linux-drm-syncobj) WSI present path intermittently deadlocks on the first frame on this HW,
 # wedging ~2/3 of cold session starts. We already rebuild gamescope from source for the
-# rotation-shader patch, so we bump the version here (same medicine as packages/mesa) rather than
+# composite-rotation patch, so we bump the version here (same medicine as packages/mesa) rather than
 # carry a runtime workaround. See devices/sm8650/bringup-phase2.md step 1e + the gamescope-flip-blocker
 # memory, and packages/README.md for the overlay mechanism.
 #
@@ -28,4 +28,4 @@
 name: gamescope
 pkgbuild_local: PKGBUILD
 pkgrel_suffix: 1
-patches: 0001-rotate-portrait-panel-in-composite.patch 0002-sanitize-nightmode-atom.patch
+patches: 0001-composite-rotation-pr2228.patch 0002-sanitize-nightmode-atom.patch

@@ -321,15 +321,25 @@ rationale lives in the linked memories and commit history.
   stays `=1` (see [[sm8650-gamescope-flip-blocker]]), so the wedge is not a field problem. Prototype
   abandoned.
 
-- [ ] **Stable Wi-Fi + Bluetooth MAC addresses (first-boot)** — the WCN7850 comes up without a
-  persistent MAC (no vendor NVRAM/`nvmem` MAC path on this SM8650 port), so the Wi-Fi and BT
-  addresses are non-deterministic across boots (random/locally-administered, and identical across
-  units flashed from the same image). Generate a **stable per-device MAC once on first boot** —
-  derive it from a hardware-unique seed (SoC serial / `machine-id`) with the locally-administered
-  bit set, persist it, and apply it: Wi-Fi via a NetworkManager `ethernet.cloned-mac-address` /
-  `wifi.cloned-mac-address` (or `.link` `MACAddress=`) keyfile, Bluetooth via a `btmgmt public-addr`
-  (or `hci0` `.link`) one-shot before `bluetoothd`. Must be idempotent (write-once, survive reboots)
-  and land on the writable side, not the RO root. Relates to [[wifi-config-is-test-only]].
+- [x] **Stable Wi-Fi MAC address (first-boot) — DONE, HW-verified 2026-07-07** — the WCN7850 comes up
+  without a persistent MAC (no vendor NVRAM/`nvmem` MAC path on this SM8650 port), so the Wi-Fi address
+  was non-deterministic across boots (random/locally-administered, and identical across units flashed
+  from the same image). Shipped in the `hw-support/` overlay: `usr/lib/novadeck/gen-mac.sh` derives a
+  locally-administered **unicast** address by `sha256(seed)` — seed = the per-unit `/etc/machine-id`
+  (empty in the image → systemd writes a fresh random one on first boot; falls back to the SoC serial,
+  then a persisted urandom value). **Write-once** persisted to `/var/lib/novadeck/mac-wifi` (RW even
+  under the Phase-4 immutable root), then applied every boot by `novadeck-macgen.service` (oneshot,
+  Before `NetworkManager.service`): it writes a cloned-mac drop-in into `/run/NetworkManager/conf.d/`
+  (tmpfs, so no RO-root write) with `wifi.scan-rand-mac-address=no` +
+  `wifi/ethernet.cloned-mac-address=<MAC>`. HW-verified across reboots: `wlp1s0` takes the derived MAC
+  and holds a stable DHCP lease. Note: interface is `wlp1s0` (predictable naming), so a global
+  `[connection]` default is used rather than a per-iface key. Relates to [[wifi-config-is-test-only]].
+  **Bluetooth deliberately NOT done:** a stable BT address via `btmgmt public-addr` is not achievable
+  on this controller — before `bluetoothd` initialises it the mgmt interface is unreachable (every
+  `btmgmt` call blocks/times out, even `info`), and after `bluetoothd` the controller is powered up so
+  `public-addr` (settable only while powered off) is refused. The two windows never overlap (HW
+  2026-07-07). Left as a known limitation; revisit only if BT identity ever matters (BT re-pairs
+  anyway).
 
 - [ ] 🍒 **Cherry on top: install to internal UFS + SD card as game library** — today NovaDeck
   runs from a dd'd SD-card image (Phase 1). Ultimately we want a real **installer that lays the

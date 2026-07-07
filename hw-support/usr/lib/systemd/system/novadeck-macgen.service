@@ -1,0 +1,17 @@
+[Unit]
+Description=novadeck stable Wi-Fi MAC (cloned-mac drop-in from a per-device seed)
+# The Wi-Fi radio has no persistent hardware MAC on this port, so pin a stable derived address. Just
+# writes the NetworkManager drop-in (fast, no polling); it must land Before NetworkManager reads its
+# config. After local-fs.target so /var/lib (the write-once store) is mounted.
+DefaultDependencies=no
+After=local-fs.target
+Before=NetworkManager.service network-pre.target shutdown.target
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/novadeck/gen-mac.sh
+
+[Install]
+WantedBy=multi-user.target

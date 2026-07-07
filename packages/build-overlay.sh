@@ -7,9 +7,17 @@
 # packages + a repo db land in work/repo/<arch>/, a local pacman repo that customize-base.sh
 # prepends ahead of the holo repos so the patched build is what actually gets installed.
 #
+# INCREMENTAL: each package carries a content hash of ITS OWN inputs (source.pin + patches +
+# local PKGBUILD) under work/repo/<arch>/.stamps/<name>.hash. A package is rebuilt only when
+# that hash changes (or its built artifacts are missing) — so a one-line gamescope patch no
+# longer drags mesa/sddm/… through a full emulated recompile. The repo db is re-indexed from
+# whatever package artifacts are present. The Makefile still lists the union of all overlay
+# inputs as $(OVERLAY_DB) prerequisites; that just re-triggers this (now cheap) script, which
+# self-selects which packages actually need the slow build.
+#
 # Host-side (drives docker, like customize-base.sh). Network required: the PKGBUILD comes from
 # the GitLab raw endpoint and makepkg clones the actual sources from public GitHub/freedesktop.
-# Reads base-devel.digest. Re-run is cheap to invoke but the emulated build itself is slow.
+# Reads base-devel.digest. Re-run is cheap to invoke but an emulated build itself is slow.
 #
 #   packages/build-overlay.sh
 set -euo pipefail
@@ -23,6 +31,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ARCH="aarch64"
 GL="https://gitlab.steamos.cloud"
 REPO_DIR="$ROOT/work/repo/$ARCH"
+STAMPS="$REPO_DIR/.stamps"
 STAGE="$ROOT/work/overlay-build/$ARCH"
 DEVEL_PIN="$ROOT/base-devel.digest"
 
@@ -44,8 +53,14 @@ esac
 
 pin_field() { sed -n "s/^$2:[[:space:]]*//p" "$1" | head -1; }
 
-# Fresh staging + repo each run, so no stale package versions linger in work/repo/<arch>/.
-rm -rf "$STAGE" "$REPO_DIR"; mkdir -p "$STAGE" "$REPO_DIR"
+# Persist the repo + per-package stamps across runs (incremental); only re-stage what we rebuild.
+mkdir -p "$STAGE" "$REPO_DIR" "$STAMPS"
+
+# --- decide which packages need a (re)build ------------------------------------------------
+# A package is up-to-date when its stored input hash matches AND every artifact it last produced
+# is still present in the repo. Otherwise it is staged (PKGBUILD fetched/patched) and queued.
+declare -A HASH        # name -> content hash of this package's inputs (recorded after a good build)
+BUILD_NAMES=()
 
 for pin in "${PINS[@]}"; do
   pdir="$(dirname "$pin")"
@@ -58,16 +73,44 @@ for pin in "${PINS[@]}"; do
   patches="$(pin_field "$pin" patches)"
   : "${name:?$pin: missing name}"
 
-  bd="$STAGE/$name"; mkdir -p "$bd"
+  # Gather this package's input files (fail-fast on a missing patch / local PKGBUILD, same as
+  # before) and hash them. The pin carries pkgbuild_ref, so a bumped holo PKGBUILD or upstream
+  # source pin flows into the hash; anything makepkg fetches is downstream of these inputs.
+  inputs=("$pin")
+  for p in $patches; do
+    src="$pdir/patches/$p"
+    [ -f "$src" ] || { echo "[overlay] $name: missing patch $src (declared in $pin)" >&2; exit 1; }
+    inputs+=("$src")
+  done
+  if [ -n "$local_pb" ]; then
+    lpb="$pdir/$local_pb"
+    [ -f "$lpb" ] || { echo "[overlay] $name: missing local PKGBUILD $lpb (declared in $pin)" >&2; exit 1; }
+    inputs+=("$lpb")
+  fi
+  hash="$(sha256sum "${inputs[@]}" | sha256sum | cut -c1-64)"
+  HASH["$name"]="$hash"
+
+  if [ -f "$STAMPS/$name.hash" ] && [ "$(cat "$STAMPS/$name.hash")" = "$hash" ] \
+     && [ -f "$STAMPS/$name.files" ]; then
+    fresh=1
+    while read -r f; do [ -n "$f" ] && [ -f "$REPO_DIR/$f" ] || { fresh=0; break; }; done < "$STAMPS/$name.files"
+    if [ "$fresh" = 1 ]; then
+      echo "[overlay] $name: up-to-date (${hash:0:12}) — skip" >&2
+      continue
+    fi
+  fi
+  echo "[overlay] $name: inputs changed / artifacts missing — will rebuild" >&2
+
+  # Stage: fetch (or copy) the PKGBUILD, drop patches in, edit the PKGBUILD. Fresh per-package
+  # staging dir so a re-stage never mixes with a prior attempt.
+  bd="$STAGE/$name"; rm -rf "$bd"; mkdir -p "$bd"
   if [ -n "$local_pb" ]; then
     # Local PKGBUILD: a novadeck-owned recipe checked in at packages/<name>/<pkgbuild_local>,
     # used when there is no suitable holo PKGBUILD to fetch (e.g. a version bump or a
     # driver-trimmed build the holo recipe doesn't cover). makepkg still pulls the upstream
     # source the PKGBUILD names (e.g. a release tarball) just the same.
-    lpb="$pdir/$local_pb"
-    [ -f "$lpb" ] || { echo "[overlay] $name: missing local PKGBUILD $lpb (declared in $pin)" >&2; exit 1; }
     echo "[overlay] $name: local PKGBUILD ${local_pb}" >&2
-    cp "$lpb" "$bd/PKGBUILD"
+    cp "$pdir/$local_pb" "$bd/PKGBUILD"
   else
     : "${repo:?$pin: missing pkgbuild_repo}"
     : "${path:?$pin: missing pkgbuild_path}"; : "${ref:?$pin: missing pkgbuild_ref}"
@@ -76,9 +119,7 @@ for pin in "${PINS[@]}"; do
   fi
 
   for p in $patches; do
-    src="$pdir/patches/$p"
-    [ -f "$src" ] || { echo "[overlay] $name: missing patch $src (declared in $pin)" >&2; exit 1; }
-    cp "$src" "$bd/$p"
+    cp "$pdir/patches/$p" "$bd/$p"
   done
 
   # Edit the PKGBUILD: bump pkgrel, register our patches as local sources (so makepkg copies
@@ -111,7 +152,17 @@ if patches and not applied:
     sys.stderr.write("ERROR: no 'cd <dir>' found in prepare(); cannot place patch step\n")
     sys.exit(3)
 PY
+  BUILD_NAMES+=("$name")
 done
+
+if [ ${#BUILD_NAMES[@]} -eq 0 ]; then
+  echo "[overlay] all overlay packages up-to-date — nothing to rebuild" >&2
+  # Bump the db mtime so make sees $(OVERLAY_DB) as satisfied against the touched inputs and
+  # does not keep re-invoking this script every build.
+  [ -f "$REPO_DIR/novadeck.db.tar.zst" ] && touch "$REPO_DIR/novadeck.db.tar.zst"
+  echo "[overlay] repo: ${REPO_DIR#"$ROOT"/}" >&2
+  exit 0
+fi
 
 # Build inside the pinned base-devel image under arm64 emulation. makepkg refuses to run as
 # root, so create an unprivileged builder with passwordless sudo (makepkg -s installs the
@@ -130,10 +181,8 @@ fi
 # installed for gamescope/gtk2/mesa left the container in a state that broke sddm's transitive
 # Qt6 module resolution. Isolating each build removes that cross-contamination at the cost of a
 # per-package dep re-sync (the emulated compile dwarfs it anyway).
-echo "[overlay] building each package in an isolated arm64 qemu container (slow — emulated)" >&2
-for d in "$STAGE"/*/; do
-  [ -f "$d/PKGBUILD" ] || continue
-  name="$(basename "$d")"
+echo "[overlay] building ${#BUILD_NAMES[@]} changed package(s) in isolated arm64 qemu containers (slow — emulated)" >&2
+for name in "${BUILD_NAMES[@]}"; do
   echo "[overlay] === build $name (isolated container) ===" >&2
   docker run --rm --platform linux/arm64 \
     -e HOSTUID="$(id -u)" -e HOSTGID="$(id -g)" -e PKG="$name" \
@@ -150,17 +199,34 @@ for d in "$STAGE"/*/; do
       cp "/stage/$PKG"/*.pkg.tar.zst /repo/
       chown -R "$HOSTUID:$HOSTGID" "/stage/$PKG" /repo
     ' >&2
+
+  # Record this package's artifacts and purge any it produced last time but no longer does
+  # (e.g. a pkgver/pkgrel bump renamed the file) so stale versions never linger in the repo.
+  # Only after a SUCCESSFUL build do we write the stamp — a failed build (set -e) leaves the
+  # old hash so the next run retries.
+  produced=("$STAGE/$name"/*.pkg.tar.zst)
+  new_basenames=(); for f in "${produced[@]}"; do new_basenames+=("$(basename "$f")"); done
+  if [ -f "$STAMPS/$name.files" ]; then
+    while read -r old; do
+      [ -n "$old" ] || continue
+      keep=0; for b in "${new_basenames[@]}"; do [ "$b" = "$old" ] && keep=1 && break; done
+      [ "$keep" = 0 ] && rm -f "$REPO_DIR/$old"
+    done < "$STAMPS/$name.files"
+  fi
+  printf '%s\n' "${new_basenames[@]}" > "$STAMPS/$name.files"
+  printf '%s\n' "${HASH[$name]}"      > "$STAMPS/$name.hash"
 done
 
-# Index the repo db once, in a final container (repo-add is an arm64 tool). Hand the artifacts
-# back to the host build user so re-runs (the initial rm -rf) and make clean-overlay work WITHOUT
-# root — the containers built them as root/builder.
+# Re-index the repo db from ALL present artifacts (repo-add is an arm64 tool). Rebuild it from
+# scratch each time so entries for purged/renamed packages never linger. Hand the artifacts back
+# to the host build user so re-runs and make clean-overlay work WITHOUT root.
 echo "[overlay] indexing repo db" >&2
 docker run --rm --platform linux/arm64 \
   -e HOSTUID="$(id -u)" -e HOSTGID="$(id -g)" \
   -v "$REPO_DIR":/repo "$DEVEL_REF" \
   bash -euo pipefail -c '
     cd /repo
+    rm -f novadeck.db.tar.zst novadeck.db novadeck.files.tar.zst novadeck.files
     repo-add novadeck.db.tar.zst *.pkg.tar.zst
     chown -R "$HOSTUID:$HOSTGID" /repo
   ' >&2

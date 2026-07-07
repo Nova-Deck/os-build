@@ -61,12 +61,14 @@ FW_QCOM      := firmware/qcom-fw/sha256sums.txt
 PREBUILT_PINS := $(wildcard packages/*/prebuilt.pin)
 # From-source overlay packages (packages/*/source.pin + patches) — rebuilt holo packages with
 # novadeck patches, landed in the local pacman repo work/repo/<arch>/ that customize-base.sh
-# prepends ahead of the holo repos. The repo db is the make target; the pins+patches are
-# prerequisites so a pin or patch change rebuilds the overlay (and then the base).
+# prepends ahead of the holo repos. The repo db is the make target; the union of pins+patches+
+# PKGBUILDs is its prerequisite so ANY overlay input change re-invokes build-overlay.sh. The
+# script is INCREMENTAL: it hashes each package's own inputs and rebuilds only the changed
+# package(s) (so a one-line gamescope patch no longer recompiles mesa), then re-indexes the db.
 OVERLAY_PINS    := $(wildcard packages/*/source.pin)
 OVERLAY_PATCHES := $(wildcard packages/*/patches/*.patch)
 # Checked-in local PKGBUILDs (pkgbuild_local in a source.pin, e.g. packages/mesa/PKGBUILD) are
-# build inputs too — track them so editing a recipe (deps, meson options) rebuilds the overlay.
+# build inputs too — track them so editing a recipe (deps, meson options) rebuilds that package.
 OVERLAY_PKGBUILDS := $(wildcard packages/*/PKGBUILD)
 # Overlay packages are ARCH-scoped (a rebuilt aarch64 gamescope serves every aarch64 device),
 # so the repo is shared at work/repo/<arch>/.
@@ -157,8 +159,9 @@ $(STEAM_SEED): steam/STEAM_SEED.pin steam/fetch-steam-seed.sh
 # ==============================================================================
 # From-source overlay packages (host — build-overlay.sh drives docker + qemu binfmt)
 # ==============================================================================
-# Rebuild holo packages with novadeck patches into the local pacman repo work/repo/<arch>/.
-# Only when at least one source.pin exists does `base` depend on it (else nothing to build).
+# Rebuild changed holo packages with novadeck patches into the local pacman repo work/repo/<arch>/.
+# Union prereq re-invokes the script on any input change; the script self-selects which package(s)
+# to rebuild (per-package input hash). Only when a source.pin exists does `base` depend on it.
 $(OVERLAY_DB): base-devel.digest $(OVERLAY_PINS) $(OVERLAY_PATCHES) $(OVERLAY_PKGBUILDS)
 	packages/build-overlay.sh
 

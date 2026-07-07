@@ -5,15 +5,17 @@ rationale lives in the linked memories and commit history.
 
 ## Open
 
-- [ ] **Rework overlay build to only rebuild changed packages** — the `$(OVERLAY_DB)` target
-  (`Makefile`) depends on the *union* of all overlay inputs (`$(OVERLAY_PINS) $(OVERLAY_PATCHES)
-  $(OVERLAY_PKGBUILDS)`), so touching a single package's patch/pin (e.g. a gamescope patch) rebuilds
-  the **whole** overlay — mesa included — even though nothing about mesa changed. That's the long pole
-  on iteration (a one-line gamescope patch triggers a full mesa+gamescope from-source compile). Make
-  the rebuild per-package: a stamp/target per overlay package keyed on *that* package's own
-  pin+patches+PKGBUILD, then assemble `novadeck.db` from whichever package artifacts exist/updated
-  (`repo-add` incrementally rather than rebuilding all). Keep the fail-fast "missing patch" guard in
-  `build-overlay.sh`. See [[overlay-package-pipeline]], [[overlay-isolate-per-package-container]].
+- [x] **Rework overlay build to only rebuild changed packages** — DONE (build-infra, not yet
+  HW-cycle-validated). `build-overlay.sh` is now incremental: it persists `work/repo/<arch>/` across
+  runs and keeps a per-package stamp under `.stamps/<name>.hash` (sha256 of that package's own
+  `source.pin` + patches + local PKGBUILD) plus `.stamps/<name>.files` (its produced artifacts). A
+  package is rebuilt only when its hash changes or an artifact is missing — a one-line gamescope patch
+  no longer recompiles mesa. Stale artifacts from a renamed/bumped build are purged via the per-package
+  file manifest; the db is re-indexed from all present `*.pkg.tar.zst`. When nothing changed the script
+  just `touch`es the db (mtime only — content/sha unchanged so customize-base's overlay reuse key stays
+  warm). `$(OVERLAY_DB)` keeps the union prereq (re-invokes the now-cheap script, which self-selects);
+  fail-fast "missing patch" guard preserved. See [[overlay-package-pipeline]],
+  [[overlay-isolate-per-package-container]], [[content-hash-cache-pattern]].
 
 - [ ] **Switch InputPlumber virtual device from DS5 to Xbox Elite** — `devices/inputplumber/devices.d/
   01-ayaneo-controller.yaml` emulates a DualSense (`target_devices: [ds5, keyboard]`). Switch the

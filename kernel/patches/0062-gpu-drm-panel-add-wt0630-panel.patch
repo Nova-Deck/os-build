@@ -131,8 +131,8 @@ index 000000000000..08d9e32f31c0
 +
 +static struct panel_desc wt0630_desc = {
 +	.lanes = 4,
-+	.width_mm = 78,
-+	.height_mm = 140,
++	.width_mm = 94,   /* CALIBRATION (true ~78): +20% so SteamUI auto-scale reads a lower DPI */
++	.height_mm = 168, /* CALIBRATION (true ~140): shrink the ~20%-too-big Deck UI. HW-tune, revert if mm is ignored */
 +	.mode = &wt0600_mode,  /* wt0600 only has different screen size */
 +	.mode_flags = MIPI_DSI_MODE_VIDEO | MIPI_DSI_MODE_VIDEO_BURST |
 +		      MIPI_DSI_CLOCK_NON_CONTINUOUS | MIPI_DSI_MODE_LPM,

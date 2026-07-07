@@ -5,6 +5,16 @@ rationale lives in the linked memories and commit history.
 
 ## Open
 
+- [ ] **Rework overlay build to only rebuild changed packages** — the `$(OVERLAY_DB)` target
+  (`Makefile`) depends on the *union* of all overlay inputs (`$(OVERLAY_PINS) $(OVERLAY_PATCHES)
+  $(OVERLAY_PKGBUILDS)`), so touching a single package's patch/pin (e.g. a gamescope patch) rebuilds
+  the **whole** overlay — mesa included — even though nothing about mesa changed. That's the long pole
+  on iteration (a one-line gamescope patch triggers a full mesa+gamescope from-source compile). Make
+  the rebuild per-package: a stamp/target per overlay package keyed on *that* package's own
+  pin+patches+PKGBUILD, then assemble `novadeck.db` from whichever package artifacts exist/updated
+  (`repo-add` incrementally rather than rebuilding all). Keep the fail-fast "missing patch" guard in
+  `build-overlay.sh`. See [[overlay-package-pipeline]], [[overlay-isolate-per-package-container]].
+
 - [ ] **Switch InputPlumber virtual device from DS5 to Xbox Elite** — `devices/inputplumber/devices.d/
   01-ayaneo-controller.yaml` emulates a DualSense (`target_devices: [ds5, keyboard]`). Switch the
   emulated pad to the Xbox Elite target (verify the exact InputPlumber target id, e.g. `xbox-elite`)
@@ -13,14 +23,22 @@ rationale lives in the linked memories and commit history.
   buttons + dpad still map (the AYANEO MCU Xbox capability map is already in use) and that Steam Input
   glyphs follow. See [[sm8650-inputplumber-input]].
 
-- [ ] **Fix automatic UI scale** — SteamUI's automatic scaling picks the wrong factor on the device
-  panel (UI too small/large for the handheld's resolution/DPI), rather than the Deck-like scale a user
-  expects. Characterize on HW first: capture what auto-scale resolves to vs. what looks right, at the
-  landscape logical output we hand gamescope (`-W/-H` from `session/etc/novadeck/session.conf` +
-  `session/usr/bin/novadeck-session`). Investigate the levers: the logical output geometry we pass
-  gamescope, gamescope's own scaling flags, and SteamUI's UI-scale (the Deck exposes a Display
-  "automatic/scale" setting driven by env/config). Decide whether to set a correct default per panel
-  vs. let SteamUI auto-compute it. See [[sm8650-working-display-baseline]], [[sm8650-gamescope-session-plumbing]].
+- [ ] **Clean up the UI-scale calibration hack (per-device panel mm)** — SteamUI's automatic scaling
+  rendered the Deck UI ~20% too big on the Pocket S2. **HW-established 2026-07-07:** Steam's gamepad-UI
+  auto-scale is driven by the panel's **physical mm** (a diagonal/area DPI — *magnitude*, not aspect):
+  gamescope patch `0003` (swap `phys_width/phys_height` when `g_bRotated`) only **transposed** the mm
+  (78×140→140×78, same diagonal) and moved the scale **not at all**; bumping the wt0630 driver mm
+  **+20% (78×140 → 94×168)** in `kernel/patches/0062` *did* shrink the UI to a good size (HW-confirmed).
+  So the real lever is the reported panel size, and the shipped fix is a deliberate **over-declaration**
+  of the physical panel (true ~6.0″, we now claim ~7.6″) — a calibration hack, not the true size.
+  **`0003` is NOT the fix** (kept for now as a defensible coherence change; slated for removal in a
+  later session since it doesn't move the scale). **Follow-ups:** (1) apply the same mm calibration to
+  **Pocket Fit** (`kernel/patches/0063`, currently `width_mm=0/height_mm=0`) and **every new device** we
+  add — otherwise each new panel reships the wrong scale; (2) find a cleaner home for this than fudging
+  the kernel panel driver (per-device table / `session.conf` mm override / Steam UI-scale config default)
+  so we're not lying in the DRM driver; (3) confirm exactly which DPI metric Steam uses to pick the mm
+  precisely per panel instead of eyeballing. See [[sm8650-working-display-baseline]],
+  [[sm8650-gamescope-session-plumbing]], [[steam-ui-scale-panel-mm]].
 
 - [x] **Replace our rotation-shader patch with upstream composited-output rotation** — DONE, rotation
   HW-confirmed on Pocket S2 2026-07-07: orientation is upright-landscape and gamescope auto-engages

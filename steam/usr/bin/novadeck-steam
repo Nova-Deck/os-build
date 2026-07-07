@@ -4,8 +4,8 @@
 # This is what NOVADECK_SESSION_CMD points at in Phase 3 (replacing the Phase-2 vkcube liveness
 # placeholder). novadeck-session execs gamescope, then gamescope execs THIS inside its Wayland
 # display. We run the NATIVE arm64 Steam client in Big Picture / gamepad UI mode — the same
-# -gamepadui/-steamdeck/-steamos3 flags SteamOS and our peers (ROCKNIX, Armada) pass for the
-# handheld Deck shell. x86 games launched from here go through FEX/Proton (later in Phase 3).
+# -gamepadui/-steamdeck/-steamos3 flags SteamOS passes for the handheld Deck shell.
+# x86 games launched from here go through FEX/Proton (later in Phase 3).
 #
 # The WHOLE Big Picture shell is baked offline (release can't fetch — Steam owns OOBE Wi-Fi): the
 # bootstrap oneshot (novadeck-steam-bootstrap.service) stages the seed client+runtime AND the full
@@ -29,7 +29,7 @@ fi
 # and ubuntu12_32/steam-runtime/amd64/* which are amd64 ELFs ("Exec format error" on aarch64).
 #
 # We launch the native client RAW ON THE HOST — NOT through the bundled SR3 runtime / pressure-vessel.
-# This is the Armada-style path (system libs + raw ELF). It became possible once gtk2 moved onto the
+# This is the system-libs + raw-ELF path. It became possible once gtk2 moved onto the
 # host: steamui.so NEEDs libgtk-x11-2.0.so.0 + libgdk_pixbuf-2.0.so.0, which we now BUILD from source
 # as a novadeck overlay package (packages/gtk2/) and install into the base (customize-base.sh PKGS),
 # so the host /usr/lib resolves them via ld.so.cache. Earlier this client was entered through
@@ -63,12 +63,12 @@ export vk_xwayland_wait_ready=false            # don't block on buffers idling b
 # -noverifyfiles: skip the client's startup file-verification pass. We bake a hand-assembled offline
 #   shell (see steam-bootstrap.sh) that won't checksum-match Valve's manifests, and there's no network
 #   at first boot (Steam owns OOBE Wi-Fi) — so verification can only waste time re-hashing the baked
-#   tree or stall trying to re-fetch. Armada ships this and it leaves the SELF-UPDATE path intact.
+#   tree or stall trying to re-fetch. This leaves the SELF-UPDATE path intact.
 # -noshaders: disable Steam's shader pre-caching (background shader download + compile). Orthogonal to
 #   the update path — pure CPU/battery saver on the handheld; safe to keep.
 #
-# DO NOT add ROCKNIX's -nobootstrapupdate / -skipinitialbootstrap / -norepairfiles here. Those
-# implement ROCKNIX's PINNED-client model: the client downloads an update but the bootstrap is
+# DO NOT add -nobootstrapupdate / -skipinitialbootstrap / -norepairfiles here. Those
+# implement a PINNED-client model: the client downloads an update but the bootstrap is
 # forbidden from applying it, so the running client never advances — even across reboots (HW-observed
 # 2026-07-03: update downloaded, SteamUI relaunched, logo/version unchanged). We want the Deck-faithful
 # self-updating client, so those three were removed while -noshaders (unrelated) stays.
@@ -79,14 +79,14 @@ export vk_xwayland_wait_ready=false            # don't block on buffers idling b
 # sentinel makes the client open a DevTools port so the SteamUI (incl. the OOBE web views) can be
 # inspected from a browser. Gated on the NOVADECK_DEBUG build marker (/usr/lib/novadeck/debug, baked
 # only when the image is built with NOVADECK_DEBUG=1) so release launches never expose the port.
-# Mirrors Armada's launch-steam, which touches this unconditionally.
+# Touched unconditionally here (only reached under the NOVADECK_DEBUG marker).
 if [ -e /usr/lib/novadeck/debug ]; then
   : >"${STEAM}/.cef-enable-remote-debugging" 2>/dev/null \
     && echo "[novadeck-steam] NOVADECK_DEBUG: CEF remote debugging enabled (${STEAM}/.cef-enable-remote-debugging)" >&2
 fi
 
 # Run from the client dir. Steam's bootstrapper resolves some helper paths relative to cwd, so launch
-# with steamrtarm64/ as the working directory (matches Armada's launch-steam `cd "${steam_arm_dir}"`).
+# with steamrtarm64/ as the working directory.
 cd "${STEAM}/steamrtarm64"
 
 # Steam's bootstrapper exits to relaunch itself whenever the client requests a restart — most
@@ -94,7 +94,7 @@ cd "${STEAM}/steamrtarm64"
 # and on every in-UI "Restart Steam". It signals this with exit code 42. gamescope hosts THIS
 # script as its `--` child, so a bare `exec` would let the process die on that first restart and
 # gamescope would tear the whole session down mid-update instead of entering Big Picture. Loop and
-# relaunch on 42 (mirrors SteamOS's steam-jupiter wrapper and the ROCKNIX/Armada launchers); any
+# relaunch on 42 (mirrors SteamOS's steam-jupiter wrapper); any
 # other exit code is a genuine shutdown, so propagate it and let the session end as intended.
 #
 # Past the 42 restart the client previously failed to render the Big Picture UI with

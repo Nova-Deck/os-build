@@ -135,7 +135,7 @@ fi
 # /etc/novadeck/session.conf, the SDDM autologin wiring, and PAM drop-ins) mirror-copied into the
 # rootfs. gamescope/seatd/vulkan-tools + sddm come from the base (customize-base.sh; sddm is built
 # into the [novadeck] overlay) — this adds no package here, only the session wiring.
-# The device boots through SDDM autologin, the SteamOS/armada way: sddm.service is enabled here
+# The device boots through SDDM autologin, the SteamOS way: sddm.service is enabled here
 # (60-novadeck-sddm.preset + an etc/systemd/system/display-manager.service symlink) and the overlay
 # points default.target at graphical.target, so on boot SDDM logs the deck user in through PAM
 # (pam_systemd → a REAL ACTIVE seat0 logind session) and launches the `novadeck` wayland session
@@ -144,7 +144,7 @@ fi
 # "no-active" bypass rule is gone. Because it is a login session, logind provides /run/user/1000 +
 # the user D-Bus bus (no linger needed). seatd.service still IS enabled (60-novadeck-seatd.preset +
 # multi-user.target.wants symlink): the launcher keeps opening the DRM seat via the persistent root
-# seatd (armada runs seatd alongside SDDM too) — the HW-validated seat/DRM path is unchanged; SDDM
+# seatd — the HW-validated seat/DRM path is unchanged; SDDM
 # only wraps it in a login session. See devices/bringup-phase2.md step 2.
 SESSION="$ROOT/session"
 if [ -d "$SESSION" ]; then
@@ -379,8 +379,8 @@ ln -sf /dev/null "$stage/etc/systemd/system/systemd-repart.service"
 
 # 4b-audio. ALSA UCM2 machine profile (SteamOS layer C audio). A static overlay tree under
 # audio/ mirror-copied into the rootfs: the device's card-name-matched UCM2 profile so userland
-# knows the routing (speaker/headphone/DP paths, jack handling). The profile is the ROCKNIX
-# Pocket S2 config (card model SM8650-APS2, matching the DT sound_card model + the AudioReach
+# knows the routing (speaker/headphone/DP paths, jack handling). The profile is the Pocket S2
+# config (card model SM8650-APS2, matching the DT sound_card model + the AudioReach
 # tplg). conf.d/sm8650/ ships two relative symlinks (SM8650-APS2 + the EFI-boot card-name
 # variant ayaneo-AYANEOPocketS2-) -> the profile; cp -a preserves them. The profile Includes
 # codec snippets (/codecs/wcd939x, /codecs/qcom-lpass/{wsa,rx}-macro, /codecs/wsa884x) that must
@@ -498,8 +498,8 @@ set -eu
 unset WAYLAND_DISPLAY DISPLAY
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/0}"
 mkdir -p "$XDG_RUNTIME_DIR"; chmod 700 "$XDG_RUNTIME_DIR"
-# Keep the gamescope WSI Vulkan layer ON by default (matches the novadeck-session launcher + upstream
-# ChimeraOS gamescope-session-plus). NOTE: this smoke is a RE-LAUNCH-heavy bring-up tool, and with WSI
+# Keep the gamescope WSI Vulkan layer ON by default (matches the novadeck-session launcher + the
+# upstream gamescope session). NOTE: this smoke is a RE-LAUNCH-heavy bring-up tool, and with WSI
 # on, re-launching gamescope after a prior instance intermittently wedges (the client blocks in
 # drm_syncobj_array_wait_timeout on a never-signaling explicit-sync fence — a userspace race, NOT stale
 # GPU state; a fresh power-on is always clean). While iterating over SSH you can force the clean

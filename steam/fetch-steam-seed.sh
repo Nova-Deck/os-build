@@ -145,7 +145,7 @@ curl -fsSL -o "$rt_tar" "$RUNTIME_URL"
 tar -xJf "$rt_tar" -C "$SEED_DIR"
 
 # The native client dlopen()s libibus from a fixed path; symlink it out of the runtime (the exact
-# soname version floats, so glob the newest). Mirrors ROCKNIX/Armada — without it Steam aborts.
+# soname version floats, so glob the newest). Without it Steam aborts.
 ibus="$(find "$SEED_DIR/steam-runtime-steamrt-arm64" \
           -path '*/files/lib/aarch64-linux-gnu/libibus-1.0.so.5.*' -type f 2>/dev/null \
         | sort | tail -n1)"

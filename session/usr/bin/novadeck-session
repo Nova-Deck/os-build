@@ -65,8 +65,8 @@ if [ ! -d "$XDG_RUNTIME_DIR" ]; then
   exit 1
 fi
 
-# Keep the gamescope WSI Vulkan layer ON, matching upstream gamescope and ChimeraOS
-# gamescope-session-plus (which exports ENABLE_GAMESCOPE_WSI=1). The FROG WSI layer is the STANDARD
+# Keep the gamescope WSI Vulkan layer ON, matching the upstream gamescope session
+# (which exports ENABLE_GAMESCOPE_WSI=1). The FROG WSI layer is the STANDARD
 # present path: it carries the framerate limiter / frame pacing, latency control, adaptive-sync hints
 # AND HDR — so turning it off (implicit-sync fallback) degrades all of those, not just HDR. It is not
 # a free toggle. Overridable from the env / session.conf; defaults to on.
@@ -95,19 +95,19 @@ if [ -n "$NOVADECK_GAMESCOPE_OUTPUT" ]; then
 fi
 
 # Seat access: let libseat AUTO-PICK its backend — inside SDDM's logind session it selects the
-# LOGIND backend, exactly like armada/SteamOS (armada enables seatd but never forces it). This is
+# LOGIND backend, exactly like SteamOS (which enables seatd but never forces it). This is
 # load-bearing for privileges: gamescope must take the seat/VT *through logind* so logind marks the
 # session ACTIVE; polkit's stock `subject.active` checks (Wi-Fi allow_active, timezone active+wheel)
 # then pass. Forcing LIBSEAT_BACKEND=seatd here made gamescope grab the VT behind logind's back, so
 # the session stayed INACTIVE and every privileged OOBE action (timezone) was denied — HW-confirmed
-# 2026-07-01. seatd.service stays enabled as an unused fallback (harmless, matches armada); do NOT
+# 2026-07-01. seatd.service stays enabled as an unused fallback (harmless); do NOT
 # set LIBSEAT_BACKEND/SEATD_SOCK or libseat will prefer seatd again.
 
-# --- gamescope <-> Steam control channel (SteamOS / ChimeraOS "--steam" startup handshake) --------
+# --- gamescope <-> Steam control channel (SteamOS "--steam" startup handshake) --------
 # Wire the runtime IPC SteamUI uses to DRIVE gamescope: the framerate limiter, brightness, refresh
 # switching AND the color / night-mode / saturation pipeline all talk to gamescope over the --steam
 # stats channel. Without it, those Quick-Access controls have nothing to attach to (they had none on
-# the bare-gamescope launch). See the memory chimeraos-gamescope-session-reference.
+# the bare-gamescope launch). See the gamescope-session reference note in project memory.
 #
 # The model changes vs a plain `exec gamescope ... -- steam`: gamescope no longer launches the client
 # as its `--` child. Instead gamescope runs STANDALONE in the background, reports its nested displays

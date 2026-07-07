@@ -4,8 +4,8 @@
 // autologin it is a real ACTIVE seat0 logind session, so NetworkManager's OOBE Wi-Fi connect
 // (org.freedesktop.NetworkManager.settings.modify.system, allow_active=yes) is authorized with no
 // rule at all. Timezone is the one exception — org.freedesktop.timedate1.set-timezone defaults to
-// auth_admin_keep even for an active session — so grant it here, gated on the SteamOS/armada pattern
-// (active session + wheel; deck is in wheel). Mirrors _reference/armada/.../50-armada-timezone.rules.
+// auth_admin_keep even for an active session — so grant it here, gated on the SteamOS pattern
+// (active session + wheel; deck is in wheel).
 //
 // This REPLACES the old 50-novadeck-steamos.rules "no-active" bypass, which existed only because the
 // pre-SDDM lingering-service shell had no logind session (subject.active was false). See the

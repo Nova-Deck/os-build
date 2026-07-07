@@ -1,7 +1,7 @@
 # novadeck: enable seatd on release as the session's seat broker (SteamOS layer B). The gamescope
 # launcher (run as the deck user by the SDDM autologin session) opens the DRM seat via this
-# persistent root seatd.service (ExecStart=seatd -g seat); deck is in the `seat` group. armada runs
-# seatd alongside SDDM too. /etc/machine-id is empty on a fresh image so systemd runs preset-all on
+# persistent root seatd.service (ExecStart=seatd -g seat); deck is in the `seat` group.
+# /etc/machine-id is empty on a fresh image so systemd runs preset-all on
 # first boot, where the stock 99-default.preset is "disable *"; this higher-priority preset (60 < 99)
 # keeps seatd enabled. A build-time multi-user.target.wants symlink ships alongside as a fallback
 # (cf. inputplumber's 60-novadeck).

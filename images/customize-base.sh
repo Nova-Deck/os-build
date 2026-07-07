@@ -65,14 +65,13 @@ DEST="$ROOT/work/base"
 # against the SteamOS 3.8.10 rootfs), so we BUILD it from source as a novadeck overlay package
 # (packages/gtk2/) and install it HERE from that overlay — the client resolves its UI libs against
 # the host base, NOT from inside Steam's bundled SR3 runtime via pressure-vessel as earlier planned.
-# gtk2's own deps (gdk-pixbuf2, pango, cairo, …) come along via pacman. (Armada's raw-ELF +
-# `dnf install gtk2` is a Fedora-only shortcut; we build from source instead.) See packages/gtk2/.
+# gtk2's own deps (gdk-pixbuf2, pango, cairo, …) come along via pacman. (No distro gtk2 package
+# exists in holo, so we build from source rather than pulling one.) See packages/gtk2/.
 # ffmpeg: the native arm64 Steam client links libav*/libsw* (libavcodec, libavformat, libswscale,
 # libswresample) for in-client media/video (store trailers, intro/animated UI). It IS in the holo
 # repo, so install it.
 # xorg-xwayland: x86 games run under FEX/Proton render through Xwayland inside gamescope (the Deck
-# shell is native Wayland, but most Proton titles are X11 clients). Armada ships it for the same
-# reason (xorg-x11-server-Xwayland in 30-install-steam-session.sh).
+# shell is native Wayland, but most Proton titles are X11 clients).
 # e2fsprogs: the deck user's /home is a dedicated ext4 partition grown to fill the card on first
 # boot (novadeck-grow-home) — resize2fs (+ e2fsck) come from here; sfdisk/partx are in util-linux.
 # lsof: the native Steam client's WebUITransport authenticates the loopback websocket from
@@ -85,7 +84,7 @@ DEST="$ROOT/work/base"
 # only "English" is readable. Noto gives broad Unicode coverage (noto-fonts: Latin/Cyrillic/Greek/
 # Arabic/Thai/…; -cjk: CJK; -emoji: UI emoji), matching SteamOS's font set.
 # sddm: the display manager that autologins the deck user into the gamescope shell, giving it a real
-# ACTIVE seat0 logind session (SteamOS/armada parity) so stock polkit (allow_active / subject.active
+# ACTIVE seat0 logind session (SteamOS parity) so stock polkit (allow_active / subject.active
 # && wheel) authorizes Wi-Fi + timezone — no "no-active" bypass rule. NOT in the holo repos, so it is
 # built from source into the [novadeck] overlay (packages/sddm) and resolves here. The `sddm` system
 # user it needs is baked below (the RO root can't run systemd-sysusers at boot to persist /etc/passwd).

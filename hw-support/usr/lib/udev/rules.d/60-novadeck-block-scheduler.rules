@@ -1,0 +1,6 @@
+# Use BFQ (fairer interactive latency under game+shader load) with a deep 4MB
+# read-ahead on the SD/eMMC boot device. Kernel builds CONFIG_IOSCHED_BFQ=y.
+# NOTE: scoped to mmcblk (the SD card novadeck boots from today). A future
+# install-to-UFS target enumerates as scsi/sd*, not mmcblk, so it won't match
+# this rule — revisit when the UFS install path lands.
+ACTION=="add|change", KERNEL=="mmcblk[0-9]", ATTR{queue/scheduler}="bfq", ATTR{queue/read_ahead_kb}="4096"

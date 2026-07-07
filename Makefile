@@ -74,6 +74,11 @@ OVERLAY_PKGBUILDS := $(wildcard packages/*/PKGBUILD)
 # so the repo is shared at work/repo/<arch>/.
 OVERLAY_ARCH    ?= aarch64
 OVERLAY_DB      := work/repo/$(OVERLAY_ARCH)/novadeck.db.tar.zst
+# Content stamp advanced by build-overlay.sh ONLY when it actually re-indexes (a package really
+# rebuilt). base keys off THIS, not novadeck.db's mtime — the script bumps the db even on a no-op
+# run (to stop make re-invoking it), and that spurious bump used to cascade the whole expensive
+# customize-base off a byte-identical repo.
+OVERLAY_STAMP   := work/repo/$(OVERLAY_ARCH)/.overlay.stamp
 BASE_STAMP   := work/.base.stamp
 KERNEL       := $(OUT)/Image.gz
 ROOTFS       := $(OUT)/images/rootfs.img
@@ -165,6 +170,14 @@ $(STEAM_SEED): steam/STEAM_SEED.pin steam/fetch-steam-seed.sh
 $(OVERLAY_DB): base-devel.digest $(OVERLAY_PINS) $(OVERLAY_PATCHES) $(OVERLAY_PKGBUILDS)
 	packages/build-overlay.sh
 
+# build-overlay.sh writes .overlay.stamp itself, but only after a real re-index. Tie it to the db
+# rule as an ORDER-ONLY prereq (| ...) so building the db creates the repo without the db's
+# always-bumped mtime dragging the stamp — and thus base — forward. The recipe only seeds the stamp
+# on first migration (from the db's own mtime, so it does not cascade); steady-state advances come
+# from the script. Order-only means make refreshes this target only when it is MISSING.
+$(OVERLAY_STAMP): | $(OVERLAY_DB)
+	@[ -e $@ ] || touch -r $(OVERLAY_DB) $@
+
 # ==============================================================================
 # Base rootfs (host — customize-base.sh drives docker + qemu binfmt itself)
 # ==============================================================================
@@ -177,7 +190,7 @@ $(BASE_STAMP): base.digest $(PREBUILT_PINS)
 # from it and folds its content hash into the reuse-cache key. Wire it as a prerequisite only
 # when source.pin packages exist, so a repo with no overlay still builds normally.
 ifneq ($(OVERLAY_PINS),)
-$(BASE_STAMP): $(OVERLAY_DB)
+$(BASE_STAMP): $(OVERLAY_STAMP)
 endif
 
 # ==============================================================================

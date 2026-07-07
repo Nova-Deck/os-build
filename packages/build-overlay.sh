@@ -231,5 +231,10 @@ docker run --rm --platform linux/arm64 \
     chown -R "$HOSTUID:$HOSTGID" /repo
   ' >&2
 
+# Advance the content stamp — base/customize-base keys off THIS, not novadeck.db's mtime (which the
+# no-rebuild branch above bumps on a no-op run). So the expensive base rebuild fires only here, when
+# a package actually rebuilt and the repo was re-indexed.
+touch "$REPO_DIR/.overlay.stamp"
+
 echo "[overlay] built repo: ${REPO_DIR#"$ROOT"/}" >&2
 ls -1 "$REPO_DIR"/*.pkg.tar.zst >&2

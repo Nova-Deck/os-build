@@ -151,6 +151,10 @@ rationale lives in the linked memories and commit history.
 - [ ] **Brightness up/down hotkeys — unverified** — `novadeck-hotkeyd` maps KEY_BRIGHTNESSUP/DOWN, but
   the Pocket S2 raw capture only showed `KEY_VOLUMEUP`, so the board likely has no physical brightness
   keys (harmless if absent). Confirm whether any board emits brightness keysyms; if not, this is moot.
+  **Possible workaround if there are no dedicated keys:** map a **chord** (e.g. a function/hotkey button +
+  vol-/vol+) to `KEY_BRIGHTNESSDOWN`/`KEY_BRIGHTNESSUP` via **InputPlumber**, so brightness gets a control
+  surface even without physical brightness keys — `novadeck-hotkeyd` already handles those keysyms.
+  See [[sm8650-inputplumber-input]].
 
 - [x] **Display color controls — RESOLVED** — confirmed working (user, 2026-07-05): the `--steam`
   handshake + R/T sockets (cabb498) gave SteamUI's color pipeline a channel, and the
@@ -250,16 +254,13 @@ rationale lives in the linked memories and commit history.
   **NEXT: build image → HW-verify night mode toggles to correct amber (not red/magenta), and that
   the intensity slider still modulates it (amount stays live).**
 
-- [ ] **Volume up/down keys don't change volume** — pressing a vol-/vol+ key brings up the SteamUI
-  volume popup but the level doesn't move; the SteamUI Quick-Access volume **slider** works, and
-  `wpctl`/PipeWire volume is fine. So audio + the SteamUI action both work — the gap is the **key → set
-  volume** binding: the keycode is delivered (popup appears) but not wired to the volume action. Same
-  shape as the brightness slider (appears, inert) and the `novadeck-waked` libinput mapping. Check
-  whether it's an **InputPlumber** mapping (the vol keys emitting the wrong evdev codes / not the ones
-  SteamUI's volume handler listens for) vs a missing gamescope/`STEAM_*` keybind; confirm what
-  `KEY_VOLUMEUP/DOWN` the panel emits and whether SteamUI expects them via gamescope's key handling.
-  See [[sm8650-inputplumber-input]], [[suspend-freeze-wake-design]],
-  [[sm8650-gamescope-session-plumbing]].
+- [x] **Volume up/down keys don't change volume** — RESOLVED (works, user-confirmed) — **duplicate of
+  the closed "Volume buttons don't change volume (OSD shows, no change)" item above.** Fixed by the
+  `novadeck-hotkeyd` daemon (`libinput debug-events` → `wpctl` in the deck PipeWire session; Steam's OSD
+  follows the sink), HW-validated 2026-07-05. The old "missing gamescope/`STEAM_*` keybind" hypothesis
+  was a DEAD END: there is no OS-level volume-key handler in SteamOS/Armada (client-only; the arm64
+  client no-ops it), so there was nothing to wire through gamescope — an external daemon is the fix.
+  See [[brightness-volume-keys-resolved]], [[sm8650-inputplumber-input]].
 
 - [x] **Adopt SteamUI-expected session defaults — DONE** — user-confirmed 2026-07-05; the defaults
   below were ported alongside the `--steam` handshake + SteamUI env gates (cabb498, 0970590).

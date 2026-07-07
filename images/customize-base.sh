@@ -228,6 +228,15 @@ docker run --name "$cid" --platform linux/arm64 -v "$PREBUILT_DIR":/prebuilt:ro 
   fi
   pacman -Sy --noconfirm --needed --disable-download-timeout '"${INSTALL_PKGS[*]}"'
 
+  # Compile the en_US.UTF-8 locale. The holo base ships /etc/locale.conf with
+  # LANG=en_US.UTF-8 and /etc/locale.gen with that entry uncommented, but never runs
+  # locale-gen — so /usr/lib/locale holds only C.utf8 and anything honouring LANG
+  # (native Steam, CEF, games) silently falls back to C. Ensure the entry then compile
+  # it into the RO root now. (Arch equivalent of Fedora glibc-langpack-en; not a
+  # pressure-vessel need here — pressure-vessel is dropped, we launch raw on host.)
+  grep -q "^en_US.UTF-8 UTF-8" /etc/locale.gen || echo "en_US.UTF-8 UTF-8" >>/etc/locale.gen
+  locale-gen
+
   # Precompiled external packages staged + verified by the host (packages/*/prebuilt.pin):
   # extract each into the rootfs with its pinned strip-components, then record the manifest
   # in the base so the host reuse-check detects pin changes. Archive roots differ, so strip

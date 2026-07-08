@@ -17,6 +17,39 @@ rationale lives in the linked memories and commit history.
   fail-fast "missing patch" guard preserved. See [[overlay-package-pipeline]],
   [[overlay-isolate-per-package-container]], [[content-hash-cache-pattern]].
 
+- [ ] **Ship FEX + CachyOS Proton as the bundled compat tool; rewire `proton11sc`/`novadeck-chain`**
+  — today the arm64 x86-game path leans entirely on **Valve precompiled runtimes the user must fetch
+  from their own Steam library after OOBE**: SLR 4.0 Arm64 container (appid 4185400) → Proton 11 ARM64
+  (appid 4628740, which carries Valve's WoW64 FEX `libwow64fex.dll`/`libarm64ecfex.dll`). Our compat
+  tool `compatibilitytools.d/proton11sc/novadeck-chain` self-chains those two so the client never has
+  to resolve Proton's Deckard-gated `require_tool 4185400`. **Goal:** ship **CachyOS Proton
+  (`proton-cachyos`, its arm64/FEX build)** *baked on the image together with **FEX**, so both the
+  x86→arm64 translation layer and Proton travel with novadeck instead of depending on two Valve depots
+  the user installs post-OOBE — removes the fetch-two-runtimes friction and the chain's `require_tool`
+  workaround. **Work:** (a) package **FEX** (fex-emu) — decide prebuilt pin vs from-source overlay,
+  pin the exact rootfs/thunk layout; (b) add `proton-cachyos` (arm64) as a baked compat tool — verify
+  the exact upstream artifact/source and whether it still needs an SLR container or is self-contained;
+  (c) rewire `novadeck-chain` + `toolmanifest.vdf` + `compatibilitytool.vdf` to invoke CachyOS Proton
+  with our FEX instead of chaining 4185400→4628740; (d) bake via `customize-base.sh`/`assemble-rootfs.sh`
+  (overlay or prebuilt pin per [[overlay-package-pipeline]] / [[sm8650-firmware-sourcing]]); (e)
+  HW-validate an x86 game launches end-to-end on the new stack (Gravity Circuit + Parking Garage Rally
+  Circuit). **NOTE — this deliberately REVERSES the earlier "use Valve's precompiled FEX, do NOT ship
+  our own" stance** (user 2026-07-08). See [[steam-native-arm64-launch-chain]],
+  [[steam-deckard-fex-investigation]], [[steam-launch-flags-no-pinned-client]].
+
+- [ ] **QuickAccess frame-rate limiter has no effect in-game** — the SteamUI Performance FPS cap
+  doesn't limit the framerate on HW (user, 2026-07-08). This is a gamescope path, NOT mangohud (the
+  perf overlay toggle + Level are HW-verified working in-game as of the same day —
+  [[mangohud-quickaccess-control-gap]]). Mechanism: gamescope's `steamcompmgr` caps commits via
+  `g_nSteamCompMgrTargetFPS` / `steamcompmgr_set_app_refresh_cycle_override()` (vblank-divisor pacing,
+  `steamcompmgr.cpp` ~5647-5673) and writes a `limiter_enabled` u32 flag to `GAMESCOPE_LIMITER_FILE`
+  (~5590). Cheap decisive probe: set an FPS cap in-game and read byte 0 of `$GAMESCOPE_LIMITER_FILE`
+  (from gamescope's `/proc/<pid>/environ`) — flips to `1` = client reached gamescope (cap engaged, chase
+  the pacing / dynamic-refresh path); stays `0` = the client→gamescope override isn't landing (check the
+  driving control channel / STEAM_* gate + whether the connector exposes valid dynamic refresh rates,
+  `GetValidDynamicRefreshRates()`). Also check `STEAM_GAMESCOPE_DYNAMIC_FPSLIMITER` (the WSI-layer
+  limiter path). See [[sm8650-gamescope-session-plumbing]], [[chimeraos-gamescope-session-reference]].
+
 - [ ] **Switch InputPlumber virtual device from DS5 to Xbox Elite** — `devices/inputplumber/devices.d/
   01-ayaneo-controller.yaml` emulates a DualSense (`target_devices: [ds5, keyboard]`). Switch the
   emulated pad to the Xbox Elite target (verify the exact InputPlumber target id, e.g. `xbox-elite`)
@@ -353,7 +386,7 @@ rationale lives in the linked memories and commit history.
   not port). Fits the Phase-4 manifest/immutable model. See
   [[install-to-ufs-sdcard-library-goal]], [[grow-home-repart-no-initramfs]], [[rootfs-build-approach]].
 
-- [x] **MangoHud performance overlay via `--mangoapp`** — DONE (build-infra, NOT yet HW-validated).
+- [x] **MangoHud performance overlay via `--mangoapp`** — DONE + HW-validated 2026-07-08.
   Confirmed `mangohud`/`mangoapp` are NOT in the holo aarch64 repos (no `mango*` in the pinned base's
   synced core/extra dbs; gamescope/mesa/openal do resolve), so shipped as a from-source overlay like
   gtk2/sddm: `packages/mangohud/` (local `PKGBUILD` @ MangoHud 0.8.4, `-Dmangoapp=true
@@ -364,19 +397,24 @@ rationale lives in the linked memories and commit history.
   our SM8650 Adreno 750). Added `mangohud` to `customize-base.sh` PKGS (installs ahead of holo from
   the [novadeck] overlay) and pass `--mangoapp` to gamescope in `session/usr/bin/novadeck-session`
   (in the `--steam`/`-T` stats block; `--mangoapp` verified present in our gamescope 3.16.23.2).
-  **HW to validate:** (1) build the overlay pkg cleanly under qemu (patches apply @ 0.8.4); (2) the
-  overlay renders in-session and SteamUI Performance toggles its level over the stats pipe; (3) the
-  earlier launch-crash is GONE now that `mangohud` exists on-image; (4) the GPU/temp/battery/RAM
-  fields read correct values on SM8650 — if a field is wrong, adjust the sysfs paths in the patches
-  (`/sys/class/devfreq/3d00000.gpu`, `gpuss_0_thermal` hwmon, `/sys/class/power_supply/battery`), see
-  `packages/mangohud/patches/README.md`. See [[sm8650-gamescope-session-plumbing]],
-  [[holo-pacman-no-gtk2]], [[overlay-package-pipeline]].
-  **Severity (HW 2026-07-07):** this isn't cosmetic — enabling the Quick Access performance overlay
-  *crashed game launches*. Steam prepends `mangohud` to the launch command
-  (`reaper … -- mangohud <compat-tool> …`); with no `mangohud` on the image the process was added
-  and removed in the same second (instant exec failure, before the compat tool runs). Confirmed on
-  Gravity Circuit via `proton11sc`: identical launch ran fine without the overlay, died the moment
-  the overlay was toggled on.
+  **HW-validated 2026-07-08:** (1) the overlay pkg builds cleanly under qemu (all 6 patches apply @
+  0.8.4); (2) the overlay renders in-session and the SteamUI Quick-Access **Performance** toggle +
+  Level drive it live over the control channel — **both** paths confirmed on device: the SysV
+  `no_display` control queue (show/hide) *and* the config-file + reload (level). **No source patch
+  needed** — the earlier "reload ignores `MANGOHUD_CONFIGFILE`, must patch it" theory is DISPROVEN by
+  the 0.8.4 source + live tests; our pkg == armada's exactly. Key gotcha: the perf overlay is **gated
+  on a focused GAME** (mangoapp self-suppresses while the Steam UI / appid 769 is focused), so
+  toggling it in the library is a no-op *by design* — exercise it in-game. `gamescope --steam
+  --mangoapp` sets `MANGOHUD_CONFIGFILE` + the `STEAM_*` gates itself (don't add them to the session).
+  (3) the earlier launch-crash is GONE now that `mangohud` exists on-image. See
+  [[mangohud-quickaccess-control-gap]], [[sm8650-gamescope-session-plumbing]], [[holo-pacman-no-gtk2]],
+  [[overlay-package-pipeline]].
+  **Severity (HW 2026-07-07):** this wasn't cosmetic — with no `mangohud` on the image, enabling the
+  Quick Access performance overlay *crashed game launches*. Steam prepends `mangohud` to the launch
+  command (`reaper … -- mangohud <compat-tool> …`); the process was added and removed in the same
+  second (instant exec failure, before the compat tool runs). Confirmed on Gravity Circuit via
+  `proton11sc`: identical launch ran fine without the overlay, died the moment the overlay was toggled
+  on. Shipping `mangoapp` closes that too.
 
 - [ ] **Faster arm64 package builds: qemu-master + native distcc cross-compiler** — the overlay
   packages currently build inside an emulated aarch64 environment (slow — qemu runs the compiler

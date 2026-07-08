@@ -1,0 +1,88 @@
+# novadeck mangohud — built FROM SOURCE via this novadeck-owned PKGBUILD (referenced by
+# packages/mangohud/source.pin: pkgbuild_local), NOT fetched from the holo monorepo, which ships no
+# mangohud at all. This is a lean recipe distilled from the Arch `mangohud` package (same upstream,
+# MangoHud 0.8.4) plus armada/ROCKNIX's meson flags + Qualcomm patch set, tailored for an arm64
+# Adreno handheld:
+#   * -Dmangoapp=true      → build the mangoapp overlay binary gamescope spawns via --mangoapp
+#   * -Dmangohudctl=true   → the mangohudctl control client (SteamUI toggles the overlay level)
+#   * -Duse_system_spdlog  → link holo's spdlog/fmt instead of a bundled wrap copy
+#   * -Dwith_xnvctrl=disabled → NVIDIA XNVCtrl is x86-desktop-only; this is an Adreno part
+# The 6 patches (packages/mangohud/patches/, applied by build-overlay.sh after `cd MangoHud`) teach
+# GPU_fdinfo / BatteryStats / the HUD to read a Qualcomm SoC (kgsl/devfreq GPU clock, `battery`
+# power-supply, RAM label) — without them the overlay shows no/garbage GPU+battery data on Adreno.
+# See packages/mangohud/source.pin for the "why", packages/mangohud/patches/README.md for provenance.
+#
+# To bump: change pkgver, re-verify the patches apply against the new tag, re-roll any that fail.
+#
+# Based on the Arch Linux mangohud package:
+#   Maintainer: Jan Alexander Steffens (heftig) <heftig@archlinux.org>
+
+pkgname=mangohud
+pkgver=0.8.4
+pkgrel=1
+pkgdesc='Vulkan and OpenGL overlay for monitoring FPS, temperatures, CPU/GPU load and more'
+arch=(x86_64 aarch64)
+url=https://github.com/flightlessmango/MangoHud
+license=(MIT)
+# NOTE: no python/python-matplotlib/python-numpy here. Those are pulled ONLY by `mangoplot`, a
+# desktop helper that renders a PNG graph of a logged benchmark session — useless on a handheld,
+# and its matplotlib+numpy+PIL+BLAS/LAPACK chain bloats the image by ~120MB. We build with
+# -Dmangoplot=disabled (below), so the overlay (mangoapp) — which links none of that — ships lean.
+depends=(
+  dbus
+  fmt
+  gcc-libs
+  glfw
+  glibc
+  hicolor-icon-theme
+  libglvnd
+  libx11
+  libxkbcommon
+  spdlog
+  vulkan-icd-loader
+  wayland
+)
+makedepends=(
+  appstream
+  git
+  glslang
+  libxrandr
+  meson
+  ninja
+  nlohmann-json
+  python-mako
+  vulkan-headers
+  wayland-protocols
+)
+source=(
+  "git+https://github.com/flightlessmango/MangoHud.git#tag=v${pkgver}"
+)
+b2sums=('SKIP')
+
+prepare() {
+  cd MangoHud
+  # build-overlay.sh inserts the `patch -p1 < "$srcdir/00NN-*.patch"` steps right here (after this
+  # first `cd`), then fetch the meson subprojects the build still needs from wraps (imgui, etc.).
+  meson subprojects download
+}
+
+build() {
+  arch-meson MangoHud build \
+    -Dmangoapp=true \
+    -Dmangohudctl=true \
+    -Dinclude_doc=true \
+    -Duse_system_spdlog=enabled \
+    -Dwith_wayland=enabled \
+    -Dwith_xnvctrl=disabled \
+    -Dmangoplot=disabled \
+    -Dtests=disabled \
+    -Dwith_fex=true
+  meson compile -C build
+}
+
+package() {
+  DESTDIR="${pkgdir}" meson install -C build
+  install -Dm 644 MangoHud/LICENSE -t "${pkgdir}/usr/share/licenses/${pkgname}/"
+}
+
+# vim: ts=2 sw=2 et:

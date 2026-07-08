@@ -170,13 +170,18 @@ $(STEAM_SEED): steam/STEAM_SEED.pin steam/fetch-steam-seed.sh
 $(OVERLAY_DB): base-devel.digest $(OVERLAY_PINS) $(OVERLAY_PATCHES) $(OVERLAY_PKGBUILDS)
 	packages/build-overlay.sh
 
-# build-overlay.sh writes .overlay.stamp itself, but only after a real re-index. Tie it to the db
-# rule as an ORDER-ONLY prereq (| ...) so building the db creates the repo without the db's
-# always-bumped mtime dragging the stamp — and thus base — forward. The recipe only seeds the stamp
-# on first migration (from the db's own mtime, so it does not cascade); steady-state advances come
-# from the script. Order-only means make refreshes this target only when it is MISSING.
-$(OVERLAY_STAMP): | $(OVERLAY_DB)
-	@[ -e $@ ] || touch -r $(OVERLAY_DB) $@
+# Advance .overlay.stamp only when the overlay repo's CONTENT actually changed, and do it in THIS
+# target's own recipe so make observes the new mtime within the same invocation (base depends on
+# this stamp). Keying on the db's sha (not its mtime) is what lets build-overlay.sh keep bumping
+# novadeck.db's mtime on a no-op run WITHOUT cascading into a base rebuild: the sha is unchanged, so
+# the stamp is left alone. A REAL re-index changes the sha, we touch the stamp, and base rebuilds
+# right away — the previous ORDER-ONLY `| $(OVERLAY_DB)` form could not, because the stamp was
+# advanced as a side effect of the DB rule and make never re-stat'd it mid-run (a stale-mtime miss
+# that silently shipped a base built against the OLD overlay). $@.sha persists the last-seen hash.
+$(OVERLAY_STAMP): $(OVERLAY_DB)
+	@newsha=$$(sha256sum $(OVERLAY_DB) | cut -d' ' -f1); \
+	 [ "$$(cat $@.sha 2>/dev/null)" = "$$newsha" ] || { printf '%s\n' "$$newsha" > $@.sha; touch $@; }
+	@[ -e $@ ] || touch $@   # first-ever run: ensure the stamp exists even if the sha file seeded it
 
 # ==============================================================================
 # Base rootfs (host — customize-base.sh drives docker + qemu binfmt itself)

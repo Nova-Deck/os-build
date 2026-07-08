@@ -353,18 +353,27 @@ rationale lives in the linked memories and commit history.
   not port). Fits the Phase-4 manifest/immutable model. See
   [[install-to-ufs-sdcard-library-goal]], [[grow-home-repart-no-initramfs]], [[rootfs-build-approach]].
 
-- [ ] **MangoHud performance overlay via `--mangoapp`** — ship the Deck-style FPS/perf overlay.
-  Add `mangohud` (+ its `mangoapp` companion) to the image (`customize-base.sh` PKGS if it resolves
-  in the holo repo, else a `packages/` overlay build), and pass `--mangoapp` to gamescope in the
-  novadeck session launch (`session/` gamescope-session). This is how SteamOS/Armada/ROCKNIX drive
-  the overlay: gamescope spawns `mangoapp` as an in-session overlay window and SteamUI's
-  Performance settings toggle its level — so it wires up to the existing Deck UI, no extra config.
-  Confirm the arm64 `mangohud`/`mangoapp` packages exist in holo before adding (cf.
-  [[holo-pacman-no-gtk2]] — don't assume a package resolves), and that gamescope was built with
-  mangoapp support. See [[sm8650-gamescope-session-plumbing]].
-  **Severity bump (HW 2026-07-07):** this isn't cosmetic — enabling the Quick Access performance
-  overlay currently *crashes game launches*. Steam prepends `mangohud` to the launch command
-  (`reaper … -- mangohud <compat-tool> …`); with no `mangohud` on the image the process is added
+- [x] **MangoHud performance overlay via `--mangoapp`** — DONE (build-infra, NOT yet HW-validated).
+  Confirmed `mangohud`/`mangoapp` are NOT in the holo aarch64 repos (no `mango*` in the pinned base's
+  synced core/extra dbs; gamescope/mesa/openal do resolve), so shipped as a from-source overlay like
+  gtk2/sddm: `packages/mangohud/` (local `PKGBUILD` @ MangoHud 0.8.4, `-Dmangoapp=true
+  -Dmangohudctl=true` + system spdlog, NVIDIA XNVCtrl off) plus the ROCKNIX Qualcomm/SM85xx patch set
+  as carried by armada (`packages/mangohud/patches/0001..0006`, applied by `build-overlay.sh`) that
+  teaches GPU_fdinfo/BatteryStats/HUD to read an Adreno SoC (kgsl/devfreq GPU clock+temp, `battery`
+  power-supply, RAM label) — all 6 taken, incl. the SM8550/SM8750 device patches (closest match for
+  our SM8650 Adreno 750). Added `mangohud` to `customize-base.sh` PKGS (installs ahead of holo from
+  the [novadeck] overlay) and pass `--mangoapp` to gamescope in `session/usr/bin/novadeck-session`
+  (in the `--steam`/`-T` stats block; `--mangoapp` verified present in our gamescope 3.16.23.2).
+  **HW to validate:** (1) build the overlay pkg cleanly under qemu (patches apply @ 0.8.4); (2) the
+  overlay renders in-session and SteamUI Performance toggles its level over the stats pipe; (3) the
+  earlier launch-crash is GONE now that `mangohud` exists on-image; (4) the GPU/temp/battery/RAM
+  fields read correct values on SM8650 — if a field is wrong, adjust the sysfs paths in the patches
+  (`/sys/class/devfreq/3d00000.gpu`, `gpuss_0_thermal` hwmon, `/sys/class/power_supply/battery`), see
+  `packages/mangohud/patches/README.md`. See [[sm8650-gamescope-session-plumbing]],
+  [[holo-pacman-no-gtk2]], [[overlay-package-pipeline]].
+  **Severity (HW 2026-07-07):** this isn't cosmetic — enabling the Quick Access performance overlay
+  *crashed game launches*. Steam prepends `mangohud` to the launch command
+  (`reaper … -- mangohud <compat-tool> …`); with no `mangohud` on the image the process was added
   and removed in the same second (instant exec failure, before the compat tool runs). Confirmed on
   Gravity Circuit via `proton11sc`: identical launch ran fine without the overlay, died the moment
   the overlay was toggled on.

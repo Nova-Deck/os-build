@@ -231,10 +231,10 @@ docker run --rm --platform linux/arm64 \
     chown -R "$HOSTUID:$HOSTGID" /repo
   ' >&2
 
-# Advance the content stamp — base/customize-base keys off THIS, not novadeck.db's mtime (which the
-# no-rebuild branch above bumps on a no-op run). So the expensive base rebuild fires only here, when
-# a package actually rebuilt and the repo was re-indexed.
-touch "$REPO_DIR/.overlay.stamp"
-
+# NOTE: we do NOT advance work/repo/<arch>/.overlay.stamp here. The Makefile's $(OVERLAY_STAMP) rule
+# owns it, keyed on the CONTENT hash of the re-indexed novadeck.db — so a real re-index (db content
+# changed) advances the stamp and rebuilds the base within the SAME make run, while the db-mtime bump
+# on a no-op run (above) does not cascade. Touching it here too was redundant AND could only advance
+# it as a side effect the same make invocation never re-stat'd (the stale-mtime miss the rule fixes).
 echo "[overlay] built repo: ${REPO_DIR#"$ROOT"/}" >&2
 ls -1 "$REPO_DIR"/*.pkg.tar.zst >&2

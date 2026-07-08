@@ -127,6 +127,18 @@ mkfifo "$GS_STARTUP" "$GS_STATS"
 export GAMESCOPE_STATS="$GS_STATS"
 GS_ARGS="$GS_ARGS --steam --xwayland-count 2 -R $GS_STARTUP -T $GS_STATS"
 
+# --mangoapp: gamescope spawns the `mangoapp` overlay as an in-session window (SpawnProcessInWatchdog)
+# and, because we also pass --steam, sets up the ENTIRE control channel itself: it creates
+# MANGOHUD_CONFIGFILE (seeded `no_display`) and exports the STEAM_USE_MANGOAPP / *_PRESETS_SUPPORTED /
+# *_HORIZONTAL_SUPPORTED / DISABLE_MANGOAPP_ATOM_WORKAROUND gates the GamepadUI reads. So SteamUI's
+# Quick-Access "Performance" toggle + Level then drive the overlay (via the SysV control queue for
+# no_display and the config file + reload for the level) with NO extra session setup — HW-verified
+# 2026-07-08, matches the Valve/ChimeraOS session env exactly. The overlay is gated on a focused game
+# (it self-suppresses while the Steam UI is focused). `mangoapp` is our from-source overlay build
+# (packages/mangohud) — REQUIRED on the image: the Steam client also prepends `mangohud` to the game
+# launch command when the overlay is enabled, so a missing binary crashes the launch.
+GS_ARGS="$GS_ARGS --mangoapp"
+
 # Persist the user's resolution/refresh pick across boots (gamescope writes it here).
 export GAMESCOPE_MODE_SAVE_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/gamescope/modes.cfg"
 mkdir -p "$(dirname "$GAMESCOPE_MODE_SAVE_FILE")" 2>/dev/null || true

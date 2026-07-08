@@ -88,7 +88,13 @@ DEST="$ROOT/work/base"
 # && wheel) authorizes Wi-Fi + timezone — no "no-active" bypass rule. NOT in the holo repos, so it is
 # built from source into the [novadeck] overlay (packages/sddm) and resolves here. The `sddm` system
 # user it needs is baked below (the RO root can't run systemd-sysusers at boot to persist /etc/passwd).
-PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-tools mesa gamescope seatd sddm bluez bluez-utils networkmanager alsa-ucm-conf pipewire wireplumber pipewire-pulse pipewire-alsa unzip openal gtk2 ffmpeg e2fsprogs xorg-xwayland lsof noto-fonts noto-fonts-cjk noto-fonts-emoji)
+# mangohud: the Deck-style FPS/perf overlay, spawned by gamescope's --mangoapp (session/usr/bin/
+# novadeck-session passes it) and toggled by SteamUI's Performance settings. NOT cosmetic — the Steam
+# client prepends `mangohud` to every game launch command when the Quick-Access perf overlay is on, so
+# with no mangohud on the image toggling it CRASHES the launch (HW 2026-07-07). NOT in the holo repos
+# (no mango* in the synced core/extra dbs), so it is built from source into the [novadeck] overlay
+# (packages/mangohud, with the Qualcomm/Adreno GPU+battery patches) and resolves here.
+PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-tools mesa gamescope seatd sddm mangohud bluez bluez-utils networkmanager alsa-ucm-conf pipewire wireplumber pipewire-pulse pipewire-alsa unzip openal gtk2 ffmpeg e2fsprogs xorg-xwayland lsof noto-fonts noto-fonts-cjk noto-fonts-emoji)
 
 # Test-only packages — installed ONLY under NOVADECK_TEST=1, NEVER in a release base.
 # On-device bring-up tools: evtest reads raw /dev/input events; usbutils provides lsusb.

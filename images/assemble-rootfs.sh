@@ -1,13 +1,20 @@
 #!/usr/bin/env bash
 # novadeck read-only root assembler — Phase 4.
 #
-# Builds the Btrfs root image RAUC writes to a slot: stages a base rootfs, injects
-# the novadeck kernel + dtbs (from kernel/build.sh) and the device firmware
-# (from firmware/fetch-qcom-fw.sh), then bakes a single-subvolume Btrfs image with
-# `mkfs.btrfs --rootdir` — no root, no loop mount.
+# Stages a base rootfs, injects the novadeck kernel + dtbs (from kernel/build.sh) and the
+# device firmware (from firmware/fetch-qcom-fw.sh), then splits the staged tree into the
+# THREE filesystem images the partition table wants (images/partition-table.txt):
 #
-# The image content is read-only by construction; the subvolume's ro *property* is
-# set by RAUC at deploy time (needs a mount), so it is not applied here.
+#   out/images/rootfs.img  btrfs, ro   -> rootfs-a   the sealed system
+#   out/images/var.img     ext4,  rw   -> var-a      writable state + the /etc overlay upper
+#   out/images/seed.img    squashfs    -> seed       the shared offline factory-reset source
+#
+# All three are built unprivileged: `mkfs.btrfs --rootdir`, `mkfs.ext4 -d`, `mksquashfs` —
+# no root, no loop mount.
+#
+# The root's content is read-only by construction; the subvolume's ro *property* is
+# set by RAUC at deploy time (needs a mount), so it is not applied here. The kernel mounts
+# it `ro` regardless (see boot/cmdline + images/initramfs/init).
 #
 #   images/assemble-rootfs.sh <base-rootfs-dir>
 #   BASE_ROOTFS=<dir> images/assemble-rootfs.sh
@@ -24,7 +31,10 @@ FW="$ROOT/firmware/qcom-fw"
 LFW="$ROOT/firmware/linux-fw"
 IMGDIR="$OUT/images"
 IMG="$IMGDIR/rootfs.img"
-SIZE="${ROOTFS_SIZE:-5G}"   # matches rootfs-a/-b in partition-table.txt; --shrink trims it
+VARIMG="$IMGDIR/var.img"     # -> var-a  (ext4, carries the /etc overlay upper+work)
+SEEDIMG="$IMGDIR/seed.img"   # -> seed   (squashfs, ro, SHARED across both root slots)
+SIZE="${ROOTFS_SIZE:-5G}"       # matches rootfs-a/-b in partition-table.txt; --shrink trims it
+VAR_SIZE_MIB="${VAR_SIZE_MIB:-256}"   # matches var-a/-b in partition-table.txt (a hard ceiling)
 
 [ -n "$BASE" ]        || { echo "usage: assemble-rootfs.sh <base-rootfs-dir>" >&2; exit 2; }
 [ -d "$BASE" ]        || { echo "no base rootfs dir: $BASE" >&2; exit 2; }
@@ -73,6 +83,13 @@ if [ -d "$MODROOT/lib/modules" ]; then
 else
   echo "  (no staged modules at ${MODROOT#"$ROOT"/} — run kernel/build.sh; built-in drivers only)"
 fi
+
+# 2c. /efi mountpoint for the ESP (p1, the only ef00 on the disk). systemd's gpt-auto generator
+# finds the ESP by type GUID and emits an automount here: mounted on first access, unmounted
+# again after 120s idle. The root is read-only, so this directory cannot be created at runtime —
+# without it the automount fails and the system boots degraded. A/B updates reach the boot image
+# through this path, since the bootloader only ever reads p1.
+install -dm0755 "$stage/efi"
 
 # 3. device-proprietary firmware under /lib/firmware (paths are already /lib/firmware-relative).
 # Fetched from the qcom-firmwares repo by firmware/fetch-qcom-fw.sh.
@@ -205,9 +222,13 @@ fi
 #    its bytes ONLY as the reset-proof recovery source; the seeder is therefore left UNENABLED (no
 #    boot-time run) and is invoked on demand by a factory-reset flow. Steam self-updates the rest of
 #    the UI on first launch (curl/unzip/tar stay in the base for that). See devices/bringup-phase3.md.
-#    Phase-4 refinement: in the A/B layout this seed should move to a SHARED recovery location, not be
-#    duplicated in both sealed root slots (2x1.4G) — see partition-table.txt.
+#    It lives on its OWN SHARED squashfs partition (p8 novadeck-seed), mounted ro by the initramfs
+#    at /usr/share/novadeck/steam-seed — the same path steam-bootstrap.sh has always read. Inside a
+#    root slot it would be duplicated A+B (2x1.4G) and push both roots past 5G; as squashfs+zstd it
+#    is ~700M, once. The root only carries the empty mountpoint.
 STEAM="$ROOT/steam"
+seedstage="$(mktemp -d)"
+trap 'rm -rf "$stage" "$seedstage"' EXIT
 if [ -d "$STEAM/usr" ]; then
   echo "  injecting novadeck Steam shell from ${STEAM#"$ROOT"/}/usr (launcher + reset tool + OOBE stubs)"
   cp -a "$STEAM"/usr "$stage/"
@@ -217,10 +238,12 @@ if [ -d "$STEAM/usr" ]; then
              "$stage/usr/bin/steamos-polkit-helpers/steamos-update" \
              "$stage/usr/bin/steamos-polkit-helpers/jupiter-biosupdate"
   SEED="$ROOT/work/steam-seed"
+  # The mountpoint exists in the root whether or not a seed was staged — the initramfs mounts the
+  # shared seed partition onto it, and a missing dir would make that mount fail.
+  install -d -m0755 "$stage/usr/share/novadeck/steam-seed"
   if [ -x "$SEED/steamrtarm64/steam" ]; then
-    echo "  baking Steam RECOVERY seed from ${SEED#"$ROOT"/} -> /usr/share/novadeck/steam-seed ($(du -sh "$SEED" | cut -f1), offline factory-reset source)"
-    install -d -m0755 "$stage/usr/share/novadeck"
-    cp -a "$SEED" "$stage/usr/share/novadeck/steam-seed"
+    echo "  staging Steam RECOVERY seed from ${SEED#"$ROOT"/} -> $(basename "$SEEDIMG") ($(du -sh "$SEED" | cut -f1) raw, offline factory-reset source)"
+    cp -a "$SEED"/. "$seedstage/"
     # novadeck self-chaining Proton 11 ARM64 compat tool (proton11sc): registers a
     # user-selectable compat tool that runs Valve's Proton 11 ARM64 + bundled WoW64
     # FEX for x86 Windows games, chaining the SLR 4.0 Arm64 container itself so the
@@ -232,9 +255,9 @@ if [ -d "$STEAM/usr" ]; then
     CTOOLS="$STEAM/compatibilitytools.d"
     if [ -d "$CTOOLS" ]; then
       echo "  baking novadeck compat tool(s) from ${CTOOLS#"$ROOT"/} -> steam-seed/compatibilitytools.d"
-      install -d -m0755 "$stage/usr/share/novadeck/steam-seed/compatibilitytools.d"
-      cp -a "$CTOOLS"/. "$stage/usr/share/novadeck/steam-seed/compatibilitytools.d/"
-      chmod 0755 "$stage/usr/share/novadeck/steam-seed/compatibilitytools.d/proton11sc/novadeck-chain"
+      install -d -m0755 "$seedstage/compatibilitytools.d"
+      cp -a "$CTOOLS"/. "$seedstage/compatibilitytools.d/"
+      chmod 0755 "$seedstage/compatibilitytools.d/proton11sc/novadeck-chain"
     fi
   else
     echo "  WARNING: no Steam seed at ${SEED#"$ROOT"/} — run steam/fetch-steam-seed.sh (no offline factory-reset source)" >&2
@@ -266,9 +289,12 @@ fi
 # Grow the home PARTITION to fill the device with systemd-repart (declarative, online — it issues
 # a BLKPG resize so it works while the disk is in use, and relocates the GPT backup header for us).
 # The stock systemd-repart.service is initrd-only (no [Install], Before=initrd-root-fs.target) and
-# we have no initramfs, so ship our own unit running the same tool early in real-root boot, before
-# /home mounts. repart matches our partition by its discoverable "Linux /home" GUID (make-sdcard
-# gives p3 typecode 8302), so it can never touch the root partition.
+# our initramfs carries no systemd to run it, so ship our own unit running the same tool early in
+# real-root boot, before /home mounts. repart matches our partition by its discoverable "Linux
+# /home" GUID (typecode 8302 in images/partition-table.txt), so it can never touch the root
+# partition. That same GUID would make systemd's gpt-auto generator synthesize a competing
+# home.mount, so the partition also carries GPT bit 63 ("no-auto") — /etc/fstab below is the one
+# and only definition of home.mount.
 #
 # The ext4 grow used to ride SOLELY on x-systemd.growfs (mount-time). That RACED home.mount: on HW
 # the mount+growfs ran before repart's enlargement was visible, so the fs was sized to the flashed
@@ -373,9 +399,118 @@ ln -sf /usr/lib/systemd/system/novadeck-grow-home.service \
 # in real-root boot and FAILS the same way our old unit did: with no device argument it can't resolve
 # the btrfs /dev/root backing disk ("Cannot determine correct backing block device"), throwing a red
 # "Failed to start Repartition Root Disk" every boot. novadeck-grow-home replaces it (explicit disk +
-# resize2fs), so silence the duplicate. REVISIT at Phase-4 initramfs — the stock unit is meant to run
-# there (see the initramfs-phase4 note) and should be UNmasked when that path exists.
+# resize2fs), so silence the duplicate. It STAYS masked now that the initramfs exists: the stock unit
+# is initrd-only, and our initramfs is a plain shell script with no systemd in it to run the unit.
 ln -sf /dev/null "$stage/etc/systemd/system/systemd-repart.service"
+
+# 4h. OFFLOAD mounts (SteamOS layer). The root is read-only and /var is a 256M partition, so the
+# paths that grow without bound are bind-mounted out to the big shared /home partition, under
+# /home/.novadeck/offload/ (SteamOS uses /home/.steamos/offload — same idea, our namespace).
+#
+# Shape copied from SteamOS: NOT fstab bind lines, but one .mount unit per path plus a target that
+# groups them (cf. steamos-offload.target + var-log.mount et al in steamos-customizations). That
+# buys explicit ordering and one place to enable.
+#
+# /var/lib/docker is in SteamOS's set and omitted here — we ship no container runtime.
+#
+# novadeck-offload-prepare.service creates each directory on /home before the binds run, and SEEDS
+# it from whatever the read-only root already has at that path. The seeding is not cosmetic: the
+# TEST build bakes an SSH key into /root/.ssh, and an empty bind over /root would shadow it and lock
+# us out of the card. Same reasoning protects anything shipped in /opt or /srv.
+echo "  injecting offload binds: /opt /root /srv + var/{log,tmp,cache/pacman,lib/*} -> /home/.novadeck/offload"
+OFFLOAD_ROOT=/home/.novadeck/offload
+# unit-name<TAB>path pairs; unit names must be the systemd-escaped path (see systemd-escape -p).
+OFFLOAD_PATHS='opt root srv var/log var/tmp var/cache/pacman var/lib/flatpak var/lib/systemd/coredump'
+
+cat >"$stage/usr/lib/systemd/system/novadeck-offload.target" <<'UNIT'
+[Unit]
+Description=novadeck offload mounts (bind /opt, /root, /srv and the growable /var paths onto /home)
+Documentation=file:///usr/lib/novadeck/offload-prepare.sh
+# Ordered inside the local-fs stage: after /home is available, before anything that consumes these
+# paths. systemd-journal-flush (sysinit.target) runs later, so /var/log is already bound by then.
+After=home.mount novadeck-offload-prepare.service
+Requires=novadeck-offload-prepare.service
+Before=local-fs.target
+UNIT
+
+cat >"$stage/usr/lib/systemd/system/novadeck-offload-prepare.service" <<UNIT
+[Unit]
+Description=novadeck offload directory preparation (create + seed the bind targets on /home)
+DefaultDependencies=no
+RequiresMountsFor=/home
+After=home.mount
+Before=novadeck-offload.target local-fs.target shutdown.target
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/novadeck/offload-prepare.sh
+UNIT
+
+install -d -m0755 "$stage/usr/lib/novadeck"
+cat >"$stage/usr/lib/novadeck/offload-prepare.sh" <<PREPARE
+#!/bin/sh
+# Create each offload directory on /home and seed it, ONCE, from the read-only root's copy of that
+# path. Seeding matters: a bare empty bind over /root would hide the TEST build's baked
+# /root/.ssh/authorized_keys. Idempotent — a directory that already exists is left strictly alone,
+# so user data is never overwritten on later boots.
+set -eu
+
+OFFLOAD="$OFFLOAD_ROOT"
+
+for rel in $OFFLOAD_PATHS; do
+  dst="\$OFFLOAD/\$rel"
+  [ -d "\$dst" ] && continue
+  mkdir -p "\$dst"
+  # cp -a of the root's existing content (may be empty; /opt and /srv usually are).
+  if [ -d "/\$rel" ] && [ -n "\$(ls -A "/\$rel" 2>/dev/null)" ]; then
+    cp -a "/\$rel/." "\$dst/" || echo "[novadeck-offload] seeding \$dst from /\$rel failed" >&2
+  fi
+  # Mirror the root's mode/owner so e.g. /root stays 0700 root:root and /var/tmp stays 1777.
+  if [ -d "/\$rel" ]; then
+    chmod --reference="/\$rel" "\$dst" 2>/dev/null || :
+    chown --reference="/\$rel" "\$dst" 2>/dev/null || :
+  fi
+done
+PREPARE
+chmod 0755 "$stage/usr/lib/novadeck/offload-prepare.sh"
+
+# One .mount unit per offload path. The unit FILENAME must be the escaped mount point, else systemd
+# refuses to load it ("Where= setting doesn't match unit name").
+for rel in $OFFLOAD_PATHS; do
+  unit="$(echo "$rel" | tr '/' '-').mount"
+  cat >"$stage/usr/lib/systemd/system/$unit" <<UNIT
+[Unit]
+Description=novadeck offload bind of /$rel onto $OFFLOAD_ROOT/$rel
+Documentation=file:///usr/lib/novadeck/offload-prepare.sh
+DefaultDependencies=no
+RequiresMountsFor=/home
+After=novadeck-offload-prepare.service
+Requires=novadeck-offload-prepare.service
+Before=local-fs.target shutdown.target
+Conflicts=shutdown.target
+PartOf=novadeck-offload.target
+
+[Mount]
+What=$OFFLOAD_ROOT/$rel
+Where=/$rel
+Type=none
+Options=bind
+
+[Install]
+WantedBy=novadeck-offload.target
+UNIT
+  install -d -m0755 "$stage/etc/systemd/system/novadeck-offload.target.wants"
+  ln -sf "/usr/lib/systemd/system/$unit" "$stage/etc/systemd/system/novadeck-offload.target.wants/$unit"
+done
+
+# Enable the target itself (preset-proof, same pattern as grow-home: 60 < the stock 99 "disable *").
+echo "enable novadeck-offload.target" \
+  >>"$stage/usr/lib/systemd/system-preset/60-novadeck-storage.preset"
+install -d -m0755 "$stage/etc/systemd/system/local-fs.target.wants"
+ln -sf /usr/lib/systemd/system/novadeck-offload.target \
+       "$stage/etc/systemd/system/local-fs.target.wants/novadeck-offload.target"
 
 # 4b-audio. ALSA UCM2 machine profile (SteamOS layer C audio). A static overlay tree under
 # audio/ mirror-copied into the rootfs: the device's card-name-matched UCM2 profile so userland
@@ -602,8 +737,61 @@ if [ "$ov_uid" != "0" ]; then
   find "$stage" -uid "$ov_uid" -exec chown -h 0:0 {} +
 fi
 
-# 5. bake the Btrfs image (populate without mounting), then shrink to fit
 mkdir -p "$IMGDIR"
+
+# 5. carve /var out of the staged tree into its own ext4 image (partition var-a). The root is
+# sealed read-only, so every writable system path has to live here — including the /etc overlay's
+# upper+work dirs, which the initramfs stacks before handing off to systemd.
+#
+# The pacman package cache is 500M of downloaded .pkg.tar.zst that nothing reads at runtime; it
+# alone would blow the 256M partition. Drop it. (/var/cache/pacman is then a bind-mount target
+# onto /home, so a live `pacman -S` still has somewhere to put its downloads.)
+varstage="$stage/var"
+rm -rf "${varstage:?}/cache/pacman/pkg"
+
+# The overlay upper+work the initramfs expects. It creates them if missing, but shipping them means
+# first boot doesn't depend on that path working.
+install -d -m0755 "$varstage/lib/overlays/etc/upper" "$varstage/lib/overlays/etc/work"
+
+# Empty mountpoints for the offload binds that land under /var (the units bind /home over these).
+for rel in log tmp cache/pacman lib/flatpak lib/systemd/coredump; do
+  install -d -m0755 "$varstage/$rel"
+done
+chmod 1777 "$varstage/tmp"
+
+var_used_mib=$(du -sm "$varstage" | cut -f1)
+# ext4 metadata on a 256M fs costs a few MiB; refuse to build an image that cannot be populated
+# rather than emit a silently-truncated /var.
+if [ "$var_used_mib" -ge $(( VAR_SIZE_MIB - 32 )) ]; then
+  echo "staged /var is ${var_used_mib}MiB — does not fit the ${VAR_SIZE_MIB}MiB var partition" >&2
+  echo "(largest offenders below; trim them or raise var-a/-b in images/partition-table.txt)" >&2
+  du -sm "$varstage"/* 2>/dev/null | sort -rn | head -5 >&2
+  exit 1
+fi
+
+rm -f "$VARIMG"
+truncate -s "${VAR_SIZE_MIB}M" "$VARIMG"
+mkfs.ext4 -q -F -L novadeck-var -m0 -d "$varstage" "$VARIMG"
+echo "  ok   var    -> ${VARIMG#"$ROOT"/}  (${VAR_SIZE_MIB}MiB ext4, ${var_used_mib}MiB used)"
+
+# The root keeps only an empty /var mountpoint — the initramfs mounts var-a over it.
+rm -rf "${varstage:?}"
+install -d -m0755 "$varstage"
+
+# 6. the shared Steam recovery seed as a read-only squashfs (partition seed). zstd because both
+# SQUASHFS_ZSTD and the squashfs driver are =y in kernel.config. -all-root: the seed is copied out
+# to /home/deck by steam-bootstrap.sh, which chowns it there, so ownership in the blob is moot.
+if [ -n "$(ls -A "$seedstage" 2>/dev/null)" ]; then
+  rm -f "$SEEDIMG"
+  mksquashfs "$seedstage" "$SEEDIMG" \
+    -comp zstd -Xcompression-level 15 -noappend -all-root -no-progress >/dev/null
+  echo "  ok   seed   -> ${SEEDIMG#"$ROOT"/}  ($(du -h "$SEEDIMG" | cut -f1) squashfs, from $(du -sh "$seedstage" | cut -f1) raw)"
+else
+  rm -f "$SEEDIMG"
+  echo "  (no Steam seed staged — no ${SEEDIMG#"$ROOT"/}; offline factory reset unavailable)" >&2
+fi
+
+# 7. bake the Btrfs image (populate without mounting), then shrink to fit
 rm -f "$IMG"
 truncate -s "$SIZE" "$IMG"
 mkfs.btrfs --rootdir "$stage" --shrink -L novadeck-root -f "$IMG" >/dev/null

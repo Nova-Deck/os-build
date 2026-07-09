@@ -1,18 +1,51 @@
-# novadeck A/B image partition table — Phase 4.
+# novadeck A/B image partition table.
 #
-# SteamOS-style 8-partition atomic-update layout (cf. iliana.fyi): a shared ESP,
-# A/B GRUB partitions, A/B read-only Btrfs roots, A/B /var, and a shared /home.
-# RAUC writes the inactive rootfs/var slot, then the bootloader switches on success.
+# SteamOS-style atomic-update layout (cf. the steamos-teardown reference):
+# a shared ESP, A/B boot partitions, A/B read-only Btrfs roots, A/B /var, and a shared
+# /home. RAUC writes the inactive rootfs/var slot, then the bootloader switches on success.
 #
-# Consumed by images/genpart.sh to emit an sgdisk script. Row order = partition
-# number. 'rest' expands to fill the target device (done at install time).
+# efi-a/efi-b are RESERVED, and stay EMPTY until A/B lands. In SteamOS they are Stage 2 —
+# each holds that slot's GRUB, chainloaded by steamcl.efi on the shared ESP. We have no
+# UEFI stage at all: the ROCKNIX ABL loads /KERNEL straight off p1 (Stage 3, directly).
+# When A/B arrives they hold the per-slot boot images (KERNEL-A / KERNEL-B, ~24M each incl.
+# the initramfs), and a RAUC post-install hook copies the freshly-written slot's image over
+# /KERNEL on the shared ESP — that indirection is forced, because ABL only ever reads p1.
+# 64M each is ~2.5x the current boot image, so there is room for the initramfs to grow.
 #
-# name      size  typecode  fs     label
-esp         256M  ef00      vfat   NOVADECK-ESP
-efi-a       64M   ef00      vfat   novadeck-efi-A
-efi-b       64M   ef00      vfat   novadeck-efi-B
-rootfs-a    5G    8300      btrfs  novadeck-root-A
-rootfs-b    5G    8300      btrfs  novadeck-root-B
-var-a       256M  8300      ext4   novadeck-var-A
-var-b       256M  8300      ext4   novadeck-var-B
-home        rest  8300      ext4   novadeck-home
+# Partitions 1-7 mirror SteamOS exactly. Two deliberate divergences:
+#
+#   p8 seed  — SteamOS recovers over the network; we must recover OFFLINE (Steam's own OOBE
+#              owns first-boot Wi-Fi), so we ship a pristine Steam client as a squashfs blob.
+#              It lives on its own SHARED partition rather than inside each root slot: at
+#              1.4G raw it would otherwise be duplicated A+B and push both roots past 5G.
+#              Mounted ro at /usr/share/novadeck/steam-seed.
+#   p9 home  — pushed one slot down by p8. It must stay LAST on disk: novadeck-grow-home
+#              expands it to fill the card on first boot, so nothing may follow it.
+#
+# efi-a/efi-b are typed 0700 (Microsoft basic data), NOT ef00 — exactly as SteamOS types
+# them. Only p1 is an EFI System partition. The ROCKNIX ABL finds the ESP by type GUID, so
+# a second ef00 on the disk would give it two candidates to choose between.
+#
+# 'rest' expands to fill the target device. Fixed partitions total ~11.5G, so the minimum
+# usable card is 16G (leaving ~3G of /home); 32G+ is the sane target.
+#
+# 'attrs' is a comma-separated list of GPT attribute bits to set, or '-' for none. Only bit 63
+# ("no-auto") is used today, on home. home carries the discoverable "Linux /home" type GUID
+# (8302) because systemd-repart matches it by that GUID to grow it on first boot — matching by
+# type is what guarantees repart can never touch a root partition. But that same GUID also makes
+# systemd's gpt-auto generator synthesize its OWN home.mount, which would silently shadow (or be
+# shadowed by) the one /etc/fstab already declares, with different options and no growfs. Bit 63
+# tells gpt-auto to skip the partition while leaving the type GUID — and so repart — intact.
+#
+# Consumed by images/genpart.sh to emit an sgdisk script. Row order = partition number.
+#
+# name      size  typecode  fs        label            attrs
+esp         256M  ef00      vfat      NOVADECK-ESP     -
+efi-a       64M   0700      vfat      novadeck-efi-A   -
+efi-b       64M   0700      vfat      novadeck-efi-B   -
+rootfs-a    5G    8300      btrfs     novadeck-root-A  -
+rootfs-b    5G    8300      btrfs     novadeck-root-B  -
+var-a       256M  8300      ext4      novadeck-var-A   -
+var-b       256M  8300      ext4      novadeck-var-B   -
+seed        800M  8300      squashfs  novadeck-seed    -
+home        rest  8302      ext4      novadeck-home    63

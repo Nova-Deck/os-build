@@ -1,0 +1,127 @@
+#!/bin/sh
+# novadeck initramfs init — mount the read-only root and stack the /etc overlay, then
+# hand off to systemd.
+#
+# This exists for ONE reason: the /etc overlay cannot be assembled after PID1 starts.
+# systemd reads /etc/fstab (via generators), /etc/machine-id, /etc/hostname and
+# system.conf before any unit can run, so an overlay mounted by a unit would leave every
+# one of those reading the read-only lower dir forever. The machine-id case is the sharpest:
+# a read-only /etc makes systemd fall back to a transient /run/machine-id, which makes
+# EVERY boot look like a first boot (re-running preset-all). So the overlay has to be in
+# place before we exec systemd — which means here, before switch_root.
+#
+# We need no modules: btrfs, ext4, squashfs and overlayfs are all =y in kernel.config, and
+# every block/storage driver is builtin too (proof: the device booted for months with no
+# initramfs at all). So this is a plain shell script over a handful of util-linux binaries,
+# staged by images/mkinitramfs.sh. No udev, no modprobe, no systemd-in-initrd.
+#
+# Layout (images/partition-table.txt):
+#   root  <- root=PARTLABEL=novadeck-root-A   btrfs, ro
+#   var   <- novadeck.var=PARTLABEL=...       ext4, rw   (carries the overlay upper+work)
+#   seed  <- novadeck.seed=PARTLABEL=...      squashfs, ro (offline factory-reset source)
+#   /etc  <- overlay(lower=/sysroot/etc, upper=/sysroot/var/lib/overlays/etc/upper)
+#
+# DEGRADED BOOT: this device has no serial console ([[sm8650-no-uart]]), so a hard failure
+# here is only debuggable by pulling the card and mounting it. Every step past "root is
+# mounted" therefore falls back rather than dying: we log the reason to /dev/kmsg (which
+# lands in the journal, readable offline via `journalctl -D`) and boot with a writable root
+# and no overlay — which is exactly the configuration that shipped before this change, so
+# the fallback is known-good rather than novel. The failure is loud, not silent.
+set -u
+
+SYSROOT=/sysroot
+
+log()  { printf '<6>novadeck-init: %s\n' "$*" >/dev/kmsg 2>/dev/null || :; }
+warn() { printf '<3>novadeck-init: %s\n' "$*" >/dev/kmsg 2>/dev/null || :; }
+
+# Everything under here is pre-created in the cpio, so no mkdir is needed before /dev exists.
+mount -t proc     -o nosuid,noexec,nodev proc /proc
+mount -t sysfs    -o nosuid,noexec,nodev sys  /sys
+mount -t devtmpfs -o nosuid,mode=0755    dev  /dev
+
+ROOTSPEC=''; VARSPEC=''; SEEDSPEC=''; ROOTFSTYPE=btrfs
+read -r _cmdline </proc/cmdline
+for _arg in $_cmdline; do
+  case "$_arg" in
+    root=*)          ROOTSPEC=${_arg#root=} ;;
+    rootfstype=*)    ROOTFSTYPE=${_arg#rootfstype=} ;;
+    novadeck.var=*)  VARSPEC=${_arg#novadeck.var=} ;;
+    novadeck.seed=*) SEEDSPEC=${_arg#novadeck.seed=} ;;
+  esac
+done
+
+# Resolve a root=-style spec (PARTLABEL=/LABEL=/UUID=/bare path) to a block device, polling
+# for it. There is no udev here and storage probes asynchronously, so the device may simply
+# not exist yet on the first pass — this is what the kernel's own `rootwait` does for us when
+# it mounts root itself. ~30s, then give up.
+resolve() {
+  _spec=$1 _i=0
+  while [ "$_i" -lt 300 ]; do
+    case "$_spec" in
+      /dev/*) [ -b "$_spec" ] && { printf '%s' "$_spec"; return 0; } ;;
+      *)      _d=$(findfs "$_spec" 2>/dev/null) && [ -b "$_d" ] && { printf '%s' "$_d"; return 0; } ;;
+    esac
+    sleep 0.1; _i=$((_i + 1))
+  done
+  return 1
+}
+
+[ -n "$ROOTSPEC" ] || { warn "no root= on the kernel cmdline — cannot continue"; exit 1; }
+
+if ! ROOTDEV=$(resolve "$ROOTSPEC"); then
+  # Nothing to fall back TO: without a root there is no system. Exiting kills init, and the
+  # kernel panics; panic=5 on our cmdline reboots. A boot loop is the honest outcome here.
+  warn "root device '$ROOTSPEC' never appeared after 30s — panicking"
+  exit 1
+fi
+
+if ! mount -t "$ROOTFSTYPE" -o ro "$ROOTDEV" "$SYSROOT"; then
+  warn "cannot mount root $ROOTDEV ($ROOTFSTYPE) — panicking"
+  exit 1
+fi
+log "root $ROOTDEV mounted ro"
+
+# From here on, failures degrade instead of panicking (see the header).
+degrade() {
+  warn "DEGRADED: $1"
+  warn "DEGRADED: booting with a writable root and no /etc overlay (pre-initramfs behaviour)"
+  mount -o remount,rw "$SYSROOT" || warn "DEGRADED: remount,rw failed too — root stays read-only"
+}
+
+# Kept inline rather than in a function: a $(...) capture would run the mounts in a subshell
+# and swallow the device names we want to log.
+overlay_ok=0
+if [ -z "$VARSPEC" ]; then
+  degrade "no novadeck.var= on the kernel cmdline"
+elif ! VARDEV=$(resolve "$VARSPEC"); then
+  degrade "var device '$VARSPEC' never appeared after 30s"
+elif ! mount -t ext4 "$VARDEV" "$SYSROOT/var"; then
+  degrade "cannot mount var $VARDEV at $SYSROOT/var"
+else
+  # upper and work MUST share a filesystem (overlayfs rename requirement) — both live on /var.
+  OVL=$SYSROOT/var/lib/overlays/etc
+  # lowerdir is the /etc we just mounted read-only; overlayfs resolves it now, at mount time,
+  # so mounting the result over that same path is safe.
+  if mkdir -p "$OVL/upper" "$OVL/work" \
+     && mount -t overlay etc \
+          -o "lowerdir=$SYSROOT/etc,upperdir=$OVL/upper,workdir=$OVL/work" "$SYSROOT/etc"; then
+    overlay_ok=1
+    log "var $VARDEV mounted; /etc overlay stacked (upper=/var/lib/overlays/etc/upper)"
+  else
+    degrade "cannot stack the /etc overlay on $VARDEV"
+  fi
+fi
+
+# The offline factory-reset source, shared across both root slots. Purely optional: a missing
+# seed costs us an offline factory reset, not the boot, so it never degrades the root.
+if [ -n "$SEEDSPEC" ]; then
+  if SEEDDEV=$(resolve "$SEEDSPEC") \
+     && mount -t squashfs -o ro "$SEEDDEV" "$SYSROOT/usr/share/novadeck/steam-seed"; then
+    log "seed $SEEDDEV mounted ro at /usr/share/novadeck/steam-seed"
+  else
+    warn "no Steam recovery seed ('$SEEDSPEC') — offline factory reset will be unavailable"
+  fi
+fi
+
+[ "$overlay_ok" -eq 1 ] || warn "DEGRADED: handing off to systemd on a writable, un-overlaid root"
+exec switch_root "$SYSROOT" /usr/lib/systemd/systemd

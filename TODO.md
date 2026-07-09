@@ -5,6 +5,26 @@ rationale lives in the linked memories and commit history.
 
 ## Open
 
+- [ ] **RAUC must rsync `/var` across slots — `/etc` and the Wi-Fi MAC ride on it** — NOT yet built;
+  a hard prerequisite for the A/B switch, not a nicety. The `/etc` overlay's upperdir lives at
+  `/var/lib/overlays/etc/upper`, and `/var` is **per-slot** (`var-a`/`var-b`). So booting the other
+  slot presents a *different* `/etc`: no saved Wi-Fi, and a fresh `/etc/machine-id`. That last one
+  bites twice, because `hw-support/usr/lib/novadeck/gen-mac.sh` derives the Wi-Fi MAC from
+  `sha256(machine-id)` — a slot switch would silently change the device's MAC.
+  SteamOS solves this exactly the way we must (`_reference/steamos-teardown/docs/system-updates.md`
+  :132-137): the post-update hook **reformats** the target slot's `/var`, `rsync`s the running slot's
+  `/var` over it, and *additionally* writes NetworkManager connections into both partsets'
+  `…/overlays/etc/upper/NetworkManager/system-connections/`. Port that hook when wiring RAUC.
+  See [[stable-mac-first-boot]], [[wifi-connect-fails-after-list]].
+
+- [ ] **Populate `efi-a`/`efi-b` with per-slot boot images** — created + formatted vfat, currently
+  EMPTY. ABL only ever reads `/KERNEL` from the shared ESP (p1), so an A/B switch cannot just point
+  the bootloader at another partition: the per-slot boot image (`KERNEL-A` / `KERNEL-B`, ~23M each
+  incl. the initramfs) has to live in `efi-a`/`efi-b`, and a RAUC post-install hook copies the
+  newly-written slot's image over `/KERNEL` on the ESP. Note each slot's image carries its OWN
+  cmdline (`root=PARTLABEL=novadeck-root-{A,B}` + `novadeck.var=…-{A,B}`), so `boot/package.sh` needs
+  a slot argument. See [[sm8650-rocknix-abl-boot]].
+
 - [x] **Rework overlay build to only rebuild changed packages** — DONE (build-infra, not yet
   HW-cycle-validated). `build-overlay.sh` is now incremental: it persists `work/repo/<arch>/` across
   runs and keeps a per-package stamp under `.stamps/<name>.hash` (sha256 of that package's own
@@ -336,7 +356,9 @@ rationale lives in the linked memories and commit history.
   old ~1GB rootfs→home copy and its grow-race ENOSPC trap). The pristine seed stays baked in the RO
   root (`/usr/share/novadeck/steam-seed`) as the **offline factory-reset** source (survives a `/home`
   wipe); `steam-bootstrap.sh` is repurposed from first-boot seeder to the on-demand reset tool (left
-  unenabled). Phase-4: move the recovery seed to a SHARED partition, not duplicated per A/B slot. See
+  unenabled). The recovery seed now lives on its own SHARED squashfs partition (p8 `novadeck-seed`,
+  649M zstd from 1.4G raw), mounted ro by the initramfs at the same `/usr/share/novadeck/steam-seed`
+  path — not duplicated per A/B slot. See
   [[steam-must-be-baked-offline]], [[steam-offline-sdl3-seed]], [[grow-home-repart-no-initramfs]].
 
 - [x] **Audio on release** — RESOLVED, HW-confirmed 2026-07-03. The "works on test, not release"

@@ -1,42 +1,43 @@
 #!/usr/bin/env bash
-# novadeck SD-card image builder — Phase 1 on-device test path.
+# novadeck SD-card image builder.
 #
-# Builds one flashable SD image with the minimal layout the ROCKNIX ABL needs to boot
-# off a card: a GPT with an EFI System Partition (FAT32) holding the all-boards KERNEL
-# boot image at its root, plus the read-only Btrfs root (label novadeck-root, which the
-# kernel cmdline mounts). No A/B, no RAUC — that is the Phase 4 internal layout
-# (images/partition-table.txt); this is the throwaway "boot it off an SD card first"
-# image for bring-up.
+# Lays the FULL SteamOS-style 9-partition GPT from images/partition-table.txt and populates
+# only the A side: ESP + rootfs-a + var-a + seed + home. rootfs-b/var-b are created and left
+# empty for RAUC to fill; efi-a/efi-b are created, formatted, and left empty until there is a
+# per-slot bootloader (see the table's header for what eventually lands there).
 #
-# Unprivileged: builds the ESP filesystem in a plain file with mtools, lays the GPT with
-# sgdisk, and dd's both filesystem images into their partition byte offsets — no loop
-# mounts, no root.
+# Laying the final table now — rather than a minimal ESP+root+home and migrating later — means
+# adding A/B never costs a reflash. The price is ~5.3G of card sitting empty in the B slots.
 #
-#   images/make-sdcard.sh
+# Unprivileged: builds each filesystem in a plain file (mtools / mkfs.ext4 -d / mksquashfs),
+# lays the GPT with sgdisk via images/genpart.sh, and dd's each filesystem into its partition
+# byte offset — no loop mounts, no root.
 #
-# Run inside the build image (needs sgdisk + mkfs.vfat + mtools):
-#   docker run --rm -v "$PWD":/src -w /src novadeck-build images/make-sdcard.sh sm8650
+# Run inside the build image (needs sgdisk + mkfs.vfat + mtools + mkfs.ext4):
+#   docker run --rm -v "$PWD":/src -w /src novadeck-build images/make-sdcard.sh
 #
 # Prereqs: boot/package.sh (-> out/boot/novadeck-boot.img) and images/build-image.sh
-# (-> out/images/rootfs.img) have run.
+# (-> out/images/{rootfs,var,seed}.img) have run.
 set -euo pipefail
 export MTOOLS_SKIP_CHECK=1   # mtools on a file image has no geometry; silence the warning
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$ROOT/out"
 KERNEL="$OUT/boot/novadeck-boot.img"
-ROOTFS="$OUT/images/rootfs.img"
 IMGDIR="$OUT/images"
+ROOTFS="$IMGDIR/rootfs.img"
+VARIMG="$IMGDIR/var.img"
+SEEDIMG="$IMGDIR/seed.img"
 IMG="$IMGDIR/sdcard.img"
+TABLE="$ROOT/images/partition-table.txt"
 
-ESP_SIZE_MIB="${ESP_SIZE_MIB:-256}"   # FAT32 ESP; matches the A/B table's esp size
-ALIGN_MIB=1                            # 1 MiB partition alignment + GPT primary slack
-END_SLACK_MIB=2                        # tail room for the backup GPT (well over its ~17 KiB)
-# /home (ext4) is PRE-SEEDED at image-build time with the native arm64 Steam client (see step 2):
+MIB=$((1024 * 1024))
+END_SLACK_MIB=2   # tail room for the backup GPT (well over its ~17 KiB)
+
+# /home (ext4) is PRE-SEEDED at image-build time with the native arm64 Steam client (see below):
 # the flashed image already carries a ready-to-run /home/deck, so there is NO ~1GB first-boot copy
 # (and none of its old grow-race ENOSPC trap). The partition is sized to just fit the seed; on first
-# boot novadeck-grow-home extends the partition + its ext4 to fill the card. HOME_SIZE_MIB is
-# computed from the staged seed below (override to force a floor).
+# boot novadeck-grow-home extends the partition + its ext4 to fill the card.
 SEED="$ROOT/work/steam-seed"
 
 for t in sgdisk mkfs.vfat mcopy mkfs.ext4; do
@@ -44,16 +45,42 @@ for t in sgdisk mkfs.vfat mcopy mkfs.ext4; do
 done
 [ -f "$KERNEL" ] || { echo "no boot image: ${KERNEL#"$ROOT"/} (run boot/package.sh)" >&2; exit 1; }
 [ -f "$ROOTFS" ] || { echo "no rootfs: ${ROOTFS#"$ROOT"/} (run images/build-image.sh)" >&2; exit 1; }
+[ -f "$VARIMG" ] || { echo "no var image: ${VARIMG#"$ROOT"/} (run images/build-image.sh)" >&2; exit 1; }
 [ -x "$SEED/steamrtarm64/steam" ] || {
   echo "no Steam seed at ${SEED#"$ROOT"/} (run steam/fetch-steam-seed.sh)" >&2; exit 1; }
+
+# Partition number and size (MiB) for a row of the table, so the two files can never drift.
+part_num()  { awk -v n="$1" '/^[[:space:]]*#/||/^[[:space:]]*$/{next} {i++; if ($1==n) {print i; exit}}' "$TABLE"; }
+part_mib()  { awk -v n="$1" '/^[[:space:]]*#/||/^[[:space:]]*$/{next}
+  $1==n { s=$2; u=substr(s,length(s),1); v=substr(s,1,length(s)-1)
+          if (u=="G") print v*1024; else if (u=="M") print v; else print 0; exit }' "$TABLE"; }
+
+P_ESP=$(part_num esp);    P_EFIA=$(part_num efi-a); P_EFIB=$(part_num efi-b)
+P_ROOTA=$(part_num rootfs-a); P_VARA=$(part_num var-a)
+P_SEED=$(part_num seed);  P_HOME=$(part_num home)
+
+ESP_SIZE_MIB=$(part_mib esp)
+EFI_SIZE_MIB=$(part_mib efi-a)
+
+# Every populated filesystem must fit the slot the table declares for it. A silently truncated
+# dd would produce a card that boots into a corrupt filesystem, so fail loudly here instead.
+fits() {  # <file> <slot-mib> <what>
+  local bytes slot_bytes; bytes=$(stat -c %s "$1"); slot_bytes=$(( $2 * MIB ))
+  [ "$bytes" -le "$slot_bytes" ] || {
+    echo "$3 is $(( bytes / MIB ))MiB but its partition is only ${2}MiB — raise it in ${TABLE#"$ROOT"/}" >&2
+    exit 1; }
+}
+fits "$ROOTFS" "$(part_mib rootfs-a)" "rootfs.img"
+fits "$VARIMG" "$(part_mib var-a)"    "var.img"
+if [ -f "$SEEDIMG" ]; then fits "$SEEDIMG" "$(part_mib seed)" "seed.img"; fi
 
 # Stage the /home tree to pre-seed: the deck user's Steam client baked into .local/share/Steam, plus
 # the HOME-relative ~/.steam compat symlinks (mirror SteamOS's layout). Owned by deck (uid/gid 1000,
 # baked into the base) so Steam can write its home immediately — mkfs.ext4 -d preserves this. This is
 # the OFFLINE analog of steamos-create-homedir, done at build time instead of first boot.
 DECK_UID=1000; DECK_GID=1000
-esp=""; home=""; homestage="$(mktemp -d)"
-trap 'rm -f "$esp" "$home"; rm -rf "$homestage"' EXIT
+esp=""; efi=""; home=""; homestage="$(mktemp -d)"
+trap 'rm -f "$esp" "$efi" "$home"; rm -rf "$homestage"' EXIT
 deckhome="$homestage/deck"
 install -d "$deckhome/.local/share" "$deckhome/.steam"
 cp -a "$SEED" "$deckhome/.local/share/Steam"
@@ -80,56 +107,63 @@ chown -R "$DECK_UID:$DECK_GID" "$deckhome"
 seed_mib=$(du -sm "$homestage" | cut -f1)
 HOME_SIZE_MIB="${HOME_SIZE_MIB:-$(( seed_mib + seed_mib / 5 + 128 ))}"
 
-MIB=$((1024 * 1024))
-rootfs_bytes=$(stat -c %s "$ROOTFS")
-rootfs_mib=$(( (rootfs_bytes + MIB - 1) / MIB ))                       # round up to MiB
-total_mib=$(( ALIGN_MIB + ESP_SIZE_MIB + rootfs_mib + HOME_SIZE_MIB + END_SLACK_MIB ))
+fixed_mib=$("$ROOT/images/genpart.sh" --min)
+total_mib=$(( fixed_mib + HOME_SIZE_MIB + END_SLACK_MIB ))
 
-echo "[novadeck] SD image: ESP ${ESP_SIZE_MIB}MiB + root ${rootfs_mib}MiB + home ${HOME_SIZE_MIB}MiB -> ${total_mib}MiB"
+echo "[novadeck] SD image: ${fixed_mib}MiB fixed layout (A populated, B empty) + home ${HOME_SIZE_MIB}MiB -> ${total_mib}MiB"
 
 # 1. ESP filesystem (FAT32) with the KERNEL boot image at its root.
-esp="$(mktemp)"; home="$(mktemp)"
+esp="$(mktemp)"; efi="$(mktemp)"; home="$(mktemp)"
 truncate -s "${ESP_SIZE_MIB}M" "$esp"
-# FAT volume label: max 11 chars (the GPT partition name below keeps NOVADECK-ESP).
+# FAT volume label: max 11 chars (the GPT partition name stays NOVADECK-ESP).
 # ABL locates the ESP by type GUID (ef00), not this label, so it is cosmetic.
 mkfs.vfat -F 32 -n NOVADECK "$esp" >/dev/null
 mcopy -i "$esp" "$KERNEL" ::/KERNEL
 echo "  esp  $(du -h "$KERNEL" | cut -f1) KERNEL -> ::/KERNEL"
 
-# 2. /home filesystem (ext4, label novadeck-home) PRE-SEEDED with the deck home via mkfs.ext4 -d,
+# 2. efi-a / efi-b: formatted but EMPTY. ABL reads /KERNEL off the ESP above, so there is nothing
+# to put here until a per-slot bootloader exists. Formatting them now means RAUC can just write.
+truncate -s "${EFI_SIZE_MIB}M" "$efi"
+mkfs.vfat -F 32 -n NOVADECKEFI "$efi" >/dev/null   # FAT labels max 11 chars; same blank fs for A and B
+
+# 3. /home filesystem (ext4, label novadeck-home) PRE-SEEDED with the deck home via mkfs.ext4 -d,
 # which populates the fs from $homestage at creation — unprivileged, no loop mount. -m0: no reserved
-# blocks (it's a data partition). Sized to the seed; novadeck-grow-home grows it to fill the card on
-# first boot. -d preserves the staged deck:deck ownership so Steam can write its home right away.
+# blocks (it's a data partition). -d preserves the staged deck:deck ownership so Steam can write its
+# home right away. The offload directories under /home/.novadeck are created on first boot by
+# novadeck-offload-prepare.service, not here — it seeds them from the read-only root's content.
 truncate -s "${HOME_SIZE_MIB}M" "$home"
 mkfs.ext4 -q -F -L novadeck-home -m0 -d "$homestage" "$home"
-echo "  home ${HOME_SIZE_MIB}MiB ext4 (novadeck-home) — pre-seeded Steam client (${seed_mib}MiB), grows to fill the card on first boot"
+echo "  home ${HOME_SIZE_MIB}MiB ext4 — pre-seeded Steam client (${seed_mib}MiB), grows to fill the card on first boot"
 
-# 3. blank disk image + GPT: p1 ESP (aligned), p2 rootfs (content-sized), p3 home filling the rest.
-# p3 uses typecode 8302 (Linux /home discoverable GUID) so systemd-repart can match + grow ONLY it.
+# 4. blank disk image + the full GPT from the table (single source of truth for offsets/types).
 mkdir -p "$IMGDIR"; rm -f "$IMG"
 truncate -s "${total_mib}M" "$IMG"
-sgdisk -Z "$IMG" >/dev/null
-sgdisk -a $(( MIB / 512 )) \
-  -n "1:0:+${ESP_SIZE_MIB}M" -t 1:ef00 -c 1:NOVADECK-ESP \
-  -n "2:0:+${rootfs_mib}M"   -t 2:8300 -c 2:novadeck-root \
-  -n "3:0:0"                 -t 3:8302 -c 3:novadeck-home \
-  "$IMG" >/dev/null
+"$ROOT/images/genpart.sh" "$IMG" >/dev/null
 sgdisk -p "$IMG"
 
-# 4. write each filesystem into its partition byte offset (notrunc; no loop device).
-p1_start=$(sgdisk -i 1 "$IMG" | sed -n 's/^First sector: \([0-9]*\).*/\1/p')
-p2_start=$(sgdisk -i 2 "$IMG" | sed -n 's/^First sector: \([0-9]*\).*/\1/p')
-p3_start=$(sgdisk -i 3 "$IMG" | sed -n 's/^First sector: \([0-9]*\).*/\1/p')
-dd if="$esp"    of="$IMG" bs=512 seek="$p1_start" conv=notrunc status=none
-dd if="$ROOTFS" of="$IMG" bs=512 seek="$p2_start" conv=notrunc status=none
-dd if="$home"   of="$IMG" bs=512 seek="$p3_start" conv=notrunc status=none
+# 5. write each filesystem into its partition's byte offset (notrunc; no loop device).
+# Partitions with no `write_part` call below (rootfs-b, var-b) are intentionally left as zeros.
+write_part() {  # <partnum> <file> <label>
+  local start; start=$(sgdisk -i "$1" "$IMG" | sed -n 's/^First sector: \([0-9]*\).*/\1/p')
+  [ -n "$start" ] || { echo "cannot read start sector of partition $1" >&2; exit 1; }
+  dd if="$2" of="$IMG" bs=512 seek="$start" conv=notrunc status=none
+  echo "  p$1  $3"
+}
+write_part "$P_ESP"   "$esp"    "NOVADECK-ESP (KERNEL)"
+write_part "$P_EFIA"  "$efi"    "novadeck-efi-A (empty, reserved)"
+write_part "$P_EFIB"  "$efi"    "novadeck-efi-B (empty, reserved)"
+write_part "$P_ROOTA" "$ROOTFS" "novadeck-root-A (btrfs, ro)"
+write_part "$P_VARA"  "$VARIMG" "novadeck-var-A (ext4)"
+if [ -f "$SEEDIMG" ]; then write_part "$P_SEED" "$SEEDIMG" "novadeck-seed (squashfs, shared)"; fi
+write_part "$P_HOME"  "$home"   "novadeck-home (ext4, grows on first boot)"
 
 echo "  ok   $(du -h "$IMG" | cut -f1) -> ${IMG#"$ROOT"/}"
 cat <<EOF
 Done. Write it to the card (replace sdX with your device, ALL DATA LOST):
   sudo dd if=${IMG#"$ROOT"/} of=/dev/sdX bs=4M conv=fsync status=progress
-ABL boots /KERNEL off the ESP; its DTB picker selects the board; the kernel mounts
-root=LABEL=novadeck-root (partition 2). /home is partition 3 (LABEL=novadeck-home),
-PRE-SEEDED with the deck user's Steam client; novadeck-grow-home extends it + its ext4
-to fill the card on first boot. (The btrfs root stays at its built size — it's read-only.)
+ABL boots /KERNEL off the ESP; its DTB picker selects the board. The initramfs then mounts
+root=PARTLABEL=novadeck-root-A read-only, mounts novadeck-var-A, stacks the /etc overlay on it,
+and mounts the shared squashfs seed — then switch_roots into systemd. /home (last partition)
+is pre-seeded with the deck user's Steam client and grows to fill the card on first boot.
+The B slots (rootfs-b, var-b) and both efi-* partitions are present but empty.
 EOF

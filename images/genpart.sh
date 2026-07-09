@@ -6,6 +6,7 @@
 # applies it. Side-effect-free unless a target is given.
 #
 #   images/genpart.sh            # print sgdisk script
+#   images/genpart.sh --min      # print only the minimum target size in MiB
 #   images/genpart.sh <target>   # also apply to <target> (disk or image file)
 set -euo pipefail
 
@@ -21,12 +22,23 @@ minmib="$(awk '
     if (u=="G") m+=v*1024; else if (u=="M") m+=v }
   END { print m+1 }' "$TABLE")"   # +1 MiB GPT/alignment slack
 
-# One sgdisk -n/-t/-c per row; 'rest' -> 0:0 (fills the disk).
+# make-sdcard.sh sizes its image file off this, so the fixed layout stays defined in one place.
+if [ "$TARGET" = "--min" ]; then
+  echo "$minmib"
+  exit 0
+fi
+
+# One sgdisk -n/-t/-c per row; 'rest' -> 0:0 (fills the disk). A row's 'attrs' column adds one
+# --attributes per GPT bit, applied after the partition exists.
 partlines="$(awk '
   /^[[:space:]]*#/ || /^[[:space:]]*$/ { next }
   { n++
     spec = ($2 == "rest") ? "0:0" : "0:+" $2
     printf "sgdisk -n %d:%s -t %d:%s -c %d:%s \"$DISK\"\n", n, spec, n, $3, n, $5
+    if ($6 != "" && $6 != "-") {
+      k = split($6, bits, ",")
+      for (i = 1; i <= k; i++) printf "sgdisk --attributes=%d:set:%s \"$DISK\"\n", n, bits[i]
+    }
   }' "$TABLE")"
 
 emit() {

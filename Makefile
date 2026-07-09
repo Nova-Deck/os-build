@@ -45,6 +45,15 @@ INBUILD := $(DOCKER) $(BUILD_IMG)
 # Test-only credential env, forwarded into the rootfs assembler (no-op unless TEST=1).
 TEST_ENV := -e NOVADECK_TEST -e NOVADECK_WIFI_SSID -e NOVADECK_WIFI_PSK -e NOVADECK_SSH_PUBKEY
 
+# NOVADECK_TEST changes the rootfs CONTENT (Wi-Fi profile, SSH host keys + authorized_keys) but is
+# an environment variable, which make cannot see. Without this, an existing release rootfs.img looks
+# up-to-date to a `NOVADECK_TEST=1 make sdcard`, the assembler is skipped, and you flash a RELEASE
+# root wrapped in a test-built card — no Wi-Fi, no SSH, and no error anywhere. (Cost me a boot cycle
+# on 2026-07-09.) Encode the mode in a stamp file that rootfs depends on, so flipping it rebuilds.
+# Lives under work/ (host-owned); out/images is written by the container as root.
+ROOTFS_MODE  := $(if $(filter 1,$(NOVADECK_TEST)),test,release)
+MODE_STAMP   := work/.rootfs-mode-$(ROOTFS_MODE)
+
 # --- artifacts (real file targets drive incremental rebuilds) -----------------
 BUILD_STAMP := out/.build-image.stamp
 # Open linux-firmware blobs are SoC-agnostic — the unified kernel embeds the union — so this
@@ -82,6 +91,11 @@ OVERLAY_STAMP   := work/repo/$(OVERLAY_ARCH)/.overlay.stamp
 BASE_STAMP   := work/.base.stamp
 KERNEL       := $(OUT)/Image.gz
 ROOTFS       := $(OUT)/images/rootfs.img
+# Sibling images the assembler emits alongside the root, one per partition (see
+# images/partition-table.txt): writable state, and the shared read-only recovery seed.
+VARIMG       := $(OUT)/images/var.img
+SEEDIMG      := $(OUT)/images/seed.img
+INITRAMFS    := $(OUT)/initramfs.cpio.gz
 BOOTIMG      := $(OUT)/boot/novadeck-boot.img
 SDCARD       := $(OUT)/images/sdcard.img
 # Native arm64 Steam SEED (steam/fetch-steam-seed.sh, host network). Consumed TWICE: assemble-rootfs
@@ -96,8 +110,10 @@ STEAM_SEED   := work/steam-seed/steamrtarm64/steam
 ASSEMBLE_SRC := $(shell find images/assemble-rootfs.sh session hw-support steam audio devices/inputplumber -type f 2>/dev/null)
 
 # Kernel inputs: any change re-triggers the (full, from-scratch) kernel build. The unified
-# kernel globs every fragment/patch/dts, and bakes the firmware embed list + common cmdline.
-KERNEL_SRC := kernel/SOURCE.pin kernel/embed.list boot/cmdline \
+# kernel globs every fragment/patch/dts, and bakes the firmware embed list.
+# boot/cmdline is NOT here: nothing in kernel/build.sh reads it (the cmdline rides in the boot
+# image header, applied by boot/package.sh), so listing it only bought needless kernel rebuilds.
+KERNEL_SRC := kernel/SOURCE.pin kernel/embed.list \
               $(wildcard kernel/*.config) \
               $(wildcard kernel/patches/*.patch) \
               $(wildcard kernel/dts/qcom/*)
@@ -108,7 +124,7 @@ KERNEL_SRC := kernel/SOURCE.pin kernel/embed.list boot/cmdline \
 # Phony orchestration targets
 # ==============================================================================
 .PHONY: help all image toolchain kernel fw-linux fw-qcom base overlay rootfs manifest \
-        boot sdcard bundle deploy clean clean-base clean-overlay distclean
+        initramfs boot sdcard bundle deploy clean clean-base clean-overlay distclean
 
 help: ## Show this help
 	@echo "novadeck build — unified image (all SoCs/boards)"
@@ -128,7 +144,8 @@ fw-linux:  $(FW_LINUX)     ## Fetch open linux-firmware blobs (host, network)
 fw-qcom:   $(FW_QCOM)      ## Fetch device-proprietary firmware from the qcom-firmwares repo (host, network)
 overlay:   $(OVERLAY_DB)   ## Rebuild from-source overlay pkgs (patched gamescope) -> work/repo/<arch>/
 base:      $(BASE_STAMP)   ## Fetch + customize the pinned aarch64 base rootfs (host)
-rootfs:    $(ROOTFS)       ## Assemble the read-only root (kernel+fw+base, in container)
+rootfs:    $(ROOTFS)       ## Assemble the read-only root + var + seed images (in container)
+initramfs: $(INITRAMFS)    ## Build the initramfs that mounts ro-root + /etc overlay (in container)
 boot:      $(BOOTIMG)      ## Package the all-boards boot artifact (in container)
 sdcard:    $(SDCARD)       ## Build the flashable SD-card image (in container)
 
@@ -212,17 +229,30 @@ manifest: $(KERNEL) ## Verify firmware-manifest.txt vs the built kernel (in cont
 # ==============================================================================
 # Read-only root (container) — base userspace + kernel + firmware -> Btrfs image
 # ==============================================================================
-$(ROOTFS): $(KERNEL) $(BASE_STAMP) $(FW_LINUX) $(FW_QCOM) $(STEAM_SEED) $(ASSEMBLE_SRC) | $(BUILD_STAMP)
+# Switching NOVADECK_TEST swaps which stamp exists, so the rootfs is rebuilt on the next make.
+$(MODE_STAMP):
+	@mkdir -p $(@D) && rm -f work/.rootfs-mode-* && touch $@
+	@echo "[novadeck] rootfs mode: $(ROOTFS_MODE)"
+
+$(ROOTFS): $(KERNEL) $(BASE_STAMP) $(FW_LINUX) $(FW_QCOM) $(STEAM_SEED) $(ASSEMBLE_SRC) $(MODE_STAMP) | $(BUILD_STAMP)
 	$(DOCKER) $(TEST_ENV) -e NOVADECK_DEBUG $(BUILD_IMG) \
 	  images/assemble-rootfs.sh /src/work/base
 
 # ==============================================================================
 # Boot artifact + bootable media (container)
 # ==============================================================================
-$(BOOTIMG): $(KERNEL) | $(BUILD_STAMP)
+# The initramfs mounts the ro root, stacks the /etc overlay on /var, and switch_roots. It is
+# staged out of the base rootfs (bash + util-linux), so the base is a prerequisite.
+$(INITRAMFS): images/mkinitramfs.sh images/initramfs/init $(BASE_STAMP) | $(BUILD_STAMP)
+	$(INBUILD) images/mkinitramfs.sh /src/work/base
+
+$(BOOTIMG): $(KERNEL) $(INITRAMFS) boot/cmdline boot/package.sh | $(BUILD_STAMP)
 	$(INBUILD) boot/package.sh
 
-$(SDCARD): $(BOOTIMG) $(ROOTFS) $(STEAM_SEED) | $(BUILD_STAMP)
+# var.img and seed.img are co-products of the same assembler run as rootfs.img.
+$(VARIMG) $(SEEDIMG): $(ROOTFS)
+
+$(SDCARD): $(BOOTIMG) $(ROOTFS) $(VARIMG) $(SEEDIMG) $(STEAM_SEED) | $(BUILD_STAMP)
 	$(INBUILD) images/make-sdcard.sh
 
 # Signed RAUC OTA bundle (Phase 4). Dev builds mint an ephemeral cert; set

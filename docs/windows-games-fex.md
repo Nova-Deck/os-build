@@ -1,88 +1,105 @@
-# Running x86 Windows games (Proton 11 ARM64 + FEX)
+# Running x86 games on arm64 (Proton + FEX)
 
-novadeck runs x86/x86_64 **Windows** games on arm64 through Valve's own
-**Proton 11.0 (ARM64)**, which bundles the WoW64 FEX emulator
-(`libwow64fex.dll`) to translate x86 → arm64. novadeck ships the wiring to use
-it, but **not** the Proton/runtime files themselves — those are Valve content
-that you install from your own Steam library (see [Why you install the runtimes
-yourself](#why-you-install-the-runtimes-yourself)).
+novadeck runs x86 and x86-64 games on this arm64 handheld through **FEX**, an x86→arm64
+translator. There are two separate paths, and which one a game takes depends on whether it is a
+*Windows* game or a *native Linux* game. Both are baked into the image: nothing needs to be
+downloaded, and nothing needs to be configured.
 
-## One-time setup
+## Windows games
 
-After you have signed in to Steam and finished first-boot setup:
+novadeck ships an arm64 build of **Proton** as a compat tool. Proton carries its own copy of FEX
+(as a Windows DLL) which translates the game's x86 code, while the Wine underneath it is a native
+arm64 binary. Nothing is downloaded — the tool is already on the image.
 
-1. **Install the two runtimes.** In Steam, search each of these by name and press
-   **Install** (they are `Tool`-type apps, so search is the way to reach them):
+Steam does not pick a *custom* compat tool on its own, so select it once. Either:
 
-   | Search for | What it is |
-   |---|---|
-   | `Proton 11.0 (ARM64)` | Proton with the bundled x86→arm64 FEX (~3.4 GB) |
-   | `Steam Linux Runtime 4.0 - Arm64` | The container Proton runs inside (~420 MB) |
+- **Per game** — **Properties → Compatibility**, tick *Force the use of a specific Steam Play
+  compatibility tool*, and choose the **Proton … (CachyOS, arm64)** entry (its name carries the
+  Proton version). Steam remembers this per game.
+- **For everything** — **Settings → Compatibility**, enable *Steam Play for all other titles*, and
+  choose the same entry. This is the setting most people want.
 
-   Install **both** — Proton needs the runtime container to launch.
+### Tuning a game that misbehaves
 
-2. **Point a Windows game at novadeck's compat tool.** Open the game's
-   **Properties → Compatibility**, tick *Force the use of a specific Steam Play
-   compatibility tool*, and choose:
+x86 guarantees stronger memory ordering than ARM does, so FEX emulates it. That emulation (TSO) is
+on by default and is the largest single cost in the translation. Turning it off is the biggest
+performance win available, and also the most likely way to introduce a race-condition crash in a
+game that was relying on x86's ordering.
 
-   > **Proton 11.0 (ARM64) [novadeck]**
+Three presets are available: `default`, `fast` (TSO off), and `compatible` (stricter, slower).
+Set one per game by creating `/etc/novadeck/game-tweaks.json`:
 
-3. **Launch the game.**
+```json
+{
+  "games": {
+    "858710": { "enabled": true, "fexProfile": "fast" }
+  }
+}
+```
 
-That is all that is required per device. The compatibility choice is remembered
-per game; repeat step 2 for each Windows title.
+The key is the Steam appid. `enabled` must be `true` or the entry is ignored. Without this file
+every game uses `default`.
 
-## Why you install the runtimes yourself
+For a one-off experiment you can instead set `STEAM_FEX_TSOENABLED=0` in a game's launch options —
+Proton reads it directly.
 
-Proton 11 ARM64 and the SLR 4.0 Arm64 container are Valve-distributed content.
-novadeck does not bake or redistribute them — it only ships the small
-`proton11sc` compat tool that knows how to run them. Fetching them with your own
-account, from your own library, is the one manual step and it keeps novadeck
-clear of redistributing Valve's binaries.
+## Native Linux games (x86 / x86-64)
+
+These run through the *system* FEX, which is registered with the kernel so that an x86 Linux
+binary executes as if it were native. It runs against a bundled Arch Linux x86 root filesystem,
+and forwards graphics and audio calls out to the device's real arm64 drivers.
+
+No setup is required, and no compat tool is involved: launching the game is enough.
 
 ## What novadeck ships
 
-Both pieces are baked into the image (and restored on a factory reset):
+Everything below is part of the OS image, replaced atomically with a system update:
 
-- **`proton11sc` compat tool** — `steam/compatibilitytools.d/proton11sc/`,
-  seeded into `~/.local/share/Steam/compatibilitytools.d/`. It registers the
-  user-selectable *Proton 11.0 (ARM64) [novadeck]* entry.
-- **uinput access rule** — `hw-support/usr/lib/udev/rules.d/70-novadeck-uinput.rules`,
-  giving Steam Input permission to create the virtual gamepad games read.
+- **arm64 Proton compat tool** — `/usr/share/steam/compatibilitytools.d/`.
+- **FEX** — the system x86 interpreter, plus its host/guest thunks.
+- **x86 guest root filesystem** — `/usr/share/fex-emu/RootFS/ArchLinux.ero`.
+- **FEX tuning profiles** — `/usr/share/novadeck/fex-profiles.json`.
+- **uinput access rule** — lets Steam Input create the virtual gamepad games read.
 
-## How it works (maintainer note)
+## Maintainer notes
 
-Valve's official Proton 11 ARM64 declares `require_tool_appid 4185400` (the
-SLR 4.0 Arm64 container). On a non-Deckard client that dependency is never
-*registered* as a compat tool even when its files are installed, so the launch
-dies with `AppError_51` ("Tool 4185400 unknown"). Rather than fight that
-platform gate, `proton11sc` carries **no `require_tool`** and instead
-*self-chains*: its `novadeck-chain` wrapper invokes the SLR 4.0 Arm64 container
-itself and then Proton inside it —
+The two paths share a name and almost nothing else:
 
-```
-SteamLinuxRuntime_4-arm64/_v2-entry-point --verb=<verb> -- \
-    "Proton 11.0 (ARM64)/proton" <verb> <game command>
-```
+| | Windows games | Native x86 Linux |
+|---|---|---|
+| Emulator | Proton's bundled WoW64 FEX | system FEX (`fex-emu`) |
+| Guest rootfs | none | `ArchLinux.ero` |
+| Thunks | none | Vulkan/GL/EGL/drm/WaylandClient/asound |
+| Runtime container | none | none |
 
-— collapsing Valve's two-tool chain into one local tool that needs no
-dependency resolution. The wrapper locates both runtimes under
-`steamapps/common/` relative to `STEAM_COMPAT_CLIENT_INSTALL_PATH`, and fails
-with an install hint if either is missing (the setup step above).
+A Windows game therefore still works on an image with no `fex-emu` package and no guest rootfs:
+Proton translates only the game's *Windows* x86 code, and every Linux syscall is issued by the
+arm64 side of Wine. That is why Proton's bundled FEX config sets neither `RootFS` nor `ThunksDB`.
 
-The trade-off: removing `require_tool` also removes Steam's only *native
-auto-download* hook, which is why the two runtimes must be installed by hand
-rather than pulled automatically. Keeping `require_tool` to get the download is
-not an option — present-but-unregistered, it kills the launch before the chain
-runs.
+**Why the compat tool is baked rather than downloaded.** Valve's own arm64 Proton declares
+`require_tool_appid` for an arm64 Steam Linux Runtime container. On a non-Deckard client that
+dependency is never *registered* as a compat tool even when its files are installed, so the launch
+dies before Proton runs (`AppError_51`). Steam also owns first-boot Wi-Fi, so nothing can be
+fetched before OOBE finishes. `images/assemble-rootfs.sh` strips `require_tool_appid` from the
+baked tool's `toolmanifest.vdf` and repoints its `commandline` at `proton-wrapper`; it also
+rewrites `compatibilitytool.vdf` to a **stable, version-free internal name** (`proton-cachyos-arm64`)
+and a friendly `display_name`, because Steam records the internal name — not the directory — against
+every game the tool is forced on, so leaving upstream's dated name would unpin every game on a
+Proton bump. All edits fail the build loudly if upstream's files change shape.
 
-## Troubleshooting
+The client only scans the per-user `compatibilitytools.d` and whatever `STEAM_EXTRA_COMPAT_TOOLS_PATHS`
+lists — not `/usr/share/steam/compatibilitytools.d` on its own — so `novadeck-steam` exports that
+path before launching the client.
 
-- **"novadeck-chain: … not found … install appid 4185400 / 4628740"** — one of
-  the runtimes isn't installed. Redo step 1.
-- **Game renders but the controller does nothing** — Steam Input couldn't open
-  `/dev/uinput`. The udev rule above fixes this on a normal image; if you are on
-  a hand-modified device, ensure `/dev/uinput` is group `input`, mode `0660`.
-- **Native-Linux x86 games** are a different case: they need a *system* FEX
-  interpreter, which novadeck does not provide. This path covers **Windows**
-  games via Proton only.
+**How per-game tuning reaches Proton's internal FEX.** Proton generates its own FEX config only if
+`FEX_APP_CONFIG` is unset, and honours a pre-set value otherwise. `proton-wrapper` resolves the
+profile for the running appid, writes a merged config into `$XDG_RUNTIME_DIR` (`/usr` is
+read-only), exports `FEX_APP_CONFIG`, and execs the real `proton`. A failure to write that config
+is never fatal — the wrapper logs and execs Proton anyway.
+
+**erofsfuse is a hard dependency.** FEXServer `execvpe`s `erofsfuse` to mount the guest rootfs; if
+the binary is missing, the exec fails inside a forked child and FEXServer aborts, taking every x86
+launch with it. It ships in its own package — `erofs-utils` does **not** contain it.
+
+See `fex/README.md` for the configuration layout and `packages/fex-emu/PKGBUILD` for how FEX and
+its x86 thunks are built.

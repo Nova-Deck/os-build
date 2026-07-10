@@ -33,7 +33,7 @@ IMGDIR="$OUT/images"
 IMG="$IMGDIR/rootfs.img"
 VARIMG="$IMGDIR/var.img"     # -> var-a  (ext4, carries the /etc overlay upper+work)
 SEEDIMG="$IMGDIR/seed.img"   # -> seed   (squashfs, ro, SHARED across both root slots)
-SIZE="${ROOTFS_SIZE:-5G}"       # matches rootfs-a/-b in partition-table.txt; --shrink trims it
+# The rootfs image is auto-sized by mkfs.btrfs --rootdir --shrink (see section 7); no fixed SIZE.
 VAR_SIZE_MIB="${VAR_SIZE_MIB:-256}"   # matches var-a/-b in partition-table.txt (a hard ceiling)
 
 [ -n "$BASE" ]        || { echo "usage: assemble-rootfs.sh <base-rootfs-dir>" >&2; exit 2; }
@@ -198,6 +198,95 @@ else
   echo "  (no hw-support/ tree — skipping HW-support injection)"
 fi
 
+# 4e-bis. x86 emulation runtime. Two independent paths, both fed from packages/*.pin and baked
+# into the slot (see images/partition-table.txt for why they are NOT on a shared partition):
+#
+#   Windows games      -> the arm64 Proton extracted by customize-base.sh, which carries its OWN
+#                         WoW64 FEX. Needs no system FEX, no guest rootfs, no runtime container.
+#   native x86 Linux   -> the fex-emu package + the ArchLinux.ero guest rootfs. FEX registers
+#                         itself with binfmt_misc by dropping /usr/lib/binfmt.d/FEX-x86*.conf;
+#                         systemd-binfmt.service is already in sysinit.target.wants and activates
+#                         on ConditionDirectoryNotEmpty, so no unit needs enabling here.
+#
+# The fex/ tree carries only configuration (see fex/README.md); the binaries come from pacman.
+FEXTREE="$ROOT/fex"
+if [ -d "$FEXTREE" ]; then
+  echo "  injecting FEX runtime config from ${FEXTREE#"$ROOT"/} (system Config.json + Proton FEX profiles)"
+  cp -a "$FEXTREE"/usr "$stage/"
+  chmod 0755 "$stage/usr/lib/novadeck/proton-wrapper"
+else
+  echo "  (no fex/ tree — skipping FEX runtime config)"
+fi
+
+# Rewrite the baked Proton compat tool. Upstream ships toolmanifest.vdf AND compatibilitytool.vdf
+# verbatim; both need editing, and every edit FAILS LOUDLY if upstream changes shape — a silently
+# un-rewritten tool would refuse to launch, bypass our FEX tuning, or unpin games on the next bump.
+#
+# toolmanifest.vdf:
+#   1. Drop `require_tool_appid`. It names Valve's arm64 SLR container, which a non-Deckard
+#      client never *registers* as a compat tool even when its files are installed. Steam then
+#      quietly falls back to an older Proton instead of launching this one.
+#   2. Point `commandline` at our wrapper, so per-game FEX tuning lands before Proton starts.
+#
+# compatibilitytool.vdf:
+#   3. Replace the tool's INTERNAL name. Upstream's is the dated build string
+#      (proton-cachyos-11.0-20260602-slr-arm64), and Steam records THAT internal name — not the
+#      directory — against every game it is forced on. Left as-is, a Proton bump changes the
+#      internal name and silently unpins every game. Rewrite it to a stable, version-free id so a
+#      bump is transparent. (The directory is already version-free via the pin's `dest`; that
+#      alone does NOT stabilise what Steam pins by.)
+#   4. Give it a friendly display_name (upstream reuses the dated build string there too).
+NOVADECK_PROTON_TOOL_NAME="proton-cachyos-11.0-arm64"   # stable internal id (matches the tool dir); docs match
+PROTON_TOOL="$stage/usr/share/steam/compatibilitytools.d/proton-cachyos-11.0-arm64"
+if [ -d "$PROTON_TOOL" ]; then
+  MANIFEST="$PROTON_TOOL/toolmanifest.vdf"
+  [ -f "$MANIFEST" ] || { echo "ERROR: Proton tool has no toolmanifest.vdf at $MANIFEST" >&2; exit 1; }
+
+  # Surface the Proton version in the display_name, derived from the tool's own `version` file
+  # (format: "<epoch> cachyos-<ver>-...", e.g. "cachyos-11.0-20260602-slr" -> "11.0-20260602").
+  # Fail loudly rather than ship a version-less name if upstream drops or reshapes the file.
+  [ -f "$PROTON_TOOL/version" ] || { echo "ERROR: Proton tool has no version file at $PROTON_TOOL/version" >&2; exit 1; }
+  PVER="$(sed -n 's/.*cachyos-\([0-9][0-9.]*-[0-9]\{6,\}\).*/\1/p' "$PROTON_TOOL/version")"
+  [ -n "$PVER" ] || { echo "ERROR: could not parse Proton version from $(cat "$PROTON_TOOL/version")" >&2; exit 1; }
+  NOVADECK_PROTON_DISPLAY="Proton ${PVER} (CachyOS, arm64)"
+
+  grep -q 'require_tool_appid' "$MANIFEST" \
+    || { echo "ERROR: Proton toolmanifest has no require_tool_appid — inspect before rewriting" >&2; exit 1; }
+  sed -i '/require_tool_appid/d' "$MANIFEST"
+
+  grep -qE '"commandline"[[:space:]]+"/proton ' "$MANIFEST" \
+    || { echo "ERROR: Proton toolmanifest commandline is not \"/proton %verb%\" — inspect" >&2; exit 1; }
+  sed -i 's#"commandline"[[:space:]]*"/proton #"commandline" "/novadeck-proton #' "$MANIFEST"
+
+  CTOOL="$PROTON_TOOL/compatibilitytool.vdf"
+  [ -f "$CTOOL" ] || { echo "ERROR: Proton tool has no compatibilitytool.vdf at $CTOOL" >&2; exit 1; }
+
+  # The internal name is the first quoted string inside `compat_tools { ... }`; the display_name
+  # is a `"display_name" "..."` pair. Both are matched positionally so an unexpected upstream shape
+  # errors out rather than half-rewriting.
+  python3 - "$CTOOL" "$NOVADECK_PROTON_TOOL_NAME" "$NOVADECK_PROTON_DISPLAY" <<'PYVDF'
+import re, sys
+path, tool_name, display = sys.argv[1], sys.argv[2], sys.argv[3]
+text = open(path).read()
+text, n = re.subn(r'("compat_tools"\s*\{\s*(?://[^\n]*\n\s*)*)"[^"]+"', lambda m: m.group(1) + '"%s"' % tool_name, text, count=1)
+if n != 1: sys.exit("compatibilitytool.vdf: could not find compat_tools internal name")
+text, n = re.subn(r'("display_name"\s+)"[^"]+"', lambda m: m.group(1) + '"%s"' % display, text, count=1)
+if n != 1: sys.exit("compatibilitytool.vdf: could not find display_name")
+open(path, "w").write(text)
+PYVDF
+
+  # In-tool shim: Steam resolves `commandline` relative to the tool directory, so the wrapper is
+  # reached through a path Steam accepts, while the wrapper itself stays a normal system file.
+  cat >"$PROTON_TOOL/novadeck-proton" <<'PROTONSHIM'
+#!/bin/sh
+exec /usr/lib/novadeck/proton-wrapper "$(dirname "$0")/proton" "$@"
+PROTONSHIM
+  chmod 0755 "$PROTON_TOOL/novadeck-proton"
+  echo "  wired Proton compat tool as '$NOVADECK_PROTON_TOOL_NAME' (require_tool dropped, FEX wrapper in front, stable name)"
+else
+  echo "  (no baked Proton compat tool — x86 Windows games will have no compat tool)" >&2
+fi
+
 # 4f. RELEASE Steam shell (SteamOS layer D): the native arm64 Steam plumbing. Two parts:
 #  - the steam/usr overlay (SoC-agnostic): the launcher (/usr/bin/novadeck-steam)
 #    NOVADECK_SESSION_CMD points at, plus the FACTORY-RESET re-seed tool (/usr/lib/novadeck/
@@ -224,7 +313,7 @@ fi
 #    the UI on first launch (curl/unzip/tar stay in the base for that). See devices/bringup-phase3.md.
 #    It lives on its OWN SHARED squashfs partition (p8 novadeck-seed), mounted ro by the initramfs
 #    at /usr/share/novadeck/steam-seed — the same path steam-bootstrap.sh has always read. Inside a
-#    root slot it would be duplicated A+B (2x1.4G) and push both roots past 5G; as squashfs+zstd it
+#    root slot it would be duplicated A+B (2x1.4G) against an 8G slot; as squashfs+zstd it
 #    is ~700M, once. The root only carries the empty mountpoint.
 STEAM="$ROOT/steam"
 seedstage="$(mktemp -d)"
@@ -244,21 +333,10 @@ if [ -d "$STEAM/usr" ]; then
   if [ -x "$SEED/steamrtarm64/steam" ]; then
     echo "  staging Steam RECOVERY seed from ${SEED#"$ROOT"/} -> $(basename "$SEEDIMG") ($(du -sh "$SEED" | cut -f1) raw, offline factory-reset source)"
     cp -a "$SEED"/. "$seedstage/"
-    # novadeck self-chaining Proton 11 ARM64 compat tool (proton11sc): registers a
-    # user-selectable compat tool that runs Valve's Proton 11 ARM64 + bundled WoW64
-    # FEX for x86 Windows games, chaining the SLR 4.0 Arm64 container itself so the
-    # client never resolves Proton's platform-gated require_tool 4185400 (which fails
-    # AppError_51 on a non-Deckard client). Our code, not Valve content — the Proton
-    # /SLR4 runtimes themselves are client-fetched by the user post-OOBE. Baked into
-    # the RECOVERY seed so a factory reset restores it (steam-bootstrap.sh copies the
-    # whole seed into ~deck/.local/share/Steam, where compatibilitytools.d/ lives).
-    CTOOLS="$STEAM/compatibilitytools.d"
-    if [ -d "$CTOOLS" ]; then
-      echo "  baking novadeck compat tool(s) from ${CTOOLS#"$ROOT"/} -> steam-seed/compatibilitytools.d"
-      install -d -m0755 "$seedstage/compatibilitytools.d"
-      cp -a "$CTOOLS"/. "$seedstage/compatibilitytools.d/"
-      chmod 0755 "$seedstage/compatibilitytools.d/proton11sc/novadeck-chain"
-    fi
+    # No compat tool is seeded here any more. The Proton tool now lives in the root slot at
+    # /usr/share/steam/compatibilitytools.d (Steam scans that path too), which means it is
+    # replaced atomically with the OS and cannot be left stale by a factory reset — the seed is
+    # a *pristine Steam client*, and a compat tool is an OS component, not client state.
   else
     echo "  WARNING: no Steam seed at ${SEED#"$ROOT"/} — run steam/fetch-steam-seed.sh (no offline factory-reset source)" >&2
   fi
@@ -791,10 +869,19 @@ else
   echo "  (no Steam seed staged — no ${SEEDIMG#"$ROOT"/}; offline factory reset unavailable)" >&2
 fi
 
-# 7. bake the Btrfs image (populate without mounting), then shrink to fit
+# 7. bake the Btrfs image (populate without mounting), compressed + shrunk to fit.
+# Let mkfs.btrfs --rootdir size the device itself: on btrfs-progs v7.0 a PRE-truncated large device
+# (the old `truncate -s 8G`) forces 1 GiB data block-groups, and `--shrink` can only shrink to that
+# coarse granularity — so 6.3 GiB of content rounded up to a 9.25 GiB image that overflowed the 8 GiB
+# slot. Creating the file fresh lets --rootdir pick tight chunks, and --shrink then lands near the
+# real usage. make-sdcard's `fits` check is the backstop if content ever genuinely exceeds the slot.
+#
+# --compress zstd: the root is sealed read-only, so compression is pure upside — it shrinks the OS
+# libraries/binaries substantially (the .ero and Proton payloads compress less, being pre-packed),
+# giving comfortable headroom under the 8 GiB slot. It is a WRITE-TIME property recorded per extent;
+# reads decompress transparently, so no mount option is needed and the ro root needs no fstab change.
 rm -f "$IMG"
-truncate -s "$SIZE" "$IMG"
-mkfs.btrfs --rootdir "$stage" --shrink -L novadeck-root -f "$IMG" >/dev/null
+mkfs.btrfs --rootdir "$stage" --compress zstd --shrink -L novadeck-root -f "$IMG" >/dev/null
 
 echo "  ok   rootfs -> ${IMG#"$ROOT"/}  ($(du -h "$IMG" | cut -f1), from $(du -sh "$stage" 2>/dev/null | cut -f1) staged)"
 echo "Done. Read-only root ready for slot install / RAUC bundling (images/genbundle.sh)."

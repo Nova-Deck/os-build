@@ -45,6 +45,13 @@ fi
 STEAM_LD_PATH="${STEAM}/steamrtarm64:${STEAM}/steamrtarm64/video:${STEAM}/lib/aarch64-linux-gnu"
 export LD_LIBRARY_PATH="${STEAM_LD_PATH}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 
+# Make the image-resident compat tool discoverable. novadeck bakes the arm64 Proton (its own WoW64
+# FEX for x86 Windows games) into the OS slot at /usr/share/steam/compatibilitytools.d so it is
+# replaced atomically with the OS and survives a factory reset — but the client only scans the
+# per-user compatibilitytools.d and whatever this variable lists, NOT /usr/share by default. Keep
+# the user path too, so anything the user drops there still registers.
+export STEAM_EXTRA_COMPAT_TOOLS_PATHS="/usr/share/steam/compatibilitytools.d${STEAM_EXTRA_COMPAT_TOOLS_PATHS:+:${STEAM_EXTRA_COMPAT_TOOLS_PATHS}}"
+
 # --- SteamUI QuickAccess / gamescope integration env (SteamOS "gamescope-session" parity) ---------
 # ENV GATES SteamUI reads to decide which Quick-Access controls to expose. They pair with the
 # gamescope --steam stats channel wired in novadeck-session — without the channel these do nothing,

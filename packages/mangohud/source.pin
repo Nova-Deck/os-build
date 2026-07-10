@@ -10,7 +10,7 @@
 # It is NOT cosmetic on this device: the Steam client prepends `mangohud` to every game launch
 # command when the Quick-Access performance overlay is enabled, so with no `mangohud` on the image
 # toggling the overlay makes the exec fail and CRASHES the launch (HW 2026-07-07, Gravity Circuit via
-# proton11sc — ran fine with the overlay off, died the moment it was toggled on). See TODO.md and
+# the Proton compat tool — ran fine with the overlay off, died the moment it was toggled on). See TODO.md and
 # [[sm8650-gamescope-session-plumbing]].
 #
 # Recipe: MangoHud 0.8.4 (the exact version armada/Fedora + Arch ship), built with

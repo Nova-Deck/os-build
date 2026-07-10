@@ -1,0 +1,161 @@
+#!/usr/bin/env python3
+"""Front Proton's entry point and hand it a per-game FEX configuration.
+
+Steam invokes this instead of `proton` (see the compat-tool rewrite in assemble-rootfs.sh):
+
+    proton-wrapper /path/to/proton <verb> [args...]
+
+Proton generates its own FEX config *only when FEX_APP_CONFIG is unset*, and honours a pre-set
+value otherwise. So exporting FEX_APP_CONFIG here is a supported override, not a hack.
+
+Failing to tune FEX must never stop a game from launching: every error below degrades to "exec
+Proton with whatever config it would have picked itself".
+"""
+
+import json
+import os
+import pathlib
+import sys
+import time
+
+BASE_CONFIG = pathlib.Path("/usr/share/fex-emu/Config.json")
+PROFILES = pathlib.Path("/usr/share/novadeck/fex-profiles.json")
+TWEAKS = pathlib.Path("/etc/novadeck/game-tweaks.json")
+
+STALE_AFTER = 24 * 60 * 60  # generated configs are per-launch; reap yesterday's
+
+
+def appid():
+    """Steam exports the running appid under one of three names, depending on the launch path."""
+    for key in ("STEAM_COMPAT_APP_ID", "SteamAppId", "SteamGameId"):
+        value = os.environ.get(key, "").strip()
+        if value.isdigit():
+            return value
+    return None
+
+
+def load_profiles():
+    with PROFILES.open(encoding="utf-8") as f:
+        contract = json.load(f)
+    profiles = contract.get("profiles")
+    if not isinstance(contract.get("defaults"), dict) or not isinstance(profiles, dict):
+        raise ValueError("fex-profiles.json: missing 'defaults' or 'profiles'")
+    if "default" not in profiles:
+        raise ValueError("fex-profiles.json: no 'default' profile to fall back to")
+    for name, profile in profiles.items():
+        if not isinstance(profile, dict) or not isinstance(profile.get("config"), dict):
+            raise ValueError(f"fex-profiles.json: profile '{name}' has no config object")
+    return contract
+
+
+def load_tweaks(defaults):
+    """User overrides. Absent or malformed means 'no overrides', never a launch failure."""
+    tweaks = json.loads(json.dumps(defaults))  # deep copy; defaults must stay pristine
+    try:
+        with TWEAKS.open(encoding="utf-8") as f:
+            loaded = json.load(f)
+    except (OSError, ValueError):
+        return tweaks
+    if not isinstance(loaded, dict):
+        return tweaks
+    if isinstance(loaded.get("global"), dict):
+        tweaks["global"].update(loaded["global"])
+    if isinstance(loaded.get("games"), dict):
+        tweaks["games"] = loaded["games"]
+    return tweaks
+
+
+def settings_for(tweaks, game_id):
+    """Global settings, overlaid with this game's if it has an entry that is explicitly enabled."""
+    settings = dict(tweaks.get("global", {}))
+    game = tweaks.get("games", {}).get(str(game_id)) if game_id else None
+    if isinstance(game, dict) and game.get("enabled") is True:
+        settings.update(game)
+    return settings
+
+
+def resolve_config(settings, profiles):
+    profile_id = settings.get("fexProfile")
+    if isinstance(profile_id, str) and profile_id in profiles:
+        return profiles[profile_id]["config"]
+    explicit = settings.get("fexConfig")
+    if isinstance(explicit, dict):
+        return explicit
+    return profiles["default"]["config"]
+
+
+def resolve_thunks(settings, names):
+    """Thunks are only user-selectable under a custom profile; presets keep the full set on."""
+    chosen = settings.get("thunks") if settings.get("fexProfile") == "custom" else None
+    if not isinstance(chosen, dict):
+        chosen = {}
+    return {name: 1 if chosen.get(name, True) else 0 for name in names}
+
+
+def runtime_dir():
+    # /usr is read-only, so the generated config cannot live beside the base config.
+    base = os.environ.get("XDG_RUNTIME_DIR")
+    return pathlib.Path(base) / "novadeck-fex" if base else pathlib.Path(f"/tmp/novadeck-fex-{os.getuid()}")
+
+
+def reap_stale(directory):
+    cutoff = time.time() - STALE_AFTER
+    for old in directory.glob("*.json"):
+        try:
+            if old.stat().st_mtime < cutoff:
+                old.unlink()
+        except OSError:
+            pass
+
+
+def write_config(settings, game_id, profiles):
+    with BASE_CONFIG.open(encoding="utf-8") as f:
+        config = json.load(f)
+
+    # Only keys some profile actually declares may be overridden — a typo in game-tweaks.json
+    # must not inject arbitrary keys into FEX's config.
+    allowed = set().union(*(profile["config"].keys() for profile in profiles.values()))
+    resolved = resolve_config(settings, profiles)
+    config.setdefault("Config", {}).update({k: v for k, v in resolved.items() if k in allowed})
+    config["ThunksDB"] = resolve_thunks(settings, config.get("ThunksDB", {}).keys())
+
+    directory = runtime_dir()
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    reap_stale(directory)
+
+    # PID-qualified: two games can run concurrently (a launcher spawning the real title).
+    name = f"{game_id or 'global'}.{os.getpid()}.json"
+    target = directory / name
+    tmp = target.with_name(f".{name}.tmp")
+    try:
+        with tmp.open("w", encoding="utf-8") as f:
+            json.dump(config, f, indent=2, sort_keys=True)
+            f.write("\n")
+        os.replace(tmp, target)  # atomic: FEX must never read a half-written config
+    finally:
+        tmp.unlink(missing_ok=True)
+    return target
+
+
+def main():
+    if len(sys.argv) < 2:
+        raise SystemExit("usage: proton-wrapper PROTON_ENTRYPOINT [ARGS...]")
+    proton = sys.argv[1]
+
+    # An explicit FEX_APP_CONFIG in the environment is a deliberate user override; leave it be.
+    if "FEX_APP_CONFIG" not in os.environ:
+        try:
+            contract = load_profiles()
+            settings = settings_for(load_tweaks(contract["defaults"]), appid())
+            os.environ["FEX_APP_CONFIG"] = str(write_config(settings, appid(), contract["profiles"]))
+        except Exception as exc:  # noqa: BLE001 - a tuning failure must not block the launch
+            print(f"proton-wrapper: no FEX config written ({exc}); using Proton's own", file=sys.stderr)
+
+    try:
+        os.execv(proton, [proton, *sys.argv[2:]])
+    except OSError as exc:
+        raise SystemExit(f"proton-wrapper: cannot exec {proton}: {exc}")
+
+
+if __name__ == "__main__":
+    main()

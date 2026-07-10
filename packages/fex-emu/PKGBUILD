@@ -1,0 +1,251 @@
+# FEX — x86/x86-64 usermode emulator for AArch64. novadeck-owned recipe (no holo/AUR package
+# exists: `fex-emu` is absent from the holo core/extra dbs AND from the AUR, so there is nothing
+# to fetch or patch — we build it from source).
+#
+# What it buys us: a SYSTEM x86 interpreter, registered with binfmt_misc, so native x86/x86_64
+# *Linux* ELF binaries execute directly. That is a separate path from Windows games — those run
+# on the bundled arm64 Proton, which carries its OWN WoW64 FEX (libwow64fex.dll) and needs
+# neither this package nor the guest rootfs. See docs/windows-games-fex.md.
+#
+# THUNKS ARE MANDATORY, not an optimisation. Without the host thunks the guest's GL/Vulkan calls
+# have no native implementation to forward to, and the loader faults on x86 binaries. Building
+# them requires compiling *x86* guest libraries on this *aarch64* host, hence the x86 sysroot
+# assembled in prepare() from pinned Arch x86_64/i686 packages. Consequences:
+#
+#   - The sysroot is a BUILD-TIME artifact. It is never installed, never shipped.
+#   - It is deliberately built from ARCH packages, so the guest thunks are compiled against the
+#     very same glibc they will run against inside the Arch guest rootfs (packages/fex-rootfs).
+#     A cross-distro sysroot works, but matching them removes a whole class of ABI surprises.
+#   - Arch keeps i686 libraries in /usr/lib32 (not /usr/lib), and names its GCC triple
+#     x86_64-pc-linux-gnu — both differ from other distros, so the toolchain files below are
+#     written here rather than reusing upstream's Data/CMake ones.
+#
+# pac-ret branch protection MUST be off: it clobbers the registers FEX's JIT relies on. -O3
+# matches upstream's own release build.
+#
+# The overlay builder invokes this under arm64 emulation and runs `makepkg --skipinteg`, so the
+# sha256sums below are NOT enforced by makepkg. prepare() therefore re-verifies the sysroot
+# packages itself with an explicit `sha256sum -c` — that check is the real integrity gate. FEX
+# itself is pinned by commit, which git verifies for us.
+#
+# To bump: move _commit to a new FEX-<ver> tag, set pkgver to match, and refresh the sysroot
+# package versions + hashes together (archive.archlinux.org URLs are permanent).
+
+pkgname=fex-emu
+pkgver=2607
+pkgrel=1
+pkgdesc="Fast usermode x86 and x86-64 emulator for AArch64, with host/guest thunks"
+arch=('aarch64')
+url="https://fex-emu.com"
+license=('MIT' 'Apache-2.0' 'BSL-1.0' 'BSD-3-Clause' 'GPL-2.0-only')
+
+# erofsfuse is a HARD dependency, not optional: FEXServer execvpe()s `erofsfuse` to mount the
+# guest rootfs (Source/Tools/FEXServer/SquashFS.cpp). If the binary is missing the exec fails
+# inside a forked child and FEXServer aborts — every x86 launch dies. squashfuse covers the
+# .sqsh rootfs variant. NOTE: erofsfuse is its OWN package; erofs-utils does NOT contain it.
+# Verified against the built package's ELFs (readelf -d union across bins + HostThunks + libFEXCore):
+#   NEEDED  -> fmt (libfmt.so.12), xxhash (libxxhash.so.0), libglvnd (libGL.so.1/libGLX.so.0),
+#              libx11 (libX11.so.6). glibc/gcc-libs are base-system, not listed.
+#   dlopen  -> the HOST thunks we enable in ThunksDB (Vulkan/EGL/drm/WaylandClient/asound) load
+#              their target lib at RUNTIME, so it is NOT in NEEDED but is still required whenever the
+#              thunk is on: vulkan-icd-loader, libdrm, wayland, alsa-lib (+ libEGL from libglvnd).
+#   exec    -> erofsfuse/squashfuse/fuse3: FEXServer execvpe's the fuse helper to mount the rootfs.
+# libxrandr moved to makedepends (build-only header for the Vulkan thunk; not linked/dlopen'd at
+# runtime — see the note there). The cuda thunk builds but is never enabled and needs no libcuda dep.
+depends=('erofsfuse' 'squashfuse' 'fuse3' 'fmt' 'xxhash'
+         'libglvnd' 'libdrm' 'wayland' 'alsa-lib' 'vulkan-icd-loader' 'libx11')
+# libxrandr is BUILD-ONLY: the Vulkan guest thunk's <vulkan/vulkan.h> #includes
+# X11/extensions/Xrandr.h (the VK_USE_PLATFORM_XLIB_XRANDR surface), so the header must be present
+# to compile — but the resulting thunk .so neither links nor dlopens libXrandr, so it is NOT a
+# runtime depend. Dropping it from both lists broke the build; makedepends is its correct home.
+makedepends=('git' 'cmake' 'ninja' 'clang' 'lld' 'llvm' 'python-setuptools'
+             'catch2' 'libepoxy' 'zlib' 'openssl' 'libarchive' 'libxrandr')
+
+# The FEX-2607 tag. NOTE this is the COMMIT the tag points at, not the tag object's own sha —
+# `git ls-remote refs/tags/FEX-2607` prints the latter (6efd1c09…), which #commit= cannot resolve.
+# Verify a bump with: git rev-parse FEX-<ver>^{commit}
+_commit=1cc4b93e7a71c883ec021b71359f136394dc1f3c
+
+# x86 sysroot inputs. Pinned to archive.archlinux.org (permanent URLs; the rolling mirrors
+# rotate old versions out). noextract: these are the sysroot payload, assembled by hand in
+# prepare() — makepkg must not splatter them into $srcdir.
+_glibc_ver=2.43+r37+gfdf10644d6ee-1
+_gcc_ver=16.1.1+r346+g4e03491b401d-1
+_lah_ver=7.1-1
+_ala=https://archive.archlinux.org/packages
+
+# NOTE: the 64-bit libstdc++ comes from the standalone `libstdc++` package. Arch split gcc-libs
+# into per-library packages; `gcc-libs` itself is now an EMPTY metapackage (a few KB of metadata,
+# zero files) and extracting it yields nothing. `lib32-gcc-libs` was not split and still carries
+# the 32-bit libstdc++. The `+` in the libstdc++ filename must be percent-encoded in the URL.
+source=("FEX::git+https://github.com/FEX-Emu/FEX.git#commit=${_commit}"
+        "${_ala}/g/glibc/glibc-${_glibc_ver}-x86_64.pkg.tar.zst"
+        "${_ala}/l/lib32-glibc/lib32-glibc-${_glibc_ver}-x86_64.pkg.tar.zst"
+        "${_ala}/g/gcc/gcc-${_gcc_ver}-x86_64.pkg.tar.zst"
+        "${_ala}/l/libstdc%2B%2B/libstdc++-${_gcc_ver}-x86_64.pkg.tar.zst"
+        "${_ala}/l/lib32-gcc-libs/lib32-gcc-libs-${_gcc_ver}-x86_64.pkg.tar.zst"
+        "${_ala}/l/linux-api-headers/linux-api-headers-${_lah_ver}-x86_64.pkg.tar.zst")
+
+# Exact filenames, never globs: `gcc-*` would also match `gcc-libs-*`, and bsdtar would then
+# read the second name as a member to extract from the first archive.
+_sysroot_pkgs=("glibc-${_glibc_ver}-x86_64.pkg.tar.zst"
+               "lib32-glibc-${_glibc_ver}-x86_64.pkg.tar.zst"
+               "gcc-${_gcc_ver}-x86_64.pkg.tar.zst"
+               "libstdc++-${_gcc_ver}-x86_64.pkg.tar.zst"
+               "lib32-gcc-libs-${_gcc_ver}-x86_64.pkg.tar.zst"
+               "linux-api-headers-${_lah_ver}-x86_64.pkg.tar.zst")
+
+noextract=("${_sysroot_pkgs[@]}")
+
+sha256sums=('SKIP'
+            '213332b0d5b712c20a12dd61d96ba4c21f192df63d454a94ad5cef2b7864e8d1'
+            '09102ae43a990a86ec5749b191454120b57a62cd1b140693f61e87cddcd86f85'
+            '1927406e3eaa37def65d525222a05e6b20c5c4cae388c331da85757009b9967f'
+            'e046e061b4e27d8812a5c339b357a195bbe6cab4d2e128c5cdc3714547d36164'
+            '491919142322a5f06ee0c3ddf984dda3913e4bf22a8af6efcb6adcef2033dbe2'
+            'a6edb1e19a58c43abb93b38e70eb327b2e8b0c15aa74abf31a187c0ee6a5d732')
+
+# Only the externals FEX cannot take from the system. fmt, xxhash and Catch2 resolve via
+# find_package() against the holo packages, so their submodules stay uninitialised; the test-data
+# submodules (fex-*-tests-bins) and tracy are never built and would cost hundreds of MB to clone.
+_submodules=(
+  External/vixl
+  External/drm-headers
+  External/Vulkan-Headers
+  External/jemalloc_glibc
+  External/range-v3
+  External/zydis
+  External/unordered_dense
+  External/rpmalloc
+  Source/Common/cpp-optparse
+)
+
+prepare() {
+  # This `cd` MUST be the first one in prepare(): packages/build-overlay.sh injects the
+  # `patch -p1` calls for every file listed in source.pin's `patches:` immediately after it, and
+  # those patches are rooted at the FEX source tree (a/FEXCore/…, a/ThunkLibs/…).
+  cd "$srcdir/FEX"
+
+  git submodule update --init --depth 1 -- "${_submodules[@]}"
+
+  cd "$srcdir"
+
+  # Real integrity gate for the sysroot (makepkg runs with --skipinteg here).
+  sha256sum -c --strict <<-EOF
+	213332b0d5b712c20a12dd61d96ba4c21f192df63d454a94ad5cef2b7864e8d1  glibc-${_glibc_ver}-x86_64.pkg.tar.zst
+	09102ae43a990a86ec5749b191454120b57a62cd1b140693f61e87cddcd86f85  lib32-glibc-${_glibc_ver}-x86_64.pkg.tar.zst
+	1927406e3eaa37def65d525222a05e6b20c5c4cae388c331da85757009b9967f  gcc-${_gcc_ver}-x86_64.pkg.tar.zst
+	e046e061b4e27d8812a5c339b357a195bbe6cab4d2e128c5cdc3714547d36164  libstdc++-${_gcc_ver}-x86_64.pkg.tar.zst
+	491919142322a5f06ee0c3ddf984dda3913e4bf22a8af6efcb6adcef2033dbe2  lib32-gcc-libs-${_gcc_ver}-x86_64.pkg.tar.zst
+	a6edb1e19a58c43abb93b38e70eb327b2e8b0c15aa74abf31a187c0ee6a5d732  linux-api-headers-${_lah_ver}-x86_64.pkg.tar.zst
+	EOF
+
+  # Assemble the x86 sysroot. Each Arch package is rooted at usr/, so extracting only that path
+  # merges them cleanly and drops the package metadata (.PKGINFO/.BUILDINFO/.MTREE).
+  rm -rf sysroot; mkdir -p sysroot
+  local p
+  for p in "${_sysroot_pkgs[@]}"; do
+    bsdtar -xf "$p" -C sysroot usr
+  done
+
+  # Assert the sysroot is actually populated. Arch has silently turned packages into empty
+  # metapackages before (gcc-libs), and an empty extraction otherwise surfaces hundreds of
+  # confusing compile errors deep inside the thunk build instead of here.
+  local f
+  for f in usr/include/stdio.h usr/include/gnu/stubs-32.h usr/include/linux/futex.h \
+           usr/lib/crt1.o usr/lib/libc.so usr/lib/libstdc++.so \
+           usr/lib32/crt1.o usr/lib32/libc.so usr/lib32/libstdc++.so; do
+    [ -e "sysroot/$f" ] || { echo "fex-emu: sysroot is missing $f" >&2; return 1; }
+  done
+
+  # Derive the GCC C++ header layout instead of hardcoding it — Arch's `gcc` bumps the directory
+  # name (usr/include/c++/16) and the triple subdir independently of the package version.
+  local cppinc triple
+  cppinc="$(cd sysroot && echo usr/include/c++/*)"
+  triple="$(cd "sysroot/${cppinc}" && echo x86_64-*-linux-gnu)"
+  [ -d "sysroot/${cppinc}/${triple}/32" ] || {
+    echo "fex-emu: sysroot has no 32-bit C++ headers at ${cppinc}/${triple}/32" >&2; return 1; }
+
+  # Thunk toolchains. -nodefaultlibs/-nostartfiles: the guest thunks are plain shared objects,
+  # so clang must not reach for the *host* aarch64 crt files. Arch's i686 libraries live in
+  # /usr/lib32, which clang does not search on its own for the i686 target.
+  #
+  # -idirafter /usr/include: the guest thunks are x86, but they #include the *API* headers of the
+  # libraries they wrap — wayland-util.h, GL/glx.h, xf86drm.h, alsa/asoundlib.h. Those are
+  # arch-independent, and the x86 sysroot (glibc + gcc only) does not carry them; the host's own
+  # dev packages (wayland/libglvnd/libdrm/alsa-lib, pulled in as makepkg deps) do. -idirafter puts
+  # /usr/include LAST, so the x86 sysroot's glibc/gcc headers still win and only these missing
+  # library headers fall through to the host copy.
+  cat > toolchain_x86_64.cmake <<-EOF
+	set(CMAKE_SYSTEM_NAME Linux)
+	set(CMAKE_SYSTEM_PROCESSOR x86_64)
+	set(CMAKE_C_COMPILER clang)
+	set(CMAKE_CXX_COMPILER clang++)
+	set(CMAKE_EXE_LINKER_FLAGS_INIT "-fuse-ld=lld")
+	set(CMAKE_MODULE_LINKER_FLAGS_INIT "-fuse-ld=lld")
+	set(CMAKE_SHARED_LINKER_FLAGS_INIT "-fuse-ld=lld -L\${X86_DEV_ROOTFS}/usr/lib -lstdc++")
+	set(CLANG_FLAGS "-nodefaultlibs -nostartfiles -target x86_64-linux-gnu --sysroot=\${X86_DEV_ROOTFS} -idirafter /usr/include")
+	set(CMAKE_C_FLAGS "\${CMAKE_C_FLAGS} \${CLANG_FLAGS}")
+	set(CMAKE_CXX_FLAGS "\${CMAKE_CXX_FLAGS} \${CLANG_FLAGS} -I\${X86_DEV_ROOTFS}/${cppinc} -I\${X86_DEV_ROOTFS}/${cppinc}/${triple}")
+	set(CMAKE_C_COMPILER_FORCED TRUE)
+	set(CMAKE_CXX_COMPILER_FORCED TRUE)
+	EOF
+
+  cat > toolchain_x86_32.cmake <<-EOF
+	set(CMAKE_SYSTEM_NAME Linux)
+	set(CMAKE_SYSTEM_PROCESSOR i686)
+	set(CMAKE_C_COMPILER clang)
+	set(CMAKE_CXX_COMPILER clang++)
+	set(CMAKE_EXE_LINKER_FLAGS_INIT "-fuse-ld=lld")
+	set(CMAKE_MODULE_LINKER_FLAGS_INIT "-fuse-ld=lld")
+	set(CMAKE_SHARED_LINKER_FLAGS_INIT "-fuse-ld=lld -L\${X86_DEV_ROOTFS}/usr/lib32 -lstdc++")
+	set(CLANG_FLAGS "-nodefaultlibs -nostartfiles -target i686-linux-gnu --sysroot=\${X86_DEV_ROOTFS} -msse2 -mfpmath=sse -idirafter /usr/include")
+	set(CMAKE_C_FLAGS "\${CMAKE_C_FLAGS} \${CLANG_FLAGS}")
+	set(CMAKE_CXX_FLAGS "\${CMAKE_CXX_FLAGS} \${CLANG_FLAGS} -I\${X86_DEV_ROOTFS}/${cppinc} -I\${X86_DEV_ROOTFS}/${cppinc}/${triple}/32 -I\${X86_DEV_ROOTFS}/${cppinc}/${triple}")
+	set(CMAKE_C_COMPILER_FORCED TRUE)
+	set(CMAKE_CXX_COMPILER_FORCED TRUE)
+	EOF
+}
+
+build() {
+  cd "$srcdir/FEX"
+
+  # pac-ret breaks the JIT; -O3 is upstream's release setting.
+  export CFLAGS+=" -mbranch-protection=none -O3"
+  export CXXFLAGS+=" -mbranch-protection=none -O3"
+
+  # TUNE_CPU is a scheduling hint only (not an ISA floor), so a conservative core keeps the
+  # build valid across the big.LITTLE cluster this ships on.
+  # BUILD_FEXCONFIG=FALSE drops the whole Qt6 dependency: it is a desktop settings GUI with no
+  # reachable surface in a gamescope-only session.
+  cmake -S . -B build -G Ninja \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_INSTALL_PREFIX=/usr \
+    -DCMAKE_C_COMPILER=clang \
+    -DCMAKE_CXX_COMPILER=clang++ \
+    -DTUNE_CPU=cortex-a78 \
+    -DENABLE_OFFLINE_TELEMETRY=OFF \
+    -DBUILD_FEXCONFIG=FALSE \
+    -DBUILD_TESTING=OFF \
+    -DBUILD_FEX_LINUX_TESTS=OFF \
+    -DBUILD_THUNKS=ON \
+    -DENABLE_CLANG_THUNKS=ON \
+    -DX86_DEV_ROOTFS="$srcdir/sysroot" \
+    -DX86_32_TOOLCHAIN_FILE="$srcdir/toolchain_x86_32.cmake" \
+    -DX86_64_TOOLCHAIN_FILE="$srcdir/toolchain_x86_64.cmake"
+
+  ninja -C build
+}
+
+package() {
+  cd "$srcdir/FEX"
+  DESTDIR="$pkgdir" ninja -C build install
+
+  # Mount/overlay points the runtime expects to exist. RootFS is where packages/fex-rootfs drops
+  # the guest image; FEXServer only ever mounts *from* here (onto a mkdtemp elsewhere), so a
+  # read-only root is fine.
+  install -d -m0755 "$pkgdir/usr/share/fex-emu/RootFS" "$pkgdir/usr/share/fex-emu/overlays"
+
+  # Built only when BUILD_TESTING is on, but installed into the wrong libdir regardless.
+  rm -f "$pkgdir/usr/lib/libfex_thunk_test.so"
+}

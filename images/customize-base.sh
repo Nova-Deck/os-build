@@ -94,7 +94,7 @@ DEST="$ROOT/work/base"
 # with no mangohud on the image toggling it CRASHES the launch (HW 2026-07-07). NOT in the holo repos
 # (no mango* in the synced core/extra dbs), so it is built from source into the [novadeck] overlay
 # (packages/mangohud, with the Qualcomm/Adreno GPU+battery patches) and resolves here.
-PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-tools mesa gamescope seatd sddm mangohud bluez bluez-utils networkmanager alsa-ucm-conf pipewire wireplumber pipewire-pulse pipewire-alsa unzip openal gtk2 ffmpeg e2fsprogs xorg-xwayland lsof noto-fonts noto-fonts-cjk noto-fonts-emoji)
+PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-tools mesa gamescope seatd sddm mangohud fex-emu bluez bluez-utils networkmanager alsa-ucm-conf pipewire wireplumber pipewire-pulse pipewire-alsa unzip openal gtk2 ffmpeg e2fsprogs xorg-xwayland lsof noto-fonts noto-fonts-cjk noto-fonts-emoji)
 
 # Test-only packages — installed ONLY under NOVADECK_TEST=1, NEVER in a release base.
 # On-device bring-up tools: evtest reads raw /dev/input events; usbutils provides lsusb.
@@ -106,16 +106,23 @@ TEST_PKGS=(evtest usbutils)
 PREBUILT_DIR="$ROOT/work/prebuilt"
 PREBUILT_PINS=("$ROOT"/packages/*/prebuilt.pin)
 pin_field() { sed -n "s/^$2:[[:space:]]*//p" "$1" | head -1; }
-# "name sha256 strip deps..." per pin, sorted — identifies exactly which prebuilts a base
-# carries AND the holo-repo runtime deps they declare, so a deps change also busts the reuse
-# cache. The container reads only the first three fields for extraction; trailing deps tokens
-# are captured into a throwaway var there (see the extraction loop), never used as a tar path.
+# One row per pin, sorted: `name sha256 strip kind dest deps...`. It identifies exactly which
+# prebuilts a base carries AND the holo-repo runtime deps they declare, so a deps change also
+# busts the reuse cache. The container re-reads this file as its placement list.
+#
+# `deps` stays LAST because it is the only space-separated (multi-token) field; everything the
+# container splits positionally must precede it. `dest` uses '-' rather than an empty field so a
+# pin without one cannot shift the columns. The container captures trailing deps tokens into a
+# throwaway var (see the placement loop) — they are pacman-installed via INSTALL_PKGS instead.
 prebuilt_manifest() {
-  local pin
+  local pin kind dest strip
   for pin in "${PREBUILT_PINS[@]}"; do
     [ -e "$pin" ] || continue
-    printf '%s %s %s %s\n' "$(pin_field "$pin" name)" "$(pin_field "$pin" sha256)" \
-                           "$(pin_field "$pin" strip)" "$(pin_field "$pin" deps)"
+    kind="$(pin_field "$pin" kind)";   kind="${kind:-tar}"
+    dest="$(pin_field "$pin" dest)";   dest="${dest:--}"
+    strip="$(pin_field "$pin" strip)"; strip="${strip:-0}"
+    printf '%s %s %s %s %s %s\n' "$(pin_field "$pin" name)" "$(pin_field "$pin" sha256)" \
+                                 "$strip" "$kind" "$dest" "$(pin_field "$pin" deps)"
   done | sort
 }
 EXPECTED_MANIFEST="$(prebuilt_manifest)"
@@ -193,10 +200,17 @@ for pin in "${PREBUILT_PINS[@]}"; do
   [ -e "$pin" ] || continue
   name="$(pin_field "$pin" name)"; ver="$(pin_field "$pin" version)"
   url="$(pin_field "$pin" url)";  sha="$(pin_field "$pin" sha256)"
+  kind="$(pin_field "$pin" kind)"; kind="${kind:-tar}"
   : "${name:?$pin: missing name}"; : "${url:?$pin: missing url}"; : "${sha:?$pin: missing sha256}"
-  echo "[novadeck] fetching prebuilt $name $ver: $url" >&2
-  curl -fsSL "$url" -o "$PREBUILT_DIR/$name.tar.gz"
-  echo "$sha  $PREBUILT_DIR/$name.tar.gz" | sha256sum -c - \
+  # `.blob` for a raw file (copied verbatim), `.tar` for an archive (tar autodetects gz/xz/zst).
+  case "$kind" in
+    tar)  staged="$PREBUILT_DIR/$name.tar" ;;
+    file) staged="$PREBUILT_DIR/$name.blob" ;;
+    *)    echo "$pin: unknown kind '$kind' (want: tar|file)" >&2; exit 1 ;;
+  esac
+  echo "[novadeck] fetching prebuilt $name $ver ($kind): $url" >&2
+  curl -fsSL "$url" -o "$staged"
+  echo "$sha  $staged" | sha256sum -c - \
     || { echo "$name sha256 mismatch — refusing" >&2; exit 1; }
 done
 printf '%s\n' "$EXPECTED_MANIFEST" >"$PREBUILT_DIR/prebuilt.manifest"
@@ -243,14 +257,31 @@ docker run --name "$cid" --platform linux/arm64 -v "$PREBUILT_DIR":/prebuilt:ro 
   locale-gen
 
   # Precompiled external packages staged + verified by the host (packages/*/prebuilt.pin):
-  # extract each into the rootfs with its pinned strip-components, then record the manifest
-  # in the base so the host reuse-check detects pin changes. Archive roots differ, so strip
-  # is per-package (InputPlumber is rooted at inputplumber/usr -> strip 1 lands at /usr).
+  # place each into the rootfs, then record the manifest in the base so the host reuse-check
+  # detects pin changes.
+  #   kind=tar  -> extract with the pin'"'"'s strip-components into `dest` (default /). Archive roots
+  #                differ, so strip is per-package (InputPlumber is rooted at inputplumber/usr ->
+  #                strip 1 lands at /usr; Proton strips its versioned dir into a stable name).
+  #   kind=file -> copy verbatim to `dest`, which is the full destination FILE path (the FEX
+  #                guest rootfs is a raw erofs image, not an archive).
   if [ -s /prebuilt/prebuilt.manifest ]; then
-    while read -r p_name p_sha p_strip p_deps; do
+    while read -r p_name p_sha p_strip p_kind p_dest p_deps; do
       [ -n "$p_name" ] || continue
       : "${p_deps:-}"  # deps are pacman-installed via the host INSTALL_PKGS list, not here
-      tar -C / --strip-components="${p_strip:-0}" -xzf "/prebuilt/$p_name.tar.gz"
+      # NB: `[ ... ] && x=y` would return 1 on a no-op and kill this `set -e` script.
+      if [ "$p_dest" = "-" ]; then p_dest=/; fi
+      case "${p_kind:-tar}" in
+        tar)
+          mkdir -p "$p_dest"
+          tar -C "$p_dest" --strip-components="${p_strip:-0}" -xf "/prebuilt/$p_name.tar"
+          ;;
+        file)
+          install -Dm0644 "/prebuilt/$p_name.blob" "$p_dest"
+          ;;
+        *)
+          echo "prebuilt $p_name: unknown kind ${p_kind}" >&2; exit 1
+          ;;
+      esac
     done < /prebuilt/prebuilt.manifest
     install -Dm0644 /prebuilt/prebuilt.manifest /usr/lib/novadeck/prebuilt.manifest
   fi

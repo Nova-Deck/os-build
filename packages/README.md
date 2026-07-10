@@ -4,21 +4,27 @@ Pacman packages layered on top of the upstream aarch64 base — overlays rebuilt
 source with novadeck patches (`source.pin`) and pinned precompiled tarballs
 (`prebuilt.pin`). (Static overlay trees baked straight into the rootfs — the Qualcomm
 HW-support layer and the Steam shell — live at top-level `hw-support/` and `steam/`, not
-here. FEX/Proton packaging is future Phase-3 work.)
+here; the FEX runtime *configuration* likewise lives at top-level `fex/`.)
 
 ## Precompiled external packages (`prebuilt.pin`)
 
 Components that aren't in the holo pacman repo and aren't built from source here are
-pulled in as **pinned precompiled tarballs**. Drop a `packages/<name>/prebuilt.pin`:
+pulled in as **pinned precompiled artifacts**. Drop a `packages/<name>/prebuilt.pin`:
 
 ```
-name: inputplumber                 # staged as work/prebuilt/<name>.tar.gz; manifest key
+name: inputplumber                 # staged as work/prebuilt/<name>.{tar,blob}; manifest key
 version: 0.77.6
 url: https://.../inputplumber-aarch64.tar.gz
 sha256: 0e0f7600…                  # from the asset's .sha256.txt sidecar
-strip: 1                           # tar --strip-components to land files at /usr
+kind: tar                          # optional: tar (default) | file
+strip: 1                           # tar only: --strip-components to land files at /usr
+dest: /                            # optional: where to put it (default /)
 deps: libiio                       # optional: holo-repo runtime deps (space-separated)
 ```
+
+`kind: tar` extracts the archive into `dest` (any tar compression; autodetected). `kind: file`
+copies the artifact verbatim **to** `dest`, which is then the full destination *file* path — for
+artifacts that aren't archives at all, such as the FEX guest rootfs image.
 
 `images/customize-base.sh` auto-discovers every `prebuilt.pin`, fetches + sha256-verifies
 it on the host, and extracts it into the release base — **adding a package is just a new
@@ -27,7 +33,9 @@ alongside the prebuilt (e.g. shared libraries the binary links), so a prebuilt's
 deps live with the pin instead of being hardcoded in the install list. The set of installed
 prebuilts **and their deps** is recorded in the base at `/usr/lib/novadeck/prebuilt.manifest`,
 which keys the base reuse-cache (bump a pin, or change its deps, → the base rebuilds).
-Current pins: `inputplumber/` (InputPlumber input daemon; `deps: libiio`).
+Current pins: `inputplumber/` (InputPlumber input daemon; `deps: libiio`),
+`fex-rootfs/` (the FEX x86 guest rootfs image; `kind: file`),
+`proton-cachyos/` (the baked arm64 Proton compat tool; `kind: tar`, `deps: python`).
 
 ## From-source overlay packages (`source.pin`)
 

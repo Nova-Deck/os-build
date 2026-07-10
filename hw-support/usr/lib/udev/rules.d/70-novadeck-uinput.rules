@@ -1,6 +1,6 @@
 # novadeck uinput access — let Steam Input create its virtual gamepad.
 #
-# When a game runs under Proton (proton11sc / Proton 11 ARM64), Steam Input opens
+# When a game runs under Proton (the baked arm64 compat tool), Steam Input opens
 # /dev/uinput to inject a virtual controller for the game. On the RO root that node
 # defaults to root:root 0600, so Steam fails with "Couldn't initialize virtual
 # gamepad: Couldn't open /dev/uinput for writing" — the game renders but takes no

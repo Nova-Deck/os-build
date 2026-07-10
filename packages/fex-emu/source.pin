@@ -1,0 +1,40 @@
+# fex-emu — built FROM SOURCE via a novadeck-owned PKGBUILD (packages/fex-emu/PKGBUILD).
+#
+# There is nothing to fetch or patch: `fex-emu` exists neither in the holo core/extra aarch64
+# repos (checked against the pinned base's synced dbs) nor in the AUR. So, unlike gamescope or
+# mesa, this is not a holo recipe with our patches on top — it is our own recipe for upstream
+# FEX, pinned to the FEX-2607 tag.
+#
+# Why ship it: it registers x86/x86_64 with binfmt_misc so native x86 *Linux* ELF binaries run
+# on this arm64 device. This is NOT the path Windows games take — those use the bundled arm64
+# Proton (packages/proton-cachyos), which carries its own WoW64 FEX and needs neither this
+# package nor the guest rootfs. The two paths are independent; see docs/windows-games-fex.md.
+#
+# Pairs with:
+#   packages/fex-rootfs/prebuilt.pin   the x86 guest rootfs this emulator runs binaries against
+#   fex/usr/share/fex-emu/Config.json  the system config naming that rootfs + enabling thunks
+#
+# Build cost: this is by far the heaviest overlay package. It compiles FEX with clang AND
+# cross-compiles the x86/i686 guest thunks, all under arm64 qemu emulation. Expect it to
+# dominate a cold `make` — it is cached like every other overlay package, so it only rebuilds
+# when this pin, the PKGBUILD, or its patches change.
+#
+# Fields (see packages/README.md):
+#   name           pkgname (must match the PKGBUILD); build-dir + repo entry
+#   pkgbuild_local path (relative to this dir) to the checked-in PKGBUILD to build
+#   pkgrel_suffix  numeric suffix appended to pkgrel so pacman prefers our build
+#   patches        space-separated files under ./patches/, applied `patch -p1` in the FEX source
+#                  root (build-overlay.sh injects them after the first `cd` in prepare(), which is
+#                  `cd "$srcdir/FEX"` for exactly this reason), in the order listed.
+#
+# Both patches are still REQUIRED at FEX-2607 with clang 21 on aarch64 — neither is upstream. A
+# peer distro bumped to 2607, dropped both, and had to restore them. See patches/README.md.
+#
+# To bump: edit _commit + pkgver in packages/fex-emu/PKGBUILD (use a FEX-<ver> tag resolved with
+# `git rev-parse FEX-<ver>^{commit}`, NOT the tag object's sha), re-verify both patches apply
+# (`git apply --check -p1`), and refresh the pinned sysroot package versions/hashes in the same
+# change.
+name: fex-emu
+pkgbuild_local: PKGBUILD
+pkgrel_suffix: 1
+patches: 0001-fexcore-aarch64-workaround-llvm18-ice.patch 0005-host-thunks-aarch64-char-signed-char.patch

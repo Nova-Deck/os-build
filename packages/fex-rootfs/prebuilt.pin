@@ -1,0 +1,38 @@
+# FEX x86 guest rootfs — the userspace an emulated x86/x86_64 *Linux* binary sees.
+#
+# FEX does not chroot: it overlays this image as the guest's `/`, so an x86 ELF finds x86 copies
+# of libc, libstdc++, the GL/Vulkan loaders and so on, while the host thunks forward the graphics
+# and audio calls back out to the real arm64 drivers. Without a rootfs an x86 binary has no
+# libraries at all and dies at the dynamic loader.
+#
+# ARCH, not Fedora. Games shipped for Linux target the SteamOS userspace, which is Arch-derived,
+# so the Arch guest rootfs is the closest match to what a Linux game expects to link against. It
+# also matches the sysroot the guest thunks are compiled against (packages/fex-emu/PKGBUILD).
+#
+# NOTE: the Windows-game path does NOT use this file. Proton carries its own WoW64 FEX, which
+# translates x86 Windows code and never needs a Linux guest rootfs (its bundled FEX config sets
+# neither RootFS nor ThunksDB). This image exists solely for native x86 Linux ELFs.
+#
+# erofs, not squashfs: upstream publishes both. The .ero is ~1.9G against ~1.1G for the .sqsh,
+# but it is random-access friendly, which matters for a filesystem the emulator reads on every
+# library resolution. FEXServer picks the mount helper from the container type — `erofsfuse` for
+# this file (SquashFS.cpp), which is why fex-emu hard-depends on it. Both the image and the
+# helper must agree; swapping to .sqsh means depending on squashfuse instead.
+#
+# Raw file, not an archive: `kind: file` copies it verbatim to `dest` (no tar, no strip).
+#
+# The upstream index (https://rootfs.fex-emu.gg/RootFS_links.json) publishes an xxhash, not a
+# sha256 — the hash below was computed from the downloaded artifact.
+#
+# Fields: see packages/inputplumber/prebuilt.pin for the base set; this pin adds
+#   kind   -> `file` (copy verbatim) or `tar` (extract; the default)
+#   dest   -> absolute path in the rootfs. For `file`, the full destination FILE path.
+#
+# To bump: pick a newer dated build from RootFS_links.json, then set version + url + sha256
+# together (the filename stays ArchLinux.ero, so Config.json needs no change).
+name: fex-rootfs
+version: 2026-01-08
+url: https://rootfs.fex-emu.gg/ArchLinux/2026-01-08/ArchLinux.ero
+sha256: 231febb39c636feb89426a21aca3b2ceb121645dbaac7858431d1b7bc7dfde95
+kind: file
+dest: /usr/share/fex-emu/RootFS/ArchLinux.ero

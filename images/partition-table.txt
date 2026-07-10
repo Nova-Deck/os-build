@@ -17,7 +17,9 @@
 #   p8 seed  — SteamOS recovers over the network; we must recover OFFLINE (Steam's own OOBE
 #              owns first-boot Wi-Fi), so we ship a pristine Steam client as a squashfs blob.
 #              It lives on its own SHARED partition rather than inside each root slot: at
-#              1.4G raw it would otherwise be duplicated A+B and push both roots past 5G.
+#              1.4G raw it would otherwise be duplicated A+B. Sharing is safe HERE precisely
+#              because the seed is version-inert — a pristine client Steam self-updates over,
+#              never a component the running root links against.
 #              Mounted ro at /usr/share/novadeck/steam-seed.
 #   p9 home  — pushed one slot down by p8. It must stay LAST on disk: novadeck-grow-home
 #              expands it to fill the card on first boot, so nothing may follow it.
@@ -26,8 +28,15 @@
 # them. Only p1 is an EFI System partition. The ROCKNIX ABL finds the ESP by type GUID, so
 # a second ef00 on the disk would give it two candidates to choose between.
 #
-# 'rest' expands to fill the target device. Fixed partitions total ~11.5G, so the minimum
-# usable card is 16G (leaving ~3G of /home); 32G+ is the sane target.
+# Root slots are 8G. They carry, on top of the ~2.6G OS, two large x86-emulation artifacts
+# that must travel WITH the slot to keep an A/B update atomic and rollback-safe: the FEX x86
+# guest rootfs (~1.9G, an erofs image) and the bundled arm64 Proton compat tool (~2.1G). That
+# is ~6.5G of content, so 8G leaves ~1.5G of headroom. Both are deliberately NOT on a shared
+# partition like p8: they are versioned OS components, and sharing them across slots would let
+# an update mutate the running system's emulation stack and break rollback.
+#
+# 'rest' expands to fill the target device. Fixed partitions total ~17.7G, so the minimum
+# usable card is 32G (leaving ~11G of /home); 64G+ is the sane target.
 #
 # 'attrs' is a comma-separated list of GPT attribute bits to set, or '-' for none. Only bit 63
 # ("no-auto") is used today, on home. home carries the discoverable "Linux /home" type GUID
@@ -43,8 +52,8 @@
 esp         256M  ef00      vfat      NOVADECK-ESP     -
 efi-a       64M   0700      vfat      novadeck-efi-A   -
 efi-b       64M   0700      vfat      novadeck-efi-B   -
-rootfs-a    5G    8300      btrfs     novadeck-root-A  -
-rootfs-b    5G    8300      btrfs     novadeck-root-B  -
+rootfs-a    8G    8300      btrfs     novadeck-root-A  -
+rootfs-b    8G    8300      btrfs     novadeck-root-B  -
 var-a       256M  8300      ext4      novadeck-var-A   -
 var-b       256M  8300      ext4      novadeck-var-B   -
 seed        800M  8300      squashfs  novadeck-seed    -

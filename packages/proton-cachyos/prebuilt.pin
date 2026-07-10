@@ -1,0 +1,51 @@
+# Proton (arm64) — the compat tool that runs x86/x86-64 *Windows* games on this device.
+#
+# This is a community Proton build that ships an arm64-native Wine plus Valve's WoW64 FEX
+# (files/lib/wine/aarch64-windows/libwow64fex.dll, libarm64ecfex.dll). The emulator translates
+# only the game's x86 Windows code; every Linux syscall is made by the arm64 side of Wine. So
+# this path is SELF-CONTAINED: it needs no system FEX package, no x86 guest rootfs, no thunks,
+# and no Steam Linux Runtime container.
+#
+# Why bake it instead of letting Steam fetch a Proton:
+#   - Valve's own arm64 Proton declares `require_tool_appid 4185400` (an arm64 SLR container).
+#     On a non-Deckard client that tool is never *registered* even when its files are present,
+#     so the launch dies before Proton runs. Baking a tool with no such dependency sidesteps the
+#     platform gate entirely.
+#   - Steam owns first-boot Wi-Fi, so nothing can be downloaded before OOBE completes. A baked
+#     compat tool works on a device that has never been online.
+#
+# This tarball's own toolmanifest.vdf still carries `require_tool_appid`, and its compat-tool
+# name is the versioned directory name. assemble-rootfs.sh rewrites both after extraction — see
+# the compat-tool section there. Do not "fix" the manifest here; the tarball is upstream content
+# and is extracted verbatim.
+#
+# strip: 1 + dest: the archive is rooted at the versioned directory
+# (proton-cachyos-11.0-20260602-slr-arm64/), so stripping that component lands its CONTENTS
+# directly in a stable, version-free directory name. NOTE the directory name is cosmetic: Steam
+# pins a game to the tool's INTERNAL name (the compat_tools key inside compatibilitytool.vdf),
+# not the directory — so assemble-rootfs.sh also rewrites that internal name to a stable id, or a
+# bump would unpin every game regardless of the directory. See the compat-tool section there.
+#
+# The tool lives under /usr/share/steam/compatibilitytools.d, which the client does NOT scan on its
+# own — novadeck-steam adds it via STEAM_EXTRA_COMPAT_TOOLS_PATHS. So it needs no seeding into $HOME
+# and, unlike a copy under the user's Steam directory, it is replaced atomically with the OS slot
+# and survives a factory reset.
+#
+# Upstream publishes a .sha512sum sidecar; the sha256 below was computed from the artifact.
+#
+# Fields: see packages/inputplumber/prebuilt.pin, plus `dest` (extraction root) documented in
+# packages/fex-rootfs/prebuilt.pin.
+#
+# To bump: pick a release from https://github.com/CachyOS/proton-cachyos/releases carrying an
+# `-arm64.tar.xz` asset, set version + url + sha256 together, and keep `dest` unchanged so games
+# stay pinned to the same tool name. Re-verify the toolmanifest rewrite in assemble-rootfs.sh
+# still matches (it fails loudly if upstream changes the commandline format).
+name: proton-cachyos
+version: 11.0-20260602-slr
+url: https://github.com/CachyOS/proton-cachyos/releases/download/cachyos-11.0-20260602-slr/proton-cachyos-11.0-20260602-slr-arm64.tar.xz
+sha256: 3a07faf87219461e850a6d61f0581e5ee7acc44c8a6221fbb54a8506af1b23c9
+kind: tar
+strip: 1
+dest: /usr/share/steam/compatibilitytools.d/proton-cachyos-11.0-arm64
+# `proton` is a python3 script (#!/usr/bin/env python3); the wrapper that fronts it is python too.
+deps: python

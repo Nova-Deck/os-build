@@ -2,7 +2,7 @@
 # hosts (kernel, rootfs/sdcard assembly, boot packaging, RAUC
 # bundle). Carries the aarch64 toolchain plus every container stage's deps; source and
 # artifacts stay on the host via a bind mount (work/ and out/ are gitignored). Re-runnable.
-FROM ubuntu:24.04
+FROM ubuntu:26.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \

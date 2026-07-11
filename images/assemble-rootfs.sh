@@ -835,7 +835,7 @@ install -d -m0755 "$varstage"
 #
 # --compress zstd: the root is sealed read-only, so compression is pure upside — it shrinks the OS
 # libraries/binaries substantially (the .ero and Proton payloads compress less, being pre-packed),
-# giving comfortable headroom under the 8 GiB slot. It is a WRITE-TIME property recorded per extent;
+# giving ~1G of headroom under the 6 GiB slot. It is a WRITE-TIME property recorded per extent;
 # reads decompress transparently, so no mount option is needed and the ro root needs no fstab change.
 rm -f "$IMG"
 mkfs.btrfs --rootdir "$stage" --compress zstd --shrink -L novadeck-root -f "$IMG" >/dev/null

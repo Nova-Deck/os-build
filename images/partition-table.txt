@@ -26,16 +26,19 @@
 # them. Only p1 is an EFI System partition. The ROCKNIX ABL finds the ESP by type GUID, so
 # a second ef00 on the disk would give it two candidates to choose between.
 #
-# Root slots are 8G. They carry, on top of the ~2.6G OS, two large x86-emulation artifacts
+# Root slots are 6G. They carry, on top of the ~2.6G OS, two large x86-emulation artifacts
 # that must travel WITH the slot to keep an A/B update atomic and rollback-safe: the FEX x86
 # guest rootfs (~1.9G, an erofs image) and the bundled arm64 Proton compat tool (~2.1G). That
-# is ~6.5G of content, so 8G leaves ~1.5G of headroom. Both are deliberately kept INSIDE the
-# root slot rather than on a shared partition: they are versioned OS components, and sharing
-# them across slots would let an update mutate the running system's emulation stack and break
-# rollback.
+# is ~6.5G of content uncompressed, but the root is sealed read-only and baked with zstd
+# (assemble-rootfs.sh), which shrinks it to ~5.0G — so 6G leaves ~1G of headroom. The two
+# emulation payloads are already packed and compress little, so most of that 5.0G is
+# incompressible and won't shrink further in future builds; size headroom off 5.0G, not 6.5G.
+# Both are deliberately kept INSIDE the root slot rather than on a shared partition: they are
+# versioned OS components, and sharing them across slots would let an update mutate the running
+# system's emulation stack and break rollback.
 #
-# 'rest' expands to fill the target device. Fixed partitions total ~16.9G, so the minimum
-# usable card is 32G (leaving ~13G of /home); 64G+ is the sane target.
+# 'rest' expands to fill the target device. Fixed partitions total ~12.9G, so the minimum
+# usable card is 32G (leaving ~17G of /home); 64G+ is the sane target.
 #
 # 'attrs' is a comma-separated list of GPT attribute bits to set, or '-' for none. Only bit 63
 # ("no-auto") is used today, on home. home carries the discoverable "Linux /home" type GUID
@@ -51,8 +54,8 @@
 esp         256M  ef00      vfat      NOVADECK-ESP     -
 efi-a       64M   0700      vfat      novadeck-efi-A   -
 efi-b       64M   0700      vfat      novadeck-efi-B   -
-rootfs-a    8G    8300      btrfs     novadeck-root-A  -
-rootfs-b    8G    8300      btrfs     novadeck-root-B  -
+rootfs-a    6G    8300      btrfs     novadeck-root-A  -
+rootfs-b    6G    8300      btrfs     novadeck-root-B  -
 var-a       256M  8300      ext4      novadeck-var-A   -
 var-b       256M  8300      ext4      novadeck-var-B   -
 home        rest  8302      ext4      novadeck-home    63

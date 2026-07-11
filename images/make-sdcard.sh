@@ -7,7 +7,7 @@
 # per-slot bootloader (see the table's header for what eventually lands there).
 #
 # Laying the final table now — rather than a minimal ESP+root+home and migrating later — means
-# adding A/B never costs a reflash. The price is ~5.3G of card sitting empty in the B slots.
+# adding A/B never costs a reflash. The price is ~6.3G of card sitting empty in the B slots.
 #
 # Unprivileged: builds each filesystem in a plain file (mtools / mkfs.ext4 -d / mksquashfs),
 # lays the GPT with sgdisk via images/genpart.sh, and dd's each filesystem into its partition

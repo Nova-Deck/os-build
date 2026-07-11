@@ -87,6 +87,15 @@ cp -a "$SEED" "$deckhome/.local/share/Steam"
 ln -sfn ../.local/share/Steam            "$deckhome/.steam/steam"
 ln -sfn ../.local/share/Steam            "$deckhome/.steam/root"
 ln -sfn ../.local/share/Steam/linuxarm64 "$deckhome/.steam/sdkarm64"
+# x86 Steam SDK/runtime compat symlinks. A native x86-64 Linux game under system-FEX dlopen()s
+# ~/.steam/sdk64/steamclient.so (32-bit -> sdk32); Steam's reaper also resolves ubuntu12_{32,64}
+# via bin{32,64}. Without these the game's SteamAPI_Init() fails ("cannot open sdk64/steamclient.so")
+# and it exits/crashes. The link targets (linux{32,64}, ubuntu12_{32,64}) are populated by the arm64
+# client on demand when it first runs an x86 title; the symlinks must pre-exist so it can.
+ln -sfn ../.local/share/Steam/linux32     "$deckhome/.steam/sdk32"
+ln -sfn ../.local/share/Steam/linux64     "$deckhome/.steam/sdk64"
+ln -sfn ../.local/share/Steam/ubuntu12_32 "$deckhome/.steam/bin32"
+ln -sfn ../.local/share/Steam/ubuntu12_64 "$deckhome/.steam/bin64"
 # No compat tool is seeded into the deck home. The arm64 Proton that runs x86 Windows
 # games lives in the root slot at /usr/share/steam/compatibilitytools.d, added to the
 # client's search set via STEAM_EXTRA_COMPAT_TOOLS_PATHS (exported by novadeck-steam) —

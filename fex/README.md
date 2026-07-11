@@ -64,3 +64,18 @@ pre-set value is honoured as-is. Proton also reads `STEAM_FEX_TSOENABLED` / `STE
 the wrapper exists for named presets and per-game overrides.
 
 The generated config must land in `$XDG_RUNTIME_DIR` because `/usr` is read-only.
+
+## Native x86 Linux games run on Xwayland, not native Wayland
+
+A native x86-64 Linux game runs inside the Steam Linux Runtime (scout-on-soldier) pressure-vessel
+container under the *system* FEX. On the **native Wayland** path it dies: SDL pulls in `libdecor`,
+which needs `wl_list_init` from `libwayland-client` — but the only x86 `libwayland-client` the
+container sees is the FEX **WaylandClient thunk**, which forwards protocol calls to the arm64 host
+and omits the client-local `wl_list_*` helpers. So `libdecor-0.so.0: undefined symbol:
+wl_list_init`, and even shimming in a real x86 libwayland just moves the failure into the
+GL-on-Wayland path (real libwayland-client mixed with the libwayland-egl/cursor thunks → SIGSEGV).
+
+The fix is to keep these games off native Wayland entirely, matching the SteamOS/gamescope model:
+`novadeck-session` does **not** export `WAYLAND_DISPLAY`, so SDL falls back to gamescope's nested
+**Xwayland** (`DISPLAY`), where `libdecor`/`libwayland` are never loaded. No per-game launch
+option and no injected libraries are needed.

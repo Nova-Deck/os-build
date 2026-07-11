@@ -74,6 +74,45 @@ rationale lives in the linked memories and commit history.
   log) but that's a nice-to-have; the default-compat-tool change is the user-facing fix. See
   [[fex-native-x86-game-crash-hw]], [[fex-two-paths-independent]], [[fex-rearchitecture-pickup]].
 
+- [x] **Native x86 SDL2 Linux games crash under system-FEX — RESOLVED 2026-07-11 (thunkless ROCKNIX
+  config, NOT the wl_list thunk patch).** Both HW-test titles — Super Meat Boy (native x86-64 Linux SDL2
+  ELF, AppId 40800) and Garage Circuit Rally — now run and are **playable** (user-confirmed "both are
+  working"). Fix = adopt ROCKNIX's game-tuned FEX profile **globally** in
+  `fex/usr/share/fex-emu/Config.json`: **thunkless** `ThunksDB` (all `0`) + ROCKNIX's JIT tuning,
+  `RootFS`→`ArchLinux.ero`. Thunkless drops the WaylandClient thunk entirely, so games load the guest's
+  REAL x86 libwayland (which DOES export `wl_list_*`) — the original `libdecor: undefined symbol:
+  wl_list_init` load crash simply cannot occur, and the render-path `sig=11` (which was actually in the
+  host GPU thunk path, not wayland) is gone because the guest x86 Mesa renders instead of forwarding to
+  host Turnip. Trade-off: no host-Turnip accel for native x86 Linux titles (guest GPU driver runs
+  emulated); acceptable — both titles are playable and ROCKNIX ships this globally incl. 3D. **Option C
+  (the FEX guest-thunk `wl_list` patch, == upstream FEX#4520) was ABANDONED as moot** — correct in
+  isolation, but the real crash cause was the GPU thunks, not the wayland thunk. This REVERSES the
+  earlier "never copy ROCKNIX's thunkless ThunksDB" stance. NOTE: baked in the working tree (Config.json),
+  NOT yet committed / NOT in a fresh full image build. See [[native-x86-linux-games-xwayland-fix]],
+  [[fex-native-x86-game-crash-hw]], [[fex-two-paths-independent]].
+
+- [x] **Cherry-pick FEX `Config.json` perf/compat knobs from ROCKNIX — DONE 2026-07-11 (adopted
+  wholesale).** Instead of cherry-picking, the ENTIRE ROCKNIX game-tuned FEX `Config` block was taken
+  globally (`Multiblock:1`, `SMCChecks:1`, `MonoHacks:1`, `VolatileMetadata:1`, `DynamicL1Cache`/
+  `DisableL2Cache:1` + cache heuristics, `MaxInst:5000`, `KernelUnalignedAtomicBackpatching:1`,
+  `DISABLE_VIXL_INDIRECT_RUNTIME_CALLS:1`, …) — the same change that closed the native-x86-crash item
+  above. It also flips `ThunksDB` to **thunkless**, which the earlier note warned against; that warning
+  is now overturned — thunkless is the right global default for the native x86 Linux system-FEX path
+  because it's what actually made both test games run (trading host-Turnip speed for not-crashing). Baked
+  in the working-tree `Config.json`, not yet committed. See [[fex-config-tuning-from-rocknix-todo]],
+  [[native-x86-linux-games-xwayland-fix]], [[overlay-package-pipeline]].
+
+- [ ] **MangoHud performance-overlay enable/disable still misbehaves — REOPENS the "DONE" item
+  below.** User re-reported (2026-07-11) that toggling the SteamUI Quick-Access **Performance** overlay
+  on/off is still not behaving on HW, so the earlier "both control paths confirmed" close is NOT
+  reliable. Investigate the toggle path end-to-end: the SysV `no_display` control queue (show/hide) vs
+  the config-file + reload (level), and the **focused-GAME gate** (mangoapp self-suppresses while the
+  Steam UI / appid 769 is focused, so a library-side toggle is a no-op *by design* — confirm the report
+  is in-game, not in the library). Capture what actually happens on toggle: does mangoapp receive the
+  control message, does the overlay redraw, does it get stuck on/off, or flicker? Compare live against
+  the DONE item's claimed mechanism. See [[mangohud-quickaccess-control-gap]],
+  [[sm8650-gamescope-session-plumbing]].
+
 - [ ] **QuickAccess frame-rate limiter has no effect in-game** — the SteamUI Performance FPS cap
   doesn't limit the framerate on HW (user, 2026-07-08). This is a gamescope path, NOT mangohud (the
   perf overlay toggle + Level are HW-verified working in-game as of the same day —

@@ -2,15 +2,13 @@
 # novadeck gamescope-session — boot the device into a gamescope compositor (SteamOS layer B).
 #
 # This is the SESSION PLUMBING: a long-running gamescope on the DRM/KMS backend that hosts the
-# Deck-UI client. The native arm64 Steam shell lands in Phase 3; until then the session runs a
-# liveness placeholder (see /etc/novadeck/session.conf — swap NOVADECK_SESSION_CMD to `steam ...`
-# in Phase 3, no unit change). It reuses the exact seat + rotation path the Phase-2 smoke
-# validated on HW (devices/sm8650/bringup-phase2.md step 1).
+# native arm64 Steam shell (NOVADECK_SESSION_CMD, set in /etc/novadeck/session.conf). It reuses the
+# exact seat + rotation path the Phase-2 smoke validated on HW (devices/sm8650/bringup-phase2.md).
 set -eu
 
 CONF=/etc/novadeck/session.conf
 [ -r "$CONF" ] && . "$CONF"
-: "${NOVADECK_SESSION_CMD:=vkcube}"
+: "${NOVADECK_SESSION_CMD:=novadeck-steam}"
 : "${NOVADECK_GAMESCOPE_EXTRA:=}"
 
 # --- Internal panel selection -> landscape LOGICAL output (--prefer-output/-W/-H/-r) -------------
@@ -168,10 +166,12 @@ if handshake="$(timeout 20 head -n1 "$GS_STARTUP")"; then
   # shellcheck disable=SC2086  # intentional word-split of the handshake line
   set -- $handshake
   export DISPLAY="${1:-}"
-  # Export the Wayland socket under both names: Steam reads GAMESCOPE_WAYLAND_DISPLAY, a generic
-  # Wayland client (the vkcube fallback) reads WAYLAND_DISPLAY.
+  # Steam finds gamescope's private Wayland socket via GAMESCOPE_WAYLAND_DISPLAY; its UI and every
+  # game render through gamescope's nested Xwayland (DISPLAY). WAYLAND_DISPLAY is deliberately NOT
+  # exported: with it set, SDL games prefer *native* Wayland inside the SLR/FEX container, where the
+  # Wayland thunk lacks wl_list_* (libdecor dies on wl_list_init) and the GL path mixes real+thunk
+  # libwayland objects → SIGSEGV. Keeping games on Xwayland matches the SteamOS/gamescope model.
   export GAMESCOPE_WAYLAND_DISPLAY="${2:-}"
-  export WAYLAND_DISPLAY="${2:-}"
 else
   echo "novadeck-session: gamescope did not report a startup display within 20s — aborting" >&2
   exit 1

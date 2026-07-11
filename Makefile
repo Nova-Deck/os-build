@@ -105,9 +105,10 @@ SDCARD       := $(OUT)/images/sdcard.img
 STEAM_SEED   := work/steam-seed/steamrtarm64/steam
 
 # Repo sources the rootfs assembler reads directly (itself + the trees it copies in: the
-# gamescope-session overlay, the HW-support overlay, and InputPlumber config). find recurses,
-# so files added under those trees are tracked automatically — no per-file Makefile edits.
-ASSEMBLE_SRC := $(shell find images/assemble-rootfs.sh session hw-support steam audio devices/inputplumber -type f 2>/dev/null)
+# gamescope-session overlay, the HW-support overlay, InputPlumber config, and the FEX runtime
+# config). find recurses, so files added under those trees are tracked automatically — no
+# per-file Makefile edits.
+ASSEMBLE_SRC := $(shell find images/assemble-rootfs.sh session hw-support steam audio devices/inputplumber fex -type f 2>/dev/null)
 
 # Kernel inputs: any change re-triggers the (full, from-scratch) kernel build. The unified
 # kernel globs every fragment/patch/dts, and bakes the firmware embed list.

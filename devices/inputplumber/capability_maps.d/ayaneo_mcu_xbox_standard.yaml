@@ -83,7 +83,7 @@ mapping:
       gamepad:
         button: Select
 
-  - name: QuickAccess2 Button
+  - name: QuickAccess Button
     source_events:
       - evdev:
           event_type: KEY
@@ -91,7 +91,7 @@ mapping:
           value_type: button
     target_event:
       gamepad:
-        button: QuickAccess2
+        button: QuickAccess
 
   - name: Right Trigger
     source_events:

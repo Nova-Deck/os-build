@@ -126,13 +126,18 @@ rationale lives in the linked memories and commit history.
   `GetValidDynamicRefreshRates()`). Also check `STEAM_GAMESCOPE_DYNAMIC_FPSLIMITER` (the WSI-layer
   limiter path). See [[sm8650-gamescope-session-plumbing]], [[chimeraos-gamescope-session-reference]].
 
-- [ ] **Switch InputPlumber virtual device from DS5 to Xbox Elite** — `devices/inputplumber/devices.d/
-  01-ayaneo-controller.yaml` emulates a DualSense (`target_devices: [ds5, keyboard]`). Switch the
-  emulated pad to the Xbox Elite target (verify the exact InputPlumber target id, e.g. `xbox-elite`)
-  so the shell/games see an Xbox controller instead of a PlayStation one — better default glyphs and
-  broadest game compatibility on the arm64/Proton path. Keep `keyboard`. Re-validate on HW that all
-  buttons + dpad still map (the AYANEO MCU Xbox capability map is already in use) and that Steam Input
-  glyphs follow. See [[sm8650-inputplumber-input]].
+- [x] **Switch InputPlumber virtual device from DS5 to Xbox — DONE 2026-07-11, NOT yet HW-validated.**
+  Reversed ROCKNIX commit `296851b1` (which had moved SM8650 xbox-series→ds5) for our port. Target is
+  **`xbox-series`** (not the Elite variant floated earlier — plain xbox-series is what the ROCKNIX
+  reverse restores, and gives standard Xbox glyphs). Two files changed in `devices/inputplumber/`:
+  (1) `devices.d/01-ayaneo-controller.yaml` — `target_devices: [ds5, keyboard]` → `[xbox-series,
+  keyboard]` (deliberately did NOT re-add the `mouse` target the strict reverse carries, per user);
+  (2) `capability_maps.d/ayaneo_mcu_xbox_standard.yaml` — the BTN5 mapping goes back from the ds5-era
+  keyboard shim (`F1 Key` → `keyboard: KeyF1`) to a real gamepad button (`QuickAccess2 Button` →
+  `gamepad: QuickAccess2`), matching the map's "(Xbox mode)" name. Everything else (Guide, sticks,
+  dpad, triggers) was untouched by that commit. **NEXT:** build a `make sdcard` image and HW-validate
+  on the Pocket S2 that all buttons + dpad still map, the QuickAccess2 button reaches Steam, and Steam
+  Input shows Xbox glyphs. See [[sm8650-inputplumber-input]].
 
 - [ ] **Find the new SteamUI scale lever — panel mm is now IGNORED (2026-07-11)** — a Steam client
   update **stopped honoring the panel's physical mm** for gamepad-UI auto-scale (it does NOT "fix" scale,

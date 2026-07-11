@@ -51,5 +51,5 @@ options:
 
 # The target input device(s) to emulate by default
 target_devices:
-  - ds5
+  - xbox-series
   - keyboard

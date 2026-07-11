@@ -94,7 +94,10 @@ DEST="$ROOT/work/base"
 # with no mangohud on the image toggling it CRASHES the launch (HW 2026-07-07). NOT in the holo repos
 # (no mango* in the synced core/extra dbs), so it is built from source into the [novadeck] overlay
 # (packages/mangohud, with the Qualcomm/Adreno GPU+battery patches) and resolves here.
-PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-tools mesa gamescope seatd sddm mangohud fex-emu bluez bluez-utils networkmanager alsa-ucm-conf pipewire wireplumber pipewire-pulse pipewire-alsa unzip openal gtk2 ffmpeg e2fsprogs xorg-xwayland lsof noto-fonts noto-fonts-cjk noto-fonts-emoji)
+# python: the interpreter behind our shipped #!/usr/bin/env python3 tools — proton-wrapper (per-game
+# FEX tuning, on every Windows-game launch) and proton-unlock (registers user-downloaded arm64 Proton).
+# It arrives transitively today, but a launch failing at the shebang would be silent, so declare it.
+PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-tools mesa gamescope seatd sddm mangohud fex-emu bluez bluez-utils networkmanager alsa-ucm-conf pipewire wireplumber pipewire-pulse pipewire-alsa unzip openal gtk2 ffmpeg e2fsprogs xorg-xwayland lsof noto-fonts noto-fonts-cjk noto-fonts-emoji python)
 
 # Test-only packages — installed ONLY under NOVADECK_TEST=1, NEVER in a release base.
 # On-device bring-up tools: evtest reads raw /dev/input events; usbutils provides lsusb.

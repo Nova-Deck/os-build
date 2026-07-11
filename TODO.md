@@ -134,22 +134,17 @@ rationale lives in the linked memories and commit history.
   buttons + dpad still map (the AYANEO MCU Xbox capability map is already in use) and that Steam Input
   glyphs follow. See [[sm8650-inputplumber-input]].
 
-- [ ] **Clean up the UI-scale calibration hack (per-device panel mm)** — SteamUI's automatic scaling
-  rendered the Deck UI ~20% too big on the Pocket S2. **HW-established 2026-07-07:** Steam's gamepad-UI
-  auto-scale is driven by the panel's **physical mm** (a diagonal/area DPI — *magnitude*, not aspect):
-  gamescope patch `0003` (swap `phys_width/phys_height` when `g_bRotated`) only **transposed** the mm
-  (78×140→140×78, same diagonal) and moved the scale **not at all**; bumping the wt0630 driver mm
-  **+20% (78×140 → 94×168)** in `kernel/patches/0062` *did* shrink the UI to a good size (HW-confirmed).
-  So the real lever is the reported panel size, and the shipped fix is a deliberate **over-declaration**
-  of the physical panel (true ~6.0″, we now claim ~7.6″) — a calibration hack, not the true size.
-  **`0003` is NOT the fix** (kept for now as a defensible coherence change; slated for removal in a
-  later session since it doesn't move the scale). **Follow-ups:** (1) apply the same mm calibration to
-  **Pocket Fit** (`kernel/patches/0063`, currently `width_mm=0/height_mm=0`) and **every new device** we
-  add — otherwise each new panel reships the wrong scale; (2) find a cleaner home for this than fudging
-  the kernel panel driver (per-device table / `session.conf` mm override / Steam UI-scale config default)
-  so we're not lying in the DRM driver; (3) confirm exactly which DPI metric Steam uses to pick the mm
-  precisely per panel instead of eyeballing. See [[sm8650-working-display-baseline]],
-  [[sm8650-gamescope-session-plumbing]], [[steam-ui-scale-panel-mm]].
+- [ ] **Find the new SteamUI scale lever — panel mm is now IGNORED (2026-07-11)** — a Steam client
+  update **stopped honoring the panel's physical mm** for gamepad-UI auto-scale (it does NOT "fix" scale,
+  it ignores the dimension). Symptom: the UI now renders **too small** on the Pocket S2, and reverting
+  `kernel/patches/0062` (wt0630) from the old +20% fudge (94×168) to the panel's **real 79×140 mm** built,
+  flashed, and **changed nothing on HW** — proving mm no longer moves the scale. The old "mm magnitude is
+  the lever" thesis (HW-believed 2026-07-07) is dead. Panel now ships TRUE dimensions (correct, but no
+  longer a scale control). **Still open:** the UI is too small and we have no working lever yet — chase
+  where SteamUI/gamescope now sources its DPI/scale (client config, gamescope `--scale`/output props, a
+  new env) and wire a per-device control. Knock-on: Pocket Fit (`kernel/patches/0063`) needs real mm only
+  for EDID sanity, NOT to chase UI size; gamescope `0003` status unchanged (coherence-only swap). See
+  [[steam-ui-scale-panel-mm]], [[sm8650-working-display-baseline]], [[sm8650-gamescope-session-plumbing]].
 
 - [x] **Replace our rotation-shader patch with upstream composited-output rotation** — DONE, rotation
   HW-confirmed on Pocket S2 2026-07-07: orientation is upright-landscape and gamescope auto-engages

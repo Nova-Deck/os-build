@@ -37,41 +37,31 @@ rationale lives in the linked memories and commit history.
   fail-fast "missing patch" guard preserved. See [[overlay-package-pipeline]],
   [[overlay-isolate-per-package-container]], [[content-hash-cache-pattern]].
 
-- [ ] **FEX + baked arm64 Proton — WRITTEN 2026-07-10, NOT BUILT, NOT HW-VALIDATED.** Replaces the
-  old `proton11sc`/`novadeck-chain` two-runtime fetch (SLR 4.0 Arm64 `4185400` → Proton 11 ARM64
-  `4628740`), now deleted. Shipped: `packages/fex-emu/` (from-source PKGBUILD, FEX-2607, thunks ON,
-  Arch x86 sysroot assembled in `prepare()` from pinned `archive.archlinux.org` packages),
-  `packages/fex-rootfs/` (`ArchLinux.ero`, raw-file pin), `packages/proton-cachyos/` (baked compat
-  tool), `fex/` (system `Config.json` + `fex-profiles.json` + `proton-wrapper`). Root slots grew
-  5G→8G ([[steamos-partition-overlay-layout]]). **KEY FINDING: the two x86 paths are INDEPENDENT** —
-  Windows games use Proton's *bundled* WoW64 FEX (no system FEX, no rootfs, no thunks, no SLR
-  container); only native x86 *Linux* ELFs use the `fex-emu` package + `ArchLinux.ero` + binfmt.
-  **Remaining work:** (a) actually build it — the emulated clang+thunk build is the heaviest overlay
-  package by far and has never been run; (b) `depends=()` in the PKGBUILD is a FIRST CUT — after the
-  first successful build, check each installed `.so`'s `NEEDED` and fix it, per
-  [[mesa-freedreno-depends-libdisplay-info]]; (c) Steam does not auto-select a custom compat tool, so
-  either set it as the default in the seed's `config.vdf` (upstream peers ship a script for this) or
-  keep documenting the manual *Steam Play for all other titles* toggle; (d) HW-validate a Windows
-  game end-to-end (Gravity Circuit + Parking Garage Rally Circuit) and, separately, a native x86
-  Linux binary to prove binfmt + rootfs + thunks; (e) confirm the 8G slot actually holds the ~6.5G of
-  content with the initramfs/`--shrink` path. **NOTE — this deliberately REVERSED the earlier "use
-  Valve's precompiled FEX, do NOT ship our own" stance** (user 2026-07-08). See
-  [[steam-native-arm64-launch-chain]], [[steam-deckard-fex-investigation]],
-  [[steam-launch-flags-no-pinned-client]], [[overlay-package-pipeline]].
+- [x] **FEX + baked arm64 Proton — DONE + HW-VALIDATED 2026-07-11** (commits `5636d21` bake,
+  `d46d156` native-x86 thunkless fix). Replaced the old `proton11sc`/`novadeck-chain` two-runtime fetch
+  (SLR 4.0 Arm64 `4185400` → Proton 11 ARM64 `4628740`), now deleted. Shipped: `packages/fex-emu/`
+  (from-source PKGBUILD, FEX-2607, Arch x86 sysroot assembled in `prepare()` from pinned
+  `archive.archlinux.org` packages), `packages/fex-rootfs/` (`ArchLinux.ero`, raw-file pin),
+  `packages/proton-cachyos/` (baked compat tool), `fex/` (system `Config.json` + `proton-wrapper`).
+  Root slots grew 5G→8G, then 8G→6G once zstd-sealed ([[steamos-partition-overlay-layout]]).
+  **KEY FINDING: the two x86 paths are INDEPENDENT** — Windows games use Proton's *bundled* WoW64 FEX
+  (no system FEX, no rootfs, no thunks, no SLR container); only native x86 *Linux* ELFs use the
+  `fex-emu` package + `ArchLinux.ero` + binfmt. Native x86 Linux titles (Super Meat Boy, Garage Circuit
+  Rally) resolved by adopting ROCKNIX's **thunkless** FEX `Config.json` globally — both playable,
+  user-confirmed. **NOTE — this deliberately REVERSED the earlier "use Valve's precompiled FEX, do NOT
+  ship our own" stance** (user 2026-07-08). See [[fex-rearchitecture-pickup]],
+  [[fex-native-x86-game-crash-hw]], [[fex-two-paths-independent]],
+  [[native-x86-linux-games-xwayland-fix]], [[steam-native-arm64-launch-chain]].
 
-- [ ] **Make `proton-cachyos-11.0-arm64` the DEFAULT compat tool (CompatToolMapping)** — sharpens
-  sub-point (c) of the FEX item above with HW evidence. **HW-confirmed 2026-07-10, 2 titles:** anything
-  that runs x86 code under the *system*-FEX path is fragile, and Steam's default selection lands users
-  there. **Parking Garage Rally Circuit** — its *native x86-64 Linux* build crashes in system-FEX
-  (SIGSEGV on `--rendering-driver opengl3`, SIGILL on the Vulkan default); the *Windows* build runs
-  fine when forced onto `proton-cachyos-11.0-arm64`. **Gravity Circuit** — Steam auto-selected **stock
-  Proton 10.0** (x86 wine → whole stack under system-FEX) and it threw a CRT `assert()` popup; forcing
-  `proton-cachyos-11.0-arm64` → works (user-confirmed on-panel). So the fix in BOTH cases is our arm64
-  Proton, but the user had to set it manually each time. Wire it as the **default `CompatToolMapping`**
-  in the seed's `config.vdf` (peers ship a helper for this — the same mechanism referenced in the FEX
-  item) so new/unknown titles default to the robust WoW64-arm64 path instead of stock x86 Proton or a
-  native x86 ELF. Separately worth a native-FEX crash capture (FEXInterpreter unsupported-instruction
-  log) but that's a nice-to-have; the default-compat-tool change is the user-facing fix. See
+- [x] **Make `proton-cachyos-11.0-arm64` the DEFAULT compat tool (CompatToolMapping) — WON'T-DO
+  (user, 2026-07-11).** The default-compat-tool change is declined; users set `proton-cachyos-11.0-arm64`
+  manually per title via *Steam Play for all other titles* / per-game compat tool. HW evidence that
+  motivated it stands (retained for provenance): anything that runs x86 code under the *system*-FEX path
+  is fragile — Parking Garage Rally Circuit's *native x86-64 Linux* build crashes in system-FEX (SIGSEGV
+  on `--rendering-driver opengl3`, SIGILL on Vulkan) while its *Windows* build runs fine on arm64 Proton;
+  Gravity Circuit's Steam-auto-selected **stock Proton 10.0** (x86 wine under system-FEX) threw a CRT
+  `assert()` popup, fixed by forcing arm64 Proton. A native-FEX crash capture (FEXInterpreter
+  unsupported-instruction log) remains an optional nice-to-have. See
   [[fex-native-x86-game-crash-hw]], [[fex-two-paths-independent]], [[fex-rearchitecture-pickup]].
 
 - [x] **Native x86 SDL2 Linux games crash under system-FEX — RESOLVED 2026-07-11 (thunkless ROCKNIX

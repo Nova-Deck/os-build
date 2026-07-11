@@ -306,7 +306,7 @@ docker run --name "$cid" --platform linux/arm64 -v "$PREBUILT_DIR":/prebuilt:ro 
   # The holo base ships systemd-networkd enabled too, so BOTH run: networkd manages nothing
   # (NM owns the links) yet its wait-online never reaches "configured" and pins
   # network-online.target until it times out EVERY boot, stalling anything ordered after it
-  # (the steam-bootstrap oneshot, hence the queued gamescope session). HW-confirmed 2026-06-27.
+  # (e.g. the gamescope session queued behind network-online.target). HW-confirmed 2026-06-27.
   # Mask networkd + its socket + its wait-online so only NetworkManager-wait-online satisfies
   # network-online.target. Masking (not disable) is preset-proof: nothing can socket-activate or
   # Wants= them back. NM provides its own resolved/timesync paths; networkd is pure dead weight.

@@ -5,9 +5,10 @@
 # libraries, adds images/initramfs/init, and rolls the lot into a newc cpio.
 #
 # Deliberately NOT mkinitcpio/dracut: the base is minimal core and ships neither, and we
-# need no modules anyway — btrfs/ext4/squashfs/overlayfs and every block driver are =y in
+# need no modules anyway — btrfs/ext4/overlayfs and every block driver are =y in
 # kernel.config (the device booted for months with no initramfs at all). So the whole job
-# is "mount three filesystems and switch_root", which is a shell script and ~6 binaries.
+# is "mount the root + var, stack the /etc overlay, and switch_root", which is a shell
+# script and ~6 binaries.
 #
 # Library resolution walks DT_NEEDED with readelf rather than calling ldd: these are aarch64
 # ELFs staged on an x86_64 build host, so nothing here can be executed to introspect it.

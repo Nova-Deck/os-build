@@ -8,25 +8,19 @@ Phase 3 — see `.claude/plans/novadeck.plan.md`.
 
 | File | Role |
 |------|------|
-| `STEAM_SEED.pin` + `fetch-steam-seed.sh` | **Build host**: fetch the native arm64 client seed + SR3 runtime (channel `steamdeck_publicbeta`) into `work/steam-seed/`. Consumed twice: `make-sdcard.sh` pre-seeds it **into the `/home` partition**, and `assemble-rootfs.sh` bakes it into the RO root as the **recovery** source. |
-| `usr/lib/novadeck/steam-bootstrap.sh` | **Offline factory-reset re-seeder**: wipes `/home/deck` and rebuilds it from the pristine RO-root seed (`/usr/share/novadeck/steam-seed`), offline. Does **not** run on a normal boot. |
-| `usr/lib/systemd/system/novadeck-steam-bootstrap.service` | Oneshot for the reset tool above. **Left unenabled** (no preset, no `*.target.wants` symlink); a reset flow starts it on demand. |
+| `STEAM_SEED.pin` + `fetch-steam-seed.sh` | **Build host**: fetch the native arm64 client seed + SR3 runtime (channel `steamdeck_publicbeta`) into `work/steam-seed/`. `make-sdcard.sh` pre-seeds it **directly into the `/home` partition** — the only client copy in the image. |
 | `usr/bin/novadeck-steam` | Launcher `NOVADECK_SESSION_CMD` points at: sets `HOME`/`LD_LIBRARY_PATH`, execs the native client **raw on the host** (no pressure-vessel) in `-gamepadui -steamos3 -steampal -steamdeck`. |
 
 The native client is **pre-seeded directly into the `/home` partition** by `make-sdcard.sh` (a
 ready-to-run `/home/deck/.local/share/Steam`, owned `deck:deck` via `mkfs.ext4 -d`), so a healthy
-first boot does **no copy**. A **pristine copy is also baked into the RO root**
-(`/usr/share/novadeck/steam-seed`) as the **offline factory-reset** source — it survives a `/home`
-wipe, and `steam-bootstrap.sh` rebuilds `/home/deck` from it with no network. Steam self-updates the
-rest in `/home` on first launch. **Storage**: `/home` is a dedicated ext4 partition
-(`LABEL=novadeck-home`) mounted via `/etc/fstab`, sized at build to just fit the seed;
-`novadeck-grow-home.service` grows the partition + its fs to fill the card on first boot. The `deck`
-user (uid 1000) is baked into the base `/etc`. The launcher still runs as the session user (root
-today); moving the session to run as `deck` is a follow-up.
-
-> **Phase-4 (A/B) note:** the recovery seed currently lives in the sealed root, which would duplicate
-> it across both root slots. In the A/B layout it should move to a **shared** recovery location (see
-> `images/partition-table.txt`) rather than being baked into each slot.
+first boot does **no copy** and needs no network — Steam's own OOBE owns first-boot Wi-Fi. The
+pre-seeded `/home` is the **only** client copy: there is no recovery seed baked into the root and no
+in-place re-seeder. A factory reset is a **reflash of the card** (a UFS install is recovered by
+booting a separate SD-card image). Steam self-updates the rest in `/home` on first launch.
+**Storage**: `/home` is a dedicated ext4 partition (`LABEL=novadeck-home`) mounted via `/etc/fstab`,
+sized at build to just fit the seed; `novadeck-grow-home.service` grows the partition + its fs to
+fill the card on first boot. The `deck` user (uid 1000) is baked into the base `/etc`. The launcher
+still runs as the session user (root today); moving the session to run as `deck` is a follow-up.
 
 ## Validate on HW (test card, session stays disabled by default)
 
@@ -35,11 +29,10 @@ today); moving the session to run as `deck` is a follow-up.
    ```sh
    df -h /home                                           # expect the full card, not ~2GiB
    ls /home/deck/.local/share/Steam/steamrtarm64/steam   # expect the native client (deck-owned)
-   ls /usr/share/novadeck/steam-seed/steamrtarm64/steam  # recovery source (offline factory reset)
    ```
    (The client ships pre-seeded in the image; only the grow runs on first boot —
-   re-run by hand with `/usr/lib/novadeck/grow-home.sh` if needed. To exercise reset:
-   `systemctl start novadeck-steam-bootstrap` re-seeds `/home/deck` from the recovery seed.)
+   re-run by hand with `/usr/lib/novadeck/grow-home.sh` if needed. There is no in-place
+   reset: reflash the card to factory-reset.)
 3. Launch the shell, watch the panel:
    ```sh
    systemctl start novadeck-session

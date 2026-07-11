@@ -91,17 +91,15 @@ OVERLAY_STAMP   := work/repo/$(OVERLAY_ARCH)/.overlay.stamp
 BASE_STAMP   := work/.base.stamp
 KERNEL       := $(OUT)/Image.gz
 ROOTFS       := $(OUT)/images/rootfs.img
-# Sibling images the assembler emits alongside the root, one per partition (see
-# images/partition-table.txt): writable state, and the shared read-only recovery seed.
+# Sibling image the assembler emits alongside the root (see images/partition-table.txt):
+# the writable state partition, which also carries the /etc overlay upper.
 VARIMG       := $(OUT)/images/var.img
-SEEDIMG      := $(OUT)/images/seed.img
 INITRAMFS    := $(OUT)/initramfs.cpio.gz
 BOOTIMG      := $(OUT)/boot/novadeck-boot.img
 SDCARD       := $(OUT)/images/sdcard.img
-# Native arm64 Steam SEED (steam/fetch-steam-seed.sh, host network). Consumed TWICE: assemble-rootfs
-# bakes it into the RO root as the offline factory-reset RECOVERY source, and make-sdcard pre-seeds
-# the SAME tree directly into the /home partition (so a healthy boot does no copy). The client binary
-# it stages is the make target; the pin + fetcher are its prerequisites.
+# Native arm64 Steam SEED (steam/fetch-steam-seed.sh, host network). make-sdcard pre-seeds this tree
+# directly into the /home partition, so a healthy first boot does no copy and needs no network. The
+# client binary it stages is the make target; the pin + fetcher are its prerequisites.
 STEAM_SEED   := work/steam-seed/steamrtarm64/steam
 
 # Repo sources the rootfs assembler reads directly (itself + the trees it copies in: the
@@ -145,7 +143,7 @@ fw-linux:  $(FW_LINUX)     ## Fetch open linux-firmware blobs (host, network)
 fw-qcom:   $(FW_QCOM)      ## Fetch device-proprietary firmware from the qcom-firmwares repo (host, network)
 overlay:   $(OVERLAY_DB)   ## Rebuild from-source overlay pkgs (patched gamescope) -> work/repo/<arch>/
 base:      $(BASE_STAMP)   ## Fetch + customize the pinned aarch64 base rootfs (host)
-rootfs:    $(ROOTFS)       ## Assemble the read-only root + var + seed images (in container)
+rootfs:    $(ROOTFS)       ## Assemble the read-only root + var images (in container)
 initramfs: $(INITRAMFS)    ## Build the initramfs that mounts ro-root + /etc overlay (in container)
 boot:      $(BOOTIMG)      ## Package the all-boards boot artifact (in container)
 sdcard:    $(SDCARD)       ## Build the flashable SD-card image (in container)
@@ -173,8 +171,7 @@ $(FW_QCOM): firmware/QCOM_FW.pin
 	@touch $@
 
 # Native arm64 Steam seed (client + SR3 runtime) — fetched on the host, staged into work/steam-seed/,
-# then baked into the RO root (recovery source) by assemble-rootfs AND pre-seeded into /home by
-# make-sdcard. Pinned channel/runtime in steam/STEAM_SEED.pin.
+# then pre-seeded into /home by make-sdcard. Pinned channel/runtime in steam/STEAM_SEED.pin.
 $(STEAM_SEED): steam/STEAM_SEED.pin steam/fetch-steam-seed.sh
 	steam/fetch-steam-seed.sh
 	@touch $@
@@ -250,10 +247,10 @@ $(INITRAMFS): images/mkinitramfs.sh images/initramfs/init $(BASE_STAMP) | $(BUIL
 $(BOOTIMG): $(KERNEL) $(INITRAMFS) boot/cmdline boot/package.sh | $(BUILD_STAMP)
 	$(INBUILD) boot/package.sh
 
-# var.img and seed.img are co-products of the same assembler run as rootfs.img.
-$(VARIMG) $(SEEDIMG): $(ROOTFS)
+# var.img is a co-product of the same assembler run as rootfs.img.
+$(VARIMG): $(ROOTFS)
 
-$(SDCARD): $(BOOTIMG) $(ROOTFS) $(VARIMG) $(SEEDIMG) $(STEAM_SEED) | $(BUILD_STAMP)
+$(SDCARD): $(BOOTIMG) $(ROOTFS) $(VARIMG) $(STEAM_SEED) | $(BUILD_STAMP)
 	$(INBUILD) images/make-sdcard.sh
 
 # Signed RAUC OTA bundle (Phase 4). Dev builds mint an ephemeral cert; set

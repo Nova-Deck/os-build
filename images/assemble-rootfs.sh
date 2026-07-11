@@ -3,14 +3,12 @@
 #
 # Stages a base rootfs, injects the novadeck kernel + dtbs (from kernel/build.sh) and the
 # device firmware (from firmware/fetch-qcom-fw.sh), then splits the staged tree into the
-# THREE filesystem images the partition table wants (images/partition-table.txt):
+# TWO filesystem images the partition table wants (images/partition-table.txt):
 #
 #   out/images/rootfs.img  btrfs, ro   -> rootfs-a   the sealed system
 #   out/images/var.img     ext4,  rw   -> var-a      writable state + the /etc overlay upper
-#   out/images/seed.img    squashfs    -> seed       the shared offline factory-reset source
 #
-# All three are built unprivileged: `mkfs.btrfs --rootdir`, `mkfs.ext4 -d`, `mksquashfs` —
-# no root, no loop mount.
+# Both are built unprivileged: `mkfs.btrfs --rootdir`, `mkfs.ext4 -d` — no root, no loop mount.
 #
 # The root's content is read-only by construction; the subvolume's ro *property* is
 # set by RAUC at deploy time (needs a mount), so it is not applied here. The kernel mounts
@@ -32,8 +30,7 @@ LFW="$ROOT/firmware/linux-fw"
 IMGDIR="$OUT/images"
 IMG="$IMGDIR/rootfs.img"
 VARIMG="$IMGDIR/var.img"     # -> var-a  (ext4, carries the /etc overlay upper+work)
-SEEDIMG="$IMGDIR/seed.img"   # -> seed   (squashfs, ro, SHARED across both root slots)
-# The rootfs image is auto-sized by mkfs.btrfs --rootdir --shrink (see section 7); no fixed SIZE.
+# The rootfs image is auto-sized by mkfs.btrfs --rootdir --shrink (see section 6); no fixed SIZE.
 VAR_SIZE_MIB="${VAR_SIZE_MIB:-256}"   # matches var-a/-b in partition-table.txt (a hard ceiling)
 
 [ -n "$BASE" ]        || { echo "usage: assemble-rootfs.sh <base-rootfs-dir>" >&2; exit 2; }
@@ -287,59 +284,32 @@ else
   echo "  (no baked Proton compat tool — x86 Windows games will have no compat tool)" >&2
 fi
 
-# 4f. RELEASE Steam shell (SteamOS layer D): the native arm64 Steam plumbing. Two parts:
-#  - the steam/usr overlay (SoC-agnostic): the launcher (/usr/bin/novadeck-steam)
-#    NOVADECK_SESSION_CMD points at, plus the FACTORY-RESET re-seed tool (/usr/lib/novadeck/
-#    steam-bootstrap.sh + novadeck-steam-bootstrap.service). Also 50-novadeck-timezone.rules — a
-#    small polkit grant for org.freedesktop.timedate1.set-timezone (active session + wheel), the ONE
-#    thing stock polkit still prompts for now that the shell runs in a real active logind session
-#    (Wi-Fi is covered by NetworkManager's allow_active, no rule needed). Also the OOBE update-check
-#    stubs (steamos-update, steamos-mandatory-update, jupiter-biosupdate,
-#    jupiter-initial-firmware-update) — SteamUI shells to these past the Wi-Fi/timezone screens and
-#    a missing binary blocks onboarding with an "update check failed" error; we bake no
-#    jupiter-hw-support and have no OS updater in Phase 1, so they report "up to date". ONLY usr/ is
-#    copied — the steam/ top-level build files (STEAM_SEED.pin, fetch-steam-seed.sh) are NOT rootfs
-#    content.
-#  - the RECOVERY seed: the native client + SR3 runtime staged on the build host (steam/
-#    fetch-steam-seed.sh -> work/steam-seed) copied into the SEALED root at
-#    /usr/share/novadeck/steam-seed. This is the OFFLINE FACTORY-RESET source — a pristine,
-#    read-only copy that survives a /home wipe, so steam-bootstrap.sh can re-materialize
-#    /home/deck with NO network (Steam's OOBE owns Wi-Fi — see steam-must-be-baked-offline).
-#    NOTE: it is NOT used on a normal first boot — images/make-sdcard.sh already pre-seeds the SAME
-#    seed DIRECTLY into the /home partition at image-build time, so a healthy boot does zero copy
-#    (that removed the old first-boot ~1GB copy + its grow-race ENOSPC trap). The RO-root copy earns
-#    its bytes ONLY as the reset-proof recovery source; the seeder is therefore left UNENABLED (no
-#    boot-time run) and is invoked on demand by a factory-reset flow. Steam self-updates the rest of
+# 4f. RELEASE Steam shell (SteamOS layer D): the native arm64 Steam plumbing (steam/usr overlay,
+#    SoC-agnostic): the launcher (/usr/bin/novadeck-steam) NOVADECK_SESSION_CMD points at, plus
+#    50-novadeck-timezone.rules — a small polkit grant for org.freedesktop.timedate1.set-timezone
+#    (active session + wheel), the ONE thing stock polkit still prompts for now that the shell runs
+#    in a real active logind session (Wi-Fi is covered by NetworkManager's allow_active, no rule
+#    needed). Also the OOBE update-check stubs (steamos-update, steamos-mandatory-update,
+#    jupiter-biosupdate, jupiter-initial-firmware-update) — SteamUI shells to these past the
+#    Wi-Fi/timezone screens and a missing binary blocks onboarding with an "update check failed"
+#    error; we bake no jupiter-hw-support and have no OS updater in Phase 1, so they report "up to
+#    date". ONLY usr/ is copied — the steam/ top-level build files (STEAM_SEED.pin,
+#    fetch-steam-seed.sh) are NOT rootfs content.
+#
+#    There is NO recovery seed baked into the root. The client is pre-seeded ONLY into the /home
+#    partition at image-build time (images/make-sdcard.sh, from work/steam-seed), so a healthy boot
+#    does zero copy and no network. A factory reset is a reflash of the card (a UFS install recovers
+#    from a separate SD-card image) — there is no in-place re-seeder. Steam self-updates the rest of
 #    the UI on first launch (curl/unzip/tar stay in the base for that). See devices/bringup-phase3.md.
-#    It lives on its OWN SHARED squashfs partition (p8 novadeck-seed), mounted ro by the initramfs
-#    at /usr/share/novadeck/steam-seed — the same path steam-bootstrap.sh has always read. Inside a
-#    root slot it would be duplicated A+B (2x1.4G) against an 8G slot; as squashfs+zstd it
-#    is ~700M, once. The root only carries the empty mountpoint.
 STEAM="$ROOT/steam"
-seedstage="$(mktemp -d)"
-trap 'rm -rf "$stage" "$seedstage"' EXIT
 if [ -d "$STEAM/usr" ]; then
-  echo "  injecting novadeck Steam shell from ${STEAM#"$ROOT"/}/usr (launcher + reset tool + OOBE stubs)"
+  echo "  injecting novadeck Steam shell from ${STEAM#"$ROOT"/}/usr (launcher + OOBE stubs)"
   cp -a "$STEAM"/usr "$stage/"
-  chmod 0755 "$stage/usr/bin/novadeck-steam" "$stage/usr/lib/novadeck/steam-bootstrap.sh" \
+  chmod 0755 "$stage/usr/bin/novadeck-steam" \
              "$stage/usr/bin/steamos-mandatory-update" "$stage/usr/bin/jupiter-initial-firmware-update" \
              "$stage/usr/bin/steamos-polkit-helpers/steamos-set-timezone" \
              "$stage/usr/bin/steamos-polkit-helpers/steamos-update" \
              "$stage/usr/bin/steamos-polkit-helpers/jupiter-biosupdate"
-  SEED="$ROOT/work/steam-seed"
-  # The mountpoint exists in the root whether or not a seed was staged — the initramfs mounts the
-  # shared seed partition onto it, and a missing dir would make that mount fail.
-  install -d -m0755 "$stage/usr/share/novadeck/steam-seed"
-  if [ -x "$SEED/steamrtarm64/steam" ]; then
-    echo "  staging Steam RECOVERY seed from ${SEED#"$ROOT"/} -> $(basename "$SEEDIMG") ($(du -sh "$SEED" | cut -f1) raw, offline factory-reset source)"
-    cp -a "$SEED"/. "$seedstage/"
-    # No compat tool is seeded here any more. The Proton tool now lives in the root slot at
-    # /usr/share/steam/compatibilitytools.d (Steam scans that path too), which means it is
-    # replaced atomically with the OS and cannot be left stale by a factory reset — the seed is
-    # a *pristine Steam client*, and a compat tool is an OS component, not client state.
-  else
-    echo "  WARNING: no Steam seed at ${SEED#"$ROOT"/} — run steam/fetch-steam-seed.sh (no offline factory-reset source)" >&2
-  fi
 else
   echo "  (no steam/usr tree — skipping Steam shell injection)"
 fi
@@ -856,20 +826,7 @@ echo "  ok   var    -> ${VARIMG#"$ROOT"/}  (${VAR_SIZE_MIB}MiB ext4, ${var_used_
 rm -rf "${varstage:?}"
 install -d -m0755 "$varstage"
 
-# 6. the shared Steam recovery seed as a read-only squashfs (partition seed). zstd because both
-# SQUASHFS_ZSTD and the squashfs driver are =y in kernel.config. -all-root: the seed is copied out
-# to /home/deck by steam-bootstrap.sh, which chowns it there, so ownership in the blob is moot.
-if [ -n "$(ls -A "$seedstage" 2>/dev/null)" ]; then
-  rm -f "$SEEDIMG"
-  mksquashfs "$seedstage" "$SEEDIMG" \
-    -comp zstd -Xcompression-level 15 -noappend -all-root -no-progress >/dev/null
-  echo "  ok   seed   -> ${SEEDIMG#"$ROOT"/}  ($(du -h "$SEEDIMG" | cut -f1) squashfs, from $(du -sh "$seedstage" | cut -f1) raw)"
-else
-  rm -f "$SEEDIMG"
-  echo "  (no Steam seed staged — no ${SEEDIMG#"$ROOT"/}; offline factory reset unavailable)" >&2
-fi
-
-# 7. bake the Btrfs image (populate without mounting), compressed + shrunk to fit.
+# 6. bake the Btrfs image (populate without mounting), compressed + shrunk to fit.
 # Let mkfs.btrfs --rootdir size the device itself: on btrfs-progs v7.0 a PRE-truncated large device
 # (the old `truncate -s 8G`) forces 1 GiB data block-groups, and `--shrink` can only shrink to that
 # coarse granularity — so 6.3 GiB of content rounded up to a 9.25 GiB image that overflowed the 8 GiB

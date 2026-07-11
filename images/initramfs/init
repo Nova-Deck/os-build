@@ -10,7 +10,7 @@
 # EVERY boot look like a first boot (re-running preset-all). So the overlay has to be in
 # place before we exec systemd — which means here, before switch_root.
 #
-# We need no modules: btrfs, ext4, squashfs and overlayfs are all =y in kernel.config, and
+# We need no modules: btrfs, ext4 and overlayfs are all =y in kernel.config, and
 # every block/storage driver is builtin too (proof: the device booted for months with no
 # initramfs at all). So this is a plain shell script over a handful of util-linux binaries,
 # staged by images/mkinitramfs.sh. No udev, no modprobe, no systemd-in-initrd.
@@ -18,7 +18,6 @@
 # Layout (images/partition-table.txt):
 #   root  <- root=PARTLABEL=novadeck-root-A   btrfs, ro
 #   var   <- novadeck.var=PARTLABEL=...       ext4, rw   (carries the overlay upper+work)
-#   seed  <- novadeck.seed=PARTLABEL=...      squashfs, ro (offline factory-reset source)
 #   /etc  <- overlay(lower=/sysroot/etc, upper=/sysroot/var/lib/overlays/etc/upper)
 #
 # DEGRADED BOOT: this device has no serial console ([[sm8650-no-uart]]), so a hard failure
@@ -39,14 +38,13 @@ mount -t proc     -o nosuid,noexec,nodev proc /proc
 mount -t sysfs    -o nosuid,noexec,nodev sys  /sys
 mount -t devtmpfs -o nosuid,mode=0755    dev  /dev
 
-ROOTSPEC=''; VARSPEC=''; SEEDSPEC=''; ROOTFSTYPE=btrfs
+ROOTSPEC=''; VARSPEC=''; ROOTFSTYPE=btrfs
 read -r _cmdline </proc/cmdline
 for _arg in $_cmdline; do
   case "$_arg" in
     root=*)          ROOTSPEC=${_arg#root=} ;;
     rootfstype=*)    ROOTFSTYPE=${_arg#rootfstype=} ;;
     novadeck.var=*)  VARSPEC=${_arg#novadeck.var=} ;;
-    novadeck.seed=*) SEEDSPEC=${_arg#novadeck.seed=} ;;
   esac
 done
 
@@ -109,17 +107,6 @@ else
     log "var $VARDEV mounted; /etc overlay stacked (upper=/var/lib/overlays/etc/upper)"
   else
     degrade "cannot stack the /etc overlay on $VARDEV"
-  fi
-fi
-
-# The offline factory-reset source, shared across both root slots. Purely optional: a missing
-# seed costs us an offline factory reset, not the boot, so it never degrades the root.
-if [ -n "$SEEDSPEC" ]; then
-  if SEEDDEV=$(resolve "$SEEDSPEC") \
-     && mount -t squashfs -o ro "$SEEDDEV" "$SYSROOT/usr/share/novadeck/steam-seed"; then
-    log "seed $SEEDDEV mounted ro at /usr/share/novadeck/steam-seed"
-  else
-    warn "no Steam recovery seed ('$SEEDSPEC') — offline factory reset will be unavailable"
   fi
 fi
 

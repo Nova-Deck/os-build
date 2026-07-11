@@ -7,10 +7,10 @@
 # -gamepadui/-steamdeck/-steamos3 flags SteamOS passes for the handheld Deck shell.
 # x86 games launched from here go through FEX/Proton (later in Phase 3).
 #
-# The WHOLE Big Picture shell is baked offline (release can't fetch — Steam owns OOBE Wi-Fi): the
-# bootstrap oneshot (novadeck-steam-bootstrap.service) stages the seed client+runtime AND the full
-# UI content into the writable home, and we launch with -noverifyfiles so the client runs exactly
-# the baked bits without attempting an (offline, doomed) self-update/repair.
+# The WHOLE Big Picture shell is baked offline (release can't fetch — Steam owns OOBE Wi-Fi):
+# images/make-sdcard.sh pre-seeds the native client+runtime directly into the writable /home at image
+# build, and we launch with -noverifyfiles so the client runs exactly the baked bits without
+# attempting an (offline, doomed) self-update/repair.
 set -eu
 
 STEAM_HOME="${STEAM_HOME:-/home/deck}"
@@ -21,7 +21,7 @@ export HOME="${STEAM_HOME}"
 
 if [ ! -x "$CLIENT" ]; then
   echo "[novadeck-steam] native arm64 Steam not staged at ${STEAM}" >&2
-  echo "[novadeck-steam] run /usr/lib/novadeck/steam-bootstrap.sh (or its first-boot unit) first" >&2
+  echo "[novadeck-steam] /home was not pre-seeded at image build — reflash the card" >&2
   exit 1
 fi
 
@@ -68,7 +68,7 @@ export vk_xwayland_wait_ready=false            # don't block on buffers idling b
 # -steamdeck/-steamos3/-steampal: Deck handheld behaviour. -gamepadui: Big Picture as the shell.
 #
 # -noverifyfiles: skip the client's startup file-verification pass. We bake a hand-assembled offline
-#   shell (see steam-bootstrap.sh) that won't checksum-match Valve's manifests, and there's no network
+#   shell (pre-seeded into /home by make-sdcard.sh) that won't checksum-match Valve's manifests, and there's no network
 #   at first boot (Steam owns OOBE Wi-Fi) — so verification can only waste time re-hashing the baked
 #   tree or stall trying to re-fetch. This leaves the SELF-UPDATE path intact.
 # -noshaders: disable Steam's shader pre-caching (background shader download + compile). Orthogonal to

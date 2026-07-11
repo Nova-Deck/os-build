@@ -1,14 +1,11 @@
-# novadeck Steam seed pin — what steam/fetch-steam-seed.sh stages for the /home pre-seed + recovery.
+# novadeck Steam seed pin — what steam/fetch-steam-seed.sh stages for the /home pre-seed.
 #
 # The native arm64 Steam client SEED (the UI-incomplete bootstrap client) + the arm64 SR3 runtime
-# are fetched HERE, on the build host, and staged into work/steam-seed/. That tree is used TWICE at
-# image build: (1) images/make-sdcard.sh pre-seeds it DIRECTLY into the /home partition (a
-# ready-to-run /home/deck/.local/share/Steam) so a healthy boot fetches nothing and copies nothing;
-# (2) images/assemble-rootfs.sh bakes it into the sealed RO root at /usr/share/novadeck/steam-seed as
-# the OFFLINE FACTORY-RESET recovery source (a pristine copy that survives a /home wipe). Neither
-# touches the network (Steam's OOBE owns Wi-Fi; an OS-side fetch would deadlock — see the
-# steam-must-be-baked-offline note). Steam still self-updates the rest of the UI on first launch,
-# inside its own OOBE, once the user connects.
+# are fetched HERE, on the build host, and staged into work/steam-seed/. images/make-sdcard.sh
+# pre-seeds that tree DIRECTLY into the /home partition (a ready-to-run /home/deck/.local/share/Steam)
+# so a healthy boot fetches nothing and copies nothing. This does not touch the network (Steam's OOBE
+# owns Wi-Fi; an OS-side fetch would deadlock — see the steam-must-be-baked-offline note). Steam still
+# self-updates the rest of the UI on first launch, inside its own OOBE, once the user connects.
 #
 # channel:     Steam client channel (arm64 publicbeta line — NOT the x86 default).
 # runtime_url: the arm64 steamrt3 runtime tarball the native client links against.

@@ -409,13 +409,13 @@ rationale lives in the linked memories and commit history.
   2026-07-03 (commit `930058f`). `make-sdcard.sh` now populates the `/home` ext4 directly at build
   (`mkfs.ext4 -d`, owned `deck:deck`, `.steam` symlinks + seed baked in), sized to the seed and grown
   to fill the card on first boot by `novadeck-grow-home` — a healthy boot does ZERO copy (killed the
-  old ~1GB rootfs→home copy and its grow-race ENOSPC trap). The pristine seed stays baked in the RO
-  root (`/usr/share/novadeck/steam-seed`) as the **offline factory-reset** source (survives a `/home`
-  wipe); `steam-bootstrap.sh` is repurposed from first-boot seeder to the on-demand reset tool (left
-  unenabled). The recovery seed now lives on its own SHARED squashfs partition (p8 `novadeck-seed`,
-  649M zstd from 1.4G raw), mounted ro by the initramfs at the same `/usr/share/novadeck/steam-seed`
-  path — not duplicated per A/B slot. See
+  old ~1GB rootfs→home copy and its grow-race ENOSPC trap). See
   [[steam-must-be-baked-offline]], [[steam-offline-sdl3-seed]], [[grow-home-repart-no-initramfs]].
+  - **UPDATE 2026-07-11:** the separate recovery-seed mechanism was DROPPED. The pre-seeded `/home`
+    is now the only client copy — no squashfs seed partition (p8 removed, layout back to 8 SteamOS
+    partitions), no `/usr/share/novadeck/steam-seed` in the RO root, and `steam-bootstrap.sh` +
+    `novadeck-steam-bootstrap.service` deleted. There is no in-place re-seed: a factory reset is a
+    reflash of the card, and a UFS install is recovered by booting a separate SD-card image.
 
 - [x] **Audio on release** — RESOLVED, HW-confirmed 2026-07-03. The "works on test, not release"
   framing was a red herring: the real precondition is **session-alive + client-updated**. Earlier

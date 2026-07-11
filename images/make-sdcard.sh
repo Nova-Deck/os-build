@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # novadeck SD-card image builder.
 #
-# Lays the FULL SteamOS-style 9-partition GPT from images/partition-table.txt and populates
-# only the A side: ESP + rootfs-a + var-a + seed + home. rootfs-b/var-b are created and left
+# Lays the FULL SteamOS-style 8-partition GPT from images/partition-table.txt and populates
+# only the A side: ESP + rootfs-a + var-a + home. rootfs-b/var-b are created and left
 # empty for RAUC to fill; efi-a/efi-b are created, formatted, and left empty until there is a
 # per-slot bootloader (see the table's header for what eventually lands there).
 #
@@ -17,7 +17,7 @@
 #   docker run --rm -v "$PWD":/src -w /src novadeck-build images/make-sdcard.sh
 #
 # Prereqs: boot/package.sh (-> out/boot/novadeck-boot.img) and images/build-image.sh
-# (-> out/images/{rootfs,var,seed}.img) have run.
+# (-> out/images/{rootfs,var}.img) have run.
 set -euo pipefail
 export MTOOLS_SKIP_CHECK=1   # mtools on a file image has no geometry; silence the warning
 
@@ -27,7 +27,6 @@ KERNEL="$OUT/boot/novadeck-boot.img"
 IMGDIR="$OUT/images"
 ROOTFS="$IMGDIR/rootfs.img"
 VARIMG="$IMGDIR/var.img"
-SEEDIMG="$IMGDIR/seed.img"
 IMG="$IMGDIR/sdcard.img"
 TABLE="$ROOT/images/partition-table.txt"
 
@@ -57,7 +56,7 @@ part_mib()  { awk -v n="$1" '/^[[:space:]]*#/||/^[[:space:]]*$/{next}
 
 P_ESP=$(part_num esp);    P_EFIA=$(part_num efi-a); P_EFIB=$(part_num efi-b)
 P_ROOTA=$(part_num rootfs-a); P_VARA=$(part_num var-a)
-P_SEED=$(part_num seed);  P_HOME=$(part_num home)
+P_HOME=$(part_num home)
 
 ESP_SIZE_MIB=$(part_mib esp)
 EFI_SIZE_MIB=$(part_mib efi-a)
@@ -72,7 +71,6 @@ fits() {  # <file> <slot-mib> <what>
 }
 fits "$ROOTFS" "$(part_mib rootfs-a)" "rootfs.img"
 fits "$VARIMG" "$(part_mib var-a)"    "var.img"
-if [ -f "$SEEDIMG" ]; then fits "$SEEDIMG" "$(part_mib seed)" "seed.img"; fi
 
 # Stage the /home tree to pre-seed: the deck user's Steam client baked into .local/share/Steam, plus
 # the HOME-relative ~/.steam compat symlinks (mirror SteamOS's layout). Owned by deck (uid/gid 1000,
@@ -156,7 +154,6 @@ write_part "$P_EFIA"  "$efi"    "novadeck-efi-A (empty, reserved)"
 write_part "$P_EFIB"  "$efi"    "novadeck-efi-B (empty, reserved)"
 write_part "$P_ROOTA" "$ROOTFS" "novadeck-root-A (btrfs, ro)"
 write_part "$P_VARA"  "$VARIMG" "novadeck-var-A (ext4)"
-if [ -f "$SEEDIMG" ]; then write_part "$P_SEED" "$SEEDIMG" "novadeck-seed (squashfs, shared)"; fi
 write_part "$P_HOME"  "$home"   "novadeck-home (ext4, grows on first boot)"
 
 echo "  ok   $(du -h "$IMG" | cut -f1) -> ${IMG#"$ROOT"/}"
@@ -165,7 +162,7 @@ Done. Write it to the card (replace sdX with your device, ALL DATA LOST):
   sudo dd if=${IMG#"$ROOT"/} of=/dev/sdX bs=4M conv=fsync status=progress
 ABL boots /KERNEL off the ESP; its DTB picker selects the board. The initramfs then mounts
 root=PARTLABEL=novadeck-root-A read-only, mounts novadeck-var-A, stacks the /etc overlay on it,
-and mounts the shared squashfs seed — then switch_roots into systemd. /home (last partition)
-is pre-seeded with the deck user's Steam client and grows to fill the card on first boot.
+then switch_roots into systemd. /home (last partition) is pre-seeded with the deck user's Steam
+client and grows to fill the card on first boot.
 The B slots (rootfs-b, var-b) and both efi-* partitions are present but empty.
 EOF

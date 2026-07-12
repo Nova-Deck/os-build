@@ -27,7 +27,7 @@ pkgname=(
   vulkan-mesa-device-select
   vulkan-mesa-layers
 )
-pkgver=26.1.3
+pkgver=26.1.4
 _pkgver=${pkgver/[a-z]/-&}
 pkgrel=1
 epoch=1
@@ -95,12 +95,12 @@ options=(
 source=(
   "https://archive.mesa3d.org/mesa-$_pkgver.tar.xz"
 )
-# Provenance: sha256 of mesa-26.1.3.tar.xz. build-overlay.sh runs makepkg with --skipinteg (our
+# Provenance: sha256 of mesa-26.1.4.tar.xz. build-overlay.sh runs makepkg with --skipinteg (our
 # locally-added patch sources have no checksums), so this is recorded for human/CI verification and
 # matches the pinned URL+sha in packages/mesa/source.pin. The upstream .sig + validpgpkeys are
 # dropped (the pipeline does not do PGP verification).
 sha256sums=(
-  '7725004e724b34c6d4fbaf5c48fc6c6223aa9f2741d6d7782c699b049356fc45'
+  '072705caa9adf4740f1489194b13e278ad959166863b5271fe423a86353c9ab6'
 )
 
 prepare() {

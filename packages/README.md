@@ -85,7 +85,7 @@ Current overlay:
 - `gamescope/` — **local PKGBUILD** building gamescope `3.16.23.2` (newer-Turnip/ROCKNIX parity)
   with the composite-rotation patch for the portrait Pocket S2 panel under
   `packages/gamescope/patches/`. (Was a fetched holo PKGBUILD at 3.16.17; moved local for the bump.)
-- `mesa/` — **local PKGBUILD** building mesa `26.1.3` from the upstream tarball. It tracks the
+- `mesa/` — **local PKGBUILD** building mesa `26.1.4` from the upstream tarball. It tracks the
   Arch/holo recipe (same `arch-meson` invocation + meson options) as closely as possible; the only
   deviations are `gallium-drivers`/`vulkan-drivers` narrowed to **freedreno** (GL) + **freedreno**
   Vulkan (Turnip), plus `gallium-rusticl=false` (no OpenCL → no Rust crate chain) and

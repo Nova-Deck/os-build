@@ -1,13 +1,13 @@
 # novadeck kernel source pin — Phase 1
 # The TARBALL + its sha256 is the canonical pin. Validated 2026-06-17.
-version:    7.0.11
-url:        https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.0.11.tar.xz
-sha256:     e56c8356dda01136a6041c6ef832bd0ec99bd2d35dff97832aa5ec10ed014304
-git_tag:    v7.0.11
-git_commit: bb532bfaf7919c7c98caab81864e9ce2646e11e3
+version:    7.1.3
+url:        https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.1.3.tar.xz
+sha256:     be41c068e88f5242a19bccdbffbe077b18c47b45f627e2325504b4fab79dd1dc
+git_tag:    v7.1.3
+git_commit: 199c9959d3a9b53f346c221757fc7ac507fbac50
 
 # Config validation (kernel/config/sm8650.config) against THIS tree:
-#   - all referenced CONFIG_* symbols exist in 7.0.11.
+#   - all referenced CONFIG_* symbols exist in 7.1.3.
 # Corrections applied during validation:
 #   MFD_QCOM_SPMI_PMIC  -> MFD_SPMI_PMIC
 #   PHY_QCOM_SNPS_EUSB2 -> PHY_SNPS_EUSB2 (+ PHY_QCOM_EUSB2_REPEATER)

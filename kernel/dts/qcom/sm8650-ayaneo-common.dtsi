@@ -1071,7 +1071,12 @@
 	status = "okay";
 };
 
-/* gpu_zap_shader / remoteproc firmware-name are board-specific — set per board .dts */
+/* GPU zap shader is shared across all SM8650 boards: the open Adreno A750 zap from
+   linux-firmware (qcom/sm8650/gen70900_zap.mbn), baked into the Image via embed.list.
+   Only the remoteproc adsp/cdsp firmware-name stays board-specific — set per board .dts. */
+&gpu_zap_shader {
+	firmware-name = "qcom/sm8650/gen70900_zap.mbn";
+};
 
 &gpu_opp_table {
 /* Additional speedbin for Adreno A33

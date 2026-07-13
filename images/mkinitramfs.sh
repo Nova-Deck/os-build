@@ -45,7 +45,7 @@ chmod 0755 "$stage"   # mktemp -d is 0700; that mode would become the initramfs 
 # Pre-create every directory init needs, so it never has to mkdir before /dev exists.
 # /bin, /sbin and /lib are symlinks into /usr, matching the base's merged-usr layout — the
 # binaries' hardcoded PT_INTERP (/lib/ld-linux-aarch64.so.1) resolves through /lib.
-mkdir -p "$stage"/{usr/bin,usr/lib,proc,sys,dev,sysroot}
+mkdir -p "$stage"/{usr/bin,usr/lib,proc,sys,dev,run,sysroot}
 ln -s usr/bin "$stage/bin"
 ln -s usr/bin "$stage/sbin"
 ln -s usr/lib "$stage/lib"

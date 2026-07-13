@@ -41,9 +41,12 @@ diff --git a/drivers/gpu/drm/panel/Makefile b/drivers/gpu/drm/panel/Makefile
 index 3615a761b44f..5ae127482f10 100644
 --- a/drivers/gpu/drm/panel/Makefile
 +++ b/drivers/gpu/drm/panel/Makefile
-@@ -1,5 +1,6 @@
+@@ -1,8 +1,9 @@
  # SPDX-License-Identifier: GPL-2.0
  obj-$(CONFIG_DRM_PANEL_ABT_Y030XX067A) += panel-abt-y030xx067a.o
+ obj-$(CONFIG_DRM_PANEL_AR06_4INCH) += panel-ar06-4inch.o
+ obj-$(CONFIG_DRM_PANEL_AR02_3INCH) += panel-ar02-3inch.o
+ obj-$(CONFIG_DRM_PANEL_AR11_5INCH) += panel-ar11-5inch.o
 +obj-$(CONFIG_DRM_PANEL_AR14) += panel-ar14-144hz.o
  obj-$(CONFIG_DRM_PANEL_ARM_VERSATILE) += panel-arm-versatile.o
  obj-$(CONFIG_DRM_PANEL_ASUS_Z00T_TM5P5_NT35596) += panel-asus-z00t-tm5p5-n35596.o

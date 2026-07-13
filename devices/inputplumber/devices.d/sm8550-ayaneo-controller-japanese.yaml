@@ -6,7 +6,7 @@ version: 1
 kind: CompositeDevice
 
 # Name of the composite device mapping
-name: AYANEO Standard Layout
+name: AYANEO Japanese Layout
 
 # Only use this profile if *any* of the given matches matches. If this list is
 # empty, then the source devices will *always* be checked.
@@ -16,12 +16,12 @@ matches:
       sys_path: /sys/firmware/devicetree/base
       attributes:
         - name: model
-          value: KONKR Pocket FIT
+          value: AYANEO Pocket ACE
   - udev:
       sys_path: /sys/firmware/devicetree/base
       attributes:
         - name: model
-          value: AYANEO Pocket S2
+          value: AYANEO Pocket DMG
 
 # Only allow a single source device per composite device of this type.
 single_source: false
@@ -34,13 +34,13 @@ source_devices:
       vendor_id: "1c4f"
       product_id: "0002"
       handler: event*
-    capability_map_id: ayaneo_mcu_xbox_standard
+    capability_map_id: sm8550_ayaneo_mcu_japanese
   - group: gamepad
     evdev:
       vendor_id: "045e"
       product_id: "028e"
       handler: event*
-    capability_map_id: ayaneo_mcu_xbox_standard
+    capability_map_id: sm8550_ayaneo_mcu_japanese
 
 # Optional configuration for the composite device
 options:

@@ -27,8 +27,8 @@ rationale lives in the linked memories and commit history.
   clean msm/iommu bring-up. Self-contained: nothing consumed the label (no `memory-region` phandle,
   no simple-framebuffer anywhere in `kernel/dts/`). Complements `video=efifb:off`
   ([[sm8650-working-display-baseline]]) and is orthogonal to the sy7758 `enable-gpios` deferred-probe
-  fix above (that was a genuinely absent backlight, not a handover artifact). Working tree only; not
-  yet committed. See [[sm8550-bringup-pickup]].
+  fix above (that was a genuinely absent backlight, not a handover artifact). Committed + pushed to
+  main as `6c1677e`. See [[sm8550-bringup-pickup]].
 
 - [ ] **PMIC RTC probe defers forever → no `/dev/rtc` (SM8650 ayaneo boards)** — HW-confirmed on
   Pocket S2 (2026-07-12). `/sys/kernel/debug/devices_deferred` holds `c400000.spmi:pmic@0:rtc@6100`

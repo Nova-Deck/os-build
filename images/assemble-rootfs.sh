@@ -562,12 +562,14 @@ ln -sf /usr/lib/systemd/system/novadeck-offload.target \
 
 # 4b-audio. ALSA UCM2 machine profile (SteamOS layer C audio). A static overlay tree under
 # audio/ mirror-copied into the rootfs: the device's card-name-matched UCM2 profile so userland
-# knows the routing (speaker/headphone/DP paths, jack handling). The profile is the Pocket S2
-# config (card model SM8650-APS2, matching the DT sound_card model + the AudioReach
-# tplg). conf.d/sm8650/ ships two relative symlinks (SM8650-APS2 + the EFI-boot card-name
-# variant ayaneo-AYANEOPocketS2-) -> the profile; cp -a preserves them. The profile Includes
-# codec snippets (/codecs/wcd939x, /codecs/qcom-lpass/{wsa,rx}-macro, /codecs/wsa884x) that must
-# be provided by the base alsa-ucm-conf package — ensure it is in the release PKGS (layer-4 work).
+# knows the routing (speaker/headphone/DP paths, jack handling). Profiles live under
+# Qualcomm/sm86{50,55}/<CARD>/ and are card-name-matched via conf.d/sm86{50,55}/ relative
+# symlinks (cp -a preserves them). SM8650: Pocket S2 (SM8650-APS2, matching the DT sound_card
+# model + the AudioReach tplg) and KONKR Pocket FIT (SM8650-KPF). SM8550: AYN Odin2, AYANEO
+# Pocket ACE (SM8550-APS) and AYN Thor. The profiles Include codec snippets (/codecs/{wcd938x,
+# wcd939x,wsa884x}, /codecs/qcom-lpass/{va,wsa,rx,tx}-macro — note SM8550 uses wcd938x, SM8650
+# wcd939x) that must be provided by the base alsa-ucm-conf package — ensure it is in the release
+# PKGS (layer-4 work).
 AUDIO="$ROOT/audio"
 if [ -d "$AUDIO" ]; then
   echo "  injecting novadeck ALSA UCM2 profile from ${AUDIO#"$ROOT"/}"

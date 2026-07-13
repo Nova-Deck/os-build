@@ -11,4 +11,4 @@
 #
 # Fetch + verify with:  firmware/fetch-qcom-fw.sh
 repo:   https://github.com/Nova-Deck/qcom-firmwares
-commit: 95a7679e83dd35eb39557867c155158afd160676
+commit: 497ae1d763c6276014519ada97aa4abb8201824b

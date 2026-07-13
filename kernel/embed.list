@@ -10,10 +10,24 @@ qcom/gen70900_aqe.fw
 qcom/gen70900_sqe.fw
 qcom/gmu_gen70900.bin
 
-# --- sm8650: per-board GPU zap shaders (device, qcom-firmwares) ---
-qcom/sm8650/ayaneo/ps2/gen70900_zap.mbn
-qcom/sm8650/konkr/pf/gen70900_zap.mbn
+# --- sm8650: GPU zap shader (open, linux-firmware) — shared across all boards ---
+qcom/sm8650/gen70900_zap.mbn
 
 # --- sm8650: AudioReach (q6apm) topology, per board card model (device) ---
 qcom/sm8650/SM8650-APS2-tplg.bin
 qcom/sm8650/SM8650-KPF-tplg.bin
+
+# --- sm8550: Adreno 740 GPU microcode + zap shader (open, linux-firmware) ---
+# All three ship in linux-firmware (a740_zap under the qcom/sm8550/ subdir); embedded so
+# the GPU can init before the rootfs mounts. Shared across every SM8550 board.
+qcom/a740_sqe.fw
+qcom/gmu_gen70200.bin
+qcom/sm8550/a740_zap.mbn
+
+# --- sm8550: AudioReach (q6apm) topology, per card model (device) ---
+# AYN Thor shares the Odin2 topology but its sound-card model is "AYN-Thor", so the
+# driver requests a distinctly-named (byte-identical) tplg. odin2/mini/portal all
+# inherit the AYN-Odin2 model. AYANEO pockets use SM8550-APS.
+qcom/sm8550/SM8550-APS-tplg.bin
+qcom/sm8550/AYN-Odin2-tplg.bin
+qcom/sm8550/AYN-Thor-tplg.bin

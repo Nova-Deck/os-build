@@ -5,6 +5,31 @@ rationale lives in the linked memories and commit history.
 
 ## Open
 
+- [ ] **Pocket DS: SY7758 backlight has no `enable-gpios` → panel will defer (no display)** — the
+  upstream `silergy,sy7758` driver requires `enable-gpios` to bind (root cause of the Pocket ACE blue
+  screen, fixed 2026-07-13 for ace/s2k/s1k with `enable-gpios = <&tlmm 41 GPIO_ACTIVE_HIGH>`). The
+  Pocket DS node (`qcs8550-ayaneo-pocketds.dts:129` `backlight: backlight@2e`) has **no enable GPIO and
+  no `backlight_pwr_active` pinctrl** to derive one from — unlike the other AYANEO boards. Its I2C bus
+  carries a **`tca6408` GPIO expander** (`tca64_20@20`), so the DS backlight enable is most likely an
+  **expander pin** (`enable-gpios = <&tca6408 N GPIO_ACTIVE_HIGH>`), not a tlmm gpio — pin N unknown,
+  needs the DS schematic or a reference. Not in Armada's fix commit (a537fbae, which only did
+  ace/s2k). Without it the AR-class DS panel(s) will sit in deferred-probe exactly like ace did. See
+  [[sm8550-bringup-pickup]].
+
+- [ ] **PMIC RTC probe defers forever → no `/dev/rtc` (SM8650 ayaneo boards)** — HW-confirmed on
+  Pocket S2 (2026-07-12). `/sys/kernel/debug/devices_deferred` holds `c400000.spmi:pmic@0:rtc@6100`
+  ("reason unknown") and there is no `/dev/rtc0`. Root cause: `sm8650-ayaneo-common.dtsi` sets
+  `qcom,uefi-rtc-info` on `&pmk8550_rtc`. That property makes `rtc-pm8xxx` read the RTC offset from a
+  UEFI variable; with `CONFIG_EFI=y` on a device that is **not** UEFI-booted (`efi: UEFI not found` —
+  we boot via ABL android-bootimg), `pm8xxx_rtc_probe_offset()` hits
+  `if (!efivar_is_available()) { if (IS_ENABLED(CONFIG_EFI)) return -EPROBE_DEFER; }`
+  (`drivers/rtc/rtc-pm8xxx.c:584`) and defers permanently — efivars never appear.
+  Fix: drop `qcom,uefi-rtc-info` from the `&pmk8550_rtc` override (keep `qcom,no-alarm` + `status`).
+  The RTC then binds offset-less (read-only, offset=0) and `/dev/rtc0` appears; `systemd-timesyncd`
+  already owns wall-clock so nothing else regresses. Impact is cosmetic today (NTP fixes the clock
+  seconds after Wi-Fi), which is why it's parked — but it's a one-line DTS change on the next kernel
+  build. Property arrived with the unified-image refactor (`a6fc71f`); only in this one dtsi.
+
 - [ ] **RAUC must rsync `/var` across slots — `/etc` and the Wi-Fi MAC ride on it** — NOT yet built;
   a hard prerequisite for the A/B switch, not a nicety. The `/etc` overlay's upperdir lives at
   `/var/lib/overlays/etc/upper`, and `/var` is **per-slot** (`var-a`/`var-b`). So booting the other

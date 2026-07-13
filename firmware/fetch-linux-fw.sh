@@ -10,9 +10,10 @@
 #   firmware/fetch-linux-fw.sh
 #
 # Exports to firmware/linux-fw/ (git-ignored). Runs on the host (needs network),
-# like images/fetch-base.sh. Idempotent — already-correct files are skipped; FORCE=1
-# re-fetches everything. The open blobs are SoC-agnostic (the unified kernel embeds the
-# union), so this is a single flat tree, not per-SoC.
+# like images/fetch-base.sh. Idempotent and staleness-proof by construction: each file is
+# verified against its per-file sha256 in the pin, so a pin bump (new file or changed sha)
+# re-fetches exactly the affected files. The open blobs are SoC-agnostic (the unified
+# kernel embeds the union), so this is a single flat tree, not per-SoC.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -32,7 +33,7 @@ while read -r src dst sha _rest; do
   [ -n "$dst" ] && [ -n "$sha" ] || { echo "bad pin line: '$src $dst $sha'" >&2; exit 1; }
   out="$DEST/$dst"
   n=$((n + 1))
-  if [ -z "${FORCE:-}" ] && [ -f "$out" ] && echo "$sha  $out" | sha256sum -c - >/dev/null 2>&1; then
+  if [ -f "$out" ] && echo "$sha  $out" | sha256sum -c - >/dev/null 2>&1; then
     continue
   fi
   tmp="$(mktemp)"

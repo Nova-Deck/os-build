@@ -14,10 +14,21 @@
 commit: e7eb98afc667913acc533ab910c608bee7d08f25
 base:   https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain
 
-# Adreno gen70900 (A750) GPU firmware — also embedded in the kernel Image (CONFIG_EXTRA_FIRMWARE)
+# Adreno gen70900 (A750 / SM8650) GPU firmware — also embedded in the kernel Image (CONFIG_EXTRA_FIRMWARE)
 qcom/gen70900_aqe.fw       qcom/gen70900_aqe.fw     25237c161d727b8ea92b4beb837a31651b44ea78bfc34d95672af8f346a45825
 qcom/gen70900_sqe.fw       qcom/gen70900_sqe.fw     f756bafe5f69a87161c7c53385386374a791861a574c244e845baba677993842
 qcom/gmu_gen70900.bin      qcom/gmu_gen70900.bin    9685f62c42543befcaee68d25355e16bf55cdb0d573bddcc9f6633f59eec3f72
+# A750 zap shader — now OPEN in linux-firmware (qcom/sm8650/), replacing the vendor-image
+# blob previously carried in qcom-firmwares. Shared across all SM8650 boards; embedded.
+qcom/sm8650/gen70900_zap.mbn  qcom/sm8650/gen70900_zap.mbn  04aced0ce55bea7c0c231e275e2d02c385085a7376606638596b2be8599adba1
+
+# Adreno gen70200 (A740 / SM8550) GPU firmware — also embedded in the kernel Image.
+# NOTE: unlike the A750, the A740 zap shader is OPEN and shipped by linux-firmware under
+# the qcom/sm8550/ subdir (the board DTS zap-shader firmware-name points here) — it does
+# NOT come from qcom-firmwares. Present at the pinned commit above.
+qcom/a740_sqe.fw           qcom/a740_sqe.fw         96fee336424b139100fc60b5b45a907360e4b3936d7e1d00406b9bd80ca48473
+qcom/gmu_gen70200.bin      qcom/gmu_gen70200.bin    1a2a419c39046d3141fc5fed5aa7f971de2db40cc7a1d89693c3e26fad64dd98
+qcom/sm8550/a740_zap.mbn   qcom/sm8550/a740_zap.mbn 386bbdc25ae94a9398e33e7580eecfdcef6c472682a1e3123e1374bcffe7cde3
 
 # WCN7850 Wi-Fi/BT (qca): Bluetooth firmware + NVM variants (board ID selects the .bNN)
 qca/hmtbtfw20.tlv          qca/hmtbtfw20.tlv        f1c00f4640a5c4e5dc36a2574d3d1d0afcfd1ab58a84f217dce4b1bb73cba981

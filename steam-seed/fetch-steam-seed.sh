@@ -7,9 +7,10 @@
 # images/make-sdcard.sh pre-seeds it DIRECTLY into the /home partition (a ready-to-run home, no
 # first-boot copy and no network — Steam's OOBE owns Wi-Fi). See steam-seed/STEAM_SEED.pin.
 #
-# Idempotent: re-running is a no-op once work/steam-seed/steamrtarm64/steam is present (delete the
-# dir to refetch). The HOME-relative ~/.steam compat symlinks are NOT staged here — make-sdcard.sh
-# creates them against /home/deck when it builds the pre-seeded home fs.
+# Version-aware: re-running resolves the live publicbeta build (a cheap ~12KB manifest GET) and is a
+# no-op only while the staged seed matches it; a bumped build (or an incomplete seed) triggers a
+# restage. Delete the dir to force a refetch. The HOME-relative ~/.steam compat symlinks are NOT
+# staged here — make-sdcard.sh creates them against /home/deck when it builds the pre-seeded home fs.
 #
 #   steam-seed/fetch-steam-seed.sh
 set -euo pipefail
@@ -31,24 +32,50 @@ CHANNEL="$(pin_field channel)";       : "${CHANNEL:?$PIN: missing channel}"
 RUNTIME_URL="$(pin_field runtime_url)"; : "${RUNTIME_URL:?$PIN: missing runtime_url}"
 MANIFEST_NAME="steam_client_${CHANNEL}_linuxarm64"
 MANIFEST_URL="${CDN}/${MANIFEST_NAME}"
+STAGED_MANIFEST="$SEED_DIR/package/${MANIFEST_NAME}.manifest"
 
-# Require the client binary AND both of Steam's bundled hard deps (libavutil, libSDL3) AND the
-# webhelper script to be executable: a stale seed missing any (client but no codecs, no SDL3, or the
-# pre-exec-bit-fix perms) must re-stage, else steamui.so fails to load / the UI never paints offline
-# (see the codecs + sdl3 fetches and the exec-bit restore below).
-if [ -x "$SEED_DIR/steamrtarm64/steam" ] && [ -f "$SEED_DIR/steamrtarm64/libavutil.so.60" ] \
+# Steam build id out of a saved-or-live manifest (the "version" field is Valve's client build number).
+# || true so an absent field yields "" (checked below) instead of tripping set -e / pipefail.
+manifest_version() { grep -aoE '"version"[[:space:]]*"[0-9]+"' "$1" | grep -oE '[0-9]+' | head -1 || true; }
+
+# Temp files (single EXIT trap for both — a second trap would replace, not add to, the first).
+LIVE_MANIFEST="$(mktemp)"; rt_tar="$(mktemp)"
+trap 'rm -f "$LIVE_MANIFEST" "$rt_tar"' EXIT
+
+# We DON'T pin a build: the channel is a live rolling pointer, so every run resolves the CURRENT
+# publicbeta manifest and uses whatever Valve publishes now. To stay AWARE of silent bumps rather than
+# updating blindly, compare the live build id against the one in the staged manifest and restage only
+# when they differ (or the seed is incomplete). This manifest GET is the only network touch on the
+# skip path; the big zips are pulled solely when we actually restage.
+log "resolving live ${CHANNEL} client build"
+curl -fsSL -o "$LIVE_MANIFEST" "$MANIFEST_URL"
+LIVE_VERSION="$(manifest_version "$LIVE_MANIFEST")"; : "${LIVE_VERSION:?could not read build id from live manifest}"
+STAGED_VERSION=""; [ -f "$STAGED_MANIFEST" ] && STAGED_VERSION="$(manifest_version "$STAGED_MANIFEST")"
+
+# Require the client binary AND both of Steam's bundled hard deps (libavutil, libSDL3) AND CEF AND the
+# webhelper script to be executable: a stale seed missing any (client but no codecs, no SDL3, no CEF,
+# or the pre-exec-bit-fix perms) must re-stage, else steamui.so fails to load / the UI never paints
+# offline (see the codecs + sdl3 + webkit fetches and the exec-bit restore below).
+if [ "$STAGED_VERSION" = "$LIVE_VERSION" ] \
+   && [ -x "$SEED_DIR/steamrtarm64/steam" ] && [ -f "$SEED_DIR/steamrtarm64/libavutil.so.60" ] \
    && [ -f "$SEED_DIR/steamrtarm64/libSDL3.so.0" ] && [ -f "$SEED_DIR/steamrtarm64/libcef.so" ] \
    && [ -d "$SEED_DIR/steamui" ] && [ -x "$SEED_DIR/steamrtarm64/steamwebhelper.sh" ]; then
-  log "seed already staged at ${SEED_DIR#"$ROOT"/} — nothing to do (rm -rf to refetch)"
+  log "seed in sync at Steam build ${LIVE_VERSION} — nothing to do (rm -rf to refetch)"
   exit 0
 fi
 
-log "staging native arm64 Steam seed into ${SEED_DIR#"$ROOT"/} (channel ${CHANNEL})"
+if [ -n "$STAGED_VERSION" ] && [ "$STAGED_VERSION" != "$LIVE_VERSION" ]; then
+  log "Steam build bumped: staged ${STAGED_VERSION} -> live ${LIVE_VERSION}; restaging"
+else
+  log "staging native arm64 Steam seed into ${SEED_DIR#"$ROOT"/} (channel ${CHANNEL}, build ${LIVE_VERSION})"
+fi
 rm -rf "$SEED_DIR"
 mkdir -p "$SEED_DIR/package"
 
 # Channel marker so the client tracks the arm64 publicbeta line (not the x86 default).
 echo "${CHANNEL}" >"$SEED_DIR/package/beta"
+# Reuse the manifest we already fetched (no second GET); fetch_pkg reads its tokens below.
+cp "$LIVE_MANIFEST" "$STAGED_MANIFEST"
 
 # 1. Client + media seed: fetch + unpack two NAMED packages out of the publicbeta manifest.
 #  - bins_linuxarm64_linuxarm64: the bootstrap client itself (steamrtarm64/steam, steamui.so,
@@ -83,9 +110,6 @@ echo "${CHANNEL}" >"$SEED_DIR/package/beta"
 #    far below the reverted full-tree bake). Boot videos/sounds (steamui_websrc_movies/sounds_all) are
 #    eye-candy, intentionally NOT baked. These unpack at the Steam root (not steamrtarm64/), so the
 #    exec-bit restore below does not touch them.
-log "fetching client manifest"
-curl -fsSL -o "$SEED_DIR/package/${MANIFEST_NAME}.manifest" "$MANIFEST_URL"
-
 # fetch_pkg <name> <label>: pull the plain (non-vz) zip token for an exact package out of the
 # (part-binary, hence grep -a) manifest, fetch from the CDN, unpack into the seed root.
 fetch_pkg() {
@@ -138,7 +162,6 @@ done < <(find "$SEED_DIR/steamrtarm64" -maxdepth 1 -type f -print0)
 
 # 2. arm64 SR3 runtime (steamrt3 aarch64): the libs the native client links against.
 log "fetching arm64 steam runtime"
-rt_tar="$(mktemp)"; trap 'rm -f "$rt_tar"' EXIT
 curl -fsSL -o "$rt_tar" "$RUNTIME_URL"
 tar -xJf "$rt_tar" -C "$SEED_DIR"
 

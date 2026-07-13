@@ -5,7 +5,7 @@
 # defaults that name to "gamescope-0" (src/Apps/gamescopectl.cpp). But gamescope binds the FIRST FREE
 # slot — it loops gamescope-0, gamescope-1, ... and stops at the first wl_display_add_socket() that
 # succeeds (src/wlserver.cpp). So a stale socket left by a prior UNCLEAN exit (our session unit runs
-# Restart=on-failure, and the restart path is documented-contaminated — see bringup-phase2.md 1e)
+# Restart=on-failure, and the restart path is documented-contaminated — see docs/bringup-phase2.md 1e)
 # pushes the LIVE compositor onto gamescope-1 and leaves a dead gamescope-0 behind. gamescopectl then
 # talks to the dead socket, the modeset never happens, and the panel stays on its frozen frame on
 # suspend/resume. (Observed exactly that on HW 2026-06-24.)

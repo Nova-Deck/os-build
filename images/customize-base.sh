@@ -41,7 +41,7 @@ DEST="$ROOT/work/base"
 # Release runtime packages — credentials are NEVER installed here (test-only at assemble).
 # gamescope + seatd are the Deck-UI session compositor (SteamOS layer B) and its seat manager:
 # Phase 2 brings up BARE gamescope on Turnip before the jupiter-* port to isolate the
-# Turnip↔gamescope Wayland-WSI question (see devices/bringup-phase2.md). Both are genuine
+# Turnip↔gamescope Wayland-WSI question (see docs/bringup-phase2.md). Both are genuine
 # release runtime (the gamescope session needs them), not test-only.
 # bluez + bluez-utils are the Bluetooth stack (layer C): the Deck UI pairs controllers/audio over
 # org.bluez, and the WCN7850 BT firmware already ships (assemble-rootfs.sh block 3b). bluetoothd is

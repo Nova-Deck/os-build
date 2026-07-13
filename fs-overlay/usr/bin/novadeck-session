@@ -3,7 +3,7 @@
 #
 # This is the SESSION PLUMBING: a long-running gamescope on the DRM/KMS backend that hosts the
 # native arm64 Steam shell (NOVADECK_SESSION_CMD, set in /etc/novadeck/session.conf). It reuses the
-# exact seat + rotation path the Phase-2 smoke validated on HW (devices/sm8650/bringup-phase2.md).
+# exact seat + rotation path the Phase-2 smoke validated on HW (docs/bringup-phase2.md).
 set -eu
 
 CONF=/etc/novadeck/session.conf
@@ -69,7 +69,7 @@ fi
 # AND HDR — so turning it off (implicit-sync fallback) degrades all of those, not just HDR. It is not
 # a free toggle. Overridable from the env / session.conf; defaults to on.
 #
-# KNOWN CAVEAT (devices/sm8650/bringup-phase2.md step 1e): with WSI on, RE-LAUNCHING gamescope after a
+# KNOWN CAVEAT (docs/bringup-phase2.md step 1e): with WSI on, RE-LAUNCHING gamescope after a
 # prior instance intermittently wedges — the next client blocks forever in drm_syncobj_array_wait_timeout
 # on a buffer-release fence that never signals (a userspace explicit-sync / linux-drm-syncobj race, NOT
 # stale GPU/DRM-master state; a graceful SIGTERM teardown wedges the same ~50% as SIGKILL and dmesg shows

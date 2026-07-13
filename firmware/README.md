@@ -20,7 +20,7 @@ Two firmware sources:
 | `fetch-qcom-fw.sh` | Fetch the device-proprietary `qcom-fw` tree from the pinned qcom-firmwares commit into `qcom-fw/`, verified against the repo's `sha256sums.txt`. Host, network. SoC-agnostic (blobs are self-namespaced by on-device path). |
 | `manifest.sh` | Verify the **union** manifest against the **built** kernel: cross-checks DTB `firmware-name` + module `MODULE_FIRMWARE` and reports missing/unbacked entries. Run after `kernel/build.sh`. |
 
-Firmware requirements live in `devices/firmware-manifest.txt` (union of all boards).
+Firmware requirements live in `firmware/manifest.txt` (union of all boards).
 `manifest.sh` needs `dtc` + `objcopy`, so run it inside the build image:
 
 ```

@@ -7,7 +7,7 @@
 #   2. MODULE_FIRMWARE entries in the built modules  (request_firmware in drivers)
 #
 # Run AFTER kernel/build.sh (needs out/dtbs + work/kernel/<ver> modules). The manifest is
-# the union of every board's firmware (devices/firmware-manifest.txt). Reports manifest
+# the union of every board's firmware (firmware/manifest.txt). Reports manifest
 # entries that are unbacked and required firmware the manifest does not list. Run inside the
 # build image (needs dtc + objcopy):
 #   docker run ... novadeck-build firmware/manifest.sh
@@ -15,7 +15,7 @@ set -euo pipefail
 shopt -s nullglob
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-MANIFEST="$ROOT/devices/firmware-manifest.txt"
+MANIFEST="$ROOT/firmware/manifest.txt"
 OUT="$ROOT/out"
 
 PIN="$ROOT/kernel/SOURCE.pin"

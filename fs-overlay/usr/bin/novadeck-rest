@@ -12,7 +12,7 @@
 #
 # Phase-2 scope is the MECHANISM only: validate by hand on HW (`novadeck-rest enter` / `leave` over
 # SSH), exactly how the gamescope session was de-risked. The trigger that fires it (a power-button
-# watcher / Deck-UI request) lands as a follow-up. See devices/<soc>/bringup-phase2.md step 3.
+# watcher / Deck-UI request) lands as a follow-up. See docs/bringup-phase2.md step 3.
 #
 # RELATIONSHIP TO novadeck-suspend (read before wiring a trigger to this): rest mode does NOT stop the
 # game — it only lowers power (panel off, CPUs offlined, governors->powersave) while userland keeps

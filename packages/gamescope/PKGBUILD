@@ -7,7 +7,7 @@
 # (linux-drm-syncobj) WSI present path intermittently DEADLOCKS on the first frame on this HW
 # (Adreno 750 / Turnip), wedging the whole pipeline on ~2/3 of cold session starts (the client
 # blocks forever in drm_syncobj_array_wait_timeout on a buffer-release fence gamescope never
-# signals). See devices/sm8650/bringup-phase2.md step 1e and the gamescope-flip-blocker memory.
+# signals). See docs/bringup-phase2.md step 1e and the gamescope-flip-blocker memory.
 # We were already rebuilding gamescope from source for the composite-rotation patch (the msm DPU
 # can't ROTATE_90 a LINEAR plane), so we apply the same medicine as mesa: pin a newer upstream
 # release in a checked-in PKGBUILD rather than carrying a runtime workaround.

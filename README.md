@@ -26,13 +26,29 @@ Lead bring-up target: **SM8650** (Adreno 750). Two hard go/no-go gates:
 | `images/` | Image assembly recipes (A/B layout, Btrfs, RAUC bundles) |
 | `packages/` | novadeck-specific + ported SteamOS `jupiter-*` package builds |
 | `kernel/` | Unified kernel: config fragments, patches, all device trees, firmware embed list |
-| `firmware/` | Vendor firmware **extraction/bundling recipes** (no blobs committed) |
-| `devices/` | Shared device enablement: firmware manifest, InputPlumber config, bring-up notes |
+| `firmware/` | Vendor firmware **extraction/bundling recipes** + `manifest.txt` (required firmware, union of all boards) |
+| `fs-overlay/` | Unified rootfs overlay payload — one filesystem-mirror tree (session, HW-support, InputPlumber, audio UCM2, FEX config, Steam shell) injected with a single `cp -a` |
+| `steam-seed/` | Native arm64 Steam client SEED fetcher + pin (build machinery; pre-seeded into `/home`, not rootfs content) |
 | `boot/` | Pluggable boot stage (android-bootimg / edk2-UEFI backends) |
 | `ci/` | GitHub Actions matrix builds + cosign signing |
-| `docs/` | Design notes ([`docs/base-pin.md`](docs/base-pin.md), [`docs/windows-games-fex.md`](docs/windows-games-fex.md)) |
+| `docs/` | Design notes + phase bring-up notes ([`docs/bringup.md`](docs/bringup.md), [`docs/base-pin.md`](docs/base-pin.md), [`docs/windows-games-fex.md`](docs/windows-games-fex.md)) |
 | `build/` | `Dockerfile` for the `novadeck-build` cross-compile image used by every container stage |
 | `Makefile` | Master build orchestrator — wires every stage into one incremental graph |
+
+## Supported SoCs
+
+Board/SoC enablement is consumed **collectively** by the unified build — there is no per-SoC
+image. Add a SoC by dropping its content into the shared trees (kernel fragment, patches, DTS,
+`firmware/manifest.txt` entries, `fs-overlay/etc/inputplumber/` config); the build discovers it.
+
+| SoC | Snapdragon | GPU | Status |
+|---|---|---|---|
+| SM8650 | 8 Gen 3 | Adreno 750 | HW-validated (boards: AYANEO Pocket S2, KONKR Pocket FIT) |
+| SM8550 | 8 Gen 2 | Adreno 740 | HW-validated (boards: AYN Odin2/Thor, AYANEO Pocket ACE) |
+| SM8750 | 8 Elite | Adreno 830 | Planned — drop fragment/DTS/firmware in to enable |
+
+The kernel command line is split: common args in `boot/cmdline`, board/SoC-specific args
+(e.g. `irqaffinity`, controller quirks) in each board's DTS `/chosen/bootargs`.
 
 ## Building
 

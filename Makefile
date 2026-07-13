@@ -97,16 +97,15 @@ VARIMG       := $(OUT)/images/var.img
 INITRAMFS    := $(OUT)/initramfs.cpio.gz
 BOOTIMG      := $(OUT)/boot/novadeck-boot.img
 SDCARD       := $(OUT)/images/sdcard.img
-# Native arm64 Steam SEED (steam/fetch-steam-seed.sh, host network). make-sdcard pre-seeds this tree
+# Native arm64 Steam SEED (steam-seed/fetch-steam-seed.sh, host network). make-sdcard pre-seeds this tree
 # directly into the /home partition, so a healthy first boot does no copy and needs no network. The
 # client binary it stages is the make target; the pin + fetcher are its prerequisites.
 STEAM_SEED   := work/steam-seed/steamrtarm64/steam
 
-# Repo sources the rootfs assembler reads directly (itself + the trees it copies in: the
-# gamescope-session overlay, the HW-support overlay, InputPlumber config, and the FEX runtime
-# config). find recurses, so files added under those trees are tracked automatically — no
-# per-file Makefile edits.
-ASSEMBLE_SRC := $(shell find images/assemble-rootfs.sh session hw-support steam audio devices/inputplumber fex -type f 2>/dev/null)
+# Repo sources the rootfs assembler reads directly (itself + the unified fs-overlay/ payload tree
+# it copies in wholesale). find recurses, so files added under fs-overlay/ are tracked
+# automatically — no per-file Makefile edits.
+ASSEMBLE_SRC := $(shell find images/assemble-rootfs.sh fs-overlay -type f 2>/dev/null)
 
 # Kernel inputs: any change re-triggers the (full, from-scratch) kernel build. The unified
 # kernel globs every fragment/patch/dts, and bakes the firmware embed list.
@@ -171,9 +170,9 @@ $(FW_QCOM): firmware/QCOM_FW.pin
 	@touch $@
 
 # Native arm64 Steam seed (client + SR3 runtime) — fetched on the host, staged into work/steam-seed/,
-# then pre-seeded into /home by make-sdcard. Pinned channel/runtime in steam/STEAM_SEED.pin.
-$(STEAM_SEED): steam/STEAM_SEED.pin steam/fetch-steam-seed.sh
-	steam/fetch-steam-seed.sh
+# then pre-seeded into /home by make-sdcard. Pinned channel/runtime in steam-seed/STEAM_SEED.pin.
+$(STEAM_SEED): steam-seed/STEAM_SEED.pin steam-seed/fetch-steam-seed.sh
+	steam-seed/fetch-steam-seed.sh
 	@touch $@
 
 # ==============================================================================
@@ -274,7 +273,7 @@ deploy: $(BOOTIMG) ## Install the boot image onto ESP=<mountpoint>
 # the artifacts from inside a throwaway container as root, like clean-base. (out/.build-image.stamp
 # is host-owned and deliberately kept so the toolchain image isn't rebuilt.)
 clean: ## Remove built artifacts (out/), keep firmware/base caches + toolchain stamp
-	docker run --rm -v $(CURDIR)/out:/wo busybox rm -rf /wo/Image.gz /wo/dtbs /wo/modroot /wo/images /wo/boot
+	docker run --rm -v $(CURDIR)/out:/wo busybox rm -rf /wo/Image.gz /wo/dtbs /wo/modroot /wo/images /wo/boot /wo/initramfs.cpio.gz
 
 # work/base is root-owned (customize-base exports it as root), so a plain rm fails for the
 # build user — remove it from inside a throwaway container as root.

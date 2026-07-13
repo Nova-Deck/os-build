@@ -2,20 +2,20 @@
 # novadeck Steam seed fetcher (build host) — stage the native arm64 Steam SEED for an OFFLINE bake.
 #
 # Runs on the build HOST (network required), like firmware/fetch-*.sh. Fetches the native arm64
-# Steam client seed + the arm64 SR3 runtime named in steam/STEAM_SEED.pin and stages the
+# Steam client seed + the arm64 SR3 runtime named in steam-seed/STEAM_SEED.pin and stages the
 # `.local/share/Steam` CONTENTS into work/steam-seed/. That tree is consumed once at image build:
 # images/make-sdcard.sh pre-seeds it DIRECTLY into the /home partition (a ready-to-run home, no
-# first-boot copy and no network — Steam's OOBE owns Wi-Fi). See steam/STEAM_SEED.pin.
+# first-boot copy and no network — Steam's OOBE owns Wi-Fi). See steam-seed/STEAM_SEED.pin.
 #
 # Idempotent: re-running is a no-op once work/steam-seed/steamrtarm64/steam is present (delete the
 # dir to refetch). The HOME-relative ~/.steam compat symlinks are NOT staged here — make-sdcard.sh
 # creates them against /home/deck when it builds the pre-seeded home fs.
 #
-#   steam/fetch-steam-seed.sh
+#   steam-seed/fetch-steam-seed.sh
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-PIN="$ROOT/steam/STEAM_SEED.pin"
+PIN="$ROOT/steam-seed/STEAM_SEED.pin"
 SEED_DIR="$ROOT/work/steam-seed"
 CDN="https://client-update.steamstatic.com"
 

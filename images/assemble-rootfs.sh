@@ -115,104 +115,21 @@ fi
 mkdir -p "$stage/etc"
 { echo "NOVADECK_VARIANT=unified"; echo "NOVADECK_BUILD=$(date -u +%Y%m%dT%H%M%SZ)"; } >"$stage/etc/novadeck-release"
 
-# 4b. RELEASE input config: ship InputPlumber's device/profile config from
-# devices/inputplumber/ into /etc/inputplumber/ and enable the daemon. This is the union of
-# every supported board's config; InputPlumber matches by hardware, so non-matching configs
-# are inert. Unlike the TEST block below this is part of EVERY build — a handheld needs its
-# gamepad/gyro mapping
-# at first boot. The inputplumber package itself comes from the base (customize-base.sh).
-# /etc/inputplumber overrides the package's /usr/share/inputplumber defaults — but ONLY via
-# the `.d` override dirs InputPlumber actually scans under /etc: composite configs in
-# devices.d/ and capability maps in capability_maps.d/ (the un-suffixed `devices`/
-# `capability_maps` names apply only under the /usr/share base path). The repo tree is laid
-# out with those `.d` names so this plain mirror-copy lands them where the daemon reads them;
-# do NOT rename them back or the configs load from nowhere and no composite device is built.
-IPCONF="$ROOT/devices/inputplumber"
-if [ -d "$IPCONF" ]; then
-  echo "  injecting InputPlumber config from ${IPCONF#"$ROOT"/}"
-  install -d -m0755 "$stage/etc/inputplumber"
-  cp -a "$IPCONF"/. "$stage/etc/inputplumber/"
-  # Enable on release: stock 99-default.preset is "disable *", so ship a higher-priority
-  # preset (60 < 99) plus a build-time symlink as a fallback (cf. the test preset at 70).
-  install -d -m0755 "$stage/usr/lib/systemd/system-preset"
-  echo "enable inputplumber.service" \
-    >"$stage/usr/lib/systemd/system-preset/60-novadeck.preset"
-  install -d -m0755 "$stage/etc/systemd/system/multi-user.target.wants"
-  ln -sf /usr/lib/systemd/system/inputplumber.service \
-         "$stage/etc/systemd/system/multi-user.target.wants/inputplumber.service"
+# 4b. RELEASE overlay payload (SteamOS layers B/C/D). Every SoC-agnostic rootfs overlay —
+# the gamescope-session plumbing, the HW-support backings, the InputPlumber device/profile
+# config, the ALSA UCM2 machine profiles, the FEX runtime config and the native arm64 Steam
+# shell — lives in ONE filesystem-mirror tree under fs-overlay/ and is injected with a single
+# cp -a. The tree already carries final target paths, executable bits (tracked in git) and the
+# systemd presets + .wants symlinks that enable each service, so nothing is generated or chmod'd
+# here. fs-overlay/README.md documents what each backing does and WHY (the per-layer rationale
+# that used to live in this script). Ownership is normalized to root:root in step 4z below.
+OVERLAY="$ROOT/fs-overlay"
+if [ -d "$OVERLAY" ]; then
+  echo "  injecting fs-overlay payload -> session + HW-support + InputPlumber + audio + FEX + Steam shell (ARMED: boots to Deck shell)"
+  cp -a "$OVERLAY"/. "$stage/"
+  rm -f "$stage/README.md"   # fs-overlay/README.md documents the tree; it is NOT rootfs content
 else
-  echo "  (no InputPlumber config at devices/inputplumber — skipping; package defaults apply, daemon not force-enabled)"
-fi
-
-# 4d. RELEASE gamescope-session (SteamOS layer B): the boot-to-compositor plumbing. A static,
-# SoC-agnostic overlay tree under session/ (launcher /usr/bin/novadeck-session, its config
-# /etc/novadeck/session.conf, the SDDM autologin wiring, and PAM drop-ins) mirror-copied into the
-# rootfs. gamescope/seatd/vulkan-tools + sddm come from the base (customize-base.sh; sddm is built
-# into the [novadeck] overlay) — this adds no package here, only the session wiring.
-# The device boots through SDDM autologin, the SteamOS way: sddm.service is enabled here
-# (60-novadeck-sddm.preset + an etc/systemd/system/display-manager.service symlink) and the overlay
-# points default.target at graphical.target, so on boot SDDM logs the deck user in through PAM
-# (pam_systemd → a REAL ACTIVE seat0 logind session) and launches the `novadeck` wayland session
-# (/usr/share/wayland-sessions/novadeck.desktop → the launcher). That active session is what lets
-# STOCK polkit authorize Wi-Fi (allow_active) and timezone (subject.active && wheel), so the old
-# "no-active" bypass rule is gone. Because it is a login session, logind provides /run/user/1000 +
-# the user D-Bus bus (no linger needed). seatd.service still IS enabled (60-novadeck-seatd.preset +
-# multi-user.target.wants symlink): the launcher keeps opening the DRM seat via the persistent root
-# seatd — the HW-validated seat/DRM path is unchanged; SDDM
-# only wraps it in a login session. See devices/bringup-phase2.md step 2.
-SESSION="$ROOT/session"
-if [ -d "$SESSION" ]; then
-  echo "  injecting novadeck gamescope-session from ${SESSION#"$ROOT"/} (ARMED: boots to Deck shell)"
-  cp -a "$SESSION"/. "$stage/"
-  chmod 0755 "$stage/usr/bin/novadeck-session"
-else
-  echo "  (no session/ tree — skipping gamescope-session injection)"
-fi
-
-# 4e. RELEASE novadeck HW-support (SteamOS layer C): the Qualcomm backings for Deck-UI affordances
-# that AMD's jupiter-hw-support assumes. A static, SoC-agnostic overlay tree under hw-support/.
-# First backing: novadeck-rest — a userspace "rest mode" (fake suspend) standing in for s2idle,
-# whose maturity on these SoCs is the top HW risk; it blanks the panel (via gamescope's own KMS
-# modeset), offlines all but the boot CPU, soft-blocks radios, and drops cpufreq to powersave. No
-# package added — gamescopectl ships in our from-source gamescope; the rest is pure sysfs. The
-# suspend engine is driven by SUSPEND, not a bespoke daemon: a systemd-suspend.service drop-in
-# redirects every logind Suspend() into novadeck-suspend (fake-suspend), and the power key is forwarded
-# to Steam by novadeck-powerbuttond (enabled here via preset + multi-user.target.wants symlink), which
-# calls Suspend() like the Steam power menu does; novadeck-suspend grabs the power key to wake. logind
-# is told to ignore the raw power/suspend/lid keys. novadeck-rest stays a hand-run dev tool. The
-# overlay also carries the SoC-agnostic release-system backings that
-# pair with the Deck UI: the Bluetooth stack (bluetoothd enabled via 60-novadeck-bluetooth.preset;
-# bluez packages come from customize-base.sh), systemd-timesyncd for a sane clock (no RTC sync
-# otherwise). No Wi-Fi resume hook ships: NM re-associates unaided after the suspend rfkill-unblock
-# (the old resume.d/50-nm-reup nudge was HW-confirmed moot, 2026-06-25). The generic resume.d drop-in
-# point in novadeck-suspend remains for future fix-ups. See devices/bringup-phase2.md step 3.
-HWSUPPORT="$ROOT/hw-support"
-if [ -d "$HWSUPPORT" ]; then
-  echo "  injecting novadeck HW-support from ${HWSUPPORT#"$ROOT"/} (power-key + media-key agents + fake-suspend + bluetooth + timesyncd enabled)"
-  cp -a "$HWSUPPORT"/. "$stage/"
-  chmod 0755 "$stage/usr/bin/novadeck-rest" "$stage/usr/bin/novadeck-suspend" "$stage/usr/bin/novadeck-hotkeyd" "$stage/usr/bin/novadeck-powerbuttond"
-else
-  echo "  (no hw-support/ tree — skipping HW-support injection)"
-fi
-
-# 4e-bis. x86 emulation runtime. Two independent paths, both fed from packages/*.pin and baked
-# into the slot (see images/partition-table.txt for why they are NOT on a shared partition):
-#
-#   Windows games      -> the arm64 Proton extracted by customize-base.sh, which carries its OWN
-#                         WoW64 FEX. Needs no system FEX, no guest rootfs, no runtime container.
-#   native x86 Linux   -> the fex-emu package + the ArchLinux.ero guest rootfs. FEX registers
-#                         itself with binfmt_misc by dropping /usr/lib/binfmt.d/FEX-x86*.conf;
-#                         systemd-binfmt.service is already in sysinit.target.wants and activates
-#                         on ConditionDirectoryNotEmpty, so no unit needs enabling here.
-#
-# The fex/ tree carries only configuration (see fex/README.md); the binaries come from pacman.
-FEXTREE="$ROOT/fex"
-if [ -d "$FEXTREE" ]; then
-  echo "  injecting FEX runtime config from ${FEXTREE#"$ROOT"/} (system Config.json + Proton FEX profiles)"
-  cp -a "$FEXTREE"/usr "$stage/"
-  chmod 0755 "$stage/usr/lib/novadeck/proton-wrapper"
-else
-  echo "  (no fex/ tree — skipping FEX runtime config)"
+  echo "  (no fs-overlay/ tree — skipping overlay injection)" >&2
 fi
 
 # Rewrite the baked Proton compat tool. Upstream ships toolmanifest.vdf AND compatibilitytool.vdf
@@ -282,36 +199,6 @@ PROTONSHIM
   echo "  wired Proton compat tool as '$NOVADECK_PROTON_TOOL_NAME' (require_tool dropped, FEX wrapper in front, stable name)"
 else
   echo "  (no baked Proton compat tool — x86 Windows games will have no compat tool)" >&2
-fi
-
-# 4f. RELEASE Steam shell (SteamOS layer D): the native arm64 Steam plumbing (steam/usr overlay,
-#    SoC-agnostic): the launcher (/usr/bin/novadeck-steam) NOVADECK_SESSION_CMD points at, plus
-#    50-novadeck-timezone.rules — a small polkit grant for org.freedesktop.timedate1.set-timezone
-#    (active session + wheel), the ONE thing stock polkit still prompts for now that the shell runs
-#    in a real active logind session (Wi-Fi is covered by NetworkManager's allow_active, no rule
-#    needed). Also the OOBE update-check stubs (steamos-update, steamos-mandatory-update,
-#    jupiter-biosupdate, jupiter-initial-firmware-update) — SteamUI shells to these past the
-#    Wi-Fi/timezone screens and a missing binary blocks onboarding with an "update check failed"
-#    error; we bake no jupiter-hw-support and have no OS updater in Phase 1, so they report "up to
-#    date". ONLY usr/ is copied — the steam/ top-level build files (STEAM_SEED.pin,
-#    fetch-steam-seed.sh) are NOT rootfs content.
-#
-#    There is NO recovery seed baked into the root. The client is pre-seeded ONLY into the /home
-#    partition at image-build time (images/make-sdcard.sh, from work/steam-seed), so a healthy boot
-#    does zero copy and no network. A factory reset is a reflash of the card (a UFS install recovers
-#    from a separate SD-card image) — there is no in-place re-seeder. Steam self-updates the rest of
-#    the UI on first launch (curl/unzip/tar stay in the base for that). See devices/bringup-phase3.md.
-STEAM="$ROOT/steam"
-if [ -d "$STEAM/usr" ]; then
-  echo "  injecting novadeck Steam shell from ${STEAM#"$ROOT"/}/usr (launcher + OOBE stubs)"
-  cp -a "$STEAM"/usr "$stage/"
-  chmod 0755 "$stage/usr/bin/novadeck-steam" \
-             "$stage/usr/bin/steamos-mandatory-update" "$stage/usr/bin/jupiter-initial-firmware-update" \
-             "$stage/usr/bin/steamos-polkit-helpers/steamos-set-timezone" \
-             "$stage/usr/bin/steamos-polkit-helpers/steamos-update" \
-             "$stage/usr/bin/steamos-polkit-helpers/jupiter-biosupdate"
-else
-  echo "  (no steam/usr tree — skipping Steam shell injection)"
 fi
 
 # 4g. First-boot STORAGE (the deck user's growable home). SteamOS sizes /home to the disk at
@@ -560,24 +447,6 @@ install -d -m0755 "$stage/etc/systemd/system/local-fs.target.wants"
 ln -sf /usr/lib/systemd/system/novadeck-offload.target \
        "$stage/etc/systemd/system/local-fs.target.wants/novadeck-offload.target"
 
-# 4b-audio. ALSA UCM2 machine profile (SteamOS layer C audio). A static overlay tree under
-# audio/ mirror-copied into the rootfs: the device's card-name-matched UCM2 profile so userland
-# knows the routing (speaker/headphone/DP paths, jack handling). Profiles live under
-# Qualcomm/sm86{50,55}/<CARD>/ and are card-name-matched via conf.d/sm86{50,55}/ relative
-# symlinks (cp -a preserves them). SM8650: Pocket S2 (SM8650-APS2, matching the DT sound_card
-# model + the AudioReach tplg) and KONKR Pocket FIT (SM8650-KPF). SM8550: AYN Odin2, AYANEO
-# Pocket ACE (SM8550-APS) and AYN Thor. The profiles Include codec snippets (/codecs/{wcd938x,
-# wcd939x,wsa884x}, /codecs/qcom-lpass/{va,wsa,rx,tx}-macro — note SM8550 uses wcd938x, SM8650
-# wcd939x) that must be provided by the base alsa-ucm-conf package — ensure it is in the release
-# PKGS (layer-4 work).
-AUDIO="$ROOT/audio"
-if [ -d "$AUDIO" ]; then
-  echo "  injecting novadeck ALSA UCM2 profile from ${AUDIO#"$ROOT"/}"
-  cp -a "$AUDIO"/. "$stage/"
-else
-  echo "  (no audio/ tree — skipping UCM2 injection)"
-fi
-
 # 4c. TEST-ONLY Wi-Fi/SSH injection (NOVADECK_TEST=1). NEVER part of a release/RAUC build:
 # the release base is packages-only and first-boot networking is the SteamOS UI's job. Here
 # we add ALL the scaffolding a throwaway card needs to auto-join the LAN and accept an SSH
@@ -688,7 +557,7 @@ mkdir -p "$XDG_RUNTIME_DIR"; chmod 700 "$XDG_RUNTIME_DIR"
 # on, re-launching gamescope after a prior instance intermittently wedges (the client blocks in
 # drm_syncobj_array_wait_timeout on a never-signaling explicit-sync fence — a userspace race, NOT stale
 # GPU state; a fresh power-on is always clean). While iterating over SSH you can force the clean
-# implicit-sync path with `ENABLE_GAMESCOPE_WSI=0 nova-gamescope-smoke`. See bringup-phase2.md step 1e.
+# implicit-sync path with `ENABLE_GAMESCOPE_WSI=0 nova-gamescope-smoke`. See docs/bringup-phase2.md step 1e.
 export ENABLE_GAMESCOPE_WSI="${ENABLE_GAMESCOPE_WSI:-1}"
 client="${1:-vkcube}"
 echo "[nova] gamescope DRM smoke: client=$client  XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR"
@@ -701,7 +570,7 @@ echo "[nova] gamescope DRM smoke: client=$client  XDG_RUNTIME_DIR=$XDG_RUNTIME_D
 # the DRM connector (DTS rotation=<90>) and auto-engages compositor rotation when the primary plane
 # can't rotate at scanout. NOTE: --immediate-flips is NOT passed — it is a no-op here (the msm DPU
 # does not advertise DRM_CAP_ATOMIC_ASYNC_PAGE_FLIP, so gamescope drops the async flag). The
-# intermittent composite-flip freeze is on the vsync'd path and unrelated. See devices/bringup-phase2.md.
+# intermittent composite-flip freeze is on the vsync'd path and unrelated. See docs/bringup-phase2.md.
 gs_args="--backend drm"
 set -x
 if command -v seatd-launch >/dev/null 2>&1; then
@@ -773,8 +642,8 @@ UNIT
          "$stage/etc/systemd/system/multi-user.target.wants/novadeck-debug-log.service"
 fi
 
-# 4z. Normalize overlay ownership to root. The overlay trees (session/, hw-support/, steam/usr,
-# audio/, inputplumber config) are injected with `cp -a`, which PRESERVES the host build user's
+# 4z. Normalize overlay ownership to root. The fs-overlay/ tree (and the other cp -a injections)
+# is copied with `cp -a`, which PRESERVES the host build user's
 # uid/gid (the repo checkout owner, typically 1000). In the image uid 1000 is `deck`, so /etc, /,
 # and every injected file end up deck-owned — a real bug (HW journal 2026-07-01: systemd-tmpfiles
 # "unsafe path transition /etc (owned by deck)"). Nothing in the read-only root legitimately belongs

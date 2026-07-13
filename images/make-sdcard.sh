@@ -46,7 +46,7 @@ done
 [ -f "$ROOTFS" ] || { echo "no rootfs: ${ROOTFS#"$ROOT"/} (run images/build-image.sh)" >&2; exit 1; }
 [ -f "$VARIMG" ] || { echo "no var image: ${VARIMG#"$ROOT"/} (run images/build-image.sh)" >&2; exit 1; }
 [ -x "$SEED/steamrtarm64/steam" ] || {
-  echo "no Steam seed at ${SEED#"$ROOT"/} (run steam/fetch-steam-seed.sh)" >&2; exit 1; }
+  echo "no Steam seed at ${SEED#"$ROOT"/} (run steam-seed/fetch-steam-seed.sh)" >&2; exit 1; }
 
 # Partition number and size (MiB) for a row of the table, so the two files can never drift.
 part_num()  { awk -v n="$1" '/^[[:space:]]*#/||/^[[:space:]]*$/{next} {i++; if ($1==n) {print i; exit}}' "$TABLE"; }

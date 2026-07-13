@@ -26,4 +26,4 @@ assumes 4K pages.** Standardized across all three SoCs.
 - ✅ Builds `Image.gz` + all board dtbs and stages loadable modules to `out/modroot`
   for the rootfs assembler — the `=m` handheld-panel drivers (display) ride along.
 - ✅ Boots on real SM8650 hardware; display, input, and Turnip Vulkan validated
-  (Phase 1 gate cleared) — see `devices/bringup.md`.
+  (Phase 1 gate cleared) — see `docs/bringup.md`.

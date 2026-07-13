@@ -15,7 +15,7 @@ root (the `gamescope/` checkout inside makepkg's `$srcdir`) by
 
 `0001` — rotate the portrait-native Pocket S2 panel in gamescope's **GPU composite** step
 (the msm DPU cannot `ROTATE_90` a LINEAR plane; root cause in
-`devices/sm8650/bringup-phase2.md` step 1e). This is upstream PR
+`docs/bringup-phase2.md` step 1e). This is upstream PR
 [#2228](https://github.com/ValveSoftware/gamescope/pull/2228): the scene stays in logical
 (landscape) space and only the final store coordinate is rotated, so sampling/blending/input/
 cursor/EDID stay coherent. It replaces the earlier ROCKNIX `--use-rotation-shader` patch and

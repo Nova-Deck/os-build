@@ -101,5 +101,5 @@ is never fatal — the wrapper logs and execs Proton anyway.
 the binary is missing, the exec fails inside a forked child and FEXServer aborts, taking every x86
 launch with it. It ships in its own package — `erofs-utils` does **not** contain it.
 
-See `fex/README.md` for the configuration layout and `packages/fex-emu/PKGBUILD` for how FEX and
+See `docs/FEX_README.md` for the configuration layout and `packages/fex-emu/PKGBUILD` for how FEX and
 its x86 thunks are built.

@@ -1,7 +1,7 @@
 # `fex/` — x86 emulation runtime configuration
 
 Copied wholesale into the rootfs by `images/assemble-rootfs.sh` (same mechanism as
-`hw-support/` and `session/`). JSON has no comment syntax, so the rationale lives here.
+`fs-overlay/`). JSON has no comment syntax, so the rationale lives here.
 
 ## The two x86 paths are independent
 

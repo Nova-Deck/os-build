@@ -72,7 +72,7 @@ state — and a clean teardown does **not** prevent it (graceful SIGTERM re-laun
 
 **Decision: keep `ENABLE_GAMESCOPE_WSI=1`** (the upstream + ChimeraOS `gamescope-session-plus`
 default — see their [`gamescope-session-plus`](https://github.com/ChimeraOS/gamescope-session/blob/73d2da8/usr/share/gamescope-session-plus/gamescope-session-plus#L51)),
-set in `session/usr/bin/novadeck-session` + the smoke helper (env-overridable, defaults on). The FROG
+set in `fs-overlay/usr/bin/novadeck-session` + the smoke helper (env-overridable, defaults on). The FROG
 WSI layer is the **standard present path** — framerate limiter / frame pacing, latency control,
 adaptive-sync hints AND HDR — so disabling it is **not** just an HDR loss; it degrades all of those.
 Since the release product boots gamescope **once per power-on** (the clean L1 case), the re-launch
@@ -127,7 +127,7 @@ gamescope line to the smoke. Input (step 1d) reaches the hosted client.
 ## Step 3 — novadeck Qualcomm HW-support (layer C) [DONE]
 Port/replace `jupiter-hw-support` + `steamos-manager` affordances onto Qualcomm backings per the
 layer-C matrix in `.claude/plans/novadeck.plan.md`. Backings ship as a static, SoC-agnostic overlay
-under `hw-support/`, mirror-copied into the rootfs by `images/assemble-rootfs.sh`.
+under `fs-overlay/`, mirror-copied into the rootfs by `images/assemble-rootfs.sh`.
 
 | Deck-UI affordance | Qualcomm backing | Notes |
 |---|---|---|

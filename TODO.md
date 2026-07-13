@@ -103,7 +103,7 @@ rationale lives in the linked memories and commit history.
   (the FEX guest-thunk `wl_list` patch, == upstream FEX#4520) was ABANDONED as moot** — correct in
   isolation, but the real crash cause was the GPU thunks, not the wayland thunk. This REVERSES the
   earlier "never copy ROCKNIX's thunkless ThunksDB" stance. NOTE: baked in the working tree (Config.json),
-  NOT yet committed / NOT in a fresh full image build. See [[native-x86-linux-games-xwayland-fix]],
+  COMMITTED (`5636d21` bake, `d46d156` thunkless fix); Config.json now at `fs-overlay/usr/share/fex-emu/`. See [[native-x86-linux-games-xwayland-fix]],
   [[fex-native-x86-game-crash-hw]], [[fex-two-paths-independent]].
 
 - [x] **Cherry-pick FEX `Config.json` perf/compat knobs from ROCKNIX — DONE 2026-07-11 (adopted
@@ -114,7 +114,7 @@ rationale lives in the linked memories and commit history.
   above. It also flips `ThunksDB` to **thunkless**, which the earlier note warned against; that warning
   is now overturned — thunkless is the right global default for the native x86 Linux system-FEX path
   because it's what actually made both test games run (trading host-Turnip speed for not-crashing). Baked
-  in the working-tree `Config.json`, not yet committed. See [[fex-config-tuning-from-rocknix-todo]],
+  COMMITTED (`5636d21`/`d46d156`). See [[fex-config-tuning-from-rocknix-todo]],
   [[native-x86-linux-games-xwayland-fix]], [[overlay-package-pipeline]].
 
 - [ ] **MangoHud performance-overlay enable/disable still misbehaves — REOPENS the "DONE" item
@@ -141,7 +141,8 @@ rationale lives in the linked memories and commit history.
   `GetValidDynamicRefreshRates()`). Also check `STEAM_GAMESCOPE_DYNAMIC_FPSLIMITER` (the WSI-layer
   limiter path). See [[sm8650-gamescope-session-plumbing]], [[chimeraos-gamescope-session-reference]].
 
-- [x] **Switch InputPlumber virtual device from DS5 to Xbox — DONE 2026-07-11, NOT yet HW-validated.**
+- [x] **Switch InputPlumber virtual device from DS5 to Xbox — DONE, COMMITTED `b63e4fe`, HW-VALIDATED.**
+  (Files moved from `devices/inputplumber/` → `fs-overlay/usr/...` in the `4bce06a` refactor.)
   Reversed ROCKNIX commit `296851b1` (which had moved SM8650 xbox-series→ds5) for our port. Target is
   **`xbox-series`** (not the Elite variant floated earlier — plain xbox-series is what the ROCKNIX
   reverse restores, and gives standard Xbox glyphs). Two files changed in `devices/inputplumber/`:
@@ -150,9 +151,9 @@ rationale lives in the linked memories and commit history.
   (2) `capability_maps.d/ayaneo_mcu_xbox_standard.yaml` — the BTN5 mapping goes back from the ds5-era
   keyboard shim (`F1 Key` → `keyboard: KeyF1`) to a real gamepad button (`QuickAccess2 Button` →
   `gamepad: QuickAccess2`), matching the map's "(Xbox mode)" name. Everything else (Guide, sticks,
-  dpad, triggers) was untouched by that commit. **NEXT:** build a `make sdcard` image and HW-validate
-  on the Pocket S2 that all buttons + dpad still map, the QuickAccess2 button reaches Steam, and Steam
-  Input shows Xbox glyphs. See [[sm8650-inputplumber-input]].
+  dpad, triggers) was untouched by that commit. **HW-CONFIRMED on the Pocket S2:** all buttons + dpad
+  map, the QuickAccess2 button reaches Steam, and Steam Input shows Xbox glyphs. See
+  [[sm8650-inputplumber-input]].
 
 - [ ] **Find the new SteamUI scale lever — panel mm is now IGNORED (2026-07-11)** — a Steam client
   update **stopped honoring the panel's physical mm** for gamepad-UI auto-scale (it does NOT "fix" scale,

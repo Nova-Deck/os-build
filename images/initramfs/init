@@ -37,6 +37,13 @@ warn() { printf '<3>novadeck-init: %s\n' "$*" >/dev/kmsg 2>/dev/null || :; }
 mount -t proc     -o nosuid,noexec,nodev proc /proc
 mount -t sysfs    -o nosuid,noexec,nodev sys  /sys
 mount -t devtmpfs -o nosuid,mode=0755    dev  /dev
+# /run is mounted here purely so switch_root can `mount --move` it into the new root cleanly.
+# util-linux switch_root walks {/dev,/proc,/sys,/run} and moves each into $SYSROOT; when /run
+# is not a mountpoint that move fails and prints a "failed to mount moving /run to /sysroot/run"
+# warning to the console. The boot recovers (systemd mounts its own /run post-pivot), so this is
+# cosmetic — but on a no-UART device ([[sm8650-no-uart]]) a spurious boot-console error is a
+# debugging trap, so we give switch_root a real tmpfs to hand over.
+mount -t tmpfs    -o nosuid,nodev,mode=0755 run /run
 
 ROOTSPEC=''; VARSPEC=''; ROOTFSTYPE=btrfs
 read -r _cmdline </proc/cmdline

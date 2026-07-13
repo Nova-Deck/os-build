@@ -16,6 +16,20 @@ rationale lives in the linked memories and commit history.
   ace/s2k). Without it the AR-class DS panel(s) will sit in deferred-probe exactly like ace did. See
   [[sm8550-bringup-pickup]].
 
+- [x] **Blueish panel / intermittent blue frame = dirty ABL framebuffer handover — RESOLVED,
+  HW-validated 2026-07-14 (Pocket S2, Pocket ACE, Odin2)** — the `cont_splash_region`
+  `reserved-memory` carve-out in the three commons (`qcs8550-ayaneo-pocket-common.dtsi`,
+  `qcs8550-ayn-common.dtsi`, `sm8650-ayaneo-common.dtsi`) reserved the framebuffer ABL had lit for
+  its boot splash and handed to Linux. Linux inheriting that live aperture is what produced the
+  blueish cast / intermittent blue frame (DPU/DRM takeover racing a still-active handover — the old
+  vblank / frame-done-timeout signature). **Fix = delete the `splash_region` node** so ABL has no
+  region to hand off into and blanks the panel before jumping to Linux → no framebuffer handover,
+  clean msm/iommu bring-up. Self-contained: nothing consumed the label (no `memory-region` phandle,
+  no simple-framebuffer anywhere in `kernel/dts/`). Complements `video=efifb:off`
+  ([[sm8650-working-display-baseline]]) and is orthogonal to the sy7758 `enable-gpios` deferred-probe
+  fix above (that was a genuinely absent backlight, not a handover artifact). Working tree only; not
+  yet committed. See [[sm8550-bringup-pickup]].
+
 - [ ] **PMIC RTC probe defers forever → no `/dev/rtc` (SM8650 ayaneo boards)** — HW-confirmed on
   Pocket S2 (2026-07-12). `/sys/kernel/debug/devices_deferred` holds `c400000.spmi:pmic@0:rtc@6100`
   ("reason unknown") and there is no `/dev/rtc0`. Root cause: `sm8650-ayaneo-common.dtsi` sets

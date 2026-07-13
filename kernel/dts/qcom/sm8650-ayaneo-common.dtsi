@@ -1324,12 +1324,6 @@
 		reg = <0 0xd4e23000 0 0x2dd000>;
 		no-map;
 	};
-
-	splash_region: splash-region {
-		label = "cont_splash_region";
-		reg = <0 0xd5100000 0 0x2b00000>;
-		no-map;
-	};
 };
 
 &sdhc_2 {

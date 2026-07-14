@@ -110,6 +110,15 @@ TEST_PKGS=(evtest usbutils)
 # is fetched on the host and extracted into the base. PREBUILT_DIR stages the verified
 # tarballs + a manifest; the manifest is also stored in the base as the reuse cache key.
 PREBUILT_DIR="$ROOT/work/prebuilt"
+# Persistent pacman package cache. The emulated `pacman -Sy` downloads all runtime packages from
+# the holo mirror on every base rebuild (a new prebuilt busts the reuse cache even when the package
+# SET is unchanged), and that mirror intermittently truncates a transfer. Bind-mounting a host
+# cache into /var/cache/pacman/pkg lets a retry reuse the packages that DID land and re-fetch only
+# the truncated one, instead of re-rolling the whole 267-package download. It PERSISTS across runs
+# like PREBUILT_DIR; docker export excludes bind-mounts, so cached packages never bloat the base
+# (which is also why the in-container `pacman -Scc` is dropped — it would only wipe this cache).
+PACMAN_CACHE="$ROOT/work/pacman-cache"
+mkdir -p "$PACMAN_CACHE"
 PREBUILT_PINS=("$ROOT"/packages/*/prebuilt.pin)
 pin_field() { sed -n "s/^$2:[[:space:]]*//p" "$1" | head -1; }
 # One row per pin, sorted: `name sha256 strip kind dest deps...`. It identifies exactly which
@@ -251,6 +260,7 @@ fi
 
 echo "[novadeck] installing runtime under arm64: ${INSTALL_PKGS[*]}" >&2
 docker run --name "$cid" --platform linux/arm64 -v "$PREBUILT_DIR":/prebuilt:ro \
+  -v "$PACMAN_CACHE":/var/cache/pacman/pkg \
   "${OVERLAY_MOUNT[@]}" "$REF" \
   bash -euo pipefail -c '
   # novadeck overlay: register our local pacman repo AHEAD of the holo repos (right after the
@@ -377,7 +387,9 @@ docker run --name "$cid" --platform linux/arm64 -v "$PREBUILT_DIR":/prebuilt:ro 
   fi
   install -d -o sddm -g sddm -m 1770 /var/lib/sddm 2>/dev/null || true
 
-  pacman -Scc --noconfirm >/dev/null 2>&1 || true
+  # NB: no `pacman -Scc` here — /var/cache/pacman/pkg is a persistent host bind-mount (the retry
+  # cache) and is excluded from `docker export` anyway, so cleaning it would only throw the cache
+  # away without shrinking the exported base.
 ' >&2
 # ^ redirect the container'\''s stdout (pacman progress) to stderr: this script'\''s stdout must
 #   carry ONLY the exported rootfs path (echo "$DEST" below), which build-image.sh captures.

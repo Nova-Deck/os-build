@@ -1,16 +1,25 @@
 #!/usr/bin/env bash
-# novadeck Steam seed fetcher (build host) — stage the native arm64 Steam SEED for an OFFLINE bake.
+# novadeck Steam seed fetcher (build host) — stage a COMPLETE native arm64 Steam tree for an OFFLINE bake.
 #
-# Runs on the build HOST (network required), like firmware/fetch-*.sh. Fetches the native arm64
-# Steam client seed + the arm64 SR3 runtime named in steam-seed/STEAM_SEED.pin and stages the
-# `.local/share/Steam` CONTENTS into work/steam-seed/. That tree is consumed once at image build:
-# images/make-sdcard.sh pre-seeds it DIRECTLY into the /home partition (a ready-to-run home, no
-# first-boot copy and no network — Steam's OOBE owns Wi-Fi). See steam-seed/STEAM_SEED.pin.
+# Runs on the build HOST (network + docker required), like the overlay build. Fetches the native arm64
+# Steam BOOTSTRAP client + the arm64 SR3 runtime named in steam-seed/STEAM_SEED.pin, then RUNS Steam's
+# own updater headless under arm64 qemu emulation (`steam -steamdeck -exitsteam`) so Steam self-installs
+# the WHOLE client tree from the CDN AT BUILD TIME and writes its `.installed` manifest. The finished
+# `.local/share/Steam` tree is staged into work/steam-seed/; images/make-sdcard.sh pre-seeds it DIRECTLY
+# into the /home partition (a ready-to-run home, no first-boot copy and no network). See STEAM_SEED.pin.
+#
+# WHY run Steam instead of hand-unzipping packages: the seed used to bake a hand-picked SUBSET of the
+# manifest and rely on Steam's first-boot self-update (over OOBE Wi-Fi) to complete the tree. Once the
+# fetcher started staging the EXACT live build, Steam saw itself as current and stopped self-updating —
+# leaving the incomplete offline tree unhealed and no `.installed` present (a seed with no `.installed`
+# re-installs on first boot). Running Steam here produces a genuinely COMPLETE, already-installed tree +
+# a real `.installed`, so first boot needs zero self-heal and zero network. (Armada does the same, but
+# on native aarch64; we drive it under qemu, like packages/build-overlay.sh.)
 #
 # Version-aware: re-running resolves the live publicbeta build (a cheap ~12KB manifest GET) and is a
-# no-op only while the staged seed matches it; a bumped build (or an incomplete seed) triggers a
-# restage. Delete the dir to force a refetch. The HOME-relative ~/.steam compat symlinks are NOT
-# staged here — make-sdcard.sh creates them against /home/deck when it builds the pre-seeded home fs.
+# no-op only while the staged seed is complete (has `.installed`) and matches it; a bumped build (or an
+# incomplete seed) triggers a full restage. Delete work/steam-seed to force a refetch. The HOME-relative
+# ~/.steam compat symlinks are NOT staged here — make-sdcard.sh creates them against /home/deck.
 #
 #   steam-seed/fetch-steam-seed.sh
 set -euo pipefail
@@ -19,48 +28,60 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PIN="$ROOT/steam-seed/STEAM_SEED.pin"
 SEED_DIR="$ROOT/work/steam-seed"
 CDN="https://client-update.steamstatic.com"
+DEVEL_PIN="$ROOT/base-devel.digest"
+# Emulated download + unpack of the full client tree is slow; generous ceiling (override via env).
+BOOTSTRAP_TIMEOUT="${STEAM_BOOTSTRAP_TIMEOUT:-1800}"
 
 log() { echo "[fetch-steam-seed] $*" >&2; }
 pin_field() { sed -n "s/^$1:[[:space:]]*//p" "$PIN" | head -1; }
 
 [ -f "$PIN" ] || { log "missing pin: ${PIN#"$ROOT"/}"; exit 1; }
-for t in curl unzip tar xz grep; do
+[ -f "$DEVEL_PIN" ] || { log "no build-env pin: ${DEVEL_PIN#"$ROOT"/}"; exit 1; }
+for t in curl unzip tar xz grep docker; do
   command -v "$t" >/dev/null 2>&1 || { log "$t not found on build host"; exit 1; }
 done
+
+# base-devel image (arm64) is the throwaway container we run Steam's updater in under qemu — same
+# pinned image the overlay build uses. Its digest does NOT affect seed CONTENT (Steam pulls its own
+# libs), so it is deliberately not a Makefile content prereq.
+DEVEL_REF="$(grep -vE '^[[:space:]]*(#|$)' "$DEVEL_PIN" | tail -1)"
+case "$DEVEL_REF" in
+  *@sha256:*) ;;
+  *) log "refusing unpinned base-devel ref (need ...@sha256:<digest>): '$DEVEL_REF'"; exit 1 ;;
+esac
 
 CHANNEL="$(pin_field channel)";       : "${CHANNEL:?$PIN: missing channel}"
 RUNTIME_URL="$(pin_field runtime_url)"; : "${RUNTIME_URL:?$PIN: missing runtime_url}"
 MANIFEST_NAME="steam_client_${CHANNEL}_linuxarm64"
 MANIFEST_URL="${CDN}/${MANIFEST_NAME}"
 STAGED_MANIFEST="$SEED_DIR/package/${MANIFEST_NAME}.manifest"
+INSTALLED="$SEED_DIR/package/${MANIFEST_NAME}.installed"
 
 # Steam build id out of a saved-or-live manifest (the "version" field is Valve's client build number).
 # || true so an absent field yields "" (checked below) instead of tripping set -e / pipefail.
 manifest_version() { grep -aoE '"version"[[:space:]]*"[0-9]+"' "$1" | grep -oE '[0-9]+' | head -1 || true; }
 
-# Temp files (single EXIT trap for both — a second trap would replace, not add to, the first).
-LIVE_MANIFEST="$(mktemp)"; rt_tar="$(mktemp)"
-trap 'rm -f "$LIVE_MANIFEST" "$rt_tar"' EXIT
+# Temp files (single EXIT trap for all — a second trap would replace, not add to, the first).
+LIVE_MANIFEST="$(mktemp)"; boot_zip="$(mktemp)"; rt_tar="$(mktemp)"
+trap 'rm -f "$LIVE_MANIFEST" "$boot_zip" "$rt_tar"' EXIT
 
 # We DON'T pin a build: the channel is a live rolling pointer, so every run resolves the CURRENT
-# publicbeta manifest and uses whatever Valve publishes now. To stay AWARE of silent bumps rather than
-# updating blindly, compare the live build id against the one in the staged manifest and restage only
-# when they differ (or the seed is incomplete). This manifest GET is the only network touch on the
-# skip path; the big zips are pulled solely when we actually restage.
+# publicbeta manifest and installs whatever Valve publishes now. To stay AWARE of silent bumps rather
+# than updating blindly, compare the live build id against the one in the staged manifest and restage
+# only when they differ (or the seed is incomplete). This manifest GET is the only network touch on the
+# skip path; the client tree is downloaded solely when we actually restage.
 log "resolving live ${CHANNEL} client build"
 curl -fsSL -o "$LIVE_MANIFEST" "$MANIFEST_URL"
 LIVE_VERSION="$(manifest_version "$LIVE_MANIFEST")"; : "${LIVE_VERSION:?could not read build id from live manifest}"
 STAGED_VERSION=""; [ -f "$STAGED_MANIFEST" ] && STAGED_VERSION="$(manifest_version "$STAGED_MANIFEST")"
 
-# Require the client binary AND both of Steam's bundled hard deps (libavutil, libSDL3) AND CEF AND the
-# webhelper script to be executable: a stale seed missing any (client but no codecs, no SDL3, no CEF,
-# or the pre-exec-bit-fix perms) must re-stage, else steamui.so fails to load / the UI never paints
-# offline (see the codecs + sdl3 + webkit fetches and the exec-bit restore below).
+# A seed is COMPLETE only if Steam actually finished a self-install: `.installed` present (else it would
+# re-install on first boot) AND steamui.so present (the UI the whole GamepadUI shell renders from). Skip
+# only when that holds AND the installed build matches live.
 if [ "$STAGED_VERSION" = "$LIVE_VERSION" ] \
-   && [ -x "$SEED_DIR/steamrtarm64/steam" ] && [ -f "$SEED_DIR/steamrtarm64/libavutil.so.60" ] \
-   && [ -f "$SEED_DIR/steamrtarm64/libSDL3.so.0" ] && [ -f "$SEED_DIR/steamrtarm64/libcef.so" ] \
-   && [ -d "$SEED_DIR/steamui" ] && [ -x "$SEED_DIR/steamrtarm64/steamwebhelper.sh" ]; then
-  log "seed in sync at Steam build ${LIVE_VERSION} — nothing to do (rm -rf to refetch)"
+   && [ -f "$INSTALLED" ] && [ -f "$SEED_DIR/steamrtarm64/steamui.so" ] \
+   && [ -x "$SEED_DIR/steamrtarm64/steam" ]; then
+  log "seed complete + in sync at Steam build ${LIVE_VERSION} — nothing to do (rm -rf work/steam-seed to refetch)"
   exit 0
 fi
 
@@ -74,80 +95,26 @@ mkdir -p "$SEED_DIR/package"
 
 # Channel marker so the client tracks the arm64 publicbeta line (not the x86 default).
 echo "${CHANNEL}" >"$SEED_DIR/package/beta"
-# Reuse the manifest we already fetched (no second GET); fetch_pkg reads its tokens below.
+# Reuse the manifest we already fetched (no second GET); Steam's updater reads it below.
 cp "$LIVE_MANIFEST" "$STAGED_MANIFEST"
 
-# 1. Client + media seed: fetch + unpack two NAMED packages out of the publicbeta manifest.
-#  - bins_linuxarm64_linuxarm64: the bootstrap client itself (steamrtarm64/steam, steamui.so,
-#    libvideo.so).
-#  - codecs_linuxarm64_linuxarm64: Steam's OWN native-arm64 ffmpeg (-> steamrtarm64/libav*.so* +
-#    libvpx). steamui.so -> libvideo.so NEEDs av_malloc_tracked@LIBAVUTIL_60 (+ LIBAVCODEC/FILTER/
-#    FORMAT) — a Valve downstream patch the stock holo ffmpeg does NOT export, so without these
-#    libvideo.so resolves the system libavutil.so.60, hits "undefined symbol: av_malloc_tracked", and
-#    steamui.so fails to load. Normally Steam's first-launch self-update pulls them, but a release
-#    unit has no network before Steam's OOBE — so bake them. The launcher front-loads steamrtarm64 on
-#    LD_LIBRARY_PATH, so these win over the system ffmpeg.
-#  - sdl3_linuxarm64_linuxarm64: Steam's OWN native-arm64 SDL3 (-> steamrtarm64/libSDL3.so.0 +
-#    libSDL3_ttf/_image). steamui.so NEEDs SDL_TryLockJoysticks@SDL3_0.0.0 — newer than the SDL3 the
-#    SR3 runtime ships (libSDL3.so.0.4.8 has Lock/UnlockJoysticks but NOT TryLock), and newer than the
-#    holo system libSDL3. Without this, "dlmopen steamui.so failed: undefined symbol:
-#    SDL_TryLockJoysticks" -> "Fatal error: Failed to load steamui.so" and the UI never paints. Same
-#    offline gap as the codecs: Steam's self-update would pull it, but a release unit has no network
-#    pre-OOBE. Front-loaded steamrtarm64 wins over both the runtime and system SDL3.
-#  - webkit_linuxarm64_linuxarm64: Steam's CEF (Chromium Embedded Framework) -> steamrtarm64/
-#    libcef.so (~218M) + cefsimple + ANGLE (libEGL/libGLESv2) + resources.pak/locales/snapshot_blob.
-#    The ENTIRE GamepadUI renders in CEF via steamwebhelper, so without libcef.so the helper dies on
-#    "error while loading shared libraries: libcef.so: cannot open shared object file", steamui loops
-#    "Restart webhelper process" / "Failed creating offscreen shared JS context", and nothing paints.
-#    CEF is the SHELL, not a download-later asset — the OOBE/Wi-Fi screens are themselves CEF — so it
-#    must be baked like steamui.so/SDL3 (corrects the earlier "webkit comes over network" assumption).
-# 2. UI content: the GamepadUI itself is a CEF web app. steamui_websrc_all unpacks the steamui/
-#    bundle (*.js/css/images/localization) the webhelper browser navigates to; without it CEF comes
-#    up "BrowserReady" but renders a BLANK page (no steamui/ dir, no network pre-OOBE) -> no UI.
-#    public_all/resources_all/resource_*/strings_* + tenfoot_images_all carry the shared images,
-#    strings and tenfoot art the bundle references. Like CEF, this is the SHELL the real Deck recovery
-#    image SHIPS — only games/updates stream later — so it is baked, not downloaded in OOBE (~75M zips,
-#    far below the reverted full-tree bake). Boot videos/sounds (steamui_websrc_movies/sounds_all) are
-#    eye-candy, intentionally NOT baked. These unpack at the Steam root (not steamrtarm64/), so the
-#    exec-bit restore below does not touch them.
-# fetch_pkg <name> <label>: pull the plain (non-vz) zip token for an exact package out of the
-# (part-binary, hence grep -a) manifest, fetch from the CDN, unpack into the seed root.
-fetch_pkg() {
-  pkg_name="$1"; pkg_label="$2"
-  tok="$(grep -aoE "${pkg_name}\.zip\.[0-9a-f]+" \
-    "$SEED_DIR/package/${MANIFEST_NAME}.manifest" | grep -v '\.vz\.' | head -n1)"
-  [ -n "$tok" ] || { log "ERROR: no ${pkg_label} package (${pkg_name}) in manifest"; exit 1; }
-  log "fetching ${pkg_label} ${tok}"
-  curl -fsSL -o "$SEED_DIR/package/${tok}" "${CDN}/${tok}"
-  unzip -q -o "$SEED_DIR/package/${tok}" -d "$SEED_DIR"
-}
+# 1. Bootstrap client: the ONLY package we hand-fetch. It contains steamrtarm64/steam — the updater we
+#    then run so Steam pulls the rest (steamui, codecs, SDL3, CEF, web bundle, movies/sounds, ...) itself
+#    and writes `.installed`. Pull the plain (non-vz) zip token out of the (part-binary, hence grep -a)
+#    manifest, fetch from the CDN, unpack into the seed root.
+boot_tok="$(grep -aoE 'bins_linuxarm64_linuxarm64\.zip\.[0-9a-f]+' "$STAGED_MANIFEST" | grep -v '\.vz\.' | head -n1)"
+[ -n "$boot_tok" ] || { log "ERROR: no bootstrap package (bins_linuxarm64_linuxarm64) in manifest"; exit 1; }
+log "fetching bootstrap client ${boot_tok}"
+curl -fsSL -o "$boot_zip" "${CDN}/${boot_tok}"
+cp "$boot_zip" "$SEED_DIR/package/${boot_tok}"
+unzip -q -o "$boot_zip" -d "$SEED_DIR"
+[ -f "$SEED_DIR/steamrtarm64/steam" ] || { log "ERROR: bootstrap did not install steamrtarm64/steam"; exit 1; }
 
-# Shell .so/runtime stack (unpacks into steamrtarm64/).
-fetch_pkg bins_linuxarm64_linuxarm64   'client seed'
-fetch_pkg codecs_linuxarm64_linuxarm64 'media codecs (ffmpeg)'
-fetch_pkg sdl3_linuxarm64_linuxarm64   'SDL3'
-fetch_pkg webkit_linuxarm64_linuxarm64 'CEF (webkit)'
-# GamepadUI web content (unpacks at the Steam root: steamui/, public/, resource/, ...).
-fetch_pkg steamui_websrc_all           'GamepadUI web bundle'
-fetch_pkg public_all                   'shared public resources'
-fetch_pkg resources_all                'UI resources'
-fetch_pkg strings_all                  'UI strings'
-fetch_pkg strings_en_all               'UI strings (en)'
-fetch_pkg tenfoot_images_all           'tenfoot images'
-[ -f "$SEED_DIR/steamrtarm64/steam" ] || { log "ERROR: seed did not install steamrtarm64/steam"; exit 1; }
-[ -f "$SEED_DIR/steamrtarm64/libavutil.so.60" ] || { log "ERROR: codecs did not install steamrtarm64/libavutil.so.60"; exit 1; }
-[ -f "$SEED_DIR/steamrtarm64/libSDL3.so.0" ] || { log "ERROR: sdl3 did not install steamrtarm64/libSDL3.so.0"; exit 1; }
-[ -f "$SEED_DIR/steamrtarm64/libcef.so" ] || { log "ERROR: webkit did not install steamrtarm64/libcef.so"; exit 1; }
-[ -d "$SEED_DIR/steamui" ] || { log "ERROR: steamui_websrc did not install the steamui/ web bundle"; exit 1; }
-
-# Restore exec bits. Valve's package zips store EVERY file as 0666 and rely on Steam's own updater to
-# set the exec bit per its manifest — which we bypass by unzip'ing the seed offline. So unzip leaves
-# steam, steamwebhelper(.sh), reaper, gldriverquery, etc. non-executable; Steam then loops forever on
-# "steamwebhelper.sh: Permission denied" (no CEF -> "Failed creating offscreen shared JS context" ->
-# no UI). Mark every ELF + *.sh under steamrtarm64 executable (harmless on the .so libs, which are
-# dlopen'd not exec'd). The SR3 runtime arrives as a tar.xz (modes preserved), so only the unzip'd
-# steamrtarm64/ needs this.
-log "restoring exec bits on unzip'd steamrtarm64 binaries"
+# Restore exec bits on the bootstrap so steamrtarm64/steam can be launched. Valve's package zips store
+# every file 0666 and rely on Steam's updater to set exec bits per its manifest — which is exactly what
+# running Steam below does for everything it installs; but the bootstrap steam binary must be executable
+# NOW so we can run it. Mark every ELF + *.sh under steamrtarm64 executable (harmless on .so libs).
+log "restoring exec bits on the bootstrap steamrtarm64 binaries"
 # ELF magic compared via cmp (not $(head ...)) so binary null bytes don't trip the shell's
 # "ignored null byte in command substitution" warning on non-ELF data files (.pak/.vdf).
 elf_magic="$(printf '\177ELF')"
@@ -158,9 +125,9 @@ while IFS= read -r -d '' f; do
   if printf '%s' "$elf_magic" | cmp -s -n 4 - "$f"; then chmod +x "$f"; fi
 done < <(find "$SEED_DIR/steamrtarm64" -maxdepth 1 -type f -print0)
 [ -x "$SEED_DIR/steamrtarm64/steam" ] || { log "ERROR: steam not executable after chmod"; exit 1; }
-[ -x "$SEED_DIR/steamrtarm64/steamwebhelper.sh" ] || { log "ERROR: steamwebhelper.sh not executable after chmod"; exit 1; }
 
-# 2. arm64 SR3 runtime (steamrt3 aarch64): the libs the native client links against.
+# 2. arm64 SR3 runtime (steamrt3 aarch64): the libs the native client links against. NOT part of the
+#    client manifest (a separate repo.steampowered.com tarball), so we fetch it ourselves.
 log "fetching arm64 steam runtime"
 curl -fsSL -o "$rt_tar" "$RUNTIME_URL"
 tar -xJf "$rt_tar" -C "$SEED_DIR"
@@ -179,7 +146,86 @@ else
   log "WARNING: libibus shim not found in runtime — Steam may fail to start"
 fi
 
-# Let Decky (Phase-3 control layer, later) attach to Steam's CEF debugger when present.
-touch "$SEED_DIR/.cef-enable-remote-debugging"
+# 3. Run Steam's updater under arm64 qemu to self-install the COMPLETE tree + write `.installed`.
+#    Same emulation path as packages/build-overlay.sh: register binfmt if a probe run fails, then a
+#    throwaway --platform linux/arm64 container. Steam runs as an unprivileged builder (mirrors the
+#    overlay's builder pattern) with the seed mounted at its $HOME/.local/share/Steam; it needs the
+#    network (CDN) and a display (Xvfb). We chown the tree back to the host build user afterward.
+if ! docker run --rm --platform linux/arm64 "$DEVEL_REF" /usr/bin/true >/dev/null 2>&1; then
+  log "registering arm64 binfmt (qemu) via tonistiigi/binfmt"
+  docker run --privileged --rm tonistiigi/binfmt --install arm64 >&2
+fi
 
-log "done — seed staged ($(du -sh "$SEED_DIR" | cut -f1)); assemble-rootfs bakes it into the RO root"
+log "running Steam updater under arm64 qemu to self-install the full tree (slow — emulated + download)"
+docker run --rm --platform linux/arm64 \
+  -e HOSTUID="$(id -u)" -e HOSTGID="$(id -g)" \
+  -e MANIFEST_NAME="$MANIFEST_NAME" -e BOOTSTRAP_TIMEOUT="$BOOTSTRAP_TIMEOUT" \
+  -v "$SEED_DIR":/home/builder/.local/share/Steam \
+  "$DEVEL_REF" \
+  bash -euo pipefail -c '
+    useradd -m builder 2>/dev/null || true
+    STEAMHOME=/home/builder
+    STEAM="$STEAMHOME/.local/share/Steam"
+    # X server for the headless updater + the minimal X CLIENT libs the steam binary links (its own
+    # runtime libs are front-loaded from steamrtarm64 via LD_LIBRARY_PATH below).
+    pacman -Sy --noconfirm --needed xorg-server-xvfb libx11 libxext libxrandr >/dev/null
+
+    # .steam compat symlinks — Steam resolves its install root through these (mirror SteamOS layout).
+    install -d "$STEAMHOME/.steam"
+    ln -sfn ../.local/share/Steam            "$STEAMHOME/.steam/steam"
+    ln -sfn ../.local/share/Steam            "$STEAMHOME/.steam/root"
+    ln -sfn ../.local/share/Steam/linuxarm64 "$STEAMHOME/.steam/sdkarm64"
+    ln -sfn ../.local/share/Steam/linux32    "$STEAMHOME/.steam/sdk32"
+    ln -sfn ../.local/share/Steam/linux64    "$STEAMHOME/.steam/sdk64"
+    ln -sfn ../.local/share/Steam/ubuntu12_32 "$STEAMHOME/.steam/bin32"
+    ln -sfn ../.local/share/Steam/ubuntu12_64 "$STEAMHOME/.steam/bin64"
+    chown -R builder "$STEAMHOME"
+
+    Xvfb :99 -screen 0 1280x800x24 >/tmp/xvfb.log 2>&1 &
+    xvfb_pid=$!
+    trap "kill $xvfb_pid 2>/dev/null || true" EXIT
+    sleep 1
+
+    set +e
+    runuser -u builder -- env \
+      HOME="$STEAMHOME" DISPLAY=:99 \
+      LD_LIBRARY_PATH="$STEAM/steamrtarm64:$STEAM/lib/aarch64-linux-gnu" \
+      timeout "$BOOTSTRAP_TIMEOUT" "$STEAM/steamrtarm64/steam" -steamdeck -exitsteam \
+      >/tmp/steam.stdout 2>/tmp/steam.stderr
+    rc=$?
+    set -e
+    if [ "$rc" = 124 ]; then
+      echo "[fetch-steam-seed] ERROR: Steam updater timed out after ${BOOTSTRAP_TIMEOUT}s" >&2
+      tail -n 30 /tmp/steam.stderr >&2 || true
+      exit 1
+    fi
+
+    INSTALLED="$STEAM/package/${MANIFEST_NAME}.installed"
+    if [ ! -f "$STEAM/steamrtarm64/steamui.so" ] || [ ! -f "$INSTALLED" ]; then
+      echo "[fetch-steam-seed] ERROR: self-install incomplete (updater rc ${rc}): steamui.so or .installed missing;" >&2
+      echo "                        the seed would re-install on first boot." >&2
+      echo "--- steam stdout (tail) ---" >&2; tail -n 30 /tmp/steam.stdout >&2 || true
+      echo "--- steam stderr (tail) ---" >&2; tail -n 30 /tmp/steam.stderr >&2 || true
+      exit 1
+    fi
+
+    # Strip per-run cruft so only the installed tree is baked (mirror the SteamOS bootstrap cleanup).
+    rm -rf "$STEAM/logs" "$STEAM/appcache/httpcache" "$STEAM/appcache/cefdata" "$STEAM/config/htmlcache"
+    find "$STEAMHOME" \( -name "*.log" -o -name "*.pid" -o -name "*.token" -o -name "*.crash" \) -delete
+    find "$STEAMHOME" \( -type s -o -type p \) -delete
+    rm -f "$STEAM/registry.vdf" "$STEAM"/ssfn* \
+          "$STEAMHOME/.steam/registry.vdf" "$STEAMHOME/.steam/steam.pid" "$STEAMHOME/.steam/steam.token"
+
+    # Let Decky (Phase-3 control layer, later) attach to the Steam CEF debugger when present.
+    touch "$STEAM/.cef-enable-remote-debugging"
+
+    # Hand the fully-installed tree back to the host build user (Steam wrote it as builder).
+    chown -R "$HOSTUID:$HOSTGID" "$STEAM"
+    echo "[fetch-steam-seed] self-install OK (updater rc ${rc}); .installed + steamui.so present" >&2
+  ' >&2
+
+# Host-side sanity: the container guards this, but assert again so a partial mount never slips through.
+[ -f "$INSTALLED" ] || { log "ERROR: no ${MANIFEST_NAME}.installed after self-install"; exit 1; }
+[ -f "$SEED_DIR/steamrtarm64/steamui.so" ] || { log "ERROR: steamui.so missing after self-install"; exit 1; }
+
+log "done — complete seed staged ($(du -sh "$SEED_DIR" | cut -f1)); make-sdcard bakes it into /home"

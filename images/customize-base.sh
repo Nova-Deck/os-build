@@ -201,7 +201,13 @@ fi
 
 # Fetch + verify every pinned prebuilt on the host (network here); staged into PREBUILT_DIR,
 # mounted read-only into the customization container below so they land in the exported base.
-rm -rf "$PREBUILT_DIR"; mkdir -p "$PREBUILT_DIR"
+#
+# PREBUILT_DIR PERSISTS across runs (it is NOT wiped) so it doubles as the download cache: a
+# re-customize — the base cache busts on any package/overlay change — reuses a staged blob whose
+# sha still matches instead of re-fetching it. The FEX ArchLinux.ero alone is ~1.9G, so this saves
+# that download on every rebuild. The staged name is per-pin (fex-rootfs.blob), so a pin bump
+# re-verifies against the NEW sha, misses, and overwrites in place — no orphans, no unbounded growth.
+mkdir -p "$PREBUILT_DIR"
 for pin in "${PREBUILT_PINS[@]}"; do
   [ -e "$pin" ] || continue
   name="$(pin_field "$pin" name)"; ver="$(pin_field "$pin" version)"
@@ -214,10 +220,17 @@ for pin in "${PREBUILT_PINS[@]}"; do
     file) staged="$PREBUILT_DIR/$name.blob" ;;
     *)    echo "$pin: unknown kind '$kind' (want: tar|file)" >&2; exit 1 ;;
   esac
+  # Reuse a cached blob only if its sha already matches the pin (guards against a partial download
+  # or a bumped url reusing the old file); otherwise (re)fetch and verify.
+  if [ -f "$staged" ] && echo "$sha  $staged" | sha256sum -c --status -; then
+    echo "[novadeck] prebuilt $name $ver ($kind): cached ($url)" >&2
+    continue
+  fi
   echo "[novadeck] fetching prebuilt $name $ver ($kind): $url" >&2
-  curl -fsSL "$url" -o "$staged"
-  echo "$sha  $staged" | sha256sum -c - \
-    || { echo "$name sha256 mismatch — refusing" >&2; exit 1; }
+  curl -fsSL "$url" -o "$staged.part"
+  echo "$sha  $staged.part" | sha256sum -c - \
+    || { echo "$name sha256 mismatch — refusing" >&2; rm -f "$staged.part"; exit 1; }
+  mv -f "$staged.part" "$staged"
 done
 printf '%s\n' "$EXPECTED_MANIFEST" >"$PREBUILT_DIR/prebuilt.manifest"
 # Install-set marker (reuse-cache key only; NOT a tar list) — the full sorted package set.

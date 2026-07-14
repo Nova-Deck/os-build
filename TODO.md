@@ -287,13 +287,24 @@ rationale lives in the linked memories and commit history.
   a real D-Bus daemon (its own effort), a natural next layer AFTER power/suspend lands. See
   [[inspect-upstream-by-cloning-not-scraping]], [[validate-architecture-vs-steamos-goal]].
 
-- [ ] **Brightness up/down hotkeys — unverified** — `novadeck-hotkeyd` maps KEY_BRIGHTNESSUP/DOWN, but
-  the Pocket S2 raw capture only showed `KEY_VOLUMEUP`, so the board likely has no physical brightness
-  keys (harmless if absent). Confirm whether any board emits brightness keysyms; if not, this is moot.
-  **Possible workaround if there are no dedicated keys:** map a **chord** (e.g. a function/hotkey button +
-  vol-/vol+) to `KEY_BRIGHTNESSDOWN`/`KEY_BRIGHTNESSUP` via **InputPlumber**, so brightness gets a control
-  surface even without physical brightness keys — `novadeck-hotkeyd` already handles those keysyms.
-  See [[sm8650-inputplumber-input]].
+- [x] **Brightness up/down hotkeys — no HW keys; Guide+VOL chord is UNFEASIBLE** — the Pocket S2 has no
+  physical brightness keys (raw capture shows only `KEY_VOLUMEUP` on gpio-keys, `KEY_VOLUMEDOWN` on
+  pmic_resin; `novadeck-hotkeyd`'s KEY_BRIGHTNESS* handlers therefore never fire). The proposed
+  **Guide+VOL → brightness chord is a dead end**, investigated fully 2026-07-14 (reverted, nothing shipped):
+  * **UX killer (fatal, approach-independent):** Guide is the Steam button — Steam opens its overlay on
+    the Guide *press*. Any Guide+X combo brings up SteamUI. The OS can detect the combo but cannot stop
+    the press from reaching Steam. This alone rules out Guide+VOL regardless of implementation.
+  * **InputPlumber chord also breaks Guide:** on AYANEO, Guide arrives as a real gamepad button
+    (`BTN_MODE`); putting it in an IP `chord` makes IP hold/consume it, killing the plain Guide button
+    (HW-confirmed: QuickAccess kept working, Guide died). IP chords are meant for throwaway trigger keys
+    (e.g. OneXPlayer's Meta+G "home"), not live gamepad buttons.
+  * **hotkeyd variant works mechanically but shares the UX killer:** a small `evtest` watcher on the IP
+    virtual gamepad (libinput hides gamepads) can track `BTN_MODE` and gate VOL→brightness, no IP change
+    — but still triggers SteamUI on the Guide press. Built and reverted.
+  * Notes for any future attempt: IP `keyboard:` targets are PascalCase (`KeyVolumeUp`), NOT `KEY_*`;
+    grabbing VOL in IP requires re-emitting plain VOL or volume dies. If brightness is still wanted, use a
+    **non-Guide** button that doesn't trigger SteamUI (e.g. QuickAccess/`BTN5`+VOL, if usable) or a Steam
+    UI brightness slider — a fresh design, not this chord. See [[sm8650-inputplumber-input]].
 
 - [x] **Display color controls — RESOLVED** — confirmed working (user, 2026-07-05): the `--steam`
   handshake + R/T sockets (cabb498) gave SteamUI's color pipeline a channel, and the

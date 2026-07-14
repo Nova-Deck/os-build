@@ -132,53 +132,48 @@ else
   echo "  (no fs-overlay/ tree — skipping overlay injection)" >&2
 fi
 
-# Rewrite the baked Proton compat tool. Upstream ships toolmanifest.vdf AND compatibilitytool.vdf
-# verbatim; both need editing, and every edit FAILS LOUDLY if upstream changes shape — a silently
-# un-rewritten tool would refuse to launch, bypass our FEX tuning, or unpin games on the next bump.
+# Rewrite the baked Proton compat tools. We bake TWO — proton-cachyos and proton-ge — so the user
+# can pick whichever runs a given title better from the Steam UI. Both are the same self-contained
+# arm64 Wine + Valve WoW64-FEX Proton and ship identical toolmanifest.vdf / compatibilitytool.vdf
+# shapes, so a single rewrite serves both. Every edit FAILS LOUDLY if upstream changes shape — a
+# silently un-rewritten tool would refuse to launch, bypass our FEX tuning, or unpin games on a bump.
 #
-# toolmanifest.vdf:
-#   1. Drop `require_tool_appid`. It names Valve's arm64 SLR container, which a non-Deckard
-#      client never *registers* as a compat tool even when its files are installed. Steam then
-#      quietly falls back to an older Proton instead of launching this one.
-#   2. Point `commandline` at our wrapper, so per-game FEX tuning lands before Proton starts.
-#
-# compatibilitytool.vdf:
-#   3. Replace the tool's INTERNAL name. Upstream's is the dated build string
-#      (proton-cachyos-11.0-20260602-slr-arm64), and Steam records THAT internal name — not the
-#      directory — against every game it is forced on. Left as-is, a Proton bump changes the
-#      internal name and silently unpins every game. Rewrite it to a stable, version-free id so a
-#      bump is transparent. (The directory is already version-free via the pin's `dest`; that
-#      alone does NOT stabilise what Steam pins by.)
-#   4. Give it a friendly display_name (upstream reuses the dated build string there too).
-NOVADECK_PROTON_TOOL_NAME="proton-cachyos-11.0-arm64"   # stable internal id (matches the tool dir); docs match
-PROTON_TOOL="$stage/usr/share/steam/compatibilitytools.d/proton-cachyos-11.0-arm64"
-if [ -d "$PROTON_TOOL" ]; then
-  MANIFEST="$PROTON_TOOL/toolmanifest.vdf"
-  [ -f "$MANIFEST" ] || { echo "ERROR: Proton tool has no toolmanifest.vdf at $MANIFEST" >&2; exit 1; }
+# rewrite_proton_tool <tool_dir> <stable_internal_name> <display_name> does, per tool:
+#   toolmanifest.vdf:
+#     1. Drop `require_tool_appid`. It names Valve's arm64 SLR container, which a non-Deckard client
+#        never *registers* as a compat tool even when its files are installed. Steam then quietly
+#        falls back to an older Proton instead of launching this one.
+#     2. Point `commandline` at our wrapper, so per-game FEX tuning lands before Proton starts.
+#   compatibilitytool.vdf:
+#     3. Replace the tool's INTERNAL name. Upstream's is the dated build string (e.g.
+#        proton-cachyos-11.0-20260602-slr-arm64 / GE-Proton11-1-aarch64), and Steam records THAT
+#        internal name — not the directory — against every game it is forced on. Left as-is, a Proton
+#        bump changes the internal name and silently unpins every game. Rewrite it to a stable,
+#        version-free id so a bump is transparent. (The directory is already version-free via the
+#        pin's `dest`; that alone does NOT stabilise what Steam pins by.)
+#     4. Give it a friendly display_name (upstream reuses the dated build string there too).
+# The display version is parsed per-tool at each call site (the `version` file format differs) and
+# passed in, so this function stays build-agnostic.
+rewrite_proton_tool() {
+  local tool_dir="$1" stable_name="$2" display="$3"
+  local manifest="$tool_dir/toolmanifest.vdf"
+  [ -f "$manifest" ] || { echo "ERROR: Proton tool has no toolmanifest.vdf at $manifest" >&2; exit 1; }
 
-  # Surface the Proton version in the display_name, derived from the tool's own `version` file
-  # (format: "<epoch> cachyos-<ver>-...", e.g. "cachyos-11.0-20260602-slr" -> "11.0-20260602").
-  # Fail loudly rather than ship a version-less name if upstream drops or reshapes the file.
-  [ -f "$PROTON_TOOL/version" ] || { echo "ERROR: Proton tool has no version file at $PROTON_TOOL/version" >&2; exit 1; }
-  PVER="$(sed -n 's/.*cachyos-\([0-9][0-9.]*-[0-9]\{6,\}\).*/\1/p' "$PROTON_TOOL/version")"
-  [ -n "$PVER" ] || { echo "ERROR: could not parse Proton version from $(cat "$PROTON_TOOL/version")" >&2; exit 1; }
-  NOVADECK_PROTON_DISPLAY="Proton ${PVER} (CachyOS, arm64)"
+  grep -q 'require_tool_appid' "$manifest" \
+    || { echo "ERROR: Proton toolmanifest ($tool_dir) has no require_tool_appid — inspect before rewriting" >&2; exit 1; }
+  sed -i '/require_tool_appid/d' "$manifest"
 
-  grep -q 'require_tool_appid' "$MANIFEST" \
-    || { echo "ERROR: Proton toolmanifest has no require_tool_appid — inspect before rewriting" >&2; exit 1; }
-  sed -i '/require_tool_appid/d' "$MANIFEST"
+  grep -qE '"commandline"[[:space:]]+"/proton ' "$manifest" \
+    || { echo "ERROR: Proton toolmanifest ($tool_dir) commandline is not \"/proton %verb%\" — inspect" >&2; exit 1; }
+  sed -i 's#"commandline"[[:space:]]*"/proton #"commandline" "/novadeck-proton #' "$manifest"
 
-  grep -qE '"commandline"[[:space:]]+"/proton ' "$MANIFEST" \
-    || { echo "ERROR: Proton toolmanifest commandline is not \"/proton %verb%\" — inspect" >&2; exit 1; }
-  sed -i 's#"commandline"[[:space:]]*"/proton #"commandline" "/novadeck-proton #' "$MANIFEST"
-
-  CTOOL="$PROTON_TOOL/compatibilitytool.vdf"
-  [ -f "$CTOOL" ] || { echo "ERROR: Proton tool has no compatibilitytool.vdf at $CTOOL" >&2; exit 1; }
+  local ctool="$tool_dir/compatibilitytool.vdf"
+  [ -f "$ctool" ] || { echo "ERROR: Proton tool has no compatibilitytool.vdf at $ctool" >&2; exit 1; }
 
   # The internal name is the first quoted string inside `compat_tools { ... }`; the display_name
   # is a `"display_name" "..."` pair. Both are matched positionally so an unexpected upstream shape
   # errors out rather than half-rewriting.
-  python3 - "$CTOOL" "$NOVADECK_PROTON_TOOL_NAME" "$NOVADECK_PROTON_DISPLAY" <<'PYVDF'
+  python3 - "$ctool" "$stable_name" "$display" <<'PYVDF'
 import re, sys
 path, tool_name, display = sys.argv[1], sys.argv[2], sys.argv[3]
 text = open(path).read()
@@ -191,15 +186,38 @@ PYVDF
 
   # In-tool shim: Steam resolves `commandline` relative to the tool directory, so the wrapper is
   # reached through a path Steam accepts, while the wrapper itself stays a normal system file.
-  cat >"$PROTON_TOOL/novadeck-proton" <<'PROTONSHIM'
+  cat >"$tool_dir/novadeck-proton" <<'PROTONSHIM'
 #!/bin/sh
 exec /usr/lib/novadeck/proton-wrapper "$(dirname "$0")/proton" "$@"
 PROTONSHIM
-  chmod 0755 "$PROTON_TOOL/novadeck-proton"
-  echo "  wired Proton compat tool as '$NOVADECK_PROTON_TOOL_NAME' (require_tool dropped, FEX wrapper in front, stable name)"
-else
-  echo "  (no baked Proton compat tool — x86 Windows games will have no compat tool)" >&2
+  chmod 0755 "$tool_dir/novadeck-proton"
+  echo "  wired Proton compat tool '$stable_name' ($display) — require_tool dropped, FEX wrapper in front, stable name"
+}
+
+COMPAT_DIR="$stage/usr/share/steam/compatibilitytools.d"
+BAKED_PROTON=0
+
+# CachyOS. `version` file format: "<epoch> cachyos-<ver>-...", e.g. "cachyos-11.0-20260702-slr".
+PROTON_CACHY_TOOL="$COMPAT_DIR/proton-cachyos-11.0-arm64"   # dir == stable internal id
+if [ -d "$PROTON_CACHY_TOOL" ]; then
+  [ -f "$PROTON_CACHY_TOOL/version" ] || { echo "ERROR: CachyOS Proton tool has no version file at $PROTON_CACHY_TOOL/version" >&2; exit 1; }
+  PVER="$(sed -n 's/.*cachyos-\([0-9][0-9.]*-[0-9]\{6,\}\).*/\1/p' "$PROTON_CACHY_TOOL/version")"
+  [ -n "$PVER" ] || { echo "ERROR: could not parse CachyOS Proton version from $(cat "$PROTON_CACHY_TOOL/version")" >&2; exit 1; }
+  rewrite_proton_tool "$PROTON_CACHY_TOOL" "proton-cachyos-11.0-arm64" "Proton ${PVER} (CachyOS, arm64)"
+  BAKED_PROTON=1
 fi
+
+# GE (GloriousEggroll). `version` file format: "<epoch> GE-Proton<major>-<minor>", e.g. "GE-Proton11-1".
+PROTON_GE_TOOL="$COMPAT_DIR/proton-ge-arm64"   # dir == stable internal id
+if [ -d "$PROTON_GE_TOOL" ]; then
+  [ -f "$PROTON_GE_TOOL/version" ] || { echo "ERROR: GE Proton tool has no version file at $PROTON_GE_TOOL/version" >&2; exit 1; }
+  GEVER="$(sed -n 's/.*\(GE-Proton[0-9][0-9.-]*[0-9]\).*/\1/p' "$PROTON_GE_TOOL/version")"
+  [ -n "$GEVER" ] || { echo "ERROR: could not parse GE Proton version from $(cat "$PROTON_GE_TOOL/version")" >&2; exit 1; }
+  rewrite_proton_tool "$PROTON_GE_TOOL" "proton-ge-arm64" "${GEVER} (GloriousEggroll, arm64)"
+  BAKED_PROTON=1
+fi
+
+[ "$BAKED_PROTON" = 1 ] || echo "  (no baked Proton compat tool — x86 Windows games will have no compat tool)" >&2
 
 # 4g. First-boot STORAGE (the deck user's growable home). SteamOS sizes /home to the disk at
 # install time; we dd a fixed image to a card, so we grow on first boot instead. Three pieces:

@@ -35,7 +35,8 @@ prebuilts **and their deps** is recorded in the base at `/usr/lib/novadeck/prebu
 which keys the base reuse-cache (bump a pin, or change its deps, → the base rebuilds).
 Current pins: `inputplumber/` (InputPlumber input daemon; `deps: libiio`),
 `fex-rootfs/` (the FEX x86 guest rootfs image; `kind: file`),
-`proton-cachyos/` (the baked arm64 Proton compat tool; `kind: tar`, `deps: python`).
+`proton-cachyos/` and `proton-ge/` (two baked arm64 Proton compat tools — CachyOS and
+GloriousEggroll GE — the user picks either per game in Steam; both `kind: tar`, `deps: python`).
 
 ## From-source overlay packages (`source.pin`)
 

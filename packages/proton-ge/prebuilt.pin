@@ -1,0 +1,48 @@
+# Proton GE (arm64) — a SECOND compat tool alongside proton-cachyos, both of which run x86/x86-64
+# *Windows* games on this device. GloriousEggroll's GE-Proton and CachyOS's proton-cachyos are two
+# community Proton builds of the SAME shape: an arm64-native Wine plus Valve's WoW64 FEX
+# (files/lib/wine/aarch64-windows/libwow64fex.dll, libarm64ecfex.dll). The emulator translates only
+# the game's x86 Windows code; every Linux syscall is made by the arm64 side of Wine. So this path
+# is SELF-CONTAINED: no system FEX package, no x86 guest rootfs, no thunks, no Steam Linux Runtime.
+#
+# We ship BOTH so the user can pick whichever runs a given title better from the Steam UI — GE and
+# CachyOS carry different game fixes, Wine bases, and DXVK/vkd3d snapshots. Everything the CachyOS
+# pin documents about *why we bake a Proton at all* (require_tool_appid gating on a non-Deckard
+# client; nothing downloadable before first-boot Wi-Fi/OOBE) applies identically here — see
+# packages/proton-cachyos/prebuilt.pin for that reasoning.
+#
+# Like CachyOS, this tarball's own toolmanifest.vdf carries `require_tool_appid` and its
+# compatibilitytool.vdf uses the dated build string as the internal name. assemble-rootfs.sh's
+# shared rewrite_proton_tool rewrites BOTH tools the same way after extraction (drops require_tool,
+# fronts our FEX wrapper, pins a stable internal name + friendly display_name). Do not "fix" the
+# manifest here; the tarball is upstream content and is extracted verbatim.
+#
+# strip: 1 + dest: the archive is rooted at the versioned directory (GE-Proton11-1-aarch64/), so
+# stripping that component lands its CONTENTS directly in a stable, version-free directory name.
+# NOTE the directory name is cosmetic: Steam pins a game to the tool's INTERNAL name (the
+# compat_tools key inside compatibilitytool.vdf), not the directory — so assemble-rootfs.sh also
+# rewrites that internal name to a stable id (proton-ge-arm64), or a GE minor bump (GE-Proton11-1 ->
+# GE-Proton11-2) would unpin every game. See rewrite_proton_tool in assemble-rootfs.sh.
+#
+# The tool lives under /usr/share/steam/compatibilitytools.d, which the client does NOT scan on its
+# own — novadeck-steam adds it via STEAM_EXTRA_COMPAT_TOOLS_PATHS (the whole dir, so both tools are
+# picked up). So it needs no seeding into $HOME and is replaced atomically with the OS slot.
+#
+# Upstream publishes a .sha512sum sidecar; the sha256 below was computed from the artifact.
+#
+# Fields: see packages/inputplumber/prebuilt.pin, plus `dest` (extraction root) documented in
+# packages/fex-rootfs/prebuilt.pin.
+#
+# To bump: pick a release from https://github.com/GloriousEggroll/proton-ge-custom/releases carrying
+# an `-aarch64.tar.gz` asset, set version + url + sha256 together, and keep `dest` unchanged so games
+# stay pinned to the same tool name. Re-verify the version parse in assemble-rootfs.sh's GE block
+# still matches (it fails loudly if upstream changes the `version` file format).
+name: proton-ge
+version: GE-Proton11-1
+url: https://github.com/GloriousEggroll/proton-ge-custom/releases/download/GE-Proton11-1/GE-Proton11-1-aarch64.tar.gz
+sha256: ce31b73ed00871f42570a8e721336c2ad3d12a245db8b65281d325ef0c3cf96d
+kind: tar
+strip: 1
+dest: /usr/share/steam/compatibilitytools.d/proton-ge-arm64
+# `proton` is a python3 script (#!/usr/bin/env python3); the wrapper that fronts it is python too.
+deps: python

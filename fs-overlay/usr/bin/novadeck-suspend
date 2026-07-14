@@ -46,6 +46,18 @@ POWER_SKIP=$NOVADECK_SUSPEND_SKIP
 POW_LIB=/usr/lib/novadeck/power-ops.sh
 if [ -r "$POW_LIB" ]; then . "$POW_LIB"; else power_enter() { :; }; power_leave() { :; }; fi
 
+# Hand the fan + clocks to novadeck-powerd for the sleep window: its Suspend() parks the fan on the
+# suspend curve (closing the "fan keeps spinning during fake-suspend" gap — power-ops.sh never owned
+# the fan) and pins CPU/GPU to minimum; Resume() restores the active profile. powerd is in
+# system.slice, never frozen, so this D-Bus call lands even while user.slice is frozen. Best-effort:
+# a down/absent powerd must NOT block the freeze/thaw. Skip via NOVADECK_SUSPEND_SKIP="powerd".
+powerd_call() {  # $1 = Suspend | Resume
+  case " $POWER_SKIP " in *" powerd "*) return 0 ;; esac
+  command -v busctl >/dev/null 2>&1 || { log "busctl missing; powerd $1 skipped"; return 0; }
+  busctl call org.novadeck.Power /org/novadeck/Power org.novadeck.Power1 "$1" >/dev/null 2>&1 \
+    || log "powerd $1 call failed (daemon down?)"
+}
+
 now_ms() { date +%s%3N; }   # GNU date; millisecond epoch for the wake debounce
 
 # Echo the first /dev/input/event* whose kernel name looks like a power key (pmic_pwrkey on SM8650,
@@ -107,6 +119,8 @@ do_suspend() {
   # honours NOVADECK_SUSPEND_SKIP.
   log "lowering power (skip='${NOVADECK_SUSPEND_SKIP}')"
   power_enter
+  # Park the fan (and pin clocks) via powerd's suspend mode, after our own power_enter.
+  powerd_call Suspend
   : > "$STATE"
   log "suspended"
 }
@@ -142,6 +156,8 @@ wait_for_wake() {
 do_resume() {
   [ -e "$STATE" ] || { log "not suspended"; return 0; }
   rm -f "$STATE"
+  # Resume powerd first so the fan spins back up on its active-profile curve as we restore.
+  powerd_call Resume
   # Restore power BEFORE the thaw so the workload wakes onto its full CPU/governor budget (reverse of
   # power_enter; restores exactly what was changed).
   log "restoring power"

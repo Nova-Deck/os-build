@@ -1,0 +1,4 @@
+# novadeck: enable the session-bus SteamOS-Manager backend in the deck user manager, so SteamUI's
+# Performance controls have a daemon on the bus the client reads. A build-time
+# default.target.wants symlink ships alongside as the reliable fallback.
+enable novadeck-steamos-manager.service

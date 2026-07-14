@@ -1,0 +1,17 @@
+[Unit]
+Description=novadeck SteamOS Manager backend (deck session bus — SteamUI reads this instance)
+# The Steam client connects to com.steampowered.SteamOSManager1 on the USER session bus, not the
+# system bus, so the QAM Performance controls only populate when this session-scoped instance owns
+# the name. Runs as the deck user and forwards to novadeck-powerd on the system bus (deck is in the
+# `wheel` group the org.novadeck.Power policy allows). The system-bus unit stays for parity/probes.
+After=graphical-session.target
+
+[Service]
+Type=dbus
+BusName=com.steampowered.SteamOSManager1
+ExecStart=/usr/bin/novadeck-steamos-manager
+Restart=on-failure
+RestartSec=1
+
+[Install]
+WantedBy=default.target

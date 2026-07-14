@@ -97,7 +97,10 @@ DEST="$ROOT/work/base"
 # python: the interpreter behind our shipped #!/usr/bin/env python3 tools — proton-wrapper (per-game
 # FEX tuning, on every Windows-game launch) and proton-unlock (registers user-downloaded arm64 Proton).
 # It arrives transitively today, but a launch failing at the shebang would be silent, so declare it.
-PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-tools mesa gamescope seatd sddm mangohud fex-emu bluez bluez-utils networkmanager alsa-ucm-conf pipewire wireplumber pipewire-pulse pipewire-alsa unzip openal gtk2 ffmpeg e2fsprogs xorg-xwayland lsof noto-fonts noto-fonts-cjk noto-fonts-emoji python)
+# python-gobject: PyGObject (the `gi` bindings) for novadeck-powerd + novadeck-steamos-manager, the
+# GLib/Gio D-Bus daemons behind SteamUI's Performance/GPU sliders and the fan curve. Without it both
+# services fail on import at boot.
+PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-tools mesa gamescope seatd sddm mangohud fex-emu bluez bluez-utils networkmanager alsa-ucm-conf pipewire wireplumber pipewire-pulse pipewire-alsa unzip openal gtk2 ffmpeg e2fsprogs xorg-xwayland lsof noto-fonts noto-fonts-cjk noto-fonts-emoji python python-gobject)
 
 # Test-only packages — installed ONLY under NOVADECK_TEST=1, NEVER in a release base.
 # On-device bring-up tools: evtest reads raw /dev/input events; usbutils provides lsusb.

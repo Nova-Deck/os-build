@@ -1,0 +1,16 @@
+[Unit]
+Description=novadeck power policy daemon (performance profiles, GPU level, fan curve)
+StartLimitIntervalSec=0
+
+[Service]
+Type=dbus
+BusName=org.novadeck.Power
+NotifyAccess=main
+ExecStart=/usr/bin/novadeck-powerd
+ExecStopPost=/usr/bin/novadeck-powerd --fan-safe
+Restart=always
+RestartSec=1
+WatchdogSec=15
+
+[Install]
+WantedBy=multi-user.target

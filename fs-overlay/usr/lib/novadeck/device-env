@@ -1,0 +1,62 @@
+#!/bin/bash
+# novadeck device-env — emit NOVADECK_* per-board facts for userspace consumers.
+#
+# Single runtime source of truth for the unified image: resolves the devicetree
+# model string to a profile conf layered over defaults.conf, then prints a fixed
+# set of NOVADECK_* assignments (shell-quoted) on stdout. Consumers eval it:
+#     eval "$(/usr/lib/novadeck/device-env)"
+#
+# novadeck-powerd reads NOVADECK_SOC_CLASS (underclock-table key); novadeck-session
+# reads the panel/output block. Hardware truth still lives in the DTS — this only
+# re-exports the subset userspace needs plus knobs with no DTS home (fake-output-mm,
+# suspend mode). Panel orientation, rotation-shader and gamepad-quirk are
+# deliberately NOT carried: novadeck uses upstream composite rotation (auto-engaged
+# off the connector) and a fixed InputPlumber config.
+set -euo pipefail
+
+device_dir=${NOVADECK_DEVICE_DIR:-/usr/lib/novadeck/devices}
+
+source "$device_dir/defaults.conf"
+
+model=${NOVADECK_MODEL:-}
+if [[ -z "$model" ]]; then
+    model=$(tr -d '\0' </sys/firmware/devicetree/base/model 2>/dev/null || true)
+fi
+case "$model" in
+    "AYANEO Pocket ACE")         profile=ayaneo-pocket-ace ;;
+    "AYANEO Pocket DMG")         profile=ayaneo-pocket-dmg ;;
+    "AYANEO Pocket DS")          profile=ayaneo-pocket-ds ;;
+    "AYANEO Pocket EVO")         profile=ayaneo-pocket-evo ;;
+    "AYANEO Pocket S 1K")        profile=ayaneo-pocket-s1k ;;
+    "AYANEO Pocket S 2K")        profile=ayaneo-pocket-s2k ;;
+    "AYANEO Pocket S2")          profile=ayaneo-pocket-s2 ;;
+    "AYN Odin 2")                profile=ayn-odin-2 ;;
+    "AYN Odin 2 Mini")           profile=ayn-odin-2-mini ;;
+    "AYN Odin 2 Portal")         profile=ayn-odin-2-portal ;;
+    "AYN Thor")                  profile=ayn-thor ;;
+    "KONKR Pocket FIT")          profile=konkr-pocket-fit ;;
+    "Retroid Pocket 6")          profile=retroid-pocket-6 ;;
+    "Retroid Pocket 6 TOP-DPAD") profile=retroid-pocket-6 ;;
+    *)                           profile= ;;
+esac
+
+if [[ -n "$profile" && -r "$device_dir/$profile.conf" ]]; then
+    source "$device_dir/$profile.conf"
+fi
+
+vars=(
+    NOVADECK_DEVICE_ID
+    NOVADECK_DEVICE_NAME
+    NOVADECK_SOC_CLASS
+    NOVADECK_SUSPEND_MODE
+    NOVADECK_PRIMARY_CONNECTOR
+    NOVADECK_PANEL_TYPE
+    NOVADECK_PANEL_NATIVE_WIDTH
+    NOVADECK_PANEL_NATIVE_HEIGHT
+    NOVADECK_PANEL_REFRESH_RATES
+    NOVADECK_GAMESCOPE_FAKE_OUTPUT_MM
+)
+
+for var in "${vars[@]}"; do
+    printf '%s=%q\n' "$var" "${!var:-}"
+done

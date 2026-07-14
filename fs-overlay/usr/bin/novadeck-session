@@ -6,46 +6,52 @@
 # exact seat + rotation path the Phase-2 smoke validated on HW (docs/bringup-phase2.md).
 set -eu
 
+# Per-board facts (SoC, panel, output-mm) from the device-env registry — the SAME source
+# novadeck-powerd / novadeck-steamos-manager read, resolved from the devicetree model. Sourced BEFORE
+# session.conf so session.conf stays the top override layer. Best-effort: an absent/failing helper
+# falls through to device-env's own defaults (or leaves the vars unset), never aborts the session.
+DEV_ENV=/usr/lib/novadeck/device-env
+if [ -x "$DEV_ENV" ]; then eval "$("$DEV_ENV" 2>/dev/null)" || true; fi
+
 CONF=/etc/novadeck/session.conf
 [ -r "$CONF" ] && . "$CONF"
 : "${NOVADECK_SESSION_CMD:=novadeck-steam}"
 : "${NOVADECK_GAMESCOPE_EXTRA:=}"
 
-# --- Internal panel selection -> landscape LOGICAL output (--prefer-output/-W/-H/-r) -------------
-# The composite-rotation patch keeps gamescope's LOGICAL output in landscape (g_nOutputWidth/Height
-# unswapped) and rotates only the final scanout store, so the LOGICAL canvas (-W/-H) the client fills
-# must be the panel's PORTRAIT native mode swapped to LANDSCAPE. Omit it and gamescope adopts the
-# portrait connector mode as the logical size, covering only a min(W,H) square of the panel.
-#
-# Some devices wire two panels on DSI: pick the LARGEST connected one (by native area) and pin it
-# with --prefer-output so gamescope scans out that connector even when more than one is present. We
-# read all of this at runtime from sysfs; session.conf may override any of it, and we fall back to a
-# generic landscape default if detection finds nothing. (sysfs exposes the mode resolution but not
-# its refresh, so -r stays a configurable default; gamescope clamps it to the nearest supported rate.)
-detect_panel() {
-  best_area=0
-  for modes in /sys/class/drm/card*-DSI-*/modes; do
-    [ -r "$modes" ] || continue
-    dir=${modes%/modes}
-    [ "$(cat "$dir/status" 2>/dev/null)" = connected ] || continue
-    native=$(head -n1 "$modes" 2>/dev/null)   # preferred (native) mode, e.g. WIDTHxHEIGHT
-    case "$native" in [0-9]*x[0-9]*) ;; *) continue ;; esac
-    pw=${native%x*}; ph=${native#*x}
-    area=$(( pw * ph ))
-    [ "$area" -gt "$best_area" ] || continue
-    best_area=$area
-    NOVADECK_GAMESCOPE_W=$ph                   # swap portrait WxH -> landscape HxW
-    NOVADECK_GAMESCOPE_H=$pw
-    conn=${dir##*/}                            # card0-DSI-1
-    NOVADECK_GAMESCOPE_OUTPUT=${conn#card*-}   # -> DSI-1
-  done
-  [ "$best_area" -gt 0 ]
-}
+# --- Internal panel -> landscape LOGICAL output (--prefer-output / -W / -H / -r) ------------------
+# All from the device-env registry now (replaces the old runtime sysfs auto-detect). The
+# composite-rotation patch keeps gamescope's LOGICAL output in landscape (g_nOutputWidth/Height
+# unswapped) and rotates only the final scanout store, so the logical canvas (-W/-H) the client fills
+# must be the panel's PORTRAIT native mode SWAPPED to landscape: W <- native height, H <- native width.
+# session.conf may override any of these (it is sourced after device-env). Multi-panel boards are a
+# conf decision (PRIMARY_CONNECTOR + that panel's native dims), not a runtime largest-area pick. A
+# board with no declared dims (unknown model, or a conf not yet filled — e.g. Pocket S1K) falls back
+# to a generic landscape 1920x1080.
 if [ -z "${NOVADECK_GAMESCOPE_W:-}" ] || [ -z "${NOVADECK_GAMESCOPE_H:-}" ]; then
-  detect_panel || { NOVADECK_GAMESCOPE_W=1920; NOVADECK_GAMESCOPE_H=1080; }
+  if [ -n "${NOVADECK_PANEL_NATIVE_WIDTH:-}" ] && [ -n "${NOVADECK_PANEL_NATIVE_HEIGHT:-}" ]; then
+    NOVADECK_GAMESCOPE_W=$NOVADECK_PANEL_NATIVE_HEIGHT   # swap portrait native -> landscape logical
+    NOVADECK_GAMESCOPE_H=$NOVADECK_PANEL_NATIVE_WIDTH
+  else
+    NOVADECK_GAMESCOPE_W=1920; NOVADECK_GAMESCOPE_H=1080
+  fi
 fi
-: "${NOVADECK_GAMESCOPE_OUTPUT:=}"
-: "${NOVADECK_GAMESCOPE_REFRESH:=60}"
+# Pin the panel's DRM connector (device-env NOVADECK_PRIMARY_CONNECTOR, e.g. DSI-1).
+: "${NOVADECK_GAMESCOPE_OUTPUT:=${NOVADECK_PRIMARY_CONNECTOR:-}}"
+# -r default = the panel's FIRST declared refresh rate (comma-separated list, e.g. "60,120");
+# gamescope clamps to the nearest supported. Falls back to 60.
+if [ -z "${NOVADECK_GAMESCOPE_REFRESH:-}" ]; then
+  _rr=${NOVADECK_PANEL_REFRESH_RATES:-}
+  NOVADECK_GAMESCOPE_REFRESH=${_rr%%,*}
+  : "${NOVADECK_GAMESCOPE_REFRESH:=60}"
+fi
+
+# Physical output size for gamescope's DPI/scale, from device-env (e.g. "177x100"); exported only
+# when the board declares one. NOTE: consumed by a gamescope fake-output-mm patch we have NOT pulled
+# yet — inert until then, but wired now so the value flows once the patch lands. Candidate lever for
+# the SteamUI-scale TODO.
+if [ -n "${NOVADECK_GAMESCOPE_FAKE_OUTPUT_MM:-}" ]; then
+  export GAMESCOPE_FAKE_OUTPUT_MM="$NOVADECK_GAMESCOPE_FAKE_OUTPUT_MM"
+fi
 
 # Force the real DRM/KMS backend: a stray WAYLAND_DISPLAY/DISPLAY makes gamescope try to nest under
 # a (non-existent) parent compositor and fail with "Failed to connect to wayland socket".

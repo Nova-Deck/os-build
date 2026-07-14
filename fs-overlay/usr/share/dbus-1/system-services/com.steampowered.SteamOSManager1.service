@@ -1,0 +1,5 @@
+[D-BUS Service]
+Name=com.steampowered.SteamOSManager1
+Exec=/bin/false
+User=root
+SystemdService=novadeck-steamos-manager.service

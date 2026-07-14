@@ -1,0 +1,5 @@
+# novadeck: enable the SteamOS-Manager compatibility backend on release — SteamUI's Performance/GPU
+# sliders (and future Desktop/Game switching) call com.steampowered.SteamOSManager1 through it, and it
+# forwards to novadeck-powerd. Same first-boot preset-all rationale as 60-novadeck-powerd. It is also
+# D-Bus activatable via the system-service file; enabling it just starts it eagerly at boot.
+enable novadeck-steamos-manager.service

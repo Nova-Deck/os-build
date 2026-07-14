@@ -5,6 +5,23 @@ rationale lives in the linked memories and commit history.
 
 ## Open
 
+- [x] **Power profiles + device-env stack — LANDED + HW-VALIDATED 2026-07-14 (Pocket S2)** — SteamUI's
+  Performance profiles / GPU / fan controls work end-to-end. Three pieces (ported from the reference
+  handheld distro's Python daemons; refs stripped from shipped source): `fs-overlay/usr/lib/novadeck/
+  device-env` (per-board registry resolving `/proc/device-tree/model` → `devices/<board>.conf` over
+  `defaults.conf`, emitting 10 `NOVADECK_*` vars); `novadeck-powerd` (system bus `org.novadeck.Power`,
+  root — eco/balanced/performance + GPU auto/manual + fan curve, reads `power-profiles.conf`);
+  `novadeck-steamos-manager` (owns `com.steampowered.SteamOSManager1`, forwards `PerformanceProfile1` /
+  `GpuPerformanceLevel1` to powerd). HW-confirmed: all three profiles apply live (SM8650 policy0/2/5/7
+  caps + `3d00000.gpu` clamps), and the fan handoff (`novadeck-suspend` → powerd `Suspend`/`Resume`)
+  stops/restarts the fan on sleep/wake — **closes the fan half of the suspend-polish item below**
+  (`bl_power` panel-blank fallback still open). `novadeck-session` now reads panel/output from device-env
+  (dropped `detect_panel()`). **KEY GOTCHA:** the Steam client reads the manager on the deck **SESSION
+  bus**, not the system bus — a system-only instance leaves QAM controls empty (`daemon not present`); we
+  ship BOTH system + user units. Needs `python-gobject` in PKGS. `SessionManagement1` (desktop/game
+  switch) stubbed until a session-control helper exists. See [[power-profiles-device-env-stack]],
+  [[steam-ui-scale-panel-mm]].
+
 - [ ] **Pocket DS: SY7758 backlight has no `enable-gpios` → panel will defer (no display)** — the
   upstream `silergy,sy7758` driver requires `enable-gpios` to bind (root cause of the Pocket ACE blue
   screen, fixed 2026-07-13 for ace/s2k/s1k with `enable-gpios = <&tlmm 41 GPIO_ACTIVE_HIGH>`). The
@@ -169,7 +186,9 @@ rationale lives in the linked memories and commit history.
   map, the QuickAccess2 button reaches Steam, and Steam Input shows Xbox glyphs. See
   [[sm8650-inputplumber-input]].
 
-- [ ] **Find the new SteamUI scale lever — panel mm is now IGNORED (2026-07-11)** — a Steam client
+- [x] **SteamUI scale lever — RESOLVED 2026-07-14 via gamescope `GAMESCOPE_FAKE_OUTPUT_MM`** (patch
+  `0003-drmbackend-fake-output-mm.patch`, exported by `novadeck-session` from device-env); was
+  panel-mm-IGNORED since 2026-07-11. Original investigation retained below. — a Steam client
   update **stopped honoring the panel's physical mm** for gamepad-UI auto-scale (it does NOT "fix" scale,
   it ignores the dimension). Symptom: the UI now renders **too small** on the Pocket S2, and reverting
   `kernel/patches/0062` (wt0630) from the old +20% fudge (94×168) to the panel's **real 79×140 mm** built,
@@ -257,20 +276,21 @@ rationale lives in the linked memories and commit history.
   if a path appears). See [[suspend-freeze-wake-design]], [[waked-holdtime-background-dispatch]],
   [[brightness-volume-keys-resolved]].
 
-- [ ] **Suspend polish: stop the fan + robust panel blank** — follow-ups from the 2026-07-05 HW pass,
-  both cosmetic (freeze/wake itself is solid):
-  - **Fan keeps spinning during fake-suspend.** There IS a controllable fan (`pwmfan` at
-    `/sys/class/hwmon/hwmon42/pwm1`); `power_enter`/`power_leave` don't touch it. Add a reversible
-    fan-off op to `power-ops.sh` (save `pwm1` + `pwm1_enable`, set 0 on enter, restore on leave — same
-    state-record pattern as the cpu/rfkill/governor ops), gated by a `NOVADECK_SUSPEND_SKIP`-style key.
-    Groundwork for later fan-curve work (steamos-manager `PerformanceProfile1`).
+- [ ] **Suspend polish: robust panel blank** (fan-off DONE) — follow-up from the 2026-07-05 HW pass,
+  cosmetic (freeze/wake itself is solid):
+  - [x] **Fan keeps spinning during fake-suspend — DONE + HW-validated 2026-07-14.** Superseded the
+    planned `power-ops.sh` fan-off op: `novadeck-powerd` now OWNS the fan, and `novadeck-suspend` calls
+    its `Suspend()`/`Resume()` (busctl) around the freeze — powerd is in system.slice so it answers while
+    user.slice is frozen. HW-confirmed: fan stops on sleep, restarts on wake. Skippable via
+    `NOVADECK_SUSPEND_SKIP="powerd"`. See [[power-profiles-device-env-stack]].
   - **Our `gamescopectl` panel-blank path logs "unreachable"** when `novadeck-suspend` runs as
     `systemd-suspend.service` (root, system.slice) — it can't resolve the live gamescope socket. Harmless
     today because Steam blanks the panel itself as part of its sleep flow, but add a `bl_power` fallback
     (`echo 4 > /sys/class/backlight/*/bl_power` on suspend, `0` on resume) so a blank still happens if
     Steam's own blank ever regresses. See [[sm8650-gamescope-flip-blocker]].
 
-- [ ] **Provide `com.steampowered.SteamOSManager1` (steamos-manager) — SteamUI's privileged backend**
+- [x] **Provide `com.steampowered.SteamOSManager1` (steamos-manager) — DONE 2026-07-14** (see the LANDED
+  power-profiles stack entry at the top of Open). SteamUI's privileged backend
   — SteamUI calls this D-Bus name for system actions it can't do as the unprivileged `deck` user;
   when it's absent those controls silently no-op (the shape of our "SteamUI setting is inert" class).
   Adopt the **reference-handheld pattern, NOT the upstream binary**: the upstream Rust project

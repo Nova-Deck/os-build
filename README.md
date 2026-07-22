@@ -31,7 +31,7 @@ Lead bring-up target: **SM8650** (Adreno 750). Two hard go/no-go gates:
 | `steam-seed/` | Native arm64 Steam client SEED fetcher + pin (build machinery; pre-seeded into `/home`, not rootfs content) |
 | `boot/` | Pluggable boot stage (android-bootimg / edk2-UEFI backends) |
 | `ci/` | GitHub Actions matrix builds + cosign signing |
-| `docs/` | Design notes + phase bring-up notes ([`docs/bringup.md`](docs/bringup.md), [`docs/base-pin.md`](docs/base-pin.md), [`docs/windows-games-fex.md`](docs/windows-games-fex.md)) |
+| `docs/` | Design notes, architecture review, and phase bring-up notes ([`docs/architecture-review.md`](docs/architecture-review.md), [`docs/bringup.md`](docs/bringup.md), [`docs/base-pin.md`](docs/base-pin.md), [`docs/windows-games-fex.md`](docs/windows-games-fex.md)) |
 | `build/` | `Dockerfile` for the `novadeck-build` cross-compile image used by every container stage |
 | `Makefile` | Master build orchestrator — wires every stage into one incremental graph |
 

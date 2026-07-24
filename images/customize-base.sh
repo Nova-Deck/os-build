@@ -100,7 +100,13 @@ DEST="$ROOT/work/base"
 # python-gobject: PyGObject (the `gi` bindings) for novadeck-powerd + novadeck-steamos-manager, the
 # GLib/Gio D-Bus daemons behind SteamUI's Performance/GPU sliders and the fan curve. Without it both
 # services fail on import at boot.
-PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-tools mesa gamescope seatd sddm mangohud fex-emu bluez bluez-utils networkmanager alsa-ucm-conf pipewire wireplumber pipewire-pulse pipewire-alsa unzip openal gtk2 ffmpeg e2fsprogs xorg-xwayland lsof noto-fonts noto-fonts-cjk noto-fonts-emoji python python-gobject)
+# scx-scheds: the sched_ext userspace schedulers (scx_lavd, scx_bpfland, scx_rusty). scx_lavd is the
+# gaming-oriented one — latency-critical tasks get priority, which is the point on a handheld. Needs
+# the kernel half (CONFIG_SCHED_CLASS_EXT + BTF, kernel/kernel.config). NOT in the holo repos, so it
+# is built from source into the [novadeck] overlay (packages/scx-scheds) and resolves here. Installing
+# it only PLACES the binaries + scx.service; nothing selects a scheduler yet, so the kernel keeps
+# running EEVDF until something enables the unit or launches a scheduler by hand.
+PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-tools mesa gamescope seatd sddm mangohud fex-emu bluez bluez-utils networkmanager alsa-ucm-conf pipewire wireplumber pipewire-pulse pipewire-alsa unzip openal gtk2 ffmpeg e2fsprogs xorg-xwayland lsof noto-fonts noto-fonts-cjk noto-fonts-emoji python python-gobject scx-scheds)
 
 # Test-only packages — installed ONLY under NOVADECK_TEST=1, NEVER in a release base.
 # On-device bring-up tools: evtest reads raw /dev/input events; usbutils provides lsusb.

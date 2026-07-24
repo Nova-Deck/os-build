@@ -9,7 +9,18 @@
 # offline), and once the seed tracks the exact live build, Steam no longer self-updates to complete a
 # partial tree. Shipping a genuinely-installed tree (real `.installed`) is what removes that dependency.
 #
-# channel:     Steam client channel (arm64 publicbeta line — NOT the x86 default).
-# runtime_url: the arm64 steamrt3 runtime tarball the native client links against.
+# Neither the client build nor the runtime snapshot is pinned to a fixed version here: both channels
+# are live rolling pointers, and every run resolves whatever Valve publishes NOW. The fetcher resolves
+# runtime_channel to a CONCRETE snapshot id (a `<channel>.txt` GET) instead of downloading through the
+# floating alias directory, so the exact runtime that got baked is logged and — critically — compared
+# against the staged tree on the next run. Without that, a runtime bump that lands WITHOUT a client
+# build bump would slip past the restage check and leave a stale runtime in the seed forever.
+# Override the resolution with STEAM_RUNTIME_SNAPSHOT=<id> to pin one build reproducibly.
+#
+# channel:         Steam client channel (arm64 publicbeta line — NOT the x86 default).
+# runtime_base:    steamrt3 image root; `<base>/<snapshot>/steam-runtime-steamrt-arm64.tar.xz` is the
+#                  arm64 runtime tarball the native client links against.
+# runtime_channel: rolling pointer under runtime_base; `<base>/<channel>.txt` holds the snapshot id.
 channel: steamdeck_publicbeta
-runtime_url: https://repo.steampowered.com/steamrt3c/images/latest-public-beta/steam-runtime-steamrt-arm64.tar.xz
+runtime_base: https://repo.steampowered.com/steamrt3c/images
+runtime_channel: latest-public-beta

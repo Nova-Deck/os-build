@@ -13,12 +13,14 @@
 # fetcher started staging the EXACT live build, Steam saw itself as current and stopped self-updating —
 # leaving the incomplete offline tree unhealed and no `.installed` present (a seed with no `.installed`
 # re-installs on first boot). Running Steam here produces a genuinely COMPLETE, already-installed tree +
-# a real `.installed`, so first boot needs zero self-heal and zero network. (Armada does the same, but
-# on native aarch64; we drive it under qemu, like packages/build-overlay.sh.)
+# a real `.installed`, so first boot needs zero self-heal and zero network. Steam's updater is x86-free
+# but aarch64-only, so we drive it under qemu, like packages/build-overlay.sh — the build host needn't
+# be arm64.
 #
-# Version-aware: re-running resolves the live publicbeta build (a cheap ~12KB manifest GET) and is a
-# no-op only while the staged seed is complete (has `.installed`) and matches it; a bumped build (or an
-# incomplete seed) triggers a full restage. Delete work/steam-seed to force a refetch. The HOME-relative
+# Version-aware: re-running resolves the live publicbeta build (a cheap ~12KB manifest GET) AND the live
+# runtime snapshot (a one-line GET), and is a no-op only while the staged seed is complete (has
+# `.installed`) and matches BOTH; a bump in either (or an incomplete seed) triggers a full restage.
+# Delete work/steam-seed to force a refetch. The HOME-relative
 # ~/.steam compat symlinks are NOT staged here — make-sdcard.sh creates them against /home/deck.
 #
 #   steam-seed/fetch-steam-seed.sh
@@ -50,8 +52,9 @@ case "$DEVEL_REF" in
   *) log "refusing unpinned base-devel ref (need ...@sha256:<digest>): '$DEVEL_REF'"; exit 1 ;;
 esac
 
-CHANNEL="$(pin_field channel)";       : "${CHANNEL:?$PIN: missing channel}"
-RUNTIME_URL="$(pin_field runtime_url)"; : "${RUNTIME_URL:?$PIN: missing runtime_url}"
+CHANNEL="$(pin_field channel)";                 : "${CHANNEL:?$PIN: missing channel}"
+RUNTIME_BASE="$(pin_field runtime_base)";       : "${RUNTIME_BASE:?$PIN: missing runtime_base}"
+RUNTIME_CHANNEL="$(pin_field runtime_channel)"; : "${RUNTIME_CHANNEL:?$PIN: missing runtime_channel}"
 MANIFEST_NAME="steam_client_${CHANNEL}_linuxarm64"
 MANIFEST_URL="${CDN}/${MANIFEST_NAME}"
 STAGED_MANIFEST="$SEED_DIR/package/${MANIFEST_NAME}.manifest"
@@ -61,34 +64,61 @@ INSTALLED="$SEED_DIR/package/${MANIFEST_NAME}.installed"
 # || true so an absent field yields "" (checked below) instead of tripping set -e / pipefail.
 manifest_version() { grep -aoE '"version"[[:space:]]*"[0-9]+"' "$1" | grep -oE '[0-9]+' | head -1 || true; }
 
+# Runtime snapshot ACTUALLY staged, read back off the extracted tree (the tarball unpacks into a
+# `steamrt<suite>_platform_<snapshot>/` dir) rather than a stamp file we write — the tree cannot
+# desync from itself, and pre-existing seeds are recognised without a gratuitous multi-GB refetch.
+# Empty in -> empty out; never fails, so `set -e` can't trip on the assignment.
+staged_runtime_snapshot() {
+  local d=""
+  d="$(find "$SEED_DIR/steam-runtime-steamrt-arm64" -maxdepth 1 -type d -name '*_platform_*' \
+       2>/dev/null | sort | tail -1)" || true
+  printf '%s' "${d##*_platform_}"
+}
+
 # Temp files (single EXIT trap for all — a second trap would replace, not add to, the first).
 LIVE_MANIFEST="$(mktemp)"; boot_zip="$(mktemp)"; rt_tar="$(mktemp)"
 trap 'rm -f "$LIVE_MANIFEST" "$boot_zip" "$rt_tar"' EXIT
 
-# We DON'T pin a build: the channel is a live rolling pointer, so every run resolves the CURRENT
-# publicbeta manifest and installs whatever Valve publishes now. To stay AWARE of silent bumps rather
-# than updating blindly, compare the live build id against the one in the staged manifest and restage
-# only when they differ (or the seed is incomplete). This manifest GET is the only network touch on the
-# skip path; the client tree is downloaded solely when we actually restage.
+# We DON'T pin a build: BOTH channels are live rolling pointers, so every run resolves the CURRENT
+# publicbeta manifest + runtime snapshot and installs whatever Valve publishes now. To stay AWARE of
+# silent bumps rather than updating blindly, compare each live id against what is actually staged and
+# restage only when one differs (or the seed is incomplete). These two small GETs are the only network
+# touches on the skip path; the client tree is downloaded solely when we actually restage.
 log "resolving live ${CHANNEL} client build"
 curl -fsSL -o "$LIVE_MANIFEST" "$MANIFEST_URL"
 LIVE_VERSION="$(manifest_version "$LIVE_MANIFEST")"; : "${LIVE_VERSION:?could not read build id from live manifest}"
 STAGED_VERSION=""; [ -f "$STAGED_MANIFEST" ] && STAGED_VERSION="$(manifest_version "$STAGED_MANIFEST")"
 
+# Resolve the runtime channel to a CONCRETE snapshot id and fetch THAT, not the floating alias dir:
+# the alias hides which build we baked, and (worse) a runtime bump with no client bump would sail
+# through the check below unnoticed. STEAM_RUNTIME_SNAPSHOT=<id> pins one build reproducibly.
+if [ -n "${STEAM_RUNTIME_SNAPSHOT:-}" ]; then
+  LIVE_SNAPSHOT="$STEAM_RUNTIME_SNAPSHOT"
+  log "runtime snapshot pinned via STEAM_RUNTIME_SNAPSHOT: ${LIVE_SNAPSHOT}"
+else
+  log "resolving live ${RUNTIME_CHANNEL} runtime snapshot"
+  LIVE_SNAPSHOT="$(curl -fsSL "${RUNTIME_BASE}/${RUNTIME_CHANNEL}.txt" | tr -d '[:space:]')"
+  : "${LIVE_SNAPSHOT:?could not resolve ${RUNTIME_CHANNEL} to a runtime snapshot}"
+fi
+RUNTIME_URL="${RUNTIME_BASE}/${LIVE_SNAPSHOT}/steam-runtime-steamrt-arm64.tar.xz"
+STAGED_SNAPSHOT="$(staged_runtime_snapshot)"
+
 # A seed is COMPLETE only if Steam actually finished a self-install: `.installed` present (else it would
 # re-install on first boot) AND steamui.so present (the UI the whole GamepadUI shell renders from). Skip
-# only when that holds AND the installed build matches live.
-if [ "$STAGED_VERSION" = "$LIVE_VERSION" ] \
+# only when that holds AND both the installed client build and the staged runtime snapshot match live.
+if [ "$STAGED_VERSION" = "$LIVE_VERSION" ] && [ "$STAGED_SNAPSHOT" = "$LIVE_SNAPSHOT" ] \
    && [ -f "$INSTALLED" ] && [ -f "$SEED_DIR/steamrtarm64/steamui.so" ] \
    && [ -x "$SEED_DIR/steamrtarm64/steam" ]; then
-  log "seed complete + in sync at Steam build ${LIVE_VERSION} — nothing to do (rm -rf work/steam-seed to refetch)"
+  log "seed complete + in sync at Steam build ${LIVE_VERSION}, runtime ${LIVE_SNAPSHOT} — nothing to do (rm -rf work/steam-seed to refetch)"
   exit 0
 fi
 
 if [ -n "$STAGED_VERSION" ] && [ "$STAGED_VERSION" != "$LIVE_VERSION" ]; then
   log "Steam build bumped: staged ${STAGED_VERSION} -> live ${LIVE_VERSION}; restaging"
+elif [ -n "$STAGED_SNAPSHOT" ] && [ "$STAGED_SNAPSHOT" != "$LIVE_SNAPSHOT" ]; then
+  log "runtime snapshot bumped: staged ${STAGED_SNAPSHOT} -> live ${LIVE_SNAPSHOT}; restaging"
 else
-  log "staging native arm64 Steam seed into ${SEED_DIR#"$ROOT"/} (channel ${CHANNEL}, build ${LIVE_VERSION})"
+  log "staging native arm64 Steam seed into ${SEED_DIR#"$ROOT"/} (channel ${CHANNEL}, build ${LIVE_VERSION}, runtime ${LIVE_SNAPSHOT})"
 fi
 rm -rf "$SEED_DIR"
 mkdir -p "$SEED_DIR/package"
@@ -128,7 +158,7 @@ done < <(find "$SEED_DIR/steamrtarm64" -maxdepth 1 -type f -print0)
 
 # 2. arm64 SR3 runtime (steamrt3 aarch64): the libs the native client links against. NOT part of the
 #    client manifest (a separate repo.steampowered.com tarball), so we fetch it ourselves.
-log "fetching arm64 steam runtime"
+log "fetching arm64 steam runtime snapshot ${LIVE_SNAPSHOT}"
 curl -fsSL -o "$rt_tar" "$RUNTIME_URL"
 tar -xJf "$rt_tar" -C "$SEED_DIR"
 
@@ -228,4 +258,4 @@ docker run --rm --platform linux/arm64 \
 [ -f "$INSTALLED" ] || { log "ERROR: no ${MANIFEST_NAME}.installed after self-install"; exit 1; }
 [ -f "$SEED_DIR/steamrtarm64/steamui.so" ] || { log "ERROR: steamui.so missing after self-install"; exit 1; }
 
-log "done — complete seed staged ($(du -sh "$SEED_DIR" | cut -f1)); make-sdcard bakes it into /home"
+log "done — complete seed staged ($(du -sh "$SEED_DIR" | cut -f1)); Steam build ${LIVE_VERSION}, runtime ${LIVE_SNAPSHOT}; make-sdcard bakes it into /home"

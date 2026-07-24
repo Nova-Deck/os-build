@@ -93,6 +93,50 @@ prepare() {
 build() {
   cd "scx-$pkgver"
   export CARGO_TARGET_DIR=target
+
+  # Give the `disable_rustfmt` sentinel a real binary, or nothing here builds under emulation.
+  #
+  # scx_cargo tells libbpf-cargo to leave the generated skeletons unformatted by pointing its
+  # .rustfmt() at a command that deliberately does not exist ("disable_rustfmt", three call
+  # sites in rust/scx_cargo/src/bpf_builder.rs). libbpf-cargo spawns it, gets
+  # ErrorKind::NotFound, and returns the generated code untouched. That contract holds on a
+  # native host and breaks under x86 user-mode qemu: for a bare PATH-searched name,
+  # Command::spawn() there returns Ok even when nothing is found, the child immediately exits
+  # 127, and libbpf-cargo's write to its stdin hits EPIPE. That — not bpftool — is the
+  # `Failed to generate skeleton ... Broken pipe (os error 32)` that killed every BPF build
+  # script here; libbpf-cargo 0.26 generates skeletons in-process and never spawns bpftool.
+  #
+  # Measured in the pinned base-devel image under emulation:
+  #   spawn("disable_rustfmt") -> Ok, child exit 127, write_all -> BrokenPipe
+  # So supply a `disable_rustfmt` that IS spawnable and is an identity filter: copying stdin to
+  # stdout is exactly the "content left untouched" upstream asks for, so the skeletons come out
+  # byte-identical to a native build. Preferred over patching the three .rustfmt() call sites
+  # because it touches no upstream source and so survives a version bump unchanged. If upstream
+  # ever renames the sentinel the shim stops matching and the build fails loudly, as before.
+  #
+  # The shim MUST buffer the whole input before answering — a streaming `exec cat` deadlocks.
+  # libbpf-cargo write_all()s the entire skeleton into the child's stdin and only reads its
+  # stdout afterwards, in wait_with_output(). A filter that echoes as it reads therefore fills
+  # its stdout pipe with nobody draining it, blocks, stops draining stdin, and both sides wedge
+  # forever. That is not theoretical: `exec cat` got scx_arena/scx_bpfland/scx_rusty through
+  # (their skeletons are 119-146K, small enough to sit in the pipe buffers plus cat's own) and
+  # then hung scx_lavd for over an hour with the shim parked in anon_pipe_write — lavd links
+  # ~20 .bpf.o into one 22M object, so its skeleton dwarfs the others. Spooling to a temp file
+  # bounds the exchange: stdin is drained to EOF first, which lets write_all() return, and only
+  # then does the parent read a stdout nobody is still writing to.
+  mkdir -p "$srcdir/qemu-shim"
+  cat > "$srcdir/qemu-shim/disable_rustfmt" <<'SHIM'
+#!/bin/sh
+# Identity filter that fully consumes stdin before emitting stdout (see PKGBUILD build()).
+set -e
+t="$(mktemp)"
+trap 'rm -f "$t"' EXIT
+cat > "$t"
+cat "$t"
+SHIM
+  chmod 0755 "$srcdir/qemu-shim/disable_rustfmt"
+  export PATH="$srcdir/qemu-shim:$PATH"
+
   local args=()
   local s
   for s in "${_scheds[@]}"; do args+=(-p "$s"); done

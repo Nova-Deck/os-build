@@ -1,13 +1,33 @@
-# STATUS: DOES NOT BUILD YET. Committed for the work already banked, not because it works.
-# `make overlay` fails; scx-scheds is deliberately NOT in images/customize-base.sh PKGS, because
-# listing a package the overlay repo does not contain would break `make base` outright.
+# STATUS: BUILDS. `make overlay` produces scx-scheds-1.1.2-1.1-aarch64.pkg.tar.zst carrying
+# scx_lavd + scx_bpfland + scx_rusty (aarch64 ELF), scx.service and /etc/default/scx. NOT yet
+# run on hardware — see the enable/first-contact note at the bottom before trying it.
 #
-# Where it stops — all four BPF build scripts reach skeleton generation and die:
+# scx-scheds is still deliberately NOT in images/customize-base.sh PKGS. Add it there when you
+# want it in the image; it is safe to do so now that the overlay repo actually contains it
+# (listing a package the repo lacks breaks `make base` outright, which is why it was held back).
+#
+# The skeleton-generation failure is SOLVED — root-caused, not worked around blind. Every BPF
+# build script used to die with:
 #
 #   thread 'main' panicked at scheds/rust/scx_bpfland/build.rs:12:10:
 #     failed to generate .../bpf.bpf.o
 #     0: Failed to generate skeleton for .../bpf.bpf.o
 #     1: Broken pipe (os error 32)
+#
+# bpftool was NOT the cause — an earlier note here blamed it, wrongly. libbpf-cargo 0.26
+# generates skeletons in-process and never spawns bpftool. The real cause is scx_cargo's
+# "skip formatting" sentinel colliding with a qemu bug; the fix is the `disable_rustfmt` shim
+# in the PKGBUILD's build(), which is commented in full there. Short version: scx_cargo calls
+# .rustfmt("disable_rustfmt") expecting the spawn to fail with NotFound so libbpf-cargo leaves
+# the generated code untouched, but under x86 user-mode qemu Command::spawn() returns Ok for a
+# PATH name that does not exist, the child exits 127, and the write to its stdin gets EPIPE.
+# Measured in the pinned base-devel image: spawn("disable_rustfmt") -> Ok + exit 127 +
+# BrokenPipe, spawn("cat") -> Ok and round-trips stdin. So build() puts an identity-filter
+# `disable_rustfmt` on PATH, which is exactly the no-op upstream intends.
+#
+# The general trap, worth remembering beyond this package: under emulation a Rust
+# Command::spawn() of a missing binary does not report NotFound. Any upstream code that treats
+# "spawn fails" as a feature-detection signal will take the wrong branch here.
 #
 # What is already ruled IN (do not re-litigate):
 #   - options=(!lto) is REQUIRED and CONFIRMED. Without it the build dies earlier, linking
@@ -20,15 +40,7 @@
 #   - The clang invocation itself is fine: clang 21.1.5 runs with -D__TARGET_ARCH_arm64, -mcpu=v3
 #     and the vendored arm64 vmlinux.h, and preprocesses the system headers successfully.
 #
-# Next action — diagnose the skeleton step, do not guess:
-#   `Broken pipe` means the child that libbpf-cargo pipes into, `bpftool gen skeleton`, died.
-#   Prime suspect is that an aarch64 bpftool is unreliable under x86 user-mode qemu (bpftool is
-#   syscall-exotic); the alternative is a libbpf-cargo/bpftool version mismatch. Distinguish them
-#   by running `bpftool gen skeleton` by hand on one of the emitted .bpf.o files inside the same
-#   emulated container. If emulation is the cause, this package needs a different build strategy
-#   (native aarch64 builder, or a prebuilt.pin against an upstream release binary) rather than a
-#   PKGBUILD tweak. Three prior fixes were one-liners; this one is not, so budget for real
-#   diagnosis. See also the [[scx-sched-bringup]] memory note.
+# See also the [[scx-sched-bringup]] memory note.
 #
 # scx-scheds — built FROM SOURCE via a novadeck-owned PKGBUILD (packages/scx-scheds/PKGBUILD),
 # NOT fetched from the holo monorepo: holo has no scx-scheds to fetch a PKGBUILD for (SteamOS

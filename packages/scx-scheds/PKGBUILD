@@ -1,0 +1,121 @@
+# scx-scheds — sched_ext userspace schedulers, built FROM SOURCE via a novadeck-owned PKGBUILD.
+# holo has no scx-scheds package at all, so there is no PKGBUILD to curl from the monorepo;
+# build-overlay.sh sees `pkgbuild_local` in source.pin and uses this checked-in recipe.
+#
+# sched_ext moves the scheduling policy into a BPF program loaded by a userspace binary. The
+# kernel side (CONFIG_SCHED_CLASS_EXT + the DEBUG_INFO_BTF chain it depends on) lives in
+# kernel/kernel.config; at attach time libbpf reads struct sched_ext_ops out of
+# /sys/kernel/btf/vmlinux, so a kernel built without BTF cannot run any of these.
+#
+# Which schedulers we build, and why not all of them:
+#   scx_lavd     — the point of the exercise. Latency-criticality aware, tuned for gaming
+#                  handhelds; traces futex calls to avoid lock-holder preemption.
+#   scx_bpfland  — interactive-workload fallback, in case lavd regresses on a title.
+#   scx_rusty    — general-purpose multi-domain fallback.
+# Everything else in the workspace is skipped. These three share almost all of their crate
+# graph, so the incremental cost over lavd alone is small — which is the deciding factor when
+# the whole build runs under arm64 qemu emulation. scxtop is deliberately NOT built: it drags
+# in a protobuf + TUI stack for interactive diagnostics that would meaningfully lengthen an
+# already-slow emulated build. Add it back to the -p list if it is ever wanted on-device.
+#
+# BPF objects are compiled by libbpf-cargo (clang + bpftool) against the vmlinux.h that upstream
+# vendors per-arch at scheds/vmlinux/arch/arm64/ — so the build does NOT need BTF from the host
+# kernel, only from the target kernel at runtime.
+#
+# To bump: edit pkgver + sha256sums, re-check services/scx.service and services/scx still exist
+# in the new tarball, and re-read the tarball's own kernel.config against kernel/kernel.config.
+
+pkgname=scx-scheds
+pkgver=1.1.2
+pkgrel=1
+pkgdesc="sched_ext userspace schedulers (scx_lavd and fallbacks)"
+url="https://github.com/sched-ext/scx"
+arch=(aarch64)
+license=(GPL-2.0-only)
+# LTO must stay off. holo's base-devel makepkg.conf enables it globally, and LTO over the static
+# archive libbpf-sys produces drops the libbpf symbols the build scripts need — the build dies
+# linking scx_arena's build script with `undefined symbol: bpf_linker__new` / `bpf_object__open_mem`
+# despite libbpf being installed. Arch's own scx-scheds carries the same `options=(!lto)`.
+options=(!lto)
+
+depends=(
+  bash
+  bpf           # /usr/bin/bpftool
+  glibc
+  jq
+  libbpf
+  gcc-libs      # Arch's recipe says `libgcc`, which is not a package here
+  libseccomp
+  elfutils      # libelf.so; the soname-style `libelf.so` is not an installable target here
+  protobuf
+  zlib
+  zstd
+)
+makedepends=(
+  rust          # provides cargo
+  clang
+  llvm
+  llvm-libs
+  python
+  bpf           # bpftool, used by libbpf-cargo for skeleton generation
+  libbpf
+  elfutils
+  pkgconf
+)
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('aef3c575dfceb272c7169eb4d7aa2d9c4710298a8f2facf400c3fefa9120bc46')
+
+# The schedulers to build and install. Kept in one place so the -p flags and the install loop
+# below cannot drift apart.
+_scheds=(scx_lavd scx_bpfland scx_rusty)
+
+prepare() {
+  # build-overlay.sh runs makepkg with --skipinteg (it has to, for the patch sources it injects
+  # into other packages), so the sha256sums array above is never actually checked. Assert the
+  # tarball hash ourselves — otherwise the pin is decorative and this build silently trusts
+  # whatever GitHub served.
+  echo "${sha256sums[0]}  $srcdir/$pkgname-$pkgver.tar.gz" | sha256sum -c -
+
+  cd "scx-$pkgver"
+  # build-overlay.sh injects `patch -p1 < "$srcdir/<patch>"` for each source.pin `patches:` entry
+  # right here, after the first `cd`. Keep this `cd` as the first statement in prepare().
+
+  # rust-toolchain.toml pins channel=stable and asks for rustfmt+clippy. That file is a rustup
+  # feature and the `rust` package is not rustup, so plain cargo ignores it — but drop it anyway
+  # so a future rustup-based builder cannot try to download a toolchain mid-build.
+  rm -f rust-toolchain.toml
+
+  # Pre-fetch every crate now so build() can run --frozen: fetching is the one step that needs
+  # the network, and failing here gives a clearer error than failing deep in a compile.
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd "scx-$pkgver"
+  export CARGO_TARGET_DIR=target
+  local args=()
+  local s
+  for s in "${_scheds[@]}"; do args+=(-p "$s"); done
+  cargo build --release --frozen "${args[@]}"
+}
+
+package() {
+  cd "scx-$pkgver"
+  local s
+  for s in "${_scheds[@]}"; do
+    install -Dm0755 "target/release/$s" "$pkgdir/usr/bin/$s"
+  done
+
+  install -Dm0644 services/scx.service "$pkgdir/usr/lib/systemd/system/scx.service"
+
+  # Upstream's services/scx defaults to scx_cosmos, which we do not build. Rewrite it to the
+  # scheduler we ship rather than shipping a config that names a missing binary. Left as a
+  # normal config file under /etc so it stays user-editable; SCX_FLAGS is intentionally empty.
+  sed -e 's/^SCX_SCHEDULER=.*/SCX_SCHEDULER=scx_lavd/' \
+      services/scx > "$srcdir/scx.default"
+  install -Dm0644 "$srcdir/scx.default" "$pkgdir/etc/default/scx"
+
+  install -Dm0644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
+
+# vim:set sw=2 sts=-1 et:

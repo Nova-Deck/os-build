@@ -1,0 +1,58 @@
+# STATUS: DOES NOT BUILD YET. Committed for the work already banked, not because it works.
+# `make overlay` fails; scx-scheds is deliberately NOT in images/customize-base.sh PKGS, because
+# listing a package the overlay repo does not contain would break `make base` outright.
+#
+# Where it stops — all four BPF build scripts reach skeleton generation and die:
+#
+#   thread 'main' panicked at scheds/rust/scx_bpfland/build.rs:12:10:
+#     failed to generate .../bpf.bpf.o
+#     0: Failed to generate skeleton for .../bpf.bpf.o
+#     1: Broken pipe (os error 32)
+#
+# What is already ruled IN (do not re-litigate):
+#   - options=(!lto) is REQUIRED and CONFIRMED. Without it the build dies earlier, linking
+#     scx_arena's build script with `undefined symbol: bpf_linker__new` / `bpf_object__open_mem`,
+#     because holo's base-devel makepkg.conf turns LTO on globally and LTO over libbpf-sys's
+#     static archive drops those symbols. Arch's own scx-scheds carries the same option.
+#   - Every depends/makedepends name here is verified to resolve via `pacman -Si` in the pinned
+#     base-devel image. Two names copied from other distros' recipes did NOT: `libelf.so` (use
+#     elfutils) and `libgcc` (use gcc-libs). Verify names before a build, never during one.
+#   - The clang invocation itself is fine: clang 21.1.5 runs with -D__TARGET_ARCH_arm64, -mcpu=v3
+#     and the vendored arm64 vmlinux.h, and preprocesses the system headers successfully.
+#
+# Next action — diagnose the skeleton step, do not guess:
+#   `Broken pipe` means the child that libbpf-cargo pipes into, `bpftool gen skeleton`, died.
+#   Prime suspect is that an aarch64 bpftool is unreliable under x86 user-mode qemu (bpftool is
+#   syscall-exotic); the alternative is a libbpf-cargo/bpftool version mismatch. Distinguish them
+#   by running `bpftool gen skeleton` by hand on one of the emitted .bpf.o files inside the same
+#   emulated container. If emulation is the cause, this package needs a different build strategy
+#   (native aarch64 builder, or a prebuilt.pin against an upstream release binary) rather than a
+#   PKGBUILD tweak. Three prior fixes were one-liners; this one is not, so budget for real
+#   diagnosis. See also the [[scx-sched-bringup]] memory note.
+#
+# scx-scheds — built FROM SOURCE via a novadeck-owned PKGBUILD (packages/scx-scheds/PKGBUILD),
+# NOT fetched from the holo monorepo: holo has no scx-scheds to fetch a PKGBUILD for (SteamOS
+# ships none). This is the "local PKGBUILD" form, like packages/mesa and packages/gtk2; makepkg
+# still downloads the upstream release tarball named in the PKGBUILD.
+#
+# Why: sched_ext lets the CPU scheduler be implemented as a BPF program loaded from userspace.
+# scx_lavd is the gaming-oriented one (latency-criticality aware, and it traces futex calls to
+# avoid lock-holder preemption). The kernel half — CONFIG_SCHED_CLASS_EXT plus the BTF chain it
+# depends on — is in kernel/kernel.config; without it the schedulers here cannot attach, since
+# libbpf resolves struct sched_ext_ops out of /sys/kernel/btf/vmlinux at load time.
+#
+# Fields:
+#   name           pkgname (must match the PKGBUILD); also the work/ build-dir + repo entry
+#   pkgbuild_local path (relative to this dir) to the checked-in PKGBUILD to build
+#   pkgrel_suffix  numeric suffix appended to the PKGBUILD's pkgrel (N -> N.<suffix>) so pacman
+#                  prefers our build on later upgrades. Integer only.
+#
+# No `patches:` — we build the upstream release unmodified.
+#
+# To bump scx: edit pkgver + sha256sums in packages/scx-scheds/PKGBUILD, and re-check that
+# services/scx.service and services/scx still exist at those paths in the new tarball (package()
+# installs both). Also re-read upstream's own kernel.config in the tarball root — it is the
+# authoritative list of required CONFIG_* symbols, and it does change between releases.
+name: scx-scheds
+pkgbuild_local: PKGBUILD
+pkgrel_suffix: 1

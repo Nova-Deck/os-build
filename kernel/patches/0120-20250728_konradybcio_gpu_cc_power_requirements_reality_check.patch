@@ -1,6 +1,6 @@
 From git@z Thu Jan  1 00:00:00 1970
-Subject: [PATCH RFC 22/24] arm64: dts: qcom: sm8550: Describe GPU_CC power
- plumbing requirements
+Subject: [PATCH RFC 19+22+23/24] arm64: dts: qcom: sm8250, sm8550, sm8650:
+ Describe GPU_CC power plumbing requirements
 From: Konrad Dybcio <konrad.dybcio@oss.qualcomm.com>
 Date: Mon, 28 Jul 2025 18:16:22 +0200
 Message-Id: <20250728-topic-gpucc_power_plumbing-v1-22-09c2480fe3e6@oss.qualcomm.com>
@@ -11,11 +11,48 @@ Content-Transfer-Encoding: 7bit
 A number of power rails must be powered on in order for GPU_CC to
 function. Ensure that's conveyed to the OS.
 
+Squash of three patches from the same RFC series, since kernel/patches/ here is
+unified across SoCs rather than split into per-SoC dirs:
+
+  19/24 sm8250  <20250728-topic-gpucc_power_plumbing-v1-19-09c2480fe3e6@oss.qualcomm.com>
+  22/24 sm8550  <20250728-topic-gpucc_power_plumbing-v1-22-09c2480fe3e6@oss.qualcomm.com>
+  23/24 sm8650  <20250728-topic-gpucc_power_plumbing-v1-23-09c2480fe3e6@oss.qualcomm.com>
+
+Series: https://lore.kernel.org/linux-arm-msm/20250728-topic-gpucc_power_plumbing-v1-0-09c2480fe3e6@oss.qualcomm.com/
+
+Each hunk is upstream-verbatim. Note sm8250 takes only CX/MX/GFX — it has no
+MXC rail in sm8250_rpmhpds[] — where sm8550/sm8650 take CX/MX/GFX/MXC.
+
+sm8250 is carried ahead of need: no SM8250 board is built from this tree yet,
+so that hunk is inert until one is added. It touches only sm8250.dtsi and so
+cannot affect the SoCs we do build.
+
+Fixes: 04a3605b184e ("arm64: dts: qcom: add sm8250 GPU nodes")
 Fixes: 9f7579423d2d ("arm64: dts: qcom: sm8550: Add graphics clock controller")
+Fixes: d2350377997f ("arm64: dts: qcom: add initial SM8650 dtsi")
 Signed-off-by: Konrad Dybcio <konrad.dybcio@oss.qualcomm.com>
 ---
+ arch/arm64/boot/dts/qcom/sm8250.dtsi | 5 +++++
  arch/arm64/boot/dts/qcom/sm8550.dtsi | 6 ++++++
- 1 file changed, 6 insertions(+)
+ arch/arm64/boot/dts/qcom/sm8650.dtsi | 5 +++++
+ 3 files changed, 16 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm8250.dtsi b/arch/arm64/boot/dts/qcom/sm8250.dtsi
+index b0197602c677d49f7833f31d71f72436499bfe84..2e600ee18b58fef6e479f9cab5c2af0324d453cb 100644
+--- a/arch/arm64/boot/dts/qcom/sm8250.dtsi
++++ b/arch/arm64/boot/dts/qcom/sm8250.dtsi
+@@ -3044,6 +3044,11 @@ gpucc: clock-controller@3d90000 {
+ 			clock-names = "bi_tcxo",
+ 				      "gcc_gpu_gpll0_clk_src",
+ 				      "gcc_gpu_gpll0_div_clk_src";
++
++			power-domains = <&rpmhpd RPMHPD_CX>,
++					<&rpmhpd RPMHPD_MX>,
++					<&rpmhpd RPMHPD_GFX>;
++
+ 			#clock-cells = <1>;
+ 			#reset-cells = <1>;
+ 			#power-domain-cells = <1>;
 
 diff --git a/arch/arm64/boot/dts/qcom/sm8550.dtsi b/arch/arm64/boot/dts/qcom/sm8550.dtsi
 index 45713d46f3c52487d2638b7ab194c111f58679ce..28eade49526dc9bb0a7b211f96dd350873489029 100644
@@ -26,6 +63,23 @@ index 45713d46f3c52487d2638b7ab194c111f58679ce..28eade49526dc9bb0a7b211f96dd3508
  				 <&gcc GCC_GPU_GPLL0_CLK_SRC>,
  				 <&gcc GCC_GPU_GPLL0_DIV_CLK_SRC>;
 +
++			power-domains = <&rpmhpd RPMHPD_CX>,
++					<&rpmhpd RPMHPD_MX>,
++					<&rpmhpd RPMHPD_GFX>,
++					<&rpmhpd RPMHPD_MXC>;
++
+ 			#clock-cells = <1>;
+ 			#reset-cells = <1>;
+ 			#power-domain-cells = <1>;
+
+diff --git a/arch/arm64/boot/dts/qcom/sm8650.dtsi b/arch/arm64/boot/dts/qcom/sm8650.dtsi
+index e14d3d778b71bbbd0c8fcc851eebc9df9ac09c31..1f1893592a3bbb14ba32c6121e9346018ffc53a3 100644
+--- a/arch/arm64/boot/dts/qcom/sm8650.dtsi
++++ b/arch/arm64/boot/dts/qcom/sm8650.dtsi
+@@ -4257,6 +4257,11 @@ gpucc: clock-controller@3d90000 {
+ 				 <&gcc GCC_GPU_GPLL0_CLK_SRC>,
+ 				 <&gcc GCC_GPU_GPLL0_DIV_CLK_SRC>;
+ 
 +			power-domains = <&rpmhpd RPMHPD_CX>,
 +					<&rpmhpd RPMHPD_MX>,
 +					<&rpmhpd RPMHPD_GFX>,

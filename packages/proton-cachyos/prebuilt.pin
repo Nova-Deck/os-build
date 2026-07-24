@@ -20,7 +20,7 @@
 # and is extracted verbatim.
 #
 # strip: 1 + dest: the archive is rooted at the versioned directory
-# (proton-cachyos-11.0-20260702-slr-arm64/), so stripping that component lands its CONTENTS
+# (proton-cachyos-11.0-20260703-slr-arm64/), so stripping that component lands its CONTENTS
 # directly in a stable, version-free directory name. NOTE the directory name is cosmetic: Steam
 # pins a game to the tool's INTERNAL name (the compat_tools key inside compatibilitytool.vdf),
 # not the directory — so assemble-rootfs.sh also rewrites that internal name to a stable id, or a
@@ -41,9 +41,9 @@
 # stay pinned to the same tool name. Re-verify the toolmanifest rewrite in assemble-rootfs.sh
 # still matches (it fails loudly if upstream changes the commandline format).
 name: proton-cachyos
-version: 11.0-20260702-slr
-url: https://github.com/CachyOS/proton-cachyos/releases/download/cachyos-11.0-20260702-slr/proton-cachyos-11.0-20260702-slr-arm64.tar.xz
-sha256: 5285c18df262984c2b89218c477216fecc9bbb3fc898aeed39a9bd1f9ff8fb1c
+version: 11.0-20260703-slr
+url: https://github.com/CachyOS/proton-cachyos/releases/download/cachyos-11.0-20260703-slr/proton-cachyos-11.0-20260703-slr-arm64.tar.xz
+sha256: 317f4b8f390fb4dea15ef9ebcf75cb4f350d01b61bff184fe29a1c4e10ce0cc5
 kind: tar
 strip: 1
 dest: /usr/share/steam/compatibilitytools.d/proton-cachyos-11.0-arm64

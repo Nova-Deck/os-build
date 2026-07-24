@@ -197,7 +197,7 @@ PROTONSHIM
 COMPAT_DIR="$stage/usr/share/steam/compatibilitytools.d"
 BAKED_PROTON=0
 
-# CachyOS. `version` file format: "<epoch> cachyos-<ver>-...", e.g. "cachyos-11.0-20260702-slr".
+# CachyOS. `version` file format: "<epoch> cachyos-<ver>-...", e.g. "cachyos-11.0-20260703-slr".
 PROTON_CACHY_TOOL="$COMPAT_DIR/proton-cachyos-11.0-arm64"   # dir == stable internal id
 if [ -d "$PROTON_CACHY_TOOL" ]; then
   [ -f "$PROTON_CACHY_TOOL/version" ] || { echo "ERROR: CachyOS Proton tool has no version file at $PROTON_CACHY_TOOL/version" >&2; exit 1; }

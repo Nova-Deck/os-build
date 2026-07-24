@@ -1,0 +1,118 @@
+#!/bin/sh
+# novadeck CPU scheduler helper — the off-SteamUI front-end for sched_ext.
+#
+# novadeck-powerd owns the CPU scheduler as a D-Bus property (org.novadeck.Power1.CpuScheduler),
+# modelled on SteamOS: "none" is the in-kernel scheduler, "lavd" is scx_lavd via scx.service, the
+# unit is never `enable`d, and powerd re-applies the saved choice at boot. The Steam client ships
+# the generated CpuScheduler1 proxy but NO rendered control in the pinned build (no "scheduler"
+# string anywhere in steamui's localization), so until a client that draws it lands there is no UI
+# path to the property. This is that path — deliberately a thin wrapper over the same property
+# SteamUI would set, NOT a second mechanism, so both stay in sync if the control ever appears.
+#
+# Talks to powerd on the SYSTEM bus rather than to novadeck-steamos-manager on the deck session
+# bus: it then works identically from SSH, Desktop mode and Game mode, with no session env to
+# reconstruct. The org.novadeck.Power policy allows `wheel`, so deck can run this unprivileged.
+
+set -eu
+
+BUS=org.novadeck.Power
+PATH_OBJ=/org/novadeck/Power
+IFACE=org.novadeck.Power1
+SCX_STATE=/sys/kernel/sched_ext/state
+ATTACH_TIMEOUT=5
+
+usage() {
+	cat <<'EOF'
+Usage: novadeck-scheduler [status|list|<scheduler>]
+
+  status          show the selected scheduler and what the kernel actually has (default)
+  list            list the schedulers this device can run
+  <scheduler>     select one, e.g. `novadeck-scheduler lavd` or `novadeck-scheduler none`
+
+The choice persists across reboots (novadeck-powerd re-applies it; scx.service stays disabled).
+EOF
+}
+
+# busctl prints properties as a type-tagged line: `s "lavd"` / `as 2 "none" "lavd"`. Drop the
+# type prefix and the quotes so callers get bare words.
+get_prop() {
+	busctl get-property "$BUS" "$PATH_OBJ" "$IFACE" "$1" 2>/dev/null |
+		sed -e 's/^[a-z}{]* //' -e 's/^[0-9]* //' -e 's/"//g'
+}
+
+require_powerd() {
+	if ! busctl status "$BUS" >/dev/null 2>&1; then
+		echo "novadeck-scheduler: novadeck-powerd is not running (systemctl status novadeck-powerd)" >&2
+		exit 1
+	fi
+}
+
+# The kernel's own view. Distinct from the property on purpose: attaching a BPF scheduler takes
+# about a second, and the kernel drops one on its own if the scheduler misbehaves — so a
+# freshly-set property is a request, and this is the outcome.
+kernel_state() {
+	[ -r "$SCX_STATE" ] && cat "$SCX_STATE" || echo "unsupported"
+}
+
+show_status() {
+	selected=$(get_prop CpuScheduler)
+	echo "scheduler:   ${selected:-unknown}"
+	echo "available:   $(get_prop AvailableCpuSchedulers)"
+	echo "sched_ext:   $(kernel_state)"
+}
+
+main() {
+	case "${1-status}" in
+	-h | --help | help)
+		usage
+		exit 0
+		;;
+	status)
+		require_powerd
+		show_status
+		;;
+	list)
+		require_powerd
+		get_prop AvailableCpuSchedulers | tr ' ' '\n'
+		;;
+	-*)
+		usage >&2
+		exit 2
+		;;
+	*)
+		require_powerd
+		target=$1
+		available=$(get_prop AvailableCpuSchedulers)
+		# Reject here as well as in powerd, purely for the better message: powerd can only
+		# answer a property set with a generic failure, and "lavd" being absent usually means
+		# a kernel without sched_ext rather than a typo.
+		for candidate in $available; do
+			[ "$candidate" = "$target" ] && found=1
+		done
+		if [ "${found-}" != 1 ]; then
+			echo "novadeck-scheduler: unknown scheduler '$target' (available: $available)" >&2
+			exit 1
+		fi
+
+		if ! busctl set-property "$BUS" "$PATH_OBJ" "$IFACE" CpuScheduler s "$target"; then
+			echo "novadeck-scheduler: could not select '$target'; see journalctl -u novadeck-powerd -u scx" >&2
+			exit 1
+		fi
+
+		# Wait out the attach window so the reported state is the real one, not the race.
+		want=$([ "$target" = none ] && echo disabled || echo enabled)
+		elapsed=0
+		while [ "$(kernel_state)" != "$want" ] && [ "$elapsed" -lt "$ATTACH_TIMEOUT" ]; do
+			sleep 1
+			elapsed=$((elapsed + 1))
+		done
+		show_status
+		if [ "$(kernel_state)" != "$want" ]; then
+			echo "novadeck-scheduler: kernel did not reach '$want' within ${ATTACH_TIMEOUT}s; see journalctl -u scx" >&2
+			exit 1
+		fi
+		;;
+	esac
+}
+
+main "$@"

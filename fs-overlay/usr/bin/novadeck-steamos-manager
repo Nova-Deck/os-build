@@ -19,6 +19,7 @@ OBJECT_PATH = "/com/steampowered/SteamOSManager1"
 IFACE_MANAGER = "com.steampowered.SteamOSManager1.Manager2"
 IFACE_PROFILE = "com.steampowered.SteamOSManager1.PerformanceProfile1"
 IFACE_GPU = "com.steampowered.SteamOSManager1.GpuPerformanceLevel1"
+IFACE_SCHED = "com.steampowered.SteamOSManager1.CpuScheduler1"
 IFACE_SESSION = "com.steampowered.SteamOSManager1.SessionManagement1"
 IFACE_OBJECT_MANAGER = "org.freedesktop.DBus.ObjectManager"
 
@@ -47,8 +48,18 @@ ROOT_XML = f"""
 </node>
 """
 
-NODE_XML = f"""
-<node>
+# Optional interface, exported only when powerd reports a scheduler other than the in-kernel one
+# (i.e. this kernel has sched_ext and scx_lavd is installed). SteamOS does the same — its manager
+# registers CpuScheduler1 only if the scx binary exists — so an unsupported build shows no CPU
+# scheduler control at all rather than a control whose only choice is "none".
+SCHED_XML = f"""
+  <interface name="{IFACE_SCHED}">
+    <property name="AvailableCpuSchedulers" type="as" access="read"/>
+    <property name="CpuScheduler" type="s" access="readwrite"/>
+  </interface>
+"""
+
+INTERFACES_XML = f"""
   <interface name="{IFACE_MANAGER}">
     <method name="ReloadConfig"/>
     <property name="DeviceModel" type="(ss)" access="read"/>
@@ -81,7 +92,6 @@ NODE_XML = f"""
     <property name="ManualGpuClockMin" type="u" access="read"/>
     <property name="ManualGpuClockMax" type="u" access="read"/>
   </interface>
-</node>
 """
 
 
@@ -147,7 +157,23 @@ class NovadeckSteamOSManager:
         self.default_desktop_session = self.env.get("NOVADECK_STEAM_DESKTOP_SESSION", "")
         self.valid_desktop_sessions = ()
         self.power = PowerClient()
+        self.cpu_schedulers = self.query_cpu_schedulers()
         self.connection = None
+
+    def query_cpu_schedulers(self):
+        try:
+            return list(self.power.get("AvailableCpuSchedulers").unpack())
+        except Exception as exc:
+            # Older powerd, or powerd down at our start: fall back to "no choice", which drops
+            # the interface. Nothing else in the manager depends on it.
+            print(f"novadeck-steamos-manager: no CPU scheduler support: {exc}", file=sys.stderr)
+            return ["none"]
+
+    def node_xml(self):
+        body = INTERFACES_XML
+        if len(self.cpu_schedulers) > 1:
+            body += SCHED_XML
+        return f"<node>{body}</node>"
 
     def managed_objects(self):
         objects = {}
@@ -200,6 +226,8 @@ class NovadeckSteamOSManager:
                 "ManualGpuClockMax": "ManualGpuClockMax",
             }
             return self.power.get(mapping[prop])
+        if iface == IFACE_SCHED:
+            return self.power.get(prop)
         return None
 
     def set_property(self, iface, prop, value):
@@ -227,6 +255,15 @@ class NovadeckSteamOSManager:
                 applied = self.power.get("ManualGpuClock")
             except Exception as exc:
                 print(f"novadeck-steamos-manager: readback ManualGpuClock failed: {exc}", file=sys.stderr)
+                return
+            self.emit_properties(iface, {prop: applied})
+            return
+        if iface == IFACE_SCHED and prop == "CpuScheduler":
+            self.power.set("CpuScheduler", value)
+            try:
+                applied = self.power.get("CpuScheduler")
+            except Exception as exc:
+                print(f"novadeck-steamos-manager: readback CpuScheduler failed: {exc}", file=sys.stderr)
                 return
             self.emit_properties(iface, {prop: applied})
             return
@@ -337,7 +374,7 @@ class NovadeckSteamOSManager:
     def register(self, connection):
         self.connection = connection
         self.root_node = Gio.DBusNodeInfo.new_for_xml(ROOT_XML)
-        self.node = Gio.DBusNodeInfo.new_for_xml(NODE_XML)
+        self.node = Gio.DBusNodeInfo.new_for_xml(self.node_xml())
         connection.register_object(
             "/",
             self.root_node.interfaces[0],

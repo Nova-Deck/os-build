@@ -22,6 +22,26 @@ FACTORY_CONFIG_FILE = Path("/usr/share/novadeck/power-profiles.conf")
 CONFIG_FILE = Path("/etc/novadeck/power-profiles.conf")
 FAN_SAFE_PWM = 128
 
+# sched_ext. SteamOS treats scx as a user-selectable CPU scheduler rather than a baked-in
+# default: steamos-manager start/stops scx.service on demand and the stock kernel scheduler
+# stays the default. Mirror that here — "none" is the in-kernel scheduler (EEVDF; one
+# implementation, not runtime-selectable, so it is the whole non-scx half of this vocabulary)
+# with the unit stopped, "lavd" is scx_lavd with it running. scx.service ships installed but
+# NOT enabled, so
+# nothing loads a BPF scheduler at boot unless the user asked for it and we restore it below.
+# Which binary the unit runs comes from /etc/default/scx (we ship SCX_SCHEDULER=scx_lavd);
+# editing that file out from under us makes the "lavd" label inaccurate, nothing worse.
+#
+# Deliberately just these two, matching Valve's vocabulary exactly. scx-scheds also ships
+# scx_bpfland and scx_rusty, but those stay SSH-only per-title fallbacks rather than QAM
+# entries. Not to be confused with the cpufreq governor (schedutil / performance): that is
+# frequency policy, a separate axis, and stays owned by the power profile.
+CPU_SCHEDULERS = ["none", "lavd"]
+SCX_UNIT = "scx.service"
+SCX_BINARY = Path("/usr/bin/scx_lavd")
+SCX_SYSFS = Path("/sys/kernel/sched_ext")
+SCX_TIMEOUT = 15
+
 
 def normalize_profile(profile):
     value = profile.strip().lower()
@@ -45,6 +65,8 @@ XML = f"""
     <property name="ManualGpuClock" type="u" access="readwrite"/>
     <property name="ManualGpuClockMin" type="u" access="read"/>
     <property name="ManualGpuClockMax" type="u" access="read"/>
+    <property name="AvailableCpuSchedulers" type="as" access="read"/>
+    <property name="CpuScheduler" type="s" access="readwrite"/>
     <property name="FanMode" type="s" access="read"/>
     <property name="FanPwm" type="u" access="read"/>
     <property name="FanRpm" type="u" access="read"/>
@@ -181,6 +203,7 @@ class NovadeckPower:
         self.profile = ""
         self.gpu_level = "auto"
         self.manual_gpu_clock = 0
+        self.cpu_scheduler = "none"
         self.smoothed_temp = 0.0
         self.last_pwm = 0
         self.suspended = False
@@ -198,6 +221,7 @@ class NovadeckPower:
         self.apply_profile()
         if self.gpu_level == "manual" and self.manual_gpu_clock:
             self.set_gpu_manual_clock(self.manual_gpu_clock)
+        self.restore_cpu_scheduler()
         self.fan_tick()
         GLib.timeout_add_seconds(3, self.fan_tick)
 
@@ -403,6 +427,8 @@ class NovadeckPower:
                 self.gpu_level = value
             elif key == "manual_gpu_clock" and value.isdigit():
                 self.manual_gpu_clock = int(value)
+            elif key == "cpu_scheduler" and value in CPU_SCHEDULERS:
+                self.cpu_scheduler = value
 
     def save_state(self):
         STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -410,7 +436,71 @@ class NovadeckPower:
             f"profile={self.profile}\n"
             f"gpu_level={self.gpu_level}\n"
             f"manual_gpu_clock={self.manual_gpu_clock}\n"
+            f"cpu_scheduler={self.cpu_scheduler}\n"
         )
+
+    def available_cpu_schedulers(self):
+        # No sched_ext in this kernel, or no scx binary: only the in-kernel scheduler exists.
+        # The manager hides its CpuScheduler1 interface entirely when this is the answer.
+        if not (SCX_SYSFS.is_dir() and SCX_BINARY.exists()):
+            return ["none"]
+        return list(CPU_SCHEDULERS)
+
+    def systemctl(self, *args, timeout=SCX_TIMEOUT):
+        return subprocess.run(
+            ["systemctl", *args],
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=timeout,
+        )
+
+    def scx_unit_active(self):
+        try:
+            return self.systemctl("is-active", SCX_UNIT, timeout=5).stdout.strip() == "active"
+        except (OSError, subprocess.SubprocessError) as exc:
+            print(f"novadeck-powerd: {SCX_UNIT} is-active failed: {exc}", file=sys.stderr)
+            return False
+
+    def restore_cpu_scheduler(self):
+        # Re-apply the saved choice at daemon start. scx.service is never `enable`d, so this
+        # (and an explicit `systemctl start`) is the only path that loads a BPF scheduler.
+        if len(self.available_cpu_schedulers()) == 1:
+            self.cpu_scheduler = "none"
+            return
+        if self.scx_unit_active():
+            # Already running — somebody started it by hand, or powerd restarted underneath a
+            # live scheduler. Adopt what is actually there instead of stopping their work.
+            self.cpu_scheduler = "lavd"
+            return
+        if self.cpu_scheduler == "none":
+            return
+        try:
+            # --no-block on purpose: our own systemd start job is still open here (Type=dbus,
+            # the bus name is taken after __init__ returns), so do not sit waiting on a second
+            # job from inside it. A start that fails is reported by the unit, not by us.
+            self.systemctl("start", "--no-block", SCX_UNIT)
+        except (OSError, subprocess.SubprocessError) as exc:
+            print(f"novadeck-powerd: restoring {SCX_UNIT} failed: {exc}", file=sys.stderr)
+            self.cpu_scheduler = "none"
+
+    def set_cpu_scheduler(self, scheduler):
+        if scheduler not in self.available_cpu_schedulers():
+            raise ValueError(scheduler)
+        if scheduler == self.cpu_scheduler:
+            return
+        action = "stop" if scheduler == "none" else "start"
+        try:
+            proc = self.systemctl(action, SCX_UNIT)
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(f"systemctl {action} {SCX_UNIT} timed out") from exc
+        if proc.returncode != 0:
+            raise RuntimeError(f"systemctl {action} {SCX_UNIT} failed: {proc.stdout.strip()}")
+        # Type=simple, so a zero exit only proves scx_lavd was exec'd, not that it attached —
+        # attach takes ~1s and lands in the journal. Report the requested scheduler, same as
+        # SteamOS does; GetStatus carries the kernel's own view for anyone who needs the truth.
+        self.cpu_scheduler = scheduler
 
     def gpu_freqs(self):
         if not self.gpu:
@@ -735,6 +825,10 @@ class NovadeckPower:
             return GLib.Variant("u", freqs[0] // 1000000 if freqs else 0)
         if prop == "ManualGpuClockMax":
             return GLib.Variant("u", freqs[-1] // 1000000 if freqs else 0)
+        if prop == "AvailableCpuSchedulers":
+            return GLib.Variant("as", self.available_cpu_schedulers())
+        if prop == "CpuScheduler":
+            return GLib.Variant("s", self.cpu_scheduler)
         if prop == "FanMode":
             return GLib.Variant("s", "managed" if self.fan_pwm else "unavailable")
         if prop == "FanPwm":
@@ -773,6 +867,9 @@ class NovadeckPower:
             if self.gpu_level == "manual":
                 mhz = self.set_gpu_manual_clock(mhz)
             changed["ManualGpuClock"] = GLib.Variant("u", mhz)
+        elif prop == "CpuScheduler":
+            self.set_cpu_scheduler(value.get_string())
+            changed["CpuScheduler"] = GLib.Variant("s", self.cpu_scheduler)
         else:
             raise KeyError(prop)
         self.save_state()
@@ -791,6 +888,11 @@ class NovadeckPower:
             "manual_gpu_clock": self.get_property("ManualGpuClock"),
             "manual_gpu_clock_min": self.get_property("ManualGpuClockMin"),
             "manual_gpu_clock_max": self.get_property("ManualGpuClockMax"),
+            "cpu_scheduler": self.get_property("CpuScheduler"),
+            # The kernel's own view ("enabled"/"disabled"/absent), which the property above
+            # cannot express: it lags a start by ~1s and goes back to "disabled" on its own if
+            # a BPF scheduler is ejected. Diagnostics only.
+            "sched_ext_state": GLib.Variant("s", read_text(SCX_SYSFS / "state")),
             "fan_mode": self.get_property("FanMode"),
             "fan_pwm": self.get_property("FanPwm"),
             "fan_rpm": self.get_property("FanRpm"),

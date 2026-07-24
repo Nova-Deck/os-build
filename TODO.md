@@ -568,6 +568,24 @@ rationale lives in the linked memories and commit history.
   arch-native codegen or running built binaries mid-build (tests, `-march=native`) won't offload
   cleanly. Relates to [[builds-use-docker-crosscompile]], [[overlay-package-pipeline]].
 
+- [ ] **Decompose `images/assemble-rootfs.sh` into named sub-stages** — build-infra hygiene, no
+  behaviour change. At **733 lines** it is ~2x the next-largest script (`customize-base.sh`, 418) and
+  is brushing our 800-line ceiling; it is also the pipeline's single coupling point, staging base
+  userspace + kernel/dtbs/modules + both firmware sets + `fs-overlay/` + first-boot storage + offload
+  mounts + test-only Wi-Fi/SSH injection + debug capture + ownership normalization, then carving
+  `var.img` and baking `rootfs.img`. The structure is **already there as comment banners** (`# 1.`
+  base, `# 2/2b/2c` kernel/modules/`/efi`, `# 3/3b` qcom + linux firmware, `# 4/4b` marker + overlay,
+  `# 4g` grow-home, `# 4h` offload, `# 4c` test-only, `# 4d` debug, `# 4z` chown, `# 5` var carve,
+  `# 6` btrfs bake) — the work is promoting each to a named function or sourced helper under
+  `images/`, keeping `assemble-rootfs.sh` as the entry point and the existing per-section rationale
+  comments intact. Payoff is that the test-only and debug injections become separable from the
+  release path by construction rather than by an `if`, which matters as RAUC lands. Only substantive
+  finding salvaged from the Copilot architecture-review PR (`Nova-Deck/os-build#2`, closed
+  2026-07-24 — its other four recommendations were already implemented: artifact paths are
+  centralized at `Makefile:92-99`, `ROOTFS_MODE` is already derived + stamped at `Makefile:54`, and
+  the stage `README.md`s already document per-script inputs/outputs/env). Relates to
+  [[folder-refactor-fs-overlay]], [[rootfs-build-approach]].
+
 ## Phase 2 — gamescope session (closed)
 
 - [x] **Clean gamescope teardown / re-launch wedge** — WON'T-FIX (HW-disproven 2026-06-25).

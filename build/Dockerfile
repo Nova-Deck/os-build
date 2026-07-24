@@ -9,6 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       build-essential \
       gcc-aarch64-linux-gnu \
       bc bison flex \
+      dwarves \
       libssl-dev libelf-dev \
       kmod cpio rsync \
       openssh-client \

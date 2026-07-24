@@ -17,9 +17,8 @@ novadeck patches applied on top of the local mangohud PKGBUILD source (MangoHud 
 0006-SM8750-Battery.patch
 ```
 
-These are the ROCKNIX Qualcomm / SM85xx patch set as carried by armada (each traced to an
-upstream ROCKNIX commit — see `_reference/armada-packages/mangohud/PATCHES.md` for the pinned
-source URLs). Stock MangoHud only knows how to read desktop GPUs (amdgpu/i915/nvidia) and generic
+These are an upstream Qualcomm / SM85xx patch set, each taken at a pinned upstream revision.
+Stock MangoHud only knows how to read desktop GPUs (amdgpu/i915/nvidia) and generic
 `BAT*` power supplies, so on an Adreno part the GPU/battery/RAM fields are blank or wrong. The set:
 
 - `0001` — **Qualcomm GPU support.** Match the `msm`/`msm_dpu`/`msm_drm` DRM driver in
@@ -39,8 +38,8 @@ SM8550 (Adreno 740) / SM8750. We take all six anyway — SM8650 shares the Adren
 `gpuss_0_thermal` hwmon layout, so they are the closest match and the correct starting point. If a
 HUD field reads wrong on HW, verify the on-device sysfs path and adjust the patch: GPU clock/temp
 come from `/sys/class/devfreq/3d00000.gpu/cur_freq` + the `gpuss_0_thermal` hwmon (`0002`), battery
-from `/sys/class/power_supply/battery` (`0003`/`0004`/`0006`). No source refs to peer distros ship
-in these files — provenance lives here and in commit history only.
+from `/sys/class/power_supply/battery` (`0003`/`0004`/`0006`). No peer-distro refs ship in the tree —
+upstream provenance lives in commit history only.
 
 Drop the patch files here with those exact names (or rename and update `source.pin`'s `patches:`
 line). **Until a declared patch is present, `make overlay` / `make base` fail fast** with a clear

@@ -1,7 +1,7 @@
 # novadeck mangohud — built FROM SOURCE via this novadeck-owned PKGBUILD (referenced by
 # packages/mangohud/source.pin: pkgbuild_local), NOT fetched from the holo monorepo, which ships no
 # mangohud at all. This is a lean recipe distilled from the Arch `mangohud` package (same upstream,
-# MangoHud 0.8.4) plus armada/ROCKNIX's meson flags + Qualcomm patch set, tailored for an arm64
+# MangoHud 0.8.4) plus the handheld meson flags + Qualcomm patch set, tailored for an arm64
 # Adreno handheld:
 #   * -Dmangoapp=true      → build the mangoapp overlay binary gamescope spawns via --mangoapp
 #   * -Dmangohudctl=true   → the mangohudctl control client (SteamUI toggles the overlay level)

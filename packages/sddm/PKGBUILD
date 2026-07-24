@@ -1,8 +1,8 @@
 # novadeck sddm — built FROM SOURCE via a novadeck-owned PKGBUILD (pkgbuild_local in
 # packages/sddm/source.pin), because the curated holo repos ship NO display manager to fetch.
-# This is a lean makepkg recipe for the same release Fedora 44 / armada run (sddm 0.21.0, Qt6 +
+# This is a lean makepkg recipe for the same release Fedora 44 ships (sddm 0.21.0, Qt6 +
 # journald — see _reference/sddm.spec), with no patches. It exists to give the gamescope shell a
-# real ACTIVE seat0 logind session via SDDM autologin (SteamOS parity); see source.pin for the why.
+# real ACTIVE seat0 logind session via SDDM autologin; see source.pin for the why.
 #
 # All Qt6 build/runtime deps resolve from the holo `extra` repo, so this is a single clean build.
 # build-overlay.sh bumps pkgrel via pkgrel_suffix so pacman prefers this over any future holo sddm,

@@ -1,7 +1,7 @@
 # mangohud — built FROM SOURCE via a novadeck-owned PKGBUILD (packages/mangohud/PKGBUILD), NOT
 # fetched from the holo monorepo: the curated holo aarch64 repos ship NO mangohud/mangoapp at all
 # (verified against the pinned base's synced core/extra dbs — gamescope/mesa/openal resolve, `mango*`
-# does not). So there is nothing to `pacman -S`; we build it ourselves, the SteamOS/armada way. See
+# does not). So there is nothing to `pacman -S`; we build it ourselves from a checked-in recipe. See
 # packages/README.md for the overlay mechanism and the holo-pacman-no-gtk2 note (don't assume a
 # package resolves).
 #
@@ -13,7 +13,7 @@
 # the Proton compat tool — ran fine with the overlay off, died the moment it was toggled on). See TODO.md and
 # [[sm8650-gamescope-session-plumbing]].
 #
-# Recipe: MangoHud 0.8.4 (the exact version armada/Fedora + Arch ship), built with
+# Recipe: MangoHud 0.8.4 (the exact version Fedora + Arch ship), built with
 # -Dmangoapp=true -Dmangohudctl=true and system spdlog. The x86/NVIDIA bits are turned off
 # (-Dwith_xnvctrl=disabled) since this is an arm64 Adreno device, and mangoplot is disabled
 # (-Dmangoplot=disabled): it is a desktop PNG-graph helper whose matplotlib+numpy+BLAS/LAPACK chain
@@ -22,8 +22,8 @@
 # libxkbcommon wayland appstream glslang libxrandr nlohmann-json python-mako ...).
 #
 # The 6 patches teach MangoHud to read a Qualcomm SoC's stats — WITHOUT them the overlay shows no /
-# garbage GPU/battery/RAM data on an Adreno part. They are the ROCKNIX Qualcomm/SM85xx patch set as
-# carried by armada (see packages/mangohud/patches/README.md for per-patch provenance). We take ALL
+# garbage GPU/battery/RAM data on an Adreno part. They are an upstream Qualcomm/SM85xx patch set
+# (see packages/mangohud/patches/README.md for what each one does). We take ALL
 # of them, including the SM8550/SM8750 device patches: SM8650 (Adreno 750) shares the Adreno
 # devfreq/kgsl + hwmon layout those patches target, so they are the closest match and the right
 # starting point — tune the exact sysfs paths on HW if a field reads wrong (see the patches README).

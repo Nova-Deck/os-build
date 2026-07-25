@@ -1,0 +1,65 @@
+From 0000000000000000000000000000000000000004 Mon Sep 17 00:00:00 2001
+From: Philippe Simons <simons.philippe@gmail.com>
+Date: Sat, 25 Jul 2026 14:00:00 +0200
+Subject: [PATCH 4/4] fix: make the legacy GAMESCOPE_FPS_LIMIT atom actually stick
+
+The QuickAccess frame-rate cap had no effect on HW. Localised 2026-07-25 on the
+device: the Steam client writes the chosen cap into the legacy X root atom
+`GAMESCOPE_FPS_LIMIT` correctly (verified: `xprop -root` reads 30 after picking
+30 in SteamUI), but gamescope forgets it again within one frame.
+
+`gamescopeFPSLimit`'s property handler assigns `g_nSteamCompMgrTargetFPS`
+directly. That global is not the source of truth: `paint_all()` calls
+`update_app_target_refresh_cycle()` on EVERY frame, and
+`_update_app_target_refresh_cycle()` unconditionally resets
+`g_nSteamCompMgrTargetFPS = 0` before recomputing it from
+`g_nCombinedAppRefreshCycleOverride[]` — which is written only by the
+`gamescope_control` Wayland protocol (`set_app_target_refresh_cycle`) and the
+`debug_set_fps_limit` console command. So the atom's value survives at most one
+vblank and the pacing condition at `steamcompmgr_should_vblank_window()` never
+sees it. This is the same in 3.16.17, so it is not a regression from our version
+bump — upstream simply never exercises the atom path, because Valve's x86 client
+drives the cap over the Wayland protocol instead.
+
+Our arm64 Steam client does NOT do that: it never opens gamescope's Wayland
+socket at all (HW-checked with `lsof -U`: only the two Xwayland servers are
+connected), so the legacy atom is the only channel it has. Route it through the
+same override the protocol writes, so it persists.
+
+`change_refresh=false`: refresh switching stays owned by
+`GAMESCOPE_DYNAMIC_REFRESH` / the control protocol; this patch only restores the
+FPS cap. `update_runtime_info()` is dropped here because
+`steamcompmgr_set_app_refresh_cycle_override()` already runs it via
+`update_app_target_refresh_cycle()` — that is what flips the
+`GAMESCOPE_LIMITER_FILE` flag the WSI layer reads to force FIFO.
+
+Validated on HW before rebuild by bridging the atom to
+`gamescopectl debug_set_fps_limit` and timing `vkcube --c 300`: with the value
+SteamUI itself wrote, 30 -> 29 fps, 20 -> 20 fps, 0 -> 59 fps.
+
+diff --git a/src/steamcompmgr.cpp b/src/steamcompmgr.cpp
+--- a/src/steamcompmgr.cpp
++++ b/src/steamcompmgr.cpp
+@@ -6083,7 +6083,18 @@
+ 	if ( ev->atom == ctx->atoms.gamescopeFPSLimit )
+ 	{
+-		g_nSteamCompMgrTargetFPS = get_prop( ctx, ctx->root, ctx->atoms.gamescopeFPSLimit, 0 );
+-		update_runtime_info();
++		// novadeck: route the legacy X-atom cap through the SAME override the
++		// gamescope_control Wayland protocol writes. Assigning
++		// g_nSteamCompMgrTargetFPS directly does not survive: paint_all() calls
++		// update_app_target_refresh_cycle() every frame, which resets the target
++		// to 0 and recomputes it from g_nCombinedAppRefreshCycleOverride[]. Our
++		// arm64 Steam client never connects to gamescope's Wayland socket, so
++		// this atom is the only channel it has for the QuickAccess FPS cap.
++		// change_refresh=false: refresh switching stays with
++		// GAMESCOPE_DYNAMIC_REFRESH / the control protocol.
++		steamcompmgr_set_app_refresh_cycle_override(
++			GetBackend()->GetScreenType(),
++			get_prop( ctx, ctx->root, ctx->atoms.gamescopeFPSLimit, 0 ),
++			false, true );
+ 	}
+ 	for (int i = 0; i < gamescope::GAMESCOPE_SCREEN_TYPE_COUNT; i++)
+ 	{
+--
+2.54.0

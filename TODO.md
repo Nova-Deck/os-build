@@ -148,29 +148,87 @@ rationale lives in the linked memories and commit history.
   COMMITTED (`5636d21`/`d46d156`). See [[fex-config-tuning-from-rocknix-todo]],
   [[native-x86-linux-games-xwayland-fix]], [[overlay-package-pipeline]].
 
-- [ ] **MangoHud performance-overlay enable/disable still misbehaves — REOPENS the "DONE" item
-  below.** User re-reported (2026-07-11) that toggling the SteamUI Quick-Access **Performance** overlay
-  on/off is still not behaving on HW, so the earlier "both control paths confirmed" close is NOT
-  reliable. Investigate the toggle path end-to-end: the SysV `no_display` control queue (show/hide) vs
-  the config-file + reload (level), and the **focused-GAME gate** (mangoapp self-suppresses while the
-  Steam UI / appid 769 is focused, so a library-side toggle is a no-op *by design* — confirm the report
-  is in-game, not in the library). Capture what actually happens on toggle: does mangoapp receive the
-  control message, does the overlay redraw, does it get stuck on/off, or flicker? Compare live against
-  the DONE item's claimed mechanism. See [[mangohud-quickaccess-control-gap]],
-  [[sm8650-gamescope-session-plumbing]].
+- [x] **MangoHud performance-overlay enable/disable — FIXED + HW-VALIDATED 2026-07-25 (uncommitted).**
+  On HW the overlay now works: the launch command has NO `mangohud` prefix any more (the legacy-path
+  tell), Steam's environ carries `STEAM_USE_MANGOAPP=1` + `MANGOHUD_CONFIGFILE`, and that file now
+  holds lines the CLIENT wrote (`control=mangohud`, `fsr_steam_sharpness`, `nis_steam_sharpness`) —
+  impossible before. Root cause: the Steam client never saw gamescope's steam-mode environment.
+  `novadeck-session` backgrounds gamescope (`--steam -R/-T`) and then starts the client from the SAME
+  shell, so Steam is gamescope's **sibling**, not its child: everything gamescope sets in
+  `UpdateCompatEnvVars()` (`src/main.cpp` ~596-686 @ 3.16.23.2) lands in gamescope's own env and in what
+  IT spawns (mangoapp) — never in Steam. The 2026-07-08 "already set, adding them is redundant" close
+  read **mangoapp's** `/proc/<pid>/environ`, which is gamescope's child; Steam's environ carried only
+  the two `STEAM_*` vars `novadeck-steam` set by hand. Without `STEAM_USE_MANGOAPP` the client takes the
+  LEGACY overlay path — it prepends `mangohud` to the game launch command instead of driving mangoapp
+  (exactly the HW-observed `reaper … -- mangohud <compat-tool> …`) — and without `MANGOHUD_CONFIGFILE`
+  it has nowhere to write `preset=N` for the Level selector. The upstream SteamOS-derived session
+  scripts export this whole block by hand *for this same reason* (their client is a sibling too).
+  **Fix (uncommitted):** `novadeck-session` now creates + exports `MANGOHUD_CONFIGFILE` (seeded
+  `no_display`) and `GAMESCOPE_LIMITER_FILE` in `$GS_RUNDIR` BEFORE launching gamescope — gamescope
+  adopts them (both creations are guarded on the var being unset), mangoapp inherits from gamescope,
+  Steam inherits from the shell; and `novadeck-steam` exports the client gates `STEAM_USE_MANGOAPP`,
+  `STEAM_MANGOAPP_PRESETS_SUPPORTED`, `STEAM_MANGOAPP_HORIZONTAL_SUPPORTED`,
+  `STEAM_DISABLE_MANGOAPP_ATOM_WORKAROUND`, `STEAM_GAMESCOPE_DYNAMIC_FPSLIMITER`,
+  `STEAM_GAMESCOPE_NIS_SUPPORTED`, `STEAM_GAMESCOPE_FANCY_SCALING_SUPPORT`, `STEAM_MULTIPLE_XWAYLANDS`,
+  `SRT_URLOPEN_PREFER_STEAM` (see the script for the ones deliberately NOT set, and why).
+  **HW test:** in-game, toggle Performance on/off + change Level; confirm `mangohud` is NO LONGER
+  prepended to the launch command, that `$MANGOHUD_CONFIGFILE` gains `preset=N`, and that the overlay
+  follows. `STEAM_MULTIPLE_XWAYLANDS` is the one behaviour-changing gate — bisect it first if a title
+  regresses. Package builds were audited against the peer distro and are NOT the problem: mangohud
+  0.8.4 meson flags + all six Qualcomm patches match exactly, and every gamescope meson option is
+  already on by default/auto in our build. See [[mangohud-quickaccess-control-gap]],
+  [[sm8650-gamescope-session-plumbing]], [[chimeraos-gamescope-session-reference]].
 
-- [ ] **QuickAccess frame-rate limiter has no effect in-game** — the SteamUI Performance FPS cap
-  doesn't limit the framerate on HW (user, 2026-07-08). This is a gamescope path, NOT mangohud (the
-  perf overlay toggle + Level are HW-verified working in-game as of the same day —
-  [[mangohud-quickaccess-control-gap]]). Mechanism: gamescope's `steamcompmgr` caps commits via
-  `g_nSteamCompMgrTargetFPS` / `steamcompmgr_set_app_refresh_cycle_override()` (vblank-divisor pacing,
-  `steamcompmgr.cpp` ~5647-5673) and writes a `limiter_enabled` u32 flag to `GAMESCOPE_LIMITER_FILE`
-  (~5590). Cheap decisive probe: set an FPS cap in-game and read byte 0 of `$GAMESCOPE_LIMITER_FILE`
-  (from gamescope's `/proc/<pid>/environ`) — flips to `1` = client reached gamescope (cap engaged, chase
-  the pacing / dynamic-refresh path); stays `0` = the client→gamescope override isn't landing (check the
-  driving control channel / STEAM_* gate + whether the connector exposes valid dynamic refresh rates,
-  `GetValidDynamicRefreshRates()`). Also check `STEAM_GAMESCOPE_DYNAMIC_FPSLIMITER` (the WSI-layer
-  limiter path). See [[sm8650-gamescope-session-plumbing]], [[chimeraos-gamescope-session-reference]].
+- [x] **QuickAccess frame-rate limiter — FIXED + HW-VALIDATED 2026-07-25 (Vulkan titles).** Root cause: **the legacy `GAMESCOPE_FPS_LIMIT` X atom is
+  dead in gamescope, and it is the only channel our client uses.** The Steam client writes the chosen
+  cap into that root atom on `:0` correctly (HW: pick 30 in SteamUI -> `xprop -root
+  GAMESCOPE_FPS_LIMIT` reads 30), but gamescope's handler assigns `g_nSteamCompMgrTargetFPS`
+  directly, and `paint_all()` calls `update_app_target_refresh_cycle()` EVERY frame, which resets
+  that global to 0 and recomputes it from `g_nCombinedAppRefreshCycleOverride[]` — written only by
+  the `gamescope_control` WAYLAND protocol (`set_app_target_refresh_cycle`) and the
+  `debug_set_fps_limit` concommand. So the cap survives <1 vblank. Identical code in 3.16.17, so NOT
+  a regression from our version bump: upstream never exercises the atom because Valve's client drives
+  the cap over the Wayland protocol — and **our arm64 client never opens gamescope's Wayland socket
+  at all** (`lsof -U`: only the two Xwayland servers are connected, despite `GAMESCOPE_WAYLAND_DISPLAY`
+  being set and `libwayland-client` mapped in the client). **Fix:** `packages/gamescope/patches/
+  0004-fps-limit-atom-persist.patch` routes the atom through
+  `steamcompmgr_set_app_refresh_cycle_override(..., change_refresh=false, change_fps_cap=true)`.
+  **Pre-validated on HW without a rebuild** by bridging the atom to `gamescopectl debug_set_fps_limit`
+  and timing `vkcube --c 300 --present_mode 2` on `:1`: with the value SteamUI itself wrote,
+  30 -> 29fps, 20 -> 20fps, 0 -> 59fps. Everything else in the chain is confirmed HEALTHY — pacing,
+  the focus gate, and `GAMESCOPE_LIMITER_FILE` all work, with AND without the FROG WSI layer.
+  **HW-VALIDATED after rebuild:** the QuickAccess cap now works on Vulkan titles (user, 2026-07-25). Corrections to earlier entries, do not re-litigate: (a) the `xprop` reading of 60 was not
+  the client clamping, it was the profile's value at the time — the atom tracks the selection fine;
+  (b) `GAMESCOPE_LIMITER_FILE` reading `1` is a real signal (`g_nSteamCompMgrTargetFPS != 0`), not a
+  false positive; (c) `STEAM_DISPLAY_REFRESH_LIMITS=40,60` is EXONERATED as the cause here — but see
+  the follow-up below; (d) the GPU-submitting process is title-dependent (wine `explorer.exe` for one
+  title, the `<Game>.exe` for another) — find it with `grep -l drm-engine-gpu /proc/*/fdinfo/*` and
+  check for a NONZERO `drm-engine-gpu`, don't guess by name.
+  See [[sm8650-gamescope-session-plumbing]], [[chimeraos-gamescope-session-reference]].
+
+- [ ] **One title (Gravity Circuit) is not paced by the frame limiter — cause unknown, NOT an API
+  class (2026-07-25).** With patch 0004 the QuickAccess cap works on vulkan titles AND on OpenGL
+  titles (HW: Parking Garage Circuit in OpenGL3 mode caps correctly). Gravity Circuit under
+  proton-cachyos-arm64 is the lone hold-out: capping it moved neither its GPU time (35 ms/s, unchanged
+  to 0.03%) nor its CPU ticks. **Two of my framings were WRONG and are retracted — do not resurrect
+  them:** "GL titles cannot be capped at all" (user caps this same title on ROCKNIX, same Proton 11.0
+  arm64) and "gamescope's pacing does not reach GL titles" (the OpenGL3 title above caps fine). The
+  only thing established is that it is per-TITLE. gamescope caps by withholding wl frame callbacks,
+  which throttles only a client that WAITS on them, so the live hypothesis is that this title presents
+  without vsync and free-runs. **Cheap test, no rebuild:** set `vblank_mode=3 %command%` (Mesa GL force
+  sync-to-vblank) as its Steam launch option; if the cap then bites, that is both the confirmation and
+  the fix. Note ROCKNIX caps it via an in-process limiter (no gamescope there; MangoHud `fps_limit`
+  sleeps in the swap call), which is not reachable in our mangoapp architecture — so matching ROCKNIX
+  is not the route. Also still open: why is a D3D11 title on wined3d -> OpenGL (zero vulkan libs
+  mapped) instead of DXVK under our Proton — a bigger perf problem than the cap.
+
+- [ ] **`STEAM_DISPLAY_REFRESH_LIMITS=40,60` is a fabricated range on a fixed-60Hz panel**
+  (`novadeck-steam:62`, its own comment says HW-TBD). The reference session script UNSETS this var
+  when the panel has a single refresh rate and only sets `lo,hi` when the rate LIST has >1 entry, so
+  we are advertising a refresh slider the panel cannot honour. Exonerated as the frame-limiter cause
+  (that was the gamescope atom, above), so this is a correctness cleanup, not a bug fix — deliberately
+  held back so it does not muddy the HW validation of the limiter patch. Same for
+  `STEAM_ENABLE_DYNAMIC_BACKLIGHT=1` if this board has no ambient-light sensor.
 
 - [x] **Switch InputPlumber virtual device from DS5 to Xbox — DONE, COMMITTED `b63e4fe`, HW-VALIDATED.**
   (Files moved from `devices/inputplumber/` → `fs-overlay/usr/...` in the `4bce06a` refactor.)

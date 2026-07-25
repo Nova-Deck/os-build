@@ -21,7 +21,7 @@ union of all fragments, patches and device trees. There is no SoC argument.
 assumes 4K pages.** Standardized across all three SoCs.
 
 ## Status (Phase 1)
-- ✅ Source pinned: linux 7.1.3 (tarball URL + sha256 in `kernel/SOURCE.pin`).
+- ✅ Source pinned: linux 7.1.5 (tarball URL + sha256 in `kernel/SOURCE.pin`).
 - ✅ Config symbols validated against that tree (see header of `kernel.config`).
 - ✅ Builds `Image.gz` + all board dtbs and stages loadable modules to `out/modroot`
   for the rootfs assembler — the `=m` handheld-panel drivers (display) ride along.

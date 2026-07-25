@@ -1,6 +1,6 @@
 # mesa patches
 
-novadeck patches applied on top of the upstream mesa release source (currently `26.1.4`), in
+novadeck patches applied on top of the upstream mesa release source (currently `26.1.5`), in
 the order listed by `patches:` in [`../source.pin`](../source.pin). Each is applied with
 `patch -p1` from the mesa source root (the `mesa-<version>/` tree inside makepkg's `$srcdir`)
 by [`packages/build-overlay.sh`](../../build-overlay.sh), inserted right after the first `cd`

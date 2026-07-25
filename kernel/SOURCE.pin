@@ -1,14 +1,19 @@
 # novadeck kernel source pin — Phase 1
-# The TARBALL + its sha256 is the canonical pin. Validated 2026-06-17.
-version:    7.1.3
-url:        https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.1.3.tar.xz
-sha256:     be41c068e88f5242a19bccdbffbe077b18c47b45f627e2325504b4fab79dd1dc
-git_tag:    v7.1.3
-git_commit: 199c9959d3a9b53f346c221757fc7ac507fbac50
+# The TARBALL + its sha256 is the canonical pin. Validated 2026-06-17; re-pinned 2026-07-25
+# (7.1.5, HW-validated on Pocket S2 + Pocket ACE).
+version:    7.1.5
+url:        https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.1.5.tar.xz
+sha256:     22a0196b3cbcdf34dc27b77561f4d040585fd3447edc9ab3531a1ac79e3041e7
+git_tag:    v7.1.5
+git_commit: 155b42bec9cbb6b8cdc47dd9bd09503a81fbe493
 
-# Config validation (kernel/config/sm8650.config) against THIS tree:
-#   - all referenced CONFIG_* symbols exist in 7.1.3.
+# Config validation (kernel/kernel.config) against THIS tree:
+#   - every referenced CONFIG_* symbol exists in 7.1.5.
+#   - all 50 out-of-tree patches in kernel/patches/ apply to 7.1.5 with zero rejects.
 # Corrections applied during validation:
+#   CRYPTO_MICHAEL_MIC  -> DROPPED (upstream removed it from crypto/Kconfig; mac80211 carries its
+#                          own michael_mic, so TKIP is unaffected). Was already a dead symbol in
+#                          7.1.3 and silently ignored by kconfig.
 #   MFD_QCOM_SPMI_PMIC  -> MFD_SPMI_PMIC
 #   PHY_QCOM_SNPS_EUSB2 -> PHY_SNPS_EUSB2 (+ PHY_QCOM_EUSB2_REPEATER)
 #   SM_DISPCC_8650      -> SM_DISPCC_8550 (SM8650 reuses the 8550 display clock controller;

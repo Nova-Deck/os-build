@@ -55,11 +55,24 @@ export STEAM_EXTRA_COMPAT_TOOLS_PATHS="/usr/share/steam/compatibilitytools.d${ST
 # --- SteamUI QuickAccess / gamescope integration env (SteamOS "gamescope-session" parity) ---------
 # ENV GATES SteamUI reads to decide which Quick-Access controls to expose. They pair with the
 # gamescope --steam stats channel wired in novadeck-session — without the channel these do nothing,
-# and without these the controls may not appear even with the channel. Values mirror the Steam Deck
-# LCD device-quirk (a 60Hz handheld panel, like ours). HW-TBD: confirm the Pocket S2's real supported
-# refresh rates and whether it has an ambient-light sensor (dynamic backlight) before trusting these.
+# and without these the controls may not appear even with the channel. HW-TBD: whether this board has
+# an ambient-light sensor (dynamic backlight) before trusting that one.
 export STEAM_ENABLE_DYNAMIC_BACKLIGHT=1        # adaptive-brightness toggle (needs an ambient sensor)
-export STEAM_DISPLAY_REFRESH_LIMITS=40,60      # refresh slider range; gamescope paces down to the low end
+
+# Refresh-rate SLIDER range — NOT the framerate cap (that is STEAM_GAMESCOPE_DYNAMIC_FPSLIMITER
+# below; its choices are divisors of the CURRENT refresh and exist regardless of this range, which is
+# why a 30/20 fps cap is selectable on a 60Hz board no matter what we put here).
+# Per-board from the device-env registry, and set ONLY for a panel that really has more than one
+# mode: most panel drivers we ship declare a SINGLE drm_display_mode (60Hz; 144 on the Pocket FIT), so
+# there is nothing for gamescope to modeset to and the variable must stay UNSET. The old hardcoded
+# Deck-LCD 40,60 was wrong both ways — it invented a 40Hz floor no panel of ours has a mode for, and
+# capped the multi-mode boards (60,120 panels) at 60. novadeck-session does not export the NOVADECK_*
+# facts (plain eval, no export), so resolve them here too.
+DEV_ENV=/usr/lib/novadeck/device-env
+if [ -x "$DEV_ENV" ]; then eval "$("$DEV_ENV" 2>/dev/null)" || true; fi
+case "${NOVADECK_PANEL_REFRESH_RATES:-}" in
+  *,*) export STEAM_DISPLAY_REFRESH_LIMITS="${NOVADECK_PANEL_REFRESH_RATES%%,*},${NOVADECK_PANEL_REFRESH_RATES##*,}" ;;
+esac
 
 # gamescope sets the gates below ITSELF in --steam mode (main.cpp UpdateCompatEnvVars) — but only into
 # its own environment, so they reach the processes gamescope SPAWNS (mangoapp) and not this client:

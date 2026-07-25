@@ -148,7 +148,7 @@ rationale lives in the linked memories and commit history.
   COMMITTED (`5636d21`/`d46d156`). See [[fex-config-tuning-from-rocknix-todo]],
   [[native-x86-linux-games-xwayland-fix]], [[overlay-package-pipeline]].
 
-- [x] **MangoHud performance-overlay enable/disable — FIXED + HW-VALIDATED 2026-07-25 (uncommitted).**
+- [x] **MangoHud performance-overlay enable/disable — FIXED + HW-VALIDATED 2026-07-25, COMMITTED `e8bc680`.**
   On HW the overlay now works: the launch command has NO `mangohud` prefix any more (the legacy-path
   tell), Steam's environ carries `STEAM_USE_MANGOAPP=1` + `MANGOHUD_CONFIGFILE`, and that file now
   holds lines the CLIENT wrote (`control=mangohud`, `fsr_steam_sharpness`, `nis_steam_sharpness`) —
@@ -163,7 +163,7 @@ rationale lives in the linked memories and commit history.
   (exactly the HW-observed `reaper … -- mangohud <compat-tool> …`) — and without `MANGOHUD_CONFIGFILE`
   it has nowhere to write `preset=N` for the Level selector. The upstream SteamOS-derived session
   scripts export this whole block by hand *for this same reason* (their client is a sibling too).
-  **Fix (uncommitted):** `novadeck-session` now creates + exports `MANGOHUD_CONFIGFILE` (seeded
+  **Fix (`e8bc680`):** `novadeck-session` now creates + exports `MANGOHUD_CONFIGFILE` (seeded
   `no_display`) and `GAMESCOPE_LIMITER_FILE` in `$GS_RUNDIR` BEFORE launching gamescope — gamescope
   adopts them (both creations are guarded on the var being unset), mangoapp inherits from gamescope,
   Steam inherits from the shell; and `novadeck-steam` exports the client gates `STEAM_USE_MANGOAPP`,
@@ -206,29 +206,64 @@ rationale lives in the linked memories and commit history.
   check for a NONZERO `drm-engine-gpu`, don't guess by name.
   See [[sm8650-gamescope-session-plumbing]], [[chimeraos-gamescope-session-reference]].
 
-- [ ] **One title (Gravity Circuit) is not paced by the frame limiter — cause unknown, NOT an API
-  class (2026-07-25).** With patch 0004 the QuickAccess cap works on vulkan titles AND on OpenGL
-  titles (HW: Parking Garage Circuit in OpenGL3 mode caps correctly). Gravity Circuit under
-  proton-cachyos-arm64 is the lone hold-out: capping it moved neither its GPU time (35 ms/s, unchanged
-  to 0.03%) nor its CPU ticks. **Two of my framings were WRONG and are retracted — do not resurrect
-  them:** "GL titles cannot be capped at all" (user caps this same title on ROCKNIX, same Proton 11.0
-  arm64) and "gamescope's pacing does not reach GL titles" (the OpenGL3 title above caps fine). The
-  only thing established is that it is per-TITLE. gamescope caps by withholding wl frame callbacks,
-  which throttles only a client that WAITS on them, so the live hypothesis is that this title presents
-  without vsync and free-runs. **Cheap test, no rebuild:** set `vblank_mode=3 %command%` (Mesa GL force
-  sync-to-vblank) as its Steam launch option; if the cap then bites, that is both the confirmation and
-  the fix. Note ROCKNIX caps it via an in-process limiter (no gamescope there; MangoHud `fps_limit`
-  sleeps in the swap call), which is not reachable in our mangoapp architecture — so matching ROCKNIX
-  is not the route. Also still open: why is a D3D11 title on wined3d -> OpenGL (zero vulkan libs
-  mapped) instead of DXVK under our Proton — a bigger perf problem than the cap.
+- [x] **One title (Gravity Circuit) not paced by the frame limiter — ROOT-CAUSED + HW-CONFIRMED
+  2026-07-25: it free-runs without vsync; `vblank_mode=3` fixes it.** The hypothesis held: gamescope
+  caps by withholding wl frame callbacks, which throttles only a client that WAITS on them, so a title
+  that presents without vsync is untouchable by the compositor's limiter no matter how healthy the
+  rest of the chain is. Setting `vblank_mode=3 %command%` (Mesa GL force sync-to-vblank) as the title's
+  Steam launch option makes the QuickAccess cap bite — user-confirmed on HW. With patch 0004 the cap
+  therefore works on vulkan titles, on OpenGL titles that already vsync (Parking Garage Circuit in
+  OpenGL3 mode), and now on this one. **Two earlier framings were WRONG and stay retracted — do not
+  resurrect them:** "GL titles cannot be capped at all" and "gamescope's pacing does not reach GL
+  titles". It was never an API class; it was one title's presentation mode. ROCKNIX's route (in-process
+  MangoHud `fps_limit` sleeping in the swap call, no gamescope) remains unreachable in our mangoapp
+  architecture and was correctly not pursued. **Productization is a separate open item below.**
 
-- [ ] **`STEAM_DISPLAY_REFRESH_LIMITS=40,60` is a fabricated range on a fixed-60Hz panel**
-  (`novadeck-steam:62`, its own comment says HW-TBD). The reference session script UNSETS this var
-  when the panel has a single refresh rate and only sets `lo,hi` when the rate LIST has >1 entry, so
-  we are advertising a refresh slider the panel cannot honour. Exonerated as the frame-limiter cause
-  (that was the gamescope atom, above), so this is a correctness cleanup, not a bug fix — deliberately
-  held back so it does not muddy the HW validation of the limiter patch. Same for
-  `STEAM_ENABLE_DYNAMIC_BACKLIGHT=1` if this board has no ambient-light sensor.
+- [ ] **Decide how `vblank_mode=3` ships — per-title launch option or session-wide default** —
+  follow-up to the resolved pacing item above, where it is proven as a FIX but is currently applied by
+  hand as a Steam launch option, i.e. every affected title needs a user to know the trick. Options:
+  (a) export `vblank_mode=3` from the session so every Mesa GL client is pacing-eligible by
+  construction — under gamescope a client presenting faster than the compositor consumes is doing
+  wasted work anyway, so forcing sync-to-vblank there is defensible; (b) leave it per-title and just
+  document it. Caveats for (a): it is a **Mesa driconf** knob, so it reaches only titles rendering
+  through our Mesa GL — a bundled or non-Mesa GL stack ignores it, and it does nothing for Vulkan; it
+  must land in the GAME's environment (Steam launch options do this today, a session-level export would
+  too); and a per-title launch option can still override it. Regression canary if (a) is taken: the
+  OpenGL3 title that ALREADY caps correctly (Parking Garage Circuit) — it must keep capping and must
+  not lose frames to a forced wait. No rebuild either way, this is an env decision.
+
+- [ ] **D3D11 title runs on wined3d → OpenGL instead of DXVK under our Proton** — split out of the
+  pacing item above, where it was a parenthetical; it is the bigger perf problem of the two and is
+  entirely unrelated to the frame cap. Gravity Circuit maps ZERO vulkan libs under
+  proton-cachyos-11.0-arm64, i.e. it is going through wined3d's GL path rather than DXVK on Turnip —
+  so it pays a translation layer we have a working Vulkan driver for. Unexplained: whether this is
+  DXVK missing/failing to load in the arm64 Proton build, a per-title Proton config, or the title
+  requesting a feature level DXVK declines. Start by checking the title's `steam-<appid>.log` /
+  `PROTON_LOG=1` output for a DXVK init failure before assuming the build lacks it.
+
+- [x] **`STEAM_DISPLAY_REFRESH_LIMITS=40,60` was a fabricated range — RESOLVED, COMMITTED `6960aa8`
+  (registry-derived; NOT booted).** The hardcoded `40,60` was the Steam Deck LCD device-quirk and was
+  wrong in BOTH directions: it invented a 40Hz floor no panel of ours has a mode for (the S2/wt0630,
+  ACE, DMG, TD4328 and XM91080G drivers each declare exactly one `drm_display_mode`), and it capped the
+  genuinely multi-rate boards at 60 (evo, ds, odin-2-portal, thor, retroid-pocket-6 have real 60+120
+  modes). Worst case was the Pocket FIT: a single 144Hz mode, the session already passing `-r 144`, and
+  Steam told the maximum was 60. Fix = `novadeck-steam` resolves `NOVADECK_PANEL_REFRESH_RATES` from
+  the device-env registry and sets `<first>,<last>` ONLY when the panel really is multi-rate, else
+  leaves the var unset — the same derive-or-unset rule the reference session script uses. GOTCHA:
+  `novadeck-session` evals device-env WITHOUT export, so the `NOVADECK_*` facts do not reach this
+  client and it has to eval the helper itself. Verified by evaluating the real registry through `sh`
+  (S2 unset, Pocket FIT unset, Retroid Pocket 6 → `60,120`, ACE unset); `sh -n` clean. Exonerated as
+  the frame-limiter cause (that was the gamescope atom, above), and the QuickAccess cap stays
+  selectable on a 60Hz board regardless — it is driven by `STEAM_GAMESCOPE_DYNAMIC_FPSLIMITER`, whose
+  choices are divisors of the CURRENT refresh. See [[power-profiles-device-env-stack]].
+
+- [ ] **`STEAM_ENABLE_DYNAMIC_BACKLIGHT=1` is set unconditionally — same fabrication, not yet fixed**
+  (`novadeck-steam:60`, whose own comment concedes it "needs an ambient sensor"). Split out of the
+  refresh-limits item above, which fixed only the refresh half. Adaptive brightness needs an ambient
+  light sensor; if these boards have none we are advertising a toggle that cannot do anything. Unlike
+  the refresh rates there is no registry fact to derive this from yet — establish first whether ANY
+  supported board has an ALS (check for an `iio` light channel on HW), then either gate it on a new
+  device-env key or drop the export outright. Cheap correctness cleanup, no rebuild.
 
 - [x] **Switch InputPlumber virtual device from DS5 to Xbox — DONE, COMMITTED `b63e4fe`, HW-VALIDATED.**
   (Files moved from `devices/inputplumber/` → `fs-overlay/usr/...` in the `4bce06a` refactor.)

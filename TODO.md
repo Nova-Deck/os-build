@@ -644,6 +644,43 @@ rationale lives in the linked memories and commit history.
   the stage `README.md`s already document per-script inputs/outputs/env). Relates to
   [[folder-refactor-fs-overlay]], [[rootfs-build-approach]].
 
+- [ ] **Trim the Kconfig: stop building drivers for hardware novadeck will never have** — we boot
+  Qualcomm SM8550/SM8650 handhelds only, but the default build path merges the **multi-platform arm64
+  defconfig** (`kernel/build.sh:123`, `merge_config.sh -m arch/arm64/configs/defconfig
+  "${FRAGMENTS[@]}"`), which is deliberately "boots every arm64 board" — so we compile and ship
+  drivers for hardware that cannot exist on these devices. Two families to cut: (1) **discrete/desktop
+  GPUs and other PCIe-card drivers** — `DRM_NOUVEAU`, `DRM_AMDGPU`, `DRM_RADEON`, the legacy VGA/server
+  parts (`AST`, `MGAG200`, `QXL`, `VMWGFX`) — none reachable on a soldered-Adreno handheld; (2) **whole
+  non-Qualcomm SoC platform stacks** — sunxi/Allwinner, tegra, rockchip, mediatek, exynos, i.MX/NXP,
+  TI/OMAP, amlogic/meson, renesas, hisilicon — clocks, pinctrl, DRM, MMC, USB PHYs and DMA engines for
+  boards we do not support. Note our fragment `kernel/kernel.config` (468 lines, 332 `=y`/`=m`) is
+  **purely additive** — it never emits `# CONFIG_x is not set`, so nothing is pruned today. Payoff:
+  build time (every image rebuild pays for it), module-tree size on the read-only rootfs, `depmod`
+  time, fewer probe paths and less journal noise at boot, smaller attack surface. Method: do NOT
+  hand-edit `.config`. **There is no `qcom_defconfig` in the tree we build** — verified against the
+  pinned tarball: `arch/arm64/configs/` in 7.1.5 holds only `defconfig`, `hardening.config`,
+  `virt.config` (the `qcom_defconfig` in the same tarball is `arch/arm/configs/`, i.e. 32-bit MSM/APQ,
+  useless for SM8550/8650). Qualcomm DO ship an arm64 `qcom_defconfig`, but in their **downstream
+  CodeLinaro tree** (`git.codelinaro.org/clo/la/kernel/qcom`, built as `kmake O=../kobj
+  qcom_defconfig`; docs.qualcomm.com/doc/80-70020-3 topic kernel-development, which also lists Yocto
+  fragments `qcom_addons.config` / `qcom_debug.config`). That covers QCS8550 — our `qcs8550-ayaneo-*`
+  family — so it is a good **donor for the negative list**, but NOT a drop-in `BASE_CONFIG`: it is a
+  downstream release branch, not 7.x mainline, so it carries downstream-only symbols mainline lacks and
+  omits ours, and `olddefconfig` would silently paper over both directions. So either (a) add explicit `# CONFIG_x is not set` lines to our fragment (merge_config honours them)
+  — smallest blast radius, but forever subtracting from a multi-platform base; or (b) take the
+  `BASE_CONFIG` path (`build.sh:33`, verbatim `.config` + `olddefconfig`, fragment merge skipped) with
+  the reference distro's SM8550/SM8650 config as the qcom-only starting point — but it must then carry
+  our own additions itself: `CONFIG_SCHED_CLASS_EXT` + BTF (`images/customize-base.sh:105`) and the
+  `EXTRA_FIRMWARE` per-file list (`build.sh:128`). Either way the endgame is one tracked
+  `novadeck_defconfig`. Then **diff the resulting `.config`**, because `olddefconfig` will silently
+  re-enable anything still `select`ed by a symbol we keep. Guardrails: hold the ROCKNIX `=y` parity rule for the display/GPU path
+  ([[kernel-build-from-rocknix-config]], [[sm8650-working-display-baseline]]); keep whatever the
+  hand-rolled initramfs needs built-in ([[initramfs-phase4-immutable]]); cut **one vendor block per
+  build** with a boot test between, since we can only HW-test Pocket S2 + Pocket ACE while the tree
+  carries 14 boards — platform-vendor removals are safe by construction, but a shared-subsystem symbol
+  can break a board we cannot boot. Fold any symbol the new tree no longer has into the same pass
+  ([[drop-dead-config-symbols]]).
+
 ## Phase 2 — gamescope session (closed)
 
 - [x] **Clean gamescope teardown / re-launch wedge** — WON'T-FIX (HW-disproven 2026-06-25).

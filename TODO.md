@@ -257,24 +257,23 @@ rationale lives in the linked memories and commit history.
   selectable on a 60Hz board regardless — it is driven by `STEAM_GAMESCOPE_DYNAMIC_FPSLIMITER`, whose
   choices are divisors of the CURRENT refresh. See [[power-profiles-device-env-stack]].
 
-- [ ] **`STEAM_ENABLE_DYNAMIC_BACKLIGHT` export DROPPED (user decision 2026-07-25) — HW-VERIFY the
-  manual brightness slider survives.** The unconditional `=1` was the Steam Deck's adaptive-brightness
+- [x] **`STEAM_ENABLE_DYNAMIC_BACKLIGHT` export DROPPED — DONE + HW-VALIDATED 2026-07-25 (user
+  decision, user-confirmed on device).** The unconditional `=1` was the Steam Deck's adaptive-brightness
   gate; almost none of the boards we support have an ambient-light sensor, and any that do most likely
   have no upstream driver, so nothing publishes an `iio` light channel for the client to read — it
   advertised a toggle that cannot work. Now listed in `novadeck-steam`'s DELIBERATELY-NOT-SET block
   with the rule that a future ALS board derives it per-board from the device-env registry (as
   `STEAM_DISPLAY_REFRESH_LIMITS` does), never a blanket `=1`.
-  **⚠️ REGRESSION RISK — the one thing to check on the next boot.** Our own HW note from the closed
-  "Wire brightness controls" item below (2026-07-05) says this env gate *"made the slider appear"*.
-  If that gate turns out to expose the **manual** brightness slider and not merely the adaptive
-  toggle, dropping it removes working brightness control — a regression, not a cleanup. Unresolved
-  from the baked client: `strings steamui.so` confirms it reads `STEAM_ENABLE_DYNAMIC_BACKLIGHT`,
-  `display_backlight_raw` and `/sys/class/backlight/`, but not which control each gates.
-  **Test:** boot with the export gone and open QuickAccess → the brightness SLIDER must still be
-  present and still move the panel (the write path itself is independent — it is the udev ACL in
-  `60-novadeck-perf-acls.rules`, unaffected by this change). If the slider disappears, restore the
-  export and reclassify the item as "keep, it is the manual-brightness gate and is misnamed".
-  See [[brightness-volume-keys-resolved]].
+  **Regression risk RAISED AND CLEARED on HW (2026-07-25).** The worry was that the closed "Wire
+  brightness controls" item below (2026-07-05) credited this same gate with making the slider
+  *appear*, which would have made removing it a regression rather than a cleanup — and it could not
+  be settled off-device (`strings steamui.so` shows the client reads
+  `STEAM_ENABLE_DYNAMIC_BACKLIGHT`, `display_backlight_raw` and `/sys/class/backlight/`, but not
+  which control each gates). Tested: with the export gone, the QuickAccess brightness **slider is
+  still present and still drives the panel** (user-confirmed). So the gate is the ADAPTIVE-brightness
+  feature only; the manual slider never depended on it. **That 2026-07-05 claim is retracted in place
+  below** — the udev ACL in `60-novadeck-perf-acls.rules` is the whole story for manual brightness.
+  Do not restore this export to "fix" a slider problem. See [[brightness-volume-keys-resolved]].
 
 - [x] **Switch InputPlumber virtual device from DS5 to Xbox — DONE, COMMITTED `b63e4fe`, HW-VALIDATED.**
   (Files moved from `devices/inputplumber/` → `fs-overlay/usr/...` in the `4bce06a` refactor.)
@@ -334,8 +333,10 @@ rationale lives in the linked memories and commit history.
   [[sm8650-gamescope-session-plumbing]], [[dirmngr-slow-shutdown-defer-phase4]].
 
 - [x] **Wire brightness controls** — RESOLVED, HW-validated 2026-07-05 (branch
-  `feat/brightness-volume-perf-acls`). Env gate (`STEAM_ENABLE_DYNAMIC_BACKLIGHT=1`) made the slider
-  appear but the write path was missing: `/sys/class/backlight/sy7758-backlight/brightness` is
+  `feat/brightness-volume-perf-acls`). ~~Env gate (`STEAM_ENABLE_DYNAMIC_BACKLIGHT=1`) made the slider
+  appear but~~ **RETRACTED 2026-07-25** — that env gate had nothing to do with the slider appearing
+  (dropping it left the slider working on HW; see the item above). The real and only problem was that
+  the write path was missing: `/sys/class/backlight/sy7758-backlight/brightness` is
   `root:root 0644` on the RO root and gamescope runs as `deck`. Fix = `hw-support/usr/lib/udev/
   rules.d/60-novadeck-perf-acls.rules` (chgrp `wheel` + `g+w` on backlight brightness — plus cpu/gpu
   perf knobs; deck ∈ wheel). Live-validated: deck wrote brightness, panel responded. See

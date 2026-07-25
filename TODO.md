@@ -347,6 +347,26 @@ rationale lives in the linked memories and commit history.
     (`echo 4 > /sys/class/backlight/*/bl_power` on suspend, `0` on resume) so a blank still happens if
     Steam's own blank ever regresses. See [[sm8650-gamescope-flip-blocker]].
 
+- [ ] **Narrow the fake-suspend freeze set so the session bus stays live — TEST FIRST, do not just
+  change the default.** `novadeck-suspend` freezes all of `/sys/fs/cgroup/user.slice`, which includes
+  `session.slice` and therefore `dbus-broker` + `systemd --user`. That is the whole reason
+  `systemctl --user` / `gamescopectl` hang inside the frozen window (see
+  [[suspend-systemctl-while-frozen-blocks]]); the file header used to claim this hazard didn't exist,
+  which was wrong and is now corrected in place. The reference handheld distro moved its equivalent
+  script off `user.slice` onto the app-level subtree for exactly this reason, keeping the game frozen
+  while the session plumbing stays answerable.
+  - **Why this is not a copy of their fix:** their session puts games under `user@.service/app.slice`.
+    Ours appears to put gamescope in `session-1.scope` (per [[gamescope-slow-shutdown-sigterm-wedge]]),
+    and if Steam and the game share that scope then freezing `app.slice` would freeze *nothing* here.
+  - **Also load-bearing:** we freeze gamescope ON PURPOSE — it holds the blank KMS modeset statically
+    while frozen. Any narrower set that leaves gamescope running needs a different blank strategy, so
+    this interacts with the `bl_power` fallback item above rather than being independent of it.
+  - **Test:** on device, `systemd-cgls` (or `systemctl status` on the game PID) during an active game
+    to record where gamescope / steam / the game process actually land. Then decide whether a set
+    exists that halts the game, leaves `session.slice` thawed, and still blanks the panel.
+  - No code change needed to try one: `NOVADECK_SUSPEND_FREEZE_CGROUPS` is already a space-separated,
+    overridable list of cgroup paths — this is a question about the *default*, not about plumbing.
+
 - [x] **Provide `com.steampowered.SteamOSManager1` (steamos-manager) — DONE 2026-07-14** (see the LANDED
   power-profiles stack entry at the top of Open). SteamUI's privileged backend
   — SteamUI calls this D-Bus name for system actions it can't do as the unprivileged `deck` user;

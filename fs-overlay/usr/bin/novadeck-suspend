@@ -9,10 +9,22 @@
 # Steam's own blank — lasts exactly as long as this one blocking call, just as an in-kernel suspend
 # would. Resume is OURS: this engine grabs the power key and wakes on it; there is no wake daemon.
 #
-# Only user.slice is frozen: this engine, journald, dbus and logind all live in system.slice and stay
-# responsive, so unlike a system-wide freeze there is no "thaw before you can reach dbus" hazard and
-# no separate never-frozen slice is needed. gamescope is inside user.slice; it holds the blank KMS
-# modeset statically while frozen, so we blank BEFORE the freeze and unblank AFTER the thaw.
+# Only user.slice is frozen: this engine, journald, logind and the SYSTEM bus all live in system.slice
+# and stay responsive, so a system-wide freeze's "thaw before you can reach dbus" hazard does not apply
+# to THEM, and no separate never-frozen slice is needed.
+#
+# The SESSION bus is a different story, and it is a hard constraint rather than a caveat: dbus-broker
+# and `systemd --user` sit in session.slice, which is INSIDE user.slice, so they are frozen along with
+# everything else. Anything that talks to the session bus — `systemctl --user`, `gamescopectl` — will
+# BLOCK until the thaw. So: use the system bus (this is exactly why the powerd fan handoff is a busctl
+# call into system.slice), or do the work before the freeze / after the thaw. Do not "fix" a hang here
+# by adding a thaw-then-retry; the call simply does not belong inside the frozen window.
+#
+# Freezing a narrower subtree would keep the session bus live, but it is not obviously expressible on
+# our layout and is NOT a drop-in — see the "narrow the fake-suspend freeze set" item in TODO.md.
+#
+# gamescope is inside user.slice and is frozen DELIBERATELY: it holds the blank KMS modeset statically
+# while frozen, so we blank BEFORE the freeze and unblank AFTER the thaw.
 set -u
 
 CONF=/etc/novadeck/rest.conf

@@ -131,14 +131,37 @@ mkfifo "$GS_STARTUP" "$GS_STATS"
 export GAMESCOPE_STATS="$GS_STATS"
 GS_ARGS="$GS_ARGS --steam --xwayland-count 2 -R $GS_STARTUP -T $GS_STATS"
 
-# --mangoapp: gamescope spawns the `mangoapp` overlay as an in-session window (SpawnProcessInWatchdog)
-# and, because we also pass --steam, sets up the ENTIRE control channel itself: it creates
-# MANGOHUD_CONFIGFILE (seeded `no_display`) and exports the STEAM_USE_MANGOAPP / *_PRESETS_SUPPORTED /
-# *_HORIZONTAL_SUPPORTED / DISABLE_MANGOAPP_ATOM_WORKAROUND gates the GamepadUI reads. So SteamUI's
-# Quick-Access "Performance" toggle + Level then drive the overlay (via the SysV control queue for
-# no_display and the config file + reload for the level) with NO extra session setup — HW-verified
-# 2026-07-08, matches the Valve/ChimeraOS session env exactly. The overlay is gated on a focused game
-# (it self-suppresses while the Steam UI is focused). `mangoapp` is our from-source overlay build
+# --- Control FILES the Steam client and gamescope must AGREE on -----------------------------------
+# gamescope creates both of these itself (main.cpp UpdateCompatEnvVars) — but ONLY into its own
+# environment, which reaches the processes IT spawns (mangoapp) and NOT the Steam client: in the
+# --steam/-R model above, gamescope runs in the BACKGROUND and the client is started by this script,
+# i.e. a SIBLING of gamescope, not its child. So we must create them HERE, before gamescope starts:
+# then gamescope adopts our paths (both creations are guarded on the var being unset/empty),
+# mangoapp inherits them from gamescope, and the client inherits them from this shell. One path,
+# three processes. This is exactly what the upstream SteamOS-derived session scripts do, and for the
+# same reason — it is NOT redundant with gamescope's own setup.
+#   MANGOHUD_CONFIGFILE  — SteamUI writes the QuickAccess Performance overlay state here (`preset=N`
+#                          for the Level selector); mangoapp re-reads it on reload_config. Seeded
+#                          `no_display` so the overlay starts hidden (gamescope seeds it the same way
+#                          when it is the creator) — otherwise the HUD flashes up during OOBE.
+#   GAMESCOPE_LIMITER_FILE — the QuickAccess frame-rate cap: gamescope writes the limiter flag, the
+#                          gamescope WSI layer inside the GAME process reads it. The game inherits its
+#                          env from Steam, so without this export neither end of that pair is wired.
+export MANGOHUD_CONFIGFILE="${GS_RUNDIR}/mangoapp.conf"
+echo "no_display" >"$MANGOHUD_CONFIGFILE"
+export GAMESCOPE_LIMITER_FILE="${GS_RUNDIR}/limiter"
+: >"$GAMESCOPE_LIMITER_FILE"
+
+# --mangoapp: gamescope spawns the `mangoapp` overlay as an in-session window (SpawnProcessInWatchdog),
+# inheriting GAMESCOPE_STATS + MANGOHUD_CONFIGFILE from this shell. SteamUI's Quick-Access
+# "Performance" toggle + Level drive it over the SysV control queue (show/hide) and that config file
+# + a reload (level/preset) — but ONLY once the CLIENT is told mangoapp exists, which is the
+# STEAM_USE_MANGOAPP / *_PRESETS_SUPPORTED / *_HORIZONTAL_SUPPORTED / *_ATOM_WORKAROUND gate block in
+# novadeck-steam. gamescope sets those gates for its own children, which the sibling client is not;
+# without them the client falls back to the LEGACY overlay path (it prepends `mangohud` to the game
+# launch instead of talking to mangoapp) and the toggle misbehaves. The overlay is additionally gated
+# on a focused game (it self-suppresses while the Steam UI is focused, so a library-side toggle is a
+# no-op by design). `mangoapp` is our from-source overlay build
 # (packages/mangohud) — REQUIRED on the image: the Steam client also prepends `mangohud` to the game
 # launch command when the overlay is enabled, so a missing binary crashes the launch.
 GS_ARGS="$GS_ARGS --mangoapp"

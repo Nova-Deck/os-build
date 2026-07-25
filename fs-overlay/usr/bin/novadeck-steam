@@ -61,6 +61,45 @@ export STEAM_EXTRA_COMPAT_TOOLS_PATHS="/usr/share/steam/compatibilitytools.d${ST
 export STEAM_ENABLE_DYNAMIC_BACKLIGHT=1        # adaptive-brightness toggle (needs an ambient sensor)
 export STEAM_DISPLAY_REFRESH_LIMITS=40,60      # refresh slider range; gamescope paces down to the low end
 
+# gamescope sets the gates below ITSELF in --steam mode (main.cpp UpdateCompatEnvVars) — but only into
+# its own environment, so they reach the processes gamescope SPAWNS (mangoapp) and not this client:
+# novadeck-session runs gamescope in the background and starts us as its SIBLING. Hence we set them by
+# hand, exactly as the upstream SteamOS-derived session scripts do. All use gamescope's own values;
+# gamescope's setenv()s are overwrite=0, so a value set here also wins there.
+#
+# Performance overlay -> mangoapp. Without these the client takes the LEGACY overlay path: it prepends
+# `mangohud` to the game launch command (the Vulkan layer inside the game) instead of driving the
+# mangoapp window gamescope already spawned, so the QuickAccess toggle/Level misbehave. The paired
+# MANGOHUD_CONFIGFILE (the file SteamUI writes `preset=N` into) is exported by novadeck-session and
+# inherited here.
+export STEAM_USE_MANGOAPP=1
+export STEAM_MANGOAPP_PRESETS_SUPPORTED=1      # QuickAccess "Level" selector -> mangoapp presets
+export STEAM_MANGOAPP_HORIZONTAL_SUPPORTED=1   # allow the horizontal HUD bar layout
+export STEAM_DISABLE_MANGOAPP_ATOM_WORKAROUND=1 # mangoapp sets GAMESCOPE_EXTERNAL_OVERLAY itself now
+# QuickAccess frame-rate cap: the client writes the cap, gamescope's WSI layer in the GAME process
+# reads GAMESCOPE_LIMITER_FILE (exported by novadeck-session). Both ends need this gate; our WSI layer
+# is on (ENABLE_GAMESCOPE_WSI=1 in the session).
+export STEAM_GAMESCOPE_DYNAMIC_FPSLIMITER=1
+# Scaling controls gamescope implements unconditionally (NIS + integer/fit/fill/stretch).
+export STEAM_GAMESCOPE_NIS_SUPPORTED=1
+export STEAM_GAMESCOPE_FANCY_SCALING_SUPPORT=1
+# Per-game Xwayland isolation. novadeck-session passes --xwayland-count 2, so the second nested
+# Xwayland exists and this is what makes the client actually USE it for games (gamescope sets this gate
+# itself whenever the count is >1). BISECT POINT: this is the one gate here that changes game-launch
+# behaviour rather than just exposing a control — drop it first if a title regresses.
+export STEAM_MULTIPLE_XWAYLANDS=1
+# SteamRT's xdg-open hands http(s):// to the client instead of a (nonexistent) desktop browser.
+export SRT_URLOPEN_PREFER_STEAM=1
+#
+# DELIBERATELY NOT SET (gamescope/ChimeraOS set some of these; each would advertise a control this
+# board cannot honour, or collides with something of ours):
+#   STEAM_GAMESCOPE_TEARING_SUPPORTED / _HAS_TEARING_SUPPORT — gamescope gates them on
+#     SupportsTearing(), which is FALSE here (msm exposes no DRM_CAP_ATOMIC_ASYNC_PAGE_FLIP).
+#   STEAM_GAMESCOPE_HDR_SUPPORTED, STEAM_GAMESCOPE_VRR_SUPPORTED — no HDR/VRR on this DSI panel.
+#   STEAM_GAMESCOPE_COLOR_MANAGED / _VIRTUAL_WHITE — belongs to the night-mode/colour work.
+#   STEAM_ENABLE_VOLUME_HANDLER — volume keys are ours (novadeck-hotkeyd); don't hand them to Steam.
+#   STEAM_USE_DYNAMIC_VRS — RADV-only.
+
 # Client-side defaults SteamOS/gamescope sessions set for the Big Picture shell (harmless, standard).
 export SDL_VIDEO_MINIMIZE_ON_FOCUS_LOSS=0      # keep the shell up when it loses focus
 export vk_xwayland_wait_ready=false            # don't block on buffers idling before present to gamescope

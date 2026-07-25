@@ -389,13 +389,33 @@ rationale lives in the linked memories and commit history.
     user.slice is frozen. HW-confirmed: fan stops on sleep, restarts on wake. Skippable via
     `NOVADECK_SUSPEND_SKIP="powerd"`. See [[power-profiles-device-env-stack]].
   - **Our `gamescopectl` panel-blank path logs "unreachable"** when `novadeck-suspend` runs as
-    `systemd-suspend.service` (root, system.slice) — it can't resolve the live gamescope socket. Harmless
-    today because Steam blanks the panel itself as part of its sleep flow, but add a `bl_power` fallback
-    (`echo 4 > /sys/class/backlight/*/bl_power` on suspend, `0` on resume) so a blank still happens if
-    Steam's own blank ever regresses. See [[sm8650-gamescope-flip-blocker]].
+    `systemd-suspend.service` (root, system.slice) — it can't resolve the live gamescope socket. Add a
+    `bl_power` fallback (`echo 4 > /sys/class/backlight/*/bl_power` on suspend, `0` on resume) so a
+    blank still happens without Steam. **HW 2026-07-26 — no longer hypothetical.** A full cycle entered
+    via `systemctl suspend` (i.e. bypassing Steam's own blank) left the panel **lit for the entire
+    ~70s frozen window**, user-visible: engine logged `no live gamescope socket` → `gamescopectl
+    unreachable; panel unchanged` → `panel blank NOT confirmed in 30ds; freezing anyway`, and the
+    recorder read `panel=enabled` on all 43 frozen samples. So the only thing blanking the screen today
+    is Steam's sleep flow; every other entry point (idle timeout, a direct `Suspend()`, anything that
+    lands here without the client's blank) sleeps with the backlight ON. Note it also costs 8s of the
+    suspend path — 5s socket-resolve + a 3s `wait_panel` timeout — before the freeze even starts.
+    See [[sm8650-gamescope-flip-blocker]].
 
-- [ ] **Narrow the fake-suspend freeze set so the session bus stays live — TEST FIRST, do not just
-  change the default.** `novadeck-suspend` freezes all of `/sys/fs/cgroup/user.slice`, which includes
+- [x] **Narrow the fake-suspend freeze set so the session bus stays live — DONE + HW-VALIDATED
+  2026-07-26 (Pocket S2, full suspend/resume cycle with a game running).** Default is now
+  `/sys/fs/cgroup/user.slice/user-1000.slice/session-*.scope` in both `novadeck-suspend` and the
+  `rest.conf` template. **Cycle evidence:** 43 consecutive frozen samples over ~70s with the scope's
+  `cpu.stat usage_usec` pinned at exactly `660453813` — the game and the whole session truly halted,
+  zero drift; `systemctl --user is-active dbus-broker` answered as `deck` THROUGHOUT the frozen window
+  (it used to hang); root SSH stayed *responsive* the entire time rather than going dead; wake on
+  KEY_POWER thawed cleanly and `usage_usec` resumed advancing at its pre-freeze rate. Test ran with
+  `NOVADECK_SUSPEND_SKIP="rfkill"` so the link stayed up to observe — orthogonal to the freeze set.
+  **CAVEAT — one criterion NOT validated:** the panel never blanked during the cycle, so "stays blank
+  while frozen" is untested. That is the pre-existing `gamescopectl unreachable` gap (the `bl_power`
+  item above), not a regression from this change, and it was visible only because the cycle was
+  triggered with `systemctl suspend` directly — the Steam power-press path does its own blank first.
+  Unaffected by construction anyway: gamescope remains INSIDE the frozen set, so whatever it was doing
+  with the blank modeset it still does. Original analysis retained below. — `novadeck-suspend` froze all of `/sys/fs/cgroup/user.slice`, which includes
   `session.slice` and therefore `dbus-broker` + `systemd --user`. That is the whole reason
   `systemctl --user` / `gamescopectl` hang inside the frozen window (see
   [[suspend-systemctl-while-frozen-blocks]]); the file header used to claim this hazard didn't exist,
@@ -427,10 +447,9 @@ rationale lives in the linked memories and commit history.
     blank-BEFORE-freeze ordering in `do_suspend()` stays load-bearing, and this does not remove the
     need for the `bl_power` fallback above. Update [[suspend-systemctl-while-frozen-blocks]] when it
     lands: the hazard narrows from "any user-session IPC" to "gamescope only".
-  - **Still to validate before flipping the default:** freeze the narrow set on a live session and
-    confirm (a) the game really halts, (b) the panel stays blank across the whole window, (c) resume
-    is clean. `NOVADECK_SUSPEND_FREEZE_CGROUPS` is overridable, so this is testable without a rebuild
-    — export it in `rest.conf` and run one sleep cycle.
+  - ~~Still to validate before flipping the default~~ — **DONE, see the HW result in the header.**
+    (a) game halts: YES, `usage_usec` frozen solid; (b) panel stays blank: NOT TESTED, it never
+    blanked (pre-existing gap, see caveat); (c) resume clean: YES.
 
 - [x] **Provide `com.steampowered.SteamOSManager1` (steamos-manager) — DONE 2026-07-14** (see the LANDED
   power-profiles stack entry at the top of Open). SteamUI's privileged backend

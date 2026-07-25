@@ -30,7 +30,12 @@ set -u
 CONF=/etc/novadeck/rest.conf
 [ -r "$CONF" ] && . "$CONF"
 : "${NOVADECK_REST_SCREEN:=internal}"
-: "${NOVADECK_SUSPEND_FREEZE_CGROUPS:=/sys/fs/cgroup/user.slice}"
+# Freeze the deck's LOGIN SCOPE, not all of user.slice. Measured on HW: session-<n>.scope holds
+# gamescope, both Xwaylands, the session scripts, mangoapp, the Steam client AND the game, while the
+# user session bus, `systemd --user` and steamos-manager sit outside it under user@1000.service — so
+# this halts the workload while leaving the session bus answerable. GLOB, not session-1: the scope
+# number is per-login. Expanded (split + globbed) in freeze(), so keep it unquoted there.
+: "${NOVADECK_SUSPEND_FREEZE_CGROUPS:=/sys/fs/cgroup/user.slice/user-1000.slice/session-*.scope}"
 : "${NOVADECK_SUSPEND_SKIP:=}"          # power ops to skip: cpu rfkill governor gpugov (e.g. "rfkill" over SSH)
 : "${NOVADECK_WAKE_KEY:=KEY_POWER}"
 : "${NOVADECK_WAKE_DEBOUNCE_MS:=1000}"  # ignore a KEY_POWER within this of arming the wait (press bounce)

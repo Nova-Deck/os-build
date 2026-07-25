@@ -257,13 +257,24 @@ rationale lives in the linked memories and commit history.
   selectable on a 60Hz board regardless — it is driven by `STEAM_GAMESCOPE_DYNAMIC_FPSLIMITER`, whose
   choices are divisors of the CURRENT refresh. See [[power-profiles-device-env-stack]].
 
-- [ ] **`STEAM_ENABLE_DYNAMIC_BACKLIGHT=1` is set unconditionally — same fabrication, not yet fixed**
-  (`novadeck-steam:60`, whose own comment concedes it "needs an ambient sensor"). Split out of the
-  refresh-limits item above, which fixed only the refresh half. Adaptive brightness needs an ambient
-  light sensor; if these boards have none we are advertising a toggle that cannot do anything. Unlike
-  the refresh rates there is no registry fact to derive this from yet — establish first whether ANY
-  supported board has an ALS (check for an `iio` light channel on HW), then either gate it on a new
-  device-env key or drop the export outright. Cheap correctness cleanup, no rebuild.
+- [ ] **`STEAM_ENABLE_DYNAMIC_BACKLIGHT` export DROPPED (user decision 2026-07-25) — HW-VERIFY the
+  manual brightness slider survives.** The unconditional `=1` was the Steam Deck's adaptive-brightness
+  gate; almost none of the boards we support have an ambient-light sensor, and any that do most likely
+  have no upstream driver, so nothing publishes an `iio` light channel for the client to read — it
+  advertised a toggle that cannot work. Now listed in `novadeck-steam`'s DELIBERATELY-NOT-SET block
+  with the rule that a future ALS board derives it per-board from the device-env registry (as
+  `STEAM_DISPLAY_REFRESH_LIMITS` does), never a blanket `=1`.
+  **⚠️ REGRESSION RISK — the one thing to check on the next boot.** Our own HW note from the closed
+  "Wire brightness controls" item below (2026-07-05) says this env gate *"made the slider appear"*.
+  If that gate turns out to expose the **manual** brightness slider and not merely the adaptive
+  toggle, dropping it removes working brightness control — a regression, not a cleanup. Unresolved
+  from the baked client: `strings steamui.so` confirms it reads `STEAM_ENABLE_DYNAMIC_BACKLIGHT`,
+  `display_backlight_raw` and `/sys/class/backlight/`, but not which control each gates.
+  **Test:** boot with the export gone and open QuickAccess → the brightness SLIDER must still be
+  present and still move the panel (the write path itself is independent — it is the udev ACL in
+  `60-novadeck-perf-acls.rules`, unaffected by this change). If the slider disappears, restore the
+  export and reclassify the item as "keep, it is the manual-brightness gate and is misnamed".
+  See [[brightness-volume-keys-resolved]].
 
 - [x] **Switch InputPlumber virtual device from DS5 to Xbox — DONE, COMMITTED `b63e4fe`, HW-VALIDATED.**
   (Files moved from `devices/inputplumber/` → `fs-overlay/usr/...` in the `4bce06a` refactor.)

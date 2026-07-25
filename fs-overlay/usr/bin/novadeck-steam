@@ -55,9 +55,7 @@ export STEAM_EXTRA_COMPAT_TOOLS_PATHS="/usr/share/steam/compatibilitytools.d${ST
 # --- SteamUI QuickAccess / gamescope integration env (SteamOS "gamescope-session" parity) ---------
 # ENV GATES SteamUI reads to decide which Quick-Access controls to expose. They pair with the
 # gamescope --steam stats channel wired in novadeck-session — without the channel these do nothing,
-# and without these the controls may not appear even with the channel. HW-TBD: whether this board has
-# an ambient-light sensor (dynamic backlight) before trusting that one.
-export STEAM_ENABLE_DYNAMIC_BACKLIGHT=1        # adaptive-brightness toggle (needs an ambient sensor)
+# and without these the controls may not appear even with the channel.
 
 # Refresh-rate SLIDER range — NOT the framerate cap (that is STEAM_GAMESCOPE_DYNAMIC_FPSLIMITER
 # below; its choices are divisors of the CURRENT refresh and exist regardless of this range, which is
@@ -112,6 +110,12 @@ export SRT_URLOPEN_PREFER_STEAM=1
 #   STEAM_GAMESCOPE_COLOR_MANAGED / _VIRTUAL_WHITE — belongs to the night-mode/colour work.
 #   STEAM_ENABLE_VOLUME_HANDLER — volume keys are ours (novadeck-hotkeyd); don't hand them to Steam.
 #   STEAM_USE_DYNAMIC_VRS — RADV-only.
+#   STEAM_ENABLE_DYNAMIC_BACKLIGHT — adaptive brightness needs an ambient-light sensor. Almost none of
+#     the boards we support have one, and for any that do there is most likely no upstream driver, so
+#     nothing would publish an iio light channel for the client to read. We used to set it =1 with an
+#     HW-TBD comment, which advertised an adaptive-brightness toggle that cannot do anything. If a
+#     board with a WORKING ALS ever lands, derive this per-board from the device-env registry the way
+#     STEAM_DISPLAY_REFRESH_LIMITS is derived above — do not restore a blanket =1.
 
 # Client-side defaults SteamOS/gamescope sessions set for the Big Picture shell (harmless, standard).
 export SDL_VIDEO_MINIMIZE_ON_FOCUS_LOSS=0      # keep the shell up when it loses focus

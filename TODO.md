@@ -402,17 +402,35 @@ rationale lives in the linked memories and commit history.
   which was wrong and is now corrected in place. The reference handheld distro moved its equivalent
   script off `user.slice` onto the app-level subtree for exactly this reason, keeping the game frozen
   while the session plumbing stays answerable.
-  - **Why this is not a copy of their fix:** their session puts games under `user@.service/app.slice`.
-    Ours appears to put gamescope in `session-1.scope` (per [[gamescope-slow-shutdown-sigterm-wedge]]),
-    and if Steam and the game share that scope then freezing `app.slice` would freeze *nothing* here.
-  - **Also load-bearing:** we freeze gamescope ON PURPOSE — it holds the blank KMS modeset statically
-    while frozen. Any narrower set that leaves gamescope running needs a different blank strategy, so
-    this interacts with the `bl_power` fallback item above rather than being independent of it.
-  - **Test:** on device, `systemd-cgls` (or `systemctl status` on the game PID) during an active game
-    to record where gamescope / steam / the game process actually land. Then decide whether a set
-    exists that halts the game, leaves `session.slice` thawed, and still blanks the panel.
-  - No code change needed to try one: `NOVADECK_SUSPEND_FREEZE_CGROUPS` is already a space-separated,
-    overridable list of cgroup paths — this is a question about the *default*, not about plumbing.
+  - **MEASURED ON HW 2026-07-26 (Pocket S2, live session WITH a game running — AppId 40800 under
+    FEX). A qualifying set exists.** Read straight out of `/proc/<pid>/cgroup`:
+    - `/user.slice/user-1000.slice/`**`session-1.scope`** (24 entries) holds EVERYTHING we want frozen:
+      `gamescope-wl` (842), both Xwaylands (`:0`/`:1`), `novadeck-session`, `novadeck-steam`,
+      `gamescopereaper` + `mangoapp`, the Steam client (904) + `steamwebhelper`, **and the game**
+      (`reaper` 2690, `pv-adverb`/FEX 2764).
+    - The session plumbing is OUTSIDE that scope, as siblings under `user@1000.service`:
+      `session.slice/dbus-broker.service` (854, the user bus), `init.scope` (`systemd --user`, 803),
+      and `app.slice` (`novadeck-steamos-manager`, 820).
+    - Root's SSH sessions are outside `user-1000.slice` entirely (`user-0.slice/session-*.scope`).
+  - **Their `app.slice` fix is CONFIRMED DEAD for us** — the doubt in this item was right. Our
+    `user@1000.service/app.slice` contains only `novadeck-steamos-manager` and at-spi; no gamescope,
+    no Steam, no game. Freezing it would freeze nothing that matters.
+  - **New default to adopt:** `/sys/fs/cgroup/user.slice/user-1000.slice/session-*.scope`. Use the
+    GLOB, do not hardcode `session-1` — the scope number is assigned per login and is not stable
+    across a session restart. No plumbing change: `freeze()` iterates `for cg in
+    $NOVADECK_SUSPEND_FREEZE_CGROUPS` **unquoted**, so the value undergoes pathname expansion at use,
+    and the glob stays scoped to uid 1000.
+  - **What this fixes and what it does NOT.** It thaws `dbus-broker` + `systemd --user`, so
+    `systemctl --user` answers inside the frozen window, and root SSH stays *responsive* rather than
+    merely connected (see [[suspend-ssh-survives-established]]). **`gamescopectl` will still hang** —
+    gamescope is in the frozen set BY DESIGN (it holds the blank KMS modeset statically). So the
+    blank-BEFORE-freeze ordering in `do_suspend()` stays load-bearing, and this does not remove the
+    need for the `bl_power` fallback above. Update [[suspend-systemctl-while-frozen-blocks]] when it
+    lands: the hazard narrows from "any user-session IPC" to "gamescope only".
+  - **Still to validate before flipping the default:** freeze the narrow set on a live session and
+    confirm (a) the game really halts, (b) the panel stays blank across the whole window, (c) resume
+    is clean. `NOVADECK_SUSPEND_FREEZE_CGROUPS` is overridable, so this is testable without a rebuild
+    — export it in `rest.conf` and run one sleep cycle.
 
 - [x] **Provide `com.steampowered.SteamOSManager1` (steamos-manager) — DONE 2026-07-14** (see the LANDED
   power-profiles stack entry at the top of Open). SteamUI's privileged backend

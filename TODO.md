@@ -681,6 +681,27 @@ rationale lives in the linked memories and commit history.
   can break a board we cannot boot. Fold any symbol the new tree no longer has into the same pass
   ([[drop-dead-config-symbols]]).
 
+- [ ] **In-session splash client — cover the gamescope→Steam black gap (and decide plymouth's fate)**
+  — boot currently ends in ~10s of black: gamescope's first modeset lands at ~15s and Steam does not
+  paint its UI until ~25s. That tail is the part that reads as "did this hang?", because it sits
+  immediately before the UI appears. **No plymouth setting can reach it.** DRM master is exclusive,
+  so plymouthd must be gone before the compositor can paint at all, and `--retain-splash` only skips
+  the explicit clear (`main.c:1502`) — `quit_splash()` still closes the DRM fd, after which the
+  kernel's fbdev emulation (`[drm] fb0: msmdrmfb`) restores a blank console over the retained frame.
+  The fix has to live INSIDE the session: a fullscreen client that paints the logo on gamescope's
+  nested display, started by `novadeck-session` right after the startup handshake and torn down when
+  Steam's first window appears. Cheap by comparison — no initramfs growth, no source-built package,
+  no patched upstream, no DRM-master ordering invariant.
+  **This item also decides whether plymouth is worth keeping at all** (`feat/plymouth-splash`,
+  HW-validated but deliberately unmerged as of 2026-07-25). plymouth covers ~4s→15s, i.e. boot's
+  FIRST half — the half nobody complained about — and costs a from-source overlay package, an
+  unsubmitted upstream NULL-deref patch that must be re-verified on every bump, ~1.9M of initramfs,
+  four cmdline requirements (`rhgb`, `plymouth.ignore-udev`, `loglevel=3`,
+  `vt.global_cursor_default=0`), and an ordering invariant anyone touching the session can break.
+  Build the in-session client FIRST, then judge: if the boot feels fine with black at the front,
+  delete the branch; if the front-half black still grates, merge it then.
+  See [[boot-splash-plymouth]], [[sm8650-gamescope-session-plumbing]].
+
 ## Phase 2 — gamescope session (closed)
 
 - [x] **Clean gamescope teardown / re-launch wedge** — WON'T-FIX (HW-disproven 2026-06-25).

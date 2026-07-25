@@ -46,9 +46,10 @@ if [ -z "${NOVADECK_GAMESCOPE_REFRESH:-}" ]; then
 fi
 
 # Physical output size for gamescope's DPI/scale, from device-env (e.g. "177x100"); exported only
-# when the board declares one. NOTE: consumed by a gamescope fake-output-mm patch we have NOT pulled
-# yet — inert until then, but wired now so the value flows once the patch lands. Candidate lever for
-# the SteamUI-scale TODO.
+# when the board declares one. Consumed by our gamescope fake-output-mm patch
+# (packages/gamescope/patches/0003), which reports it as the wl_output physical size instead of the
+# connector/EDID mm — this, NOT the panel DTS mm, is what SteamUI auto-scale reads. WIDTHxHEIGHT in
+# the LANDSCAPE (logical) orientation, aspect-matched to -W/-H. Board declares none -> real panel mm.
 if [ -n "${NOVADECK_GAMESCOPE_FAKE_OUTPUT_MM:-}" ]; then
   export GAMESCOPE_FAKE_OUTPUT_MM="$NOVADECK_GAMESCOPE_FAKE_OUTPUT_MM"
 fi

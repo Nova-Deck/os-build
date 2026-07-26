@@ -393,13 +393,20 @@ if [ ! -f "$OVERLAY_DB" ] || ! ls "$OVERLAY_REPO"/*.pkg.tar.zst >/dev/null 2>&1;
 fi
 
 # The target root. It must start EMPTY: this is a bootstrap, and reusing a partially populated
-# tree would reintroduce exactly the "content of unknown origin" the phase removes. It is
-# root-owned (the container's pacman writes it), so the wipe goes through a container too;
-# work/ itself stays host-owned, and re-creating the mount point on the host keeps it that way.
+# tree would reintroduce exactly the "content of unknown origin" the phase removes.
+#
+# BOTH the wipe and the re-create run in a container, so the directory itself is ROOT-owned like
+# everything pacman then writes into it. Creating it on the host instead (`mkdir -p "$DEST"`)
+# leaves it owned by the build user, and systemd-tmpfiles below then refuses to descend into it:
+#   Detected unsafe path transition /target (owned by 1000) -> /target/var (owned by root)
+# — its symlink-attack guard, which fires on any ownership transition into a root-owned subtree.
+# That silently produced a tree with none of the tmpfiles directories in it. work/ ITSELF stays
+# host-owned (created above, and by the Makefile at parse time); only work/base is root-owned,
+# which is already how the tree is treated everywhere else (`make clean-base` removes it from
+# inside a container for exactly this reason).
 echo "[novadeck] clearing the target root -> ${DEST#"$ROOT"/}" >&2
 mkdir -p "$ROOT/work"
-docker run --rm -v "$ROOT/work":/wb "$REF" rm -rf /wb/base
-mkdir -p "$DEST"
+docker run --rm -v "$ROOT/work":/wb "$REF" sh -c 'rm -rf /wb/base && mkdir -m0755 /wb/base'
 
 if [ -n "$RESOLVE" ]; then
   echo "[novadeck] resolving the root under arm64: ${INSTALL_PKGS[*]}" >&2
@@ -507,7 +514,15 @@ docker run --rm --platform linux/arm64 -v "$PREBUILT_DIR":/prebuilt:ro \
       case "${p_kind:-tar}" in
         tar)
           mkdir -p "/target$p_dest"
-          tar -C "/target$p_dest" --strip-components="${p_strip:-0}" -xf "/prebuilt/$p_name.tar"
+          # --no-same-owner is LOAD-BEARING, not hygiene. These are third-party archives and they
+          # carry their own CI builder`s numeric uid: the InputPlumber tarball is 1001/1001
+          # throughout, and it unpacks at / with strip 1, so a root `tar -x` chowned the TARGET`s
+          # /usr, /usr/bin, /usr/lib and /usr/share to 1001 -- a uid that does not exist on the
+          # image. Long-standing (the same extraction ran before Phase 4c) and missed by
+          # assemble-rootfs.sh step 4z, which reclaims only the repo-checkout uid. Nothing in a
+          # read-only system root legitimately belongs to a build account, so extract as root.
+          tar -C "/target$p_dest" --no-same-owner --strip-components="${p_strip:-0}" \
+              -xf "/prebuilt/$p_name.tar"
           ;;
         file)
           install -Dm0644 "/prebuilt/$p_name.blob" "/target$p_dest"
@@ -592,6 +607,26 @@ docker run --rm --platform linux/arm64 -v "$PREBUILT_DIR":/prebuilt:ro \
       || chroot /target useradd -r -U -M -d /var/lib/sddm -s /usr/bin/nologin -c "Simple Desktop Display Manager" sddm
   fi
   chroot /target install -d -o sddm -g sddm -m 1770 /var/lib/sddm 2>/dev/null || true
+
+  # Materialize tmpfiles.d. pacman`s post-transaction hook tries this and FAILS in the bootstrap
+  # ("/proc/ is not mounted, but required ... consider using the --root= switch"), because it runs
+  # chrooted with no /proc -- and pacman treats a failed hook as a warning, so the build stayed
+  # green with none of these directories created. Before 4c it did not matter: the vendor had run
+  # it when building the image we exported. Now nobody has, and the root is READ-ONLY at runtime,
+  # so a directory tmpfiles would create on first boot cannot appear at all.
+  #
+  # --root= is the documented offline mode and what the error itself suggests; builder and target
+  # ship the identical systemd (258.2-2-arch, both from the pinned snapshot). It runs HERE, after
+  # the accounts above, because entries name owners (sddm, deck) that must resolve in the target`s
+  # own /etc/passwd -- and after the prebuilts, which ship tmpfiles.d snippets of their own.
+  #
+  # NOT fatal on a non-zero exit: an offline run legitimately cannot satisfy every line (anything
+  # under /proc, /sys or /dev, and ACL/xattr ops the host filesystem may not support), and
+  # systemd-tmpfiles returns non-zero if ANY line failed. Report the code rather than swallow it,
+  # so a run that starts failing wholesale is visible in the build log.
+  if ! systemd-tmpfiles --root=/target --create; then
+    echo "[novadeck] systemd-tmpfiles --root exited $? (partial offline application; see above)" >&2
+  fi
 
   # Record the install-set marker LAST, so its presence proves the whole bootstrap ran. The host
   # reuse-check keys off it: a run that died anywhere above leaves no marker, so the next build

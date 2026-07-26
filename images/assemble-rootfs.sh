@@ -46,24 +46,42 @@ echo "[novadeck] assembling unified read-only root (base=$BASE)"
 if command -v rsync >/dev/null 2>&1; then rsync -aHAX --numeric-ids "$BASE"/ "$stage"/
 else cp -a "$BASE"/. "$stage"/; fi
 
-# Scrub the container provenance that `docker export` of the base leaves behind, so the sealed
-# image looks like the bare-metal OS it is — not the build container it was assembled in. This is
-# the maintenance tax of bootstrapping from a Docker base (vs SteamOS's manifest-sealed image); keep
-# it explicit and named so a future base bump that leaks a new artifact has an obvious home. Phase-4
-# migrates to manifest-driven sealing, which removes the need for this entirely (see rootfs plan).
+# Scrub the build provenance the base image carries in, so the sealed image looks like the
+# bare-metal OS it is — not the vendor container it was bootstrapped from. The markers are declared
+# in images/provenance.list (see that file for what each one breaks) and asserted gone by
+# images/guard-rootfs.sh, so this is one half of a declare/apply/assert triple rather than a
+# hand-kept rm.
 #
-# Audited on the SM8650 base 2026-06-25 — only the marker below was actually harmful; the other
-# docker-export tells are benign and deliberately left alone:
+# This is the maintenance tax of the docker-export bootstrap. Phase 4a does NOT remove it — 4a seals
+# what stays behind (strips the package manager); the tree still ORIGINATES as `docker export` of
+# base.digest, and 116 of the lock's rows are class `base` precisely because they arrive as image
+# content rather than as installs. Only a from-packages bootstrap (4c) makes this file unnecessary.
+#
+# Audited on the SM8650 base 2026-06-25, re-audited 2026-07-26 (unowned-file sweep of the pinned
+# base: 31,203 files, 30,012 owned by a package). Everything harmful found is in provenance.list;
+# these tells are benign and deliberately left alone:
 #   - /etc/{resolv.conf,hostname,hosts}: empty 0-byte stubs; NetworkManager populates resolv.conf at
 #     runtime (DNS verified working on HW), so blanking/owning them here would be churn for no gain.
 #   - /etc/machine-id: correctly empty — REQUIRED so systemd runs preset-all on first boot. Do NOT
 #     populate it here (that would disable our preset-based service enablement).
+#   - /etc/{os-release,locale.conf}: vendor-written and unowned by any package. Ours to own when 4c
+#     stops inheriting them; rewriting them here would be churn against a tree we still import.
 sanitize_base_provenance() {
-  # /.dockerenv (and podman's /run/.containerenv) make `systemd-detect-virt` report a container on
-  # the real device, so systemd SILENTLY skips every `ConditionVirtualization=!container` unit —
-  # systemd-timesyncd is the visible casualty (clock stuck at epoch) but it gates ~13 units.
-  # HW-confirmed on 192.168.1.186 (2026-06-25). These must never reach the sealed image.
-  rm -f "$1/.dockerenv" "$1/run/.containerenv"
+  local tree="$1" marker flag missing=0
+  while read -r marker flag _; do
+    case "$marker" in ''|'#'*) continue ;; esac
+    # A path that is never present asserts nothing, forever — the same self-fulfilling trap the
+    # guard's NAMED list guards against, and this is the only place that can see the pre-scrub
+    # tree and so the only place that can catch it. Report rather than fail: a base bump that
+    # legitimately stops shipping a marker is good news, not a broken build.
+    if [ -e "$tree/$marker" ] || [ -L "$tree/$marker" ]; then
+      rm -rf "${tree:?}/$marker"
+    elif [ "$flag" != optional ]; then
+      echo "[novadeck] provenance.list: '$marker' not present in the base — stale entry, or a typo" >&2
+      missing=$((missing + 1))
+    fi
+  done < "$ROOT/images/provenance.list"
+  echo "[novadeck] scrubbed build provenance ($missing declared marker(s) not found)"
 }
 sanitize_base_provenance "$stage"
 

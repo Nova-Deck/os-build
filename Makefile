@@ -130,8 +130,12 @@ STEAM_SEED   := work/steam-seed/steamrtarm64/steam
 # against the tree it was tightened for, not wait for the next unrelated fs-overlay edit.
 # images/manifest.lock is one of its inputs (it asserts the tree still matches the lock) and is
 # already a $(BASE_STAMP) prerequisite, which reaches the rootfs transitively.
+#
+# images/provenance.list is listed for both reasons at once: assemble-rootfs.sh scrubs what it
+# declares (it changes bytes) and guard-rootfs.sh asserts what it declares (it decides whether an
+# image is produced). Declaring a new marker has to re-run against the tree it was declared for.
 ASSEMBLE_SRC := $(shell find images/assemble-rootfs.sh images/seal-rootfs.sh images/seal.list \
-                              images/guard-rootfs.sh fs-overlay -type f 2>/dev/null)
+                              images/guard-rootfs.sh images/provenance.list fs-overlay -type f 2>/dev/null)
 
 # Kernel inputs: any change re-triggers the (full, from-scratch) kernel build. The unified
 # kernel globs every fragment/patch/dts, and bakes the firmware embed list.

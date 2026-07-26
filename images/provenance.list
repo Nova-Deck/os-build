@@ -1,0 +1,35 @@
+# novadeck build-provenance markers — paths that must NEVER reach a shipped root.
+#
+# One tree-relative path per line (no leading /); blank lines and #-comments ignored.
+#
+#   <path>            must exist in the base — assemble-rootfs.sh reports it if it does not, which
+#                     is how a typo'd path (absent from every tree, so asserted by nobody, forever)
+#                     gets caught instead of silently weakening the guard.
+#   <path> optional   defensive entry for a marker this builder does not produce. Scrubbed and
+#                     asserted exactly the same; only the not-found report is suppressed, so the
+#                     report stays worth reading.
+#
+# We bootstrap from a vendor-built container image (base.digest), so the staged tree starts life
+# carrying artifacts of two build systems that are not ours: docker's, and the vendor's CI. This
+# file is the single declaration of what those are. images/assemble-rootfs.sh removes every line
+# from the staged tree; images/guard-rootfs.sh then asserts every line is gone before an image is
+# built from it. Both read THIS file, so a marker can never be scrubbed-but-unasserted (or the
+# reverse), and adding one on a base bump is a one-line reviewable diff.
+#
+# Phase 4c (bootstrap from packages into an empty root, dropping the `base` lock class) deletes
+# the need for this file entirely — nothing is inherited, so nothing has to be scrubbed. Until
+# then this is the maintenance tax of the docker-export bootstrap, kept explicit and named.
+
+# --- docker ------------------------------------------------------------------------------------
+# `systemd-detect-virt` reports a container when these exist, and systemd then SILENTLY skips
+# every ConditionVirtualization=!container unit — ~13 of them, systemd-timesyncd being the visible
+# casualty (clock stuck at epoch). HW-confirmed 2026-06-25.
+.dockerenv
+run/.containerenv optional   # podman's; we build with docker, so it is never present here
+
+# --- vendor CI ---------------------------------------------------------------------------------
+# Artifacts of the base image's own build pipeline. Functionally inert, but they are someone
+# else's build metadata shipping as part of our OS. Found 2026-07-26 by an unowned-file audit of
+# the pinned base (31,203 files, 30,012 owned by a package); both were reaching the image.
+repos
+etc/mash-ci-tracking.job_id

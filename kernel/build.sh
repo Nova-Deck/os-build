@@ -132,6 +132,21 @@ CC=(${CROSS_COMPILE:+CROSS_COMPILE=$CROSS_COMPILE})
   scripts/config --file .config --set-str EXTRA_FIRMWARE "$EMBED_REL"
   scripts/config --file .config --set-str EXTRA_FIRMWARE_DIR firmware
   make ARCH=arm64 "${CC[@]}" olddefconfig
+
+  # Assert the symbols we deliberately force to =m actually SURVIVED olddefconfig. kconfig
+  # silently promotes a module to built-in when some =y symbol selects it, so a stray builtin
+  # Wi-Fi driver in defconfig would quietly undo kernel.config's CONFIG_CFG80211=m -- and the
+  # only visible symptom would be regulatory.db failing to load at boot again (it is requested
+  # at kernel init, before any rootfs). Fail loudly here instead of shipping that silently.
+  for sym in CFG80211 MAC80211; do
+    got="$(scripts/config --file .config --state "$sym")"
+    [ "$got" = "m" ] || {
+      echo "CONFIG_$sym resolved to '$got', expected 'm'" >&2
+      echo "  something built-in selects it; find it with: grep -rn \"select $sym\" ." >&2
+      exit 1
+    }
+  done
+
   make ARCH=arm64 "${CC[@]}" -j"$(nproc)" Image.gz dtbs modules
 )
 

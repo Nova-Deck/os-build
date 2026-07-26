@@ -1,0 +1,27 @@
+# novadeck /etc/os-release (Phase 4c).
+#
+# Installed as /etc/os-release by images/customize-base.sh. Overriding in /etc is what
+# os-release(5) defines /etc for; /usr/lib/os-release stays as the `filesystem` package
+# shipped it, so nothing is edited in place and no package file is silently modified.
+#
+# WHY WE OWN THIS. Before 4c the root was `docker export` of the vendor image, and its
+# hand-written /etc/os-release came along — so the image identified itself as "Holo core
+# Aarch64 port (preview)", ID=holo-core, with the vendor's VERSION_ID and BUILD_ID. That was
+# never true of what we ship, and it is one of the three identity files no package owns (the
+# others being /etc/locale.conf and /etc/hostname), so a from-packages bootstrap has to
+# answer for it rather than inherit it.
+#
+# NO PER-BUILD FIELDS. This file is static so that rebuilding does not churn the tree. The
+# per-build identity — variant and build timestamp — is written by
+# images/assemble-rootfs.sh to /etc/novadeck-release, which is where anything wanting to
+# know which image is running should look.
+#
+# ID_LIKE=arch is load-bearing for third-party tooling that branches on distro family
+# (Arch-style paths and package names are what this actually is). ID is ours.
+
+NAME="novadeck"
+PRETTY_NAME="novadeck"
+ID=novadeck
+ID_LIKE=arch
+ANSI_COLOR="1;35"
+HOME_URL="https://github.com/Nova-Deck/os-build"

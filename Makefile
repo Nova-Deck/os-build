@@ -171,7 +171,7 @@ kernel:    $(KERNEL)       ## Build Image.gz + all dtbs + modules (in build cont
 fw-linux:  $(FW_LINUX)     ## Fetch open linux-firmware blobs (host, network)
 fw-qcom:   $(FW_QCOM)      ## Fetch device-proprietary firmware from the qcom-firmwares repo (host, network)
 overlay:   $(OVERLAY_DB)   ## Rebuild from-source overlay pkgs (patched gamescope) -> work/repo/<arch>/
-base:      $(BASE_STAMP)   ## Fetch + customize the pinned aarch64 base rootfs (host)
+base:      $(BASE_STAMP)   ## Bootstrap the aarch64 root from packages (host; docker+qemu)
 rootfs:    $(ROOTFS)       ## Assemble the read-only root + var images (in container)
 initramfs: $(INITRAMFS)    ## Build the initramfs that mounts ro-root + /etc overlay (in container)
 boot:      $(BOOTIMG)      ## Package the all-boards boot artifact (in container)
@@ -228,21 +228,27 @@ $(OVERLAY_STAMP): $(OVERLAY_DB)
 	@[ -e $@ ] || touch $@   # first-ever run: ensure the stamp exists even if the sha file seeded it
 
 # ==============================================================================
-# Base rootfs (host — customize-base.sh drives docker + qemu binfmt itself)
+# Root bootstrap (host — customize-base.sh drives docker + qemu binfmt itself)
 # ==============================================================================
-# snapshot.pin is a base input exactly like base.digest: it selects the package-repo revision
-# customize-base.sh installs from. Without it here the stamp short-circuits `make base` and a
-# pin bump is silently a no-op -- the script's own reuse check never gets to run, because make
-# never invokes the script.
+# Every prerequisite here is an input to the tree work/base ends up containing. Without one
+# listed, the stamp short-circuits `make base` and editing that input is silently a no-op --
+# the script's own reuse check never gets to run, because make never invokes the script.
 #
-# images/manifest.lock is a base input too, and the strongest one: under the default LOCKED mode
-# customize-base.sh installs exactly the package FILES it declares (Phase 4a step 2), so editing
-# the lock changes the tree. images/fetchlock.sh is listed for the same reason build scripts
-# generally are -- it is what turns the lock into that install.
-$(BASE_STAMP): base.digest snapshot.pin images/manifest.lock images/fetchlock.sh $(PREBUILT_PINS)
+# base-devel.digest pins the arm64 image the bootstrap EXECUTES in (Phase 4c; it contributes
+# no files to the root, but it is the pacman that lays them down). snapshot.pin selects the
+# package-repo revision every row is installed from.
+#
+# images/manifest.lock is the strongest input: under the default LOCKED mode customize-base.sh
+# installs exactly the package FILES it declares (Phase 4a step 2), so editing the lock changes
+# the tree. images/fetchlock.sh is listed for the same reason build scripts generally are -- it
+# is what turns the lock into that install. images/pacman.conf and images/os-release are the
+# two committed declarations the bootstrap stages into the container: the repo set the root is
+# resolved from, and the root's own identity.
+$(BASE_STAMP): base-devel.digest snapshot.pin images/manifest.lock images/fetchlock.sh \
+               images/pacman.conf images/os-release $(PREBUILT_PINS)
 	images/customize-base.sh
-	@test -f work/base/usr/bin/sshd   # sentinel: sshd present => release runtime layered in
-	@mkdir -p $(@D) && touch $@   # recency marker outside the root-owned base tree (frozen mtimes)
+	@test -f work/base/usr/bin/sshd   # sentinel: sshd present => release runtime laid down
+	@mkdir -p $(@D) && touch $@   # recency marker outside the root-owned tree (frozen mtimes)
 
 # A built overlay repo is an extra base input: customize-base installs the patched packages
 # from it and folds its content hash into the reuse-cache key. Wire it as a prerequisite only
@@ -343,9 +349,9 @@ deploy: $(BOOTIMG) ## Install the boot image onto ESP=<mountpoint>
 clean: ## Remove built artifacts (out/), keep firmware/base caches + toolchain stamp
 	docker run --rm -v $(CURDIR)/out:/wo busybox rm -rf /wo/Image.gz /wo/dtbs /wo/modroot /wo/images /wo/boot /wo/initramfs.cpio.gz
 
-# work/base is root-owned (customize-base exports it as root), so a plain rm fails for the
-# build user — remove it from inside a throwaway container as root.
-clean-base: ## Remove the (root-owned) cached base rootfs
+# work/base is root-owned (the bootstrap's pacman writes it as root inside a container), so a
+# plain rm fails for the build user — remove it from inside a throwaway container as root.
+clean-base: ## Remove the (root-owned) bootstrapped root tree
 	docker run --rm -v $(CURDIR)/work:/wb busybox rm -rf /wb/base
 	rm -f $(BASE_STAMP)   # drop the recency marker too, else the next build skips a gone base
 

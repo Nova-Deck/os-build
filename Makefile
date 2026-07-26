@@ -121,7 +121,7 @@ KERNEL_SRC := kernel/SOURCE.pin kernel/embed.list \
 # ==============================================================================
 # Phony orchestration targets
 # ==============================================================================
-.PHONY: help all image toolchain kernel fw-linux fw-qcom base overlay rootfs manifest \
+.PHONY: help all image toolchain kernel fw-linux fw-qcom base overlay rootfs manifest relock \
         initramfs boot sdcard bundle deploy clean clean-base clean-overlay distclean
 
 help: ## Show this help
@@ -222,6 +222,13 @@ $(KERNEL): $(KERNEL_SRC) $(FW_LINUX) $(FW_QCOM) | $(BUILD_STAMP)
 # Cross-check the device firmware manifest against the built kernel (non-fatal).
 manifest: $(KERNEL) ## Verify firmware-manifest.txt vs the built kernel (in container)
 	$(INBUILD) firmware/manifest.sh
+
+# Regenerate images/manifest.lock from the customized base (Phase 4a). Host-side: it reads the
+# exported base tree, the pacman cache and the overlay repo — no container, no emulation.
+# Deliberately NOT a dependency of the image build: the lock is a reviewed artifact, so it is
+# regenerated on purpose and its diff is read, never refreshed as a silent build side effect.
+relock: $(BASE_STAMP) ## Regenerate images/manifest.lock from the customized base (host)
+	images/genmanifest.sh
 
 # ==============================================================================
 # Read-only root (container) — base userspace + kernel + firmware -> Btrfs image

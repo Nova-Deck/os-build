@@ -36,6 +36,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PINFILE="$ROOT/base.digest"
+SNAPFILE="$ROOT/snapshot.pin"
 DEST="$ROOT/work/base"
 
 # Release runtime packages — credentials are NEVER installed here (test-only at assemble).
@@ -192,6 +193,23 @@ case "$REF" in
   *@sha256:*) ;;
   *) echo "refusing unpinned base ref (need ...@sha256:<digest>): '$REF'" >&2; exit 1 ;;
 esac
+
+# Package-repo snapshot pin (snapshot.pin) — SEPARATE from the base image digest above: the
+# digest pins the image we start FROM, this pins the repo we augment it from. The base ships a
+# mirrorlist pointing at the UNSUFFIXED snapshot path, which is an alias that tracks the newest
+# revision — so leaving it alone means the repo moves under us. Overwrite it with an explicit
+# revision and refuse the alias, exactly as the base ref refuses a bare tag.
+[ -f "$SNAPFILE" ] || { echo "no snapshot pin: $SNAPFILE" >&2; exit 1; }
+SNAPSHOT="$(grep -vE '^[[:space:]]*(#|$)' "$SNAPFILE" | tail -1)"
+case "$SNAPSHOT" in
+  *mash-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].[0-9]*) ;;
+  *) echo "refusing unpinned snapshot (need an explicit .N revision, not the alias): '$SNAPSHOT'" >&2
+     exit 1 ;;
+esac
+# Fold the revision into the reuse key: bumping the pin must rebuild the base even when the
+# package SET is unchanged, which is the whole point of pinning it.
+EXPECTED_PKGS="$EXPECTED_PKGS
+snapshot:$SNAPSHOT"
 command -v docker >/dev/null 2>&1 || { echo "docker required for base customization" >&2; exit 1; }
 
 # Already customized? Reuse unless FORCE=1 (the emulated pacman run is slow). Both markers must
@@ -223,6 +241,12 @@ fi
 # that download on every rebuild. The staged name is per-pin (fex-rootfs.blob), so a pin bump
 # re-verifies against the NEW sha, misses, and overwrites in place — no orphans, no unbounded growth.
 mkdir -p "$PREBUILT_DIR"
+
+# The pinned mirrorlist crosses into the container as a FILE rather than being interpolated
+# into the single-quoted bash -c below: the URL carries literal $repo/$arch, which pacman
+# expands and neither shell must. A file keeps them literal with no quoting games.
+printf 'Server = %s/$repo/os/$arch\n' "$SNAPSHOT" >"$PREBUILT_DIR/mirrorlist"
+
 for pin in "${PREBUILT_PINS[@]}"; do
   [ -e "$pin" ] || continue
   name="$(pin_field "$pin" name)"; ver="$(pin_field "$pin" version)"
@@ -280,6 +304,12 @@ docker run --name "$cid" --platform linux/arm64 -v "$PREBUILT_DIR":/prebuilt:ro 
       { print }
     " /etc/pacman.conf > /etc/pacman.conf.nova && mv /etc/pacman.conf.nova /etc/pacman.conf
   fi
+  # Pin the repo revision (snapshot.pin, staged by the host). The base image ships a mirrorlist
+  # pointing at the unsuffixed snapshot path, which is an ALIAS for the newest revision — left
+  # alone, the repo silently moves under us between builds. Both [core] and [extra] Include this
+  # one file, so overwriting it pins them together.
+  cp /prebuilt/mirrorlist /etc/pacman.d/mirrorlist
+
   pacman -Sy --noconfirm --needed --disable-download-timeout '"${INSTALL_PKGS[*]}"'
 
   # Compile the en_US.UTF-8 locale. The holo base ships /etc/locale.conf with

@@ -163,7 +163,12 @@ rationale lives in the linked memories and commit history.
   than working around it.
 
 - [ ] **Phase 4a — sealed manifest rootfs (plan: `docs/phase4.md`)** — the half of Phase 4 that lands
-  FIRST and cannot brick a device (a bad build just fails to boot a card you reflash). Five steps:
+  FIRST and cannot brick a device (a bad build just fails to boot a card you reflash).
+  **STEPS 0+1 LANDED 2026-07-26 (build-infra, no image cycle yet):** `snapshot.pin` pins the repo
+  revision explicitly and `customize-base.sh` now overwrites the base's aliased mirrorlist with it
+  (refusing an unsuffixed URL, and folding the revision into the reuse key); `images/genmanifest.sh`
+  + `make relock` emit the committed `images/manifest.lock` — 399 rows, 265 snapshot / 120 base /
+  10 novadeck / 4 prebuilt. **Steps 2-4 still open.** Five steps:
   (0) re-pin the mirror to an explicit `mash-20251118.3` — **measured 2026-07-26, our `mirrorlist`
   points at the UNSUFFIXED path, which is an alias tracking the newest revision** (unsuffixed and
   `.3` return the identical ETag `6a510539-16f23323`; `.2` is a different, five-weeks-older

@@ -138,7 +138,11 @@ ASSEMBLE_SRC := $(shell find images/assemble-rootfs.sh images/seal-rootfs.sh ima
 # kernel globs every fragment/patch/dts, and bakes the firmware embed list.
 # boot/cmdline is NOT here: nothing in kernel/build.sh reads it (the cmdline rides in the boot
 # image header, applied by boot/package.sh), so listing it only bought needless kernel rebuilds.
-KERNEL_SRC := kernel/SOURCE.pin kernel/embed.list \
+# kernel/build.sh IS here (added 2026-07-26): it is the recipe itself — it decides the config
+# merge, the firmware embed and the =m/=y assertions, so editing it changes the Image but make
+# could not see that. Editing it alone used to be a silent no-op that only showed up as a stale
+# kernel on the card. Same class of bug as the bootstrap-script dep fixed in c0d2cb6.
+KERNEL_SRC := kernel/SOURCE.pin kernel/embed.list kernel/build.sh \
               $(wildcard kernel/*.config) \
               $(wildcard kernel/patches/*.patch) \
               $(wildcard kernel/dts/qcom/*)
@@ -326,7 +330,7 @@ $(BOOTIMG): $(KERNEL) $(INITRAMFS) boot/cmdline boot/package.sh | $(BUILD_STAMP)
 # var.img is a co-product of the same assembler run as rootfs.img.
 $(VARIMG): $(ROOTFS)
 
-$(SDCARD): $(BOOTIMG) $(ROOTFS) $(VARIMG) $(STEAM_SEED) | $(BUILD_STAMP)
+$(SDCARD): $(BOOTIMG) $(ROOTFS) $(VARIMG) $(STEAM_SEED) images/make-sdcard.sh | $(BUILD_STAMP)
 	$(INBUILD) images/make-sdcard.sh
 
 # Signed RAUC OTA bundle (Phase 4). Dev builds mint an ephemeral cert; set

@@ -91,6 +91,19 @@ removal after the last install, which is sound precisely because there is no pac
 manager left afterward to observe the inconsistency. The removal list therefore has to be
 explicit and asserted (step 4), not derived from the package database.
 
+**Decision: the removal list is an explicit, committed artifact, and the lock marks what it
+removes.** Sealing deletes files while preserving the package DB as provenance, so the DB —
+which `images/genmanifest.sh` reads — keeps listing packages the shipped image no longer has.
+Left alone the lock and the image diverge silently. So the removal list is declared rather
+than derived, and those rows are emitted in the lock under a `stripped` class instead of
+`base`/`snapshot`. One artifact then describes the real image, and a change to what we strip
+shows up in the same reviewable diff as a change to what we install. `genmanifest.sh` gains
+one input (the removal list); it does not gain knowledge of the sealing step itself.
+
+Rejected alternatives: generating the lock post-seal from the preserved DB minus the removal
+list (same result, more moving parts), and letting the lock describe the pre-seal tree with
+the removal list living separately (then neither file alone says what shipped).
+
 **Decision: on-device `pacman` is kept under `NOVADECK_TEST=1` and stripped from release.**
 It is a genuine bring-up affordance and the divergence is confined to *tooling* — it does
 not touch the boot or session path, so it does not repeat the "verify OOBE on a release

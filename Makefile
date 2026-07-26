@@ -105,7 +105,12 @@ STEAM_SEED   := work/steam-seed/steamrtarm64/steam
 # Repo sources the rootfs assembler reads directly (itself + the unified fs-overlay/ payload tree
 # it copies in wholesale). find recurses, so files added under fs-overlay/ are tracked
 # automatically — no per-file Makefile edits.
-ASSEMBLE_SRC := $(shell find images/assemble-rootfs.sh fs-overlay -type f 2>/dev/null)
+#
+# images/seal.list + images/seal-rootfs.sh are assembler inputs too: the seal is the last thing
+# that touches the staged tree (Phase 4a step 3), so editing what gets stripped changes the image
+# exactly as editing fs-overlay/ does.
+ASSEMBLE_SRC := $(shell find images/assemble-rootfs.sh images/seal-rootfs.sh images/seal.list \
+                              fs-overlay -type f 2>/dev/null)
 
 # Kernel inputs: any change re-triggers the (full, from-scratch) kernel build. The unified
 # kernel globs every fragment/patch/dts, and bakes the firmware embed list.

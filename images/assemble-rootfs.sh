@@ -660,6 +660,24 @@ UNIT
          "$stage/etc/systemd/system/multi-user.target.wants/novadeck-debug-log.service"
 fi
 
+# 4y. SEAL — strip the package manager from the RELEASE root (Phase 4a step 3).
+#
+# Last injection before the tree is frozen: everything above may still add files, and the seal
+# has to be the final word on what a release image carries. It deletes pacman, gnupg/dirmngr and
+# the keyring package with its vendor-enabled weekly timer — the timer being what activates the
+# dirmngr that then burns a 90s stop timeout at every shutdown. See images/seal.list for the
+# declaration and images/seal-rootfs.sh for the mechanism; the package database survives as
+# provenance under /usr/lib/novadeck/pkgdb.
+#
+# TEST builds keep it all: on-device pacman is a real bring-up affordance and the divergence is
+# confined to TOOLING — it touches neither the boot nor the session path, so it does not repeat
+# the "verify OOBE on a release build" trap. The step-4 guard runs against the release tree.
+if [ "${NOVADECK_TEST:-}" = "1" ]; then
+  echo "  [TEST] keeping the package manager on the image (release builds are sealed)"
+else
+  "$ROOT/images/seal-rootfs.sh" "$stage"
+fi
+
 # 4z. Normalize overlay ownership to root. The fs-overlay/ tree (and the other cp -a injections)
 # is copied with `cp -a`, which PRESERVES the host build user's
 # uid/gid (the repo checkout owner, typically 1000). In the image uid 1000 is `deck`, so /etc, /,

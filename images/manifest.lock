@@ -4,8 +4,9 @@
 # base image:    registry.gitlab.steamos.cloud/holo/holo-core-aarch64-preview/base@sha256:edd05b6cf82e4a7f8bab2fb8dd453c45fc44405d7e5a25e36fe229607a224e88
 # repo snapshot: https://holo-packages.steamos.cloud/holo-core-aarch64-preview/mash-20251118.3
 #
-# name version arch source sha256   (source: snapshot|novadeck|base|prebuilt)
+# name version arch source sha256   (source: snapshot|novadeck|base|prebuilt|stripped)
 # 'base' rows carry no hash: they ship inside the base image, pinned by its digest.
+# 'stripped' rows are in the build tree but NOT on the image: images/seal.list removes them.
 abseil-cpp 20250814.1-1 aarch64 snapshot 95d5afae5b292eb93de1128fc0a5c250fdc5ed71758ce48e294dd6c868138eb1
 acl 2.3.2-1.2 aarch64 base -
 adwaita-fonts 49.0-2.2 any snapshot b121e977fe1f6715ad7c710734e8490923f4e84a2cee5053e55e8d256be0cbfb
@@ -14,7 +15,7 @@ alsa-lib 1.2.14-2 aarch64 snapshot d5bed06296bd6817135a282fcd6b7ef7e4a719af94814
 alsa-topology-conf 1.2.5.1-4 any snapshot a76b237e24973099b3cee9d3c89f4f8b46d9133411f0992bd46a5131e4427a0c
 alsa-ucm-conf 1.2.14-2 any snapshot fcd43d67a74282e76f56f5f5ca7c1dcfad3d12ddd7efc51353f84ba177e89181
 aom 3.13.1-1 aarch64 snapshot c0346de420afb4036b8bda7aab4d07f0cb753b2403fecf24bcb78ecc2c03d256
-archlinux-keyring 20251116-1 any base -
+archlinux-keyring 20251116-1 any stripped -
 at-spi2-core 2.58.1-2 aarch64 snapshot 228d03a47d94a456fec1d54a4d91ac6b1723d51a2cdbb72d469a07576cf082b9
 attr 2.5.2-1.2 aarch64 base -
 audit 4.1.2-1 aarch64 base -
@@ -81,7 +82,7 @@ glslang 1:1.4.328.1-1 aarch64 snapshot c6d9f360d77b22985ed6b2e91165d96165f5ea2a9
 glycin 2.0.7-1 aarch64 snapshot a68d2e0fcfd4641ec8c19163c3b735650adb434c480038b4545cbe867908c408
 gmp 6.3.0-2.2 aarch64 base -
 gnulib-l10n 20241231-1 any base -
-gnupg 2.4.8-3 aarch64 base -
+gnupg 2.4.8-3 aarch64 stripped -
 gnutls 3.8.10-1 aarch64 base -
 gobject-introspection-runtime 1.86.0-1 aarch64 snapshot 17d50818c2b7155956d83560aa88fd725727b64208dc95ac5c746aa25c5507f7
 gperftools 2.17.2-1 aarch64 snapshot 56257180c947aafe4599da2c8ff97fc02e32057a11e0b9a03f5c50d85f92f6e3
@@ -299,8 +300,8 @@ openssh 10.2p1-2 aarch64 snapshot b96ab7c370317b95543420e34b544317272d48560d0a55
 openssl 3.6.0-1 aarch64 base -
 opus 1.5.2-1 aarch64 snapshot 34f280315ceccde55eadbe6d423be541b63af1e932fc7c2bfb7e7c6a8f9a68c7
 p11-kit 0.25.10-2 aarch64 base -
-pacman 7.0.0.r6.gc685ae6-6.2 aarch64 base -
-pacman-mirrorlist 20251021-1 any base -
+pacman 7.0.0.r6.gc685ae6-6.2 aarch64 stripped -
+pacman-mirrorlist 20251021-1 any stripped -
 pam 1.7.1-1 aarch64 base -
 pambase 20250719-1 any base -
 pango 1:1.57.0-2 aarch64 snapshot 2c747bc0f8e09206376d2af888e044a036a6370d6f2d06de33066f887da54e99

@@ -116,12 +116,32 @@ pkgrel that propped it up, stop being load-bearing at install time. The pacman c
 Also: nothing syncs, so the exported base now ships an **empty** `/var/lib/pacman/sync/` — a small
 head start on step 3.
 
-**3. Seal — strip the package manager.**
+**3. Seal — strip the package manager.** *(landed)*
 After install, remove `pacman`, `gnupg`/`dirmngr`, the keyring package and its timer,
 `/var/lib/pacman/` and `/etc/pacman.d/gnupg` from the release root. The local package DB
 is preserved as provenance under `/usr/lib/novadeck/`, outside any path the package
 manager would consult. This is the step that removes the shutdown stall — by deleting the
 daemon rather than masking it.
+
+`images/seal.list` declares it (4 packages, 2 paths) and `images/seal-rootfs.sh` executes it,
+expanding each declared package through its own DB file list and then `rmdir`-ing only the
+directories that end up empty — so a path another package still occupies survives by
+construction. Measured on the release tree: 471 files and 30 empty directories removed, 20 MiB
+freed, zero dangling symlinks introduced (48 before, 48 after — all pre-existing absolute
+links), and `/var` down from 12.7 MB to 1.6 MB, which is 11 MB back on a 256 MB partition.
+`timers.target.wants/` is left holding only `shadow.timer` and `systemd-tmpfiles-clean.timer`;
+the keyring's weekly refresh timer, and with it the shutdown stall, is gone.
+
+**Decision: the seal runs in `assemble-rootfs.sh` on the staged tree, not in
+`customize-base.sh` on `work/base`.** The base then stays a faithful record of what was
+*installed* — `genmanifest.sh` keeps reading its `/var/lib/pacman/local` unchanged and `make
+relock` is untouched — while the seal applies to what *ships*, once per build. It also means
+no sealed tree is ever left lying around for a later build to reuse, which the base's reuse
+cache would otherwise make possible.
+
+One cost worth naming: the class rename moves 4 rows in the lock, the lock's sha256 is part of
+the base reuse marker, so the first build after this change re-runs the full emulated install.
+That is the reuse key working as designed (any lock edit rebuilds the base), not a regression.
 
 `pacman` and the keyring package arrive as **dependencies of the `base` metapackage**
 (`base-3-2` is installed in the base tree), so sealing cannot be `pacman -R pacman` — that

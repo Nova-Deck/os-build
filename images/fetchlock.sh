@@ -25,9 +25,11 @@
 #             at /novarepo. NEVER fetched — a missing or mismatched file means the overlay was
 #             rebuilt and the lock is stale, which is a `make relock`, not a download.
 #
-# The other two are not installs: `base` rows already ship inside the digest-pinned base image
-# (no package file exists to install), and `prebuilt` rows are tarballs/blobs placed by
-# customize-base.sh from their own sha256-pinned packages/*/prebuilt.pin.
+# The other three are not installs: `base` rows already ship inside the digest-pinned base image
+# (no package file exists to install), `prebuilt` rows are tarballs/blobs placed by
+# customize-base.sh from their own sha256-pinned packages/*/prebuilt.pin, and `stripped` rows are
+# base rows that images/seal-rootfs.sh then deletes from the release image (Phase 4a step 3) —
+# genmanifest.sh refuses to mark anything installable `stripped` precisely so this stays true.
 #
 # WHY THE REPO NAME IS GUESSED rather than recorded in the lock: pacman's LOCAL database has no
 # repo field, so genmanifest.sh — which reads that database — has no repo to record. Only core
@@ -112,7 +114,7 @@ while read -r name ver arch src sha; do
       overlay=$((overlay + 1))
       list+="/novarepo/$file"$'\n'
       ;;
-    base|prebuilt) continue ;;   # not installs — see the header
+    base|prebuilt|stripped) continue ;;   # not installs — see the header
     *) echo "$LOCK: unknown source class '$src' for $name" >&2; exit 1 ;;
   esac
   rows=$((rows + 1))

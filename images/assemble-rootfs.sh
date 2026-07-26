@@ -760,5 +760,11 @@ install -d -m0755 "$varstage"
 rm -f "$IMG"
 mkfs.btrfs --rootdir "$stage" --compress zstd --shrink -L novadeck-root -f "$IMG" >/dev/null
 
-echo "  ok   rootfs -> ${IMG#"$ROOT"/}  ($(du -h "$IMG" | cut -f1), from $(du -sh "$stage" 2>/dev/null | cut -f1) staged)"
+# Report the APPARENT size, not the allocated one. `mkfs.btrfs --shrink` leaves the image sparse
+# (~2 GiB of holes), so a bare `du -h` understates it by that much -- and this number is what
+# anyone sizing the slot reads. rootfs-a is 7G (images/partition-table.txt), so the honest figure
+# is a ~0.9G margin, where the allocated one implies ~2.9G. Both are printed: the allocated size
+# is what the file costs on the build host, which is worth knowing too, just not on its own.
+echo "  ok   rootfs -> ${IMG#"$ROOT"/}  ($(du -h --apparent-size "$IMG" | cut -f1) in a 7G slot," \
+     "$(du -h "$IMG" | cut -f1) allocated, from $(du -sh "$stage" 2>/dev/null | cut -f1) staged)"
 echo "Done. Read-only root ready for slot install / RAUC bundling (images/genbundle.sh)."

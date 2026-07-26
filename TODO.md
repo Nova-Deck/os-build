@@ -162,34 +162,49 @@ rationale lives in the linked memories and commit history.
   Adding a GRUB stage stays a legitimate fallback if C proves unworkable — reconsider it rather
   than working around it.
 
-- [ ] **Phase 4a — sealed manifest rootfs (plan: `docs/phase4.md`)** — the half of Phase 4 that lands
-  FIRST and cannot brick a device (a bad build just fails to boot a card you reflash).
-  **STEPS 0+1 LANDED 2026-07-26 (build-infra, no image cycle yet):** `snapshot.pin` pins the repo
-  revision explicitly and `customize-base.sh` now overwrites the base's aliased mirrorlist with it
-  (refusing an unsuffixed URL, and folding the revision into the reuse key); `images/genmanifest.sh`
-  + `make relock` emit the committed `images/manifest.lock` — 399 rows, 265 snapshot / 120 base /
-  10 novadeck / 4 prebuilt. **Steps 2-4 still open.** Five steps:
-  (0) re-pin the mirror to an explicit `mash-20251118.3` — **measured 2026-07-26, our `mirrorlist`
-  points at the UNSUFFIXED path, which is an alias tracking the newest revision** (unsuffixed and
-  `.3` return the identical ETag `6a510539-16f23323`; `.2` is a different, five-weeks-older
-  artifact). It has not bitten us only because all three revisions carry an identical 4560-package
-  set — which is a weaker guarantee than it looks, since equal versions do not prove equal package
-  files. (1) emit a committed `images/manifest.lock` (`name version repo sha256`, covering the
-  snapshot repo + the local `[novadeck]` overlay + `packages/*/prebuilt.pin`) — the sha256 is what
-  catches a same-version rebuild. (2) install from the lock instead of `pacman -Sy` (`make relock`
-  to regenerate). (3) **strip the package manager from the RELEASE root** — `pacman`, `gnupg`
-  (→ `dirmngr`), the keyring package + its vendor weekly timer, `/var/lib/pacman/`,
-  `/etc/pacman.d/gnupg`; keep the DB as provenance under `/usr/lib/novadeck/`. Must be FILE REMOVAL,
-  not `pacman -R`: these arrive as deps of the `base` metapackage, so a removal transaction is
-  refused. Kept under `NOVADECK_TEST=1` for on-device bring-up (tooling-only divergence; does not
-  touch the boot/session path). (4) guard on the BUILT release tree — no `usr/bin/pacman`, no
-  `dirmngr`, no vendor units in `timers.target.wants`, plus a size delta. Validator: diff against the
-  published `system.rootfs.zst` (~367M) as a REFERENCE, never a build base. **Step 3 is what finally
-  removes the ~90s "stop job … GnuPG network certificate management daemon" shutdown stall**, by
-  deleting the daemon rather than masking it — root cause is the vendor-enabled weekly keyring
-  refresh timer activating `dirmngr@etc-pacman.d-gnupg`, which then ignores SIGTERM for its full
-  90s stop timeout. Confirmed on HW (`State 'stop-sigterm' timed out. Killing.`). Supersedes
-  [[dirmngr-slow-shutdown-defer-phase4]]'s "defer, do not patch". See [[rootfs-build-approach]].
+- [x] **Phase 4a — sealed manifest rootfs — ALL FIVE STEPS LANDED + HW-VALIDATED 2026-07-26**
+  (plan: `docs/phase4.md`; branch `feat/phase4-manifest-rootfs`). The half of Phase 4 that could not
+  brick a device (a bad build just fails to boot a card you reflash). A sealed **release** card boots
+  to a session on HW, and the guard passes in the release build.
+  (0) **Mirror re-pinned** to an explicit `mash-20251118.3` (`6abd676`, `0f82f36`) — `snapshot.pin` is
+  a base input, and `customize-base.sh` overwrites the base's mirrorlist with it, *refusing* an
+  unsuffixed URL and folding the revision into the reuse key. The finding that forced it: our
+  `mirrorlist` pointed at the UNSUFFIXED path, which is an **alias tracking the newest revision**
+  (unsuffixed and `.3` share ETag `6a510539-16f23323`; `.2` is a different, five-weeks-older
+  artifact). It had never bitten us only because all three revisions carry an identical 4560-package
+  set — weaker than it looks, since equal versions do not prove equal package files.
+  (1) **`images/manifest.lock` committed** (`images/genmanifest.sh`, `make relock`) — `name version
+  arch source sha256`, 398 rows: 265 `snapshot` / 116 `base` / 9 `novadeck` / 4 `prebuilt` /
+  4 `stripped`. The sha256 is what catches a same-version rebuild; `base` rows carry none (they ship
+  inside the digest-pinned image — see the Phase 4c item, which is exactly that gap).
+  (2) **Install from the lock**, not `pacman -Sy` (`images/fetchlock.sh`, `c29bd62`).
+  (3) **Release root sealed** (`images/seal.list` + `images/seal-rootfs.sh`, `a9ea0e6`): 4 packages
+  (`pacman`, `pacman-mirrorlist`, `gnupg`, `archlinux-keyring`) + 2 paths (`var/lib/pacman`,
+  `etc/pacman.d`), with the DB preserved as provenance at `/usr/lib/novadeck/pkgdb`. **FILE REMOVAL,
+  not `pacman -R`** — these are deps of the `base` metapackage, so a removal transaction is refused;
+  that is why the set is a hand-reviewed declaration rather than a derivation. Nothing is stripped
+  under `NOVADECK_TEST=1` (on-device pacman is a real bring-up affordance; divergence confined to
+  tooling). This killed the ~90s "stop job … GnuPG network certificate management daemon" stall by
+  deleting the daemon instead of masking it — HW-confirmed, and it supersedes
+  [[dirmngr-slow-shutdown-defer-phase4]]'s "defer, do not patch". The *other* ~90s cause
+  (`gamescope-wl` ignoring SIGTERM) is the separate open item at the top of this file.
+  (4) **Guard on the BUILT TREE** (`images/guard-rootfs.sh`, `2843e0d` + `391a5f5`), release-only,
+  6 assertions: the seal's declaration fully applied (expanded through the preserved DB, not a
+  hand-kept list); the named pacman/gnupg/dirmngr entry points gone — and each name cross-checked
+  against what `seal.list` actually removes, so a typo can't become a dead assertion; no dangling
+  systemd enable-symlink (scoped to `.wants`/`.requires` — the base image carries ~48 pre-existing
+  dangling links elsewhere); no build-provenance marker survived (`images/provenance.list`,
+  `0a4716e` — `/.dockerenv` is the one that costs a HW cycle, see
+  [[dockerenv-systemd-container-misdetect]]); the lock still describes the tree (set equality both
+  ways + `stripped` rows == `seal.list`'s `pkg` rows); and a per-top-level-directory size delta
+  (report only, never fails a build; baseline recorded to `out/images/rootfs.sizes` *only* on a pass,
+  so a rejected tree never becomes the next build's normal). **It asserts the TREE, never the source
+  diff** — this repo already shipped a change that was correct in the diff and wrong in the built
+  tree (the git-644 mode regression that blacked out the OOBE, [[gamescope-x11-unix-tmpfiles-oobe]]).
+  Last release build: 8707 MiB staged → 6157 MiB `rootfs.img`.
+  **Carried forward as their own items:** Phase 4b (A/B updates, design C), Phase 4c (bootstrap from
+  packages — retires the 116 `base` rows and `base.digest`), and the non-reproducible `novadeck` lock
+  rows that block CI. See [[rootfs-build-approach]].
 
 - [x] **Rework overlay build to only rebuild changed packages** — DONE (build-infra, not yet
   HW-cycle-validated). `build-overlay.sh` is now incremental: it persists `work/repo/<arch>/` across

@@ -5,6 +5,21 @@ rationale lives in the linked memories and commit history.
 
 ## Open
 
+- [ ] **~90s poweroff stall — fix landed, NOT yet HW-validated** — second, independent cause from the
+  dirmngr one (that was killed by the Phase 4a seal). `gamescope-wl` ignores SIGTERM during session
+  teardown, so logind's `session-1.scope` burns the stock 90s `DefaultTimeoutStopSec` and then SIGKILLs
+  it anyway. Re-confirmed 2026-07-26 from the offloaded journal (boot `729fa2e9`): SIGTERM 15:44:31.7 →
+  90s of nothing → `session-1.scope: Stopping timed out. Killing.` 15:46:01.9, sole survivor pid 807
+  `gamescope-wl`. The rest of shutdown takes ~0.5s. **Fix:** `fs-overlay/etc/systemd/system/
+  session-.scope.d/10-novadeck-stop-timeout.conf` sets `TimeoutStopSec=10s` on every logind session
+  scope. **Validate on HW:** poweroff should complete in ~10s, and
+  `systemctl show -p TimeoutStopUSec session-1.scope` should read 10s. Watch for Steam being SIGKILLed
+  mid-write (it shares the scope) — if that shows up, RAISE the value, don't lower it.
+  Do **not** retry the `novadeck-session` `cleanup()` SIGTERM→SIGKILL escalation: tried and HW-disproven
+  2026-07-15, and the 2026-07-26 journal shows why — SDDM tears the script down in the same instant
+  (`sddm-helper ... crashed (exit code 1)` at 15:44:31.717), so it never outlives its own grace period.
+  See [[gamescope-slow-shutdown-sigterm-wedge]], [[dirmngr-slow-shutdown-defer-phase4]].
+
 - [ ] **Phase 4c — bootstrap the root from packages, drop the `base` lock class and the docker export** —
   the rootfs still ORIGINATES as `docker export` of `base.digest`: 4a sealed what stays behind (stripped
   the package manager) but never changed where the tree comes from. 116 of the lock's 398 rows are class

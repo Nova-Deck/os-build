@@ -287,6 +287,13 @@ if [ "${NOVADECK_TEST:-}" = "1" ]; then
   EXPECTED_PKGS="$EXPECTED_PKGS
 test:1"
 fi
+# This script itself. Everything above describes the INPUTS; the tree is also a product of the
+# steps below (which packages are placed where, what runs offline with --root=, what /dev nodes
+# exist), and none of that is visible in any other key. Without this a bootstrap fix is silently
+# a no-op on a tree the reuse check still considers current -- which is exactly what happened on
+# 2026-07-26, twice over, since the Makefile was not listing this file as a prerequisite either.
+EXPECTED_PKGS="$EXPECTED_PKGS
+script:$(sha256sum "$0" | cut -d' ' -f1)"
 command -v docker >/dev/null 2>&1 || { echo "docker required for the root bootstrap" >&2; exit 1; }
 [ -f "$PACMANCONF" ] || { echo "no bootstrap pacman config: $PACMANCONF" >&2; exit 1; }
 [ -f "$OSRELEASE" ]  || { echo "no os-release declaration: $OSRELEASE" >&2; exit 1; }

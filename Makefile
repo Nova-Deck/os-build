@@ -241,8 +241,14 @@ $(OVERLAY_STAMP): $(OVERLAY_DB)
 # is what turns the lock into that install. images/pacman.conf and images/os-release are the
 # two committed declarations the bootstrap stages into the container: the repo set the root is
 # resolved from, and the root's own identity.
+# images/customize-base.sh is listed LAST but matters most: it is the script that turns all of
+# the above into a tree, so editing it changes the tree. Its absence here meant a fix to the
+# bootstrap was silently a no-op -- make saw the stamp as satisfied and never invoked it. (Cost a
+# build cycle on 2026-07-26: a `make sdcard` after a script fix rebuilt nothing.) The script also
+# folds its own sha256 into its reuse marker, because the make prereq alone only gets the script
+# RUN -- the marker check inside it would otherwise still short-circuit.
 $(BASE_STAMP): base-devel.digest snapshot.pin images/manifest.lock images/fetchlock.sh \
-               images/pacman.conf images/os-release $(PREBUILT_PINS)
+               images/pacman.conf images/os-release images/customize-base.sh $(PREBUILT_PINS)
 	images/customize-base.sh
 	@test -f work/base/usr/bin/sshd   # sentinel: sshd present => release runtime laid down
 	@mkdir -p $(@D) && touch $@   # recency marker outside the root-owned tree (frozen mtimes)

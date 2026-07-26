@@ -50,20 +50,20 @@ else cp -a "$BASE"/. "$stage"/; fi
 # arrived as `docker export` of a vendor-built image, so it started life carrying two other build
 # systems' artifacts (docker's /.dockerenv, the vendor CI's `repos` and
 # `etc/mash-ci-tracking.job_id`), and every one had to be found by audit and removed by hand.
-#
-# The root is now bootstrapped from packages, so no container filesystem and no vendor image
-# contributes bytes to it and there is nothing to remove. images/provenance.list survives as a
-# pure ASSERTION, checked by images/guard-rootfs.sh: the declaration outlives the scrub because
-# the failure it protects against — /.dockerenv reaching a device, where systemd-detect-virt
-# reports a container and systemd SILENTLY skips ~13 ConditionVirtualization=!container units —
-# costs a hardware debug cycle to diagnose and shows no build-time symptom. A check that can
-# only ever pass is the cheapest possible insurance against re-introducing an export step.
+# images/provenance.list declared them, this scrubbed them and guard-rootfs.sh asserted the
+# removal. All three are gone: the root is bootstrapped from packages, so no container filesystem
+# and no vendor image contributes bytes to it and there is nothing to remove.
 #
 # Also inherited-and-now-ours, handled at the source in images/customize-base.sh rather than
 # patched up here: /etc/os-release (images/os-release), /etc/locale.conf and /etc/hostname.
 # Still deliberately left alone: /etc/{resolv.conf,hosts} (NetworkManager populates resolv.conf
 # at runtime, DNS verified working on HW) and /etc/machine-id, which must stay absent so systemd
 # runs preset-all on first boot — populating it would disable our preset-based service enablement.
+#
+# NOT closed by 4c, and NOT covered by anything here: packages/inputplumber's prebuilt tarball is
+# still unpacked at `/` with strip-components=1 (images/customize-base.sh), so a third-party
+# archive can still place arbitrary paths in the root. Two marker names were never a guard for
+# that; see TODO.md for the real one (assert every file is package-owned or declared).
 
 # 2. novadeck kernel + dtbs under /boot
 install -Dm0644 "$OUT/Image.gz" "$stage/boot/Image.gz"

@@ -338,7 +338,8 @@ export bootstrap, and it can only ever cover what an audit has already noticed.
 `pacman -r <empty-dir> -Sy` against the pinned snapshot, so:
 
 - every row becomes `snapshot` / `novadeck` / `prebuilt` and the lock covers 398/398;
-- `base.digest` and `sanitize_base_provenance()` are deleted rather than maintained;
+- `base.digest`, `sanitize_base_provenance()` and `images/provenance.list` are all deleted
+  rather than maintained;
 - `/.dockerenv` never exists in the target root to begin with.
 
 Docker stays the **execution environment** — the install runs arm64 binaries under qemu
@@ -411,10 +412,21 @@ override is exactly what os-release's spec is for), alongside a one-line `/etc/l
 and an `/etc/hostname` that finally says `novadeck` instead of being a 0-byte stub the
 vendor left behind.
 
-**`images/provenance.list` stays, as an assertion only.** Nothing is inherited any more, so
-the scrub half (`sanitize_base_provenance()`) is deleted. The guard's assertion 4 is kept
-and its declaration reduced to the two container markers: they cost nothing to check, and
-`/.dockerenv` is the one whose return costs a hardware cycle to diagnose
-(`systemd-detect-virt` reports a container on the real device and systemd silently skips
-~13 `ConditionVirtualization=!container` units). The vendor-CI markers are dropped — they
-cannot exist in a tree no vendor image contributed to.
+**`images/provenance.list` and the guard's assertion 4 are both deleted.** Nothing is
+inherited any more, so `sanitize_base_provenance()` goes — and so does the declaration it
+consumed, along with the assertion that checked it.
+
+Keeping the assertion as cheap regression insurance was considered and rejected. This repo's
+standard for an assertion is that something can trip it: `provenance.list`'s own header made
+the point ("a typo'd path — absent from every tree, so asserted by nobody, forever"), and
+assertion 2 is deliberately self-checking for exactly that reason. Post-4c no marker can be
+present in any tree, which removes the mechanism that kept these entries honest and leaves a
+check that can only ever pass. The `/.dockerenv` failure is genuinely expensive
+(`systemd-detect-virt` reports a container on the real device and systemd silently skips ~13
+`ConditionVirtualization=!container` units) — but it had exactly one producer, `docker
+export`, and reintroducing it would be an architectural change, not an accident.
+
+**Named, because 4c does not close it:** `packages/inputplumber`'s prebuilt tarball is still
+unpacked at `/` with `strip-components=1`, so a third-party archive can still place arbitrary
+paths in the root. Two marker names were never a guard for that. The real guard is an
+assertion that every file in the tree is package-owned or declared — tracked in `TODO.md`.

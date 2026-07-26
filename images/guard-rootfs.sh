@@ -30,11 +30,9 @@
 #      depend on the database being honest)
 #   3. no dangling systemd enable-symlink — the failure mode a package removal actually leaves
 #      behind, and the one that would keep a stripped unit "enabled"
-#   4. no build-provenance marker reached the tree (images/provenance.list) — a regression guard
-#      against a container filesystem ever becoming a content source again
-#   5. images/manifest.lock still describes this tree: same package set, same versions, and its
+#   4. images/manifest.lock still describes this tree: same package set, same versions, and its
 #      `stripped` rows are exactly what seal.list removes
-#   6. a size delta against the previous build (report only — never fails a build)
+#   5. a size delta against the previous build (report only — never fails a build)
 set -euo pipefail
 shopt -s nullglob
 
@@ -189,45 +187,7 @@ done < <(find "$STAGE/usr/lib/systemd" "$STAGE/etc/systemd" \
 if [ "$wants_bad" = 0 ]; then echo "    ok  $wants_seen enable-symlinks, all resolve"; fi
 
 # ------------------------------------------------------------------------------------------
-# 4. No build-provenance marker reached the tree.
-#
-# Until Phase 4c the tree was `docker export` of a vendor-built image, so it started out carrying
-# two other build systems' artifacts and the assembler had to scrub them; this was where that
-# scrub stopped being a claim. The root is bootstrapped from packages now, so there is nothing to
-# scrub and this assertion should never be able to fail — which is exactly why it is kept. The
-# stakes are asymmetric: /.dockerenv makes systemd-detect-virt report a container on the real
-# device and SILENTLY skip ~13 ConditionVirtualization=!container units (timesyncd the visible
-# one), a failure that costs a HW debug cycle to find and that no build-time symptom shows. A
-# stat per marker buys immunity to anyone reintroducing a container filesystem as a content
-# source, so this is now a REGRESSION guard rather than the second half of a scrub.
-#
-# Read from the REPO, not from the image, unlike seal.list at assertion 1: this declaration lists
-# what must be ABSENT, so there is nothing for the image to self-describe.
-#
-# The self-fulfilling case this shares with assertion 2 (a declared path that is never present in
-# any tree, so the line asserts nothing forever) is NOT cross-checked here, and deliberately so:
-# post-4c the correct state is that no marker is ever present, so there is no longer any tree in
-# which one could be observed to validate the entry against.
-# ------------------------------------------------------------------------------------------
-PROV="$ROOT/images/provenance.list"
-prov_bad=0
-prov_seen=0
-if [ -f "$PROV" ]; then
-  while read -r marker _; do
-    case "$marker" in ''|'#'*) continue ;; esac
-    prov_seen=$((prov_seen + 1))
-    if [ -e "$STAGE/$marker" ] || [ -L "$STAGE/$marker" ]; then
-      bad "build-provenance marker survived into the image: $marker"
-      prov_bad=1
-    fi
-  done < "$PROV"
-  [ "$prov_bad" = 0 ] && echo "    ok  $prov_seen provenance markers absent"
-else
-  bad "no ${PROV#"$ROOT"/} — the provenance declaration is missing"
-fi
-
-# ------------------------------------------------------------------------------------------
-# 5. The lock still describes this tree.
+# 4. The lock still describes this tree.
 #
 # The payoff of steps 1-3: images/manifest.lock is a committed, reviewed artifact, and this is
 # where it stops being a claim. Two directions, both required —
@@ -263,7 +223,7 @@ if [ "$lock_stripped" != "$list_stripped" ]; then
 fi
 
 # ------------------------------------------------------------------------------------------
-# 6. Size delta (report only).
+# 5. Size delta (report only).
 #
 # Never fails a build — there is no defensible threshold, and a guard that blocks on growth would
 # be disabled the first time a legitimate package got bigger. Its job is to put the number in

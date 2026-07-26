@@ -56,7 +56,7 @@ The whole pipeline is driven from the top-level **`Makefile`**, which wires the 
 scripts under `kernel/ firmware/ images/ boot/` into one incremental dependency graph. It
 also pins **where** each stage runs: kernel, rootfs assembly, boot packaging, SD-card and
 RAUC bundling all cross-compile **inside the `novadeck-build` Docker image** (the repo is
-bind-mounted at `/src`); base customization and firmware/base fetches run on the host
+bind-mounted at `/src`); the root bootstrap and the firmware fetches run on the host
 because they drive Docker/qemu or the network themselves. Always go through `make` — don't
 invoke the stage scripts by hand — and keep the Makefile in step when a stage is added or
 its inputs change.
@@ -82,8 +82,11 @@ for a test card. Device firmware is fetched from the pinned Nova-Deck/qcom-firmw
 ## Upstream base
 
 novadeck builds **on top of** Valve/Collabora's official aarch64 Arch port
-(`holo-core-aarch64-preview`) rather than rebuilding userspace. It is an unsupported
-technology preview pinned to a snapshot — see [`docs/base-pin.md`](docs/base-pin.md).
+(`holo-core-aarch64-preview`) rather than rebuilding userspace — but on top of its
+**packages**, not its container image. The root is bootstrapped with `pacman` into an empty
+tree from a pinned repo snapshot, so every file on the image comes from a package that
+`images/manifest.lock` names and sha256-pins. It is an unsupported technology preview pinned
+to a snapshot — see [`docs/base-pin.md`](docs/base-pin.md).
 Upstream and peer-distro reference clones live in `_reference/` (untracked, local-only).
 
 ## Licensing & firmware

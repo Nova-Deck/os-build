@@ -165,8 +165,8 @@ rationale lives in the linked memories and commit history.
   Adding a GRUB stage stays a legitimate fallback if C proves unworkable — reconsider it rather
   than working around it.
 
-- [x] **Phase 4c — bootstrap the root from packages — LANDED 2026-07-26, guard green, NOT yet
-  HW-validated** (design: `docs/phase4.md`; branch `feat/phase4-manifest-rootfs`). The rootfs no
+- [x] **Phase 4c — bootstrap the root from packages — LANDED + HW-VALIDATED 2026-07-26**
+  (design: `docs/phase4.md`; branch `feat/phase4-manifest-rootfs`). The rootfs no
   longer ORIGINATES as `docker export` of a vendor image: it is `pacman -r <empty-dir>` against the
   pinned snapshot. Docker is still required and so is qemu binfmt — an aarch64 root has to be laid
   down by an aarch64 pacman running aarch64 scriptlets — but it is now the EXECUTION ENVIRONMENT
@@ -201,9 +201,15 @@ rationale lives in the linked memories and commit history.
   `ID=holo-core` before), `/etc/locale.conf` and `/etc/hostname`. None is owned by any package,
   measured against the snapshot, so a bootstrap that wrote none of them would have inherited the
   vendor's string, an unset LANG and a compiled-in hostname.
-  **Validate on HW:** a release card built from this should boot to a session exactly as the 4a
-  card did — the package set is identical, so a regression means the bootstrap, not the contents.
-  Check `/etc/os-release`, `journalctl -x` showing explanations, and `stat /usr` reading root.
+  **HW result 2026-07-26:** a card built from the bootstrap booted OOBE and then a SteamUI session,
+  exactly as the 4a card did — no regression from changing where the tree comes from. The four
+  post-conditions checked on the booted card: `/etc/os-release` reads `ID=novadeck` (not
+  `holo-core`), `/etc/locale.conf` `LANG=en_US.UTF-8` and `/etc/hostname` `novadeck`; the journal
+  catalog `database` exists at 286K (on the `/var` partition — the root's own `/var` is an empty
+  mountpoint, so check the mounted one, not the root tree); `/usr`, `/etc` and `/var` are all
+  `root:root 755`, so the host-ownership "unsafe path transition" is gone; and `/.dockerenv` is
+  absent, which is what stops systemd misdetecting a container and skipping every
+  `ConditionVirtualization=!container` unit.
   **Carried forward as their own items:** the two above (prebuilt tarballs at `/`, and the guard
   never asserting file ownership). See [[rootfs-build-approach]],
   [[dockerenv-systemd-container-misdetect]], [[overlay-package-pipeline]].

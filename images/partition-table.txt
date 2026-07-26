@@ -26,19 +26,25 @@
 # them. Only p1 is an EFI System partition. The ROCKNIX ABL finds the ESP by type GUID, so
 # a second ef00 on the disk would give it two candidates to choose between.
 #
-# Root slots are 7G. They carry, on top of the ~2.6G OS, two large x86-emulation artifacts
+# Root slots are 7G. They carry, on top of the ~1.8G OS, three large x86-emulation artifacts
 # that must travel WITH the slot to keep an A/B update atomic and rollback-safe: the FEX x86
-# guest rootfs (~1.9G, an erofs image) and the bundled arm64 Proton compat tool (~2.1G). That
-# is ~6.5G of content uncompressed, but the root is sealed read-only and baked with zstd
-# (assemble-rootfs.sh). The two emulation payloads are already packed and compress little, so
-# most of the result is incompressible and won't shrink in future builds.
+# guest rootfs (~1.9G, an erofs image) and TWO bundled arm64 Proton compat tools (~2.0G each —
+# the user picks per title). That is ~7.6G of content uncompressed, but the root is sealed
+# read-only and baked with zstd (assemble-rootfs.sh). The emulation payloads are already packed
+# and compress little (the .ero gives back barely 30%), so most of the result is incompressible
+# and won't shrink in future builds. The OS half is now the SMALL half: at zstd:3 the three
+# payloads are ~2.9G of the image and everything else is ~0.8G.
 #
 # Size against the image's APPARENT size, not its content. mkfs.btrfs --shrink cannot pack
 # below its block-group granularity, so the image reports ~2G more than it actually occupies
-# (6.1G apparent vs 4.1G on disk, measured 2026-07-24) — and the apparent size is what has to
+# (5.7G apparent vs 3.7G on disk, measured 2026-07-27) — and the apparent size is what has to
 # fit the partition. These slots were 6G, sized off the ~5.0G compressed content with a
 # nominal ~1G of headroom; that accounting was against the wrong number, and the slot
 # overflowed by 21MiB once scx-scheds and a newer Proton landed. 7G restores real headroom.
+#
+# The 2026-07-27 trim (images/trim.list + the mesa/scx-scheds dependency surgery) took 914MiB
+# off the staged tree and 392MiB off the apparent image. The slots stay at 7G: the headroom is
+# the point, and 4b needs room for a bundle to land next to a running system.
 # Both are deliberately kept INSIDE the root slot rather than on a shared partition: they are
 # versioned OS components, and sharing them across slots would let an update mutate the running
 # system's emulation stack and break rollback.

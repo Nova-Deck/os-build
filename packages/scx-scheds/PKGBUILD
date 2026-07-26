@@ -38,18 +38,25 @@ license=(GPL-2.0-only)
 # despite libbpf being installed. Arch's own scx-scheds carries the same `options=(!lto)`.
 options=(!lto)
 
+# Runtime deps, derived from what the three shipped binaries actually link — NOT from Arch's
+# recipe, which lists the whole upstream workspace's needs. The schedulers embed their BPF
+# skeletons at build time (libbpf-cargo links libbpf statically), so nothing here loads a BPF
+# object from disk or shells out to bpftool at runtime. Measured on the built tree: every one of
+# scx_{lavd,bpfland,rusty} NEEDs exactly libelf, libz, libgcc_s, libm, libc — and the only other
+# files the package ships are scx.service, etc/default/scx and a LICENSE, neither of which
+# references bpftool or jq.
+#
+# Dropping bpf is what makes this worth doing: `bpf` pulls binutils (an assembler and a linker)
+# and llvm-libs onto a sealed read-only root, ~220MB for a bpftool nothing invokes. protobuf,
+# libbpf, libseccomp and jq go the same way — declared upstream for scxtop and the loader, which
+# we do not build (see the header). makedepends below is untouched: the BUILD genuinely needs
+# bpftool, clang and llvm, and those live in the container, not on the image.
 depends=(
-  bash
-  bpf           # /usr/bin/bpftool
+  bash          # scx.service's ExecStart is `/bin/bash -c` (it expands the override env vars)
   glibc
-  jq
-  libbpf
   gcc-libs      # Arch's recipe says `libgcc`, which is not a package here
-  libseccomp
   elfutils      # libelf.so; the soname-style `libelf.so` is not an installable target here
-  protobuf
-  zlib
-  zstd
+  zlib          # libz.so.1, linked directly by all three binaries
 )
 makedepends=(
   rust          # provides cargo

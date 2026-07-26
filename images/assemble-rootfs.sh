@@ -670,10 +670,23 @@ fi
 # TEST builds keep it all: on-device pacman is a real bring-up affordance and the divergence is
 # confined to TOOLING — it touches neither the boot nor the session path, so it does not repeat
 # the "verify OOBE on a release build" trap. The step-4 guard runs against the release tree.
+#
+# 4y-2. TRIM — delete build and documentation artefacts (images/trim.list).
+#
+# Ordered AFTER the seal, not before, and the order is load-bearing: the sealer expands each
+# stripped package's own file list and then rmdir's the directories it listed, so running the
+# trim first would hand it a tree where some of those files are already gone. Behaviour is
+# identical either way, but "the seal sees exactly the tree it saw when it was HW-validated" is
+# worth more than the ordering being arbitrary.
+#
+# Test builds skip it for the same reason they keep pacman: deleting files out from under a live
+# package database would make every on-device `pacman -Qkk` and reinstall lie.
 if [ "${NOVADECK_TEST:-}" = "1" ]; then
   echo "  [TEST] keeping the package manager on the image (release builds are sealed)"
+  echo "  [TEST] skipping the trim (a live package db must keep describing its own files)"
 else
   "$ROOT/images/seal-rootfs.sh" "$stage"
+  "$ROOT/images/trim-rootfs.sh" "$stage"
 fi
 
 # 4z. Normalize overlay ownership to root. The fs-overlay/ tree (and the other cp -a injections)

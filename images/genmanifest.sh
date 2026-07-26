@@ -31,8 +31,20 @@ LOCK="$ROOT/images/manifest.lock"
 CACHE="$ROOT/work/pacman-cache"
 OVERLAY_REPO="$ROOT/work/repo/aarch64"
 LOCALDB="$BASE/var/lib/pacman/local"
+MARKER="$BASE/usr/lib/novadeck/pkgs"
 
 [ -d "$LOCALDB" ] || { echo "no pacman local db under $BASE (customize the base first)" >&2; exit 1; }
+
+# The lock describes the RELEASE image — the tree the step-4 seal guard runs against. A test base
+# additionally carries the on-device bring-up tooling (TEST_PKGS in customize-base.sh), and
+# locking that would both overstate what ships and put the tooling on the release install path.
+# customize-base.sh records `test:1` in the marker precisely so this is detectable rather than
+# inferred from a package-name blocklist that would drift from TEST_PKGS.
+if grep -qx 'test:1' "$MARKER" 2>/dev/null; then
+  echo "refusing to relock a TEST base: ${MARKER#"$ROOT"/} says test:1" >&2
+  echo "  rebuild release first (unset NOVADECK_TEST), then \`make relock\`" >&2
+  exit 1
+fi
 
 # Index the two package directories ONCE by exact filename. Deliberately not a per-package
 # glob: the cache accumulates stale versions (e.g. mesa 26.1.4 alongside 26.1.5), so a glob

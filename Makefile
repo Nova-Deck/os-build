@@ -204,7 +204,12 @@ $(OVERLAY_STAMP): $(OVERLAY_DB)
 # customize-base.sh installs from. Without it here the stamp short-circuits `make base` and a
 # pin bump is silently a no-op -- the script's own reuse check never gets to run, because make
 # never invokes the script.
-$(BASE_STAMP): base.digest snapshot.pin $(PREBUILT_PINS)
+#
+# images/manifest.lock is a base input too, and the strongest one: under the default LOCKED mode
+# customize-base.sh installs exactly the package FILES it declares (Phase 4a step 2), so editing
+# the lock changes the tree. images/fetchlock.sh is listed for the same reason build scripts
+# generally are -- it is what turns the lock into that install.
+$(BASE_STAMP): base.digest snapshot.pin images/manifest.lock images/fetchlock.sh $(PREBUILT_PINS)
 	images/customize-base.sh
 	@test -f work/base/usr/bin/sshd   # sentinel: sshd present => release runtime layered in
 	@mkdir -p $(@D) && touch $@   # recency marker outside the root-owned base tree (frozen mtimes)
@@ -227,12 +232,34 @@ $(KERNEL): $(KERNEL_SRC) $(FW_LINUX) $(FW_QCOM) | $(BUILD_STAMP)
 manifest: $(KERNEL) ## Verify firmware-manifest.txt vs the built kernel (in container)
 	$(INBUILD) firmware/manifest.sh
 
-# Regenerate images/manifest.lock from the customized base (Phase 4a). Host-side: it reads the
-# exported base tree, the pacman cache and the overlay repo — no container, no emulation.
-# Deliberately NOT a dependency of the image build: the lock is a reviewed artifact, so it is
-# regenerated on purpose and its diff is read, never refreshed as a silent build side effect.
-relock: $(BASE_STAMP) ## Regenerate images/manifest.lock from the customized base (host)
+# Regenerate images/manifest.lock (Phase 4a). Deliberately NOT a dependency of the image build:
+# the lock is a reviewed artifact, so it is regenerated on purpose and its diff is read, never
+# refreshed as a silent build side effect.
+#
+# It must NOT go through $(BASE_STAMP), which builds in LOCKED mode -- relocking a tree that was
+# itself installed from the lock can only ever reproduce that lock. Re-resolving is the whole
+# point, so this drives customize-base.sh directly in NOVADECK_RESOLVE=1 mode: pacman -Sy resolves
+# PKGS against the pinned snapshot, and genmanifest.sh then records what that produced.
+#
+# The resulting tree is a RESOLVE tree and must never ship, so the stamp is REMOVED rather than
+# touched. The next build re-runs customize-base.sh, which sees mode:resolve in the reuse marker,
+# rebuilds in locked mode, and so ships a tree actually verified against the new lock.
+# Release-only by construction: genmanifest.sh refuses a test base.
+#
+# NOVADECK_TEST is cleared here rather than passed through: with it set, the base would be built
+# with the test tooling and genmanifest.sh would then refuse it -- correct, but only after a full
+# emulated install. The lock is a release artifact, so force release up front.
+#
+# The overlay repo IS a prerequisite even though the base stamp is not. Dropping $(BASE_STAMP)
+# dropped its transitive overlay dependency with it, and without a built work/repo/aarch64 the
+# resolve would satisfy mesa/gamescope/sddm from the snapshot instead of from our patched builds
+# — locking upstream binaries under a `snapshot` class. That is a silently WRONG lock, which is
+# worse than a failed one, so declare the overlay directly.
+relock: $(if $(OVERLAY_PINS),$(OVERLAY_STAMP)) ## Re-resolve from PKGS and regenerate images/manifest.lock (host; release only)
+	NOVADECK_TEST= NOVADECK_RESOLVE=1 FORCE=1 images/customize-base.sh
 	images/genmanifest.sh
+	rm -f $(BASE_STAMP)
+	@echo "review the diff, commit it, then rebuild: git diff images/manifest.lock"
 
 # ==============================================================================
 # Read-only root (container) — base userspace + kernel + firmware -> Btrfs image

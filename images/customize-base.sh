@@ -32,12 +32,25 @@
 #   images/customize-base.sh
 #
 # Prints the exported rootfs path on stdout (like fetch-base.sh). FORCE=1 re-runs.
+#
+# TWO INSTALL MODES (Phase 4a step 2). Default is LOCKED: images/fetchlock.sh materializes
+# exactly the package files images/manifest.lock declares, sha256-verified on the host, and the
+# container installs that explicit list with `pacman -U`. No repo database is synced, so no
+# dependency resolution happens implicitly at build time.
+#   NOVADECK_RESOLVE=1  re-resolve from PKGS with `pacman -Sy` (the pre-lock behaviour). This is
+#                       how the lock is REGENERATED, so it must exist: `make relock` runs this
+#                       mode and then images/genmanifest.sh over the result. Never ships.
+# The two modes produce different trees by design (that is the point of relocking), so the mode
+# is folded into the reuse-cache key below — a resolve-built base can never satisfy a locked
+# build, and vice versa.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PINFILE="$ROOT/base.digest"
 SNAPFILE="$ROOT/snapshot.pin"
+LOCKFILE="$ROOT/images/manifest.lock"
 DEST="$ROOT/work/base"
+RESOLVE="${NOVADECK_RESOLVE:-}"
 
 # Release runtime packages — credentials are NEVER installed here (test-only at assemble).
 # gamescope + seatd are the Deck-UI session compositor (SteamOS layer B) and its seat manager:
@@ -166,7 +179,16 @@ done
 # (/usr/lib/novadeck/pkgs) and compare it. prebuilt.manifest stays a SEPARATE marker because
 # the container also reads it verbatim as the tar-extraction list, so it must hold only
 # prebuilt rows.
+#
+# Under LOCKED mode this list is no longer what pacman resolves — images/manifest.lock is. It
+# stays the human-editable DECLARATION of intent (edit it, `make relock`, review the diff) and
+# is still asserted against the built tree in-container via `pacman -T`, which catches a leaf
+# package that fell out of the lock and would otherwise vanish without a dependency error.
 INSTALL_PKGS=("${PKGS[@]}" "${PREBUILT_DEPS[@]}")
+# Test-only tooling is installed by NAME even under LOCKED mode (see the pacman -Sy near the end
+# of the container script). It is deliberately NOT in the lock: the lock describes the RELEASE
+# image, which is the tree the step-4 seal guard runs against. Keeping test rows out of it also
+# means `make relock` must run release — genmanifest.sh refuses a test base for that reason.
 if [ "${NOVADECK_TEST:-}" = "1" ]; then
   INSTALL_PKGS+=("${TEST_PKGS[@]}")
 fi
@@ -210,6 +232,28 @@ esac
 # package SET is unchanged, which is the whole point of pinning it.
 EXPECTED_PKGS="$EXPECTED_PKGS
 snapshot:$SNAPSHOT"
+
+# Mode + lock into the reuse key. Three distinct rebuild triggers, all of which the package SET
+# alone would miss:
+#   mode:      a resolve-built base must NEVER satisfy a locked build. Without this token
+#              `make relock` would leave an unverified tree behind that the next `make sdcard`
+#              happily reuses and ships.
+#   lock:      editing the lock (a package bump, a relock) must rebuild the base.
+#   test:      recorded explicitly so genmanifest.sh can REFUSE a test base; the test packages
+#              are already in the sorted set above, but not in a form anything can detect.
+if [ -n "$RESOLVE" ]; then
+  EXPECTED_PKGS="$EXPECTED_PKGS
+mode:resolve"
+else
+  [ -f "$LOCKFILE" ] || { echo "no manifest: $LOCKFILE (NOVADECK_RESOLVE=1 to re-resolve)" >&2; exit 1; }
+  EXPECTED_PKGS="$EXPECTED_PKGS
+mode:locked
+lock:$(sha256sum "$LOCKFILE" | cut -d' ' -f1)"
+fi
+if [ "${NOVADECK_TEST:-}" = "1" ]; then
+  EXPECTED_PKGS="$EXPECTED_PKGS
+test:1"
+fi
 command -v docker >/dev/null 2>&1 || { echo "docker required for base customization" >&2; exit 1; }
 
 # Already customized? Reuse unless FORCE=1 (the emulated pacman run is slow). Both markers must
@@ -241,6 +285,11 @@ fi
 # that download on every rebuild. The staged name is per-pin (fex-rootfs.blob), so a pin bump
 # re-verifies against the NEW sha, misses, and overwrites in place — no orphans, no unbounded growth.
 mkdir -p "$PREBUILT_DIR"
+# PREBUILT_DIR persists, so the install list has to be cleared BEFORE the mode branch: the
+# container decides locked-vs-resolve purely by whether this file exists, and a leftover list
+# from an earlier locked run would silently re-lock a resolve run (i.e. make `make relock`
+# unable to re-resolve, which is the one thing it exists to do).
+rm -f "$PREBUILT_DIR/install.list"
 
 # The pinned mirrorlist crosses into the container as a FILE rather than being interpolated
 # into the single-quoted bash -c below: the URL carries literal $repo/$arch, which pacman
@@ -275,6 +324,23 @@ printf '%s\n' "$EXPECTED_MANIFEST" >"$PREBUILT_DIR/prebuilt.manifest"
 # Install-set marker (reuse-cache key only; NOT a tar list) — the full sorted package set.
 printf '%s\n' "$EXPECTED_PKGS" >"$PREBUILT_DIR/pkgs"
 
+# LOCKED mode: materialize + sha256-verify the lock's package files on the host and hand the
+# container an explicit install list. Done HERE, before the container starts, so a stale or
+# republished package fails the build with a hash mismatch instead of after 20 minutes of
+# emulated install. Resolve mode writes no list, which is how the container tells the modes apart.
+if [ -z "$RESOLVE" ]; then
+  "$ROOT/images/fetchlock.sh" "$PREBUILT_DIR/install.list"
+else
+  echo "[novadeck] NOVADECK_RESOLVE=1 — re-resolving from PKGS, this tree is for relock only" >&2
+fi
+
+# Test-only tooling crosses as a file for the same reason the mirrorlist does: it keeps the
+# container script free of another layer of nested quoting. Absent file => release build.
+rm -f "$PREBUILT_DIR/test.pkgs"
+if [ "${NOVADECK_TEST:-}" = "1" ]; then
+  printf '%s\n' "${TEST_PKGS[@]}" >"$PREBUILT_DIR/test.pkgs"
+fi
+
 cid="nova-custom-$$"
 trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
 
@@ -288,7 +354,21 @@ if [ -f "$OVERLAY_DB" ] && ls "$OVERLAY_REPO"/*.pkg.tar.zst >/dev/null 2>&1; the
   echo "[novadeck] overlay repo present — patched packages will override holo binaries" >&2
 fi
 
-echo "[novadeck] installing runtime under arm64: ${INSTALL_PKGS[*]}" >&2
+# fetchlock.sh verifies the overlay package FILES exist, but the mount above also needs the repo
+# DB. Catch the gap on the host: without /novarepo the container's pacman -U would fail on a path
+# that does not exist, which reads like a lock problem and is not one.
+if [ -f "$PREBUILT_DIR/install.list" ] && grep -q '^/novarepo/' "$PREBUILT_DIR/install.list" \
+   && [ "${#OVERLAY_MOUNT[@]}" -eq 0 ]; then
+  echo "the lock installs overlay packages but ${OVERLAY_REPO#"$ROOT"/} is not a usable repo" >&2
+  echo "  build it first: make overlay" >&2
+  exit 1
+fi
+
+if [ -n "$RESOLVE" ]; then
+  echo "[novadeck] resolving runtime under arm64: ${INSTALL_PKGS[*]}" >&2
+else
+  echo "[novadeck] installing $(wc -l <"$PREBUILT_DIR/install.list") locked packages under arm64" >&2
+fi
 docker run --name "$cid" --platform linux/arm64 -v "$PREBUILT_DIR":/prebuilt:ro \
   -v "$PACMAN_CACHE":/var/cache/pacman/pkg \
   "${OVERLAY_MOUNT[@]}" "$REF" \
@@ -310,7 +390,40 @@ docker run --name "$cid" --platform linux/arm64 -v "$PREBUILT_DIR":/prebuilt:ro 
   # one file, so overwriting it pins them together.
   cp /prebuilt/mirrorlist /etc/pacman.d/mirrorlist
 
-  pacman -Sy --noconfirm --needed --disable-download-timeout '"${INSTALL_PKGS[*]}"'
+  # Package install (Phase 4a step 2). LOCKED when the host staged an install list, else RESOLVE.
+  if [ -s /prebuilt/install.list ]; then
+    # No -Sy anywhere on this path: nothing syncs a repo database, so pacman CANNOT resolve
+    # anything of its own accord -- it installs exactly these host-verified files. Its dependency
+    # check over the batch is then a free proof that the lock is a closed set: an unsatisfied dep
+    # is a hard error rather than a quiet fetch. Read into an array rather than word-splitting
+    # `cat`, so a path is a path.
+    mapfile -t lockpkgs < /prebuilt/install.list
+    echo "installing ${#lockpkgs[@]} locked packages"
+    pacman -U --noconfirm --needed "${lockpkgs[@]}"
+  else
+    pacman -Sy --noconfirm --needed --disable-download-timeout '"${INSTALL_PKGS[*]}"'
+  fi
+
+  # Test-only tooling, installed BY NAME even under locked mode: it is deliberately outside the
+  # lock, which describes the release image (the tree the step-4 seal guard runs against). -Sy is
+  # against the pinned mirrorlist copied above, so it still resolves from the pinned revision.
+  if [ -s /prebuilt/test.pkgs ]; then
+    mapfile -t testpkgs < /prebuilt/test.pkgs
+    pacman -Sy --noconfirm --needed --disable-download-timeout "${testpkgs[@]}"
+  fi
+
+  # Assert the tree against the DECLARATION (PKGS + prebuilt deps + test), not only against the
+  # lock. The lock is a resolved closure, so a leaf package that dropped OUT of it leaves no
+  # unsatisfied dependency behind -- pacman -U would succeed and the package would simply be
+  # absent on the device. -T reports unsatisfied names and honours provides (unlike -Q), so it
+  # catches exactly that. This is the same discipline as the step-4 guard: assert the built tree.
+  unmet="$(pacman -T '"${INSTALL_PKGS[*]}"' || true)"
+  if [ -n "$unmet" ]; then
+    echo "install did not satisfy the declared package set; unsatisfied:" >&2
+    printf "  %s\n" $unmet >&2
+    echo "the lock is stale for this declaration -- run: make relock" >&2
+    exit 1
+  fi
 
   # Compile the en_US.UTF-8 locale. The holo base ships /etc/locale.conf with
   # LANG=en_US.UTF-8 and /etc/locale.gen with that entry uncommented, but never runs

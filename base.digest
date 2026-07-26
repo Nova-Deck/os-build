@@ -1,5 +1,0 @@
-# Pinned upstream aarch64 base image (Phase 0).
-# Resolved 2026-06-17 from registry.gitlab.steamos.cloud.
-# Both `latest` and `aarch64-mash-20251118.1` resolved to the same digest.
-# Reference the base BY DIGEST, never by tag.
-registry.gitlab.steamos.cloud/holo/holo-core-aarch64-preview/base@sha256:edd05b6cf82e4a7f8bab2fb8dd453c45fc44405d7e5a25e36fe229607a224e88

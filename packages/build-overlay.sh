@@ -155,7 +155,19 @@ PY
   BUILD_NAMES+=("$name")
 done
 
-if [ ${#BUILD_NAMES[@]} -eq 0 ]; then
+# Foreign-arch artifacts left in this arch-scoped repo by an older build (see the index step at
+# the end of this file). They are not a package whose inputs changed, so nothing above selects
+# them for rebuild — but leaving them indexed is exactly the bug, so their presence alone has to
+# be enough to reach the re-index below.
+stale_foreign=0
+for f in "$REPO_DIR"/*.pkg.tar.zst; do
+  case "$f" in
+    *-"$ARCH".pkg.tar.zst|*-any.pkg.tar.zst) ;;
+    *) stale_foreign=$((stale_foreign + 1)) ;;
+  esac
+done
+
+if [ ${#BUILD_NAMES[@]} -eq 0 ] && [ "$stale_foreign" -eq 0 ]; then
   echo "[overlay] all overlay packages up-to-date — nothing to rebuild" >&2
   # Bump the db mtime so make sees $(OVERLAY_DB) as satisfied against the touched inputs and
   # does not keep re-invoking this script every build.
@@ -181,7 +193,11 @@ fi
 # installed for gamescope/gtk2/mesa left the container in a state that broke sddm's transitive
 # Qt6 module resolution. Isolating each build removes that cross-contamination at the cost of a
 # per-package dep re-sync (the emulated compile dwarfs it anyway).
-echo "[overlay] building ${#BUILD_NAMES[@]} changed package(s) in isolated arm64 qemu containers (slow — emulated)" >&2
+if [ ${#BUILD_NAMES[@]} -eq 0 ]; then
+  echo "[overlay] no package changed — re-indexing only ($stale_foreign foreign-arch artifact(s) to drop)" >&2
+else
+  echo "[overlay] building ${#BUILD_NAMES[@]} changed package(s) in isolated arm64 qemu containers (slow — emulated)" >&2
+fi
 for name in "${BUILD_NAMES[@]}"; do
   echo "[overlay] === build $name (isolated container) ===" >&2
   docker run --rm --platform linux/arm64 \
@@ -192,11 +208,21 @@ for name in "${BUILD_NAMES[@]}"; do
       printf "builder ALL=(ALL) NOPASSWD: ALL\n" > /etc/sudoers.d/builder
       chmod 0440 /etc/sudoers.d/builder
       pacman -Sy --noconfirm
+      # PKGDEST separates what makepkg PRODUCED from what it merely DOWNLOADED. Without it the
+      # copy below is a glob over the build directory, which also matches source packages a
+      # PKGBUILD fetches: packages/fex-emu assembles an Arch x86 sysroot in prepare() from pinned
+      # archive.archlinux.org packages, so six x86_64 .pkg.tar.zst (glibc, gcc, libstdc++,
+      # lib32-*, linux-api-headers) were being copied in and repo-add`ed as installable [novadeck]
+      # packages. Inert while the root arrived pre-populated by `docker export` — those names were
+      # already installed, so --needed skipped them — but a from-packages bootstrap (Phase 4c)
+      # resolves them for real and picks the overlay glibc 2.43 over the snapshot`s 2.42.
+      mkdir -p "/stage/$PKG/out"
       chown -R builder "/stage/$PKG" /repo
       echo "[overlay] makepkg in /stage/$PKG" >&2
       ( cd "/stage/$PKG" && sudo -u builder \
+          env PKGDEST="/stage/$PKG/out" \
           makepkg -sf --noconfirm --nocheck --skipinteg --noprogressbar )
-      cp "/stage/$PKG"/*.pkg.tar.zst /repo/
+      cp "/stage/$PKG/out"/*.pkg.tar.zst /repo/
       chown -R "$HOSTUID:$HOSTGID" "/stage/$PKG" /repo
     ' >&2
 
@@ -204,7 +230,7 @@ for name in "${BUILD_NAMES[@]}"; do
   # (e.g. a pkgver/pkgrel bump renamed the file) so stale versions never linger in the repo.
   # Only after a SUCCESSFUL build do we write the stamp — a failed build (set -e) leaves the
   # old hash so the next run retries.
-  produced=("$STAGE/$name"/*.pkg.tar.zst)
+  produced=("$STAGE/$name"/out/*.pkg.tar.zst)
   new_basenames=(); for f in "${produced[@]}"; do new_basenames+=("$(basename "$f")"); done
   if [ -f "$STAMPS/$name.files" ]; then
     while read -r old; do
@@ -220,12 +246,25 @@ done
 # Re-index the repo db from ALL present artifacts (repo-add is an arm64 tool). Rebuild it from
 # scratch each time so entries for purged/renamed packages never linger. Hand the artifacts back
 # to the host build user so re-runs and make clean-overlay work WITHOUT root.
+#
+# This repo is ARCH-SCOPED (work/repo/$ARCH), so an artifact for another architecture in it is
+# wrong by construction — index only $ARCH and `any`, and DELETE anything else rather than leave
+# a file the db no longer mentions. That is a second line behind the PKGDEST fix above: PKGDEST
+# stops foreign packages arriving, this clears the ones an older build already deposited (the
+# fex-emu x86 sysroot) without waiting for a fex-emu rebuild to purge them by file manifest.
 echo "[overlay] indexing repo db" >&2
 docker run --rm --platform linux/arm64 \
-  -e HOSTUID="$(id -u)" -e HOSTGID="$(id -g)" \
+  -e HOSTUID="$(id -u)" -e HOSTGID="$(id -g)" -e ARCH="$ARCH" \
   -v "$REPO_DIR":/repo "$DEVEL_REF" \
   bash -euo pipefail -c '
     cd /repo
+    shopt -s nullglob
+    for f in *.pkg.tar.zst; do
+      case "$f" in
+        *-"$ARCH".pkg.tar.zst|*-any.pkg.tar.zst) ;;
+        *) echo "[overlay] dropping foreign-arch artifact from an $ARCH repo: $f" >&2; rm -f "$f" ;;
+      esac
+    done
     rm -f novadeck.db.tar.zst novadeck.db novadeck.files.tar.zst novadeck.files
     repo-add novadeck.db.tar.zst *.pkg.tar.zst
     chown -R "$HOSTUID:$HOSTGID" /repo

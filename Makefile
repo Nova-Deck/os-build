@@ -37,6 +37,21 @@ VERSION     ?=
 
 OUT := out
 
+# work/ must be created by the HOST, and before anything else runs. Several stages that write
+# into it are root inside docker (the kernel build's modules_install, the base export), so on a
+# tree where work/ does not exist — a fresh clone, or a `rm -rf work` full-rebuild test —
+# whichever container stage lands first creates work/ ITSELF root-owned. Every host-side stage
+# after that then dies on mkdir/touch inside it: packages/build-overlay.sh, work/.base.stamp,
+# work/.rootfs-mode-*, work/steam-seed. (Cost a rebuild on 2026-07-26.)
+#
+# out/ never had this problem because out/.build-image.stamp is host-made through the
+# `| $(BUILD_STAMP)` order-only prereq that every container stage carries. work/ has no single
+# equivalent gate, and adding one per stage would silently regress the day a new stage forgets
+# it — so create the directory at parse time, which no target can route around. Only the
+# top-level directory is host-owned; the root-owned trees INSIDE it (work/base, work/kernel) are
+# by design, and clean-base/distclean already remove those from inside a container.
+$(shell mkdir -p work)
+
 # --- where each stage runs ----------------------------------------------------
 # Container: repo bind-mounted at /src. INBUILD is the plain run; DOCKER lets a
 # recipe insert `-e VAR` flags (which must precede the image name) before the image.
@@ -105,13 +120,29 @@ STEAM_SEED   := work/steam-seed/steamrtarm64/steam
 # Repo sources the rootfs assembler reads directly (itself + the unified fs-overlay/ payload tree
 # it copies in wholesale). find recurses, so files added under fs-overlay/ are tracked
 # automatically — no per-file Makefile edits.
-ASSEMBLE_SRC := $(shell find images/assemble-rootfs.sh fs-overlay -type f 2>/dev/null)
+#
+# images/seal.list + images/seal-rootfs.sh are assembler inputs too: the seal is the last thing
+# that touches the staged tree (Phase 4a step 3), so editing what gets stripped changes the image
+# exactly as editing fs-overlay/ does.
+#
+# images/guard-rootfs.sh is listed for the opposite reason -- it changes no bytes in the image, but
+# it decides whether one is produced at all (Phase 4a step 4). A tightened assertion has to re-run
+# against the tree it was tightened for, not wait for the next unrelated fs-overlay edit.
+# images/manifest.lock is one of its inputs (it asserts the tree still matches the lock) and is
+# already a $(BASE_STAMP) prerequisite, which reaches the rootfs transitively.
+#
+ASSEMBLE_SRC := $(shell find images/assemble-rootfs.sh images/seal-rootfs.sh images/seal.list \
+                              images/guard-rootfs.sh fs-overlay -type f 2>/dev/null)
 
 # Kernel inputs: any change re-triggers the (full, from-scratch) kernel build. The unified
 # kernel globs every fragment/patch/dts, and bakes the firmware embed list.
 # boot/cmdline is NOT here: nothing in kernel/build.sh reads it (the cmdline rides in the boot
 # image header, applied by boot/package.sh), so listing it only bought needless kernel rebuilds.
-KERNEL_SRC := kernel/SOURCE.pin kernel/embed.list \
+# kernel/build.sh IS here (added 2026-07-26): it is the recipe itself — it decides the config
+# merge, the firmware embed and the =m/=y assertions, so editing it changes the Image but make
+# could not see that. Editing it alone used to be a silent no-op that only showed up as a stale
+# kernel on the card. Same class of bug as the bootstrap-script dep fixed in c0d2cb6.
+KERNEL_SRC := kernel/SOURCE.pin kernel/embed.list kernel/build.sh \
               $(wildcard kernel/*.config) \
               $(wildcard kernel/patches/*.patch) \
               $(wildcard kernel/dts/qcom/*)
@@ -121,7 +152,7 @@ KERNEL_SRC := kernel/SOURCE.pin kernel/embed.list \
 # ==============================================================================
 # Phony orchestration targets
 # ==============================================================================
-.PHONY: help all image toolchain kernel fw-linux fw-qcom base overlay rootfs manifest \
+.PHONY: help all image toolchain kernel fw-linux fw-qcom base overlay rootfs manifest relock \
         initramfs boot sdcard bundle deploy clean clean-base clean-overlay distclean
 
 help: ## Show this help
@@ -141,7 +172,7 @@ kernel:    $(KERNEL)       ## Build Image.gz + all dtbs + modules (in build cont
 fw-linux:  $(FW_LINUX)     ## Fetch open linux-firmware blobs (host, network)
 fw-qcom:   $(FW_QCOM)      ## Fetch device-proprietary firmware from the qcom-firmwares repo (host, network)
 overlay:   $(OVERLAY_DB)   ## Rebuild from-source overlay pkgs (patched gamescope) -> work/repo/<arch>/
-base:      $(BASE_STAMP)   ## Fetch + customize the pinned aarch64 base rootfs (host)
+base:      $(BASE_STAMP)   ## Bootstrap the aarch64 root from packages (host; docker+qemu)
 rootfs:    $(ROOTFS)       ## Assemble the read-only root + var images (in container)
 initramfs: $(INITRAMFS)    ## Build the initramfs that mounts ro-root + /etc overlay (in container)
 boot:      $(BOOTIMG)      ## Package the all-boards boot artifact (in container)
@@ -198,12 +229,33 @@ $(OVERLAY_STAMP): $(OVERLAY_DB)
 	@[ -e $@ ] || touch $@   # first-ever run: ensure the stamp exists even if the sha file seeded it
 
 # ==============================================================================
-# Base rootfs (host — customize-base.sh drives docker + qemu binfmt itself)
+# Root bootstrap (host — customize-base.sh drives docker + qemu binfmt itself)
 # ==============================================================================
-$(BASE_STAMP): base.digest $(PREBUILT_PINS)
+# Every prerequisite here is an input to the tree work/base ends up containing. Without one
+# listed, the stamp short-circuits `make base` and editing that input is silently a no-op --
+# the script's own reuse check never gets to run, because make never invokes the script.
+#
+# base-devel.digest pins the arm64 image the bootstrap EXECUTES in (Phase 4c; it contributes
+# no files to the root, but it is the pacman that lays them down). snapshot.pin selects the
+# package-repo revision every row is installed from.
+#
+# images/manifest.lock is the strongest input: under the default LOCKED mode customize-base.sh
+# installs exactly the package FILES it declares (Phase 4a step 2), so editing the lock changes
+# the tree. images/fetchlock.sh is listed for the same reason build scripts generally are -- it
+# is what turns the lock into that install. images/pacman.conf and images/os-release are the
+# two committed declarations the bootstrap stages into the container: the repo set the root is
+# resolved from, and the root's own identity.
+# images/customize-base.sh is listed LAST but matters most: it is the script that turns all of
+# the above into a tree, so editing it changes the tree. Its absence here meant a fix to the
+# bootstrap was silently a no-op -- make saw the stamp as satisfied and never invoked it. (Cost a
+# build cycle on 2026-07-26: a `make sdcard` after a script fix rebuilt nothing.) The script also
+# folds its own sha256 into its reuse marker, because the make prereq alone only gets the script
+# RUN -- the marker check inside it would otherwise still short-circuit.
+$(BASE_STAMP): base-devel.digest snapshot.pin images/manifest.lock images/fetchlock.sh \
+               images/pacman.conf images/os-release images/customize-base.sh $(PREBUILT_PINS)
 	images/customize-base.sh
-	@test -f work/base/usr/bin/sshd   # sentinel: sshd present => release runtime layered in
-	@mkdir -p $(@D) && touch $@   # recency marker outside the root-owned base tree (frozen mtimes)
+	@test -f work/base/usr/bin/sshd   # sentinel: sshd present => release runtime laid down
+	@mkdir -p $(@D) && touch $@   # recency marker outside the root-owned tree (frozen mtimes)
 
 # A built overlay repo is an extra base input: customize-base installs the patched packages
 # from it and folds its content hash into the reuse-cache key. Wire it as a prerequisite only
@@ -222,6 +274,35 @@ $(KERNEL): $(KERNEL_SRC) $(FW_LINUX) $(FW_QCOM) | $(BUILD_STAMP)
 # Cross-check the device firmware manifest against the built kernel (non-fatal).
 manifest: $(KERNEL) ## Verify firmware-manifest.txt vs the built kernel (in container)
 	$(INBUILD) firmware/manifest.sh
+
+# Regenerate images/manifest.lock (Phase 4a). Deliberately NOT a dependency of the image build:
+# the lock is a reviewed artifact, so it is regenerated on purpose and its diff is read, never
+# refreshed as a silent build side effect.
+#
+# It must NOT go through $(BASE_STAMP), which builds in LOCKED mode -- relocking a tree that was
+# itself installed from the lock can only ever reproduce that lock. Re-resolving is the whole
+# point, so this drives customize-base.sh directly in NOVADECK_RESOLVE=1 mode: pacman -Sy resolves
+# PKGS against the pinned snapshot, and genmanifest.sh then records what that produced.
+#
+# The resulting tree is a RESOLVE tree and must never ship, so the stamp is REMOVED rather than
+# touched. The next build re-runs customize-base.sh, which sees mode:resolve in the reuse marker,
+# rebuilds in locked mode, and so ships a tree actually verified against the new lock.
+# Release-only by construction: genmanifest.sh refuses a test base.
+#
+# NOVADECK_TEST is cleared here rather than passed through: with it set, the base would be built
+# with the test tooling and genmanifest.sh would then refuse it -- correct, but only after a full
+# emulated install. The lock is a release artifact, so force release up front.
+#
+# The overlay repo IS a prerequisite even though the base stamp is not. Dropping $(BASE_STAMP)
+# dropped its transitive overlay dependency with it, and without a built work/repo/aarch64 the
+# resolve would satisfy mesa/gamescope/sddm from the snapshot instead of from our patched builds
+# — locking upstream binaries under a `snapshot` class. That is a silently WRONG lock, which is
+# worse than a failed one, so declare the overlay directly.
+relock: $(if $(OVERLAY_PINS),$(OVERLAY_STAMP)) ## Re-resolve from PKGS and regenerate images/manifest.lock (host; release only)
+	NOVADECK_TEST= NOVADECK_RESOLVE=1 FORCE=1 images/customize-base.sh
+	images/genmanifest.sh
+	rm -f $(BASE_STAMP)
+	@echo "review the diff, commit it, then rebuild: git diff images/manifest.lock"
 
 # ==============================================================================
 # Read-only root (container) — base userspace + kernel + firmware -> Btrfs image
@@ -249,7 +330,7 @@ $(BOOTIMG): $(KERNEL) $(INITRAMFS) boot/cmdline boot/package.sh | $(BUILD_STAMP)
 # var.img is a co-product of the same assembler run as rootfs.img.
 $(VARIMG): $(ROOTFS)
 
-$(SDCARD): $(BOOTIMG) $(ROOTFS) $(VARIMG) $(STEAM_SEED) | $(BUILD_STAMP)
+$(SDCARD): $(BOOTIMG) $(ROOTFS) $(VARIMG) $(STEAM_SEED) images/make-sdcard.sh | $(BUILD_STAMP)
 	$(INBUILD) images/make-sdcard.sh
 
 # Signed RAUC OTA bundle (Phase 4). Dev builds mint an ephemeral cert; set
@@ -275,9 +356,9 @@ deploy: $(BOOTIMG) ## Install the boot image onto ESP=<mountpoint>
 clean: ## Remove built artifacts (out/), keep firmware/base caches + toolchain stamp
 	docker run --rm -v $(CURDIR)/out:/wo busybox rm -rf /wo/Image.gz /wo/dtbs /wo/modroot /wo/images /wo/boot /wo/initramfs.cpio.gz
 
-# work/base is root-owned (customize-base exports it as root), so a plain rm fails for the
-# build user — remove it from inside a throwaway container as root.
-clean-base: ## Remove the (root-owned) cached base rootfs
+# work/base is root-owned (the bootstrap's pacman writes it as root inside a container), so a
+# plain rm fails for the build user — remove it from inside a throwaway container as root.
+clean-base: ## Remove the (root-owned) bootstrapped root tree
 	docker run --rm -v $(CURDIR)/work:/wb busybox rm -rf /wb/base
 	rm -f $(BASE_STAMP)   # drop the recency marker too, else the next build skips a gone base
 

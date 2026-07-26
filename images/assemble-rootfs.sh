@@ -46,26 +46,24 @@ echo "[novadeck] assembling unified read-only root (base=$BASE)"
 if command -v rsync >/dev/null 2>&1; then rsync -aHAX --numeric-ids "$BASE"/ "$stage"/
 else cp -a "$BASE"/. "$stage"/; fi
 
-# Scrub the container provenance that `docker export` of the base leaves behind, so the sealed
-# image looks like the bare-metal OS it is — not the build container it was assembled in. This is
-# the maintenance tax of bootstrapping from a Docker base (vs SteamOS's manifest-sealed image); keep
-# it explicit and named so a future base bump that leaks a new artifact has an obvious home. Phase-4
-# migrates to manifest-driven sealing, which removes the need for this entirely (see rootfs plan).
+# NOTHING TO SCRUB (Phase 4c). This is where sanitize_base_provenance() used to run: the tree
+# arrived as `docker export` of a vendor-built image, so it started life carrying two other build
+# systems' artifacts (docker's /.dockerenv, the vendor CI's `repos` and
+# `etc/mash-ci-tracking.job_id`), and every one had to be found by audit and removed by hand.
+# images/provenance.list declared them, this scrubbed them and guard-rootfs.sh asserted the
+# removal. All three are gone: the root is bootstrapped from packages, so no container filesystem
+# and no vendor image contributes bytes to it and there is nothing to remove.
 #
-# Audited on the SM8650 base 2026-06-25 — only the marker below was actually harmful; the other
-# docker-export tells are benign and deliberately left alone:
-#   - /etc/{resolv.conf,hostname,hosts}: empty 0-byte stubs; NetworkManager populates resolv.conf at
-#     runtime (DNS verified working on HW), so blanking/owning them here would be churn for no gain.
-#   - /etc/machine-id: correctly empty — REQUIRED so systemd runs preset-all on first boot. Do NOT
-#     populate it here (that would disable our preset-based service enablement).
-sanitize_base_provenance() {
-  # /.dockerenv (and podman's /run/.containerenv) make `systemd-detect-virt` report a container on
-  # the real device, so systemd SILENTLY skips every `ConditionVirtualization=!container` unit —
-  # systemd-timesyncd is the visible casualty (clock stuck at epoch) but it gates ~13 units.
-  # HW-confirmed on 192.168.1.186 (2026-06-25). These must never reach the sealed image.
-  rm -f "$1/.dockerenv" "$1/run/.containerenv"
-}
-sanitize_base_provenance "$stage"
+# Also inherited-and-now-ours, handled at the source in images/customize-base.sh rather than
+# patched up here: /etc/os-release (images/os-release), /etc/locale.conf and /etc/hostname.
+# Still deliberately left alone: /etc/{resolv.conf,hosts} (NetworkManager populates resolv.conf
+# at runtime, DNS verified working on HW) and /etc/machine-id, which must stay absent so systemd
+# runs preset-all on first boot — populating it would disable our preset-based service enablement.
+#
+# NOT closed by 4c, and NOT covered by anything here: packages/inputplumber's prebuilt tarball is
+# still unpacked at `/` with strip-components=1 (images/customize-base.sh), so a third-party
+# archive can still place arbitrary paths in the root. Two marker names were never a guard for
+# that; see TODO.md for the real one (assert every file is package-owned or declared).
 
 # 2. novadeck kernel + dtbs under /boot
 install -Dm0644 "$OUT/Image.gz" "$stage/boot/Image.gz"
@@ -660,6 +658,24 @@ UNIT
          "$stage/etc/systemd/system/multi-user.target.wants/novadeck-debug-log.service"
 fi
 
+# 4y. SEAL — strip the package manager from the RELEASE root (Phase 4a step 3).
+#
+# Last injection before the tree is frozen: everything above may still add files, and the seal
+# has to be the final word on what a release image carries. It deletes pacman, gnupg/dirmngr and
+# the keyring package with its vendor-enabled weekly timer — the timer being what activates the
+# dirmngr that then burns a 90s stop timeout at every shutdown. See images/seal.list for the
+# declaration and images/seal-rootfs.sh for the mechanism; the package database survives as
+# provenance under /usr/lib/novadeck/pkgdb.
+#
+# TEST builds keep it all: on-device pacman is a real bring-up affordance and the divergence is
+# confined to TOOLING — it touches neither the boot nor the session path, so it does not repeat
+# the "verify OOBE on a release build" trap. The step-4 guard runs against the release tree.
+if [ "${NOVADECK_TEST:-}" = "1" ]; then
+  echo "  [TEST] keeping the package manager on the image (release builds are sealed)"
+else
+  "$ROOT/images/seal-rootfs.sh" "$stage"
+fi
+
 # 4z. Normalize overlay ownership to root. The fs-overlay/ tree (and the other cp -a injections)
 # is copied with `cp -a`, which PRESERVES the host build user's
 # uid/gid (the repo checkout owner, typically 1000). In the image uid 1000 is `deck`, so /etc, /,
@@ -672,6 +688,21 @@ ov_uid="$(stat -c %u "$0")"
 if [ "$ov_uid" != "0" ]; then
   echo "  normalizing overlay ownership: uid $ov_uid -> root ($(find "$stage" -uid "$ov_uid" | wc -l) paths)"
   find "$stage" -uid "$ov_uid" -exec chown -h 0:0 {} +
+fi
+
+# 4zz. GUARD — assert the sealed tree against its declaration (Phase 4a step 4).
+#
+# Placed here, at the last point the tree is both complete and still a directory: everything above
+# has finished injecting, and section 5 below carves /var out into its own image (so a guard after
+# it could no longer see var/lib/pacman, which is exactly one of the things it has to find gone).
+# What mkfs.btrfs bakes in section 6 is this directory, unmodified.
+#
+# Release-only, mirroring the seal — a test tree deliberately keeps the package manager and carries
+# TEST_PKGS the lock does not describe. See images/guard-rootfs.sh for what it asserts and why.
+if [ "${NOVADECK_TEST:-}" = "1" ]; then
+  echo "  [TEST] skipping the sealed-root guard (nothing was sealed)"
+else
+  "$ROOT/images/guard-rootfs.sh" "$stage"
 fi
 
 mkdir -p "$IMGDIR"
@@ -729,5 +760,11 @@ install -d -m0755 "$varstage"
 rm -f "$IMG"
 mkfs.btrfs --rootdir "$stage" --compress zstd --shrink -L novadeck-root -f "$IMG" >/dev/null
 
-echo "  ok   rootfs -> ${IMG#"$ROOT"/}  ($(du -h "$IMG" | cut -f1), from $(du -sh "$stage" 2>/dev/null | cut -f1) staged)"
+# Report the APPARENT size, not the allocated one. `mkfs.btrfs --shrink` leaves the image sparse
+# (~2 GiB of holes), so a bare `du -h` understates it by that much -- and this number is what
+# anyone sizing the slot reads. rootfs-a is 7G (images/partition-table.txt), so the honest figure
+# is a ~0.9G margin, where the allocated one implies ~2.9G. Both are printed: the allocated size
+# is what the file costs on the build host, which is worth knowing too, just not on its own.
+echo "  ok   rootfs -> ${IMG#"$ROOT"/}  ($(du -h --apparent-size "$IMG" | cut -f1) in a 7G slot," \
+     "$(du -h "$IMG" | cut -f1) allocated, from $(du -sh "$stage" 2>/dev/null | cut -f1) staged)"
 echo "Done. Read-only root ready for slot install / RAUC bundling (images/genbundle.sh)."

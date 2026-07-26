@@ -1,8 +1,26 @@
 #!/usr/bin/env bash
-# novadeck base customization — install the RELEASE runtime into the aarch64 base.
+# novadeck root bootstrap — lay the RELEASE root down from packages, into an empty tree.
 #
-# The upstream holo-core base is minimal: no Wi-Fi supplicant, no SSH server, no
-# Vulkan/Mesa userspace. This layers the runtime that ships in every build —
+# PHASE 4c. This script used to `docker export` a vendor-built base image and pacman-install
+# on top of it. It now bootstraps: `pacman -r work/base` against an EMPTY directory, so every
+# file on the image arrives from a package that images/manifest.lock names and
+# images/fetchlock.sh sha256-verifies. 116 of the lock's rows used to be class `base` —
+# content that shipped inside the image with no file to install and nothing to check. There is
+# no such class any more.
+#
+# Docker is still here, and still needs qemu binfmt: an aarch64 root has to be laid down by an
+# aarch64 pacman running aarch64 install scriptlets, and a container is how we get an aarch64
+# userspace on an x86 host. It is the EXECUTION ENVIRONMENT (base-devel.digest, the same pin
+# packages/build-overlay.sh builds in) and no longer the CONTENT SOURCE. Consequences:
+#   - /.dockerenv is never created in the target root, so it cannot reach a device and make
+#     systemd-detect-virt report a container (which silently skips ~13 units).
+#   - nothing is inherited, so images/assemble-rootfs.sh has nothing to scrub.
+#   - the three identity files no package owns are ours: /etc/os-release (images/os-release),
+#     /etc/locale.conf and /etc/hostname, all written below.
+#
+# The upstream holo-core package set is minimal: no Wi-Fi supplicant, no SSH server, no
+# Vulkan/Mesa userspace. On top of the `base` metapackage this lays the runtime that ships in
+# every build —
 #   networkmanager   Wi-Fi manager (release + test); does its own DHCP
 #   wpa_supplicant   NM's Wi-Fi WPA backend (optdepend of networkmanager, so installed explicitly)
 #   bluez/bluez-utils Bluetooth stack + bluetoothctl (Deck UI pairs controllers/audio)
@@ -11,9 +29,7 @@
 #   mesa + vulkan-freedreno (Turnip) + vulkan-tools   GPU / Vulkan
 # Runtime deps of precompiled packages (e.g. libiio for InputPlumber) are NOT hardcoded here —
 # each packages/<name>/prebuilt.pin declares its own `deps:`, aggregated into the install list.
-# — by running the pinned base under arm64 emulation and pacman-installing from the
-# holo repo, then exporting the augmented rootfs to work/base/ (the directory
-# images/assemble-rootfs.sh consumes).
+# The result lands in work/base/ — the directory images/assemble-rootfs.sh consumes.
 #
 # Components NOT in the holo repo (e.g. InputPlumber, the handheld input daemon) ship as
 # precompiled-package PINS: each packages/<name>/prebuilt.pin declares a tarball by
@@ -26,17 +42,44 @@
 # scaffolding (.link/.network, regdom, wpa creds, sshd + host keys, enable-symlinks) is a
 # TEST-ONLY injection done later by assemble-rootfs.sh under NOVADECK_TEST=1 (see it).
 #
-# Unlike fetch-base.sh (a file copy, no qemu), this EXECUTES arm64 userspace, so it
+# This EXECUTES arm64 userspace (pacman, its install scriptlets, locale-gen, useradd), so it
 # needs qemu binfmt — registered on demand via tonistiigi/binfmt. Network required.
 #
 #   images/customize-base.sh
 #
-# Prints the exported rootfs path on stdout (like fetch-base.sh). FORCE=1 re-runs.
+# Prints the bootstrapped rootfs path on stdout. FORCE=1 re-runs.
+#
+# TWO INSTALL MODES (Phase 4a step 2). Default is LOCKED: images/fetchlock.sh materializes
+# exactly the package files images/manifest.lock declares, sha256-verified on the host, and the
+# container installs that explicit list with `pacman -U`. No repo database is synced, so no
+# dependency resolution happens implicitly at build time.
+#   NOVADECK_RESOLVE=1  re-resolve from PKGS with `pacman -Sy` (the pre-lock behaviour). This is
+#                       how the lock is REGENERATED, so it must exist: `make relock` runs this
+#                       mode and then images/genmanifest.sh over the result. Never ships.
+# The two modes produce different trees by design (that is the point of relocking), so the mode
+# is folded into the reuse-cache key below — a resolve-built base can never satisfy a locked
+# build, and vice versa.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-PINFILE="$ROOT/base.digest"
+# The EXECUTION environment, not the content source (see the header). Shared with
+# packages/build-overlay.sh: one pinned arm64 builder image, used by both stages.
+PINFILE="$ROOT/base-devel.digest"
+SNAPFILE="$ROOT/snapshot.pin"
+LOCKFILE="$ROOT/images/manifest.lock"
+PACMANCONF="$ROOT/images/pacman.conf"
+OSRELEASE="$ROOT/images/os-release"
 DEST="$ROOT/work/base"
+RESOLVE="${NOVADECK_RESOLVE:-}"
+
+# The root's foundation. `base` is the metapackage the vendor's own image is built from, so
+# declaring it reproduces the shipped set exactly (measured: `pacman -r <empty> -Sy base PKGS`
+# resolves the same 394 packages, name and version, that the old export-plus-install path
+# produced) instead of hand-reconstructing a minimal list that would drift from upstream on
+# every bump. It pulls `pacman` and `archlinux-keyring` in as dependencies; those are removed
+# from the RELEASE tree afterwards by images/seal-rootfs.sh, exactly as before — 4c changes
+# where content comes from, not what it contains. See docs/phase4.md.
+BOOTSTRAP_PKGS=(base)
 
 # Release runtime packages — credentials are NEVER installed here (test-only at assemble).
 # gamescope + seatd are the Deck-UI session compositor (SteamOS layer B) and its seat manager:
@@ -165,7 +208,16 @@ done
 # (/usr/lib/novadeck/pkgs) and compare it. prebuilt.manifest stays a SEPARATE marker because
 # the container also reads it verbatim as the tar-extraction list, so it must hold only
 # prebuilt rows.
-INSTALL_PKGS=("${PKGS[@]}" "${PREBUILT_DEPS[@]}")
+#
+# Under LOCKED mode this list is no longer what pacman resolves — images/manifest.lock is. It
+# stays the human-editable DECLARATION of intent (edit it, `make relock`, review the diff) and
+# is still asserted against the built tree in-container via `pacman -T`, which catches a leaf
+# package that fell out of the lock and would otherwise vanish without a dependency error.
+INSTALL_PKGS=("${BOOTSTRAP_PKGS[@]}" "${PKGS[@]}" "${PREBUILT_DEPS[@]}")
+# Test-only tooling is installed by NAME even under LOCKED mode (see the pacman -Sy near the end
+# of the container script). It is deliberately NOT in the lock: the lock describes the RELEASE
+# image, which is the tree the step-4 seal guard runs against. Keeping test rows out of it also
+# means `make relock` must run release — genmanifest.sh refuses a test base for that reason.
 if [ "${NOVADECK_TEST:-}" = "1" ]; then
   INSTALL_PKGS+=("${TEST_PKGS[@]}")
 fi
@@ -185,37 +237,89 @@ if [ -f "$OVERLAY_DB" ]; then
 overlay:$(sha256sum "$OVERLAY_DB" | cut -d' ' -f1)"
 fi
 
-[ -f "$PINFILE" ] || { echo "no base pin: $PINFILE" >&2; exit 1; }
+[ -f "$PINFILE" ] || { echo "no builder pin: $PINFILE" >&2; exit 1; }
 # Pin = last non-comment, non-blank line: an image ref ending in @sha256:<digest>.
 REF="$(grep -vE '^[[:space:]]*(#|$)' "$PINFILE" | tail -1)"
 case "$REF" in
   *@sha256:*) ;;
-  *) echo "refusing unpinned base ref (need ...@sha256:<digest>): '$REF'" >&2; exit 1 ;;
+  *) echo "refusing unpinned builder ref (need ...@sha256:<digest>): '$REF'" >&2; exit 1 ;;
 esac
-command -v docker >/dev/null 2>&1 || { echo "docker required for base customization" >&2; exit 1; }
+# Fold the builder into the reuse key. It contributes no FILES to the root any more, but it is
+# the pacman that resolves and lays them down, so a bump still has to rebuild rather than be
+# silently satisfied by a tree the previous builder produced.
+EXPECTED_PKGS="$EXPECTED_PKGS
+env:$REF"
 
-# Already customized? Reuse unless FORCE=1 (the emulated pacman run is slow). Both markers must
+# Package-repo snapshot pin (snapshot.pin) — the repo every row of the root is installed from.
+# The vendor's mirrorlist points at the UNSUFFIXED snapshot path, which is an alias that tracks
+# the newest revision, so an inherited one would move under us. We write our own from this pin
+# (images/pacman.conf Includes it) and refuse the alias.
+[ -f "$SNAPFILE" ] || { echo "no snapshot pin: $SNAPFILE" >&2; exit 1; }
+SNAPSHOT="$(grep -vE '^[[:space:]]*(#|$)' "$SNAPFILE" | tail -1)"
+case "$SNAPSHOT" in
+  *mash-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].[0-9]*) ;;
+  *) echo "refusing unpinned snapshot (need an explicit .N revision, not the alias): '$SNAPSHOT'" >&2
+     exit 1 ;;
+esac
+# Fold the revision into the reuse key: bumping the pin must rebuild the base even when the
+# package SET is unchanged, which is the whole point of pinning it.
+EXPECTED_PKGS="$EXPECTED_PKGS
+snapshot:$SNAPSHOT"
+
+# Mode + lock into the reuse key. Three distinct rebuild triggers, all of which the package SET
+# alone would miss:
+#   mode:      a resolve-built base must NEVER satisfy a locked build. Without this token
+#              `make relock` would leave an unverified tree behind that the next `make sdcard`
+#              happily reuses and ships.
+#   lock:      editing the lock (a package bump, a relock) must rebuild the base.
+#   test:      recorded explicitly so genmanifest.sh can REFUSE a test base; the test packages
+#              are already in the sorted set above, but not in a form anything can detect.
+if [ -n "$RESOLVE" ]; then
+  EXPECTED_PKGS="$EXPECTED_PKGS
+mode:resolve"
+else
+  [ -f "$LOCKFILE" ] || { echo "no manifest: $LOCKFILE (NOVADECK_RESOLVE=1 to re-resolve)" >&2; exit 1; }
+  EXPECTED_PKGS="$EXPECTED_PKGS
+mode:locked
+lock:$(sha256sum "$LOCKFILE" | cut -d' ' -f1)"
+fi
+if [ "${NOVADECK_TEST:-}" = "1" ]; then
+  EXPECTED_PKGS="$EXPECTED_PKGS
+test:1"
+fi
+# This script itself. Everything above describes the INPUTS; the tree is also a product of the
+# steps below (which packages are placed where, what runs offline with --root=, what /dev nodes
+# exist), and none of that is visible in any other key. Without this a bootstrap fix is silently
+# a no-op on a tree the reuse check still considers current -- which is exactly what happened on
+# 2026-07-26, twice over, since the Makefile was not listing this file as a prerequisite either.
+EXPECTED_PKGS="$EXPECTED_PKGS
+script:$(sha256sum "$0" | cut -d' ' -f1)"
+command -v docker >/dev/null 2>&1 || { echo "docker required for the root bootstrap" >&2; exit 1; }
+[ -f "$PACMANCONF" ] || { echo "no bootstrap pacman config: $PACMANCONF" >&2; exit 1; }
+[ -f "$OSRELEASE" ]  || { echo "no os-release declaration: $OSRELEASE" >&2; exit 1; }
+
+# Already bootstrapped? Reuse unless FORCE=1 (the emulated install is slow). Both markers must
 # match the current inputs, else a package add/removal or a prebuilt pin bump would be silently
 # missed. The pkgs marker is written last in-container, so its presence also proves the
-# customization completed (no need for per-package existence sentinels).
+# bootstrap completed (no need for per-package existence sentinels).
 if [ -z "${FORCE:-}" ] \
    && [ "$(cat "$DEST/usr/lib/novadeck/pkgs" 2>/dev/null)" = "$EXPECTED_PKGS" ] \
    && [ "$(cat "$DEST/usr/lib/novadeck/prebuilt.manifest" 2>/dev/null)" = "$EXPECTED_MANIFEST" ]; then
-  echo "[novadeck] customized base present: ${DEST#"$ROOT"/} (FORCE=1 to rebuild)" >&2
+  echo "[novadeck] bootstrapped root present: ${DEST#"$ROOT"/} (FORCE=1 to rebuild)" >&2
   echo "$DEST"; exit 0
 fi
 
-echo "[novadeck] pulling pinned base: $REF" >&2
+echo "[novadeck] pulling pinned builder: $REF" >&2
 docker pull "$REF" >&2
 
-# Ensure arm64 binfmt is registered so the base's own pacman runs under emulation.
+# Ensure arm64 binfmt is registered so the builder's pacman runs under emulation.
 if ! docker run --rm --platform linux/arm64 "$REF" /usr/bin/true >/dev/null 2>&1; then
   echo "[novadeck] registering arm64 binfmt (qemu) via tonistiigi/binfmt" >&2
   docker run --privileged --rm tonistiigi/binfmt --install arm64 >&2
 fi
 
 # Fetch + verify every pinned prebuilt on the host (network here); staged into PREBUILT_DIR,
-# mounted read-only into the customization container below so they land in the exported base.
+# mounted read-only into the bootstrap container below so they land in the target root.
 #
 # PREBUILT_DIR PERSISTS across runs (it is NOT wiped) so it doubles as the download cache: a
 # re-customize — the base cache busts on any package/overlay change — reuses a staged blob whose
@@ -223,6 +327,22 @@ fi
 # that download on every rebuild. The staged name is per-pin (fex-rootfs.blob), so a pin bump
 # re-verifies against the NEW sha, misses, and overwrites in place — no orphans, no unbounded growth.
 mkdir -p "$PREBUILT_DIR"
+# PREBUILT_DIR persists, so the install list has to be cleared BEFORE the mode branch: the
+# container decides locked-vs-resolve purely by whether this file exists, and a leftover list
+# from an earlier locked run would silently re-lock a resolve run (i.e. make `make relock`
+# unable to re-resolve, which is the one thing it exists to do).
+rm -f "$PREBUILT_DIR/install.list"
+
+# The pinned mirrorlist crosses into the container as a FILE rather than being interpolated
+# into the single-quoted bash -c below: the URL carries literal $repo/$arch, which pacman
+# expands and neither shell must. A file keeps them literal with no quoting games.
+# images/pacman.conf Includes it from this same staging directory.
+printf 'Server = %s/$repo/os/$arch\n' "$SNAPSHOT" >"$PREBUILT_DIR/mirrorlist"
+# The bootstrap's repo configuration and the root's identity, both committed declarations
+# staged alongside it (see the headers of each).
+cp "$PACMANCONF" "$PREBUILT_DIR/pacman.conf"
+cp "$OSRELEASE"  "$PREBUILT_DIR/os-release"
+
 for pin in "${PREBUILT_PINS[@]}"; do
   [ -e "$pin" ] || continue
   name="$(pin_field "$pin" name)"; ver="$(pin_field "$pin" version)"
@@ -251,45 +371,154 @@ printf '%s\n' "$EXPECTED_MANIFEST" >"$PREBUILT_DIR/prebuilt.manifest"
 # Install-set marker (reuse-cache key only; NOT a tar list) — the full sorted package set.
 printf '%s\n' "$EXPECTED_PKGS" >"$PREBUILT_DIR/pkgs"
 
-cid="nova-custom-$$"
-trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
-
-# Mount the from-source overlay repo (if built) read-only so the in-container pacman can install
-# our patched packages from it. `pacman -S` resolves a package from the FIRST repo in pacman.conf
-# ORDER that provides it (version does NOT override order), so the overlay must be inserted AHEAD
-# of the holo repos; the higher pkgrel (e.g. 3.16.17-1.1) then also keeps it across any upgrade.
-OVERLAY_MOUNT=()
-if [ -f "$OVERLAY_DB" ] && ls "$OVERLAY_REPO"/*.pkg.tar.zst >/dev/null 2>&1; then
-  OVERLAY_MOUNT=(-v "$OVERLAY_REPO":/novarepo:ro)
-  echo "[novadeck] overlay repo present — patched packages will override holo binaries" >&2
+# LOCKED mode: materialize + sha256-verify the lock's package files on the host and hand the
+# container an explicit install list. Done HERE, before the container starts, so a stale or
+# republished package fails the build with a hash mismatch instead of after 20 minutes of
+# emulated install. Resolve mode writes no list, which is how the container tells the modes apart.
+if [ -z "$RESOLVE" ]; then
+  "$ROOT/images/fetchlock.sh" "$PREBUILT_DIR/install.list"
+else
+  echo "[novadeck] NOVADECK_RESOLVE=1 — re-resolving from PKGS, this tree is for relock only" >&2
 fi
 
-echo "[novadeck] installing runtime under arm64: ${INSTALL_PKGS[*]}" >&2
-docker run --name "$cid" --platform linux/arm64 -v "$PREBUILT_DIR":/prebuilt:ro \
-  -v "$PACMAN_CACHE":/var/cache/pacman/pkg \
-  "${OVERLAY_MOUNT[@]}" "$REF" \
-  bash -euo pipefail -c '
-  # novadeck overlay: register our local pacman repo AHEAD of the holo repos (right after the
-  # [options] section) so patched from-source packages (e.g. gamescope rebuilt for the portrait-
-  # panel composite rotation) resolve from it instead of the holo binaries — pacman -S honours
-  # repo ORDER, not version. Unsigned (TrustAll): it is our own pinned build artifact.
-  if [ -d /novarepo ] && ls /novarepo/*.pkg.tar.zst >/dev/null 2>&1; then
-    awk "
-      /^\[/ && seen && !ins { print \"[novadeck]\"; print \"SigLevel = Optional TrustAll\"; print \"Server = file:///novarepo\"; print \"\"; ins=1 }
-      /^\[options\]/ { seen=1 }
-      { print }
-    " /etc/pacman.conf > /etc/pacman.conf.nova && mv /etc/pacman.conf.nova /etc/pacman.conf
-  fi
-  pacman -Sy --noconfirm --needed --disable-download-timeout '"${INSTALL_PKGS[*]}"'
+# Test-only tooling crosses as a file for the same reason the mirrorlist does: it keeps the
+# container script free of another layer of nested quoting. Absent file => release build.
+rm -f "$PREBUILT_DIR/test.pkgs"
+if [ "${NOVADECK_TEST:-}" = "1" ]; then
+  printf '%s\n' "${TEST_PKGS[@]}" >"$PREBUILT_DIR/test.pkgs"
+fi
 
-  # Compile the en_US.UTF-8 locale. The holo base ships /etc/locale.conf with
-  # LANG=en_US.UTF-8 and /etc/locale.gen with that entry uncommented, but never runs
-  # locale-gen — so /usr/lib/locale holds only C.utf8 and anything honouring LANG
-  # (native Steam, CEF, games) silently falls back to C. Ensure the entry then compile
-  # it into the RO root now. (Arch equivalent of Fedora glibc-langpack-en; not a
-  # pressure-vessel need here — pressure-vessel is dropped, we launch raw on host.)
-  grep -q "^en_US.UTF-8 UTF-8" /etc/locale.gen || echo "en_US.UTF-8 UTF-8" >>/etc/locale.gen
-  locale-gen
+# The from-source overlay repo is REQUIRED, not optional. PKGS names packages that exist in no
+# holo repo at all (gtk2, mangohud, sddm, fex-emu, scx-scheds), so a bootstrap without it cannot
+# resolve, and a locked build cannot install the /novarepo paths the lock names. Refuse here,
+# on the host, rather than 20 emulated minutes in — and refuse for BOTH modes, since the
+# pre-4c "mount it only if it happens to exist" made a missing overlay look like a lock problem.
+if [ ! -f "$OVERLAY_DB" ] || ! ls "$OVERLAY_REPO"/*.pkg.tar.zst >/dev/null 2>&1; then
+  echo "no usable overlay repo at ${OVERLAY_REPO#"$ROOT"/} — the root cannot be laid down without it" >&2
+  echo "  build it first: make overlay" >&2
+  exit 1
+fi
+
+# The target root. It must start EMPTY: this is a bootstrap, and reusing a partially populated
+# tree would reintroduce exactly the "content of unknown origin" the phase removes.
+#
+# BOTH the wipe and the re-create run in a container, so the directory itself is ROOT-owned like
+# everything pacman then writes into it. Creating it on the host instead (`mkdir -p "$DEST"`)
+# leaves it owned by the build user, and systemd-tmpfiles below then refuses to descend into it:
+#   Detected unsafe path transition /target (owned by 1000) -> /target/var (owned by root)
+# — its symlink-attack guard, which fires on any ownership transition into a root-owned subtree.
+# That silently produced a tree with none of the tmpfiles directories in it. work/ ITSELF stays
+# host-owned (created above, and by the Makefile at parse time); only work/base is root-owned,
+# which is already how the tree is treated everywhere else (`make clean-base` removes it from
+# inside a container for exactly this reason).
+echo "[novadeck] clearing the target root -> ${DEST#"$ROOT"/}" >&2
+mkdir -p "$ROOT/work"
+docker run --rm -v "$ROOT/work":/wb "$REF" sh -c 'rm -rf /wb/base && mkdir -m0755 /wb/base'
+
+if [ -n "$RESOLVE" ]; then
+  echo "[novadeck] resolving the root under arm64: ${INSTALL_PKGS[*]}" >&2
+else
+  echo "[novadeck] laying down $(wc -l <"$PREBUILT_DIR/install.list") locked packages under arm64" >&2
+fi
+docker run --rm --platform linux/arm64 -v "$PREBUILT_DIR":/prebuilt:ro \
+  -v "$PACMAN_CACHE":/var/cache/pacman/pkg \
+  -v "$OVERLAY_REPO":/novarepo:ro \
+  -v "$DEST":/target \
+  "$REF" \
+  bash -euo pipefail -c '
+  # PA is the pacman invocation every step below shares. Three flags carry the whole phase:
+  #   -r /target        install into the bind-mounted empty tree, NOT into this container. The
+  #                     container is the execution environment; nothing it owns ships.
+  #   --config          images/pacman.conf, a committed declaration staged into /prebuilt, which
+  #                     Includes the mirrorlist the host wrote from snapshot.pin. The vendor
+  #                     /etc/pacman.conf in this image is never read and never edited.
+  #   --cachedir        the persistent host cache (a bind mount). Root-relative paths would put
+  #                     it INSIDE the image being built.
+  # dbpath is left to default to /target/var/lib/pacman, which is where it belongs: that database
+  # is the tree`s own record of itself, and images/genmanifest.sh reads it to write the lock.
+  PA=(pacman -r /target --config /prebuilt/pacman.conf --cachedir /var/cache/pacman/pkg)
+  mkdir -p /target/var/lib/pacman
+
+  # A minimal /dev, because pacman runs install scriptlets CHROOTED into the target and the
+  # target has no API filesystems. pacstrap mounts /proc, /sys and /dev into the root it builds;
+  # we cannot -- a bind mount needs CAP_SYS_ADMIN, which docker drops. CAP_MKNOD it does grant,
+  # so the /dev half is buyable and worth buying: without /dev/null, `gnupg`s scriptlet dies on
+  # a redirect ("line 5: /dev/null: No such file or directory") and pacman reports a failed hook
+  # as a WARNING, so the build stays green with the scriptlet half-run. One package out of 394
+  # hits it today, and that one is stripped from the release image -- but the next one to redirect
+  # to /dev/null would fail just as quietly.
+  #
+  # The /proc half stays unbought; the two steps that need it are run offline with --root= below.
+  # These nodes are harmless in the shipped image: devtmpfs mounts over /dev at boot.
+  mkdir -p /target/dev
+  mknod -m 0666 /target/dev/null    c 1 3 2>/dev/null || true
+  mknod -m 0666 /target/dev/zero    c 1 5 2>/dev/null || true
+  mknod -m 0666 /target/dev/random  c 1 8 2>/dev/null || true
+  mknod -m 0666 /target/dev/urandom c 1 9 2>/dev/null || true
+  mknod -m 0600 /target/dev/console c 5 1 2>/dev/null || true
+
+  # Lay the root down. LOCKED when the host staged an install list, else RESOLVE.
+  if [ -s /prebuilt/install.list ]; then
+    # No -Sy anywhere on this path: nothing syncs a repo database, so pacman CANNOT resolve
+    # anything of its own accord -- it installs exactly these host-verified files. Its dependency
+    # check over the batch is then a free proof that the lock is a closed set: an unsatisfied dep
+    # is a hard error rather than a quiet fetch. Read into an array rather than word-splitting
+    # `cat`, so a path is a path.
+    mapfile -t lockpkgs < /prebuilt/install.list
+    echo "laying down ${#lockpkgs[@]} locked packages into an empty root"
+    "${PA[@]}" -U --noconfirm "${lockpkgs[@]}"
+  else
+    "${PA[@]}" -Sy --noconfirm --disable-download-timeout '"${INSTALL_PKGS[*]}"'
+  fi
+  # --needed is deliberately absent above: the root starts empty, so there is nothing for it to
+  # skip, and its old job (do not re-install what the vendor image already had) no longer exists.
+
+  # Test-only tooling, installed BY NAME even under locked mode: it is deliberately outside the
+  # lock, which describes the release image (the tree the step-4 seal guard runs against). -Sy
+  # syncs from the same pinned revision the config above names.
+  if [ -s /prebuilt/test.pkgs ]; then
+    mapfile -t testpkgs < /prebuilt/test.pkgs
+    "${PA[@]}" -Sy --noconfirm --needed --disable-download-timeout "${testpkgs[@]}"
+  fi
+
+  # Assert the tree against the DECLARATION (base + PKGS + prebuilt deps + test), not only
+  # against the lock. The lock is a resolved closure, so a leaf package that dropped OUT of it
+  # leaves no unsatisfied dependency behind -- pacman -U would succeed and the package would
+  # simply be absent on the device. -T reports unsatisfied names and honours provides (unlike
+  # -Q), so it catches exactly that. Same discipline as the step-4 guard: assert the built tree.
+  unmet="$("${PA[@]}" -T '"${INSTALL_PKGS[*]}"' || true)"
+  if [ -n "$unmet" ]; then
+    echo "the bootstrap did not satisfy the declared package set; unsatisfied:" >&2
+    printf "  %s\n" $unmet >&2
+    echo "the lock is stale for this declaration -- run: make relock" >&2
+    exit 1
+  fi
+
+  # ---- the three identity files no package owns -------------------------------------------
+  # Before Phase 4c these came in with the vendor image, so the root announced itself as someone
+  # else`s distro. Nothing in the package set owns any of the three: measured against the pinned
+  # snapshot, /etc/os-release, /etc/locale.conf and /etc/hostname appear in no package file list
+  # (only /usr/lib/os-release does, owned by `filesystem`). So a bootstrap that wrote none of
+  # them would fall back to the vendor`s /usr/lib/os-release, an unset LANG and a compiled-in
+  # hostname. os-release is a committed declaration (images/os-release) installed as the /etc
+  # copy, which is exactly what os-release(5) defines /etc for — /usr/lib/os-release is left
+  # untouched. The rm is defensive: this snapshot ships no /etc symlink, but if a later one does,
+  # install(1) would follow it and rewrite the package-owned file underneath.
+  rm -f /target/etc/os-release
+  install -Dm0644 /prebuilt/os-release /target/etc/os-release
+  # LANG is read by the native Steam client, CEF and games. The locale it names is compiled a few
+  # lines down; the two have to agree or everything silently falls back to C.
+  printf "LANG=en_US.UTF-8\n" >/target/etc/locale.conf
+  # The vendor left a 0-byte /etc/hostname, so the device fell back to a compiled-in default.
+  printf "novadeck\n" >/target/etc/hostname
+
+  # Compile the en_US.UTF-8 locale. glibc ships /etc/locale.gen with every entry COMMENTED and
+  # nothing runs locale-gen at install time, so /usr/lib/locale would hold only C.utf8 and
+  # anything honouring LANG (native Steam, CEF, games) would silently fall back to C. The root is
+  # read-only at runtime, so this cannot be deferred to first boot. (Arch equivalent of Fedora
+  # glibc-langpack-en; not a pressure-vessel need here — we launch raw on host.)
+  grep -q "^en_US.UTF-8 UTF-8" /target/etc/locale.gen || echo "en_US.UTF-8 UTF-8" >>/target/etc/locale.gen
+  chroot /target locale-gen
 
   # Precompiled external packages staged + verified by the host (packages/*/prebuilt.pin):
   # place each into the rootfs, then record the manifest in the base so the host reuse-check
@@ -299,6 +528,8 @@ docker run --name "$cid" --platform linux/arm64 -v "$PREBUILT_DIR":/prebuilt:ro 
   #                strip 1 lands at /usr; Proton strips its versioned dir into a stable name).
   #   kind=file -> copy verbatim to `dest`, which is the full destination FILE path (the FEX
   #                guest rootfs is a raw erofs image, not an archive).
+  # `dest` is a path in the TARGET root, so every one is prefixed here -- an unprefixed dest
+  # would silently unpack into the throwaway container instead.
   if [ -s /prebuilt/prebuilt.manifest ]; then
     while read -r p_name p_sha p_strip p_kind p_dest p_deps; do
       [ -n "$p_name" ] || continue
@@ -307,35 +538,41 @@ docker run --name "$cid" --platform linux/arm64 -v "$PREBUILT_DIR":/prebuilt:ro 
       if [ "$p_dest" = "-" ]; then p_dest=/; fi
       case "${p_kind:-tar}" in
         tar)
-          mkdir -p "$p_dest"
-          tar -C "$p_dest" --strip-components="${p_strip:-0}" -xf "/prebuilt/$p_name.tar"
+          mkdir -p "/target$p_dest"
+          # --no-same-owner is LOAD-BEARING, not hygiene. These are third-party archives and they
+          # carry their own CI builder`s numeric uid: the InputPlumber tarball is 1001/1001
+          # throughout, and it unpacks at / with strip 1, so a root `tar -x` chowned the TARGET`s
+          # /usr, /usr/bin, /usr/lib and /usr/share to 1001 -- a uid that does not exist on the
+          # image. Long-standing (the same extraction ran before Phase 4c) and missed by
+          # assemble-rootfs.sh step 4z, which reclaims only the repo-checkout uid. Nothing in a
+          # read-only system root legitimately belongs to a build account, so extract as root.
+          tar -C "/target$p_dest" --no-same-owner --strip-components="${p_strip:-0}" \
+              -xf "/prebuilt/$p_name.tar"
           ;;
         file)
-          install -Dm0644 "/prebuilt/$p_name.blob" "$p_dest"
+          install -Dm0644 "/prebuilt/$p_name.blob" "/target$p_dest"
           ;;
         *)
           echo "prebuilt $p_name: unknown kind ${p_kind}" >&2; exit 1
           ;;
       esac
     done < /prebuilt/prebuilt.manifest
-    install -Dm0644 /prebuilt/prebuilt.manifest /usr/lib/novadeck/prebuilt.manifest
+    install -Dm0644 /prebuilt/prebuilt.manifest /target/usr/lib/novadeck/prebuilt.manifest
   fi
-  # Record the install-set marker (written last) so the host reuse-check can detect any package
-  # add/removal — release, prebuilt-dep, or test-only — without re-running the slow emulated pacman.
-  install -Dm0644 /prebuilt/pkgs /usr/lib/novadeck/pkgs
-
   # Release base ships the runtime PACKAGES only — no network/SSH config or service
   # enablement. First-boot networking is the SteamOS UI'\''s responsibility; all Wi-Fi/SSH
   # scaffolding (.link/.network, regdom, wpa creds, sshd + host keys, enable-symlinks) is
   # injected test-only by images/assemble-rootfs.sh under NOVADECK_TEST=1.
 
-  # Headless-boot fix (GENERAL, not network/test): the image ships an empty /etc/machine-id
-  # (ConditionFirstBoot=yes), so systemd-firstboot.service runs and, with console=tty0 and no
+  # Headless-boot fix (GENERAL, not network/test): no package owns /etc/machine-id, so the root
+  # ships without one (ConditionFirstBoot=yes) — as it did before 4c, where the vendor image had
+  # none either. systemd-firstboot.service therefore runs and, with console=tty0 and no
   # usable console input, prompts for locale/root-password and blocks sysinit.target forever
   # — the device never reaches multi-user. (systemd.firstboot=off on the cmdline only disables
   # PID1'\''s builtin query, NOT this unit.) Mask it; machine-id is still generated on first
   # boot and preset-all still runs, so service enablement is unaffected.
-  ln -sf /dev/null /etc/systemd/system/systemd-firstboot.service
+  mkdir -p /target/etc/systemd/system
+  ln -sf /dev/null /target/etc/systemd/system/systemd-firstboot.service
 
   # Network stack is NetworkManager, for every build (release + test) — see PKGS note above.
   # The holo base ships systemd-networkd enabled too, so BOTH run: networkd manages nothing
@@ -345,9 +582,9 @@ docker run --name "$cid" --platform linux/arm64 -v "$PREBUILT_DIR":/prebuilt:ro 
   # Mask networkd + its socket + its wait-online so only NetworkManager-wait-online satisfies
   # network-online.target. Masking (not disable) is preset-proof: nothing can socket-activate or
   # Wants= them back. NM provides its own resolved/timesync paths; networkd is pure dead weight.
-  ln -sf /dev/null /etc/systemd/system/systemd-networkd.service
-  ln -sf /dev/null /etc/systemd/system/systemd-networkd.socket
-  ln -sf /dev/null /etc/systemd/system/systemd-networkd-wait-online.service
+  ln -sf /dev/null /target/etc/systemd/system/systemd-networkd.service
+  ln -sf /dev/null /target/etc/systemd/system/systemd-networkd.socket
+  ln -sf /dev/null /target/etc/systemd/system/systemd-networkd-wait-online.service
 
   # ...and ENABLE NetworkManager for every build. The holo base ships NM installed-but-disabled;
   # with networkd now masked, a release image would have NO active network manager at all, so the
@@ -361,13 +598,13 @@ docker run --name "$cid" --platform linux/arm64 -v "$PREBUILT_DIR":/prebuilt:ro 
   # pacman-owned + read-only, so the preset goes in /etc (systemd reads /etc/systemd/system-preset/
   # too, at higher priority than /usr/lib). Keep comments apostrophe-free — a bare single-quote
   # closes the -c string and leaks the rest to the host shell (permission-denied on /etc + /usr).
-  mkdir -p /etc/systemd/system-preset
-  echo "enable NetworkManager.service" >/etc/systemd/system-preset/60-novadeck-network.preset
-  mkdir -p /etc/systemd/system/multi-user.target.wants
+  mkdir -p /target/etc/systemd/system-preset
+  echo "enable NetworkManager.service" >/target/etc/systemd/system-preset/60-novadeck-network.preset
+  mkdir -p /target/etc/systemd/system/multi-user.target.wants
   ln -sf /usr/lib/systemd/system/NetworkManager.service \
-         /etc/systemd/system/multi-user.target.wants/NetworkManager.service
+         /target/etc/systemd/system/multi-user.target.wants/NetworkManager.service
   ln -sf /usr/lib/systemd/system/NetworkManager.service \
-         /etc/systemd/system/dbus-org.freedesktop.NetworkManager.service
+         /target/etc/systemd/system/dbus-org.freedesktop.NetworkManager.service
 
   # deck user (uid/gid 1000) — owns the session home /home/deck (a dedicated growable partition)
   # and, later, the gamescope session. SteamOS uses uid 1000 "deck"; bake the account into the RO
@@ -375,11 +612,14 @@ docker run --name "$cid" --platform linux/arm64 -v "$PREBUILT_DIR":/prebuilt:ro 
   # persist it). -M: do NOT create a home in the RO root — /home/deck lives on the /home partition,
   # which make-sdcard.sh pre-seeds (deck-owned) with the Steam client at image-build time. Supplementary
   # groups are added only when they already exist in the base (hardware/seat access for the session).
-  if ! getent passwd deck >/dev/null 2>&1; then
-    useradd -M -u 1000 -U -s /bin/bash -c "Steam Deck User" deck
+  # Every account tool below runs CHROOTED into the target: they read and write /etc/passwd,
+  # /etc/group and /etc/shadow, and outside the chroot they would edit the throwaway container.
+  # (qemu binfmt is registered with the F flag, so the interpreter survives the chroot.)
+  if ! chroot /target getent passwd deck >/dev/null 2>&1; then
+    chroot /target useradd -M -u 1000 -U -s /bin/bash -c "Steam Deck User" deck
   fi
   for g in wheel video render input audio seat; do
-    if getent group "$g" >/dev/null 2>&1; then usermod -aG "$g" deck; fi
+    if chroot /target getent group "$g" >/dev/null 2>&1; then chroot /target usermod -aG "$g" deck; fi
   done
 
   # sddm system user + its state dir. sddm ships /usr/lib/sysusers.d/sddm.conf and expects the
@@ -387,32 +627,66 @@ docker run --name "$cid" --platform linux/arm64 -v "$PREBUILT_DIR":/prebuilt:ro 
   # (same reason deck is baked above). Materialize it now from the shipped sysusers config (falls
   # back to a plain system account if the file name ever changes upstream), and pre-create the
   # state dir the tmpfiles.d entry would otherwise make on a writable root.
-  if ! getent passwd sddm >/dev/null 2>&1; then
-    systemd-sysusers /usr/lib/sysusers.d/sddm.conf 2>/dev/null \
-      || useradd -r -U -M -d /var/lib/sddm -s /usr/bin/nologin -c "Simple Desktop Display Manager" sddm
+  if ! chroot /target getent passwd sddm >/dev/null 2>&1; then
+    chroot /target systemd-sysusers /usr/lib/sysusers.d/sddm.conf 2>/dev/null \
+      || chroot /target useradd -r -U -M -d /var/lib/sddm -s /usr/bin/nologin -c "Simple Desktop Display Manager" sddm
   fi
-  install -d -o sddm -g sddm -m 1770 /var/lib/sddm 2>/dev/null || true
+  chroot /target install -d -o sddm -g sddm -m 1770 /var/lib/sddm 2>/dev/null || true
+
+  # Materialize tmpfiles.d. pacman`s post-transaction hook tries this and FAILS in the bootstrap
+  # ("/proc/ is not mounted, but required ... consider using the --root= switch"), because it runs
+  # chrooted with no /proc -- and pacman treats a failed hook as a warning, so the build stayed
+  # green with none of these directories created. Before 4c it did not matter: the vendor had run
+  # it when building the image we exported. Now nobody has, and the root is READ-ONLY at runtime,
+  # so a directory tmpfiles would create on first boot cannot appear at all.
+  #
+  # --root= is the documented offline mode and what the error itself suggests; builder and target
+  # ship the identical systemd (258.2-2-arch, both from the pinned snapshot). It runs HERE, after
+  # the accounts above, because entries name owners (sddm, deck) that must resolve in the target`s
+  # own /etc/passwd -- and after the prebuilts, which ship tmpfiles.d snippets of their own.
+  #
+  # NOT fatal on a non-zero exit: an offline run legitimately cannot satisfy every line (anything
+  # under /proc, /sys or /dev, and ACL/xattr ops the host filesystem may not support), and
+  # systemd-tmpfiles returns non-zero if ANY line failed. Report the code rather than swallow it,
+  # so a run that starts failing wholesale is visible in the build log.
+  if ! systemd-tmpfiles --root=/target --create; then
+    echo "[novadeck] systemd-tmpfiles --root exited $? (partial offline application; see above)" >&2
+  fi
+
+  # Journal message catalog, offline for the same reason as tmpfiles above. pacman`s hook runs
+  # `journalctl --update-catalog` chrooted and fails -- "Failed to open file
+  # /usr/lib/systemd/catalog/dbus-broker-launch.catalog: No such file or directory" -- which is a
+  # misleading message: every .catalog file IS present in the tree, and the same command with
+  # --root= succeeds and writes a 293K database. The chroot is what it cannot cope with.
+  #
+  # Without this /var/lib/systemd/catalog/database does not exist, so `journalctl -x` has no
+  # message explanations. On a device with no serial console, where the only debugging path is
+  # reading an offloaded journal off the card, that is the wrong thing to be missing.
+  if ! journalctl --root=/target --update-catalog; then
+    echo "[novadeck] journalctl --root --update-catalog exited $? (no message catalog)" >&2
+  fi
+
+  # Record the install-set marker LAST, so its presence proves the whole bootstrap ran. The host
+  # reuse-check keys off it: a run that died anywhere above leaves no marker, so the next build
+  # re-bootstraps instead of shipping a half-populated root. (It used to be written before this
+  # block, which made "the marker exists" a weaker claim than the comment said it was.)
+  install -Dm0644 /prebuilt/pkgs /target/usr/lib/novadeck/pkgs
 
   # NB: no `pacman -Scc` here — /var/cache/pacman/pkg is a persistent host bind-mount (the retry
-  # cache) and is excluded from `docker export` anyway, so cleaning it would only throw the cache
-  # away without shrinking the exported base.
+  # cache) and lives outside the target root, so cleaning it would only throw the cache away
+  # without shrinking anything that ships.
 ' >&2
 # ^ redirect the container'\''s stdout (pacman progress) to stderr: this script'\''s stdout must
-#   carry ONLY the exported rootfs path (echo "$DEST" below), which build-image.sh captures.
+#   carry ONLY the rootfs path (echo "$DEST" below), which build-image.sh captures.
 
-echo "[novadeck] exporting customized base -> ${DEST#"$ROOT"/}" >&2
-# Extract AS ROOT inside a container so the base tree keeps the image's real ownership
-# (root + service users). A host-side `tar -x` runs as the unprivileged build user and
-# squashes the whole tree to that uid — which makes sshd refuse its non-root privsep dir
-# (/usr/share/empty.sshd) and is wrong for everything else too. Remove any prior export as
-# root as well (after this fix it is root-owned, so the build user can't unlink it).
-mkdir -p "$ROOT/work"
-docker run --rm -v "$ROOT/work":/wb "$REF" rm -rf "/wb/base"
-mkdir -p "$DEST"
-docker export "$cid" | docker run --rm -i -v "$DEST":/dest "$REF" \
-  tar -C /dest --numeric-owner -xf -
+# NO EXPORT STEP. The tree was written straight into the bind-mounted work/base by a root
+# pacman inside the container, so it already carries real ownership (root + service users) and
+# real modes — the thing the old `docker export | tar -x as root` dance existed to preserve
+# (a host-side tar -x squashed everything to the build user, and sshd then refused its non-root
+# privsep dir). Nothing is copied, nothing is flattened, and no container filesystem — with its
+# /.dockerenv and the vendor image's own contents — is ever the source of these bytes.
 
-# du -sh on a root-owned export warns on 0700 dirs (/root, NM system-connections, gnupg keys) when
+# du -sh on a root-owned tree warns on 0700 dirs (/root, NM system-connections, gnupg keys) when
 # run as the host user; the size is just for the log line, so drop those stderr warnings.
-echo "[novadeck] customized base ready ($(du -sh "$DEST" 2>/dev/null | cut -f1) at ${DEST#"$ROOT"/})" >&2
+echo "[novadeck] bootstrapped root ready ($(du -sh "$DEST" 2>/dev/null | cut -f1) at ${DEST#"$ROOT"/})" >&2
 echo "$DEST"

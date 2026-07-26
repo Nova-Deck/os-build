@@ -2,7 +2,7 @@
 # novadeck Phase 1 image flow — base rootfs + device firmware + kernel -> rootfs.img.
 #
 # Chains the pieces into one bootable read-only Btrfs root:
-#   1. fetch the pinned upstream base userspace      (images/fetch-base.sh)
+#   1. bootstrap the root from packages               (images/customize-base.sh)
 #   2. fetch device-proprietary firmware (pinned)     (firmware/fetch-qcom-fw.sh)
 #   3. verify the firmware manifest vs the built kernel, non-fatal (firmware/manifest.sh)
 #   4. assemble the read-only Btrfs root              (images/assemble-rootfs.sh)
@@ -22,11 +22,10 @@ DK=(docker run --rm -v "$ROOT":/src -w /src novadeck-build)
 [ -f "$OUT/Image.gz" ] \
   || { echo "no kernel: out/Image.gz — run kernel/build.sh first" >&2; exit 1; }
 
-# 1. base userspace (pinned, idempotent) with the release runtime layered in (NetworkManager,
-# openssh, mesa+Turnip+vulkan-tools). customize-base.sh prints a host absolute path;
-# step 4 runs in a container with the repo bind-mounted at /src, so translate the $ROOT
-# prefix to /src for the in-container call. (For a bare base with no runtime added, use
-# images/fetch-base.sh instead.)
+# 1. the root, laid down from packages into an empty tree (pinned, idempotent): the `base`
+# metapackage plus the release runtime (NetworkManager, openssh, mesa+Turnip+vulkan-tools).
+# customize-base.sh prints a host absolute path; step 4 runs in a container with the repo
+# bind-mounted at /src, so translate the $ROOT prefix to /src for the in-container call.
 BASE="$("$ROOT/images/customize-base.sh")"
 BASE_CTR="/src/${BASE#"$ROOT"/}"
 

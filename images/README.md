@@ -24,9 +24,9 @@ it** — which is why RAUC must rsync `/var` across on update (see `TODO.md`).
 
 | File | Purpose |
 |---|---|
-| `build-image.sh` | **Phase 1 flow orchestrator.** Chains base fetch → firmware fetch/verify → rootfs assembly into `out/images/rootfs.img`. |
-| `fetch-base.sh` | Pull the pinned upstream base (`base.digest`) and export its **bare** rootfs to `work/base/`. No qemu — `docker export` only moves files. |
-| `customize-base.sh` | Pin-pull the base, then under **arm64 emulation** (qemu binfmt) `pacman`-install the release runtime — NetworkManager (Wi-Fi, with its wpa_supplicant backend), bluez (Bluetooth), openssh (SSH), mesa + Turnip + vulkan-tools — and export to `work/base/`. What `build-image.sh` uses. Network required; no credentials baked in (NM is installed but inactive in a plain release base). |
+| `build-image.sh` | **Phase 1 flow orchestrator.** Chains root bootstrap → firmware fetch/verify → rootfs assembly into `out/images/rootfs.img`. |
+| `customize-base.sh` | **Bootstraps the root from packages** (Phase 4c): `pacman -r work/base` into an *empty* tree under **arm64 emulation** (qemu binfmt), installing the `base` metapackage plus the release runtime — NetworkManager (Wi-Fi, with its wpa_supplicant backend), bluez (Bluetooth), openssh (SSH), mesa + Turnip + vulkan-tools. Docker is the execution environment (`base-devel.digest`), never the content source, so nothing is inherited and `/.dockerenv` never exists in the target. Network required; no credentials baked in (NM is installed but inactive in a plain release base). |
+| `pacman.conf` + `os-release` | Committed declarations staged into the bootstrap container: the repo set the root is resolved from, and the root's own identity (over the vendor's `/usr/lib/os-release`). |
 | `partition-table.txt` | The 8-partition A/B layout (ESP, A/B boot, A/B root, A/B /var, shared /home). Single source of truth for sizes, typecodes and labels. |
 | `genpart.sh [target\|--min]` | Emit an `sgdisk` script from the table; apply it to a disk/image when `target` is given; print the fixed layout's minimum size in MiB with `--min`. |
 | `initramfs/init` | The initramfs `/init`: mounts the root read-only, mounts `/var`, stacks the `/etc` overlay on it, then `switch_root`s into systemd. Degrades to a writable un-overlaid root (loudly, via `/dev/kmsg`) rather than bricking a device with no serial console. |

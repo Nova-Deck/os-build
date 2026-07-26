@@ -1,0 +1,53 @@
+# novadeck seal removal list — Phase 4a step 3.
+#
+# The explicit, reviewed declaration of what images/seal-rootfs.sh deletes from the RELEASE
+# root after the last install. Editing this file changes what ships, so it is committed and
+# reviewed like images/manifest.lock — and images/genmanifest.sh reads it, so the packages
+# named here are emitted in the lock under a `stripped` class rather than as if they shipped.
+#
+# WHY FILE REMOVAL AND NOT `pacman -R`: pacman and archlinux-keyring are dependencies of the
+# `base` metapackage (base-3-2 is installed), so removing them as packages leaves `base`
+# unsatisfied and pacman refuses the transaction. Deleting the files is sound precisely
+# because there is no package manager left afterward to observe the inconsistency — but it
+# means the set has to be declared here rather than derived from the package database.
+#
+# Two row kinds:
+#
+#   pkg <name>    an installed package, removed by deleting every file its own entry in the
+#                 package database lists (then rmdir-ing the directories it listed, which
+#                 no-ops on any directory another package still occupies). The database is
+#                 preserved as provenance before it is consulted, so this is a mechanical
+#                 expansion of a declared name — not a derivation of WHAT to strip.
+#                 A name that is not installed is a hard error: the list has drifted.
+#
+#   path <p>      a root-relative path removed wholesale, for state that no package owns
+#                 (pacman-key's generated keyring, the local database directory itself).
+#
+# NOT stripped, deliberately: gnupg's library dependencies (libgcrypt, libassuan, npth,
+# gpgme, …) are ordinary shared libraries other packages link, and pacman's own libalpm goes
+# with pacman itself. The target is the package-manager RUNTIME and the daemons it drags in,
+# not every transitive dependency.
+#
+# Under NOVADECK_TEST=1 nothing here is removed — on-device pacman is a genuine bring-up
+# affordance and the divergence is confined to tooling. The step-4 guard runs against the
+# RELEASE tree.
+
+# pacman itself: the binary, libalpm, makepkg, /etc/pacman.conf, the repo-* helpers.
+pkg  pacman
+# The mirrorlist package (/etc/pacman.d/mirrorlist) — a pacman dependency, useless without it.
+pkg  pacman-mirrorlist
+# gnupg: pacman's signature backend, and the source of dirmngr. This is the removal that ends
+# the ~90s "a stop job is running for GnuPG network certificate management daemon" shutdown
+# stall — by deleting the daemon rather than masking it.
+pkg  gnupg
+# The keyring package, and with it the VENDOR enable-symlink
+# usr/lib/systemd/system/timers.target.wants/archlinux-keyring-wkd-sync.timer, which no preset
+# can disable and which is what activates dirmngr@etc-pacman.d-gnupg in the first place.
+pkg  archlinux-keyring
+
+# The local database, minus the copy preserved as provenance under /usr/lib/novadeck/pkgdb.
+path var/lib/pacman
+# pacman-key's generated keyring (1.4M of trustdb + private keys, owned by no package), plus
+# the base image's stray pacman.conf.debug. The whole directory goes: with pacman-mirrorlist
+# stripped there is nothing left in it that a sealed root has any use for.
+path etc/pacman.d

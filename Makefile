@@ -37,6 +37,21 @@ VERSION     ?=
 
 OUT := out
 
+# work/ must be created by the HOST, and before anything else runs. Several stages that write
+# into it are root inside docker (the kernel build's modules_install, the base export), so on a
+# tree where work/ does not exist — a fresh clone, or a `rm -rf work` full-rebuild test —
+# whichever container stage lands first creates work/ ITSELF root-owned. Every host-side stage
+# after that then dies on mkdir/touch inside it: packages/build-overlay.sh, work/.base.stamp,
+# work/.rootfs-mode-*, work/steam-seed. (Cost a rebuild on 2026-07-26.)
+#
+# out/ never had this problem because out/.build-image.stamp is host-made through the
+# `| $(BUILD_STAMP)` order-only prereq that every container stage carries. work/ has no single
+# equivalent gate, and adding one per stage would silently regress the day a new stage forgets
+# it — so create the directory at parse time, which no target can route around. Only the
+# top-level directory is host-owned; the root-owned trees INSIDE it (work/base, work/kernel) are
+# by design, and clean-base/distclean already remove those from inside a container.
+$(shell mkdir -p work)
+
 # --- where each stage runs ----------------------------------------------------
 # Container: repo bind-mounted at /src. INBUILD is the plain run; DOCKER lets a
 # recipe insert `-e VAR` flags (which must precede the image name) before the image.

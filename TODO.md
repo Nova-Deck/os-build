@@ -153,6 +153,38 @@ rationale lives in the linked memories and commit history.
   newly-written slot's image over `/KERNEL` on the ESP. Note each slot's image carries its OWN
   cmdline (`root=PARTLABEL=novadeck-root-{A,B}` + `novadeck.var=…-{A,B}`), so `boot/package.sh` needs
   a slot argument. See [[sm8650-rocknix-abl-boot]].
+  **AMENDED 2026-07-26 — the per-slot-cmdline half of this is superseded.** Phase 4b picks
+  design **C** (`docs/phase4.md`): one slot-AGNOSTIC boot image, slot selection moved out of the
+  baked cmdline into the initramfs, which reads a try-counter state file on the ESP and falls back
+  to the other slot at zero — plus a `KERNEL.bak` so a failed health check also reverts the kernel.
+  That is the only design giving real rollback with a bootloader that cannot choose (`efi-a`/`efi-b`
+  become staging + previous-kernel storage). So `boot/package.sh` does NOT need a slot argument.
+  Adding a GRUB stage stays a legitimate fallback if C proves unworkable — reconsider it rather
+  than working around it.
+
+- [ ] **Phase 4a — sealed manifest rootfs (plan: `docs/phase4.md`)** — the half of Phase 4 that lands
+  FIRST and cannot brick a device (a bad build just fails to boot a card you reflash). Five steps:
+  (0) re-pin the mirror to an explicit `mash-20251118.3` — **measured 2026-07-26, our `mirrorlist`
+  points at the UNSUFFIXED path, which is an alias tracking the newest revision** (unsuffixed and
+  `.3` return the identical ETag `6a510539-16f23323`; `.2` is a different, five-weeks-older
+  artifact). It has not bitten us only because all three revisions carry an identical 4560-package
+  set — which is a weaker guarantee than it looks, since equal versions do not prove equal package
+  files. (1) emit a committed `images/manifest.lock` (`name version repo sha256`, covering the
+  snapshot repo + the local `[novadeck]` overlay + `packages/*/prebuilt.pin`) — the sha256 is what
+  catches a same-version rebuild. (2) install from the lock instead of `pacman -Sy` (`make relock`
+  to regenerate). (3) **strip the package manager from the RELEASE root** — `pacman`, `gnupg`
+  (→ `dirmngr`), the keyring package + its vendor weekly timer, `/var/lib/pacman/`,
+  `/etc/pacman.d/gnupg`; keep the DB as provenance under `/usr/lib/novadeck/`. Must be FILE REMOVAL,
+  not `pacman -R`: these arrive as deps of the `base` metapackage, so a removal transaction is
+  refused. Kept under `NOVADECK_TEST=1` for on-device bring-up (tooling-only divergence; does not
+  touch the boot/session path). (4) guard on the BUILT release tree — no `usr/bin/pacman`, no
+  `dirmngr`, no vendor units in `timers.target.wants`, plus a size delta. Validator: diff against the
+  published `system.rootfs.zst` (~367M) as a REFERENCE, never a build base. **Step 3 is what finally
+  removes the ~90s "stop job … GnuPG network certificate management daemon" shutdown stall**, by
+  deleting the daemon rather than masking it — root cause is the vendor-enabled weekly keyring
+  refresh timer activating `dirmngr@etc-pacman.d-gnupg`, which then ignores SIGTERM for its full
+  90s stop timeout. Confirmed on HW (`State 'stop-sigterm' timed out. Killing.`). Supersedes
+  [[dirmngr-slow-shutdown-defer-phase4]]'s "defer, do not patch". See [[rootfs-build-approach]].
 
 - [x] **Rework overlay build to only rebuild changed packages** — DONE (build-infra, not yet
   HW-cycle-validated). `build-overlay.sh` is now incremental: it persists `work/repo/<arch>/` across

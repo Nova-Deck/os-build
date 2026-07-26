@@ -39,7 +39,7 @@ END_SLACK_MIB=2   # tail room for the backup GPT (well over its ~17 KiB)
 # boot novadeck-grow-home extends the partition + its ext4 to fill the card.
 SEED="$ROOT/work/steam-seed"
 
-for t in sgdisk mkfs.vfat mcopy mkfs.ext4 gzip; do
+for t in sgdisk mkfs.vfat mcopy mkfs.ext4; do
   command -v "$t" >/dev/null 2>&1 || { echo "$t not found — run inside novadeck-build" >&2; exit 1; }
 done
 [ -f "$KERNEL" ] || { echo "no boot image: ${KERNEL#"$ROOT"/} (run boot/package.sh)" >&2; exit 1; }
@@ -158,17 +158,14 @@ write_part "$P_HOME"  "$home"   "novadeck-home (ext4, grows on first boot)"
 
 echo "  ok   $(du -h "$IMG" | cut -f1) -> ${IMG#"$ROOT"/}"
 
-# 6. Compress for distribution. Keep the raw .img (so a local `dd` still works) and produce a
-# sdcard.img.gz alongside it — most of the card is empty (B slots + unallocated tail), so the
-# image compresses hard. -f overwrites a stale .gz from a previous run.
-gzip -kf "$IMG"
-echo "  ok   $(du -h "$IMG.gz" | cut -f1) -> ${IMG#"$ROOT"/}.gz"
+# 6. No compression here. The image compresses hard (most of the card is empty — B slots plus the
+# unallocated tail), but single-threaded gzip over ~19GiB dominates the wall time of an otherwise
+# incremental rebuild, and every local consumer of this image dd's the raw .img anyway. Compression
+# is a release/CI concern: do it there, where it runs once per artifact instead of once per edit.
 
 cat <<EOF
 Done. Write it to the card (replace sdX with your device, ALL DATA LOST):
   sudo dd if=${IMG#"$ROOT"/} of=/dev/sdX bs=4M conv=fsync status=progress
-  # …or straight from the compressed image:
-  gunzip -c ${IMG#"$ROOT"/}.gz | sudo dd of=/dev/sdX bs=4M conv=fsync status=progress
 ABL boots /KERNEL off the ESP; its DTB picker selects the board. The initramfs then mounts
 root=PARTLABEL=novadeck-root-A read-only, mounts novadeck-var-A, stacks the /etc overlay on it,
 then switch_roots into systemd. /home (last partition) is pre-seeded with the deck user's Steam

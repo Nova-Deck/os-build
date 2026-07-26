@@ -314,7 +314,6 @@ pipewire-alsa 1:1.4.9-1 aarch64 snapshot ccb237bb51b1bfdd919a252a09322ee1f38b392
 pipewire-audio 1:1.4.9-1 aarch64 snapshot de62ae5c7e1afac1a9c49c5fad03ee57531e9d7d210942471bfa84034fe3e2a2
 pipewire-pulse 1:1.4.9-1 aarch64 snapshot f085370f2ebffcb677c7ee3270ad8dff771c0acd38143e7c58bc6f9d8e90ab87
 pixman 0.46.4-1 aarch64 snapshot b2133d3630f753b60d09140d5ba500f82e7bbcba7605b90c027a9900d57be6f7
-plymouth 26.134.222-2.2 aarch64 novadeck 7dc30c000a800d7be24bbebb352a60125e9b675df1a77b8b61a0d1747b7879ee
 polkit 126-2.2 aarch64 snapshot fb172ac3222cfa49538b1afb0433ff7b50a355af4d82c229a40c9cc5fb62689e
 popt 1.19-2 aarch64 base -
 portaudio 1:19.7.0-3 aarch64 snapshot 069b4dda9a6411f4013ef2f4254e2f931ecc4082bf08f7d5f34693d620eb1269

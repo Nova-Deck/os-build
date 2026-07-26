@@ -200,7 +200,11 @@ $(OVERLAY_STAMP): $(OVERLAY_DB)
 # ==============================================================================
 # Base rootfs (host — customize-base.sh drives docker + qemu binfmt itself)
 # ==============================================================================
-$(BASE_STAMP): base.digest $(PREBUILT_PINS)
+# snapshot.pin is a base input exactly like base.digest: it selects the package-repo revision
+# customize-base.sh installs from. Without it here the stamp short-circuits `make base` and a
+# pin bump is silently a no-op -- the script's own reuse check never gets to run, because make
+# never invokes the script.
+$(BASE_STAMP): base.digest snapshot.pin $(PREBUILT_PINS)
 	images/customize-base.sh
 	@test -f work/base/usr/bin/sshd   # sentinel: sshd present => release runtime layered in
 	@mkdir -p $(@D) && touch $@   # recency marker outside the root-owned base tree (frozen mtimes)

@@ -13,18 +13,23 @@
 # artifact, so equal versions do NOT prove equal package files. The hash is the only field
 # that actually detects that.
 #
-# Five provenance classes, because they are pinned by genuinely different mechanisms and
+# Four provenance classes, because they are pinned by genuinely different mechanisms and
 # conflating them would overstate what we verify:
 #
 #   snapshot  installed from the pinned repo revision; hash = the .pkg.tar.zst we installed
 #   novadeck  built from source by packages/build-overlay.sh; hash = our own build artifact
-#   base      arrived INSIDE the pinned base image and was never downloaded, so there is no
-#             package file to hash. Pinned by base.digest (itself a sha256) — recorded with
-#             a '-' hash rather than silently omitted, because they are on the image.
 #   prebuilt  not pacman packages at all: the tarballs/blobs in packages/*/prebuilt.pin,
 #             already sha256-pinned there. Carried so the lock covers the whole image.
-#   stripped  present in the tree this reads, ABSENT from the release image: named in
-#             images/seal.list and deleted by images/seal-rootfs.sh (Phase 4a step 3).
+#   stripped  installed from the pinned repo like a `snapshot` row, then DELETED from the
+#             release image: named in images/seal.list, removed by images/seal-rootfs.sh
+#             (Phase 4a step 3). They arrive as `base` metapackage dependencies, which is
+#             exactly why sealing has to delete files rather than run `pacman -R`.
+#
+# THERE IS NO `base` CLASS ANY MORE (Phase 4c). It covered 116 rows that arrived inside the
+# digest-pinned container image the root used to be exported from — no package file to
+# install, so no sha256 to check, so ~29% of the image sat outside the reviewable lock. The
+# root is now bootstrapped from packages, so a row with no package file means something
+# reached the tree outside the install path, and this fails on it rather than recording '-'.
 #
 # That last class is the one thing here that is not simply "what the database says". Sealing
 # deletes files while PRESERVING the database as provenance, so the database keeps listing
@@ -87,6 +92,7 @@ done < "$SEALLIST"
 desc_field() { sed -n "/^%$2%\$/{n;p;q}" "$1"; }
 
 rows=""
+unfiled=""
 missing=0
 stripped_seen=0
 for d in "$LOCALDB"/*/; do
@@ -99,33 +105,43 @@ for d in "$LOCALDB"/*/; do
   arch="${arch:-any}"
 
   entry="${PKGFILE["$name-$ver-$arch.pkg.tar.zst"]:-}"
-  if [ -n "$entry" ]; then
-    src="${entry%%	*}"; file="${entry#*	}"
-    sha="$(sha256sum "$file" | cut -d' ' -f1)"
-  else
-    # Came with the base image: covered by base.digest, no artifact of ours to hash.
-    src=base; sha='-'
+  if [ -z "$entry" ]; then
+    # Post-4c there is no legitimate way for a package to be in the tree without a file that
+    # put it there: the root is bootstrapped, so every row was either downloaded into the
+    # pacman cache or built into the overlay repo. A row with neither means the tree and the
+    # build path have diverged — collect them all and report once, since a bad cache tends to
+    # produce many rather than one.
+    unfiled+="  $name-$ver-$arch"$'\n'
     missing=$((missing + 1))
+    continue
   fi
+  src="${entry%%	*}"; file="${entry#*	}"
+  sha="$(sha256sum "$file" | cut -d' ' -f1)"
 
-  # Reclassify what the seal removes. Every package on the list arrives inside the base image
-  # today (pacman and archlinux-keyring are `base` metapackage dependencies — which is exactly
-  # why sealing has to delete files rather than run pacman -R), so nothing installable is being
-  # hidden here. Refuse the case that WOULD hide something: a stripped snapshot/novadeck row
-  # still has to be fetched and installed before it can be deleted, and images/fetchlock.sh
-  # keys that off the class — so silently rewriting it would drop the package from the install
-  # and leave the seal declaring a name that never arrived.
+  # Reclassify what the seal removes. The class marks DISPOSITION, not a second provenance:
+  # a `stripped` row is fetched, verified and installed exactly like the `snapshot` row it
+  # would otherwise be, and only then deleted from the release tree. Before 4c these rows
+  # arrived inside the base image with no file at all, so fetchlock.sh could skip them; now it
+  # must install them, which is why it treats `stripped` and `snapshot` identically.
   if [ -n "${STRIPPED["$name"]:-}" ]; then
-    if [ "$src" != base ]; then
-      echo "seal.list strips '$name', but it installs from '$src' — not supported yet" >&2
-      echo "  fetchlock.sh treats 'stripped' as non-installable; teach it the install path first" >&2
-      exit 1
-    fi
     src=stripped
     stripped_seen=$((stripped_seen + 1))
   fi
   rows+="$name $ver $arch $src $sha"$'\n'
 done
+
+# Every installed package must be traceable to a file we can hash. Fail rather than record a
+# '-' hash: an unhashed row is a row images/fetchlock.sh cannot verify and cannot install, so
+# writing one would produce a lock that silently describes less than the image contains — the
+# `base` class, which Phase 4c exists to remove.
+if [ "$missing" -gt 0 ]; then
+  echo "$missing installed package(s) have no package file in ${CACHE#"$ROOT"/} or ${OVERLAY_REPO#"$ROOT"/}:" >&2
+  printf '%s' "$unfiled" >&2
+  echo "  the lock cannot describe a package it cannot hash. Likely causes:" >&2
+  echo "    - the pacman cache was cleared since the root was built -> rebuild: make clean-base base" >&2
+  echo "    - the tree predates Phase 4c (exported from a base image) -> rebuild: make clean-base base" >&2
+  exit 1
+fi
 
 # A name on the removal list that is not installed means the list has drifted from the tree,
 # and the seal would fail the same way mid-build. Catch it here, at relock, where the fix is
@@ -151,18 +167,20 @@ for pin in "$ROOT"/packages/*/prebuilt.pin; do
 done
 
 snapshot="$(grep -vE '^[[:space:]]*(#|$)' "$ROOT/snapshot.pin" 2>/dev/null | tail -1 || true)"
-basedigest="$(grep -vE '^[[:space:]]*(#|$)' "$ROOT/base.digest" | tail -1)"
+builder="$(grep -vE '^[[:space:]]*(#|$)' "$ROOT/base-devel.digest" | tail -1)"
 
 {
   echo "# novadeck package manifest — GENERATED by images/genmanifest.sh, do not hand-edit."
   echo "# Regenerate with \`make relock\` after any deliberate package change; review the diff."
   echo "#"
-  echo "# base image:    $basedigest"
   echo "# repo snapshot: ${snapshot:-<unpinned>}"
+  echo "# built in:      $builder   (execution environment only — contributes no files)"
   echo "#"
-  echo "# name version arch source sha256   (source: snapshot|novadeck|base|prebuilt|stripped)"
-  echo "# 'base' rows carry no hash: they ship inside the base image, pinned by its digest."
-  echo "# 'stripped' rows are in the build tree but NOT on the image: images/seal.list removes them."
+  echo "# name version arch source sha256   (source: snapshot|novadeck|prebuilt|stripped)"
+  echo "# Every row carries a real hash: the root is bootstrapped from packages (Phase 4c), so"
+  echo "# there is no content on the image that no package file put there."
+  echo "# 'stripped' rows are installed like 'snapshot' ones and then deleted from the release"
+  echo "# image: images/seal.list declares them, images/seal-rootfs.sh removes them."
   printf '%s' "$rows" | LC_ALL=C sort
 } >"$LOCK"
 

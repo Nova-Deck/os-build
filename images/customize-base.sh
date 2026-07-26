@@ -432,6 +432,24 @@ docker run --rm --platform linux/arm64 -v "$PREBUILT_DIR":/prebuilt:ro \
   PA=(pacman -r /target --config /prebuilt/pacman.conf --cachedir /var/cache/pacman/pkg)
   mkdir -p /target/var/lib/pacman
 
+  # A minimal /dev, because pacman runs install scriptlets CHROOTED into the target and the
+  # target has no API filesystems. pacstrap mounts /proc, /sys and /dev into the root it builds;
+  # we cannot -- a bind mount needs CAP_SYS_ADMIN, which docker drops. CAP_MKNOD it does grant,
+  # so the /dev half is buyable and worth buying: without /dev/null, `gnupg`s scriptlet dies on
+  # a redirect ("line 5: /dev/null: No such file or directory") and pacman reports a failed hook
+  # as a WARNING, so the build stays green with the scriptlet half-run. One package out of 394
+  # hits it today, and that one is stripped from the release image -- but the next one to redirect
+  # to /dev/null would fail just as quietly.
+  #
+  # The /proc half stays unbought; the two steps that need it are run offline with --root= below.
+  # These nodes are harmless in the shipped image: devtmpfs mounts over /dev at boot.
+  mkdir -p /target/dev
+  mknod -m 0666 /target/dev/null    c 1 3 2>/dev/null || true
+  mknod -m 0666 /target/dev/zero    c 1 5 2>/dev/null || true
+  mknod -m 0666 /target/dev/random  c 1 8 2>/dev/null || true
+  mknod -m 0666 /target/dev/urandom c 1 9 2>/dev/null || true
+  mknod -m 0600 /target/dev/console c 5 1 2>/dev/null || true
+
   # Lay the root down. LOCKED when the host staged an install list, else RESOLVE.
   if [ -s /prebuilt/install.list ]; then
     # No -Sy anywhere on this path: nothing syncs a repo database, so pacman CANNOT resolve
@@ -626,6 +644,19 @@ docker run --rm --platform linux/arm64 -v "$PREBUILT_DIR":/prebuilt:ro \
   # so a run that starts failing wholesale is visible in the build log.
   if ! systemd-tmpfiles --root=/target --create; then
     echo "[novadeck] systemd-tmpfiles --root exited $? (partial offline application; see above)" >&2
+  fi
+
+  # Journal message catalog, offline for the same reason as tmpfiles above. pacman`s hook runs
+  # `journalctl --update-catalog` chrooted and fails -- "Failed to open file
+  # /usr/lib/systemd/catalog/dbus-broker-launch.catalog: No such file or directory" -- which is a
+  # misleading message: every .catalog file IS present in the tree, and the same command with
+  # --root= succeeds and writes a 293K database. The chroot is what it cannot cope with.
+  #
+  # Without this /var/lib/systemd/catalog/database does not exist, so `journalctl -x` has no
+  # message explanations. On a device with no serial console, where the only debugging path is
+  # reading an offloaded journal off the card, that is the wrong thing to be missing.
+  if ! journalctl --root=/target --update-catalog; then
+    echo "[novadeck] journalctl --root --update-catalog exited $? (no message catalog)" >&2
   fi
 
   # Record the install-set marker LAST, so its presence proves the whole bootstrap ran. The host

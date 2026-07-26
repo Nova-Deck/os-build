@@ -5,6 +5,21 @@ rationale lives in the linked memories and commit history.
 
 ## Open
 
+- [ ] **Retroid Pocket Nova — board support added 2026-07-27, NOT HW-validated** — SM8550 sibling of
+  the Retroid Pocket 6: same `qcs8550-retroidpocket-rp6.dts` base (AYN common dtsi, RSInput gamepad,
+  ayn/odin2 ADSP+amp firmware), differing only in the display/touch pair. Its 4.5" panel is an
+  **Ilitek IL97680A wired NATIVE LANDSCAPE 1280x960 (4:3) at 60/120 Hz** — the first board in the
+  fleet with no DTS `rotation`, so `qcs8550-retroidpocket-rpnova.dts` deletes the inherited
+  `rotation = <270>` and re-declares the digitizer 1280x960 without `touchscreen-inverted-y`.
+  Verified so far: panel patch `0105` applies to the pinned 7.1.5 (Kconfig at offset, Makefile at
+  fuzz 1 — the insertion point around `DRM_PANEL_ILITEK_IL9322` is exact), the DTB compiles with only
+  the fleet's pre-existing `unique_unit_address` noise, and `device-env` resolves the profile.
+  **Open on HW:** (1) does gamescope come up unrotated — the composite rotation path auto-engages off
+  the connector, and every other board feeds it a rotated scanout; (2) `NOVADECK_GAMESCOPE_FAKE_OUTPUT_MM
+  =120x90` is arithmetic, not measurement — exact 4:3 at ~10.7 px/mm vs the fleet's 10.8, so SteamUI
+  scale needs an eyeball; (3) 120 Hz mode selection (the panel's init sequence branches on vrefresh);
+  (4) touch axis mapping. No new firmware or ALSA UCM: it inherits the AYN-Odin2 sound-card model.
+
 - [x] **~90s poweroff stall — RESOLVED, HW-VALIDATED 2026-07-26** (fix `876adb1`) — second, independent
   cause from the dirmngr one (that was killed by the Phase 4a seal). `gamescope-wl` ignores SIGTERM
   during session teardown, so logind's `session-1.scope` burned the stock 90s `DefaultTimeoutStopSec`

@@ -30,9 +30,11 @@
 #      depend on the database being honest)
 #   3. no dangling systemd enable-symlink — the failure mode a package removal actually leaves
 #      behind, and the one that would keep a stripped unit "enabled"
-#   4. images/manifest.lock still describes this tree: same package set, same versions, and its
+#   4. no build-provenance marker survived (images/provenance.list) — the tree is bootstrapped from
+#      a vendor container image, and what it carries in is not ours to ship
+#   5. images/manifest.lock still describes this tree: same package set, same versions, and its
 #      `stripped` rows are exactly what seal.list removes
-#   5. a size delta against the previous build (report only — never fails a build)
+#   6. a size delta against the previous build (report only — never fails a build)
 set -euo pipefail
 shopt -s nullglob
 
@@ -187,7 +189,39 @@ done < <(find "$STAGE/usr/lib/systemd" "$STAGE/etc/systemd" \
 if [ "$wants_bad" = 0 ]; then echo "    ok  $wants_seen enable-symlinks, all resolve"; fi
 
 # ------------------------------------------------------------------------------------------
-# 4. The lock still describes this tree.
+# 4. No build-provenance marker survived.
+#
+# The tree is `docker export` of a vendor-built image, so it starts out carrying two other build
+# systems' artifacts. images/assemble-rootfs.sh removes them; this is where that stops being a
+# claim. The stakes are asymmetric — /.dockerenv makes systemd-detect-virt report a container on
+# the real device and SILENTLY skip ~13 ConditionVirtualization=!container units (timesyncd the
+# visible one), a failure that costs a HW debug cycle to find and that no build-time symptom shows.
+#
+# Read from the REPO, not from the image, unlike seal.list at assertion 1: this declaration lists
+# what must be ABSENT, so there is nothing for the image to self-describe, and the scrub that
+# consumes it runs in this same assembler invocation — there is no stale-image window to close.
+# The typo case (a declared path that is never present anywhere, so this passes vacuously) is
+# caught on the other side, by sanitize_base_provenance() reporting markers it did not find.
+# ------------------------------------------------------------------------------------------
+PROV="$ROOT/images/provenance.list"
+prov_bad=0
+prov_seen=0
+if [ -f "$PROV" ]; then
+  while read -r marker _; do
+    case "$marker" in ''|'#'*) continue ;; esac
+    prov_seen=$((prov_seen + 1))
+    if [ -e "$STAGE/$marker" ] || [ -L "$STAGE/$marker" ]; then
+      bad "build-provenance marker survived into the image: $marker"
+      prov_bad=1
+    fi
+  done < "$PROV"
+  [ "$prov_bad" = 0 ] && echo "    ok  $prov_seen provenance markers absent"
+else
+  bad "no ${PROV#"$ROOT"/} — the provenance declaration is missing"
+fi
+
+# ------------------------------------------------------------------------------------------
+# 5. The lock still describes this tree.
 #
 # The payoff of steps 1-3: images/manifest.lock is a committed, reviewed artifact, and this is
 # where it stops being a claim. Two directions, both required —
@@ -223,7 +257,7 @@ if [ "$lock_stripped" != "$list_stripped" ]; then
 fi
 
 # ------------------------------------------------------------------------------------------
-# 5. Size delta (report only).
+# 6. Size delta (report only).
 #
 # Never fails a build — there is no defensible threshold, and a guard that blocks on growth would
 # be disabled the first time a legitimate package got bigger. Its job is to put the number in

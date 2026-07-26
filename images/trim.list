@@ -1,0 +1,110 @@
+# novadeck trim removal list — the seal's size counterpart.
+#
+# The explicit, reviewed declaration of what images/trim-rootfs.sh deletes from the RELEASE root
+# after the seal. Editing this file changes what ships, so it is committed and reviewed like
+# images/seal.list and images/manifest.lock.
+#
+# WHY THIS IS SEPARATE FROM images/seal.list: the seal removes the package MANAGER, and its
+# argument is about what a sealed root must not be able to do to itself. This file removes BUILD
+# AND DOCUMENTATION ARTEFACTS, and its argument is about size — every megabyte here is paid twice
+# under A/B updates, once in the slot and once in every RAUC bundle that carries it. Different
+# reasons, different review criteria, so different files.
+#
+# WHAT THIS IS NOT: it is not a way to un-install a package. Everything named here belongs to a
+# package that STAYS installed and is still described by images/manifest.lock — the lock's set is
+# unchanged, so genmanifest.sh needs to know nothing about this file (it reads only `pkg` rows,
+# from seal.list). If an entire package turns out to be unwanted, remove it from PKGS in
+# images/customize-base.sh and relock; do not shadow it with a path row here.
+#
+# Two row kinds:
+#
+#   path <p>      a root-relative path removed wholesale (rm -rf). Directories only, by
+#                 convention — for a single file, prefer a glob so the row states the shape of
+#                 what it removes.
+#
+#   glob <p>      a root-relative pattern, expanded under the staged root with `extglob` and
+#                 `globstar` on. Every match is removed. Expanding to NOTHING is a hard error:
+#                 a pattern that matches nothing is a row that has silently stopped doing its
+#                 job (the package was dropped, or upstream moved the files), and a trim list
+#                 full of dead rows is how this file would rot without anyone noticing.
+#
+# Both kinds reject an absolute path or one containing `..`, exactly as the sealer does.
+#
+# RELEASE ONLY, like the seal. A NOVADECK_TEST tree keeps pacman, and deleting files out from
+# under a live package database would make on-device `pacman -Qkk` and every reinstall lie about
+# the tree. images/assemble-rootfs.sh calls this only on the release path.
+#
+# NOT trimmed, deliberately:
+#   usr/share/licenses — license texts are a shipping obligation, not documentation.
+#   usr/lib/locale     — the COMPILED locale (locale-archive) that LANG=en_US.UTF-8 resolves
+#                        against at runtime. Only the gettext catalogues below go.
+#   usr/lib/gconv      — iconv modules. Small (20M) and reachable from any charset conversion;
+#                        not worth the risk of a game or the client asking for one that is gone.
+
+# ------------------------------------------------------------------------------------------
+# Build-time artefacts. A read-only root with no compiler and (after the seal) no package
+# manager cannot use a header, a static library, or a build-system description file.
+# ------------------------------------------------------------------------------------------
+path usr/include
+path usr/lib/cmake
+path usr/lib/pkgconfig
+path usr/share/pkgconfig
+path usr/share/aclocal
+# GObject-introspection XML. The RUNTIME format is the .typelib under usr/lib/girepository-*,
+# which is what PyGObject loads for novadeck-powerd and novadeck-steamos-manager; the .gir here
+# is its source, consumed by g-ir-compiler and by bindings generators at build time.
+path usr/share/gir-1.0
+# Static libraries — 100M, of which Qt6's libQt6QmlDom.a + libQt6QmlLS.a (QML tooling for an IDE)
+# are 41M. Nothing links a .a at runtime, by definition.
+glob usr/lib/*.a
+
+# ------------------------------------------------------------------------------------------
+# Documentation. None of it is reachable from the Deck shell: there is no terminal in the
+# release UI, no man(1), and no browser pointed at /usr/share/doc.
+# ------------------------------------------------------------------------------------------
+path usr/share/doc
+path usr/share/man
+path usr/share/info
+path usr/share/gtk-doc
+
+# ------------------------------------------------------------------------------------------
+# Locale data.
+#
+# usr/share/i18n holds locale SOURCE definitions, the input to locale-gen. customize-base.sh
+# already ran locale-gen at build time (it writes /etc/locale.conf with LANG=en_US.UTF-8 and
+# generates the archive), and a read-only root can never run it again — so the sources are inert.
+#
+# usr/share/locale holds gettext .mo message catalogues: translations of SYSTEM strings. The
+# Steam client ships and translates its own UI independently of these, and the release shell is
+# Steam. 150M for translated messages of programs the user never sees output from.
+#
+# The keep list is C, en and en_US — everything /etc/locale.conf can select. Note the extglob:
+# `!(...)` is a NEGATED match, so this row means "every locale directory except these".
+# ------------------------------------------------------------------------------------------
+path usr/share/i18n
+glob usr/share/locale/!(C|en|en_US)
+
+# ------------------------------------------------------------------------------------------
+# Language runtimes from gcc-libs that nothing on this image links.
+#
+# gcc-libs is a hard dependency of ~90 packages (glibc, systemd, mesa, qt6, …) so the package
+# itself can never be removed — but it ships the runtime for every language GCC can compile,
+# and this image runs C, C++ and Rust. Checked against the built tree: outside the libraries
+# themselves there is not one NEEDED reference to any of these.
+#
+# libgcc_s, libstdc++ and libatomic are NOT here: those are the ones that are linked, everywhere.
+# ------------------------------------------------------------------------------------------
+glob usr/lib/libgo.so.*
+# D: libgphobos is the standard library, libgdruntime the runtime under it. They go together.
+glob usr/lib/libgphobos.so.*
+glob usr/lib/libgdruntime.so.*
+glob usr/lib/libgfortran.so.*
+# The sanitizer runtimes (-fsanitize=address/thread/leak/undefined). Development tooling: a
+# sanitized binary links them explicitly, and we ship none. `@(...)` is extglob for exactly one
+# of the alternatives.
+glob usr/lib/lib@(a|t|l|ub)san.so.*
+#
+# libgomp is deliberately NOT here despite looking like the same kind of thing: it is OpenMP, and
+# it IS linked — by libb2, libsoxr, libvidstab and the fftw *_omp variants that ffmpeg pulls in.
+# libgcc_s / libstdc++ / libatomic are linked essentially everywhere. libitm and libobjc are
+# unreferenced too, but together they are 1.4M and not worth a row.

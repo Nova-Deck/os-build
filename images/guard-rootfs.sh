@@ -32,7 +32,8 @@
 #      behind, and the one that would keep a stripped unit "enabled"
 #   4. images/manifest.lock still describes this tree: same package set, same versions, and its
 #      `stripped` rows are exactly what seal.list removes
-#   5. a size delta against the previous build (report only — never fails a build)
+#   5. the trim's declaration is fully applied — nothing images/trim.list names survived
+#   6. a size delta against the previous build (report only — never fails a build)
 set -euo pipefail
 shopt -s nullglob
 
@@ -40,6 +41,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 STAGE="${1:?usage: images/guard-rootfs.sh <staged-root>}"
 LOCK="$ROOT/images/manifest.lock"
 LIST="$STAGE/usr/lib/novadeck/seal.list"
+TRIMLIST="$STAGE/usr/lib/novadeck/trim.list"
 DB="$STAGE/usr/lib/novadeck/pkgdb"
 SIZES="$ROOT/out/images/rootfs.sizes"
 
@@ -223,7 +225,52 @@ if [ "$lock_stripped" != "$list_stripped" ]; then
 fi
 
 # ------------------------------------------------------------------------------------------
-# 5. Size delta (report only).
+# 5. The trim's declaration is fully applied.
+#
+# Same argument as assertion 1, for the other declaration: images/trim.list is edited by hand,
+# and a trim that half-ran (or did not run at all) leaves an image that is simply bigger than
+# intended — the one failure mode with no symptom until a slot stops fitting, by which point the
+# build that caused it is long past.
+#
+# Read from the IMAGE's copy, like the seal list, so a stale tree cannot pass against a freshly
+# edited declaration in the repo. Globs are expanded exactly as the trimmer expanded them
+# (extglob + globstar, relative to the tree), inside a subshell so those options cannot leak into
+# the plain globs the rest of this script uses.
+# ------------------------------------------------------------------------------------------
+[ -f "$TRIMLIST" ] || { echo "  GUARD FAIL: no $TRIMLIST — the trim did not run on this tree" >&2; exit 1; }
+
+trim_paths=() trim_globs=()
+while read -r kind value _; do
+  case "$kind" in
+    path) trim_paths+=("$value") ;;
+    glob) trim_globs+=("$value") ;;
+  esac
+done < "$TRIMLIST"
+[ $(( ${#trim_paths[@]} + ${#trim_globs[@]} )) -gt 0 ] \
+  || { echo "  GUARD FAIL: $TRIMLIST declares no rows" >&2; exit 1; }
+
+trim_bad=0
+for p in "${trim_paths[@]}"; do
+  if [ -e "$STAGE/$p" ] || [ -L "$STAGE/$p" ]; then bad "trimmed path still present: $p"; trim_bad=1; fi
+done
+for g in "${trim_globs[@]}"; do
+  # `|| true` is load-bearing and NOT defensive noise: compgen -G exits 1 when the pattern matches
+  # nothing, which is precisely the case this assertion wants to pass. Under `set -euo pipefail`
+  # that status propagated out and killed the guard with no output at all — a passing image
+  # failing its own build, silently. mapfile from a process substitution keeps the status of the
+  # expansion out of the shell's error handling entirely.
+  mapfile -t survivors < <( (shopt -s extglob globstar dotglob; cd "$STAGE" && compgen -G "$g") || true )
+  if [ "${#survivors[@]}" -gt 0 ]; then
+    bad "trim pattern '$g' still matches ${#survivors[@]} path(s): ${survivors[*]:0:5}"
+    trim_bad=1
+  fi
+done
+if [ "$trim_bad" = 0 ]; then
+  echo "    ok  ${#trim_paths[@]} trimmed paths + ${#trim_globs[@]} patterns, all gone"
+fi
+
+# ------------------------------------------------------------------------------------------
+# 6. Size delta (report only).
 #
 # Never fails a build — there is no defensible threshold, and a guard that blocks on growth would
 # be disabled the first time a legitimate package got bigger. Its job is to put the number in

@@ -114,6 +114,17 @@ prepare() {
   echo "$_pkgver-novadeck$epoch.$pkgrel" >VERSION
 }
 
+# llvm=disabled is a SIZE decision with no functional cost here, and it is worth spelling out
+# because "mesa without LLVM" usually means "no software rendering". Not in this build:
+# llvmpipe and softpipe are gallium drivers, and `gallium-drivers=freedreno` above never selects
+# them — there is no swrast driver on the image to lose (usr/lib/dri/ holds only the dril loader).
+# What DID link libLLVM was gallium's `draw` module, which freedreno does not use: it is for
+# drivers that do vertex processing on the CPU. So the meson default (llvm=auto, enabled because
+# llvm-config exists in the builder) was dragging a 151MB JIT onto a sealed read-only root to
+# serve nothing. rusticl is already off for the same family of reasons.
+#
+# Consequence to keep in mind: with llvmpipe absent there is no CPU fallback if Turnip fails to
+# initialise — but that was already true before this flag, so it is not a regression.
 build() {
   local meson_options=(
     -D android-libbacktrace=disabled
@@ -127,6 +138,7 @@ build() {
     -D html-docs=disabled                     # novadeck: no Sphinx docs in the image
     -D intel-rt=disabled                      # aarch64 (upstream disables on non-x86)
     -D libunwind=disabled
+    -D llvm=disabled                          # novadeck: nothing in this build uses it (see above)
     -D microsoft-clc=disabled
     -D sysprof=true
     -D valgrind=enabled
@@ -166,7 +178,9 @@ package_mesa() {
     libxext
     libxshmfence
     libxxf86vm
-    llvm-libs
+    # llvm-libs deliberately absent — see the llvm=disabled note above build(). It must be
+    # dropped HERE too, not just from the meson options: a stale depends line would keep pacman
+    # installing the 151MB package for a libgallium that no longer NEEDs it.
     lm_sensors
     spirv-tools
     wayland

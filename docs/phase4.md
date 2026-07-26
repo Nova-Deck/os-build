@@ -238,6 +238,40 @@ deltas (`usr` grew, not "the image" grew) and its record write is best-effort.
 back would need a mount, which the unprivileged build deliberately avoids; `mkfs.btrfs --rootdir`
 is the only step between the two.
 
+**5. Trim — the seal's size counterpart.** *(landed)*
+The seal removes what a sealed root must not be able to *do*; the trim removes what it does not
+need to *weigh*. `images/trim.list` declares it, `images/trim-rootfs.sh` applies it right after
+the seal, and guard assertion 5 re-expands the image's own copy of the list and fails the build if
+anything it names survived — the same declare/apply/assert shape as the seal, for the same reason
+(a declaration nothing checks is a comment).
+
+Removed: headers, static libraries, cmake/pkgconfig files, `.gir` XML (the runtime format is the
+`.typelib`), man/info/doc trees, locale *sources* (`locale-gen` already ran at build time and a
+read-only root can never run it again), non-English gettext catalogues, and the gcc-libs language
+runtimes nothing on the image links (Go, D, Fortran, the sanitizers). Kept deliberately:
+`usr/share/licenses`, `usr/lib/locale`, `usr/lib/gconv`, and `libgomp` — which looks like the same
+kind of dead runtime but is linked by libb2, libsoxr, libvidstab and ffmpeg's fftw variants.
+
+Two package-set changes land with it, both in overlay recipes rather than in the trim list, because
+the right way to not ship a package is to stop depending on it:
+
+- `packages/mesa/PKGBUILD` builds with `-D llvm=disabled`. `gallium-drivers=freedreno` never
+  selected llvmpipe, so the 151 MB `libLLVM` was serving only gallium's `draw` module, which
+  freedreno does not use. No software-GL fallback is lost — there was none.
+- `packages/scx-scheds/PKGBUILD` drops `bpf`, `protobuf`, `libbpf`, `libseccomp` and `jq` from
+  `depends`. The three shipped schedulers embed their BPF skeletons and link only
+  libelf/libz/libgcc_s/libm/libc. Dropping `bpf` is what removes **binutils** — an assembler and a
+  linker — from a sealed read-only root.
+
+Why it is a Phase 4 concern rather than housekeeping: under 4b every megabyte is paid in both
+slots *and* in every RAUC bundle downloaded over Wi-Fi. Measured on the release tree at
+zstd:3 (what `mkfs.btrfs --compress zstd` actually stores): ~225 MB off the image.
+
+Explicitly **not** trimmed, with their measured compressed cost, so the decision is revisitable
+with numbers instead of re-measurement: the second Proton compat tool (~524 MB — user choice of
+compat tool is deliberate), the FEX x86 guest rootfs (1305 MB — gated on the native-x86 guest-thunk
+work), and the CJK font weights (~226 MB — font coverage is a first-boot UX property).
+
 ---
 
 ## 4b — A/B atomic updates

@@ -30,8 +30,8 @@
 #      depend on the database being honest)
 #   3. no dangling systemd enable-symlink — the failure mode a package removal actually leaves
 #      behind, and the one that would keep a stripped unit "enabled"
-#   4. no build-provenance marker survived (images/provenance.list) — the tree is bootstrapped from
-#      a vendor container image, and what it carries in is not ours to ship
+#   4. no build-provenance marker reached the tree (images/provenance.list) — a regression guard
+#      against a container filesystem ever becoming a content source again
 #   5. images/manifest.lock still describes this tree: same package set, same versions, and its
 #      `stripped` rows are exactly what seal.list removes
 #   6. a size delta against the previous build (report only — never fails a build)
@@ -189,19 +189,25 @@ done < <(find "$STAGE/usr/lib/systemd" "$STAGE/etc/systemd" \
 if [ "$wants_bad" = 0 ]; then echo "    ok  $wants_seen enable-symlinks, all resolve"; fi
 
 # ------------------------------------------------------------------------------------------
-# 4. No build-provenance marker survived.
+# 4. No build-provenance marker reached the tree.
 #
-# The tree is `docker export` of a vendor-built image, so it starts out carrying two other build
-# systems' artifacts. images/assemble-rootfs.sh removes them; this is where that stops being a
-# claim. The stakes are asymmetric — /.dockerenv makes systemd-detect-virt report a container on
-# the real device and SILENTLY skip ~13 ConditionVirtualization=!container units (timesyncd the
-# visible one), a failure that costs a HW debug cycle to find and that no build-time symptom shows.
+# Until Phase 4c the tree was `docker export` of a vendor-built image, so it started out carrying
+# two other build systems' artifacts and the assembler had to scrub them; this was where that
+# scrub stopped being a claim. The root is bootstrapped from packages now, so there is nothing to
+# scrub and this assertion should never be able to fail — which is exactly why it is kept. The
+# stakes are asymmetric: /.dockerenv makes systemd-detect-virt report a container on the real
+# device and SILENTLY skip ~13 ConditionVirtualization=!container units (timesyncd the visible
+# one), a failure that costs a HW debug cycle to find and that no build-time symptom shows. A
+# stat per marker buys immunity to anyone reintroducing a container filesystem as a content
+# source, so this is now a REGRESSION guard rather than the second half of a scrub.
 #
 # Read from the REPO, not from the image, unlike seal.list at assertion 1: this declaration lists
-# what must be ABSENT, so there is nothing for the image to self-describe, and the scrub that
-# consumes it runs in this same assembler invocation — there is no stale-image window to close.
-# The typo case (a declared path that is never present anywhere, so this passes vacuously) is
-# caught on the other side, by sanitize_base_provenance() reporting markers it did not find.
+# what must be ABSENT, so there is nothing for the image to self-describe.
+#
+# The self-fulfilling case this shares with assertion 2 (a declared path that is never present in
+# any tree, so the line asserts nothing forever) is NOT cross-checked here, and deliberately so:
+# post-4c the correct state is that no marker is ever present, so there is no longer any tree in
+# which one could be observed to validate the entry against.
 # ------------------------------------------------------------------------------------------
 PROV="$ROOT/images/provenance.list"
 prov_bad=0

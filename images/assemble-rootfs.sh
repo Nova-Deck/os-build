@@ -46,44 +46,24 @@ echo "[novadeck] assembling unified read-only root (base=$BASE)"
 if command -v rsync >/dev/null 2>&1; then rsync -aHAX --numeric-ids "$BASE"/ "$stage"/
 else cp -a "$BASE"/. "$stage"/; fi
 
-# Scrub the build provenance the base image carries in, so the sealed image looks like the
-# bare-metal OS it is — not the vendor container it was bootstrapped from. The markers are declared
-# in images/provenance.list (see that file for what each one breaks) and asserted gone by
-# images/guard-rootfs.sh, so this is one half of a declare/apply/assert triple rather than a
-# hand-kept rm.
+# NOTHING TO SCRUB (Phase 4c). This is where sanitize_base_provenance() used to run: the tree
+# arrived as `docker export` of a vendor-built image, so it started life carrying two other build
+# systems' artifacts (docker's /.dockerenv, the vendor CI's `repos` and
+# `etc/mash-ci-tracking.job_id`), and every one had to be found by audit and removed by hand.
 #
-# This is the maintenance tax of the docker-export bootstrap. Phase 4a does NOT remove it — 4a seals
-# what stays behind (strips the package manager); the tree still ORIGINATES as `docker export` of
-# base.digest, and 116 of the lock's rows are class `base` precisely because they arrive as image
-# content rather than as installs. Only a from-packages bootstrap (4c) makes this file unnecessary.
+# The root is now bootstrapped from packages, so no container filesystem and no vendor image
+# contributes bytes to it and there is nothing to remove. images/provenance.list survives as a
+# pure ASSERTION, checked by images/guard-rootfs.sh: the declaration outlives the scrub because
+# the failure it protects against — /.dockerenv reaching a device, where systemd-detect-virt
+# reports a container and systemd SILENTLY skips ~13 ConditionVirtualization=!container units —
+# costs a hardware debug cycle to diagnose and shows no build-time symptom. A check that can
+# only ever pass is the cheapest possible insurance against re-introducing an export step.
 #
-# Audited on the SM8650 base 2026-06-25, re-audited 2026-07-26 (unowned-file sweep of the pinned
-# base: 31,203 files, 30,012 owned by a package). Everything harmful found is in provenance.list;
-# these tells are benign and deliberately left alone:
-#   - /etc/{resolv.conf,hostname,hosts}: empty 0-byte stubs; NetworkManager populates resolv.conf at
-#     runtime (DNS verified working on HW), so blanking/owning them here would be churn for no gain.
-#   - /etc/machine-id: correctly empty — REQUIRED so systemd runs preset-all on first boot. Do NOT
-#     populate it here (that would disable our preset-based service enablement).
-#   - /etc/{os-release,locale.conf}: vendor-written and unowned by any package. Ours to own when 4c
-#     stops inheriting them; rewriting them here would be churn against a tree we still import.
-sanitize_base_provenance() {
-  local tree="$1" marker flag missing=0
-  while read -r marker flag _; do
-    case "$marker" in ''|'#'*) continue ;; esac
-    # A path that is never present asserts nothing, forever — the same self-fulfilling trap the
-    # guard's NAMED list guards against, and this is the only place that can see the pre-scrub
-    # tree and so the only place that can catch it. Report rather than fail: a base bump that
-    # legitimately stops shipping a marker is good news, not a broken build.
-    if [ -e "$tree/$marker" ] || [ -L "$tree/$marker" ]; then
-      rm -rf "${tree:?}/$marker"
-    elif [ "$flag" != optional ]; then
-      echo "[novadeck] provenance.list: '$marker' not present in the base — stale entry, or a typo" >&2
-      missing=$((missing + 1))
-    fi
-  done < "$ROOT/images/provenance.list"
-  echo "[novadeck] scrubbed build provenance ($missing declared marker(s) not found)"
-}
-sanitize_base_provenance "$stage"
+# Also inherited-and-now-ours, handled at the source in images/customize-base.sh rather than
+# patched up here: /etc/os-release (images/os-release), /etc/locale.conf and /etc/hostname.
+# Still deliberately left alone: /etc/{resolv.conf,hosts} (NetworkManager populates resolv.conf
+# at runtime, DNS verified working on HW) and /etc/machine-id, which must stay absent so systemd
+# runs preset-all on first boot — populating it would disable our preset-based service enablement.
 
 # 2. novadeck kernel + dtbs under /boot
 install -Dm0644 "$OUT/Image.gz" "$stage/boot/Image.gz"

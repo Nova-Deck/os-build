@@ -131,9 +131,9 @@ STEAM_SEED   := work/steam-seed/steamrtarm64/steam
 # images/manifest.lock is one of its inputs (it asserts the tree still matches the lock) and is
 # already a $(BASE_STAMP) prerequisite, which reaches the rootfs transitively.
 #
-# images/provenance.list is listed for both reasons at once: assemble-rootfs.sh scrubs what it
-# declares (it changes bytes) and guard-rootfs.sh asserts what it declares (it decides whether an
-# image is produced). Declaring a new marker has to re-run against the tree it was declared for.
+# images/provenance.list is listed for the same reason guard-rootfs.sh is: post-4c it changes no
+# bytes in the image (nothing is inherited, so nothing is scrubbed), but it decides whether one is
+# produced. Declaring a new marker has to re-run against the tree it was declared for.
 ASSEMBLE_SRC := $(shell find images/assemble-rootfs.sh images/seal-rootfs.sh images/seal.list \
                               images/guard-rootfs.sh images/provenance.list fs-overlay -type f 2>/dev/null)
 

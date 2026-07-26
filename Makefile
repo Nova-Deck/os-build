@@ -109,8 +109,14 @@ STEAM_SEED   := work/steam-seed/steamrtarm64/steam
 # images/seal.list + images/seal-rootfs.sh are assembler inputs too: the seal is the last thing
 # that touches the staged tree (Phase 4a step 3), so editing what gets stripped changes the image
 # exactly as editing fs-overlay/ does.
+#
+# images/guard-rootfs.sh is listed for the opposite reason -- it changes no bytes in the image, but
+# it decides whether one is produced at all (Phase 4a step 4). A tightened assertion has to re-run
+# against the tree it was tightened for, not wait for the next unrelated fs-overlay edit.
+# images/manifest.lock is one of its inputs (it asserts the tree still matches the lock) and is
+# already a $(BASE_STAMP) prerequisite, which reaches the rootfs transitively.
 ASSEMBLE_SRC := $(shell find images/assemble-rootfs.sh images/seal-rootfs.sh images/seal.list \
-                              fs-overlay -type f 2>/dev/null)
+                              images/guard-rootfs.sh fs-overlay -type f 2>/dev/null)
 
 # Kernel inputs: any change re-triggers the (full, from-scratch) kernel build. The unified
 # kernel globs every fragment/patch/dts, and bakes the firmware embed list.

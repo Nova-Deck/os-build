@@ -692,6 +692,21 @@ if [ "$ov_uid" != "0" ]; then
   find "$stage" -uid "$ov_uid" -exec chown -h 0:0 {} +
 fi
 
+# 4zz. GUARD — assert the sealed tree against its declaration (Phase 4a step 4).
+#
+# Placed here, at the last point the tree is both complete and still a directory: everything above
+# has finished injecting, and section 5 below carves /var out into its own image (so a guard after
+# it could no longer see var/lib/pacman, which is exactly one of the things it has to find gone).
+# What mkfs.btrfs bakes in section 6 is this directory, unmodified.
+#
+# Release-only, mirroring the seal — a test tree deliberately keeps the package manager and carries
+# TEST_PKGS the lock does not describe. See images/guard-rootfs.sh for what it asserts and why.
+if [ "${NOVADECK_TEST:-}" = "1" ]; then
+  echo "  [TEST] skipping the sealed-root guard (nothing was sealed)"
+else
+  "$ROOT/images/guard-rootfs.sh" "$stage"
+fi
+
 mkdir -p "$IMGDIR"
 
 # 5. carve /var out of the staged tree into its own ext4 image (partition var-a). The root is

@@ -181,11 +181,60 @@ Two specific questions it answers cheaply: whether upstream's own sealed image s
 carries the package-manager runtime (informs step 3), and whether we are missing files
 that come from image assembly rather than from a package.
 
-**4. Guard.**
-Assert on the **built tree**, not on the source diff: no `usr/bin/pacman`, no `dirmngr`,
-no vendor units left in `timers.target.wants`, plus a size-delta report. This repo has
-already been bitten once by trusting a built tree it never inspected (a file-mode
-regression that reached hardware), so the assertion is the deliverable, not a nicety.
+**4. Guard.** *(landed)*
+Assert on the **built tree**, not on the source diff. This repo has already been bitten once by
+trusting a built tree it never inspected (a file-mode regression that reached hardware), so the
+assertion is the deliverable, not a nicety — and steps 1–3 are all *declarations*, which is
+exactly what a declaration that is never checked against its artifact degrades into.
+
+`images/guard-rootfs.sh` runs from `assemble-rootfs.sh` at the last point the tree is both
+complete and still a directory: after every injection and after the seal, before section 5 carves
+`/var` out into `var.img`. What `mkfs.btrfs --rootdir` bakes in section 6 is that directory,
+unmodified. Release-only, mirroring the seal — a test tree keeps the package manager on purpose
+and carries `TEST_PKGS` the lock does not describe.
+
+Five assertions; the first four fail the build. Measured on the release tree:
+
+| | assertion | measured |
+|---|---|---|
+| 1 | every file the stripped packages own is gone, expanded through the preserved DB | 4 packages, 471 files, 2 paths |
+| 2 | the named entry points are gone (`pacman`, `pacman-key`, `makepkg`, `gpg`, `dirmngr`, `etc/pacman.conf`, `var/lib/pacman`, the keyring timer) | 14 paths |
+| 3 | no dangling systemd enable-symlink | 108 links, all resolve |
+| 4 | `images/manifest.lock` still describes the tree | 394 packages, name+version |
+| 5 | size delta against the previous build | report only |
+
+**Decision: read `seal.list` and the package DB from the IMAGE, not from the repo.** The sealer
+already copies both to `/usr/lib/novadeck/`, so the guard checks what the image claims about
+itself. Checking the repo copies instead would let a stale tree pass against a freshly edited
+declaration — the exact drift the artifact exists to prevent.
+
+**Decision: assertion 2 is deliberately redundant with assertion 1, and self-checking.** Assertion
+1 trusts the preserved database to say what a package owned; a truncated or wrong database makes
+it pass vacuously. The named list trusts nothing. The cost of a hand-kept list of paths-that-must-
+be-absent is that a typo is absent from every tree ever built, so the line asserts nothing forever
+— so each name must also be *owned by a stripped package or under a declared path row*, else the
+guard reports it as a dead assertion. That uses the database to validate the list, never to make
+the assertion.
+
+**Decision: assertion 3 is scoped to `*.wants`/`*.requires`, not the whole tree.** Deleting a
+package's files deletes its units but not the symlinks pointing at them, and a vendor
+enable-symlink is how the keyring timer stayed on in the first place — so a dangling link there is
+systemd reporting an incomplete removal. A whole-tree dangling-symlink check would instead fail
+every build on ~48 pre-existing absolute links inherited from the base image. Note this is weaker
+than the earlier sketch of "no vendor units left in `timers.target.wants`": `shadow.timer` and
+`systemd-tmpfiles-clean.timer` legitimately remain there, so the assertion is that nothing points
+at a unit that is *gone*, plus the keyring timer by name in assertion 2.
+
+**Decision: assertion 4 checks set equality in both directions, and 5 can never fail a build.** A
+locked-mode build cannot drift from the lock, which is the argument for checking it rather than
+for not bothering: if it ever differs, something outside the locked install path put a package on
+the image. Conversely there is no defensible size threshold, and a guard that blocks on growth
+gets disabled the first time a package legitimately gets bigger — so 5 prints per-top-level-dir
+deltas (`usr` grew, not "the image" grew) and its record write is best-effort.
+
+**Gap worth naming:** this asserts the staged tree, not the image bytes. Reading a btrfs image
+back would need a mount, which the unprivileged build deliberately avoids; `mkfs.btrfs --rootdir`
+is the only step between the two.
 
 ---
 

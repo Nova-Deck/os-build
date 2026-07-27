@@ -161,37 +161,69 @@ rationale lives in the linked memories and commit history.
   a hard prerequisite for the A/B switch, not a nicety. The `/etc` overlay's upperdir lives at
   `/var/lib/overlays/etc/upper`, and `/var` is **per-slot** (`var-a`/`var-b`). So booting the other
   slot presents a *different* `/etc`: no saved Wi-Fi, and a fresh `/etc/machine-id`. That last one
-  bites twice, because `hw-support/usr/lib/novadeck/gen-mac.sh` derives the Wi-Fi MAC from
+  bites twice, because `fs-overlay/usr/lib/novadeck/gen-mac.sh` derives the Wi-Fi MAC from
   `sha256(machine-id)` — a slot switch would silently change the device's MAC.
   SteamOS solves this exactly the way we must (`_reference/steamos-teardown/docs/system-updates.md`
   :132-137): the post-update hook **reformats** the target slot's `/var`, `rsync`s the running slot's
   `/var` over it, and *additionally* writes NetworkManager connections into both partsets'
   `…/overlays/etc/upper/NetworkManager/system-connections/`. Port that hook when wiring RAUC.
   See [[stable-mac-first-boot]], [[wifi-connect-fails-after-list]].
-  **MEASURED 2026-07-28 — the prediction below did NOT happen, and the reason is a separate bug.**
-  Booting slot B gave the *same* MAC and the same DHCP lease as A. That looks like it refutes this
-  item; it does not. `/etc/machine-id` is supposed to be absent from the image, but the built
-  `rootfs.img` ships a populated one, so it sits in the **shared read-only lower layer** and both
-  slots read an identical value. Fix that (item below) and each slot generates its own id into its
-  own per-slot overlay, and the divergence described above appears exactly as written — so this
-  item is currently *masked*, not disproven, and the fix makes it MORE necessary. Second reason
-  pass 1 could not exercise it: the TEST image injects Wi-Fi into the shared rootfs, not the
-  per-slot `/etc` overlay, so a `NOVADECK_TEST=1` card cannot reproduce "the other slot has no
-  saved Wi-Fi" at all. Validate this hook on a RELEASE image — same trap as the OOBE work.
-  `/var/lib/novadeck/mac-wifi` is write-once, so migrating just that file preserves the MAC even
-  if `machine-id` diverges.
+  **CONFIRMED ON HW 2026-07-28 — the divergence is real and measured.** Supersedes the earlier
+  "measured, did not happen" note on this item: that reading was taken while the populated
+  `/etc/machine-id` still sat in the shared read-only lower layer, making both slots read one id.
+  With `1d1c68e` in, an A→B→A round trip on a test card gives each slot its own identity:
 
-- [ ] **FIXED IN TREE 2026-07-28 (`1d1c68e`, `feat/phase4b-boot-slots`) — NOT yet build-verified.
-  The image shipped a populated `/etc/machine-id` against its own stated invariant, with nothing
-  asserting it** — found during Phase 4b HW validation; NOT a 4b bug.
-  **What is left:** (1) run a build and confirm the shipped `rootfs.img` no longer carries the file
-  (`btrfs restore --path-regex` — the base is cached and the fix acts on the staged tree, so no
-  emulated reinstall is needed); (2) the guard's new assertion 6 has been exercised in isolation on
-  synthetic trees, both branches, but has never run against a real staged tree; (3) **already-flashed
-  devices are NOT repaired** — `gen-mac.sh` persisted the derived address write-once to
-  `/var/lib/novadeck/mac-wifi` and prefers it forever, so an existing unit keeps the colliding MAC
-  until that file is deleted or its `/var` is reformatted. The RAUC `/var` hook must clear it rather
-  than copying it across slots, or the bad address propagates to the new slot.
+  | | slot A | slot B |
+  |---|---|---|
+  | machine-id | `381853e2b0f04fab91e1ac100f929314` | `d0c69c85fe60419da8977b87b20c2a0f` |
+  | derived MAC | `76:65:55:27:14:67` | `7a:9e:e0:c4:52:04` |
+  | DHCP lease | 192.168.1.130 | 192.168.1.161 |
+
+  B booted as a FIRST BOOT (`Detected first boot` in its journal) because its `/var` is a separate
+  partition (`novadeck-var-A` = p6, `-B` = p7) and its `/var/lib/overlays/etc/upper` was empty. Both
+  MACs reproduce exactly from `sha256("<machine-id>-wifi")[0:12]` with the LAA bit set and multicast
+  cleared, so the derivation is healthy on both slots — only the seed differs. Returning to A
+  restored `381853e2…` / `76:65:55:27:14:67` / `.130` with zero first-boot lines, so neither slot
+  disturbs the other. **So this hook is a hard prerequisite: without it every OTA update silently
+  changes the device's Wi-Fi MAC and breaks any DHCP reservation.**
+
+  **TRAP for whoever writes the hook — do NOT blindly rsync `/var`.** `/var/lib/novadeck/mac-wifi`
+  is **write-once and takes precedence over the seed** (`gen-mac.sh:40-44`), so copying a stale one
+  pins the old address forever regardless of the new machine-id — that is the original machine-id
+  bug relocated, not fixed. Migrating `machine-id` ALONE is the cleaner primitive: the MAC then
+  re-derives correctly on its own, and it is the only file that has to be right. (The earlier
+  advice on this item — "migrating just `mac-wifi` preserves the MAC even if `machine-id` diverges"
+  — is technically true but is the worse half to pick: it leaves the two slots disagreeing about
+  machine-id while agreeing about the MAC, which breaks the invariant that the MAC is *derived*.)
+
+  Cheap inspection, no reboot needed: `mount -o ro /dev/mmcblk0p7 /run/varb` from the running slot
+  and read the other slot's `/var` directly — that is how B's empty overlay was confirmed *before*
+  the switch. Second reason pass 1 could not exercise this: the TEST image injects Wi-Fi into the
+  shared rootfs, not the per-slot `/etc` overlay, so a `NOVADECK_TEST=1` card cannot reproduce "the
+  other slot has no saved Wi-Fi" at all. Validate the hook on a RELEASE image — same trap as the
+  OOBE work. Leftover from this test: slot B's `/var` now permanently holds `d0c69c85…` /
+  `7a:9e:e0:c4:52:04`, so wipe `/var/lib/novadeck/mac-wifi` on B before any test expecting clean
+  first-boot derivation there.
+
+- [x] **FIXED + HW-VALIDATED 2026-07-28 (`1d1c68e`, `feat/phase4b-boot-slots`). The image shipped a
+  populated `/etc/machine-id` against its own stated invariant, with nothing asserting it** — found
+  during Phase 4b HW validation; NOT a 4b bug.
+  **Verified end to end on a test card:** the built `rootfs.img` no longer carries the file
+  (`btrfs restore -S -x`, 115 other `/etc` entries restored so the absence is real), and
+  `systemd-firstboot.service` is present as `-> /dev/null`. On device: `Detected first boot` →
+  `Applying preset policy.` → `Populated /etc with preset unit settings.`, 8 novadeck units enabled,
+  no failed units, and the derived MAC reproduces exactly from `sha256("$(cat /etc/machine-id)-wifi")`
+  — proving the seed chain finally falls through to machine-id instead of losing to a baked value.
+  Survives reboot unchanged (`boot_id` confirmed changed; zero first-boot lines on the second boot).
+  **Two caveats that remain true:** (1) guard assertion 6 is **release-only**, so on a
+  `NOVADECK_TEST=1` card `assemble-rootfs.sh` skips it entirely and the image must be checked by
+  hand — the §4y removal itself is unconditional, which is what makes a test card correct anyway;
+  (2) **already-flashed devices are NOT repaired** — `gen-mac.sh` persisted the derived address
+  write-once to `/var/lib/novadeck/mac-wifi` and prefers it forever, so an existing unit keeps the
+  colliding MAC until that file is deleted or its `/var` is reformatted. The RAUC `/var` hook must
+  clear it rather than copying it across slots, or the bad address propagates to the new slot.
+  Benign new log noise on every first boot: two `Failed to preset unit: … is masked` lines for
+  `systemd-networkd`/`-wait-online` — that mask is deliberate, do not chase it.
   `images/assemble-rootfs.sh` says in as many words that `/etc/machine-id` "must stay absent so
   systemd runs preset-all on first boot", but `out/images/rootfs.img` contains
   `def47b5c6d984873ac0b077c16b18341` (33 bytes). No `rm`, no truncate, and it appears in neither

@@ -180,6 +180,9 @@ GS_PID=""
 cleanup() {
   [ -n "$GS_PID" ] && kill "$GS_PID" 2>/dev/null || true
   rm -rf "$GS_RUNDIR" 2>/dev/null || true
+  # Withdraw the A/B readiness marker (see below). Removing it here is what makes its continued
+  # existence mean "the SAME session is still up" rather than "a session started once".
+  rm -f /run/novadeck/session/ready 2>/dev/null || true
 }
 trap cleanup EXIT HUP INT TERM
 
@@ -202,6 +205,13 @@ if handshake="$(timeout 20 head -n1 "$GS_STARTUP")"; then
   # Wayland thunk lacks wl_list_* (libdecor dies on wl_list_init) and the GL path mixes real+thunk
   # libwayland objects → SIGSEGV. Keeping games on Xwayland matches the SteamOS/gamescope model.
   export GAMESCOPE_WAYLAND_DISPLAY="${2:-}"
+  # A/B trial-boot health signal (Phase 4b). Getting here proves the whole display path came up:
+  # drm/msm took DRM master, the panel modeset, mesa initialised, both Xwaylands started, libseat
+  # got an active seat via logind and SDDM's autologin worked. novadeck-boot-good.path watches for
+  # this file and confirms the boot 30s later, if the EXIT trap above has not removed it again.
+  # Best-effort: a session must never fail because the marker could not be written.
+  mkdir -p /run/novadeck/session 2>/dev/null || true
+  printf '%s\n' "$GS_PID" >/run/novadeck/session/ready 2>/dev/null || true
 else
   echo "novadeck-session: gamescope did not report a startup display within 20s — aborting" >&2
   exit 1

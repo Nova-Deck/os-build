@@ -1,0 +1,8 @@
+# novadeck: enable the A/B trial-boot confirmation watcher on release. /etc/machine-id is empty on
+# a fresh image so systemd runs preset-all on first boot, where the stock 99-default.preset is
+# "disable *"; this higher-priority preset (60 < 99) keeps it enabled. A build-time
+# multi-user.target.wants symlink ships alongside as a fallback (cf. 60-novadeck-macgen.preset).
+#
+# The .path is the enabled unit; novadeck-boot-good.service is started only by it and carries no
+# [Install] section, so it must NOT be listed here.
+enable novadeck-boot-good.path

@@ -1,0 +1,15 @@
+[Unit]
+Description=novadeck watch for a live session, to confirm an A/B trial boot
+Documentation=file:///usr/bin/novadeck-bootctl
+# Nothing to confirm on a boot that did not come through our initramfs (a degraded
+# cmdline-fallback boot writes no /run/novadeck/boot), and mark-good would have no idea which
+# slot it was running.
+ConditionPathExists=/run/novadeck/boot
+
+[Path]
+# novadeck-session creates this the instant gamescope completes its startup handshake, and its
+# EXIT trap removes it. See novadeck-boot-good.service for why that is the signal.
+PathExists=/run/novadeck/session/ready
+
+[Install]
+WantedBy=multi-user.target

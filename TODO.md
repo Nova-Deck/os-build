@@ -181,8 +181,17 @@ rationale lives in the linked memories and commit history.
   `/var/lib/novadeck/mac-wifi` is write-once, so migrating just that file preserves the MAC even
   if `machine-id` diverges.
 
-- [ ] **The image ships a populated `/etc/machine-id`, against its own stated invariant, and
-  nothing asserts it** — found 2026-07-28 during Phase 4b HW validation; NOT a 4b bug.
+- [ ] **FIXED IN TREE 2026-07-28 (`1d1c68e`, `feat/phase4b-boot-slots`) — NOT yet build-verified.
+  The image shipped a populated `/etc/machine-id` against its own stated invariant, with nothing
+  asserting it** — found during Phase 4b HW validation; NOT a 4b bug.
+  **What is left:** (1) run a build and confirm the shipped `rootfs.img` no longer carries the file
+  (`btrfs restore --path-regex` — the base is cached and the fix acts on the staged tree, so no
+  emulated reinstall is needed); (2) the guard's new assertion 6 has been exercised in isolation on
+  synthetic trees, both branches, but has never run against a real staged tree; (3) **already-flashed
+  devices are NOT repaired** — `gen-mac.sh` persisted the derived address write-once to
+  `/var/lib/novadeck/mac-wifi` and prefers it forever, so an existing unit keeps the colliding MAC
+  until that file is deleted or its `/var` is reformatted. The RAUC `/var` hook must clear it rather
+  than copying it across slots, or the bad address propagates to the new slot.
   `images/assemble-rootfs.sh` says in as many words that `/etc/machine-id` "must stay absent so
   systemd runs preset-all on first boot", but `out/images/rootfs.img` contains
   `def47b5c6d984873ac0b077c16b18341` (33 bytes). No `rm`, no truncate, and it appears in neither
@@ -197,10 +206,18 @@ rationale lives in the linked memories and commit history.
   `multi-user.target.wants` symlinks also ship; anything relying on preset alone is off and nobody
   would notice. Fix = remove it at the end of `assemble-rootfs.sh` **plus a sixth guard assertion**
   (the removal without the assertion just recreates the same unguarded declaration).
-  *Hypothesis, unconfirmed:* the 4c `pacman -r` bootstrap generates it via systemd's scriptlet —
-  4c deleted the old sanitize step reasoning that "no container filesystem contributes bytes",
-  which is true but does not cover a file the bootstrap itself creates. Confirm before fixing.
-  See [[stable-mac-first-boot]].
+  **Producer CONFIRMED 2026-07-28:** `work/base/etc/machine-id` exists at mode `0444` (systemd's
+  own signature — `systemd-machine-id-setup` writes read-only), so the **4c `pacman -r` bootstrap**
+  creates it via systemd's install scriptlet. 4c deleted the old sanitize step reasoning that "no
+  container filesystem contributes bytes to the root" — true, and precisely the blind spot: the
+  bootstrap *itself* generates this one. Fixed in `assemble-rootfs.sh` (the staged tree, which is
+  what the guard sees) rather than in the bootstrap, so a cached base still yields a correct image.
+  **The fix is a PAIR, and guard assertion 6 enforces both halves together:** no `/etc/machine-id`,
+  AND `systemd-firstboot.service` masked. Removing the file is what makes `ConditionFirstBoot=yes`
+  true, and that unit then prompts for locale and a root password on a console with no usable input,
+  blocking `sysinit.target` forever on a device with no serial console — so a tree with neither is a
+  bricked boot, not a cosmetic slip. See [[stable-mac-first-boot]], [[sm8650-firstboot-hang]],
+  [[declared-invariants-need-assertions]].
 
 - [ ] **`/run/novadeck/boot` reports the post-write `gen` with the pre-write `pending`** — found
   2026-07-28 on HW. `write_state()` (`images/initramfs/init`) updates `STATE_GEN` but leaves

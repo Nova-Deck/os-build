@@ -33,7 +33,9 @@
 #   4. images/manifest.lock still describes this tree: same package set, same versions, and its
 #      `stripped` rows are exactly what seal.list removes
 #   5. the trim's declaration is fully applied — nothing images/trim.list names survived
-#   6. a size delta against the previous build (report only — never fails a build)
+#   6. the first-boot identity is shippable — no /etc/machine-id, AND systemd-firstboot masked
+#      (the two are only safe together)
+#   7. a size delta against the previous build (report only — never fails a build)
 set -euo pipefail
 shopt -s nullglob
 
@@ -270,7 +272,50 @@ if [ "$trim_bad" = 0 ]; then
 fi
 
 # ------------------------------------------------------------------------------------------
-# 6. Size delta (report only).
+# 6. First-boot identity.
+#
+# Asserts a PAIR, because either half alone is a defect:
+#
+#   - /etc/machine-id must be ABSENT. systemd's first-boot detection keys on it, so a populated one
+#     means preset-all never runs (the 60-novadeck-*.preset files silently do nothing) and
+#     gen-mac.sh's seed chain never falls through to the per-unit SoC serial, giving every unit
+#     flashed from the image the same Wi-Fi MAC. This was true of a shipped image and nothing
+#     caught it: the 4c bootstrap generates one (systemd's scriptlet, mode 0444), while two
+#     comments asserted it would not exist. Exactly the "declaration nobody checks" failure this
+#     script exists for — the reason it is checked here and not trusted from assemble-rootfs.sh.
+#
+#   - systemd-firstboot.service must be MASKED. Removing machine-id is what makes
+#     ConditionFirstBoot=yes true, and that unit then prompts for locale and a root password on a
+#     console with no usable input, blocking sysinit.target forever on a device with no serial
+#     console. So a tree with no machine-id and no mask is a BRICKED BOOT, not a cosmetic slip.
+#
+# Checked independently rather than as an either/or, so the log names whichever half is wrong.
+# `if` context throughout: a bare `[ ... ] && x=1` that evaluates false returns 1 and, under
+# `set -e`, kills the guard with no output — the same trap already documented in assertion 5.
+# ------------------------------------------------------------------------------------------
+echo "  6. first-boot identity"
+MID="$STAGE/etc/machine-id"
+FB="$STAGE/etc/systemd/system/systemd-firstboot.service"
+
+mid_ok=1
+if [ -e "$MID" ] || [ -L "$MID" ]; then
+  mid_ok=0
+  bad "/etc/machine-id is present ($(wc -c <"$MID" 2>/dev/null || echo '?') bytes) — first boot will not be treated as one: preset-all will not run, and every unit gets the same derived Wi-Fi MAC"
+fi
+
+fb_ok=0
+if [ -L "$FB" ] && [ "$(readlink "$FB")" = /dev/null ]; then
+  fb_ok=1
+else
+  bad "systemd-firstboot.service is not masked — with no /etc/machine-id it will run and block sysinit.target forever on a console with no input (no serial console on this device)"
+fi
+
+if [ "$mid_ok" = 1 ] && [ "$fb_ok" = 1 ]; then
+  echo "    ok  no /etc/machine-id, systemd-firstboot masked"
+fi
+
+# ------------------------------------------------------------------------------------------
+# 7. Size delta (report only).
 #
 # Never fails a build — there is no defensible threshold, and a guard that blocks on growth would
 # be disabled the first time a legitimate package got bigger. Its job is to put the number in

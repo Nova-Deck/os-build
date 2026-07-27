@@ -28,5 +28,16 @@ ConditionPathExists=/run/novadeck/boot
 
 [Service]
 Type=oneshot
+# RemainAfterExit is load-bearing, not tidiness. A .path unit re-arms the instant its triggered
+# unit leaves the active state, and PathExists is level-triggered -- the marker is still there --
+# so a plain oneshot retriggers itself the moment it exits. Measured on hardware before this
+# line: one sleep-30/mark-good cycle every 30s for the entire uptime of the device. Staying
+# `active (exited)` is what makes the unit fire once per boot.
+#
+# The failure path deliberately still retries: `mark-good --require-marker` exits non-zero when
+# the marker vanished under it, so the unit lands in `failed` (not active), the path re-arms, and
+# the next session that comes up gets its own 30s trial. That is the crash-loop case the sleep
+# exists for -- it must not be spent on the first iteration and then abandoned.
+RemainAfterExit=yes
 ExecStartPre=/usr/bin/sleep 30
 ExecStart=/usr/bin/novadeck-bootctl mark-good --require-marker

@@ -37,6 +37,7 @@ case "$model" in
     "KONKR Pocket FIT")          profile=konkr-pocket-fit ;;
     "Retroid Pocket 6")          profile=retroid-pocket-6 ;;
     "Retroid Pocket 6 TOP-DPAD") profile=retroid-pocket-6 ;;
+    "Retroid Pocket Nova")       profile=retroid-pocket-nova ;;
     *)                           profile= ;;
 esac
 

@@ -394,7 +394,50 @@ different MAC. The post-install hook must reformat the target slot's `/var`, cop
 running slot's `/var` across, and write network connections into both slots' overlay
 uppers. This is required under A, B and C alike.
 
-### Pass 1 — the boot path (implemented, HW validation pending)
+**Measured 2026-07-28, and the result is misleading until you know why.** Booting slot B produced
+the *same* MAC and the same DHCP lease as A — apparently contradicting the paragraph above. It does
+not. `machine-id` is supposed to be absent from the shipped image (`images/assemble-rootfs.sh`
+states the invariant explicitly, so that systemd runs `preset-all` on first boot), but the built
+`rootfs.img` **ships a populated one**, and it therefore lives in the shared read-only lower layer
+where both slots see the identical value. With that bug fixed, each slot generates its own id into
+its own per-slot overlay on first boot and the divergence above appears exactly as described. So
+the prerequisite is not weakened by this measurement — it is currently *masked* by it, and fixing
+`machine-id` makes the `/var` hook more necessary, not less. The `machine-id` defect is not a 4b
+problem and is tracked separately in `TODO.md`.
+
+A second reason this pass could not exercise the prerequisite: the test image injects Wi-Fi
+credentials into the **shared rootfs** (`images/assemble-rootfs.sh`), not the per-slot `/etc`
+overlay, so "the other slot has no saved Wi-Fi" cannot reproduce on a `NOVADECK_TEST=1` card at
+all. Validating the `/var` migration hook needs a release image — the same trap as the OOBE work.
+
+### Pass 1 — the boot path (implemented, HW-VALIDATED 2026-07-28)
+
+**Validated on device 2026-07-27/28**, following the least-to-most-destructive order. Passed: the
+offline card verify (fsids distinct, slot witnesses, ESP seed, cpio contents); the regression gate
+(`slot=a source=state`, no `duplicate device`, exactly one vfat mount); the read-only tool check
+(`bootctl` agrees with the handoff, `STATE.0` byte-identical before and after); the rollback branch
+without booting B (`try b --tries 0` → `source=rollback`, `pending` cleared); **the actual switch**
+(`slot=b`, `root=/dev/mmcblk0p5`, and `/var/lib/novadeck/slot` independently said `b` — the fsid
+hazard is really defeated, not just distinct on paper); **rollback from a slot that boots but never
+confirms** (health check masked in B's per-slot `/etc`, one try consumed, next boot reverted to A
+with `pending` cleared); and a **torn-write rejection on real hardware** — a *higher* generation
+(`gen=13 active=b`) truncated before its `end` terminator was rejected in favour of the older valid
+`gen=12 active=a`, so the device booted A. A discriminating `active=` value was used deliberately:
+had the reader accepted the torn file it would have booted the *other* slot, which no same-slot
+assertion could have caught.
+
+The generation counter crossed 10 during the run, so the "validate all-digits before `-gt`" guard
+was exercised for real — a lexical compare ranks `"10"` below `"9"` and would have booted the stale
+copy.
+
+Two properties fell out that were argued for but never demonstrated: the mask applied in B's `/etc`
+was invisible from A, confirming the overlay really is per-slot; and the next write after the torn
+file **reclaimed it**, because the writer always targets the non-winner. A torn copy self-heals.
+
+One bug was found and fixed here: `novadeck-boot-good.service` was a bare `Type=oneshot`, and since
+`PathExists=` is level-triggered a `.path` unit re-arms as soon as its triggered unit goes inactive
+— so it retriggered every 30s for the whole uptime of the device. `RemainAfterExit=yes` fixes it
+while keeping the failure path retryable. See the unit's own comment.
 
 The state file grammar, normative. `images/initramfs/init` is the reference implementation.
 
@@ -463,6 +506,27 @@ recovery mechanism when you have the card in a reader.
   check. The right fix is a tmpfs upperdir instead of a writable root. Worth doing, but as its
   own change *after* the slot machinery is HW-validated: it alters a path hardware already
   signed off, and this pass's discipline is one variable at a time.
+- **The SD card's behaviour under abrupt power loss is UNTESTED, and untestable on this device.**
+  The planned power-cut test cannot be run on battery-powered hardware: there is no interruptible
+  supply, and a long-press force-off takes ~8–10s against a write window of ~1s. What *is* proven
+  is the reader's rejection logic, offline (`test-slot-state.sh`) and on hardware (a truncated
+  higher generation was rejected, above) — but that covers a torn *file*, not a card whose
+  controller lost an erase block or an uncommitted FTL mapping mid-write. The two-file scheme is
+  designed against exactly that, and the design argument stands on its own; it has not been
+  demonstrated. Recorded as untested rather than passed. The tractable substitute is a test-gated
+  hook in the init that writes half the state and then `exit 1`s — the kernel panics, `panic=5`
+  reboots, and the `umount` durability barrier never runs, reproducing an interrupted write at the
+  exact instant, deterministically. That needs no `MAGIC_SYSRQ` (which `kernel/kernel.config` does
+  not declare) and is strictly more repeatable than a power yank. Tracked in `TODO.md`.
+- **`/run/novadeck/boot` is internally inconsistent on any boot that rewrites state.** `write_state()`
+  updates `STATE_GEN` but leaves `STATE_ACTIVE`/`STATE_PENDING` at their pre-write values, and the
+  handoff is emitted from those same variables — so a rollback boot reports the new `gen` alongside
+  the *old* `pending`, reading as "a trial is still armed" when the ESP says otherwise. Nothing
+  functional depends on it (`novadeck-bootctl` takes `pending` from the ESP and only `slot`/`source`
+  from the handoff, which is why rollback still clears correctly), but the init header calls this
+  file the first evidence to check when debugging a boot offline, and on the boots that most need
+  debugging it currently misleads. Left unfixed through HW validation on purpose — one variable at
+  a time — and tracked in `TODO.md`.
 
 ---
 

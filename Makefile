@@ -109,6 +109,9 @@ ROOTFS       := $(OUT)/images/rootfs.img
 # Sibling image the assembler emits alongside the root (see images/partition-table.txt):
 # the writable state partition, which also carries the /etc overlay upper.
 VARIMG       := $(OUT)/images/var.img
+# Slot B's var, emitted by the same run. Identical but for /var/lib/novadeck/slot, which is the
+# independent witness of which slot actually mounted (the roots are content-identical by design).
+VARIMG_B     := $(OUT)/images/var-b.img
 INITRAMFS    := $(OUT)/initramfs.cpio.gz
 BOOTIMG      := $(OUT)/boot/novadeck-boot.img
 SDCARD       := $(OUT)/images/sdcard.img
@@ -327,10 +330,11 @@ $(INITRAMFS): images/mkinitramfs.sh images/initramfs/init $(BASE_STAMP) | $(BUIL
 $(BOOTIMG): $(KERNEL) $(INITRAMFS) boot/cmdline boot/package.sh | $(BUILD_STAMP)
 	$(INBUILD) boot/package.sh
 
-# var.img is a co-product of the same assembler run as rootfs.img.
+# var.img and var-b.img are co-products of the same assembler run as rootfs.img.
 $(VARIMG): $(ROOTFS)
+$(VARIMG_B): $(ROOTFS)
 
-$(SDCARD): $(BOOTIMG) $(ROOTFS) $(VARIMG) $(STEAM_SEED) images/make-sdcard.sh | $(BUILD_STAMP)
+$(SDCARD): $(BOOTIMG) $(ROOTFS) $(VARIMG) $(VARIMG_B) $(STEAM_SEED) images/make-sdcard.sh | $(BUILD_STAMP)
 	$(INBUILD) images/make-sdcard.sh
 
 # Signed RAUC OTA bundle (Phase 4). Dev builds mint an ephemeral cert; set

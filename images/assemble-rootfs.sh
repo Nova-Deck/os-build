@@ -30,6 +30,7 @@ LFW="$ROOT/firmware/linux-fw"
 IMGDIR="$OUT/images"
 IMG="$IMGDIR/rootfs.img"
 VARIMG="$IMGDIR/var.img"     # -> var-a  (ext4, carries the /etc overlay upper+work)
+VARIMG_B="$IMGDIR/var-b.img" # -> var-b  (identical but for /var/lib/novadeck/slot; see section 5)
 # The rootfs image is auto-sized by mkfs.btrfs --rootdir --shrink (see section 6); no fixed SIZE.
 VAR_SIZE_MIB="${VAR_SIZE_MIB:-256}"   # matches var-a/-b in partition-table.txt (a hard ceiling)
 
@@ -750,10 +751,32 @@ if [ "$var_used_mib" -ge $(( VAR_SIZE_MIB - 32 )) ]; then
   exit 1
 fi
 
-rm -f "$VARIMG"
-truncate -s "${VAR_SIZE_MIB}M" "$VARIMG"
-mkfs.ext4 -q -F -L novadeck-var -m0 -d "$varstage" "$VARIMG"
-echo "  ok   var    -> ${VARIMG#"$ROOT"/}  (${VAR_SIZE_MIB}MiB ext4, ${var_used_mib}MiB used)"
+# One var image per slot (Phase 4b). They differ by exactly one file: /var/lib/novadeck/slot.
+#
+# The two root images are content-identical by design -- that is what an A/B update produces, and
+# RAUC will write the same bytes into whichever slot is inactive. So slot identity can never come
+# from the root's CONTENT; it has to come from where the initramfs mounted it. The initramfs
+# records its own decision in /run/novadeck/boot, but that comes from the code doing the choosing.
+# This file is an INDEPENDENT witness: /run/novadeck/boot says which slot the initramfs thinks it
+# picked, /var/lib/novadeck/slot says which var actually got mounted. If those two ever disagree,
+# the selection is lying -- which is exactly the symptom of two btrfs filesystems sharing an fsid
+# (see images/make-sdcard.sh). Four lines, and it is the only cross-check that does not share a
+# failure mode with the thing it checks.
+#
+# Two mkfs runs also give the two images distinct ext4 UUIDs for free, which matters for the same
+# reason: /home is mounted by LABEL, and duplicate filesystem identity across slots is the hazard.
+install -d -m0755 "$varstage/lib/novadeck"
+for slot in a b; do
+  printf '%s\n' "$slot" >"$varstage/lib/novadeck/slot"
+  case "$slot" in
+    a) img=$VARIMG ;;
+    b) img=$VARIMG_B ;;
+  esac
+  rm -f "$img"
+  truncate -s "${VAR_SIZE_MIB}M" "$img"
+  mkfs.ext4 -q -F -L novadeck-var -m0 -d "$varstage" "$img"
+  echo "  ok   var-$slot  -> ${img#"$ROOT"/}  (${VAR_SIZE_MIB}MiB ext4, ${var_used_mib}MiB used)"
+done
 
 # The root keeps only an empty /var mountpoint — the initramfs mounts var-a over it.
 rm -rf "${varstage:?}"

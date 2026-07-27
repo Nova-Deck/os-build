@@ -2,12 +2,19 @@
 # novadeck SD-card image builder.
 #
 # Lays the FULL SteamOS-style 8-partition GPT from images/partition-table.txt and populates
-# only the A side: ESP + rootfs-a + var-a + home. rootfs-b/var-b are created and left
-# empty for RAUC to fill; efi-a/efi-b are created, formatted, and left empty until there is a
-# per-slot bootloader (see the table's header for what eventually lands there).
+# BOTH slots: ESP + rootfs-a/-b + var-a/-b + home. efi-a/efi-b are created, formatted, and left
+# empty — under Phase 4b design C the boot image is slot-agnostic and lives only at /KERNEL on
+# the shared ESP, so nothing needs a per-slot bootloader partition yet.
 #
 # Laying the final table now — rather than a minimal ESP+root+home and migrating later — means
-# adding A/B never costs a reflash. The price is ~6.3G of card sitting empty in the B slots.
+# adding A/B never costs a reflash.
+#
+# WHY B IS POPULATED RATHER THAN LEFT EMPTY (Phase 4b): the deliverable of the boot-path pass is
+# that a slot switch and a rollback are provable by hand, and you cannot prove a switch to a slot
+# that does not boot — an empty B can only ever exercise the failure path. It is also the state a
+# device is never in again after its first real update, so testing against it tests a fiction.
+# Flash time is unchanged (the dd already writes the whole full-size image including its zeros);
+# the cost is build time and out/ disk. Set NOVADECK_SLOT_B=0 to skip it for a faster local loop.
 #
 # Unprivileged: builds each filesystem in a plain file (mtools / mkfs.ext4 -d / mksquashfs),
 # lays the GPT with sgdisk via images/genpart.sh, and dd's each filesystem into its partition
@@ -27,8 +34,13 @@ KERNEL="$OUT/boot/novadeck-boot.img"
 IMGDIR="$OUT/images"
 ROOTFS="$IMGDIR/rootfs.img"
 VARIMG="$IMGDIR/var.img"
+VARIMG_B="$IMGDIR/var-b.img"
+ROOTFS_B="$IMGDIR/rootfs-b.img"   # built here from $ROOTFS with a fresh fsid; see section 1b
 IMG="$IMGDIR/sdcard.img"
 TABLE="$ROOT/images/partition-table.txt"
+
+# Populate the B slot too (default on). See the header for why.
+SLOT_B="${NOVADECK_SLOT_B:-1}"
 
 MIB=$((1024 * 1024))
 END_SLACK_MIB=2   # tail room for the backup GPT (well over its ~17 KiB)
@@ -39,9 +51,11 @@ END_SLACK_MIB=2   # tail room for the backup GPT (well over its ~17 KiB)
 # boot novadeck-grow-home extends the partition + its ext4 to fill the card.
 SEED="$ROOT/work/steam-seed"
 
-for t in sgdisk mkfs.vfat mcopy mkfs.ext4; do
+for t in sgdisk mkfs.vfat mcopy mmd mkfs.ext4; do
   command -v "$t" >/dev/null 2>&1 || { echo "$t not found — run inside novadeck-build" >&2; exit 1; }
 done
+[ "$SLOT_B" = 1 ] && { command -v btrfstune >/dev/null 2>&1 || {
+  echo "btrfstune not found — run inside novadeck-build (or set NOVADECK_SLOT_B=0)" >&2; exit 1; }; }
 [ -f "$KERNEL" ] || { echo "no boot image: ${KERNEL#"$ROOT"/} (run boot/package.sh)" >&2; exit 1; }
 [ -f "$ROOTFS" ] || { echo "no rootfs: ${ROOTFS#"$ROOT"/} (run images/build-image.sh)" >&2; exit 1; }
 [ -f "$VARIMG" ] || { echo "no var image: ${VARIMG#"$ROOT"/} (run images/build-image.sh)" >&2; exit 1; }
@@ -56,6 +70,7 @@ part_mib()  { awk -v n="$1" '/^[[:space:]]*#/||/^[[:space:]]*$/{next}
 
 P_ESP=$(part_num esp);    P_EFIA=$(part_num efi-a); P_EFIB=$(part_num efi-b)
 P_ROOTA=$(part_num rootfs-a); P_VARA=$(part_num var-a)
+P_ROOTB=$(part_num rootfs-b); P_VARB=$(part_num var-b)
 P_HOME=$(part_num home)
 
 ESP_SIZE_MIB=$(part_mib esp)
@@ -71,14 +86,19 @@ fits() {  # <file> <slot-mib> <what>
 }
 fits "$ROOTFS" "$(part_mib rootfs-a)" "rootfs.img"
 fits "$VARIMG" "$(part_mib var-a)"    "var.img"
+if [ "$SLOT_B" = 1 ]; then
+  [ -f "$VARIMG_B" ] || { echo "no var-b image: ${VARIMG_B#"$ROOT"/} (run images/build-image.sh)" >&2; exit 1; }
+  fits "$ROOTFS"   "$(part_mib rootfs-b)" "rootfs.img (slot B)"
+  fits "$VARIMG_B" "$(part_mib var-b)"    "var-b.img"
+fi
 
 # Stage the /home tree to pre-seed: the deck user's Steam client baked into .local/share/Steam, plus
 # the HOME-relative ~/.steam compat symlinks (mirror SteamOS's layout). Owned by deck (uid/gid 1000,
 # baked into the base) so Steam can write its home immediately — mkfs.ext4 -d preserves this. This is
 # the OFFLINE analog of steamos-create-homedir, done at build time instead of first boot.
 DECK_UID=1000; DECK_GID=1000
-esp=""; efi=""; home=""; homestage="$(mktemp -d)"
-trap 'rm -f "$esp" "$efi" "$home"; rm -rf "$homestage"' EXIT
+esp=""; efi=""; home=""; state=""; homestage="$(mktemp -d)"
+trap 'rm -f "$esp" "$efi" "$home" "$state" "$ROOTFS_B"; rm -rf "$homestage"' EXIT
 deckhome="$homestage/deck"
 install -d "$deckhome/.local/share" "$deckhome/.steam"
 cp -a "$SEED" "$deckhome/.local/share/Steam"
@@ -110,7 +130,7 @@ HOME_SIZE_MIB="${HOME_SIZE_MIB:-$(( seed_mib + seed_mib / 5 + 128 ))}"
 fixed_mib=$("$ROOT/images/genpart.sh" --min)
 total_mib=$(( fixed_mib + HOME_SIZE_MIB + END_SLACK_MIB ))
 
-echo "[novadeck] SD image: ${fixed_mib}MiB fixed layout (A populated, B empty) + home ${HOME_SIZE_MIB}MiB -> ${total_mib}MiB"
+echo "[novadeck] SD image: ${fixed_mib}MiB fixed layout ($([ "$SLOT_B" = 1 ] && echo 'A+B populated' || echo 'A populated, B empty')) + home ${HOME_SIZE_MIB}MiB -> ${total_mib}MiB"
 
 # 1. ESP filesystem (FAT32) with the KERNEL boot image at its root.
 esp="$(mktemp)"; efi="$(mktemp)"; home="$(mktemp)"
@@ -121,10 +141,56 @@ mkfs.vfat -F 32 -n NOVADECK "$esp" >/dev/null
 mcopy -i "$esp" "$KERNEL" ::/KERNEL
 echo "  esp  $(du -h "$KERNEL" | cut -f1) KERNEL -> ::/KERNEL"
 
-# 2. efi-a / efi-b: formatted but EMPTY. ABL reads /KERNEL off the ESP above, so there is nothing
-# to put here until a per-slot bootloader exists. Formatting them now means RAUC can just write.
+# 1b. Seed the A/B slot state the initramfs reads (images/initramfs/init documents the format).
+# A fresh card is slot A, known good, with nothing on trial.
+#
+# STATE.1 is deliberately NOT written. The writer alternates between the two files and only ever
+# overwrites the one that is already stale, so leaving the second absent means the device's first
+# write lands on the free file and this seeded copy survives even if that write is torn.
+#
+# Under /NOVADECK/ rather than at the ESP root: ABL scans p1 for its boot artifact, and /KERNEL is
+# the only thing it must find there. Keeping our namespace in a subdirectory removes any question
+# about what the firmware might enumerate. 8.3-clean names, so the kernel's vfat driver and mtools
+# never have to agree about long-filename directory entries.
+state="$(mktemp)"
+cat >"$state" <<'EOF'
+# novadeck A/B slot state -- images/initramfs/init, /usr/bin/novadeck-bootctl
+gen=1
+active=a
+pending=
+tries=0
+kernel=a
+bak=
+end
+EOF
+mmd -i "$esp" ::/NOVADECK
+mcopy -i "$esp" "$state" ::/NOVADECK/STATE.0
+echo "  esp  slot state -> ::/NOVADECK/STATE.0 (gen=1 active=a)"
+
+# 2. efi-a / efi-b: formatted but EMPTY. ABL reads /KERNEL off the ESP above, and design C keeps
+# the boot image slot-agnostic, so there is nothing to put here. Formatted so a later pass can
+# just write them.
 truncate -s "${EFI_SIZE_MIB}M" "$efi"
 mkfs.vfat -F 32 -n NOVADECKEFI "$efi" >/dev/null   # FAT labels max 11 chars; same blank fs for A and B
+
+# 2b. Slot B's root: the SAME content, but it MUST NOT be the same bytes.
+#
+# mkfs.btrfs bakes an fsid into the superblock, and every btrfs image we build also has devid=1.
+# Writing rootfs.img verbatim to both p4 and p5 would put two filesystems on one disk sharing
+# exactly the pair btrfs keys its in-kernel device list on: the second one scanned is treated as
+# the first one having MOVED, and its path silently replaces it. The failure mode is that mounting
+# p5 hands you p4's filesystem — on the one test whose entire purpose is proving which slot booted.
+# btrfstune -U rewrites the fsid in the superblocks and in every metadata block header, which is
+# why it needs its own copy of the file rather than an in-place round trip.
+#
+# (RAUC will hit this too: every `rauc install` writes identical bytes to the inactive slot. Its
+# post-install hook will need the same treatment — tracked in TODO.md.)
+if [ "$SLOT_B" = 1 ]; then
+  rm -f "$ROOTFS_B"
+  cp --reflink=auto "$ROOTFS" "$ROOTFS_B"
+  btrfstune -f -U "$(cat /proc/sys/kernel/random/uuid)" "$ROOTFS_B" >/dev/null
+  echo "  slotB rootfs-b.img: fresh btrfs fsid (content identical to slot A)"
+fi
 
 # 3. /home filesystem (ext4, label novadeck-home) PRE-SEEDED with the deck home via mkfs.ext4 -d,
 # which populates the fs from $homestage at creation — unprivileged, no loop mount. -m0: no reserved
@@ -142,18 +208,22 @@ truncate -s "${total_mib}M" "$IMG"
 sgdisk -p "$IMG"
 
 # 5. write each filesystem into its partition's byte offset (notrunc; no loop device).
-# Partitions with no `write_part` call below (rootfs-b, var-b) are intentionally left as zeros.
+# efi-a/efi-b get a blank formatted fs; with NOVADECK_SLOT_B=0 the B root/var stay zeros.
 write_part() {  # <partnum> <file> <label>
   local start; start=$(sgdisk -i "$1" "$IMG" | sed -n 's/^First sector: \([0-9]*\).*/\1/p')
   [ -n "$start" ] || { echo "cannot read start sector of partition $1" >&2; exit 1; }
   dd if="$2" of="$IMG" bs=512 seek="$start" conv=notrunc status=none
   echo "  p$1  $3"
 }
-write_part "$P_ESP"   "$esp"    "NOVADECK-ESP (KERNEL)"
+write_part "$P_ESP"   "$esp"    "NOVADECK-ESP (KERNEL + slot state)"
 write_part "$P_EFIA"  "$efi"    "novadeck-efi-A (empty, reserved)"
 write_part "$P_EFIB"  "$efi"    "novadeck-efi-B (empty, reserved)"
 write_part "$P_ROOTA" "$ROOTFS" "novadeck-root-A (btrfs, ro)"
 write_part "$P_VARA"  "$VARIMG" "novadeck-var-A (ext4)"
+if [ "$SLOT_B" = 1 ]; then
+  write_part "$P_ROOTB" "$ROOTFS_B" "novadeck-root-B (btrfs, ro, distinct fsid)"
+  write_part "$P_VARB"  "$VARIMG_B" "novadeck-var-B (ext4)"
+fi
 write_part "$P_HOME"  "$home"   "novadeck-home (ext4, grows on first boot)"
 
 echo "  ok   $(du -h "$IMG" | cut -f1) -> ${IMG#"$ROOT"/}"
@@ -166,9 +236,12 @@ echo "  ok   $(du -h "$IMG" | cut -f1) -> ${IMG#"$ROOT"/}"
 cat <<EOF
 Done. Write it to the card (replace sdX with your device, ALL DATA LOST):
   sudo dd if=${IMG#"$ROOT"/} of=/dev/sdX bs=4M conv=fsync status=progress
-ABL boots /KERNEL off the ESP; its DTB picker selects the board. The initramfs then mounts
-root=PARTLABEL=novadeck-root-A read-only, mounts novadeck-var-A, stacks the /etc overlay on it,
-then switch_roots into systemd. /home (last partition) is pre-seeded with the deck user's Steam
-client and grows to fill the card on first boot.
-The B slots (rootfs-b, var-b) and both efi-* partitions are present but empty.
+ABL boots /KERNEL off the ESP; its DTB picker selects the board. The initramfs reads the slot
+state at ::/NOVADECK/STATE.0 (gen=1 active=a), mounts that slot's root read-only and its var,
+stacks the /etc overlay on it, then switch_roots into systemd. /home (last partition) is
+pre-seeded with the deck user's Steam client and grows to fill the card on first boot.
+$([ "$SLOT_B" = 1 ] \
+  && echo "Both slots carry a full system, so a switch is testable: novadeck-bootctl try b" \
+  || echo "The B slots are empty (NOVADECK_SLOT_B=0) — a slot switch will fail over back to A.")
+Both efi-* partitions are present but empty (design C keeps the boot image slot-agnostic).
 EOF

@@ -4,13 +4,17 @@
 # a shared ESP, A/B boot partitions, A/B read-only Btrfs roots, A/B /var, and a shared
 # /home. RAUC writes the inactive rootfs/var slot, then the bootloader switches on success.
 #
-# efi-a/efi-b are RESERVED, and stay EMPTY until A/B lands. In SteamOS they are Stage 2 —
-# each holds that slot's GRUB, chainloaded by steamcl.efi on the shared ESP. We have no
-# UEFI stage at all: the ROCKNIX ABL loads /KERNEL straight off p1 (Stage 3, directly).
-# When A/B arrives they hold the per-slot boot images (KERNEL-A / KERNEL-B, ~24M each incl.
-# the initramfs), and a RAUC post-install hook copies the freshly-written slot's image over
-# /KERNEL on the shared ESP — that indirection is forced, because ABL only ever reads p1.
-# 64M each is ~2.5x the current boot image, so there is room for the initramfs to grow.
+# efi-a/efi-b are RESERVED and stay EMPTY. In SteamOS they are Stage 2 — each holds that
+# slot's GRUB, chainloaded by steamcl.efi on the shared ESP. We have no UEFI stage at all:
+# the ROCKNIX ABL loads /KERNEL straight off p1 (Stage 3, directly).
+#
+# AMENDED for Phase 4b: they are no longer earmarked for per-slot boot images. That was
+# design A; docs/phase4.md picked design C, where the boot image is slot-AGNOSTIC and the
+# slot is chosen inside our own initramfs from a state file on the shared ESP
+# (/NOVADECK/STATE.{0,1}). One /KERNEL serves both slots, so there is nothing per-slot to
+# store. They stay allocated and formatted because the alternative is a reflash if a later
+# pass does want them — as staging for a new boot image, or for the previous kernel that a
+# failed health check reverts to. 64M each is ~2.5x the current boot image.
 #
 # All 8 partitions mirror the SteamOS layout exactly (esp, efi-A/B, rootfs-A/B, var-A/B, home).
 #

@@ -168,22 +168,47 @@ rationale lives in the linked memories and commit history.
   `/var` over it, and *additionally* writes NetworkManager connections into both partsets'
   `…/overlays/etc/upper/NetworkManager/system-connections/`. Port that hook when wiring RAUC.
   See [[stable-mac-first-boot]], [[wifi-connect-fails-after-list]].
+  **NOTE 2026-07-27:** the pass-1 HW test will *demonstrate* this rather than hit it as a surprise.
+  Booting slot B for the first time is EXPECTED to show a fresh `machine-id`, no saved Wi-Fi, a
+  different derived MAC, fresh sshd host keys and an empty journal. Record it; do not debug it.
+  `/var/lib/novadeck/mac-wifi` is write-once, so migrating just that file preserves the MAC even
+  if `machine-id` diverges.
 
-- [ ] **Populate `efi-a`/`efi-b` with per-slot boot images** — created + formatted vfat, currently
-  EMPTY. ABL only ever reads `/KERNEL` from the shared ESP (p1), so an A/B switch cannot just point
-  the bootloader at another partition: the per-slot boot image (`KERNEL-A` / `KERNEL-B`, ~23M each
-  incl. the initramfs) has to live in `efi-a`/`efi-b`, and a RAUC post-install hook copies the
-  newly-written slot's image over `/KERNEL` on the ESP. Note each slot's image carries its OWN
-  cmdline (`root=PARTLABEL=novadeck-root-{A,B}` + `novadeck.var=…-{A,B}`), so `boot/package.sh` needs
-  a slot argument. See [[sm8650-rocknix-abl-boot]].
-  **AMENDED 2026-07-26 — the per-slot-cmdline half of this is superseded.** Phase 4b picks
-  design **C** (`docs/phase4.md`): one slot-AGNOSTIC boot image, slot selection moved out of the
-  baked cmdline into the initramfs, which reads a try-counter state file on the ESP and falls back
-  to the other slot at zero — plus a `KERNEL.bak` so a failed health check also reverts the kernel.
-  That is the only design giving real rollback with a bootloader that cannot choose (`efi-a`/`efi-b`
-  become staging + previous-kernel storage). So `boot/package.sh` does NOT need a slot argument.
-  Adding a GRUB stage stays a legitimate fallback if C proves unworkable — reconsider it rather
-  than working around it.
+- [ ] **`efi-a`/`efi-b` are unused under design C** — created + formatted vfat, EMPTY, and no longer
+  earmarked for per-slot boot images. That was design A. Phase 4b picked design **C**
+  (`docs/phase4.md`): one slot-AGNOSTIC `/KERNEL`, slot selection moved out of the baked cmdline
+  into the initramfs, which reads a try-counter state file on the ESP and falls back to the other
+  slot at zero. So `boot/package.sh` does NOT need a slot argument, and there is nothing per-slot
+  to store. They stay allocated because the alternative is a reflash if a later pass does want
+  them — as staging for a new boot image, or for the previous kernel a failed health check reverts
+  to. 128MiB of card sitting idle. Adding a GRUB stage stays a legitimate fallback if C proves
+  unworkable — reconsider it rather than working around it. See [[sm8650-rocknix-abl-boot]].
+
+- [ ] **Phase 4b pass 2 — RAUC on top of the landed boot path** — branch `feat/phase4b-boot-slots`
+  landed pass 1 (slot state, selection, rollback, both slots populated, `novadeck-bootctl`, health
+  check). Pass 2, in `docs/phase4.md`:
+  1. `PKGS += rauc` + `make relock`. **Measured 2026-07-27: `rauc-1.14-1` IS in the pinned
+     snapshot's `extra` repo** and every dep but `json-glib` is already in `manifest.lock` — so no
+     `packages/rauc/` from-source recipe is needed, which was the largest unknown.
+  2. `/etc/rauc/system.conf`: two slot groups, `bootloader=custom` pointed at `novadeck-bootctl`
+     (its `get-primary`/`set-primary`/`get-state`/`set-state` already implement that contract), and
+     `keyring=/etc/rauc/keyring.pem` installed from the committed `images/rauc/novadeck-ca.pem`.
+  3. Post-install hook: **randomise the target slot's btrfs fsid.** Every `rauc install` writes
+     identical bytes into the inactive slot, so both slots end up sharing an fsid AND `devid=1` —
+     the pair btrfs keys its device list on — and mounting one can hand you the other. `make
+     sdcard` already handles this with `btrfstune -U`; the hook must do the same. Invisible until
+     a slot test starts lying, so it is written down here rather than discovered twice.
+  4. The kernel half of C (`KERNEL.BAK`). **Settle first:** promoting `/KERNEL` at the same time
+     the new root goes on trial makes a bad kernel unrecoverable; NOT promoting it means the trial
+     boot runs the new root under the old kernel, whose `/lib/modules/<oldver>` that root does not
+     carry (2817 modules, and `CFG80211`/`ATH12K` are `=m`, so that boot has no Wi-Fi). Neither is
+     free. Pass 1 deliberately does not prejudge it — the restore is reserved in the state format
+     but not implemented.
+  5. Wire `steamos-update` + the `novadeck-steamos-manager` D-Bus surface. It must own the name on
+     the **deck session bus**, not the system bus, or SteamUI will not see it
+     ([[power-profiles-device-env-stack]]).
+  6. A bundle server (an Oracle Cloud instance is available; nginx over HTTPS is enough — the
+     bundle is signed by the release cert and the device trusts the CA).
 
 - [x] **Phase 4c — bootstrap the root from packages — LANDED + HW-VALIDATED 2026-07-26**
   (design: `docs/phase4.md`; branch `feat/phase4-manifest-rootfs`). The rootfs no

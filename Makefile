@@ -156,7 +156,7 @@ KERNEL_SRC := kernel/SOURCE.pin kernel/embed.list kernel/build.sh \
 # Phony orchestration targets
 # ==============================================================================
 .PHONY: help all image toolchain kernel fw-linux fw-qcom base overlay rootfs manifest relock \
-        initramfs boot sdcard bundle deploy clean clean-base clean-overlay distclean
+        initramfs boot sdcard verify-card bundle deploy clean clean-base clean-overlay distclean
 
 help: ## Show this help
 	@echo "novadeck build — unified image (all SoCs/boards)"
@@ -180,6 +180,12 @@ rootfs:    $(ROOTFS)       ## Assemble the read-only root + var images (in conta
 initramfs: $(INITRAMFS)    ## Build the initramfs that mounts ro-root + /etc overlay (in container)
 boot:      $(BOOTIMG)      ## Package the all-boards boot artifact (in container)
 sdcard:    $(SDCARD)       ## Build the flashable SD-card image (in container)
+
+# Asserts the BUILT card the way guard-rootfs.sh asserts the built tree — the guard stops at the
+# staged tree (it runs before mkfs), so nothing else checks the GPT, the ESP, or the per-slot
+# filesystem identities an A/B switch depends on. Unprivileged: no loop mounts, no root.
+verify-card: $(SDCARD) | $(BUILD_STAMP) ## Verify the built A/B card image (in container)
+	$(INBUILD) images/verify-card.sh
 
 # ==============================================================================
 # Toolchain image

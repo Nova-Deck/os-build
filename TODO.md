@@ -168,11 +168,64 @@ rationale lives in the linked memories and commit history.
   `/var` over it, and *additionally* writes NetworkManager connections into both partsets'
   `…/overlays/etc/upper/NetworkManager/system-connections/`. Port that hook when wiring RAUC.
   See [[stable-mac-first-boot]], [[wifi-connect-fails-after-list]].
-  **NOTE 2026-07-27:** the pass-1 HW test will *demonstrate* this rather than hit it as a surprise.
-  Booting slot B for the first time is EXPECTED to show a fresh `machine-id`, no saved Wi-Fi, a
-  different derived MAC, fresh sshd host keys and an empty journal. Record it; do not debug it.
+  **MEASURED 2026-07-28 — the prediction below did NOT happen, and the reason is a separate bug.**
+  Booting slot B gave the *same* MAC and the same DHCP lease as A. That looks like it refutes this
+  item; it does not. `/etc/machine-id` is supposed to be absent from the image, but the built
+  `rootfs.img` ships a populated one, so it sits in the **shared read-only lower layer** and both
+  slots read an identical value. Fix that (item below) and each slot generates its own id into its
+  own per-slot overlay, and the divergence described above appears exactly as written — so this
+  item is currently *masked*, not disproven, and the fix makes it MORE necessary. Second reason
+  pass 1 could not exercise it: the TEST image injects Wi-Fi into the shared rootfs, not the
+  per-slot `/etc` overlay, so a `NOVADECK_TEST=1` card cannot reproduce "the other slot has no
+  saved Wi-Fi" at all. Validate this hook on a RELEASE image — same trap as the OOBE work.
   `/var/lib/novadeck/mac-wifi` is write-once, so migrating just that file preserves the MAC even
   if `machine-id` diverges.
+
+- [ ] **The image ships a populated `/etc/machine-id`, against its own stated invariant, and
+  nothing asserts it** — found 2026-07-28 during Phase 4b HW validation; NOT a 4b bug.
+  `images/assemble-rootfs.sh` says in as many words that `/etc/machine-id` "must stay absent so
+  systemd runs preset-all on first boot", but `out/images/rootfs.img` contains
+  `def47b5c6d984873ac0b077c16b18341` (33 bytes). No `rm`, no truncate, and it appears in neither
+  `guard-rootfs.sh`, `seal.list` nor `trim.list` — a declaration with no assertion behind it, which
+  is exactly what `docs/phase4.md` step 4 exists to prevent. Two consequences:
+  (a) **per-device MAC uniqueness is broken** — `fs-overlay/usr/lib/novadeck/gen-mac.sh` states
+  "systemd writes a fresh RANDOM id on first boot: unique per device", which is false for this
+  artifact, so every flashed device derives the *same* Wi-Fi MAC and two novadecks on one network
+  collide; (b) **preset-based enablement is silently dead on a fresh flash** — a non-empty
+  machine-id means systemd does not treat it as a first boot, so `preset-all` never runs and the
+  nine `60-novadeck-*.preset` files do not take effect. The device only works because explicit
+  `multi-user.target.wants` symlinks also ship; anything relying on preset alone is off and nobody
+  would notice. Fix = remove it at the end of `assemble-rootfs.sh` **plus a sixth guard assertion**
+  (the removal without the assertion just recreates the same unguarded declaration).
+  *Hypothesis, unconfirmed:* the 4c `pacman -r` bootstrap generates it via systemd's scriptlet —
+  4c deleted the old sanitize step reasoning that "no container filesystem contributes bytes",
+  which is true but does not cover a file the bootstrap itself creates. Confirm before fixing.
+  See [[stable-mac-first-boot]].
+
+- [ ] **`/run/novadeck/boot` reports the post-write `gen` with the pre-write `pending`** — found
+  2026-07-28 on HW. `write_state()` (`images/initramfs/init`) updates `STATE_GEN` but leaves
+  `STATE_ACTIVE`/`STATE_PENDING` alone, and the handoff file is emitted from those same variables,
+  so a rollback boot writes `pending=''` to the ESP while the handoff still says `pending=b`.
+  Diagnostic-only — `novadeck-bootctl` takes `pending` from the ESP and only `slot`/`source` from
+  the handoff, which is why rollback still clears correctly — but the init header calls this file
+  the first evidence to check when debugging a boot offline, and on a rollback boot it reads as "a
+  trial is still armed". Left unfixed through HW validation deliberately (one variable at a time).
+  Fix is ~2 lines: update the shell state after a successful write.
+
+- [ ] **Finish the Phase 4b pass-1 HW matrix — the power-cut test needs a substitute** — passed
+  2026-07-28: offline card verify, regression gate, read-only tools, rollback-without-booting-B,
+  the actual switch, rollback-from-unhealthy, and torn-state rejection on real hardware. Still
+  open: the cmdline **degrade path** (rename `/NOVADECK` on the card, expect `source=cmdline` and a
+  loud DEGRADED line — never run), and **destroy-B** (zero the first 2 MiB of `rootfs-b`, expect
+  the initramfs to fail the mount, clear `pending` and fail over to A; destroys B so it needs a
+  reflash after). **The power-cut test cannot be run on this hardware at all** — a battery device
+  has no interruptible supply and long-press force-off is ~8–10s against a ~1s write window; the
+  SD card's behaviour under abrupt VCC loss is recorded in `docs/phase4.md` as an accepted,
+  untested risk. The tractable substitute, worth building when the image is next rebuilt: a
+  test-gated hook in the init (`novadeck.torntest=1`) that writes half the state fields and then
+  `exit 1`s — init dies, the kernel panics, `panic=5` reboots, and the `umount` durability barrier
+  never runs, reproducing an interrupted write at the exact instant, deterministically and
+  repeatably. Needs no `MAGIC_SYSRQ` (which `kernel/kernel.config` does not declare).
 
 - [ ] **`efi-a`/`efi-b` are unused under design C** — created + formatted vfat, EMPTY, and no longer
   earmarked for per-slot boot images. That was design A. Phase 4b picked design **C**

@@ -12,12 +12,71 @@ rationale lives in the linked memories and commit history.
   install aborted at 40% with `Failed marking slot rootfs.1 as bad` — a message describing our exit
   code, not our state. Fixed in `b04b9c9`; the gap that let it ship is not.
   `images/initramfs/test-slot-state.sh` exercises the initramfs READER only and never executes
-  `novadeck-bootctl` at all, so all four backend subcommands (`get-primary`, `set-primary`,
-  `get-state`, `set-state`) have zero assertions on their **exit statuses** — the part of the
-  contract RAUC actually consumes. Worth noting the failure needed no hardware and no bundle: a
-  dozen lines against a temp-dir ESP would have caught it. The bug was also a shell idiom, not
-  logic (`[ x = y ] && action` as the last statement returns 1 when the test is false), so the
+  `novadeck-bootctl` at all, so **five** backend subcommands (`get-current`, `get-primary`,
+  `set-primary`, `get-state`, `set-state`) have zero assertions on their **exit statuses** — the
+  part of the contract RAUC actually consumes. Worth noting the failure needed no hardware and no
+  bundle: a dozen lines against a temp-dir ESP would have caught it. The bug was also a shell idiom,
+  not logic (`[ x = y ] && action` as the last statement returns 1 when the test is false), so the
   test should assert `rc=0` for every legal call INCLUDING the no-ops, not just check side effects.
+  **The count was wrong when this was written, which is itself the point:** `get-current` was a
+  fifth subcommand we had never implemented at all, and nothing noticed until hardware (fixed on
+  `feat/phase4b-rauc`, `389830f` — see the entry below for what its absence cost). A test enumerating
+  the contract would have flagged a MISSING command as loudly as a broken one.
+  One concrete blocker to writing that test: `BOOTINFO` is a hardcoded constant
+  (`novadeck-bootctl:28`), so a test cannot point the tool at a fake initramfs handoff and must
+  either run against the real `/run/novadeck/boot` or test a `sed`-mangled copy — which is not the
+  artifact that ships. Make it `BOOTINFO=${BOOTINFO:-/run/novadeck/boot}` first; the ESP path is
+  already redirectable via `PARTLABEL` lookup + a temp dir, so that one line is what unblocks the
+  rest.
+
+- [ ] **RAUC arms the new slot BEFORE `post-install.sh` makes it bootable — a ~15s window where
+  the ESP says "boot b" and b cannot boot** — found 2026-07-28 on hardware, from the journal of a
+  successful install. RAUC's order is fixed and not ours to change:
+
+  ```
+  17:55:03  Marked slot rootfs.1 as active        <- set-primary: pending=b tries=1 written HERE
+  17:55:03  Starting post install handler
+  17:55:11    fsid randomised
+  17:55:12    copied /var wholesale
+  17:55:19    kernel rotated to slot b            <- only NOW is b actually bootable
+  ```
+
+  The stale `STATE.1` left on the first test card is that window preserved: `gen=2 active=a
+  pending=b tries=1 kernel=` — "boot b next", recorded while b's `/var` had not been migrated and
+  `/KERNEL` still held a's image. Lose power in there and the next boot targets a slot whose `/var`
+  is at best stale and at worst **freshly `mkfs.ext4`'d and empty** — no
+  `/var/lib/overlays/etc/upper`, which `post-install.sh`'s own comment says means the slot "does not
+  come up" — under a kernel whose `/lib/modules` is the other slot's (CFG80211/ATH12K are `=m`: no
+  Wi-Fi, no serial console, nothing on screen).
+  Not fatal: `tries=1` means one failed boot then rollback, and the rollback path is now
+  HW-validated (2026-07-28). But it spends the safety net on a failure we can simply not create.
+  **Fix is cheap and local to us:** have `post-install.sh` DISARM at entry (write `pending='' tries=0`)
+  and re-arm at exit, after `set-kernel`. Then an interrupted post-install leaves nothing pointing at
+  a half-prepared slot, and the failure mode becomes "install failed, run it again" instead of "one
+  bad boot, hope the rollback fires". Test it by cutting power during the hook — the window is ~15s
+  of a ~6min update, so script the kill rather than racing it by hand.
+
+- [ ] **An interrupted install leaves NO record — a half-written slot still reports `good`** —
+  demonstrated on hardware 2026-07-28 (deliberately, via the tampered-bundle test): a payload byte
+  flip made dm-verity fail 13s into writing slot a, aborting the install partway through the copy.
+  Slot a was then genuinely inconsistent, and both readers disagreed with reality:
+
+  ```
+  novadeck-bootctl get-state a  ->  good
+  rauc status: [rootfs.0] ... boot status: good
+  ```
+
+  This is `set-state <slot> bad` behaving exactly as written: it is a deliberate no-op when the slot
+  is neither active nor pending (`b04b9c9`), and that reasoning is sound as far as it goes — nothing
+  automatic boots such a slot, so the device stays safe. The gap is that RAUC's `bad` marking is
+  *dropped* rather than *recorded*, so nothing can distinguish "never installed" from "install died
+  halfway". `novadeck-bootctl try a` would cheerfully boot it, and its only warning is about kernel
+  mismatch. Note RAUC cannot cover for us here: the journal says `Using per-slot statusfile. System
+  status information not supported!` — raw slots have nowhere for RAUC to keep its own status.
+  Options: a `broken=` key in the ESP state (unknown keys are already preserved verbatim across
+  versions, so this is additive and safe), set on `set-state bad` for any slot and cleared on a
+  successful post-install; then `get-state`, `try` and `status` all consult it. Whatever the shape,
+  the invariant to restore is that a slot RAUC was told is bad does not later answer `good`.
 
 - [ ] **`kernel=` in the ESP slot state goes stale after a kernel rotation** — found 2026-07-28 on
   hardware, immediately after a successful `rauc install`. The post-install hook rotates `/KERNEL`

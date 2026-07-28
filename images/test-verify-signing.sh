@@ -40,9 +40,14 @@ done_() { rm -rf "$SB"; }
 
 # Run the SHIPPED self-test. $1 is the system.conf to test; the seams default to the shipped files
 # unless the case overrode them before calling.
+# The PKI lives outside the repo (see the Makefile's PKIDIR block), so an ambient PKIDIR is
+# honoured and out/pki is only the fallback. Without either, the keyring case announces itself as
+# skipped rather than quietly passing — which is the behaviour one of the cases below asserts.
+PKI="${PKIDIR:-$ROOT/out/pki}"
+
 vs() {
   OUT=$(RELEASE_EXT="${USE_EXT:-$EXT}" KEYRING="${USE_KEYRING:-$ROOT/images/rauc/novadeck-ca.pem}" \
-        PKIDIR="${USE_PKI:-$ROOT/out/pki}" bash "$VS" "$1" 2>&1)
+        PKIDIR="${USE_PKI:-$PKI}" bash "$VS" "$1" 2>&1)
   RC=$?
   USE_EXT=""; USE_KEYRING=""; USE_PKI=""
   return 0
@@ -130,13 +135,13 @@ t "a-keyring-from-an-unrelated-ca-is-caught"
 openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 1 -keyout "$SB/other.key" \
   -out "$SB/other-ca.pem" -subj "/O=novadeck-selftest/CN=someone elses CA" \
   -addext "basicConstraints=critical,CA:TRUE,pathlen:0" >/dev/null 2>&1
-if [ -f "$ROOT/out/pki/release.cert.pem" ]; then
+if [ -f "$PKI/release.cert.pem" ]; then
   USE_KEYRING="$SB/other-ca.pem"
   vs "$CONF"
   expect_rc 1
   expect_has "is NOT the CA behind"
 else
-  ok "skipped: no out/pki in this environment"
+  ok "skipped: no PKI at ${PKI#"$ROOT"/} in this environment"
 fi
 done_
 

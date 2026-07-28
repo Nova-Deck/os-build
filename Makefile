@@ -57,6 +57,32 @@ $(shell mkdir -p work)
 # recipe insert `-e VAR` flags (which must precede the image name) before the image.
 DOCKER   := docker run --rm -v $(CURDIR):/src -w /src
 INBUILD := $(DOCKER) $(BUILD_IMG)
+
+# --- signing material, which lives OUTSIDE the repo ---------------------------
+# The OTA signing PKI is deliberately not under $(CURDIR): out/ is one `rm -rf` away from taking
+# the 20-year root of trust with it, and a device flashed with a keyring whose key is gone rejects
+# every future bundle. So the container cannot see it by default -- only /src is mounted.
+#
+# Set PKIDIR to mount it read-only at /pki for the two targets that need it:
+#
+#   PKIDIR=~/novadeck-pki make bundle          # a real signature
+#   PKIDIR=~/novadeck-pki make test-signing    # incl. the keyring-vs-signing-key check
+#
+# Unset, both keep their previous behaviour exactly: `bundle` mints an ephemeral dev cert and
+# `test-signing` announces the keyring check as skipped. Resolved with $(realpath ...) so a typo --
+# or a tilde the shell did not expand -- fails here, loudly, instead of silently mounting nothing.
+# NEVER answer this by copying private keys back under the repo.
+ifdef PKIDIR
+PKI_REAL := $(realpath $(PKIDIR))
+ifeq ($(PKI_REAL),)
+$(error PKIDIR=$(PKIDIR) does not exist (if it starts with ~, quote it differently: PKIDIR=$$HOME/...))
+endif
+PKI_MOUNT := -v $(PKI_REAL):/pki:ro -e PKIDIR=/pki
+# The filenames ci/gen-signing-ca.sh always mints, so `PKIDIR=... make bundle` is enough on its own.
+# ?= keeps an explicit RAUC_CERT/RAUC_KEY (env or command line) winning over these.
+RAUC_CERT ?= /pki/release.cert.pem
+RAUC_KEY  ?= /pki/release.key.pem
+endif
 # Test-only credential env, forwarded into the rootfs assembler (no-op unless TEST=1).
 TEST_ENV := -e NOVADECK_TEST -e NOVADECK_WIFI_SSID -e NOVADECK_WIFI_PSK -e NOVADECK_SSH_PUBKEY
 
@@ -232,8 +258,8 @@ test: ## Run the offline slot-state + bootctl + post-install suites (host, no bu
 # a negative — it feeds images/rauc/verify-signing.sh a deliberately broken config or cert profile
 # and requires it to go red — because the failure mode of a check is not "it breaks", it is "it
 # stays green while asserting nothing".
-test-signing: $(BUILD_STAMP) ## Prove the RAUC signing self-test still catches what it claims (container)
-	$(INBUILD) images/test-verify-signing.sh
+test-signing: $(BUILD_STAMP) ## Prove the RAUC signing self-test still catches what it claims (container; PKIDIR= adds the keyring check)
+	$(DOCKER) $(PKI_MOUNT) $(BUILD_IMG) images/test-verify-signing.sh
 
 # ==============================================================================
 # Toolchain image
@@ -417,10 +443,12 @@ $(VARIMG_B): $(ROOTFS)
 $(SDCARD): $(BOOTIMG) $(ROOTFS) $(VARIMG) $(VARIMG_B) $(STEAM_SEED) images/make-sdcard.sh | $(BUILD_STAMP)
 	$(INBUILD) images/make-sdcard.sh
 
-# Signed RAUC OTA bundle (Phase 4). Dev builds mint an ephemeral cert; set
-# RAUC_CERT/RAUC_KEY (repo-relative, so they resolve under /src) for a real signature.
-bundle: $(ROOTFS) | $(BUILD_STAMP) ## Build a signed RAUC update bundle (in container)
-	$(DOCKER) -e RAUC_CERT -e RAUC_KEY $(BUILD_IMG) \
+# Signed RAUC OTA bundle (Phase 4). Dev builds mint an ephemeral cert. For a real signature use
+# PKIDIR=~/novadeck-pki (mounts the PKI at /pki and points RAUC_CERT/RAUC_KEY at it), or set
+# RAUC_CERT/RAUC_KEY yourself to paths the CONTAINER can see -- repo-relative ones resolve under
+# /src, anything else needs PKIDIR or a mount of your own.
+bundle: $(ROOTFS) | $(BUILD_STAMP) ## Build a signed RAUC update bundle (in container; PKIDIR= to sign for real)
+	$(DOCKER) $(PKI_MOUNT) -e RAUC_CERT="$(RAUC_CERT)" -e RAUC_KEY="$(RAUC_KEY)" $(BUILD_IMG) \
 	  images/genbundle.sh $(VERSION)
 
 # ==============================================================================

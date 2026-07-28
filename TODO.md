@@ -370,6 +370,39 @@ rationale lives in the linked memories and commit history.
   keeps SSH (a release bundle in slot B trial-boots headless on a board with no serial console). Run
   `rauc info` before `rauc install` to separate version skew from the verity path under test.
 
+- [ ] **Adaptive (delta) bundles — every update writes the whole 7G slot today** — `[image.rootfs]`
+  in `images/rauc/manifest.raucm.in` names `rootfs.img` and nothing else, so `rauc install` streams
+  and writes the entire root image whatever changed in it. On an SD card that is minutes of writes
+  and a full-image download for a one-package bump. rauc 1.15.2 already ships the fix: **adaptive
+  updates** (`adaptive=block-hash-index`, its only supported method — see `docs/advanced.rst`
+  §"Adaptive Updates" in `work/overlay-build/aarch64/rauc/src/rauc-1.15.2`). RAUC indexes the
+  RUNNING slot by block hash and transfers only the blocks that differ.
+  **Why the payoff is large here specifically:** the slot's bulk is the three x86-emulation
+  artifacts pinned inside it by `images/partition-table.txt` — the FEX guest `.ero` plus two arm64
+  Protons, ~2.9G of a ~3.7G image — and those change only when their pins move. An OS-only update
+  should move a few hundred MB instead of 7G.
+  **Fits what we already have, deliberately:** it works for **block devices only**, and both slots
+  are `type=raw` (`fs-overlay/etc/rauc/system.conf`). The bundle still carries the full image, so a
+  slot with no usable index just falls back to a full write — no new failure mode, and no change to
+  the boot path, the trial/rollback contract, or the initramfs.
+  **Preconditions to check before claiming the win:** (1) adaptive needs the bundle *streamed*
+  (HTTP(S)), not installed from a local file — a local `rauc install /path/bundle.raucb` has
+  nothing to save; we have no update server yet, so this is coupled to whatever serves bundles.
+  (2) `post-install.sh` randomises the target's btrfs fsid after the write, so the on-device bytes
+  of a slot diverge from the image that was installed into it — confirm that does not poison the
+  block index against the NEXT update before assuming steady-state deltas stay small.
+  (3) Measure it, don't assume: `docs/advanced.rst` notes install *duration* is often similar to a
+  non-adaptive install even when far less data moves. The download is the win; the write may not be.
+  Raised 2026-07-29 while rejecting Android-style Virtual A/B (single slot + dm-snapshot COW). That
+  was declined on its merits — it reclaims ~7G, needs `dm-user`/`snapuserd` which are **not**
+  upstream (mainline gives us plain uncompressed `dm-snapshot` only), would force
+  `images/initramfs/init` to mount and fsck `/home` before it can assemble a root on a board with
+  no UART, and its merge phase destroys the known-good slot that the whole trial/rollback design
+  depends on. Adaptive bundles are the part of that idea worth having, at config-level cost.
+  See also the slot-sizing note in `images/partition-table.txt` (~2G/slot of `mkfs.btrfs --shrink`
+  block-group padding, 5.7G apparent vs 3.7G real) — a cheaper disk-space win than any of this,
+  and not yet its own item.
+
 - [ ] **Retroid Pocket Nova — board support added 2026-07-27, NOT HW-validated** — SM8550 sibling of
   the Retroid Pocket 6: same `qcs8550-retroidpocket-rp6.dts` base (AYN common dtsi, RSInput gamepad,
   ayn/odin2 ADSP+amp firmware), differing only in the display/touch pair. Its 4.5" panel is an

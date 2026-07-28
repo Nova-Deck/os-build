@@ -186,7 +186,13 @@ write_state() {
   log "state gen=$_next active=$_wa pending='$_wp' tries=$_wt -> STATE.$STATE_SPARE"
   STATE_WON=$STATE_SPARE
   [ "$STATE_WON" = 1 ] && STATE_SPARE=0 || STATE_SPARE=1
+  # ALL of the parsed state advances, not just the generation. These variables are what
+  # /run/novadeck/boot is emitted from, so updating gen alone published a post-write gen next to a
+  # pre-write pending -- a rollback boot read as "a trial is still armed" while the ESP said the
+  # opposite, on exactly the boots that need offline debugging. Anything that must see the
+  # pre-write value has to read it BEFORE calling this.
   STATE_GEN=$_next
+  STATE_ACTIVE=$_wa; STATE_PENDING=$_wp; STATE_TRIES=$_wt
   return 0
 }
 
@@ -222,17 +228,20 @@ fi
 
 # Decide the slot. SOURCE is recorded in /run/novadeck/boot and is the first thing to look at
 # when a boot went somewhere unexpected.
-SLOT=''; SOURCE=cmdline; TRIES_LEFT=$STATE_TRIES
+SLOT=''; SOURCE=cmdline
 if [ "$STATE_WON" = -1 ]; then
   warn "DEGRADED: no valid slot state on the ESP — falling back to the cmdline root="
 elif [ -z "$STATE_PENDING" ]; then
   SLOT=$STATE_ACTIVE; SOURCE=state
 elif [ "$STATE_TRIES" -gt 0 ] && [ "$ESPMODE" = rw ]; then
   # Decrement BEFORE committing to the trial. If the write fails we have no way to count this
-  # attempt, so treat it exactly like a read-only ESP below.
-  if write_state "$STATE_ACTIVE" "$STATE_PENDING" "$((STATE_TRIES - 1))"; then
-    SLOT=$STATE_PENDING; SOURCE=try; TRIES_LEFT=$((STATE_TRIES - 1))
-    log "trying pending slot $SLOT ($TRIES_LEFT tries left after this one)"
+  # attempt, so treat it exactly like a read-only ESP below. Both operands are captured first:
+  # a successful write_state advances STATE_* in place, so reading STATE_TRIES afterwards would
+  # decrement a second time.
+  _trial=$STATE_PENDING; _left=$((STATE_TRIES - 1))
+  if write_state "$STATE_ACTIVE" "$_trial" "$_left"; then
+    SLOT=$_trial; SOURCE=try
+    log "trying pending slot $SLOT ($_left tries left after this one)"
   else
     SLOT=$STATE_ACTIVE; SOURCE=try-nowrite
     warn "DEGRADED: cannot record the attempt — booting active slot $SLOT instead of $STATE_PENDING"
@@ -243,7 +252,7 @@ elif [ "$STATE_TRIES" -gt 0 ]; then
   SLOT=$STATE_ACTIVE; SOURCE=try-noro
   warn "DEGRADED: ESP is read-only, so slot $STATE_PENDING cannot be tried — booting active $SLOT"
 else
-  SLOT=$STATE_ACTIVE; SOURCE=rollback; TRIES_LEFT=0
+  SLOT=$STATE_ACTIVE; SOURCE=rollback
   warn "ROLLBACK: pending slot $STATE_PENDING exhausted its tries — reverting to $SLOT"
   [ -n "$STATE_BAK" ] && warn "ROLLBACK: state records a previous kernel (bak=$STATE_BAK); pass 1 does not restore it"
   [ "$ESPMODE" = rw ] && write_state "$STATE_ACTIVE" '' 0
@@ -301,13 +310,20 @@ log "root $ROOTDEV mounted ro (slot=${SLOT:-?} source=$SOURCE)"
 # Hand the decision to the running system. /run is moved into the new root by switch_root, so
 # this survives the pivot — it is what novadeck-bootctl reads to know which slot it is on, and
 # it is the first evidence to check when debugging a boot offline.
+#
+# INVARIANT: gen/active/pending/tries_left are emitted from the single set of STATE_* variables
+# that write_state() advances, so this file always describes the ESP as it stands at handoff —
+# never a mix of pre- and post-write values. On a boot where the ESP could not be written
+# (esp=ro, esp=none) they describe what was read, which is likewise still what is on the card.
+# `tries_left` is the remaining trial count recorded in that state, i.e. what a NEXT boot would
+# see; on a `source=try` boot this boot's own attempt is already deducted.
 mkdir -p /run/novadeck
 { printf 'slot=%s\n'       "${SLOT:-}"
   printf 'source=%s\n'     "$SOURCE"
   printf 'gen=%s\n'        "$STATE_GEN"
   printf 'active=%s\n'     "$STATE_ACTIVE"
   printf 'pending=%s\n'    "$STATE_PENDING"
-  printf 'tries_left=%s\n' "$TRIES_LEFT"
+  printf 'tries_left=%s\n' "$STATE_TRIES"
   printf 'esp=%s\n'        "$ESPMODE"
   printf 'root=%s\n'       "$ROOTDEV"
 } >/run/novadeck/boot 2>/dev/null || warn "cannot write /run/novadeck/boot"

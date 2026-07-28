@@ -518,15 +518,27 @@ recovery mechanism when you have the card in a reader.
   reboots, and the `umount` durability barrier never runs, reproducing an interrupted write at the
   exact instant, deterministically. That needs no `MAGIC_SYSRQ` (which `kernel/kernel.config` does
   not declare) and is strictly more repeatable than a power yank. Tracked in `TODO.md`.
-- **`/run/novadeck/boot` is internally inconsistent on any boot that rewrites state.** `write_state()`
-  updates `STATE_GEN` but leaves `STATE_ACTIVE`/`STATE_PENDING` at their pre-write values, and the
-  handoff is emitted from those same variables — so a rollback boot reports the new `gen` alongside
-  the *old* `pending`, reading as "a trial is still armed" when the ESP says otherwise. Nothing
-  functional depends on it (`novadeck-bootctl` takes `pending` from the ESP and only `slot`/`source`
-  from the handoff, which is why rollback still clears correctly), but the init header calls this
-  file the first evidence to check when debugging a boot offline, and on the boots that most need
-  debugging it currently misleads. Left unfixed through HW validation on purpose — one variable at
-  a time — and tracked in `TODO.md`.
+- **`/run/novadeck/boot` was internally inconsistent on any boot that rewrites state — FIXED
+  2026-07-28, after HW validation.** `write_state()` updated `STATE_GEN` but left
+  `STATE_ACTIVE`/`STATE_PENDING`/`STATE_TRIES` at their pre-write values, and the handoff is emitted
+  from those same variables — so a rollback boot reported the new `gen` alongside the *old*
+  `pending`, reading as "a trial is still armed" when the ESP said otherwise. Reproduced on the
+  destroy-B failover boot (`gen=10` beside `pending=b`, ESP correctly `pending=<none>`), so it was
+  never rollback-specific: any path that wrote state showed it. Never functional — `novadeck-bootctl`
+  takes `pending` from the ESP and only `slot`/`source` from the handoff — but the init header calls
+  this file the first evidence to check when debugging a boot offline, and it misled on exactly the
+  boots that most need debugging. Held until after HW validation on purpose, one variable at a time.
+
+  The fix advances all four parsed fields on a successful write, so the handoff describes the ESP
+  *as it stands at switch_root*. Two things fell out of it. The try branch had to capture `pending`
+  and the decremented count **before** the call, or it would have decremented twice — the hazard
+  the old code avoided only by never updating those variables. And the standalone `TRIES_LEFT` is
+  gone: it existed to carry a value the state itself now holds, and a second variable tracking the
+  same fact is how the skew got in. On the boots that write nothing (`esp=ro`, `esp=none`) the
+  read values are still what is on the card, so the invariant holds there without a special case.
+  `images/initramfs/test-slot-state.sh` asserts handoff-mirrors-ESP on every write path; reverting
+  the one-line fix fails 6 of its 56 checks, including the exact `pending=b` vs `pending=''` skew
+  that hardware showed.
 
 ---
 

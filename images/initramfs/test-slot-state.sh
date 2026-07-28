@@ -140,7 +140,10 @@ expect_boot() {  # <key> <value>
   [ "$got" = "$2" ] && ok "$1=$2" || bad "$1: expected '$2', got '$got'"
 }
 
-expect_state() {  # <gen> <active> <pending> <tries>  -- reads whichever file has the highest gen
+# Echoes "<gen>|<active>|<pending>|<tries>" of the file with the highest gen. Pipe-delimited, not
+# space-delimited: `pending` is EMPTY on exactly the states this file exists to check, and a
+# whitespace `read` silently shifts every field left of it.
+winning_state() {
   local best=-1 bf="" f g
   for f in "$SB"/esp/NOVADECK/STATE.*; do
     [ -f "$f" ] || continue
@@ -148,12 +151,32 @@ expect_state() {  # <gen> <active> <pending> <tries>  -- reads whichever file ha
     grep -qx end "$f" || continue
     [ "${g:-0}" -gt "$best" ] && { best=$g; bf=$f; }
   done
-  [ -n "$bf" ] || { bad "no valid state file on the ESP"; return; }
-  local a p tr
-  a=$(sed -n 's/^active=//p' "$bf"); p=$(sed -n 's/^pending=//p' "$bf"); tr=$(sed -n 's/^tries=//p' "$bf")
+  [ -n "$bf" ] || return 1
+  printf '%s|%s|%s|%s' "$best" \
+    "$(sed -n 's/^active=//p' "$bf")" "$(sed -n 's/^pending=//p' "$bf")" "$(sed -n 's/^tries=//p' "$bf")"
+}
+
+expect_state() {  # <gen> <active> <pending> <tries>  -- reads whichever file has the highest gen
+  local w; w=$(winning_state) || { bad "no valid state file on the ESP"; return; }
+  local best a p tr; IFS="|" read -r best a p tr <<<"$w"
   [ "$best" = "$1" ] && [ "$a" = "$2" ] && [ "$p" = "$3" ] && [ "$tr" = "$4" ] \
     && ok "state gen=$1 active=$2 pending='$3' tries=$4" \
     || bad "state: expected gen=$1 active=$2 pending='$3' tries=$4, got gen=$best active=$a pending='$p' tries=$tr"
+}
+
+# The handoff must describe the ESP AS IT STANDS at switch_root -- never a post-write `gen` beside
+# a pre-write `pending`, which is what the init published before 2026-07-28. Asserted on every
+# case that reaches a valid state, because the skew only appears on the paths that WRITE, and
+# those are the boots whose offline evidence matters most.
+expect_handoff_matches_state() {
+  local w; w=$(winning_state) || { bad "no valid state file on the ESP"; return; }
+  local best a p tr; IFS="|" read -r best a p tr <<<"$w"
+  local hg ha hp ht f="$SB/run/novadeck/boot"
+  hg=$(sed -n 's/^gen=//p' "$f");     ha=$(sed -n 's/^active=//p' "$f")
+  hp=$(sed -n 's/^pending=//p' "$f"); ht=$(sed -n 's/^tries_left=//p' "$f")
+  [ "$hg" = "$best" ] && [ "$ha" = "$a" ] && [ "$hp" = "$p" ] && [ "$ht" = "$tr" ] \
+    && ok "handoff mirrors the ESP (gen=$best active=$a pending='$p' tries_left=$tr)" \
+    || bad "handoff skew: ESP has gen=$best active=$a pending='$p' tries=$tr, handoff says gen=$hg active=$ha pending='$hp' tries_left=$ht"
 }
 
 expect_kmsg() { grep -qF "$1" "$SB/kmsg" && ok "logged: $1" || bad "not logged: $1"; }
@@ -168,6 +191,7 @@ t "normal-a"
 seed_state 0 1 a '' 0
 run_init
 expect_boot slot a; expect_boot source state; expect_rc 0
+expect_handoff_matches_state
 done_
 
 t "normal-b"
@@ -211,6 +235,8 @@ seed_state 0 5 a b 1
 run_init
 expect_boot slot b; expect_boot source try; expect_boot tries_left 0
 expect_state 6 a b 0
+expect_boot gen 6   # the decrement's generation, not the one it superseded
+expect_handoff_matches_state
 expect_written_to 1
 done_
 
@@ -219,6 +245,9 @@ seed_state 0 6 a b 0
 run_init
 expect_boot slot a; expect_boot source rollback
 expect_state 7 a '' 0
+# The regression this case exists for: gen advanced to 7 while pending stayed 'b' in the handoff.
+expect_boot gen 7; expect_boot pending ''; expect_boot tries_left 0
+expect_handoff_matches_state
 expect_kmsg "ROLLBACK: pending slot b exhausted its tries"
 done_
 
@@ -229,6 +258,7 @@ run_init
 expect_boot slot a; expect_boot source try-noro; expect_boot esp ro
 expect_kmsg "ESP is read-only"
 expect_state 5 a b 1   # untouched: the counter must not silently stay put on a trial
+expect_handoff_matches_state   # nothing was written, so the read values are still the truth
 done_
 
 t "unmountable-pending-slot-fails-over-and-clears-pending"
@@ -238,6 +268,8 @@ run_init
 expect_boot slot a; expect_boot source failover
 expect_kmsg "failing over to slot a"
 expect_state 7 a '' 0   # gen 6 = the try decrement, gen 7 = the failover
+expect_boot gen 7; expect_boot pending ''
+expect_handoff_matches_state   # two writes in one boot; the handoff reflects the LAST one
 done_
 
 t "both-slots-unmountable-panics"

@@ -5,6 +5,31 @@ rationale lives in the linked memories and commit history.
 
 ## Open
 
+- [ ] **`novadeck-bootctl`'s RAUC backend contract has no offline coverage — and that is how a
+  broken one shipped** — found 2026-07-28, the same day it cost the first hardware `rauc install`.
+  `set-state <slot> bad` returned exit 1 for a slot that was neither active nor pending, which is
+  precisely the normal pre-write case (RAUC marks the TARGET slot bad before writing it), so every
+  install aborted at 40% with `Failed marking slot rootfs.1 as bad` — a message describing our exit
+  code, not our state. Fixed in `b04b9c9`; the gap that let it ship is not.
+  `images/initramfs/test-slot-state.sh` exercises the initramfs READER only and never executes
+  `novadeck-bootctl` at all, so all four backend subcommands (`get-primary`, `set-primary`,
+  `get-state`, `set-state`) have zero assertions on their **exit statuses** — the part of the
+  contract RAUC actually consumes. Worth noting the failure needed no hardware and no bundle: a
+  dozen lines against a temp-dir ESP would have caught it. The bug was also a shell idiom, not
+  logic (`[ x = y ] && action` as the last statement returns 1 when the test is false), so the
+  test should assert `rc=0` for every legal call INCLUDING the no-ops, not just check side effects.
+
+- [ ] **`kernel=` in the ESP slot state goes stale after a kernel rotation** — found 2026-07-28 on
+  hardware, immediately after a successful `rauc install`. The post-install hook rotates `/KERNEL`
+  to the newly installed slot's boot image and records the backup via `novadeck-bootctl set-bak`,
+  but nothing updates `kernel=`: the ESP still read `kernel=a` while slot **b**'s kernel was at
+  `/KERNEL`. Harmless *today* — `images/initramfs/init:36` marks the field "reserved (pass 2)" and
+  the rollback path keys off `bak=`, not this — but it is now a field that actively lies, and its
+  name invites the next reader to trust it. Two honest options: have the hook maintain it (pass 2
+  was the pass that was meant to start), or delete it from the format. Do NOT leave it as a
+  declaration with nothing behind it — cf. the `/etc/machine-id` item further down, which is the
+  same failure mode one iteration earlier.
+
 - [ ] **`$(BASE_STAMP)` is not mode-scoped — a test-built base can feed a release build** — found
   2026-07-28 while building a RAUC bundle right after a `NOVADECK_TEST=1 make sdcard`. `MODE_STAMP`
   (`Makefile:69`, `work/.rootfs-mode-$(ROOTFS_MODE)`) exists precisely so flipping `NOVADECK_TEST`
@@ -220,14 +245,22 @@ rationale lives in the linked memories and commit history.
   disturbs the other. **So this hook is a hard prerequisite: without it every OTA update silently
   changes the device's Wi-Fi MAC and breaks any DHCP reservation.**
 
-  **TRAP for whoever writes the hook — do NOT blindly rsync `/var`.** `/var/lib/novadeck/mac-wifi`
-  is **write-once and takes precedence over the seed** (`gen-mac.sh:40-44`), so copying a stale one
-  pins the old address forever regardless of the new machine-id — that is the original machine-id
-  bug relocated, not fixed. Migrating `machine-id` ALONE is the cleaner primitive: the MAC then
-  re-derives correctly on its own, and it is the only file that has to be right. (The earlier
-  advice on this item — "migrating just `mac-wifi` preserves the MAC even if `machine-id` diverges"
-  — is technically true but is the worse half to pick: it leaves the two slots disagreeing about
-  machine-id while agreeing about the MAC, which breaks the invariant that the MAC is *derived*.)
+  **SUPERSEDED 2026-07-28 by `feat/phase4b-rauc` (`077e22a`, `4862460`) — the hook DOES rsync
+  `/var`, with two explicit exclusions.** The advice below was "do NOT blindly rsync `/var`; migrate
+  `machine-id` ALONE", on the grounds that `/var/lib/novadeck/mac-wifi` is write-once and takes
+  precedence over the seed (`gen-mac.sh:40-44`), so copying a stale one pins the old address
+  regardless of the new machine-id. That reasoning only holds when one file is copied WITHOUT the
+  other, which a wholesale copy cannot do — and as a policy it was the wrong shape: a whitelist has
+  to be extended for every new piece of per-device state, and forgetting one fails silently on a
+  device with no serial console. SSH host keys were the next instance (they were baked into the
+  image, so every OTA changed them); there would have been another.
+  What the hook does now: reformat the target `/var`, `rsync -aHAX --numeric-ids --one-file-system`
+  the running one over it, then apply exactly two exclusions, both stated in the script —
+  `/var/lib/novadeck/slot` is rewritten with the TARGET's letter (it is the independent witness
+  `novadeck-bootctl status` cross-checks against), and `/var/lib/novadeck/mac-wifi` is DELETED so
+  the address re-derives from the migrated machine-id. `--one-file-system` is load-bearing: the
+  offload dirs are bind mounts from shared `/home` and must not be copied into a 256M partition.
+  The deletion is what keeps the repair described further down this item working — see it.
 
   Cheap inspection, no reboot needed: `mount -o ro /dev/mmcblk0p7 /run/varb` from the running slot
   and read the other slot's `/var` directly — that is how B's empty overlay was confirmed *before*

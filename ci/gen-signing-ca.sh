@@ -28,12 +28,16 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PKIDIR="${PKIDIR:-$ROOT/out/pki}"
 KEYRING="$ROOT/images/rauc/novadeck-ca.pem"
+RELEASE_EXT="$ROOT/images/rauc/release.ext"   # shared with images/rauc/verify-signing.sh
 
 CA_DAYS="${CA_DAYS:-7300}"        # 20 years: the device's trust root, replaced only by reflash
 REL_DAYS="${REL_DAYS:-800}"       # ~2 years: rotated under the CA without touching devices
 ORG="${ORG:-novadeck}"
 
 command -v openssl >/dev/null 2>&1 || { echo "openssl not found" >&2; exit 1; }
+# An absent or empty profile does not fail openssl loudly enough: it mints a cert with NO
+# extensions, i.e. no CA:FALSE and no EKU, which is the one outcome this file exists to prevent.
+[ -s "$RELEASE_EXT" ] || { echo "missing or empty cert profile: $RELEASE_EXT" >&2; exit 1; }
 
 mkdir -p "$PKIDIR"
 cd "$PKIDIR"
@@ -72,14 +76,9 @@ openssl req -newkey rsa:4096 -nodes -sha256 \
   -keyout release.key.pem -out release.csr.pem \
   -subj "/O=$ORG/CN=$ORG OTA release" >/dev/null 2>&1
 
-# extendedKeyUsage=codeSigning and CA:FALSE are what stop this cert being usable to mint more
-# certs or to terminate TLS if it ever leaks out of CI.
-cat >release.ext <<'EOF'
-basicConstraints=critical,CA:FALSE
-keyUsage=critical,digitalSignature
-extendedKeyUsage=critical,codeSigning
-EOF
-
+# The cert profile lives in images/rauc/release.ext and is read, not restated: this script MINTS
+# the release cert and images/rauc/verify-signing.sh proves the shipped system.conf accepts one, so
+# a copy in either place is a profile that can drift out from under the other.
 # index.txt/serial are kept so a CRL can be issued later against this same CA. `openssl ca`
 # needs them to exist; creating them now avoids having to reconstruct the CA's issuance state
 # at the moment you actually need to revoke something.
@@ -87,10 +86,10 @@ EOF
 echo 01 >serial
 
 openssl x509 -req -in release.csr.pem -CA ca.cert.pem -CAkey ca.key.pem \
-  -CAcreateserial -days "$REL_DAYS" -sha256 -extfile release.ext \
+  -CAcreateserial -days "$REL_DAYS" -sha256 -extfile "$RELEASE_EXT" \
   -out release.cert.pem >/dev/null 2>&1
 
-rm -f release.csr.pem release.ext
+rm -f release.csr.pem
 
 chmod 0600 ca.key.pem release.key.pem
 chmod 0644 ca.cert.pem release.cert.pem

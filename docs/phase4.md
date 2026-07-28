@@ -492,6 +492,7 @@ recovery mechanism when you have the card in a reader.
 | trial-boot confirmation | `novadeck-boot-good.{path,service}`, marker from `novadeck-session` |
 | dm-verity, declared vfat/loop | `kernel/kernel.config`, asserted in `kernel/build.sh` |
 | signing CA; only the CA cert is committed | `ci/gen-signing-ca.sh`, `images/rauc/novadeck-ca.pem` |
+| release cert profile, defined once and read by both the CA script and the self-test | `images/rauc/release.ext` |
 
 ### Pass 2 — RAUC (core install path IMPLEMENTED, not yet HW-validated)
 

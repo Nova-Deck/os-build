@@ -824,8 +824,39 @@ rationale lives in the linked memories and commit history.
   6. A bundle server (an Oracle Cloud instance is available; nginx over HTTPS is enough — the
      bundle is signed by the release cert and the device trusts the CA).
 
-- [ ] **`verify-signing.sh` hand-copies the release cert's extensions from `ci/gen-signing-ca.sh`**
-  — STILL OPEN as of 2026-07-28. `5d6c447` (`feat/phase4b-rauc`, since merged to `main`) added
+- [x] **`verify-signing.sh` hand-copies the release cert's extensions from `ci/gen-signing-ca.sh`
+  — FIXED 2026-07-29 by option 1 (factor the profile into a file both read), plus the two holes
+  found while doing it.** The profile now lives in `images/rauc/release.ext`, read by
+  `ci/gen-signing-ca.sh` and `images/rauc/verify-signing.sh` alike: there is no second copy left to
+  drift, so the failure this item describes is gone by construction rather than by an assertion.
+  Option 2 (shell out to the CA script) was rejected for the reason recorded below — it mints a
+  real 4096-bit CA and refuses to overwrite an existing one. Option 3 (assert the shipped cert's
+  EKU) is in as well, in the stronger form: **`verify-signing.sh` now asserts the profile actually
+  LANDED on the cert it minted.** That hole was not in the original item and is worse than the one
+  that was: `openssl x509 -req` with an empty or unparseable `-extfile` mints a cert with NO
+  extensions and reports success, and an EKU-less cert satisfies RAUC's DEFAULT `smimesign`
+  purpose — so a truncated profile could have taken the whole self-test green while it asserted
+  nothing. Also closed: the "still manual" note below. When `out/pki` exists, `openssl verify
+  -CAfile` now proves the committed `images/rauc/novadeck-ca.pem` is the CA behind
+  `release.cert.pem`; when it does not (CI), the run says `skip ... NOT checked` rather than
+  passing silently. Nothing else in the repo can see that mistake, and it ships a device that
+  rejects every bundle we can ever sign, curable only by reflash.
+  **`images/test-verify-signing.sh`, 26 checks, `make test-signing`** (container-only — it signs
+  real bundles, so it needs rauc; the other three suites stay host-side). **Every case is a
+  negative**: the check-purpose regression that actually shipped, a wrong `check-purpose`, a
+  `bundle-formats` that disagrees with the manifest template, an empty profile, a profile without
+  `codeSigning`, a missing profile, an unrelated keyring, an absent PKI, plus a structural case
+  asserting neither script has grown a second copy of the extensions again. A self-test that cannot
+  be made to fail is indistinguishable from one that always passes.
+  Mutation-tested like the post-install suite: deleting the profile-landed assertion (2 checks),
+  the keyring/PKI check (2), or re-adding a hand-copied EKU (1) each turns it red. One nuance worth
+  keeping: with the profile assertion removed, an empty profile still fails — but the message
+  blames `system.conf` for rejecting a codeSigning cert, which is the misdiagnosis that would send
+  someone to widen `check-purpose`. The assertion converts a misleading red into a correct one, and
+  is a true green-when-broken only if `check-purpose` is missing too.
+  `ci/gen-signing-ca.sh` was verified end-to-end against a scratch tree — never the repo, since it
+  installs the keyring — and mints `CA:FALSE + digitalSignature + codeSigning` from the shared file.
+  ORIGINAL ITEM, kept for the reasoning: `5d6c447` (`feat/phase4b-rauc`, since merged to `main`) added
   `images/rauc/verify-signing.sh`, which signs a throwaway bundle and verifies it through the
   shipped `/etc/rauc/system.conf`. It catches the real bug it was written for (a `codeSigning`
   EKU against RAUC's default `smimesign` purpose rejects every bundle), but it mints its own

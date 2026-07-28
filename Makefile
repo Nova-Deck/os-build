@@ -227,6 +227,14 @@ test: ## Run the offline slot-state + bootctl + post-install suites (host, no bu
 	bash images/test-bootctl.sh
 	bash images/test-post-install.sh
 
+# The fourth suite, separate because it is the one that CANNOT run on the host: it signs real
+# bundles and verifies them through the shipped system.conf, so it needs rauc. Every case in it is
+# a negative — it feeds images/rauc/verify-signing.sh a deliberately broken config or cert profile
+# and requires it to go red — because the failure mode of a check is not "it breaks", it is "it
+# stays green while asserting nothing".
+test-signing: $(BUILD_STAMP) ## Prove the RAUC signing self-test still catches what it claims (container)
+	$(INBUILD) images/test-verify-signing.sh
+
 # ==============================================================================
 # Toolchain image
 # ==============================================================================

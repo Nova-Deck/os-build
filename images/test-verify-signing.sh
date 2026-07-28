@@ -126,30 +126,53 @@ expect_rc 1
 expect_has "no cert profile"
 done_
 
-echo "== the keyring against the local PKI =="
+echo "== the committed pair, and the key behind it =="
 
 t "a-keyring-from-an-unrelated-ca-is-caught"
 # The one thing the rest of the file cannot see, because it mints both ends of everything else: a
-# committed keyring whose private key we do not have ships a device that rejects every bundle we
-# can ever sign, curable only by reflash.
+# committed keyring that did not sign the committed release cert ships a device that rejects every
+# bundle we can ever sign, curable only by reflash. Both files are public, so this needs no secret
+# and runs on every CI push — which is the whole reason release.cert.pem is committed.
 openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 1 -keyout "$SB/other.key" \
   -out "$SB/other-ca.pem" -subj "/O=novadeck-selftest/CN=someone elses CA" \
   -addext "basicConstraints=critical,CA:TRUE,pathlen:0" >/dev/null 2>&1
-if [ -f "$PKI/release.cert.pem" ]; then
-  USE_KEYRING="$SB/other-ca.pem"
-  vs "$CONF"
-  expect_rc 1
-  expect_has "is NOT the CA behind"
-else
-  ok "skipped: no PKI at ${PKI#"$ROOT"/} in this environment"
-fi
+USE_KEYRING="$SB/other-ca.pem"
+vs "$CONF"
+expect_rc 1
+expect_has "is NOT the CA behind"
 done_
 
-t "a-missing-pki-is-announced-not-silently-skipped"
+t "a-signing-key-that-does-not-match-the-committed-cert-is-caught"
+# The CI failure mode, where the key arrives through a secret store and the cert through git: a
+# stale or truncated secret produces bundles no device accepts, and nothing downstream says why.
+mkdir -p "$SB/pki"
+openssl genrsa -out "$SB/pki/release.key.pem" 2048 >/dev/null 2>&1
+USE_PKI="$SB/pki"
+vs "$CONF"
+expect_rc 1
+expect_has "does not match"
+expect_not "-----BEGIN"          # a key check must never print key material
+done_
+
+t "a-missing-signing-key-is-announced-not-silently-skipped"
+# The normal CI shape: no private key, so the public half still runs and the private half says so.
 USE_PKI="$SB/no-such-pki"
 vs "$CONF"
 expect_rc 0
-expect_has "keyring/signing-key agreement NOT checked"
+expect_has "key/cert agreement NOT checked"
+expect_has "committed keyring is the CA behind"
+done_
+
+t "the-real-signing-key-matches-the-committed-cert"
+# Only reachable where the PKI is mounted (PKIDIR=... make test-signing). This is what would catch
+# a release cert committed from a different ci/gen-signing-ca.sh run than the key CI signs with.
+if [ -f "$PKI/release.key.pem" ]; then
+  vs "$CONF"
+  expect_rc 0
+  expect_has "signing key matches"
+else
+  ok "no signing key here — correctly not asserted (this is the CI shape)"
+fi
 done_
 
 echo "== the profile has exactly one definition =="
@@ -171,6 +194,21 @@ for f in "$CA" "$VS"; do
 done
 grep -q '^extendedKeyUsage=critical,codeSigning' "$EXT" \
   && ok "the profile itself still says codeSigning" || bad "images/rauc/release.ext lost its EKU"
+done_
+
+t "no-private-key-is-committed-under-images-rauc"
+# .gitignore blanket-excludes *.pem with exactly two negations, both public certificates. This is
+# what polices that exception: widening a rule whose job is "no key material in git" has to be
+# enforced by something other than care. Scans what is actually THERE, so a third negation added
+# for a file that turns out to hold a key fails here.
+for f in "$ROOT"/images/rauc/*.pem; do
+  [ -f "$f" ] || continue
+  if grep -q 'PRIVATE KEY' "$f"; then
+    bad "${f#"$ROOT"/} contains PRIVATE KEY -- it must never be committed"
+  else
+    ok "${f#"$ROOT"/} is public material only"
+  fi
+done
 done_
 
 echo

@@ -22,10 +22,13 @@
 #     `bundle-formats=` accepts. Both files say they must agree; nothing checked that they did.
 #   - a signature from an UNRELATED CA is rejected. Without this a permissive keyring -- or a
 #     verification step that silently no-ops -- would pass every assertion above.
-#   - that images/rauc/novadeck-ca.pem is the CA that signed out/pki/release.cert.pem, WHEN that
-#     directory exists. It is gitignored and absent in CI, so this half announces itself as skipped
-#     rather than passing silently: a keyring committed from a CA whose key you no longer have is
-#     a device that will reject every future bundle, and nothing else in the repo would notice.
+#   - that images/rauc/novadeck-ca.pem is the CA behind images/rauc/release.cert.pem. Both are
+#     committed and both are public, so this half needs NO private key and runs everywhere,
+#     including on every CI push. A keyring committed from a CA that did not sign the release cert
+#     is a device that will reject every future bundle, and nothing else in the repo would notice.
+#   - that the signing KEY matches that committed cert, when a PKIDIR holding one is present.
+#     Compared as public-key digests, so nothing secret is ever printed. Announces itself as
+#     skipped rather than passing silently when the key is absent, which is the normal CI case.
 #
 # THIS IS NOT EVIDENCE ABOUT THE DEVICE. It runs the BUILD CONTAINER's rauc against the shipped
 # config; the device runs its own (packages/rauc). Both are on the same fixed line today, but they
@@ -46,6 +49,7 @@ TEMPLATE="$ROOT/images/rauc/manifest.raucm.in"
 # Test seams, as novadeck-bootctl and post-install.sh document their own. RELEASE_EXT is THE cert
 # profile, shared with ci/gen-signing-ca.sh so neither can drift; PKIDIR matches that script's.
 RELEASE_EXT="${RELEASE_EXT:-$ROOT/images/rauc/release.ext}"
+RELEASE_CERT="${RELEASE_CERT:-$ROOT/images/rauc/release.cert.pem}"
 KEYRING="${KEYRING:-$ROOT/images/rauc/novadeck-ca.pem}"
 PKIDIR="${PKIDIR:-$ROOT/out/pki}"
 
@@ -148,15 +152,33 @@ echo "  ok    unrelated CA rejected"
 # whose key we no longer have. That mistake ships a device which rejects every bundle we will ever
 # sign, and the only cure is a reflash. Skipped loudly rather than silently in CI, where the key is
 # absent by design: a check that quietly does nothing is the thing this whole file argues against.
-if [ -f "$PKIDIR/release.cert.pem" ] && [ -f "$KEYRING" ]; then
-  if openssl verify -CAfile "$KEYRING" "$PKIDIR/release.cert.pem" >/dev/null 2>&1; then
-    echo "  ok    committed keyring signed ${PKIDIR#"$ROOT"/}/release.cert.pem"
+if [ -f "$RELEASE_CERT" ] && [ -f "$KEYRING" ]; then
+  if openssl verify -CAfile "$KEYRING" "$RELEASE_CERT" >/dev/null 2>&1; then
+    echo "  ok    committed keyring is the CA behind ${RELEASE_CERT#"$ROOT"/}"
   else
-    echo "  FAIL  ${KEYRING#"$ROOT"/} is NOT the CA behind ${PKIDIR#"$ROOT"/}/release.cert.pem" >&2
+    echo "  FAIL  ${KEYRING#"$ROOT"/} is NOT the CA behind ${RELEASE_CERT#"$ROOT"/}" >&2
     echo "        a device flashed with this keyring would reject every bundle you can sign." >&2
-    echo "        re-run ci/gen-signing-ca.sh, or commit the keyring that matches your PKI." >&2
+    echo "        commit the keyring and release cert from the SAME ci/gen-signing-ca.sh run." >&2
     exit 1
   fi
 else
-  echo "  skip  no local PKI at ${PKIDIR#"$ROOT"/} — keyring/signing-key agreement NOT checked"
+  echo "  skip  no committed release cert — keyring/cert agreement NOT checked"
+fi
+
+# The private half, which is the only part that needs the PKI. Compared as PUBLIC-key digests: the
+# secret never leaves the file, nothing sensitive is printed, and a truncated or stale secret --
+# the CI failure mode, where the key arrives through a secret store and the cert through git --
+# fails here rather than by producing a bundle no device accepts.
+if [ -f "$PKIDIR/release.key.pem" ] && [ -f "$RELEASE_CERT" ]; then
+  key_pub="$(openssl pkey -in "$PKIDIR/release.key.pem" -pubout 2>/dev/null | openssl sha256)"
+  crt_pub="$(openssl x509 -in "$RELEASE_CERT" -pubkey -noout 2>/dev/null | openssl sha256)"
+  if [ -n "$key_pub" ] && [ "$key_pub" = "$crt_pub" ]; then
+    echo "  ok    signing key matches ${RELEASE_CERT#"$ROOT"/}"
+  else
+    echo "  FAIL  the signing key in ${PKIDIR}/release.key.pem does not match ${RELEASE_CERT#"$ROOT"/}" >&2
+    echo "        bundles signed with it would be rejected by every device trusting the keyring." >&2
+    exit 1
+  fi
+else
+  echo "  skip  no signing key at ${PKIDIR}/release.key.pem — key/cert agreement NOT checked"
 fi

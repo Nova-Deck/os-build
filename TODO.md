@@ -377,6 +377,44 @@ rationale lives in the linked memories and commit history.
   `images/rauc/novadeck-ca.pem` matches the key in `out/pki` — verified by hand as of `5d6c447`,
   still manual.
 
+- [ ] **Build `packages/rauc/` at v1.15.2 — the pinned snapshot's `rauc 1.14-1` CANNOT install a
+  verity bundle on our kernel** — DECIDED 2026-07-28, HW-proven the same day. `rauc install` fails
+  at 30%:
+
+      Failed mounting bundle: Unexpected dm-verity status 'V -' (instead of '\0')
+
+  Not our bug and nothing novadeck-specific. Kernel commit `ae97648e14f7` extended dm-verity's
+  `STATUSTYPE_INFO` with a trailing FEC corrected-block count, emitted UNCONDITIONALLY —
+  `drivers/md/dm-verity-target.c:849` in our 7.1.5 tree prints `" %lld"` with FEC on and `" -"`
+  with it off. So `V -` means *verified, FEC disabled*: the integrity check PASSED and rauc
+  rejected the status string. `rauc < 1.15.1` does a strict full-string compare (`src/dm.c:242`
+  at v1.14). Upstream fix is `a45cdb14` "src/dm: fix compatibility with new dm-verity output in
+  since v6.19-rc1" (+ refactor `a40986fe`), upstream issue #1842, by RAUC's own maintainer —
+  splits on spaces and checks only the first field. **First released in v1.15.1**; not in v1.14
+  or v1.15. Enabling `CONFIG_DM_VERITY_FEC` does NOT help: it emits `V 0`, equally unequal.
+
+  Decision: build `packages/rauc/` from the upstream **v1.15.2** release through the existing
+  overlay pipeline (a clean version bump, NOT a hand-written patch — that distinction is why this
+  path was chosen over editing the parse ourselves), then `make relock` → rootfs → fresh card.
+  This reintroduces the from-source recipe that pass 2 had avoided; `[novadeck]` precedes the
+  snapshot in repo order, so the overlay build is the supported way to outrank `rauc 1.14-1`.
+  Keeps `bundle-formats=verity` as designed — do NOT fall back to `plain` in the shipped config.
+
+  Two results worth keeping from the HW run:
+  - **the failure is SAFE.** rauc aborted before writing: slot B's fsid was unchanged
+    (`0dfb7b2e…` before and after), `dmsetup ls` showed no leftover devices, and slot state was
+    untouched (`gen=1 active=a pending=<none>`). A broken bundle format cannot strand the device.
+  - **`check-purpose=codesign` is HW-CONFIRMED** (branch `feat/phase4b-rauc`, `5d6c447`, unmerged).
+    On-device `rauc info` against the real `/etc/rauc/system.conf` + `/etc/rauc/keyring.pem`:
+    `Verified inline signature by 'O = novadeck, CN = novadeck OTA release'`. That fix is correct
+    and independent of this one.
+
+  **Blind spot this exposed, worth fixing alongside:** `images/rauc/verify-signing.sh` runs the
+  BUILD CONTAINER's rauc, which is 1.15.1 — already fixed — while the device runs 1.14. The
+  offline self-test therefore validated the config against a different binary than the one that
+  ships, and could never have caught this. Once `packages/rauc/` exists the two converge; until
+  then, an offline pass is not evidence about the device.
+
 - [x] **Phase 4c — bootstrap the root from packages — LANDED + HW-VALIDATED 2026-07-26**
   (design: `docs/phase4.md`; branch `feat/phase4-manifest-rootfs`). The rootfs no
   longer ORIGINATES as `docker export` of a vendor image: it is `pacman -r <empty-dir>` against the

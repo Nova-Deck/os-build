@@ -5,8 +5,29 @@ rationale lives in the linked memories and commit history.
 
 ## Open
 
-- [ ] **`novadeck-bootctl`'s RAUC backend contract has no offline coverage — and that is how a
-  broken one shipped** — found 2026-07-28, the same day it cost the first hardware `rauc install`.
+- [ ] **The ROLLBACK half of A/B has still never fired on hardware** — every trial boot we have ever
+  run, including the three on 2026-07-28, SUCCEEDED and was promoted. `tries` reaching zero, the
+  init falling back to the other slot, and `KERNEL.BAK` being restored are offline-verified only.
+  Two things make this harder to test than it looks, both learned 2026-07-28:
+  1. **A half-written slot is not an unbootable slot.** The tamper test aborted an install into a at
+     67%, yet a still mounted and booted cleanly — the bundle and the flashed image are the same
+     build, so the bytes that landed were nearly identical to the ones they replaced. Corrupting a
+     payload byte is enough to test *verity*; it is not enough to test *rollback*.
+  2. **"Just don't run `mark-good`" does not work either.** `novadeck-boot-good.path`/`.service`
+     confirms the trial automatically once a session comes up and stays up, so a trial that boots at
+     all is promoted with no operator action.
+  So a real test needs a slot that genuinely cannot boot — e.g. zeroing the target's btrfs
+  superblocks (primary at 64K, copy at 64M) before `try`, or masking `novadeck-boot-good` and
+  forcing a hang before session start. **Risk to price in first:** this board has no UART
+  ([[sm8650-no-uart]]), so if the fallback does NOT fire the device is dark and recovery means
+  pulling the SD card and repairing `/efi/NOVADECK/STATE.*` on the host. Do it with the card
+  physically accessible, and with a known-good slot on the other side. Recovery from a deliberately
+  broken slot is otherwise cheap: boot the good slot and `rauc install` into the broken one.
+
+- [x] **`novadeck-bootctl`'s RAUC backend contract has no offline coverage — FIXED 2026-07-28**,
+  **HW-CONFIRMED 2026-07-28**: a full OTA install of a release-signed TEST bundle logged
+  `Marking target slot rootfs.1 as non-bootable (bad)... Marked slot rootfs.1 as bad` at `19:44:21`
+  and proceeded — the exact call that aborted the first hardware install at 40%. Originally: **and that is how a broken one shipped** — found 2026-07-28, the same day it cost the first hardware `rauc install`.
   `set-state <slot> bad` returned exit 1 for a slot that was neither active nor pending, which is
   precisely the normal pre-write case (RAUC marks the TARGET slot bad before writing it), so every
   install aborted at 40% with `Failed marking slot rootfs.1 as bad` — a message describing our exit
@@ -28,9 +49,35 @@ rationale lives in the linked memories and commit history.
   artifact that ships. Make it `BOOTINFO=${BOOTINFO:-/run/novadeck/boot}` first; the ESP path is
   already redirectable via `PARTLABEL` lookup + a temp dir, so that one line is what unblocks the
   rest.
+  **Resolution: `images/test-bootctl.sh`, 101 checks, and it executes the SHIPPED tool** — not a
+  copy and not a `sed`-mangled variant, so what it asserts is the artifact that ships. The seam is
+  three lines (`BOOTINFO`/`ESP_AUTO`/`ESP_MANUAL` became `${VAR:-default}`), documented as a test
+  seam at the top of the tool; `ESP_AUTO` was worth taking too, because pointing it at a sandbox
+  keeps the test on the gpt-auto path the device actually uses instead of the findfs fallback
+  nothing normally reaches. `id` and `mountpoint` are stubbed on `PATH`; nothing else is faked.
+  What it asserts, in the order the failure taught us to care about:
+  - **Exit status on every legal call, no-ops included** — `backend-exits-0-on-every-legal-call`
+    walks all ten (`get-current`, `get-primary`, `get-state a|b`, `set-primary a|b`,
+    `set-state a|b good|bad`) from a pristine state each time, because the bug was a sequence-
+    independent shell idiom and a side-effect assertion could not have seen it.
+  - **Completeness** — `backend-is-complete` enumerates the five subcommands `system.conf`'s
+    contract requires and fails if the tool does not dispatch one. A MISSING command now fails as
+    loudly as a broken one, which is the `get-current` lesson.
+  - The rest: values (`get-current` off the handoff and not the cmdline, and non-zero on a
+    degraded boot), the `broken=` semantics below, format preservation including unknown keys, and
+    rejection paths.
+  **`make test` now runs both suites** (210 checks; `test-slot-state.sh` is at 109, up from 100).
+  Host-side and needing no build, container, root or device — the previous absence of any target
+  that ran them is a large part of why the gap survived. Two of the new cases failed on their first
+  run against correct code: both had marked the ACTIVE slot bad, which the tool deliberately
+  refuses. That is the enumeration doing its job — the reachable path to `broken=ab` is genuinely
+  narrower than it looks, and the test now documents it.
 
-- [ ] **RAUC arms the new slot BEFORE `post-install.sh` makes it bootable — a ~15s window where
-  the ESP says "boot b" and b cannot boot** — found 2026-07-28 on hardware, from the journal of a
+- [x] **RAUC arms the new slot BEFORE `post-install.sh` makes it bootable — FIXED 2026-07-28**,
+  **HW-CONFIRMED 2026-07-28**: RAUC marked b active at `19:49:47`, the hook logged
+  `disarmed slot b for the duration of the install` in the same second and
+  `slot b re-armed for a trial boot` at `19:50:07` — the 20s of "armed but no /var, wrong kernel"
+  is covered end to end, and the following reboot booted b successfully. Was: **a ~15s window where the ESP says "boot b" and b cannot boot** — found 2026-07-28 on hardware, from the journal of a
   successful install. RAUC's order is fixed and not ours to change:
 
   ```
@@ -55,8 +102,38 @@ rationale lives in the linked memories and commit history.
   a half-prepared slot, and the failure mode becomes "install failed, run it again" instead of "one
   bad boot, hope the rollback fires". Test it by cutting power during the hook — the window is ~15s
   of a ~6min update, so script the kill rather than racing it by hand.
+  **Resolution: exactly the cheap local fix above.** `post-install.sh` gained a step 0 (disarm) and
+  a step 4 (re-arm), and the header's "order is load-bearing" list now runs 0–4. The disarm reuses
+  `novadeck-bootctl rollback` rather than inventing a synonym — clearing `pending` and zeroing
+  `tries` *is* rollback, and it already exits 0 as a no-op when nothing is armed. The re-arm is two
+  statements after `set-kernel`, both fatal on failure: `set-state <target> good` (clears the
+  pre-write `broken` mark — see the item below, and note this is the only place that knows the
+  install completed) then `set-primary <target>`.
+  Offline-verified as a SEQUENCE, which is what this needed: `a-completed-install-ends-armed-and-
+  unmarked` drives RAUC's real order (mark bad → write → set-primary → hook) and asserts the end
+  state is `pending=b tries=1 broken='' kernel=b`; `a-power-cut-inside-the-hook-leaves-nothing-
+  armed` stops after the disarm and asserts `get-primary` answers the RUNNING slot with
+  `pending=''`. **Still worth the HW power-cut test**, and it is now a cheaper one: the assertion
+  is "the ESP never names the target while the target is not bootable", so any kill point inside
+  the hook should show the same thing.
 
-- [ ] **An interrupted install leaves NO record — a half-written slot still reports `good`** —
+- [x] **An interrupted install leaves NO record — a half-written slot still reports `good` —
+  FIXED 2026-07-28**, **HW-CONFIRMED 2026-07-28** by re-running the tamper test: one payload byte
+  flipped at offset 2000000000 (signature still valid, verity catches it at read time) killed the
+  install at 67% with `Failed to copy data: ... Input/output error`, and the ESP state gained
+  `broken=a` in a new `gen=10` buffer. `get-state a` now answers `bad` (it answered `good` before
+  the fix), `rauc status` prints `boot status: bad`, and `bootctl status` warns. **The
+  survives-a-trial-boot trap is HW-cleared too**: `try a` warned-but-armed (`tries=1`), the trial
+  boot decremented to `tries=0` at `gen=12`, and `broken=a` came through intact and was published
+  in the `/run/novadeck/boot` handoff — a naive marker would have been erased by that one write.
+  **STILL OPEN, found by the same run — a promotion does not clear the marker.** The trial boot of
+  a *succeeded* (its content is largely the same image, so a half-written slot still mounted and
+  booted), `novadeck-boot-good.service` auto-confirmed it, and the result was `active=a` **and**
+  `broken=a` simultaneously: the running, promoted slot reporting `bad`. That is precisely the
+  contradiction the design rule below forbids ("a slot we are running is demonstrably bootable").
+  `set-state good` is specified to clear the marker unconditionally, but the promotion path never
+  calls it — only a successful *install* does. Fix is one of: have `mark-good` clear `broken=` for
+  the slot it promotes, or have the init clear it for the slot it successfully booted. Originally:
   demonstrated on hardware 2026-07-28 (deliberately, via the tampered-bundle test): a payload byte
   flip made dm-verity fail 13s into writing slot a, aborting the install partway through the copy.
   Slot a was then genuinely inconsistent, and both readers disagreed with reality:
@@ -77,13 +154,43 @@ rationale lives in the linked memories and commit history.
   versions, so this is additive and safe), set on `set-state bad` for any slot and cleared on a
   successful post-install; then `get-state`, `try` and `status` all consult it. Whatever the shape,
   the invariant to restore is that a slot RAUC was told is bad does not later answer `good`.
+  **Resolution: the `broken=` key, as sketched.** It holds the SET of marked slots ('', 'a', 'b',
+  'ab') in canonical order, not a single letter: `ab` is reachable (a failed install into b, then
+  `try b` + `mark-good` promoting it, then an install into a that dies) and a single letter would
+  erase the first mark on the second write. `set-state bad` records it for any slot except the
+  ACTIVE one — a slot we are running is demonstrably bootable, and marking it would make
+  `get-state` contradict the fact that it answered at all. `set-state good` clears it
+  unconditionally, deliberately NOT only when the slot is pending: the hook disarms while it works,
+  so the completed slot is neither active nor pending at the moment the mark must come off.
+  Consumers: `get-state` answers `bad`, `status` prints the field and warns per slot, `try` warns
+  but still arms — refusing would let the one recorded fact about a half-installed slot disable the
+  only recovery path, and the trial counter already bounds the risk.
+  **The trap this nearly walked into, and the reason it is a named field rather than a new key:**
+  `images/initramfs/init`'s `write_state` emits a FIXED field list, so it DESTROYS any key it does
+  not name — and it writes on every trial boot, to decrement `tries`. A `broken` marker would have
+  survived exactly one boot. "Unknown keys are ignored, never rejected" is a property of the init's
+  READER and has never been one of its writer, though the header comment reads as if it covered
+  both (`novadeck-bootctl` really does preserve them, via `S_EXTRA`). So `broken=` is parsed,
+  carried and emitted by the init as a first-class field, published in the `/run/novadeck/boot`
+  handoff, seeded empty by `make-sdcard.sh` and asserted empty-and-present by `verify-card.sh`.
+  `test-slot-state.sh` covers the carry on a decrement, on a rollback, for both letters, and in
+  the handoff. A malformed value is NORMALISED rather than rejected — a bookkeeping field must
+  never invalidate the state the device boots from.
+  **Left open deliberately:** the init's writer still drops genuinely unknown keys, so the next
+  field added to this format has the same trap waiting. Making `write_state` preserve them needs a
+  builtin-only passthrough (no `cat`/`sed` in the initramfs, cf. `images/mkinitramfs.sh`) and is
+  not free; it is worth doing before a third field, not as part of this.
 
 - [x] **`kernel=` in the ESP slot state goes stale after a kernel rotation — FIXED 2026-07-28** on
   `feat/phase4b-rauc`, offline-verified; **partially HW-confirmed** the same day — the device's
   shipped `/usr/lib/rauc/post-install.sh:184` calls `set-kernel`, the install at `18:28:38`
   completed through it, and the resulting handoff reads `kernel=a` for a booted slot a, consistent.
-  What is still NOT HW-exercised is the field CHANGING letter across a rotation observed end to end;
-  the last install was a same-slot repair. `get-current` is separately HW-confirmed: it answers `a`
+  **The letter change IS now HW-exercised (2026-07-28)**: an install from a booted slot a into b
+  logged `/KERNEL is now slot b's boot image (previous kept as KERNEL.BAK)`, `/efi` held `KERNEL`
+  and `KERNEL.BAK` at 30109696 bytes each, and the state read `kernel=b` across the rotation and the
+  trial boot. `novadeck-bootctl try a` then correctly warned `/KERNEL is slot b's boot image -- slot
+  a will boot with /lib/modules from a different build`, and the init logged the matching
+  `DEGRADED:` line on the boot that followed. Originally NOT exercised, when `get-current` is separately HW-confirmed: it answers `a`
   and `rauc status` reads `Booted from: rootfs.0 (a)`. Found on hardware immediately after a
   successful `rauc install`. The post-install hook rotates `/KERNEL`
   to the newly installed slot's boot image and records the backup via `novadeck-bootctl set-bak`,
@@ -124,22 +231,42 @@ rationale lives in the linked memories and commit history.
   missing backup, read-only ESP, and mismatch/match/unrecorded. It still does not execute
   `novadeck-bootctl` — that gap is the item above, unchanged by this.
 
-- [ ] **`$(BASE_STAMP)` is not mode-scoped — a test-built base can feed a release build** — found
-  2026-07-28 while building a RAUC bundle right after a `NOVADECK_TEST=1 make sdcard`. `MODE_STAMP`
+- [x] **`$(BASE_STAMP)` was not mode-scoped — a test-built base could feed a release build — FIXED
+  2026-07-28** — found the same day, building a RAUC bundle right after a
+  `NOVADECK_TEST=1 make sdcard`. `MODE_STAMP`
   (`Makefile:69`, `work/.rootfs-mode-$(ROOTFS_MODE)`) exists precisely so flipping `NOVADECK_TEST`
   rebuilds the **rootfs** — its comment records the boot cycle that cost on 2026-07-09. `$(BASE_STAMP)`
-  (`Makefile:106`, rule at `263`) has no equivalent: every prerequisite is a file, none encodes the
-  mode, so a base carrying `TEST_PKGS` looks up-to-date to a release build. `customize-base.sh` is
-  *already* mode-aware (line 234 adds `TEST_PKGS`, line 282 folds mode into the reuse key) — make
+  (`Makefile:127`, rule at `305`) had no equivalent: every prerequisite was a file, none encoded the
+  mode, so a base carrying `TEST_PKGS` looked up-to-date to a release build. `customize-base.sh` is
+  *already* mode-aware (`242` adds `TEST_PKGS`, `306` folds mode into the reuse key) — make
   simply never invokes it, so that logic is unreachable in the exact case it was written for.
   **Caught, but only in one direction:** the release guard failed with `only in tree: evtest-1.36-1 /
   usbutils-019-1` against `manifest.lock`, so nothing shipped. The reverse — a release base feeding a
   TEST card — has NO check, because `guard-rootfs.sh` is release-only (`assemble-rootfs.sh:771`), and
   that is the direction that produced the 2026-07-09 boot cycle: a release root in a test-built card,
-  no Wi-Fi, no SSH, no error anywhere. Fix is one line in kind: scope the stamp per mode
-  (`work/.base-$(ROOTFS_MODE).stamp`) so the two modes keep separate stamps, exactly as the rootfs
-  already does. Note the fix costs a full base rebuild on every mode flip — which is the correct
-  price, and is what `make relock` already pays deliberately (`rm -f $(BASE_STAMP)`).
+  no Wi-Fi, no SSH, no error anywhere.
+  **The one-line fix written here was wrong, and shipping it would have kept the bug in the direction
+  with no guard.** Renaming the stamp per mode (`work/.base-$(ROOTFS_MODE).stamp`) works for the
+  rootfs because each mode has its own *artifact*; the base has one shared tree at `work/base`. Two
+  stamps against one tree means a `.base-test.stamp` left behind by an earlier test build still looks
+  satisfied after a release build has since overwritten that tree — the same stale-base bug, now
+  arrived at through the stamp meant to prevent it.
+  Shipped instead: a **prerequisite** stamp. `$(BASE_MODE_STAMP)` (`work/.base-mode-$(ROOTFS_MODE)`)
+  is a prerequisite of `$(BASE_STAMP)`, and its rule `rm -f work/.base-mode-*` before touching, so
+  exactly one marker exists and it always names the mode `work/base` was last built in. A flip
+  re-creates it newer than `$(BASE_STAMP)`, `customize-base.sh` re-runs, and its own reuse key
+  (`test:1`) makes that a real rebuild rather than a short-circuit. One stamp per artifact, one
+  marker per mode.
+  The stamp is also no longer trusted on its own: the recipe now asserts the *built tree* is in the
+  requested mode (`test:1` present in `work/base/usr/lib/novadeck/pkgs` iff `ROOTFS_MODE=test`) and
+  fails with `base tree is a <got> build, this is a <want> build (stale work/base)`. That closes the
+  direction `guard-rootfs.sh` never covered. `relock` and `clean-base` drop the marker along with
+  the stamp — the first leaves a RESOLVE tree that is in no mode, the second leaves no tree at all.
+  Verified offline both ways with `make -n -o work/repo/aarch64/.overlay.stamp base` (the overlay
+  rule otherwise always cascades under `-n`): same mode + fresh stamp is `Nothing to be done`, a
+  flipped mode re-runs `customize-base.sh`. The assertion was exercised against the live test tree
+  in both modes. The flip costs a full base rebuild — the correct price, and what `make relock`
+  already pays deliberately.
 
 - [x] **rauc 1.15.2 as an INSTALLER — HW-VALIDATED 2026-07-28** — `packages/rauc` (`8304bc6`) builds
   1.15.2 from source solely because the snapshot's 1.14 cannot install a dm-verity bundle on
@@ -513,6 +640,14 @@ rationale lives in the linked memories and commit history.
   (makes kernel/module coherence true by construction, and needs no RAUC handler-environment
   variable), and the `/var` migration copies **`machine-id` alone** rather than rsyncing `/var`
   (copying the write-once `mac-wifi` would relocate the machine-id bug rather than fix it).
+  **This paragraph is STALE as of the 2026-07-28 HW run — the shipped hook does something else.**
+  It logs `copied /var wholesale (14M, offload bind mounts skipped)`, and slot b was confirmed to
+  receive `powerd.state` and a rewritten `slot` but **not** `mac-wifi`. The outcome is still right:
+  `machine-id` rides across in the `/etc` overlay upper (`/var/lib/overlays/etc/upper/machine-id`),
+  both slots read `7070e56b…`, both derive `66:53:fc:41:2d:f7`, and the device kept the same IP
+  across an install + slot switch. `mac-wifi` being absent is harmless — `gen-mac.sh:40` treats it
+  as a cache and re-derives identically. Reword this to describe the wholesale copy, or change the
+  hook to match the wording; right now the doc and the code disagree.
   Also corrected while implementing: `btrfs-progs` was **not** on the device at all, so step 3's
   `btrfstune` had nothing to run — it is now in `PKGS` alongside `rauc`. Pass 2, in `docs/phase4.md`:
   1. `PKGS += rauc` + `make relock`. **Measured 2026-07-27: `rauc-1.14-1` IS in the pinned

@@ -118,7 +118,7 @@ build_init() {
   n=$(grep -c 'mount -t proc' "$dst"); [ "$n" = 1 ] || { echo "FATAL: pseudo-fs mounts changed" >&2; exit 2; }
 }
 
-seed_state() {  # <file-index> <gen> <active> <pending> <tries> [bak] [kernel]
+seed_state() {  # <file-index> <gen> <active> <pending> <tries> [bak] [kernel] [broken]
   cat >"$SB/esp/NOVADECK/STATE.$1" <<EOF
 gen=$2
 active=$3
@@ -126,6 +126,7 @@ pending=$4
 tries=$5
 kernel=${7:-}
 bak=${6:-}
+broken=${8:-}
 end
 EOF
 }
@@ -144,6 +145,7 @@ expect_field() {
 }
 expect_bak()    { expect_field bak "$1"; }
 expect_kernel() { expect_field kernel "$1"; }
+expect_broken() { expect_field broken "$1"; }
 
 run_init() {
   ( cd "$SB" && PATH="$SB/bin:$PATH" sh "$SB/init" >"$SB/stdout" 2>"$SB/stderr" )
@@ -462,6 +464,52 @@ run_init
 expect_boot slot b; expect_boot source try
 expect_state 6 a b 0
 expect_kernel b
+done_
+
+echo "== broken= is carried, not dropped =="
+
+# This writer emits a FIXED field list, and it writes on EVERY trial boot to decrement `tries`. A
+# `broken` marker set by novadeck-bootctl's RAUC backend would therefore survive exactly one boot
+# if the field were left to the "unknown keys are ignored" rule -- and that rule is a property of
+# the READER here, never of the writer. The marker's whole purpose is to outlive the failure that
+# set it, so this is the assertion that makes it real.
+t "a-trial-boot-decrement-preserves-broken"
+seed_state 0 5 a b 1 '' '' b
+run_init
+expect_boot slot b; expect_boot source try
+expect_state 6 a b 0
+expect_broken b
+done_
+
+t "a-rollback-preserves-broken"
+# The rollback path assigns STATE_KERNEL/STATE_BAK before writing; `broken` must ride through that
+# write untouched -- the slot being rolled back away from is precisely the one under suspicion.
+seed_state 0 7 a b 0 '' '' b
+run_init
+expect_boot slot a
+expect_broken b
+done_
+
+t "both-slots-marked-broken-survive-a-write"
+seed_state 0 3 a b 1 '' '' ab
+run_init
+expect_broken ab
+done_
+
+t "an-empty-broken-stays-empty"
+# The common case, and the one that would show a stray default leaking in.
+seed_state 0 2 a '' 0
+run_init
+expect_broken ''
+done_
+
+t "the-handoff-publishes-broken"
+# /run/novadeck/boot is the whole offline debugging surface on a no-UART device, and
+# novadeck-bootctl reads it. A marker the ESP holds but the handoff omits is one that nothing on
+# the running system can see.
+seed_state 0 4 a '' 0 '' '' b
+run_init
+expect_boot broken b
 done_
 
 echo

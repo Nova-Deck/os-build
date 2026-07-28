@@ -170,6 +170,7 @@ pending=
 tries=0
 kernel=
 bak=
+broken=
 end
 EOF
 mmd -i "$esp" ::/NOVADECK

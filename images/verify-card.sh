@@ -107,6 +107,17 @@ if mtype -i "$IMG@@$espoff" ::/NOVADECK/STATE.0 >"$T/state" 2>/dev/null && [ -s 
   # the ordinary `try b` slot test warn about a kernel/modules mismatch that does not exist.
   kern=$(sed -n 's/^kernel=//p' "$T/state")
   [ -z "$kern" ] || bad "a fresh card must not claim a /KERNEL owner, got kernel='$kern'"
+  # `broken=` must be PRESENT and EMPTY. Present because the initramfs writer emits a fixed field
+  # list and a card seeded without it would gain the line on the first write anyway — seeding it
+  # keeps the card and the writer describing the same format. Empty because nothing has installed
+  # anything yet: a letter here would make `get-state` report bad for a slot straight off the build.
+  if grep -q '^broken=' "$T/state"; then
+    brk=$(sed -n 's/^broken=//p' "$T/state")
+    [ -z "$brk" ] && ok "broken= seeded empty" \
+                  || bad "a fresh card must not mark a slot broken, got broken='$brk'"
+  else
+    bad "STATE.0 has no broken= line — the seed and images/initramfs/init disagree about the format"
+  fi
 else
   bad "no readable ::/NOVADECK/STATE.0 — every boot would fall back to the cmdline root="
 fi

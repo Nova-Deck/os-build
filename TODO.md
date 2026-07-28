@@ -251,18 +251,25 @@ rationale lives in the linked memories and commit history.
   bricked boot, not a cosmetic slip. See [[stable-mac-first-boot]], [[sm8650-firstboot-hang]],
   [[declared-invariants-need-assertions]].
 
-- [ ] **`/run/novadeck/boot` reports the post-write `gen` with the pre-write `pending`** — found
-  2026-07-28 on HW. `write_state()` (`images/initramfs/init`) updates `STATE_GEN` but leaves
-  `STATE_ACTIVE`/`STATE_PENDING` alone, and the handoff file is emitted from those same variables,
-  so a rollback boot writes `pending=''` to the ESP while the handoff still says `pending=b`.
-  Diagnostic-only — `novadeck-bootctl` takes `pending` from the ESP and only `slot`/`source` from
-  the handoff, which is why rollback still clears correctly — but the init header calls this file
-  the first evidence to check when debugging a boot offline, and on a rollback boot it reads as "a
-  trial is still armed". Left unfixed through HW validation deliberately (one variable at a time).
-  Fix is ~2 lines: update the shell state after a successful write.
-  **REPRODUCED on the destroy-B failover boot 2026-07-28** — handoff read `gen=10` (post-write)
-  alongside `pending=b` (pre-write) while the ESP correctly held `pending=<none>`. So it is not
-  rollback-specific: any path that writes state after parsing shows it. Still diagnostic-only.
+- [x] **`/run/novadeck/boot` reported the post-write `gen` with the pre-write `pending` — FIXED
+  2026-07-28** on `feat/phase4b-boot-slots` (unmerged). `write_state()` (`images/initramfs/init`)
+  updated `STATE_GEN` but left `STATE_ACTIVE`/`STATE_PENDING`/`STATE_TRIES` alone, and the handoff
+  is emitted from those same variables, so a rollback boot wrote `pending=''` to the ESP while the
+  handoff still said `pending=b`. REPRODUCED on the destroy-B failover boot (handoff `gen=10` with
+  `pending=b`, ESP `pending=<none>`), so it was never rollback-specific: any path that wrote state
+  showed it. Diagnostic-only — `novadeck-bootctl` takes `pending` from the ESP and only
+  `slot`/`source` from the handoff — but the init header calls this file the first evidence to
+  check when debugging a boot offline, and on a no-UART device that is most of the debugging
+  surface. Held until after pass-1 HW validation deliberately (one variable at a time).
+  **Fix:** `write_state()` advances all four parsed fields on success, so the handoff describes the
+  ESP as it stands at `switch_root`. The try branch now captures `pending` and the decremented
+  count BEFORE the call (otherwise it decrements twice — the hazard the old code avoided only by
+  never updating those variables), and the redundant `TRIES_LEFT` is gone. On boots that write
+  nothing (`esp=ro`, `esp=none`) the parsed values are still what is on the card, so the invariant
+  needs no special case. `images/initramfs/test-slot-state.sh` asserts handoff-mirrors-ESP on every
+  write path (56 checks, all passing); reverting the one-line fix fails 6 of them, including the
+  exact skew hardware showed. No HW re-test needed — the changed values are diagnostic output only,
+  and the decision table they accompany is unchanged and covered offline.
 
 - [x] **Phase 4b pass-1 HW matrix — COMPLETE 2026-07-28, except the power-cut test (WON'T-DO)** —
   passed: offline card verify, regression gate, read-only tools, rollback-without-booting-B, the

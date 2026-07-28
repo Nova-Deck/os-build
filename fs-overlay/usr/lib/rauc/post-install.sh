@@ -120,12 +120,24 @@ mkdir -p "$upper" "$MNT/lib/overlays/etc/work" "$MNT/lib/novadeck"
 # deliberately after the wholesale copy that would otherwise clobber it.
 printf '%s\n' "$target" >"$MNT/lib/novadeck/slot"
 
-# NOT excluded, and this reverses an earlier decision worth stating: /var/lib/novadeck/mac-wifi.
-# The old whitelist called it a trap -- write-once, and takes precedence over the machine-id-derived
-# seed, so copying it "pins the old MAC forever regardless of machine-id". That only bites if the
-# seed and machine-id can disagree, which required copying one without the other. A full copy takes
-# both, they agree by construction, and the MAC stays stable across the update -- which was the
-# actual requirement all along. Copying it is now the correct behaviour, not the hazard.
+# THE SECOND THING THE COPY MUST NOT KEEP: /var/lib/novadeck/mac-wifi, the write-once record of
+# this device's derived Wi-Fi MAC. Deleted so the target re-derives it from the machine-id that the
+# copy above just carried over (gen-mac.sh: sha256(machine-id)).
+#
+# On a healthy device this is a no-op in effect -- same machine-id in, same MAC out, so the address
+# is stable across the update, which is the requirement. It matters for the devices where it is NOT
+# a no-op: a unit flashed before the MAC-collision fix has a COLLIDING address persisted here, and
+# because the file is write-once and outranks the derivation, that unit keeps the bad MAC forever.
+# TODO.md on main is explicit that the hook "must clear it rather than copying it across slots, or
+# the bad address propagates to the new slot" -- an OTA is the one moment we can repair those units,
+# and copying the file would be the last chance silently missed.
+#
+# Note this is NOT the reason post-install.sh's old whitelist gave for avoiding a full copy. That
+# reason (the seed outranks machine-id, so copying it pins the old MAC "regardless of machine-id")
+# only bites when one is copied without the other, which a wholesale copy cannot do. The collision
+# repair is the real constraint, and it is satisfied by one explicit deletion rather than by
+# hand-picking the entire partition.
+rm -f "$MNT/lib/novadeck/mac-wifi"
 
 # The independent slot witness make-sdcard.sh writes, so `novadeck-bootctl status` can still
 # cross-check the initramfs's choice against a filesystem that carries its own letter.

@@ -360,6 +360,23 @@ rationale lives in the linked memories and commit history.
   6. A bundle server (an Oracle Cloud instance is available; nginx over HTTPS is enough — the
      bundle is signed by the release cert and the device trusts the CA).
 
+- [ ] **`verify-signing.sh` hand-copies the release cert's extensions from `ci/gen-signing-ca.sh`**
+  — fixed-on-a-branch context: `feat/phase4b-rauc` (UNMERGED, commit `5d6c447`) added
+  `images/rauc/verify-signing.sh`, which signs a throwaway bundle and verifies it through the
+  shipped `/etc/rauc/system.conf`. It catches the real bug it was written for (a `codeSigning`
+  EKU against RAUC's default `smimesign` purpose rejects every bundle), but it mints its own
+  cert with `basicConstraints`/`keyUsage`/`extendedKeyUsage` **copied by hand** from
+  `release.ext` in `ci/gen-signing-ca.sh`. If those drift apart the test keeps passing for a
+  cert profile we no longer ship — a green check asserting the wrong thing, which is worse than
+  no check. It mints its own rather than reusing `out/pki` deliberately: that key is gitignored
+  and absent in CI. Options, none free: factor `release.ext` into a file both scripts read;
+  have the self-test shell out to `ci/gen-signing-ca.sh` with `PKIDIR` pointed at a temp dir
+  (mints a real 4096-bit CA, slower, and that script refuses to overwrite an existing CA); or
+  assert the shipped cert's EKU with `openssl x509 -noout -ext extendedKeyUsage` when
+  `out/pki` happens to exist. Related: the self-test also does NOT check that
+  `images/rauc/novadeck-ca.pem` matches the key in `out/pki` — verified by hand as of `5d6c447`,
+  still manual.
+
 - [x] **Phase 4c — bootstrap the root from packages — LANDED + HW-VALIDATED 2026-07-26**
   (design: `docs/phase4.md`; branch `feat/phase4-manifest-rootfs`). The rootfs no
   longer ORIGINATES as `docker export` of a vendor image: it is `pacman -r <empty-dir>` against the

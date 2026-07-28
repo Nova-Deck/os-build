@@ -149,6 +149,43 @@ rationale lives in the linked memories and commit history.
   refuses. That is the enumeration doing its job — the reachable path to `broken=ab` is genuinely
   narrower than it looks, and the test now documents it.
 
+- [x] **`post-install.sh` — the most destructive program we ship — had no offline coverage either.
+  FIXED 2026-07-29: `images/test-post-install.sh`, 107 checks, executing the SHIPPED hook.**
+  `test-bootctl.sh` asserts the calls the hook MAKES and never the hook itself, so until now every
+  claim in its header was verified by reading it. That is precisely the shape that let the broken
+  `set-state <slot> bad` ship. The hook runs `mkfs.ext4` and `btrfstune -f -U` against a partition
+  it chooses itself, from two sources that disagree by design (our initramfs handoff vs RAUC's
+  exported `RAUC_TARGET_SLOTS`), and a wrong choice reformats the RUNNING slot's `/var`.
+  **`make test` now runs three suites, 354 checks** (`test-slot-state.sh` 132, `test-bootctl.sh`
+  115, `test-post-install.sh` 107) — still host-side, no build, no container, no root, no device.
+  **What it asserts is ORDER, because that is what the hook's header claims and what is expensive to
+  check by eye.** Every stub appends to one call log: the fsid is randomised before anything mounts
+  the target (step 1 exists because until then the two roots share an fsid AND `devid=1`, so a mount
+  of one can hand you the other), the slot is disarmed before the work and re-armed only after
+  `set-kernel`, the target `/var` is unmounted before the target root is mounted, and the slot
+  witness is written AFTER the wholesale copy that would otherwise clobber it. Also covered: the
+  target choice and all four ways of refusing it, the two exclusions (`slot` rewritten to the
+  target's letter, `mac-wifi` deleted) against actual bytes, that the saved Wi-Fi and SSH host keys
+  ride across (the brick-class item further down), `/KERNEL` rotation including `bak=''` when there
+  is nothing to back up, and — one case per failure point — that a hook that dies mid-run leaves
+  **nothing armed**, which is the entire justification for the disarm.
+  **Six test seams added to the hook** (`ESP`, `MNT`, `BOOTINFO`, `VAR`, `DEVDIR`, `DEVTEST`),
+  documented at its head exactly as `novadeck-bootctl`'s three are. `DEVTEST` is the one assertion
+  the sandbox gives up: an unprivileged test has no block device to offer, so `-b` relaxes to `-e`.
+  Stubbed on `PATH`: only the commands that would touch real storage (`mount`, `umount`,
+  `mkfs.ext4`, `btrfstune`, `rsync`) plus `id`/`mountpoint`. `novadeck-bootctl` is the shipped tool
+  behind a shim, so the suite exercises hook and backend as one program.
+  **It was mutation-tested rather than trusted for passing.** Nine deliberate breakages, all caught:
+  targeting the booted slot (43 checks), taking the kernel from the running root (39), dropping the
+  disarm (13), dropping the fsid randomisation (14), skipping the reformat (8), copying the witness
+  verbatim (1), keeping `mac-wifi` (1), dropping `--one-file-system` (1), and never clearing
+  `broken` (2). A suite that passes first try against correct code has proven nothing yet.
+  **What it deliberately cannot cover, so a green run is not read as more than it is:** whether the
+  new fsid actually stops the kernel aliasing the two roots, whether real `rsync --one-file-system`
+  skips our offload bind mounts, and whether 256M holds the copy. A stub can only prove we ask for
+  the right things in the right order. Those three need the device, and the RELEASE-image OTA run is
+  still the gate — see the `/var` item below.
+
 - [x] **RAUC arms the new slot BEFORE `post-install.sh` makes it bootable — FIXED 2026-07-28**,
   **HW-CONFIRMED 2026-07-28**: RAUC marked b active at `19:49:47`, the hook logged
   `disarmed slot b for the duration of the install` in the same second and

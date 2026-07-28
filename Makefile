@@ -213,12 +213,19 @@ verify-card: $(SDCARD) | $(BUILD_STAMP) ## Verify the built A/B card image (in c
 # until now there was no target that did. That absence is not academic: the RAUC backend had no
 # offline coverage at all, and a broken one reached hardware and aborted a real install.
 #
-# HOST-SIDE ON PURPOSE, unlike everything else here. Both scripts execute the shipped artifacts
-# (images/initramfs/init and fs-overlay/usr/bin/novadeck-bootctl) against a sandbox; putting them
-# in the container would test the same files through an extra layer that can only add failure modes.
-test: ## Run the offline slot-state + bootctl suites (host, no build needed)
+# HOST-SIDE ON PURPOSE, unlike everything else here. All three scripts execute the shipped artifacts
+# (images/initramfs/init, fs-overlay/usr/bin/novadeck-bootctl and fs-overlay/usr/lib/rauc/
+# post-install.sh) against a sandbox; putting them in the container would test the same files
+# through an extra layer that can only add failure modes.
+#
+# The three cover the update path end to end, each from the side the others cannot see: the
+# initramfs READS the slot state, novadeck-bootctl WRITES it, and the post-install hook DRIVES both
+# while reformatting a partition. None of them needs root — the hook suite stubs the commands that
+# would touch real storage.
+test: ## Run the offline slot-state + bootctl + post-install suites (host, no build needed)
 	bash images/initramfs/test-slot-state.sh
 	bash images/test-bootctl.sh
+	bash images/test-post-install.sh
 
 # ==============================================================================
 # Toolchain image

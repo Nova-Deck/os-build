@@ -31,16 +31,31 @@ PROG=${0##*/}
 log()  { printf '[%s] %s\n' "$PROG" "$1"; }
 die()  { printf '[%s] ERROR: %s\n' "$PROG" "$1" >&2; exit 1; }
 
-ESP=/efi                      # systemd gpt-auto automount; touching it is what triggers the mount
 KERNEL_IN_ROOT=usr/lib/novadeck/boot.img
-MNT=/run/novadeck/rauc-target
+
+# These six are the TEST SEAM, and the only reason they are parameters at all. The offline suite
+# (images/test-post-install.sh) executes THIS file -- not a copy -- so what it asserts is the
+# artifact that ships; overriding them points it at a sandbox ESP, a sandbox /var and fake slot
+# devices. Same arrangement novadeck-bootctl already documents at its own head. Nothing here is
+# otherwise conditional on being under test, and the defaults are what every real invocation uses:
+# RAUC sets none of these, and neither does the unit that spawns it.
+#
+# DEVTEST is the one assertion the sandbox cannot keep: an unprivileged test has no block devices
+# to offer, so it relaxes -b to -e. Everything a wrong answer here would destroy lives behind
+# DEVDIR, so treat both as the pair they are.
+ESP=${ESP:-/efi}              # systemd gpt-auto automount; touching it is what triggers the mount
+MNT=${MNT:-/run/novadeck/rauc-target}
+BOOTINFO=${BOOTINFO:-/run/novadeck/boot}
+VAR=${VAR:-/var}
+DEVDIR=${DEVDIR:-/dev/disk/by-partlabel}
+DEVTEST=${DEVTEST:--b}
 
 # --- which slot did we just write? ------------------------------------------------------------
 # RAUC exports the target slot(s), but this must not DEPEND on that: the whole update is worthless
 # if we touch the wrong slot, and we have our own authoritative answer -- the slot this system
 # booted, from the initramfs handoff. The target is simply the other one. RAUC's value is used only
 # to cross-check, and a disagreement is fatal rather than resolved by preference.
-booted=$(sed -n 's/^slot=//p' /run/novadeck/boot 2>/dev/null || true)
+booted=$(sed -n 's/^slot=//p' "$BOOTINFO" 2>/dev/null || true)
 case "$booted" in
   a) target=b ;;
   b) target=a ;;
@@ -60,11 +75,13 @@ if [ -n "${RAUC_TARGET_SLOTS:-}" ]; then
 fi
 
 case "$target" in
-  a) dev_root=/dev/disk/by-partlabel/novadeck-root-A; dev_var=/dev/disk/by-partlabel/novadeck-var-A ;;
-  b) dev_root=/dev/disk/by-partlabel/novadeck-root-B; dev_var=/dev/disk/by-partlabel/novadeck-var-B ;;
+  a) dev_root=$DEVDIR/novadeck-root-A; dev_var=$DEVDIR/novadeck-var-A ;;
+  b) dev_root=$DEVDIR/novadeck-root-B; dev_var=$DEVDIR/novadeck-var-B ;;
 esac
-[ -b "$dev_root" ] || die "no block device at $dev_root"
-[ -b "$dev_var" ]  || die "no block device at $dev_var"
+# shellcheck disable=SC2086  # DEVTEST is a predicate, not a path
+[ $DEVTEST "$dev_root" ] || die "no block device at $dev_root"
+# shellcheck disable=SC2086
+[ $DEVTEST "$dev_var" ]  || die "no block device at $dev_var"
 log "target slot $target ($dev_root)"
 
 # --- 0. DISARM ----------------------------------------------------------------------------------
@@ -130,9 +147,9 @@ trap 'umount "$MNT" 2>/dev/null || true' EXIT
 # special handling: systemd creates a .mount unit's target directory if it is missing.
 #
 # Source is `/var/` with the trailing slash: copy the CONTENTS of /var into $MNT, not a /var/var.
-rsync -aHAX --numeric-ids --one-file-system /var/ "$MNT/" \
+rsync -aHAX --numeric-ids --one-file-system "$VAR/" "$MNT/" \
   || die "cannot copy /var to the target slot"
-log "copied /var wholesale ($(du -sh -x /var 2>/dev/null | cut -f1), offload bind mounts skipped)"
+log "copied /var wholesale ($(du -sh -x "$VAR" 2>/dev/null | cut -f1), offload bind mounts skipped)"
 
 # The overlay dirs must exist before the target boots -- the initramfs mounts /etc from them, so a
 # slot missing them does not come up. They are copied from the running /var above; this is a guard

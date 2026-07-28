@@ -260,21 +260,46 @@ rationale lives in the linked memories and commit history.
   the first evidence to check when debugging a boot offline, and on a rollback boot it reads as "a
   trial is still armed". Left unfixed through HW validation deliberately (one variable at a time).
   Fix is ~2 lines: update the shell state after a successful write.
+  **REPRODUCED on the destroy-B failover boot 2026-07-28** — handoff read `gen=10` (post-write)
+  alongside `pending=b` (pre-write) while the ESP correctly held `pending=<none>`. So it is not
+  rollback-specific: any path that writes state after parsing shows it. Still diagnostic-only.
 
-- [ ] **Finish the Phase 4b pass-1 HW matrix — the power-cut test needs a substitute** — passed
-  2026-07-28: offline card verify, regression gate, read-only tools, rollback-without-booting-B,
-  the actual switch, rollback-from-unhealthy, and torn-state rejection on real hardware. Still
-  open: the cmdline **degrade path** (rename `/NOVADECK` on the card, expect `source=cmdline` and a
-  loud DEGRADED line — never run), and **destroy-B** (zero the first 2 MiB of `rootfs-b`, expect
-  the initramfs to fail the mount, clear `pending` and fail over to A; destroys B so it needs a
-  reflash after). **The power-cut test cannot be run on this hardware at all** — a battery device
-  has no interruptible supply and long-press force-off is ~8–10s against a ~1s write window; the
-  SD card's behaviour under abrupt VCC loss is recorded in `docs/phase4.md` as an accepted,
-  untested risk. The tractable substitute, worth building when the image is next rebuilt: a
-  test-gated hook in the init (`novadeck.torntest=1`) that writes half the state fields and then
-  `exit 1`s — init dies, the kernel panics, `panic=5` reboots, and the `umount` durability barrier
-  never runs, reproducing an interrupted write at the exact instant, deterministically and
-  repeatably. Needs no `MAGIC_SYSRQ` (which `kernel/kernel.config` does not declare).
+- [x] **Phase 4b pass-1 HW matrix — COMPLETE 2026-07-28, except the power-cut test (WON'T-DO)** —
+  passed: offline card verify, regression gate, read-only tools, rollback-without-booting-B, the
+  actual switch, rollback-from-unhealthy, and torn-state rejection. The last two ran 2026-07-28:
+
+  **cmdline degrade — PASSED.** `/NOVADECK` renamed away on the ESP: `source=cmdline`, `slot=?`,
+  booted the baked `root=PARTLABEL=novadeck-root-A`, and `DEGRADED: no valid slot state on the ESP`
+  at user.err (`<11>`) in kmsg. State dir restored afterwards, `gen=7 active=a pending=<none>`
+  unchanged. **It also surfaced a real defect — fixed in `0f3ac84` on `feat/phase4b-boot-slots`:**
+  `novadeck-boot-good` fired and failed every 30s for the whole uptime (4 starts in 165s), because
+  the `.path` guarded on `ConditionPathExists=/run/novadeck/boot` while asserting in a comment that
+  a degraded boot writes no such file — false, `images/initramfs/init` writes the handoff on every
+  path including the one that resolves no slot. `mark-good` then died in `state_require` (exit 1 →
+  `failed` → the level-triggered path re-arms). Now settled before `state_require`, returning 0
+  when the handoff names no slot; exit 0 is load-bearing, since `RemainAfterExit=yes` is what stops
+  the re-arm. Same commit closed a second hole in that function: the pending-vs-booted guard was
+  `[ -n "$bs" ] && …`, so an EMPTY booted-slot skipped the check and fell through to `state_write`
+  — absence of evidence promoting a slot nothing had booted.
+
+  **destroy-B — PASSED.** First 2 MiB of `rootfs-b` zeroed (`blkid` dropped to `PARTLABEL` only, a
+  direct mount gave `bad superblock`), then `try b --tries 1` + reboot. Full expected sequence:
+  `state gen=9 … pending='b' tries=0 -> STATE.0` (counter decremented durably BEFORE the trial, so
+  a broken slot cannot be retried forever) → `trying pending slot b` → `cannot mount root
+  /dev/mmcblk0p5 (btrfs)` → `DEGRADED: slot b will not mount — failing over to slot a` → `state
+  gen=10 … pending='' tries=0 -> STATE.1` (cleared, written to the alternating file) → `root
+  /dev/mmcblk0p4 mounted ro (slot=a source=failover)`. Landed on A with its identity intact and no
+  failed units. **Slot B is destroyed and needs a reflash before it is usable again.**
+
+  **The power-cut test is WON'T-DO (user, 2026-07-28) — and the `novadeck.torntest=1` substitute
+  is not being built.** It cannot be run on this hardware at all: a battery device has no
+  interruptible supply, and long-press force-off is ~8–10s against a ~1s write window. The SD
+  card's behaviour under abrupt VCC loss stays an accepted, untested risk, recorded as such in
+  `docs/phase4.md`. Do not re-propose the init hook (write half the state fields, `exit 1`, let
+  `panic=5` reboot so the `umount` durability barrier never runs) — it was designed and
+  deliberately declined, not overlooked. What DOES cover the same ground and has passed: torn-state
+  rejection (a truncated state file is refused by the parser) and the two-file generation scheme,
+  which is what makes a torn write survivable in the first place.
 
 - [ ] **`efi-a`/`efi-b` are unused under design C** — created + formatted vfat, EMPTY, and no longer
   earmarked for per-slot boot images. That was design A. Phase 4b picked design **C**

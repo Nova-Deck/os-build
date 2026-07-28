@@ -550,16 +550,23 @@ EOF
   ln -sf /usr/lib/systemd/system/sshd.service \
          "$stage/etc/systemd/system/multi-user.target.wants/sshd.service"
 
-  # sshd needs host keys; a read-only root cannot generate them at boot, so pre-generate now.
-  if command -v ssh-keygen >/dev/null 2>&1; then
-    install -d -m0755 "$stage/etc/ssh"
-    for t in rsa ecdsa ed25519; do
-      f="$stage/etc/ssh/ssh_host_${t}_key"
-      [ -f "$f" ] || ssh-keygen -q -t "$t" -f "$f" -N "" -C "" </dev/null
-    done
-  else
-    echo "  [TEST] WARNING: ssh-keygen not found — sshd will have no host keys"
-  fi
+  # HOST KEYS ARE DELIBERATELY *NOT* GENERATED HERE. This block used to run ssh-keygen into
+  # $stage/etc/ssh, on the reasoning that "a read-only root cannot generate them at boot". That
+  # reasoning is wrong twice over:
+  #
+  #   - /etc is an overlayfs whose upper lives in /var (see the overlay setup above), so /etc/ssh
+  #     IS writable at runtime. openssh's own sshdgenkeys.service (ExecStart=ssh-keygen -A, with
+  #     ConditionPathExists=|! on each key) already runs before sshd.service, which Wants= and
+  #     After= it. Baking keys only suppressed that unit's condition.
+  #   - A key baked into the image is a property of the BUILD, not of the device. Every device
+  #     flashed from one image would share one private host key -- extractable by anyone holding
+  #     the image -- and every OTA would swap it, so each update looks like a MITM to every client
+  #     that has the device in known_hosts. (Observed on hardware 2026-07-28: the slot-b trial boot
+  #     changed the host key purely because it came from a different build.)
+  #
+  # So: leave /etc/ssh alone and let sshdgenkeys generate per-device keys at first sshd start. They
+  # land in the /etc overlay upper, i.e. in this slot's /var, and images/../post-install.sh carries
+  # them to the other slot on update so they survive an OTA. That is the same shape as machine-id.
 
   # SSH authorized key (key-only root; default PermitRootLogin=prohibit-password).
   if [ -n "${NOVADECK_SSH_PUBKEY:-}" ]; then

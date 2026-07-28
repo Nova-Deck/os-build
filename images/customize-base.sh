@@ -162,7 +162,14 @@ BOOTSTRAP_PKGS=(base)
 # images/make-sdcard.sh already does this at build time; the hook has to do it per install. NOT
 # previously on the device (no btrfs* row in manifest.lock at all), despite the root being btrfs:
 # the kernel does the mounting, and nothing shipped ever needed the userspace tools until now.
-PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-tools mesa gamescope seatd sddm mangohud fex-emu bluez bluez-utils networkmanager alsa-ucm-conf pipewire wireplumber pipewire-pulse pipewire-alsa unzip openal gtk2 ffmpeg e2fsprogs xorg-xwayland lsof noto-fonts noto-fonts-cjk noto-fonts-emoji python python-gobject scx-scheds rauc btrfs-progs)
+# rsync: the post-install hook copies the running /var wholesale into the freshly reformatted
+# target /var. That copy is what carries every piece of per-device state across an update
+# (machine-id, and with it the derived Wi-Fi MAC; saved network connections; SSH host keys; the
+# whole /etc overlay upper), so it is on the path where a failure means an updated device that is
+# subtly not the same device — or, on a Wi-Fi-only box with no serial console, not reachable at
+# all. It was NOT on the device before this (checked on hardware 2026-07-28: only tar and cp were
+# present), so the wholesale copy was not expressible until now.
+PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-tools mesa gamescope seatd sddm mangohud fex-emu bluez bluez-utils networkmanager alsa-ucm-conf pipewire wireplumber pipewire-pulse pipewire-alsa unzip openal gtk2 ffmpeg e2fsprogs xorg-xwayland lsof noto-fonts noto-fonts-cjk noto-fonts-emoji python python-gobject scx-scheds rauc btrfs-progs rsync)
 
 # Test-only packages — installed ONLY under NOVADECK_TEST=1, NEVER in a release base.
 # On-device bring-up tools: evtest reads raw /dev/input events; usbutils provides lsusb.

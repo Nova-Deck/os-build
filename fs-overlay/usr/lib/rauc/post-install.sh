@@ -72,43 +72,60 @@ btrfstune -f -U "$(cat /proc/sys/kernel/random/uuid)" "$dev_root" >/dev/null \
 log "fsid randomised"
 
 # --- 2. per-slot /var ---------------------------------------------------------------------------
-# Reformat rather than rsync-over: the target's /var is whatever the PREVIOUS install left there,
-# and stale state is exactly what makes a slot behave differently from the one that was tested.
+# Reformat, then copy the RUNNING /var over wholesale. This used to be a hand-picked whitelist
+# (machine-id, then NetworkManager connections, then SSH host keys...) and that shape was wrong:
+# every new piece of per-device state has to be REMEMBERED here, and forgetting one fails SILENTLY
+# -- the update succeeds, the slot boots, and something is subtly a different device. On hardware
+# with no serial console that is the worst failure shape available. A full copy inverts it: state
+# survives by default, and anything we do NOT want has to be excluded on purpose, in writing, here.
+# (SteamOS reaches the same conclusion; cf. _reference/steamos-teardown/docs/system-updates.md §4,
+# which rsyncs the whole partition after reformatting it.)
+#
+# The reformat stays: the target's /var is whatever the PREVIOUS install left there, and stale
+# state is what makes a slot behave differently from the one that was tested. Reformat + full copy
+# means the target ends up with exactly the running slot's state and nothing else.
 mkfs.ext4 -q -F -L "novadeck-var-${target^^}" "$dev_var" || die "cannot reformat $dev_var"
 
 mkdir -p "$MNT"
 mount "$dev_var" "$MNT" || die "cannot mount the target /var ($dev_var)"
 trap 'umount "$MNT" 2>/dev/null || true' EXIT
 
+# rsync, added to the image for exactly this (images/customize-base.sh PKGS). -aHAX preserves
+# modes, owners, hard links, ACLs and xattrs. Modes matter more than they look: sshd refuses to
+# start if a private host key is group/world-readable, so a mode-losing copy would take SSH down on
+# the updated slot and nowhere else. --numeric-ids because we are copying between two roots rather
+# than resolving names through THIS one's passwd.
+#
+# --one-file-system is LOAD-BEARING. /var/log, /var/tmp, /var/cache/pacman, /var/lib/flatpak and
+# /var/lib/systemd/coredump are bind mounts from the SHARED /home offload tree, i.e. not in this
+# partition at all. Without it we would copy shared data into a 256M partition -- /var/log alone
+# can exceed it -- and duplicate what both slots already share. The mount points themselves need no
+# special handling: systemd creates a .mount unit's target directory if it is missing.
+#
+# Source is `/var/` with the trailing slash: copy the CONTENTS of /var into $MNT, not a /var/var.
+rsync -aHAX --numeric-ids --one-file-system /var/ "$MNT/" \
+  || die "cannot copy /var to the target slot"
+log "copied /var wholesale ($(du -sh -x /var 2>/dev/null | cut -f1), offload bind mounts skipped)"
+
+# The overlay dirs must exist before the target boots -- the initramfs mounts /etc from them, so a
+# slot missing them does not come up. They are copied from the running /var above; this is a guard
+# against the one case that would be unrecoverable, not an expectation that the copy failed.
 upper="$MNT/lib/overlays/etc/upper"
 mkdir -p "$upper" "$MNT/lib/overlays/etc/work" "$MNT/lib/novadeck"
 
-# machine-id ONLY -- deliberately NOT a blanket copy of /var.
-#
-# TRAP (recorded in TODO.md): /var/lib/novadeck/mac-wifi is write-once and takes PRECEDENCE over
-# the seed (gen-mac.sh), so copying it would pin the old MAC forever regardless of machine-id --
-# the original machine-id bug relocated, not fixed. Migrating machine-id alone is the smaller and
-# more correct primitive: the MAC then re-derives from it on its own, and the two slots cannot
-# disagree about which is the source of truth.
-if [ -r /etc/machine-id ]; then
-  install -m0444 /etc/machine-id "$upper/machine-id"
-  log "machine-id migrated (MAC will re-derive from it)"
-else
-  log "WARNING: no /etc/machine-id to migrate -- the updated slot will mint its own identity"
-fi
+# THE ONE FILE THAT MUST NOT SURVIVE THE COPY VERBATIM. Everything else in /var describes the
+# DEVICE and is correct on either slot; this describes WHICH SLOT it is. It is the independent
+# witness `novadeck-bootctl status` cross-checks the initramfs's choice against, so a copy that
+# left the source slot's letter here would make the target agree with a lie. Written last,
+# deliberately after the wholesale copy that would otherwise clobber it.
+printf '%s\n' "$target" >"$MNT/lib/novadeck/slot"
 
-# Network configuration. On a RELEASE image this is the difference between an updated device that
-# is reachable and one that is not: this is Wi-Fi-only and has no serial console, so a slot with no
-# saved connections has no way back in. SteamOS copies these explicitly too, for the same reason.
-src_nm=/etc/NetworkManager/system-connections
-if [ -d "$src_nm" ] && [ -n "$(ls -A "$src_nm" 2>/dev/null)" ]; then
-  mkdir -p "$upper/NetworkManager/system-connections"
-  cp -a "$src_nm/." "$upper/NetworkManager/system-connections/"
-  chmod 0700 "$upper/NetworkManager/system-connections"
-  log "copied $(ls -1 "$src_nm" | wc -l) network connection(s)"
-else
-  log "WARNING: no saved network connections to copy -- the updated slot may come up offline"
-fi
+# NOT excluded, and this reverses an earlier decision worth stating: /var/lib/novadeck/mac-wifi.
+# The old whitelist called it a trap -- write-once, and takes precedence over the machine-id-derived
+# seed, so copying it "pins the old MAC forever regardless of machine-id". That only bites if the
+# seed and machine-id can disagree, which required copying one without the other. A full copy takes
+# both, they agree by construction, and the MAC stays stable across the update -- which was the
+# actual requirement all along. Copying it is now the correct behaviour, not the hazard.
 
 # The independent slot witness make-sdcard.sh writes, so `novadeck-bootctl status` can still
 # cross-check the initramfs's choice against a filesystem that carries its own letter.

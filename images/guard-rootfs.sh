@@ -348,8 +348,22 @@ if [ ! -s "$STAGE/usr/bin/btrfstune" ]; then
   rauc_ok=0
   bad "/usr/bin/btrfstune is missing — the post-install hook cannot re-randomise the target slot's fsid"
 fi
+# Presence is not installability. Every check above passed on a tree whose system.conf rejected
+# every bundle we can sign: the release cert's codeSigning EKU and RAUC's default smimesign
+# verification purpose disagreed, and the first thing that would have noticed was `rauc install`
+# on a device with no serial console. So sign a throwaway bundle and verify it THROUGH the tree's
+# own system.conf. Run against $STAGE, not fs-overlay, for the reason in this file's header: what
+# ships is the built tree, and a source file that is correct before the copy has been wrong after.
+if [ "$rauc_ok" = 1 ] && [ -s "$STAGE/etc/rauc/system.conf" ]; then
+  if ! signing_out="$("$(dirname "$0")/rauc/verify-signing.sh" "$STAGE/etc/rauc/system.conf" 2>&1)"; then
+    rauc_ok=0
+    bad "the shipped system.conf cannot verify a bundle signed the way ci/gen-signing-ca.sh signs one"
+    printf '%s\n' "$signing_out" | sed 's/^/      /' >&2
+  fi
+fi
 if [ "$rauc_ok" = 1 ]; then
   echo "    ok  rauc + keyring + system.conf + boot.img ($(du -h "$STAGE/usr/lib/novadeck/boot.img" | cut -f1)) + executable hook"
+  echo "    ok  a codeSigning-EKU bundle verifies through the shipped system.conf; an unrelated CA does not"
 fi
 
 # ------------------------------------------------------------------------------------------

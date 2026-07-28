@@ -208,16 +208,44 @@ cmd_mark_good() {
   need_root
   local require_marker=0
   [ "${1:-}" = --require-marker ] && require_marker=1
+
+  # NOTHING TO CONFIRM unless this boot actually came from a slot -- and this has to be settled
+  # BEFORE state_require, which dies (exit 1) when the ESP carries no valid state.
+  #
+  # A degraded cmdline-fallback boot still writes $BOOTINFO: images/initramfs/init emits the
+  # handoff on every path, including the one that never resolved a slot. So
+  # novadeck-boot-good.path's ConditionPathExists does NOT filter that case (its comment used to
+  # claim it did) -- it only filters a system that never ran our initramfs at all.
+  #
+  # Exiting 0 here is load-bearing. novadeck-boot-good.service is RemainAfterExit=yes precisely so
+  # it fires once per boot; a non-zero exit leaves it `failed`, which re-arms the level-triggered
+  # .path and starts a fresh sleep-30 + mark-good every 30 seconds for the rest of the device's
+  # uptime. HW-measured 2026-07-28 during the pass-1 degrade test: 4 starts in 165s of uptime,
+  # each one dying in state_require. That is the state you are in on a card whose slot state is
+  # unreadable -- i.e. exactly when `systemctl --failed` needs to be trustworthy.
+  #
+  # The deliberate retry-on-failure documented in the unit is NOT weakened: it exists for
+  # --require-marker losing its session marker, which still exits non-zero below.
+  local bs src
+  bs=$(booted_slot) || bs=""
+  src=$(booted_source) || src=""
+  if [ -z "$bs" ]; then
+    echo "this boot did not come from a slot (source=${src:-unknown}) -- nothing to confirm"
+    return 0
+  fi
+
   esp_open; state_require
-  local bs; bs=$(booted_slot) || bs=""
 
   if [ -z "$S_PENDING" ]; then
     echo "nothing on trial (active=$S_ACTIVE)"; return 0
   fi
   # A rollback boot already cleared pending before we got here, so if pending still names a slot
   # that is not the one we are running, something else is going on -- refuse rather than promote
-  # a slot we have no evidence about.
-  if [ -n "$bs" ] && [ "$S_PENDING" != "$bs" ]; then
+  # a slot we have no evidence about. This used to be guarded by `[ -n "$bs" ] &&`, which meant an
+  # EMPTY booted-slot skipped the check and fell through to state_write -- absence of evidence
+  # promoting a slot nothing had booted. `bs` is non-empty by the guard above, so the check is now
+  # unconditional and that hole is closed by construction.
+  if [ "$S_PENDING" != "$bs" ]; then
     echo "pending is '$S_PENDING' but this system booted slot '$bs' -- not marking anything good"
     return 0
   fi

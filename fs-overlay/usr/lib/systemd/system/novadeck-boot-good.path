@@ -1,9 +1,15 @@
 [Unit]
 Description=novadeck watch for a live session, to confirm an A/B trial boot
 Documentation=file:///usr/bin/novadeck-bootctl
-# Nothing to confirm on a boot that did not come through our initramfs (a degraded
-# cmdline-fallback boot writes no /run/novadeck/boot), and mark-good would have no idea which
-# slot it was running.
+# Nothing to confirm on a boot that did not come through our initramfs at all.
+#
+# THIS DOES NOT COVER A DEGRADED CMDLINE-FALLBACK BOOT. images/initramfs/init writes
+# /run/novadeck/boot on EVERY path, including the one that resolved no slot (it records
+# `slot=` + `source=cmdline`), so this condition passes there and mark-good runs with nothing to
+# confirm. The earlier version of this comment claimed the opposite; HW 2026-07-28 measured
+# mark-good failing every 30s for the whole uptime of a degraded boot as a result. The real guard
+# is in novadeck-bootctl mark-good, which returns 0 when the handoff names no slot -- see the
+# comment there for why it must be 0 and not a failure.
 ConditionPathExists=/run/novadeck/boot
 
 [Path]

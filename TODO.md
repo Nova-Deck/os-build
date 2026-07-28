@@ -679,7 +679,7 @@ rationale lives in the linked memories and commit history.
      bundle is signed by the release cert and the device trusts the CA).
 
 - [ ] **`verify-signing.sh` hand-copies the release cert's extensions from `ci/gen-signing-ca.sh`**
-  — fixed-on-a-branch context: `feat/phase4b-rauc` (UNMERGED, commit `5d6c447`) added
+  — STILL OPEN as of 2026-07-28. `5d6c447` (`feat/phase4b-rauc`, since merged to `main`) added
   `images/rauc/verify-signing.sh`, which signs a throwaway bundle and verifies it through the
   shipped `/etc/rauc/system.conf`. It catches the real bug it was written for (a `codeSigning`
   EKU against RAUC's default `smimesign` purpose rejects every bundle), but it mints its own
@@ -695,9 +695,10 @@ rationale lives in the linked memories and commit history.
   `images/rauc/novadeck-ca.pem` matches the key in `out/pki` — verified by hand as of `5d6c447`,
   still manual.
 
-- [ ] **Build `packages/rauc/` at v1.15.2 — the pinned snapshot's `rauc 1.14-1` CANNOT install a
-  verity bundle on our kernel** — DECIDED 2026-07-28, HW-proven the same day. `rauc install` fails
-  at 30%:
+- [x] **Build `packages/rauc/` at v1.15.2 — the pinned snapshot's `rauc 1.14-1` CANNOT install a
+  verity bundle on our kernel** — LANDED 2026-07-28 (`packages/rauc`, `8304bc6`). Kept as the
+  ROOT-CAUSE record for the closed item above; that one records the HW evidence that 1.15.2
+  installs, this one records why 1.14 could not. `rauc install` failed at 30%:
 
       Failed mounting bundle: Unexpected dm-verity status 'V -' (instead of '\0')
 
@@ -722,16 +723,21 @@ rationale lives in the linked memories and commit history.
   - **the failure is SAFE.** rauc aborted before writing: slot B's fsid was unchanged
     (`0dfb7b2e…` before and after), `dmsetup ls` showed no leftover devices, and slot state was
     untouched (`gen=1 active=a pending=<none>`). A broken bundle format cannot strand the device.
-  - **`check-purpose=codesign` is HW-CONFIRMED** (branch `feat/phase4b-rauc`, `5d6c447`, unmerged).
+  - **`check-purpose=codesign` is HW-CONFIRMED** (`5d6c447`, since merged to `main`).
     On-device `rauc info` against the real `/etc/rauc/system.conf` + `/etc/rauc/keyring.pem`:
     `Verified inline signature by 'O = novadeck, CN = novadeck OTA release'`. That fix is correct
     and independent of this one.
 
-  **Blind spot this exposed, worth fixing alongside:** `images/rauc/verify-signing.sh` runs the
-  BUILD CONTAINER's rauc, which is 1.15.1 — already fixed — while the device runs 1.14. The
-  offline self-test therefore validated the config against a different binary than the one that
-  ships, and could never have caught this. Once `packages/rauc/` exists the two converge; until
-  then, an offline pass is not evidence about the device.
+  **Blind spot this exposed** — the acute form is CLOSED, the general form is NOT. At the time,
+  `images/rauc/verify-signing.sh` ran the BUILD CONTAINER's rauc (1.15.1, already carrying
+  `a45cdb14`) while the device ran 1.14, so the offline self-test validated the shipped config
+  against a binary that could not reproduce the device's failure. Both sides are now on the fixed
+  line — build container `RAUC_VERSION=1.15.1-1` (`build/Dockerfile:23`), device `packages/rauc`
+  1.15.2 — so this exact skew cannot recur. They are still not the SAME binary, and the structural
+  point survives: `verify-signing.sh` asserts cert profile, bundle format and keyring agreement
+  against the writer, never against the device's installer. An offline pass is still not evidence
+  about the device — only an HW `rauc install` is. Same statement as the closed rauc-1.15.2 item
+  above; keep them in sync.
 
 - [x] **Phase 4c — bootstrap the root from packages — LANDED + HW-VALIDATED 2026-07-26**
   (design: `docs/phase4.md`; branch `feat/phase4-manifest-rootfs`). The rootfs no

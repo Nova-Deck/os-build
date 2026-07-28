@@ -78,8 +78,9 @@ rationale lives in the linked memories and commit history.
   successful post-install; then `get-state`, `try` and `status` all consult it. Whatever the shape,
   the invariant to restore is that a slot RAUC was told is bad does not later answer `good`.
 
-- [ ] **`kernel=` in the ESP slot state goes stale after a kernel rotation** — found 2026-07-28 on
-  hardware, immediately after a successful `rauc install`. The post-install hook rotates `/KERNEL`
+- [x] **`kernel=` in the ESP slot state goes stale after a kernel rotation — FIXED 2026-07-28** on
+  `feat/phase4b-rauc`, offline-verified, not yet HW-run. Found on hardware immediately after a
+  successful `rauc install`. The post-install hook rotates `/KERNEL`
   to the newly installed slot's boot image and records the backup via `novadeck-bootctl set-bak`,
   but nothing updates `kernel=`: the ESP still read `kernel=a` while slot **b**'s kernel was at
   `/KERNEL`. Harmless *today* — `images/initramfs/init:36` marks the field "reserved (pass 2)" and
@@ -88,6 +89,35 @@ rationale lives in the linked memories and commit history.
   was the pass that was meant to start), or delete it from the format. Do NOT leave it as a
   declaration with nothing behind it — cf. the `/etc/machine-id` item further down, which is the
   same failure mode one iteration earlier.
+  **Resolution: MAINTAINED, and given a consumer.** Deleting it was the worse half of the choice —
+  `novadeck-bootctl` preserves unknown keys verbatim, so dropping the parser case would not remove
+  the line, it would *fossilise* the stale `kernel=a` on every card already in the field, forever
+  and unreadably. Maintaining it costs one call and buys a check nothing else can make: `/KERNEL`
+  is SHARED while `/lib/modules/<ver>` ships INSIDE a root, so a boot can run a root under the
+  other build's kernel — `novadeck-bootctl try <other>` after an update reaches it with no second
+  update involved, and with `CFG80211`/`ATH12K` at `=m` the symptom is "Wi-Fi broke", not "wrong
+  kernel". What landed:
+  - `set-bak <name>` became **`set-kernel <a|b> [bak]`** — one call, so both fields land in ONE
+    generation. Split writes leave a state naming a backup for a kernel it has not recorded.
+  - The rollback in `images/initramfs/init` re-points `kernel=` at the slot it restores to, in the
+    same generation that clears `bak=`. The write necessarily precedes the copy, so a *failed*
+    restore spends a second generation taking the claim back — a field maintained only on the happy
+    path is the same defect one branch deeper.
+  - Consumers: the initramfs logs a mismatch to kmsg at boot (the whole debugging surface on a
+    no-UART device), `status` prints and warns, `try` warns before arming. None of them refuse —
+    the alternative to a mismatched pair is no pair.
+  - **`make-sdcard.sh` now seeds `kernel=` EMPTY, not `a`** (asserted in `verify-card.sh`). On a
+    fresh card both slots are the same `rootfs.img`, so a letter would make the ordinary `try b`
+    slot test warn about a mismatch that does not exist. Empty = no claim; only a rotation writes
+    a letter, so the field is either silent or true.
+  - The hook also stops recording `bak=KERNEL.BAK` when it made no backup (no `/KERNEL` to save),
+    which armed a restore that could only fail.
+  - Guard 7 now asserts every `novadeck-bootctl` subcommand the hook invokes is one the shipped
+    tool dispatches — the skew this rename could have shipped, whose symptom is an install that
+    replaces the root, rotates `/KERNEL`, then fails at its last step recording neither.
+  `images/initramfs/test-slot-state.sh` is at **100 checks (was 73)**: restore, failed restore,
+  missing backup, read-only ESP, and mismatch/match/unrecorded. It still does not execute
+  `novadeck-bootctl` — that gap is the item above, unchanged by this.
 
 - [ ] **`$(BASE_STAMP)` is not mode-scoped — a test-built base can feed a release build** — found
   2026-07-28 while building a RAUC bundle right after a `NOVADECK_TEST=1 make sdcard`. `MODE_STAMP`
@@ -459,12 +489,25 @@ rationale lives in the linked memories and commit history.
   to. 128MiB of card sitting idle. Adding a GRUB stage stays a legitimate fallback if C proves
   unworkable — reconsider it rather than working around it. See [[sm8650-rocknix-abl-boot]].
 
-- [ ] **Phase 4b pass 2 — RAUC on top of the landed boot path** — branch `feat/phase4b-boot-slots`
-  landed pass 1 (slot state, selection, rollback, both slots populated, `novadeck-bootctl`, health
-  check). Pass 2, in `docs/phase4.md`:
+- [ ] **Phase 4b pass 2 — RAUC on top of the landed boot path** — pass 1 is merged (`d524f09`).
+  **Steps 1-4 IMPLEMENTED 2026-07-28 on `feat/phase4b-rauc`, NOT yet HW-validated; steps 5-6 are
+  deliberately deferred to a follow-up branch** (updates are CLI-driven for now, so a failure in
+  this pass is attributable to the update machinery and not to UI wiring on top of it).
+  Two deviations from the original wording below, both explained in `docs/phase4.md`: the new
+  kernel ships **inside the rootfs** at `/usr/lib/novadeck/boot.img` rather than as bundle content
+  (makes kernel/module coherence true by construction, and needs no RAUC handler-environment
+  variable), and the `/var` migration copies **`machine-id` alone** rather than rsyncing `/var`
+  (copying the write-once `mac-wifi` would relocate the machine-id bug rather than fix it).
+  Also corrected while implementing: `btrfs-progs` was **not** on the device at all, so step 3's
+  `btrfstune` had nothing to run — it is now in `PKGS` alongside `rauc`. Pass 2, in `docs/phase4.md`:
   1. `PKGS += rauc` + `make relock`. **Measured 2026-07-27: `rauc-1.14-1` IS in the pinned
      snapshot's `extra` repo** and every dep but `json-glib` is already in `manifest.lock` — so no
      `packages/rauc/` from-source recipe is needed, which was the largest unknown.
+     **Overturned by the 2026-07-28 HW run: that snapshot 1.14 cannot install a verity bundle on
+     kernel >= 6.19** (fixed upstream first in `v1.15.1`), and we ship 7.1.x — so it fails every
+     install. `packages/rauc/` now exists after all: the holo 1.14-1 recipe, version-bumped to
+     **1.15.2**, no other change. Higher `pkgver` than holo's, so pacman prefers it by version,
+     not by repo order.
   2. `/etc/rauc/system.conf`: two slot groups, `bootloader=custom` pointed at `novadeck-bootctl`
      (its `get-primary`/`set-primary`/`get-state`/`set-state` already implement that contract), and
      `keyring=/etc/rauc/keyring.pem` installed from the committed `images/rauc/novadeck-ca.pem`.

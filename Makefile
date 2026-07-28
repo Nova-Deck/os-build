@@ -321,7 +321,11 @@ $(MODE_STAMP):
 	@mkdir -p $(@D) && rm -f work/.rootfs-mode-* && touch $@
 	@echo "[novadeck] rootfs mode: $(ROOTFS_MODE)"
 
-$(ROOTFS): $(KERNEL) $(BASE_STAMP) $(FW_LINUX) $(FW_QCOM) $(STEAM_SEED) $(ASSEMBLE_SRC) $(MODE_STAMP) | $(BUILD_STAMP)
+# $(BOOTIMG) is a prerequisite because the root now CARRIES its own kernel at
+# /usr/lib/novadeck/boot.img — that is what lets the RAUC post-install hook install a kernel that
+# matches the modules in the slot it just wrote. No cycle: BOOTIMG needs KERNEL + INITRAMFS, and
+# the initramfs is built from work/base, never from the assembled root.
+$(ROOTFS): $(KERNEL) $(BOOTIMG) $(BASE_STAMP) $(FW_LINUX) $(FW_QCOM) $(STEAM_SEED) $(ASSEMBLE_SRC) $(MODE_STAMP) | $(BUILD_STAMP)
 	$(DOCKER) $(TEST_ENV) -e NOVADECK_DEBUG $(BUILD_IMG) \
 	  images/assemble-rootfs.sh /src/work/base
 

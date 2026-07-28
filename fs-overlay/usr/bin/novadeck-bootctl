@@ -10,11 +10,13 @@
 #   novadeck-bootctl try b [--tries N]   boot slot b next; revert after N failed attempts
 #   novadeck-bootctl mark-good           confirm the slot on trial (this is what ends a trial)
 #   novadeck-bootctl rollback            abandon a trial, go back to the active slot
+#   novadeck-bootctl set-kernel <a|b> [bak]
+#                                        record the /KERNEL rotation: whose boot image is now on
+#                                        the ESP, and the name the previous one was kept under
 #
-# RAUC `bootloader=custom` backend contract (pass 2 wires /etc/rauc/system.conf to it; the
-# subcommands exist now so that is a config change and not a code change):
+# RAUC `bootloader=custom` backend contract (/etc/rauc/system.conf points at this file):
 #
-#   get-primary / set-primary <a|b> / get-state <a|b> / set-state <a|b> good|bad
+#   get-current / get-primary / set-primary <a|b> / get-state <a|b> / set-state <a|b> good|bad
 #
 # Slot names are lowercase a/b throughout and are identical to the `bootname=` values
 # system.conf will use, so there is never a mapping layer to get wrong.
@@ -169,10 +171,12 @@ cmd_status() {
   if [ "$S_WON" = -1 ]; then
     echo "  (no valid state file; the initramfs would fall back to the cmdline root=)"
   else
-    printf '  file=STATE.%s gen=%s\n  active=%s\n  pending=%s\n  tries=%s\n' \
-      "$S_WON" "$S_GEN" "$S_ACTIVE" "${S_PENDING:-<none>}" "$S_TRIES"
-    [ -n "$S_KERNEL" ] && printf '  kernel=%s\n' "$S_KERNEL"
-    [ -n "$S_BAK" ]    && printf '  bak=%s\n' "$S_BAK"
+    # kernel/bak are printed unconditionally, empty included. They are maintained fields now, so
+    # "not recorded" is itself a finding -- hiding it reads as "this card has no kernel record"
+    # being indistinguishable from "this tool did not tell you".
+    printf '  file=STATE.%s gen=%s\n  active=%s\n  pending=%s\n  tries=%s\n  kernel=%s\n  bak=%s\n' \
+      "$S_WON" "$S_GEN" "$S_ACTIVE" "${S_PENDING:-<none>}" "$S_TRIES" \
+      "${S_KERNEL:-<unrecorded>}" "${S_BAK:-<none>}"
   fi
   # The one cross-check that does not share a failure mode with the selection code: the var
   # image carries its own slot letter, written at build time.
@@ -182,6 +186,14 @@ cmd_status() {
       echo "  WARNING: /var says slot '$vs' but the initramfs picked '$bs' --"
       echo "           two filesystems are sharing an identity. Do not trust a slot test."
     fi
+  fi
+  # /KERNEL is SHARED by both slots, so a root can end up running under a kernel from the OTHER
+  # build -- and /lib/modules/<ver> ships inside the root. CFG80211 and ATH12K are =m, so that
+  # combination is a device with no Wi-Fi and no serial console. It needs no update to reach:
+  # `try` on a slot the last rotation did not install is enough.
+  if [ -n "$S_KERNEL" ] && [ -n "$bs" ] && [ "$S_KERNEL" != "$bs" ]; then
+    echo "  WARNING: /KERNEL holds slot '$S_KERNEL' boot image but this system booted slot '$bs' --"
+    echo "           this root's /lib/modules does not match the running kernel."
   fi
 }
 
@@ -199,6 +211,13 @@ cmd_try() {
   [[ $tries =~ ^[0-9]+$ ]] || die "--tries must be a non-negative integer"
   esp_open; state_require
   [ "$slot" != "$S_ACTIVE" ] || die "slot $slot is already active"
+  # Warned, not refused: this is the recovery tool, and booting a mismatched pair is still better
+  # than not booting. But an update rotates /KERNEL to the slot it installed, so `try` on any
+  # OTHER slot boots a root whose /lib/modules came from a different build -- no Wi-Fi (=m
+  # CFG80211/ATH12K) on a device with no serial console, and nothing on screen to say why.
+  if [ -n "$S_KERNEL" ] && [ "$S_KERNEL" != "$slot" ]; then
+    warn "/KERNEL is slot $S_KERNEL's boot image -- slot $slot will boot with /lib/modules from a different build"
+  fi
   state_write "$S_ACTIVE" "$slot" "$tries"
   echo "next boot: slot $slot (active stays $S_ACTIVE, $tries tr$([ "$tries" = 1 ] && echo y || echo ies))"
   echo "reboot to try it; it reverts to $S_ACTIVE unless '$PROG mark-good' runs."
@@ -256,6 +275,38 @@ cmd_mark_good() {
   echo "slot $S_PENDING confirmed good and is now active"
 }
 
+# Record the /KERNEL rotation: which slot's boot image now sits on the ESP, and the bare name the
+# previous one was kept under ('' when there is none to go back to). The RAUC post-install hook
+# calls this after copying the new image in, so the initramfs knows both which modules match the
+# running kernel and whether a restore is available if the trial boot never gets confirmed.
+#
+# BOTH FIELDS IN ONE CALL, hence one generation. Split across two writes there is a state that
+# names a backup for a kernel it has not recorded yet (or the reverse), and the rollback path in
+# images/initramfs/init reads the pair together -- it clears `bak` and re-points `kernel` in the
+# same generation for exactly this reason.
+#
+# Kept here rather than written by the hook because this file has ONE writer: the generation
+# scheme and the preserve-unknown-keys contract both live in state_write().
+cmd_set_kernel() {
+  need_root
+  local slot=${1:-} name=${2:-}
+  [[ $slot =~ ^[ab]$ ]] || die "usage: $PROG set-kernel <a|b> [backup-name]"
+  # A path would let a caller point the initramfs at something outside the ESP, which it cannot
+  # reach anyway -- keep it a bare filename so the format stays a name, not a location.
+  case "$name" in
+    */*|*' '*) die "the backup name must be a bare filename (got '$name')" ;;
+  esac
+  esp_open; state_require
+  [ -z "$name" ] || [ -f "$ESP/$name" ] || warn "no $ESP/$name on the ESP yet -- recording it anyway"
+  S_KERNEL=$slot; S_BAK=$name
+  state_write "$S_ACTIVE" "$S_PENDING" "$S_TRIES"
+  if [ -n "$name" ]; then
+    echo "/KERNEL is now slot $slot's boot image (previous kept as $name)"
+  else
+    echo "/KERNEL is now slot $slot's boot image (no backup recorded)"
+  fi
+}
+
 cmd_rollback() {
   need_root
   esp_open; state_require
@@ -268,9 +319,38 @@ cmd_rollback() {
 }
 
 # --- RAUC bootloader=custom backend ------------------------------------------------------------
-# Contract: get-primary prints the boot name of the slot to boot; set-primary marks a slot to be
-# booted next; get-state prints "good" or "bad"; set-state records the outcome. RAUC calls these
-# around an install, so set-primary is what starts a trial.
+# Contract: get-current prints the boot name of the slot that is RUNNING; get-primary prints the one
+# that will boot NEXT; set-primary marks a slot to be booted next; get-state prints "good" or "bad";
+# set-state records the outcome. RAUC calls these around an install, so set-primary is what starts
+# a trial.
+
+# WHICH SLOT IS RUNNING. RAUC treats this as optional -- its fallback is to parse `root=` out of
+# /proc/cmdline -- and for us that fallback is always WRONG, so implementing it is not optional.
+# Our cmdline carries a static `root=PARTLABEL=novadeck-root-A` that exists only as a last-resort
+# fallback; the initramfs resolves the real slot from the ESP state and overrides it. RAUC never
+# sees that, so without this subcommand it concludes "booted slot a" on every boot, forever.
+#
+# HW-confirmed 2026-07-28, on the update that installed and booted slot b: `rauc status` still said
+# `Booted from: rootfs.0`, and the rauc service logged `unknown command: get-current` at every
+# start. The consequence is not cosmetic -- RAUC picks the install target as the slot it did not
+# boot, so from slot b it would target b, the RUNNING slot. That aborts at RAUC's own
+# already-mounted guard (pre_install_check_slot_mount_status) rather than corrupting anything, but
+# it means no update can ever be installed FROM slot b: the A/B cycle only turns one way.
+#
+# The answer comes from the initramfs handoff -- the same source every other subcommand uses for
+# "what booted" -- and deliberately NOT from the ESP state, which records what SHOULD boot next,
+# not what actually did. Those two disagree for the entire duration of a trial, which is exactly
+# when an install is most likely to be attempted.
+cmd_get_current() {
+  local bs
+  bs=$(booted_slot) || bs=""
+  # Non-zero is the contract's documented signal for "cannot be determined", and it is the honest
+  # answer on a degraded cmdline-fallback boot: images/initramfs/init still writes the handoff
+  # there, but with an empty slot=. Guessing a letter instead would hand RAUC a slot nothing
+  # verified, and RAUC would then treat the OTHER one -- possibly the running root -- as free.
+  [ -n "$bs" ] || die "this system did not boot from a slot -- cannot name the current one"
+  echo "$bs"
+}
 
 cmd_get_primary() {
   esp_open; state_require
@@ -303,13 +383,32 @@ cmd_set_state() {
   local slot=${1:-} st=${2:-}
   [[ $slot =~ ^[ab]$ ]] || die "usage: $PROG set-state <a|b> good|bad"
   esp_open; state_require
+  # THE EXIT STATUS OF THIS FUNCTION IS PART OF THE RAUC CONTRACT, and the branches below are
+  # written as if/elif rather than `test && action` chains for exactly that reason: a trailing
+  # `[ x = y ] && action` returns 1 whenever the test is false, and RAUC treats a non-zero backend
+  # exit as a failed install. That is not hypothetical -- it cost the first HW `rauc install`
+  # (2026-07-28): RAUC marks the TARGET slot bad before writing it, that slot is by definition
+  # neither active nor pending, both tests were false, and the install aborted at 40% with
+  # "Failed marking slot rootfs.1 as bad" -- a message that describes our exit code, not our state.
   case "$st" in
     good)
-      [ "$slot" = "$S_PENDING" ] && state_write "$slot" '' 0 || true ;;
+      # Not `&& ... || true`: that swallows a state_write failure and reports success to RAUC,
+      # which would then believe a slot was confirmed that the ESP never recorded.
+      if [ "$slot" = "$S_PENDING" ]; then
+        state_write "$slot" '' 0
+      fi ;;
     bad)
-      # Mark it unbootable by zeroing its trials; the next boot rolls back.
-      [ "$slot" = "$S_PENDING" ] && state_write "$S_ACTIVE" "$slot" 0 || true
-      [ "$slot" = "$S_ACTIVE" ] && warn "refusing to mark the ACTIVE slot bad -- there would be nothing to boot" ;;
+      if [ "$slot" = "$S_ACTIVE" ]; then
+        # Deliberate refusal, reported as success: RAUC never asks this (it marks the slot it is
+        # about to overwrite, never the booted one), and honouring it would leave nothing to boot.
+        warn "refusing to mark the ACTIVE slot bad -- there would be nothing to boot"
+      elif [ "$slot" = "$S_PENDING" ]; then
+        # Mark it unbootable by zeroing its trials; the next boot rolls back.
+        state_write "$S_ACTIVE" "$slot" 0
+      fi
+      # Neither active nor pending: nothing boots it already, so "bad" is a no-op and NOT an error.
+      # This is the normal pre-write case for an install target.
+      ;;
     *) die "state must be 'good' or 'bad'" ;;
   esac
 }
@@ -324,6 +423,8 @@ case "${1:-}" in
   try)         shift; cmd_try "$@" ;;
   mark-good)   shift; cmd_mark_good "$@" ;;
   rollback)    shift; cmd_rollback "$@" ;;
+  set-kernel)  shift; cmd_set_kernel "$@" ;;
+  get-current) shift; cmd_get_current "$@" ;;
   get-primary) shift; cmd_get_primary "$@" ;;
   set-primary) shift; cmd_set_primary "$@" ;;
   get-state)   shift; cmd_get_state "$@" ;;

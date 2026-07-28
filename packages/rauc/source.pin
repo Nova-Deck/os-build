@@ -1,0 +1,28 @@
+# rauc — built FROM SOURCE at 1.15.2 via a novadeck-owned PKGBUILD (packages/rauc/PKGBUILD),
+# NOT fetched from the holo monorepo. holo HAS a rauc recipe, but only at 1.14
+# (holo-core-aarch64-preview extra-aarch64/r/rauc/1.14-1) — and 1.14 cannot install a dm-verity
+# bundle on kernel >= 6.19, which is every kernel we ship. Our PKGBUILD IS that holo recipe with
+# the version bumped to 1.15.2; see the header comment there for the two mechanical deviations.
+#
+# This is the "local PKGBUILD" form (like packages/gtk2, packages/mesa): build-overlay.sh sees
+# `pkgbuild_local` and uses the checked-in recipe instead of curl'ing one from GitLab. makepkg
+# still downloads the upstream release tarball the PKGBUILD names.
+#
+# Fields:
+#   name           pkgname (must match the PKGBUILD); also the work/ build-dir + repo entry
+#   pkgbuild_local path (relative to this dir) to the checked-in PKGBUILD to build
+#   pkgrel_suffix  numeric suffix appended to the PKGBUILD's pkgrel (N -> N.<suffix>) so pacman
+#                  prefers our build on later upgrades. Integer only (makepkg requires
+#                  pkgrel = integer[.integer]). Belt-and-braces here: 1.15.2 already outranks
+#                  holo's 1.14 by pkgver, so the suffix only matters if holo ever ships 1.15.2-1.
+#
+# No `patches:` — we carry zero novadeck patches against rauc; the whole point of this recipe is
+# the upstream version, unmodified.
+#
+# To bump rauc: edit pkgver in packages/rauc/PKGBUILD, replace both checksums (sha512sum and
+# b2sum of the new .tar.xz), and re-read upstream's meson_options.txt / NEWS for new dependencies
+# — makepkg runs with --skipinteg, so a stale checksum will NOT fail the build, it will just be
+# a lie in the recipe.
+name: rauc
+pkgbuild_local: PKGBUILD
+pkgrel_suffix: 1

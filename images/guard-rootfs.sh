@@ -35,7 +35,9 @@
 #   5. the trim's declaration is fully applied — nothing images/trim.list names survived
 #   6. the first-boot identity is shippable — no /etc/machine-id, AND systemd-firstboot masked
 #      (the two are only safe together)
-#   7. a size delta against the previous build (report only — never fails a build)
+#   7. the RAUC update path is installable — rauc, the keyring, system.conf and this slot's
+#      own boot.img are all present, and the hook that consumes them is executable;
+#   8. a size delta against the previous build (report only — never fails a build)
 set -euo pipefail
 shopt -s nullglob
 
@@ -315,7 +317,73 @@ if [ "$mid_ok" = 1 ] && [ "$fb_ok" = 1 ]; then
 fi
 
 # ------------------------------------------------------------------------------------------
-# 7. Size delta (report only).
+# 7. The RAUC update path is installable.
+#
+# Every part of an A/B update is inert until something needs it, and each missing piece fails at a
+# different and unhelpful moment: no `rauc` binary is a missing command at install time; a missing
+# keyring means bundles verify against NOTHING while still reporting success; a missing boot.img
+# means the post-install hook cannot install a kernel matching the modules in the slot it just
+# wrote, so the trial boot has no Wi-Fi and no serial console to debug it from.
+#
+# The exec bit on the hook is checked because it is exactly the failure this project has already
+# paid for once: a shipped script that lost its exec bit in a tree refactor, where the symptom was
+# a black screen rather than an error (see fs-overlay/README.md).
+# ------------------------------------------------------------------------------------------
+echo "  7. RAUC update path"
+rauc_ok=1
+for f in usr/bin/rauc etc/rauc/keyring.pem etc/rauc/system.conf usr/lib/novadeck/boot.img \
+         usr/lib/rauc/post-install.sh; do
+  if [ ! -s "$STAGE/$f" ]; then
+    rauc_ok=0
+    bad "/$f is missing or empty — the A/B update path is not installable"
+  fi
+done
+if [ -e "$STAGE/usr/lib/rauc/post-install.sh" ] && [ ! -x "$STAGE/usr/lib/rauc/post-install.sh" ]; then
+  rauc_ok=0
+  bad "/usr/lib/rauc/post-install.sh is not executable — RAUC would report a successful install of a slot that was never finished"
+fi
+# btrfstune is what re-randomises the target slot's fsid. Without it the hook dies mid-install,
+# and a slot that shares an fsid with the running root can silently hand you the wrong filesystem.
+if [ ! -s "$STAGE/usr/bin/btrfstune" ]; then
+  rauc_ok=0
+  bad "/usr/bin/btrfstune is missing — the post-install hook cannot re-randomise the target slot's fsid"
+fi
+# The hook drives the slot state through novadeck-bootctl, so every subcommand it invokes must be
+# one the SHIPPED tool dispatches. Both files live in this tree, which is precisely why a rename in
+# one is easy to miss in the other, and the symptom is the worst shape available: RAUC writes the
+# target slot, the hook then fails at its LAST step, and the card is left with a new root, a
+# rotated /KERNEL and a slot state that records neither.
+if [ "$rauc_ok" = 1 ] && [ -s "$STAGE/usr/bin/novadeck-bootctl" ]; then
+  # Comment lines are stripped first: this file's prose names the tool more often than its code does.
+  while read -r sub; do
+    [ -n "$sub" ] || continue
+    grep -qE "^ *$sub\)" "$STAGE/usr/bin/novadeck-bootctl" && continue
+    rauc_ok=0
+    bad "the post-install hook calls 'novadeck-bootctl $sub', which the shipped tool does not dispatch"
+  done < <(grep -vE '^[[:space:]]*#' "$STAGE/usr/lib/rauc/post-install.sh" \
+             | grep -oE 'novadeck-bootctl +[a-z][a-z-]*' | awk '{print $2}' | sort -u)
+fi
+
+# Presence is not installability. Every check above passed on a tree whose system.conf rejected
+# every bundle we can sign: the release cert's codeSigning EKU and RAUC's default smimesign
+# verification purpose disagreed, and the first thing that would have noticed was `rauc install`
+# on a device with no serial console. So sign a throwaway bundle and verify it THROUGH the tree's
+# own system.conf. Run against $STAGE, not fs-overlay, for the reason in this file's header: what
+# ships is the built tree, and a source file that is correct before the copy has been wrong after.
+if [ "$rauc_ok" = 1 ] && [ -s "$STAGE/etc/rauc/system.conf" ]; then
+  if ! signing_out="$("$(dirname "$0")/rauc/verify-signing.sh" "$STAGE/etc/rauc/system.conf" 2>&1)"; then
+    rauc_ok=0
+    bad "the shipped system.conf cannot verify a bundle signed the way ci/gen-signing-ca.sh signs one"
+    printf '%s\n' "$signing_out" | sed 's/^/      /' >&2
+  fi
+fi
+if [ "$rauc_ok" = 1 ]; then
+  echo "    ok  rauc + keyring + system.conf + boot.img ($(du -h "$STAGE/usr/lib/novadeck/boot.img" | cut -f1)) + executable hook"
+  echo "    ok  a codeSigning-EKU bundle verifies through the shipped system.conf; an unrelated CA does not"
+fi
+
+# ------------------------------------------------------------------------------------------
+# 8. Size delta (report only).
 #
 # Never fails a build — there is no defensible threshold, and a guard that blocks on growth would
 # be disabled the first time a legitimate package got bigger. Its job is to put the number in

@@ -102,6 +102,11 @@ if mtype -i "$IMG@@$espoff" ::/NOVADECK/STATE.0 >"$T/state" 2>/dev/null && [ -s 
                           || bad "STATE.0 has no 'end' terminator — the reader will reject it"
   [ "$act" = a ] || bad "a freshly built card should be active=a, not '$act'"
   [ -z "$pend" ] || bad "a freshly built card should have nothing pending, got '$pend'"
+  # `kernel=` must be EMPTY here, and that is a real assertion rather than a formality: both slots
+  # carry the same rootfs.img on a fresh card, so /KERNEL matches either one. A letter would make
+  # the ordinary `try b` slot test warn about a kernel/modules mismatch that does not exist.
+  kern=$(sed -n 's/^kernel=//p' "$T/state")
+  [ -z "$kern" ] || bad "a fresh card must not claim a /KERNEL owner, got kernel='$kern'"
 else
   bad "no readable ::/NOVADECK/STATE.0 — every boot would fall back to the cmdline root="
 fi
@@ -119,7 +124,10 @@ mtype -i "$IMG@@$espoff" ::/NOVADECK/STATE.1 >/dev/null 2>&1 \
 echo "  4. initramfs"
 if [ -f "$INITRAMFS" ]; then
   ( cd "$T" && gzip -dc "$INITRAMFS" | cpio -idm --quiet 2>/dev/null )
-  for b in umount mount findfs switch_root bash; do
+  # cp is load-bearing, not a convenience: it is what restores KERNEL.BAK over /KERNEL on a
+  # rollback boot. Missing, the rollback silently degrades to "old root under the new kernel" --
+  # whose /lib/modules it does not carry, so no Wi-Fi on a device with no serial console.
+  for b in umount mount findfs switch_root bash cp; do
     [ -x "$T/usr/bin/$b" ] && ok "$b staged" || bad "$b is NOT in the initramfs"
   done
   [ -d "$T/esp" ] && ok "/esp mountpoint staged" || bad "/esp mountpoint missing — the ESP cannot be mounted"

@@ -292,8 +292,19 @@ ESP, `efi-a`/`efi-b`, `rootfs-a`/`rootfs-b` (7G, read-only btrfs), `var-a`/`var-
 the build image (`build/Dockerfile`, 1.15.1), which an earlier draft of this document doubted.
 
 **Measured 2026-07-27: `rauc-1.14-1` is in the pinned snapshot's `extra` repo.** Every one of
-its dependencies is already in `images/manifest.lock` except `json-glib`. So pass 2 needs no
-`packages/rauc/` from-source recipe — it is `PKGS += rauc` plus `make relock`.
+its dependencies is already in `images/manifest.lock` except `json-glib`.
+
+**Overturned on hardware 2026-07-28: the snapshot's 1.14 is unusable here.** It cannot install a
+dm-verity bundle on a kernel `>= 6.19` — a DM/verity handling bug upstream fixed first in
+`v1.15.1` — and we ship 7.1.x, so *every* `rauc install` of our bundle format fails. Pass 2
+therefore *does* need a `packages/rauc/` from-source recipe. It exists: the holo 1.14-1 PKGBUILD
+with the version bumped to **1.15.2** and nothing else redesigned (see `packages/rauc/PKGBUILD`
+for the two mechanical deviations the overlay builder forces). Being a higher `pkgver` than
+holo's 1.14, pacman prefers the overlay build regardless of repo order.
+
+Note the two rauc binaries are unrelated and must not be conflated: the one in `build/Dockerfile`
+(Ubuntu, 1.15.1) only *creates* bundles on the host and never touches this bug; the one this
+recipe builds is the device-side *installer*.
 
 What does **not** exist: `rauc` on the device (not in `PKGS`), `/etc/rauc/system.conf`, and the
 device keyring (the CA is minted, `images/rauc/novadeck-ca.pem`, but nothing installs it yet).
@@ -376,6 +387,7 @@ untestable in pass 1 (there is one kernel), bash cannot copy binary data so it w
 device boots from — where a torn write is a reflash. The rollback boot runs the old root under
 the new kernel, so a root-side oneshot can do the restore properly, with real fsync, and reboot.
 `kernel=` and `bak=` are in the grammar from day one so pass 2 does not change the format.
+*(Pass 2 implements both, in the initramfs after all — see below.)*
 
 **The two roots must not be identical bytes.** `mkfs.btrfs` bakes an fsid into the superblock and
 every image we build has `devid=1` — exactly the pair btrfs keys its in-kernel device list on. Two
@@ -442,11 +454,21 @@ while keeping the failure path retryable. See the unit's own comment.
 The state file grammar, normative. `images/initramfs/init` is the reference implementation.
 
 ```
-/KERNEL                 unchanged — ABL reads only this
-/NOVADECK/STATE.0       gen=N active=a|b pending=''|a|b tries=N kernel= bak= end
+/KERNEL                 the running boot image — ABL reads only this
+/NOVADECK/STATE.0       gen=N active=a|b pending=''|a|b tries=N kernel=''|a|b bak= end
 /NOVADECK/STATE.1       the alternate copy; the higher valid gen wins
-/NOVADECK/KERNEL.BAK    reserved; not written or read in pass 1
+/NOVADECK/KERNEL.BAK    the previous boot image, when `bak=` names it
 ```
+
+`kernel=` names the slot whose boot image is at `/KERNEL`, and **empty means no claim** — a card
+no update has rotated, where both slots carry the same build and no mismatch is possible. A letter
+is written only by a rotation (the RAUC post-install hook) or by the rollback that undoes one, so
+the field is either silent or true. It is not decoration: `/KERNEL` is *shared* while
+`/lib/modules/<ver>` ships *inside* a root, so a root can run under the other build's kernel —
+`novadeck-bootctl try <other>` after an update reaches it with no second update involved, and with
+`CFG80211`/`ATH12K` at `=m` the symptom is "Wi-Fi broke", not "wrong kernel". The initramfs logs it
+at boot and `novadeck-bootctl status`/`try` say it before the fact; nothing refuses to boot on it,
+because the alternative to a mismatched pair is no pair.
 
 `end` must be the last non-blank line — that is the torn-write detector. **Unknown keys are
 ignored by the reader and preserved verbatim by the writer**: this reader ships inside `/KERNEL`
@@ -469,7 +491,64 @@ recovery mechanism when you have the card in a reader.
 | dm-verity, declared vfat/loop | `kernel/kernel.config`, asserted in `kernel/build.sh` |
 | signing CA; only the CA cert is committed | `ci/gen-signing-ca.sh`, `images/rauc/novadeck-ca.pem` |
 
-### Pass 2 — RAUC (not started)
+### Pass 2 — RAUC (core install path IMPLEMENTED, not yet HW-validated)
+
+Scope taken: the install path only. `steamos-update`, the `novadeck-steamos-manager` D-Bus surface
+and the bundle server are deliberately a follow-up — an update is CLI-driven for now, so a failure
+in this pass is attributable to the update machinery rather than to the UI wiring on top of it.
+
+**The kernel travels inside the rootfs, not in the bundle.** The plan for this pass was to add the
+boot image to the bundle as a second payload the post-install hook consumes. It ships at
+`/usr/lib/novadeck/boot.img` instead, installed by `images/assemble-rootfs.sh`, and the hook copies
+it out of the slot it just wrote. Two reasons, and the second is the one that decided it:
+
+- It removes a dependency on RAUC's handler environment. A bundle-side payload has to be located
+  through `RAUC_BUNDLE_MOUNT_POINT`, whose exact availability differs between *handlers* and
+  manifest *hooks*; the root-side copy needs none of that, and the hook derives its target slot
+  from our own `/run/novadeck/boot` handoff (cross-checking `RAUC_TARGET_SLOTS` when set, and
+  refusing on disagreement rather than preferring either).
+- **It makes kernel/module coherence true by construction.** `/lib/modules/<ver>` ships in a
+  specific root; the kernel that matches it is that root's kernel. Carried this way there is no
+  bundle layout to keep in sync and no way to install a root whose modules do not match the kernel
+  that will boot it. `CFG80211`/`ATH12K` are `=m`, so getting that pairing wrong means a device
+  with no Wi-Fi and no serial console. It costs ~30 MB per slot, which is the price of the
+  guarantee. A consequence worth noting: `$(ROOTFS)` now depends on `$(BOOTIMG)` in the Makefile.
+
+**The `/var` migration copies `machine-id`, not `/var`.** SteamOS reformats the target's `/var` and
+rsyncs the running one over it. We reformat too, but populate deliberately: `machine-id` alone,
+plus NetworkManager connections. `/var/lib/novadeck/mac-wifi` is write-once and takes precedence
+over the seed, so copying it would pin the old MAC forever regardless of `machine-id` — the
+original machine-id bug relocated rather than fixed. Migrating the seed and letting the MAC
+re-derive is the smaller primitive, and it keeps one source of truth.
+
+**Order inside the hook is load-bearing:** fsid first. Until `btrfstune -U` has run, the target and
+the running root share an fsid *and* `devid=1`, and mounting the target can silently hand you the
+running root — so every later step, all of which mount the target, has to come after it.
+
+**Kernel restore on rollback** is in the initramfs (`cp` is now staged for it), and reboots via
+`exit 1` → panic → `panic=5`, reusing the mechanism the no-bootable-root path already relies on
+because `MAGIC_SYSRQ` is not in `kernel/kernel.config`. `bak=` is cleared in the *same* generation
+that clears `pending`, so an interrupted copy cannot leave a state that retries a restore forever —
+and `kernel=` is re-pointed at the slot being restored to in that same generation, because the two
+fields describe one event. The write necessarily precedes the copy, so a copy that *fails* has left
+a record claiming a rotation that did not happen: the init then spends a second generation taking it
+back. A field maintained on the happy path only is the defect this one was fixed for.
+
+> **Honest limit.** This covers "the new kernel boots far enough to run our initramfs, but the
+> system is not healthy". A kernel that does not boot at all leaves nothing running to restore
+> anything — that is still a reflash, and design C never claimed otherwise.
+
+Verified offline: `images/initramfs/test-slot-state.sh` (100 checks, up from 56) covers restore, a
+missing backup file, a read-only ESP, a *failed* restore's correcting write, and the kernel/slot
+mismatch warning in all three of its states (mismatched, matching, unrecorded). Guard assertion 7
+asserts the built tree can actually perform an update: `rauc`, keyring, `system.conf`, `boot.img`,
+`btrfstune`, an *executable* hook — the exec-bit half because this project has already paid for a
+shipped script that lost it — and that every `novadeck-bootctl` subcommand the hook invokes is one
+the shipped tool dispatches, since a rename in one file is what makes the other fail at its last
+step, on a card whose root has already been replaced.
+
+#### Original checklist
+
 
 1. `PKGS += rauc` and `make relock` (it is in the pinned snapshot; `json-glib` comes with it).
 2. `/etc/rauc/system.conf`: two slot groups, `bootloader=custom` pointed at `novadeck-bootctl`

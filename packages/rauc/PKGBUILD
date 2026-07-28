@@ -1,0 +1,92 @@
+# rauc — built FROM SOURCE at 1.15.2 via a novadeck-owned PKGBUILD. This is the holo recipe
+# (holo/holo-core-aarch64-preview extra-aarch64/r/rauc/1.14-1, itself Arch's) with the VERSION
+# BUMPED and nothing else redesigned. Keep it that way: the next bump should be pkgver + the two
+# checksums, and a re-check of the two deviations noted below.
+#
+# Why we build it at all: the pinned snapshot ships rauc 1.14, and 1.14 CANNOT install a
+# dm-verity bundle on a kernel >= 6.19 — the DM ioctl/verity handling upstream fixed first in
+# v1.15.1. We run 7.1.x, so the snapshot's rauc fails every `rauc install` of our bundle format.
+# 1.15.2 is the current release on that fix line. Because this is a strictly higher pkgver than
+# holo's 1.14-1, pacman prefers the overlay build regardless of repo order.
+#
+# Deviations from the holo/Arch recipe, both forced by the overlay build mechanism
+# (packages/build-overlay.sh stages ONLY the PKGBUILD plus source.pin `patches:` entries into the
+# build dir — no other recipe file travels with it):
+#   - arch=(aarch64): one aarch64 build serves every aarch64 SoC. Upstream lists x86_64 too;
+#     we never build that.
+#   - The `rauc.tmpfiles` source FILE is written inline in package() from a heredoc instead of
+#     being a source array entry, since build-overlay cannot stage it. Content is byte-identical
+#     to holo's rauc.tmpfiles ("d /etc/rauc 755 root root - -"), so its two checksum entries are
+#     gone from sha512sums/b2sums as well.
+#
+# Everything else — depends, makedepends, optdepends, arch-meson invocation, the package() depends
+# amendment, the contrib/ docs install — is upstream's, unmodified. check() is dropped because
+# build-overlay always passes `makepkg --nocheck`; a check() that never runs is dead code.
+
+pkgname=rauc
+pkgver=1.15.2
+pkgrel=1
+pkgdesc="Safe and secure software updates for embedded Linux"
+arch=(aarch64)
+url="https://rauc.io"
+license=(LGPL-2.1-or-later)
+depends=(
+  gcc-libs
+  glibc
+  libnl
+  openssl
+  sh
+)
+makedepends=(
+  curl
+  dbus
+  glib2
+  glib2-devel
+  json-glib
+  meson
+  python
+  systemd
+  util-linux
+)
+optdepends=(
+  'casync: for casync conversion support'
+  'cryptsetup: for disk encryption support'
+  'dosfstools: for creating and checking FAT filesystems'
+  'e2fsprogs: for creating and checking ext2/3/4 filesystems'
+  'efibootmgr: for interacting with EFI boot manager'
+  'grub: for GRUB support'
+  'mtd-utils: for interacting with MTD devices'
+  'squashfs-tools: for creating and inspecting bundles'
+  'uboot-tools: for u-boot support'
+)
+source=(
+  https://github.com/rauc/rauc/releases/download/v$pkgver/$pkgname-$pkgver.tar.xz{,.asc}
+)
+sha512sums=('8d62e667afa34541c57e751bf939277c791112d0aec9795d5a29bff25ea31a4291a4de17b9518bd4b8702fed07fa03ff21c09be2b960627dd5de92fa41fc8993'
+            'SKIP')
+b2sums=('c21a6349ebb0e806e70137dada383eff83b0056da0a0bdc47df256dbe8bf1a3c1d9da5687ffc4d9a0428596ec5f4ba7a854024bd3e988f6b9dd62d4fa2cb44a1'
+        'SKIP')
+validpgpkeys=("977843FD5C3EBF76BAD4008EA58CC53DBF05E090")  # Jan Lübbe <jlu@pengutronix.de>
+
+build() {
+  arch-meson $pkgname-$pkgver build
+  meson compile -C build
+}
+
+package() {
+  depends+=(
+    curl libcurl.so
+    glib2 lib{gobject,gio,glib}-2.0.so
+    json-glib libjson-glib-1.0.so
+    util-linux-libs libfdisk.so
+  )
+
+  meson install -C build --destdir "$pkgdir"
+  install -vdm 755 "$pkgdir/etc/$pkgname/"
+  install -vDm 644 $pkgname-$pkgver/contrib/{grub.conf,uboot.sh} -t "$pkgdir/usr/share/doc/$pkgname/"
+  install -vDm 644 /dev/stdin "$pkgdir/usr/lib/tmpfiles.d/$pkgname.conf" <<'END'
+d /etc/rauc 755 root root - -
+END
+}
+
+# vim:set sw=2 sts=-1 et:

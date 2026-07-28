@@ -323,13 +323,32 @@ cmd_set_state() {
   local slot=${1:-} st=${2:-}
   [[ $slot =~ ^[ab]$ ]] || die "usage: $PROG set-state <a|b> good|bad"
   esp_open; state_require
+  # THE EXIT STATUS OF THIS FUNCTION IS PART OF THE RAUC CONTRACT, and the branches below are
+  # written as if/elif rather than `test && action` chains for exactly that reason: a trailing
+  # `[ x = y ] && action` returns 1 whenever the test is false, and RAUC treats a non-zero backend
+  # exit as a failed install. That is not hypothetical -- it cost the first HW `rauc install`
+  # (2026-07-28): RAUC marks the TARGET slot bad before writing it, that slot is by definition
+  # neither active nor pending, both tests were false, and the install aborted at 40% with
+  # "Failed marking slot rootfs.1 as bad" -- a message that describes our exit code, not our state.
   case "$st" in
     good)
-      [ "$slot" = "$S_PENDING" ] && state_write "$slot" '' 0 || true ;;
+      # Not `&& ... || true`: that swallows a state_write failure and reports success to RAUC,
+      # which would then believe a slot was confirmed that the ESP never recorded.
+      if [ "$slot" = "$S_PENDING" ]; then
+        state_write "$slot" '' 0
+      fi ;;
     bad)
-      # Mark it unbootable by zeroing its trials; the next boot rolls back.
-      [ "$slot" = "$S_PENDING" ] && state_write "$S_ACTIVE" "$slot" 0 || true
-      [ "$slot" = "$S_ACTIVE" ] && warn "refusing to mark the ACTIVE slot bad -- there would be nothing to boot" ;;
+      if [ "$slot" = "$S_ACTIVE" ]; then
+        # Deliberate refusal, reported as success: RAUC never asks this (it marks the slot it is
+        # about to overwrite, never the booted one), and honouring it would leave nothing to boot.
+        warn "refusing to mark the ACTIVE slot bad -- there would be nothing to boot"
+      elif [ "$slot" = "$S_PENDING" ]; then
+        # Mark it unbootable by zeroing its trials; the next boot rolls back.
+        state_write "$S_ACTIVE" "$slot" 0
+      fi
+      # Neither active nor pending: nothing boots it already, so "bad" is a no-op and NOT an error.
+      # This is the normal pre-write case for an install target.
+      ;;
     *) die "state must be 'good' or 'bad'" ;;
   esac
 }

@@ -79,7 +79,12 @@ rationale lives in the linked memories and commit history.
   the invariant to restore is that a slot RAUC was told is bad does not later answer `good`.
 
 - [x] **`kernel=` in the ESP slot state goes stale after a kernel rotation — FIXED 2026-07-28** on
-  `feat/phase4b-rauc`, offline-verified, not yet HW-run. Found on hardware immediately after a
+  `feat/phase4b-rauc`, offline-verified; **partially HW-confirmed** the same day — the device's
+  shipped `/usr/lib/rauc/post-install.sh:184` calls `set-kernel`, the install at `18:28:38`
+  completed through it, and the resulting handoff reads `kernel=a` for a booted slot a, consistent.
+  What is still NOT HW-exercised is the field CHANGING letter across a rotation observed end to end;
+  the last install was a same-slot repair. `get-current` is separately HW-confirmed: it answers `a`
+  and `rauc status` reads `Booted from: rootfs.0 (a)`. Found on hardware immediately after a
   successful `rauc install`. The post-install hook rotates `/KERNEL`
   to the newly installed slot's boot image and records the backup via `novadeck-bootctl set-bak`,
   but nothing updates `kernel=`: the ESP still read `kernel=a` while slot **b**'s kernel was at
@@ -136,21 +141,31 @@ rationale lives in the linked memories and commit history.
   already does. Note the fix costs a full base rebuild on every mode flip — which is the correct
   price, and is what `make relock` already pays deliberately (`rm -f $(BASE_STAMP)`).
 
-- [ ] **Nothing has exercised rauc 1.15.2 as an INSTALLER** — `packages/rauc` (branch
-  `feat/phase4b-rauc`, commit `8304bc6`) builds 1.15.2 from source solely because the snapshot's 1.14
-  cannot install a dm-verity bundle on kernel >= 6.19, and we ship 7.1.5. That premise is still an
-  **upstream changelog claim we inherited** — no test in the tree can confirm or refute it.
-  Specifically, `guard-rootfs.sh` assertion 7 passes on a release build but does NOT cover this: it
-  runs `images/rauc/verify-signing.sh` inside the BUILD container, whose rauc is 1.15.1
-  (`build/Dockerfile`), so it asserts cert profile + bundle format + keyring agreement and never
-  touches the device binary. Only a HW `rauc install` settles it. **When running it:** the bundle must
-  be signed with the real key (`RAUC_CERT=out/pki/release.cert.pem RAUC_KEY=out/pki/release.key.pem
-  make bundle`) — `genbundle.sh` otherwise mints an *ephemeral dev cert* that the device keyring
-  rejects on signature, which reads as a rauc failure but is not one. Use a TEST-mode bundle so the
-  trial boot keeps SSH (a release bundle in slot B trial-boots headless on a board with no serial
-  console). Run `rauc info` before `rauc install`: writer and installer are now deliberately
-  different versions (1.15.1 Ubuntu vs 1.15.2 overlay, same upstream fix line, never exercised as a
-  pair), and `info` separates version skew from the verity path being tested.
+- [x] **rauc 1.15.2 as an INSTALLER — HW-VALIDATED 2026-07-28** — `packages/rauc` (`8304bc6`) builds
+  1.15.2 from source solely because the snapshot's 1.14 cannot install a dm-verity bundle on
+  kernel >= 6.19, and we ship 7.1.5. That premise was an **upstream changelog claim we inherited**,
+  with no test in the tree able to confirm or refute it. Settled on hardware: device `rauc 1.15.2`
+  on `uname -r` 7.1.5 installed `novadeck-hwtest6.raucb` (`Bundle Format: verity`, verity size
+  30851072) **three times successfully** — `17:55:19` and `18:02:49` into rootfs.1, `18:28:38` into
+  rootfs.0 — each logging `Configured dm-verity device '/dev/dm-0'` before `Updating slots`. The
+  writer/installer pair is exercised too: the bundle was written by the BUILD container's 1.15.1
+  (`build/Dockerfile`) and installed by the overlay's 1.15.2, with no version-skew symptom.
+  **Verity is enforcing, not merely configured** — the deliberate tamper test hit both layers, from
+  the same filename, at two byte positions: a signature-region flip was rejected outright
+  (`Invalid bundle format: Signature data is no valid CMS`, before any write), and a payload flip
+  mounted fine and then died 13s into the copy (`Failed to copy data: Error reading from file:
+  Input/output error`) — a verity hash failure surfacing as EIO. That second case is the one that
+  left slot a inconsistent, which is the open item above.
+  What this does **not** cover: `guard-rootfs.sh` assertion 7 still runs
+  `images/rauc/verify-signing.sh` inside the BUILD container, so it asserts cert profile + bundle
+  format + keyring agreement and never touches the device binary — the offline tree still cannot
+  catch a device-side rauc regression, only a HW install can.
+  **Playbook for the next HW run** (unchanged, all of it still applies): sign with the real key
+  (`RAUC_CERT=out/pki/release.cert.pem RAUC_KEY=out/pki/release.key.pem make bundle`) —
+  `genbundle.sh` otherwise mints an *ephemeral dev cert* that the device keyring rejects on
+  signature, which reads as a rauc failure but is not one. Use a TEST-mode bundle so the trial boot
+  keeps SSH (a release bundle in slot B trial-boots headless on a board with no serial console). Run
+  `rauc info` before `rauc install` to separate version skew from the verity path under test.
 
 - [ ] **Retroid Pocket Nova — board support added 2026-07-27, NOT HW-validated** — SM8550 sibling of
   the Retroid Pocket 6: same `qcs8550-retroidpocket-rp6.dts` base (AYN common dtsi, RSInput gamepad,

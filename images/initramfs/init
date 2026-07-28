@@ -36,6 +36,9 @@
 #   kernel=a     which slot's boot image is currently at /KERNEL (the ESP, and so /KERNEL, is
 #                SHARED — this is the only record of which root's /lib/modules matches it)
 #   bak=         set when /NOVADECK/KERNEL.BAK holds the previous image
+#   broken=      slots an install started on and never finished ('', 'a', 'b' or 'ab'). Written
+#                by novadeck-bootctl's RAUC backend; READ BY NOTHING HERE — it is carried through
+#                writes and nothing else. See the write_state note on why it is a named field.
 #   end          MUST be the last non-blank line — this is the torn-write detector
 #
 # TWO FILES, NOT WRITE-THEN-RENAME. There is no `sync` here and no shell can fsync, so a rename
@@ -138,7 +141,7 @@ resolve() {
 # is not, which is what makes a truncated write detectable.
 read_state() {
   _f=$1
-  ST_GEN=''; ST_ACTIVE=''; ST_PENDING=''; ST_TRIES=''; ST_KERNEL=''; ST_BAK=''
+  ST_GEN=''; ST_ACTIVE=''; ST_PENDING=''; ST_TRIES=''; ST_KERNEL=''; ST_BAK=''; ST_BROKEN=''
   _end=0
   [ -f "$_f" ] || return 1
   # `|| [ -n "$_line" ]` so a final line with no trailing newline is still seen.
@@ -151,6 +154,7 @@ read_state() {
       tries=*)   ST_TRIES=${_line#tries=};     _end=0 ;;
       kernel=*)  ST_KERNEL=${_line#kernel=};   _end=0 ;;
       bak=*)     ST_BAK=${_line#bak=};         _end=0 ;;
+      broken=*)  ST_BROKEN=${_line#broken=};   _end=0 ;;
       end)       _end=1 ;;
       *)         _end=0 ;;   # unknown key — ignored on purpose, but not a terminator
     esac
@@ -170,6 +174,13 @@ read_state() {
 # rollback path below touches them, and it does so by assigning those variables BEFORE calling, so
 # every other write round-trips them exactly as read. Clobbering a field written by a newer
 # novadeck-bootctl is precisely what the compatibility contract forbids.
+#
+# broken= is round-tripped the same way and NOTHING here reads it. That is the point: this writer
+# emits a FIXED field list, so a key it does not name is destroyed the first time it writes --
+# and it writes on every trial boot, to decrement `tries`. A `broken` marker set by the RAUC
+# backend would therefore have survived until exactly the next boot and no further. "Unknown keys
+# are ignored" is a property of the READER above; it has never been one of this writer. Any future
+# field must be added here too, or it does not exist in practice.
 write_state() {
   _wa=$1 _wp=$2 _wt=$3
   _target=$STATEDIR/STATE.$STATE_SPARE
@@ -181,6 +192,7 @@ write_state() {
     printf 'tries=%s\n'   "$_wt"
     printf 'kernel=%s\n'  "$STATE_KERNEL"
     printf 'bak=%s\n'     "$STATE_BAK"
+    printf 'broken=%s\n'  "$STATE_BROKEN"
     printf 'end\n'
   } >"$_target" 2>/dev/null || { warn "state write to STATE.$STATE_SPARE failed"; return 1; }
   # The file we just wrote becomes the winner and the other one becomes the spare, so a second
@@ -214,13 +226,13 @@ else
 fi
 
 STATE_GEN=0; STATE_WON=-1; STATE_SPARE=0
-STATE_ACTIVE=''; STATE_PENDING=''; STATE_TRIES=0; STATE_KERNEL=''; STATE_BAK=''
+STATE_ACTIVE=''; STATE_PENDING=''; STATE_TRIES=0; STATE_KERNEL=''; STATE_BAK=''; STATE_BROKEN=''
 if [ "$ESPMODE" != none ]; then
   for _n in 0 1; do
     if read_state "$STATEDIR/STATE.$_n" && [ "$ST_GEN" -gt "$STATE_GEN" ]; then
       STATE_GEN=$ST_GEN; STATE_WON=$_n
       STATE_ACTIVE=$ST_ACTIVE; STATE_PENDING=$ST_PENDING; STATE_TRIES=$ST_TRIES
-      STATE_KERNEL=$ST_KERNEL; STATE_BAK=$ST_BAK
+      STATE_KERNEL=$ST_KERNEL; STATE_BAK=$ST_BAK; STATE_BROKEN=$ST_BROKEN
     fi
   done
   # Write to whichever file did NOT win. With no winner at all, seed STATE.0 — the same file
@@ -374,8 +386,8 @@ fi
 # this survives the pivot — it is what novadeck-bootctl reads to know which slot it is on, and
 # it is the first evidence to check when debugging a boot offline.
 #
-# INVARIANT: gen/active/pending/tries_left/kernel are emitted from the single set of STATE_* variables
-# that write_state() advances, so this file always describes the ESP as it stands at handoff —
+# INVARIANT: gen/active/pending/tries_left/kernel/broken are emitted from the single set of STATE_*
+# variables that write_state() advances, so this file always describes the ESP as it stands at handoff —
 # never a mix of pre- and post-write values. On a boot where the ESP could not be written
 # (esp=ro, esp=none) they describe what was read, which is likewise still what is on the card.
 # `tries_left` is the remaining trial count recorded in that state, i.e. what a NEXT boot would
@@ -388,6 +400,7 @@ mkdir -p /run/novadeck
   printf 'pending=%s\n'    "$STATE_PENDING"
   printf 'tries_left=%s\n' "$STATE_TRIES"
   printf 'kernel=%s\n'     "$STATE_KERNEL"
+  printf 'broken=%s\n'     "$STATE_BROKEN"
   printf 'esp=%s\n'        "$ESPMODE"
   printf 'root=%s\n'       "$ROOTDEV"
 } >/run/novadeck/boot 2>/dev/null || warn "cannot write /run/novadeck/boot"

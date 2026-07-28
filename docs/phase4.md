@@ -483,7 +483,9 @@ recovery mechanism when you have the card in a reader.
 | what | where |
 |---|---|
 | slot selection, decrement, rollback, failover | `images/initramfs/init` |
-| offline test of the decision table (45 assertions) | `images/initramfs/test-slot-state.sh` |
+| offline test of the decision table (109 checks) | `images/initramfs/test-slot-state.sh` |
+| offline test of the RAUC backend contract (101 checks) | `images/test-bootctl.sh` |
+| both suites, host-side, no build needed | `make test` |
 | `umount` + `/esp` staged into the cpio | `images/mkinitramfs.sh` |
 | both slots populated, distinct fsid, state seeded | `images/make-sdcard.sh`, `images/assemble-rootfs.sh` |
 | `status` / `try` / `mark-good` / `rollback` + RAUC's custom-bootloader contract | `fs-overlay/usr/bin/novadeck-bootctl` |
@@ -538,7 +540,7 @@ back. A field maintained on the happy path only is the defect this one was fixed
 > system is not healthy". A kernel that does not boot at all leaves nothing running to restore
 > anything — that is still a reflash, and design C never claimed otherwise.
 
-Verified offline: `images/initramfs/test-slot-state.sh` (100 checks, up from 56) covers restore, a
+Verified offline: `images/initramfs/test-slot-state.sh` (109 checks, up from 56) covers restore, a
 missing backup file, a read-only ESP, a *failed* restore's correcting write, and the kernel/slot
 mismatch warning in all three of its states (mismatched, matching, unrecorded). Guard assertion 7
 asserts the built tree can actually perform an update: `rauc`, keyring, `system.conf`, `boot.img`,

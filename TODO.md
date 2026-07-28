@@ -5,8 +5,8 @@ rationale lives in the linked memories and commit history.
 
 ## Open
 
-- [ ] **`novadeck-bootctl`'s RAUC backend contract has no offline coverage — and that is how a
-  broken one shipped** — found 2026-07-28, the same day it cost the first hardware `rauc install`.
+- [x] **`novadeck-bootctl`'s RAUC backend contract has no offline coverage — FIXED 2026-07-28**,
+  offline-verified, not yet HW-run. Originally: **and that is how a broken one shipped** — found 2026-07-28, the same day it cost the first hardware `rauc install`.
   `set-state <slot> bad` returned exit 1 for a slot that was neither active nor pending, which is
   precisely the normal pre-write case (RAUC marks the TARGET slot bad before writing it), so every
   install aborted at 40% with `Failed marking slot rootfs.1 as bad` — a message describing our exit
@@ -28,9 +28,32 @@ rationale lives in the linked memories and commit history.
   artifact that ships. Make it `BOOTINFO=${BOOTINFO:-/run/novadeck/boot}` first; the ESP path is
   already redirectable via `PARTLABEL` lookup + a temp dir, so that one line is what unblocks the
   rest.
+  **Resolution: `images/test-bootctl.sh`, 101 checks, and it executes the SHIPPED tool** — not a
+  copy and not a `sed`-mangled variant, so what it asserts is the artifact that ships. The seam is
+  three lines (`BOOTINFO`/`ESP_AUTO`/`ESP_MANUAL` became `${VAR:-default}`), documented as a test
+  seam at the top of the tool; `ESP_AUTO` was worth taking too, because pointing it at a sandbox
+  keeps the test on the gpt-auto path the device actually uses instead of the findfs fallback
+  nothing normally reaches. `id` and `mountpoint` are stubbed on `PATH`; nothing else is faked.
+  What it asserts, in the order the failure taught us to care about:
+  - **Exit status on every legal call, no-ops included** — `backend-exits-0-on-every-legal-call`
+    walks all ten (`get-current`, `get-primary`, `get-state a|b`, `set-primary a|b`,
+    `set-state a|b good|bad`) from a pristine state each time, because the bug was a sequence-
+    independent shell idiom and a side-effect assertion could not have seen it.
+  - **Completeness** — `backend-is-complete` enumerates the five subcommands `system.conf`'s
+    contract requires and fails if the tool does not dispatch one. A MISSING command now fails as
+    loudly as a broken one, which is the `get-current` lesson.
+  - The rest: values (`get-current` off the handoff and not the cmdline, and non-zero on a
+    degraded boot), the `broken=` semantics below, format preservation including unknown keys, and
+    rejection paths.
+  **`make test` now runs both suites** (210 checks; `test-slot-state.sh` is at 109, up from 100).
+  Host-side and needing no build, container, root or device — the previous absence of any target
+  that ran them is a large part of why the gap survived. Two of the new cases failed on their first
+  run against correct code: both had marked the ACTIVE slot bad, which the tool deliberately
+  refuses. That is the enumeration doing its job — the reachable path to `broken=ab` is genuinely
+  narrower than it looks, and the test now documents it.
 
-- [ ] **RAUC arms the new slot BEFORE `post-install.sh` makes it bootable — a ~15s window where
-  the ESP says "boot b" and b cannot boot** — found 2026-07-28 on hardware, from the journal of a
+- [x] **RAUC arms the new slot BEFORE `post-install.sh` makes it bootable — FIXED 2026-07-28**,
+  offline-verified, not yet HW-run. Was: **a ~15s window where the ESP says "boot b" and b cannot boot** — found 2026-07-28 on hardware, from the journal of a
   successful install. RAUC's order is fixed and not ours to change:
 
   ```
@@ -55,8 +78,23 @@ rationale lives in the linked memories and commit history.
   a half-prepared slot, and the failure mode becomes "install failed, run it again" instead of "one
   bad boot, hope the rollback fires". Test it by cutting power during the hook — the window is ~15s
   of a ~6min update, so script the kill rather than racing it by hand.
+  **Resolution: exactly the cheap local fix above.** `post-install.sh` gained a step 0 (disarm) and
+  a step 4 (re-arm), and the header's "order is load-bearing" list now runs 0–4. The disarm reuses
+  `novadeck-bootctl rollback` rather than inventing a synonym — clearing `pending` and zeroing
+  `tries` *is* rollback, and it already exits 0 as a no-op when nothing is armed. The re-arm is two
+  statements after `set-kernel`, both fatal on failure: `set-state <target> good` (clears the
+  pre-write `broken` mark — see the item below, and note this is the only place that knows the
+  install completed) then `set-primary <target>`.
+  Offline-verified as a SEQUENCE, which is what this needed: `a-completed-install-ends-armed-and-
+  unmarked` drives RAUC's real order (mark bad → write → set-primary → hook) and asserts the end
+  state is `pending=b tries=1 broken='' kernel=b`; `a-power-cut-inside-the-hook-leaves-nothing-
+  armed` stops after the disarm and asserts `get-primary` answers the RUNNING slot with
+  `pending=''`. **Still worth the HW power-cut test**, and it is now a cheaper one: the assertion
+  is "the ESP never names the target while the target is not bootable", so any kill point inside
+  the hook should show the same thing.
 
-- [ ] **An interrupted install leaves NO record — a half-written slot still reports `good`** —
+- [x] **An interrupted install leaves NO record — a half-written slot still reports `good` —
+  FIXED 2026-07-28**, offline-verified, not yet HW-run. Originally:
   demonstrated on hardware 2026-07-28 (deliberately, via the tampered-bundle test): a payload byte
   flip made dm-verity fail 13s into writing slot a, aborting the install partway through the copy.
   Slot a was then genuinely inconsistent, and both readers disagreed with reality:
@@ -77,6 +115,32 @@ rationale lives in the linked memories and commit history.
   versions, so this is additive and safe), set on `set-state bad` for any slot and cleared on a
   successful post-install; then `get-state`, `try` and `status` all consult it. Whatever the shape,
   the invariant to restore is that a slot RAUC was told is bad does not later answer `good`.
+  **Resolution: the `broken=` key, as sketched.** It holds the SET of marked slots ('', 'a', 'b',
+  'ab') in canonical order, not a single letter: `ab` is reachable (a failed install into b, then
+  `try b` + `mark-good` promoting it, then an install into a that dies) and a single letter would
+  erase the first mark on the second write. `set-state bad` records it for any slot except the
+  ACTIVE one — a slot we are running is demonstrably bootable, and marking it would make
+  `get-state` contradict the fact that it answered at all. `set-state good` clears it
+  unconditionally, deliberately NOT only when the slot is pending: the hook disarms while it works,
+  so the completed slot is neither active nor pending at the moment the mark must come off.
+  Consumers: `get-state` answers `bad`, `status` prints the field and warns per slot, `try` warns
+  but still arms — refusing would let the one recorded fact about a half-installed slot disable the
+  only recovery path, and the trial counter already bounds the risk.
+  **The trap this nearly walked into, and the reason it is a named field rather than a new key:**
+  `images/initramfs/init`'s `write_state` emits a FIXED field list, so it DESTROYS any key it does
+  not name — and it writes on every trial boot, to decrement `tries`. A `broken` marker would have
+  survived exactly one boot. "Unknown keys are ignored, never rejected" is a property of the init's
+  READER and has never been one of its writer, though the header comment reads as if it covered
+  both (`novadeck-bootctl` really does preserve them, via `S_EXTRA`). So `broken=` is parsed,
+  carried and emitted by the init as a first-class field, published in the `/run/novadeck/boot`
+  handoff, seeded empty by `make-sdcard.sh` and asserted empty-and-present by `verify-card.sh`.
+  `test-slot-state.sh` covers the carry on a decrement, on a rollback, for both letters, and in
+  the handoff. A malformed value is NORMALISED rather than rejected — a bookkeeping field must
+  never invalidate the state the device boots from.
+  **Left open deliberately:** the init's writer still drops genuinely unknown keys, so the next
+  field added to this format has the same trap waiting. Making `write_state` preserve them needs a
+  builtin-only passthrough (no `cat`/`sed` in the initramfs, cf. `images/mkinitramfs.sh`) and is
+  not free; it is worth doing before a third field, not as part of this.
 
 - [x] **`kernel=` in the ESP slot state goes stale after a kernel rotation — FIXED 2026-07-28** on
   `feat/phase4b-rauc`, offline-verified; **partially HW-confirmed** the same day — the device's

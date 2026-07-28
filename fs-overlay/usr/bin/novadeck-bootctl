@@ -18,6 +18,13 @@
 #
 #   get-current / get-primary / set-primary <a|b> / get-state <a|b> / set-state <a|b> good|bad
 #
+# EVERY ONE OF THOSE MUST EXIT 0 ON EVERY LEGAL CALL, no-ops included: RAUC treats a non-zero
+# backend exit as a failed install. That is the whole contract, and it is asserted per-subcommand
+# offline by images/test-bootctl.sh, which executes this file rather than reasoning about it.
+#
+# `set-state <slot> bad` RECORDS the marking in the state's `broken=` field rather than dropping
+# it, so a slot whose install died halfway answers `bad` afterwards instead of `good`.
+#
 # Slot names are lowercase a/b throughout and are identical to the `bootname=` values
 # system.conf will use, so there is never a mapping layer to get wrong.
 #
@@ -27,9 +34,14 @@
 # never dropped. Do not "clean up" a field you do not recognise.
 set -uo pipefail
 
-BOOTINFO=/run/novadeck/boot
-ESP_AUTO=/efi                 # systemd gpt-auto automounts the ESP here
-ESP_MANUAL=/run/novadeck/esp  # fallback only, if that automount is not available
+# These three are the TEST SEAM, and the only reason they are parameters at all. The offline suite
+# (images/test-bootctl.sh) executes THIS file -- not a sed-mangled copy -- so what it asserts is the
+# artifact that ships. Overriding them is what lets it point the tool at a sandbox ESP and a fake
+# initramfs handoff. Nothing in this script is otherwise conditional on being under test, and the
+# defaults are what every real invocation uses: no unit, hook or interactive caller sets them.
+BOOTINFO=${BOOTINFO:-/run/novadeck/boot}
+ESP_AUTO=${ESP_AUTO:-/efi}                 # systemd gpt-auto automounts the ESP here
+ESP_MANUAL=${ESP_MANUAL:-/run/novadeck/esp}  # fallback only, if that automount is not available
 TRIES_DEFAULT=1
 
 PROG=${0##*/}
@@ -65,14 +77,39 @@ trap esp_close EXIT
 # --- state -----------------------------------------------------------------------------------
 
 # Parsed state of the winning file. EXTRA holds every key we do not know about, verbatim.
-S_GEN=0; S_ACTIVE=""; S_PENDING=""; S_TRIES=0; S_KERNEL=""; S_BAK=""; S_EXTRA=""
+S_GEN=0; S_ACTIVE=""; S_PENDING=""; S_TRIES=0; S_KERNEL=""; S_BAK=""; S_BROKEN=""; S_EXTRA=""
 S_WON=-1; S_SPARE=0
+
+# --- broken= ------------------------------------------------------------------------------------
+# The set of slots RAUC has told us are bad, as a string of letters in canonical order: '', 'a',
+# 'b' or 'ab'. A SET rather than a single letter because both slots can be bad at once (install
+# into b dies, then a retry into a dies too) and the field must not lose the first one.
+#
+# It exists because `bad` was previously DROPPED rather than recorded. set-state bad is a no-op
+# when the slot is neither active nor pending -- correct, in that nothing automatic boots such a
+# slot -- but it left nothing able to tell "never installed" from "install died halfway", so a
+# half-written slot still answered `good`. Demonstrated on hardware 2026-07-28 with a tampered
+# bundle: verity aborted the copy 13s in and get-state still said good.
+broken_norm() {  # canonical order, unknown characters dropped
+  local in=$1 out=''
+  case "$in" in *a*) out=a ;; esac
+  case "$in" in *b*) out="${out}b" ;; esac
+  printf '%s' "$out"
+}
+broken_has() { case "$S_BROKEN" in *"$1"*) return 0 ;; esac; return 1; }
+broken_add() { S_BROKEN=$(broken_norm "$S_BROKEN$1"); }
+broken_del() {
+  local out=''
+  case "$S_BROKEN" in *a*) [ "$1" = a ] || out=a ;; esac
+  case "$S_BROKEN" in *b*) [ "$1" = b ] || out="${out}b" ;; esac
+  S_BROKEN=$out
+}
 
 # Same validity rules as the initramfs: complete (terminated by `end`), gen and tries all-digits
 # (checked BEFORE any numeric compare), slots in {a,b}.
 read_state_file() {
   local f=$1 line end=0
-  local gen="" active="" pending="" tries="" kernel="" bak="" extra=""
+  local gen="" active="" pending="" tries="" kernel="" bak="" broken="" extra=""
   [ -f "$f" ] || return 1
   while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in
@@ -83,6 +120,7 @@ read_state_file() {
       tries=*)   tries=${line#tries=};     end=0 ;;
       kernel=*)  kernel=${line#kernel=};   end=0 ;;
       bak=*)     bak=${line#bak=};         end=0 ;;
+      broken=*)  broken=${line#broken=};   end=0 ;;
       end)       end=1 ;;
       *)         extra+="$line"$'\n';      end=0 ;;
     esac
@@ -94,6 +132,11 @@ read_state_file() {
   [[ $pending =~ ^([ab])?$ ]] || return 1
   R_GEN=$gen; R_ACTIVE=$active; R_PENDING=$pending; R_TRIES=$tries
   R_KERNEL=$kernel; R_BAK=$bak; R_EXTRA=$extra
+  # NORMALISED, NOT VALIDATED. A malformed `broken=` must not invalidate the whole file: the other
+  # fields are what the device boots from, and rejecting the state over a bookkeeping field would
+  # turn a typo into a cmdline-fallback boot. Junk normalises to '' -- which is the safe direction
+  # only because a lost marker degrades to today's behaviour, not to booting something worse.
+  R_BROKEN=$(broken_norm "$broken")
   return 0
 }
 
@@ -104,7 +147,7 @@ state_load() {
     if read_state_file "$ESP/NOVADECK/STATE.$n" && [ "$R_GEN" -gt "$S_GEN" ]; then
       S_GEN=$R_GEN; S_WON=$n
       S_ACTIVE=$R_ACTIVE; S_PENDING=$R_PENDING; S_TRIES=$R_TRIES
-      S_KERNEL=$R_KERNEL; S_BAK=$R_BAK; S_EXTRA=$R_EXTRA
+      S_KERNEL=$R_KERNEL; S_BAK=$R_BAK; S_BROKEN=$R_BROKEN; S_EXTRA=$R_EXTRA
     fi
   done
   if [ "$S_WON" = 1 ]; then S_SPARE=0; else S_SPARE=1; fi
@@ -131,6 +174,7 @@ state_write() {  # <active> <pending> <tries>
     printf 'tries=%s\n'   "$3"
     printf 'kernel=%s\n'  "$S_KERNEL"
     printf 'bak=%s\n'     "$S_BAK"
+    printf 'broken=%s\n'  "$S_BROKEN"
     # Keys written by a version of this tool we do not know about. Preserved, not dropped.
     [ -n "$S_EXTRA" ] && printf '%s' "$S_EXTRA"
     printf 'end\n'
@@ -174,9 +218,20 @@ cmd_status() {
     # kernel/bak are printed unconditionally, empty included. They are maintained fields now, so
     # "not recorded" is itself a finding -- hiding it reads as "this card has no kernel record"
     # being indistinguishable from "this tool did not tell you".
-    printf '  file=STATE.%s gen=%s\n  active=%s\n  pending=%s\n  tries=%s\n  kernel=%s\n  bak=%s\n' \
+    printf '  file=STATE.%s gen=%s\n  active=%s\n  pending=%s\n  tries=%s\n  kernel=%s\n  bak=%s\n  broken=%s\n' \
       "$S_WON" "$S_GEN" "$S_ACTIVE" "${S_PENDING:-<none>}" "$S_TRIES" \
-      "${S_KERNEL:-<unrecorded>}" "${S_BAK:-<none>}"
+      "${S_KERNEL:-<unrecorded>}" "${S_BAK:-<none>}" "${S_BROKEN:-<none>}"
+  fi
+  # An install that started and never finished. Worth its own line rather than just the field:
+  # this is the only surface that says a slot is half-written, and the symptom otherwise is a
+  # device that fails a trial boot for no stated reason.
+  if [ -n "$S_BROKEN" ]; then
+    local sl
+    for sl in a b; do
+      broken_has "$sl" || continue
+      echo "  WARNING: slot $sl is BROKEN -- an install was started on it and never completed."
+      echo "           Re-install it; do not trust its contents. 'get-state $sl' reports bad."
+    done
   fi
   # The one cross-check that does not share a failure mode with the selection code: the var
   # image carries its own slot letter, written at build time.
@@ -217,6 +272,14 @@ cmd_try() {
   # CFG80211/ATH12K) on a device with no serial console, and nothing on screen to say why.
   if [ -n "$S_KERNEL" ] && [ "$S_KERNEL" != "$slot" ]; then
     warn "/KERNEL is slot $S_KERNEL's boot image -- slot $slot will boot with /lib/modules from a different build"
+  fi
+  # Same reasoning: warned, not refused. `try` is the tool you reach for when the device is already
+  # in trouble, and a slot marked broken is still the better bet than one that does not boot at all
+  # -- the trial counter is what bounds the risk, and it is armed by this very write. Refusing here
+  # would mean the one recorded fact about a half-installed slot disables the only recovery path.
+  if broken_has "$slot"; then
+    warn "slot $slot is marked BROKEN (an install was started and never completed) -- it may not boot"
+    warn "  it reverts to $S_ACTIVE after $tries failed attempt$([ "$tries" = 1 ] || echo s); re-install it to clear the mark"
   fi
   state_write "$S_ACTIVE" "$slot" "$tries"
   echo "next boot: slot $slot (active stays $S_ACTIVE, $tries tr$([ "$tries" = 1 ] && echo y || echo ies))"
@@ -373,9 +436,16 @@ cmd_get_state() {
   local slot=${1:-}
   [[ $slot =~ ^[ab]$ ]] || die "usage: $PROG get-state <a|b>"
   esp_open; state_require
-  # "bad" means RAUC should not consider it bootable. A slot on trial with no tries left has
-  # failed; anything else we have no evidence against.
-  if [ "$slot" = "$S_PENDING" ] && [ "$S_TRIES" = 0 ]; then echo bad; else echo good; fi
+  # "bad" means RAUC should not consider it bootable. Three ways to earn it: RAUC told us so and we
+  # recorded it in `broken` (an install that started and did not finish), or the slot is on trial
+  # with no tries left (a boot that never confirmed). Anything else we have no evidence against.
+  #
+  # The `broken` arm is what closes the gap this field was added for: without it a slot whose
+  # install died mid-copy answered `good`, because "bad" on a slot that is neither active nor
+  # pending had nowhere to be written down.
+  if broken_has "$slot"; then echo bad
+  elif [ "$slot" = "$S_PENDING" ] && [ "$S_TRIES" = 0 ]; then echo bad
+  else echo good; fi
 }
 
 cmd_set_state() {
@@ -392,29 +462,46 @@ cmd_set_state() {
   # "Failed marking slot rootfs.1 as bad" -- a message that describes our exit code, not our state.
   case "$st" in
     good)
+      # Clearing `broken` is unconditional and comes FIRST: "good" is a statement about the slot,
+      # not about whether it happens to be on trial. The RAUC post-install hook is what sends this
+      # for a freshly completed install, at which point the slot is neither active nor pending
+      # (the hook disarms while it works), so a pending-only good would clear nothing and the slot
+      # would stay marked broken for the rest of its life.
+      broken_del "$slot"
       # Not `&& ... || true`: that swallows a state_write failure and reports success to RAUC,
       # which would then believe a slot was confirmed that the ESP never recorded.
       if [ "$slot" = "$S_PENDING" ]; then
         state_write "$slot" '' 0
+      else
+        state_write "$S_ACTIVE" "$S_PENDING" "$S_TRIES"
       fi ;;
     bad)
       if [ "$slot" = "$S_ACTIVE" ]; then
         # Deliberate refusal, reported as success: RAUC never asks this (it marks the slot it is
         # about to overwrite, never the booted one), and honouring it would leave nothing to boot.
+        # Nothing is recorded in `broken` either -- a slot we are RUNNING is demonstrably bootable,
+        # and marking it would make get-state contradict the fact that it answered at all.
         warn "refusing to mark the ACTIVE slot bad -- there would be nothing to boot"
       elif [ "$slot" = "$S_PENDING" ]; then
-        # Mark it unbootable by zeroing its trials; the next boot rolls back.
+        # Mark it unbootable by zeroing its trials; the next boot rolls back. Also recorded in
+        # `broken`, because tries=0 stops describing this slot the moment a later write moves
+        # `pending` elsewhere -- and then the reason it was abandoned would be gone.
+        broken_add "$slot"
         state_write "$S_ACTIVE" "$slot" 0
-      fi
-      # Neither active nor pending: nothing boots it already, so "bad" is a no-op and NOT an error.
-      # This is the normal pre-write case for an install target.
-      ;;
+      else
+        # Neither active nor pending: nothing boots it already, so this changes no boot decision
+        # and is NOT an error -- it is the normal pre-write case for an install target. But it is
+        # no longer a NO-OP: the marking is recorded, so an install that never reaches its
+        # post-install hook leaves a slot that answers `bad` instead of quietly answering `good`.
+        broken_add "$slot"
+        state_write "$S_ACTIVE" "$S_PENDING" "$S_TRIES"
+      fi ;;
     *) die "state must be 'good' or 'bad'" ;;
   esac
 }
 
 usage() {
-  sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'
   exit 2
 }
 

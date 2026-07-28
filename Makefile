@@ -156,7 +156,7 @@ KERNEL_SRC := kernel/SOURCE.pin kernel/embed.list kernel/build.sh \
 # Phony orchestration targets
 # ==============================================================================
 .PHONY: help all image toolchain kernel fw-linux fw-qcom base overlay rootfs manifest relock \
-        initramfs boot sdcard verify-card bundle deploy clean clean-base clean-overlay distclean
+        initramfs boot sdcard verify-card test bundle deploy clean clean-base clean-overlay distclean
 
 help: ## Show this help
 	@echo "novadeck build — unified image (all SoCs/boards)"
@@ -186,6 +186,18 @@ sdcard:    $(SDCARD)       ## Build the flashable SD-card image (in container)
 # filesystem identities an A/B switch depends on. Unprivileged: no loop mounts, no root.
 verify-card: $(SDCARD) | $(BUILD_STAMP) ## Verify the built A/B card image (in container)
 	$(INBUILD) images/verify-card.sh
+
+# The two offline suites over the A/B boot logic. Neither needs a build, a container, root or a
+# device — they are pure shell over temp-dir state — so there is no reason not to run them, and
+# until now there was no target that did. That absence is not academic: the RAUC backend had no
+# offline coverage at all, and a broken one reached hardware and aborted a real install.
+#
+# HOST-SIDE ON PURPOSE, unlike everything else here. Both scripts execute the shipped artifacts
+# (images/initramfs/init and fs-overlay/usr/bin/novadeck-bootctl) against a sandbox; putting them
+# in the container would test the same files through an extra layer that can only add failure modes.
+test: ## Run the offline slot-state + bootctl suites (host, no build needed)
+	bash images/initramfs/test-slot-state.sh
+	bash images/test-bootctl.sh
 
 # ==============================================================================
 # Toolchain image

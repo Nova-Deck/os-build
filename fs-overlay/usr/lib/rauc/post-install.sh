@@ -7,6 +7,7 @@
 #
 # Order is load-bearing:
 #
+#   0. disarm     -- RAUC armed the target BEFORE calling us; take that back until it is real.
 #   1. fsid       -- MUST come before anything mounts the target. Until btrfstune has run, the
 #                    target and the running root share an fsid AND devid=1, which is the pair
 #                    btrfs keys its in-kernel device list on: the second one scanned is treated as
@@ -14,6 +15,7 @@
 #                    RUNNING root. Every later step here mounts the target, so this is step 1.
 #   2. /var       -- per-slot identity. Without it the updated slot boots as a different device.
 #   3. /KERNEL    -- rotate the ESP boot image, keeping the previous one as KERNEL.BAK.
+#   4. re-arm     -- ONLY NOW is the slot bootable, so only now may the ESP point at it.
 #
 # WHY THE KERNEL COMES OUT OF THE NEW ROOT AND NOT THE BUNDLE: /lib/modules/<ver> lives in the
 # rootfs, so the kernel that matches it is the one that root shipped with. Taking it from the root
@@ -64,6 +66,31 @@ esac
 [ -b "$dev_root" ] || die "no block device at $dev_root"
 [ -b "$dev_var" ]  || die "no block device at $dev_var"
 log "target slot $target ($dev_root)"
+
+# --- 0. DISARM ----------------------------------------------------------------------------------
+# RAUC has ALREADY armed this slot by the time we run. Its order is fixed and not ours to change:
+# it calls the bootloader backend's set-primary (-> pending=<target> tries=1) and only THEN starts
+# the post-install handler. So on entry the ESP says "boot the target next" while the target is not
+# yet bootable -- its /var is the previous install's or freshly mkfs'd, and /KERNEL still holds the
+# other slot's image. Everything below takes ~15s (HW-measured 2026-07-28: 17:55:03 armed,
+# 17:55:19 kernel rotated), and a power loss inside it leaves the device pointed at a slot with no
+# /var/lib/overlays/etc/upper -- which the comment further down correctly says "does not come up" --
+# running a kernel whose /lib/modules belong to the other build. With CFG80211/ATH12K at =m that is
+# no Wi-Fi, no serial console, nothing on screen.
+#
+# Not fatal even then: tries=1 means one failed boot and the rollback fires (HW-validated
+# 2026-07-28). But that spends the safety net on a failure we can simply not create.
+#
+# So: take the arming back for the duration of the work, and re-arm at the very end once the slot
+# is genuinely bootable. An interrupted post-install then leaves nothing pointing at a
+# half-prepared slot, and the failure mode becomes "the install failed, run it again" instead of
+# "one bad boot, hope the rollback fires".
+#
+# `rollback` is precisely this operation -- it clears pending and zeroes tries -- so it is reused
+# rather than given a synonym. It is a no-op that still exits 0 if nothing is armed, which is the
+# case when a handler runs outside a RAUC install.
+novadeck-bootctl rollback >/dev/null || die "cannot disarm the target slot before preparing it"
+log "disarmed slot $target for the duration of the install (re-armed at the end)"
 
 # --- 1. fsid ------------------------------------------------------------------------------------
 # -f because the filesystem is a byte copy of a mounted one, which btrfstune otherwise refuses.
@@ -182,5 +209,24 @@ umount "$MNT"; trap - EXIT
 # novadeck-bootctl owns every write to that file (generation scheme, unknown-key preservation);
 # hand-writing it here would be a second writer with none of those properties.
 novadeck-bootctl set-kernel "$target" "$bak" || die "cannot record the kernel rotation in the slot state"
+log "kernel rotated to slot $target${bak:+ (previous kept as $bak)}"
 
-log "kernel rotated to slot $target${bak:+ (previous kept as $bak)}; slot $target is ready to be tried"
+# --- 4. RE-ARM ----------------------------------------------------------------------------------
+# The slot is bootable as of the line above and not one line before it, so this is where the arming
+# RAUC did up front is put back. Two statements, in this order:
+#
+#   set-state good  clears the `broken` mark RAUC set before it started writing. That marking is
+#                   now RECORDED rather than dropped, which is what makes a half-written slot
+#                   answer `bad` -- so a COMPLETED install has to be what takes it back off, and
+#                   this is the only place that knows the install completed. Miss it and the slot
+#                   stays marked broken forever, warning on every `status` and every `try`.
+#   set-primary     re-arms the trial: pending=<target>, tries=1. Identical to what RAUC wrote
+#                   before the handler, so the state RAUC expects on exit is the state it gets.
+#
+# Both are fatal on failure. Exiting 0 with the slot written but unarmed would report a successful
+# install that silently never boots; exiting 0 with it armed but still marked broken would warn
+# forever about a slot that is fine.
+novadeck-bootctl set-state "$target" good || die "cannot clear the broken mark on slot $target"
+novadeck-bootctl set-primary "$target"    || die "cannot re-arm slot $target for its trial boot"
+
+log "slot $target re-armed for a trial boot; reboot to try it"

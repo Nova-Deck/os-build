@@ -426,6 +426,59 @@ expect_kernel b
 expect_kmsg "cannot restore the previous kernel"
 done_
 
+# The four cases above all reach the rollback through `tries` hitting zero. A REAL failed OTA does
+# not get that far: a trial slot that will not mount fails over on its first boot, before the
+# counter can ever run out, so the failover path is the one that actually runs in production. It
+# used to clear `pending` and stop there -- old root, new kernel, no Wi-Fi, no serial console. The
+# cases below are the failover halves of the four above, and the reason the bug survived this file
+# is that the only failover case here seeded no `bak` at all.
+
+t "failover-from-an-unmountable-trial-restores-the-previous-kernel"
+seed_state 0 5 a b 1 KERNEL.BAK b
+printf 'NEW-KERNEL' >"$SB/esp/KERNEL"
+printf 'OLD-KERNEL' >"$SB/esp/KERNEL.BAK"
+echo 'novadeck-root-B' >"$SB/unmountable"
+run_init
+expect_rc 1                     # exit 1 -> panic -> panic=5 reboots into the restored kernel
+[ "$(cat "$SB/esp/KERNEL")" = "OLD-KERNEL" ] \
+  && ok "KERNEL restored from KERNEL.BAK" || bad "KERNEL was not restored (got '$(cat "$SB/esp/KERNEL")')"
+expect_state 7 a '' 0           # gen 6 = the try decrement, gen 7 = the failover
+expect_bak ''
+expect_kernel a
+expect_kmsg "FAILOVER: restoring the previous kernel"
+awk '/umount/{u=1} END{exit !u}' "$SB/mounts" && ok "ESP unmounted before the reboot" || bad "ESP not unmounted"
+done_
+
+t "a-failed-restore-on-failover-takes-back-the-kernel-record"
+seed_state 0 5 a b 1 KERNEL.BAK b
+printf 'NEW-KERNEL' >"$SB/esp/KERNEL"
+printf 'OLD-KERNEL' >"$SB/esp/KERNEL.BAK"
+echo 'novadeck-root-B' >"$SB/unmountable"
+: >"$SB/cp-fails"
+run_init
+expect_rc 0                     # the restore failed, so it boots the other slot rather than rebooting
+expect_boot slot a; expect_boot source failover
+expect_kmsg "could not restore KERNEL.BAK"
+expect_state 8 a '' 0           # gen 6 = try, gen 7 = failover, gen 8 = the correction
+expect_kernel b                 # /KERNEL still holds b's image, and the state says so
+expect_bak ''                   # NOT re-armed: one failed restore per boot, not a loop
+expect_boot kernel b
+expect_handoff_matches_state
+expect_kmsg "/KERNEL is slot b's boot image but this boot is slot a"
+done_
+
+t "failover-with-a-missing-backup-file-still-fails-over"
+seed_state 0 5 a b 1 KERNEL.BAK b
+printf 'NEW-KERNEL' >"$SB/esp/KERNEL"     # no KERNEL.BAK on the ESP
+echo 'novadeck-root-B' >"$SB/unmountable"
+run_init
+expect_rc 0                     # degrades to the old behaviour rather than refusing to boot
+expect_boot slot a; expect_boot source failover
+[ "$(cat "$SB/esp/KERNEL")" = "NEW-KERNEL" ] && ok "KERNEL left alone" || bad "KERNEL was touched"
+expect_kernel b                 # no restore happened, so the record must not claim one
+expect_kmsg "is missing"
+done_
+
 # --- kernel/root coherence ---------------------------------------------------------------------
 # /KERNEL is SHARED; /lib/modules/<ver> ships inside a root. `try` on a slot the last rotation did
 # not install reaches the mismatch with no update involved, and =m CFG80211/ATH12K make it look

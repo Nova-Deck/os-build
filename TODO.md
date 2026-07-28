@@ -5,10 +5,41 @@ rationale lives in the linked memories and commit history.
 
 ## Open
 
-- [ ] **The ROLLBACK half of A/B has still never fired on hardware** — every trial boot we have ever
-  run, including the three on 2026-07-28, SUCCEEDED and was promoted. `tries` reaching zero, the
-  init falling back to the other slot, and `KERNEL.BAK` being restored are offline-verified only.
-  Two things make this harder to test than it looks, both learned 2026-07-28:
+- [x] **The ROLLBACK half of A/B — HW-VALIDATED 2026-07-29, both entry points, organic route.**
+  Until this run every trial boot we had ever done SUCCEEDED and was promoted, so `tries` reaching
+  zero, the init reverting, and `KERNEL.BAK` being restored were offline-verified only. Both
+  branches of `abandon_trial()` have now run on the device, each reached the way production would
+  reach it rather than by seeding state:
+
+  | entry point | trigger | ESP evidence |
+  |---|---|---|
+  | `SOURCE=failover` | trial slot will not mount | `gen=8` → `gen=9` |
+  | `SOURCE=rollback` | trial booted, never confirmed | `gen=16` → `gen=17` |
+
+  In both cases the abandoning generation wrote `active=a pending='' tries=0 kernel=a bak=''`, and
+  the boot that survived reported `source=state` — NOT `source=failover`/`rollback`, which is the
+  proof it rebooted after restoring instead of carrying on. `rauc status` agreed: `Booted from:
+  rootfs.0 (a)`. Pre-fix, that generation would have kept `kernel=b bak=KERNEL.BAK`.
+  **How the rollback was finally reached** (the recipe that works, after one that did not — see the
+  correction below): install clean so `post-install.sh` rotates `/KERNEL` and records `bak`, then
+  mask `sddm.service` in the TARGET slot's `/etc` overlay upper — on var-B at
+  `lib/overlays/etc/upper/systemd/system/sddm.service -> /dev/null`, applied AFTER the install
+  because `post-install.sh` copies `/var` wholesale and would wipe it. The trial then boots, no
+  session marker ever appears, `novadeck-boot-good.path` never fires, `tries` goes 1 → 0
+  unconfirmed, and the NEXT boot rolls back. SSH stays live throughout, which is why this beats
+  inducing a hang: a hang costs the only recovery channel and exercises no extra code.
+  **This also confirmed the property `novadeck-boot-good.service` documents** — no backstop timer
+  marked it good. Uptime passed the unit's 30s `ExecStartPre` with the unit still `inactive` and
+  `pending=b` still armed, because the `.path` never triggered.
+  **RESIDUAL LIMIT, deliberately not closed:** `KERNEL` and `KERNEL.BAK` were byte-identical
+  (`71605ef04b6d861f`) for both runs, because the device already ran the build being installed. The
+  state transitions prove the restore LOGIC ran; they do not prove the right BYTES came back.
+  Proving that needs two genuinely different builds — bump `VERSION` and rebuild so `boot.img`
+  differs, then re-run either branch. Cheap to do next time an image is built for another reason.
+  See also the unconfirmed-trial item below: the rollback is automatic ON NEXT BOOT, and nothing
+  in the system causes that boot to happen.
+
+  Two things made this harder to test than it looks, both learned 2026-07-28 and both still true:
   1. **A half-written slot is not an unbootable slot.** The tamper test aborted an install into a at
      67%, yet a still mounted and booted cleanly — the bundle and the flashed image are the same
      build, so the bytes that landed were nearly identical to the ones they replaced. Corrupting a
@@ -16,13 +47,58 @@ rationale lives in the linked memories and commit history.
   2. **"Just don't run `mark-good`" does not work either.** `novadeck-boot-good.path`/`.service`
      confirms the trial automatically once a session comes up and stays up, so a trial that boots at
      all is promoted with no operator action.
-  So a real test needs a slot that genuinely cannot boot — e.g. zeroing the target's btrfs
-  superblocks (primary at 64K, copy at 64M) before `try`, or masking `novadeck-boot-good` and
-  forcing a hang before session start. **Risk to price in first:** this board has no UART
-  ([[sm8650-no-uart]]), so if the fallback does NOT fire the device is dark and recovery means
-  pulling the SD card and repairing `/efi/NOVADECK/STATE.*` on the host. Do it with the card
-  physically accessible, and with a known-good slot on the other side. Recovery from a deliberately
-  broken slot is otherwise cheap: boot the good slot and `rauc install` into the broken one.
+
+  **CORRECTION 2026-07-28 — the test procedure this item used to prescribe would not have tested
+  rollback.** It said to zero the target's btrfs superblocks (primary at 64K, copy at 64M) before
+  `try`. A slot that will not MOUNT never reaches the rollback branch: `mount_root` fails and
+  `images/initramfs/init` takes the **failover** path (`SOURCE=failover`) on that first boot,
+  before `tries` can ever run out. Two different branches, and only one of them is what this item
+  is about. Anyone running that recipe would have watched a clean recovery and ticked the box.
+  To reach `SOURCE=rollback` the trial slot must **mount and boot, then fail to reach a session**:
+  mask `novadeck-boot-good.path` so nothing auto-confirms, and break something after mount but
+  before session start. Then boot 1 spends the try (`tries` 1 → 0), and boot 2 is the rollback.
+  Sequence to expect on the ESP: `pending=b tries=1` → `pending=b tries=0` → `pending='' tries=0`
+  with `active=a`, `kernel=a`, `bak=''`, and `KERNEL` byte-identical to the pre-update image.
+  **Risk to price in first:** this board has no UART ([[sm8650-no-uart]]), so if neither path fires
+  the device is dark and recovery means pulling the SD card and repairing `/efi/NOVADECK/STATE.*`
+  on the host. Do it with the card physically accessible, and with a known-good slot on the other
+  side. Recovery from a deliberately broken slot is otherwise cheap: boot the good slot and
+  `rauc install` into the broken one.
+  **Fixed while writing that correction** — the failover path was *also* the one with the bug.
+  `init:276` states the rule ("reverting the root without the kernel is the mismatch the rollback
+  exists to avoid"), but of the three paths that abandon a trial only the tries-exhausted one
+  obeyed it. Failover and the manual `novadeck-bootctl rollback` both cleared `pending` and left
+  the NEW kernel on the ESP against the OLD root — `/lib/modules` mismatch, and `CFG80211`/`ATH12K`
+  are `=m`, so no Wi-Fi and no console to say why. Since a failed OTA reaches failover and not the
+  rollback branch, **the broken path was the one production actually takes.** Now factored into
+  `abandon_trial()` (`images/initramfs/init`) used by both init paths, with the same field
+  discipline in `cmd_rollback`. It survived this long because the one failover case in
+  `test-slot-state.sh` seeded no `bak` at all; there are now seven cases across the two suites that
+  do (`make test`: 247 checks, was 210). Both halves are HW-confirmed by the runs recorded at the
+  top of this item.
+
+- [ ] **Nothing ends an unconfirmed trial — the rollback is automatic ON NEXT BOOT, not on failure**
+  — found on hardware 2026-07-28 while testing the rollback branch, by noticing the device simply
+  sat there. The confirm mechanism is ASYMMETRIC: `novadeck-boot-good.path`/`.service` is purely a
+  confirmer, and there is no negative counterpart. Nothing observes "the session never came up" and
+  acts on it. Verified in the tree: no `RuntimeWatchdogSec`/`RebootWatchdogSec` anywhere under
+  `fs-overlay/etc/systemd/`, and no novadeck timer or watchdog unit exists. A hardware watchdog
+  would not help even if armed — the OS is healthy and systemd would keep petting it; only the
+  session is missing.
+  **Measured:** a trial slot booted with `sddm` masked sat at `slot=b source=try tries_left=0`
+  indefinitely, well past the 30s `ExecStartPre` in `novadeck-boot-good.service`, with `pending=b`
+  still armed. Correct, but inert.
+  **Field consequence:** update installs → reboots → black screen → stays black until the user
+  holds the power button → *then* it recovers. Recovery works and the state machine is right, but
+  the window before it is UNBOUNDED, and a device left on a black screen just drains its battery.
+  On a board with no serial console the user's only signal is that black screen.
+  **Why this is not a quick patch.** A timer that force-reboots an unconfirmed trial after N
+  minutes closes it, but collides head-on with the tension `novadeck-boot-good.service` already
+  documents: a legitimately slow first boot — OOBE, an offline Steam start, a large shader compile
+  — must not be rebooted out from under the user. Picking N is a real decision and too-aggressive
+  is worse than the current gap. Note the existing comment there argues against a timeout that
+  marks GOOD; this is the opposite direction (a timeout that gives UP) and needs its own argument,
+  not that one inverted.
 
 - [x] **`novadeck-bootctl`'s RAUC backend contract has no offline coverage — FIXED 2026-07-28**,
   **HW-CONFIRMED 2026-07-28**: a full OTA install of a release-signed TEST bundle logged

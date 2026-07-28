@@ -211,6 +211,64 @@ write_state() {
   return 0
 }
 
+# Abandon a trial: make $1 active again, clear `pending`, and put the PREVIOUS kernel back.
+#
+# The kernel half is not optional and it is why this is a function. /KERNEL is shared by both slots
+# while /lib/modules/<ver> ships INSIDE a root, so reverting the root without the kernel boots the
+# old root under the new one -- CFG80211/ATH12K are =m, so that is a device with no Wi-Fi and no
+# serial console to say why ([[sm8650-no-uart]]). There are TWO ways a trial ends badly and both
+# land here: `tries` reaching zero, and the trial slot refusing to mount at all. Only the first
+# used to restore anything; the second is the one a real OTA failure actually takes, because a
+# root that will not mount fails over before the counter can ever run out.
+#
+# RETURNS only when the caller should CARRY ON booting $1 under the kernel already running: either
+# there was no backup to restore, or the restore failed. A successful restore does NOT return -- it
+# reboots, because we are running the new kernel and cannot swap it out from under ourselves. The
+# reboot is `exit 1` -> kernel panic -> panic=5 on our cmdline; MAGIC_SYSRQ is not in
+# kernel/kernel.config, so this reuses the mechanism the no-bootable-root path already relies on
+# rather than inventing a second one.
+#
+# `bak` is captured before the write, which clears it: the state must stop naming a backup in the
+# SAME generation that clears `pending`. If the copy is interrupted, the next boot must not keep
+# retrying a restore forever -- a stale KERNEL.BAK on the ESP is harmless, a state that keeps
+# pointing at it is not. `kernel` moves with the image in that same generation: KERNEL.BAK is by
+# definition what was live before the update, so restoring it makes /KERNEL the image of the slot
+# we are reverting TO. The pair describes one event and is written as one.
+#
+# HONEST LIMIT: this covers "the new kernel boots far enough to run us, but the system is not
+# healthy". A kernel that does not boot at all leaves nothing running to restore anything -- that
+# is a reflash, and design C never claimed otherwise (docs/phase4.md).
+abandon_trial() { # <slot-to-activate> <log-tag>
+  _at_slot=$1; _at_tag=$2
+  _bak=$STATE_BAK
+  _kernel_was=$STATE_KERNEL
+  _restore=0
+  if [ -n "$_bak" ] && [ "$ESPMODE" = rw ] && [ -f "$ESPDIR/$_bak" ]; then
+    _restore=1; STATE_BAK=''; STATE_KERNEL=$_at_slot
+  fi
+  [ "$ESPMODE" = rw ] && write_state "$_at_slot" '' 0
+  if [ "$_restore" = 1 ]; then
+    warn "$_at_tag: restoring the previous kernel ($_bak -> KERNEL) and rebooting"
+    if cp "$ESPDIR/$_bak" "$ESPDIR/KERNEL"; then
+      umount "$ESPDIR" || warn "DEGRADED: cannot unmount the ESP after restoring the kernel"
+      warn "$_at_tag: previous kernel restored — rebooting into slot $_at_slot"
+      exit 1
+    fi
+    warn "DEGRADED: could not restore $_bak — booting slot $_at_slot under the NEW kernel"
+    # The write above already claimed /KERNEL held $_at_slot's image. The copy failed, so it does
+    # not — correct the record with a second generation rather than boot on leaving a field that
+    # lies about which /lib/modules matches. `bak` stays cleared: a restore that failed once this
+    # boot must not be retried forever, which is the same reason it was cleared up front.
+    # (_restore=1 implies the ESP is rw, so this write needs no further guard.)
+    STATE_KERNEL=$_kernel_was
+    write_state "$_at_slot" '' 0
+  elif [ -n "$_bak" ] && [ "$ESPMODE" != rw ]; then
+    warn "DEGRADED: ESP is read-only — cannot restore the previous kernel ($_bak)"
+  elif [ -n "$_bak" ]; then
+    warn "DEGRADED: state names a previous kernel ($_bak) but $ESPDIR/$_bak is missing"
+  fi
+}
+
 ESPMODE=none
 if ESPDEV=$(resolve "PARTLABEL=NOVADECK-ESP"); then
   if mount -t vfat -o rw "$ESPDEV" "$ESPDIR" 2>/dev/null; then
@@ -270,54 +328,9 @@ else
   SLOT=$STATE_ACTIVE; SOURCE=rollback
   warn "ROLLBACK: pending slot $STATE_PENDING exhausted its tries — reverting to $SLOT"
   # An update rotated /KERNEL and kept the previous one; the trial it was installed for has now
-  # failed, so put the old kernel back. This has to REBOOT rather than carry on: we are already
-  # running the new kernel, and the root we are about to mount is the old slot, whose
-  # /lib/modules/<ver> does not match it (CFG80211/ATH12K are =m — that boot has no Wi-Fi, on a
-  # device with no serial console). Reverting the root without the kernel is the mismatch the
-  # rollback exists to avoid.
-  #
-  # The reboot is `exit 1` -> kernel panic -> panic=5 on our cmdline. MAGIC_SYSRQ is not in
-  # kernel/kernel.config, so /proc/sysrq-trigger does not exist; this reuses the same mechanism
-  # the no-bootable-root path already relies on rather than inventing a second one.
-  #
-  # HONEST LIMIT: this covers "the new kernel boots far enough to run us, but the system is not
-  # healthy". A kernel that does not boot at all leaves nothing running to restore anything — that
-  # is a reflash, and design C never claimed otherwise (docs/phase4.md).
-  # `bak` is captured before the write, which clears it: the state must stop naming a backup in the
-  # SAME generation that clears `pending`. If the copy below is interrupted, the next boot must not
-  # keep retrying a restore forever — a stale KERNEL.BAK on the ESP is harmless, a state that keeps
-  # pointing at it is not.
-  #
-  # `kernel` moves with the image: KERNEL.BAK is by definition what was live before the update, so
-  # restoring it makes /KERNEL the ACTIVE slot's image again — the slot we are rolling back to. It
-  # is re-pointed in the SAME generation that clears `bak`, because the pair describes one event.
-  _bak=$STATE_BAK
-  _kernel_was=$STATE_KERNEL
-  _restore=0
-  if [ -n "$_bak" ] && [ "$ESPMODE" = rw ] && [ -f "$ESPDIR/$_bak" ]; then
-    _restore=1; STATE_BAK=''; STATE_KERNEL=$STATE_ACTIVE
-  fi
-  [ "$ESPMODE" = rw ] && write_state "$STATE_ACTIVE" '' 0
-  if [ "$_restore" = 1 ]; then
-    warn "ROLLBACK: restoring the previous kernel ($_bak -> KERNEL) and rebooting"
-    if cp "$ESPDIR/$_bak" "$ESPDIR/KERNEL"; then
-      umount "$ESPDIR" || warn "DEGRADED: cannot unmount the ESP after restoring the kernel"
-      warn "ROLLBACK: previous kernel restored — rebooting into slot $SLOT"
-      exit 1
-    fi
-    warn "DEGRADED: could not restore $_bak — booting slot $SLOT under the NEW kernel"
-    # The write above already claimed /KERNEL held $STATE_ACTIVE's image. The copy failed, so it
-    # does not — correct the record with a second generation rather than boot on leaving a field
-    # that lies about which /lib/modules matches. `bak` stays cleared: a restore that failed once
-    # this boot must not be retried forever, which is the same reason it was cleared up front.
-    # (_restore=1 implies the ESP is rw, so this write needs no further guard.)
-    STATE_KERNEL=$_kernel_was
-    write_state "$STATE_ACTIVE" '' 0
-  elif [ -n "$_bak" ] && [ "$ESPMODE" != rw ]; then
-    warn "DEGRADED: ESP is read-only — cannot restore the previous kernel ($_bak)"
-  elif [ -n "$_bak" ]; then
-    warn "DEGRADED: state names a previous kernel ($_bak) but $ESPDIR/$_bak is missing"
-  fi
+  # failed. abandon_trial() puts that kernel back and reboots; see its header for why the root
+  # cannot be reverted on its own.
+  abandon_trial "$STATE_ACTIVE" ROLLBACK
 fi
 
 if [ -n "$SLOT" ]; then
@@ -353,7 +366,11 @@ if ! mount_root; then
   case "$SLOT" in a) _other=b ;; b) _other=a ;; esac
   if [ -n "$_other" ]; then
     warn "DEGRADED: slot $SLOT will not mount — failing over to slot $_other"
-    [ "$ESPMODE" = rw ] && write_state "$_other" '' 0
+    # Same rule as the tries-exhausted rollback above, and this is the path a real failed OTA
+    # actually takes: a trial slot that will not mount fails over HERE, before `tries` can ever
+    # reach zero, so restoring the kernel only in the rollback branch left the common case
+    # booting the old root under the new kernel. abandon_trial() reboots if it restores.
+    abandon_trial "$_other" FAILOVER
     SLOT=$_other; SOURCE=failover
     case "$SLOT" in
       a) ROOTSPEC='PARTLABEL=novadeck-root-A'; VARSPEC='PARTLABEL=novadeck-var-A' ;;

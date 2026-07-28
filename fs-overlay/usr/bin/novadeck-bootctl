@@ -370,14 +370,45 @@ cmd_set_kernel() {
   fi
 }
 
+# Abandoning a trial from userspace has to put the previous kernel back for the same reason the
+# initramfs does (see abandon_trial() in images/initramfs/init): /KERNEL is shared by both slots
+# while /lib/modules/<ver> ships inside a root, so clearing `pending` alone leaves the next boot
+# running the NEW kernel against the OLD root. CFG80211/ATH12K are =m, so that boot has no Wi-Fi
+# and this board has no serial console to say why.
+#
+# Unlike the initramfs this CANNOT reboot for you -- it runs on a live system that is using the
+# root it would pull out -- so it restores the file and says so. Until that reboot happens the
+# running system is unchanged and correct; it is the next boot that needs the restored pair.
 cmd_rollback() {
   need_root
   esp_open; state_require
   if [ -z "$S_PENDING" ]; then
     echo "nothing on trial (active=$S_ACTIVE)"; return 0
   fi
-  local was=$S_PENDING
+  local was=$S_PENDING bak=$S_BAK kernel_was=$S_KERNEL restore=0
+  # Same one-generation pairing as the initramfs: `bak` stops naming a backup in the very write
+  # that clears `pending`, and `kernel` is re-pointed alongside it, because the two describe one
+  # event. Captured first -- state_write() advances S_* in place.
+  if [ -n "$bak" ] && [ -f "$ESP/$bak" ]; then
+    restore=1; S_BAK=''; S_KERNEL=$S_ACTIVE
+  fi
   state_write "$S_ACTIVE" '' 0
+  if [ "$restore" = 1 ]; then
+    if cp "$ESP/$bak" "$ESP/KERNEL"; then
+      echo "abandoned the trial of slot $was; active stays $S_ACTIVE"
+      echo "restored the previous kernel ($bak -> KERNEL) -- REBOOT to run it against slot $S_ACTIVE"
+      return 0
+    fi
+    # The write above already claimed /KERNEL holds $S_ACTIVE's image and it does not. Correct the
+    # record with a second generation rather than leave a field that lies about which /lib/modules
+    # matches. `bak` stays cleared, as in the initramfs: a restore that failed once must not be
+    # retried forever.
+    S_KERNEL=$kernel_was
+    state_write "$S_ACTIVE" '' 0
+    warn "could not restore $bak over $ESP/KERNEL -- the next boot runs slot $S_ACTIVE under the NEW kernel"
+  elif [ -n "$bak" ]; then
+    warn "state names a previous kernel ($bak) but $ESP/$bak is missing -- cannot restore it"
+  fi
   echo "abandoned the trial of slot $was; active stays $S_ACTIVE"
 }
 

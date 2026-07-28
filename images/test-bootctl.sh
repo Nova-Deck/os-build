@@ -464,6 +464,46 @@ bc rollback
 expect_rc 0
 done_
 
+# Clearing `pending` is only half of abandoning a trial. /KERNEL is shared by both slots while
+# /lib/modules/<ver> ships inside a root, so a rollback that leaves the NEW kernel on the ESP hands
+# the next boot the old root under a kernel whose modules it does not carry -- CFG80211/ATH12K are
+# =m, so no Wi-Fi, on a board with no serial console. The initramfs learned this first
+# (abandon_trial() in images/initramfs/init); this is the same rule for the manual path.
+t "rollback-restores-the-previous-kernel"
+seed_state 0 5 a b 1 b KERNEL.BAK; seed_boot a
+printf 'NEW-KERNEL' >"$SB/esp/KERNEL"; printf 'OLD-KERNEL' >"$SB/esp/KERNEL.BAK"
+bc rollback
+expect_rc 0
+[ "$(cat "$SB/esp/KERNEL")" = "OLD-KERNEL" ] \
+  && ok "KERNEL restored from KERNEL.BAK" || bad "KERNEL was not restored (got '$(cat "$SB/esp/KERNEL")')"
+expect_state 6 a '' 0
+expect_field bak ''        # cleared in the SAME generation that cleared pending
+expect_field kernel a      # ... and `kernel` follows the image back, in that generation
+expect_has "REBOOT"        # it cannot reboot for you -- it has to say so
+done_
+
+# No backup recorded means no rotation to undo: both slots still share one kernel, so clearing the
+# trial is the whole job and /KERNEL must not be touched.
+t "rollback-with-no-backup-recorded-leaves-the-kernel-alone"
+seed_state 0 5 a b 1 b ''; seed_boot a
+printf 'NEW-KERNEL' >"$SB/esp/KERNEL"
+bc rollback
+expect_rc 0
+[ "$(cat "$SB/esp/KERNEL")" = "NEW-KERNEL" ] && ok "KERNEL left alone" || bad "KERNEL was touched"
+expect_state 6 a '' 0
+expect_field kernel b      # no restore happened, so the record must not claim one
+done_
+
+t "rollback-with-a-missing-backup-file-still-clears-the-trial"
+seed_state 0 5 a b 1 b KERNEL.BAK; seed_boot a
+printf 'NEW-KERNEL' >"$SB/esp/KERNEL"     # no KERNEL.BAK on the ESP
+bc rollback
+expect_rc 0                # the trial still has to be abandoned; refusing would leave it armed
+expect_state 6 a '' 0
+expect_field kernel b
+expect_has "is missing"
+done_
+
 t "set-kernel-records-both-fields-in-one-generation"
 seed_state 0 1 a '' 0; seed_boot a
 : >"$SB/esp/KERNEL.BAK"

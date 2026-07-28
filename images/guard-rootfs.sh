@@ -348,6 +348,22 @@ if [ ! -s "$STAGE/usr/bin/btrfstune" ]; then
   rauc_ok=0
   bad "/usr/bin/btrfstune is missing — the post-install hook cannot re-randomise the target slot's fsid"
 fi
+# The hook drives the slot state through novadeck-bootctl, so every subcommand it invokes must be
+# one the SHIPPED tool dispatches. Both files live in this tree, which is precisely why a rename in
+# one is easy to miss in the other, and the symptom is the worst shape available: RAUC writes the
+# target slot, the hook then fails at its LAST step, and the card is left with a new root, a
+# rotated /KERNEL and a slot state that records neither.
+if [ "$rauc_ok" = 1 ] && [ -s "$STAGE/usr/bin/novadeck-bootctl" ]; then
+  # Comment lines are stripped first: this file's prose names the tool more often than its code does.
+  while read -r sub; do
+    [ -n "$sub" ] || continue
+    grep -qE "^ *$sub\)" "$STAGE/usr/bin/novadeck-bootctl" && continue
+    rauc_ok=0
+    bad "the post-install hook calls 'novadeck-bootctl $sub', which the shipped tool does not dispatch"
+  done < <(grep -vE '^[[:space:]]*#' "$STAGE/usr/lib/rauc/post-install.sh" \
+             | grep -oE 'novadeck-bootctl +[a-z][a-z-]*' | awk '{print $2}' | sort -u)
+fi
+
 # Presence is not installability. Every check above passed on a tree whose system.conf rejected
 # every bundle we can sign: the release cert's codeSigning EKU and RAUC's default smimesign
 # verification purpose disagreed, and the first thing that would have noticed was `rauc install`

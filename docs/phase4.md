@@ -387,6 +387,7 @@ untestable in pass 1 (there is one kernel), bash cannot copy binary data so it w
 device boots from — where a torn write is a reflash. The rollback boot runs the old root under
 the new kernel, so a root-side oneshot can do the restore properly, with real fsync, and reboot.
 `kernel=` and `bak=` are in the grammar from day one so pass 2 does not change the format.
+*(Pass 2 implements both, in the initramfs after all — see below.)*
 
 **The two roots must not be identical bytes.** `mkfs.btrfs` bakes an fsid into the superblock and
 every image we build has `devid=1` — exactly the pair btrfs keys its in-kernel device list on. Two
@@ -453,11 +454,21 @@ while keeping the failure path retryable. See the unit's own comment.
 The state file grammar, normative. `images/initramfs/init` is the reference implementation.
 
 ```
-/KERNEL                 unchanged — ABL reads only this
-/NOVADECK/STATE.0       gen=N active=a|b pending=''|a|b tries=N kernel= bak= end
+/KERNEL                 the running boot image — ABL reads only this
+/NOVADECK/STATE.0       gen=N active=a|b pending=''|a|b tries=N kernel=''|a|b bak= end
 /NOVADECK/STATE.1       the alternate copy; the higher valid gen wins
-/NOVADECK/KERNEL.BAK    reserved; not written or read in pass 1
+/NOVADECK/KERNEL.BAK    the previous boot image, when `bak=` names it
 ```
+
+`kernel=` names the slot whose boot image is at `/KERNEL`, and **empty means no claim** — a card
+no update has rotated, where both slots carry the same build and no mismatch is possible. A letter
+is written only by a rotation (the RAUC post-install hook) or by the rollback that undoes one, so
+the field is either silent or true. It is not decoration: `/KERNEL` is *shared* while
+`/lib/modules/<ver>` ships *inside* a root, so a root can run under the other build's kernel —
+`novadeck-bootctl try <other>` after an update reaches it with no second update involved, and with
+`CFG80211`/`ATH12K` at `=m` the symptom is "Wi-Fi broke", not "wrong kernel". The initramfs logs it
+at boot and `novadeck-bootctl status`/`try` say it before the fact; nothing refuses to boot on it,
+because the alternative to a mismatched pair is no pair.
 
 `end` must be the last non-blank line — that is the torn-write detector. **Unknown keys are
 ignored by the reader and preserved verbatim by the writer**: this reader ships inside `/KERNEL`
@@ -517,16 +528,24 @@ running root — so every later step, all of which mount the target, has to come
 **Kernel restore on rollback** is in the initramfs (`cp` is now staged for it), and reboots via
 `exit 1` → panic → `panic=5`, reusing the mechanism the no-bootable-root path already relies on
 because `MAGIC_SYSRQ` is not in `kernel/kernel.config`. `bak=` is cleared in the *same* generation
-that clears `pending`, so an interrupted copy cannot leave a state that retries a restore forever.
+that clears `pending`, so an interrupted copy cannot leave a state that retries a restore forever —
+and `kernel=` is re-pointed at the slot being restored to in that same generation, because the two
+fields describe one event. The write necessarily precedes the copy, so a copy that *fails* has left
+a record claiming a rotation that did not happen: the init then spends a second generation taking it
+back. A field maintained on the happy path only is the defect this one was fixed for.
 
 > **Honest limit.** This covers "the new kernel boots far enough to run our initramfs, but the
 > system is not healthy". A kernel that does not boot at all leaves nothing running to restore
 > anything — that is still a reflash, and design C never claimed otherwise.
 
-Verified offline: `images/initramfs/test-slot-state.sh` (73 checks, up from 56) covers restore,
-a missing backup file, and a read-only ESP. Guard assertion 7 asserts the built tree can actually
-perform an update: `rauc`, keyring, `system.conf`, `boot.img`, `btrfstune`, and an *executable*
-hook — the exec-bit half because this project has already paid for a shipped script that lost it.
+Verified offline: `images/initramfs/test-slot-state.sh` (100 checks, up from 56) covers restore, a
+missing backup file, a read-only ESP, a *failed* restore's correcting write, and the kernel/slot
+mismatch warning in all three of its states (mismatched, matching, unrecorded). Guard assertion 7
+asserts the built tree can actually perform an update: `rauc`, keyring, `system.conf`, `boot.img`,
+`btrfstune`, an *executable* hook — the exec-bit half because this project has already paid for a
+shipped script that lost it — and that every `novadeck-bootctl` subcommand the hook invokes is one
+the shipped tool dispatches, since a rename in one file is what makes the other fail at its last
+step, on a card whose root has already been replaced.
 
 #### Original checklist
 

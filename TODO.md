@@ -19,8 +19,9 @@ rationale lives in the linked memories and commit history.
   logic (`[ x = y ] && action` as the last statement returns 1 when the test is false), so the
   test should assert `rc=0` for every legal call INCLUDING the no-ops, not just check side effects.
 
-- [ ] **`kernel=` in the ESP slot state goes stale after a kernel rotation** — found 2026-07-28 on
-  hardware, immediately after a successful `rauc install`. The post-install hook rotates `/KERNEL`
+- [x] **`kernel=` in the ESP slot state goes stale after a kernel rotation — FIXED 2026-07-28** on
+  `feat/phase4b-rauc`, offline-verified, not yet HW-run. Found on hardware immediately after a
+  successful `rauc install`. The post-install hook rotates `/KERNEL`
   to the newly installed slot's boot image and records the backup via `novadeck-bootctl set-bak`,
   but nothing updates `kernel=`: the ESP still read `kernel=a` while slot **b**'s kernel was at
   `/KERNEL`. Harmless *today* — `images/initramfs/init:36` marks the field "reserved (pass 2)" and
@@ -29,6 +30,35 @@ rationale lives in the linked memories and commit history.
   was the pass that was meant to start), or delete it from the format. Do NOT leave it as a
   declaration with nothing behind it — cf. the `/etc/machine-id` item further down, which is the
   same failure mode one iteration earlier.
+  **Resolution: MAINTAINED, and given a consumer.** Deleting it was the worse half of the choice —
+  `novadeck-bootctl` preserves unknown keys verbatim, so dropping the parser case would not remove
+  the line, it would *fossilise* the stale `kernel=a` on every card already in the field, forever
+  and unreadably. Maintaining it costs one call and buys a check nothing else can make: `/KERNEL`
+  is SHARED while `/lib/modules/<ver>` ships INSIDE a root, so a boot can run a root under the
+  other build's kernel — `novadeck-bootctl try <other>` after an update reaches it with no second
+  update involved, and with `CFG80211`/`ATH12K` at `=m` the symptom is "Wi-Fi broke", not "wrong
+  kernel". What landed:
+  - `set-bak <name>` became **`set-kernel <a|b> [bak]`** — one call, so both fields land in ONE
+    generation. Split writes leave a state naming a backup for a kernel it has not recorded.
+  - The rollback in `images/initramfs/init` re-points `kernel=` at the slot it restores to, in the
+    same generation that clears `bak=`. The write necessarily precedes the copy, so a *failed*
+    restore spends a second generation taking the claim back — a field maintained only on the happy
+    path is the same defect one branch deeper.
+  - Consumers: the initramfs logs a mismatch to kmsg at boot (the whole debugging surface on a
+    no-UART device), `status` prints and warns, `try` warns before arming. None of them refuse —
+    the alternative to a mismatched pair is no pair.
+  - **`make-sdcard.sh` now seeds `kernel=` EMPTY, not `a`** (asserted in `verify-card.sh`). On a
+    fresh card both slots are the same `rootfs.img`, so a letter would make the ordinary `try b`
+    slot test warn about a mismatch that does not exist. Empty = no claim; only a rotation writes
+    a letter, so the field is either silent or true.
+  - The hook also stops recording `bak=KERNEL.BAK` when it made no backup (no `/KERNEL` to save),
+    which armed a restore that could only fail.
+  - Guard 7 now asserts every `novadeck-bootctl` subcommand the hook invokes is one the shipped
+    tool dispatches — the skew this rename could have shipped, whose symptom is an install that
+    replaces the root, rotates `/KERNEL`, then fails at its last step recording neither.
+  `images/initramfs/test-slot-state.sh` is at **100 checks (was 73)**: restore, failed restore,
+  missing backup, read-only ESP, and mismatch/match/unrecorded. It still does not execute
+  `novadeck-bootctl` — that gap is the item above, unchanged by this.
 
 - [ ] **`$(BASE_STAMP)` is not mode-scoped — a test-built base can feed a release build** — found
   2026-07-28 while building a RAUC bundle right after a `NOVADECK_TEST=1 make sdcard`. `MODE_STAMP`

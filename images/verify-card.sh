@@ -102,6 +102,11 @@ if mtype -i "$IMG@@$espoff" ::/NOVADECK/STATE.0 >"$T/state" 2>/dev/null && [ -s 
                           || bad "STATE.0 has no 'end' terminator — the reader will reject it"
   [ "$act" = a ] || bad "a freshly built card should be active=a, not '$act'"
   [ -z "$pend" ] || bad "a freshly built card should have nothing pending, got '$pend'"
+  # `kernel=` must be EMPTY here, and that is a real assertion rather than a formality: both slots
+  # carry the same rootfs.img on a fresh card, so /KERNEL matches either one. A letter would make
+  # the ordinary `try b` slot test warn about a kernel/modules mismatch that does not exist.
+  kern=$(sed -n 's/^kernel=//p' "$T/state")
+  [ -z "$kern" ] || bad "a fresh card must not claim a /KERNEL owner, got kernel='$kern'"
 else
   bad "no readable ::/NOVADECK/STATE.0 — every boot would fall back to the cmdline root="
 fi

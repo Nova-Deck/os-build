@@ -33,8 +33,9 @@
 #   active=a     the slot known good. a|b
 #   pending=b    a slot on trial after an update, or empty. ''|a|b
 #   tries=1      trials left for `pending`; at 0 we roll back to `active`
-#   kernel=a     reserved (pass 2): which slot's boot image is currently at /KERNEL
-#   bak=         reserved (pass 2): set when /NOVADECK/KERNEL.BAK holds the previous image
+#   kernel=a     which slot's boot image is currently at /KERNEL (the ESP, and so /KERNEL, is
+#                SHARED — this is the only record of which root's /lib/modules matches it)
+#   bak=         set when /NOVADECK/KERNEL.BAK holds the previous image
 #   end          MUST be the last non-blank line — this is the torn-write detector
 #
 # TWO FILES, NOT WRITE-THEN-RENAME. There is no `sync` here and no shell can fsync, so a rename
@@ -55,8 +56,8 @@
 #
 # UNKNOWN KEYS ARE IGNORED, NEVER REJECTED. This reader ships inside /KERNEL on the SHARED ESP
 # while its writer (/usr/bin/novadeck-bootctl) is PER-SLOT, so after a rollback an older writer
-# and a newer reader coexist by design. The format is a compatibility contract; `kernel=`/`bak=`
-# are already reserved so pass 2 does not have to change it.
+# and a newer reader coexist by design. The format is a compatibility contract — `kernel=`/`bak=`
+# were reserved from day one so pass 2 could start writing them without changing it.
 #
 # THE STATE FILE IS A TRUST BOUNDARY. It is plain text on a FAT partition that anyone with a
 # screwdriver can edit, and it is parsed by PID 1 as root. Every field is validated against a
@@ -165,8 +166,10 @@ read_state() {
 }
 
 # Write the next generation to the file that is NOT the current winner (see the header).
-# Leaves kernel=/bak= exactly as read: pass 1 never sets them, and clobbering fields written by
-# a newer novadeck-bootctl is precisely what the compatibility contract forbids.
+# kernel=/bak= are emitted from STATE_KERNEL/STATE_BAK rather than taken as arguments: only the
+# rollback path below touches them, and it does so by assigning those variables BEFORE calling, so
+# every other write round-trips them exactly as read. Clobbering a field written by a newer
+# novadeck-bootctl is precisely what the compatibility contract forbids.
 write_state() {
   _wa=$1 _wp=$2 _wt=$3
   _target=$STATEDIR/STATE.$STATE_SPARE
@@ -272,10 +275,15 @@ else
   # SAME generation that clears `pending`. If the copy below is interrupted, the next boot must not
   # keep retrying a restore forever — a stale KERNEL.BAK on the ESP is harmless, a state that keeps
   # pointing at it is not.
+  #
+  # `kernel` moves with the image: KERNEL.BAK is by definition what was live before the update, so
+  # restoring it makes /KERNEL the ACTIVE slot's image again — the slot we are rolling back to. It
+  # is re-pointed in the SAME generation that clears `bak`, because the pair describes one event.
   _bak=$STATE_BAK
+  _kernel_was=$STATE_KERNEL
   _restore=0
   if [ -n "$_bak" ] && [ "$ESPMODE" = rw ] && [ -f "$ESPDIR/$_bak" ]; then
-    _restore=1; STATE_BAK=''
+    _restore=1; STATE_BAK=''; STATE_KERNEL=$STATE_ACTIVE
   fi
   [ "$ESPMODE" = rw ] && write_state "$STATE_ACTIVE" '' 0
   if [ "$_restore" = 1 ]; then
@@ -286,6 +294,13 @@ else
       exit 1
     fi
     warn "DEGRADED: could not restore $_bak — booting slot $SLOT under the NEW kernel"
+    # The write above already claimed /KERNEL held $STATE_ACTIVE's image. The copy failed, so it
+    # does not — correct the record with a second generation rather than boot on leaving a field
+    # that lies about which /lib/modules matches. `bak` stays cleared: a restore that failed once
+    # this boot must not be retried forever, which is the same reason it was cleared up front.
+    # (_restore=1 implies the ESP is rw, so this write needs no further guard.)
+    STATE_KERNEL=$_kernel_was
+    write_state "$STATE_ACTIVE" '' 0
   elif [ -n "$_bak" ] && [ "$ESPMODE" != rw ]; then
     warn "DEGRADED: ESP is read-only — cannot restore the previous kernel ($_bak)"
   elif [ -n "$_bak" ]; then
@@ -342,11 +357,24 @@ if ! mount_root; then
 fi
 log "root $ROOTDEV mounted ro (slot=${SLOT:-?} source=$SOURCE)"
 
+# /KERNEL is shared by both slots while /lib/modules/<ver> ships INSIDE a root, so it is possible
+# to boot a root under a kernel from the other build — `novadeck-bootctl try <other>` after an
+# update reaches it with no second update involved. CFG80211 and ATH12K are =m, so the symptom is
+# a device with no Wi-Fi and nothing on screen to say why. Loud in the journal is the entire
+# debugging surface on a device with no serial console ([[sm8650-no-uart]]).
+#
+# NOT fatal: the alternative to booting a mismatched pair is not booting. An empty `kernel` makes
+# no claim and warns about nothing — that is a card no update has rotated /KERNEL on, where both
+# slots carry the same build and no mismatch is possible (images/make-sdcard.sh seeds it empty).
+if [ -n "$STATE_KERNEL" ] && [ -n "$SLOT" ] && [ "$STATE_KERNEL" != "$SLOT" ]; then
+  warn "DEGRADED: /KERNEL is slot $STATE_KERNEL's boot image but this boot is slot $SLOT — /lib/modules will not match"
+fi
+
 # Hand the decision to the running system. /run is moved into the new root by switch_root, so
 # this survives the pivot — it is what novadeck-bootctl reads to know which slot it is on, and
 # it is the first evidence to check when debugging a boot offline.
 #
-# INVARIANT: gen/active/pending/tries_left are emitted from the single set of STATE_* variables
+# INVARIANT: gen/active/pending/tries_left/kernel are emitted from the single set of STATE_* variables
 # that write_state() advances, so this file always describes the ESP as it stands at handoff —
 # never a mix of pre- and post-write values. On a boot where the ESP could not be written
 # (esp=ro, esp=none) they describe what was read, which is likewise still what is on the card.
@@ -359,6 +387,7 @@ mkdir -p /run/novadeck
   printf 'active=%s\n'     "$STATE_ACTIVE"
   printf 'pending=%s\n'    "$STATE_PENDING"
   printf 'tries_left=%s\n' "$STATE_TRIES"
+  printf 'kernel=%s\n'     "$STATE_KERNEL"
   printf 'esp=%s\n'        "$ESPMODE"
   printf 'root=%s\n'       "$ROOTDEV"
 } >/run/novadeck/boot 2>/dev/null || warn "cannot write /run/novadeck/boot"

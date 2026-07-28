@@ -139,10 +139,6 @@ printf '%s\n' "$target" >"$MNT/lib/novadeck/slot"
 # hand-picking the entire partition.
 rm -f "$MNT/lib/novadeck/mac-wifi"
 
-# The independent slot witness make-sdcard.sh writes, so `novadeck-bootctl status` can still
-# cross-check the initramfs's choice against a filesystem that carries its own letter.
-printf '%s\n' "$target" >"$MNT/lib/novadeck/slot"
-
 umount "$MNT"; trap - EXIT
 
 # --- 3. /KERNEL rotation ------------------------------------------------------------------------
@@ -160,18 +156,31 @@ mountpoint -q "$ESP" || die "the ESP is not mounted at $ESP"
 # same filesystem, sync it, and only then move the old one aside and put the new one in place.
 cp "$src_kernel" "$ESP/KERNEL.NEW" || die "cannot stage the new kernel onto the ESP"
 sync "$ESP/KERNEL.NEW" 2>/dev/null || sync
+# `bak` is what the rollback path in images/initramfs/init restores from, so it must name a file
+# that EXISTS. There is no backup to make on a card whose ESP somehow carries no /KERNEL, and
+# recording one anyway would arm a restore that can only fail -- reported by the initramfs as
+# "state names a previous kernel but it is missing", on the boot least able to absorb a surprise.
+bak=''
 if [ -f "$ESP/KERNEL" ]; then
   cp "$ESP/KERNEL" "$ESP/KERNEL.BAK" || die "cannot save the current kernel as KERNEL.BAK"
   sync "$ESP/KERNEL.BAK" 2>/dev/null || sync
+  bak=KERNEL.BAK
+else
+  log "no /KERNEL on the ESP to back up -- rollback will keep the new kernel"
 fi
 mv -f "$ESP/KERNEL.NEW" "$ESP/KERNEL" || die "cannot install the new kernel"
 sync
 
 umount "$MNT"; trap - EXIT
 
-# Record the backup in the slot state so the initramfs knows a restore is available on rollback.
+# Record the rotation in the slot state: WHOSE image is at /KERNEL now, and what the previous one
+# was kept as. Both in one call so they land in one generation -- and `kernel` matters beyond
+# bookkeeping, because /KERNEL is shared while /lib/modules ships inside a root: it is the only
+# record of which slot the running kernel's modules belong to, and both the initramfs and
+# `novadeck-bootctl status` warn on a mismatch.
+#
 # novadeck-bootctl owns every write to that file (generation scheme, unknown-key preservation);
 # hand-writing it here would be a second writer with none of those properties.
-novadeck-bootctl set-bak KERNEL.BAK || die "cannot record the kernel backup in the slot state"
+novadeck-bootctl set-kernel "$target" "$bak" || die "cannot record the kernel rotation in the slot state"
 
-log "kernel rotated (previous kept as KERNEL.BAK); slot $target is ready to be tried"
+log "kernel rotated to slot $target${bak:+ (previous kept as $bak)}; slot $target is ready to be tried"

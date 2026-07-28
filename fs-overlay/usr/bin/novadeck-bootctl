@@ -10,10 +10,11 @@
 #   novadeck-bootctl try b [--tries N]   boot slot b next; revert after N failed attempts
 #   novadeck-bootctl mark-good           confirm the slot on trial (this is what ends a trial)
 #   novadeck-bootctl rollback            abandon a trial, go back to the active slot
-#   novadeck-bootctl set-bak <name>      record the previous kernel kept on the ESP ('' clears it)
+#   novadeck-bootctl set-kernel <a|b> [bak]
+#                                        record the /KERNEL rotation: whose boot image is now on
+#                                        the ESP, and the name the previous one was kept under
 #
-# RAUC `bootloader=custom` backend contract (pass 2 wires /etc/rauc/system.conf to it; the
-# subcommands exist now so that is a config change and not a code change):
+# RAUC `bootloader=custom` backend contract (/etc/rauc/system.conf points at this file):
 #
 #   get-primary / set-primary <a|b> / get-state <a|b> / set-state <a|b> good|bad
 #
@@ -170,10 +171,12 @@ cmd_status() {
   if [ "$S_WON" = -1 ]; then
     echo "  (no valid state file; the initramfs would fall back to the cmdline root=)"
   else
-    printf '  file=STATE.%s gen=%s\n  active=%s\n  pending=%s\n  tries=%s\n' \
-      "$S_WON" "$S_GEN" "$S_ACTIVE" "${S_PENDING:-<none>}" "$S_TRIES"
-    [ -n "$S_KERNEL" ] && printf '  kernel=%s\n' "$S_KERNEL"
-    [ -n "$S_BAK" ]    && printf '  bak=%s\n' "$S_BAK"
+    # kernel/bak are printed unconditionally, empty included. They are maintained fields now, so
+    # "not recorded" is itself a finding -- hiding it reads as "this card has no kernel record"
+    # being indistinguishable from "this tool did not tell you".
+    printf '  file=STATE.%s gen=%s\n  active=%s\n  pending=%s\n  tries=%s\n  kernel=%s\n  bak=%s\n' \
+      "$S_WON" "$S_GEN" "$S_ACTIVE" "${S_PENDING:-<none>}" "$S_TRIES" \
+      "${S_KERNEL:-<unrecorded>}" "${S_BAK:-<none>}"
   fi
   # The one cross-check that does not share a failure mode with the selection code: the var
   # image carries its own slot letter, written at build time.
@@ -183,6 +186,14 @@ cmd_status() {
       echo "  WARNING: /var says slot '$vs' but the initramfs picked '$bs' --"
       echo "           two filesystems are sharing an identity. Do not trust a slot test."
     fi
+  fi
+  # /KERNEL is SHARED by both slots, so a root can end up running under a kernel from the OTHER
+  # build -- and /lib/modules/<ver> ships inside the root. CFG80211 and ATH12K are =m, so that
+  # combination is a device with no Wi-Fi and no serial console. It needs no update to reach:
+  # `try` on a slot the last rotation did not install is enough.
+  if [ -n "$S_KERNEL" ] && [ -n "$bs" ] && [ "$S_KERNEL" != "$bs" ]; then
+    echo "  WARNING: /KERNEL holds slot '$S_KERNEL' boot image but this system booted slot '$bs' --"
+    echo "           this root's /lib/modules does not match the running kernel."
   fi
 }
 
@@ -200,6 +211,13 @@ cmd_try() {
   [[ $tries =~ ^[0-9]+$ ]] || die "--tries must be a non-negative integer"
   esp_open; state_require
   [ "$slot" != "$S_ACTIVE" ] || die "slot $slot is already active"
+  # Warned, not refused: this is the recovery tool, and booting a mismatched pair is still better
+  # than not booting. But an update rotates /KERNEL to the slot it installed, so `try` on any
+  # OTHER slot boots a root whose /lib/modules came from a different build -- no Wi-Fi (=m
+  # CFG80211/ATH12K) on a device with no serial console, and nothing on screen to say why.
+  if [ -n "$S_KERNEL" ] && [ "$S_KERNEL" != "$slot" ]; then
+    warn "/KERNEL is slot $S_KERNEL's boot image -- slot $slot will boot with /lib/modules from a different build"
+  fi
   state_write "$S_ACTIVE" "$slot" "$tries"
   echo "next boot: slot $slot (active stays $S_ACTIVE, $tries tr$([ "$tries" = 1 ] && echo y || echo ies))"
   echo "reboot to try it; it reverts to $S_ACTIVE unless '$PROG mark-good' runs."
@@ -257,13 +275,22 @@ cmd_mark_good() {
   echo "slot $S_PENDING confirmed good and is now active"
 }
 
-# Record (or clear) the name of the previous kernel kept on the ESP. The RAUC post-install hook
-# calls this after rotating /KERNEL, so the initramfs knows a restore is available if the trial
-# boot never gets confirmed. Kept here rather than written by the hook because this file has ONE
-# writer: the generation scheme and the preserve-unknown-keys contract both live in state_write().
-cmd_set_bak() {
+# Record the /KERNEL rotation: which slot's boot image now sits on the ESP, and the bare name the
+# previous one was kept under ('' when there is none to go back to). The RAUC post-install hook
+# calls this after copying the new image in, so the initramfs knows both which modules match the
+# running kernel and whether a restore is available if the trial boot never gets confirmed.
+#
+# BOTH FIELDS IN ONE CALL, hence one generation. Split across two writes there is a state that
+# names a backup for a kernel it has not recorded yet (or the reverse), and the rollback path in
+# images/initramfs/init reads the pair together -- it clears `bak` and re-points `kernel` in the
+# same generation for exactly this reason.
+#
+# Kept here rather than written by the hook because this file has ONE writer: the generation
+# scheme and the preserve-unknown-keys contract both live in state_write().
+cmd_set_kernel() {
   need_root
-  local name=${1:-}
+  local slot=${1:-} name=${2:-}
+  [[ $slot =~ ^[ab]$ ]] || die "usage: $PROG set-kernel <a|b> [backup-name]"
   # A path would let a caller point the initramfs at something outside the ESP, which it cannot
   # reach anyway -- keep it a bare filename so the format stays a name, not a location.
   case "$name" in
@@ -271,9 +298,13 @@ cmd_set_bak() {
   esac
   esp_open; state_require
   [ -z "$name" ] || [ -f "$ESP/$name" ] || warn "no $ESP/$name on the ESP yet -- recording it anyway"
-  S_BAK=$name
+  S_KERNEL=$slot; S_BAK=$name
   state_write "$S_ACTIVE" "$S_PENDING" "$S_TRIES"
-  if [ -n "$name" ]; then echo "recorded previous kernel: $name"; else echo "cleared the previous-kernel record"; fi
+  if [ -n "$name" ]; then
+    echo "/KERNEL is now slot $slot's boot image (previous kept as $name)"
+  else
+    echo "/KERNEL is now slot $slot's boot image (no backup recorded)"
+  fi
 }
 
 cmd_rollback() {
@@ -363,7 +394,7 @@ case "${1:-}" in
   try)         shift; cmd_try "$@" ;;
   mark-good)   shift; cmd_mark_good "$@" ;;
   rollback)    shift; cmd_rollback "$@" ;;
-  set-bak)     shift; cmd_set_bak "$@" ;;
+  set-kernel)  shift; cmd_set_kernel "$@" ;;
   get-primary) shift; cmd_get_primary "$@" ;;
   set-primary) shift; cmd_set_primary "$@" ;;
   get-state)   shift; cmd_get_state "$@" ;;

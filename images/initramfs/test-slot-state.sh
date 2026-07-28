@@ -74,6 +74,15 @@ echo "switch_root \$*" >>"$SB/mounts"
 exit 0
 EOF
 
+  # The init uses cp for exactly one thing: restoring KERNEL.BAK over KERNEL on a rollback. The
+  # marker lets a case make that copy fail -- the branch where the state has ALREADY been written
+  # claiming the restore, and has to be corrected before the boot continues.
+  cat >"$SB/bin/cp" <<EOF
+#!/bin/sh
+[ -f "$SB/cp-fails" ] && exit 1
+exec /usr/bin/cp "\$@"
+EOF
+
   printf '#!/bin/sh\nexit 0\n' >"$SB/bin/sleep"
   chmod +x "$SB/bin"/*
 }
@@ -109,28 +118,32 @@ build_init() {
   n=$(grep -c 'mount -t proc' "$dst"); [ "$n" = 1 ] || { echo "FATAL: pseudo-fs mounts changed" >&2; exit 2; }
 }
 
-seed_state() {  # <file-index> <gen> <active> <pending> <tries> [bak]
+seed_state() {  # <file-index> <gen> <active> <pending> <tries> [bak] [kernel]
   cat >"$SB/esp/NOVADECK/STATE.$1" <<EOF
 gen=$2
 active=$3
 pending=$4
 tries=$5
-kernel=
+kernel=${7:-}
 bak=${6:-}
 end
 EOF
 }
 
-expect_bak() {  # <expected bak= in the winning state file>
+# <key> <expected value> in the winning state file -- used for the two fields that are NOT part of
+# the four-field expect_state tuple, and whose whole point is that they must not go stale.
+expect_field() {
   local bf g best=-1 f got
   for f in "$SB"/esp/NOVADECK/STATE.*; do
     [ -f "$f" ] || continue
     grep -qx end "$f" || continue
     g=$(sed -n 's/^gen=//p' "$f"); [ "${g:-0}" -gt "$best" ] && { best=$g; bf=$f; }
   done
-  got=$(sed -n 's/^bak=//p' "$bf")
-  [ "$got" = "$1" ] && ok "bak='$1'" || bad "bak: expected '$1', got '$got'"
+  got=$(sed -n "s/^$1=//p" "$bf")
+  [ "$got" = "$2" ] && ok "$1='$2'" || bad "$1: expected '$2', got '$got'"
 }
+expect_bak()    { expect_field bak "$1"; }
+expect_kernel() { expect_field kernel "$1"; }
 
 run_init() {
   ( cd "$SB" && PATH="$SB/bin:$PATH" sh "$SB/init" >"$SB/stdout" 2>"$SB/stderr" )
@@ -353,7 +366,7 @@ done_
 # on a device with no serial console).
 
 t "rollback-restores-the-previous-kernel"
-seed_state 0 6 a b 0 KERNEL.BAK
+seed_state 0 6 a b 0 KERNEL.BAK b
 printf 'NEW-KERNEL' >"$SB/esp/KERNEL"
 printf 'OLD-KERNEL' >"$SB/esp/KERNEL.BAK"
 run_init
@@ -362,29 +375,93 @@ expect_rc 1                     # exit 1 -> panic -> panic=5 reboots into the re
   && ok "KERNEL restored from KERNEL.BAK" || bad "KERNEL was not restored (got '$(cat "$SB/esp/KERNEL")')"
 expect_state 7 a '' 0
 expect_bak ''                   # cleared in the SAME generation that cleared pending
+expect_kernel a                 # ... and `kernel` follows the image back, in that same generation
 expect_kmsg "restoring the previous kernel"
 awk '/umount/{u=1} END{exit !u}' "$SB/mounts" && ok "ESP unmounted before the reboot" || bad "ESP not unmounted"
 done_
 
+# The state is written BEFORE the copy (so an interrupted restore cannot be retried forever), so a
+# copy that fails leaves a record claiming a rotation that did not happen. The init has to take it
+# back, or `kernel` lies about which /lib/modules matches -- the exact defect this field was fixed
+# for, one branch deeper.
+t "a-failed-restore-takes-back-the-kernel-record"
+seed_state 0 6 a b 0 KERNEL.BAK b
+printf 'NEW-KERNEL' >"$SB/esp/KERNEL"
+printf 'OLD-KERNEL' >"$SB/esp/KERNEL.BAK"
+: >"$SB/cp-fails"
+run_init
+expect_rc 0                     # the restore failed, so it boots on rather than rebooting
+expect_boot slot a; expect_boot source rollback
+expect_kmsg "could not restore KERNEL.BAK"
+expect_state 8 a '' 0           # gen 7 = the rollback, gen 8 = the correction
+expect_kernel b                 # /KERNEL still holds b's image, and the state says so
+expect_bak ''                   # NOT re-armed: one failed restore per boot, not a loop
+expect_boot kernel b
+expect_handoff_matches_state
+expect_kmsg "/KERNEL is slot b's boot image but this boot is slot a"
+done_
+
 t "rollback-with-a-missing-backup-file-still-rolls-back"
-seed_state 0 6 a b 0 KERNEL.BAK
+seed_state 0 6 a b 0 KERNEL.BAK b
 printf 'NEW-KERNEL' >"$SB/esp/KERNEL"     # no KERNEL.BAK on the ESP
 run_init
 expect_rc 0                     # degrades to a normal rollback rather than refusing to boot
 expect_boot slot a; expect_boot source rollback
 [ "$(cat "$SB/esp/KERNEL")" = "NEW-KERNEL" ] && ok "KERNEL left alone" || bad "KERNEL was touched"
+expect_kernel b                 # no restore happened, so the record must not claim one
 expect_kmsg "is missing"
 done_
 
 t "readonly-esp-cannot-restore-the-kernel"
-seed_state 0 6 a b 0 KERNEL.BAK
+seed_state 0 6 a b 0 KERNEL.BAK b
 printf 'NEW-KERNEL' >"$SB/esp/KERNEL"; printf 'OLD-KERNEL' >"$SB/esp/KERNEL.BAK"
 echo ESP_RO >"$SB/unmountable"
 run_init
 expect_rc 0
 expect_boot slot a; expect_boot source rollback; expect_boot esp ro
 [ "$(cat "$SB/esp/KERNEL")" = "NEW-KERNEL" ] && ok "KERNEL left alone on a ro ESP" || bad "KERNEL was rewritten on a ro ESP"
+expect_kernel b
 expect_kmsg "cannot restore the previous kernel"
+done_
+
+# --- kernel/root coherence ---------------------------------------------------------------------
+# /KERNEL is SHARED; /lib/modules/<ver> ships inside a root. `try` on a slot the last rotation did
+# not install reaches the mismatch with no update involved, and =m CFG80211/ATH12K make it look
+# like "Wi-Fi broke", not "wrong kernel". The journal is the only place that can say so.
+
+t "kernel-slot-mismatch-is-logged"
+seed_state 0 3 a '' 0 '' b
+run_init
+expect_rc 0                     # a warning, never a refusal: not booting is the worse outcome
+expect_boot slot a; expect_boot kernel b
+expect_kmsg "/KERNEL is slot b's boot image but this boot is slot a"
+done_
+
+t "matching-kernel-slot-is-silent"
+seed_state 0 3 a '' 0 '' a
+run_init
+expect_boot slot a; expect_boot kernel a
+grep -qF "/lib/modules will not match" "$SB/kmsg" \
+  && bad "warned about a matching kernel/slot pair" || ok "no mismatch warning"
+done_
+
+# A card seeded before `kernel` was maintained carries an empty one. It must make no claim at all
+# rather than reading as "slot ''" and warning on every boot.
+t "an-unrecorded-kernel-warns-about-nothing"
+seed_state 0 3 b '' 0
+run_init
+expect_boot slot b; expect_boot kernel ''
+grep -qF "/lib/modules will not match" "$SB/kmsg" \
+  && bad "warned on an unrecorded kernel" || ok "no mismatch warning"
+done_
+
+# The try path writes state; `kernel` is not its business and must round-trip untouched.
+t "a-try-write-preserves-the-kernel-record"
+seed_state 0 5 a b 1 '' b
+run_init
+expect_boot slot b; expect_boot source try
+expect_state 6 a b 0
+expect_kernel b
 done_
 
 echo

@@ -152,6 +152,15 @@ echo "  esp  $(du -h "$KERNEL" | cut -f1) KERNEL -> ::/KERNEL"
 # the only thing it must find there. Keeping our namespace in a subdirectory removes any question
 # about what the firmware might enumerate. 8.3-clean names, so the kernel's vfat driver and mtools
 # never have to agree about long-filename directory entries.
+#
+# `kernel=` is seeded EMPTY, which is not the same as forgetting it. It names the slot whose boot
+# image sits at /KERNEL, and it exists so a boot can tell that the running kernel's /lib/modules
+# live in the OTHER root. On a fresh card that cannot be true: both slots are the same rootfs.img
+# (differing only in fsid), so /KERNEL matches either one and no letter is more correct than the
+# other. Writing `a` here would make the ordinary `novadeck-bootctl try b` slot test warn about a
+# mismatch that does not exist -- and a warning that cries wolf on the happy path is worse than no
+# warning at all. Only a /KERNEL rotation can make the two roots differ, and the RAUC post-install
+# hook records the slot when it does one.
 state="$(mktemp)"
 cat >"$state" <<'EOF'
 # novadeck A/B slot state -- images/initramfs/init, /usr/bin/novadeck-bootctl
@@ -159,7 +168,7 @@ gen=1
 active=a
 pending=
 tries=0
-kernel=a
+kernel=
 bak=
 end
 EOF

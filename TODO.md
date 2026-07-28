@@ -5,8 +5,29 @@ rationale lives in the linked memories and commit history.
 
 ## Open
 
+- [ ] **The ROLLBACK half of A/B has still never fired on hardware** — every trial boot we have ever
+  run, including the three on 2026-07-28, SUCCEEDED and was promoted. `tries` reaching zero, the
+  init falling back to the other slot, and `KERNEL.BAK` being restored are offline-verified only.
+  Two things make this harder to test than it looks, both learned 2026-07-28:
+  1. **A half-written slot is not an unbootable slot.** The tamper test aborted an install into a at
+     67%, yet a still mounted and booted cleanly — the bundle and the flashed image are the same
+     build, so the bytes that landed were nearly identical to the ones they replaced. Corrupting a
+     payload byte is enough to test *verity*; it is not enough to test *rollback*.
+  2. **"Just don't run `mark-good`" does not work either.** `novadeck-boot-good.path`/`.service`
+     confirms the trial automatically once a session comes up and stays up, so a trial that boots at
+     all is promoted with no operator action.
+  So a real test needs a slot that genuinely cannot boot — e.g. zeroing the target's btrfs
+  superblocks (primary at 64K, copy at 64M) before `try`, or masking `novadeck-boot-good` and
+  forcing a hang before session start. **Risk to price in first:** this board has no UART
+  ([[sm8650-no-uart]]), so if the fallback does NOT fire the device is dark and recovery means
+  pulling the SD card and repairing `/efi/NOVADECK/STATE.*` on the host. Do it with the card
+  physically accessible, and with a known-good slot on the other side. Recovery from a deliberately
+  broken slot is otherwise cheap: boot the good slot and `rauc install` into the broken one.
+
 - [x] **`novadeck-bootctl`'s RAUC backend contract has no offline coverage — FIXED 2026-07-28**,
-  offline-verified, not yet HW-run. Originally: **and that is how a broken one shipped** — found 2026-07-28, the same day it cost the first hardware `rauc install`.
+  **HW-CONFIRMED 2026-07-28**: a full OTA install of a release-signed TEST bundle logged
+  `Marking target slot rootfs.1 as non-bootable (bad)... Marked slot rootfs.1 as bad` at `19:44:21`
+  and proceeded — the exact call that aborted the first hardware install at 40%. Originally: **and that is how a broken one shipped** — found 2026-07-28, the same day it cost the first hardware `rauc install`.
   `set-state <slot> bad` returned exit 1 for a slot that was neither active nor pending, which is
   precisely the normal pre-write case (RAUC marks the TARGET slot bad before writing it), so every
   install aborted at 40% with `Failed marking slot rootfs.1 as bad` — a message describing our exit
@@ -53,7 +74,10 @@ rationale lives in the linked memories and commit history.
   narrower than it looks, and the test now documents it.
 
 - [x] **RAUC arms the new slot BEFORE `post-install.sh` makes it bootable — FIXED 2026-07-28**,
-  offline-verified, not yet HW-run. Was: **a ~15s window where the ESP says "boot b" and b cannot boot** — found 2026-07-28 on hardware, from the journal of a
+  **HW-CONFIRMED 2026-07-28**: RAUC marked b active at `19:49:47`, the hook logged
+  `disarmed slot b for the duration of the install` in the same second and
+  `slot b re-armed for a trial boot` at `19:50:07` — the 20s of "armed but no /var, wrong kernel"
+  is covered end to end, and the following reboot booted b successfully. Was: **a ~15s window where the ESP says "boot b" and b cannot boot** — found 2026-07-28 on hardware, from the journal of a
   successful install. RAUC's order is fixed and not ours to change:
 
   ```
@@ -94,7 +118,22 @@ rationale lives in the linked memories and commit history.
   the hook should show the same thing.
 
 - [x] **An interrupted install leaves NO record — a half-written slot still reports `good` —
-  FIXED 2026-07-28**, offline-verified, not yet HW-run. Originally:
+  FIXED 2026-07-28**, **HW-CONFIRMED 2026-07-28** by re-running the tamper test: one payload byte
+  flipped at offset 2000000000 (signature still valid, verity catches it at read time) killed the
+  install at 67% with `Failed to copy data: ... Input/output error`, and the ESP state gained
+  `broken=a` in a new `gen=10` buffer. `get-state a` now answers `bad` (it answered `good` before
+  the fix), `rauc status` prints `boot status: bad`, and `bootctl status` warns. **The
+  survives-a-trial-boot trap is HW-cleared too**: `try a` warned-but-armed (`tries=1`), the trial
+  boot decremented to `tries=0` at `gen=12`, and `broken=a` came through intact and was published
+  in the `/run/novadeck/boot` handoff — a naive marker would have been erased by that one write.
+  **STILL OPEN, found by the same run — a promotion does not clear the marker.** The trial boot of
+  a *succeeded* (its content is largely the same image, so a half-written slot still mounted and
+  booted), `novadeck-boot-good.service` auto-confirmed it, and the result was `active=a` **and**
+  `broken=a` simultaneously: the running, promoted slot reporting `bad`. That is precisely the
+  contradiction the design rule below forbids ("a slot we are running is demonstrably bootable").
+  `set-state good` is specified to clear the marker unconditionally, but the promotion path never
+  calls it — only a successful *install* does. Fix is one of: have `mark-good` clear `broken=` for
+  the slot it promotes, or have the init clear it for the slot it successfully booted. Originally:
   demonstrated on hardware 2026-07-28 (deliberately, via the tampered-bundle test): a payload byte
   flip made dm-verity fail 13s into writing slot a, aborting the install partway through the copy.
   Slot a was then genuinely inconsistent, and both readers disagreed with reality:
@@ -146,8 +185,12 @@ rationale lives in the linked memories and commit history.
   `feat/phase4b-rauc`, offline-verified; **partially HW-confirmed** the same day — the device's
   shipped `/usr/lib/rauc/post-install.sh:184` calls `set-kernel`, the install at `18:28:38`
   completed through it, and the resulting handoff reads `kernel=a` for a booted slot a, consistent.
-  What is still NOT HW-exercised is the field CHANGING letter across a rotation observed end to end;
-  the last install was a same-slot repair. `get-current` is separately HW-confirmed: it answers `a`
+  **The letter change IS now HW-exercised (2026-07-28)**: an install from a booted slot a into b
+  logged `/KERNEL is now slot b's boot image (previous kept as KERNEL.BAK)`, `/efi` held `KERNEL`
+  and `KERNEL.BAK` at 30109696 bytes each, and the state read `kernel=b` across the rotation and the
+  trial boot. `novadeck-bootctl try a` then correctly warned `/KERNEL is slot b's boot image -- slot
+  a will boot with /lib/modules from a different build`, and the init logged the matching
+  `DEGRADED:` line on the boot that followed. Originally NOT exercised, when `get-current` is separately HW-confirmed: it answers `a`
   and `rauc status` reads `Booted from: rootfs.0 (a)`. Found on hardware immediately after a
   successful `rauc install`. The post-install hook rotates `/KERNEL`
   to the newly installed slot's boot image and records the backup via `novadeck-bootctl set-bak`,
@@ -597,6 +640,14 @@ rationale lives in the linked memories and commit history.
   (makes kernel/module coherence true by construction, and needs no RAUC handler-environment
   variable), and the `/var` migration copies **`machine-id` alone** rather than rsyncing `/var`
   (copying the write-once `mac-wifi` would relocate the machine-id bug rather than fix it).
+  **This paragraph is STALE as of the 2026-07-28 HW run — the shipped hook does something else.**
+  It logs `copied /var wholesale (14M, offload bind mounts skipped)`, and slot b was confirmed to
+  receive `powerd.state` and a rewritten `slot` but **not** `mac-wifi`. The outcome is still right:
+  `machine-id` rides across in the `/etc` overlay upper (`/var/lib/overlays/etc/upper/machine-id`),
+  both slots read `7070e56b…`, both derive `66:53:fc:41:2d:f7`, and the device kept the same IP
+  across an install + slot switch. `mac-wifi` being absent is harmless — `gen-mac.sh:40` treats it
+  as a cache and re-derives identically. Reword this to describe the wholesale copy, or change the
+  hook to match the wording; right now the doc and the code disagree.
   Also corrected while implementing: `btrfs-progs` was **not** on the device at all, so step 3's
   `btrfstune` had nothing to run — it is now in `PKGS` alongside `rauc`. Pass 2, in `docs/phase4.md`:
   1. `PKGS += rauc` + `make relock`. **Measured 2026-07-27: `rauc-1.14-1` IS in the pinned

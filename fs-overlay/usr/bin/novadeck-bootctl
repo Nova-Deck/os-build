@@ -16,7 +16,7 @@
 #
 # RAUC `bootloader=custom` backend contract (/etc/rauc/system.conf points at this file):
 #
-#   get-primary / set-primary <a|b> / get-state <a|b> / set-state <a|b> good|bad
+#   get-current / get-primary / set-primary <a|b> / get-state <a|b> / set-state <a|b> good|bad
 #
 # Slot names are lowercase a/b throughout and are identical to the `bootname=` values
 # system.conf will use, so there is never a mapping layer to get wrong.
@@ -319,9 +319,38 @@ cmd_rollback() {
 }
 
 # --- RAUC bootloader=custom backend ------------------------------------------------------------
-# Contract: get-primary prints the boot name of the slot to boot; set-primary marks a slot to be
-# booted next; get-state prints "good" or "bad"; set-state records the outcome. RAUC calls these
-# around an install, so set-primary is what starts a trial.
+# Contract: get-current prints the boot name of the slot that is RUNNING; get-primary prints the one
+# that will boot NEXT; set-primary marks a slot to be booted next; get-state prints "good" or "bad";
+# set-state records the outcome. RAUC calls these around an install, so set-primary is what starts
+# a trial.
+
+# WHICH SLOT IS RUNNING. RAUC treats this as optional -- its fallback is to parse `root=` out of
+# /proc/cmdline -- and for us that fallback is always WRONG, so implementing it is not optional.
+# Our cmdline carries a static `root=PARTLABEL=novadeck-root-A` that exists only as a last-resort
+# fallback; the initramfs resolves the real slot from the ESP state and overrides it. RAUC never
+# sees that, so without this subcommand it concludes "booted slot a" on every boot, forever.
+#
+# HW-confirmed 2026-07-28, on the update that installed and booted slot b: `rauc status` still said
+# `Booted from: rootfs.0`, and the rauc service logged `unknown command: get-current` at every
+# start. The consequence is not cosmetic -- RAUC picks the install target as the slot it did not
+# boot, so from slot b it would target b, the RUNNING slot. That aborts at RAUC's own
+# already-mounted guard (pre_install_check_slot_mount_status) rather than corrupting anything, but
+# it means no update can ever be installed FROM slot b: the A/B cycle only turns one way.
+#
+# The answer comes from the initramfs handoff -- the same source every other subcommand uses for
+# "what booted" -- and deliberately NOT from the ESP state, which records what SHOULD boot next,
+# not what actually did. Those two disagree for the entire duration of a trial, which is exactly
+# when an install is most likely to be attempted.
+cmd_get_current() {
+  local bs
+  bs=$(booted_slot) || bs=""
+  # Non-zero is the contract's documented signal for "cannot be determined", and it is the honest
+  # answer on a degraded cmdline-fallback boot: images/initramfs/init still writes the handoff
+  # there, but with an empty slot=. Guessing a letter instead would hand RAUC a slot nothing
+  # verified, and RAUC would then treat the OTHER one -- possibly the running root -- as free.
+  [ -n "$bs" ] || die "this system did not boot from a slot -- cannot name the current one"
+  echo "$bs"
+}
 
 cmd_get_primary() {
   esp_open; state_require
@@ -395,6 +424,7 @@ case "${1:-}" in
   mark-good)   shift; cmd_mark_good "$@" ;;
   rollback)    shift; cmd_rollback "$@" ;;
   set-kernel)  shift; cmd_set_kernel "$@" ;;
+  get-current) shift; cmd_get_current "$@" ;;
   get-primary) shift; cmd_get_primary "$@" ;;
   set-primary) shift; cmd_set_primary "$@" ;;
   get-state)   shift; cmd_get_state "$@" ;;

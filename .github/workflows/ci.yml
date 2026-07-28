@@ -1,0 +1,62 @@
+# novadeck CI — what can honestly run on a clean runner today.
+#
+# WHAT IS DELIBERATELY NOT HERE: the image build. A clean runner has no work/, so it rebuilds the
+# nine from-source overlay packages, and our builds are not bit-reproducible — images/fetchlock.sh
+# refuses the install when the sha256 differs, so `make sdcard` fails on EVERY run. `make relock`
+# is not the escape hatch either: CI would commit back a lock carrying that runner's bytes, which
+# the next runner does not reproduce, so every run would mutate a reviewed artifact. That is
+# TODO.md's "novadeck lock rows are sha-pinned to non-reproducible builds", and it is a hard block
+# on the Phase 7 workflow ci/README.md describes, not flakiness to retry around. Fixing it is the
+# prerequisite; adding a build job before then would just be a red X nobody reads.
+#
+# So this covers the half that is genuinely CI-shaped: the offline suites. They are what caught a
+# broken RAUC backend, an unarmed slot after a failed install, and a signing self-test that could
+# have gone green while asserting nothing.
+#
+# NO SECRETS, ON PURPOSE. The signing job checks the committed keyring against the committed
+# release certificate — both public, so this runs on a fork's pull request with access to nothing.
+# The private half (does the signing KEY match that cert) announces itself as skipped here and runs
+# where a PKIDIR is mounted. When bundle signing does land it needs exactly ONE secret, the release
+# key, scoped to a protected environment rather than the repo; the CA key stays offline and never
+# reaches a runner, which is what the two-level PKI bought us.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A superseded push has nothing to tell us, and the signing job builds a container.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: offline suites (slot state, bootctl, post-install)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      # 354 checks over the update path: the initramfs READS the slot state, novadeck-bootctl
+      # WRITES it, and the post-install hook drives both while reformatting a partition. Pure
+      # shell against temp-dir sandboxes — no build, no container, no root, no device.
+      - run: make test
+
+  signing:
+    name: RAUC signing self-test
+    runs-on: ubuntu-latest
+    # Builds novadeck-build (build/Dockerfile) because the self-test signs real bundles and
+    # verifies them through the shipped system.conf, which needs rauc. Uncached today: a layer
+    # cache is worth adding when this becomes the slow part, not before.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      # Every case in here is a NEGATIVE — it feeds images/rauc/verify-signing.sh a deliberately
+      # broken config or cert profile and requires it to go red. The failure mode of a check is
+      # not "it breaks", it is "it stays green while asserting nothing".
+      - run: make test-signing

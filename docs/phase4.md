@@ -469,7 +469,56 @@ recovery mechanism when you have the card in a reader.
 | dm-verity, declared vfat/loop | `kernel/kernel.config`, asserted in `kernel/build.sh` |
 | signing CA; only the CA cert is committed | `ci/gen-signing-ca.sh`, `images/rauc/novadeck-ca.pem` |
 
-### Pass 2 — RAUC (not started)
+### Pass 2 — RAUC (core install path IMPLEMENTED, not yet HW-validated)
+
+Scope taken: the install path only. `steamos-update`, the `novadeck-steamos-manager` D-Bus surface
+and the bundle server are deliberately a follow-up — an update is CLI-driven for now, so a failure
+in this pass is attributable to the update machinery rather than to the UI wiring on top of it.
+
+**The kernel travels inside the rootfs, not in the bundle.** The plan for this pass was to add the
+boot image to the bundle as a second payload the post-install hook consumes. It ships at
+`/usr/lib/novadeck/boot.img` instead, installed by `images/assemble-rootfs.sh`, and the hook copies
+it out of the slot it just wrote. Two reasons, and the second is the one that decided it:
+
+- It removes a dependency on RAUC's handler environment. A bundle-side payload has to be located
+  through `RAUC_BUNDLE_MOUNT_POINT`, whose exact availability differs between *handlers* and
+  manifest *hooks*; the root-side copy needs none of that, and the hook derives its target slot
+  from our own `/run/novadeck/boot` handoff (cross-checking `RAUC_TARGET_SLOTS` when set, and
+  refusing on disagreement rather than preferring either).
+- **It makes kernel/module coherence true by construction.** `/lib/modules/<ver>` ships in a
+  specific root; the kernel that matches it is that root's kernel. Carried this way there is no
+  bundle layout to keep in sync and no way to install a root whose modules do not match the kernel
+  that will boot it. `CFG80211`/`ATH12K` are `=m`, so getting that pairing wrong means a device
+  with no Wi-Fi and no serial console. It costs ~30 MB per slot, which is the price of the
+  guarantee. A consequence worth noting: `$(ROOTFS)` now depends on `$(BOOTIMG)` in the Makefile.
+
+**The `/var` migration copies `machine-id`, not `/var`.** SteamOS reformats the target's `/var` and
+rsyncs the running one over it. We reformat too, but populate deliberately: `machine-id` alone,
+plus NetworkManager connections. `/var/lib/novadeck/mac-wifi` is write-once and takes precedence
+over the seed, so copying it would pin the old MAC forever regardless of `machine-id` — the
+original machine-id bug relocated rather than fixed. Migrating the seed and letting the MAC
+re-derive is the smaller primitive, and it keeps one source of truth.
+
+**Order inside the hook is load-bearing:** fsid first. Until `btrfstune -U` has run, the target and
+the running root share an fsid *and* `devid=1`, and mounting the target can silently hand you the
+running root — so every later step, all of which mount the target, has to come after it.
+
+**Kernel restore on rollback** is in the initramfs (`cp` is now staged for it), and reboots via
+`exit 1` → panic → `panic=5`, reusing the mechanism the no-bootable-root path already relies on
+because `MAGIC_SYSRQ` is not in `kernel/kernel.config`. `bak=` is cleared in the *same* generation
+that clears `pending`, so an interrupted copy cannot leave a state that retries a restore forever.
+
+> **Honest limit.** This covers "the new kernel boots far enough to run our initramfs, but the
+> system is not healthy". A kernel that does not boot at all leaves nothing running to restore
+> anything — that is still a reflash, and design C never claimed otherwise.
+
+Verified offline: `images/initramfs/test-slot-state.sh` (73 checks, up from 56) covers restore,
+a missing backup file, and a read-only ESP. Guard assertion 7 asserts the built tree can actually
+perform an update: `rauc`, keyring, `system.conf`, `boot.img`, `btrfstune`, and an *executable*
+hook — the exec-bit half because this project has already paid for a shipped script that lost it.
+
+#### Original checklist
+
 
 1. `PKGS += rauc` and `make relock` (it is in the pinned snapshot; `json-glib` comes with it).
 2. `/etc/rauc/system.conf`: two slot groups, `bootloader=custom` pointed at `novadeck-bootctl`

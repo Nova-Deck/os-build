@@ -10,6 +10,7 @@
 #   novadeck-bootctl try b [--tries N]   boot slot b next; revert after N failed attempts
 #   novadeck-bootctl mark-good           confirm the slot on trial (this is what ends a trial)
 #   novadeck-bootctl rollback            abandon a trial, go back to the active slot
+#   novadeck-bootctl set-bak <name>      record the previous kernel kept on the ESP ('' clears it)
 #
 # RAUC `bootloader=custom` backend contract (pass 2 wires /etc/rauc/system.conf to it; the
 # subcommands exist now so that is a config change and not a code change):
@@ -256,6 +257,25 @@ cmd_mark_good() {
   echo "slot $S_PENDING confirmed good and is now active"
 }
 
+# Record (or clear) the name of the previous kernel kept on the ESP. The RAUC post-install hook
+# calls this after rotating /KERNEL, so the initramfs knows a restore is available if the trial
+# boot never gets confirmed. Kept here rather than written by the hook because this file has ONE
+# writer: the generation scheme and the preserve-unknown-keys contract both live in state_write().
+cmd_set_bak() {
+  need_root
+  local name=${1:-}
+  # A path would let a caller point the initramfs at something outside the ESP, which it cannot
+  # reach anyway -- keep it a bare filename so the format stays a name, not a location.
+  case "$name" in
+    */*|*' '*) die "the backup name must be a bare filename (got '$name')" ;;
+  esac
+  esp_open; state_require
+  [ -z "$name" ] || [ -f "$ESP/$name" ] || warn "no $ESP/$name on the ESP yet -- recording it anyway"
+  S_BAK=$name
+  state_write "$S_ACTIVE" "$S_PENDING" "$S_TRIES"
+  if [ -n "$name" ]; then echo "recorded previous kernel: $name"; else echo "cleared the previous-kernel record"; fi
+}
+
 cmd_rollback() {
   need_root
   esp_open; state_require
@@ -324,6 +344,7 @@ case "${1:-}" in
   try)         shift; cmd_try "$@" ;;
   mark-good)   shift; cmd_mark_good "$@" ;;
   rollback)    shift; cmd_rollback "$@" ;;
+  set-bak)     shift; cmd_set_bak "$@" ;;
   get-primary) shift; cmd_get_primary "$@" ;;
   set-primary) shift; cmd_set_primary "$@" ;;
   get-state)   shift; cmd_get_state "$@" ;;

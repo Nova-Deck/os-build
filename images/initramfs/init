@@ -254,8 +254,43 @@ elif [ "$STATE_TRIES" -gt 0 ]; then
 else
   SLOT=$STATE_ACTIVE; SOURCE=rollback
   warn "ROLLBACK: pending slot $STATE_PENDING exhausted its tries — reverting to $SLOT"
-  [ -n "$STATE_BAK" ] && warn "ROLLBACK: state records a previous kernel (bak=$STATE_BAK); pass 1 does not restore it"
+  # An update rotated /KERNEL and kept the previous one; the trial it was installed for has now
+  # failed, so put the old kernel back. This has to REBOOT rather than carry on: we are already
+  # running the new kernel, and the root we are about to mount is the old slot, whose
+  # /lib/modules/<ver> does not match it (CFG80211/ATH12K are =m — that boot has no Wi-Fi, on a
+  # device with no serial console). Reverting the root without the kernel is the mismatch the
+  # rollback exists to avoid.
+  #
+  # The reboot is `exit 1` -> kernel panic -> panic=5 on our cmdline. MAGIC_SYSRQ is not in
+  # kernel/kernel.config, so /proc/sysrq-trigger does not exist; this reuses the same mechanism
+  # the no-bootable-root path already relies on rather than inventing a second one.
+  #
+  # HONEST LIMIT: this covers "the new kernel boots far enough to run us, but the system is not
+  # healthy". A kernel that does not boot at all leaves nothing running to restore anything — that
+  # is a reflash, and design C never claimed otherwise (docs/phase4.md).
+  # `bak` is captured before the write, which clears it: the state must stop naming a backup in the
+  # SAME generation that clears `pending`. If the copy below is interrupted, the next boot must not
+  # keep retrying a restore forever — a stale KERNEL.BAK on the ESP is harmless, a state that keeps
+  # pointing at it is not.
+  _bak=$STATE_BAK
+  _restore=0
+  if [ -n "$_bak" ] && [ "$ESPMODE" = rw ] && [ -f "$ESPDIR/$_bak" ]; then
+    _restore=1; STATE_BAK=''
+  fi
   [ "$ESPMODE" = rw ] && write_state "$STATE_ACTIVE" '' 0
+  if [ "$_restore" = 1 ]; then
+    warn "ROLLBACK: restoring the previous kernel ($_bak -> KERNEL) and rebooting"
+    if cp "$ESPDIR/$_bak" "$ESPDIR/KERNEL"; then
+      umount "$ESPDIR" || warn "DEGRADED: cannot unmount the ESP after restoring the kernel"
+      warn "ROLLBACK: previous kernel restored — rebooting into slot $SLOT"
+      exit 1
+    fi
+    warn "DEGRADED: could not restore $_bak — booting slot $SLOT under the NEW kernel"
+  elif [ -n "$_bak" ] && [ "$ESPMODE" != rw ]; then
+    warn "DEGRADED: ESP is read-only — cannot restore the previous kernel ($_bak)"
+  elif [ -n "$_bak" ]; then
+    warn "DEGRADED: state names a previous kernel ($_bak) but $ESPDIR/$_bak is missing"
+  fi
 fi
 
 if [ -n "$SLOT" ]; then

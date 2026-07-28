@@ -149,7 +149,18 @@ BOOTSTRAP_PKGS=(base)
 # is built from source into the [novadeck] overlay (packages/scx-scheds) and resolves here. Installing
 # it only PLACES the binaries + scx.service; nothing selects a scheduler yet, so the kernel keeps
 # running EEVDF until something enables the unit or launches a scheduler by hand.
-PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-tools mesa gamescope seatd sddm mangohud fex-emu bluez bluez-utils networkmanager alsa-ucm-conf pipewire wireplumber pipewire-pulse pipewire-alsa unzip openal gtk2 ffmpeg e2fsprogs xorg-xwayland lsof noto-fonts noto-fonts-cjk noto-fonts-emoji python python-gobject scx-scheds)
+# rauc: the A/B update client (Phase 4b pass 2). It is in the pinned snapshot's `extra` repo
+# (rauc-1.14-1, measured 2026-07-27), so there is no packages/rauc/ from-source recipe — only
+# json-glib arrives as a new transitive dep. It reads /etc/rauc/system.conf, which points
+# `bootloader=custom` at /usr/bin/novadeck-bootctl; that contract (get-primary/set-primary/
+# get-state/set-state) is already implemented, so nothing else has to learn about slots.
+# btrfs-progs: for `btrfstune -U` in the post-install hook. Every `rauc install` writes IDENTICAL
+# bytes into the inactive slot, so without a re-randomised fsid both slots share one fsid AND
+# devid=1 — the pair btrfs keys its device list on — and mounting one can hand you the other.
+# images/make-sdcard.sh already does this at build time; the hook has to do it per install. NOT
+# previously on the device (no btrfs* row in manifest.lock at all), despite the root being btrfs:
+# the kernel does the mounting, and nothing shipped ever needed the userspace tools until now.
+PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-tools mesa gamescope seatd sddm mangohud fex-emu bluez bluez-utils networkmanager alsa-ucm-conf pipewire wireplumber pipewire-pulse pipewire-alsa unzip openal gtk2 ffmpeg e2fsprogs xorg-xwayland lsof noto-fonts noto-fonts-cjk noto-fonts-emoji python python-gobject scx-scheds rauc btrfs-progs)
 
 # Test-only packages — installed ONLY under NOVADECK_TEST=1, NEVER in a release base.
 # On-device bring-up tools: evtest reads raw /dev/input events; usbutils provides lsusb.

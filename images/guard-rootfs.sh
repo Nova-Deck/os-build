@@ -35,7 +35,9 @@
 #   5. the trim's declaration is fully applied — nothing images/trim.list names survived
 #   6. the first-boot identity is shippable — no /etc/machine-id, AND systemd-firstboot masked
 #      (the two are only safe together)
-#   7. a size delta against the previous build (report only — never fails a build)
+#   7. the RAUC update path is installable — rauc, the keyring, system.conf and this slot's
+#      own boot.img are all present, and the hook that consumes them is executable;
+#   8. a size delta against the previous build (report only — never fails a build)
 set -euo pipefail
 shopt -s nullglob
 
@@ -315,7 +317,43 @@ if [ "$mid_ok" = 1 ] && [ "$fb_ok" = 1 ]; then
 fi
 
 # ------------------------------------------------------------------------------------------
-# 7. Size delta (report only).
+# 7. The RAUC update path is installable.
+#
+# Every part of an A/B update is inert until something needs it, and each missing piece fails at a
+# different and unhelpful moment: no `rauc` binary is a missing command at install time; a missing
+# keyring means bundles verify against NOTHING while still reporting success; a missing boot.img
+# means the post-install hook cannot install a kernel matching the modules in the slot it just
+# wrote, so the trial boot has no Wi-Fi and no serial console to debug it from.
+#
+# The exec bit on the hook is checked because it is exactly the failure this project has already
+# paid for once: a shipped script that lost its exec bit in a tree refactor, where the symptom was
+# a black screen rather than an error (see fs-overlay/README.md).
+# ------------------------------------------------------------------------------------------
+echo "  7. RAUC update path"
+rauc_ok=1
+for f in usr/bin/rauc etc/rauc/keyring.pem etc/rauc/system.conf usr/lib/novadeck/boot.img \
+         usr/lib/rauc/post-install.sh; do
+  if [ ! -s "$STAGE/$f" ]; then
+    rauc_ok=0
+    bad "/$f is missing or empty — the A/B update path is not installable"
+  fi
+done
+if [ -e "$STAGE/usr/lib/rauc/post-install.sh" ] && [ ! -x "$STAGE/usr/lib/rauc/post-install.sh" ]; then
+  rauc_ok=0
+  bad "/usr/lib/rauc/post-install.sh is not executable — RAUC would report a successful install of a slot that was never finished"
+fi
+# btrfstune is what re-randomises the target slot's fsid. Without it the hook dies mid-install,
+# and a slot that shares an fsid with the running root can silently hand you the wrong filesystem.
+if [ ! -s "$STAGE/usr/bin/btrfstune" ]; then
+  rauc_ok=0
+  bad "/usr/bin/btrfstune is missing — the post-install hook cannot re-randomise the target slot's fsid"
+fi
+if [ "$rauc_ok" = 1 ]; then
+  echo "    ok  rauc + keyring + system.conf + boot.img ($(du -h "$STAGE/usr/lib/novadeck/boot.img" | cut -f1)) + executable hook"
+fi
+
+# ------------------------------------------------------------------------------------------
+# 8. Size delta (report only).
 #
 # Never fails a build — there is no defensible threshold, and a guard that blocks on growth would
 # be disabled the first time a legitimate package got bigger. Its job is to put the number in

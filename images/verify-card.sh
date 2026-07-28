@@ -119,7 +119,10 @@ mtype -i "$IMG@@$espoff" ::/NOVADECK/STATE.1 >/dev/null 2>&1 \
 echo "  4. initramfs"
 if [ -f "$INITRAMFS" ]; then
   ( cd "$T" && gzip -dc "$INITRAMFS" | cpio -idm --quiet 2>/dev/null )
-  for b in umount mount findfs switch_root bash; do
+  # cp is load-bearing, not a convenience: it is what restores KERNEL.BAK over /KERNEL on a
+  # rollback boot. Missing, the rollback silently degrades to "old root under the new kernel" --
+  # whose /lib/modules it does not carry, so no Wi-Fi on a device with no serial console.
+  for b in umount mount findfs switch_root bash cp; do
     [ -x "$T/usr/bin/$b" ] && ok "$b staged" || bad "$b is NOT in the initramfs"
   done
   [ -d "$T/esp" ] && ok "/esp mountpoint staged" || bad "/esp mountpoint missing — the ESP cannot be mounted"

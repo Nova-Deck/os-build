@@ -40,7 +40,10 @@ IMG="$OUT/initramfs.cpio.gz"
 # builtin (read, printf, case, [), and the A/B slot-state format was chosen specifically so
 # that stays true -- see the state-file section of the init's header before adding cat, cp, mv,
 # dd or sync here.
-BINS=(bash mount umount switch_root findfs mkdir sleep)
+# cp: the rollback path restores the previous kernel (KERNEL.BAK -> KERNEL) on the ESP. A ~30MB
+# vfat file is not a shell-builtin job, and this is the one place the init writes something other
+# than the small state file.
+BINS=(bash mount umount switch_root findfs mkdir sleep cp)
 
 [ -n "$BASE" ] || { echo "usage: mkinitramfs.sh <base-rootfs-dir>" >&2; exit 2; }
 [ -d "$BASE" ] || { echo "no base rootfs dir: $BASE" >&2; exit 2; }

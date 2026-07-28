@@ -109,16 +109,27 @@ build_init() {
   n=$(grep -c 'mount -t proc' "$dst"); [ "$n" = 1 ] || { echo "FATAL: pseudo-fs mounts changed" >&2; exit 2; }
 }
 
-seed_state() {  # <file-index> <gen> <active> <pending> <tries>
+seed_state() {  # <file-index> <gen> <active> <pending> <tries> [bak]
   cat >"$SB/esp/NOVADECK/STATE.$1" <<EOF
 gen=$2
 active=$3
 pending=$4
 tries=$5
 kernel=
-bak=
+bak=${6:-}
 end
 EOF
+}
+
+expect_bak() {  # <expected bak= in the winning state file>
+  local bf g best=-1 f got
+  for f in "$SB"/esp/NOVADECK/STATE.*; do
+    [ -f "$f" ] || continue
+    grep -qx end "$f" || continue
+    g=$(sed -n 's/^gen=//p' "$f"); [ "${g:-0}" -gt "$best" ] && { best=$g; bf=$f; }
+  done
+  got=$(sed -n 's/^bak=//p' "$bf")
+  [ "$got" = "$1" ] && ok "bak='$1'" || bad "bak: expected '$1', got '$got'"
 }
 
 run_init() {
@@ -333,6 +344,47 @@ seed_state 0 2 b '' 0
 run_init
 grep -q 'novadeck-var-B' "$SB/mounts" && ok "mounted var-B" || bad "did not mount var-B"
 grep -q 'lowerdir=' "$SB/mounts" && ok "/etc overlay stacked" || bad "/etc overlay not stacked"
+done_
+
+# --- kernel rollback (design C) ----------------------------------------------------------------
+# An update rotates /KERNEL and records the previous one in `bak`. If the trial it was installed
+# for never gets confirmed, the rollback has to put that kernel back -- otherwise the old root
+# boots under the new kernel, whose /lib/modules it does not carry (=m CFG80211/ATH12K: no Wi-Fi,
+# on a device with no serial console).
+
+t "rollback-restores-the-previous-kernel"
+seed_state 0 6 a b 0 KERNEL.BAK
+printf 'NEW-KERNEL' >"$SB/esp/KERNEL"
+printf 'OLD-KERNEL' >"$SB/esp/KERNEL.BAK"
+run_init
+expect_rc 1                     # exit 1 -> panic -> panic=5 reboots into the restored kernel
+[ "$(cat "$SB/esp/KERNEL")" = "OLD-KERNEL" ] \
+  && ok "KERNEL restored from KERNEL.BAK" || bad "KERNEL was not restored (got '$(cat "$SB/esp/KERNEL")')"
+expect_state 7 a '' 0
+expect_bak ''                   # cleared in the SAME generation that cleared pending
+expect_kmsg "restoring the previous kernel"
+awk '/umount/{u=1} END{exit !u}' "$SB/mounts" && ok "ESP unmounted before the reboot" || bad "ESP not unmounted"
+done_
+
+t "rollback-with-a-missing-backup-file-still-rolls-back"
+seed_state 0 6 a b 0 KERNEL.BAK
+printf 'NEW-KERNEL' >"$SB/esp/KERNEL"     # no KERNEL.BAK on the ESP
+run_init
+expect_rc 0                     # degrades to a normal rollback rather than refusing to boot
+expect_boot slot a; expect_boot source rollback
+[ "$(cat "$SB/esp/KERNEL")" = "NEW-KERNEL" ] && ok "KERNEL left alone" || bad "KERNEL was touched"
+expect_kmsg "is missing"
+done_
+
+t "readonly-esp-cannot-restore-the-kernel"
+seed_state 0 6 a b 0 KERNEL.BAK
+printf 'NEW-KERNEL' >"$SB/esp/KERNEL"; printf 'OLD-KERNEL' >"$SB/esp/KERNEL.BAK"
+echo ESP_RO >"$SB/unmountable"
+run_init
+expect_rc 0
+expect_boot slot a; expect_boot source rollback; expect_boot esp ro
+[ "$(cat "$SB/esp/KERNEL")" = "NEW-KERNEL" ] && ok "KERNEL left alone on a ro ESP" || bad "KERNEL was rewritten on a ro ESP"
+expect_kmsg "cannot restore the previous kernel"
 done_
 
 echo

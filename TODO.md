@@ -334,9 +334,17 @@ rationale lives in the linked memories and commit history.
   to. 128MiB of card sitting idle. Adding a GRUB stage stays a legitimate fallback if C proves
   unworkable — reconsider it rather than working around it. See [[sm8650-rocknix-abl-boot]].
 
-- [ ] **Phase 4b pass 2 — RAUC on top of the landed boot path** — branch `feat/phase4b-boot-slots`
-  landed pass 1 (slot state, selection, rollback, both slots populated, `novadeck-bootctl`, health
-  check). Pass 2, in `docs/phase4.md`:
+- [ ] **Phase 4b pass 2 — RAUC on top of the landed boot path** — pass 1 is merged (`d524f09`).
+  **Steps 1-4 IMPLEMENTED 2026-07-28 on `feat/phase4b-rauc`, NOT yet HW-validated; steps 5-6 are
+  deliberately deferred to a follow-up branch** (updates are CLI-driven for now, so a failure in
+  this pass is attributable to the update machinery and not to UI wiring on top of it).
+  Two deviations from the original wording below, both explained in `docs/phase4.md`: the new
+  kernel ships **inside the rootfs** at `/usr/lib/novadeck/boot.img` rather than as bundle content
+  (makes kernel/module coherence true by construction, and needs no RAUC handler-environment
+  variable), and the `/var` migration copies **`machine-id` alone** rather than rsyncing `/var`
+  (copying the write-once `mac-wifi` would relocate the machine-id bug rather than fix it).
+  Also corrected while implementing: `btrfs-progs` was **not** on the device at all, so step 3's
+  `btrfstune` had nothing to run — it is now in `PKGS` alongside `rauc`. Pass 2, in `docs/phase4.md`:
   1. `PKGS += rauc` + `make relock`. **Measured 2026-07-27: `rauc-1.14-1` IS in the pinned
      snapshot's `extra` repo** and every dep but `json-glib` is already in `manifest.lock` — so no
      `packages/rauc/` from-source recipe is needed, which was the largest unknown.

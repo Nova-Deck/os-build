@@ -131,6 +131,27 @@ else
   echo "  (no fs-overlay/ tree — skipping overlay injection)" >&2
 fi
 
+# --- RAUC: the device keyring and the slot's own kernel (Phase 4b pass 2) ----------------------
+# Two things the overlay tree cannot carry, because both are BUILD OUTPUTS rather than static files.
+#
+# 1. The keyring. /etc/rauc/system.conf points at /etc/rauc/keyring.pem; it is installed here from
+#    the committed CA so there is ONE copy in the repo (images/rauc/novadeck-ca.pem, which ci/
+#    also signs bundles against) rather than a duplicate under fs-overlay that could drift.
+#
+# 2. The boot image, as /usr/lib/novadeck/boot.img. /lib/modules/<ver> ships in THIS root, so the
+#    kernel that matches it is this root's kernel — carrying it here makes that pairing true by
+#    construction. The RAUC post-install hook copies it out of the newly written slot onto the ESP
+#    as /KERNEL, so an update can never leave a root running under a kernel whose modules it does
+#    not have (CFG80211/ATH12K are =m: that boot would have no Wi-Fi, on a device with no serial
+#    console). It costs ~30MB per slot, which is the price of that guarantee.
+CA_SRC="$ROOT/images/rauc/novadeck-ca.pem"
+BOOTIMG_SRC="$OUT/boot/novadeck-boot.img"
+[ -f "$CA_SRC" ]      || { echo "no RAUC CA at ${CA_SRC#"$ROOT"/} (run ci/gen-signing-ca.sh)" >&2; exit 1; }
+[ -f "$BOOTIMG_SRC" ] || { echo "no boot image at ${BOOTIMG_SRC#"$ROOT"/} (run boot/package.sh)" >&2; exit 1; }
+install -D -m0444 "$CA_SRC"      "$stage/etc/rauc/keyring.pem"
+install -D -m0444 "$BOOTIMG_SRC" "$stage/usr/lib/novadeck/boot.img"
+echo "  RAUC: keyring.pem + this slot's boot.img ($(du -h "$BOOTIMG_SRC" | cut -f1)) installed"
+
 # Rewrite the baked Proton compat tools. We bake TWO — proton-cachyos and proton-ge — so the user
 # can pick whichever runs a given title better from the Steam UI. Both are the same self-contained
 # arm64 Wine + Valve WoW64-FEX Proton and ship identical toolmanifest.vdf / compatibilitytool.vdf

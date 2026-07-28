@@ -205,6 +205,22 @@ rationale lives in the linked memories and commit history.
   `7a:9e:e0:c4:52:04`, so wipe `/var/lib/novadeck/mac-wifi` on B before any test expecting clean
   first-boot derivation there.
 
+  **WHY THIS IS A BRICK-CLASS BUG ON A RELEASE IMAGE, not just an inconvenience.** The MAC/DHCP
+  half is annoying (a broken reservation). The `/etc` half is not recoverable by the user: on a
+  release image the target slot's `NetworkManager/system-connections/` is EMPTY, so the first boot
+  after an OTA has no saved network. This device is Wi-Fi-only, headless and has no serial console
+  ([[sm8650-no-uart]]) — no network means no SSH, and the only way back in is the on-screen OOBE
+  Wi-Fi picker, which is exactly the flow that needs an active session and has failed before
+  ([[wifi-connect-fails-after-list]]). If the update also broke the session, there is no way in at
+  all. So the NetworkManager-connections half of the SteamOS hook is NOT optional garnish on top of
+  the `/var` rsync — it is the part that keeps a released device reachable, and it must be
+  validated on a RELEASE image before any OTA ships.
+
+  Second HW instance 2026-07-28 on a fresh card (`try b` + reboot, different unit/card from the
+  numbers above): A `9a04534c…`/`32:2c:d5:ee:d1:b9`/`.187` vs B `40f8f6e7…`/`92:e6:c8:4d:f8:6d`/
+  `.230`. Same mechanism, reproduced independently — recorded because the surprise on the day was
+  operational: the device "vanished" from its known IP after a routine slot test.
+
 - [x] **FIXED + HW-VALIDATED 2026-07-28 (`1d1c68e`, `feat/phase4b-boot-slots`). The image shipped a
   populated `/etc/machine-id` against its own stated invariant, with nothing asserting it** — found
   during Phase 4b HW validation; NOT a 4b bug.

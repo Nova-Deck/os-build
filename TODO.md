@@ -5,6 +5,39 @@ rationale lives in the linked memories and commit history.
 
 ## Open
 
+- [ ] **`$(BASE_STAMP)` is not mode-scoped — a test-built base can feed a release build** — found
+  2026-07-28 while building a RAUC bundle right after a `NOVADECK_TEST=1 make sdcard`. `MODE_STAMP`
+  (`Makefile:69`, `work/.rootfs-mode-$(ROOTFS_MODE)`) exists precisely so flipping `NOVADECK_TEST`
+  rebuilds the **rootfs** — its comment records the boot cycle that cost on 2026-07-09. `$(BASE_STAMP)`
+  (`Makefile:106`, rule at `263`) has no equivalent: every prerequisite is a file, none encodes the
+  mode, so a base carrying `TEST_PKGS` looks up-to-date to a release build. `customize-base.sh` is
+  *already* mode-aware (line 234 adds `TEST_PKGS`, line 282 folds mode into the reuse key) — make
+  simply never invokes it, so that logic is unreachable in the exact case it was written for.
+  **Caught, but only in one direction:** the release guard failed with `only in tree: evtest-1.36-1 /
+  usbutils-019-1` against `manifest.lock`, so nothing shipped. The reverse — a release base feeding a
+  TEST card — has NO check, because `guard-rootfs.sh` is release-only (`assemble-rootfs.sh:771`), and
+  that is the direction that produced the 2026-07-09 boot cycle: a release root in a test-built card,
+  no Wi-Fi, no SSH, no error anywhere. Fix is one line in kind: scope the stamp per mode
+  (`work/.base-$(ROOTFS_MODE).stamp`) so the two modes keep separate stamps, exactly as the rootfs
+  already does. Note the fix costs a full base rebuild on every mode flip — which is the correct
+  price, and is what `make relock` already pays deliberately (`rm -f $(BASE_STAMP)`).
+
+- [ ] **Nothing has exercised rauc 1.15.2 as an INSTALLER** — `packages/rauc` (branch
+  `feat/phase4b-rauc`, commit `8304bc6`) builds 1.15.2 from source solely because the snapshot's 1.14
+  cannot install a dm-verity bundle on kernel >= 6.19, and we ship 7.1.5. That premise is still an
+  **upstream changelog claim we inherited** — no test in the tree can confirm or refute it.
+  Specifically, `guard-rootfs.sh` assertion 7 passes on a release build but does NOT cover this: it
+  runs `images/rauc/verify-signing.sh` inside the BUILD container, whose rauc is 1.15.1
+  (`build/Dockerfile`), so it asserts cert profile + bundle format + keyring agreement and never
+  touches the device binary. Only a HW `rauc install` settles it. **When running it:** the bundle must
+  be signed with the real key (`RAUC_CERT=out/pki/release.cert.pem RAUC_KEY=out/pki/release.key.pem
+  make bundle`) — `genbundle.sh` otherwise mints an *ephemeral dev cert* that the device keyring
+  rejects on signature, which reads as a rauc failure but is not one. Use a TEST-mode bundle so the
+  trial boot keeps SSH (a release bundle in slot B trial-boots headless on a board with no serial
+  console). Run `rauc info` before `rauc install`: writer and installer are now deliberately
+  different versions (1.15.1 Ubuntu vs 1.15.2 overlay, same upstream fix line, never exercised as a
+  pair), and `info` separates version skew from the verity path being tested.
+
 - [ ] **Retroid Pocket Nova — board support added 2026-07-27, NOT HW-validated** — SM8550 sibling of
   the Retroid Pocket 6: same `qcs8550-retroidpocket-rp6.dts` base (AYN common dtsi, RSInput gamepad,
   ayn/odin2 ADSP+amp firmware), differing only in the display/touch pair. Its 4.5" panel is an

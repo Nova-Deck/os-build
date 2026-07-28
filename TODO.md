@@ -188,22 +188,42 @@ rationale lives in the linked memories and commit history.
   missing backup, read-only ESP, and mismatch/match/unrecorded. It still does not execute
   `novadeck-bootctl` — that gap is the item above, unchanged by this.
 
-- [ ] **`$(BASE_STAMP)` is not mode-scoped — a test-built base can feed a release build** — found
-  2026-07-28 while building a RAUC bundle right after a `NOVADECK_TEST=1 make sdcard`. `MODE_STAMP`
+- [x] **`$(BASE_STAMP)` was not mode-scoped — a test-built base could feed a release build — FIXED
+  2026-07-28** — found the same day, building a RAUC bundle right after a
+  `NOVADECK_TEST=1 make sdcard`. `MODE_STAMP`
   (`Makefile:69`, `work/.rootfs-mode-$(ROOTFS_MODE)`) exists precisely so flipping `NOVADECK_TEST`
   rebuilds the **rootfs** — its comment records the boot cycle that cost on 2026-07-09. `$(BASE_STAMP)`
-  (`Makefile:106`, rule at `263`) has no equivalent: every prerequisite is a file, none encodes the
-  mode, so a base carrying `TEST_PKGS` looks up-to-date to a release build. `customize-base.sh` is
-  *already* mode-aware (line 234 adds `TEST_PKGS`, line 282 folds mode into the reuse key) — make
+  (`Makefile:127`, rule at `305`) had no equivalent: every prerequisite was a file, none encoded the
+  mode, so a base carrying `TEST_PKGS` looked up-to-date to a release build. `customize-base.sh` is
+  *already* mode-aware (`242` adds `TEST_PKGS`, `306` folds mode into the reuse key) — make
   simply never invokes it, so that logic is unreachable in the exact case it was written for.
   **Caught, but only in one direction:** the release guard failed with `only in tree: evtest-1.36-1 /
   usbutils-019-1` against `manifest.lock`, so nothing shipped. The reverse — a release base feeding a
   TEST card — has NO check, because `guard-rootfs.sh` is release-only (`assemble-rootfs.sh:771`), and
   that is the direction that produced the 2026-07-09 boot cycle: a release root in a test-built card,
-  no Wi-Fi, no SSH, no error anywhere. Fix is one line in kind: scope the stamp per mode
-  (`work/.base-$(ROOTFS_MODE).stamp`) so the two modes keep separate stamps, exactly as the rootfs
-  already does. Note the fix costs a full base rebuild on every mode flip — which is the correct
-  price, and is what `make relock` already pays deliberately (`rm -f $(BASE_STAMP)`).
+  no Wi-Fi, no SSH, no error anywhere.
+  **The one-line fix written here was wrong, and shipping it would have kept the bug in the direction
+  with no guard.** Renaming the stamp per mode (`work/.base-$(ROOTFS_MODE).stamp`) works for the
+  rootfs because each mode has its own *artifact*; the base has one shared tree at `work/base`. Two
+  stamps against one tree means a `.base-test.stamp` left behind by an earlier test build still looks
+  satisfied after a release build has since overwritten that tree — the same stale-base bug, now
+  arrived at through the stamp meant to prevent it.
+  Shipped instead: a **prerequisite** stamp. `$(BASE_MODE_STAMP)` (`work/.base-mode-$(ROOTFS_MODE)`)
+  is a prerequisite of `$(BASE_STAMP)`, and its rule `rm -f work/.base-mode-*` before touching, so
+  exactly one marker exists and it always names the mode `work/base` was last built in. A flip
+  re-creates it newer than `$(BASE_STAMP)`, `customize-base.sh` re-runs, and its own reuse key
+  (`test:1`) makes that a real rebuild rather than a short-circuit. One stamp per artifact, one
+  marker per mode.
+  The stamp is also no longer trusted on its own: the recipe now asserts the *built tree* is in the
+  requested mode (`test:1` present in `work/base/usr/lib/novadeck/pkgs` iff `ROOTFS_MODE=test`) and
+  fails with `base tree is a <got> build, this is a <want> build (stale work/base)`. That closes the
+  direction `guard-rootfs.sh` never covered. `relock` and `clean-base` drop the marker along with
+  the stamp — the first leaves a RESOLVE tree that is in no mode, the second leaves no tree at all.
+  Verified offline both ways with `make -n -o work/repo/aarch64/.overlay.stamp base` (the overlay
+  rule otherwise always cascades under `-n`): same mode + fresh stamp is `Nothing to be done`, a
+  flipped mode re-runs `customize-base.sh`. The assertion was exercised against the live test tree
+  in both modes. The flip costs a full base rebuild — the correct price, and what `make relock`
+  already pays deliberately.
 
 - [x] **rauc 1.15.2 as an INSTALLER — HW-VALIDATED 2026-07-28** — `packages/rauc` (`8304bc6`) builds
   1.15.2 from source solely because the snapshot's 1.14 cannot install a dm-verity bundle on

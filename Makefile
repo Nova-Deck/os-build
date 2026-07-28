@@ -69,6 +69,27 @@ TEST_ENV := -e NOVADECK_TEST -e NOVADECK_WIFI_SSID -e NOVADECK_WIFI_PSK -e NOVAD
 ROOTFS_MODE  := $(if $(filter 1,$(NOVADECK_TEST)),test,release)
 MODE_STAMP   := work/.rootfs-mode-$(ROOTFS_MODE)
 
+# The BASE tree is mode-dependent for the same reason and needs the same treatment: NOVADECK_TEST=1
+# adds TEST_PKGS (evtest, usbutils) to the bootstrap (images/customize-base.sh:176), so a test base
+# and a release base are DIFFERENT trees. Every $(BASE_STAMP) prerequisite is a file and none of them
+# encodes the mode, so without this a base built in one mode looks up-to-date to the other and make
+# never invokes customize-base.sh at all — its mode-aware reuse key (`test:1`, line 306) is
+# unreachable in exactly the case it was written for. Caught on 2026-07-28 building a release bundle
+# straight after a test card: the release guard tripped on `only in tree: evtest usbutils`. The
+# reverse direction — a release base under a TEST card — has no guard at all (guard-rootfs.sh is
+# release-only) and is the direction that cost the 2026-07-09 boot cycle.
+#
+# This is a PREREQUISITE stamp, not a per-mode rename of $(BASE_STAMP). Naming the stamp
+# work/.base-$(ROOTFS_MODE).stamp would be wrong: stamps accumulate, the tree does not. There is one
+# work/base, so a `.base-test.stamp` left behind by an earlier test build still looks satisfied after
+# a release build has since overwritten that tree — the stale-tree bug back again, silently. Instead
+# there is one stamp for the tree and one marker for the mode it was built in, and the marker rule
+# deletes its siblings so only ever one exists (same shape as $(MODE_STAMP) above). Flipping the mode
+# re-creates the marker newer than $(BASE_STAMP), which re-runs customize-base.sh, which then really
+# rebuilds because the mode is in its reuse key too. A flip costs a full base rebuild — the correct
+# price, and the one `make relock` already pays deliberately.
+BASE_MODE_STAMP := work/.base-mode-$(ROOTFS_MODE)
+
 # --- artifacts (real file targets drive incremental rebuilds) -----------------
 BUILD_STAMP := out/.build-image.stamp
 # Open linux-firmware blobs are SoC-agnostic — the unified kernel embeds the union — so this
@@ -272,11 +293,33 @@ $(OVERLAY_STAMP): $(OVERLAY_DB)
 # build cycle on 2026-07-26: a `make sdcard` after a script fix rebuilt nothing.) The script also
 # folds its own sha256 into its reuse marker, because the make prereq alone only gets the script
 # RUN -- the marker check inside it would otherwise still short-circuit.
+#
+# $(BASE_MODE_STAMP) is the NOVADECK_TEST prerequisite (see its definition): it is the only one of
+# these that changes when nothing on disk does.
+#
+# The mode assertion in the recipe is the other half of that. A marker file saying which mode the
+# tree was built in is a claim, and an unchecked claim is how the stale-base bug shipped in the first
+# place. customize-base.sh records `test:1` in its own reuse key for a test bootstrap, so the built
+# tree states its own mode: assert that against the mode we asked for. This guards BOTH directions,
+# which nothing downstream does -- guard-rootfs.sh only ever runs on a release build.
 $(BASE_STAMP): base-devel.digest snapshot.pin images/manifest.lock images/fetchlock.sh \
-               images/pacman.conf images/os-release images/customize-base.sh $(PREBUILT_PINS)
+               images/pacman.conf images/os-release images/customize-base.sh $(PREBUILT_PINS) \
+               $(BASE_MODE_STAMP)
 	images/customize-base.sh
 	@test -f work/base/usr/bin/sshd   # sentinel: sshd present => release runtime laid down
+	@: "sentinel: the tree must be in the mode this build asked for (see above)"; \
+	 got=release; grep -qx 'test:1' work/base/usr/lib/novadeck/pkgs 2>/dev/null && got=test; \
+	 [ "$$got" = "$(ROOTFS_MODE)" ] || { \
+	   echo "base tree is a $$got build, this is a $(ROOTFS_MODE) build (stale work/base)" >&2; \
+	   exit 1; }
 	@mkdir -p $(@D) && touch $@   # recency marker outside the root-owned tree (frozen mtimes)
+
+# Switching NOVADECK_TEST swaps which marker exists, so the base is rebuilt on the next make. The
+# rm is what keeps it a marker rather than a cache: exactly one mode is ever claimed, and it is
+# always the mode work/base was last built in.
+$(BASE_MODE_STAMP):
+	@mkdir -p $(@D) && rm -f work/.base-mode-* && touch $@
+	@echo "[novadeck] base mode: $(ROOTFS_MODE)"
 
 # A built overlay repo is an extra base input: customize-base installs the patched packages
 # from it and folds its content hash into the reuse-cache key. Wire it as a prerequisite only
@@ -322,7 +365,7 @@ manifest: $(KERNEL) ## Verify firmware-manifest.txt vs the built kernel (in cont
 relock: $(if $(OVERLAY_PINS),$(OVERLAY_STAMP)) ## Re-resolve from PKGS and regenerate images/manifest.lock (host; release only)
 	NOVADECK_TEST= NOVADECK_RESOLVE=1 FORCE=1 images/customize-base.sh
 	images/genmanifest.sh
-	rm -f $(BASE_STAMP)
+	rm -f $(BASE_STAMP) work/.base-mode-*   # the tree left behind is a RESOLVE tree: claim no mode for it
 	@echo "review the diff, commit it, then rebuild: git diff images/manifest.lock"
 
 # ==============================================================================
@@ -386,7 +429,7 @@ clean: ## Remove built artifacts (out/), keep firmware/base caches + toolchain s
 # plain rm fails for the build user — remove it from inside a throwaway container as root.
 clean-base: ## Remove the (root-owned) bootstrapped root tree
 	docker run --rm -v $(CURDIR)/work:/wb busybox rm -rf /wb/base
-	rm -f $(BASE_STAMP)   # drop the recency marker too, else the next build skips a gone base
+	rm -f $(BASE_STAMP) work/.base-mode-*   # drop the recency + mode markers too, else the next build skips a gone base
 
 clean-overlay: ## Remove the built (arch-scoped) overlay pacman repo + build tree
 	rm -rf work/repo work/overlay-build

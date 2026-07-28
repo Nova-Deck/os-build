@@ -98,3 +98,8 @@ Current overlay:
   it from source and install it on the host (it's in `customize-base.sh` PKGS) rather than resolving
   it from Steam's bundled SR3 runtime via pressure-vessel. Tracks the Arch recipe; carries the two
   upstream Arch patches (XID-warning severity; CVE-2024-6655 module-cwd) under `packages/gtk2/patches/`.
+- `rauc/` — **local PKGBUILD** building rauc `1.15.2` from the upstream release tarball. This is
+  holo's own `extra-aarch64/r/rauc/1.14-1` recipe with the version bumped and nothing else
+  redesigned — the *only* reason we build it is that 1.14 cannot install a dm-verity bundle on a
+  kernel `>= 6.19` (upstream fixed it first in `v1.15.1`) and we ship 7.1.x. No novadeck patches.
+  Unlike the entries above it outranks holo's build by `pkgver`, not just by repo order.

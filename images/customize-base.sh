@@ -149,8 +149,10 @@ BOOTSTRAP_PKGS=(base)
 # is built from source into the [novadeck] overlay (packages/scx-scheds) and resolves here. Installing
 # it only PLACES the binaries + scx.service; nothing selects a scheduler yet, so the kernel keeps
 # running EEVDF until something enables the unit or launches a scheduler by hand.
-# rauc: the A/B update client (Phase 4b pass 2). It is in the pinned snapshot's `extra` repo
-# (rauc-1.14-1, measured 2026-07-27), so there is no packages/rauc/ from-source recipe — only
+# rauc: the A/B update client (Phase 4b pass 2). The pinned snapshot's `extra` repo has it, but
+# only at 1.14 — and 1.14 cannot install a dm-verity bundle on a kernel >= 6.19 (upstream fixed
+# that first in v1.15.1), which is every kernel we ship. So it is built from source at 1.15.2
+# into the [novadeck] overlay (packages/rauc) and resolves here by pkgver ahead of holo's 1.14.
 # json-glib arrives as a new transitive dep. It reads /etc/rauc/system.conf, which points
 # `bootloader=custom` at /usr/bin/novadeck-bootctl; that contract (get-primary/set-primary/
 # get-state/set-state) is already implemented, so nothing else has to learn about slots.

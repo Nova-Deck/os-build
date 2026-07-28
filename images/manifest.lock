@@ -326,7 +326,7 @@ python-gobject 3.54.5-1 aarch64 snapshot a62811b775cd22c5bf28e98dfee1435ac927e96
 qt6-base 6.10.0-3 aarch64 snapshot fd2a8e2e647d98948e484010a03d7c834dd1c841deafe109400b303af51d6dac
 qt6-declarative 6.10.0-2 aarch64 snapshot 46a8d239b2a457dce091804e7e575f694b37eb9b7b1a9641cc030f7eb26179f8
 qt6-translations 6.10.0-1 any snapshot fa1e9dbefb114a776582fd29ba2aa91ba60a5a550ba25174eb69af2189e944e0
-rauc 1.14-1 aarch64 snapshot 0953a2e39dfa40be0a04555e8b77e4e9bf3de7adf00896c438d14eb8d28dace3
+rauc 1.15.2-1.1 aarch64 novadeck cfcffb033d11d1df1e0dfbac519f36f93e9650bc2a6e9cb2ddac783bbb5212b6
 rav1e 0.8.1-2 aarch64 snapshot 23c38edb528a8a0622190d7a6c97151bd3cc9bc1fdf1bf80a36b7d42748599f3
 readline 8.3.001-1 aarch64 snapshot 634f4060d127f8c32c516adadfa9ce66295b7dc06bba15a32c70fa7e91afd8d5
 rubberband 4.0.0-1 aarch64 snapshot 024e25e398b94884d060b85877ba4a7068a40c4b0cfc8d3346c2ca64debb9ed9

@@ -5,6 +5,23 @@
 FROM ubuntu:26.04
 
 ENV DEBIAN_FRONTEND=noninteractive
+
+# rauc is the ONE apt package here pinned to an exact version, and it is deliberate. Everything
+# else in the list below (compilers, mkfs tools, curl) only has to work — a newer one produces the
+# same artifact. rauc does not: it WRITES the update bundle, and the device's rauc has to be able
+# to install what it wrote. That pairing is already load-bearing (packages/rauc builds the DEVICE
+# side at 1.15.2 precisely because 1.14 cannot install a dm-verity bundle on kernel >= 6.19), so
+# letting the bundle WRITER float means the two halves of the update path can drift apart with no
+# signal until a device refuses a bundle — and this device has no serial console to ask why.
+#
+# The cost of an exact pin is that the build BREAKS when Ubuntu supersedes this version and drops
+# the old binary from the archive (Ubuntu has no per-package snapshot the way our pacman side
+# does). That is the intended trade: a loud build failure that makes someone re-verify the
+# writer/installer pair, rather than a silent version change under a working-looking build.
+# To bump: check `apt-cache madison rauc` in this base image, update the pin, and re-run the HW
+# `rauc install` test before trusting the bundles it produces.
+ARG RAUC_VERSION=1.15.1-1
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
       build-essential \
       gcc-aarch64-linux-gnu \
@@ -17,7 +34,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       curl ca-certificates \
       make python3 \
       btrfs-progs gdisk dosfstools mtools e2fsprogs \
-      rauc casync openssl squashfs-tools \
+      casync openssl squashfs-tools \
+      "rauc=${RAUC_VERSION}" \
     && rm -rf /var/lib/apt/lists/*
 
 # mkbootimg: AOSP Android boot-image packer (used by boot/backends/android-bootimg.sh).

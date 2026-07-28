@@ -292,8 +292,19 @@ ESP, `efi-a`/`efi-b`, `rootfs-a`/`rootfs-b` (7G, read-only btrfs), `var-a`/`var-
 the build image (`build/Dockerfile`, 1.15.1), which an earlier draft of this document doubted.
 
 **Measured 2026-07-27: `rauc-1.14-1` is in the pinned snapshot's `extra` repo.** Every one of
-its dependencies is already in `images/manifest.lock` except `json-glib`. So pass 2 needs no
-`packages/rauc/` from-source recipe — it is `PKGS += rauc` plus `make relock`.
+its dependencies is already in `images/manifest.lock` except `json-glib`.
+
+**Overturned on hardware 2026-07-28: the snapshot's 1.14 is unusable here.** It cannot install a
+dm-verity bundle on a kernel `>= 6.19` — a DM/verity handling bug upstream fixed first in
+`v1.15.1` — and we ship 7.1.x, so *every* `rauc install` of our bundle format fails. Pass 2
+therefore *does* need a `packages/rauc/` from-source recipe. It exists: the holo 1.14-1 PKGBUILD
+with the version bumped to **1.15.2** and nothing else redesigned (see `packages/rauc/PKGBUILD`
+for the two mechanical deviations the overlay builder forces). Being a higher `pkgver` than
+holo's 1.14, pacman prefers the overlay build regardless of repo order.
+
+Note the two rauc binaries are unrelated and must not be conflated: the one in `build/Dockerfile`
+(Ubuntu, 1.15.1) only *creates* bundles on the host and never touches this bug; the one this
+recipe builds is the device-side *installer*.
 
 What does **not** exist: `rauc` on the device (not in `PKGS`), `/etc/rauc/system.conf`, and the
 device keyring (the CA is minted, `images/rauc/novadeck-ca.pem`, but nothing installs it yet).

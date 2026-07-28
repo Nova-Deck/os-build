@@ -348,6 +348,11 @@ rationale lives in the linked memories and commit history.
   1. `PKGS += rauc` + `make relock`. **Measured 2026-07-27: `rauc-1.14-1` IS in the pinned
      snapshot's `extra` repo** and every dep but `json-glib` is already in `manifest.lock` — so no
      `packages/rauc/` from-source recipe is needed, which was the largest unknown.
+     **Overturned by the 2026-07-28 HW run: that snapshot 1.14 cannot install a verity bundle on
+     kernel >= 6.19** (fixed upstream first in `v1.15.1`), and we ship 7.1.x — so it fails every
+     install. `packages/rauc/` now exists after all: the holo 1.14-1 recipe, version-bumped to
+     **1.15.2**, no other change. Higher `pkgver` than holo's, so pacman prefers it by version,
+     not by repo order.
   2. `/etc/rauc/system.conf`: two slot groups, `bootloader=custom` pointed at `novadeck-bootctl`
      (its `get-primary`/`set-primary`/`get-state`/`set-state` already implement that contract), and
      `keyring=/etc/rauc/keyring.pem` installed from the committed `images/rauc/novadeck-ca.pem`.

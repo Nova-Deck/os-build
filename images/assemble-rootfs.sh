@@ -30,6 +30,7 @@ LFW="$ROOT/firmware/linux-fw"
 IMGDIR="$OUT/images"
 IMG="$IMGDIR/rootfs.img"
 VARIMG="$IMGDIR/var.img"     # -> var-a  (ext4, carries the /etc overlay upper+work)
+VARIMG_B="$IMGDIR/var-b.img" # -> var-b  (identical but for /var/lib/novadeck/slot; see section 5)
 # The rootfs image is auto-sized by mkfs.btrfs --rootdir --shrink (see section 6); no fixed SIZE.
 VAR_SIZE_MIB="${VAR_SIZE_MIB:-256}"   # matches var-a/-b in partition-table.txt (a hard ceiling)
 
@@ -689,6 +690,40 @@ else
   "$ROOT/images/trim-rootfs.sh" "$stage"
 fi
 
+# 4y. Drop /etc/machine-id, for EVERY build.
+#
+# The image is supposed to ship without one so systemd treats the first boot as a first boot:
+# ConditionFirstBoot=yes, a per-device id generated, preset-all run. That was stated in two places
+# and enforced in none, and the built tree had one — measured 2026-07-28 on rootfs.img: a real
+# 33-byte id, identical on every unit ever flashed from that image. Two silent consequences:
+#
+#   - fs-overlay/usr/lib/novadeck/gen-mac.sh seeds the Wi-Fi MAC from /etc/machine-id, falling back
+#     to /sys/devices/soc0/serial_number and then to random. The SoC serial IS per-unit, so the
+#     fallback would already give every device a distinct MAC — a populated machine-id is exactly
+#     what stops line 27 ever falling through to it. The bug is not that the chain is wrong; it is
+#     that a baked seed always wins and makes the whole chain unreachable.
+#   - a populated machine-id means systemd does NOT treat the first boot as first, so preset-all
+#     never runs and the 60-novadeck-*.preset files do nothing. Service enablement only survived
+#     because the explicit multi-user.target.wants symlinks ship too; anything preset-only was off.
+#     This half CANNOT be fixed in gen-mac.sh — systemd's first-boot detection keys on this file.
+#
+# Not release-only, unlike the seal above: this is a correctness fix, and a test image wants a
+# per-unit MAC and working presets just as much. Guard assertion 6 checks it on release trees.
+#
+# DOES NOT FIX AN ALREADY-FLASHED DEVICE. gen-mac.sh persists the derived address write-once to
+# /var/lib/novadeck/mac-wifi and prefers it forever after, so a device that already booted keeps
+# the colliding MAC until that file is removed or its /var is reformatted. Worth knowing for the
+# RAUC /var migration hook too: copying /var across slots copies the bad address with it.
+#
+# SAFETY, and why this is not a one-liner: removing it makes ConditionFirstBoot=yes true again,
+# which re-arms systemd-firstboot.service — which on this device prompts for locale and a root
+# password on a console with no usable input and blocks sysinit.target FOREVER, with no serial
+# console to see it on. images/customize-base.sh masks that unit precisely because the root is
+# meant to ship without a machine-id. The two facts are load-bearing together, so guard assertion
+# 6 checks both and refuses a tree that has one without the other.
+rm -f "$stage/etc/machine-id"
+echo "  dropped /etc/machine-id (first-boot identity is generated per device)"
+
 # 4z. Normalize overlay ownership to root. The fs-overlay/ tree (and the other cp -a injections)
 # is copied with `cp -a`, which PRESERVES the host build user's
 # uid/gid (the repo checkout owner, typically 1000). In the image uid 1000 is `deck`, so /etc, /,
@@ -750,10 +785,32 @@ if [ "$var_used_mib" -ge $(( VAR_SIZE_MIB - 32 )) ]; then
   exit 1
 fi
 
-rm -f "$VARIMG"
-truncate -s "${VAR_SIZE_MIB}M" "$VARIMG"
-mkfs.ext4 -q -F -L novadeck-var -m0 -d "$varstage" "$VARIMG"
-echo "  ok   var    -> ${VARIMG#"$ROOT"/}  (${VAR_SIZE_MIB}MiB ext4, ${var_used_mib}MiB used)"
+# One var image per slot (Phase 4b). They differ by exactly one file: /var/lib/novadeck/slot.
+#
+# The two root images are content-identical by design -- that is what an A/B update produces, and
+# RAUC will write the same bytes into whichever slot is inactive. So slot identity can never come
+# from the root's CONTENT; it has to come from where the initramfs mounted it. The initramfs
+# records its own decision in /run/novadeck/boot, but that comes from the code doing the choosing.
+# This file is an INDEPENDENT witness: /run/novadeck/boot says which slot the initramfs thinks it
+# picked, /var/lib/novadeck/slot says which var actually got mounted. If those two ever disagree,
+# the selection is lying -- which is exactly the symptom of two btrfs filesystems sharing an fsid
+# (see images/make-sdcard.sh). Four lines, and it is the only cross-check that does not share a
+# failure mode with the thing it checks.
+#
+# Two mkfs runs also give the two images distinct ext4 UUIDs for free, which matters for the same
+# reason: /home is mounted by LABEL, and duplicate filesystem identity across slots is the hazard.
+install -d -m0755 "$varstage/lib/novadeck"
+for slot in a b; do
+  printf '%s\n' "$slot" >"$varstage/lib/novadeck/slot"
+  case "$slot" in
+    a) img=$VARIMG ;;
+    b) img=$VARIMG_B ;;
+  esac
+  rm -f "$img"
+  truncate -s "${VAR_SIZE_MIB}M" "$img"
+  mkfs.ext4 -q -F -L novadeck-var -m0 -d "$varstage" "$img"
+  echo "  ok   var-$slot  -> ${img#"$ROOT"/}  (${VAR_SIZE_MIB}MiB ext4, ${var_used_mib}MiB used)"
+done
 
 # The root keeps only an empty /var mountpoint — the initramfs mounts var-a over it.
 rm -rf "${varstage:?}"

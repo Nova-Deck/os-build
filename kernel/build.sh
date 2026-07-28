@@ -133,16 +133,28 @@ CC=(${CROSS_COMPILE:+CROSS_COMPILE=$CROSS_COMPILE})
   scripts/config --file .config --set-str EXTRA_FIRMWARE_DIR firmware
   make ARCH=arm64 "${CC[@]}" olddefconfig
 
-  # Assert the symbols we deliberately force to =m actually SURVIVED olddefconfig. kconfig
-  # silently promotes a module to built-in when some =y symbol selects it, so a stray builtin
-  # Wi-Fi driver in defconfig would quietly undo kernel.config's CONFIG_CFG80211=m -- and the
-  # only visible symptom would be regulatory.db failing to load at boot again (it is requested
-  # at kernel init, before any rootfs). Fail loudly here instead of shipping that silently.
-  for sym in CFG80211 MAC80211; do
+  # Assert the symbols whose VALUE is load-bearing actually survived olddefconfig, in both
+  # directions. kconfig silently promotes a module to built-in when some =y symbol selects it,
+  # and it silently DROPS a =y symbol whose dependencies are unmet -- merge_config.sh warns in
+  # that case but does not fail (see kernel.config's header). Either way the only symptom is at
+  # runtime, on a device with no serial console. Fail loudly here instead of shipping it.
+  #
+  #   =m  the wireless stack: built-in, cfg80211 requests regulatory.db at kernel init, before
+  #       any rootfs exists, and the load always fails.
+  #   =y  dm-verity: rauc installs a format=verity bundle from the sealed root; a module on the
+  #       update path can be missing exactly when an update is applied.
+  #   =y  vfat + loop: images/initramfs/init mounts the ESP to read the A/B slot state. Losing
+  #       vfat makes every boot silently fall back to the cmdline root= instead.
+  for pair in CFG80211=m MAC80211=m BLK_DEV_DM=y DM_VERITY=y VFAT_FS=y BLK_DEV_LOOP=y; do
+    sym=${pair%=*}; want=${pair#*=}
     got="$(scripts/config --file .config --state "$sym")"
-    [ "$got" = "m" ] || {
-      echo "CONFIG_$sym resolved to '$got', expected 'm'" >&2
-      echo "  something built-in selects it; find it with: grep -rn \"select $sym\" ." >&2
+    [ "$got" = "$want" ] || {
+      echo "CONFIG_$sym resolved to '$got', expected '$want'" >&2
+      if [ "$want" = m ]; then
+        echo "  something built-in selects it; find it with: grep -rn \"select $sym\" ." >&2
+      else
+        echo "  a dependency is unmet, so kconfig dropped it; check: grep -rn \"config $sym\" -A5 ." >&2
+      fi
       exit 1
     }
   done

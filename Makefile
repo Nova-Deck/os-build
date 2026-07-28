@@ -109,6 +109,9 @@ ROOTFS       := $(OUT)/images/rootfs.img
 # Sibling image the assembler emits alongside the root (see images/partition-table.txt):
 # the writable state partition, which also carries the /etc overlay upper.
 VARIMG       := $(OUT)/images/var.img
+# Slot B's var, emitted by the same run. Identical but for /var/lib/novadeck/slot, which is the
+# independent witness of which slot actually mounted (the roots are content-identical by design).
+VARIMG_B     := $(OUT)/images/var-b.img
 INITRAMFS    := $(OUT)/initramfs.cpio.gz
 BOOTIMG      := $(OUT)/boot/novadeck-boot.img
 SDCARD       := $(OUT)/images/sdcard.img
@@ -153,7 +156,7 @@ KERNEL_SRC := kernel/SOURCE.pin kernel/embed.list kernel/build.sh \
 # Phony orchestration targets
 # ==============================================================================
 .PHONY: help all image toolchain kernel fw-linux fw-qcom base overlay rootfs manifest relock \
-        initramfs boot sdcard bundle deploy clean clean-base clean-overlay distclean
+        initramfs boot sdcard verify-card bundle deploy clean clean-base clean-overlay distclean
 
 help: ## Show this help
 	@echo "novadeck build — unified image (all SoCs/boards)"
@@ -177,6 +180,12 @@ rootfs:    $(ROOTFS)       ## Assemble the read-only root + var images (in conta
 initramfs: $(INITRAMFS)    ## Build the initramfs that mounts ro-root + /etc overlay (in container)
 boot:      $(BOOTIMG)      ## Package the all-boards boot artifact (in container)
 sdcard:    $(SDCARD)       ## Build the flashable SD-card image (in container)
+
+# Asserts the BUILT card the way guard-rootfs.sh asserts the built tree — the guard stops at the
+# staged tree (it runs before mkfs), so nothing else checks the GPT, the ESP, or the per-slot
+# filesystem identities an A/B switch depends on. Unprivileged: no loop mounts, no root.
+verify-card: $(SDCARD) | $(BUILD_STAMP) ## Verify the built A/B card image (in container)
+	$(INBUILD) images/verify-card.sh
 
 # ==============================================================================
 # Toolchain image
@@ -327,10 +336,11 @@ $(INITRAMFS): images/mkinitramfs.sh images/initramfs/init $(BASE_STAMP) | $(BUIL
 $(BOOTIMG): $(KERNEL) $(INITRAMFS) boot/cmdline boot/package.sh | $(BUILD_STAMP)
 	$(INBUILD) boot/package.sh
 
-# var.img is a co-product of the same assembler run as rootfs.img.
+# var.img and var-b.img are co-products of the same assembler run as rootfs.img.
 $(VARIMG): $(ROOTFS)
+$(VARIMG_B): $(ROOTFS)
 
-$(SDCARD): $(BOOTIMG) $(ROOTFS) $(VARIMG) $(STEAM_SEED) images/make-sdcard.sh | $(BUILD_STAMP)
+$(SDCARD): $(BOOTIMG) $(ROOTFS) $(VARIMG) $(VARIMG_B) $(STEAM_SEED) images/make-sdcard.sh | $(BUILD_STAMP)
 	$(INBUILD) images/make-sdcard.sh
 
 # Signed RAUC OTA bundle (Phase 4). Dev builds mint an ephemeral cert; set

@@ -1,34 +1,90 @@
 #!/bin/sh
-# novadeck initramfs init — mount the read-only root and stack the /etc overlay, then
-# hand off to systemd.
+# novadeck initramfs init — pick the A/B slot, mount its read-only root and stack the /etc
+# overlay, then hand off to systemd.
 #
-# This exists for ONE reason: the /etc overlay cannot be assembled after PID1 starts.
-# systemd reads /etc/fstab (via generators), /etc/machine-id, /etc/hostname and
-# system.conf before any unit can run, so an overlay mounted by a unit would leave every
-# one of those reading the read-only lower dir forever. The machine-id case is the sharpest:
-# a read-only /etc makes systemd fall back to a transient /run/machine-id, which makes
-# EVERY boot look like a first boot (re-running preset-all). So the overlay has to be in
-# place before we exec systemd — which means here, before switch_root.
+# This exists for TWO reasons now.
 #
-# We need no modules: btrfs, ext4 and overlayfs are all =y in kernel.config, and
-# every block/storage driver is builtin too (proof: the device booted for months with no
-# initramfs at all). So this is a plain shell script over a handful of util-linux binaries,
-# staged by images/mkinitramfs.sh. No udev, no modprobe, no systemd-in-initrd.
+# 1. The /etc overlay cannot be assembled after PID1 starts. systemd reads /etc/fstab (via
+#    generators), /etc/machine-id, /etc/hostname and system.conf before any unit can run, so an
+#    overlay mounted by a unit would leave every one of those reading the read-only lower dir
+#    forever. The machine-id case is the sharpest: a read-only /etc makes systemd fall back to a
+#    transient /run/machine-id, which makes EVERY boot look like a first boot (re-running
+#    preset-all). So the overlay has to be in place before we exec systemd.
+#
+# 2. A/B slot selection (Phase 4b, design C — docs/phase4.md). ABL loads /KERNEL off the shared
+#    ESP and reads nothing else: there is no bootloader stage that can choose a slot or fall back
+#    to the other one. So the switch AND the revert live here, driven by a state file on the ESP.
+#
+# We need no modules: btrfs, ext4, vfat and overlayfs are all =y in kernel.config, and every
+# block/storage driver is builtin too (proof: the device booted for months with no initramfs at
+# all). So this is a plain shell script over a handful of util-linux binaries, staged by
+# images/mkinitramfs.sh. No udev, no modprobe, no systemd-in-initrd.
 #
 # Layout (images/partition-table.txt):
-#   root  <- root=PARTLABEL=novadeck-root-A   btrfs, ro
-#   var   <- novadeck.var=PARTLABEL=...       ext4, rw   (carries the overlay upper+work)
+#   esp   <- PARTLABEL=NOVADECK-ESP           vfat, rw   (shared; carries /KERNEL and the state)
+#   root  <- PARTLABEL=novadeck-root-{A,B}    btrfs, ro
+#   var   <- PARTLABEL=novadeck-var-{A,B}     ext4, rw   (carries the overlay upper+work)
 #   /etc  <- overlay(lower=/sysroot/etc, upper=/sysroot/var/lib/overlays/etc/upper)
 #
-# DEGRADED BOOT: this device has no serial console ([[sm8650-no-uart]]), so a hard failure
-# here is only debuggable by pulling the card and mounting it. Every step past "root is
-# mounted" therefore falls back rather than dying: we log the reason to /dev/kmsg (which
-# lands in the journal, readable offline via `journalctl -D`) and boot with a writable root
-# and no overlay — which is exactly the configuration that shipped before this change, so
-# the fallback is known-good rather than novel. The failure is loud, not silent.
+# ---------------------------------------------------------------------------------------------
+# SLOT STATE: /NOVADECK/STATE.0 and /NOVADECK/STATE.1 on the ESP
+#
+#   gen=3        generation counter; the HIGHER valid generation wins
+#   active=a     the slot known good. a|b
+#   pending=b    a slot on trial after an update, or empty. ''|a|b
+#   tries=1      trials left for `pending`; at 0 we roll back to `active`
+#   kernel=a     reserved (pass 2): which slot's boot image is currently at /KERNEL
+#   bak=         reserved (pass 2): set when /NOVADECK/KERNEL.BAK holds the previous image
+#   end          MUST be the last non-blank line — this is the torn-write detector
+#
+# TWO FILES, NOT WRITE-THEN-RENAME. There is no `sync` here and no shell can fsync, so a rename
+# guarantees nothing on FAT: the directory entry can reach the card before the data does. Making
+# rename safe would mean staging `mv` AND `sync` for a weaker guarantee. Instead we only ever
+# overwrite the copy that is ALREADY STALE — so a torn write is rejected by the reader and the
+# previous generation still wins. There is no window in which both copies are invalid. The
+# durability barrier we do need comes free from the umount below.
+#
+# That matters because the one write that matters happens on the first boot of an UNPROVEN root
+# — the likeliest moment for someone to yank power on a handheld — and the damage from losing it
+# is not "the update retries", it is an old root under a new kernel with no matching ath12k, so
+# no Wi-Fi, on a device with no serial console: a reflash.
+#
+# EVERY read and write here is a shell builtin (read, printf, case, [). That is a constraint the
+# format was chosen to satisfy, not a coincidence — see images/mkinitramfs.sh before reaching
+# for cat/cp/mv/dd.
+#
+# UNKNOWN KEYS ARE IGNORED, NEVER REJECTED. This reader ships inside /KERNEL on the SHARED ESP
+# while its writer (/usr/bin/novadeck-bootctl) is PER-SLOT, so after a rollback an older writer
+# and a newer reader coexist by design. The format is a compatibility contract; `kernel=`/`bak=`
+# are already reserved so pass 2 does not have to change it.
+#
+# THE STATE FILE IS A TRUST BOUNDARY. It is plain text on a FAT partition that anyone with a
+# screwdriver can edit, and it is parsed by PID 1 as root. Every field is validated against a
+# strict pattern before use and none is ever word-split into a command position. Being
+# hand-editable is deliberate — it is the recovery mechanism when you have the card in a reader.
+# ---------------------------------------------------------------------------------------------
+#
+# DEGRADED BOOT: this device has no serial console ([[sm8650-no-uart]]), so a hard failure here
+# is only debuggable by pulling the card and mounting it. Every step past "root is mounted"
+# therefore falls back rather than dying: we log the reason to /dev/kmsg (which lands in the
+# journal, readable offline via `journalctl -D`) and boot with a writable root and no overlay —
+# which is exactly the configuration that shipped before this change, so the fallback is
+# known-good rather than novel. The failure is loud, not silent.
+#
+# The same doctrine covers the slot state: if the ESP will not mount, or neither state file
+# validates, we fall back to the root=/novadeck.var= still baked into boot/cmdline. Those args
+# are kept precisely for this — and because the KERNEL reads root= too, so if this script never
+# executes at all (a missing library, a truncated cpio) the kernel still mounts a root and boots.
+# Deleting them would turn every initramfs packaging bug into an unconditional panic loop.
+#
+# Known limit: if two partitions are ever labelled NOVADECK-ESP (boot/deploy.sh notes the ESP
+# may live on SD or on internal storage), findfs returns whichever blkid enumerates first, which
+# need not be the one ABL booted from.
 set -u
 
 SYSROOT=/sysroot
+ESPDIR=/esp
+STATEDIR=$ESPDIR/NOVADECK
 
 log()  { printf '<6>novadeck-init: %s\n' "$*" >/dev/kmsg 2>/dev/null || :; }
 warn() { printf '<3>novadeck-init: %s\n' "$*" >/dev/kmsg 2>/dev/null || :; }
@@ -37,7 +93,8 @@ warn() { printf '<3>novadeck-init: %s\n' "$*" >/dev/kmsg 2>/dev/null || :; }
 mount -t proc     -o nosuid,noexec,nodev proc /proc
 mount -t sysfs    -o nosuid,noexec,nodev sys  /sys
 mount -t devtmpfs -o nosuid,mode=0755    dev  /dev
-# /run is mounted here purely so switch_root can `mount --move` it into the new root cleanly.
+# /run is mounted here for two reasons: switch_root can `mount --move` it into the new root
+# cleanly, and it is how /run/novadeck/boot (written below) reaches the running system.
 # util-linux switch_root walks {/dev,/proc,/sys,/run} and moves each into $SYSROOT; when /run
 # is not a mountpoint that move fails and prints a "failed to mount moving /run to /sysroot/run"
 # warning to the console. The boot recovers (systemd mounts its own /run post-pivot), so this is
@@ -71,20 +128,213 @@ resolve() {
   return 1
 }
 
-[ -n "$ROOTSPEC" ] || { warn "no root= on the kernel cmdline — cannot continue"; exit 1; }
+# ---------------------------------------------------------------------------------------------
+# Slot state
+# ---------------------------------------------------------------------------------------------
 
-if ! ROOTDEV=$(resolve "$ROOTSPEC"); then
-  # Nothing to fall back TO: without a root there is no system. Exiting kills init, and the
-  # kernel panics; panic=5 on our cmdline reboots. A boot loop is the honest outcome here.
-  warn "root device '$ROOTSPEC' never appeared after 30s — panicking"
-  exit 1
+# Parse one state file into ST_*. Returns non-zero unless the file is COMPLETE (terminated by
+# `end`) and every field validates. A blank or comment line after `end` is fine; anything else
+# is not, which is what makes a truncated write detectable.
+read_state() {
+  _f=$1
+  ST_GEN=''; ST_ACTIVE=''; ST_PENDING=''; ST_TRIES=''; ST_KERNEL=''; ST_BAK=''
+  _end=0
+  [ -f "$_f" ] || return 1
+  # `|| [ -n "$_line" ]` so a final line with no trailing newline is still seen.
+  while IFS= read -r _line || [ -n "$_line" ]; do
+    case "$_line" in
+      ''|'#'*)   continue ;;
+      gen=*)     ST_GEN=${_line#gen=};         _end=0 ;;
+      active=*)  ST_ACTIVE=${_line#active=};   _end=0 ;;
+      pending=*) ST_PENDING=${_line#pending=}; _end=0 ;;
+      tries=*)   ST_TRIES=${_line#tries=};     _end=0 ;;
+      kernel=*)  ST_KERNEL=${_line#kernel=};   _end=0 ;;
+      bak=*)     ST_BAK=${_line#bak=};         _end=0 ;;
+      end)       _end=1 ;;
+      *)         _end=0 ;;   # unknown key — ignored on purpose, but not a terminator
+    esac
+  done <"$_f"
+  [ "$_end" = 1 ] || return 1
+  # gen and tries must be all-digits BEFORE any arithmetic: `-gt` on a non-number errors out,
+  # and a lexical compare would silently break at generation 10.
+  case "$ST_GEN"   in ''|*[!0-9]*) return 1 ;; esac
+  case "$ST_TRIES" in ''|*[!0-9]*) return 1 ;; esac
+  case "$ST_ACTIVE"  in a|b)   ;; *) return 1 ;; esac
+  case "$ST_PENDING" in ''|a|b) ;; *) return 1 ;; esac
+  return 0
+}
+
+# Write the next generation to the file that is NOT the current winner (see the header).
+# Leaves kernel=/bak= exactly as read: pass 1 never sets them, and clobbering fields written by
+# a newer novadeck-bootctl is precisely what the compatibility contract forbids.
+write_state() {
+  _wa=$1 _wp=$2 _wt=$3
+  _target=$STATEDIR/STATE.$STATE_SPARE
+  _next=$((STATE_GEN + 1))
+  { printf '# novadeck A/B slot state -- images/initramfs/init, /usr/bin/novadeck-bootctl\n'
+    printf 'gen=%s\n'     "$_next"
+    printf 'active=%s\n'  "$_wa"
+    printf 'pending=%s\n' "$_wp"
+    printf 'tries=%s\n'   "$_wt"
+    printf 'kernel=%s\n'  "$STATE_KERNEL"
+    printf 'bak=%s\n'     "$STATE_BAK"
+    printf 'end\n'
+  } >"$_target" 2>/dev/null || { warn "state write to STATE.$STATE_SPARE failed"; return 1; }
+  # The file we just wrote becomes the winner and the other one becomes the spare, so a second
+  # write in the same boot (root mount failed, and we fail over) again overwrites only the stale
+  # copy. Recomputed rather than swapped, so this is still correct when there was no winner.
+  log "state gen=$_next active=$_wa pending='$_wp' tries=$_wt -> STATE.$STATE_SPARE"
+  STATE_WON=$STATE_SPARE
+  [ "$STATE_WON" = 1 ] && STATE_SPARE=0 || STATE_SPARE=1
+  # ALL of the parsed state advances, not just the generation. These variables are what
+  # /run/novadeck/boot is emitted from, so updating gen alone published a post-write gen next to a
+  # pre-write pending -- a rollback boot read as "a trial is still armed" while the ESP said the
+  # opposite, on exactly the boots that need offline debugging. Anything that must see the
+  # pre-write value has to read it BEFORE calling this.
+  STATE_GEN=$_next
+  STATE_ACTIVE=$_wa; STATE_PENDING=$_wp; STATE_TRIES=$_wt
+  return 0
+}
+
+ESPMODE=none
+if ESPDEV=$(resolve "PARTLABEL=NOVADECK-ESP"); then
+  if mount -t vfat -o rw "$ESPDEV" "$ESPDIR" 2>/dev/null; then
+    ESPMODE=rw
+  elif mount -t vfat -o ro "$ESPDEV" "$ESPDIR" 2>/dev/null; then
+    ESPMODE=ro
+    warn "ESP $ESPDEV mounted READ-ONLY — slot state cannot be updated this boot"
+  else
+    warn "ESP $ESPDEV will not mount as vfat"
+  fi
+else
+  warn "no partition labelled NOVADECK-ESP appeared after 30s"
 fi
 
-if ! mount -t "$ROOTFSTYPE" -o ro "$ROOTDEV" "$SYSROOT"; then
-  warn "cannot mount root $ROOTDEV ($ROOTFSTYPE) — panicking"
-  exit 1
+STATE_GEN=0; STATE_WON=-1; STATE_SPARE=0
+STATE_ACTIVE=''; STATE_PENDING=''; STATE_TRIES=0; STATE_KERNEL=''; STATE_BAK=''
+if [ "$ESPMODE" != none ]; then
+  for _n in 0 1; do
+    if read_state "$STATEDIR/STATE.$_n" && [ "$ST_GEN" -gt "$STATE_GEN" ]; then
+      STATE_GEN=$ST_GEN; STATE_WON=$_n
+      STATE_ACTIVE=$ST_ACTIVE; STATE_PENDING=$ST_PENDING; STATE_TRIES=$ST_TRIES
+      STATE_KERNEL=$ST_KERNEL; STATE_BAK=$ST_BAK
+    fi
+  done
+  # Write to whichever file did NOT win. With no winner at all, seed STATE.0 — the same file
+  # images/make-sdcard.sh seeds, so a card's first two generations stay in one place.
+  if [ "$STATE_WON" = 1 ]; then STATE_SPARE=0; else STATE_SPARE=1; fi
+  [ "$STATE_WON" = -1 ] && STATE_SPARE=0
 fi
-log "root $ROOTDEV mounted ro"
+
+# Decide the slot. SOURCE is recorded in /run/novadeck/boot and is the first thing to look at
+# when a boot went somewhere unexpected.
+SLOT=''; SOURCE=cmdline
+if [ "$STATE_WON" = -1 ]; then
+  warn "DEGRADED: no valid slot state on the ESP — falling back to the cmdline root="
+elif [ -z "$STATE_PENDING" ]; then
+  SLOT=$STATE_ACTIVE; SOURCE=state
+elif [ "$STATE_TRIES" -gt 0 ] && [ "$ESPMODE" = rw ]; then
+  # Decrement BEFORE committing to the trial. If the write fails we have no way to count this
+  # attempt, so treat it exactly like a read-only ESP below. Both operands are captured first:
+  # a successful write_state advances STATE_* in place, so reading STATE_TRIES afterwards would
+  # decrement a second time.
+  _trial=$STATE_PENDING; _left=$((STATE_TRIES - 1))
+  if write_state "$STATE_ACTIVE" "$_trial" "$_left"; then
+    SLOT=$_trial; SOURCE=try
+    log "trying pending slot $SLOT ($_left tries left after this one)"
+  else
+    SLOT=$STATE_ACTIVE; SOURCE=try-nowrite
+    warn "DEGRADED: cannot record the attempt — booting active slot $SLOT instead of $STATE_PENDING"
+  fi
+elif [ "$STATE_TRIES" -gt 0 ]; then
+  # Honouring `pending` without a durable decrement would retry a broken slot FOREVER: the
+  # counter never reaches zero, so the rollback below never fires.
+  SLOT=$STATE_ACTIVE; SOURCE=try-noro
+  warn "DEGRADED: ESP is read-only, so slot $STATE_PENDING cannot be tried — booting active $SLOT"
+else
+  SLOT=$STATE_ACTIVE; SOURCE=rollback
+  warn "ROLLBACK: pending slot $STATE_PENDING exhausted its tries — reverting to $SLOT"
+  [ -n "$STATE_BAK" ] && warn "ROLLBACK: state records a previous kernel (bak=$STATE_BAK); pass 1 does not restore it"
+  [ "$ESPMODE" = rw ] && write_state "$STATE_ACTIVE" '' 0
+fi
+
+if [ -n "$SLOT" ]; then
+  case "$SLOT" in
+    a) ROOTSPEC='PARTLABEL=novadeck-root-A'; VARSPEC='PARTLABEL=novadeck-var-A' ;;
+    b) ROOTSPEC='PARTLABEL=novadeck-root-B'; VARSPEC='PARTLABEL=novadeck-var-B' ;;
+  esac
+  ROOTFSTYPE=btrfs
+fi
+
+# ---------------------------------------------------------------------------------------------
+# Root
+# ---------------------------------------------------------------------------------------------
+
+[ -n "$ROOTSPEC" ] || { warn "no root= on the kernel cmdline and no slot state — cannot continue"; exit 1; }
+
+# Try the chosen root; on failure fall over to the OTHER slot once. Note this clears `pending`
+# as it goes: a slot that will not even mount must not keep a trial in hand for the next boot.
+mount_root() {
+  if ! ROOTDEV=$(resolve "$ROOTSPEC"); then
+    warn "root device '$ROOTSPEC' never appeared after 30s"
+    return 1
+  fi
+  if ! mount -t "$ROOTFSTYPE" -o ro "$ROOTDEV" "$SYSROOT"; then
+    warn "cannot mount root $ROOTDEV ($ROOTFSTYPE)"
+    return 1
+  fi
+  return 0
+}
+
+if ! mount_root; then
+  _other=''
+  case "$SLOT" in a) _other=b ;; b) _other=a ;; esac
+  if [ -n "$_other" ]; then
+    warn "DEGRADED: slot $SLOT will not mount — failing over to slot $_other"
+    [ "$ESPMODE" = rw ] && write_state "$_other" '' 0
+    SLOT=$_other; SOURCE=failover
+    case "$SLOT" in
+      a) ROOTSPEC='PARTLABEL=novadeck-root-A'; VARSPEC='PARTLABEL=novadeck-var-A' ;;
+      b) ROOTSPEC='PARTLABEL=novadeck-root-B'; VARSPEC='PARTLABEL=novadeck-var-B' ;;
+    esac
+  fi
+  if [ -z "$_other" ] || ! mount_root; then
+    # Nothing left to fall back TO: without a root there is no system. Exiting kills init, and
+    # the kernel panics; panic=5 on our cmdline reboots. A boot loop is the honest outcome here.
+    warn "no bootable root — panicking"
+    exit 1
+  fi
+fi
+log "root $ROOTDEV mounted ro (slot=${SLOT:-?} source=$SOURCE)"
+
+# Hand the decision to the running system. /run is moved into the new root by switch_root, so
+# this survives the pivot — it is what novadeck-bootctl reads to know which slot it is on, and
+# it is the first evidence to check when debugging a boot offline.
+#
+# INVARIANT: gen/active/pending/tries_left are emitted from the single set of STATE_* variables
+# that write_state() advances, so this file always describes the ESP as it stands at handoff —
+# never a mix of pre- and post-write values. On a boot where the ESP could not be written
+# (esp=ro, esp=none) they describe what was read, which is likewise still what is on the card.
+# `tries_left` is the remaining trial count recorded in that state, i.e. what a NEXT boot would
+# see; on a `source=try` boot this boot's own attempt is already deducted.
+mkdir -p /run/novadeck
+{ printf 'slot=%s\n'       "${SLOT:-}"
+  printf 'source=%s\n'     "$SOURCE"
+  printf 'gen=%s\n'        "$STATE_GEN"
+  printf 'active=%s\n'     "$STATE_ACTIVE"
+  printf 'pending=%s\n'    "$STATE_PENDING"
+  printf 'tries_left=%s\n' "$STATE_TRIES"
+  printf 'esp=%s\n'        "$ESPMODE"
+  printf 'root=%s\n'       "$ROOTDEV"
+} >/run/novadeck/boot 2>/dev/null || warn "cannot write /run/novadeck/boot"
+
+# Unmount the ESP BEFORE switch_root. This is the durability barrier for the state write above,
+# and it is a correctness requirement: switch_root moves only {/dev,/proc,/sys,/run}, so a
+# still-mounted /esp becomes an orphan and systemd's gpt-auto generator then mounts the same
+# vfat device a SECOND time at /efi.
+if [ "$ESPMODE" != none ]; then
+  umount "$ESPDIR" || warn "DEGRADED: cannot unmount the ESP — /efi may double-mount it"
+fi
 
 # From here on, failures degrade instead of panicking (see the header).
 degrade() {

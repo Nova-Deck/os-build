@@ -1,0 +1,43 @@
+# Confirms an A/B trial boot. Started ONLY by novadeck-boot-good.path -- hence no [Install].
+#
+# THE SIGNAL is gamescope's startup handshake, plus the session still being alive 30s later.
+#
+# Reaching that handshake proves, in one shot: drm/msm bound and took DRM master, the panel
+# modeset, mesa initialised, both nested Xwaylands came up, libseat got an active seat through
+# logind, and SDDM's PAM autologin worked. It is the earliest instant at which "the screen is
+# showing something" is actually true. The weaker candidates all mark a black screen good:
+# graphical.target reached only proves sddm.service was STARTED, and an active logind session is
+# the same problem one layer up. The stricter one -- waiting for SteamUI -- would roll back a
+# healthy OS over an OOBE, an offline first boot, or a Steam-side outage.
+#
+# The 30s re-check is not padding. sddm.conf.d autologin sets Relogin=true, so a session that
+# dies immediately is restarted forever; without the delay a boot stuck in that loop would mark
+# itself good on its first iteration. --require-marker re-tests the marker after the sleep, and
+# novadeck-session's EXIT trap removes it, so "still there" means "the same session stayed up".
+#
+# THERE IS DELIBERATELY NO TIMEOUT THAT MARKS GOOD ANYWAY. If the session never comes up, the
+# path unit never fires, pending stays set, and the next boot rolls back. That is the property
+# this whole mechanism exists for; a backstop timer would defeat it.
+#
+# Known gap: gamescope up with Steam wedged shows a blank compositor and still confirms. Pass 2
+# tightens it -- novadeck-steamos-manager touches a second marker on SteamUI's first D-Bus call.
+[Unit]
+Description=novadeck confirm this A/B trial boot (session came up and stayed up)
+Documentation=file:///usr/bin/novadeck-bootctl
+ConditionPathExists=/run/novadeck/boot
+
+[Service]
+Type=oneshot
+# RemainAfterExit is load-bearing, not tidiness. A .path unit re-arms the instant its triggered
+# unit leaves the active state, and PathExists is level-triggered -- the marker is still there --
+# so a plain oneshot retriggers itself the moment it exits. Measured on hardware before this
+# line: one sleep-30/mark-good cycle every 30s for the entire uptime of the device. Staying
+# `active (exited)` is what makes the unit fire once per boot.
+#
+# The failure path deliberately still retries: `mark-good --require-marker` exits non-zero when
+# the marker vanished under it, so the unit lands in `failed` (not active), the path re-arms, and
+# the next session that comes up gets its own 30s trial. That is the crash-loop case the sleep
+# exists for -- it must not be spent on the first iteration and then abandoned.
+RemainAfterExit=yes
+ExecStartPre=/usr/bin/sleep 30
+ExecStart=/usr/bin/novadeck-bootctl mark-good --require-marker

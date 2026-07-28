@@ -276,16 +276,27 @@ work), and the CJK font weights (~226 MB — font coverage is a first-boot UX pr
 
 ## 4b — A/B atomic updates
 
+4b is split into two passes. **Pass 1 (the boot path) is implemented**; pass 2 (RAUC) is not.
+
+| pass | scope | why this cut |
+|---|---|---|
+| **1** | slot state on the ESP, selection + rollback in the initramfs, both slots populated, `novadeck-bootctl`, a trial-boot health check | The initramfs is the one component that can leave a no-serial-console device unbootable. It should be the only variable the first time hardware sees it. |
+| **2** | `rauc` on the device, `system.conf` + keyring, bundle install, the `/var` migration hook, the D-Bus/`steamos-update` wiring | Lands on a boot path hardware has already signed off, so a failure is attributable. |
+
 ### What already exists
 
 The partition layout is in place and documented (`images/partition-table.txt`): shared
 ESP, `efi-a`/`efi-b`, `rootfs-a`/`rootfs-b` (7G, read-only btrfs), `var-a`/`var-b`, shared
-`home`. `make sdcard` populates the A side only; the B slots and both `efi-*` partitions
-are created, formatted and left empty. Bundle generation exists too —
-`images/genbundle.sh`, `images/rauc/manifest.raucm.in`, `make bundle`.
+`home`. `make sdcard` now populates **both** slots. Bundle generation exists —
+`images/genbundle.sh`, `images/rauc/manifest.raucm.in`, `make bundle` — and `rauc` **is** in
+the build image (`build/Dockerfile`, 1.15.1), which an earlier draft of this document doubted.
 
-What does **not** exist: `rauc` on the device (not in `PKGS`, no `/etc/rauc/system.conf`,
-no keyring), and confirmation that `rauc` is present in the build image.
+**Measured 2026-07-27: `rauc-1.14-1` is in the pinned snapshot's `extra` repo.** Every one of
+its dependencies is already in `images/manifest.lock` except `json-glib`. So pass 2 needs no
+`packages/rauc/` from-source recipe — it is `PKGS += rauc` plus `make relock`.
+
+What does **not** exist: `rauc` on the device (not in `PKGS`), `/etc/rauc/system.conf`, and the
+device keyring (the CA is minted, `images/rauc/novadeck-ca.pem`, but nothing installs it yet).
 
 ### The actual problem: no A/B-aware bootloader
 
@@ -319,6 +330,61 @@ Consequence to settle before writing code: under C the boot image is slot-agnost
 `boot/package.sh` does **not** need the per-slot cmdline argument the older TODO note
 assumed — slot selection moves out of the baked cmdline and into the initramfs.
 
+### Pass 1 decisions
+
+**The state is two files with a generation counter, not write-then-rename.** There is no `sync`
+in the initramfs and no shell can fsync, so a rename guarantees nothing on FAT: the directory
+entry can reach the card before the data does. Making rename safe would mean staging `mv` *and*
+`sync` — two more binaries — for a *weaker* guarantee. Alternating writes only ever overwrite the
+copy that is already stale, so a torn write is rejected by the reader and the previous generation
+still wins; there is no window in which both copies are invalid, and the durability barrier comes
+free from the `umount` before `switch_root`. The asymmetry is what decides it: the write that
+matters happens on the first boot of an unproven root — the likeliest moment for someone to yank
+power on a handheld — and losing it means an old root under a new kernel with no matching
+`ath12k`, so no Wi-Fi, on a device with no serial console. That is a reflash, not a retry.
+
+A corollary: **every ESP read and write in the init is a shell builtin.** That is a constraint
+the format was chosen to satisfy, not a coincidence.
+
+**`boot/cmdline` keeps `root=`/`novadeck.var=`.** They are read by the *kernel*, not only by us:
+if the initramfs never executes — a missing library after an `mkinitramfs.sh` edit, a truncated
+cpio — the kernel mounts `root=` itself and boots, which is the configuration this device shipped
+in for months. Deleting them would turn every initramfs packaging bug into an unconditional panic
+loop. Design C is still honoured in that the cmdline is *never* consulted when the slot state is
+readable; it is a degrade path, and taking it logs loudly.
+
+**Three cases that are easy to get wrong**, all covered by `images/initramfs/test-slot-state.sh`:
+honouring `pending` without a durable decrement would retry a broken slot *forever* (the counter
+never reaches zero, so the rollback never fires), so a read-only ESP boots `active` instead; a
+slot that will not mount clears `pending` as it fails over, so the next boot does not burn a
+second try on it; and `gen` is validated all-digits *before* any `-gt`, since a lexical compare
+silently breaks at generation 10.
+
+**The health signal is gamescope's startup handshake, re-checked 30s later.** Reaching it proves
+in one shot that `drm/msm` took DRM master, the panel modeset, mesa initialised, both nested
+Xwaylands came up, libseat got an active seat through logind, and SDDM's autologin worked — the
+earliest instant at which "the screen is showing something" is true. *Rejected:* `graphical.target`
+reached (proves only that `sddm.service` was started — confirms a black screen), an active logind
+session (same problem one layer up), and SteamUI ready (too strict and too coupled: an OOBE, an
+offline first boot or a Steam-side outage would each roll back a healthy OS). The 30s re-check is
+load-bearing because autologin sets `Relogin=true`, so a session dying in a loop would otherwise
+confirm itself on its first iteration. **There is deliberately no timeout that confirms anyway.**
+
+**`KERNEL.bak` restore is reserved in the format but not implemented in the initramfs.** It is
+untestable in pass 1 (there is one kernel), bash cannot copy binary data so it would cost `cp`,
+`mv` and `sync`, and it would re-introduce the fsync-less FAT rename problem on the very file the
+device boots from — where a torn write is a reflash. The rollback boot runs the old root under
+the new kernel, so a root-side oneshot can do the restore properly, with real fsync, and reboot.
+`kernel=` and `bak=` are in the grammar from day one so pass 2 does not change the format.
+
+**The two roots must not be identical bytes.** `mkfs.btrfs` bakes an fsid into the superblock and
+every image we build has `devid=1` — exactly the pair btrfs keys its in-kernel device list on. Two
+such filesystems on one disk make the second one scanned look like the first having *moved*, so
+mounting p5 can hand you p4, on the one test whose purpose is proving which slot booted.
+`images/make-sdcard.sh` gives slot B a fresh fsid with `btrfstune -U`. **RAUC will hit this too** —
+every `rauc install` writes identical bytes into the inactive slot — so its post-install hook needs
+the same treatment. Tracked in `TODO.md`.
+
 ### Hard prerequisite, independent of the design
 
 `/var` is per-slot, and both the `/etc` overlay upperdir (`/var/lib/overlays/etc/upper`)
@@ -328,23 +394,151 @@ different MAC. The post-install hook must reformat the target slot's `/var`, cop
 running slot's `/var` across, and write network connections into both slots' overlay
 uppers. This is required under A, B and C alike.
 
-### Sketch of the work
+**Measured 2026-07-28, and the result is misleading until you know why.** Booting slot B produced
+the *same* MAC and the same DHCP lease as A — apparently contradicting the paragraph above. It does
+not. `machine-id` is supposed to be absent from the shipped image (`images/assemble-rootfs.sh`
+states the invariant explicitly, so that systemd runs `preset-all` on first boot), but the built
+`rootfs.img` **ships a populated one**, and it therefore lives in the shared read-only lower layer
+where both slots see the identical value. With that bug fixed, each slot generates its own id into
+its own per-slot overlay on first boot and the divergence above appears exactly as described. So
+the prerequisite is not weakened by this measurement — it is currently *masked* by it, and fixing
+`machine-id` makes the `/var` hook more necessary, not less. The `machine-id` defect is not a 4b
+problem and is tracked separately in `TODO.md`.
 
-1. `rauc` available in the build image and on the device (repo package if one exists in
-   the snapshot, otherwise a from-source `packages/rauc/` like the other overlay builds).
-2. Device config: `/etc/rauc/system.conf` describing the two slot groups, plus the release
-   keyring. Signing keys live in CI, never the tree.
-3. Slot-state file on the ESP (vfat, writable from both the initramfs and the running
-   system): active slot, pending slot, try counter, previous kernel marker.
-4. `images/initramfs/init`: read the state file, select root/var, decrement the try
-   counter, fall back to the other slot at zero. Keep the existing degrade-loudly
-   discipline — this device has no serial console, so every new failure path must log to
-   `/dev/kmsg` and continue rather than die silently.
-5. Health-check unit that marks the boot good (session up), and restores `KERNEL.bak` +
-   the previous slot when it does not.
-6. `/var` migration hook (above).
-7. Wire an update entry point to the system-manager D-Bus surface so the UI's software
-   update path is real rather than stubbed.
+A second reason this pass could not exercise the prerequisite: the test image injects Wi-Fi
+credentials into the **shared rootfs** (`images/assemble-rootfs.sh`), not the per-slot `/etc`
+overlay, so "the other slot has no saved Wi-Fi" cannot reproduce on a `NOVADECK_TEST=1` card at
+all. Validating the `/var` migration hook needs a release image — the same trap as the OOBE work.
+
+### Pass 1 — the boot path (implemented, HW-VALIDATED 2026-07-28)
+
+**Validated on device 2026-07-27/28**, following the least-to-most-destructive order. Passed: the
+offline card verify (fsids distinct, slot witnesses, ESP seed, cpio contents); the regression gate
+(`slot=a source=state`, no `duplicate device`, exactly one vfat mount); the read-only tool check
+(`bootctl` agrees with the handoff, `STATE.0` byte-identical before and after); the rollback branch
+without booting B (`try b --tries 0` → `source=rollback`, `pending` cleared); **the actual switch**
+(`slot=b`, `root=/dev/mmcblk0p5`, and `/var/lib/novadeck/slot` independently said `b` — the fsid
+hazard is really defeated, not just distinct on paper); **rollback from a slot that boots but never
+confirms** (health check masked in B's per-slot `/etc`, one try consumed, next boot reverted to A
+with `pending` cleared); and a **torn-write rejection on real hardware** — a *higher* generation
+(`gen=13 active=b`) truncated before its `end` terminator was rejected in favour of the older valid
+`gen=12 active=a`, so the device booted A. A discriminating `active=` value was used deliberately:
+had the reader accepted the torn file it would have booted the *other* slot, which no same-slot
+assertion could have caught.
+
+The generation counter crossed 10 during the run, so the "validate all-digits before `-gt`" guard
+was exercised for real — a lexical compare ranks `"10"` below `"9"` and would have booted the stale
+copy.
+
+Two properties fell out that were argued for but never demonstrated: the mask applied in B's `/etc`
+was invisible from A, confirming the overlay really is per-slot; and the next write after the torn
+file **reclaimed it**, because the writer always targets the non-winner. A torn copy self-heals.
+
+One bug was found and fixed here: `novadeck-boot-good.service` was a bare `Type=oneshot`, and since
+`PathExists=` is level-triggered a `.path` unit re-arms as soon as its triggered unit goes inactive
+— so it retriggered every 30s for the whole uptime of the device. `RemainAfterExit=yes` fixes it
+while keeping the failure path retryable. See the unit's own comment.
+
+The state file grammar, normative. `images/initramfs/init` is the reference implementation.
+
+```
+/KERNEL                 unchanged — ABL reads only this
+/NOVADECK/STATE.0       gen=N active=a|b pending=''|a|b tries=N kernel= bak= end
+/NOVADECK/STATE.1       the alternate copy; the higher valid gen wins
+/NOVADECK/KERNEL.BAK    reserved; not written or read in pass 1
+```
+
+`end` must be the last non-blank line — that is the torn-write detector. **Unknown keys are
+ignored by the reader and preserved verbatim by the writer**: this reader ships inside `/KERNEL`
+on the *shared* ESP while its writer (`novadeck-bootctl`) is *per-slot*, so after a rollback an
+older writer and a newer reader coexist by design. The format is a compatibility contract.
+
+It is also a **trust boundary** — plain text on a FAT partition anyone with a screwdriver can
+edit, parsed by PID 1 as root. Every field is validated against a strict pattern before use and
+none is ever word-split into a command position. Being hand-editable is deliberate: it is the
+recovery mechanism when you have the card in a reader.
+
+| what | where |
+|---|---|
+| slot selection, decrement, rollback, failover | `images/initramfs/init` |
+| offline test of the decision table (45 assertions) | `images/initramfs/test-slot-state.sh` |
+| `umount` + `/esp` staged into the cpio | `images/mkinitramfs.sh` |
+| both slots populated, distinct fsid, state seeded | `images/make-sdcard.sh`, `images/assemble-rootfs.sh` |
+| `status` / `try` / `mark-good` / `rollback` + RAUC's custom-bootloader contract | `fs-overlay/usr/bin/novadeck-bootctl` |
+| trial-boot confirmation | `novadeck-boot-good.{path,service}`, marker from `novadeck-session` |
+| dm-verity, declared vfat/loop | `kernel/kernel.config`, asserted in `kernel/build.sh` |
+| signing CA; only the CA cert is committed | `ci/gen-signing-ca.sh`, `images/rauc/novadeck-ca.pem` |
+
+### Pass 2 — RAUC (not started)
+
+1. `PKGS += rauc` and `make relock` (it is in the pinned snapshot; `json-glib` comes with it).
+2. `/etc/rauc/system.conf`: two slot groups, `bootloader=custom` pointed at `novadeck-bootctl`
+   (whose `get-primary`/`set-primary`/`get-state`/`set-state` already implement that contract),
+   and `keyring=/etc/rauc/keyring.pem` installed from `images/rauc/novadeck-ca.pem`.
+3. Post-install hook: randomise the target slot's btrfs fsid (see the decision above), then the
+   `/var` migration below.
+4. The kernel half of design C: install the new boot image, keep `KERNEL.BAK`, and restore it
+   from a root-side oneshot on the rollback boot. **Settle first:** promoting `/KERNEL` at the
+   same time the new root goes on trial makes a bad kernel unrecoverable (see accepted risks);
+   *not* promoting it means the trial boot runs the new root under the old kernel, whose
+   `/lib/modules/<oldver>` that root does not carry. Neither is free.
+5. Wire `steamos-update` and the `novadeck-steamos-manager` D-Bus surface so the UI's update
+   path is real. Note the manager must own the name on the **deck session bus**, not the system
+   bus, or SteamUI will not see it.
+6. A bundle server. The bundle is signed by the release cert; the device trusts the CA.
+
+### Accepted risks
+
+- **A bad boot image is unrecoverable, and design C cannot fix it.** If `/KERNEL` panics before
+  the initramfs runs, `panic=5` loops forever, the try counter never decrements, and no state
+  file can help. Design C covers everything downstream of "the initramfs executed" and nothing
+  upstream of it. This is the strongest concrete argument for the GRUB fallback noted above, and
+  it is what makes pass-2 item 4 load-bearing rather than cosmetic.
+- **An unreadable ESP on a device whose `active=b` boots A** — a silent downgrade in *content*,
+  though a loud one in the journal. The alternative is not booting at all.
+- **The health signal confirms a blank compositor** if gamescope is up but Steam is wedged.
+  Pass 2 tightens it with a second marker from `novadeck-steamos-manager`.
+- **Power-off inside the 30s confirm window rolls back a healthy update.** The cost is a
+  rollback, not a brick; `tries` is the tunable. Pass 1 uses `tries=1` so tests are deterministic.
+- **`degrade()` remounts the root rw** (`images/initramfs/init`), which under A/B mutates a slot
+   — possibly the one on trial, which breaks any "is this slot still the bytes we installed"
+  reasoning and, once verity bundles are normal, the invariant `CONFIG_DM_VERITY` exists to
+  check. The right fix is a tmpfs upperdir instead of a writable root. Worth doing, but as its
+  own change *after* the slot machinery is HW-validated: it alters a path hardware already
+  signed off, and this pass's discipline is one variable at a time.
+- **The SD card's behaviour under abrupt power loss is UNTESTED, and untestable on this device.**
+  The planned power-cut test cannot be run on battery-powered hardware: there is no interruptible
+  supply, and a long-press force-off takes ~8–10s against a write window of ~1s. What *is* proven
+  is the reader's rejection logic, offline (`test-slot-state.sh`) and on hardware (a truncated
+  higher generation was rejected, above) — but that covers a torn *file*, not a card whose
+  controller lost an erase block or an uncommitted FTL mapping mid-write. The two-file scheme is
+  designed against exactly that, and the design argument stands on its own; it has not been
+  demonstrated. Recorded as untested rather than passed. The tractable substitute is a test-gated
+  hook in the init that writes half the state and then `exit 1`s — the kernel panics, `panic=5`
+  reboots, and the `umount` durability barrier never runs, reproducing an interrupted write at the
+  exact instant, deterministically. That needs no `MAGIC_SYSRQ` (which `kernel/kernel.config` does
+  not declare) and is strictly more repeatable than a power yank. Tracked in `TODO.md`.
+- **`/run/novadeck/boot` was internally inconsistent on any boot that rewrites state — FIXED
+  2026-07-28, after HW validation.** `write_state()` updated `STATE_GEN` but left
+  `STATE_ACTIVE`/`STATE_PENDING`/`STATE_TRIES` at their pre-write values, and the handoff is emitted
+  from those same variables — so a rollback boot reported the new `gen` alongside the *old*
+  `pending`, reading as "a trial is still armed" when the ESP said otherwise. Reproduced on the
+  destroy-B failover boot (`gen=10` beside `pending=b`, ESP correctly `pending=<none>`), so it was
+  never rollback-specific: any path that wrote state showed it. Never functional — `novadeck-bootctl`
+  takes `pending` from the ESP and only `slot`/`source` from the handoff — but the init header calls
+  this file the first evidence to check when debugging a boot offline, and it misled on exactly the
+  boots that most need debugging. Held until after HW validation on purpose, one variable at a time.
+
+  The fix advances all four parsed fields on a successful write, so the handoff describes the ESP
+  *as it stands at switch_root*. Two things fell out of it. The try branch had to capture `pending`
+  and the decremented count **before** the call, or it would have decremented twice — the hazard
+  the old code avoided only by never updating those variables. And the standalone `TRIES_LEFT` is
+  gone: it existed to carry a value the state itself now holds, and a second variable tracking the
+  same fact is how the skew got in. On the boots that write nothing (`esp=ro`, `esp=none`) the
+  read values are still what is on the card, so the invariant holds there without a special case.
+  `images/initramfs/test-slot-state.sh` asserts handoff-mirrors-ESP on every write path; reverting
+  the one-line fix fails 6 of its 56 checks, including the exact `pending=b` vs `pending=''` skew
+  that hardware showed.
 
 ---
 

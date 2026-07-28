@@ -1,0 +1,333 @@
+#!/usr/bin/env bash
+# novadeck-bootctl — read and update the A/B slot state the initramfs boots from.
+#
+# The state lives on the shared ESP at /NOVADECK/STATE.{0,1}; images/initramfs/init is the
+# authoritative description of the format and of the two-file generation scheme. The short
+# version: the higher valid generation wins, and a writer only ever overwrites the copy that is
+# already stale, so a torn write can never destroy the state.
+#
+#   novadeck-bootctl status              what booted, and what the ESP says
+#   novadeck-bootctl try b [--tries N]   boot slot b next; revert after N failed attempts
+#   novadeck-bootctl mark-good           confirm the slot on trial (this is what ends a trial)
+#   novadeck-bootctl rollback            abandon a trial, go back to the active slot
+#
+# RAUC `bootloader=custom` backend contract (pass 2 wires /etc/rauc/system.conf to it; the
+# subcommands exist now so that is a config change and not a code change):
+#
+#   get-primary / set-primary <a|b> / get-state <a|b> / set-state <a|b> good|bad
+#
+# Slot names are lowercase a/b throughout and are identical to the `bootname=` values
+# system.conf will use, so there is never a mapping layer to get wrong.
+#
+# THIS TOOL IS PER-SLOT; THE INITRAMFS THAT READS ITS OUTPUT IS SHARED. /KERNEL lives on the ESP
+# and serves both slots, so after a rollback an older novadeck-bootctl can be writing state that
+# a newer initramfs reads, or the reverse. Hence: unknown keys are preserved verbatim on write,
+# never dropped. Do not "clean up" a field you do not recognise.
+set -uo pipefail
+
+BOOTINFO=/run/novadeck/boot
+ESP_AUTO=/efi                 # systemd gpt-auto automounts the ESP here
+ESP_MANUAL=/run/novadeck/esp  # fallback only, if that automount is not available
+TRIES_DEFAULT=1
+
+PROG=${0##*/}
+die()  { printf '%s: %s\n' "$PROG" "$1" >&2; exit 1; }
+warn() { printf '%s: %s\n' "$PROG" "$1" >&2; }
+
+# --- the ESP ---------------------------------------------------------------------------------
+
+ESP=""; ESP_WE_MOUNTED=0
+
+# Prefer the gpt-auto automount and NEVER mount a second time on top of it: two concurrent rw
+# vfat mounts of one device corrupt it. Touching the path is what triggers the automount.
+esp_open() {
+  if ls "$ESP_AUTO" >/dev/null 2>&1 && mountpoint -q "$ESP_AUTO"; then
+    ESP=$ESP_AUTO
+    return 0
+  fi
+  local dev
+  dev=$(findfs PARTLABEL=NOVADECK-ESP 2>/dev/null) || die "no partition labelled NOVADECK-ESP"
+  mkdir -p "$ESP_MANUAL"
+  mount -t vfat -o rw "$dev" "$ESP_MANUAL" || die "cannot mount the ESP ($dev)"
+  ESP=$ESP_MANUAL; ESP_WE_MOUNTED=1
+}
+
+esp_close() {
+  [ "$ESP_WE_MOUNTED" = 1 ] || return 0
+  sync
+  umount "$ESP_MANUAL" 2>/dev/null || warn "could not unmount $ESP_MANUAL"
+  ESP_WE_MOUNTED=0
+}
+trap esp_close EXIT
+
+# --- state -----------------------------------------------------------------------------------
+
+# Parsed state of the winning file. EXTRA holds every key we do not know about, verbatim.
+S_GEN=0; S_ACTIVE=""; S_PENDING=""; S_TRIES=0; S_KERNEL=""; S_BAK=""; S_EXTRA=""
+S_WON=-1; S_SPARE=0
+
+# Same validity rules as the initramfs: complete (terminated by `end`), gen and tries all-digits
+# (checked BEFORE any numeric compare), slots in {a,b}.
+read_state_file() {
+  local f=$1 line end=0
+  local gen="" active="" pending="" tries="" kernel="" bak="" extra=""
+  [ -f "$f" ] || return 1
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      ''|'#'*)   continue ;;
+      gen=*)     gen=${line#gen=};         end=0 ;;
+      active=*)  active=${line#active=};   end=0 ;;
+      pending=*) pending=${line#pending=}; end=0 ;;
+      tries=*)   tries=${line#tries=};     end=0 ;;
+      kernel=*)  kernel=${line#kernel=};   end=0 ;;
+      bak=*)     bak=${line#bak=};         end=0 ;;
+      end)       end=1 ;;
+      *)         extra+="$line"$'\n';      end=0 ;;
+    esac
+  done <"$f"
+  [ "$end" = 1 ] || return 1
+  [[ $gen   =~ ^[0-9]+$ ]] || return 1
+  [[ $tries =~ ^[0-9]+$ ]] || return 1
+  [[ $active  =~ ^[ab]$ ]] || return 1
+  [[ $pending =~ ^([ab])?$ ]] || return 1
+  R_GEN=$gen; R_ACTIVE=$active; R_PENDING=$pending; R_TRIES=$tries
+  R_KERNEL=$kernel; R_BAK=$bak; R_EXTRA=$extra
+  return 0
+}
+
+state_load() {
+  local n
+  S_GEN=0; S_WON=-1
+  for n in 0 1; do
+    if read_state_file "$ESP/NOVADECK/STATE.$n" && [ "$R_GEN" -gt "$S_GEN" ]; then
+      S_GEN=$R_GEN; S_WON=$n
+      S_ACTIVE=$R_ACTIVE; S_PENDING=$R_PENDING; S_TRIES=$R_TRIES
+      S_KERNEL=$R_KERNEL; S_BAK=$R_BAK; S_EXTRA=$R_EXTRA
+    fi
+  done
+  if [ "$S_WON" = 1 ]; then S_SPARE=0; else S_SPARE=1; fi
+  [ "$S_WON" = -1 ] && S_SPARE=0
+  return 0
+}
+
+state_require() {
+  state_load
+  [ "$S_WON" != -1 ] || die "no valid slot state on the ESP (expected $ESP/NOVADECK/STATE.{0,1})"
+}
+
+# Write the next generation to the file that did NOT win. Unlike the initramfs we have real
+# tools here, so this also does temp -> sync -> rename -> sync (boot/deploy.sh's shape) --
+# belt and braces on a scheme that is already correct without it.
+state_write() {  # <active> <pending> <tries>
+  local dir=$ESP/NOVADECK target=$ESP/NOVADECK/STATE.$S_SPARE tmp
+  mkdir -p "$dir"
+  tmp="$dir/.ST.tmp.$$"
+  { printf '# novadeck A/B slot state -- images/initramfs/init, /usr/bin/novadeck-bootctl\n'
+    printf 'gen=%s\n'     "$((S_GEN + 1))"
+    printf 'active=%s\n'  "$1"
+    printf 'pending=%s\n' "$2"
+    printf 'tries=%s\n'   "$3"
+    printf 'kernel=%s\n'  "$S_KERNEL"
+    printf 'bak=%s\n'     "$S_BAK"
+    # Keys written by a version of this tool we do not know about. Preserved, not dropped.
+    [ -n "$S_EXTRA" ] && printf '%s' "$S_EXTRA"
+    printf 'end\n'
+  } >"$tmp" || die "cannot write $tmp"
+  sync "$tmp" 2>/dev/null || sync
+  mv -f "$tmp" "$target" || die "cannot install $target"
+  sync "$dir" 2>/dev/null || sync
+  S_GEN=$((S_GEN + 1))
+  S_WON=$S_SPARE
+  if [ "$S_WON" = 1 ]; then S_SPARE=0; else S_SPARE=1; fi
+}
+
+# --- what booted -----------------------------------------------------------------------------
+
+booted_slot() {
+  [ -r "$BOOTINFO" ] || return 1
+  sed -n 's/^slot=//p' "$BOOTINFO"
+}
+
+booted_source() { [ -r "$BOOTINFO" ] && sed -n 's/^source=//p' "$BOOTINFO"; }
+
+other_slot() { case "$1" in a) echo b ;; b) echo a ;; *) return 1 ;; esac; }
+
+need_root() { [ "$(id -u)" = 0 ] || die "must run as root"; }
+
+# --- subcommands -----------------------------------------------------------------------------
+
+cmd_status() {
+  esp_open; state_load
+  local bs; bs=$(booted_slot) || bs=""
+  echo "booted:"
+  if [ -r "$BOOTINFO" ]; then
+    sed 's/^/  /' "$BOOTINFO"
+  else
+    echo "  (no $BOOTINFO -- this system did not boot through the novadeck initramfs)"
+  fi
+  echo "esp state:"
+  if [ "$S_WON" = -1 ]; then
+    echo "  (no valid state file; the initramfs would fall back to the cmdline root=)"
+  else
+    printf '  file=STATE.%s gen=%s\n  active=%s\n  pending=%s\n  tries=%s\n' \
+      "$S_WON" "$S_GEN" "$S_ACTIVE" "${S_PENDING:-<none>}" "$S_TRIES"
+    [ -n "$S_KERNEL" ] && printf '  kernel=%s\n' "$S_KERNEL"
+    [ -n "$S_BAK" ]    && printf '  bak=%s\n' "$S_BAK"
+  fi
+  # The one cross-check that does not share a failure mode with the selection code: the var
+  # image carries its own slot letter, written at build time.
+  if [ -r /var/lib/novadeck/slot ]; then
+    local vs; vs=$(cat /var/lib/novadeck/slot)
+    if [ -n "$bs" ] && [ "$vs" != "$bs" ]; then
+      echo "  WARNING: /var says slot '$vs' but the initramfs picked '$bs' --"
+      echo "           two filesystems are sharing an identity. Do not trust a slot test."
+    fi
+  fi
+}
+
+cmd_try() {
+  need_root
+  local slot=${1:-} tries=$TRIES_DEFAULT
+  shift || true
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --tries) tries=${2:-}; shift 2 ;;
+      *) die "unknown option: $1" ;;
+    esac
+  done
+  [[ $slot  =~ ^[ab]$ ]]  || die "usage: $PROG try <a|b> [--tries N]"
+  [[ $tries =~ ^[0-9]+$ ]] || die "--tries must be a non-negative integer"
+  esp_open; state_require
+  [ "$slot" != "$S_ACTIVE" ] || die "slot $slot is already active"
+  state_write "$S_ACTIVE" "$slot" "$tries"
+  echo "next boot: slot $slot (active stays $S_ACTIVE, $tries tr$([ "$tries" = 1 ] && echo y || echo ies))"
+  echo "reboot to try it; it reverts to $S_ACTIVE unless '$PROG mark-good' runs."
+}
+
+cmd_mark_good() {
+  need_root
+  local require_marker=0
+  [ "${1:-}" = --require-marker ] && require_marker=1
+
+  # NOTHING TO CONFIRM unless this boot actually came from a slot -- and this has to be settled
+  # BEFORE state_require, which dies (exit 1) when the ESP carries no valid state.
+  #
+  # A degraded cmdline-fallback boot still writes $BOOTINFO: images/initramfs/init emits the
+  # handoff on every path, including the one that never resolved a slot. So
+  # novadeck-boot-good.path's ConditionPathExists does NOT filter that case (its comment used to
+  # claim it did) -- it only filters a system that never ran our initramfs at all.
+  #
+  # Exiting 0 here is load-bearing. novadeck-boot-good.service is RemainAfterExit=yes precisely so
+  # it fires once per boot; a non-zero exit leaves it `failed`, which re-arms the level-triggered
+  # .path and starts a fresh sleep-30 + mark-good every 30 seconds for the rest of the device's
+  # uptime. HW-measured 2026-07-28 during the pass-1 degrade test: 4 starts in 165s of uptime,
+  # each one dying in state_require. That is the state you are in on a card whose slot state is
+  # unreadable -- i.e. exactly when `systemctl --failed` needs to be trustworthy.
+  #
+  # The deliberate retry-on-failure documented in the unit is NOT weakened: it exists for
+  # --require-marker losing its session marker, which still exits non-zero below.
+  local bs src
+  bs=$(booted_slot) || bs=""
+  src=$(booted_source) || src=""
+  if [ -z "$bs" ]; then
+    echo "this boot did not come from a slot (source=${src:-unknown}) -- nothing to confirm"
+    return 0
+  fi
+
+  esp_open; state_require
+
+  if [ -z "$S_PENDING" ]; then
+    echo "nothing on trial (active=$S_ACTIVE)"; return 0
+  fi
+  # A rollback boot already cleared pending before we got here, so if pending still names a slot
+  # that is not the one we are running, something else is going on -- refuse rather than promote
+  # a slot we have no evidence about. This used to be guarded by `[ -n "$bs" ] &&`, which meant an
+  # EMPTY booted-slot skipped the check and fell through to state_write -- absence of evidence
+  # promoting a slot nothing had booted. `bs` is non-empty by the guard above, so the check is now
+  # unconditional and that hole is closed by construction.
+  if [ "$S_PENDING" != "$bs" ]; then
+    echo "pending is '$S_PENDING' but this system booted slot '$bs' -- not marking anything good"
+    return 0
+  fi
+  if [ "$require_marker" = 1 ] && [ ! -e /run/novadeck/session/ready ]; then
+    die "no session marker at /run/novadeck/session/ready -- refusing to confirm this boot"
+  fi
+  state_write "$S_PENDING" '' 0
+  echo "slot $S_PENDING confirmed good and is now active"
+}
+
+cmd_rollback() {
+  need_root
+  esp_open; state_require
+  if [ -z "$S_PENDING" ]; then
+    echo "nothing on trial (active=$S_ACTIVE)"; return 0
+  fi
+  local was=$S_PENDING
+  state_write "$S_ACTIVE" '' 0
+  echo "abandoned the trial of slot $was; active stays $S_ACTIVE"
+}
+
+# --- RAUC bootloader=custom backend ------------------------------------------------------------
+# Contract: get-primary prints the boot name of the slot to boot; set-primary marks a slot to be
+# booted next; get-state prints "good" or "bad"; set-state records the outcome. RAUC calls these
+# around an install, so set-primary is what starts a trial.
+
+cmd_get_primary() {
+  esp_open; state_require
+  if [ -n "$S_PENDING" ] && [ "$S_TRIES" -gt 0 ]; then echo "$S_PENDING"; else echo "$S_ACTIVE"; fi
+}
+
+cmd_set_primary() {
+  need_root
+  local slot=${1:-}
+  [[ $slot =~ ^[ab]$ ]] || die "usage: $PROG set-primary <a|b>"
+  esp_open; state_require
+  if [ "$slot" = "$S_ACTIVE" ]; then
+    state_write "$S_ACTIVE" '' 0
+  else
+    state_write "$S_ACTIVE" "$slot" "$TRIES_DEFAULT"
+  fi
+}
+
+cmd_get_state() {
+  local slot=${1:-}
+  [[ $slot =~ ^[ab]$ ]] || die "usage: $PROG get-state <a|b>"
+  esp_open; state_require
+  # "bad" means RAUC should not consider it bootable. A slot on trial with no tries left has
+  # failed; anything else we have no evidence against.
+  if [ "$slot" = "$S_PENDING" ] && [ "$S_TRIES" = 0 ]; then echo bad; else echo good; fi
+}
+
+cmd_set_state() {
+  need_root
+  local slot=${1:-} st=${2:-}
+  [[ $slot =~ ^[ab]$ ]] || die "usage: $PROG set-state <a|b> good|bad"
+  esp_open; state_require
+  case "$st" in
+    good)
+      [ "$slot" = "$S_PENDING" ] && state_write "$slot" '' 0 || true ;;
+    bad)
+      # Mark it unbootable by zeroing its trials; the next boot rolls back.
+      [ "$slot" = "$S_PENDING" ] && state_write "$S_ACTIVE" "$slot" 0 || true
+      [ "$slot" = "$S_ACTIVE" ] && warn "refusing to mark the ACTIVE slot bad -- there would be nothing to boot" ;;
+    *) die "state must be 'good' or 'bad'" ;;
+  esac
+}
+
+usage() {
+  sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'
+  exit 2
+}
+
+case "${1:-}" in
+  status)      shift; cmd_status "$@" ;;
+  try)         shift; cmd_try "$@" ;;
+  mark-good)   shift; cmd_mark_good "$@" ;;
+  rollback)    shift; cmd_rollback "$@" ;;
+  get-primary) shift; cmd_get_primary "$@" ;;
+  set-primary) shift; cmd_set_primary "$@" ;;
+  get-state)   shift; cmd_get_state "$@" ;;
+  set-state)   shift; cmd_set_state "$@" ;;
+  ''|-h|--help|help) usage ;;
+  *) die "unknown command: $1 (try --help)" ;;
+esac

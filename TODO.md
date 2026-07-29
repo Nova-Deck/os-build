@@ -666,7 +666,32 @@ rationale lives in the linked memories and commit history.
   `pin-bump` job — a separate job because it is the only one holding a write token — that opens a PR
   carrying the new shas, using `gh` rather than a marketplace action for the same reason
   `overlay-store.sh` pins its own `oras`. **The review of that PR is where trust enters**; the check
-  proves the bytes match the pins, never that anyone looked.
+  proves the bytes match the pins, never that anyone looked. It landed and then failed three times
+  before opening anything, all three the same shape — **green while doing nothing** — and worth
+  recording because that is the failure mode to expect from this job: (1) no `!cancelled()`, so a
+  *skipped* `build` (the GOOD case: full cache hit) propagated transitively and the job was dead code
+  on the common path — `verify` had its own `always()` and survived, `pin-bump` inherited the skip
+  (`fa88f93`); (2) the change gate ran `git diff --quiet` **unstaged**, and `git diff` cannot see
+  untracked files, so on the bootstrap run — no `artifact.pin` tracked yet, exactly the run whose PR
+  introduces them — it reported "unchanged" about 8 files it had just created (`4354b6a`; fix is `git
+  add` then `git diff --cached`); (3) `GITHUB_TOKEN` cannot create a PR at all without an org-wide
+  grant. PR #6 finally carried the 8 pins onto `main`.
+  **The PR credential is `secrets.PIN_BUMP_PAT`** (fine-grained, this repo only, *Pull requests:
+  read+write*), not `GITHUB_TOKEN`. The alternative is the org setting "Allow GitHub Actions to create
+  and approve pull requests", which cannot be narrowed — org-wide, every repo, and it grants **approve**
+  as well as create, so any workflow in the org could satisfy a required-review protection by itself.
+  Wrong trade for a mechanism whose premise is that a human reviewed the pins. It was briefly enabled
+  and is now **off at org and repo**; do not flip it back to "fix" a PR-creation failure. Second reason
+  it matters: a `GITHUB_TOKEN`-created PR **triggers no workflows**, so PR #6 arrived with no checks.
+  `git push` still uses `GITHUB_TOKEN` (`contents: write`; `pull-requests: write` deliberately absent).
+  A missing/expired secret **fails** the step — opposite to `prune`, deliberately, since this job *is*
+  the mechanism.
+  **STILL OPEN (small): the PAT path has never opened a real PR.** It only fires when a pin actually
+  changes — a `source.pin`/patch/`PKGBUILD` change — and an ordinary merge is a full cache hit that
+  correctly no-ops. Success tell is a pin PR **with `ci` checks on it**. To force it:
+  `gh workflow run overlay.yml --ref main -f packages=rauc -f force=true` (`rauc` is cheapest, and
+  non-reproducible builds mean a forced rebuild alone changes the bytes). Between that republish and
+  merging the PR, the store disagrees with `main`'s pin, so don't cut a `v*` tag in the window.
   **STILL OPEN: bundle signing.** `release-bundle.yml` builds an unsigned dev-cert bundle — a real
   smoke test (it assembles, verity hashes compute, the pin gate passes) that every device rejects.
   `image.yml` accepts `RAUC_CERT_PEM`/`RAUC_KEY_PEM` and warns loudly when absent. What is undecided
@@ -688,7 +713,9 @@ rationale lives in the linked memories and commit history.
   plus a fix for an early exit that `set -e` turned fatal in exactly the state a pull produces
   (stamps fresh, db absent). This unblocks a cold-runner image build: wire `overlay-pull` ahead of
   `make sdcard`.
-  **STILL OPEN: the byte claim.** The lock attests these artifacts' *sources*, not their bytes —
+  **~~STILL OPEN~~: the byte claim — CLOSED, see the top of this item.** Kept for the reasoning, not
+  as an open gap; the shape it proposed (`prebuilt` rows) is the one that turned out unbuildable.
+  The lock attests these artifacts' *sources*, not their bytes —
   anyone who can write `work/repo` can substitute one, and the store does not change that (`oras pull`
   verifies what the *registry* holds, a different question from what a reviewer approved). The
   remaining shape is the original one: promote these to the `prebuilt` class (sha256-pinned, fetched

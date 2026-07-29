@@ -158,17 +158,26 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - name: pull, then assemble
-        run: |
-          set -euo pipefail
-          make overlay-pull
-          # No credentials were used above. This runner never logged in, which is half the claim.
-          make overlay 2>&1 | tee /tmp/overlay.log
+      # THE GUARD GOES FIRST. --require-all fails here, in seconds, if any package could not be
+      # retrieved — and says which and why (absent vs. not readable). The earlier shape ran the
+      # build and then grepped its log, so it reported an uncovered store only AFTER recompiling
+      # everything, which is a post-mortem dressed as a check.
+      #
+      # No credentials are used in this job, and that is half of what is being asserted: the
+      # runner never logs in, so a pull that works here works for anyone with a clone.
+      - name: retrieve everything from the store (no credentials)
+        run: packages/overlay-store.sh pull-all --require-all
+
+      - name: assemble the repo
+        run: make overlay 2>&1 | tee /tmp/overlay.log
+
+      # Belt and braces now rather than the primary check: the pull above already proved coverage,
+      # so this only catches `make overlay` deciding to rebuild something the pull called fresh.
       - name: assert nothing was compiled
         run: |
           set -euo pipefail
           if grep -q 'inputs changed / artifacts missing' /tmp/overlay.log; then
-            echo "::error::a package was rebuilt after a full pull — the store did not cover it"
+            echo "::error::a package was rebuilt despite a complete pull — stamps disagree with the store"
             grep 'inputs changed / artifacts missing' /tmp/overlay.log
             exit 1
           fi

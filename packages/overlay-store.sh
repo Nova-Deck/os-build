@@ -162,9 +162,30 @@ resolve_names() {
 }
 
 # --- store operations -----------------------------------------------------------------------
+# Ask the registry about one package and CLASSIFY the answer, because "we could not get it" hides
+# two very different problems behind one symptom:
+#
+#   0  present
+#   1  absent — the store genuinely does not have this input hash. Normal: build it.
+#   2  UNREADABLE — it may well be there, but this caller is not allowed to see it. A GHCR package
+#      created by a first push is PRIVATE even in a public repo, which made every pull look like a
+#      plain miss and sent the CI verify job off to recompile all 8 packages instead of saying
+#      "permission denied". One bit of classification, one clear message.
+#   3  something else (network, DNS, registry down)
+probe() {
+  local ref="$1" err rc=0
+  err="$(oras manifest fetch --descriptor "$ref" 2>&1 >/dev/null)" || rc=$?
+  [ "$rc" -eq 0 ] && return 0
+  case "$err" in
+    *[Uu]nauthorized*|*401*|*[Dd]enied*|*403*|*"authentication required"*) return 2 ;;
+    *"not found"*|*404*|*"name unknown"*|*"manifest unknown"*|*NAME_UNKNOWN*|*MANIFEST_UNKNOWN*) return 1 ;;
+    *) log "registry error for $ref: $err"; return 3 ;;
+  esac
+}
+
 have() {
   local ref; ref="$(pkg_ref "$1" "${2:-}")"
-  oras manifest fetch --descriptor "$ref" >/dev/null 2>&1
+  probe "$ref"
 }
 
 # Publish one package. Requires the LOCAL build to be current for the hash being published —
@@ -344,18 +365,41 @@ case "$cmd" in
   # NEVER FATAL. This is a cache: a miss means the caller builds instead, which is slow, not
   # wrong. The one thing it will not do is leave a half-restored package looking complete.
   pull-all)
+    # --require-all turns a miss from "fine, build it" into an ERROR, and it exists because the
+    # lenient default put a guard in the wrong place. CI's verify job used to run `make
+    # overlay-pull && make overlay` and then grep the BUILD LOG to discover that nothing had been
+    # pulled — so it reported the failure only after recompiling everything it was meant to prove
+    # unnecessary, ~20min to say what this line knows in seconds. Normal local use stays lenient:
+    # there, a miss genuinely does mean "compile it".
+    require_all=0
+    if [ "${1:-}" = "--require-all" ]; then require_all=1; shift; fi
     resolve_names "$@"
-    got=0; fresh=0; miss=0
+    got=0; fresh=0; miss=0; denied=0; broke=0
     for name in "${NAMES[@]}"; do
       h="$(pkg_hash "$name")"
       if is_fresh "$name" "$h"; then log "$name ${h:0:12}: already built here — skip"; fresh=$((fresh+1)); continue; fi
-      if pull_one "$name" "$h"; then got=$((got+1)); else
-        log "$name ${h:0:12}: not in the store — it will be built locally"
-        miss=$((miss+1))
-      fi
+      st=0; probe "$(pkg_ref "$name" "$h")" || st=$?
+      case "$st" in
+        0) if pull_one "$name" "$h"; then got=$((got+1)); else
+             # Present in the registry but the payload did not survive the transfer intact. Not a
+             # cache miss — something is wrong with what was published.
+             log "$name ${h:0:12}: in the store but could not be restored intact"
+             broke=$((broke+1))
+           fi ;;
+        2) log "$name ${h:0:12}: PERMISSION DENIED — the package is not readable by this caller."
+           log "  A GHCR package is PRIVATE when first created, even in a public repo. Make it"
+           log "  public (or link it to the repo) — pulling is supposed to need no credentials."
+           denied=$((denied+1)) ;;
+        1) log "$name ${h:0:12}: not in the store"; miss=$((miss+1)) ;;
+        *) log "$name ${h:0:12}: registry unreachable"; broke=$((broke+1)) ;;
+      esac
     done
-    log "pull-all: $got restored, $fresh already local, $miss to build"
-    [ "$miss" -eq 0 ] || log "note: $miss package(s) will compile under emulation — this is slow but correct"
+    log "pull-all: $got restored, $fresh already local, $miss absent, $denied unreadable, $broke failed"
+    if [ "$require_all" -eq 1 ]; then
+      [ $((miss + denied + broke)) -eq 0 ] || die "--require-all: $((miss + denied + broke)) package(s) could not be retrieved (see above)"
+    elif [ $((miss + denied + broke)) -gt 0 ]; then
+      log "note: $((miss + denied + broke)) package(s) will be compiled locally — slow but correct"
+    fi
     ;;
 
   ''|-h|--help|help)

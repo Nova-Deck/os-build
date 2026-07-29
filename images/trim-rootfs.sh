@@ -20,7 +20,7 @@
 # states what it no longer has — and images/guard-rootfs.sh re-expands that copy against the
 # built tree and fails the build if anything it names survived.
 #
-# Not called under NOVADECK_TEST=1 — see images/assemble-rootfs.sh.
+# Not called under NOVADECK_DEV=1 — see images/assemble-rootfs.sh.
 set -euo pipefail
 # extglob and globstar are what the `glob` rows are written against; trim.list documents both.
 shopt -s extglob globstar nullglob dotglob

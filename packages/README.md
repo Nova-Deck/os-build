@@ -38,6 +38,55 @@ Current pins: `inputplumber/` (InputPlumber input daemon; `deps: libiio`),
 `proton-cachyos/` and `proton-ge/` (two baked arm64 Proton compat tools — CachyOS and
 GloriousEggroll GE — the user picks either per game in Steam; both `kind: tar`, `deps: python`).
 
+## Artifact pins (`artifact.pin`) — the byte claim, release only
+
+`source.pin` + `images/manifest.lock` answer *"were these built from the reviewed sources?"*.
+`artifact.pin` answers the other question: *"are these the reviewed **bytes**?"*
+
+```
+name: rauc
+inputhash: 9bbf620c…                                  # which sources produced them
+artifact: 3f1a…  rauc-1.15.2-1.1-aarch64.pkg.tar.zst  # sha256 of the built package
+```
+
+The two are kept in **separate files with separate lifetimes**, and that separation is the whole
+design. The lock's hash has to verify on every machine, so it cannot be a byte hash — our builds are
+not bit-reproducible, and one that was made a clean CI runner fail every run. An artifact pin *is* a
+byte hash, so it can only ever be satisfied by bytes from the store — which is exactly why it applies
+to release builds and nothing else.
+
+| build | pins enforced? | who runs it |
+|---|---|---|
+| `NOVADECK_DEV=1 make sdcard` | no | you, constantly |
+| `make sdcard` / `make bundle` (release) | **yes** | CI only |
+
+So a release image cannot be built from packages you compiled locally, by design — locally built
+bytes will never match a published sha. That is not friction to route around; it is the claim. Use
+the dev path for development, and let `release-sdcard.yml` / `release-bundle.yml` produce anything
+that leaves your machine.
+
+```
+make verify-pins        # the release gate, run by hand (release builds run it automatically)
+make pin-artifacts      # record what is built HERE as the pinned bytes, then review the diff
+```
+
+Normally you never run `pin-artifacts`: `.github/workflows/overlay.yml` publishes each package and
+opens a **pin-bump PR** carrying the new shas. **Reviewing that PR is where the trust actually
+enters.** `verify-pins.sh` proves the bytes match the pins; nothing can prove someone looked. Merge
+it carelessly and the mechanism degrades to "CI published what CI published".
+
+Two failure modes, deliberately distinguished — conflating them turns one clear problem into ten
+confusing ones:
+
+| message | meaning | fix |
+|---|---|---|
+| pin is **STALE** | `inputhash` disagrees: sources moved, no pin-bump landed yet | merge the pin-bump PR, or build `NOVADECK_DEV=1` |
+| **BYTES DO NOT MATCH** | same sources, different bytes | expected for a local rebuild; from the store it is a substitution |
+
+`novadeck.db` is deliberately **not** pinned: `repo-add` is not byte-reproducible either, so a pin on
+it could never hold. Nothing installs *from* the db in a locked build — `fetchlock.sh` hands pacman an
+explicit file list — so it is an index, not an input.
+
 ## From-source overlay packages (`source.pin`)
 
 Holo packages that need a novadeck **code** patch are rebuilt from source instead of pulled as

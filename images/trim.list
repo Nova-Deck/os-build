@@ -30,7 +30,7 @@
 #
 # Both kinds reject an absolute path or one containing `..`, exactly as the sealer does.
 #
-# RELEASE ONLY, like the seal. A NOVADECK_TEST tree keeps pacman, and deleting files out from
+# RELEASE ONLY, like the seal. A NOVADECK_DEV tree keeps pacman, and deleting files out from
 # under a live package database would make on-device `pacman -Qkk` and every reinstall lie about
 # the tree. images/assemble-rootfs.sh calls this only on the release path.
 #

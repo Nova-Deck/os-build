@@ -19,8 +19,8 @@
 # here and there adds content. (The one gap: this asserts the tree, not the image bytes — reading
 # a btrfs image back would need a mount, which the unprivileged build deliberately avoids.)
 #
-# RELEASE ONLY, like the seal itself. A NOVADECK_TEST tree keeps the package manager on purpose
-# and carries TEST_PKGS that the lock does not describe, so most of this would be asserting the
+# RELEASE ONLY, like the seal itself. A NOVADECK_DEV tree keeps the package manager on purpose
+# and carries DEV_PKGS that the lock does not describe, so most of this would be asserting the
 # wrong thing. images/assemble-rootfs.sh calls this only on the release path.
 #
 # What it asserts:

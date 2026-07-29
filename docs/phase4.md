@@ -97,12 +97,12 @@ resolve tree can never satisfy a locked build, and editing the lock rebuilds the
 therefore *deletes* the base stamp rather than touching it — the next build re-installs in locked
 mode, so what ships is always a tree verified against the lock.
 
-**Decision: test-only tooling stays out of the lock and installs by name.** `TEST_PKGS` (`evtest`,
-`usbutils`) are `pacman -Sy`'d under `NOVADECK_TEST=1` even in locked mode. The lock describes the
+**Decision: dev-only tooling stays out of the lock and installs by name.** `DEV_PKGS` (`evtest`,
+`usbutils`) are `pacman -Sy`'d under `NOVADECK_DEV=1` even in locked mode. The lock describes the
 *release* image — the tree the step-4 guard runs against — so locking test tooling would overstate
-what ships. `customize-base.sh` records `test:1` in the marker and `genmanifest.sh` refuses to
+what ships. `customize-base.sh` records `dev:1` in the marker and `genmanifest.sh` refuses to
 relock a test base, rather than filtering by a package-name blocklist that would drift from
-`TEST_PKGS`.
+`DEV_PKGS`.
 
 The lock is a resolved closure, so a leaf package dropping *out* of it leaves no unsatisfied
 dependency for `pacman -U` to trip over — it would just be absent on the device. So the container
@@ -165,7 +165,7 @@ Rejected alternatives: generating the lock post-seal from the preserved DB minus
 list (same result, more moving parts), and letting the lock describe the pre-seal tree with
 the removal list living separately (then neither file alone says what shipped).
 
-**Decision: on-device `pacman` is kept under `NOVADECK_TEST=1` and stripped from release.**
+**Decision: on-device `pacman` is kept under `NOVADECK_DEV=1` and stripped from release.**
 It is a genuine bring-up affordance and the divergence is confined to *tooling* — it does
 not touch the boot or session path, so it does not repeat the "verify OOBE on a release
 build, not the test image" trap. The step-4 guard runs against the **release** tree.
@@ -193,7 +193,7 @@ exactly what a declaration that is never checked against its artifact degrades i
 complete and still a directory: after every injection and after the seal, before section 5 carves
 `/var` out into `var.img`. What `mkfs.btrfs --rootdir` bakes in section 6 is that directory,
 unmodified. Release-only, mirroring the seal — a test tree keeps the package manager on purpose
-and carries `TEST_PKGS` the lock does not describe.
+and carries `DEV_PKGS` the lock does not describe.
 
 Five assertions; the first four fail the build. Measured on the release tree:
 
@@ -419,7 +419,7 @@ problem and is tracked separately in `TODO.md`.
 
 A second reason this pass could not exercise the prerequisite: the test image injects Wi-Fi
 credentials into the **shared rootfs** (`images/assemble-rootfs.sh`), not the per-slot `/etc`
-overlay, so "the other slot has no saved Wi-Fi" cannot reproduce on a `NOVADECK_TEST=1` card at
+overlay, so "the other slot has no saved Wi-Fi" cannot reproduce on a `NOVADECK_DEV=1` card at
 all. Validating the `/var` migration hook needs a release image — the same trap as the OOBE work.
 
 ### Pass 1 — the boot path (implemented, HW-VALIDATED 2026-07-28)

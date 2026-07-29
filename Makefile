@@ -30,8 +30,10 @@ BUILD_IMG ?= novadeck-build
 #                config) — skips the defconfig+fragment merge in kernel/build.sh.
 #   VERSION      RAUC bundle version (defaults to the date inside genbundle.sh).
 #   ESP          mounted EFI System Partition, for `make deploy`.
-#   NOVADECK_TEST=1 + NOVADECK_WIFI_SSID/PSK + NOVADECK_SSH_PUBKEY  inject test-only
+#   NOVADECK_DEV=1 + NOVADECK_WIFI_SSID/PSK + NOVADECK_SSH_PUBKEY  inject dev-only
 #                Wi-Fi/SSH creds into the rootfs (never part of a release build).
+#                This is also the ONLY way to build an image from packages you compiled
+#                yourself: a release build requires reviewed artifact pins (see verify-pins).
 BASE_CONFIG ?=
 VERSION     ?=
 
@@ -83,31 +85,36 @@ PKI_MOUNT := -v $(PKI_REAL):/pki:ro -e PKIDIR=/pki
 RAUC_CERT ?= /pki/release.cert.pem
 RAUC_KEY  ?= /pki/release.key.pem
 endif
-# Test-only credential env, forwarded into the rootfs assembler (no-op unless TEST=1).
-TEST_ENV := -e NOVADECK_TEST -e NOVADECK_WIFI_SSID -e NOVADECK_WIFI_PSK -e NOVADECK_SSH_PUBKEY
+# Dev-only credential env, forwarded into the rootfs assembler (no-op unless NOVADECK_DEV=1).
+DEV_ENV := -e NOVADECK_DEV -e NOVADECK_WIFI_SSID -e NOVADECK_WIFI_PSK -e NOVADECK_SSH_PUBKEY
 
-# NOVADECK_TEST changes the rootfs CONTENT (Wi-Fi profile, SSH host keys + authorized_keys) but is
+# NOVADECK_DEV changes the rootfs CONTENT (Wi-Fi profile, SSH host keys + authorized_keys) but is
 # an environment variable, which make cannot see. Without this, an existing release rootfs.img looks
-# up-to-date to a `NOVADECK_TEST=1 make sdcard`, the assembler is skipped, and you flash a RELEASE
-# root wrapped in a test-built card — no Wi-Fi, no SSH, and no error anywhere. (Cost me a boot cycle
+# up-to-date to a `NOVADECK_DEV=1 make sdcard`, the assembler is skipped, and you flash a RELEASE
+# root wrapped in a dev-built card — no Wi-Fi, no SSH, and no error anywhere. (Cost me a boot cycle
 # on 2026-07-09.) Encode the mode in a stamp file that rootfs depends on, so flipping it rebuilds.
 # Lives under work/ (host-owned); out/images is written by the container as root.
-ROOTFS_MODE  := $(if $(filter 1,$(NOVADECK_TEST)),test,release)
+#
+# THE NAME: this was NOVADECK_TEST until 2026-07-30. It was chosen while debugging the very first
+# Steam OOBE, where "test" meant a throwaway card, and it long outlived that — this is the normal
+# development cycle now, and the release path is the one that is special. Renamed with the artifact
+# pins, since both turn on the same distinction: who built these bytes.
+ROOTFS_MODE  := $(if $(filter 1,$(NOVADECK_DEV)),dev,release)
 MODE_STAMP   := work/.rootfs-mode-$(ROOTFS_MODE)
 
-# The BASE tree is mode-dependent for the same reason and needs the same treatment: NOVADECK_TEST=1
-# adds TEST_PKGS (evtest, usbutils) to the bootstrap (images/customize-base.sh:176), so a test base
+# The BASE tree is mode-dependent for the same reason and needs the same treatment: NOVADECK_DEV=1
+# adds DEV_PKGS (evtest, usbutils) to the bootstrap (images/customize-base.sh:176), so a dev base
 # and a release base are DIFFERENT trees. Every $(BASE_STAMP) prerequisite is a file and none of them
 # encodes the mode, so without this a base built in one mode looks up-to-date to the other and make
-# never invokes customize-base.sh at all — its mode-aware reuse key (`test:1`, line 306) is
+# never invokes customize-base.sh at all — its mode-aware reuse key (`dev:1`, line 306) is
 # unreachable in exactly the case it was written for. Caught on 2026-07-28 building a release bundle
-# straight after a test card: the release guard tripped on `only in tree: evtest usbutils`. The
-# reverse direction — a release base under a TEST card — has no guard at all (guard-rootfs.sh is
+# straight after a dev card: the release guard tripped on `only in tree: evtest usbutils`. The
+# reverse direction — a release base under a DEV card — has no guard at all (guard-rootfs.sh is
 # release-only) and is the direction that cost the 2026-07-09 boot cycle.
 #
 # This is a PREREQUISITE stamp, not a per-mode rename of $(BASE_STAMP). Naming the stamp
 # work/.base-$(ROOTFS_MODE).stamp would be wrong: stamps accumulate, the tree does not. There is one
-# work/base, so a `.base-test.stamp` left behind by an earlier test build still looks satisfied after
+# work/base, so a `.base-dev.stamp` left behind by an earlier dev build still looks satisfied after
 # a release build has since overwritten that tree — the stale-tree bug back again, silently. Instead
 # there is one stamp for the tree and one marker for the mode it was built in, and the marker rule
 # deletes its siblings so only ever one exists (same shape as $(MODE_STAMP) above). Flipping the mode
@@ -115,6 +122,17 @@ MODE_STAMP   := work/.rootfs-mode-$(ROOTFS_MODE)
 # rebuilds because the mode is in its reuse key too. A flip costs a full base rebuild — the correct
 # price, and the one `make relock` already pays deliberately.
 BASE_MODE_STAMP := work/.base-mode-$(ROOTFS_MODE)
+
+# --- artifact-pin enforcement (release only) -----------------------------------
+# A RELEASE build installs overlay packages whose BYTES are named by a reviewed
+# packages/*/artifact.pin; a dev build does not. That is the whole dev/release distinction and it
+# is deliberately not a separate knob: a gate only CI remembers to set is a gate that rots, and
+# there is no legitimate release image that a developer builds locally — CI builds those, from
+# store artifacts a pin-bump PR recorded. See packages/verify-pins.sh.
+#
+# The lock already answers "were these built from the reviewed SOURCES?" on every build and every
+# machine. This answers the question the lock deliberately gave up: "are these the reviewed BYTES?"
+PINNED := $(if $(filter release,$(ROOTFS_MODE)),1,)
 
 # --- artifacts (real file targets drive incremental rebuilds) -----------------
 BUILD_STAMP := out/.build-image.stamp
@@ -203,6 +221,7 @@ KERNEL_SRC := kernel/SOURCE.pin kernel/embed.list kernel/build.sh \
 # Phony orchestration targets
 # ==============================================================================
 .PHONY: help all image toolchain kernel fw-linux fw-qcom base overlay overlay-pull overlay-publish \
+        verify-pins pin-artifacts \
         rootfs manifest relock \
         initramfs boot sdcard verify-card test bundle deploy clean clean-base clean-overlay distclean
 
@@ -212,7 +231,7 @@ help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
 	  | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-12s\033[0m %s\n",$$1,$$2}'
 	@echo
-	@echo "Knobs: BASE_CONFIG VERSION ESP NOVADECK_TEST(+creds)"
+	@echo "Knobs: BASE_CONFIG VERSION ESP NOVADECK_DEV(+creds)"
 
 all: sdcard ## Alias for `sdcard` (the full bring-up image)
 
@@ -332,6 +351,17 @@ overlay-pull: ## Fetch already-built overlay packages from the store into work/r
 overlay-publish: $(OVERLAY_STAMP) ## Publish locally built overlay packages to the store (needs login)
 	packages/overlay-store.sh push-all
 
+# The byte check a release build must pass. Not wired to $(OVERLAY_STAMP): it reads the lock and the
+# committed pins and re-hashes what is on disk, so it must run even when make thinks the repo is
+# current -- that is precisely the case a substitution produces.
+verify-pins: ## Verify overlay artifact BYTES against packages/*/artifact.pin (release gate)
+	packages/verify-pins.sh
+
+# Record the bytes built here as the reviewed ones. Normally CI's pin-bump PR does this; run it by
+# hand when you deliberately intend to make a local build the pinned one, then review the diff.
+pin-artifacts: $(OVERLAY_STAMP) ## (Re)generate packages/*/artifact.pin from the built overlay repo
+	packages/verify-pins.sh --write
+
 # ==============================================================================
 # Root bootstrap (host — customize-base.sh drives docker + qemu binfmt itself)
 # ==============================================================================
@@ -356,17 +386,28 @@ overlay-publish: $(OVERLAY_STAMP) ## Publish locally built overlay packages to t
 # folds its own sha256 into its reuse marker, because the make prereq alone only gets the script
 # RUN -- the marker check inside it would otherwise still short-circuit.
 #
-# $(BASE_MODE_STAMP) is the NOVADECK_TEST prerequisite (see its definition): it is the only one of
+# $(BASE_MODE_STAMP) is the NOVADECK_DEV prerequisite (see its definition): it is the only one of
 # these that changes when nothing on disk does.
 #
 # The mode assertion in the recipe is the other half of that. A marker file saying which mode the
 # tree was built in is a claim, and an unchecked claim is how the stale-base bug shipped in the first
-# place. customize-base.sh records `test:1` in its own reuse key for a test bootstrap, so the built
+# place. customize-base.sh records `dev:1` in its own reuse key for a dev bootstrap, so the built
 # tree states its own mode: assert that against the mode we asked for. This guards BOTH directions,
 # which nothing downstream does -- guard-rootfs.sh only ever runs on a release build.
+# The artifact-pin gate is ORDER-ONLY (`|`), and that is load-bearing rather than stylistic.
+# verify-pins is .PHONY, so as a normal prerequisite it would be perpetually newer than the stamp
+# and every release `make` would rebuild the base from scratch. Order-only still RUNS it (a phony
+# target is always out of date) while leaving the stamp's own up-to-date check alone -- the same
+# reason every container stage carries `| $(BUILD_STAMP)`.
+#
+# It gates the BASE rather than the image targets so the check happens BEFORE these bytes are
+# installed, not after. Checking work/repo rather than the built tree is sound because
+# $(OVERLAY_STAMP) already keys off sha256sum $(OVERLAY_DB): a substitution inside work/repo moves
+# the db, which rebuilds the base anyway, so there is no window where a verified repo and an
+# unverified tree coexist.
 $(BASE_STAMP): base-devel.digest snapshot.pin images/manifest.lock images/fetchlock.sh \
                images/pacman.conf images/os-release images/customize-base.sh $(PREBUILT_PINS) \
-               $(BASE_MODE_STAMP)
+               $(BASE_MODE_STAMP) | $(if $(PINNED),verify-pins)
 	images/customize-base.sh
 	@test -f work/base/usr/bin/sshd   # sentinel: sshd present => release runtime laid down
 	@: "sentinel: the pairing agent's interpreter and key validator. Both arrive as transitive"; \
@@ -377,13 +418,13 @@ $(BASE_STAMP): base-devel.digest snapshot.pin images/manifest.lock images/fetchl
 	     echo "novadeck-pairingd needs /$$f and the base tree has no such file" >&2; exit 1; }; \
 	 done
 	@: "sentinel: the tree must be in the mode this build asked for (see above)"; \
-	 got=release; grep -qx 'test:1' work/base/usr/lib/novadeck/pkgs 2>/dev/null && got=test; \
+	 got=release; grep -qx 'dev:1' work/base/usr/lib/novadeck/pkgs 2>/dev/null && got=dev; \
 	 [ "$$got" = "$(ROOTFS_MODE)" ] || { \
 	   echo "base tree is a $$got build, this is a $(ROOTFS_MODE) build (stale work/base)" >&2; \
 	   exit 1; }
 	@mkdir -p $(@D) && touch $@   # recency marker outside the root-owned tree (frozen mtimes)
 
-# Switching NOVADECK_TEST swaps which marker exists, so the base is rebuilt on the next make. The
+# Switching NOVADECK_DEV swaps which marker exists, so the base is rebuilt on the next make. The
 # rm is what keeps it a marker rather than a cache: exactly one mode is ever claimed, and it is
 # always the mode work/base was last built in.
 $(BASE_MODE_STAMP):
@@ -420,10 +461,10 @@ manifest: $(KERNEL) ## Verify firmware-manifest.txt vs the built kernel (in cont
 # The resulting tree is a RESOLVE tree and must never ship, so the stamp is REMOVED rather than
 # touched. The next build re-runs customize-base.sh, which sees mode:resolve in the reuse marker,
 # rebuilds in locked mode, and so ships a tree actually verified against the new lock.
-# Release-only by construction: genmanifest.sh refuses a test base.
+# Release-only by construction: genmanifest.sh refuses a dev base.
 #
-# NOVADECK_TEST is cleared here rather than passed through: with it set, the base would be built
-# with the test tooling and genmanifest.sh would then refuse it -- correct, but only after a full
+# NOVADECK_DEV is cleared here rather than passed through: with it set, the base would be built
+# with the dev tooling and genmanifest.sh would then refuse it -- correct, but only after a full
 # emulated install. The lock is a release artifact, so force release up front.
 #
 # The overlay repo IS a prerequisite even though the base stamp is not. Dropping $(BASE_STAMP)
@@ -432,7 +473,7 @@ manifest: $(KERNEL) ## Verify firmware-manifest.txt vs the built kernel (in cont
 # — locking upstream binaries under a `snapshot` class. That is a silently WRONG lock, which is
 # worse than a failed one, so declare the overlay directly.
 relock: $(if $(OVERLAY_PINS),$(OVERLAY_STAMP)) ## Re-resolve from PKGS and regenerate images/manifest.lock (host; release only)
-	NOVADECK_TEST= NOVADECK_RESOLVE=1 FORCE=1 images/customize-base.sh
+	NOVADECK_DEV= NOVADECK_RESOLVE=1 FORCE=1 images/customize-base.sh
 	images/genmanifest.sh
 	rm -f $(BASE_STAMP) work/.base-mode-*   # the tree left behind is a RESOLVE tree: claim no mode for it
 	@echo "review the diff, commit it, then rebuild: git diff images/manifest.lock"
@@ -440,7 +481,7 @@ relock: $(if $(OVERLAY_PINS),$(OVERLAY_STAMP)) ## Re-resolve from PKGS and regen
 # ==============================================================================
 # Read-only root (container) — base userspace + kernel + firmware -> Btrfs image
 # ==============================================================================
-# Switching NOVADECK_TEST swaps which stamp exists, so the rootfs is rebuilt on the next make.
+# Switching NOVADECK_DEV swaps which stamp exists, so the rootfs is rebuilt on the next make.
 $(MODE_STAMP):
 	@mkdir -p $(@D) && rm -f work/.rootfs-mode-* && touch $@
 	@echo "[novadeck] rootfs mode: $(ROOTFS_MODE)"
@@ -450,7 +491,7 @@ $(MODE_STAMP):
 # matches the modules in the slot it just wrote. No cycle: BOOTIMG needs KERNEL + INITRAMFS, and
 # the initramfs is built from work/base, never from the assembled root.
 $(ROOTFS): $(KERNEL) $(BOOTIMG) $(BASE_STAMP) $(FW_LINUX) $(FW_QCOM) $(STEAM_SEED) $(ASSEMBLE_SRC) $(MODE_STAMP) | $(BUILD_STAMP)
-	$(DOCKER) $(TEST_ENV) -e NOVADECK_DEBUG $(BUILD_IMG) \
+	$(DOCKER) $(DEV_ENV) -e NOVADECK_DEBUG $(BUILD_IMG) \
 	  images/assemble-rootfs.sh /src/work/base
 
 # ==============================================================================

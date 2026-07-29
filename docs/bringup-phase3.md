@@ -24,7 +24,7 @@ still runs as the session user (root today); moving the session to run as `deck`
 
 ## Validate on HW (test card, session stays disabled by default)
 
-1. Flash a `NOVADECK_TEST=1` sdcard (Wi-Fi/SSH), boot, SSH in.
+1. Flash a `NOVADECK_DEV=1` sdcard (Wi-Fi/SSH), boot, SSH in.
 2. Confirm the home grew and the pre-seeded client is present (offline — no CDN):
    ```sh
    df -h /home                                           # expect the full card, not ~2GiB

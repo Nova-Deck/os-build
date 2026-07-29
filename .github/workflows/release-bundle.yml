@@ -1,0 +1,53 @@
+# novadeck release update bundle — builds a RAUC bundle for a device already in the field.
+#
+# Separate from release-sdcard.yml on purpose: an update ships on its own cadence, and coupling it to
+# card builds would mean either cutting cards nobody asked for or delaying updates until someone did.
+# Both delegate to image.yml so the rootfs recipe exists once.
+#
+# ============================================================================================
+# THIS PRODUCES AN UNSIGNED (dev-cert) BUNDLE. IT IS NOT A SHIPPABLE UPDATE.
+# ============================================================================================
+# A device only installs a bundle whose signature chains to the keyring baked into its own image, so
+# what this builds is a SMOKE TEST: it proves the bundle assembles, the verity hashes compute, the
+# manifest is well formed and the pin gate passed. Every device will reject the result.
+#
+# WHY IT STOPS THERE, deliberately. Signing needs the release private key — the 20-year root of
+# trust, currently at ~/novadeck-pki, deliberately outside the repo and invisible to the build
+# container. Putting it into GitHub secrets is a real security decision that has not been made, and
+# guessing at it is how a root of trust ends up somewhere nobody chose to put it.
+#
+# TO FINISH THIS, once that decision is made:
+#
+#   1. Create a PROTECTED environment (repo settings -> Environments), e.g. `release-signing`, with
+#      required reviewers and a branch restriction. Without one, any workflow_dispatch reaches the
+#      key. The environment is what makes signing an approved action rather than an available one.
+#   2. Add RAUC_CERT_PEM + RAUC_KEY_PEM to THAT environment, not to repo-wide secrets.
+#   3. In image.yml, add an `environment` input and set it on the build job. It has to be declared
+#      there because that is the job the secret is used in — a caller cannot attach an environment to
+#      a reusable workflow's job from outside. Verify on the first run that an empty value means "no
+#      environment" for the sdcard path, or give image.yml two jobs and pick with an `if:`.
+#   4. Pass `secrets: inherit` from a signed job here.
+#
+# image.yml ALREADY accepts RAUC_CERT_PEM / RAUC_KEY_PEM and signs with them when both are present,
+# so step 4 is the only change on this side. It warns loudly when they are absent rather than
+# quietly producing something that looks shippable.
+name: release bundle
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Bundle version (default: the date, chosen inside genbundle.sh)'
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  unsigned:
+    uses: ./.github/workflows/image.yml
+    with:
+      artifact: bundle
+      version: ${{ inputs.version }}

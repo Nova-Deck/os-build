@@ -1,0 +1,32 @@
+# novadeck release SD card — a flashable image for bringing a device up from scratch.
+#
+# Separate from release-bundle.yml because the two are wanted at different cadences: a card is what
+# you flash onto a new device or after a wipe, a bundle is what updates one already in the field.
+# Both delegate to image.yml so the rootfs recipe exists once.
+#
+# NEEDS NO SECRETS. Nothing here is signed — an sdcard is flashed over USB by someone holding the
+# device, so there is no signature for anything to verify. That is why this workflow could land
+# before the release signing key was anywhere near CI.
+#
+# This is also the workflow that replaces building a release image locally. `make sdcard` on a dev
+# box now fails the artifact-pin gate by design (packages/verify-pins.sh), so verifying OOBE on a
+# real release image means flashing the artifact this produces.
+name: release sdcard
+
+on:
+  # Manual by default: a card is cut when someone wants one, not on every push.
+  workflow_dispatch:
+  # A tag is the other natural trigger — whatever v* means to you, a flashable image of it is
+  # usually wanted at the same moment.
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  sdcard:
+    uses: ./.github/workflows/image.yml
+    with:
+      artifact: sdcard

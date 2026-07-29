@@ -32,7 +32,7 @@ it** — which is why RAUC must rsync `/var` across on update (see `TODO.md`).
 | `initramfs/init` | The initramfs `/init`: mounts the root read-only, mounts `/var`, stacks the `/etc` overlay on it, then `switch_root`s into systemd. Degrades to a writable un-overlaid root (loudly, via `/dev/kmsg`) rather than bricking a device with no serial console. |
 | `mkinitramfs.sh <base-rootfs>` | Stage `bash` + util-linux out of the base, resolve their libraries via `readelf`, and roll `init` into `out/initramfs.cpio.gz` (~2.2M). No mkinitcpio/dracut, no modules — every filesystem and block driver we need is `=y`. |
 | `assemble-rootfs.sh <base-rootfs>` | Stage base + kernel + firmware, then split the tree into the two images the table wants: `rootfs.img` (btrfs, ro) and `var.img` (ext4, carries the `/etc` overlay upper). All unprivileged. Also injects the unified `fs-overlay/` payload (session, HW-support, InputPlumber, audio, FEX, Steam shell) and the offload bind units. |
-| `seal.list` + `seal-rootfs.sh` | **What a release root must not be able to do** (Phase 4a step 3). The list declares the packages and paths removed after the last install — pacman, gnupg/dirmngr, the keyring and its vendor-enabled weekly timer; the script expands each name through the package database and deletes its files. The database survives as provenance under `/usr/lib/novadeck/pkgdb`. Release only: a `NOVADECK_TEST` card keeps pacman on purpose. |
+| `seal.list` + `seal-rootfs.sh` | **What a release root must not be able to do** (Phase 4a step 3). The list declares the packages and paths removed after the last install — pacman, gnupg/dirmngr, the keyring and its vendor-enabled weekly timer; the script expands each name through the package database and deletes its files. The database survives as provenance under `/usr/lib/novadeck/pkgdb`. Release only: a `NOVADECK_DEV` card keeps pacman on purpose. |
 | `trim.list` + `trim-rootfs.sh` | **What a release root need not weigh** (Phase 4a step 5). Same declare-then-apply shape, for build and documentation artefacts: headers, static libs, cmake/pkgconfig, `.gir`, man/doc/info, locale sources and non-English catalogues, and the gcc-libs language runtimes nothing links. Runs after the seal, release only. ~225 MB compressed, paid twice under A/B (both slots, plus every bundle). |
 | `guard-rootfs.sh` | **The check that stops both lists from being comments** (Phase 4a step 4). Asserts on the built tree, never on the source diff: the seal fully applied, the named package-manager entry points gone, no dangling systemd enable-symlink, `manifest.lock` still describing the tree, the trim fully applied — plus a report-only per-directory size delta against the previous build. |
 | `make-sdcard.sh` | Lay the **full** GPT from the table and populate only the A side (ESP + root-A + var-A + home, with `/home` pre-seeded with the native arm64 Steam client) → `out/images/sdcard.img`. The B slots and both `efi-*` partitions are created but empty, so adding RAUC later never needs a reflash. Unprivileged (mtools + sgdisk + `dd`, no loop). |
@@ -68,12 +68,12 @@ sudo dd if=out/images/sdcard.img of=/dev/sdX bs=4M conv=fsync status=progress
 
 The release runtime (NetworkManager, openssh, mesa/Turnip/vulkan-tools) ships in every build
 via `customize-base.sh`. **Credentials** are not — they are injected only when assembling with
-`NOVADECK_TEST=1`, straight from the environment, so they never touch the repo. Use this to
+`NOVADECK_DEV=1`, straight from the environment, so they never touch the repo. Use this to
 build a throwaway card that joins your LAN and accepts SSH, to run `vulkaninfo` on hardware:
 
 ```
 docker run --rm -v "$PWD":/src -w /src \
-  -e NOVADECK_TEST=1 -e NOVADECK_WIFI_SSID="$SSID" -e NOVADECK_WIFI_PSK="$PSK" \
+  -e NOVADECK_DEV=1 -e NOVADECK_WIFI_SSID="$SSID" -e NOVADECK_WIFI_PSK="$PSK" \
   -e NOVADECK_SSH_PUBKEY="$(cat ~/.ssh/id_ed25519.pub)" \
   novadeck-build images/assemble-rootfs.sh work/base
 docker run --rm -v "$PWD":/src -w /src novadeck-build boot/package.sh

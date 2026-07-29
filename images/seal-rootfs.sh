@@ -25,7 +25,7 @@
 # what it no longer has. images/genmanifest.sh reads the same list and marks those rows
 # `stripped` in images/manifest.lock, so one artifact describes the real image.
 #
-# Not called under NOVADECK_TEST=1 — see images/assemble-rootfs.sh.
+# Not called under NOVADECK_DEV=1 — see images/assemble-rootfs.sh.
 set -euo pipefail
 shopt -s nullglob
 

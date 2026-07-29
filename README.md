@@ -75,7 +75,7 @@ make clean                      # drop out/ (clean-base / distclean go further)
 
 Targets only rebuild when their inputs (source pins, patches, dts, config, firmware)
 change. Key knobs: `BASE_CONFIG=` (verbatim kernel `.config`, e.g. a ROCKNIX config),
-`VERSION=` (RAUC bundle), `ESP=` (deploy target), and `NOVADECK_TEST=1` + Wi-Fi/SSH creds
+`VERSION=` (RAUC bundle), `ESP=` (deploy target), and `NOVADECK_DEV=1` + Wi-Fi/SSH creds
 for a test card. Device firmware is fetched from the pinned Nova-Deck/qcom-firmwares repo
 (`make fw-qcom`), so no device dump is needed.
 

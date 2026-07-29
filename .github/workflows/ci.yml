@@ -1,17 +1,17 @@
-# novadeck CI — what can honestly run on a clean runner today.
+# novadeck CI — the offline suites. See also .github/workflows/overlay.yml (the package pipeline).
 #
-# WHAT IS DELIBERATELY NOT HERE: the image build. A clean runner has no work/, so it rebuilds the
-# nine from-source overlay packages, and our builds are not bit-reproducible — images/fetchlock.sh
-# refuses the install when the sha256 differs, so `make sdcard` fails on EVERY run. `make relock`
-# is not the escape hatch either: CI would commit back a lock carrying that runner's bytes, which
-# the next runner does not reproduce, so every run would mutate a reviewed artifact. That is
-# TODO.md's "novadeck lock rows are sha-pinned to non-reproducible builds", and it is a hard block
-# on the Phase 7 workflow ci/README.md describes, not flakiness to retry around. Fixing it is the
-# prerequisite; adding a build job before then would just be a red X nobody reads.
+# WHAT IS DELIBERATELY NOT HERE: the image build — but no longer because it CANNOT run. Both of the
+# old blockers are gone. The lock used to pin the overlay rows to artifact bytes our
+# non-reproducible builds could not reproduce, so images/fetchlock.sh refused the install on every
+# run; it now pins them to their SOURCES (packages/inputhash.sh), so a clean runner verifies exactly
+# like the machine that wrote the lock. And a clean runner no longer has to spend ~4h compiling the
+# overlay under emulation: overlay.yml publishes those packages keyed by that same input hash, and
+# `make overlay-pull` retrieves them. What is left is finding out what the REST of the image build
+# costs on a runner, which is ordinary work rather than a hard block. See ci/README.md.
 #
-# So this covers the half that is genuinely CI-shaped: the offline suites. They are what caught a
-# broken RAUC backend, an unarmed slot after a failed install, and a signing self-test that could
-# have gone green while asserting nothing.
+# So this covers the half that has always been cleanly CI-shaped: the offline suites. They are what
+# caught a broken RAUC backend, an unarmed slot after a failed install, and a signing self-test that
+# could have gone green while asserting nothing.
 #
 # NO SECRETS, ON PURPOSE. The signing job checks the committed keyring against the committed
 # release certificate — both public, so this runs on a fork's pull request with access to nothing.

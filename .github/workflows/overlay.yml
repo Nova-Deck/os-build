@@ -1,0 +1,237 @@
+# novadeck overlay package pipeline — build each from-source package ONCE, keyed by its inputs.
+#
+# WHAT PROBLEM THIS SOLVES. `make overlay` rebuilds ~8 holo packages from source, and it is by
+# far the most expensive thing in this build: a cold run on a 16-core dev box takes ~4h under
+# arm64 emulation, fex-emu alone ~2h. Every consumer used to pay that again — which is why
+# ci/README.md still lists the image build under "not here yet". This turns it into a one-time
+# cost per SOURCE CHANGE: build here, publish to GHCR, and any later pipeline pulls the bytes.
+#
+# THE KEY IS packages/inputhash.sh. That digest already covers exactly the files that determine a
+# build (source.pin + patches + a local PKGBUILD), is already path-independent, and is already
+# what images/manifest.lock records for the `novadeck` rows. So "has this package changed?" and
+# "which artifact do I want?" are the same question with the same answer, and the `plan` job below
+# is nothing more than asking the registry whether it already holds that answer. An unchanged
+# package is not a fast build here — it is NO build.
+#
+# WHY NATIVE ARM. The dev box compiles these under qemu; these runners are real aarch64, so
+# build-overlay.sh's own binfmt probe passes and it never registers qemu or asks for --privileged.
+# The indirection through vars.OVERLAY_RUNNER is the escape hatch if a hosted runner turns out too
+# slow for fex-emu. Do NOT point it at a self-hosted runner while this repo is public.
+#
+# FORK PULL REQUESTS DO NOT RUN THIS, on purpose. A fork's token is read-only, so it could not
+# publish anyway; triggering on `push` rather than `pull_request` means a fork PR simply skips the
+# pipeline and its packages get built when the change merges. Same reason there is no
+# pull_request trigger for branches in this repo: it would build every commit twice.
+#
+# THIS IS A CACHE, NOT A PROVENANCE MECHANISM. images/manifest.lock still pins the `novadeck` rows
+# to their sources and images/fetchlock.sh still re-derives that hash from packages/ — neither is
+# touched here, and a pull miss falls back to compiling. Making the lock verify these artifacts by
+# BYTE is the separate, still-open TODO item; this lands the store that step will consume.
+name: overlay packages
+
+on:
+  push:
+    paths:
+      - 'packages/*/source.pin'
+      - 'packages/*/patches/**'
+      - 'packages/*/PKGBUILD'
+      - 'packages/build-overlay.sh'
+      - 'packages/inputhash.sh'
+      - 'packages/overlay-store.sh'
+      - 'packages/oras.pin'
+      - 'base-devel.digest'
+      - '.github/workflows/overlay.yml'
+  workflow_dispatch:
+    inputs:
+      packages:
+        description: 'Space-separated package names to consider (empty = all)'
+        required: false
+        default: ''
+      force:
+        description: 'Rebuild and republish even if the store already has that input hash'
+        type: boolean
+        required: false
+        default: false
+  # So the image pipeline can require the packages it is about to install.
+  workflow_call:
+    outputs:
+      matrix:
+        description: 'Packages this run had to build (JSON matrix; empty include = full cache hit)'
+        value: ${{ jobs.plan.outputs.matrix }}
+
+# A superseded push means the sources moved. Anything already published stays valid on its own
+# hash, so cancelling mid-flight loses work but never corrupts the store.
+concurrency:
+  group: overlay-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  # Cheap, and x86 on purpose: this only hashes committed files and asks the registry what it
+  # already holds. It is what makes a re-run, a rebase, or a merge of an already-built branch free.
+  plan:
+    name: what needs building
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      any: ${{ steps.plan.outputs.any }}
+    steps:
+      - uses: actions/checkout@v4
+      # Every ${{ }} value reaches the shell as an ENVIRONMENT VARIABLE, never spliced into the
+      # script text. PACKAGES is operator-supplied (workflow_dispatch), so splicing it would be a
+      # command-injection hole; the others are ours, but the rule is only useful if it is absolute.
+      - id: plan
+        env:
+          PACKAGES: ${{ inputs.packages || '' }}
+          FORCE: ${{ inputs.force && '1' || '' }}
+        run: |
+          set -euo pipefail
+          args=()
+          [ -n "$FORCE" ] && args+=(--force)
+          # Intentional word-split: PACKAGES is a space-separated name list, and each name is
+          # validated against packages/<name>/source.pin by the script before it is used.
+          # shellcheck disable=SC2206
+          [ -n "$PACKAGES" ] && args+=($PACKAGES)
+          m=$(packages/overlay-store.sh plan "${args[@]}")
+          echo "matrix=$m" >> "$GITHUB_OUTPUT"
+          # `any` drives the build job's `if`. An empty matrix is the GOOD case (everything is
+          # already published) but GitHub still schedules a matrix job for an empty include list
+          # unless it is gated, and an empty-include job fails rather than skipping.
+          n=$(printf '%s' "$m" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["include"]))')
+          echo "any=$([ "$n" -gt 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          echo "$n package(s) to build" >> "$GITHUB_STEP_SUMMARY"
+          printf '%s\n' "$m" >> "$GITHUB_STEP_SUMMARY"
+
+  build:
+    name: build ${{ matrix.pkg }}
+    needs: plan
+    if: needs.plan.outputs.any == 'true'
+    runs-on: ${{ vars.OVERLAY_RUNNER || 'ubuntu-24.04-arm' }}
+    # fex-emu is the reason this is not the default 360. It compiles FEX with clang AND
+    # cross-compiles the x86/i686 guest thunks; ~2h emulated on a dev box, unknown natively.
+    timeout-minutes: 360
+    strategy:
+      # One package failing must not cancel the others: they are independent builds (each already
+      # runs in its own fresh container, deliberately — a shared one once poisoned sddm's Qt6
+      # resolution), and a package that DID build is worth publishing regardless.
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # --no-index because the repo db is rebuilt from scratch over EVERYTHING present, and this
+      # job holds one package. The consumer that reassembles the full repo indexes it.
+      - name: build
+        env:
+          PKG: ${{ matrix.pkg }}
+        run: packages/build-overlay.sh --only "$PKG" --no-index
+
+      # Pushing is the only operation here that needs a credential; pulling never does.
+      - name: log in to the store
+        env:
+          NOVADECK_GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_ACTOR: ${{ github.actor }}
+        run: packages/overlay-store.sh login
+
+      # The hash is passed explicitly rather than recomputed so that what gets published is keyed
+      # by what `plan` decided to build — if those two ever disagreed, silently publishing under
+      # the recomputed key would hide it. overlay-store.sh cross-checks it against the stamp the
+      # build just wrote and refuses a mismatch.
+      - name: publish
+        env:
+          PKG: ${{ matrix.pkg }}
+          HASH: ${{ matrix.hash }}
+        run: packages/overlay-store.sh push "$PKG" "$HASH"
+
+  # THE CONTRACT OTHER PIPELINES DEPEND ON, tested every run rather than assumed. A cold machine
+  # with no work/ must be able to reconstitute a complete, indexed overlay repo from the store
+  # without compiling anything. If that stops being true, this is where it shows up.
+  verify:
+    name: cold-machine retrieval
+    needs: [plan, build]
+    if: always() && needs.plan.result == 'success' && needs.build.result != 'failure'
+    runs-on: ${{ vars.OVERLAY_RUNNER || 'ubuntu-24.04-arm' }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: pull, then assemble
+        run: |
+          set -euo pipefail
+          make overlay-pull
+          # No credentials were used above. This runner never logged in, which is half the claim.
+          make overlay 2>&1 | tee /tmp/overlay.log
+      - name: assert nothing was compiled
+        run: |
+          set -euo pipefail
+          if grep -q 'inputs changed / artifacts missing' /tmp/overlay.log; then
+            echo "::error::a package was rebuilt after a full pull — the store did not cover it"
+            grep 'inputs changed / artifacts missing' /tmp/overlay.log
+            exit 1
+          fi
+          test -f work/repo/aarch64/novadeck.db.tar.zst \
+            || { echo "::error::no repo db was produced"; exit 1; }
+          n=$(ls -1 work/repo/aarch64/*.pkg.tar.zst | wc -l)
+          echo "reconstituted $n artifact(s) with zero compiles" >> "$GITHUB_STEP_SUMMARY"
+
+      # fetchlock verifies EVERY row, so on a cold runner it downloads the ~382 snapshot packages
+      # (~700MB) alongside the 10 overlay ones we actually care about here. Cache the download
+      # mirror so that is a one-time cost.
+      #
+      # This is a cache where caching work/repo was rejected (TODO.md), and the difference is the
+      # point: these are third-party bytes pinned by a sha256 in the lock, so a miss re-downloads
+      # and re-verifies — slow, never wrong. work/repo holds OUR non-reproducible build output,
+      # where a miss meant a 4h rebuild whose artifacts the lock could not confirm. A cache is fine
+      # for bytes something else already attests; it is not a substitute for provenance.
+      - uses: actions/cache@v4
+        with:
+          path: work/pacman-cache
+          key: pacman-cache-${{ hashFiles('snapshot.pin', 'images/manifest.lock') }}
+          restore-keys: pacman-cache-
+
+      # The lock is not touched by this pipeline, so it must still verify against a repo that was
+      # pulled rather than built. Distinct from the no-compile assertion above: that proves the
+      # stamps match the pins, this proves the lock's rows match the FILES the store handed back —
+      # a bumped pkgver with a stale lock fails here and nowhere else.
+      - name: lock still verifies against the pulled repo
+        run: images/fetchlock.sh /tmp/install-list && wc -l < /tmp/install-list
+
+  # Housekeeping only. Public packages are not metered, so this is about keeping the namespace
+  # readable rather than staying inside a quota — hence a generous retention: an old input hash is
+  # a working cache entry for any branch still sitting on those sources.
+  prune:
+    name: prune old input hashes
+    needs: [build, verify]
+    if: always() && github.ref == 'refs/heads/main' && needs.verify.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # GITHUB_TOKEN cannot delete package versions no matter what `permissions:` says — deletion
+      # needs a PAT with delete:packages. Absent the secret this announces itself and stops, rather
+      # than failing a run whose real work already succeeded. Running without it forever is fine.
+      - name: prune
+        env:
+          GH_TOKEN: ${{ secrets.GHCR_PRUNE_TOKEN }}
+          OWNER: ${{ github.repository_owner }}
+          KEEP: '5'
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "no GHCR_PRUNE_TOKEN secret — skipping prune (nothing is metered; this is optional)" \
+              >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          gh api --paginate "/orgs/$OWNER/packages?package_type=container" \
+            --jq '.[] | select(.name | startswith("novadeck-overlay/")) | .name' \
+          | while read -r pkg; do
+              enc=${pkg//\//%2F}
+              gh api --paginate "/orgs/$OWNER/packages/container/$enc/versions" \
+                --jq "sort_by(.created_at) | reverse | .[$KEEP:][] | .id" \
+              | while read -r id; do
+                  echo "deleting $pkg version $id"
+                  gh api -X DELETE "/orgs/$OWNER/packages/container/$enc/versions/$id"
+                done
+            done

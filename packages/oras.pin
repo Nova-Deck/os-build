@@ -1,0 +1,22 @@
+# oras — the OCI-registry client packages/overlay-store.sh uses to push/pull overlay artifacts.
+#
+# Pinned here rather than installed from a distro repo or a marketplace action for the same
+# reason base-devel.digest and snapshot.pin exist: the tool that moves our build artifacts around
+# should not float. `oras-project/setup-oras@v1` would resolve a version at run time on a runner
+# we do not control; this resolves the same version, verified by sha256, on a runner AND on a
+# developer's box from the one file.
+#
+# oras is used instead of docker/podman because these are plain FILES, not images — a package
+# artifact is a set of .pkg.tar.zst blobs, and `oras push`/`oras pull` moves exactly those with
+# no image/rootfs wrapper. The registry content-addresses each blob, so `oras pull` verifies the
+# bytes it hands back for free (see overlay-store.sh on why we ship no separate sha sidecar).
+#
+# Two arches because the pipeline is split: the cheap `plan` job runs on x86 (it only hashes
+# files and asks the registry what already exists) while the builds run on native aarch64.
+#
+# To bump: pick the release, then take BOTH sums from that release's oras_<ver>_checksums.txt.
+version: 1.3.3
+url_amd64: https://github.com/oras-project/oras/releases/download/v1.3.3/oras_1.3.3_linux_amd64.tar.gz
+sha256_amd64: 9ce999f8d2de03fc03968b29d743077a58783e545e5eaa53917ca177352d0e59
+url_arm64: https://github.com/oras-project/oras/releases/download/v1.3.3/oras_1.3.3_linux_arm64.tar.gz
+sha256_arm64: ac7156f93a21e903f7ad606c792f3560f17e0cd0e36365634701b1e7cc4e4eca

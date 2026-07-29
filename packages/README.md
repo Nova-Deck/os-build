@@ -61,9 +61,49 @@ adds it as a `file://` repo **ahead of the holo repos** so the patched package w
 resolves by repo order, not version — the higher `pkgrel` only matters for later upgrades), and
 folds the repo db's hash into the base reuse-cache key. `base` depends on `overlay` automatically.
 
-**Publishing for CI:** `work/repo/<arch>/` is a standard pacman repo. To share it (so CI need not
-rebuild from scratch), upload that dir and point a pinned `[novadeck]` `Server` at the URL instead
-of `file://` — same mechanism, different `Server`.
+### The package store — build once, retrieve everywhere
+
+A cold `make overlay` compiles every package under emulation: ~4h on a 16-core box, `fex-emu`
+alone ~2h. `packages/overlay-store.sh` makes that a one-time cost **per source change** by
+publishing each built package to a registry keyed by its `inputhash.sh` digest, so any other
+machine or pipeline pulls the bytes instead of recompiling.
+
+```
+make overlay-pull && make overlay      # cold consumer: fetch, then assemble. No compiles.
+make overlay-publish                   # publish what this machine built (needs a login)
+packages/overlay-store.sh plan         # which packages the store does NOT already have (JSON)
+```
+
+`.github/workflows/overlay.yml` is the producer: one job per package that the store lacks, on
+native `aarch64` runners (no qemu), publishing to `ghcr.io/nova-deck/novadeck-overlay/<name>-<arch>`
+tagged with the input hash. An unchanged package is not a fast build there — it is **no build**.
+
+Things worth knowing:
+
+- **Pulling needs no credentials.** The packages are public, so a fresh clone retrieves with no
+  token and no `gh`. Only publishing authenticates.
+- **The input hash is the key**, which is why it is not throwaway: same hash ⇒ same sources ⇒ the
+  published artifacts are the ones you would have built. It is a fourth reader of the one formula
+  above and must agree with the other three.
+- **`.stamps/<name>.files` travels with the artifact**, because it is the only mapping from a pin
+  to its several outputs (`mesa` emits five) and both `genmanifest.sh` and `fetchlock.sh` hard-fail
+  without it. A pull writes the stamps last, so an interrupted pull looks un-built and gets rebuilt
+  rather than looking complete with files missing.
+- **No checksum sidecar**: a registry content-addresses every blob, so `oras pull` already verifies
+  the bytes it returns. `oras` itself is pinned by `packages/oras.pin`.
+- **This is a cache, not a provenance mechanism.** `images/manifest.lock` still pins the `novadeck`
+  rows to their *sources* and `fetchlock.sh` still re-derives that hash from `packages/` — the store
+  changes neither, and a miss just means a local build. Making the lock verify these artifacts *by
+  byte* is a separate open item in `TODO.md`.
+- **The repo db is rebuilt locally, not shipped**, since it must describe whatever set the consumer
+  actually has. `repo-add` output is not byte-reproducible, so a pull-then-index yields a different
+  `novadeck.db` sha than the machine that built the packages — which advances `.overlay.stamp` and
+  so rebuilds the *base*. Cheap next to the compiles it skipped, and conservative in the right
+  direction, but it does mean `overlay-pull` is not completely free on a warm machine.
+
+`work/repo/<arch>/` remains a plain pacman repo, so the alternative of serving it over HTTP and
+repointing the `[novadeck]` `Server` still works; the store is preferred because it is
+content-addressed per package rather than a single mutable directory.
 
 ### How these packages are pinned — `inputhash.sh`
 

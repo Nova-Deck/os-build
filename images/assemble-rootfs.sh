@@ -539,16 +539,11 @@ EOF
   # Wi-Fi unaided after a novadeck-suspend thaw — HW-validated 2026-06-25, which is why the former
   # 50-nm-reup hook was dropped as moot.
 
-  # Enable services. /etc/machine-id is empty, so systemd runs preset-all on first boot and
-  # the stock 99-default.preset is "disable *"; ship a high-priority preset (70 < 99) so our
-  # units stay enabled, plus pre-create the symlinks as a build-time fallback. Only sshd is
-  # test-only here — NetworkManager is enabled for EVERY build in customize-base.sh (the gamepadui
-  # needs it on release too), so it is NOT re-enabled here; this block only adds the test creds.
-  install -d -m0755 "$stage/usr/lib/systemd/system-preset"
-  echo "enable sshd.service" >"$stage/usr/lib/systemd/system-preset/70-novadeck-test.preset"
-  install -d -m0755 "$stage/etc/systemd/system/multi-user.target.wants"
-  ln -sf /usr/lib/systemd/system/sshd.service \
-         "$stage/etc/systemd/system/multi-user.target.wants/sshd.service"
+  # sshd itself is NOT enabled here anymore: it ships always-on for EVERY build via the fs-overlay
+  # (60-novadeck-sshd.preset + the committed multi-user.target.wants/sshd.service symlink), because
+  # release remote access is key-only and a keyless sshd admits nobody. NetworkManager is likewise
+  # enabled for every build in customize-base.sh. So this block only adds the TEST credential
+  # below — the root key that gives the throwaway card a root@device login for bring-up.
 
   # HOST KEYS ARE DELIBERATELY *NOT* GENERATED HERE. This block used to run ssh-keygen into
   # $stage/etc/ssh, on the reasoning that "a read-only root cannot generate them at boot". That

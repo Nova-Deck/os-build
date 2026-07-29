@@ -10,27 +10,31 @@ WHY THIS EXISTS
 
 THE CONSENT MODEL — read this before changing anything here
     The listening socket is unauthenticated by construction: the whole point is to accept a key
-    from someone who has no credentials yet. What makes that safe is that the port only accepts
-    registrations during a short window that a human opens by flipping a switch in the on-screen
-    settings, while physically holding the device. Outside that window every registration is
-    refused. Physical presence is the credential.
+    from someone who has no credentials yet. What makes that safe is that the socket only exists
+    while this daemon runs, and this daemon runs only while a human has turned the on-screen
+    remote-access switch ON. Flipping the switch off stops the daemon and closes the port. The
+    switch is the credential, and because there is no time window the switch position the UI
+    shows is the honest truth about whether the device is accepting keys — turn it off once the
+    key is exchanged.
 
-    The window is measured from THIS PROCESS'S OWN START, which is why the toggle restarts the
-    service rather than signalling an already-running one: there is no stamp file to forge and
-    no clock to trust (CLOCK_MONOTONIC, so an NTP step or a dead RTC cannot widen it). The unit
-    is Restart=no and has no [Install] section, so a window can only ever be opened by a human
-    flipping the switch — never by a crash, and never by an unattended boot.
+    There is deliberately NO time window. An earlier design opened a bounded window measured from
+    process start; it was dropped because the switch and the window could disagree (the UI showed
+    "on" after the window had silently closed), and because the client re-asserts the switch
+    position at boot regardless — so a window bought no protection a switched-off daemon does not
+    already give. Accepting keys for exactly as long as the switch is on is both simpler and
+    truthful to the UI.
 
-    A second confirmation prompt drawn by the on-screen client is the intended future addition;
-    the client ships the entry points for it. It is not wired up here because it cannot be
-    verified without hardware, and a consent gate that has never been seen to draw is worse
-    than one whose behaviour is fully determined.
+    The unit has no [Install] section, so systemd never starts it on its own: it is started and
+    stopped only by the switch helper (steamos-polkit-helpers/steamos-devkit-mode). Leaving the
+    switch on does mean the client re-starts the daemon at the next boot — that is intended here,
+    since the UI still shows the switch on.
 
 WHAT IT GRANTS
-    An approved registration appends one key to the session user's authorized_keys and turns on
-    the SSH server. It never sets a password, never touches root's authorized_keys (which would
-    not survive a slot update anyway — /root is on the read-only root, the session user's home
-    is a partition of its own), and never grants anything a second registration could escalate.
+    An approved registration appends one key to the session user's authorized_keys. That is all:
+    sshd is already running (it ships enabled, key-only), so no port has to be opened here. It
+    never sets a password, never touches root's authorized_keys (which would not survive a slot
+    update anyway — /root is on the read-only root, the session user's home is a partition of its
+    own), and never grants anything a second registration could escalate.
 """
 
 import http.server
@@ -41,16 +45,10 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import time
 
 # The port and path the pairing tooling already speaks. Chosen for compatibility: it means a
 # user can register with nothing but curl, and the existing third-party GUI clients also work.
 SERVICE_PORT = 32000
-
-# How long a flip of the switch keeps registration open. Long enough to walk to another machine
-# and paste a command, short enough that a device left on a cafe network is not a standing
-# offer. Re-flip the switch to open another one.
-PAIRING_WINDOW_SECONDS = 300
 
 # The account remote access is granted to. uid 1000, and its home is the shared data partition,
 # so an installed key survives A/B updates untouched.
@@ -77,17 +75,6 @@ MAX_BODY_BYTES = 8 * 1024
 
 def log(msg):
     print(f"novadeck-pairingd: {msg}", file=sys.stderr, flush=True)
-
-
-# Captured at import, i.e. at process start. CLOCK_MONOTONIC counts from BOOT, not from us, so
-# the elapsed time has to be measured against this baseline — using it raw would leave the window
-# permanently shut on any device that has been up longer than PAIRING_WINDOW_SECONDS.
-_STARTED = time.monotonic()
-
-
-def window_remaining():
-    """Seconds left in the pairing window; <= 0 once it has closed."""
-    return PAIRING_WINDOW_SECONDS - (time.monotonic() - _STARTED)
 
 
 def parse_public_key(body):
@@ -183,20 +170,6 @@ def install_key(key_line):
     return True
 
 
-def enable_sshd():
-    """Turn on the SSH server. Runs as root, so it needs no polkit mediation."""
-    try:
-        subprocess.run(
-            ["systemctl", "enable", "--now", "sshd.service"],
-            check=True, stdout=subprocess.DEVNULL, timeout=60,
-        )
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as e:
-        log(f"cannot enable sshd: {e}")
-        return False
-    log("sshd enabled")
-    return True
-
-
 class PairingHandler(http.server.BaseHTTPRequestHandler):
     server_version = "novadeck-pairingd"
     sys_version = ""
@@ -219,9 +192,9 @@ class PairingHandler(http.server.BaseHTTPRequestHandler):
             self._respond(200, SESSION_USER + "\n")
             return
         if self.path == "/status":
-            remaining = max(0, int(window_remaining()))
-            self._respond(200, json.dumps({"pairing_open": remaining > 0,
-                                           "seconds_remaining": remaining}) + "\n",
+            # If this endpoint can be reached at all, the daemon is running, i.e. the switch is
+            # on and the device is accepting keys. There is no window, so nothing to count down.
+            self._respond(200, json.dumps({"pairing_open": True}) + "\n",
                           ctype="application/json")
             return
         self._respond(404, "not found\n")
@@ -229,16 +202,6 @@ class PairingHandler(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         if self.path != "/register":
             self._respond(404, "not found\n")
-            return
-
-        remaining = window_remaining()
-        if remaining <= 0:
-            # Refuse BEFORE reading the key. Nothing about a closed window should depend on
-            # what was submitted, and there is no reason to hold an unapproved key in memory.
-            log(f"registration refused from {self.client_address[0]}: pairing window closed")
-            self._respond(403, json.dumps(
-                {"error": "pairing window closed — turn remote access on again on the device"}
-            ) + "\n", ctype="application/json")
             return
 
         try:
@@ -257,10 +220,10 @@ class PairingHandler(http.server.BaseHTTPRequestHandler):
                           ctype="application/json")
             return
 
-        log(f"registration accepted from {self.client_address[0]} "
-            f"({int(remaining)}s left in window)")
+        log(f"registration accepted from {self.client_address[0]}")
 
-        if not install_key(key_line) or not enable_sshd():
+        # sshd already runs (it ships enabled, key-only), so installing the key is the whole job.
+        if not install_key(key_line):
             self._respond(500, json.dumps({"error": "failed to apply the key"}) + "\n",
                           ctype="application/json")
             return
@@ -273,6 +236,23 @@ class PairingServer(http.server.ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
+    def handle_error(self, request, client_address):
+        """Log a peer hanging up as one line instead of a stack trace.
+
+        This port is unauthenticated and internet-adjacent by design, so it gets scanned. A
+        scanner that connects and drops raises ConnectionResetError inside the handler thread,
+        and the default handler dumps a full traceback to stderr — i.e. into the journal, which
+        on a device with no shell and no serial console is the only debugging channel there is.
+        Drowning it in tracebacks from routine scans costs us the next real diagnosis. Faults
+        that are genuinely ours still get the traceback.
+        """
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (ConnectionResetError, BrokenPipeError,
+                            ConnectionAbortedError, TimeoutError)):
+            log(f"client {client_address[0]} disconnected: {type(exc).__name__}")
+            return
+        super().handle_error(request, client_address)
+
 
 def main():
     if os.geteuid() != 0:
@@ -284,10 +264,8 @@ def main():
         return 1
 
     server = PairingServer(("", SERVICE_PORT), PairingHandler)
-    log(f"listening on :{SERVICE_PORT}, pairing open for {PAIRING_WINDOW_SECONDS}s")
+    log(f"listening on :{SERVICE_PORT}, accepting keys until stopped")
     try:
-        # Serve past the window rather than exiting: a client that arrives late gets a clear
-        # 403 explaining how to re-open it, instead of a connection refused it cannot read.
         server.serve_forever(poll_interval=1.0)
     except KeyboardInterrupt:
         pass

@@ -1,23 +1,31 @@
 #!/usr/bin/bash
 # Remote-access switch. SteamUI's Settings > System > Developer page calls this by absolute
-# path (confirmed in the baked seed's steamui.so); it is the ONLY switch the shipped client
-# offers that maps onto remote access, so it is the switch we hang it off. Ships OFF: nothing
-# enables this at build time, and the agent it starts has no [Install] section to enable.
+# path (confirmed in the baked seed's steamui.so, and in the device journal); it is the ONLY
+# switch the shipped client offers that maps onto remote access, so it is the switch we hang it
+# off. It gates the key-delivery daemon, NOT the SSH server.
 #
-# ON  = open a pairing window. Flipping the switch is the physical confirmation that makes an
-#       unauthenticated pairing port safe to expose, so this RESTARTS the agent rather than
-#       merely starting it: a second flip must open a fresh window, not join the stale one
-#       (the window is measured from the agent's own start — see novadeck-pairingd).
-#       Turning it on grants nothing by itself. Until someone registers a key, sshd is not
-#       running and no account here has a password.
-# OFF = stop accepting keys AND close the port. A switch labelled off that left the SSH server
-#       running would be a lie. Already-installed keys are left in place, so turning it back on
-#       and pairing again is not required for a machine that paired before.
+# sshd itself ships ON and is never touched here (see 60-novadeck-sshd.preset). That is safe
+# because access is key-only: no account has a password and no key is baked, so a running sshd
+# with no authorized key admits nobody. The sensitive thing is the unauthenticated port that
+# ACCEPTS a key, and that is novadeck-pairingd, which is what this switch turns on and off.
+#
+# ON  = start the pairing daemon: it listens on :32000 and accepts one SSH public key, which it
+#       appends to deck's authorized_keys. There is no time window — it accepts keys for as long
+#       as it runs, so the switch position the UI shows is the honest truth about whether the
+#       device is accepting keys. Turn it off once the key is exchanged.
+# OFF = stop the daemon. The port closes and no more keys are accepted. Keys already installed
+#       are left in place (in deck's home, which survives A/B updates), so an already-paired
+#       machine keeps working and does not need to re-pair.
 #
 # The client tracks the switch position itself (no query verb is invoked and nothing in it
-# inspects unit state), so this only has to apply the change, not report it.
+# inspects unit state), so this only has to apply the change, not report it. Note the client
+# ALSO asserts the remembered position at session start, so leaving the switch on means the
+# daemon comes back up on boot — that is intended under this design (the UI says on, so it is on).
 #
-# Self-elevates for the same reason as steamos-enable-sshd; see that script's header.
+# Self-elevates through pkexec against a dedicated action declared in
+# /usr/share/polkit-1/actions/org.novadeck.policy, limited to an ACTIVE session.
+# --disable-internal-agent means an unauthorized caller fails outright instead of hanging on an
+# auth prompt that nothing in the gamepad session can draw.
 set -eu
 
 case "${1:-}" in
@@ -33,10 +41,7 @@ if [ "${EUID:-$(id -u)}" -ne 0 ]; then
 fi
 
 if [ "$action" = enable ]; then
-    exec systemctl restart novadeck-pairingd.service
+    exec systemctl start novadeck-pairingd.service
 fi
 
-# Order matters: stop accepting new keys before closing the door, so a registration cannot land
-# in the gap and re-enable sshd immediately after we disabled it.
-systemctl stop novadeck-pairingd.service
-exec systemctl disable --now sshd.service
+exec systemctl stop novadeck-pairingd.service

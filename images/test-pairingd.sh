@@ -5,16 +5,16 @@
 #   images/test-pairingd.sh
 #
 # WHY THIS FILE EXISTS. The pairing agent listens on an unauthenticated port and its answer to a
-# single POST decides whether a stranger on the same Wi-Fi gets a shell on the device. Two of its
-# guarantees are the kind that read as obviously true and fail silently: that a registration
-# arriving after the window is refused BEFORE anything is installed, and that a submitted line
-# cannot carry authorized_keys options (command=, permitopen=) that would turn "install a key"
-# into "install a forced command". Neither is observable on hardware without deliberately
-# attacking the device, so both are pinned here instead.
+# single POST decides whether a stranger on the same Wi-Fi gets a shell on the device. Its
+# sharpest guarantee is the kind that reads as obviously true and fails silently: a submitted
+# line cannot carry authorized_keys options (command=, permitopen=) that would turn "install a
+# key" into "install a forced command". That is not observable on hardware without deliberately
+# attacking the device, so it is pinned here instead. The design intentionally has NO time window
+# — the switch starts and stops the daemon, and the daemon accepts keys for exactly as long as it
+# runs — so the switch verbs and the daemon's structural guarantees are pinned here too.
 #
 # Everything runs on the host with no root and no device: the agent is imported by path and its
-# two privileged effects (writing another account's home, enabling a system unit) are replaced
-# with recorders, so the HTTP layer and the window arithmetic are exercised for real.
+# one privileged effect (writing another account's home) is exercised against a scratch home.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -31,7 +31,7 @@ for f in "$DAEMON" "$SWITCH" "$UNIT"; do
   [ -f "$f" ] || { echo "missing: $f" >&2; exit 1; }
 done
 
-# --- 1. the agent: key parsing, key install, window enforcement, HTTP surface ---------------------
+# --- 1. the agent: key parsing, key install, HTTP surface ----------------------------------------
 #
 # Driven from python because that is where the code is. The harness prints the same "ok"/"FAIL"
 # lines this script does and exits nonzero if any case failed, so the two tallies stay one report.
@@ -39,7 +39,10 @@ CASE="agent"
 if ! command -v ssh-keygen >/dev/null 2>&1; then
   skip "ssh-keygen not on PATH — cannot generate or validate test keys"
 else
-  agent_out="$(python3 - "$DAEMON" <<'PY'
+  # -B is load-bearing: importing the daemon by path writes __pycache__ NEXT TO IT, i.e. inside
+  # fs-overlay/usr/bin, which assemble-rootfs.sh copies wholesale into the image. Without this,
+  # running the tests silently bakes a stale .pyc of the pairing agent into the shipped rootfs.
+  agent_out="$(python3 -B - "$DAEMON" <<'PY'
 import importlib.machinery, importlib.util
 import json, os, pwd, stat, subprocess, sys, tempfile, threading, time
 import urllib.request, urllib.error
@@ -158,10 +161,7 @@ if len(lines) == 2 and KEY.split()[1] in lines[0] and KEY2.split()[1] in lines[1
 else:
     bad(f"append corrupted the file: {lines!r}")
 
-# --- HTTP surface + the window -------------------------------------------------------------------
-enabled = []
-pd.enable_sshd = lambda: (enabled.append(True), True)[1]
-
+# --- HTTP surface --------------------------------------------------------------------------------
 def serve():
     srv = pd.PairingServer(("127.0.0.1", 0), pd.PairingHandler)
     threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.05},
@@ -184,9 +184,11 @@ if code == 200 and body.strip() == pd.SESSION_USER:
 else:
     bad(f"GET /login-name returned {code} {body!r}")
 
+# There is no window: if the daemon answers at all, it is accepting keys, so /status is always
+# open. (A closed daemon is a closed port, which the client sees as connection-refused instead.)
 code, body = req(base + "/status")
 if code == 200 and json.loads(body)["pairing_open"] is True:
-    ok("GET /status reports the window open while it is")
+    ok("GET /status reports pairing open while the daemon runs")
 else:
     bad(f"GET /status returned {code} {body!r}")
 
@@ -198,20 +200,19 @@ else:
 
 os.remove(akeys)
 code, body = req(base + "/register", data=KEY.encode())
-if code == 200 and os.path.exists(akeys) and enabled:
-    ok("registration inside the window installs the key and enables sshd")
+if code == 200 and os.path.exists(akeys):
+    ok("a registration installs the key")
 else:
-    bad(f"in-window registration: {code} {body!r} installed={os.path.exists(akeys)} "
-        f"sshd_enabled={bool(enabled)}")
+    bad(f"registration: {code} {body!r} installed={os.path.exists(akeys)}")
 
-# An invalid key must not enable sshd, even inside the window: opening the port is a
-# consequence of a SUCCESSFUL pairing, never of an attempted one.
-enabled.clear()
+# A hostile line must install nothing — the key install is the only privileged effect now, so
+# "did it install?" is the whole question.
+os.remove(akeys) if os.path.exists(akeys) else None
 code, _ = req(base + "/register", data=b"command=\"/bin/sh\" " + KEY.encode())
-if code == 400 and not enabled:
-    ok("a rejected key inside the window does not enable sshd")
+if code == 400 and not os.path.exists(akeys):
+    ok("a rejected key installs nothing")
 else:
-    bad(f"rejected key still enabled sshd (code={code}, enabled={bool(enabled)})")
+    bad(f"rejected key still wrote a file (code={code}, installed={os.path.exists(akeys)})")
 
 code, _ = req(base + "/register", data=b"x" * (pd.MAX_BODY_BYTES + 1))
 if code == 400:
@@ -219,26 +220,6 @@ if code == 400:
 else:
     bad(f"oversized body returned {code}")
 
-srv.shutdown()
-
-# Now the closed window. Reaching back in monotonic time is the only honest way to test this
-# without sleeping for the real duration.
-pd.PAIRING_WINDOW_SECONDS = -1
-enabled.clear()
-os.remove(akeys)
-srv, base = serve()
-code, body = req(base + "/register", data=KEY.encode())
-if code == 403 and not os.path.exists(akeys) and not enabled:
-    ok("registration after the window is refused, installs nothing, enables nothing")
-else:
-    bad(f"post-window registration: {code} {body!r} installed={os.path.exists(akeys)} "
-        f"sshd_enabled={bool(enabled)}")
-
-code, body = req(base + "/status")
-if code == 200 and json.loads(body)["pairing_open"] is False:
-    ok("GET /status reports the window closed once it is")
-else:
-    bad(f"GET /status after window: {code} {body!r}")
 srv.shutdown()
 
 print(f"__TALLY__ {P} {F}")
@@ -293,51 +274,68 @@ EOF
     cat "$SB/calls"
   }
 
+  # The switch gates the pairing DAEMON, never sshd (which ships always-on, key-only). So each
+  # verb must touch novadeck-pairingd and nothing else — a stray `disable sshd` here would be the
+  # bug this pins against.
   calls="$(run_switch --enable)"
-  if [ "$calls" = "systemctl restart novadeck-pairingd.service" ]; then
-    ok "--enable restarts the agent (a second flip opens a FRESH window)"
+  if [ "$calls" = "systemctl start novadeck-pairingd.service" ]; then
+    ok "--enable starts the pairing daemon (and only that)"
   else
     bad "--enable ran: ${calls:-<nothing>}"
   fi
 
   calls="$(run_switch --disable)"
-  stopped="$(printf '%s\n' "$calls" | grep -c 'stop novadeck-pairingd')"
-  disabled="$(printf '%s\n' "$calls" | grep -c 'disable --now sshd')"
-  if [ "$stopped" -eq 1 ] && [ "$disabled" -eq 1 ]; then
-    ok "--disable stops the agent AND closes sshd"
+  if [ "$calls" = "systemctl stop novadeck-pairingd.service" ]; then
+    ok "--disable stops the pairing daemon (and does NOT touch sshd)"
   else
     bad "--disable ran: ${calls:-<nothing>}"
-  fi
-  # Ordering is load-bearing: a registration landing between the two would re-enable sshd
-  # immediately after we disabled it.
-  if [ "$(printf '%s\n' "$calls" | grep -n 'stop novadeck-pairingd' | cut -d: -f1)" = "1" ]; then
-    ok "--disable stops the agent BEFORE disabling sshd"
-  else
-    bad "--disable disabled sshd before stopping the agent"
   fi
   rm -rf "$SB"
 fi
 
 # --- 4. the unit: structural guarantees ----------------------------------------------------------
-#
-# Two properties the agent's own comments rely on but cannot enforce from inside itself.
 CASE="unit"
 if ! grep -q '^\[Install\]' "$UNIT"; then
-  ok "no [Install] section — the agent cannot be enabled at boot"
+  ok "no [Install] section — systemd cannot start the daemon on its own"
 else
-  bad "unit has [Install]: a device could boot straight into pairing mode"
+  bad "unit has [Install]: systemd could start pairing without the switch"
 fi
 
-if grep -qE '^Restart=no[[:space:]]*$' "$UNIT"; then
-  ok "Restart=no — a crash cannot silently re-open a pairing window"
+# Restart=on-failure keeps the running daemon matching the switch after a crash; a clean stop by
+# the switch helper is not a failure, so --disable still stops it for good. (The old Restart=no
+# existed only to protect a time window that no longer exists.)
+if grep -qE '^Restart=on-failure[[:space:]]*$' "$UNIT"; then
+  ok "Restart=on-failure — a crash does not leave the switch showing on with the port shut"
 else
-  bad "unit is restartable: a crash loop would keep re-opening the window"
+  bad "unit is not Restart=on-failure: a crash would silently drop pairing while the switch shows on"
 fi
 
 if grep -q '^ExecStopPost=.*rm -f /etc/avahi/services/' "$UNIT"; then
   ok "withdraws its network advertisement on stop"
 else
   bad "unit leaves its advertisement published after it stops"
+fi
+
+# The advertisement must never decide whether remote access works. It shipped once as a FATAL
+# ExecStartPre writing into /etc under ProtectSystem=full -- which mounts /etc read-only -- so
+# the install failed EROFS and took the entire pairing path down with it: port closed, on-screen
+# switch apparently dead, and no way to see why on a device with no shell and no serial console.
+# Both halves are asserted because either one alone would have prevented that.
+if grep -qE '^ExecStartPre=-' "$UNIT"; then
+  ok "publishing the advertisement is non-fatal — it cannot block pairing"
+else
+  bad "ExecStartPre is fatal: a failure to advertise would stop the agent starting at all"
+fi
+
+# ProtectSystem=full/strict makes /etc read-only, so anything the unit genuinely has to write
+# there needs an explicit carve-out. Without this the line above would silently degrade to
+# "mDNS never works" instead of failing loudly.
+if grep -qE '^ProtectSystem=(full|strict)' "$UNIT"; then
+  if grep -qE '^ReadWritePaths=-?/etc/avahi' "$UNIT"; then
+    ok "ProtectSystem=full is carved out for /etc/avahi so the advertisement can be written"
+  else
+    bad "ProtectSystem makes /etc read-only but nothing grants /etc/avahi: advertisement cannot be published"
+  fi
 fi
 
 printf '\n%s: %d passed, %d failed, %d skipped\n' "$(basename "$0")" "$PASS" "$FAIL" "$SKIP"

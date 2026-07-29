@@ -67,13 +67,27 @@ rationale lives in the linked memories and commit history.
   [[test-image-grow-and-networkd-gaps]]. NB `avahi-browse` on the dev workstation cannot verify any
   of this — see [[avahi-browse-dead-instrument]].
 
-- [ ] **Revisit "use a TEST-mode bundle so the trial boot keeps SSH"** — the release-bundle
-  playbook further down this file says a release bundle trial-boots headless and therefore is not
-  verifiable. That should no longer be true once the above is confirmed: `/home` is its own
-  partition and `post-install.sh` copies `/var` only, so a key in `/home/deck/.ssh` and an enabled
-  `sshd` (whose enable symlink lives in the `/etc` overlay upper, inside the per-slot `/var`) both
-  ride A→B. Confirm on the device, then rewrite that playbook to test a REAL release bundle.
-  Use `deck`, not `root` — `/root` is on the read-only root and does not survive the slot write.
+- [x] **A REAL release bundle IS verifiable on hardware — HW-VALIDATED 2026-07-29. Supersedes
+  "use a TEST-mode bundle so the trial boot keeps SSH".** The old premise — a release bundle
+  trial-boots headless, so it cannot be verified — is now false, because remote access no longer
+  depends on the slot: sshd ships always-on in every image and the paired key lives in
+  `/home/deck/.ssh`, its own partition. Proven end to end in one run:
+  `PKIDIR=$HOME/novadeck-pki make bundle` produced a 3.5G verity bundle signed by
+  `O = novadeck, CN = novadeck OTA release`; `rauc install` was driven **as `deck` over SSH on a
+  release image with no `sudo` on the box at all** (rauc's D-Bus service + polkit, no password
+  anywhere), and the DEVICE's own keyring verified the signature (`Verifying signature done` at
+  20%); the reboot came back on SSH in ~35s booted from `rootfs.1 (b)`, with the **host key
+  unchanged** (`SHA256:SqV+NzOd…d15pc` before and after) — so an OTA does NOT invalidate every
+  already-paired machine, which was the sharpest unknown here. The ESP slot state confirms it was
+  PROMOTED rather than merely booted: `STATE.0` is the newer record (`gen=9` > `gen=8`) and reads
+  `active=b pending= tries=0`, while the `gen=8` record preserves the armed mid-flight state
+  (`active=a pending=b`). Two traps for whoever reads this next: **`rauc status` alone cannot tell
+  promoted from still-on-trial** (it showed B `good` in both states — only the ESP state
+  distinguishes them), and **the STATE filename is not the slot** — `STATE.0` held slot B's record,
+  so `gen=` is the tiebreak, and reading `STATE.0` as "slot A" inverts the conclusion. `novadeck-bootctl
+  status` needs root to mount the ESP, so as `deck` it cannot answer this at all; read the card
+  offline or run it as root. Playbook below rewritten accordingly. Use `deck`, not `root` — `/root`
+  is on the read-only root and does not survive the slot write.
 
 - [x] **The ROLLBACK half of A/B — HW-VALIDATED 2026-07-29, both entry points, organic route.**
   Until this run every trial boot we had ever done SUCCEEDED and was promoted, so `tries` reaching
@@ -470,12 +484,21 @@ rationale lives in the linked memories and commit history.
   `images/rauc/verify-signing.sh` inside the BUILD container, so it asserts cert profile + bundle
   format + keyring agreement and never touches the device binary — the offline tree still cannot
   catch a device-side rauc regression, only a HW install can.
-  **Playbook for the next HW run** (unchanged, all of it still applies): sign with the real key
-  (`RAUC_CERT=out/pki/release.cert.pem RAUC_KEY=out/pki/release.key.pem make bundle`) —
-  `genbundle.sh` otherwise mints an *ephemeral dev cert* that the device keyring rejects on
-  signature, which reads as a rauc failure but is not one. Use a TEST-mode bundle so the trial boot
-  keeps SSH (a release bundle in slot B trial-boots headless on a board with no serial console). Run
-  `rauc info` before `rauc install` to separate version skew from the verity path under test.
+  **Playbook for the next HW run** (rewritten 2026-07-29 after the run above): sign with the real
+  key — `PKIDIR=$HOME/novadeck-pki make bundle`, NOT `RAUC_CERT=out/pki/...`, because the PKI moved
+  out of `out/pki` (see [[novadeck-pki-location]]) and is invisible to the container unless PKIDIR
+  mounts it. Without it `genbundle.sh` mints an *ephemeral dev cert* (7-day self-signed, deleted with
+  its tempdir) that the device keyring rejects on signature, which reads as a rauc failure but is not
+  one. **Test a REAL release bundle, not a TEST-mode one** — the old advice here is obsolete: a
+  release image keeps SSH through the trial boot on its own (always-on sshd + the key on `/home`),
+  which is what made the whole path verifiable. Run `rauc info` before `rauc install` to separate
+  version skew from the verity path under test — but note `rauc info --keyring <ca>` applies rauc's
+  DEFAULT purpose (`smimesign`, which accepts only emailProtection or no EKU) and therefore REJECTS
+  our codeSigning release cert with `unsuitable certificate purpose`. That is a false red: verify
+  through the shipped config instead, `rauc --conf=fs-overlay/etc/rauc/system.conf info <bundle>`
+  (`check-purpose=codesign`). Note also that `make bundle` does NOT verify its own output — rauc
+  logs `No keyring given, skipping signature verification` at creation — so a green `make` is not
+  evidence the bundle is validly signed.
 
 - [ ] **Adaptive (delta) bundles — every update writes the whole 7G slot today** — `[image.rootfs]`
   in `images/rauc/manifest.raucm.in` names `rootfs.img` and nothing else, so `rauc install` streams

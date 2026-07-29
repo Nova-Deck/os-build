@@ -11,14 +11,40 @@ Access is granted at runtime, by a person holding the device, and it is granted 
 1. On the device: **Settings → System → Enable Developer Mode**, then turn on the developer
    page's remote-access switch. That opens a **five-minute pairing window**. Turning the switch
    on grants nothing by itself: the SSH server is still not running.
-2. From the machine you want to connect *from*, within those five minutes:
+2. From the machine you want to connect *from*, within those five minutes.
+
+   Linux / macOS:
 
    ```sh
    curl -X POST --data-binary @~/.ssh/id_ed25519.pub http://<device>:32000/register
    ```
 
+   Windows — **`curl.exe`, not `curl`**. Windows has shipped real curl in `System32` since
+   Windows 10 1803, but in the default Windows PowerShell (5.1) the bare word `curl` is an
+   alias for `Invoke-WebRequest`, which takes different arguments and fails with a confusing
+   error. Spelling out the `.exe` bypasses the alias. There is no `~`, so use `$env:USERPROFILE`
+   (PowerShell) or `%USERPROFILE%` (cmd):
+
+   ```powershell
+   curl.exe -X POST --data-binary "@$env:USERPROFILE\.ssh\id_ed25519.pub" http://<device>:32000/register
+   ```
+
+   Or with no curl at all, using PowerShell's own client — `-InFile` sends the file's bytes
+   unmodified, which is what this needs:
+
+   ```powershell
+   Invoke-RestMethod -Method Post -Uri http://<device>:32000/register `
+     -InFile "$env:USERPROFILE\.ssh\id_ed25519.pub"
+   ```
+
+   Windows has also shipped the OpenSSH client since 1809, so `ssh-keygen` and `ssh` are
+   present and the key is in the usual place. If you have no key yet, `ssh-keygen -t ed25519`
+   works identically there. CRLF line endings in the key file are handled.
+
    `<device>` is the address shown in the on-screen network settings. While the window is open
-   the device also advertises itself over mDNS, so `novadeck.local` usually works too.
+   the device also advertises itself over mDNS, so `novadeck.local` usually works too — on
+   Windows that resolves natively on recent builds, and otherwise needs Bonjour installed, so
+   prefer the address if the name does not resolve.
 3. The key is appended to `deck`'s `authorized_keys`, the SSH server is switched on, and you can
    `ssh deck@<device>` from then on — no password, and no need to re-pair.
 

@@ -5,30 +5,67 @@ rationale lives in the linked memories and commit history.
 
 ## Open
 
-- [ ] **Remote access: HW-verify the switch, then wire the on-screen approval prompt** — the
-  pairing path landed on `feat/remote-access` (`novadeck-pairingd` + `steamos-devkit-mode` +
-  `org.novadeck.policy`, 34 offline cases in `images/test-pairingd.sh`). Two things could not be
-  checked without the device:
-  **(a) the switch's argument contract.** The shipped client calls
-  `/usr/bin/steamos-polkit-helpers/steamos-devkit-mode` — that path IS in our `steamui.so` — but
-  the `--enable`/`--disable` verbs are inferred from the equivalent helper on the reference
-  platform, because our client's string carries no format specifier. If it passes something else
-  the helper exits 22 and the switch looks dead with no other symptom. Check
-  `journalctl -u novadeck-pairingd` and the helper's own exit after flipping it. Also unverified:
-  that the Developer page renders the switch at all, and that `pkexec --disable-internal-agent`
-  authorizes against the new action (it fails hard rather than prompting, so a mis-declared
-  action also presents as a dead switch — `pkaction --action-id org.novadeck.policykit.devkit-mode`
-  on the device separates the two).
-  **(b) the pairing-approval prompt.** `steamui.so` carries `System.Devkit.RegisterForPairingPrompt`
-  / `RespondToPairingPrompt` and the `devkit approve-ssh-key` handler, so the client can draw a
-  confirmation dialog; the reference implementation drives it by writing
-  `devkit-1 steam://devkit-1/<token>/approve-ssh-key?response=<path>&request=<text>` into
-  `~/.steam/steam.pipe` and waiting up to 30s for a JSON response file. Deliberately NOT wired up
-  yet — consent currently rests entirely on the five-minute window opened by the physical switch,
-  which is fully determined and offline-testable, whereas a prompt nobody has seen draw is not.
-  Once (a) is confirmed, add the prompt as a SECOND factor on top of the window, not a
-  replacement for it: if the prompt silently never draws, a window-only fallback must still be
-  what happens. See [[release-ssh-devkit-toggle]] and `docs/remote-access.md`.
+- [x] **Remote access — (a) HW-VALIDATED 2026-07-29; (b) the approval prompt is INVESTIGATED AND
+  REJECTED, not deferred.** Shipped in `78982fe` (`novadeck-pairingd` + `steamos-devkit-mode` +
+  `org.novadeck.policy`, 34 offline cases in `images/test-pairingd.sh`).
+  **(a) the switch's argument contract — CONFIRMED on the device.** The Developer page does render
+  the switch, the client calls `/usr/bin/steamos-polkit-helpers/steamos-devkit-mode` with exactly
+  `--enable`/`--disable` (the verbs inferred from the reference platform were right), and `pkexec
+  --disable-internal-agent` authorizes against `org.novadeck.policykit.devkit-mode` without
+  prompting. All three follow from the daemon actually starting and stopping on the flip: ON opened
+  `:32000` in ~6s, OFF closed it in ~18s logging `Deactivated successfully`, with no exit-22
+  dead-switch symptom. The same run validated the whole path on a FRESH build: `:22` open on first
+  boot but `ssh deck@` refused (`publickey,password`) with no key installed, which is the core
+  safety claim of an always-on sshd; `command=`, `permitopen`, junk and `ssh-dss` registrations all
+  400 with nothing written; a real key pairs and logs in as `deck` (`.ssh` 0700, `authorized_keys`
+  0600); OFF withdraws the mDNS advert and leaves the installed key working, so an already-paired
+  machine is unaffected. Across a subsequent power cycle the installed key still logged in (it lives
+  in `/home/deck/.ssh`, its own partition) and `novadeck-pairingd` came back `inactive` — the switch
+  being off persists across a boot, so an unattended device does not resume accepting keys. **A latent blocker was found and fixed in that run:** the unit's
+  `ExecStartPre` wrote the avahi service file into `/etc` under `ProtectSystem=full` with no `-`
+  prefix — fatal EROFS, so the daemon had never started on ANY build and the switch would have
+  presented as dead. Now `ExecStartPre=-` + `ReadWritePaths=-/etc/avahi`, pinned in the offline
+  suite.
+  **(b) the pairing-approval prompt — NOT VIABLE by this route. Do not retry without a new idea.**
+  The mechanism was fully mapped on hardware (token = `~/.steam/steam.token`, 16 bytes mode 0400,
+  regenerated per boot; dispatch via the `~/.steam/steam.pipe` FIFO; response path must be
+  `/tmp/<subdir>/<file>`; requires the client in pairing mode via Settings→Developer→**Pair new
+  host**, which is `System.Devkit.SetPairing` and NOT the remote-access switch). Two blockers, the
+  second fatal: drawing the modal needs a JS prompt callback only Steam's own devkit view
+  registers, reachable only by CDP injection over the CEF debug port — brittle; and **the token is
+  readable by any process running as `deck`, i.e. every game, so a token-gated prompt is forgeable
+  by a running game** and adds no consent the switch does not already give. "Pair new host" has no
+  script hook at all (pressing it produced zero journal activity). A real prompt must be OUR OWN
+  gamescope overlay gated on something a game cannot supply — that is new work, not this item.
+  **Note the original text's premise is gone:** consent no longer rests on a five-minute window.
+  It was removed in `b6f67a6` because the UI switch and the window could disagree (the UI kept
+  showing "on" after the window had silently closed) and the client re-asserts the switch position
+  at session start anyway. Consent is now the switch position itself, which is why the daemon
+  accepts keys for exactly as long as it runs. See [[release-ssh-devkit-toggle]] and
+  `docs/remote-access.md`.
+
+- [ ] **The device runs at least THREE mDNS participants — decide who owns 5353.** Every
+  `avahi-daemon` start logs `*** WARNING: Detected another IPv4 mDNS stack running on this host ***`
+  (and the IPv6 twin); avahi itself calls this unreliable. Measured on the device 2026-07-29, so
+  this is not inference:
+  - `avahi-daemon` — active, and the one that publishes our `_steamos-devkit._tcp` pairing advert
+    (`Service "novadeck" ... successfully established`).
+  - `systemd-resolved` — active, with `Current Scopes: DNS LLMNR/IPv4 mDNS/IPv4`, i.e. its own
+    MulticastDNS responder is on.
+  - **`steamwebhelper`** — bound to `224.0.0.251:5353` (`ss -lunp`, pid 930). This one is the
+    surprise and it changes the fix: that is almost certainly Steam's own local-network discovery
+    (Remote Play), so "disable the other responder" is NOT safe advice — killing it may break
+    Remote Play. Whatever we turn off must be chosen with that in mind.
+  `ss` was run as `deck`, so only the `deck`-owned socket could be attributed; the remaining
+  `0.0.0.0:5353` and `*:5353` listeners are root-owned and were left unidentified. **Re-run
+  `ss -lunp | grep 5353` as root** to finish the census before changing anything. Not blocking:
+  discovery worked throughout the remote-access validation (`novadeck.local` resolves, pairing
+  endpoint reachable by name). But several responders answering for one name is a coin-flip we have
+  not characterised, and mDNS is how a user finds the device without reading an address off the
+  on-screen network settings. Likely landing: keep avahi as the publisher, turn off resolved's
+  MulticastDNS, leave Steam's alone. Same shape as the networkd/NM double-stack deadlock in
+  [[test-image-grow-and-networkd-gaps]]. NB `avahi-browse` on the dev workstation cannot verify any
+  of this — see [[avahi-browse-dead-instrument]].
 
 - [ ] **Revisit "use a TEST-mode bundle so the trial boot keeps SSH"** — the release-bundle
   playbook further down this file says a release bundle trial-boots headless and therefore is not

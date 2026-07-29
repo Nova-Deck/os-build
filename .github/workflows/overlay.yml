@@ -255,9 +255,12 @@ jobs:
     if: ${{ !cancelled() && github.ref == 'refs/heads/main' && needs.verify.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # GITHUB_TOKEN needs contents:write and nothing else: it pushes the branch (via the credential
+    # actions/checkout leaves behind) and never touches the PR. Deliberately NO pull-requests:write —
+    # the PR is opened with PIN_BUMP_PAT below, so granting it here would be a permission nothing
+    # uses, which is indistinguishable from one something quietly does.
     permissions:
       contents: write
-      pull-requests: write
     steps:
       - uses: actions/checkout@v4
 
@@ -297,14 +300,38 @@ jobs:
       # gh(1) rather than a marketplace action, for the same reason packages/overlay-store.sh
       # fetches a pinned oras instead of using one: an unpinned third-party action in the job that
       # holds the write token is exactly the dependency this change exists to stop having.
+      #
+      # WHY A PAT OPENS THE PR AND GITHUB_TOKEN PUSHES THE BRANCH. GITHUB_TOKEN cannot create a PR
+      # unless the ORG enables "Allow GitHub Actions to create and approve pull requests" — and that
+      # single switch cannot be narrowed: it is org-wide, it covers every repo under the org, and it
+      # grants APPROVE alongside create, so any workflow anywhere in the org could satisfy a
+      # required-review branch protection by itself. Trading that for one PR in one repo is a bad
+      # exchange, especially for a mechanism whose entire premise is that a HUMAN reviewed the pins.
+      #
+      # The PAT is scoped to this repo and to pull-requests only, and it is used for exactly one
+      # command. It buys a second thing we want: a PR opened by GITHUB_TOKEN does not trigger other
+      # workflows, so the pin PR arrived with no checks on it. A PAT-opened PR runs `ci` normally.
+      #
+      # git push deliberately does NOT use it — that keeps the strongest credential off the
+      # operation that writes to the repo, and out of any git config a later step could read.
       - name: open or update the PR
         if: steps.apply.outputs.changed == 'true'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.PIN_BUMP_PAT }}
           BRANCH: ci/artifact-pins
           SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
+          # FAIL, DO NOT SKIP. A missing secret must not degrade to "pushed the branch, opened
+          # nothing" — that is the same silent-success failure this job has now had twice (an
+          # inherited skip, then a diff blind to untracked files). If the PR is the mechanism, its
+          # absence is an error.
+          [ -n "${GH_TOKEN:-}" ] || {
+            echo "::error::secret PIN_BUMP_PAT is not set — cannot open the pin-bump PR." \
+                 "Create a fine-grained PAT (this repo only, Pull requests: read+write) and add it" \
+                 "as the PIN_BUMP_PAT repository secret."
+            exit 1
+          }
           git config user.name  'novadeck-ci'
           git config user.email 'novadeck-ci@users.noreply.github.com'
           git checkout -B "$BRANCH"

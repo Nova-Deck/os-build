@@ -20,7 +20,27 @@ Triggered by a change to any overlay input (`packages/*/source.pin`, its patches
 | `plan` | x86 | `overlay-store.sh plan` — the input hash of every package, against what the store already holds. Emits the build matrix. |
 | `build` | `ubuntu-24.04-arm` | one job per *missing* package: `build-overlay.sh --only <pkg> --no-index`, then publish |
 | `verify` | `ubuntu-24.04-arm` | `make overlay-pull && make overlay` on a clean workspace, asserting **zero compiles**, a real repo db, and that `fetchlock.sh` still verifies the untouched lock |
+| `pin-bump` | x86 | `main` only: applies the pins `verify` recorded and opens the **pin-bump PR**. Needs a `PIN_BUMP_PAT` secret and **fails without one** |
 | `prune` | x86 | optional housekeeping; needs a `GHCR_PRUNE_TOKEN` PAT, announces itself as skipped without one |
+
+The two PATs are deliberately opposite about a missing secret. `prune` is housekeeping on packages
+nothing meters, so it announces itself as skipped and lets the run pass. `pin-bump` *is* the
+provenance mechanism, so an absent secret is an error — the failure mode to avoid is a green job that
+pushed a branch and opened nothing, which this job has already produced twice (an inherited job skip,
+then a `git diff` blind to untracked files).
+
+`PIN_BUMP_PAT` should be a fine-grained PAT scoped to **this repo only**, with **Pull requests:
+read+write** and nothing else; it is used for the single `gh pr create` call. The branch push uses
+`GITHUB_TOKEN` (`contents: write`), so the stronger credential never touches the operation that
+writes to the repo. The alternative — letting `GITHUB_TOKEN` open the PR — requires the *organisation*
+setting "Allow GitHub Actions to create and approve pull requests", which cannot be narrowed: it is
+org-wide, covers every repo, and grants **approve** as well as create, so any workflow in the org
+could satisfy a required-review branch protection on its own. For a mechanism whose whole premise is
+that a human reviewed the pins, that is the wrong trade. It also has a practical cost: a PR opened by
+`GITHUB_TOKEN` triggers no workflows, so the pin PR arrives with no checks. A PAT-opened one runs `ci`.
+
+A fine-grained PAT expires. When it does, `pin-bump` fails loudly on the next `main` run that changes
+a pin — which is the intended behaviour, but budget for the renewal rather than being surprised by it.
 
 Three properties this leans on:
 

@@ -1,0 +1,149 @@
+# novadeck image builder — the shared rootfs stage behind every RELEASE artifact.
+#
+# workflow_call only: this builds nothing on its own schedule. .github/workflows/release-sdcard.yml
+# and release-bundle.yml call it on their own triggers, which is the whole reason it exists — the two
+# artifacts are wanted at different cadences (a card is for flashing a device from scratch, a bundle
+# is for updating one already in the field) and neither should have to wait on the other.
+#
+# WHY CI IS THE ONLY PRODUCER OF A RELEASE IMAGE. A release build requires reviewed artifact pins
+# (packages/*/artifact.pin, enforced by packages/verify-pins.sh through the Makefile's PINNED gate).
+# Locally built overlay packages will never match a published sha — our builds are not
+# bit-reproducible — so a developer cannot produce a release image even by accident, and does not
+# need to: `NOVADECK_DEV=1 make sdcard` is the dev path and is unaffected by any of this.
+#
+# THE EXPENSIVE PART IS ALREADY PAID. overlay.yml publishes every from-source package to GHCR keyed
+# by packages/inputhash.sh, so `overlay-pull --require-all` reconstitutes work/repo with ZERO
+# compiles. --require-all rather than a best-effort pull: on a release runner a miss must be a red
+# build, not a silent four-hour fallback into compiling fex-emu under emulation.
+name: image
+
+on:
+  workflow_call:
+    inputs:
+      artifact:
+        description: 'Which release artifact to produce: sdcard | bundle'
+        required: true
+        type: string
+      version:
+        description: 'VERSION passed to the bundle (ignored for sdcard)'
+        required: false
+        type: string
+        default: ''
+    secrets:
+      # Only the bundle path needs these, and only when signing with the real release key. Absent,
+      # genbundle.sh mints an ephemeral dev cert — fine for a smoke test, NOT a shippable update.
+      RAUC_CERT_PEM:
+        required: false
+      RAUC_KEY_PEM:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ inputs.artifact }}
+    runs-on: ${{ vars.OVERLAY_RUNNER || 'ubuntu-24.04-arm' }}
+    # The overlay is pulled rather than built, but the base bootstrap and the rootfs assembly are
+    # still real work under docker.
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: validate the requested artifact
+        env:
+          ARTIFACT: ${{ inputs.artifact }}
+        run: |
+          set -euo pipefail
+          case "$ARTIFACT" in
+            sdcard|bundle) ;;
+            *) echo "::error::artifact must be sdcard or bundle, got '$ARTIFACT'"; exit 1 ;;
+          esac
+
+      # Same cache as overlay.yml's verify job and for the same reason: fetchlock verifies EVERY row,
+      # so a cold runner downloads ~382 snapshot packages (~700MB). These are third-party bytes
+      # pinned by a sha256 in the lock, so a miss re-downloads and re-verifies — slow, never wrong.
+      - uses: actions/cache@v4
+        with:
+          path: work/pacman-cache
+          key: pacman-cache-${{ hashFiles('snapshot.pin', 'images/manifest.lock') }}
+          restore-keys: pacman-cache-
+
+      - name: retrieve overlay packages from the store (no credentials)
+        run: packages/overlay-store.sh pull-all --require-all
+
+      - name: assemble the overlay repo
+        run: make overlay
+
+      # Explicit, ahead of the build, so a pin problem is the FIRST thing this job reports rather
+      # than something discovered 40 minutes in. The Makefile gates the base on this too (order-only
+      # on $(BASE_STAMP)), so this is belt-and-braces — but it is the check most likely to fail on a
+      # normal day, when sources moved and the pin-bump PR has not merged yet.
+      - name: verify artifact pins (release gate)
+        run: make verify-pins
+
+      - name: build the toolchain image
+        run: make toolchain
+
+      # No NOVADECK_DEV: this is a release build by construction, which is what makes the pin gate
+      # apply. Setting it here would silently produce a dev image with Wi-Fi creds baked in.
+      - name: build ${{ inputs.artifact }}
+        env:
+          ARTIFACT: ${{ inputs.artifact }}
+          VERSION: ${{ inputs.version }}
+          RAUC_CERT_PEM: ${{ secrets.RAUC_CERT_PEM }}
+          RAUC_KEY_PEM: ${{ secrets.RAUC_KEY_PEM }}
+        run: |
+          set -euo pipefail
+          if [ "$ARTIFACT" = bundle ]; then
+            # $RUNNER_TEMP, never the workspace — the repo tree gets uploaded as artifacts and
+            # cached, and a private key that lands in either is a leaked key. This is the convention
+            # ci/README.md already set for this secret; it also mirrors how PKIDIR works locally
+            # (~/novadeck-pki), i.e. outside anything the build can sweep up.
+            if [ -n "${RAUC_CERT_PEM:-}" ] && [ -n "${RAUC_KEY_PEM:-}" ]; then
+              pki="$RUNNER_TEMP/pki"
+              mkdir -p "$pki" && chmod 700 "$pki"
+              printf '%s' "$RAUC_CERT_PEM" > "$pki/release.cert.pem"
+              printf '%s' "$RAUC_KEY_PEM"  > "$pki/release.key.pem"
+              chmod 600 "$pki/release.key.pem"
+              make bundle PKIDIR="$pki"
+            else
+              echo "::warning::no release signing key configured — this bundle is signed with an ephemeral dev cert and is NOT shippable"
+              make bundle
+            fi
+          else
+            make sdcard
+          fi
+
+      # Compress the card: an sdcard.img is mostly empty space and uploading it raw is minutes of
+      # nothing. The bundle is already a compressed squashfs, so it is uploaded as-is.
+      - name: package the output
+        env:
+          ARTIFACT: ${{ inputs.artifact }}
+        run: |
+          set -euo pipefail
+          mkdir -p upload
+          if [ "$ARTIFACT" = sdcard ]; then
+            zstd -T0 -19 -o upload/sdcard.img.zst out/images/sdcard.img
+          else
+            cp out/images/*.raucb upload/
+          fi
+          ls -l upload/ >> "$GITHUB_STEP_SUMMARY"
+
+      # The pins the image was actually built against, carried alongside it. Without this an
+      # artifact months old cannot be traced to the bytes it installed. One directory level per
+      # package: every pin is named artifact.pin, so a flat copy would silently keep only the last.
+      - name: record what went in
+        run: |
+          set -euo pipefail
+          mkdir -p upload/provenance/pins
+          cp images/manifest.lock upload/provenance/
+          for f in packages/*/artifact.pin; do
+            cp "$f" "upload/provenance/pins/$(basename "$(dirname "$f")").pin"
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: novadeck-${{ inputs.artifact }}
+          path: upload/
+          if-no-files-found: error

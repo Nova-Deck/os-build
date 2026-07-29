@@ -41,10 +41,10 @@ fi
   || echo "  (firmware manifest verify reported gaps — review above before flashing)"
 
 # 4. assemble the read-only Btrfs root. Forward the TEST-ONLY credential env (a no-op
-# unless NOVADECK_TEST=1) so a test card can carry Wi-Fi + SSH creds; see assemble-rootfs.sh.
+# unless NOVADECK_DEV=1) so a dev card can carry Wi-Fi + SSH creds; see assemble-rootfs.sh.
 # Env flags must precede the image name, so spell this docker run out rather than reuse DK.
 docker run --rm -v "$ROOT":/src -w /src \
-  -e NOVADECK_TEST -e NOVADECK_WIFI_SSID -e NOVADECK_WIFI_PSK -e NOVADECK_SSH_PUBKEY \
+  -e NOVADECK_DEV -e NOVADECK_WIFI_SSID -e NOVADECK_WIFI_PSK -e NOVADECK_SSH_PUBKEY \
   -e NOVADECK_DEBUG \
   novadeck-build images/assemble-rootfs.sh "$BASE_CTR"
 

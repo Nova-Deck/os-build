@@ -23,10 +23,13 @@
 # pipeline and its packages get built when the change merges. Same reason there is no
 # pull_request trigger for branches in this repo: it would build every commit twice.
 #
-# THIS IS A CACHE, NOT A PROVENANCE MECHANISM. images/manifest.lock still pins the `novadeck` rows
-# to their sources and images/fetchlock.sh still re-derives that hash from packages/ — neither is
-# touched here, and a pull miss falls back to compiling. Making the lock verify these artifacts by
-# BYTE is the separate, still-open TODO item; this lands the store that step will consume.
+# THE STORE IS A CACHE; THE PIN-BUMP PR IS THE PROVENANCE MECHANISM. images/manifest.lock still
+# pins the `novadeck` rows to their sources and images/fetchlock.sh still re-derives that hash from
+# packages/ — neither is touched here, and a pull miss falls back to compiling. What closes the byte
+# gap is the `pin-bump` job below: it opens a PR carrying each published artifact's sha256 into
+# packages/*/artifact.pin, and packages/verify-pins.sh then refuses a RELEASE build whose bytes
+# disagree. `oras pull` verifying a registry digest was never the same claim — that says "I got what
+# the registry holds", not "this is what a reviewer approved".
 name: overlay packages
 
 on:
@@ -207,6 +210,102 @@ jobs:
       # a bumped pkgver with a stale lock fails here and nowhere else.
       - name: lock still verifies against the pulled repo
         run: images/fetchlock.sh /tmp/install-list && wc -l < /tmp/install-list
+
+      # THE BYTE CLAIM. Everything above proves these artifacts came from the reviewed SOURCES;
+      # this records what those sources actually produced, so a release build can verify the BYTES
+      # (packages/verify-pins.sh). Written HERE rather than in its own job because this is the job
+      # that already holds a complete, store-pulled repo — recomputing that elsewhere would be a
+      # second chance to disagree about which bytes we mean.
+      #
+      # These are the STORE's bytes, not this runner's: the pull above fetched them and nothing
+      # since has rebuilt anything (the no-compile assertion is what guarantees that).
+      - name: record artifact pins
+        run: packages/verify-pins.sh --write
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: artifact-pins
+          path: packages/*/artifact.pin
+          if-no-files-found: error
+
+  # Open a PR carrying the new pins. A SEPARATE job because it is the only one here that can write
+  # to the repo, and it deliberately does no building, no pulling and no network fetching beyond
+  # git — the smallest possible surface holding a write token.
+  #
+  # THE REVIEW OF THIS PR *IS* THE PROVENANCE CLAIM. verify-pins.sh proves the bytes match these
+  # pins; it cannot prove anyone looked. Auto-merging this would reduce the whole mechanism to
+  # "CI published what CI published", so it opens a PR and stops.
+  pin-bump:
+    name: open the pin-bump PR
+    needs: verify
+    if: github.ref == 'refs/heads/main' && needs.verify.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: artifact-pins
+          path: pins
+
+      # Move them into place, then let git decide whether anything actually moved. An unchanged
+      # publish (a re-run, a rebase, a merge of already-built sources) must produce no PR at all
+      # rather than an empty one.
+      - id: apply
+        run: |
+          set -euo pipefail
+          # Nested one level under pins/, mirroring packages/<name>/artifact.pin.
+          for f in pins/*/artifact.pin; do
+            d="packages/$(basename "$(dirname "$f")")"
+            [ -d "$d" ] || { echo "::error::no such package dir: $d"; exit 1; }
+            cp "$f" "$d/artifact.pin"
+          done
+          rm -rf pins
+          if git diff --quiet -- 'packages/*/artifact.pin'; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "artifact pins unchanged — no PR needed" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            git diff --stat -- 'packages/*/artifact.pin' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # gh(1) rather than a marketplace action, for the same reason packages/overlay-store.sh
+      # fetches a pinned oras instead of using one: an unpinned third-party action in the job that
+      # holds the write token is exactly the dependency this change exists to stop having.
+      - name: open or update the PR
+        if: steps.apply.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BRANCH: ci/artifact-pins
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git config user.name  'novadeck-ci'
+          git config user.email 'novadeck-ci@users.noreply.github.com'
+          git checkout -B "$BRANCH"
+          git add -- 'packages/*/artifact.pin'
+          git commit -m "chore(pins): record overlay artifact sha256s
+
+          Published from ${SHA}. These are the bytes a release build will verify
+          (packages/verify-pins.sh); reviewing this diff is what makes them accountable."
+          # Force-push: the branch is a rolling proposal, not history. A superseded pin set is
+          # never something to merge later.
+          git push --force origin "$BRANCH"
+          gh pr view "$BRANCH" --json state --jq .state 2>/dev/null | grep -qx OPEN \
+            || gh pr create --base main --head "$BRANCH" \
+                 --title 'chore(pins): record overlay artifact sha256s' \
+                 --body 'Generated by `.github/workflows/overlay.yml` after publishing to the overlay store.
+
+          Each `artifact:` line is the sha256 of a package the release image installs. `packages/verify-pins.sh`
+          refuses a release build whose bytes do not match these, so **merging this is the point at which
+          those bytes become trusted** — the check proves they match, not that they are right.
+
+          `inputhash:` ties each pin to the sources that produced it; a mismatch there is reported as a
+          stale pin rather than as a byte mismatch.'
 
   # Housekeeping only. Public packages are not metered, so this is about keeping the namespace
   # readable rather than staying inside a quota — hence a generous retention: an old input hash is

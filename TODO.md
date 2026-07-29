@@ -430,12 +430,12 @@ rationale lives in the linked memories and commit history.
 
 - [x] **`$(BASE_STAMP)` was not mode-scoped — a test-built base could feed a release build — FIXED
   2026-07-28** — found the same day, building a RAUC bundle right after a
-  `NOVADECK_TEST=1 make sdcard`. `MODE_STAMP`
-  (`Makefile:69`, `work/.rootfs-mode-$(ROOTFS_MODE)`) exists precisely so flipping `NOVADECK_TEST`
+  `NOVADECK_DEV=1 make sdcard`. `MODE_STAMP`
+  (`Makefile:69`, `work/.rootfs-mode-$(ROOTFS_MODE)`) exists precisely so flipping `NOVADECK_DEV`
   rebuilds the **rootfs** — its comment records the boot cycle that cost on 2026-07-09. `$(BASE_STAMP)`
   (`Makefile:127`, rule at `305`) had no equivalent: every prerequisite was a file, none encoded the
-  mode, so a base carrying `TEST_PKGS` looked up-to-date to a release build. `customize-base.sh` is
-  *already* mode-aware (`242` adds `TEST_PKGS`, `306` folds mode into the reuse key) — make
+  mode, so a base carrying `DEV_PKGS` looked up-to-date to a release build. `customize-base.sh` is
+  *already* mode-aware (`242` adds `DEV_PKGS`, `306` folds mode into the reuse key) — make
   simply never invokes it, so that logic is unreachable in the exact case it was written for.
   **Caught, but only in one direction:** the release guard failed with `only in tree: evtest-1.36-1 /
   usbutils-019-1` against `manifest.lock`, so nothing shipped. The reverse — a release base feeding a
@@ -625,9 +625,56 @@ rationale lives in the linked memories and commit history.
   `work/repo` can substitute one — in exchange for a provenance claim that survives crossing a machine.
   See [[rootfs-build-approach]], [[overlay-package-pipeline]].
 
-- [ ] **Publish overlay builds as sha-pinned `prebuilt` rows — COST HALF LANDED 2026-07-29, byte claim
-  still open** — successor to the item above, which fixed the *correctness* half. Two halves, and only
-  one is done.
+- [x] **Byte-pin overlay artifacts + dev/release split — LANDED 2026-07-30, HW-validation pending** —
+  successor to the item above, which fixed the *correctness* half. Both halves are now done, but NOT
+  the way this item originally proposed.
+  **What shipped instead of `prebuilt` rows.** The plan below said "promote these to the `prebuilt`
+  class". That is unbuildable: `prebuilt` rows are not pacman installs at all — `fetchlock.sh:168`
+  skips them and `customize-base.sh` stages them as tarballs from `packages/*/prebuilt.pin`. Overlay
+  packages are real `pacman -U` inputs. Extending the lock was rejected for a second reason:
+  `fetchlock.sh` reads rows with a 5-field positional `read`, and `genmanifest.sh:142` already refuses
+  to put an artifact sha in that column because it would produce "a lock that verifies differently
+  depending on which script wrote it". So the byte claim went into its own file with its own lifetime:
+  **`packages/<name>/artifact.pin`** (`name` + `inputhash` + one `artifact:` line per shipped
+  artifact, 8 pins covering 10 installed rows — mesa contributes 3 of the 5 it builds), enforced by
+  **`packages/verify-pins.sh`**. The lock still answers "built from the reviewed SOURCES?" on every
+  machine; the pin answers "are these the reviewed BYTES?" and only for release. Two questions, two
+  files, neither overloaded.
+  **The gate is `ROOTFS_MODE=release`, with no opt-in knob** — `PINNED` in the Makefile, wired as an
+  **order-only** prerequisite of `$(BASE_STAMP)`. Order-only is load-bearing, not stylistic: a phony
+  target in the normal position is perpetually newer than the stamp and would rebuild the base on
+  every release `make` (verified: with the overlay current, `customize-base.sh` appears 0 times and
+  the gate still runs). Gating the base rather than the image targets puts the check *before* the
+  install; checking `work/repo` is sound because `$(OVERLAY_STAMP)` already keys off `sha256sum
+  $(OVERLAY_DB)`, so a substitution there rebuilds the base anyway. A knob was rejected: a gate only
+  CI remembers to set is a gate that rots.
+  **Consequence, accepted deliberately: a release image can only be built by CI.** Locally built
+  bytes will never match a published sha, so `make sdcard` on a dev box now fails the gate. This
+  **replaces the plain-release OOBE workflow** — verifying OOBE means flashing what
+  `release-sdcard.yml` produces. That is the one thing here still needing a hardware pass.
+  **`NOVADECK_TEST` → `NOVADECK_DEV`, mode string `test` → `dev`, marker `test:1` → `dev:1`** — the
+  name dated from the first Steam OOBE debugging and mislabelled what is now the ordinary dev cycle.
+  Renamed with this change because both turn on the same distinction: who built these bytes. The three
+  marker readers (`Makefile:380`, `genmanifest.sh:65`, `customize-base.sh:308`) had to move together;
+  it self-heals because the *marker filename* changes, so the mode stamp is newer than the base stamp
+  and the assertion runs after the rebuild. `test.pkgs` → `dev.pkgs`. The local gitignored
+  credentials file was renamed to `dev-wifi.env` (`.gitignore` updated) — done 2026-07-30. Note a
+  stale copy is no longer a silent failure: `NOVADECK_TEST=1` now falls through to `release`, which
+  fails the pin gate loudly instead of shipping a release root in a dev card (the 2026-07-09 footgun).
+  **CI: `image.yml` (`workflow_call`) + `release-sdcard.yml` + `release-bundle.yml`**, so the rootfs
+  recipe exists once and the two artifacts keep independent cadences. `overlay.yml` gained a
+  `pin-bump` job — a separate job because it is the only one holding a write token — that opens a PR
+  carrying the new shas, using `gh` rather than a marketplace action for the same reason
+  `overlay-store.sh` pins its own `oras`. **The review of that PR is where trust enters**; the check
+  proves the bytes match the pins, never that anyone looked.
+  **STILL OPEN: bundle signing.** `release-bundle.yml` builds an unsigned dev-cert bundle — a real
+  smoke test (it assembles, verity hashes compute, the pin gate passes) that every device rejects.
+  `image.yml` accepts `RAUC_CERT_PEM`/`RAUC_KEY_PEM` and warns loudly when absent. What is undecided
+  is whether the release private key belongs in GitHub at all; the file documents the four steps
+  (protected environment with required reviewers, secrets on that environment, an `environment` input
+  on `image.yml`'s build job, `secrets: inherit`) rather than guessing at a root-of-trust decision.
+  Also unverified: whether an empty `environment` value means "no environment" for the sdcard path.
+  Original framing, kept because the reasoning still holds:
   **DONE: the package pipeline and the store.** `.github/workflows/overlay.yml` +
   `packages/overlay-store.sh` build each from-source package once and publish it to
   `ghcr.io/nova-deck/novadeck-overlay/<name>-aarch64:<inputhash>`, on native `ubuntu-24.04-arm`
@@ -767,7 +814,7 @@ rationale lives in the linked memories and commit history.
   Cheap inspection, no reboot needed: `mount -o ro /dev/mmcblk0p7 /run/varb` from the running slot
   and read the other slot's `/var` directly — that is how B's empty overlay was confirmed *before*
   the switch. Second reason pass 1 could not exercise this: the TEST image injects Wi-Fi into the
-  shared rootfs, not the per-slot `/etc` overlay, so a `NOVADECK_TEST=1` card cannot reproduce "the
+  shared rootfs, not the per-slot `/etc` overlay, so a `NOVADECK_DEV=1` card cannot reproduce "the
   other slot has no saved Wi-Fi" at all. Validate the hook on a RELEASE image — same trap as the
   OOBE work. Leftover from this test: slot B's `/var` now permanently holds `d0c69c85…` /
   `7a:9e:e0:c4:52:04`, so wipe `/var/lib/novadeck/mac-wifi` on B before any test expecting clean
@@ -800,7 +847,7 @@ rationale lives in the linked memories and commit history.
   — proving the seed chain finally falls through to machine-id instead of losing to a baked value.
   Survives reboot unchanged (`boot_id` confirmed changed; zero first-boot lines on the second boot).
   **Two caveats that remain true:** (1) guard assertion 6 is **release-only**, so on a
-  `NOVADECK_TEST=1` card `assemble-rootfs.sh` skips it entirely and the image must be checked by
+  `NOVADECK_DEV=1` card `assemble-rootfs.sh` skips it entirely and the image must be checked by
   hand — the §4y removal itself is unconditional, which is what makes a test card correct anyway;
   (2) **already-flashed devices are NOT repaired** — `gen-mac.sh` persisted the derived address
   write-once to `/var/lib/novadeck/mac-wifi` and prefers it forever, so an existing unit keeps the
@@ -1111,7 +1158,7 @@ rationale lives in the linked memories and commit history.
   `etc/pacman.d`), with the DB preserved as provenance at `/usr/lib/novadeck/pkgdb`. **FILE REMOVAL,
   not `pacman -R`** — these are deps of the `base` metapackage, so a removal transaction is refused;
   that is why the set is a hand-reviewed declaration rather than a derivation. Nothing is stripped
-  under `NOVADECK_TEST=1` (on-device pacman is a real bring-up affordance; divergence confined to
+  under `NOVADECK_DEV=1` (on-device pacman is a real bring-up affordance; divergence confined to
   tooling). This killed the ~90s "stop job … GnuPG network certificate management daemon" stall by
   deleting the daemon instead of masking it — HW-confirmed, and it supersedes
   [[dirmngr-slow-shutdown-defer-phase4]]'s "defer, do not patch". The *other* ~90s cause

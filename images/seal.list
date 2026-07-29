@@ -28,7 +28,7 @@
 # with pacman itself. The target is the package-manager RUNTIME and the daemons it drags in,
 # not every transitive dependency.
 #
-# Under NOVADECK_TEST=1 nothing here is removed — on-device pacman is a genuine bring-up
+# Under NOVADECK_DEV=1 nothing here is removed — on-device pacman is a genuine bring-up
 # affordance and the divergence is confined to tooling. The step-4 guard runs against the
 # RELEASE tree.
 

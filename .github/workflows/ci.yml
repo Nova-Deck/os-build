@@ -1,23 +1,21 @@
 # novadeck CI — the offline suites. See also .github/workflows/overlay.yml (the package pipeline).
 #
-# WHAT IS DELIBERATELY NOT HERE: the image build — but no longer because it CANNOT run. Both of the
-# old blockers are gone. The lock used to pin the overlay rows to artifact bytes our
-# non-reproducible builds could not reproduce, so images/fetchlock.sh refused the install on every
-# run; it now pins them to their SOURCES (packages/inputhash.sh), so a clean runner verifies exactly
-# like the machine that wrote the lock. And a clean runner no longer has to spend ~4h compiling the
-# overlay under emulation: overlay.yml publishes those packages keyed by that same input hash, and
-# `make overlay-pull` retrieves them. What is left is finding out what the REST of the image build
-# costs on a runner, which is ordinary work rather than a hard block. See ci/README.md.
+# WHERE THE IMAGE BUILD LIVES: .github/workflows/image.yml, called by release-sdcard.yml and
+# release-bundle.yml. It used to be listed here as impossible, then as merely unwired; both old
+# blockers are gone (the lock pins overlay rows to their SOURCES rather than to bytes no clean runner
+# could reproduce, and overlay.yml publishes the packages so a cold runner retrieves instead of
+# spending ~4h compiling under emulation). CI is now the ONLY producer of a release image, because a
+# release build enforces packages/*/artifact.pin and locally built bytes cannot satisfy it.
 #
-# So this covers the half that has always been cleanly CI-shaped: the offline suites. They are what
+# So this file covers the half that has always been cleanly CI-shaped: the offline suites. They are what
 # caught a broken RAUC backend, an unarmed slot after a failed install, and a signing self-test that
 # could have gone green while asserting nothing.
 #
 # NO SECRETS, ON PURPOSE. The signing job checks the committed keyring against the committed
 # release certificate — both public, so this runs on a fork's pull request with access to nothing.
 # The private half (does the signing KEY match that cert) announces itself as skipped here and runs
-# where a PKIDIR is mounted. When bundle signing does land it needs exactly ONE secret, the release
-# key, scoped to a protected environment rather than the repo; the CA key stays offline and never
+# where a PKIDIR is mounted. Bundle signing still needs exactly ONE secret, the release key, scoped
+# to a protected environment rather than the repo; the CA key stays offline and never
 # reaches a runner, which is what the two-level PKI bought us.
 name: ci
 

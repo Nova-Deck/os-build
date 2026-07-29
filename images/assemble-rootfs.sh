@@ -485,7 +485,7 @@ install -d -m0755 "$stage/etc/systemd/system/local-fs.target.wants"
 ln -sf /usr/lib/systemd/system/novadeck-offload.target \
        "$stage/etc/systemd/system/local-fs.target.wants/novadeck-offload.target"
 
-# 4c. TEST-ONLY Wi-Fi/SSH injection (NOVADECK_TEST=1). NEVER part of a release/RAUC build:
+# 4c. DEV-ONLY Wi-Fi/SSH injection (NOVADECK_DEV=1). NEVER part of a release/RAUC build:
 # the release base is packages-only and first-boot networking is the SteamOS UI's job. Here
 # we add ALL the scaffolding a throwaway card needs to auto-join the LAN and accept an SSH
 # login to run vulkaninfo — a NetworkManager connection profile, regdom, the Wi-Fi PSK + SSH
@@ -494,9 +494,9 @@ ln -sf /usr/lib/systemd/system/novadeck-offload.target \
 # the base (customize-base.sh). The test card deliberately uses the SAME manager as release —
 # NetworkManager — so this path validates the real release Wi-Fi stack (incl. its unaided recovery
 # across a novadeck-suspend cycle) instead of a divergent test-only wpa_supplicant@wlan0 + networkd path.
-if [ "${NOVADECK_TEST:-}" = "1" ]; then
-  : "${NOVADECK_WIFI_SSID:?NOVADECK_TEST=1 requires NOVADECK_WIFI_SSID}"
-  : "${NOVADECK_WIFI_PSK:?NOVADECK_TEST=1 requires NOVADECK_WIFI_PSK}"
+if [ "${NOVADECK_DEV:-}" = "1" ]; then
+  : "${NOVADECK_WIFI_SSID:?NOVADECK_DEV=1 requires NOVADECK_WIFI_SSID}"
+  : "${NOVADECK_WIFI_PSK:?NOVADECK_DEV=1 requires NOVADECK_WIFI_PSK}"
   echo "  [TEST] injecting Wi-Fi + SSH scaffolding for '$NOVADECK_WIFI_SSID' (test-only)"
 
   # NetworkManager connection profile (keyfile format). NM binds by SSID, not interface, so no
@@ -626,7 +626,7 @@ SMOKE
   chmod 0755 "$stage/usr/local/bin/nova-gamescope-smoke"
 fi
 
-# 4d. DEBUG log capture (NOVADECK_DEBUG=1) — INDEPENDENT of NOVADECK_TEST, applies to release too.
+# 4d. DEBUG log capture (NOVADECK_DEBUG=1) — INDEPENDENT of NOVADECK_DEV, applies to release too.
 # This device has no UART and is usually powered off abruptly, and journald's default
 # SyncIntervalSec=5min means a short boot's system logs (kernel/NetworkManager/wpa_supplicant/
 # regulatory) never reach disk before the power is cut — that is why a released card's persistent
@@ -703,11 +703,11 @@ fi
 # identical either way, but "the seal sees exactly the tree it saw when it was HW-validated" is
 # worth more than the ordering being arbitrary.
 #
-# Test builds skip it for the same reason they keep pacman: deleting files out from under a live
+# Dev builds skip it for the same reason they keep pacman: deleting files out from under a live
 # package database would make every on-device `pacman -Qkk` and reinstall lie.
-if [ "${NOVADECK_TEST:-}" = "1" ]; then
-  echo "  [TEST] keeping the package manager on the image (release builds are sealed)"
-  echo "  [TEST] skipping the trim (a live package db must keep describing its own files)"
+if [ "${NOVADECK_DEV:-}" = "1" ]; then
+  echo "  [DEV] keeping the package manager on the image (release builds are sealed)"
+  echo "  [DEV] skipping the trim (a live package db must keep describing its own files)"
 else
   "$ROOT/images/seal-rootfs.sh" "$stage"
   "$ROOT/images/trim-rootfs.sh" "$stage"
@@ -768,10 +768,10 @@ fi
 # it could no longer see var/lib/pacman, which is exactly one of the things it has to find gone).
 # What mkfs.btrfs bakes in section 6 is this directory, unmodified.
 #
-# Release-only, mirroring the seal — a test tree deliberately keeps the package manager and carries
-# TEST_PKGS the lock does not describe. See images/guard-rootfs.sh for what it asserts and why.
-if [ "${NOVADECK_TEST:-}" = "1" ]; then
-  echo "  [TEST] skipping the sealed-root guard (nothing was sealed)"
+# Release-only, mirroring the seal — a dev tree deliberately keeps the package manager and carries
+# DEV_PKGS the lock does not describe. See images/guard-rootfs.sh for what it asserts and why.
+if [ "${NOVADECK_DEV:-}" = "1" ]; then
+  echo "  [DEV] skipping the sealed-root guard (nothing was sealed)"
 else
   "$ROOT/images/guard-rootfs.sh" "$stage"
 fi

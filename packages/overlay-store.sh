@@ -25,8 +25,10 @@
 # WHAT THIS IS NOT. It is a CACHE, not a provenance mechanism. images/manifest.lock still pins the
 # `novadeck` rows to their SOURCES and images/fetchlock.sh still re-derives that hash from
 # packages/ — neither is touched by this script, and a pull miss is never fatal (we fall back to
-# building). Promoting these artifacts to sha-pinned rows the lock verifies BY BYTE is the
-# separate, still-open TODO item; this lands the store that step will consume.
+# building). The BYTE claim is made elsewhere: .github/workflows/overlay.yml records each published
+# artifact's sha256 into packages/*/artifact.pin through a reviewed pin-bump PR, and
+# packages/verify-pins.sh enforces it on release builds. A registry digest was never that claim —
+# `oras pull` says "I got what the registry holds", not "a reviewer approved this".
 #
 # `.stamps/<name>.files` IS PART OF THE PAYLOAD, not an afterthought. One PKGBUILD can emit
 # several packages (mesa emits five), and that list is the ONLY mapping from a source pin to its

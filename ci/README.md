@@ -44,33 +44,40 @@ itself as skipped there and runs wherever a PKI is mounted:
 
     PKIDIR=~/novadeck-pki make test-signing
 
+## Today: the release image builds
+
+`.github/workflows/image.yml` is a `workflow_call`-only builder — `overlay-pull --require-all` →
+`make overlay` → `make verify-pins` → `make sdcard` / `make bundle`. Two thin callers invoke it on
+their own triggers, because a flashable card and a field update are wanted at different cadences:
+
+| workflow | trigger | secrets |
+|---|---|---|
+| `release-sdcard.yml` | `v*` tag, or manual | none — nothing is signed |
+| `release-bundle.yml` | manual | none *yet* (unsigned smoke test; see below) |
+
+**CI is the only producer of a release image, and that is the point.** A release build enforces
+`packages/*/artifact.pin` (via the Makefile's `PINNED` gate → `packages/verify-pins.sh`), and locally
+built overlay bytes will never match a published sha because our builds are not bit-reproducible. So
+`make sdcard` on a dev box now fails that gate by design; `NOVADECK_DEV=1 make sdcard` is the dev
+path and is untouched by any of this. Verifying OOBE on a genuine release image means flashing the
+artifact `release-sdcard.yml` produces.
+
+Both of the old blockers are gone, and worth recording because they were different problems. The
+*lock* half: a clean runner has no `work/`, so it rebuilt the overlay, and non-reproducible builds
+failed `images/fetchlock.sh` every run because the lock pinned those rows to artifact bytes only the
+last `make relock` machine could reproduce. The lock now pins them to their **sources**. The *cost*
+half: the package store above means a cold runner retrieves rather than compiles. What used to be
+listed here as the still-open **byte** claim is now closed from the other side — not by putting bytes
+back in the lock, but by `artifact.pin` + the pin-bump PR, so the two claims live in separate files
+with separate lifetimes. See `packages/README.md`.
+
 ## Not here yet, and why
 
-**The image build.** Both of its old blockers are now gone, and what remains is smaller than either.
-
-The *lock* half was fixed first. A clean runner has no `work/`, so it rebuilds the from-source
-overlay packages, and those builds are not bit-reproducible — which used to fail
-`images/fetchlock.sh` on every single run, because the lock pinned those rows to artifact bytes that
-only the machine that last ran `make relock` could reproduce. `images/manifest.lock` now pins them to
-their **sources** instead (`packages/inputhash.sh` over `source.pin` + patches + `PKGBUILD`), so a
-rebuild from unchanged sources is not a lock change and a clean runner verifies exactly like the
-machine that wrote the lock. CI never has to mutate a reviewed artifact to get green.
-
-The *cost* half is what the package pipeline above answers. A runner still starts cold, but it no
-longer compiles: `make overlay-pull` retrieves the packages some earlier run already built, keyed by
-the input hash the lock records, and `make overlay` then only re-indexes. The `verify` job proves
-that path on every run. So an image build in CI is now a matter of wiring `overlay-pull` ahead of
-`make sdcard` and finding out what the rest of the pipeline costs — not a hard block.
-
-What is still genuinely open is the **byte** claim, not the cost. The lock attests these artifacts'
-sources, not their bytes: anyone who can write `work/repo` can substitute one, and the store does
-not change that (`oras pull` verifies what the registry holds, which is a different question from
-what the lock reviewed). Closing it is the TODO item on promoting overlay output to sha-pinned rows
-that `fetchlock.sh` fetches and verifies like `snapshot` — for which the store is the prerequisite,
-now in place.
-
-**Bundle signing.** `make bundle` needs the built rootfs, so it is blocked by the same thing. When
-it lands, the shape is already settled by the PKI:
+**Bundle signing.** `release-bundle.yml` builds, but with an ephemeral dev cert — it proves the
+bundle assembles, the verity hashes compute and the pin gate passed, while producing something every
+device will reject. The remaining decision is whether the release private key belongs in GitHub at
+all; `image.yml` already accepts `RAUC_CERT_PEM` / `RAUC_KEY_PEM` and signs when both are present,
+warning loudly when they are not. The shape is settled by the PKI:
 
 - **one secret**, the release signing key, scoped to a protected *environment* (not the repo, where
   any workflow on any branch can read it). Write it to `$RUNNER_TEMP`, never the workspace — the

@@ -41,11 +41,17 @@
 #             the old check only ever passed on the machine that last ran `make relock` — it
 #             could say "you rebuilt" but never "the inputs changed". `make distclean && make
 #             sdcard` could not succeed on its own, and a clean CI runner (no work/, so it
-#             rebuilds the overlay) failed every single run. The claim is weaker about the
-#             artifact — anyone who can write work/repo can substitute one — and stronger about
-#             provenance, which is the half that has to survive crossing a machine. The proper
-#             fix is to publish overlay builds as sha-pinned `prebuilt` rows from a package
-#             pipeline; that restores the byte check and is tracked in TODO.md.
+#             rebuilds the overlay) failed every single run. So this row's claim is weaker about
+#             the artifact and stronger about provenance, which is the half that has to survive
+#             crossing a machine.
+#
+#             THE BYTE CHECK IS NOT MISSING ANY MORE, it just is not here. It lives in
+#             packages/verify-pins.sh against packages/*/artifact.pin, and it applies to RELEASE
+#             builds only — a release image is built solely by CI, from store artifacts whose
+#             sha256 a pin-bump PR recorded. Keeping the two checks in separate files is the
+#             point: this one must pass on every machine, that one must not (locally built bytes
+#             will never match a published sha, and requiring them to would mean a publish round
+#             trip before you could flash anything you just compiled). See NOVADECK_DEV.
 #
 # The fourth is not an install: `prebuilt` rows are tarballs/blobs placed by customize-base.sh
 # from their own sha256-pinned packages/*/prebuilt.pin.

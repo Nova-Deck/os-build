@@ -61,8 +61,8 @@ cosign.key
 # images/rauc/ is asserted to contain no PRIVATE KEY by images/test-verify-signing.sh, so the
 # exception is policed by a test and not by care.
 !/images/rauc/release.cert.pem
-# Test-only Wi-Fi/SSH creds for throwaway test cards (NOVADECK_TEST=1) — never committed
-/test-wifi.env
+# Dev-only Wi-Fi/SSH creds for throwaway dev cards (NOVADECK_DEV=1) — never committed
+/dev-wifi.env
 
 # Editor / OS noise
 *.swp

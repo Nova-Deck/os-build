@@ -32,7 +32,7 @@ gamescope needs are all present on Adreno 750.
 
 **How to run** (TEST build, SSH in, watch the panel): `nova-gamescope-smoke [client]` — gamescope
 `--backend drm --use-rotation-shader -- vkcube` (or a swapped nested client). Ships **test-only**
-(`images/assemble-rootfs.sh` under `NOVADECK_TEST=1`), hand-launched, not a systemd unit, so it
+(`images/assemble-rootfs.sh` under `NOVADECK_DEV=1`), hand-launched, not a systemd unit, so it
 never seizes the panel from the bring-up path. gamescope + seatd themselves are in the **release**
 set (layer-B runtime, not test tooling).
 

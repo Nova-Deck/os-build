@@ -40,7 +40,7 @@
 # This installs PACKAGES only — it writes NO network/SSH config and enables NO services.
 # First-boot networking is the SteamOS UI's responsibility on release. All Wi-Fi/SSH
 # scaffolding (.link/.network, regdom, wpa creds, sshd + host keys, enable-symlinks) is a
-# TEST-ONLY injection done later by assemble-rootfs.sh under NOVADECK_TEST=1 (see it).
+# DEV-ONLY injection done later by assemble-rootfs.sh under NOVADECK_DEV=1 (see it).
 #
 # This EXECUTES arm64 userspace (pacman, its install scriptlets, locale-gen, useradd), so it
 # needs qemu binfmt — registered on demand via tonistiigi/binfmt. Network required.
@@ -92,7 +92,7 @@ BOOTSTRAP_PKGS=(base)
 # networkmanager is the Wi-Fi manager (the SteamOS gamepadui default; uses wpa_supplicant as its
 # backend, already present). NM ships no auto-enable preset, so installing it here leaves it INACTIVE
 # in a plain release base — release first-boot networking is the Steam UI's job (Phase-3), which
-# drives NM. The TEST card (assemble-rootfs.sh NOVADECK_TEST block) DOES enable NM and drops a
+# drives NM. The DEV card (assemble-rootfs.sh NOVADECK_DEV block) DOES enable NM and drops a
 # connection profile, so the throwaway card exercises the same manager as release (no test-vs-release
 # stack split). bluez/networkmanager being added busts the install-set reuse marker — intended.
 # Audio (SteamOS layer C): PipeWire stack + ALSA UCM2 base. alsa-ucm-conf supplies the
@@ -171,9 +171,9 @@ BOOTSTRAP_PKGS=(base)
 # present), so the wholesale copy was not expressible until now.
 PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-tools mesa gamescope seatd sddm mangohud fex-emu bluez bluez-utils networkmanager alsa-ucm-conf pipewire wireplumber pipewire-pulse pipewire-alsa unzip openal gtk2 ffmpeg e2fsprogs xorg-xwayland lsof noto-fonts noto-fonts-cjk noto-fonts-emoji python python-gobject scx-scheds rauc btrfs-progs rsync)
 
-# Test-only packages — installed ONLY under NOVADECK_TEST=1, NEVER in a release base.
+# Dev-only packages — installed ONLY under NOVADECK_DEV=1, NEVER in a release base.
 # On-device bring-up tools: evtest reads raw /dev/input events; usbutils provides lsusb.
-TEST_PKGS=(evtest usbutils)
+DEV_PKGS=(evtest usbutils)
 
 # Precompiled external packages: every packages/<name>/prebuilt.pin (url + sha256 + strip)
 # is fetched on the host and extracted into the base. PREBUILT_DIR stages the verified
@@ -234,12 +234,12 @@ done
 # is still asserted against the built tree in-container via `pacman -T`, which catches a leaf
 # package that fell out of the lock and would otherwise vanish without a dependency error.
 INSTALL_PKGS=("${BOOTSTRAP_PKGS[@]}" "${PKGS[@]}" "${PREBUILT_DEPS[@]}")
-# Test-only tooling is installed by NAME even under LOCKED mode (see the pacman -Sy near the end
+# Dev-only tooling is installed by NAME even under LOCKED mode (see the pacman -Sy near the end
 # of the container script). It is deliberately NOT in the lock: the lock describes the RELEASE
 # image, which is the tree the step-4 seal guard runs against. Keeping test rows out of it also
-# means `make relock` must run release — genmanifest.sh refuses a test base for that reason.
-if [ "${NOVADECK_TEST:-}" = "1" ]; then
-  INSTALL_PKGS+=("${TEST_PKGS[@]}")
+# means `make relock` must run release — genmanifest.sh refuses a dev base for that reason.
+if [ "${NOVADECK_DEV:-}" = "1" ]; then
+  INSTALL_PKGS+=("${DEV_PKGS[@]}")
 fi
 # Canonical (sorted, de-duped) install set — the reuse-cache key recorded in the base below.
 EXPECTED_PKGS="$(printf '%s\n' "${INSTALL_PKGS[@]}" | sort -u)"
@@ -292,7 +292,7 @@ snapshot:$SNAPSHOT"
 #              `make relock` would leave an unverified tree behind that the next `make sdcard`
 #              happily reuses and ships.
 #   lock:      editing the lock (a package bump, a relock) must rebuild the base.
-#   test:      recorded explicitly so genmanifest.sh can REFUSE a test base; the test packages
+#   dev:       recorded explicitly so genmanifest.sh can REFUSE a dev base; the dev packages
 #              are already in the sorted set above, but not in a form anything can detect.
 if [ -n "$RESOLVE" ]; then
   EXPECTED_PKGS="$EXPECTED_PKGS
@@ -303,9 +303,9 @@ else
 mode:locked
 lock:$(sha256sum "$LOCKFILE" | cut -d' ' -f1)"
 fi
-if [ "${NOVADECK_TEST:-}" = "1" ]; then
+if [ "${NOVADECK_DEV:-}" = "1" ]; then
   EXPECTED_PKGS="$EXPECTED_PKGS
-test:1"
+dev:1"
 fi
 # This script itself. Everything above describes the INPUTS; the tree is also a product of the
 # steps below (which packages are placed where, what runs offline with --root=, what /dev nodes
@@ -401,11 +401,11 @@ else
   echo "[novadeck] NOVADECK_RESOLVE=1 — re-resolving from PKGS, this tree is for relock only" >&2
 fi
 
-# Test-only tooling crosses as a file for the same reason the mirrorlist does: it keeps the
+# Dev-only tooling crosses as a file for the same reason the mirrorlist does: it keeps the
 # container script free of another layer of nested quoting. Absent file => release build.
-rm -f "$PREBUILT_DIR/test.pkgs"
-if [ "${NOVADECK_TEST:-}" = "1" ]; then
-  printf '%s\n' "${TEST_PKGS[@]}" >"$PREBUILT_DIR/test.pkgs"
+rm -f "$PREBUILT_DIR/dev.pkgs"
+if [ "${NOVADECK_DEV:-}" = "1" ]; then
+  printf '%s\n' "${DEV_PKGS[@]}" >"$PREBUILT_DIR/dev.pkgs"
 fi
 
 # The from-source overlay repo is REQUIRED, not optional. PKGS names packages that exist in no
@@ -493,15 +493,15 @@ docker run --rm --platform linux/arm64 -v "$PREBUILT_DIR":/prebuilt:ro \
   # --needed is deliberately absent above: the root starts empty, so there is nothing for it to
   # skip, and its old job (do not re-install what the vendor image already had) no longer exists.
 
-  # Test-only tooling, installed BY NAME even under locked mode: it is deliberately outside the
+  # Dev-only tooling, installed BY NAME even under locked mode: it is deliberately outside the
   # lock, which describes the release image (the tree the step-4 seal guard runs against). -Sy
   # syncs from the same pinned revision the config above names.
-  if [ -s /prebuilt/test.pkgs ]; then
-    mapfile -t testpkgs < /prebuilt/test.pkgs
-    "${PA[@]}" -Sy --noconfirm --needed --disable-download-timeout "${testpkgs[@]}"
+  if [ -s /prebuilt/dev.pkgs ]; then
+    mapfile -t devpkgs < /prebuilt/dev.pkgs
+    "${PA[@]}" -Sy --noconfirm --needed --disable-download-timeout "${devpkgs[@]}"
   fi
 
-  # Assert the tree against the DECLARATION (base + PKGS + prebuilt deps + test), not only
+  # Assert the tree against the DECLARATION (base + PKGS + prebuilt deps + dev), not only
   # against the lock. The lock is a resolved closure, so a leaf package that dropped OUT of it
   # leaves no unsatisfied dependency behind -- pacman -U would succeed and the package would
   # simply be absent on the device. -T reports unsatisfied names and honours provides (unlike
@@ -582,7 +582,7 @@ docker run --rm --platform linux/arm64 -v "$PREBUILT_DIR":/prebuilt:ro \
   # Release base ships the runtime PACKAGES only — no network/SSH config or service
   # enablement. First-boot networking is the SteamOS UI'\''s responsibility; all Wi-Fi/SSH
   # scaffolding (.link/.network, regdom, wpa creds, sshd + host keys, enable-symlinks) is
-  # injected test-only by images/assemble-rootfs.sh under NOVADECK_TEST=1.
+  # injected dev-only by images/assemble-rootfs.sh under NOVADECK_DEV=1.
 
   # Headless-boot fix (GENERAL, not network/test): no package owns /etc/machine-id, so the root
   # ships without one (ConditionFirstBoot=yes) — as it did before 4c, where the vendor image had

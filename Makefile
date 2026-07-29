@@ -252,6 +252,7 @@ test: ## Run the offline slot-state + bootctl + post-install suites (host, no bu
 	bash images/initramfs/test-slot-state.sh
 	bash images/test-bootctl.sh
 	bash images/test-post-install.sh
+	bash images/test-pairingd.sh
 
 # The fourth suite, separate because it is the one that CANNOT run on the host: it signs real
 # bundles and verifies them through the shipped system.conf, so it needs rauc. Every case in it is
@@ -348,6 +349,13 @@ $(BASE_STAMP): base-devel.digest snapshot.pin images/manifest.lock images/fetchl
                $(BASE_MODE_STAMP)
 	images/customize-base.sh
 	@test -f work/base/usr/bin/sshd   # sentinel: sshd present => release runtime laid down
+	@: "sentinel: the pairing agent's interpreter and key validator. Both arrive as transitive"; \
+	 : "dependencies of other packages, so a dependency change elsewhere could remove them and"; \
+	 : "the only symptom would be that remote access silently stops working on a shipped image."; \
+	 for f in usr/bin/python3 usr/bin/ssh-keygen; do \
+	   test -e "work/base/$$f" || { \
+	     echo "novadeck-pairingd needs /$$f and the base tree has no such file" >&2; exit 1; }; \
+	 done
 	@: "sentinel: the tree must be in the mode this build asked for (see above)"; \
 	 got=release; grep -qx 'test:1' work/base/usr/lib/novadeck/pkgs 2>/dev/null && got=test; \
 	 [ "$$got" = "$(ROOTFS_MODE)" ] || { \
@@ -477,7 +485,28 @@ clean-base: ## Remove the (root-owned) bootstrapped root tree
 clean-overlay: ## Remove the built (arch-scoped) overlay pacman repo + build tree
 	rm -rf work/repo work/overlay-build
 
-distclean: clean clean-base clean-overlay ## clean + drop fetched firmware + kernel work tree
+# TWO THINGS THIS DELIBERATELY DOES *NOT* REMOVE, both of which surprise people:
+#
+#   work/prebuilt      the pinned-download cache (customize-base.sh documents it as persistent).
+#   work/pacman-cache  the package cache.
+#
+# Together they are ~3.5G, i.e. essentially everything left under work/ after this target runs,
+# which is why "distclean left stuff behind" is a reasonable first reading. It is a CHOICE: every
+# byte in them is content-addressed against a pin or a package version, so a stale entry cannot
+# be served — a mismatched sha is re-fetched, and the FEX guest .ero alone is ~1.9G to pull again.
+# Nothing in the build reads them as INPUT to a decision; they only ever save a download. To drop
+# them anyway (moving machines, reclaiming disk, or proving a pin still resolves upstream):
+#
+#   rm -rf work/prebuilt work/pacman-cache
+#
+# AND ONE CONSEQUENCE, which is not a choice: this removes work/repo (via clean-overlay), so the
+# next build rebuilds all ~10 overlay packages from source. Those builds are not byte-reproducible,
+# so their sha256s no longer match images/manifest.lock and the build STOPS at work/.base.stamp
+# with "sha256 differs from the lock". That is the guard working, not a bug — but it means
+# `make distclean && make sdcard` cannot succeed on its own. Expect to review `git diff
+# images/manifest.lock` after a `make relock` (versions identical, hashes moved) and commit it.
+# Confirmed end to end on 2026-07-29.
+distclean: clean clean-base clean-overlay ## clean + drop fetched firmware + kernel tree (KEEPS the download caches; forces a relock)
 	# work/kernel is root-owned (the kernel build's modules_install runs as root in the build
 	# image), so remove it from inside a throwaway container like clean/clean-base — a host-side
 	# rm fails with permission errors. work/steam-seed (host-fetched) goes the same way for

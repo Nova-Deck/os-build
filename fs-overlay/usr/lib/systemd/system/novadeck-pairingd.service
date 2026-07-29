@@ -1,0 +1,48 @@
+[Unit]
+Description=novadeck key-pairing agent (accepts an SSH key while the remote-access switch is on)
+# Soft dependency: the advertisement is a convenience so a user can reach the device by name
+# instead of hunting for its address. If the responder is not installed or not running, pairing
+# still works over the address shown in the on-screen network settings.
+Wants=avahi-daemon.service
+After=avahi-daemon.service network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/novadeck-pairingd
+
+# The advertisement exists only while the agent does, so a device that is not in pairing mode
+# does not announce a pairing port to the network. Leading '-' on BOTH: the advertisement is a
+# convenience (see Wants= above), so neither publishing nor removing it may decide whether
+# remote access works at all. Without the '-' on the setup line this unit was un-startable --
+# ProtectSystem=full below mounts /etc read-only, the install failed EROFS, and a fatal
+# ExecStartPre took the whole pairing path down with it. A device that cannot advertise must
+# still pair over the address shown in the on-screen network settings.
+ExecStartPre=-/usr/bin/install -Dm0644 /usr/share/novadeck/pairing.avahi-service /etc/avahi/services/novadeck-pairing.service
+ExecStopPost=-/usr/bin/rm -f /etc/avahi/services/novadeck-pairing.service
+
+# Restart on failure so the running daemon keeps matching the switch: if it crashes while the
+# switch is on, the UI still shows "on", so it should come back rather than leave the port
+# silently shut. A clean stop by the switch helper (systemctl stop) is not a failure, so turning
+# the switch off still stops it for good. There is no time window to worry about re-opening.
+Restart=on-failure
+
+# Runs as root because it writes another account's (deck's) authorized_keys. Doing that from an
+# unprivileged agent would need a polkit grant broad enough to be worse. It no longer enables any
+# system unit — sshd ships always-on — so writing that one file is the only privilege it needs.
+User=root
+NoNewPrivileges=no
+ProtectSystem=full
+ProtectHome=no
+PrivateTmp=yes
+
+# ProtectSystem=full mounts /etc read-only too, which is the intent everywhere EXCEPT the one
+# directory this unit has to write: the avahi service file it drops on start and removes on
+# stop. Narrowed to that subtree rather than weakening ProtectSystem to 'true' for the whole
+# unit. Leading '-' so an image without the responder installed still starts the agent --
+# pairing by address does not depend on any of this.
+ReadWritePaths=-/etc/avahi
+
+# Deliberately NO [Install] section: systemd must not start this on its own. It is started and
+# stopped only by the on-screen remote-access switch (steamos-polkit-helpers/steamos-devkit-mode).
+# With no time window the daemon simply runs while the switch is on; leaving the switch on means
+# the client re-starts it at the next boot, which is intended here (the UI still shows it on).

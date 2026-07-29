@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1.0/policyconfig.dtd">
+<!--
+  pkexec actions for the helpers in /usr/bin/steamos-polkit-helpers that cannot reach their
+  privileged operation through an already-brokered D-Bus interface. Everything that CAN is
+  granted in rules.d instead, against the stock action, which is preferred: it needs no
+  declaration here and stays narrow automatically.
+
+  allow_active only. The gamepad session is a real ACTIVE seat0 logind session (SDDM
+  autologin), so that is all it needs, and it is what makes the toggle meaningless to anyone
+  not physically in front of the device. Deliberately NOT allow_any/allow_inactive: an
+  inactive or remote subject flipping remote access on is the exact thing to prevent, and
+  auth_admin is not an option because no account here has a password to authenticate with.
+-->
+<policyconfig>
+
+  <action id="org.novadeck.policykit.devkit-mode">
+    <description>Turn remote access on or off</description>
+    <message>Authentication is required to change remote access</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/steamos-polkit-helpers/steamos-devkit-mode</annotate>
+  </action>
+
+</policyconfig>

@@ -1,0 +1,16 @@
+<?xml version="1.0" standalone='no'?>
+<!DOCTYPE service-group SYSTEM "avahi-service.dtd">
+<!--
+  Advertised only while the pairing agent is running; the unit installs this into
+  /etc/avahi/services on start and removes it on stop. The service type is the one existing
+  pairing tooling already browses for, so third-party clients discover the device without
+  needing to know anything about this implementation.
+-->
+<service-group>
+  <name replace-wildcards="yes">%h</name>
+  <service>
+    <type>_steamos-devkit._tcp</type>
+    <port>32000</port>
+    <txt-record>login=deck</txt-record>
+  </service>
+</service-group>

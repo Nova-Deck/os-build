@@ -82,6 +82,13 @@ if pd.parse_public_key((KEY + " 900b919520e4cf601998a71eec318fec").encode()) is 
 else:
     bad("rejected a key with a trailing client marker")
 
+# A key file written on Windows arrives CRLF-terminated. docs/remote-access.md promises that
+# works, so it is checked here rather than left as a claim.
+if pd.parse_public_key((KEY + "\r\n").encode()) is not None:
+    ok("accepts a CRLF-terminated key file")
+else:
+    bad("rejected a CRLF-terminated key — Windows pairing would fail")
+
 # THE ONE THAT MATTERS: authorized_keys options must never be smuggled in ahead of the key.
 for hostile, label in [
     (f'command="/bin/sh" {KEY}',              "command= option prefix"),

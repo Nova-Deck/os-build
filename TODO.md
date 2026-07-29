@@ -5,6 +5,39 @@ rationale lives in the linked memories and commit history.
 
 ## Open
 
+- [ ] **Remote access: HW-verify the switch, then wire the on-screen approval prompt** — the
+  pairing path landed on `feat/remote-access` (`novadeck-pairingd` + `steamos-devkit-mode` +
+  `org.novadeck.policy`, 34 offline cases in `images/test-pairingd.sh`). Two things could not be
+  checked without the device:
+  **(a) the switch's argument contract.** The shipped client calls
+  `/usr/bin/steamos-polkit-helpers/steamos-devkit-mode` — that path IS in our `steamui.so` — but
+  the `--enable`/`--disable` verbs are inferred from the equivalent helper on the reference
+  platform, because our client's string carries no format specifier. If it passes something else
+  the helper exits 22 and the switch looks dead with no other symptom. Check
+  `journalctl -u novadeck-pairingd` and the helper's own exit after flipping it. Also unverified:
+  that the Developer page renders the switch at all, and that `pkexec --disable-internal-agent`
+  authorizes against the new action (it fails hard rather than prompting, so a mis-declared
+  action also presents as a dead switch — `pkaction --action-id org.novadeck.policykit.devkit-mode`
+  on the device separates the two).
+  **(b) the pairing-approval prompt.** `steamui.so` carries `System.Devkit.RegisterForPairingPrompt`
+  / `RespondToPairingPrompt` and the `devkit approve-ssh-key` handler, so the client can draw a
+  confirmation dialog; the reference implementation drives it by writing
+  `devkit-1 steam://devkit-1/<token>/approve-ssh-key?response=<path>&request=<text>` into
+  `~/.steam/steam.pipe` and waiting up to 30s for a JSON response file. Deliberately NOT wired up
+  yet — consent currently rests entirely on the five-minute window opened by the physical switch,
+  which is fully determined and offline-testable, whereas a prompt nobody has seen draw is not.
+  Once (a) is confirmed, add the prompt as a SECOND factor on top of the window, not a
+  replacement for it: if the prompt silently never draws, a window-only fallback must still be
+  what happens. See [[release-ssh-devkit-toggle]] and `docs/remote-access.md`.
+
+- [ ] **Revisit "use a TEST-mode bundle so the trial boot keeps SSH"** — the release-bundle
+  playbook further down this file says a release bundle trial-boots headless and therefore is not
+  verifiable. That should no longer be true once the above is confirmed: `/home` is its own
+  partition and `post-install.sh` copies `/var` only, so a key in `/home/deck/.ssh` and an enabled
+  `sshd` (whose enable symlink lives in the `/etc` overlay upper, inside the per-slot `/var`) both
+  ride A→B. Confirm on the device, then rewrite that playbook to test a REAL release bundle.
+  Use `deck`, not `root` — `/root` is on the read-only root and does not survive the slot write.
+
 - [x] **The ROLLBACK half of A/B — HW-VALIDATED 2026-07-29, both entry points, organic route.**
   Until this run every trial boot we had ever done SUCCEEDED and was promoted, so `tries` reaching
   zero, the init reverting, and `KERNEL.BAK` being restored were offline-verified only. Both

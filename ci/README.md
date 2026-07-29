@@ -18,13 +18,19 @@ itself as skipped there and runs wherever a PKI is mounted:
 
 ## Not here yet, and why
 
-**The image build.** A clean runner has no `work/`, so it rebuilds the nine from-source overlay
-packages, and those builds are not bit-reproducible: `images/fetchlock.sh` refuses the install when
-a sha256 differs, so `make sdcard` fails on every run. `make relock` is not an escape hatch — CI
-would commit back a lock carrying that runner's bytes, which the next runner does not reproduce, so
-every run would mutate a reviewed artifact. See TODO.md ("novadeck lock rows are sha-pinned to
-non-reproducible builds"). **This is the prerequisite for everything below**, not a detail to work
-around.
+**The image build.** The *lock* half of this is fixed. A clean runner has no `work/`, so it rebuilds
+the from-source overlay packages, and those builds are not bit-reproducible — which used to fail
+`images/fetchlock.sh` on every single run, because the lock pinned those rows to artifact bytes that
+only the machine that last ran `make relock` could reproduce. `images/manifest.lock` now pins them to
+their **sources** instead (`packages/inputhash.sh` over `source.pin` + patches + `PKGBUILD`), so a
+rebuild from unchanged sources is not a lock change and a clean runner verifies exactly like the
+machine that wrote the lock. CI never has to mutate a reviewed artifact to get green.
+
+What is left is cost, not correctness: rebuilding every overlay package under qemu is the most
+expensive thing in this build (`fex-emu` dominates), and a runner starts cold every time. So the open
+question for landing `make sdcard` in CI is where the overlay artifacts come from — which is the
+same question the successor TODO item answers by publishing them as sha-pinned `prebuilt` rows from
+a separate package pipeline, restoring a byte-level claim as a side effect.
 
 **Bundle signing.** `make bundle` needs the built rootfs, so it is blocked by the same thing. When
 it lands, the shape is already settled by the PKI:

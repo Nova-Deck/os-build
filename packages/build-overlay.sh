@@ -15,6 +15,11 @@
 # inputs as $(OVERLAY_DB) prerequisites; that just re-triggers this (now cheap) script, which
 # self-selects which packages actually need the slow build.
 #
+# That hash is computed by packages/inputhash.sh, NOT here, because it has a second job: it is
+# also what images/manifest.lock records for the `novadeck` rows (our builds are not
+# bit-reproducible, so the lock pins the sources rather than the artifact bytes — see that script
+# and images/fetchlock.sh). Three readers, one formula.
+#
 # Host-side (drives docker, like customize-base.sh). Network required: the PKGBUILD comes from
 # the GitLab raw endpoint and makepkg clones the actual sources from public GitHub/freedesktop.
 # Reads base-devel.digest. Re-run is cheap to invoke but an emulated build itself is slow.
@@ -73,21 +78,17 @@ for pin in "${PINS[@]}"; do
   patches="$(pin_field "$pin" patches)"
   : "${name:?$pin: missing name}"
 
-  # Gather this package's input files (fail-fast on a missing patch / local PKGBUILD, same as
-  # before) and hash them. The pin carries pkgbuild_ref, so a bumped holo PKGBUILD or upstream
-  # source pin flows into the hash; anything makepkg fetches is downstream of these inputs.
-  inputs=("$pin")
-  for p in $patches; do
-    src="$pdir/patches/$p"
-    [ -f "$src" ] || { echo "[overlay] $name: missing patch $src (declared in $pin)" >&2; exit 1; }
-    inputs+=("$src")
-  done
-  if [ -n "$local_pb" ]; then
-    lpb="$pdir/$local_pb"
-    [ -f "$lpb" ] || { echo "[overlay] $name: missing local PKGBUILD $lpb (declared in $pin)" >&2; exit 1; }
-    inputs+=("$lpb")
-  fi
-  hash="$(sha256sum "${inputs[@]}" | sha256sum | cut -c1-64)"
+  # Hash this package's committed inputs (source.pin + its patches + a local PKGBUILD), fail-fast
+  # on a missing one. The pin carries pkgbuild_ref, so a bumped holo PKGBUILD or upstream source
+  # pin flows into the hash; anything makepkg fetches is downstream of these inputs.
+  #
+  # Delegated to packages/inputhash.sh rather than computed here, because this value is no longer
+  # only a local cache key: images/genmanifest.sh writes the same digest into manifest.lock as the
+  # `novadeck` rows' pin and images/fetchlock.sh re-derives it, so all three have to agree byte for
+  # byte. That script also documents why it is deliberately path-independent — the formula that
+  # used to be inlined here was not, which was harmless for a per-machine stamp and would have
+  # quietly broken the lock across machines.
+  hash="$("$ROOT/packages/inputhash.sh" "$pdir")"
   HASH["$name"]="$hash"
 
   if [ -f "$STAMPS/$name.hash" ] && [ "$(cat "$STAMPS/$name.hash")" = "$hash" ] \

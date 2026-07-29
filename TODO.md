@@ -600,34 +600,46 @@ rationale lives in the linked memories and commit history.
   Cheap (one `find`), and it is the assertion that would have caught this without a person
   reading `stat` output by hand. See [[folder-refactor-fs-overlay]].
 
-- [ ] **`novadeck` lock rows are sha-pinned to non-reproducible builds → blocks CI (Phase 7)** — found
-  2026-07-26 during a `rm -rf work` full-rebuild test. `images/manifest.lock` records a sha256 for the 9
-  from-source overlay packages, and `images/fetchlock.sh:109` refuses the install when it differs. But our
-  builds are **not bit-reproducible**: wiping `work/repo/aarch64` and rebuilding from *identical* inputs
-  changed all 9 shas (fex-emu, gamescope, gtk2, mangohud, mesa, scx-scheds, sddm, vulkan-freedreno,
-  vulkan-mesa-device-select). So the lock only verifies on the machine that last ran `make relock`.
-  **In CI this is a hard block, not flakiness:** a clean runner has no `work/`, rebuilds the overlay, and
-  fails `fetchlock` on every run. `make relock` is not the escape hatch either — CI would commit back a
-  lock carrying *that runner's* bytes, which the next runner won't reproduce, so every run mutates a
-  reviewed artifact. Bites hardest exactly where `ci/README.md` is headed (cosign-signed artifacts +
-  published update manifests), where "these bytes are the reviewed bytes" has to hold across machines.
-  Root cause: one sha column carries two different guarantees — for `snapshot` rows it catches a third
-  party republishing under a fixed name (real value, `fetchlock.sh:13-17`, keep); for `novadeck` rows it
-  can only ever say "you rebuilt", never "the inputs changed".
-  **Preferred fix — promote overlay output to a pinned binary input**, i.e. the `prebuilt` class the repo
-  already has (`packages/*/prebuilt.pin`, sha256-pinned, fetched not built). Two pipelines: a *package*
-  pipeline triggered by `source.pin`/patch/`PKGBUILD` changes that builds, publishes, and opens a pin-bump
-  PR with the sha; and the *image* pipeline consuming those pinned bytes, so `fetchlock`'s `novadeck` class
-  becomes fetchable like `snapshot` and its sha goes back to verifying a download. Gets CI green without
-  requiring bit-reproducible builds.
-  Cheap interim: key `novadeck` rows off the per-package **input** hash `packages/build-overlay.sh` already
-  writes (`work/repo/aarch64/.stamps/<name>.hash`) instead of the artifact sha (~10 lines across
-  `fetchlock.sh` + `images/genmanifest.sh`); weakens the claim to "built from the reviewed sources".
-  Reproducible builds (`SOURCE_DATE_EPOCH` etc.) are the purist fix but are a project on their own, and
-  partial reproducibility is still a red build — layer it later as *verification* of the package pipeline,
-  not as a prerequisite. **Rejected:** caching `work/repo` in CI — a miss is a red build, guaranteed on the
-  first build after any patch edit, and a cache is not a provenance mechanism.
+- [x] **`novadeck` lock rows are sha-pinned to non-reproducible builds — FIXED 2026-07-29 (interim
+  taken)** — found 2026-07-26 during a `rm -rf work` full-rebuild test. `images/manifest.lock` recorded a
+  sha256 of the *built artifact* for the 10 overlay rows, and `images/fetchlock.sh` refused the install
+  when it differed. Our builds are **not bit-reproducible**: wiping `work/repo/aarch64` and rebuilding
+  from *identical* inputs moved all 10 shas, so the lock only verified on the machine that last ran
+  `make relock` — a hard block in CI (a clean runner has no `work/`, so it fails every run) and the
+  reason `make distclean && make sdcard` could not succeed on its own. Root cause: one column carrying
+  two guarantees — for `snapshot` rows it catches a third party republishing under a fixed name (real
+  value, kept); for `novadeck` rows it could only ever say "you rebuilt", never "the inputs changed".
+  **Fix shipped — the cheap interim below, with one correction.** `novadeck` rows now record a hash of
+  the package's **committed sources** (`source.pin` + patches + local `PKGBUILD`), computed by a new
+  `packages/inputhash.sh` that `build-overlay.sh`, `genmanifest.sh` and `fetchlock.sh` all share. The
+  correction: the formula this item pointed at (inlined in `build-overlay.sh`) was **path-dependent** —
+  `sha256sum "${inputs[@]}" | sha256sum` hashes `<hash>  <path>` lines, so the digest followed the
+  checkout directory and would have silently failed the very cross-machine property the change exists
+  for. It hashes the content column only, and `fetchlock.sh` re-derives it from the repo rather than
+  reading `.stamps/<name>.hash`, so the check is against sources a reviewer can see, not the builder's
+  claim about itself. mesa's three installed artifacts share one hash — one split PKGBUILD, one pin.
+  Also: `distclean` no longer runs `clean-overlay`, so `work/repo` joins the kept caches (`make
+  clean-overlay` is still the force-rebuild button). Verified: path-independent across two checkout
+  dirs; an edited patch fails `fetchlock` naming the package; deleting and rebuilding `rauc` leaves the
+  lock untouched. **Gives up** the byte-level claim about the artifact — anyone who can write
+  `work/repo` can substitute one — in exchange for a provenance claim that survives crossing a machine.
   See [[rootfs-build-approach]], [[overlay-package-pipeline]].
+
+- [ ] **Publish overlay builds as sha-pinned `prebuilt` rows (restores the byte claim; unblocks a
+  cold-runner image build)** — successor to the item above, which fixed the *correctness* half. The
+  overlay artifacts are still built on whatever machine runs `make`, so `images/manifest.lock` attests
+  their sources but not their bytes, and CI would rebuild ~10 packages under qemu on every cold run
+  (`fex-emu` dominates). **Shape:** promote overlay output to the `prebuilt` class the repo already has
+  (`packages/*/prebuilt.pin`, sha256-pinned, fetched not built). Two pipelines — a *package* pipeline
+  triggered by `source.pin`/patch/`PKGBUILD` changes that builds, publishes and opens a pin-bump PR with
+  the sha; and the *image* pipeline consuming those pinned bytes, so `fetchlock`'s `novadeck` class
+  becomes fetchable like `snapshot` and its sha verifies a download again. Note the source hash from
+  `packages/inputhash.sh` is exactly the trigger key that pipeline needs, so it is reusable, not
+  throwaway. Reproducible builds (`SOURCE_DATE_EPOCH` etc.) are the purist fix but are a project on
+  their own, and partial reproducibility is still a red build — layer it later as *verification* of the
+  package pipeline, not as a prerequisite. **Rejected:** caching `work/repo` in CI — a miss is a red
+  build, guaranteed on the first build after any patch edit, and a cache is not a provenance mechanism.
+  See `ci/README.md` ("Not here yet, and why"), [[overlay-package-pipeline]].
 
 - [x] **Power profiles + device-env stack — LANDED + HW-VALIDATED 2026-07-14 (Pocket S2)** — SteamUI's
   Performance profiles / GPU / fan controls work end-to-end. Three pieces (ported from the reference

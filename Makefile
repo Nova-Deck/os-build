@@ -485,10 +485,11 @@ clean-base: ## Remove the (root-owned) bootstrapped root tree
 clean-overlay: ## Remove the built (arch-scoped) overlay pacman repo + build tree
 	rm -rf work/repo work/overlay-build
 
-# TWO THINGS THIS DELIBERATELY DOES *NOT* REMOVE, both of which surprise people:
+# THREE THINGS THIS DELIBERATELY DOES *NOT* REMOVE, all of which surprise people:
 #
 #   work/prebuilt      the pinned-download cache (customize-base.sh documents it as persistent).
 #   work/pacman-cache  the package cache.
+#   work/repo          the built overlay packages (NOT clean-overlay — this target no longer runs it).
 #
 # Together they are ~3.5G, i.e. essentially everything left under work/ after this target runs,
 # which is why "distclean left stuff behind" is a reasonable first reading. It is a CHOICE: every
@@ -497,16 +498,18 @@ clean-overlay: ## Remove the built (arch-scoped) overlay pacman repo + build tre
 # Nothing in the build reads them as INPUT to a decision; they only ever save a download. To drop
 # them anyway (moving machines, reclaiming disk, or proving a pin still resolves upstream):
 #
-#   rm -rf work/prebuilt work/pacman-cache
+#   rm -rf work/prebuilt work/pacman-cache && make clean-overlay
 #
-# AND ONE CONSEQUENCE, which is not a choice: this removes work/repo (via clean-overlay), so the
-# next build rebuilds all ~10 overlay packages from source. Those builds are not byte-reproducible,
-# so their sha256s no longer match images/manifest.lock and the build STOPS at work/.base.stamp
-# with "sha256 differs from the lock". That is the guard working, not a bug — but it means
-# `make distclean && make sdcard` cannot succeed on its own. Expect to review `git diff
-# images/manifest.lock` after a `make relock` (versions identical, hashes moved) and commit it.
-# Confirmed end to end on 2026-07-29.
-distclean: clean clean-base clean-overlay ## clean + drop fetched firmware + kernel tree (KEEPS the download caches; forces a relock)
+# work/repo is the newest member and the one with real history. It used to go via clean-overlay,
+# and because images/manifest.lock then pinned the overlay's ARTIFACT bytes — which our
+# non-reproducible builds move on every rebuild from identical inputs — `make distclean && make
+# sdcard` could not succeed on its own: it stopped at work/.base.stamp on a hash mismatch and
+# needed a full `make relock` to get going again. The lock now pins those rows to their SOURCES
+# (packages/inputhash.sh, read by images/fetchlock.sh), so a rebuild is no longer a lock change
+# and that hard stop is gone. Keeping the repo is now purely about not re-paying for it: rebuilding
+# all ~10 packages under qemu is the single most expensive thing in this build, and fex-emu alone
+# dominates it. `make clean-overlay` is still there when you actually want them rebuilt.
+distclean: clean clean-base ## clean + drop fetched firmware + kernel tree (KEEPS the download + overlay caches)
 	# work/kernel is root-owned (the kernel build's modules_install runs as root in the build
 	# image), so remove it from inside a throwaway container like clean/clean-base — a host-side
 	# rm fails with permission errors. work/steam-seed (host-fetched) goes the same way for

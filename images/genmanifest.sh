@@ -17,7 +17,14 @@
 # conflating them would overstate what we verify:
 #
 #   snapshot  installed from the pinned repo revision; hash = the .pkg.tar.zst we installed
-#   novadeck  built from source by packages/build-overlay.sh; hash = our own build artifact
+#   novadeck  built from source by packages/build-overlay.sh; hash = packages/inputhash.sh over
+#             the package's COMMITTED SOURCES (source.pin + patches + local PKGBUILD), NOT the
+#             built artifact. Our overlay builds are not bit-reproducible, so an artifact hash
+#             here moved on every rebuild from identical inputs: it only ever verified on the
+#             machine that last ran `make relock`, said "you rebuilt" rather than "the inputs
+#             changed", and failed every clean CI runner. This says the thing that holds across
+#             machines. Three artifacts can legitimately share one hash — mesa's PKGBUILD is a
+#             split build (mesa, vulkan-freedreno, vulkan-mesa-device-select), one source pin.
 #   prebuilt  not pacman packages at all: the tarballs/blobs in packages/*/prebuilt.pin,
 #             already sha256-pinned there. Carried so the lock covers the whole image.
 #   stripped  installed from the pinned repo like a `snapshot` row, then DELETED from the
@@ -78,6 +85,22 @@ index_dir() {
 index_dir "$CACHE" snapshot
 index_dir "$OVERLAY_REPO" novadeck
 
+# Overlay artifact -> the input hash of the source pin that produced it (see the header on why the
+# `novadeck` class is pinned by sources rather than by artifact bytes). The mapping comes from the
+# per-package artifact lists packages/build-overlay.sh already writes, because one PKGBUILD can
+# emit several packages and only the builder knows which. Entries for artifacts we never install
+# (every *-debug, vulkan-mesa-layers) are simply never looked up.
+declare -A PINHASH
+for pin in "$ROOT"/packages/*/source.pin; do
+  [ -e "$pin" ] || continue
+  pname="$(sed -n 's/^name:[[:space:]]*//p' "$pin" | head -1)"
+  [ -f "$OVERLAY_REPO/.stamps/$pname.files" ] || continue
+  h="$("$ROOT/packages/inputhash.sh" "$(dirname "$pin")")"
+  while read -r f; do
+    [ -n "$f" ] && PINHASH["$f"]="$h"
+  done < "$OVERLAY_REPO/.stamps/$pname.files"
+done
+
 # The seal's `pkg` rows (images/seal.list) — the packages that are in the tree below but not on
 # the release image. Only the row kind is read; expanding a name to its files is the sealer's
 # job, not this one's.
@@ -116,7 +139,19 @@ for d in "$LOCALDB"/*/; do
     continue
   fi
   src="${entry%%	*}"; file="${entry#*	}"
-  sha="$(sha256sum "$file" | cut -d' ' -f1)"
+  if [ "$src" = novadeck ]; then
+    # Pinned by its sources, not its bytes (header). No fallback to the artifact sha: that would
+    # write a row images/fetchlock.sh reads with the other meaning, i.e. a lock that verifies
+    # differently depending on which script wrote it.
+    sha="${PINHASH["$(basename "$file")"]:-}"
+    [ -n "$sha" ] || {
+      echo "$(basename "$file"): built into the overlay repo but no source pin claims it" >&2
+      echo "  ${OVERLAY_REPO#"$ROOT"/}/.stamps is stale or absent -> rebuild: make overlay" >&2
+      exit 1
+    }
+  else
+    sha="$(sha256sum "$file" | cut -d' ' -f1)"
+  fi
 
   # Reclassify what the seal removes. The class marks DISPOSITION, not a second provenance:
   # a `stripped` row is fetched, verified and installed exactly like the `snapshot` row it
@@ -179,6 +214,13 @@ builder="$(grep -vE '^[[:space:]]*(#|$)' "$ROOT/base-devel.digest" | tail -1)"
   echo "# name version arch source sha256   (source: snapshot|novadeck|prebuilt|stripped)"
   echo "# Every row carries a real hash: the root is bootstrapped from packages (Phase 4c), so"
   echo "# there is no content on the image that no package file put there."
+  echo "# The hash column pins two different things, because these classes are pinned by"
+  echo "# genuinely different mechanisms:"
+  echo "#   snapshot/stripped/prebuilt  the FILE — the exact bytes fetched and installed."
+  echo "#   novadeck                    the SOURCES — packages/inputhash.sh over that package's"
+  echo "#     source.pin + patches + local PKGBUILD. These are built here and are not"
+  echo "#     bit-reproducible, so an artifact hash would move on every rebuild from unchanged"
+  echo "#     inputs. Rows sharing a hash come from one split PKGBUILD (mesa emits three)."
   echo "# 'stripped' rows are installed like 'snapshot' ones and then deleted from the release"
   echo "# image: images/seal.list declares them, images/seal-rootfs.sh removes them."
   printf '%s' "$rows" | LC_ALL=C sort

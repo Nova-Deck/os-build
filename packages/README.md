@@ -65,6 +65,32 @@ folds the repo db's hash into the base reuse-cache key. `base` depends on `overl
 rebuild from scratch), upload that dir and point a pinned `[novadeck]` `Server` at the URL instead
 of `file://` — same mechanism, different `Server`.
 
+### How these packages are pinned — `inputhash.sh`
+
+`packages/inputhash.sh <package-dir>` prints a digest of a package's **committed inputs**: its
+`source.pin`, the patches that pin declares, and `pkgbuild_local` if it has one. Three readers share
+that one formula, and they have to agree byte for byte:
+
+| reader | what it does with it |
+|---|---|
+| `build-overlay.sh` | incremental-rebuild cache key (`work/repo/<arch>/.stamps/<name>.hash`) |
+| `images/genmanifest.sh` | writes it into `images/manifest.lock` as the `novadeck` rows' hash |
+| `images/fetchlock.sh` | re-derives it and refuses the install when the lock disagrees |
+
+So the lock pins these rows to their **sources**, not to the built artifact's bytes — these builds
+are not bit-reproducible, and an artifact hash moved on every rebuild from unchanged inputs, which
+only ever verified on the machine that last ran `make relock`. Consequences worth knowing:
+
+- Rebuilding a package changes nothing in the lock. Editing a patch or bumping a pin **does**, and
+  `fetchlock` will say so by name and ask for `make relock`.
+- One split PKGBUILD legitimately gives several rows the same hash (`mesa` emits `mesa`,
+  `vulkan-freedreno`, `vulkan-mesa-device-select`).
+- `work/repo` therefore survives `make distclean`; `make clean-overlay` still forces a rebuild.
+
+The hash is **path-independent** by construction, because it has to agree between a developer's
+checkout and a CI runner's workspace. Do not "simplify" it to `sha256sum "${inputs[@]}" |
+sha256sum`: that hashes `<hash>  <path>` lines and silently follows the directory.
+
 ### Local (checked-in) PKGBUILD — `pkgbuild_local`
 
 When there is **no suitable holo PKGBUILD** to fetch — a version bump holo hasn't taken, or a

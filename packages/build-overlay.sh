@@ -24,10 +24,38 @@
 # the GitLab raw endpoint and makepkg clones the actual sources from public GitHub/freedesktop.
 # Reads base-devel.digest. Re-run is cheap to invoke but an emulated build itself is slow.
 #
-#   packages/build-overlay.sh
+#   packages/build-overlay.sh [--only <name>]... [--no-index]
+#
+# --only    build ONLY the named package(s), instead of every package whose inputs changed.
+#           Repeatable. This is what lets the CI package pipeline fan out one package per job
+#           (packages/overlay-store.sh, .github/workflows/overlay.yml) — the builds were already
+#           independent, since each runs in its own fresh container. Handy locally too, to
+#           re-run a single slow package without re-examining the rest.
+# --no-index  skip the closing repo-add. A single-package job holds only its own artifacts, and
+#           the index is rebuilt from scratch over EVERYTHING present — indexing there would
+#           produce a db describing a subset. Whoever assembles the full repo indexes it.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+ONLY=()
+DO_INDEX=1
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --only) [ $# -ge 2 ] || { echo "--only needs a package name" >&2; exit 2; }; ONLY+=("$2"); shift 2 ;;
+    --no-index) DO_INDEX=0; shift ;;
+    -h|--help) sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) echo "unknown argument '$1' (try --help)" >&2; exit 2 ;;
+  esac
+done
+
+# Is this package in the caller's --only filter? No filter means everything, which is the
+# default `make overlay` behaviour and has to stay byte-identical.
+selected() {
+  [ ${#ONLY[@]} -eq 0 ] && return 0
+  local n; for n in "${ONLY[@]}"; do [ "$n" = "$1" ] && return 0; done
+  return 1
+}
 
 # Overlay packages are ARCH-scoped, NOT SoC-scoped: a rebuilt holo package (e.g. gamescope) is a
 # plain aarch64 binary every aarch64 SoC shares, so ONE build serves all devices — and the
@@ -90,6 +118,14 @@ for pin in "${PINS[@]}"; do
   # quietly broken the lock across machines.
   hash="$("$ROOT/packages/inputhash.sh" "$pdir")"
   HASH["$name"]="$hash"
+
+  # Filter AFTER hashing, not before: the hash is cheap (three sha256sums over committed files)
+  # and computing it for every package keeps this loop's accounting — and any message it prints —
+  # the same whether or not a filter is in play.
+  if ! selected "$name"; then
+    echo "[overlay] $name: not selected (--only) — skip" >&2
+    continue
+  fi
 
   if [ -f "$STAMPS/$name.hash" ] && [ "$(cat "$STAMPS/$name.hash")" = "$hash" ] \
      && [ -f "$STAMPS/$name.files" ]; then
@@ -168,11 +204,25 @@ for f in "$REPO_DIR"/*.pkg.tar.zst; do
   esac
 done
 
-if [ ${#BUILD_NAMES[@]} -eq 0 ] && [ "$stale_foreign" -eq 0 ]; then
+# The db's presence is part of this condition, and it is the whole reason `make overlay-pull &&
+# make overlay` works. A pulled repo (packages/overlay-store.sh) arrives with every stamp fresh
+# and NO db, because the index is rebuilt locally rather than shipped — a state this early exit
+# never used to anticipate.
+#
+# Without the `-f` test, that state took this branch and the script exited 0 having built NOTHING
+# and indexed nothing: it printed "all overlay packages up-to-date" and "repo: <dir>", which reads
+# as a completely successful run. (The bare `[ -f ... ] && touch` was not itself fatal — `set -e`
+# exempts a failing AND-OR list — it just quietly did nothing.) The damage landed later and
+# elsewhere: make's $(OVERLAY_DB) target does not exist after a recipe that succeeded, so
+# $(OVERLAY_STAMP)'s sha256sum fails, or customize-base.sh's "no usable overlay repo" check fires.
+# Falling through to the index step instead is both the fix and exactly what a freshly pulled repo
+# needs: one cheap container, no compiles.
+if [ ${#BUILD_NAMES[@]} -eq 0 ] && [ "$stale_foreign" -eq 0 ] \
+   && [ -f "$REPO_DIR/novadeck.db.tar.zst" ]; then
   echo "[overlay] all overlay packages up-to-date — nothing to rebuild" >&2
   # Bump the db mtime so make sees $(OVERLAY_DB) as satisfied against the touched inputs and
   # does not keep re-invoking this script every build.
-  [ -f "$REPO_DIR/novadeck.db.tar.zst" ] && touch "$REPO_DIR/novadeck.db.tar.zst"
+  touch "$REPO_DIR/novadeck.db.tar.zst"
   echo "[overlay] repo: ${REPO_DIR#"$ROOT"/}" >&2
   exit 0
 fi
@@ -253,6 +303,14 @@ done
 # a file the db no longer mentions. That is a second line behind the PKGDEST fix above: PKGDEST
 # stops foreign packages arriving, this clears the ones an older build already deposited (the
 # fex-emu x86 sysroot) without waiting for a fex-emu rebuild to purge them by file manifest.
+#
+# --no-index exists BECAUSE this step is global. A per-package CI job holds only its own
+# artifacts, so indexing there would write a db describing a subset — and the foreign-arch purge
+# above would delete every OTHER package's artifacts as "not mine" if they ever shared a workspace.
+# The job publishes its package and stops; the consumer that reassembles the full repo indexes it.
+if [ "$DO_INDEX" -eq 0 ]; then
+  echo "[overlay] --no-index: skipping the repo db (caller will index the assembled repo)" >&2
+else
 echo "[overlay] indexing repo db" >&2
 docker run --rm --platform linux/arm64 \
   -e HOSTUID="$(id -u)" -e HOSTGID="$(id -g)" -e ARCH="$ARCH" \
@@ -270,6 +328,7 @@ docker run --rm --platform linux/arm64 \
     repo-add novadeck.db.tar.zst *.pkg.tar.zst
     chown -R "$HOSTUID:$HOSTGID" /repo
   ' >&2
+fi
 
 # NOTE: we do NOT advance work/repo/<arch>/.overlay.stamp here. The Makefile's $(OVERLAY_STAMP) rule
 # owns it, keyed on the CONTENT hash of the re-indexed novadeck.db — so a real re-index (db content

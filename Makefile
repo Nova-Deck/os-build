@@ -202,7 +202,8 @@ KERNEL_SRC := kernel/SOURCE.pin kernel/embed.list kernel/build.sh \
 # ==============================================================================
 # Phony orchestration targets
 # ==============================================================================
-.PHONY: help all image toolchain kernel fw-linux fw-qcom base overlay rootfs manifest relock \
+.PHONY: help all image toolchain kernel fw-linux fw-qcom base overlay overlay-pull overlay-publish \
+        rootfs manifest relock \
         initramfs boot sdcard verify-card test bundle deploy clean clean-base clean-overlay distclean
 
 help: ## Show this help
@@ -311,6 +312,25 @@ $(OVERLAY_STAMP): $(OVERLAY_DB)
 	@newsha=$$(sha256sum $(OVERLAY_DB) | cut -d' ' -f1); \
 	 [ "$$(cat $@.sha 2>/dev/null)" = "$$newsha" ] || { printf '%s\n' "$$newsha" > $@.sha; touch $@; }
 	@[ -e $@ ] || touch $@   # first-ever run: ensure the stamp exists even if the sha file seeded it
+
+# Retrieve overlay packages someone already built, instead of compiling them here. Keyed by the
+# same packages/inputhash.sh digest the lock records, so a hit means "built from exactly these
+# sources" — see packages/overlay-store.sh. Pulling needs NO credentials.
+#
+# NOT a prerequisite of $(OVERLAY_DB), deliberately. `make overlay` stays a pure local build with
+# no silent network fetch inside it, and this stays a cache rather than something the lock leans
+# on. A cold consumer runs the two in sequence:  make overlay-pull && make overlay  — the pull
+# lands the artifacts + stamps, and the build then finds everything fresh and only re-indexes.
+# A miss is not an error: whatever could not be pulled simply gets compiled.
+overlay-pull: ## Fetch already-built overlay packages from the store into work/repo/<arch>/
+	packages/overlay-store.sh pull-all
+
+# Publish what THIS machine built. Depends on the stamp so it can only ever publish a repo make
+# considers current — publishing artifacts whose sources have since moved is the one failure this
+# store cannot detect afterwards, because the input hash is the only claim attached to them.
+# (overlay-store.sh re-checks that per package too; this just stops the obvious case earlier.)
+overlay-publish: $(OVERLAY_STAMP) ## Publish locally built overlay packages to the store (needs login)
+	packages/overlay-store.sh push-all
 
 # ==============================================================================
 # Root bootstrap (host — customize-base.sh drives docker + qemu binfmt itself)

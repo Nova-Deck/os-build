@@ -61,9 +61,90 @@ adds it as a `file://` repo **ahead of the holo repos** so the patched package w
 resolves by repo order, not version — the higher `pkgrel` only matters for later upgrades), and
 folds the repo db's hash into the base reuse-cache key. `base` depends on `overlay` automatically.
 
-**Publishing for CI:** `work/repo/<arch>/` is a standard pacman repo. To share it (so CI need not
-rebuild from scratch), upload that dir and point a pinned `[novadeck]` `Server` at the URL instead
-of `file://` — same mechanism, different `Server`.
+### The package store — build once, retrieve everywhere
+
+A cold `make overlay` compiles every package under emulation: ~4h on a 16-core box, `fex-emu`
+alone ~2h. `packages/overlay-store.sh` makes that a one-time cost **per source change** by
+publishing each built package to a registry keyed by its `inputhash.sh` digest, so any other
+machine or pipeline pulls the bytes instead of recompiling.
+
+```
+make overlay-pull && make overlay      # cold consumer: fetch, then assemble. No compiles.
+make overlay-publish                   # publish what this machine built (needs a login)
+packages/overlay-store.sh plan         # which packages the store does NOT already have (JSON)
+packages/overlay-store.sh pull-all --require-all   # fail unless EVERY package came from the store
+```
+
+**`--require-all` is for verification, not for building.** By default a miss is fine — whatever the
+store lacks gets compiled locally, which is slow but correct, so `make overlay-pull` never fails a
+build over a cache miss. CI's `verify` job wants the opposite: it exists to prove the store covers
+the whole set, so it fails immediately and names the package. Reach for the flag when a miss means
+something is *wrong*, not merely absent.
+
+The retrieval path distinguishes **absent** from **unreadable**, which is worth knowing because the
+two have completely different fixes and used to look identical:
+
+| symptom | cause | fix |
+|---|---|---|
+| `not in the store` | nothing has published that input hash yet | build and publish it (or let CI) |
+| `PERMISSION DENIED` | the package exists but is not public | make it public / link it to the repo |
+
+That second row is the trap: **a GHCR package is private when first created, even in a public
+repo.** Before it was classified separately, a freshly published (still-private) store read as a
+plain miss, and CI dutifully recompiled all eight packages instead of saying "I am not allowed to
+read this". Verify a visibility change with no credentials in the environment, not by reading the
+setting back:
+
+```
+DOCKER_CONFIG=$(mktemp -d) packages/overlay-store.sh have rauc && echo readable
+```
+
+`.github/workflows/overlay.yml` is the producer: one job per package that the store lacks, on
+native `aarch64` runners (no qemu), publishing to `ghcr.io/nova-deck/novadeck-overlay/<name>-<arch>`
+tagged with the input hash. An unchanged package is not a fast build there — it is **no build**.
+
+Things worth knowing:
+
+- **Pulling needs no credentials.** The packages are public, so a fresh clone retrieves with no
+  token and no `gh`. Only publishing authenticates — and in CI nothing extra is needed there either,
+  because the workflow's `GITHUB_TOKEN` with `permissions: packages: write` is accepted.
+- **Publishing from a workstation needs a CLASSIC personal access token**, and this is worth knowing
+  before you spend time on it: `gh auth token` hands out a `gho_` OAuth token which GHCR
+  *authenticates* — the blob uploads all succeed — and then refuses at the manifest with `the token
+  provided does not match expected scopes`. The message points at scopes, but the token **type** is
+  the problem, so `gh auth refresh -s write:packages` does not fix it. Create a classic PAT with
+  `write:packages` (plus `delete:packages` only if you also want the prune job), then:
+
+  ```
+  export NOVADECK_GHCR_TOKEN=ghp_...
+  packages/overlay-store.sh login && make overlay-publish
+  ```
+
+  None of this is on the critical path: publishing from a workstation only pre-seeds the store so CI
+  need not build on its first run, and CI builds the whole set from cold in well under ten minutes
+  on native `aarch64`. Skipping it is a perfectly good default.
+- **The input hash is the key**, which is why it is not throwaway: same hash ⇒ same sources ⇒ the
+  published artifacts are the ones you would have built. It is a fourth reader of the one formula
+  above and must agree with the other three.
+- **`.stamps/<name>.files` travels with the artifact**, because it is the only mapping from a pin
+  to its several outputs (`mesa` emits five) and both `genmanifest.sh` and `fetchlock.sh` hard-fail
+  without it. A pull writes the stamps last, so an interrupted pull looks un-built and gets rebuilt
+  rather than looking complete with files missing.
+- **No checksum sidecar**: a registry content-addresses every blob, so `oras pull` already verifies
+  the bytes it returns. `oras` itself is pinned by `packages/oras.pin`.
+- **This is a cache, not a provenance mechanism.** `images/manifest.lock` still pins the `novadeck`
+  rows to their *sources* and `fetchlock.sh` still re-derives that hash from `packages/` — the store
+  changes neither, and a miss just means a local build. Making the lock verify these artifacts *by
+  byte* is a separate open item in `TODO.md`.
+- **The repo db is rebuilt locally, not shipped**, since it must describe whatever set the consumer
+  actually has. `repo-add` output is not byte-reproducible, so a pull-then-index yields a different
+  `novadeck.db` sha than the machine that built the packages — which advances `.overlay.stamp` and
+  so rebuilds the *base*. Cheap next to the compiles it skipped, and conservative in the right
+  direction, but it does mean `overlay-pull` is not completely free on a warm machine.
+
+`work/repo/<arch>/` remains a plain pacman repo, so the alternative of serving it over HTTP and
+repointing the `[novadeck]` `Server` still works; the store is preferred because it is
+content-addressed per package rather than a single mutable directory.
 
 ### How these packages are pinned — `inputhash.sh`
 

@@ -9,6 +9,34 @@ Two jobs, no secrets, on every push and pull request:
 | `test` | `make test` — 354 checks across the initramfs slot-state reader, `novadeck-bootctl`, and the RAUC post-install hook | nothing (host shell) |
 | `signing` | `make test-signing` — every case a negative against `images/rauc/verify-signing.sh` | the `novadeck-build` container, for `rauc` |
 
+## Today: `.github/workflows/overlay.yml` — the package pipeline
+
+Builds the from-source overlay packages and publishes them so nothing else has to build them.
+Triggered by a change to any overlay input (`packages/*/source.pin`, its patches, a local
+`PKGBUILD`, `base-devel.digest`), plus `workflow_dispatch` and `workflow_call`.
+
+| job | runner | what it runs |
+|---|---|---|
+| `plan` | x86 | `overlay-store.sh plan` — the input hash of every package, against what the store already holds. Emits the build matrix. |
+| `build` | `ubuntu-24.04-arm` | one job per *missing* package: `build-overlay.sh --only <pkg> --no-index`, then publish |
+| `verify` | `ubuntu-24.04-arm` | `make overlay-pull && make overlay` on a clean workspace, asserting **zero compiles**, a real repo db, and that `fetchlock.sh` still verifies the untouched lock |
+| `prune` | x86 | optional housekeeping; needs a `GHCR_PRUNE_TOKEN` PAT, announces itself as skipped without one |
+
+Three properties this leans on:
+
+- **The trigger key and the artifact key are the same value** — `packages/inputhash.sh`, which the
+  lock already records. "Has this changed?" and "which artifact do I want?" have one answer, so an
+  unchanged package is not a fast build but *no* build.
+- **Native aarch64, so no emulation.** `build-overlay.sh`'s own binfmt probe passes and it never
+  registers qemu or needs `--privileged`. `vars.OVERLAY_RUNNER` overrides the label; do **not**
+  point it at a self-hosted runner while this repo is public.
+- **Fork PRs do not run it.** A fork's token is read-only and could not publish; triggering on
+  `push` means a fork PR skips the pipeline and its packages get built on merge.
+
+`verify` is the job that matters to everything downstream: it is the automated form of "a cold
+machine can reconstitute the overlay repo from the store without compiling", tested every run
+rather than assumed.
+
 The signing job checks the committed keyring (`images/rauc/novadeck-ca.pem`) against the committed
 release certificate (`images/rauc/release.cert.pem`). Both are public, so it runs on a fork's PR
 with access to nothing. The private half — does the signing *key* match that cert — announces
@@ -18,19 +46,28 @@ itself as skipped there and runs wherever a PKI is mounted:
 
 ## Not here yet, and why
 
-**The image build.** The *lock* half of this is fixed. A clean runner has no `work/`, so it rebuilds
-the from-source overlay packages, and those builds are not bit-reproducible — which used to fail
+**The image build.** Both of its old blockers are now gone, and what remains is smaller than either.
+
+The *lock* half was fixed first. A clean runner has no `work/`, so it rebuilds the from-source
+overlay packages, and those builds are not bit-reproducible — which used to fail
 `images/fetchlock.sh` on every single run, because the lock pinned those rows to artifact bytes that
 only the machine that last ran `make relock` could reproduce. `images/manifest.lock` now pins them to
 their **sources** instead (`packages/inputhash.sh` over `source.pin` + patches + `PKGBUILD`), so a
 rebuild from unchanged sources is not a lock change and a clean runner verifies exactly like the
 machine that wrote the lock. CI never has to mutate a reviewed artifact to get green.
 
-What is left is cost, not correctness: rebuilding every overlay package under qemu is the most
-expensive thing in this build (`fex-emu` dominates), and a runner starts cold every time. So the open
-question for landing `make sdcard` in CI is where the overlay artifacts come from — which is the
-same question the successor TODO item answers by publishing them as sha-pinned `prebuilt` rows from
-a separate package pipeline, restoring a byte-level claim as a side effect.
+The *cost* half is what the package pipeline above answers. A runner still starts cold, but it no
+longer compiles: `make overlay-pull` retrieves the packages some earlier run already built, keyed by
+the input hash the lock records, and `make overlay` then only re-indexes. The `verify` job proves
+that path on every run. So an image build in CI is now a matter of wiring `overlay-pull` ahead of
+`make sdcard` and finding out what the rest of the pipeline costs — not a hard block.
+
+What is still genuinely open is the **byte** claim, not the cost. The lock attests these artifacts'
+sources, not their bytes: anyone who can write `work/repo` can substitute one, and the store does
+not change that (`oras pull` verifies what the registry holds, which is a different question from
+what the lock reviewed). Closing it is the TODO item on promoting overlay output to sha-pinned rows
+that `fetchlock.sh` fetches and verifies like `snapshot` — for which the store is the prerequisite,
+now in place.
 
 **Bundle signing.** `make bundle` needs the built rootfs, so it is blocked by the same thing. When
 it lands, the shape is already settled by the PKI:

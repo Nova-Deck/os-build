@@ -625,21 +625,41 @@ rationale lives in the linked memories and commit history.
   `work/repo` can substitute one — in exchange for a provenance claim that survives crossing a machine.
   See [[rootfs-build-approach]], [[overlay-package-pipeline]].
 
-- [ ] **Publish overlay builds as sha-pinned `prebuilt` rows (restores the byte claim; unblocks a
-  cold-runner image build)** — successor to the item above, which fixed the *correctness* half. The
-  overlay artifacts are still built on whatever machine runs `make`, so `images/manifest.lock` attests
-  their sources but not their bytes, and CI would rebuild ~10 packages under qemu on every cold run
-  (`fex-emu` dominates). **Shape:** promote overlay output to the `prebuilt` class the repo already has
-  (`packages/*/prebuilt.pin`, sha256-pinned, fetched not built). Two pipelines — a *package* pipeline
-  triggered by `source.pin`/patch/`PKGBUILD` changes that builds, publishes and opens a pin-bump PR with
-  the sha; and the *image* pipeline consuming those pinned bytes, so `fetchlock`'s `novadeck` class
-  becomes fetchable like `snapshot` and its sha verifies a download again. Note the source hash from
-  `packages/inputhash.sh` is exactly the trigger key that pipeline needs, so it is reusable, not
-  throwaway. Reproducible builds (`SOURCE_DATE_EPOCH` etc.) are the purist fix but are a project on
-  their own, and partial reproducibility is still a red build — layer it later as *verification* of the
-  package pipeline, not as a prerequisite. **Rejected:** caching `work/repo` in CI — a miss is a red
-  build, guaranteed on the first build after any patch edit, and a cache is not a provenance mechanism.
-  See `ci/README.md` ("Not here yet, and why"), [[overlay-package-pipeline]].
+- [ ] **Publish overlay builds as sha-pinned `prebuilt` rows — COST HALF LANDED 2026-07-29, byte claim
+  still open** — successor to the item above, which fixed the *correctness* half. Two halves, and only
+  one is done.
+  **DONE: the package pipeline and the store.** `.github/workflows/overlay.yml` +
+  `packages/overlay-store.sh` build each from-source package once and publish it to
+  `ghcr.io/nova-deck/novadeck-overlay/<name>-aarch64:<inputhash>`, on native `ubuntu-24.04-arm`
+  runners (no qemu, no `--privileged`). `make overlay-pull && make overlay` reconstitutes
+  `work/repo/aarch64` on a cold machine with **zero compiles** — validated end to end against a local
+  `registry:2`: 19 artifacts byte-identical, repo db rebuilt, `fetchlock.sh` verifying all 392 rows
+  (10 overlay) against an untouched lock. As predicted, `packages/inputhash.sh` was exactly the
+  trigger key — it is now a *fourth* reader of that one formula, so a `plan` job asking the registry
+  "do you already have this hash?" is the whole change-detection mechanism, and an unchanged package
+  is no build at all. `build-overlay.sh` gained `--only` / `--no-index` for the per-package fan-out,
+  plus a fix for an early exit that `set -e` turned fatal in exactly the state a pull produces
+  (stamps fresh, db absent). This unblocks a cold-runner image build: wire `overlay-pull` ahead of
+  `make sdcard`.
+  **STILL OPEN: the byte claim.** The lock attests these artifacts' *sources*, not their bytes —
+  anyone who can write `work/repo` can substitute one, and the store does not change that (`oras pull`
+  verifies what the *registry* holds, a different question from what a reviewer approved). The
+  remaining shape is the original one: promote these to the `prebuilt` class (sha256-pinned, fetched
+  not built), have the pipeline open a **pin-bump PR carrying each artifact's sha**, and make
+  `fetchlock`'s `novadeck` class fetchable-and-byte-verified like `snapshot`. Cost is no longer the
+  motivation for it; provenance is. Note the trade it imposes: a local `make overlay` would no longer
+  be enough to image from, since locally built bytes will not match a published sha without a
+  publish + `make relock` round trip.
+  Reproducible builds (`SOURCE_DATE_EPOCH` etc.) remain the purist fix and a project on their own —
+  layer them later as *verification* of the pipeline, not as a prerequisite. One measured wart worth
+  knowing: `repo-add` is not byte-reproducible either, so a pull-then-index moves `novadeck.db`'s sha
+  and therefore rebuilds the base — cheap next to the compiles skipped, but `overlay-pull` is not
+  entirely free on a warm machine.
+  **Rejected (unchanged):** GitHub Actions `cache` for `work/repo` — a miss is a red build, guaranteed
+  on the first build after any patch edit, and a cache keyed by anything other than the input hash is
+  not a provenance mechanism. The store above is content-addressed per package, which is why a miss
+  there is merely slow.
+  See `ci/README.md`, `packages/README.md` ("The package store"), [[overlay-package-pipeline]].
 
 - [x] **Power profiles + device-env stack — LANDED + HW-VALIDATED 2026-07-14 (Pocket S2)** — SteamUI's
   Performance profiles / GPU / fan controls work end-to-end. Three pieces (ported from the reference

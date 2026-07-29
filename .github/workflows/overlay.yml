@@ -41,6 +41,13 @@ on:
       - 'packages/build-overlay.sh'
       - 'packages/inputhash.sh'
       - 'packages/overlay-store.sh'
+      # The pin writer AND the release gate. Omitting it meant a change to the checker could not
+      # trigger the pipeline that exercises it — the same shape of omission as the missing
+      # !cancelled() below: the thing meant to run simply does not.
+      - 'packages/verify-pins.sh'
+      # packages/*/artifact.pin is deliberately NOT a trigger. This pipeline WRITES those files, so
+      # triggering on them would make every pin-bump merge start another run that produces another
+      # pin-bump — a loop whose every iteration looks legitimate.
       - 'packages/oras.pin'
       - 'base-devel.digest'
       - '.github/workflows/overlay.yml'
@@ -238,7 +245,14 @@ jobs:
   pin-bump:
     name: open the pin-bump PR
     needs: verify
-    if: github.ref == 'refs/heads/main' && needs.verify.result == 'success'
+    # !cancelled() IS LOAD-BEARING, and its absence made this job dead code on the common path.
+    # A full cache hit skips `build` (the good case — nothing needed rebuilding), and a skip
+    # propagates transitively to every downstream job that does not opt out. `verify` opts out with
+    # its own always(); this job did not, so it inherited build's skip even though verify succeeded.
+    # Observed on the first main run after this landed: prune (which has always()) ran, pin-bump did
+    # not, with identical ref and verify conditions. The explicit success check below is what keeps
+    # the opt-out honest — we want "verify passed", not "verify finished".
+    if: ${{ !cancelled() && github.ref == 'refs/heads/main' && needs.verify.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

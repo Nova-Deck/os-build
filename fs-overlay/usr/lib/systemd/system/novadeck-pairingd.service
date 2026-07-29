@@ -1,0 +1,39 @@
+[Unit]
+Description=novadeck key-pairing agent (opens a bounded window to accept an SSH key)
+# Soft dependency: the advertisement is a convenience so a user can reach the device by name
+# instead of hunting for its address. If the responder is not installed or not running, pairing
+# still works over the address shown in the on-screen network settings.
+Wants=avahi-daemon.service
+After=avahi-daemon.service network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/novadeck-pairingd
+
+# The advertisement exists only while the agent does, so a device that is not in pairing mode
+# does not announce a pairing port to the network. Leading '-' on the teardown: a failure to
+# remove the file must not mark the unit failed, and the next start overwrites it anyway.
+ExecStartPre=/usr/bin/install -Dm0644 /usr/share/novadeck/pairing.avahi-service /etc/avahi/services/novadeck-pairing.service
+ExecStopPost=-/usr/bin/rm -f /etc/avahi/services/novadeck-pairing.service
+
+# NOT restarted. The pairing window is measured from process start, so an automatic restart
+# would silently re-open one that nobody asked for. If the agent dies, the user flips the
+# switch again — which is exactly the physical confirmation the whole design rests on.
+Restart=no
+
+# Backstop: the agent keeps answering after the window closes purely so a late client gets a
+# readable "window closed" instead of a connection refused. Half an hour of that is plenty;
+# after it the port goes away entirely rather than lingering for the rest of the uptime.
+RuntimeMaxSec=1800
+
+# Runs as root: it writes another account's authorized_keys and enables a system unit. Doing
+# that from an unprivileged agent would need a polkit grant broad enough to be worse.
+User=root
+NoNewPrivileges=no
+ProtectSystem=full
+ProtectHome=no
+PrivateTmp=yes
+
+# Deliberately NO [Install] section. This unit must not be enable-able, because a device that
+# boots into pairing mode unattended defeats the physical-presence gate. It is started by the
+# on-screen remote-access switch (steamos-polkit-helpers/steamos-devkit-mode) and no other way.

@@ -1,0 +1,300 @@
+#!/usr/bin/python3
+"""novadeck-pairingd — key-pairing agent for remote access.
+
+WHY THIS EXISTS
+    This image ships no desktop and no terminal, so there is no way for a user to put an SSH
+    key on the device by hand, and no way for them to reach a shell to do it. Ejecting the
+    storage and writing the key from another machine works today and stops working the moment
+    the OS is installed to internal storage. So key delivery has to happen over the network,
+    and it has to be safe to expose on whatever Wi-Fi the device happens to have joined.
+
+THE CONSENT MODEL — read this before changing anything here
+    The listening socket is unauthenticated by construction: the whole point is to accept a key
+    from someone who has no credentials yet. What makes that safe is that the port only accepts
+    registrations during a short window that a human opens by flipping a switch in the on-screen
+    settings, while physically holding the device. Outside that window every registration is
+    refused. Physical presence is the credential.
+
+    The window is measured from THIS PROCESS'S OWN START, which is why the toggle restarts the
+    service rather than signalling an already-running one: there is no stamp file to forge and
+    no clock to trust (CLOCK_MONOTONIC, so an NTP step or a dead RTC cannot widen it). The unit
+    is Restart=no and has no [Install] section, so a window can only ever be opened by a human
+    flipping the switch — never by a crash, and never by an unattended boot.
+
+    A second confirmation prompt drawn by the on-screen client is the intended future addition;
+    the client ships the entry points for it. It is not wired up here because it cannot be
+    verified without hardware, and a consent gate that has never been seen to draw is worse
+    than one whose behaviour is fully determined.
+
+WHAT IT GRANTS
+    An approved registration appends one key to the session user's authorized_keys and turns on
+    the SSH server. It never sets a password, never touches root's authorized_keys (which would
+    not survive a slot update anyway — /root is on the read-only root, the session user's home
+    is a partition of its own), and never grants anything a second registration could escalate.
+"""
+
+import http.server
+import json
+import os
+import pwd
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+
+# The port and path the pairing tooling already speaks. Chosen for compatibility: it means a
+# user can register with nothing but curl, and the existing third-party GUI clients also work.
+SERVICE_PORT = 32000
+
+# How long a flip of the switch keeps registration open. Long enough to walk to another machine
+# and paste a command, short enough that a device left on a cafe network is not a standing
+# offer. Re-flip the switch to open another one.
+PAIRING_WINDOW_SECONDS = 300
+
+# The account remote access is granted to. uid 1000, and its home is the shared data partition,
+# so an installed key survives A/B updates untouched.
+SESSION_USER = "deck"
+
+# Accepted key algorithms. Anything else is refused rather than passed to ssh-keygen, so an
+# exotic or deprecated type cannot become a login on this device by accident.
+ALLOWED_KEY_TYPES = {
+    "ssh-ed25519",
+    "sk-ssh-ed25519@openssh.com",
+    "ecdsa-sha2-nistp256",
+    "ecdsa-sha2-nistp384",
+    "ecdsa-sha2-nistp521",
+    "sk-ecdsa-sha2-nistp256@openssh.com",
+    "ssh-rsa",
+}
+
+# An authorized_keys line may begin with OPTIONS (command=, environment=, permitopen=, ...)
+# before the key type. A registration must never be able to smuggle those in, so a submitted
+# line has to start with the key type itself and be exactly one line. This is the difference
+# between installing a key and installing an arbitrary forced command.
+MAX_BODY_BYTES = 8 * 1024
+
+
+def log(msg):
+    print(f"novadeck-pairingd: {msg}", file=sys.stderr, flush=True)
+
+
+# Captured at import, i.e. at process start. CLOCK_MONOTONIC counts from BOOT, not from us, so
+# the elapsed time has to be measured against this baseline — using it raw would leave the window
+# permanently shut on any device that has been up longer than PAIRING_WINDOW_SECONDS.
+_STARTED = time.monotonic()
+
+
+def window_remaining():
+    """Seconds left in the pairing window; <= 0 once it has closed."""
+    return PAIRING_WINDOW_SECONDS - (time.monotonic() - _STARTED)
+
+
+def parse_public_key(body):
+    """Return a normalised single-line public key, or None if the body is not exactly that.
+
+    Rejects: multiple lines, leading options, unknown algorithms, and anything ssh-keygen
+    cannot read back as a key. The comment field is preserved (it is what the user sees when
+    auditing authorized_keys later) but stripped of anything that could break the file format.
+    """
+    try:
+        text = body.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    if len(lines) != 1:
+        return None
+
+    fields = lines[0].split()
+    if len(fields) < 2 or fields[0] not in ALLOWED_KEY_TYPES:
+        return None
+
+    keytype, blob = fields[0], fields[1]
+    # Comment: collapse whitespace, drop control characters, and bound the length. The pairing
+    # clients append their own marker here, which is fine — it is only ever a label.
+    comment = " ".join(fields[2:])
+    comment = "".join(c for c in comment if c.isprintable())[:120].strip()
+    candidate = f"{keytype} {blob}" + (f" {comment}" if comment else "")
+
+    # Final authority is ssh-keygen: if it cannot fingerprint the line, it is not a key.
+    with tempfile.NamedTemporaryFile("w", suffix=".pub", delete=True) as tf:
+        tf.write(candidate + "\n")
+        tf.flush()
+        try:
+            subprocess.run(
+                ["ssh-keygen", "-l", "-f", tf.name],
+                check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10,
+            )
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
+            return None
+
+    return candidate
+
+
+def install_key(key_line):
+    """Append the key to the session user's authorized_keys. Returns True on success.
+
+    Idempotent on the key blob, so re-registering the same key from the same machine is a
+    no-op rather than a growing file.
+    """
+    try:
+        ent = pwd.getpwnam(SESSION_USER)
+    except KeyError:
+        log(f"no such user: {SESSION_USER}")
+        return False
+
+    ssh_dir = os.path.join(ent.pw_dir, ".ssh")
+    keyfile = os.path.join(ssh_dir, "authorized_keys")
+    blob = key_line.split()[1]
+
+    try:
+        os.makedirs(ssh_dir, mode=0o700, exist_ok=True)
+        os.chown(ssh_dir, ent.pw_uid, ent.pw_gid)
+        os.chmod(ssh_dir, 0o700)
+
+        existing = ""
+        if os.path.exists(keyfile):
+            with open(keyfile, "r", encoding="utf-8", errors="replace") as f:
+                existing = f.read()
+            if blob in existing:
+                log("key already registered")
+                return True
+
+        # Write via a temp file in the same directory and rename, so a crash mid-write cannot
+        # leave a truncated authorized_keys (which would lock out every already-paired machine).
+        fd, tmp = tempfile.mkstemp(dir=ssh_dir)
+        try:
+            with os.fdopen(fd, "w") as f:
+                if existing and not existing.endswith("\n"):
+                    existing += "\n"
+                f.write(existing + key_line + "\n")
+            os.chown(tmp, ent.pw_uid, ent.pw_gid)
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, keyfile)
+        except Exception:
+            os.unlink(tmp)
+            raise
+    except OSError as e:
+        log(f"cannot install key: {e}")
+        return False
+
+    log(f"installed key for {SESSION_USER}")
+    return True
+
+
+def enable_sshd():
+    """Turn on the SSH server. Runs as root, so it needs no polkit mediation."""
+    try:
+        subprocess.run(
+            ["systemctl", "enable", "--now", "sshd.service"],
+            check=True, stdout=subprocess.DEVNULL, timeout=60,
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as e:
+        log(f"cannot enable sshd: {e}")
+        return False
+    log("sshd enabled")
+    return True
+
+
+class PairingHandler(http.server.BaseHTTPRequestHandler):
+    server_version = "novadeck-pairingd"
+    sys_version = ""
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, fmt, *args):
+        log(fmt % args)
+
+    def _respond(self, code, payload, ctype="text/plain"):
+        body = payload.encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        # Compatibility endpoint: pairing clients ask which account to log in as.
+        if self.path == "/login-name":
+            self._respond(200, SESSION_USER + "\n")
+            return
+        if self.path == "/status":
+            remaining = max(0, int(window_remaining()))
+            self._respond(200, json.dumps({"pairing_open": remaining > 0,
+                                           "seconds_remaining": remaining}) + "\n",
+                          ctype="application/json")
+            return
+        self._respond(404, "not found\n")
+
+    def do_POST(self):
+        if self.path != "/register":
+            self._respond(404, "not found\n")
+            return
+
+        remaining = window_remaining()
+        if remaining <= 0:
+            # Refuse BEFORE reading the key. Nothing about a closed window should depend on
+            # what was submitted, and there is no reason to hold an unapproved key in memory.
+            log(f"registration refused from {self.client_address[0]}: pairing window closed")
+            self._respond(403, json.dumps(
+                {"error": "pairing window closed — turn remote access on again on the device"}
+            ) + "\n", ctype="application/json")
+            return
+
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            length = 0
+        if length <= 0 or length > MAX_BODY_BYTES:
+            self._respond(400, json.dumps({"error": "bad request body"}) + "\n",
+                          ctype="application/json")
+            return
+
+        key_line = parse_public_key(self.rfile.read(length))
+        if key_line is None:
+            log(f"registration refused from {self.client_address[0]}: not a single valid key")
+            self._respond(400, json.dumps({"error": "not a valid ssh public key"}) + "\n",
+                          ctype="application/json")
+            return
+
+        log(f"registration accepted from {self.client_address[0]} "
+            f"({int(remaining)}s left in window)")
+
+        if not install_key(key_line) or not enable_sshd():
+            self._respond(500, json.dumps({"error": "failed to apply the key"}) + "\n",
+                          ctype="application/json")
+            return
+
+        self._respond(200, json.dumps({"result": "registered", "user": SESSION_USER}) + "\n",
+                      ctype="application/json")
+
+
+class PairingServer(http.server.ThreadingHTTPServer):
+    daemon_threads = True
+    allow_reuse_address = True
+
+
+def main():
+    if os.geteuid() != 0:
+        log("must run as root")
+        return 1
+    if shutil.which("ssh-keygen") is None:
+        # Fail loudly at startup rather than accepting a registration we cannot validate.
+        log("ssh-keygen not found — refusing to start")
+        return 1
+
+    server = PairingServer(("", SERVICE_PORT), PairingHandler)
+    log(f"listening on :{SERVICE_PORT}, pairing open for {PAIRING_WINDOW_SECONDS}s")
+    try:
+        # Serve past the window rather than exiting: a client that arrives late gets a clear
+        # 403 explaining how to re-open it, instead of a connection refused it cannot read.
+        server.serve_forever(poll_interval=1.0)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

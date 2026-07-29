@@ -1,0 +1,26 @@
+#!/usr/bin/bash
+# Turn on the SSH server.
+#
+# Unlike the other helpers in this directory (which run as the session user and reach a
+# privileged operation through a D-Bus interface polkit already brokers), enabling a unit
+# has no such path: systemd's manage-unit-files action is auth_admin_keep by default and
+# there is no per-unit detail we can safely narrow a rules.d grant to. So this one
+# self-elevates through pkexec against a dedicated action, declared in
+# /usr/share/polkit-1/actions/org.novadeck.policy and limited to an ACTIVE session.
+#
+# --disable-internal-agent is deliberate: it means a caller that is NOT authorized fails
+# outright instead of hanging on an auth prompt that nothing in the gamepad session can draw.
+#
+# Enabling writes into /etc, whose overlay upper lives in the per-slot /var, so the setting
+# rides an A/B update across to the target slot (see usr/lib/rauc/post-install.sh). Host keys
+# are NOT generated here — sshdgenkeys.service does that per-device on first start.
+#
+# This grants no access on its own. sshd is key-only (no account here has a password), so a
+# running sshd with no authorized key admits nobody. Key delivery is a separate step.
+set -eu
+
+if [ "${EUID:-$(id -u)}" -ne 0 ]; then
+    exec pkexec --disable-internal-agent "$0" "$@"
+fi
+
+exec systemctl enable --now sshd.service

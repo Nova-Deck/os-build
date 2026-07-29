@@ -252,6 +252,7 @@ test: ## Run the offline slot-state + bootctl + post-install suites (host, no bu
 	bash images/initramfs/test-slot-state.sh
 	bash images/test-bootctl.sh
 	bash images/test-post-install.sh
+	bash images/test-pairingd.sh
 
 # The fourth suite, separate because it is the one that CANNOT run on the host: it signs real
 # bundles and verifies them through the shipped system.conf, so it needs rauc. Every case in it is
@@ -348,6 +349,13 @@ $(BASE_STAMP): base-devel.digest snapshot.pin images/manifest.lock images/fetchl
                $(BASE_MODE_STAMP)
 	images/customize-base.sh
 	@test -f work/base/usr/bin/sshd   # sentinel: sshd present => release runtime laid down
+	@: "sentinel: the pairing agent's interpreter and key validator. Both arrive as transitive"; \
+	 : "dependencies of other packages, so a dependency change elsewhere could remove them and"; \
+	 : "the only symptom would be that remote access silently stops working on a shipped image."; \
+	 for f in usr/bin/python3 usr/bin/ssh-keygen; do \
+	   test -e "work/base/$$f" || { \
+	     echo "novadeck-pairingd needs /$$f and the base tree has no such file" >&2; exit 1; }; \
+	 done
 	@: "sentinel: the tree must be in the mode this build asked for (see above)"; \
 	 got=release; grep -qx 'test:1' work/base/usr/lib/novadeck/pkgs 2>/dev/null && got=test; \
 	 [ "$$got" = "$(ROOTFS_MODE)" ] || { \

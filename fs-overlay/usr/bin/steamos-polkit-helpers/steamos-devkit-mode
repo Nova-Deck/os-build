@@ -1,0 +1,42 @@
+#!/usr/bin/bash
+# Remote-access switch. SteamUI's Settings > System > Developer page calls this by absolute
+# path (confirmed in the baked seed's steamui.so); it is the ONLY switch the shipped client
+# offers that maps onto remote access, so it is the switch we hang it off. Ships OFF: nothing
+# enables this at build time, and the agent it starts has no [Install] section to enable.
+#
+# ON  = open a pairing window. Flipping the switch is the physical confirmation that makes an
+#       unauthenticated pairing port safe to expose, so this RESTARTS the agent rather than
+#       merely starting it: a second flip must open a fresh window, not join the stale one
+#       (the window is measured from the agent's own start — see novadeck-pairingd).
+#       Turning it on grants nothing by itself. Until someone registers a key, sshd is not
+#       running and no account here has a password.
+# OFF = stop accepting keys AND close the port. A switch labelled off that left the SSH server
+#       running would be a lie. Already-installed keys are left in place, so turning it back on
+#       and pairing again is not required for a machine that paired before.
+#
+# The client tracks the switch position itself (no query verb is invoked and nothing in it
+# inspects unit state), so this only has to apply the change, not report it.
+#
+# Self-elevates for the same reason as steamos-enable-sshd; see that script's header.
+set -eu
+
+case "${1:-}" in
+    --enable|enable)   action=enable  ;;
+    --disable|disable) action=disable ;;
+    # EINVAL. An unrecognised verb must not be read as "disable" -- a future client that calls
+    # this with a query or a new subcommand would otherwise silently drop remote access.
+    *) echo "usage: ${0##*/} --enable|--disable" >&2; exit 22 ;;
+esac
+
+if [ "${EUID:-$(id -u)}" -ne 0 ]; then
+    exec pkexec --disable-internal-agent "$0" "$@"
+fi
+
+if [ "$action" = enable ]; then
+    exec systemctl restart novadeck-pairingd.service
+fi
+
+# Order matters: stop accepting new keys before closing the door, so a registration cannot land
+# in the gap and re-enable sshd immediately after we disabled it.
+systemctl stop novadeck-pairingd.service
+exec systemctl disable --now sshd.service

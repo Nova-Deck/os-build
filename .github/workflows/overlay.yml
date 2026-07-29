@@ -279,12 +279,19 @@ jobs:
             cp "$f" "$d/artifact.pin"
           done
           rm -rf pins
-          if git diff --quiet -- 'packages/*/artifact.pin'; then
+          # STAGE BEFORE ASKING. `git diff` does not see untracked files, so on the bootstrap run
+          # — no artifact.pin tracked yet, which is exactly the run whose PR introduces them — it
+          # reported "unchanged" about eight files that had just been created, and the job succeeded
+          # having done nothing. Observed on the first main run after the !cancelled() fix made this
+          # job reachable at all: reachable, green, and still no PR. Staging first makes an added
+          # file and a modified file the same question, which is the question we meant to ask.
+          git add -- 'packages/*/artifact.pin'
+          if git diff --cached --quiet -- 'packages/*/artifact.pin'; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "artifact pins unchanged — no PR needed" >> "$GITHUB_STEP_SUMMARY"
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
-            git diff --stat -- 'packages/*/artifact.pin' >> "$GITHUB_STEP_SUMMARY"
+            git diff --cached --stat -- 'packages/*/artifact.pin' >> "$GITHUB_STEP_SUMMARY"
           fi
 
       # gh(1) rather than a marketplace action, for the same reason packages/overlay-store.sh

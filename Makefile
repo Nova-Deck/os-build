@@ -242,6 +242,25 @@ KERNEL_SRC := kernel/SOURCE.pin kernel/embed.list kernel/build.sh \
               $(wildcard kernel/patches/*.patch) \
               $(wildcard kernel/dts/qcom/*)
 
+# ...but the kernel keys off the CONTENT of that list, not its mtimes. git rewrites a file
+# whenever its content differs between the old and new tree, stamping it with the time of the
+# checkout — so `git checkout` + `pull --ff-only` across a branch that touches any kernel input
+# rewrites it TWICE (out to the other version, back to this one) and leaves a fresh mtime on
+# bytes that never changed. That cost a full ~25min from-scratch rebuild per merge, for nothing:
+# measured 2026-07-30, when the PR #12 fast-forward re-stamped kernel/build.sh and
+# kernel/kernel.config with content identical to the kernel already in out/.
+#
+# So $(KERNEL) depends on this digest file instead. Its recipe runs whenever an input's mtime
+# moves (which is the only cheap signal that something MIGHT have changed), but it rewrites
+# itself only when the digest actually differs — so its own mtime advances on real edits alone.
+# Same shape as $(OVERLAY_STAMP) below, which keys off sha256sum $(OVERLAY_DB) rather than
+# novadeck.db's mtime for exactly this reason. One file rather than that rule's stamp+.sha pair,
+# because here the digest IS the marker; there the stamp doubles as a build marker.
+#
+# The file list is inside the digest, not just the file contents, so adding or deleting a patch
+# counts as a change. Paths are repo-relative, so the digest does not follow the checkout dir.
+KERNEL_SRC_HASH := work/.kernel-src.hash
+
 .DEFAULT_GOAL := help
 
 # ==============================================================================
@@ -251,6 +270,11 @@ KERNEL_SRC := kernel/SOURCE.pin kernel/embed.list kernel/build.sh \
         verify-pins pin-artifacts verify-lock \
         rootfs manifest relock \
         initramfs boot sdcard verify-card test bundle deploy clean clean-base clean-overlay distclean
+
+# An always-out-of-date prerequisite, for rules that must re-evaluate their own inputs every run
+# rather than trust a prerequisite's mtime. Only $(KERNEL_SRC_HASH) uses it; see the note there.
+.PHONY: FORCE
+FORCE:
 
 help: ## Show this help
 	@echo "novadeck build — unified image (all SoCs/boards)"
@@ -508,7 +532,23 @@ endif
 # ==============================================================================
 # Kernel (container) — needs both firmware sets baked in (CONFIG_EXTRA_FIRMWARE)
 # ==============================================================================
-$(KERNEL): $(KERNEL_SRC) $(FW_LINUX) $(FW_QCOM) | $(BUILD_STAMP)
+# Advance the kernel-source digest only when the sources' CONTENT changed — see KERNEL_SRC_HASH
+# up top for why an mtime dependency is not good enough here. Written in this target's own recipe
+# so make observes the new mtime within the same invocation, the same requirement $(OVERLAY_STAMP)
+# documents. A missing $(KERNEL) still rebuilds regardless of this file, so a `make clean` (which
+# leaves work/ alone) cannot be tricked into skipping the build by a digest that survived it.
+# FORCE, not $(KERNEL_SRC): the recipe has to run on EVERY invocation, because the case it must
+# catch has no newer prerequisite to trigger it. DELETING a patch changes what the kernel is built
+# from, but leaves every surviving input older than the digest, so an mtime-driven rule would skip
+# and keep serving the pre-deletion hash. (The old direct dependency had the same blind spot for
+# the same reason; it is fixed here rather than carried over.) Recomputing is a sha256sum over
+# ~60 files, single-digit ms — cheap enough to pay unconditionally.
+$(KERNEL_SRC_HASH): FORCE
+	@mkdir -p $(@D)
+	@new=$$(sha256sum $(KERNEL_SRC) | sha256sum | cut -d' ' -f1); \
+	 [ "$$(cat $@ 2>/dev/null)" = "$$new" ] || printf '%s\n' "$$new" > $@
+
+$(KERNEL): $(KERNEL_SRC_HASH) $(FW_LINUX) $(FW_QCOM) | $(BUILD_STAMP)
 	$(DOCKER) $(if $(BASE_CONFIG),-e BASE_CONFIG=/src/$(BASE_CONFIG)) \
 	  $(BUILD_IMG) kernel/build.sh
 

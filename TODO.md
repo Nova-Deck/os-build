@@ -711,18 +711,30 @@ rationale lives in the linked memories and commit history.
   `git push` still uses `GITHUB_TOKEN` (`contents: write`; `pull-requests: write` deliberately absent).
   A missing/expired secret **fails** the step — opposite to `prune`, deliberately, since this job *is*
   the mechanism.
-  **OPEN, NOW UNDER TEST (2026-07-30): the PAT path has never opened a real PR.** It only fires when a
+  **CLOSED — the PAT path opened a real PR, on real traffic, 2026-07-30 (PR #8).** It only fires when a
   pin actually changes — a `source.pin`/patch/`PKGBUILD` change — and an ordinary merge is a full cache
-  hit that correctly no-ops. The mangohud `0002` swap on main is the **first genuine source change**
-  since the PAT landed, so it is the real-traffic test the forced-rebuild recipe was a stand-in for:
-  `packages/inputhash.sh packages/mangohud` moved `bdbcde0e…` → `6a8f4393…`, `verify-pins.sh` reports
-  mangohud STALE, and `artifact.pin` is deliberately left at the old hash for the pipeline to bump.
-  Success tell is a pin PR **with `ci` checks on it** carrying exactly one changed `artifact.pin`.
-  Failure modes to expect, all "green while doing nothing": inherited skip from a cache hit, a change
-  gate blind to untracked files, or no PR-creation right. If it needs forcing instead:
+  hit that correctly no-ops, which is why it went so long unexercised. The mangohud `0002` swap
+  (`317c152`) was the first genuine source change since the PAT landed, so this was real traffic and
+  not the `force=true` stand-in. Every success tell was met: `inputhash` moved `bdbcde0e…` →
+  `6a8f4393…`, the pipeline republished, and PR #8 opened carrying **exactly one changed file**
+  (`packages/mangohud/artifact.pin`) **with `ci` checks on it** — both jobs green, which is the
+  specific thing a `GITHUB_TOKEN`-opened PR could not do and the second reason the PAT was chosen.
+  Merged 06:59 UTC; `artifact:` is now `439f25aa…` and the tree reads clean. None of the three
+  "green while doing nothing" failure modes recurred (inherited cache-hit skip, a change gate blind to
+  untracked files, no PR-creation right). The whole mechanism — source change → republish → pin-bump
+  PR → human review → merge — has now been walked end to end by an ordinary edit, which is the only
+  evidence that counts for it. If a future run ever needs forcing:
   `gh workflow run overlay.yml --ref main -f packages=rauc -f force=true` (`rauc` is cheapest, and
   non-reproducible builds mean a forced rebuild alone changes the bytes). Between that republish and
   merging the PR, the store disagrees with `main`'s pin, so don't cut a `v*` tag in the window.
+  **Left open deliberately:** nothing checks an `artifact.pin` at commit time. It is excluded from
+  `overlay.yml`'s trigger paths (correctly — the pipeline writes those files, so triggering on them
+  loops), and `ci.yml` only runs `make test` / `make test-signing`. So a hand-edit to an `artifact.pin`
+  lands green and is not caught until a release build runs `make verify-pins` (`image.yml`). It does
+  self-heal — the next genuine pipeline run overwrites the file from published bytes and opens a
+  restoring PR — but detection is deferred. The stale check needs **no built artifacts** (pure
+  `inputhash.sh` over sources), so `ci.yml` could validate every `artifact.pin`'s `inputhash` on every
+  push for near-zero cost; only the byte comparison genuinely needs the artifacts.
   **STILL OPEN: bundle signing.** `release-bundle.yml` builds an unsigned dev-cert bundle — a real
   smoke test (it assembles, verity hashes compute, the pin gate passes) that every device rejects.
   `image.yml` accepts `RAUC_CERT_PEM`/`RAUC_KEY_PEM` and warns loudly when absent. What is undecided

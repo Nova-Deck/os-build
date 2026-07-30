@@ -67,13 +67,26 @@ itself as skipped there and runs wherever a PKI is mounted:
 ## Today: the release image builds
 
 `.github/workflows/image.yml` is a `workflow_call`-only builder — `overlay-pull --require-all` →
-`make overlay` → `make verify-pins` → `make sdcard` / `make bundle`. Two thin callers invoke it on
+`make overlay` → `make verify-pins` → the build, walked **target by target** rather than as one
+`make sdcard`: work/ peaks near 30 GB and out/ near 21 GB, so each stage's inputs are deleted once
+its output exists (kernel tree ~14 G, base+prebuilt ~11 G, intermediate images ~13 G), with `df -h`
+after each into the step summary. Two thin callers invoke it on
 their own triggers, because a flashable card and a field update are wanted at different cadences:
 
-| workflow | trigger | secrets |
-|---|---|---|
-| `release-sdcard.yml` | `v*` tag, or manual | none — nothing is signed |
-| `release-bundle.yml` | manual | none *yet* (unsigned smoke test; see below) |
+| workflow | trigger | secrets | ships to |
+|---|---|---|---|
+| `release-sdcard.yml` | `card/v*` tag, or manual | `R2_*` (push-only, public bucket) | Cloudflare R2 + a GitHub Release carrying checksums/provenance |
+| `release-bundle.yml` | `ota/v*` tag, or manual | none *yet* (unsigned smoke test; see below) | workflow artifact; the Oracle Cloud OTA host is not wired up yet |
+
+**The tag namespaces are separate on purpose.** A bundle ships far more often than a card, so each
+gets its own namespace rather than sharing a bare `v*`. That also fixes a real inversion: while
+`release-sdcard.yml` owned `v*` alone and `release-bundle.yml` had no tag trigger, tagging a release
+built a card and *never* a bundle. `card/v1.3.0` and `ota/v1.3.0` on one commit are the same OS
+delivered two ways.
+
+**A card is ~9 GiB, which is why it is not a release asset** — GitHub caps those at 2 GiB. It goes to
+a public R2 bucket (`images/publish-card.sh`, retention N=1 to stay inside the 10 GB free tier) and
+the Release carries only `sha256sums.txt`, the provenance pins and the link.
 
 **CI is the only producer of a release image, and that is the point.** A release build enforces
 `packages/*/artifact.pin` (via the Makefile's `PINNED` gate → `packages/verify-pins.sh`), and locally

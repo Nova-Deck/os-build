@@ -110,9 +110,24 @@ else
   echo "  (no linux-firmware at ${LFW#"$ROOT"/} — run firmware/fetch-linux-fw.sh; GPU/BT/VPU firmware will be missing)"
 fi
 
-# 4. novadeck marker so the running system can identify the slot's provenance
+# 4. novadeck marker so the running system can identify the slot's provenance.
+#
+# This is the file images/os-release designates for per-build identity ("NO PER-BUILD FIELDS ... the
+# per-build identity is written by images/assemble-rootfs.sh to /etc/novadeck-release, which is where
+# anything wanting to know which image is running should look"), so the release name belongs here
+# rather than churning the static os-release on every build.
+#
+# NOVADECK_VERSION is set by CI from the release tag (`card/v1.3.0` -> `1.3.0`, likewise `ota/`), and
+# is empty for a local build — rendered `dev`, which is the honest answer for bytes that came off
+# someone's box. Without these two fields the only per-build identity was a timestamp, which cannot
+# answer "is this device on the card I flashed, or an OTA past it?".
 mkdir -p "$stage/etc"
-{ echo "NOVADECK_VARIANT=unified"; echo "NOVADECK_BUILD=$(date -u +%Y%m%dT%H%M%SZ)"; } >"$stage/etc/novadeck-release"
+{
+  echo "NOVADECK_VARIANT=unified"
+  echo "NOVADECK_BUILD=$(date -u +%Y%m%dT%H%M%SZ)"
+  echo "NOVADECK_VERSION=${NOVADECK_VERSION:-dev}"
+  echo "NOVADECK_GIT=${NOVADECK_GIT:-unknown}"
+} >"$stage/etc/novadeck-release"
 
 # 4b. RELEASE overlay payload (SteamOS layers B/C/D). Every SoC-agnostic rootfs overlay —
 # the gamescope-session plumbing, the HW-support backings, the InputPlumber device/profile

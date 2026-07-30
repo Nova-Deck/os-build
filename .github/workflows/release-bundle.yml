@@ -31,8 +31,19 @@
 # image.yml ALREADY accepts RAUC_CERT_PEM / RAUC_KEY_PEM and signs with them when both are present,
 # so step 4 is the only change on this side. It warns loudly when they are absent rather than
 # quietly producing something that looks shippable.
+# WHERE THE BUNDLE GOES. Not to R2, and not to a GitHub release asset: bundles are served from the
+# Oracle Cloud instance devices fetch their OTAs from. That is a different host with different
+# credentials from the card bucket, and deliberately so — a card is downloaded by a person with a
+# browser, a bundle is fetched by a device with a keyring. This workflow currently stops at a
+# workflow artifact and the upload to that instance is done from there; wiring it in is the open
+# half of this channel, alongside the signing key below.
 name: release bundle
 
+# TAG NAMESPACE: `ota/v*`. Bundles and cards ship on independent cadences — an update goes out far
+# more often than a card — so each gets its own namespace instead of sharing a bare `v*`. Until this
+# trigger existed, release-sdcard.yml owned `v*` alone, so tagging a release built a CARD and never
+# a bundle: exactly backwards. `ota/v1.3.0` and `card/v1.3.0` on one commit are the same OS shipped
+# two ways; a run of ota tags with no card between them is the normal state.
 on:
   workflow_dispatch:
     inputs:
@@ -41,13 +52,40 @@ on:
         required: false
         type: string
         default: ''
+  push:
+    tags:
+      - 'ota/v*'
 
 permissions:
   contents: read
 
 jobs:
+  # Same reason release-sdcard.yml has one: GitHub expressions cannot strip the `ota/` prefix, so the
+  # version is derived in a shell step and image.yml keeps taking a bare version string.
+  prep:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - id: v
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [ -n "${INPUT_VERSION:-}" ]; then
+            v="$INPUT_VERSION"
+          elif [ "$GITHUB_REF_TYPE" = tag ]; then
+            v="${REF_NAME#ota/}"
+          else
+            # Empty is legitimate here, unlike the card path: genbundle.sh defaults to the date.
+            v=""
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
   unsigned:
+    needs: prep
     uses: ./.github/workflows/image.yml
     with:
       artifact: bundle
-      version: ${{ inputs.version }}
+      version: ${{ needs.prep.outputs.version }}

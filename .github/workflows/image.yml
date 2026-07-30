@@ -11,10 +11,39 @@
 # bit-reproducible — so a developer cannot produce a release image even by accident, and does not
 # need to: `NOVADECK_DEV=1 make sdcard` is the dev path and is unaffected by any of this.
 #
+# THE TWO ARTIFACTS SHIP TO DIFFERENT PLACES, which is why only one of them has a publish step here.
+# A CARD goes to the public Cloudflare R2 bucket a person downloads and flashes from (see
+# images/publish-card.sh for why not a GitHub release asset: ~9 GiB against a 2 GiB cap). A BUNDLE
+# goes to the Oracle Cloud instance devices fetch their OTAs from — a different host, different
+# credentials, different audience — so the bundle path stops at a workflow artifact here and is
+# handed off from there. Do not "unify" these: the only thing they legitimately share is everything
+# up to and including the assembled rootfs, which is exactly what this workflow already shares.
+#
 # THE EXPENSIVE PART IS ALREADY PAID. overlay.yml publishes every from-source package to GHCR keyed
 # by packages/inputhash.sh, so `overlay-pull --require-all` reconstitutes work/repo with ZERO
 # compiles. --require-all rather than a best-effort pull: on a release runner a miss must be a red
 # build, not a silent four-hour fallback into compiling fex-emu under emulation.
+#
+# ============================================================================================
+# DISK: THERE IS ROOM, AND THIS IS THE MEASUREMENT SO NOBODY RE-ENGINEERS FOR A CONSTRAINT THAT IS
+# NOT THERE. One full build peaks near 50 GB — work/ ~30 GB (kernel 14, base 8, steam-seed 3.3,
+# prebuilt 2.8) plus out/ ~21 GB, of which sdcard.img alone is 19 G apparent / 17 G real. GitHub's
+# docs quote "14 GB SSD" for hosted arm64 runners, which is what led to an elaborate design here
+# that walked the build target by target and deleted each stage's inputs as it went.
+#
+# MEASURED 2026-07-30 on ubuntu-24.04-arm (.github/workflows/preflight.yml): 109 G free, 120 G after
+# clearing the preinstalled toolchains. So the real figure is ~8x the documented one and the peak
+# fits with better than 2x headroom.
+#
+# The staged version was therefore reverted to a plain `make sdcard`. Its cost was never the extra
+# steps — it was that deleting work/base while keeping work/.base.stamp depends on subtle make
+# semantics, and cleverness like that earns a baffling 40-minute rebuild eventually. That was a
+# reasonable trade against a hard limit and a bad one without it. `df -h` stays, because the card
+# only grows (the Steam seed is unpinned) and this is where you would look first.
+#
+# The paths are root-owned (every container stage runs as uid 0 through the bind mount — the same
+# reason Makefile's clean targets shell out to busybox), hence sudo.
+# ============================================================================================
 name: image
 
 on:
@@ -25,16 +54,33 @@ on:
         required: true
         type: string
       version:
-        description: 'VERSION passed to the bundle (ignored for sdcard)'
+        description: 'Version stamped into the image and used for the R2 prefix'
         required: false
         type: string
         default: ''
+      publish:
+        description: 'Upload the finished card to R2 (sdcard only; needs the R2_* secrets)'
+        required: false
+        type: boolean
+        default: false
+    outputs:
+      card_url:
+        description: 'Public URL of the published card, empty when publish was false'
+        value: ${{ jobs.build.outputs.card_url }}
     secrets:
       # Only the bundle path needs these, and only when signing with the real release key. Absent,
       # genbundle.sh mints an ephemeral dev cert — fine for a smoke test, NOT a shippable update.
       RAUC_CERT_PEM:
         required: false
       RAUC_KEY_PEM:
+        required: false
+      # Push-only credentials for the public card bucket. Scope the R2 API token to that ONE bucket
+      # with Object Read & Write — it is a write credential to a host anyone can read.
+      R2_ACCOUNT_ID:
+        required: false
+      R2_ACCESS_KEY_ID:
+        required: false
+      R2_SECRET_ACCESS_KEY:
         required: false
 
 permissions:
@@ -44,21 +90,45 @@ jobs:
   build:
     name: ${{ inputs.artifact }}
     runs-on: ${{ vars.OVERLAY_RUNNER || 'ubuntu-24.04-arm' }}
-    # The overlay is pulled rather than built, but the base bootstrap and the rootfs assembly are
-    # still real work under docker.
-    timeout-minutes: 180
+    # The overlay is pulled rather than built, but the base bootstrap, the kernel and the rootfs
+    # assembly are still real work under docker. 350 rather than 180: on a 4-vCPU runner the kernel
+    # alone is a large fraction of the old budget. 360 is GitHub's hard ceiling for a job.
+    timeout-minutes: 350
+    outputs:
+      card_url: ${{ steps.publish.outputs.url }}
+    env:
+      # VERSION is the Makefile knob genbundle.sh reads; NOVADECK_VERSION is what the Makefile's
+      # ID_ENV forwards into the rootfs container so images/assemble-rootfs.sh can stamp
+      # /etc/novadeck-release. Both, or a card ships identifying itself as `dev`.
+      VERSION: ${{ inputs.version }}
+      NOVADECK_VERSION: ${{ inputs.version }}
+      ARTIFACT: ${{ inputs.artifact }}
     steps:
       - uses: actions/checkout@v4
 
       - name: validate the requested artifact
-        env:
-          ARTIFACT: ${{ inputs.artifact }}
         run: |
           set -euo pipefail
           case "$ARTIFACT" in
             sdcard|bundle) ;;
             *) echo "::error::artifact must be sdcard or bundle, got '$ARTIFACT'"; exit 1 ;;
           esac
+          # `publish` means R2, and R2 is the CARD's home only — bundles are served from the Oracle
+          # Cloud instance devices fetch their OTAs from, which is a different host with different
+          # credentials. So this is a structural constraint, not a missing feature, and the
+          # assertion exists so a future `publish: true` on the bundle path fails in second one
+          # rather than silently uploading an OTA into the card bucket.
+          if [ "${{ inputs.publish }}" = true ] && [ "$ARTIFACT" != sdcard ]; then
+            echo "::error::publish is only implemented for the sdcard artifact"; exit 1
+          fi
+
+      # No reclaiming of the runner image's preinstalled toolchains: there is ~109 G free and the
+      # build peaks near 50, so `sudo rm -rf` over /usr/share/dotnet and friends would be real risk
+      # for space we do not need.
+      - name: disk baseline
+        run: |
+          set -euo pipefail
+          { echo "### disk"; echo '```'; echo "start:"; df -h /; echo '```'; } | tee -a "$GITHUB_STEP_SUMMARY"
 
       # Same cache as overlay.yml's verify job and for the same reason: fetchlock verifies EVERY row,
       # so a cold runner downloads ~382 snapshot packages (~700MB). These are third-party bytes
@@ -85,12 +155,11 @@ jobs:
       - name: build the toolchain image
         run: make toolchain
 
-      # No NOVADECK_DEV: this is a release build by construction, which is what makes the pin gate
-      # apply. Setting it here would silently produce a dev image with Wi-Fi creds baked in.
+      # No NOVADECK_DEV: this is a release build by construction, which is what makes
+      # the pin gate apply. Setting it would silently produce a dev image with Wi-Fi creds baked in.
+
       - name: build ${{ inputs.artifact }}
         env:
-          ARTIFACT: ${{ inputs.artifact }}
-          VERSION: ${{ inputs.version }}
           RAUC_CERT_PEM: ${{ secrets.RAUC_CERT_PEM }}
           RAUC_KEY_PEM: ${{ secrets.RAUC_KEY_PEM }}
         run: |
@@ -115,34 +184,68 @@ jobs:
             make sdcard
           fi
 
-      # Compress the card: an sdcard.img is mostly empty space and uploading it raw is minutes of
-      # nothing. The bundle is already a compressed squashfs, so it is uploaded as-is.
-      - name: package the output
-        env:
-          ARTIFACT: ${{ inputs.artifact }}
+      # gzip, not zstd, and level 6. MEASURED on a real card (19 G apparent / 17 G real, both slots
+      # populated): gz -6 = 8.97 GiB in 33s, zstd -6 = 8.77 GiB in 7s, zstd -19 = 8.49 GiB in 444s.
+      # Every option lands 8.5-9.0 GiB because the payload is ALREADY compressed (both btrfs roots
+      # carry compress=zstd), so this is not a size decision — it is a compatibility one, and .gz is
+      # what balenaEtcher and Raspberry Pi Imager have opened for years. Note gzip's level knob does
+      # nothing at all here: -6 and -9 are byte-for-byte identical.
+      - name: compress the card
+        if: inputs.artifact == 'sdcard'
+        run: |
+          set -euo pipefail
+          command -v pigz >/dev/null || sudo apt-get install -y -qq pigz
+          mkdir -p upload
+          pigz -6 -c out/images/sdcard.img > upload/sdcard.img.gz
+          ls -lh upload/ >> "$GITHUB_STEP_SUMMARY"
+          { echo '```'; echo "after build+compress:"; df -h /; echo '```'; } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: package a bundle
+        if: inputs.artifact == 'bundle'
         run: |
           set -euo pipefail
           mkdir -p upload
-          if [ "$ARTIFACT" = sdcard ]; then
-            zstd -T0 -19 -o upload/sdcard.img.zst out/images/sdcard.img
-          else
-            cp out/images/*.raucb upload/
-          fi
-          ls -l upload/ >> "$GITHUB_STEP_SUMMARY"
+          cp out/images/*.raucb upload/
+          ls -lh upload/ >> "$GITHUB_STEP_SUMMARY"
 
-      # The pins the image was actually built against, carried alongside it. Without this an
-      # artifact months old cannot be traced to the bytes it installed. One directory level per
-      # package: every pin is named artifact.pin, so a flat copy would silently keep only the last.
-      - name: record what went in
+      # Checksums + the pins this image was actually built against. One producer (images/card-meta.sh)
+      # for both the R2 copy and the workflow artifact, so the two cannot drift.
+      - name: stage release metadata
         run: |
           set -euo pipefail
-          mkdir -p upload/provenance/pins
-          cp images/manifest.lock upload/provenance/
-          for f in packages/*/artifact.pin; do
-            cp "$f" "upload/provenance/pins/$(basename "$(dirname "$f")").pin"
-          done
+          # Name the file from the artifact rather than globbing for it: exactly one of the two
+          # exists, so any `ls` over both is a guaranteed non-zero exit under pipefail.
+          if [ "$ARTIFACT" = sdcard ]; then
+            f=upload/sdcard.img.gz
+          else
+            f=$(find upload -maxdepth 1 -name '*.raucb' -print -quit)
+          fi
+          [ -n "$f" ] && [ -f "$f" ] || { echo "::error::no $ARTIFACT output to hash"; exit 1; }
+          images/card-meta.sh "$f"
 
-      - uses: actions/upload-artifact@v4
+      - name: upload the card to R2
+        id: publish
+        if: inputs.publish && inputs.artifact == 'sdcard'
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ vars.R2_BUCKET }}
+          R2_PUBLIC_BASE: ${{ vars.R2_PUBLIC_BASE }}
+        run: images/publish-card.sh "$VERSION" upload/sdcard.img.gz out/images/release-meta
+
+      - name: upload metadata artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: novadeck-${{ inputs.artifact }}-meta
+          path: out/images/release-meta/
+          if-no-files-found: error
+
+      # The image itself, only when it is NOT going to R2 — a 9 GiB artifact on every test build is
+      # pure storage burn, and when publish is on the bucket already holds it.
+      - name: upload the image artifact
+        if: '!inputs.publish'
+        uses: actions/upload-artifact@v4
         with:
           name: novadeck-${{ inputs.artifact }}
           path: upload/

@@ -34,17 +34,51 @@ Every `make` invocation below runs from the repo root. A dev build needs its env
 - **`/home` is shared and survives everything** — including the paired SSH keys in
   `/home/deck/.ssh`, and the offloaded `/var/log`. This is why an OTA does not lock you out.
 
-## Build and flash a card
+## Get a release card
+
+**A release card can only be built by CI**, and that is deliberate: `make sdcard` on a dev box fails
+the artifact-pin gate (`packages/verify-pins.sh`), because locally compiled overlay bytes will never
+match a published sha. So verifying OOBE on a real release image means flashing what
+`release-sdcard.yml` produced.
+
+Cards are served from Cloudflare R2, not from a GitHub release asset — the image is ~9 GiB against
+GitHub's 2 GiB per-asset cap. The GitHub Release for a `card/v*` tag carries the checksums, the
+provenance pins, and the link:
 
 ```sh
+curl -LO https://<R2_PUBLIC_BASE>/cards/v1.3.0/sdcard.img.gz
+curl -LO https://github.com/Nova-Deck/os-build/releases/download/card/v1.3.0/sha256sums.txt
+sha256sum -c sha256sums.txt                   # do this BEFORE writing 19G to a card
+gzip -dc sdcard.img.gz | sudo dd of=/dev/sdX bs=4M conv=fsync status=progress
+```
+
+`.gz` rather than `.zst` on purpose: every option lands 8.5-9.0 GiB (the payload is already
+compressed — both btrfs roots carry `compress=zstd`), so the wrapper is a compatibility choice, not
+a size one, and `.gz` is what balenaEtcher and Raspberry Pi Imager open.
+
+To cut a card: tag `card/vX.Y.Z`. To cut an update instead, tag `ota/vX.Y.Z` — the two ship on
+independent cadences and a bundle is expected far more often than a card. **Check before tagging**
+that `main`'s artifact pins match the store: between an overlay republish and its pin-bump PR
+merging, `make verify-pins` will fail the build.
+
+The version and commit a card was built from are stamped into `/etc/novadeck-release` on the device
+(`NOVADECK_VERSION`, `NOVADECK_GIT`), so a running system can name where it came from.
+
+## Build and flash a dev card
+
+```sh
+set -a; . ./dev.env; set +a                   # NOVADECK_DEV=1 + optional Wi-Fi creds
 make sdcard                                   # -> out/images/sdcard.img
 make verify-card                              # GPT, ESP, per-slot filesystem identities
 sudo dd if=out/images/sdcard.img of=/dev/sdX bs=4M conv=fsync status=progress
 ```
 
-`make-sdcard.sh` lays the **full** GPT but populates only the A side (ESP + root-A + var-A + home,
-with `/home` pre-seeded with the native arm64 Steam client). The B slots and both `efi-*`
-partitions are created empty, so moving to A/B updates never needs a reflash.
+`make-sdcard.sh` lays the **full** GPT and populates **both** slots — ESP + root-A/-B + var-A/-B +
+home, with `/home` pre-seeded with the native arm64 Steam client and root-B carrying a distinct
+btrfs fsid. Both `efi-*` partitions are created empty (design C keeps the boot image slot-agnostic
+at `/KERNEL` on the shared ESP). B is populated rather than left empty because a slot switch cannot
+be proven against a slot that does not boot; set `NOVADECK_SLOT_B=0` for a faster local loop, at the
+cost of a card whose first slot switch can only exercise the failover path.
 
 Run `verify-card` before you commit a card to a device — it asserts the built image rather than
 the source tree, which is the only place the GPT, the ESP contents and the per-slot filesystem

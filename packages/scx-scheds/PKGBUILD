@@ -161,9 +161,22 @@ package() {
 
   # Upstream's services/scx defaults to scx_cosmos, which we do not build. Rewrite it to the
   # scheduler we ship rather than shipping a config that names a missing binary. Left as a
-  # normal config file under /etc so it stays user-editable; SCX_FLAGS is intentionally empty.
+  # normal config file under /etc so it stays user-editable.
+  #
+  # SCX_FLAGS='--autopower' is what couples the scheduler to the power profile: lavd then polls
+  # PowerProfiles.ActiveProfile on the system bus once a second and switches its own
+  # performance/balanced/powersave mode live, with no unit restart. novadeck-powerd answers that
+  # name (we ship no power-profiles-daemon) — see the PPD_NAMES block in
+  # fs-overlay/usr/bin/novadeck-powerd for why both bus names exist and why ordering matters.
+  # Deliberately set HERE and not via a scx.service.d drop-in: upstream's ExecStart is
+  # `${SCX_FLAGS_OVERRIDE:-$SCX_FLAGS}`, so a drop-in would silently outrank a user's own edit to
+  # this file. Keeping it in the file means a user can see it and change it.
   sed -e 's/^SCX_SCHEDULER=.*/SCX_SCHEDULER=scx_lavd/' \
+      -e 's|^# Set custom flags.*|# Flags for the scheduler above. --autopower makes scx_lavd follow the active power profile\n# (novadeck-powerd answers PowerProfiles on the system bus); drop it to pin one mode by hand.|' \
+      -e "s/^#SCX_FLAGS=.*/SCX_FLAGS='--autopower'/" \
       services/scx > "$srcdir/scx.default"
+  grep -q "^SCX_FLAGS='--autopower'$" "$srcdir/scx.default" ||
+    { echo "scx defaults file did not gain SCX_FLAGS; upstream services/scx changed shape" >&2; return 1; }
   install -Dm0644 "$srcdir/scx.default" "$pkgdir/etc/default/scx"
 
   install -Dm0644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"

@@ -36,11 +36,56 @@ FAN_SAFE_PWM = 128
 # scx_bpfland and scx_rusty, but those stay SSH-only per-title fallbacks rather than QAM
 # entries. Not to be confused with the cpufreq governor (schedutil / performance): that is
 # frequency policy, a separate axis, and stays owned by the power profile.
+#
+# The power profile does, however, own lavd's INTERNAL power mode. We ship scx_lavd with
+# `--autopower` (packages/scx-scheds/PKGBUILD writes it into /etc/default/scx), so once the user
+# has turned lavd on it polls PowerProfiles.ActiveProfile on the system bus once a second and
+# switches its own performance/balanced/powersave mode live, no restart. We answer that name
+# ourselves (PPD_NAMES below) because we ship no power-profiles-daemon. This does NOT change the
+# toggle model above: scx.service is still never `enable`d and "none" is still the default; the
+# profile only picks lavd's mode once lavd is running.
 CPU_SCHEDULERS = ["none", "lavd"]
 SCX_UNIT = "scx.service"
 SCX_BINARY = Path("/usr/bin/scx_lavd")
 SCX_SYSFS = Path("/sys/kernel/sched_ext")
 SCX_TIMEOUT = 15
+
+# power-profiles-daemon compatibility, served for two independent consumers:
+#
+#   net.hadess.PowerProfiles              scx_lavd --autopower. It hardcodes interface, service
+#                                         AND path (scx_utils/src/autopower.rs) with no fallback
+#                                         to the newer name, so this one is load-bearing: drop it
+#                                         and the whole coupling above silently stops working.
+#   org.freedesktop.UPower.PowerProfiles  glib's GPowerProfileMonitorDBus, which uses only this
+#                                         name (no net.hadess reference anywhere in libgio), so
+#                                         g_power_profile_monitor_dup_default() is dead without
+#                                         it. Also the name real PPD prefers today.
+#
+# Both expose the same ActiveProfile, so one handler serves both; the table exists so they cannot
+# drift. Upstream scx chose the legacy name deliberately (sched-ext/scx#1017: tuned-ppd implements
+# net.hadess and not the freedesktop name) and main still hardcodes it, so this is not a
+# transitional hack we can retire on the next scx bump.
+#
+# WHY THE MAPPING MATTERS MORE THAN IT LOOKS: when lavd cannot reach PPD it falls back to reading
+# policy0/energy_performance_preference then scaling_governor, and it treats a governor it does
+# not recognise as Unknown. A transition from a KNOWN profile into Unknown makes it disable
+# autopower permanently, silently, for the life of the process. On this hardware there is no EPP
+# file at all and the governors in play are ondemand/performance, so that fallback is worse than
+# useless — Performance -> Balanced would kill it outright. Hence: we must own these names BEFORE
+# the scheduler we start takes its first tick (see main()).
+PPD_NAMES = (
+    ("net.hadess.PowerProfiles", "/net/hadess/PowerProfiles", "net.hadess.PowerProfiles"),
+    (
+        "org.freedesktop.UPower.PowerProfiles",
+        "/org/freedesktop/UPower/PowerProfiles",
+        "org.freedesktop.UPower.PowerProfiles",
+    ),
+)
+# Our profile ids <-> PPD's. PPD has exactly these three and so do we, which is why this is a
+# plain mapping and not a policy. Note these are ids, NOT the UI labels ("Eco") that the
+# org.novadeck.Power1 Profile property speaks — do not route one through the other.
+PPD_PROFILES = {"eco": "power-saver", "balanced": "balanced", "performance": "performance"}
+PPD_PROFILE_IDS = {ppd: ours for ours, ppd in PPD_PROFILES.items()}
 
 
 def normalize_profile(profile):
@@ -71,6 +116,26 @@ XML = f"""
     <property name="FanPwm" type="u" access="read"/>
     <property name="FanRpm" type="u" access="read"/>
     <property name="Temperature" type="u" access="read"/>
+  </interface>
+</node>
+"""
+
+
+# One PPD interface per bus name — same body, different interface name, so it is a template.
+# ActiveProfile is readwrite: a PPD client setting it is a legitimate way to change the profile,
+# and it lands in exactly the same code path as our own Profile property. Profiles and
+# PerformanceDegraded exist so a client can enumerate and reason about us instead of finding a
+# stub; PerformanceDegraded is always "" because we never thermally-throttle the profile behind
+# the user's back (the fan curve absorbs it). HoldProfile/ReleaseProfile are deliberately absent:
+# they need per-sender cookie refcounting with NameOwnerChanged cleanup, and nothing on the device
+# asks for them. A client that needs holds sees them missing rather than broken.
+def ppd_xml(iface):
+    return f"""
+<node>
+  <interface name="{iface}">
+    <property name="ActiveProfile" type="s" access="readwrite"/>
+    <property name="Profiles" type="aa{{sv}}" access="read"/>
+    <property name="PerformanceDegraded" type="s" access="read"/>
   </interface>
 </node>
 """
@@ -221,7 +286,8 @@ class NovadeckPower:
         self.apply_profile()
         if self.gpu_level == "manual" and self.manual_gpu_clock:
             self.set_gpu_manual_clock(self.manual_gpu_clock)
-        self.restore_cpu_scheduler()
+        # restore_cpu_scheduler() is NOT called here — main() runs it once we own the PPD bus
+        # names, because scx_lavd --autopower reads them on its first tick. See main().
         self.fan_tick()
         GLib.timeout_add_seconds(3, self.fan_tick)
 
@@ -463,9 +529,20 @@ class NovadeckPower:
             print(f"novadeck-powerd: {SCX_UNIT} is-active failed: {exc}", file=sys.stderr)
             return False
 
+    def reset_scx_failure(self):
+        # scx.service carries upstream's StartLimitIntervalSec=30 / StartLimitBurst=2, so a couple
+        # of quick none<->lavd flips leave the unit rate-limited and every later start refused with
+        # no in-product way to clear it. Clearing first is free when there is nothing to clear.
+        try:
+            self.systemctl("reset-failed", SCX_UNIT, timeout=5)
+        except (OSError, subprocess.SubprocessError) as exc:
+            print(f"novadeck-powerd: {SCX_UNIT} reset-failed failed: {exc}", file=sys.stderr)
+
     def restore_cpu_scheduler(self):
         # Re-apply the saved choice at daemon start. scx.service is never `enable`d, so this
         # (and an explicit `systemctl start`) is the only path that loads a BPF scheduler.
+        # Called from main() once the PPD bus names are owned, NOT from __init__ — scx_lavd runs
+        # with --autopower and reads ActiveProfile on its first tick.
         if len(self.available_cpu_schedulers()) == 1:
             self.cpu_scheduler = "none"
             return
@@ -476,6 +553,7 @@ class NovadeckPower:
             return
         if self.cpu_scheduler == "none":
             return
+        self.reset_scx_failure()
         try:
             # --no-block on purpose: our own systemd start job is still open here (Type=dbus,
             # the bus name is taken after __init__ returns), so do not sit waiting on a second
@@ -491,6 +569,8 @@ class NovadeckPower:
         if scheduler == self.cpu_scheduler:
             return
         action = "stop" if scheduler == "none" else "start"
+        if action == "start":
+            self.reset_scx_failure()
         try:
             proc = self.systemctl(action, SCX_UNIT)
         except subprocess.TimeoutExpired as exc:
@@ -839,15 +919,25 @@ class NovadeckPower:
             return GLib.Variant("u", self.read_temp())
         raise KeyError(prop)
 
+    def select_profile(self, profile):
+        # The single place a profile is applied. Both the org.novadeck.Power1 Profile property
+        # (which speaks UI labels) and PPD's ActiveProfile (which speaks ids) come through here,
+        # so the two can never apply a profile differently.
+        if profile not in PROFILES:
+            raise ValueError(profile)
+        self.profile = profile
+        self.apply_profile()
+        return {"Profile": GLib.Variant("s", self.label_for(self.profile))}
+
     def set_property(self, prop, value):
         changed = {}
         if prop == "Profile":
-            profile = self.profile_for_label(value.get_string())
+            # Resolve first so the error names what the caller actually sent, not "".
+            label = value.get_string()
+            profile = self.profile_for_label(label)
             if profile not in PROFILES:
-                raise ValueError(value.get_string())
-            self.profile = profile
-            self.apply_profile()
-            changed["Profile"] = GLib.Variant("s", self.label_for(self.profile))
+                raise ValueError(label)
+            changed = self.select_profile(profile)
         elif prop == "GpuPerformanceLevel":
             level = value.get_string()
             if level not in ("auto", "manual"):
@@ -874,6 +964,8 @@ class NovadeckPower:
             raise KeyError(prop)
         self.save_state()
         self.emit_properties(changed)
+        if "Profile" in changed:
+            self.emit_ppd_profile()
 
     def status(self):
         gpu_min, gpu_max = self.resolved_gpu_auto_limits()
@@ -900,14 +992,21 @@ class NovadeckPower:
             "suspended": GLib.Variant("b", self.suspended),
         }
 
-    def emit_properties(self, changed):
+    def emit_properties(self, changed, path=OBJECT_PATH, iface=IFACE):
         self.connection.emit_signal(
             None,
-            OBJECT_PATH,
+            path,
             "org.freedesktop.DBus.Properties",
             "PropertiesChanged",
-            GLib.Variant("(sa{sv}as)", (IFACE, changed, [])),
+            GLib.Variant("(sa{sv}as)", (iface, changed, [])),
         )
+
+    def emit_ppd_profile(self):
+        # lavd polls, so this is not what makes the coupling work — but real PPD emits it and
+        # glib's GPowerProfileMonitor subscribes to it rather than polling.
+        changed = {"ActiveProfile": GLib.Variant("s", PPD_PROFILES[self.profile])}
+        for _bus_name, path, iface in PPD_NAMES:
+            self.emit_properties(changed, path=path, iface=iface)
 
     def handle_method_call(self, _conn, _sender, _path, iface, method, _params, invocation):
         if iface != IFACE:
@@ -958,7 +1057,46 @@ class NovadeckPower:
             print(f"novadeck-powerd: set {prop} failed: {exc}", file=sys.stderr)
             return False
 
+    def ppd_get_property(self, _conn, _sender, _path, _iface, prop):
+        if prop == "ActiveProfile":
+            return GLib.Variant("s", PPD_PROFILES[self.profile])
+        if prop == "Profiles":
+            return GLib.Variant(
+                "aa{sv}",
+                [
+                    {
+                        "Profile": GLib.Variant("s", PPD_PROFILES[profile]),
+                        "Driver": GLib.Variant("s", "novadeck-powerd"),
+                    }
+                    for profile in PROFILES
+                ],
+            )
+        if prop == "PerformanceDegraded":
+            return GLib.Variant("s", "")
+        return None
+
+    def ppd_set_property(self, _conn, _sender, _path, _iface, prop, value):
+        if prop != "ActiveProfile":
+            return False
+        try:
+            requested = value.get_string()
+            profile = PPD_PROFILE_IDS.get(requested)
+            if profile is None:
+                raise ValueError(requested)
+            changed = self.select_profile(profile)
+        except Exception as exc:
+            print(f"novadeck-powerd: PPD set {prop} failed: {exc}", file=sys.stderr)
+            return False
+        self.save_state()
+        self.emit_properties(changed)
+        self.emit_ppd_profile()
+        return True
+
     def register(self, connection):
+        # Called from whichever bus name wins its bus_acquired first — we own several now, and the
+        # objects must exist before any of those names becomes visible to clients.
+        if self.connection is not None:
+            return
         self.connection = connection
         self.node = Gio.DBusNodeInfo.new_for_xml(XML)
         connection.register_object(
@@ -968,6 +1106,19 @@ class NovadeckPower:
             self.handle_get_property,
             self.handle_set_property,
         )
+        # Keep a reference to each node: Gio does not own the DBusInterfaceInfo we hand it, and a
+        # collected node takes the registration's interface info with it.
+        self.ppd_nodes = []
+        for _bus_name, path, iface in PPD_NAMES:
+            node = Gio.DBusNodeInfo.new_for_xml(ppd_xml(iface))
+            self.ppd_nodes.append(node)
+            connection.register_object(
+                path,
+                node.interfaces[0],
+                None,
+                self.ppd_get_property,
+                self.ppd_set_property,
+            )
 
 
 def main():
@@ -990,14 +1141,62 @@ def main():
     def name_lost(_connection, _name):
         loop.quit()
 
-    owner_id = Gio.bus_own_name(
-        Gio.BusType.SYSTEM,
-        BUS_NAME,
-        Gio.BusNameOwnerFlags.NONE,
-        bus_acquired,
-        None,
-        name_lost,
-    )
+    owner_ids = [
+        Gio.bus_own_name(
+            Gio.BusType.SYSTEM,
+            BUS_NAME,
+            Gio.BusNameOwnerFlags.NONE,
+            bus_acquired,
+            None,
+            name_lost,
+        )
+    ]
+
+    # Restoring the saved CPU scheduler is deliberately NOT done in __init__ any more. scx_lavd
+    # runs with --autopower and reads PowerProfiles.ActiveProfile from its very first tick; if we
+    # start it before we answer that name it falls through to sysfs, and on this hardware a later
+    # profile change into an unrecognised governor makes it disable autopower permanently and
+    # silently. So: own the names first, start the scheduler second.
+    #
+    # The backstop matters. A name we cannot acquire (a real power-profiles-daemon got there first)
+    # never fires name_acquired, and the user's scheduler choice must not be collateral damage of
+    # that — so a timer restores it regardless. Whichever path runs first wins; the other no-ops.
+    pending_ppd_names = {bus_name for bus_name, _path, _iface in PPD_NAMES}
+    restored = False
+
+    def restore_scheduler(reason):
+        nonlocal restored
+        if restored:
+            return False
+        restored = True
+        if reason != "ppd-names-acquired":
+            print(
+                f"novadeck-powerd: restoring CPU scheduler without full PPD ownership ({reason});"
+                f" still unowned: {' '.join(sorted(pending_ppd_names))}",
+                file=sys.stderr,
+            )
+        power.restore_cpu_scheduler()
+        return False
+
+    def ppd_name_acquired(_connection, name):
+        pending_ppd_names.discard(name)
+        if not pending_ppd_names:
+            restore_scheduler("ppd-names-acquired")
+
+    for ppd_bus_name, _path, _iface in PPD_NAMES:
+        owner_ids.append(
+            Gio.bus_own_name(
+                Gio.BusType.SYSTEM,
+                ppd_bus_name,
+                Gio.BusNameOwnerFlags.NONE,
+                bus_acquired,
+                ppd_name_acquired,
+                None,
+            )
+        )
+
+    GLib.timeout_add_seconds(5, restore_scheduler, "timeout")
+
     def stop(_signum, _frame):
         power.fan_safe()
         loop.quit()
@@ -1008,7 +1207,8 @@ def main():
         loop.run()
     finally:
         power.fan_safe()
-        Gio.bus_unown_name(owner_id)
+        for owner_id in owner_ids:
+            Gio.bus_unown_name(owner_id)
 
 
 if __name__ == "__main__":

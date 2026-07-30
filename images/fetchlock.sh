@@ -127,7 +127,7 @@ fetch_pkg() {
   return 1
 }
 
-rows=0 fetched=0 cached=0 overlay=0
+rows=0 fetched=0 cached=0 overlay=0 unadopted=0
 list=""
 while read -r name ver arch src sha; do
   case "$name" in ''|'#'*) continue ;; esac
@@ -165,6 +165,26 @@ while read -r name ver arch src sha; do
         echo "$file: built from different sources than images/manifest.lock records" >&2
         echo "    lock: $sha" >&2
         echo "    tree: ${entry%%	*}   (${entry#*	}: source.pin + patches + PKGBUILD)" >&2
+        # A dev card is not a provenance artifact, and requiring the lock to be adopted mid-loop
+        # means every edit to an overlay package's sources costs a `make relock` — which rebuilds
+        # the overlay AND (because relock clears NOVADECK_DEV) the base, twice, before you can
+        # flash the thing you just compiled. That is the same round-trip argument the artifact-pin
+        # split already makes in this file's header; this is the other half of it. So under
+        # NOVADECK_DEV=1 an unadopted source change is a WARNING: the row's file still has to
+        # exist and still has to be claimed by a source.pin (both checked above, in every mode) —
+        # the only relaxed claim is "these bytes came from the sources the lock names", which is
+        # exactly the claim a dev build cannot make and does not need to.
+        #
+        # Release builds are untouched: NOVADECK_DEV is unset there, and `make relock` clears it
+        # explicitly, so the relock path itself still sees the strict check.
+        if [ "${NOVADECK_DEV:-}" = "1" ]; then
+          echo "  NOVADECK_DEV=1: continuing with the locally built package" >&2
+          unadopted=$((unadopted + 1))
+          overlay=$((overlay + 1))
+          list+="/novarepo/$file"$'\n'
+          rows=$((rows + 1))
+          continue
+        fi
         echo "  review that source change and \`make relock\` to adopt it" >&2
         exit 1
       fi
@@ -183,3 +203,10 @@ done < "$LOCK"
 # behind for the container to install from.
 printf '%s' "$list" >"$OUT"
 echo "[novadeck] lock: $rows packages verified ($cached cached, $fetched fetched, $overlay overlay)" >&2
+
+# Last line of the run, so it survives a long build log. Per-row warnings scroll away; this does
+# not, and it names the one command that clears the state.
+if [ "$unadopted" -gt 0 ]; then
+  echo "[novadeck] lock: $unadopted overlay row(s) built from UNADOPTED sources (dev build)." >&2
+  echo "[novadeck]       run \`make relock\` before committing or building a release." >&2
+fi

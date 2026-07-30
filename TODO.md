@@ -533,20 +533,45 @@ rationale lives in the linked memories and commit history.
   block-group padding, 5.7G apparent vs 3.7G real) — a cheaper disk-space win than any of this,
   and not yet its own item.
 
-- [ ] **Retroid Pocket Nova — board support added 2026-07-27, NOT HW-validated** — SM8550 sibling of
-  the Retroid Pocket 6: same `qcs8550-retroidpocket-rp6.dts` base (AYN common dtsi, RSInput gamepad,
-  ayn/odin2 ADSP+amp firmware), differing only in the display/touch pair. Its 4.5" panel is an
+- [ ] **Retroid Pocket Nova — board support HW-VALIDATED 2026-07-30, one gap left (120 Hz)** — SM8550
+  sibling of the Retroid Pocket 6: same `qcs8550-retroidpocket-rp6.dts` base (AYN common dtsi, RSInput
+  gamepad, ayn/odin2 ADSP+amp firmware), differing only in the display/touch pair. Its 4.5" panel is an
   **Ilitek IL97680A wired NATIVE LANDSCAPE 1280x960 (4:3) at 60/120 Hz** — the first board in the
   fleet with no DTS `rotation`, so `qcs8550-retroidpocket-rpnova.dts` deletes the inherited
   `rotation = <270>` and re-declares the digitizer 1280x960 without `touchscreen-inverted-y`.
-  Verified so far: panel patch `0105` applies to the pinned 7.1.5 (Kconfig at offset, Makefile at
-  fuzz 1 — the insertion point around `DRM_PANEL_ILITEK_IL9322` is exact), the DTB compiles with only
-  the fleet's pre-existing `unique_unit_address` noise, and `device-env` resolves the profile.
-  **Open on HW:** (1) does gamescope come up unrotated — the composite rotation path auto-engages off
-  the connector, and every other board feeds it a rotated scanout; (2) `NOVADECK_GAMESCOPE_FAKE_OUTPUT_MM
-  =120x90` is arithmetic, not measurement — exact 4:3 at ~10.7 px/mm vs the fleet's 10.8, so SteamUI
-  scale needs an eyeball; (3) 120 Hz mode selection (the panel's init sequence branches on vrefresh);
-  (4) touch axis mapping. No new firmware or ALSA UCM: it inherits the AYN-Odin2 sound-card model.
+  Novadeck has been run on the device. **Cleared on HW:** gamescope comes up unrotated (the composite
+  rotation path does NOT wrongly auto-engage off the connector, despite every other board feeding it a
+  rotated scanout); `NOVADECK_GAMESCOPE_FAKE_OUTPUT_MM=120x90` — arithmetic, never measured, exact 4:3
+  at ~10.7 px/mm vs the fleet's 10.8 — reads correct by eye, so it stays; and the 1280x960 digitizer
+  maps correctly without `touchscreen-inverted-y`. Build-side checks stand: panel patch `0105` applies
+  to the pinned 7.1.5 (Kconfig at offset, Makefile at fuzz 1 — the insertion point around
+  `DRM_PANEL_ILITEK_IL9322` is exact), the DTB compiles with only the fleet's pre-existing
+  `unique_unit_address` noise, and `device-env` resolves the profile. No new firmware or ALSA UCM: it
+  inherits the AYN-Odin2 sound-card model.
+  **Still open on HW:** 120 Hz mode selection — the panel's init sequence branches on vrefresh, and
+  nothing has confirmed the 120 Hz mode actually selects and drives rather than silently landing at 60.
+
+- [ ] **Nova gamepad + SM8550 audio fixes ported 2026-07-30 — in tree, NOT re-validated here** — three
+  post-merge upstream fixes for this board, ported and build-verified but only ever exercised on the
+  upstream tree, not ours:
+  (1) **Left stick mirrored.** The Nova reports ABS_X/ABS_Y inverted relative to the RP6 it inherits
+  from; `qcs8550-retroidpocket-rpnova.dts` now sets `invert-x` + `invert-y` on `&gamepad`. The right
+  stick is already correct — do NOT add `invert-rx`/`invert-ry`.
+  (2) **Triggers idle above zero**, reading as permanently half-pulled. `trigger-left-deadzone` /
+  `trigger-right-deadzone` = `<100>` against the inherited `axis-range = <1024>`. This needed a driver
+  change too: `0031_input--Add-driver-for-RSInput-Gamepad.patch` gained the two `device_property_read_u32`
+  overrides in probe (the module params existed; the DT plumbing did not). `100` is upstream's number,
+  not ours — worth an eyeball that it doesn't eat usable travel at the bottom of the pull.
+  (3) **Audio boot delay / amp log spam.** New `0201-ASoC-qdsp6-q6apm-lpass-start-playback-port-at-prepare.patch`:
+  port start moved out of `.prepare` into `.trigger` upstream, so MI2S BCLK now comes up *after* the
+  codec DAPM widgets power on. The aw88166 amps validate their PLL against BCLK at DAPM `PRE_PMU`,
+  before the trigger — with no clock the PLL never locks, the amps stay silent, and the retry spams the
+  log and stretches audio bring-up. Starting the playback port back in `.prepare` fixes it; the
+  trigger's `!is_port_started` guard then no-ops and capture is untouched. **This is fleet-wide, not
+  Nova-only** — aw88166 lives in `qcs8550-ayn-common.dtsi`, so Odin2/mini/portal/Thor inherit it too,
+  and any of them could have been silently paying this cost. Verified: all 51 patches apply to pinned
+  7.1.5 with zero rejects, and the rebuilt DTB carries all four gamepad properties. Unverified: whether
+  the deadzone value feels right, and whether the audio fix measurably changes our boot on any board.
 
 - [x] **~90s poweroff stall — RESOLVED, HW-VALIDATED 2026-07-26** (fix `876adb1`) — second, independent
   cause from the dirmngr one (that was killed by the Phase 4a seal). `gamescope-wl` ignores SIGTERM

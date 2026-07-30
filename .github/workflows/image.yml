@@ -221,7 +221,12 @@ jobs:
             f=$(find upload -maxdepth 1 -name '*.raucb' -print -quit)
           fi
           [ -n "$f" ] && [ -f "$f" ] || { echo "::error::no $ARTIFACT output to hash"; exit 1; }
-          images/card-meta.sh "$f"
+          # meta/ at the workspace root, NOT under out/. Every container stage runs as uid 0
+          # through the bind mount, so out/ and everything in it is root-owned — which is why the
+          # Makefile's clean targets shell out to busybox rather than using host rm. The runner
+          # cannot mkdir inside it. This bit once already; do not "tidy" the path back into out/.
+          mkdir -p meta
+          images/card-meta.sh "$f" meta
 
       - name: upload the card to R2
         id: publish
@@ -232,13 +237,13 @@ jobs:
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_BUCKET: ${{ vars.R2_BUCKET }}
           R2_PUBLIC_BASE: ${{ vars.R2_PUBLIC_BASE }}
-        run: images/publish-card.sh "$VERSION" upload/sdcard.img.gz out/images/release-meta
+        run: images/publish-card.sh "$VERSION" upload/sdcard.img.gz meta
 
       - name: upload metadata artifact
         uses: actions/upload-artifact@v4
         with:
           name: novadeck-${{ inputs.artifact }}-meta
-          path: out/images/release-meta/
+          path: meta/
           if-no-files-found: error
 
       # The image itself, only when it is NOT going to R2 — a 9 GiB artifact on every test build is

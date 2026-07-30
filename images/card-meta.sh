@@ -17,6 +17,9 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 IMG="${1:-}"
+# NOTE the default is only usable where you can write out/ — after any container build that tree
+# is ROOT-OWNED (every stage runs as uid 0 through the bind mount, which is why the Makefile's
+# clean targets go through busybox). CI therefore passes a runner-owned directory explicitly.
 OUT="${2:-$ROOT/out/images/release-meta}"
 
 [ -n "$IMG" ] && [ -f "$IMG" ] || { echo "usage: $0 <image-file> [outdir]" >&2; exit 1; }

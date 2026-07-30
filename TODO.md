@@ -711,9 +711,15 @@ rationale lives in the linked memories and commit history.
   `git push` still uses `GITHUB_TOKEN` (`contents: write`; `pull-requests: write` deliberately absent).
   A missing/expired secret **fails** the step — opposite to `prune`, deliberately, since this job *is*
   the mechanism.
-  **STILL OPEN (small): the PAT path has never opened a real PR.** It only fires when a pin actually
-  changes — a `source.pin`/patch/`PKGBUILD` change — and an ordinary merge is a full cache hit that
-  correctly no-ops. Success tell is a pin PR **with `ci` checks on it**. To force it:
+  **OPEN, NOW UNDER TEST (2026-07-30): the PAT path has never opened a real PR.** It only fires when a
+  pin actually changes — a `source.pin`/patch/`PKGBUILD` change — and an ordinary merge is a full cache
+  hit that correctly no-ops. The mangohud `0002` swap on main is the **first genuine source change**
+  since the PAT landed, so it is the real-traffic test the forced-rebuild recipe was a stand-in for:
+  `packages/inputhash.sh packages/mangohud` moved `bdbcde0e…` → `6a8f4393…`, `verify-pins.sh` reports
+  mangohud STALE, and `artifact.pin` is deliberately left at the old hash for the pipeline to bump.
+  Success tell is a pin PR **with `ci` checks on it** carrying exactly one changed `artifact.pin`.
+  Failure modes to expect, all "green while doing nothing": inherited skip from a cache hit, a change
+  gate blind to untracked files, or no PR-creation right. If it needs forcing instead:
   `gh workflow run overlay.yml --ref main -f packages=rauc -f force=true` (`rauc` is cheapest, and
   non-reproducible builds mean a forced rebuild alone changes the bytes). Between that republish and
   merging the PR, the store disagrees with `main`'s pin, so don't cut a `v*` tag in the window.

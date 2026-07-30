@@ -24,9 +24,11 @@
 # The 6 patches teach MangoHud to read a Qualcomm SoC's stats — WITHOUT them the overlay shows no /
 # garbage GPU/battery/RAM data on an Adreno part. They are an upstream Qualcomm/SM85xx patch set
 # (see packages/mangohud/patches/README.md for what each one does). We take ALL
-# of them, including the SM8550/SM8750 device patches: SM8650 (Adreno 750) shares the Adreno
-# devfreq/kgsl + hwmon layout those patches target, so they are the closest match and the right
-# starting point — tune the exact sysfs paths on HW if a field reads wrong (see the patches README).
+# of them, including the SM8750 battery patch: SM8650 (Adreno 750) shares the Adreno devfreq/kgsl +
+# hwmon layout those patches target, so they are the closest match and the right starting point —
+# tune the exact sysfs paths on HW if a field reads wrong (see the patches README). `0002` is no
+# longer SM8550-specific: it now probes a LIST of kgsl/devfreq nodes and takes the first that
+# exists, which covers SM8650 by name rather than by "close enough to SM8550".
 #
 # Fields (see packages/README.md and packages/gamescope/source.pin):
 #   name           pkgname (must match the PKGBUILD); build-dir + repo entry
@@ -40,4 +42,4 @@
 name: mangohud
 pkgbuild_local: PKGBUILD
 pkgrel_suffix: 1
-patches: 0001-Qualcomm-GPU-support.patch 0002-SM8550-GPU.patch 0003-Battery-name.patch 0004-Qualcomm-battery-power-now.patch 0005-RAM-name.patch 0006-SM8750-Battery.patch
+patches: 0001-Qualcomm-GPU-support.patch 0002-GPU-monitoring.patch 0003-Battery-name.patch 0004-Qualcomm-battery-power-now.patch 0005-RAM-name.patch 0006-SM8750-Battery.patch

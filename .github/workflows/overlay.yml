@@ -91,6 +91,20 @@ jobs:
       any: ${{ steps.plan.outputs.any }}
     steps:
       - uses: actions/checkout@v4
+
+      # BEFORE anything is planned, pulled or compiled. `cold-machine retrieval` already rejects a
+      # lock whose novadeck rows disagree with packages/, but only at the far end of this pipeline:
+      # after the plan, after up to several hours of aarch64 builds, and after those builds have
+      # been published to the store. This is the same comparison over the same two committed inputs
+      # in about a second — see packages/verify-lock-rows.sh for why it can run without a repo.
+      #
+      # Duplicated on purpose: the `ci` workflow runs it too (via `make test`). ci triggers on paths
+      # this workflow ignores, so it catches a commit touching only images/manifest.lock; this copy
+      # keeps the expensive pipeline self-guarding rather than dependent on a sibling workflow
+      # having already gone red.
+      - name: lock rows still name the sources in packages/
+        run: packages/verify-lock-rows.sh
+
       # Every ${{ }} value reaches the shell as an ENVIRONMENT VARIABLE, never spliced into the
       # script text. PACKAGES is operator-supplied (workflow_dispatch), so splicing it would be a
       # command-injection hole; the others are ours, but the rule is only useful if it is absolute.

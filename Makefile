@@ -221,7 +221,7 @@ KERNEL_SRC := kernel/SOURCE.pin kernel/embed.list kernel/build.sh \
 # Phony orchestration targets
 # ==============================================================================
 .PHONY: help all image toolchain kernel fw-linux fw-qcom base overlay overlay-pull overlay-publish \
-        verify-pins pin-artifacts \
+        verify-pins pin-artifacts verify-lock \
         rootfs manifest relock \
         initramfs boot sdcard verify-card test bundle deploy clean clean-base clean-overlay distclean
 
@@ -268,7 +268,17 @@ verify-card: $(SDCARD) | $(BUILD_STAMP) ## Verify the built A/B card image (in c
 # initramfs READS the slot state, novadeck-bootctl WRITES it, and the post-install hook DRIVES both
 # while reformatting a partition. None of them needs root — the hook suite stubs the commands that
 # would touch real storage.
-test: ## Run the offline slot-state + bootctl + post-install suites (host, no build needed)
+# A second's worth of committed-file arithmetic, and the reason it is a PREREQUISITE of `test`
+# rather than a step inside images/fetchlock.sh: fetchlock makes the same comparison but needs a
+# populated work/repo plus the ~382 snapshot packages it verifies alongside, so on a clean machine
+# nothing runs it until the overlay pipeline's retrieval job — hours of aarch64 compiles after the
+# wrong row was pushed. Hanging it off `test` is what puts it on every push and every PR: the ci
+# workflow runs `make test`, and it triggers on paths overlay.yml deliberately ignores, so a commit
+# touching ONLY images/manifest.lock is still checked.
+verify-lock: ## Check the lock's novadeck rows against packages/ (host, seconds, no build)
+	bash packages/verify-lock-rows.sh
+
+test: verify-lock ## Run the offline slot-state + bootctl + post-install suites (host, no build needed)
 	bash images/initramfs/test-slot-state.sh
 	bash images/test-bootctl.sh
 	bash images/test-post-install.sh

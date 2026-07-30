@@ -265,6 +265,7 @@ that one formula, and they have to agree byte for byte:
 | `build-overlay.sh` | incremental-rebuild cache key (`work/repo/<arch>/.stamps/<name>.hash`) |
 | `images/genmanifest.sh` | writes it into `images/manifest.lock` as the `novadeck` rows' hash |
 | `images/fetchlock.sh` | re-derives it and refuses the install when the lock disagrees |
+| `packages/verify-lock-rows.sh` | the same comparison from committed files only, so it can run **before** a build (`make verify-lock`) |
 
 So the lock pins these rows to their **sources**, not to the built artifact's bytes — these builds
 are not bit-reproducible, and an artifact hash moved on every rebuild from unchanged inputs, which
@@ -273,7 +274,11 @@ only ever verified on the machine that last ran `make relock`. Consequences wort
 - Rebuilding a package changes nothing in the lock. Editing a patch or bumping a pin **does**, and
   `fetchlock` will say so by name and ask for `make relock`.
 - One split PKGBUILD legitimately gives several rows the same hash (`mesa` emits `mesa`,
-  `vulkan-freedreno`, `vulkan-mesa-device-select`).
+  `vulkan-freedreno`, `vulkan-mesa-device-select`). **All of them move together.** Hand-editing the
+  row whose name matches the package *directory* and stopping there is a real mistake that has
+  happened (`ab3121b`, fixed in `5f15a19`): it looks correct on 7 of our 8 packages, because only
+  `mesa` is split. `make verify-lock` catches it in a second and names the owning package;
+  `fetchlock` also catches it, but not until a repo exists to check against.
 - `work/repo` therefore survives `make distclean`; `make clean-overlay` still forces a rebuild.
 
 The hash is **path-independent** by construction, because it has to agree between a developer's

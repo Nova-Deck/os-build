@@ -8,11 +8,13 @@
 # makepkg fetches is downstream of these files (the pin carries pkgbuild_ref, a local PKGBUILD
 # carries pkgver + the upstream source's own sha256sums), so hashing them pins the build.
 #
-# FIVE CALLERS, ONE FORMULA, and they have to agree or the build breaks in confusing ways:
+# SIX CALLERS, ONE FORMULA, and they have to agree or the build breaks in confusing ways:
 #
 #   packages/build-overlay.sh   incremental-rebuild cache key (work/repo/<arch>/.stamps/<n>.hash)
 #   images/genmanifest.sh       writes it into images/manifest.lock as the `novadeck` rows' pin
 #   images/fetchlock.sh         re-derives it and refuses the install when the lock disagrees
+#   packages/verify-lock-rows.sh  the same comparison as fetchlock but from COMMITTED FILES ONLY,
+#                               so it runs in a second before any build rather than after one
 #   packages/overlay-store.sh   the GHCR tag each package is published under and retrieved by
 #   packages/verify-pins.sh     ties an artifact.pin to the sources it was built from, so a pin
 #                               that predates a source change reports as STALE rather than as a

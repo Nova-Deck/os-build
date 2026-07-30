@@ -1,7 +1,8 @@
-# `fex/` — x86 emulation runtime configuration
+# FEX — x86 emulation runtime configuration
 
-Copied wholesale into the rootfs by `images/assemble-rootfs.sh` (same mechanism as
-`fs-overlay/`). JSON has no comment syntax, so the rationale lives here.
+The config lives in the unified overlay payload (`fs-overlay/usr/share/fex-emu/`,
+`fs-overlay/usr/lib/novadeck/proton-wrapper`), copied wholesale into the rootfs by
+`images/assemble-rootfs.sh`. JSON has no comment syntax, so the rationale lives here.
 
 ## The two x86 paths are independent
 

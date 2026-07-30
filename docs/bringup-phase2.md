@@ -98,8 +98,9 @@ Turns the hand-run smoke into **session plumbing**: a long-running gamescope com
 systemd unit. Native arm64 Steam lands in Phase 3 — Step 2 is the *compositor + session unit*, not
 the Steam client.
 
-### Plumbing — `session/` overlay tree
-A static, SoC-agnostic overlay mirror-copied into the rootfs by `images/assemble-rootfs.sh`:
+### Plumbing — the session layer of `fs-overlay/`
+A static, SoC-agnostic overlay mirror-copied into the rootfs by `images/assemble-rootfs.sh`
+(this tree was the standalone `session/` before the trees were merged into `fs-overlay/`):
 
 | File | Role |
 |---|---|

@@ -151,6 +151,13 @@ build() {
   CFLAGS+=" -g1"
   CXXFLAGS+=" -g1"
 
+  # Raise the ISA floor off the stock armv8-a baseline: fp16 and dotprod for the format-conversion
+  # and compiler paths, plus the implied armv8.1-a LSE atomics. Turnip's own runtime feature checks
+  # are unaffected — this only changes what the compiler may emit ahead of time.
+  # See "CPU baseline" in packages/README.md for the fleet floor and why i8mm is absent.
+  CFLAGS+=" -march=armv8.2-a+fp16+dotprod"
+  CXXFLAGS+=" -march=armv8.2-a+fp16+dotprod"
+
   arch-meson mesa-$_pkgver build "${meson_options[@]}"
   meson compile -C build
 }

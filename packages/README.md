@@ -87,6 +87,49 @@ confusing ones:
 it could never hold. Nothing installs *from* the db in a locked build — `fetchlock.sh` hands pacman an
 explicit file list — so it is an index, not an input.
 
+## CPU baseline (`-march`) for from-source packages
+
+The base `makepkg.conf` ships `CFLAGS="-O2 -pipe -fno-plt -fexceptions …"` with **no `-march`**, so
+everything built from source targets the stock `armv8-a` baseline. Two packages opt out of that, in
+their own `PKGBUILD`:
+
+```
+-march=armv8.2-a+fp16+dotprod       # packages/fex-emu, packages/mesa
+```
+
+**The floor is set by the OLDEST SoC the store must serve, not the newest.** The overlay store is
+shared across every board, so a published byte has to run on all of them. SM8550 (Cortex-X3/A715) and
+SM8650 (X4/A720) are ARMv9-A and would tolerate far more, but **SM8250 (Cortex-A77/A55, ARMv8.2-A)**
+is a planned target and it is what the floor is chosen against. Raising the floor above what the
+oldest board supports does not fail at build time — it produces packages that SIGILL on that device,
+after the pipeline has published them.
+
+**Why `i8mm` is deliberately absent.** It is an ARMv8.6 feature that first appears in the ARMv9 cores
+(A710/X2 and later); Cortex-A77 does not have it. `bf16` and SVE are out for the same reason. `fp16`
+and `dotprod` are present on A77 and A55, so they stay.
+
+**The part that actually motivated this is not in the feature list.** `armv8.2-a` implies
+`armv8.1-a`, which brings **LSE atomics** (`CAS`/`LDADD`) in place of `ldxr/stxr` retry loops. That is
+the real win for FEX, which is atomic-heavy by construction — emulating x86's strong memory model on
+a weakly-ordered host largely *is* atomics. Note this affects FEX's **compiled C++ only**: the JIT
+selects its emitted instructions from *runtime* host feature detection, so `-march` changes nothing
+about the code that actually executes guest x86.
+
+**Why these flags live in each `PKGBUILD` and not a shared toolchain file.**
+`packages/inputhash.sh` hashes exactly three things per package — `source.pin`, its declared patches,
+and the local `PKGBUILD`. A shared flags file would be **invisible** to it: changing the flags would
+move the artifact bytes while leaving the inputhash unchanged, so `images/manifest.lock` would keep
+asserting the same provenance for different bytes and `verify-pins.sh` would report a byte mismatch
+instead of a STALE pin — exactly the confusing failure its stale-check-first ordering exists to
+prevent. Putting the flags in the `PKGBUILD` keeps them inside the hashed input set, so a flag change
+is an ordinary pin-bump like any source change. **If this ever becomes a shared file, it must be
+added to `inputhash.sh`'s input set in the same commit** — and that bumps every package's hash at
+once.
+
+`-mtune` is a scheduling hint, not an ISA floor, so it is chosen separately and more loosely;
+`fex-emu` passes `-DTUNE_CPU=cortex-a78` (FEX's own knob) as a conservative pick across the
+big.LITTLE cluster, which stays valid with A77 in the fleet.
+
 ## From-source overlay packages (`source.pin`)
 
 Holo packages that need a novadeck **code** patch are rebuilt from source instead of pulled as

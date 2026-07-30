@@ -211,8 +211,14 @@ build() {
   cd "$srcdir/FEX"
 
   # pac-ret breaks the JIT; -O3 is upstream's release setting.
-  export CFLAGS+=" -mbranch-protection=none -O3"
-  export CXXFLAGS+=" -mbranch-protection=none -O3"
+  # -march raises the ISA floor off the stock armv8-a baseline. The win here is NOT the SIMD
+  # features but the implied armv8.1-a: LSE atomics (CAS/LDADD) instead of ldxr/stxr retry loops,
+  # and FEX is atomic-heavy because emulating x86's strong memory model on a weakly-ordered host
+  # largely is atomics. That code is compiled C++, not JIT output — the JIT picks its emitted
+  # instructions from RUNTIME host detection, so -march changes nothing on the guest hot path.
+  # See "CPU baseline" in packages/README.md for the fleet floor and why i8mm is absent.
+  export CFLAGS+=" -mbranch-protection=none -O3 -march=armv8.2-a+fp16+dotprod"
+  export CXXFLAGS+=" -mbranch-protection=none -O3 -march=armv8.2-a+fp16+dotprod"
 
   # TUNE_CPU is a scheduling hint only (not an ISA floor), so a conservative core keeps the
   # build valid across the big.LITTLE cluster this ships on.

@@ -145,7 +145,13 @@ CC=(${CROSS_COMPILE:+CROSS_COMPILE=$CROSS_COMPILE})
   #       update path can be missing exactly when an update is applied.
   #   =y  vfat + loop: images/initramfs/init mounts the ESP to read the A/B slot state. Losing
   #       vfat makes every boot silently fall back to the cmdline root= instead.
-  for pair in CFG80211=m MAC80211=m BLK_DEV_DM=y DM_VERITY=y VFAT_FS=y BLK_DEV_LOOP=y; do
+  #   =y  zram + the zstd backend: the ONLY swap device on this image comes from zram-generator,
+  #       and a kernel without it produces no zram0, no swap and no error — while
+  #       60-novadeck-gaming.conf's vm.swappiness=180 quietly does nothing. The backend is checked
+  #       separately from ZRAM because losing just that one leaves zram working but rejecting the
+  #       `compression-algorithm = zstd` the shipped generator config asks for.
+  for pair in CFG80211=m MAC80211=m BLK_DEV_DM=y DM_VERITY=y VFAT_FS=y BLK_DEV_LOOP=y \
+              ZRAM=y ZRAM_BACKEND_ZSTD=y; do
     sym=${pair%=*}; want=${pair#*=}
     got="$(scripts/config --file .config --state "$sym")"
     [ "$got" = "$want" ] || {

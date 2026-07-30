@@ -1,0 +1,43 @@
+# novadeck — the earlyoom operator override file, deliberately EMPTY of defaults.
+#
+# This path belongs to the earlyoom package, which ships it containing an active
+#
+#   EARLYOOM_ARGS="-r 3600 -n --avoid '(^|/)(init|systemd|Xorg|sshd)$'"
+#
+# We overwrite it with this comments-only version. WHY: earlyoom.service expands $EARLYOOM_ARGS
+# AFTER novadeck's own settings (see /usr/lib/systemd/system/earlyoom.service.d/novadeck.conf), and
+# earlyoom parses with getopt, where the LAST occurrence of an option wins outright — a second
+# --avoid REPLACES the first rather than adding to it. So the packaged defaults did not merge with
+# our policy, they silently displaced the parts they overlapped.
+#
+# Measured on hardware before this file existed: the device logged
+#   Will avoid killing process names that match regex '(^|/)(init|systemd|Xorg|sshd)$'
+# i.e. the packaged list, not ours. Every name in our --avoid regex had no bias at all, and our
+# -r 0 was overridden back to hourly reports. Only -M, -S and --ignore survived, because those
+# happen to be the options the packaged file does not set.
+#
+# Emptying it is what makes the drop-in's design work as written, and it costs nothing: the packaged
+# values were a generic desktop default (Xorg, which this image does not run) rather than anything
+# tuned for this device.
+#
+# THIS FILE IS STILL THE OPERATOR SURFACE, and that is the point of emptying it rather than deleting
+# it. Setting EARLYOOM_ARGS below overrides novadeck's policy — it is expanded last, so it wins on
+# any option it names, and leaves the rest of the policy in place. That is the supported way to
+# retune earlyoom on a device over SSH without editing /usr.
+#
+# Note for anyone doing that: an edit here lands in the /etc overlay's upper (which lives in /var)
+# and therefore persists across updates, masking later versions of this file. If a future image
+# changes the packaged defaults, a device that has been edited will not see the change.
+
+# Options to pass to earlyoom. Unset by default — policy lives in
+# /usr/lib/systemd/system/earlyoom.service.d/novadeck.conf.
+#
+# Examples:
+#
+# Memory report every minute (0 disables reports entirely, which is novadeck's default):
+# EARLYOOM_ARGS="-r 60"
+#
+# Act at 5% available memory instead of novadeck's absolute 400 MB threshold:
+# EARLYOOM_ARGS="-m 5"
+#
+# See `earlyoom -h` for the full option list.

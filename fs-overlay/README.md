@@ -55,3 +55,26 @@ package + guest rootfs (auto-registered with binfmt_misc). See `docs/FEX_README.
 `50-novadeck-timezone.rules` (the one polkit grant stock polkit still prompts for). The Steam client
 SEED itself is build machinery, not rootfs content — it lives in `../steam-seed/` and is pre-seeded
 into `/home` at image build time (`images/make-sdcard.sh`). See `docs/bringup-phase3.md`.
+
+**System hygiene — identity, memory, and the `/var` shape**
+Four files that are not a subsystem but are load-bearing for the immutable A/B model, because on
+this image `/etc/passwd` and `/var` are *build products* rather than device state:
+
+- `usr/lib/sysusers.d/01-novadeck-enforce-ids.conf` — pins every system UID/GID that
+  `systemd-sysusers` would otherwise allocate by counting down from 999. Adding one package with a
+  sysusers entry shifts every id below it, and the RAUC post-install hook copies `/var` wholesale
+  across an update, so drifting ids reassign the ownership of persisted state. **This file is also
+  read by `images/customize-base.sh`**, which stages it into the target root *before* the pacman
+  transaction — the pin only works if it is there when the sysusers hook runs. Its sha is in the
+  base reuse key, and `images/guard-rootfs.sh` assertion 8 checks the built tree against it. There
+  is no end-of-line comment syntax in sysusers.d; a trailing `#` silently rejects the line.
+- `usr/lib/tmpfiles.d/novadeck-var.conf` — declares the `/var` hierarchy in the ROOT. A fresh flash
+  gets `/var` from the build; an *updated* slot gets the previous version's `/var`, so a directory a
+  new version needs has to be asserted at boot or it will not exist. New `/var` paths go here.
+- `usr/lib/systemd/system/earlyoom.service.d/novadeck.conf` — OOM policy: absolute thresholds
+  (RAM spans 8–16 GB across supported SKUs, so percentages mean different headroom per unit),
+  reports off (the default is one journal line per second, onto an SD card), and the session spine
+  protected. Enabled by `60-novadeck-earlyoom.preset` + a `multi-user.target.wants` symlink.
+- `usr/lib/systemd/zram-generator.conf` — the image's only swap device, `ram/2` compressed in RAM.
+  **Coupled to the kernel:** it needs `CONFIG_ZRAM` + the zstd backend, which `kernel/build.sh`
+  asserts, because without them there is no `zram0`, no swap, and no error.

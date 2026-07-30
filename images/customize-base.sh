@@ -69,6 +69,11 @@ SNAPFILE="$ROOT/snapshot.pin"
 LOCKFILE="$ROOT/images/manifest.lock"
 PACMANCONF="$ROOT/images/pacman.conf"
 OSRELEASE="$ROOT/images/os-release"
+# The pinned system UID/GID range. It SHIPS from fs-overlay (the device's own boot-time sysusers
+# run must agree with it), but it has to be in the target root BEFORE the transaction whose
+# sysusers hook allocates the ids — so this script reads it from there and stages it in early.
+# There is exactly one copy; assemble-rootfs.sh later re-lays the identical file with the overlay.
+IDPIN="$ROOT/fs-overlay/usr/lib/sysusers.d/01-novadeck-enforce-ids.conf"
 DEST="$ROOT/work/base"
 RESOLVE="${NOVADECK_RESOLVE:-}"
 
@@ -169,7 +174,18 @@ BOOTSTRAP_PKGS=(base)
 # subtly not the same device — or, on a Wi-Fi-only box with no serial console, not reachable at
 # all. It was NOT on the device before this (checked on hardware 2026-07-28: only tar and cp were
 # present), so the wholesale copy was not expressible until now.
-PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-tools mesa gamescope seatd sddm mangohud fex-emu bluez bluez-utils networkmanager alsa-ucm-conf pipewire wireplumber pipewire-pulse pipewire-alsa unzip openal gtk2 ffmpeg e2fsprogs xorg-xwayland lsof noto-fonts noto-fonts-cjk noto-fonts-emoji python python-gobject scx-scheds rauc btrfs-progs rsync)
+# earlyoom: userspace OOM killer. Nothing on the image had this job — systemd-oomd arrives with
+# systemd but ships disabled and nothing enabled it — so the only backstop was the kernel OOM
+# killer, which acts after allocation already failed. On a gamepad-only device with no serial
+# console that difference is a power cycle. Policy (absolute thresholds sized for an 8-16 GB spread,
+# and which processes are off-limits) is in fs-overlay/.../earlyoom.service.d/novadeck.conf; it is
+# enabled by 60-novadeck-earlyoom.preset plus a build-time .wants symlink, like every other unit here.
+# zram-generator: creates the zram0 swap device from fs-overlay/usr/lib/systemd/zram-generator.conf.
+# This is the image's ONLY swap device (no swap file — read-only root, and the only bulk storage is
+# the SD card). It needs CONFIG_ZRAM, which kernel/kernel.config only gained alongside it, so the two
+# have to move together; kernel/build.sh asserts the symbol survived. Both packages resolve from the
+# pinned snapshot's `extra` (earlyoom 1.9.0, zram-generator 1.2.1) — no overlay build needed.
+PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-tools mesa gamescope seatd sddm mangohud fex-emu bluez bluez-utils networkmanager alsa-ucm-conf pipewire wireplumber pipewire-pulse pipewire-alsa unzip openal gtk2 ffmpeg e2fsprogs xorg-xwayland lsof noto-fonts noto-fonts-cjk noto-fonts-emoji python python-gobject scx-scheds rauc btrfs-progs rsync earlyoom zram-generator)
 
 # Dev-only packages — installed ONLY under NOVADECK_DEV=1, NEVER in a release base.
 # On-device bring-up tools: evtest reads raw /dev/input events; usbutils provides lsusb.
@@ -314,6 +330,13 @@ fi
 # 2026-07-26, twice over, since the Makefile was not listing this file as a prerequisite either.
 EXPECTED_PKGS="$EXPECTED_PKGS
 script:$(sha256sum "$0" | cut -d' ' -f1)"
+# The UID/GID pin. It decides the numbers baked into this tree's /etc/passwd and /etc/group, and
+# nothing else in the key would notice it changing — the package SET is identical either way. Its
+# whole point is that those numbers are stable, so an edit must rebuild rather than be satisfied by
+# a base carrying the previous allocation.
+[ -f "$IDPIN" ] || { echo "no UID/GID pin: $IDPIN" >&2; exit 1; }
+EXPECTED_PKGS="$EXPECTED_PKGS
+ids:$(sha256sum "$IDPIN" | cut -d' ' -f1)"
 command -v docker >/dev/null 2>&1 || { echo "docker required for the root bootstrap" >&2; exit 1; }
 [ -f "$PACMANCONF" ] || { echo "no bootstrap pacman config: $PACMANCONF" >&2; exit 1; }
 [ -f "$OSRELEASE" ]  || { echo "no os-release declaration: $OSRELEASE" >&2; exit 1; }
@@ -362,6 +385,8 @@ printf 'Server = %s/$repo/os/$arch\n' "$SNAPSHOT" >"$PREBUILT_DIR/mirrorlist"
 # staged alongside it (see the headers of each).
 cp "$PACMANCONF" "$PREBUILT_DIR/pacman.conf"
 cp "$OSRELEASE"  "$PREBUILT_DIR/os-release"
+# The UID/GID pin, staged so the container can place it before the transaction (see its header).
+cp "$IDPIN"      "$PREBUILT_DIR/sysusers-ids.conf"
 
 for pin in "${PREBUILT_PINS[@]}"; do
   [ -e "$pin" ] || continue
@@ -476,6 +501,13 @@ docker run --rm --platform linux/arm64 -v "$PREBUILT_DIR":/prebuilt:ro \
   mknod -m 0666 /target/dev/random  c 1 8 2>/dev/null || true
   mknod -m 0666 /target/dev/urandom c 1 9 2>/dev/null || true
   mknod -m 0600 /target/dev/console c 5 1 2>/dev/null || true
+
+  # The UID/GID pin, placed BEFORE the transaction. Order is the whole mechanism: pacman runs the
+  # systemd-sysusers hook once at the END of the transaction, over every sysusers.d file present at
+  # that moment, and the first definition of a name wins. Placed after the install it would be
+  # inert — the ids would already have been allocated by counting down from 999. No package owns
+  # this path, so it cannot collide with the transaction. See the file for what drift it prevents.
+  install -Dm0644 /prebuilt/sysusers-ids.conf /target/usr/lib/sysusers.d/01-novadeck-enforce-ids.conf
 
   # Lay the root down. LOCKED when the host staged an install list, else RESOLVE.
   if [ -s /prebuilt/install.list ]; then

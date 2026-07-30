@@ -37,7 +37,9 @@
 #      (the two are only safe together)
 #   7. the RAUC update path is installable — rauc, the keyring, system.conf and this slot's
 #      own boot.img are all present, and the hook that consumes them is executable;
-#   8. a size delta against the previous build (report only — never fails a build)
+#   8. the system UID/GID allocation matches the pin — the ids baked into this tree's passwd and
+#      group are the ones fs-overlay's sysusers.d pin names, not whatever sysusers counted down to
+#   9. a size delta against the previous build (report only — never fails a build)
 set -euo pipefail
 shopt -s nullglob
 
@@ -383,7 +385,79 @@ if [ "$rauc_ok" = 1 ]; then
 fi
 
 # ------------------------------------------------------------------------------------------
-# 8. Size delta (report only).
+# 8. The system UID/GID allocation matches the pin.
+#
+# /usr/lib/sysusers.d/01-novadeck-enforce-ids.conf declares an id for every name in the range
+# systemd-sysusers would otherwise allocate. Whether it WORKED is not visible in the declaration:
+# it only takes effect if it reached the target root before the transaction whose hook allocates,
+# and it wins only because `01-` sorts first. Both are properties of images/customize-base.sh, one
+# file away from this one, and the failure is silent — sysusers allocates by counting down from 999,
+# so a pin that never applied still yields a plausible-looking passwd.
+#
+# What it costs to miss: the ids are recorded in the inodes of /home and of each slot's /var, and
+# fs-overlay/usr/lib/rauc/post-install.sh copies /var wholesale across an update. So a build whose
+# allocation silently moved ships an update that reassigns ownership of persisted state — noticed
+# on a device, after the fact, as a service that cannot read its own state directory.
+#
+# Read from the STAGE, not from fs-overlay, for this file's usual reason: what ships is the built
+# tree, and the pin is only load-bearing if it is IN it. An absent pin is a failure, not a skip.
+# ------------------------------------------------------------------------------------------
+echo "  8. system UID/GID allocation"
+IDPIN="$STAGE/usr/lib/sysusers.d/01-novadeck-enforce-ids.conf"
+PASSWD="$STAGE/etc/passwd"
+GROUP="$STAGE/etc/group"
+
+ids_ok=1
+if [ ! -s "$IDPIN" ]; then
+  ids_ok=0
+  bad "/usr/lib/sysusers.d/01-novadeck-enforce-ids.conf is missing — nothing pins the system id range, so every id in it is a function of the package set"
+elif [ ! -s "$PASSWD" ] || [ ! -s "$GROUP" ]; then
+  ids_ok=0
+  bad "/etc/passwd or /etc/group is missing or empty — the tree has no id allocation to check"
+else
+  ids_checked=0
+  # Fields: <type> <name> <id> ... — only `u` and `g` lines carry an id we pin. A `-` id would mean
+  # "allocate", which is the thing this file exists to prevent, so it is a failure and not a skip.
+  while read -r kind name id _rest; do
+    case "$kind" in u|g) ;; *) continue ;; esac
+    [ -n "${id:-}" ] || continue
+    if [ "$id" = "-" ]; then
+      ids_ok=0
+      bad "the id pin leaves '$name' unpinned ($kind line with '-') — that name is back to being allocated by package order"
+      continue
+    fi
+    # Which files must agree: a `g` line fixes only the group, a `u` line fixes the user AND the
+    # like-named group, because sysusers creates both at the same id.
+    case "$kind" in
+      g) files="group" ;;
+      u) files="passwd group" ;;
+    esac
+    for which in $files; do
+      case "$which" in passwd) file="$PASSWD" ;; group) file="$GROUP" ;; esac
+      # Look the NAME up, not the id. A name sitting at the wrong id is exactly the failure being
+      # hunted, and searching by id would simply not find it.
+      got="$(awk -F: -v n="$name" '$1 == n { print $3; exit }' "$file")"
+      if [ -z "$got" ]; then
+        ids_ok=0
+        bad "'$name' is pinned to $id but is absent from /etc/$which — the pin names something this tree does not create"
+      elif [ "$got" != "$id" ]; then
+        ids_ok=0
+        bad "'$name' is $got in /etc/$which but the pin says $id — the pin did not apply (it must reach the target root BEFORE the pacman transaction; see images/customize-base.sh)"
+      fi
+    done
+    ids_checked=$((ids_checked + 1))
+  done < <(grep -vE '^[[:space:]]*(#|$)' "$IDPIN")
+
+  if [ "$ids_checked" = 0 ]; then
+    ids_ok=0
+    bad "the id pin declares no u/g entries — it is a comment, not a pin"
+  elif [ "$ids_ok" = 1 ]; then
+    echo "    ok  $ids_checked pinned system ids match /etc/passwd + /etc/group"
+  fi
+fi
+
+# ------------------------------------------------------------------------------------------
+# 9. Size delta (report only).
 #
 # Never fails a build — there is no defensible threshold, and a guard that blocks on growth would
 # be disabled the first time a legitimate package got bigger. Its job is to put the number in

@@ -1,0 +1,9 @@
+# novadeck: enable the userspace OOM killer on release. /etc/machine-id is empty on a fresh image so
+# systemd runs preset-all on first boot, where the stock 99-default.preset is "disable *"; this
+# higher-priority preset (60 < 99) keeps it enabled. A build-time multi-user.target.wants symlink
+# ships alongside as a fallback (cf. 60-novadeck-macgen.preset).
+#
+# The upstream earlyoom package ships no preset of its own, so without this (and the fallback
+# symlink) it would install and never start. Policy — thresholds, and which processes are off-limits
+# — is in earlyoom.service.d/novadeck.conf, not here.
+enable earlyoom.service

@@ -8,5 +8,5 @@
 # If it disagrees with the tree, the pin is STALE — the sources moved and no pin-bump PR
 # has landed yet — which is a different failure from bytes that do not match.
 name: scx-scheds
-inputhash: 9c53d95c97693ccd4bcd88739430d60850afca134125c7a12102f97f96fa8334
-artifact: b047f404e50298f68e192531b184e18e57c9457139f0301c4d89636176664d61  scx-scheds-1.1.2-1.1-aarch64.pkg.tar.zst
+inputhash: a07031adb00b97382d7bc88fe65ea73ce551b04072a1f226beaaa5f8fd027f6c
+artifact: 5366e87d0a6f6f0b12b9d72a7a9153e03d0a6d0bc83ce4351a8d3816455c4a89  scx-scheds-1.1.2-1.1-aarch64.pkg.tar.zst

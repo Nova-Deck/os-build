@@ -1861,6 +1861,17 @@ rationale lives in the linked memories and commit history.
   (plain-dir libraries, no btrfs nodatacow dance — Armada's `steamapps` subvolume is Armada-only, do
   not port). Fits the Phase-4 manifest/immutable model. See
   [[install-to-ufs-sdcard-library-goal]], [[grow-home-repart-no-initramfs]], [[rootfs-build-approach]].
+  - **Dependency, park until then: port the upstream fstab-repair one-shot.** The reference
+    platform ships a tiny unit that comments out `/dev/mmcblk* none …` lines in `/etc/fstab`
+    (upstream `ValveSoftware/SteamOS#1208`): their SD-card format helper writes such entries, they
+    are invalid, and they stop UDisks mounting the card at all. It is NOT needed today — nothing on
+    our image writes `/etc/fstab` at runtime, only `images/assemble-rootfs.sh` at build time — but it
+    becomes needed the moment we ship the format helper above, because that is what creates the bad
+    entries. Cheap when the time comes: the whole thing is a 10-line `sed` plus a unit gated on
+    `ConditionPathExists=/var/lib/overlays/etc/upper/fstab`, which is *already* our /etc overlay
+    upper path, so it drops in unmodified. Reviewed 2026-07-30 against upstream
+    `holo-PKGBUILD/holo-fstab-repair`; do not ship it before the helper, or it is a unit that
+    guards against a state we cannot reach.
 
 - [x] **MangoHud performance overlay via `--mangoapp`** — DONE + HW-validated 2026-07-08.
   Confirmed `mangohud`/`mangoapp` are NOT in the holo aarch64 repos (no `mango*` in the pinned base's

@@ -104,9 +104,25 @@ is a planned target and it is what the floor is chosen against. Raising the floo
 oldest board supports does not fail at build time — it produces packages that SIGILL on that device,
 after the pipeline has published them.
 
-**Why `i8mm` is deliberately absent.** It is an ARMv8.6 feature that first appears in the ARMv9 cores
-(A710/X2 and later); Cortex-A77 does not have it. `bf16` and SVE are out for the same reason. `fp16`
-and `dotprod` are present on A77 and A55, so they stay.
+**Why `i8mm` is deliberately absent — VERIFIED, not assumed.** `FEAT_I8MM` is optional from
+ARMv8.2-A and only *mandatory* from ARMv8.6-A, so "v8.2 core" alone does not settle it; it has to be
+checked per core. Neither of SM8250's cores implements it, per the per-core tables in the two
+toolchains that actually decide our codegen (mesa builds with gcc, fex-emu with clang):
+
+| core | LLVM `AArch64Processors.td` | GCC `aarch64-cores.def` |
+| --- | --- | --- |
+| Cortex-A77 | `HasV8_2aOps, …FeatureFullFP16, FeatureDotProd, …FeatureLSE` | `V8_2A, (F16, RCPC, DOTPROD, SSBS)` |
+| Cortex-A55 | `HasV8_2aOps, …FeatureFullFP16, FeatureDotProd, …FeatureLSE` | `V8_2A, (F16, RCPC, DOTPROD)` |
+
+`FeatureMatMulInt8`/`I8MM` appears in neither. `bf16` (also v8.6-mandatory) and SVE are out the same
+way. `armv8.2-a` is the *exact* architecture level of both cores rather than a conservative guess,
+which is also what confirms the LSE claim below.
+
+**`dotprod` had to be checked on the LITTLE core, and that is the check that matters.** SM8250 is
+A77 **+ A55**, and a published byte runs on both clusters, so the constraint is the A55 — reasoning
+only about the big core would leave `dotprod` unverified where it is most likely to be missing. Both
+tables list it, and `F16`, on A55 explicitly. Had A55 lacked either, these flags would have been a
+latent SIGILL on the little cores that nothing in the pipeline detects.
 
 **The part that actually motivated this is not in the feature list.** `armv8.2-a` implies
 `armv8.1-a`, which brings **LSE atomics** (`CAS`/`LDADD`) in place of `ldxr/stxr` retry loops. That is

@@ -8,5 +8,5 @@
 # If it disagrees with the tree, the pin is STALE — the sources moved and no pin-bump PR
 # has landed yet — which is a different failure from bytes that do not match.
 name: mangohud
-inputhash: bdbcde0ec88e458b9a13cf55e97dcfd76fe88964bcc879af41a1ca174c16d272
-artifact: 7b577079dd541405780c4cbfe74ac4f736dcfca3a9af55282439613104dad206  mangohud-0.8.4-1.1-aarch64.pkg.tar.zst
+inputhash: 6a8f43930b1f3a506e08bbc955ebef29b7e50b2ef1fd8de83db62ec532a4df7a
+artifact: 439f25aa8b2493cf48bf4429dc1a002813f8b4f465a3dd079b517d0116ae4d56  mangohud-0.8.4-1.1-aarch64.pkg.tar.zst

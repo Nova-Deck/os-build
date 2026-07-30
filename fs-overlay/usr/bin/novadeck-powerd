@@ -22,29 +22,39 @@ FACTORY_CONFIG_FILE = Path("/usr/share/novadeck/power-profiles.conf")
 CONFIG_FILE = Path("/etc/novadeck/power-profiles.conf")
 FAN_SAFE_PWM = 128
 
-# sched_ext. SteamOS treats scx as a user-selectable CPU scheduler rather than a baked-in
-# default: steamos-manager start/stops scx.service on demand and the stock kernel scheduler
-# stays the default. Mirror that here — "none" is the in-kernel scheduler (EEVDF; one
-# implementation, not runtime-selectable, so it is the whole non-scx half of this vocabulary)
-# with the unit stopped, "lavd" is scx_lavd with it running. scx.service ships installed but
-# NOT enabled, so
-# nothing loads a BPF scheduler at boot unless the user asked for it and we restore it below.
-# Which binary the unit runs comes from /etc/default/scx (we ship SCX_SCHEDULER=scx_lavd);
-# editing that file out from under us makes the "lavd" label inaccurate, nothing worse.
+# sched_ext. "none" is the in-kernel scheduler (EEVDF; one implementation, not
+# runtime-selectable, so it is the whole non-scx half of this vocabulary) with scx.service
+# stopped, "lavd" is scx_lavd with it running. Which binary the unit runs comes from
+# /etc/default/scx (we ship SCX_SCHEDULER=scx_lavd); editing that file out from under us makes
+# the "lavd" label inaccurate, nothing worse.
 #
 # Deliberately just these two, matching Valve's vocabulary exactly. scx-scheds also ships
 # scx_bpfland and scx_rusty, but those stay SSH-only per-title fallbacks rather than QAM
 # entries. Not to be confused with the cpufreq governor (schedutil / performance): that is
 # frequency policy, a separate axis, and stays owned by the power profile.
 #
-# The power profile does, however, own lavd's INTERNAL power mode. We ship scx_lavd with
-# `--autopower` (packages/scx-scheds/PKGBUILD writes it into /etc/default/scx), so once the user
-# has turned lavd on it polls PowerProfiles.ActiveProfile on the system bus once a second and
-# switches its own performance/balanced/powersave mode live, no restart. We answer that name
-# ourselves (PPD_NAMES below) because we ship no power-profiles-daemon. This does NOT change the
-# toggle model above: scx.service is still never `enable`d and "none" is still the default; the
-# profile only picks lavd's mode once lavd is running.
+# WE DIVERGE FROM STEAMOS ON THE DEFAULT, deliberately. SteamOS defaults to the stock scheduler
+# because scx there is a capability that may not be installed at all — its manager bails with
+# "scx.service not installed" and holo ships no scx packages. We build both halves ourselves
+# (CONFIG_SCHED_CLASS_EXT in kernel/kernel.config, packages/scx-scheds into the [novadeck]
+# overlay, scx-scheds in customize-base.sh PKGS), so the capability is always there and lavd's
+# latency-first behaviour is the reason a handheld wants it. Hence DEFAULT_CPU_SCHEDULER below.
+# "none" stays a first-class choice: an explicit cpu_scheduler= in powerd.state outranks the
+# default, so a user who picks EEVDF keeps it across reboots.
+#
+# The DEFAULT IS NOT IMPLEMENTED BY ENABLING scx.service, and must not be. The unit ships
+# installed but never `enable`d; restore_cpu_scheduler() below is the only thing that starts it
+# at boot. That is load-bearing for the --autopower coupling described next: a preset or a
+# .wants symlink would start lavd independently of us, before we own the PowerProfiles names,
+# which is the one ordering that silently breaks it. See main().
+#
+# The power profile owns lavd's INTERNAL power mode. We ship scx_lavd with `--autopower`
+# (packages/scx-scheds/PKGBUILD writes it into /etc/default/scx), so once lavd is running it
+# polls PowerProfiles.ActiveProfile on the system bus once a second and switches its own
+# performance/balanced/powersave mode live, no restart. We answer that name ourselves
+# (PPD_NAMES below) because we ship no power-profiles-daemon.
 CPU_SCHEDULERS = ["none", "lavd"]
+DEFAULT_CPU_SCHEDULER = "lavd"
 SCX_UNIT = "scx.service"
 SCX_BINARY = Path("/usr/bin/scx_lavd")
 SCX_SYSFS = Path("/sys/kernel/sched_ext")
@@ -268,7 +278,7 @@ class NovadeckPower:
         self.profile = ""
         self.gpu_level = "auto"
         self.manual_gpu_clock = 0
-        self.cpu_scheduler = "none"
+        self.cpu_scheduler = DEFAULT_CPU_SCHEDULER
         self.smoothed_temp = 0.0
         self.last_pwm = 0
         self.suspended = False
@@ -539,8 +549,9 @@ class NovadeckPower:
             print(f"novadeck-powerd: {SCX_UNIT} reset-failed failed: {exc}", file=sys.stderr)
 
     def restore_cpu_scheduler(self):
-        # Re-apply the saved choice at daemon start. scx.service is never `enable`d, so this
-        # (and an explicit `systemctl start`) is the only path that loads a BPF scheduler.
+        # Apply the saved choice at daemon start, or DEFAULT_CPU_SCHEDULER when nothing is saved.
+        # scx.service is never `enable`d, so this (and an explicit `systemctl start`) is the only
+        # path that loads a BPF scheduler — which is what puts lavd on a fresh device.
         # Called from main() once the PPD bus names are owned, NOT from __init__ — scx_lavd runs
         # with --autopower and reads ActiveProfile on its first tick.
         if len(self.available_cpu_schedulers()) == 1:

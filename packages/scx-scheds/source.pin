@@ -1,10 +1,11 @@
-# STATUS: BUILDS. `make overlay` produces scx-scheds-1.1.2-1.1-aarch64.pkg.tar.zst carrying
-# scx_lavd + scx_bpfland + scx_rusty (aarch64 ELF), scx.service and /etc/default/scx. NOT yet
-# run on hardware — see the enable/first-contact note at the bottom before trying it.
+# STATUS: BUILDS AND SHIPS, HW-validated on SM8650. `make overlay` produces
+# scx-scheds-1.1.2-1.1-aarch64.pkg.tar.zst carrying scx_lavd + scx_bpfland + scx_rusty
+# (aarch64 ELF), scx.service and /etc/default/scx. It is in images/customize-base.sh PKGS.
 #
-# scx-scheds is still deliberately NOT in images/customize-base.sh PKGS. Add it there when you
-# want it in the image; it is safe to do so now that the overlay repo actually contains it
-# (listing a package the repo lacks breaks `make base` outright, which is why it was held back).
+# scx_lavd is the DEFAULT CPU scheduler on novadeck. scx.service itself is never `enable`d:
+# novadeck-powerd starts it at boot (DEFAULT_CPU_SCHEDULER) and stops it if the user selects
+# "none". Do not add a preset or a .wants symlink for it — powerd must own the PowerProfiles
+# bus names before lavd's --autopower reads them, and enabling the unit breaks that ordering.
 #
 # The skeleton-generation failure is SOLVED — root-caused, not worked around blind. Every BPF
 # build script used to die with:

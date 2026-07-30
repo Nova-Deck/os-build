@@ -1,12 +1,14 @@
 #!/bin/sh
 # novadeck CPU scheduler helper — the off-SteamUI front-end for sched_ext.
 #
-# novadeck-powerd owns the CPU scheduler as a D-Bus property (org.novadeck.Power1.CpuScheduler),
-# modelled on SteamOS: "none" is the in-kernel scheduler, "lavd" is scx_lavd via scx.service, the
-# unit is never `enable`d, and powerd re-applies the saved choice at boot. The Steam client ships
-# the generated CpuScheduler1 proxy but NO rendered control in the pinned build (no "scheduler"
-# string anywhere in steamui's localization), so until a client that draws it lands there is no UI
-# path to the property. This is that path — deliberately a thin wrapper over the same property
+# novadeck-powerd owns the CPU scheduler as a D-Bus property (org.novadeck.Power1.CpuScheduler):
+# "none" is the in-kernel scheduler, "lavd" is scx_lavd via scx.service, the unit is never
+# `enable`d, and powerd applies the saved choice at boot. "lavd" is the default, so `status` on an
+# untouched device reports it — selecting "none" here is what makes EEVDF stick.
+#
+# The Steam client ships the generated CpuScheduler1 proxy but NO rendered control in the pinned
+# build (no "scheduler" string anywhere in steamui's localization), so until a client that draws
+# it lands there is no UI path to the property. This is that path — deliberately a thin wrapper over the same property
 # SteamUI would set, NOT a second mechanism, so both stay in sync if the control ever appears.
 #
 # Talks to powerd on the SYSTEM bus rather than to novadeck-steamos-manager on the deck session

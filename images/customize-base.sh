@@ -152,8 +152,9 @@ BOOTSTRAP_PKGS=(base)
 # gaming-oriented one — latency-critical tasks get priority, which is the point on a handheld. Needs
 # the kernel half (CONFIG_SCHED_CLASS_EXT + BTF, kernel/kernel.config). NOT in the holo repos, so it
 # is built from source into the [novadeck] overlay (packages/scx-scheds) and resolves here. Installing
-# it only PLACES the binaries + scx.service; nothing selects a scheduler yet, so the kernel keeps
-# running EEVDF until something enables the unit or launches a scheduler by hand.
+# it only PLACES the binaries + scx.service; the unit is deliberately never `enable`d. What actually
+# selects a scheduler is novadeck-powerd, which starts it at boot because scx_lavd is our default
+# (DEFAULT_CPU_SCHEDULER), and stops it again if the user picks "none" via novadeck-scheduler.
 # rauc: the A/B update client (Phase 4b pass 2). The pinned snapshot's `extra` repo has it, but
 # only at 1.14 — and 1.14 cannot install a dm-verity bundle on a kernel >= 6.19 (upstream fixed
 # that first in v1.15.1), which is every kernel we ship. So it is built from source at 1.15.2

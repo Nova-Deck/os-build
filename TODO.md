@@ -683,7 +683,12 @@ rationale lives in the linked memories and commit history.
   marker readers (`Makefile:380`, `genmanifest.sh:65`, `customize-base.sh:308`) had to move together;
   it self-heals because the *marker filename* changes, so the mode stamp is newer than the base stamp
   and the assertion runs after the rebuild. `test.pkgs` → `dev.pkgs`. The local gitignored
-  credentials file was renamed to `dev-wifi.env` (`.gitignore` updated) — done 2026-07-30. Note a
+  credentials file was renamed to `dev-wifi.env`, then split later the same day into a TRACKED
+  secret-free `dev.env` plus a gitignored `dev.env.local` holding only the SSID/PSK, so a fresh
+  clone runs `set -a; . ./dev.env; set +a` with nothing to edit and no PSK ever sits in a tracked
+  file. The Wi-Fi profile became OPTIONAL at the same time (`NOVADECK_WIFI`), which is what makes a
+  no-network dev card — the OOBE condition — buildable at all; `ROOTFS_MODE` gained `dev-nowifi` so
+  the flip cannot silently reuse the previous card. `.gitignore` updated — done 2026-07-30. Note a
   stale copy is no longer a silent failure: `NOVADECK_TEST=1` now falls through to `release`, which
   fails the pin gate loudly instead of shipping a release root in a dev card (the 2026-07-09 footgun).
   **CI: `image.yml` (`workflow_call`) + `release-sdcard.yml` + `release-bundle.yml`**, so the rootfs

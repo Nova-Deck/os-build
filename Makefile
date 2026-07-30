@@ -30,10 +30,17 @@ BUILD_IMG ?= novadeck-build
 #                config) — skips the defconfig+fragment merge in kernel/build.sh.
 #   VERSION      RAUC bundle version (defaults to the date inside genbundle.sh).
 #   ESP          mounted EFI System Partition, for `make deploy`.
-#   NOVADECK_DEV=1 + NOVADECK_WIFI_SSID/PSK + NOVADECK_SSH_PUBKEY  inject dev-only
-#                Wi-Fi/SSH creds into the rootfs (never part of a release build).
-#                This is also the ONLY way to build an image from packages you compiled
-#                yourself: a release build requires reviewed artifact pins (see verify-pins).
+#   NOVADECK_DEV=1  build a dev image. `set -a; . ./dev.env; set +a` sets this and the rest;
+#                dev.env is TRACKED and secret-free, and sources dev.env.local (gitignored) for
+#                Wi-Fi creds. This is also the ONLY way to build an image from packages you
+#                compiled yourself: a release build requires reviewed artifact pins (verify-pins).
+#   NOVADECK_WIFI_SSID/PSK  OPTIONAL dev-only Wi-Fi profile, injected from the environment so it
+#                never touches the repo. Absent => a card with NO network and no SSH, i.e. the
+#                shipping first-boot condition (the only honest way to test OOBE locally).
+#   NOVADECK_WIFI  intent knob for the above: 1 = require creds (fail loudly rather than hand you
+#                an unreachable card), 0 = no profile even when creds are set. See dev.env.
+#   NOVADECK_SSH_PUBKEY  root's authorized_keys on a dev card. dev.env generates a throwaway key
+#                under work/dev-ssh/ rather than using your personal one.
 BASE_CONFIG ?=
 VERSION     ?=
 
@@ -86,7 +93,7 @@ RAUC_CERT ?= /pki/release.cert.pem
 RAUC_KEY  ?= /pki/release.key.pem
 endif
 # Dev-only credential env, forwarded into the rootfs assembler (no-op unless NOVADECK_DEV=1).
-DEV_ENV := -e NOVADECK_DEV -e NOVADECK_WIFI_SSID -e NOVADECK_WIFI_PSK -e NOVADECK_SSH_PUBKEY
+DEV_ENV := -e NOVADECK_DEV -e NOVADECK_WIFI -e NOVADECK_WIFI_SSID -e NOVADECK_WIFI_PSK -e NOVADECK_SSH_PUBKEY
 
 # NOVADECK_DEV changes the rootfs CONTENT (Wi-Fi profile, SSH host keys + authorized_keys) but is
 # an environment variable, which make cannot see. Without this, an existing release rootfs.img looks
@@ -99,7 +106,20 @@ DEV_ENV := -e NOVADECK_DEV -e NOVADECK_WIFI_SSID -e NOVADECK_WIFI_PSK -e NOVADEC
 # Steam OOBE, where "test" meant a throwaway card, and it long outlived that — this is the normal
 # development cycle now, and the release path is the one that is special. Renamed with the artifact
 # pins, since both turn on the same distinction: who built these bytes.
-ROOTFS_MODE  := $(if $(filter 1,$(NOVADECK_DEV)),dev,release)
+# The Wi-Fi profile is a THIRD state, not a sub-detail of dev, and it has to reach the stamp or it
+# fails exactly the way NOVADECK_DEV did before this stamp existed. "dev with creds" and "dev
+# without creds" produce different rootfs CONTENT (an /etc/NetworkManager profile that auto-joins,
+# or nothing), so sharing work/.rootfs-mode-dev between them means dropping the creds leaves the
+# image looking up-to-date: the assembler is skipped and you flash the PREVIOUS card, still
+# auto-joining, while believing you are testing the offline first boot. No error anywhere.
+#
+# DEV_WIFI mirrors the assembler's own decision (images/assemble-rootfs.sh, `dev_wifi`) and must
+# keep mirroring it: it is the EFFECTIVE outcome, not the knob. That distinction is the point —
+# forgetting to source dev.env.local is indistinguishable from asking for no Wi-Fi as far as the
+# image is concerned, so both must land on the same stamp. (NOVADECK_WIFI=1 with no creds is a hard
+# error in the assembler, so make needs no case for it.)
+DEV_WIFI     := $(if $(filter 0,$(NOVADECK_WIFI)),,$(if $(NOVADECK_WIFI_SSID),$(if $(NOVADECK_WIFI_PSK),1,),))
+ROOTFS_MODE  := $(if $(filter 1,$(NOVADECK_DEV)),dev$(if $(DEV_WIFI),,-nowifi),release)
 MODE_STAMP   := work/.rootfs-mode-$(ROOTFS_MODE)
 
 # The BASE tree is mode-dependent for the same reason and needs the same treatment: NOVADECK_DEV=1
@@ -121,7 +141,14 @@ MODE_STAMP   := work/.rootfs-mode-$(ROOTFS_MODE)
 # re-creates the marker newer than $(BASE_STAMP), which re-runs customize-base.sh, which then really
 # rebuilds because the mode is in its reuse key too. A flip costs a full base rebuild — the correct
 # price, and the one `make relock` already pays deliberately.
-BASE_MODE_STAMP := work/.base-mode-$(ROOTFS_MODE)
+# Deliberately NOT $(ROOTFS_MODE): that one carries the -nowifi dimension, and the base does not
+# have one. DEV_PKGS keys off NOVADECK_DEV alone, and the Wi-Fi profile is written by the ASSEMBLER,
+# not by the bootstrap — so a dev base is byte-identical whether or not creds were present. Reusing
+# ROOTFS_MODE here would rename this marker on a Wi-Fi flip and charge a full base rebuild (the
+# expensive half of the build) for a change that cannot affect work/base. Toggling Wi-Fi costs a
+# rootfs re-assembly and nothing more.
+BASE_MODE       := $(if $(filter 1,$(NOVADECK_DEV)),dev,release)
+BASE_MODE_STAMP := work/.base-mode-$(BASE_MODE)
 
 # --- artifact-pin enforcement (release only) -----------------------------------
 # A RELEASE build installs overlay packages whose BYTES are named by a reviewed
@@ -231,7 +258,7 @@ help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
 	  | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-12s\033[0m %s\n",$$1,$$2}'
 	@echo
-	@echo "Knobs: BASE_CONFIG VERSION ESP NOVADECK_DEV(+creds)"
+	@echo "Knobs: BASE_CONFIG VERSION ESP OVERLAY_PULL   dev build: set -a; . ./dev.env; set +a"
 
 all: sdcard ## Alias for `sdcard` (the full bring-up image)
 
@@ -241,6 +268,14 @@ toolchain: $(BUILD_STAMP) ## Build the novadeck-build cross-compile docker image
 kernel:    $(KERNEL)       ## Build Image.gz + all dtbs + modules (in build container)
 fw-linux:  $(FW_LINUX)     ## Fetch open linux-firmware blobs (host, network)
 fw-qcom:   $(FW_QCOM)      ## Fetch device-proprietary firmware from the qcom-firmwares repo (host, network)
+# OVERLAY_PULL := 0 is what keeps this goal's documented contract (see $(OVERLAY_DB)): `make
+# overlay` is a PURE LOCAL BUILD that touches no network. A target-specific variable applies to
+# the target AND its prerequisites, which is exactly the reach needed — the value follows down
+# into $(OVERLAY_DB)'s recipe. Reaching the same db through an image goal (sdcard/image/rootfs)
+# leaves the default 1 in place and pulls first.
+# Caveat for `make overlay sdcard` in ONE invocation: the shared db is considered once, so it gets
+# whichever value make reaches first. Run them as two invocations if the distinction matters.
+overlay:   OVERLAY_PULL := 0
 overlay:   $(OVERLAY_DB)   ## Rebuild from-source overlay pkgs (patched gamescope) -> work/repo/<arch>/
 base:      $(BASE_STAMP)   ## Bootstrap the aarch64 root from packages (host; docker+qemu)
 rootfs:    $(ROOTFS)       ## Assemble the read-only root + var images (in container)
@@ -326,7 +361,26 @@ $(STEAM_SEED): steam-seed/STEAM_SEED.pin steam-seed/fetch-steam-seed.sh
 # Rebuild changed holo packages with novadeck patches into the local pacman repo work/repo/<arch>/.
 # Union prereq re-invokes the script on any input change; the script self-selects which package(s)
 # to rebuild (per-package input hash). Only when a source.pin exists does `base` depend on it.
+#
+# THE PULL RUNS FIRST, and it is in this recipe rather than being a prerequisite for a reason: it
+# then fires exactly when make has already decided the repo is out of date, i.e. precisely when a
+# source.pin/patch bump would otherwise start a multi-hour qemu compile for artifacts CI has
+# already built. On an up-to-date repo the rule never runs, so there is NO per-build network cost.
+# (`make sdcard` after ab3121b raised the ISA floor recompiled fex-emu + mesa + mangohud locally,
+# with no signal that the store already had all three. That is the failure this closes.)
+#
+# It cannot turn a working build into a broken one: pull-all is NEVER fatal (see overlay-store.sh)
+# — a miss, an unreadable package, or an unreachable registry all log and return 0, and whatever
+# could not be retrieved simply gets compiled, which is the old behaviour exactly.
+#
+# It also cannot clobber a local iteration. pull-all tests is_fresh BEFORE touching the network, and
+# that is the same per-package input-hash test build-overlay.sh applies: a package you already built
+# here is skipped without a request, and an uncommitted edit's hash is absent from the store, so it
+# costs one 404 manifest probe and then compiles. Nothing overwrites artifacts whose stamp is current.
+# OVERLAY_PULL=0 opts out entirely (no pull, no probe) for a hermetic loop; `make overlay` sets it.
+OVERLAY_PULL ?= 1
 $(OVERLAY_DB): base-devel.digest $(OVERLAY_PINS) $(OVERLAY_PATCHES) $(OVERLAY_PKGBUILDS)
+	$(if $(filter 1,$(OVERLAY_PULL)),packages/overlay-store.sh pull-all)
 	packages/build-overlay.sh
 
 # Advance .overlay.stamp only when the overlay repo's CONTENT actually changed, and do it in THIS
@@ -346,10 +400,13 @@ $(OVERLAY_STAMP): $(OVERLAY_DB)
 # same packages/inputhash.sh digest the lock records, so a hit means "built from exactly these
 # sources" — see packages/overlay-store.sh. Pulling needs NO credentials.
 #
-# NOT a prerequisite of $(OVERLAY_DB), deliberately. `make overlay` stays a pure local build with
-# no silent network fetch inside it, and this stays a cache rather than something the lock leans
-# on. A cold consumer runs the two in sequence:  make overlay-pull && make overlay  — the pull
-# lands the artifacts + stamps, and the build then finds everything fresh and only re-indexes.
+# Every IMAGE goal (sdcard/image/rootfs/base) now does this for you, from $(OVERLAY_DB)'s own
+# recipe — so a cold clone reaches a card without knowing this target exists. `make overlay` still
+# does NOT (it sets OVERLAY_PULL=0): that goal remains a pure local build with no network in it.
+# This stays a cache either way, never something the lock leans on — the lock pins the novadeck
+# rows to their SOURCES, so a pulled artifact and a locally compiled one satisfy it identically.
+#
+# Run it by hand to pre-warm the repo without building anything, or to see what the store has.
 # A miss is not an error: whatever could not be pulled simply gets compiled.
 overlay-pull: ## Fetch already-built overlay packages from the store into work/repo/<arch>/
 	packages/overlay-store.sh pull-all

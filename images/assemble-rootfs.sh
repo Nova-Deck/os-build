@@ -494,10 +494,42 @@ ln -sf /usr/lib/systemd/system/novadeck-offload.target \
 # the base (customize-base.sh). The test card deliberately uses the SAME manager as release —
 # NetworkManager — so this path validates the real release Wi-Fi stack (incl. its unaided recovery
 # across a novadeck-suspend cycle) instead of a divergent test-only wpa_supplicant@wlan0 + networkd path.
+# Initialised OUTSIDE the dev branch because this script runs under `set -u`: a release build
+# never enters the block below, and the Wi-Fi test further down would then dereference an unset
+# variable and abort the assembler.
+dev_wifi=0
 if [ "${NOVADECK_DEV:-}" = "1" ]; then
-  : "${NOVADECK_WIFI_SSID:?NOVADECK_DEV=1 requires NOVADECK_WIFI_SSID}"
-  : "${NOVADECK_WIFI_PSK:?NOVADECK_DEV=1 requires NOVADECK_WIFI_PSK}"
-  echo "  [TEST] injecting Wi-Fi + SSH scaffolding for '$NOVADECK_WIFI_SSID' (test-only)"
+  # WI-FI IS OPTIONAL, and which way it went is stamped by ROOTFS_MODE so make re-assembles on a
+  # flip (see the Makefile). A card with no profile is the SHIPPING first-boot condition — no
+  # network until the user joins one in the UI — which is the only honest way to exercise OOBE
+  # locally. It is also unreachable: no profile means no SSH, and this device has no UART, so the
+  # only debug path left is the offline card-mount (`journalctl -D`).
+  #
+  # These vars used to be `:?` REQUIRED here, which made a no-network dev card impossible to
+  # build. Optional is right, but "absent means skip" alone would trade one footgun for a worse
+  # one: forgetting to source dev.env.local would silently hand you an unreachable card. So intent
+  # is what decides, and NOVADECK_WIFI=1 is how a caller that depends on SSH states it.
+  dev_wifi=1
+  if [ "${NOVADECK_WIFI:-}" = "0" ]; then
+    dev_wifi=0                                    # explicit: no profile even though creds exist
+  elif [ -z "${NOVADECK_WIFI_SSID:-}" ] || [ -z "${NOVADECK_WIFI_PSK:-}" ]; then
+    if [ "${NOVADECK_WIFI:-}" = "1" ]; then
+      echo "NOVADECK_WIFI=1 requires NOVADECK_WIFI_SSID + NOVADECK_WIFI_PSK" >&2
+      echo "  put them in dev.env.local (gitignored), or unset NOVADECK_WIFI for a no-network card" >&2
+      exit 1
+    fi
+    dev_wifi=0
+  fi
+
+  if [ "$dev_wifi" = "0" ]; then
+    echo "  [DEV] NO Wi-Fi profile — this card will NOT auto-join and is NOT reachable over SSH."
+    echo "  [DEV]   first boot starts offline (the shipping OOBE condition); debug via card-mount."
+    echo "  [DEV]   for a reachable card, set NOVADECK_WIFI_SSID + NOVADECK_WIFI_PSK in dev.env.local."
+  fi
+fi
+
+if [ "${NOVADECK_DEV:-}" = "1" ] && [ "$dev_wifi" = "1" ]; then
+  echo "  [DEV] injecting Wi-Fi profile for '$NOVADECK_WIFI_SSID' (dev-only)"
 
   # NetworkManager connection profile (keyfile format). NM binds by SSID, not interface, so no
   # interface rename is needed; NM also runs its own DHCP and drives wpa_supplicant itself (the
@@ -538,7 +570,13 @@ EOF
   # No resume hook needed: the test card runs NetworkManager (same as release), and NM re-associates
   # Wi-Fi unaided after a novadeck-suspend thaw — HW-validated 2026-06-25, which is why the former
   # 50-nm-reup hook was dropped as moot.
+fi
 
+# The rest of the dev scaffolding is NOT conditional on Wi-Fi. The SSH key is useful on a
+# no-Wi-Fi card the moment OOBE joins a network, and the smoke helper is a local tool — gating
+# either on a profile that may not exist would make a no-network dev card less useful than it
+# needs to be, for no reason.
+if [ "${NOVADECK_DEV:-}" = "1" ]; then
   # sshd itself is NOT enabled here anymore: it ships always-on for EVERY build via the fs-overlay
   # (60-novadeck-sshd.preset + the committed multi-user.target.wants/sshd.service symlink), because
   # release remote access is key-only and a keyless sshd admits nobody. NetworkManager is likewise

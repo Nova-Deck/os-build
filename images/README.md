@@ -68,13 +68,23 @@ sudo dd if=out/images/sdcard.img of=/dev/sdX bs=4M conv=fsync status=progress
 
 The release runtime (NetworkManager, openssh, mesa/Turnip/vulkan-tools) ships in every build
 via `customize-base.sh`. **Credentials** are not — they are injected only when assembling with
-`NOVADECK_DEV=1`, straight from the environment, so they never touch the repo. Use this to
-build a throwaway card that joins your LAN and accepts SSH, to run `vulkaninfo` on hardware:
+`NOVADECK_DEV=1`, straight from the environment, so they never touch the repo. Normally you get
+them from `set -a; . ./dev.env; set +a` (tracked and secret-free; it sources the gitignored
+`dev.env.local` for your SSID/PSK and generates a throwaway SSH key under `work/dev-ssh/`).
+
+The Wi-Fi profile is **optional**. With no creds — or with `NOVADECK_WIFI=0` — you get a card
+that starts with no network and no SSH, which is the shipping first-boot condition and the only
+honest way to exercise OOBE locally. `NOVADECK_WIFI=1` makes missing creds a hard error instead,
+for anything that depends on being able to SSH in. Which way it went is recorded in
+`ROOTFS_MODE` (`dev` vs `dev-nowifi`), so flipping it re-assembles the rootfs rather than handing
+back the previous card.
+
+Spelled out, for a throwaway card that joins your LAN and accepts SSH:
 
 ```
 docker run --rm -v "$PWD":/src -w /src \
   -e NOVADECK_DEV=1 -e NOVADECK_WIFI_SSID="$SSID" -e NOVADECK_WIFI_PSK="$PSK" \
-  -e NOVADECK_SSH_PUBKEY="$(cat ~/.ssh/id_ed25519.pub)" \
+  -e NOVADECK_SSH_PUBKEY="$(cat work/dev-ssh/id_ed25519.pub)" \
   novadeck-build images/assemble-rootfs.sh work/base
 docker run --rm -v "$PWD":/src -w /src novadeck-build boot/package.sh
 docker run --rm -v "$PWD":/src -w /src novadeck-build images/make-sdcard.sh

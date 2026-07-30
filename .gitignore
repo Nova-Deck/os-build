@@ -61,8 +61,11 @@ cosign.key
 # images/rauc/ is asserted to contain no PRIVATE KEY by images/test-verify-signing.sh, so the
 # exception is policed by a test and not by care.
 !/images/rauc/release.cert.pem
-# Dev-only Wi-Fi/SSH creds for throwaway dev cards (NOVADECK_DEV=1) — never committed
-/dev-wifi.env
+# Dev-card Wi-Fi credentials for throwaway dev cards (NOVADECK_DEV=1) — never committed.
+# ./dev.env IS tracked and holds no secrets; it sources this file when it exists. The split is
+# what lets a fresh clone run `set -a; . ./dev.env; set +a` with nothing to edit, while a PSK
+# never sits in a tracked file (where --skip-worktree would not survive a stash or a rebase).
+/dev.env.local
 
 # Editor / OS noise
 *.swp

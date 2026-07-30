@@ -39,6 +39,8 @@ jobs:
       - name: what does this runner actually have
         run: |
           set -euo pipefail
+          # tee, not >>: a number that exists only in a rendered step summary is invisible to
+          # `gh run view --log`, which is how this gets read when something is actually wrong.
           {
             echo "### runner"
             echo '```'
@@ -48,7 +50,7 @@ jobs:
             echo
             df -h / "$RUNNER_TEMP"
             echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: how much is reclaimable before the build starts
         run: |
@@ -69,7 +71,7 @@ jobs:
             else
               echo ":white_check_mark: enough headroom for the staged build."
             fi
-          } >> "$GITHUB_STEP_SUMMARY"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
       # Cheap and early: this is the first thing a release build does that could fail for a reason
       # unrelated to our code.
@@ -88,7 +90,7 @@ jobs:
             echo '```'
             cat /tmp/madison.txt
             echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
           grep -q "rauc.*${rauc_ver%%-*}" /tmp/madison.txt \
             || echo "::warning::pinned rauc ${rauc_ver} not seen in madison output — make toolchain may fail; see build/Dockerfile on how to bump"
 

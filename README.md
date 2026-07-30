@@ -92,10 +92,18 @@ are running — include it.
 
 novadeck stands on work other people did first, and two projects deserve naming.
 
-**[ROCKNIX](https://rocknix.org/)** has done an enormous amount of the hard, unglamorous work of
-making Qualcomm handhelds run Linux at all — kernel enablement, device trees, and the patient
-device-by-device bring-up that no one sees and everyone depends on. Much of what makes these
-boards usable traces back to that effort.
+**[ROCKNIX](https://rocknix.org/)** — and this project would not exist without them, which is
+meant literally rather than as a courtesy.
+
+Their **ABL work is the foundation everything else here stands on.** These handhelds ship an
+Android bootloader that will not load an ordinary Linux boot flow; solving how to get a kernel
+started on them at all is the problem that gates every other problem. Without it there is no
+display to bring up, no session to launch and no game to run — there is a device that does not
+boot. novadeck boots the way it does because ROCKNIX worked that out first.
+
+Beyond that: the kernel enablement, the device trees, and the patient device-by-device bring-up
+that nobody sees and everybody depends on. Much of what makes this class of hardware usable under
+Linux traces back to that effort.
 
 **Armada** showed that a Steam-style handheld experience on this class of hardware was a real
 target rather than a nice idea, and demonstrated a great deal about how the pieces fit together.

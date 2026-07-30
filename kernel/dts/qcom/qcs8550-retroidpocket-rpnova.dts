@@ -32,3 +32,19 @@
 		/delete-property/ touchscreen-inverted-y;
 	};
 };
+
+/*
+ * The Nova's left stick reports both axes mirrored relative to the RP6 it inherits
+ * from, so flip X and Y back in the driver. The right stick is already correct —
+ * do NOT add invert-rx/invert-ry.
+ *
+ * Both analog triggers idle a little above zero, which reads as permanently
+ * half-pulled; a deadzone of 100 (axis-range is 1024) swallows the rest offset
+ * without eating usable travel.
+ */
+&gamepad {
+	invert-x;
+	invert-y;
+	trigger-left-deadzone = <100>;
+	trigger-right-deadzone = <100>;
+};

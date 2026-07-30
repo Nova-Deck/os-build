@@ -8,5 +8,5 @@
 # If it disagrees with the tree, the pin is STALE — the sources moved and no pin-bump PR
 # has landed yet — which is a different failure from bytes that do not match.
 name: fex-emu
-inputhash: 992b5ce8f5272e8c48097f015f6ef1d82731946b9a48274072b2871738a26dd5
-artifact: 18b9739dab745d3a898355d282e5ff10207945886f8cf7571f4f505228b47792  fex-emu-2607-1.1-aarch64.pkg.tar.zst
+inputhash: 72680ffad57fbf85b50a6ec99bcd973c1712c4c5ab89b934b52076441dbc14af
+artifact: d0953efe3101253606665db61418c145f8f75c91c6cb1fb6ae56a60cbda859bb  fex-emu-2607-1.1-aarch64.pkg.tar.zst

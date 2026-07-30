@@ -1488,8 +1488,9 @@ rationale lives in the linked memories and commit history.
   coordinate is rotated, so sampling/blending/input/cursor/EDID stay coherent). We drop the launch
   flag entirely and let gamescope AUTO-ENGAGE off the DRM connector panel orientation (our DTS
   `rotation=<90>`) when the primary plane can't rotate at scanout — no `--use-rotation-shader`, no
-  `--force-composition-rotation` (`session/usr/bin/novadeck-session` + `images/assemble-rootfs.sh`
-  smoke both now launch bare `--backend drm`). `-W/-H` stay the landscape logical size (PR keeps
+  `--force-composition-rotation` (`fs-overlay/usr/bin/novadeck-session` launches bare
+  `--backend drm`; the TEST-only `nova-gamescope-smoke` in `images/assemble-rootfs.sh` did too, and
+  was removed 2026-07-30 — the real session covers the same path). `-W/-H` stay the landscape logical size (PR keeps
   `g_nOutputWidth/Height` unswapped). The nightmode patch is renumbered `0002`. **HW to re-validate:**
   (1) panel is upright-landscape, not 180°-flipped or blank (if flipped, the connector orientation /
   rotation direction differs from ROCKNIX's shader — compensate via `--force-orientation`); (2) the
@@ -1882,7 +1883,7 @@ rationale lives in the linked memories and commit history.
   teaches GPU_fdinfo/BatteryStats/HUD to read an Adreno SoC (kgsl/devfreq GPU clock+temp, `battery`
   power-supply, RAM label) — all 6 taken, incl. the SM8550/SM8750 device patches (closest match for
   our SM8650 Adreno 750). Added `mangohud` to `customize-base.sh` PKGS (installs ahead of holo from
-  the [novadeck] overlay) and pass `--mangoapp` to gamescope in `session/usr/bin/novadeck-session`
+  the [novadeck] overlay) and pass `--mangoapp` to gamescope in `fs-overlay/usr/bin/novadeck-session`
   (in the `--steam`/`-T` stats block; `--mangoapp` verified present in our gamescope 3.16.23.2).
   **HW-validated 2026-07-08:** (1) the overlay pkg builds cleanly under qemu (all 6 patches apply @
   0.8.4); (2) the overlay renders in-session and the SteamUI Quick-Access **Performance** toggle +

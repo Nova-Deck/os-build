@@ -609,59 +609,6 @@ if [ "${NOVADECK_DEV:-}" = "1" ]; then
   else
     echo "  [TEST] WARNING: NOVADECK_SSH_PUBKEY unset — sshd (key-only root) will reject login"
   fi
-
-  # Phase-2 de-risk smoke (TEST-ONLY): bring up BARE gamescope on Turnip via DRM/KMS — the
-  # exact compositor path the Deck-UI session uses. SSH in and run `nova-gamescope-smoke`
-  # while watching the panel; it launches gamescope on the DRM backend with a Vulkan client
-  # (default vkcube) rendering through gamescope's Wayland display. This exercises Turnip's
-  # Wayland WSI under the compositor — the open question the plan flags before the jupiter-*
-  # port (the Phase-1 gate only proved the direct VK_KHR_display KMS path). It is launched
-  # by hand, not enabled as a unit, so it can't take the panel away from the SSH/console
-  # bring-up path on a throwaway test card.
-  echo "  [TEST] installing gamescope DRM smoke helper /usr/local/bin/nova-gamescope-smoke"
-  install -d -m0755 "$stage/usr/local/bin"
-  cat >"$stage/usr/local/bin/nova-gamescope-smoke" <<'SMOKE'
-#!/bin/sh
-# novadeck Phase-2 smoke: bare gamescope on Turnip (DRM/KMS). TEST-ONLY. Run over SSH as root,
-# watch the panel.  Usage: nova-gamescope-smoke [client]   (default client: vkcube)
-set -eu
-# Force the real DRM/KMS backend: a stray WAYLAND_DISPLAY/DISPLAY in the env makes gamescope try
-# to nest under a (non-existent) parent compositor and fail with "Failed to connect to wayland socket".
-unset WAYLAND_DISPLAY DISPLAY
-export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/0}"
-mkdir -p "$XDG_RUNTIME_DIR"; chmod 700 "$XDG_RUNTIME_DIR"
-# Keep the gamescope WSI Vulkan layer ON by default (matches the novadeck-session launcher + the
-# upstream gamescope session). NOTE: this smoke is a RE-LAUNCH-heavy bring-up tool, and with WSI
-# on, re-launching gamescope after a prior instance intermittently wedges (the client blocks in
-# drm_syncobj_array_wait_timeout on a never-signaling explicit-sync fence — a userspace race, NOT stale
-# GPU state; a fresh power-on is always clean). While iterating over SSH you can force the clean
-# implicit-sync path with `ENABLE_GAMESCOPE_WSI=0 nova-gamescope-smoke`. See docs/bringup-phase2.md step 1e.
-export ENABLE_GAMESCOPE_WSI="${ENABLE_GAMESCOPE_WSI:-1}"
-client="${1:-vkcube}"
-echo "[nova] gamescope DRM smoke: client=$client  XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR"
-# An SSH session has no graphical logind seat, and the holo libseat is built with only the
-# logind+seatd backends (no 'builtin'), so run under a seatd daemon. seatd-launch spawns seatd,
-# exports SEATD_SOCK + LIBSEAT_BACKEND=seatd for the child, and tears seatd down on exit.
-# Patched gamescope (from-source overlay): composite rotation (upstream PR #2228) rotates the
-# portrait-native Pocket S2 panel in the GPU composite and scans out an unrotated buffer (the msm
-# DPU can't ROTATE_90 a LINEAR plane). No flag needed — gamescope reads the panel orientation from
-# the DRM connector (DTS rotation=<90>) and auto-engages compositor rotation when the primary plane
-# can't rotate at scanout. NOTE: --immediate-flips is NOT passed — it is a no-op here (the msm DPU
-# does not advertise DRM_CAP_ATOMIC_ASYNC_PAGE_FLIP, so gamescope drops the async flag). The
-# intermittent composite-flip freeze is on the vsync'd path and unrelated. See docs/bringup-phase2.md.
-gs_args="--backend drm"
-set -x
-if command -v seatd-launch >/dev/null 2>&1; then
-  exec seatd-launch -- gamescope $gs_args -- "$client"
-fi
-# Fallback: hand-start seatd if seatd-launch is unavailable (don't exec, so the trap cleans up).
-seatd >/tmp/seatd.log 2>&1 & seatd_pid=$!
-trap 'kill "$seatd_pid" 2>/dev/null || true' EXIT INT TERM
-i=0; while [ ! -S /run/seatd.sock ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i+1)); done
-export LIBSEAT_BACKEND=seatd
-gamescope $gs_args -- "$client"
-SMOKE
-  chmod 0755 "$stage/usr/local/bin/nova-gamescope-smoke"
 fi
 
 # 4d. DEBUG log capture (NOVADECK_DEBUG=1) — INDEPENDENT of NOVADECK_DEV, applies to release too.

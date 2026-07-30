@@ -30,11 +30,13 @@ gamescope needs are all present on Adreno 750.
 | 1d | Input reaches the client | ✅ gamescope passes the InputPlumber virtual DualSense through to its hosted child (does NOT EVIOCGRAB the pad) — the path the Phase-3 Steam shell needs |
 | 1e | Per-frame atomic flip | ✅ rotation fixed (composite shader); re-launch freeze characterized — WSI kept **ON** (release launches once), see below |
 
-**How to run** (TEST build, SSH in, watch the panel): `nova-gamescope-smoke [client]` — gamescope
-`--backend drm --use-rotation-shader -- vkcube` (or a swapped nested client). Ships **test-only**
-(`images/assemble-rootfs.sh` under `NOVADECK_DEV=1`), hand-launched, not a systemd unit, so it
-never seizes the panel from the bring-up path. gamescope + seatd themselves are in the **release**
-set (layer-B runtime, not test tooling).
+**How it was run**: a TEST-only helper, `nova-gamescope-smoke [client]`, launched gamescope
+`--backend drm -- vkcube` by hand over SSH — deliberately not a systemd unit, so it could never
+seize the panel from the bring-up path. **Removed 2026-07-30**: the real Deck-UI session
+(`novadeck-session` + `gamescope-session`) exercises the same compositor path, so the helper was
+only duplicating it on test cards. Recover it from git history if a bare-gamescope bisect is ever
+needed again. gamescope + seatd themselves are in the **release** set (layer-B runtime, not test
+tooling) and are unaffected.
 
 ### Resolved 1e (a): rotation flip EINVAL → patched gamescope (composite rotation)
 
@@ -52,11 +54,15 @@ rejects `ROTATE_90` before the driver `atomic_check` → EINVAL every flip. (The
 survived because it didn't carry the rotated client plane; Phase-1 direct present is `ROTATE_0`.)
 
 A portrait panel in a landscape chassis needs the 90° transform *somewhere*, and the DPU can't do it
-for LINEAR buffers — so it's done in gamescope's **GPU composite** (scanning out a `ROTATE_0`
-buffer) via a rotation-shader patch (from ROCKNIX), opt-in with `--use-rotation-shader`. Ships as a
-from-source overlay package (`packages/gamescope/`, see `packages/README.md`); the overlay repo is
-inserted ahead of the holo repos so the patched build wins. `novadeck-session` +
-`nova-gamescope-smoke` pass the flag.
+for LINEAR buffers — so it's done in gamescope's **GPU composite**, scanning out a `ROTATE_0`
+buffer. Ships as a from-source overlay package (`packages/gamescope/`, see `packages/README.md`);
+the overlay repo is inserted ahead of the holo repos so the patched build wins.
+
+**No launch flag is involved.** The original fix was ROCKNIX's rotation-shader patch, opt-in with
+`--use-rotation-shader`; that was replaced by upstream PR #2228 (composite rotation), which
+AUTO-ENGAGES off the DRM connector's panel orientation when the primary plane can't rotate at
+scanout. `novadeck-session` launches bare `--backend drm` and passes neither
+`--use-rotation-shader` nor `--force-composition-rotation`.
 
 ### 1e (b): re-launch freeze — characterized; WSI kept ON
 A steady session intermittently wedged: the client (`vkcube`) blocks forever in
@@ -72,7 +78,7 @@ state — and a clean teardown does **not** prevent it (graceful SIGTERM re-laun
 
 **Decision: keep `ENABLE_GAMESCOPE_WSI=1`** (the upstream + ChimeraOS `gamescope-session-plus`
 default — see their [`gamescope-session-plus`](https://github.com/ChimeraOS/gamescope-session/blob/73d2da8/usr/share/gamescope-session-plus/gamescope-session-plus#L51)),
-set in `fs-overlay/usr/bin/novadeck-session` + the smoke helper (env-overridable, defaults on). The FROG
+set in `fs-overlay/usr/bin/novadeck-session` (env-overridable, defaults on). The FROG
 WSI layer is the **standard present path** — framerate limiter / frame pacing, latency control,
 adaptive-sync hints AND HDR — so disabling it is **not** just an HDR loss; it degrades all of those.
 Since the release product boots gamescope **once per power-on** (the clean L1 case), the re-launch

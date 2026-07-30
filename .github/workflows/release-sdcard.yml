@@ -4,29 +4,136 @@
 # you flash onto a new device or after a wipe, a bundle is what updates one already in the field.
 # Both delegate to image.yml so the rootfs recipe exists once.
 #
-# NEEDS NO SECRETS. Nothing here is signed — an sdcard is flashed over USB by someone holding the
-# device, so there is no signature for anything to verify. That is why this workflow could land
-# before the release signing key was anywhere near CI.
+# TAG NAMESPACE: `card/v*`, NOT a bare `v*`. The two artifacts have independent cadences — a bundle
+# ships far more often than a card — so they get independent tag namespaces rather than sharing one
+# and hoping. This also fixes a real inversion: while this workflow triggered on `v*` and
+# release-bundle.yml had no tag trigger at all, tagging a release built a card and NEVER a bundle,
+# which is backwards from how the two actually ship. `card/v1.3.0` and `ota/v1.3.0` on the same
+# commit mean the same OS delivered two ways; a run of ota tags with no card between them is normal.
+#
+# NEEDS NO SIGNING KEY. Nothing here is signed — an sdcard is flashed over USB by someone holding
+# the device, so there is no signature for anything to verify. It DOES need the R2 credentials to
+# publish, but those are push-only credentials to a public bucket, not a root of trust.
 #
 # This is also the workflow that replaces building a release image locally. `make sdcard` on a dev
-# box now fails the artifact-pin gate by design (packages/verify-pins.sh), so verifying OOBE on a
-# real release image means flashing the artifact this produces.
+# box fails the artifact-pin gate by design (packages/verify-pins.sh), so verifying OOBE on a real
+# release image means flashing what this produces.
 name: release sdcard
 
 on:
   # Manual by default: a card is cut when someone wants one, not on every push.
   workflow_dispatch:
-  # A tag is the other natural trigger — whatever v* means to you, a flashable image of it is
-  # usually wanted at the same moment.
+    inputs:
+      version:
+        description: 'Version for this card (default: date-shortsha)'
+        required: false
+        type: string
+        default: ''
+      publish:
+        description: 'Upload to R2 and cut a GitHub Release (off for a plain test build)'
+        required: false
+        type: boolean
+        default: false
   push:
     tags:
-      - 'v*'
+      - 'card/v*'
 
 permissions:
   contents: read
 
 jobs:
+  # The version has to be computed in a shell step, not an expression: GitHub's expression language
+  # has no string-replace, so `card/v1.3.0` -> `1.3.0` cannot be done inline. Keeping it here rather
+  # than inside image.yml leaves image.yml's contract simple — it takes a bare version string and
+  # knows nothing about our tag scheme.
+  prep:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      publish: ${{ steps.v.outputs.publish }}
+    steps:
+      - id: v
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_PUBLISH: ${{ inputs.publish }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [ -n "${INPUT_VERSION:-}" ]; then
+            v="$INPUT_VERSION"
+          elif [ "$GITHUB_REF_TYPE" = tag ]; then
+            v="${REF_NAME#card/}"
+          else
+            # A dispatch with no version still needs to name itself, or the bucket prefix and the
+            # image's own /etc/novadeck-release would both say "unset".
+            v="$(date -u +%Y%m%d)-$(echo "$GITHUB_SHA" | cut -c1-7)"
+          fi
+          # This becomes a URL path segment; refuse anything that could escape it here rather than
+          # discovering it after a four-hour build.
+          case "$v" in
+            *[!A-Za-z0-9._-]*) echo "::error::version '$v' has characters that do not belong in a URL path"; exit 1 ;;
+          esac
+          # A tag always publishes. A dispatch publishes only when asked, so the common case —
+          # "does this still build?" — cannot overwrite a released card or spend the free tier.
+          if [ "$GITHUB_REF_TYPE" = tag ] || [ "${INPUT_PUBLISH:-false}" = true ]; then
+            p=true
+          else
+            p=false
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "publish=$p" >> "$GITHUB_OUTPUT"
+          echo "version=$v publish=$p" >> "$GITHUB_STEP_SUMMARY"
+
   sdcard:
+    needs: prep
     uses: ./.github/workflows/image.yml
     with:
       artifact: sdcard
+      version: ${{ needs.prep.outputs.version }}
+      publish: ${{ needs.prep.outputs.publish == 'true' }}
+    secrets:
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+
+  # The Release carries only small files — checksums, the provenance pins, and the link. The card
+  # itself is 4x GitHub's 2 GiB per-asset cap and lives in R2; see images/publish-card.sh.
+  #
+  # A separate job so `contents: write` is scoped to it alone: the long build job, which runs far
+  # more third-party code, stays read-only.
+  release:
+    needs: [prep, sdcard]
+    if: needs.prep.outputs.publish == 'true' && github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: novadeck-sdcard-meta
+          path: meta
+      - name: cut the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.prep.outputs.version }}
+          CARD_URL: ${{ needs.sdcard.outputs.card_url }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## novadeck card \`$VERSION\`"
+            echo
+            echo 'The image is ~9 GiB — past GitHub'"'"'s 2 GiB release-asset limit — so it is served from R2:'
+            echo
+            echo '```bash'
+            echo "curl -LO $CARD_URL"
+            echo "gzip -dc $(basename "$CARD_URL") | sudo dd of=/dev/sdX bs=4M status=progress"
+            echo '```'
+            echo
+            echo 'Check it against `sha256sums.txt` below before flashing. `provenance/` records the'
+            echo 'exact overlay artifact pins and package lock this card was built from.'
+          } > notes.md
+          gh release create "$GITHUB_REF_NAME" \
+            --title "novadeck card $VERSION" \
+            --notes-file notes.md \
+            meta/sha256sums.txt meta/provenance/manifest.lock meta/provenance/pins/*.pin

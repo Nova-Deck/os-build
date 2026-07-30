@@ -95,6 +95,14 @@ endif
 # Dev-only credential env, forwarded into the rootfs assembler (no-op unless NOVADECK_DEV=1).
 DEV_ENV := -e NOVADECK_DEV -e NOVADECK_WIFI -e NOVADECK_WIFI_SSID -e NOVADECK_WIFI_PSK -e NOVADECK_SSH_PUBKEY
 
+# Per-build identity, stamped into /etc/novadeck-release by images/assemble-rootfs.sh so a flashed
+# device can name the release it came from. NOVADECK_VERSION is set by CI from the release tag and
+# is empty for a local build, which assemble-rootfs.sh renders as `dev`. The git sha is resolved on
+# the HOST: /src is bind-mounted into the container, but git itself is not in the build image.
+NOVADECK_VERSION ?=
+NOVADECK_GIT     := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+ID_ENV := -e NOVADECK_VERSION -e NOVADECK_GIT=$(NOVADECK_GIT)
+
 # NOVADECK_DEV changes the rootfs CONTENT (Wi-Fi profile, SSH host keys + authorized_keys) but is
 # an environment variable, which make cannot see. Without this, an existing release rootfs.img looks
 # up-to-date to a `NOVADECK_DEV=1 make sdcard`, the assembler is skipped, and you flash a RELEASE
@@ -598,7 +606,7 @@ $(MODE_STAMP):
 # matches the modules in the slot it just wrote. No cycle: BOOTIMG needs KERNEL + INITRAMFS, and
 # the initramfs is built from work/base, never from the assembled root.
 $(ROOTFS): $(KERNEL) $(BOOTIMG) $(BASE_STAMP) $(FW_LINUX) $(FW_QCOM) $(STEAM_SEED) $(ASSEMBLE_SRC) $(MODE_STAMP) | $(BUILD_STAMP)
-	$(DOCKER) $(DEV_ENV) -e NOVADECK_DEBUG $(BUILD_IMG) \
+	$(DOCKER) $(DEV_ENV) $(ID_ENV) -e NOVADECK_DEBUG $(BUILD_IMG) \
 	  images/assemble-rootfs.sh /src/work/base
 
 # ==============================================================================

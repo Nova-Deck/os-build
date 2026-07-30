@@ -1,0 +1,107 @@
+# novadeck release preflight — answer the cheap questions before spending four hours on a card.
+#
+# Manual only. Everything here is read-only or self-cleaning, and the whole job is a couple of
+# minutes, so it is meant to be run whenever the release path is touched or the R2 settings change.
+#
+# IT ANSWERS THREE THINGS, each of which otherwise fails late and expensively:
+#
+#   1. DISK. The card build peaks near 50 GB across work/ and out/ (kernel 14G, base 8G, out/ 21G of
+#      which sdcard.img is 17G real). .github/workflows/image.yml is built to fit that by deleting
+#      each stage's inputs as it goes, but whether it fits AT ALL depends on a number nobody has
+#      measured: what a hosted ubuntu-24.04-arm runner actually has free. If this reports much under
+#      ~40 GB, the single-job design needs splitting and it is better to know now.
+#
+#   2. THE TOOLCHAIN IMAGE ON arm64. build/Dockerfile pins `FROM ubuntu:26.04` plus an exact
+#      `rauc=1.15.1-1` and `gcc-aarch64-linux-gnu`, and its own header says it was written for x86_64
+#      hosts. If either package is absent from the arm64 ports archive, `make toolchain` dies in
+#      minute one of every release build. Checking it costs seconds.
+#
+#   3. R2. Five settings (three secrets, two vars) that can each be wrong in a way that only shows up
+#      when a finished 9 GiB card is uploaded. images/r2-preflight.sh runs the identical round trip
+#      against one small object. The failure it exists for is the quiet one: publicity is a BUCKET
+#      setting invisible to the S3 API, so a misconfigured bucket accepts every upload and serves 404
+#      to everyone who clicks the link.
+name: preflight
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  runner:
+    name: runner capacity + toolchain
+    runs-on: ${{ vars.OVERLAY_RUNNER || 'ubuntu-24.04-arm' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: what does this runner actually have
+        run: |
+          set -euo pipefail
+          {
+            echo "### runner"
+            echo '```'
+            echo "arch:  $(uname -m)"
+            echo "cores: $(nproc)"
+            free -h | head -2
+            echo
+            df -h / "$RUNNER_TEMP"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: how much is reclaimable before the build starts
+        run: |
+          set -euo pipefail
+          before=$(df --output=avail -BG / | tail -1 | tr -dc '0-9')
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/share/boost /usr/share/swift 2>/dev/null || true
+          sudo docker image prune -af >/dev/null 2>&1 || true
+          after=$(df --output=avail -BG / | tail -1 | tr -dc '0-9')
+          {
+            echo "**free disk: ${before}G -> ${after}G after cleanup**"
+            echo
+            echo "The card build needs roughly 40G with image.yml's staged reclaims."
+            if [ "$after" -lt 40 ]; then
+              echo ":warning: **under 40G — the single-job build will not fit.** Split image.yml into"
+              echo "a rootfs producer and a card assembler exchanging rootfs.img as an artifact, or"
+              echo "move to a larger/self-hosted runner via vars.OVERLAY_RUNNER."
+            else
+              echo ":white_check_mark: enough headroom for the staged build."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Cheap and early: this is the first thing a release build does that could fail for a reason
+      # unrelated to our code.
+      - name: can the toolchain image resolve its pinned apt packages on this arch
+        run: |
+          set -euo pipefail
+          rauc_ver=$(sed -n 's/^ARG RAUC_VERSION=//p' build/Dockerfile | head -1)
+          echo "pinned rauc: ${rauc_ver:-<unset>}"
+          docker run --rm ubuntu:26.04 sh -c '
+            set -e
+            apt-get update -qq
+            apt-cache madison rauc gcc-aarch64-linux-gnu || true
+          ' | tee /tmp/madison.txt
+          {
+            echo "### toolchain apt (arm64 ports)"
+            echo '```'
+            cat /tmp/madison.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          grep -q "rauc.*${rauc_ver%%-*}" /tmp/madison.txt \
+            || echo "::warning::pinned rauc ${rauc_ver} not seen in madison output — make toolchain may fail; see build/Dockerfile on how to bump"
+
+  r2:
+    name: R2 bucket
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: round-trip a throwaway object
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ vars.R2_BUCKET }}
+          R2_PUBLIC_BASE: ${{ vars.R2_PUBLIC_BASE }}
+        run: images/r2-preflight.sh

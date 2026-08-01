@@ -44,12 +44,12 @@ does not touch your Android install.
 | AYN Thor | SM8550 | `ayn-thor` | yes |
 | Retroid Pocket Nova | SM8550 | `retroid-pocket-nova` | yes (120 Hz mode selection open) |
 | AYANEO Pocket DMG | SM8550 | `ayaneo-pocket-dmg` | — |
-| AYANEO Pocket DS | SM8550 | `ayaneo-pocket-ds` | — |
-| AYANEO Pocket EVO | SM8550 | `ayaneo-pocket-evo` | — |
+| AYANEO Pocket DS | SM8550 | `ayaneo-pocket-ds` | no - panel stays black |
+| AYANEO Pocket EVO | SM8550 | `ayaneo-pocket-evo` | no - panel stays black |
 | AYANEO Pocket S 1K | SM8550 | `ayaneo-pocket-s1k` | — |
 | AYANEO Pocket S 2K | SM8550 | `ayaneo-pocket-s2k` | — |
 | AYN Odin 2 Mini | SM8550 | `ayn-odin-2-mini` | — |
-| AYN Odin 2 Portal | SM8550 | `ayn-odin-2-portal` | — |
+| AYN Odin 2 Portal | SM8550 | `ayn-odin-2-portal` | yes |
 | Retroid Pocket 6 | SM8550 | `retroid-pocket-6` | — |
 
 <!-- END AUTO-GENERATED -->

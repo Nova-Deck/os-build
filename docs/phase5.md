@@ -1,9 +1,9 @@
 # Phase 5 — SteamDeck-style boot (steamcl + GRUB)
 
-> **Status: implemented, not yet hardware-validated in this form.** This is the design record for
-> the `boot(phase5)` / `rauc(phase5)` commit series on `boot/phase5`. Everything below is what the
-> tree builds; what has actually been proven, and by what, is spelled out per section rather than
-> implied.
+> **Status: implemented; the boot chain is hardware-validated, the update path is not.** This is
+> the design record for the `boot(phase5)` / `rauc(phase5)` commit series on `boot/phase5`.
+> Everything below is what the tree builds; what has actually been proven, and by what, is spelled
+> out per section and summarised under "Hardware status" rather than implied.
 
 Phase 5 replaces the ROCKNIX-ABL `/KERNEL` flow — an Android boot image on the shared ESP with the
 kernel and every board DTB appended, ABL's DTB picker choosing the board — with SteamOS's chain:
@@ -92,10 +92,17 @@ Generation is a separate script from the build because it needs no toolchain —
 efi partition, so `$root` is that partition and everything else is on the same disk:
 
 ```
-regexp -s bootdisk '^\((.*),gpt[0-9]+\)$' "$root"
+regexp -s bootdisk '^\(?([^,)]+),gpt[0-9]+\)?$' "$root"
 set esp="$bootdisk,gpt1"
 set slotroot="$bootdisk,gpt4"      # gpt5 in the B config
 ```
+
+The parentheses are OPTIONAL for a reason: GRUB stores `root` as the bare device name
+(`hd0,gpt2`) and only parenthesises it when building `$prefix`, which is why every path is written
+`($root)/...`. A pattern that requires them never matches — that shipped, and the only symptom was
+the fallback's message and its 3s pause. `images/test-stage2-grub.sh` now runs the pattern through
+`sed -E` (GRUB's `regexp` uses `REG_EXTENDED`, so it is the same matcher) instead of grepping for
+it.
 
 with a content search (`--file /SteamOS/conf/<slot>.conf`) and a label search only as a loud
 fallback. A label search is ambiguous exactly when it matters — a RAUC install writes the bundle's
@@ -209,16 +216,33 @@ Offline, in `make test` — all green at the time of writing:
 | `test-post-install.sh` | The hook against a sandboxed ESP/efi/var, including the fsid + label re-stamp. |
 | `verify-card.sh` (`make verify-card`) | The BUILT card: distinct fsids, per-slot btrfs labels, the ESP stage-1 tree + confs + grubenv, the efi stage-2 trees + partset identity matrix, and that each on-card `grub.cfg` is byte-identical to what `gen-grub-cfg.sh` produces for that slot. |
 
+## Hardware status
+
+✅ **Validated 2026-08-02 on an AYANEO Pocket S2** (dev card, slot A):
+
+* ABL chainloads `bootaa64.efi`; stage 1 picks image A; stage 2 comes up and waits at the board
+  menu on a fresh card.
+* Picking a board boots it: `/proc/device-tree/model` reads `AYANEO Pocket S2`, and the cmdline
+  carries `root=`/`novadeck.var=`/`novadeck.efi=` all pointing at the A slot.
+* The initramfs resolves `novadeck.efi=PARTLABEL=` and mounts p2 at `/efi`; `/esp` is p1 from
+  fstab; root is ro on p4, `/var` on p6, `/var/lib/novadeck/slot` = `a`.
+* **`save_env` writes the ESP grubenv** — `saved_entry=ayaneo-pocket-s2` — and a reboot takes it
+  with no input at all. This is the assertion the whole grubenv rework exists for.
+* The health unit confirms the boot (`boot-count` 1 → 2, `boot-attempts` 0, `image-invalid` 0),
+  `novadeck-boot-bad.service` stays inactive, and the journal carries no "unknown key" warning —
+  the `ExecOnFailure=` → `OnFailure=` fix holds on the device.
+
+One defect found on that boot and fixed: the `regexp` deriving the boot disk from `$root` required
+literal parentheses, and GRUB stores the bare `hd0,gpt2`. The config fell through to its search
+fallback on every boot — cosmetic (a message and a 3s pause) because the fallback works, but the
+primary path was dead. See the commit; the test now executes the pattern rather than grepping it.
+
 ## Open items
 
-Everything here needs the device.
+Still needs the device:
 
-* **ABL actually chainloads `bootaa64.efi`** and our GRUB comes up. The previous iteration got this
-  far, so it is expected to hold, but it has not been re-tested against this stage 2.
-* **The board choice persists.** First boot waits at the menu; after picking, `save_env` writes
-  `/EFI/steamos/grubenv` on the ESP's FAT and the next boot takes it behind a 3s menu. This is the
-  assertion the whole grubenv fix exists for and it has never worked on hardware.
-* **A slot switch** still boots, with stage 2 coming off the *other* efi partition.
-* **The demote path**, now that it is a real unit: force a health-check failure and confirm the
-  next boot lands on the other slot.
-* **`steamenv` reintroduction** (above), once the chain is proven without it.
+* **A slot switch** — install a bundle, boot B, confirm stage 2 comes off the *other* efi
+  partition and that post-install's fsid/label re-stamp did its job.
+* **The demote path end to end** — force a health-check failure and confirm the next boot lands on
+  the other slot. The unit is wired and inactive-when-healthy; the failure branch is untested.
+* **`steamenv` reintroduction** (above), now that the chain is proven without it.

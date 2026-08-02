@@ -214,6 +214,9 @@ VARIMG       := $(OUT)/images/var.img
 VARIMG_B     := $(OUT)/images/var-b.img
 INITRAMFS    := $(OUT)/initramfs.cpio.gz
 BOOTIMG      := $(OUT)/boot/novadeck-boot.img
+# Stage-1 steamcl (boot/steamcl.sh). The rule's target is steamcl.efi, but the run also emits
+# holo-bootconf, steamcl-version and fonts/default.pf2 into the same out/boot.
+STEAMCL      := $(OUT)/boot/steamcl.efi
 SDCARD       := $(OUT)/images/sdcard.img
 # Native arm64 Steam SEED (steam-seed/fetch-steam-seed.sh, host network). make-sdcard pre-seeds this tree
 # directly into the /home partition, so a healthy first boot does no copy and needs no network. The
@@ -277,7 +280,7 @@ KERNEL_SRC_HASH := work/.kernel-src.hash
 .PHONY: help all image toolchain kernel fw-linux fw-qcom base overlay overlay-pull overlay-publish \
         verify-pins pin-artifacts verify-lock \
         rootfs manifest relock \
-        initramfs boot sdcard verify-card test bundle deploy clean clean-base clean-overlay distclean
+        initramfs boot steamcl sdcard verify-card test bundle deploy clean clean-base clean-overlay distclean
 
 # An always-out-of-date prerequisite, for rules that must re-evaluate their own inputs every run
 # rather than trust a prerequisite's mtime. Only $(KERNEL_SRC_HASH) uses it; see the note there.
@@ -313,6 +316,7 @@ base:      $(BASE_STAMP)   ## Bootstrap the aarch64 root from packages (host; do
 rootfs:    $(ROOTFS)       ## Assemble the read-only root + var images (in container)
 initramfs: $(INITRAMFS)    ## Build the initramfs that mounts ro-root + /etc overlay (in container)
 boot:      $(BOOTIMG)      ## Package the all-boards boot artifact (in container)
+steamcl:   $(STEAMCL)      ## Build the stage-1 steamcl + steamos-bootconf (in container)
 sdcard:    $(SDCARD)       ## Build the flashable SD-card image (in container)
 
 # Asserts the BUILT card the way guard-rootfs.sh asserts the built tree — the guard stops at the
@@ -620,6 +624,11 @@ $(INITRAMFS): images/mkinitramfs.sh images/initramfs/init $(BASE_STAMP) | $(BUIL
 $(BOOTIMG): $(KERNEL) $(INITRAMFS) boot/cmdline boot/package.sh | $(BUILD_STAMP)
 	$(INBUILD) boot/package.sh
 
+# Stage-1 steamcl + the steamos-bootconf binary the OS side installs (boot/steamcl.sh, pinned
+# source). Independent of the kernel: it is bootloader software, not a payload.
+$(STEAMCL): boot/steamcl.sh boot/steamos-efi.pin | $(BUILD_STAMP)
+	$(INBUILD) boot/steamcl.sh
+
 # var.img and var-b.img are co-products of the same assembler run as rootfs.img.
 $(VARIMG): $(ROOTFS)
 $(VARIMG_B): $(ROOTFS)
@@ -636,9 +645,9 @@ bundle: $(ROOTFS) | $(BUILD_STAMP) ## Build a signed RAUC update bundle (in cont
 	  images/genbundle.sh $(VERSION)
 
 # ==============================================================================
-# Deploy (host) — copy the all-boards KERNEL onto a mounted ESP
+# Deploy (host) — copy the stage-1 steamcl tree onto a mounted ESP
 # ==============================================================================
-deploy: $(BOOTIMG) ## Install the boot image onto ESP=<mountpoint>
+deploy: $(STEAMCL) ## Install the stage-1 steamcl tree onto ESP=<mountpoint>
 	@test -n "$(ESP)" || { echo "pass ESP=<esp-mountpoint>" >&2; exit 2; }
 	boot/deploy.sh $(ESP)
 

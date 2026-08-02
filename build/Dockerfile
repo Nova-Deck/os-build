@@ -38,21 +38,30 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       "rauc=${RAUC_VERSION}" \
     && rm -rf /var/lib/apt/lists/*
 
-# mkbootimg: AOSP Android boot-image packer (used by boot/backends/android-bootimg.sh).
-# Not packaged for Ubuntu — vendor the single upstream script, pinned by commit +
-# sha256 (cf. the kernel source pin). The lone top-level GKI-signing import pulls in
-# the avbtool tree and is unused here, so neutralize it after verifying the pristine
-# hash; the rest of mkbootimg is self-contained.
-ARG MKBOOTIMG_COMMIT=d2bb0af5ba6d3198a3e99529c97eda1be0b5a093
-ARG MKBOOTIMG_SHA256=37d84b3d162e0bc62e36c1f4e1c63c85ea0caa9f29be023eb2f8efe006ad948c
-RUN curl -fsSL "https://android.googlesource.com/platform/system/tools/mkbootimg/+/${MKBOOTIMG_COMMIT}/mkbootimg.py?format=TEXT" \
-      | base64 -d > /tmp/mkbootimg.py \
-    && echo "${MKBOOTIMG_SHA256}  /tmp/mkbootimg.py" | sha256sum -c - \
-    && sed -i 's/^from gki.generate_gki_certificate import generate_gki_certificate/def generate_gki_certificate(*a, **k):\n    raise NotImplementedError("GKI signing unsupported in novadeck")/' \
-        /tmp/mkbootimg.py \
-    && install -Dm0755 /tmp/mkbootimg.py /usr/local/bin/mkbootimg \
-    && rm -f /tmp/mkbootimg.py \
-    && mkbootimg --help >/dev/null
+# Boot stage (Phase 5): the two-stage UEFI chain, steamcl (stage 1) + GRUB (stage 2).
+#
+# steamos-efi ships no configure, so it needs the autotools; it links against gnu-efi for arm64
+# and generates its console font at build time through fontconfig + grub-mkfont. Ubuntu's
+# gnu-efi:arm64 installs to plain /usr/lib (crt0-efi-aarch64.o, elf_aarch64_efi.lds,
+# /usr/lib/pkgconfig/gnu-efi.pc) rather than a multiarch dir — the fork's efi_cpu AC_SUBST maps
+# target_cpu arm64 -> aarch64 to find it.
+#
+# GRUB is built from the GNU 2.14 RELEASE tarball, which is already bootstrapped (it ships
+# configure, grub-core/Makefile.core.am and a vendored gnulib), so there is no autoreconf and no
+# gnulib checkout on that side — see boot/grub.sh. What it does need is gawk: grub-core's
+# genmoddep.awk uses asorti(), which mawk does not implement, and Ubuntu's default awk is mawk.
+#
+# grub-common carries the host-side tools both stages use: grub-mkfont (steamcl's font and ours),
+# grub-mkimage, grub-editenv (seeding the stage-2 env block) and grub-script-check (which
+# images/test-stage2-grub.sh runs over the generated grub.cfg files).
+RUN dpkg --add-architecture arm64 && apt-get update && apt-get install -y --no-install-recommends \
+      gnu-efi:arm64 \
+      libc6-dev-arm64-cross \
+      autoconf automake libtool pkg-config gettext \
+      gawk \
+      fontconfig fonts-dejavu-core libfreetype-dev \
+      grub-common \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
 ENTRYPOINT ["/bin/bash"]

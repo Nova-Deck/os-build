@@ -1,0 +1,17 @@
+# novadeck steamos-efi source pin — Phase 5
+# Nova-Deck/steamos-efi fork of evlaV/steamos-efi, master (aarch64 patched + CI).
+# The TARBALL + its sha256 is the canonical pin.
+version:    1.1.0
+url:        https://github.com/Nova-Deck/steamos-efi/archive/12795a85ce037170a712709a7c44c068c895bad9.tar.gz
+sha256:     ea2d4a92336a0e7e1738690fd90f2cfc189cfcfe223b137dcef29d5c10ac5a17
+git_commit: 12795a85ce037170a712709a7c44c068c895bad9
+
+# Fork carries the arm64 port (committed on top of upstream master):
+#   chainloader/bootload.c       EFI_STUB_ARCH 0xaa64 on __aarch64__
+#   chainloader/util.h           \EFI\steamos\grubaa64.efi / bootaa64.efi paths
+#   util/steamcl-install.in      removable-media bootaa64.efi from uname -m
+#   configure.ac                 efi_cpu AC_SUBST (arm64->aarch64), TARGET_LD, AS_CASE comma
+#   Makefile.am                  steamcl_elf_LINK = $(TARGET_LD)
+#   bootconf/config-extra.c      ftruncate return check
+# plus .github/workflows/build.yml (arm64 cross-build CI). Validated 2026-08-01:
+# steamcl.efi = PE32+ ARM64; holo-bootconf = aarch64 statically linked.

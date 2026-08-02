@@ -1,0 +1,25 @@
+# Demote the RUNNING A/B image. Triggered ONLY by novadeck-boot-good.service's OnFailure= --
+# hence no [Install] -- when the boot could not be confirmed: the session marker vanished under
+# the 30s re-check, or the confirmation itself could not be written.
+#
+# `set-state self bad` is `set-mode reboot-other --set image-invalid 1` on the booted image, so
+# the NEXT boot goes to the other slot. It is idempotent, and on a degraded boot where the booted
+# image cannot be identified at all it fails harmlessly rather than guessing a slot.
+#
+# WHY A WHOLE UNIT FOR ONE COMMAND. systemd has no per-service "run this if the service failed"
+# verb. The plausible-looking ExecOnFailure= is not a systemd directive: the parser logs
+# "Unknown key name" and carries on, so a service carrying it looks correct and does nothing.
+# novadeck shipped exactly that for the whole of phase 5's first pass, which meant the OS half of
+# the rollback design was never actually wired up.
+#
+# ExecStopPost= with a $SERVICE_RESULT test would also work, but it runs inside the failing
+# service's own scope -- so a service that failed by being killed drags this with it. A separate
+# unit is what OnFailure= is for.
+[Unit]
+Description=novadeck demote this A/B image after a failed boot confirmation
+Documentation=file:///usr/bin/novadeck-bootctl
+ConditionPathExists=/run/novadeck/boot
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/novadeck-bootctl set-state self bad

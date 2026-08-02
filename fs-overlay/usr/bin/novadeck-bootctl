@@ -1,552 +1,248 @@
 #!/usr/bin/env bash
-# novadeck-bootctl — read and update the A/B slot state the initramfs boots from.
+# novadeck-bootctl — Phase 5: the RAUC bootloader backend over SteamOS's steamconf, plus the
+# boot-health confirmation. See docs/phase5.md for the chain this belongs to.
 #
-# The state lives on the shared ESP at /NOVADECK/STATE.{0,1}; images/initramfs/init is the
-# authoritative description of the format and of the two-file generation scheme. The short
-# version: the higher valid generation wins, and a writer only ever overwrites the copy that is
-# already stale, so a torn write can never destroy the state.
+# Three jobs, one tool:
 #
-#   novadeck-bootctl status              what booted, and what the ESP says
-#   novadeck-bootctl try b [--tries N]   boot slot b next; revert after N failed attempts
-#   novadeck-bootctl mark-good           confirm the slot on trial (this is what ends a trial)
-#   novadeck-bootctl rollback            abandon a trial, go back to the active slot
-#   novadeck-bootctl set-kernel <a|b> [bak]
-#                                        record the /KERNEL rotation: whose boot image is now on
-#                                        the ESP, and the name the previous one was kept under
+#   1. The RAUC `bootloader=custom` backend (/etc/rauc/system.conf points at this file). Its
+#      internals are Valve's bootloader-custom-backend.sh.in nearly verbatim, calling holo-bootconf
+#      (installed as /usr/bin/steamos-bootconf) against the shared ESP's /esp/SteamOS/conf and the
+#      booted slot's /efi. The RAUC slots ARE the SteamOS images now: `bootname=A|B` in
+#      system.conf is literally the conf file name, so there is no mapping layer.
 #
-# RAUC `bootloader=custom` backend contract (/etc/rauc/system.conf points at this file):
+#      get-current  -> steamos-bootconf this-image     (A|B)
+#      get-primary  -> steamos-bootconf selected-image
+#      set-primary  -> steamos-bootconf --image X set-mode reboot   (this STARTS a trial)
+#      get-state    -> bad iff boot-attempts >= 1 or image-invalid > 0
+#      set-state    -> good: set-mode reboot --set image-invalid 0
+#                      bad:  set-mode reboot-other --set image-invalid 1
 #
-#   get-current / get-primary / set-primary <a|b> / get-state <a|b> / set-state <a|b> good|bad
+#      `self` is accepted wherever an image name is, and resolves to whichever image this-image
+#      reports — that is what the health unit uses to demote the booted slot.
 #
-# EVERY ONE OF THOSE MUST EXIT 0 ON EVERY LEGAL CALL, no-ops included: RAUC treats a non-zero
-# backend exit as a failed install. That is the whole contract, and it is asserted per-subcommand
-# offline by images/test-bootctl.sh, which executes this file rather than reasoning about it.
+#   2. mark-good — the boot-health confirmation (novadeck-boot-good.{service,path}). When a
+#      session has proven healthy it runs `steamos-bootconf set-mode booted` (clears boot-attempts,
+#      so the steamenv stage-2 counter and stock steamcl's failsafe stop counting this boot). The
+#      unit's ExecOnFailure demotes with `set-state self bad`.
 #
-# `set-state <slot> bad` RECORDS the marking in the state's `broken=` field rather than dropping
-# it, so a slot whose install died halfway answers `bad` afterwards instead of `good`.
+#   3. status — diagnostics over the same bootconf.
 #
-# Slot names are lowercase a/b throughout and are identical to the `bootname=` values
-# system.conf will use, so there is never a mapping layer to get wrong.
+# THE CONTRACT IS THE EXIT STATUS. RAUC treats a non-zero backend exit as a failed install, so
+# every legal call must exit 0 — including no-ops. That is asserted per-subcommand offline by
+# images/test-bootctl.sh, which executes THIS file (not a copy) against a stubbed steamos-bootconf.
 #
-# THIS TOOL IS PER-SLOT; THE INITRAMFS THAT READS ITS OUTPUT IS SHARED. /KERNEL lives on the ESP
-# and serves both slots, so after a rollback an older novadeck-bootctl can be writing state that
-# a newer initramfs reads, or the reverse. Hence: unknown keys are preserved verbatim on write,
-# never dropped. Do not "clean up" a field you do not recognise.
-set -uo pipefail
+# SteamOS splits the decision in two, and so do we:
+#   * "Is this slot OK?" is OS-arbitrated. The boot service confirms (set-mode booted); a failed
+#     health check demotes (novadeck-boot-bad.service -> set-state self bad -> reboot-other +
+#     image-invalid=1). The bootloader never decides it.
+#   * "Did a slot fail to come up N times?" is the stage-2 boot-attempts counter, which
+#     steamcl's failsafe acts on (menu at >=3, auto-pick the other slot at >=6).
+#
+# ONLY THE FIRST IS LIVE TODAY. The counter is bumped by steamenv_init, and the stage-2 grub.cfg
+# does not invoke steamenv yet (docs/phase5.md) -- so boot-attempts stays 0 and get-state's
+# "boot-attempts >= 1" arm never fires. A slot that never reaches the health unit at all is not
+# rolled back automatically; recovery is the stage-2 board menu.
+set -euo pipefail
 
-# These three are the TEST SEAM, and the only reason they are parameters at all. The offline suite
-# (images/test-bootctl.sh) executes THIS file -- not a sed-mangled copy -- so what it asserts is the
-# artifact that ships. Overriding them is what lets it point the tool at a sandbox ESP and a fake
-# initramfs handoff. Nothing in this script is otherwise conditional on being under test, and the
-# defaults are what every real invocation uses: no unit, hook or interactive caller sets them.
+# TEST SEAM, as before: the offline suite executes this file and stubs these. BOOTINFO is the
+# initramfs handoff (written by images/initramfs/init on every boot, including degraded ones) that
+# mark-good uses to tell "a slot boot" from a "cmdline-fallback boot". SESSION_MARKER is the ready
+# marker the health service waits on; its default is exactly the path novadeck-boot-good.path
+# watches. BC is the bootconf binary; on a device it is /usr/bin/steamos-bootconf (holo-bootconf
+# installed by assemble-rootfs.sh). BC_ARGS is a single env string whose word-split expands to the
+# flags on every bootconf call; it defaults to the device paths and the suite overrides it to
+# redirect bootconf's files into the sandbox.
 BOOTINFO=${BOOTINFO:-/run/novadeck/boot}
-ESP_AUTO=${ESP_AUTO:-/efi}                 # systemd gpt-auto automounts the ESP here
-ESP_MANUAL=${ESP_MANUAL:-/run/novadeck/esp}  # fallback only, if that automount is not available
-TRIES_DEFAULT=1
+SESSION_MARKER=${SESSION_MARKER:-/run/novadeck/session/ready}
+BC=${BC:-steamos-bootconf}
+BC_ARGS=${BC_ARGS:---conf-dir /esp/SteamOS/conf --efi-dir /efi}
 
 PROG=${0##*/}
-die()  { printf '%s: %s\n' "$PROG" "$1" >&2; exit 1; }
-warn() { printf '%s: %s\n' "$PROG" "$1" >&2; }
+die()  { printf '%s: %s\n' "$PROG" "$*" >&2; exit 1; }
+warn() { printf '%s: WARNING: %s\n' "$PROG" "$*" >&2; }
 
-# --- the ESP ---------------------------------------------------------------------------------
+bc() { "$BC" $BC_ARGS "$@"; }
 
-ESP=""; ESP_WE_MOUNTED=0
+# --- Valve's backend helpers (bootloader-custom-backend.sh.in) ----------------------------------
 
-# Prefer the gpt-auto automount and NEVER mount a second time on top of it: two concurrent rw
-# vfat mounts of one device corrupt it. Touching the path is what triggers the automount.
-esp_open() {
-  if ls "$ESP_AUTO" >/dev/null 2>&1 && mountpoint -q "$ESP_AUTO"; then
-    ESP=$ESP_AUTO
-    return 0
-  fi
-  local dev
-  dev=$(findfs PARTLABEL=NOVADECK-ESP 2>/dev/null) || die "no partition labelled NOVADECK-ESP"
-  mkdir -p "$ESP_MANUAL"
-  mount -t vfat -o rw "$dev" "$ESP_MANUAL" || die "cannot mount the ESP ($dev)"
-  ESP=$ESP_MANUAL; ESP_WE_MOUNTED=1
+current_image=
+target_image=
+
+set_current_image() {
+  local name=
+  if [ -n "$current_image" ]; then return; fi
+  name=$(bc this-image)
+  case $name in
+    A|B|dev) ;;
+    *)
+      # unexpected image: pick the highest-priority well-known name as primary
+      while read -r valid slot x; do
+        case $slot in A|B) name=$slot ;; esac
+      done < <(bc list-images)
+      ;;
+  esac
+  current_image=$name
 }
 
-esp_close() {
-  [ "$ESP_WE_MOUNTED" = 1 ] || return 0
-  sync
-  umount "$ESP_MANUAL" 2>/dev/null || warn "could not unmount $ESP_MANUAL"
-  ESP_WE_MOUNTED=0
-}
-trap esp_close EXIT
-
-# --- state -----------------------------------------------------------------------------------
-
-# Parsed state of the winning file. EXTRA holds every key we do not know about, verbatim.
-S_GEN=0; S_ACTIVE=""; S_PENDING=""; S_TRIES=0; S_KERNEL=""; S_BAK=""; S_BROKEN=""; S_EXTRA=""
-S_WON=-1; S_SPARE=0
-
-# --- broken= ------------------------------------------------------------------------------------
-# The set of slots RAUC has told us are bad, as a string of letters in canonical order: '', 'a',
-# 'b' or 'ab'. A SET rather than a single letter because both slots can be bad at once (install
-# into b dies, then a retry into a dies too) and the field must not lose the first one.
-#
-# It exists because `bad` was previously DROPPED rather than recorded. set-state bad is a no-op
-# when the slot is neither active nor pending -- correct, in that nothing automatic boots such a
-# slot -- but it left nothing able to tell "never installed" from "install died halfway", so a
-# half-written slot still answered `good`. Demonstrated on hardware 2026-07-28 with a tampered
-# bundle: verity aborted the copy 13s in and get-state still said good.
-broken_norm() {  # canonical order, unknown characters dropped
-  local in=$1 out=''
-  case "$in" in *a*) out=a ;; esac
-  case "$in" in *b*) out="${out}b" ;; esac
-  printf '%s' "$out"
-}
-broken_has() { case "$S_BROKEN" in *"$1"*) return 0 ;; esac; return 1; }
-broken_add() { S_BROKEN=$(broken_norm "$S_BROKEN$1"); }
-broken_del() {
-  local out=''
-  case "$S_BROKEN" in *a*) [ "$1" = a ] || out=a ;; esac
-  case "$S_BROKEN" in *b*) [ "$1" = b ] || out="${out}b" ;; esac
-  S_BROKEN=$out
+set_target_image() {  # <A|B|dev|self>
+  case ${1:-} in
+    self) set_current_image; target_image=$current_image ;;
+    A|B|dev) target_image=$1 ;;
+    *) die "invalid target image '$1' (expected A, B, dev or self)" ;;
+  esac
 }
 
-# Same validity rules as the initramfs: complete (terminated by `end`), gen and tries all-digits
-# (checked BEFORE any numeric compare), slots in {a,b}.
-read_state_file() {
-  local f=$1 line end=0
-  local gen="" active="" pending="" tries="" kernel="" bak="" broken="" extra=""
-  [ -f "$f" ] || return 1
-  while IFS= read -r line || [ -n "$line" ]; do
-    case "$line" in
-      ''|'#'*)   continue ;;
-      gen=*)     gen=${line#gen=};         end=0 ;;
-      active=*)  active=${line#active=};   end=0 ;;
-      pending=*) pending=${line#pending=}; end=0 ;;
-      tries=*)   tries=${line#tries=};     end=0 ;;
-      kernel=*)  kernel=${line#kernel=};   end=0 ;;
-      bak=*)     bak=${line#bak=};         end=0 ;;
-      broken=*)  broken=${line#broken=};   end=0 ;;
-      end)       end=1 ;;
-      *)         extra+="$line"$'\n';      end=0 ;;
-    esac
-  done <"$f"
-  [ "$end" = 1 ] || return 1
-  [[ $gen   =~ ^[0-9]+$ ]] || return 1
-  [[ $tries =~ ^[0-9]+$ ]] || return 1
-  [[ $active  =~ ^[ab]$ ]] || return 1
-  [[ $pending =~ ^([ab])?$ ]] || return 1
-  R_GEN=$gen; R_ACTIVE=$active; R_PENDING=$pending; R_TRIES=$tries
-  R_KERNEL=$kernel; R_BAK=$bak; R_EXTRA=$extra
-  # NORMALISED, NOT VALIDATED. A malformed `broken=` must not invalidate the whole file: the other
-  # fields are what the device boots from, and rejecting the state over a bookkeeping field would
-  # turn a typo into a cmdline-fallback boot. Junk normalises to '' -- which is the safe direction
-  # only because a lost marker degrades to today's behaviour, not to booting something worse.
-  R_BROKEN=$(broken_norm "$broken")
-  return 0
+ensure_exists() {  # <image>
+  # config without --set/--get creates a missing config (create_missing defaults to on); the
+  # explicit `create` is Valve's belt-and-braces, kept verbatim.
+  bc config --image "$1" || bc create --image "$1" ||:
 }
 
-state_load() {
-  local n
-  S_GEN=0; S_WON=-1
-  for n in 0 1; do
-    if read_state_file "$ESP/NOVADECK/STATE.$n" && [ "$R_GEN" -gt "$S_GEN" ]; then
-      S_GEN=$R_GEN; S_WON=$n
-      S_ACTIVE=$R_ACTIVE; S_PENDING=$R_PENDING; S_TRIES=$R_TRIES
-      S_KERNEL=$R_KERNEL; S_BAK=$R_BAK; S_BROKEN=$R_BROKEN; S_EXTRA=$R_EXTRA
-    fi
-  done
-  if [ "$S_WON" = 1 ]; then S_SPARE=0; else S_SPARE=1; fi
-  [ "$S_WON" = -1 ] && S_SPARE=0
-  return 0
+# --- RAUC backend subcommands -------------------------------------------------------------------
+
+get_current() {
+  set_current_image
+  case $current_image in
+    A|B) echo "$current_image" ;;
+    # dev is a valid bootconf image but not a RAUC slot on this system (system.conf has only
+    # rootfs.0/rootfs.1). Guessing would hand RAUC a slot nothing verified, so this is the
+    # contract's "cannot be determined" signal.
+    *) die "this system booted image '$current_image', which has no RAUC slot" ;;
+  esac
 }
 
-state_require() {
-  state_load
-  [ "$S_WON" != -1 ] || die "no valid slot state on the ESP (expected $ESP/NOVADECK/STATE.{0,1})"
-}
-
-# Write the next generation to the file that did NOT win. Unlike the initramfs we have real
-# tools here, so this also does temp -> sync -> rename -> sync (boot/deploy.sh's shape) --
-# belt and braces on a scheme that is already correct without it.
-state_write() {  # <active> <pending> <tries>
-  local dir=$ESP/NOVADECK target=$ESP/NOVADECK/STATE.$S_SPARE tmp
-  mkdir -p "$dir"
-  tmp="$dir/.ST.tmp.$$"
-  { printf '# novadeck A/B slot state -- images/initramfs/init, /usr/bin/novadeck-bootctl\n'
-    printf 'gen=%s\n'     "$((S_GEN + 1))"
-    printf 'active=%s\n'  "$1"
-    printf 'pending=%s\n' "$2"
-    printf 'tries=%s\n'   "$3"
-    printf 'kernel=%s\n'  "$S_KERNEL"
-    printf 'bak=%s\n'     "$S_BAK"
-    printf 'broken=%s\n'  "$S_BROKEN"
-    # Keys written by a version of this tool we do not know about. Preserved, not dropped.
-    [ -n "$S_EXTRA" ] && printf '%s' "$S_EXTRA"
-    printf 'end\n'
-  } >"$tmp" || die "cannot write $tmp"
-  sync "$tmp" 2>/dev/null || sync
-  mv -f "$tmp" "$target" || die "cannot install $target"
-  sync "$dir" 2>/dev/null || sync
-  S_GEN=$((S_GEN + 1))
-  S_WON=$S_SPARE
-  if [ "$S_WON" = 1 ]; then S_SPARE=0; else S_SPARE=1; fi
-}
-
-# --- what booted -----------------------------------------------------------------------------
-
-booted_slot() {
-  [ -r "$BOOTINFO" ] || return 1
-  sed -n 's/^slot=//p' "$BOOTINFO"
-}
-
-booted_source() { [ -r "$BOOTINFO" ] && sed -n 's/^source=//p' "$BOOTINFO"; }
-
-other_slot() { case "$1" in a) echo b ;; b) echo a ;; *) return 1 ;; esac; }
-
-need_root() { [ "$(id -u)" = 0 ] || die "must run as root"; }
-
-# --- subcommands -----------------------------------------------------------------------------
-
-cmd_status() {
-  esp_open; state_load
-  local bs; bs=$(booted_slot) || bs=""
-  echo "booted:"
-  if [ -r "$BOOTINFO" ]; then
-    sed 's/^/  /' "$BOOTINFO"
+get_primary() {
+  set_current_image
+  local image
+  image=$(bc selected-image)
+  if [ "$image" = dev ]; then image=$current_image; fi
+  if [ -n "$image" ]; then
+    echo "$image"
+  elif [ -n "$current_image" ]; then
+    echo "$current_image"
   else
-    echo "  (no $BOOTINFO -- this system did not boot through the novadeck initramfs)"
-  fi
-  echo "esp state:"
-  if [ "$S_WON" = -1 ]; then
-    echo "  (no valid state file; the initramfs would fall back to the cmdline root=)"
-  else
-    # kernel/bak are printed unconditionally, empty included. They are maintained fields now, so
-    # "not recorded" is itself a finding -- hiding it reads as "this card has no kernel record"
-    # being indistinguishable from "this tool did not tell you".
-    printf '  file=STATE.%s gen=%s\n  active=%s\n  pending=%s\n  tries=%s\n  kernel=%s\n  bak=%s\n  broken=%s\n' \
-      "$S_WON" "$S_GEN" "$S_ACTIVE" "${S_PENDING:-<none>}" "$S_TRIES" \
-      "${S_KERNEL:-<unrecorded>}" "${S_BAK:-<none>}" "${S_BROKEN:-<none>}"
-  fi
-  # An install that started and never finished. Worth its own line rather than just the field:
-  # this is the only surface that says a slot is half-written, and the symptom otherwise is a
-  # device that fails a trial boot for no stated reason.
-  if [ -n "$S_BROKEN" ]; then
-    local sl
-    for sl in a b; do
-      broken_has "$sl" || continue
-      echo "  WARNING: slot $sl is BROKEN -- an install was started on it and never completed."
-      echo "           Re-install it; do not trust its contents. 'get-state $sl' reports bad."
-    done
-  fi
-  # The one cross-check that does not share a failure mode with the selection code: the var
-  # image carries its own slot letter, written at build time.
-  if [ -r /var/lib/novadeck/slot ]; then
-    local vs; vs=$(cat /var/lib/novadeck/slot)
-    if [ -n "$bs" ] && [ "$vs" != "$bs" ]; then
-      echo "  WARNING: /var says slot '$vs' but the initramfs picked '$bs' --"
-      echo "           two filesystems are sharing an identity. Do not trust a slot test."
-    fi
-  fi
-  # /KERNEL is SHARED by both slots, so a root can end up running under a kernel from the OTHER
-  # build -- and /lib/modules/<ver> ships inside the root. CFG80211 and ATH12K are =m, so that
-  # combination is a device with no Wi-Fi and no serial console. It needs no update to reach:
-  # `try` on a slot the last rotation did not install is enough.
-  if [ -n "$S_KERNEL" ] && [ -n "$bs" ] && [ "$S_KERNEL" != "$bs" ]; then
-    echo "  WARNING: /KERNEL holds slot '$S_KERNEL' boot image but this system booted slot '$bs' --"
-    echo "           this root's /lib/modules does not match the running kernel."
+    die "cannot determine the primary slot"
   fi
 }
 
-cmd_try() {
-  need_root
-  local slot=${1:-} tries=$TRIES_DEFAULT
-  shift || true
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      --tries) tries=${2:-}; shift 2 ;;
-      *) die "unknown option: $1" ;;
+set_primary() {  # <A|B|dev|self>
+  set_target_image "$1"
+  ensure_exists "$target_image"
+  bc --image "$target_image" set-mode reboot
+}
+
+get_state() {  # <A|B|dev|self>
+  local tries= invalid=
+  set_target_image "$1"
+  while read -r key val x; do
+    case $key in
+      boot-attempts:) tries=$val ;;
+      image-invalid:) invalid=$val ;;
     esac
-  done
-  [[ $slot  =~ ^[ab]$ ]]  || die "usage: $PROG try <a|b> [--tries N]"
-  [[ $tries =~ ^[0-9]+$ ]] || die "--tries must be a non-negative integer"
-  esp_open; state_require
-  [ "$slot" != "$S_ACTIVE" ] || die "slot $slot is already active"
-  # Warned, not refused: this is the recovery tool, and booting a mismatched pair is still better
-  # than not booting. But an update rotates /KERNEL to the slot it installed, so `try` on any
-  # OTHER slot boots a root whose /lib/modules came from a different build -- no Wi-Fi (=m
-  # CFG80211/ATH12K) on a device with no serial console, and nothing on screen to say why.
-  if [ -n "$S_KERNEL" ] && [ "$S_KERNEL" != "$slot" ]; then
-    warn "/KERNEL is slot $S_KERNEL's boot image -- slot $slot will boot with /lib/modules from a different build"
+  done < <(bc --image "$target_image" config --get boot-attempts --get image-invalid)
+  if [ -z "$tries" ] || [ -z "$invalid" ]; then
+    die "missing boot configuration for image $target_image"
   fi
-  # Same reasoning: warned, not refused. `try` is the tool you reach for when the device is already
-  # in trouble, and a slot marked broken is still the better bet than one that does not boot at all
-  # -- the trial counter is what bounds the risk, and it is armed by this very write. Refusing here
-  # would mean the one recorded fact about a half-installed slot disables the only recovery path.
-  if broken_has "$slot"; then
-    warn "slot $slot is marked BROKEN (an install was started and never completed) -- it may not boot"
-    warn "  it reverts to $S_ACTIVE after $tries failed attempt$([ "$tries" = 1 ] || echo s); re-install it to clear the mark"
+  # 1 or more unsuccessful/incomplete boot attempts, or the image is flagged invalid:
+  if [ "$tries" -ge 1 ] || [ "$invalid" -gt 0 ]; then
+    echo bad
+  else
+    echo good
   fi
-  state_write "$S_ACTIVE" "$slot" "$tries"
-  echo "next boot: slot $slot (active stays $S_ACTIVE, $tries tr$([ "$tries" = 1 ] && echo y || echo ies))"
-  echo "reboot to try it; it reverts to $S_ACTIVE unless '$PROG mark-good' runs."
 }
 
-cmd_mark_good() {
-  need_root
+set_state() {  # <A|B|dev|self> <good|bad>
+  set_target_image "$1"
+  ensure_exists "$target_image"
+  case ${2:-} in
+    good)
+      # clears boot-other and update, sets boot-requested-at
+      bc --image "$target_image" set-mode reboot --set image-invalid 0
+      ;;
+    bad)
+      # clears update, sets boot-other and boot-requested-at
+      bc --image "$target_image" set-mode reboot-other --set image-invalid 1
+      ;;
+    *) die "bad image state value '${2:-}' (expected good or bad)" ;;
+  esac
+}
+
+# --- boot health --------------------------------------------------------------------------------
+
+# Confirm this boot, called by novadeck-boot-good.service after the session handshake plus a 30s
+# re-check. Exiting 0 here is load-bearing on a degraded boot: novadeck-boot-good.service is
+# RemainAfterExit=yes so it fires once per boot, and a non-zero exit re-arms the level-triggered
+# .path into a failing mark-good every 30s for the rest of the device's uptime (measured on
+# hardware in 2026-07, before the handoff guard existed). The handoff names no slot on a
+# cmdline-fallback boot, so that is the guard: nothing to confirm -> 0.
+mark_good() {
   local require_marker=0
   [ "${1:-}" = --require-marker ] && require_marker=1
 
-  # NOTHING TO CONFIRM unless this boot actually came from a slot -- and this has to be settled
-  # BEFORE state_require, which dies (exit 1) when the ESP carries no valid state.
-  #
-  # A degraded cmdline-fallback boot still writes $BOOTINFO: images/initramfs/init emits the
-  # handoff on every path, including the one that never resolved a slot. So
-  # novadeck-boot-good.path's ConditionPathExists does NOT filter that case (its comment used to
-  # claim it did) -- it only filters a system that never ran our initramfs at all.
-  #
-  # Exiting 0 here is load-bearing. novadeck-boot-good.service is RemainAfterExit=yes precisely so
-  # it fires once per boot; a non-zero exit leaves it `failed`, which re-arms the level-triggered
-  # .path and starts a fresh sleep-30 + mark-good every 30 seconds for the rest of the device's
-  # uptime. HW-measured 2026-07-28 during the pass-1 degrade test: 4 starts in 165s of uptime,
-  # each one dying in state_require. That is the state you are in on a card whose slot state is
-  # unreadable -- i.e. exactly when `systemctl --failed` needs to be trustworthy.
-  #
-  # The deliberate retry-on-failure documented in the unit is NOT weakened: it exists for
-  # --require-marker losing its session marker, which still exits non-zero below.
   local bs src
-  bs=$(booted_slot) || bs=""
-  src=$(booted_source) || src=""
+  bs=$(sed -n 's/^slot=//p' "$BOOTINFO" 2>/dev/null || true)
+  src=$(sed -n 's/^source=//p' "$BOOTINFO" 2>/dev/null || true)
   if [ -z "$bs" ]; then
     echo "this boot did not come from a slot (source=${src:-unknown}) -- nothing to confirm"
     return 0
   fi
 
-  esp_open; state_require
+  if [ "$require_marker" = 1 ] && [ ! -e "$SESSION_MARKER" ]; then
+    die "no session marker at $SESSION_MARKER -- refusing to confirm this boot"
+  fi
 
-  if [ -z "$S_PENDING" ]; then
-    echo "nothing on trial (active=$S_ACTIVE)"; return 0
-  fi
-  # A rollback boot already cleared pending before we got here, so if pending still names a slot
-  # that is not the one we are running, something else is going on -- refuse rather than promote
-  # a slot we have no evidence about. This used to be guarded by `[ -n "$bs" ] &&`, which meant an
-  # EMPTY booted-slot skipped the check and fell through to state_write -- absence of evidence
-  # promoting a slot nothing had booted. `bs` is non-empty by the guard above, so the check is now
-  # unconditional and that hole is closed by construction.
-  if [ "$S_PENDING" != "$bs" ]; then
-    echo "pending is '$S_PENDING' but this system booted slot '$bs' -- not marking anything good"
-    return 0
-  fi
-  if [ "$require_marker" = 1 ] && [ ! -e /run/novadeck/session/ready ]; then
-    die "no session marker at /run/novadeck/session/ready -- refusing to confirm this boot"
-  fi
-  state_write "$S_PENDING" '' 0
-  echo "slot $S_PENDING confirmed good and is now active"
-}
-
-# Record the /KERNEL rotation: which slot's boot image now sits on the ESP, and the bare name the
-# previous one was kept under ('' when there is none to go back to). The RAUC post-install hook
-# calls this after copying the new image in, so the initramfs knows both which modules match the
-# running kernel and whether a restore is available if the trial boot never gets confirmed.
-#
-# BOTH FIELDS IN ONE CALL, hence one generation. Split across two writes there is a state that
-# names a backup for a kernel it has not recorded yet (or the reverse), and the rollback path in
-# images/initramfs/init reads the pair together -- it clears `bak` and re-points `kernel` in the
-# same generation for exactly this reason.
-#
-# Kept here rather than written by the hook because this file has ONE writer: the generation
-# scheme and the preserve-unknown-keys contract both live in state_write().
-cmd_set_kernel() {
-  need_root
-  local slot=${1:-} name=${2:-}
-  [[ $slot =~ ^[ab]$ ]] || die "usage: $PROG set-kernel <a|b> [backup-name]"
-  # A path would let a caller point the initramfs at something outside the ESP, which it cannot
-  # reach anyway -- keep it a bare filename so the format stays a name, not a location.
-  case "$name" in
-    */*|*' '*) die "the backup name must be a bare filename (got '$name')" ;;
+  # set-mode booted clears boot-attempts, bumps boot-count and stamps boot-time — the "this boot
+  # was fine" record that keeps the steamenv counter from failing this slot. It does NOT clear
+  # image-invalid (its `invalid` key is not in the bootconf schema), and the failure path
+  # (ExecOnFailure: set-state self bad) may have set it, so clear it here or a recovered slot
+  # would confirm yet stay demoted.
+  bc set-mode booted || die "steamos-bootconf set-mode booted failed"
+  local self
+  self=$(bc this-image) || die "cannot identify the booted image"
+  case "$self" in
+    A|B) bc --image "$self" config --set image-invalid 0 || die "cannot clear image-invalid on $self" ;;
   esac
-  esp_open; state_require
-  [ -z "$name" ] || [ -f "$ESP/$name" ] || warn "no $ESP/$name on the ESP yet -- recording it anyway"
-  S_KERNEL=$slot; S_BAK=$name
-  state_write "$S_ACTIVE" "$S_PENDING" "$S_TRIES"
-  if [ -n "$name" ]; then
-    echo "/KERNEL is now slot $slot's boot image (previous kept as $name)"
-  else
-    echo "/KERNEL is now slot $slot's boot image (no backup recorded)"
-  fi
+  echo "boot confirmed good (image $self)"
 }
 
-# Abandoning a trial from userspace has to put the previous kernel back for the same reason the
-# initramfs does (see abandon_trial() in images/initramfs/init): /KERNEL is shared by both slots
-# while /lib/modules/<ver> ships inside a root, so clearing `pending` alone leaves the next boot
-# running the NEW kernel against the OLD root. CFG80211/ATH12K are =m, so that boot has no Wi-Fi
-# and this board has no serial console to say why.
-#
-# Unlike the initramfs this CANNOT reboot for you -- it runs on a live system that is using the
-# root it would pull out -- so it restores the file and says so. Until that reboot happens the
-# running system is unchanged and correct; it is the next boot that needs the restored pair.
-cmd_rollback() {
-  need_root
-  esp_open; state_require
-  if [ -z "$S_PENDING" ]; then
-    echo "nothing on trial (active=$S_ACTIVE)"; return 0
-  fi
-  local was=$S_PENDING bak=$S_BAK kernel_was=$S_KERNEL restore=0
-  # Same one-generation pairing as the initramfs: `bak` stops naming a backup in the very write
-  # that clears `pending`, and `kernel` is re-pointed alongside it, because the two describe one
-  # event. Captured first -- state_write() advances S_* in place.
-  if [ -n "$bak" ] && [ -f "$ESP/$bak" ]; then
-    restore=1; S_BAK=''; S_KERNEL=$S_ACTIVE
-  fi
-  state_write "$S_ACTIVE" '' 0
-  if [ "$restore" = 1 ]; then
-    if cp "$ESP/$bak" "$ESP/KERNEL"; then
-      echo "abandoned the trial of slot $was; active stays $S_ACTIVE"
-      echo "restored the previous kernel ($bak -> KERNEL) -- REBOOT to run it against slot $S_ACTIVE"
-      return 0
+# --- diagnostics --------------------------------------------------------------------------------
+
+status() {
+  local cur sel i dump
+  cur=$(bc this-image 2>/dev/null || true)
+  sel=$(bc selected-image 2>/dev/null || true)
+  echo "booted image: ${cur:-<unidentifiable>}"
+  echo "next boot:    ${sel:-<undetermined>}"
+  echo "(needs /esp/SteamOS/conf mounted and the booted slot's /efi partsets; see docs/phase5.md)"
+  for i in A B; do
+    if dump=$(bc --image "$i" config --get boot-requested-at --get boot-attempts \
+                 --get image-invalid --get boot-count 2>/dev/null); then
+      echo "image $i:"
+      printf '%s\n' "$dump" | sed 's/^/  /'
+    else
+      echo "image $i: (no config on the ESP)"
     fi
-    # The write above already claimed /KERNEL holds $S_ACTIVE's image and it does not. Correct the
-    # record with a second generation rather than leave a field that lies about which /lib/modules
-    # matches. `bak` stays cleared, as in the initramfs: a restore that failed once must not be
-    # retried forever.
-    S_KERNEL=$kernel_was
-    state_write "$S_ACTIVE" '' 0
-    warn "could not restore $bak over $ESP/KERNEL -- the next boot runs slot $S_ACTIVE under the NEW kernel"
-  elif [ -n "$bak" ]; then
-    warn "state names a previous kernel ($bak) but $ESP/$bak is missing -- cannot restore it"
-  fi
-  echo "abandoned the trial of slot $was; active stays $S_ACTIVE"
-}
-
-# --- RAUC bootloader=custom backend ------------------------------------------------------------
-# Contract: get-current prints the boot name of the slot that is RUNNING; get-primary prints the one
-# that will boot NEXT; set-primary marks a slot to be booted next; get-state prints "good" or "bad";
-# set-state records the outcome. RAUC calls these around an install, so set-primary is what starts
-# a trial.
-
-# WHICH SLOT IS RUNNING. RAUC treats this as optional -- its fallback is to parse `root=` out of
-# /proc/cmdline -- and for us that fallback is always WRONG, so implementing it is not optional.
-# Our cmdline carries a static `root=PARTLABEL=novadeck-root-A` that exists only as a last-resort
-# fallback; the initramfs resolves the real slot from the ESP state and overrides it. RAUC never
-# sees that, so without this subcommand it concludes "booted slot a" on every boot, forever.
-#
-# HW-confirmed 2026-07-28, on the update that installed and booted slot b: `rauc status` still said
-# `Booted from: rootfs.0`, and the rauc service logged `unknown command: get-current` at every
-# start. The consequence is not cosmetic -- RAUC picks the install target as the slot it did not
-# boot, so from slot b it would target b, the RUNNING slot. That aborts at RAUC's own
-# already-mounted guard (pre_install_check_slot_mount_status) rather than corrupting anything, but
-# it means no update can ever be installed FROM slot b: the A/B cycle only turns one way.
-#
-# The answer comes from the initramfs handoff -- the same source every other subcommand uses for
-# "what booted" -- and deliberately NOT from the ESP state, which records what SHOULD boot next,
-# not what actually did. Those two disagree for the entire duration of a trial, which is exactly
-# when an install is most likely to be attempted.
-cmd_get_current() {
-  local bs
-  bs=$(booted_slot) || bs=""
-  # Non-zero is the contract's documented signal for "cannot be determined", and it is the honest
-  # answer on a degraded cmdline-fallback boot: images/initramfs/init still writes the handoff
-  # there, but with an empty slot=. Guessing a letter instead would hand RAUC a slot nothing
-  # verified, and RAUC would then treat the OTHER one -- possibly the running root -- as free.
-  [ -n "$bs" ] || die "this system did not boot from a slot -- cannot name the current one"
-  echo "$bs"
-}
-
-cmd_get_primary() {
-  esp_open; state_require
-  if [ -n "$S_PENDING" ] && [ "$S_TRIES" -gt 0 ]; then echo "$S_PENDING"; else echo "$S_ACTIVE"; fi
-}
-
-cmd_set_primary() {
-  need_root
-  local slot=${1:-}
-  [[ $slot =~ ^[ab]$ ]] || die "usage: $PROG set-primary <a|b>"
-  esp_open; state_require
-  if [ "$slot" = "$S_ACTIVE" ]; then
-    state_write "$S_ACTIVE" '' 0
-  else
-    state_write "$S_ACTIVE" "$slot" "$TRIES_DEFAULT"
-  fi
-}
-
-cmd_get_state() {
-  local slot=${1:-}
-  [[ $slot =~ ^[ab]$ ]] || die "usage: $PROG get-state <a|b>"
-  esp_open; state_require
-  # "bad" means RAUC should not consider it bootable. Three ways to earn it: RAUC told us so and we
-  # recorded it in `broken` (an install that started and did not finish), or the slot is on trial
-  # with no tries left (a boot that never confirmed). Anything else we have no evidence against.
-  #
-  # The `broken` arm is what closes the gap this field was added for: without it a slot whose
-  # install died mid-copy answered `good`, because "bad" on a slot that is neither active nor
-  # pending had nowhere to be written down.
-  if broken_has "$slot"; then echo bad
-  elif [ "$slot" = "$S_PENDING" ] && [ "$S_TRIES" = 0 ]; then echo bad
-  else echo good; fi
-}
-
-cmd_set_state() {
-  need_root
-  local slot=${1:-} st=${2:-}
-  [[ $slot =~ ^[ab]$ ]] || die "usage: $PROG set-state <a|b> good|bad"
-  esp_open; state_require
-  # THE EXIT STATUS OF THIS FUNCTION IS PART OF THE RAUC CONTRACT, and the branches below are
-  # written as if/elif rather than `test && action` chains for exactly that reason: a trailing
-  # `[ x = y ] && action` returns 1 whenever the test is false, and RAUC treats a non-zero backend
-  # exit as a failed install. That is not hypothetical -- it cost the first HW `rauc install`
-  # (2026-07-28): RAUC marks the TARGET slot bad before writing it, that slot is by definition
-  # neither active nor pending, both tests were false, and the install aborted at 40% with
-  # "Failed marking slot rootfs.1 as bad" -- a message that describes our exit code, not our state.
-  case "$st" in
-    good)
-      # Clearing `broken` is unconditional and comes FIRST: "good" is a statement about the slot,
-      # not about whether it happens to be on trial. The RAUC post-install hook is what sends this
-      # for a freshly completed install, at which point the slot is neither active nor pending
-      # (the hook disarms while it works), so a pending-only good would clear nothing and the slot
-      # would stay marked broken for the rest of its life.
-      broken_del "$slot"
-      # Not `&& ... || true`: that swallows a state_write failure and reports success to RAUC,
-      # which would then believe a slot was confirmed that the ESP never recorded.
-      if [ "$slot" = "$S_PENDING" ]; then
-        state_write "$slot" '' 0
-      else
-        state_write "$S_ACTIVE" "$S_PENDING" "$S_TRIES"
-      fi ;;
-    bad)
-      if [ "$slot" = "$S_ACTIVE" ]; then
-        # Deliberate refusal, reported as success: RAUC never asks this (it marks the slot it is
-        # about to overwrite, never the booted one), and honouring it would leave nothing to boot.
-        # Nothing is recorded in `broken` either -- a slot we are RUNNING is demonstrably bootable,
-        # and marking it would make get-state contradict the fact that it answered at all.
-        warn "refusing to mark the ACTIVE slot bad -- there would be nothing to boot"
-      elif [ "$slot" = "$S_PENDING" ]; then
-        # Mark it unbootable by zeroing its trials; the next boot rolls back. Also recorded in
-        # `broken`, because tries=0 stops describing this slot the moment a later write moves
-        # `pending` elsewhere -- and then the reason it was abandoned would be gone.
-        broken_add "$slot"
-        state_write "$S_ACTIVE" "$slot" 0
-      else
-        # Neither active nor pending: nothing boots it already, so this changes no boot decision
-        # and is NOT an error -- it is the normal pre-write case for an install target. But it is
-        # no longer a NO-OP: the marking is recorded, so an install that never reaches its
-        # post-install hook leaves a slot that answers `bad` instead of quietly answering `good`.
-        broken_add "$slot"
-        state_write "$S_ACTIVE" "$S_PENDING" "$S_TRIES"
-      fi ;;
-    *) die "state must be 'good' or 'bad'" ;;
-  esac
+  done
 }
 
 usage() {
-  sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'
+  # The header comment IS the usage text, printed to wherever it now ends rather than to a hard
+  # line number: this used to be `sed -n '2,31p'` against a header that has since grown past 31
+  # lines, so `--help` silently stopped halfway through the subcommand list.
+  awk 'NR == 1 { next }                      # shebang
+       /^#/    { sub(/^# ?/, ""); print; next }
+               { exit }' "$0"
   exit 2
 }
 
 case "${1:-}" in
-  status)      shift; cmd_status "$@" ;;
-  try)         shift; cmd_try "$@" ;;
-  mark-good)   shift; cmd_mark_good "$@" ;;
-  rollback)    shift; cmd_rollback "$@" ;;
-  set-kernel)  shift; cmd_set_kernel "$@" ;;
-  get-current) shift; cmd_get_current "$@" ;;
-  get-primary) shift; cmd_get_primary "$@" ;;
-  set-primary) shift; cmd_set_primary "$@" ;;
-  get-state)   shift; cmd_get_state "$@" ;;
-  set-state)   shift; cmd_set_state "$@" ;;
+  get-current) shift; get_current ;;
+  get-primary) shift; get_primary ;;
+  set-primary) shift; set_primary "$@" ;;
+  get-state)   shift; get_state "$@" ;;
+  set-state)   shift; set_state "$@" ;;
+  mark-good)   shift; mark_good "$@" ;;
+  status)      shift; status ;;
   ''|-h|--help|help) usage ;;
   *) die "unknown command: $1 (try --help)" ;;
 esac

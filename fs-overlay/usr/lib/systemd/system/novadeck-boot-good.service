@@ -15,9 +15,32 @@
 # itself good on its first iteration. --require-marker re-tests the marker after the sleep, and
 # novadeck-session's EXIT trap removes it, so "still there" means "the same session stayed up".
 #
+# THE CONFIRMATION IS STEAMOS-STYLE NOW (Phase 5): mark-good runs `steamos-bootconf set-mode
+# booted`, which clears the image's boot-attempts counter (the steamenv stage-2 module bumped it
+# before the kernel booted), so stock steamcl's failsafe and RAUC get-state stop counting this
+# boot as a failure.
+#
+# THE FAILURE PATH DEMOTES, through OnFailure= in [Unit]. If this unit fails -- the marker vanished
+# under the 30s re-check, or the confirmation could not be written -- novadeck-boot-bad.service
+# marks the RUNNING image bad (`set-state self bad` -> set-mode reboot-other + image-invalid=1), so
+# the NEXT boot tries the other slot. That is the OS half of "is this slot OK?"; the bootloader
+# never decides it. (set-mode booted on a later, recovered session re-promotes the image --
+# mark-good clears image-invalid too, since `booted` itself does not.)
+#
+# It is a separate unit rather than an Exec*= line here because systemd has no per-service
+# "run this on failure" verb. The obvious-looking ExecOnFailure= does not exist: systemd logs
+# "Unknown key name" and ignores it, and the demote silently never happens. That is exactly how
+# this shipped once already.
+#
+# RIGHT NOW THIS IS THE ONLY ROLLBACK TRIGGER. The other half of the SteamOS design is the
+# stage-2 boot-attempts counter, which steamcl's failsafe acts on -- and the stage-2 config does
+# not invoke steamenv yet (docs/phase5.md), so nothing increments it. A slot that never reaches
+# this unit at all -- no session, no path unit firing -- is therefore NOT rolled back
+# automatically today. Recovery is the stage-2 board menu, which is why it stays visible.
+#
 # THERE IS DELIBERATELY NO TIMEOUT THAT MARKS GOOD ANYWAY. If the session never comes up, the
-# path unit never fires, pending stays set, and the next boot rolls back. That is the property
-# this whole mechanism exists for; a backstop timer would defeat it.
+# path unit never fires and the image is never confirmed. That is the property this whole
+# mechanism exists for; a backstop timer would defeat it.
 #
 # Known gap: gamescope up with Steam wedged shows a blank compositor and still confirms. Pass 2
 # tightens it -- novadeck-steamos-manager touches a second marker on SteamUI's first D-Bus call.
@@ -25,6 +48,7 @@
 Description=novadeck confirm this A/B trial boot (session came up and stayed up)
 Documentation=file:///usr/bin/novadeck-bootctl
 ConditionPathExists=/run/novadeck/boot
+OnFailure=novadeck-boot-bad.service
 
 [Service]
 Type=oneshot
@@ -37,7 +61,9 @@ Type=oneshot
 # The failure path deliberately still retries: `mark-good --require-marker` exits non-zero when
 # the marker vanished under it, so the unit lands in `failed` (not active), the path re-arms, and
 # the next session that comes up gets its own 30s trial. That is the crash-loop case the sleep
-# exists for -- it must not be spent on the first iteration and then abandoned.
+# exists for -- it must not be spent on the first iteration and then abandoned. Every failed
+# iteration also demotes the image (OnFailure=, above), so the wedge is bounded: the next reboot
+# tries the other slot rather than retrying the broken one indefinitely.
 RemainAfterExit=yes
 ExecStartPre=/usr/bin/sleep 30
 ExecStart=/usr/bin/novadeck-bootctl mark-good --require-marker

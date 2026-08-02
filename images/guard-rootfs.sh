@@ -335,6 +335,8 @@ echo "  7. RAUC update path"
 rauc_ok=1
 for f in usr/bin/rauc etc/rauc/keyring.pem etc/rauc/system.conf \
          usr/bin/steamos-bootconf \
+         usr/lib/systemd/system/novadeck-boot-good.service \
+         usr/lib/systemd/system/novadeck-boot-bad.service \
          usr/lib/novadeck/boot/steamcl.efi usr/lib/novadeck/boot/steamcl-version \
          usr/lib/novadeck/boot/grubaa64.efi usr/lib/novadeck/boot/grub-a.cfg \
          usr/lib/novadeck/boot/grub-b.cfg \

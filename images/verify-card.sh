@@ -29,7 +29,7 @@ TABLE="$ROOT/images/partition-table.txt"
 INITRAMFS="$ROOT/out/initramfs.cpio.gz"
 
 [ -f "$IMG" ] || { echo "no card image: $IMG (run make sdcard)" >&2; exit 1; }
-for t in sgdisk blkid debugfs mdir mtype cpio; do
+for t in sgdisk blkid debugfs mdir mtype mlabel cpio; do
   command -v "$t" >/dev/null 2>&1 || { echo "$t not found — run inside novadeck-build" >&2; exit 1; }
 done
 
@@ -118,14 +118,18 @@ check_slot "$P_VARA" a
 # ----------------------------------------------------------------------------------------------
 echo "  3. ESP (stage 1)"
 espoff=$(( $(start "$P_ESP") * 512 ))
-dd if="$IMG" of="$T/esp.sb" bs=512 skip="$(start "$P_ESP")" count=64 status=none
 need_file() {  # <msdos path> <what>
   mtype -i "$IMG@@$espoff" "$1" >"$T/f" 2>/dev/null && ok "$2 present" || bad "$2 missing"
 }
 # The FAT label. Nothing in the boot chain RESOLVES by it (stage 2 goes by partition index, with a
 # content search for /SteamOS/conf/<slot>.conf as the fallback), which is exactly why it is worth
 # asserting: when it did matter, it drifted from what grub.cfg searched for and nothing failed.
-esp_fslabel=$(blkid -p -o value -s LABEL "$T/esp.sb" 2>/dev/null)
+# mlabel, not blkid: a FAT32 volume label lives in a root-directory entry out in the data area,
+# so probing a short dd of the superblock reports nothing at all.
+# mlabel prints " Volume label is NOVADECK   " -- leading space, and the label space-padded to the
+# full 11 bytes FAT stores. Both have to be stripped or this compares against padding.
+esp_fslabel=$(mlabel -i "$IMG@@$espoff" -s :: 2>/dev/null \
+  | sed -n 's/^[[:space:]]*Volume label is //p' | sed 's/[[:space:]]*$//')
 [ -n "$esp_fslabel" ] && [ "${#esp_fslabel}" -le 11 ] \
   && ok "ESP FAT label '$esp_fslabel' (<= 11 chars)" \
   || bad "ESP FAT label is empty or over the 11-char FAT limit: '$esp_fslabel'"

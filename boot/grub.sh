@@ -47,7 +47,7 @@ for p in "$PATCHES"/*.patch; do
     || { echo "patch FAILED: $(basename "$p")" >&2; exit 1; }
 done
 
-# Patch 0002 adds a module to grub-core/Makefile.core.def, GRUB's module manifest. That file is
+# Patch 0003 adds a module to grub-core/Makefile.core.def, GRUB's module manifest. That file is
 # input to autogen (via gentpl.py), which writes grub-core/Makefile.core.am, which automake INLINES
 # into grub-core/Makefile.in — and the release tarball ships all of those pre-generated, from
 # before our module existed. So the manifest edit does nothing until the chain is re-run:
@@ -59,7 +59,7 @@ done
 echo "[grub] autogen.sh (regenerating the module tables for the novadeck stanza)"
 ( cd "$SRCDIR" && ./autogen.sh )
 grep -q novadeck "$SRCDIR/grub-core/Makefile.in" \
-  || { echo "autogen.sh did not pick up the novadeck module — is patch 0002 applied?" >&2; exit 1; }
+  || { echo "autogen.sh did not pick up the novadeck module — is patch 0003 applied?" >&2; exit 1; }
 
 BUILDDIR="$WORK/build"
 rm -rf "$BUILDDIR"; mkdir -p "$BUILDDIR"
@@ -103,7 +103,7 @@ search_fs_uuid search_label chain reboot halt sleep test true echo read \
 configfile regexp normal minicmd gfxterm efi_gop font all_video novadeck"
 
 echo "[grub] grub-mkimage"
-test -f grub-core/novadeck.mod || { echo "novadeck.mod was not built — is patch 0002 applied?" >&2; exit 1; }
+test -f grub-core/novadeck.mod || { echo "novadeck.mod was not built — is patch 0003 applied?" >&2; exit 1; }
 ./grub-mkimage -d grub-core -O arm64-efi -p /EFI/steamos $MODULES \
   -o "$OUT/grubaa64.efi"
 

@@ -164,6 +164,19 @@ fi
 # console and no keyboard, and stage 1's steamcl-menu flag does not reach stage 2 at all — so a 3s
 # visible menu is the only way back after picking the wrong board.
 
+# --- the console ----------------------------------------------------------------------------------
+# rotation MUST be set before terminal_output brings gfxterm up. Patch 0001 reads it exactly once,
+# in grub_video_fb_create_render_target_from_pointer, when the video driver builds the framebuffer
+# render target — setting it after that point is a silent no-op. 270 is the panel's mounting on
+# every board in the catalog: the display is portrait-native and the device is held landscape, so
+# an unrotated menu paints sideways.
+#
+# The colours are read by the normal module each time it paints the menu, so their placement does
+# not matter the way rotation's does; they are here to keep the whole console block in one place.
+set rotation=270
+set menu_color_normal=cyan/blue
+set menu_color_highlight=white/blue
+
 loadfont \$prefix/fonts/dejavu-mono.pf2
 insmod gfxterm
 insmod efi_gop

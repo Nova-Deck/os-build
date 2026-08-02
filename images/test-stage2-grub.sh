@@ -196,6 +196,23 @@ for slot in A B; do
     && ok "grub-$lc.cfg counts the attempt after terminal_output gfxterm" \
     || bad "grub-$lc.cfg calls novadeck_bootattempts before the terminal is up"
 
+  # Console. rotation is read once, when the video driver builds the framebuffer render target, so
+  # a `set rotation=` that lands AFTER terminal_output parses fine, ships, and does nothing — the
+  # ordering is the whole assertion. The colours have no such constraint.
+  ln_rot=$(grep -n '^set rotation=270$' "$cfg" | cut -d: -f1)
+  [ -n "$ln_rot" ] \
+    && ok "grub-$lc.cfg rotates the framebuffer 270" \
+    || bad "grub-$lc.cfg does not set rotation=270 — patch 0001 is inert without it"
+  [ -n "$ln_rot" ] && [ -n "$ln_term" ] && [ "$ln_rot" -lt "$ln_term" ] \
+    && ok "grub-$lc.cfg sets rotation before terminal_output gfxterm" \
+    || bad "grub-$lc.cfg sets rotation after the terminal is up, where it is a no-op"
+  grep -q '^set menu_color_normal=cyan/blue$' "$cfg" \
+    && ok "grub-$lc.cfg sets menu_color_normal" \
+    || bad "grub-$lc.cfg does not set menu_color_normal"
+  grep -q '^set menu_color_highlight=white/blue$' "$cfg" \
+    && ok "grub-$lc.cfg sets menu_color_highlight" \
+    || bad "grub-$lc.cfg does not set menu_color_highlight"
+
   if command -v grub-script-check >/dev/null 2>&1; then
     grub-script-check "$cfg" 2>"$T/gscerr" \
       && ok "grub-$lc.cfg parses under grub-script-check" \

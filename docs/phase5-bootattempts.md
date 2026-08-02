@@ -6,7 +6,7 @@
 > so the increment can only have come from the bootloader. Unmasking and `mark-good` cleared it
 > again (`boot-count` 1 → 2). Designed the same day after `steamenv_init`
 > was tried on hardware and failed; built the same day. The module is
-> `boot/patches/grub/0001-add-the-novadeck-stage-2-module.patch`, the call site is
+> `boot/patches/grub/0002-add-the-novadeck-stage-2-module.patch`, the call site is
 > `boot/gen-grub-cfg.sh`, and `images/test-stage2-grub.sh` asserts it. `steamenv` is gone from the
 > tree. The question this doc originally left open — whether ABL publishes the ESP as a filesystem
 > handle — is now **answered from steamcl's source**, not deferred to a boot: see "Why the ESP is

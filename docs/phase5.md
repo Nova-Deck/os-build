@@ -65,10 +65,25 @@ somewhere steamcl never looks.
 
 ## Stage 2 — GRUB 2.14 + patches (`boot/grub.sh`, `boot/patches/grub/`)
 
-Source is the **GNU release tarball** from ftp.gnu.org, not a fork and not a git checkout. Two
-patches, both real sources: our `novadeck` module, and the one `grub-core/Makefile.core.def`
-stanza that builds it. `boot/grub.sh` then runs `./autogen.sh`, because the module tables the build
-actually reads are generated from that manifest and the tarball ships them pre-generated.
+Source is the **GNU release tarball** from ftp.gnu.org, not a fork and not a git checkout. Three
+patches, all against real sources: framebuffer rotation, our `novadeck` module, and the one
+`grub-core/Makefile.core.def` stanza that builds it. `boot/grub.sh` then runs `./autogen.sh`,
+because the module tables the build actually reads are generated from that manifest and the
+tarball ships them pre-generated.
+
+Rotation (patch 0001) exists because the panel is mounted rotated: without it the gfxterm menu
+renders sideways. It adds a `rotation` GRUB variable — `set rotation=90|180|270` — read once in
+`grub_video_fb_create_render_target_from_pointer`, so it must be set before `load_video`/`gfxterm`
+comes up. Text render targets are deliberately left unrotated; the rotation happens on the final
+blit to the framebuffer, so rotating them too would double-rotate.
+
+✅ Hardware-validated 2026-08-02: `set rotation=270` in `boot/gen-grub-cfg.sh` puts the board menu
+the right way up on the panel. `images/test-stage2-grub.sh` asserts both that the line is emitted
+and that it lands BEFORE `terminal_output gfxterm` — the ordering is the failure mode worth a test,
+because a `set rotation=` after that point parses, ships, and silently does nothing.
+
+The value is global, not per-board. If a board in the catalog ever mounts its panel differently,
+rotation has to become a `boot/boards.map` column like `dtb` and `bootargs` rather than a constant.
 
 Carrying the generated tables as a patch was tried and rejected: re-running automake at all
 rewrites 23 files and 191 hunks of `grub-core/Makefile.in`, since Ubuntu's automake is not the one
@@ -82,7 +97,7 @@ literals are 2-byte, is a configure argument rather than a `configure.ac` patch:
 preset `TARGET_CFLAGS`.
 
 ✅ Verified offline: `grubaa64.efi` builds as PE32+ ARM64 with `novadeck` embedded, from the
-pristine tarball plus the two patches, in the build container, with no warnings under `-Wall -W`.
+pristine tarball plus the three patches, in the build container, with no warnings under `-Wall -W`.
 
 ### The config (`boot/gen-grub-cfg.sh`)
 

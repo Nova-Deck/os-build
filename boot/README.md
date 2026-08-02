@@ -18,7 +18,7 @@ itself, so it is a menu on first boot and a saved answer afterwards.
 | `steamos-efi.pin` | Pinned source for stage 1: the arm64 fork of Valve's `steamos-efi`. |
 | `steamcl.sh` | Cross-build it → `out/boot/{steamcl.efi, holo-bootconf, steamcl-version, fonts/default.pf2}`. `holo-bootconf` ships on-device as `/usr/bin/steamos-bootconf`. |
 | `grub.pin` | Pinned source for stage 2: the **GNU GRUB 2.14 release tarball** from ftp.gnu.org. |
-| `patches/grub/` | Our delta on it: the `novadeck` boot-attempts module, and the `Makefile.core.def` stanza that builds it. Applied lexically, like `kernel/patches/`. |
+| `patches/grub/` | Our delta on it: framebuffer rotation, the `novadeck` boot-attempts module, and the `Makefile.core.def` stanza that builds it. Applied lexically, like `kernel/patches/`. |
 | `grub.sh` | Cross-build stage 2 → `out/boot/grubaa64.efi` + `fonts/dejavu-mono.pf2`, then generate both configs. |
 | `gen-grub-cfg.sh <A\|B> <out>` | Generate one slot's `grub.cfg`. No toolchain — `images/test-stage2-grub.sh` runs it directly. |
 | `boards.map` | Build-time board catalog: `id⇥name⇥dtb⇥bootargs`. Cross-checked against the runtime device profiles by that test. |

@@ -13,8 +13,15 @@ git_tag:    grub-2.14
 # drift, no bootstrap step. boot/grub.sh goes tarball -> patch -> autogen.sh -> configure -> make.
 #
 # Our delta lives in boot/patches/grub/ and is applied lexically, exactly like kernel/patches/:
-#   0001  grub-core/commands/efi/novadeck.c   the boot-attempts counter module
-#   0002  grub-core/Makefile.core.def         GRUB's module manifest -- the stanza that builds it
+#   0001  grub-core/video/fb/*, include/grub/  framebuffer rotation (`set rotation=90|180|270`)
+#   0002  grub-core/commands/efi/novadeck.c    the boot-attempts counter module
+#   0003  grub-core/Makefile.core.def          GRUB's module manifest -- the stanza that builds it
+#
+# 0001 is a three-commit series by kbader94 <kyle.bader94@gmail.com> (2024-06-17), carried
+# verbatim: it rewrites the fb dirty-region tracking to be 2D, adds a `rotation` enum to
+# grub_video_mode_info driven by the `rotation` GRUB variable, and teaches grub-mkconfig about
+# GRUB_FB_ROTATION. We need it because this device's panel is mounted rotated, so an unrotated
+# gfxterm menu renders sideways. It applies to 2.14 with no fuzz.
 #
 # Only real sources are patched. The module tables the build actually reads (Makefile.core.am and
 # the Makefile.in files) are GENERATED from that manifest, and the tarball ships them pre-generated

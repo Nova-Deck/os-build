@@ -111,9 +111,14 @@ insmod loadenv
 insmod regexp
 
 # --- locate the ESP and this slot's root --------------------------------------------------------
-# \$root is the efi partition steamcl chainloaded us from, e.g. (hd0,gpt$((P_ESP + 1))). Everything
-# else lives on the same disk at a fixed index from images/partition-table.txt.
-regexp -s bootdisk '^\\((.*),gpt[0-9]+\\)\$' "\$root"
+# \$root is the efi partition steamcl chainloaded us from, and it is the BARE device name --
+# hd0,gpt$((P_ESP + 1)), with NO parentheses. That is why every path below writes (\$root)/... :
+# grub_set_prefix_and_root() wraps the device in parens only when it builds \$prefix
+# (kern/main.c: grub_env_set "root" gets the bare device). Matching \(...\) here never fires,
+# which cost one hardware boot: the derivation silently failed, the fallback search ran, and the
+# only symptom was a message and a 3s pause before the menu. The optional parens are kept so this
+# works either way.
+regexp -s bootdisk '^\\(?([^,)]+),gpt[0-9]+\\)?\$' "\$root"
 if [ -n "\$bootdisk" ]; then
   set esp="\$bootdisk,gpt$P_ESP"
   set slotroot="\$bootdisk,gpt$P_ROOT"

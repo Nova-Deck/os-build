@@ -142,6 +142,24 @@ for slot in A B; do
     && ok "grub-$lc.cfg finds the root at gpt$(part_num "rootfs-$lc")" \
     || bad "grub-$lc.cfg root index disagrees with ${TABLE#"$ROOT"/}"
 
+  # THE DEVICE DERIVATION, executed rather than grepped. GRUB's `regexp` compiles with
+  # REG_EXTENDED, so a POSIX ERE engine here (sed -E) is the same matcher the device runs -- which
+  # makes this the one assertion that can catch a pattern that parses, ships, and never matches.
+  # It did: the first version required literal parens around $root, but GRUB sets `root` to the
+  # BARE device name (kern/main.c) and only parenthesises it for $prefix. The config fell through
+  # to its search fallback on every boot, and the sole symptom was a message and a 3s pause.
+  pat=$(sed -n "s/^regexp -s bootdisk '\(.*\)' \"\$root\"\$/\1/p" "$cfg")
+  if [ -z "$pat" ]; then
+    bad "grub-$lc.cfg has no 'regexp -s bootdisk' line"
+  else
+    ok "grub-$lc.cfg derives the boot disk with: $pat"
+    for form in 'hd0,gpt2' '(hd0,gpt2)' 'hd0,gpt10'; do
+      got=$(printf '%s' "$form" | sed -E "s|$pat|\1|")
+      [ "$got" = "hd0" ] && ok "grub-$lc.cfg: \$root='$form' -> bootdisk=hd0" \
+                         || bad "grub-$lc.cfg: \$root='$form' -> '$got', expected 'hd0' (the fallback search would run every boot)"
+    done
+  fi
+
   # the saved board choice. savedefault is called by every entry and is NOT a GRUB builtin, so a
   # config that does not DEFINE it saves nothing and silently prints an error per entry.
   grep -q '^function savedefault {' "$cfg" && ok "grub-$lc.cfg defines savedefault" \

@@ -1,0 +1,27 @@
+# novadeck board catalog for the stage-2 grub.cfg generation (boot/grub.sh).
+#
+# Tab-separated: <device-id>\t<menuentry name>\t<dtb basename>\t<bootargs>
+# One row per board, read verbatim by boot/grub.sh. This is BUILD-TIME data: the
+# DTB and the SoC bootargs only exist to generate grub.cfg menuentries, so they
+# live here in the project boot folder, NOT in the runtime device profiles
+# (fs-overlay/usr/lib/novadeck/devices/*.conf, which carry no boot data).
+#
+# <device-id> and <name> mirror NOVADECK_DEVICE_ID / NOVADECK_DEVICE_NAME in the
+# runtime profiles (the menuentry id/title must match the identity the OS
+# reports); images/test-stage2-grub.sh cross-checks the two stay in sync. Every
+# <dtb> must exist under kernel/dts/qcom/ and every board DTB must be covered
+# here or by the filename-derived top-dpad entry.
+ayaneo-pocket-ace	AYANEO Pocket ACE	qcs8550-ayaneo-pocketace	allow_mismatched_32bit_el0 fw_devlink.strict=1 pcie_ports=compat irqaffinity=0-2 usbcore.interrupt_interval_override=045e:028e:2
+ayaneo-pocket-dmg	AYANEO Pocket DMG	qcs8550-ayaneo-pocketdmg	allow_mismatched_32bit_el0 fw_devlink.strict=1 pcie_ports=compat irqaffinity=0-2 usbcore.interrupt_interval_override=045e:028e:2
+ayaneo-pocket-ds	AYANEO Pocket DS	qcs8550-ayaneo-pocketds	allow_mismatched_32bit_el0 fw_devlink.strict=1 pcie_ports=compat irqaffinity=0-2 usbcore.interrupt_interval_override=045e:028e:2
+ayaneo-pocket-evo	AYANEO Pocket EVO	qcs8550-ayaneo-pocketevo	allow_mismatched_32bit_el0 fw_devlink.strict=1 pcie_ports=compat irqaffinity=0-2 usbcore.interrupt_interval_override=045e:028e:2
+ayaneo-pocket-s1k	AYANEO Pocket S 1K	qcs8550-ayaneo-pockets1k	allow_mismatched_32bit_el0 fw_devlink.strict=1 pcie_ports=compat irqaffinity=0-2 usbcore.interrupt_interval_override=045e:028e:2
+ayaneo-pocket-s2	AYANEO Pocket S2	sm8650-ayaneo-ps2	irqaffinity=0-1 usbcore.interrupt_interval_override=045e:028e:2
+ayaneo-pocket-s2k	AYANEO Pocket S 2K	qcs8550-ayaneo-pockets2k	allow_mismatched_32bit_el0 fw_devlink.strict=1 pcie_ports=compat irqaffinity=0-2 usbcore.interrupt_interval_override=045e:028e:2
+ayn-odin-2	AYN Odin 2	qcs8550-ayn-odin2	allow_mismatched_32bit_el0 fw_devlink.strict=1 pcie_ports=compat irqaffinity=0-2
+ayn-odin-2-mini	AYN Odin 2 Mini	qcs8550-ayn-odin2mini	allow_mismatched_32bit_el0 fw_devlink.strict=1 pcie_ports=compat irqaffinity=0-2
+ayn-odin-2-portal	AYN Odin 2 Portal	qcs8550-ayn-odin2portal	allow_mismatched_32bit_el0 fw_devlink.strict=1 pcie_ports=compat irqaffinity=0-2
+ayn-thor	AYN Thor	qcs8550-ayn-thor	allow_mismatched_32bit_el0 fw_devlink.strict=1 pcie_ports=compat irqaffinity=0-2
+konkr-pocket-fit	KONKR Pocket FIT	sm8650-konkr-pf	irqaffinity=0-1 usbcore.interrupt_interval_override=045e:028e:2
+retroid-pocket-6	Retroid Pocket 6	qcs8550-retroidpocket-rp6	allow_mismatched_32bit_el0 fw_devlink.strict=1 pcie_ports=compat irqaffinity=0-2
+retroid-pocket-nova	Retroid Pocket Nova	qcs8550-retroidpocket-rpnova	allow_mismatched_32bit_el0 fw_devlink.strict=1 pcie_ports=compat irqaffinity=0-2

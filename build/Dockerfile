@@ -46,10 +46,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # /usr/lib/pkgconfig/gnu-efi.pc) rather than a multiarch dir — the fork's efi_cpu AC_SUBST maps
 # target_cpu arm64 -> aarch64 to find it.
 #
-# GRUB is built from the GNU 2.14 RELEASE tarball, which is already bootstrapped (it ships
-# configure, grub-core/Makefile.core.am and a vendored gnulib), so there is no autoreconf and no
-# gnulib checkout on that side — see boot/grub.sh. What it does need is gawk: grub-core's
-# genmoddep.awk uses asorti(), which mawk does not implement, and Ubuntu's default awk is mawk.
+# GRUB is built from the GNU 2.14 RELEASE tarball, which vendors gnulib — so there is no
+# ./bootstrap and no gnulib checkout to pin. It does still need ./autogen.sh, because our patch
+# adds a module to grub-core/Makefile.core.def and the tables generated from that manifest ship
+# pre-generated: hence autogen (the AutoGen tool, which gentpl.py drives), autoconf-archive and
+# autopoint on top of the autotools above. It also needs gawk: grub-core's genmoddep.awk uses
+# asorti(), which mawk does not implement, and Ubuntu's default awk is mawk.
 #
 # grub-common carries the host-side tools both stages use: grub-mkfont (steamcl's font and ours),
 # grub-mkimage, grub-editenv (seeding the stage-2 env block) and grub-script-check (which
@@ -58,6 +60,7 @@ RUN dpkg --add-architecture arm64 && apt-get update && apt-get install -y --no-i
       gnu-efi:arm64 \
       libc6-dev-arm64-cross \
       autoconf automake libtool pkg-config gettext \
+      autogen autoconf-archive autopoint \
       gawk \
       fontconfig fonts-dejavu-core libfreetype-dev \
       grub-common \

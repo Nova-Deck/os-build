@@ -1,0 +1,2035 @@
+Add Valve's steamenv stage-2 GRUB module.
+
+Verbatim copy of grub-core/commands/efi/steamenv.c from SteamOS's
+steamos-0001-SteamOS-stage-II-bootloader patch (holo's grub PKGBUILD).
+
+It provides two commands:
+
+  steamenv_init  reads the EFI command line stage 1 handed us, mounts the
+                 partition this binary was chainloaded from, resolves the image
+                 name by matching that partition's uuid against
+                 SteamOS/partsets/* (all/self/other/shared are skipped, so the
+                 files that name it are A and B), reads the ESP uuid from
+                 partsets/all, opens SteamOS/conf/<image>.conf on the ESP,
+                 INCREMENTS boot-attempts and saves. It then overwrites the
+                 grub `timeout`/`timeout_style` variables and scores GOP video
+                 modes.
+  steamenv_boot  wraps `linux`, appending steamos.efi=PARTUUID=<uuid> of the
+                 partition it was loaded from.
+
+Note that the boot-attempts counter is bumped by steamenv_INIT, not by
+steamenv_boot -- and that steamenv_init's unconditional timeout override is why
+novadeck's stage-2 grub.cfg does not invoke either command yet. See
+docs/phase5.md; the module is built in and inert until that lands.
+
+diff -urN a/grub-core/commands/efi/steamenv.c b/grub-core/commands/efi/steamenv.c
+--- a/grub-core/commands/efi/steamenv.c
++++ b/grub-core/commands/efi/steamenv.c
+@@ -0,0 +1,2007 @@
++/*
++ *  steamenv.mod  --  GRand Unified Bootloader SteamOS 3 boot module
++ *
++ *  Copyright © 2018-2025  Collabora Ltd.
++ *  Copyright © 2018-2025  Valve Corporation
++ *
++ *  This file is NOT part of GRUB, but is distributed under the same terms.
++ *
++ *  steamenv.mod is free software: you can redistribute it and/or modify
++ *  it under the terms of the GNU General Public License as published by
++ *  the Free Software Foundation, either version 3 of the License, or
++ *  (at your option) any later version.
++ *
++ *  steamenv.mod is distributed in the hope that it will be useful,
++ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
++ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ *  GNU General Public License for more details.
++ *
++ *  You should have received a copy of the GNU General Public License
++ *  along with steamenv.mod.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++#include <grub/types.h>
++#include <grub/mm.h>
++#include <grub/env.h>
++#include <grub/misc.h>
++#include <grub/efi/api.h>
++#include <grub/efi/edid.h>
++#include <grub/efi/pci.h>
++#include <grub/efi/efi.h>
++#include <grub/efi/disk.h>
++#include <grub/charset.h>
++#include <grub/command.h>
++#include <grub/kernel.h>
++#include <grub/gpt_partition.h>
++#include <grub/parser.h>
++#include <grub/reader.h>
++#include <grub/normal.h>
++#include <grub/video.h>
++
++GRUB_MOD_LICENSE ("GPLv3+");
++
++#define MIN(a, b) \
++  ({ typeof (a) _a = (a); \
++     typeof (b) _b = (b); \
++     _a < _b ? _a : _b; })
++
++// Location of boot config/state variables
++#define BCP "\\SteamOS\\bootconf"
++#define NEWCONFDIR   L"\\SteamOS\\conf"
++#define OLDCONFPATH  L"\\SteamOS\\bootconf"
++#define PARTSET_DIR  L"\\SteamOS\\partsets"
++#define CONF_EXT     L".conf"
++
++#define VERBOSE_BOOT_ONCE 0xff
++
++#ifdef DEBUG_TO_KERNEL_CMDLINE
++// HACKY DEBUG MECHANISM
++// some vars to support a debug output accumulator so we can get
++// some debug trace info even when console output is suppressed:
++// messages are appended to the kernel command line
++static char sedbg[4096] = { 0 };
++static int  seoff = 0;
++#define _DBG(fmt, ...) \
++ ({ seoff += grub_snprintf (&sedbg[seoff], sizeof(sedbg) - seoff - 1, fmt "-", ##__VA_ARGS__); sedbg[sizeof(sedbg) - 1] = (char)0; })
++#else
++#define _DBG(fmt, ...)
++#endif
++
++// command line parameters which we expect/understand from the stage 1
++// bootloader. handled in:
++// efi_make_image_arglist / efi_parse_image_arglist / efi_xfer_image_arglist
++#define CMD_UPDATE    "update=1"
++#define CMD_VERBOSE   "verbose"
++#define CMD_MENU      "bootmenu"
++#define CMD_RESET     "factory-reset"
++
++// kernel command prefixes of interest to us:
++#define CMD_PREFIX    "steamos-"
++#define PLY_PREFIX    "plymouth."
++#define SPLASH_PREFIX "splash="
++#define LOGLVL_PREFIX "loglevel="
++#define FBCON_PREFIX  "fbcon=vc"
++
++// default noisy/quiet settings if they're unconfigured in the config:
++#define DEFAULT_QUIET                                   \
++    "loglevel=3 quiet splash "                          \
++    "plymouth.ignore-serial-consoles "                  \
++    "fbcon=vc:4-6"
++#define DEFAULT_NOISY "loglevel=5 splash=verbose fbcon=nodefer " \
++    "sysrq_always_enabled"
++
++static int mode_grub_menu = 0;
++static int mode_os_update = 0;
++static int mode_verbose = 0;
++
++// Passed by EFI variable ChainLoaderEntryFlags to us.
++// This overrides anything found in NEWCONFDIR or OLDCONFPATH
++#define ENTRY_FLAG_INVALID    1 << 0
++#define ENTRY_FLAG_BOOT_OTHER 1 << 1
++#define ENTRY_FLAG_UPDATE     1 << 2
++
++#define MAXUINTN ((grub_efi_uintn_t)~0)
++#define MAXINTN  (MAXUINTN >> 1)
++
++// ============================================================================
++// These structs would go in the grub-wide header files if we were upstreaming
++// this module to grub proper - however maintenance is easier if we keep the
++// entire module self contained:
++#ifndef GRUB_EFI_END_OF_FILE
++#define GRUB_EFI_END_OF_FILE GRUB_EFI_ERROR_CODE (27)
++#endif
++
++#define EFI_FILE_INFO_ID \
++  {                                \
++    (grub_efi_uint32_t)0x09576e92, \
++    (grub_efi_uint16_t)0x6d3f,     \
++    (grub_efi_uint16_t)0x11d2,     \
++      {                            \
++        (grub_efi_uint8_t)0x8e,    \
++        (grub_efi_uint8_t)0x39,    \
++        (grub_efi_uint8_t)0x00,    \
++        (grub_efi_uint8_t)0xa0,    \
++        (grub_efi_uint8_t)0xc9,    \
++        (grub_efi_uint8_t)0x69,    \
++        (grub_efi_uint8_t)0x72,    \
++        (grub_efi_uint8_t)0x3b     \
++      }                            \
++  }
++
++// File open modes
++#define EFI_FILE_MODE_READ      0x0000000000000001
++#define EFI_FILE_MODE_WRITE     0x0000000000000002
++#define EFI_FILE_MODE_CREATE    0x8000000000000000
++// File Attribute Bits
++#define EFI_FILE_READ_ONLY   0x0000000000000001
++#define EFI_FILE_HIDDEN      0x0000000000000002
++#define EFI_FILE_SYSTEM      0x0000000000000004
++#define EFI_FILE_RESERVED    0x0000000000000008
++#define EFI_FILE_DIRECTORY   0x0000000000000010
++#define EFI_FILE_ARCHIVE     0x0000000000000020
++#define EFI_FILE_VALID_ATTR  0x0000000000000037
++
++typedef struct efi_file_info efi_file_info_t;
++
++struct efi_file_info
++{
++  grub_efi_uint64_t size;
++  grub_efi_uint64_t file_size;
++  grub_efi_uint64_t physical_size;
++  grub_efi_time_t   create_time;
++  grub_efi_time_t   last_access_time;
++  grub_efi_time_t   modification_time;
++  grub_efi_uint64_t attribute;
++  grub_efi_char16_t file_name[];
++} GRUB_PACKED;
++
++// Max vfat fs is 255 UCS-2 (2-byte) chars + L'\0' = 512 bytes
++// UEFI doesn't allocate space for this in the struct but has
++// a zero length wchar array at the end of the struct and leaves
++// the user to allocate as much dangling space as they need.
++#define EFI_FILE_INFO_SAFE_SIZE (sizeof(efi_file_info_t) + 512)
++
++typedef struct efi_file_io_token efi_file_io_token_t;
++
++struct efi_file_io_token
++{
++  grub_efi_event_t event;
++  grub_efi_status_t status;
++  grub_efi_uintn_t buffer_size;
++  void *buffer;
++} GRUB_PACKED;
++
++typedef struct efi_file_protocol efi_file_protocol_t;
++
++struct efi_file_protocol
++{
++  grub_efi_uint64_t revision;
++  grub_efi_status_t (__grub_efi_api *open) (efi_file_protocol_t *this,
++                                            efi_file_protocol_t **new_handle,
++                                            const grub_efi_char16_t *file_name,
++                                            grub_efi_uint64_t open_mode,
++                                            grub_efi_uint64_t attributes);
++  grub_efi_status_t (__grub_efi_api *close) (efi_file_protocol_t *this);
++  grub_efi_status_t (__grub_efi_api *delete) (efi_file_protocol_t *this);
++  grub_efi_status_t (__grub_efi_api *read) (efi_file_protocol_t * this,
++                                            grub_efi_uintn_t *buffer_size,
++                                            void *buffer);
++  grub_efi_status_t (__grub_efi_api *write) (efi_file_protocol_t *this,
++                                             grub_efi_uintn_t *buffer_size,
++                                             void *buffer);
++  grub_efi_status_t (__grub_efi_api *get_position) (efi_file_protocol_t *this,
++                                                    grub_efi_uint64_t *position);
++  grub_efi_status_t (__grub_efi_api *set_position) (efi_file_protocol_t *this,
++                                                    grub_efi_uint64_t position);
++  grub_efi_status_t (__grub_efi_api *get_info) (efi_file_protocol_t *this,
++                                                grub_guid_t *information_type,
++                                                grub_efi_uintn_t *buffer_size,
++                                                void *buffer);
++  grub_efi_status_t (__grub_efi_api *set_info) (efi_file_protocol_t *this,
++                                                grub_guid_t *information_type,
++                                                grub_efi_uintn_t buffer_size,
++                                                void *buffer);
++  grub_efi_status_t (__grub_efi_api *flush) (efi_file_protocol_t *this);
++
++  grub_efi_status_t (__grub_efi_api *openx) (efi_file_protocol_t *this,
++                                             efi_file_protocol_t **new_handle,
++                                             grub_efi_char16_t *file_name,
++                                             grub_efi_uint64_t open_mode,
++                                             grub_efi_uint64_t attributes,
++                                             efi_file_io_token_t *token);
++  grub_efi_status_t (__grub_efi_api *readx) (efi_file_protocol_t *this,
++                                             efi_file_io_token_t *token);
++  grub_efi_status_t (__grub_efi_api *writex) (efi_file_protocol_t *this,
++                                              efi_file_io_token_t *token);
++  grub_efi_status_t (__grub_efi_api *flushx) (efi_file_protocol_t *this,
++                                              efi_file_io_token_t *token );
++} GRUB_PACKED;
++
++typedef struct efi_simple_file_system_protocol
++  efi_simple_file_system_protocol_t;
++
++struct efi_simple_file_system_protocol
++{
++  grub_uint64_t revision;
++  grub_efi_status_t (__grub_efi_api *open_volume)
++    (efi_simple_file_system_protocol_t *this,
++     efi_file_protocol_t **t);
++} GRUB_PACKED;
++
++// 32 digit chars, 4 '-' separators, 1 trailing NUL
++#define GUID_STRLEN 37
++#define GUID_STRFMT "%08x-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x"
++#define GUID_FMTARG(g) \
++    (g)->data1, \
++    (g)->data2, \
++    (g)->data3, \
++    (g)->data4[0], (g)->data4[1], \
++    (g)->data4[2], (g)->data4[3], (g)->data4[4], \
++    (g)->data4[5], (g)->data4[6], (g)->data4[7]
++
++#define TZ_LOCAL ((grub_efi_uint16_t) 0x07ff)
++
++static int
++cmp_guids (grub_guid_t *a, grub_guid_t *b)
++{
++  return grub_memcmp (a, b, sizeof(grub_guid_t));
++}
++
++static void *
++get_handle_protocol (grub_efi_handle_t handle, grub_guid_t *id)
++{
++  return grub_efi_open_protocol (handle, id,
++                                 GRUB_EFI_OPEN_PROTOCOL_BY_HANDLE_PROTOCOL);
++}
++
++static void *
++get_protocol_handles (grub_guid_t *proto_guid, grub_efi_uintn_t *count)
++{
++  return grub_efi_locate_handle( GRUB_EFI_BY_PROTOCOL, proto_guid, NULL, count );
++}
++
++#define GRUB_EFI_CHAINLOADER_VARIABLE_GUID \
++  { 0x399ABB9B, 0x4BEE, 0x4A18, { 0xAB, 0x5B, 0x45, 0xC6, 0xE0, 0xE8, 0xC7, 0x16 }}
++
++#define NULL_GUID { 0x0, 0x0, 0x0, { 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0 } }
++#define SIG_TYPE_MBR  0x01
++#define SIG_TYPE_GUID 0x02
++// =========================================================================
++// structs used for reading the NEWCONFDIR / OLDCONFPATH data:
++typedef enum
++{
++  cfg_string,
++  cfg_bool,
++  cfg_uint,
++  cfg_path,
++  cfg_stamp,
++  cfg_end,
++} cfg_entry_type;
++
++typedef struct cfg_entry cfg_entry_t;
++
++struct cfg_entry
++{
++  cfg_entry_type type;
++  const char *name;
++  struct
++  {
++    struct { char *bytes; grub_efi_uintn_t size; } string;
++    union  { grub_efi_uintn_t u; grub_efi_intn_t i; } number;
++  } value;
++} GRUB_PACKED;
++
++static cfg_entry_t bootspec[] =
++  { { .type = cfg_string, .name = "title"               },
++    { .type = cfg_stamp , .name = "boot-requested-at"   },
++    { .type = cfg_bool  , .name = "boot-other"          },
++    { .type = cfg_bool  , .name = "boot-other-disabled" },
++    { .type = cfg_uint  , .name = "boot-attempts"       },
++    { .type = cfg_uint  , .name = "boot-count"          },
++    { .type = cfg_stamp , .name = "boot-time"           },
++    { .type = cfg_bool  , .name = "image-invalid"       },
++    { .type = cfg_uint  , .name = "verbose"             },
++    { .type = cfg_bool  , .name = "update"              },
++    { .type = cfg_bool  , .name = "update-disabled"     },
++    { .type = cfg_stamp , .name = "update-window-start" },
++    { .type = cfg_stamp , .name = "update-window-end"   },
++    { .type = cfg_path  , .name = "loader"              },
++    { .type = cfg_string, .name = "partitions"          },
++    { .type = cfg_string, .name = "comment"             },
++    { .type = cfg_end } };
++
++// ============================================================================
++// UTC timestamps. EFI makes this hard. I have Opinions™ on this.
++static grub_efi_uint8_t
++max_month_day (grub_efi_time_t *time)
++{
++  grub_efi_uint16_t y;
++
++  switch (time->month)
++    {
++    case 1:  /* jan */
++    case 3:  /* mar */
++    case 5:  /* may */
++    case 7:  /* jul */
++    case 8:  /* aug */
++    case 10: /* oct */
++    case 12: /* dec */
++      return 31;
++
++    case 4:  /* apr */
++    case 6:  /* jun */
++    case 9:  /* sep */
++    case 11: /* nov */
++      return 30;
++
++    case 2:  /* feb */
++      y = time->year;
++      // leap years divisible by 4 but centuries must also be div by 400:
++      //       not-div-100  not-div-4             not-div-400
++      return ( (y % 100) ? ((y % 4) ? 28 : 29) : ((y % 400) ? 28 : 29) );
++
++    default:
++      return 0;
++    }
++}
++
++static inline void
++incr_month (grub_efi_time_t *time)
++{
++  if (time->month == 12)
++    {
++      time->month = 1;
++      time->year++;
++      return;
++    }
++
++  time->month++;
++}
++
++static inline void
++incr_day (grub_efi_time_t *time)
++{
++  if (time->day == max_month_day(time))
++    {
++      time->day = 1;
++      incr_month (time);
++      return;
++    }
++
++  time->day++;
++}
++
++static inline void
++incr_hour (grub_efi_time_t *time)
++{
++  if (time->hour == 23)
++    {
++      time->hour = 0;
++      incr_day (time);
++      return;
++    }
++
++  time->hour++;
++}
++
++static inline void
++incr_minute (grub_efi_time_t *time)
++{
++  if (time->minute == 59)
++    {
++      time->minute = 0;
++      incr_hour (time);
++      return;
++    }
++
++  time->minute++;
++}
++
++static inline void
++decr_month (grub_efi_time_t *time)
++{
++  if (time->month == 1)
++    {
++      time->month = 12;
++      time->year--;
++      return;
++    }
++
++  time->month--;
++}
++
++static inline void
++decr_day (grub_efi_time_t *time)
++{
++  if (time->day == 1)
++    {
++      decr_month (time);
++      time->day = max_month_day (time);
++      return;
++    }
++
++  time->day--;
++}
++
++static inline void
++decr_hour (grub_efi_time_t *time)
++{
++  if (time->hour == 0)
++    {
++      time->hour = 23;
++      decr_day (time);
++      return;
++    }
++
++  time->hour--;
++}
++
++static inline void
++decr_minute (grub_efi_time_t *time)
++{
++  if (time->minute == 0)
++    {
++      time->minute = 59;
++      decr_hour (time);
++      return;
++    }
++
++  time->minute--;
++}
++
++// utc = now + now.zone
++// now.zoneis ± 24 hours (1440 minutes)
++static void
++efi_time_to_utc (grub_efi_time_t *time)
++{
++  if (time->time_zone == TZ_LOCAL)
++    return;
++
++  if (time->time_zone > 0)
++    for (; time->time_zone; time->time_zone--)
++      incr_minute (time);
++  else if (time->time_zone < 0)
++    for (; time->time_zone; time->time_zone++)
++      decr_minute (time);
++}
++
++__attribute__ ((unused))
++static grub_efi_uint64_t
++utc_timestamp (void)
++{
++  grub_efi_time_t now = { 0 };
++  grub_efi_status_t res;
++
++  res = grub_efi_system_table->runtime_services->get_time(&now, NULL);
++
++  if (res != GRUB_EFI_SUCCESS)
++    return 0;
++
++  efi_time_to_utc (&now);
++
++  return ( now.second                 +
++           (now.minute * 100)         +
++           (now.hour   * 10000)       +
++           (now.day    * 1000000)     +
++           (now.month  * 100000000)   +
++           (now.year   * 10000000000) );
++}
++
++// ============================================================================
++// memory management
++static void *
++efi_alloc (grub_efi_uintn_t size)
++{
++  void *mem = NULL;
++  grub_efi_status_t res;
++
++  res = grub_efi_system_table->boot_services->allocate_pool(GRUB_EFI_BOOT_SERVICES_DATA,
++                                                            size, &mem);
++
++  if (res != GRUB_EFI_SUCCESS)
++    return NULL;
++
++  grub_efi_system_table->boot_services->set_mem(mem, size, 0);
++
++  return mem;
++}
++
++static void
++efi_free (void *mem)
++{
++  if (mem)
++    grub_efi_system_table->boot_services->free_pool(mem);
++}
++// ============================================================================
++// wide char/string utilities
++static grub_efi_uintn_t
++strlen_w (const grub_efi_char16_t *str)
++{
++  grub_efi_uintn_t len = 0;
++
++  while( str && str[len] )
++    len++;
++
++  return len;
++}
++
++static inline const grub_efi_char16_t *
++strstr_w (const grub_efi_char16_t *haystack, const grub_efi_char16_t *needle)
++{
++  grub_efi_uintn_t hlen = 0;
++  grub_efi_uintn_t nlen = 0;
++  grub_efi_uintn_t nbytes = 0;
++
++  if( !haystack )
++    return NULL;
++
++  if( !needle )
++    return NULL;
++
++  if( *needle == L'\0' )
++    return (grub_efi_char16_t *)haystack;
++
++  hlen = strlen_w( haystack );
++  nlen = strlen_w( needle );
++  nbytes = nlen * sizeof(grub_efi_char16_t);
++
++  if( hlen < nlen )
++    return NULL;
++
++  for( grub_efi_uintn_t c = 0; c <= hlen - nlen; c++ )
++    if( haystack[c] == needle[0] &&
++        grub_memcmp( haystack + c, needle, nbytes ) == 0 )
++      return haystack + c;
++
++  return NULL;
++}
++
++// string utilities
++static int
++str_has_prefix (const char *haystack, const char *prefix)
++{
++  return (grub_strncmp (haystack, prefix, grub_strlen (prefix)) == 0);
++}
++
++// ============================================================================
++// filesystem & file io
++static efi_file_protocol_t *
++efi_mount (efi_simple_file_system_protocol_t *fs)
++{
++  efi_file_protocol_t *root = NULL;
++  grub_efi_status_t res;
++
++  res = fs->open_volume(fs, &root);
++  if (res != GRUB_EFI_SUCCESS)
++    return NULL;
++
++  return root;
++}
++
++static grub_guid_t device_path_partition_uuid (grub_efi_device_path_t *dp)
++{
++  grub_guid_t none = NULL_GUID;
++
++  if( !dp )
++    return none;
++
++  while( dp && !GRUB_EFI_END_ENTIRE_DEVICE_PATH( dp ) )
++    {
++      if ( GRUB_EFI_DEVICE_PATH_TYPE( dp ) == GRUB_EFI_MEDIA_DEVICE_PATH_TYPE &&
++           GRUB_EFI_DEVICE_PATH_SUBTYPE( dp ) ==
++           GRUB_EFI_HARD_DRIVE_DEVICE_PATH_SUBTYPE )
++        {
++          grub_guid_t *guid;
++          grub_efi_hard_drive_device_path_t *hd =
++            (grub_efi_hard_drive_device_path_t *)dp;
++
++          if( hd->signature_type != SIG_TYPE_GUID )
++            break;
++
++          guid = (grub_guid_t *)&hd->partition_signature[0];
++
++          return *guid;
++        }
++
++      dp = GRUB_EFI_NEXT_DEVICE_PATH( dp );
++    }
++
++  return none;
++}
++
++static void
++get_root_partuuid (grub_guid_t *guid)
++{
++  if( !guid )
++    return;
++
++  grub_guid_t dp_guid = GRUB_EFI_DEVICE_PATH_GUID;
++  grub_efi_loaded_image_t *image =
++    grub_efi_get_loaded_image( grub_efi_image_handle );
++  grub_efi_device_path_t *dp =
++    get_handle_protocol( image->device_handle, &dp_guid );
++
++  *guid = device_path_partition_uuid( dp );
++}
++
++// get an efi file handle for the root of the filesystem on which
++// grub's EFI binary (ie this program) resides:
++static efi_file_protocol_t *efi_mount_current_root (grub_guid_t *guid)
++{
++  grub_efi_loaded_image_t *image;
++  grub_guid_t fs_guid = GRUB_EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID;
++  efi_simple_file_system_protocol_t *fs = NULL;
++
++  image = grub_efi_get_loaded_image( grub_efi_image_handle );
++
++  if( !image )
++    return NULL;
++
++  fs = get_handle_protocol( image->device_handle, &fs_guid );
++
++  if( !fs )
++    return NULL;
++
++  if( guid )
++    get_root_partuuid( guid );
++
++  return efi_mount( fs );
++}
++
++// file level ops:
++
++static void
++efi_close (efi_file_protocol_t *fh)
++{
++  if (fh)
++    fh->close(fh);
++}
++
++static efi_file_protocol_t *
++efi_open (efi_file_protocol_t *dir,
++          const grub_efi_char16_t *path,
++          grub_efi_uint64_t mode,
++          grub_efi_uint64_t attr)
++{
++  grub_efi_status_t res;
++  efi_file_protocol_t *fh = NULL;
++
++  if (!mode)
++    {
++      mode = EFI_FILE_MODE_READ;
++    }
++  else
++    {
++      if (mode & EFI_FILE_MODE_CREATE)
++        mode |= EFI_FILE_MODE_WRITE;
++
++      if (mode & EFI_FILE_MODE_WRITE)
++        mode |= EFI_FILE_MODE_READ;
++    }
++
++  switch (mode)
++    {
++    case EFI_FILE_MODE_CREATE|EFI_FILE_MODE_WRITE|EFI_FILE_MODE_READ:
++    case EFI_FILE_MODE_WRITE|EFI_FILE_MODE_READ:
++    case EFI_FILE_MODE_READ:
++      break;
++    default:
++      return NULL;
++    }
++
++  res = dir->open(dir, &fh, path, mode, attr);
++  if (res != GRUB_EFI_SUCCESS)
++    return NULL;
++
++  return fh;
++}
++
++static efi_file_info_t *
++efi_readdir_alloc_buffer(grub_efi_uintn_t *size)
++{
++  efi_file_info_t *file = efi_alloc( EFI_FILE_INFO_SAFE_SIZE );
++
++  if( file )
++    {
++      if( size )
++        *size = EFI_FILE_INFO_SAFE_SIZE;
++      return file;
++    }
++
++  if( size )
++    *size = 0;
++
++  return NULL;
++}
++
++static efi_file_info_t *
++efi_stat_fh (efi_file_protocol_t *fh)
++{
++  grub_efi_uintn_t bufsize = 0;
++  grub_guid_t info_guid = EFI_FILE_INFO_ID;
++  efi_file_info_t *info = NULL;
++  grub_efi_status_t res;
++
++  if (!fh)
++    return NULL;
++
++  info = efi_readdir_alloc_buffer (&bufsize);
++
++  if (!info)
++    return NULL;
++
++  res = fh->get_info(fh, &info_guid, &bufsize, info);
++
++  if (res != GRUB_EFI_SUCCESS)
++    {
++      efi_free (info);
++      return NULL;
++    }
++
++  return info;
++}
++
++static grub_efi_status_t
++efi_set_stat_fh (efi_file_protocol_t *fh,
++                 efi_file_info_t *info,
++                 grub_efi_uintn_t bsize)
++{
++  grub_guid_t info_guid = EFI_FILE_INFO_ID;
++
++  if (bsize == 0)
++    bsize = EFI_FILE_INFO_SAFE_SIZE;
++
++  return fh->set_info(fh, &info_guid, bsize, info);
++}
++
++static grub_efi_uintn_t
++efi_write (efi_file_protocol_t *fh, const char *buf, grub_efi_uintn_t bytes)
++{
++  grub_efi_uintn_t written = bytes;
++  grub_efi_status_t res = fh->write(fh, &written, (char *)buf);
++
++  switch (res)
++    {
++    case GRUB_EFI_SUCCESS:
++    case GRUB_EFI_VOLUME_FULL:
++      return written;
++    default:
++      return 0;
++    }
++}
++
++static grub_efi_intn_t
++efi_seek (efi_file_protocol_t *fh, grub_efi_intn_t pos)
++{
++  grub_efi_status_t res = GRUB_ERR_NONE;
++  grub_efi_uint64_t rv;
++
++  res = fh->set_position( fh, (grub_efi_uint64_t)pos );
++  if( res != GRUB_EFI_SUCCESS )
++    return -1;
++
++  res = fh->get_position( fh, &rv );
++  if( res != GRUB_EFI_SUCCESS )
++    return -1;
++
++  return (grub_efi_intn_t)rv;
++}
++
++static grub_efi_status_t
++efi_file_to_mem (efi_file_protocol_t *fh,
++                 char **buf,
++                 grub_efi_uintn_t *size)
++{
++  grub_efi_status_t res = GRUB_EFI_SUCCESS;
++  efi_file_info_t *finfo;
++  grub_efi_uintn_t alloc;
++  char *data;
++
++  *buf = NULL;
++  *size = 0;
++
++  finfo = efi_stat_fh( fh );
++  if( !finfo )
++    return GRUB_EFI_NOT_FOUND;
++
++  alloc = finfo->file_size;
++  efi_free ( finfo );
++  finfo = NULL;
++  data = efi_alloc( alloc + 1 );
++
++  if( !data )
++    {
++      res = GRUB_EFI_OUT_OF_RESOURCES;
++      goto cleanup;
++    }
++
++  data[alloc] = (char)0;
++
++  res = fh->read( fh, &alloc, data );
++  if( res != GRUB_EFI_SUCCESS )
++    goto cleanup;
++
++  *size = alloc;
++  *buf = data;
++  return res;
++
++ cleanup:
++  efi_free (data);
++  return res;
++}
++
++static grub_efi_status_t
++efi_readdir (efi_file_protocol_t *dir,
++             efi_file_info_t *dirent,
++             grub_efi_uintn_t *size)
++{
++  grub_efi_uintn_t bufsize = *size;
++  grub_efi_status_t res = GRUB_EFI_SUCCESS;
++
++  // minimum space for L"." is 4 bytes.
++  if (bufsize < sizeof(efi_file_info_t) + 4)
++    return GRUB_EFI_BUFFER_TOO_SMALL;
++
++  res = dir->read( dir, size, dirent );
++
++  // 0 indicates EOD
++  // Otherwise copy the fixed dirent size back in since we just want
++  // the caller to be able to keep calling us with the same args:
++  if( *size > 0 )
++    *size = bufsize;
++
++  return res;
++}
++
++// ============================================================================
++
++// ============================================================================
++// bootconf reading/parsing/writing
++static int
++set_config_item_from_line (cfg_entry_t *item, char *line)
++{
++  char *start = NULL;
++  int vsize = 0;
++  int nl, ll;
++
++  // beginning of line does not match item->name + ':'
++  nl = grub_strlen( (char *)item->name );
++  ll = grub_strlen( line );
++  if( ll <= nl + 1 || grub_memcmp(item->name, line, nl) || line[nl] != ':' )
++    return 0;
++
++  for( start = line + nl + 1; start < (line + ll) && *start; start++ )
++    if( *start != ' ' )
++      break;
++
++  vsize = ll - (start - line);
++  for( char *c = start + vsize - 1; c >= start; c-- )
++    if( *c == ' ' )
++      vsize--;
++    else
++      break;
++
++  item->value.string.bytes = efi_alloc( vsize + 1 );
++  if (!item->value.string.bytes)
++    return 0;
++  item->value.string.size = vsize;
++
++  grub_efi_system_table->boot_services->copy_mem( item->value.string.bytes,
++                                                  start, vsize );
++  item->value.string.bytes[vsize] = (char)0;
++
++  switch (item->type)
++    {
++    case cfg_bool:
++    case cfg_uint:
++    case cfg_stamp: // ← this is not OK on 32 bit. We don't care.
++      item->value.number.u = grub_strtoul( item->value.string.bytes, NULL, 0 );
++      break;
++    default:
++      item->value.number.u = 0;
++      break;
++    }
++
++  return 1;
++}
++
++static int
++set_config_from_line (cfg_entry_t *cfg, char *line)
++{
++    int found = 0;
++
++    for( int i = 0; cfg[i].type != cfg_end; i++  )
++      found += set_config_item_from_line (&cfg[i], line);
++
++    return found;
++}
++
++static grub_err_t
++set_config_from_data (cfg_entry_t *cfg, char *data, grub_efi_uint64_t size)
++{
++    int found = 0;
++
++    for( char *c = data; c < data + size; c++ )
++      if( *c == '\n' )
++        *c = (char)0;
++
++    for( char *c = data; c < data + size; c++ )
++      if( (c == data) || (*(c - 1) == (char)0) )
++        found += set_config_from_line (cfg, c);
++
++    return GRUB_EFI_SUCCESS;
++}
++
++static char *
++get_partset_value (char *buf, grub_efi_uintn_t size, const char *key)
++{
++  grub_efi_uintn_t i = 0;
++  // We currently have a maximum of 3 images in our installs, A,B,dev
++  // each one requires 3 image specific partitions: efi,var,root.
++  // in addition there are 2 shared partitions, esp and home.
++  // 64 entries therefore allows (64 - 2) / 3 which allows for
++  // up to 20 images, which should be plenty.
++  char *item[64] = { 0 };
++  char *val = NULL;
++
++  // slice buf into tokens:
++  for( char *c = buf; c < buf + size; c++ )
++    if( *c == '\n' || *c == ' ' || *c == '\t' )
++      *c = (char)0;
++
++  // copy the token start addresses
++  for( char *c = buf; (c < buf + size) && (i < ARRAY_SIZE(item)); c++ )
++    {
++      if (*c)
++        item[ i++ ] = c;
++      while( *c++ );
++      c--;
++    }
++
++  for( grub_efi_uintn_t j = 0; (j < i - 1) && (val == NULL); j += 2 )
++    if( grub_strcmp (item[ j ], key) == 0 )
++      val = item[ j + 1 ];
++
++  if( val )
++    return grub_strdup (val);
++
++  return NULL;
++}
++
++static grub_efi_char16_t *
++strdup_w (const grub_efi_char16_t *str)
++{
++  grub_efi_uintn_t len = 0;
++  grub_efi_char16_t *cpy = NULL;
++  grub_efi_uintn_t size = 0;
++
++  if( !str )
++    return NULL;
++
++  len = strlen_w( str );
++  size = sizeof(grub_efi_char16_t) * (len + 1);
++  cpy = efi_alloc( size );
++
++  if( !cpy )
++    return NULL;
++
++  grub_memcpy( cpy, str, size );
++
++  return cpy;
++}
++
++static int
++strcmp_w (const grub_efi_char16_t *s1, const grub_efi_char16_t *s2)
++{
++  while( *s1 && *s2 )
++    {
++      if( *s1 != *s2 )
++        break;
++
++      s1++;
++      s2++;
++    }
++
++  return (int) (grub_uint16_t) *s1 - (int) (grub_uint16_t) *s2;
++}
++
++static char *
++efi_guid_to_str (const grub_guid_t *uuid)
++{
++  char str[GUID_STRLEN] = { 0 };
++
++  grub_snprintf (&str[0], GUID_STRLEN, GUID_STRFMT, GUID_FMTARG(uuid));
++
++  return grub_strdup (&str[0]);
++}
++
++// find the OS image name (A, B, dev etc) by matching
++// the efi partition uuid against the "efi" entry in
++// each partset file in turn:
++static grub_efi_char16_t *
++get_os_image_name (efi_file_protocol_t *root, grub_guid_t *uuid)
++{
++  grub_efi_char16_t *image_name = NULL;
++  efi_file_protocol_t *info_dir = NULL;
++  efi_file_info_t *dirent = NULL;
++  grub_efi_status_t res;
++  char *uuid_str = NULL;
++  grub_efi_uintn_t size = 0;
++
++  if( !root )
++    return NULL;
++
++  info_dir = efi_open( root, PARTSET_DIR, 0, 0 );
++
++  if( !info_dir )
++    return NULL;
++
++  uuid_str = efi_guid_to_str( uuid );
++
++  dirent = efi_readdir_alloc_buffer( &size );
++
++  if( !dirent )
++    goto cleanup;
++
++  while( image_name == NULL )
++    {
++      efi_file_protocol_t *setdata = NULL;
++      grub_efi_char16_t *name = NULL;
++
++      res = efi_readdir( info_dir, dirent, &size );
++
++      if( res != GRUB_EFI_SUCCESS )
++        break;
++
++      if( size == 0 ) // no more entries
++        break;
++
++#pragma GCC diagnostic push
++#pragma GCC diagnostic ignored "-Waddress-of-packed-member"
++      name = &dirent->file_name[0];
++#pragma GCC diagnostic pop
++
++      // These entries won't have useful identifying information:
++      if( strcmp_w( L"all",    name ) == 0 ||
++          strcmp_w( L"self",   name ) == 0 ||
++          strcmp_w( L"other",  name ) == 0 ||
++          strcmp_w( L"shared", name ) == 0 ||
++          strcmp_w( L"..",     name ) == 0 ||
++          strcmp_w( L".",      name ) == 0 )
++        continue;
++
++      setdata = efi_open( info_dir, name, 0, 0 );
++
++      if( setdata )
++        {
++          char *data = NULL;
++          grub_efi_uintn_t dlen = 0;
++
++          if( efi_file_to_mem( setdata, &data, &dlen ) == GRUB_EFI_SUCCESS )
++            {
++              char *efi_part_uuid = get_partset_value( data, dlen, "efi" );
++
++              if( efi_part_uuid && grub_strcmp( efi_part_uuid, uuid_str ) == 0 )
++                  image_name = strdup_w( name );
++
++              efi_free( data );
++            }
++
++          efi_close( setdata );
++        }
++    }
++
++cleanup:
++  efi_free( uuid_str );
++  efi_free( dirent );
++  efi_close( info_dir );
++
++  return image_name;
++}
++
++static char *
++get_esp_uuid (efi_file_protocol_t *root)
++{
++  char *uuid = NULL;
++  char *buf = NULL;
++  grub_efi_uintn_t size = 0;
++  efi_file_protocol_t *info_all = NULL;
++
++  if( !root )
++    return NULL;
++
++  info_all = efi_open( root, PARTSET_DIR L"\\all", 0, 0 );
++
++  if( !info_all )
++    return NULL;
++
++  if( efi_file_to_mem( info_all, &buf, &size ) == GRUB_EFI_SUCCESS )
++    {
++      uuid = get_partset_value( buf, size, "esp" );
++
++      if( uuid )
++        uuid = grub_strdup( uuid );
++
++      efi_free( buf );
++    }
++
++  efi_close( info_all );
++
++  return uuid;
++}
++
++static efi_file_protocol_t *
++get_esp_root (grub_efi_handle_t *handles,
++              grub_efi_uintn_t n_handles,
++              grub_guid_t *efi_uuid,
++              const char *esp_uuid)
++{
++  efi_file_protocol_t *esp_root = NULL;
++  grub_guid_t dp_guid = GRUB_EFI_DEVICE_PATH_GUID;
++  grub_guid_t fs_guid = GRUB_EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID;
++
++  // find the esp filesystem by matching its partition uuid with esp_uuid
++  for( grub_efi_uintn_t i = 0; (i < n_handles) && (esp_root == NULL); i++ )
++    {
++      grub_guid_t part_uuid = NULL_GUID;
++      grub_efi_device_path_t *maybe_esp_dev = NULL;
++      char *maybe_esp_uuid = NULL;
++      efi_simple_file_system_protocol_t *esp_fs = NULL;
++
++      maybe_esp_dev = get_handle_protocol( handles[i], &dp_guid );
++      part_uuid = device_path_partition_uuid( maybe_esp_dev );
++
++      // this is our current efi root, so by definition
++      // not what we are looking for:
++      if( cmp_guids( efi_uuid, &part_uuid ) == 0 )
++        continue;
++
++      maybe_esp_uuid = efi_guid_to_str( &part_uuid );
++      if( !maybe_esp_uuid )
++          continue;
++
++      if( grub_strcmp( maybe_esp_uuid, esp_uuid ) == 0 )
++        {
++          esp_fs = get_handle_protocol( handles[i], &fs_guid );
++
++          if( esp_fs )
++            esp_root = efi_mount( esp_fs );
++        }
++
++      efi_free( maybe_esp_uuid );
++    }
++
++  return esp_root;
++}
++
++static efi_file_protocol_t *
++open_conf_file (efi_file_protocol_t *esp_root, grub_efi_char16_t *os_image_name)
++{
++  efi_file_protocol_t *conf = NULL;
++  // max vfat fs file name length
++  grub_efi_char16_t path[256] = { 0 };
++  grub_efi_uintn_t nlen = 0;
++
++  if( !esp_root )
++    return NULL;
++
++  if( !os_image_name || !*os_image_name )
++    return NULL;
++
++  nlen = strlen_w( os_image_name );
++
++  // we don't have ucs-2 printf family utilities and this is
++  // the only place we need them so we'll just do it old-school:
++  grub_memcpy( &path[0], NEWCONFDIR, sizeof(NEWCONFDIR) );
++  path[ sizeof(NEWCONFDIR)/sizeof(grub_efi_char16_t) - 1 ] = L'\\';
++  grub_memcpy( &path[ sizeof (NEWCONFDIR)/sizeof(grub_efi_char16_t) ],
++               os_image_name, nlen * sizeof(grub_efi_char16_t) );
++  grub_memcpy( &path[ sizeof(NEWCONFDIR)/sizeof(grub_efi_char16_t) + nlen ],
++               CONF_EXT, sizeof (CONF_EXT) );
++
++  conf = efi_open( esp_root, &path[0], EFI_FILE_MODE_WRITE, 0 );
++
++  return conf;
++}
++
++static grub_err_t
++load_steamenv (cfg_entry_t **cfg,
++               grub_guid_t *efi_uuid,
++               efi_file_protocol_t *root,
++               efi_file_protocol_t **cfg_root,
++               efi_file_protocol_t **cfg_file)
++{
++  grub_guid_t fs_guid = GRUB_EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID;
++  efi_file_protocol_t *cffile = NULL;
++  efi_file_protocol_t *esp_root = NULL;
++  grub_err_t rv = GRUB_ERR_NONE;
++  grub_efi_uintn_t size = 0;
++  grub_efi_status_t res;
++  char *data = NULL;
++  grub_efi_handle_t *handles = NULL;
++  grub_efi_uintn_t n_handles = 0;
++  char *esp_uuid = NULL;
++  grub_efi_char16_t *os_image_name = NULL;
++
++  if( cfg_file )
++    *cfg_file = NULL;
++
++  if( cfg_root )
++    *cfg_root = NULL;
++
++  if( !root )
++    {
++      rv = GRUB_ERR_BAD_FS;
++      goto cleanup;
++    }
++
++  os_image_name = get_os_image_name( root, efi_uuid );
++  esp_uuid = get_esp_uuid( root );
++
++  handles = get_protocol_handles( &fs_guid, &n_handles );
++
++  esp_root = get_esp_root( handles, n_handles, efi_uuid, esp_uuid );
++
++  // hopefully we found the ESP. Open the config file there
++  cffile = open_conf_file( esp_root, os_image_name );
++
++   if( cfg_root )
++     *cfg_root = esp_root;
++
++  // the old layout had the config file on the image specific EFI
++  // partition. the stage 1 bootloader _should_ migrate everything
++  // for us but let's fall back here:
++  if( !cffile )
++    {
++      cffile = efi_open( root, OLDCONFPATH, EFI_FILE_MODE_WRITE, 0 );
++    }
++
++  if( !cffile )
++    {
++      rv = GRUB_ERR_FILE_NOT_FOUND;
++      goto cleanup;
++    }
++
++  if( cfg_file )
++    *cfg_file = cffile;
++
++  res = efi_file_to_mem( cffile, &data, &size );
++  if( (res != GRUB_EFI_SUCCESS) || !data || !size )
++    {
++      rv = GRUB_ERR_FILE_READ_ERROR;
++      goto cleanup;
++    }
++
++  *cfg = efi_alloc( sizeof(bootspec) );
++  if( !*cfg )
++    {
++      rv = GRUB_ERR_OUT_OF_MEMORY;
++      goto cleanup;
++    }
++
++  grub_efi_system_table->boot_services->copy_mem(*cfg, bootspec, sizeof(bootspec));
++
++  res = set_config_from_data( *cfg, data, size );
++  if( res != GRUB_EFI_SUCCESS )
++    {
++      efi_free( *cfg );
++      rv   = GRUB_ERR_EOF;
++      *cfg = NULL;
++      goto cleanup;
++    }
++
++ cleanup:
++  efi_free( data );
++  if( !cfg_file )
++    efi_close( cffile );
++  if( !cfg_root )
++    efi_close( esp_root );
++
++  return rv;
++}
++
++static grub_uint64_t
++save_cfg_item (cfg_entry_t *cfg, efi_file_protocol_t *cffile)
++{
++  static char line[4096] = { 0 };
++  grub_uint64_t bytes = 0;
++  grub_efi_uintn_t uval;
++  const char *sval;
++
++  switch (cfg->type)
++    {
++    case cfg_end:
++      return 0;
++
++    case cfg_bool:
++      uval = cfg->value.number.u ? 1 : 0;
++      bytes = grub_snprintf( line, sizeof (line), "%s: %lu\n", cfg->name, uval );
++      break;
++
++    case cfg_uint:
++    case cfg_stamp:
++      uval = cfg->value.number.u;
++      bytes = grub_snprintf( line, sizeof (line), "%s: %lu\n", cfg->name, uval );
++      break;
++
++    default:
++      sval = cfg->value.string.bytes ?: "";
++      bytes = grub_snprintf( line, sizeof (line), "%s: %s\n", cfg->name, sval );
++    }
++
++  return efi_write (cffile, line, bytes);
++}
++
++static grub_err_t
++save_steamenv(cfg_entry_t *cfg, efi_file_protocol_t *cffile)
++{
++  efi_file_info_t *cfinfo = NULL;
++  grub_err_t rv = GRUB_ERR_NONE;
++  grub_efi_uint64_t size = 0;
++  grub_efi_intn_t pos = 0;
++
++  if( !cfg )
++    return GRUB_ERR_NONE;
++
++  if( !cffile )
++    return GRUB_ERR_FILE_NOT_FOUND;
++
++  pos = efi_seek( cffile, 0 );
++  if( pos != 0 )
++    return GRUB_ERR_FILE_READ_ERROR;
++
++  cfinfo = efi_stat_fh( cffile );
++  if( !cfinfo )
++      return GRUB_ERR_READ_ERROR;
++
++  for( grub_efi_uint64_t i = 0; cfg[i].type != cfg_end; i++ )
++    size += save_cfg_item( &cfg[i], cffile );
++
++  if( size < cfinfo->file_size )
++    {
++      cfinfo->file_size = size;
++      efi_set_stat_fh( cffile, cfinfo, 0 );
++    }
++
++  efi_free( cfinfo );
++
++  return rv;
++}
++
++static cfg_entry_t *
++get_conf_item (cfg_entry_t *cfg, const char *name)
++{
++  if( !name )
++    return NULL;
++
++  for( grub_efi_uintn_t i = 0; cfg[i].type != cfg_end; i++ )
++    if( cfg[i].name )
++      if( grub_strcmp( cfg[i].name, name ) == 0 )
++        return &cfg[i];
++
++  return NULL;
++}
++
++__attribute__ ((unused))
++static grub_efi_uintn_t
++get_conf_uint (cfg_entry_t *cfg, const char *name)
++{
++  cfg_entry_t *c = get_conf_item (cfg, name);
++
++  return c ? c->value.number.u : 0;
++}
++
++static void
++free_steamenv (cfg_entry_t **cfg)
++{
++  cfg_entry_t *conf = *cfg;
++
++  if( !conf )
++    return;
++
++  for( grub_efi_uintn_t i = 0; conf[i].type != cfg_end; i++ )
++    {
++      conf[i].value.string.size = 0;
++      conf[i].value.number.u = 0;
++      if( !conf[i].value.string.bytes )
++        continue;
++
++      efi_free( conf[i].value.string.bytes );
++      conf[i].value.string.bytes = NULL;
++    }
++
++  efi_free( conf );
++  *cfg = NULL;
++}
++
++// ============================================================================
++// grub command definitions
++static void efi_free_image_arglist (char **arglist)
++{
++  grub_free( arglist[0] );
++  grub_free( arglist );
++}
++
++static char **efi_make_image_arglist (int *count)
++{
++  char **arglist = NULL;
++  grub_efi_loaded_image_t *image = NULL;
++
++  if( count )
++    *count = 0;
++
++  image = grub_efi_get_loaded_image( grub_efi_image_handle );
++
++  if( !image )
++    return NULL;
++
++  if( !image->load_options_size || !image->load_options )
++    {
++      arglist = grub_calloc( 1, sizeof(char *) );
++      arglist[ 0 ] = grub_strdup( "" );
++      if( count )
++        *count = 0;
++    }
++  else
++    {
++      int arg_count = 0;
++      char *str = efi_alloc( image->load_options_size + 1 );
++      grub_err_t rv;
++
++      grub_utf16_to_utf8( (grub_uint8_t *)str,
++                          image->load_options, image->load_options_size );
++
++      rv = grub_parser_split_cmdline( str, NULL, NULL, &arg_count, &arglist );
++      efi_free( str );
++
++      if( rv != GRUB_ERR_NONE )
++        {
++          if( count )
++            count = 0;
++        }
++      else
++        {
++          if( count )
++            *count = arg_count;
++        }
++    }
++
++  return arglist;
++}
++
++// pre-parse the UEFI image options so we know what was requested
++// before we copy the configured list from grub config:
++static void efi_parse_image_arglist (int argc, char **argv)
++{
++  for (int i = 0; i < argc; i++)
++    {
++      // skip null or empty args
++      if( !argv[ i ] || !*argv[ i ] )
++        continue;
++
++      if (str_has_prefix( argv[i], CMD_PREFIX ) )
++        {
++          // a steamos boot arg, interpret it:
++          const char *cmd = argv[ i ] + sizeof( CMD_PREFIX ) - 1;
++
++          _DBG("P%s.%s", argv[i], cmd);
++
++          if( grub_strcmp( cmd, CMD_UPDATE ) == 0 )
++            mode_os_update = 1;
++          else if( grub_strcmp( cmd, CMD_VERBOSE ) == 0 )
++            mode_verbose = 1;
++          else if( grub_strcmp( cmd, CMD_MENU ) == 0 )
++            mode_grub_menu = 1;
++        }
++    }
++}
++
++static void
++efi_xfer_image_arglist (char *args, grub_size_t size, int *len,
++                        int argc, char **argv)
++{
++  for( int i = 0; i < argc; i++ )
++    {
++      // skip null or empty args
++      if( !argv[ i ] || !*argv[ i ] )
++        continue;
++
++      if( str_has_prefix( argv[i], CMD_PREFIX ) )
++        {
++          // a steamos boot arg, interpret it:
++          const char *cmd = argv[ i ] + sizeof( CMD_PREFIX ) - 1;
++
++          _DBG("X%s.%s", argv[i], cmd);
++
++          // these are well known, and handled by efi_parse_image_arglist:
++          if (grub_strcmp( cmd, CMD_UPDATE  ) == 0 ||
++              grub_strcmp( cmd, CMD_VERBOSE ) == 0 ||
++              grub_strcmp( cmd, CMD_MENU    ) == 0 )
++            continue;
++
++          // Swap the prefix to a more usual kernel DOMAIN.VAR style but
++          // otherwise pass on the arg - It's not one we know about.
++          // The OS or initramfs may know more:
++          *len += grub_snprintf (args + *len, size - *len, " steamos.%s", cmd);
++        }
++      else // didn't start with CMD_PREFIX so just pass on unmodified:
++        {
++          *len += grub_snprintf (args + *len, size - *len, " %s", argv[i]);
++        }
++    }
++}
++
++static int is_verbosity_arg (const char *arg)
++{
++  return ( grub_strcmp( arg, "quiet"  ) == 0 ||
++           grub_strcmp( arg, "splash" ) == 0 ||
++           str_has_prefix( arg, SPLASH_PREFIX ) ||
++           str_has_prefix( arg, PLY_PREFIX    ) ||
++           str_has_prefix( arg, LOGLVL_PREFIX ) ||
++           str_has_prefix( arg, FBCON_PREFIX  ) );
++}
++
++static void
++init_grub_var (const char *name, const char *default_value)
++{
++  const char *value = NULL;
++
++  value = grub_env_get( name );
++  if( value == 0 )
++    grub_env_set( name, default_value ?: "" );
++}
++
++static grub_err_t
++process_boot_config (void)
++{
++  grub_guid_t uuid = NULL_GUID;
++  efi_file_protocol_t *cfg_file = NULL;
++  efi_file_protocol_t *cfg_root = NULL;
++  efi_file_protocol_t *root = NULL;
++  cfg_entry_t *cfg = NULL;
++  grub_err_t rv;
++
++  root = efi_mount_current_root( &uuid );
++
++  if( !root )
++    return grub_error( GRUB_ERR_IO, N_("can't mount root") );
++
++  rv = load_steamenv( &cfg, &uuid, root, &cfg_root, &cfg_file );
++
++  if( rv == GRUB_ERR_NONE )
++    {
++      cfg_entry_t *bc = get_conf_item( cfg, "boot-attempts" );
++      cfg_entry_t *verb = get_conf_item( cfg, "verbose" );
++
++      if( bc )
++        bc->value.number.u++;
++
++      if( verb && verb->value.number.u > 0 )
++        {
++          mode_verbose = 1;
++
++          // magic verbose flag value means we wanted to turn this off:
++          if( verb->value.number.u == VERBOSE_BOOT_ONCE )
++            verb->value.number.u = 0;
++        }
++
++      // We leave this decision up to the stage 1 bootloader now
++      // (it tells us via the EFI command line): update_scheduled_now (cfg))
++
++      save_steamenv( cfg, cfg_file );
++      free_steamenv( &cfg );
++    }
++
++  efi_close( cfg_file );
++  efi_close( cfg_root );
++  efi_close( root );
++
++  return GRUB_ERR_NONE;
++}
++
++// Initialise the variables which store the video modes used to display
++// the UI and set up the framebuffer before handover to the kernel.
++// Both can be overridden by the grub config.
++typedef struct _mode_choice
++{
++    struct
++    {
++        unsigned int mode;
++        unsigned int width;
++        unsigned int height;
++        unsigned int score;
++    } grub, kern;
++} mode_choice;
++
++static mode_choice chosen_modes = { 0 };
++
++static int choose_mode (const struct grub_video_mode_info *info, void *data)
++{
++    mode_choice *chosen = data;
++    unsigned int score = 0;
++    unsigned int ratio = ( info->width * 10 ) / info->height;
++
++    score += ( info->width  >  info->height ) ? 100 : 0;
++    score += ( info->height >= 800          ) ? 100 : 0; // at least 800px tall
++    score += ratio;                                      // wider = better
++    score += ( ratio >= 16 )                  ?  10 : 0; // 16:10 or wider bonus
++    score += ( info->width * info->height ) / 20000;     // area bonus
++
++    if( info->mode_number == 0 )
++    {
++        chosen->kern.mode   = 0;
++        chosen->kern.width  = info->width;
++        chosen->kern.height = info->height;
++        chosen->kern.score  = score;
++    }
++
++    if( score > chosen->grub.score )
++    {
++        chosen->grub.mode   = info->mode_number;
++        chosen->grub.width  = info->width;
++        chosen->grub.height = info->height;
++        chosen->grub.score  = score;
++    }
++
++    return 0;
++}
++
++static void
++choose_verbose_video_modes (mode_choice *chosen)
++{
++    grub_video_adapter_t a      = NULL;
++    grub_video_adapter_t driver = NULL;
++
++    // ==================================================================
++    // EFI GOP driver needs to be loaded here or this isn't going to work
++    // This just locates the UEFI handle for the GOP interface and checks
++    // there is at least 1 video mode available, it doesn't actually poke
++    // the framebuffer(s) or initialise the screen in any way:
++    grub_dl_load ("efi_gop");
++    // ==================================================================
++
++    FOR_VIDEO_ADAPTERS (a)
++    {
++        // As we have not yet activated the display (and may choose
++        // not to touch it) we can't use grub_video_get_driver_id()
++        if (a->id == GRUB_VIDEO_DRIVER_EFI_GOP)
++        {
++            driver = a;
++            break;
++        }
++    }
++
++    if (driver && driver->iterate)
++    {
++        driver->iterate (choose_mode, chosen);
++
++        if (chosen->grub.score)
++        {
++            char *lmode = NULL;
++
++            lmode = grub_xasprintf ("%ux%u",
++                                    chosen->grub.width, chosen->grub.height);
++            init_grub_var( "steamenv_noisy_loader_mode", lmode );
++
++            grub_free (lmode);
++        }
++
++        if (chosen->kern.score)
++        {
++            char *kmode = NULL;
++
++            kmode = grub_xasprintf ("%ux%u",
++                                    chosen->kern.width, chosen->kern.height);
++            init_grub_var( "steamenv_noisy_kernel_mode", kmode );
++
++            grub_free (kmode);
++        }
++    }
++
++    // Fall back to the default behaviour on probe failures:
++    if( chosen->grub.score == 0 )
++        init_grub_var( "steamenv_noisy_loader_mode", "auto" );
++
++    if( chosen->kern.score == 0 )
++        init_grub_var( "steamenv_noisy_kernel_mode", "keep" );
++
++}
++
++static grub_err_t
++grub_cmd_steamenv_init (grub_command_t cmd __attribute__ ((unused)),
++                        int argc __attribute__ ((unused)),
++                        char **argv __attribute__ ((unused)))
++{
++  char **image_argv = NULL;
++  int image_argc = 0;
++
++  image_argv = efi_make_image_arglist( &image_argc );
++
++  if( image_argc > 0 )
++    efi_parse_image_arglist( image_argc, image_argv );
++
++  efi_free_image_arglist( image_argv );
++
++  process_boot_config();
++
++  if( mode_grub_menu )
++    {
++      // Clear away any old console output: The grub menu drawing routines
++      // don't do this so the menu can fall off the visible area if we don't:
++      grub_cls();
++      grub_env_set( "timeout", "-1" );
++      grub_env_set( "timeout_style", "menu" );
++    }
++  else
++    {
++      grub_env_set( "timeout", "0" );
++      grub_env_set( "timeout_style", "menu" );
++    }
++
++  // make sure steamenv_noisy and steamenv_quiet are set
++  init_grub_var( "steamenv_noisy", DEFAULT_NOISY );
++  init_grub_var( "steamenv_quiet", DEFAULT_QUIET );
++
++  // make sure the video modes have sensible defaults if they're unset
++  init_grub_var( "steamenv_loader_mode", "auto" );
++  init_grub_var( "steamenv_kernel_mode", "keep" );
++
++  // ========================================================================
++  // These two used to be statically configured but now they're
++  // set up at runtime based on the available UEFI modes:
++  // ========================================================================
++  // They're weird on the Deck because it's secretly a portrait
++  // mode device with the screen mounted sideways, with one framebuffer
++  // set up to mimic landscape mode, which the kernel compensates for
++  // but the bootloaders do not (as they don't have the gfx infrastructure)
++  // ========================================================================
++  // steamenv_noisy_loader_mode: 1280x800
++  // steamenv_noisy_kernel_mode: 800x1280
++  choose_verbose_video_modes (&chosen_modes);
++
++  // set steamos_verbosity & video mode variables depending on mode_verbose:
++  const char *noise = NULL;
++
++  if( mode_verbose || mode_grub_menu )
++    {
++      const char *video_mode_grub = NULL;
++      const char *video_mode_boot = NULL;
++
++      noise = grub_env_get( "steamenv_noisy" );
++
++      video_mode_grub = grub_env_get( "steamenv_noisy_loader_mode" );
++      grub_env_set( "steamenv_loader_mode", video_mode_grub );
++
++      video_mode_boot = grub_env_get( "steamenv_noisy_kernel_mode" );
++      grub_env_set( "steamenv_kernel_mode", video_mode_boot );
++    }
++  else
++    {
++      noise = grub_env_get( "steamenv_quiet" );
++    }
++
++  grub_env_set( "steamenv_verbosity", noise );
++
++  return GRUB_ERR_NONE;
++}
++
++
++static grub_err_t
++grub_cmd_steamenv_boot (grub_command_t cmd __attribute__ ((unused)), int argc,
++                        char **argv)
++{
++  grub_guid_t chainloader = GRUB_EFI_CHAINLOADER_VARIABLE_GUID;
++  grub_command_t cmd_next = { 0 };
++  grub_guid_t uuid = NULL_GUID;
++  char **next_argv = NULL;
++  static char args[4096];
++  grub_size_t datasize;
++  int next_argc = 0;
++  grub_err_t rv;
++  int len = 0;
++  void *data = NULL;
++  char **image_argv = NULL;
++  int image_argc = 0;
++  int i;
++
++  if( argc < 1 || !argv[0] || !argv[0][0] )
++    return grub_error( GRUB_ERR_BAD_ARGUMENT, N_("no command is specified") );
++
++  cmd_next = grub_command_find (argv[0]);
++
++  if( !cmd_next )
++    return grub_error( GRUB_ERR_UNKNOWN_COMMAND, N_("can't find command `%s'"),
++                       argv[0] );
++
++  // Trying to set a variable that doesn't exist triggers an abortive error,
++  // so make sure there's something there before trying to write or erase it:
++  grub_efi_get_variable( "ChainLoaderBootAttempts", &chainloader,
++                         &datasize, &data );
++  if( data != NULL || datasize != 0 )
++    {
++      datasize = 0;
++      grub_free( data );
++      grub_efi_set_variable( "ChainLoaderBootAttempts", &chainloader, NULL, 0 );
++      data = NULL;
++    }
++
++  // secondary mechanism for setting mode_os_update - volatile UEFI variable:
++  // don't know why this was introduced but not removing it yet:
++  // (see efi_parse_image_arglist):
++  grub_efi_get_variable( "ChainLoaderEntryFlags", &chainloader,
++                         &datasize, &data );
++  if( data )
++    {
++      mode_os_update = (*(grub_efi_uint64_t *)data & ENTRY_FLAG_UPDATE) != 0;
++      grub_free( data );
++      data = NULL;
++    }
++
++  image_argv = efi_make_image_arglist( &image_argc );
++
++  _DBG("A%d", mode_verbose);
++  if( image_argc > 0 )
++    efi_parse_image_arglist( image_argc, image_argv );
++  _DBG("B%d", mode_verbose);
++
++  // >>>>>>>>>>>>>>>>>>>>>>>>>>>>> NOTE <<<<<<<<<<<<<<<<<<<<<<<<<<<<<
++  // parse config here and check update/update-window-{start,end} et al
++  // against the current time to see if we should update on a scheduled
++  // rather than ad-hoc basis.
++  // >>>>>>>>>>>>>>>>>>>>>>>>>>>>> NOTE <<<<<<<<<<<<<<<<<<<<<<<<<<<<<
++
++  if( image_argc || argc )
++    {
++      grub_guid_t none = NULL_GUID;
++      char *efi_uuid = NULL;
++      const char *video_mode = NULL;
++
++      _DBG("C%d", mode_verbose);
++      // put args from this grub command call into the kernel command line:
++      len = grub_snprintf( args, sizeof (args), "%s", argv[0] );
++
++      for( i = 1; i < argc; i++ )
++        {
++          // drop 'quiet' et al from the cmdline, they are set via
++          // $steamenv_verbosity, which is handled by efi_parse_image_arglist
++          if( is_verbosity_arg( argv[i] ) )
++            continue;
++
++          len += grub_snprintf( &args[len], sizeof(args) - len,
++                                " %s", argv[i] );
++        }
++
++      _DBG("D%d%d", mode_verbose, mode_grub_menu);
++      // transfer (some) UEFI command line args to the kernel command line
++      efi_xfer_image_arglist( &args[0], sizeof (args), &len,
++                              image_argc, image_argv );
++      _DBG("E%d%d", mode_verbose, mode_grub_menu);
++
++      const char *noise = grub_env_get( "steamenv_verbosity" );
++      if( noise && *noise )
++        len += grub_snprintf( &args[len], sizeof (args) - len, " %s", noise );
++
++      if( mode_os_update )
++        len += grub_snprintf( &args[len], sizeof (args) - len,
++                              " xystemd.unit=steamos-update-os.target" );
++
++      // Used to check if steamos-factory-reset=1 had been pased to us
++      // (tracked via the variable mode_reset) here. No longer necessary
++      // as this arg is handled entirely within our dracut scripts:
++      // if( mode_reset ) …
++
++      // ================================================================
++      // SteamOS initramfs needs to know the partition the efi for this
++      // image is on (it uses this to find the rest of the partition set,
++      // set up /dev/disk/by-partuuid etc).
++      get_root_partuuid( &uuid );
++      efi_uuid = efi_guid_to_str( &uuid );
++
++      if( (efi_uuid != NULL) && (cmp_guids( &none, &uuid ) != 0) )
++        {
++          len += grub_snprintf( &args[len], sizeof(args) - len,
++                                " steamos.efi=PARTUUID=%s", efi_uuid );
++        }
++      else
++        {
++          // this is likely unrecoverable (how would it even happen?)
++          // but we'll put a clue into the cmdline anyway:
++          len += grub_snprintf( &args[len], sizeof(args) - len,
++                                " steamos.efi=uuid-not-found" );
++        }
++
++      efi_free_image_arglist( image_argv );
++      efi_free( efi_uuid );
++      efi_uuid = NULL;
++
++      // force the video mode here (cmd_next may alter it
++      // again but this is the one we expect at this point):
++#pragma GCC diagnostic push
++#pragma GCC diagnostic ignored "-Wunused-variable"
++      video_mode = grub_env_get ("steamenv_kernel_mode");
++      if( video_mode && *video_mode != '\0' )
++        {
++          char *tmp = grub_xasprintf ("%s; auto", video_mode);
++          grub_err_t vrc = grub_video_set_mode (tmp, 0, 0);
++          _DBG("V%s.%d", video_mode, vrc);
++          grub_free (tmp);
++        }
++      else
++      {
++          _DBG("Vnull");
++      }
++#pragma GCC diagnostic pop
++#ifdef DEBUG_TO_KERNEL_CMDLINE
++      len += grub_snprintf (&args[len], sizeof (args) - len,
++                            " steamos-debug.lmode=%u:%ux%u"
++                            " steamos-debug.kmode=%u:%ux%u",
++                            chosen_modes.grub.score,
++                            chosen_modes.grub.width,
++                            chosen_modes.grub.height,
++                            chosen_modes.kern.score,
++                            chosen_modes.kern.width,
++                            chosen_modes.kern.height);
++      // last chance to append to kernel cmdline:
++      len += grub_snprintf (&args[len], sizeof (args) - len,
++                            " sdb=%s", &sedbg[0]);
++#endif
++      args[sizeof(args) - 1] = (char)0;
++
++      // TODO: add the verity id et al to the kernel command line?
++
++      if( len )
++        {
++          rv = grub_parser_split_cmdline( args, NULL, NULL, &next_argc,
++                                          &next_argv );
++          if( rv == GRUB_ERR_NONE )
++            {
++              argc = next_argc;
++              argv = next_argv;
++            }
++        }
++    }
++
++  // invoke the next command with the new kernel command line
++  // dropping the first arg as it's the name of _this_ command
++  rv = cmd_next->func( cmd_next, argc - 1, &argv[1] );
++
++  if( next_argv )
++    {
++      // Arguments are returned in single memory chunk separated by zeroes
++      grub_free( next_argv[0] );
++      grub_free( next_argv );
++    }
++
++  return rv;
++}
++// ============================================================================
++
++// ============================================================================
++// register/unregister commands on init/exit
++static grub_command_t vars;
++static grub_command_t boot;
++
++GRUB_MOD_INIT(steamenv)
++{
++  vars = grub_register_command ("steamenv_init", grub_cmd_steamenv_init,
++                                "Set some grub config variables for SteamOS",
++                                "Sets timeout, timeout_style, "
++                                "steamenv_loader_mode, steamenv_kernel_mode, "
++                                "and steamenv_verbosity based on GRUB's "
++                                "command line arguments. "
++                                "Initialises steamenv_quiet and "
++                                "steamenv_noisy to reasonable defaults if "
++                                "unset.");
++  boot = grub_register_command ("steamenv_boot", grub_cmd_steamenv_boot,
++                                "Update SteamOS bootconf and call 'linux'",
++                                "Update the SteamOS bootconf variables and boot "
++                                "as if the 'linux' command had been called, "
++                                "adding extra commandline args according to the "
++                                "bootconf settings.");
++}
++
++GRUB_MOD_FINI(steamenv)
++{
++  grub_unregister_command (vars);
++  grub_unregister_command (boot);
++}

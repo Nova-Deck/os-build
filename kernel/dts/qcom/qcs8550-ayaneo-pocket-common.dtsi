@@ -39,16 +39,16 @@
 	chosen {
 		stdout-path = "serial0:115200n8";
 		/*
-		 * SoC-specific kernel args. The unified boot image carries only the
-		 * common cmdline (boot/cmdline); ABL appends it to these bootargs, so
-		 * the kernel sees these + common (keep the two sets disjoint).
-		 * irqaffinity pins IRQs to SM8550's three little cores (0-2; topology
-		 * differs from SM8650's 0-1). pcie_ports=compat + fw_devlink.strict=1
-		 * cover the SM8550 PCIe USB3-hub bring-up; the Xbox-standard MCU
-		 * (045e:028e) needs the USB interrupt-interval override. Every SM8550
-		 * board inherits one of the two common dtsis.
+		 * SoC-specific kernel args moved to NOVADECK_BOOTARGS in the board
+		 * catalog boot/boards.map (Phase 5): the stage-2 GRUB builds the full cmdline in the
+		 * menuentry's linux line, and the EFI stub overwrites /chosen/bootargs
+		 * with it, so a bootargs property here would be dead. irqaffinity pins
+		 * IRQs to SM8550's three little cores (0-2; topology differs from
+		 * SM8650's 0-1). pcie_ports=compat + fw_devlink.strict=1 cover the
+		 * SM8550 PCIe USB3-hub bring-up; the Xbox-standard MCU (045e:028e) needs
+		 * the USB interrupt-interval override. Every SM8550 board inherits one
+		 * of the two common dtsis.
 		 */
-		bootargs = "allow_mismatched_32bit_el0 fw_devlink.strict=1 pcie_ports=compat irqaffinity=0-2 usbcore.interrupt_interval_override=045e:028e:2";
 	};
 
 	gpio-keys {

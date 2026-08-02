@@ -1,0 +1,31 @@
+# novadeck GRUB source pin — Phase 5
+# GNU GRUB 2.14, the upstream RELEASE tarball. The TARBALL + its sha256 is the canonical pin.
+version:    2.14
+url:        https://ftp.gnu.org/gnu/grub/grub-2.14.tar.xz
+sha256:     bc8d3c73535b8838d8c8e2654d73edc4e6ae8c8acdb45d5df5dc9a1547446d43
+git_tag:    grub-2.14
+
+# WHY THE RELEASE TARBALL AND NOT A GIT CHECKOUT. A GNU release tarball vendors gnulib under
+# grub-core/lib/gnulib. A checkout does not, and needs ./bootstrap --gnulib-srcdir=<checkout of a
+# PINNED gnulib revision> -- 2.14's bootstrap.conf wants 9f48fb99 (2022-02-12), and anything from
+# 2023-04-12 on emits `#error "Please include config.h first."` in time.h/stddef.h, at which point
+# the host-util build dies. Taking the tarball deletes that dependency outright: no gnulib pin to
+# drift, no bootstrap step. boot/grub.sh goes tarball -> patch -> autogen.sh -> configure -> make.
+#
+# Our delta lives in boot/patches/grub/ and is applied lexically, exactly like kernel/patches/:
+#   0001  grub-core/commands/efi/steamenv.c   Valve's stage-2 module, verbatim
+#   0002  grub-core/Makefile.core.def         GRUB's module manifest -- the stanza that builds it
+#
+# Only real sources are patched. The module tables the build actually reads (Makefile.core.am and
+# the Makefile.in files) are GENERATED from that manifest, and the tarball ships them pre-generated
+# from before our module existed -- so boot/grub.sh re-runs ./autogen.sh rather than patching them.
+# Carrying them as a patch was tried and rejected: re-running automake at all rewrites 23 files and
+# 191 hunks of grub-core/Makefile.in, because Ubuntu's automake is not the one that cut the
+# tarball. That churn is not a reviewable patch.
+#
+# NOT patched, deliberately: the -fshort-wchar that the steamenv module needs (it copies L"..."
+# literals into grub_efi_char16_t buffers, so wchar_t has to be 2 bytes). Valve patches
+# configure.ac + conf/Makefile.common for x86; we pass it as a configure argument instead
+# (TARGET_CFLAGS, see boot/grub.sh), because 2.14's configure.ac:93-101 honours a preset
+# TARGET_CFLAGS and appends its own flags to it. A configure argument cannot bit-rot against a
+# patch context the way a configure.ac hunk can, and it keeps us off autoreconf.

@@ -1,0 +1,34 @@
+Build the steamenv module.
+
+grub-core/Makefile.core.def is GRUB's module manifest. Adding a stanza here is
+the whole change; everything else is generated. boot/grub.sh runs ./autogen.sh
+after applying this patch, which regenerates grub-core/Makefile.core.am (via
+gentpl.py + autogen) and then the Makefile.in files (via autoreconf).
+
+Regenerating rather than patching the generated files is deliberate. The .am
+hunk autogen produces is mechanical and could be carried in a patch, but the
+Makefile.in it feeds is not: re-running automake at all rewrites 23 files in the
+tree and 191 hunks of grub-core/Makefile.in alone, because Ubuntu's automake is
+not the automake the 2.14 tarball was released with. There is no version of that
+diff worth keeping in a patch file.
+
+`enable = efi` builds the module for every EFI target; only arm64-efi is ever
+used here. The cflags exemption is Valve's: steamenv.c takes the address of
+packed struct members when walking EFI file-info records.
+
+--- a/grub-core/Makefile.core.def
++++ b/grub-core/Makefile.core.def
+@@ -843,6 +843,13 @@
+ };
+ 
+ module = {
++  name = steamenv;
++  common = commands/efi/steamenv.c;
++  enable = efi;
++  cflags = "-Wno-error=address-of-packed-member";
++};
++
++module = {
+   name = efitextmode;
+   efi = commands/efi/efitextmode.c;
+   enable = efi;

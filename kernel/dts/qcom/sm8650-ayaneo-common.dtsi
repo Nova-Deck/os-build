@@ -45,15 +45,15 @@
 	chosen {
 		stdout-path = "serial0:115200n8";
 		/*
-		 * Board-specific kernel args. The unified boot image carries only the
-		 * common cmdline (boot/cmdline); ABL appends it to these bootargs, so the
-		 * kernel sees board args + common (keep the two sets disjoint).
-		 * irqaffinity pins IRQs to the SoC's little cores (CPU topology differs
-		 * per SoC), and this MCU controller (045e:028e, Xbox-standard) needs the
-		 * USB interrupt-interval override; both current SM8650 boards inherit this
+		 * SoC-specific kernel args moved to NOVADECK_BOOTARGS in the board
+		 * catalog boot/boards.map (Phase 5): the stage-2 GRUB builds the full cmdline in the
+		 * menuentry's linux line, and the EFI stub overwrites /chosen/bootargs
+		 * with it, so a bootargs property here would be dead. irqaffinity pins
+		 * IRQs to the SoC's little cores (CPU topology differs per SoC), and
+		 * this MCU controller (045e:028e, Xbox-standard) needs the USB
+		 * interrupt-interval override; both current SM8650 boards inherit this
 		 * dtsi.
 		 */
-		bootargs = "irqaffinity=0-1 usbcore.interrupt_interval_override=045e:028e:2";
 	};
 
 	wcd939x: audio-codec {

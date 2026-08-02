@@ -217,6 +217,9 @@ BOOTIMG      := $(OUT)/boot/novadeck-boot.img
 # Stage-1 steamcl (boot/steamcl.sh). The rule's target is steamcl.efi, but the run also emits
 # holo-bootconf, steamcl-version and fonts/default.pf2 into the same out/boot.
 STEAMCL      := $(OUT)/boot/steamcl.efi
+# Stage-2 GRUB (boot/grub.sh). Co-products in the same out/boot: grub-a.cfg, grub-b.cfg and
+# fonts/dejavu-mono.pf2.
+GRUB         := $(OUT)/boot/grubaa64.efi
 SDCARD       := $(OUT)/images/sdcard.img
 # Native arm64 Steam SEED (steam-seed/fetch-steam-seed.sh, host network). make-sdcard pre-seeds this tree
 # directly into the /home partition, so a healthy first boot does no copy and needs no network. The
@@ -280,7 +283,7 @@ KERNEL_SRC_HASH := work/.kernel-src.hash
 .PHONY: help all image toolchain kernel fw-linux fw-qcom base overlay overlay-pull overlay-publish \
         verify-pins pin-artifacts verify-lock \
         rootfs manifest relock \
-        initramfs boot steamcl sdcard verify-card test bundle deploy clean clean-base clean-overlay distclean
+        initramfs boot steamcl grub sdcard verify-card test bundle deploy clean clean-base clean-overlay distclean
 
 # An always-out-of-date prerequisite, for rules that must re-evaluate their own inputs every run
 # rather than trust a prerequisite's mtime. Only $(KERNEL_SRC_HASH) uses it; see the note there.
@@ -317,6 +320,7 @@ rootfs:    $(ROOTFS)       ## Assemble the read-only root + var images (in conta
 initramfs: $(INITRAMFS)    ## Build the initramfs that mounts ro-root + /etc overlay (in container)
 boot:      $(BOOTIMG)      ## Package the all-boards boot artifact (in container)
 steamcl:   $(STEAMCL)      ## Build the stage-1 steamcl + steamos-bootconf (in container)
+grub:      $(GRUB)         ## Build the stage-2 GRUB + per-slot grub.cfg (in container)
 sdcard:    $(SDCARD)       ## Build the flashable SD-card image (in container)
 
 # Asserts the BUILT card the way guard-rootfs.sh asserts the built tree — the guard stops at the
@@ -349,11 +353,12 @@ verify-card: $(SDCARD) | $(BUILD_STAMP) ## Verify the built A/B card image (in c
 verify-lock: ## Check the lock's novadeck rows against packages/ (host, seconds, no build)
 	bash packages/verify-lock-rows.sh
 
-test: verify-lock ## Run the offline slot-state + bootctl + post-install suites (host, no build needed)
+test: verify-lock ## Run the offline slot-state + bootctl + post-install + stage-2 suites (host, no build needed)
 	bash images/initramfs/test-slot-state.sh
 	bash images/test-bootctl.sh
 	bash images/test-post-install.sh
 	bash images/test-pairingd.sh
+	bash images/test-stage2-grub.sh
 
 # The fourth suite, separate because it is the one that CANNOT run on the host: it signs real
 # bundles and verifies them through the shipped system.conf, so it needs rauc. Every case in it is
@@ -628,6 +633,14 @@ $(BOOTIMG): $(KERNEL) $(INITRAMFS) boot/cmdline boot/package.sh | $(BUILD_STAMP)
 # source). Independent of the kernel: it is bootloader software, not a payload.
 $(STEAMCL): boot/steamcl.sh boot/steamos-efi.pin | $(BUILD_STAMP)
 	$(INBUILD) boot/steamcl.sh
+
+# Stage-2 GRUB + the two per-slot grub.cfg files. The patch set and the board catalog are
+# prerequisites because both change the artifact: a new patch changes grubaa64.efi, and a new
+# board row changes the configs generated beside it. images/partition-table.txt is in there for
+# the same reason -- the configs address partitions by index out of that file.
+$(GRUB): boot/grub.sh boot/gen-grub-cfg.sh boot/grub.pin boot/boards.map \
+         images/partition-table.txt $(wildcard boot/patches/grub/*.patch) | $(BUILD_STAMP)
+	$(INBUILD) boot/grub.sh
 
 # var.img and var-b.img are co-products of the same assembler run as rootfs.img.
 $(VARIMG): $(ROOTFS)

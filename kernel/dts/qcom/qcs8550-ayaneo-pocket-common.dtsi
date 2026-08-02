@@ -182,6 +182,12 @@
 			reg = <0 0xfce00000 0 0x2900000>;
 			no-map;
 		};
+
+		splash_region: splash_region@b8000000 {
+			reg = <0x0 0xb8000000 0x0 0x2b00000>;
+			label = "cont_splash_region";
+			no-map;
+		};
 	};
 
 	upd720201_avdd33_reg: upd720201-avdd33-regulator {

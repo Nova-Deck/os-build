@@ -1047,8 +1047,9 @@ rationale lives in the linked memories and commit history.
   `images/test-stage2-grub.sh` and `images/verify-card.sh`. Confirm on-device afterwards that
   `steamenv_init` can actually WRITE the ESP conf here (it resolves the ESP through the partsets
   and EFI handles — never exercised on ABL), and that the timeout guard leaves `steamos-bootmenu`
-  intact. Do the slot-switch test FIRST, against the currently-validated config, so the two changes
-  do not confound each other.
+  intact. The slot-switch test that had to come first is **DONE and HW-validated 2026-08-02**
+  (`docs/phase5.md`), so this is unblocked; the remaining device work it should not confound is the
+  demote-on-failure branch.
 
 - [x] **`efi-a`/`efi-b` are unused under design C — CLOSED 2026-08-02 BY PHASE 5** — created +
   formatted vfat, EMPTY, and no longer earmarked for per-boot images. That was design A. Phase 4b

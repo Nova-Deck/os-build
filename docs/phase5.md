@@ -1,6 +1,7 @@
 # Phase 5 — SteamDeck-style boot (steamcl + GRUB)
 
-> **Status: implemented; the boot chain is hardware-validated, the update path is not.** This is
+> **Status: implemented; the boot chain and the update path are both hardware-validated. The
+> demote-on-failure branch is not.** This is
 > the design record for the `boot(phase5)` / `rauc(phase5)` commit series on `boot/phase5`.
 > Everything below is what the tree builds; what has actually been proven, and by what, is spelled
 > out per section and summarised under "Hardware status" rather than implied.
@@ -252,12 +253,31 @@ literal parentheses, and GRUB stores the bare `hd0,gpt2`. The config fell throug
 fallback on every boot — cosmetic (a message and a 3s pause) because the fallback works, but the
 primary path was dead. See the commit; the test now executes the pattern rather than grepping it.
 
+✅ **The update path validated the same day, same device** — a bundle built with
+`PKIDIR=~/novadeck-pki make bundle`, installed with `rauc install`, then rebooted:
+
+* The post-install hook did all four of its jobs: root-B's fsid was re-randomised off the running
+  slot's (`d0ff08e5…` → `af750a64…`), the label re-stamped `novadeck-root-B`, efi-B's stage-2
+  `grubaa64.efi` + `grub.cfg` refreshed out of the *installed* root, and B.conf re-armed with a
+  `boot-requested-at` newer than A's.
+* The reboot landed on B **off the other efi partition**: `/efi` is `mmcblk0p3` (efi-B), the kernel
+  came from `BOOT_IMAGE=(hd1,gpt5)`, and the cmdline carries `root-B`/`var-B`/`efi-B`. Since
+  efi-A's `grub.cfg` hardcodes `gpt4`/`root-A`, only efi-B's config could have produced that.
+* The trial self-confirmed: B.conf `boot-count 1`, `boot-attempts 0`, `image-invalid 0`,
+  `bootconf mode: boot-ok`; `novadeck-boot-good` ran `mark-good --require-marker` and
+  `get-state self` reads `good`.
+
+Two things worth knowing before the next bundle. The RAUC keyring is the committed
+`images/rauc/novadeck-ca.pem` in **dev builds too**, so a bundle for a card built from this tree
+must be signed with `PKIDIR=~/novadeck-pki`; `genbundle.sh`'s ephemeral cert is self-signed and the
+card rejects it. And verifying a bundle by hand needs `check-purpose=codesign` — `rauc info`
+defaults to the smimesign purpose and fails with "unsuitable certificate purpose", which is a
+mismatch in the *checker*, not a defect in the bundle.
+
 ## Open items
 
 Still needs the device:
 
-* **A slot switch** — install a bundle, boot B, confirm stage 2 comes off the *other* efi
-  partition and that post-install's fsid/label re-stamp did its job.
 * **The demote path end to end** — force a health-check failure and confirm the next boot lands on
   the other slot. The unit is wired and inactive-when-healthy; the failure branch is untested.
 * **`steamenv` reintroduction** (above), now that the chain is proven without it.

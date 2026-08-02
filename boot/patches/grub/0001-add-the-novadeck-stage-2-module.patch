@@ -1,0 +1,537 @@
+Add the novadeck stage-2 module.
+
+One command, novadeck_bootattempts <image-name>, which opens
+\SteamOS\conf\<image-name>.conf on the ESP through the firmware's
+EFI_FILE_PROTOCOL, increments the boot-attempts: value and writes it back.
+
+This REPLACES Valve's steamenv, which did the same increment inside
+steamenv_init and black-screened this device on 2026-08-02 without writing the
+conf. See docs/phase5-bootattempts.md for the post-mortem; the short version is
+that steamenv discovers the ESP by parsing SteamOS/partsets/* and matching
+partition uuids across every SIMPLE_FILE_SYSTEM handle, and swallows the
+failure when that lookup comes up empty. Here the image name is an argument
+(gen-grub-cfg.sh already emits one config per slot and already knows the slot),
+the conf is found by attempting the open on each handle in turn, and every
+failure path returns a grub_error naming what was tried.
+
+GRUB cannot do this without a module: its own fat driver is read-only, so the
+EFI file protocol is the only way to write the ESP from stage 2.
+
+The file header carries the rest of the rationale.
+
+diff -urN a/grub-core/commands/efi/novadeck.c b/grub-core/commands/efi/novadeck.c
+--- a/grub-core/commands/efi/novadeck.c
++++ b/grub-core/commands/efi/novadeck.c
+@@ -0,0 +1,512 @@
++/*
++ *  novadeck.mod  --  bump the SteamOS bootconf `boot-attempts` counter.
++ *
++ *  Copyright © 2026 the novadeck authors
++ *
++ *  This file is NOT part of GRUB, but is distributed under the same terms.
++ *
++ *  novadeck.mod is free software: you can redistribute it and/or modify
++ *  it under the terms of the GNU General Public License as published by
++ *  the Free Software Foundation, either version 3 of the License, or
++ *  (at your option) any later version.
++ *
++ *  novadeck.mod is distributed in the hope that it will be useful,
++ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
++ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ *  GNU General Public License for more details.
++ *
++ *  You should have received a copy of the GNU General Public License
++ *  along with novadeck.mod.  If not, see <http://www.gnu.org/licenses/>.
++ *
++ *  ---------------------------------------------------------------------------
++ *
++ *  One command:
++ *
++ *      novadeck_bootattempts <image-name>          # e.g. novadeck_bootattempts A
++ *
++ *  It opens \SteamOS\conf\<image-name>.conf on the ESP, increments the
++ *  `boot-attempts:` value in it, and writes it back. That is the whole module.
++ *
++ *  It exists because GRUB cannot do this itself: GRUB's own `fat` driver is
++ *  READ-ONLY, so the only way to write the ESP from stage 2 is the firmware's
++ *  EFI_FILE_PROTOCOL. Hence a module rather than a line of grub.cfg.
++ *
++ *  This replaces Valve's `steamenv`, which does the same increment buried in
++ *  ~2000 lines of Deck-specific work, and which black-screened this device.
++ *  Three deliberate differences, each one a failure mode we already paid for:
++ *
++ *    1. THE IMAGE NAME IS AN ARGUMENT, NOT A DISCOVERY. steamenv works out
++ *       which image it is by reading \SteamOS\partsets\* off the volume it was
++ *       chainloaded from and matching partition uuids. boot/gen-grub-cfg.sh
++ *       already emits one config per slot and already knows the slot, so the
++ *       whole partsets path — the most likely thing to be failing on ABL — is
++ *       simply deleted.
++ *
++ *    2. FINDING THE CONF IS TRY-EACH-HANDLE, NOT UUID MATCHING. steamenv
++ *       enumerates SIMPLE_FILE_SYSTEM handles and picks the one whose
++ *       partition uuid equals the ESP uuid it parsed out of partsets/all. We
++ *       just attempt the open on every handle and take the first that works.
++ *       No uuid arithmetic, and no assumption about which handles a minimal
++ *       UEFI implementation chooses to publish. The conf lives only on the ESP
++ *       (images/make-sdcard.sh), so the first hit is the right one.
++ *
++ *    3. IT FAILS LOUDLY. steamenv's process_boot_config() acts only if the
++ *       load succeeded and returns GRUB_ERR_NONE either way, so "found no
++ *       conf" is indistinguishable from "counted a boot" — which is exactly
++ *       what we observed on hardware. Every failure here returns a grub_error
++ *       naming what was tried, and the success path prints old -> new.
++ *
++ *  The failure message deliberately reports how many SIMPLE_FILE_SYSTEM
++ *  handles existed. That number answers the one open question this design
++ *  could not answer from a desk: whether ABL publishes the ESP as a filesystem
++ *  handle at all, or only the volume it booted from.
++ *
++ *  It does NOT touch `timeout`, `timeout_style`, video modes, kernel command
++ *  lines or UEFI ChainLoader* variables. steamenv's unconditional timeout
++ *  overwrite is what forced the call to sit before gfxterm was up, where
++ *  nothing it printed could be seen; this one is callable from anywhere.
++ */
++
++#include <grub/types.h>
++#include <grub/misc.h>
++#include <grub/mm.h>
++#include <grub/err.h>
++#include <grub/dl.h>
++#include <grub/command.h>
++#include <grub/efi/api.h>
++#include <grub/efi/efi.h>
++
++GRUB_MOD_LICENSE ("GPLv3+");
++
++/* The bootconf key we own. steamos-bootconf's `set-mode booted` clears it once
++   the OS proves healthy; everything else only ever reads it. */
++#define ATTEMPTS_KEY "boot-attempts:"
++
++/* \SteamOS\conf\<name>.conf, as UCS-2. L"..." is 2-byte because the build
++   passes -fshort-wchar (see boot/grub.pin); without it every one of these
++   string literals would be 4-byte and the firmware would see garbage. */
++#define CONF_DIR L"\\SteamOS\\conf\\"
++#define CONF_EXT L".conf"
++
++/* A bootconf is ~20 short `key: value` lines. 4 KiB is an order of magnitude
++   of headroom, and a file that overflows it is corrupt, not big — so the
++   overflow path errors out rather than truncating a file we would then have to
++   write back. */
++#define CONF_MAX 4096
++
++/* Longest image name we will splice into the path. Slots are "A" and "B"; the
++   cap is here so the fixed-size path buffer below can never be overrun. */
++#define NAME_MAX 16
++
++/* ==========================================================================
++   EFI_FILE_PROTOCOL / EFI_SIMPLE_FILE_SYSTEM_PROTOCOL.
++
++   GRUB has no headers for these — it reaches block devices through its own
++   drivers and never opens a firmware file — so they are declared here. Member
++   ORDER is the ABI: the async openx/readx/writex/flushx entries that follow
++   `flush` in the UEFI spec are omitted because nothing here calls them, and a
++   struct that stops short is safe as long as it stops at the END.
++   ========================================================================== */
++
++#define EFI_FILE_INFO_ID \
++  {                                \
++    (grub_efi_uint32_t)0x09576e92, \
++    (grub_efi_uint16_t)0x6d3f,     \
++    (grub_efi_uint16_t)0x11d2,     \
++      {                            \
++        (grub_efi_uint8_t)0x8e,    \
++        (grub_efi_uint8_t)0x39,    \
++        (grub_efi_uint8_t)0x00,    \
++        (grub_efi_uint8_t)0xa0,    \
++        (grub_efi_uint8_t)0xc9,    \
++        (grub_efi_uint8_t)0x69,    \
++        (grub_efi_uint8_t)0x72,    \
++        (grub_efi_uint8_t)0x3b     \
++      }                            \
++  }
++
++#define EFI_FILE_MODE_READ  0x0000000000000001ULL
++#define EFI_FILE_MODE_WRITE 0x0000000000000002ULL
++
++typedef struct efi_file_info efi_file_info_t;
++
++struct efi_file_info
++{
++  grub_efi_uint64_t size;
++  grub_efi_uint64_t file_size;
++  grub_efi_uint64_t physical_size;
++  grub_efi_time_t   create_time;
++  grub_efi_time_t   last_access_time;
++  grub_efi_time_t   modification_time;
++  grub_efi_uint64_t attribute;
++  grub_efi_char16_t file_name[];
++} GRUB_PACKED;
++
++/* UEFI leaves the caller to allocate the dangling file_name[]. A vfat name is
++   at most 255 UCS-2 chars plus L'\0' = 512 bytes. */
++#define EFI_FILE_INFO_SAFE_SIZE (sizeof (efi_file_info_t) + 512)
++
++typedef struct efi_file_protocol efi_file_protocol_t;
++
++struct efi_file_protocol
++{
++  grub_efi_uint64_t revision;
++  grub_efi_status_t (__grub_efi_api *open) (efi_file_protocol_t *this,
++                                            efi_file_protocol_t **new_handle,
++                                            const grub_efi_char16_t *file_name,
++                                            grub_efi_uint64_t open_mode,
++                                            grub_efi_uint64_t attributes);
++  grub_efi_status_t (__grub_efi_api *close) (efi_file_protocol_t *this);
++  grub_efi_status_t (__grub_efi_api *delete) (efi_file_protocol_t *this);
++  grub_efi_status_t (__grub_efi_api *read) (efi_file_protocol_t *this,
++                                            grub_efi_uintn_t *buffer_size,
++                                            void *buffer);
++  grub_efi_status_t (__grub_efi_api *write) (efi_file_protocol_t *this,
++                                             grub_efi_uintn_t *buffer_size,
++                                             void *buffer);
++  grub_efi_status_t (__grub_efi_api *get_position) (efi_file_protocol_t *this,
++                                                    grub_efi_uint64_t *position);
++  grub_efi_status_t (__grub_efi_api *set_position) (efi_file_protocol_t *this,
++                                                    grub_efi_uint64_t position);
++  grub_efi_status_t (__grub_efi_api *get_info) (efi_file_protocol_t *this,
++                                                grub_guid_t *information_type,
++                                                grub_efi_uintn_t *buffer_size,
++                                                void *buffer);
++  grub_efi_status_t (__grub_efi_api *set_info) (efi_file_protocol_t *this,
++                                                grub_guid_t *information_type,
++                                                grub_efi_uintn_t buffer_size,
++                                                void *buffer);
++  grub_efi_status_t (__grub_efi_api *flush) (efi_file_protocol_t *this);
++} GRUB_PACKED;
++
++typedef struct efi_simple_file_system_protocol efi_simple_file_system_protocol_t;
++
++struct efi_simple_file_system_protocol
++{
++  grub_efi_uint64_t revision;
++  grub_efi_status_t (__grub_efi_api *open_volume)
++    (efi_simple_file_system_protocol_t *this,
++     efi_file_protocol_t **root);
++} GRUB_PACKED;
++
++/* ==========================================================================
++   Buffers.
++
++   Static, not allocated: a GRUB module's failure paths are the expensive part
++   to get right, and these remove three of them. get_info() needs 8-byte
++   alignment, which the union's grub_uint64_t member supplies (efi_file_info_t
++   is GRUB_PACKED and so aligns to 1 on its own).
++   ========================================================================== */
++
++static union
++{
++  efi_file_info_t info;
++  grub_uint64_t   align[(EFI_FILE_INFO_SAFE_SIZE + 7) / 8];
++} finfo;
++
++static char confbuf[CONF_MAX + 1];      /* +1: read_conf NUL-terminates */
++static char outbuf[CONF_MAX];
++
++/* ==========================================================================
++   Locating the conf.
++   ========================================================================== */
++
++/* Try to open the conf read/write on one filesystem handle. Returns the file
++   handle and, through *root_out, the volume root that has to outlive it. */
++static efi_file_protocol_t *
++try_handle (grub_efi_handle_t handle,
++            const grub_efi_char16_t *path,
++            efi_file_protocol_t **root_out)
++{
++  grub_guid_t fs_guid = GRUB_EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID;
++  efi_simple_file_system_protocol_t *fs;
++  efi_file_protocol_t *root = NULL;
++  efi_file_protocol_t *fh = NULL;
++
++  *root_out = NULL;
++
++  fs = grub_efi_open_protocol (handle, &fs_guid,
++                               GRUB_EFI_OPEN_PROTOCOL_BY_HANDLE_PROTOCOL);
++  if (!fs)
++    return NULL;
++
++  if (fs->open_volume (fs, &root) != GRUB_EFI_SUCCESS || !root)
++    return NULL;
++
++  /* READ|WRITE and no CREATE: a volume that does not already carry the conf is
++     not the ESP, and must not be given one. */
++  if (root->open (root, &fh, path,
++                  EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE, 0)
++      != GRUB_EFI_SUCCESS)
++    {
++      root->close (root);
++      return NULL;
++    }
++
++  *root_out = root;
++  return fh;
++}
++
++/* ==========================================================================
++   Reading and writing the conf.
++   ========================================================================== */
++
++static grub_err_t
++read_conf (efi_file_protocol_t *fh, grub_efi_uintn_t *len)
++{
++  grub_guid_t info_guid = EFI_FILE_INFO_ID;
++  grub_efi_uintn_t bufsize = EFI_FILE_INFO_SAFE_SIZE;
++  grub_efi_uintn_t n;
++
++  if (fh->get_info (fh, &info_guid, &bufsize, &finfo.info) != GRUB_EFI_SUCCESS)
++    return grub_error (GRUB_ERR_FILE_READ_ERROR,
++                       "novadeck: cannot stat the boot config");
++
++  if (finfo.info.file_size > CONF_MAX)
++    return grub_error (GRUB_ERR_FILE_READ_ERROR,
++                       "novadeck: boot config is %llu bytes, over the %d limit",
++                       (unsigned long long) finfo.info.file_size, CONF_MAX);
++
++  if (fh->set_position (fh, 0) != GRUB_EFI_SUCCESS)
++    return grub_error (GRUB_ERR_FILE_READ_ERROR,
++                       "novadeck: cannot rewind the boot config");
++
++  n = (grub_efi_uintn_t) finfo.info.file_size;
++  if (fh->read (fh, &n, confbuf) != GRUB_EFI_SUCCESS)
++    return grub_error (GRUB_ERR_FILE_READ_ERROR,
++                       "novadeck: cannot read the boot config");
++
++  confbuf[n] = '\0';
++  *len = n;
++  return GRUB_ERR_NONE;
++}
++
++static grub_err_t
++write_conf (efi_file_protocol_t *fh, const char *buf, grub_efi_uintn_t len)
++{
++  grub_guid_t info_guid = EFI_FILE_INFO_ID;
++  grub_efi_uintn_t n = len;
++
++  if (fh->set_position (fh, 0) != GRUB_EFI_SUCCESS)
++    return grub_error (GRUB_ERR_WRITE_ERROR,
++                       "novadeck: cannot rewind the boot config to write it");
++
++  if (fh->write (fh, &n, (void *) buf) != GRUB_EFI_SUCCESS || n != len)
++    return grub_error (GRUB_ERR_WRITE_ERROR,
++                       "novadeck: wrote %llu of %llu bytes to the boot config",
++                       (unsigned long long) n, (unsigned long long) len);
++
++  /* Incrementing can only grow the file (9 -> 10), never shrink it, so this
++     branch is defensive. It stays because the alternative — leaving a stale
++     tail behind a short write — produces a conf that parses and lies. */
++  if (len < finfo.info.file_size)
++    {
++      finfo.info.file_size = len;
++      if (fh->set_info (fh, &info_guid,
++                        (grub_efi_uintn_t) finfo.info.size, &finfo.info)
++          != GRUB_EFI_SUCCESS)
++        return grub_error (GRUB_ERR_WRITE_ERROR,
++                           "novadeck: cannot truncate the boot config");
++    }
++
++  if (fh->flush (fh) != GRUB_EFI_SUCCESS)
++    return grub_error (GRUB_ERR_WRITE_ERROR,
++                       "novadeck: cannot flush the boot config");
++
++  return GRUB_ERR_NONE;
++}
++
++/* ==========================================================================
++   The `key: value` edit.
++
++   The format is holo-bootconf's: one `key: value` per line, LF-terminated. We
++   rewrite the whole buffer rather than patching in place because the new value
++   can be one digit longer than the old one.
++   ========================================================================== */
++
++/* Start of the line beginning with `key`, or NULL. Anchored to line starts so
++   a value that happens to contain the key text cannot match. */
++static char *
++find_key_line (char *buf, grub_efi_uintn_t len, const char *key)
++{
++  grub_size_t klen = grub_strlen (key);
++  char *p = buf;
++  char *end = buf + len;
++
++  while (p < end)
++    {
++      if ((grub_size_t) (end - p) >= klen && grub_memcmp (p, key, klen) == 0)
++        return p;
++
++      while (p < end && *p != '\n')
++        p++;
++      if (p < end)
++        p++;
++    }
++
++  return NULL;
++}
++
++/* ==========================================================================
++   The command.
++   ========================================================================== */
++
++static grub_err_t
++grub_cmd_bootattempts (grub_command_t cmd __attribute__ ((unused)),
++                       int argc, char **args)
++{
++  grub_efi_char16_t path[sizeof (CONF_DIR) / sizeof (grub_efi_char16_t)
++                         + NAME_MAX
++                         + sizeof (CONF_EXT) / sizeof (grub_efi_char16_t)];
++  grub_guid_t fs_guid = GRUB_EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID;
++  grub_efi_handle_t *handles = NULL;
++  grub_efi_uintn_t n_handles = 0;
++  efi_file_protocol_t *root = NULL;
++  efi_file_protocol_t *fh = NULL;
++  grub_efi_uintn_t i, len = 0, outlen;
++  const char *name;
++  grub_size_t namelen, dirlen, k;
++  char *line, *v, *digits, *tail;
++  char num[12];
++  unsigned long val;
++  int numlen, ndigits;
++  grub_err_t rv;
++
++  if (argc != 1)
++    return grub_error (GRUB_ERR_BAD_ARGUMENT,
++                       "usage: novadeck_bootattempts <image-name>");
++
++  name = args[0];
++  namelen = grub_strlen (name);
++  if (namelen == 0 || namelen > NAME_MAX)
++    return grub_error (GRUB_ERR_BAD_ARGUMENT,
++                       "novadeck: image name must be 1-%d characters",
++                       NAME_MAX);
++
++  /* Alphanumerics, '-' and '_' only. The name is spliced into a firmware path,
++     so this is what keeps a '\' or a ".." out of it. */
++  for (k = 0; k < namelen; k++)
++    {
++      char c = name[k];
++      if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
++            || (c >= '0' && c <= '9') || c == '-' || c == '_'))
++        return grub_error (GRUB_ERR_BAD_ARGUMENT,
++                           "novadeck: bad character in image name '%s'", name);
++    }
++
++  /* Build \SteamOS\conf\<name>.conf in UCS-2. GRUB has no wide printf, so the
++     splice is by hand: dir (minus its NUL), then the name widened one byte at
++     a time, then the extension WITH its NUL. */
++  dirlen = sizeof (CONF_DIR) / sizeof (grub_efi_char16_t) - 1;
++  grub_memcpy (path, CONF_DIR, dirlen * sizeof (grub_efi_char16_t));
++  for (k = 0; k < namelen; k++)
++    path[dirlen + k] = (grub_efi_char16_t) name[k];
++  grub_memcpy (&path[dirlen + namelen], CONF_EXT, sizeof (CONF_EXT));
++
++  handles = grub_efi_locate_handle (GRUB_EFI_BY_PROTOCOL, &fs_guid, NULL,
++                                    &n_handles);
++
++  for (i = 0; handles && i < n_handles && !fh; i++)
++    fh = try_handle (handles[i], path, &root);
++
++  grub_free (handles);
++
++  /* The handle count is the diagnostic, not decoration: if this device turns
++     out to publish only the volume it booted from, this line is what says so
++     — and it is the fact the first attempt at this failed to establish. */
++  if (!fh)
++    return grub_error (GRUB_ERR_FILE_NOT_FOUND,
++                       "novadeck: no volume carries \\SteamOS\\conf\\%s.conf "
++                       "(%llu simple-filesystem handle(s) tried)",
++                       name, (unsigned long long) n_handles);
++
++  rv = read_conf (fh, &len);
++  if (rv != GRUB_ERR_NONE)
++    goto out;
++
++  line = find_key_line (confbuf, len, ATTEMPTS_KEY);
++  if (!line)
++    {
++      rv = grub_error (GRUB_ERR_FILE_READ_ERROR,
++                       "novadeck: no '%s' line in \\SteamOS\\conf\\%s.conf",
++                       ATTEMPTS_KEY, name);
++      goto out;
++    }
++
++  v = line + grub_strlen (ATTEMPTS_KEY);
++  while (v < confbuf + len && (*v == ' ' || *v == '\t'))
++    v++;
++
++  digits = v;
++  val = 0;
++  ndigits = 0;
++  while (v < confbuf + len && *v >= '0' && *v <= '9')
++    {
++      if (++ndigits > 9)
++        {
++          rv = grub_error (GRUB_ERR_FILE_READ_ERROR,
++                           "novadeck: implausible '%s' value", ATTEMPTS_KEY);
++          goto out;
++        }
++      val = (val * 10) + (unsigned long) (*v - '0');
++      v++;
++    }
++
++  if (ndigits == 0)
++    {
++      rv = grub_error (GRUB_ERR_FILE_READ_ERROR,
++                       "novadeck: '%s' has no numeric value", ATTEMPTS_KEY);
++      goto out;
++    }
++
++  tail = v;
++  numlen = grub_snprintf (num, sizeof (num), "%lu", val + 1);
++
++  /* head + new digits + tail. The bound is arithmetic on sizes we already
++     know, so it can only fail if CONF_MAX is smaller than the file we just
++     read plus one digit. */
++  outlen = (grub_efi_uintn_t) (digits - confbuf)
++           + (grub_efi_uintn_t) numlen
++           + (grub_efi_uintn_t) (confbuf + len - tail);
++  if (outlen > sizeof (outbuf))
++    {
++      rv = grub_error (GRUB_ERR_OUT_OF_RANGE,
++                       "novadeck: boot config would exceed %d bytes",
++                       CONF_MAX);
++      goto out;
++    }
++
++  grub_memcpy (outbuf, confbuf, (grub_size_t) (digits - confbuf));
++  grub_memcpy (outbuf + (digits - confbuf), num, (grub_size_t) numlen);
++  grub_memcpy (outbuf + (digits - confbuf) + numlen, tail,
++               (grub_size_t) (confbuf + len - tail));
++
++  rv = write_conf (fh, outbuf, outlen);
++  if (rv != GRUB_ERR_NONE)
++    goto out;
++
++  grub_printf ("novadeck: %s boot-attempts %lu -> %lu\n", name, val, val + 1);
++
++ out:
++  fh->close (fh);
++  if (root)
++    root->close (root);
++
++  return rv;
++}
++
++static grub_command_t cmd_bootattempts;
++
++GRUB_MOD_INIT (novadeck)
++{
++  cmd_bootattempts =
++    grub_register_command ("novadeck_bootattempts", grub_cmd_bootattempts,
++                           "IMAGE",
++                           "Increment boot-attempts in the SteamOS boot "
++                           "config of IMAGE (A or B) on the ESP.");
++}
++
++GRUB_MOD_FINI (novadeck)
++{
++  grub_unregister_command (cmd_bootattempts);
++}

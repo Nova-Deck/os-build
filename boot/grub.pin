@@ -13,7 +13,7 @@ git_tag:    grub-2.14
 # drift, no bootstrap step. boot/grub.sh goes tarball -> patch -> autogen.sh -> configure -> make.
 #
 # Our delta lives in boot/patches/grub/ and is applied lexically, exactly like kernel/patches/:
-#   0001  grub-core/commands/efi/steamenv.c   Valve's stage-2 module, verbatim
+#   0001  grub-core/commands/efi/novadeck.c   the boot-attempts counter module
 #   0002  grub-core/Makefile.core.def         GRUB's module manifest -- the stanza that builds it
 #
 # Only real sources are patched. The module tables the build actually reads (Makefile.core.am and
@@ -23,9 +23,10 @@ git_tag:    grub-2.14
 # 191 hunks of grub-core/Makefile.in, because Ubuntu's automake is not the one that cut the
 # tarball. That churn is not a reviewable patch.
 #
-# NOT patched, deliberately: the -fshort-wchar that the steamenv module needs (it copies L"..."
-# literals into grub_efi_char16_t buffers, so wchar_t has to be 2 bytes). Valve patches
-# configure.ac + conf/Makefile.common for x86; we pass it as a configure argument instead
+# NOT patched, deliberately: the -fshort-wchar that the novadeck module needs (it copies L"..."
+# literals into grub_efi_char16_t buffers, so wchar_t has to be 2 bytes -- without it the firmware
+# is handed a UTF-32 path and finds nothing). SteamOS patches configure.ac + conf/Makefile.common
+# for the same reason on x86; we pass it as a configure argument instead
 # (TARGET_CFLAGS, see boot/grub.sh), because 2.14's configure.ac:93-101 honours a preset
 # TARGET_CFLAGS and appends its own flags to it. A configure argument cannot bit-rot against a
 # patch context the way a configure.ac hunk can, and it keeps us off autoreconf.

@@ -24,6 +24,12 @@
 #     stopped being found, so the saved board choice never persisted.
 #
 # The label search is kept as a FALLBACK only, and it is loud when it is used.
+#
+# THE SECOND THING is where the boot-attempts call sits: AFTER terminal_output gfxterm, not before.
+# Its predecessor was Valve's steamenv_init, which had to run before any menuentry was defined
+# because it overwrote $timeout — so when it wedged on this hardware nothing had been painted and
+# nothing could be, and the only symptom was a black screen. novadeck_bootattempts touches no GRUB
+# variable, which is what buys the freedom to call it where its output is visible.
 set -euo pipefail
 shopt -s nullglob
 
@@ -155,15 +161,29 @@ else
 fi
 
 # The menu stays VISIBLE rather than hidden even once a board is saved. This device has no serial
-# console and no keyboard, and stage 1's steamcl-menu flag only reaches stage 2 through the
-# steamenv module, which this config does not invoke — so a 3s visible menu is currently the only
-# way back after picking the wrong board. Revisit when steamenv lands (docs/phase5.md).
+# console and no keyboard, and stage 1's steamcl-menu flag does not reach stage 2 at all — so a 3s
+# visible menu is the only way back after picking the wrong board.
 
 loadfont \$prefix/fonts/dejavu-mono.pf2
 insmod gfxterm
 insmod efi_gop
 set gfxpayload=keep
 terminal_output gfxterm
+
+# --- count this boot attempt ---------------------------------------------------------------------
+# Increments boot-attempts: in (\$esp)/SteamOS/conf/$SLOT.conf. novadeck-boot-good clears it once
+# the session proves healthy; novadeck-bootctl and RAUC read it to decide a slot is bad. GRUB's own
+# fat driver is read-only, so writing the ESP needs a module.
+#
+# The module prints old -> new on success and an error naming what it tried on failure. The else
+# arm exists to hold that error on screen for the 5s before the menu paints over it.
+insmod novadeck
+if novadeck_bootattempts $SLOT; then
+  true
+else
+  echo "novadeck: boot-attempts NOT counted for slot $SLOT — this slot cannot fail safe"
+  sleep 5
+fi
 
 EOF
 

@@ -178,11 +178,23 @@ for slot in A B; do
   grep -q '^  set timeout=-1$' "$cfg" && ok "grub-$lc.cfg waits when no board is saved" \
                                       || bad "grub-$lc.cfg does not wait on a fresh card"
 
-  # steamenv is built into grubaa64.efi but must not be INVOKED yet: steamenv_init overwrites
-  # timeout/timeout_style after this config has set them, and it is what bumps boot-attempts.
-  # Reintroducing it is a separate, deliberate step (docs/phase5.md).
-  grep -q 'steamenv_' "$cfg" && bad "grub-$lc.cfg invokes a steamenv_ command" \
-                             || ok "grub-$lc.cfg invokes no steamenv_ command"
+  # boot-attempts. The counter is per-IMAGE state, so slot A's config must bump A's conf and only
+  # A's: a config that counted the other slot's attempts would mark a healthy image bad and,
+  # worse, let a failing one retry forever.
+  other_uc="${other^^}"
+  grep -q "^if novadeck_bootattempts $slot; then\$" "$cfg" \
+    && ok "grub-$lc.cfg counts a boot attempt against image $slot" \
+    || bad "grub-$lc.cfg does not call novadeck_bootattempts $slot"
+  grep -q "novadeck_bootattempts $other_uc" "$cfg" \
+    && bad "grub-$lc.cfg counts a boot attempt against the OTHER image ($other_uc)" \
+    || ok "grub-$lc.cfg never names image $other_uc to novadeck_bootattempts"
+  # It has to run where its errors can be seen. Its predecessor ran before the terminal was up and
+  # a total failure was indistinguishable from success — which is the whole reason it was replaced.
+  ln_term=$(grep -n '^terminal_output gfxterm$' "$cfg" | cut -d: -f1)
+  ln_att=$(grep -n '^if novadeck_bootattempts ' "$cfg" | cut -d: -f1)
+  [ -n "$ln_term" ] && [ -n "$ln_att" ] && [ "$ln_att" -gt "$ln_term" ] \
+    && ok "grub-$lc.cfg counts the attempt after terminal_output gfxterm" \
+    || bad "grub-$lc.cfg calls novadeck_bootattempts before the terminal is up"
 
   if command -v grub-script-check >/dev/null 2>&1; then
     grub-script-check "$cfg" 2>"$T/gscerr" \

@@ -2,8 +2,8 @@
 # novadeck GRUB (stage 2) build.
 #
 # Builds the per-slot stage-2 bootloader for arm64-efi from the pinned GNU GRUB 2.14 release
-# tarball plus boot/patches/grub/ (Valve's steamenv module), and generates the two per-slot
-# grub.cfg files that go with it. Emits:
+# tarball plus boot/patches/grub/ (the novadeck boot-attempts module), and generates the two
+# per-slot grub.cfg files that go with it. Emits:
 #   out/boot/grubaa64.efi
 #   out/boot/grub-a.cfg, out/boot/grub-b.cfg
 #   out/boot/fonts/dejavu-mono.pf2
@@ -56,16 +56,17 @@ done
 # This is the one autotools step in the GRUB build. It is not the tarball's `bootstrap`: bootstrap
 # is what needs a separately-checked-out gnulib at an exact revision, and the release tarball
 # already vendors gnulib under grub-core/lib/gnulib. Hence no gnulib pin.
-echo "[grub] autogen.sh (regenerating the module tables for the steamenv stanza)"
+echo "[grub] autogen.sh (regenerating the module tables for the novadeck stanza)"
 ( cd "$SRCDIR" && ./autogen.sh )
-grep -q steamenv "$SRCDIR/grub-core/Makefile.in" \
-  || { echo "autogen.sh did not pick up the steamenv module — is patch 0002 applied?" >&2; exit 1; }
+grep -q novadeck "$SRCDIR/grub-core/Makefile.in" \
+  || { echo "autogen.sh did not pick up the novadeck module — is patch 0002 applied?" >&2; exit 1; }
 
 BUILDDIR="$WORK/build"
 rm -rf "$BUILDDIR"; mkdir -p "$BUILDDIR"
 cd "$BUILDDIR"
 
-# TARGET_CFLAGS carries the module's -fshort-wchar (see boot/grub.pin). -Os has to be repeated:
+# TARGET_CFLAGS carries -fshort-wchar, which the novadeck module needs so its L"..." UCS-2 path
+# literals are 2-byte as the firmware expects (see boot/grub.pin). -Os has to be repeated:
 # configure only defaults TARGET_CFLAGS to -Os when it is EMPTY, and then appends its own flags to
 # whatever it found (configure.ac:93-101), so setting it here replaces the default rather than
 # adding to it.
@@ -96,13 +97,13 @@ make -j"$(nproc)" AWK=gawk
 #   loadenv                 load_env/save_env against the ESP's grubenv -- the saved board choice
 #   regexp                  derives the boot disk from $root; see boot/gen-grub-cfg.sh
 #   search*                 the fallback path when that derivation fails
-#   steamenv                built in, currently NOT invoked by the generated grub.cfg
+#   novadeck                novadeck_bootattempts, called once per boot by the generated grub.cfg
 MODULES="boot linux part_gpt fat btrfs loadenv search search_fs_file \
 search_fs_uuid search_label chain reboot halt sleep test true echo read \
-configfile regexp normal minicmd gfxterm efi_gop font all_video steamenv"
+configfile regexp normal minicmd gfxterm efi_gop font all_video novadeck"
 
 echo "[grub] grub-mkimage"
-test -f grub-core/steamenv.mod || { echo "steamenv.mod was not built — is patch 0002 applied?" >&2; exit 1; }
+test -f grub-core/novadeck.mod || { echo "novadeck.mod was not built — is patch 0002 applied?" >&2; exit 1; }
 ./grub-mkimage -d grub-core -O arm64-efi -p /EFI/steamos $MODULES \
   -o "$OUT/grubaa64.efi"
 

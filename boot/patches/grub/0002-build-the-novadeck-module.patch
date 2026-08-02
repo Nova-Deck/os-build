@@ -1,4 +1,4 @@
-Build the steamenv module.
+Build the novadeck module.
 
 grub-core/Makefile.core.def is GRUB's module manifest. Adding a stanza here is
 the whole change; everything else is generated. boot/grub.sh runs ./autogen.sh
@@ -13,19 +13,20 @@ not the automake the 2.14 tarball was released with. There is no version of that
 diff worth keeping in a patch file.
 
 `enable = efi` builds the module for every EFI target; only arm64-efi is ever
-used here. The cflags exemption is Valve's: steamenv.c takes the address of
-packed struct members when walking EFI file-info records.
+used here. Unlike Valve's steamenv stanza this needs no
+-Wno-error=address-of-packed-member: novadeck.c reads and assigns packed struct
+members but never takes their address.
 
+diff -urN a/grub-core/Makefile.core.def b/grub-core/Makefile.core.def
 --- a/grub-core/Makefile.core.def
 +++ b/grub-core/Makefile.core.def
-@@ -843,6 +843,13 @@
+@@ -843,6 +843,12 @@
  };
  
  module = {
-+  name = steamenv;
-+  common = commands/efi/steamenv.c;
++  name = novadeck;
++  common = commands/efi/novadeck.c;
 +  enable = efi;
-+  cflags = "-Wno-error=address-of-packed-member";
 +};
 +
 +module = {

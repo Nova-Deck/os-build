@@ -33,16 +33,19 @@ FAN_SAFE_PWM = 128
 # entries. Not to be confused with the cpufreq governor (schedutil / performance): that is
 # frequency policy, a separate axis, and stays owned by the power profile.
 #
-# WE DIVERGE FROM STEAMOS ON THE DEFAULT, deliberately. SteamOS defaults to the stock scheduler
-# because scx there is a capability that may not be installed at all — its manager bails with
-# "scx.service not installed" and holo ships no scx packages. We build both halves ourselves
-# (CONFIG_SCHED_CLASS_EXT in kernel/kernel.config, packages/scx-scheds into the [novadeck]
-# overlay, scx-scheds in customize-base.sh PKGS), so the capability is always there and lavd's
-# latency-first behaviour is the reason a handheld wants it. Hence DEFAULT_CPU_SCHEDULER below.
-# "none" stays a first-class choice: an explicit cpu_scheduler= in powerd.state outranks the
-# default, so a user who picks EEVDF keeps it across reboots.
+# THE DEFAULT IS "none", i.e. the stock in-kernel scheduler — same as SteamOS, for a different
+# reason. SteamOS defaults to stock because scx there may not be installed at all (its manager
+# bails with "scx.service not installed" and holo ships no scx packages); we build both halves
+# ourselves (CONFIG_SCHED_CLASS_EXT in kernel/kernel.config, packages/scx-scheds into the
+# [novadeck] overlay, scx-scheds in customize-base.sh PKGS), so the capability is always there
+# and lavd is one `novadeck-scheduler lavd` away. We default to stock because lavd was REPORTED
+# to hurt in-game performance — see the TODO.md item; until that is measured rather than
+# reported, the conservative scheduler is the one that ships on. lavd was briefly the default
+# (2026-07-30 to 2026-08-03); flipping it back does NOT touch a device that already persisted
+# `cpu_scheduler=lavd` in powerd.state — an explicit saved choice outranks this default in both
+# directions, so such a device needs one `novadeck-scheduler none`.
 #
-# The DEFAULT IS NOT IMPLEMENTED BY ENABLING scx.service, and must not be. The unit ships
+# THE DEFAULT IS NOT IMPLEMENTED BY ENABLING scx.service, and must not be. The unit ships
 # installed but never `enable`d; restore_cpu_scheduler() below is the only thing that starts it
 # at boot. That is load-bearing for the --autopower coupling described next: a preset or a
 # .wants symlink would start lavd independently of us, before we own the PowerProfiles names,
@@ -54,7 +57,7 @@ FAN_SAFE_PWM = 128
 # performance/balanced/powersave mode live, no restart. We answer that name ourselves
 # (PPD_NAMES below) because we ship no power-profiles-daemon.
 CPU_SCHEDULERS = ["none", "lavd"]
-DEFAULT_CPU_SCHEDULER = "lavd"
+DEFAULT_CPU_SCHEDULER = "none"
 SCX_UNIT = "scx.service"
 SCX_BINARY = Path("/usr/bin/scx_lavd")
 SCX_SYSFS = Path("/sys/kernel/sched_ext")
@@ -549,9 +552,10 @@ class NovadeckPower:
             print(f"novadeck-powerd: {SCX_UNIT} reset-failed failed: {exc}", file=sys.stderr)
 
     def restore_cpu_scheduler(self):
-        # Apply the saved choice at daemon start, or DEFAULT_CPU_SCHEDULER when nothing is saved.
-        # scx.service is never `enable`d, so this (and an explicit `systemctl start`) is the only
-        # path that loads a BPF scheduler — which is what puts lavd on a fresh device.
+        # Apply the saved choice at daemon start, or DEFAULT_CPU_SCHEDULER ("none") when nothing
+        # is saved. scx.service is never `enable`d, so this (and an explicit `systemctl start`) is
+        # the only path that loads a BPF scheduler — a fresh device therefore boots on the stock
+        # in-kernel scheduler and only a persisted `cpu_scheduler=lavd` starts the unit here.
         # Called from main() once the PPD bus names are owned, NOT from __init__ — scx_lavd runs
         # with --autopower and reads ActiveProfile on its first tick.
         if len(self.available_cpu_schedulers()) == 1:

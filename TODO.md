@@ -5,6 +5,36 @@ rationale lives in the linked memories and commit history.
 
 ## Open
 
+- [ ] **`scx_lavd` is OFF by default as of 2026-08-03 — investigate the reported in-game
+  performance regression before turning it back on.** Users reported worse in-game performance
+  with lavd, so `DEFAULT_CPU_SCHEDULER` in `fs-overlay/usr/bin/novadeck-powerd` went back to
+  `"none"` (stock EEVDF). **This is a report, not a measurement — nothing here has been profiled.**
+  Everything else about the sched_ext stack is unchanged and still works: the kernel half, the
+  package, `scx.service` (still never `enable`d), the `CpuScheduler1` property and
+  `novadeck-scheduler lavd`. Only the fresh-device default moved.
+  - **A device that already booted the lavd default keeps lavd.** `save_state()` persists
+    `cpu_scheduler=` on any property write, and an explicit saved value outranks the default in
+    both directions. No state migration was written (nothing public has shipped, same call as when
+    lavd became the default). Test devices need one `novadeck-scheduler none`, and a bench run
+    must check `novadeck-scheduler status` first rather than assuming the new default is in force.
+  - **Reproduce and quantify before deciding anything.** Wanted: a frame-time capture (MangoHud
+    log, not eyeballed FPS) on the same title, same power profile, same governor, lavd vs none,
+    ideally both orders to rule out thermal drift. Note whether the title is native arm64, Proton,
+    or system-FEX x86 — lavd's latency heuristics and FEX's thread behaviour are a plausible
+    interaction and the three paths should not be assumed to behave alike.
+  - **Suspects worth checking first, cheapest to most expensive.** (1) `--autopower`: lavd's
+    internal power mode follows `PowerProfiles.ActiveProfile`, and it gives up on that coupling
+    **permanently and silently** on an unknown profile value — a device stuck in powersave mode
+    would look exactly like this report. Diagnose with `scx_lavd --monitor 1`; the give-up path
+    logs nothing, so the journal cannot see it ([[novadeck-ppd-shim-for-scx-autopower]]).
+    (2) scx 1.1.2 is pinned and old — the kernel already warns `Writing directly to
+    p->scx.slice/dsq_vtime is deprecated` against its BPF code; try a version bump before
+    concluding lavd is wrong for this SoC. (3) little/big topology: check lavd is reading this
+    SoC's core layout sanely rather than treating it as uniform.
+  - Re-enabling by default is a one-line revert of `DEFAULT_CPU_SCHEDULER` plus the comment blocks
+    in `novadeck-powerd`, `novadeck-scheduler` and `images/customize-base.sh` that state the
+    default. Do it only on measured evidence. See [[scx-sched-bringup]].
+
 - [x] **Remote access — (a) HW-VALIDATED 2026-07-29; (b) the approval prompt is INVESTIGATED AND
   REJECTED, not deferred.** Shipped in `78982fe` (`novadeck-pairingd` + `steamos-devkit-mode` +
   `org.novadeck.policy`, 34 offline cases in `images/test-pairingd.sh`).

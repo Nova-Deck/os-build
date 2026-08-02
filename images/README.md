@@ -29,13 +29,13 @@ it** — which is why RAUC must rsync `/var` across on update (see `TODO.md`).
 | `pacman.conf` + `os-release` | Committed declarations staged into the bootstrap container: the repo set the root is resolved from, and the root's own identity (over the vendor's `/usr/lib/os-release`). |
 | `partition-table.txt` | The 8-partition A/B layout (ESP, A/B boot, A/B root, A/B /var, shared /home). Single source of truth for sizes, typecodes and labels. |
 | `genpart.sh [target\|--min]` | Emit an `sgdisk` script from the table; apply it to a disk/image when `target` is given; print the fixed layout's minimum size in MiB with `--min`. |
-| `initramfs/init` | The initramfs `/init`: mounts the root read-only, mounts `/var`, stacks the `/etc` overlay on it, then `switch_root`s into systemd. Degrades to a writable un-overlaid root (loudly, via `/dev/kmsg`) rather than bricking a device with no serial console. |
-| `mkinitramfs.sh <base-rootfs>` | Stage `bash` + util-linux out of the base, resolve their libraries via `readelf`, and roll `init` into `out/initramfs.cpio.gz` (~2.2M). No mkinitcpio/dracut, no modules — every filesystem and block driver we need is `=y`. |
+| `initramfs/init` | The initramfs `/init` (Phase 5): mounts the booted slot's root read-only + its `/var`, mounts the slot's efi-a/b partition at `/efi` (from `novadeck.efi=PARTLABEL=`), stacks the `/etc` overlay on `/var`, then `switch_root`s into systemd. Slot selection is not here — the bootloader chain did it. Degrades to a writable un-overlaid root (loudly, via `/dev/kmsg`) rather than bricking a device with no serial console. |
+| `mkinitramfs.sh <base-rootfs>` | Stage `bash` + util-linux out of the base, resolve their libraries via `readelf`, and roll `init` into `out/initramfs.cpio.gz` (installed as `/boot/initramfs-novadeck.img`). No mkinitcpio/dracut, no modules — every filesystem and block driver we need is `=y`. |
 | `assemble-rootfs.sh <base-rootfs>` | Stage base + kernel + firmware, then split the tree into the two images the table wants: `rootfs.img` (btrfs, ro) and `var.img` (ext4, carries the `/etc` overlay upper). All unprivileged. Also injects the unified `fs-overlay/` payload (session, HW-support, InputPlumber, audio, FEX, Steam shell) and the offload bind units. |
 | `seal.list` + `seal-rootfs.sh` | **What a release root must not be able to do** (Phase 4a step 3). The list declares the packages and paths removed after the last install — pacman, gnupg/dirmngr, the keyring and its vendor-enabled weekly timer; the script expands each name through the package database and deletes its files. The database survives as provenance under `/usr/lib/novadeck/pkgdb`. Release only: a `NOVADECK_DEV` card keeps pacman on purpose. |
 | `trim.list` + `trim-rootfs.sh` | **What a release root need not weigh** (Phase 4a step 5). Same declare-then-apply shape, for build and documentation artefacts: headers, static libs, cmake/pkgconfig, `.gir`, man/doc/info, locale sources and non-English catalogues, and the gcc-libs language runtimes nothing links. Runs after the seal, release only. ~225 MB compressed, paid twice under A/B (both slots, plus every bundle). |
 | `guard-rootfs.sh` | **The check that stops both lists from being comments** (Phase 4a step 4). Asserts on the built tree, never on the source diff: the seal fully applied, the named package-manager entry points gone, no dangling systemd enable-symlink, `manifest.lock` still describing the tree, the trim fully applied — plus a report-only per-directory size delta against the previous build. |
-| `make-sdcard.sh` | Lay the **full** GPT from the table and populate only the A side (ESP + root-A + var-A + home, with `/home` pre-seeded with the native arm64 Steam client) → `out/images/sdcard.img`. The B slots and both `efi-*` partitions are created but empty, so adding RAUC later never needs a reflash. Unprivileged (mtools + sgdisk + `dd`, no loop). |
+| `make-sdcard.sh` | Lay the **full** GPT from the table and populate **both** slots (Phase 5): the ESP carries the stage-1 steamcl + `SteamOS/conf` + a seeded grubenv; each slot's `efi-*` partition carries its stage-2 GRUB + partsets; root-A/B + var-A/B + home. `/home` is pre-seeded with the native arm64 Steam client. → `out/images/sdcard.img`. Unprivileged (mtools + sgdisk + `dd`, no loop). |
 | `rauc/manifest.raucm.in` | RAUC update-manifest template (`@VERSION@`; `compatible=novadeck`). |
 | `genbundle.sh [version]` | Wrap the root image into a signed RAUC bundle (`.raucb`) for OTA. Dev builds mint an ephemeral cert; release builds pass `RAUC_CERT`/`RAUC_KEY`. |
 
@@ -52,15 +52,14 @@ images/build-image.sh
 pacman-installs the release runtime under emulation); firmware fetch/verify + assembly
 run in `novadeck-build`. Device-proprietary firmware is fetched from the pinned
 Nova-Deck/qcom-firmwares repo (`firmware/fetch-qcom-fw.sh`, idempotent — no device dump
-needed). Output is `out/images/rootfs.img`; package + deploy per `boot/` (KERNEL
-onto the ESP, rootfs image onto the rootfs partition).
+needed). Output is `out/images/rootfs.img`; the root carries its own boot half
+(`/boot/{Image, initramfs-novadeck.img, dtbs}` + the `/usr/lib/novadeck/boot` mirror).
+The flashable card is `images/make-sdcard.sh` (or `make sdcard`).
 
-To test on hardware off an SD card first, package the boot image then wrap both into one
-card image (ESP + root, no A/B):
+To test on hardware off an SD card:
 
 ```
-docker run --rm -v "$PWD":/src -w /src novadeck-build boot/package.sh
-docker run --rm -v "$PWD":/src -w /src novadeck-build images/make-sdcard.sh
+images/make-sdcard.sh
 sudo dd if=out/images/sdcard.img of=/dev/sdX bs=4M conv=fsync status=progress
 ```
 
@@ -86,7 +85,6 @@ docker run --rm -v "$PWD":/src -w /src \
   -e NOVADECK_DEV=1 -e NOVADECK_WIFI_SSID="$SSID" -e NOVADECK_WIFI_PSK="$PSK" \
   -e NOVADECK_SSH_PUBKEY="$(cat work/dev-ssh/id_ed25519.pub)" \
   novadeck-build images/assemble-rootfs.sh work/base
-docker run --rm -v "$PWD":/src -w /src novadeck-build boot/package.sh
 docker run --rm -v "$PWD":/src -w /src novadeck-build images/make-sdcard.sh
 ```
 
@@ -104,9 +102,14 @@ docker run --rm -v "$PWD":/src -w /src novadeck-build images/assemble-rootfs.sh 
 docker run --rm -v "$PWD":/src -w /src novadeck-build images/genbundle.sh
 ```
 
-**Done (Phase 4 assembly):** partition layout, read-only Btrfs root, signed RAUC bundle.
-**Deferred (runtime, needs an installed system/VM):** full disk population + GRUB A/B,
-overlayfs `/etc`, `steamos-atomupd` client, and boot-failure auto-rollback — these are
-validated by the Phase 4 gate (`install → OTA → forced-failure rollback`) on hardware.
+**Done (Phase 5 assembly):** partition layout, read-only Btrfs root, signed RAUC bundle,
+SteamDeck-style boot (steamcl stage 1 + per-slot GRUB stage 2 + kernel in the slot root),
+initramfs `/efi` mount, both slots populated by `make-sdcard.sh`, and the offline suites in
+`make test` (`test-stage2-grub.sh`, `test-units.sh`, `test-bootctl.sh`, `test-post-install.sh`)
+plus `make verify-card` against the built image.
+**Deferred (needs hardware):** the whole chain end to end — ABL chainloading stage 1, the board
+choice persisting to the ESP grubenv, a slot switch, and the demote path. Auto-rollback of a slot
+that never reaches systemd needs the `steamenv` counter, which is deliberately not wired up yet
+(`docs/phase5.md`). `steamos-atomupd` remains out of scope.
 
-_Phase 4._
+_Phase 5._

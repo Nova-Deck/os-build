@@ -1014,17 +1014,47 @@ rationale lives in the linked memories and commit history.
   rejection (a truncated state file is refused by the parser) and the two-file generation scheme,
   which is what makes a torn write survivable in the first place.
 
-- [ ] **`efi-a`/`efi-b` are unused under design C** — created + formatted vfat, EMPTY, and no longer
-  earmarked for per-slot boot images. That was design A. Phase 4b picked design **C**
-  (`docs/phase4.md`): one slot-AGNOSTIC `/KERNEL`, slot selection moved out of the baked cmdline
-  into the initramfs, which reads a try-counter state file on the ESP and falls back to the other
-  slot at zero. So `boot/package.sh` does NOT need a slot argument, and there is nothing per-slot
-  to store. They stay allocated because the alternative is a reflash if a later pass does want
-  them — as staging for a new boot image, or for the previous kernel a failed health check reverts
-  to. 128MiB of card sitting idle. Adding a GRUB stage stays a legitimate fallback if C proves
-  unworkable — reconsider it rather than working around it. See [[sm8650-rocknix-abl-boot]].
+- [ ] **Reintroduce the `steamenv` stage-2 module** — Phase 5 ships `grubaa64.efi` with Valve's
+  `steamenv` compiled IN and never invoked, so `boot-attempts` is never incremented. Consequence,
+  stated in `docs/phase5.md` and in the health unit: a slot that boots badly IS demoted (the health
+  unit fails → `novadeck-boot-bad.service` → `image-invalid=1`), but a slot that never reaches
+  systemd at all is NOT rolled back — steamcl's failsafe has no counter to act on, so it is retried
+  every boot. Recovery is the stage-2 board menu, which is why it stays visible rather than hidden.
+  The reason it is out: `steamenv_init` (not `steamenv_boot`) bumps the counter AND then overwrites
+  `timeout`/`timeout_style` unconditionally, so calling it after the config sets its own made a
+  fresh card boot menu entry 0 — one specific board — instantly on every device. Turning it back on
+  is a config change against a byte-identical binary: `steamenv_init` first, guard the timeout block
+  with `if [ "$timeout" != "-1" ]`, `linux` → `steamenv_boot linux`, and flip the assertions in
+  `images/test-stage2-grub.sh` + `images/verify-card.sh`. Judge on-device at the same time: its GOP
+  mode scoring prefers landscape on portrait panels, and its quiet/verbose juggling can rewrite our
+  `quiet`. Do this only once the chain is hardware-proven WITHOUT it.
 
-- [ ] **Phase 4b pass 2 — RAUC on top of the landed boot path** — pass 1 is merged (`d524f09`).
+- [x] **`efi-a`/`efi-b` are unused under design C — CLOSED 2026-08-02 BY PHASE 5** — created +
+  formatted vfat, EMPTY, and no longer earmarked for per-boot images. That was design A. Phase 4b
+  picked design **C** (`docs/phase4.md`): one slot-AGNOSTIC `/KERNEL`, slot selection moved out of
+  the baked cmdline into the initramfs, which reads a try-counter state file on the ESP and falls
+  back to the other slot at zero. So `boot/package.sh` does NOT need a slot argument, and there is
+  nothing per-slot to store. They stay allocated because the alternative is a reflash if a later
+  pass does want them — as staging for a new boot image, or for the previous kernel a failed health
+  check reverts to. 128MiB of card sitting idle. Adding a GRUB stage stays a legitimate fallback if
+  C proves unworkable — reconsider it rather than working around it. See
+  [[sm8650-rocknix-abl-boot]].
+  **Resolution (Phase 5, `docs/phase5.md`): the "adding a GRUB stage" fallback became the design.**
+  Design C was replaced by the SteamDeck-style chain — ABL → steamcl (stage 1, ESP) → per-slot
+  GRUB (stage 2, `efi-a`/`efi-b`) → kernel in the slot root — so `efi-a`/`efi-b` now carry the
+  per-slot `grubaa64.efi` + `grub.cfg` + partsets, `/KERNEL` and `/NOVADECK/STATE.*` are gone, and
+  `boot/package.sh`/`boot/cmdline` were deleted.
+
+- [x] **Phase 4b pass 2 — RAUC on top of the landed boot path — CLOSED 2026-08-02 BY PHASE 5** —
+  pass 1 is merged (`d524f09`).
+  **Resolution: absorbed into Phase 5.** The boot-path rework (`docs/phase5.md`) replaced design C
+  wholesale: the post-install hook's `/KERNEL`
+  rotation and the `KERNEL.BAK`/`kernel=` machinery are gone, the hook now refreshes the slot's
+  `efi-a/b` stage 2 + partsets and the ESP steamcl from the installed root's
+  `/usr/lib/novadeck/boot` mirror and writes the bootconf (steps 1-4 land there), and the RAUC
+  backend runs Valve's `bootloader-custom-backend.sh.in` over `steamos-bootconf`. Still open and
+  independent of the boot path: steps 5-6 (the `steamos-update`/`novadeck-steamos-manager` D-Bus
+  surface on the deck session bus, and the bundle server).
   **Steps 1-4 IMPLEMENTED 2026-07-28 on `feat/phase4b-rauc`, NOT yet HW-validated; steps 5-6 are
   deliberately deferred to a follow-up branch** (updates are CLI-driven for now, so a failure in
   this pass is attributable to the update machinery and not to UI wiring on top of it).

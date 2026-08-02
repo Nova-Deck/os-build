@@ -27,8 +27,11 @@ Every `make` invocation below runs from the repo root. A dev build needs its env
 `images/partition-table.txt` is the single source of truth for sizes, typecodes and labels;
 `images/genpart.sh` emits the `sgdisk` script from it. Three facts drive most of what follows:
 
-- **The ESP is shared.** `/KERNEL` and the slot state (`/NOVADECK/STATE.{0,1}`) live there and
-  serve both slots. ABL reads partition 1 only.
+- **The shared ESP carries the bootconf, not a kernel.** SteamOS/conf/{A,B}.conf on the ESP decide
+  which image boots and how many failed attempts it is allowed; the stage-1 steamcl (as
+  `/EFI/BOOT/bootaa64.efi`) is what ABL chainloads. Each slot's *own* efi partition (efi-a/efi-b)
+  carries that slot's stage-2 GRUB and its identity partset (`SteamOS/partsets/self`). ABL reads
+  partition 1 only.
 - **`/var` is per-slot, and `/etc` rides on it** (an overlayfs whose upper dir is
   `/var/lib/overlays/etc/upper`). A slot switch therefore carries `/etc` with it.
 - **`/home` is shared and survives everything** — including the paired SSH keys in
@@ -75,8 +78,8 @@ sudo dd if=out/images/sdcard.img of=/dev/sdX bs=4M conv=fsync status=progress
 
 `make-sdcard.sh` lays the **full** GPT and populates **both** slots — ESP + root-A/-B + var-A/-B +
 home, with `/home` pre-seeded with the native arm64 Steam client and root-B carrying a distinct
-btrfs fsid. Both `efi-*` partitions are created empty (design C keeps the boot image slot-agnostic
-at `/KERNEL` on the shared ESP). B is populated rather than left empty because a slot switch cannot
+btrfs fsid. Each `efi-*` partition carries that slot's stage-2 GRUB, its `grub.cfg` and the
+partsets that identify it. B is populated rather than left empty because a slot switch cannot
 be proven against a slot that does not boot; set `NOVADECK_SLOT_B=0` for a faster local loop, at the
 cost of a card whose first slot switch can only exercise the failover path.
 
@@ -84,10 +87,18 @@ Run `verify-card` before you commit a card to a device — it asserts the built 
 the source tree, which is the only place the GPT, the ESP contents and the per-slot filesystem
 identities are checked at all.
 
-To install a freshly built kernel onto an already-flashed card's ESP without rebuilding the image:
+**The first boot stops at the stage-2 board menu and waits.** One image serves all 15 boards, so
+the DTB is the one thing the card cannot know. The choice is written to `/EFI/steamos/grubenv` on
+the shared ESP, and every boot after that takes it automatically behind a 3-second visible menu —
+including across a slot switch and an update, since the grubenv is on the ESP rather than in a
+slot. Picking the wrong board gives a card that does not come up; the menu stays visible
+(rather than hidden) precisely so there is a way back on a device with no keyboard.
+
+To install a freshly built stage-1 steamcl onto an already-flashed card's ESP without rebuilding
+the image:
 
 ```sh
-make deploy ESP=/run/media/$USER/NOVADECK-ESP
+make deploy ESP=/run/media/$USER/NOVADECK
 ```
 
 ## Reach the device
@@ -167,17 +178,20 @@ Not as `root`: `/root` is on the read-only root and does not survive the slot wr
 Every install writes the whole slot today (`[image.rootfs]` names `rootfs.img` and nothing else),
 so budget minutes of SD-card writes for a one-package bump.
 
-The post-install hook rotates `/KERNEL` to the slot it just wrote, randomises the target slot's
-btrfs fsid (both slots otherwise share an fsid *and* `devid=1`, and mounting one can hand you the
-other), and copies `/var` across. Reboot to land on the new slot.
+The post-install hook makes the freshly written slot bootable: it re-randomises the target's btrfs
+fsid (both slots otherwise share an fsid *and* `devid=1`, and mounting one can hand you the other),
+copies `/var` across, installs this build's stage-2 GRUB + grub.cfg + font onto the target's efi
+partition and re-points its partsets, refreshes the shared ESP's stage-1 steamcl if it changed, and
+finally arms the target for its trial boot through steamos-bootconf. Reboot to land on the new slot.
 
-## Read and steer the slot state
+## Read and steer the boot state
 
 ```sh
-novadeck-bootctl status               # what booted, and what the ESP says
-novadeck-bootctl try b                # boot slot b next; revert after 1 failed attempt
-novadeck-bootctl mark-good            # confirm the slot on trial — this is what ends a trial
-novadeck-bootctl rollback             # abandon a trial, return to the active slot
+novadeck-bootctl status               # what booted, and what the ESP/efi say
+novadeck-bootctl get-state B          # is slot B fit to boot? (good|bad)
+novadeck-bootctl set-primary B        # boot slot B next (starts its trial boot)
+novadeck-bootctl set-state B bad      # demote B; the next boot goes to the other slot
+novadeck-bootctl mark-good            # confirm THIS boot — ends its trial, clears boot-attempts
 ```
 
 **All of these need root, and a release image ships no `sudo`.** As `deck` the tool cannot answer
@@ -185,20 +199,44 @@ any of it. On a dev card, `ssh -i work/dev-ssh/id_ed25519 root@<device>`; on a r
 read the state off the card offline (below). `rauc install` is the deliberate exception — it goes
 through rauc's D-Bus service and polkit, which is why it works as `deck`.
 
-**Three traps, each of which has inverted a conclusion on real hardware:**
+These are Valve's SteamOS semantics, surfaced through the same steamos-bootconf that RAUC uses, so
+`novadeck-bootctl` and `rauc status` agree by construction. The state that decides a boot lives in
+the ESP conf of each image:
+
+- **`image-invalid`** — a hard demote. `set-state <slot> bad` sets it (and the boot-health unit's
+  failure path does exactly that, via `novadeck-boot-bad.service`); only a completed install clears
+  it, because the post-install hook is the only place that knows an install completed. **This is
+  the only rollback trigger that is live today.**
+- **`boot-attempts`** — the trial counter, and **nothing increments it right now**. In the SteamOS
+  design the stage-2 `steamenv` module bumps it before every kernel boot, `mark-good` clears it
+  after a healthy session, and steamcl's failsafe offers a menu at ≥3 and auto-picks the other slot
+  at ≥6. Our stage-2 config does not invoke `steamenv` (see `docs/phase5.md` and `boot/README.md`
+  for why), so it stays 0. `get-state` still reads it, and `mark-good` still clears it, so this
+  becomes live the moment `steamenv` is turned back on.
+
+> **What that means in practice.** A slot that boots but comes up broken IS demoted — the health
+> unit fails and the next boot goes to the other slot. A slot that never gets far enough to run
+> systemd at all is NOT rolled back automatically; it will be retried every boot. Recovery is the
+> stage-2 board menu, which is why it stays visible rather than hidden.
+
+Three traps, each of which has inverted a conclusion on real hardware:
 
 - **`rauc status` cannot tell promoted from still-on-trial.** It reports the slot `good` in both
-  states. Only the ESP slot state distinguishes them.
-- **The `STATE.N` filename is not the slot.** `STATE.0` has held slot B's record. The higher
-  `gen=` is the tiebreak; reading `STATE.0` as "slot A" inverts the answer.
-- **A trial that is never confirmed reverts.** `try` arms a counter; `mark-good` is the only
-  thing that ends the trial. Both branches of the abandon path — the trial slot failing to mount,
-  and an explicit `rollback` — are hardware-validated, and both restore the previous kernel.
+  states. Only the ESP conf distinguishes them — and while `boot-attempts` is unwired, not even
+  that does: read `image-invalid` and whether the health unit succeeded this boot
+  (`systemctl status novadeck-boot-good`).
+- **A slot that never booted answers `good`.** `get-state` reads `boot-attempts ≥ 1` or
+  `image-invalid > 0`; a freshly installed slot has neither, so it is indistinguishable from a
+  confirmed one until its first boot. That is by design — a new slot must not report bad before it
+  has ever tried.
+- **A trial that is never confirmed does not revert on its own.** With the counter unwired, the
+  automatic revert is the health unit failing and demoting the running image. If the session never
+  comes up at all, nothing fires; `set-primary` back to the good slot by hand.
 
-`set-kernel <a|b> [backup-name]` records which slot's boot image is currently on the shared ESP.
-`try` warns (rather than refuses) when `/KERNEL` belongs to a different slot: that boot runs a
-root whose `/lib/modules` came from another build, and `CFG80211`/`ATH12K` are `=m`, so it comes
-up with no Wi-Fi on a device with no serial console.
+`set-primary` is the manual equivalent of the old `try`: it arms the other slot for its trial boot.
+There is no manual `rollback` — `set-primary` back to the good slot is it. `self` is accepted anywhere an image name is, and resolves to
+the booted image; that is what the boot-health unit's failure path uses to demote (`set-state self
+bad`).
 
 ## Recovery: when it does not boot
 
@@ -222,21 +260,28 @@ sudo journalctl -D /mnt/.novadeck/offload/var/log/journal --list-boots
 sudo journalctl -D /mnt/.novadeck/offload/var/log/journal _BOOT_ID=<id>
 ```
 
-The ESP carries the state that decided the boot:
+The ESP carries the bootconf that decided the boot, and the booted slot's efi partition carries
+its identity:
 
 ```sh
 sudo mount /dev/sdX1 /mnt-esp                 # NOVADECK-ESP
-cat /mnt-esp/NOVADECK/STATE.0 /mnt-esp/NOVADECK/STATE.1
+cat /mnt-esp/SteamOS/conf/A.conf /mnt-esp/SteamOS/conf/B.conf
+sudo mount /dev/sdX2 /mnt-efi                 # novadeck-efi-A (the booted slot's efi)
+cat /mnt-efi/SteamOS/partsets/self            # which image this efi partition IS
 ```
 
-Higher `gen=` wins. `images/initramfs/init` is the authoritative description of the format.
+`image-invalid: 1` on the conf of the image that just failed means it was demoted — by the health
+unit's failure path, by hand, or by an interrupted install. `boot-attempts:` will read 0 whatever
+happened, until the stage-2 counter is wired up.
+`steamos-bootconf` is the authoritative tool; `images/test-bootctl.sh` documents the semantics.
 
 The initramfs is written to **degrade loudly rather than brick**: if it cannot assemble the
 `/etc` overlay it falls back to a writable un-overlaid root and says so via `/dev/kmsg`. A device
 that boots to a shell with a strange `/etc` is that path, not a corrupt image.
 
-A torn write to the ESP, or a `/KERNEL` that no slot's modules match, is a **reflash** — that is
-the acknowledged failure mode of the design, not a bug to work around.
+A torn write to the ESP or to a slot's efi partition — a lost partset, a missing stage-2 GRUB — is
+a **reflash**; the post-install hook refuses to update a card whose booted efi has no partsets.
+That is the acknowledged failure mode of the design, not a bug to work around.
 
 ## Before a push
 

@@ -1,5 +1,14 @@
 # Phase 4 — sealed manifest rootfs + A/B atomic updates
 
+> **Superseded in Phase 5 (`docs/phase5.md`).** The 4b slot-state design this document
+> describes — the `/KERNEL` Android boot image on the shared ESP, the `/NOVADECK/STATE.*`
+> files, design-C slot selection in the initramfs, and the post-install `/KERNEL` rotation —
+> has been replaced by the SteamDeck-style chain (ABL → steamcl stage 1 → per-slot GRUB
+> stage 2 → kernel in the slot root) and the corresponding `steamos-bootconf` RAUC backend.
+> The 4a sealed-rootfs and 4c bootstrap halves still describe the current build. Kept as
+> the design record for what preceded Phase 5; nothing here reflects the boot path the tree
+> builds today.
+
 Phase 4 turns the image from "a rootfs we assembled with a package manager" into "a
 declared artifact that can be replaced atomically and rolled back". It splits into three
 parts, two of them independent:

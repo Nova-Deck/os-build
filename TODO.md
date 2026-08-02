@@ -1014,7 +1014,29 @@ rationale lives in the linked memories and commit history.
   rejection (a truncated state file is refused by the parser) and the two-file generation scheme,
   which is what makes a torn write survivable in the first place.
 
-- [ ] **Wire the `boot-attempts` counter — call `steamenv_init` (DECIDED 2026-08-02, not yet done)**
+- [ ] **Wire the `boot-attempts` counter — ~~call `steamenv_init`~~ DEAD, write a `novadeck` module**
+
+  **THE `steamenv_init` DECISION BELOW IS DEAD — TRIED ON HARDWARE 2026-08-02 AND REVERTED
+  (`157ee42`).** It gave a BLACK SCREEN with no message and left `SteamOS/conf/A.conf` completely
+  untouched (`boot-attempts: 0`, still the make-sdcard seed comment) — it neither works nor fails
+  visibly. Do not retry it; the reasoning below was sound but its premise was never testable from a
+  desk. Two causes, both in Valve's code: `load_steamenv` discovers the ESP by matching a partsets
+  uuid across every `SIMPLE_FILE_SYSTEM` handle, which assumes the firmware publishes every
+  partition as one (ABL likely publishes only the volume it booted from); and
+  `process_boot_config()` acts only `if( rv == GRUB_ERR_NONE )` then returns `GRUB_ERR_NONE`
+  regardless, so total failure is indistinguishable from success. Correction to the note below: the
+  module does **not** apply a video mode — that part was right all along.
+
+  **Replacement: a minimal `novadeck` GRUB module, designed in `docs/phase5-bootattempts.md`**
+  (`c0ec7b2`, `96dbe6c`). The image name becomes an ARGUMENT rather than a discovery, since
+  `gen-grub-cfg.sh` already emits one config per slot — which deletes the partsets path entirely.
+  Finding the conf is try-each-handle, not uuid matching. It fails LOUDLY. It REPLACES steamenv:
+  both patches go, `steamenv` leaves `MODULES`, and the `steamenv_boot` guards are deleted with it.
+  Nothing is implemented yet. If ABL turns out not to publish the ESP as a filesystem handle at
+  all, the doc records the fallbacks (bump from the initramfs; or leave the bootloader half
+  unwired). A grubenv counter stays rejected — `save_env` cannot write the bootconf's format.
+
+  Everything from here down is the SUPERSEDED 2026-08-02 decision, kept for the source facts only:
   Phase 5 ships `grubaa64.efi` with Valve's `steamenv` compiled IN and never invoked, so nothing
   increments `boot-attempts`. Consequence, stated in `docs/phase5.md` and in the health unit: a
   slot that boots badly IS demoted (health unit fails → `novadeck-boot-bad.service` →

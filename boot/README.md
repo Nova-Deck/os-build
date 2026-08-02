@@ -53,8 +53,13 @@ whole module — it touches no GRUB variable, no video mode and no kernel comman
 **It needs to be a module because GRUB's own `fat` driver is read-only.** The EFI file protocol is
 the only way to write the ESP from stage 2.
 
-Two things to know before changing it:
+Three things to know before changing it:
 
+* **It does not do its own `ConnectController` sweep, on purpose.** steamcl does one over `BLOCK_IO`
+  handles for firmware that skips FAT driver binding under fastboot, and it cannot reach efi-A to
+  chainload us without the resulting filesystem handles. Those bindings persist into us — it uses
+  `LoadImage`/`StartImage` and never calls `ExitBootServices` — so repeating the sweep would be
+  dead code. That is also why the ESP is reachable at all from a binary loaded off efi-A.
 * **The image name is an argument, not a discovery.** `gen-grub-cfg.sh` emits one config per slot
   and already knows the slot, so the module never has to work out which image it is.
 * **The call sits AFTER `terminal_output gfxterm`,** which its predecessor could not. That

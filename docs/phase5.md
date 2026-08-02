@@ -169,10 +169,16 @@ grubenv is its own 1024-byte block format, not `key: value` lines. A second stor
 format, on another partition, needing new OS-side tooling to clear, is the mapping layer this phase
 exists to avoid.
 
-⏳ **Not yet hardware-validated.** The open question is whether ABL publishes the ESP as a
-`SIMPLE_FILE_SYSTEM` handle at all, or only the volume it booted from. The module's failure message
-reports how many handles it tried, which answers that on the first boot; the fallbacks if the
-answer is "only its own" are in `docs/phase5-bootattempts.md`.
+**Why the ESP is reachable at all**, given we are chainloaded off the slot's efi partition and not
+off the ESP: steamcl cannot find `\EFI\steamos\grubaa64.efi` on efi-A without enumerating
+`SIMPLE_FILE_SYSTEM` handles and mounting each (`find_loaders()`, `_reference/steamos-efi`). If the
+device runs us at all, non-boot partitions are bound — and the ESP, steamcl's own boot volume, is
+bound *a fortiori*. steamcl also carries a `ConnectController()` sweep for firmware that skips
+driver binding under fastboot; we deliberately do not repeat it, because those bindings persist
+into us (it chainloads via `LoadImage` and never calls `ExitBootServices`).
+
+⏳ **Not yet hardware-validated** — the mechanism is established from source, but no device has run
+it. One boot prints either `novadeck: A boot-attempts 0 -> 1` or an error with the handle count.
 
 ## Card layout (`images/make-sdcard.sh`)
 
@@ -306,6 +312,6 @@ slot that never reaches this unit at all — which is the `boot-attempts` item b
 
 * **Hardware-validate `novadeck_bootattempts`** (above). The demote branch already covers a slot
   that boots but fails userspace; this closes the other half, a slot that never reaches systemd.
-  The module is built and called; what is unproven is whether ABL publishes the ESP as a
-  `SIMPLE_FILE_SYSTEM` handle at all. One boot answers it — the module prints either
-  `novadeck: A boot-attempts 0 -> 1` or an error naming how many handles it tried.
+  The module is built and called, and steamcl's source establishes that the ESP is reachable this
+  way. What is left is simply running it: one boot prints either `novadeck: A boot-attempts 0 -> 1`
+  or an error naming how many handles it tried.

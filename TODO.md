@@ -1039,12 +1039,13 @@ rationale lives in the linked memories and commit history.
 
 - [ ] **Hardware-validate `novadeck_bootattempts` — one boot, three possible answers**
 
-  The one thing no desk can settle: whether ABL publishes the ESP as a `SIMPLE_FILE_SYSTEM` handle
-  at all. Flash a fresh card, watch the panel before the board menu, and read `A.conf` offline
-  afterwards. Outcomes and their fixes are tabulated in `docs/phase5-bootattempts.md`; the short
-  form is `A boot-attempts 0 -> 1` (done), an error naming the handle count (fall back to bumping
-  from the initramfs), or nothing at all (dies inside the call — now distinguishable, which it was
-  not last time).
+  The mechanism is settled from source — steamcl cannot chainload us off efi-A without enumerating
+  `SIMPLE_FILE_SYSTEM` handles, so the ESP is reachable and no `ConnectController` sweep of our own
+  is needed (`docs/phase5-bootattempts.md`). What is left is running it. Flash a fresh card, watch
+  the panel before the board menu, and read `A.conf` offline afterwards. Outcomes and their fixes are tabulated in `docs/phase5-bootattempts.md`; the short
+  form is `A boot-attempts 0 -> 1` (done), an error naming the handle count (unexpected now; fall
+  back to bumping from the initramfs), or nothing at all (dies inside the call — now
+  distinguishable, which it was not last time).
 
   Until this passes, a slot that never reaches systemd is still retried forever, and **the stage-2
   menu picks the BOARD, not the SLOT** — slot choice is stage 1's, so a bad OTA is unrecoverable

@@ -17,12 +17,14 @@ failure path returns a grub_error naming what was tried.
 GRUB cannot do this without a module: its own fat driver is read-only, so the
 EFI file protocol is the only way to write the ESP from stage 2.
 
-The file header carries the rest of the rationale.
+The file header carries the rest of the rationale, including why the ESP is
+reachable from a binary chainloaded off the SLOT's efi partition, and why we
+deliberately do not repeat stage 1's ConnectController sweep.
 
 diff -urN a/grub-core/commands/efi/novadeck.c b/grub-core/commands/efi/novadeck.c
 --- a/grub-core/commands/efi/novadeck.c
 +++ b/grub-core/commands/efi/novadeck.c
-@@ -0,0 +1,512 @@
+@@ -0,0 +1,530 @@
 +/*
 + *  novadeck.mod  --  bump the SteamOS bootconf `boot-attempts` counter.
 + *
@@ -64,8 +66,11 @@ diff -urN a/grub-core/commands/efi/novadeck.c b/grub-core/commands/efi/novadeck.
 + *       which image it is by reading \SteamOS\partsets\* off the volume it was
 + *       chainloaded from and matching partition uuids. boot/gen-grub-cfg.sh
 + *       already emits one config per slot and already knows the slot, so the
-+ *       whole partsets path — the most likely thing to be failing on ABL — is
-+ *       simply deleted.
++ *       whole partsets path is simply deleted. (It was suspected of being the
++ *       thing that failed on this hardware. Reading steamos-efi afterwards
++ *       showed that enumeration itself is fine here — see below — so this is a
++ *       simplification, not a fix. Deleting it is still right: it is ~2000
++ *       lines of discovery for a fact the config already has.)
 + *
 + *    2. FINDING THE CONF IS TRY-EACH-HANDLE, NOT UUID MATCHING. steamenv
 + *       enumerates SIMPLE_FILE_SYSTEM handles and picks the one whose
@@ -81,10 +86,25 @@ diff -urN a/grub-core/commands/efi/novadeck.c b/grub-core/commands/efi/novadeck.
 + *       what we observed on hardware. Every failure here returns a grub_error
 + *       naming what was tried, and the success path prints old -> new.
 + *
-+ *  The failure message deliberately reports how many SIMPLE_FILE_SYSTEM
-+ *  handles existed. That number answers the one open question this design
-+ *  could not answer from a desk: whether ABL publishes the ESP as a filesystem
-+ *  handle at all, or only the volume it booted from.
++ *  WHY THE ESP IS REACHABLE AT ALL is worth stating, because GRUB is
++ *  chainloaded from the SLOT'S efi partition, not from the ESP -- so unlike
++ *  stage 1 we cannot just ask our own loaded image for it.
++ *
++ *  Stage 1 (steamcl) cannot reach \EFI\steamos\grubaa64.efi on efi-A without
++ *  enumerating SIMPLE_FILE_SYSTEM handles and mounting each in turn
++ *  (find_loaders(), steamos-efi). If the device got as far as running this
++ *  module, non-boot partitions are therefore bound -- and the ESP, being
++ *  steamcl's own boot volume, is bound a fortiori.
++ *
++ *  steamcl also carries a ConnectController() sweep over BLOCK_IO handles for
++ *  firmware that "may skip binding drivers ... when running with fastboot
++ *  enabled", retrying the enumeration afterwards. We deliberately do NOT
++ *  repeat that sweep: whichever path stage 1 took, the bindings persist into
++ *  us, because it chainloads through LoadImage/StartImage and never calls
++ *  ExitBootServices. Adding our own would be dead code on every real boot.
++ *
++ *  The failure message still reports the handle count. If this ever does fire,
++ *  that number is the whole diagnosis.
 + *
 + *  It does NOT touch `timeout`, `timeout_style`, video modes, kernel command
 + *  lines or UEFI ChainLoader* variables. steamenv's unconditional timeout

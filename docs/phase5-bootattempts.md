@@ -4,8 +4,9 @@
 > was tried on hardware and failed; built the same day. The module is
 > `boot/patches/grub/0001-add-the-novadeck-stage-2-module.patch`, the call site is
 > `boot/gen-grub-cfg.sh`, and `images/test-stage2-grub.sh` asserts it. `steamenv` is gone from the
-> tree. What remains open is the last section: whether ABL publishes the ESP as a filesystem
-> handle. One device boot answers it.
+> tree. The question this doc originally left open — whether ABL publishes the ESP as a filesystem
+> handle — is now **answered from steamcl's source**, not deferred to a boot: see "Why the ESP is
+> reachable" below.
 
 ## What happened, so nobody re-derives it
 
@@ -55,11 +56,14 @@ build trap recorded in [[grub-module-needs-autogen]] still applies to the replac
 
 **The image name is an argument, not a discovery.** `boot/gen-grub-cfg.sh` already generates one
 config per slot and already knows `$SLOT`, so the module never has to work out which image it is.
-That deletes the partsets path entirely — the most likely thing to be failing on ABL.
+That deletes the partsets path entirely. (When this was written the partsets path was the prime
+suspect for the failure. Reading steamcl afterwards showed handle enumeration works fine here, so
+this is a simplification rather than a fix — still the right call, but not for the stated reason.)
 
 **Finding the conf: try, don't match.** Enumerate `SIMPLE_FILE_SYSTEM` handles and attempt to open
 `\SteamOS\conf\<name>.conf` read/write on each, taking the first that succeeds. No uuid comparison.
-This is both simpler and more tolerant of whatever ABL does or does not publish.
+This is both simpler and more tolerant of whatever ABL does or does not publish, and it is the
+same shape steamcl uses to find the loader on efi-A.
 
 **Fail loudly.** If no handle yields the file, return `grub_error(GRUB_ERR_FILE_NOT_FOUND, ...)`.
 The whole cost of the first attempt was that failure looked identical to success.
@@ -93,26 +97,51 @@ deleted rather than left to rot:
 What replaces them is one assertion that the config invokes `novadeck_bootattempts` with this
 slot's image name, which is the only claim still worth enforcing.
 
-## Open question this does not answer
+## Why the ESP is reachable — answered from steamcl's source, not from a boot
 
-Whether ABL publishes the ESP as a filesystem handle *at all*. If it publishes only the volume it
-booted from — the slot's efi partition — then no module can reach p1 through the EFI file protocol
-and the counter cannot live in the ESP conf. In that case the honest fallbacks are, in order of
-preference:
+This section used to be an open question: whether ABL publishes the ESP as a `SIMPLE_FILE_SYSTEM`
+handle at all, or only the volume it booted from. It is answered, and the answer was in
+`_reference/steamos-efi` the whole time.
+
+**GRUB is chainloaded from the SLOT's efi partition, not from the ESP**, so unlike stage 1 we
+cannot simply ask our own loaded image for it. steamcl can: `find_loaders()` takes the ESP from
+`get_self_device_handle()` → `HandleProtocol(SIMPLE_FILE_SYSTEM)`, because `bootaa64.efi` lives on
+the ESP. That trick does not transfer.
+
+But steamcl **also** loops over `LocateHandle(ByProtocol, SIMPLE_FILE_SYSTEM_PROTOCOL)` and
+`efi_mount`s each handle in turn — that is how it reaches `\EFI\steamos\grubaa64.efi` on efi-A to
+chainload us at all. So if the device gets far enough to run this module, non-boot partitions are
+bound, and the ESP — steamcl's own boot volume — is bound *a fortiori*. Enumeration works here;
+that was never the thing that broke.
+
+There is one real hazard, and stage 1 already handles it. `chainloader.c` retries after
+`connect_block_controllers()`, which walks `BLOCK_IO` handles calling `ConnectController(…, TRUE)`:
+
+> Some UEFI implementations may skip binding drivers, including the FAT filesystem driver, when
+> running with fastboot enabled. This results in handles to the filesystems not being returned and
+> boot failing. Bind all block handles to drivers, which should trigger binding of filesystems.
+
+**We deliberately do not repeat that sweep.** Whichever path stage 1 took, the bindings persist
+into us: steamcl chainloads through `LoadImage`/`StartImage` and never calls `ExitBootServices`, so
+the handle database we enumerate is the one it left behind. A sweep of our own would be dead code
+on every real boot path, against a module whose whole point is that it is small.
+
+If the counter ever *does* fail to find the conf, the error reports the handle count, and that
+number is the diagnosis. The fallbacks then, in order of preference:
 
 1. **Bump it from the initramfs.** Trivial there (real tools, real filesystems, correct format) and
    needs no GRUB code at all. Covers a slot whose kernel and initramfs come up but where systemd
    never does — a real part of the gap, though not a kernel or DTB that never reaches the
    initramfs.
 2. **Leave the bootloader half unwired** and document that such a slot is recovered through the
-   stage-2 board menu, which is what ships today.
+   stage-2 board menu.
 
 A grubenv counter stays rejected: `boot-attempts` is per-image state that lives in the bootconf
 beside `image-invalid`/`boot-count`, where RAUC and `novadeck-bootctl` already read it, and
 `save_env` cannot write the bootconf's format anyway — grubenv is its own 1024-byte block format,
 not `key: value` lines. It would be a second store in a second format needing new OS-side tooling.
 
-## What shipped, and what one boot will tell us
+## What shipped, and what the first boot confirms
 
 The module is ~510 lines including its header, builds warning-free under `-Wall -W`, and is
 embedded in `grubaa64.efi`. The config calls it after `terminal_output gfxterm`, wrapped so a
@@ -133,7 +162,7 @@ The next device boot has exactly three possible outcomes, and each one is a diff
 | What the panel shows | What it means | Next |
 |---|---|---|
 | `novadeck: A boot-attempts 0 -> 1` | Works. | Confirm offline that `A.conf` really moved, then the bootloader half of rollback is closed. |
-| `novadeck: no volume carries \SteamOS\conf\A.conf (N ... handles tried)` | The module ran and returned. If N is small (1), ABL publishes only the volume it booted from — the open question above, answered. | Fall back to bumping from the initramfs. |
+| `novadeck: no volume carries \SteamOS\conf\A.conf (N ... handles tried)` | The module ran and returned. Not expected — steamcl could not have chainloaded us without enumerating handles (above) — so N is the diagnosis. | Fall back to bumping from the initramfs. |
 | Nothing, or a hang before the menu | Dies inside the call. | Unlike last time this is now distinguishable, because the terminal is up before the call and the menu is already defined. |
 
 That third row is the whole reason the call moved after `gfxterm`: the first attempt could not tell

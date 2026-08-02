@@ -6,12 +6,18 @@
 # the ESP contents, or the filesystem identities the A/B switch depends on. This closes that gap
 # for the parts a slot switch can be silently wrong about.
 #
+# Phase 5 shape (docs/phase5.md): the card boots ABL → steamcl (stage 1, on the ESP) → per-slot
+# GRUB (stage 2, on the slot's efi-a/b partition) → kernel. So beyond the filesystem identities
+# this asserts the two boot homes: the ESP carries steamcl + the boot confs + the grubenv, and
+# each efi partition carries its stage-2 GRUB + identity partsets keyed to the disk's partuuids.
+# There is deliberately no /KERNEL and no /NOVADECK/ to check anymore.
+#
 # It matters most for one thing that is invisible until hardware contradicts you: the two roots
 # are content-identical by design, so if they also share a btrfs fsid then mounting slot B can
 # hand you slot A, and every slot test after that is meaningless. That check is why this exists.
 #
 # Everything here is unprivileged — dd out a superblock and ask blkid, read ext4 with debugfs,
-# read the ESP with mtools. No loop mounts, no root.
+# read the ESP/efi partitions with mtools. No loop mounts, no root.
 #
 # Run inside the build image (needs sgdisk, blkid, debugfs, mtools, cpio):
 #   docker run --rm -v "$PWD":/src -w /src novadeck-build images/verify-card.sh
@@ -35,10 +41,16 @@ bad() { printf '    !!  %s\n' "$1"; FAIL=1; }
 
 part_num() { awk -v n="$1" '/^[[:space:]]*#/||/^[[:space:]]*$/{next} {i++; if ($1==n) {print i; exit}}' "$TABLE"; }
 start()    { sgdisk -i "$1" "$IMG" | sed -n 's/^First sector: \([0-9]*\).*/\1/p'; }
+part_uuid() { sgdisk -i "$1" "$IMG" | sed -n 's/^Partition unique GUID: \(.*\)/\1/p' | tr '[:upper:]' '[:lower:]'; }
 
 P_ESP=$(part_num esp)
+P_EFIA=$(part_num efi-a); P_EFIB=$(part_num efi-b)
 P_ROOTA=$(part_num rootfs-a); P_ROOTB=$(part_num rootfs-b)
 P_VARA=$(part_num var-a);     P_VARB=$(part_num var-b)
+
+ESP_UUID=$(part_uuid "$P_ESP")
+EFIA_UUID=$(part_uuid "$P_EFIA")
+EFIB_UUID=$(part_uuid "$P_EFIB")
 
 echo "[novadeck] verifying ${IMG#"$ROOT"/}"
 
@@ -72,10 +84,21 @@ else
     || bad "var-a and var-b share a UUID"
 fi
 
+# Per-slot filesystem LABELS. Not how stage 2 normally finds the root -- it goes by partition
+# index -- but they are its documented fallback, they are what `blkid` on a mounted card reports,
+# and they are the thing a RAUC raw write silently gets wrong (the bundle image is slot A's, so an
+# install leaves the target labelled novadeck-root-A until the post-install hook re-labels it).
+for pair in "$P_ROOTA:novadeck-root-A" "$P_ROOTB:novadeck-root-B"; do
+  pn=${pair%%:*}; want=${pair#*:}
+  [ "$SLOT_B" = 0 ] && [ "$pn" = "$P_ROOTB" ] && continue
+  got=$(blkid -p -o value -s LABEL "$T/p$pn.sb" 2>/dev/null)
+  [ "$got" = "$want" ] && ok "p$pn btrfs label = $want" || bad "p$pn btrfs label: expected '$want', got '$got'"
+done
+
 # ----------------------------------------------------------------------------------------------
-# 2. The independent slot witness. /run/novadeck/boot records what the initramfs THINKS it picked;
-# this file records which var actually mounted. It is the only cross-check that does not share a
-# failure mode with the selection code.
+# 2. The independent slot witness. /var/lib/novadeck/slot records which var actually mounted;
+# it is written per-slot at image build and re-written by post-install.sh. It is the only
+# cross-check that does not share a failure mode with the selection code.
 # ----------------------------------------------------------------------------------------------
 echo "  2. slot witness"
 check_slot() {  # <partnum> <expected letter>
@@ -90,59 +113,119 @@ check_slot "$P_VARA" a
 [ "$SLOT_B" = 1 ] && check_slot "$P_VARB" b
 
 # ----------------------------------------------------------------------------------------------
-# 3. The ESP: the boot image, and the slot state the initramfs reads before anything else.
+# 3. The ESP (stage 1 home). steamcl at /EFI/BOOT/bootaa64.efi is the only thing ABL can find,
+# so a card with no /KERNEL still boots. The boot state is the confs + the seeded grubenv.
 # ----------------------------------------------------------------------------------------------
-echo "  3. ESP"
+echo "  3. ESP (stage 1)"
 espoff=$(( $(start "$P_ESP") * 512 ))
-mdir -i "$IMG@@$espoff" ::/KERNEL >/dev/null 2>&1 && ok "/KERNEL present" || bad "/KERNEL missing"
-if mtype -i "$IMG@@$espoff" ::/NOVADECK/STATE.0 >"$T/state" 2>/dev/null && [ -s "$T/state" ]; then
-  gen=$(sed -n 's/^gen=//p' "$T/state"); act=$(sed -n 's/^active=//p' "$T/state")
-  pend=$(sed -n 's/^pending=//p' "$T/state")
-  grep -qx end "$T/state" && ok "STATE.0 terminated by 'end' (gen=$gen active=$act pending='$pend')" \
-                          || bad "STATE.0 has no 'end' terminator — the reader will reject it"
-  [ "$act" = a ] || bad "a freshly built card should be active=a, not '$act'"
-  [ -z "$pend" ] || bad "a freshly built card should have nothing pending, got '$pend'"
-  # `kernel=` must be EMPTY here, and that is a real assertion rather than a formality: both slots
-  # carry the same rootfs.img on a fresh card, so /KERNEL matches either one. A letter would make
-  # the ordinary `try b` slot test warn about a kernel/modules mismatch that does not exist.
-  kern=$(sed -n 's/^kernel=//p' "$T/state")
-  [ -z "$kern" ] || bad "a fresh card must not claim a /KERNEL owner, got kernel='$kern'"
-  # `broken=` must be PRESENT and EMPTY. Present because the initramfs writer emits a fixed field
-  # list and a card seeded without it would gain the line on the first write anyway — seeding it
-  # keeps the card and the writer describing the same format. Empty because nothing has installed
-  # anything yet: a letter here would make `get-state` report bad for a slot straight off the build.
-  if grep -q '^broken=' "$T/state"; then
-    brk=$(sed -n 's/^broken=//p' "$T/state")
-    [ -z "$brk" ] && ok "broken= seeded empty" \
-                  || bad "a fresh card must not mark a slot broken, got broken='$brk'"
-  else
-    bad "STATE.0 has no broken= line — the seed and images/initramfs/init disagree about the format"
-  fi
-else
-  bad "no readable ::/NOVADECK/STATE.0 — every boot would fall back to the cmdline root="
-fi
-# The seed must occupy exactly one file: the writer alternates, so leaving the other absent is
-# what lets the seeded copy survive a torn FIRST write.
-mtype -i "$IMG@@$espoff" ::/NOVADECK/STATE.1 >/dev/null 2>&1 \
-  && bad "STATE.1 exists on a fresh card — the first write would have nowhere safe to land" \
-  || ok "STATE.1 absent"
+dd if="$IMG" of="$T/esp.sb" bs=512 skip="$(start "$P_ESP")" count=64 status=none
+need_file() {  # <msdos path> <what>
+  mtype -i "$IMG@@$espoff" "$1" >"$T/f" 2>/dev/null && ok "$2 present" || bad "$2 missing"
+}
+# The FAT label. Nothing in the boot chain RESOLVES by it (stage 2 goes by partition index, with a
+# content search for /SteamOS/conf/<slot>.conf as the fallback), which is exactly why it is worth
+# asserting: when it did matter, it drifted from what grub.cfg searched for and nothing failed.
+esp_fslabel=$(blkid -p -o value -s LABEL "$T/esp.sb" 2>/dev/null)
+[ -n "$esp_fslabel" ] && [ "${#esp_fslabel}" -le 11 ] \
+  && ok "ESP FAT label '$esp_fslabel' (<= 11 chars)" \
+  || bad "ESP FAT label is empty or over the 11-char FAT limit: '$esp_fslabel'"
+need_file ::/EFI/BOOT/bootaa64.efi         "steamcl at /EFI/BOOT/bootaa64.efi"
+need_file ::/EFI/BOOT/steamcl-version     "/EFI/BOOT/steamcl-version"
+need_file ::/EFI/BOOT/steamcl-restricted  "/EFI/BOOT/steamcl-restricted"
+need_file ::/EFI/BOOT/fonts/default.pf2   "/EFI/BOOT/fonts/default.pf2"
+need_file ::/EFI/steamos/grubenv          "/EFI/steamos/grubenv"
+need_file ::/SteamOS/conf/A.conf          "/SteamOS/conf/A.conf"
+need_file ::/SteamOS/conf/B.conf          "/SteamOS/conf/B.conf"
+# steamcl-restricted must be present and EMPTY (it gates steamcl's own-device-only behaviour;
+# presence matters, content does not).
+mtype -i "$IMG@@$espoff" ::/EFI/BOOT/steamcl-restricted >"$T/f" 2>/dev/null \
+  && { [ -s "$T/f" ] && bad "steamcl-restricted should be empty" || ok "steamcl-restricted present and empty"; } \
+  || bad "/EFI/BOOT/steamcl-restricted missing"
+# A stale /KERNEL or /NOVADECK would mean this card was laid by the pre-Phase-5 assembler; catch it here so it cannot be flashed by habit.
+mdir -i "$IMG@@$espoff" ::/KERNEL >/dev/null 2>&1 && bad "/KERNEL present on a Phase 5 card" \
+                                                   || ok "no /KERNEL"
+mdir -i "$IMG@@$espoff" ::/NOVADECK >/dev/null 2>&1 && bad "/NOVADECK present on a Phase 5 card" \
+                                                      || ok "no /NOVADECK"
+# confs: A is seeded with the newest boot-requested-at so the first boot picks A; B is 0. Both
+# must be the bootconf key: value format (any non-empty value line parses; these are the seeds).
+mtype -i "$IMG@@$espoff" ::/SteamOS/conf/A.conf >"$T/conf_a" 2>/dev/null || true
+mtype -i "$IMG@@$espoff" ::/SteamOS/conf/B.conf >"$T/conf_b" 2>/dev/null || true
+a_stamp=$(sed -n 's/^boot-requested-at: //p' "$T/conf_a")
+b_stamp=$(sed -n 's/^boot-requested-at: //p' "$T/conf_b")
+case "$a_stamp" in [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9])
+  ok "A.conf boot-requested-at = $a_stamp" ;;
+*) bad "A.conf has no valid boot-requested-at (got '$a_stamp')" ;; esac
+[ "$b_stamp" = 0 ] && ok "B.conf boot-requested-at = 0" || bad "B.conf boot-requested-at should be 0, got '$b_stamp'"
+[ "$a_stamp" -gt "$b_stamp" ] 2>/dev/null && ok "A is the newer image (first boot picks A)" \
+                                          || bad "A is not the newer image"
+# the seeded grubenv is a real GRUB env block, so GRUB's first save_env has a file to write.
+mtype -i "$IMG@@$espoff" ::/EFI/steamos/grubenv >"$T/grubenv" 2>/dev/null || true
+grep -aq "GRUB Environment Block" "$T/grubenv" && ok "grubenv is a valid GRUB env block" \
+                                              || bad "grubenv has no GRUB magic header"
 
 # ----------------------------------------------------------------------------------------------
-# 4. The initramfs actually carries what the boot path needs. A missing umount here is not
-# cosmetic: the ESP would stay mounted across switch_root and gpt-auto would mount the same vfat
-# device a second time at /efi.
+# 4. efi-a / efi-b (stage 2 homes). steamcl chainloads \EFI\steamos\grubaa64.efi on the slot's
+# efi partition; the steamenv module matches its own partition uuid against partsets/self and
+# reads the ESP uuid from partsets/all. A wrong uuid anywhere here breaks the boot handoff.
 # ----------------------------------------------------------------------------------------------
-echo "  4. initramfs"
+echo "  4. efi-a / efi-b (stage 2)"
+check_efi() {  # <partnum> <letter> <self> <other>
+  local p=$1 letter=$2 self=$3 other=$4 off
+  off=$(( $(start "$p") * 512 ))
+  for f in ::/EFI/steamos/grubaa64.efi ::/EFI/steamos/grub.cfg \
+           ::/EFI/steamos/fonts/dejavu-mono.pf2; do
+    mtype -i "$IMG@@$off" "$f" >"$T/f" 2>/dev/null && ok "p$p$f present" || bad "p$p$f missing"
+  done
+  # The shipped grub.cfg must be EXACTLY what boot/gen-grub-cfg.sh produces for THIS slot. One
+  # comparison covers the whole class: a stale out/boot from an older build, slot A's config
+  # written onto slot B's partition, or a generator change that never reached the card. What the
+  # config has to CONTAIN is asserted by images/test-stage2-grub.sh; this asserts it arrived.
+  if [ -x "$ROOT/boot/gen-grub-cfg.sh" ]; then
+    if "$ROOT/boot/gen-grub-cfg.sh" "$letter" "$T/expect-$letter.cfg" >/dev/null 2>&1; then
+      mtype -i "$IMG@@$off" ::/EFI/steamos/grub.cfg >"$T/oncard-$letter.cfg" 2>/dev/null || true
+      cmp -s "$T/expect-$letter.cfg" "$T/oncard-$letter.cfg" \
+        && ok "p$p grub.cfg is the current slot-$letter config" \
+        || bad "p$p grub.cfg differs from boot/gen-grub-cfg.sh $letter (stale build, or the wrong slot's config)"
+    else
+      bad "boot/gen-grub-cfg.sh $letter failed"
+    fi
+  else
+    ok "p$p grub.cfg content check skipped (no boot/gen-grub-cfg.sh)"
+  fi
+
+  # partsets are 'key value' whitespace-separated (steamenv's format).
+  partset() { mtype -i "$IMG@@$off" "::/SteamOS/partsets/$1" 2>/dev/null; }
+  for n in A B all shared self other; do
+    partset "$n" >/dev/null 2>&1 && ok "p$p partsets/$n present" || bad "p$p partsets/$n missing"
+  done
+  # The identity matrix. self must name THIS partition; other the sibling; all/shared the ESP;
+  # A/B the two efi uuids — on both slots, so the partsets are slot-invariant except self/other.
+  [ "$(partset self)"  = "efi $self" ]  && ok "p$p self = $self"  || bad "p$p self: expected 'efi $self', got '$(partset self)'"
+  [ "$(partset other)" = "efi $other" ] && ok "p$p other = $other" || bad "p$p other: expected 'efi $other', got '$(partset other)'"
+  [ "$(partset all)"   = "esp $ESP_UUID" ] && ok "p$p all = esp $ESP_UUID"  || bad "p$p all is wrong"
+  [ "$(partset shared)" = "esp $ESP_UUID" ] && ok "p$p shared = esp $ESP_UUID" || bad "p$p shared is wrong"
+  [ "$(partset A)"      = "efi $EFIA_UUID" ] && ok "p$p A = $EFIA_UUID" || bad "p$p A is wrong"
+  [ "$(partset B)"      = "efi $EFIB_UUID" ] && ok "p$p B = $EFIB_UUID" || bad "p$p B is wrong"
+}
+check_efi "$P_EFIA" A "$EFIA_UUID" "$EFIB_UUID"
+check_efi "$P_EFIB" B "$EFIB_UUID" "$EFIA_UUID"
+
+# ----------------------------------------------------------------------------------------------
+# 5. The initramfs actually carries what the boot path needs. The phase-5 init mounts root (ro) +
+# var + the slot's efi partition at /efi (inside the btrfs root, so the mount survives
+# switch_root), stacks the /etc overlay and hands off to systemd. The ESP is NOT mounted here —
+# the booted system mounts it at /esp from /etc/fstab.
+# ----------------------------------------------------------------------------------------------
+echo "  5. initramfs"
 if [ -f "$INITRAMFS" ]; then
   ( cd "$T" && gzip -dc "$INITRAMFS" | cpio -idm --quiet 2>/dev/null )
-  # cp is load-bearing, not a convenience: it is what restores KERNEL.BAK over /KERNEL on a
-  # rollback boot. Missing, the rollback silently degrades to "old root under the new kernel" --
-  # whose /lib/modules it does not carry, so no Wi-Fi on a device with no serial console.
-  for b in umount mount findfs switch_root bash cp; do
+  for b in mount findfs switch_root; do
     [ -x "$T/usr/bin/$b" ] && ok "$b staged" || bad "$b is NOT in the initramfs"
   done
-  [ -d "$T/esp" ] && ok "/esp mountpoint staged" || bad "/esp mountpoint missing — the ESP cannot be mounted"
-  grep -q 'NOVADECK-ESP' "$T/init" && ok "init reads the ESP slot state" || bad "init has no slot logic"
+  grep -q 'steamos.efi=' "$T/init" && ok "init mounts /efi from steamos.efi=PARTUUID=" \
+                                    || bad "init has no /efi handoff (steamos.efi=)"
+  grep -q 'switch_root "\$SYSROOT"' "$T/init" && ok "init hands off via switch_root" \
+                                                || bad "init has no switch_root"
 else
   bad "no ${INITRAMFS#"$ROOT"/}"
 fi

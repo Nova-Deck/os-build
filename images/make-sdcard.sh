@@ -2,12 +2,18 @@
 # novadeck SD-card image builder.
 #
 # Lays the FULL SteamOS-style 8-partition GPT from images/partition-table.txt and populates
-# BOTH slots: ESP + rootfs-a/-b + var-a/-b + home. efi-a/efi-b are created, formatted, and left
-# empty — under Phase 4b design C the boot image is slot-agnostic and lives only at /KERNEL on
-# the shared ESP, so nothing needs a per-slot bootloader partition yet.
+# BOTH slots: ESP + rootfs-a/-b + var-a/-b + home, and each slot's efi-a/efi-b partition with
+# that slot's STAGE-2 GRUB (Phase 5; docs/phase5.md).
 #
-# Laying the final table now — rather than a minimal ESP+root+home and migrating later — means
-# adding A/B never costs a reflash.
+# The boot chain this card boots is SteamOS's three-stage one:
+#
+#   ABL -> /EFI/BOOT/bootaa64.efi (steamcl, stage 1, shared ESP)
+#       -> \EFI\steamos\grubaa64.efi on the SLOT's efi partition (stage 2)
+#       -> kernel in the slot's root /boot
+#
+# The ESP carries the stage-1 software + the boot state (SteamOS/conf/A.conf|B.conf + the
+# grubenv); each efi partition carries its own stage-2 GRUB + identity partsets. There is no
+# /KERNEL and no /NOVADECK/STATE.0 — that was design C; the slot state IS the confs now.
 #
 # WHY B IS POPULATED RATHER THAN LEFT EMPTY (Phase 4b): the deliverable of the boot-path pass is
 # that a slot switch and a rollback are provable by hand, and you cannot prove a switch to a slot
@@ -20,17 +26,18 @@
 # lays the GPT with sgdisk via images/genpart.sh, and dd's each filesystem into its partition
 # byte offset — no loop mounts, no root.
 #
-# Run inside the build image (needs sgdisk + mkfs.vfat + mtools + mkfs.ext4):
+# Run inside the build image (needs sgdisk + mkfs.vfat + mtools + mkfs.ext4 + grub-editenv):
 #   docker run --rm -v "$PWD":/src -w /src novadeck-build images/make-sdcard.sh
 #
-# Prereqs: boot/package.sh (-> out/boot/novadeck-boot.img) and images/build-image.sh
-# (-> out/images/{rootfs,var}.img) have run.
+# Prereqs: boot/steamcl.sh + boot/grub.sh (-> out/boot/{steamcl.efi,steamcl-version,holo-bootconf,
+# fonts/default.pf2, grubaa64.efi, grub-a.cfg, grub-b.cfg, fonts/dejavu-mono.pf2}) and
+# images/build-image.sh (-> out/images/{rootfs,var}.img) have run.
 set -euo pipefail
 export MTOOLS_SKIP_CHECK=1   # mtools on a file image has no geometry; silence the warning
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$ROOT/out"
-KERNEL="$OUT/boot/novadeck-boot.img"
+BOOT="$OUT/boot"
 IMGDIR="$OUT/images"
 ROOTFS="$IMGDIR/rootfs.img"
 VARIMG="$IMGDIR/var.img"
@@ -38,6 +45,16 @@ VARIMG_B="$IMGDIR/var-b.img"
 ROOTFS_B="$IMGDIR/rootfs-b.img"   # built here from $ROOTFS with a fresh fsid; see section 1b
 IMG="$IMGDIR/sdcard.img"
 TABLE="$ROOT/images/partition-table.txt"
+
+# Phase 5 boot-stage artifacts, all staged to out/boot by boot/steamcl.sh + boot/grub.sh:
+STEAMCL="$BOOT/steamcl.efi"
+STEAMCL_VER="$BOOT/steamcl-version"
+BOOTCONF="$BOOT/holo-bootconf"          # installed on the ESP as steamos-bootconf
+STAGE_FONT="$BOOT/fonts/default.pf2"    # steamcl's boot menu font
+GRUB_EFI="$BOOT/grubaa64.efi"
+GRUB_CFG_A="$BOOT/grub-a.cfg"           # per-slot grub.cfg (stage 2, A)
+GRUB_CFG_B="$BOOT/grub-b.cfg"
+GRUB_FONT="$BOOT/fonts/dejavu-mono.pf2" # stage-2 boot font ($prefix/fonts/ in grub.cfg)
 
 # Populate the B slot too (default on). See the header for why.
 SLOT_B="${NOVADECK_SLOT_B:-1}"
@@ -51,12 +68,15 @@ END_SLACK_MIB=2   # tail room for the backup GPT (well over its ~17 KiB)
 # boot novadeck-grow-home extends the partition + its ext4 to fill the card.
 SEED="$ROOT/work/steam-seed"
 
-for t in sgdisk mkfs.vfat mcopy mmd mkfs.ext4; do
+for t in sgdisk mkfs.vfat mcopy mmd mkfs.ext4 grub-editenv; do
   command -v "$t" >/dev/null 2>&1 || { echo "$t not found — run inside novadeck-build" >&2; exit 1; }
 done
 [ "$SLOT_B" = 1 ] && { command -v btrfstune >/dev/null 2>&1 || {
   echo "btrfstune not found — run inside novadeck-build (or set NOVADECK_SLOT_B=0)" >&2; exit 1; }; }
-[ -f "$KERNEL" ] || { echo "no boot image: ${KERNEL#"$ROOT"/} (run boot/package.sh)" >&2; exit 1; }
+for f in "$STEAMCL" "$STEAMCL_VER" "$BOOTCONF" "$STAGE_FONT" \
+         "$GRUB_EFI" "$GRUB_CFG_A" "$GRUB_CFG_B" "$GRUB_FONT"; do
+  [ -f "$f" ] || { echo "no boot artifact: ${f#"$ROOT"/} (run boot/steamcl.sh + boot/grub.sh)" >&2; exit 1; }
+done
 [ -f "$ROOTFS" ] || { echo "no rootfs: ${ROOTFS#"$ROOT"/} (run images/build-image.sh)" >&2; exit 1; }
 [ -f "$VARIMG" ] || { echo "no var image: ${VARIMG#"$ROOT"/} (run images/build-image.sh)" >&2; exit 1; }
 [ -x "$SEED/steamrtarm64/steam" ] || {
@@ -97,8 +117,12 @@ fi
 # baked into the base) so Steam can write its home immediately — mkfs.ext4 -d preserves this. This is
 # the OFFLINE analog of steamos-create-homedir, done at build time instead of first boot.
 DECK_UID=1000; DECK_GID=1000
-esp=""; efi=""; home=""; state=""; homestage="$(mktemp -d)"
-trap 'rm -f "$esp" "$efi" "$home" "$state" "$ROOTFS_B"; rm -rf "$homestage"' EXIT
+homestage="$(mktemp -d)"
+# Every name here is ${x:-} because the trap is armed BEFORE most of them exist: under `set -u` an
+# early exit (a `fits` check failing, say) would otherwise die inside the trap on an unset variable
+# and mask the real error. The previous fix for that was a block of empty pre-assignments carrying
+# a comment pointing at a line number, which is a trap of its own.
+trap 'rm -f "${esp:-}" "${efi_a:-}" "${efi_b:-}" "${home:-}" "${ROOTFS_B:-}" "${conf_a:-}" "${conf_b:-}" "${grubenv:-}" "${flag:-}"; rm -rf "${homestage:-}"' EXIT
 deckhome="$homestage/deck"
 install -d "$deckhome/.local/share" "$deckhome/.steam"
 cp -a "$SEED" "$deckhome/.local/share/Steam"
@@ -132,58 +156,7 @@ total_mib=$(( fixed_mib + HOME_SIZE_MIB + END_SLACK_MIB ))
 
 echo "[novadeck] SD image: ${fixed_mib}MiB fixed layout ($([ "$SLOT_B" = 1 ] && echo 'A+B populated' || echo 'A populated, B empty')) + home ${HOME_SIZE_MIB}MiB -> ${total_mib}MiB"
 
-# 1. ESP filesystem (FAT32) with the KERNEL boot image at its root.
-esp="$(mktemp)"; efi="$(mktemp)"; home="$(mktemp)"
-truncate -s "${ESP_SIZE_MIB}M" "$esp"
-# FAT volume label: max 11 chars (the GPT partition name stays NOVADECK-ESP).
-# ABL locates the ESP by type GUID (ef00), not this label, so it is cosmetic.
-mkfs.vfat -F 32 -n NOVADECK "$esp" >/dev/null
-mcopy -i "$esp" "$KERNEL" ::/KERNEL
-echo "  esp  $(du -h "$KERNEL" | cut -f1) KERNEL -> ::/KERNEL"
-
-# 1b. Seed the A/B slot state the initramfs reads (images/initramfs/init documents the format).
-# A fresh card is slot A, known good, with nothing on trial.
-#
-# STATE.1 is deliberately NOT written. The writer alternates between the two files and only ever
-# overwrites the one that is already stale, so leaving the second absent means the device's first
-# write lands on the free file and this seeded copy survives even if that write is torn.
-#
-# Under /NOVADECK/ rather than at the ESP root: ABL scans p1 for its boot artifact, and /KERNEL is
-# the only thing it must find there. Keeping our namespace in a subdirectory removes any question
-# about what the firmware might enumerate. 8.3-clean names, so the kernel's vfat driver and mtools
-# never have to agree about long-filename directory entries.
-#
-# `kernel=` is seeded EMPTY, which is not the same as forgetting it. It names the slot whose boot
-# image sits at /KERNEL, and it exists so a boot can tell that the running kernel's /lib/modules
-# live in the OTHER root. On a fresh card that cannot be true: both slots are the same rootfs.img
-# (differing only in fsid), so /KERNEL matches either one and no letter is more correct than the
-# other. Writing `a` here would make the ordinary `novadeck-bootctl try b` slot test warn about a
-# mismatch that does not exist -- and a warning that cries wolf on the happy path is worse than no
-# warning at all. Only a /KERNEL rotation can make the two roots differ, and the RAUC post-install
-# hook records the slot when it does one.
-state="$(mktemp)"
-cat >"$state" <<'EOF'
-# novadeck A/B slot state -- images/initramfs/init, /usr/bin/novadeck-bootctl
-gen=1
-active=a
-pending=
-tries=0
-kernel=
-bak=
-broken=
-end
-EOF
-mmd -i "$esp" ::/NOVADECK
-mcopy -i "$esp" "$state" ::/NOVADECK/STATE.0
-echo "  esp  slot state -> ::/NOVADECK/STATE.0 (gen=1 active=a)"
-
-# 2. efi-a / efi-b: formatted but EMPTY. ABL reads /KERNEL off the ESP above, and design C keeps
-# the boot image slot-agnostic, so there is nothing to put here. Formatted so a later pass can
-# just write them.
-truncate -s "${EFI_SIZE_MIB}M" "$efi"
-mkfs.vfat -F 32 -n NOVADECKEFI "$efi" >/dev/null   # FAT labels max 11 chars; same blank fs for A and B
-
-# 2b. Slot B's root: the SAME content, but it MUST NOT be the same bytes.
+# 1b. Slot B's root: the SAME content, but it MUST NOT be the same bytes.
 #
 # mkfs.btrfs bakes an fsid into the superblock, and every btrfs image we build also has devid=1.
 # Writing rootfs.img verbatim to both p4 and p5 would put two filesystems on one disk sharing
@@ -194,19 +167,25 @@ mkfs.vfat -F 32 -n NOVADECKEFI "$efi" >/dev/null   # FAT labels max 11 chars; sa
 # why it needs its own copy of the file rather than an in-place round trip.
 #
 # (RAUC will hit this too: every `rauc install` writes identical bytes to the inactive slot. Its
-# post-install hook will need the same treatment — tracked in TODO.md.)
+# post-install hook needs the same treatment — tracked in TODO.md.)
 if [ "$SLOT_B" = 1 ]; then
   rm -f "$ROOTFS_B"
   cp --reflink=auto "$ROOTFS" "$ROOTFS_B"
   btrfstune -f -U "$(cat /proc/sys/kernel/random/uuid)" "$ROOTFS_B" >/dev/null
-  echo "  slotB rootfs-b.img: fresh btrfs fsid (content identical to slot A)"
+  btrfs filesystem label "$ROOTFS_B" novadeck-root-B >/dev/null
+  echo "  slotB rootfs-b.img: fresh btrfs fsid + label novadeck-root-B (content identical to A)"
 fi
+# Slot A needs no copy at all: images/assemble-rootfs.sh already labels rootfs.img novadeck-root-A,
+# and section 5 writes it straight into p4. This used to `cp --reflink=auto` the whole multi-GiB
+# image to a rootfs-a.img purely to run `btrfs filesystem label` on it -- an extra full-size write
+# per build, and one that happened even with NOVADECK_SLOT_B=0.
 
 # 3. /home filesystem (ext4, label novadeck-home) PRE-SEEDED with the deck home via mkfs.ext4 -d,
 # which populates the fs from $homestage at creation — unprivileged, no loop mount. -m0: no reserved
 # blocks (it's a data partition). -d preserves the staged deck:deck ownership so Steam can write its
 # home right away. The offload directories under /home/.novadeck are created on first boot by
 # novadeck-offload-prepare.service, not here — it seeds them from the read-only root's content.
+home="$(mktemp)"
 truncate -s "${HOME_SIZE_MIB}M" "$home"
 mkfs.ext4 -q -F -L novadeck-home -m0 -d "$homestage" "$home"
 echo "  home ${HOME_SIZE_MIB}MiB ext4 — pre-seeded Steam client (${seed_mib}MiB), grows to fill the card on first boot"
@@ -217,18 +196,137 @@ truncate -s "${total_mib}M" "$IMG"
 "$ROOT/images/genpart.sh" "$IMG" >/dev/null
 sgdisk -p "$IMG"
 
+# 4b. Partition uuids (Phase 5). sgdisk assigns these at GPT-lay time; the ESP confs and the efi
+# partsets are keyed by them (steamcl/steamenv match a partset's `efi` value against the uuid of
+# the partition they were loaded from; bootconf reads partsets/self; steamenv reads partsets/all
+# for the ESP). Lowercased — PARTUUID= on the kernel cmdline and the EFI guid strings are lowercase.
+part_uuid() { sgdisk -i "$1" "$IMG" | sed -n 's/^Partition unique GUID: \(.*\)/\1/p' | tr '[:upper:]' '[:lower:]'; }
+ESP_UUID="$(part_uuid "$P_ESP")"
+EFIA_UUID="$(part_uuid "$P_EFIA")"
+EFIB_UUID="$(part_uuid "$P_EFIB")"
+[ -n "$ESP_UUID" ] && [ -n "$EFIA_UUID" ] && [ -n "$EFIB_UUID" ] || {
+  echo "cannot read esp/efi-a/efi-b partition uuids from ${IMG#"$ROOT"/}" >&2; exit 1; }
+echo "  esp  $ESP_UUID"
+echo "  efi-a $EFIA_UUID"
+echo "  efi-b $EFIB_UUID"
+
+# 4c. ESP filesystem (FAT32) — the stage-1 home:
+#
+# mtools has no mkdir -p: create each directory level (an existing dir is fine to re-touch).
+fatdir() {  # <img> <msdos path, no leading '::'>
+  local img="$1" path="$2" p="" part
+  for part in ${path//\// }; do
+    p="$p/$part"
+    mmd -i "$img" "::$p" >/dev/null 2>&1 || true
+  done
+}
+#
+#   /EFI/BOOT/bootaa64.efi           ABL chainloads this (steamcl); with /KERNEL gone it is the
+#                                    only way onto the card
+#   /EFI/BOOT/{steamcl-version,      companion files resolved by steamcl's resolve_path() relative
+#     steamcl-restricted,            to the chainloader location
+#     fonts/default.pf2}
+#   /EFI/steamos/grubenv             stage-2 env block (saved_entry), seeded on ESP so the
+#                                    user's board choice survives slot updates
+#   /SteamOS/conf/A.conf|B.conf      the per-image boot state (bootconf's home). A is seeded with
+#                                    the newest boot-requested-at so the FIRST boot picks A
+#
+# NOTHING RESOLVES THE ESP BY THIS LABEL. ABL finds it by type GUID (ef00), the OS mounts it by
+# PARTLABEL from /etc/fstab, and the stage-2 grub.cfg addresses it by partition index (falling back
+# to a search for /SteamOS/conf/<slot>.conf, i.e. by content). The label is a human convenience on
+# a mounted card, and it is deliberately NOT the GPT name: a FAT label caps at 11 characters and
+# NOVADECK-ESP is twelve. An earlier version of this script had grub.cfg searching for a FAT label
+# this line had stopped writing, and nothing failed -- the saved board choice just never persisted.
+esp="$(mktemp)"
+truncate -s "${ESP_SIZE_MIB}M" "$esp"
+mkfs.vfat -F 32 -n NOVADECK "$esp" >/dev/null
+fatdir "$esp" /EFI/BOOT
+fatdir "$esp" /EFI/BOOT/fonts
+fatdir "$esp" /EFI/steamos
+fatdir "$esp" /SteamOS/conf
+mcopy -i "$esp" "$STEAMCL" ::/EFI/BOOT/bootaa64.efi
+mcopy -i "$esp" "$STEAMCL_VER" ::/EFI/BOOT/steamcl-version
+flag="$(mktemp)"; : >"$flag"
+mcopy -i "$esp" "$flag" ::/EFI/BOOT/steamcl-restricted
+mcopy -i "$esp" "$STAGE_FONT" ::/EFI/BOOT/fonts/default.pf2
+grubenv="$(mktemp)"
+grub-editenv "$grubenv" create
+mcopy -i "$esp" "$grubenv" ::/EFI/steamos/grubenv
+
+# The confs: key: value lines (bootconf's format). boot-requested-at is a YYYYmmDDHHMMSS UTC
+# datestamp; the chainloader picks the image with the newest one as the default. A gets now,
+# B gets 0, so a fresh card's first boot lands on A.
+mkconf() {  # <outfile> <ident> <stamp>
+  cat >"$1" <<EOF
+title: novadeck $2
+boot-requested-at: $3
+boot-other: 0
+boot-other-disabled: 0
+boot-attempts: 0
+boot-count: 0
+boot-time: 0
+image-invalid: 0
+verbose: 0
+update: 0
+update-disabled: 1
+update-window-start: 0
+update-window-end: 0
+loader:
+partitions:
+comment: seeded by images/make-sdcard.sh
+EOF
+}
+conf_a="$(mktemp)"; conf_b="$(mktemp)"
+mkconf "$conf_a" A "$(date -u +%Y%m%d%H%M%S)"
+mkconf "$conf_b" B 0
+mcopy -i "$esp" "$conf_a" ::/SteamOS/conf/A.conf
+mcopy -i "$esp" "$conf_b" ::/SteamOS/conf/B.conf
+
+# 4d. efi-a / efi-b (p2/p3): each slot's STAGE-2 home. Per docs/phase5.md and the post-install
+# hook's refresh shape, both carry the same /EFI/steamos/{grubaa64.efi, grub.cfg, fonts} and the
+# same /SteamOS/partsets/{A,B,all,shared}; only self/other differ, naming THIS partition and the
+# other one. steamcl chainloads \EFI\steamos\grubaa64.efi; the module's grub.cfg is the A or B
+# variant; the partsets are the identity steamcl/steamenv match the booted efi uuid against.
+mkpartset() {  # <img> <name> <token...>
+  local img="$1" name="$2"; shift 2
+  local tmp; tmp="$(mktemp)"
+  printf '%s\n' "$*" >"$tmp"
+  mcopy -i "$img" "$tmp" "::/SteamOS/partsets/$name"
+  rm -f "$tmp"
+}
+mkefi() {  # <img> <grub.cfg> <self-efi-uuid> <other-efi-uuid> <label-suffix>
+  local img="$1" cfg="$2" self="$3" other="$4" label_suffix="$5"
+  truncate -s "${EFI_SIZE_MIB}M" "$img"
+  mkfs.vfat -F 32 -n "GRUB-${label_suffix}" "$img" >/dev/null
+  fatdir "$img" /EFI/steamos/fonts
+  fatdir "$img" /SteamOS/partsets
+  mcopy -i "$img" "$GRUB_EFI" ::/EFI/steamos/grubaa64.efi
+  mcopy -i "$img" "$cfg" ::/EFI/steamos/grub.cfg
+  mcopy -i "$img" "$GRUB_FONT" ::/EFI/steamos/fonts/dejavu-mono.pf2
+  mkpartset "$img" A      "efi $EFIA_UUID"
+  mkpartset "$img" B      "efi $EFIB_UUID"
+  mkpartset "$img" all    "esp $ESP_UUID"
+  mkpartset "$img" shared "esp $ESP_UUID"
+  mkpartset "$img" self   "efi $self"
+  mkpartset "$img" other  "efi $other"
+}
+efi_a="$(mktemp)"; efi_b="$(mktemp)"
+mkefi "$efi_a" "$GRUB_CFG_A" "$EFIA_UUID" "$EFIB_UUID" "A"
+echo "  efi-a  grubaa64.efi + grub.cfg(A) + partsets (self=A)"
+mkefi "$efi_b" "$GRUB_CFG_B" "$EFIB_UUID" "$EFIA_UUID" "B"
+echo "  efi-b  grubaa64.efi + grub.cfg(B) + partsets (self=B)"
+
 # 5. write each filesystem into its partition's byte offset (notrunc; no loop device).
-# efi-a/efi-b get a blank formatted fs; with NOVADECK_SLOT_B=0 the B root/var stay zeros.
 write_part() {  # <partnum> <file> <label>
   local start; start=$(sgdisk -i "$1" "$IMG" | sed -n 's/^First sector: \([0-9]*\).*/\1/p')
   [ -n "$start" ] || { echo "cannot read start sector of partition $1" >&2; exit 1; }
   dd if="$2" of="$IMG" bs=512 seek="$start" conv=notrunc status=none
   echo "  p$1  $3"
 }
-write_part "$P_ESP"   "$esp"    "NOVADECK-ESP (KERNEL + slot state)"
-write_part "$P_EFIA"  "$efi"    "novadeck-efi-A (empty, reserved)"
-write_part "$P_EFIB"  "$efi"    "novadeck-efi-B (empty, reserved)"
-write_part "$P_ROOTA" "$ROOTFS" "novadeck-root-A (btrfs, ro)"
+write_part "$P_ESP"   "$esp"    "NOVADECK-ESP (steamcl + boot confs + grubenv)"
+write_part "$P_EFIA"  "$efi_a"  "novadeck-efi-A (stage-2 GRUB A + partsets)"
+write_part "$P_EFIB"  "$efi_b"  "novadeck-efi-B (stage-2 GRUB B + partsets)"
+write_part "$P_ROOTA" "$ROOTFS"   "novadeck-root-A (btrfs, ro)"
 write_part "$P_VARA"  "$VARIMG" "novadeck-var-A (ext4)"
 if [ "$SLOT_B" = 1 ]; then
   write_part "$P_ROOTB" "$ROOTFS_B" "novadeck-root-B (btrfs, ro, distinct fsid)"
@@ -246,12 +344,21 @@ echo "  ok   $(du -h "$IMG" | cut -f1) -> ${IMG#"$ROOT"/}"
 cat <<EOF
 Done. Write it to the card (replace sdX with your device, ALL DATA LOST):
   sudo dd if=${IMG#"$ROOT"/} of=/dev/sdX bs=4M conv=fsync status=progress
-ABL boots /KERNEL off the ESP; its DTB picker selects the board. The initramfs reads the slot
-state at ::/NOVADECK/STATE.0 (gen=1 active=a), mounts that slot's root read-only and its var,
-stacks the /etc overlay on it, then switch_roots into systemd. /home (last partition) is
-pre-seeded with the deck user's Steam client and grows to fill the card on first boot.
+ABL chainloads /EFI/BOOT/bootaa64.efi (steamcl, stage 1) off the ESP; steamcl reads the boot state
+at /SteamOS/conf/{A,B}.conf, then chainloads \EFI\steamos\grubaa64.efi on the SLOT's efi-A/B
+partition (stage 2, per-slot grub.cfg + partsets), which boots the kernel in the slot root's /boot.
+/home (last partition) is pre-seeded with the deck user's Steam client and grows to fill the card.
 $([ "$SLOT_B" = 1 ] \
-  && echo "Both slots carry a full system, so a switch is testable: novadeck-bootctl try b" \
+  && echo "Both slots carry a full system, so a switch is testable: novadeck-bootctl set-primary B" \
   || echo "The B slots are empty (NOVADECK_SLOT_B=0) — a slot switch will fail over back to A.")
-Both efi-* partitions are present but empty (design C keeps the boot image slot-agnostic).
+
+The FIRST boot stops at the stage-2 board menu and waits: one image serves every board, so the DTB
+is the one thing the card cannot know. The choice is written to /EFI/steamos/grubenv on the ESP and
+every boot after that takes it automatically (3s visible menu), including across a slot switch.
+
+ESP layout: /EFI/BOOT/{bootaa64.efi, steamcl-version, steamcl-restricted, fonts/default.pf2}
+            /EFI/steamos/grubenv (shared stage-2 env — the saved board choice)
+            /SteamOS/conf/{A,B}.conf (the per-image boot state)
+Filesystem labels: ESP NOVADECK | efi-A GRUB-A | efi-B GRUB-B (cosmetic; nothing resolves by them)
+There is no /KERNEL: ABL only boots via the stage-1 chainloader now (docs/phase5.md).
 EOF

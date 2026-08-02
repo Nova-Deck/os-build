@@ -96,7 +96,7 @@ make -j"$(nproc)" AWK=gawk
 #   loadenv                 load_env/save_env against the ESP's grubenv -- the saved board choice
 #   regexp                  derives the boot disk from $root; see boot/gen-grub-cfg.sh
 #   search*                 the fallback path when that derivation fails
-#   steamenv                built in, currently NOT invoked by the generated grub.cfg
+#   steamenv                steamenv_init, which bumps this image's boot-attempts in the ESP conf
 MODULES="boot linux part_gpt fat btrfs loadenv search search_fs_file \
 search_fs_uuid search_label chain reboot halt sleep test true echo read \
 configfile regexp normal minicmd gfxterm efi_gop font all_video steamenv"

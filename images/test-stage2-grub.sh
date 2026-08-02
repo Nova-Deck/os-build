@@ -173,16 +173,41 @@ for slot in A B; do
     && ok "grub-$lc.cfg saves to the ESP grubenv" || bad "grub-$lc.cfg does not save the grubenv"
   # A config that never sets a timeout waits forever (GRUB treats unset as -1); one that sets only
   # a hidden timeout gives a keyboard-less device no way back to the menu.
-  grep -q '^  set timeout=3$' "$cfg" && ok "grub-$lc.cfg boots the saved entry after 3s" \
-                                     || bad "grub-$lc.cfg has no timeout for the saved-entry path"
-  grep -q '^  set timeout=-1$' "$cfg" && ok "grub-$lc.cfg waits when no board is saved" \
-                                      || bad "grub-$lc.cfg does not wait on a fresh card"
+  grep -qE '^ +set timeout=3$' "$cfg" && ok "grub-$lc.cfg boots the saved entry after 3s" \
+                                      || bad "grub-$lc.cfg has no timeout for the saved-entry path"
+  grep -qE '^ +set timeout=-1$' "$cfg" && ok "grub-$lc.cfg waits when no board is saved" \
+                                       || bad "grub-$lc.cfg does not wait on a fresh card"
 
-  # steamenv is built into grubaa64.efi but must not be INVOKED yet: steamenv_init overwrites
-  # timeout/timeout_style after this config has set them, and it is what bumps boot-attempts.
-  # Reintroducing it is a separate, deliberate step (docs/phase5.md).
-  grep -q 'steamenv_' "$cfg" && bad "grub-$lc.cfg invokes a steamenv_ command" \
-                             || ok "grub-$lc.cfg invokes no steamenv_ command"
+  # steamenv_init is what bumps this image's boot-attempts -- the bootloader half of the rollback
+  # design, catching a slot that never reaches systemd (the OS-side demote only covers a slot that
+  # boots and then fails userspace). See docs/phase5.md.
+  grep -q '^steamenv_init$' "$cfg" && ok "grub-$lc.cfg invokes steamenv_init (bumps boot-attempts)" \
+                                   || bad "grub-$lc.cfg does not invoke steamenv_init"
+
+  # ORDER IS THE WHOLE BUG. steamenv_init overwrites timeout/timeout_style unconditionally, so a
+  # config that sets its own timeout FIRST always loses -- which made a fresh card boot menu entry
+  # 0 instantly on every device. Assert the line numbers, not just presence.
+  si_line=$(grep -n '^steamenv_init$' "$cfg" | head -1 | cut -d: -f1)
+  to_line=$(grep -nE '^if \[ "\$timeout" != "-1" \]' "$cfg" | head -1 | cut -d: -f1)
+  if [ -n "$si_line" ] && [ -n "$to_line" ] && [ "$si_line" -lt "$to_line" ]; then
+    ok "grub-$lc.cfg calls steamenv_init (line $si_line) BEFORE its timeout block (line $to_line)"
+  else
+    bad "grub-$lc.cfg timeout block does not follow steamenv_init (init=$si_line timeout=$to_line)"
+  fi
+
+  # The guard is what lets stage 1's steamos-bootmenu request survive: steamenv_init encodes it as
+  # timeout=-1, and clobbering that leaves a keyboard-less device no way back to the menu.
+  grep -qE '^if \[ "\$timeout" != "-1" \]' "$cfg" \
+    && ok "grub-$lc.cfg guards its timeout so stage 1's menu request wins" \
+    || bad "grub-$lc.cfg overrides the timeout unconditionally"
+
+  # steamenv_boot is deliberately NOT used: it adds UEFI ChainLoader* poking (meaningless on ABL),
+  # cmdline juggling, and a redundant steamos.efi=PARTUUID= append. Plain `linux` stays.
+  # Anchored to an INVOCATION: the config carries a comment explaining why steamenv_boot is not
+  # used, and a bare substring match would trip on that comment rather than on any real command.
+  grep -qE '^[[:space:]]*steamenv_boot\b' "$cfg" \
+    && bad "grub-$lc.cfg uses steamenv_boot instead of plain linux" \
+    || ok "grub-$lc.cfg boots with plain linux, not steamenv_boot"
 
   if command -v grub-script-check >/dev/null 2>&1; then
     grub-script-check "$cfg" 2>"$T/gscerr" \

@@ -76,6 +76,20 @@ The module does not touch `timeout` or `timeout_style`, so:
 
 Both of those were only ever there to work around `steamenv_init` overwriting the timeout.
 
+`steamenv_boot` goes with the rest of the module, and so do the things defending against it. Once
+no `steamenv_` command exists, these are guarding a command that cannot be called and should be
+deleted rather than left to rot:
+
+* the comment block in `boot/gen-grub-cfg.sh` explaining why plain `linux` is kept instead of
+  `steamenv_boot` — the reasons (UEFI `ChainLoader*` poking meaningless on ABL, cmdline juggling, a
+  redundant `steamos.efi=PARTUUID=` append) are recorded here and in `dd8bec5`, so nothing is lost;
+* the `grub-*.cfg boots with plain linux, not steamenv_boot` assertion in
+  `images/test-stage2-grub.sh`, along with the `steamenv_init` presence and ordering assertions
+  added in `dd8bec5` — all three describe a module that will not exist.
+
+What replaces them is one assertion that the config invokes `novadeck_bootattempts` with this
+slot's image name, which is the only claim still worth enforcing.
+
 ## Open question this does not answer
 
 Whether ABL publishes the ESP as a filesystem handle *at all*. If it publishes only the volume it

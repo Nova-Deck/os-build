@@ -1,7 +1,7 @@
 # Phase 5 — SteamDeck-style boot (steamcl + GRUB)
 
-> **Status: implemented; the boot chain and the update path are both hardware-validated. The
-> demote-on-failure branch is not.** This is
+> **Status: implemented; the boot chain, the update path and the demote-on-failure branch are all
+> hardware-validated.** This is
 > the design record for the `boot(phase5)` / `rauc(phase5)` commit series on `boot/phase5`.
 > Everything below is what the tree builds; what has actually been proven, and by what, is spelled
 > out per section and summarised under "Hardware status" rather than implied.
@@ -274,10 +274,28 @@ card rejects it. And verifying a bundle by hand needs `check-purpose=codesign` �
 defaults to the smimesign purpose and fails with "unsuitable certificate purpose", which is a
 mismatch in the *checker*, not a defect in the bundle.
 
+✅ **The demote branch validated the same day, same device**, forced through the real path rather
+than by writing the bootconf by hand — stopping `novadeck-boot-good.service` re-arms the
+level-triggered `.path` for a fresh 30s trial, and the session marker was removed inside that
+window, which is exactly what a session dying immediately looks like:
+
+* `mark-good --require-marker` exited 1 with *"no session marker at /run/novadeck/session/ready --
+  refusing to confirm this boot"*, so the confirmer landed in `failed` rather than `active`.
+* `OnFailure=` drove `novadeck-boot-bad.service`, whose `set-state self bad` succeeded: B.conf went
+  to `image-invalid: 1`, `boot-other: 1`, mode `reboot (other)`, and `get-primary` flipped to A
+  while `get-current` still read B. A.conf was untouched and stayed a valid target throughout.
+* The reboot landed on **A**: `BOOT_IMAGE=(hd1,gpt4)`, root `mmcblk0p4`, `/efi` `mmcblk0p2`
+  (efi-A), `/var` `mmcblk0p6`. So stage 1 honoured `image-invalid` and fell through to the other
+  slot with no operator input and no card reader.
+* A then confirmed its own trial independently — `boot-count` 3 → 4, `boot-ok`, `mark-good` exit 0,
+  `novadeck-boot-bad` inactive — so the failure did not leak across slots. B is left demoted, which
+  is the correct resting state: installing into B (or a later `set-mode booted` on it) re-promotes.
+
+This closes the OS half of the rollback design. What is still missing is the *bootloader* half — a
+slot that never reaches this unit at all — which is the `boot-attempts` item below.
+
 ## Open items
 
-Still needs the device:
-
-* **The demote path end to end** — force a health-check failure and confirm the next boot lands on
-  the other slot. The unit is wired and inactive-when-healthy; the failure branch is untested.
-* **`steamenv` reintroduction** (above), now that the chain is proven without it.
+* **`steamenv` reintroduction** (above), now that the chain is proven without it. This is the one
+  remaining gap: the demote branch covers a slot that boots but fails userspace; a slot that never
+  reaches systemd still has no counter to fail against, so it is retried forever.

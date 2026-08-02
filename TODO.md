@@ -1014,20 +1014,41 @@ rationale lives in the linked memories and commit history.
   rejection (a truncated state file is refused by the parser) and the two-file generation scheme,
   which is what makes a torn write survivable in the first place.
 
-- [ ] **Reintroduce the `steamenv` stage-2 module** — Phase 5 ships `grubaa64.efi` with Valve's
-  `steamenv` compiled IN and never invoked, so `boot-attempts` is never incremented. Consequence,
-  stated in `docs/phase5.md` and in the health unit: a slot that boots badly IS demoted (the health
-  unit fails → `novadeck-boot-bad.service` → `image-invalid=1`), but a slot that never reaches
-  systemd at all is NOT rolled back — steamcl's failsafe has no counter to act on, so it is retried
-  every boot. Recovery is the stage-2 board menu, which is why it stays visible rather than hidden.
-  The reason it is out: `steamenv_init` (not `steamenv_boot`) bumps the counter AND then overwrites
-  `timeout`/`timeout_style` unconditionally, so calling it after the config sets its own made a
-  fresh card boot menu entry 0 — one specific board — instantly on every device. Turning it back on
-  is a config change against a byte-identical binary: `steamenv_init` first, guard the timeout block
-  with `if [ "$timeout" != "-1" ]`, `linux` → `steamenv_boot linux`, and flip the assertions in
-  `images/test-stage2-grub.sh` + `images/verify-card.sh`. Judge on-device at the same time: its GOP
-  mode scoring prefers landscape on portrait panels, and its quiet/verbose juggling can rewrite our
-  `quiet`. Do this only once the chain is hardware-proven WITHOUT it.
+- [ ] **Wire the `boot-attempts` counter — call `steamenv_init` (DECIDED 2026-08-02, not yet done)**
+  Phase 5 ships `grubaa64.efi` with Valve's `steamenv` compiled IN and never invoked, so nothing
+  increments `boot-attempts`. Consequence, stated in `docs/phase5.md` and in the health unit: a
+  slot that boots badly IS demoted (health unit fails → `novadeck-boot-bad.service` →
+  `image-invalid=1`), but a slot that never reaches systemd is NOT rolled back — steamcl's failsafe
+  has no counter to act on, so it is retried forever. That matters because **the stage-2 menu picks
+  the BOARD, not the SLOT**: slot choice is stage 1's, so a bad OTA is unrecoverable without a card
+  reader. This is the one real gap left in the A/B story.
+
+  **Decision: call `steamenv_init`, keep plain `linux`.** Rejected alternative: counting in the
+  grubenv. `boot-attempts` is per-image state that already lives in the bootconf beside
+  `image-invalid`/`boot-count`/`boot-requested-at`, and `novadeck-bootctl get-state`, `mark-good`
+  and RAUC all read it there — a second store in another format on another partition, needing new
+  OS-side tooling to clear, is exactly the mapping layer phase 5 exists to avoid.
+
+  Source facts established 2026-08-02, so nobody re-derives them:
+  * `steamenv_init` — NOT `steamenv_boot` — calls `process_boot_config()` and bumps the counter.
+  * It then overwrites `timeout`/`timeout_style` unconditionally (`timeout=0`, or `-1` when stage 1
+    passed `steamos-bootmenu`). Setting ours BEFORE it is what made a fresh card boot menu entry 0
+    instantly on every device. Set ours AFTER, guarded by `if [ "$timeout" != "-1" ]` so stage 1's
+    menu request still wins.
+  * **It never applies a video mode.** Every line is `grub_env_set`; the Deck portrait GOP scoring
+    only computes `steamenv_noisy_{loader,kernel}_mode` variables. They are inert unless something
+    reads them, and the only reader is `steamenv_boot`. So the Deck-specific half is dead weight,
+    not a hazard.
+  * Keep `linux`, do NOT switch to `steamenv_boot`: that would add UEFI `ChainLoader*` variable
+    poking (Valve firmware, meaningless on ABL), quiet/verbose cmdline juggling, and a redundant
+    `steamos.efi=PARTUUID=` append we already replaced with `novadeck.efi=PARTLABEL=`.
+
+  Work: one line in `boot/gen-grub-cfg.sh`, then flip the "no `steamenv_`" assertions in
+  `images/test-stage2-grub.sh` and `images/verify-card.sh`. Confirm on-device afterwards that
+  `steamenv_init` can actually WRITE the ESP conf here (it resolves the ESP through the partsets
+  and EFI handles — never exercised on ABL), and that the timeout guard leaves `steamos-bootmenu`
+  intact. Do the slot-switch test FIRST, against the currently-validated config, so the two changes
+  do not confound each other.
 
 - [x] **`efi-a`/`efi-b` are unused under design C — CLOSED 2026-08-02 BY PHASE 5** — created +
   formatted vfat, EMPTY, and no longer earmarked for per-boot images. That was design A. Phase 4b

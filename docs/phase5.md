@@ -138,16 +138,31 @@ This is the part that broke boot on the first attempt, and the mechanism is wort
 The module is compiled into `grubaa64.efi` and simply not called, so turning it back on is a config
 change against a byte-identical binary. What that costs meanwhile is in the next section.
 
-### Reintroducing it
+### The plan for turning the counter back on (decided, not yet done)
 
-* `steamenv_init` first, then guard the timeout block with `if [ "$timeout" != "-1" ]` so stage 1's
-  menu request still wins but its `timeout=0` does not.
-* `linux` → `steamenv_boot linux`.
+**Call `steamenv_init`; keep plain `linux`.** We want exactly one thing from this module — the
+`boot-attempts` increment — and that lives in `steamenv_init`.
+
+* `steamenv_init` goes FIRST, and our `timeout`/`default` block goes after it, wrapped in
+  `if [ "$timeout" != "-1" ]` so stage 1's `steamos-bootmenu` request still wins while its
+  `timeout=0` does not.
+* Menu entries keep `linux`. `steamenv_boot` would add UEFI `ChainLoader*` variable poking (Valve
+  firmware plumbing, meaningless on ABL), quiet/verbose cmdline juggling, and a
+  `steamos.efi=PARTUUID=` append that `novadeck.efi=PARTLABEL=` already replaced.
+* The Deck-specific half is dead weight rather than a hazard: `steamenv_init` **never applies a
+  video mode**. Every line in it is `grub_env_set`; the portrait GOP scoring only computes
+  `steamenv_noisy_{loader,kernel}_mode`, and the only thing that reads those is `steamenv_boot`.
 * Flip the assertions in `images/test-stage2-grub.sh` (currently: no `steamenv_` command appears)
   and in `images/verify-card.sh`.
-* Two things to judge on-device, both currently unassessed: `steamenv_init`'s GOP mode scoring
-  prefers landscape, on portrait handheld panels; and its quiet/verbose juggling can rewrite our
-  `quiet`.
+
+Why not count in the grubenv instead: `boot-attempts` is per-image state that already lives in the
+bootconf beside `image-invalid`, `boot-count` and `boot-requested-at`, and `novadeck-bootctl
+get-state`, `mark-good` and RAUC all read it there. A second store, in another format, on another
+partition, needing new OS-side tooling to clear, is the mapping layer this phase exists to avoid.
+
+Confirm on-device afterwards: that `steamenv_init` can actually WRITE the ESP conf on this hardware
+(it resolves the ESP through the partsets and EFI handles, never exercised on ABL), and that the
+timeout guard leaves `steamos-bootmenu` intact.
 
 ## Card layout (`images/make-sdcard.sh`)
 

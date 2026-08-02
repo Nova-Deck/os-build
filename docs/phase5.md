@@ -177,8 +177,12 @@ bound *a fortiori*. steamcl also carries a `ConnectController()` sweep for firmw
 driver binding under fastboot; we deliberately do not repeat it, because those bindings persist
 into us (it chainloads via `LoadImage` and never calls `ExitBootServices`).
 
-⏳ **Not yet hardware-validated** — the mechanism is established from source, but no device has run
-it. One boot prints either `novadeck: A boot-attempts 0 -> 1` or an error with the handle count.
+✅ **Hardware-validated 2026-08-02** on a Pocket S2. Masking `novadeck-boot-good` so it could not
+clear the counter, a reboot moved `A.conf` from `boot-attempts: 0` to `1` with `boot-count` and
+`boot-time` unchanged from the previous boot — the increment came from the bootloader and nothing
+else. `mark-good` then cleared it (`boot-count` 1 → 2), closing the loop. The success line prints
+just before the menu paints, so on a normal 3s boot it is easy to miss; absence of the message is
+not absence of the increment.
 
 ## Card layout (`images/make-sdcard.sh`)
 
@@ -228,7 +232,7 @@ With that fixed:
 | Failure | Rolled back? |
 |---|---|
 | Slot boots, session never comes up or dies | **Yes** — the health unit fails, `novadeck-boot-bad.service` sets `image-invalid=1`, next boot goes to the other slot. |
-| Slot never reaches systemd at all | **Yes in principle**, by `novadeck_bootattempts` + steamcl's failsafe — but not yet proven on hardware. Until it is, assume this slot is retried every boot. |
+| Slot never reaches systemd at all | **Yes** — `novadeck_bootattempts` climbs the counter every boot (HW-validated), and steamcl's failsafe offers a menu at ≥3 and auto-picks the other slot at ≥6. |
 
 The stage-2 board menu stays **visible** (3s) rather than hidden regardless: on a device with no
 keyboard and no serial console, and with stage 1's `steamcl-menu` flag not reaching stage 2 at all,
@@ -310,8 +314,5 @@ slot that never reaches this unit at all — which is the `boot-attempts` item b
 
 ## Open items
 
-* **Hardware-validate `novadeck_bootattempts`** (above). The demote branch already covers a slot
-  that boots but fails userspace; this closes the other half, a slot that never reaches systemd.
-  The module is built and called, and steamcl's source establishes that the ESP is reachable this
-  way. What is left is simply running it: one boot prints either `novadeck: A boot-attempts 0 -> 1`
-  or an error naming how many handles it tried.
+*(The `boot-attempts` gap that stood here is closed — see "The `boot-attempts` counter" above,
+hardware-validated 2026-08-02. Both halves of rollback now have a trigger.)*

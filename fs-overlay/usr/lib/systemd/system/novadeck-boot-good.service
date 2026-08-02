@@ -32,12 +32,14 @@
 # "Unknown key name" and ignores it, and the demote silently never happens. That is exactly how
 # this shipped once already.
 #
-# TREAT THIS AS THE ONLY PROVEN ROLLBACK TRIGGER. The other half of the SteamOS design is the
-# stage-2 boot-attempts counter, which steamcl's failsafe acts on. Our stage-2 config now calls
-# `novadeck_bootattempts <slot>` on every boot (docs/phase5.md), but whether this firmware lets
-# that module reach the ESP is unconfirmed on hardware -- so until it is, assume a slot that never
-# reaches this unit at all (no session, no path unit firing) is NOT rolled back automatically.
-# Recovery is the stage-2 board menu, which is why it stays visible.
+# THIS IS ONE OF TWO ROLLBACK TRIGGERS, both live. The other is the stage-2 boot-attempts counter
+# that steamcl's failsafe acts on: our grub.cfg calls `novadeck_bootattempts <slot>` on every boot
+# (docs/phase5.md), HW-validated 2026-08-02, so a slot that never reaches this unit at all -- no
+# session, no path unit firing -- is still demoted, at >=6 attempts.
+#
+# NOTE FOR ANYONE TESTING THAT COUNTER: this unit's set-mode booted CLEARS boot-attempts, so a
+# healthy boot erases the evidence. Mask this unit before the test reboot, or the counter reads 0
+# whether or not the bootloader is counting.
 #
 # THERE IS DELIBERATELY NO TIMEOUT THAT MARKS GOOD ANYWAY. If the session never comes up, the
 # path unit never fires and the image is never confirmed. That is the property this whole

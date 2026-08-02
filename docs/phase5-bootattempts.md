@@ -1,6 +1,10 @@
 # boot-attempts — replacing Valve's steamenv with a minimal counter module
 
-> **Status: IMPLEMENTED, not yet hardware-validated.** Designed 2026-08-02 after `steamenv_init`
+> **Status: IMPLEMENTED AND HARDWARE-VALIDATED 2026-08-02** on an AYANEO Pocket S2. With
+> `novadeck-boot-good` masked so it could not clear the counter, a reboot took `A.conf` from
+> `boot-attempts: 0` to `1` while `boot-count`/`boot-time` stayed on the previous boot's values —
+> so the increment can only have come from the bootloader. Unmasking and `mark-good` cleared it
+> again (`boot-count` 1 → 2). Designed the same day after `steamenv_init`
 > was tried on hardware and failed; built the same day. The module is
 > `boot/patches/grub/0001-add-the-novadeck-stage-2-module.patch`, the call site is
 > `boot/gen-grub-cfg.sh`, and `images/test-stage2-grub.sh` asserts it. `steamenv` is gone from the

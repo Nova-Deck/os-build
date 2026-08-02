@@ -210,15 +210,16 @@ the ESP conf of each image:
 - **`boot-attempts`** — the trial counter. The stage-2 `novadeck` module bumps it on every kernel
   boot (`novadeck_bootattempts <slot>` in the generated `grub.cfg`), `mark-good` clears it after a
   healthy session, and steamcl's failsafe offers a menu at ≥3 and auto-picks the other slot at ≥6.
-  **Wired but not yet hardware-proven:** whether this firmware lets the module reach the ESP is
-  unconfirmed (see `docs/phase5.md` and `boot/README.md`). On a device boot GRUB prints either
-  `novadeck: A boot-attempts 0 -> 1` or an error saying how many filesystem handles it tried —
-  which is how you tell whether this trigger is live.
+  **HW-validated 2026-08-02.** Two traps when checking it by hand: a healthy boot runs `set-mode
+  booted`, which *clears* the counter — so mask `novadeck-boot-good.{path,service}` before the test
+  reboot or a working counter and a dead one both read `0`. And GRUB prints
+  `novadeck: A boot-attempts 0 -> 1` just before the board menu paints over it, so on a 3s boot you
+  will usually miss it; the conf is the evidence, not the panel.
 
 > **What that means in practice.** A slot that boots but comes up broken IS demoted — the health
 > unit fails and the next boot goes to the other slot. A slot that never gets far enough to run
-> systemd at all is only rolled back if the counter above is actually moving; until that is
-> confirmed, assume it will be retried every boot. Recovery is the stage-2 board menu, which is why
+> systemd at all is demoted by the counter above, at ≥6 attempts. Recovery is the stage-2 board
+> menu, which is why
 > it stays visible rather than hidden.
 
 Three traps, each of which has inverted a conclusion on real hardware:

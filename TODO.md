@@ -1037,20 +1037,23 @@ rationale lives in the linked memories and commit history.
   patches, embedded in `grubaa64.efi`; `images/test-stage2-grub.sh` asserts the config counts
   against THIS slot, never the other, and after the terminal is up.
 
-- [ ] **Hardware-validate `novadeck_bootattempts` — one boot, three possible answers**
+- [x] **Hardware-validate `novadeck_bootattempts` — DONE 2026-08-02, Pocket S2**
 
-  The mechanism is settled from source — steamcl cannot chainload us off efi-A without enumerating
-  `SIMPLE_FILE_SYSTEM` handles, so the ESP is reachable and no `ConnectController` sweep of our own
-  is needed (`docs/phase5-bootattempts.md`). What is left is running it. Flash a fresh card, watch
-  the panel before the board menu, and read `A.conf` offline afterwards. Outcomes and their fixes are tabulated in `docs/phase5-bootattempts.md`; the short
-  form is `A boot-attempts 0 -> 1` (done), an error naming the handle count (unexpected now; fall
-  back to bumping from the initramfs), or nothing at all (dies inside the call — now
-  distinguishable, which it was not last time).
+  Result: `boot-attempts` went `0 -> 1` across a reboot while `boot-count` and `boot-time` stayed
+  on the previous boot's values, so the increment came from the bootloader and nothing else.
+  `mark-good` then cleared it (`boot-count` 1 -> 2). The bootloader half of rollback is closed.
 
-  Until this passes, a slot that never reaches systemd is still retried forever, and **the stage-2
-  menu picks the BOARD, not the SLOT** — slot choice is stage 1's, so a bad OTA is unrecoverable
-  without a card reader. That is the one real gap left in the A/B story. The demote-on-failure
-  branch is the device work this should not be confounded with; it is already HW-validated.
+  **How to re-run it, because the obvious method does not work.** A healthy boot runs
+  `set-mode booted`, which CLEARS `boot-attempts` — so a working module and a module that never
+  ran both leave `0`. Mask the health unit first, or you learn nothing:
+
+      systemctl mask novadeck-boot-good.path novadeck-boot-good.service
+      reboot                     # then read boot-attempts; unmask + mark-good afterwards
+
+  Two things that look like faults and are not: the success line prints just before the board menu
+  paints over it, so on a 3s boot you will usually miss it — absence of the message is not absence
+  of the increment; and the ESP grubenv keeps its card-build mtime forever, because `save_env`
+  writes raw disk blocks and never touches the FAT directory entry.
 
 - [x] **`efi-a`/`efi-b` are unused under design C — CLOSED 2026-08-02 BY PHASE 5** — created +
   formatted vfat, EMPTY, and no longer earmarked for per-boot images. That was design A. Phase 4b

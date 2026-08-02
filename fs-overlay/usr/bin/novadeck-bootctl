@@ -22,8 +22,8 @@
 #
 #   2. mark-good — the boot-health confirmation (novadeck-boot-good.{service,path}). When a
 #      session has proven healthy it runs `steamos-bootconf set-mode booted` (clears boot-attempts,
-#      so the steamenv stage-2 counter and stock steamcl's failsafe stop counting this boot). The
-#      unit's ExecOnFailure demotes with `set-state self bad`.
+#      so the stage-2 counter and steamcl's failsafe stop counting this boot). The unit's
+#      OnFailure= demotes with `set-state self bad`.
 #
 #   3. status — diagnostics over the same bootconf.
 #
@@ -38,10 +38,12 @@
 #   * "Did a slot fail to come up N times?" is the stage-2 boot-attempts counter, which
 #     steamcl's failsafe acts on (menu at >=3, auto-pick the other slot at >=6).
 #
-# ONLY THE FIRST IS LIVE TODAY. The counter is bumped by steamenv_init, and the stage-2 grub.cfg
-# does not invoke steamenv yet (docs/phase5.md) -- so boot-attempts stays 0 and get-state's
-# "boot-attempts >= 1" arm never fires. A slot that never reaches the health unit at all is not
-# rolled back automatically; recovery is the stage-2 board menu.
+# THE SECOND IS WIRED BUT NOT YET HARDWARE-PROVEN. The stage-2 grub.cfg calls
+# `novadeck_bootattempts <slot>` on every boot (boot/patches/grub/, docs/phase5.md); what is
+# unconfirmed is whether this firmware lets that module reach the ESP at all. Until a device boot
+# shows the counter moving, assume boot-attempts stays 0, get-state's "boot-attempts >= 1" arm
+# never fires, and a slot that never reaches the health unit is not rolled back automatically --
+# recovery being the stage-2 board menu.
 set -euo pipefail
 
 # TEST SEAM, as before: the offline suite executes this file and stubs these. BOOTINFO is the
@@ -192,9 +194,9 @@ mark_good() {
   fi
 
   # set-mode booted clears boot-attempts, bumps boot-count and stamps boot-time — the "this boot
-  # was fine" record that keeps the steamenv counter from failing this slot. It does NOT clear
+  # was fine" record that keeps the stage-2 counter from failing this slot. It does NOT clear
   # image-invalid (its `invalid` key is not in the bootconf schema), and the failure path
-  # (ExecOnFailure: set-state self bad) may have set it, so clear it here or a recovered slot
+  # (OnFailure: set-state self bad) may have set it, so clear it here or a recovered slot
   # would confirm yet stay demoted.
   bc set-mode booted || die "steamos-bootconf set-mode booted failed"
   local self

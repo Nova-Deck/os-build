@@ -109,7 +109,7 @@ log "target slot $target ($dev_root, $dev_efi)"
 #
 # Making the BOOTED image the highest-priority one is precisely this operation. (There is no
 # concept of "clearing a trial" in the SteamOS model -- a trial IS a priority bump, enforced by the
-# steamenv counter and stock steamcl's failsafe, so this is the closest equivalent.)
+# stage-2 boot-attempts counter and stock steamcl's failsafe, so this is the closest equivalent.)
 bc --image "$booted" set-mode reboot >/dev/null \
   || die "cannot disarm the target slot before preparing it"
 log "disarmed slot $target for the duration of the install (re-armed at the end)"
@@ -215,7 +215,7 @@ log "stage-2 GRUB + grub.cfg + font installed on $dev_efi"
 
 # Partsets: copied from the RUNNING efi partition -- they are disk-derived (partition uuids), so
 # both efi partitions carry the same A/B/all/shared files and only self/other change, re-pointed at
-# the target so steamcl/steamenv identify this partition as its own image. This is Valve's
+# the target so steamcl identifies this partition as its own image. This is Valve's
 # configure_other_efi shape (cp all/shared verbatim, swap self/other), always run rather than only
 # on a missing dir: an install must leave the target efi naming the RIGHT image.
 partsets="$EFI/SteamOS/partsets"

@@ -109,7 +109,7 @@ initramfs `/efi` mount, both slots populated by `make-sdcard.sh`, and the offlin
 plus `make verify-card` against the built image.
 **Deferred (needs hardware):** the whole chain end to end — ABL chainloading stage 1, the board
 choice persisting to the ESP grubenv, a slot switch, and the demote path. Auto-rollback of a slot
-that never reaches systemd needs the `steamenv` counter, which is deliberately not wired up yet
-(`docs/phase5.md`). `steamos-atomupd` remains out of scope.
+that never reaches systemd needs the stage-2 `novadeck_bootattempts` counter, which is wired but
+not yet proven on device (`docs/phase5.md`). `steamos-atomupd` remains out of scope.
 
 _Phase 5._

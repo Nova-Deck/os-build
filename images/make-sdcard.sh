@@ -197,9 +197,11 @@ truncate -s "${total_mib}M" "$IMG"
 sgdisk -p "$IMG"
 
 # 4b. Partition uuids (Phase 5). sgdisk assigns these at GPT-lay time; the ESP confs and the efi
-# partsets are keyed by them (steamcl/steamenv match a partset's `efi` value against the uuid of
-# the partition they were loaded from; bootconf reads partsets/self; steamenv reads partsets/all
-# for the ESP). Lowercased — PARTUUID= on the kernel cmdline and the EFI guid strings are lowercase.
+# partsets are keyed by them (steamcl matches a partset's `efi` value against the uuid of the
+# partition it was loaded from, and reads partsets/all for the ESP; bootconf reads partsets/self).
+# Stage 2 reads none of them: novadeck_bootattempts takes the image name as an ARGUMENT, which is
+# what let its ~2000-line predecessor go. Lowercased — PARTUUID= on the kernel cmdline and the EFI
+# guid strings are lowercase.
 part_uuid() { sgdisk -i "$1" "$IMG" | sed -n 's/^Partition unique GUID: \(.*\)/\1/p' | tr '[:upper:]' '[:lower:]'; }
 ESP_UUID="$(part_uuid "$P_ESP")"
 EFIA_UUID="$(part_uuid "$P_EFIA")"
@@ -286,7 +288,7 @@ mcopy -i "$esp" "$conf_b" ::/SteamOS/conf/B.conf
 # hook's refresh shape, both carry the same /EFI/steamos/{grubaa64.efi, grub.cfg, fonts} and the
 # same /SteamOS/partsets/{A,B,all,shared}; only self/other differ, naming THIS partition and the
 # other one. steamcl chainloads \EFI\steamos\grubaa64.efi; the module's grub.cfg is the A or B
-# variant; the partsets are the identity steamcl/steamenv match the booted efi uuid against.
+# variant; the partsets are the identity steamcl matches the booted efi uuid against.
 mkpartset() {  # <img> <name> <token...>
   local img="$1" name="$2"; shift 2
   local tmp; tmp="$(mktemp)"

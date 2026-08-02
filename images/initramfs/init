@@ -10,15 +10,15 @@
 #   root=PARTLABEL=novadeck-root-A|B    the slot's btrfs root, mounted ro
 #   novadeck.var=PARTLABEL=...          the slot's ext4 /var (overlay upper + per-slot identity)
 #   novadeck.efi=PARTLABEL=...          the slot's efi-a/b partition, mounted at /efi
-#   steamos.efi=PARTUUID=...            the same thing, appended by steamenv_boot from the
-#                                       partition the stage-2 binary was loaded from. Accepted as
-#                                       a FALLBACK so the two forms can coexist: the stage-2
+#   steamos.efi=PARTUUID=...            the same thing, as SteamOS states it -- appended by the
+#                                       bootloader from the partition the stage-2 binary was
+#                                       loaded from. Accepted as a FALLBACK so the two forms can
+#                                       coexist; nothing we ship emits it, because our stage-2
 #                                       grub.cfg states novadeck.efi= itself (it knows the slot,
-#                                       so it knows the partition), and steamenv is not currently
-#                                       invoked at all -- see docs/phase5.md.
+#                                       so it knows the partition). See docs/phase5.md.
 #
 # The old design-C machinery — the /NOVADECK/STATE.* read/write, slot selection, failover,
-# kernel-mismatch warning and KERNEL.BAK rollback — is gone. The steamenv stage-2 counter + stock
+# kernel-mismatch warning and KERNEL.BAK rollback — is gone. The stage-2 boot-attempts counter + stock
 # steamcl's failsafe own "did a slot come up", and the OS owns "is this slot OK" via
 # novadeck-boot-good.service (set-mode booted / set-state bad). Nothing here chooses anything.
 #
@@ -53,7 +53,7 @@
 #
 # A root that will not mount is different: with no root there is no system, so that is a panic
 # (panic=5 on the grub.cfg cmdline reboots). Failover to the other slot is NOT done here — that
-# is the bootloader's job, and doing it here too would fight the steamenv counter's accounting.
+# is the bootloader's job, and doing it here too would fight the boot-attempts counter's accounting.
 set -u
 
 SYSROOT=/sysroot
@@ -84,8 +84,8 @@ for _arg in $_cmdline; do
   esac
 done
 # novadeck.efi= wins when both are present. It comes from the generated grub.cfg, which knows
-# which slot it is and therefore which partition to name; steamos.efi= is appended by steamenv
-# from the partition it was chainloaded from. They should always agree, and when they do not it is
+# which slot it is and therefore which partition to name; steamos.efi= is SteamOS's form, appended
+# by the bootloader from the partition it was chainloaded from. They should always agree, and when they do not it is
 # the config that is authoritative -- it is the file the update path installs alongside the root.
 [ -n "$EFISPEC" ] || EFISPEC=$EFISPEC_ALT
 
@@ -162,10 +162,10 @@ else
 fi
 
 # ---------------------------------------------------------------------------------------------
-# The slot's efi partition at /efi (steamenv's steamos.efi=PARTUUID= handoff)
+# The slot's efi partition at /efi (novadeck.efi=PARTLABEL=, or SteamOS's steamos.efi=PARTUUID=)
 # ---------------------------------------------------------------------------------------------
-# steamenv_boot appends steamos.efi=PARTUUID=<uuid> from the partition the stage-2 GRUB was
-# chainloaded from, so this mounts the partition whose partsets name THIS image. post-install.sh
+# Either form names the partition the stage-2 GRUB was chainloaded from, so this mounts the
+# partition whose partsets name THIS image. post-install.sh
 # and novadeck-bootctl need it (this-image reads partsets/self), and the mount persists across
 # switch_root because it is on the new root's filesystem.
 efi_ok=0

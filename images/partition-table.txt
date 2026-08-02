@@ -7,8 +7,8 @@
 # efi-a/efi-b are each a slot's STAGE 2 home (Phase 5; docs/phase5.md): steamcl.efi on the
 # shared ESP chainloads \EFI\steamos\grubaa64.efi on the slot's efi partition, whose per-slot
 # grub.cfg boots the kernel in the slot root's /boot. Each carries the stage-2 GRUB + its
-# identity partsets (/SteamOS/partsets/{A,B,all,shared,self,other}); steamcl/steamenv match
-# the efi uuid of the partition they were loaded from against partsets/self. 64M each is ~2x
+# identity partsets (/SteamOS/partsets/{A,B,all,shared,self,other}); steamcl matches the efi
+# uuid of the partition it was loaded from against partsets/self. 64M each is ~2x
 # the current stage-2 tree.
 #
 # All 8 partitions mirror the SteamOS layout exactly (esp, efi-A/B, rootfs-A/B, var-A/B, home).

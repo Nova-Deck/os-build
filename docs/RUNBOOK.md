@@ -207,17 +207,19 @@ the ESP conf of each image:
   failure path does exactly that, via `novadeck-boot-bad.service`); only a completed install clears
   it, because the post-install hook is the only place that knows an install completed. **This is
   the only rollback trigger that is live today.**
-- **`boot-attempts`** — the trial counter, and **nothing increments it right now**. In the SteamOS
-  design the stage-2 `steamenv` module bumps it before every kernel boot, `mark-good` clears it
-  after a healthy session, and steamcl's failsafe offers a menu at ≥3 and auto-picks the other slot
-  at ≥6. Our stage-2 config does not invoke `steamenv` (see `docs/phase5.md` and `boot/README.md`
-  for why), so it stays 0. `get-state` still reads it, and `mark-good` still clears it, so this
-  becomes live the moment `steamenv` is turned back on.
+- **`boot-attempts`** — the trial counter. The stage-2 `novadeck` module bumps it on every kernel
+  boot (`novadeck_bootattempts <slot>` in the generated `grub.cfg`), `mark-good` clears it after a
+  healthy session, and steamcl's failsafe offers a menu at ≥3 and auto-picks the other slot at ≥6.
+  **Wired but not yet hardware-proven:** whether this firmware lets the module reach the ESP is
+  unconfirmed (see `docs/phase5.md` and `boot/README.md`). On a device boot GRUB prints either
+  `novadeck: A boot-attempts 0 -> 1` or an error saying how many filesystem handles it tried —
+  which is how you tell whether this trigger is live.
 
 > **What that means in practice.** A slot that boots but comes up broken IS demoted — the health
 > unit fails and the next boot goes to the other slot. A slot that never gets far enough to run
-> systemd at all is NOT rolled back automatically; it will be retried every boot. Recovery is the
-> stage-2 board menu, which is why it stays visible rather than hidden.
+> systemd at all is only rolled back if the counter above is actually moving; until that is
+> confirmed, assume it will be retried every boot. Recovery is the stage-2 board menu, which is why
+> it stays visible rather than hidden.
 
 Three traps, each of which has inverted a conclusion on real hardware:
 

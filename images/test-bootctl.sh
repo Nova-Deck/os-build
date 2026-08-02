@@ -308,7 +308,7 @@ expect_rc 0; expect_out bad
 done_
 
 t "get-state-absent-keys-answer-good"
-# A slot that was installed but never booted has no boot-attempts on the ESP (steamenv only writes
+# A slot that was installed but never booted has no boot-attempts on the ESP (stage 2 only writes
 # it at boot time); the bootconf schema defaults it to 0, so the answer is good, not a failure.
 printf 'title: A\n' >"$SB/conf/A.conf"
 bc get-state A
@@ -377,7 +377,7 @@ done_
 echo "== mark-good (boot health) =="
 
 t "mark-good-confirms-the-booted-slot"
-# set-mode booted clears boot-attempts (so the steamenv counter and stock steamcl's failsafe stop
+# set-mode booted clears boot-attempts (so the stage-2 counter and stock steamcl's failsafe stop
 # counting this boot), bumps boot-count, and clears image-invalid (which booted does NOT touch on
 # its own -- see the note in the tool).
 put_conf A boot-attempts 3

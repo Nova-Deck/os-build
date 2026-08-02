@@ -169,8 +169,8 @@ grep -aq "GRUB Environment Block" "$T/grubenv" && ok "grubenv is a valid GRUB en
 
 # ----------------------------------------------------------------------------------------------
 # 4. efi-a / efi-b (stage 2 homes). steamcl chainloads \EFI\steamos\grubaa64.efi on the slot's
-# efi partition; the steamenv module matches its own partition uuid against partsets/self and
-# reads the ESP uuid from partsets/all. A wrong uuid anywhere here breaks the boot handoff.
+# efi partition, matching its own partition uuid against partsets/self and reading the ESP uuid
+# from partsets/all. A wrong uuid anywhere here breaks the boot handoff.
 # ----------------------------------------------------------------------------------------------
 echo "  4. efi-a / efi-b (stage 2)"
 check_efi() {  # <partnum> <letter> <self> <other>
@@ -197,7 +197,7 @@ check_efi() {  # <partnum> <letter> <self> <other>
     ok "p$p grub.cfg content check skipped (no boot/gen-grub-cfg.sh)"
   fi
 
-  # partsets are 'key value' whitespace-separated (steamenv's format).
+  # partsets are 'key value' whitespace-separated (steamcl's format).
   partset() { mtype -i "$IMG@@$off" "::/SteamOS/partsets/$1" 2>/dev/null; }
   for n in A B all shared self other; do
     partset "$n" >/dev/null 2>&1 && ok "p$p partsets/$n present" || bad "p$p partsets/$n missing"

@@ -16,7 +16,7 @@
 # novadeck-session's EXIT trap removes it, so "still there" means "the same session stayed up".
 #
 # THE CONFIRMATION IS STEAMOS-STYLE NOW (Phase 5): mark-good runs `steamos-bootconf set-mode
-# booted`, which clears the image's boot-attempts counter (the steamenv stage-2 module bumped it
+# booted`, which clears the image's boot-attempts counter (the stage-2 novadeck module bumped it
 # before the kernel booted), so stock steamcl's failsafe and RAUC get-state stop counting this
 # boot as a failure.
 #
@@ -32,11 +32,12 @@
 # "Unknown key name" and ignores it, and the demote silently never happens. That is exactly how
 # this shipped once already.
 #
-# RIGHT NOW THIS IS THE ONLY ROLLBACK TRIGGER. The other half of the SteamOS design is the
-# stage-2 boot-attempts counter, which steamcl's failsafe acts on -- and the stage-2 config does
-# not invoke steamenv yet (docs/phase5.md), so nothing increments it. A slot that never reaches
-# this unit at all -- no session, no path unit firing -- is therefore NOT rolled back
-# automatically today. Recovery is the stage-2 board menu, which is why it stays visible.
+# TREAT THIS AS THE ONLY PROVEN ROLLBACK TRIGGER. The other half of the SteamOS design is the
+# stage-2 boot-attempts counter, which steamcl's failsafe acts on. Our stage-2 config now calls
+# `novadeck_bootattempts <slot>` on every boot (docs/phase5.md), but whether this firmware lets
+# that module reach the ESP is unconfirmed on hardware -- so until it is, assume a slot that never
+# reaches this unit at all (no session, no path unit firing) is NOT rolled back automatically.
+# Recovery is the stage-2 board menu, which is why it stays visible.
 #
 # THERE IS DELIBERATELY NO TIMEOUT THAT MARKS GOOD ANYWAY. If the session never comes up, the
 # path unit never fires and the image is never confirmed. That is the property this whole

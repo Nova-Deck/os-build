@@ -30,8 +30,8 @@
 #
 # WHAT IT CANNOT COVER, so that nobody reads a green run as more than it is: whether btrfstune's new
 # fsid actually stops the kernel aliasing the two roots, whether rsync's real --one-file-system
-# skips our offload bind mounts, whether 256M is enough for the copy, and whether steamenv/GRUB
-# actually boots the freshly written efi partition. Those need the device. This asserts that the
+# skips our offload bind mounts, whether 256M is enough for the copy, and whether GRUB actually
+# boots the freshly written efi partition. Those need the device. This asserts that the
 # hook asks for the right things, in the right order, and refuses to act on a target it cannot prove.
 set -uo pipefail
 
@@ -485,7 +485,7 @@ done_
 
 t "the-partsets-are-refreshed-with-self-pointing-at-the-target"
 # all/shared/A/B are disk-derived and identical on both efi partitions; only self/other re-point,
-# so steamcl/steamenv identify this partition as its own image.
+# so steamcl identifies this partition as its own image.
 run
 expect_rc 0
 expect_file "$(tefi B)/SteamOS/partsets/all"     'partset-all'

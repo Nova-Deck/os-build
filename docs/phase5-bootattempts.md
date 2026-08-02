@@ -1,8 +1,11 @@
 # boot-attempts — replacing Valve's steamenv with a minimal counter module
 
-> **Status: design only, nothing implemented.** Written 2026-08-02 after `steamenv_init` was
-> tried on hardware and failed. `dd8bec5` (the `steamenv_init` call) is still in the tree and
-> **makes the device unbootable** — revert it before flashing anything.
+> **Status: IMPLEMENTED, not yet hardware-validated.** Designed 2026-08-02 after `steamenv_init`
+> was tried on hardware and failed; built the same day. The module is
+> `boot/patches/grub/0001-add-the-novadeck-stage-2-module.patch`, the call site is
+> `boot/gen-grub-cfg.sh`, and `images/test-stage2-grub.sh` asserts it. `steamenv` is gone from the
+> tree. What remains open is the last section: whether ABL publishes the ESP as a filesystem
+> handle. One device boot answers it.
 
 ## What happened, so nobody re-derives it
 
@@ -109,8 +112,29 @@ beside `image-invalid`/`boot-count`, where RAUC and `novadeck-bootctl` already r
 `save_env` cannot write the bootconf's format anyway — grubenv is its own 1024-byte block format,
 not `key: value` lines. It would be a second store in a second format needing new OS-side tooling.
 
-## First implementation step
+## What shipped, and what one boot will tell us
 
-Build the module and call it from a config where `gfxterm` is already up, with `echo` markers
-either side and a `sleep`. That one boot distinguishes "dies inside the call" from "returns cleanly
-but finds no conf", which is the fact the first attempt failed to establish.
+The module is ~510 lines including its header, builds warning-free under `-Wall -W`, and is
+embedded in `grubaa64.efi`. The config calls it after `terminal_output gfxterm`, wrapped so a
+failure is held on screen:
+
+```
+insmod novadeck
+if novadeck_bootattempts A; then
+  true
+else
+  echo "novadeck: boot-attempts NOT counted for slot A — this slot cannot fail safe"
+  sleep 5
+fi
+```
+
+The next device boot has exactly three possible outcomes, and each one is a different fix:
+
+| What the panel shows | What it means | Next |
+|---|---|---|
+| `novadeck: A boot-attempts 0 -> 1` | Works. | Confirm offline that `A.conf` really moved, then the bootloader half of rollback is closed. |
+| `novadeck: no volume carries \SteamOS\conf\A.conf (N ... handles tried)` | The module ran and returned. If N is small (1), ABL publishes only the volume it booted from — the open question above, answered. | Fall back to bumping from the initramfs. |
+| Nothing, or a hang before the menu | Dies inside the call. | Unlike last time this is now distinguishable, because the terminal is up before the call and the menu is already defined. |
+
+That third row is the whole reason the call moved after `gfxterm`: the first attempt could not tell
+"dies inside the call" from "returns cleanly but finds no conf".

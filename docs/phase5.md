@@ -66,7 +66,7 @@ somewhere steamcl never looks.
 ## Stage 2 — GRUB 2.14 + patches (`boot/grub.sh`, `boot/patches/grub/`)
 
 Source is the **GNU release tarball** from ftp.gnu.org, not a fork and not a git checkout. Two
-patches, both real sources: Valve's `steamenv` module, and the one `grub-core/Makefile.core.def`
+patches, both real sources: our `novadeck` module, and the one `grub-core/Makefile.core.def`
 stanza that builds it. `boot/grub.sh` then runs `./autogen.sh`, because the module tables the build
 actually reads are generated from that manifest and the tarball ships them pre-generated.
 
@@ -77,11 +77,12 @@ then silently does not get built, because `Makefile.in` predates the manifest ed
 
 The tarball vendors gnulib, so there is no `./bootstrap` and no gnulib revision to pin (2.14's
 `bootstrap.conf` wants one from 2022; anything newer breaks its host-util build with `#error
-"Please include config.h first."`). `-fshort-wchar`, which `steamenv` needs, is a configure
-argument rather than a `configure.ac` patch: 2.14 honours a preset `TARGET_CFLAGS`.
+"Please include config.h first."`). `-fshort-wchar`, which the module needs so its `L"..."` path
+literals are 2-byte, is a configure argument rather than a `configure.ac` patch: 2.14 honours a
+preset `TARGET_CFLAGS`.
 
-✅ Verified offline: `grubaa64.efi` builds as PE32+ ARM64 with `steamenv` embedded, from the
-pristine tarball plus the two patches, in the build container.
+✅ Verified offline: `grubaa64.efi` builds as PE32+ ARM64 with `novadeck` embedded, from the
+pristine tarball plus the two patches, in the build container, with no warnings under `-Wall -W`.
 
 ### The config (`boot/gen-grub-cfg.sh`)
 
@@ -112,20 +113,33 @@ post-install hook runs — and it fails silently, which is how the ESP search ke
 a FAT label the card assembler had stopped writing.
 
 The `/efi` handoff is `novadeck.efi=PARTLABEL=`, stated by the config, symmetric with the existing
-`novadeck.var=`. It used to be `steamos.efi=PARTUUID=`, appended by `steamenv_boot` — which this
-config does not call. The initramfs accepts both, ours winning, so the two can coexist later.
+`novadeck.var=`. SteamOS states it as `steamos.efi=PARTUUID=`, appended by the bootloader rather
+than by the config. The initramfs accepts both, ours winning, so the two can coexist later.
 
 Board bootargs moved out of the dtsi `/chosen/bootargs` onto the `linux` line, where they now have
 to be: the EFI stub overwrites `/chosen/bootargs` with the loader's command line.
 
-## Why `steamenv` is built but not invoked
+## The `boot-attempts` counter
 
-This is the part that broke boot on the first attempt, and the mechanism is worth stating exactly.
+The generated config calls, once, after `terminal_output gfxterm`:
+
+```
+novadeck_bootattempts A          # or B
+```
+
+That opens `\SteamOS\conf\A.conf` on the ESP through the firmware's `EFI_FILE_PROTOCOL`, increments
+`boot-attempts:` and writes it back. It needs a module because GRUB's own `fat` driver is
+read-only. `novadeck-boot-good` clears the counter once the session is healthy, and
+`novadeck-bootctl get-state`/RAUC read it to decide a slot is bad.
+
+It replaced Valve's `steamenv`, which is worth stating exactly because it is the part that broke
+boot twice.
 
 `steamenv_init` — **not** `steamenv_boot` — is what calls `process_boot_config()` and increments
-`boot-attempts`, and it then overwrites `timeout` and `timeout_style` unconditionally
-(`steamenv.c`, `grub_cmd_steamenv_init`): `timeout=-1` when stage 1 asked for a menu, otherwise
-`timeout=0`. Called *after* a config has set its own timeout, it wins. So:
+`boot-attempts`, and it then overwrites `timeout` and `timeout_style` unconditionally: `timeout=-1`
+when stage 1 asked for a menu, otherwise `timeout=0`. Called *after* a config has set its own
+timeout, it wins. So the first attempt at wiring the counter — leaving `steamenv` compiled in but
+uncalled — was itself a workaround for that:
 
 1. First boot: `timeout=0` with no `default` → GRUB boots menu entry 0 immediately. That is one
    specific board, on every device, whatever the hardware is.
@@ -136,34 +150,29 @@ This is the part that broke boot on the first attempt, and the mechanism is wort
 3. So `boot-attempts` only climbed. At ≥3, steamcl's failsafe requests a menu, `steamenv_init` sets
    `timeout=-1`, and the device parks at the board menu for good.
 
-The module is compiled into `grubaa64.efi` and simply not called, so turning it back on is a config
-change against a byte-identical binary. What that costs meanwhile is in the next section.
+Calling `steamenv_init` behind a timeout guard was then tried on hardware (2026-08-02) and produced
+a **black screen with the conf still untouched** — because the guard forced the call before
+`loadfont`/`gfxterm`, and because `load_steamenv` discovers the ESP by parsing
+`SteamOS/partsets/*` and matching partition uuids across EFI handles, a path `process_boot_config()`
+then swallows the failure of. The full post-mortem is `docs/phase5-bootattempts.md`.
 
-### The plan for turning the counter back on (decided, not yet done)
-
-**Call `steamenv_init`; keep plain `linux`.** We want exactly one thing from this module — the
-`boot-attempts` increment — and that lives in `steamenv_init`.
-
-* `steamenv_init` goes FIRST, and our `timeout`/`default` block goes after it, wrapped in
-  `if [ "$timeout" != "-1" ]` so stage 1's `steamos-bootmenu` request still wins while its
-  `timeout=0` does not.
-* Menu entries keep `linux`. `steamenv_boot` would add UEFI `ChainLoader*` variable poking (Valve
-  firmware plumbing, meaningless on ABL), quiet/verbose cmdline juggling, and a
-  `steamos.efi=PARTUUID=` append that `novadeck.efi=PARTLABEL=` already replaced.
-* The Deck-specific half is dead weight rather than a hazard: `steamenv_init` **never applies a
-  video mode**. Every line in it is `grub_env_set`; the portrait GOP scoring only computes
-  `steamenv_noisy_{loader,kernel}_mode`, and the only thing that reads those is `steamenv_boot`.
-* Flip the assertions in `images/test-stage2-grub.sh` (currently: no `steamenv_` command appears)
-  and in `images/verify-card.sh`.
+The replacement drops everything that is not the counter — ~2000 lines of vendor code carried to
+use ~30 — and inverts each of those three failures: the image name is an **argument**, the conf is
+found by **attempting the open on each filesystem handle** rather than by uuid matching, and every
+failure path returns a `grub_error` naming what it tried. Touching no GRUB variable is what lets
+the call sit where its output is visible.
 
 Why not count in the grubenv instead: `boot-attempts` is per-image state that already lives in the
 bootconf beside `image-invalid`, `boot-count` and `boot-requested-at`, and `novadeck-bootctl
-get-state`, `mark-good` and RAUC all read it there. A second store, in another format, on another
-partition, needing new OS-side tooling to clear, is the mapping layer this phase exists to avoid.
+get-state`, `mark-good` and RAUC all read it there. `save_env` cannot write that format anyway —
+grubenv is its own 1024-byte block format, not `key: value` lines. A second store, in another
+format, on another partition, needing new OS-side tooling to clear, is the mapping layer this phase
+exists to avoid.
 
-Confirm on-device afterwards: that `steamenv_init` can actually WRITE the ESP conf on this hardware
-(it resolves the ESP through the partsets and EFI handles, never exercised on ABL), and that the
-timeout guard leaves `steamos-bootmenu` intact.
+⏳ **Not yet hardware-validated.** The open question is whether ABL publishes the ESP as a
+`SIMPLE_FILE_SYSTEM` handle at all, or only the volume it booted from. The module's failure message
+reports how many handles it tried, which answers that on the first boot; the fallbacks if the
+answer is "only its own" are in `docs/phase5-bootattempts.md`.
 
 ## Card layout (`images/make-sdcard.sh`)
 
@@ -208,17 +217,16 @@ parser logs "Unknown key name" and carries on, so the demote never ran. It is no
 `OnFailure=novadeck-boot-bad.service`, and `images/test-units.sh` runs `systemd-analyze` over every
 unit in `fs-overlay` so a fabricated directive cannot survive review again.
 
-With that fixed, and with `steamenv` not invoked:
+With that fixed:
 
 | Failure | Rolled back? |
 |---|---|
 | Slot boots, session never comes up or dies | **Yes** — the health unit fails, `novadeck-boot-bad.service` sets `image-invalid=1`, next boot goes to the other slot. |
-| Slot never reaches systemd at all | **No.** Nothing increments `boot-attempts`, so steamcl's failsafe never fires. It will be retried every boot. |
+| Slot never reaches systemd at all | **Yes in principle**, by `novadeck_bootattempts` + steamcl's failsafe — but not yet proven on hardware. Until it is, assume this slot is retried every boot. |
 
-The second row is the price of leaving `steamenv` out, and it is why the stage-2 board menu stays
-**visible** (3s) rather than hidden: on a device with no keyboard and no serial console, and with
-stage 1's `steamcl-menu` flag only reachable through `steamenv`, that menu is currently the only
-way back from a bad choice.
+The stage-2 board menu stays **visible** (3s) rather than hidden regardless: on a device with no
+keyboard and no serial console, and with stage 1's `steamcl-menu` flag not reaching stage 2 at all,
+that menu is the only way back from a bad board choice.
 
 ## Tests
 
@@ -226,7 +234,7 @@ Offline, in `make test` — all green at the time of writing:
 
 | Suite | What it pins down |
 |---|---|
-| `test-stage2-grub.sh` | Generates both configs and asserts them: one entry per DTB, per-slot `root=`/`novadeck.var=`/`novadeck.efi=` and never the other slot's, gpt indices matching `partition-table.txt`, `savedefault` defined, grubenv load *and* save, both timeout paths, no `steamenv_`, and `grub-script-check` parses it. Also catalog ↔ DTB ↔ device-profile parity, and that the dtsi bootargs are gone. |
+| `test-stage2-grub.sh` | Generates both configs and asserts them: one entry per DTB, per-slot `root=`/`novadeck.var=`/`novadeck.efi=` and never the other slot's, gpt indices matching `partition-table.txt`, `savedefault` defined, grubenv load *and* save, both timeout paths, `novadeck_bootattempts` naming this slot and never the other one and running after `terminal_output gfxterm`, and `grub-script-check` parses it. Also catalog ↔ DTB ↔ device-profile parity, and that the dtsi bootargs are gone. |
 | `test-units.sh` | `systemd-analyze` over every unit in `fs-overlay`; any unknown key or section fails. |
 | `test-bootctl.sh` | The RAUC backend contract against a stubbed `steamos-bootconf`. |
 | `test-post-install.sh` | The hook against a sandboxed ESP/efi/var, including the fsid + label re-stamp. |
@@ -296,6 +304,8 @@ slot that never reaches this unit at all — which is the `boot-attempts` item b
 
 ## Open items
 
-* **`steamenv` reintroduction** (above), now that the chain is proven without it. This is the one
-  remaining gap: the demote branch covers a slot that boots but fails userspace; a slot that never
-  reaches systemd still has no counter to fail against, so it is retried forever.
+* **Hardware-validate `novadeck_bootattempts`** (above). The demote branch already covers a slot
+  that boots but fails userspace; this closes the other half, a slot that never reaches systemd.
+  The module is built and called; what is unproven is whether ABL publishes the ESP as a
+  `SIMPLE_FILE_SYSTEM` handle at all. One boot answers it — the module prints either
+  `novadeck: A boot-attempts 0 -> 1` or an error naming how many handles it tried.

@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# novadeck read-only root assembler — Phase 4.
+# novadeck read-only root assembler — Phase 5.
 #
-# Stages a base rootfs, injects the novadeck kernel + dtbs (from kernel/build.sh) and the
-# device firmware (from firmware/fetch-qcom-fw.sh), then splits the staged tree into the
-# TWO filesystem images the partition table wants (images/partition-table.txt):
+# Stages a base rootfs, injects the novadeck kernel + dtbs + initramfs (from kernel/build.sh and
+# images/mkinitramfs.sh) and the device firmware (from firmware/fetch-qcom-fw.sh), then splits
+# the staged tree into the TWO filesystem images the partition table wants
+# (images/partition-table.txt):
 #
 #   out/images/rootfs.img  btrfs, ro   -> rootfs-a   the sealed system
 #   out/images/var.img     ext4,  rw   -> var-a      writable state + the /etc overlay upper
@@ -12,7 +13,12 @@
 #
 # The root's content is read-only by construction; the subvolume's ro *property* is
 # set by RAUC at deploy time (needs a mount), so it is not applied here. The kernel mounts
-# it `ro` regardless (see boot/cmdline + images/initramfs/init).
+# it `ro` regardless (rootfstype=btrfs ... ro on the stage-2 grub.cfg cmdline).
+#
+# The root carries its own boot half (docs/phase5.md): /boot/{Image, initramfs-novadeck.img,
+# dtbs} that the slot's stage-2 GRUB boots, plus the /usr/lib/novadeck/boot mirror + the
+# /esp//efi mountpoints the update path reads. The stage-1/2 binaries reach the cards through
+# the ESP/efi partitions laid by images/make-sdcard.sh and refreshed by the RAUC hook.
 #
 #   images/assemble-rootfs.sh <base-rootfs-dir>
 #   BASE_ROOTFS=<dir> images/assemble-rootfs.sh
@@ -36,7 +42,8 @@ VAR_SIZE_MIB="${VAR_SIZE_MIB:-256}"   # matches var-a/-b in partition-table.txt 
 
 [ -n "$BASE" ]        || { echo "usage: assemble-rootfs.sh <base-rootfs-dir>" >&2; exit 2; }
 [ -d "$BASE" ]        || { echo "no base rootfs dir: $BASE" >&2; exit 2; }
-[ -f "$OUT/Image.gz" ] || { echo "no kernel: $OUT/Image.gz (run kernel/build.sh first)" >&2; exit 1; }
+[ -f "$OUT/Image" ]       || { echo "no kernel: $OUT/Image (run kernel/build.sh first)" >&2; exit 1; }
+[ -f "$OUT/initramfs.cpio.gz" ] || { echo "no initramfs: $OUT/initramfs.cpio.gz (run make initramfs)" >&2; exit 1; }
 command -v mkfs.btrfs >/dev/null 2>&1 || { echo "mkfs.btrfs not found (run inside novadeck-build)" >&2; exit 1; }
 
 stage="$(mktemp -d)"
@@ -66,8 +73,12 @@ else cp -a "$BASE"/. "$stage"/; fi
 # archive can still place arbitrary paths in the root. Two marker names were never a guard for
 # that; see TODO.md for the real one (assert every file is package-owned or declared).
 
-# 2. novadeck kernel + dtbs under /boot
-install -Dm0644 "$OUT/Image.gz" "$stage/boot/Image.gz"
+# 2. novadeck kernel + dtbs + initramfs under /boot. These are what the stage-2 grub.cfg boots
+# (docs/phase5.md): `linux ($root)/boot/Image`, `initrd ($root)/boot/initramfs-novadeck.img`,
+# `devicetree ($root)/boot/dtbs/<dtb>.dtb`. The kernel must be the UNCOMPRESSED Image — the
+# embedded gzio filter is not in grubaa64.efi's module set, so Image.gz would not decompress.
+install -Dm0644 "$OUT/Image" "$stage/boot/Image"
+install -Dm0644 "$OUT/initramfs.cpio.gz" "$stage/boot/initramfs-novadeck.img"
 for dtb in "$OUT"/dtbs/*.dtb; do install -Dm0644 "$dtb" "$stage/boot/dtbs/$(basename "$dtb")"; done
 
 # 2b. loadable kernel modules under /lib/modules (from kernel/build.sh modules_install).
@@ -80,12 +91,19 @@ else
   echo "  (no staged modules at ${MODROOT#"$ROOT"/} — run kernel/build.sh; built-in drivers only)"
 fi
 
-# 2c. /efi mountpoint for the ESP (p1, the only ef00 on the disk). systemd's gpt-auto generator
-# finds the ESP by type GUID and emits an automount here: mounted on first access, unmounted
-# again after 120s idle. The root is read-only, so this directory cannot be created at runtime —
-# without it the automount fails and the system boots degraded. A/B updates reach the boot image
-# through this path, since the bootloader only ever reads p1.
+# 2c. /esp + /efi mountpoints (Phase 5). The two boot homes the OS must see are the shared ESP
+# and the booted slot's own efi partition:
+#   /esp  the shared ESP (p1, the only ef00) — SteamOS/conf + steamcl. Mounted HERE by /etc/fstab
+#         (below); gpt-auto is switched off for it by GPT bit 63 in partition-table.txt, because
+#         gpt-auto would otherwise mount it at /efi — which is the name the initramfs reserves for
+#         the slot's efi partition. The root is read-only, so the mountpoint must pre-exist.
+#   /efi  the booted slot's efi-a/b partition (p2/p3, typed 0700 so gpt-auto ignores them). The
+#         initramfs mounts THIS partition here, from steamos.efi=PARTUUID= on the cmdline; the
+#         mount persists across switch_root (it lives in the btrfs root). /boot/efi -> /efi is the
+#         SteamOS convention for bootloader tooling that looks there.
+install -dm0755 "$stage/esp"
 install -dm0755 "$stage/efi"
+ln -s /efi "$stage/boot/efi"
 
 # 3. device-proprietary firmware under /lib/firmware (paths are already /lib/firmware-relative).
 # Fetched from the qcom-firmwares repo by firmware/fetch-qcom-fw.sh.
@@ -153,19 +171,32 @@ fi
 #    the committed CA so there is ONE copy in the repo (images/rauc/novadeck-ca.pem, which ci/
 #    also signs bundles against) rather than a duplicate under fs-overlay that could drift.
 #
-# 2. The boot image, as /usr/lib/novadeck/boot.img. /lib/modules/<ver> ships in THIS root, so the
-#    kernel that matches it is this root's kernel — carrying it here makes that pairing true by
-#    construction. The RAUC post-install hook copies it out of the newly written slot onto the ESP
-#    as /KERNEL, so an update can never leave a root running under a kernel whose modules it does
-#    not have (CFG80211/ATH12K are =m: that boot would have no Wi-Fi, on a device with no serial
-#    console). It costs ~30MB per slot, which is the price of that guarantee.
+# 2. The boot software, mirrored under /usr/lib/novadeck/boot (Phase 5; docs/phase5.md). The stage-1
+#    steamcl and both per-slot stage-2 GRUB builds are owned by the same build that ships /boot/Image
+#    and /lib/modules/<ver> inside this root, so carrying them here makes the pairing true by
+#    construction: the RAUC post-install hook refreshes the ESP and the slot's efi partition FROM
+#    this directory, so an update can never install a root whose boot chain does not boot it. This
+#    directory replaces the old /usr/lib/novadeck/boot.img (Phase 1 /KERNEL flow).
+#    steamos-bootconf (holo-bootconf) is installed as /usr/bin/steamos-bootconf — the boot state
+#    reader both the RAUC backend (novadeck-bootctl) and the health service call.
 CA_SRC="$ROOT/images/rauc/novadeck-ca.pem"
-BOOTIMG_SRC="$OUT/boot/novadeck-boot.img"
-[ -f "$CA_SRC" ]      || { echo "no RAUC CA at ${CA_SRC#"$ROOT"/} (run ci/gen-signing-ca.sh)" >&2; exit 1; }
-[ -f "$BOOTIMG_SRC" ] || { echo "no boot image at ${BOOTIMG_SRC#"$ROOT"/} (run boot/package.sh)" >&2; exit 1; }
+BOOTDIR_SRC="$OUT/boot"
+[ -f "$CA_SRC" ] || { echo "no RAUC CA at ${CA_SRC#"$ROOT"/} (run ci/gen-signing-ca.sh)" >&2; exit 1; }
+for f in steamcl.efi steamcl-version holo-bootconf fonts/default.pf2 \
+         grubaa64.efi grub-a.cfg grub-b.cfg fonts/dejavu-mono.pf2; do
+  [ -f "$BOOTDIR_SRC/$f" ] || { echo "no boot artifact: ${BOOTDIR_SRC#"$ROOT"/}/$f (run boot/steamcl.sh + boot/grub.sh)" >&2; exit 1; }
+done
 install -D -m0444 "$CA_SRC"      "$stage/etc/rauc/keyring.pem"
-install -D -m0444 "$BOOTIMG_SRC" "$stage/usr/lib/novadeck/boot.img"
-echo "  RAUC: keyring.pem + this slot's boot.img ($(du -h "$BOOTIMG_SRC" | cut -f1)) installed"
+install -D -m0755 "$BOOTDIR_SRC/holo-bootconf" "$stage/usr/bin/steamos-bootconf"
+install -d -m0755 "$stage/usr/lib/novadeck/boot/fonts"
+install -D -m0444 "$BOOTDIR_SRC/steamcl.efi"      "$stage/usr/lib/novadeck/boot/steamcl.efi"
+install -D -m0444 "$BOOTDIR_SRC/steamcl-version"  "$stage/usr/lib/novadeck/boot/steamcl-version"
+install -D -m0444 "$BOOTDIR_SRC/fonts/default.pf2" "$stage/usr/lib/novadeck/boot/fonts/default.pf2"
+install -D -m0444 "$BOOTDIR_SRC/grubaa64.efi"     "$stage/usr/lib/novadeck/boot/grubaa64.efi"
+install -D -m0444 "$BOOTDIR_SRC/grub-a.cfg"       "$stage/usr/lib/novadeck/boot/grub-a.cfg"
+install -D -m0444 "$BOOTDIR_SRC/grub-b.cfg"       "$stage/usr/lib/novadeck/boot/grub-b.cfg"
+install -D -m0444 "$BOOTDIR_SRC/fonts/dejavu-mono.pf2" "$stage/usr/lib/novadeck/boot/fonts/dejavu-mono.pf2"
+echo "  RAUC: keyring.pem + stage-1/2 boot software + /usr/bin/steamos-bootconf installed"
 
 # Rewrite the baked Proton compat tools. We bake TWO — proton-cachyos and proton-ge — so the user
 # can pick whichever runs a given title better from the Steam UI. Both are the same self-contained
@@ -262,8 +293,17 @@ fi
 #    (resize2fs from e2fsprogs, in the base) to fill the device on first boot, before /home mounts.
 #  - the deck user (uid 1000) is baked into the base /etc (customize-base.sh); the seeder above
 #    materializes + chowns /home/deck on first boot. Steam (self-update + games) lives on /home.
+#  The shared ESP is also fstab-mounted here, at /esp (Phase 5). It is the partition's only mount
+#  definition: GPT bit 63 (partition-table.txt) keeps gpt-auto from auto-mounting it at /efi.
 echo "  injecting first-boot storage: /home mount + grow (deck user baked in base)"
 mkdir -p "$stage/etc"
+if ! grep -q 'PARTLABEL=NOVADECK-ESP' "$stage/etc/fstab" 2>/dev/null; then
+  printf '%s\n' \
+    '# novadeck shared ESP — SteamOS/conf + steamcl (stage 1). Mounted here at /esp; GPT bit 63' \
+    '# keeps gpt-auto away so the initramfs can mount the slot efi partition at /efi instead.' \
+    'PARTLABEL=NOVADECK-ESP  /esp  vfat  defaults,nofail,noatime  0 2' \
+    >>"$stage/etc/fstab"
+fi
 if ! grep -q 'LABEL=novadeck-home' "$stage/etc/fstab" 2>/dev/null; then
   printf '%s\n' \
     '# novadeck shared data partition — the deck user home + Steam library live here.' \
@@ -831,7 +871,7 @@ for slot in a b; do
   esac
   rm -f "$img"
   truncate -s "${VAR_SIZE_MIB}M" "$img"
-  mkfs.ext4 -q -F -L novadeck-var -m0 -d "$varstage" "$img"
+  mkfs.ext4 -q -F -L novadeck-var-"${slot^^}" -m0 -d "$varstage" "$img"
   echo "  ok   var-$slot  -> ${img#"$ROOT"/}  (${VAR_SIZE_MIB}MiB ext4, ${var_used_mib}MiB used)"
 done
 
@@ -850,8 +890,14 @@ install -d -m0755 "$varstage"
 # libraries/binaries substantially (the .ero and Proton payloads compress less, being pre-packed),
 # giving ~1G of headroom under the 6 GiB slot. It is a WRITE-TIME property recorded per extent;
 # reads decompress transparently, so no mount option is needed and the ro root needs no fstab change.
+#
+# The LABEL is slot A's, not a generic one. This image is written verbatim to rootfs-a by
+# make-sdcard.sh AND shipped as the RAUC bundle payload, so it lands byte-for-byte on whichever
+# slot an update targets — which is why the post-install hook has to re-label (and re-randomise
+# the fsid of) the slot it just wrote. Labelling here rather than in make-sdcard.sh is what avoids
+# a second full multi-gigabyte copy of the image purely to stamp eleven characters on it.
 rm -f "$IMG"
-mkfs.btrfs --rootdir "$stage" --compress zstd --shrink -L novadeck-root -f "$IMG" >/dev/null
+mkfs.btrfs --rootdir "$stage" --compress zstd --shrink -L novadeck-root-A -f "$IMG" >/dev/null
 
 # Report the APPARENT size, not the allocated one. `mkfs.btrfs --shrink` leaves the image sparse
 # (~2 GiB of holes), so a bare `du -h` understates it by that much -- and this number is what

@@ -1,72 +1,48 @@
 #!/bin/sh
-# novadeck initramfs init — pick the A/B slot, mount its read-only root and stack the /etc
-# overlay, then hand off to systemd.
+# novadeck initramfs init — Phase 5: mount the booted slot's root (ro) + var, mount the slot's
+# efi partition at /efi, stack the /etc overlay, then hand off to systemd.
 #
-# This exists for TWO reasons now.
+# WHAT PICKED THE SLOT IS NOT HERE. Slot selection moved out of the initramfs in Phase 5
+# (docs/phase5.md): the bootloader chain — ABL -> steamcl (stage 1, on the ESP) -> per-slot GRUB
+# (stage 2) — picks the image and appends the full cmdline. This init merely carries out what
+# the cmdline says:
 #
-# 1. The /etc overlay cannot be assembled after PID1 starts. systemd reads /etc/fstab (via
-#    generators), /etc/machine-id, /etc/hostname and system.conf before any unit can run, so an
-#    overlay mounted by a unit would leave every one of those reading the read-only lower dir
-#    forever. The machine-id case is the sharpest: a read-only /etc makes systemd fall back to a
-#    transient /run/machine-id, which makes EVERY boot look like a first boot (re-running
-#    preset-all). So the overlay has to be in place before we exec systemd.
+#   root=PARTLABEL=novadeck-root-A|B    the slot's btrfs root, mounted ro
+#   novadeck.var=PARTLABEL=...          the slot's ext4 /var (overlay upper + per-slot identity)
+#   novadeck.efi=PARTLABEL=...          the slot's efi-a/b partition, mounted at /efi
+#   steamos.efi=PARTUUID=...            the same thing, appended by steamenv_boot from the
+#                                       partition the stage-2 binary was loaded from. Accepted as
+#                                       a FALLBACK so the two forms can coexist: the stage-2
+#                                       grub.cfg states novadeck.efi= itself (it knows the slot,
+#                                       so it knows the partition), and steamenv is not currently
+#                                       invoked at all -- see docs/phase5.md.
 #
-# 2. A/B slot selection (Phase 4b, design C — docs/phase4.md). ABL loads /KERNEL off the shared
-#    ESP and reads nothing else: there is no bootloader stage that can choose a slot or fall back
-#    to the other one. So the switch AND the revert live here, driven by a state file on the ESP.
+# The old design-C machinery — the /NOVADECK/STATE.* read/write, slot selection, failover,
+# kernel-mismatch warning and KERNEL.BAK rollback — is gone. The steamenv stage-2 counter + stock
+# steamcl's failsafe own "did a slot come up", and the OS owns "is this slot OK" via
+# novadeck-boot-good.service (set-mode booted / set-state bad). Nothing here chooses anything.
+#
+# WHY THE /ETC OVERLAY IS IN THE INITRAMFS AT ALL: it cannot be assembled after PID1 starts.
+# systemd reads /etc/fstab (via generators), /etc/machine-id, /etc/hostname and system.conf
+# before any unit can run, so an overlay mounted by a unit would leave every one of those reading
+# the read-only lower dir forever. The machine-id case is the sharpest: a read-only /etc makes
+# systemd fall back to a transient /run/machine-id, which makes EVERY boot look like a first boot
+# (re-running preset-all). So the overlay has to be in place before we exec systemd.
 #
 # We need no modules: btrfs, ext4, vfat and overlayfs are all =y in kernel.config, and every
-# block/storage driver is builtin too (proof: the device booted for months with no initramfs at
-# all). So this is a plain shell script over a handful of util-linux binaries, staged by
-# images/mkinitramfs.sh. No udev, no modprobe, no systemd-in-initrd.
+# block/storage driver is builtin too. So this is a plain shell script over a handful of
+# util-linux binaries, staged by images/mkinitramfs.sh. No udev, no modprobe, no systemd-in-initrd.
 #
 # Layout (images/partition-table.txt):
-#   esp   <- PARTLABEL=NOVADECK-ESP           vfat, rw   (shared; carries /KERNEL and the state)
 #   root  <- PARTLABEL=novadeck-root-{A,B}    btrfs, ro
-#   var   <- PARTLABEL=novadeck-var-{A,B}     ext4, rw   (carries the overlay upper+work)
+#   var   <- PARTLABEL=novadeck-var-{A,B}     ext4, rw   (overlay upper+work; /lib/novadeck/slot)
+#   efi   <- PARTUUID=... (steamos.efi=)      vfat, rw   (the SLOT's efi-a/b: SteamOS/partsets)
 #   /etc  <- overlay(lower=/sysroot/etc, upper=/sysroot/var/lib/overlays/etc/upper)
 #
-# ---------------------------------------------------------------------------------------------
-# SLOT STATE: /NOVADECK/STATE.0 and /NOVADECK/STATE.1 on the ESP
-#
-#   gen=3        generation counter; the HIGHER valid generation wins
-#   active=a     the slot known good. a|b
-#   pending=b    a slot on trial after an update, or empty. ''|a|b
-#   tries=1      trials left for `pending`; at 0 we roll back to `active`
-#   kernel=a     which slot's boot image is currently at /KERNEL (the ESP, and so /KERNEL, is
-#                SHARED — this is the only record of which root's /lib/modules matches it)
-#   bak=         set when /NOVADECK/KERNEL.BAK holds the previous image
-#   broken=      slots an install started on and never finished ('', 'a', 'b' or 'ab'). Written
-#                by novadeck-bootctl's RAUC backend; READ BY NOTHING HERE — it is carried through
-#                writes and nothing else. See the write_state note on why it is a named field.
-#   end          MUST be the last non-blank line — this is the torn-write detector
-#
-# TWO FILES, NOT WRITE-THEN-RENAME. There is no `sync` here and no shell can fsync, so a rename
-# guarantees nothing on FAT: the directory entry can reach the card before the data does. Making
-# rename safe would mean staging `mv` AND `sync` for a weaker guarantee. Instead we only ever
-# overwrite the copy that is ALREADY STALE — so a torn write is rejected by the reader and the
-# previous generation still wins. There is no window in which both copies are invalid. The
-# durability barrier we do need comes free from the umount below.
-#
-# That matters because the one write that matters happens on the first boot of an UNPROVEN root
-# — the likeliest moment for someone to yank power on a handheld — and the damage from losing it
-# is not "the update retries", it is an old root under a new kernel with no matching ath12k, so
-# no Wi-Fi, on a device with no serial console: a reflash.
-#
-# EVERY read and write here is a shell builtin (read, printf, case, [). That is a constraint the
-# format was chosen to satisfy, not a coincidence — see images/mkinitramfs.sh before reaching
-# for cat/cp/mv/dd.
-#
-# UNKNOWN KEYS ARE IGNORED, NEVER REJECTED. This reader ships inside /KERNEL on the SHARED ESP
-# while its writer (/usr/bin/novadeck-bootctl) is PER-SLOT, so after a rollback an older writer
-# and a newer reader coexist by design. The format is a compatibility contract — `kernel=`/`bak=`
-# were reserved from day one so pass 2 could start writing them without changing it.
-#
-# THE STATE FILE IS A TRUST BOUNDARY. It is plain text on a FAT partition that anyone with a
-# screwdriver can edit, and it is parsed by PID 1 as root. Every field is validated against a
-# strict pattern before use and none is ever word-split into a command position. Being
-# hand-editable is deliberate — it is the recovery mechanism when you have the card in a reader.
-# ---------------------------------------------------------------------------------------------
+# The efi mountpoint is INSIDE the btrfs root ($SYSROOT/efi), so the mount survives switch_root:
+# it is a mount on the new root's filesystem, not on this initramfs's root. The shared ESP is
+# deliberately NOT mounted here at all — the booted system mounts it at /esp from /etc/fstab, and
+# GPT bit 63 (partition-table.txt) keeps gpt-auto from trying to shadow /efi with it.
 #
 # DEGRADED BOOT: this device has no serial console ([[sm8650-no-uart]]), so a hard failure here
 # is only debuggable by pulling the card and mounting it. Every step past "root is mounted"
@@ -75,20 +51,12 @@
 # which is exactly the configuration that shipped before this change, so the fallback is
 # known-good rather than novel. The failure is loud, not silent.
 #
-# The same doctrine covers the slot state: if the ESP will not mount, or neither state file
-# validates, we fall back to the root=/novadeck.var= still baked into boot/cmdline. Those args
-# are kept precisely for this — and because the KERNEL reads root= too, so if this script never
-# executes at all (a missing library, a truncated cpio) the kernel still mounts a root and boots.
-# Deleting them would turn every initramfs packaging bug into an unconditional panic loop.
-#
-# Known limit: if two partitions are ever labelled NOVADECK-ESP (boot/deploy.sh notes the ESP
-# may live on SD or on internal storage), findfs returns whichever blkid enumerates first, which
-# need not be the one ABL booted from.
+# A root that will not mount is different: with no root there is no system, so that is a panic
+# (panic=5 on the grub.cfg cmdline reboots). Failover to the other slot is NOT done here — that
+# is the bootloader's job, and doing it here too would fight the steamenv counter's accounting.
 set -u
 
 SYSROOT=/sysroot
-ESPDIR=/esp
-STATEDIR=$ESPDIR/NOVADECK
 
 log()  { printf '<6>novadeck-init: %s\n' "$*" >/dev/kmsg 2>/dev/null || :; }
 warn() { printf '<3>novadeck-init: %s\n' "$*" >/dev/kmsg 2>/dev/null || :; }
@@ -97,29 +65,34 @@ warn() { printf '<3>novadeck-init: %s\n' "$*" >/dev/kmsg 2>/dev/null || :; }
 mount -t proc     -o nosuid,noexec,nodev proc /proc
 mount -t sysfs    -o nosuid,noexec,nodev sys  /sys
 mount -t devtmpfs -o nosuid,mode=0755    dev  /dev
-# /run is mounted here for two reasons: switch_root can `mount --move` it into the new root
-# cleanly, and it is how /run/novadeck/boot (written below) reaches the running system.
-# util-linux switch_root walks {/dev,/proc,/sys,/run} and moves each into $SYSROOT; when /run
-# is not a mountpoint that move fails and prints a "failed to mount moving /run to /sysroot/run"
-# warning to the console. The boot recovers (systemd mounts its own /run post-pivot), so this is
-# cosmetic — but on a no-UART device ([[sm8650-no-uart]]) a spurious boot-console error is a
-# debugging trap, so we give switch_root a real tmpfs to hand over.
+# /run is mounted here because util-linux switch_root walks {/dev,/proc,/sys,/run} and moves each
+# into $SYSROOT; when /run is not a mountpoint that move fails and prints a "failed to mount
+# moving /run to /sysroot/run" warning to the console. The boot recovers (systemd mounts its own
+# /run post-pivot), so this is cosmetic — but on a no-UART device ([[sm8650-no-uart]]) a spurious
+# boot-console error is a debugging trap, so we give switch_root a real tmpfs to hand over.
 mount -t tmpfs    -o nosuid,nodev,mode=0755 run /run
 
-ROOTSPEC=''; VARSPEC=''; ROOTFSTYPE=btrfs
+ROOTSPEC=''; VARSPEC=''; EFISPEC=''; EFISPEC_ALT=''; ROOTFSTYPE=btrfs
 read -r _cmdline </proc/cmdline
 for _arg in $_cmdline; do
   case "$_arg" in
     root=*)          ROOTSPEC=${_arg#root=} ;;
     rootfstype=*)    ROOTFSTYPE=${_arg#rootfstype=} ;;
     novadeck.var=*)  VARSPEC=${_arg#novadeck.var=} ;;
+    novadeck.efi=*)  EFISPEC=${_arg#novadeck.efi=} ;;
+    steamos.efi=*)   EFISPEC_ALT=${_arg#steamos.efi=} ;;
   esac
 done
+# novadeck.efi= wins when both are present. It comes from the generated grub.cfg, which knows
+# which slot it is and therefore which partition to name; steamos.efi= is appended by steamenv
+# from the partition it was chainloaded from. They should always agree, and when they do not it is
+# the config that is authoritative -- it is the file the update path installs alongside the root.
+[ -n "$EFISPEC" ] || EFISPEC=$EFISPEC_ALT
 
-# Resolve a root=-style spec (PARTLABEL=/LABEL=/UUID=/bare path) to a block device, polling
-# for it. There is no udev here and storage probes asynchronously, so the device may simply
-# not exist yet on the first pass — this is what the kernel's own `rootwait` does for us when
-# it mounts root itself. ~30s, then give up.
+# Resolve a root=-style spec (PARTLABEL=/LABEL=/UUID=/PARTUUID=/bare path) to a block device,
+# polling for it. There is no udev here and storage probes asynchronously, so the device may
+# simply not exist yet on the first pass — this is what the kernel's own `rootwait` does for us
+# when it mounts root itself. ~30s, then give up.
 resolve() {
   _spec=$1 _i=0
   while [ "$_i" -lt 300 ]; do
@@ -132,303 +105,27 @@ resolve() {
   return 1
 }
 
-# ---------------------------------------------------------------------------------------------
-# Slot state
-# ---------------------------------------------------------------------------------------------
-
-# Parse one state file into ST_*. Returns non-zero unless the file is COMPLETE (terminated by
-# `end`) and every field validates. A blank or comment line after `end` is fine; anything else
-# is not, which is what makes a truncated write detectable.
-read_state() {
-  _f=$1
-  ST_GEN=''; ST_ACTIVE=''; ST_PENDING=''; ST_TRIES=''; ST_KERNEL=''; ST_BAK=''; ST_BROKEN=''
-  _end=0
-  [ -f "$_f" ] || return 1
-  # `|| [ -n "$_line" ]` so a final line with no trailing newline is still seen.
-  while IFS= read -r _line || [ -n "$_line" ]; do
-    case "$_line" in
-      ''|'#'*)   continue ;;
-      gen=*)     ST_GEN=${_line#gen=};         _end=0 ;;
-      active=*)  ST_ACTIVE=${_line#active=};   _end=0 ;;
-      pending=*) ST_PENDING=${_line#pending=}; _end=0 ;;
-      tries=*)   ST_TRIES=${_line#tries=};     _end=0 ;;
-      kernel=*)  ST_KERNEL=${_line#kernel=};   _end=0 ;;
-      bak=*)     ST_BAK=${_line#bak=};         _end=0 ;;
-      broken=*)  ST_BROKEN=${_line#broken=};   _end=0 ;;
-      end)       _end=1 ;;
-      *)         _end=0 ;;   # unknown key — ignored on purpose, but not a terminator
-    esac
-  done <"$_f"
-  [ "$_end" = 1 ] || return 1
-  # gen and tries must be all-digits BEFORE any arithmetic: `-gt` on a non-number errors out,
-  # and a lexical compare would silently break at generation 10.
-  case "$ST_GEN"   in ''|*[!0-9]*) return 1 ;; esac
-  case "$ST_TRIES" in ''|*[!0-9]*) return 1 ;; esac
-  case "$ST_ACTIVE"  in a|b)   ;; *) return 1 ;; esac
-  case "$ST_PENDING" in ''|a|b) ;; *) return 1 ;; esac
-  return 0
-}
-
-# Write the next generation to the file that is NOT the current winner (see the header).
-# kernel=/bak= are emitted from STATE_KERNEL/STATE_BAK rather than taken as arguments: only the
-# rollback path below touches them, and it does so by assigning those variables BEFORE calling, so
-# every other write round-trips them exactly as read. Clobbering a field written by a newer
-# novadeck-bootctl is precisely what the compatibility contract forbids.
-#
-# broken= is round-tripped the same way and NOTHING here reads it. That is the point: this writer
-# emits a FIXED field list, so a key it does not name is destroyed the first time it writes --
-# and it writes on every trial boot, to decrement `tries`. A `broken` marker set by the RAUC
-# backend would therefore have survived until exactly the next boot and no further. "Unknown keys
-# are ignored" is a property of the READER above; it has never been one of this writer. Any future
-# field must be added here too, or it does not exist in practice.
-write_state() {
-  _wa=$1 _wp=$2 _wt=$3
-  _target=$STATEDIR/STATE.$STATE_SPARE
-  _next=$((STATE_GEN + 1))
-  { printf '# novadeck A/B slot state -- images/initramfs/init, /usr/bin/novadeck-bootctl\n'
-    printf 'gen=%s\n'     "$_next"
-    printf 'active=%s\n'  "$_wa"
-    printf 'pending=%s\n' "$_wp"
-    printf 'tries=%s\n'   "$_wt"
-    printf 'kernel=%s\n'  "$STATE_KERNEL"
-    printf 'bak=%s\n'     "$STATE_BAK"
-    printf 'broken=%s\n'  "$STATE_BROKEN"
-    printf 'end\n'
-  } >"$_target" 2>/dev/null || { warn "state write to STATE.$STATE_SPARE failed"; return 1; }
-  # The file we just wrote becomes the winner and the other one becomes the spare, so a second
-  # write in the same boot (root mount failed, and we fail over) again overwrites only the stale
-  # copy. Recomputed rather than swapped, so this is still correct when there was no winner.
-  log "state gen=$_next active=$_wa pending='$_wp' tries=$_wt -> STATE.$STATE_SPARE"
-  STATE_WON=$STATE_SPARE
-  [ "$STATE_WON" = 1 ] && STATE_SPARE=0 || STATE_SPARE=1
-  # ALL of the parsed state advances, not just the generation. These variables are what
-  # /run/novadeck/boot is emitted from, so updating gen alone published a post-write gen next to a
-  # pre-write pending -- a rollback boot read as "a trial is still armed" while the ESP said the
-  # opposite, on exactly the boots that need offline debugging. Anything that must see the
-  # pre-write value has to read it BEFORE calling this.
-  STATE_GEN=$_next
-  STATE_ACTIVE=$_wa; STATE_PENDING=$_wp; STATE_TRIES=$_wt
-  return 0
-}
-
-# Abandon a trial: make $1 active again, clear `pending`, and put the PREVIOUS kernel back.
-#
-# The kernel half is not optional and it is why this is a function. /KERNEL is shared by both slots
-# while /lib/modules/<ver> ships INSIDE a root, so reverting the root without the kernel boots the
-# old root under the new one -- CFG80211/ATH12K are =m, so that is a device with no Wi-Fi and no
-# serial console to say why ([[sm8650-no-uart]]). There are TWO ways a trial ends badly and both
-# land here: `tries` reaching zero, and the trial slot refusing to mount at all. Only the first
-# used to restore anything; the second is the one a real OTA failure actually takes, because a
-# root that will not mount fails over before the counter can ever run out.
-#
-# RETURNS only when the caller should CARRY ON booting $1 under the kernel already running: either
-# there was no backup to restore, or the restore failed. A successful restore does NOT return -- it
-# reboots, because we are running the new kernel and cannot swap it out from under ourselves. The
-# reboot is `exit 1` -> kernel panic -> panic=5 on our cmdline; MAGIC_SYSRQ is not in
-# kernel/kernel.config, so this reuses the mechanism the no-bootable-root path already relies on
-# rather than inventing a second one.
-#
-# `bak` is captured before the write, which clears it: the state must stop naming a backup in the
-# SAME generation that clears `pending`. If the copy is interrupted, the next boot must not keep
-# retrying a restore forever -- a stale KERNEL.BAK on the ESP is harmless, a state that keeps
-# pointing at it is not. `kernel` moves with the image in that same generation: KERNEL.BAK is by
-# definition what was live before the update, so restoring it makes /KERNEL the image of the slot
-# we are reverting TO. The pair describes one event and is written as one.
-#
-# HONEST LIMIT: this covers "the new kernel boots far enough to run us, but the system is not
-# healthy". A kernel that does not boot at all leaves nothing running to restore anything -- that
-# is a reflash, and design C never claimed otherwise (docs/phase4.md).
-abandon_trial() { # <slot-to-activate> <log-tag>
-  _at_slot=$1; _at_tag=$2
-  _bak=$STATE_BAK
-  _kernel_was=$STATE_KERNEL
-  _restore=0
-  if [ -n "$_bak" ] && [ "$ESPMODE" = rw ] && [ -f "$ESPDIR/$_bak" ]; then
-    _restore=1; STATE_BAK=''; STATE_KERNEL=$_at_slot
-  fi
-  [ "$ESPMODE" = rw ] && write_state "$_at_slot" '' 0
-  if [ "$_restore" = 1 ]; then
-    warn "$_at_tag: restoring the previous kernel ($_bak -> KERNEL) and rebooting"
-    if cp "$ESPDIR/$_bak" "$ESPDIR/KERNEL"; then
-      umount "$ESPDIR" || warn "DEGRADED: cannot unmount the ESP after restoring the kernel"
-      warn "$_at_tag: previous kernel restored — rebooting into slot $_at_slot"
-      exit 1
-    fi
-    warn "DEGRADED: could not restore $_bak — booting slot $_at_slot under the NEW kernel"
-    # The write above already claimed /KERNEL held $_at_slot's image. The copy failed, so it does
-    # not — correct the record with a second generation rather than boot on leaving a field that
-    # lies about which /lib/modules matches. `bak` stays cleared: a restore that failed once this
-    # boot must not be retried forever, which is the same reason it was cleared up front.
-    # (_restore=1 implies the ESP is rw, so this write needs no further guard.)
-    STATE_KERNEL=$_kernel_was
-    write_state "$_at_slot" '' 0
-  elif [ -n "$_bak" ] && [ "$ESPMODE" != rw ]; then
-    warn "DEGRADED: ESP is read-only — cannot restore the previous kernel ($_bak)"
-  elif [ -n "$_bak" ]; then
-    warn "DEGRADED: state names a previous kernel ($_bak) but $ESPDIR/$_bak is missing"
-  fi
-}
-
-ESPMODE=none
-if ESPDEV=$(resolve "PARTLABEL=NOVADECK-ESP"); then
-  if mount -t vfat -o rw "$ESPDEV" "$ESPDIR" 2>/dev/null; then
-    ESPMODE=rw
-  elif mount -t vfat -o ro "$ESPDEV" "$ESPDIR" 2>/dev/null; then
-    ESPMODE=ro
-    warn "ESP $ESPDEV mounted READ-ONLY — slot state cannot be updated this boot"
-  else
-    warn "ESP $ESPDEV will not mount as vfat"
-  fi
-else
-  warn "no partition labelled NOVADECK-ESP appeared after 30s"
-fi
-
-STATE_GEN=0; STATE_WON=-1; STATE_SPARE=0
-STATE_ACTIVE=''; STATE_PENDING=''; STATE_TRIES=0; STATE_KERNEL=''; STATE_BAK=''; STATE_BROKEN=''
-if [ "$ESPMODE" != none ]; then
-  for _n in 0 1; do
-    if read_state "$STATEDIR/STATE.$_n" && [ "$ST_GEN" -gt "$STATE_GEN" ]; then
-      STATE_GEN=$ST_GEN; STATE_WON=$_n
-      STATE_ACTIVE=$ST_ACTIVE; STATE_PENDING=$ST_PENDING; STATE_TRIES=$ST_TRIES
-      STATE_KERNEL=$ST_KERNEL; STATE_BAK=$ST_BAK; STATE_BROKEN=$ST_BROKEN
-    fi
-  done
-  # Write to whichever file did NOT win. With no winner at all, seed STATE.0 — the same file
-  # images/make-sdcard.sh seeds, so a card's first two generations stay in one place.
-  if [ "$STATE_WON" = 1 ]; then STATE_SPARE=0; else STATE_SPARE=1; fi
-  [ "$STATE_WON" = -1 ] && STATE_SPARE=0
-fi
-
-# Decide the slot. SOURCE is recorded in /run/novadeck/boot and is the first thing to look at
-# when a boot went somewhere unexpected.
-SLOT=''; SOURCE=cmdline
-if [ "$STATE_WON" = -1 ]; then
-  warn "DEGRADED: no valid slot state on the ESP — falling back to the cmdline root="
-elif [ -z "$STATE_PENDING" ]; then
-  SLOT=$STATE_ACTIVE; SOURCE=state
-elif [ "$STATE_TRIES" -gt 0 ] && [ "$ESPMODE" = rw ]; then
-  # Decrement BEFORE committing to the trial. If the write fails we have no way to count this
-  # attempt, so treat it exactly like a read-only ESP below. Both operands are captured first:
-  # a successful write_state advances STATE_* in place, so reading STATE_TRIES afterwards would
-  # decrement a second time.
-  _trial=$STATE_PENDING; _left=$((STATE_TRIES - 1))
-  if write_state "$STATE_ACTIVE" "$_trial" "$_left"; then
-    SLOT=$_trial; SOURCE=try
-    log "trying pending slot $SLOT ($_left tries left after this one)"
-  else
-    SLOT=$STATE_ACTIVE; SOURCE=try-nowrite
-    warn "DEGRADED: cannot record the attempt — booting active slot $SLOT instead of $STATE_PENDING"
-  fi
-elif [ "$STATE_TRIES" -gt 0 ]; then
-  # Honouring `pending` without a durable decrement would retry a broken slot FOREVER: the
-  # counter never reaches zero, so the rollback below never fires.
-  SLOT=$STATE_ACTIVE; SOURCE=try-noro
-  warn "DEGRADED: ESP is read-only, so slot $STATE_PENDING cannot be tried — booting active $SLOT"
-else
-  SLOT=$STATE_ACTIVE; SOURCE=rollback
-  warn "ROLLBACK: pending slot $STATE_PENDING exhausted its tries — reverting to $SLOT"
-  # An update rotated /KERNEL and kept the previous one; the trial it was installed for has now
-  # failed. abandon_trial() puts that kernel back and reboots; see its header for why the root
-  # cannot be reverted on its own.
-  abandon_trial "$STATE_ACTIVE" ROLLBACK
-fi
-
-if [ -n "$SLOT" ]; then
-  case "$SLOT" in
-    a) ROOTSPEC='PARTLABEL=novadeck-root-A'; VARSPEC='PARTLABEL=novadeck-var-A' ;;
-    b) ROOTSPEC='PARTLABEL=novadeck-root-B'; VARSPEC='PARTLABEL=novadeck-var-B' ;;
-  esac
-  ROOTFSTYPE=btrfs
-fi
+# The slot letter for /run/novadeck/boot, derived from the root PARTLABEL the bootloader chose.
+# Empty on any other root (a dev boot) — which is exactly what mark-good needs to know.
+SLOT=''
+case "$ROOTSPEC" in
+  PARTLABEL=novadeck-root-A) SLOT=A ;;
+  PARTLABEL=novadeck-root-B) SLOT=B ;;
+esac
 
 # ---------------------------------------------------------------------------------------------
 # Root
 # ---------------------------------------------------------------------------------------------
-
-[ -n "$ROOTSPEC" ] || { warn "no root= on the kernel cmdline and no slot state — cannot continue"; exit 1; }
-
-# Try the chosen root; on failure fall over to the OTHER slot once. Note this clears `pending`
-# as it goes: a slot that will not even mount must not keep a trial in hand for the next boot.
-mount_root() {
-  if ! ROOTDEV=$(resolve "$ROOTSPEC"); then
-    warn "root device '$ROOTSPEC' never appeared after 30s"
-    return 1
-  fi
-  if ! mount -t "$ROOTFSTYPE" -o ro "$ROOTDEV" "$SYSROOT"; then
-    warn "cannot mount root $ROOTDEV ($ROOTFSTYPE)"
-    return 1
-  fi
-  return 0
-}
-
-if ! mount_root; then
-  _other=''
-  case "$SLOT" in a) _other=b ;; b) _other=a ;; esac
-  if [ -n "$_other" ]; then
-    warn "DEGRADED: slot $SLOT will not mount — failing over to slot $_other"
-    # Same rule as the tries-exhausted rollback above, and this is the path a real failed OTA
-    # actually takes: a trial slot that will not mount fails over HERE, before `tries` can ever
-    # reach zero, so restoring the kernel only in the rollback branch left the common case
-    # booting the old root under the new kernel. abandon_trial() reboots if it restores.
-    abandon_trial "$_other" FAILOVER
-    SLOT=$_other; SOURCE=failover
-    case "$SLOT" in
-      a) ROOTSPEC='PARTLABEL=novadeck-root-A'; VARSPEC='PARTLABEL=novadeck-var-A' ;;
-      b) ROOTSPEC='PARTLABEL=novadeck-root-B'; VARSPEC='PARTLABEL=novadeck-var-B' ;;
-    esac
-  fi
-  if [ -z "$_other" ] || ! mount_root; then
-    # Nothing left to fall back TO: without a root there is no system. Exiting kills init, and
-    # the kernel panics; panic=5 on our cmdline reboots. A boot loop is the honest outcome here.
-    warn "no bootable root — panicking"
-    exit 1
-  fi
+[ -n "$ROOTSPEC" ] || { warn "no root= on the kernel cmdline — cannot continue"; exit 1; }
+if ! ROOTDEV=$(resolve "$ROOTSPEC"); then
+  warn "root device '$ROOTSPEC' never appeared after 30s — panicking (panic=5 reboots)"
+  exit 1
 fi
-log "root $ROOTDEV mounted ro (slot=${SLOT:-?} source=$SOURCE)"
-
-# /KERNEL is shared by both slots while /lib/modules/<ver> ships INSIDE a root, so it is possible
-# to boot a root under a kernel from the other build — `novadeck-bootctl try <other>` after an
-# update reaches it with no second update involved. CFG80211 and ATH12K are =m, so the symptom is
-# a device with no Wi-Fi and nothing on screen to say why. Loud in the journal is the entire
-# debugging surface on a device with no serial console ([[sm8650-no-uart]]).
-#
-# NOT fatal: the alternative to booting a mismatched pair is not booting. An empty `kernel` makes
-# no claim and warns about nothing — that is a card no update has rotated /KERNEL on, where both
-# slots carry the same build and no mismatch is possible (images/make-sdcard.sh seeds it empty).
-if [ -n "$STATE_KERNEL" ] && [ -n "$SLOT" ] && [ "$STATE_KERNEL" != "$SLOT" ]; then
-  warn "DEGRADED: /KERNEL is slot $STATE_KERNEL's boot image but this boot is slot $SLOT — /lib/modules will not match"
+if ! mount -t "$ROOTFSTYPE" -o ro "$ROOTDEV" "$SYSROOT"; then
+  warn "cannot mount root $ROOTDEV ($ROOTFSTYPE) — panicking (panic=5 reboots)"
+  exit 1
 fi
-
-# Hand the decision to the running system. /run is moved into the new root by switch_root, so
-# this survives the pivot — it is what novadeck-bootctl reads to know which slot it is on, and
-# it is the first evidence to check when debugging a boot offline.
-#
-# INVARIANT: gen/active/pending/tries_left/kernel/broken are emitted from the single set of STATE_*
-# variables that write_state() advances, so this file always describes the ESP as it stands at handoff —
-# never a mix of pre- and post-write values. On a boot where the ESP could not be written
-# (esp=ro, esp=none) they describe what was read, which is likewise still what is on the card.
-# `tries_left` is the remaining trial count recorded in that state, i.e. what a NEXT boot would
-# see; on a `source=try` boot this boot's own attempt is already deducted.
-mkdir -p /run/novadeck
-{ printf 'slot=%s\n'       "${SLOT:-}"
-  printf 'source=%s\n'     "$SOURCE"
-  printf 'gen=%s\n'        "$STATE_GEN"
-  printf 'active=%s\n'     "$STATE_ACTIVE"
-  printf 'pending=%s\n'    "$STATE_PENDING"
-  printf 'tries_left=%s\n' "$STATE_TRIES"
-  printf 'kernel=%s\n'     "$STATE_KERNEL"
-  printf 'broken=%s\n'     "$STATE_BROKEN"
-  printf 'esp=%s\n'        "$ESPMODE"
-  printf 'root=%s\n'       "$ROOTDEV"
-} >/run/novadeck/boot 2>/dev/null || warn "cannot write /run/novadeck/boot"
-
-# Unmount the ESP BEFORE switch_root. This is the durability barrier for the state write above,
-# and it is a correctness requirement: switch_root moves only {/dev,/proc,/sys,/run}, so a
-# still-mounted /esp becomes an orphan and systemd's gpt-auto generator then mounts the same
-# vfat device a SECOND time at /efi.
-if [ "$ESPMODE" != none ]; then
-  umount "$ESPDIR" || warn "DEGRADED: cannot unmount the ESP — /efi may double-mount it"
-fi
+log "root $ROOTDEV mounted ro (slot=${SLOT:-?})"
 
 # From here on, failures degrade instead of panicking (see the header).
 degrade() {
@@ -437,6 +134,9 @@ degrade() {
   mount -o remount,rw "$SYSROOT" || warn "DEGRADED: remount,rw failed too — root stays read-only"
 }
 
+# ---------------------------------------------------------------------------------------------
+# /var + the /etc overlay
+# ---------------------------------------------------------------------------------------------
 # Kept inline rather than in a function: a $(...) capture would run the mounts in a subshell
 # and swallow the device names we want to log.
 overlay_ok=0
@@ -461,5 +161,37 @@ else
   fi
 fi
 
+# ---------------------------------------------------------------------------------------------
+# The slot's efi partition at /efi (steamenv's steamos.efi=PARTUUID= handoff)
+# ---------------------------------------------------------------------------------------------
+# steamenv_boot appends steamos.efi=PARTUUID=<uuid> from the partition the stage-2 GRUB was
+# chainloaded from, so this mounts the partition whose partsets name THIS image. post-install.sh
+# and novadeck-bootctl need it (this-image reads partsets/self), and the mount persists across
+# switch_root because it is on the new root's filesystem.
+efi_ok=0
+if [ -z "$EFISPEC" ]; then
+  warn "no steamos.efi=PARTUUID= on the kernel cmdline — /efi will not be mounted (post-install needs it)"
+elif ! EFIDEV=$(resolve "$EFISPEC"); then
+  warn "efi device '$EFISPEC' never appeared after 30s — /efi will not be mounted"
+elif ! mkdir -p "$SYSROOT/efi" || ! mount -t vfat "$EFIDEV" "$SYSROOT/efi"; then
+  warn "cannot mount $EFIDEV at $SYSROOT/efi — /efi will not be mounted"
+else
+  efi_ok=1
+  log "efi $EFIDEV mounted at /efi (slot=$SLOT)"
+fi
+
+# Hand the decision to the running system. /run is moved into the new root by switch_root, so
+# this survives the pivot. novadeck-bootctl mark-good reads slot= to tell "a slot boot" from a
+# "dev/cmdline boot" (nothing to confirm), and the fields are the first evidence when debugging
+# a boot offline.
+mkdir -p /run/novadeck
+{ printf 'slot=%s\n'   "${SLOT}"
+  printf 'source=%s\n' 'grub'
+  printf 'root=%s\n'   "${ROOTDEV:-}"
+  printf 'var=%s\n'    "${VARDEV:-}"
+  printf 'efi=%s\n'    "${EFIDEV:-}"
+} >/run/novadeck/boot 2>/dev/null || warn "cannot write /run/novadeck/boot"
+
 [ "$overlay_ok" -eq 1 ] || warn "DEGRADED: handing off to systemd on a writable, un-overlaid root"
+[ "$efi_ok" -eq 1 ] || warn "DEGRADED: /efi is not mounted — updates and boot confirmation will fail"
 exec switch_root "$SYSROOT" /usr/lib/systemd/systemd

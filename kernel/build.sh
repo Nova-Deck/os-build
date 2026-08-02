@@ -1,12 +1,17 @@
 #!/usr/bin/env bash
 # novadeck unified kernel build. Requires an aarch64 build host (or CROSS_COMPILE) + toolchain.
 #
-# One Image.gz serves EVERY supported SoC/board: a single arm64 kernel built with the union
-# of all config fragments, all out-of-tree patches, and all device trees. The boot stage
-# bundles every board DTB into one artifact and the bootloader's DTB picker selects at boot.
+# One Image serves EVERY supported SoC/board: a single arm64 kernel built with the union of all
+# config fragments, all out-of-tree patches, and all device trees. Every board DTB is staged
+# alongside it and the stage-2 grub.cfg picks one per menu entry.
+#
+# UNCOMPRESSED, deliberately. This used to build Image.gz for the android-bootimg boot artifact.
+# The stage-2 GRUB boots ($slotroot)/boot/Image, and grubaa64.efi's module set has no gzio filter
+# to unpack a .gz with -- so a compressed kernel here would simply not load. Building both and
+# shipping one is how the unused half goes stale, so only Image is built.
 #
 # Steps: fetch+verify pinned tarball -> apply all patches -> inject all device trees ->
-# merge all config fragments -> build Image.gz + every dtb + modules -> stage for boot packaging.
+# merge all config fragments -> build Image + every dtb + modules -> stage for image assembly.
 #
 #   kernel/build.sh           # no SoC argument — the build is unified
 set -euo pipefail
@@ -165,12 +170,13 @@ CC=(${CROSS_COMPILE:+CROSS_COMPILE=$CROSS_COMPILE})
     }
   done
 
-  make ARCH=arm64 "${CC[@]}" -j"$(nproc)" Image.gz dtbs modules
+  make ARCH=arm64 "${CC[@]}" -j"$(nproc)" Image dtbs modules
 )
 
-# --- Stage artifacts for boot packaging ---
+# --- Stage artifacts for image assembly ---
 OUT="$ROOT/out"; mkdir -p "$OUT/dtbs"
-cp "$SRCDIR/arch/arm64/boot/Image.gz" "$OUT/"
+cp "$SRCDIR/arch/arm64/boot/Image" "$OUT/"
+rm -f "$OUT/Image.gz"   # a leftover from a pre-phase-5 out/ would be stale, and nothing reads it
 for b in "${BOARDS[@]}"; do cp "$QCOM_DTS/${b}.dtb" "$OUT/dtbs/"; done
 
 # Install loadable modules into a staging tree consumed by images/assemble-rootfs.sh.
@@ -184,4 +190,4 @@ rm -rf "$MODROOT"
   make ARCH=arm64 "${CC[@]}" INSTALL_MOD_PATH="$MODROOT" INSTALL_MOD_STRIP=1 modules_install
 )
 find "$MODROOT/lib/modules" -maxdepth 2 -type l \( -name build -o -name source \) -delete
-echo "[novadeck] staged Image.gz + ${#BOARDS[@]} dtbs + modules in $OUT"
+echo "[novadeck] staged Image + ${#BOARDS[@]} dtbs + modules in $OUT"

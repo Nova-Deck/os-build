@@ -7,7 +7,9 @@
 #   3. verify the firmware manifest vs the built kernel, non-fatal (firmware/manifest.sh)
 #   4. assemble the read-only Btrfs root              (images/assemble-rootfs.sh)
 #
-# Prereq: unified kernel already built (kernel/build.sh) so out/ has Image.gz + modroot.
+# Prereq: unified kernel already built (kernel/build.sh) so out/ has Image + modroot,
+# plus the initramfs (images/mkinitramfs.sh) and the stage-1/2 boot artifacts (boot/steamcl.sh +
+# boot/grub.sh) — the assembler now bakes all three into the root (Phase 5).
 # Device firmware is fetched from the pinned Nova-Deck/qcom-firmwares repo — no proprietary
 # blobs ship in-repo. Steps 3-4 run in the novadeck-build image.
 #
@@ -19,8 +21,10 @@ OUT="$ROOT/out"
 FW="$ROOT/firmware/qcom-fw"
 DK=(docker run --rm -v "$ROOT":/src -w /src novadeck-build)
 
-[ -f "$OUT/Image.gz" ] \
-  || { echo "no kernel: out/Image.gz — run kernel/build.sh first" >&2; exit 1; }
+[ -f "$OUT/Image" ] \
+  || { echo "no kernel: out/Image — run kernel/build.sh first" >&2; exit 1; }
+[ -f "$OUT/initramfs.cpio.gz" ] \
+  || { echo "no initramfs: out/initramfs.cpio.gz — run images/mkinitramfs.sh first" >&2; exit 1; }
 
 # 1. the root, laid down from packages into an empty tree (pinned, idempotent): the `base`
 # metapackage plus the release runtime (NetworkManager, openssh, mesa+Turnip+vulkan-tools).
@@ -51,8 +55,8 @@ docker run --rm -v "$ROOT":/src -w /src \
 cat <<EOF
 
 Image flow done. Read-only root at out/images/rootfs.img.
-Next — boot artifact + deploy:
-  ${DK[*]} boot/package.sh
-  boot/deploy.sh <esp-mountpoint>     # copies the all-boards KERNEL onto the ESP
-  # then write out/images/rootfs.img to the device's rootfs partition
+The root carries its own boot half (Phase 5): /boot/{Image, initramfs-novadeck.img, dtbs} and the
+/usr/lib/novadeck/boot stage-1/2 mirror (run boot/steamcl.sh + boot/grub.sh for out/boot/* first).
+Next — the flashable card:
+  images/make-sdcard.sh             # -> out/images/sdcard.img (or `make sdcard`)
 EOF

@@ -204,7 +204,7 @@ OVERLAY_DB      := work/repo/$(OVERLAY_ARCH)/novadeck.db.tar.zst
 # customize-base off a byte-identical repo.
 OVERLAY_STAMP   := work/repo/$(OVERLAY_ARCH)/.overlay.stamp
 BASE_STAMP   := work/.base.stamp
-KERNEL       := $(OUT)/Image.gz
+KERNEL       := $(OUT)/Image
 ROOTFS       := $(OUT)/images/rootfs.img
 # Sibling image the assembler emits alongside the root (see images/partition-table.txt):
 # the writable state partition, which also carries the /etc overlay upper.
@@ -213,7 +213,6 @@ VARIMG       := $(OUT)/images/var.img
 # independent witness of which slot actually mounted (the roots are content-identical by design).
 VARIMG_B     := $(OUT)/images/var-b.img
 INITRAMFS    := $(OUT)/initramfs.cpio.gz
-BOOTIMG      := $(OUT)/boot/novadeck-boot.img
 # Stage-1 steamcl (boot/steamcl.sh). The rule's target is steamcl.efi, but the run also emits
 # holo-bootconf, steamcl-version and fonts/default.pf2 into the same out/boot.
 STEAMCL      := $(OUT)/boot/steamcl.efi
@@ -245,8 +244,8 @@ ASSEMBLE_SRC := $(shell find images/assemble-rootfs.sh images/seal-rootfs.sh ima
 
 # Kernel inputs: any change re-triggers the (full, from-scratch) kernel build. The unified
 # kernel globs every fragment/patch/dts, and bakes the firmware embed list.
-# boot/cmdline is NOT here: nothing in kernel/build.sh reads it (the cmdline rides in the boot
-# image header, applied by boot/package.sh), so listing it only bought needless kernel rebuilds.
+# There is no cmdline file to list: the common boot args live in boot/gen-grub-cfg.sh and land on
+# the `linux` line of the generated grub.cfg, so nothing in kernel/build.sh reads one.
 # kernel/build.sh IS here (added 2026-07-26): it is the recipe itself — it decides the config
 # merge, the firmware embed and the =m/=y assertions, so editing it changes the Image but make
 # could not see that. Editing it alone used to be a silent no-op that only showed up as a stale
@@ -283,7 +282,7 @@ KERNEL_SRC_HASH := work/.kernel-src.hash
 .PHONY: help all image toolchain kernel fw-linux fw-qcom base overlay overlay-pull overlay-publish \
         verify-pins pin-artifacts verify-lock \
         rootfs manifest relock \
-        initramfs boot steamcl grub sdcard verify-card test bundle deploy clean clean-base clean-overlay distclean
+        initramfs steamcl grub sdcard verify-card test bundle deploy clean clean-base clean-overlay distclean
 
 # An always-out-of-date prerequisite, for rules that must re-evaluate their own inputs every run
 # rather than trust a prerequisite's mtime. Only $(KERNEL_SRC_HASH) uses it; see the note there.
@@ -303,7 +302,7 @@ all: sdcard ## Alias for `sdcard` (the full bring-up image)
 image: $(ROOTFS) ## Read-only Btrfs root only (out/images/rootfs.img)
 
 toolchain: $(BUILD_STAMP) ## Build the novadeck-build cross-compile docker image
-kernel:    $(KERNEL)       ## Build Image.gz + all dtbs + modules (in build container)
+kernel:    $(KERNEL)       ## Build Image + all dtbs + modules (in build container)
 fw-linux:  $(FW_LINUX)     ## Fetch open linux-firmware blobs (host, network)
 fw-qcom:   $(FW_QCOM)      ## Fetch device-proprietary firmware from the qcom-firmwares repo (host, network)
 # OVERLAY_PULL := 0 is what keeps this goal's documented contract (see $(OVERLAY_DB)): `make
@@ -318,7 +317,6 @@ overlay:   $(OVERLAY_DB)   ## Rebuild from-source overlay pkgs (patched gamescop
 base:      $(BASE_STAMP)   ## Bootstrap the aarch64 root from packages (host; docker+qemu)
 rootfs:    $(ROOTFS)       ## Assemble the read-only root + var images (in container)
 initramfs: $(INITRAMFS)    ## Build the initramfs that mounts ro-root + /etc overlay (in container)
-boot:      $(BOOTIMG)      ## Package the all-boards boot artifact (in container)
 steamcl:   $(STEAMCL)      ## Build the stage-1 steamcl + steamos-bootconf (in container)
 grub:      $(GRUB)         ## Build the stage-2 GRUB + per-slot grub.cfg (in container)
 sdcard:    $(SDCARD)       ## Build the flashable SD-card image (in container)
@@ -353,8 +351,7 @@ verify-card: $(SDCARD) | $(BUILD_STAMP) ## Verify the built A/B card image (in c
 verify-lock: ## Check the lock's novadeck rows against packages/ (host, seconds, no build)
 	bash packages/verify-lock-rows.sh
 
-test: verify-lock ## Run the offline slot-state + bootctl + post-install + stage-2 suites (host, no build needed)
-	bash images/initramfs/test-slot-state.sh
+test: verify-lock ## Run the offline bootctl + post-install + pairingd + stage-2 suites (host, no build needed)
 	bash images/test-bootctl.sh
 	bash images/test-post-install.sh
 	bash images/test-pairingd.sh
@@ -610,24 +607,22 @@ $(MODE_STAMP):
 	@mkdir -p $(@D) && rm -f work/.rootfs-mode-* && touch $@
 	@echo "[novadeck] rootfs mode: $(ROOTFS_MODE)"
 
-# $(BOOTIMG) is a prerequisite because the root now CARRIES its own kernel at
-# /usr/lib/novadeck/boot.img — that is what lets the RAUC post-install hook install a kernel that
-# matches the modules in the slot it just wrote. No cycle: BOOTIMG needs KERNEL + INITRAMFS, and
-# the initramfs is built from work/base, never from the assembled root.
-$(ROOTFS): $(KERNEL) $(BOOTIMG) $(BASE_STAMP) $(FW_LINUX) $(FW_QCOM) $(STEAM_SEED) $(ASSEMBLE_SRC) $(MODE_STAMP) | $(BUILD_STAMP)
+# $(INITRAMFS), $(STEAMCL) and $(GRUB) are prerequisites because the root CARRIES its own boot
+# half: /boot/{Image,initramfs-novadeck.img,dtbs} that the slot's stage 2 boots, plus the
+# /usr/lib/novadeck/boot mirror the RAUC hook refreshes the ESP and the slot's efi partition FROM.
+# That is what makes "this root and the software that boots it came from one build" true by
+# construction. No cycle: the initramfs is built from work/base, never from the assembled root.
+$(ROOTFS): $(KERNEL) $(INITRAMFS) $(STEAMCL) $(GRUB) $(BASE_STAMP) $(FW_LINUX) $(FW_QCOM) $(STEAM_SEED) $(ASSEMBLE_SRC) $(MODE_STAMP) | $(BUILD_STAMP)
 	$(DOCKER) $(DEV_ENV) $(ID_ENV) -e NOVADECK_DEBUG $(BUILD_IMG) \
 	  images/assemble-rootfs.sh /src/work/base
 
 # ==============================================================================
-# Boot artifact + bootable media (container)
+# Boot stage + bootable media (container)
 # ==============================================================================
-# The initramfs mounts the ro root, stacks the /etc overlay on /var, and switch_roots. It is
-# staged out of the base rootfs (bash + util-linux), so the base is a prerequisite.
+# The initramfs mounts the slot's root + var + efi partition, stacks the /etc overlay, and
+# switch_roots. It is staged out of the base rootfs (bash + util-linux), so the base is a prereq.
 $(INITRAMFS): images/mkinitramfs.sh images/initramfs/init $(BASE_STAMP) | $(BUILD_STAMP)
 	$(INBUILD) images/mkinitramfs.sh /src/work/base
-
-$(BOOTIMG): $(KERNEL) $(INITRAMFS) boot/cmdline boot/package.sh | $(BUILD_STAMP)
-	$(INBUILD) boot/package.sh
 
 # Stage-1 steamcl + the steamos-bootconf binary the OS side installs (boot/steamcl.sh, pinned
 # source). Independent of the kernel: it is bootloader software, not a payload.
@@ -646,7 +641,7 @@ $(GRUB): boot/grub.sh boot/gen-grub-cfg.sh boot/grub.pin boot/boards.map \
 $(VARIMG): $(ROOTFS)
 $(VARIMG_B): $(ROOTFS)
 
-$(SDCARD): $(BOOTIMG) $(ROOTFS) $(VARIMG) $(VARIMG_B) $(STEAM_SEED) images/make-sdcard.sh | $(BUILD_STAMP)
+$(SDCARD): $(ROOTFS) $(VARIMG) $(VARIMG_B) $(STEAMCL) $(GRUB) $(STEAM_SEED) images/make-sdcard.sh | $(BUILD_STAMP)
 	$(INBUILD) images/make-sdcard.sh
 
 # Signed RAUC OTA bundle (Phase 4). Dev builds mint an ephemeral cert. For a real signature use
@@ -672,7 +667,7 @@ deploy: $(STEAMCL) ## Install the stage-1 steamcl tree onto ESP=<mountpoint>
 # the artifacts from inside a throwaway container as root, like clean-base. (out/.build-image.stamp
 # is host-owned and deliberately kept so the toolchain image isn't rebuilt.)
 clean: ## Remove built artifacts (out/), keep firmware/base caches + toolchain stamp
-	docker run --rm -v $(CURDIR)/out:/wo busybox rm -rf /wo/Image.gz /wo/dtbs /wo/modroot /wo/images /wo/boot /wo/initramfs.cpio.gz
+	docker run --rm -v $(CURDIR)/out:/wo busybox rm -rf /wo/Image /wo/Image.gz /wo/dtbs /wo/modroot /wo/images /wo/boot /wo/initramfs.cpio.gz
 
 # work/base is root-owned (the bootstrap's pacman writes it as root inside a container), so a
 # plain rm fails for the build user — remove it from inside a throwaway container as root.

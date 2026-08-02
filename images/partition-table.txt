@@ -4,17 +4,12 @@
 # a shared ESP, A/B boot partitions, A/B read-only Btrfs roots, A/B /var, and a shared
 # /home. RAUC writes the inactive rootfs/var slot, then the bootloader switches on success.
 #
-# efi-a/efi-b are RESERVED and stay EMPTY. In SteamOS they are Stage 2 — each holds that
-# slot's GRUB, chainloaded by steamcl.efi on the shared ESP. We have no UEFI stage at all:
-# the ROCKNIX ABL loads /KERNEL straight off p1 (Stage 3, directly).
-#
-# AMENDED for Phase 4b: they are no longer earmarked for per-slot boot images. That was
-# design A; docs/phase4.md picked design C, where the boot image is slot-AGNOSTIC and the
-# slot is chosen inside our own initramfs from a state file on the shared ESP
-# (/NOVADECK/STATE.{0,1}). One /KERNEL serves both slots, so there is nothing per-slot to
-# store. They stay allocated and formatted because the alternative is a reflash if a later
-# pass does want them — as staging for a new boot image, or for the previous kernel that a
-# failed health check reverts to. 64M each is ~2.5x the current boot image.
+# efi-a/efi-b are each a slot's STAGE 2 home (Phase 5; docs/phase5.md): steamcl.efi on the
+# shared ESP chainloads \EFI\steamos\grubaa64.efi on the slot's efi partition, whose per-slot
+# grub.cfg boots the kernel in the slot root's /boot. Each carries the stage-2 GRUB + its
+# identity partsets (/SteamOS/partsets/{A,B,all,shared,self,other}); steamcl/steamenv match
+# the efi uuid of the partition they were loaded from against partsets/self. 64M each is ~2x
+# the current stage-2 tree.
 #
 # All 8 partitions mirror the SteamOS layout exactly (esp, efi-A/B, rootfs-A/B, var-A/B, home).
 #
@@ -28,7 +23,15 @@
 #
 # efi-a/efi-b are typed 0700 (Microsoft basic data), NOT ef00 — exactly as SteamOS types
 # them. Only p1 is an EFI System partition. The ROCKNIX ABL finds the ESP by type GUID, so
-# a second ef00 on the disk would give it two candidates to choose between.
+# a second ef00 on the disk would give it two candidates to choose between. The stage-2
+# grubaa64.efi is reached by steamcl, not by UEFI firmware scan, so it does not need ef00.
+#
+# The ESP carries GPT bit 63 ("no-auto") for the same reason home does: that GUID would make
+# systemd's gpt-auto generator auto-mount it at /efi, and /efi is the name the initramfs
+# reserves for the SLOT's efi-a/b partition (mounted from steamos.efi=PARTUUID=, phase 5).
+# The ESP's one and only mount definition is the /esp entry images/assemble-rootfs.sh puts in
+# /etc/fstab — bit 63 disables the competing generator without touching the type GUID the
+# firmware scans by.
 #
 # Root slots are 7G. They carry, on top of the ~1.8G OS, three large x86-emulation artifacts
 # that must travel WITH the slot to keep an A/B update atomic and rollback-safe: the FEX x86
@@ -67,7 +70,7 @@
 # Consumed by images/genpart.sh to emit an sgdisk script. Row order = partition number.
 #
 # name      size  typecode  fs        label            attrs
-esp         256M  ef00      vfat      NOVADECK-ESP     -
+esp         256M  ef00      vfat      NOVADECK-ESP     63
 efi-a       64M   0700      vfat      novadeck-efi-A   -
 efi-b       64M   0700      vfat      novadeck-efi-B   -
 rootfs-a    7G    8300      btrfs     novadeck-root-A  -

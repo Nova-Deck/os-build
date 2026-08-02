@@ -141,7 +141,7 @@ scripts by hand.**
 ```sh
 make help                       # every target and knob
 make sdcard                     # full image -> out/images/sdcard.img
-make kernel                     # Image.gz + dtbs + modules
+make kernel                     # Image + dtbs + modules
 make test                       # offline suites: no build, no container, no root, no device
 ```
 
@@ -180,7 +180,7 @@ compiled overlay bytes will never match a published sha. `NOVADECK_DEV=1` is the
 | `firmware/` | Vendor firmware fetch/verify recipes + `manifest.txt` |
 | `fs-overlay/` | Rootfs overlay payload — one filesystem-mirror tree injected with a single `cp -a` |
 | `steam-seed/` | Native arm64 Steam client seed fetcher + pin |
-| `boot/` | Pluggable boot stage (android-bootimg / edk2-UEFI backends) |
+| `boot/` | Two-stage UEFI boot: steamcl (stage 1) + GRUB (stage 2), both built from pinned sources |
 | `ci/` | Signing-CA generator + notes for `.github/workflows/` |
 | `build/` | `Dockerfile` for the cross-compile image |
 

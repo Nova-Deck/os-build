@@ -323,9 +323,9 @@ fi
 #
 # Every part of an A/B update is inert until something needs it, and each missing piece fails at a
 # different and unhelpful moment: no `rauc` binary is a missing command at install time; a missing
-# keyring means bundles verify against NOTHING while still reporting success; a missing boot.img
-# means the post-install hook cannot install a kernel matching the modules in the slot it just
-# wrote, so the trial boot has no Wi-Fi and no serial console to debug it from.
+# keyring means bundles verify against NOTHING while still reporting success; a missing stage-1/2
+# boot mirror under /usr/lib/novadeck/boot means the post-install hook cannot refresh the ESP and
+# the slot's efi partition, so the updated slot boots a boot chain that does not match it.
 #
 # The exec bit on the hook is checked because it is exactly the failure this project has already
 # paid for once: a shipped script that lost its exec bit in a tree refactor, where the symptom was
@@ -333,7 +333,13 @@ fi
 # ------------------------------------------------------------------------------------------
 echo "  7. RAUC update path"
 rauc_ok=1
-for f in usr/bin/rauc etc/rauc/keyring.pem etc/rauc/system.conf usr/lib/novadeck/boot.img \
+for f in usr/bin/rauc etc/rauc/keyring.pem etc/rauc/system.conf \
+         usr/bin/steamos-bootconf \
+         usr/lib/novadeck/boot/steamcl.efi usr/lib/novadeck/boot/steamcl-version \
+         usr/lib/novadeck/boot/grubaa64.efi usr/lib/novadeck/boot/grub-a.cfg \
+         usr/lib/novadeck/boot/grub-b.cfg \
+         usr/lib/novadeck/boot/fonts/dejavu-mono.pf2 \
+         boot/Image boot/initramfs-novadeck.img \
          usr/lib/rauc/post-install.sh; do
   if [ ! -s "$STAGE/$f" ]; then
     rauc_ok=0
@@ -350,20 +356,32 @@ if [ ! -s "$STAGE/usr/bin/btrfstune" ]; then
   rauc_ok=0
   bad "/usr/bin/btrfstune is missing — the post-install hook cannot re-randomise the target slot's fsid"
 fi
-# The hook drives the slot state through novadeck-bootctl, so every subcommand it invokes must be
-# one the SHIPPED tool dispatches. Both files live in this tree, which is precisely why a rename in
-# one is easy to miss in the other, and the symptom is the worst shape available: RAUC writes the
-# target slot, the hook then fails at its LAST step, and the card is left with a new root, a
-# rotated /KERNEL and a slot state that records neither.
+# The hook drives the boot state through steamos-bootconf (the bc() seam), and the backend tool
+# does the same, so the cross-file consistency claim moved from "hook → bootctl" to "both files →
+# bootconf's real subcommand set". bootconf is external — holo-bootconf ships as
+# /usr/bin/steamos-bootconf — so a subcommand either file invokes that bootconf does not have fails
+# at the LAST step of an install, and the card is left with a new root, refreshed stage 2 and a
+# bootconf that never re-armed it: the worst shape available. Both files live in this tree, which
+# is precisely why a rename in one is easy to miss in the other.
 if [ "$rauc_ok" = 1 ] && [ -s "$STAGE/usr/bin/novadeck-bootctl" ]; then
-  # Comment lines are stripped first: this file's prose names the tool more often than its code does.
-  while read -r sub; do
-    [ -n "$sub" ] || continue
-    grep -qE "^ *$sub\)" "$STAGE/usr/bin/novadeck-bootctl" && continue
-    rauc_ok=0
-    bad "the post-install hook calls 'novadeck-bootctl $sub', which the shipped tool does not dispatch"
-  done < <(grep -vE '^[[:space:]]*#' "$STAGE/usr/lib/rauc/post-install.sh" \
-             | grep -oE 'novadeck-bootctl +[a-z][a-z-]*' | awk '{print $2}' | sort -u)
+  known="dump-config selected-image this-image list-images set-mode config create"
+  for f in "$STAGE/usr/lib/rauc/post-install.sh" "$STAGE/usr/bin/novadeck-bootctl"; do
+    [ -s "$f" ] || continue
+    # Comment lines are stripped first: this file's prose names bootconf commands too. The
+    # extraction catches both `bc <cmd>` and `bc --image <img> <cmd>` call shapes.
+    while read -r sub; do
+      [ -n "$sub" ] || continue
+      case " $known " in
+        *" $sub "*) ;;
+        *)
+          rauc_ok=0
+          bad "$f calls steamos-bootconf '$sub', which bootconf does not have"
+          ;;
+      esac
+    done < <(grep -vE '^[[:space:]]*#' "$f" \
+               | grep -oE 'bc( +--image +[^ ]+)? +[a-z][a-z-]*' \
+               | awk '{print $NF}' | sort -u)
+  done
 fi
 
 # Presence is not installability. Every check above passed on a tree whose system.conf rejected
@@ -380,7 +398,7 @@ if [ "$rauc_ok" = 1 ] && [ -s "$STAGE/etc/rauc/system.conf" ]; then
   fi
 fi
 if [ "$rauc_ok" = 1 ]; then
-  echo "    ok  rauc + keyring + system.conf + boot.img ($(du -h "$STAGE/usr/lib/novadeck/boot.img" | cut -f1)) + executable hook"
+  echo "    ok  rauc + keyring + system.conf + /usr/lib/novadeck/boot stage-1/2 mirror + /boot kernel + executable hook"
   echo "    ok  a codeSigning-EKU bundle verifies through the shipped system.conf; an unrelated CA does not"
 fi
 

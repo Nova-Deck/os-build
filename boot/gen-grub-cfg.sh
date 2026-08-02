@@ -129,25 +129,6 @@ else
   sleep 3
 fi
 
-# --- the boot-attempts counter ------------------------------------------------------------------
-# steamenv_init -- NOT steamenv_boot -- is what calls process_boot_config() and increments this
-# image's boot-attempts in the ESP conf (grub_cmd_steamenv_init, grub-core/commands/efi/steamenv.c).
-# That counter is the BOOTLOADER half of the rollback design: novadeck-boot-good/bad demote a slot
-# that boots but fails userspace, and only this catches a slot that never reaches systemd at all.
-# The OS clears it again on a good boot -- novadeck-bootctl mark-good runs `steamos-bootconf
-# set-mode booted`, which zeroes boot-attempts -- so a healthy slot never accumulates one.
-#
-# The module is compiled into grubaa64.efi either way (boot/grub.sh MODULES), so turning this on is
-# a config change against a byte-identical binary, and turning it back off is deleting one line.
-#
-# It MUST come before the timeout block below, not after: steamenv_init overwrites timeout and
-# timeout_style unconditionally, so a config that sets its own first always loses. See there.
-#
-# steamenv_boot is deliberately NOT used for the actual boot: it adds UEFI ChainLoader* variable
-# poking (Valve firmware, meaningless on ABL), quiet/verbose cmdline juggling, and a redundant
-# steamos.efi=PARTUUID= append that novadeck.efi=PARTLABEL= already replaces. Plain `linux` stays.
-steamenv_init
-
 # --- the saved board choice ---------------------------------------------------------------------
 # One image serves every board, so the DTB — and therefore the menu entry — is the ONE thing the
 # user has to tell us. It is saved on the shared ESP rather than on this slot's efi partition so it
@@ -164,34 +145,19 @@ function savedefault {
 
 if [ -n "\${saved_entry}" ]; then
   set default="\${saved_entry}"
-else
-  set default=0
-fi
-
-# --- the timeout ---------------------------------------------------------------------------------
-# steamenv_init has ALREADY written timeout and timeout_style by this point, unconditionally: -1
-# when stage 1 passed steamos-bootmenu, 0 otherwise. Ours therefore has to come AFTER it. Setting
-# it first is exactly what broke the first attempt at this — steamenv always won, so a fresh card
-# booted menu entry 0 (one specific board) instantly on every device, the wrong DTB meant the boot
-# never completed, boot-attempts only climbed, and at >=3 steamcl's failsafe parked the device at
-# the menu for good. The reported symptom was "stops at the GRUB board menu", and the menu was the
-# LAST link in that chain rather than the first.
-#
-# The -1 guard is the other half: a -1 here IS stage 1's menu request, and it must survive. Only
-# steamenv's timeout=0 gets overridden.
-if [ "\$timeout" != "-1" ]; then
   set timeout_style=menu
-  if [ -n "\${saved_entry}" ]; then
-    set timeout=3
-  else
-    # Fresh card: nothing can tell us the board, so wait. -1 is "no timeout".
-    set timeout=-1
-  fi
+  set timeout=3
+else
+  # Fresh card: nothing can tell us the board, so wait. -1 is "no timeout".
+  set default=0
+  set timeout_style=menu
+  set timeout=-1
 fi
 
 # The menu stays VISIBLE rather than hidden even once a board is saved. This device has no serial
-# console and no keyboard, so a 3s visible menu is a way back after picking the wrong board. Stage
-# 1's steamcl-menu flag now also reaches us, through steamenv_init's timeout=-1 above.
+# console and no keyboard, and stage 1's steamcl-menu flag only reaches stage 2 through the
+# steamenv module, which this config does not invoke — so a 3s visible menu is currently the only
+# way back after picking the wrong board. Revisit when steamenv lands (docs/phase5.md).
 
 loadfont \$prefix/fonts/dejavu-mono.pf2
 insmod gfxterm

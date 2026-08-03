@@ -135,8 +135,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Two secrets, and the job stops here without both. A publish that silently no-ops is worse
-      # than one that fails: the tag looks shipped and the fleet never sees it.
+      # DO NOT PUT THE INSTANCE ADMIN KEY HERE. The key used to publish from a workstation
+      # (~/.ssh/ssh-key-2026-07-10.key) logs in as `ubuntu`, who has PASSWORDLESS SUDO on the update
+      # server — handing CI that key hands CI root on the host every device fetches from, which is a
+      # far larger grant than "may write one directory". OTA_SSH_KEY must be a SEPARATE key,
+      # restricted to the docroot: its own user, or an authorized_keys entry with a forced command
+      # and no-pty/no-port-forwarding. Until such a key exists, leave this secret unset and publish
+      # from the workstation with `make publish-bundle` — the job then skips, which is correct.
+      #
+      # The signing half above does not have this problem: a leaked signing key is answered by
+      # minting a new release cert from the offline root. There is no equivalent for shell access.
+      #
+      # The job stops without the secret rather than silently no-opping: a publish that quietly does
+      # nothing means the tag looks shipped and the fleet never sees it.
       - name: check for publishing credentials
         id: creds
         env:

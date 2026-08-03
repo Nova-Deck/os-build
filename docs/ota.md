@@ -11,6 +11,7 @@ this file is the server and the act of publishing.
 | Serves | nginx 1.24, TLS via Let's Encrypt |
 | Docroot | `/srv/novadeck-ota`, owned `ubuntu`, **read-only to the internet** |
 | Retention | 3 bundles per channel (`NOVADECK_OTA_KEEP`) |
+| Disk | ~94G; a bundle is ~4G — free space is the retention budget, see *Disk budget* |
 | Repo | `ota/` — vhost, bootstrap, publisher |
 
 ## Layout
@@ -179,6 +180,36 @@ The vhost is `ota/nginx-novadeck-ota.conf` and **the repo is authoritative** —
 copies it. This is why certbot is run as `certonly --webroot` and never `--nginx`: the `--nginx`
 installer edits the vhost in place, and the running config would stop matching the committed one
 with nothing to signal the drift.
+
+### Disk budget
+
+Free space on this instance is not spare capacity — it **is** the retention budget. Keeping the
+previous releases is what makes a bad update recoverable fleet-wide by re-pointing `latest.json`
+(see *Rolling back a bad release*), and that only works while those bytes are still on the server.
+
+The arithmetic: ~94G of disk, a bundle is ~4G, `NOVADECK_OTA_KEEP=3` per channel — so roughly 12G
+in use per channel against 94G. Comfortable, and deliberately so.
+
+`publish-bundle.sh` protects it from the front. Before it moves a single byte it runs
+`df -kP` on the destination **over ssh** and requires the bundle's exact size plus 512 MiB of
+headroom, then dies telling you to lower `NOVADECK_OTA_KEEP` or prune by hand. This is checked
+first because the alternative is discovering it after a 4G transfer to Frankfurt.
+
+That check is only as good as the free space it measures, which is why the journal is capped.
+Ubuntu ships journald with no `SystemMaxUse`, so the built-in default applies — 10% of the
+filesystem, up to 4G — and this box would spend it slowly on logs for a server that only hands
+out static files. `setup-server.sh` installs
+`/etc/systemd/journald.conf.d/10-novadeck-cap.conf` with `SystemMaxUse=200M` and vacuums once, so
+the cap applies to what has already accumulated and not just to new writes.
+
+Note the failure this prevents is *not* corruption. An unbounded journal makes a future publish
+refuse to start, at a confusing distance from the cause — the disk quietly filled weeks earlier.
+
+```sh
+# what is actually being used
+ssh -i <key> ubuntu@updates.novadeck.cloud-ip.cc \
+  'df -h /srv/novadeck-ota; journalctl --disk-usage; du -sh /srv/novadeck-ota/*'
+```
 
 ### Certificate renewal
 

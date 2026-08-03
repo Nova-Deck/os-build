@@ -142,8 +142,18 @@ design — that is the shipping first-boot condition, and the only honest way to
 ### Build and sign a bundle
 
 ```sh
-PKIDIR=$HOME/novadeck-pki make bundle VERSION=<version>
+NOVADECK_VERSION=<version> PKIDIR=$HOME/novadeck-pki make bundle
 ```
+
+**The version has to be set before the rootfs is built, not at bundling time.** `NOVADECK_VERSION`
+is stamped into the image's `/etc/novadeck-release`, and `genbundle.sh` reads it back out of the
+image to name the bundle — so the bundle can never claim a version its payload does not carry. That
+equality is what the device's update check compares, so it is not cosmetic. Changing the version
+re-assembles the rootfs (a few minutes; not a base or kernel rebuild).
+
+Omit it and the image calls itself `dev`; the bundle is then named after its build timestamp, which
+is still unique per build but is not a release. There is no separate bundle-version knob — the old
+`VERSION=` was removed on 2026-08-03 precisely because it could disagree with the image.
 
 `PKIDIR` is not optional for anything a device will accept. Without it `genbundle.sh` mints an
 **ephemeral 7-day dev cert**, deleted with its tempdir, which the device keyring rejects on
@@ -163,10 +173,28 @@ accepts only `emailProtection` or no EKU, and therefore rejects our `codeSigning
 with `unsuitable certificate purpose`. It is a false red. The shipped `system.conf` sets
 `check-purpose=codesign`.
 
+### Publish it
+
+```sh
+NOVADECK_OTA_SSH_KEY=~/.ssh/<key> ota/publish-bundle.sh out/images/novadeck-<version>.raucb
+```
+
+Puts the bundle on `updates.novadeck.cloud-ip.cc`, where devices fetch it from, and flips the channel
+pointer at it. **Install it on a device first** (below) — nothing on the device ends an unconfirmed
+trial boot, so a bundle that comes up to a black screen costs ~6 manual power-cycles to recover on
+hardware with no serial console. Every published bundle gets a hardware install before it ships.
+
+The publisher verifies the signature against the CA baked into every device's keyring before it moves
+a byte, and there is no override: a bundle built without `PKIDIR` carries an ephemeral 7-day cert and
+would be a ~4 GB download the fleet discards at the last step. Server contract, retention, rollback
+and cert renewal are in **`docs/ota.md`**.
+
 ### Install it
 
-Drive the install **as `deck` over SSH** — rauc's D-Bus service plus polkit authorize it with no
-`sudo` on the box and no password anywhere:
+Drive the install **as `deck` over SSH** — rauc's D-Bus service authorizes it with no `sudo` on the
+box and no password anywhere. (The mechanism is rauc's *open bus policy*, not polkit: 1.15.2 ships
+no polkit policy, and its `de.pengutronix.rauc.conf` allows any local user to call the installer. The
+signature is the gate. See `docs/ota.md` and `TODO.md`.)
 
 ```sh
 ssh deck@<device> rauc install /path/to/novadeck-<version>.raucb

@@ -160,7 +160,7 @@ compiled overlay bytes will never match a published sha. `NOVADECK_DEV=1` is the
 | Knob | Default | Effect |
 |---|---|---|
 | `BASE_CONFIG` | *(unset)* | Repo-relative path to a full verbatim kernel `.config` — skips the defconfig+fragment merge in `kernel/build.sh` |
-| `VERSION` | date, inside `genbundle.sh` | RAUC bundle version for `make bundle` |
+| `NOVADECK_VERSION` | *(unset — renders `dev`)* | The release this build calls itself. Stamped into `/etc/novadeck-release` **and** read back out of the image to name the RAUC bundle, so the two cannot disagree. Set it before the rootfs is built; changing it re-assembles |
 | `ESP` | *(unset)* | Mounted EFI System Partition, the install target for `make deploy` |
 | `PKIDIR` | *(unset)* | Signing PKI, mounted read-only at `/pki`; makes `bundle` sign for real and adds `test-signing`'s keyring check. Unset, `bundle` mints an ephemeral dev cert |
 | `RAUC_CERT` / `RAUC_KEY` | `/pki/release.{cert,key}.pem` when `PKIDIR` is set | Override the signing pair with paths the *container* can see |

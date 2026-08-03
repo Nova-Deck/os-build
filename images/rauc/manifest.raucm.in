@@ -1,8 +1,30 @@
 # novadeck RAUC update manifest template — Phase 4.
 # images/genbundle.sh fills @PLACEHOLDERS@; `rauc bundle` computes the rootfs hash/size.
+#
+# The three fields below are the SAME three the payload carries in its own /etc/novadeck-release —
+# genbundle.sh fills them from the sidecar the assembler wrote beside the image, not from its own
+# environment, so a bundle cannot claim an identity its contents do not. That equality is what the
+# OTA client's "is an update available?" comparison rests on.
 [update]
 compatible=novadeck
 version=@VERSION@
+
+# `version` alone cannot identify a dev build: NOVADECK_VERSION is empty off a developer's box and
+# renders `dev`, which every such image shares. genbundle.sh's identity rule falls back to `build`
+# for exactly that case, so both have to travel with the bundle. `[meta.*]` is RAUC's forward-
+# compatible free-form metadata: it is not interpreted, and it reaches `rauc info`, InspectBundle and
+# the install handlers as RAUC_META_NOVADECK_* — which is where a post-install hook would read them
+# if it ever needs to record what a slot was updated TO (see TODO.md, the trial-stamp fix sketch).
+#
+# `mode` is dev|release, copied from the payload's own /etc/novadeck-release. A DEV image carries
+# Wi-Fi credentials and an authorized_keys, and signing one with the real release key makes it
+# byte-indistinguishable from a shippable bundle to any signature check — so the provenance has to
+# travel WITH the bundle for ota/publish-bundle.sh to be able to refuse it. Dev bundles are still
+# built and still install; they are just not publishable.
+[meta.novadeck]
+build=@BUILD@
+git=@GIT@
+mode=@MODE@
 
 [bundle]
 format=verity

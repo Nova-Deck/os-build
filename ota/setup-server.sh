@@ -1,0 +1,234 @@
+#!/usr/bin/env bash
+# novadeck OTA server bootstrap — Phase 3. RUNS ON THE INSTANCE, as root. Ship the whole ota/ tree
+# and run it from there, in one command:
+#
+#   tar cz ota | ssh -i <key> ubuntu@updates.novadeck.cloud-ip.cc \
+#                    'sudo tar xz -C /tmp && sudo bash /tmp/ota/setup-server.sh'
+#
+# NOT `ssh 'sudo bash -s' < setup-server.sh`, even though that is the tidier-looking invocation: this
+# script has to install ota/nginx-novadeck-ota.conf, and a lone stdin stream cannot carry it. The
+# alternative is embedding a copy of the vhost in a heredoc here, which makes two files that must be
+# edited together and will therefore eventually disagree — the exact drift the vhost's own header
+# refuses --nginx over. One source of truth: the conf next to this script.
+#
+# It is a bootstrap, not a config manager: idempotent, re-runnable, and a second run is a no-op that
+# still re-reports the state it found.
+#
+# IT NEVER OPENS A PORT. This is a public host on a public IP, and a script that quietly widens a
+# firewall is how a host ends up more exposed than anyone chose. It DETECTS both layers and reports
+# what is blocking; opening a port is a decision a person makes, with the exact command printed here.
+#
+# THE TWO FIREWALL LAYERS, and why both have to be checked separately (this cost a session):
+#
+#   1. OCI VCN security lists / NSGs, in Oracle's console, outside this machine entirely. They DROP,
+#      silently. A blocked port therefore TIMES OUT after ~10s.
+#   2. The instance-local iptables. Oracle's Ubuntu images ship an INPUT chain whose last rule is
+#      `REJECT --reject-with icmp-host-prohibited`. That REJECT answers, so a blocked port fails
+#      FAST — in one RTT, with EHOSTUNREACH (the kernel's rendering of ICMP admin-prohibited).
+#
+# So the errno from outside is the cheap discriminator, and it distinguishes three states with no
+# console access at all: timeout = VCN, EHOSTUNREACH = local iptables, ECONNREFUSED = both layers
+# open and nothing is listening yet. Only the third means "your problem is on this box".
+#
+# The iptables trap specifically: the ACCEPT rules must be INSERTED BEFORE the trailing REJECT
+# (`-I INPUT <n>`), not appended (`-A`). An appended ACCEPT lands after the REJECT, is never reached,
+# and changes nothing while looking exactly like a fix in `iptables -S`.
+set -euo pipefail
+
+DOMAIN="${NOVADECK_OTA_DOMAIN:-updates.novadeck.cloud-ip.cc}"
+DOCROOT="${NOVADECK_OTA_DOCROOT:-/srv/novadeck-ota}"
+# Who owns the docroot, i.e. who publish-bundle.sh rsyncs in as. nginx reads it as www-data through
+# the o+rx below, so the owner never needs to be www-data and publishing never needs sudo.
+OWNER="${NOVADECK_OTA_OWNER:-ubuntu}"
+# Certbot's registration address. Not cosmetic: it is the only warning anybody gets if the renewal
+# timer breaks, and an expired cert takes every device's update check offline with no device-side
+# symptom beyond "unreachable".
+EMAIL="${NOVADECK_OTA_EMAIL:-simons.philippe@gmail.com}"
+CHANNELS="${NOVADECK_OTA_CHANNELS:-stable}"
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+VHOST_SRC="${NOVADECK_OTA_VHOST:-$HERE/nginx-novadeck-ota.conf}"
+SITE=/etc/nginx/sites-available/novadeck-ota
+LIVE="/etc/letsencrypt/live/$DOMAIN"
+
+say()  { printf '[ota-setup] %s\n' "$*"; }
+warn() { printf '[ota-setup] WARNING: %s\n' "$*" >&2; }
+die()  { printf '[ota-setup] %s\n' "$*" >&2; exit 1; }
+
+[ "$(id -u)" -eq 0 ] || die "run as root"
+[ -f "$VHOST_SRC" ] || die "no vhost beside this script: $VHOST_SRC
+  Ship the whole tree, not just this file:
+    tar cz ota | ssh <host> 'sudo tar xz -C /tmp && sudo bash /tmp/ota/setup-server.sh'"
+
+# --- 1. the firewall, reported and not touched ---------------------------------------------------
+
+check_iptables() {
+  command -v iptables >/dev/null 2>&1 || { warn "no iptables binary — cannot check the local layer"; return 0; }
+
+  # Rule POSITION is the whole point, so walk the chain in order rather than grepping for a match:
+  # an ACCEPT that sits after the catch-all reads identically to a working one in an unordered grep,
+  # and that is precisely the bug this check exists to catch.
+  local n=0 reject_at=0 port
+  local -A open=()
+  while IFS= read -r rule; do
+    n=$((n + 1))
+    # A rule only counts as "open" if it ACCEPTs and is reached, i.e. sits before the catch-all.
+    # Matching on --dport alone would score a `--dport 80 -j DROP` as open.
+    if [ "$reject_at" -eq 0 ] && [[ $rule == *"-j ACCEPT"* ]]; then
+      for port in 80 443; do
+        # The trailing space is load-bearing: without it `--dport 8080` matches the 80 pattern.
+        [[ $rule == *"--dport $port "* ]] && open[$port]=$n
+      done
+    fi
+    if [ "$reject_at" -eq 0 ] && [[ $rule == *"-j REJECT"* || $rule == *"-j DROP"* ]]; then
+      # A catch-all only: a REJECT that names a port blocks that port, not everything after it.
+      [[ $rule != *"--dport "* ]] && reject_at=$n
+    fi
+  done < <(iptables -S INPUT 2>/dev/null | tail -n +2)
+
+  local blocked=0
+  for port in 80 443; do
+    if [ -n "${open[$port]:-}" ]; then
+      say "iptables: tcp/$port ACCEPT at rule ${open[$port]} (before the catch-all at ${reject_at:-none}) — ok"
+    elif [ "$reject_at" -gt 0 ]; then
+      warn "iptables: tcp/$port is NOT accepted before the catch-all REJECT at rule $reject_at"
+      warn "  fix, and note -I not -A (an appended rule lands after the REJECT and does nothing):"
+      warn "    iptables -I INPUT $reject_at -p tcp -m state --state NEW --dport $port -j ACCEPT"
+      warn "    netfilter-persistent save"
+      blocked=1
+    else
+      say "iptables: no catch-all REJECT in INPUT; tcp/$port is not blocked locally"
+    fi
+  done
+  return $blocked
+}
+
+say "checking the instance-local firewall (the VCN layer is in Oracle's console, not here)"
+if ! check_iptables; then
+  die "the local firewall would block this server. Nothing was changed — apply the rules above and re-run.
+  If the ports look open here but the host is still unreachable, the block is the OTHER layer:
+  a probe that TIMES OUT is the VCN dropping silently; EHOSTUNREACH is this chain."
+fi
+
+# --- 2. packages ---------------------------------------------------------------------------------
+# python3-certbot-nginx is installed but NOT used as an installer (see the vhost's header on why
+# --nginx is refused). It is here because certbot's nginx plugin is also what `certbot renew` uses to
+# reload the service after a successful renewal without a separate deploy hook.
+need=()
+for pkg in nginx certbot python3-certbot-nginx rsync; do
+  dpkg -s "$pkg" >/dev/null 2>&1 || need+=("$pkg")
+done
+if [ ${#need[@]} -gt 0 ]; then
+  say "installing: ${need[*]}"
+  DEBIAN_FRONTEND=noninteractive apt-get update -qq
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends "${need[@]}"
+else
+  say "nginx, certbot and rsync are already installed"
+fi
+
+# --- 3. the docroot ------------------------------------------------------------------------------
+id "$OWNER" >/dev/null 2>&1 || die "no such user '$OWNER' to own the docroot"
+install -d -o "$OWNER" -g "$OWNER" -m 0755 "$DOCROOT"
+install -d -o "$OWNER" -g "$OWNER" -m 0755 "$DOCROOT/.well-known" "$DOCROOT/.well-known/acme-challenge"
+for ch in $CHANNELS; do
+  install -d -o "$OWNER" -g "$OWNER" -m 0755 "$DOCROOT/$ch"
+  say "channel: $DOCROOT/$ch"
+done
+# A channel with no latest.json is the CORRECT resting state between releases, not a gap: the client
+# gets a 404, fails closed and exits 7 silently. A placeholder pointing at a bundle that is not there
+# would be worse — it would offer an update whose download 404s after the user said yes.
+
+# --- 4. the certificate, and the ordering problem it creates --------------------------------------
+#
+# The real vhost cannot load until the certificate exists (nginx refuses to start on a missing
+# ssl_certificate), and the certificate cannot be issued until something answers HTTP-01 on port 80.
+# So: a minimal HTTP-only vhost first, issue, then swap in the real one.
+if [ -s "$LIVE/fullchain.pem" ]; then
+  say "certificate already present at $LIVE — skipping issuance"
+else
+  say "no certificate yet; bringing up a temporary HTTP-only vhost for the ACME challenge"
+  cat >"$SITE" <<EOF
+server {
+    listen 80;
+    listen [::]:80;
+    server_name $DOMAIN;
+    root $DOCROOT;
+    location /.well-known/acme-challenge/ { }
+    location / { return 404; }
+}
+EOF
+  ln -sfn "$SITE" /etc/nginx/sites-enabled/novadeck-ota
+  rm -f /etc/nginx/sites-enabled/default
+  nginx -t || die "the temporary vhost does not parse — this is a bug in $0"
+  systemctl enable --now nginx >/dev/null 2>&1 || true
+  systemctl reload nginx
+
+  say "requesting a certificate for $DOMAIN (HTTP-01 over port 80)"
+  certbot certonly --webroot -w "$DOCROOT" -d "$DOMAIN" \
+    --email "$EMAIL" --agree-tos --no-eff-email --non-interactive || die "certbot failed.
+  HTTP-01 validates over PLAIN HTTP from the internet, so the usual causes are, in order:
+    - the A record for $DOMAIN does not point at this instance
+    - tcp/80 is blocked at the VCN layer (a probe from outside TIMES OUT rather than being refused)
+    - rate limit: 5 failures per account per hostname per hour"
+fi
+
+# --- 5. the real vhost ---------------------------------------------------------------------------
+# Copied from the repo file, never generated here. The domain and docroot are substituted so a
+# non-default NOVADECK_OTA_DOMAIN yields a coherent vhost rather than one that silently still names
+# the committed default in half its directives.
+install -m 0644 "$VHOST_SRC" "$SITE"
+sed -i "s|updates\.novadeck\.cloud-ip\.cc|$DOMAIN|g; s|/srv/novadeck-ota|$DOCROOT|g" "$SITE"
+
+ln -sfn "$SITE" /etc/nginx/sites-enabled/novadeck-ota
+rm -f /etc/nginx/sites-enabled/default
+nginx -t || die "the installed vhost does not parse; nothing was reloaded, the previous config is still serving"
+systemctl enable --now nginx >/dev/null 2>&1 || true
+systemctl reload nginx
+say "nginx reloaded with the novadeck-ota vhost"
+
+# --- 6. renewal ----------------------------------------------------------------------------------
+#
+# TWO SEPARATE THINGS HAVE TO WORK, and only the first is automatic.
+#
+# 1. certbot renews the certificate on disk. Its own timer does this, twice a day, acting at 30 days
+#    remaining — so there are ~60 attempts before expiry and a transient failure is harmless.
+#
+# 2. nginx starts SERVING the renewed certificate. This does NOT happen by itself. nginx reads its
+#    certificates at startup and holds them in memory, and `certonly` — which is what this script
+#    uses, so that certbot never rewrites the committed vhost — installs nothing and reloads
+#    nothing. Without a deploy hook the renewal succeeds, the log says so, and the server keeps
+#    presenting the OLD certificate until it expires 30 days later. Every device then fails its
+#    update check on a TLS error, and the only warning anyone got was the renewal SUCCEEDING.
+#
+# The hook runs only on an actual renewal, not on every timer tick.
+HOOK=/etc/letsencrypt/renewal-hooks/deploy/10-reload-nginx.sh
+install -d -m 0755 /etc/letsencrypt/renewal-hooks/deploy
+cat >"$HOOK" <<'HOOK_EOF'
+#!/bin/sh
+# Installed by novadeck's ota/setup-server.sh. certbot runs this after a successful renewal.
+# nginx caches certificates in memory at startup; without this reload it would keep serving the
+# expiring one for another 30 days despite a renewal that reported success.
+set -e
+# nginx -t writes its SUCCESS message to stderr, and certbot reports any hook stderr as "ran with
+# error output" — so echoing it unconditionally trains you to ignore the one line that would matter.
+# Speak only on failure.
+if ! out=$(nginx -t 2>&1); then
+    printf '%s\n' "$out" >&2
+    exit 1
+fi
+systemctl reload nginx
+HOOK_EOF
+chmod 0755 "$HOOK"
+say "deploy hook installed: ${HOOK##*/} (reloads nginx after a renewal)"
+
+# Certbot's own timer, not a cron line of ours. Asserted rather than assumed: a disabled timer is
+# silent for ~60 days and then takes the whole fleet's update check down at once.
+if systemctl is-enabled --quiet certbot.timer 2>/dev/null; then
+  say "certbot.timer is enabled; next run: $(systemctl show certbot.timer -p NextElapseUSecRealtime --value)"
+else
+  warn "certbot.timer is NOT enabled — the certificate will expire in ~90 days with no warning"
+  warn "  fix: systemctl enable --now certbot.timer"
+fi
+
+say "done. Verify from OUTSIDE the instance, which is the only place the answer means anything:"
+say "  curl -I https://$DOMAIN/healthz"

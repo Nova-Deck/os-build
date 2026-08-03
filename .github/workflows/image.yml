@@ -63,6 +63,12 @@ on:
         required: false
         type: boolean
         default: false
+      environment:
+        description: 'Deployment environment to run the build job in. Empty = none. Set it to the
+          protected signing environment to make the release key reachable.'
+        required: false
+        type: string
+        default: ''
     outputs:
       card_url:
         description: 'Public URL of the published card, empty when publish was false'
@@ -90,6 +96,15 @@ jobs:
   build:
     name: ${{ inputs.artifact }}
     runs-on: ${{ vars.OVERLAY_RUNNER || 'ubuntu-24.04-arm' }}
+    # THE ENVIRONMENT IS THE AUTHORIZATION BOUNDARY FOR SIGNING, and it has to be declared here
+    # rather than by the caller: a reusable workflow's job cannot be attached to an environment from
+    # outside. Empty means no environment, which is the sdcard path and every unsigned smoke test.
+    #
+    # RAUC_CERT_PEM/RAUC_KEY_PEM must live in THAT environment, never in repo-wide secrets. That is
+    # the whole mechanism: a job that does not name the environment cannot see them, so it silently
+    # falls through to the ephemeral dev cert below and produces something no device will install.
+    # Repo-wide secrets would reach every workflow_dispatch and there would be no gate at all.
+    environment: ${{ inputs.environment }}
     # The overlay is pulled rather than built, but the base bootstrap, the kernel and the rootfs
     # assembly are still real work under docker. 350 rather than 180: on a 4-vCPU runner the kernel
     # alone is a large fraction of the old budget. 360 is GitHub's hard ceiling for a job.
@@ -97,9 +112,15 @@ jobs:
     outputs:
       card_url: ${{ steps.publish.outputs.url }}
     env:
-      # VERSION is the Makefile knob genbundle.sh reads; NOVADECK_VERSION is what the Makefile's
-      # ID_ENV forwards into the rootfs container so images/assemble-rootfs.sh can stamp
-      # /etc/novadeck-release. Both, or a card ships identifying itself as `dev`.
+      # NOVADECK_VERSION is the ONLY version knob the build has. The Makefile's ID_ENV forwards it
+      # into the rootfs container, images/assemble-rootfs.sh stamps it into /etc/novadeck-release,
+      # and images/genbundle.sh reads it back out of the assembled image to name the bundle. Absent,
+      # the artifact ships identifying itself as `dev`.
+      #
+      # There used to be a second knob, `VERSION`, which named the bundle independently — the pair
+      # could disagree, and the OTA client's update check compares exactly those two strings. It was
+      # removed 2026-08-03. VERSION below is a plain workflow variable feeding publish-card.sh's
+      # first argument (the R2 path prefix for a card), and is unrelated to the build.
       VERSION: ${{ inputs.version }}
       NOVADECK_VERSION: ${{ inputs.version }}
       ARTIFACT: ${{ inputs.artifact }}

@@ -31,6 +31,9 @@
 	gpio-keys-lid {
 		compatible = "gpio-keys";
 
+		pinctrl-0 = <&hall_lid_n>;
+		pinctrl-names = "default";
+
 		hall-lid-sensor {
 			label = "Hall Lid Sensor";
 			gpios = <&tlmm 17 GPIO_ACTIVE_LOW>;
@@ -448,6 +451,16 @@
 &tlmm {
 	key_ayn_n: key-ayn-n-state {
 		pins = "gpio41";
+		function = "gpio";
+		bias-pull-up;
+		output-disable;
+	};
+
+	/* The hall sensor drives this pin open-drain: it only pulls low when the
+	   lid is closed. Without a pull-up the released (lid open) level floats,
+	   so SW_LID reads are undefined and the lid appears to toggle at random. */
+	hall_lid_n: hall-lid-n-state {
+		pins = "gpio17";
 		function = "gpio";
 		bias-pull-up;
 		output-disable;

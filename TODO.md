@@ -2098,42 +2098,58 @@ rationale lives in the linked memories and commit history.
   the stage `README.md`s already document per-script inputs/outputs/env). Relates to
   [[folder-refactor-fs-overlay]], [[rootfs-build-approach]].
 
-- [ ] **Trim the Kconfig: stop building drivers for hardware novadeck will never have** — we boot
-  Qualcomm SM8550/SM8650 handhelds only, but the default build path merges the **multi-platform arm64
-  defconfig** (`kernel/build.sh:123`, `merge_config.sh -m arch/arm64/configs/defconfig
-  "${FRAGMENTS[@]}"`), which is deliberately "boots every arm64 board" — so we compile and ship
-  drivers for hardware that cannot exist on these devices. Two families to cut: (1) **discrete/desktop
-  GPUs and other PCIe-card drivers** — `DRM_NOUVEAU`, `DRM_AMDGPU`, `DRM_RADEON`, the legacy VGA/server
-  parts (`AST`, `MGAG200`, `QXL`, `VMWGFX`) — none reachable on a soldered-Adreno handheld; (2) **whole
-  non-Qualcomm SoC platform stacks** — sunxi/Allwinner, tegra, rockchip, mediatek, exynos, i.MX/NXP,
-  TI/OMAP, amlogic/meson, renesas, hisilicon — clocks, pinctrl, DRM, MMC, USB PHYs and DMA engines for
-  boards we do not support. Note our fragment `kernel/kernel.config` (468 lines, 332 `=y`/`=m`) is
-  **purely additive** — it never emits `# CONFIG_x is not set`, so nothing is pruned today. Payoff:
-  build time (every image rebuild pays for it), module-tree size on the read-only rootfs, `depmod`
-  time, fewer probe paths and less journal noise at boot, smaller attack surface. Method: do NOT
-  hand-edit `.config`. **There is no `qcom_defconfig` in the tree we build** — verified against the
-  pinned tarball: `arch/arm64/configs/` in 7.1.5 holds only `defconfig`, `hardening.config`,
-  `virt.config` (the `qcom_defconfig` in the same tarball is `arch/arm/configs/`, i.e. 32-bit MSM/APQ,
-  useless for SM8550/8650). Qualcomm DO ship an arm64 `qcom_defconfig`, but in their **downstream
-  CodeLinaro tree** (`git.codelinaro.org/clo/la/kernel/qcom`, built as `kmake O=../kobj
-  qcom_defconfig`; docs.qualcomm.com/doc/80-70020-3 topic kernel-development, which also lists Yocto
-  fragments `qcom_addons.config` / `qcom_debug.config`). That covers QCS8550 — our `qcs8550-ayaneo-*`
-  family — so it is a good **donor for the negative list**, but NOT a drop-in `BASE_CONFIG`: it is a
-  downstream release branch, not 7.x mainline, so it carries downstream-only symbols mainline lacks and
-  omits ours, and `olddefconfig` would silently paper over both directions. So either (a) add explicit `# CONFIG_x is not set` lines to our fragment (merge_config honours them)
-  — smallest blast radius, but forever subtracting from a multi-platform base; or (b) take the
-  `BASE_CONFIG` path (`build.sh:33`, verbatim `.config` + `olddefconfig`, fragment merge skipped) with
-  the reference distro's SM8550/SM8650 config as the qcom-only starting point — but it must then carry
-  our own additions itself: `CONFIG_SCHED_CLASS_EXT` + BTF (`images/customize-base.sh:105`) and the
-  `EXTRA_FIRMWARE` per-file list (`build.sh:128`). Either way the endgame is one tracked
-  `novadeck_defconfig`. Then **diff the resulting `.config`**, because `olddefconfig` will silently
-  re-enable anything still `select`ed by a symbol we keep. Guardrails: hold the ROCKNIX `=y` parity rule for the display/GPU path
-  ([[kernel-build-from-rocknix-config]], [[sm8650-working-display-baseline]]); keep whatever the
-  hand-rolled initramfs needs built-in ([[initramfs-phase4-immutable]]); cut **one vendor block per
-  build** with a boot test between, since we can only HW-test Pocket S2 + Pocket ACE while the tree
-  carries 14 boards — platform-vendor removals are safe by construction, but a shared-subsystem symbol
-  can break a board we cannot boot. Fold any symbol the new tree no longer has into the same pass
-  ([[drop-dead-config-symbols]]).
+- [x] **Trim the Kconfig: stop building drivers for hardware novadeck will never have — DONE
+  2026-08-03 (config-validated; HW boot test still owed).** Landed as `kernel/trim-platforms.config`,
+  a third declared list alongside `kernel.config` and `trim.list`, plus a self-verification block in
+  `kernel/build.sh`. **Measured on 7.1.6, pre → post:** enabled symbols 4961 → 3370 (**−1591, −32%**);
+  `=y` 3721 → 2625; `=m` 1240 → 745. Artifacts: `Image` 70.1 → 56.4 MiB (**−13.6, −19.4%**),
+  `out/modroot` 89.4 → 58.6 MiB (**−30.8, −34.5%**), 1397 → 888 `.ko` (**−509**). **~44.5 MiB off the
+  read-only rootfs**, which is also 44.5 MiB off every OTA bundle (see the disk budget in `docs/ota.md`).
+  All 15 board DTBs still build.
+  **The method that made it small: cut the PLATFORM GATES, not the drivers.** All 48 top-level gates in
+  `arch/arm64/Kconfig.platforms` were enabled by the multi-platform defconfig; 47 are now negated (all
+  but `ARCH_QCOM`). Vendor drivers hang off them (`ARCH_MXC` alone is referenced in 148 Kconfig lines),
+  so kconfig's dependency closure prunes ~1591 symbols from 49 directives — and the file **maintains
+  itself**, because a vendor driver added upstream in a future kernel is born disabled. Child options
+  (`ARCH_TEGRA_*_SOC`, `ARCH_R8A*`, and the umbrella `ARCH_BCM`/`ARCH_NXP`/`ARCH_MICROCHIP`) cascade off
+  on their own and are deliberately NOT listed. **Do not convert this to a per-driver list** — that is
+  the version that rots. Safety: removals are safe by construction, since kconfig will not drop a symbol
+  that anything we keep `select`s. Verified **every** symbol matching `QCOM|MSM|ADRENO|SNAPDRAGON|QRTR|SLIMBUS`
+  is **bit-identical** pre/post, and `SCHED_CLASS_EXT`/`DEBUG_INFO_BTF` are still `=y` in the real
+  container build (a host-side probe cannot check those two — no `pahole`).
+  **Two claims in the original entry were wrong, corrected here:** (1) family (1) was already almost
+  entirely false — `DRM_AMDGPU`, `DRM_RADEON`, `AST`, `MGAG200`, `QXL` and `VMWGFX` were *never* enabled;
+  the only discrete GPU on was `DRM_NOUVEAU=m`, a 2-line cut, not a family. (2) The objection to option
+  (a) ("forever subtracting from a multi-platform base") assumed a hand-maintained per-driver list; at
+  gate level it is 49 self-maintaining lines, so option (b) — the downstream CodeLinaro `BASE_CONFIG`
+  path, with its downstream-only symbols and papering `olddefconfig` — was not needed at all.
+  **TRAP PAID FOR (one wasted kernel build):** `merge_config.sh` matches negatives with
+  `notset_regex = "^# CONFIG_[a-zA-Z0-9_]+ is not set$"`. That `$` is hard-anchored, so an inline
+  trailing comment (`# CONFIG_ARCH_TEGRA is not set   # NVIDIA Tegra`) silently demotes the directive to
+  a plain comment — **no warning, build succeeds, drivers ship anyway**. Subtractive config fails
+  silently in a way additive config does not: the result is just the old, larger kernel. Hence the guard
+  in `build.sh` — it re-derives the directives with merge_config's own regex, asserts each resolved to
+  unset, enforces a floor on the directive count (an empty parse would otherwise "pass"), and greps
+  explicitly for the trailing-text form. Prints `trim-platforms: N symbols confirmed disabled`.
+  The same block now also asserts `DRM_MSM`, `PCIE_QCOM`, `PCI_PWRCTRL_GENERIC`, `MMC_SDHCI_MSM`,
+  `SCSI_UFSHCD`, `ARM_SMMU`, `ARM64_4K_PAGES`, `SCHED_CLASS_EXT`, `DEBUG_INFO_BTF`, `SQUASHFS`,
+  `OVERLAY_FS` — several were declared invariants that nothing checked ([[declared-invariants-need-assertions]]).
+  **Still owed: the HW boot test** on Pocket S2 + Pocket ACE (display, Vulkan, audio, Wi-Fi, controller,
+  suspend/wake; diff `dmesg` probe failures against a pre-trim capture). Cut in ONE pass rather than the
+  per-vendor sequence the original entry proposed — justified by the empty Qualcomm-surface diff, and
+  agreed 2026-08-03. See [[kernel-build-from-rocknix-config]], [[sm8650-working-display-baseline]],
+  [[drop-dead-config-symbols]], [[initramfs-phase4-immutable]].
+
+- [ ] **Residual foreign-hardware drivers that the ARCH gates do NOT reach** — the platform-gate trim
+  above cannot touch drivers whose Kconfig has no `ARCH_*` dependency, and a measurable block survives:
+  **~7.2 MiB across 22 modules** in `net/ethernet` + `net/dsa`, for NICs and switches that cannot exist
+  on these handhelds — Mellanox datacenter NICs, Amazon ENA, Xilinx, STMicro, and a Broadcom
+  GENET/SYSTEMPORT/B53/SF2 block (`MDIO_BCM_UNIMAC` only `depends on HAS_IOMEM`, so it survived as `=m`
+  once its Broadcom selectors went modular). Same story likely in `sound/` (107 modules remain) and
+  parts of `drivers/`. This is a **separate judgement call** from the gate trim: cutting it means
+  per-driver negatives, which is exactly the rotting list `trim-platforms.config`'s header warns
+  against — so it wants its own decision on where the line sits, not a reflex extension. Deferred out
+  of the 2026-08-03 pass deliberately; `card/v0.2.0` does not block on it.
 
 - [ ] **In-session splash client — cover the gamescope→Steam black gap (and decide plymouth's fate)**
   — boot currently ends in ~10s of black: gamescope's first modeset lands at ~15s and Steam does not

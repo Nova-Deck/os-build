@@ -155,8 +155,33 @@ CC=(${CROSS_COMPILE:+CROSS_COMPILE=$CROSS_COMPILE})
   #       60-novadeck-gaming.conf's vm.swappiness=180 quietly does nothing. The backend is checked
   #       separately from ZRAM because losing just that one leaves zram working but rejecting the
   #       `compression-algorithm = zstd` the shipped generator config asks for.
+  #
+  # The block below guards the Qualcomm platform path against kernel/trim-platforms.config.
+  # That fragment disables ~47 non-Qualcomm ARCH_* platform gates and lets kconfig's dependency
+  # closure prune the drivers behind them. Removals are safe by construction TODAY (verified
+  # bit-identical across every QCOM|MSM|ADRENO|SNAPDRAGON symbol), but nothing stops a future
+  # kernel bump from re-parenting one of these under a gate we now cut -- at which point the
+  # symbol vanishes silently and the device fails to display, boot or mount. Assert, don't hope.
+  #
+  #   =y  DRM_MSM: the display. Losing it is a black panel with no other symptom.
+  #   =y  PCIE_QCOM + PCI_PWRCTRL_GENERIC: the USB3 hub hangs off &pcie1_port0; without the
+  #       pwrctrl driver the port never powers up and every USB3 device is simply absent.
+  #   =y  MMC_SDHCI_MSM: the SD card IS the boot medium. A module here cannot mount the rootfs
+  #       that contains it.
+  #   =y  SCSI_UFSHCD: internal UFS -- the install-to-UFS target and the only other bulk store.
+  #   =y  ARM_SMMU: the IOMMU the GPU and peripherals sit behind.
+  #   =y  ARM64_4K_PAGES: FEX-Emu / x86 game compat assumes 4K pages (see kernel/README.md).
+  #       kconfig picks a page size unconditionally, so a silent flip here is a silent ABI change.
+  #   =y  SCHED_CLASS_EXT + DEBUG_INFO_BTF: kernel.config's header says to verify both by hand
+  #       after every merge because the BTF dep chain is fragile (DEBUG_INFO_REDUCED, pahole).
+  #       A declared invariant that nothing checks is not a guard -- so check it here.
+  #   =y  SQUASHFS + OVERLAY_FS: the /etc overlay mounts a squashfs seed. Losing either leaves
+  #       a root that boots with an empty or read-only /etc.
   for pair in CFG80211=m MAC80211=m BLK_DEV_DM=y DM_VERITY=y VFAT_FS=y BLK_DEV_LOOP=y \
-              ZRAM=y ZRAM_BACKEND_ZSTD=y; do
+              ZRAM=y ZRAM_BACKEND_ZSTD=y \
+              DRM_MSM=y PCIE_QCOM=y PCI_PWRCTRL_GENERIC=y MMC_SDHCI_MSM=y SCSI_UFSHCD=y \
+              ARM_SMMU=y ARM64_4K_PAGES=y SCHED_CLASS_EXT=y DEBUG_INFO_BTF=y \
+              SQUASHFS=y OVERLAY_FS=y; do
     sym=${pair%=*}; want=${pair#*=}
     got="$(scripts/config --file .config --state "$sym")"
     [ "$got" = "$want" ] || {
@@ -169,6 +194,50 @@ CC=(${CROSS_COMPILE:+CROSS_COMPILE=$CROSS_COMPILE})
       exit 1
     }
   done
+
+  # Verify kernel/trim-platforms.config actually TOOK EFFECT. That fragment is subtractive --
+  # it is a list of `# CONFIG_x is not set` directives -- and subtractive config has a failure
+  # mode additive config does not: when a directive is malformed, nothing errors. The symbol
+  # simply keeps its defconfig value, the build succeeds, and the image ships the drivers you
+  # believe you cut. There is no runtime symptom to notice either, because the result is just
+  # the old, larger kernel.
+  #
+  # It is an easy line to malform. merge_config.sh matches these with
+  #   notset_regex = "^# CONFIG_[a-zA-Z0-9_]+ is not set$"
+  # and that trailing `$` means an inline trailing comment silently demotes the directive to a
+  # plain comment (cost one wasted kernel build on 2026-08-03 -- see the fragment's header).
+  #
+  # So re-derive the directives with merge_config's OWN anchored regex and assert each one
+  # resolved to unset. Two extra guards, because a parse that finds nothing would otherwise
+  # "pass" an empty loop: a floor on the directive count, and an explicit scan for the
+  # trailing-text form that merge_config would ignore.
+  TRIM="$KDIR_REPO/trim-platforms.config"
+  if [ -f "$TRIM" ]; then
+    # The exact form merge_config would ignore: a directive with anything trailing "is not set".
+    if grep -nE '^# CONFIG_[A-Za-z0-9_]+ is not set.+' "$TRIM" >&2; then
+      echo "trim-platforms.config: the lines above have trailing text after 'is not set'," >&2
+      echo "  so merge_config.sh treats them as comments and the symbols stay enabled." >&2
+      echo "  Move the description to its own line above the directive." >&2
+      exit 1
+    fi
+    TRIM_SYMS="$(sed -n 's/^# CONFIG_\([A-Za-z0-9_]\+\) is not set$/\1/p' "$TRIM")"
+    TRIM_N="$(printf '%s\n' "$TRIM_SYMS" | grep -c . || true)"
+    [ "$TRIM_N" -ge 40 ] || {
+      echo "trim-platforms.config: parsed only $TRIM_N directives, expected >= 40" >&2
+      echo "  the file is present but nearly nothing in it is a valid directive" >&2
+      exit 1
+    }
+    for sym in $TRIM_SYMS; do
+      got="$(scripts/config --file .config --state "$sym")"
+      case "$got" in
+        n|undef) ;;
+        *) echo "CONFIG_$sym is '$got' but kernel/trim-platforms.config asks for it to be unset" >&2
+           echo "  something we still enable selects it; find it with: grep -rn \"select $sym\" ." >&2
+           exit 1 ;;
+      esac
+    done
+    echo "[novadeck] trim-platforms: $TRIM_N symbols confirmed disabled"
+  fi
 
   make ARCH=arm64 "${CC[@]}" -j"$(nproc)" Image dtbs modules
 )

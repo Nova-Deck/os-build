@@ -915,8 +915,12 @@ rationale lives in the linked memories and commit history.
   main as `6c1677e`. See [[sm8550-bringup-pickup]].
 
 - [ ] **PMIC RTC probe defers forever → no `/dev/rtc` (SM8650 ayaneo boards)** — HW-confirmed on
-  Pocket S2 (2026-07-12). `/sys/kernel/debug/devices_deferred` holds `c400000.spmi:pmic@0:rtc@6100`
-  ("reason unknown") and there is no `/dev/rtc0`. Root cause: `sm8650-ayaneo-common.dtsi` sets
+  Pocket S2 (2026-07-12), **re-confirmed 2026-08-03** on the trimmed 7.1.6 kernel: `devices_deferred`
+  still holds `c400000.spmi:pmic@0:rtc@6100`, so it survives both the 7.1.6 bump and the Kconfig
+  platform trim (`CONFIG_EFI` is untouched by the trim — it is not behind any `ARCH_*` gate). This is
+  also the mechanism behind [[journalctl-boot-index-broken-stale-rtc]]: no RTC means a stale clock,
+  which breaks `journalctl -b -1` — query by `_BOOT_ID=` instead.
+  The entry reads "reason unknown" and there is no `/dev/rtc0`. Root cause: `sm8650-ayaneo-common.dtsi` sets
   `qcom,uefi-rtc-info` on `&pmk8550_rtc`. That property makes `rtc-pm8xxx` read the RTC offset from a
   UEFI variable; with `CONFIG_EFI=y` on a device that is **not** UEFI-booted (`efi: UEFI not found` —
   we boot via ABL android-bootimg), `pm8xxx_rtc_probe_offset()` hits
@@ -2191,8 +2195,22 @@ rationale lives in the linked memories and commit history.
   record. (a) — OTA between two phase-5 builds — has to be run on its own and is the only thing
   that validates the path that actually ships. `docs/ota.md` is updated.
 
-- [ ] **kernel 7.1.6 + mesa 26.1.6 — built and committed 2026-08-03, NOT yet HW-validated** —
-  `a964be1`. A dev card (`NOVADECK_MODE=dev`, `NOVADECK_GIT=a964be1`) is built and carries kernel
+- [ ] **kernel 7.1.6 + mesa 26.1.6 — HW-validated on Pocket S2 2026-08-03; TWO measurements still
+  owed.** Validated on a dev card carrying the trimmed 7.1.6 kernel (see the Kconfig-trim entry):
+  display, audio, **Vulkan 1.4.354 / Turnip Adreno 750** (which exercises mesa 26.1.6), Wi-Fi
+  associated on 5 GHz, USB3 enumeration through the PCIe hub, InputPlumber, suspend/wake, zram
+  active — zero failed units, no missing modules, `depmod` clean. That clears the display/Vulkan/
+  gamescope regression risk this entry was written to catch.
+  **Still owed, both from the original entry and neither covered by the pass above:**
+  1. **ath12k WCN7850 MLO RX throughput** measured against a 5 GHz AP — association was confirmed,
+     *throughput was not*, and the whole point of the bump was that fix
+     ([[ath12k-self-managed-regdom-5ghz-works]]).
+  2. **Night mode** reading warm amber and tracking the intensity slider at every setting, no
+     magenta/red. The sanitize patch is committed (`ddbe201`, `3a90242`) but has not been exercised
+     on hardware since.
+  **Pocket ACE has not been booted on the trimmed kernel at all** — worth doing before the tag, since
+  it is the other board we can actually HW-test.
+  Original context: `a964be1`. A dev card (`NOVADECK_MODE=dev`, `NOVADECK_GIT=a964be1`) carries kernel
   `7.1.6` (`out/modroot/lib/modules/7.1.6`), `mesa 1:26.1.6-1.1` + `vulkan-freedreno` +
   `vulkan-mesa-device-select`, and the re-patched gamescope. **7.1.6 carries ZERO drm/msm changes**,
   which is the useful part: a display/Vulkan/gamescope regression is *mesa*, and Wi-Fi or input is
@@ -2200,8 +2218,18 @@ rationale lives in the linked memories and commit history.
   5 GHz AP ([[ath12k-self-managed-regdom-5ghz-works]]). Night mode should read as warm amber
   tracking the intensity slider at every setting — no magenta/red.
 
-- [ ] **The pin-bump PR must land before `card/v0.2.0`** — the release gate is BYTES, and the bytes
-  for mesa `26.1.6` and the re-patched gamescope do not exist in `packages/*/artifact.pin` yet.
+- [x] **The pin-bump PR must land before `card/v0.2.0` — DONE 2026-08-03, merged as PR #21**
+  (`4f547da` chore(pins): record overlay artifact sha256s, merged in `9cb89f0`). Both
+  `packages/mesa/artifact.pin` and `packages/gamescope/artifact.pin` now carry reviewed shas, so the
+  stated blocker below is resolved and CI can build the release card.
+  **Expected local behaviour, do NOT mistake it for a regression:** `packages/verify-pins.sh` exits
+  **1** on a developer machine after a local overlay build. It is comparing the reviewed *store* pins
+  against *your* freshly built bytes, and our builds are not bit-reproducible — the script says so
+  itself and points at `NOVADECK_DEV=1 make sdcard`. It passes in CI, which pulls from the store.
+  Check its exit code directly; do not pipe it through `tail`, or you capture the pager's status
+  instead ([[piped-build-exit-code-hides-failure]]).
+  Original entry follows — the release gate is BYTES, and the bytes
+  for mesa `26.1.6` and the re-patched gamescope did not exist in `packages/*/artifact.pin` yet.
   `pin-artifacts` was deliberately NOT run into the commits: locally built overlay artifacts are not
   bit-reproducible, so pinning this machine's bytes would both record a sha nobody can regenerate
   and bypass the review that *is* the provenance claim. Push, let `overlay.yml` publish to the store

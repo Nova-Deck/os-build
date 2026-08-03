@@ -5,32 +5,38 @@
 # Both delegate to image.yml so the rootfs recipe exists once.
 #
 # ============================================================================================
-# THIS PRODUCES AN UNSIGNED (dev-cert) BUNDLE. IT IS NOT A SHIPPABLE UPDATE.
+# A TAG PRODUCES A SIGNED, SHIPPABLE BUNDLE. A DISPATCH PRODUCES AN UNSIGNED SMOKE TEST.
 # ============================================================================================
-# A device only installs a bundle whose signature chains to the keyring baked into its own image, so
-# what this builds is a SMOKE TEST: it proves the bundle assembles, the verity hashes compute, the
-# manifest is well formed and the pin gate passed. Every device will reject the result.
+# A device installs a bundle only if its signature chains to the keyring baked into its own image.
+# Pushing `ota/v*` runs the build inside a PROTECTED environment where the release key is reachable;
+# anything else builds with an ephemeral dev cert, which proves the bundle assembles, the verity
+# hashes compute, the manifest is well formed and the pin gate passed — and which every device
+# rejects. That is the intended difference, not a limitation.
 #
-# WHY IT STOPS THERE, deliberately. Signing needs the release private key — the 20-year root of
-# trust, currently at ~/novadeck-pki, deliberately outside the repo and invisible to the build
-# container. Putting it into GitHub secrets is a real security decision that has not been made, and
-# guessing at it is how a root of trust ends up somewhere nobody chose to put it.
+# WHICH KEY ACTUALLY GOES TO CI, because this was mis-stated for a while and it matters. Not the
+# 20-year root: ~/novadeck-pki/ca.key.pem stays offline and never leaves the workstation. CI gets
+# release.cert.pem + release.key.pem — the SIGNING pair, whose cert expires 2028-10-04. Devices
+# trust the CA, not that cert, so if CI is ever compromised the response is to mint a new release
+# cert from the offline root and carry on. No device changes, no keyring update, no reflash. That
+# is a materially smaller decision than "put the root of trust in GitHub", which is what the old
+# wording here described.
 #
-# TO FINISH THIS, once that decision is made:
+# SETUP, once per repo (nothing below works until this is done — the build silently falls through
+# to the dev cert, which is the safe direction):
 #
-#   1. Create a PROTECTED environment (repo settings -> Environments), e.g. `release-signing`, with
-#      required reviewers and a branch restriction. Without one, any workflow_dispatch reaches the
-#      key. The environment is what makes signing an approved action rather than an available one.
-#   2. Add RAUC_CERT_PEM + RAUC_KEY_PEM to THAT environment, not to repo-wide secrets.
-#   3. In image.yml, add an `environment` input and set it on the build job. It has to be declared
-#      there because that is the job the secret is used in — a caller cannot attach an environment to
-#      a reusable workflow's job from outside. Verify on the first run that an empty value means "no
-#      environment" for the sdcard path, or give image.yml two jobs and pick with an `if:`.
-#   4. Pass `secrets: inherit` from a signed job here.
+#   1. Create a PROTECTED environment (repo settings -> Environments) named `release-signing`, with
+#      required reviewers and a branch/tag restriction. The environment is what makes signing an
+#      APPROVED action rather than an available one. Override the name with the SIGNING_ENVIRONMENT
+#      repo variable if you want a different one.
+#   2. Add RAUC_CERT_PEM + RAUC_KEY_PEM to THAT environment. NOT to repo-wide secrets — repo-wide
+#      secrets reach every workflow_dispatch and the gate would evaporate with no visible change.
+#   3. Nothing else. image.yml takes an `environment` input and declares it on its build job (a
+#      caller cannot attach an environment to a reusable workflow's job from outside), and the
+#      `build` job below passes it only on a tag.
 #
-# image.yml ALREADY accepts RAUC_CERT_PEM / RAUC_KEY_PEM and signs with them when both are present,
-# so step 4 is the only change on this side. It warns loudly when they are absent rather than
-# quietly producing something that looks shippable.
+# UNVERIFIED UNTIL THE FIRST RUN: that `environment: ''` means "no environment" rather than an error.
+# It is the documented behaviour and release-sdcard.yml depends on it too. If it turns out to fail,
+# the fix is two jobs in image.yml picked with an `if:` — not a change to the model here.
 # WHERE THE BUNDLE GOES. Not to R2, and not to a GitHub release asset: bundles are served from the
 # Oracle Cloud instance devices fetch their OTAs from. That is a different host with different
 # credentials from the card bucket, and deliberately so — a card is downloaded by a person with a
@@ -96,18 +102,35 @@ jobs:
           fi
           echo "version=$v" >> "$GITHUB_OUTPUT"
 
-  unsigned:
+  # SIGNED ON A TAG, unsigned on a dispatch, and the difference is the environment rather than an
+  # `if:` on a signing step. A tag push is the deliberate act — someone decided this commit ships —
+  # and it is the only path that names the protected environment, so it is the only path where the
+  # release key is reachable and the only one that waits for a reviewer. A bare workflow_dispatch
+  # stays what it was: a smoke test that proves the bundle assembles, signed with an ephemeral dev
+  # cert, rejected by every device.
+  #
+  # `secrets: inherit` is safe precisely because the signing secrets are ENVIRONMENT-scoped. A job
+  # that does not name the environment inherits nothing that matters, and image.yml falls through to
+  # the dev cert. Put RAUC_CERT_PEM/RAUC_KEY_PEM in repo-wide secrets and this whole gate evaporates
+  # silently — every dispatch would sign.
+  build:
     needs: prep
     uses: ./.github/workflows/image.yml
+    secrets: inherit
     with:
       artifact: bundle
       version: ${{ needs.prep.outputs.version }}
+      environment: ${{ github.ref_type == 'tag' && (vars.SIGNING_ENVIRONMENT || 'release-signing') || '' }}
 
   # The upload half. See the header: this is deliberately inert until the release key reaches a
   # protected environment, and it is written rather than commented out so that decision is a matter
   # of adding secrets, not of writing a job under time pressure on release day.
   publish:
-    needs: unsigned
+    needs: build
+    # Only a tag can have produced a signed bundle, and only a signed bundle can be published. On a
+    # dispatch this job would exist solely to fail its own keyring gate, so it does not run at all —
+    # a skipped job that is always skipped teaches people to ignore skipped jobs.
+    if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

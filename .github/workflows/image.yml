@@ -63,6 +63,12 @@ on:
         required: false
         type: boolean
         default: false
+      environment:
+        description: 'Deployment environment to run the build job in. Empty = none. Set it to the
+          protected signing environment to make the release key reachable.'
+        required: false
+        type: string
+        default: ''
     outputs:
       card_url:
         description: 'Public URL of the published card, empty when publish was false'
@@ -90,6 +96,15 @@ jobs:
   build:
     name: ${{ inputs.artifact }}
     runs-on: ${{ vars.OVERLAY_RUNNER || 'ubuntu-24.04-arm' }}
+    # THE ENVIRONMENT IS THE AUTHORIZATION BOUNDARY FOR SIGNING, and it has to be declared here
+    # rather than by the caller: a reusable workflow's job cannot be attached to an environment from
+    # outside. Empty means no environment, which is the sdcard path and every unsigned smoke test.
+    #
+    # RAUC_CERT_PEM/RAUC_KEY_PEM must live in THAT environment, never in repo-wide secrets. That is
+    # the whole mechanism: a job that does not name the environment cannot see them, so it silently
+    # falls through to the ephemeral dev cert below and produces something no device will install.
+    # Repo-wide secrets would reach every workflow_dispatch and there would be no gate at all.
+    environment: ${{ inputs.environment }}
     # The overlay is pulled rather than built, but the base bootstrap, the kernel and the rootfs
     # assembly are still real work under docker. 350 rather than 180: on a 4-vCPU runner the kernel
     # alone is a large fraction of the old budget. 360 is GitHub's hard ceiling for a job.

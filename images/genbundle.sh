@@ -49,6 +49,11 @@ field() { sed -n "s/^$1=//p" "$RELEASE" | tail -1; }
 IMG_VERSION="$(field NOVADECK_VERSION)"
 IMG_BUILD="$(field NOVADECK_BUILD)"
 IMG_GIT="$(field NOVADECK_GIT)"
+# dev|release. Read back like everything else rather than re-derived from this process's environment
+# — genbundle.sh may be wrapping an image assembled by an entirely different invocation, and the
+# question "was this built as a test image?" is only answerable by the bytes being wrapped. Empty on
+# an image assembled before this field existed, which ota/publish-bundle.sh treats as "not release".
+IMG_MODE="$(field NOVADECK_MODE)"
 
 # The identity rule, and it MUST stay in lockstep with identity_of() in fs-overlay/usr/bin/
 # novadeck-update: the version when the build has a real one, the build timestamp otherwise. A local
@@ -87,11 +92,13 @@ content="$work/content"; mkdir -p "$content"
 sed -e "s/@VERSION@/$VERSION/g" \
     -e "s/@BUILD@/$IMG_BUILD/g" \
     -e "s/@GIT@/$IMG_GIT/g" \
+    -e "s/@MODE@/$IMG_MODE/g" \
     "$TEMPLATE" >"$content/manifest.raucm"
 cp "$ROOTFS" "$content/rootfs.img"
 
 rm -f "$BUNDLE"
-echo "[novadeck] bundling v$VERSION (build $IMG_BUILD, git $IMG_GIT) -> ${BUNDLE#"$ROOT"/}"
+echo "[novadeck] bundling v$VERSION (build $IMG_BUILD, git $IMG_GIT, mode ${IMG_MODE:-unknown}) -> ${BUNDLE#"$ROOT"/}"
+[ "$IMG_MODE" = release ] || echo "[novadeck] NOTE: mode='${IMG_MODE:-unknown}' — installable, but ota/publish-bundle.sh will refuse to publish it"
 rauc bundle --cert="$CERT" --key="$KEY" "$content" "$BUNDLE"
 
 echo "  ok   $(du -h "$BUNDLE" | cut -f1)  $(basename "$BUNDLE")"

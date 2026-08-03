@@ -121,6 +121,10 @@ def device_identity():
         "version": rel.get("NOVADECK_VERSION", ""),
         "build": rel.get("NOVADECK_BUILD", ""),
         "git": rel.get("NOVADECK_GIT", ""),
+        # dev|release. Not used by the update logic — a dev image updates exactly like a release one
+        # — but it is the only thing that distinguishes a test image from a shippable one, and
+        # `status` is where you go to find out what is actually running.
+        "mode": rel.get("NOVADECK_MODE", ""),
     }
 
 
@@ -483,7 +487,7 @@ def download(remote, path, emit):
 def cmd_status():
     base_url, channel = config()
     local = device_identity()
-    print(f"device:   {identity_of(local) or '<unidentified>'}")
+    print(f"device:   {identity_of(local) or '<unidentified>'} ({local.get('mode') or 'mode unknown'})")
     print(f"server:   {base_url}/{channel}")
     print(f"logged in: {'yes' if steam_logged_in() else 'no (updates deferred)'}")
     pending = staged_identity()

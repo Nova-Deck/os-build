@@ -139,12 +139,23 @@ fi
 # is empty for a local build — rendered `dev`, which is the honest answer for bytes that came off
 # someone's box. Without these two fields the only per-build identity was a timestamp, which cannot
 # answer "is this device on the card I flashed, or an OTA past it?".
+# NOVADECK_MODE answers "is this a test image or a shippable one?", which nothing else could. A DEV
+# image carries Wi-Fi credentials and an authorized_keys (section 4c below) and must never reach a
+# device that is not the builder's own — yet a dev image signed with the real release key is
+# INDISTINGUISHABLE from a release one to every check that existed before this line: the signature
+# is over the bytes, not over their provenance, and version/build/git are stamped the same either
+# way. ota/publish-bundle.sh refuses to publish a bundle that does not say `release` here.
+#
+# Derived from NOVADECK_DEV rather than from a mode string passed in, because that is the SAME
+# variable the dev-only injection blocks below are gated on. The stamp cannot disagree with what
+# actually went into the image, because both read the one flag.
 mkdir -p "$stage/etc"
 {
   echo "NOVADECK_VARIANT=unified"
   echo "NOVADECK_BUILD=$(date -u +%Y%m%dT%H%M%SZ)"
   echo "NOVADECK_VERSION=${NOVADECK_VERSION:-dev}"
   echo "NOVADECK_GIT=${NOVADECK_GIT:-unknown}"
+  if [ "${NOVADECK_DEV:-}" = "1" ]; then echo "NOVADECK_MODE=dev"; else echo "NOVADECK_MODE=release"; fi
 } >"$stage/etc/novadeck-release"
 
 # The same three fields are needed OUTSIDE the image, by images/genbundle.sh: a RAUC bundle has to

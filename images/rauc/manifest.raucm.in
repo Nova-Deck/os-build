@@ -15,9 +15,16 @@ version=@VERSION@
 # compatible free-form metadata: it is not interpreted, and it reaches `rauc info`, InspectBundle and
 # the install handlers as RAUC_META_NOVADECK_* — which is where a post-install hook would read them
 # if it ever needs to record what a slot was updated TO (see TODO.md, the trial-stamp fix sketch).
+#
+# `mode` is dev|release, copied from the payload's own /etc/novadeck-release. A DEV image carries
+# Wi-Fi credentials and an authorized_keys, and signing one with the real release key makes it
+# byte-indistinguishable from a shippable bundle to any signature check — so the provenance has to
+# travel WITH the bundle for ota/publish-bundle.sh to be able to refuse it. Dev bundles are still
+# built and still install; they are just not publishable.
 [meta.novadeck]
 build=@BUILD@
 git=@GIT@
+mode=@MODE@
 
 [bundle]
 format=verity

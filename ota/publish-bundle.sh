@@ -121,8 +121,31 @@ COMPATIBLE="$(mf RAUC_MF_COMPATIBLE)"
 # the literal `dev`), so these two are for a human reading latest.json, not for the update logic.
 BUILD="$(mf RAUC_META_NOVADECK_BUILD)"
 GIT="$(mf RAUC_META_NOVADECK_GIT)"
+MODE="$(mf RAUC_META_NOVADECK_MODE)"
 
 [ "$COMPATIBLE" = novadeck ] || die "bundle compatible is '$COMPATIBLE', not 'novadeck' — no device would install it"
+
+# THE SECOND GATE, and the signature does not imply it. A dev image carries Wi-Fi credentials and an
+# authorized_keys, and `NOVADECK_DEV=1 PKIDIR=~/novadeck-pki make bundle` — the normal, correct way
+# to build a bundle for testing on your own hardware — produces one signed with the REAL release key.
+# To a signature check that is indistinguishable from a shippable release, because the signature is
+# over the bytes and says nothing about their provenance. Only the mode stamp the payload carries can
+# tell them apart.
+#
+# Empty is REFUSED, not waved through: an image assembled before this field existed cannot answer the
+# question, and "cannot answer" has to mean no. Re-assemble it — the answer is a property of the
+# build, so there is nothing to add after the fact.
+case "$MODE" in
+  release) ;;
+  dev) die "REFUSED: this bundle's payload was built as a DEV image (mode=dev).
+  A dev image carries Wi-Fi credentials and an authorized_keys, and it is signed with the same
+  release key as a shippable one, so nothing downstream would catch this. Build without
+  NOVADECK_DEV=1 — note that release builds are CI's job (see .github/workflows/image.yml)." ;;
+  *) die "REFUSED: this bundle does not say how it was built (mode='${MODE:-<absent>}').
+  Bundles assembled before the mode stamp existed cannot answer it, and 'cannot answer' means no.
+  Re-assemble the rootfs and re-bundle; the answer is a property of the build, not metadata that
+  can be added afterwards." ;;
+esac
 case "$VERSION" in
   ''|*[!A-Za-z0-9._+-]*) die "bundle version '$VERSION' is not usable as a filename or URL segment" ;;
 esac
@@ -135,7 +158,7 @@ esac
 SIZE="$(stat -c %s "$BUNDLE_ABS")"
 log "computing sha256 over $((SIZE / 1024 / 1024)) MiB"
 SHA="$(sha256sum "$BUNDLE_ABS" | cut -d' ' -f1)"
-log "publishing v$VERSION${BUILD:+ (build $BUILD${GIT:+, git $GIT})} to $BASE_URL/$CHANNEL/"
+log "publishing v$VERSION (mode $MODE${BUILD:+, build $BUILD}${GIT:+, git $GIT}) to $BASE_URL/$CHANNEL/"
 
 # --- 3. upload -------------------------------------------------------------------------------------
 DEST="$DOCROOT/$CHANNEL"

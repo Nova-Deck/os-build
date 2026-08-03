@@ -1872,6 +1872,24 @@ rationale lives in the linked memories and commit history.
   UNCERTAIN to help: SteamUI's `hue=0.85` is CONSTANT across off/on, so it may be a fixed SteamUI
   default, not a colorimetry-derived value → better primaries might not move it.
 
+  **CLOSED HARDER 2026-08-03 — it is the arm64 Steam CLIENT, not our panel, and the difference
+  matters.** An unrelated arm64 distribution on different hardware and a different (EDID-carrying)
+  panel hit the IDENTICAL broken vector and shipped their own gamescope workaround for it. Since the
+  fault reproduces where the EDID premise does not hold, no panel-side work — EDID, chromaticity,
+  colorimetry override — can move what the client writes into `GAMESCOPE_COLOR_NIGHT_MODE`. Do not
+  re-open this route on the theory that a proper EDID would fix night mode; it would not.
+  **Their fix is NOT worth adopting, and the reason is a useful trap to record.** It gates on
+  `#if defined(__aarch64__)` and re-reads the vector as `[amount, saturation]`, on the theory that
+  the arm64 client sends a 2-element property. That mechanism is impossible: `steamcompmgr.cpp`
+  fills a zero-initialised local `float vec[3]` only `if ( bHasVec && user_vec.size() == 3 )`
+  (verified at our pinned 3.16.23.2 AND on gamescope master), so a 2-element property would make
+  night mode fully INERT, not garbage — and we measured a live `amount` driving a visible tint, so
+  the client really does send 3 elements and `1.02e15` is really what it wrote. Their patch does
+  land on amber, but by forcing hue at compile time on every arm64 build (so a fixed client stays
+  overridden), treating a frozen constant as if it were the user's saturation, and dropping the
+  non-finite guard. Ours is runtime, arch-neutral, self-healing, and HW-confirmed. The one thing
+  taken from it: the amber hue constant, now `25/360` rather than `0.083`.
+
   **RECOMMENDED FIX (reliable, fully in our control): a gamescope-side sanitize patch** on the night-mode
   atom handler (`steamcompmgr.cpp` ~L6347) / `set_color_nightmode`: (1) clamp `nightmode.saturation` to
   [0,1] (kills the 1e15); (2) remap/force `nightmode.hue` into a warm amber band (~0.05–0.12) when it's

@@ -3,12 +3,18 @@ From: Philippe Simons <simons.philippe@gmail.com>
 Date: Sat, 4 Jul 2026 14:00:00 +0200
 Subject: [PATCH 2/2] fix: sanitize GAMESCOPE_COLOR_NIGHT_MODE atom
 
-On the Pocket S2's no-EDID DSI panel the Steam client sends a broken night-mode
-vector: the hue field only sweeps cold->red (~0.5 up to 1.0, HW-measured) and
-never a warm value, the saturation field is frozen garbage (~6.5e22), and only
-`amount` is usable (it tracks the intensity slider). gamescope renders
-HSV(hue, saturation*amount, 1.0) faithfully, so those values turn night mode
-into a magenta/red screen instead of the expected warm amber.
+The arm64 Steam client sends a broken night-mode vector: the hue field only
+sweeps cold->red (~0.5 up to 1.0, HW-measured) and never a warm value, the
+saturation field is frozen garbage (~6.5e22), and only `amount` is usable (it
+tracks the intensity slider). gamescope renders HSV(hue, saturation*amount, 1.0)
+faithfully, so those values turn night mode into a magenta/red screen instead of
+the expected warm amber.
+
+This was first read as a consequence of this panel exposing no EDID, but other
+arm64 systems on unrelated panels hit the identical vector, so the cause is the
+client and not our display stack. Worth stating because it rules out the
+"advertise real colorimetry via a kernel panel EDID" route a second time: even a
+perfect EDID would not change what the client writes into this atom.
 
 Clamp amount/saturation into [0,1] and force hue to amber unless it lies in a
 tight warm band (excluding both hue extremes, since 0.0 and 1.0 are pure red),
@@ -37,7 +43,7 @@ diff --git a/src/steamcompmgr.cpp b/src/steamcompmgr.cpp
 +		// is the client's garbage, NOT a "deep red" the user asked for. See TODO.md
 +		// "Display color controls" + steam-gamescope-handshake HW notes.
 +		{
-+			constexpr float kNightModeAmberHue = 0.083f;  // amber, matches Steam Deck night mode
++			constexpr float kNightModeAmberHue = 25.0f / 360.0f;  // 25deg amber, matches Steam Deck night mode
 +			constexpr float kNightModeWarmHueMin = 0.02f; // exclude pure red (harsh) at hue 0
 +			constexpr float kNightModeWarmHueMax = 0.20f; // amber .. yellow upper bound
 +			const bool bWarmHue = nightmode.hue >= kNightModeWarmHueMin && nightmode.hue <= kNightModeWarmHueMax;

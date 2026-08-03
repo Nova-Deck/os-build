@@ -2175,6 +2175,33 @@ rationale lives in the linked memories and commit history.
   record. (a) — OTA between two phase-5 builds — has to be run on its own and is the only thing
   that validates the path that actually ships. `docs/ota.md` is updated.
 
+- [ ] **kernel 7.1.6 + mesa 26.1.6 — built and committed 2026-08-03, NOT yet HW-validated** —
+  `a964be1`. A dev card (`NOVADECK_MODE=dev`, `NOVADECK_GIT=a964be1`) is built and carries kernel
+  `7.1.6` (`out/modroot/lib/modules/7.1.6`), `mesa 1:26.1.6-1.1` + `vulkan-freedreno` +
+  `vulkan-mesa-device-select`, and the re-patched gamescope. **7.1.6 carries ZERO drm/msm changes**,
+  which is the useful part: a display/Vulkan/gamescope regression is *mesa*, and Wi-Fi or input is
+  the *kernel*. Also picks up an ath12k WCN7850 MLO RX throughput fix worth measuring against a
+  5 GHz AP ([[ath12k-self-managed-regdom-5ghz-works]]). Night mode should read as warm amber
+  tracking the intensity slider at every setting — no magenta/red.
+
+- [ ] **The pin-bump PR must land before `card/v0.2.0`** — the release gate is BYTES, and the bytes
+  for mesa `26.1.6` and the re-patched gamescope do not exist in `packages/*/artifact.pin` yet.
+  `pin-artifacts` was deliberately NOT run into the commits: locally built overlay artifacts are not
+  bit-reproducible, so pinning this machine's bytes would both record a sha nobody can regenerate
+  and bypass the review that *is* the provenance claim. Push, let `overlay.yml` publish to the store
+  and open its `pin-bump` PR, review that diff, merge — *then* the release card can be built by CI.
+  A release build before that fails `verify-pins.sh`, correctly.
+  **Ordering trap found doing this:** `make relock` must run BEFORE `make pin-artifacts` whenever a
+  package's VERSION moves. `verify-pins.sh` only pins artifacts the *lock* says are installed, so
+  against a stale lock it logs `mesa: no installed artifacts — no pin written`, **exits 0**, and
+  leaves the previous version's pin in place.
+
+- [ ] **The journal cap is committed but NOT deployed to the live server** — `ccd6098` adds the
+  `SystemMaxUse=200M` drop-in to `ota/setup-server.sh`, and `5e12af8` documents the disk budget it
+  protects, but the running instance still has journald at its Ubuntu default (10% of the
+  filesystem, up to 4G). Applying it is a re-run of `setup-server.sh`, which is idempotent and
+  reports state without changing it on a second pass — see *The server* in `docs/ota.md`.
+
 - [ ] **Move the `R2_*` card credentials into their own protected environment** — split out of the
   OTA signing work (2026-08-03), which put `RAUC_CERT_PEM`/`RAUC_KEY_PEM` into a protected
   `release-signing` environment restricted to `ota/v*` tags, with `loki666` as required reviewer.

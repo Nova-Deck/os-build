@@ -177,7 +177,7 @@ compiled overlay bytes will never match a published sha. `NOVADECK_DEV=1` is the
 | `images/` | Image assembly (A/B layout, Btrfs, RAUC bundles) |
 | `packages/` | From-source overlay: PKGBUILDs + source/artifact pins for what we patch or version-bump, plus the pipeline that builds and pins them |
 | `kernel/` | Unified kernel: config fragments, patches, all device trees, firmware embed list |
-| `firmware/` | Vendor firmware fetch/verify recipes + `manifest.txt` |
+| `firmware/` | Vendor firmware fetch/verify recipes + their pins |
 | `fs-overlay/` | Rootfs overlay payload — one filesystem-mirror tree injected with a single `cp -a` |
 | `steam-seed/` | Native arm64 Steam client seed fetcher + pin |
 | `boot/` | Two-stage UEFI boot: steamcl (stage 1) + GRUB (stage 2), both built from pinned sources |

@@ -304,7 +304,7 @@ KERNEL_SRC_HASH := work/.kernel-src.hash
 # ==============================================================================
 .PHONY: help all image toolchain kernel fw-linux fw-qcom base overlay overlay-pull overlay-publish \
         verify-pins pin-artifacts verify-lock \
-        rootfs manifest relock \
+        rootfs relock \
         initramfs steamcl grub sdcard verify-card test bundle publish-bundle deploy clean clean-base clean-overlay distclean
 
 # An always-out-of-date prerequisite, for rules that must re-evaluate their own inputs every run
@@ -590,10 +590,6 @@ $(KERNEL_SRC_HASH): FORCE
 $(KERNEL): $(KERNEL_SRC_HASH) $(FW_LINUX) $(FW_QCOM) | $(BUILD_STAMP)
 	$(DOCKER) $(if $(BASE_CONFIG),-e BASE_CONFIG=/src/$(BASE_CONFIG)) \
 	  $(BUILD_IMG) kernel/build.sh
-
-# Cross-check the device firmware manifest against the built kernel (non-fatal).
-manifest: $(KERNEL) ## Verify firmware-manifest.txt vs the built kernel (in container)
-	$(INBUILD) firmware/manifest.sh
 
 # Regenerate images/manifest.lock (Phase 4a). Deliberately NOT a dependency of the image build:
 # the lock is a reviewed artifact, so it is regenerated on purpose and its diff is read, never

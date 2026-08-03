@@ -4,8 +4,7 @@
 # Chains the pieces into one bootable read-only Btrfs root:
 #   1. bootstrap the root from packages               (images/customize-base.sh)
 #   2. fetch device-proprietary firmware (pinned)     (firmware/fetch-qcom-fw.sh)
-#   3. verify the firmware manifest vs the built kernel, non-fatal (firmware/manifest.sh)
-#   4. assemble the read-only Btrfs root              (images/assemble-rootfs.sh)
+#   3. assemble the read-only Btrfs root              (images/assemble-rootfs.sh)
 #
 # Prereq: unified kernel already built (kernel/build.sh) so out/ has Image + modroot,
 # plus the initramfs (images/mkinitramfs.sh) and the stage-1/2 boot artifacts (boot/steamcl.sh +
@@ -40,11 +39,7 @@ if [ ! -d "$FW" ]; then
   exit 1
 fi
 
-# 3. verify firmware coverage vs the built kernel's DTB/module references (non-fatal).
-"${DK[@]}" firmware/manifest.sh \
-  || echo "  (firmware manifest verify reported gaps — review above before flashing)"
-
-# 4. assemble the read-only Btrfs root. Forward the TEST-ONLY credential env (a no-op
+# 3. assemble the read-only Btrfs root. Forward the TEST-ONLY credential env (a no-op
 # unless NOVADECK_DEV=1) so a dev card can carry Wi-Fi + SSH creds; see assemble-rootfs.sh.
 # Env flags must precede the image name, so spell this docker run out rather than reuse DK.
 docker run --rm -v "$ROOT":/src -w /src \

@@ -18,11 +18,13 @@ Two firmware sources:
 |---|---|
 | `fetch-linux-fw.sh` | Fetch the open `linux-fw` blobs at the pinned commit into `linux-fw/`, per-file sha256-verified. Host, network. SoC-agnostic flat tree. |
 | `fetch-qcom-fw.sh` | Fetch the device-proprietary `qcom-fw` tree from the pinned qcom-firmwares commit into `qcom-fw/`, verified against the repo's `sha256sums.txt`. Host, network. SoC-agnostic (blobs are self-namespaced by on-device path). |
-| `manifest.sh` | Verify the **union** manifest against the **built** kernel: cross-checks DTB `firmware-name` + module `MODULE_FIRMWARE` and reports missing/unbacked entries. Run after `kernel/build.sh`. |
 
-Firmware requirements live in `firmware/manifest.txt` (union of all boards).
-`manifest.sh` needs `dtc` + `objcopy`, so run it inside the build image:
+There is no separate firmware requirements list. What ships is decided by the two pins and
+nothing else: `LINUX_FW.pin` is an explicit per-file allowlist (each row carries its own
+sha256), and `qcom-fw/` is whatever the pinned qcom-firmwares commit contains. Both staged
+trees are then installed into the rootfs wholesale by `images/assemble-rootfs.sh`.
 
-```
-docker run --rm -v "$PWD":/src -w /src novadeck-build firmware/manifest.sh
-```
+A board's firmware requirement is expressed where it is actually consumed — the DTS
+`firmware-name` properties, and `kernel/embed.list` for the subset baked into `Image.gz`.
+A hand-maintained mirror of that was tried and deleted: nothing enforced it, so it silently
+drifted (it still claimed to be SM8650-only long after the SM8550 boards landed).

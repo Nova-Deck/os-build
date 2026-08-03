@@ -2195,21 +2195,15 @@ rationale lives in the linked memories and commit history.
   record. (a) — OTA between two phase-5 builds — has to be run on its own and is the only thing
   that validates the path that actually ships. `docs/ota.md` is updated.
 
-- [ ] **kernel 7.1.6 + mesa 26.1.6 — HW-validated on Pocket S2 2026-08-03; TWO measurements still
-  owed.** Validated on a dev card carrying the trimmed 7.1.6 kernel (see the Kconfig-trim entry):
-  display, audio, **Vulkan 1.4.354 / Turnip Adreno 750** (which exercises mesa 26.1.6), Wi-Fi
-  associated on 5 GHz, USB3 enumeration through the PCIe hub, InputPlumber, suspend/wake, zram
-  active — zero failed units, no missing modules, `depmod` clean. That clears the display/Vulkan/
-  gamescope regression risk this entry was written to catch.
-  **Still owed, both from the original entry and neither covered by the pass above:**
-  1. **ath12k WCN7850 MLO RX throughput** measured against a 5 GHz AP — association was confirmed,
-     *throughput was not*, and the whole point of the bump was that fix
-     ([[ath12k-self-managed-regdom-5ghz-works]]).
-  2. **Night mode** reading warm amber and tracking the intensity slider at every setting, no
-     magenta/red. The sanitize patch is committed (`ddbe201`, `3a90242`) but has not been exercised
-     on hardware since.
-  **Pocket ACE has not been booted on the trimmed kernel at all** — worth doing before the tag, since
-  it is the other board we can actually HW-test.
+- [x] **kernel 7.1.6 + mesa 26.1.6 — HW-VALIDATED on Pocket S2 2026-08-03.** Validated on a dev card
+  carrying the trimmed 7.1.6 kernel (see the Kconfig-trim entry — the trim and the bump were proven
+  in the same pass): display, audio, **Vulkan 1.4.354 / Turnip Adreno 750** (which exercises mesa
+  26.1.6), Wi-Fi associated on 5 GHz, USB3 enumeration through the PCIe hub, InputPlumber,
+  suspend/wake, zram active — zero failed units, no missing modules, `depmod` clean. That clears the
+  display/Vulkan/gamescope regression risk this entry was written to catch, which was the whole
+  question: 7.1.6 carries ZERO drm/msm changes, so a regression there would have been *mesa*.
+  Two verification items from the original text are NOT covered by this and are split into their own
+  entry below (night mode, ath12k throughput) — they are release-gate checks, not "is the bump good".
   Original context: `a964be1`. A dev card (`NOVADECK_MODE=dev`, `NOVADECK_GIT=a964be1`) carries kernel
   `7.1.6` (`out/modroot/lib/modules/7.1.6`), `mesa 1:26.1.6-1.1` + `vulkan-freedreno` +
   `vulkan-mesa-device-select`, and the re-patched gamescope. **7.1.6 carries ZERO drm/msm changes**,
@@ -2217,6 +2211,24 @@ rationale lives in the linked memories and commit history.
   the *kernel*. Also picks up an ath12k WCN7850 MLO RX throughput fix worth measuring against a
   5 GHz AP ([[ath12k-self-managed-regdom-5ghz-works]]). Night mode should read as warm amber
   tracking the intensity slider at every setting — no magenta/red.
+
+- [ ] **Pre-tag HW gates for `card/v0.2.0` — three checks nobody has run yet.** Split out of the
+  7.1.6/26.1.6 entry above 2026-08-03, because that entry's question ("did the bump regress
+  display/Vulkan/Wi-Fi/input?") is answered, while these three are independent verification that
+  would otherwise hide as sub-bullets inside a checked-looking entry.
+  1. **Night mode on hardware** — must read as warm amber and track the intensity slider at every
+     setting, no magenta/red. The sanitize patch is committed (`ddbe201`, `3a90242`) and the client
+     is known to send garbage `hue`/`saturation`, but the fix has NOT been exercised on a device
+     since it was written. This is the highest-value of the three: it is a shipped-behaviour bug
+     with a fix that has never been seen working. See [[fps-limiter-atom-clobber]] for the adjacent
+     atom-clobber class.
+  2. **ath12k WCN7850 MLO RX throughput** measured against a 5 GHz AP. Association is confirmed
+     working; *throughput was never measured*, and that fix is the reason the kernel was bumped
+     ([[ath12k-self-managed-regdom-5ghz-works]]). Without a number this is an unverified claim.
+  3. **Pocket ACE boot on the trimmed kernel.** It is the other board we can actually HW-test, and
+     the Kconfig trim has only ever run on Pocket S2. Platform-gate removals are safe by
+     construction, so this is cheap insurance rather than a suspected failure — but 13 of the 15
+     boards in the tree cannot be tested at all, which makes the two we *can* test worth spending.
 
 - [x] **The pin-bump PR must land before `card/v0.2.0` — DONE 2026-08-03, merged as PR #21**
   (`4f547da` chore(pins): record overlay artifact sha256s, merged in `9cb89f0`). Both

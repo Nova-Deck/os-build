@@ -305,7 +305,7 @@ KERNEL_SRC_HASH := work/.kernel-src.hash
 .PHONY: help all image toolchain kernel fw-linux fw-qcom base overlay overlay-pull overlay-publish \
         verify-pins pin-artifacts verify-lock \
         rootfs manifest relock \
-        initramfs steamcl grub sdcard verify-card test bundle deploy clean clean-base clean-overlay distclean
+        initramfs steamcl grub sdcard verify-card test bundle publish-bundle deploy clean clean-base clean-overlay distclean
 
 # An always-out-of-date prerequisite, for rules that must re-evaluate their own inputs every run
 # rather than trust a prerequisite's mtime. Only $(KERNEL_SRC_HASH) uses it; see the note there.
@@ -685,6 +685,21 @@ $(SDCARD): $(ROOTFS) $(VARIMG) $(VARIMG_B) $(STEAMCL) $(GRUB) $(STEAM_SEED) imag
 bundle: $(ROOTFS) | $(BUILD_STAMP) ## Build a signed RAUC update bundle (in container; PKIDIR= to sign for real)
 	$(DOCKER) $(PKI_MOUNT) -e RAUC_CERT="$(RAUC_CERT)" -e RAUC_KEY="$(RAUC_KEY)" $(BUILD_IMG) \
 	  images/genbundle.sh
+
+# ==============================================================================
+# Publish an update (host) — put a signed bundle on the OTA server
+# ==============================================================================
+# Runs on the HOST, not in the container: the transport is ssh/rsync and the credentials are the
+# operator's. The script reaches back INTO the container by itself for the one thing that needs the
+# pinned rauc — verifying the bundle against the keyring every device carries, which it does before
+# it moves a byte and without an override. Server contract: docs/ota.md.
+#
+# No dependency on `bundle`: publishing a CI artifact or a bundle built on another machine is a
+# normal thing to do, and re-deriving it here from a possibly-newer tree would publish bytes nobody
+# tested. Pass the file you actually installed on a device.
+publish-bundle: ## Publish BUNDLE=<file.raucb> to the OTA server (host; needs NOVADECK_OTA_SSH_KEY)
+	@test -n "$(BUNDLE)" || { echo "pass BUNDLE=out/images/novadeck-<version>.raucb" >&2; exit 2; }
+	ota/publish-bundle.sh "$(BUNDLE)" $(CHANNEL)
 
 # ==============================================================================
 # Deploy (host) — copy the stage-1 steamcl tree onto a mounted ESP

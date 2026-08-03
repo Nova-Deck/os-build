@@ -34,9 +34,20 @@
 # WHERE THE BUNDLE GOES. Not to R2, and not to a GitHub release asset: bundles are served from the
 # Oracle Cloud instance devices fetch their OTAs from. That is a different host with different
 # credentials from the card bucket, and deliberately so — a card is downloaded by a person with a
-# browser, a bundle is fetched by a device with a keyring. This workflow currently stops at a
-# workflow artifact and the upload to that instance is done from there; wiring it in is the open
-# half of this channel, alongside the signing key below.
+# browser, a bundle is fetched by a device with a keyring. The transport is ota/publish-bundle.sh
+# and the `publish` job below calls it.
+#
+# THAT JOB IS INERT TODAY, and it fails closed twice over rather than being commented out:
+#
+#   1. publish-bundle.sh verifies the bundle against the CA in every device's keyring BEFORE it
+#      moves a byte, and this workflow can only produce dev-cert bundles (see above). So it would
+#      reject its own artifact.
+#   2. The SSH secrets do not exist, and the job announces that as a skip rather than a pass.
+#
+# It goes live with the signing decision described above — the same decision, not a second one. A
+# signed bundle with no way to publish it, or a publish path that only ever carries unsigned ones,
+# are both half a channel. Until then, publishing is done from the workstation where the release key
+# actually lives; see docs/ota.md.
 name: release bundle
 
 # TAG NAMESPACE: `ota/v*`. Bundles and cards ship on independent cadences — an update goes out far
@@ -91,3 +102,58 @@ jobs:
     with:
       artifact: bundle
       version: ${{ needs.prep.outputs.version }}
+
+  # The upload half. See the header: this is deliberately inert until the release key reaches a
+  # protected environment, and it is written rather than commented out so that decision is a matter
+  # of adding secrets, not of writing a job under time pressure on release day.
+  publish:
+    needs: unsigned
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Two secrets, and the job stops here without both. A publish that silently no-ops is worse
+      # than one that fails: the tag looks shipped and the fleet never sees it.
+      - name: check for publishing credentials
+        id: creds
+        env:
+          KEY: ${{ secrets.OTA_SSH_KEY }}
+        run: |
+          if [ -z "${KEY:-}" ]; then
+            echo "::notice::OTA_SSH_KEY is not set — nothing was published."
+            echo "::notice::This is expected: CI can only build dev-cert bundles today, and"
+            echo "::notice::ota/publish-bundle.sh would reject one anyway. See this file's header."
+            echo "ready=no" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=yes" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: fetch the bundle
+        if: steps.creds.outputs.ready == 'yes'
+        uses: actions/download-artifact@v4
+        with:
+          name: novadeck-bundle
+          path: out/images
+
+      # $RUNNER_TEMP, never the workspace, for the reason image.yml already keeps the RAUC key
+      # there: anything left in the repo tree gets swept into artifacts and caches.
+      - name: publish to the update server
+        if: steps.creds.outputs.ready == 'yes'
+        env:
+          OTA_SSH_KEY: ${{ secrets.OTA_SSH_KEY }}
+          NOVADECK_OTA_HOST: ${{ vars.OTA_HOST || 'updates.novadeck.cloud-ip.cc' }}
+          NOVADECK_OTA_USER: ${{ vars.OTA_USER || 'ubuntu' }}
+        run: |
+          set -euo pipefail
+          key="$RUNNER_TEMP/ota_key"
+          printf '%s\n' "$OTA_SSH_KEY" > "$key"
+          chmod 600 "$key"
+          trap 'shred -u "$key" 2>/dev/null || rm -f "$key"' EXIT
+          bundle="$(ls out/images/novadeck-*.raucb)"
+          # Build the toolchain image so publish-bundle.sh's keyring gate runs against the PINNED
+          # rauc (build/Dockerfile, RAUC_VERSION) rather than whatever the runner's archive holds.
+          # Not a detail: ubuntu-latest ships a rauc old enough to predate verity bundle support, so
+          # `apt-get install rauc` here would give a gate that fails on every bundle we produce —
+          # indistinguishable, from the log, from a genuinely bad signature.
+          docker build -t novadeck-build -f build/Dockerfile build
+          NOVADECK_OTA_SSH_KEY="$key" ota/publish-bundle.sh "$bundle"

@@ -115,7 +115,42 @@ once anyway.
 
 ---
 
-## 4. Phase 3 — server (Oracle Cloud + nginx)
+## 4. Phase 3 — server (Oracle Cloud + nginx) — **LANDED 2026-08-03**
+
+**Live.** `https://updates.novadeck.cloud-ip.cc/healthz` answers 200 with a Let's Encrypt cert.
+`stable/` is deliberately EMPTY — no `latest.json` — which is the correct resting state: the client
+404s, fails closed, exits 7 silently. Built in `ota/`, not `images/ota/`: `images/` is uniformly
+things that build or publish an artifact for the DEVICE, and a vhost for a rented Ubuntu box is not
+one. The peer is `ci/`.
+
+Proven end to end against the live host, via a throwaway `_selftest` channel (since the first real
+bundle is deferred): `check` prints the version and exits 0; the same version exits 7 with **empty
+stdout**; an empty channel exits 7 silently; `apply` emits only `0%`/`60%` on stdout, fails at the
+absent rauc bus, and **unlinks the bundle** — the "/home fills silently" guard. `Range` returns 206,
+content types and cache headers are right.
+
+Traps paid for, all of which cost a cycle:
+
+- **`docker run novadeck-build rauc …` cannot work.** The image's ENTRYPOINT is `/bin/bash`, so that
+  runs `bash rauc` and bash tries to *source* the binary — "cannot execute binary file", which reads
+  like a broken image and is not. Every other caller in the repo passes it shell scripts. Use `-c`.
+- **nginx `add_header` does not accumulate across levels.** A `location` with any `add_header`
+  discards every one inherited from the `server` block, so HSTS and `nosniff` were silently dropped
+  from `.raucb` and `latest.json` — the only two paths that matter — while surviving on the 404s.
+  They have to be repeated in each such location.
+- **`http2 on;` is nginx ≥ 1.25**; Ubuntu 24.04 ships 1.24 and rejects it as an unknown directive.
+  Dropped entirely rather than downgraded to the `listen … http2` form: one client fetching one large
+  file with a Range header gains nothing from multiplexing.
+- **`certonly --webroot` reloads nothing.** A renewal succeeds, and nginx keeps serving the OLD
+  certificate from memory until it expires 30 days later — the only prior warning being a renewal
+  that *worked*. `/etc/letsencrypt/renewal-hooks/deploy/10-reload-nginx.sh` is the fix and
+  `setup-server.sh` installs it. `certbot renew` also sleeps a random ≤8 min when non-interactive,
+  which looks exactly like a hang.
+- Let's Encrypt no longer publishes an OCSP responder URL, so `ssl_stapling` warns on every reload.
+
+Original design notes below, kept for the reasoning.
+
+### Original plan
 
 Host: **`updates.novadeck.cloud-ip.cc`** → `130.61.37.34` (OCI Frankfurt). Ubuntu 24.04.4 LTS, login
 `ubuntu`, key `~/.ssh/ssh-key-2026-07-10.key`. Note the name: `novadeck.cloud-ip.cc` is a ClouDNS
@@ -268,8 +303,14 @@ mechanism is the open bus policy, not polkit.
 ## 9. Pickup order
 
 1. ~~**Phase 2** — version identity.~~ LANDED.
-2. **Phase 4** — the test suite (`images/test-update.sh`). With Phase 2 done this makes the client
-   verifiable with no server and no device. **Next.**
-3. **Phase 3** — server, once the DNS record and both firewall layers are open (operator-side).
-4. **Phase 5** — hardware.
+2. ~~**Phase 3** — server.~~ LANDED 2026-08-03 and live.
+3. **Phase 4** — the test suite (`images/test-update.sh`). **Next.** Add transport cases for
+   `ota/publish-bundle.sh` alongside the client cases below: the keyring gate, the `.part` rename,
+   the 206 check, the pointer flip and the prune are all written and **unexercised**, because
+   nothing has been published yet.
+4. **First real publish** — `NOVADECK_VERSION=0.2.0 PKIDIR=$HOME/novadeck-pki make bundle`, which
+   re-assembles the rootfs (`out/images/` has no `rootfs.release` sidecar, so `make bundle` fails
+   loudly until it does), then `make publish-bundle BUNDLE=…`. This is the first exercise of the
+   whole path.
+5. **Phase 5** — hardware.
 5. ~~Transcribe §8 into `TODO.md`.~~ DONE — both items are in the working tree's `TODO.md`.

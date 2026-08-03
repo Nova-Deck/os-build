@@ -62,7 +62,11 @@ CURL = os.environ.get("NOVADECK_CURL", "curl")
 # The server this device fetches from. Overridable in CONFIG_FILE so a device is never locked to
 # one host by its image ([[devices-are-operator-reachable]]); the shipped default is the release
 # channel and needs no configuration on a normal device.
-DEFAULT_URL = "https://novadeck.cloud-ip.cc/ota"
+#
+# The host is dedicated to updates and the docroot is its root, so there is no path prefix: a
+# channel is the first segment, giving /<channel>/latest.json. Note that `updates.novadeck` is not
+# a typo for `novadeck` — novadeck.cloud-ip.cc is a DNS sub-zone with no address of its own.
+DEFAULT_URL = "https://updates.novadeck.cloud-ip.cc"
 DEFAULT_CHANNEL = "stable"
 
 # Steam's exit-code contract. 7 is "no update available" and is ALSO how every recoverable failure

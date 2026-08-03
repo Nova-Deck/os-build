@@ -117,27 +117,35 @@ once anyway.
 
 ## 4. Phase 3 — server (Oracle Cloud + nginx)
 
-Host: `novadeck.cloud-ip.cc`. **As of 2026-08-03 that name has no A or AAAA record** — only the
-apex `cloud-ip.cc` resolves (185.206.180.131/174, the DDNS provider, not the instance). Instance
-reachability is therefore unverified.
+Host: **`updates.novadeck.cloud-ip.cc`** → `130.61.37.34` (OCI Frankfurt). Ubuntu 24.04.4 LTS, login
+`ubuntu`, key `~/.ssh/ssh-key-2026-07-10.key`. Note the name: `novadeck.cloud-ip.cc` is a ClouDNS
+sub-zone with no address of its own, and the OTA host is a record inside it.
 
-### Prerequisites (operator, not agent)
+### Prerequisites
 
-1. A record `novadeck.cloud-ip.cc` → instance public IP.
-2. VCN ingress (Security List or NSG): TCP 80 + 443.
-3. **The instance-local firewall.** Oracle's Ubuntu/Oracle Linux images ship iptables/firewalld
-   rules that DROP everything but 22, persisted in `/etc/iptables/rules.v4`. Opening the VCN alone
-   leaves the port silently filtered, and the symptom is indistinguishable from a VCN
-   misconfiguration. **Both layers must open.**
+1. ~~A record → instance public IP.~~ **DONE 2026-08-03**, confirmed from the authoritative NS,
+   `1.1.1.1` and the workstation.
+2. ~~VCN ingress (Security List or NSG): TCP 80 + 443.~~ **Already open** — proven by a differential
+   probe rather than by reading the console: an unopened port (12345) times out at 10 s because OCI
+   security lists drop silently, while 80/443 fail in ~20 ms, i.e. one RTT. The packets reach the
+   instance.
+3. **The instance-local firewall — THE REMAINING BLOCKER.** Oracle's images ship an `INPUT` chain
+   ending in `REJECT --reject-with icmp-host-prohibited`, persisted in `/etc/iptables/rules.v4`.
+   Diagnosed from the errno, which is the cheap discriminator worth reusing: a reachable host with
+   nothing listening sends a TCP RST → `ECONNREFUSED`, whereas 80/443 return **`EHOSTUNREACH`**,
+   which is what the kernel reports for an ICMP admin-prohibited reply. Insert the ACCEPT rules
+   BEFORE the reject (`-I INPUT <n>`, not `-A`) or nothing changes, then persist.
 4. Port 80 open *and* the name resolving before certbot — HTTP-01 validates over plain HTTP.
 
-Gate: `curl -I https://novadeck.cloud-ip.cc/` answers from the workstation.
+Gate: `curl -I https://updates.novadeck.cloud-ip.cc/` answers from the workstation.
 
 ### To build
 
 - `images/ota/nginx-novadeck-ota.conf` — TLS, HSTS, `autoindex off`, `Range` on (free resume now,
   streaming later), `application/octet-stream` for `.raucb`, no upload surface, docroot
-  `/srv/novadeck-ota`.
+  `/srv/novadeck-ota`. **The docroot IS the URL root** — the client's `DEFAULT_URL` carries no path
+  prefix, so a channel is the first segment: `/srv/novadeck-ota/stable/latest.json` is served at
+  `https://updates.novadeck.cloud-ip.cc/stable/latest.json`.
 - `images/ota/setup-server.sh` — run **on the instance**: nginx + certbot, docroot, vhost, cert.
   Must *detect* both firewall layers and report what is blocking; must not silently open ports on a
   public host.

@@ -71,3 +71,9 @@ cosign.key
 *.swp
 *~
 .DS_Store
+
+# Python bytecode. Nothing in fs-overlay/ is imported as a module at runtime — the clients are
+# executed — so a __pycache__ there only ever comes from a host-side test importing one of them,
+# and fs-overlay/ is copied verbatim into the rootfs. Ignored so it cannot ride along into an image.
+__pycache__/
+*.pyc

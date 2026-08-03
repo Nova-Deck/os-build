@@ -50,6 +50,9 @@ cat >"$W/bin/curl" <<'STUB'
 # Faithful enough for the two shapes the client uses: a plain GET to stdout, and -o <dest> for the
 # bundle. Exits 22 like the real curl's -f on a missing document.
 url=""; dest=""
+# The FULL argv, not just the path: the stall-abort case asserts which flags the download carries
+# and the manifest fetch does not, and those are invisible in requests.log.
+printf '%s\n' "$*" >> "$WWW/../argv.log"
 while [ $# -gt 0 ]; do
   case "$1" in
     -o) dest="$2"; shift 2 ;;
@@ -95,6 +98,7 @@ run() { # <arg...> -- with env assignments allowed before the first non-assignme
   local -a envs=()
   while [ $# -gt 0 ] && [[ $1 == *=* ]]; do envs+=("$1"); shift; done
   : >"$W/requests.log"
+  : >"$W/argv.log"
   OUT="$(env PATH="$W/bin:$PATH" WWW="$W/www" \
       NOVADECK_CURL="$W/bin/curl" \
       NOVADECK_OTA_URL="https://updates.example" \
@@ -205,6 +209,31 @@ run NOVADECK_RELEASE_FILE="$(release_file 1.0.0)" NOVADECK_OTA_CHANNEL=big
 # One request: the manifest. A second would mean the bundle download started anyway.
 [ "$(requests)" = 1 ] && ok "did not start the download" \
                       || bad "made $(requests) requests — the space guard ran after the fetch"
+
+# =================================================================================================
+CASE="download-stall-abort"
+# The download runs with --max-time 0, because a 4G transfer must not die at the 30s that suits a
+# small manifest. That lifts the only thing that would ever end a WEDGED transfer, so the stall
+# guard has to replace it: without it a dead connection hangs forever, Steam sits on a frozen
+# progress bar, and a device with no serial console has nothing left but a power-cycle.
+# Asserted on the argv the client actually ran, since neither flag is visible in requests.log.
+bundle_file stall novadeck-9.9.9.raucb 4096
+manifest stall '{"version":"9.9.9","bundle":"novadeck-9.9.9.raucb","size":4096}'
+run NOVADECK_RELEASE_FILE="$(release_file 1.0.0)" NOVADECK_OTA_CHANNEL=stall
+dl="$(grep -- ' -o ' "$W/argv.log" | head -1)"
+mf="$(grep -v -- ' -o ' "$W/argv.log" | grep -- 'latest.json' | head -1)"
+case "$dl" in
+  *"--speed-limit 1024"*"--speed-time 120"*) ok "the download aborts on a sustained stall" ;;
+  "") bad "no download request was recorded — the case proves nothing" ;;
+  *) bad "the download carries no stall abort: $dl" ;;
+esac
+# The manifest keeps its own 30s cap. A throughput rule sized for a 4G file is the wrong shape for
+# a 200-byte document, where "under 1 KiB/s for two minutes" is not a stall, it is arithmetic.
+case "$mf" in
+  *--speed-limit*) bad "the manifest fetch inherited the download's throughput rule: $mf" ;;
+  "") bad "no manifest request was recorded — the case proves nothing" ;;
+  *) ok "the manifest fetch keeps its own timeout" ;;
+esac
 
 # =================================================================================================
 CASE="apply-progress"

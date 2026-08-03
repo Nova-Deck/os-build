@@ -69,6 +69,20 @@ CURL = os.environ.get("NOVADECK_CURL", "curl")
 DEFAULT_URL = "https://updates.novadeck.cloud-ip.cc"
 DEFAULT_CHANNEL = "stable"
 
+# The stall abort for the bundle download. The download deliberately runs with NO total time limit
+# (see fetch()) because a 4G transfer over a slow link is normal and must not be killed for being
+# slow -- but "no total limit" with nothing else means a WEDGED connection hangs forever. Steam sits
+# on a frozen progress bar, nothing times out, and the user's only move is to power-cycle a device
+# with no serial console.
+#
+# So the guard is on THROUGHPUT, not duration: give up only when the transfer is doing essentially
+# nothing for a sustained stretch. 1 KiB/s is far below any working link and far above a dead one,
+# and two minutes is long enough that a stalled-but-recovering transfer (a roaming Wi-Fi handoff,
+# a server hiccup) is not mistaken for a dead one. curl resumes with -C - on the next attempt, so
+# aborting here costs the user nothing already downloaded.
+DOWNLOAD_MIN_BYTES_PER_SEC = 1024
+DOWNLOAD_STALL_SECONDS = 120
+
 # Steam's exit-code contract. 7 is "no update available" and is ALSO how every recoverable failure
 # exits: a check that cannot reach the server, cannot parse the manifest or cannot fit the download
 # must not answer "yes" and must not answer with a crash. Fail closed.
@@ -148,7 +162,15 @@ def fetch(url, dest=None, timeout=30):
     Resumable when writing to a file: a dropped multi-gigabyte transfer must not start over."""
     cmd = [CURL, "-fsSL", "--max-time", str(timeout)]
     if dest:
-        cmd += ["-C", "-", "-o", dest, "--max-time", "0"]
+        # --max-time 0 lifts the cap set above (curl takes the last one): a multi-gigabyte bundle
+        # must not die at the 30s that is right for a small manifest. The speed guard replaces it
+        # -- abort a transfer that has stalled, never one that is merely slow. See the constants.
+        cmd += [
+            "-C", "-", "-o", dest,
+            "--max-time", "0",
+            "--speed-limit", str(DOWNLOAD_MIN_BYTES_PER_SEC),
+            "--speed-time", str(DOWNLOAD_STALL_SECONDS),
+        ]
     cmd.append(url)
     if dest:
         return subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)

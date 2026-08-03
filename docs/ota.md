@@ -72,6 +72,55 @@ the bundle is readable at its public URL with a `Range` request, **flip `latest.
 that back over HTTPS, and prune to `KEEP`. Everything before the flip is invisible to devices; the
 flip is the publish.
 
+### Validating a release on hardware, before anything is published
+
+This looks circular the first time you meet it — a boot-flow change wants a new card, and you do not
+want to cut a card until the update path is proven — and it is not. **Proving the update path needs
+no published card and no published bundle.** It needs a device on the boot flow you are shipping and
+a bundle that device will accept, and both are buildable locally.
+
+There are two questions here, they are not the same one, and the second answers strictly more:
+
+| | Question | What it decides |
+|---|---|---|
+| **a** | Does an OTA work *on* the new boot flow? | Whether the update path is sound at all |
+| **b** | Can a device on the **previous** boot flow be OTA'd *across* to the new one? | Whether the next card is a convenience or a **mandatory reflash for every device in the field** |
+
+Run **b**. It costs the same and subsumes a. It also needs no new card — flash the *already
+published* previous card.
+
+```sh
+# 1. the device. For (b) flash the PUBLISHED previous card; for (a) build the new flow locally:
+set -a; . ./dev.env; set +a
+make sdcard                                   # dev card, new boot flow
+
+# 2. a bundle the device will accept: a DEV image with a REAL signature.
+#    rauc gates on the signature, so this installs exactly like a release bundle.
+NOVADECK_VERSION=<bumped> PKIDIR=$HOME/novadeck-pki make bundle
+
+# 3. hand-seed it into a TEST channel — not stable
+scp out/images/novadeck-<bumped>.raucb ubuntu@updates.novadeck.cloud-ip.cc:/srv/novadeck-ota/test/
+#    then write /srv/novadeck-ota/test/latest.json by hand (schema above; size must be exact)
+
+# 4. point the device at it, and drive the update FROM THE STEAM UI
+ssh deck@<device> 'echo OTA_CHANNEL=test | sudo tee -a /etc/novadeck/ota.conf'
+```
+
+Step 4 is the gate: Settings → check → offer → download → install → restart → confirm the new slot
+booted and `/etc/novadeck-release` changed. Then check again — it must report up-to-date and **not**
+re-offer. Verify from the **seat session**, not over SSH: those are different D-Bus subjects even
+though rauc's policy is open to both on paper.
+
+**`ota/publish-bundle.sh` refuses dev bundles, and that does not obstruct this.** The mode gate
+protects `stable` from a test image reaching the fleet; hand-placing a bundle in a channel of your
+own, on your own server, is you doing something explicit. The gate is on publishing, not installing.
+
+**Reset the channel when you are done.** `/etc` is an overlayfs on the per-slot `/var`, and
+`post-install.sh` migrates `/var` to the new slot — so `OTA_CHANNEL=test` **survives the update**. A
+device left pointing at the test channel silently keeps reading it forever.
+
+Only once that passes: tag `card/vX.Y.Z`, then `ota/vX.Y.Z`.
+
 ### Rolling back a bad release
 
 The previous bundles are still on the server — that is what `KEEP=3` is for. Edit

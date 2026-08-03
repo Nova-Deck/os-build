@@ -230,5 +230,32 @@ else
   warn "  fix: systemctl enable --now certbot.timer"
 fi
 
+# --- 7. cap the journal --------------------------------------------------------------------------
+# Ubuntu ships journald with NO SystemMaxUse, so the default applies: 10% of the filesystem, capped
+# at 4G. On this 96G disk that is 4G of logs on a box whose entire job is serving static files — and
+# it is the only thing here that grows without bound. Found 2026-08-03 at 242M.
+#
+# Why it matters more here than the raw number suggests: the free space on this instance is the
+# retention budget for published bundles. NOVADECK_OTA_KEEP=3 at ~4G each is ~12G, and
+# publish-bundle.sh does a df check BEFORE it uploads and REFUSES if the room is not there. An
+# uncapped journal is therefore not just untidy; it is a slow leak pointed at the one resource a
+# publish needs, and it would surface as a refused release rather than as a disk-space alert.
+#
+# A drop-in rather than an edit to journald.conf, so a distribution upgrade cannot silently revert
+# it and so this script stays idempotent. 200M keeps weeks of history on a machine this quiet.
+JOURNALD_DROPIN=/etc/systemd/journald.conf.d/10-novadeck-cap.conf
+install -d -m 0755 /etc/systemd/journald.conf.d
+cat >"$JOURNALD_DROPIN" <<'JOURNALD_EOF'
+# Installed by novadeck's ota/setup-server.sh. See the rationale there.
+[Journal]
+SystemMaxUse=200M
+JOURNALD_EOF
+chmod 0644 "$JOURNALD_DROPIN"
+# journald applies the new cap on restart and vacuums to it immediately; --vacuum-size does the same
+# to what is already on disk without waiting for the next rotation.
+systemctl restart systemd-journald
+journalctl --vacuum-size=200M >/dev/null 2>&1 || true
+say "journal capped at 200M (now: $(journalctl --disk-usage | sed 's/^Archived and active journals take up //'))"
+
 say "done. Verify from OUTSIDE the instance, which is the only place the answer means anything:"
 say "  curl -I https://$DOMAIN/healthz"

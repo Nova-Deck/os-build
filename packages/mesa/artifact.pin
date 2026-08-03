@@ -8,7 +8,7 @@
 # If it disagrees with the tree, the pin is STALE — the sources moved and no pin-bump PR
 # has landed yet — which is a different failure from bytes that do not match.
 name: mesa
-inputhash: 3bc16abf144435866487e3aa9ab38d4bbb14568222a8aadcaebdb05a7750364e
-artifact: 2d6d2dc8ce4556f0cd3416ea7d339f6f2af7c70f13302087972318ae7dff1ec8  mesa-1:26.1.5-1.1-aarch64.pkg.tar.zst
-artifact: c574073b58774f7009e9d2dcfcca1730248e621df1e1f8b3562f11263cd1b509  vulkan-freedreno-1:26.1.5-1.1-aarch64.pkg.tar.zst
-artifact: 01d44941a86a0f595beb354bb5e80b8421ecf6ef2ff76ce2e9b1899f0817c932  vulkan-mesa-device-select-1:26.1.5-1.1-aarch64.pkg.tar.zst
+inputhash: 699a499e6804ec488ff1e6ed3ad5caf526674c0c088c78eb302670d8d2c3648e
+artifact: 5b57a120ce540a2aa38e55364012ca3304ccc3f16cfb036101e308687fcb65cc  mesa-1:26.1.6-1.1-aarch64.pkg.tar.zst
+artifact: 9dd3fdc269e7deca71cff12d241f6e41f3e0b2a8180fc1d67a57aea411b787d9  vulkan-freedreno-1:26.1.6-1.1-aarch64.pkg.tar.zst
+artifact: d132663320697a6cc542d1d27c11c049391280c7a97db43ff6d73a3a56a7317e  vulkan-mesa-device-select-1:26.1.6-1.1-aarch64.pkg.tar.zst

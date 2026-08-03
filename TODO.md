@@ -2079,6 +2079,41 @@ rationale lives in the linked memories and commit history.
   delete the branch; if the front-half black still grates, merge it then.
   See [[boot-splash-plymouth]], [[sm8650-gamescope-session-plumbing]].
 
+- [ ] **Move the `R2_*` card credentials into their own protected environment** — split out of the
+  OTA signing work (2026-08-03), which put `RAUC_CERT_PEM`/`RAUC_KEY_PEM` into a protected
+  `release-signing` environment restricted to `ota/v*` tags, with `loki666` as required reviewer.
+  The `R2_*` trio is still **repo-wide**, so any `workflow_dispatch` by anyone with write access
+  reaches it. That matters more than "a write credential to a public bucket" suggests:
+  `images/publish-card.sh` **prunes** older cards with `rclone purge` (KEEP=1), so these are
+  destructive, not merely additive.
+  **Two things make this more than moving secrets in the UI, and both would fail silently:**
+  1. **It needs a SECOND environment, not the same one.** `release-signing`'s branch policy is
+     `ota/v*`; cards ship on `card/v*`, so reusing it would BLOCK every card release. Create
+     `release-cards` with a `card/v*` tag policy.
+  2. **`release-sdcard.yml` must switch to `secrets: inherit`.** It currently passes them
+     explicitly (`R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}`), and that expression evaluates in
+     the CALLER's context — where there is no environment, because a job that calls a reusable
+     workflow cannot declare one. An environment-scoped secret would therefore resolve to **empty**
+     and card publishing would break at the upload step with blank credentials. This is exactly why
+     the signing path uses `secrets: inherit` with the environment declared inside `image.yml`'s
+     build job; `image.yml` already takes the `environment` input, so only the caller changes.
+
+- [ ] **A restricted SSH key so CI can publish OTA bundles** — `.github/workflows/release-bundle.yml`
+  has a `publish` job wired and gated, but `OTA_SSH_KEY` is deliberately **unset**, so it skips and
+  publishing is done from the workstation with `make publish-bundle`. The reason is not laziness:
+  the key used to publish today logs in as `ubuntu`, who has **passwordless sudo** on
+  `updates.novadeck.cloud-ip.cc`. Handing that to CI grants CI root on the host every device in the
+  field fetches from — a far larger grant than "may write one directory", and one with no clean
+  recovery. (Contrast the signing key, where a leak is answered by minting a new release cert from
+  the offline root: no device change, no keyring update, no reflash.)
+  **What to build:** a dedicated principal restricted to the docroot — its own user, or an
+  `authorized_keys` entry with `command="rrsync /srv/novadeck-ota"`, `no-pty`,
+  `no-port-forwarding`, `no-agent-forwarding`. Note `publish-bundle.sh` does more than rsync (it
+  runs `mkdir`, `df`, `mv`, `chmod` and the prune over ssh), so a forced-command wrapper has to
+  cover those or the script needs a narrower remote protocol. Then put the key in the
+  `release-signing` environment — NOT repo-wide, for the same reason as above.
+  Server contract: `docs/ota.md`. See [[ota-server-oracle-instance]].
+
 ## Phase 2 — gamescope session (closed)
 
 - [x] **Clean gamescope teardown / re-launch wedge** — WON'T-FIX (HW-disproven 2026-06-25).

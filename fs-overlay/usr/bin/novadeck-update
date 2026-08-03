@@ -277,7 +277,15 @@ def staged_identity(installer=None):
     try:
         installer = installer or rauc()
         primary = installer.call_sync("GetPrimary", None, 0, 5000, None).unpack()[0]
-        booted = installer.get_cached_property("BootSlot").get_string()
+        # BOTH SIDES OUT OF ONE SOURCE, and that is the whole point. GetPrimary answers with a slot
+        # NAME ("rootfs.1"); the BootSlot property answers with a BOOTNAME ("B"). Comparing those
+        # two is never equal, so the pending test below was always true, the "stamp is spent" branch
+        # was unreachable, and a device reported restart-pending forever after its first update --
+        # exactly the failure this function's docstring warns about. Steam then never offers the
+        # next update, so the fleet takes one OTA and stops. HW-caught 2026-08-03 by re-checking
+        # after a real reboot; a check before the reboot cannot see it.
+        status = installer.call_sync("GetSlotStatus", None, 0, 5000, None).unpack()[0]
+        booted = next((name for name, data in status if data.get("state") == "booted"), "")
     except Exception as exc:
         log(f"cannot ask rauc whether an update is pending: {exc}")
         return None

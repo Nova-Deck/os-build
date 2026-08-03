@@ -296,5 +296,64 @@ for pair in "1.4.0|20260101T000000Z" "dev|20260102T030405Z" "|20260103T000000Z" 
 done
 
 # =================================================================================================
+CASE="staged-stamp-is-spent-by-the-reboot"
+# HW-CAUGHT 2026-08-03, and invisible to every case above because it only appears on the SECOND
+# check, after a real reboot. GetPrimary answers with a slot NAME ("rootfs.1"); the BootSlot
+# property answers with a BOOTNAME ("B"). Comparing the two is never equal, so "is an update still
+# pending?" was permanently true, the stamp was never cleared, and Steam showed restart-pending
+# forever -- a device took exactly one OTA and then stopped being offered anything.
+#
+# Driven through staged_identity()'s own installer seam rather than a live bus: what matters is
+# which VALUES it compares, and a fake installer states them outright.
+cat >"$W/staged_test.py" <<'PY'
+import importlib.util, os, sys
+from importlib.machinery import SourceFileLoader
+# The client ships without a .py suffix, so the loader has to be named rather than inferred.
+loader = SourceFileLoader("nvu", os.environ["CLIENT"])
+spec = importlib.util.spec_from_loader("nvu", loader)
+nvu = importlib.util.module_from_spec(spec); loader.exec_module(nvu)
+
+class Ret:
+    def __init__(self, v): self.v = v
+    def unpack(self): return (self.v,)
+
+class Installer:
+    """primary is a slot NAME, exactly as rauc's GetPrimary answers."""
+    def __init__(self, primary, booted): self.primary, self.booted = primary, booted
+    def call_sync(self, method, *a, **k):
+        if method == "GetPrimary": return Ret(self.primary)
+        if method == "GetSlotStatus":
+            # bootname is carried because it is the WRONG value to compare against GetPrimary --
+            # it must be present for this case to be able to catch someone reaching for it again.
+            return Ret([(n, {"state": "booted" if n == self.booted else "inactive",
+                             "bootname": {"rootfs.0": "A", "rootfs.1": "B"}[n]})
+                        for n in ("rootfs.0", "rootfs.1")])
+        raise AssertionError(method)
+
+stamp = {"version": "9.9.9", "build": "20260101T000000Z"}
+fails = []
+
+# 1. the reboot happened: primary is the slot we are running. The stamp is spent.
+nvu.write_staged(stamp)
+if nvu.staged_identity(Installer("rootfs.1", "rootfs.1")) is not None:
+    fails.append("still reported restart-pending after the reboot into the primary slot")
+if os.path.exists(nvu.STAGED_FILE):
+    fails.append("the spent stamp was left on disk, so the next check repeats the bug")
+
+# 2. genuinely pending: installed into the other slot, not yet rebooted.
+nvu.write_staged(stamp)
+if nvu.staged_identity(Installer("rootfs.1", "rootfs.0")) != "9.9.9":
+    fails.append("did not report a genuinely pending update before the reboot")
+
+print("\n".join(fails))
+PY
+staged_out="$(CLIENT="$CLIENT" NOVADECK_OTA_STAGE="$W/stage" python3 "$W/staged_test.py" 2>&1)"
+if [ -z "$staged_out" ]; then
+  ok "the stamp is cleared by the reboot, and survives until it"
+else
+  while read -r line; do [ -n "$line" ] && bad "$line"; done <<<"$staged_out"
+fi
+
+# =================================================================================================
 printf '\ntest-update.sh: %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

@@ -104,8 +104,10 @@ rationale lives in the linked memories and commit history.
   `/home/deck/.ssh`, its own partition. Proven end to end in one run:
   `PKIDIR=$HOME/novadeck-pki make bundle` produced a 3.5G verity bundle signed by
   `O = novadeck, CN = novadeck OTA release`; `rauc install` was driven **as `deck` over SSH on a
-  release image with no `sudo` on the box at all** (rauc's D-Bus service + polkit, no password
-  anywhere), and the DEVICE's own keyring verified the signature (`Verifying signature done` at
+  release image with no `sudo` on the box at all** (rauc's D-Bus service, no password anywhere —
+  this originally said "+ polkit", which is wrong and was corrected 2026-08-03: rauc ships no
+  polkit policy, its BUS policy is simply open to every local process, see the item below), and
+  the DEVICE's own keyring verified the signature (`Verifying signature done` at
   20%); the reboot came back on SSH in ~35s booted from `rootfs.1 (b)`, with the **host key
   unchanged** (`SHA256:SqV+NzOd…d15pc` before and after) — so an OTA does NOT invalidate every
   already-paired machine, which was the sharpest unknown here. The ESP slot state confirms it was
@@ -213,6 +215,63 @@ rationale lives in the linked memories and commit history.
   is worse than the current gap. Note the existing comment there argues against a timeout that
   marks GOOD; this is the opposite direction (a timeout that gives UP) and needs its own argument,
   not that one inverted.
+
+  **DECISION 2026-08-03: the SteamUI update button ships WITHOUT this closed.** Accepted and
+  tracked, deliberately not mitigated. The failure needs a bad bundle to trigger, we control what
+  is published, and every bundle gets a hardware install before it reaches the server — so the
+  exposure is gated by the release process rather than by the device. Revisit when anyone other
+  than us can publish, or when the first bundle ships to a device we cannot physically reach.
+
+  **Two findings from that decision (2026-08-03), both of which narrow the solution space:**
+
+  1. **A message on screen is NOT a mitigation, and the reason is not "delivery is unreliable".**
+     The most likely cause of "the session never came up" after an OS update is a display-stack
+     regression — kernel, mesa and gamescope are exactly what a bundle carries. In that case the
+     thing that would draw the warning is broken by the same fault that made the warning necessary.
+     The mitigation fails *correlated* with the failure it reports, so for the dominant case it is
+     not partial coverage, it is no coverage. Any fix has to be display-independent.
+  2. **Phase 5 removed the signal a give-up timer would need to arm on.** `images/initramfs/init:189`
+     now writes `source=grub` on EVERY boot, and the stage-2 GRUB module increments `boot-attempts`
+     on every boot, so from userspace a post-update trial is indistinguishable from an OOBE first
+     boot — every boot looks unconfirmed until `mark-good` runs. That is what makes "arm the timer
+     only on a trial" (which would dodge the slow-first-boot collision entirely) impossible today.
+     The bootconf carries an `update` bool, but `_reference/steamos-efi/chainloader/config.c:44`
+     marks the whole update group deprecated, so building on it is borrowing trouble.
+     **Fix sketch:** `post-install.sh` already runs after every install and already writes the
+     bootconf — have it record "this slot is on trial from an update", and have `mark-good` clear
+     it. Small, explicit, ours.
+
+  **The reframing that makes a timer defensible**, and the reason "picking N is a real decision"
+  overstates the difficulty: a timer is NOT adjudicating "is this slot good". It is supplying the
+  boot attempts the failsafe already requires and that nothing currently generates. Recovery today
+  is guaranteed but stalled — the failsafe shows a menu at >=3 attempts and auto-picks the other
+  slot at >=6, and a counter of BOOT ATTEMPTS only advances when something causes a boot. A timer
+  turns ~6 human power-cycles into automatic ones, or into one if it calls `set-state self bad`
+  directly instead of feeding the counter. The cost asymmetry is the argument: a misfire on a
+  genuinely slow boot costs one reboot and a rolled-back good update, which the user can simply
+  re-apply; not firing costs an unbounded black screen and a flat battery.
+
+- [ ] **rauc's D-Bus policy lets ANY local process install a bundle** — found 2026-08-03 while
+  wiring the SteamUI update path. rauc 1.15.2 ships
+  `data/de.pengutronix.rauc.conf` = `<policy context="default"><allow
+  send_destination="de.pengutronix.rauc"/></policy>`, whose own comment reads *"This config allows
+  anyone to control rauc"*, and it ships **no polkit policy at all** (checked at `v1.15.2` in
+  `_reference/rauc`). So any local process — including anything the Steam client launches, i.e. any
+  game — can call `InstallBundle`, overwrite the inactive slot and arm a trial, or deny service by
+  holding the installer busy.
+  **Bounded, not harmless.** The signature is the real gate: the device installs only a bundle that
+  chains to `/etc/rauc/keyring.pem` with `check-purpose=codesign`, so this is not arbitrary code
+  execution and an attacker cannot install their own image. What they CAN do is force a slot
+  overwrite + reboot-arming with a validly-signed bundle, at a moment of their choosing.
+  **Already shipping — NOT introduced by the update work.** It is written down now because the UI
+  path is what makes it reachable by design rather than by someone with a shell. Deliberately not
+  fixed in the same change: narrowing it means shipping our own bus policy or polkit action, which
+  is a privilege-model change that deserves its own reasoning and its own hardware check that a
+  legitimate install still works from the SEAT session (not just over SSH — they are not the same
+  D-Bus subject).
+  **Correction this forces elsewhere:** the HW-validated item above credits "rauc's D-Bus service +
+  polkit" for the unprivileged install as `deck`. Polkit had nothing to do with it; the bus policy
+  is simply open. Corrected in place.
 
 - [x] **`novadeck-bootctl`'s RAUC backend contract has no offline coverage — FIXED 2026-07-28**,
   **HW-CONFIRMED 2026-07-28**: a full OTA install of a release-signed TEST bundle logged

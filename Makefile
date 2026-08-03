@@ -28,7 +28,10 @@ BUILD_IMG ?= novadeck-build
 # Optional knobs forwarded to the underlying scripts:
 #   BASE_CONFIG  repo-relative path to a full verbatim kernel .config (e.g. a ROCKNIX
 #                config) — skips the defconfig+fragment merge in kernel/build.sh.
-#   VERSION      RAUC bundle version (defaults to the date inside genbundle.sh).
+#   NOVADECK_VERSION  the release this build calls itself, stamped into /etc/novadeck-release AND
+#                carried by the RAUC bundle manifest. Empty (a local build) renders as `dev`, and
+#                the bundle then identifies itself by its build timestamp instead. CI sets it from
+#                the release tag. There is no separate bundle-version knob; see below.
 #   ESP          mounted EFI System Partition, for `make deploy`.
 #   NOVADECK_DEV=1  build a dev image. `set -a; . ./dev.env; set +a` sets this and the rest;
 #                dev.env is TRACKED and secret-free, and sources dev.env.local (gitignored) for
@@ -42,7 +45,6 @@ BUILD_IMG ?= novadeck-build
 #   NOVADECK_SSH_PUBKEY  root's authorized_keys on a dev card. dev.env generates a throwaway key
 #                under work/dev-ssh/ rather than using your personal one.
 BASE_CONFIG ?=
-VERSION     ?=
 
 OUT := out
 
@@ -99,9 +101,30 @@ DEV_ENV := -e NOVADECK_DEV -e NOVADECK_WIFI -e NOVADECK_WIFI_SSID -e NOVADECK_WI
 # device can name the release it came from. NOVADECK_VERSION is set by CI from the release tag and
 # is empty for a local build, which assemble-rootfs.sh renders as `dev`. The git sha is resolved on
 # the HOST: /src is bind-mounted into the container, but git itself is not in the build image.
+#
+# THIS IS THE ONLY VERSION KNOB, and as of 2026-08-03 it is also the bundle's. It used to be one of
+# two: `VERSION` named the RAUC bundle and defaulted to today's date inside genbundle.sh, entirely
+# independently of what the image called itself. The OTA client compares the manifest's identity
+# against the device's /etc/novadeck-release to decide whether an update is available, so two
+# unrelated strings meant that comparison was meaningless — a device could be offered its own build
+# forever, or never be offered a real one. images/genbundle.sh now reads the identity back OUT of
+# the assembled image (out/images/rootfs.release) instead of being told, so the bundle cannot name
+# a version the bytes inside it do not carry, and `VERSION` is GONE rather than kept as a
+# cross-check: with $(VERSION_STAMP) below, a stale image cannot survive a version change, so a
+# second knob could only ever be redundant or wrong.
 NOVADECK_VERSION ?=
 NOVADECK_GIT     := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 ID_ENV := -e NOVADECK_VERSION -e NOVADECK_GIT=$(NOVADECK_GIT)
+
+# NOVADECK_VERSION changes the rootfs CONTENT (the /etc/novadeck-release it stamps), and make cannot
+# see environment variables — the same trap NOVADECK_DEV needed $(MODE_STAMP) for, with the same
+# silent symptom: an existing rootfs.img looks up-to-date to a `NOVADECK_VERSION=1.4.0 make bundle`,
+# the assembler is skipped, and you ship a bundle whose image still identifies itself as the
+# previous build. genbundle.sh would then name the bundle after those older bytes, which is honest
+# but not what was asked for. Encode the version in a stamp the rootfs depends on, so changing it
+# re-assembles. A re-assembly, not a base or kernel rebuild — the correct price for changing what
+# the image calls itself.
+VERSION_STAMP := work/.rootfs-version-$(if $(NOVADECK_VERSION),$(NOVADECK_VERSION),dev)
 
 # NOVADECK_DEV changes the rootfs CONTENT (Wi-Fi profile, SSH host keys + authorized_keys) but is
 # an environment variable, which make cannot see. Without this, an existing release rootfs.img looks
@@ -295,7 +318,7 @@ help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
 	  | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-12s\033[0m %s\n",$$1,$$2}'
 	@echo
-	@echo "Knobs: BASE_CONFIG VERSION ESP OVERLAY_PULL   dev build: set -a; . ./dev.env; set +a"
+	@echo "Knobs: BASE_CONFIG NOVADECK_VERSION ESP OVERLAY_PULL   dev build: set -a; . ./dev.env; set +a"
 
 all: sdcard ## Alias for `sdcard` (the full bring-up image)
 
@@ -608,12 +631,18 @@ $(MODE_STAMP):
 	@mkdir -p $(@D) && rm -f work/.rootfs-mode-* && touch $@
 	@echo "[novadeck] rootfs mode: $(ROOTFS_MODE)"
 
+# Same shape, same reason, for NOVADECK_VERSION (see its definition): one marker at a time, and
+# changing the version re-creates it newer than the rootfs, which re-assembles.
+$(VERSION_STAMP):
+	@mkdir -p $(@D) && rm -f work/.rootfs-version-* && touch $@
+	@echo "[novadeck] rootfs version: $(if $(NOVADECK_VERSION),$(NOVADECK_VERSION),dev)"
+
 # $(INITRAMFS), $(STEAMCL) and $(GRUB) are prerequisites because the root CARRIES its own boot
 # half: /boot/{Image,initramfs-novadeck.img,dtbs} that the slot's stage 2 boots, plus the
 # /usr/lib/novadeck/boot mirror the RAUC hook refreshes the ESP and the slot's efi partition FROM.
 # That is what makes "this root and the software that boots it came from one build" true by
 # construction. No cycle: the initramfs is built from work/base, never from the assembled root.
-$(ROOTFS): $(KERNEL) $(INITRAMFS) $(STEAMCL) $(GRUB) $(BASE_STAMP) $(FW_LINUX) $(FW_QCOM) $(STEAM_SEED) $(ASSEMBLE_SRC) $(MODE_STAMP) | $(BUILD_STAMP)
+$(ROOTFS): $(KERNEL) $(INITRAMFS) $(STEAMCL) $(GRUB) $(BASE_STAMP) $(FW_LINUX) $(FW_QCOM) $(STEAM_SEED) $(ASSEMBLE_SRC) $(MODE_STAMP) $(VERSION_STAMP) | $(BUILD_STAMP)
 	$(DOCKER) $(DEV_ENV) $(ID_ENV) -e NOVADECK_DEBUG $(BUILD_IMG) \
 	  images/assemble-rootfs.sh /src/work/base
 
@@ -649,9 +678,13 @@ $(SDCARD): $(ROOTFS) $(VARIMG) $(VARIMG_B) $(STEAMCL) $(GRUB) $(STEAM_SEED) imag
 # PKIDIR=~/novadeck-pki (mounts the PKI at /pki and points RAUC_CERT/RAUC_KEY at it), or set
 # RAUC_CERT/RAUC_KEY yourself to paths the CONTAINER can see -- repo-relative ones resolve under
 # /src, anything else needs PKIDIR or a mount of your own.
+#
+# No version argument: genbundle.sh reads the identity out of the image it is wrapping
+# (out/images/rootfs.release, written by the same assembler run that produced rootfs.img). Set
+# NOVADECK_VERSION before the rootfs is built, not here.
 bundle: $(ROOTFS) | $(BUILD_STAMP) ## Build a signed RAUC update bundle (in container; PKIDIR= to sign for real)
 	$(DOCKER) $(PKI_MOUNT) -e RAUC_CERT="$(RAUC_CERT)" -e RAUC_KEY="$(RAUC_KEY)" $(BUILD_IMG) \
-	  images/genbundle.sh $(VERSION)
+	  images/genbundle.sh
 
 # ==============================================================================
 # Deploy (host) — copy the stage-1 steamcl tree onto a mounted ESP

@@ -97,9 +97,15 @@ jobs:
     outputs:
       card_url: ${{ steps.publish.outputs.url }}
     env:
-      # VERSION is the Makefile knob genbundle.sh reads; NOVADECK_VERSION is what the Makefile's
-      # ID_ENV forwards into the rootfs container so images/assemble-rootfs.sh can stamp
-      # /etc/novadeck-release. Both, or a card ships identifying itself as `dev`.
+      # NOVADECK_VERSION is the ONLY version knob the build has. The Makefile's ID_ENV forwards it
+      # into the rootfs container, images/assemble-rootfs.sh stamps it into /etc/novadeck-release,
+      # and images/genbundle.sh reads it back out of the assembled image to name the bundle. Absent,
+      # the artifact ships identifying itself as `dev`.
+      #
+      # There used to be a second knob, `VERSION`, which named the bundle independently — the pair
+      # could disagree, and the OTA client's update check compares exactly those two strings. It was
+      # removed 2026-08-03. VERSION below is a plain workflow variable feeding publish-card.sh's
+      # first argument (the R2 path prefix for a card), and is unrelated to the build.
       VERSION: ${{ inputs.version }}
       NOVADECK_VERSION: ${{ inputs.version }}
       ARTIFACT: ${{ inputs.artifact }}

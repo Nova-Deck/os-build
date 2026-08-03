@@ -142,8 +142,18 @@ design — that is the shipping first-boot condition, and the only honest way to
 ### Build and sign a bundle
 
 ```sh
-PKIDIR=$HOME/novadeck-pki make bundle VERSION=<version>
+NOVADECK_VERSION=<version> PKIDIR=$HOME/novadeck-pki make bundle
 ```
+
+**The version has to be set before the rootfs is built, not at bundling time.** `NOVADECK_VERSION`
+is stamped into the image's `/etc/novadeck-release`, and `genbundle.sh` reads it back out of the
+image to name the bundle — so the bundle can never claim a version its payload does not carry. That
+equality is what the device's update check compares, so it is not cosmetic. Changing the version
+re-assembles the rootfs (a few minutes; not a base or kernel rebuild).
+
+Omit it and the image calls itself `dev`; the bundle is then named after its build timestamp, which
+is still unique per build but is not a release. There is no separate bundle-version knob — the old
+`VERSION=` was removed on 2026-08-03 precisely because it could disagree with the image.
 
 `PKIDIR` is not optional for anything a device will accept. Without it `genbundle.sh` mints an
 **ephemeral 7-day dev cert**, deleted with its tempdir, which the device keyring rejects on

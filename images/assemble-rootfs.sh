@@ -147,6 +147,18 @@ mkdir -p "$stage/etc"
   echo "NOVADECK_GIT=${NOVADECK_GIT:-unknown}"
 } >"$stage/etc/novadeck-release"
 
+# The same three fields are needed OUTSIDE the image, by images/genbundle.sh: a RAUC bundle has to
+# name the version it carries, and the OTA client compares that name against this very file on the
+# device. Deriving it a second time from the environment is how those two drifted apart in the first
+# place (see the Makefile's NOVADECK_VERSION block) — the bundle was date-stamped while the image
+# called itself something else, and the comparison the whole update path rests on compared two
+# unrelated strings. So the identity is stamped ONCE, here, and everything downstream reads it back.
+#
+# It is copied rather than re-generated for the same reason, and it is copied AT THE END of this
+# script (section 5's `mkdir -p "$IMGDIR"` is the first thing that may create the directory) so a
+# failed assembly cannot leave a sidecar describing an image that was never written.
+release_file="$stage/etc/novadeck-release"
+
 # 4b. RELEASE overlay payload (SteamOS layers B/C/D). Every SoC-agnostic rootfs overlay —
 # the gamescope-session plumbing, the HW-support backings, the InputPlumber device/profile
 # config, the ALSA UCM2 machine profiles, the FEX runtime config and the native arm64 Steam
@@ -898,6 +910,12 @@ install -d -m0755 "$varstage"
 # a second full multi-gigabyte copy of the image purely to stamp eleven characters on it.
 rm -f "$IMG"
 mkfs.btrfs --rootdir "$stage" --compress zstd --shrink -L novadeck-root-A -f "$IMG" >/dev/null
+
+# The identity sidecar (see section 4), beside the image and written only now that there is an image
+# to describe. This is the /etc/novadeck-release that is INSIDE $IMG, byte for byte — genbundle.sh
+# reads it to name the bundle, and the device compares the bundle's name against its own copy.
+# Reading it back out of the btrfs image instead would need `btrfs restore` for four lines.
+cp "$release_file" "$IMGDIR/rootfs.release"
 
 # Report the APPARENT size, not the allocated one. `mkfs.btrfs --shrink` leaves the image sparse
 # (~2 GiB of holes), so a bare `du -h` understates it by that much -- and this number is what

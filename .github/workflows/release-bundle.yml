@@ -48,7 +48,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Bundle version (default: the date, chosen inside genbundle.sh)'
+        description: 'Bundle version (default: empty — the image stamps itself `dev` and the bundle is named after its build timestamp)'
         required: false
         type: string
         default: ''
@@ -78,7 +78,9 @@ jobs:
           elif [ "$GITHUB_REF_TYPE" = tag ]; then
             v="${REF_NAME#ota/}"
           else
-            # Empty is legitimate here, unlike the card path: genbundle.sh defaults to the date.
+            # Empty is legitimate here, unlike the card path: the image then calls itself `dev` and
+            # genbundle.sh names the bundle after its build timestamp, which is still unique per
+            # build. A dispatch with no version is a smoke test, and it is labelled as one.
             v=""
           fi
           echo "version=$v" >> "$GITHUB_OUTPUT"

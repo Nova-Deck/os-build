@@ -2196,11 +2196,13 @@ rationale lives in the linked memories and commit history.
   against a stale lock it logs `mesa: no installed artifacts — no pin written`, **exits 0**, and
   leaves the previous version's pin in place.
 
-- [ ] **The journal cap is committed but NOT deployed to the live server** — `ccd6098` adds the
-  `SystemMaxUse=200M` drop-in to `ota/setup-server.sh`, and `5e12af8` documents the disk budget it
-  protects, but the running instance still has journald at its Ubuntu default (10% of the
-  filesystem, up to 4G). Applying it is a re-run of `setup-server.sh`, which is idempotent and
-  reports state without changing it on a second pass — see *The server* in `docs/ota.md`.
+- [x] **Journal cap — DEPLOYED 2026-08-03 18:22 UTC** — `ccd6098` adds the `SystemMaxUse=200M`
+  drop-in to `ota/setup-server.sh` and `5e12af8` documents the disk budget it protects. Verified on
+  the instance, not assumed: `/etc/systemd/journald.conf.d/10-novadeck-cap.conf` is byte-identical
+  to the one the script writes, `systemd-journald` shows `ActiveEnterTimestamp` 18:22:06 UTC, and
+  the journal sits at **191.9M** — i.e. the cap is not merely configured, the vacuum actually ran
+  against the 242M that was already there. Disk 2.4G of 96G, so the ~12G retention budget
+  (`KEEP=3` at ~4G) is intact.
 
 - [ ] **Move the `R2_*` card credentials into their own protected environment** — split out of the
   OTA signing work (2026-08-03), which put `RAUC_CERT_PEM`/`RAUC_KEY_PEM` into a protected

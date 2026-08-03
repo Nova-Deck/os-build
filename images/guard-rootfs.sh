@@ -386,6 +386,34 @@ if [ "$rauc_ok" = 1 ] && [ -s "$STAGE/usr/bin/novadeck-bootctl" ]; then
   done
 fi
 
+# --- the OTA client SteamUI drives (Phase 3) -----------------------------------------------------
+#
+# What Steam actually executes is /usr/bin/steamos-polkit-helpers/steamos-update, which execs the
+# client. Three things have to survive the copy into $STAGE, and each fails SILENTLY on a device
+# with no serial console — the symptom is the update button in Settings doing nothing at all.
+#
+# THE SYMLINK IS THE ONE THAT NEEDS SAYING. fs-overlay/usr/bin/steamos-update -> novadeck-update is
+# the FIRST symlink in usr/bin/, and `btrfs restore` drops symlinks unless it is given -S: a tree
+# extracted for verification would show it simply absent, which reads as "we never shipped it"
+# rather than "the extraction lost it". Assert it is still a symlink, not merely present, so a copy
+# that dereferenced it (cp without -a, an rsync without -l) is caught here rather than by its
+# absence somewhere downstream. See [[declared-invariants-need-assertions]].
+for f in "$STAGE/usr/bin/novadeck-update" "$STAGE/usr/bin/steamos-polkit-helpers/steamos-update"; do
+  if [ ! -s "$f" ]; then
+    bad "${f#"$STAGE"} is missing — SteamUI's update button has nothing to call"
+  elif [ ! -x "$f" ]; then
+    # The exact failure that produced the OOBE black screen: present, correct, and not executable.
+    bad "${f#"$STAGE"} is not executable — Steam runs it directly, so a lost mode bit is a dead button"
+  fi
+done
+if [ ! -L "$STAGE/usr/bin/steamos-update" ]; then
+  if [ -e "$STAGE/usr/bin/steamos-update" ]; then
+    bad "/usr/bin/steamos-update is a regular file — it must stay a SYMLINK to novadeck-update (a dereferencing copy: cp without -a, rsync without -l)"
+  else
+    bad "/usr/bin/steamos-update is missing — the CLI entry point to the update client (btrfs restore drops symlinks without -S)"
+  fi
+fi
+
 # Presence is not installability. Every check above passed on a tree whose system.conf rejected
 # every bundle we can sign: the release cert's codeSigning EKU and RAUC's default smimesign
 # verification purpose disagreed, and the first thing that would have noticed was `rauc install`

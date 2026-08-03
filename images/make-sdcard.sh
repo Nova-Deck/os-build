@@ -362,5 +362,4 @@ ESP layout: /EFI/BOOT/{bootaa64.efi, steamcl-version, steamcl-restricted, fonts/
             /EFI/steamos/grubenv (shared stage-2 env — the saved board choice)
             /SteamOS/conf/{A,B}.conf (the per-image boot state)
 Filesystem labels: ESP NOVADECK | efi-A GRUB-A | efi-B GRUB-B (cosmetic; nothing resolves by them)
-There is no /KERNEL: ABL only boots via the stage-1 chainloader now (docs/phase5.md).
 EOF

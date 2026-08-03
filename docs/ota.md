@@ -86,13 +86,34 @@ There are two questions here, they are not the same one, and the second answers 
 | **a** | Does an OTA work *on* the new boot flow? | Whether the update path is sound at all |
 | **b** | Can a device on the **previous** boot flow be OTA'd *across* to the new one? | Whether the next card is a convenience or a **mandatory reflash for every device in the field** |
 
-Run **b**. It costs the same and subsumes a. It also needs no new card — flash the *already
-published* previous card.
+**(b) was ANSWERED on 2026-08-03, and the answer is no: `card/v0.2.0` is a mandatory reflash.** It
+was settled by reading both ends rather than by running it, because the two halves name the same
+missing file:
+
+- The phase-5 build ships **no** `/usr/lib/novadeck/boot.img` — `images/assemble-rootfs.sh:202`, the
+  boot *directory* replaces it.
+- A `card/v0.1.0` device's own `post-install.sh:194` hard-fails without exactly that file:
+  `die "the installed root carries no boot image at /usr/lib/novadeck/boot.img"`.
+
+**The reason this cannot be fixed in the bundle is the part worth remembering: RAUC runs the BOOTED
+slot's post-install handler, not the bundle's.** A v0.1.0 device runs v0.1.0's Phase-4b handler,
+which rotates `/KERNEL` and knows nothing of stage-2 GRUB, per-slot efi partitions or partsets. No
+change to a future bundle reaches that handler retroactively. Every device on a pre-phase-5 card is
+a reflash, once.
+
+The failure is safe for the running system but is **not a dry run**: the handler disarms the target
+(`:109`), re-randomises its fsid (`:115`) and reformats its `/var` (`:131`) *before* reaching the
+kernel step, so slot B is left overwritten and unbootable while slot A keeps running. It never
+re-arms (`:246-247`), so the device simply stays where it was.
+
+So **run (a)** — it no longer subsumes anything, and it is the path that actually ships. Both the
+card and the bundle are built locally, below.
 
 ```sh
-# 1. the device. For (b) flash the PUBLISHED previous card; for (a) build the new flow locally:
+# 1. the device: build the new boot flow locally and flash it. Give the CARD a version too, or
+#    both ends render `dev` and the client has no version change to detect.
 set -a; . ./dev.env; set +a
-make sdcard                                   # dev card, new boot flow
+NOVADECK_VERSION=<base> PKIDIR=$HOME/novadeck-pki make sdcard    # dev card, new boot flow
 
 # 2. a bundle the device will accept: a DEV image with a REAL signature.
 #    rauc gates on the signature, so this installs exactly like a release bundle.

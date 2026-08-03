@@ -2138,6 +2138,25 @@ rationale lives in the linked memories and commit history.
   delete the branch; if the front-half black still grates, merge it then.
   See [[boot-splash-plymouth]], [[sm8650-gamescope-session-plumbing]].
 
+- [ ] **`card/v0.2.0` is a MANDATORY REFLASH — every device on a pre-phase-5 card must be
+  re-imaged by hand, and the release notes have to say so.** Determined 2026-08-03 by reading both
+  ends, not by running it; the two halves name the same missing file. The phase-5 build ships **no**
+  `/usr/lib/novadeck/boot.img` (`images/assemble-rootfs.sh:202` — the boot *directory* replaces it),
+  and a `card/v0.1.0` device's own `post-install.sh:194` hard-fails without exactly that file.
+  **The reason no future bundle can fix this is the durable part: RAUC runs the BOOTED slot's
+  post-install handler, not the bundle's.** A v0.1.0 device runs v0.1.0's Phase-4b handler, which
+  rotates `/KERNEL` and knows nothing of stage-2 GRUB, per-slot efi partitions or partsets. Nothing
+  shipped later reaches it. This is not a signing or a mode problem — the signature verifies and the
+  mode gate is publisher-side only ([[ota-steamui-pickup]]).
+  **The failure is safe but is not a dry run.** The handler disarms the target (`:109`),
+  re-randomises its fsid (`:115`) and reformats its `/var` (`:131`) *before* the kernel step, so
+  slot B is left overwritten and unbootable while slot A keeps running; it never re-arms
+  (`:246-247`). A user who tries the OTA loses nothing they were using, but B is not recoverable
+  without a reflash either.
+  **Consequence for validation:** test (b) no longer subsumes test (a), which was the plan of
+  record. (a) — OTA between two phase-5 builds — has to be run on its own and is the only thing
+  that validates the path that actually ships. `docs/ota.md` is updated.
+
 - [ ] **Move the `R2_*` card credentials into their own protected environment** — split out of the
   OTA signing work (2026-08-03), which put `RAUC_CERT_PEM`/`RAUC_KEY_PEM` into a protected
   `release-signing` environment restricted to `ota/v*` tags, with `loki666` as required reviewer.

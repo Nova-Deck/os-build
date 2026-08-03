@@ -373,7 +373,10 @@ in for months. Deleting them would turn every initramfs packaging bug into an un
 loop. Design C is still honoured in that the cmdline is *never* consulted when the slot state is
 readable; it is a degrade path, and taking it logs loudly.
 
-**Three cases that are easy to get wrong**, all covered by `images/initramfs/test-slot-state.sh`:
+**Three cases that are easy to get wrong**, all covered at the time by
+`images/initramfs/test-slot-state.sh` — deleted in phase 5 (`0d714ed`) along with the /KERNEL flow
+it exercised; the equivalent coverage now lives in the `images/test-*.sh` suites that `make test`
+runs:
 honouring `pending` without a durable decrement would retry a broken slot *forever* (the counter
 never reaches zero, so the rollback never fires), so a read-only ESP boots `active` instead; a
 slot that will not mount clears `pending` as it fails over, so the next boot does not burn a

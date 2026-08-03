@@ -27,7 +27,7 @@ pkgname=(
   vulkan-mesa-device-select
   vulkan-mesa-layers
 )
-pkgver=26.1.5
+pkgver=26.1.6
 _pkgver=${pkgver/[a-z]/-&}
 pkgrel=1
 epoch=1
@@ -95,12 +95,20 @@ options=(
 source=(
   "https://archive.mesa3d.org/mesa-$_pkgver.tar.xz"
 )
-# Provenance: sha256 of mesa-26.1.5.tar.xz. build-overlay.sh runs makepkg with --skipinteg (our
+# Provenance: sha256 of mesa-26.1.6.tar.xz. build-overlay.sh runs makepkg with --skipinteg (our
 # locally-added patch sources have no checksums), so this is recorded for human/CI verification and
 # matches the pinned URL+sha in packages/mesa/source.pin. The upstream .sig + validpgpkeys are
 # dropped (the pipeline does not do PGP verification).
+#
+# WHERE THIS HASH COMES FROM, because it is not self-evident and the obvious source does not exist:
+# mesa publishes NO .sha256sum next to the tarball (that URL 404s), only a detached .sig. So this
+# was computed locally from a tarball whose PGP signature verifies as a GOOD signature from Eric
+# Engestrom, key 5755 1DE1 5B96 8F63 41C2 48F6 8D8E 31AF C324 28A6 — the SAME issuer fingerprint
+# that signed 26.1.5, the release this image already shipped and validated on hardware. Checking
+# the signer against the previous release is the load-bearing step: an unknown-trust "good
+# signature" on its own only proves the tarball matches whatever key came with it.
 sha256sums=(
-  '79e421c7ce18cd9e790b8375920325779f10798630bf30e0b22f1a21c8617122'
+  '5296b88a0f1e012e2cb9ada150a2bbadf728ca81e5a4fb2ab43c83a4d2158606'
 )
 
 prepare() {

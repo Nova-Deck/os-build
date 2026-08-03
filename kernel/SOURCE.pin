@@ -1,16 +1,33 @@
 # novadeck kernel source pin — Phase 1
 # The TARBALL + its sha256 is the canonical pin. Validated 2026-06-17; re-pinned 2026-07-25
-# (7.1.5, HW-validated on Pocket S2 + Pocket ACE).
-version:    7.1.5
-url:        https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.1.5.tar.xz
-sha256:     22a0196b3cbcdf34dc27b77561f4d040585fd3447edc9ab3531a1ac79e3041e7
-git_tag:    v7.1.5
-git_commit: 155b42bec9cbb6b8cdc47dd9bd09503a81fbe493
+# (7.1.5, HW-validated on Pocket S2 + Pocket ACE); re-pinned 2026-08-03 (7.1.6).
+version:    7.1.6
+url:        https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.1.6.tar.xz
+sha256:     995dd7188d924662b94b48fd6fb783587267590e5b8bb33dade2c771e7d855c1
+git_tag:    v7.1.6
+git_commit: 2609d60e2f6d0b8a96563baa08b56482962cebaa
 
-# Config validation (kernel/kernel.config) against THIS tree:
-#   - every referenced CONFIG_* symbol exists in 7.1.5.
-#   - all 50 out-of-tree patches in kernel/patches/ apply to 7.1.5 with zero rejects.
-# Corrections applied during validation:
+# The sha256 above is the one kernel.org publishes in the SIGNED sha256sums.asc for v7.x, not a
+# hash of whatever the CDN happened to serve — checked 2026-08-03. git_commit is the DEREFERENCED
+# tag (`git ls-remote 'v7.1.6^{}'`), matching how the 7.1.5 line was recorded; the annotated tag
+# object is ea09c82324a76af76dc0cadf3fff4fef7025ca57 and is NOT what belongs here.
+
+# Config validation (kernel/kernel.config) against THIS tree, re-run 2026-08-03 for 7.1.6:
+#   - all 356 referenced CONFIG_* symbols exist in the PATCHED 7.1.6 tree. Zero corrections were
+#     needed this time — the renames below were already carried in from the 7.1.5 bump.
+#   - all 52 out-of-tree patches in kernel/patches/ apply to 7.1.6 with ZERO rejects, applied
+#     CUMULATIVELY in lexical order, which is the only order that means anything (see below).
+#     10 of them need fuzz; kernel/build.sh passes no -F0, so patch's default fuzz=2 accepts them.
+#
+# HOW TO RE-RUN THIS VALIDATION, and the mistake that makes it lie: patches must be applied
+# cumulatively to ONE tree, exactly as kernel/build.sh:56 does. Dry-running each patch independently
+# against a pristine tree reports ~8 false failures, because several patches depend on files an
+# earlier patch CREATES (1002 patches the qcom-hv-haptics.c that 1000 adds; 1003 patches the
+# rsinput.c that 0031 adds) and the six drm/panel patches all extend one Makefile, each one's
+# context containing the line its predecessor added. Zero of those are real.
+#
+# Corrections applied during the 7.1.5 validation, still current and still load-bearing in
+# kernel.config — do not "restore" the left-hand names:
 #   CRYPTO_MICHAEL_MIC  -> DROPPED (upstream removed it from crypto/Kconfig; mac80211 carries its
 #                          own michael_mic, so TKIP is unaffected). Was already a dead symbol in
 #                          7.1.3 and silently ignored by kconfig.

@@ -50,6 +50,11 @@ not also rewrite.
 
 ## Cutting an update
 
+**`rsync` must be installed on the publishing workstation.** `publish-bundle.sh` uses it for both
+the bundle upload and the `latest.json` flip, and it is *not* in the Arch base install — a
+workstation without it fails at the upload step. The server has it. The script now refuses up front
+rather than discovering this minutes in; see its own comment for why the check sits where it does.
+
 ```sh
 # 1. build and sign — the version must be set BEFORE the rootfs, see docs/RUNBOOK.md
 NOVADECK_VERSION=0.2.0 PKIDIR=$HOME/novadeck-pki make bundle

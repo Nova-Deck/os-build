@@ -65,6 +65,18 @@ BUNDLE_ABS="$(cd "$(dirname "$BUNDLE")" && pwd)/$(basename "$BUNDLE")"
 NAME="$(basename "$BUNDLE_ABS")"
 
 # --- ssh/rsync plumbing --------------------------------------------------------------------------
+# rsync is checked HERE, before any work, because it is needed LAST: the upload (step 4) and the
+# latest.json flip (step 5). Without this the run gets all the way through the signature gate, the
+# version read and the remote space check -- minutes, on a 4G bundle -- and only then dies on a
+# `command not found` from inside a pipeline, where set -e's report names neither the tool nor the
+# fix. It is not in the Arch base install, and this bit on 2026-08-03 on a workstation that had
+# never published before. ssh gets no such check on purpose: it is used from step 2 onward, so its
+# absence is already immediate and self-describing.
+command -v rsync >/dev/null 2>&1 || die "rsync is not installed, and this script cannot publish
+  without it: it uploads the bundle and flips latest.json over rsync-over-ssh. The SERVER has it;
+  this is the publishing workstation that does not. Install it and re-run -- nothing has been
+  uploaded, so there is nothing to clean up."
+
 # BatchMode so a missing key fails immediately instead of hanging on a password prompt in CI.
 SSH_OPTS=(-o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15)
 [ -n "$SSH_KEY" ] && SSH_OPTS+=(-i "$SSH_KEY")

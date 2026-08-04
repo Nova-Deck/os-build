@@ -669,8 +669,14 @@ $(GRUB): boot/grub.sh boot/gen-grub-cfg.sh boot/grub.pin boot/boards.map \
 $(VARIMG): $(ROOTFS)
 $(VARIMG_B): $(ROOTFS)
 
+# NOVADECK_DEV and NOVADECK_SLOT_B have to be FORWARDED, not just set: this rule ran through plain
+# $(INBUILD), so neither reached the container and `NOVADECK_SLOT_B=0 make sdcard` silently did
+# nothing at all. It matters more now that the mode picks the default -- make-sdcard.sh populates
+# slot B for a dev card and leaves it empty for a release card, and an unforwarded NOVADECK_DEV
+# would build every card release-shaped. No mode stamp is needed on top: $(ROOTFS) already depends
+# on $(MODE_STAMP), so flipping the mode rebuilds the rootfs and this rule with it.
 $(SDCARD): $(ROOTFS) $(VARIMG) $(VARIMG_B) $(STEAMCL) $(GRUB) $(STEAM_SEED) images/make-sdcard.sh | $(BUILD_STAMP)
-	$(INBUILD) images/make-sdcard.sh
+	$(DOCKER) -e NOVADECK_DEV -e NOVADECK_SLOT_B $(BUILD_IMG) images/make-sdcard.sh
 
 # Signed RAUC OTA bundle (Phase 4). Dev builds mint an ephemeral cert. For a real signature use
 # PKIDIR=~/novadeck-pki (mounts the PKI at /pki and points RAUC_CERT/RAUC_KEY at it), or set

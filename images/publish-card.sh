@@ -8,10 +8,11 @@
 # Metadata is built by its own script rather than here, because the non-publishing path needs the
 # identical checksums and provenance for its workflow artifact — one producer, two consumers.
 #
-# WHY THIS EXISTS RATHER THAN A RELEASE ASSET. A release card compresses to ~9 GiB (measured: the
-# payload is ~11.5G of ALREADY-compressed content — both btrfs roots carry compress=zstd — so no
-# format or level gets it near a GiB). GitHub caps a single release asset at 2 GiB, which rules the
-# Release out as the transport by 4x. GHCR was the other candidate and was ruled out by test: a bare
+# WHY THIS EXISTS RATHER THAN A RELEASE ASSET. A release card compresses to 5.08 GiB (measured
+# 2026-08-04, pigz -6, 19G apparent / 11G real): the payload is ALREADY-compressed content (the
+# btrfs root carries compress=zstd), so no format or level gets it near a GiB. GitHub caps a single
+# release asset at 2 GiB, which rules the Release out as the transport by 2.5x. GHCR was the other
+# candidate and was ruled out by test: a bare
 # blob URL answers 401 even for a public package, so a browser cannot fetch one and every consumer
 # would need oras or a curl+jq token dance. R2 is what leaves a person with a link they can click.
 #
@@ -24,9 +25,12 @@
 # workspace gets swept into artifacts and caches. The token they belong to should be scoped to this
 # ONE bucket with Object Read & Write: it is a write credential to a public host.
 #
-# RETENTION IS N=1, deliberately. R2's free tier is 10 GB and one card is ~9 GiB, so keeping two
-# cards is the moment this stops being free. Older prefixes are pruned on publish; bump KEEP if you
-# decide to pay for a back catalogue.
+# RETENTION IS N=1, deliberately, and it STAYS N=1 even though the card halved. R2's free tier is
+# 10 GB = 9.31 GiB; two 5.08 GiB cards are 10.16 GiB, which is over it. Dropping slot B took the
+# card from 8.97 to 5.08 GiB (measured 2026-08-04 — release cards carried a second copy of the root
+# in slot B until then), so the margin is far healthier than it was at 96% of the tier, but it is
+# still not two cards. Older prefixes are pruned on publish; bump KEEP if you decide to pay for a
+# back catalogue.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

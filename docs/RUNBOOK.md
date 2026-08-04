@@ -76,12 +76,21 @@ make verify-card                              # GPT, ESP, per-slot filesystem id
 sudo dd if=out/images/sdcard.img of=/dev/sdX bs=4M conv=fsync status=progress
 ```
 
-`make-sdcard.sh` lays the **full** GPT and populates **both** slots — ESP + root-A/-B + var-A/-B +
-home, with `/home` pre-seeded with the native arm64 Steam client and root-B carrying a distinct
-btrfs fsid. Each `efi-*` partition carries that slot's stage-2 GRUB, its `grub.cfg` and the
-partsets that identify it. B is populated rather than left empty because a slot switch cannot
-be proven against a slot that does not boot; set `NOVADECK_SLOT_B=0` for a faster local loop, at the
-cost of a card whose first slot switch can only exercise the failover path.
+`make-sdcard.sh` lays the **full** GPT — ESP + root-A/-B + var-A/-B + home, with `/home` pre-seeded
+with the native arm64 Steam client. Each `efi-*` partition carries that slot's stage-2 GRUB, its
+`grub.cfg` and the partsets that identify it.
+
+**Whether slot B is populated follows the build mode**, and `NOVADECK_SLOT_B=0|1` overrides it:
+
+* **Dev card** (`NOVADECK_DEV=1`): B is populated, carrying a distinct btrfs fsid, because a slot
+  switch cannot be proven against a slot that does not boot. Set `NOVADECK_SLOT_B=0` for a faster
+  local loop, at the cost of a card whose first slot switch can only exercise the failover path.
+* **Release card**: B is left empty **and no `B.conf` is written**. B is a byte-identical copy of an
+  already-compressed root, so it survives release compression whole — ~4 of the ~9 GiB a card
+  compresses to, for a failover window that closes the first time RAUC writes the slot. Omitting the
+  conf is what keeps steamcl from offering the empty slot as a boot candidate; see the seeding site
+  in `images/make-sdcard.sh` for the `SUPERMAX_BOOT_FAILURES` path it closes. The first update
+  writes B in full and creates its conf.
 
 Run `verify-card` before you commit a card to a device — it asserts the built image rather than
 the source tree, which is the only place the GPT, the ESP contents and the per-slot filesystem

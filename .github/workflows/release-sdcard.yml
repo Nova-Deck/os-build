@@ -97,7 +97,7 @@ jobs:
       R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
 
   # The Release carries only small files — checksums, the provenance pins, and the link. The card
-  # itself is 4x GitHub's 2 GiB per-asset cap and lives in R2; see images/publish-card.sh.
+  # itself is well over GitHub's 2 GiB per-asset cap and lives in R2; see images/publish-card.sh.
   #
   # A separate job so `contents: write` is scoped to it alone: the long build job, which runs far
   # more third-party code, stays read-only.

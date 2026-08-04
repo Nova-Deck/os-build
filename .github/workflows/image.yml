@@ -207,10 +207,17 @@ jobs:
 
       # gzip, not zstd, and level 6. MEASURED on a real card (19 G apparent / 17 G real, both slots
       # populated): gz -6 = 8.97 GiB in 33s, zstd -6 = 8.77 GiB in 7s, zstd -19 = 8.49 GiB in 444s.
-      # Every option lands 8.5-9.0 GiB because the payload is ALREADY compressed (both btrfs roots
-      # carry compress=zstd), so this is not a size decision — it is a compatibility one, and .gz is
-      # what balenaEtcher and Raspberry Pi Imager have opened for years. Note gzip's level knob does
-      # nothing at all here: -6 and -9 are byte-for-byte identical.
+      # Every option landed within 0.5 GiB of the others because the payload is ALREADY compressed
+      # (the btrfs root carries compress=zstd), so this is not a size decision — it is a
+      # compatibility one, and .gz is what balenaEtcher and Raspberry Pi Imager have opened for
+      # years. Note gzip's level knob does nothing at all here: -6 and -9 are byte-for-byte
+      # identical.
+      #
+      # Those numbers predate 2026-08-04, when release cards stopped populating slot B (a second
+      # copy of an incompressible root: see images/make-sdcard.sh). The same gz -6 over the same
+      # 19G-apparent card now measures 5.08 GiB — 3.89 GiB less, 43% off. Nothing about the CHOICE
+      # changes: the payload is still already-compressed and the formats still land within a
+      # fraction of each other, so the comparison above is kept as the record of why .gz.
       - name: compress the card
         if: inputs.artifact == 'sdcard'
         run: |

@@ -15,12 +15,23 @@
 # grubenv); each efi partition carries its own stage-2 GRUB + identity partsets. There is no
 # /KERNEL and no /NOVADECK/STATE.0 — that was design C; the slot state IS the confs now.
 #
-# WHY B IS POPULATED RATHER THAN LEFT EMPTY (Phase 4b): the deliverable of the boot-path pass is
-# that a slot switch and a rollback are provable by hand, and you cannot prove a switch to a slot
-# that does not boot — an empty B can only ever exercise the failure path. It is also the state a
-# device is never in again after its first real update, so testing against it tests a fiction.
-# Flash time is unchanged (the dd already writes the whole full-size image including its zeros);
-# the cost is build time and out/ disk. Set NOVADECK_SLOT_B=0 to skip it for a faster local loop.
+# WHY B IS POPULATED ON A DEV CARD AND EMPTY ON A RELEASE CARD. The default follows NOVADECK_DEV;
+# NOVADECK_SLOT_B=0|1 overrides it in either direction.
+#
+# Dev (Phase 4b): the deliverable of the boot-path pass is that a slot switch and a rollback are
+# provable by hand, and you cannot prove a switch to a slot that does not boot — an empty B can only
+# ever exercise the failure path. It is also the state a device is never in again after its first
+# real update, so testing against it tests a fiction.
+#
+# Release: B is a byte-identical copy of a root that is ALREADY zstd-compressed inside btrfs, so it
+# survives the release compression whole. Nothing dedupes it: the flash instruction is `gzip -dc`
+# (32 KiB window), and even zstd --long tops out at a 2 GiB window against a ~4 GiB gap between the
+# two copies. That is ~4 of the ~9 GiB a release card compresses to (images/publish-card.sh) — ~44%
+# of every download — bought to cover a failover window that closes the first time RAUC writes the
+# slot, which it writes in FULL and reads nothing prior out of. A user never hand-tests a slot
+# switch, and a fresh-card A failure is media failure, which will not politely spare B.
+#
+# Flash time is unchanged either way: the dd writes the whole full-size image including its zeros.
 #
 # Unprivileged: builds each filesystem in a plain file (mtools / mkfs.ext4 -d / mksquashfs),
 # lays the GPT with sgdisk via images/genpart.sh, and dd's each filesystem into its partition
@@ -56,8 +67,10 @@ GRUB_CFG_A="$BOOT/grub-a.cfg"           # per-slot grub.cfg (stage 2, A)
 GRUB_CFG_B="$BOOT/grub-b.cfg"
 GRUB_FONT="$BOOT/fonts/dejavu-mono.pf2" # stage-2 boot font ($prefix/fonts/ in grub.cfg)
 
-# Populate the B slot too (default on). See the header for why.
-SLOT_B="${NOVADECK_SLOT_B:-1}"
+# Populate the B slot too: on for a dev card, off for a release card. See the header for why.
+# Read the mode rather than defaulting to 1, so that forgetting to forward NOVADECK_DEV produces a
+# release-shaped card (small, one bootable slot) rather than silently shipping the 4 GiB copy.
+SLOT_B="${NOVADECK_SLOT_B:-$([ "${NOVADECK_DEV:-}" = 1 ] && echo 1 || echo 0)}"
 
 MIB=$((1024 * 1024))
 END_SLACK_MIB=2   # tail room for the backup GPT (well over its ~17 KiB)
@@ -230,8 +243,9 @@ fatdir() {  # <img> <msdos path, no leading '::'>
 #     fonts/default.pf2}
 #   /EFI/steamos/grubenv             stage-2 env block (saved_entry), seeded on ESP so the
 #                                    user's board choice survives slot updates
-#   /SteamOS/conf/A.conf|B.conf      the per-image boot state (bootconf's home). A is seeded with
-#                                    the newest boot-requested-at so the FIRST boot picks A
+#   /SteamOS/conf/A.conf[|B.conf]    the per-image boot state (bootconf's home). A is seeded with
+#                                    the newest boot-requested-at so the FIRST boot picks A. B.conf
+#                                    exists only when slot B is populated -- see the seeding site
 #
 # NOTHING RESOLVES THE ESP BY THIS LABEL. ABL finds it by type GUID (ef00), the OS mounts it by
 # PARTLABEL from /etc/fstab, and the stage-2 grub.cfg addresses it by partition index (falling back
@@ -280,9 +294,35 @@ EOF
 }
 conf_a="$(mktemp)"; conf_b="$(mktemp)"
 mkconf "$conf_a" A "$(date -u +%Y%m%d%H%M%S)"
-mkconf "$conf_b" B 0
 mcopy -i "$esp" "$conf_a" ::/SteamOS/conf/A.conf
-mcopy -i "$esp" "$conf_b" ::/SteamOS/conf/B.conf
+
+# NO B.conf WHEN B IS EMPTY, and this is load-bearing rather than tidiness. steamcl honours
+# image-invalid only as a SORT DEMOTION -- chainloader/bootload.c reads it into found[].disabled and
+# earlier_entry_is_newer() sorts disabled below enabled, but the steamos-efi README says it outright:
+# "This does not disable booting, it lowers this image's priority". A marked-invalid B is still a
+# candidate. Worse, set_menu_conf() deliberately picks the OTHER entry once the selected one passes
+# SUPERMAX_BOOT_FAILURES (6), and that pick is guarded ONLY by `found[alt_opt].tries <= tries` -- it
+# never consults the disabled flag, and a slot nothing has ever booted reports boot-attempts 0, so it
+# passes every time. Marking B invalid would not have closed that path.
+#
+# Omitting the conf closes it at the source. steamcl builds its candidate list by walking the EFI
+# partition handles (skipping the ESP), resolving each one's partsets/self to an image name, and then
+# requiring a config for that name: <esp>\SteamOS\conf\<name>.conf, falling back to SteamOS\bootconf
+# on the efi partition itself. With NEITHER present it does `continue` and the partition never enters
+# found[] at all. So efi-b can keep its full stage-2 GRUB and partsets (mkefi below runs
+# unconditionally, and nothing here writes the legacy SteamOS\bootconf) and B is still not a
+# candidate. found_cfg_count is then 1, def_opt is 0, and BOTH branches of the alt pick are false
+# (`def_opt > 0`, and `def_opt < found_cfg_count - 1` = `0 < 0`) -- so alt_opt stays def_opt and
+# nothing is switched. A is retried behind the failsafe menu, which is the right answer for a device
+# that genuinely has one populated slot, instead of being handed a slot with no kernel.
+#
+# It returns on its own the first time B becomes real: novadeck-bootctl's ensure_exists() runs
+# `bc config --image B || bc create --image B`, bootconf's create_missing defaults to on, RAUC's
+# set-primary goes through it, and post-install.sh then clears image-invalid on the slot it wrote.
+if [ "$SLOT_B" = 1 ]; then
+  mkconf "$conf_b" B 0
+  mcopy -i "$esp" "$conf_b" ::/SteamOS/conf/B.conf
+fi
 
 # 4d. efi-a / efi-b (p2/p3): each slot's STAGE-2 home. Per docs/phase5.md and the post-install
 # hook's refresh shape, both carry the same /EFI/steamos/{grubaa64.efi, grub.cfg, fonts} and the
@@ -352,7 +392,8 @@ partition (stage 2, per-slot grub.cfg + partsets), which boots the kernel in the
 /home (last partition) is pre-seeded with the deck user's Steam client and grows to fill the card.
 $([ "$SLOT_B" = 1 ] \
   && echo "Both slots carry a full system, so a switch is testable: novadeck-bootctl set-primary B" \
-  || echo "The B slots are empty (NOVADECK_SLOT_B=0) — a slot switch will fail over back to A.")
+  || echo "The B slots are empty and there is no B.conf, so steamcl sees ONE image and retries A
+rather than switching. The first update writes B in full and creates its conf.")
 
 The FIRST boot stops at the stage-2 board menu and waits: one image serves every board, so the DTB
 is the one thing the card cannot know. The choice is written to /EFI/steamos/grubenv on the ESP and
@@ -360,6 +401,6 @@ every boot after that takes it automatically (3s visible menu), including across
 
 ESP layout: /EFI/BOOT/{bootaa64.efi, steamcl-version, steamcl-restricted, fonts/default.pf2}
             /EFI/steamos/grubenv (shared stage-2 env — the saved board choice)
-            /SteamOS/conf/{A,B}.conf (the per-image boot state)
+            /SteamOS/conf/$([ "$SLOT_B" = 1 ] && echo '{A,B}' || echo 'A').conf (the per-image boot state)
 Filesystem labels: ESP NOVADECK | efi-A GRUB-A | efi-B GRUB-B (cosmetic; nothing resolves by them)
 EOF

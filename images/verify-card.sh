@@ -70,7 +70,7 @@ for p in "$P_ROOTA" "$P_ROOTB" "$P_VARA" "$P_VARB"; do
 done
 
 if [ -z "${U[$P_ROOTB]:-}" ]; then
-  ok "slot B is empty (NOVADECK_SLOT_B=0) — skipping the A/B identity checks"
+  ok "slot B is empty (release card, or NOVADECK_SLOT_B=0) — skipping the A/B identity checks"
   SLOT_B=0
 else
   SLOT_B=1
@@ -139,7 +139,17 @@ need_file ::/EFI/BOOT/steamcl-restricted  "/EFI/BOOT/steamcl-restricted"
 need_file ::/EFI/BOOT/fonts/default.pf2   "/EFI/BOOT/fonts/default.pf2"
 need_file ::/EFI/steamos/grubenv          "/EFI/steamos/grubenv"
 need_file ::/SteamOS/conf/A.conf          "/SteamOS/conf/A.conf"
-need_file ::/SteamOS/conf/B.conf          "/SteamOS/conf/B.conf"
+# B.conf must be PRESENT when B is populated and ABSENT when it is not -- the absence is what stops
+# steamcl's set_menu_conf() alt-entry pick from handing a 6-times-failed A over to a slot with no
+# kernel (images/make-sdcard.sh documents the mechanism). A B.conf on a card with an empty B is a
+# real defect, not a leftover, so assert it rather than skipping the check.
+if [ "$SLOT_B" = 1 ]; then
+  need_file ::/SteamOS/conf/B.conf        "/SteamOS/conf/B.conf"
+else
+  mtype -i "$IMG@@$espoff" ::/SteamOS/conf/B.conf >/dev/null 2>&1 \
+    && bad "B.conf present on a card with an empty slot B — steamcl would offer B as a boot candidate" \
+    || ok "no B.conf (empty slot B is not a boot candidate)"
+fi
 # steamcl-restricted must be present and EMPTY (it gates steamcl's own-device-only behaviour;
 # presence matters, content does not).
 mtype -i "$IMG@@$espoff" ::/EFI/BOOT/steamcl-restricted >"$T/f" 2>/dev/null \
@@ -153,15 +163,17 @@ mdir -i "$IMG@@$espoff" ::/NOVADECK >/dev/null 2>&1 && bad "/NOVADECK present on
 # confs: A is seeded with the newest boot-requested-at so the first boot picks A; B is 0. Both
 # must be the bootconf key: value format (any non-empty value line parses; these are the seeds).
 mtype -i "$IMG@@$espoff" ::/SteamOS/conf/A.conf >"$T/conf_a" 2>/dev/null || true
-mtype -i "$IMG@@$espoff" ::/SteamOS/conf/B.conf >"$T/conf_b" 2>/dev/null || true
 a_stamp=$(sed -n 's/^boot-requested-at: //p' "$T/conf_a")
-b_stamp=$(sed -n 's/^boot-requested-at: //p' "$T/conf_b")
 case "$a_stamp" in [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9])
   ok "A.conf boot-requested-at = $a_stamp" ;;
 *) bad "A.conf has no valid boot-requested-at (got '$a_stamp')" ;; esac
-[ "$b_stamp" = 0 ] && ok "B.conf boot-requested-at = 0" || bad "B.conf boot-requested-at should be 0, got '$b_stamp'"
-[ "$a_stamp" -gt "$b_stamp" ] 2>/dev/null && ok "A is the newer image (first boot picks A)" \
-                                          || bad "A is not the newer image"
+if [ "$SLOT_B" = 1 ]; then
+  mtype -i "$IMG@@$espoff" ::/SteamOS/conf/B.conf >"$T/conf_b" 2>/dev/null || true
+  b_stamp=$(sed -n 's/^boot-requested-at: //p' "$T/conf_b")
+  [ "$b_stamp" = 0 ] && ok "B.conf boot-requested-at = 0" || bad "B.conf boot-requested-at should be 0, got '$b_stamp'"
+  [ "$a_stamp" -gt "$b_stamp" ] 2>/dev/null && ok "A is the newer image (first boot picks A)" \
+                                            || bad "A is not the newer image"
+fi
 # the seeded grubenv is a real GRUB env block, so GRUB's first save_env has a file to write.
 mtype -i "$IMG@@$espoff" ::/EFI/steamos/grubenv >"$T/grubenv" 2>/dev/null || true
 grep -aq "GRUB Environment Block" "$T/grubenv" && ok "grubenv is a valid GRUB env block" \

@@ -303,7 +303,7 @@ KERNEL_SRC_HASH := work/.kernel-src.hash
 # Phony orchestration targets
 # ==============================================================================
 .PHONY: help all image toolchain kernel fw-linux fw-qcom base overlay overlay-pull overlay-publish \
-        verify-pins pin-artifacts verify-lock \
+        verify-pins verify-pins-store pin-artifacts verify-lock \
         rootfs relock \
         initramfs steamcl grub sdcard verify-card test bundle publish-bundle deploy clean clean-base clean-overlay distclean
 
@@ -490,8 +490,31 @@ verify-pins: ## Verify overlay artifact BYTES against packages/*/artifact.pin (r
 
 # Record the bytes built here as the reviewed ones. Normally CI's pin-bump PR does this; run it by
 # hand when you deliberately intend to make a local build the pinned one, then review the diff.
+#
+# Doing that by hand is LEGITIMATE, as of verify-pins-store below — it used to be a rule ("never
+# hand-edit pins") that nothing enforced. Pin what you built, publish it, and the check passes
+# because those bytes really are published. The full local round trip, no CI in it:
+#     make overlay && make overlay-publish && make pin-artifacts && make verify-pins-store
+# The publish is the load-bearing step: a pin nobody can retrieve is exactly what the check
+# rejects. It only works for sources nothing has published yet — which is the case that matters,
+# since editing a package changes its input hash.
 pin-artifacts: $(OVERLAY_STAMP) ## (Re)generate packages/*/artifact.pin from the built overlay repo
 	packages/verify-pins.sh --write
+
+# The other half of the byte question, and the one `verify-pins` above cannot ask. That target
+# compares the pins to work/repo — "is the repo in front of me the pinned one?". This compares them
+# to the STORE — "was anything with these shas ever published?" — which is what stops a pin
+# describing bytes that exist on exactly one machine. Network, no credentials, no work/ needed.
+#
+# Deliberately NOT a prerequisite of any build: a release build already fails without matching
+# bytes on disk, and making every image goal wait on a registry would put a flaky network in the
+# path of a local build for no extra guarantee. CI runs it per changed pin (.github/workflows/ci.yml);
+# run it by hand before pushing a pin, or bare to audit every pin on main.
+#
+# PKG= narrows it to one package (`make verify-pins-store PKG=gamescope`). Worth reaching for:
+# bare, it pulls every pinned payload, and fex-emu alone is most of that download.
+verify-pins-store: ## Verify packages/*/artifact.pin against the PUBLISHED store bytes (network)
+	packages/verify-pins.sh --store $(PKG)
 
 # ==============================================================================
 # Root bootstrap (host — customize-base.sh drives docker + qemu binfmt itself)

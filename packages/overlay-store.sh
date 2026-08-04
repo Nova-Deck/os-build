@@ -7,6 +7,7 @@
 #   packages/overlay-store.sh have  <name> [hash]        exit 0 iff the store already has it
 #   packages/overlay-store.sh push  <name> [hash]        publish this package's built artifacts
 #   packages/overlay-store.sh pull  <name> [hash]        fetch them into work/repo/<arch>/
+#   packages/overlay-store.sh fetch <name> <dir> [hash]  fetch them into <dir>, touching nothing else
 #   packages/overlay-store.sh push-all [name...]         publish everything built and current
 #   packages/overlay-store.sh pull-all [name...]         fetch everything missing (never fatal)
 #
@@ -253,32 +254,54 @@ push_one() {
   does not have to build everything on its first run. Skipping it is fine."
 }
 
-# Retrieve one package. Writes the stamps LAST and only once every artifact the payload promised
-# has landed, so an interrupted pull leaves the package looking un-built (and gets rebuilt) rather
-# than looking fresh with files missing.
-pull_one() {
-  local name="$1" hash="${2:-}" ref tmp f n=0
+# Retrieve one package's payload into an arbitrary directory and check it is COMPLETE — every
+# artifact $FILES_NAME promised actually arrived. Nothing else is touched: no work/repo, no stamps,
+# no index.
+#
+# WHY THIS IS SEPARATE FROM pull_one. A reader that is not a build wants exactly this and nothing
+# more: packages/verify-pins.sh --store compares a committed pin against the published bytes, and
+# doing that through `pull` would overwrite the caller's own built repo with store artifacts —
+# making "verify" a destructive verb on a developer's machine, and destroying the very bytes a
+# local build was about to pin. So the retrieval is the shared part and the INSTALL is not.
+fetch_one() {
+  local name="$1" dir="$2" hash="${3:-}" ref f n=0
   [ -n "$hash" ] || hash="$(pkg_hash "$name")"
   ref="$(pkg_ref "$name" "$hash")"
+
+  mkdir -p "$dir"
+  log "fetch $name ${hash:0:12} <- $ref"
+  oras pull "$ref" -o "$dir" >&2 || return 1
+  [ -f "$dir/$FILES_NAME" ] || { log "$name: payload has no $FILES_NAME — refusing it"; return 1; }
+
+  while read -r f; do
+    [ -n "$f" ] || continue
+    [ -f "$dir/$f" ] || { log "$name: payload promised $f but did not carry it — refusing it"; return 1; }
+    n=$((n + 1))
+  done < "$dir/$FILES_NAME"
+  [ "$n" -gt 0 ] || { log "$name: payload lists no artifacts — refusing it"; return 1; }
+}
+
+# Retrieve one package INTO THE REPO. Writes the stamps LAST and only once every artifact the
+# payload promised has landed, so an interrupted pull leaves the package looking un-built (and gets
+# rebuilt) rather than looking fresh with files missing.
+pull_one() {
+  local name="$1" hash="${2:-}" tmp f n=0
+  [ -n "$hash" ] || hash="$(pkg_hash "$name")"
 
   # Same filesystem as the repo, so the moves below are renames rather than a second copy of
   # every artifact (see the note in push_one).
   mkdir -p "$ROOT/work"
   tmp="$(mktemp -d -p "$ROOT/work" .overlay-pull.XXXXXX)"
   trap 'rm -rf "$tmp"' RETURN
-  log "pull $name ${hash:0:12} <- $ref"
-  oras pull "$ref" -o "$tmp" >&2 || return 1
-  [ -f "$tmp/$FILES_NAME" ] || { log "$name: payload has no $FILES_NAME — refusing it"; return 1; }
 
-  while read -r f; do
-    [ -n "$f" ] || continue
-    [ -f "$tmp/$f" ] || { log "$name: payload promised $f but did not carry it — refusing it"; return 1; }
-    n=$((n + 1))
-  done < "$tmp/$FILES_NAME"
-  [ "$n" -gt 0 ] || { log "$name: payload lists no artifacts — refusing it"; return 1; }
+  fetch_one "$name" "$tmp" "$hash" || return 1
 
   mkdir -p "$REPO_DIR" "$STAMPS"
-  while read -r f; do [ -n "$f" ] && mv -f "$tmp/$f" "$REPO_DIR/$f"; done < "$tmp/$FILES_NAME"
+  while read -r f; do
+    [ -n "$f" ] || continue
+    mv -f "$tmp/$f" "$REPO_DIR/$f"
+    n=$((n + 1))
+  done < "$tmp/$FILES_NAME"
   cp "$tmp/$FILES_NAME" "$STAMPS/$name.files"
   printf '%s\n' "$hash" > "$STAMPS/$name.hash"
   log "$name: $n artifact(s) restored"
@@ -304,6 +327,9 @@ case "$cmd" in
   have) [ $# -ge 1 ] || die "usage: $0 have <name> [hash]"; have "$1" "${2:-}" ;;
   push) [ $# -ge 1 ] || die "usage: $0 push <name> [hash]"; push_one "$1" "${2:-}" ;;
   pull) [ $# -ge 1 ] || die "usage: $0 pull <name> [hash]"; pull_one "$1" "${2:-}" || die "$1: pull failed" ;;
+  # The hash is the third argument and not the second, because <dir> is not optional: a fetch with
+  # nowhere to put it is a typo, not a default.
+  fetch) [ $# -ge 2 ] || die "usage: $0 fetch <name> <dir> [hash]"; fetch_one "$1" "$2" "${3:-}" || die "$1: fetch failed" ;;
 
   # Log in for push. Separate subcommand rather than something push does implicitly: writing a
   # credential into ~/.docker/config.json is a side effect on the caller's machine, and it should
@@ -405,7 +431,7 @@ case "$cmd" in
     ;;
 
   ''|-h|--help|help)
-    sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'
     ;;
   *) die "unknown subcommand '$cmd' (try: $0 help)" ;;
 esac

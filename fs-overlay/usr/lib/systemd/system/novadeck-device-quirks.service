@@ -1,0 +1,21 @@
+[Unit]
+Description=novadeck per-board runtime quirks (silicon/driver workarounds)
+Documentation=file:///usr/lib/novadeck/device-quirks
+# Ordered inside sysinit so the quirks are in place before anything drives the GPU or lets a core
+# idle for long: the SM8550 quirk this carries holds cpu0 out of the silver-rail power-collapse so
+# the cluster rail cannot drop under the GMU's 10ms OOB poll, and the window it guards opens as
+# soon as the CPU first goes idle — well before the session, or even plymouth, exists. After
+# local-fs.target because the script reads /usr/lib/novadeck/device-env; it only writes sysfs, so
+# nothing else waits on it.
+DefaultDependencies=no
+After=local-fs.target
+Before=sysinit.target shutdown.target
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/novadeck/device-quirks
+
+[Install]
+WantedBy=sysinit.target

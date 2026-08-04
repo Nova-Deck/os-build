@@ -1,0 +1,135 @@
+#!/bin/bash
+# novadeck device-quirks — per-board runtime workarounds with no DTS or device-env home.
+#
+# device-env carries per-board FACTS that daemons read (panel geometry, suspend mode, SoC class).
+# This script carries the other kind of per-board knowledge: pokes at sysfs that work around a
+# silicon or driver bug. Keep the two apart — if userspace needs to *read* it, it is a fact and
+# belongs in devices/<board>.conf; if it is a write we make once at boot to stop the hardware
+# misbehaving, it belongs here.
+#
+# Quirks apply general -> specific, mirroring the way device-env layers defaults.conf under
+# <profile>.conf: SoC-class quirks (NOVADECK_SOC_CLASS) run first, then device-class quirks
+# (NOVADECK_DEVICE_ID), so one board can add to what all of its SoC siblings get.
+#
+# Every quirk states the symptom it prevents, so a future kernel bump can retire it by test rather
+# than by guess. A quirk that cannot be applied is logged and skipped — a missing sysfs knob must
+# never fail the boot, and a quirk that silently did nothing must never look like it worked.
+#
+# Operator override — /etc/novadeck/device-quirks.conf, sourced if present:
+#     NOVADECK_SKIP_QUIRKS='sm8550-gmu-oob-cpuidle'    # space-separated ids, or 'all'
+set -uo pipefail
+
+DEVICE_ENV=${NOVADECK_DEVICE_ENV:-/usr/lib/novadeck/device-env}
+QUIRKS_CONF=${NOVADECK_QUIRKS_CONF:-/etc/novadeck/device-quirks.conf}
+# Overridable so the offline suite can point the quirks at a fabricated sysfs tree and assert that
+# each one actually lands. A quirk nothing checks is not a workaround, it is a comment.
+SYSFS=${NOVADECK_SYSFS_ROOT:-/sys}
+
+log() { printf 'device-quirks: %s\n' "$*" >&2; }
+
+# ---------------------------------------------------------------------------- helpers
+
+skip() {
+    local list=" ${NOVADECK_SKIP_QUIRKS:-} "
+    [[ $list == *" all "* || $list == *" $1 "* ]]
+}
+
+# write_knob <quirk-id> <path> <value> — always returns 0; reports whether it landed.
+write_knob() {
+    local id=$1 path=$2 value=$3
+    if [[ ! -e $path ]]; then
+        log "$id NOT applied — $path is absent (kernel changed?)"
+        return 0
+    fi
+    if ! printf '%s\n' "$value" >"$path" 2>/dev/null; then
+        log "$id NOT applied — write of '$value' to $path failed"
+        return 0
+    fi
+    log "$id applied — $path = $value"
+}
+
+# cpuidle_state_by_desc <cpuN> <desc> — echo the matching state dir, or fail.
+#
+# Matches the sysfs `desc` (the devicetree idle-state-name) rather than a state index: indices
+# shift when a kernel adds or reorders idle states, and a quirk that then disables the wrong state
+# would still exit 0 and look applied.
+cpuidle_state_by_desc() {
+    local cpu=$1 want=$2 dir desc
+    for dir in "$SYSFS"/devices/system/cpu/"$cpu"/cpuidle/state*/; do
+        [[ -r ${dir}desc ]] || continue
+        read -r desc <"${dir}desc" || continue
+        if [[ $desc == "$want" ]]; then
+            printf '%s' "$dir"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# ---------------------------------------------------------------------------- SoC-class quirks
+
+# SM8550 (Adreno 740): the GPU wedges on an idle screen and never recovers —
+#     [drm:a6xx_gmu_set_oob] *ERROR* Timeout waiting for GMU OOB set GPU_SET
+#   then a CP translation fault at iova=0, a hangcheck the driver cannot complete (preemption
+#   times out), and a permanently frozen display.
+#
+#   a6xx_gmu_set_oob does not wait on an interrupt, despite the kernel's comment there saying so:
+#   it polls GMU2HOST_INTR_INFO on a 10ms budget at 100us intervals. The silver-rail collapse
+#   carries local-timer-stop and a 750us exit latency, and it is a CLUSTER state — cpu0-2 all live
+#   in cluster_pd and all reference the same devicetree node, so the rail only drops once every
+#   silver core is in it. Holding cpu0 out keeps the whole rail up, which is why parking one core
+#   is enough and parking all three is unnecessary.
+#
+#   The step from rail collapse to a blown poll budget is inferred, not proven — this is an
+#   empirical workaround. Retire it by test on the affected hardware, never by argument.
+sm8550_gmu_oob_cpuidle() {
+    local id=sm8550-gmu-oob-cpuidle dir
+    if skip "$id"; then
+        log "$id skipped by $QUIRKS_CONF"
+        return 0
+    fi
+    if ! dir=$(cpuidle_state_by_desc cpu0 silver-rail-power-collapse); then
+        log "$id NOT applied — cpu0 has no idle state described 'silver-rail-power-collapse'"
+        return 0
+    fi
+    write_knob "$id" "${dir}disable" 1
+}
+
+apply_soc_quirks() {
+    case ${NOVADECK_SOC_CLASS:-} in
+        SM8550) sm8550_gmu_oob_cpuidle ;;
+        *)      : ;;
+    esac
+}
+
+# ---------------------------------------------------------------------------- device-class quirks
+
+apply_device_quirks() {
+    case ${NOVADECK_DEVICE_ID:-} in
+        # Nothing yet. Add cases keyed on NOVADECK_DEVICE_ID here, for a board that needs
+        # something its SoC siblings do not — same one-function-per-quirk shape as above.
+        *) : ;;
+    esac
+}
+
+# ---------------------------------------------------------------------------- main
+
+# device-env is the only input, so if it cannot speak we apply nothing rather than guess at the
+# board. Its stderr is deliberately NOT redirected: it explains why it failed, and that reason
+# belongs in the journal next to the line below. Captured then eval'd in two steps because
+# `eval "$(cmd)"` yields eval's exit status, not cmd's — a failed device-env would look fine and
+# every quirk would then silently match the empty SoC class.
+if ! device_env=$("$DEVICE_ENV"); then
+    log "$DEVICE_ENV failed — no quirks applied"
+    exit 0
+fi
+eval "$device_env"
+
+if [[ -r $QUIRKS_CONF ]]; then
+    # shellcheck source=/dev/null
+    source "$QUIRKS_CONF" || log "$QUIRKS_CONF failed to parse — ignoring it"
+fi
+
+apply_soc_quirks
+apply_device_quirks
+exit 0

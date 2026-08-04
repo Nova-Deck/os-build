@@ -5,48 +5,19 @@ rationale lives in the linked memories and commit history.
 
 ## Open
 
-- [ ] **Confirm the empty-B release card on hardware, and replace the projected size with a real
-  one.** As of 2026-08-04 a release card leaves slot B empty and writes no `B.conf`
-  (`images/make-sdcard.sh`); dev cards still populate B. Two things are arithmetic rather than
-  measurement and should be closed by the first release build that ships this:
-  - ~~The **~5 GiB compressed** figure is arithmetic.~~ MEASURED 2026-08-04: 5.08 GiB (pigz -6,
-    the same settings CI uses), down from 8.97 GiB — 3.89 GiB off, 43%. `images/publish-card.sh`
-    and `.github/workflows/image.yml` now carry the real number, and `KEEP=1` was re-checked
-    against it and still holds (two cards = 10.16 GiB against a 9.31 GiB free tier).
-  - ~~The **boot behaviour** is verified by source reading only.~~ HW-CONFIRMED 2026-08-04: a
-    release card built with an empty B and no `B.conf` boots. That matches the source reading —
-    steamcl drops a partition whose image name resolves but whose config is absent
-    (`chainloader/bootload.c`: both the `<esp>\SteamOS\conf\<name>.conf` and legacy
-    `SteamOS\bootconf` lookups miss, so it `continue`s and B never enters `found[]`).
-    - Still UNCHECKED, and not implied by a clean boot: that `novadeck-bootctl` reports **one**
-      image rather than two on such a card. A card that boots A tells you nothing about what the
-      tooling thinks the slot inventory is. Worth one `novadeck-bootctl` dump on the device.
-  - ~~**A local `rauc install` on an empty-B card is the whole test.**~~ HW-VALIDATED 2026-08-04,
-    end to end on device .192: release card with empty B and no `B.conf` booted A; `rauc install`
-    of a locally built signed bundle (driven as `deck`, no sudo) created `/esp/SteamOS/conf/B.conf`
-    via the `bc create` branch (`image-invalid 0`, `boot-count 0`, sane `boot-requested-at`) and
-    armed `next boot: B`; the device then **booted B** — confirmed by three independent witnesses
-    (`novadeck-bootctl` `booted image: B`, `/var/lib/novadeck/slot` = B, `rauc` `Booted from
-    rootfs.1 (B)`), with `boot-attempts 0` showing `novadeck-boot-good` marked it healthy.
-    Only `novadeck-bootctl status` reporting B as `(no config on the ESP)` pre-install remains as
-    the recorded pre-state. **This item is closed.**
-
-    Original scoping, kept because it is the reusable part: the
-
-    recovery path is RAUC writing B in full and `ensure_exists()`/`post-install.sh` creating the
-    conf and clearing `image-invalid`, and `fs-overlay/etc/rauc/system.conf` wires both to RAUC
-    itself (`bootloader-custom-backend=`, `post-install=`). `novadeck-update` only fetches a bundle
-    and hands it over; the manifest/download/disk-space layer never touches bootconf and is already
-    covered by test-update.sh's 32 offline cases. So: `rauc install` a locally built bundle on a
-    card that never had a `B.conf`, and check that
-    - `bc create --image B` actually fires (the `bc config` probe must FAIL first — this is the
-      only state in which that branch has ever been reached),
-    - the resulting B.conf has `image-invalid 0` and a sane `boot-requested-at`,
-    - the card then boots B.
-
-    A dev card with both slots populated does NOT exercise this, because there the conf already
-    exists and `ensure_exists()` short-circuits — an empty-B card is the only state that reaches
-    the `bc create` branch. Keep that in mind if this ever needs re-testing.
+- [x] **Release cards ship slot B empty with no `B.conf` — HW-VALIDATED 2026-08-04** (`7f49ef2`).
+  The card compresses 8.97 -> 5.08 GiB (pigz -6, CI's settings): 3.89 GiB and 43% off every
+  download, and `KEEP=1` in `images/publish-card.sh` was re-checked against the real number and
+  still holds. Validated end to end on device .192: the card boots A; `novadeck-bootctl` reports B
+  as `(no config on the ESP)` rather than as a second candidate; `rauc install` creates
+  `/esp/SteamOS/conf/B.conf` through `ensure_exists()`'s `bc create` branch and the device then
+  boots B, confirmed independently by `novadeck-bootctl`, `/var/lib/novadeck/slot` and `rauc`.
+  `make verify-card` asserts `B.conf` is ABSENT on an empty-B card.
+  - Worth keeping: an empty-B card is the ONLY state that reaches the `bc create` branch — on a
+    dev card the conf already exists and `ensure_exists()` short-circuits. And omitting the conf is
+    load-bearing: `image-invalid: 1` would NOT have sufficed, because steamcl honours it only as a
+    sort demotion and `set_menu_conf()` picks the other entry past `SUPERMAX_BOOT_FAILURES` without
+    consulting it. Full mechanism in the commit message and the release-card-empty-b-slot memory.
 
 - [ ] **Enforce artifact pins by VERIFIABILITY, not by convention — a PR check that re-pulls each
   changed pin from the store.** Today nothing mechanically guards `packages/*/artifact.pin`: there

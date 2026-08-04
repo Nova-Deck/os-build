@@ -49,10 +49,20 @@ rclone_bin() {
 # Configured entirely through the environment so no credential is ever written to disk — the same
 # instinct as .github/workflows/image.yml keeping the RAUC key in $RUNNER_TEMP: anything left in the
 # workspace gets swept into artifacts and caches. The remote is named "r2"; paths are r2:<bucket>/...
+# The three credentials use :? so EMPTY fails as loudly as unset, which is the case that actually
+# happens: in CI they are always *set*, to whatever `${{ secrets.R2_* }}` evaluated to, and an
+# environment-scoped secret evaluates to the EMPTY STRING in any job that does not declare that
+# environment. No error, no warning, at the point of evaluation. Since 2026-08-04 these live in the
+# `release-cards` environment, so that is the first thing to check when this fires in CI with the
+# secret plainly present in repo settings — the message names it rather than making you rediscover
+# it after a four-hour build.
+R2_ENV_HINT='not set. In CI this usually means the job did not declare the `release-cards`
+  environment (an environment-scoped secret reads as EMPTY, silently, in a job that does not name
+  it) -- check the environment: line before assuming the secret is missing.'
 r2_env() {
-  : "${R2_ACCOUNT_ID:?R2_ACCOUNT_ID not set}"
-  : "${R2_ACCESS_KEY_ID:?R2_ACCESS_KEY_ID not set}"
-  : "${R2_SECRET_ACCESS_KEY:?R2_SECRET_ACCESS_KEY not set}"
+  : "${R2_ACCOUNT_ID:?R2_ACCOUNT_ID $R2_ENV_HINT}"
+  : "${R2_ACCESS_KEY_ID:?R2_ACCESS_KEY_ID $R2_ENV_HINT}"
+  : "${R2_SECRET_ACCESS_KEY:?R2_SECRET_ACCESS_KEY $R2_ENV_HINT}"
   : "${R2_BUCKET:?R2_BUCKET not set}"
   : "${R2_PUBLIC_BASE:?R2_PUBLIC_BASE not set (the r2.dev URL, or a custom domain if one is attached)}"
 

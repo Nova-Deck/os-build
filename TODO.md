@@ -337,21 +337,23 @@ them. The full rationale otherwise lives in the linked memories and commit histo
   delete the branch; if the front-half black still grates, merge it then.
   See [[boot-splash-plymouth]], [[sm8650-gamescope-session-plumbing]].
 
-- [ ] **Move the `R2_*` card credentials into their own protected environment** — split out of the
-  OTA signing work (2026-08-03), which put `RAUC_CERT_PEM`/`RAUC_KEY_PEM` into a protected
-  `release-signing` environment restricted to `ota/v*` tags, with `loki666` as required reviewer.
-  The `R2_*` trio is still **repo-wide**, so any `workflow_dispatch` by anyone with write access
-  reaches it. That matters more than "a write credential to a public bucket" suggests:
-  `images/publish-card.sh` **prunes** older cards with `rclone purge` (KEEP=1), so these are
-  destructive, not merely additive.
-  **Two things make this more than moving secrets in the UI, and both would fail silently:**
-  1. **It needs a SECOND environment, not the same one.** `release-signing`'s branch policy is
-     `ota/v*`; cards ship on `card/v*`, so reusing it would BLOCK every card release. Create
-     `release-cards` with a `card/v*` tag policy.
-  2. **`release-sdcard.yml` must switch to `secrets: inherit`.** It currently passes them
-     explicitly (`R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}`), and that expression evaluates in
-     the CALLER's context — where there is no environment, because a job that calls a reusable
-     workflow cannot declare one. An environment-scoped secret would therefore resolve to **empty**
-     and card publishing would break at the upload step with blank credentials. This is exactly why
-     the signing path uses `secrets: inherit` with the environment declared inside `image.yml`'s
-     build job; `image.yml` already takes the `environment` input, so only the caller changes.
+- [ ] **Move the `R2_*` card credentials into their own protected environment — CODE LANDED
+  2026-08-04, WAITING ON THE THREE VALUES.** Everything except the secret values themselves is
+  done: the `release-cards` environment exists (required reviewer `loki666`, policy = `card/v*`
+  tags + `main`), `release-sdcard.yml` uses `secrets: inherit` and passes `environment:` when the
+  run publishes, and `r2_env` now names the environment in its failure message. GitHub does not
+  hand secret values back, so the transfer cannot be automated from here.
+  **The remaining step, in this order — reversing it breaks card publishing outright:**
+  ```sh
+  gh secret set R2_ACCOUNT_ID       --env release-cards --repo Nova-Deck/os-build
+  gh secret set R2_ACCESS_KEY_ID    --env release-cards --repo Nova-Deck/os-build
+  gh secret set R2_SECRET_ACCESS_KEY --env release-cards --repo Nova-Deck/os-build
+  # only once the three above are set:
+  gh secret delete R2_ACCOUNT_ID R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY --repo Nova-Deck/os-build
+  ```
+  **Prefer rotating over copying.** The old token was repo-wide and reachable by any dispatch from
+  anyone with write access, for months. Mint a fresh Cloudflare token scoped to the one bucket with
+  Object Read & Write, set *that*, then revoke the old one — a copy carries the exposure forward.
+  Verify with a `workflow_dispatch` from `main`, `publish: true`: it must pause for approval, then
+  reach the upload step with working credentials. `R2_BUCKET`/`R2_PUBLIC_BASE` stay repo **variables**
+  — they are not secrets and `vars.` resolves the same either way.

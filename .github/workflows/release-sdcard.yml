@@ -15,6 +15,16 @@
 # the device, so there is no signature for anything to verify. It DOES need the R2 credentials to
 # publish, but those are push-only credentials to a public bucket, not a root of trust.
 #
+# THE R2 CREDENTIALS ARE STILL GATED, since 2026-08-04, in the `release-cards` environment — not
+# repo-wide. "Not a root of trust" bounds the damage; it does not make the credential free. Blank is
+# what an unauthorised caller gets, and `rclone purge`-based retention (KEEP=1, images/publish-card.sh)
+# means these are DESTRUCTIVE, not merely additive: they can delete the published card, not just add
+# one. Repo-wide, any `workflow_dispatch` by anyone with write access reached them.
+#
+# Its policy allows the `card/v*` tags AND `main`, because a dispatch with publish:true is a
+# supported way to cut a card and a tag-only policy would reject it at the gate. Both still require a
+# reviewer, so this is strictly tighter than the repo-wide arrangement it replaces, not a new door.
+#
 # A LOCAL `make sdcard` PRODUCES THE SAME KIND OF IMAGE. It used to fail an artifact-pin gate by
 # design, which made flashing this workflow's output the only way to see a real release image; that
 # gate was retired 2026-08-04. What this workflow still has that a dev box does not is the R2
@@ -88,14 +98,36 @@ jobs:
   sdcard:
     needs: prep
     uses: ./.github/workflows/image.yml
+    # `secrets: inherit`, NOT the explicit `R2_*: ${{ secrets.R2_* }}` mapping this used to carry,
+    # and the difference is the whole point of moving those secrets into an environment.
+    #
+    # An explicit mapping evaluates in the CALLER's context — here, in this job — and a job that
+    # calls a reusable workflow CANNOT declare an environment. So an environment-scoped secret would
+    # resolve to the EMPTY STRING right here, be handed to image.yml as an empty string, and the
+    # build would run for four hours before dying at the upload step with blank credentials. No
+    # error at the point of evaluation, no warning, and the secret plainly visible in repo settings.
+    #
+    # `inherit` defers resolution to the CALLED workflow's job, which does name the environment (via
+    # the input below), so the secrets resolve there and only there. Same mechanism the signing key
+    # already uses in release-bundle.yml. This pairing is load-bearing: `inherit` without the
+    # environment input, or the environment input without `inherit`, both yield blank credentials.
+    secrets: inherit
     with:
       artifact: sdcard
       version: ${{ needs.prep.outputs.version }}
       publish: ${{ needs.prep.outputs.publish == 'true' }}
-    secrets:
-      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
-      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      # Named only when this run actually publishes, and PUBLISH IS NOT THE SAME AS TAG here — unlike
+      # the bundle path, a `workflow_dispatch` with publish:true is a supported way to cut a card, and
+      # gating on `github.ref_type == 'tag'` would hand that path empty credentials. Gate on the thing
+      # that decides whether R2 is touched at all.
+      #
+      # The common case — a dispatch answering "does this still build?" — names no environment, so it
+      # needs no approval and cannot reach the credentials. It also cannot reach the upload step at
+      # all: image.yml guards that on `inputs.publish`.
+      #
+      # `release-cards`, not `release-signing`: that environment's deployment policy is `ota/v*`, so
+      # reusing it would reject every `card/v*` tag outright. Two artifacts, two cadences, two gates.
+      environment: ${{ needs.prep.outputs.publish == 'true' && (vars.CARDS_ENVIRONMENT || 'release-cards') || '' }}
 
   # The Release carries only small files — checksums, the provenance pins, and the link. The card
   # itself is well over GitHub's 2 GiB per-asset cap and lives in R2; see images/publish-card.sh.

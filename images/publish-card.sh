@@ -20,6 +20,10 @@
 # and the link. That is the reviewable, permanent record; the bucket is only where the bytes live.
 #
 # CREDENTIALS. Push-only, and only here: R2_ACCOUNT_ID / R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY.
+# In CI they live in the `release-cards` GitHub environment, not in repo-wide secrets, since
+# 2026-08-04 — because of the retention paragraph below, these can DELETE the published card, not
+# just add one, so "a write credential to a public bucket" undersells them. If they arrive empty,
+# read the hint r2_env prints: the usual cause is a job that did not declare the environment.
 # They are consumed as environment variables and never written to a config file, for the reason
 # .github/workflows/image.yml already keeps the RAUC key in $RUNNER_TEMP — anything on disk in the
 # workspace gets swept into artifacts and caches. The token they belong to should be scoped to this

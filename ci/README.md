@@ -7,7 +7,7 @@ Two jobs, no secrets, on every push and pull request:
 | job | what it runs | needs |
 |---|---|---|
 | `test` | `make test` — 354 checks across the initramfs slot-state reader, `novadeck-bootctl`, and the RAUC post-install hook | nothing (host shell) |
-| `signing` | `make test-signing` — every case a negative against `images/rauc/verify-signing.sh` | the `novadeck-build` container, for `rauc` |
+| `signing` | `make test-signing` — every case a negative against `images/rauc/verify-signing.sh` | `build/Dockerfile`'s `signing` stage (rauc + openssl + mksquashfs, ~66 MB) |
 
 ## Today: `.github/workflows/overlay.yml` — the package compile pass
 

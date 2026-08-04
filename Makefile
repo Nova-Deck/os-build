@@ -24,6 +24,11 @@
 # kernel patches. work/base is root-owned (clean-base uses docker to remove it).
 
 BUILD_IMG ?= novadeck-build
+# The RAUC signing self-test's image: build/Dockerfile's first stage, holding rauc + openssl +
+# mksquashfs and nothing else. Separate because that suite runs on every push and pull request and
+# has no use for the cross-toolchain the full image spends its build time on. Same Dockerfile, so
+# the two cannot disagree about the rauc pin — see the header there.
+SIGN_IMG  ?= novadeck-sign
 
 # Optional knobs forwarded to the underlying scripts:
 #   BASE_CONFIG  repo-relative path to a full verbatim kernel .config (e.g. a ROCKNIX
@@ -183,6 +188,7 @@ BASE_MODE_STAMP := work/.base-mode-$(BASE_MODE)
 
 # --- artifacts (real file targets drive incremental rebuilds) -----------------
 BUILD_STAMP := out/.build-image.stamp
+SIGN_STAMP  := out/.sign-image.stamp
 # Open linux-firmware blobs are SoC-agnostic — the unified kernel embeds the union — so this
 # is a single flat tree, not per-SoC.
 FW_LINUX     := firmware/linux-fw/.fetched.stamp
@@ -368,14 +374,27 @@ test: verify-lock ## Run the offline bootctl/post-install/pairingd/quirks/stage-
 # a negative — it feeds images/rauc/verify-signing.sh a deliberately broken config or cert profile
 # and requires it to go red — because the failure mode of a check is not "it breaks", it is "it
 # stays green while asserting nothing".
-test-signing: $(BUILD_STAMP) ## Prove the RAUC signing self-test still catches what it claims (container; PKIDIR= adds the keyring check)
-	$(DOCKER) $(PKI_MOUNT) $(BUILD_IMG) images/test-verify-signing.sh
+#
+# It depends on $(SIGN_STAMP), NOT $(BUILD_STAMP): the suite needs rauc, openssl and mksquashfs,
+# and building the aarch64 cross-toolchain + GRUB's autotools to get them is what made this the
+# slowest thing in `ci`. Both images come from the same build/Dockerfile, so the rauc pin they
+# share cannot drift. Anyone who already has the full image loses nothing — the signing stage is
+# its own first layer, so docker reuses it rather than fetching anything twice.
+test-signing: $(SIGN_STAMP) ## Prove the RAUC signing self-test still catches what it claims (container; PKIDIR= adds the keyring check)
+	$(DOCKER) $(PKI_MOUNT) $(SIGN_IMG) images/test-verify-signing.sh
 
 # ==============================================================================
-# Toolchain image
+# Toolchain images
 # ==============================================================================
+# No --target: `full` is the last stage in build/Dockerfile, so a plain build selects it.
 $(BUILD_STAMP): build/Dockerfile
 	docker build -t $(BUILD_IMG) -f build/Dockerfile build
+	@mkdir -p $(@D) && touch $@
+
+# The signing stage alone. Both stamps key off the same Dockerfile, so editing it rebuilds
+# whichever images you actually use rather than coupling them.
+$(SIGN_STAMP): build/Dockerfile
+	docker build --target signing -t $(SIGN_IMG) -f build/Dockerfile build
 	@mkdir -p $(@D) && touch $@
 
 # ==============================================================================

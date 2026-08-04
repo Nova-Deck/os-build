@@ -48,9 +48,18 @@ jobs:
   signing:
     name: RAUC signing self-test
     runs-on: ubuntu-latest
-    # Builds novadeck-build (build/Dockerfile) because the self-test signs real bundles and
-    # verifies them through the shipped system.conf, which needs rauc. Uncached today: a layer
-    # cache is worth adding when this becomes the slow part, not before.
+    # Builds build/Dockerfile's `signing` stage — rauc, openssl and mksquashfs over ubuntu:26.04,
+    # ~66 MB of apt payload — because the self-test signs real bundles and verifies them through
+    # the shipped system.conf. It used to build the FULL toolchain image for that, i.e. the aarch64
+    # cross-compiler, a foreign arm64 architecture, autotools, AutoGen and fontconfig, ~1.08 GB.
+    #
+    # That is why this job is no longer the slow one. It normally ran ~80s, essentially all docker
+    # build; on 2026-08-04 (run 30917187270) the identical build took 1739s on archive throughput
+    # alone and finished 61 seconds inside this timeout. The baseline was tolerable, the variance
+    # was not, and 94% of the payload driving it had nothing to do with what this job asserts.
+    #
+    # Still uncached, and now that is the right call rather than a deferral: there is little left
+    # to cache, and a cache would be one more thing that can be stale about a signing check.
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4

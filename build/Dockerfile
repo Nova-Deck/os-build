@@ -2,12 +2,33 @@
 # hosts (kernel, rootfs/sdcard assembly, boot packaging, RAUC
 # bundle). Carries the aarch64 toolchain plus every container stage's deps; source and
 # artifacts stay on the host via a bind mount (work/ and out/ are gitignored). Re-runnable.
-FROM ubuntu:26.04
+#
+# TWO STAGES, AND THE SPLIT IS ABOUT CI TIME. The `signing` stage below holds only what the RAUC
+# signing self-test needs (rauc, openssl, mksquashfs); `full` adds everything else. That test signs
+# and verifies real bundles and is the one suite that cannot run on the host, so `ci.yml` builds an
+# image for it on every push and pull request — and it was paying for the kernel cross-toolchain,
+# a foreign arm64 architecture, autotools, AutoGen and fontconfig to do it.
+#
+# MEASURED, which is why this exists: the signing job normally ran ~80s, essentially all of it this
+# docker build. On 2026-08-04 (run 30917187270) the same build took 1739s — a 20x swing on Ubuntu
+# archive throughput alone, finishing 61 seconds inside the job's 30-minute timeout. The baseline
+# was never the problem; the unbounded variance was, and most of the payload driving it is
+# irrelevant to what the job asserts.
+#
+# ONE FILE, ON PURPOSE. A separate slim Dockerfile would drift, and the drift would be silent in
+# the worst possible place: the whole point of the self-test is that bundles are written by the
+# rauc version we ship against. `full` derives FROM `signing`, so both halves resolve the same
+# ARG RAUC_VERSION by construction — there is no second pin to forget.
+#
+# Build the full image with a plain `docker build` (it is the last stage, so it is the default
+# target); `make test-signing` builds `--target signing`.
+
+FROM ubuntu:26.04 AS signing
 
 ENV DEBIAN_FRONTEND=noninteractive
 
 # rauc is the ONE apt package here pinned to an exact version, and it is deliberate. Everything
-# else in the list below (compilers, mkfs tools, curl) only has to work — a newer one produces the
+# else in the lists below (compilers, mkfs tools, curl) only has to work — a newer one produces the
 # same artifact. rauc does not: it WRITES the update bundle, and the device's rauc has to be able
 # to install what it wrote. That pairing is already load-bearing (packages/rauc builds the DEVICE
 # side at 1.15.2 precisely because 1.14 cannot install a dm-verity bundle on kernel >= 6.19), so
@@ -22,6 +43,26 @@ ENV DEBIAN_FRONTEND=noninteractive
 # `rauc install` test before trusting the bundles it produces.
 ARG RAUC_VERSION=1.15.1-1
 
+# squashfs-tools is NOT incidental: `rauc bundle` shells out to mksquashfs for the verity format,
+# so images/rauc/verify-signing.sh cannot mint the bundles it then breaks on purpose without it.
+# openssl mints the throwaway cert profiles the negative cases feed in.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      openssl ca-certificates \
+      squashfs-tools \
+      "rauc=${RAUC_VERSION}" \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set here rather than in `full` so both stages carry them — a derived stage inherits its parent's
+# config, and images/test-verify-signing.sh is invoked as a bare argument (the ENTRYPOINT bash is
+# what runs it).
+WORKDIR /src
+ENTRYPOINT ["/bin/bash"]
+
+# ==============================================================================
+# Everything the rest of the pipeline needs, on top of the signing base.
+# ==============================================================================
+FROM signing AS full
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
       build-essential \
       gcc-aarch64-linux-gnu \
@@ -31,11 +72,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       kmod cpio rsync \
       openssh-client \
       xz-utils patch device-tree-compiler \
-      curl ca-certificates \
+      curl \
       make python3 \
       btrfs-progs gdisk dosfstools mtools e2fsprogs \
-      casync openssl squashfs-tools \
-      "rauc=${RAUC_VERSION}" \
+      casync \
     && rm -rf /var/lib/apt/lists/*
 
 # Boot stage (Phase 5): the two-stage UEFI chain, steamcl (stage 1) + GRUB (stage 2).
@@ -65,6 +105,3 @@ RUN dpkg --add-architecture arm64 && apt-get update && apt-get install -y --no-i
       fontconfig fonts-dejavu-core libfreetype-dev \
       grub-common \
     && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /src
-ENTRYPOINT ["/bin/bash"]

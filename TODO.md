@@ -19,30 +19,45 @@ rationale lives in the linked memories and commit history.
     sort demotion and `set_menu_conf()` picks the other entry past `SUPERMAX_BOOT_FAILURES` without
     consulting it. Full mechanism in the commit message and the release-card-empty-b-slot memory.
 
-- [ ] **Enforce artifact pins by VERIFIABILITY, not by convention — a PR check that re-pulls each
-  changed pin from the store.** Today nothing mechanically guards `packages/*/artifact.pin`: there
-  is no CODEOWNERS, and no job rejects a diff touching them. The only control is the review
-  convention stated in `.github/workflows/overlay.yml` ("THE REVIEW OF THIS PR *IS* THE PROVENANCE
-  CLAIM … it cannot prove anyone looked"). A hand-run `make pin-artifacts` can therefore commit a
-  pin describing bytes that exist on exactly one machine — which then breaks CI's next release
-  build, since CI builds from store artifacts and its bytes will not match the local sha.
-  - **A blanket "reject any PR touching artifact.pin" rule cannot work**: the `pin-bump` job's
-    entire output IS a diff to those files, so it would block the only legitimate producer.
-  - **Gating on authorship is the wrong axis** — branch names are spoofable, and anything that can
-    open a PR as the bot can open any PR as the bot. It also protects the wrong property; nobody
-    cares who typed the sha.
-  - **Proposal:** a PR check that, for every changed `artifact.pin`, pulls that artifact from the
-    overlay store (`packages/overlay-store.sh`) and asserts the sha matches. CI's pin-bump PR
-    passes trivially (it pins what it just published); a hand-edited pin fails unless those exact
-    bytes are genuinely published. Forging it requires actually publishing, at which point the pin
-    is honest by construction. This is strictly stronger than the current convention and would let
-    the "never hand-edit pins" rule be dropped.
-  - Caveats: needs store read access from the PR check (anonymous `oras pull` from GHCR appears to
-    work, so probably no secret needed), and it couples pin PRs to store availability — a flaky
-    registry becomes a red check. Consider a retry and a clear failure message distinguishing
-    "sha mismatch" from "could not reach the store", since those mean opposite things.
+- [x] **Artifact pins are enforced by VERIFIABILITY now, not by convention — LANDED 2026-08-04.**
+  `packages/verify-pins.sh --store [package|path…]` pulls each pinned artifact back out of the
+  overlay store and compares, and `ci.yml`'s `pins` job runs it over every `artifact.pin` a change
+  touches. A pin describing bytes that exist on one machine is caught at PR time instead of at the
+  next release build. Validated against the live store before merging: all 8 pins on `main` verify
+  (10 artifacts, exit 0), a tampered `artifact:` sha exits 1, a fabricated `inputhash:` is reported
+  as STALE rather than as a byte mismatch, an absent artifact exits 1, and an unreachable registry
+  exits **3** after three tries.
+  - **The pin's `inputhash` is what addresses the store**, and it is checked against the tree
+    *first*. So the location being read is fixed by the SOURCES in the commit, not by anything the
+    pin author chose: a pin passes iff those exact bytes are published under those exact sources,
+    and getting them published means actually pushing them. Forging it requires making it true.
+  - **THIS DROPS THE "never hand-edit pins" RULE.** `make overlay-publish && make pin-artifacts`
+    is now a legitimate local round trip — you can make your own bytes the pinned ones without
+    waiting for CI. It only works for sources nothing has published yet (the store keeps the FIRST
+    bytes at a given hash and skips a second push), which is exactly the case that matters, since
+    editing a package moves its input hash.
+  - **Only the pins a change TOUCHES are checked**, and that is not laziness: a commit bumping a
+    package's sources makes its existing pin stale by definition — the pin-bump for it cannot exist
+    until after the merge — so a gate over all pins on every push would go red on precisely the
+    commits that are fine. A bare `make verify-pins-store` (every pin) is for auditing `main`, and
+    the RUNBOOK now points at it as the pre-tag check.
+  - **Exit 3 vs exit 1 is load-bearing**: "the registry told us nothing" and "this pin is wrong"
+    want opposite responses, so the CI step annotates them differently and only the second says to
+    change anything. `store_have()` retries the transient answer three times (5s, 10s) and never
+    retries "absent", which is a fact rather than a hiccup.
+  - Rejected on the way: blanket-rejecting any PR that touches `artifact.pin` (the pin-bump job's
+    entire output IS such a diff — it would block the only legitimate producer), and gating on
+    authorship (branch names are spoofable, anything that can open a PR as the bot can open any PR
+    as the bot, and nobody cares who typed the sha).
+  - Implementation note worth keeping: the check pulls through a NEW `overlay-store.sh fetch
+    <name> <dir> [hash]`, not through `pull`. `pull` installs into `work/repo` — verifying that way
+    would overwrite a developer's own build with store bytes, i.e. make "verify" a destructive verb
+    that destroys the very artifacts a local pin was about to describe. `pull_one` now sits on top
+    of `fetch_one`, so the retrieval-and-completeness half stays one implementation.
   - Prompted 2026-08-04 by nearly committing a locally generated gamescope pin while testing the
     night-mode fix; the local pin was reverted after the test bundle instead.
+  - Still NOT proven by any of this: that anyone reviewed the diff, or that the published bytes are
+    good. It proves a pin is not a private fiction. Provenance is still the review.
 
 - [ ] **Pocket FIT touch works via `=m` timing, not via a declared dependency — make the chipone
   probe defer.** HW-VALIDATED 2026-08-04: flipping `CONFIG_TOUCHSCREEN_CHIPONE_TDDI` to `=m`

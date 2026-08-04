@@ -62,7 +62,9 @@ a size one, and `.gz` is what balenaEtcher and Raspberry Pi Imager open.
 To cut a card: tag `card/vX.Y.Z`. To cut an update instead, tag `ota/vX.Y.Z` — the two ship on
 independent cadences and a bundle is expected far more often than a card. **Check before tagging**
 that `main`'s artifact pins match the store: between an overlay republish and its pin-bump PR
-merging, `make verify-pins` will fail the build.
+merging, a release build fails the pin gate. `make verify-pins-store` answers that from a clone in
+under a minute — it pulls each pinned artifact and compares, needing no `work/` and no credentials.
+Exit 3 means the registry did not answer (retry); exit 1 means a pin really is wrong.
 
 The version and commit a card was built from are stamped into `/etc/novadeck-release` on the device
 (`NOVADECK_VERSION`, `NOVADECK_GIT`), so a running system can name where it came from.
@@ -75,6 +77,24 @@ make sdcard                                   # -> out/images/sdcard.img
 make verify-card                              # GPT, ESP, per-slot filesystem identities
 sudo dd if=out/images/sdcard.img of=/dev/sdX bs=4M conv=fsync status=progress
 ```
+
+**Editing an overlay package needs no CI round trip.** `make overlay` compiles it locally and the
+dev path installs it — nothing reads `packages/*/artifact.pin` unless `ROOTFS_MODE=release`, so
+patch, build, flash, repeat is entirely local. Pins only enter when you want *your* bytes to be the
+ones a release installs, and that is now a local sequence too:
+
+```sh
+make overlay                                  # compile the package you changed
+packages/overlay-store.sh login               # classic PAT with write:packages (see the script)
+make overlay-publish                          # your bytes become the store's, at this input hash
+make pin-artifacts                            # record their shas, review the diff
+make verify-pins-store PKG=<name>             # prove the pin names published bytes
+```
+
+The publish is the load-bearing step, and it only wins for sources nothing has published yet: the
+store keeps the FIRST bytes at a given input hash. Editing a package moves that hash, so the case
+you care about is the case that works. Skip all of it to just let CI publish and open its pin-bump
+PR — the sequence exists so waiting is a choice.
 
 `make-sdcard.sh` lays the **full** GPT — ESP + root-A/-B + var-A/-B + home, with `/home` pre-seeded
 with the native arm64 Steam client. Each `efi-*` partition carries that slot's stage-2 GRUB, its
@@ -330,6 +350,7 @@ make verify-lock                # lock's novadeck rows vs packages/ (seconds)
 make test                       # slot-state + bootctl + post-install + pairingd suites
 make test-signing               # RAUC signing self-test (container)
 make verify-pins                # overlay artifact bytes vs packages/*/artifact.pin (release gate)
+make verify-pins-store          # only if you touched a pin: are those bytes published? (network)
 ```
 
 CI runs `make test` and `make test-signing` on every push and pull request. `make test` needs no

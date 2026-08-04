@@ -48,6 +48,31 @@ rationale lives in the linked memories and commit history.
     exists and `ensure_exists()` short-circuits — an empty-B card is the only state that reaches
     the `bc create` branch. Keep that in mind if this ever needs re-testing.
 
+- [ ] **Enforce artifact pins by VERIFIABILITY, not by convention — a PR check that re-pulls each
+  changed pin from the store.** Today nothing mechanically guards `packages/*/artifact.pin`: there
+  is no CODEOWNERS, and no job rejects a diff touching them. The only control is the review
+  convention stated in `.github/workflows/overlay.yml` ("THE REVIEW OF THIS PR *IS* THE PROVENANCE
+  CLAIM … it cannot prove anyone looked"). A hand-run `make pin-artifacts` can therefore commit a
+  pin describing bytes that exist on exactly one machine — which then breaks CI's next release
+  build, since CI builds from store artifacts and its bytes will not match the local sha.
+  - **A blanket "reject any PR touching artifact.pin" rule cannot work**: the `pin-bump` job's
+    entire output IS a diff to those files, so it would block the only legitimate producer.
+  - **Gating on authorship is the wrong axis** — branch names are spoofable, and anything that can
+    open a PR as the bot can open any PR as the bot. It also protects the wrong property; nobody
+    cares who typed the sha.
+  - **Proposal:** a PR check that, for every changed `artifact.pin`, pulls that artifact from the
+    overlay store (`packages/overlay-store.sh`) and asserts the sha matches. CI's pin-bump PR
+    passes trivially (it pins what it just published); a hand-edited pin fails unless those exact
+    bytes are genuinely published. Forging it requires actually publishing, at which point the pin
+    is honest by construction. This is strictly stronger than the current convention and would let
+    the "never hand-edit pins" rule be dropped.
+  - Caveats: needs store read access from the PR check (anonymous `oras pull` from GHCR appears to
+    work, so probably no secret needed), and it couples pin PRs to store availability — a flaky
+    registry becomes a red check. Consider a retry and a clear failure message distinguishing
+    "sha mismatch" from "could not reach the store", since those mean opposite things.
+  - Prompted 2026-08-04 by nearly committing a locally generated gamescope pin while testing the
+    night-mode fix; the local pin was reverted after the test bundle instead.
+
 - [ ] **Pocket FIT touch works via `=m` timing, not via a declared dependency — make the chipone
   probe defer.** HW-VALIDATED 2026-08-04: flipping `CONFIG_TOUCHSCREEN_CHIPONE_TDDI` to `=m`
   restored the touchscreen and cut the boot (the built-in probe was burning ~18.6s of the 20.9s

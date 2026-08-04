@@ -256,6 +256,13 @@ jobs:
   # THE REVIEW OF THIS PR *IS* THE PROVENANCE CLAIM. verify-pins.sh proves the bytes match these
   # pins; it cannot prove anyone looked. Auto-merging this would reduce the whole mechanism to
   # "CI published what CI published", so it opens a PR and stops.
+  #
+  # What the review is NO LONGER load-bearing for: whether the pins describe real, retrievable
+  # bytes. `ci.yml`'s `pins` job pulls every changed pin back out of the store and compares, so a
+  # pin naming bytes that exist on one machine is now caught at PR time rather than at the next
+  # release build. That check runs on THIS PR too — trivially green here, since these are the shas
+  # of what the job above just published. The review is for judging the CHANGE, not for policing
+  # where the file came from.
   pin-bump:
     name: open the pin-bump PR
     needs: verify

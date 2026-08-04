@@ -45,6 +45,90 @@ jobs:
       # shell against temp-dir sandboxes — no build, no container, no root, no device.
       - run: make test
 
+  # THE PIN GATE. packages/*/artifact.pin names the exact bytes a release build installs, and until
+  # this job existed the only control on them was a convention ("the review of the pin-bump PR IS
+  # the provenance claim", .github/workflows/overlay.yml). A convention cannot stop `make
+  # pin-artifacts` from committing a sha for bytes that exist on one laptop — which is not caught
+  # until CI's next release build fails, because CI builds from STORE artifacts and its bytes will
+  # not be that laptop's.
+  #
+  # So: for every artifact.pin this change touches, pull that artifact from the overlay store and
+  # compare. The pin-bump PR passes trivially — it pins what CI just published. A hand-written pin
+  # passes iff those bytes are genuinely published, and publishing them is the honest act, so
+  # forging this requires making the claim true. That is strictly stronger than the convention, and
+  # it is why hand-writing a pin is now allowed (see `pin-artifacts` in the Makefile).
+  #
+  # WHY NOT "REJECT ANY PR THAT TOUCHES artifact.pin": the pin-bump job's entire output IS such a
+  # diff, so that rule blocks the only legitimate producer. And gating on the AUTHOR is the wrong
+  # axis — branch names are spoofable, anything that can open a PR as the bot can open any PR as the
+  # bot, and nobody cares who typed the sha. Verifiability is the property worth checking.
+  #
+  # STILL NO SECRETS: pulling from the store needs no credentials (overlay.yml's retrieval job
+  # asserts exactly that), so this runs on a fork's pull request like everything else here.
+  pins:
+    name: changed artifact pins name published bytes
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The base ref has to be present to diff against, and a PR of any depth can move a pin.
+          fetch-depth: 0
+
+      # Two outputs, and the empty-list encoding is deliberate: `pins` empty with `run` true means
+      # "could not tell what changed — check EVERY pin". A change of unknown shape must widen the
+      # check, never silence it.
+      - id: changed
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          base=""
+          if [ -n "${BASE_REF:-}" ]; then
+            base="origin/$BASE_REF"
+          elif [ -n "${BEFORE:-}" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ] \
+               && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            base="$BEFORE"
+          fi
+          if [ -z "$base" ]; then
+            echo "no diff base (first push, force-push or dispatch) — checking every pin" \
+              >> "$GITHUB_STEP_SUMMARY"
+            { echo "run=true"; echo "pins="; } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # --diff-filter=d drops DELETIONS: a pin a change removes is not a pin to verify, and
+          # feeding the path anyway makes the checker die on a file that is gone on purpose.
+          pins="$(git diff --name-only --diff-filter=d "$base...HEAD" -- 'packages/*/artifact.pin' | tr '\n' ' ')"
+          if [ -z "$pins" ]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "no artifact.pin touched since $base — nothing to verify" >> "$GITHUB_STEP_SUMMARY"
+          else
+            { echo "run=true"; echo "pins=$pins"; } >> "$GITHUB_OUTPUT"
+            echo "verifying against the store: $pins" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # The two failures mean OPPOSITE things and must not read the same. Exit 3 is
+      # "the store never answered" — retry it. Anything else is "this pin is not what is
+      # published" — do not retry it, fix the pin.
+      - name: verify against the overlay store
+        if: steps.changed.outputs.run == 'true'
+        env:
+          PINS: ${{ steps.changed.outputs.pins }}
+        run: |
+          set -uo pipefail
+          rc=0
+          # Intentional word-split: PINS is a space-separated path list, and every entry is
+          # validated against packages/<name>/source.pin by the script before it is used.
+          # shellcheck disable=SC2086
+          packages/verify-pins.sh --store $PINS || rc=$?
+          case "$rc" in
+            0) ;;
+            3) echo "::error::could not reach the overlay store — infrastructure, not a bad pin. Re-run this job." ;;
+            *) echo "::error::a changed artifact.pin does not describe published bytes (see the log above)" ;;
+          esac
+          exit $((rc == 0 ? 0 : 1))
+
   signing:
     name: RAUC signing self-test
     runs-on: ubuntu-latest

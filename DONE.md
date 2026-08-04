@@ -2262,3 +2262,32 @@ name. Order is as it was in TODO.md — roughly the order things were closed, no
   setgid bit on its next run, surfacing months later as a publish that fails on `mkdir` for a new
   channel. Re-ran it to prove it: ownership survived, CI key still writes, `/healthz` still 200.
   See [[ota-server-oracle-instance]], `docs/ota.md`.
+
+- [x] **Move the `R2_*` card credentials into their own protected environment** — DONE 2026-08-04.
+  The trio was repo-wide, so any `workflow_dispatch` by anyone with write access reached it. That is
+  worse than "a write credential to a public bucket" suggests: `images/publish-card.sh` prunes with
+  `rclone purge` at KEEP=1, so these credentials can **delete** the published card, not merely add
+  one. Now in `release-cards` (required reviewer `loki666`), with the repo-wide copies deleted.
+  **A SECOND environment, not `release-signing`.** That one's deployment policy is `ota/v*`; cards
+  ship on `card/v*`, so reusing it would have rejected every card release at the gate. Its policy
+  allows `main` as well as the `card/v*` tags, because a dispatch with `publish: true` is a
+  documented way to cut a card and a tag-only policy would refuse it. Both still require a reviewer,
+  so the result is strictly tighter than repo-wide rather than a new door.
+  **The half that would have failed silently.** `release-sdcard.yml` passed the secrets explicitly
+  (`R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}`), and that expression evaluates in the CALLER's
+  context — a job calling a reusable workflow, which cannot declare an environment. The secrets
+  would have resolved to the empty string there, been handed to `image.yml` as empty strings, and
+  the build would have run ~4h before dying at the upload step. Now `secrets: inherit`, which defers
+  resolution to `image.yml`'s build job where the environment IS declared. Load-bearing in both
+  directions: `inherit` without the environment input, or the input without `inherit`, both give
+  blank credentials.
+  **Gated on `publish`, not on `ref_type == 'tag'`** — unlike the bundle path those differ for
+  cards, and gating on the tag would hand a publishing dispatch empty credentials. A dispatch that
+  only asks "does this still build?" names no environment, needs no approval, and cannot reach the
+  upload step at all (`image.yml` guards it on `inputs.publish`).
+  `r2_env` now names this mechanism in its failure message instead of saying only "R2_ACCOUNT_ID not
+  set", which is useless when the secret is plainly visible in repo settings.
+  **Proven:** `card/v0.2.1` was moved to head and its run paused at the `release-cards` gate — it
+  could not have paused there before this change. `R2_BUCKET`/`R2_PUBLIC_BASE` stay repo variables.
+  Second occurrence of the empty-secret trap in one day; the first cost `ota/v0.2.1` a green run
+  that published nothing. See [[ci-protected-environments]].

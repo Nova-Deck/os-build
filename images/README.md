@@ -20,7 +20,8 @@ The root is mounted `ro`. Writable state lives in three places, mirroring SteamO
   `/home/.novadeck/offload/` by `novadeck-offload.target`, so the 256M `/var` never fills.
 
 Because `/etc` rides on `/var`, and `/var` is per-slot, **a slot switch carries `/etc` with
-it** — which is why RAUC must rsync `/var` across on update (see `TODO.md`).
+it** — which is why RAUC rsyncs `/var` across on update, in
+`fs-overlay/usr/lib/rauc/post-install.sh` (rationale and HW evidence: `DONE.md`).
 
 | File | Purpose |
 |---|---|

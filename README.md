@@ -184,8 +184,10 @@ creds, an SSH key and the dev package set baked in.
 | `ci/` | Signing-CA generator + notes for `.github/workflows/` |
 | `build/` | `Dockerfile` for the cross-compile image |
 
-Each of those directories carries its own `README.md` documenting it file-by-file. `TODO.md` is
-the working log — open items, and the decision record for closed ones.
+Each of those directories carries its own `README.md` documenting it file-by-file. `TODO.md` holds
+the OPEN items; `DONE.md` holds the closed ones and is the decision record — resolved entries keep
+their measurements, HW-validation dates and dead ends, because several are the only written record
+of why something is shaped the way it is.
 
 ### Adding a board
 

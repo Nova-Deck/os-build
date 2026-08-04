@@ -22,7 +22,7 @@
 # touches the network. Nothing here needs rauc, a bus, a server or a device.
 #
 # WHAT THIS CANNOT COVER: the install half. `apply`'s D-Bus conversation with rauc needs a bus, and
-# the only evidence that matters about a real install is a hardware one (see TODO.md). What is
+# the only evidence that matters about a real install is a hardware one (see DONE.md). What is
 # covered is everything up to InstallBundle, which is where every decision gets made.
 set -uo pipefail
 

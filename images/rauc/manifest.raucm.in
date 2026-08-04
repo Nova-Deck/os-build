@@ -33,3 +33,24 @@ format=verity
 # then the bootloader marks it primary and rolls back if first boot fails.
 [image.rootfs]
 filename=rootfs.img
+# Ship a SHA256 index of every 4KiB block alongside the image (~0.8% of it, ~30M here). At install
+# time rauc looks each block up in BOTH slots and fetches only the ones it cannot find locally, so
+# an OS-only update moves the delta instead of the whole slot. Measured 2026-08-04 on two
+# independent pairs of real bundles: 96.1% of non-zero blocks are reused and ~125M crosses the wire
+# instead of 3.90G (TODO.md carries the table and the method).
+#
+# Matching is CONTENT-addressed, not offset-based, and every local hit is re-hashed against this
+# index before use -- which is why post-install.sh's `btrfstune -U` is harmless here. It diverges
+# the target's btrfs metadata from the image that was written, so those blocks simply miss and get
+# re-fetched; it costs bandwidth proportional to metadata, never correctness.
+#
+# THIS IS AN OPTIMISATION, NOT A FORMAT CHANGE. The bundle still carries the full rootfs.img, and
+# rauc's adaptive path is best-effort with an unconditional fall-through to a raw copy on EVERY
+# failure -- no data-directory, unsupported method, or any error mid-way
+# (_reference/rauc/src/update_handler.c:986-1035). So `rauc install /path/bundle.raucb` from a
+# workstation still works exactly as before and still gains nothing, which is the point: the
+# pre-publish hardware install stays the same test it always was.
+#
+# It needs `data-directory` in fs-overlay/etc/rauc/system.conf. Without it this line is INERT and
+# says so only at g_message level -- see the long comment there.
+adaptive=block-hash-index

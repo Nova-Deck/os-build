@@ -40,6 +40,17 @@
 # has to verify. Treat every field in it as attacker-controlled: `bundle` is forced to a bare
 # filename so a manifest can never redirect the download to another host.
 #
+# THE BUNDLE IS STREAMED, NOT DOWNLOADED, and that is what makes an OTA cheap. This program hands
+# InstallBundle an https:// URL; rauc fetches it over NBD with HTTP Range requests and, because
+# images/rauc/manifest.raucm.in marks the image `adaptive=block-hash-index`, transfers only the
+# 4KiB blocks it cannot already find in one of the two slots. Measured 2026-08-04 on two pairs of
+# real consecutive bundles: 96.1% of non-zero blocks are reused, ~125M crosses the wire instead of
+# 3.90G. Nothing is staged on the device, so an update no longer needs free space in /home at all.
+#
+# That is also why this file no longer owns a transfer. It used to curl the bundle to STAGE_DIR
+# with a resume flag and a stall guard, then install from disk; see the block above EXIT_OK for
+# what each of those did and which one has no replacement.
+#
 # TEST SEAMS, in the same spirit as novadeck-bootctl's: images/test-update.sh executes THIS file
 # and overrides the environment below to redirect the release file, the config, the staging
 # directory, the fetch tool and the bus into a sandbox. What runs under test is the artifact that
@@ -69,33 +80,35 @@ CURL = os.environ.get("NOVADECK_CURL", "curl")
 DEFAULT_URL = "https://updates.novadeck.cloud-ip.cc"
 DEFAULT_CHANNEL = "stable"
 
-# The stall abort for the bundle download. The download deliberately runs with NO total time limit
-# (see fetch()) because a 4G transfer over a slow link is normal and must not be killed for being
-# slow -- but "no total limit" with nothing else means a WEDGED connection hangs forever. Steam sits
-# on a frozen progress bar, nothing times out, and the user's only move is to power-cycle a device
-# with no serial console.
-#
-# So the guard is on THROUGHPUT, not duration: give up only when the transfer is doing essentially
-# nothing for a sustained stretch. 1 KiB/s is far below any working link and far above a dead one,
-# and two minutes is long enough that a stalled-but-recovering transfer (a roaming Wi-Fi handoff,
-# a server hiccup) is not mistaken for a dead one. curl resumes with -C - on the next attempt, so
-# aborting here costs the user nothing already downloaded.
-DOWNLOAD_MIN_BYTES_PER_SEC = 1024
-DOWNLOAD_STALL_SECONDS = 120
-
 # Steam's exit-code contract. 7 is "no update available" and is ALSO how every recoverable failure
-# exits: a check that cannot reach the server, cannot parse the manifest or cannot fit the download
-# must not answer "yes" and must not answer with a crash. Fail closed.
+# exits: a check that cannot reach the server or cannot parse the manifest must not answer "yes"
+# and must not answer with a crash. Fail closed.
 EXIT_OK = 0
 EXIT_NONE = 7
 
-# The download is the long pole (a full slot image over Wi-Fi); the install is a local write. Split
-# the bar so neither half appears stalled. Tune from measurements, not taste.
-PROGRESS_DOWNLOAD_END = 60
-
-# Free space needed to stage a bundle, over and above the bundle itself. An install that dies for
-# want of a few MiB after a multi-gigabyte download is the worst possible time to find out.
-STAGE_MARGIN_BYTES = 512 * 1024 * 1024
+# WHAT USED TO BE HERE, because its absence is a deliberate decision and not an oversight.
+#
+# This program used to download the bundle to STAGE_DIR with curl and then hand rauc a local PATH.
+# That needed three things that are now gone: a free-space check with a margin (STAGE_MARGIN_BYTES),
+# a resumable transfer (`curl -C -`), and a THROUGHPUT guard -- abort at under 1 KiB/s for two
+# minutes -- because a download with no total time limit otherwise hangs forever on a wedged
+# connection, leaving Steam on a frozen bar and the user with nothing but the power button.
+#
+# rauc streams the bundle over NBD now, which is what makes `adaptive=block-hash-index` in the
+# manifest pay: it fetches only the blocks it cannot already find in the two slots (measured
+# 2026-08-04: ~125M instead of 3.90G). There is nothing left to stage, so the space check and the
+# progress split went with it.
+#
+# THE STALL GUARD COULD NOT BE CARRIED OVER, and this is the one real regression. rauc's D-Bus API
+# has no Cancel method -- Install, InstallBundle, Info, InspectBundle, Mark, GetSlotStatus,
+# GetPrimary, and that is all of it -- so once InstallBundle is accepted, this program cannot call
+# it off. What replaces the guard is inside rauc: nbd.c sets CURLOPT_CONNECTTIMEOUT 20 and retries a
+# failed range request five times before failing the install. That bounds a connection that BREAKS.
+# It does not bound one that merely stalls, which is bounded only by the kernel's TCP timeout.
+#
+# Accepted, because adaptive changes the cost of being wrong: a failed attempt leaves correct blocks
+# already written into the target slot, and the next attempt finds them locally instead of
+# re-fetching them. Retrying is cheap now in a way it never was when the unit of work was a 4G file.
 
 
 def log(msg):
@@ -157,24 +170,17 @@ def identity_of(info):
 # --- the manifest -------------------------------------------------------------------------------
 
 
-def fetch(url, dest=None, timeout=30):
-    """GET a URL with the pinned fetch tool. Returns bytes, or writes to dest and returns None.
-    Resumable when writing to a file: a dropped multi-gigabyte transfer must not start over."""
-    cmd = [CURL, "-fsSL", "--max-time", str(timeout)]
-    if dest:
-        # --max-time 0 lifts the cap set above (curl takes the last one): a multi-gigabyte bundle
-        # must not die at the 30s that is right for a small manifest. The speed guard replaces it
-        # -- abort a transfer that has stalled, never one that is merely slow. See the constants.
-        cmd += [
-            "-C", "-", "-o", dest,
-            "--max-time", "0",
-            "--speed-limit", str(DOWNLOAD_MIN_BYTES_PER_SEC),
-            "--speed-time", str(DOWNLOAD_STALL_SECONDS),
-        ]
-    cmd.append(url)
-    if dest:
-        return subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+def fetch(url, timeout=30):
+    """GET a small document with the pinned fetch tool. Returns bytes, or None.
+
+    THE MANIFEST ONLY. This used to have a second mode that streamed a multi-gigabyte bundle to
+    disk, with `-C -` to resume and a throughput guard to abort a wedged transfer. rauc streams the
+    bundle itself now (see install()), so the only thing curl still fetches is latest.json -- a few
+    hundred bytes, for which one flat timeout is the whole story."""
+    result = subprocess.run(
+        [CURL, "-fsSL", "--max-time", str(timeout), url],
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+    )
     if result.returncode != 0:
         return None
     return result.stdout
@@ -317,8 +323,13 @@ def rauc():
     )
 
 
-def install(path, on_percent):
-    """Drive InstallBundle to completion, reporting 0-100 of the INSTALL half through on_percent.
+def install(source, on_percent):
+    """Drive InstallBundle to completion, reporting 0-100 through on_percent.
+
+    `source` is an https:// URL. rauc resolves it by creating an NBD device and an unprivileged
+    helper (user `nobody`) that turns the block reads into HTTP Range requests, so the bundle is
+    never written to this device's storage. A local path still works and is what a workstation
+    install uses; this program only ever passes a URL.
 
     Asynchronous by design: InstallBundle returns as soon as the work is accepted, progress arrives
     as PropertiesChanged on the (isi) Progress tuple, and the result arrives on Completed. Returns
@@ -359,7 +370,7 @@ def install(path, on_percent):
     try:
         proxy.call_sync(
             "InstallBundle",
-            GLib.Variant("(sa{sv})", (path, {})),
+            GLib.Variant("(sa{sv})", (source, {})),
             Gio.DBusCallFlags.NONE,
             -1,
             None,
@@ -388,17 +399,10 @@ def steam_logged_in():
         return False
 
 
-def room_for(size):
-    """Free bytes at the staging directory, against the bundle plus a margin. Checked BEFORE the
-    download, not after: discovering this at the end costs the whole transfer."""
-    os.makedirs(STAGE_DIR, exist_ok=True)
-    stat = os.statvfs(STAGE_DIR)
-    free = stat.f_bavail * stat.f_frsize
-    needed = size + STAGE_MARGIN_BYTES
-    if free < needed:
-        log(f"need {needed} bytes free at {STAGE_DIR}, have {free}")
-        return False
-    return True
+# room_for() lived here: a free-space check against the bundle size plus a margin, run before the
+# download rather than after it. Nothing is staged any more -- rauc streams straight into the
+# inactive slot, which is a fixed-size raw partition that the bundle is built to fit by
+# construction -- so there is no longer a disk to run out of. Removed rather than kept as a no-op.
 
 
 # --- the subcommands ------------------------------------------------------------------------------
@@ -441,24 +445,15 @@ def cmd_apply():
     remote = manifest(base_url, channel)
     if remote is None:
         return EXIT_NONE
-    if not room_for(remote["size"]):
-        return EXIT_NONE
 
+    # ONE JOB NOW, so the bar is rauc's from end to end. There is no download half to weight against
+    # an install half: rauc fetches and writes in the same pass, and its own progress already spans
+    # both. Note the number it reports is progress through the INSTALL, not through the transfer --
+    # with adaptive most blocks come from the local slots, so the bar advances through stretches
+    # where nothing crosses the network at all.
     emit = progress_emitter()
-    path = os.path.join(STAGE_DIR, remote["bundle"])
-    if not download(remote, path, emit):
-        return EXIT_NONE
-
-    ok = install(path, lambda pct: emit(PROGRESS_DOWNLOAD_END + pct * (100 - PROGRESS_DOWNLOAD_END) / 100))
-
-    # The bundle is spent either way: on success it is written into the slot, on failure it is a
-    # multi-gigabyte file the user did not ask to keep. Leaving it behind fills /home silently.
-    try:
-        os.unlink(path)
-    except OSError:
-        pass
-
-    if not ok:
+    log(f"streaming {remote['url']} ({remote['size']} bytes at most; adaptive fetches less)")
+    if not install(remote["url"], emit):
         return EXIT_NONE
     write_staged(remote)
     emit(100)
@@ -479,39 +474,11 @@ def progress_emitter():
     return emit
 
 
-def download(remote, path, emit):
-    """Fetch the bundle, reporting 0..PROGRESS_DOWNLOAD_END.
-
-    Progress comes from the file on disk rather than from curl's own output: the size is known from
-    the manifest, curl's progress meter is a display format rather than an interface, and polling
-    the file works identically for a fresh transfer and a resumed one."""
-    proc = fetch(remote["url"], dest=path)
-    if proc is None:
-        return False
-    size = remote["size"]
-    while proc.poll() is None:
-        try:
-            done = os.path.getsize(path)
-        except OSError:
-            done = 0
-        emit(min(PROGRESS_DOWNLOAD_END, done * PROGRESS_DOWNLOAD_END / size))
-        try:
-            proc.wait(timeout=2)
-        except subprocess.TimeoutExpired:
-            pass
-    if proc.returncode != 0:
-        stderr = (proc.stderr.read() or b"").decode(errors="replace").strip()
-        log(f"download failed: {stderr or proc.returncode}")
-        return False
-
-    # Size is not integrity — the signature is — but a truncated file makes rauc fail with a
-    # confusing verity error instead of an obvious one, and it is free to check here.
-    actual = os.path.getsize(path)
-    if actual != size:
-        log(f"downloaded {actual} bytes, manifest says {size}")
-        return False
-    emit(PROGRESS_DOWNLOAD_END)
-    return True
+# download() lived here: curl the bundle to STAGE_DIR, reporting 0..PROGRESS_DOWNLOAD_END by polling
+# the growing file, then check the final size against the manifest. rauc does the fetching now, so
+# all of it is gone -- including that size check, which was never integrity (the signature is) and
+# only ever existed to turn a truncated file into an obvious error instead of a confusing verity
+# one. A streamed bundle cannot be truncated on disk, because it is never on disk.
 
 
 def cmd_status():

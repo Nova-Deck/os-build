@@ -473,6 +473,18 @@ OFFLOAD_ROOT=/home/.novadeck/offload
 # unit-name<TAB>path pairs; unit names must be the systemd-escaped path (see systemd-escape -p).
 OFFLOAD_PATHS='opt root srv var/log var/tmp var/cache/pacman var/lib/flatpak var/lib/systemd/coredump'
 
+# rauc's data-directory (fs-overlay/etc/rauc/system.conf), where it keeps the per-slot block-hash
+# indices that make adaptive updates work, plus central.raucs. Created by the same prepare service
+# because it has the same precondition -- a real directory on the /home partition, which does not
+# exist in the staged tree (that /home is only a mount point).
+#
+# A SIBLING OF THE OFFLOAD TREE, NOT A MEMBER OF IT, and the distinction is the whole point. The
+# offload paths are /var paths REDIRECTED onto /home because /var is a 256M per-slot partition.
+# This is the opposite requirement: data that must live somewhere no update touches, precisely
+# because post-install.sh reformats the target /var on every install. Adding it to OFFLOAD_PATHS
+# would give it a bind mount from a slot-local path and quietly reintroduce the problem.
+RAUC_DATA=/home/.novadeck/rauc
+
 cat >"$stage/usr/lib/systemd/system/novadeck-offload.target" <<'UNIT'
 [Unit]
 Description=novadeck offload mounts (bind /opt, /root, /srv and the growable /var paths onto /home)
@@ -509,6 +521,13 @@ cat >"$stage/usr/lib/novadeck/offload-prepare.sh" <<PREPARE
 set -eu
 
 OFFLOAD="$OFFLOAD_ROOT"
+
+# rauc's data-directory. No bind, no seeding, no mode mirroring -- 0700 root, created if absent and
+# never touched again, because everything in it is rauc's own state. An existing directory is left
+# alone: it holds the block-hash indices of both slots, and deleting them costs the next update a
+# full-size download (it re-hashes on demand, so it degrades in bandwidth, not in correctness).
+mkdir -p "$RAUC_DATA"
+chmod 0700 "$RAUC_DATA"
 
 for rel in $OFFLOAD_PATHS; do
   dst="\$OFFLOAD/\$rel"

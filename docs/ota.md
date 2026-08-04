@@ -67,10 +67,45 @@ ssh deck@<device> rauc install /path/to/novadeck-0.2.0.raucb
 NOVADECK_OTA_SSH_KEY=~/.ssh/<key> ota/publish-bundle.sh out/images/novadeck-0.2.0.raucb
 ```
 
+Step 2 installs from a **local file**, and that is still exactly the test it always was. The device
+itself STREAMS (below), but a local `rauc install <file>` is unaffected: rauc's adaptive path is
+best-effort with an unconditional fall-through to a plain full-slot copy, so a workstation install
+writes the same bytes it always did. It simply gains nothing from adaptive — there is no download
+to shrink.
+
 Step 2 is not optional and is not ceremony. Nothing on the device ends an unconfirmed trial boot
 (`TODO.md`), so a bundle that comes up to a black screen needs about six manual power-cycles to
 recover — on a device with no serial console. Every published bundle gets a hardware install first.
 That is the entire mitigation, and it was accepted as such on 2026-08-03.
+
+### The device streams; it does not download
+
+`novadeck-update` hands rauc the bundle's **https URL**, not a downloaded file. rauc creates an NBD
+device backed by an unprivileged helper (user `nobody`) that turns block reads into HTTP `Range`
+requests, so a bundle never occupies storage on the device — there is no staging directory to fill
+and no free-space precondition on an update.
+
+Because `images/rauc/manifest.raucm.in` marks the image `adaptive=block-hash-index`, the bundle also
+carries a SHA256 index of every 4 KiB block. rauc looks each block up in **both** slots and fetches
+only what it cannot find locally. Measured 2026-08-04 across two independent pairs of real
+consecutive bundles: **96.1% of non-zero blocks are reused, ~125 MB crosses the wire instead of
+3.90 GB.** Matching is content-addressed, and every local hit is re-hashed against the index inside
+the signed bundle before use — a corrupt or tampered local index can only cost bandwidth.
+
+Three consequences worth knowing before reading a slow first result:
+
+- **The first update after this shipped has no index for either slot.** rauc generates them on
+  demand, which means hashing both slots once. Expect that install to be slower and full-size; the
+  saving starts with the one after it.
+- **The progress bar tracks the INSTALL, not the transfer.** With most blocks coming from local
+  slots, it advances through stretches where nothing crosses the network.
+- **A failed stream is cheap to retry.** The correct blocks already written into the target slot are
+  exactly what the next attempt finds locally. There is no resume, and there is no way to cancel an
+  install once accepted — rauc's D-Bus API has no `Cancel` method. A broken connection is bounded
+  (5 range-request retries, then the install fails); a merely stalled one is bounded only by TCP.
+
+Both halves fail *silently* if lost — a rauc built without streaming, or a kernel without `nbd.ko`,
+degrades to a full download that still succeeds. `images/guard-rootfs.sh` asserts both at build time.
 
 `publish-bundle.sh` does, in order: verify the signature against the device keyring, read the version
 back out of the bundle, check free space on the server, upload to a `.part` name and rename, prove

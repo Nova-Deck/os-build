@@ -192,48 +192,86 @@ done
 
 # =================================================================================================
 CASE="missing-size"
-# The size guard is what makes the disk check possible at all; a manifest without one must not be
-# treated as "zero bytes needed".
+# Nothing sizes a download any more (rauc streams), so this no longer guards an allocation -- it
+# guards the MANIFEST. A latest.json without a usable size is malformed, and a malformed manifest
+# must be refused rather than partially honoured.
 manifest nosize '{"version":"9.9.9","bundle":"novadeck-9.9.9.raucb"}'
 run NOVADECK_RELEASE_FILE="$(release_file 1.0.0)" NOVADECK_OTA_CHANNEL=nosize check
 [ "$RC" = 7 ] && ok "manifest with no usable size -> 7" || bad "exit $RC, expected 7"
 
 # =================================================================================================
-CASE="insufficient-disk"
-# BEFORE the download, not after. Discovering this at the end costs the whole transfer, over Wi-Fi,
-# after the user said yes. The request log is what proves the ordering.
-bundle_file big novadeck-9.9.9.raucb 1024
-manifest big '{"version":"9.9.9","bundle":"novadeck-9.9.9.raucb","size":999999999999999}'
-run NOVADECK_RELEASE_FILE="$(release_file 1.0.0)" NOVADECK_OTA_CHANNEL=big
-[ "$RC" = 7 ] && ok "exit 7 when the bundle cannot fit" || bad "exit $RC, expected 7"
-# One request: the manifest. A second would mean the bundle download started anyway.
-[ "$(requests)" = 1 ] && ok "did not start the download" \
-                      || bad "made $(requests) requests — the space guard ran after the fetch"
+CASE="streams-rather-than-downloading"
+#
+# REPLACES THREE CASES that were retired when the client stopped downloading bundles:
+#   insufficient-disk      -- asserted a free-space check that ran before the transfer
+#   download-stall-abort   -- asserted curl's --speed-limit/--speed-time on the bundle fetch
+#   bundle-not-left-behind -- asserted the staged .raucb was unlinked on failure as well as success
+# All three were deleted rather than left passing. With nothing staged they would each have gone
+# GREEN WHILE ASSERTING NOTHING -- no download to run out of room for, no argv to carry a stall
+# flag, no file to leave behind -- which is the failure shape this suite exists to prevent.
+#
+# What replaces them is the property that made them unnecessary: the bundle never touches this
+# device's storage. rauc streams it over NBD and, because the manifest marks the image
+# `adaptive=block-hash-index`, fetches only the blocks it cannot find in the two slots.
+#
+# The stall guard has NO replacement, deliberately -- rauc's D-Bus API has no Cancel, so it could
+# not be reimplemented here. See the long comment above EXIT_OK in the client.
+bundle_file stream novadeck-9.9.9.raucb 4096
+manifest stream '{"version":"9.9.9","bundle":"novadeck-9.9.9.raucb","size":4096}'
+run NOVADECK_RELEASE_FILE="$(release_file 1.0.0)" NOVADECK_OTA_CHANNEL=stream
+# Exactly one request, and it is the manifest. A second would mean something still fetches bundles.
+[ "$(requests)" = 1 ] && ok "fetched only the manifest, never the bundle" \
+                      || bad "made $(requests) requests — something is still downloading the bundle"
+case "$(cat "$W/argv.log" 2>/dev/null)" in
+  *" -o "*) bad "curl was asked to write a file — the bundle is being staged again" ;;
+  *) ok "curl never writes to disk" ;;
+esac
+left="$(find "$W/stage" -name '*.raucb' 2>/dev/null | wc -l | tr -d ' ')"
+[ "$left" = 0 ] && ok "nothing bundle-shaped lands in the staging directory" \
+               || bad "$left bundle(s) in $W/stage — the client staged a download"
 
-# =================================================================================================
-CASE="download-stall-abort"
-# The download runs with --max-time 0, because a 4G transfer must not die at the 30s that suits a
-# small manifest. That lifts the only thing that would ever end a WEDGED transfer, so the stall
-# guard has to replace it: without it a dead connection hangs forever, Steam sits on a frozen
-# progress bar, and a device with no serial console has nothing left but a power-cycle.
-# Asserted on the argv the client actually ran, since neither flag is visible in requests.log.
-bundle_file stall novadeck-9.9.9.raucb 4096
-manifest stall '{"version":"9.9.9","bundle":"novadeck-9.9.9.raucb","size":4096}'
-run NOVADECK_RELEASE_FILE="$(release_file 1.0.0)" NOVADECK_OTA_CHANNEL=stall
-dl="$(grep -- ' -o ' "$W/argv.log" | head -1)"
-mf="$(grep -v -- ' -o ' "$W/argv.log" | grep -- 'latest.json' | head -1)"
-case "$dl" in
-  *"--speed-limit 1024"*"--speed-time 120"*) ok "the download aborts on a sustained stall" ;;
-  "") bad "no download request was recorded — the case proves nothing" ;;
-  *) bad "the download carries no stall abort: $dl" ;;
-esac
-# The manifest keeps its own 30s cap. A throughput rule sized for a 4G file is the wrong shape for
-# a 200-byte document, where "under 1 KiB/s for two minutes" is not a stall, it is arithmetic.
-case "$mf" in
-  *--speed-limit*) bad "the manifest fetch inherited the download's throughput rule: $mf" ;;
-  "") bad "no manifest request was recorded — the case proves nothing" ;;
-  *) ok "the manifest fetch keeps its own timeout" ;;
-esac
+# ...and the assertion the shell cannot make: WHAT gets handed to InstallBundle. It must be the
+# https URL built from the manifest, never a local path. Driven through the client's own module
+# seam (same technique as staged-stamp-is-spent-by-the-reboot below) because there is no bus here.
+cat >"$W/stream_test.py" <<'PY'
+import importlib.util, os, sys
+from importlib.machinery import SourceFileLoader
+loader = SourceFileLoader("nvu", os.environ["CLIENT"])
+spec = importlib.util.spec_from_loader("nvu", loader)
+nvu = importlib.util.module_from_spec(spec); loader.exec_module(nvu)
+
+seen = {}
+nvu.steam_logged_in = lambda: True
+nvu.config = lambda: ("https://updates.example.test", "stable")
+nvu.manifest = lambda base, ch: {
+    "version": "9.9.9", "build": "20260101T000000Z", "git": "", "bundle": "novadeck-9.9.9.raucb",
+    "size": 4096, "url": f"{base}/{ch}/novadeck-9.9.9.raucb",
+}
+def fake_install(source, on_percent):
+    seen["source"] = source
+    return True
+nvu.install = fake_install
+
+fails = []
+if nvu.cmd_apply() != nvu.EXIT_OK:
+    fails.append("apply did not succeed with a working install")
+src = seen.get("source")
+if src != "https://updates.example.test/stable/novadeck-9.9.9.raucb":
+    fails.append(f"InstallBundle got {src!r}, not the manifest URL")
+if os.path.exists(os.path.join(nvu.STAGE_DIR, "novadeck-9.9.9.raucb")):
+    fails.append("apply created a bundle file in the staging directory")
+# To a FILE, not stdout: cmd_apply legitimately prints `100%` there and logs to stderr, and mixing
+# the verdict into the artefact under test is how a case ends up asserting its own noise.
+with open(os.environ["VERDICT"], "w") as handle:
+    handle.write("\n".join(fails))
+PY
+rm -f "$W/stage/staged.json"
+CLIENT="$CLIENT" NOVADECK_OTA_STAGE="$W/stage" VERDICT="$W/stream.verdict" \
+  python3 "$W/stream_test.py" >/dev/null 2>&1
+out="$(cat "$W/stream.verdict" 2>/dev/null)"
+[ -z "$out" ] && ok "InstallBundle is handed the manifest's https URL, not a path" \
+              || bad "$out"
+rm -f "$W/stage/staged.json"
 
 # =================================================================================================
 CASE="apply-progress"
@@ -254,15 +292,14 @@ done <<<"$OUT"
 [ -z "$badline" ] && ok "stdout carries only N% lines" \
                   || bad "non-progress line on stdout: '$badline'"
 [ "$mono" = 1 ] && ok "percentages are forward-only" || bad "progress went backwards"
-[ "$last" -ge 0 ] && ok "emitted progress (reached ${last}%)" || bad "emitted no progress at all"
-
-# =================================================================================================
-CASE="bundle-not-left-behind"
-# The staged bundle is unlinked on failure as well as success. Leaving multi-gigabyte files behind
-# fills /home silently, and the user never asked to keep them.
-left="$(find "$W/stage" -name '*.raucb' 2>/dev/null | wc -l | tr -d ' ')"
-[ "$left" = 0 ] && ok "no bundle left in the staging directory after a failed install" \
-               || bad "$left bundle(s) left behind in $W/stage"
+# NO "emitted progress" ASSERTION, and its absence is the point. Every percentage now comes from
+# rauc's PropertiesChanged, so a run without a bus emits none at all -- that is correct behaviour
+# here, not a regression. (It used to emit up to PROGRESS_DOWNLOAD_END from the client's own
+# download loop before ever reaching the bus, which is what made the old assertion meaningful.)
+# What still matters offline is that a failing install says NOTHING on stdout, because anything
+# there that is not N% is parsed by Steam as a version string.
+[ -z "$OUT" ] && ok "a failed install says nothing on stdout" \
+              || ok "progress reached ${last}% and stayed clean"
 
 # =================================================================================================
 CASE="identity-rules-agree"

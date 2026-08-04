@@ -138,29 +138,73 @@ them. The full rationale otherwise lives in the linked memories and commit histo
   genuinely slow boot costs one reboot and a rolled-back good update, which the user can simply
   re-apply; not firing costs an unbounded black screen and a flat battery.
 
-- [ ] **Adaptive (delta) bundles — every update writes the whole 7G slot today** — `[image.rootfs]`
-  in `images/rauc/manifest.raucm.in` names `rootfs.img` and nothing else, so `rauc install` streams
-  and writes the entire root image whatever changed in it. On an SD card that is minutes of writes
-  and a full-image download for a one-package bump. rauc 1.15.2 already ships the fix: **adaptive
-  updates** (`adaptive=block-hash-index`, its only supported method — see `docs/advanced.rst`
-  §"Adaptive Updates" in `work/overlay-build/aarch64/rauc/src/rauc-1.15.2`). RAUC indexes the
-  RUNNING slot by block hash and transfers only the blocks that differ.
-  **Why the payoff is large here specifically:** the slot's bulk is the three x86-emulation
-  artifacts pinned inside it by `images/partition-table.txt` — the FEX guest `.ero` plus two arm64
-  Protons, ~2.9G of a ~3.7G image — and those change only when their pins move. An OS-only update
-  should move a few hundred MB instead of 7G.
-  **Fits what we already have, deliberately:** it works for **block devices only**, and both slots
-  are `type=raw` (`fs-overlay/etc/rauc/system.conf`). The bundle still carries the full image, so a
-  slot with no usable index just falls back to a full write — no new failure mode, and no change to
-  the boot path, the trial/rollback contract, or the initramfs.
-  **Preconditions to check before claiming the win:** (1) adaptive needs the bundle *streamed*
-  (HTTP(S)), not installed from a local file — a local `rauc install /path/bundle.raucb` has
-  nothing to save; we have no update server yet, so this is coupled to whatever serves bundles.
-  (2) `post-install.sh` randomises the target's btrfs fsid after the write, so the on-device bytes
-  of a slot diverge from the image that was installed into it — confirm that does not poison the
-  block index against the NEXT update before assuming steady-state deltas stay small.
-  (3) Measure it, don't assume: `docs/advanced.rst` notes install *duration* is often similar to a
-  non-adaptive install even when far less data moves. The download is the win; the write may not be.
+- [ ] **Adaptive (delta) bundles — every update writes the whole slot today. MEASURED 2026-08-04:
+  the win is ~32x and the gate is PASSED; what remains is implementation.** `[image.rootfs]` in
+  `images/rauc/manifest.raucm.in` names `rootfs.img` and nothing else, so `rauc install` streams
+  and writes the entire root image whatever changed in it — 3.90 GB per bundle for a one-package
+  bump. rauc 1.15.2 already ships the fix: **adaptive updates** (`adaptive=block-hash-index`, its
+  only supported method — `docs/advanced.rst` §"Adaptive Updates", now readable at
+  `_reference/rauc/`). RAUC hashes every 4 KiB block, looks each one up in the two local slots, and
+  fetches only what is genuinely new. Matching is content-addressed, not offset-based, and every
+  local hit is re-hashed against the signature-covered bundle index — so a stale or tampered local
+  index can only cost bandwidth, never correctness.
+
+  **THE FULL PLAN, with the measurement written up, lives at
+  `~/.claude/plans/fizzy-fluttering-hopper.md`** (outside the repo — read it before starting).
+
+  **Phase 1 is DONE and the gate is passed.** Measured offline against the real bundles in
+  `out/images/`, streaming each payload with `unsquashfs -cat <bundle> rootfs.img` (squashfs-tools
+  4.7.5 inside `novadeck-build`, so nothing is extracted to disk) into a 4 KiB block hasher kept at
+  `work/adaptive-measure/blockindex.py`:
+
+  | pair | non-zero 4K reuse | squashfs blocks touched | on the wire |
+  |---|---|---|---|
+  | `0.2.1` -> `0.2.2` (consecutive releases) | **96.1%** | 1531 / 48424 | **~123 MB** of 3.90 GB |
+  | `20260802` -> `0.2.2` (a day apart) | **96.1%** | 1560 / 48424 | **~125 MB** of 3.90 GB |
+
+  Both payloads are 1 549 568 blocks, of which **33.3% are all-zero** (`mkfs.btrfs --shrink`
+  sparseness). Those are counted and EXCLUDED — including them reports a flattering 97.4%, which
+  is the number not to quote.
+
+  Three things that settles: (1) `mkfs.btrfs --rootdir --compress zstd` produces a **stable**
+  extent layout across builds — that was the top risk and it is retired; (2) changed blocks
+  **cluster** (3466 runs, 46 KiB average), so the default 128 KiB squashfs block barely amplifies
+  — `--mksquashfs-args="-b 64k"` measured 122.9 MB vs 123.2 MB and is **not worth doing**;
+  (3) casync/casync-nano is **not** the answer here — see the plan file for the four reasons, and
+  note the CDC comparison was deliberately not run because the only condition that would overturn
+  the recommendation (fixed 4 KiB blocks matching poorly) did not occur.
+
+  **What is left, in order.** (a) `data-directory=/home/.novadeck/rauc` in
+  `fs-overlay/etc/rauc/system.conf` — WITHOUT IT `adaptive=` IS SILENTLY INERT (the shipped binary
+  logs `Ignoring adaptive method since 'data-directory' is not configured` and falls back to a full
+  copy). It cannot live in `/var`: `post-install.sh` step 2 `mkfs.ext4`s the target `/var` and
+  rsyncs the running one over it, and rauc requires a filesystem "not overwritten during updates"
+  — `/home` is the only one that qualifies. Needs the dir created in `assemble-rootfs.sh` §4h
+  (sibling of `OFFLOAD_ROOT`, not an offload bind) plus a `rauc.service` drop-in with
+  `RequiresMountsFor=`, because rauc is D-Bus activated and nothing orders it after `home.mount`.
+  Note it also implies `statusfile=<dir>/central.raucs`, which replaces the per-slot status rauc
+  cannot keep for `type=raw` slots — re-check `staged_identity()` in `novadeck-update`, that
+  function has already shipped one HW-only bug. (b) one line `adaptive=block-hash-index` in the
+  manifest. (c) `novadeck-update` must hand `InstallBundle` a **URL** instead of a downloaded path
+  — adaptive only pays when the bundle is streamed. That deletes `download()`, `room_for()` and the
+  `DOWNLOAD_*` stall guard; rauc has **no Cancel method**, so the stall guard cannot be reproduced
+  (accepted: `nbd.c` retries a range request 5x then fails, and a re-run is cheap because the
+  partially written target slot is exactly what the next index finds locally). (d) retire the three
+  now-dead cases in `images/test-update.sh` (`insufficient-disk`, `download-stall-abort`,
+  `bundle-not-left-behind`) and add two `guard-rootfs.sh` assertions — `nbd.ko` present, and the
+  staged `usr/bin/rauc` still reporting `streaming=1`.
+
+  **Preconditions from the original entry, now resolved rather than open.** Streaming: rauc is
+  ALREADY built with `streaming=1` and `CONFIG_BLK_DEV_NBD=m` is already in the kernel with
+  `nbd.ko` shipped — and it **autoloads**, because `nbd.c` declares `MODULE_ALIAS_GENL_FAMILY` and
+  genetlink `request_module()`s an unknown family by name. nginx already serves Range requests
+  (`gzip off` on `\.raucb$`, which today's `curl -C -` resume depends on). The fsid worry is a
+  non-issue: `btrfstune -U` diverges metadata blocks, but content-addressed matching just re-fetches
+  them — it costs bandwidth proportional to btrfs metadata, not correctness. And a **local**
+  `rauc install /path/bundle.raucb` keeps working byte-for-byte: `_reference/rauc/src/
+  update_handler.c:986-1035` makes adaptive best-effort with an unconditional `goto raw_copy` on
+  every failure path, so the pre-publish HW gate is untouched.
+
   Raised 2026-07-29 while rejecting Android-style Virtual A/B (single slot + dm-snapshot COW). That
   was declined on its merits — it reclaims ~7G, needs `dm-user`/`snapuserd` which are **not**
   upstream (mainline gives us plain uncompressed `dm-snapshot` only), would force

@@ -358,6 +358,35 @@ if [ ! -s "$STAGE/usr/bin/btrfstune" ]; then
   rauc_ok=0
   bad "/usr/bin/btrfstune is missing — the post-install hook cannot re-randomise the target slot's fsid"
 fi
+
+# --- the two halves of adaptive streaming, both of which fail SILENTLY --------------------------
+# Adaptive updates (images/rauc/manifest.raucm.in) cut a release-to-release OTA from 3.90G to ~125M
+# measured, but every way of losing them degrades to "a full download that still succeeds". Nothing
+# goes red on the device, nothing goes red in CI, and the only symptom is a bill and a slow update.
+# So they are asserted here, where a wrong answer is a build failure.
+#
+# 1. rauc must be BUILT with streaming. It is on by default upstream and packages/rauc/PKGBUILD
+#    passes plain arch-meson, so this holds today -- but a bump that touches meson_options.txt, or a
+#    distro that flips the default, would take it away with no other trace. The binary prints its
+#    own feature set (`1.15.2 create=1 ... streaming=1`), so grep it out of the shipped artefact
+#    rather than trusting the recipe: what matters is the aarch64 binary in the tree, not what the
+#    PKGBUILD asked for.
+if ! grep -aqF 'streaming=1' "$STAGE/usr/bin/rauc" 2>/dev/null; then
+  rauc_ok=0
+  bad "/usr/bin/rauc was built WITHOUT streaming — every OTA silently reverts to a full-slot download"
+fi
+# 2. The NBD module must ship. rauc streams by creating an /dev/nbdN backed by an unprivileged
+#    HTTP-Range helper; without the module `genl_ctrl_resolve(nl, "nbd")` fails and the install
+#    dies. It is CONFIG_BLK_DEV_NBD=m from the arm64 defconfig with no ARCH_* gate, so today it
+#    survives kernel/trim-platforms.config by accident rather than by decision -- and the open
+#    "residual foreign-hardware drivers" item in TODO.md proposes exactly the kind of per-driver
+#    negative pass that would take it out. No modprobe is needed at runtime (nbd.c declares
+#    MODULE_ALIAS_GENL_FAMILY and genetlink request_module()s an unknown family by name), so the
+#    only requirement is that the .ko is present.
+if ! find "$STAGE/lib/modules" -name 'nbd.ko*' -print -quit 2>/dev/null | grep -q .; then
+  rauc_ok=0
+  bad "nbd.ko is not in the module tree — rauc cannot stream, so adaptive updates are dead"
+fi
 # The hook drives the boot state through steamos-bootconf (the bc() seam), and the backend tool
 # does the same, so the cross-file consistency claim moved from "hook → bootctl" to "both files →
 # bootconf's real subcommand set". bootconf is external — holo-bootconf ships as

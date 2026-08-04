@@ -127,16 +127,41 @@ for pin in "${PINS[@]}"; do
     continue
   fi
 
-  if [ -f "$STAMPS/$name.hash" ] && [ "$(cat "$STAMPS/$name.hash")" = "$hash" ] \
-     && [ -f "$STAMPS/$name.files" ]; then
-    fresh=1
-    while read -r f; do [ -n "$f" ] && [ -f "$REPO_DIR/$f" ] || { fresh=0; break; }; done < "$STAMPS/$name.files"
-    if [ "$fresh" = 1 ]; then
-      echo "[overlay] $name: up-to-date (${hash:0:12}) — skip" >&2
-      continue
-    fi
+  # WHY this package is being built, distinguished rather than lumped together. The three reasons
+  # mean very different things, and in CI only ever ONE of them is true:
+  #
+  #   not built here yet   no stamp at all — a fresh runner or a clean clone. Nothing CHANGED;
+  #                        there is simply no previous build to compare against. This is the
+  #                        normal case for every CI build now that the overlay is compiled in-run.
+  #   inputs changed       source.pin, a patch or the local PKGBUILD moved. The dev-box case.
+  #   artifact missing     the stamp agrees, but a file it names is gone from the repo.
+  #
+  # These shared one message until 2026-08-04 ("inputs changed / artifacts missing"), which was
+  # tolerable while a store-pulled repo made the up-to-date path the CI norm — and actively
+  # confusing now that it is not. That exact string also used to be a FAILURE signal: the retired
+  # overlay.yml `verify` job grepped for it to assert a pulled repo had compiled nothing. Reading
+  # it as an alarm is a trained reflex worth disarming, since it is now the expected output.
+  why=""
+  if [ ! -f "$STAMPS/$name.hash" ] || [ ! -f "$STAMPS/$name.files" ]; then
+    why="not built in this tree yet"
+  elif [ "$(cat "$STAMPS/$name.hash")" != "$hash" ]; then
+    why="inputs changed ($(cut -c1-12 "$STAMPS/$name.hash") -> ${hash:0:12})"
+  else
+    # The stamp agrees, so the only way to need a build is a file it names being absent. Name the
+    # FIRST one: "something is missing" without saying what sends you reading ten filenames.
+    # A blank line counts as missing — it did before this change too (the old one-liner's
+    # `[ -n "$f" ] && … || fresh=0` treated it that way), and a stamp that cannot say what it
+    # produced is not a stamp to trust.
+    while read -r f; do
+      [ -n "$f" ] || { why="stamp has a blank artifact line"; break; }
+      [ -f "$REPO_DIR/$f" ] || { why="artifact missing: $f"; break; }
+    done < "$STAMPS/$name.files"
   fi
-  echo "[overlay] $name: inputs changed / artifacts missing — will rebuild" >&2
+  if [ -z "$why" ]; then
+    echo "[overlay] $name: up-to-date (${hash:0:12}) — skip" >&2
+    continue
+  fi
+  echo "[overlay] $name: $why — building" >&2
 
   # Stage: fetch (or copy) the PKGBUILD, drop patches in, edit the PKGBUILD. Fresh per-package
   # staging dir so a re-stage never mixes with a prior attempt.

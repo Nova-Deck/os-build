@@ -94,9 +94,17 @@ the signed bundle before use — a corrupt or tampered local index can only cost
 
 Three consequences worth knowing before reading a slow first result:
 
-- **The first update after this shipped has no index for either slot.** rauc generates them on
-  demand, which means hashing both slots once. Expect that install to be slower and full-size; the
-  saving starts with the one after it.
+- **Getting here takes two hops, and the first one measures nothing.** rauc runs from the RUNNING
+  slot, so it is that slot's `system.conf` and that slot's `novadeck-update` which decide whether an
+  install is adaptive — not the bundle's. A device on a pre-adaptive release therefore installs an
+  adaptive bundle as a plain full-slot write: no `data-directory` means `goto raw_copy`, and the old
+  client passes a local path rather than a URL. Only once that build is RUNNING does the next update
+  exercise any of this. Install the first hop by hand (`rauc install <file>`, which is the mandated
+  pre-publish step anyway) and there is nothing to publish for it.
+- **The first adaptive install still saves; it is just slower.** With no stored index for either
+  slot rauc generates them on demand, which costs one pass of hashing both slots. Matching — and so
+  the download saving — applies from that install onward. Indices are then kept in the data
+  directory on `/home`, which is shared, so they survive the slot switch.
 - **The progress bar tracks the INSTALL, not the transfer.** With most blocks coming from local
   slots, it advances through stretches where nothing crosses the network.
 - **A failed stream is cheap to retry.** The correct blocks already written into the target slot are

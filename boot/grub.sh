@@ -109,9 +109,23 @@ test -f grub-core/novadeck.mod || { echo "novadeck.mod was not built — is patc
 
 # Boot font. Prefer the tree-built grub-mkfont (needs libfreetype-dev in the container); fall back
 # to the distro grub-common one, which is the same GRUB 2.14.
+#
+# SIZE IS THE ONLY MENU-SCALE LEVER WE HAVE. gfxterm draws the menu in a fixed-size bitmap font at
+# whatever resolution the firmware hands us, and we never set gfxmode -- GRUB's default is already
+# `auto`, i.e. the panel's preferred (native) mode. So the menu's physical size is set here and
+# nowhere else; adding `set gfxmode=auto` to grub.cfg would parse, ship and change nothing.
+#
+# Forcing a small gfxmode instead is NOT the alternative it looks like: these are Qualcomm ABL/GOP
+# devices that generally expose only the native mode, so the request falls back to native silently
+# -- and it would also change what gfxpayload=keep hands the kernel.
+#
+# 32px because the catalog spans 1.78x in linear density: most boards are 1080 wide, the Pocket
+# S2/S2K are 1440x2560. At 16px the menu was unreadable there. Rotated 270 this gives roughly
+# 60x33 cells on a 1080 board and 80x45 on an S2 -- comfortable at both ends. Revisit if a panel
+# outside that range joins the catalog.
 MKFONT="$BUILDDIR/grub-mkfont"
 [ -x "$MKFONT" ] || MKFONT="$(command -v grub-mkfont)"
-"$MKFONT" -s 16 /usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf \
+"$MKFONT" -s 32 /usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf \
   -o "$OUT/fonts/dejavu-mono.pf2"
 
 file "$OUT/grubaa64.efi" "$OUT/fonts/dejavu-mono.pf2"

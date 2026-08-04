@@ -138,8 +138,8 @@ them. The full rationale otherwise lives in the linked memories and commit histo
   genuinely slow boot costs one reboot and a rolled-back good update, which the user can simply
   re-apply; not firing costs an unbounded black screen and a flat battery.
 
-- [ ] **Adaptive (delta) bundles — IMPLEMENTED (f552b23) and the streaming win is now HW-CONFIRMED
-  on the wire. One thing left: nobody has BOOTED a slot written this way.** `[image.rootfs]` in
+- [x] **Adaptive (delta) bundles — IMPLEMENTED (f552b23), HW-CONFIRMED on the wire at 61.8x, and a
+  delta-written slot has now BOOTED and confirmed itself good. DONE.** `[image.rootfs]` in
   `images/rauc/manifest.raucm.in` names `rootfs.img` and nothing else, so `rauc install` streams
   and writes the entire root image whatever changed in it — 3.90 GB per bundle for a one-package
   bump. rauc 1.15.2 already ships the fix: **adaptive updates** (`adaptive=block-hash-index`, its
@@ -229,12 +229,19 @@ them. The full rationale otherwise lives in the linked memories and commit histo
   Re-running it against a slot whose content is known is the only way to close that, and it is not
   worth a dedicated build — take it opportunistically the next time both slots are known.
 
-  **What this does NOT establish: that a delta-written slot boots.** A is `activated` and marked
-  `good`, the device is still booted from B, and a bad delta write would look exactly like this
-  until the reboot. `rauc install` returning 0 means the blocks were written and the bundle verified
-  — the same claim a full-slot install makes, and adaptive re-hashes every local hit against the
-  signature-covered index, so correctness is bounded by design rather than by this run. Still
-  unproven in fact. Next reboot settles it; until then treat adaptive as measured, not validated.
+  **The reboot settled it, same day: the delta-written slot BOOTS.** Device came up on `rootfs.0`
+  (A) running `0.2.2` / build `20260804T180433Z`, `novadeck-boot-good` logged `boot confirmed good
+  (image A)`, both slots ended `good`, zero failed units. So adaptive is validated, not merely
+  measured — correctness was already bounded by design (every local hit re-hashed against the
+  signature-covered index) and is now also observed.
+
+  One trap for whoever repeats this: **immediately after the reboot A reads `boot status: bad`, and
+  that is the normal unconfirmed-trial state, not a failure.** `novadeck-boot-good.path` waits for a
+  live session and the service adds `ExecStartPre=/usr/bin/sleep 30`, so the flip to `good` lands
+  minutes in. Reading `rauc status` at once and concluding the delta write was corrupt is the
+  available mistake here. (Do not use `uptime -p` to judge how long to wait — it disagreed with
+  `who -b` by ~10 min on this device, the stale-RTC behaviour noted elsewhere. Trust unit
+  timestamps.)
 
   Raised 2026-07-29 while rejecting Android-style Virtual A/B (single slot + dm-snapshot COW). That
   was declined on its merits — it reclaims ~7G, needs `dm-user`/`snapuserd` which are **not**

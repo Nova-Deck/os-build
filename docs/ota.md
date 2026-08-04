@@ -200,6 +200,18 @@ device left pointing at the test channel silently keeps reading it forever.
 
 Only once that passes: tag `card/vX.Y.Z`, then `ota/vX.Y.Z`.
 
+**`ota/vX.Y.Z` now publishes by itself.** Since 2026-08-04 `release-bundle.yml`'s `publish` job is
+live, so the tag builds the bundle, signs it with the release cert and pushes it to `stable/` —
+`make publish-bundle` from the workstation is the fallback, not the route. The tag asks for **two
+approvals**, not one: `build` waits for a reviewer to reach the signing key and `publish` waits
+again to reach the publishing key. That is deliberate — signing produces an artifact that still goes
+nowhere; publishing is the step that puts bytes in front of the fleet.
+
+A publish now ends in exactly one of two states, **published** or **red**. Before that date a
+missing credential was a `::notice::` and a skipped step, so `ota/v0.2.1` was cut, built, signed and
+published nowhere while the run went green; no one reads a skipped step at the bottom of an
+hour-long success.
+
 ### Rolling back a bad release
 
 The previous bundles are still on the server — that is what `KEEP=3` is for. Edit
@@ -217,13 +229,48 @@ recovers through the boot failsafe, not through the server.
 ## The server
 
 ```sh
-# stand it up, or re-run it — idempotent, and a second run reports state without changing it
-tar cz ota | ssh -i <key> ubuntu@updates.novadeck.cloud-ip.cc \
+# 1. the CI publishing account (creates `otapub`, installs ota/ci-publish.pub, re-owns the docroot)
+tar cz ota | ssh -i <admin key> ubuntu@updates.novadeck.cloud-ip.cc \
+  'sudo tar xz -C /tmp && sudo bash /tmp/ota/setup-ci-user.sh'
+
+# 2. stand it up, or re-run it — idempotent, and a second run reports state without changing it
+tar cz ota | ssh -i <admin key> ubuntu@updates.novadeck.cloud-ip.cc \
   'sudo tar xz -C /tmp && sudo bash /tmp/ota/setup-server.sh'
 
 # is it alive?
 curl -I https://updates.novadeck.cloud-ip.cc/healthz
 ```
+
+**Order matters, and only in one direction.** `setup-server.sh` defaults the docroot owner to
+`otapub` and *dies* if that account does not exist — it will not create a login itself, because the
+one property this account exists to have is *no privileges*, and a server bootstrap that quietly
+invents accounts is how that gets lost. Run `setup-ci-user.sh` first, or pass
+`NOVADECK_OTA_OWNER=ubuntu` to stand up a server with no CI principal at all.
+
+### The two publishing principals
+
+| | logs in as | key | may |
+|---|---|---|---|
+| workstation, by hand | `ubuntu` | the instance admin key | anything — it has passwordless sudo |
+| GitHub Actions | `otapub` | `OTA_SSH_KEY`, in the `release-signing` environment | write the docroot, nothing else |
+
+`otapub` is a system account with no password, no sudo, and no group but its own; its sole
+`authorized_keys` entry is prefixed `restrict`, so no pty and no forwarding of any kind. The public
+half is committed at `ota/ci-publish.pub`; the private half exists only as the CI secret.
+
+**A forced command was considered and rejected.** `command="rrsync /srv/novadeck-ota"` covers rsync,
+and `publish-bundle.sh` is not an rsync wrapper — it also runs `mkdir`, `df`, `mv`, `chmod`,
+`sha256sum` and a `bash -s` prune over ssh. A wrapper whitelisting those becomes a second,
+unversioned copy of the publish protocol: two things that must change together and will eventually
+disagree. An account with no sudo is the same bound enforced by the kernel instead.
+
+The docroot is therefore `otapub:otapub` mode **2775** — setgid, with `ubuntu` in the `otapub`
+group, so both principals can act on each other's files and the by-hand rollback below keeps
+working. Adding `ubuntu` to a group does not affect sessions that are already open; reconnect.
+
+**Rotating the CI key** needs no device involvement and no keyring change: `ssh-keygen` a new pair,
+replace `ota/ci-publish.pub`, re-run `setup-ci-user.sh` — it *rewrites* `authorized_keys` rather than
+appending, so the old key stops working — and `gh secret set OTA_SSH_KEY --env release-signing`.
 
 `/healthz` exists because `stable/` is legitimately empty between releases, so every other probe
 answers 404 and a dead server looks exactly like a quiet one.

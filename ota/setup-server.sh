@@ -39,7 +39,18 @@ DOMAIN="${NOVADECK_OTA_DOMAIN:-updates.novadeck.cloud-ip.cc}"
 DOCROOT="${NOVADECK_OTA_DOCROOT:-/srv/novadeck-ota}"
 # Who owns the docroot, i.e. who publish-bundle.sh rsyncs in as. nginx reads it as www-data through
 # the o+rx below, so the owner never needs to be www-data and publishing never needs sudo.
-OWNER="${NOVADECK_OTA_OWNER:-ubuntu}"
+#
+# `otapub`, not `ubuntu`, and this script does not create it — ota/setup-ci-user.sh does, and dies
+# below if it has not run. The two are ordered that way because the CI account is the thing that
+# must NOT have sudo, and a server bootstrap that silently invents privileged-adjacent accounts is
+# how that property gets lost. Set NOVADECK_OTA_OWNER=ubuntu to bring up a server without a CI
+# principal at all; publishing then only works from the workstation.
+OWNER="${NOVADECK_OTA_OWNER:-otapub}"
+# Mode 2775, not 0755: setgid so files created by EITHER publishing principal (otapub from CI,
+# ubuntu by hand) land in a group the other can act on. Dropping this back to 0755 does not break
+# anything until the next by-hand rollback or the next new channel, which is the worst possible
+# time to discover it — so it is set here as well as in setup-ci-user.sh, and both must agree.
+DOCROOT_MODE=2775
 # Certbot's registration address. Not cosmetic: it is the only warning anybody gets if the renewal
 # timer breaks, and an expired cert takes every device's update check offline with no device-side
 # symptom beyond "unreachable".
@@ -127,11 +138,14 @@ else
 fi
 
 # --- 3. the docroot ------------------------------------------------------------------------------
-id "$OWNER" >/dev/null 2>&1 || die "no such user '$OWNER' to own the docroot"
-install -d -o "$OWNER" -g "$OWNER" -m 0755 "$DOCROOT"
-install -d -o "$OWNER" -g "$OWNER" -m 0755 "$DOCROOT/.well-known" "$DOCROOT/.well-known/acme-challenge"
+id "$OWNER" >/dev/null 2>&1 || die "no such user '$OWNER' to own the docroot.
+  If that is 'otapub', it is the CI publishing account and this script does not create it:
+    bash $HERE/setup-ci-user.sh    # then re-run this one
+  To stand up a server with no CI principal, re-run with NOVADECK_OTA_OWNER=ubuntu."
+install -d -o "$OWNER" -g "$OWNER" -m "$DOCROOT_MODE" "$DOCROOT"
+install -d -o "$OWNER" -g "$OWNER" -m "$DOCROOT_MODE" "$DOCROOT/.well-known" "$DOCROOT/.well-known/acme-challenge"
 for ch in $CHANNELS; do
-  install -d -o "$OWNER" -g "$OWNER" -m 0755 "$DOCROOT/$ch"
+  install -d -o "$OWNER" -g "$OWNER" -m "$DOCROOT_MODE" "$DOCROOT/$ch"
   say "channel: $DOCROOT/$ch"
 done
 # A channel with no latest.json is the CORRECT resting state between releases, not a gap: the client

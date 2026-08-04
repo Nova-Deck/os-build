@@ -355,19 +355,3 @@ them. The full rationale otherwise lives in the linked memories and commit histo
      and card publishing would break at the upload step with blank credentials. This is exactly why
      the signing path uses `secrets: inherit` with the environment declared inside `image.yml`'s
      build job; `image.yml` already takes the `environment` input, so only the caller changes.
-
-- [ ] **A restricted SSH key so CI can publish OTA bundles** — `.github/workflows/release-bundle.yml`
-  has a `publish` job wired and gated, but `OTA_SSH_KEY` is deliberately **unset**, so it skips and
-  publishing is done from the workstation with `make publish-bundle`. The reason is not laziness:
-  the key used to publish today logs in as `ubuntu`, who has **passwordless sudo** on
-  `updates.novadeck.cloud-ip.cc`. Handing that to CI grants CI root on the host every device in the
-  field fetches from — a far larger grant than "may write one directory", and one with no clean
-  recovery. (Contrast the signing key, where a leak is answered by minting a new release cert from
-  the offline root: no device change, no keyring update, no reflash.)
-  **What to build:** a dedicated principal restricted to the docroot — its own user, or an
-  `authorized_keys` entry with `command="rrsync /srv/novadeck-ota"`, `no-pty`,
-  `no-port-forwarding`, `no-agent-forwarding`. Note `publish-bundle.sh` does more than rsync (it
-  runs `mkdir`, `df`, `mv`, `chmod` and the prune over ssh), so a forced-command wrapper has to
-  cover those or the script needs a narrower remote protocol. Then put the key in the
-  `release-signing` environment — NOT repo-wide, for the same reason as above.
-  Server contract: `docs/ota.md`. See [[ota-server-oracle-instance]].

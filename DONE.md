@@ -2234,3 +2234,31 @@ name. Order is as it was in TODO.md — roughly the order things were closed, no
   enablement in overlay. The epoch-stuck clock root cause was `/.dockerenv` (→
   `systemd-detect-virt=docker` skipped the unit's `ConditionVirtualization`); fixed by
   `sanitize_base_provenance()`. See [[dockerenv-systemd-container-misdetect]].
+
+- [x] **A restricted SSH key so CI can publish OTA bundles** — DONE 2026-08-04, server-side verified.
+  `ota/v0.2.1` was cut, built and signed, and its run went **green having published nothing**: the
+  `publish` job reported the missing `OTA_SSH_KEY` as a `::notice::` and skipped its steps, which no
+  one reads at the bottom of an hour-long success. Two things were wrong and only one of them was
+  the credential.
+  **The principal.** `ota/setup-ci-user.sh` (new, idempotent, runs as root on the instance) creates
+  `otapub`: a system account with no password, no sudo and no group but its own, whose sole
+  `authorized_keys` entry is `restrict`-prefixed. Public half committed at `ota/ci-publish.pub`;
+  private half exists only as the CI secret. Verified from outside with the CI key: docroot write,
+  `df`, `mv`, `chmod`, `sha256sum` and the `bash -s` prune all work; `sudo -n`, writing `/etc`,
+  reading `/etc/shadow`, a pty, and both `-L` and `-R` forwarding all refused. (`-L` binds
+  client-side and *appears* to succeed — the honest test is whether bytes traverse it. They do not.)
+  **A forced command was rejected, not skipped.** `rrsync` covers rsync and `publish-bundle.sh` is
+  not an rsync wrapper; a wrapper whitelisting the other five verbs becomes a second, unversioned
+  copy of the publish protocol. An account with no sudo is the same bound enforced by the kernel.
+  **The second bug: an environment-scoped secret reads as EMPTY in a job that does not declare the
+  environment.** No error, no warning. `OTA_SSH_KEY` went into `release-signing` as planned, so
+  without `environment:` on the `publish` job the fix would have reproduced the original symptom
+  exactly — green, nothing published, secret visibly present in repo settings. The job now declares
+  it (costing a second approval per release, which is the right shape) and a missing credential is a
+  hard `::error::` + `exit 1`: the only two outcomes are **published** or **red**.
+  **Docroot ownership moved** to `otapub:otapub` mode 2775 (setgid), with `ubuntu` in the `otapub`
+  group so the workstation path and the by-hand rollback keep working. `setup-server.sh`'s owner
+  default moved with it — left at `ubuntu` it would have chowned the tree back and dropped the
+  setgid bit on its next run, surfacing months later as a publish that fails on `mkdir` for a new
+  channel. Re-ran it to prove it: ownership survived, CI key still writes, `/healthz` still 200.
+  See [[ota-server-oracle-instance]], `docs/ota.md`.

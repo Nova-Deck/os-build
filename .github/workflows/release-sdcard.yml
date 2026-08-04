@@ -15,9 +15,10 @@
 # the device, so there is no signature for anything to verify. It DOES need the R2 credentials to
 # publish, but those are push-only credentials to a public bucket, not a root of trust.
 #
-# This is also the workflow that replaces building a release image locally. `make sdcard` on a dev
-# box fails the artifact-pin gate by design (packages/verify-pins.sh), so verifying OOBE on a real
-# release image means flashing what this produces.
+# A LOCAL `make sdcard` PRODUCES THE SAME KIND OF IMAGE. It used to fail an artifact-pin gate by
+# design, which made flashing this workflow's output the only way to see a real release image; that
+# gate was retired 2026-08-04. What this workflow still has that a dev box does not is the R2
+# credentials and a version string tied to a tag.
 name: release sdcard
 
 on:
@@ -130,10 +131,11 @@ jobs:
             echo "gzip -dc $(basename "$CARD_URL") | sudo dd of=/dev/sdX bs=4M status=progress"
             echo '```'
             echo
-            echo 'Check it against `sha256sums.txt` below before flashing. `provenance/` records the'
-            echo 'exact overlay artifact pins and package lock this card was built from.'
+            echo 'Check it against `sha256sums.txt` below before flashing. `manifest.lock` records'
+            echo 'every package this card was built from — third-party ones by sha256, ours by the'
+            echo 'digest of the sources they were compiled from in this run.'
           } > notes.md
           gh release create "$GITHUB_REF_NAME" \
             --title "novadeck card $VERSION" \
             --notes-file notes.md \
-            meta/sha256sums.txt meta/provenance/manifest.lock meta/provenance/pins/*.pin
+            meta/sha256sums.txt meta/provenance/manifest.lock

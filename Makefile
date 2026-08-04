@@ -35,8 +35,8 @@ BUILD_IMG ?= novadeck-build
 #   ESP          mounted EFI System Partition, for `make deploy`.
 #   NOVADECK_DEV=1  build a dev image. `set -a; . ./dev.env; set +a` sets this and the rest;
 #                dev.env is TRACKED and secret-free, and sources dev.env.local (gitignored) for
-#                Wi-Fi creds. This is also the ONLY way to build an image from packages you
-#                compiled yourself: a release build requires reviewed artifact pins (verify-pins).
+#                Wi-Fi creds. A RELEASE image (no NOVADECK_DEV) builds locally too — it just
+#                cannot be published, since the R2 and signing credentials only exist in CI.
 #   NOVADECK_WIFI_SSID/PSK  OPTIONAL dev-only Wi-Fi profile, injected from the environment so it
 #                never touches the repo. Absent => a card with NO network and no SSH, i.e. the
 #                shipping first-boot condition (the only honest way to test OOBE locally).
@@ -181,17 +181,6 @@ MODE_STAMP   := work/.rootfs-mode-$(ROOTFS_MODE)
 BASE_MODE       := $(if $(filter 1,$(NOVADECK_DEV)),dev,release)
 BASE_MODE_STAMP := work/.base-mode-$(BASE_MODE)
 
-# --- artifact-pin enforcement (release only) -----------------------------------
-# A RELEASE build installs overlay packages whose BYTES are named by a reviewed
-# packages/*/artifact.pin; a dev build does not. That is the whole dev/release distinction and it
-# is deliberately not a separate knob: a gate only CI remembers to set is a gate that rots, and
-# there is no legitimate release image that a developer builds locally — CI builds those, from
-# store artifacts a pin-bump PR recorded. See packages/verify-pins.sh.
-#
-# The lock already answers "were these built from the reviewed SOURCES?" on every build and every
-# machine. This answers the question the lock deliberately gave up: "are these the reviewed BYTES?"
-PINNED := $(if $(filter release,$(ROOTFS_MODE)),1,)
-
 # --- artifacts (real file targets drive incremental rebuilds) -----------------
 BUILD_STAMP := out/.build-image.stamp
 # Open linux-firmware blobs are SoC-agnostic — the unified kernel embeds the union — so this
@@ -302,8 +291,7 @@ KERNEL_SRC_HASH := work/.kernel-src.hash
 # ==============================================================================
 # Phony orchestration targets
 # ==============================================================================
-.PHONY: help all image toolchain kernel fw-linux fw-qcom base overlay overlay-pull overlay-publish \
-        verify-pins verify-pins-store pin-artifacts verify-lock \
+.PHONY: help all image toolchain kernel fw-linux fw-qcom base overlay verify-lock \
         rootfs relock \
         initramfs steamcl grub sdcard verify-card test bundle publish-bundle deploy clean clean-base clean-overlay distclean
 
@@ -318,7 +306,7 @@ help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
 	  | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-12s\033[0m %s\n",$$1,$$2}'
 	@echo
-	@echo "Knobs: BASE_CONFIG NOVADECK_VERSION ESP OVERLAY_PULL   dev build: set -a; . ./dev.env; set +a"
+	@echo "Knobs: BASE_CONFIG NOVADECK_VERSION ESP   dev build: set -a; . ./dev.env; set +a"
 
 all: sdcard ## Alias for `sdcard` (the full bring-up image)
 
@@ -328,14 +316,6 @@ toolchain: $(BUILD_STAMP) ## Build the novadeck-build cross-compile docker image
 kernel:    $(KERNEL)       ## Build Image + all dtbs + modules (in build container)
 fw-linux:  $(FW_LINUX)     ## Fetch open linux-firmware blobs (host, network)
 fw-qcom:   $(FW_QCOM)      ## Fetch device-proprietary firmware from the qcom-firmwares repo (host, network)
-# OVERLAY_PULL := 0 is what keeps this goal's documented contract (see $(OVERLAY_DB)): `make
-# overlay` is a PURE LOCAL BUILD that touches no network. A target-specific variable applies to
-# the target AND its prerequisites, which is exactly the reach needed — the value follows down
-# into $(OVERLAY_DB)'s recipe. Reaching the same db through an image goal (sdcard/image/rootfs)
-# leaves the default 1 in place and pulls first.
-# Caveat for `make overlay sdcard` in ONE invocation: the shared db is considered once, so it gets
-# whichever value make reaches first. Run them as two invocations if the distinction matters.
-overlay:   OVERLAY_PULL := 0
 overlay:   $(OVERLAY_DB)   ## Rebuild from-source overlay pkgs (patched gamescope) -> work/repo/<arch>/
 base:      $(BASE_STAMP)   ## Bootstrap the aarch64 root from packages (host; docker+qemu)
 rootfs:    $(ROOTFS)       ## Assemble the read-only root + var images (in container)
@@ -426,25 +406,19 @@ $(STEAM_SEED): steam-seed/STEAM_SEED.pin steam-seed/fetch-steam-seed.sh
 # Union prereq re-invokes the script on any input change; the script self-selects which package(s)
 # to rebuild (per-package input hash). Only when a source.pin exists does `base` depend on it.
 #
-# THE PULL RUNS FIRST, and it is in this recipe rather than being a prerequisite for a reason: it
-# then fires exactly when make has already decided the repo is out of date, i.e. precisely when a
-# source.pin/patch bump would otherwise start a multi-hour qemu compile for artifacts CI has
-# already built. On an up-to-date repo the rule never runs, so there is NO per-build network cost.
-# (`make sdcard` after ab3121b raised the ISA floor recompiled fex-emu + mesa + mangohud locally,
-# with no signal that the store already had all three. That is the failure this closes.)
+# THE CACHE IS LOCAL AND IT IS THE STAMPS. build-overlay.sh keys each package on
+# packages/inputhash.sh over its committed inputs and records it as
+# work/repo/<arch>/.stamps/<name>.hash, so a package whose sources have not moved is not rebuilt —
+# a one-line gamescope patch costs a gamescope build and nothing else. That is the whole caching
+# story now, on a dev box and in CI alike, and it means this goal touches NO network beyond what
+# makepkg fetches for a package it has actually decided to build.
 #
-# It cannot turn a working build into a broken one: pull-all is NEVER fatal (see overlay-store.sh)
-# — a miss, an unreadable package, or an unreachable registry all log and return 0, and whatever
-# could not be retrieved simply gets compiled, which is the old behaviour exactly.
-#
-# It also cannot clobber a local iteration. pull-all tests is_fresh BEFORE touching the network, and
-# that is the same per-package input-hash test build-overlay.sh applies: a package you already built
-# here is skipped without a request, and an uncommitted edit's hash is absent from the store, so it
-# costs one 404 manifest probe and then compiles. Nothing overwrites artifacts whose stamp is current.
-# OVERLAY_PULL=0 opts out entirely (no pull, no probe) for a hermetic loop; `make overlay` sets it.
-OVERLAY_PULL ?= 1
+# There used to be a `packages/overlay-store.sh pull-all` here that retrieved CI-built artifacts
+# from GHCR before compiling. It was retired 2026-08-04: the store existed because an overlay build
+# costs ~4h emulated on a dev box, but on the native aarch64 runners CI uses it costs ~34 minutes
+# for the whole set, which is not worth a registry, a pin format and a bot with write access to
+# main. See .github/workflows/overlay.yml for the per-package measurements.
 $(OVERLAY_DB): base-devel.digest $(OVERLAY_PINS) $(OVERLAY_PATCHES) $(OVERLAY_PKGBUILDS)
-	$(if $(filter 1,$(OVERLAY_PULL)),packages/overlay-store.sh pull-all)
 	packages/build-overlay.sh
 
 # Advance .overlay.stamp only when the overlay repo's CONTENT actually changed, and do it in THIS
@@ -459,62 +433,6 @@ $(OVERLAY_STAMP): $(OVERLAY_DB)
 	@newsha=$$(sha256sum $(OVERLAY_DB) | cut -d' ' -f1); \
 	 [ "$$(cat $@.sha 2>/dev/null)" = "$$newsha" ] || { printf '%s\n' "$$newsha" > $@.sha; touch $@; }
 	@[ -e $@ ] || touch $@   # first-ever run: ensure the stamp exists even if the sha file seeded it
-
-# Retrieve overlay packages someone already built, instead of compiling them here. Keyed by the
-# same packages/inputhash.sh digest the lock records, so a hit means "built from exactly these
-# sources" — see packages/overlay-store.sh. Pulling needs NO credentials.
-#
-# Every IMAGE goal (sdcard/image/rootfs/base) now does this for you, from $(OVERLAY_DB)'s own
-# recipe — so a cold clone reaches a card without knowing this target exists. `make overlay` still
-# does NOT (it sets OVERLAY_PULL=0): that goal remains a pure local build with no network in it.
-# This stays a cache either way, never something the lock leans on — the lock pins the novadeck
-# rows to their SOURCES, so a pulled artifact and a locally compiled one satisfy it identically.
-#
-# Run it by hand to pre-warm the repo without building anything, or to see what the store has.
-# A miss is not an error: whatever could not be pulled simply gets compiled.
-overlay-pull: ## Fetch already-built overlay packages from the store into work/repo/<arch>/
-	packages/overlay-store.sh pull-all
-
-# Publish what THIS machine built. Depends on the stamp so it can only ever publish a repo make
-# considers current — publishing artifacts whose sources have since moved is the one failure this
-# store cannot detect afterwards, because the input hash is the only claim attached to them.
-# (overlay-store.sh re-checks that per package too; this just stops the obvious case earlier.)
-overlay-publish: $(OVERLAY_STAMP) ## Publish locally built overlay packages to the store (needs login)
-	packages/overlay-store.sh push-all
-
-# The byte check a release build must pass. Not wired to $(OVERLAY_STAMP): it reads the lock and the
-# committed pins and re-hashes what is on disk, so it must run even when make thinks the repo is
-# current -- that is precisely the case a substitution produces.
-verify-pins: ## Verify overlay artifact BYTES against packages/*/artifact.pin (release gate)
-	packages/verify-pins.sh
-
-# Record the bytes built here as the reviewed ones. Normally CI's pin-bump PR does this; run it by
-# hand when you deliberately intend to make a local build the pinned one, then review the diff.
-#
-# Doing that by hand is LEGITIMATE, as of verify-pins-store below — it used to be a rule ("never
-# hand-edit pins") that nothing enforced. Pin what you built, publish it, and the check passes
-# because those bytes really are published. The full local round trip, no CI in it:
-#     make overlay && make overlay-publish && make pin-artifacts && make verify-pins-store
-# The publish is the load-bearing step: a pin nobody can retrieve is exactly what the check
-# rejects. It only works for sources nothing has published yet — which is the case that matters,
-# since editing a package changes its input hash.
-pin-artifacts: $(OVERLAY_STAMP) ## (Re)generate packages/*/artifact.pin from the built overlay repo
-	packages/verify-pins.sh --write
-
-# The other half of the byte question, and the one `verify-pins` above cannot ask. That target
-# compares the pins to work/repo — "is the repo in front of me the pinned one?". This compares them
-# to the STORE — "was anything with these shas ever published?" — which is what stops a pin
-# describing bytes that exist on exactly one machine. Network, no credentials, no work/ needed.
-#
-# Deliberately NOT a prerequisite of any build: a release build already fails without matching
-# bytes on disk, and making every image goal wait on a registry would put a flaky network in the
-# path of a local build for no extra guarantee. CI runs it per changed pin (.github/workflows/ci.yml);
-# run it by hand before pushing a pin, or bare to audit every pin on main.
-#
-# PKG= narrows it to one package (`make verify-pins-store PKG=gamescope`). Worth reaching for:
-# bare, it pulls every pinned payload, and fex-emu alone is most of that download.
-verify-pins-store: ## Verify packages/*/artifact.pin against the PUBLISHED store bytes (network)
-	packages/verify-pins.sh --store $(PKG)
 
 # ==============================================================================
 # Root bootstrap (host — customize-base.sh drives docker + qemu binfmt itself)
@@ -548,20 +466,9 @@ verify-pins-store: ## Verify packages/*/artifact.pin against the PUBLISHED store
 # place. customize-base.sh records `dev:1` in its own reuse key for a dev bootstrap, so the built
 # tree states its own mode: assert that against the mode we asked for. This guards BOTH directions,
 # which nothing downstream does -- guard-rootfs.sh only ever runs on a release build.
-# The artifact-pin gate is ORDER-ONLY (`|`), and that is load-bearing rather than stylistic.
-# verify-pins is .PHONY, so as a normal prerequisite it would be perpetually newer than the stamp
-# and every release `make` would rebuild the base from scratch. Order-only still RUNS it (a phony
-# target is always out of date) while leaving the stamp's own up-to-date check alone -- the same
-# reason every container stage carries `| $(BUILD_STAMP)`.
-#
-# It gates the BASE rather than the image targets so the check happens BEFORE these bytes are
-# installed, not after. Checking work/repo rather than the built tree is sound because
-# $(OVERLAY_STAMP) already keys off sha256sum $(OVERLAY_DB): a substitution inside work/repo moves
-# the db, which rebuilds the base anyway, so there is no window where a verified repo and an
-# unverified tree coexist.
 $(BASE_STAMP): base-devel.digest snapshot.pin images/manifest.lock images/fetchlock.sh \
                images/pacman.conf images/os-release images/customize-base.sh $(PREBUILT_PINS) \
-               $(BASE_MODE_STAMP) | $(if $(PINNED),verify-pins)
+               $(BASE_MODE_STAMP)
 	images/customize-base.sh
 	@test -f work/base/usr/bin/sshd   # sentinel: sshd present => release runtime laid down
 	@: "sentinel: the pairing agent's interpreter and key validator. Both arrive as transitive"; \

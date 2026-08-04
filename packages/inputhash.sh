@@ -15,10 +15,7 @@
 #   images/fetchlock.sh         re-derives it and refuses the install when the lock disagrees
 #   packages/verify-lock-rows.sh  the same comparison as fetchlock but from COMMITTED FILES ONLY,
 #                               so it runs in a second before any build rather than after one
-#   packages/overlay-store.sh   the GHCR tag each package is published under and retrieved by
-#   packages/verify-pins.sh     ties an artifact.pin to the sources it was built from, so a pin
-#                               that predates a source change reports as STALE rather than as a
-#                               byte mismatch
+#   packages/build-overlay.sh   the per-package rebuild stamp, work/repo/<arch>/.stamps/<name>.hash
 #
 # WHY THIS IS THE `novadeck` ROWS' PIN AND NOT THE BUILT ARTIFACT'S SHA256. Our overlay builds
 # are not bit-reproducible: rebuilding from identical inputs moves every artifact's sha256, so an
@@ -27,9 +24,10 @@
 # This hash says the thing that is actually true across machines: these bytes were built from the
 # reviewed sources. It is a WEAKER claim about the artifact and a STRONGER one about provenance.
 #
-# The artifact claim is made separately, by packages/*/artifact.pin, and only for RELEASE builds —
-# which is why it can be a byte hash at all: those bytes come from the store, not from whichever
-# machine happens to be building. Two questions, two files, neither overloaded.
+# There used to be a second, byte-level claim alongside it (packages/*/artifact.pin, checked only on
+# release builds, naming the sha256 a GHCR store had published). It was retired 2026-08-04 with the
+# store: a release image's overlay is now compiled in the same CI run that publishes the image, so
+# there are no foreign bytes for a byte hash to be about.
 #
 # PATH INDEPENDENCE IS THE WHOLE POINT, and it is the one thing easy to get wrong here. The
 # obvious `sha256sum "${inputs[@]}" | sha256sum` is WRONG: sha256sum prints "<hash>  <path>", so

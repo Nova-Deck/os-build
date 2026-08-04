@@ -11,9 +11,8 @@ RCLONE_PIN="${RCLONE_PIN:-$ROOT/images/rclone.pin}"
 pin_field() { sed -n "s/^$2:[[:space:]]*//p" "$1" | head -1; }
 
 # --- rclone, pinned -------------------------------------------------------------------------
-# Fetched to work/tools/ and verified against images/rclone.pin. Same shape as overlay-store.sh's
-# oras_bin(), and for the same reason: the tool that moves our artifacts should not float between a
-# runner and a developer's box.
+# Fetched to work/tools/ and verified against images/rclone.pin rather than installed from a distro
+# repo: the tool that moves our artifacts should not float between a runner and a developer's box.
 rclone_bin() {
   local ver url sha host dest zip dir
   [ -f "$RCLONE_PIN" ] || die "no rclone pin: $RCLONE_PIN"

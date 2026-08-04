@@ -1,89 +1,72 @@
-# novadeck overlay package pipeline — build each from-source package ONCE, keyed by its inputs.
+# novadeck overlay package pipeline — prove the from-source packages still compile.
 #
-# WHAT PROBLEM THIS SOLVES. `make overlay` rebuilds ~8 holo packages from source, and it is by
-# far the most expensive thing in this build: a cold run on a 16-core dev box takes ~4h under
-# arm64 emulation, fex-emu alone ~2h. Every consumer used to pay that again — which is why
-# ci/README.md still lists the image build under "not here yet". This turns it into a one-time
-# cost per SOURCE CHANGE: build here, publish to GHCR, and any later pipeline pulls the bytes.
+# WHAT THIS IS FOR. `make overlay` rebuilds ~8 holo packages from source with our patches. A change
+# to a source.pin, a patch, or a PKGBUILD can break one of those builds, and without this the first
+# thing that notices is a release build — 30 minutes in, hours after the change landed. So: build the
+# packages a pull request actually touched, and nothing else.
 #
-# THE KEY IS packages/inputhash.sh. That digest already covers exactly the files that determine a
-# build (source.pin + patches + a local PKGBUILD), is already path-independent, and is already
-# what images/manifest.lock records for the `novadeck` rows. So "has this package changed?" and
-# "which artifact do I want?" are the same question with the same answer, and the `plan` job below
-# is nothing more than asking the registry whether it already holds that answer. An unchanged
-# package is not a fast build here — it is NO build.
+# IT PUBLISHES NOTHING, AND THAT IS THE DESIGN. This used to be a build-once-and-cache pipeline: it
+# pushed every package to GHCR keyed by packages/inputhash.sh, opened a bot PR carrying each
+# artifact's sha256 into packages/*/artifact.pin, and a release build verified those bytes. All of
+# that was sized against the DEV BOX cost of an overlay build — ~4h for the set under arm64
+# emulation, fex-emu alone ~2h — on the assumption CI would pay the same.
+#
+# IT DOES NOT. MEASURED on ubuntu-24.04-arm (run 30490159103), which is real aarch64 and never
+# registers qemu:
+#
+#     gtk2 7m   sddm 5m   mesa 5m   fex-emu 5m   gamescope 4m   scx-scheds 4m   mangohud 3m   rauc 1m
+#
+# ~34 minutes for the WHOLE set, serially, against a release card build that already runs 33-41
+# minutes and has a 350-minute budget. The store was buying half an hour and charging ~1300 lines, two
+# PATs, and a bot with write access to main. It was retired 2026-08-04; a release build now compiles
+# the overlay in-run from the sources in the commit it is building (.github/workflows/image.yml), and
+# a dev keeps the per-package input-hash cache build-overlay.sh has always maintained under
+# work/repo/<arch>/.stamps/. If someone proposes reintroducing a cache, the numbers above are the
+# thing to re-measure first.
 #
 # WHY NATIVE ARM. The dev box compiles these under qemu; these runners are real aarch64, so
 # build-overlay.sh's own binfmt probe passes and it never registers qemu or asks for --privileged.
 # The indirection through vars.OVERLAY_RUNNER is the escape hatch if a hosted runner turns out too
-# slow for fex-emu. Do NOT point it at a self-hosted runner while this repo is public.
+# slow. Do NOT point it at a self-hosted runner while this repo is public.
 #
-# FORK PULL REQUESTS DO NOT RUN THIS, on purpose. A fork's token is read-only, so it could not
-# publish anyway; triggering on `push` rather than `pull_request` means a fork PR simply skips the
-# pipeline and its packages get built when the change merges. Same reason there is no
-# pull_request trigger for branches in this repo: it would build every commit twice.
+# FORK PULL REQUESTS RUN THIS FINE. Nothing here needs a credential — no registry, no write token,
+# `contents: read` and no secrets at all — so a fork's read-only token is sufficient.
 #
-# THE STORE IS A CACHE; THE PIN-BUMP PR IS THE PROVENANCE MECHANISM. images/manifest.lock still
-# pins the `novadeck` rows to their sources and images/fetchlock.sh still re-derives that hash from
-# packages/ — neither is touched here, and a pull miss falls back to compiling. What closes the byte
-# gap is the `pin-bump` job below: it opens a PR carrying each published artifact's sha256 into
-# packages/*/artifact.pin, and packages/verify-pins.sh then refuses a RELEASE build whose bytes
-# disagree. `oras pull` verifying a registry digest was never the same claim — that says "I got what
-# the registry holds", not "this is what a reviewer approved".
+# NOT TRIGGERED BY A PUSH TO main, deliberately: a PR already built what it changed, and a
+# direct-to-main package edit is caught by the next release build. Use workflow_dispatch to force a
+# pass over a branch that never saw a PR.
 name: overlay packages
 
 on:
-  push:
+  pull_request:
     paths:
       - 'packages/*/source.pin'
       - 'packages/*/patches/**'
       - 'packages/*/PKGBUILD'
       - 'packages/build-overlay.sh'
       - 'packages/inputhash.sh'
-      - 'packages/overlay-store.sh'
-      # The pin writer AND the release gate. Omitting it meant a change to the checker could not
-      # trigger the pipeline that exercises it — the same shape of omission as the missing
-      # !cancelled() below: the thing meant to run simply does not.
-      - 'packages/verify-pins.sh'
-      # packages/*/artifact.pin is deliberately NOT a trigger. This pipeline WRITES those files, so
-      # triggering on them would make every pin-bump merge start another run that produces another
-      # pin-bump — a loop whose every iteration looks legitimate.
-      - 'packages/oras.pin'
       - 'base-devel.digest'
       - '.github/workflows/overlay.yml'
   workflow_dispatch:
     inputs:
       packages:
-        description: 'Space-separated package names to consider (empty = all)'
+        description: 'Space-separated package names to build (empty = all)'
         required: false
         default: ''
-      force:
-        description: 'Rebuild and republish even if the store already has that input hash'
-        type: boolean
-        required: false
-        default: false
-  # So the image pipeline can require the packages it is about to install.
-  workflow_call:
-    outputs:
-      matrix:
-        description: 'Packages this run had to build (JSON matrix; empty include = full cache hit)'
-        value: ${{ jobs.plan.outputs.matrix }}
 
-# A superseded push means the sources moved. Anything already published stays valid on its own
-# hash, so cancelling mid-flight loses work but never corrupts the store.
+# A superseded push means the sources moved; there is no published state to corrupt, so cancelling
+# mid-flight only ever loses compute.
 concurrency:
   group: overlay-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
-  # Cheap, and x86 on purpose: this only hashes committed files and asks the registry what it
-  # already holds. It is what makes a re-run, a rebase, or a merge of an already-built branch free.
+  # Cheap, and x86 on purpose: this only reads committed files and a git diff.
   plan:
-    name: what needs building
+    name: what changed
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
@@ -91,17 +74,15 @@ jobs:
       any: ${{ steps.plan.outputs.any }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The base ref has to be present to diff against, and a PR of any depth can move a package.
+          fetch-depth: 0
 
-      # BEFORE anything is planned, pulled or compiled. `cold-machine retrieval` already rejects a
-      # lock whose novadeck rows disagree with packages/, but only at the far end of this pipeline:
-      # after the plan, after up to several hours of aarch64 builds, and after those builds have
-      # been published to the store. This is the same comparison over the same two committed inputs
-      # in about a second — see packages/verify-lock-rows.sh for why it can run without a repo.
-      #
-      # Duplicated on purpose: the `ci` workflow runs it too (via `make test`). ci triggers on paths
-      # this workflow ignores, so it catches a commit touching only images/manifest.lock; this copy
-      # keeps the expensive pipeline self-guarding rather than dependent on a sibling workflow
-      # having already gone red.
+      # BEFORE anything is compiled. This is the same comparison over the same two committed inputs
+      # that `make test` runs — see packages/verify-lock-rows.sh for why it needs no repo — and it
+      # takes about a second. Duplicated on purpose: `ci` triggers on paths this workflow ignores, so
+      # it catches a commit touching only images/manifest.lock; this copy keeps the expensive
+      # pipeline self-guarding rather than dependent on a sibling workflow having already gone red.
       - name: lock rows still name the sources in packages/
         run: packages/verify-lock-rows.sh
 
@@ -110,24 +91,67 @@ jobs:
       # command-injection hole; the others are ours, but the rule is only useful if it is absolute.
       - id: plan
         env:
+          BASE_REF: ${{ github.base_ref }}
           PACKAGES: ${{ inputs.packages || '' }}
-          FORCE: ${{ inputs.force && '1' || '' }}
         run: |
           set -euo pipefail
-          args=()
-          [ -n "$FORCE" ] && args+=(--force)
-          # Intentional word-split: PACKAGES is a space-separated name list, and each name is
-          # validated against packages/<name>/source.pin by the script before it is used.
-          # shellcheck disable=SC2206
-          [ -n "$PACKAGES" ] && args+=($PACKAGES)
-          m=$(packages/overlay-store.sh plan "${args[@]}")
+
+          # dir -> the name build-overlay.sh --only matches on. They are equal for all 8 packages
+          # today, but the pin's `name:` field is what the builder keys off (and what
+          # verify-lock-rows.sh reads), so derive it rather than assuming the directory name.
+          declare -A NAMEOF=()
+          for pin in packages/*/source.pin; do
+            d="$(dirname "$pin")"
+            n="$(sed -n 's/^name:[[:space:]]*//p' "$pin" | head -1)"
+            [ -n "$n" ] || { echo "::error::$pin: missing name"; exit 1; }
+            NAMEOF["$d"]="$n"
+          done
+          # Only these dirs are compiled here. packages/{fex-rootfs,inputplumber,proton-*} carry a
+          # prebuilt.pin and no sources, so there is nothing to build for them.
+          [ ${#NAMEOF[@]} -gt 0 ] || { echo "::error::no packages/*/source.pin found"; exit 1; }
+
+          all() { printf '%s\n' "${NAMEOF[@]}"; }
+
+          sel=""
+          why=""
+          if [ -n "${PACKAGES:-}" ]; then
+            # Validate against the tree rather than trusting the operator's spelling: a typo must be
+            # an error, not a silently empty build set.
+            for want in $PACKAGES; do
+              found=""
+              for d in "${!NAMEOF[@]}"; do [ "${NAMEOF[$d]}" = "$want" ] && found=1; done
+              [ -n "$found" ] || { echo "::error::no such package: $want"; exit 1; }
+              sel+="$want"$'\n'
+            done
+            why="requested by hand"
+          elif [ -z "${BASE_REF:-}" ]; then
+            # A dispatch with no list. Unknown scope must WIDEN the check, never silence it.
+            sel="$(all)"
+            why="no diff base (dispatch) — building everything"
+          else
+            changed="$(git diff --name-only "origin/$BASE_REF...HEAD")"
+            # A change to the builder itself, the hash formula, or the container it builds in can
+            # break any package, so it selects all of them.
+            if printf '%s\n' "$changed" | grep -qE '^(packages/build-overlay\.sh|packages/inputhash\.sh|base-devel\.digest)$'; then
+              sel="$(all)"
+              why="the builder or its base image moved — building everything"
+            else
+              for d in "${!NAMEOF[@]}"; do
+                printf '%s\n' "$changed" | grep -q "^$d/" && sel+="${NAMEOF[$d]}"$'\n'
+              done
+              why="changed since origin/$BASE_REF"
+            fi
+          fi
+
+          sel="$(printf '%s' "$sel" | sed '/^$/d' | sort -u)"
+          n=$(printf '%s' "$sel" | grep -c . || true)
+          m=$(printf '%s' "$sel" | jq -R . | jq -sc '{pkg: .}')
           echo "matrix=$m" >> "$GITHUB_OUTPUT"
-          # `any` drives the build job's `if`. An empty matrix is the GOOD case (everything is
-          # already published) but GitHub still schedules a matrix job for an empty include list
-          # unless it is gated, and an empty-include job fails rather than skipping.
-          n=$(printf '%s' "$m" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["include"]))')
+          # `any` drives the build job's `if`. An empty selection is a legitimate outcome (a PR that
+          # only touches a prebuilt.pin, say) but GitHub still schedules a matrix job for an empty
+          # list unless it is gated, and an empty-list job fails rather than skipping.
           echo "any=$([ "$n" -gt 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
-          echo "$n package(s) to build" >> "$GITHUB_STEP_SUMMARY"
+          echo "$n package(s) to build — $why" >> "$GITHUB_STEP_SUMMARY"
           printf '%s\n' "$m" >> "$GITHUB_STEP_SUMMARY"
 
   build:
@@ -135,280 +159,22 @@ jobs:
     needs: plan
     if: needs.plan.outputs.any == 'true'
     runs-on: ${{ vars.OVERLAY_RUNNER || 'ubuntu-24.04-arm' }}
-    # fex-emu is the reason this is not the default 360. It compiles FEX with clang AND
-    # cross-compiles the x86/i686 guest thunks; ~2h emulated on a dev box, unknown natively.
-    timeout-minutes: 360
+    # 90, not the 360 this carried while it was sized for emulated builds: the slowest package
+    # measured 7 minutes natively (gtk2). A job approaching this limit means something regressed
+    # badly enough to be worth failing over rather than waiting out.
+    timeout-minutes: 90
     strategy:
       # One package failing must not cancel the others: they are independent builds (each already
       # runs in its own fresh container, deliberately — a shared one once poisoned sddm's Qt6
-      # resolution), and a package that DID build is worth publishing regardless.
+      # resolution), and knowing which ones ALSO break is the useful part of a red run.
       fail-fast: false
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v4
 
       # --no-index because the repo db is rebuilt from scratch over EVERYTHING present, and this
-      # job holds one package. The consumer that reassembles the full repo indexes it.
+      # job holds one package. Nothing consumes this build — it exists to go red.
       - name: build
         env:
           PKG: ${{ matrix.pkg }}
         run: packages/build-overlay.sh --only "$PKG" --no-index
-
-      # Pushing is the only operation here that needs a credential; pulling never does.
-      - name: log in to the store
-        env:
-          NOVADECK_GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_ACTOR: ${{ github.actor }}
-        run: packages/overlay-store.sh login
-
-      # The hash is passed explicitly rather than recomputed so that what gets published is keyed
-      # by what `plan` decided to build — if those two ever disagreed, silently publishing under
-      # the recomputed key would hide it. overlay-store.sh cross-checks it against the stamp the
-      # build just wrote and refuses a mismatch.
-      - name: publish
-        env:
-          PKG: ${{ matrix.pkg }}
-          HASH: ${{ matrix.hash }}
-        run: packages/overlay-store.sh push "$PKG" "$HASH"
-
-  # THE CONTRACT OTHER PIPELINES DEPEND ON, tested every run rather than assumed. A cold machine
-  # with no work/ must be able to reconstitute a complete, indexed overlay repo from the store
-  # without compiling anything. If that stops being true, this is where it shows up.
-  verify:
-    name: cold-machine retrieval
-    needs: [plan, build]
-    if: always() && needs.plan.result == 'success' && needs.build.result != 'failure'
-    runs-on: ${{ vars.OVERLAY_RUNNER || 'ubuntu-24.04-arm' }}
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-      # THE GUARD GOES FIRST. --require-all fails here, in seconds, if any package could not be
-      # retrieved — and says which and why (absent vs. not readable). The earlier shape ran the
-      # build and then grepped its log, so it reported an uncovered store only AFTER recompiling
-      # everything, which is a post-mortem dressed as a check.
-      #
-      # No credentials are used in this job, and that is half of what is being asserted: the
-      # runner never logs in, so a pull that works here works for anyone with a clone.
-      - name: retrieve everything from the store (no credentials)
-        run: packages/overlay-store.sh pull-all --require-all
-
-      - name: assemble the repo
-        run: make overlay 2>&1 | tee /tmp/overlay.log
-
-      # Belt and braces now rather than the primary check: the pull above already proved coverage,
-      # so this only catches `make overlay` deciding to rebuild something the pull called fresh.
-      - name: assert nothing was compiled
-        run: |
-          set -euo pipefail
-          if grep -q 'inputs changed / artifacts missing' /tmp/overlay.log; then
-            echo "::error::a package was rebuilt despite a complete pull — stamps disagree with the store"
-            grep 'inputs changed / artifacts missing' /tmp/overlay.log
-            exit 1
-          fi
-          test -f work/repo/aarch64/novadeck.db.tar.zst \
-            || { echo "::error::no repo db was produced"; exit 1; }
-          n=$(ls -1 work/repo/aarch64/*.pkg.tar.zst | wc -l)
-          echo "reconstituted $n artifact(s) with zero compiles" >> "$GITHUB_STEP_SUMMARY"
-
-      # fetchlock verifies EVERY row, so on a cold runner it downloads the ~382 snapshot packages
-      # (~700MB) alongside the 10 overlay ones we actually care about here. Cache the download
-      # mirror so that is a one-time cost.
-      #
-      # This is a cache where caching work/repo was rejected (TODO.md), and the difference is the
-      # point: these are third-party bytes pinned by a sha256 in the lock, so a miss re-downloads
-      # and re-verifies — slow, never wrong. work/repo holds OUR non-reproducible build output,
-      # where a miss meant a 4h rebuild whose artifacts the lock could not confirm. A cache is fine
-      # for bytes something else already attests; it is not a substitute for provenance.
-      - uses: actions/cache@v4
-        with:
-          path: work/pacman-cache
-          key: pacman-cache-${{ hashFiles('snapshot.pin', 'images/manifest.lock') }}
-          restore-keys: pacman-cache-
-
-      # The lock is not touched by this pipeline, so it must still verify against a repo that was
-      # pulled rather than built. Distinct from the no-compile assertion above: that proves the
-      # stamps match the pins, this proves the lock's rows match the FILES the store handed back —
-      # a bumped pkgver with a stale lock fails here and nowhere else.
-      - name: lock still verifies against the pulled repo
-        run: images/fetchlock.sh /tmp/install-list && wc -l < /tmp/install-list
-
-      # THE BYTE CLAIM. Everything above proves these artifacts came from the reviewed SOURCES;
-      # this records what those sources actually produced, so a release build can verify the BYTES
-      # (packages/verify-pins.sh). Written HERE rather than in its own job because this is the job
-      # that already holds a complete, store-pulled repo — recomputing that elsewhere would be a
-      # second chance to disagree about which bytes we mean.
-      #
-      # These are the STORE's bytes, not this runner's: the pull above fetched them and nothing
-      # since has rebuilt anything (the no-compile assertion is what guarantees that).
-      - name: record artifact pins
-        run: packages/verify-pins.sh --write
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: artifact-pins
-          path: packages/*/artifact.pin
-          if-no-files-found: error
-
-  # Open a PR carrying the new pins. A SEPARATE job because it is the only one here that can write
-  # to the repo, and it deliberately does no building, no pulling and no network fetching beyond
-  # git — the smallest possible surface holding a write token.
-  #
-  # THE REVIEW OF THIS PR *IS* THE PROVENANCE CLAIM. verify-pins.sh proves the bytes match these
-  # pins; it cannot prove anyone looked. Auto-merging this would reduce the whole mechanism to
-  # "CI published what CI published", so it opens a PR and stops.
-  #
-  # What the review is NO LONGER load-bearing for: whether the pins describe real, retrievable
-  # bytes. `ci.yml`'s `pins` job pulls every changed pin back out of the store and compares, so a
-  # pin naming bytes that exist on one machine is now caught at PR time rather than at the next
-  # release build. That check runs on THIS PR too — trivially green here, since these are the shas
-  # of what the job above just published. The review is for judging the CHANGE, not for policing
-  # where the file came from.
-  pin-bump:
-    name: open the pin-bump PR
-    needs: verify
-    # !cancelled() IS LOAD-BEARING, and its absence made this job dead code on the common path.
-    # A full cache hit skips `build` (the good case — nothing needed rebuilding), and a skip
-    # propagates transitively to every downstream job that does not opt out. `verify` opts out with
-    # its own always(); this job did not, so it inherited build's skip even though verify succeeded.
-    # Observed on the first main run after this landed: prune (which has always()) ran, pin-bump did
-    # not, with identical ref and verify conditions. The explicit success check below is what keeps
-    # the opt-out honest — we want "verify passed", not "verify finished".
-    if: ${{ !cancelled() && github.ref == 'refs/heads/main' && needs.verify.result == 'success' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    # GITHUB_TOKEN needs contents:write and nothing else: it pushes the branch (via the credential
-    # actions/checkout leaves behind) and never touches the PR. Deliberately NO pull-requests:write —
-    # the PR is opened with PIN_BUMP_PAT below, so granting it here would be a permission nothing
-    # uses, which is indistinguishable from one something quietly does.
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: artifact-pins
-          path: pins
-
-      # Move them into place, then let git decide whether anything actually moved. An unchanged
-      # publish (a re-run, a rebase, a merge of already-built sources) must produce no PR at all
-      # rather than an empty one.
-      - id: apply
-        run: |
-          set -euo pipefail
-          # Nested one level under pins/, mirroring packages/<name>/artifact.pin.
-          for f in pins/*/artifact.pin; do
-            d="packages/$(basename "$(dirname "$f")")"
-            [ -d "$d" ] || { echo "::error::no such package dir: $d"; exit 1; }
-            cp "$f" "$d/artifact.pin"
-          done
-          rm -rf pins
-          # STAGE BEFORE ASKING. `git diff` does not see untracked files, so on the bootstrap run
-          # — no artifact.pin tracked yet, which is exactly the run whose PR introduces them — it
-          # reported "unchanged" about eight files that had just been created, and the job succeeded
-          # having done nothing. Observed on the first main run after the !cancelled() fix made this
-          # job reachable at all: reachable, green, and still no PR. Staging first makes an added
-          # file and a modified file the same question, which is the question we meant to ask.
-          git add -- 'packages/*/artifact.pin'
-          if git diff --cached --quiet -- 'packages/*/artifact.pin'; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "artifact pins unchanged — no PR needed" >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            git diff --cached --stat -- 'packages/*/artifact.pin' >> "$GITHUB_STEP_SUMMARY"
-          fi
-
-      # gh(1) rather than a marketplace action, for the same reason packages/overlay-store.sh
-      # fetches a pinned oras instead of using one: an unpinned third-party action in the job that
-      # holds the write token is exactly the dependency this change exists to stop having.
-      #
-      # WHY A PAT OPENS THE PR AND GITHUB_TOKEN PUSHES THE BRANCH. GITHUB_TOKEN cannot create a PR
-      # unless the ORG enables "Allow GitHub Actions to create and approve pull requests" — and that
-      # single switch cannot be narrowed: it is org-wide, it covers every repo under the org, and it
-      # grants APPROVE alongside create, so any workflow anywhere in the org could satisfy a
-      # required-review branch protection by itself. Trading that for one PR in one repo is a bad
-      # exchange, especially for a mechanism whose entire premise is that a HUMAN reviewed the pins.
-      #
-      # The PAT is scoped to this repo and to pull-requests only, and it is used for exactly one
-      # command. It buys a second thing we want: a PR opened by GITHUB_TOKEN does not trigger other
-      # workflows, so the pin PR arrived with no checks on it. A PAT-opened PR runs `ci` normally.
-      #
-      # git push deliberately does NOT use it — that keeps the strongest credential off the
-      # operation that writes to the repo, and out of any git config a later step could read.
-      - name: open or update the PR
-        if: steps.apply.outputs.changed == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.PIN_BUMP_PAT }}
-          BRANCH: ci/artifact-pins
-          SHA: ${{ github.sha }}
-        run: |
-          set -euo pipefail
-          # FAIL, DO NOT SKIP. A missing secret must not degrade to "pushed the branch, opened
-          # nothing" — that is the same silent-success failure this job has now had twice (an
-          # inherited skip, then a diff blind to untracked files). If the PR is the mechanism, its
-          # absence is an error.
-          [ -n "${GH_TOKEN:-}" ] || {
-            echo "::error::secret PIN_BUMP_PAT is not set — cannot open the pin-bump PR." \
-                 "Create a fine-grained PAT (this repo only, Pull requests: read+write) and add it" \
-                 "as the PIN_BUMP_PAT repository secret."
-            exit 1
-          }
-          git config user.name  'novadeck-ci'
-          git config user.email 'novadeck-ci@users.noreply.github.com'
-          git checkout -B "$BRANCH"
-          git add -- 'packages/*/artifact.pin'
-          git commit -m "chore(pins): record overlay artifact sha256s
-
-          Published from ${SHA}. These are the bytes a release build will verify
-          (packages/verify-pins.sh); reviewing this diff is what makes them accountable."
-          # Force-push: the branch is a rolling proposal, not history. A superseded pin set is
-          # never something to merge later.
-          git push --force origin "$BRANCH"
-          gh pr view "$BRANCH" --json state --jq .state 2>/dev/null | grep -qx OPEN \
-            || gh pr create --base main --head "$BRANCH" \
-                 --title 'chore(pins): record overlay artifact sha256s' \
-                 --body 'Generated by `.github/workflows/overlay.yml` after publishing to the overlay store.
-
-          Each `artifact:` line is the sha256 of a package the release image installs. `packages/verify-pins.sh`
-          refuses a release build whose bytes do not match these, so **merging this is the point at which
-          those bytes become trusted** — the check proves they match, not that they are right.
-
-          `inputhash:` ties each pin to the sources that produced it; a mismatch there is reported as a
-          stale pin rather than as a byte mismatch.'
-
-  # Housekeeping only. Public packages are not metered, so this is about keeping the namespace
-  # readable rather than staying inside a quota — hence a generous retention: an old input hash is
-  # a working cache entry for any branch still sitting on those sources.
-  prune:
-    name: prune old input hashes
-    needs: [build, verify]
-    if: always() && github.ref == 'refs/heads/main' && needs.verify.result == 'success'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      # GITHUB_TOKEN cannot delete package versions no matter what `permissions:` says — deletion
-      # needs a PAT with delete:packages. Absent the secret this announces itself and stops, rather
-      # than failing a run whose real work already succeeded. Running without it forever is fine.
-      - name: prune
-        env:
-          GH_TOKEN: ${{ secrets.GHCR_PRUNE_TOKEN }}
-          OWNER: ${{ github.repository_owner }}
-          KEEP: '5'
-        run: |
-          set -euo pipefail
-          if [ -z "${GH_TOKEN:-}" ]; then
-            echo "no GHCR_PRUNE_TOKEN secret — skipping prune (nothing is metered; this is optional)" \
-              >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-          gh api --paginate "/orgs/$OWNER/packages?package_type=container" \
-            --jq '.[] | select(.name | startswith("novadeck-overlay/")) | .name' \
-          | while read -r pkg; do
-              enc=${pkg//\//%2F}
-              gh api --paginate "/orgs/$OWNER/packages/container/$enc/versions" \
-                --jq "sort_by(.created_at) | reverse | .[$KEEP:][] | .id" \
-              | while read -r id; do
-                  echo "deleting $pkg version $id"
-                  gh api -X DELETE "/orgs/$OWNER/packages/container/$enc/versions/$id"
-                done
-            done

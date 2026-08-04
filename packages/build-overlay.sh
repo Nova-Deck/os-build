@@ -27,10 +27,10 @@
 #   packages/build-overlay.sh [--only <name>]... [--no-index]
 #
 # --only    build ONLY the named package(s), instead of every package whose inputs changed.
-#           Repeatable. This is what lets the CI package pipeline fan out one package per job
-#           (packages/overlay-store.sh, .github/workflows/overlay.yml) — the builds were already
-#           independent, since each runs in its own fresh container. Handy locally too, to
-#           re-run a single slow package without re-examining the rest.
+#           Repeatable. This is what lets the CI compile pass fan out one package per job
+#           (.github/workflows/overlay.yml) — the builds were already independent, since each runs
+#           in its own fresh container. Handy locally too, to re-run a single slow package without
+#           re-examining the rest.
 # --no-index  skip the closing repo-add. A single-package job holds only its own artifacts, and
 #           the index is rebuilt from scratch over EVERYTHING present — indexing there would
 #           produce a db describing a subset. Whoever assembles the full repo indexes it.
@@ -204,10 +204,11 @@ for f in "$REPO_DIR"/*.pkg.tar.zst; do
   esac
 done
 
-# The db's presence is part of this condition, and it is the whole reason `make overlay-pull &&
-# make overlay` works. A pulled repo (packages/overlay-store.sh) arrives with every stamp fresh
-# and NO db, because the index is rebuilt locally rather than shipped — a state this early exit
-# never used to anticipate.
+# The db's presence is part of this condition, and it stays that way even though the case that
+# forced it is gone. A repo pulled from the retired GHCR store arrived with every stamp fresh and
+# NO db, because the index was rebuilt locally rather than shipped — a state this early exit never
+# used to anticipate. Any other route to fresh-stamps-no-db (a deleted db, an interrupted index)
+# lands in exactly the same trap, so the `-f` test earns its place on its own.
 #
 # Without the `-f` test, that state took this branch and the script exited 0 having built NOTHING
 # and indexed nothing: it printed "all overlay packages up-to-date" and "repo: <dir>", which reads

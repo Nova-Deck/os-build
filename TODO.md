@@ -19,45 +19,39 @@ rationale lives in the linked memories and commit history.
     sort demotion and `set_menu_conf()` picks the other entry past `SUPERMAX_BOOT_FAILURES` without
     consulting it. Full mechanism in the commit message and the release-card-empty-b-slot memory.
 
-- [x] **Artifact pins are enforced by VERIFIABILITY now, not by convention — LANDED 2026-08-04.**
-  `packages/verify-pins.sh --store [package|path…]` pulls each pinned artifact back out of the
-  overlay store and compares, and `ci.yml`'s `pins` job runs it over every `artifact.pin` a change
-  touches. A pin describing bytes that exist on one machine is caught at PR time instead of at the
-  next release build. Validated against the live store before merging: all 8 pins on `main` verify
-  (10 artifacts, exit 0), a tampered `artifact:` sha exits 1, a fabricated `inputhash:` is reported
-  as STALE rather than as a byte mismatch, an absent artifact exits 1, and an unreachable registry
-  exits **3** after three tries.
-  - **The pin's `inputhash` is what addresses the store**, and it is checked against the tree
-    *first*. So the location being read is fixed by the SOURCES in the commit, not by anything the
-    pin author chose: a pin passes iff those exact bytes are published under those exact sources,
-    and getting them published means actually pushing them. Forging it requires making it true.
-  - **THIS DROPS THE "never hand-edit pins" RULE.** `make overlay-publish && make pin-artifacts`
-    is now a legitimate local round trip — you can make your own bytes the pinned ones without
-    waiting for CI. It only works for sources nothing has published yet (the store keeps the FIRST
-    bytes at a given hash and skips a second push), which is exactly the case that matters, since
-    editing a package moves its input hash.
-  - **Only the pins a change TOUCHES are checked**, and that is not laziness: a commit bumping a
-    package's sources makes its existing pin stale by definition — the pin-bump for it cannot exist
-    until after the merge — so a gate over all pins on every push would go red on precisely the
-    commits that are fine. A bare `make verify-pins-store` (every pin) is for auditing `main`, and
-    the RUNBOOK now points at it as the pre-tag check.
-  - **Exit 3 vs exit 1 is load-bearing**: "the registry told us nothing" and "this pin is wrong"
-    want opposite responses, so the CI step annotates them differently and only the second says to
-    change anything. `store_have()` retries the transient answer three times (5s, 10s) and never
-    retries "absent", which is a fact rather than a hiccup.
-  - Rejected on the way: blanket-rejecting any PR that touches `artifact.pin` (the pin-bump job's
-    entire output IS such a diff — it would block the only legitimate producer), and gating on
-    authorship (branch names are spoofable, anything that can open a PR as the bot can open any PR
-    as the bot, and nobody cares who typed the sha).
-  - Implementation note worth keeping: the check pulls through a NEW `overlay-store.sh fetch
-    <name> <dir> [hash]`, not through `pull`. `pull` installs into `work/repo` — verifying that way
-    would overwrite a developer's own build with store bytes, i.e. make "verify" a destructive verb
-    that destroys the very artifacts a local pin was about to describe. `pull_one` now sits on top
-    of `fetch_one`, so the retrieval-and-completeness half stays one implementation.
-  - Prompted 2026-08-04 by nearly committing a locally generated gamescope pin while testing the
-    night-mode fix; the local pin was reverted after the test bundle instead.
-  - Still NOT proven by any of this: that anyone reviewed the diff, or that the published bytes are
-    good. It proves a pin is not a private fiction. Provenance is still the review.
+- [x] **The overlay artifact store and the whole pin machinery are RETIRED — LANDED 2026-08-04.**
+  Deleted: `packages/overlay-store.sh`, `packages/verify-pins.sh`, `packages/oras.pin`, all eight
+  `packages/*/artifact.pin`, `ci.yml`'s `pins` job, and `overlay.yml`'s publish / cold-retrieval /
+  pin-bump / prune jobs — ~1300 lines, two PATs, and a bot with write access to `main`. A release
+  build now compiles the overlay in the same run that publishes the image; a PR that touches a
+  package gets a compile pass over the packages it changed, publishing nothing.
+  - **The premise was a dev-box number that never applied to CI.** Everything above was sized
+    against ~4h for a cold overlay build under arm64 emulation (`fex-emu` alone ~2h). MEASURED on
+    `ubuntu-24.04-arm` (run `30490159103`, real aarch64, no qemu): `gtk2 7m, sddm 5m, mesa 5m,
+    fex-emu 5m, gamescope 4m, scx-scheds 4m, mangohud 3m, rauc 1m` — **~34 min for the whole set**,
+    against a release card run that already took 33-41 min with the store doing all the compiling.
+    Half an hour, for all of that machinery. **Re-measure these before anyone proposes a cache
+    again**; they are the entire basis of the decision.
+  - **The byte claim did not go missing, it collapsed into the source claim.** `artifact.pin`
+    existed because a release image installed bytes some OTHER machine had compiled. It no longer
+    does: CI compiles from the sources in the commit it is building, into a fresh runner nothing
+    else writes to, so "built from the reviewed sources" and "these exact bytes" are one statement —
+    the one `images/manifest.lock`'s `novadeck` rows already make on every machine.
+  - **A local release build is possible again, deliberately.** The `PINNED` gate is gone, so
+    `make sdcard` with no `NOVADECK_DEV` produces a real release image — which un-blocks testing
+    OOBE on hardware without flashing a CI artifact first. Publishing stays CI-only because the R2
+    and RAUC signing credentials live there; that is the real control and it is untouched.
+  - **Accepted loss:** `verify-lock-rows.sh` drops to hash-membership only, since the pins were what
+    mapped an artifact filename to its owning package. The mesa split-package bug it was written for
+    is still caught (the stale siblings carried a digest no package produces any more); what is no
+    longer detectable is a row carrying a hash that is *current for a different package*.
+  - **Local caching is unchanged and was never the store's job**: `build-overlay.sh` keys each
+    package on `packages/inputhash.sh` and skips what has not moved
+    (`work/repo/<arch>/.stamps/<name>.hash`).
+  - Repo settings to clean up by hand: delete the `PIN_BUMP_PAT` and `GHCR_PRUNE_TOKEN` secrets.
+    The `novadeck-overlay/*` GHCR packages can rot; nothing pulls them.
+  - Superseded by this: the two items below on byte-pinning artifacts and the package store. Kept
+    for their reasoning, which is still correct about the problems they were solving.
 
 - [ ] **Pocket FIT touch works via `=m` timing, not via a declared dependency — make the chipone
   probe defer.** HW-VALIDATED 2026-08-04: flipping `CONFIG_TOUCHSCREEN_CHIPONE_TDDI` to `=m`
@@ -813,8 +807,11 @@ rationale lives in the linked memories and commit history.
   `work/repo` can substitute one — in exchange for a provenance claim that survives crossing a machine.
   See [[rootfs-build-approach]], [[overlay-package-pipeline]].
 
-- [x] **Byte-pin overlay artifacts + dev/release split — LANDED 2026-07-30, HW-validation pending** —
-  successor to the item above, which fixed the *correctness* half. Both halves are now done, but NOT
+- [x] **Byte-pin overlay artifacts + dev/release split — LANDED 2026-07-30, ~~HW-validation
+  pending~~ SUPERSEDED 2026-08-04.** The store and the pins described below were retired; see the
+  retirement item at the top for the measurements that motivated it. Everything here is history,
+  including the `--require-all` / `overlay-pull` / `verify-pins` commands it names.
+  Successor to the item above, which fixed the *correctness* half. Both halves are now done, but NOT
   the way this item originally proposed.
   **What shipped instead of `prebuilt` rows.** The plan below said "promote these to the `prebuilt`
   class". That is unbuildable: `prebuilt` rows are not pacman installs at all — `fetchlock.sh:168`
@@ -944,7 +941,8 @@ rationale lives in the linked memories and commit history.
   on the first build after any patch edit, and a cache keyed by anything other than the input hash is
   not a provenance mechanism. The store above is content-addressed per package, which is why a miss
   there is merely slow.
-  See `ci/README.md`, `packages/README.md` ("The package store"), [[overlay-package-pipeline]].
+  See `ci/README.md` and `packages/README.md` for what replaced this, and the retirement item at the
+  top of this file for why. [[overlay-package-pipeline]]
 
 - [x] **Power profiles + device-env stack — LANDED + HW-VALIDATED 2026-07-14 (Pocket S2)** — SteamUI's
   Performance profiles / GPU / fan controls work end-to-end. Three pieces (ported from the reference

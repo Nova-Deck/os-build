@@ -152,8 +152,9 @@ Dev vs release is selected by **environment**, not by a make knob, and it must b
 set -a; . ./dev.env; set +a
 ```
 
-A **release** image can only be built by CI: it requires reviewed artifact pins, and locally
-compiled overlay bytes will never match a published sha. `NOVADECK_DEV=1` is the developer path.
+A **release** image (no `NOVADECK_DEV`) builds locally too — it just cannot be *published*, since
+the R2 and OTA signing credentials only exist in CI. `NOVADECK_DEV=1` is the developer path: Wi-Fi
+creds, an SSH key and the dev package set baked in.
 
 <!-- AUTO-GENERATED from Makefile — regenerate with /ecc:update-docs -->
 
@@ -164,7 +165,6 @@ compiled overlay bytes will never match a published sha. `NOVADECK_DEV=1` is the
 | `ESP` | *(unset)* | Mounted EFI System Partition, the install target for `make deploy` |
 | `PKIDIR` | *(unset)* | Signing PKI, mounted read-only at `/pki`; makes `bundle` sign for real and adds `test-signing`'s keyring check. Unset, `bundle` mints an ephemeral dev cert |
 | `RAUC_CERT` / `RAUC_KEY` | `/pki/release.{cert,key}.pem` when `PKIDIR` is set | Override the signing pair with paths the *container* can see |
-| `OVERLAY_PULL` | `1` | Fetch prebuilt overlay packages before building. `make overlay` forces `0` (pure local build, no network) |
 | `OVERLAY_ARCH` | `aarch64` | Scopes the built overlay pacman repo at `work/repo/<arch>/` |
 | `BUILD_IMG` | `novadeck-build` | Name of the cross-compile Docker image |
 
@@ -175,7 +175,7 @@ compiled overlay bytes will never match a published sha. `NOVADECK_DEV=1` is the
 | Path | Purpose |
 |---|---|
 | `images/` | Image assembly (A/B layout, Btrfs, RAUC bundles) |
-| `packages/` | From-source overlay: PKGBUILDs + source/artifact pins for what we patch or version-bump, plus the pipeline that builds and pins them |
+| `packages/` | From-source overlay: PKGBUILDs + source pins for what we patch or version-bump, plus the builder that turns them into a local pacman repo |
 | `kernel/` | Unified kernel: config fragments, patches, all device trees, firmware embed list |
 | `firmware/` | Vendor firmware fetch/verify recipes + their pins |
 | `fs-overlay/` | Rootfs overlay payload — one filesystem-mirror tree injected with a single `cp -a` |

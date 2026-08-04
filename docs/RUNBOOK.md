@@ -39,14 +39,14 @@ Every `make` invocation below runs from the repo root. A dev build needs its env
 
 ## Get a release card
 
-**A release card can only be built by CI**, and that is deliberate: `make sdcard` on a dev box fails
-the artifact-pin gate (`packages/verify-pins.sh`), because locally compiled overlay bytes will never
-match a published sha. So verifying OOBE on a real release image means flashing what
-`release-sdcard.yml` produced.
+**A release card is published only by CI**, because the R2 credentials live there — but `make
+sdcard` on a dev box (no `NOVADECK_DEV`) builds the same kind of image, which is how OOBE gets
+tested on hardware without waiting for a run. That was not true until 2026-08-04: an artifact-pin
+gate made a local release build impossible, and it was retired with the overlay store.
 
 Cards are served from Cloudflare R2, not from a GitHub release asset — the image is ~9 GiB against
 GitHub's 2 GiB per-asset cap. The GitHub Release for a `card/v*` tag carries the checksums, the
-provenance pins, and the link:
+package lock the card was built from, and the link:
 
 ```sh
 curl -LO https://<R2_PUBLIC_BASE>/cards/v1.3.0/sdcard.img.gz
@@ -60,11 +60,10 @@ compressed — both btrfs roots carry `compress=zstd`), so the wrapper is a comp
 a size one, and `.gz` is what balenaEtcher and Raspberry Pi Imager open.
 
 To cut a card: tag `card/vX.Y.Z`. To cut an update instead, tag `ota/vX.Y.Z` — the two ship on
-independent cadences and a bundle is expected far more often than a card. **Check before tagging**
-that `main`'s artifact pins match the store: between an overlay republish and its pin-bump PR
-merging, a release build fails the pin gate. `make verify-pins-store` answers that from a clone in
-under a minute — it pulls each pinned artifact and compares, needing no `work/` and no credentials.
-Exit 3 means the registry did not answer (retry); exit 1 means a pin really is wrong.
+independent cadences and a bundle is expected far more often than a card. There is nothing to line
+up first: the release run compiles the overlay from the sources in the commit it is building
+(~34 min on top of the image), so a tag is never waiting on a separate pipeline to have published
+anything.
 
 The version and commit a card was built from are stamped into `/etc/novadeck-release` on the device
 (`NOVADECK_VERSION`, `NOVADECK_GIT`), so a running system can name where it came from.
@@ -78,23 +77,16 @@ make verify-card                              # GPT, ESP, per-slot filesystem id
 sudo dd if=out/images/sdcard.img of=/dev/sdX bs=4M conv=fsync status=progress
 ```
 
-**Editing an overlay package needs no CI round trip.** `make overlay` compiles it locally and the
-dev path installs it — nothing reads `packages/*/artifact.pin` unless `ROOTFS_MODE=release`, so
-patch, build, flash, repeat is entirely local. Pins only enter when you want *your* bytes to be the
-ones a release installs, and that is now a local sequence too:
+**Editing an overlay package needs no CI round trip, in either mode.** `make overlay` compiles it
+locally and both the dev and release paths install what is in `work/repo/<arch>/` — patch, build,
+flash, repeat is entirely local. Only the package you touched is rebuilt: `build-overlay.sh` keys
+each one on `packages/inputhash.sh` over its committed inputs and skips the rest.
 
 ```sh
-make overlay                                  # compile the package you changed
-packages/overlay-store.sh login               # classic PAT with write:packages (see the script)
-make overlay-publish                          # your bytes become the store's, at this input hash
-make pin-artifacts                            # record their shas, review the diff
-make verify-pins-store PKG=<name>             # prove the pin names published bytes
+make overlay                                  # rebuild whatever moved (a warm tree: no-op)
+packages/build-overlay.sh --only gamescope    # force one package
+cat work/repo/aarch64/.stamps/gamescope.hash  # what was built, vs. inputhash.sh on the dir
 ```
-
-The publish is the load-bearing step, and it only wins for sources nothing has published yet: the
-store keeps the FIRST bytes at a given input hash. Editing a package moves that hash, so the case
-you care about is the case that works. Skip all of it to just let CI publish and open its pin-bump
-PR — the sequence exists so waiting is a choice.
 
 `make-sdcard.sh` lays the **full** GPT — ESP + root-A/-B + var-A/-B + home, with `/home` pre-seeded
 with the native arm64 Steam client. Each `efi-*` partition carries that slot's stage-2 GRUB, its
@@ -349,9 +341,9 @@ That is the acknowledged failure mode of the design, not a bug to work around.
 make verify-lock                # lock's novadeck rows vs packages/ (seconds)
 make test                       # slot-state + bootctl + post-install + pairingd suites
 make test-signing               # RAUC signing self-test (container)
-make verify-pins                # overlay artifact bytes vs packages/*/artifact.pin (release gate)
-make verify-pins-store          # only if you touched a pin: are those bytes published? (network)
 ```
 
-CI runs `make test` and `make test-signing` on every push and pull request. `make test` needs no
+CI runs `make test` and `make test-signing` on every push and pull request. A pull request that
+touches a package also gets a compile pass over the packages it changed
+(`.github/workflows/overlay.yml`). `make test` needs no
 build, no container, no root and no device — it executes the shipped artifacts against a sandbox.

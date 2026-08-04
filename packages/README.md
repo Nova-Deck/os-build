@@ -38,50 +38,28 @@ Current pins: `inputplumber/` (InputPlumber input daemon; `deps: libiio`),
 `proton-cachyos/` and `proton-ge/` (two baked arm64 Proton compat tools — CachyOS and
 GloriousEggroll GE — the user picks either per game in Steam; both `kind: tar`, `deps: python`).
 
-## Artifact pins (`artifact.pin`) — the byte claim, release only
+## What CI does with these packages
 
-`source.pin` + `images/manifest.lock` answer *"were these built from the reviewed sources?"*.
-`artifact.pin` answers the other question: *"are these the reviewed **bytes**?"*
+Nothing is published anywhere. `.github/workflows/overlay.yml` builds the packages a pull request
+touches, purely to prove they still compile, and a release build (`.github/workflows/image.yml`)
+compiles the whole set in the same run that produces the image.
 
-```
-name: rauc
-inputhash: 9bbf620c…                                  # which sources produced them
-artifact: 3f1a…  rauc-1.15.2-1.1-aarch64.pkg.tar.zst  # sha256 of the built package
-```
+There used to be more: a GHCR **artifact store** that each package was published to, keyed by
+`packages/inputhash.sh`, plus a per-package `artifact.pin` recording the sha256 of the published
+bytes and a bot that opened a **pin-bump PR** to carry those shas into the tree. A release build
+verified them, which meant a release image could only ever be built by CI.
 
-The two are kept in **separate files with separate lifetimes**, and that separation is the whole
-design. The lock's hash has to verify on every machine, so it cannot be a byte hash — our builds are
-not bit-reproducible, and one that was made a clean CI runner fail every run. An artifact pin *is* a
-byte hash, so it can only ever be satisfied by bytes from the store — which is exactly why it applies
-to release builds and nothing else.
+All of it was sized against the cost of an overlay build **on a dev box**, where arm64 emulation
+makes the set take ~4h and fex-emu alone ~2h. CI does not pay that. On the native `ubuntu-24.04-arm`
+runners it uses, the same eight packages measured `gtk2 7m, sddm 5m, mesa 5m, fex-emu 5m, gamescope
+4m, scx-scheds 4m, mangohud 3m, rauc 1m` — **~34 minutes for everything**, against a release build
+that already runs 33–41 minutes. It was retired on 2026-08-04. If you are thinking of reintroducing a
+cache, re-measure those numbers first; they are what the decision rests on.
 
-| build | pins enforced? | who runs it |
-|---|---|---|
-| `NOVADECK_DEV=1 make sdcard` | no | you, constantly |
-| `make sdcard` / `make bundle` (release) | **yes** | CI only |
-
-So a release image cannot be built from packages you compiled locally, by design — locally built
-bytes will never match a published sha. That is not friction to route around; it is the claim. Use
-the dev path for development, and let `release-sdcard.yml` / `release-bundle.yml` produce anything
-that leaves your machine.
-
-```
-make verify-pins        # the release gate, run by hand (release builds run it automatically)
-make pin-artifacts      # record what is built HERE as the pinned bytes, then review the diff
-```
-
-Normally you never run `pin-artifacts`: `.github/workflows/overlay.yml` publishes each package and
-opens a **pin-bump PR** carrying the new shas. **Reviewing that PR is where the trust actually
-enters.** `verify-pins.sh` proves the bytes match the pins; nothing can prove someone looked. Merge
-it carelessly and the mechanism degrades to "CI published what CI published".
-
-Two failure modes, deliberately distinguished — conflating them turns one clear problem into ten
-confusing ones:
-
-| message | meaning | fix |
-|---|---|---|
-| pin is **STALE** | `inputhash` disagrees: sources moved, no pin-bump landed yet | merge the pin-bump PR, or build `NOVADECK_DEV=1` |
-| **BYTES DO NOT MATCH** | same sources, different bytes | expected for a local rebuild; from the store it is a substitution |
+**Locally, the cache is the stamps.** `build-overlay.sh` records each package's input hash under
+`work/repo/<arch>/.stamps/<name>.hash` and rebuilds only what moved, so a one-line gamescope patch
+costs a gamescope build and nothing else. Change a `source.pin`, a patch or a `PKGBUILD` and the next
+`make overlay` rebuilds that package; change nothing and it does nothing.
 
 `novadeck.db` is deliberately **not** pinned: `repo-add` is not byte-reproducible either, so a pin on
 it could never hold. Nothing installs *from* the db in a locked build — `fetchlock.sh` hands pacman an
@@ -97,8 +75,9 @@ their own `PKGBUILD`:
 -march=armv8.2-a+fp16+dotprod       # packages/fex-emu, packages/mesa
 ```
 
-**The floor is set by the OLDEST SoC the store must serve, not the newest.** The overlay store is
-shared across every board, so a published byte has to run on all of them. SM8550 (Cortex-X3/A715) and
+**The floor is set by the OLDEST SoC the image must serve, not the newest.** The overlay is built
+once per architecture and the image is unified across every board, so one built byte has to run on
+all of them. SM8550 (Cortex-X3/A715) and
 SM8650 (X4/A720) are ARMv9-A and would tolerate far more, but **SM8250 (Cortex-A77/A55, ARMv8.2-A)**
 is a planned target and it is what the floor is chosen against. Raising the floor above what the
 oldest board supports does not fail at build time — it produces packages that SIGILL on that device,
@@ -135,10 +114,10 @@ about the code that actually executes guest x86.
 `packages/inputhash.sh` hashes exactly three things per package — `source.pin`, its declared patches,
 and the local `PKGBUILD`. A shared flags file would be **invisible** to it: changing the flags would
 move the artifact bytes while leaving the inputhash unchanged, so `images/manifest.lock` would keep
-asserting the same provenance for different bytes and `verify-pins.sh` would report a byte mismatch
-instead of a STALE pin — exactly the confusing failure its stale-check-first ordering exists to
-prevent. Putting the flags in the `PKGBUILD` keeps them inside the hashed input set, so a flag change
-is an ordinary pin-bump like any source change. **If this ever becomes a shared file, it must be
+asserting the same provenance for different bytes, and — worse — `build-overlay.sh` would consider
+every package up to date and never rebuild any of them, so the flag change would silently not happen
+at all. Putting the flags in the `PKGBUILD` keeps them inside the hashed input set, so a flag change
+rebuilds the package like any source change. **If this ever becomes a shared file, it must be
 added to `inputhash.sh`'s input set in the same commit** — and that bumps every package's hash at
 once.
 
@@ -169,90 +148,38 @@ adds it as a `file://` repo **ahead of the holo repos** so the patched package w
 resolves by repo order, not version — the higher `pkgrel` only matters for later upgrades), and
 folds the repo db's hash into the base reuse-cache key. `base` depends on `overlay` automatically.
 
-### The package store — build once, retrieve everywhere
+### Rebuilds are incremental, and that is the only cache
 
-A cold `make overlay` compiles every package under emulation: ~4h on a 16-core box, `fex-emu`
-alone ~2h. `packages/overlay-store.sh` makes that a one-time cost **per source change** by
-publishing each built package to a registry keyed by its `inputhash.sh` digest, so any other
-machine or pipeline pulls the bytes instead of recompiling.
-
-```
-make overlay-pull && make overlay      # cold consumer: fetch, then assemble. No compiles.
-make overlay-publish                   # publish what this machine built (needs a login)
-packages/overlay-store.sh plan         # which packages the store does NOT already have (JSON)
-packages/overlay-store.sh pull-all --require-all   # fail unless EVERY package came from the store
-```
-
-**`--require-all` is for verification, not for building.** By default a miss is fine — whatever the
-store lacks gets compiled locally, which is slow but correct, so `make overlay-pull` never fails a
-build over a cache miss. CI's `verify` job wants the opposite: it exists to prove the store covers
-the whole set, so it fails immediately and names the package. Reach for the flag when a miss means
-something is *wrong*, not merely absent.
-
-The retrieval path distinguishes **absent** from **unreadable**, which is worth knowing because the
-two have completely different fixes and used to look identical:
-
-| symptom | cause | fix |
-|---|---|---|
-| `not in the store` | nothing has published that input hash yet | build and publish it (or let CI) |
-| `PERMISSION DENIED` | the package exists but is not public | make it public / link it to the repo |
-
-That second row is the trap: **a GHCR package is private when first created, even in a public
-repo.** Before it was classified separately, a freshly published (still-private) store read as a
-plain miss, and CI dutifully recompiled all eight packages instead of saying "I am not allowed to
-read this". Verify a visibility change with no credentials in the environment, not by reading the
-setting back:
+`build-overlay.sh` hashes each package's committed inputs with `packages/inputhash.sh` and records
+the result as `work/repo/<arch>/.stamps/<name>.hash`. A package is rebuilt when that hash moves or
+its artifacts are missing, and skipped otherwise — so `make overlay` on a warm tree is a no-op, and
+a one-line patch to one package costs one package's build.
 
 ```
-DOCKER_CONFIG=$(mktemp -d) packages/overlay-store.sh have rauc && echo readable
+make overlay                                # rebuild whatever moved, index the repo
+packages/build-overlay.sh --only mesa       # force one package, skip re-examining the rest
+packages/inputhash.sh packages/mesa         # the digest that decides
 ```
 
-`.github/workflows/overlay.yml` is the producer: one job per package that the store lacks, on
-native `aarch64` runners (no qemu), publishing to `ghcr.io/nova-deck/novadeck-overlay/<name>-<arch>`
-tagged with the input hash. An unchanged package is not a fast build there — it is **no build**.
+Cost matters here because it is what shapes the CI design: a cold build of all eight is **~4h on a
+dev box** under arm64 emulation (`fex-emu` alone ~2h) but **~34 minutes on a native aarch64 runner**.
+If a build starts unexpectedly, check the stamp before assuming something is broken:
 
-Things worth knowing:
+```
+cat work/repo/aarch64/.stamps/mesa.hash     # what was built
+packages/inputhash.sh packages/mesa         # what the tree says now
+```
 
-- **Pulling needs no credentials.** The packages are public, so a fresh clone retrieves with no
-  token and no `gh`. Only publishing authenticates — and in CI nothing extra is needed there either,
-  because the workflow's `GITHUB_TOKEN` with `permissions: packages: write` is accepted.
-- **Publishing from a workstation needs a CLASSIC personal access token**, and this is worth knowing
-  before you spend time on it: `gh auth token` hands out a `gho_` OAuth token which GHCR
-  *authenticates* — the blob uploads all succeed — and then refuses at the manifest with `the token
-  provided does not match expected scopes`. The message points at scopes, but the token **type** is
-  the problem, so `gh auth refresh -s write:packages` does not fix it. Create a classic PAT with
-  `write:packages` (plus `delete:packages` only if you also want the prune job), then:
+`.stamps/<name>.files` is the other half, and the more load-bearing one: it maps a package directory
+to the several artifacts it emitted (`mesa` emits five), and both `genmanifest.sh` and `fetchlock.sh`
+hard-fail without it.
 
-  ```
-  export NOVADECK_GHCR_TOKEN=ghp_...
-  packages/overlay-store.sh login && make overlay-publish
-  ```
-
-  None of this is on the critical path: publishing from a workstation only pre-seeds the store so CI
-  need not build on its first run, and CI builds the whole set from cold in well under ten minutes
-  on native `aarch64`. Skipping it is a perfectly good default.
-- **The input hash is the key**, which is why it is not throwaway: same hash ⇒ same sources ⇒ the
-  published artifacts are the ones you would have built. It is a fourth reader of the one formula
-  above and must agree with the other three.
-- **`.stamps/<name>.files` travels with the artifact**, because it is the only mapping from a pin
-  to its several outputs (`mesa` emits five) and both `genmanifest.sh` and `fetchlock.sh` hard-fail
-  without it. A pull writes the stamps last, so an interrupted pull looks un-built and gets rebuilt
-  rather than looking complete with files missing.
-- **No checksum sidecar**: a registry content-addresses every blob, so `oras pull` already verifies
-  the bytes it returns. `oras` itself is pinned by `packages/oras.pin`.
-- **This is a cache, not a provenance mechanism.** `images/manifest.lock` still pins the `novadeck`
-  rows to their *sources* and `fetchlock.sh` still re-derives that hash from `packages/` — the store
-  changes neither, and a miss just means a local build. Making the lock verify these artifacts *by
-  byte* is a separate open item in `TODO.md`.
-- **The repo db is rebuilt locally, not shipped**, since it must describe whatever set the consumer
-  actually has. `repo-add` output is not byte-reproducible, so a pull-then-index yields a different
-  `novadeck.db` sha than the machine that built the packages — which advances `.overlay.stamp` and
-  so rebuilds the *base*. Cheap next to the compiles it skipped, and conservative in the right
-  direction, but it does mean `overlay-pull` is not completely free on a warm machine.
-
-`work/repo/<arch>/` remains a plain pacman repo, so the alternative of serving it over HTTP and
-repointing the `[novadeck]` `Server` still works; the store is preferred because it is
-content-addressed per package rather than a single mutable directory.
+**There is no shared artifact cache.** A GHCR store keyed by the same input hash existed until
+2026-08-04 — with `oras`, an `artifact.pin` per package, and a bot PR carrying published shas — and
+it was retired because it was built for the emulated cost and CI never paid it. See *What CI does
+with these packages* above for the measurements. `work/repo/<arch>/` is a plain pacman repo, so if
+one is ever wanted again, serving that directory over HTTP and repointing the `[novadeck]` `Server`
+is the cheap version.
 
 ### How these packages are pinned — `inputhash.sh`
 

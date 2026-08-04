@@ -5,11 +5,13 @@
 # artifacts are wanted at different cadences (a card is for flashing a device from scratch, a bundle
 # is for updating one already in the field) and neither should have to wait on the other.
 #
-# WHY CI IS THE ONLY PRODUCER OF A RELEASE IMAGE. A release build requires reviewed artifact pins
-# (packages/*/artifact.pin, enforced by packages/verify-pins.sh through the Makefile's PINNED gate).
-# Locally built overlay packages will never match a published sha — our builds are not
-# bit-reproducible — so a developer cannot produce a release image even by accident, and does not
-# need to: `NOVADECK_DEV=1 make sdcard` is the dev path and is unaffected by any of this.
+# WHAT MAKES CI THE PRODUCER OF A RELEASE IMAGE is the CREDENTIALS, not a build gate. Publishing a
+# card needs the R2 secrets and signing a bundle needs the release key in a protected environment;
+# neither is reachable from a dev box. Building one locally is fine and supported — `make sdcard`
+# with no NOVADECK_DEV produces a real release image, which is how OOBE gets tested on hardware
+# without waiting for a run here. There used to be a hard gate (packages/*/artifact.pin, enforced by
+# packages/verify-pins.sh) that made a local release build impossible; it was retired 2026-08-04
+# along with the overlay store — see .github/workflows/overlay.yml for the measurements behind that.
 #
 # THE TWO ARTIFACTS SHIP TO DIFFERENT PLACES, which is why only one of them has a publish step here.
 # A CARD goes to the public Cloudflare R2 bucket a person downloads and flashes from (see
@@ -19,10 +21,12 @@
 # handed off from there. Do not "unify" these: the only thing they legitimately share is everything
 # up to and including the assembled rootfs, which is exactly what this workflow already shares.
 #
-# THE EXPENSIVE PART IS ALREADY PAID. overlay.yml publishes every from-source package to GHCR keyed
-# by packages/inputhash.sh, so `overlay-pull --require-all` reconstitutes work/repo with ZERO
-# compiles. --require-all rather than a best-effort pull: on a release runner a miss must be a red
-# build, not a silent four-hour fallback into compiling fex-emu under emulation.
+# THE OVERLAY IS COMPILED HERE, IN THIS RUN, from the sources in the commit being built. That is
+# ~34 minutes on a native aarch64 runner for the whole set (measured per package in
+# .github/workflows/overlay.yml) against this job's 350-minute budget. It used to be retrieved from a
+# GHCR store keyed by packages/inputhash.sh; the store was retired because it was sized against the
+# ~4h EMULATED dev-box cost and CI never paid that. Compiling in-run also removes the question of
+# whether the bytes in work/repo are the reviewed ones — nothing else ever writes them.
 #
 # ============================================================================================
 # DISK: THERE IS ROOM, AND THIS IS THE MEASUREMENT SO NOBODY RE-ENGINEERS FOR A CONSTRAINT THAT IS
@@ -160,18 +164,10 @@ jobs:
           key: pacman-cache-${{ hashFiles('snapshot.pin', 'images/manifest.lock') }}
           restore-keys: pacman-cache-
 
-      - name: retrieve overlay packages from the store (no credentials)
-        run: packages/overlay-store.sh pull-all --require-all
-
-      - name: assemble the overlay repo
+      # ~34 minutes cold for the 8 from-source packages. The runner is fresh, so this is always
+      # cold; there is no stamp cache to hit here the way there is on a dev box.
+      - name: build the overlay packages
         run: make overlay
-
-      # Explicit, ahead of the build, so a pin problem is the FIRST thing this job reports rather
-      # than something discovered 40 minutes in. The Makefile gates the base on this too (order-only
-      # on $(BASE_STAMP)), so this is belt-and-braces — but it is the check most likely to fail on a
-      # normal day, when sources moved and the pin-bump PR has not merged yet.
-      - name: verify artifact pins (release gate)
-        run: make verify-pins
 
       - name: build the toolchain image
         run: make toolchain

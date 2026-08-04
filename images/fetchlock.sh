@@ -45,13 +45,14 @@
 #             the artifact and stronger about provenance, which is the half that has to survive
 #             crossing a machine.
 #
-#             THE BYTE CHECK IS NOT MISSING ANY MORE, it just is not here. It lives in
-#             packages/verify-pins.sh against packages/*/artifact.pin, and it applies to RELEASE
-#             builds only — a release image is built solely by CI, from store artifacts whose
-#             sha256 a pin-bump PR recorded. Keeping the two checks in separate files is the
-#             point: this one must pass on every machine, that one must not (locally built bytes
-#             will never match a published sha, and requiring them to would mean a publish round
-#             trip before you could flash anything you just compiled). See NOVADECK_DEV.
+#             THERE IS NO SEPARATE BYTE CHECK, and after 2026-08-04 there is no longer a gap where
+#             one is wanted. There used to be: packages/*/artifact.pin recorded the sha256 of each
+#             artifact a GHCR store had published, and a release build required a match. That whole
+#             mechanism existed because a release image installed bytes some OTHER machine had
+#             compiled. It does not any more — CI compiles the overlay in the same run that
+#             publishes the image, from the sources in the commit it is building, so "built from
+#             the reviewed sources" and "these exact bytes" collapse into one claim, which is the
+#             one this row makes.
 #
 # The fourth is not an install: `prebuilt` rows are tarballs/blobs placed by customize-base.sh
 # from their own sha256-pinned packages/*/prebuilt.pin.

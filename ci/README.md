@@ -9,53 +9,45 @@ Two jobs, no secrets, on every push and pull request:
 | `test` | `make test` — 354 checks across the initramfs slot-state reader, `novadeck-bootctl`, and the RAUC post-install hook | nothing (host shell) |
 | `signing` | `make test-signing` — every case a negative against `images/rauc/verify-signing.sh` | the `novadeck-build` container, for `rauc` |
 
-## Today: `.github/workflows/overlay.yml` — the package pipeline
+## Today: `.github/workflows/overlay.yml` — the package compile pass
 
-Builds the from-source overlay packages and publishes them so nothing else has to build them.
-Triggered by a change to any overlay input (`packages/*/source.pin`, its patches, a local
-`PKGBUILD`, `base-devel.digest`), plus `workflow_dispatch` and `workflow_call`.
+Builds the from-source overlay packages a **pull request** touches, to prove they still compile.
+It publishes nothing and needs no secrets. Triggered by a change to any overlay input
+(`packages/*/source.pin`, its patches, a local `PKGBUILD`, `build-overlay.sh`, `inputhash.sh`,
+`base-devel.digest`), plus `workflow_dispatch`.
 
 | job | runner | what it runs |
 |---|---|---|
-| `plan` | x86 | `overlay-store.sh plan` — the input hash of every package, against what the store already holds. Emits the build matrix. |
-| `build` | `ubuntu-24.04-arm` | one job per *missing* package: `build-overlay.sh --only <pkg> --no-index`, then publish |
-| `verify` | `ubuntu-24.04-arm` | `make overlay-pull && make overlay` on a clean workspace, asserting **zero compiles**, a real repo db, and that `fetchlock.sh` still verifies the untouched lock |
-| `pin-bump` | x86 | `main` only: applies the pins `verify` recorded and opens the **pin-bump PR**. Needs a `PIN_BUMP_PAT` secret and **fails without one** |
-| `prune` | x86 | optional housekeeping; needs a `GHCR_PRUNE_TOKEN` PAT, announces itself as skipped without one |
-
-The two PATs are deliberately opposite about a missing secret. `prune` is housekeeping on packages
-nothing meters, so it announces itself as skipped and lets the run pass. `pin-bump` *is* the
-provenance mechanism, so an absent secret is an error — the failure mode to avoid is a green job that
-pushed a branch and opened nothing, which this job has already produced twice (an inherited job skip,
-then a `git diff` blind to untracked files).
-
-`PIN_BUMP_PAT` should be a fine-grained PAT scoped to **this repo only**, with **Pull requests:
-read+write** and nothing else; it is used for the single `gh pr create` call. The branch push uses
-`GITHUB_TOKEN` (`contents: write`), so the stronger credential never touches the operation that
-writes to the repo. The alternative — letting `GITHUB_TOKEN` open the PR — requires the *organisation*
-setting "Allow GitHub Actions to create and approve pull requests", which cannot be narrowed: it is
-org-wide, covers every repo, and grants **approve** as well as create, so any workflow in the org
-could satisfy a required-review branch protection on its own. For a mechanism whose whole premise is
-that a human reviewed the pins, that is the wrong trade. It also has a practical cost: a PR opened by
-`GITHUB_TOKEN` triggers no workflows, so the pin PR arrives with no checks. A PAT-opened one runs `ci`.
-
-A fine-grained PAT expires. When it does, `pin-bump` fails loudly on the next `main` run that changes
-a pin — which is the intended behaviour, but budget for the renewal rather than being surprised by it.
+| `plan` | x86 | `verify-lock-rows.sh`, then a `git diff` against the base ref → the build matrix |
+| `build` | `ubuntu-24.04-arm` | one job per *changed* package: `build-overlay.sh --only <pkg> --no-index` |
 
 Three properties this leans on:
 
-- **The trigger key and the artifact key are the same value** — `packages/inputhash.sh`, which the
-  lock already records. "Has this changed?" and "which artifact do I want?" have one answer, so an
-  unchanged package is not a fast build but *no* build.
 - **Native aarch64, so no emulation.** `build-overlay.sh`'s own binfmt probe passes and it never
   registers qemu or needs `--privileged`. `vars.OVERLAY_RUNNER` overrides the label; do **not**
   point it at a self-hosted runner while this repo is public.
-- **Fork PRs do not run it.** A fork's token is read-only and could not publish; triggering on
-  `push` means a fork PR skips the pipeline and its packages get built on merge.
+- **Fork PRs run it fine**, now that nothing is published: `contents: read`, no secrets, no registry.
+- **Unknown scope widens the check.** A dispatch with no diff base, or a change to the builder
+  itself, selects every package rather than none.
 
-`verify` is the job that matters to everything downstream: it is the automated form of "a cold
-machine can reconstitute the overlay repo from the store without compiling", tested every run
-rather than assumed.
+Not triggered by a push to `main`: a PR already built what it changed, and a direct-to-`main` package
+edit is caught by the next release build. `workflow_dispatch` forces a pass over a branch that never
+saw a PR.
+
+### What used to be here
+
+Until 2026-08-04 this workflow was a build-once-and-cache pipeline: it published every package to
+GHCR keyed by `packages/inputhash.sh`, ran a `verify` job asserting a cold machine could reconstitute
+the repo with zero compiles, and opened a **pin-bump PR** carrying each artifact's sha256 into
+`packages/*/artifact.pin` — which a release build then enforced. It needed two PATs (`PIN_BUMP_PAT`,
+`GHCR_PRUNE_TOKEN`), a pinned `oras`, and a prune job.
+
+It was retired because its premise was a **dev-box** number. An overlay build costs ~4h under arm64
+emulation on a workstation (`fex-emu` alone ~2h), and the store existed so nothing paid that twice.
+CI never paid it: on `ubuntu-24.04-arm` the eight packages measured `gtk2 7m, sddm 5m, mesa 5m,
+fex-emu 5m, gamescope 4m, scx-scheds 4m, mangohud 3m, rauc 1m` — **~34 minutes for the set**, against
+a release card build that already ran 33–41 minutes. Both PAT secrets can be deleted; nothing reads
+them. If reintroducing a cache is ever proposed, re-measure those figures first.
 
 The signing job checks the committed keyring (`images/rauc/novadeck-ca.pem`) against the committed
 release certificate (`images/rauc/release.cert.pem`). Both are public, so it runs on a fork's PR
@@ -66,11 +58,11 @@ itself as skipped there and runs wherever a PKI is mounted:
 
 ## Today: the release image builds
 
-`.github/workflows/image.yml` is a `workflow_call`-only builder — `overlay-pull --require-all` →
-`make overlay` → `make verify-pins` → the build, walked **target by target** rather than as one
-`make sdcard`: work/ peaks near 30 GB and out/ near 21 GB, so each stage's inputs are deleted once
-its output exists (kernel tree ~14 G, base+prebuilt ~11 G, intermediate images ~13 G), with `df -h`
-after each into the step summary. Two thin callers invoke it on
+`.github/workflows/image.yml` is a `workflow_call`-only builder: `make overlay` (~34 min, compiled
+in-run) → `make toolchain` → `make sdcard` or `make bundle`, with `df -h` into the step summary.
+work/ peaks near 30 GB and out/ near 21 GB against ~109 G free on the runner, measured by
+`preflight.yml` — there is room, and an earlier design that deleted each stage's inputs as it went
+was reverted as cleverness bought against a limit that is not there. Two thin callers invoke it on
 their own triggers, because a flashable card and a field update are wanted at different cadences:
 
 | workflow | trigger | secrets | ships to |
@@ -86,29 +78,25 @@ delivered two ways.
 
 **A card is ~9 GiB, which is why it is not a release asset** — GitHub caps those at 2 GiB. It goes to
 a public R2 bucket (`images/publish-card.sh`, retention N=1 to stay inside the 10 GB free tier) and
-the Release carries only `sha256sums.txt`, the provenance pins and the link.
+the Release carries only `sha256sums.txt`, `manifest.lock` and the link.
 
-**CI is the only producer of a release image, and that is the point.** A release build enforces
-`packages/*/artifact.pin` (via the Makefile's `PINNED` gate → `packages/verify-pins.sh`), and locally
-built overlay bytes will never match a published sha because our builds are not bit-reproducible. So
-`make sdcard` on a dev box now fails that gate by design; `NOVADECK_DEV=1 make sdcard` is the dev
-path and is untouched by any of this. Verifying OOBE on a genuine release image means flashing the
-artifact `release-sdcard.yml` produces.
+**CI is the only thing that PUBLISHES a release image**, because the R2 and signing credentials live
+here. Building one is not restricted: `make sdcard` with no `NOVADECK_DEV` produces a real release
+image on a dev box, which is how OOBE gets tested on hardware. That was not true until 2026-08-04,
+when the artifact-pin gate was retired along with the store.
 
-Both of the old blockers are gone, and worth recording because they were different problems. The
-*lock* half: a clean runner has no `work/`, so it rebuilt the overlay, and non-reproducible builds
-failed `images/fetchlock.sh` every run because the lock pinned those rows to artifact bytes only the
-last `make relock` machine could reproduce. The lock now pins them to their **sources**. The *cost*
-half: the package store above means a cold runner retrieves rather than compiles. What used to be
-listed here as the still-open **byte** claim is now closed from the other side — not by putting bytes
-back in the lock, but by `artifact.pin` + the pin-bump PR, so the two claims live in separate files
-with separate lifetimes. See `packages/README.md`.
+The blocker that once made a release build impossible on a clean runner is worth recording. A clean
+runner has no `work/`, so it rebuilt the overlay, and because our builds are not bit-reproducible
+`images/fetchlock.sh` failed every run — the lock pinned those rows to artifact bytes only the last
+`make relock` machine could reproduce. The lock now pins them to their **sources**, which is the
+claim that survives crossing a machine. A release image's overlay is compiled in the same run that
+publishes it, so those source pins are also its byte provenance. See `packages/README.md`.
 
 ## Not here yet, and why
 
 **Bundle signing.** `release-bundle.yml` builds, but with an ephemeral dev cert — it proves the
-bundle assembles, the verity hashes compute and the pin gate passed, while producing something every
-device will reject. The remaining decision is whether the release private key belongs in GitHub at
+bundle assembles and the verity hashes compute, while producing something every device will
+reject. The remaining decision is whether the release private key belongs in GitHub at
 all; `image.yml` already accepts `RAUC_CERT_PEM` / `RAUC_KEY_PEM` and signs when both are present,
 warning loudly when they are not. The shape is settled by the PKI:
 

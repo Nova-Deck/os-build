@@ -7,6 +7,28 @@ them. The full rationale otherwise lives in the linked memories and commit histo
 
 ## Open
 
+- [ ] **The night-mode atom workaround INVERTS if Steam fixes its property packing — re-check on
+  every client update.** `packages/gamescope/patches/0002` decodes
+  `GAMESCOPE_COLOR_NIGHT_MODE` as `[amount, saturation]` and pins the hue, because the arm64 client
+  mis-packs the property for Xlib's `format=32` LP64 ABI: `XChangeProperty` transmits the low 32
+  bits of each `long`, the client passes a 12-byte `float[3] {amount, hue, saturation}`, so Xlib
+  reads three 8-byte longs off it and the wire becomes `[amount, saturation, overread]`. The hue is
+  computed and then destroyed in transit; `vec[2]` is an out-of-bounds read of the client's stack.
+  - **A fixed client sends a correct `[amount, hue, saturation]` and our patch then reads the real
+    hue as saturation and forces amber over it.** Peak Saturation goes wrong, Primary Hue stays
+    dead. The failure is quiet: our `clamp` turns the mis-decode into a plausible-looking value
+    rather than an obviously broken screen, so it will not announce itself.
+  - **There is no reliable runtime sniff.** A legitimate `vec[2]` in `[0,1]` and random heap bits
+    are not distinguishable — a large share of float bit patterns land in `[0,1]` — and a fixed
+    client still declares `nelements=3`, so gamescope's `size()==3` guard cannot tell them apart
+    either. Auto-detection is not on the table; this has to be a human re-check.
+  - **How to re-check** (from [[nightmode-atom-is-amount-saturation]]): all sliders to min, night
+    mode ON, change-only `xprop` monitor, then sweep each control. If "Primary Hue" has come alive
+    and `vec[2]` has become stable and in-range, the client is fixed — drop the patch entirely
+    rather than adjusting it. Verifying from the screen instead of the atom does not work.
+  - Upstream is expected to fix this in the client, so the patch is meant to be temporary. It has
+    no expiry mechanism, which is why it is tracked here.
+
 - [ ] **Pocket FIT touch works via `=m` timing, not via a declared dependency — make the chipone
   probe defer.** HW-VALIDATED 2026-08-04: flipping `CONFIG_TOUCHSCREEN_CHIPONE_TDDI` to `=m`
   restored the touchscreen and cut the boot (the built-in probe was burning ~18.6s of the 20.9s

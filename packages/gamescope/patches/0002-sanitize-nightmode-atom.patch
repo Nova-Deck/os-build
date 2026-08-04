@@ -3,56 +3,80 @@ From: Philippe Simons <simons.philippe@gmail.com>
 Date: Sat, 4 Jul 2026 14:00:00 +0200
 Subject: [PATCH 2/2] fix: sanitize GAMESCOPE_COLOR_NIGHT_MODE atom
 
-The arm64 Steam client does not write the vector this atom is documented to
-carry. Measured on hardware by sweeping each UI control and watching the atom:
-the "Primary Hue" slider moves NOTHING, the "Peak Saturation" slider drives
-vec[1] (sweeping 0.5..1.0), and the night-mode tint slider drives vec[0]. So the
-client sends [amount, saturation] and never sends a hue at all; vec[2] is left
-as uninitialised garbage.
+The arm64 Steam client packs this property wrong for Xlib's format=32 ABI, and the
+hue never reaches the compositor.
 
-gamescope renders HSV(hue, saturation*amount, 1.0) faithfully, so reading vec[1]
-as the hue turns night mode into a magenta/red screen instead of warm amber.
-Reading vec[2] as the saturation is worse than wrong, it is a coin flip: the
-garbage is re-rolled per install, and a large positive (1.02e15, 6.5e22) clamps
-to 1.0 and works by luck while a negative (-6.25527e-27) clamps to 0.0, which
-multiplies the tint away so night mode does nothing at all at any intensity.
-That is why "night mode does nothing" was never reproducible across cards.
+XChangeProperty(format=32) takes a long* on LP64 and transmits the low 32 bits of
+each element. The client hands it a float[3] {amount, hue, saturation} -- 12 bytes
+-- so Xlib reads three 8-byte longs off a 12-byte buffer: long[0] is {amount, hue}
+and its low half is amount, long[1] is {saturation, ...} and its low half is
+saturation, and long[2] is entirely past the end of the buffer. The wire vector is
+therefore [amount, saturation, overread].
 
-This was first read as a consequence of this panel exposing no EDID, but other
-arm64 systems on unrelated panels hit the identical vector, so the cause is the
-client and not our display stack. Worth stating because it rules out the
-"advertise real colorimetry via a kernel panel EDID" route a second time: even a
-perfect EDID would not change what the client writes into this atom.
+That is confirmed on hardware by sweeping each UI control and watching the atom:
+the tint slider drives vec[0], "Peak Saturation" drives vec[1] (0.5..1.0), and
+"Primary Hue" moves nothing. The hue is computed client-side and then destroyed in
+transit, which is why that slider is inert and why no compositor-side change can
+revive it. vec[2] is an out-of-bounds read of the client's stack, not an
+uninitialised field -- hence garbage that is re-rolled per install (1.02e15 and
+6.5e22 seen, -6.25527e-27 on 2026-08-04).
 
-Take the two fields the client really sends, pin the hue it never sends to
-amber, and guard both against the non-finite values this client is known to
-emit. Night mode becomes a reliable warm cast whose strength follows the tint
-slider and whose intensity follows the saturation slider. "Primary Hue" stays
-inert because the client transmits nothing for it.
+So the stock decode is wrong twice. Reading vec[1] as the hue turns night mode into
+a magenta/red screen instead of warm amber. Reading vec[2] as the saturation is
+worse than wrong, it is a coin flip: a large positive clamps to 1.0 and works by
+luck, while a negative clamps to 0.0, which multiplies the tint away so night mode
+does nothing at all at any intensity. That is why "night mode does nothing" was
+never reproducible across cards.
+
+This was first read as a consequence of this panel exposing no EDID. The packing
+analysis rules that route out for good: the vector is mangled before it ever leaves
+the client, so no amount of advertised colorimetry would change what arrives.
+
+Take the two fields that survive the packing, pin the hue the wire loses to amber,
+and guard both against non-finite values -- the only validation on this path is the
+size()==3 check, so garbage would otherwise reach the HSV math unchecked. Night mode
+becomes a reliable warm cast whose strength follows the tint slider and whose
+intensity follows the saturation slider. "Primary Hue" stays inert.
 ---
- src/steamcompmgr.cpp | 20 ++++++++++++++++++++
- 1 file changed, 20 insertions(+)
+ src/steamcompmgr.cpp | 36 ++++++++++++++++++++++++++++++++++++
+ 1 file changed, 36 insertions(+)
 
 diff --git a/src/steamcompmgr.cpp b/src/steamcompmgr.cpp
 --- a/src/steamcompmgr.cpp
 +++ b/src/steamcompmgr.cpp
-@@ -6349,6 +6349,26 @@
+@@ -6349,6 +6349,42 @@
  		nightmode.hue = vec[1];
  		nightmode.saturation = vec[2];
- 
-+		// novadeck: re-read the atom the way the arm64 Steam client actually fills it.
-+		// HW-measured by sweeping each UI control: "Primary Hue" moves nothing, "Peak
-+		// Saturation" drives vec[1] (0.5..1.0), the tint slider drives vec[0]. The client
-+		// sends [amount, saturation] and no hue; vec[2] is uninitialised garbage, re-rolled
-+		// per install (1.02e15 and 6.5e22 seen, and -6.25527e-27 on 2026-08-04).
+
++		// novadeck: the arm64 Steam client packs this property wrong for Xlib's format=32
++		// ABI. XChangeProperty(format=32) takes a long* on LP64 and transmits the low 32 bits
++		// of each element. The client hands it a float[3] {amount, hue, saturation} -- 12
++		// bytes -- so Xlib reads three 8-byte longs off a 12-byte buffer:
++		//     long[0] = {amount, hue}      -> low half = amount
++		//     long[1] = {saturation, ...}  -> low half = saturation
++		//     long[2] = past the buffer    -> whatever the client's stack held
++		// The wire vector is therefore [amount, saturation, overread]. The hue IS computed
++		// client-side and then destroyed in transit, and vec[2] is an out-of-bounds read --
++		// which is why it is re-rolled per install (1.02e15 and 6.5e22 seen, -6.25527e-27 on
++		// 2026-08-04) rather than merely uninitialised. HW-confirmed by sweeping each control:
++		// the tint slider drives vec[0], "Peak Saturation" drives vec[1] (0.5..1.0), and
++		// "Primary Hue" moves nothing -- that slider cannot be fixed from here.
 +		//
 +		// So the stock decode is wrong twice: vec[1] as a hue gives a magenta/red screen, and
-+		// vec[2] as a saturation is a coin flip -- a big positive clamps to 1.0 and works by
-+		// luck, a negative clamps to 0.0 and multiplies the tint away, leaving night mode
-+		// visibly dead at every intensity. Hence: take vec[0]/vec[1], pin the hue, and guard
-+		// both against the non-finite values this client is known to emit.
++		// vec[2] as a saturation is a coin flip -- a big positive clamps to 1.0 and night mode
++		// works by luck, a negative clamps to 0.0 and multiplies the tint away, leaving it
++		// visibly dead at every intensity.
++		//
++		// Take the two fields that survive the packing, pin the hue the wire loses, and guard
++		// both: the only validation on this path is the size()==3 check above, so a non-finite
++		// value would otherwise reach the HSV math unchecked.
++		//
++		// WATCH: if the client fixes its packing the wire becomes a correct
++		// [amount, hue, saturation] and this workaround starts mis-decoding -- reading the real
++		// hue as saturation. There is no reliable runtime sniff (a correct vec[2] and random
++		// heap bits are not distinguishable), so re-check this on Steam client updates.
 +		{
-+			constexpr float kNightModeAmberHue = 25.0f / 360.0f;  // 25deg amber, matches Steam Deck night mode
++			constexpr float kNightModeAmberHue = 25.0f / 360.0f;  // 25deg amber, matches the x86 client
 +			const float flAmount     = vec[0];
 +			const float flSaturation = vec[1];
 +			nightmode.amount     = std::isfinite( flAmount )     ? std::clamp( flAmount,     0.0f, 1.0f ) : 0.0f;

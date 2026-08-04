@@ -2176,8 +2176,12 @@ rationale lives in the linked memories and commit history.
   delete the branch; if the front-half black still grates, merge it then.
   See [[boot-splash-plymouth]], [[sm8650-gamescope-session-plumbing]].
 
-- [ ] **`card/v0.2.0` is a MANDATORY REFLASH — every device on a pre-phase-5 card must be
-  re-imaged by hand, and the release notes have to say so.** Determined 2026-08-03 by reading both
+- [x] **`card/v0.2.0` is a MANDATORY REFLASH — every device on a pre-phase-5 card must be
+  re-imaged by hand, and the release notes have to say so — SAID, 2026-08-04.** The published
+  `card/v0.2.0` notes now lead with the warning: re-image by hand, do not wait for an OTA, and the
+  attempt is destructive to the inactive slot. Devices already on `v0.2.0` are called out as
+  unaffected. The reasoning below is unchanged and is why no later bundle can soften this.
+  Determined 2026-08-03 by reading both
   ends, not by running it; the two halves name the same missing file. The phase-5 build ships **no**
   `/usr/lib/novadeck/boot.img` (`images/assemble-rootfs.sh:202` — the boot *directory* replaces it),
   and a `card/v0.1.0` device's own `post-install.sh:194` hard-fails without exactly that file.

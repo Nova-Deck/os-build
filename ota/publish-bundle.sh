@@ -28,9 +28,10 @@
 # --keyring overrides only [keyring] path=, which names /etc/rauc/keyring.pem: an on-device absolute
 # path that does not exist here. Same pair as images/rauc/verify-signing.sh and docs/RUNBOOK.md.
 #
-# ORDER OF OPERATIONS IS THE WHOLE DESIGN. Bytes first under a .part name, renamed into place, and
-# latest.json flipped LAST. A device that checks mid-publish must see either the old release or the
-# new one, never a pointer at a URL that 404s or at a file still being written.
+# ORDER OF OPERATIONS IS THE WHOLE DESIGN. Bytes first under a .part name, renamed into place,
+# hashed ON THE SERVER, and latest.json flipped LAST. A device that checks mid-publish must see
+# either the old release or the new one, never a pointer at a URL that 404s, at a file still being
+# written, or at bytes that did not survive the trip.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -190,6 +191,37 @@ log "uploading $NAME (resumable)"
 rsync -e "ssh ${SSH_OPTS[*]}" --partial --inplace --progress \
   "$BUNDLE_ABS" "$USER_@$HOST:$DEST/$NAME.part" || die "upload failed; the partial file is left at $DEST/$NAME.part and will resume on the next run"
 remote "mv -f '$DEST/$NAME.part' '$DEST/$NAME' && chmod 0644 '$DEST/$NAME'"
+
+# --- 3b. prove the bytes that LANDED are the bytes we hashed ---------------------------------------
+# $SHA is computed from the LOCAL file, before the upload. So without this step the sha256 that goes
+# into latest.json is a claim about a file on this laptop, not about the one being served. rsync's
+# own checksum covers a transfer it knows it made; it does not cover a .part a second concurrent
+# publish was also writing (two runs both rsync --inplace to the same path and NEITHER fails — they
+# interleave), a resume whose earlier half came from a different build, or a bad disk on the far end.
+#
+# And the client does not check sha256 at all (docs/ota.md: the RAUC signature is the integrity gate,
+# since a hash fetched from the same server proves nothing an attacker could not also rewrite). So
+# there is nothing between this line and each device's OWN signature verification that would notice
+# corrupt bytes — which is to say, nothing until every device on the channel has already spent a ~4G
+# download to find out. Caught here it costs one re-upload.
+#
+# BEFORE the pointer flip, deliberately: everything up to step 5 is invisible to devices, so a
+# failure here leaves the fleet on the previous release. The bad bundle is left on the server under
+# its FINAL name (the rename already happened), where it serves nobody because latest.json does not
+# name it. Delete it before re-running rather than trusting a resume to repair it: the next run
+# uploads to $NAME.part, which no longer exists, so it re-sends in full anyway and the stale copy
+# would just sit there eating the KEEP budget.
+log "verifying the uploaded bytes (sha256 on the server, ~$((SIZE / 1024 / 1024)) MiB to read)"
+remote_sha="$(remote "sha256sum '$DEST/$NAME' | cut -d' ' -f1" || true)"
+[ -n "$remote_sha" ] || die "could not hash $DEST/$NAME on $HOST — refusing to publish a pointer at bytes nobody has checked"
+[ "$remote_sha" = "$SHA" ] || die "CORRUPT UPLOAD: $NAME on $HOST does not match what was sent.
+  local:  $SHA
+  server: $remote_sha
+  latest.json was NOT flipped, so the fleet is unaffected and still sees the previous release.
+  Check for a second publish running against the same file (ps aux | grep rsync), then delete
+  '$DEST/$NAME' on the server and re-run. Do not leave it: it serves nobody, but it counts against
+  NOVADECK_OTA_KEEP (currently $KEEP) and the re-run re-sends in full regardless."
+log "ok: server-side sha256 matches"
 
 # --- 4. prove it is readable from the internet -----------------------------------------------------
 # Present in the docroot and served to the world are different claims, and only the second one

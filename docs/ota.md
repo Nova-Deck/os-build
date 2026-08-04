@@ -116,10 +116,19 @@ Both halves fail *silently* if lost — a rauc built without streaming, or a ker
 degrades to a full download that still succeeds. `images/guard-rootfs.sh` asserts both at build time.
 
 `publish-bundle.sh` does, in order: verify the signature against the device keyring, read the version
-back out of the bundle, check free space on the server, upload to a `.part` name and rename, prove
-the bundle is readable at its public URL with a `Range` request, **flip `latest.json` last**, read
-that back over HTTPS, and prune to `KEEP`. Everything before the flip is invisible to devices; the
-flip is the publish.
+back out of the bundle, check free space on the server, upload to a `.part` name and rename, **hash
+the uploaded file on the server and compare it to the local one**, prove the bundle is readable at
+its public URL with a `Range` request, **flip `latest.json` last**, read that back over HTTPS, and
+prune to `KEEP`. Everything before the flip is invisible to devices; the flip is the publish.
+
+The server-side hash is not redundant with rsync's own checksum. `$SHA` is computed from the local
+file *before* the transfer, so without this step the `sha256` published in `latest.json` describes a
+file on the workstation, not the one being served. rsync covers a transfer it knows it made; it does
+not cover a `.part` a second concurrent publish was also writing (two runs both `rsync --inplace` to
+the same path and neither fails — they just interleave), a resume whose earlier half came from a
+different build, or a bad disk on the far end. And because the client does **not** check `sha256`
+(above), a corrupt bundle would otherwise be caught no earlier than each device's own signature
+verification — after a ~4G download, per device. Caught here it costs one re-upload.
 
 ### Validating a release on hardware, before anything is published
 

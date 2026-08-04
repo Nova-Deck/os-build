@@ -138,8 +138,8 @@ them. The full rationale otherwise lives in the linked memories and commit histo
   genuinely slow boot costs one reboot and a rolled-back good update, which the user can simply
   re-apply; not firing costs an unbounded black screen and a flat battery.
 
-- [ ] **Adaptive (delta) bundles — every update writes the whole slot today. MEASURED 2026-08-04:
-  the win is ~32x and the gate is PASSED; what remains is implementation.** `[image.rootfs]` in
+- [ ] **Adaptive (delta) bundles — IMPLEMENTED (f552b23) and the streaming win is now HW-CONFIRMED
+  on the wire. One thing left: nobody has BOOTED a slot written this way.** `[image.rootfs]` in
   `images/rauc/manifest.raucm.in` names `rootfs.img` and nothing else, so `rauc install` streams
   and writes the entire root image whatever changed in it — 3.90 GB per bundle for a one-package
   bump. rauc 1.15.2 already ships the fix: **adaptive updates** (`adaptive=block-hash-index`, its
@@ -204,6 +204,37 @@ them. The full rationale otherwise lives in the linked memories and commit histo
   `rauc install /path/bundle.raucb` keeps working byte-for-byte: `_reference/rauc/src/
   update_handler.c:986-1035` makes adaptive best-effort with an unconditional `goto raw_copy` on
   every failure path, so the pre-publish HW gate is untouched.
+
+  **HW RESULT 2026-08-04 — the wire measurement, which was the open gate.** Device on `0.2.1`
+  (slot B, git c9f208c), `rauc install <https URL>` of the published `test`-channel `0.2.2`,
+  dispatched over rauc's open D-Bus policy. Counters read either side of the install ON the device
+  (`/sys/class/net/wlp1s0/statistics/`):
+
+  | | |
+  |---|---|
+  | on the wire (rx) | **60 529 625 B = 57.7 MiB** |
+  | bundle, in full | 3 740 633 702 B = 3.48 GiB |
+  | reduction | **61.8x, 98.38% saved** |
+  | elapsed, `rc=0` | 8m08s |
+
+  Adaptive engaged and is confirmed, not inferred: the log shows `Checking slot rootfs.0 (A)`
+  consuming the first ~46% of the run, which is the on-demand index build — no index was stored
+  yet, exactly as c9f208c predicted (slower, not bigger).
+
+  **DO NOT quote 61.8x as the `0.2.1 -> 0.2.2` number, and do not read it as the offline model
+  under-predicting.** Adaptive matches against the TARGET slot, which was A — and rauc tracks no
+  per-slot installed version here (`rauc status --output-format=json` reports `?`), so what A held
+  is genuinely unknown. It was most likely a same-day build, which would explain landing 2.1x under
+  the ~123 MB predicted for the consecutive-release pair. The measured pair is `unknown -> 0.2.2`.
+  Re-running it against a slot whose content is known is the only way to close that, and it is not
+  worth a dedicated build — take it opportunistically the next time both slots are known.
+
+  **What this does NOT establish: that a delta-written slot boots.** A is `activated` and marked
+  `good`, the device is still booted from B, and a bad delta write would look exactly like this
+  until the reboot. `rauc install` returning 0 means the blocks were written and the bundle verified
+  — the same claim a full-slot install makes, and adaptive re-hashes every local hit against the
+  signature-covered index, so correctness is bounded by design rather than by this run. Still
+  unproven in fact. Next reboot settles it; until then treat adaptive as measured, not validated.
 
   Raised 2026-07-29 while rejecting Android-style Virtual A/B (single slot + dm-snapshot COW). That
   was declined on its merits — it reclaims ~7G, needs `dm-user`/`snapuserd` which are **not**

@@ -146,6 +146,12 @@ CC=(${CROSS_COMPILE:+CROSS_COMPILE=$CROSS_COMPILE})
   #
   #   =m  the wireless stack: built-in, cfg80211 requests regulatory.db at kernel init, before
   #       any rootfs exists, and the load always fails.
+  #   =m  TOUCHSCREEN_CHIPONE_TDDI: a TDDI controller powered off the PANEL rails. Built-in, it
+  #       probes from the initcall at ~0.97s, ~18.8s before the msm DRM panel driver binds and
+  #       powers it -- so every I2C write times out (-110), the driver's three 5.1s retries burn
+  #       ~18.6s with the rest of device probing (PCIe, UFS, DRM) stuck behind it, and touch is
+  #       then absent for the session. =m moves it off the initcall path to udev autoload, after
+  #       the panel is up. A silent promotion back to =y costs the touchscreen AND the boot.
   #   =y  dm-verity: rauc installs a format=verity bundle from the sealed root; a module on the
   #       update path can be missing exactly when an update is applied.
   #   =y  vfat + loop: images/initramfs/init mounts the ESP to read the A/B slot state. Losing
@@ -177,7 +183,8 @@ CC=(${CROSS_COMPILE:+CROSS_COMPILE=$CROSS_COMPILE})
   #       A declared invariant that nothing checks is not a guard -- so check it here.
   #   =y  SQUASHFS + OVERLAY_FS: the /etc overlay mounts a squashfs seed. Losing either leaves
   #       a root that boots with an empty or read-only /etc.
-  for pair in CFG80211=m MAC80211=m BLK_DEV_DM=y DM_VERITY=y VFAT_FS=y BLK_DEV_LOOP=y \
+  for pair in CFG80211=m MAC80211=m TOUCHSCREEN_CHIPONE_TDDI=m \
+              BLK_DEV_DM=y DM_VERITY=y VFAT_FS=y BLK_DEV_LOOP=y \
               ZRAM=y ZRAM_BACKEND_ZSTD=y \
               DRM_MSM=y PCIE_QCOM=y PCI_PWRCTRL_GENERIC=y MMC_SDHCI_MSM=y SCSI_UFSHCD=y \
               ARM_SMMU=y ARM64_4K_PAGES=y SCHED_CLASS_EXT=y DEBUG_INFO_BTF=y \

@@ -5,6 +5,26 @@ rationale lives in the linked memories and commit history.
 
 ## Open
 
+- [ ] **Pocket FIT touch works via `=m` timing, not via a declared dependency — make the chipone
+  probe defer.** HW-VALIDATED 2026-08-04: flipping `CONFIG_TOUCHSCREEN_CHIPONE_TDDI` to `=m`
+  restored the touchscreen and cut the boot (the built-in probe was burning ~18.6s of the 20.9s
+  kernel phase, with PCIe/UFS/DRM queued behind it). That is ROCKNIX parity — they ship the same
+  driver as an out-of-tree `.ko` against a byte-identical touch node — **but it is timing, not a
+  guarantee.** The controller is a TDDI part powered off the panel rails, and the driver still
+  declares no supply and no ordering: it just happens to be udev-loaded after the msm DRM panel
+  driver binds. Anything that reorders userspace bring-up can put it back in front of the panel,
+  and the failure mode is silent and total — three 5.1s I2C `-110` retries, probe fails `-19`,
+  touch absent for the session, no retry ever.
+  - The real fix is to make the probe **defer** instead of dying on first failure: declare the
+    panel supply on the touch node and have the ported driver request it (regulator core then
+    returns `-EPROBE_DEFER` until it exists), or map the `-110` to `-EPROBE_DEFER` directly.
+    Either way the driver retries instead of giving up, and `=y` becomes safe again.
+  - Worth checking whether the retry loop should be that expensive at all: 3 × 5.1s is a long
+    time to spend proving an unpowered part is unpowered, even off the critical path.
+  - `=m` is asserted in `kernel/build.sh`'s config-parity loop — kconfig silently promotes a
+    module to built-in when an `=y` symbol selects it, and that regression costs both the
+    touchscreen and the boot. See [[chipone-tddi-must-be-a-module]].
+
 - [ ] **`scx_lavd` is OFF by default as of 2026-08-03 — investigate the reported in-game
   performance regression before turning it back on.** Users reported worse in-game performance
   with lavd, so `DEFAULT_CPU_SCHEDULER` in `fs-overlay/usr/bin/novadeck-powerd` went back to

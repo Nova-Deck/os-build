@@ -384,6 +384,26 @@ inert until selection is solved.
 2. Client-side gating — a newer client, or a flag the shipping client does not set.
 3. Frame-only enablement, in which case adoption waits on hardware release.
 
+**ANSWERED 2026-08-05 (reported, not measured here): the gate is on the ACCOUNT.** Selection of
+the FEX tool is limited to specific Valve test Steam accounts, so it opens with the Frame's
+release — candidate 3, with the gate one layer up from where we were looking. Third-hand and
+therefore not graded CONFIRMED, but it is consistent with everything we measured independently:
+the client never registers 3127680 at all (not "registers it and declines to apply it"), and
+`app_info_print 3127680` to our normal account returned a totally empty `{}` — strictly more
+private than 4185400/4628740, which both exposed `common` + `depots` to the same account.
+
+**This kills the `-deckard` idea, and it would have failed even if it worked.** `-deckard` asserts
+Frame *device* identity (`ON_FRAME=true`); an account-level gate is indifferent to what the device
+claims to be. Tried and reverted 2026-08-05: a dev card was built with `-deckard` appended to
+`NOVADECK_STEAM_ARGS` via a dev-only block in `images/assemble-rootfs.sh`, then abandoned before
+flashing. **Do not re-chase it** — no device-side flag reaches an account entitlement.
+
+**So the plan is PARKED, not dead, and the parking is clean.** Phase 1 is landed, HW-validated and
+guarded by `make test`; it is correct pre-positioning that costs nothing while inert. Phases 2-4
+wait on the Frame's release. The re-check trigger is the release itself (or an account of ours
+gaining the entitlement) — at which point re-run the two cheap probes: does `compat_log.txt` gain a
+registration for 3127680, and does a launched title carry `STEAM_COMPAT_EMULATOR`.
+
 ### Direct invocation WORKS — Phase 1's consumer is validated (2026-08-05)
 
 Bypassing Steam's selection entirely, Valve's tool runs x86 code against our provider:

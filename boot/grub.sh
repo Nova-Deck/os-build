@@ -97,10 +97,14 @@ make -j"$(nproc)" AWK=gawk
 #   loadenv                 load_env/save_env against the ESP's grubenv -- the saved board choice
 #   regexp                  derives the boot disk from $root; see boot/gen-grub-cfg.sh
 #   search*                 the fallback path when that derivation fails
+#   probe                   --part-uuid, which turns those derived devices into the PARTUUIDs the
+#                           cmdline names. Stock GRUB builds it and we simply never embedded it;
+#                           without it here the generated config's probe calls are "unknown
+#                           command" and every boot silently takes the PARTLABEL fallback.
 #   novadeck                novadeck_bootattempts, called once per boot by the generated grub.cfg
 MODULES="boot linux part_gpt fat btrfs loadenv search search_fs_file \
 search_fs_uuid search_label chain reboot halt sleep test true echo read \
-configfile regexp normal minicmd gfxterm efi_gop font all_video novadeck"
+configfile regexp probe normal minicmd gfxterm efi_gop font all_video novadeck"
 
 echo "[grub] grub-mkimage"
 test -f grub-core/novadeck.mod || { echo "novadeck.mod was not built — is patch 0003 applied?" >&2; exit 1; }

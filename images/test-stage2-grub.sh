@@ -100,7 +100,27 @@ for dts in "$DTS"/*.dts; do
 done
 ok "$ndtb board DTBs, $ncat catalog rows, $((ndtb - ncat)) derived"
 
-# --- 4. the generated grub.cfg files ------------------------------------------------------------
+# --- 4. the stage-2 module set carries what the config calls -------------------------------------
+# A config that calls a module which was never embedded gets "unknown command", leaves the target
+# variable unset, and carries on -- so `probe --part-uuid` missing from grubaa64.efi is not a boot
+# failure, it is every boot silently taking the PARTLABEL fallback with one console line to show
+# for it. probe is stock GRUB and builds unconditionally; it was simply never in MODULES.
+#
+# This is asserted here rather than in a boot/grub.sh test because the coupling is here: the
+# generated config is the only caller, and the two files are edited for different reasons.
+CASE="stage-2 module set"
+MODLINE=$(sed -n '/^MODULES="/,/"$/p' "$ROOT/boot/grub.sh" | tr -d '\\\n')
+if [ -z "$MODLINE" ]; then
+  bad "cannot find the MODULES= assignment in boot/grub.sh"
+else
+  for m in probe regexp loadenv novadeck; do
+    printf '%s' "$MODLINE" | grep -qw -- "$m" \
+      && ok "boot/grub.sh embeds $m" \
+      || bad "boot/grub.sh does not embed $m -- the config's $m calls are 'unknown command'"
+  done
+fi
+
+# --- 5. the generated grub.cfg files ------------------------------------------------------------
 CASE="generated grub.cfg"
 for slot in A B; do
   lc="${slot,,}"
@@ -122,10 +142,8 @@ for slot in A B; do
 
   # the per-slot cmdline. Every entry must name THIS slot's root, var and efi partitions -- one
   # entry pointing at the other slot is a boot that silently mounts the wrong /var.
-  for key in "root=PARTLABEL=$(part_label "rootfs-$lc")" \
-             "novadeck.var=PARTLABEL=$(part_label "var-$lc")" \
-             "novadeck.efi=PARTLABEL=$(part_label "efi-$lc")"; do
-    n=$(grep -c -- "$key" "$cfg")
+  for key in 'root=$rootspec' 'novadeck.var=$varspec' 'novadeck.efi=$efispec' "novadeck.slot=$slot"; do
+    n=$(grep -cF -- "$key" "$cfg")
     [ "$n" -eq "$n_entries" ] && ok "grub-$lc.cfg: all $n entries carry $key" \
                               || bad "grub-$lc.cfg: $n of $n_entries entries carry $key"
   done
@@ -133,6 +151,41 @@ for slot in A B; do
   grep -q -- "PARTLABEL=$(part_label "rootfs-$other")" "$cfg" \
     && bad "grub-$lc.cfg references the OTHER slot's root" \
     || ok "grub-$lc.cfg never references the other slot"
+  grep -q -- "novadeck.slot=${other^^}" "$cfg" \
+    && bad "grub-$lc.cfg tells the initramfs it is slot ${other^^}" \
+    || ok "grub-$lc.cfg never claims to be slot ${other^^}"
+
+  # PARTUUID, and the PARTLABEL fallback behind it. The three specs are set ONCE at the top and
+  # referenced by every entry, so this is where the partition identity actually gets decided.
+  for v in rootuuid varuuid efiuuid; do
+    grep -q -- "probe --part-uuid --set=$v " "$cfg" \
+      && ok "grub-$lc.cfg derives \$$v with probe --part-uuid" \
+      || bad "grub-$lc.cfg never sets \$$v"
+  done
+  # The PARTUUID assignment must be reachable only when all three probes produced something. probe
+  # sets the literal string "none" for a device with no partition rather than failing, so an
+  # emptiness test alone would happily put root=PARTUUID=none on the cmdline.
+  grep -q 'set rootspec="PARTUUID=\$rootuuid"' "$cfg" \
+    && ok "grub-$lc.cfg names the root by PARTUUID when the probe succeeds" \
+    || bad "grub-$lc.cfg never uses the probed PARTUUID"
+  n_none=$(grep -o '!= "none"' "$cfg" | wc -l)
+  [ "$n_none" -eq 3 ] && ok "grub-$lc.cfg rejects all three 'none' probe results" \
+                      || bad "grub-$lc.cfg guards $n_none of 3 probe results against \"none\""
+  # The fallback arm has to still emit the form that shipped before, or a probe regression is a
+  # black screen instead of a message.
+  for key in "set rootspec=\"PARTLABEL=$(part_label "rootfs-$lc")\"" \
+             "set varspec=\"PARTLABEL=$(part_label "var-$lc")\"" \
+             "set efispec=\"PARTLABEL=$(part_label "efi-$lc")\""; do
+    grep -qF -- "$key" "$cfg" && ok "grub-$lc.cfg falls back to: $key" \
+                              || bad "grub-$lc.cfg has no PARTLABEL fallback for ${key%%=*}"
+  done
+  # ...and the fallback must be the DEFAULT, assigned before the conditional overrides it. Set the
+  # other way round, a failed probe leaves the specs unset and the kernel gets root= with no value.
+  ln_fb=$(grep -n 'set rootspec="PARTLABEL=' "$cfg" | cut -d: -f1)
+  ln_uu=$(grep -n 'set rootspec="PARTUUID=' "$cfg" | cut -d: -f1)
+  [ -n "$ln_fb" ] && [ -n "$ln_uu" ] && [ "$ln_fb" -lt "$ln_uu" ] \
+    && ok "grub-$lc.cfg defaults to PARTLABEL and upgrades to PARTUUID" \
+    || bad "grub-$lc.cfg sets the PARTUUID spec before the PARTLABEL default, which then clobbers it"
 
   # partition indices must match the table this was generated from
   grep -q "set esp=\"\$bootdisk,gpt$(part_num esp)\"" "$cfg" \
@@ -222,7 +275,7 @@ for slot in A B; do
   fi
 done
 
-# --- 5. the board bootargs left the device trees ------------------------------------------------
+# --- 6. the board bootargs left the device trees ------------------------------------------------
 # They live on the `linux` line now. They have to: the EFI stub OVERWRITES /chosen/bootargs with
 # the loader's command line, so anything still in a dtsi is silently dropped.
 CASE="dtsi bootargs stripped"

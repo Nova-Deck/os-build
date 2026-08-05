@@ -171,7 +171,12 @@ then nondeterministic across **five** sites, not one:
 The `grow-home` one is the worst: it would run `systemd-repart` + `resize2fs` on the
 **wrong disk**. One mechanism must cover all five.
 
-### 1a. Boot-time PARTUUID derivation in stage 2
+### 1a. Boot-time PARTUUID derivation in stage 2 — LANDED, offline-green, HW-UNVALIDATED
+
+`probe` is in `MODULES`, the config derives all three PARTUUIDs with a `"none"`-aware guard and an
+announced PARTLABEL fallback, `novadeck.slot=` is on the cmdline, and the initramfs reads it.
+`test-stage2-grub.sh` covers it (167 assertions, incl. the module list). **The gate below has not
+been run**, so 1b/1c stay open and nothing in Phase 3 may proceed on this.
 
 `probe --part-uuid` exists in our tree (`work/grub/src-grub/grub-core/commands/probe.c:50`),
 formats lowercase via `%pG` — exactly the form `findfs PARTUUID=` and the kernel want — and

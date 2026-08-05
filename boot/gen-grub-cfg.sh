@@ -25,6 +25,13 @@
 #
 # The label search is kept as a FALLBACK only, and it is loud when it is used.
 #
+# For the same reason the cmdline names partitions by PARTUUID rather than PARTLABEL: the eight GPT
+# names are identical on every novadeck medium, so with two attached — a card left in after an
+# install to internal storage — findfs resolves whichever it enumerates first. The UUIDs are read
+# out of the GPT at boot with `probe --part-uuid`, off the disk we were chainloaded from, so they
+# are per-disk by construction and survive an update untouched. PARTLABEL remains as the announced
+# fallback.
+#
 # THE SECOND THING is where the boot-attempts call sits: AFTER terminal_output gfxterm, not before.
 # Its predecessor was Valve's steamenv_init, which had to run before any menuentry was defined
 # because it overwrote $timeout — so when it wedged on this hardware nothing had been painted and
@@ -59,10 +66,11 @@ part_label() { awk -v n="$1" '/^[[:space:]]*#/||/^[[:space:]]*$/{next} {if ($1==
 
 P_ESP=$(part_num esp)
 P_ROOT=$(part_num "rootfs-$slot_lc")
+P_VAR=$(part_num "var-$slot_lc")
 L_ROOT=$(part_label "rootfs-$slot_lc")
 L_VAR=$(part_label "var-$slot_lc")
 L_EFI=$(part_label "efi-$slot_lc")
-for v in P_ESP P_ROOT L_ROOT L_VAR L_EFI; do
+for v in P_ESP P_ROOT P_VAR L_ROOT L_VAR L_EFI; do
   [ -n "${!v}" ] || { echo "cannot resolve $v from ${TABLE#"$ROOT"/}" >&2; exit 1; }
 done
 
@@ -76,8 +84,8 @@ done
 ESP_MARKER="/SteamOS/conf/$SLOT.conf"
 
 # --- the common kernel command line -------------------------------------------------------------
-# Board-specific args come from boards.map; root=/novadeck.var=/novadeck.efi= are per-slot and
-# added per menuentry. This replaces the old boot/cmdline file, which the android-bootimg backend
+# Board-specific args come from boards.map; root=/novadeck.var=/novadeck.efi=/novadeck.slot= are
+# per-slot and added per menuentry. This replaces the old boot/cmdline file, which the android-bootimg backend
 # baked into the image header: with a UEFI chain the EFI stub OVERWRITES /chosen/bootargs with
 # GRUB's command line, so every argument has to be on the `linux` line or it is not applied.
 BOOT_CMDLINE="quiet video=efifb:off console=tty0 cgroup.memory=nokmem,nosocket nosoftlockup panic=5"
@@ -97,7 +105,7 @@ emit_entry() {  # <id> <name> <dtb> <board bootargs>
   cat <<EOF
 menuentry '${ename:-$eid}' --id $eid {
   savedefault
-  linux (\$slotroot)/boot/Image $BOOT_CMDLINE $ebootargs root=PARTLABEL=$L_ROOT rootfstype=btrfs rootwait ro novadeck.var=PARTLABEL=$L_VAR novadeck.efi=PARTLABEL=$L_EFI
+  linux (\$slotroot)/boot/Image $BOOT_CMDLINE $ebootargs root=\$rootspec rootfstype=btrfs rootwait ro novadeck.var=\$varspec novadeck.efi=\$efispec novadeck.slot=$SLOT
   initrd (\$slotroot)/boot/initramfs-novadeck.img
   devicetree (\$slotroot)/boot/dtbs/${edtb}.dtb
 }
@@ -128,10 +136,40 @@ regexp -s bootdisk '^\\(?([^,)]+),gpt[0-9]+\\)?\$' "\$root"
 if [ -n "\$bootdisk" ]; then
   set esp="\$bootdisk,gpt$P_ESP"
   set slotroot="\$bootdisk,gpt$P_ROOT"
+  probe --part-uuid --set=rootuuid (\$slotroot)
+  probe --part-uuid --set=varuuid  (\$bootdisk,gpt$P_VAR)
+  probe --part-uuid --set=efiuuid  (\$root)
 else
   echo "novadeck: cannot derive the boot disk from '\$root' — falling back to a filesystem search"
   search --no-floppy --file $ESP_MARKER --set esp
   search --no-floppy --label $L_ROOT --set slotroot
+  sleep 3
+fi
+
+# --- how the kernel is told which partitions to mount -------------------------------------------
+# PARTLABEL is the FALLBACK, not the answer. Every novadeck disk carries the same eight GPT names,
+# so the moment a second one is attached — a card left inserted after an install to internal
+# storage, or a card being imaged on a running device — findfs picks one of them and the choice is
+# nondeterministic. The PARTUUIDs above are unique per partition and are derived from the disk
+# GRUB was chainloaded off, at boot, so they cannot name the wrong disk and no update has to
+# rewrite them.
+#
+# Three ways this can come back empty and they all end here: probe absent from the embedded module
+# set (boot/grub.sh MODULES), the boot-disk derivation above having failed, or a device that has
+# no partition at all — the last of which sets the literal string "none" rather than failing, which
+# is why the test below checks for it by name. The fallback is the exact cmdline that shipped
+# before, so it is known-good; it is announced and paused because "ambiguous when two novadeck
+# disks are present" is not a state to enter silently on a device with no serial console.
+set rootspec="PARTLABEL=$L_ROOT"
+set varspec="PARTLABEL=$L_VAR"
+set efispec="PARTLABEL=$L_EFI"
+if [ -n "\$rootuuid" -a "\$rootuuid" != "none" -a -n "\$varuuid" -a "\$varuuid" != "none" -a -n "\$efiuuid" -a "\$efiuuid" != "none" ]; then
+  set rootspec="PARTUUID=\$rootuuid"
+  set varspec="PARTUUID=\$varuuid"
+  set efispec="PARTUUID=\$efiuuid"
+else
+  echo "novadeck: PARTUUID derivation failed — falling back to PARTLABEL, which names the wrong"
+  echo "novadeck: disk if another novadeck medium is attached. Remove all but one and reboot."
   sleep 3
 fi
 

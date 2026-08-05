@@ -58,6 +58,12 @@ DEVTEST=${DEVTEST:--b}
 BC=${BC:-steamos-bootconf}
 BC_ARGS=(--conf-dir "$ESP/SteamOS/conf" --efi-dir "$EFI")
 bc() { "$BC" "${BC_ARGS[@]}" "$@"; }
+# The hasher, a seam for the same reason BC is one: the suite runs this script with the HOST's PATH
+# appended, so it cannot make a tool absent, and the assertion below would be untestable as a bare
+# command name. Overriding it with a name that does not exist is how the offline suite reaches the
+# die() -- there is no other way in, and an assertion nothing can exercise is what put a dead `cmp`
+# in this file for three releases.
+SHA256=${SHA256:-sha256sum}
 
 # --- which slot did we just write? --------------------------------------------------------------
 # The booted image comes from bootconf (partsets/self), NOT from RAUC: RAUC names slots as they
@@ -103,7 +109,7 @@ log "target slot $target ($dev_root, $dev_efi)"
 # install. Dying at the use site would be worse than useless: by then the target's fsid is
 # randomised and its /var reformatted, so the slot is already unbootable and the run cannot be
 # retried cleanly. Fail while nothing has been touched.
-command -v sha256sum >/dev/null || die "sha256sum is missing -- cannot compare the ESP boot files"
+command -v "$SHA256" >/dev/null || die "$SHA256 is missing -- cannot compare the ESP boot files"
 
 # --- 0. DISARM ----------------------------------------------------------------------------------
 # RAUC has ALREADY armed this slot by the time we run. Its order is fixed and not ours to change:
@@ -254,7 +260,7 @@ mountpoint -q "$ESP" || die "the ESP is not mounted at $ESP"
 # closed on the updates where these files did not change, which is most of them. sha256sum is
 # coreutils and is asserted at the top. Read from stdin so the output is the digest alone.
 refresh_if_diff() {  # <src> <dst>
-  if [ ! -e "$2" ] || [ "$(sha256sum <"$1")" != "$(sha256sum <"$2")" ]; then
+  if [ ! -e "$2" ] || [ "$("$SHA256" <"$1")" != "$("$SHA256" <"$2")" ]; then
     cp -f "$1" "$2" || die "cannot refresh $2"
     sync
     log "refreshed $2"

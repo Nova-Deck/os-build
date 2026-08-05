@@ -232,9 +232,10 @@ EOF
 }
 
 # Run the SHIPPED hook against the sandbox.
-run() {
+run() { # [KEY=VAL ...]  -- leading assignments are passed to the hook, as in test-publish-bundle.sh
   local env_extra=()
-  [ -n "$RAUC_SLOTS" ] && env_extra=(RAUC_TARGET_SLOTS="$RAUC_SLOTS")
+  while [ $# -gt 0 ] && [[ $1 == *=* ]]; do env_extra+=("$1"); shift; done
+  [ -n "$RAUC_SLOTS" ] && env_extra+=(RAUC_TARGET_SLOTS="$RAUC_SLOTS")
   OUT=$(env PATH="$SB/bin:$PATH" SB="$SB" \
             ESP="$SB/esp" EFI="$SB/efi" MNT="$SB/mnt" EFIMNT="$SB/efimnt" VAR="$SB/var" \
             DEVDIR="$SB/dev" DEVTEST=-e BC="$SB/bin/steamos-bootconf" \
@@ -515,6 +516,24 @@ expect_esp EFI/BOOT/bootaa64.efi 'STEAMCL-B'
 expect_esp EFI/BOOT/steamcl-version '1.B'
 expect_esp EFI/BOOT/fonts/default.pf2 'FONT-B'
 # steamcl-restricted is an empty flag file; just ensure it exists (not asserted by content)
+done_
+
+t "a-missing-hasher-dies-before-anything-destructive"
+# The preflight exists because the two ways of losing the comparator fail in OPPOSITE directions and
+# only one of them is survivable. A missing `cmp` (what shipped until 2026-08-05) exits non-zero, so
+# the guard degrades to always-copy: wasteful, but the bytes end up right. A missing hasher inside
+# $(...) yields two EMPTY strings that compare equal, so the ESP is never refreshed at all and a new
+# root boots against the old steamcl. That one is silent and wrong, hence a hard assertion.
+#
+# It has to fire before step 0. By the use site in step 3 the target's fsid is randomised and its
+# /var reformatted, so dying there leaves an unbootable slot and a run that cannot simply be redone.
+run SHA256=novadeck-no-such-hasher
+expect_rc 1
+expect_has "novadeck-no-such-hasher is missing"
+expect_no_call 'btrfstune'              # step 1 -- nothing may have been touched
+expect_no_call 'mkfs.ext4'              # step 2
+expect_no_call 'BC set-mode B reboot'   # step 4 -- and nothing armed
+expect_esp EFI/BOOT/bootaa64.efi 'OLD-STEAMCL'
 done_
 
 t "identical-esp-boot-files-are-left-untouched"

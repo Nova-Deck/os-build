@@ -165,7 +165,7 @@ location, and stops being paired with 200 MB of our own emulator build.
 
 ## Phase 0 — Verification (BLOCKING)
 
-Nothing below is committed to until these are answered. Three are already closed:
+Nothing below is committed to until these are answered. Four are already closed:
 
 - ✅ **Not hardware-gated for download.** The depot pulled cleanly with an ordinary Steam
   account on x86_64, no Frame, no Deck. Licensing is not a blocker.
@@ -177,34 +177,73 @@ Nothing below is committed to until these are answered. Three are already closed
   "an Arch Linux derivative such as SteamOS" with `x86_64` + `i386`, which is very nearly
   what we need to author verbatim.
 
+- ✅ **The pinned `ArchLinux.ero` already satisfies the graphics-provider contract, in
+  full.** This was the item that could have invalidated the plan. Verified 2026-08-05 by
+  mounting `work/prebuilt/fex-rootfs.blob` with `erofsfuse` in a throwaway Arch container
+  (`erofsfuse` is its own Arch package — `erofs-utils` does not carry it):
+
+  | required by `graphics_provider(5)` | result |
+  |---|---|
+  | `etc/ld.so.cache` | present |
+  | `sbin/ldconfig`, `usr/sbin/ldconfig` | present |
+  | x86-64 linker (`lib64/`, `usr/lib64/`) | present |
+  | i386 linker (`lib/`, `usr/lib/`, `usr/lib32/`) | present |
+  | merged-`/usr` layout | yes — `bin`→`usr/bin`, `lib`→`usr/lib`, `lib64`→`usr/lib`, `sbin`→`usr/bin` |
+
+  Both architectures are fully populated: `usr/lib` and `usr/lib32` each carry a complete
+  Mesa (`libGL`, `libEGL`, `libvulkan`, `libGLX_mesa`, `libgallium-25.3.3-arch1.1`,
+  `libdrm`, `libwayland-client`), 66 `dri/` drivers each, plus `gbm/` and 255 `gconv/`.
+  So "fex + **mesa** combined arch linux install" is already what we hold — no combined
+  guest needs building. There is no `graphics_provider.json` in it; that is the one file
+  we add.
+
+  Superblock, for the size argument: 4,157,067,859 bytes of content stored in
+  1,956,739,919 bytes (47.07%), 89,992 files. Valve's own beta rootfs depot is
+  3,945,426,115 — the same order of magnitude uncompressed, which is precisely why keeping
+  ours as a mounted `.ero` is the better shape.
+
 Open:
 
-1. **Does the stock `ArchLinux.ero` satisfy the graphics-provider contract?** Two parts,
-   and the man page makes the second one concrete:
-   - Does it carry x86 Mesa? The target path is described as a "fex + mesa combined arch
-     linux install", and ours is upstream FEX's stock rootfs.
-   - `root` "must contain at least `etc/ld.so.cache`, `usr/lib*`, `sbin/ldconfig`, the
-     architectures' interoperable dynamic linkers" — a stock FEX guest rootfs is not
-     obviously built to be a *graphics provider*, so this is not a given.
-
-   **Answerable on the build host**, not on hardware: inspect `work/prebuilt/fex-rootfs.blob`
-   with `erofs-utils` (absent on the host, present in the build container). Do this first —
-   it is the cheapest open item and the one that can invalidate the plan.
-3. **Is pressure-vessel actually live for native x86 Linux games on our device?**
+1. **Is pressure-vessel actually live for native x86 Linux games on our device?**
    `fex-compat-tool:136-140` sets `STEAM_COMPAT_MACHINE_ARCHITECTURE=aarch64-linux-gnu` and
    `STEAM_COMPAT_EMULATOR=<emulator.json>`, commented *"Tell PV that we are an AArch64
    machine"*. We launch Steam raw on host with no pressure-vessel
    (`fs-overlay/usr/bin/novadeck-steam:31`, `images/customize-base.sh:115`), but
    `docs/FEX_README.md:71` says native x86-64 games do go through SLR scout-on-soldier.
    These may both be true; confirm which on hardware.
-4. **Does the Steam client on our device offer the tool at all,** and does it select it for
+2. **Does the Steam client on our device offer the tool at all,** and does it select it for
    a native x86 Linux title, or fall through to our binfmt registration?
+
+Both remaining items need hardware. Phase 1 can start without them.
 
 ---
 
 ## Phase 1 — Provide `/usr/share/guestos/fex-mesa`
 
 - `graphics_provider.json` authored to the Phase 0 schema, delivered via `fs-overlay`.
+  The verified layout means it is essentially the man page's SteamOS example verbatim —
+  the paths below were all confirmed to exist in our `.ero`:
+
+  ```json
+  {
+    "graphics_provider_v0": {
+      "root": "./",
+      "architectures": {
+        "x86_64-linux-gnu": {
+          "dri": "/usr/lib/dri", "gbm": "/usr/lib/gbm", "gconv": "/usr/lib/gconv"
+        },
+        "i386-linux-gnu": {
+          "dri": "/usr/lib32/dri", "gconv": "/usr/lib32/gconv",
+          "fallback_library_paths": ["/usr/lib32"]
+        }
+      }
+    }
+  }
+  ```
+
+  Decide `locales` deliberately: it defaults to `true`, and the guest does carry
+  `usr/lib/gconv`, but if its locale data is thin PV should be told to take locales from
+  the root instead.
 - A systemd mount unit mounting the pinned `.ero` read-only at
   `/usr/share/guestos/fex-mesa`, ordered before the session.
 - The `graphics_provider.json` has to appear *inside* that directory, so it needs an
@@ -261,9 +300,9 @@ Only after Phase 2 is green.
   so this is expected to be a no-op — but the tool version will move.
 - **The tool is not offered on non-Frame hardware.** Download is not gated (proven), but
   client-side *selection* for a title may be. This is Phase 0 item 4.
-- **Our `.ero` does not satisfy the graphics-provider contract** (Phase 0 item 1) — the one
-  finding that could make this plan more expensive than the status quo rather than less.
-  Check it first.
+- ~~Our `.ero` does not satisfy the graphics-provider contract~~ — **closed 2026-08-05**,
+  it does, in full. This was the risk that could have made the plan more expensive than the
+  status quo; it is retired. Retained here so it is not re-raised.
 
 **Rollback:** `packages/fex-emu` and `packages/fex-rootfs` stay in the tree untouched
 through Phases 0-2. Nothing is irreversible before Phase 3.

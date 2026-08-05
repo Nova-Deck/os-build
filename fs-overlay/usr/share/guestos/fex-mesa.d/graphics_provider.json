@@ -1,0 +1,19 @@
+{
+  "graphics_provider_v0": {
+    "root": "./",
+    "locales": false,
+    "va_api": false,
+    "architectures": {
+      "x86_64-linux-gnu": {
+        "dri": "/usr/lib/dri",
+        "gbm": "/usr/lib/gbm",
+        "gconv": "/usr/lib/gconv"
+      },
+      "i386-linux-gnu": {
+        "dri": "/usr/lib32/dri",
+        "gconv": "/usr/lib32/gconv",
+        "fallback_library_paths": ["/usr/lib32"]
+      }
+    }
+  }
+}

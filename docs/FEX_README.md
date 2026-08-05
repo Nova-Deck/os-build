@@ -106,3 +106,54 @@ The fix is to keep these games off native Wayland entirely, matching the SteamOS
 `novadeck-session` does **not** export `WAYLAND_DISPLAY`, so SDL falls back to gamescope's nested
 **Xwayland** (`DISPLAY`), where `libdecor`/`libwayland` are never loaded. No per-game launch
 option and no injected libraries are needed.
+
+## `usr/share/guestos/fex-mesa/` — the guest as a Steam graphics provider
+
+Valve publishes FEX as a Steam Play compat tool (app `3127680`). On its **public** branch that
+tool ships the emulator and thunks only — its rootfs depot is empty — and it expects the OS to
+provide the x86 guest at a fixed path, `/usr/share/guestos/fex-mesa`. It sets `FEX_PORTABLE=1`, so
+it deliberately ignores a system FEX install and everything in `usr/share/fex-emu/Config.json`
+above. The migration plan is `.claude/plans/fex-compat-tool.plan.md`.
+
+Our pinned `ArchLinux.ero` already satisfies pressure-vessel's graphics-provider contract in full,
+so no new guest has to be built. `images/assemble-rootfs.sh` surfaces it with **two** fstab
+entries, and the second is not optional:
+
+1. the `.ero`, loop-mounted read-only on a private `/run/novadeck/fex-guest`;
+2. a read-only **overlay** of `usr/share/guestos/fex-mesa.d/` over it, at the probed path.
+
+Two mounts because the provider manifest has to appear *inside* the guest tree — the compat tool
+derives the FEX `RootFS` from the manifest's own directory — while the `.ero` is an immutable
+pinned artifact we must not rewrite. `lowerdir` is **leftmost-wins**, so the manifest layer is
+listed first; reverse it and the guest shadows the manifest, the tool finds no provider, and the
+failure is silent.
+
+This is **additive**. The image is still read from its `fex-emu` location and the system FEX keeps
+working off the same file, unchanged — the validated baseline survives and the change rolls back
+for free. Relocating the `.ero` belongs with the retirement of `packages/fex-emu`, not here.
+
+### `graphics_provider.json`
+
+Schema is `steam-runtime-graphics-provider.json(5)` (pressure-vessel — the compat tool only sets
+`STEAM_COMPAT_GRAPHICS_PROVIDER`, PV consumes it). Every value below was verified against the
+pinned image rather than copied from the man page's example:
+
+- **`root: "./"`** — the manifest's own directory, i.e. the merged overlay. The guest is a
+  merged-`/usr` tree (`bin`→`usr/bin`, `lib`→`usr/lib`, `lib64`→`usr/lib`, `sbin`→`usr/bin`) and
+  carries `etc/ld.so.cache`, both `ldconfig`s and both interoperable linkers.
+- **`locales: false`** — the guest ships only `C.utf8` under `usr/lib/locale`. Left at its `true`
+  default, PV would take locale data from a guest that has essentially none.
+- **`va_api: false`** — there are no `*_drv_video.so` drivers in the image.
+- **Per-arch paths** — `usr/lib/dri` and `usr/lib32/dri` (66 drivers each), `usr/lib/gbm`,
+  `usr/lib/gconv` (255) and `usr/lib32/gconv` (256). `usr/lib32` is also given as a
+  `fallback_library_paths` entry, since 32-bit libraries live there rather than in `usr/lib`.
+- **`vdpau` is deliberately absent**, i.e. left at its default: the guest does carry
+  `usr/lib{,32}/vdpau`.
+
+Both architectures must stay declared — FEX emulates x86-64 *and* i386, and dropping the i386
+entry silently breaks every 32-bit title.
+
+`images/test-graphics-provider.sh` (in `make test`) guards the parts that fail quietly: that the
+manifest parses and only names absolute paths, that `packages/fex-rootfs/prebuilt.pin`'s `dest`
+still matches the mount source, that both mounts exist in the right layer order, and that the
+kernel can mount any of it (`EROFS_FS`, `EROFS_FS_ZIP` for LZ4, `OVERLAY_FS`, `BLK_DEV_LOOP`).

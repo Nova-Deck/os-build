@@ -345,11 +345,22 @@ fi
 # already satisfies that contract in full (both arches carry a complete Mesa, dri/, gbm/, gconv/,
 # both interoperable linkers, ld.so.cache, ldconfig, merged-/usr) — see .claude/plans/.
 #
-# TWO mounts, and the second one is not optional. The provider manifest has to appear INSIDE the
-# guest tree (the tool derives the FEX RootFS from the manifest's own directory), but the .ero is
-# an immutable pinned artifact we must not rewrite. So: loop-mount the image on a private /run
-# path, then present a read-only overlay that lays our manifest over it at the probed path.
-# overlayfs lowerdir is leftmost-wins, so fex-mesa.d/graphics_provider.json shadows the guest.
+# TWO mounts. The manifest must sit at exactly /usr/share/guestos/fex-mesa/graphics_provider.json
+# because the tool PROBES that fixed path (it only derives the rootfs from the manifest's directory
+# in the other branch, where STEAM_COMPAT_GRAPHICS_PROVIDER is already set). The manifest's own
+# `root` field takes an absolute path, so the guest tree does NOT have to be that same directory --
+# a lone manifest pointing `root` at the loop mount would satisfy pressure-vessel on its own.
+#
+# The overlay buys the OTHER consumer. That fixed path is also what the tool hands FEX as `RootFS`,
+# and FEX needs a real guest there. Inside a pressure-vessel container that does not matter --
+# emulator.json forces FEX_ROOTFS empty, so the container supplies the x86 userspace and `RootFS`
+# is unused -- but out of container it does. Overlaying the manifest onto the guest satisfies both
+# callers for the cost of one extra mount, instead of betting on which path Steam takes. That bet
+# is still open (Phase 0), which is exactly why we are not taking it.
+#
+# The .ero is an immutable pinned artifact we must not rewrite, hence overlay rather than editing
+# the image. overlayfs lowerdir is leftmost-wins, so fex-mesa.d/graphics_provider.json shadows the
+# guest; reversed, the guest hides the manifest and the tool finds no provider at all.
 #
 # The image is read from its CURRENT fex-emu location on purpose. This stage is additive: the
 # system FEX (packages/fex-emu) keeps working off the same file, unchanged, so the validated

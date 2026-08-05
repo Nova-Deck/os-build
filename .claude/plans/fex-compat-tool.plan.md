@@ -222,9 +222,20 @@ Nothing below is committed to until these are answered. Four are already closed:
   now provides, so `os.path.exists(.../graphics_provider.json)` is true on the device and
   the tool will take its Branch A path.
 
+- ✅ **Pressure-vessel IS live** — answered by launching Super Meat Boy, 2026-08-05. The chain
+  is `steam-launch-wrapper → reaper → SteamLinuxRuntime_soldier/_v2-entry-point → scout-on-
+  soldier-entry-point-v2 → SuperMeatBoy`, running under `srt-bwrap` with a
+  `/run/pressure-vessel/interpreter-root`. `docs/FEX_README.md:71` was correct.
+
+  A signal recorded earlier in this plan — "only scout got installed, so PV may not be in the
+  path" — was **wrong**, and worth keeping as a caution: soldier (`1391110`) is registered at
+  **launch** time, not install time, so an install-time inventory cannot answer this question.
+
+- ❌ **Steam does NOT select Valve's FEX tool** — the finding that blocks Phase 3. See below.
+
 Open:
 
-1. **Is pressure-vessel actually live for native x86 Linux games on our device?**
+1. ~~Is pressure-vessel actually live~~ — answered above.
    `fex-compat-tool:136-140` sets `STEAM_COMPAT_MACHINE_ARCHITECTURE=aarch64-linux-gnu` and
    `STEAM_COMPAT_EMULATOR=<emulator.json>`, commented *"Tell PV that we are an AArch64
    machine"*. We launch Steam raw on host with no pressure-vessel
@@ -312,6 +323,58 @@ the device.
 instruction through Valve's tool. The plumbing is also consumer-agnostic — any
 pressure-vessel graphics provider pointed at this path works, whether or not Valve's tool
 is what reads it.
+
+---
+
+## BLOCKER — Steam does not select the FEX compat tool (2026-08-05)
+
+Super Meat Boy launches and runs. It runs on **`packages/fex-emu`**, not Valve's tool:
+
+```
+pid 3943  /usr/bin/FEX ./amd64/SuperMeatBoy
+/proc/sys/fs/binfmt_misc/FEX-x86_64: enabled, interpreter /usr/bin/FEX, flags POCF
+```
+
+`/usr/bin/FEX` is ours. Valve's is at `steamapps/common/FEX-Emu/usr/bin/FEX` and **never
+executed** — no `/tmp/fex-compat-tool-*.log` was created, and it appears nowhere in the
+process tree.
+
+**Why it was not used:** `STEAM_COMPAT_EMULATOR` is unset in the game's environment, so
+`emulator.json` was never consulted. Pressure-vessel met a foreign-architecture binary,
+found no emulator declared, and fell through to `binfmt_misc` — which is our registration.
+The tool is installed, licensed and correctly targeted at our provider path, and Steam
+simply does not reach for it.
+
+Two supporting details:
+
+- `FEX_ROOTFS=/run/pressure-vessel/interpreter-root` — PV built its own interpreter root and
+  pointed FEX at it. Not our guest, and not the empty value `emulator.json` would have set.
+- `erofsfuse /usr/share/fex-emu/RootFS/ArchLinux.ero → /run/user/1000/.FEXMount3854-*` —
+  FEXServer mounted our pinned guest itself, through the **old** system-FEX path.
+
+### What this costs the plan
+
+**Phase 3 is blocked.** `packages/fex-emu` cannot be retired: it is what runs the game. The
+Phase 1 provider at `/usr/share/guestos/fex-mesa` is correct and live but **was never
+consulted**, because the only thing that reads it never ran. Phase 1 is not wasted — it is
+inert until selection is solved.
+
+### The question that replaces the old Phase 0
+
+**What makes Steam select the FEX compat tool?** Candidates, cheapest first:
+
+1. An explicit `CompatToolMapping` entry for the app in `config/config.vdf`. Note this may
+   not even be the right mechanism: the tool declares `compatmanager_layer_name "fex"` and
+   `filter_exclusive_priority 2`, which reads like a **layer applied by filter**, not a
+   user-selectable tool in the per-game dropdown.
+2. Client-side gating — a newer client, or a flag the shipping client does not set.
+3. Frame-only enablement, in which case adoption waits on hardware release.
+
+A useful independent test regardless: invoke Valve's tool **directly**, bypassing Steam's
+selection, to prove the tool plus our graphics provider can run a title end to end. That
+validates Phase 1's real consumer without depending on the selection question.
+
+---
 
 ## Phase 2 — A/B validation on hardware (GATE)
 

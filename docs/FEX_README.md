@@ -122,11 +122,24 @@ entries, and the second is not optional:
 1. the `.ero`, loop-mounted read-only on a private `/run/novadeck/fex-guest`;
 2. a read-only **overlay** of `usr/share/guestos/fex-mesa.d/` over it, at the probed path.
 
-Two mounts because the provider manifest has to appear *inside* the guest tree — the compat tool
-derives the FEX `RootFS` from the manifest's own directory — while the `.ero` is an immutable
-pinned artifact we must not rewrite. `lowerdir` is **leftmost-wins**, so the manifest layer is
-listed first; reverse it and the guest shadows the manifest, the tool finds no provider, and the
-failure is silent.
+Why two, precisely — the short version is *robustness*, not necessity:
+
+- The manifest must sit at exactly `/usr/share/guestos/fex-mesa/graphics_provider.json`, because
+  the tool **probes that fixed path**. (It derives the rootfs from the manifest's directory only in
+  its *other* branch, the one where `STEAM_COMPAT_GRAPHICS_PROVIDER` is already set.)
+- The manifest's own `root` field takes an absolute path, so the guest tree does **not** have to be
+  that same directory. A lone manifest with `root` pointing at the loop mount would satisfy
+  pressure-vessel by itself, with no overlay.
+- But that fixed path is *also* what the tool hands FEX as `RootFS`, and FEX needs a real guest
+  there. Inside a pressure-vessel container this is moot — `emulator.json` forces `FEX_ROOTFS` to
+  empty, so the container supplies the x86 userspace and `RootFS` goes unused — yet **out** of
+  container it matters.
+
+Which path Steam actually takes on our device is still open (Phase 0). Overlaying the manifest onto
+the guest satisfies both callers for one extra mount, rather than betting on the answer. `lowerdir`
+is **leftmost-wins**, so the manifest layer is listed first; reverse it and the guest shadows the
+manifest, the tool finds no provider, and the failure is silent. The `.ero` is a pinned artifact we
+must not rewrite, hence an overlay rather than editing the image.
 
 This is **additive**. The image is still read from its `fex-emu` location and the system FEX keeps
 working off the same file, unchanged — the validated baseline survives and the change rolls back

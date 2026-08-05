@@ -208,6 +208,20 @@ Nothing below is committed to until these are answered. Four are already closed:
   3,945,426,115 — the same order of magnitude uncompressed, which is precisely why keeping
   ours as a mounted `.ero` is the better shape.
 
+- ✅ **The tool installs on non-Frame hardware, and it is the public branch.** Installed on a
+  dev card 2026-08-05. `appmanifest_3127680.acf`: `StateFlags 4`, `SizeOnDisk 24805692`,
+  `buildid 24136555` — byte-for-byte the public depot measured over steamcmd.
+  `VERSIONS.txt` reads `FEX-2607-76-g37265b1`, identical to the depot copy.
+
+  **`rootfs/` is empty, and ships an `EmptySteamDepot/` marker directory** — Valve's own
+  convention for a depot that intentionally contains nothing. This upgrades the plan's
+  central premise from inference (depot sizes plus two scripts) to direct evidence: the
+  empty rootfs depot is deliberate, and the OS is expected to supply the guest.
+
+  Its `fex-compat-tool:14` targets `/usr/share/guestos/fex-mesa` — exactly the path Phase 1
+  now provides, so `os.path.exists(.../graphics_provider.json)` is true on the device and
+  the tool will take its Branch A path.
+
 Open:
 
 1. **Is pressure-vessel actually live for native x86 Linux games on our device?**
@@ -217,6 +231,21 @@ Open:
    (`fs-overlay/usr/bin/novadeck-steam:31`, `images/customize-base.sh:115`), but
    `docs/FEX_README.md:71` says native x86-64 games do go through SLR scout-on-soldier.
    These may both be true; confirm which on hardware.
+
+   **New signal, 2026-08-05, not yet conclusive.** Installing Super Meat Boy pulled in
+   `Steam Linux Runtime 1.0 (scout)` (app `1070560`) and nothing else. Scout is the classic
+   `LD_LIBRARY_PATH` runtime — *not* a pressure-vessel container; the container runtimes are
+   soldier (`1391110`) and sniper (`1628350`), neither of which is installed. If the game
+   really runs under scout alone then PV is **not** in the path, FEX's `RootFS` is live
+   rather than overridden to empty, and the Phase 1 overlay is **required rather than a
+   hedge**. That would also make `docs/FEX_README.md:71` stale.
+
+   Cheap way to settle it: `fex-compat-tool` runs `printenv` into
+   `/tmp/fex-compat-tool-<pid>.log` on every launch. One real launch answers this, plus
+   whether `STEAM_COMPAT_GRAPHICS_PROVIDER` picked up our manifest.
+
+   `CompatToolMapping` in `config/config.vdf` is **empty**, so nothing is pinned by hand —
+   whatever Steam does with this title is its own default selection.
 2. **Does the Steam client on our device offer the tool at all,** and does it select it for
    a native x86 Linux title, or fall through to our binfmt registration?
 
@@ -258,6 +287,31 @@ Both remaining items need hardware. Phase 1 can start without them.
 - `packages/fex-rootfs/prebuilt.pin` keeps its pin; only `dest` and the consumer change.
 - Assert the mount in `make test` — a declared invariant nothing checks is not a guard
   (`[[declared-invariants-need-assertions]]`).
+
+### Phase 1 — HW-validated 2026-08-05
+
+A dev card built at `3816be4` and booted on device. Both mounts come up automatically from
+fstab at boot, with no intervention:
+
+```
+/run/novadeck/fex-guest      /dev/loop0  erofs    ro,noatime,...
+/usr/share/guestos/fex-mesa  overlay     overlay  ro,lowerdir=/usr/share/guestos/fex-mesa.d:/run/novadeck/fex-guest
+```
+
+So the kernel decompresses the LZ4 erofs over a loop device, and the overlay merges in the
+declared order. The merged view is correct: `graphics_provider.json` sits at the top level
+*alongside* the guest's `bin/ lib/ lib64/ sbin/ usr/ etc/`, and every path the manifest
+declares resolves there — both `dri/`, `gbm/`, both `gconv/`, `etc/ld.so.cache`,
+`sbin/ldconfig`, both `libvulkan.so.1`.
+
+That last point is what matters: the manifest's paths are no longer verified against an
+image mounted somewhere else in a container, but at the exact path Valve's tool probes, on
+the device.
+
+**This validates the plumbing we own, not the consumer.** Nothing has yet executed an x86
+instruction through Valve's tool. The plumbing is also consumer-agnostic — any
+pressure-vessel graphics provider pointed at this path works, whether or not Valve's tool
+is what reads it.
 
 ## Phase 2 — A/B validation on hardware (GATE)
 
@@ -307,10 +361,11 @@ Only after Phase 2 is green.
 
 ## Risks and re-check triggers
 
-- **Valve repopulates the public rootfs depot.** The whole OS-provided premise is inferred
-  from depot sizes plus two scripts, not from a Valve statement. If they intend to ship a
-  rootfs on public before Frame launches, Phase 1 becomes unnecessary. Re-run the appinfo
-  query (Appendix A) before starting Phase 1 and again near Frame launch.
+- ~~Valve repopulates the public rootfs depot~~ — **largely retired 2026-08-05.** The
+  installed tool ships an `EmptySteamDepot/` marker directory, Valve's own convention for a
+  depot deliberately containing nothing. The OS-provided premise is no longer an inference
+  from depot sizes. Still worth re-checking near Frame launch, but it is no longer the
+  plan's load-bearing assumption.
 - **`bleeding-edge` becomes `public`.** It already shares public's empty rootfs manifest,
   so this is expected to be a no-op — but the tool version will move.
 - **The tool is not offered on non-Frame hardware.** Download is not gated (proven), but

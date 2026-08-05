@@ -128,6 +128,30 @@ A read-only `install/probe-internal.sh`, run from a dev card over SSH, dumping t
 **Deliverable:** `docs/internal-storage.md` with captured GPTs, plus the real `userdata` sizes
 per device — §4d's consent screen quotes them, so they are a product input, not just recon.
 
+### Layout variation is the normal case, not the exception
+
+Four devices are available to capture — KONKR Pocket FIT and AYANEO Pocket S2 (SM8650), AYANEO
+Pocket ACE and AYN Odin 2 (SM8550) — and their internal layouts are expected to differ. Two
+consequences, both of which shape Phase 3 rather than Phase 0:
+
+- **`docs/internal-storage.md` is a set of per-board sections, never one canonical table.**
+  `probe-internal.sh` puts the board in its H1 so captures concatenate. `disk-rules.conf` is
+  authored from the **union** of all captures, and `test-select-target.sh` must stay green against
+  **every** captured GPT — a rule tightened for one board and silently breaking another is the
+  failure this guards.
+- **`fs-overlay/usr/lib/novadeck/devices/` already carries 14 boards.** Ten of them will have no
+  capture. The installer must therefore treat an uncaptured layout as a **refusal, not a guess**:
+  rule 4 below (any partition name matching no rule → refuse and print it) is what makes that
+  safe, and it is load-bearing precisely because the capture set will always be incomplete. An
+  uncaptured board declining to install is the correct outcome when EDL is the only recovery.
+  Since the probe is read-only, it is also safe to hand to an owner of one of those boards to
+  contribute a capture.
+
+**One naming risk to check across the four captures:** rule 6's `require userdata` assumes that
+literal name. If any board calls its data partition something else, the rule refuses a device we
+actually support — which is safe but wrong. If the captures disagree, `require` becomes a
+per-board name rather than a constant, resolved from `devices/*.conf`.
+
 ---
 
 ## Phase 1 — Partition identity: kill the PARTLABEL coin flip

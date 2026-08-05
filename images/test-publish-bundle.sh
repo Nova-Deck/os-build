@@ -204,6 +204,74 @@ run NOVADECK_TEST_CORRUPT=1
   || bad "the failed publish pruned the release the fleet is running"
 
 # =================================================================================================
+# THE PRUNE (step 6). Until 2026-08-05 the only thing asserted about it was the negative above --
+# that a FAILED publish does not prune. Its `rm -f` had never executed anywhere: `stable/` holds one
+# bundle, KEEP is 3, and `head -n "-3"` over a one-element list emits nothing, so the delete branch
+# first runs for real on the FOURTH ota/v* release, against the live fleet's docroot.
+#
+# Seeded bundles are 1 byte; nothing here re-uploads them, so their contents never matter.
+seed() { for v in "$@"; do printf 'x' >"$W/srv/test/novadeck-$v.raucb"; done; }
+have() { [ -f "$W/srv/test/novadeck-$1.raucb" ]; }
+
+CASE="prune-deletes-only-beyond-keep"
+reset_server
+mkdir -p "$W/srv/test"
+seed 9.9.1 9.9.2 9.9.3 9.9.4 9.9.5     # + the published 9.9.9 = six, KEEP=3
+run
+[ "$RC" = 0 ] && ok "exit 0" || bad "exit $RC: $ERR"
+have 9.9.1 || have 9.9.2 || have 9.9.3 \
+  && bad "the three oldest bundles were not pruned" \
+  || ok "pruned the three oldest"
+have 9.9.4 && have 9.9.5 && have 9.9.9 \
+  && ok "kept exactly the newest KEEP=3" \
+  || bad "pruned inside the retention budget"
+[ -f "$W/srv/test/latest.json" ] \
+  && ok "latest.json is not swept up by the novadeck-*.raucb glob" \
+  || bad "the prune deleted latest.json"
+
+CASE="prune-spares-the-bundle-the-pointer-names"
+# THE CASE THE GUARD EXISTS FOR, and the only way to reach it. The prune reads latest.json AFTER
+# step 5 has flipped it, so `keep` is normally the bundle just published and normally sorts newest
+# -- the `[ "$old" = "$keep" ] && continue` line is then dead. It comes alive when the version being
+# published sorts OLD, which is exactly a deliberate roll-back publish: re-shipping a known-good
+# earlier bundle to a fleet that is on a bad one. Without the guard the publish would delete the
+# very file its own latest.json had just started pointing at, and take the update path down at the
+# moment it was being used to recover.
+reset_server
+mkdir -p "$W/srv/test"
+seed 9.9.10 9.9.11 9.9.12 9.9.13       # all sort ABOVE the published 9.9.9
+run
+[ "$RC" = 0 ] && ok "exit 0" || bad "exit $RC: $ERR"
+have 9.9.9 \
+  && ok "the just-published bundle survives despite sorting oldest" \
+  || bad "pruned the bundle latest.json names -- the fleet's update path is down"
+if pointer | grep -q "\"bundle\": \"$NAME\"" && [ -f "$W/srv/test/$NAME" ]; then
+  ok "latest.json names a bundle that is still on disk"
+else
+  bad "latest.json points at $NAME but the prune deleted it -- a dangling pointer"
+fi
+have 9.9.10 \
+  && bad "9.9.10 was inside the delete set and should have gone" \
+  || ok "still prunes the others in the delete set"
+have 9.9.11 && have 9.9.12 && have 9.9.13 \
+  && ok "the newest KEEP=3 are untouched" \
+  || bad "pruned inside the retention budget"
+
+CASE="keep-0-disables-the-prune"
+# `if [ "$KEEP" -ge 1 ]` is the only off switch, and an operator reaching for it is usually mid-
+# incident and wants nothing deleted. Asserted so the guard is not refactored into `-ge 0`.
+reset_server
+mkdir -p "$W/srv/test"
+seed 9.9.1 9.9.2 9.9.3 9.9.4 9.9.5
+run NOVADECK_OTA_KEEP=0
+[ "$RC" = 0 ] && ok "exit 0" || bad "exit $RC: $ERR"
+have 9.9.1 && have 9.9.2 && have 9.9.3 && have 9.9.4 && have 9.9.5 \
+  && ok "nothing was pruned" \
+  || bad "KEEP=0 still deleted bundles"
+
+# =================================================================================================
+# KEEP THIS CASE LAST: it replaces $W/bin/ssh with a stub that deletes bundles and fails sha256sum,
+# and never restores it. Anything added after it inherits that stub.
 CASE="unreadable-upload-is-a-failure-not-a-shrug"
 # An empty hash is the case that would quietly wave everything through if the gate tested only for
 # inequality. It must fail closed.

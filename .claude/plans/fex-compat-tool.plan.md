@@ -384,9 +384,39 @@ inert until selection is solved.
 2. Client-side gating — a newer client, or a flag the shipping client does not set.
 3. Frame-only enablement, in which case adoption waits on hardware release.
 
-A useful independent test regardless: invoke Valve's tool **directly**, bypassing Steam's
-selection, to prove the tool plus our graphics provider can run a title end to end. That
-validates Phase 1's real consumer without depending on the selection question.
+### Direct invocation WORKS — Phase 1's consumer is validated (2026-08-05)
+
+Bypassing Steam's selection entirely, Valve's tool runs x86 code against our provider:
+
+```
+$ STEAM_COMPAT_DATA_PATH=/tmp/fexdata ./fex-compat-tool run -- /usr/bin/uname -a
+Linux novadeck 6.11.0 #FEX-2607-76-g37265b1 SMP  x86_64 GNU/Linux   (rc=0)
+```
+
+Three things that together settle it:
+
+- **`x86_64`** — x86 code executed, and `/usr/bin/uname` resolved *inside the guest*, not on
+  the aarch64 host.
+- **`#FEX-2607-76-g37265b1`** — FEX stamps its own build into `uname`. That is **Valve's**
+  build; ours is plain `FEX-2607`. So this was not our system FEX via binfmt.
+- **The `Config.json` it generated** into `$STEAM_COMPAT_DATA_PATH/fex-emu/`:
+
+  ```json
+  "RootFS": "/usr/share/guestos/fex-mesa/",
+  "ThunkHostLibs":  ".../FEX-Emu/usr/lib/aarch64-linux-gnu/fex-emu/HostThunks",
+  "ThunkGuestLibs": ".../FEX-Emu/usr/share/fex-emu/GuestThunks"
+  ```
+
+  `@FEX_ROOTFS_PATH@` resolved to **our Phase 1 provider**. The tool also emitted no
+  `didn't provide graphics_provider.json` warning — the message it prints when the manifest
+  is absent — so `setup_rootfs()` found our manifest and took the OS-provided path.
+
+Note it runs **thunked**, pointing at Valve's own thunk directories, unlike our thunkless
+system config.
+
+**So everything on our side is ready.** The provider is correct, the tool consumes it, and
+x86 execution works. The *only* remaining gap is that Steam does not select the tool on its
+own — which is a client-side question, not something the OS can fix.
 
 ---
 

@@ -88,26 +88,55 @@ A read-only `install/probe-internal.sh`, run from a dev card over SSH, dumping t
    SM8650 device.
 3. **Whether Linux sees internal storage at all.** `docs/bringup.md:9` still says "UFS
    itself unverified". `CONFIG_SCSI_UFSHCD` is in the config; that is not the same thing.
-4. **ABL fallback when the stored default names a medium that is absent** — specifically,
-   default = "Linux / SD" with no card inserted: does ABL fall back to internal, or stop?
-   This is the one ABL question that still changes the product: it decides whether the
-   post-install flow ends with "reboot, done" or must end with "hold Volume Up and change
-   your default", and whether "install complete" should power off or reboot.
+4. ~~**ABL fallback when the stored default names a medium that is absent.**~~ **ANSWERED
+   2026-08-05 — and the question was posed backwards.** See "The ABL contract" below: the
+   fallback runs internal→external, not the reverse, so with no card inserted ABL boots our
+   internal install. **The post-install flow is "remove the card and reboot, done"** — no
+   Volume-Up step, and no reason to prefer power-off over reboot.
 5. **Where in `devinfo` the boot choice lives, and its size** — capture the partition raw,
    *for backup only*. The choice is persisted in `devinfo` (user-confirmed 2026-08-05).
    `devinfo` is already in the `deny` list at §3, and **the installer must never write it**
    (see "Explicitly out of scope"). This item is a capture, not a risk.
 
-   > **Closed, was the dual-boot go/no-go.** ABL is a chooser: a *configurable default boot
-   > target* (Linux internal / SD / USB, or Android) plus a *temporary override by holding
-   > Volume Up at startup*. Confirmed by the user 2026-08-05 and corroborated by the upstream
-   > README in `_reference/abl`. So an ESP on internal cannot strand Android, and an internal
-   > install stays recoverable by booting the installer medium on demand — which is exactly
-   > the mechanism `images/partition-table.txt` already assumes. Two further facts from
-   > upstream's `update.sh`: ABL is a **signed, per-device ELF** (`abl_signed-<HW_DEVICE>.elf`
-   > flashed to `abl_a`/`abl_b`), so we consume it and cannot rebuild it; and it is addressed
-   > via `/dev/disk/by-partlabel/`, so internal storage enumerates with partlabels from Linux
-   > under ROCKNIX's kernel — evidence for (3), not proof for ours.
+   > **Closed, was the dual-boot go/no-go.** An ESP on internal cannot strand Android. Two
+   > further facts from upstream's `update.sh`: ABL is a **signed, per-device ELF**
+   > (`abl_signed-<HW_DEVICE>.elf` flashed to `abl_a`/`abl_b`), so we consume it and cannot
+   > rebuild it; and it is addressed via `/dev/disk/by-partlabel/`, so internal storage
+   > enumerates with partlabels from Linux under ROCKNIX's kernel — evidence for (3).
+
+### The ABL contract — corrected 2026-08-05, and it moves two design points
+
+Stated by the user, who worked on the ROCKNIX ABL. An earlier draft of this plan described a
+four-target chooser (Linux internal / SD / USB, or Android) with a Volume-Up override that
+switched medium. **That model was wrong.** It is:
+
+- **Two modes: Android, or Linux.** Android mode boots Android on internal, full stop.
+- **Linux mode tries INTERNAL FIRST, then falls back to external.** "Internal" means an internal
+  ESP carrying either `/EFI/BOOT/bootaa64.efi` or `/KERNEL`. The test is on **content**, not on
+  the partition existing.
+- **A "force external" option** overrides that and always takes the external medium.
+- **Volume Up is a ONE-TIME override to Android**, offered when Linux mode is selected. It does
+  not choose a medium. (§4d's consent text happens to state this correctly already.)
+- **The ESP is found by partition TYPE at any index** — ROCKNIX's own internal install on the
+  Pocket FIT puts its ESP (`C12A7328-…`) at **p12** and boots. Appending our partitions to an
+  existing OEM GPT is therefore safe, which Phase 2's `genpart.sh --append` depends on.
+
+**Both arms were observed on hardware the same day, not merely described.** S2, ACE and Odin 2
+have no internal ESP and fell through to the SD card unaided; the FIT has one at p12 and needed
+force-external to reach the card at all.
+
+**Consequence 1 — the recovery story in §3 is wrong as written.** It claims an internal install
+"stays recoverable by booting the installer medium on demand". With internal-first that is false:
+once our internal ESP exists, inserting the installer card boots *internal*. **Recovery requires
+the force-external option**, and it must be named in `docs/install-internal.md` and
+`docs/RUNBOOK.md` in the user's terms. The difference between naming it and not is the difference
+between a recoverable device and one the user believes we bricked.
+
+**Consequence 2 — "arm the bootconf last" now has a precise definition.** ABL's test is content-
+based, so the last byte the installer writes is **`/EFI/BOOT/bootaa64.efi` on the internal ESP**.
+Before it, an interrupted install still boots the card and re-running works; after it, internal
+wins. The ESP partition itself, its `grubenv`, the partsets and `A.conf` can all be written
+earlier — it is that one file that flips the device over.
 6. **LUN enumeration stability across boots** — if `/dev/sdX` is not stable, target
    selection must key on `wwid`/LUN, not the kernel name.
 7. **gamescope without a logind session.** The main image gets an active `seat0` via SDDM
@@ -416,6 +445,15 @@ The new `userdata` size is a user choice on the confirm screen (default 16 GiB, 
 with our minimum from `genpart.sh --min` (~15 GiB) plus a `HOME_FLOOR` of 8 GiB enforced
 against the remainder.
 
+> **Recreate `userdata` with its ORIGINAL type GUID.** Found 2026-08-05 in the captures: stock
+> `userdata` is type `1B81E7E6-F50D-419B-A739-2AEEF8DA3335`, but on the Pocket FIT — where
+> ROCKNIX performed this same carve — it came back as `0FC63DAF-…` (Linux filesystem data).
+> Recreating it under a Linux type risks Android not recognising its own data partition, and
+> "Android survives, factory-reset but working" is the *entire* justification for destroying it.
+> So `select-target.sh` must capture the type GUID along with the extent, and the carve must
+> restore it. `test-select-target.sh` gets a case: recreate from a captured GPT, assert the type
+> GUID is byte-identical to the original.
+
 ### Identification, then geometry — the primary mechanism
 
 Revised 2026-08-05. **Only one partition matters: `userdata`.** Everything else on the disk is
@@ -569,11 +607,17 @@ luck, so the construction is the thing under test:
 - **Wrong LUN carrying `xbl`/`abl`** → hard brick, EDL only. Rule 5 is the sole thing preventing
   it, which is why selection is a separate side-effect-free script with its own test suite. This
   single failure mode justifies the entire `disk-rules.conf` + double-check design.
-- **Right LUN, interrupted** → recoverable by re-running, *provided* the internal ESP is
-  written and the bootconf armed **last**. Order the installer exactly as `post-install.sh`
-  orders itself: nothing points at the new install until the new install is real. This is the
-  one failure class with a genuine software recovery, which is why the ordering is not
-  negotiable.
+- **Right LUN, interrupted** → recoverable by re-running, *provided* `/EFI/BOOT/bootaa64.efi` on
+  the internal ESP is the **last** thing written. Order the installer exactly as
+  `post-install.sh` orders itself: nothing points at the new install until the new install is
+  real. This is the one failure class with a genuine software recovery, which is why the ordering
+  is not negotiable — and per "The ABL contract" in Phase 0 that one file, not the bootconf, is
+  the point of no easy return.
+
+  **Re-running requires the force-external option**, because by then the internal ESP may exist
+  and ABL prefers it. So the failure screen and the docs must say so: "insert the installer card,
+  select force external in the bootloader, and re-run." An interrupted install whose recovery
+  instructions omit that step is, from the user's side, indistinguishable from a brick.
 - **Completed** → Android's user data is gone permanently, by design and with consent. Nothing
   restores it. Do not imply reversibility anywhere in the UI.
 
@@ -969,7 +1013,7 @@ behaviour post-extraction), `test-select-target.sh` (≥60 cases on real capture
 | Squashfs installer root misses non-ELF runtime state | Low | pacman-resolved tree rather than a readelf walk; a first-boot smoke unit asserting TLS, NSS, dbus and nmcli all work |
 | gamescope will not start without a logind session → black screen | Medium | Phase 0 item 7 proves it over `seatd`/`LIBSEAT_BACKEND=builtin` before Phase 5 starts; SSH + the ESP `install.log` + the tty1 `OnFailure=` getty mean a failed GUI is still diagnosable and the install still runnable |
 | Wi-Fi picker unusable on a gamepad | Medium | `wifi.conf` on the ESP is a first-class path, not a fallback; USB keyboard works free |
-| Interrupted install leaves an unbootable internal disk | Medium | Arm the bootconf **last**; re-run is idempotent; the medium is also the recovery medium |
+| Interrupted install leaves an unbootable internal disk | Medium | Write `/EFI/BOOT/bootaa64.efi` on the internal ESP **last** — it is what flips ABL to internal; re-run is idempotent; the medium is also the recovery medium, reached with **force external** |
 | ~3.5 GB stream over Wi-Fi on battery | Medium | Honest progress from RAUC's `Progress` property; refuse below a battery threshold (Phase 0 item 8) |
 
 ---

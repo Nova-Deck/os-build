@@ -295,6 +295,17 @@ bad`).
 
 There is no serial console. Power off, pull the card, and read it on your workstation.
 
+**If the device has an internal Linux install, an inserted card will NOT boot — pick "force
+external" in the bootloader.** ABL's Linux mode tries internal storage first and only falls
+through to the card when no internal ESP carries `/EFI/BOOT/bootaa64.efi` or `/KERNEL`. So on a
+device installed to internal storage — ours or another distribution's — inserting a card and
+rebooting changes nothing, which reads exactly like a dead card or a bricked machine. Select
+force external in ABL and the card boots normally. This is the recovery path for an interrupted
+or broken internal install, and it is the only one short of EDL.
+
+Nothing on the SD-card-only path is affected: with no internal ESP present, ABL falls through to
+the card unaided and no option needs setting.
+
 **The journal is not on the slot's `/var`.** `/var/log` is bind-mounted onto
 `/home/.novadeck/offload/var/log`, so it lives on the shared **home** partition and survives both
 slots:

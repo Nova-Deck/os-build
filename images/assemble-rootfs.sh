@@ -337,6 +337,41 @@ if ! grep -q 'LABEL=novadeck-home' "$stage/etc/fstab" 2>/dev/null; then
     >>"$stage/etc/fstab"
 fi
 
+# 4g-bis. The FEX guest rootfs, surfaced as a pressure-vessel GRAPHICS PROVIDER.
+#
+# Valve publishes FEX as a Steam Play compat tool (app 3127680). On its public branch the tool
+# ships the emulator and thunks only — its rootfs depot is empty — and it expects the OS to
+# provide the x86 guest at a fixed path, /usr/share/guestos/fex-mesa. Our pinned ArchLinux.ero
+# already satisfies that contract in full (both arches carry a complete Mesa, dri/, gbm/, gconv/,
+# both interoperable linkers, ld.so.cache, ldconfig, merged-/usr) — see .claude/plans/.
+#
+# TWO mounts, and the second one is not optional. The provider manifest has to appear INSIDE the
+# guest tree (the tool derives the FEX RootFS from the manifest's own directory), but the .ero is
+# an immutable pinned artifact we must not rewrite. So: loop-mount the image on a private /run
+# path, then present a read-only overlay that lays our manifest over it at the probed path.
+# overlayfs lowerdir is leftmost-wins, so fex-mesa.d/graphics_provider.json shadows the guest.
+#
+# The image is read from its CURRENT fex-emu location on purpose. This stage is additive: the
+# system FEX (packages/fex-emu) keeps working off the same file, unchanged, so the validated
+# baseline survives and the change is free to roll back. Relocating the .ero belongs with the
+# retirement of that package, not here.
+#
+# nofail on both, deliberately: this feeds native x86 Linux games only. A missing or corrupt guest
+# must cost x86 Linux titles, never a boot. It is a quiet failure by design, which is why
+# images/test-graphics-provider.sh asserts the pair exists and is well-formed at build time.
+echo "  injecting FEX guest graphics-provider mounts (/usr/share/guestos/fex-mesa)"
+mkdir -p "$stage/usr/share/guestos/fex-mesa"
+if ! grep -q '/usr/share/guestos/fex-mesa' "$stage/etc/fstab" 2>/dev/null; then
+  printf '%s\n' \
+    '# FEX x86 guest rootfs for Valve'"'"'s FEX compat tool (Steam app 3127680), as a' \
+    '# pressure-vessel graphics provider. 1) the pinned .ero, loop-mounted read-only;' \
+    '# 2) our graphics_provider.json overlaid on top, at the path the tool probes.' \
+    '# lowerdir is leftmost-wins. nofail: this must never hold up a boot.' \
+    '/usr/share/fex-emu/RootFS/ArchLinux.ero  /run/novadeck/fex-guest  erofs  loop,ro,nofail,noatime  0 0' \
+    'overlay  /usr/share/guestos/fex-mesa  overlay  ro,nofail,lowerdir=/usr/share/guestos/fex-mesa.d:/run/novadeck/fex-guest,x-systemd.requires-mounts-for=/run/novadeck/fex-guest  0 0' \
+    >>"$stage/etc/fstab"
+fi
+
 # Grow the home PARTITION to fill the device with systemd-repart (declarative, online — it issues
 # a BLKPG resize so it works while the disk is in use, and relocates the GPT backup header for us).
 # The stock systemd-repart.service is initrd-only (no [Install], Before=initrd-root-fs.target) and

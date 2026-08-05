@@ -369,6 +369,7 @@ test: verify-lock ## Run the offline bootctl/post-install/pairingd/quirks/stage-
 	bash images/test-units.sh
 	bash images/test-update.sh
 	bash images/test-publish-bundle.sh
+	bash images/test-graphics-provider.sh
 
 # The fourth suite, separate because it is the one that CANNOT run on the host: it signs real
 # bundles and verifies them through the shipped system.conf, so it needs rauc. Every case in it is

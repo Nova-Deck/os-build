@@ -95,6 +95,16 @@ esac
 [ $DEVTEST "$dev_efi" ]  || die "no block device at $dev_efi"
 log "target slot $target ($dev_root, $dev_efi)"
 
+# The one external tool this script asserts, and it is asserted HERE -- before step 0, ahead of
+# everything destructive -- rather than at its use site down in step 3. A comparator that is merely
+# ABSENT does not announce itself: `cmp -s` was used until 2026-08-05, diffutils has never been in
+# PKGS, and "command not found" is a non-zero exit that reads exactly like "the files differ". The
+# ESP refresh below degraded to unconditional copy for three releases without a single failed
+# install. Dying at the use site would be worse than useless: by then the target's fsid is
+# randomised and its /var reformatted, so the slot is already unbootable and the run cannot be
+# retried cleanly. Fail while nothing has been touched.
+command -v sha256sum >/dev/null || die "sha256sum is missing -- cannot compare the ESP boot files"
+
 # --- 0. DISARM ----------------------------------------------------------------------------------
 # RAUC has ALREADY armed this slot by the time we run. Its order is fixed and not ours to change:
 # it calls the bootloader backend's set-primary (-> `--image <target> set-mode reboot`, making the
@@ -237,8 +247,14 @@ umount "$EFIMNT"; rm -rf "$EFIMNT"; trap 'umount "$MNT" 2>/dev/null || true' EXI
 # when unchanged -- skip rather than rewrite the ESP's live boot files on every update.
 ls "$ESP" >/dev/null 2>&1 || true         # trigger the fstab automount if it is not up
 mountpoint -q "$ESP" || die "the ESP is not mounted at $ESP"
+# WHY sha256sum AND NOT cmp: cmp(1) is diffutils, which this image does not carry and never has.
+# The skip below is not an optimisation -- the shared ESP is the only write in the whole update
+# with no A/B copy behind it, so `cp -f` over the file ABL chainloads is the one step a power cut
+# can leave unbootable with nothing to roll back to. Comparing first is what keeps that window
+# closed on the updates where these files did not change, which is most of them. sha256sum is
+# coreutils and is asserted at the top. Read from stdin so the output is the digest alone.
 refresh_if_diff() {  # <src> <dst>
-  if ! cmp -s "$1" "$2"; then
+  if [ ! -e "$2" ] || [ "$(sha256sum <"$1")" != "$(sha256sum <"$2")" ]; then
     cp -f "$1" "$2" || die "cannot refresh $2"
     sync
     log "refreshed $2"

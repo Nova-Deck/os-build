@@ -517,6 +517,33 @@ expect_esp EFI/BOOT/fonts/default.pf2 'FONT-B'
 # steamcl-restricted is an empty flag file; just ensure it exists (not asserted by content)
 done_
 
+t "identical-esp-boot-files-are-left-untouched"
+# The skip is not an optimisation. The shared ESP is the only write in the whole update with no A/B
+# copy behind it, so every needless rewrite of the file ABL chainloads is a power-cut window with
+# nothing to roll back to. Seed the ESP with content already identical to the new root's and assert
+# the file is NOT rewritten -- by mtime, because `cp -f` truncates in place and keeps the inode.
+#
+# WHY THIS CASE EXISTS: the comparison was `cmp -s` from 58e48a8 until 2026-08-05, and cmp is
+# diffutils, which is not in PKGS and has never been on the image. On hardware it was "command not
+# found" -- a non-zero exit, indistinguishable from "the files differ" -- so the skip never once
+# happened in three releases and every OTA rewrote all three files. run() appends the HOST's PATH
+# after $SB/bin and the host has diffutils, which is precisely why a suite asserting only content
+# could not see it. Assert the skip itself, not the bytes.
+printf 'STEAMCL-B\n' >"$SB/esp/EFI/BOOT/bootaa64.efi"
+touch -d '2001-01-01 00:00:00' "$SB/esp/EFI/BOOT/bootaa64.efi"
+before=$(stat -c %Y "$SB/esp/EFI/BOOT/bootaa64.efi")
+run
+expect_rc 0
+after=$(stat -c %Y "$SB/esp/EFI/BOOT/bootaa64.efi")
+[ "$before" = "$after" ] && ok "bootaa64.efi was not rewritten" \
+  || bad "bootaa64.efi was rewritten despite identical content"
+expect_esp EFI/BOOT/bootaa64.efi 'STEAMCL-B'
+# The companions genuinely changed, so the same run must still refresh them -- a skip that skips
+# everything would pass the assertion above and be just as wrong.
+expect_esp EFI/BOOT/steamcl-version '1.B'
+expect_esp EFI/BOOT/fonts/default.pf2 'FONT-B'
+done_
+
 t "an-esp-that-is-not-mounted-is-fatal"
 : >"$SB/fail-esp"
 run

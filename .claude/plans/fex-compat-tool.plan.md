@@ -20,6 +20,12 @@ On 2026-08-04 Valve published **FEX as Steam app `3127680`** alongside Lepton, a
 making the Steam Frame software stack public. Frame is a Snapdragon 8 Gen 3 — the same
 SoC as our SM8650 target.
 
+**This is not fixing something broken.** `packages/fex-emu` works: both titles tested to
+date run out of the box on it. The motivation is maintenance — deleting the heaviest
+overlay package in the tree, its two carried patches, and a pinned x86 sysroot that needs
+refreshing on every FEX bump — with a possible rendering upside (§ thunks). The trade is
+a known-working stack for a first-party one, so Phase 2 is a real gate, not a formality.
+
 ---
 
 ## What Valve actually ships (verified 2026-08-05)
@@ -257,11 +263,20 @@ Both remaining items need hardware. Phase 1 can start without them.
 
 Nothing is deleted until this passes.
 
-- Test titles: **Super Meat Boy** and **Garage Circuit Rally** — the two titles HW-proven
-  under our thunkless system FEX on 2026-07-11, and the pair whose SIGSEGV under host GPU
-  thunks forced the thunkless config in the first place.
-- Run each three ways: our system FEX (baseline), Valve's tool with its default thunked
-  config, and Valve's tool with `STEAM_COMPAT_FEX_CONFIG` forcing thunks off.
+**The baseline is higher than "it runs."** Super Meat Boy and Garage Circuit Rally both
+work today **out of the box** on `packages/fex-emu` — system FEX via binfmt, the shipped
+thunkless `fs-overlay/usr/share/fex-emu/Config.json`, zero per-game `game-tweaks.json`
+entries, no `fexProfile` override. That is the bar Valve's tool has to match. A result of "runs, but needs `STEAM_COMPAT_FEX_CONFIG` set per title" is a
+**regression**, not a pass, because it would push per-game configuration onto users who
+have none today.
+
+Note the sample is thin — two titles, both HW-proven 2026-07-11, and the same pair whose
+SIGSEGV under host GPU thunks forced the thunkless config. Clearing this gate is evidence
+of parity on the tested surface, not of broad compatibility. Neither configuration is
+broadly validated, so widening the test set is worth more than deepening it.
+
+- Run each title three ways: our system FEX (baseline), Valve's tool at its default
+  (thunked) config, and Valve's tool with `STEAM_COMPAT_FEX_CONFIG` forcing thunks off.
 - Confirm whether host Turnip is genuinely in the path — `fdinfo drm-engine-gpu` plus crtc
   framecount, **not** debugfs `gpu`, which hitches the display
   (`[[sm8650-gpu-liveness-probing]]`).

@@ -165,21 +165,31 @@ location, and stops being paired with 200 MB of our own emulator build.
 
 ## Phase 0 — Verification (BLOCKING)
 
-Nothing below is committed to until these are answered. Two are already closed:
+Nothing below is committed to until these are answered. Three are already closed:
 
 - ✅ **Not hardware-gated for download.** The depot pulled cleanly with an ordinary Steam
   account on x86_64, no Frame, no Deck. Licensing is not a blocker.
 - ✅ **Kernel supports the mount.** `EROFS_FS` / `OVERLAY_FS` / `USER_NS` all `=y`.
+- ✅ **`graphics_provider.json` schema is public.** No depot archaeology needed — it is a
+  documented, versioned interface, `steam-runtime-graphics-provider.json(5)`. See
+  References. `STEAM_COMPAT_GRAPHICS_PROVIDER` is a *pressure-vessel* variable; the FEX
+  compat tool only sets it, PV consumes it. The man page's second example is explicitly
+  "an Arch Linux derivative such as SteamOS" with `x86_64` + `i386`, which is very nearly
+  what we need to author verbatim.
 
 Open:
 
-1. **`graphics_provider.json` schema.** The one hard unknown. It lives inside the 855 MiB
-   `beta` rootfs depot (`3127681`, manifest `874797479366940863`). Pull it, read the file,
-   discard the rest. Without the schema we cannot author the OS-provided guest.
-2. **Does the stock `ArchLinux.ero` carry x86 Mesa?** The path is described as a "fex +
-   mesa combined arch linux install". Our `.ero` is upstream FEX's stock rootfs. If it has
-   no x86 Mesa we must build a combined guest, which is a materially larger job and
-   changes the size arithmetic.
+1. **Does the stock `ArchLinux.ero` satisfy the graphics-provider contract?** Two parts,
+   and the man page makes the second one concrete:
+   - Does it carry x86 Mesa? The target path is described as a "fex + mesa combined arch
+     linux install", and ours is upstream FEX's stock rootfs.
+   - `root` "must contain at least `etc/ld.so.cache`, `usr/lib*`, `sbin/ldconfig`, the
+     architectures' interoperable dynamic linkers" — a stock FEX guest rootfs is not
+     obviously built to be a *graphics provider*, so this is not a given.
+
+   **Answerable on the build host**, not on hardware: inspect `work/prebuilt/fex-rootfs.blob`
+   with `erofs-utils` (absent on the host, present in the build container). Do this first —
+   it is the cheapest open item and the one that can invalidate the plan.
 3. **Is pressure-vessel actually live for native x86 Linux games on our device?**
    `fex-compat-tool:136-140` sets `STEAM_COMPAT_MACHINE_ARCHITECTURE=aarch64-linux-gnu` and
    `STEAM_COMPAT_EMULATOR=<emulator.json>`, commented *"Tell PV that we are an AArch64
@@ -251,8 +261,9 @@ Only after Phase 2 is green.
   so this is expected to be a no-op — but the tool version will move.
 - **The tool is not offered on non-Frame hardware.** Download is not gated (proven), but
   client-side *selection* for a title may be. This is Phase 0 item 4.
-- **Our `.ero` lacks x86 Mesa** (Phase 0 item 2) — the one finding that could make this
-  plan more expensive than the status quo rather than less.
+- **Our `.ero` does not satisfy the graphics-provider contract** (Phase 0 item 1) — the one
+  finding that could make this plan more expensive than the status quo rather than less.
+  Check it first.
 
 **Rollback:** `packages/fex-emu` and `packages/fex-rootfs` stay in the tree untouched
 through Phases 0-2. Nothing is irreversible before Phase 3.
@@ -279,11 +290,30 @@ env HOME="$SP" LD_LIBRARY_PATH="$SP/steamcmd/linux64" ./linux64/steamcmd \
 env HOME="$SP" LD_LIBRARY_PATH="$SP/steamcmd/linux64" ./linux64/steamcmd \
     +login <account> +download_depot 3127680 3127682 +quit
 
-# tool depot, beta branch
+# tool depot, beta branch -- for comparing against the retired code path only
 ... +download_depot 3127680 3127682 2446860776614422387 +quit
-
-# rootfs depot, beta branch (855 MiB) -- Phase 0 item 1
-... +download_depot 3127680 3127681 874797479366940863 +quit
 ```
 
 Manifest GIDs are in the appinfo dump and will move; re-read rather than reusing these.
+
+The `beta` **rootfs** depot (`3127681`, manifest `874797479366940863`, 855 MiB) is
+deliberately **not** listed as a step. An earlier draft had Phase 0 pull it to reverse
+engineer `graphics_provider.json` — unnecessary, since that file is a documented interface
+(References). Fetch it only if a Valve-authored reference guest is wanted for comparison,
+and never as a dependency.
+
+---
+
+## References
+
+- `steam-runtime-graphics-provider.json(5)` — the `graphics_provider_v0` schema:
+  `architectures` (multiarch tuples, per-arch `dri`/`gbm`/`gconv`/`fallback_library_paths`),
+  `root`, `locales`, `va_api`, `vdpau`, and the required `root` contents.
+- `steam-runtime-emulator.json(5)` — the `emulator_v0` schema Valve's `emulator.json`
+  implements, and the exec chain PV builds around it.
+- `docs/steam-compat-tool-interface.md` — `toolmanifest.vdf`, compat verbs, and the
+  `STEAM_COMPAT_*` variables.
+
+Canonical home is <https://gitlab.steamos.cloud/steamrt/steam-runtime-tools> (`docs/`).
+There is no `ValveSoftware/steam-runtime-tools` on GitHub — only third-party forks, which
+is what the copies in the scratchpad came from. Prefer the GitLab original when citing.

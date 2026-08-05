@@ -128,11 +128,43 @@ A read-only `install/probe-internal.sh`, run from a dev card over SSH, dumping t
 **Deliverable:** `docs/internal-storage.md` with captured GPTs, plus the real `userdata` sizes
 per device — §4d's consent screen quotes them, so they are a product input, not just recon.
 
+### CAPTURED 2026-08-05 — all four boards. What the recon actually returned
+
+`docs/internal-storage.md` holds S2, ACE, Odin 2 and Pocket FIT. Items 1, 2, 3, 5 and 6-by-HCTL
+above are answered; items 4 (ABL fallback), 7 (gamescope without logind), 8 (throughput/battery)
+and 9 (`userdata` removal side effects) are **not** — none is answerable read-only from one boot,
+and the probe says so in its own closing section.
+
+- **Linux sees internal storage.** 6–8 UFS LUNs per board. `docs/bringup.md:9`'s "UFS itself
+  unverified" is closed.
+- **Constant across all four:** data LUN is 0; `xbl` on LUN 1; `abl` + `devinfo` on LUN 4; zero
+  unpartitioned space, so the carve must come out of `userdata`; and `userdata` carries that
+  literal name and is the largest partition by a wide margin. **`require userdata` therefore
+  survives as a constant** — the naming risk flagged below did not materialise — and rule 6's
+  label/size cross-check and the dominance fallback agree on every board.
+- **Sector size is 4096 on all four**, across two UFS vendors and two SoCs. The span arithmetic
+  must READ the logical sector size, never assume 512: an 8× error puts writes outside the span,
+  which is precisely what containment exists to catch. `test-select-target.sh` needs a 512-byte
+  fixture anyway, since no real board will exercise that arm.
+- **`zram0` enumerates as an install candidate** on every board — `removable=0`, `ro=0`, so rule 2
+  does not exclude it. Harmless today (no GPT, so `require userdata` refuses it), but
+  `select-target.sh` should exclude zram explicitly rather than rely on that.
+
 ### Layout variation is the normal case, not the exception
 
 Four devices are available to capture — KONKR Pocket FIT and AYANEO Pocket S2 (SM8650), AYANEO
 Pocket ACE and AYN Odin 2 (SM8550) — and their internal layouts are expected to differ. Two
 consequences, both of which shape Phase 3 rather than Phase 0:
+
+> **Confirmed by the captures, with the axis identified: layout tracks the VENDOR, not the SoC.**
+> S2 vs ACE is a different SoC generation with the same table; ACE vs Odin 2 is the same SoC with
+> different tables. Those two pairs cross-cut, which is what isolates the variable. `userdata` is
+> `/dev/sda11` on the AYANEO-family boards (KONKR is an AYANEO sub-brand) and **`/dev/sda17`** on
+> the Odin 2, which carries six names no AYANEO board has: `nvdata1/2`, `qpdata1/2`,
+> `reserve1/2`. So **any rule keyed on partition index is already broken** — identification by
+> label is not merely preferable, it is required. `reserve1`/`reserve2` are also exactly the kind
+> of generic OEM name a deny list cannot anticipate on an uncaptured board, which is concrete
+> support for span containment being the primary defence rather than the name list.
 
 - **`docs/internal-storage.md` is a set of per-board sections, never one canonical table.**
   `probe-internal.sh` puts the board in its H1 so captures concatenate. `disk-rules.conf` is
@@ -153,6 +185,40 @@ literal name. If any board calls its data partition something else, the rule ref
 actually support — which is safe but wrong. If the captures disagree, `require` becomes a
 per-board name rather than a constant, resolved from `devices/*.conf`.
 
+> **Checked, 2026-08-05: it holds on all four.** `require` stays a constant. Re-open only if a
+> fifth board disagrees.
+
+### A disk already carrying a THIRD-PARTY install — an open Phase 3 decision
+
+Found on the Pocket FIT, which has an internal ROCKNIX installation: `userdata` shrunk to 64 GiB
+with `ROCKNIX` (2 GiB vfat) and `STORAGE` (380 GiB ext4) appended after it. The three sum to the
+S2's stock `userdata` exactly, so that distribution performs the same carve this plan describes —
+useful evidence that the mechanism is sound in the field, on this hardware.
+
+**Policy, decided 2026-08-05: REFUSE, and the user removes the other distribution first.** Taking
+over `STORAGE` was rejected — it would mean deleting a partition we did not create, which breaks
+the "exactly one pre-existing partition is modified" invariant the whole safety model rests on.
+
+**The mechanism does not yet implement that policy, and this is the part to build.** Today the FIT
+is refused only by accident of proportions: rule 6 fires because `STORAGE` (380 GiB) is larger than
+`userdata` (64 GiB), so label and size disagree. Reverse the proportions — an install that left
+`userdata` at 300 GiB and took 100 — and `userdata` is still the largest, rule 6 passes, and we
+**succeed**: `ROCKNIX`/`STORAGE` sit outside `[userdata_start, userdata_end]`, so span containment
+protects them by construction and our eight partitions lay down inside the shrunken `userdata`
+quite happily. The result is one disk carrying Android, another distro and NovaDeck, three of them
+believing they own the boot chain, with no rule having objected.
+
+So the refusal needs its own check: **any partition on the target disk that is neither
+OEM-recognised nor ours → refuse and name it.** That check also generalises to a distro we have
+never captured, where a name list would not.
+
+It must be reconciled with rule 4, which deliberately *reports* an unrecognised name rather than
+refusing, so uncaptured boards still install. Both are right in their own case, and the
+distinction is roughly "an unknown OEM partition" versus "a foreign rootfs/boot pair" — resolving
+that is Phase 3 design work, not something to guess at here. Note also that the refusal message
+must say what is true: "this disk already carries another Linux installation, remove it first",
+never rule 6's "contradiction about a device we do not understand".
+
 ---
 
 ## Phase 1 — Partition identity: kill the PARTLABEL coin flip
@@ -171,12 +237,29 @@ then nondeterministic across **five** sites, not one:
 The `grow-home` one is the worst: it would run `systemd-repart` + `resize2fs` on the
 **wrong disk**. One mechanism must cover all five.
 
-### 1a. Boot-time PARTUUID derivation in stage 2 — LANDED, offline-green, HW-UNVALIDATED
+### 1a. Boot-time PARTUUID derivation in stage 2 — LANDED + HW-VALIDATED (2026-08-05)
 
 `probe` is in `MODULES`, the config derives all three PARTUUIDs with a `"none"`-aware guard and an
 announced PARTLABEL fallback, `novadeck.slot=` is on the cmdline, and the initramfs reads it.
-`test-stage2-grub.sh` covers it (167 assertions, incl. the module list). **The gate below has not
-been run**, so 1b/1c stay open and nothing in Phase 3 may proceed on this.
+`test-stage2-grub.sh` covers it (167 assertions, incl. the module list).
+
+**Validated on four boards** — Pocket S2, Pocket ACE, Odin 2, Pocket FIT — each booting
+`root=PARTUUID=` / `novadeck.var=` / `novadeck.efi=` with `novadeck.slot=A`, `/run/novadeck/boot`
+reporting `slot=A` with all three devices resolved, and **no fallback message on any of them**
+(user-confirmed on-screen, corroborated by `/proc/cmdline`).
+
+Three things that validation does NOT cover, so the Phase 1 gate below is still open:
+
+- **Slot B has not been booted.** `grub-b.cfg` is generated by the same code path and asserted by
+  the same tests, so the risk is low — but low is not zero and the gate says both slots.
+- **No OTA has run** against a PARTUUID cmdline. `post-install.sh` reinstalls the build-time
+  `grub.cfg`, which is exactly what should keep the derivation correct; that is a prediction, not
+  a result.
+- **The PARTLABEL fallback arm has never fired in the field.** It is offline-asserted only. Its
+  whole job is to run when something has already gone wrong, which is the worst time to discover
+  it is broken.
+
+1b and 1c remain open regardless, and nothing in Phase 3 may proceed on this.
 
 `probe --part-uuid` exists in our tree (`work/grub/src-grub/grub-core/commands/probe.c:50`),
 formats lowercase via `%pG` — exactly the form `findfs PARTUUID=` and the kernel want — and

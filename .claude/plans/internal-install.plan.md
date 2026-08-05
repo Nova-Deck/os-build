@@ -72,9 +72,17 @@ to head this list is closed** — the ROCKNIX ABL is a chooser, not a fixed bran
 A read-only `install/probe-internal.sh`, run from a dev card over SSH, dumping to
 `docs/internal-storage.md`:
 
-1. **LUN topology** — `lsblk`, and for every internal disk `sgdisk -p`, `sfdisk --dump`,
-   `/sys/block/*/{removable,ro,size}`, the UFS `wwid` and LUN number. Which LUN carries
-   `super`/`userdata`/`metadata`, and whether it is exclusively Android data.
+1. **LUN topology** — `lsblk`, and for every internal disk `sfdisk --dump`,
+   `/sys/block/*/{removable,ro,size}`, the UFS `WWN` and LUN number (read off `lsblk`'s `HCTL`
+   column, i.e. `Host:Channel:Target:Lun`, rather than guessed from the `sdX` letter). Which LUN
+   carries `super`/`userdata`/`metadata`, and whether it is exclusively Android data.
+
+   > **Not `sgdisk`.** An earlier draft of this item specified `sgdisk -p`; gptfdisk is absent
+   > from the novadeck rootfs (it is one of the three packages the *installer* image must add), so
+   > a probe built on it would fail on the very device it inspects — the `cmp`-in-`post-install.sh`
+   > class of bug. `install/probe-internal.sh` therefore runs on an existing dev card with no
+   > rebuild, using `sfdisk`/`lsblk`/`findmnt` only, and picks `sgdisk` up opportunistically if it
+   > is ever present.
 2. **The exact OEM partition name set** per SoC, so `install/disk-rules.conf` is written
    against reality and not against recalled AOSP naming. At least one SM8550 and one
    SM8650 device.

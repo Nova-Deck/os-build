@@ -363,10 +363,24 @@ inert until selection is solved.
 
 **What makes Steam select the FEX compat tool?** Candidates, cheapest first:
 
-1. An explicit `CompatToolMapping` entry for the app in `config/config.vdf`. Note this may
-   not even be the right mechanism: the tool declares `compatmanager_layer_name "fex"` and
-   `filter_exclusive_priority 2`, which reads like a **layer applied by filter**, not a
-   user-selectable tool in the per-game dropdown.
+1. ~~An explicit `CompatToolMapping` entry~~ — **tried 2026-08-05, not possible.** Steam
+   never registered FEX as a compat tool at all: `compat_log.txt` contains **zero**
+   occurrences of `3127680`, and the only registrations are
+   `proton-cachyos-11.0-arm64`, `proton-ge-arm64`, `steamlinuxruntime` and
+   `steamlinuxruntime_soldier`. A mapping would name a tool the client does not know.
+
+   The suspicion above was right, and the mechanism mismatch explains it. Tools registered
+   through `compatibilitytools.d` declare `from_oslist`/`to_oslist` — Proton is
+   `windows`→`linux`, and a native Linux title matches no such tool. Valve's FEX
+   `toolmanifest.vdf` declares **neither**; it carries `compatmanager_layer_name "fex"` and
+   `filter_exclusive_priority 2`. That is the **layer** mechanism, applied automatically by
+   the compat manager, not the user-selectable tool mechanism.
+
+   So the lever was never mapping. It is whatever makes the client emit
+   `STEAM_COMPAT_EMULATOR` for a foreign-architecture title — candidates 2 and 3 below.
+   Fabricating a `compatibilitytools.d` entry with invented `from_oslist`/`to_oslist` would
+   register *something*, but it would not be Valve's design and is not evidence about the
+   supported path.
 2. Client-side gating — a newer client, or a flag the shipping client does not set.
 3. Frame-only enablement, in which case adoption waits on hardware release.
 

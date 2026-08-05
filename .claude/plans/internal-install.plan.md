@@ -140,12 +140,13 @@ consequences, both of which shape Phase 3 rather than Phase 0:
   **every** captured GPT — a rule tightened for one board and silently breaking another is the
   failure this guards.
 - **`fs-overlay/usr/lib/novadeck/devices/` already carries 14 boards.** Ten of them will have no
-  capture. The installer must therefore treat an uncaptured layout as a **refusal, not a guess**:
-  rule 4 below (any partition name matching no rule → refuse and print it) is what makes that
-  safe, and it is load-bearing precisely because the capture set will always be incomplete. An
-  uncaptured board declining to install is the correct outcome when EDL is the only recovery.
-  Since the probe is read-only, it is also safe to hand to an owner of one of those boards to
-  contribute a capture.
+  capture, and the capture set will always be incomplete. This is why identification plus **span
+  containment** replaced the name list as the primary defence (see Phase 3): an uncaptured board
+  installs *correctly by construction* rather than being refused for lack of a fixture, because
+  everything outside the identified `userdata` extent is protected geometrically regardless of what
+  it is called. Captures still matter — they author the `deny` net, settle per-board naming, and
+  serve as test fixtures — but the design no longer depends on having one per board. Since the
+  probe is read-only, it is safe to hand to an owner of any uncaptured board.
 
 **One naming risk to check across the four captures:** rule 6's `require userdata` assumes that
 literal name. If any board calls its data partition something else, the rule refuses a device we
@@ -314,8 +315,10 @@ mechanically sound "preserve dual boot" is therefore:
 into space that partition gave up. Nothing else on the disk is read for content, written, moved,
 or resized.** Two mechanisms enforce it and nothing else is relied upon:
 
-1. The `deny` gate below, checked twice by independent rules (§ `select-target.sh` items 4 and 5),
-   so a typo widening one rule still cannot open a write path.
+1. **Span containment** — every sector written lies inside the identified `userdata` extent, so
+   everything else on the disk is protected geometrically rather than by being named. Independently
+   corroborated by the `deny` list (§ `select-target.sh` items 4 and 5), so a typo widening one
+   rule still cannot open a write path.
 2. A **big, unmissable consent screen** (§4d) naming the one partition and its real size.
 
 There are no backups, no restore path, and no undo — see rule 10 for why each was rejected
@@ -325,7 +328,48 @@ The new `userdata` size is a user choice on the confirm screen (default 16 GiB, 
 with our minimum from `genpart.sh --min` (~15 GiB) plus a `HOME_FLOOR` of 8 GiB enforced
 against the remainder.
 
-### `install/disk-rules.conf` — the brick gate
+### Identification, then geometry — the primary mechanism
+
+Revised 2026-08-05. **Only one partition matters: `userdata`.** Everything else on the disk is
+something we never touch, so the design identifies that one partition and then constrains
+ourselves to its extent — rather than enumerating everything dangerous and allowing the rest.
+
+**The paramount assertion is geometric, not nominal:**
+
+> **Every sector written falls inside `[userdata_start, userdata_end]` of the partition we
+> identified.** The shrunk `userdata` and all 8 of our partitions are laid inside that span.
+
+This protects `xbl`, `abl`, `devinfo`, `super` and every OEM partition *by construction, on any
+layout* — captured or not — because they are outside the span. It is strictly stronger than a name
+list, which can only protect what it knows to name, and it is what makes the ten uncaptured boards
+in `devices/` safe rather than merely refused. Any write whose target sector range is not wholly
+contained is a bug that aborts before issuing, not a rule that can be widened by a typo.
+
+**Identifying `userdata` uses two signals, and they are not interchangeable:**
+
+1. **Label first** — `userdata`, plus any per-board aliases the Phase-0 captures reveal.
+2. **Size as a cross-check, never a substitute.** Assert the label-matched partition is also the
+   largest. If label and size disagree, that is a contradiction about a device we evidently do not
+   understand → refuse and print the table. Corroboration is worth far more here than fallback.
+3. **No label match → offer the dominant partition, gated on §4d** (decided 2026-08-05). Only when
+   one partition is unambiguously dominant — **>50% of the disk and >2× the runner-up** —
+   otherwise refuse. This is safe precisely because §4d already names the specific partition and
+   its real size to the user: *"we believe your Android data is partition 23, 96.4 GiB; everything
+   on it will be erased."* A human confirming a named partition is a stronger check than any rule
+   we would write, and it is what lets a board we have never captured install at all.
+
+**Ordering is load-bearing: the already-NovaDeck check (rule 8) runs BEFORE any size heuristic.**
+On a reinstall the largest partition is our own `/home`, not `userdata`, so a size test reached
+first would carve the user's game library. Identity of the disk is settled before size is
+consulted.
+
+### `install/disk-rules.conf` — the second net
+
+**Demoted 2026-08-05 from "the brick gate" to a second, independent net.** Span containment above
+is what actually prevents a brick; this list catches the case where identification itself went
+wrong, and it is deliberately redundant with it. Keep it — two mechanisms that fail differently
+are the point — but do not let it drift back into being the primary defence, because a name list
+cannot cover layouts nobody has captured.
 
 Glob-matched against GPT partition names (case-folded, `_a`/`_b`/`bak` suffixes normalised),
 written against the Phase-0 captures:
@@ -347,11 +391,17 @@ This file is the thing to review as if it were the whole feature.
 2. `/sys/block/X/removable == 0`, `ro == 0`. **The SD card is never written** — assert it.
 3. `sgdisk -v` reports zero problems and both GPT headers are present. A damaged backup GPT
    is refused: we cannot distinguish "damaged" from "not what we think it is".
-4. Every partition name matches an `allow`/`deny`/`sacrifice` rule. Any unmatched name → refuse
-   and print it.
-5. No `deny` match in the span we intend to write — evaluated **independently** of (4), so a
-   typo widening a rule still cannot open the brick path.
-6. `require` satisfied.
+4. **Span containment** — every sector we intend to write lies inside the identified `userdata`
+   extent. This is the assertion that actually prevents a brick; (5) and (6) are independent
+   corroboration, not the defence. An unmatched partition name no longer refuses outright, since
+   uncaptured boards are expected: it is reported, and it is harmless as long as it sits outside
+   the span.
+5. No `deny` match inside the span we intend to write — evaluated **independently** of (4), so a
+   typo widening a rule still cannot open the brick path, and a containment bug still meets a
+   name check.
+6. `userdata` identified per "Identification, then geometry" above: label match cross-checked
+   against largest-partition, or a §4d-gated offer of an unambiguously dominant partition.
+   Contradiction between label and size → refuse.
 7. Free space after the shrunk `userdata` ≥ `genpart.sh --min` + `HOME_FLOOR`.
 8. **Idempotency:** if the disk already carries the NovaDeck 8, skip 4–6 — it is already ours,
    and a re-run is a re-lay + re-write, which is the correct semantics for "reinstall".
@@ -393,10 +443,28 @@ This file is the thing to review as if it were the whole feature.
 ### Tests
 
 `install/test-select-target.sh` — this is where the assertion budget goes, ≥60 cases against
-the **real captured GPTs** from Phase 0: data LUN accepted; the same tree with `abl` present
-→ refused; unnamed GPT → refused; damaged backup GPT → refused; the boot SD → refused;
-too-small remainder → refused; two eligible LUNs → refused; already-NovaDeck → accepted via
-(8); every `deny` name individually → refused.
+the **real captured GPTs** from Phase 0, and green against **every** captured board rather than
+one: data LUN accepted; the same tree with `abl` present → refused; unnamed GPT → refused; damaged
+backup GPT → refused; the boot SD → refused; too-small remainder → refused; two eligible LUNs →
+refused; already-NovaDeck → accepted via (8); every `deny` name individually → refused.
+
+The identification and containment rules need their own cases, since they are now the primary
+defence:
+
+- **Containment is the one to attack.** Synthesise a layout where our 8 partitions would not fit
+  inside `userdata`'s extent and assert the abort fires *before* any write is issued. Then mutate
+  a start/length by one sector in each direction and assert it still fires — an off-by-one that
+  escapes the span is the whole failure mode.
+- Label present but **not** the largest partition → refused as a contradiction.
+- Label absent, one partition >50% and >2× the runner-up → **offered**, and the §4d text quotes
+  that partition's real name and size.
+- Label absent, two partitions of similar size → refused, both listed.
+- **Reinstall ordering:** an already-NovaDeck disk whose `/home` is the largest partition →
+  accepted via (8) as a reinstall, and the size heuristic is never consulted. This is the case
+  that destroys a game library if the ordering regresses, so it gets an explicit test rather than
+  relying on rule order being read correctly.
+- An OEM name absent from every capture, sitting outside the span → **accepted**, reported, not
+  refused. This is the uncaptured-board case and it must not regress into a refusal.
 
 ### Blast radius, stated plainly
 

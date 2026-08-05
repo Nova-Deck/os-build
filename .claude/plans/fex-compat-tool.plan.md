@@ -411,8 +411,39 @@ Three things that together settle it:
   `didn't provide graphics_provider.json` warning — the message it prints when the manifest
   is absent — so `setup_rootfs()` found our manifest and took the OS-provided path.
 
-Note it runs **thunked**, pointing at Valve's own thunk directories, unlike our thunkless
-system config.
+**Correction — it does NOT run thunked.** An earlier reading of this plan inferred "thunked"
+from `ThunkHostLibs`/`ThunkGuestLibs` being set. Those only say *where* thunks live.
+Enablement is the separate `ThunksDB` object, and the generated `Config.json` has **none** —
+`generate_app_config()` populates it only when `STEAM_COMPAT_FEX_CONFIG` carries
+`ThunksDB_GL:1` / `ThunksDB_Vulkan:1`, which Steam supplies per title. So **Valve's default
+is thunkless too**, exactly like our system config, and per-game thunk enablement comes from
+a Valve-curated database we do not have.
+
+That retires one of the plan's stated upsides: adopting the tool does **not** by itself undo
+July's thunkless concession. It only makes the per-title database available *if* Steam
+selects the tool.
+
+### Running an actual game this way is inconclusive
+
+Super Meat Boy launched under the tool (`FEX-Emu/usr/bin/FEX ./amd64/SuperMeatBoy`, plus its
+own `FEXServer`) and genuinely rendered — `drm-engine-gpu` climbed from 1.03s to 1.95s over
+about a minute, so the guest's x86 Mesa is driving the Adreno through FEX's ioctl
+translation. But it sat on the splash screen at ~14% of one core and never reached gameplay.
+
+Two reasons this run cannot be compared against the baseline, both artifacts of bypassing
+Steam rather than defects in the tool:
+
+- **`[API loaded no]`** — the Steam API never loaded. Direct invocation skips
+  `steam-launch-wrapper` and `reaper`, so the title very plausibly waits on a Steam API
+  handshake that will never complete. A game stuck at its splash with no Steam API is the
+  expected shape of that.
+- **Audio had to be disabled outright.** OpenAL could not connect to PipeWire
+  (`res: -22`) and the game died on it twice; it only got past with `ALSOFT_DRIVERS=null`.
+  Steam's real chain wraps the game in `pw-audio-namespace`, which this path skips.
+
+So Phase 2's gate — both titles running **out of the box**, compared against the baseline —
+remains untested, and cannot be tested by direct invocation. It needs Steam to select the
+tool, which is the standing blocker.
 
 **So everything on our side is ready.** The provider is correct, the tool consumes it, and
 x86 execution works. The *only* remaining gap is that Steam does not select the tool on its

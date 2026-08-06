@@ -392,7 +392,7 @@ exists twice-over already; the goal is one copy.
 
 New `fs-overlay/usr/lib/novadeck/install/lib-slotwrite.sh`, sourced by
 `fs-overlay/usr/lib/rauc/post-install.sh` so the OTA path and the install path cannot drift:
-`mint_partsets`, `write_efi_partition <mnt> <slot> <bootdir>`, `refresh_esp_stage1`,
+`mint_partsets`, `write_efi_partition <mnt> <slot> <bootdir>`, `write_parts_env <mnt>`, `refresh_esp_stage1`,
 `seed_var <dev> <slot> <seedtar>`, `mkfs_esp`.
 
 | artifact | source of truth |
@@ -402,11 +402,49 @@ New `fs-overlay/usr/lib/novadeck/install/lib-slotwrite.sh`, sourced by
 | ESP `grubenv` | **new**: `boot/grub.sh` emits a pristine `grub-editenv`-created grubenv into `out/boot/`; the device just `cp`s it (removes a `grub-editenv` dependency from the device) |
 | ESP `SteamOS/conf/A.conf` | `steamos-bootconf` (`bc create --image A` + `set-mode reboot`) — reuse, don't re-emit `make-sdcard.sh`'s heredoc |
 | efi-a/efi-b stage 2 | `/usr/lib/novadeck/boot/` of the installed root — `post-install.sh` step 3, factored out |
+| efi-a/efi-b `parts.env` | **new**: written by hand as a raw env block from the indices `genpart.sh --append` just laid down — see below |
 | efi partsets | **minted from the NEW partition UUIDs** — `post-install.sh` copies them from the *running* `/efi`, which is a different disk here. `make-sdcard.sh`'s `mkpartset`/`mkefi` is the logic; extract it |
 | var-a / var-b | **new**: `assemble-rootfs.sh` also writes its `$varstage` to `/usr/lib/novadeck/var-seed.tar.zst` inside the root (`work/base/var` is ~13 MB, negligible in a 7 G slot) |
 | rootfs-a | the signed RAUC bundle (Phase 4) |
 | rootfs-b | nothing — left empty and **no `B.conf`**, matching the release-card shape so steamcl sees one image and retries A rather than switching (`make-sdcard.sh`'s `mkconf` site explains why). First OTA fills B |
 | `/home` Steam seed (~1 GB) | **new published artifact** `steam-seed-<pin>.tar.zst`, sha256 verified against the pin **baked into the installer image**, not against `latest.json` (explicitly not a trust boundary). Folding it into the bundle instead does not fit: rootfs-a is 7 G with ~0.9 G margin |
+
+### `write_parts_env` — emit the env block directly, do not reach for `grub-editenv`
+
+`parts.env` (phase 1b) is the map stage 2 reads before it can address anything, and unlike every
+other artifact here its contents are **per-disk**: the indices come from what `genpart.sh --append`
+just laid down on this specific device. So the trick used for the ESP grubenv — build a pristine
+block at image-build time and have the device `cp` it — does not transfer. It has to be generated
+on the device, at install time.
+
+**`grub-editenv` is not on the shipped image** (confirmed 2026-08-06: no `grub` in
+`customize-base.sh`'s `PKGS`, no `/usr/bin/grub-editenv` in the built base). Adding it to the
+*installer* package list would be free — that is a separate root — but it is not worth the
+dependency, because the format is trivial and fixed:
+
+```
+# GRUB Environment Block\n     the signature — 24 chars + \n, byte-exact (envblk.c memcmp's it)
+# WARNING: Do not edit …\n     what grub-editenv writes; a comment, so optional
+nd_esp=12\n                    one key=value line each
+…
+####…                          '#' padding out to exactly 1024 bytes
+```
+
+`grub_envblk_iterate` starts immediately after the signature and skips any line beginning with `#`,
+which is why both the warning line and the tail padding are inert. Only the signature is load-bearing
+and it has to match byte for byte.
+
+So `write_parts_env` is a `printf` plus a pad, with one assertion that the result is exactly 1024
+bytes — anything else is silently unreadable to `load_env`. Writing it by hand also keeps the
+installer's dependency list honest: it already needs `gptfdisk` and `dosfstools` that the shipped
+image lacks, and this is one fewer.
+
+`install/test-install.sh` gets a case: generate a block from a captured GPT's indices, and assert
+the real `grub-editenv list` reads back every key — that is the check that the hand-rolled format
+matches what GRUB actually parses, and it runs on the host where `grub-editenv` exists. Assert the
+1024-byte length too: `grub_envblk_open` only requires the signature to fit, so a truncated block
+still reads back fine here and would differ from what `make-sdcard.sh` writes on a card. Matching
+the card's shape byte for byte is what keeps one reader honest about two writers.
 
 Also in this phase:
 - `images/customize-base.sh:190` — no change (installer tooling must **not** enter the shipped

@@ -191,7 +191,13 @@ PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno v
 
 # Dev-only packages — installed ONLY under NOVADECK_DEV=1, NEVER in a release base.
 # On-device bring-up tools: evtest reads raw /dev/input events; usbutils provides lsusb.
-DEV_PKGS=(evtest usbutils)
+# xorg-xprop + xorg-xwininfo: read the ACTUAL attributes of a window inside gamescope's nested
+# Xwayland. Added 2026-08-06 because the Steam bootstrap update dialog is created and shown
+# (`Create window` / `Show window`) yet gamescope never selects it as focus and commits zero flips,
+# and with no X tools on the image the only way to ask "is it override-redirect / IsViewable /
+# what size" was to infer it from gamescope's source. Inference is what made that investigation
+# expensive; measuring is cheap. DEV-only — a release card has no business carrying X debug tools.
+DEV_PKGS=(evtest usbutils xorg-xprop xorg-xwininfo)
 
 # Precompiled external packages: every packages/<name>/prebuilt.pin (url + sha256 + strip)
 # is fetched on the host and extracted into the base. PREBUILT_DIR stages the verified

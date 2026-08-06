@@ -98,11 +98,39 @@ them. The full rationale otherwise lives in the linked memories and commit histo
     `// bootstrapper is override redirect :(`), and the discard is the `already_exists` path at
     `:7302-7320` — a commit sits in `w->commit_queue` unconsumed, so every later commit of the same
     buffer is dropped, which is what a never-painted window looks like.
-  - **PRIME SUSPECT, untested: the card predates the gamescope bump.** The affected unit logged
-    `gamescope version 3.16.23.2+`; `packages/gamescope/PKGBUILD` is now at **3.16.25**, bumped the
-    same day (`afabca8`) precisely because the older WSI present path *intermittently deadlocks on
-    the first frame*. A newly-shown window that commits and is never presented is that same class of
-    failure. **Re-test on a card built from current main BEFORE investigating gamescope further.**
+  - **RULED OUT 2026-08-06: the gamescope bump is NOT the fix.** Reproduced identically on a dev
+    card at `afabca8` running **3.16.25+** — `Using update UI: glx` / `Create window` /
+    `Show window` at 15:33:07, panel black for the whole 3-minute install. The 3.16.25 first-frame
+    WSI theory is dead; do not re-test it.
+  - **SHARPENED ROOT CAUSE — gamescope commits ZERO atomic flips while the dialog is the only
+    window.** Measured live on that boot with `gamescopectl backend_info` (the tool is on the image;
+    run it as deck with `XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=gamescope-0`):
+    | when | Total Presents Queued |
+    | --- | --- |
+    | during the update, after `Show window` | **0** |
+    | after Big Picture maps | **1484** |
+    `m_uQueuedPresents` is incremented per atomic flip commit (`DRMBackend.cpp:3996`), so this is
+    literally "nothing was ever sent to the panel", not "the wrong thing was sent". With
+    `gamescopectl log_focus debug`, the focus log names exactly ONE window for the entire session:
+    `Setting keyboard focus to: Steam Big Picture Mode (1c00015)`. The update UI window is never
+    selected as focus, gamescope therefore has nothing to composite, and it does not flip at all.
+  - **What is NOT yet known: why it is excluded.** `GetGlobalPossibleFocusWindows()`
+    (`steamcompmgr.cpp:3739`) requires `map_state == IsViewable`, `c_class == InputOutput` and
+    `opacity > TRANSLUCENT`, and skips `isSysTrayIcon`/`isOverlay`/`isExternalOverlay`; the
+    appID-only filter at `:3761` is gated on `SteamControlled` and our default is `SingleApplication`
+    (`backend.cpp:20`), so it should not apply. With one candidate, `:3583-3590` would pick it as
+    `vecPossibleFocusWindows[0]`. Something upstream of that is dropping it — the leading candidate
+    remains that the window is override-redirect (gamescope's own `:8650` comment,
+    `// bootstrapper is override redirect :(`), but that is not yet demonstrated on our path.
+  - **Next step is instrumentation, not another version bump.** `xorg-xprop` + `xorg-xwininfo` are
+    now in `DEV_PKGS`, so the next repro can read the window's actual attributes
+    (`xwininfo -root -children`, `xprop -id <win>`) while the dialog is up, instead of inferring
+    them from source. Re-arm a repro with the manifest trick below.
+  - **How to force a client update on demand (no waiting for Valve).** In
+    `~/.local/share/Steam/package/`, edit `…linuxarm64.manifest`'s `"version"` DOWN and
+    `rm -f *.installed`, then reboot TWICE: Steam stages a pending update at boot N (its startup
+    check runs before the network is up, all hosts fail `http error 0`, and the background loop
+    downloads afterwards) and installs it at boot N+1. The install is what shows the dialog.
   - **Backend differs from the host harness, and that matters.** Under Xvfb in the build container
     the bootstrapper selects `xwin`; on device it selects `glx`. Anything reproduced host-side is
     therefore exercising a different code path — the device picks the GL backend because

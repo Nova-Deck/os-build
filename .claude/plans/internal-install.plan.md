@@ -291,11 +291,13 @@ reporting `slot=A` with all three devices resolved, and **no fallback message on
 - The `/var` copy carried the machine-id across, `mac-wifi` was correctly deleted so the MAC
   re-derived to the same value, and the device returned on the **same IP**.
 
-One thing still unexercised: **the PARTLABEL fallback arm has never fired on hardware.** It is
-offline-asserted only, and its whole job is to run when something has already gone wrong — the
-worst time to discover it is broken. Worth forcing once, by building a `grubaa64.efi` without
-`probe` in `MODULES` and confirming the device boots with the two-line message rather than a
-black screen.
+**The PARTLABEL fallback arm has now FIRED on hardware — 2026-08-06, Pocket S2.** It was
+offline-asserted only until then, and its whole job is to run when something has already gone wrong,
+which is the worst time to discover it is broken. Forcing it turned out not to need the planned
+`grubaa64.efi` built without `probe`: with 1b landed, setting `nd_var_a` in `parts.env` to a
+nonexistent partition index makes `probe --part-uuid` return the literal `none`, the three-way guard
+rejects it, and all three specs drop to PARTLABEL. The device booted, printed the two-line message,
+and came up with `root=PARTLABEL=novadeck-root-A` on `/proc/cmdline` — no black screen.
 
 1b and 1c remain open regardless, and nothing in Phase 3 may proceed on this.
 
@@ -322,24 +324,81 @@ want. Keep the existing `else` arm loud and falling back to the `PARTLABEL=` for
 that becomes the explicit `novadeck.slot=` (stage 2 knows it statically). `/var/lib/novadeck/slot`
 stays the independent witness.
 
-### 1b. Variable partition indices, for dual boot
+### 1b. Variable partition indices, for dual boot — LANDED (2026-08-06), HW pending
 
 Our 8 partitions will not be at indices 1..8 on a disk that keeps Android. GRUB has no
 arithmetic and `probe` has **no `--part-label`** (verified: only `driver/partmap/fs/fs-uuid/label/part-uuid`),
 so indices cannot be discovered in stage 2.
 
-Mechanism: the installer writes the eight indices into the ESP's existing grubenv, which
-stage 2 already loads for `saved_entry`:
+Mechanism: whoever creates the partitions writes the eight indices into a GRUB env block, and
+stage 2 reads them back before it addresses anything.
+
+**Correction to this section's original sketch, and the reason it matters.** The map was to live in
+the ESP's existing grubenv. **It cannot: stage 2 must locate the ESP before it can read that file,
+and the ESP's index is one of the eight numbers in it.** The map therefore lives in its own block on
+**the slot's own efi partition** — `($root)/EFI/steamos/parts.env`. `$root` is the partition steamcl
+chainloaded stage 2 from, so it is the one place reachable with no index at all. Do not move this
+back to the ESP.
+
+Durability was checked rather than assumed: the efi partitions are **not RAUC slots** (`system.conf`
+declares only `rootfs.0`/`rootfs.1`; `manifest.raucm.in` carries only `rootfs.img`), and
+`post-install.sh` mounts the target efi partition and `cp`s named paths onto it — no `mkfs`, no
+delete. `/var`, by contrast, is reformatted on every update, so nothing of ours could ever live
+there. A comment at that site now records the constraint.
 
 ```
-load_env -f ($esp)/EFI/steamos/grubenv saved_entry nd_esp nd_efi_a nd_efi_b nd_root_a nd_root_b nd_var_a nd_var_b nd_home
-if [ -z "$nd_root_a" ]; then set nd_esp=1; set nd_efi_a=2; … ; fi   # defaults from partition-table.txt
-set slotroot="$bootdisk,gpt$nd_root_a"
+set esp_idx=1                    # defaults from partition-table.txt, per slot
+set root_idx=4
+set var_idx=6
+if [ -f ($root)/EFI/steamos/parts.env ]; then
+  load_env -f ($root)/EFI/steamos/parts.env nd_esp nd_efi_a … nd_home
+  if [ -n "$nd_esp" -a -n "$nd_root_a" -a -n "$nd_var_a" ]; then   # ALL-OR-NOTHING
+    set esp_idx="$nd_esp"; set root_idx="$nd_root_a"; set var_idx="$nd_var_a"
+  else echo "…incomplete…"; sleep 3; fi
+fi
+set esp="$bootdisk,gpt$esp_idx"
 ```
 
-Defaults come from `partition-table.txt` at generation time, so an SD card is unchanged and
-never reads the new keys. `post-install.sh` does not rewrite grubenv, so the values survive
-OTA. Testable offline in `images/test-stage2-grub.sh`.
+Three properties worth keeping: the `[ -f ]` guard makes a medium without the file *silent* (that is
+every card built before this landed); the upgrade is all-or-nothing, so a partial file can never mix
+a root from one layout with a `/var` from another; and the loaded key names differ from the consumed
+`*_idx` names because `load_env` cannot rename — loading straight into `esp_idx` would destroy the
+default before it could be judged.
+
+**`images/make-sdcard.sh` seeds it on both efi partitions with the card's real indices.** On a card
+those equal the defaults, so it changes no behaviour — the point is that the card then exercises the
+same lookup the internal install depends on, on every boot, rather than shipping that path untested
+until the installer exists. `images/verify-card.sh` asserts the seeded values against
+`partition-table.txt`, since a wrong value would otherwise be invisible at boot.
+
+Offline coverage in `images/test-stage2-grub.sh` (195 assertions, was 167): the index variables in
+the device specs, the defaults matching the table, the `[ -f ]`-guarded load from `($root)`, per-slot
+key selection with the other slot's keys never consulted, the single all-or-nothing condition, and
+both orderings (defaults before the load, load before the first use). Both a baked-index regression
+and a wrong-slot-key regression were confirmed to fail the suite.
+
+**HW-VALIDATED 2026-08-06 on a Pocket S2 — all four arms, from one card, no reflash.** `/efi` is
+mounted `rw`, so `parts.env` is editable in place over SSH; the image ships no `grub-editenv`, so the
+block was rewritten by hand, which road-tested the Phase 2 `write_parts_env` format on real hardware
+through GRUB itself.
+
+| arm | edit | result |
+|---|---|---|
+| normal | none | no message; `root=PARTUUID=5df235fc-…`, all three devices resolved, `novadeck.efi=` matching the build log's efi-A uuid |
+| **file is authoritative** | `nd_var_a=9` (nonexistent) | `probe` → `none`, guard rejects, **all three specs drop to PARTLABEL** — a card whose map equals its defaults can only produce that by having READ the file |
+| incomplete | `--unset nd_var_a` | the "incomplete" message, then **PARTUUID with the identical three uuids** — the all-or-nothing guard rejected the whole map rather than mixing a filed `nd_root_a` with a defaulted `var` |
+| absent | `rm parts.env` | completely silent, PARTUUID — the `[ -f ]` guard, i.e. every card built before this change |
+
+The poisoned-value arm is the one that carries the proof, and it doubles as the PARTLABEL fallback's
+first hardware firing (§1a). The incomplete arm is the one that would have caught a partial map: a
+leaked `nd_root_a` with a defaulted `var` would have shown a different `novadeck.var=` uuid, and it
+showed the same one index 6 gives.
+
+**One product finding, fixed the same day:** 3s is too short to read a message in the boot font on a
+Pocket S2 panel. All four diagnostic arms now `sleep 10`, asserted by two new cases. Waiting for a
+keypress instead was rejected — `sleep --interruptible` is ESC-only, the power button never reaches
+GRUB's EFI console input, and these arms fire on users' devices, where blocking on input with no
+keyboard makes a bootable device look bricked.
 
 ### 1c. A disk-scoped device map in the initramfs
 

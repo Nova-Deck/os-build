@@ -187,13 +187,69 @@ for slot in A B; do
     && ok "grub-$lc.cfg defaults to PARTLABEL and upgrades to PARTUUID" \
     || bad "grub-$lc.cfg sets the PARTUUID spec before the PARTLABEL default, which then clobbers it"
 
-  # partition indices must match the table this was generated from
-  grep -q "set esp=\"\$bootdisk,gpt$(part_num esp)\"" "$cfg" \
-    && ok "grub-$lc.cfg finds the ESP at gpt$(part_num esp)" \
-    || bad "grub-$lc.cfg ESP index disagrees with ${TABLE#"$ROOT"/}"
-  grep -q "set slotroot=\"\$bootdisk,gpt$(part_num "rootfs-$lc")\"" "$cfg" \
-    && ok "grub-$lc.cfg finds the root at gpt$(part_num "rootfs-$lc")" \
-    || bad "grub-$lc.cfg root index disagrees with ${TABLE#"$ROOT"/}"
+  # Partition indices. They are no longer baked into the device specs: an internal install appends
+  # our eight to the OEM's GPT at per-vendor indices, so the specs read variables and the numbers
+  # come from parts.env on this slot's efi partition, falling back to the table's own order.
+  for spec in "set esp=\"\$bootdisk,gpt\$esp_idx\"" \
+              "set slotroot=\"\$bootdisk,gpt\$root_idx\"" \
+              "probe --part-uuid --set=varuuid  (\$bootdisk,gpt\$var_idx)"; do
+    grep -qF -- "$spec" "$cfg" && ok "grub-$lc.cfg addresses by index variable: ${spec%% *} ${spec#* }" \
+      || bad "grub-$lc.cfg does not use an index VARIABLE here -- a baked index is wrong on internal: $spec"
+  done
+  # ...and the defaults behind those variables are the table's order, so a card is unchanged.
+  for kv in "set esp_idx=$(part_num esp)" \
+            "set root_idx=$(part_num "rootfs-$lc")" \
+            "set var_idx=$(part_num "var-$lc")"; do
+    grep -qx -- "$kv" "$cfg" && ok "grub-$lc.cfg defaults to: $kv" \
+      || bad "grub-$lc.cfg's index default disagrees with ${TABLE#"$ROOT"/}: expected '$kv'"
+  done
+
+  # parts.env. It is read from (\$root) -- the efi partition steamcl chainloaded us from -- because
+  # the ESP's own index is one of the numbers in it, so an ESP-resident map could not be located
+  # without already knowing what it says.
+  grep -q 'load_env -f (\$root)/EFI/steamos/parts.env ' "$cfg" \
+    && ok "grub-$lc.cfg loads parts.env from the slot's own efi partition" \
+    || bad "grub-$lc.cfg does not load (\$root)/EFI/steamos/parts.env"
+  grep -q 'if \[ -f (\$root)/EFI/steamos/parts.env \]; then' "$cfg" \
+    && ok "grub-$lc.cfg guards the load with -f, so a card without one is silent" \
+    || bad "grub-$lc.cfg loads parts.env unguarded -- every pre-existing card would print an error"
+  # Per-slot keys: slot A must take its indices from A's keys, and never from B's. The map is one
+  # file shared by both slots, so picking the wrong key is a config that mounts the other slot's
+  # /var -- the same failure the per-slot cmdline assertions above guard, one layer earlier.
+  grep -qF -- "set root_idx=\"\$nd_root_$lc\"" "$cfg" \
+    && ok "grub-$lc.cfg takes its root index from \$nd_root_$lc" \
+    || bad "grub-$lc.cfg does not take its root index from \$nd_root_$lc"
+  grep -qF -- "set var_idx=\"\$nd_var_$lc\"" "$cfg" \
+    && ok "grub-$lc.cfg takes its var index from \$nd_var_$lc" \
+    || bad "grub-$lc.cfg does not take its var index from \$nd_var_$lc"
+  if grep -qF -- "_idx=\"\$nd_root_$other\"" "$cfg" || grep -qF -- "_idx=\"\$nd_var_$other\"" "$cfg"; then
+    bad "grub-$lc.cfg takes an index from slot ${other^^}'s keys"
+  else
+    ok "grub-$lc.cfg never takes an index from slot ${other^^}'s keys"
+  fi
+  # ALL-OR-NOTHING. A file missing one key must not yield a map half from the install and half from
+  # this build -- a root from one layout with a /var from another boots something nobody assembled.
+  # So: exactly three -n tests, in ONE condition, and the three assignments only inside it.
+  n_ntest=$(grep -c -- '-n "\$nd_' "$cfg")
+  [ "$n_ntest" -eq 1 ] && ok "grub-$lc.cfg validates the loaded keys in a single condition" \
+    || bad "grub-$lc.cfg has $n_ntest conditions testing nd_* keys, expected 1 (partial maps must be impossible)"
+  n_keys=$(grep -o -- '-n "\$nd_[a-z_]*"' "$cfg" | wc -l)
+  [ "$n_keys" -eq 3 ] && ok "grub-$lc.cfg requires all 3 consumed keys before using any" \
+    || bad "grub-$lc.cfg tests $n_keys of the 3 keys it consumes"
+  n_assign=$(grep -c -- 'set [a-z]*_idx="\$nd_' "$cfg")
+  [ "$n_assign" -eq 3 ] && ok "grub-$lc.cfg upgrades all 3 indices together" \
+    || bad "grub-$lc.cfg assigns $n_assign indices from parts.env, expected 3"
+  # Defaults must be assigned BEFORE the load, or the upgrade is what gets clobbered.
+  ln_def=$(grep -n "^set esp_idx=" "$cfg" | cut -d: -f1)
+  ln_env=$(grep -n 'load_env -f (\$root)/EFI/steamos/parts.env ' "$cfg" | cut -d: -f1)
+  [ -n "$ln_def" ] && [ -n "$ln_env" ] && [ "$ln_def" -lt "$ln_env" ] \
+    && ok "grub-$lc.cfg sets the built-in indices before reading parts.env" \
+    || bad "grub-$lc.cfg reads parts.env before its defaults, which then overwrite it"
+  # The indices have to be settled before anything is addressed with them.
+  ln_use=$(grep -n 'set esp="\$bootdisk,gpt\$esp_idx"' "$cfg" | cut -d: -f1)
+  [ -n "$ln_use" ] && [ -n "$ln_env" ] && [ "$ln_env" -lt "$ln_use" ] \
+    && ok "grub-$lc.cfg reads parts.env before it addresses a partition" \
+    || bad "grub-$lc.cfg addresses partitions before parts.env is read"
 
   # THE DEVICE DERIVATION, executed rather than grepped. GRUB's `regexp` compiles with
   # REG_EXTENDED, so a POSIX ERE engine here (sed -E) is the same matcher the device runs -- which
@@ -265,6 +321,17 @@ for slot in A B; do
   grep -q '^set menu_color_highlight=white/blue$' "$cfg" \
     && ok "grub-$lc.cfg sets menu_color_highlight" \
     || bad "grub-$lc.cfg does not set menu_color_highlight"
+
+  # Every arm that prints a diagnostic must hold it on screen long enough to READ. gfxterm draws in
+  # the boot font, already at the only scale lever we have, and 3s was measured too short on a
+  # Pocket S2 panel (2026-08-06). A pause that drifts back down makes the message useless on the one
+  # class of device that has no other diagnostic at all.
+  n_short=$(grep -cE '^ *sleep [1-9]$' "$cfg")
+  [ "$n_short" -eq 0 ] && ok "grub-$lc.cfg holds every diagnostic for 10s or more" \
+    || bad "grub-$lc.cfg has $n_short arm(s) pausing under 10s — unreadable on a handheld panel"
+  n_sleep=$(grep -cE '^ *sleep 10$' "$cfg")
+  [ "$n_sleep" -eq 4 ] && ok "grub-$lc.cfg: all 4 diagnostic arms pause 10s" \
+    || bad "grub-$lc.cfg has $n_sleep 10s pauses, expected 4 (an arm lost its dwell, or gained one)"
 
   if command -v grub-script-check >/dev/null 2>&1; then
     grub-script-check "$cfg" 2>"$T/gscerr" \

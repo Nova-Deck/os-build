@@ -214,6 +214,16 @@ trap 'umount "$MNT" 2>/dev/null || true; umount "$EFIMNT" 2>/dev/null || true' E
 mkdir -p "$EFIMNT"
 mount "$dev_efi" "$EFIMNT" || die "cannot mount the target efi partition ($dev_efi)"
 
+# THIS PARTITION IS COPIED ONTO, NEVER WIPED, and that is now load-bearing rather than incidental.
+# The efi partitions are not RAUC slots (etc/rauc/system.conf declares only rootfs.0/rootfs.1, and
+# the bundle carries only rootfs.img), so the only thing that ever writes them is this block. Since
+# the phase-1b work they also carry /EFI/steamos/parts.env -- where our eight partitions actually
+# are on THIS medium, written once by whoever created them and read by the stage-2 grub.cfg before
+# it can address anything. An update must leave it alone: the running system cannot know the layout
+# of the disk it is updating any better than the installer that laid it down did, and a mkfs or an
+# rsync --delete here would take an internal install's map away and leave stage 2 falling back to
+# the SD card's 1..8. Refresh the files below by name, and add nothing that deletes.
+
 # Stage 2: this build's GRUB + its per-slot grub.cfg + the boot font (grub.cfg references it via
 # $prefix/fonts/). All three come out of the installed root, so they are the pairing with the
 # kernel the root carries.

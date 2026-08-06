@@ -47,6 +47,7 @@ P_ESP=$(part_num esp)
 P_EFIA=$(part_num efi-a); P_EFIB=$(part_num efi-b)
 P_ROOTA=$(part_num rootfs-a); P_ROOTB=$(part_num rootfs-b)
 P_VARA=$(part_num var-a);     P_VARB=$(part_num var-b)
+P_HOME=$(part_num home)
 
 ESP_UUID=$(part_uuid "$P_ESP")
 EFIA_UUID=$(part_uuid "$P_EFIA")
@@ -189,8 +190,24 @@ check_efi() {  # <partnum> <letter> <self> <other>
   local p=$1 letter=$2 self=$3 other=$4 off
   off=$(( $(start "$p") * 512 ))
   for f in ::/EFI/steamos/grubaa64.efi ::/EFI/steamos/grub.cfg \
-           ::/EFI/steamos/fonts/dejavu-mono.pf2; do
+           ::/EFI/steamos/fonts/dejavu-mono.pf2 ::/EFI/steamos/parts.env; do
     mtype -i "$IMG@@$off" "$f" >"$T/f" 2>/dev/null && ok "p$p$f present" || bad "p$p$f missing"
+  done
+
+  # parts.env: where our eight partitions are on THIS medium, read by the stage-2 grub.cfg before it
+  # can address anything. On a card the values equal the generator's build-time defaults, so a wrong
+  # one is invisible at boot — which is exactly why it is asserted here against the same table both
+  # sides derive from. A card whose map disagrees with its own GPT is a card that would boot fine and
+  # then teach the installer's reader the wrong lesson.
+  mtype -i "$IMG@@$off" ::/EFI/steamos/parts.env >"$T/parts-$letter.env" 2>/dev/null || true
+  grep -aq "GRUB Environment Block" "$T/parts-$letter.env" \
+    && ok "p$p parts.env is a valid GRUB env block" \
+    || bad "p$p parts.env has no GRUB magic header"
+  for kv in "nd_esp=$P_ESP" "nd_efi_a=$P_EFIA" "nd_efi_b=$P_EFIB" \
+            "nd_root_a=$P_ROOTA" "nd_root_b=$P_ROOTB" \
+            "nd_var_a=$P_VARA" "nd_var_b=$P_VARB" "nd_home=$P_HOME"; do
+    grep -aqx -- "$kv" "$T/parts-$letter.env" && ok "p$p parts.env $kv" \
+      || bad "p$p parts.env does not carry $kv (the card's map disagrees with ${TABLE#"$ROOT"/})"
   done
   # The shipped grub.cfg must be EXACTLY what boot/gen-grub-cfg.sh produces for THIS slot. One
   # comparison covers the whole class: a stale out/boot from an older build, slot A's config

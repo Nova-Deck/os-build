@@ -212,9 +212,16 @@ not absence of the increment.
   `/EFI/steamos/grubenv` (the saved board choice; on the ESP so it survives a slot switch and an
   update), `/SteamOS/conf/{A,B}.conf`. A is seeded with the newest `boot-requested-at` so a fresh
   card's first boot lands on A. No `/KERNEL`, no `/NOVADECK/`.
-* **efi-A (p2) / efi-B (p3)** — `/EFI/steamos/{grubaa64.efi, grub.cfg, fonts/dejavu-mono.pf2}` and
+* **efi-A (p2) / efi-B (p3)** — `/EFI/steamos/{grubaa64.efi, grub.cfg, fonts/dejavu-mono.pf2, parts.env}` and
   `/SteamOS/partsets/{A,B,all,shared,self,other}` written from the disk's own partuuids. Only
   `self`/`other` differ between the two.
+
+  `parts.env` is a GRUB env block holding the eight partition indices on **this** medium, read by
+  the stage-2 config before it addresses anything. On a card the values equal the generator's
+  build-time defaults and it changes nothing; it exists because an install to internal storage
+  appends our eight to the OEM's GPT at per-vendor indices, and it is on the efi partition rather
+  than the shared ESP because locating the ESP is itself one of the eight numbers. Not a RAUC slot
+  and never wiped by `post-install.sh`, so an installer-written map survives every update.
 * **Rootfs (p4/p5)** — `/boot/{Image, initramfs-novadeck.img, dtbs/*.dtb}`, plus a
   `/usr/lib/novadeck/boot/*` mirror of the stage-1/2 software: one source for both the fresh-card
   path and updates.
@@ -266,7 +273,7 @@ Offline, in `make test` — all green at the time of writing:
 
 | Suite | What it pins down |
 |---|---|
-| `test-stage2-grub.sh` | Generates both configs and asserts them: one entry per DTB, per-slot `root=`/`novadeck.var=`/`novadeck.efi=`/`novadeck.slot=` and never the other slot's, the three `probe --part-uuid` derivations with their `"none"` guards and the PARTLABEL fallback defaulted *before* them, `probe` present in `boot/grub.sh`'s embedded `MODULES`, gpt indices matching `partition-table.txt`, `savedefault` defined, grubenv load *and* save, both timeout paths, `novadeck_bootattempts` naming this slot and never the other one and running after `terminal_output gfxterm`, and `grub-script-check` parses it. Also catalog ↔ DTB ↔ device-profile parity, and that the dtsi bootargs are gone. |
+| `test-stage2-grub.sh` | Generates both configs and asserts them: one entry per DTB, per-slot `root=`/`novadeck.var=`/`novadeck.efi=`/`novadeck.slot=` and never the other slot's, the three `probe --part-uuid` derivations with their `"none"` guards and the PARTLABEL fallback defaulted *before* them, `probe` present in `boot/grub.sh`'s embedded `MODULES`, the partitions addressed by index VARIABLE with the `parts.env` map read from `($root)` behind a `[ -f ]` guard — all-or-nothing, this slot's keys only, defaults from `partition-table.txt` set before the load and the load before the first use — `savedefault` defined, grubenv load *and* save, both timeout paths, `novadeck_bootattempts` naming this slot and never the other one and running after `terminal_output gfxterm`, and `grub-script-check` parses it. Also catalog ↔ DTB ↔ device-profile parity, and that the dtsi bootargs are gone. |
 | `test-units.sh` | `systemd-analyze` over every unit in `fs-overlay`; any unknown key or section fails. |
 | `test-bootctl.sh` | The RAUC backend contract against a stubbed `steamos-bootconf`. |
 | `test-post-install.sh` | The hook against a sandboxed ESP/efi/var, including the fsid + label re-stamp. |

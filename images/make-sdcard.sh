@@ -136,7 +136,7 @@ homestage="$(mktemp -d)"
 # early exit (a `fits` check failing, say) would otherwise die inside the trap on an unset variable
 # and mask the real error. The previous fix for that was a block of empty pre-assignments carrying
 # a comment pointing at a line number, which is a trap of its own.
-trap 'rm -f "${esp:-}" "${efi_a:-}" "${efi_b:-}" "${home:-}" "${ROOTFS_B:-}" "${conf_a:-}" "${conf_b:-}" "${grubenv:-}" "${flag:-}"; rm -rf "${homestage:-}"' EXIT
+trap 'rm -f "${esp:-}" "${efi_a:-}" "${efi_b:-}" "${home:-}" "${ROOTFS_B:-}" "${conf_a:-}" "${conf_b:-}" "${grubenv:-}" "${partsenv:-}" "${flag:-}"; rm -rf "${homestage:-}"' EXIT
 deckhome="$homestage/deck"
 install -d "$deckhome/.local/share" "$deckhome/.steam"
 cp -a "$SEED" "$deckhome/.local/share/Steam"
@@ -326,10 +326,24 @@ if [ "$SLOT_B" = 1 ]; then
 fi
 
 # 4d. efi-a / efi-b (p2/p3): each slot's STAGE-2 home. Per docs/phase5.md and the post-install
-# hook's refresh shape, both carry the same /EFI/steamos/{grubaa64.efi, grub.cfg, fonts} and the
-# same /SteamOS/partsets/{A,B,all,shared}; only self/other differ, naming THIS partition and the
-# other one. steamcl chainloads \EFI\steamos\grubaa64.efi; the module's grub.cfg is the A or B
+# hook's refresh shape, both carry the same /EFI/steamos/{grubaa64.efi, grub.cfg, fonts, parts.env}
+# and the same /SteamOS/partsets/{A,B,all,shared}; only self/other differ, naming THIS partition and
+# the other one. steamcl chainloads \EFI\steamos\grubaa64.efi; the module's grub.cfg is the A or B
 # variant; the partsets are the identity steamcl matches the booted efi uuid against.
+#
+# parts.env is where our eight partitions ARE on this medium. The stage-2 grub.cfg carries the same
+# numbers as build-time defaults, so on a card the file changes nothing — it is seeded anyway, and
+# that is deliberate: it makes the card exercise the same lookup an internal install depends on, on
+# every boot, instead of shipping that path untested until the installer exists. On an internal
+# install our eight are APPENDED to the OEM's GPT and land at per-vendor indices, and the installer
+# writes this file with the real ones. It is the one map of the layout, so it goes on both slots
+# identically; the reader picks the keys for the slot it is.
+partsenv="$(mktemp)"
+grub-editenv "$partsenv" create
+grub-editenv "$partsenv" set \
+  "nd_esp=$P_ESP" "nd_efi_a=$P_EFIA" "nd_efi_b=$P_EFIB" \
+  "nd_root_a=$P_ROOTA" "nd_root_b=$P_ROOTB" \
+  "nd_var_a=$P_VARA" "nd_var_b=$P_VARB" "nd_home=$P_HOME"
 mkpartset() {  # <img> <name> <token...>
   local img="$1" name="$2"; shift 2
   local tmp; tmp="$(mktemp)"
@@ -346,6 +360,7 @@ mkefi() {  # <img> <grub.cfg> <self-efi-uuid> <other-efi-uuid> <label-suffix>
   mcopy -i "$img" "$GRUB_EFI" ::/EFI/steamos/grubaa64.efi
   mcopy -i "$img" "$cfg" ::/EFI/steamos/grub.cfg
   mcopy -i "$img" "$GRUB_FONT" ::/EFI/steamos/fonts/dejavu-mono.pf2
+  mcopy -i "$img" "$partsenv" ::/EFI/steamos/parts.env
   mkpartset "$img" A      "efi $EFIA_UUID"
   mkpartset "$img" B      "efi $EFIB_UUID"
   mkpartset "$img" all    "esp $ESP_UUID"
@@ -355,9 +370,9 @@ mkefi() {  # <img> <grub.cfg> <self-efi-uuid> <other-efi-uuid> <label-suffix>
 }
 efi_a="$(mktemp)"; efi_b="$(mktemp)"
 mkefi "$efi_a" "$GRUB_CFG_A" "$EFIA_UUID" "$EFIB_UUID" "A"
-echo "  efi-a  grubaa64.efi + grub.cfg(A) + partsets (self=A)"
+echo "  efi-a  grubaa64.efi + grub.cfg(A) + parts.env + partsets (self=A)"
 mkefi "$efi_b" "$GRUB_CFG_B" "$EFIB_UUID" "$EFIA_UUID" "B"
-echo "  efi-b  grubaa64.efi + grub.cfg(B) + partsets (self=B)"
+echo "  efi-b  grubaa64.efi + grub.cfg(B) + parts.env + partsets (self=B)"
 
 # 5. write each filesystem into its partition's byte offset (notrunc; no loop device).
 write_part() {  # <partnum> <file> <label>

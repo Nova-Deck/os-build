@@ -299,7 +299,8 @@ nonexistent partition index makes `probe --part-uuid` return the literal `none`,
 rejects it, and all three specs drop to PARTLABEL. The device booted, printed the two-line message,
 and came up with `root=PARTLABEL=novadeck-root-A` on `/proc/cmdline` — no black screen.
 
-1b and 1c remain open regardless, and nothing in Phase 3 may proceed on this.
+1b has since landed and been HW-validated, and 1c is dropped by scope decision — see both below.
+Phase 1 is closed.
 
 `probe --part-uuid` exists in our tree (`work/grub/src-grub/grub-core/commands/probe.c:50`),
 formats lowercase via `%pG` — exactly the form `findfs PARTUUID=` and the kernel want — and
@@ -400,31 +401,43 @@ keypress instead was rejected — `sleep --interruptible` is ESC-only, the power
 GRUB's EFI console input, and these arms fire on users' devices, where blocking on input with no
 keyboard makes a bootable device look bricked.
 
-### 1c. A disk-scoped device map in the initramfs
+### 1c. A disk-scoped device map in the initramfs — DROPPED 2026-08-07, and here is why
 
-In `images/initramfs/init`, after `ROOTDEV` resolves, walk **the boot disk's own** partitions
-via sysfs and publish `/run/novadeck/dev/<gpt-name> -> /dev/<part>`:
+The OS-side sites keep resolving by name: `assemble-rootfs.sh`'s two fstab lines
+(`PARTLABEL=NOVADECK-ESP`, `LABEL=novadeck-home`), `grow-home.sh`'s `HOME_DEV`, and
+`fs-overlay/etc/rauc/system.conf`'s `by-partlabel/novadeck-root-{A,B}`. **This is a decision, not an
+omission.** A future reader will ask why the bootloader was moved to PARTUUID while the OS was not,
+and without the answer recorded the natural move is to reinstate this section.
 
-```sh
-part=${ROOTDEV#/dev/}
-disk=$(basename "$(readlink -f /sys/class/block/$part/..)")
-mkdir -p /run/novadeck/dev
-for p in /sys/class/block/"$disk"/*/partition; do
-  n=$(basename "$(dirname "$p")")
-  l=$(blkid -p -s PART_ENTRY_NAME -o value "/dev/$n" 2>/dev/null) || continue
-  case "$l" in novadeck-*|NOVADECK-ESP) ln -sfn "/dev/$n" "/run/novadeck/dev/$l" ;; esac
-done
-```
+**No supported state puts two `novadeck-*` named disks in front of a running system.** Scoped by the
+product owner 2026-08-07:
 
-~15 lines, no udev, index-agnostic, works for `sda4` and `mmcblk0p4` alike, disk-scoped by
-construction. Adds `blkid` to `BINS` in `images/mkinitramfs.sh` (util-linux, shares
-`libblkid` with the `findfs` already staged). Note this is *more* deterministic than
-`by-label`, which waits on an asynchronous udev probe — which is why `grow-home.sh` has a
-settle-and-poll block today.
+| medium | GPT names | collides? |
+|---|---|---|
+| installer / recovery card | `esp`, `root` (2-partition image) | no |
+| SD game library card | freshly formatted by Steam's helper, ext4 | no |
+| internal install | the `novadeck-*` eight | the only one |
 
-Then repoint the four remaining consumers at `/run/novadeck/dev/…`:
-`assemble-rootfs.sh` (both fstab lines + `grow-home.sh`'s `HOME_DEV`),
-`fs-overlay/etc/rauc/system.conf`, and `post-install.sh`'s `DEVDIR` seam.
+The two arguments that seemed to require 1c are both out of scope. **Reusing the current novadeck
+card as the library card is not a goal** — Steam games are re-downloadable and saves are cloud-synced,
+so the library card is a fresh card the user inserts long after boot, not their old install medium.
+And **recovery reuses the INSTALLER card**, not a novadeck card, so the recovery boot presents
+`esp`/`root` and cannot collide either. A user who deliberately inserts an old novadeck card into an
+internally-installed device is accepted as unsupported.
+
+**What would reopen this,** and the reason the reasoning is preserved rather than deleted: any flow
+that puts a second `novadeck-*` disk in front of a *running* system. The sharp edge is
+`grow-home.sh` — it runs on **every boot** by design ("safe to run every boot"), resolves
+`/dev/disk/by-label/novadeck-home`, takes the parent disk from `lsblk -no pkname`, and runs
+`systemd-repart --dry-run=no` on it. With two candidates the symlink is an async udev coin flip and
+the loser gets repartitioned. `system.conf` is the other: an OTA would write ~3.5 GB to whichever
+disk udev picked, then mark the boot state updated.
+
+The mechanism, if it is ever needed: walk the boot disk's own partitions in sysfs after `ROOTDEV`
+resolves and publish `/run/novadeck/dev/<gpt-name> -> /dev/<part>` — ~15 lines, no udev,
+index-agnostic, disk-scoped by construction, needing `blkid` in `images/mkinitramfs.sh`'s `BINS`.
+It is also *more* deterministic than `by-label`, so it would let `grow-home.sh` drop its
+settle-and-poll block.
 
 ### Tests
 
@@ -432,15 +445,19 @@ Then repoint the four remaining consumers at `/run/novadeck/dev/…`:
   lines, `root=PARTUUID=$rootuuid`, `novadeck.slot=<S>`, the grubenv default block, and that
   the fallback arm still emits the PARTLABEL form. Follow the existing precedent of
   *executing* the emitted regexp rather than grepping for it.
-- New `images/test-initramfs-init.sh` — run the real `init`'s map block against a fake
-  `/sys/class/block` with **two** disks carrying identical PARTLABELs and `blkid` stubbed.
-  Assert every symlink points at a partition of the boot disk and that the second disk's
-  identically-named partition is never linked.
-- `images/test-post-install.sh` — re-point `DEVDIR`, stays green.
-- Grep assertion: no shipped file references `/dev/disk/by-partlabel/novadeck-*` or
-  `by-label/novadeck-home` outside a documented fallback.
+- ~~New `images/test-initramfs-init.sh`~~ and ~~the `by-partlabel`/`by-label` grep assertion~~ —
+  both belonged to 1c and are dropped with it.
+- `images/test-post-install.sh` — unchanged, stays green.
 
-**Gate: HW boot on both slots + one successful OTA before Phase 3 lands.**
+**GATE MET — 2026-08-07. Phase 3 may proceed.**
+
+- **1a** — PARTUUID on the cmdline: HW-validated on four boards, both slots, one OTA (see above).
+- **1b** — `parts.env`: HW-validated on a Pocket S2, all four arms, and it fired the PARTLABEL
+  fallback on hardware for the first time.
+- **1c** — dropped by scope decision, with the reasoning and the reopen condition recorded above.
+
+Nothing in Phase 1 is outstanding. The original gate was "HW boot on both slots + one successful OTA
+before Phase 3 lands"; both were met 2026-08-05 and 1b has been validated since.
 
 ---
 
@@ -1091,21 +1108,31 @@ install/README.md        pkgs.list       mkroot.sh        mkimage.sh
 
 ## Verification
 
-**Offline, in `make test`:** `test-stage2-grub.sh` (PARTUUID + grubenv index block),
-`test-initramfs-init.sh` (two-disk identical-label map), `test-post-install.sh` (unchanged
-behaviour post-extraction), `test-select-target.sh` (≥60 cases on real captured GPTs),
-`test-install.sh` (step order, confirm gate, never-writes-the-boot-disk), `test-units.sh`
-(new units), byte-identity of the shipped `partition-table.txt`/`genpart.sh`, and the
-`by-partlabel`/`by-label` grep assertion.
+**Offline, in `make test`:** `test-stage2-grub.sh` (PARTUUID + the `parts.env` index map, 199
+assertions), `test-post-install.sh` (unchanged behaviour post-extraction), `test-select-target.sh`
+(≥60 cases on real captured GPTs), `test-install.sh` (step order, confirm gate,
+never-writes-the-boot-disk, and the hand-written env block round-tripping through `grub-editenv`),
+`test-units.sh` (new units), and byte-identity of the shipped `partition-table.txt`/`genpart.sh`.
 
 **Hardware, in order — each gates the next:**
-1. Phase 1 alone: boot both slots from SD, run one OTA. Nothing else proceeds until green.
-2. `install/probe-internal.sh` read-only on one SM8550 and one SM8650.
+1. ~~Phase 1 alone: boot both slots from SD, run one OTA.~~ **DONE** — 2026-08-05 (both slots + OTA)
+   and 2026-08-06 (`parts.env`, all four arms).
+2. ~~`install/probe-internal.sh` read-only on one SM8550 and one SM8650.~~ **DONE** — four boards,
+   2026-08-05.
 3. `novadeck-install` over SSH from a dev card, on a **sacrificial device**: Android still
    boots, NovaDeck boots from internal with the SD removed, `novadeck-bootctl status` sane,
    one OTA installs into B and switches.
-4. Same, with an old NovaDeck card left inserted — the case Phase 1 exists for.
+4. ~~Same, with an old NovaDeck card left inserted.~~ **DROPPED with 1c** — an old novadeck card in
+   an internally-installed device is out of scope (see 1c). The supported inserted media are the
+   installer/recovery card and a Steam-formatted library card, neither of which carries `novadeck-*`
+   names.
 5. The standalone installer image end-to-end, including `wifi.conf` and the picker.
+
+**Note on the SD game library:** it cannot be exercised before step 3. These devices have ONE SD
+slot and novadeck occupies it, so there is no free slot to insert a library card into until the
+install lives on internal storage. The whole chain — udisks2 (absent from `manifest.lock` today,
+so nothing mounts a hot-inserted card), the `steamos-format-device`/`steamos-format-sdcard` port,
+and then `holo-fstab-repair` — sits behind Phase 4, not beside it.
 
 ---
 

@@ -7,6 +7,47 @@ them. The full rationale otherwise lives in the linked memories and commit histo
 
 ## Open
 
+- [ ] **The device sometimes reboots itself early in boot, and a SINGLE such reboot is enough to
+  mark the slot invalid — but nothing on the device can currently record why.** USER-OBSERVED
+  (recurring, 2026-08-06 and before): the unit reboots on its own well before SteamUI, usually once,
+  and the next boot is fine. Two separate problems, and the second is what blocks fixing the first.
+  - **Why one early reboot invalidates a slot.** GRUB increments `boot-attempts` in
+    `($esp)/SteamOS/conf/<SLOT>.conf` on EVERY boot attempt, before the kernel starts
+    (`boot/gen-grub-cfg.sh`, the `novadeck_bootattempts` call). `novadeck-boot-good` clears it only
+    once the session proves healthy (`novadeck-bootctl mark-good --require-marker`). A reboot that
+    happens before SteamUI therefore never clears the counter, and the threshold in
+    `fs-overlay/usr/bin/novadeck-bootctl:150` is `[ "$tries" -ge 1 ] || [ "$invalid" -gt 0 ]` —
+    **one** uncleared attempt is enough, and the fallback arm then writes `image-invalid 1`. This is
+    arguably correct behaviour; it is recorded here because it makes a rare early reboot look like a
+    slot-integrity failure, and it is a plausible source of otherwise-unexplained slot demotions and
+    of an update client deciding a slot needs reinstalling.
+  - **The fault is invisible by construction, and this was checked the hard way 2026-08-06 by
+    pulling the card.** THREE independent recorders are all unavailable at that point in boot:
+    - the journal IS persistent, but it lives at
+      `/home/.novadeck/offload/var/log/journal` — an OFFLOAD BIND onto the home partition, NOT
+      `novadeck-var-{A,B}/log/`, which are empty (look in the wrong place and you will wrongly
+      conclude journald is volatile). Persistence cannot begin until that mount is up, so a crash
+      before `systemd-journal-flush` writes nothing. Confirmed: all 8 most recent boots end with
+      clean shutdown tails (unmounts, BPF unload) — not one abruptly-terminated boot is recorded,
+      despite the symptom recurring.
+    - `/sys/fs/pstore` is EMPTY: `systemd-pstore` logs `Platform Persistent Storage Archival was
+      skipped ... (ConditionDirectoryNotEmpty=/sys/fs/pstore)`, and `efi_pstore` is skipped too.
+      There is no `ramoops` reserved-memory node in our DTs, so nothing survives the reset.
+    - no UART on this hardware ([[sm8650-no-uart]]) and no root on release units by design.
+  - **`panic=5` turns a panic into exactly this symptom.** The kernel cmdline carries `panic=5`, so
+    a panic auto-reboots after 5s with nothing on screen. That does not cause the fault, but it
+    converts a diagnosable stop into a silent reboot that usually succeeds on retry — i.e. it is
+    consistent with every detail of the report, and means "reboots once then works" tells us
+    nothing about whether it was a panic, a watchdog bite, or a PMIC reset.
+  - **Fix the recorder FIRST, then the bug.** Add a `ramoops` reserved-memory region to the
+    SM8550/SM8650 DTs; `systemd-pstore` is already enabled and will archive the previous boot's
+    panic tail into the (persistent, offloaded) journal automatically. Without that, every
+    investigation ends where 2026-08-06's did: no reset reason, no crash tail, nothing to read.
+  - **Adjacent, probably unrelated, recorded so it is not re-discovered as a lead:** every boot logs
+    `CPU features: SANITY CHECK: Unexpected variation in SYS_ID_AA64MMFR1_EL1` between the boot CPU
+    and CPUs 2-7 (`0x...11312122` vs `0x...10312122`) — a big.LITTLE ID-register mismatch. It is
+    present on boots that come up fine, so it is not by itself the trigger.
+
 - [ ] **A boot-time Steam client self-update paints NOTHING — the screen is black for minutes with
   no progress, and a power-cycle during it corrupts the download.** OBSERVED 2026-08-06 on a
   release unit (v0.2.1, slot A) taking client `1785347151` -> `1785979169`.

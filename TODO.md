@@ -51,27 +51,61 @@ them. The full rationale otherwise lives in the linked memories and commit histo
 - [ ] **A boot-time Steam client self-update paints NOTHING — the screen is black for minutes with
   no progress, and a power-cycle during it corrupts the download.** OBSERVED 2026-08-06 on a
   release unit (v0.2.1, slot A) taking client `1785347151` -> `1785979169`.
-  - **Why there is no progress bar, and why it is not a bug in the session.** Steam's client update
-    runs in its BOOTSTRAP, before the renderer exists: `~/.local/share/Steam/logs/bootstrap_log.txt`
-    logged `Found pending update` / `Installing update...` / `Extracting package...` while
-    `pgrep steamwebhelper` returned ZERO. The progress dialog is drawn by Steam's own UI, so during
-    the one phase that most needs feedback there is nothing alive to draw it. Everything else was
-    healthy and was checked: `plymouthd` had already exited (so it was NOT starving DRM master),
-    `sddm` was active running `novadeck-session` with autologin, and `steam` was correctly parented
-    to `novadeck-steam`. The screen had nothing drawing to it — it was not wedged.
-  - **Cost measured:** ~3-4 minutes of black screen, ending when Steam re-execs itself (the exit-42
-    restart loop — `steam`'s ELAPSED went DOWN, 78s -> 45s, and `steamwebhelper` appeared). Longer
-    when a previous download was interrupted: this run also had to recover from
+  - **CORRECTED 2026-08-06 — Steam DOES draw a progress dialog here, and gamescope is dropping it.**
+    The original entry concluded "there is nothing alive to draw it" from `pgrep steamwebhelper`
+    returning ZERO. That does not follow, and it is wrong. `steamwebhelper` draws Big Picture; the
+    **bootstrapper has its own update UI**, which it runs in a forked child
+    (`steam -child-update-ui -child-update-ui-socket 8 …`) and drives over an IPC socket with the
+    command set `Create window` / `Show window` / `Set status message: %s` /
+    `Set percent complete: %d` / `Destroy window`. Backends are `glx`, `xwin` and `console`
+    (`updateui_gl.cpp`, `updateui_xwin.cpp`, `updateui_linux.cpp`); every X/GL/freetype library it
+    needs is `dlopen`ed, and all of them are present in our base.
+  - **The device log proves the UI ran for the whole update.** From the affected boot
+    (`~/.local/share/sddm/wayland-session.log`, NOT the journal — see below):
+    ```
+    [12:28:27] Using update UI: glx
+    [12:28:27] Create window
+    [12:28:27] Set status message: Checking for available updates...
+    [12:28:27] Set status message: Installing update...
+    [12:28:29] Show window
+    [gamescope] [Warn]  xwm: got the same buffer committed twice, ignoring.
+    [12:28:31] Set status message: Extracting package...
+    [12:42:02] Set status message: Installing update...
+    ```
+    Steam created the window, showed it, and kept feeding it status for 13.5 minutes. **gamescope
+    emitted exactly one message in that entire window** — the discarded commit — and composited
+    nothing. So the bug is on our side of the boundary: an override-redirect GLX window that
+    gamescope never presents. gamescope's own source knows this window (`steamcompmgr.cpp:8650`,
+    `// bootstrapper is override redirect :(`), and the discard is the `already_exists` path at
+    `:7302-7320` — a commit sits in `w->commit_queue` unconsumed, so every later commit of the same
+    buffer is dropped, which is what a never-painted window looks like.
+  - **PRIME SUSPECT, untested: the card predates the gamescope bump.** The affected unit logged
+    `gamescope version 3.16.23.2+`; `packages/gamescope/PKGBUILD` is now at **3.16.25**, bumped the
+    same day (`afabca8`) precisely because the older WSI present path *intermittently deadlocks on
+    the first frame*. A newly-shown window that commits and is never presented is that same class of
+    failure. **Re-test on a card built from current main BEFORE investigating gamescope further.**
+  - **Backend differs from the host harness, and that matters.** Under Xvfb in the build container
+    the bootstrapper selects `xwin`; on device it selects `glx`. Anything reproduced host-side is
+    therefore exercising a different code path — the device picks the GL backend because
+    `msm_dri.so` is present and GLX works.
+  - **Steam's stderr is NOT in the journal.** `journalctl -D /home/.novadeck/offload/var/log/journal`
+    has zero of these lines; they land in `~/.local/share/sddm/wayland-session.log`, because SDDM
+    owns the session's stdio. Anyone grepping the journal for update-UI evidence will wrongly
+    conclude the UI never ran. Worth wiring the session's stderr into the journal so this is
+    greppable with everything else.
+  - **Cost measured:** the black screen is far longer than first recorded — `Extracting package...`
+    at 12:28:31 to `Installing update...` at 12:42:02 is **13.5 minutes**, not 3-4. It ends when
+    Steam re-execs itself (the exit-42 restart loop). This run also had to recover from
     `Error: Download failed: http error 0` plus an `uninstalled manifest found`, because a reboot
     had landed mid-download.
   - **The failure loop is what makes it worth fixing.** A black unresponsive screen after boot
     invites exactly one user action — hold the power button — which interrupts the download and
     guarantees a longer, messier recovery on the next boot. It is self-reinforcing, and on a
     handheld with no visible activity indicator there is no way to tell it apart from a hang.
-  - **The obvious fix collides with a known constraint.** Holding the splash until Steam's first
-    frame runs straight into [[boot-splash-plymouth]]: `plymouthd` starves gamescope's DRM master
-    and MUST be released as root before `sddm`. So this needs a surface that is not plymouth's, or
-    a handoff, not a one-line ordering change. Do not "fix" it by delaying the plymouth quit.
+  - **Do NOT fix this by drawing our own progress dialog.** Steam's works and is already wired to
+    real percentages; a novadeck replacement would duplicate a working upstream UI, add a permanent
+    maintenance surface, and leave the actual defect — gamescope dropping the window — unfixed.
+    The splash question is a SEPARATE item (the gamescope→Steam gap, below); it is not this one.
   - **How to reproduce deterministically:** stage a client bump into the seed
     (`steam-seed/fetch-steam-seed.sh` restages whenever Valve's rolling channel moves), boot, and
     watch the panel while tailing `bootstrap_log.txt` over SSH. Note that `make` alone will NOT

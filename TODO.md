@@ -114,6 +114,31 @@ them. The full rationale otherwise lives in the linked memories and commit histo
     `gamescopectl log_focus debug`, the focus log names exactly ONE window for the entire session:
     `Setting keyboard focus to: Steam Big Picture Mode (1c00015)`. The update UI window is never
     selected as focus, gamescope therefore has nothing to composite, and it does not flip at all.
+  - **THE WINDOW, MEASURED 2026-08-06** (dev card `3e06d48`, `xorg-xwininfo`/`xorg-xprop` now in
+    `DEV_PKGS`, captured live while the dialog was up and the panel black):
+    ```
+    0x600002 "Steam"   2560x1440+1+1      <- fullscreen, NOT the small dialog seen under Xvfb
+      Class: InputOutput                  <- passes the :3739 class filter
+      Map State: IsViewable               <- passes the :3739 map filter
+      Override Redirect State: yes
+      Depth: 24                           <- not 1x1 (win_is_useless), not translucent
+    properties, ALL of them:
+      WM_NAME(UTF8_STRING) = "Steam"
+      STEAM_BIGPICTURE(CARDINAL) = 1
+    ```
+    No `STEAM_GAME`, so `appID == 0` and `win_has_game_id()` is FALSE. No `_NET_WM_WINDOW_OPACITY`,
+    no `_NET_WM_STATE`, no `WM_TRANSIENT_FOR`.
+  - **`STEAM_BIGPICTURE=1` is load-bearing and cuts AGAINST the override-redirect theory.** That is
+    gamescope's `steamAtom` -> `w->isSteamLegacyBigPicture`, which makes `window_is_steam()` true
+    (`:1049`). That in turn means the window is exempt from the one override-redirect exclusion that
+    names it (`:8650`, `&& !pWindow->isSteamLegacyBigPicture` — Valve added that clause *for* the
+    bootstrapper), and it would pass even the `SteamControlled` appID filter at `:3761`. So being
+    override-redirect does not, by itself, explain the exclusion.
+  - **Do NOT read `GAMESCOPE_FOCUSABLE_WINDOWS` as evidence** — it was empty here, and that is BY
+    DESIGN: `:4192-4195` deliberately drops override-redirect windows from the property *reported to
+    Steam*, independently of actual focus selection. Same trap for `GAMESCOPE_FOCUSED_WINDOW`/`_APP`,
+    written with `nelements = 0` when the appID is 0 (`:4494`), so "unset" and "none" are
+    indistinguishable. The only trustworthy signal found so far is the flip counter.
   - **What is NOT yet known: why it is excluded.** `GetGlobalPossibleFocusWindows()`
     (`steamcompmgr.cpp:3739`) requires `map_state == IsViewable`, `c_class == InputOutput` and
     `opacity > TRANSLUCENT`, and skips `isSysTrayIcon`/`isOverlay`/`isExternalOverlay`; the

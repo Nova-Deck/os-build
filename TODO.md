@@ -48,6 +48,25 @@ them. The full rationale otherwise lives in the linked memories and commit histo
     and CPUs 2-7 (`0x...11312122` vs `0x...10312122`) — a big.LITTLE ID-register mismatch. It is
     present on boots that come up fine, so it is not by itself the trigger.
 
+- [ ] **The OTA check compares versions for INEQUALITY, so a RELEASE card can still be offered a
+  downgrade.** The dev-card half of this is fixed — `images/assemble-rootfs.sh` now writes
+  `/etc/novadeck/ota.conf` with `OTA_CHANNEL=dev` under `NOVADECK_DEV=1`, so a dev build is never
+  offered a stable release (HW-observed 2026-08-06: a dev card at `afabca8`, built to test the
+  gamescope 3.16.25 bump, was offered and began installing stable `v0.2.1`, which carries the
+  3.16.23.2 whose bug it existed to test — 3.7 GB into slot B before it was aborted). But the
+  comparison itself is unchanged, so a release card on `stable` is still offered any published
+  release whose version merely DIFFERS, including an older one after a rollback.
+  - The channel split does not fix it and was not meant to: it removes the `dev` -> release
+    mismatch, not the release -> older-release one.
+  - An ordering comparison is the obvious answer and is not sufficient on its own — `dev` is not
+    comparable to a release tag at all, which is exactly why the channel was the right lever for
+    that case. Whatever lands must keep "not comparable" meaning "no update", i.e. fail closed the
+    way `manifest()` already does.
+  - Note the version string KEEPS its `v` prefix (`v0.2.1`, see [[card-ota-version-keeps-the-v-prefix]]),
+    so any ordering comparison has to strip it rather than assume a bare semver.
+  - Worth deciding at the same time whether a downgrade should ever be offered deliberately (a
+    rollback path the user can choose) rather than silently, since the machinery would be shared.
+
 - [ ] **A boot-time Steam client self-update paints NOTHING — the screen is black for minutes with
   no progress, and a power-cycle during it corrupts the download.** OBSERVED 2026-08-06 on a
   release unit (v0.2.1, slot A) taking client `1785347151` -> `1785979169`.

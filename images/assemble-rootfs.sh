@@ -625,6 +625,49 @@ if [ "${NOVADECK_DEV:-}" = "1" ]; then
   fi
 fi
 
+# 4c-2. DEV-ONLY OTA channel. A dev card must NEVER be offered a stable release, because taking
+# one is a DOWNGRADE that silently destroys whatever the card was built to test.
+#
+# HW-OBSERVED 2026-08-06: a dev card at NOVADECK_GIT=afabca8 — built specifically to test the
+# gamescope 3.16.25 bump — showed an update notification in the Steam UI. Pressing Apply ran
+# steamos-update -> novadeck-update -> rauc and began writing stable's novadeck-v0.2.1.raucb (3.7 GB)
+# into the inactive slot. v0.2.1 carries gamescope 3.16.23.2, i.e. exactly the build whose bug the
+# card existed to test a fix for, and on completion it would have become primary.
+#
+# WHY it was offered at all: novadeck-update compares the running version to the channel's for
+# INEQUALITY, not for ordering, and a dev image stamps NOVADECK_VERSION=dev (see the
+# /etc/novadeck-release block above). "dev" != "v0.2.1", so every published stable release looks
+# like an update forever. Ordering cannot fix this on its own — "dev" is not comparable to a
+# release tag at all — so the channel is the right lever.
+#
+# WHAT THIS BUYS with no server-side work: novadeck-update's manifest() FAILS CLOSED. A channel
+# whose latest.json does not exist cannot be reached, and `check` then exits EXIT_NONE (7) — the
+# same "no update available" it returns for a healthy up-to-date device. So a dev card stops being
+# offered anything the moment this lands, and publishing a real dev channel later is additive.
+#
+# This writes the documented override file (novadeck-update's CONFIG_FILE, /etc/novadeck/ota.conf),
+# NOT a new code path, so the operator override surface is unchanged and a dev card can still be
+# repointed by hand ([[devices-are-operator-reachable]]). A RELEASE image gets no ota.conf at all
+# and keeps novadeck-update's own DEFAULT_CHANNEL="stable".
+if [ "${NOVADECK_DEV:-}" = "1" ]; then
+  echo "  [DEV] pinning the OTA channel to 'dev' — a dev card is never offered a stable release"
+  install -d -m 0755 "$stage/etc/novadeck"
+  cat >"$stage/etc/novadeck/ota.conf" <<'OTACONF'
+# DEV CARD ONLY — written by images/assemble-rootfs.sh under NOVADECK_DEV=1.
+# A release image does not ship this file and uses novadeck-update's built-in "stable" default.
+#
+# A dev build stamps NOVADECK_VERSION=dev, and the update check compares versions for INEQUALITY,
+# so every stable release would otherwise read as an available update — and taking it downgrades
+# the card to the release it was built to test against. Point it somewhere that is not stable.
+#
+# If this channel has no latest.json on the server the check fails closed and reports "no update
+# available", which is the intended behaviour for a dev card. Set OTA_URL here too to point at a
+# different server entirely.
+OTA_CHANNEL=dev
+OTACONF
+  chmod 0644 "$stage/etc/novadeck/ota.conf"
+fi
+
 if [ "${NOVADECK_DEV:-}" = "1" ] && [ "$dev_wifi" = "1" ]; then
   echo "  [DEV] injecting Wi-Fi profile for '$NOVADECK_WIFI_SSID' (dev-only)"
 

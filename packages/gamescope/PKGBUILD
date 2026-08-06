@@ -1,7 +1,7 @@
 # novadeck gamescope — built FROM SOURCE via a novadeck-owned PKGBUILD (pkgbuild_local in
 # packages/gamescope/source.pin), NOT fetched from the holo monorepo. This is a near-verbatim copy
 # of the upstream Arch / holo gamescope recipe (same maintainers) with ONE deliberate change: the
-# version is bumped from holo's pinned 3.16.17 to 3.16.23.2.
+# version is bumped from holo's pinned 3.16.17 to 3.16.25.
 #
 # Why we own + bump it: holo is pinned at gamescope 3.16.17, whose Wayland explicit-sync
 # (linux-drm-syncobj) WSI present path intermittently DEADLOCKS on the first frame on this HW
@@ -13,13 +13,16 @@
 # release in a checked-in PKGBUILD rather than carrying a runtime workaround.
 #
 # The git submodule commits are pinned by the gamescope tree at the tag itself (`git submodule
-# update` checks out the gitlinked commits recorded in gamescope@3.16.23.2), so bumping pkgver
+# update` checks out the gitlinked commits recorded in gamescope@3.16.25), so bumping pkgver
 # auto-selects the matching wlroots/etc. Our patches are applied by packages/build-overlay.sh
 # (inserted after `cd gamescope` in prepare()); the composite-rotation patch (upstream PR #2228,
-# based on master) applies -p1 against 3.16.23.2 with line-offset fuzz.
+# based on master) applies -p1 against 3.16.25 with line-offset fuzz.
 #
 # To bump gamescope: change pkgver, re-verify the patches apply against the new tag
-# (patch -p1 --dry-run against a shallow clone), and re-roll them only if a hunk fails.
+# (patch -p1 --dry-run against a shallow clone), and re-roll them only if a hunk fails. ALSO diff
+# the tag's .gitmodules against the source=() URLs below and its meson_options.txt against the
+# -D flags in build(): pkgver carries neither a submodule URL change nor a new build option, and
+# 3.16.25 introduced one of each.
 #
 # Maintainer: Maxime Gauduin <alucryd@archlinux.org>
 # Maintainer: Giancarlo Razzolini <grazzolini@archlinux.org>
@@ -28,7 +31,7 @@
 # Contributor: PedroHLC <root@pedrohlc.com>
 
 pkgname=gamescope
-pkgver=3.16.23.2
+pkgver=3.16.25
 pkgrel=1
 pkgdesc='SteamOS session compositing window manager'
 arch=(x86_64 aarch64)
@@ -92,7 +95,13 @@ source=(
   git+https://github.com/Joshua-Ashton/reshade.git
   git+https://github.com/KhronosGroup/SPIRV-Headers.git
   git+https://github.com/Joshua-Ashton/vkroots.git
-  git+https://github.com/Joshua-Ashton/wlroots.git
+  # 3.16.25 moved wlroots from Joshua-Ashton's fork to upstream freedesktop; this tracks that.
+  # It is NOT a build-breaking rename: the pinned commit (88a869855742, "build: bump version to
+  # 0.19.3") was verified fetchable from BOTH remotes -- GitHub fork networks share an object
+  # store, so the stale fork URL would still have resolved it. We follow .gitmodules anyway,
+  # because continuing to source a submodule from a third-party fork only works for as long as
+  # that fork exists, and upstream is where the 0.19 branch is actually maintained.
+  git+https://gitlab.freedesktop.org/wlroots/wlroots.git
 )
 b2sums=('SKIP'
         'SKIP'
@@ -116,8 +125,18 @@ prepare() {
 }
 
 build() {
+  # wlroots STAYS in force_fallback_for even though 3.16.25 dropped it from upstream's
+  # default_options. Upstream only stopped MANDATING the vendored copy; src/meson.build still
+  # declares `fallback: 'wlroots'`, and the dependency moved to wlroots-0.19 (>= 0.19.0, < 0.20.0),
+  # which holo does not ship. Forcing the fallback keeps us on the submodule pinned by the tag
+  # instead of failing to find a system wlroots.
+  #
+  # enable_tests is new in 3.16.25 and defaults to TRUE, which adds subdir('tests') to the build.
+  # Turned off explicitly: a release image has no use for the unit tests, and they are pure build
+  # cost under arm64 emulation.
   arch-meson gamescope build \
     -Dforce_fallback_for=glm,stb,libdisplay-info,libliftoff,vkroots,wlroots \
+    -Denable_tests=false \
     -Dpipewire=enabled
   meson compile -C build
 }

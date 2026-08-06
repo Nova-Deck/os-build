@@ -1,7 +1,7 @@
 # gamescope patches
 
 novadeck patches applied on top of the local gamescope PKGBUILD source (Valve gamescope
-`3.16.23.2`, see [`../PKGBUILD`](../PKGBUILD)), in the order listed by `patches:` in
+`3.16.25`, see [`../PKGBUILD`](../PKGBUILD)), in the order listed by `patches:` in
 [`../source.pin`](../source.pin). Each is applied with `patch -p1` from the gamescope source
 root (the `gamescope/` checkout inside makepkg's `$srcdir`) by
 [`packages/build-overlay.sh`](../../build-overlay.sh).

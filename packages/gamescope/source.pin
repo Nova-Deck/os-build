@@ -4,7 +4,7 @@
 # gamescope tag + its submodules) named in it.
 #
 # This switched from the holo `pkgbuild_repo` fetch (was pinned at holo's 3.16.17-1) to a local
-# PKGBUILD bumped to gamescope 3.16.23.2. Reason: 3.16.17's Wayland explicit-sync
+# PKGBUILD bumped to gamescope 3.16.25. Reason: 3.16.17's Wayland explicit-sync
 # (linux-drm-syncobj) WSI present path intermittently deadlocks on the first frame on this HW,
 # wedging ~2/3 of cold session starts. We already rebuild gamescope from source for the
 # composite-rotation patch, so we bump the version here (same medicine as packages/mesa) rather than

@@ -3,7 +3,7 @@
 # There is nothing to fetch or patch: `fex-emu` exists neither in the holo core/extra aarch64
 # repos (checked against the pinned base's synced dbs) nor in the AUR. So, unlike gamescope or
 # mesa, this is not a holo recipe with our patches on top — it is our own recipe for upstream
-# FEX, pinned to the FEX-2607 tag.
+# FEX, pinned to the FEX-2608 tag.
 #
 # Why ship it: it registers x86/x86_64 with binfmt_misc so native x86 *Linux* ELF binaries run
 # on this arm64 device. This is NOT the path Windows games take — those use the bundled arm64
@@ -27,13 +27,12 @@
 #                  root (build-overlay.sh injects them after the first `cd` in prepare(), which is
 #                  `cd "$srcdir/FEX"` for exactly this reason), in the order listed.
 #
-# Both patches are still REQUIRED at FEX-2607 with clang 21 on aarch64 — neither is upstream. A
+# Both patches are still REQUIRED at FEX-2608 with clang 21 on aarch64 — neither is upstream. A
 # peer distro bumped to 2607, dropped both, and had to restore them. See patches/README.md.
 #
 # To bump: edit _commit + pkgver in packages/fex-emu/PKGBUILD (use a FEX-<ver> tag resolved with
-# `git rev-parse FEX-<ver>^{commit}`, NOT the tag object's sha), re-verify both patches apply
-# (`git apply --check -p1`), and refresh the pinned sysroot package versions/hashes in the same
-# change.
+# `git rev-parse FEX-<ver>^{commit}`, NOT the tag object's sha) and re-verify both patches apply
+# (`git apply --check -p1`). The sysroot pins are NOT part of a FEX bump — see the PKGBUILD.
 name: fex-emu
 pkgbuild_local: PKGBUILD
 pkgrel_suffix: 1

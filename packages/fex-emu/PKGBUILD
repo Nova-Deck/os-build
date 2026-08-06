@@ -28,11 +28,14 @@
 # packages itself with an explicit `sha256sum -c` — that check is the real integrity gate. FEX
 # itself is pinned by commit, which git verifies for us.
 #
-# To bump: move _commit to a new FEX-<ver> tag, set pkgver to match, and refresh the sysroot
-# package versions + hashes together (archive.archlinux.org URLs are permanent).
+# To bump: move _commit to a new FEX-<ver> tag and set pkgver to match. Do NOT refresh the
+# sysroot pins as a reflex — they track packages/fex-rootfs, not the FEX version, because the
+# whole point is that the guest thunks compile against the glibc they will run against inside
+# the guest image. Move them only when that image moves. archive.archlinux.org URLs are
+# permanent, so an old pin never rots out from under us.
 
 pkgname=fex-emu
-pkgver=2607
+pkgver=2608
 pkgrel=1
 pkgdesc="Fast usermode x86 and x86-64 emulator for AArch64, with host/guest thunks"
 arch=('aarch64')
@@ -61,10 +64,10 @@ depends=('erofsfuse' 'squashfuse' 'fuse3' 'fmt' 'xxhash'
 makedepends=('git' 'cmake' 'ninja' 'clang' 'lld' 'llvm' 'python-setuptools'
              'catch2' 'libepoxy' 'zlib' 'openssl' 'libarchive' 'libxrandr')
 
-# The FEX-2607 tag. NOTE this is the COMMIT the tag points at, not the tag object's own sha —
-# `git ls-remote refs/tags/FEX-2607` prints the latter (6efd1c09…), which #commit= cannot resolve.
+# The FEX-2608 tag. NOTE this is the COMMIT the tag points at, not the tag object's own sha —
+# `git ls-remote refs/tags/FEX-2608` prints the latter, which #commit= cannot resolve.
 # Verify a bump with: git rev-parse FEX-<ver>^{commit}
-_commit=1cc4b93e7a71c883ec021b71359f136394dc1f3c
+_commit=e869aa644a16e4332cdc15c1ea0b4d13d482385d
 
 # x86 sysroot inputs. Pinned to archive.archlinux.org (permanent URLs; the rolling mirrors
 # rotate old versions out). noextract: these are the sysroot payload, assembled by hand in

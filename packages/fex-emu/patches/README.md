@@ -1,7 +1,9 @@
 # FEX patches
 
 Both are **build fixes for aarch64 + clang**, not behaviour changes, and both are still required
-at FEX-2607 (`1cc4b93`). Neither is upstream — verified absent from FEX `main` on 2026-07-10.
+at FEX-2608 (`e869aa6`). Neither is upstream — re-verified absent from the FEX-2608 tree on
+2026-08-06 (`FEXCore/Source/CMakeLists.txt` has no `set_source_files_properties` for
+`InterpreterFallbacks.cpp`; `ThunkLibs/include/common/Host.h` has no `signed char*` conversion).
 
 They are numbered `0001`/`0005` to match the numbering of the upstream patch series they came from
 (a Qualcomm-handheld distro's FEX package); the gap is not a missing file.
@@ -11,7 +13,8 @@ They are numbered `0001`/`0005` to match the numbering of the upstream patch ser
 Compiles `InterpreterFallbacks.cpp` at `-O0 -fno-lto`. Without it clang hits an internal compiler
 error building FEXCore for aarch64. Named for LLVM 18, but the ICE was still reproducing on a
 clang-21 toolchain: the peer this came from bumped to FEX-2607, removed both patches, and had to
-add them straight back.
+add them straight back. FEX-2608 touches this file (it adds `SharedCodeBufferManager.cpp` to
+`SRCS`), but nowhere near the hunk — the patch still applies at its recorded offset.
 
 The cost is real but contained — one translation unit of the *interpreter fallback* path drops to
 `-O0`. That path only runs for instructions the JIT declines to compile.

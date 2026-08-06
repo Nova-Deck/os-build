@@ -237,16 +237,43 @@ protects them by construction and our eight partitions lay down inside the shrun
 quite happily. The result is one disk carrying Android, another distro and NovaDeck, three of them
 believing they own the boot chain, with no rule having objected.
 
-So the refusal needs its own check: **any partition on the target disk that is neither
-OEM-recognised nor ours → refuse and name it.** That check also generalises to a distro we have
-never captured, where a name list would not.
+### RESOLVED 2026-08-07 — refuse on a FOREIGN BOOTABLE ESP, and nothing wider
 
-It must be reconciled with rule 4, which deliberately *reports* an unrecognised name rather than
-refusing, so uncaptured boards still install. Both are right in their own case, and the
-distinction is roughly "an unknown OEM partition" versus "a foreign rootfs/boot pair" — resolving
-that is Phase 3 design work, not something to guess at here. Note also that the refusal message
-must say what is true: "this disk already carries another Linux installation, remove it first",
-never rule 6's "contradiction about a device we do not understand".
+**If the target disk carries an ESP (type `C12A7328-…`) that is not ours and that holds either
+`/EFI/BOOT/bootaa64.efi` or `/KERNEL` → refuse, and tell the user to remove the other OS first.**
+
+The rule is worth stating in terms of *why it is the right one*: it is the exact test ABL performs.
+Per "The ABL contract", Linux mode boots the internal ESP carrying either of those two files, and the
+test is on **content**, not on the partition existing. So two such ESPs on one disk is not a
+tidiness problem we are refusing on principle — **ABL has no way to choose between them**, and
+whichever it picks, one of the two installations is unreachable. Refusing is the only honest answer,
+and "remove the other distribution first" is the only instruction that fixes it.
+
+That makes it strictly better than the earlier sketch ("any partition neither OEM-recognised nor
+ours"), which needed a judgement call about what counts as a foreign rootfs, and better than the
+accident of proportions the Pocket FIT is refused by today, which reverses the moment `userdata`
+stays larger than the other distro's partitions.
+
+It also **resolves the rule-4 tension rather than reconciling it**. There is no longer a spectrum
+between "an unknown OEM partition" and "a foreign rootfs/boot pair": an unrecognised name outside
+the span is still merely *reported*, so uncaptured boards install, and the only refusal is a second
+bootable ESP. A foreign distro with no ESP of its own cannot be booted by ABL either, so it is not a
+competing boot chain and is not our business.
+
+**Two qualifiers.**
+
+- **Ours is exempt** — on a reinstall our own ESP carries `/EFI/BOOT/bootaa64.efi` by construction.
+  This falls out of rule 8's ordering, which already runs the already-NovaDeck identity check before
+  anything else, but the exemption must be explicit rather than implied by order alone: identify our
+  ESP by the `NOVADECK-ESP` GPT name plus its `SteamOS/conf` content, and skip it.
+- **An empty ESP is not a refusal** — an OEM ESP carrying neither file is invisible to ABL, so
+  appending ours beside it is safe. This is the same content-not-existence test, applied
+  consistently, and it is what keeps `genpart.sh --append` viable on a board that ships an unused
+  ESP.
+
+The refusal message must say what is true — "this disk already carries another Linux installation
+(partition N, `<label>`); remove it and retry" — never rule 6's "contradiction about a device we do
+not understand".
 
 ---
 
@@ -640,6 +667,13 @@ This file is the thing to review as if it were the whole feature.
 2. `/sys/block/X/removable == 0`, `ro == 0`. **The SD card is never written** — assert it.
 3. `sgdisk -v` reports zero problems and both GPT headers are present. A damaged backup GPT
    is refused: we cannot distinguish "damaged" from "not what we think it is".
+3b. **No FOREIGN BOOTABLE ESP** — no partition of type `C12A7328-…`, other than ours, carrying
+   `/EFI/BOOT/bootaa64.efi` or `/KERNEL`. This is ABL's own content test: two of those on one disk
+   and the firmware cannot choose, so one installation is unreachable whichever it picks. Refuse and
+   name the partition. Read-only, via `mtype`/`mdir` on the partition at its byte offset — no mount,
+   consistent with the rest of this script being side-effect-free. Ours is exempt (rule 8 identity
+   plus the `NOVADECK-ESP` name); an ESP holding neither file is invisible to ABL and is not a
+   refusal.
 4. **Span containment** — every sector we intend to write lies inside the identified `userdata`
    extent. This is the assertion that actually prevents a brick; (5) and (6) are independent
    corroboration, not the defence. An unmatched partition name no longer refuses outright, since
@@ -714,6 +748,19 @@ defence:
   relying on rule order being read correctly.
 - An OEM name absent from every capture, sitting outside the span → **accepted**, reported, not
   refused. This is the uncaptured-board case and it must not regress into a refusal.
+
+Rule 3b (foreign bootable ESP) gets four, and the Pocket FIT capture is the real fixture for the
+first — it is the only board we hold that actually carries another distribution's install:
+
+- The FIT's GPT with `/KERNEL` present on its p12 ESP → **refused**, message naming p12. Then the
+  same GPT with `userdata` left LARGER than `ROCKNIX`/`STORAGE` → still refused, which is the whole
+  point: today that layout passes rule 6 and installs.
+- An ESP of the right type carrying **neither** file → accepted. An OEM ESP that ABL ignores must
+  not block an install.
+- `/EFI/BOOT/bootaa64.efi` and `/KERNEL` each independently trigger it — ABL accepts either, so a
+  check that only knew one would miss half the distributions.
+- A reinstall: our own `NOVADECK-ESP` carrying `bootaa64.efi` → **accepted**, not refused as
+  foreign. This is the case that breaks if the exemption is left implicit in rule ordering.
 
 ### Blast radius, stated plainly
 

@@ -156,7 +156,7 @@ jobs:
           {
             echo "## novadeck card \`$VERSION\`"
             echo
-            echo 'The image is ~9 GiB — past GitHub'"'"'s 2 GiB release-asset limit — so it is served from R2:'
+            echo 'The image is ~5 GiB — past GitHub'"'"'s 2 GiB release-asset limit — so it is served from R2:'
             echo
             echo '```bash'
             echo "curl -LO $CARD_URL"

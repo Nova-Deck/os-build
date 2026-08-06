@@ -76,7 +76,7 @@ gets its own namespace rather than sharing a bare `v*`. That also fixes a real i
 built a card and *never* a bundle. `card/v1.3.0` and `ota/v1.3.0` on one commit are the same OS
 delivered two ways.
 
-**A card is ~9 GiB, which is why it is not a release asset** — GitHub caps those at 2 GiB. It goes to
+**A card is ~5 GiB, which is why it is not a release asset** — GitHub caps those at 2 GiB. It goes to
 a public R2 bucket (`images/publish-card.sh`, retention N=1 to stay inside the 10 GB free tier) and
 the Release carries only `sha256sums.txt`, `manifest.lock` and the link.
 

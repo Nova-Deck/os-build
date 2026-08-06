@@ -17,7 +17,7 @@
 #      minute one of every release build. Checking it costs seconds.
 #
 #   3. R2. Five settings (three secrets, two vars) that can each be wrong in a way that only shows up
-#      when a finished 9 GiB card is uploaded. images/r2-preflight.sh runs the identical round trip
+#      when a finished 5 GiB card is uploaded. images/r2-preflight.sh runs the identical round trip
 #      against one small object. The failure it exists for is the quiet one: publicity is a BUCKET
 #      setting invisible to the S3 API, so a misconfigured bucket accepts every upload and serves 404
 #      to everyone who clicks the link.

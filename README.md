@@ -76,7 +76,7 @@ Then follow [**the runbook**](docs/RUNBOOK.md) — it covers flashing, getting a
 device, installing updates, and recovering one that will not boot. Read the recovery section
 *before* you need it.
 
-> The image is ~9 GiB compressed and it is served from object storage rather than as a GitHub
+> The image is ~5 GiB compressed and it is served from object storage rather than as a GitHub
 > release file, which caps attachments at 2 GiB. The release notes carry the link.
 
 ## Community

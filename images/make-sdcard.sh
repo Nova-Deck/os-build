@@ -23,13 +23,14 @@
 # ever exercise the failure path. It is also the state a device is never in again after its first
 # real update, so testing against it tests a fiction.
 #
-# Release: B is a byte-identical copy of a root that is ALREADY zstd-compressed inside btrfs, so it
-# survives the release compression whole. Nothing dedupes it: the flash instruction is `gzip -dc`
-# (32 KiB window), and even zstd --long tops out at a 2 GiB window against a ~4 GiB gap between the
-# two copies. That is ~4 of the ~9 GiB a release card compresses to (images/publish-card.sh) — ~44%
-# of every download — bought to cover a failover window that closes the first time RAUC writes the
-# slot, which it writes in FULL and reads nothing prior out of. A user never hand-tests a slot
-# switch, and a fresh-card A failure is media failure, which will not politely spare B.
+# Release: B WOULD BE a byte-identical copy of a root that is ALREADY zstd-compressed inside btrfs,
+# so it would survive the release compression whole. Nothing dedupes it: the flash instruction is
+# `gzip -dc` (32 KiB window), and even zstd --long tops out at a 2 GiB window against a ~4 GiB gap
+# between the two copies. That was ~4 of the ~9 GiB a release card compressed to until 2026-08-04
+# (images/publish-card.sh) — ~44% of every download — bought to cover a failover window that closes
+# the first time RAUC writes the slot, which it writes in FULL and reads nothing prior out of. A
+# user never hand-tests a slot switch, and a fresh-card A failure is media failure, which will not
+# politely spare B. With B left empty a card compresses to ~5 GiB instead.
 #
 # Flash time is unchanged either way: the dd writes the whole full-size image including its zeros.
 #

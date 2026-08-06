@@ -78,7 +78,7 @@ log "uploading metadata"
 # bucket whose public access was never enabled looks identical from in here — the upload succeeds
 # and the link 404s — and that failure would otherwise be found by the first person to try to flash
 # a card. Range request rather than a full GET: it proves reachability and resumability in one
-# round trip without pulling 9 GiB through the runner.
+# round trip without pulling 5 GiB through the runner.
 url="${R2_PUBLIC_BASE%/}/$prefix/$name"
 log "verifying public readability: $url"
 code="$(curl -fsS -o /dev/null -w '%{http_code}' -r 0-0 "$url" || true)"
@@ -90,8 +90,9 @@ case "$code" in
   access on '$R2_BUCKET' (R2 -> bucket -> Settings -> Public access) and re-run." ;;
 esac
 
-# Prune older cards. R2's free tier is 10 GB against ~9 GiB per card, so this is what keeps the
-# bucket free rather than a tidiness preference. Never touches the prefix just written.
+# Prune older cards. R2's free tier is 10 GB against ~5 GiB per card, so a second card already
+# overruns it: this is what keeps the bucket free rather than a tidiness preference.
+# Never touches the prefix just written.
 case "$KEEP" in
   ''|*[!0-9]*) die "NOVADECK_CARD_KEEP must be a whole number, got '$KEEP'" ;;
 esac

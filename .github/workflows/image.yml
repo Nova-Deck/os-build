@@ -15,7 +15,7 @@
 #
 # THE TWO ARTIFACTS SHIP TO DIFFERENT PLACES, which is why only one of them has a publish step here.
 # A CARD goes to the public Cloudflare R2 bucket a person downloads and flashes from (see
-# images/publish-card.sh for why not a GitHub release asset: ~9 GiB against a 2 GiB cap). A BUNDLE
+# images/publish-card.sh for why not a GitHub release asset: ~5 GiB against a 2 GiB cap). A BUNDLE
 # goes to the Oracle Cloud instance devices fetch their OTAs from — a different host, different
 # credentials, different audience — so the bundle path stops at a workflow artifact here and is
 # handed off from there. Do not "unify" these: the only thing they legitimately share is everything
@@ -270,7 +270,7 @@ jobs:
           path: meta/
           if-no-files-found: error
 
-      # The image itself, only when it is NOT going to R2 — a 9 GiB artifact on every test build is
+      # The image itself, only when it is NOT going to R2 — a 5 GiB artifact on every test build is
       # pure storage burn, and when publish is on the bucket already holds it.
       - name: upload the image artifact
         if: '!inputs.publish'

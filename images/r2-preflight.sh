@@ -52,12 +52,12 @@ got="$(curl -fsS "$url" 2>/dev/null || true)"
   (A 401 here means public access is off; a DNS failure means R2_PUBLIC_BASE is wrong.)"
 pass "public URL serves the object anonymously"
 
-# 3. Range support. Not fatal — but a 9 GiB download that cannot resume is worth knowing about
+# 3. Range support. Not fatal — but a 5 GiB download that cannot resume is worth knowing about
 # before someone on a bad connection finds out.
 code="$(curl -fsS -o /dev/null -w '%{http_code}' -r 0-0 "$url" || true)"
 case "$code" in
   206) pass "range requests honoured (a resumed download continues rather than restarting)" ;;
-  200) log  "WARNING: 200 rather than 206 — no Range support, so a resumed 9 GiB download restarts" ;;
+  200) log  "WARNING: 200 rather than 206 — no Range support, so a resumed 5 GiB download restarts" ;;
   *)   log  "WARNING: unexpected ${code:-no response} on the range request" ;;
 esac
 

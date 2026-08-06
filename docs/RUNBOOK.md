@@ -44,7 +44,7 @@ sdcard` on a dev box (no `NOVADECK_DEV`) builds the same kind of image, which is
 tested on hardware without waiting for a run. That was not true until 2026-08-04: an artifact-pin
 gate made a local release build impossible, and it was retired with the overlay store.
 
-Cards are served from Cloudflare R2, not from a GitHub release asset — the image is ~9 GiB against
+Cards are served from Cloudflare R2, not from a GitHub release asset — the image is ~5 GiB against
 GitHub's 2 GiB per-asset cap. The GitHub Release for a `card/v*` tag carries the checksums, the
 package lock the card was built from, and the link:
 
@@ -97,12 +97,13 @@ with the native arm64 Steam client. Each `efi-*` partition carries that slot's s
 * **Dev card** (`NOVADECK_DEV=1`): B is populated, carrying a distinct btrfs fsid, because a slot
   switch cannot be proven against a slot that does not boot. Set `NOVADECK_SLOT_B=0` for a faster
   local loop, at the cost of a card whose first slot switch can only exercise the failover path.
-* **Release card**: B is left empty **and no `B.conf` is written**. B is a byte-identical copy of an
-  already-compressed root, so it survives release compression whole — ~4 of the ~9 GiB a card
-  compresses to, for a failover window that closes the first time RAUC writes the slot. Omitting the
-  conf is what keeps steamcl from offering the empty slot as a boot candidate; see the seeding site
-  in `images/make-sdcard.sh` for the `SUPERMAX_BOOT_FAILURES` path it closes. The first update
-  writes B in full and creates its conf.
+* **Release card**: B is left empty **and no `B.conf` is written**. B would be a byte-identical copy
+  of an already-compressed root, surviving release compression whole — it was ~4 of the ~9 GiB a
+  card compressed to until 2026-08-04, for a failover window that closes the first time RAUC writes
+  the slot. Empty, a card compresses to ~5 GiB instead. Omitting the conf is what keeps steamcl from
+  offering the empty slot as a boot candidate; see the seeding site in `images/make-sdcard.sh` for
+  the `SUPERMAX_BOOT_FAILURES` path it closes. The first update writes B in full and creates its
+  conf.
 
 Run `verify-card` before you commit a card to a device — it asserts the built image rather than
 the source tree, which is the only place the GPT, the ESP contents and the per-slot filesystem

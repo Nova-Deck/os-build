@@ -59,7 +59,7 @@ asserted at `kernel/build.sh:187` — this finally makes that assertion's stated
 true (it currently claims "the /etc overlay mounts a squashfs seed", which is stale).
 
 Total image ≈ 1 GB, ≈ 400 MB compressed (the graphics stack for the GUI dominates — see
-Phase 5). It carries no bundle and needs no reflash per release; the release card is ~9 GiB
+Phase 5). It carries no bundle and needs no reflash per release; the release card is ~5 GiB
 compressed by comparison.
 
 ---

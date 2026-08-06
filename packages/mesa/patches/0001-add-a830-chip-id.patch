@@ -1,6 +1,8 @@
+diff --git a/src/freedreno/common/freedreno_devices.py b/src/freedreno/common/freedreno_devices.py
+index b2ba8d9..aa12fcf 100644
 --- a/src/freedreno/common/freedreno_devices.py
 +++ b/src/freedreno/common/freedreno_devices.py
-@@ -1342,7 +1342,9 @@
+@@ -1379,7 +1379,9 @@ add_gpus([
  
  add_gpus([
          GPUId(chip_id=0xffff44050000, name="Adreno (TM) 830"),

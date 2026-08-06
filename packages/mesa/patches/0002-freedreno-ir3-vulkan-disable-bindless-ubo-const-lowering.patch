@@ -1,8 +1,8 @@
 diff --git a/src/freedreno/ir3/ir3_nir_analyze_ubo_ranges.c b/src/freedreno/ir3/ir3_nir_analyze_ubo_ranges.c
-index fd95dc2..d8c04db 100644
+index 6e7e332..d5ebac6 100644
 --- a/src/freedreno/ir3/ir3_nir_analyze_ubo_ranges.c
 +++ b/src/freedreno/ir3/ir3_nir_analyze_ubo_ranges.c
-@@ -60,7 +60,8 @@ get_ubo_info(nir_intrinsic_instr *instr, struct ir3_ubo_info *ubo)
+@@ -56,7 +56,8 @@ get_ubo_info(nir_intrinsic_instr *instr, struct ir3_ubo_info *ubo)
        return true;
     } else {
        nir_intrinsic_instr *rsrc = ir3_bindless_resource(instr->src[0]);

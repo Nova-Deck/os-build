@@ -429,8 +429,28 @@ them. The full rationale otherwise lives in the linked memories and commit histo
     ZERO `Show window` in the whole session log. `STEAM_UPDATEUI_PNG_BACKGROUND` would therefore
     paint a window that is never mapped. gamescope agrees from its side — the first focus rerolls
     report `pick from 0 candidate(s)`, i.e. the gap is black because nothing is drawing, not because
-    something is being dropped. The in-session client below is still the answer. (Superseded plan,
-    kept so it is not re-proposed:)
+    something is being dropped. The in-session client below is still the answer.
+    - **CONFIRMED 2026-08-06 by SETTING the variable, not by reading the log.** The paragraph above
+      inferred the outcome from `skip show logo`; this bullet is the direct trial, prompted by
+      ChimeraOS's own use of it (`sessions.d/steam`: `export
+      STEAM_UPDATEUI_PNG_BACKGROUND=/usr/share/steamos/steamos.png` guarded by an `-f` test — no
+      companion flag, no second variable, so there is nothing else of theirs left to try). A dev card
+      was given a deliberately garish 1920x1080 PNG via `export` in `/etc/novadeck/session.conf`,
+      `/proc/<steam>/environ` was checked to prove the variable actually reached the client, and the
+      boot produced the SAME four lines — `Create window` / `skip show logo` / `Destroy window` — with
+      nothing on screen. gamescope saw one window all gap: `0x200001 "(untitled)" ... useless=1 map=0
+      geom=1x1+0+0`, i.e. never mapped and never sized. **Do not re-test this variable for the splash.**
+      - Method note that cost a trial: `systemctl restart sddm` does NOT recycle the client (the
+        21:27 Steam survived it with no variable in its environ, consistent with the slow-shutdown
+        SIGTERM wedge). Only a REBOOT is a valid trial of session-env changes.
+      - Where the gate probably is: `/tmp/.steam-first-start-breadcrumb` sits immediately beside
+        `UpdateUI: skip show logo` in the bootstrapper's rodata, and that file exists by the time
+        Steam runs on every boot. If that is the gate, no env var can flip it — the lever would be a
+        launch flag (`-forceguiupdater` is in the binary's flag list), which is out of scope here.
+      - Untested and the only surviving use for the variable: whether the PNG paints during a REAL
+        update, i.e. branding the update screen rather than covering the boot gap. Costs an update
+        rearm; worth a look if the bare update screen ever grates, worthless for this item.
+    (Superseded plan, kept so it is not re-proposed:)
   - **(dead) the splash may already exist, and we may be looking at one bug, not two.**
     Steam's bootstrapper creates its own update-UI window on every startup, and
     `STEAM_UPDATEUI_PNG_BACKGROUND` (a real env var in our arm64 binary) sets its background image.

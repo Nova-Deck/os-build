@@ -7,6 +7,129 @@ name. Order is as it was in TODO.md — roughly the order things were closed, no
 
 ## Closed
 
+- [x] **A Steam client self-update paints NOTHING — black panel for minutes — FIXED and HW-VALIDATED
+  2026-08-06** (gamescope patch `0005-steamcontrolled-steam-focus-fallback.patch`). Observed
+  2026-08-06 on a release unit (v0.2.1, slot A) taking client `1785347151` -> `1785979169`: 13.5
+  minutes of black screen with no progress, and a power-cycle during it corrupts the download.
+  - **ROOT CAUSE.** `novadeck-session` passes `--steam`, which flips
+    `cv_backend_virtual_connector_strategy` from `SingleApplication` to `SteamControlled`
+    (`main.cpp:771-774`). That makes `controlledFocus` true for the whole session, and
+    `pick_primary_focus_and_override()`'s `if ( !focus && ( !globalFocus || !controlledFocus ) )`
+    then withholds the generic `vecPossibleFocusWindows[0]` fallback from the GLOBAL pass. That
+    leaves `focusControlWindow` and `ctxFocusControlAppIDs` as the only routes to global focus — and
+    **Steam publishes both**, so on a gamescope that has not yet hosted SteamUI neither exists.
+    Measured: `ctrlwin=0x0` always, `ctrlappids` empty early in boot and only later `[413091, 769]`.
+    The bootstrapper's update dialog matches neither, `focus` stays NULL, nothing is composited, and
+    the backend commits ZERO atomic flips. Not a filter problem — **selection cannot reach a window
+    that no filter rejects.**
+  - **THE FIX.** After the generic fallback, a last-resort route: if `focus` is still NULL, take the
+    highest-priority candidate for which `window_is_steam()` is true. Four guards keep the blast
+    radius at exactly that hole — `!focus` (so anything Steam actively asked for has already matched
+    and a live client's choice is never overridden), `globalFocus` (the local pass keeps its existing
+    path), `eStrategy == SteamControlled` (the other three strategies are untouched), and
+    Steam-windows-only (it will never select a game, which is the behaviour the withheld fallback
+    exists to protect). `localGameFocused` is computed as `focus->appID != 0`, matching the generic
+    fallback. Placed AFTER the generic block, not inside the `SteamControlled` branch: inside, it
+    would also fire on the local pass and could pick something other than `[0]`, changing a path that
+    already works.
+  - **HW VALIDATION 2026-08-06 — the organic path, on a real reboot.** Dev card with the patch plus
+    the instrumentation armed. Staged an update, then rebooted from the SteamUI power menu
+    (`boot_id` confirmed changed `be905fee…` -> `fb8bae85…`, session log truncated). The device came
+    up straight into a VISIBLE updater:
+    ```
+    cand: global pick from 1 candidate(s), controlled=1(strategy=SteamControlled[1]<- ctrlwin=0x0 ctrlappids=0[])
+        cand:   focus  0x600002 "Steam" pid=915 appID=769 or=1 bigpicture=1 is_steam=1
+                       geom=2560x1440+1+1 queue=1 done=1 lastid=3 -> PRESENTING
+    ```
+    Fresh gamescope that had never hosted SteamUI, `ctrlappids` empty, override-redirect
+    bootstrapper dialog — the exact configuration that produced 13.5 minutes of black on the release
+    unit, now presenting at boot.
+  - **Earlier the same day, the same result via a manufactured cold start** (kill the client so the
+    session restarts and gamescope is fresh): identical line with `pid=5772`, ran to
+    `Update complete, launching Steam...` with the dialog visible throughout, SteamUI returning
+    normally afterwards (`ctrlappids=2[413091,769]`, `-> PRESENTING`).
+  - **BONUS, measured on a patched cold boot:** SteamUI ITSELF now reaches `-> PRESENTING` while
+    `ctrlappids=0[]` — the fallback carries Big Picture on screen before Steam publishes its control
+    atoms, which under the old code left global focus NULL until they landed. So `0005` also shrinks
+    the post-gamescope boot black gap. Duration unmeasured (gamescope's focus lines are
+    untimestamped) — see the splash item in TODO.md.
+  - **How the boot install actually works** (this corrects the original entry's mechanism): the
+    startup check CANNOT discover an update — it runs before the network is up and fails all three
+    mirrors with `http error 0` every time. Discovery is the in-session background loop. But once
+    that has staged the packages locally, the next boot's startup check fails the network as usual
+    and then installs from the staged copy anyway: `Download failed: http error 0` 21:23:21 ->
+    `Installing update...` 21:23:21 -> `Show window` 21:23:22. That is why the bug presented as a
+    BOOT-time black screen despite the update being found in a previous session.
+  - **The commit-fence mechanism is NOT a second blocker.** `window_has_commits()` gating
+    (`pick_primary_focus_and_override` only publishes a pick whose queue holds a `done` commit) is
+    real, and the dialog did log `-> HELD, no done commit` twice before settling to
+    `queue=1 done=1 -> PRESENTING`. Transient. The fix is sufficient, not merely necessary.
+  - **CORRECTION — it is not "appID == 0 can never take focus".** `xprop` on the release unit showed
+    no `STEAM_GAME` (hence the original reading), but gamescope's internal `w->appID` for that window
+    is 769 via `isSteamLegacyBigPicture`. Both are true and neither is the blocker: the blocker is
+    that `ctxFocusControlAppIDs` is **empty**, so no appID could match whatever its value.
+  - **ONLY the cold path was ever broken.** Two later runs did NOT exercise the fix, because
+    `ctxFocusControlAppIDs` is read from a root-window property that survives the client exiting. If
+    gamescope has already hosted SteamUI, the atoms are still set and the pre-existing appID route
+    matches the updater unaided (measured: `ctrlappids=2[413091,769]`, updater `appID=769`,
+    presented). The broken case is specifically a gamescope that has never seen Steam.
+  - **Do NOT re-derive these dead ends.** The window passes EVERY filter (`IsViewable`,
+    `InputOutput`, opaque, `window_is_steam()` true) and IS in `vecPossibleFocusWindows`. A gamescope
+    version bump is not the fix (3.16.25 reproduces identically). A peer's `GAMESCOPE_FALLBACK_APPID`
+    patch cannot help — it keys on an appID, and no appID is matchable when the control list is
+    empty. `backend.cpp:20` defaulting to `SingleApplication` is real but irrelevant: `--steam`
+    overrides it, and any analysis starting from "we are SingleApplication" is void — that wrong
+    assumption cost most of a session. `--steam` itself cannot be dropped: the startup handshake,
+    night mode and the colour pipeline all ride it.
+  - **Do NOT read `GAMESCOPE_FOCUSABLE_WINDOWS` as evidence** — `:4192-4195` deliberately drops
+    override-redirect windows from the property *reported to Steam*, independently of actual focus
+    selection. Same trap for `GAMESCOPE_FOCUSED_WINDOW`/`_APP`, written with `nelements = 0` when the
+    appID is 0, so "unset" and "none" are indistinguishable. The trustworthy signal is the flip
+    counter (`gamescopectl backend_info`, `Total Presents Queued`: 0 during the update, 1484 once Big
+    Picture maps).
+  - **THE WINDOW, MEASURED** (dev card `3e06d48`, live while the dialog was up and the panel black):
+    ```
+    0x600002 "Steam"   2560x1440+1+1      <- fullscreen, NOT the small dialog seen under Xvfb
+      Class: InputOutput / Map State: IsViewable / Override Redirect: yes / Depth: 24
+    properties, ALL of them:
+      WM_NAME(UTF8_STRING) = "Steam"
+      STEAM_BIGPICTURE(CARDINAL) = 1
+    ```
+    `STEAM_BIGPICTURE=1` is load-bearing: it is gamescope's `steamAtom` ->
+    `w->isSteamLegacyBigPicture` -> `window_is_steam()` true, which is both why the window is exempt
+    from the one override-redirect exclusion that names it (`:8650`, `// bootstrapper is override
+    redirect :(` — Valve added that clause *for* the bootstrapper) and what the fix keys on.
+  - **The instrumentation that localized it** is
+    `packages/gamescope/patches/0006-focus-candidate-instrumentation.patch`, deliberately kept OUT of
+    `source.pin` (carrying it makes `fetchlock.sh` report the gamescope row as built from UNADOPTED
+    sources). Arm with `export GAMESCOPE_DEBUG_FOCUS=1` in `/etc/novadeck/session.conf` — the only
+    way to catch this at boot, before SSH is up — or `gamescopectl debug_focus_candidates 1` live;
+    output goes to `~/.local/share/sddm/wayland-session.log`, `grep 'cand:'`. Two notes worth not
+    re-deriving: gate it on a ConVar whose default reads `env_to_bool( getenv(...) )` so it works
+    both at boot and live, and collapse repeated reports or a 13.5-minute stall writes the same line
+    thousands of times to the SD card.
+  - **Steam's stderr is NOT in the journal** — it lands in
+    `~/.local/share/sddm/wayland-session.log`, because SDDM owns the session's stdio. Anyone grepping
+    the journal for update-UI evidence will wrongly conclude the UI never ran. Worth wiring the
+    session's stderr into the journal so it is greppable with everything else.
+  - **Backend differs from the host harness:** under Xvfb in the build container the bootstrapper
+    selects `xwin`; on device it selects `glx` (because `msm_dri.so` is present and GLX works).
+    Anything reproduced host-side exercises a different code path.
+  - **How to force a client update on demand.** In `~/.local/share/Steam/package/`, edit
+    `…linuxarm64.manifest`'s `"version"` DOWN, `chown deck:deck` it afterwards if you used `sed -i`
+    (which rewrites via a temp file and leaves it root-owned — Steam must be able to write it), and
+    `rm -f *.installed`. Then reboot, let the session sit ~15s so the background loop discovers and
+    stages it, and reboot again — the second boot installs it with the dialog up. The "reboot twice"
+    shape is correct; only its stated mechanism was wrong, per the note above.
+  - **Why it was worth fixing at all:** a black unresponsive screen after boot invites exactly one
+    user action — hold the power button — which interrupts the download and guarantees a longer,
+    messier recovery next boot. Self-reinforcing, and on a handheld with no activity indicator there
+    is no way to tell it from a hang. It was NOT fixed by drawing our own progress dialog: Steam's
+    works and is wired to real percentages, and a replacement would duplicate a working upstream UI
+    while leaving the actual defect unfixed. `STEAM_UPDATEUI_PNG_BACKGROUND` is real in our binary
+    and sets the update UI's background image — a branding lever now that presentation works, and
+    unrelated to this defect.
+
 - [x] **rauc's D-Bus policy lets ANY local process install a bundle — ACCEPTED AS A DESIGN CHOICE
   2026-08-04. Closed as decided, NOT as fixed: the exposure below is unchanged and still ships.**
   Found 2026-08-03 while wiring the SteamUI update path. rauc 1.15.2 ships

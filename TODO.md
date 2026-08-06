@@ -67,124 +67,32 @@ them. The full rationale otherwise lives in the linked memories and commit histo
   - Worth deciding at the same time whether a downgrade should ever be offered deliberately (a
     rollback path the user can choose) rather than silently, since the machinery would be shared.
 
-- [ ] **A boot-time Steam client self-update paints NOTHING — the screen is black for minutes with
-  no progress, and a power-cycle during it corrupts the download.** OBSERVED 2026-08-06 on a
-  release unit (v0.2.1, slot A) taking client `1785347151` -> `1785979169`.
-  - **CORRECTED 2026-08-06 — Steam DOES draw a progress dialog here, and gamescope is dropping it.**
-    The original entry concluded "there is nothing alive to draw it" from `pgrep steamwebhelper`
-    returning ZERO. That does not follow, and it is wrong. `steamwebhelper` draws Big Picture; the
-    **bootstrapper has its own update UI**, which it runs in a forked child
-    (`steam -child-update-ui -child-update-ui-socket 8 …`) and drives over an IPC socket with the
-    command set `Create window` / `Show window` / `Set status message: %s` /
-    `Set percent complete: %d` / `Destroy window`. Backends are `glx`, `xwin` and `console`
-    (`updateui_gl.cpp`, `updateui_xwin.cpp`, `updateui_linux.cpp`); every X/GL/freetype library it
-    needs is `dlopen`ed, and all of them are present in our base.
-  - **The device log proves the UI ran for the whole update.** From the affected boot
-    (`~/.local/share/sddm/wayland-session.log`, NOT the journal — see below):
-    ```
-    [12:28:27] Using update UI: glx
-    [12:28:27] Create window
-    [12:28:27] Set status message: Checking for available updates...
-    [12:28:27] Set status message: Installing update...
-    [12:28:29] Show window
-    [gamescope] [Warn]  xwm: got the same buffer committed twice, ignoring.
-    [12:28:31] Set status message: Extracting package...
-    [12:42:02] Set status message: Installing update...
-    ```
-    Steam created the window, showed it, and kept feeding it status for 13.5 minutes. **gamescope
-    emitted exactly one message in that entire window** — the discarded commit — and composited
-    nothing. So the bug is on our side of the boundary: an override-redirect GLX window that
-    gamescope never presents. gamescope's own source knows this window (`steamcompmgr.cpp:8650`,
-    `// bootstrapper is override redirect :(`), and the discard is the `already_exists` path at
-    `:7302-7320` — a commit sits in `w->commit_queue` unconsumed, so every later commit of the same
-    buffer is dropped, which is what a never-painted window looks like.
-  - **RULED OUT 2026-08-06: the gamescope bump is NOT the fix.** Reproduced identically on a dev
-    card at `afabca8` running **3.16.25+** — `Using update UI: glx` / `Create window` /
-    `Show window` at 15:33:07, panel black for the whole 3-minute install. The 3.16.25 first-frame
-    WSI theory is dead; do not re-test it.
-  - **SHARPENED ROOT CAUSE — gamescope commits ZERO atomic flips while the dialog is the only
-    window.** Measured live on that boot with `gamescopectl backend_info` (the tool is on the image;
-    run it as deck with `XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=gamescope-0`):
-    | when | Total Presents Queued |
-    | --- | --- |
-    | during the update, after `Show window` | **0** |
-    | after Big Picture maps | **1484** |
-    `m_uQueuedPresents` is incremented per atomic flip commit (`DRMBackend.cpp:3996`), so this is
-    literally "nothing was ever sent to the panel", not "the wrong thing was sent". With
-    `gamescopectl log_focus debug`, the focus log names exactly ONE window for the entire session:
-    `Setting keyboard focus to: Steam Big Picture Mode (1c00015)`. The update UI window is never
-    selected as focus, gamescope therefore has nothing to composite, and it does not flip at all.
-  - **THE WINDOW, MEASURED 2026-08-06** (dev card `3e06d48`, `xorg-xwininfo`/`xorg-xprop` now in
-    `DEV_PKGS`, captured live while the dialog was up and the panel black):
-    ```
-    0x600002 "Steam"   2560x1440+1+1      <- fullscreen, NOT the small dialog seen under Xvfb
-      Class: InputOutput                  <- passes the :3739 class filter
-      Map State: IsViewable               <- passes the :3739 map filter
-      Override Redirect State: yes
-      Depth: 24                           <- not 1x1 (win_is_useless), not translucent
-    properties, ALL of them:
-      WM_NAME(UTF8_STRING) = "Steam"
-      STEAM_BIGPICTURE(CARDINAL) = 1
-    ```
-    No `STEAM_GAME`, so `appID == 0` and `win_has_game_id()` is FALSE. No `_NET_WM_WINDOW_OPACITY`,
-    no `_NET_WM_STATE`, no `WM_TRANSIENT_FOR`.
-  - **`STEAM_BIGPICTURE=1` is load-bearing and cuts AGAINST the override-redirect theory.** That is
-    gamescope's `steamAtom` -> `w->isSteamLegacyBigPicture`, which makes `window_is_steam()` true
-    (`:1049`). That in turn means the window is exempt from the one override-redirect exclusion that
-    names it (`:8650`, `&& !pWindow->isSteamLegacyBigPicture` — Valve added that clause *for* the
-    bootstrapper), and it would pass even the `SteamControlled` appID filter at `:3761`. So being
-    override-redirect does not, by itself, explain the exclusion.
-  - **Do NOT read `GAMESCOPE_FOCUSABLE_WINDOWS` as evidence** — it was empty here, and that is BY
-    DESIGN: `:4192-4195` deliberately drops override-redirect windows from the property *reported to
-    Steam*, independently of actual focus selection. Same trap for `GAMESCOPE_FOCUSED_WINDOW`/`_APP`,
-    written with `nelements = 0` when the appID is 0 (`:4494`), so "unset" and "none" are
-    indistinguishable. The only trustworthy signal found so far is the flip counter.
-  - **What is NOT yet known: why it is excluded.** `GetGlobalPossibleFocusWindows()`
-    (`steamcompmgr.cpp:3739`) requires `map_state == IsViewable`, `c_class == InputOutput` and
-    `opacity > TRANSLUCENT`, and skips `isSysTrayIcon`/`isOverlay`/`isExternalOverlay`; the
-    appID-only filter at `:3761` is gated on `SteamControlled` and our default is `SingleApplication`
-    (`backend.cpp:20`), so it should not apply. With one candidate, `:3583-3590` would pick it as
-    `vecPossibleFocusWindows[0]`. Something upstream of that is dropping it — the leading candidate
-    remains that the window is override-redirect (gamescope's own `:8650` comment,
-    `// bootstrapper is override redirect :(`), but that is not yet demonstrated on our path.
-  - **Next step is instrumentation, not another version bump.** `xorg-xprop` + `xorg-xwininfo` are
-    now in `DEV_PKGS`, so the next repro can read the window's actual attributes
-    (`xwininfo -root -children`, `xprop -id <win>`) while the dialog is up, instead of inferring
-    them from source. Re-arm a repro with the manifest trick below.
-  - **How to force a client update on demand (no waiting for Valve).** In
-    `~/.local/share/Steam/package/`, edit `…linuxarm64.manifest`'s `"version"` DOWN and
-    `rm -f *.installed`, then reboot TWICE: Steam stages a pending update at boot N (its startup
-    check runs before the network is up, all hosts fail `http error 0`, and the background loop
-    downloads afterwards) and installs it at boot N+1. The install is what shows the dialog.
-  - **Backend differs from the host harness, and that matters.** Under Xvfb in the build container
-    the bootstrapper selects `xwin`; on device it selects `glx`. Anything reproduced host-side is
-    therefore exercising a different code path — the device picks the GL backend because
-    `msm_dri.so` is present and GLX works.
-  - **Steam's stderr is NOT in the journal.** `journalctl -D /home/.novadeck/offload/var/log/journal`
-    has zero of these lines; they land in `~/.local/share/sddm/wayland-session.log`, because SDDM
-    owns the session's stdio. Anyone grepping the journal for update-UI evidence will wrongly
-    conclude the UI never ran. Worth wiring the session's stderr into the journal so this is
-    greppable with everything else.
-  - **Cost measured:** the black screen is far longer than first recorded — `Extracting package...`
-    at 12:28:31 to `Installing update...` at 12:42:02 is **13.5 minutes**, not 3-4. It ends when
-    Steam re-execs itself (the exit-42 restart loop). This run also had to recover from
-    `Error: Download failed: http error 0` plus an `uninstalled manifest found`, because a reboot
-    had landed mid-download.
-  - **The failure loop is what makes it worth fixing.** A black unresponsive screen after boot
-    invites exactly one user action — hold the power button — which interrupts the download and
-    guarantees a longer, messier recovery on the next boot. It is self-reinforcing, and on a
-    handheld with no visible activity indicator there is no way to tell it apart from a hang.
-  - **Do NOT fix this by drawing our own progress dialog.** Steam's works and is already wired to
-    real percentages; a novadeck replacement would duplicate a working upstream UI, add a permanent
-    maintenance surface, and leave the actual defect — gamescope dropping the window — unfixed.
-    The splash question is a SEPARATE item (the gamescope→Steam gap, below); it is not this one.
-  - **How to reproduce deterministically:** stage a client bump into the seed
-    (`steam-seed/fetch-steam-seed.sh` restages whenever Valve's rolling channel moves), boot, and
-    watch the panel while tailing `bootstrap_log.txt` over SSH. Note that `make` alone will NOT
-    re-fetch the seed: `$(STEAM_SEED)`'s only prerequisites are `STEAM_SEED.pin` and the fetcher,
-    and the pin is deliberately version-less (both channels are live rolling pointers), so a client
-    bump changes no file make can see. Run `steam-seed/fetch-steam-seed.sh` explicitly — its own
-    live-vs-staged check is what detects the bump.
+- [ ] **Steam's boot-time update check always fails the network, so an update can only be DISCOVERED
+  in-session — never at boot.** MEASURED three times 2026-08-06. At ~+5s from boot the startup check
+  fails all three mirrors with `http error 0`
+  (`fastly.`/`akamai.`/`client-update.steamstatic.com`); the in-session background loop succeeds
+  ~13s later and logs `Downloaded new manifest … version 1785979169, installed version 0`.
+  - **The install itself is NOT affected** — corrected 2026-08-06 after initially concluding it was.
+    Once the background loop has staged the packages locally, the next boot's startup check fails the
+    network exactly as always and then installs from the staged copy anyway:
+    `Download failed: http error 0` at 21:23:21 -> `Installing update...` at 21:23:21 ->
+    `Show window` at 21:23:22. So the old "reboot twice" recipe DOES work; what was wrong in it was
+    the mechanism (boot N stages via the BACKGROUND loop, not via the startup check).
+  - **What it actually costs:** a device that boots, is used briefly, and is put down may never
+    discover an update, because discovery needs the client to stay up ~15s past boot with a network.
+    Low severity, and possibly not worth fixing.
+  - **Likely fix shape (unverified):** order the session behind `network-online.target`, or have
+    novadeck-steam wait for a route before exec'ing the client. Check first whether Steam's own
+    retry already covers it — the background loop clearly does within seconds.
+
+- [ ] **(WEAK — observed ONCE, then contradicted) A SteamUI reboot may install a pending client
+  update in-session instead of rebooting.** 2026-08-06: with an update staged, a SteamUI reboot
+  produced `-child-update-ui` at 21:08:00, a full in-session install, and a return to Big Picture
+  with the boot time unchanged. The very next attempt behaved correctly — `boot_id` changed
+  `be905fee…` -> `fb8bae85…` and the update installed at boot with the dialog on screen. So this is
+  NOT reproducible as stated and may have been a mis-click on a "software update" entry rather than
+  the power menu. Do not chase it without a second sighting; if one occurs, capture `boot_id` before
+  and after, and check `novadeck-powerbuttond`/logind handling of Steam's reboot D-Bus call.
 
 - [ ] **The night-mode atom workaround INVERTS if Steam fixes its property packing — re-check on
   every client update.** `packages/gamescope/patches/0002` decodes
@@ -514,5 +422,57 @@ them. The full rationale otherwise lives in the linked memories and commit histo
   `vt.global_cursor_default=0`), and an ordering invariant anyone touching the session can break.
   Build the in-session client FIRST, then judge: if the boot feels fine with black at the front,
   delete the branch; if the front-half black still grates, merge it then.
+  - **MEASURED 2026-08-06 — RULED OUT. The update UI cannot be the splash, and this is NOT the same
+    bug as the client-update black screen.** On an ordinary no-update boot the bootstrapper creates
+    its update-UI window and destroys it two seconds later WITHOUT ever showing it:
+    `Using update UI: glx` / `Create window` / `UpdateUI: skip show logo` / `Destroy window`, with
+    ZERO `Show window` in the whole session log. `STEAM_UPDATEUI_PNG_BACKGROUND` would therefore
+    paint a window that is never mapped. gamescope agrees from its side — the first focus rerolls
+    report `pick from 0 candidate(s)`, i.e. the gap is black because nothing is drawing, not because
+    something is being dropped. The in-session client below is still the answer. (Superseded plan,
+    kept so it is not re-proposed:)
+  - **(dead) the splash may already exist, and we may be looking at one bug, not two.**
+    Steam's bootstrapper creates its own update-UI window on every startup, and
+    `STEAM_UPDATEUI_PNG_BACKGROUND` (a real env var in our arm64 binary) sets its background image.
+    If that window is SHOWN on an ordinary no-update boot, then it already occupies exactly this gap,
+    the gap is black only because gamescope never presents it — the same defect as the client-update
+    item above — and the fix is one env var plus that defect, with NO new client, no teardown
+    handshake, and no focus patch. Do not build a splash client until this is measured.
+    - **What the evidence actually says:** in the only traces we have (all from update boots),
+      `Create window` fires during `Checking for available updates...` but `Show window` fires two
+      seconds later, AFTER `Installing update...` — i.e. showing looks gated on there BEING an
+      update, which would mean it cannot cover an ordinary boot. That is consistent with the data,
+      not established by it; no no-update boot has ever been captured.
+    - **How to settle it, cheaply:** boot a dev card with no pending client update and
+      `GAMESCOPE_DEBUG_FOCUS=1` set. The candidate report lists every window with its `map=` state on
+      every focus reroll, so the bootstrapper window either appears mapped in the 15-25s window or it
+      never does. `STEAM_BOOTSTRAP_LOG_VERBOSE=1` gives the Steam half of the same timeline.
+  - **The splash has to win gamescope's focus, and that is not automatic once Steam is up.** With
+    `SingleApplication` and no focus-control atoms set, a lone fullscreen client is just
+    `vecPossibleFocusWindows[0]` and gets picked, so a splash that runs strictly BEFORE Steam should
+    need nothing. But once Steam sets `GAMESCOPE_CTRL_APP_ID` / `GAMESCOPE_CTRL_WINDOW` on the root,
+    `controlledFocus` becomes true and the `[0]` fallback at `steamcompmgr.cpp:3584` is skipped for
+    the global pass entirely — a splash still on screen at that moment is dropped. If that bites, the
+    known lever is a small focus-selection patch: when nothing was picked, fall back to the window
+    whose `STEAM_GAME` appID matches an env-supplied ID, yielding as soon as a real window appears.
+    Our own splash client can set `STEAM_GAME`, so it can opt in; it is focus-selection only and off
+    the per-frame composite path. Not needed until the ordering is measured — do not pre-emptively
+    carry the patch.
+    - **UPDATE 2026-08-06: we now DO carry a focus-selection patch, and it is not this one.**
+      `0005-steamcontrolled-steam-focus-fallback.patch` (see the closed client-update entry in
+      DONE.md) fills the same gap but keys on `window_is_steam()`, not on an env-supplied appID, and
+      fires only when nothing else matched. A splash client would NOT be rescued by it — it is
+      deliberately Steam-windows-only so it can never pull a game to the front. If the ordering
+      problem above turns out to be real, the appID-keyed variant is still the lever, and it would
+      slot in beside `0005` rather than replace it.
+    - **AND `0005` ALREADY SHRANK THIS GAP — re-measure before building anything.** MEASURED
+      2026-08-06 on a patched cold boot: SteamUI reaches `-> PRESENTING` while `ctrlappids=0[]`,
+      i.e. the new `window_is_steam()` fallback is what puts Big Picture on screen; Steam's control
+      atoms only appear ~60% of the way through the session log. Under the old code that global pick
+      was NULL, so nothing was composited until the atoms landed — which is exactly the "nothing is
+      drawing" the measurement above attributed to the gap. How much of the black is left is NOT
+      known: gamescope's focus lines are untimestamped, so the ordering is established but the
+      duration is not. Time a patched cold boot with a camera or the flip counter BEFORE deciding a
+      splash client is needed at all.
   See [[boot-splash-plymouth]], [[sm8650-gamescope-session-plumbing]].
 

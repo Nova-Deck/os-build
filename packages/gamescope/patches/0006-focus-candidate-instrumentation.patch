@@ -1,0 +1,291 @@
+--- a/src/steamcompmgr.cpp
++++ b/src/steamcompmgr.cpp
+@@ -3503,6 +3503,128 @@
+ 	return false;
+ }
+ 
++// novadeck: focus-candidate instrumentation.
++//
++// The Steam bootstrapper's client-update dialog (an override-redirect GLX window carrying
++// STEAM_BIGPICTURE=1) is never presented on our arm64 handheld: gamescope commits ZERO atomic
++// flips for the whole install, so the panel stays black for minutes with no progress. Everything
++// observable from outside the process says the window should qualify — it is IsViewable,
++// InputOutput, opaque, fullscreen — so the exclusion has to be read from the inside.
++//
++// Off by default and costs nothing when off. Enable either way:
++//   GAMESCOPE_DEBUG_FOCUS=1 in the session env   (needed to catch it at boot, before SSH is up)
++//   gamescopectl debug_focus_candidates 1        (live, once a session is reachable)
++gamescope::ConVar<bool> cv_debug_focus_candidates{ "debug_focus_candidates",
++	env_to_bool( getenv( "GAMESCOPE_DEBUG_FOCUS" ) ),
++	"Log every window considered for focus with the reason it was rejected, the window that wins, "
++	"and its commit-queue state. GAMESCOPE_DEBUG_FOCUS=1 enables it from startup." };
++
++// Collapses identical consecutive reports. A wedged state is by definition unchanging, so without
++// this a 13-minute stall writes the same line thousands of times into the session log; with it the
++// state logs once and the repeat count is emitted when the state finally moves.
++class CFocusDebugReporter
++{
++public:
++	void Report( const std::string &sReport )
++	{
++		if ( sReport == m_sLast )
++		{
++			m_uRepeats++;
++			return;
++		}
++
++		if ( m_uRepeats )
++			focus_log.infof( "cand: (previous report repeated %u more times)", m_uRepeats );
++
++		m_uRepeats = 0;
++		m_sLast = sReport;
++		focus_log.infof( "%s", sReport.c_str() );
++	}
++private:
++	std::string m_sLast;
++	uint32_t m_uRepeats = 0;
++};
++
++// "queue=1 done=0 lastid=42 recvdone=1" — the discriminator between the two ways a window ends up
++// unpresented. pick_primary_focus_and_override() only publishes a focus window that satisfies
++// window_has_commits(), which needs at least one commit with done=true; a queue that is non-empty
++// with every entry done=0 means buffers were committed and their fences never signalled, which
++// looks identical at the panel to never having been focused at all.
++static std::string focus_debug_commits( steamcompmgr_win_t *w )
++{
++	std::string sResult = "queue=" + std::to_string( w->commit_queue.size() );
++
++	if ( !w->commit_queue.empty() )
++	{
++		sResult += " done=";
++		for ( size_t i = 0; i < w->commit_queue.size(); i++ )
++			sResult += ( i ? "," : "" ) + std::to_string( (int)w->commit_queue[ i ]->done );
++		sResult += " lastid=" + std::to_string( w->commit_queue.back()->commitID );
++	}
++
++	sResult += w->receivedDoneCommit ? " recvdone=1" : " recvdone=0";
++	return sResult;
++}
++
++// `controlledFocus` is a three-way OR, and when it is true it disables the generic
++// vecPossibleFocusWindows[0] fallback for the GLOBAL pass — so a window can pass every filter and
++// still never be focused. Knowing it is true is not enough; which term made it true says whether the
++// strategy is not what we assume or whether Steam claimed focus control. Print all three.
++static std::string focus_debug_controlled(
++	gamescope::VirtualConnectorStrategy eStrategy,
++	Window focusControlWindow,
++	const std::vector<uint32_t> &ctxFocusControlAppIDs )
++{
++	static const char *const s_pszStrategies[] = { "SingleApplication", "SteamControlled", "PerAppId", "PerWindow" };
++	const uint32_t uStrategy = (uint32_t)eStrategy;
++	const char *pszStrategy = uStrategy < gamescope::VirtualConnectorStrategies::Count
++		? s_pszStrategies[ uStrategy ] : "?";
++
++	std::string sAppIDs;
++	for ( uint32_t uAppID : ctxFocusControlAppIDs )
++		sAppIDs += ( sAppIDs.empty() ? "" : "," ) + std::to_string( uAppID );
++
++	char szBuf[ 256 ];
++	snprintf( szBuf, sizeof( szBuf ), "(strategy=%s[%u]%s ctrlwin=0x%lx%s ctrlappids=%zu[%s]%s)",
++		pszStrategy, uStrategy,
++		eStrategy != gamescope::VirtualConnectorStrategies::SingleApplication ? "<-" : "",
++		(unsigned long)focusControlWindow, focusControlWindow != None ? "<-" : "",
++		ctxFocusControlAppIDs.size(), sAppIDs.c_str(),
++		!ctxFocusControlAppIDs.empty() ? "<-" : "" );
++	return szBuf;
++}
++
++static std::string focus_debug_window( steamcompmgr_win_t *w )
++{
++	if ( !w )
++		return "(none)";
++
++	const char *pszTitle = w->title ? w->title->c_str() : "(untitled)";
++	char szBuf[ 512 ];
++
++	if ( w->type != steamcompmgr_win_type_t::XWAYLAND )
++	{
++		snprintf( szBuf, sizeof( szBuf ), "xdg 0x%x \"%s\" appID=%u %s",
++			w->id(), pszTitle, w->appID, focus_debug_commits( w ).c_str() );
++		return szBuf;
++	}
++
++	const Rect rect = w->GetGeometry();
++	snprintf( szBuf, sizeof( szBuf ),
++		"0x%x \"%s\" pid=%d appID=%u or=%d bigpicture=%d is_steam=%d useless=%d map=%d class=%d opacity=0x%x geom=%dx%d+%d+%d %s",
++		w->id(), pszTitle, (int)w->pid, w->appID,
++		(int)w->xwayland().a.override_redirect,
++		(int)w->isSteamLegacyBigPicture,
++		(int)window_is_steam( w ),
++		(int)win_is_useless( w ),
++		w->xwayland().a.map_state,
++		w->xwayland().a.c_class,
++		w->opacity,
++		rect.nWidth, rect.nHeight, rect.nX, rect.nY,
++		focus_debug_commits( w ).c_str() );
++	return szBuf;
++}
++
+ static bool is_good_override_candidate( steamcompmgr_win_t *override, steamcompmgr_win_t* focus )
+ {
+ 	// Some Chrome/Edge dropdowns (ie. FH5 xbox login) will automatically close themselves if you
+@@ -3682,9 +3804,25 @@
+ 		}
+ 	}
+ 
++	if ( cv_debug_focus_candidates )
++	{
++		static CFocusDebugReporter s_LocalReporter;
++		static CFocusDebugReporter s_GlobalReporter;
++
++		std::string sReport = std::string( "cand: " ) + ( globalFocus ? "global" : "local" ) +
++			" pick from " + std::to_string( vecPossibleFocusWindows.size() ) + " candidate(s)" +
++			", controlled=" + std::to_string( (int)controlledFocus ) + focus_debug_controlled(
++				eStrategy, focusControlWindow, ctxFocusControlAppIDs ) +
++			"\n\tcand:   focus    " + focus_debug_window( focus ) +
++			( focus ? ( window_has_commits( focus ) ? " -> PRESENTING" : " -> HELD, no done commit" ) : "" ) +
++			"\n\tcand:   override " + focus_debug_window( override_focus );
++
++		( globalFocus ? s_GlobalReporter : s_LocalReporter ).Report( sReport );
++	}
++
+ 	if ( focus )
+ 	{
+-		if ( window_has_commits( focus ) ) 
++		if ( window_has_commits( focus ) )
+ 			out->focusWindow = focus;
+ 		else
+ 			focus->outdatedInteractiveFocus = true;
+@@ -3743,41 +3881,83 @@
+  {
+ 	std::vector<steamcompmgr_win_t*> vecPossibleFocusWindows;
+ 
+-	for (steamcompmgr_win_t *w = this->list; w; w = w->xwayland().next)
++	// The filter, restated as a reason so it can be logged. Conditions and their order are
++	// identical to what they replace — nullptr means the window is a candidate.
++	auto RejectReason = []( steamcompmgr_win_t *w ) -> const char *
+ 	{
+ 		// Always skip system tray icons and overlays
+-		if ( w->isSysTrayIcon || w->isOverlay || w->isExternalOverlay )
+-		{
+-			continue;
+-		}
++		if ( w->isSysTrayIcon )
++			return "systray-icon";
++		if ( w->isOverlay )
++			return "overlay";
++		if ( w->isExternalOverlay )
++			return "external-overlay";
+ 
+ 		// Skip overlay targets
+ 		if ( w->oulTargetVROverlay && !cv_vr_show_forwarded_overlays )
+-		{
+-			continue;
+-		}
++			return "vr-overlay-target";
+ 
+ 		// Skip streaming client video window
+ 		if ( w->isSteamStreamingClientVideo )
+-		{
+-			continue;
+-		}
++			return "streaming-client-video";
+ 
+ 		if ( gamescope::cv_backend_virtual_connector_strategy == gamescope::VirtualConnectorStrategies::SteamControlled )
+ 		{
+-			if ( !( win_has_game_id( w ) || window_is_steam( w ) || w->isSteamStreamingClient ) )	
+-				continue;
++			if ( !( win_has_game_id( w ) || window_is_steam( w ) || w->isSteamStreamingClient ) )
++				return "steam-controlled-not-game-or-steam";
+ 		}
+ 
+-		if ( w->xwayland().a.map_state == IsViewable && w->xwayland().a.c_class == InputOutput &&
+-			 (w->opacity > TRANSLUCENT || w->isSteamStreamingClient ) )
++		if ( w->xwayland().a.map_state != IsViewable )
++			return "not-viewable";
++		if ( w->xwayland().a.c_class != InputOutput )
++			return "not-inputoutput";
++		if ( !( w->opacity > TRANSLUCENT || w->isSteamStreamingClient ) )
++			return "translucent";
++
++		return nullptr;
++	};
++
++	std::string sReport;
++	if ( cv_debug_focus_candidates )
++		sReport = "cand: xwayland ctx " + std::to_string( this->scr ) + " window list";
++
++	for (steamcompmgr_win_t *w = this->list; w; w = w->xwayland().next)
++	{
++		const char *pszReject = RejectReason( w );
++
++		if ( cv_debug_focus_candidates )
+ 		{
+-			vecPossibleFocusWindows.push_back( w );
++			sReport += "\n\tcand:   ";
++			sReport += focus_debug_window( w );
++			sReport += pszReject ? " -> rejected: " : " -> CANDIDATE";
++			sReport += pszReject ? pszReject : "";
+ 		}
++
++		if ( !pszReject )
++			vecPossibleFocusWindows.push_back( w );
+ 	}
+ 
+ 	std::stable_sort( vecPossibleFocusWindows.begin(), vecPossibleFocusWindows.end(), is_focus_priority_greater );
+ 
++	if ( cv_debug_focus_candidates )
++	{
++		// The sort decides the winner: pick_primary_focus_and_override() takes element [0] whenever
++		// no focus-control window or appID claims the focus first.
++		sReport += "\n\tcand:   sorted: ";
++		for ( size_t i = 0; i < vecPossibleFocusWindows.size(); i++ )
++		{
++			char szBuf[ 32 ];
++			snprintf( szBuf, sizeof( szBuf ), "%s[%zu]=0x%x", i ? " " : "", i, vecPossibleFocusWindows[ i ]->id() );
++			sReport += szBuf;
++		}
++		if ( vecPossibleFocusWindows.empty() )
++			sReport += "(empty)";
++
++		// Per-context, or two servers reporting in turn would defeat the repeat collapsing.
++		static std::unordered_map<xwayland_ctx_t *, CFocusDebugReporter> s_Reporters;
++		s_Reporters[ this ].Report( sReport );
++	}
++
+ 	return vecPossibleFocusWindows;
+  }
+ 
+@@ -6924,7 +7104,19 @@
+ 		if ( w->commit_queue[ j ]->commitID == commitID )
+ 		{
+ 			gpuvis_trace_printf( "commit %lu done", w->commit_queue[ j ]->commitID );
++
++			// Only the 0 -> 1 transition, not every completion: this is what flips
++			// window_has_commits() true and so makes the window presentable at all. Logging every
++			// done commit would write a line per frame once anything is actually running.
++			const bool bFirstDoneCommit = cv_debug_focus_candidates && !window_has_commits( w );
++
+ 			w->commit_queue[ j ]->done = true;
++
++			if ( bFirstDoneCommit )
++			{
++				static CFocusDebugReporter s_Reporter;
++				s_Reporter.Report( "cand: first done commit for " + focus_debug_window( w ) );
++			}
+ 			w->commit_queue[ j ]->earliest_present_time = earliestPresentTime;
+ 			w->commit_queue[ j ]->present_margin = earliestPresentTime - earliestLatchTime;
+ 			bFoundWindow = true;
+@@ -7367,6 +7559,12 @@
+ 		wlserver_unlock();
+ 		xwm_log.debugf( "got the same buffer committed twice, ignoring." );
+ 
++		if ( cv_debug_focus_candidates )
++		{
++			static CFocusDebugReporter s_Reporter;
++			s_Reporter.Report( "cand: discarded duplicate buffer commit for " + focus_debug_window( w ) );
++		}
++
+ 		// If we have a duplicated commit + frame callback, ensure that is signalled.
+ 		// This matches Mutter and Weston behavior, so it's plausible that some application relies on forward progress.
+ 		// We're essentially discarding the commit here, so consider it complete right away.

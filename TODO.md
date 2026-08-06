@@ -7,6 +7,38 @@ them. The full rationale otherwise lives in the linked memories and commit histo
 
 ## Open
 
+- [ ] **A boot-time Steam client self-update paints NOTHING — the screen is black for minutes with
+  no progress, and a power-cycle during it corrupts the download.** OBSERVED 2026-08-06 on a
+  release unit (v0.2.1, slot A) taking client `1785347151` -> `1785979169`.
+  - **Why there is no progress bar, and why it is not a bug in the session.** Steam's client update
+    runs in its BOOTSTRAP, before the renderer exists: `~/.local/share/Steam/logs/bootstrap_log.txt`
+    logged `Found pending update` / `Installing update...` / `Extracting package...` while
+    `pgrep steamwebhelper` returned ZERO. The progress dialog is drawn by Steam's own UI, so during
+    the one phase that most needs feedback there is nothing alive to draw it. Everything else was
+    healthy and was checked: `plymouthd` had already exited (so it was NOT starving DRM master),
+    `sddm` was active running `novadeck-session` with autologin, and `steam` was correctly parented
+    to `novadeck-steam`. The screen had nothing drawing to it — it was not wedged.
+  - **Cost measured:** ~3-4 minutes of black screen, ending when Steam re-execs itself (the exit-42
+    restart loop — `steam`'s ELAPSED went DOWN, 78s -> 45s, and `steamwebhelper` appeared). Longer
+    when a previous download was interrupted: this run also had to recover from
+    `Error: Download failed: http error 0` plus an `uninstalled manifest found`, because a reboot
+    had landed mid-download.
+  - **The failure loop is what makes it worth fixing.** A black unresponsive screen after boot
+    invites exactly one user action — hold the power button — which interrupts the download and
+    guarantees a longer, messier recovery on the next boot. It is self-reinforcing, and on a
+    handheld with no visible activity indicator there is no way to tell it apart from a hang.
+  - **The obvious fix collides with a known constraint.** Holding the splash until Steam's first
+    frame runs straight into [[boot-splash-plymouth]]: `plymouthd` starves gamescope's DRM master
+    and MUST be released as root before `sddm`. So this needs a surface that is not plymouth's, or
+    a handoff, not a one-line ordering change. Do not "fix" it by delaying the plymouth quit.
+  - **How to reproduce deterministically:** stage a client bump into the seed
+    (`steam-seed/fetch-steam-seed.sh` restages whenever Valve's rolling channel moves), boot, and
+    watch the panel while tailing `bootstrap_log.txt` over SSH. Note that `make` alone will NOT
+    re-fetch the seed: `$(STEAM_SEED)`'s only prerequisites are `STEAM_SEED.pin` and the fetcher,
+    and the pin is deliberately version-less (both channels are live rolling pointers), so a client
+    bump changes no file make can see. Run `steam-seed/fetch-steam-seed.sh` explicitly — its own
+    live-vs-staged check is what detects the bump.
+
 - [ ] **The night-mode atom workaround INVERTS if Steam fixes its property packing — re-check on
   every client update.** `packages/gamescope/patches/0002` decodes
   `GAMESCOPE_COLOR_NIGHT_MODE` as `[amount, saturation]` and pins the hue, because the arm64 client

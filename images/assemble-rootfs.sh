@@ -225,6 +225,21 @@ install -D -m0444 "$BOOTDIR_SRC/fonts/dejavu-mono.pf2" "$stage/usr/lib/novadeck/
 # that does not exist yet and cannot create one -- grub-editenv is not on this image (see
 # boot/grub.sh, which emits it for exactly this).
 install -D -m0444 "$BOOTDIR_SRC/grubenv"          "$stage/usr/lib/novadeck/boot/grubenv"
+
+# The GPT, shipped VERBATIM beside the slot-write primitives (Phase 2 of
+# .claude/plans/internal-install.plan.md). images/genpart.sh --append lays our eight partitions into
+# an OEM disk's free space and reports where they landed; partition-table.txt is the single source
+# of the sizes, types and GPT names it works from, and the same file images/make-sdcard.sh uses for
+# a card.
+#
+# VERBATIM IS THE POINT, and guard-rootfs.sh diffs the two copies rather than trusting this line.
+# An installer working from a stale table would produce a disk whose partition SIZES differ from the
+# card the release was tested on, and the first symptom is a rootfs image that does not fit a slot --
+# after the OEM's userdata has already been destroyed, which is not a state to discover a drift in.
+# genpart.sh resolves the table next to itself for exactly this reason, so it needs no argument here
+# and behaves identically from images/ in the repo and from /usr/lib/novadeck/install/ on a device.
+install -D -m0555 "$ROOT/images/genpart.sh"          "$stage/usr/lib/novadeck/install/genpart.sh"
+install -D -m0444 "$ROOT/images/partition-table.txt" "$stage/usr/lib/novadeck/install/partition-table.txt"
 echo "  RAUC: keyring.pem + stage-1/2 boot software + /usr/bin/steamos-bootconf installed"
 
 # Rewrite the baked Proton compat tools. We bake TWO — proton-cachyos and proton-ge — so the user

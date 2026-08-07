@@ -415,6 +415,35 @@ else
   [ "$seed_bad" = 0 ] && echo "    ok  installer artifacts: var-seed.tar.zst ($(du -h "$seed" | cut -f1), no per-slot state, overlay upper present)"
 fi
 
+# genpart.sh + partition-table.txt, shipped VERBATIM. Existence is the cheap half; the half that
+# matters is that they are byte-identical to the repo copies, because a drift here is silent and
+# expensive. images/make-sdcard.sh builds a card from the repo table, and the installer lays an
+# internal disk out from the shipped one -- if they disagree, an install produces partitions sized
+# differently from the card every release was tested on. The first symptom is a rootfs image that
+# will not fit its slot, discovered AFTER the OEM's userdata has been destroyed. There is no undo.
+#
+# The exec bit is checked for the same reason post-install.sh's is: a shipped script losing it in a
+# tree refactor is a failure this project has already paid for once, and here it would strand an
+# install between "GPT written" and "nothing written to it".
+for f in genpart.sh partition-table.txt; do
+  shipped="$STAGE/usr/lib/novadeck/install/$f"
+  if [ ! -s "$shipped" ]; then
+    bad "/usr/lib/novadeck/install/$f is missing — the installer cannot lay out a GPT"
+  elif ! cmp -s "$shipped" "$ROOT/images/$f"; then
+    bad "/usr/lib/novadeck/install/$f differs from images/$f — an install would partition a disk to a different layout than the card this release was tested on"
+  else
+    echo "    ok  installer artifacts: $f byte-identical to images/$f"
+  fi
+done
+if [ -e "$STAGE/usr/lib/novadeck/install/genpart.sh" ] && [ ! -x "$STAGE/usr/lib/novadeck/install/genpart.sh" ]; then
+  bad "/usr/lib/novadeck/install/genpart.sh is not executable — the installer would write a GPT for a disk it then cannot populate"
+fi
+# The primitives the hook and the installer share. Asserted here as well as on the RAUC list above,
+# because the two readers fail differently: without it an OTA dies on post-install.sh's first line,
+# while an install has no way to write parts.env and leaves stage 2 guessing the SD card's 1..8.
+[ -s "$STAGE/usr/lib/novadeck/install/lib-slotwrite.sh" ] \
+  || bad "/usr/lib/novadeck/install/lib-slotwrite.sh is missing — neither an update nor an install can write a slot"
+
 # --- the two halves of adaptive streaming, both of which fail SILENTLY --------------------------
 # Adaptive updates (images/rauc/manifest.raucm.in) cut a release-to-release OTA from 3.90G to ~125M
 # measured, but every way of losing them degrades to "a full download that still succeeds". Nothing

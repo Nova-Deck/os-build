@@ -424,5 +424,60 @@ else
   skip "zstd is not installed -- the /var seed round-trip did not run"
 fi
 
+# --- 9. genpart.sh + the table, from the SHIPPED layout -----------------------------------------
+# Both files are installed verbatim into /usr/lib/novadeck/install/ of the built root, and
+# images/guard-rootfs.sh diffs them against images/ at build time. Byte-identity is not the whole
+# claim though: the shipped copies also have to WORK from that directory, which is a different
+# thing and is what genpart.sh's `TABLE=$SELFDIR/partition-table.txt` seam exists for. A copy that
+# resolved the table through a repo-relative path would be byte-identical and dead on a device.
+#
+# So: reproduce the shipped layout in a tmpdir and assert the output is identical to the repo
+# invocation. Neither mode touches a disk without a target argument, so this needs no sgdisk.
+CASE="the shipped layout resolves its own table"
+SHIPPED="$T/usr-lib-novadeck-install"; mkdir -p "$SHIPPED"
+cp "$GENPART" "$SHIPPED/genpart.sh"
+cp "$TABLE"   "$SHIPPED/partition-table.txt"
+chmod 0555 "$SHIPPED/genpart.sh"
+
+for mode in create append; do
+  case "$mode" in
+    create) repo_out=$(bash "$GENPART" 2>/dev/null);            ship_out=$(bash "$SHIPPED/genpart.sh" 2>/dev/null) ;;
+    append) repo_out=$(bash "$GENPART" --append 2>/dev/null);   ship_out=$(bash "$SHIPPED/genpart.sh" --append 2>/dev/null) ;;
+  esac
+  [ -n "$ship_out" ] \
+    && ok "$mode mode emits from the shipped location" \
+    || bad "$mode mode emitted nothing from the shipped location -- did it fail to find its table?"
+  [ "$repo_out" = "$ship_out" ] \
+    && ok "$mode mode is identical from images/ and from the shipped dir" \
+    || bad "$mode mode differs between the repo and the shipped copy"
+done
+
+# The eight GPT names have to survive into the emitted script, or --append lays down partitions
+# parts_env_from_genpart_map cannot name. This is the join between the two halves of Phase 2.
+CASE="the shipped script carries every table name"
+ship_append=$(bash "$SHIPPED/genpart.sh" --append 2>/dev/null)
+while read -r label; do
+  [ -n "$label" ] || continue
+  printf '%s\n' "$ship_append" | grep -q -- "$label" \
+    && ok "$label appears in the emitted append script" \
+    || bad "$label is in partition-table.txt but not in what the shipped genpart.sh emits"
+done < <(awk '/^[[:space:]]*#/||/^[[:space:]]*$/{next} {print $5}' "$TABLE")
+
+CASE="the table is resolved next to the script, not through the cwd"
+# Run from an unrelated directory: a script that reached for ./partition-table.txt or a repo-relative
+# path would work in the repo and die on a device, which is the failure this seam prevents.
+( cd "$T" && bash "$SHIPPED/genpart.sh" >/dev/null 2>&1 ) \
+  && ok "works with the cwd elsewhere" \
+  || bad "the shipped genpart.sh depends on the cwd"
+
+CASE="NOVADECK_PARTITION_TABLE still overrides"
+# The other half of the seam: the installer needs to be able to point genpart at a table it chose.
+# A copy that hardcoded $SELFDIR would pass every case above and remove that lever.
+printf '# empty table\n' >"$T/empty-table.txt"
+alt_out=$(NOVADECK_PARTITION_TABLE="$T/empty-table.txt" bash "$SHIPPED/genpart.sh" 2>/dev/null)
+[ "$alt_out" != "$ship_out" ] \
+  && ok "an overridden table changes the output" \
+  || bad "NOVADECK_PARTITION_TABLE was ignored by the shipped copy"
+
 printf '\ntest-install.sh: %d passed, %d failed, %d skipped\n' "$PASS" "$FAIL" "$SKIP"
 [ "$FAIL" -eq 0 ]

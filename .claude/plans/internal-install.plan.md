@@ -497,7 +497,29 @@ before Phase 3 lands"; both were met 2026-08-05 and 1b has been validated since.
 
 ---
 
-## Phase 2 — Extract the reusable install primitives
+## Phase 2 — Extract the reusable install primitives — LANDED 2026-08-07
+
+All six items are done and `make test` is green (`install/test-install.sh` 98 cases,
+`images/test-post-install.sh` 127 — the same count as before the extraction, which is what proves it
+was behaviour-preserving). **None of it has run on hardware**, and most of it cannot: the offline
+suites drive plain directories, so what they establish is that the primitives ask for the right
+things, not that a disk laid out this way boots. Phase 4 is where that gets answered.
+
+Three things landed differently from the sketch below, each for a reason worth keeping:
+
+- **`seed_var` takes `<dev> <slot> <mnt> <source>`**, not `<dev> <slot> <seedtar>`. The mountpoint is
+  an argument because this file's own rule is that a primitive reaching for a global is right for
+  exactly one of its two callers. `<source>` is a directory (OTA: the running `/var`) or a tarball
+  (install: `var-seed.tar.zst`), because on a fresh disk the running system is the *installer*, whose
+  `/var` describes the wrong device.
+- **The /var finalization moved above the guard** in `images/assemble-rootfs.sh` (now section 4zy).
+  `var-seed.tar.zst` goes inside the root, and `guard-rootfs.sh`'s contract is that the tree it
+  inspects is the tree `mkfs.btrfs` bakes. Nothing may be added to `$stage` below the guard call.
+- **`tar -p` on the extract is load-bearing.** Measured, not assumed: without it `/var/tmp` comes back
+  0777 instead of 1777. `rsync -a` has no such mode, so the two paths would have agreed only by
+  accident of who ran them.
+
+
 
 The installer must write everything a RAUC bundle does not carry. Almost all of that logic
 exists twice-over already; the goal is one copy.

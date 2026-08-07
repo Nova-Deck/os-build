@@ -360,13 +360,14 @@ verify-card: $(SDCARD) | $(BUILD_STAMP) ## Verify the built A/B card image (in c
 verify-lock: ## Check the lock's novadeck rows against packages/ (host, seconds, no build)
 	bash packages/verify-lock-rows.sh
 
-test: verify-lock ## Run the offline bootctl/post-install/pairingd/quirks/stage-2/unit/update/publish/install suites (host, no build needed)
+test: verify-lock ## Run the offline bootctl/post-install/pairingd/quirks/stage-2/unit/perf/update/publish/install suites (host, no build needed)
 	bash images/test-bootctl.sh
 	bash images/test-post-install.sh
 	bash images/test-pairingd.sh
 	bash images/test-device-quirks.sh
 	bash images/test-stage2-grub.sh
 	bash images/test-units.sh
+	bash images/test-perf.sh
 	bash images/test-update.sh
 	bash images/test-publish-bundle.sh
 	bash install/test-install.sh

@@ -306,10 +306,12 @@ class NovadeckPower:
         # names, because scx_lavd --autopower reads them on its first tick. See main().
         self.fan_tick()
         GLib.timeout_add_seconds(3, self.fan_tick)
-        # Per-game perf enforcement (novadeck_perf): gamescope thread policy from
-        # game-tweaks.json, per-appid via the Steam process tree. Same cadence as
-        # the fan; a missing tweaks file or absent gamescope makes it a no-op.
-        self.perf_appid_cache = {}
+        # Per-game perf enforcement (novadeck_perf): gamescope + game-tree thread
+        # policy from game-tweaks.json, per-appid via the Steam process tree. Same
+        # cadence as the fan; a missing tweaks file or absent gamescope makes it a
+        # no-op. The Enforcer is long-lived because it remembers which game threads
+        # it changed, so it can put them back when a tweak is removed.
+        self.perf = novadeck_perf.Enforcer()
         self.perf_tick()
         GLib.timeout_add_seconds(3, self.perf_tick)
 
@@ -894,7 +896,7 @@ class NovadeckPower:
         # kill the timer: a bad tweaks entry must cost one tick, not the tool.
         try:
             if not self.suspended:
-                novadeck_perf.perf_tick(self.perf_appid_cache)
+                self.perf.tick()
         except Exception as exc:
             print(f"novadeck-powerd: perf tick failed: {exc}", file=sys.stderr)
         return True

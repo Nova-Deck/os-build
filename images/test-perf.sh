@@ -13,7 +13,11 @@
 #
 # NOT covered here: the sched_setscheduler/setpriority/sched_setaffinity effects of
 # apply_gamescope — those need live tids and a device. The tick's value plumbing IS covered,
-# with apply_gamescope stubbed to capture what it would enforce.
+# with the apply_* functions stubbed to capture what they would enforce, and so is
+# apply_game_tree's touched-thread bookkeeping (which threads it writes, and that it puts
+# them back) since that is decision logic rather than kernel effect.
+#
+# It also covers proton-wrapper's apply_env, the launch-time half of the same settings file.
 #
 # Runs on the host with no root and no device.
 set -uo pipefail
@@ -68,7 +72,8 @@ cat > "$TMP/tweaks.json" <<'EOF'
 {
   "global": {"gamescopeNice": 5, "gamescopeRr": false},
   "games": {
-    "620": {"enabled": true, "gamescopeNice": -4, "gamescopeCores": "prime"},
+    "620": {"enabled": true, "gamescopeNice": -4, "gamescopeCores": "prime",
+            "nice": -3, "cores": "big"},
     "990": {"gamescopeNice": -10}
   }
 }
@@ -138,26 +143,101 @@ check("cores resolved", clean.get("gamescopeCores"), [7])
 check("stray keys dropped", "enabled" in clean, False)
 check("bad cores dropped", "gamescopeCores" in np.sanitize_perf({"gamescopeCores": "99"}), False)
 check("non-int nice dropped", "gamescopeNice" in np.sanitize_perf({"gamescopeNice": "fast"}), False)
+check("bool is not a nice", "gamescopeNice" in np.sanitize_perf({"gamescopeNice": True}), False)
+
+# game-tree keys
+game = np.sanitize_perf({"nice": -3, "cores": "big"})
+check("game nice kept", game.get("nice"), -3)
+check("game cores resolved", game.get("cores"), [2, 3, 4, 5, 6, 7])
+check("game nice clamped", np.sanitize_perf({"nice": 99}).get("nice"), 19)
+check("bad game cores dropped", "cores" in np.sanitize_perf({"cores": "nope"}), False)
 
 # /proc tree walk + appid detection
 check("find steam", np.pids_by_comm(np.STEAM_COMMS), [1234])
 check("descendants", sorted(np.descendant_pids(1234)), [1300, 1400, 1500])
 cache = {}
-check("newest launch wins", np.running_appid(cache), "990")
-cache[7777] = "555"  # dead pid planted in the cache
-np.running_appid(cache)
+appid, tree = np.scan_games(cache)
+check("newest launch wins", appid, "990")
+check("game tree is that launch only", sorted(tree), [1500])
+check("steam itself never tagged", 1234 in tree, False)
+cache[7777] = (1, "555")  # dead pid planted in the cache
+np.scan_games(cache)
 check("dead pid pruned", 7777 in cache, False)
+# pid reuse: same pid, different starttime -> the cached answer must be dropped
+cache[1500] = (999999, "111")
+check("pid reuse re-reads environ", np.scan_games(cache)[0], "990")
 
 np.PROC_ROOT = pathlib.Path(os.environ["PROCNC"])
 check("no PROC_CHILDREN degrades", np.running_appid({}), None)
 np.PROC_ROOT = pathlib.Path(os.environ["NOVADECK_PERF_PROC"])
 
+# game-tree bookkeeping: what it touches, and that it puts it back.
+# The syscalls themselves are stubbed; only the decisions are under test.
+real_getpri, real_setpri = os.getpriority, os.setpriority
+applied, pinned = {}, []
+os.getpriority = lambda which, tid: applied.get(tid, 0)
+os.setpriority = lambda which, tid, value: applied.__setitem__(tid, value)
+np._set_affinity = lambda tid, mask: pinned.append((tid, sorted(mask)))
+state = {"affinity": set(), "nice": {}}
+
+np.apply_game_tree({"nice": -3, "cores": [2, 3]}, [1500], state)
+check("game tree nice applied", applied.get(1500), -3)
+check("game tree pinned", pinned, [(1500, [2, 3])])
+check("state records the tid", 1500 in state["affinity"], True)
+
+pinned.clear()
+np.apply_game_tree({}, [1500], state)  # tweak removed
+check("affinity repaired to all", pinned, [(1500, [0, 1, 2, 3, 4, 5, 6, 7])])
+check("nice restored to original", applied.get(1500), 0)
+check("state cleared after repair", (len(state["affinity"]), len(state["nice"])), (0, 0))
+
+pinned.clear()
+np.apply_game_tree({}, [1500], state)
+check("unconfigured tree is never written", pinned, [])
+
+np.apply_game_tree({"nice": -3}, [1500], state)
+np.apply_game_tree({"nice": -3}, [], state)  # game exited
+check("dead tids forgotten", len(state["nice"]), 0)
+os.getpriority, os.setpriority = real_getpri, real_setpri
+
 # tick plumbing with enforcement stubbed out
 seen = {}
 np.apply_gamescope = lambda values: seen.update(values)
-values = np.perf_tick({})
+np.apply_game_tree = lambda values, pids, state: seen.update({"_pids": sorted(pids)})
+values = np.Enforcer().tick()
 check("tick merges newest game", values.get("gamescopeNice"), 5)  # 990 lacks enabled -> global
 check("tick reaches enforcement", seen.get("gamescopeNice"), 5)
+check("tick hands the game tree over", seen.get("_pids"), [1500])
+
+# --- proton-wrapper's half of the split: Wine-only env, applied before exec.
+# Loaded by path because it ships without a .py extension. It imports
+# novadeck_perf itself, which resolves to the fake-configured module above.
+import importlib.machinery
+import importlib.util
+pw_path = os.path.join(os.environ["PERF_DIR"], "proton-wrapper")
+spec = importlib.util.spec_from_loader(
+    "pw", importlib.machinery.SourceFileLoader("pw", pw_path))
+pw = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(pw)
+
+os.environ.pop("WINE_CPU_TOPOLOGY", None)
+os.environ["TOMBSTONE_ME"] = "yes"
+pw.apply_env({"cores": "2,3", "env": {"DXVK_HUD": "fps", "TOMBSTONE_ME": None}})
+check("WINE_CPU_TOPOLOGY derived from cores", os.environ.get("WINE_CPU_TOPOLOGY"), "2:2,3")
+check("per-game env applied", os.environ.get("DXVK_HUD"), "fps")
+check("null env entry unsets", "TOMBSTONE_ME" in os.environ, False)
+
+os.environ.pop("WINE_CPU_TOPOLOGY", None)
+pw.apply_env({"cores": "2,3", "wineTopology": False})
+check("wineTopology false suppresses it", os.environ.get("WINE_CPU_TOPOLOGY"), None)
+
+os.environ["WINE_CPU_TOPOLOGY"] = "user-set"
+pw.apply_env({"cores": "2,3"})
+check("explicit user topology wins", os.environ.get("WINE_CPU_TOPOLOGY"), "user-set")
+
+os.environ.pop("WINE_CPU_TOPOLOGY", None)
+pw.apply_env({"cores": "bogus", "env": {"STILL": "applied"}})
+check("bad cores does not block env", os.environ.get("STILL"), "applied")
 
 for status, name in results:
     print(f"{status} {name}")

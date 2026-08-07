@@ -21,11 +21,25 @@ The key under `games` is the Steam appid. A game entry applies only while that g
 
 ## Keys
 
+Compositor (gamescope):
+
 | Key | Type | Effect |
 |-----|------|--------|
 | `gamescopeNice` | int −20…19 | niceness applied to every gamescope thread |
 | `gamescopeRr` | bool | promote gamescope's threads to `SCHED_RR` (realtime CPU class) |
 | `gamescopeCores` | cpulist or preset | pin gamescope's threads to these CPUs |
+
+The game itself:
+
+| Key | Type | Effect |
+|-----|------|--------|
+| `nice` | int −20…19 | niceness applied to every thread of the game's process tree |
+| `cores` | cpulist or preset | pin the game's threads to these CPUs |
+| `env` | object | environment variables for the launch (`null` unsets one) — Proton titles only |
+| `wineTopology` | bool | set `false` to pin via `cores` without reshaping what Wine reports |
+
+`cores` also derives `WINE_CPU_TOPOLOGY` for Proton titles, so Wine reports the CPUs the game
+will actually get instead of the machine's full set.
 
 `gamescopeCores` accepts a kernel-style cpulist (`"0,3-5"`) or a named preset: `all`, `little`,
 `big` (everything that is not little, prime included), `prime`. Presets are resolved from the live
@@ -43,33 +57,44 @@ compositor alone.
 
 Notes:
 
-- These knobs affect **gamescope** (the compositor), not the game's own threads. Game-side keys
-  are a planned follow-up — see below for how they split across launch paths.
+- The game tree is found the same way the appid is: every process Steam launches for a title
+  inherits the appid in its environment, so `nice` and `cores` reach the game on the Proton,
+  system-FEX and native launch paths alike. The Steam client carries no appid and is never
+  touched.
+- Compositor and game keys are enforced with deliberately different rules. gamescope is ours, so
+  clearing a `gamescope*` key restores the default. A game tree is not ours — Proton, FEX and the
+  game set their own priorities — so `nice`/`cores` are written only when set, and only threads
+  novadeck itself changed are ever put back.
 - `gamescopeRr` outranks every normal thread including the game's. It can help frame pacing when
   the compositor is starved; it can also starve the game if something in gamescope spins. Treat it
   as a per-title experiment, not a default.
 - Removing a tweak (or the whole file) is picked up on the next tick and the previous state is
   repaired — no reboot, no powerd restart.
 
-## Game-side keys (planned follow-up)
+## How the keys divide across launch paths
 
 Games launch three ways — Proton (compat tool), native x86 Linux via the system FEX
 (binfmt_misc, no compat tool), native arm64 (direct exec) — and only the Proton path has
-`proton-wrapper` in its exec chain. So the follow-up splits by *binding time*, not by file:
+`proton-wrapper` in its exec chain. So the keys split by *binding time*, not by file:
 
-- **Scheduling for the game tree** (`nice`, `cores`, later `uclamp.min`): needs no launch hook
-  at all. `novadeck-powerd` already finds the game's processes on every launch path (the tree
-  walk keys off the appid in the game's environment, which Steam sets for Proton, FEX and
-  native launches alike), so these will be enforced post-launch from the daemon, exactly like
-  the gamescope keys. Caveat: enforcement lands up to one tick (~3 s) after launch.
-- **Wine/Proton-specific env** (`WINE_CPU_TOPOLOGY`, per-game env for Proton titles): env must
-  exist before exec, and `proton-wrapper` is in the exec chain precisely for this path — it is
-  the correct and sufficient home. Meaningless for non-Wine titles, so no coverage gap.
-- **FEX tuning for native x86 games**: FEX has its own per-app mechanism (AppConfig JSON,
-  looked up by guest binary name) in the same layer as the base `Config.json`. Per-game TSO and
-  similar knobs on the system-FEX path should go through that, not through env injection.
-  Wrinkle: it keys on binary name, not Steam appid.
-- **Generic env for non-Proton titles**: no clean hook exists today. If a concrete need
-  appears, the interception point is the binfmt registration (a shim before `FEXInterpreter`
-  that reads this file, keyed off `SteamAppId` in its own environment). Native arm64 titles
-  would still need `%command%` launch options — an accepted gap for the rare case.
+- **Scheduling for the game tree** (`nice`, `cores`) needs no launch hook at all, and is
+  enforced post-launch by `novadeck-powerd` on **every** path. Caveat: enforcement lands up to
+  one tick (~3 s) after launch, so the first moments run untuned.
+- **Wine/Proton env** (`env`, `WINE_CPU_TOPOLOGY` from `cores`) must exist before exec, and
+  `proton-wrapper` is in the exec chain precisely for this path. Meaningless for non-Wine
+  titles, so no coverage gap.
+
+Still open, deliberately:
+
+- **`uclamp.min` per game.** The kernel supports it (`CONFIG_UCLAMP_TASK`), but applying it per
+  task needs `sched_setattr` (no Python binding — ctypes or a cgroup placement), so it is a
+  separate piece of work rather than another key.
+- **FEX tuning for native x86 games.** FEX has its own per-app mechanism (AppConfig JSON, looked
+  up by guest binary name) in the same layer as the base `Config.json`. Per-game TSO and similar
+  knobs on the system-FEX path belong there rather than in env injection. Wrinkle: it keys on
+  binary name, not Steam appid, so it cannot simply reuse this file's schema.
+- **Generic `env` for non-Proton titles.** No clean hook exists today; `env` therefore applies to
+  Proton launches only. If a concrete need appears, the interception point is the binfmt
+  registration (a shim before `FEXInterpreter` that reads this file, keyed off `SteamAppId` in
+  its own environment). Native arm64 titles would still need `%command%` launch options — an
+  accepted gap for the rare case.

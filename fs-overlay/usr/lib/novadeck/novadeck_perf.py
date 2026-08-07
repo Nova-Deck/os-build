@@ -148,6 +148,11 @@ def clamp(value, low, high):
     return max(low, min(high, int(value)))
 
 
+def _is_int(value):
+    """bool is a subclass of int; `"gamescopeRr": true` must not read as a nice."""
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
 # ----------------------------------------------------------------- tweaks ---
 
 def load_tweaks():
@@ -173,7 +178,16 @@ def settings_for(tweaks, appid):
 def sanitize_perf(settings):
     """Validated subset of the perf keys; a bad value drops that key alone."""
     clean = {}
-    if isinstance(settings.get("gamescopeNice"), int):
+    if _is_int(settings.get("nice")):
+        clean["nice"] = clamp(settings["nice"], NICE_MIN, NICE_MAX)
+    if "cores" in settings:
+        try:
+            cores = resolve_cores(settings.get("cores"))
+            if cores is not None:
+                clean["cores"] = cores
+        except ValueError:
+            pass
+    if _is_int(settings.get("gamescopeNice")):
         clean["gamescopeNice"] = clamp(settings["gamescopeNice"], NICE_MIN, NICE_MAX)
     if isinstance(settings.get("gamescopeRr"), bool):
         clean["gamescopeRr"] = settings["gamescopeRr"]
@@ -262,24 +276,42 @@ def _start_ticks(pid):
         return 0
 
 
-def running_appid(cache=None):
-    """Appid of the running game: the newest process under the Steam client
-    whose environment names one. `cache` (caller-owned dict) memoises the
-    per-pid environ answer across ticks; dead pids are pruned each call."""
+def scan_games(cache=None):
+    """One walk of the Steam client's descendants, two answers:
+    (appid of the newest launch, pids belonging to that launch's tree).
+
+    Every process Steam launches for a game inherits the appid in its
+    environment — the compat tool, FEX, the game itself — so the tagged set IS
+    the game tree, on the Proton, system-FEX and native paths alike. The Steam
+    client and its own helpers carry no appid and are never tagged, which is
+    what keeps enforcement off the client.
+
+    `cache` (caller-owned dict) memoises the per-pid environ read across ticks
+    as {pid: (starttime, appid)}; the starttime guards against a recycled pid
+    inheriting a dead process's answer. Dead pids are pruned each call.
+    """
     if cache is None:
         cache = {}
-    candidates = []
+    tagged = []
     for steam in pids_by_comm(STEAM_COMMS):
         for pid in descendant_pids(steam):
-            if pid not in cache:
-                cache[pid] = _environ_appid(pid)
-            if cache[pid]:
-                candidates.append(pid)
+            start = _start_ticks(pid)
+            entry = cache.get(pid)
+            if entry is None or entry[0] != start:
+                entry = cache[pid] = (start, _environ_appid(pid))
+            if entry[1]:
+                tagged.append((start, pid, entry[1]))
     for stale in [p for p in cache if not (PROC_ROOT / str(p)).exists()]:
         del cache[stale]
-    if not candidates:
-        return None
-    return cache[max(candidates, key=_start_ticks)]
+    if not tagged:
+        return None, []
+    appid = max(tagged)[2]  # newest starttime wins
+    return appid, [pid for _start, pid, tag in tagged if tag == appid]
+
+
+def running_appid(cache=None):
+    """Appid of the running game, or None. Thin view over scan_games()."""
+    return scan_games(cache)[0]
 
 
 # ------------------------------------------------------------ enforcement ---
@@ -349,10 +381,75 @@ def apply_gamescope(values):
                     _set_affinity(tid, all_cpus)
 
 
-def perf_tick(cache=None):
-    """One enforcement pass: merged tweaks for the running game, applied to
-    gamescope. The novadeck-powerd entry point."""
-    tweaks = load_tweaks()
-    values = sanitize_perf(settings_for(tweaks, running_appid(cache)))
-    apply_gamescope(values)
-    return values
+def apply_game_tree(values, pids, state):
+    """Apply the game-tree keys (`nice`, `cores`) to every thread of `pids`.
+
+    Deliberately narrower than apply_gamescope, and the asymmetry is the point:
+    gamescope is ours to own, so an unset key there means "restore the default".
+    A game tree is NOT ours — Proton, FEX and the game itself set their own
+    affinities and priorities — so here an unset key means "don't touch", and
+    only threads THIS function changed (recorded in `state`) are ever repaired.
+    Otherwise every tick would quietly undo a game's own thread tuning.
+
+    Works on every launch path, because it keys off the tagged pids from
+    scan_games() rather than off anything a launch wrapper had to inject.
+    """
+    all_cpus = set(online_cpus())
+    tids = [tid for pid in pids for tid in process_tids(pid)]
+    live = set(tids)
+    # a tid we touched that has since exited cannot be repaired; forgetting it
+    # is what keeps `state` from growing for the daemon's whole uptime
+    state["affinity"] &= live
+    for gone in [tid for tid in state["nice"] if tid not in live]:
+        del state["nice"][gone]
+
+    cores = values.get("cores") or None
+    mask = None
+    if cores:
+        mask = set(cores) & all_cpus
+        if not mask:  # every requested cpu is offline: not enforceable
+            mask = None
+
+    if mask:
+        for tid in tids:
+            _set_affinity(tid, mask)
+            state["affinity"].add(tid)
+    elif state["affinity"]:
+        for tid in state["affinity"]:
+            _set_affinity(tid, all_cpus)
+        state["affinity"].clear()
+
+    nice = values.get("nice")
+    if nice is not None:
+        for tid in tids:
+            try:
+                current = os.getpriority(os.PRIO_PROCESS, tid)
+                state["nice"].setdefault(tid, current)
+                if current != nice:
+                    os.setpriority(os.PRIO_PROCESS, tid, nice)
+            except OSError:
+                continue
+    elif state["nice"]:
+        for tid, original in state["nice"].items():
+            try:
+                os.setpriority(os.PRIO_PROCESS, tid, original)
+            except OSError:
+                continue
+        state["nice"].clear()
+
+
+class Enforcer:
+    """Per-tick enforcement, plus the state that has to survive between ticks.
+    novadeck-powerd holds one for its lifetime and calls tick()."""
+
+    def __init__(self):
+        self.appid_cache = {}
+        self.game_state = {"affinity": set(), "nice": {}}
+
+    def tick(self):
+        tweaks = load_tweaks()
+        appid, pids = scan_games(self.appid_cache)
+        values = sanitize_perf(settings_for(tweaks, appid))
+        apply_gamescope(values)
+        apply_game_tree(values, pids, self.game_state)
+        return values

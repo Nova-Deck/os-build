@@ -18,6 +18,12 @@ import pathlib
 import sys
 import time
 
+sys.path.insert(0, "/usr/lib/novadeck")
+try:
+    import novadeck_perf
+except ImportError:  # per-game tuning must never be what stops a launch
+    novadeck_perf = None
+
 BASE_CONFIG = pathlib.Path("/usr/share/fex-emu/Config.json")
 PROFILES = pathlib.Path("/usr/share/novadeck/fex-profiles.json")
 TWEAKS = pathlib.Path("/etc/novadeck/game-tweaks.json")
@@ -137,19 +143,60 @@ def write_config(settings, game_id, profiles):
     return target
 
 
+def apply_env(settings):
+    """Per-game environment. Applied last and verbatim, so it can override anything above it.
+
+    WINE_CPU_TOPOLOGY is derived from the same `cores` key novadeck-powerd enforces as an
+    affinity pin, so Wine reports the CPUs the game will actually be given rather than the
+    machine's full set. It lives here rather than in the daemon because env must exist before
+    exec and this is Wine-only — the scheduling half of `cores` is applied post-launch by the
+    daemon, on every launch path (see docs/per-game-perf.md). Set "wineTopology": false to pin
+    without also reshaping what Wine reports.
+    """
+    cores = None
+    if novadeck_perf is not None and "cores" in settings:
+        try:
+            cores = novadeck_perf.resolve_cores(settings.get("cores"))
+        except ValueError as exc:
+            print(f"proton-wrapper: ignoring bad 'cores' ({exc})", file=sys.stderr)
+    if (cores and settings.get("wineTopology") is not False
+            and "WINE_CPU_TOPOLOGY" not in os.environ):
+        os.environ["WINE_CPU_TOPOLOGY"] = f"{len(cores)}:{','.join(map(str, cores))}"
+
+    extra = settings.get("env")
+    if not isinstance(extra, dict):
+        return
+    for key, value in extra.items():
+        try:
+            if value is None:  # null is a tombstone: unset rather than set-to-empty
+                os.environ.pop(str(key), None)
+            else:
+                os.environ[str(key)] = str(value)
+        except (ValueError, OSError) as exc:
+            # one malformed name must not cost the rest of the entries
+            print(f"proton-wrapper: bad env entry {key!r}: {exc}", file=sys.stderr)
+
+
 def main():
     if len(sys.argv) < 2:
         raise SystemExit("usage: proton-wrapper PROTON_ENTRYPOINT [ARGS...]")
     proton = sys.argv[1]
 
-    # An explicit FEX_APP_CONFIG in the environment is a deliberate user override; leave it be.
-    if "FEX_APP_CONFIG" not in os.environ:
-        try:
-            contract = load_profiles()
-            settings = settings_for(load_tweaks(contract["defaults"]), appid())
+    settings = {}
+    try:
+        contract = load_profiles()
+        settings = settings_for(load_tweaks(contract["defaults"]), appid())
+        # An explicit FEX_APP_CONFIG in the environment is a deliberate user override; leave
+        # it be. The per-game env below still applies — it is a separate knob.
+        if "FEX_APP_CONFIG" not in os.environ:
             os.environ["FEX_APP_CONFIG"] = str(write_config(settings, appid(), contract["profiles"]))
-        except Exception as exc:  # noqa: BLE001 - a tuning failure must not block the launch
-            print(f"proton-wrapper: no FEX config written ({exc}); using Proton's own", file=sys.stderr)
+    except Exception as exc:  # noqa: BLE001 - a tuning failure must not block the launch
+        print(f"proton-wrapper: no FEX config written ({exc}); using Proton's own", file=sys.stderr)
+
+    try:
+        apply_env(settings)
+    except Exception as exc:  # noqa: BLE001 - same contract as the FEX block above
+        print(f"proton-wrapper: per-game env skipped ({exc})", file=sys.stderr)
 
     try:
         os.execv(proton, [proton, *sys.argv[2:]])

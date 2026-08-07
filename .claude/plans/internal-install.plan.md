@@ -160,12 +160,21 @@ per device — §4d's consent screen quotes them, so they are a product input, n
 ### CAPTURED 2026-08-05 — all four boards. What the recon actually returned
 
 `docs/internal-storage.md` holds S2, ACE, Odin 2 and Pocket FIT. Items 1, 2, 3, 5 and 6-by-HCTL
-above are answered; items 4 (ABL fallback), 7 (gamescope without logind), 8 (throughput/battery)
+above are answered by the probe; items 7 (gamescope without logind), 8 (throughput/battery)
 and 9 (`userdata` removal side effects) are **not** — none is answerable read-only from one boot,
 and the probe says so in its own closing section.
 
-- **Linux sees internal storage.** 6–8 UFS LUNs per board. `docs/bringup.md:9`'s "UFS itself
-  unverified" is closed.
+**Item 4 (ABL fallback) is answered, but not by the probe** — by the user's statement of the ABL
+contract plus both arms being observed on hardware the same day (see "The ABL contract"). Read the
+list above as *what the probe returned*, not as the state of Phase 0: the two are not the same set.
+
+**Item 6 is answered only in the form the design needs.** HCTL and `wwid` were captured on all four
+boards, which is what target selection keys on; `/dev/sdX` stability across *reboots* was never
+tested, because one read-only boot cannot test it. That is fine and stays fine — the design does not
+depend on it. Do not reopen this as a gap; reopen it only if something starts keying on `sdX`.
+
+- **Linux sees internal storage.** 6–8 UFS LUNs per board. This closed `docs/bringup.md`'s step-2
+  "UFS itself unverified", which has since been corrected to say so (2026-08-07).
 - **Constant across all four:** data LUN is 0; `xbl` on LUN 1; `abl` + `devinfo` on LUN 4; zero
   unpartitioned space, so the carve must come out of `userdata`; and `userdata` carries that
   literal name and is the largest partition by a wide margin. **`require userdata` therefore
@@ -352,7 +361,7 @@ want. Keep the existing `else` arm loud and falling back to the `PARTLABEL=` for
 that becomes the explicit `novadeck.slot=` (stage 2 knows it statically). `/var/lib/novadeck/slot`
 stays the independent witness.
 
-### 1b. Variable partition indices, for dual boot — LANDED (2026-08-06), HW pending
+### 1b. Variable partition indices, for dual boot — LANDED (2026-08-06), HW-VALIDATED (2026-08-07)
 
 Our 8 partitions will not be at indices 1..8 on a disk that keeps Android. GRUB has no
 arithmetic and `probe` has **no `--part-label`** (verified: only `driver/partmap/fs/fs-uuid/label/part-uuid`),

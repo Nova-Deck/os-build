@@ -65,6 +65,21 @@ bc() { "$BC" "${BC_ARGS[@]}" "$@"; }
 # in this file for three releases.
 SHA256=${SHA256:-sha256sum}
 
+# The shared half of this hook. Everything a RAUC bundle does not carry has to be written twice --
+# once here and once by the internal installer, onto a disk with no novadeck on it -- and two copies
+# of that logic drift in the direction "the installed system boots, the updated one does not", which
+# is discoverable only on hardware. So they live in one file and this sources it.
+#
+# Resolved RELATIVE TO THIS SCRIPT, with no seam, because fs-overlay/ mirrors the device layout
+# exactly: /usr/lib/rauc/../novadeck/install/ and fs-overlay/usr/lib/rauc/../novadeck/install/ are
+# both right, so the offline suite exercises the shipped path rather than a test-only one. Sourced
+# AFTER the seams above so the library picks up an overridden $SHA256 rather than its own default.
+SELFDIR="$(cd "$(dirname "$0")" && pwd)"
+SLOTWRITE="$SELFDIR/../novadeck/install/lib-slotwrite.sh"
+[ -r "$SLOTWRITE" ] || die "cannot read $SLOTWRITE -- this root is missing the slot-write primitives"
+# shellcheck source=../novadeck/install/lib-slotwrite.sh
+. "$SLOTWRITE"
+
 # --- which slot did we just write? --------------------------------------------------------------
 # The booted image comes from bootconf (partsets/self), NOT from RAUC: RAUC names slots as they
 # appear in system.conf, and this must not depend on a value that could be misnamed. The target is
@@ -146,63 +161,11 @@ btrfs filesystem label "$dev_root" "novadeck-root-${target^^}" >/dev/null \
 log "fsid randomised, label set to novadeck-root-${target^^}"
 
 # --- 2. per-slot /var ---------------------------------------------------------------------------
-# Reformat, then copy the RUNNING /var over wholesale. This used to be a hand-picked whitelist
-# (machine-id, then NetworkManager connections, then SSH host keys...) and that shape was wrong:
-# every new piece of per-device state has to be REMEMBERED here, and forgetting one fails SILENTLY
-# -- the update succeeds, the slot boots, and something is subtly a different device. On hardware
-# with no serial console that is the worst failure shape available. A full copy inverts it: state
-# survives by default, and anything we do NOT want has to be excluded on purpose, in writing, here.
-# (SteamOS reaches the same conclusion; cf. _reference/steamos-teardown/docs/system-updates.md §4,
-# which rsyncs the whole partition after reformatting it.)
-#
-# The reformat stays: the target's /var is whatever the PREVIOUS install left there, and stale
-# state is what makes a slot behave differently from the one that was tested. Reformat + full copy
-# means the target ends up with exactly the running slot's state and nothing else.
-mkfs.ext4 -q -F -L "novadeck-var-${target^^}" "$dev_var" || die "cannot reformat $dev_var"
-
-mkdir -p "$MNT"
-mount "$dev_var" "$MNT" || die "cannot mount the target /var ($dev_var)"
-trap 'umount "$MNT" 2>/dev/null || true' EXIT
-
-# rsync, added to the image for exactly this (images/customize-base.sh PKGS). -aHAX preserves
-# modes, owners, hard links, ACLs and xattrs. Modes matter more than they look: sshd refuses to
-# start if a private host key is group/world-readable, so a mode-losing copy would take SSH down on
-# the updated slot and nowhere else. --numeric-ids because we are copying between two roots rather
-# than resolving names through THIS one's passwd.
-#
-# --one-file-system is LOAD-BEARING. /var/log, /var/tmp, /var/cache/pacman, /var/lib/flatpak and
-# /var/lib/systemd/coredump are bind mounts from the SHARED /home offload tree, i.e. not in this
-# partition at all. Without it we would copy shared data into a 256M partition -- /var/log alone
-# can exceed it -- and duplicate what both slots already share. The mount points themselves need no
-# special handling: systemd creates a .mount unit's target directory if it is missing.
-#
-# Source is `/var/` with the trailing slash: copy the CONTENTS of /var into $MNT, not a /var/var.
-rsync -aHAX --numeric-ids --one-file-system "$VAR/" "$MNT/" \
-  || die "cannot copy /var to the target slot"
-log "copied /var wholesale ($(du -sh -x "$VAR" 2>/dev/null | cut -f1), offload bind mounts skipped)"
-
-# The overlay dirs must exist before the target boots -- the initramfs mounts /etc from them, so a
-# slot missing them does not come up. They are copied from the running /var above; this is a guard
-# against the one case that would be unrecoverable, not an expectation that the copy failed.
-upper="$MNT/lib/overlays/etc/upper"
-mkdir -p "$upper" "$MNT/lib/overlays/etc/work" "$MNT/lib/novadeck"
-
-# THE ONE FILE THAT MUST NOT SURVIVE THE COPY VERBATIM. Everything else in /var describes the
-# DEVICE and is correct on either slot; this describes WHICH SLOT it is. Written last, deliberately
-# after the wholesale copy that would otherwise clobber it.
-printf '%s\n' "$target" >"$MNT/lib/novadeck/slot"
-
-# THE SECOND THING THE COPY MUST NOT KEEP: /var/lib/novadeck/mac-wifi, the write-once record of
-# this device's derived Wi-Fi MAC. Deleted so the target re-derives it from the machine-id that the
-# copy above just carried over (gen-mac.sh: sha256(machine-id)).
-#
-# On a healthy device this is a no-op in effect -- same machine-id in, same MAC out, so the address
-# is stable across the update, which is the requirement. It matters for the devices where it is NOT
-# a no-op: a unit flashed before the MAC-collision fix has a COLLIDING address persisted here, and
-# because the file is write-once and outranks the derivation, that unit keeps the bad MAC forever.
-rm -f "$MNT/lib/novadeck/mac-wifi"
-
-umount "$MNT"; trap - EXIT
+# Reformat, then copy the RUNNING /var over wholesale, then stamp the slot's own identity onto it.
+# seed_var mounts and unmounts $MNT itself and carries the reasoning for all three; the source is a
+# DIRECTORY here, which is what makes this the OTA case (the installer passes a seed tarball,
+# because on a fresh disk there is no running system whose /var describes the device).
+seed_var "$dev_var" "$target" "$MNT" "$VAR"
 
 # --- 3. stage 2: the target's efi partition + the shared ESP ------------------------------------
 # Safe to mount the root now: the fsid was re-randomised in step 1, so this cannot alias the
@@ -214,29 +177,12 @@ trap 'umount "$MNT" 2>/dev/null || true; umount "$EFIMNT" 2>/dev/null || true' E
 mkdir -p "$EFIMNT"
 mount "$dev_efi" "$EFIMNT" || die "cannot mount the target efi partition ($dev_efi)"
 
-# THIS PARTITION IS COPIED ONTO, NEVER WIPED, and that is now load-bearing rather than incidental.
 # The efi partitions are not RAUC slots (etc/rauc/system.conf declares only rootfs.0/rootfs.1, and
-# the bundle carries only rootfs.img), so the only thing that ever writes them is this block. Since
-# the phase-1b work they also carry /EFI/steamos/parts.env -- where our eight partitions actually
-# are on THIS medium, written once by whoever created them and read by the stage-2 grub.cfg before
-# it can address anything. An update must leave it alone: the running system cannot know the layout
-# of the disk it is updating any better than the installer that laid it down did, and a mkfs or an
-# rsync --delete here would take an internal install's map away and leave stage 2 falling back to
-# the SD card's 1..8. Refresh the files below by name, and add nothing that deletes.
-
-# Stage 2: this build's GRUB + its per-slot grub.cfg + the boot font (grub.cfg references it via
-# $prefix/fonts/). All three come out of the installed root, so they are the pairing with the
-# kernel the root carries.
-grub_efi="$MNT/usr/lib/novadeck/boot/grubaa64.efi"
-grub_cfg="$MNT/usr/lib/novadeck/boot/grub-${target,,}.cfg"
-grub_font="$MNT/usr/lib/novadeck/boot/fonts/dejavu-mono.pf2"
-[ -f "$grub_efi" ] || die "the installed root carries no stage-2 GRUB at /usr/lib/novadeck/boot/grubaa64.efi"
-[ -f "$grub_cfg" ] || die "the installed root carries no /usr/lib/novadeck/boot/grub-${target,,}.cfg"
-[ -f "$grub_font" ] || die "the installed root carries no boot font at /usr/lib/novadeck/boot/fonts/dejavu-mono.pf2"
-mkdir -p "$EFIMNT/EFI/steamos/fonts"
-cp "$grub_efi"  "$EFIMNT/EFI/steamos/grubaa64.efi" || die "cannot install grubaa64.efi on the target efi"
-cp "$grub_cfg"  "$EFIMNT/EFI/steamos/grub.cfg"      || die "cannot install grub.cfg on the target efi"
-cp "$grub_font" "$EFIMNT/EFI/steamos/fonts/dejavu-mono.pf2" || die "cannot install the boot font"
+# the bundle carries only rootfs.img), so the only thing that ever writes them on an update is this
+# block. write_efi_partition carries the rest of the reasoning, including why it copies onto the
+# partition rather than wiping it -- parts.env lives there and an update cannot rebuild it.
+BOOTDIR="$MNT/usr/lib/novadeck/boot"
+write_efi_partition "$EFIMNT" "$target" "$BOOTDIR"
 log "stage-2 GRUB + grub.cfg + font installed on $dev_efi"
 
 # Partsets: copied from the RUNNING efi partition -- they are disk-derived (partition uuids), so
@@ -257,36 +203,12 @@ log "partsets refreshed on $dev_efi (self=$target other=$booted)"
 
 umount "$EFIMNT"; rm -rf "$EFIMNT"; trap 'umount "$MNT" 2>/dev/null || true' EXIT
 
-# The shared ESP's steamcl (stage 1) is refreshed from the installed root too. ABL chainloads
-# /EFI/BOOT/bootaa64.efi, so that is the copy that matters. Companion files in /EFI/BOOT/ are
-# resolved by steamcl's resolve_path() relative to the chainloader location. Content-identical
-# when unchanged -- skip rather than rewrite the ESP's live boot files on every update.
+# The shared ESP's steamcl (stage 1) is refreshed from the installed root too, so it is the same
+# build that owns the stage 2 written above. The mountpoint check is the OTA path's own: the ESP
+# comes up through an fstab automount here, whereas the installer mounts it itself.
 ls "$ESP" >/dev/null 2>&1 || true         # trigger the fstab automount if it is not up
 mountpoint -q "$ESP" || die "the ESP is not mounted at $ESP"
-# WHY sha256sum AND NOT cmp: cmp(1) is diffutils, which this image does not carry and never has.
-# The skip below is not an optimisation -- the shared ESP is the only write in the whole update
-# with no A/B copy behind it, so `cp -f` over the file ABL chainloads is the one step a power cut
-# can leave unbootable with nothing to roll back to. Comparing first is what keeps that window
-# closed on the updates where these files did not change, which is most of them. sha256sum is
-# coreutils and is asserted at the top. Read from stdin so the output is the digest alone.
-refresh_if_diff() {  # <src> <dst>
-  if [ ! -e "$2" ] || [ "$("$SHA256" <"$1")" != "$("$SHA256" <"$2")" ]; then
-    cp -f "$1" "$2" || die "cannot refresh $2"
-    sync
-    log "refreshed $2"
-  fi
-}
-steamcl="$MNT/usr/lib/novadeck/boot/steamcl.efi"
-steamcl_ver="$MNT/usr/lib/novadeck/boot/steamcl-version"
-stage_font="$MNT/usr/lib/novadeck/boot/fonts/default.pf2"
-[ -f "$steamcl" ] || die "the installed root carries no /usr/lib/novadeck/boot/steamcl.efi"
-mkdir -p "$ESP/EFI/BOOT" "$ESP/EFI/BOOT/fonts"
-refresh_if_diff "$steamcl" "$ESP/EFI/BOOT/bootaa64.efi"
-refresh_if_diff "$steamcl_ver" "$ESP/EFI/BOOT/steamcl-version"
-refresh_if_diff "$stage_font" "$ESP/EFI/BOOT/fonts/default.pf2"
-# steamcl-restricted is an empty flag file; ensure it exists
-: >"$ESP/EFI/BOOT/steamcl-restricted"
-sync
+refresh_esp_stage1 "$ESP" "$BOOTDIR"
 
 umount "$MNT"; trap - EXIT
 

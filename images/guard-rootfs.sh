@@ -327,6 +327,11 @@ fi
 # boot mirror under /usr/lib/novadeck/boot means the post-install hook cannot refresh the ESP and
 # the slot's efi partition, so the updated slot boots a boot chain that does not match it.
 #
+# lib-slotwrite.sh is on the list because the hook SOURCES it: since the primitives were factored out
+# for the internal installer to share, a root without it has a post-install that dies on its first
+# line. RAUC would then report a failed install of a slot it had already written -- recoverable, but
+# only from the other slot, and the build is the cheap place to notice.
+#
 # The exec bit on the hook is checked because it is exactly the failure this project has already
 # paid for once: a shipped script that lost its exec bit in a tree refactor, where the symptom was
 # a black screen rather than an error (see fs-overlay/README.md).
@@ -342,7 +347,8 @@ for f in usr/bin/rauc etc/rauc/keyring.pem etc/rauc/system.conf \
          usr/lib/novadeck/boot/grub-b.cfg \
          usr/lib/novadeck/boot/fonts/dejavu-mono.pf2 \
          boot/Image boot/initramfs-novadeck.img \
-         usr/lib/rauc/post-install.sh; do
+         usr/lib/rauc/post-install.sh \
+         usr/lib/novadeck/install/lib-slotwrite.sh; do
   if [ ! -s "$STAGE/$f" ]; then
     rauc_ok=0
     bad "/$f is missing or empty — the A/B update path is not installable"

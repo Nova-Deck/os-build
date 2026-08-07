@@ -13,12 +13,23 @@
 # running system's /esp and /efi, the installer addresses mountpoints under /run on a foreign disk,
 # and a primitive that reached for a global would be right for exactly one of them.
 
-# die() is the caller's if it has one -- post-install.sh's prefixes [post-install.sh] and exits 1,
-# and its offline suite asserts that shape. Only define a fallback when sourced by something that
-# has not got one.
+# die() and log() are the caller's if it has them -- post-install.sh's prefix [post-install.sh] and
+# its offline suite asserts that shape, so a primitive that printed its own name would make the
+# hook's output read as if two programs were talking. Only define fallbacks when sourced by
+# something that has not got them.
 if ! declare -F die >/dev/null 2>&1; then
   die() { printf '[lib-slotwrite] ERROR: %s\n' "$1" >&2; exit 1; }
 fi
+if ! declare -F log >/dev/null 2>&1; then
+  log() { printf '[lib-slotwrite] %s\n' "$1"; }
+fi
+
+# The hasher used by refresh_if_diff below, a seam for the same reason post-install.sh's BC is one:
+# an offline suite runs with the HOST's PATH appended and so cannot make a tool absent, which would
+# leave the "the comparator is missing" path untestable. post-install.sh defines this before it
+# sources us and asserts the tool exists ahead of anything destructive; the default here is for
+# callers that do neither.
+SHA256=${SHA256:-sha256sum}
 
 # --- parts.env (phase 1b) -----------------------------------------------------------------------
 # The map stage 2 reads before it can address anything: where our eight partitions ARE on this
@@ -110,4 +121,224 @@ parts_env_from_genpart_map() {  # reads the map on stdin, emits key=value on std
     esac
     printf '%s=%s\n' "$key" "$idx"
   done
+}
+
+# --- per-slot /var ------------------------------------------------------------------------------
+# Reformat the slot's var partition and populate it, then stamp the two pieces of identity that
+# distinguish this slot from the one the content came from.
+#
+# THE POPULATION IS WHOLESALE, and that shape is load-bearing. It used to be a hand-picked whitelist
+# (machine-id, then NetworkManager connections, then SSH host keys...) and that was wrong: every new
+# piece of per-device state has to be REMEMBERED, and forgetting one fails SILENTLY -- the update
+# succeeds, the slot boots, and something is subtly a different device. On hardware with no serial
+# console that is the worst failure shape available. A full copy inverts it: state survives by
+# default, and anything we do NOT want has to be excluded on purpose, in writing, below. (SteamOS
+# reaches the same conclusion; cf. _reference/steamos-teardown/docs/system-updates.md §4, which
+# rsyncs the whole partition after reformatting it.)
+#
+# The reformat stays: the target's /var is whatever the PREVIOUS install left there, and stale state
+# is what makes a slot behave differently from the one that was tested.
+#
+# <source> IS EITHER A DIRECTORY OR A TARBALL, and which one is what separates the two callers. The
+# OTA path passes the RUNNING /var -- there is a live system to copy from and copying it is the
+# whole point. The installer passes /usr/lib/novadeck/var-seed.tar.zst out of the root it just
+# wrote, because on a disk with no novadeck on it there is nothing to copy: the running system is
+# the installer image, whose /var describes the INSTALLER, not the device being built. Everything
+# after the population is identical, which is why it is one function and not two.
+seed_var() {  # <dev> <slot> <mnt> <source>
+  local dev="$1" slot="$2" mnt="$3" src="$4"
+  local SLOT="${slot^^}"
+  case "$SLOT" in A|B) ;; *) die "seed_var: '$slot' is not an image name (A or B)" ;; esac
+
+  # Resolve WHICH KIND of source this is before the reformat, not at the point of use. Both checks
+  # are free, and the reformat is destructive: an installer handed a seed tarball path that does not
+  # exist would otherwise discover it with the target's /var already emptied, turning a bad argument
+  # into a slot that has to be redone.
+  local mode
+  if   [ -d "$src" ]; then mode=dir
+  elif [ -f "$src" ]; then mode=tar
+  else die "no /var source at $src -- neither a directory to copy nor a seed tarball"
+  fi
+
+  mkfs.ext4 -q -F -L "novadeck-var-$SLOT" "$dev" || die "cannot reformat $dev"
+
+  mkdir -p "$mnt"
+  mount "$dev" "$mnt" || die "cannot mount the target /var ($dev)"
+  # Expanded at trap-SET time, not at trap-fire time: $mnt is a local, and by the time an EXIT trap
+  # runs on the die() path this function has gone.
+  trap "umount $(printf %q "$mnt") 2>/dev/null || true" EXIT
+
+  if [ "$mode" = dir ]; then
+    # rsync, in the image for exactly this (images/customize-base.sh PKGS). -aHAX preserves modes,
+    # owners, hard links, ACLs and xattrs. Modes matter more than they look: sshd refuses to start
+    # if a private host key is group/world-readable, so a mode-losing copy would take SSH down on
+    # the updated slot and nowhere else. --numeric-ids because we are copying between two roots
+    # rather than resolving names through THIS one's passwd.
+    #
+    # --one-file-system is LOAD-BEARING. /var/log, /var/tmp, /var/cache/pacman, /var/lib/flatpak and
+    # /var/lib/systemd/coredump are bind mounts from the SHARED /home offload tree, i.e. not in this
+    # partition at all. Without it we would copy shared data into a 256M partition -- /var/log alone
+    # can exceed it -- and duplicate what both slots already share. The mount points themselves need
+    # no special handling: systemd creates a .mount unit's target directory if it is missing.
+    #
+    # Trailing slash on the source: copy its CONTENTS into $mnt, not a /var/var.
+    rsync -aHAX --numeric-ids --one-file-system "${src%/}/" "$mnt/" \
+      || die "cannot copy $src to the target slot"
+    log "copied $src wholesale ($(du -sh -x "$src" 2>/dev/null | cut -f1), offload bind mounts skipped)"
+  else
+    tar -xf "$src" -C "$mnt" || die "cannot unpack the /var seed $src onto $dev"
+    log "seeded /var from $src"
+  fi
+
+  # The overlay dirs must exist before the target boots -- the initramfs mounts /etc from them, so a
+  # slot missing them does not come up at all. A directory source brings them; this is a guard
+  # against the one case that would be unrecoverable, and the seed tarball's own guarantee.
+  mkdir -p "$mnt/lib/overlays/etc/upper" "$mnt/lib/overlays/etc/work" "$mnt/lib/novadeck"
+
+  # THE ONE FILE THAT MUST NOT SURVIVE THE POPULATION VERBATIM. Everything else in /var describes
+  # the DEVICE and is correct on either slot; this describes WHICH SLOT it is. Written last,
+  # deliberately after the copy that would otherwise clobber it.
+  printf '%s\n' "$SLOT" >"$mnt/lib/novadeck/slot"
+
+  # THE SECOND THING THE COPY MUST NOT KEEP: /var/lib/novadeck/mac-wifi, the write-once record of
+  # this device's derived Wi-Fi MAC. Deleted so the target re-derives it from the machine-id that
+  # the copy above just carried over (gen-mac.sh: sha256(machine-id)).
+  #
+  # On a healthy device this is a no-op in effect -- same machine-id in, same MAC out, so the
+  # address is stable across the update, which is the requirement. It matters for the devices where
+  # it is NOT a no-op: a unit flashed before the MAC-collision fix has a COLLIDING address persisted
+  # here, and because the file is write-once and outranks the derivation, that unit keeps the bad
+  # MAC forever.
+  rm -f "$mnt/lib/novadeck/mac-wifi"
+
+  umount "$mnt"; trap - EXIT
+}
+
+# --- stage 2 on a slot's efi partition ------------------------------------------------------------
+# <bootdir> is /usr/lib/novadeck/boot of the INSTALLED ROOT -- the one whose bytes were just written,
+# mounted somewhere readable -- and never this running system's.
+#
+# WHY THE FILES COME OUT OF THE NEW ROOT AND NOT THE BUNDLE (or, for the installer, not the medium):
+# grubaa64.efi and grub-<slot>.cfg are boot software owned by the same build that ships /boot/Image
+# and /lib/modules/<ver> inside that rootfs. Taking them from the root makes the pairing true by
+# construction -- there is no second layout to keep in sync, and no way to install a root whose
+# stage 2 does not boot it.
+#
+# The efi partition is COPIED ONTO, NEVER WIPED, and that is load-bearing rather than incidental.
+# Since the phase-1b work it also carries /EFI/steamos/parts.env -- where our eight partitions
+# actually are on THIS medium, written once by whoever created them and read by the stage-2 grub.cfg
+# before it can address anything. An update must leave it alone: the running system cannot know the
+# layout of the disk it is updating any better than the installer that laid it down did, and a mkfs
+# or an rsync --delete here would take an internal install's map away and leave stage 2 falling back
+# to the SD card's 1..8. Refresh by name, and add nothing that deletes.
+write_efi_partition() {  # <mnt> <slot> <bootdir>
+  local mnt="$1" slot="$2" bootdir="$3"
+  local lower="${slot,,}"
+  case "$lower" in a|b) ;; *) die "write_efi_partition: '$slot' is not an image name (A or B)" ;; esac
+
+  local grub_efi="$bootdir/grubaa64.efi"
+  local grub_cfg="$bootdir/grub-$lower.cfg"
+  local grub_font="$bootdir/fonts/dejavu-mono.pf2"
+  # The paths named in these messages are the ones an operator sees on the device, so they are
+  # spelled absolutely rather than as $bootdir, which is a mountpoint under /run.
+  [ -f "$grub_efi" ] || die "the installed root carries no stage-2 GRUB at /usr/lib/novadeck/boot/grubaa64.efi"
+  [ -f "$grub_cfg" ] || die "the installed root carries no /usr/lib/novadeck/boot/grub-$lower.cfg"
+  [ -f "$grub_font" ] || die "the installed root carries no boot font at /usr/lib/novadeck/boot/fonts/dejavu-mono.pf2"
+
+  mkdir -p "$mnt/EFI/steamos/fonts" || die "cannot create $mnt/EFI/steamos/fonts"
+  cp "$grub_efi"  "$mnt/EFI/steamos/grubaa64.efi" || die "cannot install grubaa64.efi on the target efi"
+  cp "$grub_cfg"  "$mnt/EFI/steamos/grub.cfg"     || die "cannot install grub.cfg on the target efi"
+  cp "$grub_font" "$mnt/EFI/steamos/fonts/dejavu-mono.pf2" || die "cannot install the boot font"
+}
+
+# --- partsets -------------------------------------------------------------------------------------
+# The identity files steamcl matches against: it resolves the efi partition it was loaded from to an
+# image name via SteamOS/partsets/self, reads partsets/all for the ESP, and bootconf reads self too.
+# all/shared/A/B are disk-derived and identical on both efi partitions; only self/other name THIS
+# partition and the other one.
+#
+# The OTA path does NOT use this -- it copies the partsets off the running /efi, because they
+# describe the disk it is already running from and cannot be rebuilt from nothing there. The
+# installer must MINT them: it is writing a disk that has no novadeck on it, so the uuids come from
+# the GPT it just laid down. Same file format, and this is where it is written down once.
+mint_partsets() {  # <mnt> <self-image> <esp-uuid> <efi-a-uuid> <efi-b-uuid>
+  local mnt="$1" self="$2" esp_uuid="$3" efia="$4" efib="$5"
+  local self_uuid other_uuid u
+
+  case "${self^^}" in
+    A) self_uuid="$efia"; other_uuid="$efib" ;;
+    B) self_uuid="$efib"; other_uuid="$efia" ;;
+    *) die "mint_partsets: '$self' is not an image name (A or B)" ;;
+  esac
+
+  # LOWERCASE, and asserted. sgdisk prints partition GUIDs in upper case and steamcl compares these
+  # strings against the uuid of the partition it booted from; a set minted from raw sgdisk output
+  # would be well-formed, would match nothing, and the symptom is a disk that does not boot -- found
+  # only on hardware. images/make-sdcard.sh lowercases at the same seam for the same reason.
+  for u in "$esp_uuid" "$efia" "$efib"; do
+    [[ "$u" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] \
+      || die "mint_partsets: '$u' is not a lowercase partition uuid"
+  done
+
+  mkdir -p "$mnt/SteamOS/partsets" || die "cannot create $mnt/SteamOS/partsets"
+  printf 'efi %s\n' "$efia"       >"$mnt/SteamOS/partsets/A"      || die "cannot write partsets/A"
+  printf 'efi %s\n' "$efib"       >"$mnt/SteamOS/partsets/B"      || die "cannot write partsets/B"
+  printf 'esp %s\n' "$esp_uuid"   >"$mnt/SteamOS/partsets/all"    || die "cannot write partsets/all"
+  printf 'esp %s\n' "$esp_uuid"   >"$mnt/SteamOS/partsets/shared" || die "cannot write partsets/shared"
+  printf 'efi %s\n' "$self_uuid"  >"$mnt/SteamOS/partsets/self"   || die "cannot write partsets/self"
+  printf 'efi %s\n' "$other_uuid" >"$mnt/SteamOS/partsets/other"  || die "cannot write partsets/other"
+}
+
+# --- the shared ESP ---------------------------------------------------------------------------
+# Stage 1. ABL chainloads /EFI/BOOT/bootaa64.efi, so that is the copy that matters; the companions
+# in /EFI/BOOT/ are resolved by steamcl's resolve_path() relative to the chainloader location.
+#
+# WHY sha256sum AND NOT cmp: cmp(1) is diffutils, which this image does not carry and never has. The
+# skip below is not an optimisation -- the shared ESP is the only write in an update with no A/B
+# copy behind it, so `cp -f` over the file ABL chainloads is the one step a power cut can leave
+# unbootable with nothing to roll back to. Comparing first is what keeps that window closed on the
+# updates where these files did not change, which is most of them. Read from stdin so the output is
+# the digest alone. A comparator that is merely ABSENT does not announce itself -- `cmp -s` was used
+# until 2026-08-05 and "command not found" reads exactly like "the files differ", so the ESP refresh
+# degraded to unconditional copy for three releases -- which is why callers assert $SHA256 exists
+# before they touch anything, rather than discovering it here.
+refresh_if_diff() {  # <src> <dst>
+  if [ ! -e "$2" ] || [ "$("$SHA256" <"$1")" != "$("$SHA256" <"$2")" ]; then
+    cp -f "$1" "$2" || die "cannot refresh $2"
+    sync
+    log "refreshed $2"
+  fi
+}
+
+refresh_esp_stage1() {  # <esp> <bootdir>
+  local esp="$1" bootdir="$2"
+  local steamcl="$bootdir/steamcl.efi"
+  local steamcl_ver="$bootdir/steamcl-version"
+  local stage_font="$bootdir/fonts/default.pf2"
+  [ -f "$steamcl" ] || die "the installed root carries no /usr/lib/novadeck/boot/steamcl.efi"
+
+  mkdir -p "$esp/EFI/BOOT" "$esp/EFI/BOOT/fonts" || die "cannot create $esp/EFI/BOOT"
+  refresh_if_diff "$steamcl" "$esp/EFI/BOOT/bootaa64.efi"
+  refresh_if_diff "$steamcl_ver" "$esp/EFI/BOOT/steamcl-version"
+  refresh_if_diff "$stage_font" "$esp/EFI/BOOT/fonts/default.pf2"
+  # An empty flag file; steamcl reads its existence, not its contents. It restricts chainloading to
+  # the same physical device, which is what stops an installer medium from being used to boot
+  # something off another disk.
+  : >"$esp/EFI/BOOT/steamcl-restricted" || die "cannot write $esp/EFI/BOOT/steamcl-restricted"
+  sync
+}
+
+# NOTHING RESOLVES THE ESP BY THIS LABEL: ABL finds it by type GUID (ef00), the OS mounts it by
+# PARTLABEL from /etc/fstab, and the stage-2 grub.cfg addresses it by partition index. It is a human
+# convenience on a mounted disk, and it is deliberately NOT the GPT name -- a FAT label caps at 11
+# characters and NOVADECK-ESP is twelve. Kept identical to images/make-sdcard.sh's so a card and an
+# internal install present the same object.
+ESP_FAT_LABEL=NOVADECK
+
+# Installer-only: an update never creates a filesystem on the shared ESP, it refreshes files on the
+# one that is already there.
+mkfs_esp() {  # <dev>
+  local dev="$1"
+  mkfs.vfat -F 32 -n "$ESP_FAT_LABEL" "$dev" >/dev/null \
+    || die "cannot create the ESP filesystem on $dev"
 }

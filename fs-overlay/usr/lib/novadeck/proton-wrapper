@@ -35,7 +35,9 @@ def appid():
     """Steam exports the running appid under one of three names, depending on the launch path."""
     for key in ("STEAM_COMPAT_APP_ID", "SteamAppId", "SteamGameId"):
         value = os.environ.get(key, "").strip()
-        if value.isdigit():
+        # 0 is Valve's "no app" sentinel — Steam invokes the compat tool with it
+        # for prefix setup and tool probing, which is not a game to tune.
+        if value.isdigit() and value != "0":
             return value
     return None
 

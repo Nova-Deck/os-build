@@ -262,7 +262,11 @@ def _environ_appid(pid):
             env[key.decode("ascii", "replace")] = value
     for key in APPID_ENV_KEYS:
         value = env.get(key, b"").decode("ascii", "replace").strip()
-        if value.isdigit():
+        # 0 is Valve's "no app" sentinel, and it appears in practice: Steam runs
+        # the compat tool as `proton run` with STEAM_COMPAT_APP_ID=0 for prefix
+        # setup and tool probing. Treating it as an appid would tag those helpers
+        # as a game tree and tune them with the global settings.
+        if value.isdigit() and value != "0":
             return value
     return None
 

@@ -56,10 +56,13 @@ mk_proc() { # pid comm children starttime [environ]
   [[ -n $environ ]] && printf '%b' "$environ" > "$PROC/$pid/environ"
   return 0
 }
-mk_proc 1234 steam       "1300 1500" 100
+mk_proc 1234 steam       "1300 1500 1600" 100
 mk_proc 1300 reaper      "1400"      200 'HOME=/home/deck\0STEAM_COMPAT_APP_ID=620\0'
 mk_proc 1400 pv-bwrap    ""          210 'SteamAppId=620\0'
 mk_proc 1500 reaper      ""          300 'STEAM_COMPAT_APP_ID=990\0'
+# Observed on device: Steam runs the compat tool with appid 0 (prefix setup /
+# tool probing). NEWEST of the lot, so an unfiltered sentinel would win.
+mk_proc 1600 python3     ""          400 'STEAM_COMPAT_APP_ID=0\0'
 mk_proc 2000 gamescope   "2100"      50
 mk_proc 2100 steamcompmgr ""         60
 # steam on a kernel WITHOUT CONFIG_PROC_CHILDREN: task dir exists, no children file
@@ -154,12 +157,13 @@ check("bad game cores dropped", "cores" in np.sanitize_perf({"cores": "nope"}), 
 
 # /proc tree walk + appid detection
 check("find steam", np.pids_by_comm(np.STEAM_COMMS), [1234])
-check("descendants", sorted(np.descendant_pids(1234)), [1300, 1400, 1500])
+check("descendants", sorted(np.descendant_pids(1234)), [1300, 1400, 1500, 1600])
 cache = {}
 appid, tree = np.scan_games(cache)
 check("newest launch wins", appid, "990")
 check("game tree is that launch only", sorted(tree), [1500])
 check("steam itself never tagged", 1234 in tree, False)
+check("appid 0 sentinel ignored", 1600 in tree, False)
 cache[7777] = (1, "555")  # dead pid planted in the cache
 np.scan_games(cache)
 check("dead pid pruned", 7777 in cache, False)

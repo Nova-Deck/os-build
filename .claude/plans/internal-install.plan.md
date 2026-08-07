@@ -72,34 +72,71 @@ to head this list is closed** — the ROCKNIX ABL is a chooser, not a fixed bran
 A read-only `install/probe-internal.sh`, run from a dev card over SSH, dumping to
 `docs/internal-storage.md`:
 
-1. **LUN topology** — `lsblk`, and for every internal disk `sgdisk -p`, `sfdisk --dump`,
-   `/sys/block/*/{removable,ro,size}`, the UFS `wwid` and LUN number. Which LUN carries
-   `super`/`userdata`/`metadata`, and whether it is exclusively Android data.
+1. **LUN topology** — `lsblk`, and for every internal disk `sfdisk --dump`,
+   `/sys/block/*/{removable,ro,size}`, the UFS `WWN` and LUN number (read off `lsblk`'s `HCTL`
+   column, i.e. `Host:Channel:Target:Lun`, rather than guessed from the `sdX` letter). Which LUN
+   carries `super`/`userdata`/`metadata`, and whether it is exclusively Android data.
+
+   > **Not `sgdisk`.** An earlier draft of this item specified `sgdisk -p`; gptfdisk is absent
+   > from the novadeck rootfs (it is one of the three packages the *installer* image must add), so
+   > a probe built on it would fail on the very device it inspects — the `cmp`-in-`post-install.sh`
+   > class of bug. `install/probe-internal.sh` therefore runs on an existing dev card with no
+   > rebuild, using `sfdisk`/`lsblk`/`findmnt` only, and picks `sgdisk` up opportunistically if it
+   > is ever present.
 2. **The exact OEM partition name set** per SoC, so `install/disk-rules.conf` is written
    against reality and not against recalled AOSP naming. At least one SM8550 and one
    SM8650 device.
 3. **Whether Linux sees internal storage at all.** `docs/bringup.md:9` still says "UFS
    itself unverified". `CONFIG_SCSI_UFSHCD` is in the config; that is not the same thing.
-4. **ABL fallback when the stored default names a medium that is absent** — specifically,
-   default = "Linux / SD" with no card inserted: does ABL fall back to internal, or stop?
-   This is the one ABL question that still changes the product: it decides whether the
-   post-install flow ends with "reboot, done" or must end with "hold Volume Up and change
-   your default", and whether "install complete" should power off or reboot.
+4. ~~**ABL fallback when the stored default names a medium that is absent.**~~ **ANSWERED
+   2026-08-05 — and the question was posed backwards.** See "The ABL contract" below: the
+   fallback runs internal→external, not the reverse, so with no card inserted ABL boots our
+   internal install. **The post-install flow is "remove the card and reboot, done"** — no
+   Volume-Up step, and no reason to prefer power-off over reboot.
 5. **Where in `devinfo` the boot choice lives, and its size** — capture the partition raw,
    *for backup only*. The choice is persisted in `devinfo` (user-confirmed 2026-08-05).
    `devinfo` is already in the `deny` list at §3, and **the installer must never write it**
    (see "Explicitly out of scope"). This item is a capture, not a risk.
 
-   > **Closed, was the dual-boot go/no-go.** ABL is a chooser: a *configurable default boot
-   > target* (Linux internal / SD / USB, or Android) plus a *temporary override by holding
-   > Volume Up at startup*. Confirmed by the user 2026-08-05 and corroborated by the upstream
-   > README in `_reference/abl`. So an ESP on internal cannot strand Android, and an internal
-   > install stays recoverable by booting the installer medium on demand — which is exactly
-   > the mechanism `images/partition-table.txt` already assumes. Two further facts from
-   > upstream's `update.sh`: ABL is a **signed, per-device ELF** (`abl_signed-<HW_DEVICE>.elf`
-   > flashed to `abl_a`/`abl_b`), so we consume it and cannot rebuild it; and it is addressed
-   > via `/dev/disk/by-partlabel/`, so internal storage enumerates with partlabels from Linux
-   > under ROCKNIX's kernel — evidence for (3), not proof for ours.
+   > **Closed, was the dual-boot go/no-go.** An ESP on internal cannot strand Android. Two
+   > further facts from upstream's `update.sh`: ABL is a **signed, per-device ELF**
+   > (`abl_signed-<HW_DEVICE>.elf` flashed to `abl_a`/`abl_b`), so we consume it and cannot
+   > rebuild it; and it is addressed via `/dev/disk/by-partlabel/`, so internal storage
+   > enumerates with partlabels from Linux under ROCKNIX's kernel — evidence for (3).
+
+### The ABL contract — corrected 2026-08-05, and it moves two design points
+
+Stated by the user, who worked on the ROCKNIX ABL. An earlier draft of this plan described a
+four-target chooser (Linux internal / SD / USB, or Android) with a Volume-Up override that
+switched medium. **That model was wrong.** It is:
+
+- **Two modes: Android, or Linux.** Android mode boots Android on internal, full stop.
+- **Linux mode tries INTERNAL FIRST, then falls back to external.** "Internal" means an internal
+  ESP carrying either `/EFI/BOOT/bootaa64.efi` or `/KERNEL`. The test is on **content**, not on
+  the partition existing.
+- **A "force external" option** overrides that and always takes the external medium.
+- **Volume Up is a ONE-TIME override to Android**, offered when Linux mode is selected. It does
+  not choose a medium. (§4d's consent text happens to state this correctly already.)
+- **The ESP is found by partition TYPE at any index** — ROCKNIX's own internal install on the
+  Pocket FIT puts its ESP (`C12A7328-…`) at **p12** and boots. Appending our partitions to an
+  existing OEM GPT is therefore safe, which Phase 2's `genpart.sh --append` depends on.
+
+**Both arms were observed on hardware the same day, not merely described.** S2, ACE and Odin 2
+have no internal ESP and fell through to the SD card unaided; the FIT has one at p12 and needed
+force-external to reach the card at all.
+
+**Consequence 1 — the recovery story in §3 is wrong as written.** It claims an internal install
+"stays recoverable by booting the installer medium on demand". With internal-first that is false:
+once our internal ESP exists, inserting the installer card boots *internal*. **Recovery requires
+the force-external option**, and it must be named in `docs/install-internal.md` and
+`docs/RUNBOOK.md` in the user's terms. The difference between naming it and not is the difference
+between a recoverable device and one the user believes we bricked.
+
+**Consequence 2 — "arm the bootconf last" now has a precise definition.** ABL's test is content-
+based, so the last byte the installer writes is **`/EFI/BOOT/bootaa64.efi` on the internal ESP**.
+Before it, an interrupted install still boots the card and re-running works; after it, internal
+wins. The ESP partition itself, its `grubenv`, the partsets and `A.conf` can all be written
+earlier — it is that one file that flips the device over.
 6. **LUN enumeration stability across boots** — if `/dev/sdX` is not stable, target
    selection must key on `wwid`/LUN, not the kernel name.
 7. **gamescope without a logind session.** The main image gets an active `seat0` via SDDM
@@ -120,6 +157,133 @@ A read-only `install/probe-internal.sh`, run from a dev card over SSH, dumping t
 **Deliverable:** `docs/internal-storage.md` with captured GPTs, plus the real `userdata` sizes
 per device — §4d's consent screen quotes them, so they are a product input, not just recon.
 
+### CAPTURED 2026-08-05 — all four boards. What the recon actually returned
+
+`docs/internal-storage.md` holds S2, ACE, Odin 2 and Pocket FIT. Items 1, 2, 3, 5 and 6-by-HCTL
+above are answered by the probe; items 7 (gamescope without logind), 8 (throughput/battery)
+and 9 (`userdata` removal side effects) are **not** — none is answerable read-only from one boot,
+and the probe says so in its own closing section.
+
+**Item 4 (ABL fallback) is answered, but not by the probe** — by the user's statement of the ABL
+contract plus both arms being observed on hardware the same day (see "The ABL contract"). Read the
+list above as *what the probe returned*, not as the state of Phase 0: the two are not the same set.
+
+**Item 6 is answered only in the form the design needs.** HCTL and `wwid` were captured on all four
+boards, which is what target selection keys on; `/dev/sdX` stability across *reboots* was never
+tested, because one read-only boot cannot test it. That is fine and stays fine — the design does not
+depend on it. Do not reopen this as a gap; reopen it only if something starts keying on `sdX`.
+
+- **Linux sees internal storage.** 6–8 UFS LUNs per board. This closed `docs/bringup.md`'s step-2
+  "UFS itself unverified", which has since been corrected to say so (2026-08-07).
+- **Constant across all four:** data LUN is 0; `xbl` on LUN 1; `abl` + `devinfo` on LUN 4; zero
+  unpartitioned space, so the carve must come out of `userdata`; and `userdata` carries that
+  literal name and is the largest partition by a wide margin. **`require userdata` therefore
+  survives as a constant** — the naming risk flagged below did not materialise — and rule 6's
+  label/size cross-check and the dominance fallback agree on every board.
+- **Sector size is 4096 on all four**, across two UFS vendors and two SoCs. The span arithmetic
+  must READ the logical sector size, never assume 512: an 8× error puts writes outside the span,
+  which is precisely what containment exists to catch. `test-select-target.sh` needs a 512-byte
+  fixture anyway, since no real board will exercise that arm.
+- **`zram0` enumerates as an install candidate** on every board — `removable=0`, `ro=0`, so rule 2
+  does not exclude it. Harmless today (no GPT, so `require userdata` refuses it), but
+  `select-target.sh` should exclude zram explicitly rather than rely on that.
+
+### Layout variation is the normal case, not the exception
+
+Four devices are available to capture — KONKR Pocket FIT and AYANEO Pocket S2 (SM8650), AYANEO
+Pocket ACE and AYN Odin 2 (SM8550) — and their internal layouts are expected to differ. Two
+consequences, both of which shape Phase 3 rather than Phase 0:
+
+> **Confirmed by the captures, with the axis identified: layout tracks the VENDOR, not the SoC.**
+> S2 vs ACE is a different SoC generation with the same table; ACE vs Odin 2 is the same SoC with
+> different tables. Those two pairs cross-cut, which is what isolates the variable. `userdata` is
+> `/dev/sda11` on the AYANEO-family boards (KONKR is an AYANEO sub-brand) and **`/dev/sda17`** on
+> the Odin 2, which carries six names no AYANEO board has: `nvdata1/2`, `qpdata1/2`,
+> `reserve1/2`. So **any rule keyed on partition index is already broken** — identification by
+> label is not merely preferable, it is required. `reserve1`/`reserve2` are also exactly the kind
+> of generic OEM name a deny list cannot anticipate on an uncaptured board, which is concrete
+> support for span containment being the primary defence rather than the name list.
+
+- **`docs/internal-storage.md` is a set of per-board sections, never one canonical table.**
+  `probe-internal.sh` puts the board in its H1 so captures concatenate. `disk-rules.conf` is
+  authored from the **union** of all captures, and `test-select-target.sh` must stay green against
+  **every** captured GPT — a rule tightened for one board and silently breaking another is the
+  failure this guards.
+- **`fs-overlay/usr/lib/novadeck/devices/` already carries 14 boards.** Ten of them will have no
+  capture, and the capture set will always be incomplete. This is why identification plus **span
+  containment** replaced the name list as the primary defence (see Phase 3): an uncaptured board
+  installs *correctly by construction* rather than being refused for lack of a fixture, because
+  everything outside the identified `userdata` extent is protected geometrically regardless of what
+  it is called. Captures still matter — they author the `deny` net, settle per-board naming, and
+  serve as test fixtures — but the design no longer depends on having one per board. Since the
+  probe is read-only, it is safe to hand to an owner of any uncaptured board.
+
+**One naming risk to check across the four captures:** rule 6's `require userdata` assumes that
+literal name. If any board calls its data partition something else, the rule refuses a device we
+actually support — which is safe but wrong. If the captures disagree, `require` becomes a
+per-board name rather than a constant, resolved from `devices/*.conf`.
+
+> **Checked, 2026-08-05: it holds on all four.** `require` stays a constant. Re-open only if a
+> fifth board disagrees.
+
+### A disk already carrying a THIRD-PARTY install — an open Phase 3 decision
+
+Found on the Pocket FIT, which has an internal ROCKNIX installation: `userdata` shrunk to 64 GiB
+with `ROCKNIX` (2 GiB vfat) and `STORAGE` (380 GiB ext4) appended after it. The three sum to the
+S2's stock `userdata` exactly, so that distribution performs the same carve this plan describes —
+useful evidence that the mechanism is sound in the field, on this hardware.
+
+**Policy, decided 2026-08-05: REFUSE, and the user removes the other distribution first.** Taking
+over `STORAGE` was rejected — it would mean deleting a partition we did not create, which breaks
+the "exactly one pre-existing partition is modified" invariant the whole safety model rests on.
+
+**The mechanism does not yet implement that policy, and this is the part to build.** Today the FIT
+is refused only by accident of proportions: rule 6 fires because `STORAGE` (380 GiB) is larger than
+`userdata` (64 GiB), so label and size disagree. Reverse the proportions — an install that left
+`userdata` at 300 GiB and took 100 — and `userdata` is still the largest, rule 6 passes, and we
+**succeed**: `ROCKNIX`/`STORAGE` sit outside `[userdata_start, userdata_end]`, so span containment
+protects them by construction and our eight partitions lay down inside the shrunken `userdata`
+quite happily. The result is one disk carrying Android, another distro and NovaDeck, three of them
+believing they own the boot chain, with no rule having objected.
+
+### RESOLVED 2026-08-07 — refuse on a FOREIGN BOOTABLE ESP, and nothing wider
+
+**If the target disk carries an ESP (type `C12A7328-…`) that is not ours and that holds either
+`/EFI/BOOT/bootaa64.efi` or `/KERNEL` → refuse, and tell the user to remove the other OS first.**
+
+The rule is worth stating in terms of *why it is the right one*: it is the exact test ABL performs.
+Per "The ABL contract", Linux mode boots the internal ESP carrying either of those two files, and the
+test is on **content**, not on the partition existing. So two such ESPs on one disk is not a
+tidiness problem we are refusing on principle — **ABL has no way to choose between them**, and
+whichever it picks, one of the two installations is unreachable. Refusing is the only honest answer,
+and "remove the other distribution first" is the only instruction that fixes it.
+
+That makes it strictly better than the earlier sketch ("any partition neither OEM-recognised nor
+ours"), which needed a judgement call about what counts as a foreign rootfs, and better than the
+accident of proportions the Pocket FIT is refused by today, which reverses the moment `userdata`
+stays larger than the other distro's partitions.
+
+It also **resolves the rule-4 tension rather than reconciling it**. There is no longer a spectrum
+between "an unknown OEM partition" and "a foreign rootfs/boot pair": an unrecognised name outside
+the span is still merely *reported*, so uncaptured boards install, and the only refusal is a second
+bootable ESP. A foreign distro with no ESP of its own cannot be booted by ABL either, so it is not a
+competing boot chain and is not our business.
+
+**Two qualifiers.**
+
+- **Ours is exempt** — on a reinstall our own ESP carries `/EFI/BOOT/bootaa64.efi` by construction.
+  This falls out of rule 8's ordering, which already runs the already-NovaDeck identity check before
+  anything else, but the exemption must be explicit rather than implied by order alone: identify our
+  ESP by the `NOVADECK-ESP` GPT name plus its `SteamOS/conf` content, and skip it.
+- **An empty ESP is not a refusal** — an OEM ESP carrying neither file is invisible to ABL, so
+  appending ours beside it is safe. This is the same content-not-existence test, applied
+  consistently, and it is what keeps `genpart.sh --append` viable on a board that ships an unused
+  ESP.
+
+The refusal message must say what is true — "this disk already carries another Linux installation
+(partition N, `<label>`); remove it and retry" — never rule 6's "contradiction about a device we do
+not understand".
+
 ---
 
 ## Phase 1 — Partition identity: kill the PARTLABEL coin flip
@@ -138,7 +302,41 @@ then nondeterministic across **five** sites, not one:
 The `grow-home` one is the worst: it would run `systemd-repart` + `resize2fs` on the
 **wrong disk**. One mechanism must cover all five.
 
-### 1a. Boot-time PARTUUID derivation in stage 2
+### 1a. Boot-time PARTUUID derivation in stage 2 — LANDED + HW-VALIDATED (2026-08-05)
+
+`probe` is in `MODULES`, the config derives all three PARTUUIDs with a `"none"`-aware guard and an
+announced PARTLABEL fallback, `novadeck.slot=` is on the cmdline, and the initramfs reads it.
+`test-stage2-grub.sh` covers it (167 assertions, incl. the module list).
+
+**Validated on four boards** — Pocket S2, Pocket ACE, Odin 2, Pocket FIT — each booting
+`root=PARTUUID=` / `novadeck.var=` / `novadeck.efi=` with `novadeck.slot=A`, `/run/novadeck/boot`
+reporting `slot=A` with all three devices resolved, and **no fallback message on any of them**
+(user-confirmed on-screen, corroborated by `/proc/cmdline`).
+
+**THE PHASE 1 GATE BELOW IS MET — both slots plus one OTA, 2026-08-05.**
+
+- **Slot B** booted on a Pocket S2 via `set-primary B`: `slot=B`, root/var/efi all on B's
+  partitions, three PARTUUIDs distinct from A's, and `/var/lib/novadeck/slot` agreeing. It also
+  auto-booted the saved board entry, so the shared-ESP grubenv survives a slot switch.
+- **One OTA**, a dev bundle built from this tree, installed from B into A in 4m33s (full
+  `raw_copy` — no adaptive reuse on this path, so the 61× figure is a WIRE saving against a
+  served delta, not a local write saving). Post-install wrote `efi-A` a config with all three
+  `probe --part-uuid` lines and `novadeck.slot=A`, and the rebooted slot came up on
+  `root=PARTUUID=` — **which is the part a fresh-card boot cannot prove**, since it is
+  `post-install.sh` rather than `make-sdcard.sh` that writes the config an updated slot boots.
+- The `/var` copy carried the machine-id across, `mac-wifi` was correctly deleted so the MAC
+  re-derived to the same value, and the device returned on the **same IP**.
+
+**The PARTLABEL fallback arm has now FIRED on hardware — 2026-08-06, Pocket S2.** It was
+offline-asserted only until then, and its whole job is to run when something has already gone wrong,
+which is the worst time to discover it is broken. Forcing it turned out not to need the planned
+`grubaa64.efi` built without `probe`: with 1b landed, setting `nd_var_a` in `parts.env` to a
+nonexistent partition index makes `probe --part-uuid` return the literal `none`, the three-way guard
+rejects it, and all three specs drop to PARTLABEL. The device booted, printed the two-line message,
+and came up with `root=PARTLABEL=novadeck-root-A` on `/proc/cmdline` — no black screen.
+
+1b has since landed and been HW-validated, and 1c is dropped by scope decision — see both below.
+Phase 1 is closed.
 
 `probe --part-uuid` exists in our tree (`work/grub/src-grub/grub-core/commands/probe.c:50`),
 formats lowercase via `%pG` — exactly the form `findfs PARTUUID=` and the kernel want — and
@@ -163,50 +361,119 @@ want. Keep the existing `else` arm loud and falling back to the `PARTLABEL=` for
 that becomes the explicit `novadeck.slot=` (stage 2 knows it statically). `/var/lib/novadeck/slot`
 stays the independent witness.
 
-### 1b. Variable partition indices, for dual boot
+### 1b. Variable partition indices, for dual boot — LANDED (2026-08-06), HW-VALIDATED (2026-08-07)
 
 Our 8 partitions will not be at indices 1..8 on a disk that keeps Android. GRUB has no
 arithmetic and `probe` has **no `--part-label`** (verified: only `driver/partmap/fs/fs-uuid/label/part-uuid`),
 so indices cannot be discovered in stage 2.
 
-Mechanism: the installer writes the eight indices into the ESP's existing grubenv, which
-stage 2 already loads for `saved_entry`:
+Mechanism: whoever creates the partitions writes the eight indices into a GRUB env block, and
+stage 2 reads them back before it addresses anything.
+
+**Correction to this section's original sketch, and the reason it matters.** The map was to live in
+the ESP's existing grubenv. **It cannot: stage 2 must locate the ESP before it can read that file,
+and the ESP's index is one of the eight numbers in it.** The map therefore lives in its own block on
+**the slot's own efi partition** — `($root)/EFI/steamos/parts.env`. `$root` is the partition steamcl
+chainloaded stage 2 from, so it is the one place reachable with no index at all. Do not move this
+back to the ESP.
+
+Durability was checked rather than assumed: the efi partitions are **not RAUC slots** (`system.conf`
+declares only `rootfs.0`/`rootfs.1`; `manifest.raucm.in` carries only `rootfs.img`), and
+`post-install.sh` mounts the target efi partition and `cp`s named paths onto it — no `mkfs`, no
+delete. `/var`, by contrast, is reformatted on every update, so nothing of ours could ever live
+there. A comment at that site now records the constraint.
 
 ```
-load_env -f ($esp)/EFI/steamos/grubenv saved_entry nd_esp nd_efi_a nd_efi_b nd_root_a nd_root_b nd_var_a nd_var_b nd_home
-if [ -z "$nd_root_a" ]; then set nd_esp=1; set nd_efi_a=2; … ; fi   # defaults from partition-table.txt
-set slotroot="$bootdisk,gpt$nd_root_a"
+set esp_idx=1                    # defaults from partition-table.txt, per slot
+set root_idx=4
+set var_idx=6
+if [ -f ($root)/EFI/steamos/parts.env ]; then
+  load_env -f ($root)/EFI/steamos/parts.env nd_esp nd_efi_a … nd_home
+  if [ -n "$nd_esp" -a -n "$nd_root_a" -a -n "$nd_var_a" ]; then   # ALL-OR-NOTHING
+    set esp_idx="$nd_esp"; set root_idx="$nd_root_a"; set var_idx="$nd_var_a"
+  else echo "…incomplete…"; sleep 3; fi
+fi
+set esp="$bootdisk,gpt$esp_idx"
 ```
 
-Defaults come from `partition-table.txt` at generation time, so an SD card is unchanged and
-never reads the new keys. `post-install.sh` does not rewrite grubenv, so the values survive
-OTA. Testable offline in `images/test-stage2-grub.sh`.
+Three properties worth keeping: the `[ -f ]` guard makes a medium without the file *silent* (that is
+every card built before this landed); the upgrade is all-or-nothing, so a partial file can never mix
+a root from one layout with a `/var` from another; and the loaded key names differ from the consumed
+`*_idx` names because `load_env` cannot rename — loading straight into `esp_idx` would destroy the
+default before it could be judged.
 
-### 1c. A disk-scoped device map in the initramfs
+**`images/make-sdcard.sh` seeds it on both efi partitions with the card's real indices.** On a card
+those equal the defaults, so it changes no behaviour — the point is that the card then exercises the
+same lookup the internal install depends on, on every boot, rather than shipping that path untested
+until the installer exists. `images/verify-card.sh` asserts the seeded values against
+`partition-table.txt`, since a wrong value would otherwise be invisible at boot.
 
-In `images/initramfs/init`, after `ROOTDEV` resolves, walk **the boot disk's own** partitions
-via sysfs and publish `/run/novadeck/dev/<gpt-name> -> /dev/<part>`:
+Offline coverage in `images/test-stage2-grub.sh` (195 assertions, was 167): the index variables in
+the device specs, the defaults matching the table, the `[ -f ]`-guarded load from `($root)`, per-slot
+key selection with the other slot's keys never consulted, the single all-or-nothing condition, and
+both orderings (defaults before the load, load before the first use). Both a baked-index regression
+and a wrong-slot-key regression were confirmed to fail the suite.
 
-```sh
-part=${ROOTDEV#/dev/}
-disk=$(basename "$(readlink -f /sys/class/block/$part/..)")
-mkdir -p /run/novadeck/dev
-for p in /sys/class/block/"$disk"/*/partition; do
-  n=$(basename "$(dirname "$p")")
-  l=$(blkid -p -s PART_ENTRY_NAME -o value "/dev/$n" 2>/dev/null) || continue
-  case "$l" in novadeck-*|NOVADECK-ESP) ln -sfn "/dev/$n" "/run/novadeck/dev/$l" ;; esac
-done
-```
+**HW-VALIDATED 2026-08-06 on a Pocket S2 — all four arms, from one card, no reflash.** `/efi` is
+mounted `rw`, so `parts.env` is editable in place over SSH; the image ships no `grub-editenv`, so the
+block was rewritten by hand, which road-tested the Phase 2 `write_parts_env` format on real hardware
+through GRUB itself.
 
-~15 lines, no udev, index-agnostic, works for `sda4` and `mmcblk0p4` alike, disk-scoped by
-construction. Adds `blkid` to `BINS` in `images/mkinitramfs.sh` (util-linux, shares
-`libblkid` with the `findfs` already staged). Note this is *more* deterministic than
-`by-label`, which waits on an asynchronous udev probe — which is why `grow-home.sh` has a
-settle-and-poll block today.
+| arm | edit | result |
+|---|---|---|
+| normal | none | no message; `root=PARTUUID=5df235fc-…`, all three devices resolved, `novadeck.efi=` matching the build log's efi-A uuid |
+| **file is authoritative** | `nd_var_a=9` (nonexistent) | `probe` → `none`, guard rejects, **all three specs drop to PARTLABEL** — a card whose map equals its defaults can only produce that by having READ the file |
+| incomplete | `--unset nd_var_a` | the "incomplete" message, then **PARTUUID with the identical three uuids** — the all-or-nothing guard rejected the whole map rather than mixing a filed `nd_root_a` with a defaulted `var` |
+| absent | `rm parts.env` | completely silent, PARTUUID — the `[ -f ]` guard, i.e. every card built before this change |
 
-Then repoint the four remaining consumers at `/run/novadeck/dev/…`:
-`assemble-rootfs.sh` (both fstab lines + `grow-home.sh`'s `HOME_DEV`),
-`fs-overlay/etc/rauc/system.conf`, and `post-install.sh`'s `DEVDIR` seam.
+The poisoned-value arm is the one that carries the proof, and it doubles as the PARTLABEL fallback's
+first hardware firing (§1a). The incomplete arm is the one that would have caught a partial map: a
+leaked `nd_root_a` with a defaulted `var` would have shown a different `novadeck.var=` uuid, and it
+showed the same one index 6 gives.
+
+**One product finding, fixed the same day:** 3s is too short to read a message in the boot font on a
+Pocket S2 panel. All four diagnostic arms now `sleep 10`, asserted by two new cases. Waiting for a
+keypress instead was rejected — `sleep --interruptible` is ESC-only, the power button never reaches
+GRUB's EFI console input, and these arms fire on users' devices, where blocking on input with no
+keyboard makes a bootable device look bricked.
+
+### 1c. A disk-scoped device map in the initramfs — DROPPED 2026-08-07, and here is why
+
+The OS-side sites keep resolving by name: `assemble-rootfs.sh`'s two fstab lines
+(`PARTLABEL=NOVADECK-ESP`, `LABEL=novadeck-home`), `grow-home.sh`'s `HOME_DEV`, and
+`fs-overlay/etc/rauc/system.conf`'s `by-partlabel/novadeck-root-{A,B}`. **This is a decision, not an
+omission.** A future reader will ask why the bootloader was moved to PARTUUID while the OS was not,
+and without the answer recorded the natural move is to reinstate this section.
+
+**No supported state puts two `novadeck-*` named disks in front of a running system.** Scoped by the
+product owner 2026-08-07:
+
+| medium | GPT names | collides? |
+|---|---|---|
+| installer / recovery card | `esp`, `root` (2-partition image) | no |
+| SD game library card | freshly formatted by Steam's helper, ext4 | no |
+| internal install | the `novadeck-*` eight | the only one |
+
+The two arguments that seemed to require 1c are both out of scope. **Reusing the current novadeck
+card as the library card is not a goal** — Steam games are re-downloadable and saves are cloud-synced,
+so the library card is a fresh card the user inserts long after boot, not their old install medium.
+And **recovery reuses the INSTALLER card**, not a novadeck card, so the recovery boot presents
+`esp`/`root` and cannot collide either. A user who deliberately inserts an old novadeck card into an
+internally-installed device is accepted as unsupported.
+
+**What would reopen this,** and the reason the reasoning is preserved rather than deleted: any flow
+that puts a second `novadeck-*` disk in front of a *running* system. The sharp edge is
+`grow-home.sh` — it runs on **every boot** by design ("safe to run every boot"), resolves
+`/dev/disk/by-label/novadeck-home`, takes the parent disk from `lsblk -no pkname`, and runs
+`systemd-repart --dry-run=no` on it. With two candidates the symlink is an async udev coin flip and
+the loser gets repartitioned. `system.conf` is the other: an OTA would write ~3.5 GB to whichever
+disk udev picked, then mark the boot state updated.
+
+The mechanism, if it is ever needed: walk the boot disk's own partitions in sysfs after `ROOTDEV`
+resolves and publish `/run/novadeck/dev/<gpt-name> -> /dev/<part>` — ~15 lines, no udev,
+index-agnostic, disk-scoped by construction, needing `blkid` in `images/mkinitramfs.sh`'s `BINS`.
+It is also *more* deterministic than `by-label`, so it would let `grow-home.sh` drop its
+settle-and-poll block.
 
 ### Tests
 
@@ -214,26 +481,52 @@ Then repoint the four remaining consumers at `/run/novadeck/dev/…`:
   lines, `root=PARTUUID=$rootuuid`, `novadeck.slot=<S>`, the grubenv default block, and that
   the fallback arm still emits the PARTLABEL form. Follow the existing precedent of
   *executing* the emitted regexp rather than grepping for it.
-- New `images/test-initramfs-init.sh` — run the real `init`'s map block against a fake
-  `/sys/class/block` with **two** disks carrying identical PARTLABELs and `blkid` stubbed.
-  Assert every symlink points at a partition of the boot disk and that the second disk's
-  identically-named partition is never linked.
-- `images/test-post-install.sh` — re-point `DEVDIR`, stays green.
-- Grep assertion: no shipped file references `/dev/disk/by-partlabel/novadeck-*` or
-  `by-label/novadeck-home` outside a documented fallback.
+- ~~New `images/test-initramfs-init.sh`~~ and ~~the `by-partlabel`/`by-label` grep assertion~~ —
+  both belonged to 1c and are dropped with it.
+- `images/test-post-install.sh` — unchanged, stays green.
 
-**Gate: HW boot on both slots + one successful OTA before Phase 3 lands.**
+**GATE MET — 2026-08-07. Phase 3 may proceed.**
+
+- **1a** — PARTUUID on the cmdline: HW-validated on four boards, both slots, one OTA (see above).
+- **1b** — `parts.env`: HW-validated on a Pocket S2, all four arms, and it fired the PARTLABEL
+  fallback on hardware for the first time.
+- **1c** — dropped by scope decision, with the reasoning and the reopen condition recorded above.
+
+Nothing in Phase 1 is outstanding. The original gate was "HW boot on both slots + one successful OTA
+before Phase 3 lands"; both were met 2026-08-05 and 1b has been validated since.
 
 ---
 
-## Phase 2 — Extract the reusable install primitives
+## Phase 2 — Extract the reusable install primitives — LANDED 2026-08-07
+
+All six items are done and `make test` is green (`install/test-install.sh` 98 cases,
+`images/test-post-install.sh` 127 — the same count as before the extraction, which is what proves it
+was behaviour-preserving). **None of it has run on hardware**, and most of it cannot: the offline
+suites drive plain directories, so what they establish is that the primitives ask for the right
+things, not that a disk laid out this way boots. Phase 4 is where that gets answered.
+
+Three things landed differently from the sketch below, each for a reason worth keeping:
+
+- **`seed_var` takes `<dev> <slot> <mnt> <source>`**, not `<dev> <slot> <seedtar>`. The mountpoint is
+  an argument because this file's own rule is that a primitive reaching for a global is right for
+  exactly one of its two callers. `<source>` is a directory (OTA: the running `/var`) or a tarball
+  (install: `var-seed.tar.zst`), because on a fresh disk the running system is the *installer*, whose
+  `/var` describes the wrong device.
+- **The /var finalization moved above the guard** in `images/assemble-rootfs.sh` (now section 4zy).
+  `var-seed.tar.zst` goes inside the root, and `guard-rootfs.sh`'s contract is that the tree it
+  inspects is the tree `mkfs.btrfs` bakes. Nothing may be added to `$stage` below the guard call.
+- **`tar -p` on the extract is load-bearing.** Measured, not assumed: without it `/var/tmp` comes back
+  0777 instead of 1777. `rsync -a` has no such mode, so the two paths would have agreed only by
+  accident of who ran them.
+
+
 
 The installer must write everything a RAUC bundle does not carry. Almost all of that logic
 exists twice-over already; the goal is one copy.
 
 New `fs-overlay/usr/lib/novadeck/install/lib-slotwrite.sh`, sourced by
 `fs-overlay/usr/lib/rauc/post-install.sh` so the OTA path and the install path cannot drift:
-`mint_partsets`, `write_efi_partition <mnt> <slot> <bootdir>`, `refresh_esp_stage1`,
+`mint_partsets`, `write_efi_partition <mnt> <slot> <bootdir>`, `write_parts_env <mnt>`, `refresh_esp_stage1`,
 `seed_var <dev> <slot> <seedtar>`, `mkfs_esp`.
 
 | artifact | source of truth |
@@ -243,11 +536,49 @@ New `fs-overlay/usr/lib/novadeck/install/lib-slotwrite.sh`, sourced by
 | ESP `grubenv` | **new**: `boot/grub.sh` emits a pristine `grub-editenv`-created grubenv into `out/boot/`; the device just `cp`s it (removes a `grub-editenv` dependency from the device) |
 | ESP `SteamOS/conf/A.conf` | `steamos-bootconf` (`bc create --image A` + `set-mode reboot`) — reuse, don't re-emit `make-sdcard.sh`'s heredoc |
 | efi-a/efi-b stage 2 | `/usr/lib/novadeck/boot/` of the installed root — `post-install.sh` step 3, factored out |
+| efi-a/efi-b `parts.env` | **new**: written by hand as a raw env block from the indices `genpart.sh --append` just laid down — see below |
 | efi partsets | **minted from the NEW partition UUIDs** — `post-install.sh` copies them from the *running* `/efi`, which is a different disk here. `make-sdcard.sh`'s `mkpartset`/`mkefi` is the logic; extract it |
 | var-a / var-b | **new**: `assemble-rootfs.sh` also writes its `$varstage` to `/usr/lib/novadeck/var-seed.tar.zst` inside the root (`work/base/var` is ~13 MB, negligible in a 7 G slot) |
 | rootfs-a | the signed RAUC bundle (Phase 4) |
 | rootfs-b | nothing — left empty and **no `B.conf`**, matching the release-card shape so steamcl sees one image and retries A rather than switching (`make-sdcard.sh`'s `mkconf` site explains why). First OTA fills B |
 | `/home` Steam seed (~1 GB) | **new published artifact** `steam-seed-<pin>.tar.zst`, sha256 verified against the pin **baked into the installer image**, not against `latest.json` (explicitly not a trust boundary). Folding it into the bundle instead does not fit: rootfs-a is 7 G with ~0.9 G margin |
+
+### `write_parts_env` — emit the env block directly, do not reach for `grub-editenv`
+
+`parts.env` (phase 1b) is the map stage 2 reads before it can address anything, and unlike every
+other artifact here its contents are **per-disk**: the indices come from what `genpart.sh --append`
+just laid down on this specific device. So the trick used for the ESP grubenv — build a pristine
+block at image-build time and have the device `cp` it — does not transfer. It has to be generated
+on the device, at install time.
+
+**`grub-editenv` is not on the shipped image** (confirmed 2026-08-06: no `grub` in
+`customize-base.sh`'s `PKGS`, no `/usr/bin/grub-editenv` in the built base). Adding it to the
+*installer* package list would be free — that is a separate root — but it is not worth the
+dependency, because the format is trivial and fixed:
+
+```
+# GRUB Environment Block\n     the signature — 24 chars + \n, byte-exact (envblk.c memcmp's it)
+# WARNING: Do not edit …\n     what grub-editenv writes; a comment, so optional
+nd_esp=12\n                    one key=value line each
+…
+####…                          '#' padding out to exactly 1024 bytes
+```
+
+`grub_envblk_iterate` starts immediately after the signature and skips any line beginning with `#`,
+which is why both the warning line and the tail padding are inert. Only the signature is load-bearing
+and it has to match byte for byte.
+
+So `write_parts_env` is a `printf` plus a pad, with one assertion that the result is exactly 1024
+bytes — anything else is silently unreadable to `load_env`. Writing it by hand also keeps the
+installer's dependency list honest: it already needs `gptfdisk` and `dosfstools` that the shipped
+image lacks, and this is one fewer.
+
+`install/test-install.sh` gets a case: generate a block from a captured GPT's indices, and assert
+the real `grub-editenv list` reads back every key — that is the check that the hand-rolled format
+matches what GRUB actually parses, and it runs on the host where `grub-editenv` exists. Assert the
+1024-byte length too: `grub_envblk_open` only requires the signature to fit, so a truncated block
+still reads back fine here and would differ from what `make-sdcard.sh` writes on a card. Matching
+the card's shape byte for byte is what keeps one reader honest about two writers.
 
 Also in this phase:
 - `images/customize-base.sh:190` — no change (installer tooling must **not** enter the shipped
@@ -266,6 +597,24 @@ Also in this phase:
 
 ## Phase 3 — Target selection and the dual-boot carve
 
+### Carried in from the Phase 2 review — decide before wiring a real target
+
+**`NOVADECK_APPEND_FLOOR` must become mandatory for `genpart.sh --append <target>`.** Today it is
+opt-in (`images/genpart.sh:106` refuses only when a floor was supplied), which was correct while
+every caller was a test invoking `--append` with no target. It stops being correct the moment a real
+device is passed.
+
+Unset, sgdisk places our eight in whatever the LARGEST FREE BLOCK is. The rule below — every sector
+written lies inside `[userdata_start, userdata_end]` — then holds only because the carve happens to
+have made the freed tail the largest free block, which `genpart.sh` cannot see and therefore cannot
+verify. That makes the containment argument true by luck rather than by construction, and luck is
+not what the geometric bound is for.
+
+The asymmetry decides it: over-requiring the floor costs one relaxed line; forgetting it costs a
+brick with EDL as the only recovery. So the safe path should be the default, and `--append` with a
+device argument should refuse without a floor rather than accept one. Left unchanged in Phase 2
+deliberately — it is a contract decision that belongs with the caller Phase 3 writes.
+
 ### The carve
 
 `super` (Android dynamic partitions) is sized to its contents and cannot be shrunk.
@@ -282,8 +631,10 @@ mechanically sound "preserve dual boot" is therefore:
 into space that partition gave up. Nothing else on the disk is read for content, written, moved,
 or resized.** Two mechanisms enforce it and nothing else is relied upon:
 
-1. The `deny` gate below, checked twice by independent rules (§ `select-target.sh` items 4 and 5),
-   so a typo widening one rule still cannot open a write path.
+1. **Span containment** — every sector written lies inside the identified `userdata` extent, so
+   everything else on the disk is protected geometrically rather than by being named. Independently
+   corroborated by the `deny` list (§ `select-target.sh` items 4 and 5), so a typo widening one
+   rule still cannot open a write path.
 2. A **big, unmissable consent screen** (§4d) naming the one partition and its real size.
 
 There are no backups, no restore path, and no undo — see rule 10 for why each was rejected
@@ -293,7 +644,57 @@ The new `userdata` size is a user choice on the confirm screen (default 16 GiB, 
 with our minimum from `genpart.sh --min` (~15 GiB) plus a `HOME_FLOOR` of 8 GiB enforced
 against the remainder.
 
-### `install/disk-rules.conf` — the brick gate
+> **Recreate `userdata` with its ORIGINAL type GUID.** Found 2026-08-05 in the captures: stock
+> `userdata` is type `1B81E7E6-F50D-419B-A739-2AEEF8DA3335`, but on the Pocket FIT — where
+> ROCKNIX performed this same carve — it came back as `0FC63DAF-…` (Linux filesystem data).
+> Recreating it under a Linux type risks Android not recognising its own data partition, and
+> "Android survives, factory-reset but working" is the *entire* justification for destroying it.
+> So `select-target.sh` must capture the type GUID along with the extent, and the carve must
+> restore it. `test-select-target.sh` gets a case: recreate from a captured GPT, assert the type
+> GUID is byte-identical to the original.
+
+### Identification, then geometry — the primary mechanism
+
+Revised 2026-08-05. **Only one partition matters: `userdata`.** Everything else on the disk is
+something we never touch, so the design identifies that one partition and then constrains
+ourselves to its extent — rather than enumerating everything dangerous and allowing the rest.
+
+**The paramount assertion is geometric, not nominal:**
+
+> **Every sector written falls inside `[userdata_start, userdata_end]` of the partition we
+> identified.** The shrunk `userdata` and all 8 of our partitions are laid inside that span.
+
+This protects `xbl`, `abl`, `devinfo`, `super` and every OEM partition *by construction, on any
+layout* — captured or not — because they are outside the span. It is strictly stronger than a name
+list, which can only protect what it knows to name, and it is what makes the ten uncaptured boards
+in `devices/` safe rather than merely refused. Any write whose target sector range is not wholly
+contained is a bug that aborts before issuing, not a rule that can be widened by a typo.
+
+**Identifying `userdata` uses two signals, and they are not interchangeable:**
+
+1. **Label first** — `userdata`, plus any per-board aliases the Phase-0 captures reveal.
+2. **Size as a cross-check, never a substitute.** Assert the label-matched partition is also the
+   largest. If label and size disagree, that is a contradiction about a device we evidently do not
+   understand → refuse and print the table. Corroboration is worth far more here than fallback.
+3. **No label match → offer the dominant partition, gated on §4d** (decided 2026-08-05). Only when
+   one partition is unambiguously dominant — **>50% of the disk and >2× the runner-up** —
+   otherwise refuse. This is safe precisely because §4d already names the specific partition and
+   its real size to the user: *"we believe your Android data is partition 23, 96.4 GiB; everything
+   on it will be erased."* A human confirming a named partition is a stronger check than any rule
+   we would write, and it is what lets a board we have never captured install at all.
+
+**Ordering is load-bearing: the already-NovaDeck check (rule 8) runs BEFORE any size heuristic.**
+On a reinstall the largest partition is our own `/home`, not `userdata`, so a size test reached
+first would carve the user's game library. Identity of the disk is settled before size is
+consulted.
+
+### `install/disk-rules.conf` — the second net
+
+**Demoted 2026-08-05 from "the brick gate" to a second, independent net.** Span containment above
+is what actually prevents a brick; this list catches the case where identification itself went
+wrong, and it is deliberately redundant with it. Keep it — two mechanisms that fail differently
+are the point — but do not let it drift back into being the primary defence, because a name list
+cannot cover layouts nobody has captured.
 
 Glob-matched against GPT partition names (case-folded, `_a`/`_b`/`bak` suffixes normalised),
 written against the Phase-0 captures:
@@ -315,11 +716,24 @@ This file is the thing to review as if it were the whole feature.
 2. `/sys/block/X/removable == 0`, `ro == 0`. **The SD card is never written** — assert it.
 3. `sgdisk -v` reports zero problems and both GPT headers are present. A damaged backup GPT
    is refused: we cannot distinguish "damaged" from "not what we think it is".
-4. Every partition name matches an `allow`/`deny`/`sacrifice` rule. Any unmatched name → refuse
-   and print it.
-5. No `deny` match in the span we intend to write — evaluated **independently** of (4), so a
-   typo widening a rule still cannot open the brick path.
-6. `require` satisfied.
+3b. **No FOREIGN BOOTABLE ESP** — no partition of type `C12A7328-…`, other than ours, carrying
+   `/EFI/BOOT/bootaa64.efi` or `/KERNEL`. This is ABL's own content test: two of those on one disk
+   and the firmware cannot choose, so one installation is unreachable whichever it picks. Refuse and
+   name the partition. Read-only, via `mtype`/`mdir` on the partition at its byte offset — no mount,
+   consistent with the rest of this script being side-effect-free. Ours is exempt (rule 8 identity
+   plus the `NOVADECK-ESP` name); an ESP holding neither file is invisible to ABL and is not a
+   refusal.
+4. **Span containment** — every sector we intend to write lies inside the identified `userdata`
+   extent. This is the assertion that actually prevents a brick; (5) and (6) are independent
+   corroboration, not the defence. An unmatched partition name no longer refuses outright, since
+   uncaptured boards are expected: it is reported, and it is harmless as long as it sits outside
+   the span.
+5. No `deny` match inside the span we intend to write — evaluated **independently** of (4), so a
+   typo widening a rule still cannot open the brick path, and a containment bug still meets a
+   name check.
+6. `userdata` identified per "Identification, then geometry" above: label match cross-checked
+   against largest-partition, or a §4d-gated offer of an unambiguously dominant partition.
+   Contradiction between label and size → refuse.
 7. Free space after the shrunk `userdata` ≥ `genpart.sh --min` + `HOME_FLOOR`.
 8. **Idempotency:** if the disk already carries the NovaDeck 8, skip 4–6 — it is already ours,
    and a re-run is a re-lay + re-write, which is the correct semantics for "reinstall".
@@ -361,10 +775,41 @@ This file is the thing to review as if it were the whole feature.
 ### Tests
 
 `install/test-select-target.sh` — this is where the assertion budget goes, ≥60 cases against
-the **real captured GPTs** from Phase 0: data LUN accepted; the same tree with `abl` present
-→ refused; unnamed GPT → refused; damaged backup GPT → refused; the boot SD → refused;
-too-small remainder → refused; two eligible LUNs → refused; already-NovaDeck → accepted via
-(8); every `deny` name individually → refused.
+the **real captured GPTs** from Phase 0, and green against **every** captured board rather than
+one: data LUN accepted; the same tree with `abl` present → refused; unnamed GPT → refused; damaged
+backup GPT → refused; the boot SD → refused; too-small remainder → refused; two eligible LUNs →
+refused; already-NovaDeck → accepted via (8); every `deny` name individually → refused.
+
+The identification and containment rules need their own cases, since they are now the primary
+defence:
+
+- **Containment is the one to attack.** Synthesise a layout where our 8 partitions would not fit
+  inside `userdata`'s extent and assert the abort fires *before* any write is issued. Then mutate
+  a start/length by one sector in each direction and assert it still fires — an off-by-one that
+  escapes the span is the whole failure mode.
+- Label present but **not** the largest partition → refused as a contradiction.
+- Label absent, one partition >50% and >2× the runner-up → **offered**, and the §4d text quotes
+  that partition's real name and size.
+- Label absent, two partitions of similar size → refused, both listed.
+- **Reinstall ordering:** an already-NovaDeck disk whose `/home` is the largest partition →
+  accepted via (8) as a reinstall, and the size heuristic is never consulted. This is the case
+  that destroys a game library if the ordering regresses, so it gets an explicit test rather than
+  relying on rule order being read correctly.
+- An OEM name absent from every capture, sitting outside the span → **accepted**, reported, not
+  refused. This is the uncaptured-board case and it must not regress into a refusal.
+
+Rule 3b (foreign bootable ESP) gets four, and the Pocket FIT capture is the real fixture for the
+first — it is the only board we hold that actually carries another distribution's install:
+
+- The FIT's GPT with `/KERNEL` present on its p12 ESP → **refused**, message naming p12. Then the
+  same GPT with `userdata` left LARGER than `ROCKNIX`/`STORAGE` → still refused, which is the whole
+  point: today that layout passes rule 6 and installs.
+- An ESP of the right type carrying **neither** file → accepted. An OEM ESP that ABL ignores must
+  not block an install.
+- `/EFI/BOOT/bootaa64.efi` and `/KERNEL` each independently trigger it — ABL accepts either, so a
+  check that only knew one would miss half the distributions.
+- A reinstall: our own `NOVADECK-ESP` carrying `bootaa64.efi` → **accepted**, not refused as
+  foreign. This is the case that breaks if the exemption is left implicit in rule ordering.
 
 ### Blast radius, stated plainly
 
@@ -381,11 +826,17 @@ luck, so the construction is the thing under test:
 - **Wrong LUN carrying `xbl`/`abl`** → hard brick, EDL only. Rule 5 is the sole thing preventing
   it, which is why selection is a separate side-effect-free script with its own test suite. This
   single failure mode justifies the entire `disk-rules.conf` + double-check design.
-- **Right LUN, interrupted** → recoverable by re-running, *provided* the internal ESP is
-  written and the bootconf armed **last**. Order the installer exactly as `post-install.sh`
-  orders itself: nothing points at the new install until the new install is real. This is the
-  one failure class with a genuine software recovery, which is why the ordering is not
-  negotiable.
+- **Right LUN, interrupted** → recoverable by re-running, *provided* `/EFI/BOOT/bootaa64.efi` on
+  the internal ESP is the **last** thing written. Order the installer exactly as
+  `post-install.sh` orders itself: nothing points at the new install until the new install is
+  real. This is the one failure class with a genuine software recovery, which is why the ordering
+  is not negotiable — and per "The ABL contract" in Phase 0 that one file, not the bootconf, is
+  the point of no easy return.
+
+  **Re-running requires the force-external option**, because by then the internal ESP may exist
+  and ABL prefers it. So the failure screen and the docs must say so: "insert the installer card,
+  select force external in the bootloader, and re-run." An interrupted install whose recovery
+  instructions omit that step is, from the user's side, indistinguishable from a brick.
 - **Completed** → Android's user data is gone permanently, by design and with consent. Nothing
   restores it. Do not imply reversibility anywhere in the UI.
 
@@ -753,21 +1204,31 @@ install/README.md        pkgs.list       mkroot.sh        mkimage.sh
 
 ## Verification
 
-**Offline, in `make test`:** `test-stage2-grub.sh` (PARTUUID + grubenv index block),
-`test-initramfs-init.sh` (two-disk identical-label map), `test-post-install.sh` (unchanged
-behaviour post-extraction), `test-select-target.sh` (≥60 cases on real captured GPTs),
-`test-install.sh` (step order, confirm gate, never-writes-the-boot-disk), `test-units.sh`
-(new units), byte-identity of the shipped `partition-table.txt`/`genpart.sh`, and the
-`by-partlabel`/`by-label` grep assertion.
+**Offline, in `make test`:** `test-stage2-grub.sh` (PARTUUID + the `parts.env` index map, 199
+assertions), `test-post-install.sh` (unchanged behaviour post-extraction), `test-select-target.sh`
+(≥60 cases on real captured GPTs), `test-install.sh` (step order, confirm gate,
+never-writes-the-boot-disk, and the hand-written env block round-tripping through `grub-editenv`),
+`test-units.sh` (new units), and byte-identity of the shipped `partition-table.txt`/`genpart.sh`.
 
 **Hardware, in order — each gates the next:**
-1. Phase 1 alone: boot both slots from SD, run one OTA. Nothing else proceeds until green.
-2. `install/probe-internal.sh` read-only on one SM8550 and one SM8650.
+1. ~~Phase 1 alone: boot both slots from SD, run one OTA.~~ **DONE** — 2026-08-05 (both slots + OTA)
+   and 2026-08-06 (`parts.env`, all four arms).
+2. ~~`install/probe-internal.sh` read-only on one SM8550 and one SM8650.~~ **DONE** — four boards,
+   2026-08-05.
 3. `novadeck-install` over SSH from a dev card, on a **sacrificial device**: Android still
    boots, NovaDeck boots from internal with the SD removed, `novadeck-bootctl status` sane,
    one OTA installs into B and switches.
-4. Same, with an old NovaDeck card left inserted — the case Phase 1 exists for.
+4. ~~Same, with an old NovaDeck card left inserted.~~ **DROPPED with 1c** — an old novadeck card in
+   an internally-installed device is out of scope (see 1c). The supported inserted media are the
+   installer/recovery card and a Steam-formatted library card, neither of which carries `novadeck-*`
+   names.
 5. The standalone installer image end-to-end, including `wifi.conf` and the picker.
+
+**Note on the SD game library:** it cannot be exercised before step 3. These devices have ONE SD
+slot and novadeck occupies it, so there is no free slot to insert a library card into until the
+install lives on internal storage. The whole chain — udisks2 (absent from `manifest.lock` today,
+so nothing mounts a hot-inserted card), the `steamos-format-device`/`steamos-format-sdcard` port,
+and then `holo-fstab-repair` — sits behind Phase 4, not beside it.
 
 ---
 
@@ -781,7 +1242,7 @@ behaviour post-extraction), `test-select-target.sh` (≥60 cases on real capture
 | Squashfs installer root misses non-ELF runtime state | Low | pacman-resolved tree rather than a readelf walk; a first-boot smoke unit asserting TLS, NSS, dbus and nmcli all work |
 | gamescope will not start without a logind session → black screen | Medium | Phase 0 item 7 proves it over `seatd`/`LIBSEAT_BACKEND=builtin` before Phase 5 starts; SSH + the ESP `install.log` + the tty1 `OnFailure=` getty mean a failed GUI is still diagnosable and the install still runnable |
 | Wi-Fi picker unusable on a gamepad | Medium | `wifi.conf` on the ESP is a first-class path, not a fallback; USB keyboard works free |
-| Interrupted install leaves an unbootable internal disk | Medium | Arm the bootconf **last**; re-run is idempotent; the medium is also the recovery medium |
+| Interrupted install leaves an unbootable internal disk | Medium | Write `/EFI/BOOT/bootaa64.efi` on the internal ESP **last** — it is what flips ABL to internal; re-run is idempotent; the medium is also the recovery medium, reached with **force external** |
 | ~3.5 GB stream over Wi-Fi on battery | Medium | Honest progress from RAUC's `Progress` property; refuse below a battery threshold (Phase 0 item 8) |
 
 ---

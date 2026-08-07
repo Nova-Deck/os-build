@@ -100,7 +100,27 @@ for dts in "$DTS"/*.dts; do
 done
 ok "$ndtb board DTBs, $ncat catalog rows, $((ndtb - ncat)) derived"
 
-# --- 4. the generated grub.cfg files ------------------------------------------------------------
+# --- 4. the stage-2 module set carries what the config calls -------------------------------------
+# A config that calls a module which was never embedded gets "unknown command", leaves the target
+# variable unset, and carries on -- so `probe --part-uuid` missing from grubaa64.efi is not a boot
+# failure, it is every boot silently taking the PARTLABEL fallback with one console line to show
+# for it. probe is stock GRUB and builds unconditionally; it was simply never in MODULES.
+#
+# This is asserted here rather than in a boot/grub.sh test because the coupling is here: the
+# generated config is the only caller, and the two files are edited for different reasons.
+CASE="stage-2 module set"
+MODLINE=$(sed -n '/^MODULES="/,/"$/p' "$ROOT/boot/grub.sh" | tr -d '\\\n')
+if [ -z "$MODLINE" ]; then
+  bad "cannot find the MODULES= assignment in boot/grub.sh"
+else
+  for m in probe regexp loadenv novadeck; do
+    printf '%s' "$MODLINE" | grep -qw -- "$m" \
+      && ok "boot/grub.sh embeds $m" \
+      || bad "boot/grub.sh does not embed $m -- the config's $m calls are 'unknown command'"
+  done
+fi
+
+# --- 5. the generated grub.cfg files ------------------------------------------------------------
 CASE="generated grub.cfg"
 for slot in A B; do
   lc="${slot,,}"
@@ -122,10 +142,8 @@ for slot in A B; do
 
   # the per-slot cmdline. Every entry must name THIS slot's root, var and efi partitions -- one
   # entry pointing at the other slot is a boot that silently mounts the wrong /var.
-  for key in "root=PARTLABEL=$(part_label "rootfs-$lc")" \
-             "novadeck.var=PARTLABEL=$(part_label "var-$lc")" \
-             "novadeck.efi=PARTLABEL=$(part_label "efi-$lc")"; do
-    n=$(grep -c -- "$key" "$cfg")
+  for key in 'root=$rootspec' 'novadeck.var=$varspec' 'novadeck.efi=$efispec' "novadeck.slot=$slot"; do
+    n=$(grep -cF -- "$key" "$cfg")
     [ "$n" -eq "$n_entries" ] && ok "grub-$lc.cfg: all $n entries carry $key" \
                               || bad "grub-$lc.cfg: $n of $n_entries entries carry $key"
   done
@@ -133,14 +151,105 @@ for slot in A B; do
   grep -q -- "PARTLABEL=$(part_label "rootfs-$other")" "$cfg" \
     && bad "grub-$lc.cfg references the OTHER slot's root" \
     || ok "grub-$lc.cfg never references the other slot"
+  grep -q -- "novadeck.slot=${other^^}" "$cfg" \
+    && bad "grub-$lc.cfg tells the initramfs it is slot ${other^^}" \
+    || ok "grub-$lc.cfg never claims to be slot ${other^^}"
 
-  # partition indices must match the table this was generated from
-  grep -q "set esp=\"\$bootdisk,gpt$(part_num esp)\"" "$cfg" \
-    && ok "grub-$lc.cfg finds the ESP at gpt$(part_num esp)" \
-    || bad "grub-$lc.cfg ESP index disagrees with ${TABLE#"$ROOT"/}"
-  grep -q "set slotroot=\"\$bootdisk,gpt$(part_num "rootfs-$lc")\"" "$cfg" \
-    && ok "grub-$lc.cfg finds the root at gpt$(part_num "rootfs-$lc")" \
-    || bad "grub-$lc.cfg root index disagrees with ${TABLE#"$ROOT"/}"
+  # PARTUUID, and the PARTLABEL fallback behind it. The three specs are set ONCE at the top and
+  # referenced by every entry, so this is where the partition identity actually gets decided.
+  for v in rootuuid varuuid efiuuid; do
+    grep -q -- "probe --part-uuid --set=$v " "$cfg" \
+      && ok "grub-$lc.cfg derives \$$v with probe --part-uuid" \
+      || bad "grub-$lc.cfg never sets \$$v"
+  done
+  # The PARTUUID assignment must be reachable only when all three probes produced something. probe
+  # sets the literal string "none" for a device with no partition rather than failing, so an
+  # emptiness test alone would happily put root=PARTUUID=none on the cmdline.
+  grep -q 'set rootspec="PARTUUID=\$rootuuid"' "$cfg" \
+    && ok "grub-$lc.cfg names the root by PARTUUID when the probe succeeds" \
+    || bad "grub-$lc.cfg never uses the probed PARTUUID"
+  n_none=$(grep -o '!= "none"' "$cfg" | wc -l)
+  [ "$n_none" -eq 3 ] && ok "grub-$lc.cfg rejects all three 'none' probe results" \
+                      || bad "grub-$lc.cfg guards $n_none of 3 probe results against \"none\""
+  # The fallback arm has to still emit the form that shipped before, or a probe regression is a
+  # black screen instead of a message.
+  for key in "set rootspec=\"PARTLABEL=$(part_label "rootfs-$lc")\"" \
+             "set varspec=\"PARTLABEL=$(part_label "var-$lc")\"" \
+             "set efispec=\"PARTLABEL=$(part_label "efi-$lc")\""; do
+    grep -qF -- "$key" "$cfg" && ok "grub-$lc.cfg falls back to: $key" \
+                              || bad "grub-$lc.cfg has no PARTLABEL fallback for ${key%%=*}"
+  done
+  # ...and the fallback must be the DEFAULT, assigned before the conditional overrides it. Set the
+  # other way round, a failed probe leaves the specs unset and the kernel gets root= with no value.
+  ln_fb=$(grep -n 'set rootspec="PARTLABEL=' "$cfg" | cut -d: -f1)
+  ln_uu=$(grep -n 'set rootspec="PARTUUID=' "$cfg" | cut -d: -f1)
+  [ -n "$ln_fb" ] && [ -n "$ln_uu" ] && [ "$ln_fb" -lt "$ln_uu" ] \
+    && ok "grub-$lc.cfg defaults to PARTLABEL and upgrades to PARTUUID" \
+    || bad "grub-$lc.cfg sets the PARTUUID spec before the PARTLABEL default, which then clobbers it"
+
+  # Partition indices. They are no longer baked into the device specs: an internal install appends
+  # our eight to the OEM's GPT at per-vendor indices, so the specs read variables and the numbers
+  # come from parts.env on this slot's efi partition, falling back to the table's own order.
+  for spec in "set esp=\"\$bootdisk,gpt\$esp_idx\"" \
+              "set slotroot=\"\$bootdisk,gpt\$root_idx\"" \
+              "probe --part-uuid --set=varuuid  (\$bootdisk,gpt\$var_idx)"; do
+    grep -qF -- "$spec" "$cfg" && ok "grub-$lc.cfg addresses by index variable: ${spec%% *} ${spec#* }" \
+      || bad "grub-$lc.cfg does not use an index VARIABLE here -- a baked index is wrong on internal: $spec"
+  done
+  # ...and the defaults behind those variables are the table's order, so a card is unchanged.
+  for kv in "set esp_idx=$(part_num esp)" \
+            "set root_idx=$(part_num "rootfs-$lc")" \
+            "set var_idx=$(part_num "var-$lc")"; do
+    grep -qx -- "$kv" "$cfg" && ok "grub-$lc.cfg defaults to: $kv" \
+      || bad "grub-$lc.cfg's index default disagrees with ${TABLE#"$ROOT"/}: expected '$kv'"
+  done
+
+  # parts.env. It is read from (\$root) -- the efi partition steamcl chainloaded us from -- because
+  # the ESP's own index is one of the numbers in it, so an ESP-resident map could not be located
+  # without already knowing what it says.
+  grep -q 'load_env -f (\$root)/EFI/steamos/parts.env ' "$cfg" \
+    && ok "grub-$lc.cfg loads parts.env from the slot's own efi partition" \
+    || bad "grub-$lc.cfg does not load (\$root)/EFI/steamos/parts.env"
+  grep -q 'if \[ -f (\$root)/EFI/steamos/parts.env \]; then' "$cfg" \
+    && ok "grub-$lc.cfg guards the load with -f, so a card without one is silent" \
+    || bad "grub-$lc.cfg loads parts.env unguarded -- every pre-existing card would print an error"
+  # Per-slot keys: slot A must take its indices from A's keys, and never from B's. The map is one
+  # file shared by both slots, so picking the wrong key is a config that mounts the other slot's
+  # /var -- the same failure the per-slot cmdline assertions above guard, one layer earlier.
+  grep -qF -- "set root_idx=\"\$nd_root_$lc\"" "$cfg" \
+    && ok "grub-$lc.cfg takes its root index from \$nd_root_$lc" \
+    || bad "grub-$lc.cfg does not take its root index from \$nd_root_$lc"
+  grep -qF -- "set var_idx=\"\$nd_var_$lc\"" "$cfg" \
+    && ok "grub-$lc.cfg takes its var index from \$nd_var_$lc" \
+    || bad "grub-$lc.cfg does not take its var index from \$nd_var_$lc"
+  if grep -qF -- "_idx=\"\$nd_root_$other\"" "$cfg" || grep -qF -- "_idx=\"\$nd_var_$other\"" "$cfg"; then
+    bad "grub-$lc.cfg takes an index from slot ${other^^}'s keys"
+  else
+    ok "grub-$lc.cfg never takes an index from slot ${other^^}'s keys"
+  fi
+  # ALL-OR-NOTHING. A file missing one key must not yield a map half from the install and half from
+  # this build -- a root from one layout with a /var from another boots something nobody assembled.
+  # So: exactly three -n tests, in ONE condition, and the three assignments only inside it.
+  n_ntest=$(grep -c -- '-n "\$nd_' "$cfg")
+  [ "$n_ntest" -eq 1 ] && ok "grub-$lc.cfg validates the loaded keys in a single condition" \
+    || bad "grub-$lc.cfg has $n_ntest conditions testing nd_* keys, expected 1 (partial maps must be impossible)"
+  n_keys=$(grep -o -- '-n "\$nd_[a-z_]*"' "$cfg" | wc -l)
+  [ "$n_keys" -eq 3 ] && ok "grub-$lc.cfg requires all 3 consumed keys before using any" \
+    || bad "grub-$lc.cfg tests $n_keys of the 3 keys it consumes"
+  n_assign=$(grep -c -- 'set [a-z]*_idx="\$nd_' "$cfg")
+  [ "$n_assign" -eq 3 ] && ok "grub-$lc.cfg upgrades all 3 indices together" \
+    || bad "grub-$lc.cfg assigns $n_assign indices from parts.env, expected 3"
+  # Defaults must be assigned BEFORE the load, or the upgrade is what gets clobbered.
+  ln_def=$(grep -n "^set esp_idx=" "$cfg" | cut -d: -f1)
+  ln_env=$(grep -n 'load_env -f (\$root)/EFI/steamos/parts.env ' "$cfg" | cut -d: -f1)
+  [ -n "$ln_def" ] && [ -n "$ln_env" ] && [ "$ln_def" -lt "$ln_env" ] \
+    && ok "grub-$lc.cfg sets the built-in indices before reading parts.env" \
+    || bad "grub-$lc.cfg reads parts.env before its defaults, which then overwrite it"
+  # The indices have to be settled before anything is addressed with them.
+  ln_use=$(grep -n 'set esp="\$bootdisk,gpt\$esp_idx"' "$cfg" | cut -d: -f1)
+  [ -n "$ln_use" ] && [ -n "$ln_env" ] && [ "$ln_env" -lt "$ln_use" ] \
+    && ok "grub-$lc.cfg reads parts.env before it addresses a partition" \
+    || bad "grub-$lc.cfg addresses partitions before parts.env is read"
 
   # THE DEVICE DERIVATION, executed rather than grepped. GRUB's `regexp` compiles with
   # REG_EXTENDED, so a POSIX ERE engine here (sed -E) is the same matcher the device runs -- which
@@ -213,6 +322,17 @@ for slot in A B; do
     && ok "grub-$lc.cfg sets menu_color_highlight" \
     || bad "grub-$lc.cfg does not set menu_color_highlight"
 
+  # Every arm that prints a diagnostic must hold it on screen long enough to READ. gfxterm draws in
+  # the boot font, already at the only scale lever we have, and 3s was measured too short on a
+  # Pocket S2 panel (2026-08-06). A pause that drifts back down makes the message useless on the one
+  # class of device that has no other diagnostic at all.
+  n_short=$(grep -cE '^ *sleep [1-9]$' "$cfg")
+  [ "$n_short" -eq 0 ] && ok "grub-$lc.cfg holds every diagnostic for 10s or more" \
+    || bad "grub-$lc.cfg has $n_short arm(s) pausing under 10s — unreadable on a handheld panel"
+  n_sleep=$(grep -cE '^ *sleep 10$' "$cfg")
+  [ "$n_sleep" -eq 4 ] && ok "grub-$lc.cfg: all 4 diagnostic arms pause 10s" \
+    || bad "grub-$lc.cfg has $n_sleep 10s pauses, expected 4 (an arm lost its dwell, or gained one)"
+
   if command -v grub-script-check >/dev/null 2>&1; then
     grub-script-check "$cfg" 2>"$T/gscerr" \
       && ok "grub-$lc.cfg parses under grub-script-check" \
@@ -222,7 +342,7 @@ for slot in A B; do
   fi
 done
 
-# --- 5. the board bootargs left the device trees ------------------------------------------------
+# --- 6. the board bootargs left the device trees ------------------------------------------------
 # They live on the `linux` line now. They have to: the EFI stub OVERWRITES /chosen/bootargs with
 # the loader's command line, so anything still in a dtsi is silently dropped.
 CASE="dtsi bootargs stripped"

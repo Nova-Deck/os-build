@@ -7,9 +7,18 @@
 # (stage 2) — picks the image and appends the full cmdline. This init merely carries out what
 # the cmdline says:
 #
-#   root=PARTLABEL=novadeck-root-A|B    the slot's btrfs root, mounted ro
-#   novadeck.var=PARTLABEL=...          the slot's ext4 /var (overlay upper + per-slot identity)
-#   novadeck.efi=PARTLABEL=...          the slot's efi-a/b partition, mounted at /efi
+#   root=PARTUUID=...                   the slot's btrfs root, mounted ro
+#   novadeck.var=PARTUUID=...           the slot's ext4 /var (overlay upper + per-slot identity)
+#   novadeck.efi=PARTUUID=...           the slot's efi-a/b partition, mounted at /efi
+#   novadeck.slot=A|B                   which slot the above three are
+#
+#                                       The first three are PARTUUID because every novadeck medium
+#                                       carries the same eight PARTLABELs, so with a card inserted
+#                                       on a device installed to internal storage a PARTLABEL
+#                                       resolves to whichever disk enumerates first. Stage 2 reads
+#                                       the UUIDs off the disk it was chainloaded from with
+#                                       `probe --part-uuid`; PARTLABEL= is still accepted here,
+#                                       because it is stage 2's announced fallback.
 #   steamos.efi=PARTUUID=...            the same thing, as SteamOS states it -- appended by the
 #                                       bootloader from the partition the stage-2 binary was
 #                                       loaded from. Accepted as a FALLBACK so the two forms can
@@ -34,9 +43,9 @@
 # util-linux binaries, staged by images/mkinitramfs.sh. No udev, no modprobe, no systemd-in-initrd.
 #
 # Layout (images/partition-table.txt):
-#   root  <- PARTLABEL=novadeck-root-{A,B}    btrfs, ro
-#   var   <- PARTLABEL=novadeck-var-{A,B}     ext4, rw   (overlay upper+work; /lib/novadeck/slot)
-#   efi   <- PARTUUID=... (steamos.efi=)      vfat, rw   (the SLOT's efi-a/b: SteamOS/partsets)
+#   root  <- PARTUUID=... (root=)             btrfs, ro
+#   var   <- PARTUUID=... (novadeck.var=)     ext4, rw   (overlay upper+work; /lib/novadeck/slot)
+#   efi   <- PARTUUID=... (novadeck.efi=)     vfat, rw   (the SLOT's efi-a/b: SteamOS/partsets)
 #   /etc  <- overlay(lower=/sysroot/etc, upper=/sysroot/var/lib/overlays/etc/upper)
 #
 # The efi mountpoint is INSIDE the btrfs root ($SYSROOT/efi), so the mount survives switch_root:
@@ -72,7 +81,7 @@ mount -t devtmpfs -o nosuid,mode=0755    dev  /dev
 # boot-console error is a debugging trap, so we give switch_root a real tmpfs to hand over.
 mount -t tmpfs    -o nosuid,nodev,mode=0755 run /run
 
-ROOTSPEC=''; VARSPEC=''; EFISPEC=''; EFISPEC_ALT=''; ROOTFSTYPE=btrfs
+ROOTSPEC=''; VARSPEC=''; EFISPEC=''; EFISPEC_ALT=''; SLOTSPEC=''; ROOTFSTYPE=btrfs
 read -r _cmdline </proc/cmdline
 for _arg in $_cmdline; do
   case "$_arg" in
@@ -80,6 +89,7 @@ for _arg in $_cmdline; do
     rootfstype=*)    ROOTFSTYPE=${_arg#rootfstype=} ;;
     novadeck.var=*)  VARSPEC=${_arg#novadeck.var=} ;;
     novadeck.efi=*)  EFISPEC=${_arg#novadeck.efi=} ;;
+    novadeck.slot=*) SLOTSPEC=${_arg#novadeck.slot=} ;;
     steamos.efi=*)   EFISPEC_ALT=${_arg#steamos.efi=} ;;
   esac
 done
@@ -105,13 +115,27 @@ resolve() {
   return 1
 }
 
-# The slot letter for /run/novadeck/boot, derived from the root PARTLABEL the bootloader chose.
+# The slot letter for /run/novadeck/boot. Stage 2 states it outright — it is generated per slot, so
+# it knows statically which one it is — and that is now the only thing that can tell us: the root=
+# spec it emits is a PARTUUID, which carries no slot letter at all.
+#
+# The PARTLABEL match is kept for one boot: an OLD stage-2 grub.cfg on the other slot's efi
+# partition, which has not been rewritten yet because post-install.sh only touches the slot it
+# just installed. Without it, booting back into a not-yet-updated slot reports slot='' and
+# novadeck-bootctl mark-good treats a real slot boot as a dev boot — so boot-attempts is never
+# cleared and a healthy image gets marked bad.
+#
 # Empty on any other root (a dev boot) — which is exactly what mark-good needs to know.
 SLOT=''
-case "$ROOTSPEC" in
-  PARTLABEL=novadeck-root-A) SLOT=A ;;
-  PARTLABEL=novadeck-root-B) SLOT=B ;;
+case "$SLOTSPEC" in
+  A|B) SLOT=$SLOTSPEC ;;
 esac
+if [ -z "$SLOT" ]; then
+  case "$ROOTSPEC" in
+    PARTLABEL=novadeck-root-A) SLOT=A ;;
+    PARTLABEL=novadeck-root-B) SLOT=B ;;
+  esac
+fi
 
 # ---------------------------------------------------------------------------------------------
 # Root

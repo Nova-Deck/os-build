@@ -6,7 +6,7 @@ Track in order — each step gates the next.
 | # | Subsystem | Kernel deps (config) | Validate | Status |
 |---|---|---|---|---|
 | 1 | UART console | `SERIAL_QCOM_GENI*`, `earlycon` | boot log on `ttyMSM0,115200` | ⊘ N/A — no serial on device ([[sm8650-no-uart]]); console is the panel (step 4) |
-| 2 | Storage | `SCSI_UFS_QCOM` | rootfs mounts | ✅ boots root off **SD** (`root=PARTLABEL=novadeck-root`, btrfs); UFS itself unverified |
+| 2 | Storage | `SCSI_UFS_QCOM` | rootfs mounts | ✅ boots root off **SD** (`root=PARTUUID=`, derived at boot by `probe --part-uuid`; `PARTLABEL=` is the announced fallback — `boot/README.md`); **UFS enumerates**: 6–8 LUNs on all four boards, read-only recon 2026-08-05 (`docs/internal-storage.md`). Nothing has yet *booted* off UFS — that is the internal-install plan's job |
 | 3 | USB | `USB_DWC3_QCOM`, QMP/eUSB2 phys | enumerate over USB | ◐ boot-hang HACK + xpad interrupt-interval override in tree; not yet confirmed on HW |
 | 4 | Display (DSI/DP) | `DRM_MSM_DPU`, `DRM_MSM_DSI` | panel lights, fb console | ✅ panel + fb console verified on Pocket S2 ([[sm8650-working-display-baseline]]) |
 | 5 | Input | `INPUT_EVDEV` | `evtest` sees keys; gamepad usable | ✅ AYANEO Pocket S2 controller works on-device via **InputPlumber** (pinned prebuilt ≥ v0.77.7 — earlier versions miss DPadLeft/DPadUp); all directions incl. d-pad confirmed ([[sm8650-inputplumber-input]]) |

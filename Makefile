@@ -234,8 +234,8 @@ INITRAMFS    := $(OUT)/initramfs.cpio.gz
 # Stage-1 steamcl (boot/steamcl.sh). The rule's target is steamcl.efi, but the run also emits
 # holo-bootconf, steamcl-version and fonts/default.pf2 into the same out/boot.
 STEAMCL      := $(OUT)/boot/steamcl.efi
-# Stage-2 GRUB (boot/grub.sh). Co-products in the same out/boot: grub-a.cfg, grub-b.cfg and
-# fonts/dejavu-mono.pf2.
+# Stage-2 GRUB (boot/grub.sh). Co-products in the same out/boot: grub-a.cfg, grub-b.cfg,
+# fonts/dejavu-mono.pf2 and grubenv (the pristine stage-2 env block the ESP gets).
 GRUB         := $(OUT)/boot/grubaa64.efi
 SDCARD       := $(OUT)/images/sdcard.img
 # Native arm64 Steam SEED (steam-seed/fetch-steam-seed.sh, host network). make-sdcard pre-seeds this tree
@@ -360,7 +360,7 @@ verify-card: $(SDCARD) | $(BUILD_STAMP) ## Verify the built A/B card image (in c
 verify-lock: ## Check the lock's novadeck rows against packages/ (host, seconds, no build)
 	bash packages/verify-lock-rows.sh
 
-test: verify-lock ## Run the offline bootctl/post-install/pairingd/quirks/stage-2/unit/update/publish suites (host, no build needed)
+test: verify-lock ## Run the offline bootctl/post-install/pairingd/quirks/stage-2/unit/update/publish/install suites (host, no build needed)
 	bash images/test-bootctl.sh
 	bash images/test-post-install.sh
 	bash images/test-pairingd.sh
@@ -369,6 +369,7 @@ test: verify-lock ## Run the offline bootctl/post-install/pairingd/quirks/stage-
 	bash images/test-units.sh
 	bash images/test-update.sh
 	bash images/test-publish-bundle.sh
+	bash install/test-install.sh
 
 # The fourth suite, separate because it is the one that CANNOT run on the host: it signs real
 # bundles and verifies them through the shipped system.conf, so it needs rauc. Every case in it is
@@ -607,10 +608,17 @@ $(INITRAMFS): images/mkinitramfs.sh images/initramfs/init $(BASE_STAMP) | $(BUIL
 $(STEAMCL): boot/steamcl.sh boot/steamos-efi.pin | $(BUILD_STAMP)
 	$(INBUILD) boot/steamcl.sh
 
-# Stage-2 GRUB + the two per-slot grub.cfg files. The patch set and the board catalog are
+# Stage-2 GRUB + the two per-slot grub.cfg files + grubenv. The patch set and the board catalog are
 # prerequisites because both change the artifact: a new patch changes grubaa64.efi, and a new
 # board row changes the configs generated beside it. images/partition-table.txt is in there for
 # the same reason -- the configs address partitions by index out of that file.
+#
+# THE CO-PRODUCTS ARE NOT SEPARATE TARGETS, here or in the steamcl rule above, and the cost is worth
+# knowing: make only stats grubaa64.efi, so deleting a co-product on its own does NOT retrigger this
+# rule. It fails at the consumer instead -- images/assemble-rootfs.sh and images/make-sdcard.sh both
+# check each file by name and name this script in the error. Loud, and one recipe run rather than
+# four. Giving grubenv its own rule would mean either running boot/grub.sh twice or minting the
+# block outside it, which is the second writer that shipping it as an artifact exists to remove.
 $(GRUB): boot/grub.sh boot/gen-grub-cfg.sh boot/grub.pin boot/boards.map \
          images/partition-table.txt $(wildcard boot/patches/grub/*.patch) | $(BUILD_STAMP)
 	$(INBUILD) boot/grub.sh

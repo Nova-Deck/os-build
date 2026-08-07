@@ -327,6 +327,11 @@ fi
 # boot mirror under /usr/lib/novadeck/boot means the post-install hook cannot refresh the ESP and
 # the slot's efi partition, so the updated slot boots a boot chain that does not match it.
 #
+# lib-slotwrite.sh is on the list because the hook SOURCES it: since the primitives were factored out
+# for the internal installer to share, a root without it has a post-install that dies on its first
+# line. RAUC would then report a failed install of a slot it had already written -- recoverable, but
+# only from the other slot, and the build is the cheap place to notice.
+#
 # The exec bit on the hook is checked because it is exactly the failure this project has already
 # paid for once: a shipped script that lost its exec bit in a tree refactor, where the symptom was
 # a black screen rather than an error (see fs-overlay/README.md).
@@ -342,7 +347,8 @@ for f in usr/bin/rauc etc/rauc/keyring.pem etc/rauc/system.conf \
          usr/lib/novadeck/boot/grub-b.cfg \
          usr/lib/novadeck/boot/fonts/dejavu-mono.pf2 \
          boot/Image boot/initramfs-novadeck.img \
-         usr/lib/rauc/post-install.sh; do
+         usr/lib/rauc/post-install.sh \
+         usr/lib/novadeck/install/lib-slotwrite.sh; do
   if [ ! -s "$STAGE/$f" ]; then
     rauc_ok=0
     bad "/$f is missing or empty — the A/B update path is not installable"
@@ -358,6 +364,85 @@ if [ ! -s "$STAGE/usr/bin/btrfstune" ]; then
   rauc_ok=0
   bad "/usr/bin/btrfstune is missing — the post-install hook cannot re-randomise the target slot's fsid"
 fi
+
+# --- what the INTERNAL INSTALLER reads out of this root ------------------------------------------
+# Separate from the list above because nothing on the A/B update path touches these, so an update
+# would keep working with every one of them missing. They are read by the installer running from the
+# recovery medium, which writes an ESP that does not exist yet: the constants it cannot mint on the
+# device, out of the root whose boot chain they belong to.
+#
+# grubenv is the shared ESP's stage-2 env block, where `save_env` puts the user's board choice. It
+# ships prebuilt because grub-editenv is not on this image and 1024 bytes of constant do not justify
+# putting it there (boot/grub.sh emits it and asserts it is pristine). The 1024 is re-checked here
+# because it is the length nothing downstream complains about: grub_envblk_open only requires the
+# signature to FIT, so a short block reads back perfectly and is simply not the object a card carries.
+if [ ! -s "$STAGE/usr/lib/novadeck/boot/grubenv" ]; then
+  bad "/usr/lib/novadeck/boot/grubenv is missing — an internal install cannot seed the ESP's stage-2 env block, and the device has no grub-editenv to mint one"
+elif [ "$(wc -c <"$STAGE/usr/lib/novadeck/boot/grubenv")" != 1024 ]; then
+  bad "/usr/lib/novadeck/boot/grubenv is $(wc -c <"$STAGE/usr/lib/novadeck/boot/grubenv") bytes, not 1024 — it would read back fine and still not match what a card carries"
+else
+  echo "    ok  installer artifacts: grubenv (1024 B, pristine)"
+fi
+
+# var-seed.tar.zst is the /var a freshly installed slot starts from. The OTA path has no use for it
+# — it rsyncs the running /var — so nothing but an install would ever notice it missing, and what
+# an install would do instead is boot a slot whose /var is empty: no machine-id, no overlay upper,
+# no /etc. Listed, not just stat'd, because the two things that must NOT be in it are absences, and
+# an absence is what a `-s` check cannot see:
+#
+#   lib/novadeck/slot     per-slot, written by seed_var after unpacking. Baked in, it would be a
+#                         second answer to "which slot is this" — and that file exists precisely to
+#                         be the INDEPENDENT witness against the initramfs's own claim.
+#   lib/novadeck/mac-wifi write-once and outranks the derivation, so a seeded copy would hand every
+#                         installed device the same Wi-Fi MAC. Two on one network is the symptom.
+seed="$STAGE/usr/lib/novadeck/var-seed.tar.zst"
+if [ ! -s "$seed" ]; then
+  bad "/usr/lib/novadeck/var-seed.tar.zst is missing — an internal install has no /var to seed a fresh slot with, and there is no running system to copy one from"
+elif ! seed_list=$(tar -tf "$seed" 2>/dev/null); then
+  bad "/usr/lib/novadeck/var-seed.tar.zst is not readable as a tar archive — is zstd in the build container?"
+else
+  seed_bad=0
+  for f in ./lib/novadeck/slot ./lib/novadeck/mac-wifi; do
+    if printf '%s\n' "$seed_list" | grep -qx -- "$f"; then
+      seed_bad=1
+      bad "var-seed.tar.zst carries $f — it is per-device/per-slot state and must be written after unpacking, not baked in"
+    fi
+  done
+  # And the one directory whose absence is unrecoverable: the initramfs mounts /etc from the overlay
+  # upper, so a slot seeded without it does not come up at all.
+  printf '%s\n' "$seed_list" | grep -qx -- './lib/overlays/etc/upper/' \
+    || { seed_bad=1; bad "var-seed.tar.zst has no ./lib/overlays/etc/upper/ — a slot seeded from it cannot mount /etc and will not boot"; }
+  [ "$seed_bad" = 0 ] && echo "    ok  installer artifacts: var-seed.tar.zst ($(du -h "$seed" | cut -f1), no per-slot state, overlay upper present)"
+fi
+
+# genpart.sh + partition-table.txt, shipped VERBATIM. Existence is the cheap half; the half that
+# matters is that they are byte-identical to the repo copies, because a drift here is silent and
+# expensive. images/make-sdcard.sh builds a card from the repo table, and the installer lays an
+# internal disk out from the shipped one -- if they disagree, an install produces partitions sized
+# differently from the card every release was tested on. The first symptom is a rootfs image that
+# will not fit its slot, discovered AFTER the OEM's userdata has been destroyed. There is no undo.
+#
+# The exec bit is checked for the same reason post-install.sh's is: a shipped script losing it in a
+# tree refactor is a failure this project has already paid for once, and here it would strand an
+# install between "GPT written" and "nothing written to it".
+for f in genpart.sh partition-table.txt; do
+  shipped="$STAGE/usr/lib/novadeck/install/$f"
+  if [ ! -s "$shipped" ]; then
+    bad "/usr/lib/novadeck/install/$f is missing — the installer cannot lay out a GPT"
+  elif ! cmp -s "$shipped" "$ROOT/images/$f"; then
+    bad "/usr/lib/novadeck/install/$f differs from images/$f — an install would partition a disk to a different layout than the card this release was tested on"
+  else
+    echo "    ok  installer artifacts: $f byte-identical to images/$f"
+  fi
+done
+if [ -e "$STAGE/usr/lib/novadeck/install/genpart.sh" ] && [ ! -x "$STAGE/usr/lib/novadeck/install/genpart.sh" ]; then
+  bad "/usr/lib/novadeck/install/genpart.sh is not executable — the installer would write a GPT for a disk it then cannot populate"
+fi
+# The primitives the hook and the installer share. Asserted here as well as on the RAUC list above,
+# because the two readers fail differently: without it an OTA dies on post-install.sh's first line,
+# while an install has no way to write parts.env and leaves stage 2 guessing the SD card's 1..8.
+[ -s "$STAGE/usr/lib/novadeck/install/lib-slotwrite.sh" ] \
+  || bad "/usr/lib/novadeck/install/lib-slotwrite.sh is missing — neither an update nor an install can write a slot"
 
 # --- the two halves of adaptive streaming, both of which fail SILENTLY --------------------------
 # Adaptive updates (images/rauc/manifest.raucm.in) cut a release-to-release OTA from 3.90G to ~125M

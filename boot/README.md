@@ -35,7 +35,15 @@ which is why the board args moved out of the DTS `/chosen/bootargs` too. They co
 |---|---|
 | common args | `BOOT_CMDLINE` in `gen-grub-cfg.sh` |
 | board args | the fourth column of `boards.map` |
-| `root=` `novadeck.var=` `novadeck.efi=` | per slot, from `images/partition-table.txt` |
+| `root=` `novadeck.var=` `novadeck.efi=` | per slot, as `PARTUUID=` read out of the GPT at boot with `probe --part-uuid`; `PARTLABEL=` from `images/partition-table.txt` is the announced fallback |
+| `novadeck.slot=` | per slot, stated outright — a PARTUUID carries no slot letter for the initramfs to match |
+
+The specs are `PARTUUID=` because every novadeck medium carries the same eight GPT names: with a
+card inserted on a device installed to internal storage, `PARTLABEL=` resolves to whichever disk
+enumerates first. The UUIDs are derived from the disk stage 2 was chainloaded off, at boot, so
+they name that disk by construction and no update has to rewrite them. This needs `probe` in the
+embedded `MODULES` — an unembedded module is an "unknown command" that leaves the variable unset
+and takes the fallback on every boot, so `images/test-stage2-grub.sh` asserts the module list.
 
 ## The novadeck module
 

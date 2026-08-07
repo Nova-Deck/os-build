@@ -7,6 +7,7 @@
 #   out/boot/grubaa64.efi
 #   out/boot/grub-a.cfg, out/boot/grub-b.cfg
 #   out/boot/fonts/dejavu-mono.pf2
+#   out/boot/grubenv
 #
 #   boot/grub.sh
 #
@@ -97,10 +98,14 @@ make -j"$(nproc)" AWK=gawk
 #   loadenv                 load_env/save_env against the ESP's grubenv -- the saved board choice
 #   regexp                  derives the boot disk from $root; see boot/gen-grub-cfg.sh
 #   search*                 the fallback path when that derivation fails
+#   probe                   --part-uuid, which turns those derived devices into the PARTUUIDs the
+#                           cmdline names. Stock GRUB builds it and we simply never embedded it;
+#                           without it here the generated config's probe calls are "unknown
+#                           command" and every boot silently takes the PARTLABEL fallback.
 #   novadeck                novadeck_bootattempts, called once per boot by the generated grub.cfg
 MODULES="boot linux part_gpt fat btrfs loadenv search search_fs_file \
 search_fs_uuid search_label chain reboot halt sleep test true echo read \
-configfile regexp normal minicmd gfxterm efi_gop font all_video novadeck"
+configfile regexp probe normal minicmd gfxterm efi_gop font all_video novadeck"
 
 echo "[grub] grub-mkimage"
 test -f grub-core/novadeck.mod || { echo "novadeck.mod was not built — is patch 0003 applied?" >&2; exit 1; }
@@ -130,6 +135,32 @@ MKFONT="$BUILDDIR/grub-mkfont"
 
 file "$OUT/grubaa64.efi" "$OUT/fonts/dejavu-mono.pf2"
 file "$OUT/grubaa64.efi" | grep -q "ARM64" || { echo "grubaa64.efi not ARM64" >&2; exit 1; }
+
+# A pristine stage-2 env block, built HERE by grub-editenv and shipped as an artifact, because the
+# two places that need one cannot make it themselves. It goes to the shared ESP as
+# /EFI/steamos/grubenv, and `save_env` writes the user's board choice into it so the choice survives
+# slot updates (the ESP is the only partition an A/B update does not replace).
+#
+#   images/make-sdcard.sh  mcopy's this file rather than running `grub-editenv create` a second time
+#   the internal installer  cp's it out of /usr/lib/novadeck/boot/ of the root it just wrote
+#
+# THE INSTALLER IS WHY IT IS AN ARTIFACT AT ALL. grub-editenv is not on the shipped image -- no grub
+# in customize-base.sh's PKGS -- so the device cannot create one, and adding grub to the installer's
+# package list to write 1024 bytes of constant is a dependency for nothing. Everything else the
+# installer writes is per-disk and has to be generated there (see lib-slotwrite.sh's parts.env, which
+# is hand-rolled for exactly that reason); this one is a constant, so it ships as a constant.
+#
+# EMPTY IS THE ASSERTION THAT MATTERS. grub-editenv is being run on a build host, and a block that
+# arrived carrying a `saved_entry` would pin every device flashed or installed from this build to
+# one board -- and it would boot, on the machine that built it, which is the failure that never gets
+# noticed. `list` on a pristine block prints nothing.
+echo "[grub] grub-editenv create -> grubenv"
+rm -f "$OUT/grubenv"
+grub-editenv "$OUT/grubenv" create
+[ "$(wc -c <"$OUT/grubenv")" = 1024 ] \
+  || { echo "grubenv is $(wc -c <"$OUT/grubenv") bytes, not 1024 -- grub_envblk_open only requires the signature to FIT, so a wrong-length block reads back fine and is not the object a card carries" >&2; exit 1; }
+[ -z "$(grub-editenv "$OUT/grubenv" list)" ] \
+  || { echo "grubenv is not pristine -- it carries: $(grub-editenv "$OUT/grubenv" list | tr '\n' ' ')" >&2; exit 1; }
 
 # The per-slot configs. Generation is a separate script on purpose: it needs no toolchain, so
 # images/test-stage2-grub.sh can produce and assert them on a bare host with no cross-build.

@@ -365,6 +365,25 @@ if [ ! -s "$STAGE/usr/bin/btrfstune" ]; then
   bad "/usr/bin/btrfstune is missing — the post-install hook cannot re-randomise the target slot's fsid"
 fi
 
+# --- what the INTERNAL INSTALLER reads out of this root ------------------------------------------
+# Separate from the list above because nothing on the A/B update path touches these, so an update
+# would keep working with every one of them missing. They are read by the installer running from the
+# recovery medium, which writes an ESP that does not exist yet: the constants it cannot mint on the
+# device, out of the root whose boot chain they belong to.
+#
+# grubenv is the shared ESP's stage-2 env block, where `save_env` puts the user's board choice. It
+# ships prebuilt because grub-editenv is not on this image and 1024 bytes of constant do not justify
+# putting it there (boot/grub.sh emits it and asserts it is pristine). The 1024 is re-checked here
+# because it is the length nothing downstream complains about: grub_envblk_open only requires the
+# signature to FIT, so a short block reads back perfectly and is simply not the object a card carries.
+if [ ! -s "$STAGE/usr/lib/novadeck/boot/grubenv" ]; then
+  bad "/usr/lib/novadeck/boot/grubenv is missing — an internal install cannot seed the ESP's stage-2 env block, and the device has no grub-editenv to mint one"
+elif [ "$(wc -c <"$STAGE/usr/lib/novadeck/boot/grubenv")" != 1024 ]; then
+  bad "/usr/lib/novadeck/boot/grubenv is $(wc -c <"$STAGE/usr/lib/novadeck/boot/grubenv") bytes, not 1024 — it would read back fine and still not match what a card carries"
+else
+  echo "    ok  installer artifacts: grubenv (1024 B, pristine)"
+fi
+
 # --- the two halves of adaptive streaming, both of which fail SILENTLY --------------------------
 # Adaptive updates (images/rauc/manifest.raucm.in) cut a release-to-release OTA from 3.90G to ~125M
 # measured, but every way of losing them degrades to "a full download that still succeeds". Nothing

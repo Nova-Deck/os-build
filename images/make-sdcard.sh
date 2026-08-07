@@ -67,6 +67,7 @@ GRUB_EFI="$BOOT/grubaa64.efi"
 GRUB_CFG_A="$BOOT/grub-a.cfg"           # per-slot grub.cfg (stage 2, A)
 GRUB_CFG_B="$BOOT/grub-b.cfg"
 GRUB_FONT="$BOOT/fonts/dejavu-mono.pf2" # stage-2 boot font ($prefix/fonts/ in grub.cfg)
+GRUBENV="$BOOT/grubenv"                 # pristine stage-2 env block (saved_entry lives here)
 
 # Populate the B slot too: on for a dev card, off for a release card. See the header for why.
 # Read the mode rather than defaulting to 1, so that forgetting to forward NOVADECK_DEV produces a
@@ -88,7 +89,7 @@ done
 [ "$SLOT_B" = 1 ] && { command -v btrfstune >/dev/null 2>&1 || {
   echo "btrfstune not found — run inside novadeck-build (or set NOVADECK_SLOT_B=0)" >&2; exit 1; }; }
 for f in "$STEAMCL" "$STEAMCL_VER" "$BOOTCONF" "$STAGE_FONT" \
-         "$GRUB_EFI" "$GRUB_CFG_A" "$GRUB_CFG_B" "$GRUB_FONT"; do
+         "$GRUB_EFI" "$GRUB_CFG_A" "$GRUB_CFG_B" "$GRUB_FONT" "$GRUBENV"; do
   [ -f "$f" ] || { echo "no boot artifact: ${f#"$ROOT"/} (run boot/steamcl.sh + boot/grub.sh)" >&2; exit 1; }
 done
 [ -f "$ROOTFS" ] || { echo "no rootfs: ${ROOTFS#"$ROOT"/} (run images/build-image.sh)" >&2; exit 1; }
@@ -136,7 +137,7 @@ homestage="$(mktemp -d)"
 # early exit (a `fits` check failing, say) would otherwise die inside the trap on an unset variable
 # and mask the real error. The previous fix for that was a block of empty pre-assignments carrying
 # a comment pointing at a line number, which is a trap of its own.
-trap 'rm -f "${esp:-}" "${efi_a:-}" "${efi_b:-}" "${home:-}" "${ROOTFS_B:-}" "${conf_a:-}" "${conf_b:-}" "${grubenv:-}" "${partsenv:-}" "${flag:-}"; rm -rf "${homestage:-}"' EXIT
+trap 'rm -f "${esp:-}" "${efi_a:-}" "${efi_b:-}" "${home:-}" "${ROOTFS_B:-}" "${conf_a:-}" "${conf_b:-}" "${partsenv:-}" "${flag:-}"; rm -rf "${homestage:-}"' EXIT
 deckhome="$homestage/deck"
 install -d "$deckhome/.local/share" "$deckhome/.steam"
 cp -a "$SEED" "$deckhome/.local/share/Steam"
@@ -266,9 +267,12 @@ mcopy -i "$esp" "$STEAMCL_VER" ::/EFI/BOOT/steamcl-version
 flag="$(mktemp)"; : >"$flag"
 mcopy -i "$esp" "$flag" ::/EFI/BOOT/steamcl-restricted
 mcopy -i "$esp" "$STAGE_FONT" ::/EFI/BOOT/fonts/default.pf2
-grubenv="$(mktemp)"
-grub-editenv "$grubenv" create
-mcopy -i "$esp" "$grubenv" ::/EFI/steamos/grubenv
+# The pristine env block comes from out/boot, not from a `grub-editenv create` here. It used to be
+# minted on the spot, which was fine while a card was the only thing that had one -- but the internal
+# installer writes an ESP too and cannot run grub-editenv (not on the shipped image), so it ships as
+# a build artifact and gets copied. Two writers of the same constant is how a card and an install end
+# up carrying subtly different objects; one writer, two copies, cannot.
+mcopy -i "$esp" "$GRUBENV" ::/EFI/steamos/grubenv
 
 # The confs: key: value lines (bootconf's format). boot-requested-at is a YYYYmmDDHHMMSS UTC
 # datestamp; the chainloader picks the image with the newest one as the default. A gets now,

@@ -134,6 +134,22 @@ if command -v grub-editenv >/dev/null 2>&1; then
   cmp -s "$block" "$ref" \
     && ok "byte-identical to a grub-editenv-written block" \
     || bad "differs from what grub-editenv writes for the same keys"
+
+  # The EMPTY case, which is a different artifact with a different owner: boot/grub.sh runs
+  # `grub-editenv create` to emit out/boot/grubenv, the shared ESP's stage-2 env block, and ships it
+  # into the root so the internal installer can cp it onto an ESP it just made (the device has no
+  # grub-editenv). Asserting our writer reproduces that block with NO keys says the shipped constant
+  # is not opaque: if grub-editenv ever left the build container, parts_env_block emits the same
+  # bytes, and nothing about the card or an install would change.
+  pristine="$T/pristine.env"
+  grub-editenv "$pristine" create 2>/dev/null
+  parts_env_block >"$T/pristine-ours.env"
+  cmp -s "$pristine" "$T/pristine-ours.env" \
+    && ok "a keyless block is byte-identical to grub-editenv's pristine grubenv" \
+    || bad "our keyless block differs from a pristine grub-editenv grubenv"
+  [ "$(wc -c <"$pristine")" -eq 1024 ] \
+    && ok "the pristine grubenv is 1024 bytes (what boot/grub.sh asserts about the shipped one)" \
+    || bad "a pristine grub-editenv block is not 1024 bytes"
 else
   skip "grub-editenv is not installed -- the readback assertion did not run"
 fi

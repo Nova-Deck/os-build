@@ -206,7 +206,7 @@ CA_SRC="$ROOT/images/rauc/novadeck-ca.pem"
 BOOTDIR_SRC="$OUT/boot"
 [ -f "$CA_SRC" ] || { echo "no RAUC CA at ${CA_SRC#"$ROOT"/} (run ci/gen-signing-ca.sh)" >&2; exit 1; }
 for f in steamcl.efi steamcl-version holo-bootconf fonts/default.pf2 \
-         grubaa64.efi grub-a.cfg grub-b.cfg fonts/dejavu-mono.pf2; do
+         grubaa64.efi grub-a.cfg grub-b.cfg fonts/dejavu-mono.pf2 grubenv; do
   [ -f "$BOOTDIR_SRC/$f" ] || { echo "no boot artifact: ${BOOTDIR_SRC#"$ROOT"/}/$f (run boot/steamcl.sh + boot/grub.sh)" >&2; exit 1; }
 done
 install -D -m0444 "$CA_SRC"      "$stage/etc/rauc/keyring.pem"
@@ -219,6 +219,12 @@ install -D -m0444 "$BOOTDIR_SRC/grubaa64.efi"     "$stage/usr/lib/novadeck/boot/
 install -D -m0444 "$BOOTDIR_SRC/grub-a.cfg"       "$stage/usr/lib/novadeck/boot/grub-a.cfg"
 install -D -m0444 "$BOOTDIR_SRC/grub-b.cfg"       "$stage/usr/lib/novadeck/boot/grub-b.cfg"
 install -D -m0444 "$BOOTDIR_SRC/fonts/dejavu-mono.pf2" "$stage/usr/lib/novadeck/boot/fonts/dejavu-mono.pf2"
+# The pristine stage-2 env block. Unlike everything above it, no A/B update ever reads this: the ESP
+# is shared, so its grubenv survives updates by not being touched, and overwriting it would throw
+# away the board choice the user saved. It is here for the INTERNAL INSTALLER, which writes an ESP
+# that does not exist yet and cannot create one -- grub-editenv is not on this image (see
+# boot/grub.sh, which emits it for exactly this).
+install -D -m0444 "$BOOTDIR_SRC/grubenv"          "$stage/usr/lib/novadeck/boot/grubenv"
 echo "  RAUC: keyring.pem + stage-1/2 boot software + /usr/bin/steamos-bootconf installed"
 
 # Rewrite the baked Proton compat tools. We bake TWO — proton-cachyos and proton-ge — so the user

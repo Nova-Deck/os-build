@@ -597,6 +597,24 @@ Also in this phase:
 
 ## Phase 3 — Target selection and the dual-boot carve
 
+### Carried in from the Phase 2 review — decide before wiring a real target
+
+**`NOVADECK_APPEND_FLOOR` must become mandatory for `genpart.sh --append <target>`.** Today it is
+opt-in (`images/genpart.sh:106` refuses only when a floor was supplied), which was correct while
+every caller was a test invoking `--append` with no target. It stops being correct the moment a real
+device is passed.
+
+Unset, sgdisk places our eight in whatever the LARGEST FREE BLOCK is. The rule below — every sector
+written lies inside `[userdata_start, userdata_end]` — then holds only because the carve happens to
+have made the freed tail the largest free block, which `genpart.sh` cannot see and therefore cannot
+verify. That makes the containment argument true by luck rather than by construction, and luck is
+not what the geometric bound is for.
+
+The asymmetry decides it: over-requiring the floor costs one relaxed line; forgetting it costs a
+brick with EDL as the only recovery. So the safe path should be the default, and `--append` with a
+device argument should refuse without a floor rather than accept one. Left unchanged in Phase 2
+deliberately — it is a contract decision that belongs with the caller Phase 3 writes.
+
 ### The carve
 
 `super` (Android dynamic partitions) is sized to its contents and cannot be shrunk.

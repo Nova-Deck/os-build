@@ -12,6 +12,11 @@
 # The functions take explicit arguments and touch nothing implicitly: the OTA path addresses a
 # running system's /esp and /efi, the installer addresses mountpoints under /run on a foreign disk,
 # and a primitive that reached for a global would be right for exactly one of them.
+#
+# ONE ACKNOWLEDGED EXCEPTION: $SHA256, read by refresh_if_diff. It is a global because it is the
+# seam the offline suite drives to make the comparator ABSENT -- a parameter could not be made to
+# vanish from a caller the suite does not control. Named here so the rule above reads as having one
+# carve-out rather than as being quietly untrue.
 
 # die() and log() are the caller's if it has them -- post-install.sh's prefix [post-install.sh] and
 # its offline suite asserts that shape, so a primitive that printed its own name would make the
@@ -102,7 +107,7 @@ write_parts_env() {  # <mnt> <key=value>...
 # that knows the correspondence, so a rename in partition-table.txt breaks HERE, loudly, rather than
 # producing a parts.env that is well-formed and names nothing.
 parts_env_from_genpart_map() {  # reads the map on stdin, emits key=value on stdout
-  local line name idx key
+  local name idx key
   while IFS='=' read -r name idx; do
     [ -n "$name" ] || continue
     case "$name" in
@@ -164,9 +169,18 @@ seed_var() {  # <dev> <slot> <mnt> <source>
 
   mkdir -p "$mnt"
   mount "$dev" "$mnt" || die "cannot mount the target /var ($dev)"
+  # OURS IS ADDITIVE, and that matters more than it looks. The caller may already own an EXIT trap:
+  # post-install.sh does not at this point, but Phase 4's installer holds mountpoints under /run on
+  # a foreign disk and will carry one across its whole run. A bare `trap ... EXIT` here would
+  # overwrite it and the success path's `trap - EXIT` would then disarm the caller entirely --
+  # silently, with the symptom being leaked mounts on exactly the failure paths where cleanup
+  # matters. So: chain the previous handler behind ours, and restore it verbatim on the way out.
+  #
   # Expanded at trap-SET time, not at trap-fire time: $mnt is a local, and by the time an EXIT trap
   # runs on the die() path this function has gone.
-  trap "umount $(printf %q "$mnt") 2>/dev/null || true" EXIT
+  local prev_cmd
+  prev_cmd="$(trap -p EXIT | sed -n "s/^trap -- '\(.*\)' EXIT\$/\1/p")"
+  trap "umount $(printf %q "$mnt") 2>/dev/null || true${prev_cmd:+; $prev_cmd}" EXIT
 
   if [ "$mode" = dir ]; then
     # rsync, in the image for exactly this (images/customize-base.sh PKGS). -aHAX preserves modes,
@@ -223,7 +237,9 @@ seed_var() {  # <dev> <slot> <mnt> <source>
   # MAC forever.
   rm -f "$mnt/lib/novadeck/mac-wifi"
 
-  umount "$mnt"; trap - EXIT
+  # Put the caller's handler back exactly as it was -- `trap - EXIT` only when there was nothing.
+  umount "$mnt"
+  if [ -n "$prev_cmd" ]; then trap "$prev_cmd" EXIT; else trap - EXIT; fi
 }
 
 # --- stage 2 on a slot's efi partition ------------------------------------------------------------

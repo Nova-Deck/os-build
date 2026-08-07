@@ -892,26 +892,14 @@ if [ "$ov_uid" != "0" ]; then
   find "$stage" -uid "$ov_uid" -exec chown -h 0:0 {} +
 fi
 
-# 4zz. GUARD — assert the sealed tree against its declaration (Phase 4a step 4).
+# 4zy. /var, finalized — and packed as the installer's seed.
 #
-# Placed here, at the last point the tree is both complete and still a directory: everything above
-# has finished injecting, and section 5 below carves /var out into its own image (so a guard after
-# it could no longer see var/lib/pacman, which is exactly one of the things it has to find gone).
-# What mkfs.btrfs bakes in section 6 is this directory, unmodified.
-#
-# Release-only, mirroring the seal — a dev tree deliberately keeps the package manager and carries
-# DEV_PKGS the lock does not describe. See images/guard-rootfs.sh for what it asserts and why.
-if [ "${NOVADECK_DEV:-}" = "1" ]; then
-  echo "  [DEV] skipping the sealed-root guard (nothing was sealed)"
-else
-  "$ROOT/images/guard-rootfs.sh" "$stage"
-fi
-
-mkdir -p "$IMGDIR"
-
-# 5. carve /var out of the staged tree into its own ext4 image (partition var-a). The root is
-# sealed read-only, so every writable system path has to live here — including the /etc overlay's
-# upper+work dirs, which the initramfs stacks before handing off to systemd.
+# This block used to open section 5, below the guard. It runs HERE now because the seed tarball it
+# produces goes INSIDE the root, and images/guard-rootfs.sh's contract is that the tree it inspects
+# is the tree mkfs.btrfs bakes ("nothing between here and there adds content"). A file written after
+# the guard would quietly falsify that, and that contract exists because a file-mode regression once
+# reached hardware. Moving the block up also means the guard now sees the /var that actually ships
+# — no pacman cache, overlay dirs present — rather than an intermediate one.
 #
 # The pacman package cache is 500M of downloaded .pkg.tar.zst that nothing reads at runtime; it
 # alone would blow the 256M partition. Drop it. (/var/cache/pacman is then a bind-mount target
@@ -939,6 +927,58 @@ if [ "$var_used_mib" -ge $(( VAR_SIZE_MIB - 32 )) ]; then
   exit 1
 fi
 
+# THE INSTALLER'S /var SEED (Phase 2 of .claude/plans/internal-install.plan.md).
+#
+# The OTA path fills a target slot's /var by rsyncing the RUNNING one -- there is a live system that
+# describes this device, and copying it is the whole point. An install has no such source: the
+# running system is the INSTALLER, whose /var describes the installer. So the /var a fresh slot
+# starts from ships inside the root, and fs-overlay/usr/lib/novadeck/install/lib-slotwrite.sh's
+# seed_var unpacks it (that function takes a directory OR a tarball for exactly this reason).
+#
+# It is the same $varstage the two var images below are built from, so a slot installed from the
+# medium and a slot flashed on a card start from identical state by construction rather than by two
+# lists being kept in agreement.
+#
+# --numeric-owner --xattrs --acls to match what the OTA path's `rsync -aHAX --numeric-ids` promises;
+# tar preserves hard links natively. Modes matter more than they look here: sshd refuses to start if
+# a private host key is group/world-readable, so a mode-losing pack would take SSH down on an
+# installed device and nowhere else.
+#
+# lib/novadeck/slot is EXCLUDED because it is the one file in /var that is per-slot -- seed_var
+# writes it after unpacking, and a copy baked in here would be a second answer to the question
+# "which slot is this", of the kind /var/lib/novadeck/slot exists to be the independent witness for.
+# ~13 MiB of /var, so a few MiB compressed: negligible against a 7 G slot.
+install -d -m0755 "$stage/usr/lib/novadeck"
+tar --numeric-owner --xattrs --acls --zstd \
+    --exclude=./lib/novadeck/slot --exclude=./lib/novadeck/mac-wifi \
+    -cf "$stage/usr/lib/novadeck/var-seed.tar.zst" -C "$varstage" . \
+  || { echo "cannot pack the installer's /var seed" >&2; exit 1; }
+chmod 0444 "$stage/usr/lib/novadeck/var-seed.tar.zst"
+echo "  var-seed.tar.zst  $(du -h "$stage/usr/lib/novadeck/var-seed.tar.zst" | cut -f1) (installer /var seed, from the same staged tree as var-a/-b)"
+
+# 4zz. GUARD — assert the sealed tree against its declaration (Phase 4a step 4).
+#
+# Placed here, at the last point the tree is both complete and still a directory: everything above
+# has finished injecting, and section 5 below carves /var out into its own image (so a guard after
+# it could no longer see var/lib/pacman, which is exactly one of the things it has to find gone).
+# What mkfs.btrfs bakes in section 6 is this directory, unmodified.
+#
+# Release-only, mirroring the seal — a dev tree deliberately keeps the package manager and carries
+# DEV_PKGS the lock does not describe. See images/guard-rootfs.sh for what it asserts and why.
+if [ "${NOVADECK_DEV:-}" = "1" ]; then
+  echo "  [DEV] skipping the sealed-root guard (nothing was sealed)"
+else
+  "$ROOT/images/guard-rootfs.sh" "$stage"
+fi
+
+mkdir -p "$IMGDIR"
+
+# 5. carve /var out of the staged tree into its own ext4 image (partition var-a). The root is
+# sealed read-only, so every writable system path has to live here — including the /etc overlay's
+# upper+work dirs, which the initramfs stacks before handing off to systemd. $varstage was
+# finalized, size-checked and packed as the installer's seed in section 4zy, above the guard; what
+# is left here is turning it into the two per-slot images.
+#
 # One var image per slot (Phase 4b). They differ by exactly one file: /var/lib/novadeck/slot.
 #
 # The two root images are content-identical by design -- that is what an A/B update produces, and

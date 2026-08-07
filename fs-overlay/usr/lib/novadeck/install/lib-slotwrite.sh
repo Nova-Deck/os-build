@@ -186,7 +186,19 @@ seed_var() {  # <dev> <slot> <mnt> <source>
       || die "cannot copy $src to the target slot"
     log "copied $src wholesale ($(du -sh -x "$src" 2>/dev/null | cut -f1), offload bind mounts skipped)"
   else
-    tar -xf "$src" -C "$mnt" || die "cannot unpack the /var seed $src onto $dev"
+    # The flags MIRROR the rsync above, and have to: -p --numeric-owner --xattrs --acls is what
+    # `rsync -aHAX --numeric-ids` promises, and tar preserves hard links natively. An installed slot
+    # and an updated one must reach the same /var, and the modes are the sharp end -- sshd refuses
+    # to start if a private host key is group/world-readable, so a mode-losing unpack takes SSH down
+    # on installed devices and nowhere else. images/assemble-rootfs.sh packs with the same set.
+    #
+    # -p IS NOT REDUNDANT, even though this runs as root and tar defaults to it there. Measured:
+    # without -p the sticky bit on /var/tmp comes back 0777 instead of 1777 -- the bit IS in the
+    # archive, tar simply masks it off when it does not think it is preserving permissions. rsync -a
+    # has no such mode, so leaving it implicit would make the two paths agree only by accident of
+    # who is running them, which is the exact drift this file exists to prevent.
+    tar -p --numeric-owner --xattrs --acls -xf "$src" -C "$mnt" \
+      || die "cannot unpack the /var seed $src onto $dev"
     log "seeded /var from $src"
   fi
 

@@ -361,5 +361,68 @@ declare -F mkfs_esp >/dev/null \
   && ok "defined (unexercised offline -- needs a block device and root)" \
   || bad "mkfs_esp is not defined"
 
+# --- 8. the /var seed: one archive, two programs, and they must agree ---------------------------
+# images/assemble-rootfs.sh PACKS var-seed.tar.zst and lib-slotwrite.sh's seed_var UNPACKS it, and
+# between them they have to reproduce what the OTA path gets from `rsync -aHAX --numeric-ids`. The
+# flags are the whole contract: nothing fails if they drift, the slot just comes up subtly wrong.
+ASSEMBLE="$ROOT/images/assemble-rootfs.sh"
+
+CASE="the pack and unpack flag sets agree"
+for flag in -- --numeric-owner --xattrs --acls; do
+  [ "$flag" = -- ] && continue
+  grep -q -- "$flag" <(grep -A3 'tar --numeric-owner' "$ASSEMBLE") \
+    && ok "assemble-rootfs.sh packs with $flag" \
+    || bad "assemble-rootfs.sh no longer packs with $flag"
+  grep -q -- "$flag" <(grep -A2 'tar -p --numeric-owner' "$LIB") \
+    && ok "seed_var unpacks with $flag" \
+    || bad "seed_var no longer unpacks with $flag"
+done
+# -p is the one that looks redundant and is not: tar defaults to preserving permissions only when
+# it thinks it is root, and the round-trip below is what proves what that costs.
+grep -q 'tar -p --numeric-owner' "$LIB" \
+  && ok "seed_var unpacks with -p (not left to tar's root-only default)" \
+  || bad "seed_var lost -p -- setuid/sticky bits come back masked"
+
+CASE="the seed round-trips the modes that matter"
+if command -v zstd >/dev/null 2>&1; then
+  V="$T/varstage"
+  mkdir -p "$V/lib/overlays/etc/upper" "$V/lib/novadeck" "$V/tmp"
+  chmod 1777 "$V/tmp"
+  printf '7070e56b\n'   >"$V/lib/overlays/etc/upper/machine-id"
+  printf 'ssh-ed25519\n' >"$V/lib/overlays/etc/upper/ssh_host_ed25519_key"
+  chmod 0600 "$V/lib/overlays/etc/upper/ssh_host_ed25519_key"
+  printf 'a\n'          >"$V/lib/novadeck/slot"
+  printf 'de:ad\n'      >"$V/lib/novadeck/mac-wifi"
+
+  seed="$T/var-seed.tar.zst"
+  tar --numeric-owner --xattrs --acls --zstd \
+      --exclude=./lib/novadeck/slot --exclude=./lib/novadeck/mac-wifi \
+      -cf "$seed" -C "$V" . 2>/dev/null
+  M="$T/seedmnt"; mkdir -p "$M"
+  tar -p --numeric-owner --xattrs --acls -xf "$seed" -C "$M" 2>/dev/null
+
+  # sshd refuses to start if a private host key is group/world-readable, so this one takes SSH down
+  # on installed devices and nowhere else -- the worst shape on a device with no serial console.
+  [ "$(stat -c %a "$M/lib/overlays/etc/upper/ssh_host_ed25519_key")" = 600 ] \
+    && ok "a 0600 host key survives the round-trip (sshd would start)" \
+    || bad "the host key came back $(stat -c %a "$M/lib/overlays/etc/upper/ssh_host_ed25519_key") -- sshd would refuse to start"
+  # MEASURED, not assumed: without -p this comes back 0777. The bit is in the archive either way.
+  [ "$(stat -c %a "$M/tmp")" = 1777 ] \
+    && ok "/var/tmp keeps its sticky bit (1777)" \
+    || bad "/var/tmp came back $(stat -c %a "$M/tmp") -- any user could delete another's files there"
+  [ -f "$M/lib/overlays/etc/upper/machine-id" ] \
+    && ok "the machine-id rides across (the derived Wi-Fi MAC depends on it)" \
+    || bad "machine-id did not survive the seed"
+  # The two exclusions, which are what stop every installed device sharing an identity.
+  [ ! -e "$M/lib/novadeck/slot" ] \
+    && ok "no baked-in slot witness (seed_var writes it after unpacking)" \
+    || bad "the seed carried lib/novadeck/slot"
+  [ ! -e "$M/lib/novadeck/mac-wifi" ] \
+    && ok "no baked-in mac-wifi (else every install shares one Wi-Fi MAC)" \
+    || bad "the seed carried lib/novadeck/mac-wifi"
+else
+  skip "zstd is not installed -- the /var seed round-trip did not run"
+fi
+
 printf '\ntest-install.sh: %d passed, %d failed, %d skipped\n' "$PASS" "$FAIL" "$SKIP"
 [ "$FAIL" -eq 0 ]

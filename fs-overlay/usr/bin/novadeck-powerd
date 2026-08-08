@@ -63,6 +63,11 @@ SCX_BINARY = Path("/usr/bin/scx_lavd")
 SCX_SYSFS = Path("/sys/kernel/sched_ext")
 SCX_TIMEOUT = 15
 
+# Resolving a D-Bus sender to a pid costs a round trip to the bus daemon. It only ever happens on
+# an actual profile change (a human action), so the cost is irrelevant -- but the timeout must stay
+# short, because a wedged bus must not turn a profile set into a hang.
+SENDER_LOOKUP_TIMEOUT_MS = 500
+
 # power-profiles-daemon compatibility, served for two independent consumers:
 #
 #   net.hadess.PowerProfiles              scx_lavd --autopower. It hardcodes interface, service
@@ -934,17 +939,51 @@ class NovadeckPower:
             return GLib.Variant("u", self.read_temp())
         raise KeyError(prop)
 
-    def select_profile(self, profile):
+    def describe_sender(self, sender):
+        """Best-effort "who asked" for the log line. Never raises: attribution is not worth a
+        failed profile set, and a unique name alone is useless after the fact -- by the time anyone
+        reads the journal the bus has forgotten which process :1.19 was."""
+        if not sender:
+            return "powerd itself"
+        try:
+            reply = self.connection.call_sync(
+                "org.freedesktop.DBus",
+                "/org/freedesktop/DBus",
+                "org.freedesktop.DBus",
+                "GetConnectionUnixProcessID",
+                GLib.Variant("(s)", (sender,)),
+                GLib.VariantType("(u)"),
+                Gio.DBusCallFlags.NONE,
+                SENDER_LOOKUP_TIMEOUT_MS,
+                None,
+            )
+            pid = reply.get_child_value(0).get_uint32()
+        except Exception:
+            return sender
+        comm = read_text(f"/proc/{pid}/comm") or "?"
+        return f"{sender} pid={pid} ({comm})"
+
+    def select_profile(self, profile, sender=None):
         # The single place a profile is applied. Both the org.novadeck.Power1 Profile property
         # (which speaks UI labels) and PPD's ActiveProfile (which speaks ids) come through here,
         # so the two can never apply a profile differently.
         if profile not in PROFILES:
             raise ValueError(profile)
+        previous = self.profile
         self.profile = profile
         self.apply_profile()
+        # Logged unconditionally, including a re-select of the value already in effect. The
+        # question this answers is "what changed my profile, and when" LONG after the fact, and a
+        # daemon that logs nothing turns that into a live-capture session every single time. A
+        # rewrite back to the same value is precisely the case worth seeing, because that is what
+        # an out-of-band writer fighting the user looks like.
+        print(
+            f"novadeck-powerd: profile {previous} -> {profile} by {self.describe_sender(sender)}",
+            file=sys.stderr,
+        )
         return {"Profile": GLib.Variant("s", self.label_for(self.profile))}
 
-    def set_property(self, prop, value):
+    def set_property(self, prop, value, sender=None):
         changed = {}
         if prop == "Profile":
             # Resolve first so the error names what the caller actually sent, not "".
@@ -952,7 +991,7 @@ class NovadeckPower:
             profile = self.profile_for_label(label)
             if profile not in PROFILES:
                 raise ValueError(label)
-            changed = self.select_profile(profile)
+            changed = self.select_profile(profile, sender)
         elif prop == "GpuPerformanceLevel":
             level = value.get_string()
             if level not in ("auto", "manual"):
@@ -1062,11 +1101,11 @@ class NovadeckPower:
         except Exception:
             return None
 
-    def handle_set_property(self, _conn, _sender, _path, iface, prop, value):
+    def handle_set_property(self, _conn, sender, _path, iface, prop, value):
         if iface != IFACE:
             return False
         try:
-            self.set_property(prop, value)
+            self.set_property(prop, value, sender)
             return True
         except Exception as exc:
             print(f"novadeck-powerd: set {prop} failed: {exc}", file=sys.stderr)
@@ -1090,7 +1129,7 @@ class NovadeckPower:
             return GLib.Variant("s", "")
         return None
 
-    def ppd_set_property(self, _conn, _sender, _path, _iface, prop, value):
+    def ppd_set_property(self, _conn, sender, _path, _iface, prop, value):
         if prop != "ActiveProfile":
             return False
         try:
@@ -1098,7 +1137,7 @@ class NovadeckPower:
             profile = PPD_PROFILE_IDS.get(requested)
             if profile is None:
                 raise ValueError(requested)
-            changed = self.select_profile(profile)
+            changed = self.select_profile(profile, sender)
         except Exception as exc:
             print(f"novadeck-powerd: PPD set {prop} failed: {exc}", file=sys.stderr)
             return False

@@ -11,6 +11,9 @@ import time
 import warnings
 from pathlib import Path
 
+sys.path.insert(0, "/usr/lib/novadeck")
+import novadeck_perf  # noqa: E402 - needs the path insert above
+
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 BUS_NAME = "org.novadeck.Power"
@@ -308,6 +311,14 @@ class NovadeckPower:
         # names, because scx_lavd --autopower reads them on its first tick. See main().
         self.fan_tick()
         GLib.timeout_add_seconds(3, self.fan_tick)
+        # Per-game perf enforcement (novadeck_perf): gamescope + game-tree thread
+        # policy from game-tweaks.json, per-appid via the Steam process tree. Same
+        # cadence as the fan; a missing tweaks file or absent gamescope makes it a
+        # no-op. The Enforcer is long-lived because it remembers which game threads
+        # it changed, so it can put them back when a tweak is removed.
+        self.perf = novadeck_perf.Enforcer()
+        self.perf_tick()
+        GLib.timeout_add_seconds(3, self.perf_tick)
 
     def discover(self):
         self.gpu = self.discover_gpu()
@@ -882,6 +893,17 @@ class NovadeckPower:
             print(f"novadeck-powerd: fan tick failed: {exc}", file=sys.stderr)
             self.fan_safe()
             sd_notify("WATCHDOG=1")
+        return True
+
+    def perf_tick(self):
+        # Suspended = session frozen (cgroup-freeze) and CPUs mostly offline;
+        # policy writes then are pointless at best. Never lets an exception
+        # kill the timer: a bad tweaks entry must cost one tick, not the tool.
+        try:
+            if not self.suspended:
+                self.perf.tick()
+        except Exception as exc:
+            print(f"novadeck-powerd: perf tick failed: {exc}", file=sys.stderr)
         return True
 
     def fan_safe(self):

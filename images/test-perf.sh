@@ -1,0 +1,284 @@
+#!/usr/bin/env bash
+# Offline check for the per-game perf library (fs-overlay/usr/lib/novadeck/novadeck_perf.py).
+#
+#   images/test-perf.sh
+#
+# WHY THIS EXISTS. Every input to the perf tick is a file whose absence is legal: the tweaks
+# json is operator-created, /proc/<pid>/task/<tid>/children only exists with
+# CONFIG_PROC_CHILDREN, cpu_capacity only exists on DT platforms, and the appid lives in
+# another process's environ. Each degrade path is deliberately silent, which is exactly how a
+# regression would ship: a typo'd merge contract or a broken tree walk still exits 0 and
+# simply enforces nothing. So this drives the REAL module against fabricated /proc and sysfs
+# trees and asserts on the answers.
+#
+# NOT covered here: the sched_setscheduler/setpriority/sched_setaffinity effects of
+# apply_gamescope — those need live tids and a device. The tick's value plumbing IS covered,
+# with the apply_* functions stubbed to capture what they would enforce, and so is
+# apply_game_tree's touched-thread bookkeeping (which threads it writes, and that it puts
+# them back) since that is decision logic rather than kernel effect.
+#
+# It also covers proton-wrapper's apply_env, the launch-time half of the same settings file.
+#
+# Runs on the host with no root and no device.
+set -uo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PERF_DIR="$ROOT/fs-overlay/usr/lib/novadeck"
+
+[[ -f $PERF_DIR/novadeck_perf.py ]] || { echo "novadeck_perf.py missing: $PERF_DIR" >&2; exit 1; }
+
+TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
+
+# --- fabricated sysfs: 2 little (cap 300) + 5 big (cap 800) + 1 prime (cap 1024), all online
+SYS="$TMP/sys-cpu"
+for c in 0 1 2 3 4 5 6 7; do mkdir -p "$SYS/cpu$c"; done
+printf '0-7\n' > "$SYS/online"
+for c in 0 1; do printf '300\n'  > "$SYS/cpu$c/cpu_capacity"; done
+for c in 2 3 4 5 6; do printf '800\n'  > "$SYS/cpu$c/cpu_capacity"; done
+printf '1024\n' > "$SYS/cpu7/cpu_capacity"
+
+# uniform-capacity variant: every preset must collapse to all online
+SYSU="$TMP/sys-cpu-uniform"
+for c in 0 1 2 3; do mkdir -p "$SYSU/cpu$c"; printf '1024\n' > "$SYSU/cpu$c/cpu_capacity"; done
+printf '0-3\n' > "$SYSU/online"
+
+# --- fabricated /proc: steam(1234) -> reaper(1300, appid 620, older) -> pv(1400, appid 620)
+#     plus a second, NEWER launch chain steam -> reaper(1500, appid 990)
+#     and gamescope(2000) with a non-gamescope child (2100)
+PROC="$TMP/proc"
+mk_proc() { # pid comm children starttime [environ]
+  local pid=$1 comm=$2 children=$3 start=$4 environ=${5-}
+  mkdir -p "$PROC/$pid/task/$pid"
+  printf '%s\n' "$comm" > "$PROC/$pid/comm"
+  printf '%s\n' "$children" > "$PROC/$pid/task/$pid/children"
+  printf '%s (%s) S 1 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 %s 0 0\n' \
+    "$pid" "$comm" "$start" > "$PROC/$pid/stat"
+  [[ -n $environ ]] && printf '%b' "$environ" > "$PROC/$pid/environ"
+  return 0
+}
+mk_proc 1234 steam       "1300 1500 1600" 100
+mk_proc 1300 reaper      "1400"      200 'HOME=/home/deck\0STEAM_COMPAT_APP_ID=620\0'
+mk_proc 1400 pv-bwrap    ""          210 'SteamAppId=620\0'
+mk_proc 1500 reaper      ""          300 'STEAM_COMPAT_APP_ID=990\0'
+# Observed on device: Steam runs the compat tool with appid 0 (prefix setup /
+# tool probing). NEWEST of the lot, so an unfiltered sentinel would win.
+mk_proc 1600 python3     ""          400 'STEAM_COMPAT_APP_ID=0\0'
+mk_proc 2000 gamescope   "2100"      50
+mk_proc 2100 steamcompmgr ""         60
+# steam on a kernel WITHOUT CONFIG_PROC_CHILDREN: task dir exists, no children file
+PROCNC="$TMP/proc-nochildren"
+mkdir -p "$PROCNC/9000/task/9000"
+printf 'steam\n' > "$PROCNC/9000/comm"
+
+# --- tweaks: global + one enabled game, one entry missing "enabled" (must not apply)
+cat > "$TMP/tweaks.json" <<'EOF'
+{
+  "global": {"gamescopeNice": 5, "gamescopeRr": false},
+  "games": {
+    "620": {"enabled": true, "gamescopeNice": -4, "gamescopeCores": "prime",
+            "nice": -3, "cores": "big"},
+    "990": {"gamescopeNice": -10}
+  }
+}
+EOF
+
+NOVADECK_PERF_SYSCPU="$SYS" NOVADECK_PERF_PROC="$PROC" \
+TEST_TMP="$TMP" PERF_DIR="$PERF_DIR" SYSU="$SYSU" PROCNC="$PROCNC" \
+python3 - <<'PYEOF'
+import os, pathlib, sys
+
+sys.path.insert(0, os.environ["PERF_DIR"])
+import novadeck_perf as np
+
+tmp = pathlib.Path(os.environ["TEST_TMP"])
+results = []
+def check(name, got, want):
+    results.append(("PASS", name) if got == want else ("FAIL", f"{name} (want {want!r}, got {got!r})"))
+def raises(name, fn):
+    try:
+        fn()
+    except ValueError:
+        results.append(("PASS", name))
+    else:
+        results.append(("FAIL", f"{name} (no ValueError)"))
+
+# cpulist grammar
+check("parse simple", np.parse_cpulist("0,3-5"), [0, 3, 4, 5])
+check("format compact", np.format_cpulist([3, 4, 5, 7]), "3-5,7")
+check("roundtrip", np.parse_cpulist(np.format_cpulist([0, 2, 3, 4])), [0, 2, 3, 4])
+raises("reject duplicates", lambda: np.parse_cpulist("1,1"))
+raises("reject reversed range", lambda: np.parse_cpulist("5-3"))
+raises("reject garbage", lambda: np.parse_cpulist("two"))
+
+# topology presets from the fabricated sysfs
+check("online cpus", np.online_cpus(), [0, 1, 2, 3, 4, 5, 6, 7])
+check("preset little", np.preset_cpus("little"), [0, 1])
+check("preset prime", np.preset_cpus("prime"), [7])
+check("preset big", np.preset_cpus("big"), [2, 3, 4, 5, 6, 7])
+check("preset all", np.preset_cpus("all"), [0, 1, 2, 3, 4, 5, 6, 7])
+
+np.SYS_CPU_ROOT = pathlib.Path(os.environ["SYSU"])
+check("uniform capacity collapses", np.preset_cpus("little"), [0, 1, 2, 3])
+np.SYS_CPU_ROOT = pathlib.Path(os.environ["NOVADECK_PERF_SYSCPU"])
+
+# resolve_cores
+check("unset inherits", np.resolve_cores(None), None)
+check("empty inherits", np.resolve_cores(""), None)
+check("explicit list", np.resolve_cores("2,7"), [2, 7])
+raises("reject offline cpu", lambda: np.resolve_cores("12"))
+
+# tweaks merge — the proton-wrapper contract
+np.TWEAKS_CONFIG = tmp / "tweaks.json"
+tweaks = np.load_tweaks()
+check("global only", np.settings_for(tweaks, None).get("gamescopeNice"), 5)
+check("enabled game overlays", np.settings_for(tweaks, "620").get("gamescopeNice"), -4)
+check("missing enabled ignored", np.settings_for(tweaks, "990").get("gamescopeNice"), 5)
+np.TWEAKS_CONFIG = tmp / "no-such-file.json"
+check("absent tweaks empty", np.load_tweaks(), {})
+np.TWEAKS_CONFIG = tmp / "tweaks.json"
+
+# sanitize
+clean = np.sanitize_perf({"gamescopeNice": -99, "gamescopeRr": True,
+                          "gamescopeCores": "prime", "enabled": True})
+check("nice clamped", clean.get("gamescopeNice"), -20)
+check("rr kept", clean.get("gamescopeRr"), True)
+check("cores resolved", clean.get("gamescopeCores"), [7])
+check("stray keys dropped", "enabled" in clean, False)
+check("bad cores dropped", "gamescopeCores" in np.sanitize_perf({"gamescopeCores": "99"}), False)
+check("non-int nice dropped", "gamescopeNice" in np.sanitize_perf({"gamescopeNice": "fast"}), False)
+check("bool is not a nice", "gamescopeNice" in np.sanitize_perf({"gamescopeNice": True}), False)
+
+# game-tree keys
+game = np.sanitize_perf({"nice": -3, "cores": "big"})
+check("game nice kept", game.get("nice"), -3)
+check("game cores resolved", game.get("cores"), [2, 3, 4, 5, 6, 7])
+check("game nice clamped", np.sanitize_perf({"nice": 99}).get("nice"), 19)
+check("bad game cores dropped", "cores" in np.sanitize_perf({"cores": "nope"}), False)
+
+# /proc tree walk + appid detection
+check("find steam", np.pids_by_comm(np.STEAM_COMMS), [1234])
+check("descendants", sorted(np.descendant_pids(1234)), [1300, 1400, 1500, 1600])
+cache = {}
+appid, tree = np.scan_games(cache)
+check("newest launch wins", appid, "990")
+check("game tree is that launch only", sorted(tree), [1500])
+check("steam itself never tagged", 1234 in tree, False)
+check("appid 0 sentinel ignored", 1600 in tree, False)
+cache[7777] = (1, "555")  # dead pid planted in the cache
+np.scan_games(cache)
+check("dead pid pruned", 7777 in cache, False)
+# pid reuse: same pid, different starttime -> the cached answer must be dropped
+cache[1500] = (999999, "111")
+check("pid reuse re-reads environ", np.scan_games(cache)[0], "990")
+
+np.PROC_ROOT = pathlib.Path(os.environ["PROCNC"])
+check("no PROC_CHILDREN degrades", np.running_appid({}), None)
+np.PROC_ROOT = pathlib.Path(os.environ["NOVADECK_PERF_PROC"])
+
+# game-tree bookkeeping: what it touches, and that it puts it back.
+# The syscalls themselves are stubbed; only the decisions are under test.
+real_getpri, real_setpri = os.getpriority, os.setpriority
+applied, pinned = {}, []
+os.getpriority = lambda which, tid: applied.get(tid, 0)
+os.setpriority = lambda which, tid, value: applied.__setitem__(tid, value)
+np._set_affinity = lambda tid, mask: pinned.append((tid, sorted(mask)))
+# every thread starts unpinned unless a case below says otherwise
+masks = {}
+np._get_affinity = lambda tid: set(masks.get(tid, range(8)))
+state = {"affinity": {}, "nice": {}}
+
+np.apply_game_tree({"nice": -3, "cores": [2, 3]}, [1500], state)
+check("game tree nice applied", applied.get(1500), -3)
+check("game tree pinned", pinned, [(1500, [2, 3])])
+check("state records the tid", 1500 in state["affinity"], True)
+check("state records the ORIGINAL mask", sorted(state["affinity"][1500]), [0, 1, 2, 3, 4, 5, 6, 7])
+
+pinned.clear()
+np.apply_game_tree({}, [1500], state)  # tweak removed
+check("affinity repaired to all", pinned, [(1500, [0, 1, 2, 3, 4, 5, 6, 7])])
+check("nice restored to original", applied.get(1500), 0)
+check("state cleared after repair", (len(state["affinity"]), len(state["nice"])), (0, 0))
+
+# a thread the GAME pinned itself must be restored to ITS mask, not widened
+masks[1500] = {4, 5}
+selfpin = {"affinity": {}, "nice": {}}
+pinned.clear()
+np.apply_game_tree({"cores": [2, 3]}, [1500], selfpin)
+check("self-pinned thread is overridden", pinned, [(1500, [2, 3])])
+check("self-pinned original remembered", sorted(selfpin["affinity"][1500]), [4, 5])
+pinned.clear()
+np.apply_game_tree({}, [1500], selfpin)  # tweak removed
+check("self-pinned thread restored, not widened", pinned, [(1500, [4, 5])])
+
+# an original mask whose cpus all went offline cannot be restored verbatim
+masks[1500] = {6, 7}
+offline = {"affinity": {}, "nice": {}}
+np.apply_game_tree({"cores": [2, 3]}, [1500], offline)
+real_online = np.online_cpus
+np.online_cpus = lambda: [0, 1, 2, 3]
+pinned.clear()
+np.apply_game_tree({}, [1500], offline)
+check("unrestorable mask falls back to online cpus", pinned, [(1500, [0, 1, 2, 3])])
+np.online_cpus = real_online
+masks.clear()
+
+pinned.clear()
+np.apply_game_tree({}, [1500], state)
+check("unconfigured tree is never written", pinned, [])
+
+np.apply_game_tree({"nice": -3}, [1500], state)
+np.apply_game_tree({"nice": -3}, [], state)  # game exited
+check("dead tids forgotten", len(state["nice"]), 0)
+os.getpriority, os.setpriority = real_getpri, real_setpri
+
+# tick plumbing with enforcement stubbed out
+seen = {}
+np.apply_gamescope = lambda values: seen.update(values)
+np.apply_game_tree = lambda values, pids, state: seen.update({"_pids": sorted(pids)})
+values = np.Enforcer().tick()
+check("tick merges newest game", values.get("gamescopeNice"), 5)  # 990 lacks enabled -> global
+check("tick reaches enforcement", seen.get("gamescopeNice"), 5)
+check("tick hands the game tree over", seen.get("_pids"), [1500])
+
+# --- proton-wrapper's half of the split: Wine-only env, applied before exec.
+# Loaded by path because it ships without a .py extension. It imports
+# novadeck_perf itself, which resolves to the fake-configured module above.
+import importlib.machinery
+import importlib.util
+pw_path = os.path.join(os.environ["PERF_DIR"], "proton-wrapper")
+spec = importlib.util.spec_from_loader(
+    "pw", importlib.machinery.SourceFileLoader("pw", pw_path))
+pw = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(pw)
+
+os.environ.pop("WINE_CPU_TOPOLOGY", None)
+os.environ["TOMBSTONE_ME"] = "yes"
+pw.apply_env({"cores": "2,3", "env": {"DXVK_HUD": "fps", "TOMBSTONE_ME": None}})
+check("WINE_CPU_TOPOLOGY derived from cores", os.environ.get("WINE_CPU_TOPOLOGY"), "2:2,3")
+check("per-game env applied", os.environ.get("DXVK_HUD"), "fps")
+check("null env entry unsets", "TOMBSTONE_ME" in os.environ, False)
+
+os.environ.pop("WINE_CPU_TOPOLOGY", None)
+pw.apply_env({"cores": "2,3", "wineTopology": False})
+check("wineTopology false suppresses it", os.environ.get("WINE_CPU_TOPOLOGY"), None)
+
+os.environ["WINE_CPU_TOPOLOGY"] = "user-set"
+pw.apply_env({"cores": "2,3"})
+check("explicit user topology wins", os.environ.get("WINE_CPU_TOPOLOGY"), "user-set")
+
+os.environ.pop("WINE_CPU_TOPOLOGY", None)
+pw.apply_env({"cores": "bogus", "env": {"STILL": "applied"}})
+check("bad cores does not block env", os.environ.get("STILL"), "applied")
+
+for status, name in results:
+    print(f"{status} {name}")
+sys.exit(1 if any(s == "FAIL" for s, _ in results) else 0)
+PYEOF
+py_rc=$?
+
+if [[ $py_rc -eq 0 ]]; then
+  echo "test-perf: all checks passed"
+else
+  echo "test-perf: FAILURES above" >&2
+fi
+exit "$py_rc"

@@ -38,7 +38,8 @@ Set one per game by creating `/etc/novadeck/game-tweaks.json`:
 ```
 
 The key is the Steam appid. `enabled` must be `true` or the entry is ignored. Without this file
-every game uses `default`.
+every game uses `default`. The same file also carries per-game performance keys (compositor
+priority and CPU pinning) — see [per-game-perf.md](per-game-perf.md).
 
 For a one-off experiment you can instead set `STEAM_FEX_TSOENABLED=0` in a game's launch options —
 Proton reads it directly.

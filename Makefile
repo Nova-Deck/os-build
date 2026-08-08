@@ -419,8 +419,23 @@ $(FW_QCOM): firmware/QCOM_FW.pin
 
 # Native arm64 Steam seed (client + SR3 runtime) — fetched on the host, staged into work/steam-seed/,
 # then pre-seeded into /home by make-sdcard. Pinned channel/runtime in steam-seed/STEAM_SEED.pin.
-$(STEAM_SEED): steam-seed/STEAM_SEED.pin steam-seed/fetch-steam-seed.sh
+#
+# The sync target is PHONY on purpose: the pin names two live ROLLING channels, so seed freshness
+# is a question about Valve's CDN, not about repo files — mtimes cannot answer it, which is the
+# MODE_STAMP staleness shape again. With the old file-only rule, a staged seed newer than the pin
+# + fetcher meant make never invoked the fetcher at all, and its version compare (built to be a
+# cheap every-run check: two small GETs on the skip path) was unreachable in exactly the common
+# case. HW-OBSERVED 2026-08-08: a card built two days after its seed staged took a Steam client
+# self-update right after OOBE — the compare would have caught the bump; it was never consulted.
+#
+# Order-only (`|`) is what keeps this from cascading: the phony runs every build, but the seed
+# TARGET's mtime moves only when the fetcher actually restages, so $(ROOTFS) re-assembles exactly
+# when the seed changed and not once per invocation.
+.PHONY: steam-seed-sync
+steam-seed-sync:
 	steam-seed/fetch-steam-seed.sh
+$(STEAM_SEED): steam-seed/STEAM_SEED.pin steam-seed/fetch-steam-seed.sh | steam-seed-sync
+	@[ -x "$@" ] || { echo "steam seed missing after sync: $@" >&2; exit 1; }
 	@touch $@
 
 # ==============================================================================

@@ -360,7 +360,7 @@ verify-card: $(SDCARD) | $(BUILD_STAMP) ## Verify the built A/B card image (in c
 verify-lock: ## Check the lock's novadeck rows against packages/ (host, seconds, no build)
 	bash packages/verify-lock-rows.sh
 
-test: verify-lock ## Run the offline bootctl/post-install/pairingd/quirks/stage-2/unit/update/publish/install suites (host, no build needed)
+test: verify-lock ## Run the offline bootctl/post-install/pairingd/quirks/stage-2/unit/update/publish/install/steamos-manager suites (host, no build needed)
 	bash images/test-bootctl.sh
 	bash images/test-post-install.sh
 	bash images/test-pairingd.sh
@@ -369,6 +369,7 @@ test: verify-lock ## Run the offline bootctl/post-install/pairingd/quirks/stage-
 	bash images/test-units.sh
 	bash images/test-update.sh
 	bash images/test-publish-bundle.sh
+	bash images/test-steamos-manager.sh
 	bash install/test-install.sh
 
 # The fourth suite, separate because it is the one that CANNOT run on the host: it signs real

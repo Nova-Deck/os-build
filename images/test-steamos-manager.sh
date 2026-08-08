@@ -331,6 +331,15 @@ else
   bad "no default.target.wants symlink: the session-bus instance relies on presets alone"
 fi
 
+# That symlink lives under /usr/lib, so it applies to every user manager -- and one starts for
+# anyone who logs in, root over SSH included. ConditionUser is what keeps the pair honest: without
+# it each SSH login spawned a shim owning the bus name on a session bus nobody reads.
+if grep -qE '^ConditionUser=deck[[:space:]]*$' "$USER_UNIT"; then
+  ok "user unit is gated on ConditionUser=deck — one instance, in the session SteamUI reads"
+else
+  bad "no ConditionUser=deck: the vendor wants symlink starts a shim in EVERY user manager"
+fi
+
 # Restart=on-failure matters more here than usual: the shim holds a bus name the client resolves
 # once. If it dies and stays dead, the QAM's power controls go inert with nothing in a log.
 for unit in "$USER_UNIT" "$SYS_UNIT"; do

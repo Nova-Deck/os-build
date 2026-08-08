@@ -5,6 +5,12 @@ Description=novadeck SteamOS Manager backend (deck session bus — SteamUI reads
 # the name. Runs as the deck user and forwards to novadeck-powerd on the system bus (deck is in the
 # `wheel` group the org.novadeck.Power policy allows). The system-bus unit stays for parity/probes.
 After=graphical-session.target
+# The default.target.wants symlink ships under /usr/lib, so it applies to EVERY user manager, not
+# just deck's -- and a user manager starts for anyone who logs in, including root over SSH. Without
+# this condition each SSH login spawned its own shim, which owned the bus name on that user's own
+# session bus (where nothing reads it) and held a pointless powerd subscription. Only deck's
+# instance is the one SteamUI talks to.
+ConditionUser=deck
 
 [Service]
 Type=dbus

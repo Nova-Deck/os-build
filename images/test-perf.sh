@@ -182,18 +182,45 @@ applied, pinned = {}, []
 os.getpriority = lambda which, tid: applied.get(tid, 0)
 os.setpriority = lambda which, tid, value: applied.__setitem__(tid, value)
 np._set_affinity = lambda tid, mask: pinned.append((tid, sorted(mask)))
-state = {"affinity": set(), "nice": {}}
+# every thread starts unpinned unless a case below says otherwise
+masks = {}
+np._get_affinity = lambda tid: set(masks.get(tid, range(8)))
+state = {"affinity": {}, "nice": {}}
 
 np.apply_game_tree({"nice": -3, "cores": [2, 3]}, [1500], state)
 check("game tree nice applied", applied.get(1500), -3)
 check("game tree pinned", pinned, [(1500, [2, 3])])
 check("state records the tid", 1500 in state["affinity"], True)
+check("state records the ORIGINAL mask", sorted(state["affinity"][1500]), [0, 1, 2, 3, 4, 5, 6, 7])
 
 pinned.clear()
 np.apply_game_tree({}, [1500], state)  # tweak removed
 check("affinity repaired to all", pinned, [(1500, [0, 1, 2, 3, 4, 5, 6, 7])])
 check("nice restored to original", applied.get(1500), 0)
 check("state cleared after repair", (len(state["affinity"]), len(state["nice"])), (0, 0))
+
+# a thread the GAME pinned itself must be restored to ITS mask, not widened
+masks[1500] = {4, 5}
+selfpin = {"affinity": {}, "nice": {}}
+pinned.clear()
+np.apply_game_tree({"cores": [2, 3]}, [1500], selfpin)
+check("self-pinned thread is overridden", pinned, [(1500, [2, 3])])
+check("self-pinned original remembered", sorted(selfpin["affinity"][1500]), [4, 5])
+pinned.clear()
+np.apply_game_tree({}, [1500], selfpin)  # tweak removed
+check("self-pinned thread restored, not widened", pinned, [(1500, [4, 5])])
+
+# an original mask whose cpus all went offline cannot be restored verbatim
+masks[1500] = {6, 7}
+offline = {"affinity": {}, "nice": {}}
+np.apply_game_tree({"cores": [2, 3]}, [1500], offline)
+real_online = np.online_cpus
+np.online_cpus = lambda: [0, 1, 2, 3]
+pinned.clear()
+np.apply_game_tree({}, [1500], offline)
+check("unrestorable mask falls back to online cpus", pinned, [(1500, [0, 1, 2, 3])])
+np.online_cpus = real_online
+masks.clear()
 
 pinned.clear()
 np.apply_game_tree({}, [1500], state)

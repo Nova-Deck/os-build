@@ -327,6 +327,14 @@ def _policy(tid):
         return -1
 
 
+def _get_affinity(tid):
+    """The thread's current cpu mask, or None if it has already exited."""
+    try:
+        return set(os.sched_getaffinity(tid))
+    except OSError:
+        return None
+
+
 def _set_affinity(tid, mask):
     """Write affinity only when it differs — repairs a stale restrictive mask
     after the config goes away without churning syscalls every tick."""
@@ -392,8 +400,9 @@ def apply_game_tree(values, pids, state):
     gamescope is ours to own, so an unset key there means "restore the default".
     A game tree is NOT ours — Proton, FEX and the game itself set their own
     affinities and priorities — so here an unset key means "don't touch", and
-    only threads THIS function changed (recorded in `state`) are ever repaired.
-    Otherwise every tick would quietly undo a game's own thread tuning.
+    only threads THIS function changed are ever repaired — each back to the nice
+    and cpu mask IT had before we touched it, both recorded in `state` on first
+    write. Otherwise every tick would quietly undo a game's own thread tuning.
 
     Works on every launch path, because it keys off the tagged pids from
     scan_games() rather than off anything a launch wrapper had to inject.
@@ -403,9 +412,9 @@ def apply_game_tree(values, pids, state):
     live = set(tids)
     # a tid we touched that has since exited cannot be repaired; forgetting it
     # is what keeps `state` from growing for the daemon's whole uptime
-    state["affinity"] &= live
-    for gone in [tid for tid in state["nice"] if tid not in live]:
-        del state["nice"][gone]
+    for touched in (state["affinity"], state["nice"]):
+        for gone in [tid for tid in touched if tid not in live]:
+            del touched[gone]
 
     cores = values.get("cores") or None
     mask = None
@@ -416,11 +425,20 @@ def apply_game_tree(values, pids, state):
 
     if mask:
         for tid in tids:
+            if tid not in state["affinity"]:
+                # remember the thread's OWN mask before the first overwrite, so
+                # repair restores what the game/FEX chose rather than widening
+                # it to every cpu (same contract as `nice` below)
+                original = _get_affinity(tid)
+                if original is None:
+                    continue  # exited between process_tids() and here
+                state["affinity"][tid] = original
             _set_affinity(tid, mask)
-            state["affinity"].add(tid)
     elif state["affinity"]:
-        for tid in state["affinity"]:
-            _set_affinity(tid, all_cpus)
+        for tid, original in state["affinity"].items():
+            # a cpu that went offline while we held the mask is not restorable;
+            # falling back to all_cpus beats setting an empty (EINVAL) mask
+            _set_affinity(tid, (original & all_cpus) or all_cpus)
         state["affinity"].clear()
 
     nice = values.get("nice")
@@ -448,7 +466,7 @@ class Enforcer:
 
     def __init__(self):
         self.appid_cache = {}
-        self.game_state = {"affinity": set(), "nice": {}}
+        self.game_state = {"affinity": {}, "nice": {}}
 
     def tick(self):
         tweaks = load_tweaks()

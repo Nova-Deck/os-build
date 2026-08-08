@@ -64,7 +64,9 @@ Notes:
 - Compositor and game keys are enforced with deliberately different rules. gamescope is ours, so
   clearing a `gamescope*` key restores the default. A game tree is not ours — Proton, FEX and the
   game set their own priorities — so `nice`/`cores` are written only when set, and only threads
-  novadeck itself changed are ever put back.
+  novadeck itself changed are ever put back. Each such thread is restored to *its own* prior nice
+  and cpu mask, recorded before the first overwrite, so a game that pins or deprioritises its own
+  threads gets that tuning back rather than a flattened "nice 0, all CPUs".
 - `gamescopeRr` outranks every normal thread including the game's. It can help frame pacing when
   the compositor is starved; it can also starve the game if something in gamescope spins. Treat it
   as a per-title experiment, not a default.

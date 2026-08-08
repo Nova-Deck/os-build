@@ -26,6 +26,34 @@ IFACE_OBJECT_MANAGER = "org.freedesktop.DBus.ObjectManager"
 POWER_BUS = "org.novadeck.Power"
 POWER_PATH = "/org/novadeck/Power"
 POWER_IFACE = "org.novadeck.Power1"
+
+# Our property names -> powerd's. One source of truth: get_property() reads through these, and
+# POWERD_TO_STEAM inverts them so a powerd-side change can be re-announced under our own names.
+PROFILE_PROPS = {
+    "AvailablePerformanceProfiles": "AvailableProfiles",
+    "PerformanceProfile": "Profile",
+    "SuggestedDefaultPerformanceProfile": "SuggestedDefaultProfile",
+}
+GPU_PROPS = {
+    "AvailableGpuPerformanceLevels": "AvailableGpuPerformanceLevels",
+    "GpuPerformanceLevel": "GpuPerformanceLevel",
+    "ManualGpuClock": "ManualGpuClock",
+    "ManualGpuClockMin": "ManualGpuClockMin",
+    "ManualGpuClockMax": "ManualGpuClockMax",
+}
+SCHED_PROPS = {
+    "AvailableCpuSchedulers": "AvailableCpuSchedulers",
+    "CpuScheduler": "CpuScheduler",
+}
+POWERD_TO_STEAM = {
+    powerd: (iface, ours)
+    for iface, props in (
+        (IFACE_PROFILE, PROFILE_PROPS),
+        (IFACE_GPU, GPU_PROPS),
+        (IFACE_SCHED, SCHED_PROPS),
+    )
+    for ours, powerd in props.items()
+}
 PROPS = "org.freedesktop.DBus.Properties"
 POWER_GET_TIMEOUT_MS = 1000
 POWER_SET_TIMEOUT_MS = 5000
@@ -147,6 +175,24 @@ class PowerClient:
             None,
         )
 
+    def subscribe_changed(self, handler):
+        """Call `handler` on every powerd PropertiesChanged, whichever bus name caused it.
+
+        powerd emits on org.novadeck.Power1 from the single place a profile is applied, so this
+        catches changes made through PPD's ActiveProfile or by powerd itself -- not just the ones
+        we forwarded. Without it our own emits-change properties would only ever fire for writes
+        that came through us, and a client caching on them would skip legitimate sets.
+        """
+        return self.props.get_connection().signal_subscribe(
+            POWER_BUS,
+            PROPS,
+            "PropertiesChanged",
+            POWER_PATH,
+            None,
+            Gio.DBusSignalFlags.NONE,
+            handler,
+        )
+
 
 class NovadeckSteamOSManager:
     def __init__(self):
@@ -159,6 +205,8 @@ class NovadeckSteamOSManager:
         self.power = PowerClient()
         self.cpu_schedulers = self.query_cpu_schedulers()
         self.connection = None
+        self.power_subscription = None
+        self.last_emitted = {}
 
     def query_cpu_schedulers(self):
         try:
@@ -194,13 +242,40 @@ class NovadeckSteamOSManager:
         return objects
 
     def emit_properties(self, iface, changed):
+        # A write through us emits here AND comes back via the powerd subscription; drop the
+        # second one rather than announcing a change that did not happen.
+        fresh = {}
+        for prop, value in changed.items():
+            text = value.print_(True)
+            if self.last_emitted.get((iface, prop)) == text:
+                continue
+            self.last_emitted[(iface, prop)] = text
+            fresh[prop] = value
+        if not fresh:
+            return
         self.connection.emit_signal(
             None,
             OBJECT_PATH,
             "org.freedesktop.DBus.Properties",
             "PropertiesChanged",
-            GLib.Variant("(sa{sv}as)", (iface, changed, [])),
+            GLib.Variant("(sa{sv}as)", (iface, fresh, [])),
         )
+
+    def on_power_changed(self, _conn, _sender, _path, _iface, _signal, params):
+        """Re-announce a powerd-side change under our own interfaces and property names."""
+        if params.n_children() < 2 or params.get_child_value(0).get_string() != POWER_IFACE:
+            return
+        changed = params.get_child_value(1)
+        by_iface = {}
+        for i in range(changed.n_children()):
+            entry = changed.get_child_value(i)
+            target = POWERD_TO_STEAM.get(entry.get_child_value(0).get_string())
+            if target is None:
+                continue  # powerd property with no SteamOSManager equivalent (fan, temp, ...)
+            iface, prop = target
+            by_iface.setdefault(iface, {})[prop] = entry.get_child_value(1).get_variant()
+        for iface, props in by_iface.items():
+            self.emit_properties(iface, props)
 
     def get_property(self, iface, prop):
         if iface == IFACE_MANAGER and prop == "DeviceModel":
@@ -211,23 +286,11 @@ class NovadeckSteamOSManager:
             if prop == "DefaultLoginMode":
                 return GLib.Variant("s", self.default_login_mode)
         if iface == IFACE_PROFILE:
-            mapping = {
-                "AvailablePerformanceProfiles": "AvailableProfiles",
-                "PerformanceProfile": "Profile",
-                "SuggestedDefaultPerformanceProfile": "SuggestedDefaultProfile",
-            }
-            return self.power.get(mapping[prop])
+            return self.power.get(PROFILE_PROPS[prop])
         if iface == IFACE_GPU:
-            mapping = {
-                "AvailableGpuPerformanceLevels": "AvailableGpuPerformanceLevels",
-                "GpuPerformanceLevel": "GpuPerformanceLevel",
-                "ManualGpuClock": "ManualGpuClock",
-                "ManualGpuClockMin": "ManualGpuClockMin",
-                "ManualGpuClockMax": "ManualGpuClockMax",
-            }
-            return self.power.get(mapping[prop])
+            return self.power.get(GPU_PROPS[prop])
         if iface == IFACE_SCHED:
-            return self.power.get(prop)
+            return self.power.get(SCHED_PROPS[prop])
         return None
 
     def set_property(self, iface, prop, value):
@@ -390,6 +453,9 @@ class NovadeckSteamOSManager:
                 self.handle_get_property,
                 self.handle_set_property,
             )
+        # bus_acquired can fire again after a reconnect; one powerd subscription is enough
+        if self.power_subscription is None:
+            self.power_subscription = self.power.subscribe_changed(self.on_power_changed)
 
 
 def main():

@@ -260,6 +260,21 @@ STEAM_SEED   := work/steam-seed/steamrtarm64/steam
 ASSEMBLE_SRC := $(shell find images/assemble-rootfs.sh images/seal-rootfs.sh images/seal.list \
                               images/guard-rootfs.sh fs-overlay -type f 2>/dev/null)
 
+# Decky plugin frontend (decky/novadeck-control) — TypeScript compiled to dist/index.js in a
+# digest-pinned node container (the ONLY npm use in the build; the lockfile is committed, npm ci
+# refuses to resolve anything the lock does not name).
+# DECKY_SRC deliberately includes the BACKEND files (main.py, py_modules): the assembler copies
+# them from the repo, but the rootfs rule tracks decky/ only through $(DECKY_DIST), so a
+# backend-only edit must still bump the dist's mtime (it costs one ~10s no-change npm build) or
+# the re-assembly would silently not happen — the same staleness shape MODE_STAMP exists for.
+DECKY_PLUGIN := decky/novadeck-control
+DECKY_DIST   := $(DECKY_PLUGIN)/dist/index.js
+DECKY_SRC    := $(shell find $(DECKY_PLUGIN)/src $(DECKY_PLUGIN)/py_modules $(DECKY_PLUGIN)/main.py \
+                              $(DECKY_PLUGIN)/plugin.json $(DECKY_PLUGIN)/package.json \
+                              $(DECKY_PLUGIN)/package-lock.json $(DECKY_PLUGIN)/rollup.config.js \
+                              $(DECKY_PLUGIN)/tsconfig.json -type f 2>/dev/null)
+NODE_IMG := docker.io/library/node:22-slim@sha256:d649c27dae7ba0137b3cef5dd75baa422c08dc3d9e3fc0c23dfb172dc3cc6436
+
 # Kernel inputs: any change re-triggers the (full, from-scratch) kernel build. The unified
 # kernel globs every fragment/patch/dts, and bakes the firmware embed list.
 # There is no cmdline file to list: the common boot args live in boot/gen-grub-cfg.sh and land on
@@ -360,7 +375,7 @@ verify-card: $(SDCARD) | $(BUILD_STAMP) ## Verify the built A/B card image (in c
 verify-lock: ## Check the lock's novadeck rows against packages/ (host, seconds, no build)
 	bash packages/verify-lock-rows.sh
 
-test: verify-lock ## Run the offline bootctl/post-install/pairingd/quirks/stage-2/unit/coredump/perf/update/publish/install/steamos-manager suites (host, no build needed)
+test: verify-lock ## Run the offline bootctl/post-install/pairingd/quirks/stage-2/unit/coredump/perf/decky/update/publish/install/steamos-manager suites (host, no build needed)
 	bash images/test-bootctl.sh
 	bash images/test-post-install.sh
 	bash images/test-pairingd.sh
@@ -369,6 +384,7 @@ test: verify-lock ## Run the offline bootctl/post-install/pairingd/quirks/stage-
 	bash images/test-units.sh
 	bash images/test-coredump-limit.sh
 	bash images/test-perf.sh
+	bash images/test-decky.sh
 	bash images/test-update.sh
 	bash images/test-publish-bundle.sh
 	bash images/test-steamos-manager.sh
@@ -609,9 +625,19 @@ $(VERSION_STAMP):
 # /usr/lib/novadeck/boot mirror the RAUC hook refreshes the ESP and the slot's efi partition FROM.
 # That is what makes "this root and the software that boots it came from one build" true by
 # construction. No cycle: the initramfs is built from work/base, never from the assembled root.
-$(ROOTFS): $(KERNEL) $(INITRAMFS) $(STEAMCL) $(GRUB) $(BASE_STAMP) $(FW_LINUX) $(FW_QCOM) $(STEAM_SEED) $(ASSEMBLE_SRC) $(MODE_STAMP) $(VERSION_STAMP) | $(BUILD_STAMP)
+$(ROOTFS): $(KERNEL) $(INITRAMFS) $(STEAMCL) $(GRUB) $(BASE_STAMP) $(FW_LINUX) $(FW_QCOM) $(STEAM_SEED) $(ASSEMBLE_SRC) $(DECKY_DIST) $(MODE_STAMP) $(VERSION_STAMP) | $(BUILD_STAMP)
 	$(DOCKER) $(DEV_ENV) $(ID_ENV) -e NOVADECK_DEBUG $(BUILD_IMG) \
 	  images/assemble-rootfs.sh /src/work/base
+
+# Host docker, not $(BUILD_IMG): the cross-compile toolchain image has no node, and the plugin
+# is pure frontend TS -> one bundle, nothing arch-specific. -u keeps dist/ host-owned (the
+# assembler reads it from the repo checkout); HOME=/tmp because npm insists on a writable one.
+$(DECKY_DIST): $(DECKY_SRC)
+	docker run --rm -v $(CURDIR)/$(DECKY_PLUGIN):/build -w /build \
+	  -u $(shell id -u):$(shell id -g) -e HOME=/tmp $(NODE_IMG) \
+	  sh -c 'npm ci --no-audit --no-fund && npm run build'
+
+decky-plugin: $(DECKY_DIST) ## Build the novadeck-control Decky plugin frontend (host docker, node)
 
 # ==============================================================================
 # Boot stage + bootable media (container)

@@ -1,0 +1,279 @@
+#!/usr/bin/env bash
+# Offline checks for the Decky stack: the loader pin, the homebrew seed/sync, the units that run
+# it, the FEX AppConfig, the CEF sentinel, and the novadeck-control plugin backend.
+#
+#   images/test-decky.sh
+#
+# WHY THIS FILE EXISTS. Almost everything decky-shaped fails INVISIBLY on device: a loader without
+# its exec bit, a unit condition on a path the image spells differently, a sync that clobbers a
+# self-updated loader, a sanitizer that lets appid 0 through — each reads as "the QAM tab just
+# is not there" (or worse, quietly tunes Valve's prefix helper) with nothing in the journal to
+# name the culprit. Every check here is a decision the scripts make on paths and file content,
+# which is exactly what a fabricated tree can exercise on the host: no root, no device, no bus.
+#
+# The one thing this deliberately CANNOT prove: PluginLoader (x86_64) actually running under our
+# FEX build, and Decky actually injecting into our Steam client. Those are the two HW gates.
+set -uo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SYNC="$ROOT/fs-overlay/usr/lib/novadeck/decky-sync"
+PIN="$ROOT/packages/decky-loader/prebuilt.pin"
+PLUGIN="$ROOT/decky/novadeck-control"
+UNITDIR="$ROOT/fs-overlay/usr/lib/systemd/system"
+WANTSDIR="$ROOT/fs-overlay/etc/systemd/system/multi-user.target.wants"
+APPCONF="$ROOT/fs-overlay/usr/share/fex-emu/AppConfig/PluginLoader.json"
+
+PASS=0; FAIL=0; SKIP=0
+ok()  { PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }
+bad() { FAIL=$((FAIL+1)); printf '  FAIL %s\n' "$1"; }
+
+pin_field() { sed -n "s/^$2:[[:space:]]*//p" "$1" | head -1; }
+
+# --- the pin -------------------------------------------------------------------------------
+if [ -f "$PIN" ]; then
+  ok "pin exists — the loader is a declared, sha256-pinned input"
+  [ "$(pin_field "$PIN" mode)" = "0755" ] \
+    && ok "pin mode=0755 — the placed loader is executable at rest" \
+    || bad "pin mode is not 0755: plugin_loader.service would EACCES on its ExecStart"
+  [ "$(pin_field "$PIN" kind)" = "file" ] \
+    && ok "pin kind=file — the release asset is a bare binary, not an archive" \
+    || bad "pin kind is not file: tar-extracting a bare ELF cannot work"
+  [ "$(pin_field "$PIN" dest)" = "/usr/share/decky-loader/PluginLoader" ] \
+    && ok "pin dest matches the path every consumer conditions on" \
+    || bad "pin dest diverged from /usr/share/decky-loader/PluginLoader — units + sync + sentinel all key on it"
+  sha="$(pin_field "$PIN" sha256)"
+  case "$sha" in
+    *[!0-9a-f]*|"") bad "pin sha256 is not a lowercase hex string" ;;
+    *) [ "${#sha}" -eq 64 ] && ok "pin sha256 is well-formed" || bad "pin sha256 is ${#sha} chars, want 64" ;;
+  esac
+else
+  bad "no prebuilt.pin at ${PIN#"$ROOT"/}"
+fi
+
+# No lock assertion either way: prebuilt rows are excluded by fetchlock AND guard-rootfs, and
+# genmanifest writes the decky-loader row from the pin at the next `make relock`.
+
+# --- the units -----------------------------------------------------------------------------
+for unit in novadeck-decky-sync.service plugin_loader.service; do
+  f="$UNITDIR/$unit"
+  if [ ! -f "$f" ]; then bad "$unit missing from fs-overlay"; continue; fi
+  grep -q '^RequiresMountsFor=/home/deck$' "$f" \
+    && ok "$unit orders after the /home mount — the payload lives there" \
+    || bad "$unit lacks RequiresMountsFor=/home/deck: a race with home.mount seeds into the bare root"
+  [ -L "$WANTSDIR/$unit" ] \
+    && ok "$unit wants-symlink present (enabled without waiting for preset-all)" \
+    || bad "$unit has no multi-user.target.wants symlink: enablement rides on first-boot presets alone"
+done
+grep -q '^Before=plugin_loader.service$' "$UNITDIR/novadeck-decky-sync.service" 2>/dev/null \
+  && ok "sync runs Before=plugin_loader.service — the loader never starts against an unseeded tree" \
+  || bad "sync is not Before=plugin_loader.service: first boot races the seed against the loader"
+grep -Eq '^After=.*novadeck-decky-sync\.service' "$UNITDIR/plugin_loader.service" 2>/dev/null \
+  && ok "loader is After= the sync (the ordering is declared on both sides)" \
+  || bad "plugin_loader.service does not order After= the sync"
+grep -q '^ExecStart=/home/deck/homebrew/services/PluginLoader$' "$UNITDIR/plugin_loader.service" 2>/dev/null \
+  && ok "loader execs the SEEDED copy on /home, not the read-only master" \
+  || bad "loader ExecStart is not the seeded /home path — self-updates would be impossible"
+preset="$ROOT/fs-overlay/usr/lib/systemd/system-preset/60-novadeck-decky.preset"
+{ grep -q '^enable novadeck-decky-sync.service$' "$preset" && grep -q '^enable plugin_loader.service$' "$preset"; } 2>/dev/null \
+  && ok "preset enables both units" \
+  || bad "60-novadeck-decky.preset does not enable both units"
+
+# --- the FEX AppConfig ---------------------------------------------------------------------
+if python3 -c "import json,sys; json.load(open('$APPCONF'))" 2>/dev/null; then
+  ok "AppConfig/PluginLoader.json parses — a broken file silently reverts FEX to defaults"
+  python3 - "$APPCONF" <<'PY' && ok "AppConfig keeps TSO on + Multiblock off (the conservative-correctness pair)" || bad "AppConfig lost TSOEnabled=1/Multiblock=0"
+import json, sys
+c = json.load(open(sys.argv[1]))["Config"]
+sys.exit(0 if c.get("TSOEnabled") == "1" and c.get("Multiblock") == "0" else 1)
+PY
+else
+  bad "AppConfig/PluginLoader.json missing or invalid JSON"
+fi
+
+# --- the CEF sentinel ----------------------------------------------------------------------
+# Unconditional by decision (2026-08-08): it is Decky's only injection path. The regression this
+# catches is someone "cleaning up" the always-on touch back behind a debug gate.
+if grep -q '^: >"${STEAM}/.cef-enable-remote-debugging"' "$ROOT/fs-overlay/usr/bin/novadeck-steam"; then
+  ok "novadeck-steam touches the CEF sentinel unconditionally (Decky's only injection path)"
+else
+  bad "the CEF sentinel touch is missing or re-gated: Decky polls forever and no plugin UI appears"
+fi
+
+# --- the sync script, driven against a fabricated tree -------------------------------------
+if [ ! -x "$SYNC" ]; then
+  bad "decky-sync missing or not executable"
+else
+  ok "decky-sync is executable in the tree (the exec bit is rootfs content)"
+  T="$(mktemp -d)"
+  trap 'rm -rf "$T"' EXIT
+  share="$T/share"; home="$T/homebrew"
+  mkdir -p "$share/decky-loader" "$share/decky-plugins/novadeck-control/dist"
+  printf 'LOADER-V1' >"$share/decky-loader/PluginLoader"; chmod 0755 "$share/decky-loader/PluginLoader"
+  printf 'dist-v1'   >"$share/decky-plugins/novadeck-control/dist/index.js"
+  run_sync() {
+    NOVADECK_DECKY_USER="$(id -un)" NOVADECK_DECKY_GROUP="$(id -gn)" \
+    NOVADECK_DECKY_HOMEBREW="$home" \
+    NOVADECK_DECKY_LOADER="$share/decky-loader/PluginLoader" \
+    NOVADECK_DECKY_PLUGINS="$share/decky-plugins" \
+    bash "$SYNC"
+  }
+
+  # fresh flash: everything seeds
+  run_sync || bad "sync failed on an empty homebrew"
+  [ -x "$home/services/PluginLoader" ] && [ "$(cat "$home/services/PluginLoader")" = "LOADER-V1" ] \
+    && ok "fresh seed: loader lands executable in homebrew/services" \
+    || bad "fresh seed: loader missing or wrong content"
+  [ "$(cat "$home/settings/loader.json" 2>/dev/null)" = '{
+  "branch": 1
+}' ] && ok "fresh seed: loader.json pins the prerelease branch (where the arm fixes live)" \
+     || bad "fresh seed: loader.json missing or not branch:1"
+  [ -f "$home/plugins/novadeck-control/dist/index.js" ] \
+    && ok "fresh seed: baked plugin copied into homebrew/plugins" \
+    || bad "fresh seed: plugin did not seed"
+
+  # normal boot: no-op
+  before="$(stat -c %Y "$home/services/PluginLoader")"
+  sleep 1; run_sync || bad "sync failed on an already-seeded tree"
+  [ "$(stat -c %Y "$home/services/PluginLoader")" = "$before" ] \
+    && ok "steady state: an unchanged bundle does not rewrite the loader" \
+    || bad "steady state: the loader was rewritten with nothing to do"
+
+  # pin change with an untouched install: re-seed, in EITHER direction
+  printf 'LOADER-V0-ROLLBACK' >"$share/decky-loader/PluginLoader"
+  run_sync || bad "sync failed on a pin change"
+  [ "$(cat "$home/services/PluginLoader")" = "LOADER-V0-ROLLBACK" ] \
+    && ok "pin change: re-seeds even when the change is a rollback (the pin is authoritative)" \
+    || bad "pin change: the image's loader did not replace the seeded one"
+
+  # operator self-updated via Decky: hands off
+  printf 'SELF-UPDATED-V9' >"$home/services/PluginLoader"
+  printf 'LOADER-V2' >"$share/decky-loader/PluginLoader"
+  run_sync || bad "sync failed on a self-updated tree"
+  [ "$(cat "$home/services/PluginLoader")" = "SELF-UPDATED-V9" ] \
+    && ok "self-updated loader: the image keeps its hands off" \
+    || bad "self-updated loader was clobbered by the image copy"
+
+  # loader.json is loader-owned state after the first seed
+  printf '{\n  "branch": 0\n}\n' >"$home/settings/loader.json"
+  run_sync
+  grep -q '"branch": 0' "$home/settings/loader.json" \
+    && ok "loader.json: the user's branch choice survives every later sync" \
+    || bad "loader.json was rewritten after the first seed"
+
+  # baked plugins force-replace; a plugin SHRINKING must not leave stale files behind
+  printf 'stale' >"$home/plugins/novadeck-control/dist/leftover.js"
+  printf 'dist-v2' >"$share/decky-plugins/novadeck-control/dist/index.js"
+  run_sync
+  [ "$(cat "$home/plugins/novadeck-control/dist/index.js")" = "dist-v2" ] \
+    && ok "baked plugin: force-replaced with the image copy every boot" \
+    || bad "baked plugin content did not update"
+  [ ! -e "$home/plugins/novadeck-control/dist/leftover.js" ] \
+    && ok "baked plugin: a removed file does not survive as a stale leftover" \
+    || bad "baked plugin: stale file survived the replace (rm-before-copy is broken)"
+
+  # user-installed plugins are not ours to touch
+  mkdir -p "$home/plugins/SomeStorePlugin"; printf 'user' >"$home/plugins/SomeStorePlugin/main.py"
+  run_sync
+  [ "$(cat "$home/plugins/SomeStorePlugin/main.py" 2>/dev/null)" = "user" ] \
+    && ok "user-installed plugin untouched by the sync" \
+    || bad "user-installed plugin was damaged by the sync"
+
+  # no baked loader = broken image (the loader ships in EVERY build): the sync must fail LOUDLY
+  # under set -e, never quietly seed a loaderless tree the boot then trusts.
+  rm -rf "$T/none"; mkdir -p "$T/none"
+  if NOVADECK_DECKY_USER="$(id -un)" NOVADECK_DECKY_GROUP="$(id -gn)" \
+     NOVADECK_DECKY_HOMEBREW="$T/none/homebrew" \
+     NOVADECK_DECKY_LOADER="$T/none/nonexistent" \
+     NOVADECK_DECKY_PLUGINS="$T/none/plugins" bash "$SYNC" 2>/dev/null; then
+    bad "absent loader: the sync exited 0 — a broken image would boot with a silently empty seed"
+  elif [ ! -e "$T/none/homebrew/services/PluginLoader" ]; then
+    ok "absent loader: the sync FAILS (a broken image is loud, not silently unseeded)"
+  else
+    bad "absent loader: a PluginLoader appeared out of nowhere"
+  fi
+fi
+
+# --- the plugin backend --------------------------------------------------------------------
+if python3 -m py_compile "$PLUGIN/main.py" "$PLUGIN"/py_modules/novadeck_control/*.py 2>/dev/null; then
+  ok "plugin backend compiles (the loader would swallow a SyntaxError into a blank tab)"
+else
+  bad "plugin backend does not compile"
+fi
+find "$PLUGIN" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null
+
+# The python block prints the same `  ok  `/`  FAIL` lines; fold them into THIS script's
+# counters so the summary line counts every check that was actually shown.
+pyout="$(python3 - "$PLUGIN" <<'PY'
+import json, sys
+sys.path.insert(0, sys.argv[1] + "/py_modules")
+from novadeck_control import tweaks
+
+def ok(m): print(f"  ok   {m}")
+def bad(m): print(f"  FAIL {m}"); sys.exit(1)
+
+clean = tweaks.sanitize_tweaks({"global": {"nice": -5}, "games": {
+    "0": {"enabled": True, "nice": -20},          # Valve's no-app sentinel
+    "40800": {"enabled": True, "cores": "big"},
+    "abc": {"enabled": True},                      # non-digit appid
+    "123": "not-a-dict",
+}})
+if "0" in clean["games"]:
+    bad("sanitizer accepted appid 0 — the UI could tune Valve's prefix-setup helper")
+ok("sanitizer refuses appid 0 (the no-app sentinel can never grow a section)")
+if "abc" in clean["games"] or "123" in clean["games"]:
+    bad("sanitizer accepted a non-digit appid or a non-dict game section")
+ok("sanitizer drops non-digit appids and non-dict sections")
+if clean["games"].get("40800") != {"enabled": True, "cores": "big"}:
+    bad("sanitizer damaged a valid game section")
+ok("sanitizer passes a valid section through untouched (deep validation stays at the consumers)")
+try:
+    tweaks.sanitize_tweaks({"global": {"x": "y" * (300 * 1024)}})
+    bad("sanitizer accepted an oversized payload")
+except ValueError:
+    ok("sanitizer caps the payload size")
+try:
+    tweaks.sanitize_tweaks(["not", "a", "dict"])
+    bad("sanitizer accepted a non-dict payload")
+except ValueError:
+    ok("sanitizer rejects a non-dict payload")
+
+# PyInstaller exports LD_LIBRARY_PATH=<bundle dir> to children; a busctl spawned with it loads
+# the bundle's libcrypto and dies (HW-observed as "AvailableProfiles returned non-zero exit
+# status 1" in the Power tab). The backend must strip it — or restore PyInstaller's saved _ORIG.
+import os
+from novadeck_control import power
+os.environ["LD_LIBRARY_PATH"] = "/tmp/_MEIfake"
+os.environ.pop("LD_LIBRARY_PATH_ORIG", None)
+if "LD_LIBRARY_PATH" in power._clean_env():
+    bad("subprocess env keeps the PyInstaller LD_LIBRARY_PATH — busctl dies on the bundled libcrypto")
+ok("subprocess env drops the PyInstaller LD_LIBRARY_PATH")
+os.environ["LD_LIBRARY_PATH_ORIG"] = "/real/path"
+if power._clean_env().get("LD_LIBRARY_PATH") != "/real/path":
+    bad("subprocess env does not restore LD_LIBRARY_PATH_ORIG when PyInstaller saved one")
+ok("subprocess env restores PyInstaller's saved LD_LIBRARY_PATH_ORIG")
+PY
+)"
+printf '%s\n' "$pyout"
+PASS=$((PASS + $(grep -c '^  ok ' <<<"$pyout" || true)))
+if grep -q '^  FAIL' <<<"$pyout"; then FAIL=$((FAIL+1)); fi
+
+python3 -c "
+import json, sys
+m = json.load(open('$PLUGIN/plugin.json'))
+sys.exit(0 if m.get('flags') == ['root'] and m.get('name') else 1)
+" && ok "plugin.json declares flags:[root] — without it every /etc write turns into EACCES" \
+  || bad "plugin.json is missing flags:[root] (or a name)"
+
+# --- the assembler + Makefile wiring -------------------------------------------------------
+grep -q 'decky-plugins/novadeck-control' "$ROOT/images/assemble-rootfs.sh" \
+  && ok "assembler stages the plugin (4c-3)" \
+  || bad "assembler has no plugin staging block"
+grep -q 'decky-loader/PluginLoader' "$ROOT/images/guard-rootfs.sh" \
+  && ok "guard-rootfs asserts the loader (assertion 9) — image completeness is checked at build" \
+  || bad "guard-rootfs has no loader assertion: an incomplete image would ship undetected"
+grep -q 'test-decky.sh' "$ROOT/Makefile" \
+  && ok "this suite is wired into make test (a suite nothing runs is documentation)" \
+  || bad "images/test-decky.sh is not in the Makefile test target"
+
+printf '\n%s: %d passed, %d failed, %d skipped\n' "$(basename "$0")" "$PASS" "$FAIL" "$SKIP"
+[ "$FAIL" -eq 0 ]

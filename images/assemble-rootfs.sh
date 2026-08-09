@@ -713,6 +713,27 @@ OTACONF
   chmod 0644 "$stage/etc/novadeck/ota.conf"
 fi
 
+# 4c-3. Decky plugin payload — EVERY build, not a dev injection (it sits between the 4c dev
+# blocks only because it depends on nothing before step 4d). The loader binary arrives via its
+# prebuilt pin as a BASE ingredient; the novadeck-control plugin is OUR source in this repo, so
+# it stages here like fs-overlay content. /usr/share is the read-only master copy;
+# /usr/lib/novadeck/decky-sync materializes it into /home/deck/homebrew at boot, which is where
+# the loader actually loads from.
+# dist/ is built by `make decky-plugin` (a $(ROOTFS) prerequisite); missing means a stale
+# invocation bypassed make — fail rather than assemble an image without its settings UI.
+plugin_src="$ROOT/decky/novadeck-control"
+plugin_dest="$stage/usr/share/decky-plugins/novadeck-control"
+[ -s "$plugin_src/dist/index.js" ] || {
+  echo "decky plugin dist missing: ${plugin_src#"$ROOT"/}/dist/index.js (run: make decky-plugin)" >&2
+  exit 1
+}
+echo "  injecting Decky plugin novadeck-control -> /usr/share/decky-plugins/"
+install -d -m 0755 "$plugin_dest"
+install -m 0644 "$plugin_src/plugin.json" "$plugin_src/package.json" "$plugin_src/main.py" "$plugin_dest/"
+cp -a "$plugin_src/py_modules" "$plugin_src/dist" "$plugin_dest/"
+rm -f "$plugin_dest/dist/"*.map
+find "$plugin_dest" -name __pycache__ -type d -prune -exec rm -rf {} +
+
 if [ "${NOVADECK_DEV:-}" = "1" ] && [ "$dev_wifi" = "1" ]; then
   echo "  [DEV] injecting Wi-Fi profile for '$NOVADECK_WIFI_SSID' (dev-only)"
 

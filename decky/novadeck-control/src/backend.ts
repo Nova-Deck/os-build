@@ -1,0 +1,10 @@
+import { call } from "@decky/api";
+import type { Config, InstalledGame, PowerStatus, Tweaks } from "./types";
+
+export const getConfig = () => call<[], Config>("get_config");
+export const getInstalledGames = () => call<[], InstalledGame[]>("get_installed_games");
+export const saveTweaks = (data: Tweaks) => call<[Tweaks], Tweaks>("save_tweaks", data);
+export const getPowerStatus = () => call<[], PowerStatus>("get_power_status");
+export const setActiveProfile = (label: string) => call<[string], PowerStatus>("set_active_profile", label);
+export const setGpuLevel = (level: string) => call<[string], PowerStatus>("set_gpu_level", level);
+export const setManualGpuClock = (mhz: number) => call<[number], PowerStatus>("set_manual_gpu_clock", mhz);

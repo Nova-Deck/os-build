@@ -4,6 +4,10 @@
 profiles per game (see [windows-games-fex.md](windows-games-fex.md)); the same file also carries
 performance keys, enforced at runtime by `novadeck-powerd`.
 
+The [novadeck-control Decky plugin](decky.md) edits this file from the Quick Access Menu;
+editing it directly stays fully supported — the plugin's writes are atomic and its validation
+is deliberately shallower than the consumers' own.
+
 ## File shape
 
 ```json

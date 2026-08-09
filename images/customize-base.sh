@@ -214,23 +214,26 @@ PACMAN_CACHE="$ROOT/work/pacman-cache"
 mkdir -p "$PACMAN_CACHE"
 PREBUILT_PINS=("$ROOT"/packages/*/prebuilt.pin)
 pin_field() { sed -n "s/^$2:[[:space:]]*//p" "$1" | head -1; }
-# One row per pin, sorted: `name sha256 strip kind dest deps...`. It identifies exactly which
+# One row per pin, sorted: `name sha256 strip kind dest mode deps...`. It identifies exactly which
 # prebuilts a base carries AND the holo-repo runtime deps they declare, so a deps change also
 # busts the reuse cache. The container re-reads this file as its placement list.
 #
 # `deps` stays LAST because it is the only space-separated (multi-token) field; everything the
-# container splits positionally must precede it. `dest` uses '-' rather than an empty field so a
-# pin without one cannot shift the columns. The container captures trailing deps tokens into a
-# throwaway var (see the placement loop) — they are pacman-installed via INSTALL_PKGS instead.
+# container splits positionally must precede it. `dest` and `mode` use '-' rather than an empty
+# field so a pin without one cannot shift the columns. `mode` is the kind:file install mode
+# (default 0644 — decky-loader's PluginLoader is executed directly and needs 0755). The container
+# captures trailing deps tokens into a throwaway var (see the placement loop) — they are
+# pacman-installed via INSTALL_PKGS instead.
 prebuilt_manifest() {
-  local pin kind dest strip
+  local pin kind dest strip mode
   for pin in "${PREBUILT_PINS[@]}"; do
     [ -e "$pin" ] || continue
     kind="$(pin_field "$pin" kind)";   kind="${kind:-tar}"
     dest="$(pin_field "$pin" dest)";   dest="${dest:--}"
     strip="$(pin_field "$pin" strip)"; strip="${strip:-0}"
-    printf '%s %s %s %s %s %s\n' "$(pin_field "$pin" name)" "$(pin_field "$pin" sha256)" \
-                                 "$strip" "$kind" "$dest" "$(pin_field "$pin" deps)"
+    mode="$(pin_field "$pin" mode)";   mode="${mode:--}"
+    printf '%s %s %s %s %s %s %s\n' "$(pin_field "$pin" name)" "$(pin_field "$pin" sha256)" \
+                                 "$strip" "$kind" "$dest" "$mode" "$(pin_field "$pin" deps)"
   done | sort
 }
 EXPECTED_MANIFEST="$(prebuilt_manifest)"
@@ -591,11 +594,12 @@ docker run --rm --platform linux/arm64 -v "$PREBUILT_DIR":/prebuilt:ro \
   # `dest` is a path in the TARGET root, so every one is prefixed here -- an unprefixed dest
   # would silently unpack into the throwaway container instead.
   if [ -s /prebuilt/prebuilt.manifest ]; then
-    while read -r p_name p_sha p_strip p_kind p_dest p_deps; do
+    while read -r p_name p_sha p_strip p_kind p_dest p_mode p_deps; do
       [ -n "$p_name" ] || continue
       : "${p_deps:-}"  # deps are pacman-installed via the host INSTALL_PKGS list, not here
       # NB: `[ ... ] && x=y` would return 1 on a no-op and kill this `set -e` script.
       if [ "$p_dest" = "-" ]; then p_dest=/; fi
+      if [ "$p_mode" = "-" ] || [ -z "$p_mode" ]; then p_mode=0644; fi
       case "${p_kind:-tar}" in
         tar)
           mkdir -p "/target$p_dest"
@@ -610,7 +614,9 @@ docker run --rm --platform linux/arm64 -v "$PREBUILT_DIR":/prebuilt:ro \
               -xf "/prebuilt/$p_name.tar"
           ;;
         file)
-          install -Dm0644 "/prebuilt/$p_name.blob" "/target$p_dest"
+          # mode comes from the pin (default 0644): the FEX rootfs is data, but decky-loader
+          # PluginLoader is executed directly by its unit and needs the exec bit at rest.
+          install -D -m "$p_mode" "/prebuilt/$p_name.blob" "/target$p_dest"
           ;;
         *)
           echo "prebuilt $p_name: unknown kind ${p_kind}" >&2; exit 1

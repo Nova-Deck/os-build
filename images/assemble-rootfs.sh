@@ -509,6 +509,13 @@ ln -sf /dev/null "$stage/etc/systemd/system/systemd-repart.service"
 #
 # /var/lib/docker is in SteamOS's set and omitted here — we ship no container runtime.
 #
+# /root IS REQUIRED ON RELEASE — do not read it as dev scaffolding and trim it. FEXServer runs as
+# root, so its HOME is /root, and it creates AND HOLDS OPEN
+# /root/.local/share/fex-emu/Server/{Server,RootFS}.lock, with its per-user config in
+# /root/.config/fex-emu/ (HW-observed 2026-08-09). gnupg/dirmngr keeps state in /root/.gnupg too.
+# On a read-only root without this bind, FEXServer is creating its locks on a read-only filesystem
+# at boot — and FEX is the path EVERY x86 title takes, so the failure would surface far from here.
+#
 # novadeck-offload-prepare.service creates each directory on /home before the binds run, and SEEDS
 # it from whatever the read-only root already has at that path. The seeding is not cosmetic: the
 # TEST build bakes an SSH key into /root/.ssh, and an empty bind over /root would shadow it and lock

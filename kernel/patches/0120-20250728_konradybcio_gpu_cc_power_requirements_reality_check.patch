@@ -20,8 +20,17 @@ unified across SoCs rather than split into per-SoC dirs:
 
 Series: https://lore.kernel.org/linux-arm-msm/20250728-topic-gpucc_power_plumbing-v1-0-09c2480fe3e6@oss.qualcomm.com/
 
-Each hunk is upstream-verbatim. Note sm8250 takes only CX/MX/GFX — it has no
-MXC rail in sm8250_rpmhpds[] — where sm8550/sm8650 take CX/MX/GFX/MXC.
+MODIFIED, sm8550 + sm8650 hunks only: RPMHPD_GFX is dropped from both. The GX
+rail is GMU-owned on these two SoCs, so a gpucc device vote on it fights the
+GMU's own vote and wedges the GX clock. CX/MX/MXC — the rails gpucc genuinely
+needs and that nothing else drives — stay. This pairs with 0121, which floors
+gfx/gmxc pre-sync_state rather than clamping them to the top corner; together
+they are what makes the GX clock behave. Upstream still lists GFX here.
+
+The sm8250 hunk is unmodified and stays upstream-verbatim: it takes only
+CX/MX/GFX — sm8250_rpmhpds[] has no MXC rail — and the GX-ownership claim above
+has not been checked for that SoC. Nothing is built from it here, so leaving it
+as upstream wrote it costs nothing.
 
 sm8250 is carried ahead of need: no SM8250 board is built from this tree yet,
 so that hunk is inert until one is added. It touches only sm8250.dtsi and so
@@ -33,9 +42,9 @@ Fixes: d2350377997f ("arm64: dts: qcom: add initial SM8650 dtsi")
 Signed-off-by: Konrad Dybcio <konrad.dybcio@oss.qualcomm.com>
 ---
  arch/arm64/boot/dts/qcom/sm8250.dtsi | 5 +++++
- arch/arm64/boot/dts/qcom/sm8550.dtsi | 6 ++++++
- arch/arm64/boot/dts/qcom/sm8650.dtsi | 5 +++++
- 3 files changed, 16 insertions(+)
+ arch/arm64/boot/dts/qcom/sm8550.dtsi | 5 +++++
+ arch/arm64/boot/dts/qcom/sm8650.dtsi | 4 ++++
+ 3 files changed, 14 insertions(+)
 
 diff --git a/arch/arm64/boot/dts/qcom/sm8250.dtsi b/arch/arm64/boot/dts/qcom/sm8250.dtsi
 index b0197602c677d49f7833f31d71f72436499bfe84..2e600ee18b58fef6e479f9cab5c2af0324d453cb 100644
@@ -58,14 +67,13 @@ diff --git a/arch/arm64/boot/dts/qcom/sm8550.dtsi b/arch/arm64/boot/dts/qcom/sm8
 index 45713d46f3c52487d2638b7ab194c111f58679ce..28eade49526dc9bb0a7b211f96dd350873489029 100644
 --- a/arch/arm64/boot/dts/qcom/sm8550.dtsi
 +++ b/arch/arm64/boot/dts/qcom/sm8550.dtsi
-@@ -2572,6 +2572,12 @@ gpucc: clock-controller@3d90000 {
+@@ -2572,6 +2572,11 @@ gpucc: clock-controller@3d90000 {
  			clocks = <&bi_tcxo_div2>,
  				 <&gcc GCC_GPU_GPLL0_CLK_SRC>,
  				 <&gcc GCC_GPU_GPLL0_DIV_CLK_SRC>;
 +
 +			power-domains = <&rpmhpd RPMHPD_CX>,
 +					<&rpmhpd RPMHPD_MX>,
-+					<&rpmhpd RPMHPD_GFX>,
 +					<&rpmhpd RPMHPD_MXC>;
 +
  			#clock-cells = <1>;
@@ -76,13 +84,12 @@ diff --git a/arch/arm64/boot/dts/qcom/sm8650.dtsi b/arch/arm64/boot/dts/qcom/sm8
 index e14d3d778b71bbbd0c8fcc851eebc9df9ac09c31..1f1893592a3bbb14ba32c6121e9346018ffc53a3 100644
 --- a/arch/arm64/boot/dts/qcom/sm8650.dtsi
 +++ b/arch/arm64/boot/dts/qcom/sm8650.dtsi
-@@ -4257,6 +4257,11 @@ gpucc: clock-controller@3d90000 {
+@@ -4257,6 +4257,10 @@ gpucc: clock-controller@3d90000 {
  				 <&gcc GCC_GPU_GPLL0_CLK_SRC>,
  				 <&gcc GCC_GPU_GPLL0_DIV_CLK_SRC>;
- 
+
 +			power-domains = <&rpmhpd RPMHPD_CX>,
 +					<&rpmhpd RPMHPD_MX>,
-+					<&rpmhpd RPMHPD_GFX>,
 +					<&rpmhpd RPMHPD_MXC>;
 +
  			#clock-cells = <1>;

@@ -235,12 +235,30 @@ def _read_comm(pid):
         return ""
 
 
-def pids_by_comm(comms):
-    pids = []
+def comm_index(comms):
+    """{comm: [pid, ...]} for the comms of interest, from ONE listdir of /proc.
+
+    The walk — a readdir plus a `comm` read per process — is the tick's dominant
+    cost (~7 ms at 675 processes), and a tick needs two different comm sets
+    (steam, gamescope). Collecting them together is what keeps that at one walk;
+    see Enforcer.tick(), which builds the index and hands it to both consumers.
+    """
+    index = {}
     for entry in os.listdir(PROC_ROOT):
-        if entry.isdigit() and _read_comm(entry) in comms:
-            pids.append(int(entry))
-    return pids
+        if not entry.isdigit():
+            continue
+        comm = _read_comm(entry)
+        if comm in comms:
+            index.setdefault(comm, []).append(int(entry))
+    return index
+
+
+def pids_by_comm(comms, index=None):
+    """Pids whose comm is in `comms`. Walks /proc unless handed an `index` from
+    comm_index() that already covers those comms."""
+    if index is None:
+        index = comm_index(comms)
+    return sorted(pid for comm in comms for pid in index.get(comm, ()))
 
 
 def process_tids(pid):
@@ -305,7 +323,7 @@ def _start_ticks(pid):
         return 0
 
 
-def scan_games(cache=None):
+def scan_games(cache=None, index=None):
     """One walk of the Steam client's descendants, two answers:
     (appid of the newest launch, pids belonging to that launch's tree).
 
@@ -318,11 +336,14 @@ def scan_games(cache=None):
     `cache` (caller-owned dict) memoises the per-pid environ read across ticks
     as {pid: (starttime, appid)}; the starttime guards against a recycled pid
     inheriting a dead process's answer. Dead pids are pruned each call.
+
+    `index` is an optional comm_index() covering STEAM_COMMS, so a caller that
+    also needs another comm set this tick pays for one /proc walk, not two.
     """
     if cache is None:
         cache = {}
     tagged = []
-    for steam in pids_by_comm(STEAM_COMMS):
+    for steam in pids_by_comm(STEAM_COMMS, index):
         for pid in descendant_pids(steam):
             start = _start_ticks(pid)
             entry = cache.get(pid)
@@ -338,9 +359,9 @@ def scan_games(cache=None):
     return appid, [pid for _start, pid, tag in tagged if tag == appid]
 
 
-def running_appid(cache=None):
+def running_appid(cache=None, index=None):
     """Appid of the running game, or None. Thin view over scan_games()."""
-    return scan_games(cache)[0]
+    return scan_games(cache, index)[0]
 
 
 # ------------------------------------------------------------ enforcement ---
@@ -370,12 +391,14 @@ def _set_affinity(tid, mask):
         pass
 
 
-def apply_gamescope(values):
+def apply_gamescope(values, index=None):
     """Idempotent per-tick enforcement of the gamescope thread policy.
 
     RESET_ON_FORK covers RR/negative nice leaking into children but NOT
     affinity, hence the explicit reset of gamescope's non-gamescope children
     back to all CPUs whenever a restrictive mask is in force.
+
+    `index` is an optional comm_index() covering GAMESCOPE_COMMS; see scan_games.
     """
     nice = clamp(values.get("gamescopeNice", 0), NICE_MIN, NICE_MAX)
     want_rr = bool(values.get("gamescopeRr"))
@@ -384,7 +407,7 @@ def apply_gamescope(values):
     mask = set(cores) & all_cpus if cores else all_cpus
     if not mask:
         mask = all_cpus
-    for pid in pids_by_comm(GAMESCOPE_COMMS):
+    for pid in pids_by_comm(GAMESCOPE_COMMS, index):
         for tid in process_tids(pid):
             policy = _policy(tid)
             try:
@@ -562,9 +585,12 @@ class Enforcer:
 
     def tick(self):
         tweaks = load_tweaks()
-        appid, pids = scan_games(self.appid_cache)
+        # ONE /proc walk for both consumers: scan_games wants steam,
+        # apply_gamescope wants gamescope, and the walk is the tick's dominant cost.
+        index = comm_index(STEAM_COMMS + GAMESCOPE_COMMS)
+        appid, pids = scan_games(self.appid_cache, index)
         values = sanitize_perf(settings_for(tweaks, appid))
-        apply_gamescope(values)
+        apply_gamescope(values, index)
         apply_game_tree(values, pids, self.game_state)
         # Carried on the return, not applied here — powerd owns scx.service. Left absent
         # rather than set to None so "no opinion" and "explicitly none" stay distinguishable.

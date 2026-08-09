@@ -2414,3 +2414,27 @@ name. Order is as it was in TODO.md — roughly the order things were closed, no
   could not have paused there before this change. `R2_BUCKET`/`R2_PUBLIC_BASE` stay repo variables.
   Second occurrence of the empty-secret trap in one day; the first cost `ota/v0.2.1` a green run
   that published nothing. See [[ci-protected-environments]].
+
+- [x] **`novadeck_perf` walked `/proc` TWICE per tick — collapsed to one pass, 2026-08-10.** Pure
+  optimization, no behaviour change. `pids_by_comm()` reads every `/proc/<pid>/comm` and was called
+  twice per 3s tick with different comm sets: once for `steam` (inside `scan_games`) and once for
+  `gamescope` (inside `apply_gamescope`). Now `Enforcer.tick()` builds one `comm_index(STEAM_COMMS +
+  GAMESCOPE_COMMS)` — `{comm: [pid]}` from a single `listdir` — and hands it to both; each consumer
+  still works standalone, walking on its own when passed no index, which is what keeps the offline
+  suite and any future caller honest. Measured on the DEV HOST (read-only `/proc` benchmark, not the
+  device): at 567 processes, 10.95 ms for two walks vs 5.43 ms for one — the predicted halving, from
+  ~6.8 ms/walk at 675 processes measured 2026-08-09. `images/test-perf.sh` asserts the shape (index
+  grouped by comm, indexed lookups equal to a fresh walk) AND the point of the change: it counts
+  `listdir` calls on `PROC_ROOT` during a tick and requires exactly **one**, so a future caller
+  reintroducing a second walk fails the suite rather than silently costing a tick.
+  **Why the tick must NOT be `nice`d** — the question that raised this, and the reason it was worth
+  writing down. `fan_tick` is the ONLY `sd_notify("WATCHDOG=1")` caller (`perf_tick` has none), and
+  the unit pairs `WatchdogSec=15` with `Restart=always` + `ExecStopPost=--fan-safe`. Starving the
+  tick past 15s therefore kills powerd, slams the fan to `FAN_SAFE_PWM=128` and restarts the daemon,
+  precisely under the full load where the curve matters most. It would also be queued behind the very
+  processes we prioritize ourselves (game tree `nice -5`, gamescope `SCHED_RR`), and `nice` does not
+  mean the same thing under `scx_lavd` as under EEVDF.
+  **The remaining win is NOT free**, and is deliberately not taken: skipping the scan entirely when
+  no tweaks are configured would break `apply_gamescope`'s restore path, which puts gamescope's
+  children back on all CPUs when a mask is withdrawn — it would need the touched-state bookkeeping
+  `apply_game_tree` already has. Relates to [[per-game-perf-port]], [[scx-sched-bringup]].

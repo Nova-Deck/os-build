@@ -180,6 +180,13 @@ check("scheduler domain", list(np.SCHEDULERS), ["none", "lavd"])
 
 # /proc tree walk + appid detection
 check("find steam", np.pids_by_comm(np.STEAM_COMMS), [1234])
+# One walk answering both comm sets: the index must group by comm, and feeding it
+# back to pids_by_comm must give exactly what a fresh walk would.
+idx = np.comm_index(np.STEAM_COMMS + np.GAMESCOPE_COMMS)
+check("index groups by comm", sorted(idx), ["gamescope", "steam"])
+check("indexed steam", np.pids_by_comm(np.STEAM_COMMS, idx), [1234])
+check("indexed gamescope", np.pids_by_comm(np.GAMESCOPE_COMMS, idx), [2000])
+check("index omits unmatched comms", np.pids_by_comm(("nosuchcomm",), idx), [])
 check("descendants", sorted(np.descendant_pids(1234)), [1300, 1400, 1500, 1600])
 cache = {}
 appid, tree = np.scan_games(cache)
@@ -300,9 +307,19 @@ os.getpriority, os.setpriority = real_getpri, real_setpri
 
 # tick plumbing with enforcement stubbed out
 seen = {}
-np.apply_gamescope = lambda values: seen.update(values)
+np.apply_gamescope = lambda values, index=None: seen.update(values, _gs_index=index)
 np.apply_game_tree = lambda values, pids, state: seen.update({"_pids": sorted(pids)})
+# The tick must walk /proc exactly ONCE: both consumers share one comm_index.
+# Only the root listdir counts -- the per-pid task/ listdirs are a different walk.
+real_listdir = os.listdir
+walks = []
+os.listdir = lambda path: (walks.append(path)
+                           if str(path) == str(np.PROC_ROOT) else None) or real_listdir(path)
 values = np.Enforcer().tick()
+os.listdir = real_listdir
+check("tick walks /proc once", len(walks), 1)
+check("tick shares the walk with gamescope", sorted(seen.get("_gs_index") or {}),
+      ["gamescope", "steam"])
 check("tick merges newest game", values.get("gamescopeNice"), 5)  # 990 lacks enabled -> global
 check("tick reaches enforcement", seen.get("gamescopeNice"), 5)
 check("tick hands the game tree over", seen.get("_pids"), [1500])

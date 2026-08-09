@@ -39,7 +39,9 @@
 #      own boot.img are all present, and the hook that consumes them is executable;
 #   8. the system UID/GID allocation matches the pin — the ids baked into this tree's passwd and
 #      group are the ones fs-overlay's sysusers.d pin names, not whatever sysusers counted down to
-#   9. a size delta against the previous build (report only — never fails a build)
+#   9. the Decky stack is complete — the loader is executable and the baked plugin's dist staged;
+#      nothing at runtime guards this (decky-sync assumes a complete image, by design)
+#  10. a size delta against the previous build (report only — never fails a build)
 set -euo pipefail
 shopt -s nullglob
 
@@ -619,7 +621,27 @@ else
 fi
 
 # ------------------------------------------------------------------------------------------
-# 9. Size delta (report only).
+# 9. The Decky stack is complete.
+#
+# The loader is a prebuilt (excluded from lock assertion 4 like every prebuilt row) and the
+# plugin is staged by the assembler, so nothing above covers either. The runtime deliberately
+# carries no existence guard — novadeck-decky-sync assumes a complete image — which makes THIS
+# the only place a missing loader, a lost exec bit (the OOBE black-screen failure shape), or an
+# unstaged plugin dist is caught before an image ships.
+# ------------------------------------------------------------------------------------------
+if [ ! -x "$STAGE/usr/share/decky-loader/PluginLoader" ]; then
+  bad "usr/share/decky-loader/PluginLoader missing or not executable — the whole decky stack is dead"
+else
+  echo "    ok  Decky loader present and executable"
+fi
+if [ ! -s "$STAGE/usr/share/decky-plugins/novadeck-control/dist/index.js" ]; then
+  bad "novadeck-control plugin dist missing — the settings UI did not stage"
+else
+  echo "    ok  novadeck-control plugin staged with its dist"
+fi
+
+# ------------------------------------------------------------------------------------------
+# 10. Size delta (report only).
 #
 # Never fails a build — there is no defensible threshold, and a guard that blocks on growth would
 # be disabled the first time a legitimate package got bigger. Its job is to put the number in

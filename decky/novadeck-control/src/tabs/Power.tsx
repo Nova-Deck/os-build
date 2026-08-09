@@ -1,7 +1,7 @@
 import { Field, PanelSection } from "@decky/ui";
 import { useEffect, useRef } from "react";
 import type { Dispatch, SetStateAction } from "react";
-import { getPowerStatus, setActiveProfile, setGpuLevel, setManualGpuClock } from "../backend";
+import { getPowerStatus, setActiveProfile, setCpuScheduler, setGpuLevel, setManualGpuClock } from "../backend";
 import { SelectEdit, SliderEdit } from "../components/widgets";
 import { titleCase } from "../lib/util";
 import type { Config, PowerStatus } from "../types";
@@ -58,6 +58,15 @@ export function Power({ config, setConfig }: { config: Config; setConfig: Dispat
     }
   };
 
+  const selectScheduler = async (scheduler: string) => {
+    adopt({ ...power, cpuScheduler: scheduler });
+    try {
+      adopt(await setCpuScheduler(scheduler));
+    } catch (error) {
+      // the next poll restores the truth
+    }
+  };
+
   const dragClock = (mhz: number) => {
     adopt({ ...power, manualGpuClock: mhz });
     pendingClock.current = mhz;
@@ -84,6 +93,14 @@ export function Power({ config, setConfig }: { config: Config; setConfig: Dispat
   const gpuLevels = power.gpuLevels || [];
   const hasGpu = gpuLevels.length > 0;
   const clockKnown = (power.manualGpuClockMax || 0) > (power.manualGpuClockMin || 0);
+  // Same capability-by-enumeration rule as the GPU section: powerd serves ["none"] alone when
+  // the kernel has no sched_ext or the scx binary is missing, and a lone option is not a choice.
+  const schedulers = power.cpuSchedulers || [];
+  const hasSchedulerChoice = schedulers.length > 1;
+  // powerd reports the loaded scheduler separately, so a per-game override is stated rather than
+  // left as a dropdown that silently disagrees with the machine.
+  const schedulerOverridden =
+    !!power.activeCpuScheduler && power.activeCpuScheduler !== power.cpuScheduler;
   return (
     <>
       <PanelSection title="POWER PROFILE">
@@ -98,6 +115,26 @@ export function Power({ config, setConfig }: { config: Config; setConfig: Dispat
           Applies immediately, directly to the power daemon.
         </div>
       </PanelSection>
+      {hasSchedulerChoice ? (
+        <PanelSection title="CPU SCHEDULER">
+          <SelectEdit
+            label="Scheduler"
+            value={power.cpuScheduler}
+            options={schedulers.map((name) => ({
+              data: name,
+              label: name === "none" ? "Stock (EEVDF)" : name,
+            }))}
+            onChange={selectScheduler}
+          />
+          <div className="novadeck-field-note">
+            {schedulerOverridden
+              ? `The running game overrides this — ${
+                  power.activeCpuScheduler === "none" ? "Stock (EEVDF)" : power.activeCpuScheduler
+                } is loaded until it exits.`
+              : "System-wide default. A game can override it from its own settings."}
+          </div>
+        </PanelSection>
+      ) : null}
       {hasGpu ? (
         <PanelSection title="GPU CLOCK">
           <SelectEdit

@@ -22,6 +22,14 @@ export const styles = `
       .novadeck-control-tabs .novadeck-control-tab-content {
         padding-bottom: 24px;
       }
+      /* A label-less SelectEdit renders a BARE Dropdown — none of the vertical padding that a
+         Field-wrapped row carries. Decky paints a focused row's highlight slightly outside its own
+         box, so with no gap below, the next row's highlight lands on this dropdown's bottom edge
+         (HW-observed: the enable toggle's focus ring touching the edit-target dropdown). Reserve
+         the space here rather than on the toggle, which is shared by every other tab. */
+      .novadeck-control-tabs .novadeck-bare-dropdown {
+        padding-bottom: 8px;
+      }
       .novadeck-control-tabs .novadeck-slider-field {
         width: 100%;
         max-width: none;

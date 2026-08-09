@@ -8,3 +8,4 @@ export const getPowerStatus = () => call<[], PowerStatus>("get_power_status");
 export const setActiveProfile = (label: string) => call<[string], PowerStatus>("set_active_profile", label);
 export const setGpuLevel = (level: string) => call<[string], PowerStatus>("set_gpu_level", level);
 export const setManualGpuClock = (mhz: number) => call<[number], PowerStatus>("set_manual_gpu_clock", mhz);
+export const setCpuScheduler = (scheduler: string) => call<[string], PowerStatus>("set_cpu_scheduler", scheduler);

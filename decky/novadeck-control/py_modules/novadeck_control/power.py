@@ -65,6 +65,7 @@ def _error_status(message):
         "profiles": [], "activeProfile": "",
         "gpuLevels": [], "gpuLevel": "",
         "manualGpuClock": 0, "manualGpuClockMin": 0, "manualGpuClockMax": 0,
+        "cpuSchedulers": [], "cpuScheduler": "", "activeCpuScheduler": "",
         "error": message,
     }
 
@@ -86,6 +87,14 @@ def power_status():
             "manualGpuClock": int(props.get("ManualGpuClock", 0)),
             "manualGpuClockMin": int(props.get("ManualGpuClockMin", 0)),
             "manualGpuClockMax": int(props.get("ManualGpuClockMax", 0)),
+            # Same capability-by-enumeration rule: a kernel without sched_ext (or an image
+            # without the scx binary) serves ["none"] alone, and the tab hides the control.
+            "cpuSchedulers": [str(s) for s in props.get("AvailableCpuSchedulers", [])],
+            "cpuScheduler": str(props.get("CpuScheduler", "")),
+            # What is actually loaded. Differs from cpuScheduler only while a running game's
+            # per-game `scheduler` tweak overrides it — the tab says so rather than showing
+            # the dropdown disagreeing with the machine.
+            "activeCpuScheduler": str(props.get("ActiveCpuScheduler", "")),
             "error": "",
         }
     except (OSError, ValueError, KeyError, subprocess.SubprocessError) as exc:
@@ -118,6 +127,17 @@ def set_gpu_level(level):
         _set_property("GpuPerformanceLevel", "s", level)
     except (OSError, subprocess.SubprocessError) as exc:
         return _error_status(f"set GPU level failed: {exc}")
+    return power_status()
+
+
+def set_cpu_scheduler(scheduler):
+    """The SYSTEM-WIDE scheduler. This is the only place it lives — there is no
+    `global.scheduler` in game-tweaks.json — so this and `novadeck-scheduler` write the
+    same property. A per-game tweak temporarily overrides it without changing it."""
+    try:
+        _set_property("CpuScheduler", "s", scheduler)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return _error_status(f"set CPU scheduler failed: {exc}")
     return power_status()
 
 

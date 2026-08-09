@@ -16,7 +16,9 @@ export function SelectEdit({ label, value, options, onChange, labelBelow, disabl
   return (
     <PanelSectionRow>
       {label === undefined ? (
-        <Dropdown disabled={disabled} selectedOption={value} rgOptions={rgOptions} onChange={(option) => onChange(option.data)} />
+        <div className="novadeck-bare-dropdown">
+          <Dropdown disabled={disabled} selectedOption={value} rgOptions={rgOptions} onChange={(option) => onChange(option.data)} />
+        </div>
       ) : labelBelow ? (
         <Field label={label} childrenLayout="below" childrenContainerWidth="max" disabled={disabled}>
           <Dropdown disabled={disabled} selectedOption={value} rgOptions={rgOptions} onChange={(option) => onChange(option.data)} />

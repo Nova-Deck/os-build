@@ -30,6 +30,10 @@ SYS_CPU_ROOT = pathlib.Path(
     os.environ.get("NOVADECK_PERF_SYSCPU", "/sys/devices/system/cpu"))
 
 CORE_PRESETS = ("all", "big", "prime", "little")
+# The CPU schedulers a tweak may select. novadeck-powerd imports this as its own
+# CPU_SCHEDULERS so the D-Bus enum and the tweaks-file domain cannot drift apart.
+# "none" is the stock in-kernel scheduler; "lavd" is scx_lavd via scx.service.
+SCHEDULERS = ("none", "lavd")
 GAMESCOPE_COMMS = ("gamescope", "gamescope-wl")
 STEAM_COMMS = ("steam",)
 # Preference order matters: STEAM_COMPAT_APP_ID is set only on compat-tool
@@ -199,6 +203,27 @@ def sanitize_perf(settings):
         except ValueError:
             pass
     return clean
+
+
+def scheduler_for(tweaks, appid):
+    """The per-game CPU scheduler, or None for "no opinion".
+
+    Deliberately NOT part of sanitize_perf/settings_for, and deliberately not
+    readable from the "global" section: the system-wide scheduler already has
+    exactly one home — novadeck-powerd's persisted CpuScheduler property, which
+    `novadeck-scheduler` and the plugin both drive. A `global.scheduler` here
+    would be a second place to set the same value, with no way for either to
+    show the other's state. So this key is per-game only, it is an override that
+    lasts as long as the game does, and "none" spells out "stock for this title"
+    against a persisted lavd.
+
+    Unlike every other perf key, powerd applies this one itself (it drives
+    scx.service); novadeck_perf only resolves it."""
+    game = (tweaks.get("games") or {}).get(str(appid)) if appid else None
+    if not isinstance(game, dict) or game.get("enabled") is not True:
+        return None
+    value = game.get("scheduler")
+    return value if value in SCHEDULERS else None
 
 
 # -------------------------------------------------------------- /proc walk ---
@@ -541,4 +566,9 @@ class Enforcer:
         values = sanitize_perf(settings_for(tweaks, appid))
         apply_gamescope(values)
         apply_game_tree(values, pids, self.game_state)
+        # Carried on the return, not applied here — powerd owns scx.service. Left absent
+        # rather than set to None so "no opinion" and "explicitly none" stay distinguishable.
+        scheduler = scheduler_for(tweaks, appid)
+        if scheduler is not None:
+            values["scheduler"] = scheduler
         return values

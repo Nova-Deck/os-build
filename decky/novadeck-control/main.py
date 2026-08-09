@@ -3,6 +3,7 @@ import asyncio
 from novadeck_control.power import (
     power_status,
     set_active_profile,
+    set_cpu_scheduler,
     set_gpu_level,
     set_manual_gpu_clock,
 )
@@ -34,6 +35,9 @@ class Plugin:
 
     async def set_manual_gpu_clock(self, mhz):
         return await asyncio.to_thread(set_manual_gpu_clock, mhz)
+
+    async def set_cpu_scheduler(self, scheduler):
+        return await asyncio.to_thread(set_cpu_scheduler, scheduler)
 
     @staticmethod
     def _build_config():

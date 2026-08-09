@@ -6,6 +6,8 @@ export interface GameTweaks {
   gamescopeNice?: number;
   gamescopeRr?: boolean;
   gamescopeCores?: string;
+  /** Per-game only — the system-wide scheduler is PowerStatus.cpuScheduler, not a tweak. */
+  scheduler?: string;
   fexProfile?: string;
   env?: Record<string, string | null>;
   [key: string]: any;
@@ -24,6 +26,12 @@ export interface PowerStatus {
   manualGpuClock: number;
   manualGpuClockMin: number;
   manualGpuClockMax: number;
+  /** Empty or ["none"] alone on a device without sched_ext — hide the control then. */
+  cpuSchedulers: string[];
+  /** The system-wide choice. */
+  cpuScheduler: string;
+  /** What is loaded now; differs from cpuScheduler only under a per-game override. */
+  activeCpuScheduler: string;
   error: string;
 }
 

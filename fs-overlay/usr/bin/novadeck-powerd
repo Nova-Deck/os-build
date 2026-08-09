@@ -41,12 +41,16 @@ FAN_SAFE_PWM = 128
 # bails with "scx.service not installed" and holo ships no scx packages); we build both halves
 # ourselves (CONFIG_SCHED_CLASS_EXT in kernel/kernel.config, packages/scx-scheds into the
 # [novadeck] overlay, scx-scheds in customize-base.sh PKGS), so the capability is always there
-# and lavd is one `novadeck-scheduler lavd` away. We default to stock because lavd was REPORTED
-# to hurt in-game performance — see the TODO.md item; until that is measured rather than
-# reported, the conservative scheduler is the one that ships on. lavd was briefly the default
-# (2026-07-30 to 2026-08-03); flipping it back does NOT touch a device that already persisted
-# `cpu_scheduler=lavd` in powerd.state — an explicit saved choice outranks this default in both
-# directions, so such a device needs one `novadeck-scheduler none`.
+# and lavd is one `novadeck-scheduler lavd` away. The old reason for defaulting to stock — a report
+# that lavd hurt in-game performance — is GONE: it was measured on SM8650 (2026-08-09) and refuted,
+# lavd came out ~62% faster on a GPU-headroom title because stock leaves the prime core near-idle.
+# See packages/scx-scheds/source.pin for the numbers. We still default to stock because swapping the
+# in-kernel scheduler is a thing to opt into rather than have imposed, and it is now selectable
+# system-wide (this property) or per-game (the `scheduler` tweak key). lavd was briefly the default
+# (2026-07-30 to
+# 2026-08-03); flipping it back does NOT touch a device that already persisted `cpu_scheduler=lavd`
+# in powerd.state — an explicit saved choice outranks this default in both directions, so such a
+# device needs one `novadeck-scheduler none`.
 #
 # THE DEFAULT IS NOT IMPLEMENTED BY ENABLING scx.service, and must not be. The unit ships
 # installed but never `enable`d; restore_cpu_scheduler() below is the only thing that starts it
@@ -59,7 +63,9 @@ FAN_SAFE_PWM = 128
 # polls PowerProfiles.ActiveProfile on the system bus once a second and switches its own
 # performance/balanced/powersave mode live, no restart. We answer that name ourselves
 # (PPD_NAMES below) because we ship no power-profiles-daemon.
-CPU_SCHEDULERS = ["none", "lavd"]
+# Single domain, shared with the tweaks file: a `scheduler` value novadeck_perf accepts is exactly
+# a value this property accepts, with no second list to keep in step.
+CPU_SCHEDULERS = list(novadeck_perf.SCHEDULERS)
 DEFAULT_CPU_SCHEDULER = "none"
 SCX_UNIT = "scx.service"
 SCX_BINARY = Path("/usr/bin/scx_lavd")
@@ -133,6 +139,9 @@ XML = f"""
     <property name="ManualGpuClockMax" type="u" access="read"/>
     <property name="AvailableCpuSchedulers" type="as" access="read"/>
     <property name="CpuScheduler" type="s" access="readwrite"/>
+    <!-- The scheduler actually loaded. Equals CpuScheduler unless a running game's `scheduler`
+         tweak is overriding it, which is the only way the two ever diverge. -->
+    <property name="ActiveCpuScheduler" type="s" access="read"/>
     <property name="FanMode" type="s" access="read"/>
     <property name="FanPwm" type="u" access="read"/>
     <property name="FanRpm" type="u" access="read"/>
@@ -289,7 +298,14 @@ class NovadeckPower:
         self.profile = ""
         self.gpu_level = "auto"
         self.manual_gpu_clock = 0
+        # cpu_scheduler is the PERSISTED CHOICE and the system-wide setting — there is no
+        # `global.scheduler` in game-tweaks.json, precisely so this stays the only place the
+        # system-wide value lives. scheduler_live is what is actually loaded right now; the two
+        # differ only while a PER-GAME `scheduler` tweak holds scheduler_override. An override is
+        # never written back as the choice, or one launch of one game would rewrite it for all.
         self.cpu_scheduler = DEFAULT_CPU_SCHEDULER
+        self.scheduler_live = DEFAULT_CPU_SCHEDULER
+        self.scheduler_override = None
         self.smoothed_temp = 0.0
         self.last_pwm = 0
         self.suspended = False
@@ -576,13 +592,16 @@ class NovadeckPower:
         # with --autopower and reads ActiveProfile on its first tick.
         if len(self.available_cpu_schedulers()) == 1:
             self.cpu_scheduler = "none"
+            self.scheduler_live = "none"
             return
         if self.scx_unit_active():
             # Already running — somebody started it by hand, or powerd restarted underneath a
             # live scheduler. Adopt what is actually there instead of stopping their work.
             self.cpu_scheduler = "lavd"
+            self.scheduler_live = "lavd"
             return
         if self.cpu_scheduler == "none":
+            self.scheduler_live = "none"
             return
         self.reset_scx_failure()
         try:
@@ -590,14 +609,16 @@ class NovadeckPower:
             # the bus name is taken after __init__ returns), so do not sit waiting on a second
             # job from inside it. A start that fails is reported by the unit, not by us.
             self.systemctl("start", "--no-block", SCX_UNIT)
+            self.scheduler_live = "lavd"
         except (OSError, subprocess.SubprocessError) as exc:
             print(f"novadeck-powerd: restoring {SCX_UNIT} failed: {exc}", file=sys.stderr)
             self.cpu_scheduler = "none"
+            self.scheduler_live = "none"
 
-    def set_cpu_scheduler(self, scheduler):
-        if scheduler not in self.available_cpu_schedulers():
-            raise ValueError(scheduler)
-        if scheduler == self.cpu_scheduler:
+    def apply_scheduler(self, scheduler):
+        """Make `scheduler` the LIVE one by starting/stopping scx.service. Touches
+        scheduler_live only — the caller owns whether this was a choice or an override."""
+        if scheduler == self.scheduler_live:
             return
         action = "stop" if scheduler == "none" else "start"
         if action == "start":
@@ -611,7 +632,18 @@ class NovadeckPower:
         # Type=simple, so a zero exit only proves scx_lavd was exec'd, not that it attached —
         # attach takes ~1s and lands in the journal. Report the requested scheduler, same as
         # SteamOS does; GetStatus carries the kernel's own view for anyone who needs the truth.
+        self.scheduler_live = scheduler
+
+    def set_cpu_scheduler(self, scheduler):
+        if scheduler not in self.available_cpu_schedulers():
+            raise ValueError(scheduler)
+        if scheduler == self.cpu_scheduler:
+            return
         self.cpu_scheduler = scheduler
+        # A live override outranks the choice while it lasts; the new choice takes effect when
+        # that override lifts. Setting it during a game is therefore recorded, not ignored.
+        if self.scheduler_override is None:
+            self.apply_scheduler(scheduler)
 
     def gpu_freqs(self):
         if not self.gpu:
@@ -901,10 +933,24 @@ class NovadeckPower:
         # kill the timer: a bad tweaks entry must cost one tick, not the tool.
         try:
             if not self.suspended:
-                self.perf.tick()
+                self.apply_scheduler_tweak(self.perf.tick())
         except Exception as exc:
             print(f"novadeck-powerd: perf tick failed: {exc}", file=sys.stderr)
         return True
+
+    def apply_scheduler_tweak(self, values):
+        """Honour the running game's `scheduler` tweak. Absent means no opinion, which restores
+        the persisted choice — that is what makes the override end when the game does."""
+        want = values.get("scheduler")
+        if want is not None and want not in self.available_cpu_schedulers():
+            want = None
+        if want == self.scheduler_override:
+            return
+        self.scheduler_override = want
+        target = self.cpu_scheduler if want is None else want
+        # Deliberately not a PropertiesChanged on CpuScheduler: the property is the user's choice
+        # and it has not changed. ActiveCpuScheduler is where the override is observable.
+        self.apply_scheduler(target)
 
     def fan_safe(self):
         if not self.fan_pwm:
@@ -951,6 +997,8 @@ class NovadeckPower:
             return GLib.Variant("as", self.available_cpu_schedulers())
         if prop == "CpuScheduler":
             return GLib.Variant("s", self.cpu_scheduler)
+        if prop == "ActiveCpuScheduler":
+            return GLib.Variant("s", self.scheduler_live)
         if prop == "FanMode":
             return GLib.Variant("s", "managed" if self.fan_pwm else "unavailable")
         if prop == "FanPwm":

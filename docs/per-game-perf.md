@@ -41,6 +41,27 @@ The game itself:
 | `cores` | cpulist or preset | pin the game's threads to these CPUs |
 | `env` | object | environment variables for the launch (`null` unsets one) — Proton titles only |
 | `wineTopology` | bool | set `false` to pin via `cores` without reshaping what Wine reports |
+| `scheduler` | `"none"` or `"lavd"` | CPU scheduler to run while this game is running |
+
+### `scheduler` is per-game only
+
+Every other key here can also be set in `global`. `scheduler` cannot, and the omission is
+deliberate: the system-wide CPU scheduler already has exactly one home — `novadeck-powerd`'s
+persisted `CpuScheduler` property, which both `novadeck-scheduler` and the plugin's **Power** tab
+drive. A `global.scheduler` would be a second place to set the same value with no way for either
+to show the other's state.
+
+So the order is: a running game's `scheduler` wins; otherwise the system-wide `CpuScheduler`
+applies. `"none"` is spelled out rather than implied, because forcing stock for one title on a
+device whose system-wide choice is `lavd` is exactly what it is for.
+
+The override is temporary. `novadeck-powerd` starts or stops `scx.service` when the game starts and
+puts the persisted choice back when it exits — the saved choice is never rewritten, so one launch of
+one game cannot change the setting for everything else. `org.novadeck.Power1.ActiveCpuScheduler`
+reports what is actually loaded, and differs from `CpuScheduler` only while an override holds.
+
+`lavd` is `scx_lavd`; see [`packages/scx-scheds/source.pin`](../packages/scx-scheds/source.pin) for
+the measurements behind it and why the shipped default is still stock.
 
 `cores` also derives `WINE_CPU_TOPOLOGY` for Proton titles, so Wine reports the CPUs the game
 will actually get instead of the machine's full set.

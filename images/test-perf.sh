@@ -155,6 +155,29 @@ check("game cores resolved", game.get("cores"), [2, 3, 4, 5, 6, 7])
 check("game nice clamped", np.sanitize_perf({"nice": 99}).get("nice"), 19)
 check("bad game cores dropped", "cores" in np.sanitize_perf({"cores": "nope"}), False)
 
+# scheduler: per-game ONLY, and never merged through settings_for/sanitize_perf. A global
+# section must not be able to set it -- the system-wide value is powerd's CpuScheduler, and a
+# second home for it is the bug this asserts against.
+check("scheduler not a sanitize_perf key", "scheduler" in np.sanitize_perf({"scheduler": "lavd"}), False)
+sched_tweaks = {
+    "global": {"scheduler": "lavd"},
+    "games": {
+        "620": {"enabled": True, "scheduler": "none"},
+        "700": {"enabled": True, "scheduler": "bogus"},
+        "800": {"enabled": False, "scheduler": "lavd"},
+        "900": {"enabled": True},
+    },
+}
+check("global scheduler ignored", np.scheduler_for(sched_tweaks, None), None)
+check("global not inherited by a game", np.scheduler_for(sched_tweaks, "900"), None)
+check("per-game none is explicit", np.scheduler_for(sched_tweaks, "620"), "none")
+check("bad scheduler dropped", np.scheduler_for(sched_tweaks, "700"), None)
+check("disabled game ignored", np.scheduler_for(sched_tweaks, "800"), None)
+check("unknown appid", np.scheduler_for(sched_tweaks, "12345"), None)
+check("lavd accepted", np.scheduler_for({"games": {"1": {"enabled": True, "scheduler": "lavd"}}}, "1"), "lavd")
+# powerd imports this as its D-Bus enum, so the two domains cannot drift.
+check("scheduler domain", list(np.SCHEDULERS), ["none", "lavd"])
+
 # /proc tree walk + appid detection
 check("find steam", np.pids_by_comm(np.STEAM_COMMS), [1234])
 check("descendants", sorted(np.descendant_pids(1234)), [1300, 1400, 1500, 1600])

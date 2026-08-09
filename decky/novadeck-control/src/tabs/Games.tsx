@@ -14,6 +14,15 @@ const CORE_OPTIONS = [
   { data: "little", label: "Little cores" },
 ];
 
+// "" is absent-from-the-file, i.e. "follow the system-wide setting in the Power tab" — which is
+// why "none" is spelled out separately: it is the only way to force stock for one title on a
+// device whose system-wide choice is lavd.
+const SCHEDULER_OPTIONS = [
+  { data: "", label: "(unchanged)" },
+  { data: "none", label: "Stock (EEVDF)" },
+  { data: "lavd", label: "lavd" },
+];
+
 const NICE_MIN = -20;
 const NICE_MAX = 19;
 
@@ -117,6 +126,13 @@ export function Games({ config, setConfig }: { config: Config; setConfig: Dispat
         />
         <SelectEdit label="Gamescope cores" value={settings.gamescopeCores || ""} options={CORE_OPTIONS}
           disabled={!gameEnabled} onChange={(v) => patch({ gamescopeCores: v || undefined })} />
+      </PanelSection>
+      <PanelSection title="CPU SCHEDULER">
+        <div className="novadeck-field-note">
+          Overrides the system-wide scheduler while this game runs, then restores it.
+        </div>
+        <SelectEdit label="Scheduler" value={settings.scheduler || ""} options={SCHEDULER_OPTIONS}
+          disabled={!gameEnabled} onChange={(v) => patch({ scheduler: v || undefined })} />
       </PanelSection>
       <PanelSection title="X86 EMULATION">
         <div className="novadeck-field-note">

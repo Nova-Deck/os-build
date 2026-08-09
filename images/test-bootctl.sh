@@ -196,7 +196,8 @@ for call in "get-current" "get-primary" "get-state A" "get-state B" "get-state s
             "set-primary A" "set-primary B" "set-primary self" \
             "set-state A good" "set-state B good" "set-state A bad" "set-state B bad" \
             "set-state self good" "set-state self bad" \
-            "mark-good" "mark-good --require-marker" "status"; do
+            "mark-good" "mark-good --require-marker" "mark-good --require-marker --wait 0" \
+            "status"; do
   t "backend-exits-0-on-$call"
   marker   # mark-good --require-marker needs the session marker present
   # shellcheck disable=SC2086
@@ -435,6 +436,93 @@ marker
 bc mark-good
 expect_rc 1
 expect_has "failed"
+done_
+
+echo "== mark-good --wait: a shutdown mid-re-check is not a verdict =="
+#
+# HW 2026-08-10, Pocket S2: the re-check delay used to be ExecStartPre=/usr/bin/sleep 30 in
+# novadeck-boot-good.service. Powering the device off inside that window -- i.e. every OOBE test --
+# SIGTERMed the sleep, so systemd scored the unit `Failed with result 'signal'` and fired
+# OnFailure=novadeck-boot-bad.service. The demote lost the race to the shutdown transaction that
+# time; nothing guaranteed it would. These cases pin the replacement: the wait lives in the tool
+# and a signal during it means NO VERDICT -- exit 0, nothing confirmed, nothing demoted.
+
+# Runs the shipped tool in the background and SIGTERMs the shell after <delay>s. Only the shell is
+# signalled, not its `sleep` child, which is the STRICTER case: with no trap, bash dies on the
+# default disposition and the call exits 143, so a regression cannot pass by accident.
+bc_term_after() {  # <delay-seconds> <args...>
+  local delay=$1; shift
+  BOOTINFO="$SB/run/boot" SESSION_MARKER="$SB/marker" \
+    BC="$SB/bin/steamos-bootconf" BC_ARGS="--conf-dir $SB/conf --efi-dir $SB/efi" \
+    bash "$BOOTCTL" "$@" >"$SB/bg.out" 2>&1 &
+  local pid=$!
+  sleep "$delay"
+  kill -TERM "$pid" 2>/dev/null || true
+  wait "$pid"; RC=$?
+  OUT=$(cat "$SB/bg.out")
+  return 0
+}
+
+t "wait-completes-and-confirms-when-nothing-interrupts-it"
+put_conf A boot-attempts 2
+marker
+bc mark-good --require-marker --wait 1
+expect_rc 0
+expect_has "boot confirmed good"
+expect_conf A boot-attempts 0
+done_
+
+t "sigterm-during-the-wait-exits-0-and-reaches-no-verdict"
+# The three things that must all hold: not a failure (no red unit, no OnFailure), not a
+# confirmation (the session never served its 30s), and not a demote.
+put_conf A boot-attempts 1
+put_conf A image-invalid 0
+marker
+bc_term_after 1 mark-good --require-marker --wait 20
+expect_rc 0
+expect_has "interrupted"
+expect_conf A boot-attempts 1
+expect_conf A image-invalid 0
+done_
+
+t "sigterm-after-the-wait-does-not-reach-back-and-undo-the-confirmation"
+# The trap is armed only around the wait; once it has been disarmed the confirmation is a normal
+# write and a late signal must not turn a good boot into no-verdict.
+put_conf A boot-attempts 3
+marker
+bc_term_after 3 mark-good --require-marker --wait 1
+expect_conf A boot-attempts 0
+done_
+
+t "wait-rejects-a-non-numeric-argument"
+# --wait feeds `sleep` and an arithmetic test; a typo must be loud rather than silently 0.
+marker
+bc mark-good --wait 30s
+expect_rc 1
+expect_has "whole number"
+done_
+
+t "mark-good-rejects-an-unknown-option"
+marker
+bc mark-good --requre-marker
+expect_rc 1
+expect_has "unknown option"
+done_
+
+t "the-shipped-unit-passes--wait-and-carries-no-sleep-of-its-own"
+# The tool growing --wait is worthless if the unit still sleeps in an ExecStartPre, so assert the
+# artifact that ships, not just the tool. This is the drift that would silently restore the bug.
+UNIT="$ROOT/fs-overlay/usr/lib/systemd/system/novadeck-boot-good.service"
+grep -qE '^ExecStart=.*mark-good .*--wait 30' "$UNIT" \
+  && ok "boot-good ExecStart passes --wait 30" || bad "boot-good does not pass --wait 30"
+grep -qE '^ExecStartPre=.*sleep' "$UNIT" \
+  && bad "boot-good still sleeps in ExecStartPre -- the signal lands on the sleep again" \
+  || ok "boot-good has no ExecStartPre sleep"
+BADUNIT="$ROOT/fs-overlay/usr/lib/systemd/system/novadeck-boot-bad.service"
+grep -qE '^ExecCondition=' "$BADUNIT" \
+  && ok "boot-bad is gated by an ExecCondition" || bad "boot-bad has no shutdown guard"
+grep -qE '^ExecCondition=.*is-system-running' "$BADUNIT" \
+  && ok "boot-bad's guard tests is-system-running" || bad "boot-bad's guard does not test is-system-running"
 done_
 
 echo "== the install sequence, as RAUC and the hook actually drive it =="

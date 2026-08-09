@@ -22,4 +22,17 @@ ConditionPathExists=/run/novadeck/boot
 
 [Service]
 Type=oneshot
+# NEVER DEMOTE A SLOT WHILE THE SYSTEM IS GOING DOWN. Anything still mid-flight at poweroff gets
+# SIGTERMed and can fail for that reason alone, and a shutdown says nothing about slot health --
+# demoting there sends the NEXT boot to the other slot, which on a release card is empty.
+#
+# systemd has no built-in "not shutting down" condition. DefaultDependencies= already gives this
+# unit Conflicts=shutdown.target, and on the 2026-08-10 HW occurrence that is what refused the job
+# ("Transaction ... is destructive") -- but only because a conflicting stop job happened to be
+# queued first. Lose that race and the demote runs. ExecCondition= closes it: a non-zero exit
+# SKIPS the unit (systemd v243+) rather than failing it, which is the semantics wanted here.
+#
+# is-system-running exits non-zero for `degraded` too, so the state is matched on stdout rather
+# than on its exit status -- a degraded-but-running system must still be able to demote itself.
+ExecCondition=/bin/sh -c '! /usr/bin/systemctl is-system-running | grep -qx stopping'
 ExecStart=/usr/bin/novadeck-bootctl set-state self bad

@@ -25,6 +25,11 @@
 #      so the stage-2 counter and steamcl's failsafe stop counting this boot). The unit's
 #      OnFailure= demotes with `set-state self bad`.
 #
+#      mark-good [--require-marker] [--wait SECONDS]
+#        --require-marker  re-test the session marker before confirming; without it, exit 1
+#        --wait SECONDS    hold that long first, and exit 0 WITHOUT a verdict if signalled
+#                          during the wait (a shutdown is not evidence of a bad boot)
+#
 #   3. status — diagnostics over the same bootconf.
 #
 # THE CONTRACT IS THE EXIT STATUS. RAUC treats a non-zero backend exit as a failed install, so
@@ -172,15 +177,36 @@ set_state() {  # <A|B|dev|self> <good|bad>
 
 # --- boot health --------------------------------------------------------------------------------
 
-# Confirm this boot, called by novadeck-boot-good.service after the session handshake plus a 30s
-# re-check. Exiting 0 here is load-bearing on a degraded boot: novadeck-boot-good.service is
+# Confirm this boot, called by novadeck-boot-good.service after the session handshake plus a
+# --wait re-check. Exiting 0 here is load-bearing on a degraded boot: novadeck-boot-good.service is
 # RemainAfterExit=yes so it fires once per boot, and a non-zero exit re-arms the level-triggered
 # .path into a failing mark-good every 30s for the rest of the device's uptime (measured on
 # hardware in 2026-07, before the handoff guard existed). The handoff names no slot on a
 # cmdline-fallback boot, so that is the guard: nothing to confirm -> 0.
+#
+# --wait OWNS THE RE-CHECK DELAY, and it is here rather than in the unit because being interrupted
+# mid-wait must not be a verdict. It used to be `ExecStartPre=/usr/bin/sleep 30`, and powering the
+# device off inside that window -- which is every OOBE test, and HW-observed 2026-08-10 on Pocket
+# S2 -- killed the sleep with SIGTERM. systemd scores a control process killed by a signal as
+# `Failed with result 'signal'`, so a perfectly healthy boot ended in a failed unit on screen AND
+# fired OnFailure=novadeck-boot-bad.service. That demote was refused only because the shutdown
+# transaction happened to already be queued ("Transaction ... is destructive") -- ordering luck,
+# not a guard. Trapping the signal here turns "the system went down before we could judge" into
+# what it actually is: no verdict. boot-attempts stays as it is, nothing is confirmed, nothing is
+# demoted, and the next boot runs the whole check again from the top.
 mark_good() {
-  local require_marker=0
-  [ "${1:-}" = --require-marker ] && require_marker=1
+  local require_marker=0 wait_secs=0
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --require-marker) require_marker=1 ;;
+      --wait) shift; wait_secs=${1:-} ;;
+      *) die "mark-good: unknown option '$1'" ;;
+    esac
+    shift
+  done
+  case $wait_secs in
+    ''|*[!0-9]*) die "mark-good: --wait needs a whole number of seconds, got '${wait_secs}'" ;;
+  esac
 
   local bs src
   bs=$(sed -n 's/^slot=//p' "$BOOTINFO" 2>/dev/null || true)
@@ -188,6 +214,21 @@ mark_good() {
   if [ -z "$bs" ]; then
     echo "this boot did not come from a slot (source=${src:-unknown}) -- nothing to confirm"
     return 0
+  fi
+
+  # The wait comes AFTER the handoff guard so a degraded boot answers immediately instead of
+  # sleeping first to say "nothing to confirm". `sleep` is backgrounded and waited on because bash
+  # defers a trap until the current FOREGROUND command returns -- a foreground sleep would swallow
+  # the signal for the rest of the window, which is the whole thing being fixed here.
+  if [ "$wait_secs" -gt 0 ]; then
+    local interrupted=0
+    trap 'interrupted=1' TERM INT
+    sleep "$wait_secs" & wait $! || true
+    trap - TERM INT
+    if [ "$interrupted" = 1 ]; then
+      echo "interrupted during the ${wait_secs}s re-check -- not confirming, not demoting"
+      return 0
+    fi
   fi
 
   if [ "$require_marker" = 1 ] && [ ! -e "$SESSION_MARKER" ]; then

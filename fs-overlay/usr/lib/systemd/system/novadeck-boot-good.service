@@ -67,6 +67,13 @@ Type=oneshot
 # exists for -- it must not be spent on the first iteration and then abandoned. Every failed
 # iteration also demotes the image (OnFailure=, above), so the wedge is bounded: the next reboot
 # tries the other slot rather than retrying the broken one indefinitely.
+#
+# THE 30s WAIT IS INSIDE mark-good, NOT AN ExecStartPre=/usr/bin/sleep 30. It was the latter until
+# 2026-08-10, when a Pocket S2 powered off ~2s after the session came up: systemd SIGTERMed the
+# sleep, scored the control process as `Failed with result 'signal'`, showed a failed unit at
+# shutdown, and fired OnFailure= below. The demote was refused only because the shutdown
+# transaction was already queued -- luck. mark-good --wait traps the signal and returns 0 without
+# confirming or demoting, because "the operator switched the device off" is not a health verdict.
+# See the mark-good comment in novadeck-bootctl.
 RemainAfterExit=yes
-ExecStartPre=/usr/bin/sleep 30
-ExecStart=/usr/bin/novadeck-bootctl mark-good --require-marker
+ExecStart=/usr/bin/novadeck-bootctl mark-good --require-marker --wait 30

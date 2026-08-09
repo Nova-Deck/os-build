@@ -7,8 +7,8 @@ name. Order is as it was in TODO.md — roughly the order things were closed, no
 
 ## Closed
 
-- [x] **The GX rail is GMU-owned, so gpucc must not vote on it — HW-VALIDATED on SM8650 2026-08-10**
-  (`6f973e0`). Ported from an upstream-peer change whose author reports it fixing GX clock issues on
+- [x] **The GX rail is GMU-owned, so gpucc must not vote on it — HW-VALIDATED on BOTH SoCs
+  2026-08-10** (`6f973e0`). Ported from an upstream-peer change whose author reports it fixing GX clock issues on
   SM8550/SM8650. Two coupled kernel patches, and neither alone is the fix:
   - `0120-...gpu_cc_power_requirements_reality_check.patch` — upstream's RFC describes gpucc as
     needing CX/MX/**GFX**/MXC. GX is owned by the GMU on these SoCs, so a gpucc *device* vote on it
@@ -21,17 +21,25 @@ name. Order is as it was in TODO.md — roughly the order things were closed, no
     corner 0 or RETENTION, below what the GMU needs for its first ramp. The new one adds
     `.presync_floor` (hold at `max(corner, pd->enable_corner)` until `sync_state`) plus
     `.skip_retention_level` so the floor is a corner logic can run at.
-  - **What was actually measured.** A dev card booted on Pocket S2 (SM8650) all the way to OOBE:
-    the GPU probed, the panel modeset and gamescope completed its startup handshake — that handshake
-    is what arms `novadeck-boot-good.path`, so reaching OOBE *is* the evidence drm/msm bound and took
-    DRM master. Zero rpmhpd or gpucc errors in the journal. Verified in the shipped artifact too, not
-    just the source: `dtc` on `qcs8550-ayaneo-pocketace.dtb` and `sm8650-ayaneo-ps2.dtb` shows
-    `power-domains = <… 0x00 … 0x08 … 0x0a>` = CX(0), MX(8), MXC(10) — three entries, GFX(3) absent.
-  - **NOT measured, deliberately recorded as gaps:** no SM8550 board has booted it (still open in
-    TODO.md), and nothing was run past OOBE — no game, no FPS number, so this says nothing about
-    whether the GX *clock* behaviour actually improved, only that the GPU still comes up. The
-    instruments for that when someone gets to it are [[sm8650-gpu-liveness-probing]] and
-    [[gamescope-stats-pipe-fps-instrument]].
+  - **What was actually measured.** BOTH SoCs booted, which matters because `0120` edits a separate
+    dtsi hunk for each and they could have failed independently:
+    - **SM8650 — Pocket S2**, dev card to OOBE: the GPU probed, the panel modeset and gamescope
+      completed its startup handshake. That handshake is what arms `novadeck-boot-good.path`, so
+      reaching OOBE *is* the evidence drm/msm bound and took DRM master. Zero rpmhpd or gpucc errors
+      in the journal (read offline from the offload journal on the card).
+    - **SM8550 — Pocket ACE**, same check, same result.
+    - Verified in the shipped artifact too, not just the source: `dtc` on
+      `qcs8550-ayaneo-pocketace.dtb` and `sm8650-ayaneo-ps2.dtb` shows
+      `power-domains = <… 0x00 … 0x08 … 0x0a>` = CX(0), MX(8), MXC(10) — three entries, GFX(3) absent.
+  - **NOT measured, deliberately recorded as a gap:** nothing ran past OOBE on either board — no
+    game, no FPS number. So this establishes that the GPU still comes up, NOT that the GX clock
+    behaviour improved, which is the claim the patch is actually making and is still unmeasured. The
+    instruments for it are [[sm8650-gpu-liveness-probing]] and
+    [[gamescope-stats-pipe-fps-instrument]] on a title with a known number.
+  - **A boot does not clear the SM8550 GMU wedge** ([[sm8550-gmu-wedge-ifpc-cpuidle]]). That wedge is
+    an idle/runtime failure, not a probe-time one, so Pocket ACE reaching OOBE says nothing about it.
+    This is now a THIRD variable in that subsystem alongside the cpuidle quirk and our IFPC patch —
+    if the wedge reappears on SM8550, suspect this before either of those.
   - **Patch-apply baseline**, re-run against the pinned 7.1.6 tree and recorded in `kernel/SOURCE.pin`:
     53/53 apply cumulatively, zero rejects, 10 need fuzz, and 0120/0121 are not among the 10.
 

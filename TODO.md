@@ -319,20 +319,17 @@ them. The full rationale otherwise lives in the linked memories and commit histo
   seconds after Wi-Fi), which is why it's parked — but it's a one-line DTS change on the next kernel
   build. Property arrived with the unified-image refactor (`a6fc71f`); only in this one dtsi.
 
-- [ ] **The GX-rail rework (0120 + 0121) is UNVALIDATED on our hardware — build a card and watch the
-  GPU** — landed 2026-08-10 as a port of an upstream-peer change that its author reports as fixing GX
-  clock issues on SM8550/SM8650. Two coupled edits: `0120` stops gpucc voting on `RPMHPD_GFX` (the GX
-  rail is GMU-owned, so a device vote fights the GMU's), and `0121` replaces the old "mark gfx/gmxc
-  `.state_synced` from boot" hack with an explicit `.presync_floor` that pins those rails at their
-  lowest *functional* corner until `sync_state`. Both apply at fuzz 0 to the pinned 7.1.6 tree and the
-  full 53-patch cumulative run is still clean — that is ALL that has been checked. Nothing has been
-  compiled or booted. What to look for once it is on a card: the GPU comes up at all (this touches the
-  rails gpucc needs to probe, so the failure mode is a dead or never-probing GPU, not a slow one);
-  then GPU liveness via [[sm8650-gpu-liveness-probing]] and real FPS via
-  [[gamescope-stats-pipe-fps-instrument]] on a title with a known number. Worth a look for interaction
-  with the SM8550 GMU wedge in [[sm8550-gmu-wedge-ifpc-cpuidle]] — that entry's standing warning is to
-  not change the cpuidle quirk and our IFPC patch at the same time, and this is a THIRD variable in the
-  same subsystem, so if the wedge reappears on SM8550 suspect this before either of those.
+- [ ] **The GX-rail rework has NOT been booted on SM8550** — the SM8650 half is HW-confirmed and
+  closed (see DONE.md), but `0120` drops `RPMHPD_GFX` from the sm8550 gpucc node too and no SM8550
+  board has run it. That half rests entirely on the upstream-peer author's downstream check. It is
+  already in the field: `ota/v0.2.3` and `card/v0.2.3` (2026-08-10) both carry it, and a fresh card
+  ships slot B EMPTY ([[release-card-empty-b-slot]]), so a first-flash SM8550 unit has nothing to
+  fall back to. Boot any 8550 board — Pocket ACE and Odin2 are the ones on the bench — and the check
+  is the same one the 8650 passed: does the GPU probe at all. The failure mode is a dead or
+  never-probing GPU, not a slow one. Also worth watching for interaction with the SM8550 GMU wedge in
+  [[sm8550-gmu-wedge-ifpc-cpuidle]] — that entry's standing warning is to not change the cpuidle
+  quirk and our IFPC patch at the same time, and this is a THIRD variable in the same subsystem, so
+  if the wedge reappears on SM8550 suspect this before either of those.
 
 - [ ] **Decide how `vblank_mode=3` ships — per-title launch option or session-wide default** —
   follow-up to the resolved "One title (Gravity Circuit) not paced by the frame limiter" item in

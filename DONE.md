@@ -7,6 +7,34 @@ name. Order is as it was in TODO.md — roughly the order things were closed, no
 
 ## Closed
 
+- [x] **The GX rail is GMU-owned, so gpucc must not vote on it — HW-VALIDATED on SM8650 2026-08-10**
+  (`6f973e0`). Ported from an upstream-peer change whose author reports it fixing GX clock issues on
+  SM8550/SM8650. Two coupled kernel patches, and neither alone is the fix:
+  - `0120-...gpu_cc_power_requirements_reality_check.patch` — upstream's RFC describes gpucc as
+    needing CX/MX/**GFX**/MXC. GX is owned by the GMU on these SoCs, so a gpucc *device* vote on it
+    fights the GMU's own and the clock wedges. Our copy drops `RPMHPD_GFX` from the sm8550 and
+    sm8650 hunks. The sm8250 hunk stays upstream-verbatim — nothing is built from it and the
+    ownership claim was never checked there.
+  - `0121-pmdomain-qcom-rpmhpd-presync-floor-gmu-rails.patch` — replaces the older
+    `...no-max-clamp...` patch, which set `.state_synced = true` on gfx/gmxc from boot to dodge
+    rpmhpd's pre-sync clamp-to-top-corner. That overshoots the other way and lets the vote fall to
+    corner 0 or RETENTION, below what the GMU needs for its first ramp. The new one adds
+    `.presync_floor` (hold at `max(corner, pd->enable_corner)` until `sync_state`) plus
+    `.skip_retention_level` so the floor is a corner logic can run at.
+  - **What was actually measured.** A dev card booted on Pocket S2 (SM8650) all the way to OOBE:
+    the GPU probed, the panel modeset and gamescope completed its startup handshake — that handshake
+    is what arms `novadeck-boot-good.path`, so reaching OOBE *is* the evidence drm/msm bound and took
+    DRM master. Zero rpmhpd or gpucc errors in the journal. Verified in the shipped artifact too, not
+    just the source: `dtc` on `qcs8550-ayaneo-pocketace.dtb` and `sm8650-ayaneo-ps2.dtb` shows
+    `power-domains = <… 0x00 … 0x08 … 0x0a>` = CX(0), MX(8), MXC(10) — three entries, GFX(3) absent.
+  - **NOT measured, deliberately recorded as gaps:** no SM8550 board has booted it (still open in
+    TODO.md), and nothing was run past OOBE — no game, no FPS number, so this says nothing about
+    whether the GX *clock* behaviour actually improved, only that the GPU still comes up. The
+    instruments for that when someone gets to it are [[sm8650-gpu-liveness-probing]] and
+    [[gamescope-stats-pipe-fps-instrument]].
+  - **Patch-apply baseline**, re-run against the pinned 7.1.6 tree and recorded in `kernel/SOURCE.pin`:
+    53/53 apply cumulatively, zero rejects, 10 need fuzz, and 0120/0121 are not among the 10.
+
 - [x] **A Steam client self-update paints NOTHING — black panel for minutes — FIXED and HW-VALIDATED
   2026-08-06** (gamescope patch `0005-steamcontrolled-steam-focus-fallback.patch`). Observed
   2026-08-06 on a release unit (v0.2.1, slot A) taking client `1785347151` -> `1785979169`: 13.5

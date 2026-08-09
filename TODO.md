@@ -43,6 +43,17 @@ them. The full rationale otherwise lives in the linked memories and commit histo
     SM8550/SM8650 DTs; `systemd-pstore` is already enabled and will archive the previous boot's
     panic tail into the (persistent, offloaded) journal automatically. Without that, every
     investigation ends where 2026-08-06's did: no reset reason, no crash tail, nothing to read.
+  - **One CONFIRMED contributor to the demotion half is now fixed (2026-08-10, `58ab1ca`) — do not
+    re-derive it.** A deliberate poweroff inside `novadeck-boot-good`'s 30s re-check produced exactly
+    the "healthy boot, demoted slot" signature described above, via a different route than an early
+    reboot: the `ExecStartPre=/usr/bin/sleep 30` was SIGTERMed, systemd scored the unit
+    `Failed with result 'signal'`, and `OnFailure=novadeck-boot-bad.service` fired — refused that
+    time only because the shutdown transaction was already queued. HW-observed on Pocket S2 at OOBE,
+    where the card was left reading `boot-attempts: 1`. The wait now lives in `mark-good --wait` with
+    a TERM trap and reaches no verdict, and boot-bad has an `ExecCondition` that skips it while the
+    system is stopping. **This does NOT close the item above** — that is about the device rebooting
+    on its own, which still has no recorder. It only removes a known false positive that would
+    otherwise be mistaken for one.
   - **Adjacent, probably unrelated, recorded so it is not re-discovered as a lead:** every boot logs
     `CPU features: SANITY CHECK: Unexpected variation in SYS_ID_AA64MMFR1_EL1` between the boot CPU
     and CPUs 2-7 (`0x...11312122` vs `0x...10312122`) — a big.LITTLE ID-register mismatch. It is

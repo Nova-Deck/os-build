@@ -21,12 +21,19 @@
 *.castr/
 *.raucb
 
+# Decky plugin frontend build (make decky-plugin); the lockfile IS committed
+/decky/*/node_modules/
+/decky/*/dist/
+
 # Pacman/devtools build artifacts
 *.pkg.tar.zst
 *.pkg.tar.xz
 src/
 pkg/
 /.makepkg/
+# ... but the Decky plugin's TypeScript SOURCE is repo content, not a makepkg build dir.
+# (An excluded directory's children cannot be re-included, so the dir itself is negated.)
+!/decky/*/src/
 
 # Device-proprietary firmware, fetched on demand from the pinned Nova-Deck/qcom-firmwares
 # repo + verified against its sha256sums.txt (never committed here — only in that repo).

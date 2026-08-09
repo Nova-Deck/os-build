@@ -1,0 +1,35 @@
+# Decky Loader — the plugin host that gives SteamUI features an in-UI surface (Quick Access
+# Menu tab). First consumer: the novadeck-control plugin (decky/novadeck-control), the UI for
+# /etc/novadeck/game-tweaks.json and the power profiles — settings that until now were
+# ssh-edit-a-json-file only.
+#
+# x86_64 ON PURPOSE. Upstream ships exactly one asset, the x86_64 PyInstaller binary; there is
+# no aarch64 build. It runs under the system FEX binfmt (packages/fex-emu) — the same mechanism
+# as native x86 Linux games, a combination already proven on aarch64 handhelds elsewhere, with
+# the AppConfig knobs we mirror in fs-overlay/usr/share/fex-emu/AppConfig/PluginLoader.json
+# (TSO on, Multiblock off, GL/Vulkan/Wayland/asound thunks). A Python runtime is far tamer
+# under emulation than a game: no JIT of its own, no GPU fast path to lose.
+#
+# PRERELEASE on purpose. The -pre channel is where upstream lands its Steam-on-ARM fixes (native
+# arm64 Steam client, which is what this image runs). The stable channel targets the x86 Deck
+# client and lags on exactly the codepaths we need. The seeded loader.json (written by
+# /usr/lib/novadeck/decky-sync) pins new installs to the prerelease branch for the same reason.
+#
+# mode: PluginLoader is executed directly by plugin_loader.service; without 0755 the unit fails
+# with EACCES (kind:file installs 0644 by default — right for the FEX rootfs image, not for a
+# binary).
+#
+# Fields: see packages/inputplumber/prebuilt.pin for the base set and
+# packages/fex-rootfs/prebuilt.pin for kind/dest; this pin adds
+#   mode -> chmod for the placed file (kind:file only; default 0644)
+#
+# To bump: pick a release at https://github.com/SteamDeckHomebrew/decky-loader/releases, set
+# version + url together, and recompute sha256 from the downloaded asset (upstream publishes no
+# checksum sidecar).
+name: decky-loader
+version: v3.2.8-pre1
+url: https://github.com/SteamDeckHomebrew/decky-loader/releases/download/v3.2.8-pre1/PluginLoader
+sha256: 9df160a81df3fc49c96e5665a1d1b3ba5c79de5bf271adc266d6bfedfda399d8
+kind: file
+dest: /usr/share/decky-loader/PluginLoader
+mode: 0755

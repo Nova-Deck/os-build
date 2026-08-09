@@ -1,0 +1,2 @@
+enable novadeck-decky-sync.service
+enable plugin_loader.service

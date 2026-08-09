@@ -1,0 +1,17 @@
+[Unit]
+Description=Seed Decky Loader and baked plugins into /home/deck/homebrew
+# The whole payload lands on /home, so the mount must be there — and on first boot that means
+# after the repart/grow chain that home.mount already orders itself behind.
+RequiresMountsFor=/home/deck
+Before=plugin_loader.service
+# No ConditionPathExists on the loader: it ships in EVERY image (packages/decky-loader/
+# prebuilt.pin), so a missing binary is a broken image and should fail THIS unit loudly, not
+# be silently condition-skipped.
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/novadeck/decky-sync
+
+[Install]
+WantedBy=multi-user.target

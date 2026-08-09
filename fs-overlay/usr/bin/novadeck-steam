@@ -138,15 +138,14 @@ export vk_xwayland_wait_ready=false            # don't block on buffers idling b
 # Word-splitting on the extra-args is intentional (sh).
 : "${NOVADECK_STEAM_ARGS:=-gamepadui -steamos3 -steampal -steamdeck -noverifyfiles -noshaders}"
 
-# Optional CEF remote-debugging (OFF on release). Steam's Big Picture UI is CEF; touching this
-# sentinel makes the client open a DevTools port so the SteamUI (incl. the OOBE web views) can be
-# inspected from a browser. Gated on the NOVADECK_DEBUG build marker (/usr/lib/novadeck/debug, baked
-# only when the image is built with NOVADECK_DEBUG=1) so release launches never expose the port.
-# Touched unconditionally here (only reached under the NOVADECK_DEBUG marker).
-if [ -e /usr/lib/novadeck/debug ]; then
-  : >"${STEAM}/.cef-enable-remote-debugging" 2>/dev/null \
-    && echo "[novadeck-steam] NOVADECK_DEBUG: CEF remote debugging enabled (${STEAM}/.cef-enable-remote-debugging)" >&2
-fi
+# CEF remote-debugging, ALWAYS on (2026-08-08, was NOVADECK_DEBUG-gated). Steam's Big Picture UI
+# is CEF; this sentinel makes the client open its DevTools port. It is the ONLY path Decky Loader
+# has for injecting its UI into SteamUI — no sentinel, no plugin surface, the loader just polls
+# forever — and it is what every SteamOS-with-Decky install runs with. Unconditional rather than
+# keyed to the baked loader so the debugger is also there for SteamUI investigation on ANY image
+# (the freeze hunts have all wanted it). The port binds localhost only.
+: >"${STEAM}/.cef-enable-remote-debugging" 2>/dev/null \
+  && echo "[novadeck-steam] CEF remote debugging enabled (${STEAM}/.cef-enable-remote-debugging)" >&2
 
 # Run from the client dir. Steam's bootstrapper resolves some helper paths relative to cwd, so launch
 # with steamrtarm64/ as the working directory.

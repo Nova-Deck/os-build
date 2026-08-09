@@ -3,28 +3,26 @@
 #
 #   images/test-steamos-manager.sh
 #
-# WHY THIS FILE EXISTS. The shim's properties are declared without an EmitsChangedSignal
-# annotation, so D-Bus's default applies and every client is entitled to CACHE them and to trust
-# PropertiesChanged to keep that cache honest. The Steam client does exactly that: it does NOT
-# re-read these properties when the QAM opens, and when its cache is stale it SKIPS writes it
-# believes are redundant. So a missed signal does not degrade to "the UI lags" — it degrades to
-# "the control silently stops working", with nothing in any log.
+# WHAT THE SHIM IS NOW. It carries no settings. PerformanceProfile1, GpuPerformanceLevel1 and
+# finally CpuScheduler1 all moved to the novadeck-control Decky plugin, which talks straight to
+# powerd; what is left is the two interfaces STEAMUI CALLS — SessionManagement1 and Manager2 —
+# which by definition cannot move to a plugin, because only the owner of this bus name can
+# answer them.
 #
-# That failure is invisible on hardware without a second machine on the bus, and it is exactly
-# what shipped: the shim emitted only from its own set_property handlers, so a change arriving by
-# any other route (the Decky plugin, powerd itself) left the client believing the old value.
-# The re-emit path that fixes it is pinned here rather than left to a device test, because the
-# device test cannot tell "no signal" apart from "signal the client ignored".
+# WHY IT STILL EXISTS AT ALL, and the failure this file now guards. SteamUI's power menu offers
+# "Switch to Desktop" unconditionally: it does not consult ValidDesktopSessions and it does not
+# care whether this service is running. When the call fails it sits on a "Switching to Desktop…"
+# popup forever. That was HW-observed 2026-08-09 twice over — with the whole service masked, and
+# with the interface present but raising NotImplementedError. So a shim that merely EXPORTS the
+# interface is not enough; the switch has to actually resolve. On a device with one session the
+# only resolution available is to restart it, which is what switch_session does.
 #
-# The performance PROFILE and the GPU LEVEL are deliberately no longer part of any of this
-# (2026-08-08): their UI surface is the novadeck-control Decky plugin, and the shim exports
-# neither PerformanceProfile1 nor GpuPerformanceLevel1 — absence is how SteamUI is told the
-# capability does not exist. Both removals are pinned below, because re-adding an interface
-# would quietly resurrect the two-surface fight this file's history is about. The re-emit
-# machinery they validated now serves the one exported settings interface left, CpuScheduler1.
+# That makes "switch_session must never raise, and must schedule a restart" the load-bearing
+# assertion here — a regression to a raise gives a wedged shell that no device test tells apart
+# from a slow one.
 #
-# Everything runs on the host: the shim is imported by path and driven with real GLib.Variants
-# against a recording connection, so no bus, no powerd and no root are involved.
+# Everything runs on the host: the shim is imported by path and driven against a recording
+# connection, so no bus, no session and no root are involved.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -42,10 +40,6 @@ for f in "$SHIM" "$USER_UNIT" "$SYS_UNIT"; do
   [ -f "$f" ] || { echo "missing: $f" >&2; exit 1; }
 done
 
-# --- 1. the re-emit path ------------------------------------------------------------------------
-#
-# Driven from python because that is where the code is. The harness prints the same "ok"/"FAIL"
-# lines this script does and exits nonzero if any case failed, so the two tallies stay one report.
 CASE="shim"
 # gi is in the image (the shim would not start without it), but an offline suite inherits the HOST
 # PATH and proves logic only -- it can never stand in for the image's tool inventory. Skipping
@@ -59,15 +53,15 @@ else
   # running the tests silently bakes a stale .pyc of the manager into the shipped rootfs.
   shim_out="$(python3 -B - "$SHIM" <<'PY'
 import importlib.machinery, importlib.util
+import subprocess
 import sys
 
 import gi
 gi.require_version("Gio", "2.0")
 from gi.repository import GLib
 
-shim_path = sys.argv[1]
 spec = importlib.util.spec_from_loader(
-    "shim", importlib.machinery.SourceFileLoader("shim", shim_path))
+    "shim", importlib.machinery.SourceFileLoader("shim", sys.argv[1]))
 sm = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(sm)
 
@@ -82,274 +76,136 @@ class FakeConnection:
     """Records emit_signal instead of putting anything on a bus."""
     def __init__(self):
         self.emitted = []
-
     def emit_signal(self, dest, path, iface, name, params):
         self.emitted.append((dest, path, iface, name, params))
 
-    # (iface, {prop: printed-value}) for each PropertiesChanged, in order.
-    def changes(self):
-        out = []
-        for _dest, _path, _iface, _name, params in self.emitted:
-            body = params.get_child_value(1)
-            props = {}
-            for i in range(body.n_children()):
-                e = body.get_child_value(i)
-                props[e.get_child_value(0).get_string()] = \
-                    e.get_child_value(1).get_variant().print_(True)
-            out.append((params.get_child_value(0).get_string(), props))
-        return out
-
 
 def manager():
-    """A manager with no __init__: the real one dials the system bus in PowerClient()."""
+    """A manager with no __init__: the real one shells out to device-env."""
     m = sm.NovadeckSteamOSManager.__new__(sm.NovadeckSteamOSManager)
     m.connection = FakeConnection()
     m.last_emitted = {}
+    m.valid_desktop_sessions = ()
+    m.device_id, m.device_name = "novadeck", "NovaDeck"
+    m.default_login_mode, m.default_desktop_session = "game", ""
     return m
 
 
-def powerd_signal(props, iface=None):
-    """A PropertiesChanged as powerd emits it: (sa{sv}as)."""
-    return GLib.Variant("(sa{sv}as)",
-                        (iface if iface is not None else sm.POWER_IFACE, props, []))
-
-
-def feed(m, props, iface=None):
-    m.on_power_changed(None, None, None, None, None, powerd_signal(props, iface))
-
-
-# --- PerformanceProfile1 stays GONE -------------------------------------------------------------
+# --- THE SETTINGS SURFACES STAY GONE -------------------------------------------------------
 #
-# The profile's UI surface is the Decky plugin; the shim must not advertise a second one. Absence
-# is the capability signal, so the checks are absences: no constant, no interface in the exported
-# XML, and no profile property in the re-announce map (a mapping there would emit
-# PropertiesChanged for an interface no longer registered — noise at best, a client resurrecting
-# a cached control at worst).
-for gone, fight in [
-    (("IFACE_PROFILE", "PROFILE_PROPS"), "PerformanceProfile1"),
-    (("IFACE_GPU", "GPU_PROPS"), "GpuPerformanceLevel1"),
-]:
-    if all(getattr(sm, name, None) is None for name in gone):
-        ok(f"no {fight} constants — the interface cannot come back by accident")
+# Each moved to the Decky plugin for its own reason (see the shim's header). Re-exporting one
+# would resurrect a second live surface for a setting the plugin owns — and for the profile that
+# meant the client's property cache going silently stale, which is what this file was originally
+# written about.
+xml = manager().node_xml()
+for gone in ("PerformanceProfile1", "GpuPerformanceLevel1", "CpuScheduler1"):
+    if gone in xml:
+        bad(f"{gone} is exported again — the plugin owns that setting")
     else:
-        bad(f"{fight} constants exist again — its surface moved to the Decky plugin")
+        ok(f"{gone} stays unexported")
+for const in ("IFACE_PROFILE", "IFACE_GPU", "IFACE_SCHED", "PROFILE_PROPS", "GPU_PROPS",
+              "SCHED_PROPS", "POWERD_TO_STEAM"):
+    if getattr(sm, const, None) is not None:
+        bad(f"{const} exists again — the settings machinery is creeping back")
+if not any(getattr(sm, c, None) is not None for c in ("IFACE_PROFILE", "IFACE_GPU", "IFACE_SCHED")):
+    ok("no settings-interface constants remain")
+
+# No powerd client remains: with every settings interface gone there is nothing to read from it,
+# and a live subscription would be a bus connection kept open to serve nobody.
+if getattr(sm, "PowerClient", None) is None and not hasattr(sm.NovadeckSteamOSManager, "on_power_changed"):
+    ok("no powerd client and no re-emit path — the shim reads nothing")
+else:
+    bad("a powerd client survived the settings move — dead weight holding a bus connection")
+
+# --- THE SWITCH MUST RESOLVE, NOT RAISE ----------------------------------------------------
+#
+# The one that matters. An exception of any kind is what wedges SteamUI on its popup.
 m = manager()
-m.cpu_schedulers = ["none", "lavd"]
-xml = m.node_xml()
-for fight in ("PerformanceProfile1", "GpuPerformanceLevel1"):
-    if fight not in xml:
-        ok(f"exported XML carries no {fight} — SteamUI shows no native control for it")
+scheduled = []
+real_timeout = GLib.timeout_add
+GLib.timeout_add = lambda ms, fn, *a: (scheduled.append((ms, fn)), 1)[1]
+try:
+    for target in ("desktop", "gamemode"):
+        try:
+            m.switch_session(target)
+            ok(f"switch_session({target}) does not raise — the popup cannot wedge")
+        except Exception as exc:
+            bad(f"switch_session({target}) raised {exc!r} — SteamUI wedges on its popup")
+    if len(scheduled) == 2 and all(fn == m._restart_session for _ms, fn in scheduled):
+        ok("each switch schedules the session restart (the thing that clears the popup)")
     else:
-        bad(f"{fight} is in the exported XML — SteamUI is offered a surface the plugin owns")
-leaked = [p for p in ("Profile", "AvailableProfiles", "SuggestedDefaultProfile",
-                      "GpuPerformanceLevel", "AvailableGpuPerformanceLevels",
-                      "ManualGpuClock", "ManualGpuClockMin", "ManualGpuClockMax")
-          if p in sm.POWERD_TO_STEAM]
-if not leaked:
-    ok("powerd's profile + GPU properties are not re-announced under any SteamOSManager1 name")
-else:
-    bad(f"removed-surface properties still in POWERD_TO_STEAM: {leaked}")
-
-# --- the inversion is COMPLETE ------------------------------------------------------------------
-#
-# POWERD_TO_STEAM is built by inverting the property maps. If a property is added to one of
-# them and the inversion misses it, get_property() still works and only the re-announce goes
-# quiet -- i.e. the exact silent-stale-cache failure this file exists for, reintroduced for one
-# property. Checked structurally so a new property cannot land uncovered.
-for iface, table, label in [
-    (sm.IFACE_SCHED,   sm.SCHED_PROPS,   "CpuScheduler1"),
-]:
-    missing = [p for p in table.values() if p not in sm.POWERD_TO_STEAM]
-    if missing:
-        bad(f"{label}: powerd props absent from POWERD_TO_STEAM: {missing} — changes go unannounced")
-        continue
-    wrong = [(pd, sm.POWERD_TO_STEAM[pd]) for ours, pd in table.items()
-             if sm.POWERD_TO_STEAM[pd] != (iface, ours)]
-    if wrong:
-        bad(f"{label}: inversion maps to the wrong iface/name: {wrong}")
+        bad(f"switch did not schedule _restart_session: {scheduled}")
+    # Deferred, not inline: killing the session from inside the call takes our own bus
+    # connection down before the reply is written, and the caller sees the error path again.
+    if scheduled and all(ms > 0 for ms, _fn in scheduled):
+        ok("the restart is deferred, so the D-Bus reply is delivered first")
     else:
-        ok(f"{label}: every powerd property inverts back to its own interface and name")
+        bad("the restart runs inline — the reply would never reach the caller")
+finally:
+    GLib.timeout_add = real_timeout
 
-# --- a powerd-side change is re-announced under OUR interfaces -----------------------------------
-#
-# THE ONE THAT MATTERS. This is the whole fix: a change that never went through set_property still
-# reaches the client under the SteamOSManager1 interface it is watching. (Since the profile's
-# removal every surviving property NAME is identical on both sides, so the translation being
-# exercised is the interface, not the name.)
+# The session it kills is the compositor's: the seat0 one. Picking the wrong row (a root SSH
+# session, the user manager) would kill nothing and leave the popup up.
+real_check = subprocess.check_output
+subprocess.check_output = lambda *a, **k: (
+    "2 1000 deck -     822  manager       -    no -\n"
+    "4    0 root -     2235 user          -    no -\n"
+    "6 1000 deck seat0 2266 user          tty1 no -\n")
+try:
+    got = sm.NovadeckSteamOSManager.graphical_session()
+    if got == "6":
+        ok("graphical_session picks the seat0 row, not the manager or an SSH session")
+    else:
+        bad(f"graphical_session picked {got!r}, expected the seat0 session")
+finally:
+    subprocess.check_output = real_check
+
+def _boom(*a, **k):
+    raise OSError("no loginctl")
+subprocess.check_output = _boom
+try:
+    if sm.NovadeckSteamOSManager.graphical_session() == "":
+        ok("a failing loginctl yields no session rather than an exception")
+    else:
+        bad("graphical_session did not degrade when loginctl failed")
+finally:
+    subprocess.check_output = real_check
+
+# --- WHAT THE SHIM STILL ANSWERS -----------------------------------------------------------
 m = manager()
-feed(m, {"CpuScheduler": GLib.Variant("s", "lavd")})
-changes = m.connection.changes()
-if changes == [(sm.IFACE_SCHED, {"CpuScheduler": "'lavd'"})]:
-    ok("a powerd-side CpuScheduler change is re-announced on CpuScheduler1")
+if m.get_property(sm.IFACE_MANAGER, "DeviceModel").unpack() == ("novadeck", "NovaDeck"):
+    ok("Manager2.DeviceModel answers (SteamUI asks the manager, so only we can)")
 else:
-    bad(f"powerd-side CpuScheduler change did not re-announce correctly: {changes}")
-
-# --- properties split across their real interfaces -----------------------------------------------
-#
-# With only one mapped interface left (SCHED), the historical per-interface SPLIT cannot be
-# exercised against real maps any more; what remains testable is the batching half of the same
-# grouping code: two properties of one interface arriving in one powerd signal must go out as
-# ONE PropertiesChanged, not two.
-m = manager()
-feed(m, {"CpuScheduler": GLib.Variant("s", "lavd"),
-         "AvailableCpuSchedulers": GLib.Variant("as", ["none", "lavd"])})
-changes = m.connection.changes()
-if (len(changes) == 1 and changes[0][0] == sm.IFACE_SCHED
-        and set(changes[0][1]) == {"CpuScheduler", "AvailableCpuSchedulers"}):
-    ok("two properties of one interface in one powerd signal batch into one PropertiesChanged")
+    bad("DeviceModel does not answer")
+if m.get_property(sm.IFACE_SESSION, "DefaultLoginMode").get_string() == "game":
+    ok("SessionManagement1 properties answer")
 else:
-    bad(f"same-interface properties were not batched: {changes}")
+    bad("SessionManagement1 properties do not answer")
 
-# --- powerd properties with no SteamOSManager1 equivalent ----------------------------------------
-#
-# powerd owns more than the shim exposes (fan, temperature...). Those must be dropped silently --
-# not crash the handler, which would take the re-emit path down for every OTHER property too.
+# The session properties are the last emits-change surface, so the dedupe still has a job.
 m = manager()
-feed(m, {"FanSpeed": GLib.Variant("u", 2200), "Temperature": GLib.Variant("d", 47.5)})
-if m.connection.emitted == []:
-    ok("powerd properties with no SteamOSManager1 equivalent are dropped, not emitted")
-else:
-    bad(f"emitted a signal for properties the shim does not expose: {m.connection.changes()}")
-
-m = manager()
-feed(m, {"FanSpeed": GLib.Variant("u", 2200), "CpuScheduler": GLib.Variant("s", "lavd")})
-if dict(m.connection.changes()).get(sm.IFACE_SCHED, {}).get("CpuScheduler") == "'lavd'":
-    ok("an unmapped property alongside a mapped one does not suppress the mapped one")
-else:
-    bad("an unmapped property suppressed the mapped property in the same signal")
-
-# The profile is now an unmapped property BY DESIGN: powerd still emits it (the Decky plugin
-# sets it), and the shim must drop it silently like fan/temperature — not crash, not re-announce.
-m = manager()
-feed(m, {"Profile": GLib.Variant("s", "performance")})
-if m.connection.emitted == []:
-    ok("a powerd-side Profile change is dropped — no interface exists to announce it on")
-else:
-    bad(f"re-announced the removed profile property: {m.connection.changes()}")
-
-# --- signals from something other than powerd's interface ----------------------------------------
-m = manager()
-feed(m, {"CpuScheduler": GLib.Variant("s", "lavd")}, iface="org.example.Other")
-if m.connection.emitted == []:
-    ok("a PropertiesChanged for a different interface is ignored")
-else:
-    bad("re-announced a change from an unrelated interface")
-
-# --- the dedupe: a write through us must not announce twice --------------------------------------
-#
-# set_property emits directly AND the write comes back through the powerd subscription. Without
-# dedupe the client sees the same change twice.
-m = manager()
-m.emit_properties(sm.IFACE_SCHED, {"CpuScheduler": GLib.Variant("s", "lavd")})
-feed(m, {"CpuScheduler": GLib.Variant("s", "lavd")})
-if len(m.connection.emitted) == 1:
-    ok("a value already announced is not announced again by the powerd echo")
-else:
-    bad(f"the powerd echo double-announced: {m.connection.changes()}")
-
-# THE SHARP ONE. A dedupe that remembers the last value can silently swallow a LATER genuine
-# change if it is written carelessly -- and the symptom is identical to the bug this whole file
-# exists for, so it would not be caught by the cases above. A->B->A must produce three signals.
-m = manager()
-for value in ("lavd", "none", "lavd"):
-    feed(m, {"CpuScheduler": GLib.Variant("s", value)})
-seen = [props["CpuScheduler"] for _iface, props in m.connection.changes()]
-if seen == ["'lavd'", "'none'", "'lavd'"]:
-    ok("a value returning to a previously-seen one is still announced (A->B->A emits 3)")
-else:
-    bad(f"dedupe swallowed a genuine change: expected 3 alternating signals, got {seen}")
-
-# A repeat of the CURRENT value is the one thing that must stay quiet.
-m = manager()
-for _ in range(3):
-    feed(m, {"CpuScheduler": GLib.Variant("s", "none")})
-if len(m.connection.emitted) == 1:
-    ok("an unchanged value repeated by powerd is announced once, not once per signal")
-else:
-    bad(f"re-announced an unchanged value {len(m.connection.emitted)} times")
-
-# Dedupe must be keyed per (interface, property): two interfaces can carry the same property name
-# and the same value without masking each other.
-m = manager()
-m.emit_properties(sm.IFACE_SCHED, {"Shared": GLib.Variant("s", "x")})
-m.emit_properties(sm.IFACE_SESSION, {"Shared": GLib.Variant("s", "x")})
-if len(m.connection.emitted) == 2:
-    ok("dedupe is keyed per interface — the same name and value on two interfaces both emit")
-else:
-    bad("dedupe collapsed the same property name across two different interfaces")
-
-# --- never emit an empty PropertiesChanged -------------------------------------------------------
-#
-# If every property in a batch deduped away, the batch must vanish with them. An empty
-# PropertiesChanged is a wakeup for every subscribed client that says nothing.
-m = manager()
-m.emit_properties(sm.IFACE_SCHED, {"CpuScheduler": GLib.Variant("s", "lavd")})
+m.emit_properties(sm.IFACE_SESSION, {"DefaultLoginMode": GLib.Variant("s", "game")})
 before = len(m.connection.emitted)
-m.emit_properties(sm.IFACE_SCHED, {"CpuScheduler": GLib.Variant("s", "lavd")})
+m.emit_properties(sm.IFACE_SESSION, {"DefaultLoginMode": GLib.Variant("s", "game")})
 if len(m.connection.emitted) == before:
-    ok("a fully-deduped batch emits no empty PropertiesChanged")
+    ok("an unchanged value is not re-announced")
 else:
-    bad("emitted an empty PropertiesChanged after everything deduped away")
-
-# --- a mixed batch keeps only what actually changed ----------------------------------------------
-m = manager()
-m.emit_properties(sm.IFACE_SCHED, {"CpuScheduler": GLib.Variant("s", "lavd"),
-                                   "AvailableCpuSchedulers": GLib.Variant("as", ["none"])})
-m.emit_properties(sm.IFACE_SCHED, {"CpuScheduler": GLib.Variant("s", "lavd"),
-                                   "AvailableCpuSchedulers": GLib.Variant("as", ["none", "lavd"])})
-last = m.connection.changes()[-1][1]
-if last == {"AvailableCpuSchedulers": "['none', 'lavd']"}:
-    ok("a partly-changed batch announces only the property that moved")
+    bad("emitted a duplicate PropertiesChanged")
+m.emit_properties(sm.IFACE_SESSION, {"DefaultLoginMode": GLib.Variant("s", "desktop")})
+if len(m.connection.emitted) == before + 1:
+    ok("a genuine change is announced")
 else:
-    bad(f"announced unchanged properties alongside the changed one: {last}")
+    bad("dedupe swallowed a genuine change")
 
-# --- the signal body is a well-formed PropertiesChanged ------------------------------------------
-#
-# Emitted by hand rather than by GDBus, so the signature and destination are ours to get wrong. A
-# malformed body is dropped by the client with no error anywhere on our side.
-m = manager()
-feed(m, {"CpuScheduler": GLib.Variant("s", "lavd")})
-if not m.connection.emitted:
-    # Guarded rather than indexed blind: an empty list here is a real regression elsewhere, and
-    # letting it raise would kill the harness before it printed its tally.
-    bad("nothing was emitted — cannot inspect the signal body")
-else:
-    dest, path, iface, name, params = m.connection.emitted[0]
-    checks = [
-        (dest is None, "broadcast (no destination)"),
-        (path == sm.OBJECT_PATH, f"path is {sm.OBJECT_PATH}"),
-        (iface == "org.freedesktop.DBus.Properties", "interface is org.freedesktop.DBus.Properties"),
-        (name == "PropertiesChanged", "member is PropertiesChanged"),
-        (params.get_type_string() == "(sa{sv}as)", "signature is (sa{sv}as)"),
-    ]
-    wrong = [label for good, label in checks if not good]
-    if wrong:
-        bad(f"malformed signal — wrong: {wrong}")
-    else:
-        ok("the emitted signal is a well-formed broadcast PropertiesChanged on the shim's object")
-
-print(f"__COUNTS__ {P} {F}")
+print(f"__TALLY__ {P} {F}")
 PY
 )"
-  shim_rc=$?
-  echo "$shim_out" | grep -v '^__COUNTS__'
-  # Tally from the lines actually printed, NOT from the sentinel. If the harness dies partway the
-  # sentinel never arrives, and crediting it with nothing would print a summary that contradicts
-  # the FAIL lines immediately above it — the one number a CI reader is most likely to trust.
-  PASS=$((PASS + $(echo "$shim_out" | grep -c '^  ok   shim --')))
-  FAIL=$((FAIL + $(echo "$shim_out" | grep -c '^  FAIL shim --')))
-  # The sentinel's remaining job: prove the harness reached the end, so a crash cannot pass as a
-  # clean run just because everything printed before it happened to be green.
-  if ! echo "$shim_out" | grep -q '^__COUNTS__'; then
-    bad "the python harness died partway (rc=$shim_rc) — the cases after it never ran"
-  fi
+  printf '%s\n' "$shim_out" | grep -v '^__TALLY__'
+  read -r _ p f <<<"$(printf '%s\n' "$shim_out" | grep '^__TALLY__')"
+  PASS=$((PASS + ${p:-0})); FAIL=$((FAIL + ${f:-0}))
+  [ -n "${p:-}" ] || bad "the python harness died before printing its tally"
 fi
 
-# --- 2. the units that put it on the bus SteamUI reads --------------------------------------------
-#
-# The re-emit path is worth nothing if the instance the Steam client talks to is not running. The
-# client connects on the USER session bus, so the user unit is the load-bearing one; the system
-# unit is parity.
 CASE="units"
 
 if grep -qE '^ExecStart=.*novadeck-steamos-manager[[:space:]]*$' "$USER_UNIT"; then
@@ -365,7 +221,8 @@ else
 fi
 
 # Presets are applied on first boot only. The shipped wants symlink is what makes the session-bus
-# instance come up on EVERY boot regardless, so SteamUI never faces an empty bus name.
+# instance come up on EVERY boot regardless, so SteamUI never faces an empty bus name — which,
+# for the desktop switch, is the difference between a restart and a wedged popup.
 if [ -L "$USER_WANTS" ]; then
   ok "user unit ships a default.target.wants symlink — starts without depending on presets"
 else
@@ -382,7 +239,7 @@ else
 fi
 
 # Restart=on-failure matters more here than usual: the shim holds a bus name the client resolves
-# once. If it dies and stays dead, the QAM's power controls go inert with nothing in a log.
+# once. If it dies and stays dead, the desktop switch goes back to wedging with nothing in a log.
 for unit in "$USER_UNIT" "$SYS_UNIT"; do
   if grep -qE '^Restart=on-failure[[:space:]]*$' "$unit"; then
     ok "$(basename "$(dirname "$unit")")/$(basename "$unit"): Restart=on-failure"
@@ -390,14 +247,6 @@ for unit in "$USER_UNIT" "$SYS_UNIT"; do
     bad "$(basename "$(dirname "$unit")")/$(basename "$unit"): a crash would leave the bus name unowned"
   fi
 done
-
-# The subscription is established once, guarded on power_subscription being None. bus_acquired can
-# fire again after a bus reconnect; a second subscription would double every re-announce.
-if grep -q 'if self.power_subscription is None:' "$SHIM"; then
-  ok "the powerd subscription is guarded — a bus reconnect cannot double-subscribe"
-else
-  bad "nothing guards the powerd subscription: a reconnect would announce every change twice"
-fi
 
 printf '\n%s: %d passed, %d failed, %d skipped\n' "$(basename "$0")" "$PASS" "$FAIL" "$SKIP"
 [ "$FAIL" -eq 0 ]

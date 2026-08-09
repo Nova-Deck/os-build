@@ -24,33 +24,18 @@ IFACE_MANAGER = "com.steampowered.SteamOSManager1.Manager2"
 # and SKIPS writes against a stale value — the bug the re-emit path below was built for). GPU
 # followed for the opposite reason: the client never rendered a GPU clock control on this
 # device at all (it gates that slider on its own hardware checks, not on the interface), so the
-# export was a surface nothing consumed. Absence is the capability signal SteamUI understands:
-# like a build without sched_ext showing no CPU-scheduler control. powerd keeps the full API
-# for both — the plugin and any PPD client still see everything. CpuScheduler1 stays exported.
-IFACE_SCHED = "com.steampowered.SteamOSManager1.CpuScheduler1"
+# export was a surface nothing consumed. CpuScheduler1 went last (2026-08-09) once the scheduler
+# became a plugin concern too. powerd keeps the full API for all three — the plugin and any PPD
+# client still see everything; the shim simply stopped being a settings surface.
+#
+# WHAT IS LEFT, AND WHY IT CANNOT MOVE TO THE PLUGIN: SessionManagement1 and Manager2 are the
+# interfaces STEAMUI CALLS, so only something owning this bus name can answer them. That is not
+# academic — SteamUI's power menu offers "Switch to Desktop" unconditionally and wedges on a
+# "Switching to Desktop…" popup when the call fails (HW-observed with this service masked). The
+# shim exists now to keep that button honest, not to carry settings. No powerd client remains.
 IFACE_SESSION = "com.steampowered.SteamOSManager1.SessionManagement1"
 IFACE_OBJECT_MANAGER = "org.freedesktop.DBus.ObjectManager"
 
-POWER_BUS = "org.novadeck.Power"
-POWER_PATH = "/org/novadeck/Power"
-POWER_IFACE = "org.novadeck.Power1"
-
-# Our property names -> powerd's. One source of truth: get_property() reads through these, and
-# POWERD_TO_STEAM inverts them so a powerd-side change can be re-announced under our own names.
-SCHED_PROPS = {
-    "AvailableCpuSchedulers": "AvailableCpuSchedulers",
-    "CpuScheduler": "CpuScheduler",
-}
-POWERD_TO_STEAM = {
-    powerd: (iface, ours)
-    for iface, props in (
-        (IFACE_SCHED, SCHED_PROPS),
-    )
-    for ours, powerd in props.items()
-}
-PROPS = "org.freedesktop.DBus.Properties"
-POWER_GET_TIMEOUT_MS = 1000
-POWER_SET_TIMEOUT_MS = 5000
 
 ROOT_XML = f"""
 <node>
@@ -70,16 +55,6 @@ ROOT_XML = f"""
 </node>
 """
 
-# Optional interface, exported only when powerd reports a scheduler other than the in-kernel one
-# (i.e. this kernel has sched_ext and scx_lavd is installed). SteamOS does the same — its manager
-# registers CpuScheduler1 only if the scx binary exists — so an unsupported build shows no CPU
-# scheduler control at all rather than a control whose only choice is "none".
-SCHED_XML = f"""
-  <interface name="{IFACE_SCHED}">
-    <property name="AvailableCpuSchedulers" type="as" access="read"/>
-    <property name="CpuScheduler" type="s" access="readwrite"/>
-  </interface>
-"""
 
 INTERFACES_XML = f"""
   <interface name="{IFACE_MANAGER}">
@@ -126,56 +101,6 @@ def shell_env():
     return env
 
 
-class PowerClient:
-    def __init__(self):
-        self.props = Gio.DBusProxy.new_for_bus_sync(
-            Gio.BusType.SYSTEM,
-            Gio.DBusProxyFlags.NONE,
-            None,
-            POWER_BUS,
-            POWER_PATH,
-            PROPS,
-            None,
-        )
-
-    def get(self, name):
-        result = self.props.call_sync(
-            "Get",
-            GLib.Variant("(ss)", (POWER_IFACE, name)),
-            Gio.DBusCallFlags.NONE,
-            POWER_GET_TIMEOUT_MS,
-            None,
-        )
-        return result.get_child_value(0).get_variant()
-
-    def set(self, name, value):
-        self.props.call_sync(
-            "Set",
-            GLib.Variant("(ssv)", (POWER_IFACE, name, value)),
-            Gio.DBusCallFlags.NONE,
-            POWER_SET_TIMEOUT_MS,
-            None,
-        )
-
-    def subscribe_changed(self, handler):
-        """Call `handler` on every powerd PropertiesChanged, whichever bus name caused it.
-
-        powerd emits on org.novadeck.Power1 from the single place a setting is applied, so this
-        catches changes made by any other client (the Decky plugin, powerd itself) -- not just
-        the ones we forwarded. Without it our own emits-change properties (GPU level, CPU
-        scheduler) would only ever fire for writes that came through us, and a client caching on
-        them would skip legitimate sets.
-        """
-        return self.props.get_connection().signal_subscribe(
-            POWER_BUS,
-            PROPS,
-            "PropertiesChanged",
-            POWER_PATH,
-            None,
-            Gio.DBusSignalFlags.NONE,
-            handler,
-        )
-
 
 class NovadeckSteamOSManager:
     def __init__(self):
@@ -185,26 +110,11 @@ class NovadeckSteamOSManager:
         self.default_login_mode = self.env.get("NOVADECK_STEAM_DEFAULT_LOGIN_MODE", "game")
         self.default_desktop_session = self.env.get("NOVADECK_STEAM_DESKTOP_SESSION", "")
         self.valid_desktop_sessions = ()
-        self.power = PowerClient()
-        self.cpu_schedulers = self.query_cpu_schedulers()
         self.connection = None
-        self.power_subscription = None
         self.last_emitted = {}
 
-    def query_cpu_schedulers(self):
-        try:
-            return list(self.power.get("AvailableCpuSchedulers").unpack())
-        except Exception as exc:
-            # Older powerd, or powerd down at our start: fall back to "no choice", which drops
-            # the interface. Nothing else in the manager depends on it.
-            print(f"novadeck-steamos-manager: no CPU scheduler support: {exc}", file=sys.stderr)
-            return ["none"]
-
     def node_xml(self):
-        body = INTERFACES_XML
-        if len(self.cpu_schedulers) > 1:
-            body += SCHED_XML
-        return f"<node>{body}</node>"
+        return f"<node>{INTERFACES_XML}</node>"
 
     def managed_objects(self):
         objects = {}
@@ -244,22 +154,6 @@ class NovadeckSteamOSManager:
             GLib.Variant("(sa{sv}as)", (iface, fresh, [])),
         )
 
-    def on_power_changed(self, _conn, _sender, _path, _iface, _signal, params):
-        """Re-announce a powerd-side change under our own interfaces and property names."""
-        if params.n_children() < 2 or params.get_child_value(0).get_string() != POWER_IFACE:
-            return
-        changed = params.get_child_value(1)
-        by_iface = {}
-        for i in range(changed.n_children()):
-            entry = changed.get_child_value(i)
-            target = POWERD_TO_STEAM.get(entry.get_child_value(0).get_string())
-            if target is None:
-                continue  # powerd property with no SteamOSManager equivalent (fan, temp, ...)
-            iface, prop = target
-            by_iface.setdefault(iface, {})[prop] = entry.get_child_value(1).get_variant()
-        for iface, props in by_iface.items():
-            self.emit_properties(iface, props)
-
     def get_property(self, iface, prop):
         if iface == IFACE_MANAGER and prop == "DeviceModel":
             return GLib.Variant("(ss)", (self.device_id, self.device_name))
@@ -268,20 +162,9 @@ class NovadeckSteamOSManager:
                 return GLib.Variant("s", self.default_desktop_session)
             if prop == "DefaultLoginMode":
                 return GLib.Variant("s", self.default_login_mode)
-        if iface == IFACE_SCHED:
-            return self.power.get(SCHED_PROPS[prop])
         return None
 
     def set_property(self, iface, prop, value):
-        if iface == IFACE_SCHED and prop == "CpuScheduler":
-            self.power.set("CpuScheduler", value)
-            try:
-                applied = self.power.get("CpuScheduler")
-            except Exception as exc:
-                print(f"novadeck-steamos-manager: readback CpuScheduler failed: {exc}", file=sys.stderr)
-                return
-            self.emit_properties(iface, {prop: applied})
-            return
         if iface == IFACE_SESSION and prop == "DefaultDesktopSession":
             session = value.get_string()
             if session not in self.valid_desktop_sessions:
@@ -299,11 +182,54 @@ class NovadeckSteamOSManager:
         raise KeyError(prop)
 
     def switch_session(self, target):
-        # TODO: novadeck has no desktop/game session-control helper yet. The
-        # SessionManagement1 interface stays present so SteamUI can probe it, but
-        # switches fail cleanly until a session-control equivalent lands (the
-        # Desktop/Game-mode feature tracked in TODO.md).
-        raise NotImplementedError(f"session switching not implemented ({target})")
+        """Every switch restarts the one session we have. There is no desktop.
+
+        FAILING IS NOT AN OPTION HERE, which is the whole reason this is not a
+        raise. SteamUI's power menu offers "Switch to Desktop" unconditionally —
+        it does not consult ValidDesktopSessions, and it does not care whether
+        this service exists at all — and on the error path it sits on a
+        "Switching to Desktop…" popup forever (HW-observed 2026-08-09, both with
+        the interface raising NotImplementedError and with the whole service
+        masked). A wedged shell is a worse answer than an unexpected one.
+
+        So the honest reply to "switch" on a device with exactly one session is
+        to restart that session: the popup dies with the compositor and the user
+        lands back in game mode a few seconds later. SIGKILL, because gamescope
+        ignores SIGTERM long enough for logind to give up (its slow-shutdown
+        wedge), and sddm's autologin brings the session straight back —
+        both measured on hardware.
+
+        Scheduled off the main loop rather than run inline so the D-Bus reply is
+        actually delivered first; killing the session from inside the call would
+        take the bus connection down with it and the caller would see the error
+        path this exists to avoid.
+        """
+        GLib.timeout_add(500, self._restart_session)
+
+    def _restart_session(self):
+        session = self.graphical_session()
+        if session:
+            subprocess.run(["/usr/bin/loginctl", "kill-session", session, "--signal=SIGKILL"],
+                           check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                           timeout=10)
+        else:
+            print("novadeck-steamos-manager: no graphical session to restart", file=sys.stderr)
+        return False  # one-shot
+
+    @staticmethod
+    def graphical_session():
+        """The seat0 session of the session user — the one the compositor runs in."""
+        try:
+            out = subprocess.check_output(
+                ["/usr/bin/loginctl", "list-sessions", "--no-legend"],
+                text=True, timeout=5)
+        except (OSError, subprocess.SubprocessError):
+            return ""
+        for line in out.splitlines():
+            fields = line.split()
+            if len(fields) >= 4 and fields[3] == "seat0":
+                return fields[0]
+        return ""
 
     def switch_login_mode(self, mode):
         if mode == "desktop":
@@ -322,7 +248,8 @@ class NovadeckSteamOSManager:
 
     def handle_method_call(self, _conn, _sender, _path, iface, method, _params, invocation):
         if iface == IFACE_MANAGER and method == "ReloadConfig":
-            self.power = PowerClient()
+            # Nothing cached to reload since the settings interfaces left; answered rather than
+            # dropped because SteamOS clients call it and an UnknownMethod would look like a fault.
             invocation.return_value(None)
             return
         if iface == IFACE_SESSION:
@@ -405,9 +332,6 @@ class NovadeckSteamOSManager:
                 self.handle_get_property,
                 self.handle_set_property,
             )
-        # bus_acquired can fire again after a reconnect; one powerd subscription is enough
-        if self.power_subscription is None:
-            self.power_subscription = self.power.subscribe_changed(self.on_power_changed)
 
 
 def main():

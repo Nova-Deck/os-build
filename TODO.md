@@ -392,6 +392,24 @@ them. The full rationale otherwise lives in the linked memories and commit histo
   the stage `README.md`s already document per-script inputs/outputs/env). Relates to
   [[folder-refactor-fs-overlay]], [[rootfs-build-approach]].
 
+- [ ] **`novadeck_perf` walks `/proc` TWICE per tick — collapse to one pass** — pure optimization, no
+  behaviour change. `pids_by_comm()` globs every `/proc/<pid>/comm` and is called twice per 3s tick
+  with different comm sets: once for `steam` (inside `scan_games`) and once for `gamescope` (inside
+  `apply_gamescope`). One walk collecting both sets is behaviour-identical and halves the tick's
+  dominant cost. Measured 2026-08-09 on the DEV HOST (675 processes, read-only `/proc` benchmark, not
+  the device): ~6.8 ms per walk, so ~14 ms per tick — ~0.5% of one core, ~0.06% of an 8-core device.
+  Deferred deliberately: the cost is noise, and it was raised while asking whether powerd should be
+  `nice`d. **It should NOT be** — `fan_tick` is the ONLY `sd_notify("WATCHDOG=1")` caller
+  (`novadeck-powerd:1123,1156,1160`; `perf_tick` has none), and the unit pairs `WatchdogSec=15` with
+  `Restart=always` + `ExecStopPost=--fan-safe`. Starving the tick past 15s therefore kills powerd,
+  slams the fan to `FAN_SAFE_PWM=128` and restarts the daemon, precisely under the full load where
+  the curve matters most. It would also be queued behind the very processes we prioritize ourselves
+  (game tree `nice -5`, gamescope `SCHED_RR`), and `nice` does not mean the same thing under
+  `scx_lavd` as under EEVDF. A tempting further win — skip the scan entirely when no tweaks are
+  configured — is NOT free: `apply_gamescope` also restores gamescope's children to all CPUs when a
+  mask is withdrawn, so it would need the touched-state bookkeeping `apply_game_tree` already has.
+  Relates to [[per-game-perf-port]], [[scx-sched-bringup]].
+
 - [ ] **Residual foreign-hardware drivers that the ARCH gates do NOT reach** — the platform-gate trim
   above cannot touch drivers whose Kconfig has no `ARCH_*` dependency, and a measurable block survives:
   **~7.2 MiB across 22 modules** in `net/ethernet` + `net/dsa`, for NICs and switches that cannot exist

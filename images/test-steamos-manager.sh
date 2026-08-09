@@ -6,15 +6,22 @@
 # WHY THIS FILE EXISTS. The shim's properties are declared without an EmitsChangedSignal
 # annotation, so D-Bus's default applies and every client is entitled to CACHE them and to trust
 # PropertiesChanged to keep that cache honest. The Steam client does exactly that: it does NOT
-# re-read the performance profile when the QAM opens, and when its cache is stale it SKIPS writes
-# it believes are redundant. So a missed signal does not degrade to "the UI lags" — it degrades to
-# "the profile control silently stops working", with nothing in any log.
+# re-read these properties when the QAM opens, and when its cache is stale it SKIPS writes it
+# believes are redundant. So a missed signal does not degrade to "the UI lags" — it degrades to
+# "the control silently stops working", with nothing in any log.
 #
 # That failure is invisible on hardware without a second machine on the bus, and it is exactly
 # what shipped: the shim emitted only from its own set_property handlers, so a change arriving by
-# any other route (PPD's ActiveProfile, powerd itself) left the client believing the old value.
+# any other route (the Decky plugin, powerd itself) left the client believing the old value.
 # The re-emit path that fixes it is pinned here rather than left to a device test, because the
 # device test cannot tell "no signal" apart from "signal the client ignored".
+#
+# The performance PROFILE and the GPU LEVEL are deliberately no longer part of any of this
+# (2026-08-08): their UI surface is the novadeck-control Decky plugin, and the shim exports
+# neither PerformanceProfile1 nor GpuPerformanceLevel1 — absence is how SteamUI is told the
+# capability does not exist. Both removals are pinned below, because re-adding an interface
+# would quietly resurrect the two-surface fight this file's history is about. The re-emit
+# machinery they validated now serves the one exported settings interface left, CpuScheduler1.
 #
 # Everything runs on the host: the shim is imported by path and driven with real GLib.Variants
 # against a recording connection, so no bus, no powerd and no root are involved.
@@ -111,15 +118,45 @@ def feed(m, props, iface=None):
     m.on_power_changed(None, None, None, None, None, powerd_signal(props, iface))
 
 
+# --- PerformanceProfile1 stays GONE -------------------------------------------------------------
+#
+# The profile's UI surface is the Decky plugin; the shim must not advertise a second one. Absence
+# is the capability signal, so the checks are absences: no constant, no interface in the exported
+# XML, and no profile property in the re-announce map (a mapping there would emit
+# PropertiesChanged for an interface no longer registered — noise at best, a client resurrecting
+# a cached control at worst).
+for gone, fight in [
+    (("IFACE_PROFILE", "PROFILE_PROPS"), "PerformanceProfile1"),
+    (("IFACE_GPU", "GPU_PROPS"), "GpuPerformanceLevel1"),
+]:
+    if all(getattr(sm, name, None) is None for name in gone):
+        ok(f"no {fight} constants — the interface cannot come back by accident")
+    else:
+        bad(f"{fight} constants exist again — its surface moved to the Decky plugin")
+m = manager()
+m.cpu_schedulers = ["none", "lavd"]
+xml = m.node_xml()
+for fight in ("PerformanceProfile1", "GpuPerformanceLevel1"):
+    if fight not in xml:
+        ok(f"exported XML carries no {fight} — SteamUI shows no native control for it")
+    else:
+        bad(f"{fight} is in the exported XML — SteamUI is offered a surface the plugin owns")
+leaked = [p for p in ("Profile", "AvailableProfiles", "SuggestedDefaultProfile",
+                      "GpuPerformanceLevel", "AvailableGpuPerformanceLevels",
+                      "ManualGpuClock", "ManualGpuClockMin", "ManualGpuClockMax")
+          if p in sm.POWERD_TO_STEAM]
+if not leaked:
+    ok("powerd's profile + GPU properties are not re-announced under any SteamOSManager1 name")
+else:
+    bad(f"removed-surface properties still in POWERD_TO_STEAM: {leaked}")
+
 # --- the inversion is COMPLETE ------------------------------------------------------------------
 #
-# POWERD_TO_STEAM is built by inverting the three property maps. If a property is added to one of
+# POWERD_TO_STEAM is built by inverting the property maps. If a property is added to one of
 # them and the inversion misses it, get_property() still works and only the re-announce goes
 # quiet -- i.e. the exact silent-stale-cache failure this file exists for, reintroduced for one
 # property. Checked structurally so a new property cannot land uncovered.
 for iface, table, label in [
-    (sm.IFACE_PROFILE, sm.PROFILE_PROPS, "PerformanceProfile1"),
-    (sm.IFACE_GPU,     sm.GPU_PROPS,     "GpuPerformanceLevel1"),
     (sm.IFACE_SCHED,   sm.SCHED_PROPS,   "CpuScheduler1"),
 ]:
     missing = [p for p in table.values() if p not in sm.POWERD_TO_STEAM]
@@ -133,40 +170,35 @@ for iface, table, label in [
     else:
         ok(f"{label}: every powerd property inverts back to its own interface and name")
 
-# --- a powerd-side change is re-announced under OUR names ----------------------------------------
+# --- a powerd-side change is re-announced under OUR interfaces -----------------------------------
 #
 # THE ONE THAT MATTERS. This is the whole fix: a change that never went through set_property still
-# reaches the client, translated out of powerd's vocabulary into SteamOSManager1's.
+# reaches the client under the SteamOSManager1 interface it is watching. (Since the profile's
+# removal every surviving property NAME is identical on both sides, so the translation being
+# exercised is the interface, not the name.)
 m = manager()
-feed(m, {"Profile": GLib.Variant("s", "performance")})
+feed(m, {"CpuScheduler": GLib.Variant("s", "lavd")})
 changes = m.connection.changes()
-if changes == [(sm.IFACE_PROFILE, {"PerformanceProfile": "'performance'"})]:
-    ok("a powerd-side Profile change is re-announced as PerformanceProfile1.PerformanceProfile")
+if changes == [(sm.IFACE_SCHED, {"CpuScheduler": "'lavd'"})]:
+    ok("a powerd-side CpuScheduler change is re-announced on CpuScheduler1")
 else:
-    bad(f"powerd-side Profile change did not re-announce correctly: {changes}")
-
-# powerd's name must NOT leak: a client watching for SteamOSManager1 names would never see it.
-if not changes:
-    bad("nothing was emitted — cannot judge whether powerd's raw name leaks")
-elif "Profile" not in changes[0][1]:
-    ok("powerd's own property name does not leak into the emitted signal")
-else:
-    bad("emitted powerd's raw property name — no SteamOSManager1 client is watching for it")
+    bad(f"powerd-side CpuScheduler change did not re-announce correctly: {changes}")
 
 # --- properties split across their real interfaces -----------------------------------------------
 #
-# One powerd signal can carry properties belonging to different SteamOSManager1 interfaces. They
-# must go out as separate PropertiesChanged, because the interface name is part of the signal body
-# and a client caches per interface.
+# With only one mapped interface left (SCHED), the historical per-interface SPLIT cannot be
+# exercised against real maps any more; what remains testable is the batching half of the same
+# grouping code: two properties of one interface arriving in one powerd signal must go out as
+# ONE PropertiesChanged, not two.
 m = manager()
-feed(m, {"Profile": GLib.Variant("s", "balanced"),
-         "GpuPerformanceLevel": GLib.Variant("s", "auto")})
-by_iface = dict(m.connection.changes())
-if (by_iface.get(sm.IFACE_PROFILE, {}).get("PerformanceProfile") == "'balanced'"
-        and by_iface.get(sm.IFACE_GPU, {}).get("GpuPerformanceLevel") == "'auto'"):
-    ok("properties from one powerd signal are split onto their own interfaces")
+feed(m, {"CpuScheduler": GLib.Variant("s", "lavd"),
+         "AvailableCpuSchedulers": GLib.Variant("as", ["none", "lavd"])})
+changes = m.connection.changes()
+if (len(changes) == 1 and changes[0][0] == sm.IFACE_SCHED
+        and set(changes[0][1]) == {"CpuScheduler", "AvailableCpuSchedulers"}):
+    ok("two properties of one interface in one powerd signal batch into one PropertiesChanged")
 else:
-    bad(f"properties were not split per interface: {m.connection.changes()}")
+    bad(f"same-interface properties were not batched: {changes}")
 
 # --- powerd properties with no SteamOSManager1 equivalent ----------------------------------------
 #
@@ -180,15 +212,24 @@ else:
     bad(f"emitted a signal for properties the shim does not expose: {m.connection.changes()}")
 
 m = manager()
-feed(m, {"FanSpeed": GLib.Variant("u", 2200), "Profile": GLib.Variant("s", "performance")})
-if dict(m.connection.changes()).get(sm.IFACE_PROFILE, {}).get("PerformanceProfile") == "'performance'":
+feed(m, {"FanSpeed": GLib.Variant("u", 2200), "CpuScheduler": GLib.Variant("s", "lavd")})
+if dict(m.connection.changes()).get(sm.IFACE_SCHED, {}).get("CpuScheduler") == "'lavd'":
     ok("an unmapped property alongside a mapped one does not suppress the mapped one")
 else:
     bad("an unmapped property suppressed the mapped property in the same signal")
 
+# The profile is now an unmapped property BY DESIGN: powerd still emits it (the Decky plugin
+# sets it), and the shim must drop it silently like fan/temperature — not crash, not re-announce.
+m = manager()
+feed(m, {"Profile": GLib.Variant("s", "performance")})
+if m.connection.emitted == []:
+    ok("a powerd-side Profile change is dropped — no interface exists to announce it on")
+else:
+    bad(f"re-announced the removed profile property: {m.connection.changes()}")
+
 # --- signals from something other than powerd's interface ----------------------------------------
 m = manager()
-feed(m, {"Profile": GLib.Variant("s", "performance")}, iface="org.example.Other")
+feed(m, {"CpuScheduler": GLib.Variant("s", "lavd")}, iface="org.example.Other")
 if m.connection.emitted == []:
     ok("a PropertiesChanged for a different interface is ignored")
 else:
@@ -199,8 +240,8 @@ else:
 # set_property emits directly AND the write comes back through the powerd subscription. Without
 # dedupe the client sees the same change twice.
 m = manager()
-m.emit_properties(sm.IFACE_PROFILE, {"PerformanceProfile": GLib.Variant("s", "performance")})
-feed(m, {"Profile": GLib.Variant("s", "performance")})
+m.emit_properties(sm.IFACE_SCHED, {"CpuScheduler": GLib.Variant("s", "lavd")})
+feed(m, {"CpuScheduler": GLib.Variant("s", "lavd")})
 if len(m.connection.emitted) == 1:
     ok("a value already announced is not announced again by the powerd echo")
 else:
@@ -210,10 +251,10 @@ else:
 # change if it is written carelessly -- and the symptom is identical to the bug this whole file
 # exists for, so it would not be caught by the cases above. A->B->A must produce three signals.
 m = manager()
-for value in ("performance", "balanced", "performance"):
-    feed(m, {"Profile": GLib.Variant("s", value)})
-seen = [props["PerformanceProfile"] for _iface, props in m.connection.changes()]
-if seen == ["'performance'", "'balanced'", "'performance'"]:
+for value in ("lavd", "none", "lavd"):
+    feed(m, {"CpuScheduler": GLib.Variant("s", value)})
+seen = [props["CpuScheduler"] for _iface, props in m.connection.changes()]
+if seen == ["'lavd'", "'none'", "'lavd'"]:
     ok("a value returning to a previously-seen one is still announced (A->B->A emits 3)")
 else:
     bad(f"dedupe swallowed a genuine change: expected 3 alternating signals, got {seen}")
@@ -221,7 +262,7 @@ else:
 # A repeat of the CURRENT value is the one thing that must stay quiet.
 m = manager()
 for _ in range(3):
-    feed(m, {"Profile": GLib.Variant("s", "balanced")})
+    feed(m, {"CpuScheduler": GLib.Variant("s", "none")})
 if len(m.connection.emitted) == 1:
     ok("an unchanged value repeated by powerd is announced once, not once per signal")
 else:
@@ -230,8 +271,8 @@ else:
 # Dedupe must be keyed per (interface, property): two interfaces can carry the same property name
 # and the same value without masking each other.
 m = manager()
-m.emit_properties(sm.IFACE_PROFILE, {"Shared": GLib.Variant("s", "x")})
-m.emit_properties(sm.IFACE_GPU, {"Shared": GLib.Variant("s", "x")})
+m.emit_properties(sm.IFACE_SCHED, {"Shared": GLib.Variant("s", "x")})
+m.emit_properties(sm.IFACE_SESSION, {"Shared": GLib.Variant("s", "x")})
 if len(m.connection.emitted) == 2:
     ok("dedupe is keyed per interface — the same name and value on two interfaces both emit")
 else:
@@ -242,9 +283,9 @@ else:
 # If every property in a batch deduped away, the batch must vanish with them. An empty
 # PropertiesChanged is a wakeup for every subscribed client that says nothing.
 m = manager()
-m.emit_properties(sm.IFACE_PROFILE, {"PerformanceProfile": GLib.Variant("s", "performance")})
+m.emit_properties(sm.IFACE_SCHED, {"CpuScheduler": GLib.Variant("s", "lavd")})
 before = len(m.connection.emitted)
-m.emit_properties(sm.IFACE_PROFILE, {"PerformanceProfile": GLib.Variant("s", "performance")})
+m.emit_properties(sm.IFACE_SCHED, {"CpuScheduler": GLib.Variant("s", "lavd")})
 if len(m.connection.emitted) == before:
     ok("a fully-deduped batch emits no empty PropertiesChanged")
 else:
@@ -252,12 +293,12 @@ else:
 
 # --- a mixed batch keeps only what actually changed ----------------------------------------------
 m = manager()
-m.emit_properties(sm.IFACE_GPU, {"GpuPerformanceLevel": GLib.Variant("s", "auto"),
-                                 "ManualGpuClock": GLib.Variant("u", 500)})
-m.emit_properties(sm.IFACE_GPU, {"GpuPerformanceLevel": GLib.Variant("s", "auto"),
-                                 "ManualGpuClock": GLib.Variant("u", 800)})
+m.emit_properties(sm.IFACE_SCHED, {"CpuScheduler": GLib.Variant("s", "lavd"),
+                                   "AvailableCpuSchedulers": GLib.Variant("as", ["none"])})
+m.emit_properties(sm.IFACE_SCHED, {"CpuScheduler": GLib.Variant("s", "lavd"),
+                                   "AvailableCpuSchedulers": GLib.Variant("as", ["none", "lavd"])})
 last = m.connection.changes()[-1][1]
-if last == {"ManualGpuClock": "uint32 800"}:
+if last == {"AvailableCpuSchedulers": "['none', 'lavd']"}:
     ok("a partly-changed batch announces only the property that moved")
 else:
     bad(f"announced unchanged properties alongside the changed one: {last}")
@@ -267,7 +308,7 @@ else:
 # Emitted by hand rather than by GDBus, so the signature and destination are ours to get wrong. A
 # malformed body is dropped by the client with no error anywhere on our side.
 m = manager()
-feed(m, {"Profile": GLib.Variant("s", "performance")})
+feed(m, {"CpuScheduler": GLib.Variant("s", "lavd")})
 if not m.connection.emitted:
     # Guarded rather than indexed blind: an empty list here is a real regression elsewhere, and
     # letting it raise would kill the harness before it printed its tally.

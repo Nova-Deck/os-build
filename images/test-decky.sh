@@ -29,6 +29,17 @@ bad() { FAIL=$((FAIL+1)); printf '  FAIL %s\n' "$1"; }
 
 pin_field() { sed -n "s/^$2:[[:space:]]*//p" "$1" | head -1; }
 
+# Two checks below make CPython write a __pycache__ NEXT TO THE SOURCE, inside decky/, which the
+# build stages into the image: the py_compile of the plugin backend, and the block that imports
+# novadeck_control to exercise sanitize_tweaks. Redirect all bytecode out of the tree.
+#
+# This replaces a post-hoc `find $PLUGIN -name __pycache__ -delete`, which was placed BETWEEN the
+# two — so it swept the compile and never the import, and the tree kept a __pycache__ that dev
+# cards then shipped (host CPython 3.14 into a 3.13 image; found on hardware 2026-08-10). A sweep
+# has to be correct about ordering forever; a prefix does not. See test-perf.sh.
+PYCACHE_TMP="$(mktemp -d)"
+export PYTHONPYCACHEPREFIX="$PYCACHE_TMP"
+
 # --- the pin -------------------------------------------------------------------------------
 if [ -f "$PIN" ]; then
   ok "pin exists — the loader is a declared, sha256-pinned input"
@@ -214,7 +225,6 @@ if python3 -m py_compile "$PLUGIN/main.py" "$PLUGIN"/py_modules/novadeck_control
 else
   bad "plugin backend does not compile"
 fi
-find "$PLUGIN" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null
 
 # The python block prints the same `  ok  `/`  FAIL` lines; fold them into THIS script's
 # counters so the summary line counts every check that was actually shown.
@@ -340,6 +350,10 @@ grep -q 'decky-loader/PluginLoader' "$ROOT/images/guard-rootfs.sh" \
 grep -q 'test-decky.sh' "$ROOT/Makefile" \
   && ok "this suite is wired into make test (a suite nothing runs is documentation)" \
   || bad "images/test-decky.sh is not in the Makefile test target"
+
+rm -rf "$PYCACHE_TMP"   # no trap: one is already claimed for EXIT below, and a strand in /tmp is
+                        # harmless — the thing that must never be dirtied is the tree, and the
+                        # prefix has already guaranteed that whether or not this line runs.
 
 printf '\n%s: %d passed, %d failed, %d skipped\n' "$(basename "$0")" "$PASS" "$FAIL" "$SKIP"
 [ "$FAIL" -eq 0 ]

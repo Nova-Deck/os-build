@@ -80,7 +80,14 @@ cosign.key
 .DS_Store
 
 # Python bytecode. Nothing in fs-overlay/ is imported as a module at runtime — the clients are
-# executed — so a __pycache__ there only ever comes from a host-side test importing one of them,
-# and fs-overlay/ is copied verbatim into the rootfs. Ignored so it cannot ride along into an image.
+# executed — so a __pycache__ there only ever comes from a host-side test importing one of them.
+#
+# THIS RULE DOES NOT KEEP IT OUT OF AN IMAGE, which is what the comment here used to claim.
+# fs-overlay/ is injected with `cp -a` of the WORKING TREE (images/assemble-rootfs.sh), and a copy
+# does not consult .gitignore — so v0.2.x dev cards shipped host-CPython 3.14 .pyc into an image
+# running 3.13, dead bytes the device can never load. Found on hardware 2026-08-10. The image is
+# kept clean by three other things: the suites redirect bytecode via PYTHONPYCACHEPREFIX, the
+# assembler prunes __pycache__ after the copy, and guard-rootfs.sh asserts none survived. This
+# rule only keeps the repo clean.
 __pycache__/
 *.pyc

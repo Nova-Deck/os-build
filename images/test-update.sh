@@ -38,6 +38,10 @@ bad() { FAIL=$((FAIL+1)); printf '  FAIL %s -- %s\n' "$CASE" "$1"; }
 W="$(mktemp -d)"
 trap 'rm -rf "$W"' EXIT
 
+# Loading novadeck-update as a module writes a __pycache__ into fs-overlay/usr/bin, which the
+# assembler copies into the rootfs verbatim. Keep the bytecode in the sandbox. See test-perf.sh.
+export PYTHONPYCACHEPREFIX="$W/pycache"
+
 # --- the sandbox ---------------------------------------------------------------------------------
 #
 # A curl stub rather than a real server: it answers from files under $W/www, keyed by the URL path,

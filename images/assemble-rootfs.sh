@@ -207,6 +207,14 @@ if [ -d "$OVERLAY" ]; then
   echo "  injecting fs-overlay payload -> session + HW-support + InputPlumber + audio + FEX + Steam shell (ARMED: boots to Deck shell)"
   cp -a "$OVERLAY"/. "$stage/"
   rm -f "$stage/README.md"   # fs-overlay/README.md documents the tree; it is NOT rootfs content
+  # Host-side Python bytecode, same class of thing as the README: build-tree litter, not rootfs
+  # content. The offline suites import fs-overlay's clients as modules (test-perf.sh, -fan-curve,
+  # -update), and CPython writes a __pycache__ NEXT TO THE SOURCE — inside fs-overlay/, which this
+  # cp copies verbatim. .gitignore covers the repo but NOT this copy, and the difference is not
+  # theoretical: v0.2.x dev cards shipped .pyc files that the device can never load, because they
+  # are the HOST's CPython ABI (3.14) and the image runs 3.13. Pruned here rather than left to the
+  # release-only guard, since a dev card is exactly where it happened.
+  find "$stage" -name __pycache__ -type d -prune -exec rm -rf {} +
 else
   echo "  (no fs-overlay/ tree — skipping overlay injection)" >&2
 fi

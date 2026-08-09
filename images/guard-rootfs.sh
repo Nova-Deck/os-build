@@ -42,7 +42,9 @@
 #      group are the ones fs-overlay's sysusers.d pin names, not whatever sysusers counted down to
 #   9. the Decky stack is complete — the loader is executable and the baked plugin's dist staged;
 #      nothing at runtime guards this (decky-sync assumes a complete image, by design)
-#  10. a size delta against the previous build (report only — never fails a build)
+#  10. no __pycache__ — host-CPython bytecode the device cannot load, which fs-overlay's verbatim
+#      copy will carry in whenever an offline suite has imported one of its Python clients
+#  11. a size delta against the previous build (report only — never fails a build)
 set -euo pipefail
 shopt -s nullglob
 
@@ -666,7 +668,28 @@ else
 fi
 
 # ------------------------------------------------------------------------------------------
-# 10. Size delta (report only).
+# 10. No host Python bytecode rode in.
+#
+# fs-overlay/ is injected with `cp -a` of the WORKING TREE, and the offline suites import its
+# Python clients as modules — CPython then writes a __pycache__ next to the source, inside the
+# very tree that gets copied. .gitignore covers the repo and does nothing for that copy; the
+# assembler prunes it, and this is the check that the prune actually ran.
+#
+# Not cosmetic, and not hypothetical: v0.2.x dev cards shipped .pyc compiled by the BUILD HOST's
+# CPython (3.14) into an image whose interpreter is 3.13, so the device could never load a byte
+# of it — dead weight that also silently defeats the startup caching it looks like it provides.
+# Found on hardware 2026-08-10, not by any check.
+# ------------------------------------------------------------------------------------------
+pycache="$(find "$STAGE" -name __pycache__ -type d -printf '%P\n' | LC_ALL=C sort)"
+if [ -n "$pycache" ]; then
+  bad "host Python bytecode in the tree — the assembler's __pycache__ prune did not run:"
+  printf '      %s\n' $pycache >&2
+else
+  echo "    ok  no __pycache__ staged"
+fi
+
+# ------------------------------------------------------------------------------------------
+# 11. Size delta (report only).
 #
 # Never fails a build — there is no defensible threshold, and a guard that blocks on growth would
 # be disabled the first time a legitimate package got bigger. Its job is to put the number in

@@ -27,6 +27,10 @@ FACTORY="$ROOT/fs-overlay/usr/share/novadeck/power-profiles.conf"
 
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 
+# Loading novadeck-powerd as a module writes a __pycache__ into fs-overlay/usr/bin, which the
+# assembler copies into the rootfs verbatim. Keep the bytecode in the sandbox. See test-perf.sh.
+export PYTHONPYCACHEPREFIX="$TMP/pycache"
+
 NOVADECK_POWERD_FACTORY="$FACTORY" NOVADECK_POWERD_ETC="$TMP/etc" \
 python3 - "$POWERD" "$ROOT" "$TMP" <<'PYEOF'
 import configparser

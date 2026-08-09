@@ -90,6 +90,21 @@ else
   bad "AppConfig/PluginLoader.json missing or invalid JSON"
 fi
 
+# --- the stylesheet is one template literal --------------------------------------------------
+# A backtick anywhere inside src/styles.ts ENDS the string early, so every rule after it is
+# dropped and the QAM tabs render unstyled. Nothing catches it: what follows the truncation
+# parses as a valid expression, so tsc and rollup both stay green and the damage only appears
+# on device. Two backticks exactly -- the ones opening and closing the literal.
+styles_ts="$PLUGIN/src/styles.ts"
+if [ -f "$styles_ts" ]; then
+  ticks=$(tr -cd '`' <"$styles_ts" | wc -c)
+  [ "$ticks" -eq 2 ] \
+    && ok "styles.ts holds exactly 2 backticks — the CSS template literal is not truncated" \
+    || bad "styles.ts has $ticks backticks (want 2): a stray one silently drops every CSS rule below it"
+else
+  bad "no styles.ts at ${styles_ts#"$ROOT"/}"
+fi
+
 # --- the CEF sentinel ----------------------------------------------------------------------
 # Unconditional by decision (2026-08-08): it is Decky's only injection path. The regression this
 # catches is someone "cleaning up" the always-on touch back behind a debug gate.
@@ -251,6 +266,57 @@ os.environ["LD_LIBRARY_PATH_ORIG"] = "/real/path"
 if power._clean_env().get("LD_LIBRARY_PATH") != "/real/path":
     bad("subprocess env does not restore LD_LIBRARY_PATH_ORIG when PyInstaller saved one")
 ok("subprocess env restores PyInstaller's saved LD_LIBRARY_PATH_ORIG")
+
+# The Monitor's CPU/GPU rows classify thermal zones by their `type` prefix. Getting that
+# wrong shows a dash forever rather than an error, so drive it with the REAL zone names from
+# both SoCs we ship. These are the sysfs `type` strings VERBATIM, captured off an SM8650
+# device 2026-08-09 -- note they KEEP the "-thermal" suffix of the DT node name, which is why
+# the classifier matches on a prefix and not on an exact name. SM8650 spells the GPU zones
+# `gpuss0-thermal`, SM8550 spells them `gpuss-0-thermal`, and the CPU zones are a mix of
+# `cpussN-thermal` and `cpuN-middle-thermal`. Zones we must NOT count as either are in there
+# too -- a hot modem or DSP is not a hot CPU.
+import pathlib, tempfile
+from novadeck_control import telemetry
+
+def fake_zones(zones):
+    root = pathlib.Path(tempfile.mkdtemp())
+    for index, (kind, millicelsius) in enumerate(zones):
+        zone = root / f"thermal_zone{index}"
+        zone.mkdir()
+        (zone / "type").write_text(kind + "\n")
+        (zone / "temp").write_text(f"{millicelsius}\n")
+    telemetry.THERMAL_ROOT = root
+    return telemetry._temperatures()
+
+got = fake_zones([
+    ("cpuss0-thermal", 61000), ("cpu7-middle-thermal", 67500),
+    ("gpuss0-thermal", 58000), ("gpuss3-thermal", 59500),
+    ("video-thermal", 90000), ("modem0-thermal", 95000),
+    ("nsphvx0-thermal", 99000), ("ddr-thermal", 91000),
+])
+if got != {"cpuC": 67.5, "gpuC": 59.5}:
+    bad(f"SM8650 zone names misclassified: {got}")
+ok("thermal zones: real SM8650 `type` strings (-thermal suffix kept) classify correctly")
+
+got = fake_zones([
+    ("cpuss3-thermal", 55000), ("cpu5-top-thermal", 62100),
+    ("gpuss-0-thermal", 71200), ("gpuss-7-thermal", 70000),
+    ("mem-thermal", 88000), ("modem1-thermal", 97000),
+])
+if got != {"cpuC": 62.1, "gpuC": 71.2}:
+    bad(f"SM8550 zone names misclassified: {got}")
+ok("thermal zones: SM8550 names (hyphenated gpuss-N) classify the same way")
+
+# A disabled sensor reads exactly 0; counting it as "0 °C" would be a lie, and taking a max
+# over it is harmless only because every real zone is warmer.
+got = fake_zones([("cpuss0-thermal", 0), ("cpu0-thermal", 48000), ("gpuss0-thermal", 0)])
+if got != {"cpuC": 48.0, "gpuC": 0.0}:
+    bad(f"a zone reading 0 was treated as a real measurement: {got}")
+ok("thermal zones: a sensor reading 0 does not mask a live one, and absent stays 0")
+
+if fake_zones([]) != {"cpuC": 0.0, "gpuC": 0.0}:
+    bad("no thermal zones at all should report zeros, not raise")
+ok("thermal zones: a device with no zones degrades to zeros")
 PY
 )"
 printf '%s\n' "$pyout"

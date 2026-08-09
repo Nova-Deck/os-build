@@ -49,7 +49,7 @@ user's branch choice sticks.
 
 ## novadeck-control
 
-Two tabs; the backend runs as root inside the loader (`"flags": ["root"]`).
+Three tabs; the backend runs as root inside the loader (`"flags": ["root"]`).
 
 - **Games** — edits `/etc/novadeck/game-tweaks.json` (atomic writes, same file + `enabled:true`
   contract as [per-game-perf.md](per-game-perf.md)). Scheduling keys apply within one powerd
@@ -59,7 +59,16 @@ Two tabs; the backend runs as root inside the loader (`"flags": ["root"]`).
   by powerd's reported min/max), straight to powerd's `org.novadeck.Power1` on the system bus
   (via `busctl`; the loader's bundled Python has no dbus module). The plugin is the ONLY UI
   surface for these: the steamos-manager shim no longer exports `PerformanceProfile1` or
-  `GpuPerformanceLevel1` to SteamUI.
+  `GpuPerformanceLevel1` to SteamUI. Also carries the editable fan curve for the active
+  profile — one slider per fixed temperature stop, see [fan-curve.md](fan-curve.md).
+- **Monitor** — live load, clocks, governors, per-zone CPU/GPU temperatures, memory and load
+  average from `/proc` and `/sys`, plus fan speed from powerd. It also shows powerd's own
+  blended, smoothed *curve input* as a separate figure, labelled as such: that number — not
+  either per-zone reading — is what the fan curve is evaluated against, so the two are
+  deliberately different and the tab says so. Zone classification is by `type` prefix
+  (`cpu*`, `gpu*`), covering both SoCs' naming (`gpuss0` on SM8650, `gpuss-0` on SM8550);
+  `images/test-decky.sh` asserts it against the real names from each dtsi. Polls at 1 Hz, and
+  only while it is the tab on screen.
 
 Frontend: TypeScript + `@decky/ui`, built by `make decky-plugin` (npm ci in a digest-pinned
 node container; lockfile committed; `dist/` gitignored). The dist is a `$(ROOTFS)`

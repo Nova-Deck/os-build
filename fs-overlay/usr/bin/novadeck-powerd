@@ -21,9 +21,28 @@ OBJECT_PATH = "/org/novadeck/Power"
 IFACE = "org.novadeck.Power1"
 PROFILES = ["eco", "balanced", "performance"]
 STATE_FILE = Path("/var/lib/novadeck/powerd.state")
-FACTORY_CONFIG_FILE = Path("/usr/share/novadeck/power-profiles.conf")
-CONFIG_FILE = Path("/etc/novadeck/power-profiles.conf")
+# Overridable so images/test-fan-curve.sh can drive the real parse/write paths against a
+# fabricated tree, the same trick novadeck_perf uses for /proc and /sys.
+FACTORY_CONFIG_FILE = Path(os.environ.get(
+    "NOVADECK_POWERD_FACTORY", "/usr/share/novadeck/power-profiles.conf"))
+CONFIG_DIR = Path(os.environ.get("NOVADECK_POWERD_ETC", "/etc/novadeck"))
+CONFIG_FILE = CONFIG_DIR / "power-profiles.conf"
+# Three layers, lowest first: /usr factory -> the operator's own /etc file -> drop-ins. The
+# split exists because the /etc file is OPERATOR territory (hand-written, commented, and it
+# may override underclock tables or the whole [fan] block), while FAN_CURVE_DROPIN is ours to
+# rewrite from scratch on every FanCurve set. configparser cannot round-trip comments, so
+# writing the user's curve into the /etc file would silently eat an operator's notes on every
+# slider drag. An operator who wants the last word still has it: drop-ins are read in sorted
+# order, so a 90-*.conf of their own outranks ours.
+CONFIG_DROPIN_DIR = Path(f"{CONFIG_FILE}.d")
+FAN_CURVE_DROPIN = CONFIG_DROPIN_DIR / "50-fan-curves.conf"
+# A curve powerd itself wrote, as opposed to a factory one. The name is what makes
+# FanCurveIsCustom answerable, and what ResetFanCurve deletes.
+CUSTOM_CURVE_PREFIX = "custom-"
 FAN_SAFE_PWM = 128
+# Fallback only: the factory config carries curve_stops. It matters when an /etc file from an
+# older image is layered over a newer /usr, which is exactly the case an OTA produces.
+DEFAULT_CURVE_STOPS = (60, 70, 80, 90, 100)
 
 # sched_ext. "none" is the in-kernel scheduler (EEVDF; one implementation, not
 # runtime-selectable, so it is the whole non-scx half of this vocabulary) with scx.service
@@ -146,6 +165,28 @@ XML = f"""
     <property name="FanPwm" type="u" access="read"/>
     <property name="FanRpm" type="u" access="read"/>
     <property name="Temperature" type="u" access="read"/>
+    <!-- The editable fan curve, as PWM values sampled at FIXED temperature stops.
+         Editing only the PWMs is what makes an invalid curve unreachable rather than
+         rejected: the stops are already sorted, so "temperatures must rise" cannot be
+         violated and there is no ordering to validate. FanCurve is scoped to the ACTIVE
+         profile and is re-emitted when the profile changes, because a fan curve is a
+         property of a thermal policy, not of a title.
+
+         The STORAGE grammar is unchanged (`temp:pwm,...`, arbitrary point count), so an
+         operator can still hand-author a curve of any shape over SSH and powerd will
+         apply it verbatim. FanCurve then reports that curve RESAMPLED onto the stops --
+         which is what the fan is actually doing at those temperatures, not an
+         approximation of it. Writing the property does flatten such a curve to the stops. -->
+    <property name="FanCurveStops" type="au" access="read"/>
+    <property name="FanCurve" type="au" access="readwrite"/>
+    <property name="FanCurveMinPwm" type="u" access="read"/>
+    <property name="FanCurveMaxPwm" type="u" access="read"/>
+    <property name="FanCurveIsCustom" type="b" access="read"/>
+    <!-- Deletes what powerd wrote and returns to the factory curve. Neither touches an
+         operator's own override in the /etc file. No argument on either, so that reset
+         addresses exactly what FanCurve addresses: the active profile, or everything. -->
+    <method name="ResetFanCurve"/>
+    <method name="ResetAllFanCurves"/>
   </interface>
 </node>
 """
@@ -188,17 +229,34 @@ def write_text(path, value):
 
 
 def restore_factory_config(reason):
-    # Remove invalid /etc overrides so factory-only sections keep tracking /usr.
-    if not CONFIG_FILE.exists():
-        raise reason
+    """Quarantine EVERY user layer so factory-only sections keep tracking /usr.
+
+    All of them, not just the /etc file: the config is three layers now, and dropping only
+    one of them leaves whichever other layer was the actual culprit still in place. The
+    caller re-parses factory-only immediately afterwards, so the next boot would hit the
+    same bad file and quarantine nothing -- a loop that presents as "my curve reverts every
+    reboot" with no error anyone can see.
+    """
     timestamp = time.strftime("%Y%m%d-%H%M%S")
-    backup = CONFIG_FILE.with_name(f"{CONFIG_FILE.name}.invalid-{timestamp}")
-    try:
-        shutil.copy2(CONFIG_FILE, backup)
-        CONFIG_FILE.unlink()
-    except OSError:
+    # The suffix goes AFTER .conf on purpose: `50-fan-curves.conf.invalid-<ts>` no longer
+    # matches the *.conf glob, so a quarantined drop-in stays quarantined.
+    victims = [path for path in [CONFIG_FILE, *sorted(CONFIG_DROPIN_DIR.glob("*.conf"))]
+               if path.exists()]
+    if not victims:
         raise reason
-    print(f"novadeck-powerd: dropped invalid {CONFIG_FILE} (backup at {backup}); using factory defaults: {reason}", file=sys.stderr)
+    dropped = []
+    for path in victims:
+        backup = path.with_name(f"{path.name}.invalid-{timestamp}")
+        try:
+            shutil.copy2(path, backup)
+            path.unlink()
+        except OSError:
+            continue
+        dropped.append(f"{path} (backup at {backup})")
+    if not dropped:
+        raise reason
+    print(f"novadeck-powerd: dropped invalid config {', '.join(dropped)}; "
+          f"using factory defaults: {reason}", file=sys.stderr)
 
 
 def sd_notify(message):
@@ -255,6 +313,119 @@ def parse_fan_curve(value):
         except ValueError:
             continue
     return sorted(curve, reverse=True)
+
+
+def format_fan_curve(curve):
+    """Inverse of parse_fan_curve, in the descending order the factory config is written in."""
+    return ",".join(f"{temp}:{pwm}" for temp, pwm in sorted(curve, reverse=True))
+
+
+def curve_pwm(curve, temp):
+    """The curve's PWM at a temperature: linear between points, flat outside the ends.
+
+    Pulled out of target_pwm so the UI can ask the same question the fan tick asks. It is
+    deliberately NOT quantized -- quantization is an artifact of what the hardware accepts,
+    and rounding it into a slider's value would make the slider jump under the user's thumb
+    and then disagree with what they set.
+    """
+    curve = sorted(curve)
+    if not curve:
+        return 0
+    if temp <= curve[0][0]:
+        return curve[0][1]
+    if temp >= curve[-1][0]:
+        return curve[-1][1]
+    for (low_temp, low_pwm), (high_temp, high_pwm) in zip(curve, curve[1:]):
+        if low_temp <= temp <= high_temp:
+            span = high_temp - low_temp
+            if not span:
+                return high_pwm
+            return int(round(low_pwm + (high_pwm - low_pwm) * (temp - low_temp) / span))
+    return curve[0][1]
+
+
+def resample_curve(curve, stops):
+    return [curve_pwm(curve, stop) for stop in stops]
+
+
+def parse_curve_stops(value):
+    stops = []
+    for item in str(value).split(","):
+        item = item.strip()
+        if not item.isdigit():
+            raise ValueError(f"invalid fan curve stop: {item!r}")
+        stops.append(int(item))
+    if len(stops) < 2:
+        raise ValueError("need at least two fan curve stops")
+    if any(high <= low for low, high in zip(stops, stops[1:])):
+        raise ValueError("fan curve stops must rise")
+    if stops[0] < 0 or stops[-1] > 120:
+        raise ValueError("fan curve stops must lie in 0..120")
+    return stops
+
+
+def clean_curve_pwms(pwms, stops, low, high):
+    """A slider payload the fan tick can run: right length, in range, never falling.
+
+    The running max is what enforces monotonicity, and it is applied rather than rejected on
+    purpose -- with fixed stops the only way to get a descending pair is a client that
+    ignores the contract, and clamping it gives that client a working fan instead of an error.
+    """
+    if len(pwms) != len(stops):
+        raise ValueError(f"fan curve needs exactly {len(stops)} values")
+    clean, floor = [], low
+    for pwm in pwms:
+        value = clamp(int(pwm), floor, high)
+        clean.append(value)
+        floor = value
+    return clean
+
+
+def render_fan_dropin(curves, stops):
+    """The whole drop-in, rebuilt from scratch. {profile: [pwm at each stop]} -> ini text."""
+    lines = [
+        "# Written by novadeck-powerd (org.novadeck.Power1 FanCurve). Rebuilt in full on",
+        "# every change, so comments added here do not survive -- put operator overrides in",
+        f"# {CONFIG_FILE} (read first) or a higher-numbered drop-in (read after) instead.",
+        "#",
+        "# `ResetFanCurve` deletes a profile's pair of sections below; when none are left the",
+        "# whole file goes and the factory curves apply again.",
+    ]
+    for profile in PROFILES:
+        pwms = curves.get(profile)
+        if not pwms:
+            continue
+        name = f"{CUSTOM_CURVE_PREFIX}{profile}"
+        curve = format_fan_curve(list(zip(stops, pwms)))
+        lines += [
+            "",
+            f"[fan_curve.{name}]",
+            f"label=Custom ({profile.title()})",
+            f"curve={curve}",
+            "",
+            f"[profile.{profile}]",
+            f"fan_curve={name}",
+        ]
+    return "\n".join(lines) + "\n"
+
+
+def read_fan_dropin(path=None):
+    """Our own drop-in back as {profile: [(temp, pwm)]}; anything unreadable is 'no curves'."""
+    parser = configparser.ConfigParser()
+    try:
+        if not parser.read(path or FAN_CURVE_DROPIN):
+            return {}
+    except configparser.Error:
+        return {}
+    curves = {}
+    for profile in PROFILES:
+        section = f"fan_curve.{CUSTOM_CURVE_PREFIX}{profile}"
+        if not parser.has_section(section):
+            continue
+        curve = parse_fan_curve(parser.get(section, "curve", fallback=""))
+        if curve:
+            curves[profile] = curve
+    return curves
 
 
 def require_section(parser, section):
@@ -369,8 +540,13 @@ class NovadeckPower:
         profile_config = {}
         parser = configparser.ConfigParser()
         config_files = [FACTORY_CONFIG_FILE]
-        if include_user and CONFIG_FILE.exists():
-            config_files.append(CONFIG_FILE)
+        if include_user:
+            if CONFIG_FILE.exists():
+                config_files.append(CONFIG_FILE)
+            # Sorted, and read last: our own 50- drop-in outranks the operator's /etc file,
+            # a 90- of theirs outranks us. Later files win key-by-key, so a drop-in holding
+            # only `fan_curve=` overrides that key and inherits the rest of the profile.
+            config_files.extend(sorted(CONFIG_DROPIN_DIR.glob("*.conf")))
         if not parser.read(config_files):
             raise FileNotFoundError(FACTORY_CONFIG_FILE)
         require_section(parser, "general")
@@ -449,6 +625,9 @@ class NovadeckPower:
         fan_config["pwm_quantum"] = clamp(parser.getint("fan", "pwm_quantum", fallback=1), 1, 255)
         fan_config["min_pwm"] = clamp(fan_config["min_pwm"], 0, 255)
         fan_config["max_pwm"] = clamp(fan_config["max_pwm"], fan_config["min_pwm"], 255)
+        fan_config["curve_stops"] = parse_curve_stops(
+            parser.get("fan", "curve_stops",
+                       fallback=",".join(str(stop) for stop in DEFAULT_CURVE_STOPS)))
 
         fan_off_below = clamp(parser.getint("suspend", "fan_off_below", fallback=45), 0, 120)
         fan_on_above = clamp(
@@ -687,6 +866,76 @@ class NovadeckPower:
     def profile_settings(self):
         return self.profile_config.get(self.profile, self.profile_config["balanced"])
 
+    def active_curve(self, profile=None):
+        """The effective curve for a profile, as points -- factory or custom, resolved."""
+        settings = self.profile_config.get(profile or self.profile, self.profile_settings())
+        curve = settings["fan_curve"]
+        if isinstance(curve, str):
+            curve = self.fan_curves.get(curve, [])
+        return list(curve)
+
+    def active_curve_name(self, profile=None):
+        curve = self.profile_config.get(
+            profile or self.profile, self.profile_settings())["fan_curve"]
+        return curve if isinstance(curve, str) else ""
+
+    def fan_curve_pwms(self):
+        return resample_curve(self.active_curve(), self.fan_config["curve_stops"])
+
+    def reload_config(self):
+        """Re-read every layer and re-apply. Shared by the Reload method and every curve
+        write, so a curve edit cannot drift from what an operator's `Reload` would do."""
+        self.load_config()
+        self.discover()
+        self.apply_underclock_refs()
+        self.apply_profile()
+        if self.gpu_level == "manual" and self.manual_gpu_clock:
+            self.set_gpu_manual_clock(self.manual_gpu_clock)
+
+    def write_fan_dropin(self, curves):
+        """Rebuild the drop-in from `curves`, or remove it when nothing is left to say."""
+        if curves:
+            CONFIG_DROPIN_DIR.mkdir(parents=True, exist_ok=True)
+            stops = self.fan_config["curve_stops"]
+            text = render_fan_dropin(
+                {p: resample_curve(c, stops) for p, c in curves.items()}, stops)
+            # Same atomic-replace rule the tweaks file follows: powerd re-reads this from its
+            # own reload path, and a half-written ini is a quarantined config.
+            temporary = FAN_CURVE_DROPIN.with_name(f".{FAN_CURVE_DROPIN.name}.new")
+            temporary.write_text(text)
+            os.replace(temporary, FAN_CURVE_DROPIN)
+        else:
+            FAN_CURVE_DROPIN.unlink(missing_ok=True)
+        self.reload_config()
+
+    def fan_curve_changed(self):
+        return {
+            "FanCurve": self.get_property("FanCurve"),
+            "FanCurveIsCustom": self.get_property("FanCurveIsCustom"),
+        }
+
+    def set_fan_curve(self, pwms):
+        stops = self.fan_config["curve_stops"]
+        clean = clean_curve_pwms(
+            pwms, stops, self.fan_config["min_pwm"], self.fan_config["max_pwm"])
+        curves = read_fan_dropin()
+        curves[self.profile] = list(zip(stops, clean))
+        self.write_fan_dropin(curves)
+        print(f"novadeck-powerd: fan curve for {self.profile} set to "
+              f"{format_fan_curve(curves[self.profile])}", file=sys.stderr)
+
+    def reset_fan_curve(self, every=False):
+        # Unconditional, including when there was nothing to remove: the reload has to run
+        # either way so the reported end state is the real one, and an operator may have
+        # edited the file since we last read it.
+        curves = {}
+        if not every:
+            curves = read_fan_dropin()
+            curves.pop(self.profile, None)
+        self.write_fan_dropin(curves)
+        target = "all profiles" if every else self.profile
+        print(f"novadeck-powerd: fan curve reset to factory for {target}", file=sys.stderr)
+
     def write_governor(self, path, preferred):
         available = read_text(path / "scaling_available_governors").split()
         if preferred in available:
@@ -863,26 +1112,10 @@ class NovadeckPower:
         return clamp(int(pwm), self.fan_config["min_pwm"], self.fan_config["max_pwm"])
 
     def target_pwm(self, temp):
-        curve = self.profile_settings()["fan_curve"]
-        if isinstance(curve, str):
-            curve = self.fan_curves[curve]
-        curve = sorted(curve)
+        curve = self.active_curve()
         if not curve:
             return self.fan_config["min_pwm"]
-        if temp <= curve[0][0]:
-            return self.quantize_pwm(curve[0][1])
-        if temp >= curve[-1][0]:
-            return self.quantize_pwm(curve[-1][1])
-        for lower, upper in zip(curve, curve[1:]):
-            low_temp, low_pwm = lower
-            high_temp, high_pwm = upper
-            if low_temp <= temp <= high_temp:
-                span = high_temp - low_temp
-                if not span:
-                    return self.quantize_pwm(high_pwm)
-                pwm = low_pwm + (high_pwm - low_pwm) * (temp - low_temp) / span
-                return self.quantize_pwm(pwm)
-        return self.fan_config["min_pwm"]
+        return self.quantize_pwm(curve_pwm(curve, temp))
 
     def fan_tick(self):
         try:
@@ -1007,6 +1240,17 @@ class NovadeckPower:
             return GLib.Variant("u", self.fan_rpm_value())
         if prop == "Temperature":
             return GLib.Variant("u", self.read_temp())
+        if prop == "FanCurveStops":
+            return GLib.Variant("au", self.fan_config["curve_stops"])
+        if prop == "FanCurve":
+            return GLib.Variant("au", self.fan_curve_pwms())
+        if prop == "FanCurveMinPwm":
+            return GLib.Variant("u", self.fan_config["min_pwm"])
+        if prop == "FanCurveMaxPwm":
+            return GLib.Variant("u", self.fan_config["max_pwm"])
+        if prop == "FanCurveIsCustom":
+            return GLib.Variant(
+                "b", self.active_curve_name().startswith(CUSTOM_CURVE_PREFIX))
         raise KeyError(prop)
 
     def describe_sender(self, sender):
@@ -1051,7 +1295,13 @@ class NovadeckPower:
             f"novadeck-powerd: profile {previous} -> {profile} by {self.describe_sender(sender)}",
             file=sys.stderr,
         )
-        return {"Profile": GLib.Variant("s", self.label_for(self.profile))}
+        # FanCurve rides along because the property is scoped to the active profile: the
+        # value did not change, but what it addresses did, and a tab that only listened for
+        # PropertiesChanged would otherwise keep showing the previous profile's curve.
+        return {
+            "Profile": GLib.Variant("s", self.label_for(self.profile)),
+            **self.fan_curve_changed(),
+        }
 
     def set_property(self, prop, value, sender=None):
         changed = {}
@@ -1084,6 +1334,9 @@ class NovadeckPower:
         elif prop == "CpuScheduler":
             self.set_cpu_scheduler(value.get_string())
             changed["CpuScheduler"] = GLib.Variant("s", self.cpu_scheduler)
+        elif prop == "FanCurve":
+            self.set_fan_curve(list(value))
+            changed = self.fan_curve_changed()
         else:
             raise KeyError(prop)
         self.save_state()
@@ -1112,6 +1365,9 @@ class NovadeckPower:
             "fan_mode": self.get_property("FanMode"),
             "fan_pwm": self.get_property("FanPwm"),
             "fan_rpm": self.get_property("FanRpm"),
+            "fan_curve": self.get_property("FanCurve"),
+            "fan_curve_stops": self.get_property("FanCurveStops"),
+            "fan_curve_custom": self.get_property("FanCurveIsCustom"),
             "temperature": self.get_property("Temperature"),
             "suspended": GLib.Variant("b", self.suspended),
         }
@@ -1138,16 +1394,22 @@ class NovadeckPower:
             return
         if method == "Reload":
             try:
-                self.load_config()
-                self.discover()
-                self.apply_underclock_refs()
-                self.apply_profile()
-                if self.gpu_level == "manual" and self.manual_gpu_clock:
-                    self.set_gpu_manual_clock(self.manual_gpu_clock)
+                self.reload_config()
             except Exception as exc:
                 print(f"novadeck-powerd: reload failed: {exc}", file=sys.stderr)
                 invocation.return_dbus_error(f"{BUS_NAME}.Error.ReloadFailed", str(exc))
                 return
+            self.emit_properties(self.fan_curve_changed())
+            invocation.return_value(None)
+            return
+        if method in ("ResetFanCurve", "ResetAllFanCurves"):
+            try:
+                self.reset_fan_curve(every=(method == "ResetAllFanCurves"))
+            except Exception as exc:
+                print(f"novadeck-powerd: {method} failed: {exc}", file=sys.stderr)
+                invocation.return_dbus_error(f"{BUS_NAME}.Error.FanCurveFailed", str(exc))
+                return
+            self.emit_properties(self.fan_curve_changed())
             invocation.return_value(None)
             return
         if method == "Suspend":

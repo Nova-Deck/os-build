@@ -32,7 +32,39 @@ export interface PowerStatus {
   cpuScheduler: string;
   /** What is loaded now; differs from cpuScheduler only under a per-game override. */
   activeCpuScheduler: string;
+  /** PWM per stop, for the ACTIVE profile. Same length as fanCurveStops. */
+  fanCurve: number[];
+  /** The temperatures fanCurve is sampled at. Empty on a powerd too old to serve it. */
+  fanCurveStops: number[];
+  fanCurveMinPwm: number;
+  fanCurveMaxPwm: number;
+  /** False while the profile is still on its factory curve — gates the Reset button. */
+  fanCurveCustom: boolean;
+  fanPwm: number;
+  fanRpm: number;
+  temperature: number;
   error: string;
+}
+
+export interface CpuCluster {
+  /** The policy's affected_cpus, verbatim ("0-1"). */
+  cores: string;
+  khz: number;
+  /** scaling_max_freq — the cap the active profile really imposes, not the silicon's. */
+  maxKhz: number;
+  governor: string;
+}
+
+export interface Telemetry {
+  cpuPercent: number;
+  cpuClusters: CpuCluster[];
+  gpu: { hz: number; maxHz: number; governor: string };
+  /** Hottest CPU and GPU zone, raw. Not powerd's blended curve input — see telemetry.py. */
+  temperatures: { cpuC: number; gpuC: number };
+  memory: { usedMb: number; totalMb: number; percent: number };
+  loadAverage: number[];
+  /** Fan and temperature come from powerd, which owns them; see telemetry.py. */
+  power: PowerStatus;
 }
 
 export interface InstalledGame {

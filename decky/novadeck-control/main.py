@@ -2,12 +2,15 @@ import asyncio
 
 from novadeck_control.power import (
     power_status,
+    reset_fan_curve,
     set_active_profile,
     set_cpu_scheduler,
+    set_fan_curve,
     set_gpu_level,
     set_manual_gpu_clock,
 )
 from novadeck_control.steam import installed_games
+from novadeck_control.telemetry import telemetry
 from novadeck_control.system import os_version
 from novadeck_control.tweaks import load_fex_profiles, load_tweaks, save_tweaks
 
@@ -38,6 +41,22 @@ class Plugin:
 
     async def set_cpu_scheduler(self, scheduler):
         return await asyncio.to_thread(set_cpu_scheduler, scheduler)
+
+    async def get_telemetry(self):
+        # One call, not two: the Monitor polls at 1 Hz and the fan/temperature half of what
+        # it shows comes from powerd, so pairing the sysfs read with a single GetAll keeps
+        # the tab at one busctl subprocess per second instead of two.
+        return await asyncio.to_thread(self._build_telemetry)
+
+    @staticmethod
+    def _build_telemetry():
+        return {**telemetry(), "power": power_status()}
+
+    async def set_fan_curve(self, pwms):
+        return await asyncio.to_thread(set_fan_curve, pwms)
+
+    async def reset_fan_curve(self, every=False):
+        return await asyncio.to_thread(reset_fan_curve, every)
 
     @staticmethod
     def _build_config():

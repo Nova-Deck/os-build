@@ -60,12 +60,25 @@ def _get_all():
     return {name: value["data"] for name, value in payload.items()}
 
 
+def _call(method):
+    subprocess.run(
+        ["/usr/bin/busctl", "--system", "call", BUS_NAME, OBJECT_PATH, IFACE, method],
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        timeout=TIMEOUT,
+        env=_clean_env(),
+    )
+
+
 def _error_status(message):
     return {
         "profiles": [], "activeProfile": "",
         "gpuLevels": [], "gpuLevel": "",
         "manualGpuClock": 0, "manualGpuClockMin": 0, "manualGpuClockMax": 0,
         "cpuSchedulers": [], "cpuScheduler": "", "activeCpuScheduler": "",
+        "fanCurve": [], "fanCurveStops": [], "fanCurveMinPwm": 0, "fanCurveMaxPwm": 0,
+        "fanCurveCustom": False, "fanPwm": 0, "fanRpm": 0, "temperature": 0,
         "error": message,
     }
 
@@ -95,17 +108,32 @@ def power_status():
             # per-game `scheduler` tweak overrides it — the tab says so rather than showing
             # the dropdown disagreeing with the machine.
             "activeCpuScheduler": str(props.get("ActiveCpuScheduler", "")),
+            # The editable fan curve: PWM per FIXED temperature stop, scoped to the profile
+            # that is active right now. powerd re-emits it on a profile change, and it comes
+            # down this same GetAll, so the tab needs no extra round trip to follow along.
+            # An empty stops list means a powerd too old to serve it -- hide the section,
+            # the same capability-by-enumeration rule the lists above use.
+            "fanCurve": [int(v) for v in props.get("FanCurve", [])],
+            "fanCurveStops": [int(v) for v in props.get("FanCurveStops", [])],
+            "fanCurveMinPwm": int(props.get("FanCurveMinPwm", 0)),
+            "fanCurveMaxPwm": int(props.get("FanCurveMaxPwm", 0)),
+            "fanCurveCustom": bool(props.get("FanCurveIsCustom", False)),
+            "fanPwm": int(props.get("FanPwm", 0)),
+            "fanRpm": int(props.get("FanRpm", 0)),
+            "temperature": int(props.get("Temperature", 0)),
             "error": "",
         }
     except (OSError, ValueError, KeyError, subprocess.SubprocessError) as exc:
         return _error_status(f"powerd unreachable: {exc}")
 
 
-def _set_property(prop, signature, value):
+def _set_property(prop, signature, *values):
+    # Varargs because busctl spells a container as SEPARATE argv words, not one string: an
+    # `au` is "<count> <v1> <v2> ...". A scalar is just the one-value case of that.
     # set-property has no --json; a failure surfaces as CalledProcessError -> error string.
     subprocess.run(
         ["/usr/bin/busctl", "--system", "set-property",
-         BUS_NAME, OBJECT_PATH, IFACE, prop, signature, str(value)],
+         BUS_NAME, OBJECT_PATH, IFACE, prop, signature, *(str(v) for v in values)],
         check=True,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -138,6 +166,27 @@ def set_cpu_scheduler(scheduler):
         _set_property("CpuScheduler", "s", scheduler)
     except (OSError, subprocess.SubprocessError) as exc:
         return _error_status(f"set CPU scheduler failed: {exc}")
+    return power_status()
+
+
+def set_fan_curve(pwms):
+    """The whole curve in one write — powerd rewrites its drop-in and reloads per set, so
+    sending one slider at a time would mean one config rewrite per frame of a drag."""
+    try:
+        values = [int(v) for v in pwms]
+        # powerd clamps into range and enforces the non-falling rule itself, so nothing here
+        # needs to second-guess the values — only the count, which busctl needs up front.
+        _set_property("FanCurve", "au", len(values), *values)
+    except (OSError, TypeError, ValueError, subprocess.SubprocessError) as exc:
+        return _error_status(f"set fan curve failed: {exc}")
+    return power_status()
+
+
+def reset_fan_curve(every=False):
+    try:
+        _call("ResetAllFanCurves" if every else "ResetFanCurve")
+    except (OSError, subprocess.SubprocessError) as exc:
+        return _error_status(f"reset fan curve failed: {exc}")
     return power_status()
 
 

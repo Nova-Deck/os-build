@@ -34,7 +34,8 @@
 #      `stripped` rows are exactly what seal.list removes
 #   5. the trim's declaration is fully applied — nothing images/trim.list names survived
 #   6. the first-boot identity is shippable — no /etc/machine-id, AND systemd-firstboot masked
-#      (the two are only safe together)
+#      (the two are only safe together); plus /etc/os-release carrying the per-build identity
+#      that non-novadeck software reads, agreeing with /etc/novadeck-release
 #   7. the RAUC update path is installable — rauc, the keyring, system.conf and this slot's
 #      own boot.img are all present, and the hook that consumes them is executable;
 #   8. the system UID/GID allocation matches the pin — the ids baked into this tree's passwd and
@@ -316,6 +317,30 @@ fi
 
 if [ "$mid_ok" = 1 ] && [ "$fb_ok" = 1 ]; then
   echo "    ok  no /etc/machine-id, systemd-firstboot masked"
+fi
+
+# The image's identity to software that is NOT ours. /etc/novadeck-release is what novadeck reads;
+# os-release is what everything else reads, and SteamUI's Settings -> System renders OS Variant /
+# Version / Build straight out of it. Those fields shipped BLANK until 2026-08-09 — invisible in
+# the source (the committed images/os-release is static by design, and the values are appended by
+# the assembler), and invisible on device unless someone opens that screen. So assert the appended
+# half is there, and that it AGREES with novadeck-release rather than being separately derived.
+osr="$STAGE/etc/os-release"
+rel="$STAGE/etc/novadeck-release"
+osr_ok=1
+for field in VARIANT VARIANT_ID VERSION VERSION_ID BUILD_ID; do
+  grep -q "^$field=" "$osr" 2>/dev/null || { bad "/etc/os-release has no $field — SteamOS-style clients render that row blank"; osr_ok=0; }
+done
+if [ "$osr_ok" = 1 ]; then
+  osr_ver="$(sed -n 's/^VERSION_ID=//p' "$osr" | tr -d '"')"
+  rel_ver="$(sed -n 's/^NOVADECK_VERSION=//p' "$rel" 2>/dev/null)"
+  osr_build="$(sed -n 's/^BUILD_ID=//p' "$osr" | tr -d '"')"
+  rel_build="$(sed -n 's/^NOVADECK_BUILD=//p' "$rel" 2>/dev/null)"
+  if [ "$osr_ver" != "$rel_ver" ] || [ "$osr_build" != "$rel_build" ]; then
+    bad "os-release ($osr_ver/$osr_build) and novadeck-release ($rel_ver/$rel_build) disagree — one identity, stamped once, is the whole rule"
+  else
+    echo "    ok  os-release carries the per-build identity and agrees with novadeck-release"
+  fi
 fi
 
 # ------------------------------------------------------------------------------------------

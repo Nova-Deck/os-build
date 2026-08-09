@@ -158,6 +158,30 @@ mkdir -p "$stage/etc"
   if [ "${NOVADECK_DEV:-}" = "1" ]; then echo "NOVADECK_MODE=dev"; else echo "NOVADECK_MODE=release"; fi
 } >"$stage/etc/novadeck-release"
 
+# 4a-2. The same identity, in the field names OTHER software reads.
+#
+# SteamUI's Settings -> System renders OS Variant / Version / Build / Codename straight out of
+# /etc/os-release, and shipped them all BLANK (HW-observed 2026-08-09) because our os-release
+# carries only the static NAME/ID block. The values existed the whole time — they are the file
+# written just above — under names nothing but novadeck knows to look for.
+#
+# APPENDED HERE rather than added to images/os-release, because that file is committed and
+# deliberately static ("NO PER-BUILD FIELDS ... so that rebuilding does not churn the tree"), and
+# VERSION_ID/BUILD_ID are per-build by definition. Same rule as novadeck-release: the identity is
+# stamped ONCE, in one place, and everything downstream reads it back — so these cannot drift from
+# the file above the way the bundle version once drifted from the image's.
+#
+# VERSION_CODENAME is deliberately NOT set: os-release(5) wants a lowercase distro codename and we
+# have not chosen one. A field we would have to invent is worth less than the blank that shows we
+# have not named it, and inventing it here would put a product decision in a build script.
+{
+  echo "VARIANT=\"unified\""
+  echo "VARIANT_ID=unified"
+  echo "VERSION_ID=${NOVADECK_VERSION:-dev}"
+  echo "VERSION=\"${NOVADECK_VERSION:-dev} (${NOVADECK_GIT:-unknown})\""
+  echo "BUILD_ID=$(sed -n 's/^NOVADECK_BUILD=//p' "$stage/etc/novadeck-release")"
+} >>"$stage/etc/os-release"
+
 # The same three fields are needed OUTSIDE the image, by images/genbundle.sh: a RAUC bundle has to
 # name the version it carries, and the OTA client compares that name against this very file on the
 # device. Deriving it a second time from the environment is how those two drifted apart in the first

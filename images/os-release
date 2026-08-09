@@ -23,8 +23,10 @@
 # ID_LIKE=arch is load-bearing for third-party tooling that branches on distro family
 # (Arch-style paths and package names are what this actually is). ID is ours.
 
-NAME="novadeck"
-PRETTY_NAME="novadeck"
+# NAME/PRETTY_NAME carry the BRAND spelling; ID is the machine identifier and os-release(5)
+# requires it lowercase, so the two differ on purpose and neither is a typo for the other.
+NAME="NovaDeck"
+PRETTY_NAME="NovaDeck"
 ID=novadeck
 ID_LIKE=arch
 ANSI_COLOR="1;35"

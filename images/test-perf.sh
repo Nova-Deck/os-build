@@ -185,7 +185,7 @@ np._set_affinity = lambda tid, mask: pinned.append((tid, sorted(mask)))
 # every thread starts unpinned unless a case below says otherwise
 masks = {}
 np._get_affinity = lambda tid: set(masks.get(tid, range(8)))
-state = {"affinity": {}, "nice": {}}
+state = {"affinity": {}, "nice": {}, "baseline": {}}
 
 np.apply_game_tree({"nice": -3, "cores": [2, 3]}, [1500], state)
 check("game tree nice applied", applied.get(1500), -3)
@@ -198,10 +198,13 @@ np.apply_game_tree({}, [1500], state)  # tweak removed
 check("affinity repaired to all", pinned, [(1500, [0, 1, 2, 3, 4, 5, 6, 7])])
 check("nice restored to original", applied.get(1500), 0)
 check("state cleared after repair", (len(state["affinity"]), len(state["nice"])), (0, 0))
+# The baseline deliberately SURVIVES a repair: it is what this process looked like before
+# novadeck ever touched it, and that stays true until the process exits.
+check("baseline survives the repair", 1500 in state["baseline"], True)
 
 # a thread the GAME pinned itself must be restored to ITS mask, not widened
 masks[1500] = {4, 5}
-selfpin = {"affinity": {}, "nice": {}}
+selfpin = {"affinity": {}, "nice": {}, "baseline": {}}
 pinned.clear()
 np.apply_game_tree({"cores": [2, 3]}, [1500], selfpin)
 check("self-pinned thread is overridden", pinned, [(1500, [2, 3])])
@@ -212,7 +215,7 @@ check("self-pinned thread restored, not widened", pinned, [(1500, [4, 5])])
 
 # an original mask whose cpus all went offline cannot be restored verbatim
 masks[1500] = {6, 7}
-offline = {"affinity": {}, "nice": {}}
+offline = {"affinity": {}, "nice": {}, "baseline": {}}
 np.apply_game_tree({"cores": [2, 3]}, [1500], offline)
 real_online = np.online_cpus
 np.online_cpus = lambda: [0, 1, 2, 3]
@@ -221,6 +224,47 @@ np.apply_game_tree({}, [1500], offline)
 check("unrestorable mask falls back to online cpus", pinned, [(1500, [0, 1, 2, 3])])
 np.online_cpus = real_online
 masks.clear()
+
+# A THREAD BORN WHILE THE TWEAK IS IN FORCE. fork inherits nice AND affinity, so it arrives
+# already carrying our values — recording "what it has now" as its original would record OUR
+# tweak and make repair restore the tweak. HW-observed 2026-08-09: removing a tweak left 11 of
+# Super Meat Boy's 15 threads at nice -5 / cpus 2-7 for exactly this reason.
+# The fixture grows a second task dir between the two applies to be that new thread.
+born = {"affinity": {}, "nice": {}, "baseline": {}}
+np.apply_game_tree({"nice": -3, "cores": [2, 3]}, [1500], born)   # first apply: 1500 only
+newtid = 1501
+(np.PROC_ROOT / "1500" / "task" / str(newtid)).mkdir(parents=True, exist_ok=True)
+applied[newtid] = -3                 # inherited our nice at fork
+masks[newtid] = {2, 3}               # inherited our mask at fork
+pinned.clear()
+np.apply_game_tree({"nice": -3, "cores": [2, 3]}, [1500], born)   # second apply sees it
+check("newborn thread's recorded nice is the process baseline, not our tweak",
+      born["nice"][newtid], 0)
+check("newborn thread's recorded mask is the process baseline, not our tweak",
+      sorted(born["affinity"][newtid]), [0, 1, 2, 3, 4, 5, 6, 7])
+applied[newtid], pinned[:] = -3, []
+np.apply_game_tree({}, [1500], born)                              # tweak removed
+check("newborn thread is repaired to the baseline, not left tweaked",
+      applied.get(newtid), 0)
+check("newborn thread's affinity is repaired too",
+      sorted(dict(pinned).get(newtid, [])), [0, 1, 2, 3, 4, 5, 6, 7])
+
+# ...but a thread born during our tenure that sets its OWN value keeps it: the value differs
+# from what we enforce, so it cannot have come from us. (A game's SCHED_BATCH disk thread at
+# nice 19 is the real case — HW-confirmed those return to 19, not 0.)
+own = {"affinity": {}, "nice": {}, "baseline": {}}
+(np.PROC_ROOT / "1500" / "task" / str(newtid)).rmdir()   # it must be born DURING this tenure
+applied.pop(newtid, None)
+np.apply_game_tree({"nice": -3}, [1500], own)
+(np.PROC_ROOT / "1500" / "task" / str(newtid)).mkdir()
+applied[newtid] = 19                 # born, then deprioritised itself
+np.apply_game_tree({"nice": -3}, [1500], own)
+check("a newborn thread's OWN nice is remembered verbatim", own["nice"][newtid], 19)
+np.apply_game_tree({}, [1500], own)
+check("a newborn thread's OWN nice is restored, not flattened", applied.get(newtid), 19)
+(np.PROC_ROOT / "1500" / "task" / str(newtid)).rmdir()
+applied.pop(newtid, None); masks.pop(newtid, None)
+pinned.clear()
 
 pinned.clear()
 np.apply_game_tree({}, [1500], state)

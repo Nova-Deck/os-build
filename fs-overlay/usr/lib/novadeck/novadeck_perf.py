@@ -393,6 +393,54 @@ def apply_gamescope(values):
                     _set_affinity(tid, all_cpus)
 
 
+def _adopt(pid, state):
+    """Record, once per process, what it looked like BEFORE we touched it.
+
+    This is the reference point for threads that do not exist yet. It reads the
+    main thread (tid == pid) because that is the one thread guaranteed to
+    predate us; per-thread tuning is captured per-thread elsewhere.
+    """
+    baseline = state["baseline"].get(pid)
+    if baseline is None:
+        try:
+            nice = os.getpriority(os.PRIO_PROCESS, pid)
+        except OSError:
+            nice = 0
+        affinity = _get_affinity(pid)
+        baseline = {"nice": nice,
+                    "affinity": affinity if affinity is not None else set(online_cpus())}
+        state["baseline"][pid] = baseline
+    return baseline
+
+
+def _remember(store, key, pid, tid, current, enforced, fresh, state):
+    """Record a thread's pre-novadeck value, once, the first time we touch it.
+
+    THE SUBTLETY, and the whole reason this is not `setdefault(tid, current)`:
+    fork inherits both nice and affinity, so a thread SPAWNED WHILE OUR TWEAK
+    IS IN FORCE is born already carrying it. Recording what it currently has
+    would record OUR value as its original, and "repair" would then restore the
+    tweak — HW-observed 2026-08-09, where removing a tweak left 11 of Super Meat
+    Boy's 15 threads still at nice -5 / cpus 2-7 because they were born after
+    the first apply.
+
+    So the question is not what the thread has, it is where that value CAME
+    from. Two cases, and `fresh` (this process's first apply in this call) is
+    what separates them:
+      - a thread that predates us -> its value is its own, record it verbatim;
+      - a thread born during our tenure -> if it still carries exactly what we
+        enforce, it inherited it, and the honest reference is the process
+        baseline. If it carries something else it set that itself (a game's own
+        SCHED_BATCH disk thread at nice 19 is the real case), so record that.
+    """
+    if tid in store:
+        return
+    if fresh or current != enforced:
+        store[tid] = current
+    else:
+        store[tid] = state["baseline"][pid][key]
+
+
 def apply_game_tree(values, pids, state):
     """Apply the game-tree keys (`nice`, `cores`) to every thread of `pids`.
 
@@ -403,18 +451,29 @@ def apply_game_tree(values, pids, state):
     only threads THIS function changed are ever repaired — each back to the nice
     and cpu mask IT had before we touched it, both recorded in `state` on first
     write. Otherwise every tick would quietly undo a game's own thread tuning.
+    See _remember() for what "before we touched it" means for a thread that did
+    not exist when we arrived.
 
     Works on every launch path, because it keys off the tagged pids from
     scan_games() rather than off anything a launch wrapper had to inject.
     """
     all_cpus = set(online_cpus())
-    tids = [tid for pid in pids for tid in process_tids(pid)]
+    tids_by_pid = {pid: process_tids(pid) for pid in pids}
+    tids = [tid for pid in pids for tid in tids_by_pid[pid]]
     live = set(tids)
     # a tid we touched that has since exited cannot be repaired; forgetting it
     # is what keeps `state` from growing for the daemon's whole uptime
     for touched in (state["affinity"], state["nice"]):
         for gone in [tid for tid in touched if tid not in live]:
             del touched[gone]
+    live_pids = set(pids)
+    for gone in [pid for pid in state["baseline"] if pid not in live_pids]:
+        del state["baseline"][gone]
+    # Which processes are meeting us for the first time in THIS call: all their
+    # threads predate us, so none of them can have inherited anything from us.
+    fresh_pids = {pid for pid in pids if pid not in state["baseline"]}
+    for pid in pids:
+        _adopt(pid, state)
 
     cores = values.get("cores") or None
     mask = None
@@ -424,16 +483,19 @@ def apply_game_tree(values, pids, state):
             mask = None
 
     if mask:
-        for tid in tids:
-            if tid not in state["affinity"]:
-                # remember the thread's OWN mask before the first overwrite, so
-                # repair restores what the game/FEX chose rather than widening
-                # it to every cpu (same contract as `nice` below)
-                original = _get_affinity(tid)
-                if original is None:
-                    continue  # exited between process_tids() and here
-                state["affinity"][tid] = original
-            _set_affinity(tid, mask)
+        for pid in pids:
+            fresh = pid in fresh_pids
+            for tid in tids_by_pid[pid]:
+                if tid not in state["affinity"]:
+                    # remember the thread's OWN mask before the first overwrite,
+                    # so repair restores what the game/FEX chose rather than
+                    # widening it to every cpu (same contract as `nice` below)
+                    original = _get_affinity(tid)
+                    if original is None:
+                        continue  # exited between process_tids() and here
+                    _remember(state["affinity"], "affinity", pid, tid,
+                              original, mask, fresh, state)
+                _set_affinity(tid, mask)
     elif state["affinity"]:
         for tid, original in state["affinity"].items():
             # a cpu that went offline while we held the mask is not restorable;
@@ -443,14 +505,17 @@ def apply_game_tree(values, pids, state):
 
     nice = values.get("nice")
     if nice is not None:
-        for tid in tids:
-            try:
-                current = os.getpriority(os.PRIO_PROCESS, tid)
-                state["nice"].setdefault(tid, current)
-                if current != nice:
-                    os.setpriority(os.PRIO_PROCESS, tid, nice)
-            except OSError:
-                continue
+        for pid in pids:
+            fresh = pid in fresh_pids
+            for tid in tids_by_pid[pid]:
+                try:
+                    current = os.getpriority(os.PRIO_PROCESS, tid)
+                    _remember(state["nice"], "nice", pid, tid,
+                              current, nice, fresh, state)
+                    if current != nice:
+                        os.setpriority(os.PRIO_PROCESS, tid, nice)
+                except OSError:
+                    continue
     elif state["nice"]:
         for tid, original in state["nice"].items():
             try:
@@ -466,7 +531,9 @@ class Enforcer:
 
     def __init__(self):
         self.appid_cache = {}
-        self.game_state = {"affinity": {}, "nice": {}}
+        # baseline: what each process looked like before we first touched it —
+        # the reference for threads spawned while a tweak is in force (_remember)
+        self.game_state = {"affinity": {}, "nice": {}, "baseline": {}}
 
     def tick(self):
         tweaks = load_tweaks()

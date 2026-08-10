@@ -7,6 +7,37 @@ name. Order is as it was in TODO.md — roughly the order things were closed, no
 
 ## Closed
 
+- [x] **SM8250 (Snapdragon 865) port — six boards, NO REGRESSION on the shipping SoCs
+  2026-08-10** (branch `soc/sm8250`). Retroid Pocket 5 / Flip2 / Mini / Mini V2, AYN Thor Lite,
+  MANGMI Pocket Max. Five deliverables: 6 device trees + 1 common dtsi, 18 out-of-tree patches
+  (71 total, all applying cumulatively at the pinned 7.1.6), the kernel config delta, the ALSA
+  UCM2 profiles, and the firmware. Third SoC family in the unified image; board count 15 → 21.
+  - **What was actually measured.** A dev card built from the merged tree booted on **three
+    boards across both shipping SoCs — AYANEO Pocket S2 (SM8650), KONKR Pocket FIT (SM8650),
+    AYANEO Pocket ACE (SM8550)** — with no regressions. That is the test that mattered: the
+    import touches the *shared* Image, not just new files.
+  - **The specific risk this retires.** `0005-msm-dsi-keep-link-clocks-up-while-display-active`
+    was the one shared-code import that is NOT a provable no-op — it suppresses link-clock
+    recycling on DCS transfers while the display is live, which changes behaviour on every
+    DSI-backlight panel we already ship. Pocket S2 and Pocket ACE were named as the boards to
+    re-check when it landed; both were tested. Cleared.
+  - `0003-msm-dsi-restore-wide_bus-bpp-calculation` needed no hardware: it is a provable no-op
+    for every panel we ship, because all three of our DSC panels are `MIPI_DSI_FMT_RGB888` with
+    `bits_per_component = 8`, so `dsc->bits_per_component * 3` and
+    `mipi_dsi_pixel_format_to_bpp(format)` both yield 24.
+  - **What this run did NOT cover, deliberately recorded rather than implied.** None of the three
+    boards uses the ChipOne ICNA35XX driver (they are AR14, AR06 and WT0630-2K), so
+    `0070_Chipone-ICNA35XX--add-MANGMI-Pocket-Max-panel` — which extends a driver shared with
+    Pocket DS / Pocket EVO / Odin2 Portal / AYN Thor — is compile-clean and structurally isolated
+    (new `panel_desc` + one `of_match` row, no edit to the existing descs) but not runtime-proven.
+    Exercising it needs one of those four boards. No SM8250 board has been powered on at all.
+  - **Open on SM8250 hardware, from the port itself:** the AYN Thor Lite's
+    `NOVADECK_PRIMARY_CONNECTOR=DSI-2` is the one profile field derived from DRM enumeration
+    rather than the DTS (it mirrors the SM8550 AYN Thor, the only other dual-live-DSI board);
+    and `qcom/sm8250/slpi.mbn` does not exist in any open source, so every SM8250 board is
+    without its sensor DSP — no accelerometer, no auto-rotation — until it is extracted from a
+    device vendor image. See the gap note at the bottom of `firmware/QCOM_FW.pin`.
+
 - [x] **The GX rail is GMU-owned, so gpucc must not vote on it — HW-VALIDATED on BOTH SoCs
   2026-08-10** (`6f973e0`). Ported from an upstream-peer change whose author reports it fixing GX clock issues on
   SM8550/SM8650. Two coupled kernel patches, and neither alone is the fix:

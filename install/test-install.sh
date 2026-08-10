@@ -508,14 +508,10 @@ done
 
 CASE="the append floor is required, not optional"
 append_script=$(bash "$SHIPPED/genpart.sh" --append 2>/dev/null)
-run_append() {  # <floor, or the literal UNSET> -> rc, with stderr merged onto stdout
-  if [ "$1" = UNSET ]; then
-    ( unset NOVADECK_APPEND_FLOOR
-      DISK="$T/nodisk.img" bash -euo pipefail -c "$append_script" ) 2>&1
-  else
-    ( NOVADECK_APPEND_FLOOR="$1" DISK="$T/nodisk.img" \
-      PATH="$T/nobin:$PATH" bash -euo pipefail -c "$append_script" ) 2>&1
-  fi
+run_append() {  # <floor, or UNSET> [ceil, or UNSET] -> rc, with stderr merged onto stdout
+  ( case "$1" in UNSET) unset NOVADECK_APPEND_FLOOR ;; *) export NOVADECK_APPEND_FLOOR="$1" ;; esac
+    case "${2-100000000}" in UNSET) unset NOVADECK_APPEND_CEIL ;; *) export NOVADECK_APPEND_CEIL="${2-100000000}" ;; esac
+    DISK="$T/nodisk.img" PATH="$T/nobin:$PATH" bash -euo pipefail -c "$append_script" ) 2>&1
 }
 mkdir -p "$T/nobin"
 
@@ -551,53 +547,91 @@ printf '%s\n' "$out" | grep -qE 'NOVADECK_APPEND_FLOOR|must be a sector number' 
   && bad "a plain sector number was rejected by the floor gate: $out" \
   || ok "a plain sector number passes the gate (the run then needs a real sgdisk)"
 
-# --- 11. the floor is an EXPECTATION, not a minimum ----------------------------------------------
-# MEASURED against real sgdisk (2026-08-10): on a disk with a bigger unallocated region elsewhere,
-# `sgdisk -F` returns a sector ABOVE the floor, so a lower-bound test accepts a run that lays all
-# eight outside the space the carve freed. Harmless to the disk, wrong for the user -- they gave up
-# Android's data for room the install then does not use.
+# --- 11. the window: a ceiling, a size check and a containment check ------------------------------
+# WHY THE CEILING EXISTS, measured against real sgdisk 2026-08-10 rather than reasoned: `-n 0:0:+sz`
+# re-resolves the LARGEST FREE BLOCK on every call, so a run that starts correctly inside the carve's
+# tail still relocates mid-layout. On a 40 GiB fixture the ESP and both roots landed in the tail,
+# then var-A/var-B/home jumped past an OEM partition into a bigger hole and sgdisk reported success.
+# A floor cannot catch it -- it only ever sees the first call. Hence explicit placement between a
+# floor and a ceiling, and hence these cases.
 #
-# Driving that needs sgdisk to answer -F, so this stubs it. The stub is honest about its limits: it
-# serves -p and -F and fails everything else, so a run that gets past the window check dies at the
-# first real partitioning call, and it is the MESSAGE that distinguishes the two outcomes.
-CASE="the floor is an expectation, not a minimum"
+# The stub serves `sgdisk -p` from a synthetic table and fails every mutating call, so a run that
+# survives all the checks dies at the first create. It is the MESSAGE that says which outcome it was.
+CASE="the append window is checked before anything is written"
 mkdir -p "$T/stub"
 cat >"$T/stub/sgdisk" <<'STUB'
 #!/usr/bin/env bash
 for a in "$@"; do
   case "$a" in
-    -p) exit 0 ;;
-    -F) echo "$STUB_FIRST_FREE"; exit 0 ;;
+    -p) printf 'Disk /stub: 83886080 sectors, 40.0 GiB\n'
+        printf 'Sector size (logical): %s bytes\n' "${STUB_SS:-512}"
+        printf 'Number  Start (sector)    End (sector)  Size       Code  Name\n'
+        printf '%s\n' "$STUB_ROWS"
+        exit 0 ;;
   esac
 done
 echo "stub sgdisk: refusing to partition" >&2
 exit 1
 STUB
 chmod +x "$T/stub/sgdisk"
-
 : >"$T/nodisk.img"
-try_first_free() {  # <first-free-sector> <floor> -> the run's output
-  ( STUB_FIRST_FREE="$1" NOVADECK_APPEND_FLOOR="$2" DISK="$T/nodisk.img" PATH="$T/stub:$PATH" \
+
+# 40 GiB disk; userdata shrunk to 8 GiB ending at 16812031, an OEM partition at 62949376. So the
+# carve's window is 16812032..62949375 -- the shape the real-sgdisk run above was driven with.
+STUB_TABLE='   1            2048           34815   16.0 MiB    8300  oem-early
+   2           34816        16812031   8.0 GiB     8300  userdata
+   3        62949376        63080447   64.0 MiB    8300  oem-late'
+FLOOR=16812032
+CEIL=62949375
+try_window() {  # <floor> <ceil> [rows] -> the run's output
+  ( export NOVADECK_APPEND_FLOOR="$1" NOVADECK_APPEND_CEIL="$2"
+    STUB_ROWS="${3-$STUB_TABLE}" DISK="$T/nodisk.img" PATH="$T/stub:$PATH" \
     bash -euo pipefail -c "$append_script" ) 2>&1
 }
-FLOOR=100352
-# Exactly the freed sector, and the far edge of one 1 MiB alignment grain: both must get through.
-for ff in "$FLOOR" "$((FLOOR + 2047))"; do
-  out=$(try_first_free "$ff" "$FLOOR")
-  printf '%s\n' "$out" | grep -q 'is not the space the carve freed' \
-    && bad "first-free $ff (floor $FLOOR) was refused -- the alignment grain is too tight" \
-    || ok "first-free $ff is accepted as the carve's own space"
-done
-# Below the floor: the original failure the floor was written for.
-out=$(try_first_free "$((FLOOR - 2048))" "$FLOOR")
-printf '%s\n' "$out" | grep -q 'is not the space the carve freed' \
-  && ok "a first-free BELOW the floor is refused" \
-  || bad "sgdisk starting before the carve's tail was accepted: $out"
-# Above the window: the case a lower-bound test accepts and a real disk produces.
-out=$(try_first_free "$((FLOOR + 172032))" "$FLOOR")
-printf '%s\n' "$out" | grep -q 'is not the space the carve freed' \
-  && ok "a first-free ABOVE the window is refused (the largest block is elsewhere)" \
-  || bad "our eight would have landed outside the freed tail and the run was accepted: $out"
+
+out=$(run_append "$FLOOR" UNSET)
+printf '%s\n' "$out" | grep -q 'NOVADECK_APPEND_CEIL' \
+  && ok "a floor without a ceiling is refused" \
+  || bad "the ceiling is not required -- home would run to the end of the disk: $out"
+out=$(run_append "$FLOOR" 4096MiB)
+printf '%s\n' "$out" | grep -q 'must be a sector number' \
+  && ok "a non-numeric ceiling is refused" \
+  || bad "a non-numeric ceiling was accepted: $out"
+out=$(run_append "$FLOOR" "$FLOOR")
+printf '%s\n' "$out" | grep -q 'is not above floor' \
+  && ok "a ceiling equal to the floor is refused" \
+  || bad "an empty window was accepted: $out"
+
+# The layout needs ~15 GiB. A window smaller than that used to create three partitions and refuse
+# the fourth, leaving a half-appended GPT -- the state a user cannot boot and cannot diagnose.
+out=$(try_window "$FLOOR" "$((FLOOR + 2 * 1024 * 2048))")
+{ printf '%s\n' "$out" | grep -q 'the layout needs' \
+  && printf '%s\n' "$out" | grep -q 'nothing has been written'; } \
+  && ok "a 2 GiB window is refused before the first sgdisk -n" \
+  || bad "a too-small window was not refused up front: $out"
+out=$(try_window "$FLOOR" "$CEIL")
+printf '%s\n' "$out" | grep -q 'the layout needs' \
+  && bad "the real 22 GiB window was rejected as too small: $out" \
+  || ok "a window that fits the layout passes the size check"
+
+# CONTAINMENT. The window is asserted clear of every existing partition, so no arithmetic error
+# upstream can put us on top of one. Widening the ceiling by a single sector reaches oem-late.
+out=$(try_window "$FLOOR" "$((CEIL + 1))")
+{ printf '%s\n' "$out" | grep -q 'inside the window' \
+  && printf '%s\n' "$out" | grep -q 'nothing has been written'; } \
+  && ok "a ceiling one sector into oem-late is refused, naming it" \
+  || bad "the window was allowed to overlap an existing partition: $out"
+out=$(try_window "$((FLOOR - 1))" "$CEIL")
+printf '%s\n' "$out" | grep -q 'inside the window' \
+  && ok "a floor one sector inside the shrunk userdata is refused" \
+  || bad "the window was allowed to overlap the userdata we just recreated: $out"
+
+# A 4096-byte logical sector is what a real UFS LUN reports, and it changes MiB->sectors eightfold.
+# Read wrong, the size check compares against a window 8x too small and refuses every real install.
+out=$( STUB_SS=4096 try_window "$FLOOR" "$CEIL" )
+printf '%s\n' "$out" | grep -q 'the layout needs' \
+  && bad "a 4096-byte-sector disk was refused -- the MiB conversion is hardcoded to 512: $out" \
+  || ok "a 4096-byte logical sector is handled (what a UFS LUN reports)"
 
 CASE="the shipped copy carries the mandatory form"
 # Byte-identity with images/ is asserted elsewhere; what is asserted here is that the emitted text

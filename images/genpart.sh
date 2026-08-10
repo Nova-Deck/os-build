@@ -104,8 +104,9 @@ appendrows="$(awk '
     printf "nd_newpart %s %s %s %s\n", $2, $3, $5, attrs }' "$TABLE")"
 
 emit_append() {
+  echo "# novadeck A/B GPT, APPENDED to an existing table — generated from partition-table.txt"
+  echo "nd_min_mib=$minmib   # the fixed rows plus slack; home needs whatever is left over"
   cat <<'PREAMBLE'
-# novadeck A/B GPT, APPENDED to an existing table — generated from partition-table.txt
 DISK="${DISK:?set DISK to the target disk or image}"
 
 # Where our partitions may begin. Required: this script cannot see the disk the carve freed, so the
@@ -114,29 +115,50 @@ DISK="${DISK:?set DISK to the target disk or image}"
 # No apostrophe in that message: bash opens a quote on a ' inside ${var:?...} even within double
 # quotes, and the parse error it causes surfaces dozens of lines later.
 : "${NOVADECK_APPEND_FLOOR:?required -- set it to the first sector our partitions may occupy}"
-case "$NOVADECK_APPEND_FLOOR" in
-  *[!0-9]*|'')
-    echo "genpart: NOVADECK_APPEND_FLOOR must be a sector number, got '$NOVADECK_APPEND_FLOOR'" >&2
-    exit 1 ;;
-esac
+: "${NOVADECK_APPEND_CEIL:?required -- set it to the last sector our partitions may occupy}"
+for nd_v in NOVADECK_APPEND_FLOOR NOVADECK_APPEND_CEIL; do
+  case "${!nd_v}" in
+    *[!0-9]*|'') echo "genpart: $nd_v must be a sector number, got '${!nd_v}'" >&2; exit 1 ;;
+  esac
+done
+[ "$NOVADECK_APPEND_CEIL" -gt "$NOVADECK_APPEND_FLOOR" ] \
+  || { echo "genpart: ceiling $NOVADECK_APPEND_CEIL is not above floor $NOVADECK_APPEND_FLOOR" >&2; exit 1; }
 
 sgdisk -p "$DISK" >/dev/null 2>&1 \
   || { echo "genpart: $DISK has no readable GPT -- append needs one (use create mode)" >&2; exit 1; }
 
-# The first aligned sector of the largest free block: what `-n 0:0:...` is about to pick. It has to
-# be the sector the caller named, not merely at-or-after it -- MEASURED 2026-08-10: a disk with a
-# bigger unallocated region elsewhere makes sgdisk -F return a sector ABOVE the floor, and a
-# lower-bound test then accepts a run that lays all eight outside the space the carve freed. Not a
-# brick, since that region holds nothing, but the user gave up Android's data for room we would then
-# not use, and home would be sized by an unrelated hole. So the floor is an EXPECTATION, and the
-# window is one 1 MiB alignment grain wide because that is sgdisk's own rounding.
-nd_first_free="$(sgdisk -F "$DISK")"
-if [ "$nd_first_free" -lt "$NOVADECK_APPEND_FLOOR" ] \
-   || [ "$nd_first_free" -gt "$((NOVADECK_APPEND_FLOOR + 2047))" ]; then
-  echo "genpart: sgdisk would start at sector $nd_first_free, but the carve freed sector $NOVADECK_APPEND_FLOOR -- refusing" >&2
-  echo "genpart: the largest free block on $DISK is not the space the carve freed" >&2
+# Sizes are read in MiB but placement is in SECTORS, and a real UFS LUN reports 4096-byte logical
+# sectors where an image file reports 512. Ask the disk rather than assuming either.
+# Two spellings, and a device prints the one an image file never does:
+#   Sector size (logical): 512 bytes            <- image file
+#   Sector size (logical/physical): 4096/4096 bytes  <- a UFS LUN
+nd_ss="$(sgdisk -p "$DISK" | sed -n 's/^Sector size (logical[^)]*): \([0-9]*\).*/\1/p')"
+[ -n "$nd_ss" ] \
+  || { echo "genpart: cannot read the logical sector size of $DISK" >&2; exit 1; }
+nd_per_mib=$(( 1048576 / nd_ss ))
+
+# Does what we are about to lay down actually fit between the floor and the ceiling? Asked BEFORE
+# the first sgdisk -n, because the alternative is what a too-small window used to produce: three
+# partitions created, the fourth refused, and a half-appended GPT on a disk the user cannot boot.
+nd_window=$(( NOVADECK_APPEND_CEIL - NOVADECK_APPEND_FLOOR + 1 ))
+if [ "$nd_window" -lt "$(( nd_min_mib * nd_per_mib ))" ]; then
+  echo "genpart: the window is $(( nd_window / nd_per_mib )) MiB, and the layout needs ${nd_min_mib} MiB -- refusing" >&2
+  echo "genpart: nothing has been written to $DISK" >&2
   exit 1
 fi
+
+# CONTAINMENT, asserted here rather than inferred. Every sector we are about to write lies in
+# [floor, ceil], so the one thing that can still make that unsafe is an existing partition inside
+# the window. Refuse if any row overlaps it -- this is the check that means no pre-existing
+# partition is ever written, and it holds whatever the caller got wrong.
+while read -r nd_idx nd_start nd_end; do
+  [ -n "$nd_idx" ] || continue
+  if [ "$nd_start" -le "$NOVADECK_APPEND_CEIL" ] && [ "$nd_end" -ge "$NOVADECK_APPEND_FLOOR" ]; then
+    echo "genpart: partition $nd_idx occupies $nd_start..$nd_end, inside the window $NOVADECK_APPEND_FLOOR..$NOVADECK_APPEND_CEIL -- refusing" >&2
+    echo "genpart: nothing has been written to $DISK" >&2
+    exit 1
+  fi
+done < <(sgdisk -p "$DISK" | awk '/^[[:space:]]*[0-9]+[[:space:]]+[0-9]+/ {print $1, $2, $3}')
 
 # Which index did a just-created partition get? Asked by GPT name, which is unique across our eight.
 nd_index_of() {  # <gpt-name> -> index on stdout
@@ -148,13 +170,32 @@ nd_index_of() {  # <gpt-name> -> index on stdout
   return 1
 }
 
+# The running start sector. Every partition is placed EXPLICITLY from here, because `-n 0:0:+size`
+# re-resolves the largest free block on every call: measured 2026-08-10, once the two 7 GiB roots
+# had consumed the freed tail, var-A/var-B/home jumped to a bigger hole elsewhere on the disk and
+# the run reported success. A floor check cannot catch that -- it only ever sees the first call.
+nd_cursor="$NOVADECK_APPEND_FLOOR"
+
 nd_newpart() {  # <size> <typecode> <gpt-name> <attrs>
   local size="$1" type="$2" name="$3" attrs="$4" spec idx bit
-  if [ "$size" = rest ]; then spec="0:0:0"; else spec="0:0:+$size"; fi
+  # 'rest' ends at the ceiling, not at `0`: with an explicit START, sgdisk reads end 0 as the last
+  # sector of the DISK and refuses the moment that span crosses a partition (measured, same run).
+  if [ "$size" = rest ]; then spec="0:$nd_cursor:$NOVADECK_APPEND_CEIL"; else spec="0:$nd_cursor:+$size"; fi
   sgdisk -n "$spec" -t "0:$type" -c "0:$name" "$DISK" >/dev/null \
     || { echo "genpart: cannot create $name" >&2; exit 1; }
   idx="$(nd_index_of "$name")" \
     || { echo "genpart: created $name but cannot find it again by name" >&2; exit 1; }
+  # Advance the cursor from what sgdisk ACTUALLY did, not from what we asked for, and re-assert the
+  # ceiling per partition. The window check above proves the layout fits; this proves each row
+  # landed where it was put, so the containment claim rests on the resulting GPT rather than on
+  # arithmetic done before any of it existed.
+  local last
+  last="$(sgdisk -i "$idx" "$DISK" | sed -n 's/^Last sector: \([0-9]*\).*/\1/p')"
+  [ -n "$last" ] \
+    || { echo "genpart: cannot read the end sector of $name (p$idx)" >&2; exit 1; }
+  [ "$last" -le "$NOVADECK_APPEND_CEIL" ] \
+    || { echo "genpart: $name ends at $last, past the ceiling $NOVADECK_APPEND_CEIL" >&2; exit 1; }
+  nd_cursor=$(( last + 1 ))
   if [ "$attrs" != "-" ]; then
     local IFS=,
     for bit in $attrs; do

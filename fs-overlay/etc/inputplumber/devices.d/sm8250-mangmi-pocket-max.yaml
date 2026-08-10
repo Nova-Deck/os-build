@@ -1,0 +1,44 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/ShadowBlip/InputPlumber/main/rootfs/usr/share/inputplumber/schema/composite_device_v1.json
+# Schema version number
+version: 1
+
+# The type of configuration schema
+kind: CompositeDevice
+
+# Name of the composite device mapping
+name: MANGMI Pocket Max
+
+# Explicit rather than empty for the same reason as the Retroid profile: one image
+# serves every SoC, so "always check the source devices" is not a safe default here.
+matches:
+  - udev:
+      sys_path: /sys/firmware/devicetree/base
+      attributes:
+        - name: model
+          value: MANGMI Pocket Max
+
+# Only allow a single source device per composite device of this type.
+single_source: false
+
+# The SPI MCU joypad plus the board's pwm-vibrator, so rumble routes through the
+# same composite device as the buttons.
+source_devices:
+  - group: gamepad
+    evdev:
+      name: MANGMI Pocket Max Joypad
+      phys_path: mangmi-pocket-max/input0
+      handler: event*
+    capability_map_id: sm8250_pocket_max_mcu
+  - group: gamepad
+    evdev:
+      name: pwm-vibrator
+      handler: event*
+
+# Optional configuration for the composite device
+options:
+  auto_manage: true
+
+# xbox-series, not ds5 — see the note in sm8250-retroid-controller.yaml.
+target_devices:
+  - xbox-series
+  - keyboard

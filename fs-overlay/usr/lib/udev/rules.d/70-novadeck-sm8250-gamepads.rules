@@ -1,0 +1,17 @@
+# novadeck SM8250 MCU gamepads — classify them as joysticks.
+#
+# Both boards' pads are MCU parts on a serdev/SPI bus rather than USB HID, so udev's
+# input_id builtin has no bus-level hint to work from and never sets ID_INPUT_JOYSTICK.
+# Without that, the evdev node is not tagged as a game controller: InputPlumber skips
+# it, SDL does not enumerate it, and the device boots to a Steam UI nothing can drive.
+#
+# Set GROUP=input MODE=0660 rather than the 0666 the reference rules used — the deck
+# user is already in `input` (see 70-novadeck-uinput.rules), so a world-writable input
+# node buys nothing.
+#
+# The reference rules also carried a FEEDBACKD_TYPE=vibra line for a "pmi8998_haptics"
+# device. Dropped on both counts: novadeck ships no feedbackd, and the driver we build
+# (kernel/patches/0038) names its input device "spmi_haptics", so the match could never
+# have fired here anyway.
+SUBSYSTEM=="input", ATTRS{name}=="Retroid Pocket Gamepad", GROUP="input", MODE="0660", ENV{ID_INPUT_JOYSTICK}="1"
+SUBSYSTEM=="input", ATTRS{name}=="MANGMI Pocket Max Joypad", GROUP="input", MODE="0660", ENV{ID_INPUT_JOYSTICK}="1"

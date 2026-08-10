@@ -309,5 +309,45 @@ out=$(PATH="$T/bin:$PATH" NOVADECK_SELECT_DISKS="$RUN_PATH $T/one.img" bash "$SE
   && ok "the scan skips the running disk and takes the other" \
   || bad "the scan did not exclude the running disk: $out"
 
+# --- 11. the FIT with its proportions REVERSED -- the case rule 3b was written for -------------------
+# The plan states it plainly: as captured, the FIT is refused partly BY ACCIDENT OF PROPORTIONS --
+# STORAGE (380 GiB) is larger than userdata (64 GiB). An install that had left userdata at 300 GiB
+# and taken 100 would have passed every rule that existed before 3b and SUCCEEDED, producing one disk
+# carrying Android, another distribution and NovaDeck, three of them believing they own the boot
+# chain. Section 4 above tests 3b on the proportions the capture happens to have; this tests it on
+# the ones that made the rule necessary.
+CASE="a foreign install is refused on content, not on proportions"
+rev="$T/fit-reversed.img"; rows_for "KONKR Pocket FIT" /dev/sda | build "$rev"
+stor="$(sgdisk -p "$rev" | awk '/STORAGE/ {print $1}' | head -1)"
+rock="$(sgdisk -p "$rev" | awk '/ROCKNIX/ {print $1}' | head -1)"
+if [ -n "$stor" ] && [ -n "$rock" ]; then
+  # Shrink STORAGE at its own start, so userdata becomes the largest partition on the disk and every
+  # size-shaped intuition about this layout is inverted. Nothing else moves.
+  stor_s="$(sgdisk -i "$stor" "$rev" | sed -n 's/^First sector: \([0-9]*\).*/\1/p')"
+  sgdisk -d "$stor" "$rev" >/dev/null 2>&1
+  sgdisk -n "$stor:$stor_s:+2G" -c "$stor:STORAGE" "$rev" >/dev/null 2>&1
+  ud_sz="$(sgdisk -p "$rev" | awk '$NF=="userdata" {print $3-$2}')"
+  st_sz="$(sgdisk -p "$rev" | awk '$NF=="STORAGE" {print $3-$2}')"
+  [ "$ud_sz" -gt "$st_sz" ] \
+    && ok "the fixture now has userdata larger than STORAGE, as intended" \
+    || bad "the reversed fixture is not reversed: userdata $ud_sz, STORAGE $st_sz"
+
+  rock_s="$(sgdisk -i "$rock" "$rev" | sed -n 's/^First sector: \([0-9]*\).*/\1/p')"
+  rock_e="$(sgdisk -i "$rock" "$rev" | sed -n 's/^Last sector: \([0-9]*\).*/\1/p')"
+  sgdisk -t "$rock:ef00" "$rev" >/dev/null 2>&1
+  rfat="$T/rev.fat"
+  dd if=/dev/zero of="$rfat" bs=512 count=$(( rock_e - rock_s + 1 )) status=none
+  mkfs.vfat "$rfat" >/dev/null 2>&1
+  : >"$T/KERNEL"; mcopy -i "$rfat" "$T/KERNEL" ::/KERNEL >/dev/null 2>&1
+  dd if="$rfat" of="$rev" bs=512 seek="$rock_s" conv=notrunc status=none
+
+  out=$(bash "$SELECT" "$rev" 2>&1)
+  printf '%s\n' "$out" | grep -q "bootable ESP that is not ours" \
+    && ok "userdata largest, foreign bootable ESP present -> still refused, and refused BY 3b" \
+    || bad "the layout the plan says would have succeeded was not refused by 3b: $out"
+else
+  skip "the FIT capture has no ROCKNIX/STORAGE pair to reverse"
+fi
+
 printf '\ntest-select-target.sh: %d passed, %d failed, %d skipped\n' "$PASS" "$FAIL" "$SKIP"
 [ "$FAIL" -eq 0 ]

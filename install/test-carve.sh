@@ -264,5 +264,56 @@ for verb in "" install wipe FRESH; do
     || bad "verb '$verb' was accepted and modified the table"
 done
 
+# --- 10. the window boundary at SECTOR resolution -------------------------------------------------------
+# The plan asks for the containment bound attacked one sector in each direction, and the GiB-grained
+# cases above cannot reach that: carve takes a size in GiB, so the finest lever the CLI offers is
+# ~2 million sectors. So the DISK is mutated instead. A foreign partition is placed exactly where the
+# layout ends -- window == the minimum, to the sector -- and then one sector earlier, which is the
+# smallest possible violation of the bound genpart refuses on.
+#
+# This is the case that distinguishes "the window check is right" from "the window check is roughly
+# right": an off-by-one that escapes the span is the entire failure mode, and every arithmetic path
+# in carve and genpart chains from this one comparison.
+CASE="the window bound is exact to the sector"
+minsec=$(( $(bash "$ROOT/images/genpart.sh" --min) * 2048 ))   # 512-byte sectors, as image files report
+ud_start=2048
+ud_sectors=$(( 33 * 2097152 ))                                  # 33 GiB, the smallest userdata selection accepts
+floor=$(( ud_start + ud_sectors ))
+
+for delta in 0 -1; do
+  img="$T/exact$delta.img"
+  oem_start=$(( floor + minsec + delta ))
+  truncate -s $(( (oem_start + 4096 + 65536) * 512 )) "$img"
+  sgdisk -n "1:$ud_start:+$ud_sectors" -c 1:userdata -t 1:1B81E7E6-F50D-419B-A739-2AEEF8DA3335 \
+         -n "2:$oem_start:+2048" -c 2:oem-late "$img" >/dev/null 2>&1
+  snap="$(rows "$img")"
+  out="$(carve fresh "$img" 33)"
+  if [ "$delta" = 0 ]; then
+    { [ "$(ours "$img")" = 8 ] \
+      && [ "$(rows "$img" | awk '$4=="novadeck-home" {print $3}')" = "$(( oem_start - 1 ))" ] \
+      && [ "$(rows "$img" | grep ' oem-late$')" = "$(printf '%s\n' "$snap" | grep ' oem-late$')" ]; } \
+      && ok "a window that is EXACTLY the minimum -> carves, home ends one sector before oem-late" \
+      || bad "the exact-minimum window did not carve cleanly: $out"
+  else
+    { [ "$(rows "$img")" = "$snap" ] && printf '%s\n' "$out" | grep -q "the layout needs"; } \
+      && ok "one sector less than the minimum -> refused, nothing written" \
+      || bad "a window one sector too small was not refused: $out"
+  fi
+done
+
+# And the other direction: a foreign partition one sector INSIDE the window must be refused by
+# genpart's overlap test rather than written over -- the assertion that no pre-existing partition is
+# ever touched, made against the GPT instead of inferred from the floor.
+img="$T/intruder.img"
+oem_start=$(( floor + minsec ))
+truncate -s $(( (oem_start + 4096 + 65536) * 512 )) "$img"
+sgdisk -n "1:$ud_start:+$ud_sectors" -c 1:userdata -t 1:1B81E7E6-F50D-419B-A739-2AEEF8DA3335 \
+       -n "2:$(( oem_start - 1 )):+2048" -c 2:oem-late "$img" >/dev/null 2>&1
+snap="$(rows "$img")"
+out="$(carve fresh "$img" 33)"
+{ [ "$(rows "$img")" = "$snap" ] && [ "$(ours "$img")" = 0 ]; } \
+  && ok "a foreign partition one sector inside the window -> nothing of ours is created" \
+  || bad "a partition overlapping the window by one sector did not stop the carve: $out"
+
 printf '\ntest-carve.sh: %d passed, %d failed, %d skipped\n' "$PASS" "$FAIL" "$SKIP"
 [ "$FAIL" -eq 0 ]

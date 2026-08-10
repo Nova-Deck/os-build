@@ -926,16 +926,28 @@ This file is the thing to review as if it were the whole feature.
 
 ### Tests
 
-> **WIRING, decided 2026-08-10 — this suite hangs off the INSTALLER-IMAGE target, not `make test`.**
-> That target does not exist yet (Phase 6 adds `installer` as a third `artifact:` value in
-> `image.yml`), so until it does the suite is run by hand inside `novadeck-build` and is wired to
-> nothing. **Wire it when the installer target lands, and not before.**
+> **WIRING, decided 2026-08-10 — BOTH installer suites hang off the INSTALLER-IMAGE target, not
+> `make test`.** That target does not exist yet (Phase 6 adds `installer` as a third `artifact:`
+> value in `image.yml`), so until it does they are run by hand inside `novadeck-build` and are wired
+> to nothing. **Wire them when the installer target lands, and not before.**
 >
-> The reason is scope, not runtime. `select-target.sh` is never shipped into the rootfs —
-> `images/assemble-rootfs.sh` installs `genpart.sh`, `partition-table.txt` and `lib-slotwrite.sh`
-> and nothing else — and no OTA or card path carves anything, so a card or bundle build gaining a
-> minute of CI for a script it does not contain would be pure cost. It needs `sgdisk`, `mtools` and
-> `dosfstools`, which the host does not have; it skips with a reason there rather than failing.
+> The two are `install/test-select-target.sh` (64 cases) and `install/test-carve.sh` (51), and they
+> share `install/lib-gptfixture.sh` — the builder that rebuilds the four captured boards as real
+> GPTs, extracted when the second suite needed it rather than copied, because a second copy of that
+> awk is the obvious place for them to drift apart. Wiring either one wires the library, so they
+> land together or not at all.
+>
+> The reason is scope, not runtime. Neither `select-target.sh` nor `carve.sh` is shipped into the
+> rootfs — `images/assemble-rootfs.sh` installs `genpart.sh`, `partition-table.txt` and
+> `lib-slotwrite.sh` and nothing else — and no OTA or card path carves anything, so a card or bundle
+> build gaining a minute of CI for scripts it does not contain would be pure cost. **Nothing in the
+> build references `carve.sh` at all today**, which is correct rather than an oversight, and is the
+> one thing to check has changed when the installer target lands. They need `sgdisk`, `mtools` and
+> `dosfstools`, which the host does not have; they skip with a reason there rather than failing.
+>
+> **`test-carve.sh` is the one to run after ANY change to the append path**, `genpart.sh --append`
+> included: it is the only suite that drives a carve to completion against real captured geometry,
+> so it is where a regression in placement surfaces as a moved partition rather than as a green run.
 >
 > **Keep the split clean:** `genpart.sh` DOES ship in the rootfs and its **create** mode is what
 > `make-sdcard.sh` uses, so the genpart cases in `install/test-install.sh` stay in `make test`.
@@ -962,6 +974,30 @@ This file is the thing to review as if it were the whole feature.
 > wider: `examine()` still refuses anything that is not a block device unless the fixture flag is
 > also set. Rule 1 is reached the same way, by shimming `findmnt`/`lsblk` so a temp file can be the
 > running disk without writing into `/dev`.
+
+`install/test-carve.sh` — organised around the two claims that stand between a user and an EDL
+recovery, and both are asserted against the **resulting GPT** rather than against the arithmetic
+that produced it:
+
+- **Containment.** Each fixture's *foreign* rows — everything neither ours nor `userdata` — are
+  captured before the carve and compared byte for byte after, on all four boards. The Odin 2 earns
+  its place with sixteen partitions ahead of `userdata` at p17; the Pocket FIT is the only capture
+  with anything *after* it, so it is the one board where a `home` overrunning the ceiling lands in a
+  neighbour rather than in free space.
+- **A refusal costs nothing.** Every refusal case asserts the table is unchanged. A run that deleted
+  `userdata` and *then* discovered the eight would not fit is precisely what the check ordering
+  exists to prevent, and "it refused" is not the property worth testing — "it refused having written
+  nothing" is.
+
+Plus the resize path (the case the effective ceiling exists for), an interrupted carve completed by
+re-running — the entire recovery story, rule 10 having ruled out backups — reinstall writing nothing,
+a partial set refusing, and uninstall restoring the span with its vendor type intact.
+
+> **What a green run here does NOT establish.** No defect in `carve.sh` was found by writing these
+> 51 cases, which is weaker evidence than it reads as: the code agrees with fixtures written
+> alongside it, on image files where sgdisk sees **512-byte sectors**. Real UFS LUNs report 4096 and
+> sgdisk only asks the kernel for that on a block device, so the whole sector-size path is untested
+> off hardware. Do not treat this suite as the gate Phase 4's hardware run is.
 
 `install/test-select-target.sh` — this is where the assertion budget goes, ≥60 cases against
 the **real captured GPTs** from Phase 0, and green against **every** captured board rather than

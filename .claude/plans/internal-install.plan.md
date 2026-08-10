@@ -852,6 +852,26 @@ This file is the thing to review as if it were the whole feature.
 
 ### Tests
 
+> **WIRING, decided 2026-08-10 — this suite hangs off the INSTALLER-IMAGE target, not `make test`.**
+> That target does not exist yet (Phase 6 adds `installer` as a third `artifact:` value in
+> `image.yml`), so until it does the suite is run by hand inside `novadeck-build` and is wired to
+> nothing. **Wire it when the installer target lands, and not before.**
+>
+> The reason is scope, not runtime. `select-target.sh` is never shipped into the rootfs —
+> `images/assemble-rootfs.sh` installs `genpart.sh`, `partition-table.txt` and `lib-slotwrite.sh`
+> and nothing else — and no OTA or card path carves anything, so a card or bundle build gaining a
+> minute of CI for a script it does not contain would be pure cost. It needs `sgdisk`, `mtools` and
+> `dosfstools`, which the host does not have; it skips with a reason there rather than failing.
+>
+> **Keep the split clean:** `genpart.sh` DOES ship in the rootfs and its **create** mode is what
+> `make-sdcard.sh` uses, so the genpart cases in `install/test-install.sh` stay in `make test`.
+> Only `--append` and `select-target.sh` are installer-only. Do not move the genpart cases out
+> along with this suite.
+>
+> Runtime, measured 2026-08-10: **47 s**, after building each fixture GPT in one `sgdisk` call
+> instead of one per partition (~600 processes, over five minutes). What is left is filesystem
+> allocation for a backup GPT at the end of a 479 GiB sparse file; user time is 1.7 s.
+
 `install/test-select-target.sh` — this is where the assertion budget goes, ≥60 cases against
 the **real captured GPTs** from Phase 0, and green against **every** captured board rather than
 one: data LUN accepted; the same tree with `abl` present → refused; unnamed GPT → refused; damaged

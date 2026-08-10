@@ -42,10 +42,16 @@ T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
 export NOVADECK_SELECT_FIXTURE=1
 
 # --- rebuild a captured disk as a real GPT --------------------------------------------------------
-# Rows come out of the markdown as board|disk|index|name|bytes. Partitions are laid in capture order
-# at their captured sizes, so indices and neighbours match the hardware -- which matters because
-# CEIL is "the sector before whatever follows userdata" and the Odin 2 puts userdata at 17.
-rows_for() {  # <board> <disk> -> "index name bytes" lines
+# Rows come out of the markdown as board|disk|index|name|bytes, and the TYPE GUID out of the verbatim
+# `sfdisk --dump` block below the table on the same disk. Partitions are laid in capture order at
+# their captured sizes, so indices and neighbours match the hardware -- which matters because CEIL is
+# "the sector before whatever follows userdata" and the Odin 2 puts userdata at 17.
+#
+# The type GUIDs are what let the suite assert the carve's most easily-missed obligation: stock
+# userdata is the vendor type `1B81E7E6-…` and the Pocket FIT shows what it looks like when a carve
+# hands it back as `0FC63DAF-…`. Without the real types every fixture would be Linux-typed and that
+# assertion would be vacuous.
+rows_for() {  # <board> <disk> -> "index name bytes type" lines
   awk -v want_b="$1" -v want_d="$2" '
     /^# Internal storage capture/ { b=$0; sub(/^# Internal storage capture — /,"",b) }
     /^## `\/dev\// { d=$0; gsub(/[#` ]/,"",d) }
@@ -53,7 +59,26 @@ rows_for() {  # <board> <disk> -> "index name bytes" lines
       if (b != want_b || d != want_d) next
       gsub(/`/,""); split($0,f,"|")
       gsub(/ /,"",f[2]); gsub(/ /,"",f[3]); gsub(/ /,"",f[5])
-      if (f[5] ~ /^[0-9]+$/) print f[2], f[3], f[5]
+      if (f[5] ~ /^[0-9]+$/) { i=f[2]+0; nm[i]=f[3]; by[i]=f[5]; if (i>max) max=i }
+    }
+    /^\/dev\/[a-z]+[0-9]+ : start=/ {
+      if (b != want_b || d != want_d) next
+      dev=$1; sub(/^\/dev\/[a-z]+/,"",dev)
+      if (match($0, /type=[0-9A-Fa-f-]+/)) tp[dev+0] = substr($0, RSTART+5, RLENGTH-5)
+    }
+    END { for (i=1; i<=max; i++) if (i in nm) print i, nm[i], by[i], (i in tp ? tp[i] : "-") }
+  ' "$CAPTURES"
+}
+
+# The disks a board captured, minus sda (the data LUN) and zram. Read from the document rather than
+# hardcoded because the boards do not agree: the S2 and the Odin 2 expose sdb..sdh, the ACE sdb..sdf.
+luns_for() {  # <board> -> /dev/sdX lines
+  awk -v want_b="$1" '
+    /^# Internal storage capture/ { b=$0; sub(/^# Internal storage capture — /,"",b) }
+    /^## `\/dev\// {
+      if (b != want_b) next
+      d=$0; gsub(/[#` ]/,"",d)
+      if (d != "/dev/sda" && d !~ /zram/) print d
     }' "$CAPTURES"
 }
 
@@ -63,12 +88,18 @@ build() {  # <img> <rows...> on stdin; echoes nothing, exits non-zero on failure
   # the whole GPT -- minutes of wall clock for a suite that does no real work. sgdisk takes as many
   # -n/-c pairs as you give it (create mode in genpart.sh depends on the same thing), and every
   # start sector here is explicit, so batching changes nothing about the tables produced.
-  local img="$1" idx name bytes sectors start=2048 total=0
+  local img="$1" idx name bytes type sectors start=2048 total=0
   local -a args=()
-  while read -r idx name bytes; do
+  while read -r idx name bytes type; do
     [ -n "$idx" ] || continue
     sectors=$(( bytes / 512 )); [ "$sectors" -gt 0 ] || sectors=1
     args+=(-n "$idx:$start:+$sectors" -c "$idx:$name")
+    # An all-zero type is "unused" to sgdisk, so the `last_parti` rows keep the default rather than
+    # being asked for something that would delete the entry they were just given.
+    case "$type" in
+      -|00000000-0000-0000-0000-000000000000) ;;
+      *) args+=(-t "$idx:$type") ;;
+    esac
     start=$(( start + sectors ))
     start=$(( (start + 2047) / 2048 * 2048 ))   # 1 MiB alignment, as on the captures
     total=$(( total + sectors + 2048 ))
@@ -112,10 +143,34 @@ for board in "${BOARDS[@]}"; do
         && ok "$board: userdata is last, ceiling reaches the trailing free space" \
         || bad "$board: ceiling $ceil is below userdata's end $ud_end"
     fi
-    # The type GUID has to be carried out for the carve to restore it.
-    [ -n "$(field "$out" UD_TYPE)" ] \
-      && ok "$board: carries userdata's type GUID out" \
-      || bad "$board: emitted no UD_TYPE -- the carve would recreate under a Linux type"
+    # The type GUID, against the CAPTURE rather than merely against non-empty. This is the one
+    # output the carve copies verbatim, and the failure it prevents -- Android not recognising its
+    # own data partition -- is invisible until the user boots the other OS.
+    want_type="$(rows_for "$board" /dev/sda | awk '$2=="userdata" {print $4}')"
+    got_type="$(field "$out" UD_TYPE)"
+    { [ -n "$want_type" ] && [ "${got_type^^}" = "${want_type^^}" ]; } \
+      && ok "$board: UD_TYPE is the captured $want_type" \
+      || bad "$board: UD_TYPE is '$got_type', the capture says '$want_type'"
+    # The extent, read back off the GPT rather than trusted from the emitter's own arithmetic: it is
+    # the input the carve turns into sector arguments, so an off-by-one here is written to a disk.
+    gpt_i="$(sgdisk -i "$ud_idx" "$img")"
+    gpt_start="$(printf '%s\n' "$gpt_i" | sed -n 's/^First sector: \([0-9]*\).*/\1/p')"
+    gpt_end="$(printf '%s\n' "$gpt_i" | sed -n 's/^Last sector: \([0-9]*\).*/\1/p')"
+    { [ "$(field "$out" UD_START)" = "$gpt_start" ] && [ "$(field "$out" UD_END)" = "$gpt_end" ]; } \
+      && ok "$board: extent $gpt_start..$gpt_end matches the GPT" \
+      || bad "$board: emitted $(field "$out" UD_START)..$(field "$out" UD_END), the GPT says $gpt_start..$gpt_end"
+    # A captured board is a FRESH install. The reinstall path skips nothing today, but it is the
+    # branch that decides whether /home survives, so it must never be reached by accident.
+    [ "$(field "$out" MODE)" = fresh ] \
+      && ok "$board: MODE=fresh on a stock Android disk" \
+      || bad "$board: a stock Android disk reported MODE=$(field "$out" MODE)"
+    # SECTOR is what turns the user's GiB choice into sectors. Asserted against the image, which is
+    # 512 -- these boards are really 4096, but sgdisk assumes 512 for a FILE and only asks the
+    # kernel on a block device, so the fixture cannot reach the 4096 path. What is testable is that
+    # the emitted value is the one sgdisk read, not a constant.
+    [ "$(field "$out" SECTOR)" = "$(sgdisk -p "$img" | sed -n 's/^Sector size (logical[^)]*): \([0-9]*\).*/\1/p')" ] \
+      && ok "$board: SECTOR is the size sgdisk read off the disk" \
+      || bad "$board: SECTOR=$(field "$out" SECTOR) is not what sgdisk reports"
   else
     bad "$board: refused, but the capture shows an installable disk: $out"
   fi
@@ -124,15 +179,22 @@ done
 # --- 2. the non-data LUNs are refused -------------------------------------------------------------
 # Each board exposes 6-8 UFS LUNs. Only sda carries userdata; picking any other is the wrong-LUN
 # case, and sdb/sdc/sde carry xbl and abl on some boards -- the partitions that end a device.
+# EVERY captured LUN, not a sample: they are cheap (20-4096 MiB of sparse file against sda's 479
+# GiB) and the one that gets skipped is the one that turns out to be shaped like a data LUN.
 CASE="a LUN with no userdata is refused"
 for board in "${BOARDS[@]}"; do
-  for lun in /dev/sdb /dev/sde; do
+  for lun in $(luns_for "$board"); do
     img="$T/$(printf '%s%s' "$board" "$lun" | tr -c 'A-Za-z0-9' '_').img"
     rows_for "$board" "$lun" | build "$img" || continue
-    out=$(bash "$SELECT" "$img" 2>&1)
-    printf '%s\n' "$out" | grep -q "not supported yet" \
-      && ok "$board $lun: refused, no userdata" \
-      || bad "$board $lun: was not refused for lacking userdata: $out"
+    if out=$(bash "$SELECT" "$img" 2>&1); then
+      bad "$board $lun: ACCEPTED a LUN that carries no userdata: $out"
+    else
+      # Either refusal is correct and which one fires is a property of the LUN, not of the rule:
+      # sdd on some boards is one `last_parti` row and never reaches the victim rule at all.
+      printf '%s\n' "$out" | grep -Eq "not supported yet|no partitions" \
+        && ok "$board $lun: refused, no userdata" \
+        || bad "$board $lun: refused for the wrong reason: $out"
+    fi
   done
 done
 
@@ -229,6 +291,87 @@ out=$(bash "$SELECT" "$T/re.img" 2>&1)
 [ "$(field "$out" MODE)" = reinstall ] \
   && ok "MODE=reinstall when novadeck-root-A is present" \
   || bad "an already-NovaDeck disk reported MODE=$(field "$out" MODE)"
+
+# --- 6. a damaged or absent GPT ---------------------------------------------------------------------
+# `sgdisk -v` REGENERATES a missing header in memory and then reports "No problems found" about what
+# it invented -- measured 2026-08-10, and all three disks below were ACCEPTED before rule 3 was
+# changed to read the whole output. Each would have been carved on the strength of a table gdisk made
+# up, which is the one situation where "we cannot tell damaged from not-the-disk-we-think" stops
+# being a slogan. The rule must also stay quiet about ALIGNMENT: stock Android tables are not
+# 2048-aligned, and a first attempt that refused on any Caution refused all four captured boards.
+CASE="a damaged or absent GPT is refused"
+sz="$(stat -c %s "$base")"
+
+cp --sparse=always "$base" "$T/nobackup.img"
+dd if=/dev/zero of="$T/nobackup.img" bs=512 seek=$(( sz / 512 - 1 )) count=1 conv=notrunc status=none
+out=$(bash "$SELECT" "$T/nobackup.img" 2>&1)
+printf '%s\n' "$out" | grep -q "damaged or absent" \
+  && ok "a zeroed BACKUP GPT header -> refused" \
+  || bad "a disk with no backup GPT was not refused as damaged: $out"
+
+cp --sparse=always "$base" "$T/nomain.img"
+dd if=/dev/zero of="$T/nomain.img" bs=512 seek=1 count=1 conv=notrunc status=none
+out=$(bash "$SELECT" "$T/nomain.img" 2>&1)
+printf '%s\n' "$out" | grep -q "damaged or absent" \
+  && ok "a zeroed MAIN GPT header -> refused" \
+  || bad "a disk with no main GPT was not refused as damaged: $out"
+
+truncate -s "$sz" "$T/blank.img"
+out=$(bash "$SELECT" "$T/blank.img" 2>&1)
+printf '%s\n' "$out" | grep -q "damaged or absent" \
+  && ok "a disk with no GPT at all -> refused" \
+  || bad "a blank disk was not refused as damaged: $out"
+
+# --- 7. rule 1 -- the disk the running system is on -------------------------------------------------
+# select-target.sh finds it through findmnt+lsblk, so shims are the only way to reach the rule
+# offline. On the installer this is the SD card, and writing the medium you booted from takes the
+# recovery path with it.
+CASE="the running disk is never a target"
+mkdir -p "$T/bin"
+printf '#!/bin/sh\necho /dev/nvme0n1p2\n' >"$T/bin/findmnt"
+# lsblk is asked for the PARENT of that source, and the script prints "/dev/$parent". The fixtures
+# live in $T, so the shim answers with a path RELATIVE to /dev -- "/dev/../tmp/…" is both a real path
+# to the fixture and, more to the point, the same STRING the scan list below holds. That is what lets
+# a temp file be the running disk without writing anything into /dev.
+printf '#!/bin/sh\necho ..%s\n' "$T/running.img" >"$T/bin/lsblk"
+chmod +x "$T/bin/findmnt" "$T/bin/lsblk"
+cp --sparse=always "$base" "$T/running.img"
+RUN_PATH="/dev/..$T/running.img"
+out=$(PATH="$T/bin:$PATH" bash "$SELECT" "$RUN_PATH" 2>&1)
+printf '%s\n' "$out" | grep -q "running system is on" \
+  && ok "an explicit target that is the running disk -> refused" \
+  || bad "the running disk was accepted as an explicit target: $out"
+
+# --- 8. the scan -- rule 9, which the explicit-target path cannot reach -----------------------------
+# Zero says why, one prints it, two or more refuses rather than picks. The last is the rule with
+# teeth: on a disk it did not choose, every geometric guarantee in this script is about the wrong
+# device. NOVADECK_SELECT_DISKS exists for these four cases and for nothing else.
+CASE="the scan picks exactly one disk or none"
+cp --sparse=always "$base" "$T/one.img"
+cp --sparse=always "$base" "$T/two.img"
+rows_for "AYANEO Pocket S2" /dev/sdb | build "$T/nolun.img"
+
+out=$(NOVADECK_SELECT_DISKS="$T/one.img $T/nolun.img" bash "$SELECT" 2>&1)
+[ "$(field "$out" TARGET)" = "$T/one.img" ] \
+  && ok "one eligible disk among ineligible ones -> selected" \
+  || bad "the scan did not select the only eligible disk: $out"
+
+out=$(NOVADECK_SELECT_DISKS="$T/one.img $T/two.img" bash "$SELECT" 2>&1)
+{ printf '%s\n' "$out" | grep -q "more than one disk qualifies" && [ -z "$(field "$out" TARGET)" ]; } \
+  && ok "two eligible disks -> refused, and nothing is emitted to act on" \
+  || bad "the scan chose between two eligible disks: $out"
+
+out=$(NOVADECK_SELECT_DISKS="$T/nolun.img" bash "$SELECT" 2>&1)
+{ printf '%s\n' "$out" | grep -q "no disk qualifies" && printf '%s\n' "$out" | grep -q "not supported yet"; } \
+  && ok "no eligible disk -> refused, naming what was rejected and why" \
+  || bad "an empty scan did not say what it rejected: $out"
+
+# The running disk is excluded from the SCAN too, not only from an explicit target -- and this is the
+# arm that runs unattended, so it is the one where a miss is not caught by a human reading the screen.
+out=$(PATH="$T/bin:$PATH" NOVADECK_SELECT_DISKS="$RUN_PATH $T/one.img" bash "$SELECT" 2>&1)
+[ "$(field "$out" TARGET)" = "$T/one.img" ] \
+  && ok "the scan skips the running disk and takes the other" \
+  || bad "the scan did not exclude the running disk: $out"
 
 printf '\ntest-select-target.sh: %d passed, %d failed, %d skipped\n' "$PASS" "$FAIL" "$SKIP"
 [ "$FAIL" -eq 0 ]

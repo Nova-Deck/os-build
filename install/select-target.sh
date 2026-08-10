@@ -106,8 +106,27 @@ examine() {
 
   # A damaged backup header is refused rather than repaired: we cannot tell "damaged" apart from
   # "not the disk we think this is", and the second reading is the one that ends a device.
-  sgdisk -v "$disk" 2>/dev/null | grep -qi "No problems found" \
+  #
+  # AND THE SUMMARY LINE IS NOT THE VERDICT. Measured 2026-08-10, which is what the test case for
+  # this rule turned up: `sgdisk -v` prints "No problems found" on a disk whose BACKUP GPT has been
+  # zeroed, on one whose MAIN GPT has been zeroed, and on a disk carrying no GPT at all -- it
+  # regenerates the missing half in memory first and then verifies what it invented. Grepping only
+  # for that line accepted every one of them. So the whole output is read, and the offending line
+  # goes in the message -- a board refused in the field is only useful if we can see what it said.
+  #
+  # THE PATTERN NAMES DAMAGE, not severity, and the fixtures are why. Refusing on any Caution or
+  # Warning refused all four captured boards: stock Android tables are not 2048-sector aligned
+  # (`sda1` is two sectors at LBA 6), so every one of them draws "Partition 1 doesn't end on a
+  # 2048-sector boundary". That is a remark about tidiness on a disk we did not lay out and never
+  # will. What we refuse on is a header or table gdisk could not read and substituted for.
+  local vfy bad_line
+  vfy="$(sgdisk -v "$disk" 2>&1 || true)"
+  printf '%s\n' "$vfy" | grep -qi "No problems found" \
     || { say "  $disk: sgdisk reports GPT problems -- refusing"; return 1; }
+  bad_line="$(printf '%s\n' "$vfy" \
+    | grep -Eim1 "One or more CRCs|invalid main GPT|invalid backup GPT|header: ERROR|partition table: ERROR|Creating new GPT entries|corrupt GPT" || true)"
+  [ -z "$bad_line" ] \
+    || { say "  $disk: the GPT is damaged or absent -- sgdisk said: $bad_line"; return 1; }
 
   ss="$(sector_size "$disk")"
   [ -n "$ss" ] || { say "  $disk: cannot read the logical sector size"; return 1; }
@@ -140,9 +159,16 @@ examine() {
   [ -n "$ud_idx" ] \
     || { say "  $disk: no partition named 'userdata' -- this board is not supported yet"; return 1; }
 
+  # The size test is a FRESH-INSTALL question and only ever meant "is there room to make a NovaDeck
+  # install here". On a reinstall that has been answered -- and answered by a carve that was allowed
+  # to leave userdata as small as ANDROID_FLOOR_GIB, so applying it here refuses to reinstall exactly
+  # the devices whose owners gave Android the least. Rule 8's "skip 4-6 on a disk that is already
+  # ours" is what this is; the name check above still runs, because the carve needs the extent.
   local ud_gib=$(( (ud_end - ud_start + 1) * ss / 1073741824 ))
-  [ "$ud_gib" -ge "$UD_MIN_GIB" ] \
-    || { say "  $disk: userdata is ${ud_gib} GiB, and ${UD_MIN_GIB} is the minimum (${NOVADECK_MIN_GIB} for NovaDeck + ${ANDROID_FLOOR_GIB} kept for Android)"; return 1; }
+  if [ "$mode" = fresh ]; then
+    [ "$ud_gib" -ge "$UD_MIN_GIB" ] \
+      || { say "  $disk: userdata is ${ud_gib} GiB, and ${UD_MIN_GIB} is the minimum (${NOVADECK_MIN_GIB} for NovaDeck + ${ANDROID_FLOOR_GIB} kept for Android)"; return 1; }
+  fi
 
   # The type GUID has to come back byte-identical on the recreated partition: stock userdata is a
   # vendor type, and the Pocket FIT shows what a Linux type does to a board that expects its own.
@@ -171,9 +197,18 @@ fi
 
 # Scan. Exactly one disk must pass: zero says what was rejected and why, two or more refuses and
 # lists them rather than picking, because picking is the decision this script exists not to guess at.
+#
+# NOVADECK_SELECT_DISKS stands in for the glob so the suite can drive this loop. Rule 9 is the only
+# rule the explicit-target path cannot reach, and it is the one that decides WHICH disk every
+# geometric guarantee below is about -- untested, "never pick" is an intention rather than a
+# property. It is the same seam as NOVADECK_SELECT_FIXTURE and no wider: examine() still refuses
+# anything that is not a block device unless the fixture flag is ALSO set, so a list on its own
+# cannot introduce a candidate a bare scan would have skipped.
 found=0; result=""; names=""
-for d in /dev/sd? /dev/nvme?n? /dev/mmcblk?; do
-  [ -b "$d" ] || continue
+for d in ${NOVADECK_SELECT_DISKS:-/dev/sd? /dev/nvme?n? /dev/mmcblk?}; do
+  # -e, not -b: an unmatched glob leaves the pattern itself, and examine() is where "not a block
+  # device" is decided -- with a message, which the scan owes the user when zero disks qualify.
+  [ -e "$d" ] || continue
   [ "$d" != "$RUNNING" ] || continue
   if out="$(examine "$d")"; then
     found=$(( found + 1 )); result="$out"; names="$names $d"

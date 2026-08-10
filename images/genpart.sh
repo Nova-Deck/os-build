@@ -10,7 +10,9 @@
 #   images/genpart.sh --min            # print only the minimum target size in MiB
 #   images/genpart.sh <target>         # also apply to <target> (disk or image file)
 #   images/genpart.sh --append         # print the APPEND script (no zap; indices discovered)
-#   images/genpart.sh --append <target># also apply it, and print the name=index map
+#   NOVADECK_APPEND_FLOOR=<sector> images/genpart.sh --append <target>
+#                                      # also apply it, and print the name=index map. The floor is
+#                                      # REQUIRED to apply -- see "THE FLOOR IS MANDATORY" below.
 #
 # THIS FILE IS SHIPPED VERBATIM into /usr/lib/novadeck/install/ of the built root, alongside
 # partition-table.txt, and a host test asserts the two copies are byte-identical. That is why the
@@ -86,8 +88,15 @@ emit() {
 # what makes the freed tail the largest free block and so the one start sector 0 selects. Because
 # that is an inference about a disk this script cannot see, NOVADECK_APPEND_FLOOR exists: set it to
 # the first sector our partitions may occupy and the run refuses if sgdisk would start earlier.
-# Unset, the mode is exactly the plan's `-n 0:0:+<size>` sketch. Do not treat the floor as optional
-# on a real install -- an unset floor means a free block elsewhere on the disk can take our ESP.
+#
+# THE FLOOR IS MANDATORY, not an option (Phase 3, was opt-in through Phase 2). Unset, sgdisk takes
+# whatever the largest free block happens to be, and the containment rule then holds only because
+# the carve happened to leave the freed tail as that block -- true by luck rather than by
+# construction, which is not what a geometric bound is for. The asymmetry settles it: over-requiring
+# the floor costs one relaxed line, forgetting it costs a device whose only recovery is EDL with a
+# vendor firehose. So the emitted script refuses without one, and it refuses on a floor that is not
+# a plain sector number: `[ x -lt abc ]` returns 2, which an `if` reads as false, so a typo'd floor
+# would otherwise disable the check while looking set.
 appendrows="$(awk '
   /^[[:space:]]*#/ || /^[[:space:]]*$/ { next }
   { attrs = ($6 == "" ? "-" : $6)
@@ -98,12 +107,24 @@ emit_append() {
 # novadeck A/B GPT, APPENDED to an existing table — generated from partition-table.txt
 DISK="${DISK:?set DISK to the target disk or image}"
 
+# Where our partitions may begin. Required: this script cannot see the disk the carve freed, so the
+# caller asserts it, and no assertion means no append. Checked FIRST, ahead of even reading the
+# disk, so a missing floor is refused identically whatever state the target is in.
+# No apostrophe in that message: bash opens a quote on a ' inside ${var:?...} even within double
+# quotes, and the parse error it causes surfaces dozens of lines later.
+: "${NOVADECK_APPEND_FLOOR:?required -- set it to the first sector our partitions may occupy}"
+case "$NOVADECK_APPEND_FLOOR" in
+  *[!0-9]*|'')
+    echo "genpart: NOVADECK_APPEND_FLOOR must be a sector number, got '$NOVADECK_APPEND_FLOOR'" >&2
+    exit 1 ;;
+esac
+
 sgdisk -p "$DISK" >/dev/null 2>&1 \
   || { echo "genpart: $DISK has no readable GPT -- append needs one (use create mode)" >&2; exit 1; }
 
 # The first aligned sector of the largest free block: what `-n 0:0:...` is about to pick.
 nd_first_free="$(sgdisk -F "$DISK")"
-if [ -n "${NOVADECK_APPEND_FLOOR:-}" ] && [ "$nd_first_free" -lt "$NOVADECK_APPEND_FLOOR" ]; then
+if [ "$nd_first_free" -lt "$NOVADECK_APPEND_FLOOR" ]; then
   echo "genpart: sgdisk would start at sector $nd_first_free, below the floor of $NOVADECK_APPEND_FLOOR -- refusing" >&2
   echo "genpart: the largest free block on $DISK is not the space the carve freed" >&2
   exit 1

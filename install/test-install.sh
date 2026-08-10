@@ -479,5 +479,88 @@ alt_out=$(NOVADECK_PARTITION_TABLE="$T/empty-table.txt" bash "$SHIPPED/genpart.s
   && ok "an overridden table changes the output" \
   || bad "NOVADECK_PARTITION_TABLE was ignored by the shipped copy"
 
+# --- 10. the append floor is MANDATORY (Phase 3) ------------------------------------------------
+# Through Phase 2 the floor was opt-in, which was right while every caller passed --append with no
+# target. Applied to a real device it is the assertion that makes span containment hold by
+# construction: unset, sgdisk starts our eight at whatever the largest free block is, which is the
+# carve's freed tail only by luck.
+#
+# These run the EMITTED script rather than genpart.sh itself, because the emitted text is what the
+# installer executes and what ships to the device. sgdisk is not needed and deliberately not used:
+# the floor is checked ahead of the first disk read, so a refusal here cannot be a "sgdisk: command
+# not found" in disguise -- which is the shape this suite would otherwise get for free and prove
+# nothing with.
+# Before anything behavioural: the emitted text has to PARSE. genpart runs it as
+# `bash -c "$(emit_append)"`, so a quoting slip in the generator is a runtime failure on a device
+# rather than a build error, and every case below would refuse for that reason and read green.
+# (Caught one immediately: an apostrophe inside ${var:?...} opens a quote even within double quotes,
+# and bash reports it dozens of lines further down.)
+CASE="the emitted scripts are syntactically valid"
+for mode in create append; do
+  case "$mode" in
+    create) bash "$SHIPPED/genpart.sh"          >"$T/emitted-$mode.sh" 2>/dev/null ;;
+    append) bash "$SHIPPED/genpart.sh" --append >"$T/emitted-$mode.sh" 2>/dev/null ;;
+  esac
+  bash -n "$T/emitted-$mode.sh" 2>/dev/null \
+    && ok "$mode mode emits parseable bash" \
+    || bad "$mode mode emits a script bash cannot parse: $(bash -n "$T/emitted-$mode.sh" 2>&1 | head -1)"
+done
+
+CASE="the append floor is required, not optional"
+append_script=$(bash "$SHIPPED/genpart.sh" --append 2>/dev/null)
+run_append() {  # <floor, or the literal UNSET> -> rc, with stderr merged onto stdout
+  if [ "$1" = UNSET ]; then
+    ( unset NOVADECK_APPEND_FLOOR
+      DISK="$T/nodisk.img" bash -euo pipefail -c "$append_script" ) 2>&1
+  else
+    ( NOVADECK_APPEND_FLOOR="$1" DISK="$T/nodisk.img" \
+      PATH="$T/nobin:$PATH" bash -euo pipefail -c "$append_script" ) 2>&1
+  fi
+}
+mkdir -p "$T/nobin"
+
+out=$(run_append UNSET); rc=$?
+[ "$rc" -ne 0 ] \
+  && ok "no floor -> refuses (rc=$rc)" \
+  || bad "an append with NO floor was accepted -- sgdisk would place our eight anywhere"
+printf '%s\n' "$out" | grep -q 'NOVADECK_APPEND_FLOOR' \
+  && ok "the refusal names the variable the caller has to set" \
+  || bad "refused without saying the floor is what is missing: $out"
+# Which check fired matters: a run that died on the GPT probe would also be non-zero, and would
+# still accept a floorless append against a disk that HAS a readable GPT.
+printf '%s\n' "$out" | grep -q 'has no readable GPT' \
+  && bad "the GPT probe fired first -- a floorless append still reaches the disk" \
+  || ok "the floor is checked before the target is read at all"
+
+# `[ 34 -lt abc ]` exits 2, and an `if` reads that as false: a typo'd floor would sail straight
+# through the comparison with the check LOOKING set. Measured, not assumed -- hence its own case.
+CASE="a floor that is not a sector number is refused"
+for bogus in 16GiB 2048MiB ' ' -1 0x800 ''; do
+  out=$(run_append "$bogus"); rc=$?
+  # Non-zero alone is not the assertion. Under a reverted guard these runs die on the GPT probe
+  # instead and every one of them reads green -- measured during the mutation check, not supposed.
+  # So match the message: the numeric gate has to be what rejected it.
+  { [ "$rc" -ne 0 ] && printf '%s\n' "$out" | grep -qE 'must be a sector number|NOVADECK_APPEND_FLOOR: required'; } \
+    && ok "floor '$bogus' -> refused by the numeric gate" \
+    || bad "floor '$bogus' was not refused by the floor check (rc=$rc): $out"
+done
+# ...and the numeric one gets past the floor gate, or the case above proves only that everything
+# fails. It dies later, at the missing sgdisk, which is exactly how far this test can honestly go.
+out=$(run_append 2048)
+printf '%s\n' "$out" | grep -qE 'NOVADECK_APPEND_FLOOR|must be a sector number' \
+  && bad "a plain sector number was rejected by the floor gate: $out" \
+  || ok "a plain sector number passes the gate (the run then needs a real sgdisk)"
+
+CASE="the shipped copy carries the mandatory form"
+# Byte-identity with images/ is asserted elsewhere; what is asserted here is that the emitted text
+# is the MANDATORY shape, so a revert to the opt-in `[ -n "${NOVADECK_APPEND_FLOOR:-}" ] && ...`
+# guard fails a test rather than quietly restoring luck-based containment.
+printf '%s\n' "$append_script" | grep -q 'NOVADECK_APPEND_FLOOR:?' \
+  && ok "the emitted script hard-requires the floor" \
+  || bad "the emitted append script no longer requires a floor"
+printf '%s\n' "$append_script" | grep -q 'NOVADECK_APPEND_FLOOR:-' \
+  && bad "the opt-in floor guard is back -- an unset floor would be accepted again" \
+  || ok "no opt-in floor guard remains"
+
 printf '\ntest-install.sh: %d passed, %d failed, %d skipped\n' "$PASS" "$FAIL" "$SKIP"
 [ "$FAIL" -eq 0 ]

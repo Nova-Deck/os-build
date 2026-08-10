@@ -11,15 +11,21 @@
 #
 # Fetch + verify with:  firmware/fetch-qcom-fw.sh
 repo:   https://github.com/Nova-Deck/qcom-firmwares
-commit: ed698678fd6269259e4b07e6f57e6da903b4b549
+commit: dbf238bd885d5858543b9588fbee9d0645a25d4f
 
-# --- SM8250: OPEN, with two exceptions ---------------------------------------------------
+# --- SM8250: OPEN, with one exception, and one still-open gap ----------------------------
 # The six SM8250 boards need almost nothing from this repo. Their GPU microcode, zap shader,
 # adsp, cdsp, Venus, ath11k/QCA6390 Wi-Fi and qca Bluetooth are all in linux-firmware and are
-# pinned in LINUX_FW.pin instead. Two blobs a board .dts asks for are NOT available anywhere
-# open, and both need extracting from the device's own Android vendor image and republishing
-# here. Until then the pinned commit above has no SM8250 content at all, which is correct —
-# an empty directory would be the lie.
+# pinned in LINUX_FW.pin instead. Exactly one blob a board .dts asks for is not open:
+#
+#   qcom/sm8250/ayn/thor/aw883xx_acf.bin   [present as of the commit above]
+#       AW88166 amp calibration for the AYN Thor Lite only, requested by its two amp nodes.
+#       Its bytes are IDENTICAL to the SM8550 AYN Thor's acf we already republish (sha256
+#       ecb54190..., 85704 bytes) — AYN reused one amp tuning across both devices. It is
+#       still stored at its own path, per that repo's per-device rule: a device must never
+#       reference another device's path, or a later per-device fix silently regresses it.
+#
+# Still missing everywhere, and NOT faked with a near-miss:
 #
 #   qcom/sm8250/slpi.mbn
 #       Requested by the &slpi node in kernel/dts/qcom/sm8250-retroidpocket-common.dtsi (and
@@ -29,10 +35,3 @@ commit: ed698678fd6269259e4b07e6f57e6da903b4b549
 #       Cost while missing: the sensor DSP never boots, i.e. no accelerometer, so no
 #       auto-rotation. Nothing else depends on it; QCOM_Q6V5_PAS is =m and the failed
 #       request is a log line, not a boot failure.
-#
-#   qcom/sm8250/ayn/thor/aw883xx_acf.bin
-#       AW88166 amp calibration for the AYN Thor Lite only, requested by its two amp nodes.
-#       We already republish the SM8550 AYN Thor's file at qcom/sm8550/ayn/thor/ — do NOT
-#       reuse it. The ACF describes the speaker and enclosure, not the SoC, and these are
-#       different devices. Cost while missing: no speaker output on the Thor Lite; its
-#       headphone path is a wcd9385 and is unaffected.

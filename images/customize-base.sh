@@ -197,7 +197,15 @@ PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno v
 # and with no X tools on the image the only way to ask "is it override-redirect / IsViewable /
 # what size" was to infer it from gamescope's source. Inference is what made that investigation
 # expensive; measuring is cheap. DEV-only — a release card has no business carrying X debug tools.
-DEV_PKGS=(evtest usbutils xorg-xprop xorg-xwininfo)
+# alsa-utils: amixer/alsamixer to read and set the mixer, alsaucm to ask what UCM actually resolved,
+# aplay + speaker-test to generate a tone without going through Steam. Added 2026-08-10 for the
+# same reason as the X tools, and it cost the same way: the MANGMI Pocket Max (SM8250) came up
+# silent, and with no ALSA tools on the image every "which control is wrong" question had to be
+# answered by reading driver source and guessing. Worse than slow — `amixer` being ABSENT made
+# every control query print nothing, which reads exactly like "the control does not exist" and
+# sent that investigation down a wrong path (see DONE.md). The card is a handheld whose audio
+# routing is per-board UCM; not being able to inspect it is a permanent tax.
+DEV_PKGS=(evtest usbutils xorg-xprop xorg-xwininfo alsa-utils)
 
 # Precompiled external packages: every packages/<name>/prebuilt.pin (url + sha256 + strip)
 # is fetched on the host and extracted into the base. PREBUILT_DIR stages the verified

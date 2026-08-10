@@ -670,9 +670,10 @@ or resized.** Two mechanisms enforce it and nothing else is relied upon:
 There are no backups, no restore path, and no undo — see rule 10 for why each was rejected
 rather than merely skipped. A blast radius this narrow is worth more than a backup of it.
 
-The new `userdata` size is a user choice on the confirm screen (default 16 GiB, floor 8 GiB),
-with our minimum from `genpart.sh --min` (~15 GiB) plus a `HOME_FLOOR` of 8 GiB enforced
-against the remainder.
+The new `userdata` size is a user choice on the confirm screen. **Revised 2026-08-10:** Android's
+floor is **1 GiB** and NovaDeck's share must be **at least 32 GiB**, so the partition is eligible
+at **33 GiB** and the user's choice is bounded by whatever is left above 32 for us. The earlier
+"default 16 GiB, floor 8 GiB, plus `HOME_FLOOR`" is replaced by that pair of numbers.
 
 > **Recreate `userdata` with its ORIGINAL type GUID.** Found 2026-08-05 in the captures: stock
 > `userdata` is type `1B81E7E6-F50D-419B-A739-2AEEF8DA3335`, but on the Pocket FIT — where
@@ -711,6 +712,11 @@ list, which can only protect what it knows to name, and it is what makes the ten
 in `devices/` safe rather than merely refused. Any write whose target sector range is not wholly
 contained is a bug that aborts before issuing, not a rule that can be widened by a typo.
 
+> **SUPERSEDED 2026-08-10 by the victim rule above: exact name `userdata`, at least 33 GiB, no
+> fallback.** The three bullets below — label first, size as cross-check, dominant-partition offer —
+> are kept because the reasoning about why size can never be a *substitute* still holds, but the
+> offer in (3) is gone, and with it the case the deny list guarded.
+
 **Identifying `userdata` uses two signals, and they are not interchangeable:**
 
 1. **Label first** — `userdata`, plus any per-board aliases the Phase-0 captures reveal.
@@ -729,7 +735,38 @@ On a reinstall the largest partition is our own `/home`, not `userdata`, so a si
 first would carve the user's game library. Identity of the disk is settled before size is
 consulted.
 
-### `install/disk-rules.conf` — the second net
+### `install/disk-rules.conf` — DROPPED 2026-08-10, and the victim rule replaces it
+
+**The user's call, and it removes the thing the list existed to backstop.** The victim is identified
+by one rule with no fallback:
+
+> A partition named **exactly `userdata`** (all four captures agree), **at least 33 GiB**. No label
+> match → refuse. No size heuristic, no dominant-partition offer, no name list.
+
+The 33 GiB is 32 for NovaDeck plus 1 kept for Android. Below 32 GiB a NovaDeck install is not worth
+having, so a disk that cannot give it that is refused rather than half-served. Note this is a
+*policy* minimum and is not the same number as `genpart.sh --min` (15233 MiB), which is the
+*mechanical* one — the point below which the eight partitions do not physically fit. Both exist;
+they must not be conflated, and neither should drift into the other.
+
+Why the deny list goes with it: its whole job was guarding the *choice of victim* against the
+dominant-partition heuristic picking something like `super`. With no heuristic there is no wrong
+choice to guard — the name either is `userdata` or the install refuses. Everything else on the disk
+is already protected geometrically by `genpart.sh`, which refuses to write into any span an existing
+partition occupies. A name list would now be a second answer to a question that has one.
+
+**No satisfying `userdata` is a BLOCKER, not a branch** (user's call, 2026-08-10). Wrong name, or
+smaller than 33 GiB, and the installer stops: it does not offer another partition, does not fall
+back to a heuristic, and does not proceed in a reduced mode. The screen says which disk was examined
+and which of the two conditions failed, and that is the end of the run.
+
+The consequence to keep in view: a board whose data partition is called something else is refused,
+not carved wrongly. That is the intended trade — refusing an installable device is recoverable, and
+the alternative failure is not. It also means the installer must say *why* precisely enough that the
+user can tell "this device is not supported yet" apart from "this device is too small", since those
+have completely different answers.
+
+### ~~`install/disk-rules.conf` — the second net~~ (superseded, kept for the reasoning)
 
 **Demoted 2026-08-05 from "the brick gate" to a second, independent net.** Span containment above
 is what actually prevents a brick; this list catches the case where identification itself went

@@ -58,23 +58,25 @@ rows_for() {  # <board> <disk> -> "index name bytes" lines
 }
 
 build() {  # <img> <rows...> on stdin; echoes nothing, exits non-zero on failure
+  # ONE sgdisk invocation per disk, not one per partition. An sde LUN carries 78 rows and there are
+  # eight LUNs in play, so the naive loop spawned ~600 processes and each one re-read and rewrote
+  # the whole GPT -- minutes of wall clock for a suite that does no real work. sgdisk takes as many
+  # -n/-c pairs as you give it (create mode in genpart.sh depends on the same thing), and every
+  # start sector here is explicit, so batching changes nothing about the tables produced.
   local img="$1" idx name bytes sectors start=2048 total=0
-  local -a specs=()
+  local -a args=()
   while read -r idx name bytes; do
     [ -n "$idx" ] || continue
     sectors=$(( bytes / 512 )); [ "$sectors" -gt 0 ] || sectors=1
-    specs+=("$idx:$name:$sectors")
-    total=$(( total + sectors ))
-  done
-  truncate -s $(( (total + 65536) * 512 )) "$img" || return 1
-  sgdisk -Z "$img" >/dev/null 2>&1
-  local spec
-  for spec in "${specs[@]}"; do
-    idx="${spec%%:*}"; name="${spec#*:}"; sectors="${name##*:}"; name="${name%%:*}"
-    sgdisk -n "$idx:$start:+$sectors" -c "$idx:$name" "$img" >/dev/null 2>&1 || return 1
+    args+=(-n "$idx:$start:+$sectors" -c "$idx:$name")
     start=$(( start + sectors ))
     start=$(( (start + 2047) / 2048 * 2048 ))   # 1 MiB alignment, as on the captures
+    total=$(( total + sectors + 2048 ))
   done
+  [ "${#args[@]}" -gt 0 ] || return 1
+  truncate -s $(( (total + 65536) * 512 )) "$img" || return 1
+  sgdisk -Z "$img" >/dev/null 2>&1
+  sgdisk "${args[@]}" "$img" >/dev/null 2>&1 || return 1
 }
 
 field() { printf '%s\n' "$1" | sed -n "s/^$2=//p"; }

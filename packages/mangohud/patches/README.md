@@ -44,13 +44,32 @@ battery from `/sys/class/power_supply/battery` (`0003`/`0004`/`0006`).
 **GPU temperature is a substring match, and that is load-bearing.** `0002` used to also repoint the
 hwmon lookup from `find_hwmon_sensor_dir("gpu")` to `"gpuss_0_thermal"`; it no longer does, and
 nothing replaced it, so the lookup `0001` leaves in place is plain `"gpu"`. That is *not* a
-regression on this SoC only because `find_hwmon_sensor_dir` matches with
-`name_content.find(name) != npos` — `"gpu"` is a substring of `"gpuss_0_thermal"`, so it still
-resolves. Two consequences worth knowing before touching this: hardcoding the full sensor name back
-in would re-break every SoC whose GPU hwmon is named differently, and because the search returns the
-*first* hwmon whose name contains `"gpu"` in unspecified `directory_iterator` order, a board that
-exposes a second `gpu*` hwmon could latch onto the wrong sensor and report a plausible-but-wrong
-temperature. If GPU temp ever reads oddly, check `/sys/class/hwmon/*/name` on the device first.
+regression, because `find_hwmon_sensor_dir` matches with `name_content.find(name) != npos`
+(`src/gpu_fdinfo.cpp:275` in 0.8.4) — `"gpu"` is a substring of every SoC's sensor name, so it
+resolves everywhere.
+
+Keeping it that way is what lets ONE binary serve every SoC we ship, and it is the reason the
+per-SoC GPU patches published upstream must NOT be taken as-is. Each of those hardcodes one name:
+
+| SoC    | upstream patch pins   | zones actually in the .dtsi                     |
+|--------|-----------------------|-------------------------------------------------|
+| SM8250 | `gpu_top_thermal`     | `gpu-top-thermal`, `gpu-bottom-thermal`          |
+| SM8550 | `gpuss_0_thermal`     | `gpuss-0-thermal` … `gpuss-7-thermal`            |
+| SM8650 | `gpuss0_thermal`      | `gpuss0-thermal` … `gpuss7-thermal`              |
+
+novadeck builds one unified image, so pinning any single one of those breaks the other two SoCs
+outright (`gpuss_0_thermal` is not a substring of `gpu_top_thermal`, and vice versa). The other
+half of those patches — repointing `init_kgsl()` at `/sys/class/devfreq/3d00000.gpu` — is already
+covered by `0002`, which tries that path plus the kgsl and SM6115 ones and takes the first that
+exists. Nothing from them is missing here.
+
+The remaining wrinkle is determinism, not correctness: `find_hwmon_sensor_dir` returns the *first*
+hwmon whose name contains `"gpu"` in unspecified `directory_iterator` order, and every SoC above
+exposes 2–8 of them. All of them are genuine GPU-subsystem sensors, so any winner reports a sane
+temperature — but which one is not pinned, so two boots can disagree by a couple of degrees. If GPU
+temp ever reads oddly, check `/sys/class/hwmon/*/name` on the device first. Making it deterministic
+means preferring an ordered list of exact names before falling back to the substring — deliberately
+not done yet, since it costs an overlay rebuild for a cosmetic gain.
 
 No peer-distro refs ship in the tree — upstream provenance lives in commit history only.
 

@@ -31,3 +31,15 @@ qcom/sm8550/a740_zap.mbn
 qcom/sm8550/SM8550-APS-tplg.bin
 qcom/sm8550/AYN-Odin2-tplg.bin
 qcom/sm8550/AYN-Thor-tplg.bin
+
+# --- sm8250: Adreno 650 GPU microcode + zap shader (open, linux-firmware) ---
+# Shared by all six SM8250 boards. Embedded for the same reason as the other two SoCs:
+# DRM_MSM is =y and the panel is the only console, so the GPU has to come up before the
+# root is mounted.
+qcom/a650_sqe.fw
+qcom/a650_gmu.bin
+qcom/sm8250/a650_zap.mbn
+
+# No SM8250 tplg line, and that is not an omission: SM8250 audio runs the legacy q6asm/ADM
+# path (SND_SOC_SM8250), which has no AudioReach topology blob to load. Its adsp/cdsp are
+# likewise absent here — QCOM_Q6V5_PAS is =m, so they load from the mounted root.

@@ -6,13 +6,25 @@ verified, into git-ignored trees (`qcom-fw/`, `linux-fw/`; see `.gitignore`).
 
 Two firmware sources:
 
-- **`linux-fw`** — open firmware (Adreno GPU microcode, qca WCN7850 BT, Iris VPU) from the
-  official `linux-firmware` repo. The upstream Holo base ships no `/lib/firmware`, so these
-  are fetched + sha256-verified by `fetch-linux-fw.sh` (pinned in `LINUX_FW.pin`).
+- **`linux-fw`** — open firmware (Adreno GPU microcode, qca BT, Venus/Iris VPU, ath11k
+  Wi-Fi, and on SM8250 the adsp/cdsp too) from the official `linux-firmware` repo. The
+  upstream Holo base ships no `/lib/firmware`, so these are fetched + sha256-verified by
+  `fetch-linux-fw.sh` (pinned in `LINUX_FW.pin`).
 - **`qcom-fw`** — device-proprietary Qualcomm/vendor blobs (GPU zap shaders, adsp/cdsp DSP
   images, AudioReach tplg, ath12k Wi-Fi/BT, Renesas xHCI) extracted from each device's Android
   vendor image and republished to the [Nova-Deck/qcom-firmwares](https://github.com/Nova-Deck/qcom-firmwares)
   repo. Fetched + verified by `fetch-qcom-fw.sh` (pinned in `QCOM_FW.pin`).
+
+Which class a given blob falls in is **per-SoC, not fixed**. SM8550/SM8650 boards each need
+their own vendor-signed `adsp`/`cdsp`; every SM8250 board is served by the generic open pair
+in `linux-firmware`. Two SM8250 blobs are missing from both sources and are documented as
+open gaps at the bottom of `QCOM_FW.pin`.
+
+One trap worth knowing when adding rows: `linux-firmware` uses **symlinks** for several
+driver-facing names (e.g. `qcom/vpu-1.0/venus.mbn` → `../vpu/vpu20_p4.mbn`), and cgit's
+`plain/` endpoint returns 404 for a symlink. A 404 is therefore not proof the firmware is
+absent — check `WHENCE` at the pinned commit, then pin the real blob and rename it via the
+row's install-path column.
 
 | File | Purpose |
 |---|---|

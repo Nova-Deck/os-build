@@ -673,7 +673,18 @@ ourselves to its extent — rather than enumerating everything dangerous and all
 **The paramount assertion is geometric, not nominal:**
 
 > **Every sector written falls inside `[userdata_start, userdata_end]` of the partition we
-> identified.** The shrunk `userdata` and all 8 of our partitions are laid inside that span.
+> identified, or in space that was already unallocated.** The shrunk `userdata` and all 8 of our
+> partitions are laid inside that span.
+
+> **Measured 2026-08-10, and it is why `--append` needs no ceiling to match its floor.** `sgdisk
+> -n 0:0:0` ends at the end of the *free block*, not the end of the disk: with any partition after
+> `userdata`, `home` stops exactly at `userdata_end` (444415 in the fixture, with `oem-late` at
+> 444416 untouched). The one case that goes further is `userdata` being the last partition with
+> unallocated tail space, where `home` absorbs that tail — which is desirable, not a violation:
+> `home` is meant to expand to the maximum allowed once the user has chosen the new `userdata`
+> size. Hence the "or already unallocated" clause above. The property that carries the safety
+> argument is that **no sector of a pre-existing partition is ever written**, and the floor plus
+> the free-block rule deliver it without a second bound.
 
 This protects `xbl`, `abl`, `devinfo`, `super` and every OEM partition *by construction, on any
 layout* — captured or not — because they are outside the span. It is strictly stronger than a name

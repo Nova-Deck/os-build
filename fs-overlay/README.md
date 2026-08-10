@@ -38,9 +38,15 @@ the suspend engine (a `systemd-suspend.service` drop-in redirects logind `Suspen
 hook ships (NM re-associates unaided). See `docs/bringup-phase2.md` step 3.
 
 **Audio (layer C) — ALSA UCM2 machine profiles**
-`usr/share/alsa/ucm2/Qualcomm/sm86{50,55}/<CARD>/` profiles, card-name-matched via relative symlinks
-under `conf.d/sm86{50,55}/` (preserved by `cp -a`). They `Include` codec snippets that the base
-`alsa-ucm-conf` package must provide (SM8550 uses wcd938x, SM8650 wcd939x).
+`usr/share/alsa/ucm2/Qualcomm/sm8{250,550,650}/<CARD>/` profiles, card-name-matched via relative
+symlinks under `conf.d/sm8{250,550,650}/` (preserved by `cp -a`). They `Include` codec snippets that
+the base `alsa-ucm-conf` package must provide (SM8550 uses wcd938x, SM8650 wcd939x, SM8250 wcd938x
+plus wsa881x or AW88166 for speakers). One snippet is NOT in that package and ships here instead:
+`ucm2/codecs/wsa881x/init.conf`, without which the two wsa881x amps expose no stereo `Speakers
+Volume` control for the SM8250 profiles to bind to. The SM8250 boards also route through the legacy
+q6asm/ADM path rather than AudioReach, and the AYN Thor Lite additionally needs
+`usr/share/wireplumber/wireplumber.conf.d/51-ayn-thor-lite.conf` to pin its PCMs to S16LE — the ADM
+COPP is a bit-exact passthrough and UCM has no key for the sample format.
 
 **FEX (layer) — x86 emulation runtime config**
 `usr/share/fex-emu/Config.json` + the Proton FEX profiles + `usr/lib/novadeck/proton-wrapper`. The

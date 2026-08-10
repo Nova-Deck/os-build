@@ -551,6 +551,54 @@ printf '%s\n' "$out" | grep -qE 'NOVADECK_APPEND_FLOOR|must be a sector number' 
   && bad "a plain sector number was rejected by the floor gate: $out" \
   || ok "a plain sector number passes the gate (the run then needs a real sgdisk)"
 
+# --- 11. the floor is an EXPECTATION, not a minimum ----------------------------------------------
+# MEASURED against real sgdisk (2026-08-10): on a disk with a bigger unallocated region elsewhere,
+# `sgdisk -F` returns a sector ABOVE the floor, so a lower-bound test accepts a run that lays all
+# eight outside the space the carve freed. Harmless to the disk, wrong for the user -- they gave up
+# Android's data for room the install then does not use.
+#
+# Driving that needs sgdisk to answer -F, so this stubs it. The stub is honest about its limits: it
+# serves -p and -F and fails everything else, so a run that gets past the window check dies at the
+# first real partitioning call, and it is the MESSAGE that distinguishes the two outcomes.
+CASE="the floor is an expectation, not a minimum"
+mkdir -p "$T/stub"
+cat >"$T/stub/sgdisk" <<'STUB'
+#!/usr/bin/env bash
+for a in "$@"; do
+  case "$a" in
+    -p) exit 0 ;;
+    -F) echo "$STUB_FIRST_FREE"; exit 0 ;;
+  esac
+done
+echo "stub sgdisk: refusing to partition" >&2
+exit 1
+STUB
+chmod +x "$T/stub/sgdisk"
+
+: >"$T/nodisk.img"
+try_first_free() {  # <first-free-sector> <floor> -> the run's output
+  ( STUB_FIRST_FREE="$1" NOVADECK_APPEND_FLOOR="$2" DISK="$T/nodisk.img" PATH="$T/stub:$PATH" \
+    bash -euo pipefail -c "$append_script" ) 2>&1
+}
+FLOOR=100352
+# Exactly the freed sector, and the far edge of one 1 MiB alignment grain: both must get through.
+for ff in "$FLOOR" "$((FLOOR + 2047))"; do
+  out=$(try_first_free "$ff" "$FLOOR")
+  printf '%s\n' "$out" | grep -q 'is not the space the carve freed' \
+    && bad "first-free $ff (floor $FLOOR) was refused -- the alignment grain is too tight" \
+    || ok "first-free $ff is accepted as the carve's own space"
+done
+# Below the floor: the original failure the floor was written for.
+out=$(try_first_free "$((FLOOR - 2048))" "$FLOOR")
+printf '%s\n' "$out" | grep -q 'is not the space the carve freed' \
+  && ok "a first-free BELOW the floor is refused" \
+  || bad "sgdisk starting before the carve's tail was accepted: $out"
+# Above the window: the case a lower-bound test accepts and a real disk produces.
+out=$(try_first_free "$((FLOOR + 172032))" "$FLOOR")
+printf '%s\n' "$out" | grep -q 'is not the space the carve freed' \
+  && ok "a first-free ABOVE the window is refused (the largest block is elsewhere)" \
+  || bad "our eight would have landed outside the freed tail and the run was accepted: $out"
+
 CASE="the shipped copy carries the mandatory form"
 # Byte-identity with images/ is asserted elsewhere; what is asserted here is that the emitted text
 # is the MANDATORY shape, so a revert to the opt-in `[ -n "${NOVADECK_APPEND_FLOOR:-}" ] && ...`

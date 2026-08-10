@@ -87,7 +87,8 @@ emit() {
 # written lies inside the old userdata span; it deletes userdata and recreates it smaller, which is
 # what makes the freed tail the largest free block and so the one start sector 0 selects. Because
 # that is an inference about a disk this script cannot see, NOVADECK_APPEND_FLOOR exists: set it to
-# the first sector our partitions may occupy and the run refuses if sgdisk would start earlier.
+# the first sector our partitions may occupy -- the sector the shrunk userdata stops at, plus one --
+# and the run refuses unless sgdisk agrees that is where it is about to start.
 #
 # THE FLOOR IS MANDATORY, not an option (Phase 3, was opt-in through Phase 2). Unset, sgdisk takes
 # whatever the largest free block happens to be, and the containment rule then holds only because
@@ -122,10 +123,17 @@ esac
 sgdisk -p "$DISK" >/dev/null 2>&1 \
   || { echo "genpart: $DISK has no readable GPT -- append needs one (use create mode)" >&2; exit 1; }
 
-# The first aligned sector of the largest free block: what `-n 0:0:...` is about to pick.
+# The first aligned sector of the largest free block: what `-n 0:0:...` is about to pick. It has to
+# be the sector the caller named, not merely at-or-after it -- MEASURED 2026-08-10: a disk with a
+# bigger unallocated region elsewhere makes sgdisk -F return a sector ABOVE the floor, and a
+# lower-bound test then accepts a run that lays all eight outside the space the carve freed. Not a
+# brick, since that region holds nothing, but the user gave up Android's data for room we would then
+# not use, and home would be sized by an unrelated hole. So the floor is an EXPECTATION, and the
+# window is one 1 MiB alignment grain wide because that is sgdisk's own rounding.
 nd_first_free="$(sgdisk -F "$DISK")"
-if [ "$nd_first_free" -lt "$NOVADECK_APPEND_FLOOR" ]; then
-  echo "genpart: sgdisk would start at sector $nd_first_free, below the floor of $NOVADECK_APPEND_FLOOR -- refusing" >&2
+if [ "$nd_first_free" -lt "$NOVADECK_APPEND_FLOOR" ] \
+   || [ "$nd_first_free" -gt "$((NOVADECK_APPEND_FLOOR + 2047))" ]; then
+  echo "genpart: sgdisk would start at sector $nd_first_free, but the carve freed sector $NOVADECK_APPEND_FLOOR -- refusing" >&2
   echo "genpart: the largest free block on $DISK is not the space the carve freed" >&2
   exit 1
 fi

@@ -34,9 +34,15 @@ case "$model" in
     "AYN Odin 2 Mini")           profile=ayn-odin-2-mini ;;
     "AYN Odin 2 Portal")         profile=ayn-odin-2-portal ;;
     "AYN Thor")                  profile=ayn-thor ;;
+    "AYN Thor Lite")             profile=ayn-thor-lite ;;
     "KONKR Pocket FIT")          profile=konkr-pocket-fit ;;
+    "MANGMI Pocket Max")         profile=mangmi-pocket-max ;;
+    "Retroid Pocket 5")          profile=retroid-pocket-5 ;;
     "Retroid Pocket 6")          profile=retroid-pocket-6 ;;
     "Retroid Pocket 6 TOP-DPAD") profile=retroid-pocket-6 ;;
+    "Retroid Pocket Flip2")      profile=retroid-pocket-flip2 ;;
+    "Retroid Pocket Mini")       profile=retroid-pocket-mini ;;
+    "Retroid Pocket Mini V2")    profile=retroid-pocket-mini-v2 ;;
     "Retroid Pocket Nova")       profile=retroid-pocket-nova ;;
     *)                           profile= ;;
 esac

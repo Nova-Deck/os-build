@@ -1,0 +1,32 @@
+# Keep wsa881x speaker amps out of runtime PM.
+#
+# HW-confirmed fix on the MANGMI Pocket Max (SM8250), 2026-08-10. Without it that
+# board has NO audio at all — not just no speakers.
+#
+# Why. The Pocket Max wires BOTH amps to one powerdown line
+# (kernel/dts/qcom/sm8250-mangmi-pocket-max.dts: `powerdown-gpios = <&tlmm 127 ...>`
+# on speaker@0,1 AND speaker@0,2). Every other wsa881x board here gives each amp its
+# own pin — Retroid Pocket uses 129 and 127. Sharing only works at all because
+# kernel/patches/0202 requests the GPIO with GPIOD_FLAGS_BIT_NONEXCLUSIVE, which
+# makes gpiolib hand each consumer a `gpiolib_shared` proxy chip over the one line.
+#
+# A shared line aggregates its consumers, so ONE amp left in runtime-suspend keeps
+# the line asserted and holds the OTHER amp in powerdown too. The stuck amp then
+# never completes SoundWire enumeration:
+#     wsa881x-codec sdw:1:0:0217:2010:00:1: Initialization not complete, timed out
+#     WSA Playback: ASoC error (-110): at __soc_pcm_open()
+# (the timeout is wsa881x_runtime_resume() waiting on the SoundWire core's
+# initialization_complete), and the whole card is unusable.
+#
+# Pinning both amps active from bind keeps the line de-asserted. Verified on the
+# device by the debugfs line flipping `out lo` -> `out hi` on an ACTIVE_LOW gpio,
+# both amps reaching runtime_status=active, and every wsa881x timeout disappearing
+# from the kernel log.
+#
+# Scope. Matched on the wsa881x SoundWire part ID (0217:2010), so it is inert on
+# every board we already ship: SM8550/SM8650 use wsa884x, which is 0217:0204. It
+# DOES also catch the four Retroid Pocket boards, which have separate pins and so
+# should not need it; there it is belt-and-braces at the cost of leaving the amps
+# powered. Narrow it to the Pocket Max if that idle draw ever shows up in a
+# measurement — as of now no Retroid board has been powered on to measure.
+ACTION=="bind", SUBSYSTEM=="soundwire", KERNEL=="sdw:*:0217:2010:*", ATTR{power/control}="on"

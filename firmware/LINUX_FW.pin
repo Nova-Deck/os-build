@@ -2,15 +2,18 @@
 # repository, pinned by commit + per-file sha256 (the sha verifies the DOWNLOADED source).
 #
 # The upstream Holo aarch64 base ships NO /lib/firmware, so these `linux-fw`-class blobs
-# (Adreno GPU, WCN7850 Wi-Fi/BT, Iris VPU) must be delivered by us. Device-signed blobs
-# (GPU zap, adsp/cdsp) are NOT here — those come from the Nova-Deck/qcom-firmwares repo
-# via firmware/fetch-qcom-fw.sh (firmware/QCOM_FW.pin).
+# (Adreno GPU, qca Wi-Fi/BT, Venus/Iris VPU, and on SM8250 the DSPs too) must be delivered
+# by us. Blobs that are device-signed and absent upstream are NOT here — those come from
+# the Nova-Deck/qcom-firmwares repo via firmware/fetch-qcom-fw.sh (firmware/QCOM_FW.pin).
+# Which class a blob falls in is per-SoC, not fixed: the SM8550/SM8650 boards need
+# vendor-signed adsp/cdsp, while every SM8250 board is served by the generic open pair.
 #
 # Columns:  <src-path-in-linux-firmware>  <install-path-under-/lib/firmware>  <sha256>
 # '#' and blank lines are ignored. install-path may rename the file (e.g. the VPU signed
 # variant) to the exact name the kernel driver requests.
 #
-# Fetch + verify with:  firmware/fetch-linux-fw.sh sm8650
+# Fetch + verify with:  firmware/fetch-linux-fw.sh   (no arguments — one flat tree for
+# every SoC; the unified Image embeds the union.)
 commit: e7eb98afc667913acc533ab910c608bee7d08f25
 base:   https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain
 
@@ -38,3 +41,46 @@ qca/hmtnv20.b112           qca/hmtnv20.b112         f8d027c5f0ea54456d23b903c55e
 
 # Iris VPU (gen33): driver hard-requests vpu33_p4.mbn; upstream ships the _s7 signed variant
 qcom/vpu/vpu33_p4_s7.mbn   qcom/vpu/vpu33_p4.mbn    7b829fc1c8ce7cca836d10e898b99c5bcbd86e22073b690147168c9d0a5de378
+
+# ---------------------------------------------------------------------------------------
+# SM8250 (Snapdragon 865) — Retroid Pocket 5 / Flip2 / Mini / Mini V2, AYN Thor Lite,
+# MANGMI Pocket Max. Unlike SM8550/SM8650, almost the whole SM8250 firmware set is OPEN:
+# even adsp/cdsp ship in linux-firmware under qcom/sm8250/, so they are rows HERE rather
+# than per-board republished blobs in qcom-firmwares. See QCOM_FW.pin for the two that are
+# genuinely missing (slpi, and the Thor Lite's amp calibration).
+# ---------------------------------------------------------------------------------------
+
+# Adreno 650 GPU microcode + zap shader (open) — also embedded in the kernel Image.
+# The zap is shared by all six boards; every board .dts points its &gpu_zap_shader at it.
+qcom/a650_sqe.fw           qcom/a650_sqe.fw         c863ceac3a823af215205d7803776bfdc68098c2c2a5d2fd05b4aa77cd336b4b
+qcom/a650_gmu.bin          qcom/a650_gmu.bin        df79fa8482fcc7587bb239b9c9e2b24bce4729893b990fe3f82b30da8175b01c
+qcom/sm8250/a650_zap.mbn   qcom/sm8250/a650_zap.mbn 0624d84e0ecc5e08dce55e33c4e0e34a4c1221bb8b9b2716c699a2cb79fe99de
+
+# adsp / cdsp DSP images. NOTE the contrast with SM8550/SM8650, where each board needs its
+# own vendor-signed pair out of qcom-firmwares: the SM8250 boards all ask for the generic
+# qcom/sm8250/ path, and linux-firmware has it. Not embedded — QCOM_Q6V5_PAS is =m and
+# loads after the root is mounted.
+qcom/sm8250/adsp.mbn       qcom/sm8250/adsp.mbn     7fd1fa907d0cb44a87e7339ffa0ce279cf08d6a70f8e7cd199a3fcd10d000a38
+qcom/sm8250/cdsp.mbn       qcom/sm8250/cdsp.mbn     42b371d64e87b7c40775ed9474e5f4f1b5d84b3a6766ba1d74a5bcfa255016a1
+
+# Venus video codec. The driver hard-requests qcom/vpu-1.0/venus.mbn (sm8250_res.fwname in
+# drivers/media/platform/qcom/venus/core.c). In linux-firmware that path is a SYMLINK to
+# qcom/vpu/vpu20_p4.mbn, and cgit's plain/ endpoint cannot serve a symlink — fetching the
+# link path returns 404. Pull the real blob and rename on install, exactly as the SM8650
+# vpu33 row above does.
+qcom/vpu/vpu20_p4.mbn      qcom/vpu-1.0/venus.mbn   a66e86e34dc69a870fe631c73ed4a93d9fcfea6f3f2a4ac02cb118cb505bbbb2
+
+# QCA6390 Wi-Fi (ath11k) — the SM8250 radio is ath11k/QCA6390, not the ath12k/WCN7850 the
+# SM8650 boards carry, and unlike WCN7850 its blobs are OPEN (WCN7850's live in qcom-fw).
+# These three are the entire QCA6390/hw2.0 directory upstream; there is no regdb.bin for
+# this part, so nothing is being left out.
+ath11k/QCA6390/hw2.0/amss.bin     ath11k/QCA6390/hw2.0/amss.bin     8ab2a06422e3989012df423bb6a156fde2c3feb4cd5db4c5d3588f674dc872ff
+ath11k/QCA6390/hw2.0/board-2.bin  ath11k/QCA6390/hw2.0/board-2.bin  4aa9f0fe15e9e2b6f9bb13b7187ed8ce035d9d46fb65fac5d5eba2c4e7edc091
+ath11k/QCA6390/hw2.0/m3.bin       ath11k/QCA6390/hw2.0/m3.bin       1921d25edb52f90a7a0acc7275861e14399f904d579aae9f7ab1c4d28533fad6
+
+# QCA6390 Bluetooth (qca): rampatch + NVM. btqca picks the names from the SoC type and ROM
+# version — QCA_QCA6390 with rom_ver 0x20 gives htbtfw20.tlv, and the NVM falls back from a
+# board-specific htnv20.bNN to htnv20.bin. Only the fallback is pinned: unlike the WCN7850
+# rows above, no SM8250 board here is known to need a .bNN variant.
+qca/htbtfw20.tlv           qca/htbtfw20.tlv         3fbe07f93d170b1483c1c7f71bdfd6c98862281bfc10898b8cd537b700f688ec
+qca/htnv20.bin             qca/htnv20.bin           a4c0cbafc102998805679a2947aa82dd3b0abf1a1c0b372f1630b8ea327e2e8a

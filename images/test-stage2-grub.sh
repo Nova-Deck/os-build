@@ -82,6 +82,49 @@ for id in "${!confids[@]}"; do
                           || bad "device profile '$id' is missing from the catalog"
 done
 
+# --- 2b. device-env can actually REACH every profile --------------------------------------------
+# A fourth file has to agree and nothing checked it until a six-board SoC import made the gap
+# obvious. fs-overlay/usr/lib/novadeck/device-env maps the devicetree `model` string to a profile
+# name with a hand-written case. Miss a board there and it does not fail: it falls through to
+# defaults.conf, so the running system reports device-id `unknown`, exports no SOC_CLASS (powerd
+# loses its underclock table) and no panel dims (novadeck-session falls back to a generic
+# landscape 1920x1080 on the wrong connector). No error, just a subtly wrong session.
+CASE="device-env <-> profiles"
+DEVENV="$ROOT/fs-overlay/usr/lib/novadeck/device-env"
+if [ ! -r "$DEVENV" ]; then
+  bad "cannot read $DEVENV"
+else
+  # Case arms look like:  "AYN Thor Lite")   profile=ayn-thor-lite ;;
+  unset envprof; declare -A envprof
+  unset envmodel; declare -A envmodel
+  while IFS= read -r line; do
+    m=$(printf '%s' "$line" | sed -n 's/^[[:space:]]*"\([^"]*\)").*profile=\([A-Za-z0-9._-]*\).*/\1/p')
+    p=$(printf '%s' "$line" | sed -n 's/^[[:space:]]*"\([^"]*\)").*profile=\([A-Za-z0-9._-]*\).*/\2/p')
+    [ -n "$p" ] || continue
+    envprof["$p"]=1
+    envmodel["$m"]=1
+  done < "$DEVENV"
+
+  for id in "${!confids[@]}"; do
+    [ -n "${envprof[$id]:-}" ] && ok "device-env can select profile '$id'" \
+      || bad "device-env has no model string mapping to '$id' -- that board silently gets defaults.conf"
+  done
+  for p in "${!envprof[@]}"; do
+    [ -r "$DEVICES/$p.conf" ] && ok "device-env's '$p' arm has a profile file" \
+      || bad "device-env maps a model to '$p', but $p.conf does not exist"
+  done
+
+  # And the case KEYS must be real model strings, or the match never fires on hardware. Compare
+  # against the root `model` of every board .dts (following one level of #include for the boards
+  # that inherit their root node from a sibling .dts).
+  for dts in "$DTS"/*.dts; do
+    mdl=$(sed -n 's/^[[:space:]]*model = "\(.*\)";.*/\1/p' "$dts" | head -1)
+    [ -n "$mdl" ] || continue
+    [ -n "${envmodel[$mdl]:-}" ] && ok "model '$mdl' is matched by device-env" \
+      || bad "$(basename "$dts") declares model '$mdl', which device-env's case never matches"
+  done
+fi
+
 # --- 3. every shipped DTB is reachable from the menu --------------------------------------------
 # A DTB with no catalog row is only legal when it is a hardware variant deriving from one (the
 # RP6's top-dpad revision). Anything else ships a board nobody can boot.

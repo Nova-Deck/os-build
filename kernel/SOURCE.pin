@@ -12,14 +12,22 @@ git_commit: 2609d60e2f6d0b8a96563baa08b56482962cebaa
 # tag (`git ls-remote 'v7.1.6^{}'`), matching how the 7.1.5 line was recorded; the annotated tag
 # object is ea09c82324a76af76dc0cadf3fff4fef7025ca57 and is NOT what belongs here.
 
-# Config validation (kernel/kernel.config) against THIS tree, re-run 2026-08-03 for 7.1.6:
-#   - all 356 referenced CONFIG_* symbols exist in the PATCHED 7.1.6 tree. Zero corrections were
+# Config validation (kernel/kernel.config) against THIS tree, re-run 2026-08-10 for the SM8250
+# import (previous full run 2026-08-03 for 7.1.6):
+#   - all 377 referenced CONFIG_* symbols exist in the PATCHED 7.1.6 tree. Zero corrections were
 #     needed this time — the renames below were already carried in from the 7.1.5 bump.
-#   - all 53 out-of-tree patches in kernel/patches/ apply to 7.1.6 with ZERO rejects, applied
+#   - all 71 out-of-tree patches in kernel/patches/ apply to 7.1.6 with ZERO rejects, applied
 #     CUMULATIVELY in lexical order, which is the only order that means anything (see below).
 #     10 of them need fuzz; kernel/build.sh passes no -F0, so patch's default fuzz=2 accepts them.
-#     Patch-apply half re-run 2026-08-10 after the 0120/0121 GX-rail rework: still 53/53 clean,
-#     still the same 10 fuzz patches, and 0120/0121 are not among them (both apply at fuzz 0).
+#     Patch-apply half re-run 2026-08-10 after the 0120/0121 GX-rail rework and again after the
+#     18 SM8250 patches landed: still clean, still the same 10 fuzz patches, and neither
+#     0120/0121 nor any SM8250 patch is among them (all apply at fuzz 0).
+#   - the 2026-08-10 run went one step further than a symbol-existence check and MERGED the
+#     fragments for real (`merge_config.sh -m defconfig kernel/*.config` + `make olddefconfig`,
+#     trim-platforms.config included), then asserted every requested symbol kept its requested
+#     value. Only DEBUG_INFO_BTF/SCHED_CLASS_EXT came out unset, and only because that run was
+#     on a host without `dwarves` — PAHOLE_VERSION resolves to 0 there. Inside build/Dockerfile
+#     it is present, and kernel/build.sh asserts both anyway.
 #
 # HOW TO RE-RUN THIS VALIDATION, and the mistake that makes it lie: patches must be applied
 # cumulatively to ONE tree, exactly as kernel/build.sh:56 does. Dry-running each patch independently

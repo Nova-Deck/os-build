@@ -11,6 +11,16 @@
 # reports); images/test-stage2-grub.sh cross-checks the two stay in sync. Every
 # <dtb> must exist under kernel/dts/qcom/ and every board DTB must be covered
 # here or by the filename-derived top-dpad entry.
+#
+# The bootargs column carries only what is SPECIFIC to the board — the args every
+# board gets (quiet, video=efifb:off, console=tty0, ...) live in BOOT_CMDLINE in
+# boot/gen-grub-cfg.sh. In practice that means irqaffinity, pinned to the SoC's
+# LITTLE cluster so device interrupts stay off the big cores: 0-2 on SM8550
+# (3x A510), 0-1 on SM8650 (2x A520), 0-3 on SM8250 (4x A55 — verified against
+# the capacity-dmips-mhz split in sm8250.dtsi, where CPU0-3 are 448 and CPU4-7
+# are 1024). The SM8550 rows' allow_mismatched_32bit_el0 / fw_devlink.strict /
+# pcie_ports are SoC workarounds and are deliberately absent from the SM8250
+# rows; so is the 045e:028e USB polling quirk, which only some boards carry.
 ayaneo-pocket-ace	AYANEO Pocket ACE	qcs8550-ayaneo-pocketace	allow_mismatched_32bit_el0 fw_devlink.strict=1 pcie_ports=compat irqaffinity=0-2 usbcore.interrupt_interval_override=045e:028e:2
 ayaneo-pocket-dmg	AYANEO Pocket DMG	qcs8550-ayaneo-pocketdmg	allow_mismatched_32bit_el0 fw_devlink.strict=1 pcie_ports=compat irqaffinity=0-2 usbcore.interrupt_interval_override=045e:028e:2
 ayaneo-pocket-ds	AYANEO Pocket DS	qcs8550-ayaneo-pocketds	allow_mismatched_32bit_el0 fw_devlink.strict=1 pcie_ports=compat irqaffinity=0-2 usbcore.interrupt_interval_override=045e:028e:2
@@ -22,6 +32,12 @@ ayn-odin-2	AYN Odin 2	qcs8550-ayn-odin2	allow_mismatched_32bit_el0 fw_devlink.st
 ayn-odin-2-mini	AYN Odin 2 Mini	qcs8550-ayn-odin2mini	allow_mismatched_32bit_el0 fw_devlink.strict=1 pcie_ports=compat irqaffinity=0-2
 ayn-odin-2-portal	AYN Odin 2 Portal	qcs8550-ayn-odin2portal	allow_mismatched_32bit_el0 fw_devlink.strict=1 pcie_ports=compat irqaffinity=0-2
 ayn-thor	AYN Thor	qcs8550-ayn-thor	allow_mismatched_32bit_el0 fw_devlink.strict=1 pcie_ports=compat irqaffinity=0-2
+ayn-thor-lite	AYN Thor Lite	sm8250-ayn-thorlite	irqaffinity=0-3
 konkr-pocket-fit	KONKR Pocket FIT	sm8650-konkr-pf	irqaffinity=0-1 usbcore.interrupt_interval_override=045e:028e:2
+mangmi-pocket-max	MANGMI Pocket Max	sm8250-mangmi-pocket-max	irqaffinity=0-3
+retroid-pocket-5	Retroid Pocket 5	sm8250-retroidpocket-rp5	irqaffinity=0-3
 retroid-pocket-6	Retroid Pocket 6	qcs8550-retroidpocket-rp6	allow_mismatched_32bit_el0 fw_devlink.strict=1 pcie_ports=compat irqaffinity=0-2
+retroid-pocket-flip2	Retroid Pocket Flip2	sm8250-retroidpocket-flip2	irqaffinity=0-3
+retroid-pocket-mini	Retroid Pocket Mini	sm8250-retroidpocket-rpmini	irqaffinity=0-3
+retroid-pocket-mini-v2	Retroid Pocket Mini V2	sm8250-retroidpocket-rpminiv2	irqaffinity=0-3
 retroid-pocket-nova	Retroid Pocket Nova	qcs8550-retroidpocket-rpnova	allow_mismatched_32bit_el0 fw_devlink.strict=1 pcie_ports=compat irqaffinity=0-2

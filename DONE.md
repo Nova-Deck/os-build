@@ -7,6 +7,120 @@ name. Order is as it was in TODO.md — roughly the order things were closed, no
 
 ## Closed
 
+- [x] **SM8250 (Snapdragon 865) port — six boards, NO REGRESSION on the shipping SoCs
+  2026-08-10** (branch `soc/sm8250`). Retroid Pocket 5 / Flip2 / Mini / Mini V2, AYN Thor Lite,
+  MANGMI Pocket Max. Five deliverables: 6 device trees + 1 common dtsi, 18 out-of-tree patches
+  (71 total, all applying cumulatively at the pinned 7.1.6), the kernel config delta, the ALSA
+  UCM2 profiles, and the firmware. Third SoC family in the unified image; board count 15 → 21.
+  - **What was actually measured.** A dev card built from the merged tree booted on **four
+    boards across both shipping SoCs — AYANEO Pocket S2 (SM8650), KONKR Pocket FIT (SM8650),
+    AYANEO Pocket ACE (SM8550), AYN Odin 2 (SM8550)** — with no regressions. That is the test
+    that mattered: the import touches the *shared* Image, not just new files.
+    The Odin 2 earns a separate mention: it is the only one of the four in the AYN family, and
+    it carries a **wcd938x** (`sdw20217010d00`) — the same codec that made the upstream
+    runtime-PM udev rule too broad to accept with the SM8250 UCM import. It works untouched,
+    which is the evidence that declining that rule was right. It also confirms the new
+    `70-novadeck-wsa881x-runtime-pm.rules` cannot reach it: the Odin 2 has no wsa881x at all
+    (its speakers are AW88166 over MI2S), so nothing on it matches `0217:2010`.
+  - **The specific risk this retires.** `0005-msm-dsi-keep-link-clocks-up-while-display-active`
+    was the one shared-code import that is NOT a provable no-op — it suppresses link-clock
+    recycling on DCS transfers while the display is live, which changes behaviour on every
+    DSI-backlight panel we already ship. Pocket S2 and Pocket ACE were named as the boards to
+    re-check when it landed; both were tested. Cleared.
+  - `0003-msm-dsi-restore-wide_bus-bpp-calculation` needed no hardware: it is a provable no-op
+    for every panel we ship, because all three of our DSC panels are `MIPI_DSI_FMT_RGB888` with
+    `bits_per_component = 8`, so `dsc->bits_per_component * 3` and
+    `mipi_dsi_pixel_format_to_bpp(format)` both yield 24.
+  - **What this run did NOT cover, deliberately recorded rather than implied.** None of the four
+    boards uses the ChipOne ICNA35XX driver — they are AR14, AR06, WT0630-2K and, on the Odin 2,
+    Synaptics TD4328 — so `0070_Chipone-ICNA35XX--add-MANGMI-Pocket-Max-panel`, which extends a
+    driver shared with Pocket DS / Pocket EVO / Odin2 Portal / AYN Thor, is compile-clean and
+    structurally isolated (new `panel_desc` + one `of_match` row, no edit to the existing descs)
+    but still not runtime-proven. Exercising it needs one of those four boards, and adding the
+    Odin 2 to the set did not help: it is the plain Odin 2, not the Portal.
+  - **First SM8250 hardware, 2026-08-10 — AYN Thor Lite and MANGMI Pocket Max.** Both boot.
+    - **Thor Lite: display FIXED** (`f67caef`). Its primary panel is **DSI-1**, not the DSI-2
+      the profile shipped — `/sys/class/drm` shows DSI-1 at 1080x1920 (icna3520, mdss_dsi0)
+      and DSI-2 at 1080x1240 (ch13726a,thor, mdss_dsi1). gamescope took `--prefer-output
+      DSI-2`, lit the small secondary panel and left the main screen black, with the boot
+      console still visible because the kernel had lit the real panel first. **The connector
+      index is not derivable**: the SM8550 AYN Thor has the identical shape (primary on
+      mdss_dsi0, second panel on mdss_dsi1) and genuinely IS DSI-2 (`7c6850c`). Read
+      `/sys/class/drm` per board. Note an `sddm` restart does not retest this — gamescope
+      outlives it; reboot.
+    - **Thor Lite: audio WORKS.** Card 0 `sm8250 - AYN Thor Lite`, so the UCM lookup, the
+      q6asm/ADM path and the AW88166-over-MI2S speaker route are all good, and the whole
+      SM8250 audio stack is proven end to end on at least one board.
+    - **Pocket Max: NO AUDIO — root-caused to the wsa881x amps, NOT to any of our config.**
+      Read out of the persistent journal after the fact (the card had already moved to the
+      Thor Lite; `_BOOT_ID=58a16267…`, found by matching `Machine model:` per boot rather than
+      trusting the boot index, which the stale RTC scrambles). What the journal shows:
+      - The card IS created and correctly named — `input: PocketMax Headset Jack …
+        card0/input6`, `Reached target Sound Card`. So the conf.d name match and the machine
+        driver are fine.
+      - `wcd938x` (headphones + mic) bound cleanly on both `sdw:2` and `sdw:3` at t=3.64s.
+      - `wsa881x-codec sdw:1:0:0217:2010:00:1: Initialization not complete, timed out` at
+        t=12.38s, then `ASoC error (-110)` and `WSA Playback: ASoC error (-110): at
+        __soc_pcm_open()`. The timeout is in `wsa881x_runtime_resume()`, which drives the
+        powerdown GPIO and then waits on the SoundWire core's `initialization_complete`.
+      - `MultiMedia1: ASoC: no backend DAIs enabled` — the headphone route was never set
+        either, which is why "no audio" rather than "no speakers".
+      **FIXED** by `fs-overlay/usr/lib/udev/rules.d/70-novadeck-wsa881x-runtime-pm.rules`,
+      confirmed on the device. MANGMI wires BOTH amps to one powerdown line (`&tlmm 127`
+      twice); every other wsa881x board gives each its own (Retroid 129/127, AYANEO SM8550
+      7/12). Sharing works at all only because `0202` requests the GPIO non-exclusively, which
+      makes gpiolib hand each consumer a `gpiolib_shared` proxy — and a shared line aggregates
+      its consumers, so ONE amp left in runtime-suspend holds the OTHER in powerdown. Pinning
+      both `power/control=on` from bind flips the debugfs line `out lo` -> `out hi` on an
+      ACTIVE_LOW gpio, both amps reach `runtime_status=active`, every wsa881x timeout
+      disappears, and UCM brings up both Speaker and Headphones sinks. The rule matches the
+      wsa881x part ID `0217:2010`, so it is inert on SM8550/SM8650 (wsa884x is `0217:0204`).
+      Two things asserted earlier in this file were WRONG and are corrected here: both amps do
+      enumerate and bind (`sdw:1:…:1` and `:2`) — the right one merely never logged; and the
+      "zero `Spkr*` controls" reading was a dead instrument, not evidence, because the image
+      ships no `alsa-utils` (`amixer` and `alsaucm` are both absent).
+      **The wiring is what makes this board unique:** MANGMI puts BOTH amps on the same
+      powerdown GPIO (`&tlmm 127` twice). Every other wsa881x board here gives each amp its
+      own — Retroid Pocket uses 129 and 127, AYANEO Pocket (SM8550, working) uses 7 and 12.
+      That shared line is precisely why `0202-ASoC-wsa881x-request-powerdown-gpio-non-
+      exclusively` exists in the SM8250 patch set, and it applied. With one line and two
+      driver instances, one instance's runtime-suspend drives the pin back to powerdown while
+      the other is waiting to re-enumerate — which is exactly the observed timeout.
+      **Testable prediction: the four Retroid boards should have working speakers**, since
+      they do not share the pin. Untested — no Retroid hardware yet.
+      Two causes were eliminated offline before the journal was read, and stay eliminated: the
+      manual speaker EnableSequence in `PocketMax/HiFi.conf` is the exact union of the shared
+      `wsa-macro` + `wsa881x` snippets (only `WSA_RXn INP0` swapped for the crossed channels),
+      and the frontend dai-link order is MultiMedia1/2/3 as on both working boards.
+    - **Pocket Max: volume LOUD ENOUGH — the "too low" bug is CLOSED, 2026-08-10.** No new
+      change fixed it; it was the same `70-novadeck-wsa881x-runtime-pm.rules` finally running
+      from bind. The too-low measurement was taken on a card where the rule was hand-applied as
+      a temp `/etc/udev/rules.d/60-test-wsa881x.rules` *after* boot, so the amps had already
+      timed out and were never really delivering. Reflashed with the rule baked in, the board is
+      comfortably loud with the PipeWire sink at only **25%** — where the earlier reading was
+      "too low" at 100%. Confirmed on the device (`amixer` is present now, `38dc236`):
+      - zero `wsa881x … timed out` this boot, both amps `power/control=on`, `runtime_status=active`;
+      - UCM's speaker sequence really did run — `WSA_RX0 INP0`=`RX1` and `WSA_RX1 INP0`=`RX0`,
+        the crossed pair that is ours alone and could never be a default. COMP + BOOST on,
+        `Smart Boost Level` = `7.500 V` (item 7 of 16, mid-scale — not the low default that
+        was suspected), `WSA_RX0/1 Digital Volume` = 120 of 124 where 84 is unity, so +36 dB.
+      So the whole earlier gain-chain theory was chasing a chain that was already hot; the amps
+      simply were not powered. **The suspects named in the old note (`Smart Boost Level`, the
+      `COMP` compander) are eliminated** — both were already in the wanted state.
+    - **Separate, still-live nit found while confirming: our UCM's `Spkr{Left,Right} PA Volume
+      12` does not stick.** Steady state is **8**, the wsa881x reset default (`0..12` at 1.5 dB
+      per step, so +12 dB where the UCM asks for +18 dB). The readback tracks amp power exactly
+      — sink node `suspended` reads 0, `running` reads 8 — i.e. the part re-initialises its gain
+      register on every power-up and discards what UCM wrote at device-enable time. Writing 12
+      by hand holds only until the next suspend/resume. The udev rule does not cover this: it
+      pins SoundWire *runtime PM*, a different layer from the ASoC/DAPM power-down of the PCM
+      path. Costs 6 dB of headroom that the +36 dB digital stage is currently covering, which is
+      why it is a nit and not the bug. Not chased further — it predates the fix and is unchanged
+      by it.
+  - **Still open, needs a vendor image:** `qcom/sm8250/slpi.mbn` exists in no open source, so
+    every SM8250 board is without its sensor DSP — no accelerometer, no auto-rotation. See the
+    gap note at the bottom of `firmware/QCOM_FW.pin`.
+
 - [x] **The GX rail is GMU-owned, so gpucc must not vote on it — HW-VALIDATED on BOTH SoCs
   2026-08-10** (`6f973e0`). Ported from an upstream-peer change whose author reports it fixing GX clock issues on
   SM8550/SM8650. Two coupled kernel patches, and neither alone is the fix:

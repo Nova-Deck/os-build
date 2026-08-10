@@ -12,10 +12,16 @@ name. Order is as it was in TODO.md — roughly the order things were closed, no
   MANGMI Pocket Max. Five deliverables: 6 device trees + 1 common dtsi, 18 out-of-tree patches
   (71 total, all applying cumulatively at the pinned 7.1.6), the kernel config delta, the ALSA
   UCM2 profiles, and the firmware. Third SoC family in the unified image; board count 15 → 21.
-  - **What was actually measured.** A dev card built from the merged tree booted on **three
+  - **What was actually measured.** A dev card built from the merged tree booted on **four
     boards across both shipping SoCs — AYANEO Pocket S2 (SM8650), KONKR Pocket FIT (SM8650),
-    AYANEO Pocket ACE (SM8550)** — with no regressions. That is the test that mattered: the
-    import touches the *shared* Image, not just new files.
+    AYANEO Pocket ACE (SM8550), AYN Odin 2 (SM8550)** — with no regressions. That is the test
+    that mattered: the import touches the *shared* Image, not just new files.
+    The Odin 2 earns a separate mention: it is the only one of the four in the AYN family, and
+    it carries a **wcd938x** (`sdw20217010d00`) — the same codec that made the upstream
+    runtime-PM udev rule too broad to accept with the SM8250 UCM import. It works untouched,
+    which is the evidence that declining that rule was right. It also confirms the new
+    `70-novadeck-wsa881x-runtime-pm.rules` cannot reach it: the Odin 2 has no wsa881x at all
+    (its speakers are AW88166 over MI2S), so nothing on it matches `0217:2010`.
   - **The specific risk this retires.** `0005-msm-dsi-keep-link-clocks-up-while-display-active`
     was the one shared-code import that is NOT a provable no-op — it suppresses link-clock
     recycling on DCS transfers while the display is live, which changes behaviour on every
@@ -25,12 +31,13 @@ name. Order is as it was in TODO.md — roughly the order things were closed, no
     for every panel we ship, because all three of our DSC panels are `MIPI_DSI_FMT_RGB888` with
     `bits_per_component = 8`, so `dsc->bits_per_component * 3` and
     `mipi_dsi_pixel_format_to_bpp(format)` both yield 24.
-  - **What this run did NOT cover, deliberately recorded rather than implied.** None of the three
-    boards uses the ChipOne ICNA35XX driver (they are AR14, AR06 and WT0630-2K), so
-    `0070_Chipone-ICNA35XX--add-MANGMI-Pocket-Max-panel` — which extends a driver shared with
-    Pocket DS / Pocket EVO / Odin2 Portal / AYN Thor — is compile-clean and structurally isolated
-    (new `panel_desc` + one `of_match` row, no edit to the existing descs) but not runtime-proven.
-    Exercising it needs one of those four boards. No SM8250 board has been powered on at all.
+  - **What this run did NOT cover, deliberately recorded rather than implied.** None of the four
+    boards uses the ChipOne ICNA35XX driver — they are AR14, AR06, WT0630-2K and, on the Odin 2,
+    Synaptics TD4328 — so `0070_Chipone-ICNA35XX--add-MANGMI-Pocket-Max-panel`, which extends a
+    driver shared with Pocket DS / Pocket EVO / Odin2 Portal / AYN Thor, is compile-clean and
+    structurally isolated (new `panel_desc` + one `of_match` row, no edit to the existing descs)
+    but still not runtime-proven. Exercising it needs one of those four boards, and adding the
+    Odin 2 to the set did not help: it is the plain Odin 2, not the Portal.
   - **First SM8250 hardware, 2026-08-10 — AYN Thor Lite and MANGMI Pocket Max.** Both boot.
     - **Thor Lite: display FIXED** (`f67caef`). Its primary panel is **DSI-1**, not the DSI-2
       the profile shipped — `/sys/class/drm` shows DSI-1 at 1080x1920 (icna3520, mdss_dsi0)

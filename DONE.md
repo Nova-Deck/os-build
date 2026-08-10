@@ -31,12 +31,29 @@ name. Order is as it was in TODO.md — roughly the order things were closed, no
     Pocket DS / Pocket EVO / Odin2 Portal / AYN Thor — is compile-clean and structurally isolated
     (new `panel_desc` + one `of_match` row, no edit to the existing descs) but not runtime-proven.
     Exercising it needs one of those four boards. No SM8250 board has been powered on at all.
-  - **Open on SM8250 hardware, from the port itself:** the AYN Thor Lite's
-    `NOVADECK_PRIMARY_CONNECTOR=DSI-2` is the one profile field derived from DRM enumeration
-    rather than the DTS (it mirrors the SM8550 AYN Thor, the only other dual-live-DSI board);
-    and `qcom/sm8250/slpi.mbn` does not exist in any open source, so every SM8250 board is
-    without its sensor DSP — no accelerometer, no auto-rotation — until it is extracted from a
-    device vendor image. See the gap note at the bottom of `firmware/QCOM_FW.pin`.
+  - **First SM8250 hardware, 2026-08-10 — AYN Thor Lite and MANGMI Pocket Max.** Both boot.
+    - **Thor Lite: display FIXED** (`f67caef`). Its primary panel is **DSI-1**, not the DSI-2
+      the profile shipped — `/sys/class/drm` shows DSI-1 at 1080x1920 (icna3520, mdss_dsi0)
+      and DSI-2 at 1080x1240 (ch13726a,thor, mdss_dsi1). gamescope took `--prefer-output
+      DSI-2`, lit the small secondary panel and left the main screen black, with the boot
+      console still visible because the kernel had lit the real panel first. **The connector
+      index is not derivable**: the SM8550 AYN Thor has the identical shape (primary on
+      mdss_dsi0, second panel on mdss_dsi1) and genuinely IS DSI-2 (`7c6850c`). Read
+      `/sys/class/drm` per board. Note an `sddm` restart does not retest this — gamescope
+      outlives it; reboot.
+    - **Thor Lite: audio WORKS.** Card 0 `sm8250 - AYN Thor Lite`, so the UCM lookup, the
+      q6asm/ADM path and the AW88166-over-MI2S speaker route are all good, and the whole
+      SM8250 audio stack is proven end to end on at least one board.
+    - **Pocket Max: NO AUDIO — open.** Two candidate causes eliminated offline: the manual
+      speaker EnableSequence in `PocketMax/HiFi.conf` is the exact union of the shared
+      `wsa-macro` + `wsa881x` snippets (only `WSA_RXn INP0` swapped for the crossed channels),
+      so no control is missing; and the frontend dai-link order is MultiMedia1/2/3 exactly as
+      on the two working boards, so `hw:,0/1/2` is right. What is left needs the device:
+      whether the card is created at all and under the name `PocketMax` the conf.d symlink
+      expects, and whether the wsa881x pair enumerates on SoundWire.
+  - **Still open, needs a vendor image:** `qcom/sm8250/slpi.mbn` exists in no open source, so
+    every SM8250 board is without its sensor DSP — no accelerometer, no auto-rotation. See the
+    gap note at the bottom of `firmware/QCOM_FW.pin`.
 
 - [x] **The GX rail is GMU-owned, so gpucc must not vote on it — HW-VALIDATED on BOTH SoCs
   2026-08-10** (`6f973e0`). Ported from an upstream-peer change whose author reports it fixing GX clock issues on

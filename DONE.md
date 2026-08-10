@@ -92,6 +92,31 @@ name. Order is as it was in TODO.md — roughly the order things were closed, no
       manual speaker EnableSequence in `PocketMax/HiFi.conf` is the exact union of the shared
       `wsa-macro` + `wsa881x` snippets (only `WSA_RXn INP0` swapped for the crossed channels),
       and the frontend dai-link order is MultiMedia1/2/3 as on both working boards.
+    - **Pocket Max: volume LOUD ENOUGH — the "too low" bug is CLOSED, 2026-08-10.** No new
+      change fixed it; it was the same `70-novadeck-wsa881x-runtime-pm.rules` finally running
+      from bind. The too-low measurement was taken on a card where the rule was hand-applied as
+      a temp `/etc/udev/rules.d/60-test-wsa881x.rules` *after* boot, so the amps had already
+      timed out and were never really delivering. Reflashed with the rule baked in, the board is
+      comfortably loud with the PipeWire sink at only **25%** — where the earlier reading was
+      "too low" at 100%. Confirmed on the device (`amixer` is present now, `38dc236`):
+      - zero `wsa881x … timed out` this boot, both amps `power/control=on`, `runtime_status=active`;
+      - UCM's speaker sequence really did run — `WSA_RX0 INP0`=`RX1` and `WSA_RX1 INP0`=`RX0`,
+        the crossed pair that is ours alone and could never be a default. COMP + BOOST on,
+        `Smart Boost Level` = `7.500 V` (item 7 of 16, mid-scale — not the low default that
+        was suspected), `WSA_RX0/1 Digital Volume` = 120 of 124 where 84 is unity, so +36 dB.
+      So the whole earlier gain-chain theory was chasing a chain that was already hot; the amps
+      simply were not powered. **The suspects named in the old note (`Smart Boost Level`, the
+      `COMP` compander) are eliminated** — both were already in the wanted state.
+    - **Separate, still-live nit found while confirming: our UCM's `Spkr{Left,Right} PA Volume
+      12` does not stick.** Steady state is **8**, the wsa881x reset default (`0..12` at 1.5 dB
+      per step, so +12 dB where the UCM asks for +18 dB). The readback tracks amp power exactly
+      — sink node `suspended` reads 0, `running` reads 8 — i.e. the part re-initialises its gain
+      register on every power-up and discards what UCM wrote at device-enable time. Writing 12
+      by hand holds only until the next suspend/resume. The udev rule does not cover this: it
+      pins SoundWire *runtime PM*, a different layer from the ASoC/DAPM power-down of the PCM
+      path. Costs 6 dB of headroom that the +36 dB digital stage is currently covering, which is
+      why it is a nit and not the bug. Not chased further — it predates the fix and is unchanged
+      by it.
   - **Still open, needs a vendor image:** `qcom/sm8250/slpi.mbn` exists in no open source, so
     every SM8250 board is without its sensor DSP — no accelerometer, no auto-rotation. See the
     gap note at the bottom of `firmware/QCOM_FW.pin`.

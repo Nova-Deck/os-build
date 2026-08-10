@@ -154,15 +154,26 @@ earlier — it is that one file that flips the device over.
 9. **Side effects of removing/shrinking `userdata`** on ABL or the modem — some vendor
    ABLs read `misc`/`metadata`. Test on a sacrificial device *before* writing anything.
 
+   > **ANSWERED 2026-08-10 — ABL does not look at `userdata` at all.** The generic-vendor-ABL
+   > worry does not apply to these boards: the chooser's inputs are the ones already documented
+   > under "The ABL contract", and `userdata` is not among them. Nothing gates on it, so deleting
+   > and recreating it smaller has no effect on the boot path.
+   >
+   > The modem half of the item falls with it. It was only ever a concern *via* ABL — `modemst*`,
+   > `fsg`, `fsc` and `persist` are on the `deny` list and sit outside the carve span, so the
+   > modem's own state is untouched by construction.
+   >
+   > **This was the item with teeth, and it is the last thing that blocked Phase 3.**
+
 **Deliverable:** `docs/internal-storage.md` with captured GPTs, plus the real `userdata` sizes
 per device — §4d's consent screen quotes them, so they are a product input, not just recon.
 
 ### CAPTURED 2026-08-05 — all four boards. What the recon actually returned
 
 `docs/internal-storage.md` holds S2, ACE, Odin 2 and Pocket FIT. Items 1, 2, 3, 5 and 6-by-HCTL
-above are answered by the probe; items 7 (gamescope without logind), 8 (throughput/battery)
-and 9 (`userdata` removal side effects) are **not** — none is answerable read-only from one boot,
-and the probe says so in its own closing section.
+above are answered by the probe; items 7 (gamescope without logind) and 8 (throughput/battery) are
+**not** — neither is answerable read-only from one boot, and the probe says so in its own closing
+section. Item 9 (`userdata` removal side effects) was closed separately on 2026-08-10, see above.
 
 **Item 4 (ABL fallback) is answered, but not by the probe** — by the user's statement of the ABL
 contract plus both arms being observed on hardware the same day (see "The ABL contract"). Read the
@@ -1238,7 +1249,7 @@ and then `holo-fstab-repair` — sits behind Phase 4, not beside it.
 |---|---|---|
 | ABL cannot reach Android once our ESP exists → dual boot impossible | **High** | Phase 0 item 5 is a go/no-go; if negative, re-open the Android decision before Phase 3 |
 | Wrong-LUN write → EDL-only brick | Low / catastrophic | `disk-rules.conf` deny list evaluated independently of the allow list; side-effect-free selection with its own suite; GPT backups before any write |
-| `userdata` deletion upsets ABL or modem | Medium | Phase 0 item 9, on a sacrificial device, before anything of ours is written |
+| ~~`userdata` deletion upsets ABL or modem~~ | **Retired** | Phase 0 item 9 answered 2026-08-10: ABL does not read `userdata`, and the modem's own partitions are outside the carve span |
 | Squashfs installer root misses non-ELF runtime state | Low | pacman-resolved tree rather than a readelf walk; a first-boot smoke unit asserting TLS, NSS, dbus and nmcli all work |
 | gamescope will not start without a logind session → black screen | Medium | Phase 0 item 7 proves it over `seatd`/`LIBSEAT_BACKEND=builtin` before Phase 5 starts; SSH + the ESP `install.log` + the tty1 `OnFailure=` getty mean a failed GUI is still diagnosable and the install still runnable |
 | Wi-Fi picker unusable on a gamepad | Medium | `wifi.conf` on the ESP is a first-class path, not a fallback; USB keyboard works free |

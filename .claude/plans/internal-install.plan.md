@@ -822,6 +822,80 @@ This file is the thing to review as if it were the whole feature.
    library the user may have spent days filling over Wi-Fi. Erasing takes the §4d sequence gate
    in its own right: measured in what the user would actually miss, a game library outranks a
    factory-reset Android. Keeping `/home` still requires no consent gate at all.
+
+   > **THE THREE MODES, settled 2026-08-10 (user's), and the reasoning collapses the design.** The
+   > first sketch had reinstall drop all eight partitions, ask whether the `userdata` split should
+   > change, and re-lay from scratch. The user's objection killed it in one line: *if the user does
+   > not resize `userdata` there is no point recreating `/home` at all — and that is the only reason
+   > reinstall mode exists.* Nobody reinstalls to get the same partitions back; they reinstall to
+   > replace the OS **while keeping the library**. Once that is the purpose, resizing has no business
+   > on the path, because resizing destroys the library and there is then nothing left to preserve —
+   > at which point the operation is just a fresh install and should be run as one.
+   >
+   > So the modes are distinguished by what the user is trying to keep, and each one is short:
+   >
+   > | mode | `userdata` | our eight | Android data | `/home` |
+   > |---|---|---|---|---|
+   > | **fresh** | carved smaller (or already sized, on a re-run that resizes) | created | **factory reset** | created empty |
+   > | **reinstall** | **untouched** | rootfs A/B, var A/B, ESP, EFI rewritten in place | untouched | **untouched — not even its GPT entry** |
+   > | **uninstall** | grown back to its full span | **deleted** | **factory reset** | deleted |
+   >
+   > - **Reinstall writes no partition table at all.** Not "delete and recreate at the identical
+   >   extent" — that was the previous sketch and it bought nothing except an arithmetic identity to
+   >   assert. The eight are already where they belong; a reinstall opens filesystems, not the GPT.
+   >   This is strictly safer than what it replaces and it is also less code.
+   > - **"I want a different split" is a FRESH install, and the UI must name it that way.** It
+   >   factory-resets Android *and* erases the library, which is exactly the fresh-install consent
+   >   text — so it takes the §4d gate rather than a quieter one, and the user is never offered a
+   >   resize that silently costs them a library.
+   > - **Erasing `/home` on a reinstall stays available** (rule 8's opt-in above) and is now clearly
+   >   what it always was: a `mkfs` on one partition, not a re-lay. Keep remains the default.
+   >
+   > **What reinstall is FOR, and therefore what to call it (2026-08-10).** Asked directly, the
+   > use-case list comes out short and all of it is disaster recovery **for the update mechanism
+   > itself** — which is the only situation where OTA cannot be the answer: both slots unbootable
+   > (single-slot corruption is RAUC's job, not ours), a broken update chain on a disk that is
+   > otherwise fine (keyring rotation, a bundle that wedges the updater, a device too far behind for
+   > any bundle to apply), or crossing a boundary OTA will not cross such as dev↔release. The
+   > tempting extras do not survive contact: a wedged `/etc` overlay and a bad `/var` both have
+   > cheaper resets, a downgrade is already offered by OTA (`check` compares inequality), and a
+   > layout change cannot be a reinstall at all because re-laying moves the floor.
+   >
+   > So it is **repair**, not convenience, and §4d's wording should say so: *"Repair NovaDeck — keeps
+   > your games"* against *"Install NovaDeck — erases Android data and your games"*. Calling it
+   > "reinstall" invites the expectation that it fixes partitioning, which is the one thing it
+   > deliberately will not touch. And the erase-`/home` opt-in earns its place here rather than being
+   > a courtesy: the faults that send someone to the installer often live partly in `/home` (Steam
+   > config, shader caches, a library on a failing card), so a repair that preserves everything that
+   > could be wrong is the right default and the wrong only option.
+   >
+   > **Uninstall — new, and it is the mode with the tidiest geometry.** Delete our eight, delete
+   > `userdata`, recreate `userdata` at its original start running to `CEIL`, with its original type
+   > GUID. No stored pre-state is needed and none is consulted: `CEIL` is *by construction* the last
+   > sector before whatever followed `userdata`, so on a board where something does follow (the
+   > Pocket FIT) the restored partition is byte-identical to the factory one, and on a board where
+   > nothing does (S2, ACE, Odin 2) it additionally absorbs any trailing space that was unallocated
+   > to begin with. Both are the right answer, and neither needs the install record that rule 10
+   > deliberately refuses to make restorable.
+   >
+   > Android is factory-reset a second time by an uninstall — the partition changes size, so its
+   > filesystem cannot survive. That is the same consent the install already took, and it must be
+   > taken again rather than inherited.
+   >
+   > **`select-target.sh` already emits everything uninstall needs** — `UD_START`, `UD_TYPE` and
+   > `CEIL` — which is a good sign the read-only/destructive split was cut in the right place. What
+   > it does not yet have is a way to say *which* of the three the user asked for, and that is an
+   > argument to the destructive half, not something to be inferred from the disk: the disk state
+   > only distinguishes "ours" from "not ours". **Do not overload `MODE=` with intent.**
+
+   > **CONSEQUENCE FOR THE VICTIM RULE, and it is a bug in `select-target.sh` as committed
+   > (2026-08-10).** The ≥33 GiB size test runs on every path, but after a carve `userdata` is
+   > legitimately as small as **1 GiB** — that is the Android floor the user was allowed to choose.
+   > So a device installed with a minimal Android share cannot be reinstalled: it is refused with
+   > "userdata is 1 GiB, and 33 is the minimum". The 33 GiB figure only ever meant "there is room to
+   > *make* a NovaDeck install here", which on a disk that already has one is a question that has
+   > been answered. **The size test belongs behind `MODE=fresh`** — which is precisely what rule 8's
+   > "skip 4–6" was for, and what the code does not yet do.
 9. Exactly one disk passes. Zero → name what was rejected and why. Two+ → refuse and list;
    never pick.
 10. **A record, not a backup — and never a refusal condition.** Decided 2026-08-05: the
@@ -871,6 +945,23 @@ This file is the thing to review as if it were the whole feature.
 > Runtime, measured 2026-08-10: **47 s**, after building each fixture GPT in one `sgdisk` call
 > instead of one per partition (~600 processes, over five minutes). What is left is filesystem
 > allocation for a backup GPT at the end of a 479 GiB sparse file; user time is 1.7 s.
+
+> **AT 64 CASES, 2026-08-10, and writing the last eight found two defects rather than confirming
+> none.** (1) Rule 3 accepted a damaged GPT: `sgdisk -v` prints "No problems found" on a disk whose
+> backup header is zeroed, whose main header is zeroed, *and* on a disk carrying no GPT at all,
+> because it regenerates the missing half in memory and then verifies what it invented. It now reads
+> the whole output — and the pattern names damage rather than severity, since a first attempt that
+> refused on any `Caution` refused **all four captured boards**: stock Android tables are not
+> 2048-aligned. (2) The 33 GiB size test ran on every path, so a device whose owner gave Android the
+> minimum could never be reinstalled; it is now behind `MODE=fresh`, which is what rule 8's "skip
+> 4–6" always meant.
+>
+> **`NOVADECK_SELECT_DISKS` exists for rule 9 and nothing else.** Two eligible disks must refuse
+> rather than pick, and the explicit-target path cannot reach that rule — untested, "never pick" is
+> an intention rather than a property. The seam is the same shape as `NOVADECK_SELECT_FIXTURE` and no
+> wider: `examine()` still refuses anything that is not a block device unless the fixture flag is
+> also set. Rule 1 is reached the same way, by shimming `findmnt`/`lsblk` so a temp file can be the
+> running disk without writing into `/dev`.
 
 `install/test-select-target.sh` — this is where the assertion budget goes, ≥60 cases against
 the **real captured GPTs** from Phase 0, and green against **every** captured board rather than

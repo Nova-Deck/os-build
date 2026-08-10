@@ -44,13 +44,34 @@ name. Order is as it was in TODO.md — roughly the order things were closed, no
     - **Thor Lite: audio WORKS.** Card 0 `sm8250 - AYN Thor Lite`, so the UCM lookup, the
       q6asm/ADM path and the AW88166-over-MI2S speaker route are all good, and the whole
       SM8250 audio stack is proven end to end on at least one board.
-    - **Pocket Max: NO AUDIO — open.** Two candidate causes eliminated offline: the manual
-      speaker EnableSequence in `PocketMax/HiFi.conf` is the exact union of the shared
+    - **Pocket Max: NO AUDIO — root-caused to the wsa881x amps, NOT to any of our config.**
+      Read out of the persistent journal after the fact (the card had already moved to the
+      Thor Lite; `_BOOT_ID=58a16267…`, found by matching `Machine model:` per boot rather than
+      trusting the boot index, which the stale RTC scrambles). What the journal shows:
+      - The card IS created and correctly named — `input: PocketMax Headset Jack …
+        card0/input6`, `Reached target Sound Card`. So the conf.d name match and the machine
+        driver are fine.
+      - `wcd938x` (headphones + mic) bound cleanly on both `sdw:2` and `sdw:3` at t=3.64s.
+      - `wsa881x-codec sdw:1:0:0217:2010:00:1: Initialization not complete, timed out` at
+        t=12.38s, then `ASoC error (-110)` and `WSA Playback: ASoC error (-110): at
+        __soc_pcm_open()`. The timeout is in `wsa881x_runtime_resume()`, which drives the
+        powerdown GPIO and then waits on the SoundWire core's `initialization_complete`.
+      - Only the LEFT amp (`reg = <0 1>`) ever appears. The right one produces no line at all.
+      - `MultiMedia1: ASoC: no backend DAIs enabled` — the headphone route was never set
+        either, which is why "no audio" rather than "no speakers".
+      **The wiring is what makes this board unique:** MANGMI puts BOTH amps on the same
+      powerdown GPIO (`&tlmm 127` twice). Every other wsa881x board here gives each amp its
+      own — Retroid Pocket uses 129 and 127, AYANEO Pocket (SM8550, working) uses 7 and 12.
+      That shared line is precisely why `0202-ASoC-wsa881x-request-powerdown-gpio-non-
+      exclusively` exists in the SM8250 patch set, and it applied. With one line and two
+      driver instances, one instance's runtime-suspend drives the pin back to powerdown while
+      the other is waiting to re-enumerate — which is exactly the observed timeout.
+      **Testable prediction: the four Retroid boards should have working speakers**, since
+      they do not share the pin. Untested — no Retroid hardware yet.
+      Two causes were eliminated offline before the journal was read, and stay eliminated: the
+      manual speaker EnableSequence in `PocketMax/HiFi.conf` is the exact union of the shared
       `wsa-macro` + `wsa881x` snippets (only `WSA_RXn INP0` swapped for the crossed channels),
-      so no control is missing; and the frontend dai-link order is MultiMedia1/2/3 exactly as
-      on the two working boards, so `hw:,0/1/2` is right. What is left needs the device:
-      whether the card is created at all and under the name `PocketMax` the conf.d symlink
-      expects, and whether the wsa881x pair enumerates on SoundWire.
+      and the frontend dai-link order is MultiMedia1/2/3 as on both working boards.
   - **Still open, needs a vendor image:** `qcom/sm8250/slpi.mbn` exists in no open source, so
     every SM8250 board is without its sensor DSP — no accelerometer, no auto-rotation. See the
     gap note at the bottom of `firmware/QCOM_FW.pin`.

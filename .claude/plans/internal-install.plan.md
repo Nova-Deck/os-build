@@ -626,6 +626,25 @@ brick with EDL as the only recovery. So the safe path should be the default, and
 device argument should refuse without a floor rather than accept one. Left unchanged in Phase 2
 deliberately — it is a contract decision that belongs with the caller Phase 3 writes.
 
+> **DONE 2026-08-10 (`3222b19`, `4669cfd`), and it needed more than the floor.** Running `--append`
+> to completion for the first time showed `sgdisk -n 0:0:+size` re-resolving the largest free block
+> on *every* call: the ESP and both roots landed in the freed tail, then var-A/var-B/home jumped
+> past an OEM partition into a bigger hole, and the run reported success. A floor cannot see that —
+> it only ever validates the first call.
+>
+> **The caller now passes both edges**, and `select-target.sh` owes both:
+> - `NOVADECK_APPEND_FLOOR` — last sector of the shrunk `userdata`, plus one.
+> - `NOVADECK_APPEND_CEIL` — last sector of the contiguous free run starting at the floor: the
+>   sector before whatever follows the carve, or the end of the disk when `userdata` was last. That
+>   second case is what keeps `home` absorbing trailing free space.
+>
+> genpart places every row at an explicit start chained from the floor, ends `home` at the ceiling,
+> and refuses before the first `sgdisk -n` if the window is too small for the layout or if any
+> existing partition overlaps it. That overlap test is the containment rule asserted directly
+> against the GPT rather than inferred from arithmetic, so `select-target.sh` getting the window
+> wrong cannot put us on top of a partition. It also removes a failure mode Phase 2 had: a short
+> window used to create three partitions and refuse the fourth, leaving a half-appended GPT.
+
 ### The carve
 
 `super` (Android dynamic partitions) is sized to its contents and cannot be shrunk.

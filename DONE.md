@@ -56,9 +56,22 @@ name. Order is as it was in TODO.md — roughly the order things were closed, no
         t=12.38s, then `ASoC error (-110)` and `WSA Playback: ASoC error (-110): at
         __soc_pcm_open()`. The timeout is in `wsa881x_runtime_resume()`, which drives the
         powerdown GPIO and then waits on the SoundWire core's `initialization_complete`.
-      - Only the LEFT amp (`reg = <0 1>`) ever appears. The right one produces no line at all.
       - `MultiMedia1: ASoC: no backend DAIs enabled` — the headphone route was never set
         either, which is why "no audio" rather than "no speakers".
+      **FIXED** by `fs-overlay/usr/lib/udev/rules.d/70-novadeck-wsa881x-runtime-pm.rules`,
+      confirmed on the device. MANGMI wires BOTH amps to one powerdown line (`&tlmm 127`
+      twice); every other wsa881x board gives each its own (Retroid 129/127, AYANEO SM8550
+      7/12). Sharing works at all only because `0202` requests the GPIO non-exclusively, which
+      makes gpiolib hand each consumer a `gpiolib_shared` proxy — and a shared line aggregates
+      its consumers, so ONE amp left in runtime-suspend holds the OTHER in powerdown. Pinning
+      both `power/control=on` from bind flips the debugfs line `out lo` -> `out hi` on an
+      ACTIVE_LOW gpio, both amps reach `runtime_status=active`, every wsa881x timeout
+      disappears, and UCM brings up both Speaker and Headphones sinks. The rule matches the
+      wsa881x part ID `0217:2010`, so it is inert on SM8550/SM8650 (wsa884x is `0217:0204`).
+      Two things asserted earlier in this file were WRONG and are corrected here: both amps do
+      enumerate and bind (`sdw:1:…:1` and `:2`) — the right one merely never logged; and the
+      "zero `Spkr*` controls" reading was a dead instrument, not evidence, because the image
+      ships no `alsa-utils` (`amixer` and `alsaucm` are both absent).
       **The wiring is what makes this board unique:** MANGMI puts BOTH amps on the same
       powerdown GPIO (`&tlmm 127` twice). Every other wsa881x board here gives each amp its
       own — Retroid Pocket uses 129 and 127, AYANEO Pocket (SM8550, working) uses 7 and 12.

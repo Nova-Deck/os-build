@@ -2,9 +2,9 @@
 
 **A Steam Deck–style gaming OS for Qualcomm Snapdragon handhelds.**
 
-Turn an AYANEO Pocket, AYN Odin, Retroid Pocket or KONKR handheld into a console-like machine:
-boot straight into the Steam UI, browse your library with the gamepad, and play — including
-Windows games, translated to ARM on the fly.
+Turn an AYANEO Pocket, AYN Odin, Retroid Pocket, KONKR or MANGMI handheld into a console-like
+machine: boot straight into the Steam UI, browse your library with the gamepad, and play —
+including Windows games, translated to ARM on the fly.
 
 [**Join the Discord →**](https://discord.com/invite/fqVfmjWc9y)
 
@@ -21,6 +21,9 @@ Windows games, translated to ARM on the fly.
   an update fails to boot, the device rolls back to the version that worked.
 - **Suspend and resume**, per-device power profiles, brightness and volume keys, and the
   Quick Access menu — the handheld things you would miss immediately if they were missing.
+- **Tuning from inside the UI.** Every image ships Decky Loader and a first-party
+  **novadeck-control** plugin: power profile, GPU clocks, an editable fan curve, and
+  performance settings you can pin *per game* rather than globally.
 
 ### Honest status
 
@@ -43,6 +46,8 @@ does not touch your Android install.
 | AYN Odin 2 | SM8550 | `ayn-odin-2` | yes |
 | AYN Thor | SM8550 | `ayn-thor` | yes |
 | Retroid Pocket Nova | SM8550 | `retroid-pocket-nova` | yes (120 Hz mode selection open) |
+| AYN Thor Lite | SM8250 | `ayn-thor-lite` | yes |
+| MANGMI Pocket Max | SM8250 | `mangmi-pocket-max` | yes |
 | AYANEO Pocket DMG | SM8550 | `ayaneo-pocket-dmg` | — |
 | AYANEO Pocket DS | SM8550 | `ayaneo-pocket-ds` | no - panel stays black |
 | AYANEO Pocket EVO | SM8550 | `ayaneo-pocket-evo` | no - panel stays black |
@@ -51,12 +56,20 @@ does not touch your Android install.
 | AYN Odin 2 Mini | SM8550 | `ayn-odin-2-mini` | — |
 | AYN Odin 2 Portal | SM8550 | `ayn-odin-2-portal` | yes |
 | Retroid Pocket 6 | SM8550 | `retroid-pocket-6` | — |
+| Retroid Pocket 5 | SM8250 | `retroid-pocket-5` | — |
+| Retroid Pocket Flip2 | SM8250 | `retroid-pocket-flip2` | — |
+| Retroid Pocket Mini | SM8250 | `retroid-pocket-mini` | — |
+| Retroid Pocket Mini V2 | SM8250 | `retroid-pocket-mini-v2` | — |
 
 <!-- END AUTO-GENERATED -->
 
 **"HW-validated"** means someone has actually booted novadeck on that unit. The rest ship support
 data that looks right but has never met the hardware — they may work, and reports either way are
 genuinely useful.
+
+> **SM8250 boards have no sensor DSP.** The `slpi.mbn` firmware for that SoC is published in no
+> open source, so every Snapdragon 865 board is without its accelerometer — no auto-rotation.
+> Everything else works; this one is blocked on a blob we cannot ship.
 
 One image serves every device. There is no per-device download: the running system identifies the
 board and configures itself.
@@ -124,7 +137,7 @@ FEX-Emu, gamescope and RAUC projects.
 ### What it actually is
 
 An immutable, A/B-updatable aarch64 Linux distribution that forks SteamOS 3 "Holo" onto Qualcomm
-mobile silicon (**SM8550 / SM8650 / SM8750**). The root is read-only, bootstrapped from packages
+mobile silicon (**SM8250 / SM8550 / SM8650**). The root is read-only, bootstrapped from packages
 into a sealed Btrfs image; updates are RAUC bundles installed to the inactive slot behind a custom
 `novadeck-bootctl` bootloader backend.
 
@@ -181,10 +194,13 @@ creds, an SSH key and the dev package set baked in.
 | `fs-overlay/` | Rootfs overlay payload — one filesystem-mirror tree injected with a single `cp -a` |
 | `steam-seed/` | Native arm64 Steam client seed fetcher + pin |
 | `boot/` | Two-stage UEFI boot: steamcl (stage 1) + GRUB (stage 2), both built from pinned sources |
+| `decky/` | `novadeck-control` — the first-party Decky plugin (per-game tweaks, power, fan curve) |
+| `install/` | Internal-storage install: the read-only board probe, partition carve, and its offline suites |
+| `ota/` | Update-server side: publish script + the nginx/CI-user setup for the OTA host |
 | `ci/` | Signing-CA generator + notes for `.github/workflows/` |
 | `build/` | `Dockerfile` for the cross-compile image |
 
-Each of those directories carries its own `README.md` documenting it file-by-file. `TODO.md` holds
+Most of those directories carry their own `README.md` documenting them file-by-file. `TODO.md` holds
 the OPEN items; `DONE.md` holds the closed ones and is the decision record — resolved entries keep
 their measurements, HW-validation dates and dead ends, because several are the only written record
 of why something is shaped the way it is.
@@ -207,6 +223,13 @@ to `defaults.conf` and still boots.
 | [`docs/bringup-phase2.md`](docs/bringup-phase2.md) | Phase 2 — the SteamOS layers: gamescope session, HW-support, InputPlumber, audio |
 | [`docs/bringup-phase3.md`](docs/bringup-phase3.md) | Phase 3 — the native arm64 Steam Deck UI inside the Phase-2 session |
 | [`docs/phase4.md`](docs/phase4.md) | Phase 4 — sealed manifest rootfs (4a), A/B atomic updates (4b), bootstrap from packages (4c) |
+| [`docs/phase5.md`](docs/phase5.md) | Phase 5 — the SteamDeck-style boot chain: steamcl + GRUB, update path, demote-on-failure |
+| [`docs/phase5-bootattempts.md`](docs/phase5-bootattempts.md) | The `boot-attempts` GRUB module that replaces Valve's steamenv counter |
+| [`docs/ota.md`](docs/ota.md) | The update *server*: publishing a bundle, and how the OTA host is set up |
+| [`docs/decky.md`](docs/decky.md) | Decky Loader + the `novadeck-control` plugin — the in-UI surface for everything below |
+| [`docs/per-game-perf.md`](docs/per-game-perf.md) | `game-tweaks.json` — the per-game performance keys and which launch path enforces each |
+| [`docs/fan-curve.md`](docs/fan-curve.md) | The temperature→PWM curve, why it belongs to the power profile, and how a user edits it |
+| [`docs/internal-storage.md`](docs/internal-storage.md) | Per-board internal-storage captures — the fixtures the install target's rules are written against |
 | [`docs/base-pin.md`](docs/base-pin.md) | What we pin of the upstream aarch64 Arch port, and how |
 | [`docs/windows-games-fex.md`](docs/windows-games-fex.md) | Running x86/x86-64 games: the two independent Proton/FEX paths |
 | [`docs/FEX_README.md`](docs/FEX_README.md) | The FEX runtime configuration itself (rationale for the comment-less JSON) |

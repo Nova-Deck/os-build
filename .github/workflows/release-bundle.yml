@@ -152,7 +152,7 @@ jobs:
     # while this job is the one that puts bytes in front of the fleet.
     environment: ${{ vars.SIGNING_ENVIRONMENT || 'release-signing' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # DO NOT PUT THE INSTANCE ADMIN KEY HERE. The key used to publish from a workstation logs in
       # as `ubuntu`, who has PASSWORDLESS SUDO on the update server — handing CI that key hands CI
@@ -195,7 +195,7 @@ jobs:
           fi
 
       - name: fetch the bundle
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: novadeck-bundle
           path: out/images

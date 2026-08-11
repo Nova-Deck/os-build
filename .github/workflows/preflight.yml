@@ -34,7 +34,7 @@ jobs:
     name: runner capacity + toolchain
     runs-on: ${{ vars.OVERLAY_RUNNER || 'ubuntu-24.04-arm' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: what does this runner actually have
         run: |
@@ -98,7 +98,7 @@ jobs:
     name: R2 bucket
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: round-trip a throwaway object
         env:
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}

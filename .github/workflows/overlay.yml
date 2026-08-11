@@ -73,7 +73,7 @@ jobs:
       matrix: ${{ steps.plan.outputs.matrix }}
       any: ${{ steps.plan.outputs.any }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # The base ref has to be present to diff against, and a PR of any depth can move a package.
           fetch-depth: 0
@@ -170,7 +170,7 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # --no-index because the repo db is rebuilt from scratch over EVERYTHING present, and this
       # job holds one package. Nothing consumes this build — it exists to go red.

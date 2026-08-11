@@ -120,7 +120,7 @@ jobs:
       NOVADECK_VERSION: ${{ inputs.version }}
       ARTIFACT: ${{ inputs.artifact }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: validate the requested artifact
         run: |
@@ -141,7 +141,7 @@ jobs:
       # Same cache as overlay.yml's verify job and for the same reason: fetchlock verifies EVERY row,
       # so a cold runner downloads ~382 snapshot packages (~700MB). These are third-party bytes
       # pinned by a sha256 in the lock, so a miss re-downloads and re-verifies — slow, never wrong.
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: work/pacman-cache
           key: pacman-cache-${{ hashFiles('snapshot.pin', 'images/manifest.lock') }}
@@ -236,7 +236,7 @@ jobs:
           images/card-meta.sh "$f" meta
 
       - name: upload metadata artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: novadeck-${{ inputs.artifact }}-meta
           path: meta/
@@ -251,7 +251,7 @@ jobs:
       # downloads this within the same run, and the only reason to want it afterwards is to re-run a
       # failed publish. Seven days is far longer than anyone takes to notice that.
       - name: upload the image artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: novadeck-${{ inputs.artifact }}
           path: upload/

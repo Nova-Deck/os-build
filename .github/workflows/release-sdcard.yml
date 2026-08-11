@@ -146,19 +146,24 @@ jobs:
     # failure is loud, but the fix is always this line rather than the secret.
     environment: ${{ vars.CARDS_ENVIRONMENT || 'release-cards' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Both halves of what publish-card.sh takes: the image, and the checksums + provenance
       # card-meta.sh staged next to it during the build. One producer for the bucket copy and the
       # GitHub Release, so the two cannot drift.
+      #
+      # download-artifact v8 ERRORS on a digest mismatch rather than warning as v4 did, and that
+      # default is deliberately left alone (it is configurable via `digest-mismatch`): the
+      # alternative is uploading a corrupted 5 GiB card to the bucket people flash from, alongside a
+      # sha256sums.txt that describes the good bytes.
       - name: fetch the card
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: novadeck-sdcard
           path: upload
 
       - name: fetch the metadata
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: novadeck-sdcard-meta
           path: meta
@@ -188,8 +193,8 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           name: novadeck-sdcard-meta
           path: meta

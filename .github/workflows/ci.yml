@@ -39,7 +39,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # grub-common carries grub-editenv, and install/test-install.sh SKIPS its strongest case
       # without it: that our hand-rolled parts.env block is byte-identical to one GRUB's own tool
       # writes. The suites otherwise inherit the runner's PATH, which is exactly how a check ends up
@@ -67,7 +67,7 @@ jobs:
     # to cache, and a cache would be one more thing that can be stale about a signing check.
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # Every case in here is a NEGATIVE — it feeds images/rauc/verify-signing.sh a deliberately
       # broken config or cert profile and requires it to go red. The failure mode of a check is
       # not "it breaks", it is "it stays green while asserting nothing".

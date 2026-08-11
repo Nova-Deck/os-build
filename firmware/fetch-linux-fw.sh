@@ -37,7 +37,12 @@ while read -r src dst sha _rest; do
     continue
   fi
   tmp="$(mktemp)"
-  curl -fsSL -o "$tmp" "${BASE}/${src}?id=${COMMIT}" \
+  # Retry, because this loop makes one request per pinned file and a single transient 5xx from
+  # the cgit frontend would otherwise abort a build 30+ minutes in (seen: a 503 on qca/htnv20.bin
+  # during the ota/v0.2.4 release). curl's default exponential backoff, capped so a genuinely
+  # dead upstream still fails the build promptly instead of stalling the job.
+  curl -fsSL --retry 5 --retry-all-errors --retry-max-time 120 \
+    -o "$tmp" "${BASE}/${src}?id=${COMMIT}" \
     || { echo "download failed: $src" >&2; rm -f "$tmp"; exit 1; }
   echo "${sha}  ${tmp}" | sha256sum -c - >/dev/null \
     || { echo "sha256 mismatch for $src — refusing (pin stale? wrong commit?)" >&2; rm -f "$tmp"; exit 1; }

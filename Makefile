@@ -99,6 +99,14 @@ PKI_MOUNT := -v $(PKI_REAL):/pki:ro -e PKIDIR=/pki
 RAUC_CERT ?= /pki/release.cert.pem
 RAUC_KEY  ?= /pki/release.key.pem
 endif
+
+# The bundling invocation, shared by `bundle` and `sign-bundle` so the two cannot drift in how the
+# key reaches the container. Recursively expanded (`=`, not `:=`) because PKI_MOUNT and RAUC_CERT/
+# RAUC_KEY only exist inside the ifdef above -- expanding this eagerly would bake in their values
+# from before that block ran.
+GENBUNDLE = $(DOCKER) $(PKI_MOUNT) -e RAUC_CERT="$(RAUC_CERT)" -e RAUC_KEY="$(RAUC_KEY)" $(BUILD_IMG) \
+	  images/genbundle.sh
+
 # Dev-only credential env, forwarded into the rootfs assembler (no-op unless NOVADECK_DEV=1).
 DEV_ENV := -e NOVADECK_DEV -e NOVADECK_WIFI -e NOVADECK_WIFI_SSID -e NOVADECK_WIFI_PSK -e NOVADECK_SSH_PUBKEY
 
@@ -314,7 +322,7 @@ KERNEL_SRC_HASH := work/.kernel-src.hash
 # ==============================================================================
 .PHONY: help all image toolchain kernel fw-linux fw-qcom base overlay verify-lock \
         rootfs relock \
-        initramfs steamcl grub sdcard verify-card test bundle publish-bundle deploy clean clean-base clean-overlay distclean
+        initramfs steamcl grub sdcard verify-card test bundle sign-bundle publish-bundle deploy clean clean-base clean-overlay distclean
 
 # An always-out-of-date prerequisite, for rules that must re-evaluate their own inputs every run
 # rather than trust a prerequisite's mtime. Only $(KERNEL_SRC_HASH) uses it; see the note there.
@@ -690,8 +698,30 @@ $(SDCARD): $(ROOTFS) $(VARIMG) $(VARIMG_B) $(STEAMCL) $(GRUB) $(STEAM_SEED) imag
 # (out/images/rootfs.release, written by the same assembler run that produced rootfs.img). Set
 # NOVADECK_VERSION before the rootfs is built, not here.
 bundle: $(ROOTFS) | $(BUILD_STAMP) ## Build a signed RAUC update bundle (in container; PKIDIR= to sign for real)
-	$(DOCKER) $(PKI_MOUNT) -e RAUC_CERT="$(RAUC_CERT)" -e RAUC_KEY="$(RAUC_KEY)" $(BUILD_IMG) \
-	  images/genbundle.sh
+	$(GENBUNDLE)
+
+# The same wrap, minus the $(ROOTFS) PREREQUISITE, for signing an image this tree did not build.
+#
+# WHY IT EXISTS. CI splits the release into build -> sign -> publish so a 30-minute build does not
+# sit behind a human approving the signing environment (see .github/workflows/release-bundle.yml).
+# The sign job restores out/images/rootfs.img from a workflow artifact and holds nothing else the
+# build produced -- no kernel, no base, no overlay. `make bundle` there would see rootfs.img present
+# but every one of ITS prerequisites missing, and cheerfully rebuild the entire image before signing
+# it: a second full build, and one whose bytes nobody reviewed.
+#
+# So this target asserts the payload rather than deriving it. That is the whole difference, and it is
+# why the assertion is a hard error and not a `make rootfs`: if the image is not here, the artifact
+# did not arrive, and the answer is to find out why -- never to build a replacement locally and sign
+# THAT under the release key.
+#
+# Use `bundle` everywhere else. On a dev box the prerequisite is the feature: it keeps the bundle
+# honest about the tree it came from.
+sign-bundle: | $(BUILD_STAMP) ## Sign a RAUC bundle around an EXISTING out/images/rootfs.img (in container; PKIDIR=)
+	@test -f $(ROOTFS) || { \
+	  echo "no rootfs image: $(ROOTFS)" >&2; \
+	  echo "(sign-bundle signs an image built elsewhere -- restore it first; use 'make bundle' to build one)" >&2; \
+	  exit 2; }
+	$(GENBUNDLE)
 
 # ==============================================================================
 # Publish an update (host) — put a signed bundle on the OTA server

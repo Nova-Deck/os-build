@@ -34,9 +34,11 @@
 #      caller cannot attach an environment to a reusable workflow's job from outside), and the
 #      `build` job below passes it only on a tag.
 #
-# UNVERIFIED UNTIL THE FIRST RUN: that `environment: ''` means "no environment" rather than an error.
-# It is the documented behaviour and release-sdcard.yml depends on it too. If it turns out to fail,
-# the fix is two jobs in image.yml picked with an `if:` — not a change to the model here.
+# VERIFIED 2026-08-11: `environment: ''` means "no environment" rather than an error. Every card run
+# has taken that path since release-sdcard.yml was written, and the `build` job below now takes it
+# unconditionally — a build that names no environment is the entire point of the split. (Recorded
+# here as UNVERIFIED until the split made it load-bearing for bundles too. Had it failed, the fix
+# would have been two jobs in image.yml picked with an `if:`, not a change to the model.)
 # WHERE THE BUNDLE GOES. Not to R2, and not to a GitHub release asset: bundles are served from the
 # Oracle Cloud instance devices fetch their OTAs from. That is a different host with different
 # credentials from the card bucket, and deliberately so — a card is downloaded by a person with a
@@ -109,31 +111,136 @@ jobs:
           fi
           echo "version=$v" >> "$GITHUB_OUTPUT"
 
-  # SIGNED ON A TAG, unsigned on a dispatch, and the difference is the environment rather than an
-  # `if:` on a signing step. A tag push is the deliberate act — someone decided this commit ships —
-  # and it is the only path that names the protected environment, so it is the only path where the
-  # release key is reachable and the only one that waits for a reviewer. A bare workflow_dispatch
-  # stays what it was: a smoke test that proves the bundle assembles, signed with an ephemeral dev
-  # cert, rejected by every device.
+  # ============================================================================================
+  # build -> sign -> publish. THE BUILD HOLDS NO KEY AND NAMES NO ENVIRONMENT, so it starts the
+  # moment the tag lands instead of queueing behind a reviewer.
+  # ============================================================================================
+  # This job used to BE the signing job: it took `artifact: bundle` and the protected environment,
+  # which meant the whole 30-minute image build sat in `waiting` until someone clicked approve. The
+  # approval bought nothing during those 30 minutes — assembling a rootfs needs no release key — and
+  # it cost the obvious thing: on 2026-08-11 two consecutive upstream outages (a kernel.org 503, then
+  # github.com unreachable for 134 s mid-clone) each burned an approval and produced no bundle.
   #
-  # `secrets: inherit` is safe precisely because the signing secrets are ENVIRONMENT-scoped. A job
-  # that does not name the environment inherits nothing that matters, and image.yml falls through to
-  # the dev cert. Put RAUC_CERT_PEM/RAUC_KEY_PEM in repo-wide secrets and this whole gate evaporates
-  # silently — every dispatch would sign.
+  # Splitting moves the gate to where the key is actually used. The approval count is UNCHANGED at
+  # two — `sign` and `publish` — because the gate moved rather than multiplied. What changed is that
+  # a reviewer now approves a build that has already succeeded, which is the same correction made to
+  # the card path when its R2 upload moved out of the build job (see image.yml's header).
+  #
+  # `secrets: inherit` stays, and stays safe for the same reason as before: the signing secrets are
+  # ENVIRONMENT-scoped, and this job names no environment, so it inherits nothing that matters. It is
+  # now belt-and-braces rather than load-bearing — `artifact: rootfs` has no step that would use a
+  # key even if one were reachable.
   build:
     needs: prep
     uses: ./.github/workflows/image.yml
     secrets: inherit
     with:
-      artifact: bundle
+      artifact: rootfs
       version: ${{ needs.prep.outputs.version }}
-      environment: ${{ github.ref_type == 'tag' && (vars.SIGNING_ENVIRONMENT || 'release-signing') || '' }}
+      environment: ''
+
+  # SIGNED ON A TAG, unsigned on a dispatch, and the difference is still the environment rather than
+  # an `if:` on a signing step. A tag push is the deliberate act — someone decided this commit ships
+  # — and it is the only path that names the protected environment, so it is the only path where the
+  # release key is reachable and the only one that waits for a reviewer. A bare workflow_dispatch
+  # stays what it was: a smoke test that proves the bundle assembles, signed with an ephemeral dev
+  # cert, rejected by every device.
+  #
+  # WHY THIS SIGNS A FRESH BUNDLE RATHER THAN RE-SIGNING ONE. `rauc resign` exists and works on our
+  # `format=verity` bundles (it truncates the old signature and regenerates — _reference/rauc/src/
+  # bundle.c, resign_bundle). It was rejected anyway: resigning means the build job first mints a
+  # DEV-cert bundle over the exact payload that is about to ship, and a bundle whose only difference
+  # from the shippable one is which key signed it is precisely the artifact images/rauc/
+  # manifest.raucm.in's `mode` field exists to keep distinguishable. Wrapping the rootfs here instead
+  # means a tagged payload is signed exactly once, by the real key, and no other signature over those
+  # bytes ever exists.
+  sign:
+    # Not `prep`: this job deliberately consumes no version string. See the fetch step below.
+    needs: build
+    # aarch64, because genbundle.sh runs rauc inside the novadeck-build container and that image is
+    # built for the target arch. Same expression as image.yml's build job so the two cannot drift
+    # onto different runner pools.
+    runs-on: ${{ vars.OVERLAY_RUNNER || 'ubuntu-24.04-arm' }}
+    environment: ${{ github.ref_type == 'tag' && (vars.SIGNING_ENVIRONMENT || 'release-signing') || '' }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      # Straight into out/images/, where genbundle.sh looks. No NOVADECK_VERSION here and none
+      # wanted: the bundle's identity comes out of the rootfs.release sidecar that travelled with the
+      # image, never out of this job's environment. That is the invariant genbundle.sh was rewritten
+      # to enforce, and the split would be the perfect way to violate it — this job could trivially
+      # be handed a version that disagrees with the payload's own /etc/novadeck-release.
+      - name: fetch the rootfs
+        uses: actions/download-artifact@v8
+        with:
+          name: novadeck-rootfs
+          path: out/images
+
+      - name: build the toolchain image
+        run: make toolchain
+
+      - name: sign the bundle
+        env:
+          RAUC_CERT_PEM: ${{ secrets.RAUC_CERT_PEM }}
+          RAUC_KEY_PEM: ${{ secrets.RAUC_KEY_PEM }}
+        run: |
+          set -euo pipefail
+          # $RUNNER_TEMP, never the workspace — the repo tree gets uploaded as artifacts and cached,
+          # and a private key that lands in either is a leaked key. Same convention as ci/README.md
+          # and as PKIDIR locally (~/novadeck-pki): outside anything the build can sweep up.
+          if [ -n "${RAUC_CERT_PEM:-}" ] && [ -n "${RAUC_KEY_PEM:-}" ]; then
+            pki="$RUNNER_TEMP/pki"
+            mkdir -p "$pki" && chmod 700 "$pki"
+            printf '%s' "$RAUC_CERT_PEM" > "$pki/release.cert.pem"
+            printf '%s' "$RAUC_KEY_PEM"  > "$pki/release.key.pem"
+            chmod 600 "$pki/release.key.pem"
+            make sign-bundle PKIDIR="$pki"
+          else
+            echo "::warning::no release signing key configured — this bundle is signed with an ephemeral dev cert and is NOT shippable"
+            make sign-bundle
+          fi
+
+      - name: package a bundle
+        run: |
+          set -euo pipefail
+          mkdir -p upload
+          cp out/images/*.raucb upload/
+          ls -lh upload/ >> "$GITHUB_STEP_SUMMARY"
+
+      # Over the SIGNED bundle, which is why this moved here from image.yml: the sum a consumer
+      # checks has to be the sum of the bytes they receive, and those bytes do not exist until the
+      # step above runs. card-meta.sh's other half — the provenance copy of images/manifest.lock —
+      # comes from this job's checkout, which is the same commit the build job used.
+      - name: stage release metadata
+        run: |
+          set -euo pipefail
+          f=$(find upload -maxdepth 1 -name '*.raucb' -print -quit)
+          [ -n "$f" ] && [ -f "$f" ] || { echo "::error::no bundle to hash"; exit 1; }
+          mkdir -p meta
+          images/card-meta.sh "$f" meta
+
+      - name: upload metadata artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: novadeck-bundle-meta
+          path: meta/
+          if-no-files-found: error
+
+      # Same artifact name the publish job already downloads, so nothing below had to change.
+      - name: upload the image artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: novadeck-bundle
+          path: upload/
+          if-no-files-found: error
+          retention-days: 7
 
   # The upload half. See the header: this is deliberately inert until the release key reaches a
   # protected environment, and it is written rather than commented out so that decision is a matter
   # of adding secrets, not of writing a job under time pressure on release day.
   publish:
-    needs: build
+    needs: sign
     # Only a tag can have produced a signed bundle, and only a signed bundle can be published. On a
     # dispatch this job would exist solely to fail its own keyring gate, so it does not run at all —
     # a skipped job that is always skipped teaches people to ignore skipped jobs.
@@ -146,10 +253,15 @@ jobs:
     # failure this job was written to make impossible. If a publish ever skips with the secret
     # visibly present in repo settings, this line is the first thing to check.
     #
-    # The cost is a SECOND approval per release: `build` waits for a reviewer to reach the signing
+    # The cost is a SECOND approval per release: `sign` waits for a reviewer to reach the signing
     # key, and `publish` waits again to reach the publishing key. That is the right shape rather than
     # an accident of reusing one environment — signing produces an artifact that still goes nowhere,
     # while this job is the one that puts bytes in front of the fleet.
+    #
+    # DO NOT COLLAPSE THE TWO into one job to save the extra artifact round trip the build/sign split
+    # costs. That trade was considered when the split was made and rejected: it would buy back a few
+    # minutes of upload by turning "may this be signed" and "may this reach the fleet" into a single
+    # click, which is the one distinction here worth paying for.
     environment: ${{ vars.SIGNING_ENVIRONMENT || 'release-signing' }}
     steps:
       - uses: actions/checkout@v7

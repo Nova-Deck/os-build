@@ -28,6 +28,20 @@
 # move it back. Do not "unify" the two paths either: the only thing they legitimately share is
 # everything up to and including the assembled rootfs, which is exactly what this workflow shares.
 #
+# `artifact: rootfs` IS THE SAME MOVE, APPLIED TO SIGNING (2026-08-11). It stops at that shared
+# boundary and uploads the bare image plus its identity sidecar, signing nothing. release-bundle.yml
+# then wraps it in a separate, environment-gated `sign` job. The reason is identical to the R2 one
+# above: the signing key sat in a protected environment, so the ENTIRE build queued behind a human
+# — an approval granted before a 30-minute build rather than after it, blocking on a reviewer to do
+# work that needs no key at all. Two consecutive upstream outages during ota/v0.2.4 made the cost
+# obvious: each one burned an approval and produced nothing.
+#
+# The cost is one extra artifact round trip of ~4 GiB (6 G apparent, sparse), against up to half an
+# hour of human latency. It buys back nothing if approvals are instant — they are not.
+#
+# THIS MODE IS NOT A THIRD RELEASE ARTIFACT. Nothing consumes a rootfs.img except the sign job in
+# the same run, which is why it carries no release metadata and why the card path never asks for it.
+#
 # THE OVERLAY IS COMPILED HERE, IN THIS RUN, from the sources in the commit being built. That is
 # ~34 minutes on a native aarch64 runner for the whole set (measured per package in
 # .github/workflows/overlay.yml) against this job's 350-minute budget. It used to be retrieved from a
@@ -61,7 +75,7 @@ on:
   workflow_call:
     inputs:
       artifact:
-        description: 'Which release artifact to produce: sdcard | bundle'
+        description: 'Which release artifact to produce: sdcard | bundle | rootfs'
         required: true
         type: string
       version:
@@ -126,8 +140,8 @@ jobs:
         run: |
           set -euo pipefail
           case "$ARTIFACT" in
-            sdcard|bundle) ;;
-            *) echo "::error::artifact must be sdcard or bundle, got '$ARTIFACT'"; exit 1 ;;
+            sdcard|bundle|rootfs) ;;
+            *) echo "::error::artifact must be sdcard, bundle or rootfs, got '$ARTIFACT'"; exit 1 ;;
           esac
 
       # No reclaiming of the runner image's preinstalled toolchains: there is ~109 G free and the
@@ -164,7 +178,13 @@ jobs:
           RAUC_KEY_PEM: ${{ secrets.RAUC_KEY_PEM }}
         run: |
           set -euo pipefail
-          if [ "$ARTIFACT" = bundle ]; then
+          # `rootfs` STOPS BEFORE SIGNING, and that is its entire reason to exist: it is the half of
+          # a bundle build that needs no key, so it can run with no environment and therefore
+          # without waiting for a reviewer. release-bundle.yml's `sign` job picks the image up from
+          # the artifact below and wraps it. Nothing else calls this mode.
+          if [ "$ARTIFACT" = rootfs ]; then
+            make rootfs
+          elif [ "$ARTIFACT" = bundle ]; then
             # $RUNNER_TEMP, never the workspace — the repo tree gets uploaded as artifacts and
             # cached, and a private key that lands in either is a leaked key. This is the convention
             # ci/README.md already set for this secret; it also mirrors how PKIDIR works locally
@@ -215,9 +235,31 @@ jobs:
           cp out/images/*.raucb upload/
           ls -lh upload/ >> "$GITHUB_STEP_SUMMARY"
 
+      # BOTH FILES, and the sidecar is not optional garnish. genbundle.sh reads the version out of
+      # rootfs.release rather than out of its own environment, precisely so a bundle cannot claim an
+      # identity its payload does not carry — ship the image without it and the sign job fails at
+      # "no identity sidecar", which is the correct outcome but a confusing place to learn it.
+      #
+      # --sparse=always because rootfs.img is 6 G apparent over ~4 G of real blocks; a plain cp
+      # writes all six to the runner's disk for no gain.
+      - name: stage the rootfs
+        if: inputs.artifact == 'rootfs'
+        run: |
+          set -euo pipefail
+          mkdir -p upload
+          cp --sparse=always out/images/rootfs.img out/images/rootfs.release upload/
+          ls -lh upload/ >> "$GITHUB_STEP_SUMMARY"
+
       # Checksums + the pins this image was actually built against. One producer (images/card-meta.sh)
       # for both the R2 copy and the workflow artifact, so the two cannot drift.
+      #
+      # NOT ON THE ROOTFS PATH. The sums here are what a consumer checks against the thing they
+      # fetched, and nobody fetches a rootfs.img — it is an intermediate that exists for exactly one
+      # downstream job. Hashing it would produce a sha256sums.txt naming a file that never ships,
+      # sitting next to the one that does. release-bundle.yml's `sign` job runs card-meta.sh over
+      # the SIGNED bundle instead, which is the artifact with an audience.
       - name: stage release metadata
+        if: inputs.artifact != 'rootfs'
         run: |
           set -euo pipefail
           # Name the file from the artifact rather than globbing for it: exactly one of the two
@@ -236,6 +278,7 @@ jobs:
           images/card-meta.sh "$f" meta
 
       - name: upload metadata artifact
+        if: inputs.artifact != 'rootfs'
         uses: actions/upload-artifact@v7
         with:
           name: novadeck-${{ inputs.artifact }}-meta

@@ -211,6 +211,14 @@ is still unique per build but is not a release. There is no separate bundle-vers
 signature — that reads as a rauc failure and is not one. The PKI lives outside the repo and is
 invisible to the build container unless `PKIDIR` mounts it.
 
+There is a second target, `make sign-bundle`, which wraps an **existing** `out/images/rootfs.img`
+instead of building one — same signing, no `$(ROOTFS)` prerequisite. CI uses it to split the release
+into build → sign → publish so the image build does not queue behind someone approving the signing
+environment; locally it is what you want when the image came from somewhere else (a CI artifact, or
+another machine) and rebuilding it would defeat the point. It fails rather than building a
+replacement if the image is not there. Use plain `make bundle` on a dev box: the prerequisite is the
+feature, keeping the bundle honest about the tree it came from.
+
 **`make bundle` does not verify its own output.** rauc logs `No keyring given, skipping signature
 verification` at creation, so a green `make` is not evidence the bundle is validly signed. Check
 it yourself, **through the shipped config**:

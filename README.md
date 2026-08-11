@@ -31,8 +31,14 @@ novadeck is **early**. It boots, plays games, and updates itself on real hardwar
 project under active development, not a finished product. Expect rough edges, expect to read the
 docs, and expect to be able to recover a device you have unlocked.
 
-You need an **unlockable bootloader** and a spare **SD card**. novadeck runs from the card and
-does not touch your Android install.
+You need an **unlockable bootloader**, a spare **SD card**, and the device already running the
+**[ROCKNIX ABL](https://github.com/ROCKNIX/abl)** — the custom bootloader that can start a Linux
+system on these handhelds at all. novadeck does not ship one and cannot build one, so flashing
+that comes first; on a stock Android bootloader a novadeck card simply does nothing. The
+[runbook](docs/RUNBOOK.md#prerequisite-the-device-already-runs-the-rocknix-abl) covers it, and if
+you already run ROCKNIX you have it.
+
+novadeck runs from the card and does not touch your Android install.
 
 ## Supported devices
 

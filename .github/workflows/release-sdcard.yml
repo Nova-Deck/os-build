@@ -95,39 +95,86 @@ jobs:
           echo "publish=$p" >> "$GITHUB_OUTPUT"
           echo "version=$v publish=$p" >> "$GITHUB_STEP_SUMMARY"
 
+  # NO SECRETS AND NO ENVIRONMENT. Nothing in a card build is signed and nothing in it is uploaded,
+  # so this job — the long one, six hours of bootstrapping a rootfs and compiling the overlay from
+  # third-party sources as uid 0 — has no credential in scope at all. It ends at a workflow artifact.
+  #
+  # This job used to carry `secrets: inherit` plus an `environment:` input, which together made the
+  # R2 credentials resolve inside image.yml's build job. That pairing was load-bearing and easy to
+  # get half-right: an explicit `R2_*: ${{ secrets.R2_* }}` mapping evaluates in the CALLER's
+  # context, and a job that calls a reusable workflow cannot declare an environment, so the secret
+  # resolved to the EMPTY STRING here and the build died six hours later at the upload step with
+  # blank credentials — no error where it was evaluated, no warning, secret plainly present in repo
+  # settings. The publish job below sidesteps the whole trap: it is an ordinary job, so it declares
+  # its environment directly and its secrets resolve where they are used.
   sdcard:
     needs: prep
     uses: ./.github/workflows/image.yml
-    # `secrets: inherit`, NOT the explicit `R2_*: ${{ secrets.R2_* }}` mapping this used to carry,
-    # and the difference is the whole point of moving those secrets into an environment.
-    #
-    # An explicit mapping evaluates in the CALLER's context — here, in this job — and a job that
-    # calls a reusable workflow CANNOT declare an environment. So an environment-scoped secret would
-    # resolve to the EMPTY STRING right here, be handed to image.yml as an empty string, and the
-    # build would run for four hours before dying at the upload step with blank credentials. No
-    # error at the point of evaluation, no warning, and the secret plainly visible in repo settings.
-    #
-    # `inherit` defers resolution to the CALLED workflow's job, which does name the environment (via
-    # the input below), so the secrets resolve there and only there. Same mechanism the signing key
-    # already uses in release-bundle.yml. This pairing is load-bearing: `inherit` without the
-    # environment input, or the environment input without `inherit`, both yield blank credentials.
-    secrets: inherit
     with:
       artifact: sdcard
       version: ${{ needs.prep.outputs.version }}
-      publish: ${{ needs.prep.outputs.publish == 'true' }}
-      # Named only when this run actually publishes, and PUBLISH IS NOT THE SAME AS TAG here — unlike
-      # the bundle path, a `workflow_dispatch` with publish:true is a supported way to cut a card, and
-      # gating on `github.ref_type == 'tag'` would hand that path empty credentials. Gate on the thing
-      # that decides whether R2 is touched at all.
-      #
-      # The common case — a dispatch answering "does this still build?" — names no environment, so it
-      # needs no approval and cannot reach the credentials. It also cannot reach the upload step at
-      # all: image.yml guards that on `inputs.publish`.
-      #
-      # `release-cards`, not `release-signing`: that environment's deployment policy is `ota/v*`, so
-      # reusing it would reject every `card/v*` tag outright. Two artifacts, two cadences, two gates.
-      environment: ${{ needs.prep.outputs.publish == 'true' && (vars.CARDS_ENVIRONMENT || 'release-cards') || '' }}
+
+  # The upload half, split out of the build 2026-08-11. Three things came with the split, in order of
+  # how much they matter:
+  #
+  #   1. LEAST PRIVILEGE. The R2 token is push-only and bucket-scoped, but `rclone purge` retention
+  #      (KEEP=1) means it can DELETE the published card, not merely add one. It is now live for the
+  #      couple of minutes an upload takes rather than the ~6 hours of a build.
+  #   2. THE APPROVAL LANDS ON EVIDENCE. An environment gates job START, so the old shape made a
+  #      reviewer approve before anything was built — and nothing built until they did. Now the build
+  #      runs unattended and the prompt appears with a finished image behind it.
+  #   3. A FAILED UPLOAD NO LONGER COSTS A REBUILD. R2 hiccups at minute 340 used to mean running the
+  #      whole thing again; "Re-run failed jobs" now retries just this against the kept artifact.
+  #
+  # PUBLISH IS NOT THE SAME AS TAG here — unlike the bundle path, a `workflow_dispatch` with
+  # publish:true is a supported way to cut a card, so this gates on prep's `publish` output. Gating
+  # on `github.ref_type == 'tag'` would hand that path empty credentials. The common case — a
+  # dispatch answering "does this still build?" — skips this job entirely: no approval, no
+  # credentials, and the image still lands as an artifact to download.
+  publish:
+    needs: [prep, sdcard]
+    if: needs.prep.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      card_url: ${{ steps.publish.outputs.url }}
+    # `release-cards`, not `release-signing`: that environment's deployment policy is `ota/v*`, so
+    # reusing it would reject every `card/v*` tag outright. Two artifacts, two cadences, two gates.
+    #
+    # Declaring it HERE is what makes the R2 secrets resolve at all — an environment-scoped secret
+    # reads as the empty string in any job that does not name its environment. images/lib-rclone.sh's
+    # r2_env stops on an empty one with a hint rather than uploading nothing and going green, so the
+    # failure is loud, but the fix is always this line rather than the secret.
+    environment: ${{ vars.CARDS_ENVIRONMENT || 'release-cards' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Both halves of what publish-card.sh takes: the image, and the checksums + provenance
+      # card-meta.sh staged next to it during the build. One producer for the bucket copy and the
+      # GitHub Release, so the two cannot drift.
+      - name: fetch the card
+        uses: actions/download-artifact@v4
+        with:
+          name: novadeck-sdcard
+          path: upload
+
+      - name: fetch the metadata
+        uses: actions/download-artifact@v4
+        with:
+          name: novadeck-sdcard-meta
+          path: meta
+
+      # rclone is fetched and sha256-verified by images/lib-rclone.sh against images/rclone.pin, so
+      # this job needs nothing from the runner image beyond curl.
+      - name: upload the card to R2
+        id: publish
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ vars.R2_BUCKET }}
+          R2_PUBLIC_BASE: ${{ vars.R2_PUBLIC_BASE }}
+          VERSION: ${{ needs.prep.outputs.version }}
+        run: images/publish-card.sh "$VERSION" upload/sdcard.img.gz meta
 
   # The Release carries only small files — checksums, the provenance pins, and the link. The card
   # itself is well over GitHub's 2 GiB per-asset cap and lives in R2; see images/publish-card.sh.
@@ -135,7 +182,7 @@ jobs:
   # A separate job so `contents: write` is scoped to it alone: the long build job, which runs far
   # more third-party code, stays read-only.
   release:
-    needs: [prep, sdcard]
+    needs: [prep, publish]
     if: needs.prep.outputs.publish == 'true' && github.ref_type == 'tag'
     runs-on: ubuntu-latest
     permissions:
@@ -150,7 +197,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.prep.outputs.version }}
-          CARD_URL: ${{ needs.sdcard.outputs.card_url }}
+          CARD_URL: ${{ needs.publish.outputs.card_url }}
         run: |
           set -euo pipefail
           {

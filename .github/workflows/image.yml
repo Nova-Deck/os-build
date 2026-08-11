@@ -5,21 +5,28 @@
 # artifacts are wanted at different cadences (a card is for flashing a device from scratch, a bundle
 # is for updating one already in the field) and neither should have to wait on the other.
 #
-# WHAT MAKES CI THE PRODUCER OF A RELEASE IMAGE is the CREDENTIALS, not a build gate. Publishing a
-# card needs the R2 secrets and signing a bundle needs the release key in a protected environment;
-# neither is reachable from a dev box. Building one locally is fine and supported — `make sdcard`
-# with no NOVADECK_DEV produces a real release image, which is how OOBE gets tested on hardware
-# without waiting for a run here. There used to be a hard gate (packages/*/artifact.pin, enforced by
-# packages/verify-pins.sh) that made a local release build impossible; it was retired 2026-08-04
-# along with the overlay store — see .github/workflows/overlay.yml for the measurements behind that.
+# WHAT MAKES CI THE PRODUCER OF A RELEASE IMAGE is the CREDENTIALS, not a build gate. Signing a
+# bundle needs the release key in a protected environment, and publishing either artifact needs a
+# key that lives in one; none of them is reachable from a dev box. Building one locally is fine and
+# supported — `make sdcard` with no NOVADECK_DEV produces a real release image, which is how OOBE
+# gets tested on hardware without waiting for a run here. There used to be a hard gate
+# (packages/*/artifact.pin, enforced by packages/verify-pins.sh) that made a local release build
+# impossible; it was retired 2026-08-04 along with the overlay store — see
+# .github/workflows/overlay.yml for the measurements behind that.
 #
-# THE TWO ARTIFACTS SHIP TO DIFFERENT PLACES, which is why only one of them has a publish step here.
-# A CARD goes to the public Cloudflare R2 bucket a person downloads and flashes from (see
-# images/publish-card.sh for why not a GitHub release asset: ~5 GiB against a 2 GiB cap). A BUNDLE
-# goes to the Oracle Cloud instance devices fetch their OTAs from — a different host, different
-# credentials, different audience — so the bundle path stops at a workflow artifact here and is
-# handed off from there. Do not "unify" these: the only thing they legitimately share is everything
-# up to and including the assembled rootfs, which is exactly what this workflow already shares.
+# THE TWO ARTIFACTS SHIP TO DIFFERENT PLACES, AND NEITHER SHIPS FROM HERE. A CARD goes to the public
+# Cloudflare R2 bucket a person downloads and flashes from (see images/publish-card.sh for why not a
+# GitHub release asset: ~5 GiB against a 2 GiB cap). A BUNDLE goes to the Oracle Cloud instance
+# devices fetch their OTAs from — a different host, different credentials, different audience. Both
+# paths stop at a workflow artifact here and are handed off to a publishing job in the caller.
+#
+# The card used to be uploaded from THIS job, which meant the R2 credentials were in scope for the
+# whole 350-minute build — a job that bootstraps a rootfs, compiles the overlay from third-party
+# sources and runs several container stages as uid 0. Moving the upload out (2026-08-11) shrank that
+# window to the couple of minutes an upload takes, put the reviewer's approval AFTER a green build
+# rather than before a six-hour one, and made a failed upload retryable without a rebuild. Do not
+# move it back. Do not "unify" the two paths either: the only thing they legitimately share is
+# everything up to and including the assembled rootfs, which is exactly what this workflow shares.
 #
 # THE OVERLAY IS COMPILED HERE, IN THIS RUN, from the sources in the commit being built. That is
 # ~34 minutes on a native aarch64 runner for the whole set (measured per package in
@@ -58,25 +65,16 @@ on:
         required: true
         type: string
       version:
-        description: 'Version stamped into the image and used for the R2 prefix'
+        description: 'Version stamped into the image (the R2 prefix is named by the caller)'
         required: false
         type: string
         default: ''
-      publish:
-        description: 'Upload the finished card to R2 (sdcard only; needs the R2_* secrets)'
-        required: false
-        type: boolean
-        default: false
       environment:
         description: 'Deployment environment to run the build job in. Empty = none. Set it to the
           protected signing environment to make the release key reachable.'
         required: false
         type: string
         default: ''
-    outputs:
-      card_url:
-        description: 'Public URL of the published card, empty when publish was false'
-        value: ${{ jobs.build.outputs.card_url }}
     secrets:
       # Only the bundle path needs these, and only when signing with the real release key. Absent,
       # genbundle.sh mints an ephemeral dev cert — fine for a smoke test, NOT a shippable update.
@@ -84,14 +82,9 @@ on:
         required: false
       RAUC_KEY_PEM:
         required: false
-      # Push-only credentials for the public card bucket. Scope the R2 API token to that ONE bucket
-      # with Object Read & Write — it is a write credential to a host anyone can read.
-      R2_ACCOUNT_ID:
-        required: false
-      R2_ACCESS_KEY_ID:
-        required: false
-      R2_SECRET_ACCESS_KEY:
-        required: false
+      # NO R2_* HERE. The card upload lives in release-sdcard.yml's own publish job, so the bucket
+      # credentials never enter this workflow — see the header. A caller passing them would be
+      # handing a six-hour build a credential it has no step to use.
 
 permissions:
   contents: read
@@ -113,8 +106,6 @@ jobs:
     # assembly are still real work under docker. 350 rather than 180: on a 4-vCPU runner the kernel
     # alone is a large fraction of the old budget. 360 is GitHub's hard ceiling for a job.
     timeout-minutes: 350
-    outputs:
-      card_url: ${{ steps.publish.outputs.url }}
     env:
       # NOVADECK_VERSION is the ONLY version knob the build has. The Makefile's ID_ENV forwards it
       # into the rootfs container, images/assemble-rootfs.sh stamps it into /etc/novadeck-release,
@@ -123,9 +114,9 @@ jobs:
       #
       # There used to be a second knob, `VERSION`, which named the bundle independently — the pair
       # could disagree, and the OTA client's update check compares exactly those two strings. It was
-      # removed 2026-08-03. VERSION below is a plain workflow variable feeding publish-card.sh's
-      # first argument (the R2 path prefix for a card), and is unrelated to the build.
-      VERSION: ${{ inputs.version }}
+      # removed 2026-08-03. A plain `VERSION` workflow variable outlived it as publish-card.sh's
+      # first argument and went with the upload in 2026-08-11; the R2 path prefix is now named in
+      # release-sdcard.yml's publish job, from the same prep output that feeds this input.
       NOVADECK_VERSION: ${{ inputs.version }}
       ARTIFACT: ${{ inputs.artifact }}
     steps:
@@ -138,14 +129,6 @@ jobs:
             sdcard|bundle) ;;
             *) echo "::error::artifact must be sdcard or bundle, got '$ARTIFACT'"; exit 1 ;;
           esac
-          # `publish` means R2, and R2 is the CARD's home only — bundles are served from the Oracle
-          # Cloud instance devices fetch their OTAs from, which is a different host with different
-          # credentials. So this is a structural constraint, not a missing feature, and the
-          # assertion exists so a future `publish: true` on the bundle path fails in second one
-          # rather than silently uploading an OTA into the card bucket.
-          if [ "${{ inputs.publish }}" = true ] && [ "$ARTIFACT" != sdcard ]; then
-            echo "::error::publish is only implemented for the sdcard artifact"; exit 1
-          fi
 
       # No reclaiming of the runner image's preinstalled toolchains: there is ~109 G free and the
       # build peaks near 50, so `sudo rm -rf` over /usr/share/dotnet and friends would be real risk
@@ -252,17 +235,6 @@ jobs:
           mkdir -p meta
           images/card-meta.sh "$f" meta
 
-      - name: upload the card to R2
-        id: publish
-        if: inputs.publish && inputs.artifact == 'sdcard'
-        env:
-          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
-          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          R2_BUCKET: ${{ vars.R2_BUCKET }}
-          R2_PUBLIC_BASE: ${{ vars.R2_PUBLIC_BASE }}
-        run: images/publish-card.sh "$VERSION" upload/sdcard.img.gz meta
-
       - name: upload metadata artifact
         uses: actions/upload-artifact@v4
         with:
@@ -270,12 +242,18 @@ jobs:
           path: meta/
           if-no-files-found: error
 
-      # The image itself, only when it is NOT going to R2 — a 5 GiB artifact on every test build is
-      # pure storage burn, and when publish is on the bucket already holds it.
+      # The image itself, UNCONDITIONALLY — this is the only way it leaves this job now that neither
+      # artifact is shipped from here. The card path used to skip this upload when publishing,
+      # because the bucket already held the bytes; that shortcut died with the in-job upload.
+      #
+      # RETENTION IS SHORT ON PURPOSE. A card is ~5 GiB and the repo default is 90 days, so keeping
+      # every release card around for a quarter is real storage against no use: a publishing job
+      # downloads this within the same run, and the only reason to want it afterwards is to re-run a
+      # failed publish. Seven days is far longer than anyone takes to notice that.
       - name: upload the image artifact
-        if: '!inputs.publish'
         uses: actions/upload-artifact@v4
         with:
           name: novadeck-${{ inputs.artifact }}
           path: upload/
           if-no-files-found: error
+          retention-days: 7

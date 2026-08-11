@@ -7,6 +7,34 @@ is, `TODO.md` for the open items and the hardware-validation record each step he
 Every `make` invocation below runs from the repo root. A dev build needs its environment sourced
 **before every one of them** (`set -a; . ./dev.env; set +a`) — see the README's Building section.
 
+## Prerequisite: the device already runs the ROCKNIX ABL
+
+**novadeck ships no bootloader.** A card boots because the device is already running the custom
+ABL from [ROCKNIX](https://github.com/ROCKNIX/abl) — an Android bootloader replacement that can
+chainload a UEFI payload off an ESP. On a stock Android ABL a novadeck card does nothing, and
+nothing on the card can change that: writing the image is not the first step, flashing that ABL
+is. We consume it and cannot build it — it ships as a signed, per-device ELF.
+
+Install it by ROCKNIX's own procedure — their `update.sh` writes the signed
+`abl_signed-<HW_DEVICE>.elf` to both `abl_a` and `abl_b`, and it needs an unlocked bootloader.
+That process is theirs to own and keep current; it is not reproduced here.
+
+Two properties of it govern everything below:
+
+- **It has two modes, Android or Linux, and the choice persists in the `devinfo` partition** — so
+  set it in ABL's own menu. novadeck never writes `devinfo`: it is in the installer's deny list,
+  the format is ABL-private, and on Qualcomm parts that partition also carries unlock and verity
+  state. With Linux mode selected, **Volume-Up is a one-time override back to Android** — it
+  chooses a mode, not a medium.
+- **Linux mode tries internal storage first**, falling through to the card only when no internal
+  ESP carries `/EFI/BOOT/bootaa64.efi` or `/KERNEL`. On a device with nothing installed to
+  internal that is invisible — the card simply boots. On one that has something, the card needs
+  "force external"; see [Recovery](#recovery-when-it-does-not-boot).
+
+A pre-existing ROCKNIX *installation* is the second case, not just a pre-existing ABL: ROCKNIX
+installed to internal storage keeps winning the boot until you force external, which reads like a
+dead card. That is a setting, not a fault.
+
 ## The disk it all operates on
 
 <!-- AUTO-GENERATED from images/partition-table.txt — regenerate with /ecc:update-docs -->
@@ -109,12 +137,13 @@ Run `verify-card` before you commit a card to a device — it asserts the built 
 the source tree, which is the only place the GPT, the ESP contents and the per-slot filesystem
 identities are checked at all.
 
-**The first boot stops at the stage-2 board menu and waits.** One image serves all 15 boards, so
-the DTB is the one thing the card cannot know. The choice is written to `/EFI/steamos/grubenv` on
-the shared ESP, and every boot after that takes it automatically behind a 3-second visible menu —
-including across a slot switch and an update, since the grubenv is on the ESP rather than in a
-slot. Picking the wrong board gives a card that does not come up; the menu stays visible
-(rather than hidden) precisely so there is a way back on a device with no keyboard.
+**The first boot stops at the stage-2 board menu and waits.** One image serves every supported
+board (the README's table is the roster), so the DTB is the one thing the card cannot know. The
+choice is written to `/EFI/steamos/grubenv` on the shared ESP, and every boot after that takes it
+automatically behind a 3-second visible menu — including across a slot switch and an update, since
+the grubenv is on the ESP rather than in a slot. Picking the wrong board gives a card that does
+not come up; the menu stays visible (rather than hidden) precisely so there is a way back on a
+device with no keyboard.
 
 To install a freshly built stage-1 steamcl onto an already-flashed card's ESP without rebuilding
 the image:
@@ -298,10 +327,14 @@ There is no serial console. Power off, pull the card, and read it on your workst
 **If the device has an internal Linux install, an inserted card will NOT boot — pick "force
 external" in the bootloader.** ABL's Linux mode tries internal storage first and only falls
 through to the card when no internal ESP carries `/EFI/BOOT/bootaa64.efi` or `/KERNEL`. So on a
-device installed to internal storage — ours or another distribution's — inserting a card and
-rebooting changes nothing, which reads exactly like a dead card or a bricked machine. Select
-force external in ABL and the card boots normally. This is the recovery path for an interrupted
-or broken internal install, and it is the only one short of EDL.
+device installed to internal storage — ours, or **ROCKNIX**, or another distribution's —
+inserting a card and rebooting changes nothing, which reads exactly like a dead card or a bricked
+machine. Select force external in ABL and the card boots normally. This is the recovery path for
+an interrupted or broken internal install, and it is the only one short of EDL.
+
+Since the ABL itself comes from ROCKNIX, a device that already had ROCKNIX installed to internal
+is the most likely version of this, and it is not a novadeck fault to debug — it is the
+[boot-order rule](#prerequisite-the-device-already-runs-the-rocknix-abl) working as designed.
 
 Nothing on the SD-card-only path is affected: with no internal ESP present, ABL falls through to
 the card unaided and no option needs setting.

@@ -181,11 +181,15 @@ creds, an SSH key and the dev package set baked in.
 |---|---|---|
 | `BASE_CONFIG` | *(unset)* | Repo-relative path to a full verbatim kernel `.config` — skips the defconfig+fragment merge in `kernel/build.sh` |
 | `NOVADECK_VERSION` | *(unset — renders `dev`)* | The release this build calls itself. Stamped into `/etc/novadeck-release` **and** read back out of the image to name the RAUC bundle, so the two cannot disagree. Set it before the rootfs is built; changing it re-assembles |
+| `NOVADECK_SLOT_B` | *(follows the mode — dev populates B, release leaves it empty)* | Force slot B populated (`1`) or empty (`0`) on the card. `0` is a faster dev loop whose first slot switch can only exercise failover |
+| `NOVADECK_DEBUG` | *(unset)* | Diagnostic build, **independent of `NOVADECK_DEV` and valid for release too**: persistent journald synced every 5s so a power-yank keeps the logs, no rate limit, plus a `/usr/lib/novadeck/debug` sentinel that turns on Steam's CEF DevTools. Never ship one — the constant fsync beats on the card |
 | `ESP` | *(unset)* | Mounted EFI System Partition, the install target for `make deploy` |
+| `BUNDLE` / `CHANNEL` | *(no default — `publish-bundle` refuses without `BUNDLE`)* / `stable` | The bundle `make publish-bundle` uploads, and the OTA channel it lands on. Needs `NOVADECK_OTA_SSH_KEY` |
 | `PKIDIR` | *(unset)* | Signing PKI, mounted read-only at `/pki`; makes `bundle` sign for real and adds `test-signing`'s keyring check. Unset, `bundle` mints an ephemeral dev cert |
 | `RAUC_CERT` / `RAUC_KEY` | `/pki/release.{cert,key}.pem` when `PKIDIR` is set | Override the signing pair with paths the *container* can see |
 | `OVERLAY_ARCH` | `aarch64` | Scopes the built overlay pacman repo at `work/repo/<arch>/` |
 | `BUILD_IMG` | `novadeck-build` | Name of the cross-compile Docker image |
+| `SIGN_IMG` | `novadeck-sign` | Name of the signing-only image `test-signing` builds and runs |
 
 <!-- END AUTO-GENERATED -->
 

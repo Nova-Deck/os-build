@@ -403,41 +403,56 @@ fi
 # already satisfies that contract in full (both arches carry a complete Mesa, dri/, gbm/, gconv/,
 # both interoperable linkers, ld.so.cache, ldconfig, merged-/usr) — see .claude/plans/.
 #
-# TWO mounts. The manifest must sit at exactly /usr/share/guestos/fex-mesa/graphics_provider.json
-# because the tool PROBES that fixed path (it only derives the rootfs from the manifest's directory
-# in the other branch, where STEAM_COMPAT_GRAPHICS_PROVIDER is already set). The manifest's own
-# `root` field takes an absolute path, so the guest tree does NOT have to be that same directory --
-# a lone manifest pointing `root` at the loop mount would satisfy pressure-vessel on its own.
+# ONE mount, since the 2026-08-11 guest. The tool PROBES a fixed path for the manifest,
+# /usr/share/guestos/fex-mesa/graphics_provider.json (it derives the rootfs from the manifest's own
+# directory only in the other branch, where STEAM_COMPAT_GRAPHICS_PROVIDER is already set) -- and
+# upstream now SHIPS that manifest at the root of the image. So loop-mounting the guest at the
+# probed path puts the manifest exactly where the tool looks, and the same mount is a real guest
+# tree for the other consumer: that path is also what the tool hands FEX as `RootFS`.
 #
-# The overlay buys the OTHER consumer. That fixed path is also what the tool hands FEX as `RootFS`,
-# and FEX needs a real guest there. Inside a pressure-vessel container that does not matter --
-# emulator.json forces FEX_ROOTFS empty, so the container supplies the x86 userspace and `RootFS`
-# is unused -- but out of container it does. Overlaying the manifest onto the guest satisfies both
-# callers for the cost of one extra mount, instead of betting on which path Steam takes. That bet
-# is still open (Phase 0), which is exactly why we are not taking it.
-#
-# The .ero is an immutable pinned artifact we must not rewrite, hence overlay rather than editing
-# the image. overlayfs lowerdir is leftmost-wins, so fex-mesa.d/graphics_provider.json shadows the
-# guest; reversed, the guest hides the manifest and the tool finds no provider at all.
+# We used to overlay a manifest of our own here, because the 2026-01-08 guest carried none. That
+# overlay is now redundant and was removed with the pin bump. Ours and upstream's differ only in
+# ways that favour theirs: upstream drops `gbm` for x86_64, adds `fallback_library_paths` for it,
+# and states `vdpau: false` rather than leaving it to default true.
 #
 # The image is read from its CURRENT fex-emu location on purpose. This stage is additive: the
 # system FEX (packages/fex-emu) keeps working off the same file, unchanged, so the validated
 # baseline survives and the change is free to roll back. Relocating the .ero belongs with the
 # retirement of that package, not here.
 #
-# nofail on both, deliberately: this feeds native x86 Linux games only. A missing or corrupt guest
-# must cost x86 Linux titles, never a boot. It is a quiet failure by design, which is why
-# images/test-graphics-provider.sh asserts the pair exists and is well-formed at build time.
-echo "  injecting FEX guest graphics-provider mounts (/usr/share/guestos/fex-mesa)"
+# nofail, deliberately: this feeds native x86 Linux games only. A missing or corrupt guest must
+# cost x86 Linux titles, never a boot. That makes every failure here a quiet one -- hence the gate
+# below, and images/test-graphics-provider.sh for the parts visible in committed files.
+#
+# THE GATE IS NOT OPTIONAL, and its exit code is not the signal. `dump.erofs --path` returns 0 for
+# a path that does not exist (it only prints "read inode failed" to stderr), so the check has to be
+# on the CONTENT: pipe the file out and parse it. A rootfs bump to an image without a manifest
+# would otherwise be discovered by a user, at x86 game launch, as a game that does not start.
+echo "  injecting FEX guest graphics-provider mount (/usr/share/guestos/fex-mesa)"
+guest_ero="$stage/usr/share/fex-emu/RootFS/ArchLinux.ero"
+[ -f "$guest_ero" ] || { echo "ERROR: FEX guest rootfs missing at ${guest_ero#"$stage"}" >&2; exit 1; }
+dump.erofs --cat --path=/graphics_provider.json "$guest_ero" 2>/dev/null | python3 -c '
+import json, sys
+try:
+    manifest = json.load(sys.stdin)["graphics_provider_v0"]
+except (ValueError, KeyError, TypeError) as exc:
+    sys.exit(f"the pinned FEX guest ships no usable /graphics_provider.json ({exc}) -- "
+             "the FEX compat tool probes that path and would find nothing")
+# Both arches or 32-bit titles break silently; the schema allows a list or an object.
+arches = manifest.get("architectures", {})
+for arch in ("x86_64-linux-gnu", "i386-linux-gnu"):
+    if arch not in arches:
+        sys.exit(f"the guest manifest does not declare {arch}")
+' || { echo "ERROR: FEX guest graphics-provider manifest check failed (see above)" >&2; exit 1; }
+
 mkdir -p "$stage/usr/share/guestos/fex-mesa"
 if ! grep -q '/usr/share/guestos/fex-mesa' "$stage/etc/fstab" 2>/dev/null; then
   printf '%s\n' \
     '# FEX x86 guest rootfs for Valve'"'"'s FEX compat tool (Steam app 3127680), as a' \
-    '# pressure-vessel graphics provider. 1) the pinned .ero, loop-mounted read-only;' \
-    '# 2) our graphics_provider.json overlaid on top, at the path the tool probes.' \
-    '# lowerdir is leftmost-wins. nofail: this must never hold up a boot.' \
-    '/usr/share/fex-emu/RootFS/ArchLinux.ero  /run/novadeck/fex-guest  erofs  loop,ro,nofail,noatime  0 0' \
-    'overlay  /usr/share/guestos/fex-mesa  overlay  ro,nofail,lowerdir=/usr/share/guestos/fex-mesa.d:/run/novadeck/fex-guest,x-systemd.requires-mounts-for=/run/novadeck/fex-guest  0 0' \
+    '# pressure-vessel graphics provider. The guest ships its own graphics_provider.json' \
+    '# at its root, which this mount lands on the path the tool probes.' \
+    '# nofail: this must never hold up a boot.' \
+    '/usr/share/fex-emu/RootFS/ArchLinux.ero  /usr/share/guestos/fex-mesa  erofs  loop,ro,nofail,noatime  0 0' \
     >>"$stage/etc/fstab"
 fi
 

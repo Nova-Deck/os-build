@@ -499,6 +499,34 @@ Also settled while checking the download: the upstream index's `Hash` is **XXH3-
 (`xxhsum -H3`), not the tool's default XXH64. It matched, so the artifact is now verifiable
 against upstream's own integrity value instead of only self-hashing. The pin records the command.
 
+### Phase 1 collapses to ONE mount (2026-08-17)
+
+The 2026-08-11 guest **ships `/graphics_provider.json` at its own root**, so the overlay that laid
+our manifest over the guest is redundant: loop-mounting the image at `/usr/share/guestos/fex-mesa`
+puts upstream's manifest on the probed path and gives the tool a real guest tree in the same mount.
+Our manifest, `fs-overlay/usr/share/guestos/fex-mesa.d/graphics_provider.json`, is deleted — the
+mount would mask anything we shipped there anyway.
+
+What we lose by taking theirs: nothing we can justify keeping. Upstream drops `gbm` for x86_64,
+adds `fallback_library_paths` for it, and sets `vdpau: false` explicitly where we left the `true`
+default. The peer distro reached the same conclusion independently (armada `9d3f480`), keeping an
+overlay only for a patched x86 Mesa payload they build and we do not.
+
+The manifest is no longer a committed file, so `images/test-graphics-provider.sh` cannot check it.
+The check moved to `images/assemble-rootfs.sh`, where the image is present: it cats
+`/graphics_provider.json` out of the `.ero` and parses it, requiring both architectures. **Not** on
+`dump.erofs`'s exit status — that is 0 for a path that does not exist. `erofs-utils` was added to
+`build/Dockerfile` for exactly this, and the offline suite now guards the gate instead of the
+manifest: that it exists, that it parses rather than trusting an exit code, and that the build
+image still carries the tool.
+
+**`usr/share/fex-emu/Config.json` keeps `RootFS: ArchLinux.ero`, deliberately.** Pointing it at the
+mount would let FEXServer skip its own `erofsfuse` mount of the same image — but the mount is
+`nofail`, so a failed mount would then leave the system FEX running x86 binaries against an empty
+directory, where today it mounts the image itself and keeps working. Sharing the mount only pays
+when the tree is *modified*, which is the peer's case (their Mesa payload) and not ours. If Steam
+does select the tool, Phase 3 retires this config's consumer anyway.
+
 `packages/fex-emu`'s x86 sysroot moved with the guest, as its PKGBUILD has always said it must.
 It had drifted to glibc 2.43 against a 2.42 guest — thunks built against a *newer* glibc than the
 guest supplies, which is the direction that yields missing symbol versions. It now matches the

@@ -13,7 +13,7 @@
 # translates x86 Windows code and never needs a Linux guest rootfs (its bundled FEX config sets
 # neither RootFS nor ThunksDB). This image exists solely for native x86 Linux ELFs.
 #
-# erofs, not squashfs: upstream publishes both. The .ero is ~1.9G against ~1.1G for the .sqsh,
+# erofs, not squashfs: upstream publishes both. The .ero is ~2.0G against ~1.3G for the .sqsh,
 # but it is random-access friendly, which matters for a filesystem the emulator reads on every
 # library resolution. FEXServer picks the mount helper from the container type — `erofsfuse` for
 # this file (SquashFS.cpp), which is why fex-emu hard-depends on it. Both the image and the
@@ -22,7 +22,10 @@
 # Raw file, not an archive: `kind: file` copies it verbatim to `dest` (no tar, no strip).
 #
 # The upstream index (https://rootfs.fex-emu.gg/RootFS_links.json) publishes an xxhash, not a
-# sha256 — the hash below was computed from the downloaded artifact.
+# sha256 — the hash below was computed from the downloaded artifact. The index's `Hash` is
+# XXH3-64, i.e. `xxhsum -H3` (NOT the tool's default -H1/XXH64), so a download CAN be checked
+# against upstream's own integrity value before the sha256 below is derived from it:
+#   xxhsum -H3 ArchLinux.ero   ->   XXH3_82c0c5f15edf59d2   for 2026-08-11
 #
 # Fields: see packages/inputplumber/prebuilt.pin for the base set; this pin adds
 #   kind   -> `file` (copy verbatim) or `tar` (extract; the default)
@@ -31,8 +34,8 @@
 # To bump: pick a newer dated build from RootFS_links.json, then set version + url + sha256
 # together (the filename stays ArchLinux.ero, so Config.json needs no change).
 name: fex-rootfs
-version: 2026-01-08
-url: https://rootfs.fex-emu.gg/ArchLinux/2026-01-08/ArchLinux.ero
-sha256: 231febb39c636feb89426a21aca3b2ceb121645dbaac7858431d1b7bc7dfde95
+version: 2026-08-11
+url: https://rootfs.fex-emu.gg/ArchLinux/2026-08-11/ArchLinux.ero
+sha256: b035dcfe31a3d8e7ee497f2809caa11bf3a85bc68d707c7621d7433839d19ff2
 kind: file
 dest: /usr/share/fex-emu/RootFS/ArchLinux.ero

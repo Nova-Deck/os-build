@@ -72,8 +72,14 @@ _commit=e869aa644a16e4332cdc15c1ea0b4d13d482385d
 # x86 sysroot inputs. Pinned to archive.archlinux.org (permanent URLs; the rolling mirrors
 # rotate old versions out). noextract: these are the sysroot payload, assembled by hand in
 # prepare() — makepkg must not splatter them into $srcdir.
-_glibc_ver=2.43+r37+gfdf10644d6ee-1
-_gcc_ver=16.1.1+r346+g4e03491b401d-1
+#
+# These are the EXACT versions packages/fex-rootfs's ArchLinux.ero 2026-08-11 carries — read out of
+# the image's own pacman db, not guessed from a release date:
+#   dump.erofs --ls --path=/var/lib/pacman/local ArchLinux.ero | grep -E '^(glibc|gcc|linux-api-headers)-'
+# Re-run that on any rootfs bump; a guest whose glibc is OLDER than this sysroot is the ABI-risky
+# direction (thunks reference symbol versions the guest cannot supply).
+_glibc_ver=2.44+r24+g16be1518495f-1
+_gcc_ver=16.2.1+r23+gd564253eb6c8-1
 _lah_ver=7.1-1
 _ala=https://archive.archlinux.org/packages
 
@@ -101,11 +107,11 @@ _sysroot_pkgs=("glibc-${_glibc_ver}-x86_64.pkg.tar.zst"
 noextract=("${_sysroot_pkgs[@]}")
 
 sha256sums=('SKIP'
-            '213332b0d5b712c20a12dd61d96ba4c21f192df63d454a94ad5cef2b7864e8d1'
-            '09102ae43a990a86ec5749b191454120b57a62cd1b140693f61e87cddcd86f85'
-            '1927406e3eaa37def65d525222a05e6b20c5c4cae388c331da85757009b9967f'
-            'e046e061b4e27d8812a5c339b357a195bbe6cab4d2e128c5cdc3714547d36164'
-            '491919142322a5f06ee0c3ddf984dda3913e4bf22a8af6efcb6adcef2033dbe2'
+            '5db2283f5b46b6114d06b4bc71fcf8ede5f1a04fcccb4d307048fcdc4e501d93'
+            '8aaea9fbcacd58c7114b13de001ca354017afa09bb396c382683f7d20d94999c'
+            '1d79371ccf3138e3c172dd83b51560687b65ab824c1ad7e9cb41b7857ed9c55f'
+            '15dc6bd2f3a2ee17fcd79a14325e9e0037722a592b2bdc55e1665d92112eaa51'
+            '21fde8d5c5fda174b0277515fb6e49a450763a9c8a05f1956f719779e459465a'
             'a6edb1e19a58c43abb93b38e70eb327b2e8b0c15aa74abf31a187c0ee6a5d732')
 
 # Only the externals FEX cannot take from the system. fmt, xxhash and Catch2 resolve via
@@ -135,11 +141,11 @@ prepare() {
 
   # Real integrity gate for the sysroot (makepkg runs with --skipinteg here).
   sha256sum -c --strict <<-EOF
-	213332b0d5b712c20a12dd61d96ba4c21f192df63d454a94ad5cef2b7864e8d1  glibc-${_glibc_ver}-x86_64.pkg.tar.zst
-	09102ae43a990a86ec5749b191454120b57a62cd1b140693f61e87cddcd86f85  lib32-glibc-${_glibc_ver}-x86_64.pkg.tar.zst
-	1927406e3eaa37def65d525222a05e6b20c5c4cae388c331da85757009b9967f  gcc-${_gcc_ver}-x86_64.pkg.tar.zst
-	e046e061b4e27d8812a5c339b357a195bbe6cab4d2e128c5cdc3714547d36164  libstdc++-${_gcc_ver}-x86_64.pkg.tar.zst
-	491919142322a5f06ee0c3ddf984dda3913e4bf22a8af6efcb6adcef2033dbe2  lib32-gcc-libs-${_gcc_ver}-x86_64.pkg.tar.zst
+	5db2283f5b46b6114d06b4bc71fcf8ede5f1a04fcccb4d307048fcdc4e501d93  glibc-${_glibc_ver}-x86_64.pkg.tar.zst
+	8aaea9fbcacd58c7114b13de001ca354017afa09bb396c382683f7d20d94999c  lib32-glibc-${_glibc_ver}-x86_64.pkg.tar.zst
+	1d79371ccf3138e3c172dd83b51560687b65ab824c1ad7e9cb41b7857ed9c55f  gcc-${_gcc_ver}-x86_64.pkg.tar.zst
+	15dc6bd2f3a2ee17fcd79a14325e9e0037722a592b2bdc55e1665d92112eaa51  libstdc++-${_gcc_ver}-x86_64.pkg.tar.zst
+	21fde8d5c5fda174b0277515fb6e49a450763a9c8a05f1956f719779e459465a  lib32-gcc-libs-${_gcc_ver}-x86_64.pkg.tar.zst
 	a6edb1e19a58c43abb93b38e70eb327b2e8b0c15aa74abf31a187c0ee6a5d732  linux-api-headers-${_lah_ver}-x86_64.pkg.tar.zst
 	EOF
 

@@ -507,3 +507,22 @@ them. The full rationale otherwise lives in the linked memories and commit histo
       splash client is needed at all.
   See [[boot-splash-plymouth]], [[sm8650-gamescope-session-plumbing]].
 
+
+- [ ] **Drop `packages/mesa/patches/0002-freedreno-ir3-vulkan-disable-bindless-ubo-const-lowering.patch`
+  at the next mesa bump** — it is an adopted ROCKNIX workaround, never upstreamed, and **ROCKNIX
+  removed it on 2026-08-11** (`ROCKNIX/distribution#3167`, "no longer needed" — unfilled PR
+  template: no reason, no test notes, no review). We are on the same mesa they are (`26.2.0`).
+  - **Why it was not dropped on their say-so (checked 2026-08-18).** Upstream has NOT absorbed it:
+    `mesa-26.2.0` still reads `if (rsrc && nir_src_is_const(rsrc->src[0]))` at that site, with no
+    offset check. So "fixed upstream" is not the explanation. What DID change is the surrounding
+    analysis, reworked between 26.0.0 and 26.2.0 (`nir_intrinsic_has_range_base()`,
+    `offset_shift`/`has_offset_shift` replacing the `load_global_ir3` special-casing) — a credible
+    reason for the workaround to be redundant now, but inference, not evidence.
+  - **Why it waits for a bump rather than getting its own build.** Being wrong costs miscompiled
+    shaders — a hang or corruption inside a Vulkan title, found by a player rather than by a build —
+    and mesa is one of the heaviest overlay packages under arm64 emulation. A bump pays for that
+    rebuild anyway and is the natural moment to play the Vulkan titles with and without it.
+  - **We also run it wider than ROCKNIX did**: they scoped it to SM8550 (a740); our unified image
+    carries it for a740, a750, a650 and a830. Test on more than one board before deleting.
+  - Rationale and provenance are in `packages/mesa/patches/README.md`; if it turns out to still be
+    needed, record WHAT reproduced — that note has been missing since the patch was adopted in May.

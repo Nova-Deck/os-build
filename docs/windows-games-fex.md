@@ -85,15 +85,30 @@ It is **not** about working offline, and an earlier revision of this file claime
 game arrives over the network by definition, so a compat tool arriving the same way costs nothing a
 user was not already paying — as the client demonstrates by fetching runtimes mid-launch.
 
-Separately, Valve's own arm64 Proton declares `require_tool_appid` for an arm64 Steam Linux Runtime
-container. On a non-Deckard client that dependency was never *registered* as a compat tool even
-when its files were installed, so the launch died before Proton ran (`AppError_51`).
-`images/assemble-rootfs.sh` therefore strips `require_tool_appid` from the
-baked tool's `toolmanifest.vdf` and repoints its `commandline` at `game-launch`; it also
-rewrites `compatibilitytool.vdf` to a **stable, version-free internal name** (`proton-cachyos-arm64`)
-and a friendly `display_name`, because Steam records the internal name — not the directory — against
-every game the tool is forced on, so leaving upstream's dated name would unpin every game on a
-Proton bump. All edits fail the build loudly if upstream's files change shape.
+**Our Protons run inside SLR4, like Valve's.** Their `toolmanifest.vdf` declares
+`require_tool_appid` for the arm64 Steam Linux Runtime (4185400), and we leave it alone.
+
+We used to strip it, and had to: a non-Deckard client never *registered* that dependency as a
+compat tool even with its files installed, so the launch died before Proton ran (`AppError_51`).
+The client update that unlocked Valve's FEX compat tool fixed it — HW-confirmed 2026-08-18: it
+registers 4185400, installs it on demand, and composes the SLR4 entry point around any tool that
+asks. Stripping it now would opt us out of the runtime Valve builds and tests against, for nothing.
+
+Dropping the strip required dropping something else first. `assemble-rootfs.sh` also used to
+repoint `commandline` at an in-tool `novadeck-proton` shim, which exec'd
+`/usr/lib/novadeck/game-launch` — a host path that does not exist inside the container, where
+`/usr` is SLR4's. With both changes it was not "untuned", it was **dead**:
+`exec: /usr/lib/novadeck/game-launch: not found`, and the game never started. So the shim is gone
+too, and per-game tuning arrives the way it does for every other tool: Steam launch options,
+written by novadeck-control, evaluated on the host.
+
+`images/assemble-rootfs.sh` now touches only `compatibilitytool.vdf`, where it rewrites the tool to
+a **stable, version-free internal name** (`proton-cachyos-arm64`) and a friendly `display_name` —
+because Steam records the internal name, not the directory, against every game the tool is forced
+on, so leaving upstream's dated build string would unpin every game on a Proton bump. It still
+fails the build loudly if upstream's files change shape, and it now asserts `require_tool_appid` is
+present rather than removing it: a Proton that stopped declaring it would silently start running
+outside the container.
 
 The client only scans the per-user `compatibilitytools.d` and whatever `STEAM_EXTRA_COMPAT_TOOLS_PATHS`
 lists — not `/usr/share/steam/compatibilitytools.d` on its own — so `novadeck-steam` exports that

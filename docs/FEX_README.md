@@ -58,22 +58,20 @@ always run the full thunk set.
 Resolves the effective profile for the running appid, writes a merged FEX config under
 `$XDG_CACHE_HOME`, exports `FEX_APP_CONFIG`, and execs the command it was given.
 
-**One script, two entry points**, because the first cannot reach every launch:
+**One entry point, for every compat tool.** `novadeck-control` writes a game's Steam launch options
+as `/usr/lib/novadeck/game-launch %command%`. Steam evaluates them on the host and expands
+`%command%` to the whole chain it assembled, so the tuning lands whichever tool that is — ours,
+Valve's arm64 Proton (app `4628740`, client-owned data we must not rewrite and now Steam's default
+for Windows titles), or the FEX compat tool.
 
-| | reaches | how it is applied |
-|---|---|---|
-| the in-tool shim | only Protons **we bake** | `assemble-rootfs.sh` rewrites their `commandline` to the in-tool `novadeck-proton` shim — automatic, no per-game state |
-| launch options | **whatever tool Steam picked** | `game-launch %command%`, written per game by novadeck-control |
+It used to reach only the Protons we bake, via an in-tool shim: `assemble-rootfs.sh` rewrote their
+`commandline` to a `novadeck-proton` script in the tool directory. **That shim is gone**, and with
+it the `require_tool_appid` strip that had to accompany it — the shim exec'd a host path that does
+not exist inside SLR4, so it could not survive our Protons running in the container Valve builds
+against. See `docs/windows-games-fex.md`.
 
-Both callers run the SAME file — the shim is just the caller that needs no per-game state. A fix
-to per-game tuning therefore cannot land for one caller and miss the other. Launch options exist
-because Valve's own arm64 Proton (app `4628740`) is client-owned data whose
-`toolmanifest.vdf` we must not rewrite — and since the FEX-tool client update, it is what Steam
-selects by default for Windows titles. Without launch options those launches get no profile, no
-per-game FEX config and no `cores` topology, and nothing reports it.
-
-The two compose rather than collide: whichever runs first writes `FEX_APP_CONFIG`, and the inner
-one honours a value that is already set.
+Being launch options also puts the wrapper on the HOST side of pressure-vessel, which is what makes
+the config it writes readable from inside the container.
 
 This works because Proton only generates its own FEX config **if `FEX_APP_CONFIG` is unset** — a
 pre-set value is honoured as-is. Proton also reads `STEAM_FEX_TSOENABLED` / `STEAM_FEX_MULTIBLOCK`

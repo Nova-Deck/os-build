@@ -146,10 +146,10 @@ if [ -f "$LAUNCH_LIB" ]; then
     bad "no fs-overlay$wrapper_path — the plugin would write launch options naming nothing"
   fi
 
-  # One file, called by both the in-tool shim and the launch options -- so a fix to per-game
-  # tuning cannot land for one caller and miss the other.
+  # The single entry point every tuned launch goes through, now that the in-tool shim is gone.
+  # Steam stores the launch-options string happily even if it names nothing.
   if [ -f "$LAUNCH_ENTRY" ] && [ -x "$LAUNCH_ENTRY" ]; then
-    ok "game-launch is an executable the in-tool shim and launch options both call"
+    ok "game-launch ships as an executable the launch options can call"
   else
     bad "game-launch is missing or not executable"
   fi
@@ -171,6 +171,24 @@ if [ -f "$LAUNCH_LIB" ]; then
   grep -q 'LAUNCH_WRAPPER} ${COMMAND_TOKEN} ${trimmed}' "$LAUNCH_LIB" \
     && ok "user launch options are preserved after %command%" \
     || bad "user launch options are dropped or placed before %command%"
+
+  # The launch options are now the ONLY way tuning reaches a game, so the two things that used to
+  # do it in-tool must stay gone. Both were removed together on purpose (2026-08-18, HW-validated):
+  # the shim exec'd a host path that does not exist inside SLR4, and the strip was what kept our
+  # Protons out of SLR4 in the first place. Re-adding either alone produces a tool that cannot
+  # launch at all -- `exec: /usr/lib/novadeck/game-launch: not found`.
+  ASSEMBLE="$ROOT/images/assemble-rootfs.sh"
+  grep -q 'novadeck-proton' "$ASSEMBLE" \
+    && bad "assemble-rootfs.sh writes an in-tool shim again — it cannot resolve /usr inside SLR4" \
+    || ok "no in-tool shim is written (tuning comes from launch options)"
+
+  grep -qE "sed -i '/require_tool_appid/d'" "$ASSEMBLE" \
+    && bad "assemble-rootfs.sh strips require_tool_appid again — that opts our Protons out of SLR4" \
+    || ok "require_tool_appid is left intact (our Protons run in SLR4, like Valve's)"
+
+  grep -q "declares no require_tool_appid" "$ASSEMBLE" \
+    && ok "the assembler ASSERTS the SLR4 dependency instead (a silent drop would run bare)" \
+    || bad "nothing checks require_tool_appid is still declared upstream"
 
   grep -q 'syncLaunchWrapper' "$PLUGIN/src/tabs/Games.tsx" \
     && ok "the Games tab syncs the wrapper with the per-game enable switch" \

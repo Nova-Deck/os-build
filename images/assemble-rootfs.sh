@@ -280,20 +280,34 @@ echo "  RAUC: keyring.pem + stage-1/2 boot software + /usr/bin/steamos-bootconf 
 # shapes, so a single rewrite serves both. Every edit FAILS LOUDLY if upstream changes shape — a
 # silently un-rewritten tool would refuse to launch, bypass our FEX tuning, or unpin games on a bump.
 #
-# rewrite_proton_tool <tool_dir> <stable_internal_name> <display_name> does, per tool:
-#   toolmanifest.vdf:
-#     1. Drop `require_tool_appid`. It names Valve's arm64 SLR container, which a non-Deckard client
-#        never *registers* as a compat tool even when its files are installed. Steam then quietly
-#        falls back to an older Proton instead of launching this one.
-#     2. Point `commandline` at our wrapper, so per-game FEX tuning lands before Proton starts.
-#   compatibilitytool.vdf:
-#     3. Replace the tool's INTERNAL name. Upstream's is the dated build string (e.g.
+# WE NO LONGER TOUCH toolmanifest.vdf AT ALL, and both edits that used to live there are worth
+# their epitaphs:
+#
+#   `require_tool_appid` was STRIPPED, because it names Valve's arm64 SLR container (4185400) and a
+#   non-Deckard client never *registered* that as a compat tool even with its files installed — the
+#   launch died before Proton ran (AppError_51). The client that unlocked Valve's FEX compat tool
+#   fixed this: HW-confirmed 2026-08-17, it registers 4185400, installs it on demand, and composes
+#   the SLR4 entry point around a tool that asks for it. Stripping it now would opt us OUT of the
+#   container Valve builds and tests against, for nothing.
+#
+#   `commandline` was REPOINTED at an in-tool shim, so per-game FEX tuning ran in front of Proton
+#   automatically. That shim exec'd /usr/lib/novadeck/game-launch — a path that does not exist
+#   inside SLR4, where /usr is the container's. Keeping it would have meant a tool that cannot
+#   launch at all (HW-observed: `exec: /usr/lib/novadeck/game-launch: not found`, game dead).
+#   Tuning now arrives the way it does for EVERY other compat tool, ours or Valve's: Steam launch
+#   options, `/usr/lib/novadeck/game-launch %command%`, written per game by novadeck-control, which
+#   runs on the host side of pressure-vessel. novadeck-control is the user surface for these
+#   settings anyway, so nothing is lost by routing them all through it.
+#
+# rewrite_proton_tool <tool_dir> <stable_internal_name> <display_name> now only touches
+# compatibilitytool.vdf:
+#     1. Replace the tool's INTERNAL name. Upstream's is the dated build string (e.g.
 #        proton-cachyos-11.0-20260602-slr-arm64 / GE-Proton11-1-aarch64), and Steam records THAT
 #        internal name — not the directory — against every game it is forced on. Left as-is, a Proton
 #        bump changes the internal name and silently unpins every game. Rewrite it to a stable,
 #        version-free id so a bump is transparent. (The directory is already version-free via the
 #        pin's `dest`; that alone does NOT stabilise what Steam pins by.)
-#     4. Give it a friendly display_name (upstream reuses the dated build string there too).
+#     2. Give it a friendly display_name (upstream reuses the dated build string there too).
 # The display version is parsed per-tool at each call site (the `version` file format differs) and
 # passed in, so this function stays build-agnostic.
 rewrite_proton_tool() {
@@ -301,13 +315,11 @@ rewrite_proton_tool() {
   local manifest="$tool_dir/toolmanifest.vdf"
   [ -f "$manifest" ] || { echo "ERROR: Proton tool has no toolmanifest.vdf at $manifest" >&2; exit 1; }
 
+  # Asserted, not edited. The dependency is what puts this tool inside SLR4, and a Proton that
+  # stopped declaring it would silently start running bare again — a different runtime than the
+  # one it was built and tested against, with nothing to say so.
   grep -q 'require_tool_appid' "$manifest" \
-    || { echo "ERROR: Proton toolmanifest ($tool_dir) has no require_tool_appid — inspect before rewriting" >&2; exit 1; }
-  sed -i '/require_tool_appid/d' "$manifest"
-
-  grep -qE '"commandline"[[:space:]]+"/proton ' "$manifest" \
-    || { echo "ERROR: Proton toolmanifest ($tool_dir) commandline is not \"/proton %verb%\" — inspect" >&2; exit 1; }
-  sed -i 's#"commandline"[[:space:]]*"/proton #"commandline" "/novadeck-proton #' "$manifest"
+    || { echo "ERROR: Proton toolmanifest ($tool_dir) declares no require_tool_appid — upstream changed shape" >&2; exit 1; }
 
   local ctool="$tool_dir/compatibilitytool.vdf"
   [ -f "$ctool" ] || { echo "ERROR: Proton tool has no compatibilitytool.vdf at $ctool" >&2; exit 1; }
@@ -326,17 +338,7 @@ if n != 1: sys.exit("compatibilitytool.vdf: could not find display_name")
 open(path, "w").write(text)
 PYVDF
 
-  # In-tool shim: Steam resolves `commandline` relative to the tool directory, so the wrapper is
-  # reached through a path Steam accepts, while the wrapper itself stays a normal system file.
-  # It is the SAME /usr/lib/novadeck/game-launch that novadeck-control writes into a game's Steam
-  # launch options — this shim is just the caller that needs no per-game state, and covers only
-  # the tools we bake.
-  cat >"$tool_dir/novadeck-proton" <<'PROTONSHIM'
-#!/bin/sh
-exec /usr/lib/novadeck/game-launch "$(dirname "$0")/proton" "$@"
-PROTONSHIM
-  chmod 0755 "$tool_dir/novadeck-proton"
-  echo "  wired Proton compat tool '$stable_name' ($display) — require_tool dropped, FEX wrapper in front, stable name"
+  echo "  wired Proton compat tool '$stable_name' ($display) — stable name, SLR4 dependency intact"
 }
 
 COMPAT_DIR="$stage/usr/share/steam/compatibilitytools.d"

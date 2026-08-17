@@ -534,33 +534,71 @@ guest exactly. Inert while `ThunksDB` is all-zero, but the invariant is the poin
 
 ---
 
-## Phase 2 — A/B validation on hardware (GATE)
+## Phase 2 — A/B validation on hardware (GATE) — PARTIALLY CLEARED, no longer a gate (2026-08-18)
 
-Nothing is deleted until this passes.
+**It was a gate on deleting `packages/fex-emu`. Phase 3 is dropped (below), so nothing waits on
+this any more.** What it actually established, and what it did not:
 
-**The baseline is higher than "it runs."** Super Meat Boy and Garage Circuit Rally both
-work today **out of the box** on `packages/fex-emu` — system FEX via binfmt, the shipped
-thunkless `fs-overlay/usr/share/fex-emu/Config.json`, zero per-game `game-tweaks.json`
-entries, no `fexProfile` override. That is the bar Valve's tool has to match. A result of "runs, but needs `STEAM_COMPAT_FEX_CONFIG` set per title" is a
-**regression**, not a pass, because it would push per-game configuration onto users who
-have none today.
+- ✅ **Parking Garage Rally Circuit ran out of the box** through the tool, on the first try, with
+  no per-game configuration: `pw-audio-namespace → reaper → FEX-Emu/fex-compat-tool →
+  SLR_soldier/_v2-entry-point → scout-on-soldier → garagerally.x86_64`, Valve's
+  `FEX-Emu/usr/bin/FEX` exec'ing both guest linkers out of `/usr/share/guestos/fex-mesa`.
+- ❌ **Super Meat Boy was not run.** The bar named two titles; one was tested.
+- ❌ **No A/B against the baseline.** We know the tool path works. We do not know whether it is
+  faster, slower or equal to the system-FEX path it was written to replace, and nothing measured
+  frame times either way.
 
-Note the sample is thin — two titles, both HW-proven 2026-07-11, and the same pair whose
-SIGSEGV under host GPU thunks forced the thunkless config. Clearing this gate is evidence
-of parity on the tested surface, not of broad compatibility. Neither configuration is
-broadly validated, so widening the test set is worth more than deepening it.
+**The reason to still run those two is not the checkbox.** Native x86 Linux titles now execute on
+*Valve's* FEX build with *Valve's* per-title `ThunksDB` decisions, not our thunkless
+`fs-overlay/usr/share/fex-emu/Config.json` — and the guest they render through moved to mesa
+26.1.6 in the same week. That is a different renderer path than the one both titles were validated
+against in July 2026, so a regression there would be invisible until someone plays them.
 
-- Run each title three ways: our system FEX (baseline), Valve's tool at its default
-  (thunked) config, and Valve's tool with `STEAM_COMPAT_FEX_CONFIG` forcing thunks off.
+### The bar, and the run that would still settle it
+
+Kept verbatim in substance, because the comparison is still worth making even though nothing
+depends on it any more.
+
+**The baseline is higher than "it runs."** Super Meat Boy and Garage Circuit Rally both work
+**out of the box** on `packages/fex-emu` — system FEX via binfmt, the shipped thunkless
+`fs-overlay/usr/share/fex-emu/Config.json`, zero per-game `game-tweaks.json` entries, no
+`fexProfile` override. That is the bar Valve's tool has to match. A result of "runs, but needs
+`STEAM_COMPAT_FEX_CONFIG` set per title" is a **regression**, not a pass, because it pushes
+per-game configuration onto users who have none today.
+
+The sample is thin — two titles, both HW-proven 2026-07-11, and the same pair whose SIGSEGV under
+host GPU thunks forced the thunkless config. Clearing this is evidence of parity on the tested
+surface, not of broad compatibility. Neither configuration is broadly validated, so widening the
+test set is worth more than deepening it.
+
+- Run each title three ways: our system FEX (baseline), Valve's tool at its default (thunked)
+  config, and Valve's tool with `STEAM_COMPAT_FEX_CONFIG` forcing thunks off.
 - Confirm whether host Turnip is genuinely in the path — `fdinfo drm-engine-gpu` plus crtc
   framecount, **not** debugfs `gpu`, which hitches the display
   (`[[sm8650-gpu-liveness-probing]]`).
-- Expected upside: their thunks are Adreno-tuned and 32-bit sets ship too, so the thunked
-  path may undo the concession we made in July. Expected risk: the same SIGSEGV.
+- Expected upside: their thunks are Adreno-tuned and 32-bit sets ship too, so the thunked path may
+  undo the concession we made in July. Expected risk: the same SIGSEGV.
+- Since 2026-08-18 there is a fourth reason to run it: which FEX and which `ThunksDB` a native
+  title gets is now Valve's decision, not ours, and the guest Mesa moved 25.3.3 → 26.1.6.
 
-## Phase 3 — Retire the system FEX
+## Phase 3 — Retire the system FEX — DROPPED (2026-08-18)
 
-Only after Phase 2 is green.
+**Not deferred: dropped.** The premise was that Valve's compat tool makes `packages/fex-emu`
+redundant. It does not, because **the compat tool only covers what STEAM launches.** Every other
+x86 binary on the device reaches `binfmt_misc` → `/usr/bin/FEX`, and we ship one that matters:
+Decky's `PluginLoader` is an x86_64 build running under our FEX with its own FEXServer and its own
+`erofsfuse` mount of `ArchLinux.ero` (visible in the process tree next to a game running under
+Valve's tool). Retiring the package would take Decky — and `novadeck-control`, the user surface for
+per-game settings — down with it.
+
+So `packages/fex-emu`, its two patches, its pinned x86 sysroot, `fs-overlay/usr/share/fex-emu/`
+and the `erofsfuse`/`fuse3` deps all STAY. The two x86 paths coexist permanently: Valve's tool for
+titles Steam routes to it, ours for everything else.
+
+Reviving this would need an answer for non-Steam x86 binaries first — a second emulator for Decky,
+or an upstream that stops shipping PluginLoader as x86. Neither is in view.
+
+The original steps, kept because they are the correct checklist *if* that ever changes:
 
 - Drop `packages/fex-emu/` (PKGBUILD, 2 patches, `source.pin`, the pinned x86 sysroot).
 - Drop `fex-emu` from `PKGS` in `images/customize-base.sh:190`.

@@ -106,3 +106,59 @@ The fix is to keep these games off native Wayland entirely, matching the SteamOS
 `novadeck-session` does **not** export `WAYLAND_DISPLAY`, so SDL falls back to gamescope's nested
 **Xwayland** (`DISPLAY`), where `libdecor`/`libwayland` are never loaded. No per-game launch
 option and no injected libraries are needed.
+
+## `usr/share/guestos/fex-mesa/` — the guest as a Steam graphics provider
+
+Valve publishes FEX as a Steam Play compat tool (app `3127680`). On its **public** branch that
+tool ships the emulator and thunks only — its rootfs depot is empty — and it expects the OS to
+provide the x86 guest at a fixed path, `/usr/share/guestos/fex-mesa`. It sets `FEX_PORTABLE=1`, so
+it deliberately ignores a system FEX install and everything in `usr/share/fex-emu/Config.json`
+above. The migration plan is `.claude/plans/fex-compat-tool.plan.md`.
+
+Our pinned `ArchLinux.ero` already satisfies pressure-vessel's graphics-provider contract in full,
+so no new guest has to be built. `images/assemble-rootfs.sh` surfaces it with **one** fstab entry:
+the `.ero`, loop-mounted read-only at the probed path, `nofail`.
+
+One mount works because **the guest ships its own `/graphics_provider.json`** as of the 2026-08-11
+image. Mounting it at `/usr/share/guestos/fex-mesa` therefore lands the manifest at exactly
+`/usr/share/guestos/fex-mesa/graphics_provider.json`, which is the path the tool probes, and the
+same mount is a real guest tree for the tool's other use of that path — it hands it to FEX as
+`RootFS`. (Inside a pressure-vessel container that second use is moot: `emulator.json` forces
+`FEX_ROOTFS` empty and the container supplies the x86 userspace. Out of container it matters.)
+
+Until that image, we overlaid a manifest of our own from `fs-overlay` — the 2026-01-08 guest
+carried none. Upstream's differs from what we had written, and in its favour: no `gbm` entry for
+`x86_64-linux-gnu`, a `fallback_library_paths` for it instead, and an explicit `vdpau: false` where
+ours left the `true` default. Ours was deleted with the pin bump; nothing of ours may live under
+the mountpoint now, because the mount would mask it.
+
+This is **additive**. The image is still read from its `fex-emu` location and the system FEX keeps
+working off the same file, unchanged — the validated baseline survives and the change rolls back
+for free. Relocating the `.ero` belongs with the retirement of `packages/fex-emu`, not here.
+
+`usr/share/fex-emu/Config.json` deliberately still names `ArchLinux.ero` rather than this mount,
+even though pointing it here would let FEXServer skip its own `erofsfuse` mount of the same image.
+The mount is `nofail`; if it ever failed, a `RootFS` pointing at it would leave the system FEX
+running x86 binaries against an **empty directory**, where today FEX mounts the image itself and
+keeps working. That trade is only worth taking to share a *modified* guest, which we do not ship —
+and Phase 3 retires this config's consumer outright if Steam ever selects the tool.
+
+### The manifest gate
+
+The manifest now lives inside a 2 GiB pinned artifact that is not in the tree, so it cannot be
+checked by reading committed files. `images/assemble-rootfs.sh` reads it out of the image at build
+time instead — `dump.erofs --cat --path=/graphics_provider.json`, parsed, with both architectures
+required (FEX emulates x86-64 *and* i386; dropping i386 silently breaks every 32-bit title). A
+rootfs bump to an image without a manifest would otherwise surface as a card that boots fine and
+cannot launch an x86 title.
+
+**The exit code is not the signal.** `dump.erofs --path` exits 0 for a path that does not exist and
+only prints `read inode failed` to stderr, so the gate has to parse the content. This is also the
+only reason `erofs-utils` is in `build/Dockerfile`.
+
+`images/test-graphics-provider.sh` (in `make test`) guards what committed files can still show:
+that `packages/fex-rootfs/prebuilt.pin`'s `dest` is the mount source, that the mount is read-only
+and `nofail` and its mountpoint exists in the read-only image, that we ship nothing under that
+mountpoint, that the build-time gate above still exists *and still parses* rather than trusting an
+exit status, that the build image carries the tool it needs, and that the kernel can mount any of
+it (`EROFS_FS`, `EROFS_FS_ZIP` for LZ4, `BLK_DEV_LOOP`).

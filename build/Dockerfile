@@ -76,7 +76,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       make python3 \
       btrfs-progs gdisk dosfstools mtools e2fsprogs \
       casync \
+      erofs-utils \
     && rm -rf /var/lib/apt/lists/*
+# erofs-utils is here for ONE assertion, and it earns its place: assemble-rootfs.sh reads the
+# graphics_provider.json out of the pinned FEX guest .ero to prove the guest still carries one.
+# The mount that surfaces it is `nofail`, so without this the answer arrives at x86 game launch,
+# on a user's device. dump.erofs reads the image unprivileged — no loop device, no FUSE, which is
+# what makes the check runnable inside this container at all.
 
 # Boot stage (Phase 5): the two-stage UEFI chain, steamcl (stage 1) + GRUB (stage 2).
 #

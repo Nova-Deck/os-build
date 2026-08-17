@@ -77,11 +77,18 @@ A Windows game therefore still works on an image with no `fex-emu` package and n
 Proton translates only the game's *Windows* x86 code, and every Linux syscall is issued by the
 arm64 side of Wine. That is why Proton's bundled FEX config sets neither `RootFS` nor `ThunksDB`.
 
-**Why the compat tool is baked rather than downloaded.** Valve's own arm64 Proton declares
-`require_tool_appid` for an arm64 Steam Linux Runtime container. On a non-Deckard client that
-dependency is never *registered* as a compat tool even when its files are installed, so the launch
-dies before Proton runs (`AppError_51`). Steam also owns first-boot Wi-Fi, so nothing can be
-fetched before OOBE finishes. `images/assemble-rootfs.sh` strips `require_tool_appid` from the
+**Why the compat tool is baked rather than downloaded.** Because it is then *pinned*: a specific
+CachyOS/GE build, versioned with the image and replaced only by an OTA, instead of whatever the
+client resolves at launch time on a given day. That is the whole of it.
+
+It is **not** about working offline, and an earlier revision of this file claimed it was. A Steam
+game arrives over the network by definition, so a compat tool arriving the same way costs nothing a
+user was not already paying — as the client demonstrates by fetching runtimes mid-launch.
+
+Separately, Valve's own arm64 Proton declares `require_tool_appid` for an arm64 Steam Linux Runtime
+container. On a non-Deckard client that dependency was never *registered* as a compat tool even
+when its files were installed, so the launch died before Proton ran (`AppError_51`).
+`images/assemble-rootfs.sh` therefore strips `require_tool_appid` from the
 baked tool's `toolmanifest.vdf` and repoints its `commandline` at `proton-wrapper`; it also
 rewrites `compatibilitytool.vdf` to a **stable, version-free internal name** (`proton-cachyos-arm64`)
 and a friendly `display_name`, because Steam records the internal name — not the directory — against

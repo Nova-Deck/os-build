@@ -110,6 +110,15 @@ the container and does not share the runtime dir, and FEX skips an unreadable `F
 **silently** — which presents as "the profile did nothing", not as an error. Our Protons run bare
 today, so either location works; this one keeps working if that ever changes.
 
+**The in-tool shim only covers Protons we bake.** Valve's arm64 Proton (app `4628740`) is client
+data — Steam installs, verifies and updates it, and its `toolmanifest.vdf` is not ours to rewrite.
+Since the client update that unlocked the FEX compat tool, that Proton is also what Steam picks by
+DEFAULT for Windows titles, so the shim's coverage shrank from "every Windows launch" to "launches
+the user pointed at our tool". For everything else, `novadeck-control` writes Steam launch options
+of the form `/usr/lib/novadeck/game-launch %command%`: Steam evaluates those on the host and
+expands `%command%` to the whole chain it assembled, whichever tool that is. `game-launch` is the
+same script as `proton-wrapper`, reached under a second name.
+
 The merged config also drops `RootFS`, `ThunkGuestLibs` and `ThunkHostLibs` before it is written.
 Those name the *system* FEX's tree, and this config is read by a different FEX — Proton's bundled
 WoW64 build — which resolves its own. Passing them along points that FEX at a tree that is not its

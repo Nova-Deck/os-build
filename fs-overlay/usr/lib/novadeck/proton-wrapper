@@ -1,15 +1,31 @@
 #!/usr/bin/env python3
-"""Front Proton's entry point and hand it a per-game FEX configuration.
+"""Hand a game a per-game FEX configuration, then exec it.
 
-Steam invokes this instead of `proton` (see the compat-tool rewrite in assemble-rootfs.sh):
+ONE SCRIPT, TWO NAMES, because the same job has two entry points:
 
     proton-wrapper /path/to/proton <verb> [args...]
+        The in-tool shim in our BAKED Protons (see the compat-tool rewrite in
+        assemble-rootfs.sh). Automatic and stateless — but it only ever fronts a Proton we
+        bake, because that is the only toolmanifest.vdf we may rewrite.
+
+    game-launch %command%
+        Steam LAUNCH OPTIONS, written per game by novadeck-control. `%command%` expands to the
+        whole chain Steam assembled, so this fronts WHATEVER tool it picked — including Valve's
+        own arm64 Proton (app 4628740), which the client now selects by default for Windows
+        titles and which is user data we do not own. Without this, those launches get no
+        profile, no per-game FEX config and no `cores` topology, and say nothing about it.
+
+`game-launch` is a symlink to this file; both paths run the same code and differ only in which
+name appears in a diagnostic. Launch options also run on the HOST side of pressure-vessel, where
+our /usr paths exist — inside a container they do not (docs/windows-games-fex.md).
 
 Proton generates its own FEX config *only when FEX_APP_CONFIG is unset*, and honours a pre-set
-value otherwise. So exporting FEX_APP_CONFIG here is a supported override, not a hack.
+value otherwise. So exporting FEX_APP_CONFIG here is a supported override, not a hack — and it
+is also what lets the two entry points stack without fighting: whichever runs first wins, the
+inner one then leaves it alone.
 
 Failing to tune FEX must never stop a game from launching: every error below degrades to "exec
-Proton with whatever config it would have picked itself".
+the command with whatever config it would have picked itself".
 """
 
 import json
@@ -27,6 +43,9 @@ except ImportError:  # per-game tuning must never be what stops a launch
 BASE_CONFIG = pathlib.Path("/usr/share/fex-emu/Config.json")
 PROFILES = pathlib.Path("/usr/share/novadeck/fex-profiles.json")
 TWEAKS = pathlib.Path("/etc/novadeck/game-tweaks.json")
+
+# How we were invoked, so a message names the entry point the user actually configured.
+PROG = os.path.basename(sys.argv[0]) or "proton-wrapper"
 
 STALE_AFTER = 24 * 60 * 60  # generated configs are per-launch; reap yesterday's
 
@@ -182,7 +201,7 @@ def apply_env(settings):
         try:
             cores = novadeck_perf.resolve_cores(settings.get("cores"))
         except ValueError as exc:
-            print(f"proton-wrapper: ignoring bad 'cores' ({exc})", file=sys.stderr)
+            print(f"{PROG}: ignoring bad 'cores' ({exc})", file=sys.stderr)
     if (cores and settings.get("wineTopology") is not False
             and "WINE_CPU_TOPOLOGY" not in os.environ):
         os.environ["WINE_CPU_TOPOLOGY"] = f"{len(cores)}:{','.join(map(str, cores))}"
@@ -198,13 +217,31 @@ def apply_env(settings):
                 os.environ[str(key)] = str(value)
         except (ValueError, OSError) as exc:
             # one malformed name must not cost the rest of the entries
-            print(f"proton-wrapper: bad env entry {key!r}: {exc}", file=sys.stderr)
+            print(f"{PROG}: bad env entry {key!r}: {exc}", file=sys.stderr)
 
 
 def main():
+    """Apply this game's tuning to our own environment, then become the command we were given.
+
+    TWO CALLERS, ONE BEHAVIOUR, and the second is why this is worth stating. Both hand us a
+    command to exec, so both are served by exactly the same code:
+
+      proton-wrapper /path/to/proton waitforexitandrun ...   (the in-tool shim; our baked Protons)
+      game-launch    %command%                               (Steam launch options; ANY tool)
+
+    The second exists because the first only reaches Protons WE bake. Steam's own arm64 Proton
+    (app 4628740) is user data the client owns, verifies and updates — its toolmanifest is not
+    ours to rewrite — and since the FEX-tool client update it is what Steam picks by default for
+    Windows titles. A game on that Proton gets no profile, no per-game FEX config and no `cores`
+    topology, silently, because nothing in the chain is ours. Launch options wrap `%command%`
+    whatever tool Steam chose, so they close that gap.
+
+    Running as launch options also puts us on the HOST side of pressure-vessel, where our
+    /usr paths still exist. Inside a container they do not — see docs/windows-games-fex.md.
+    """
     if len(sys.argv) < 2:
-        raise SystemExit("usage: proton-wrapper PROTON_ENTRYPOINT [ARGS...]")
-    proton = sys.argv[1]
+        raise SystemExit(f"usage: {PROG} COMMAND [ARGS...]   ({PROG} %command% from launch options)")
+    command = sys.argv[1]
 
     settings = {}
     try:
@@ -212,20 +249,24 @@ def main():
         settings = settings_for(load_tweaks(contract["defaults"]), appid())
         # An explicit FEX_APP_CONFIG in the environment is a deliberate user override; leave
         # it be. The per-game env below still applies — it is a separate knob.
+        #
+        # It is also what makes the two callers compose: with launch options in play, the outer
+        # game-launch writes the config and the in-tool shim then finds it already set and does
+        # not write a second one.
         if "FEX_APP_CONFIG" not in os.environ:
             os.environ["FEX_APP_CONFIG"] = str(write_config(settings, appid(), contract["profiles"]))
     except Exception as exc:  # noqa: BLE001 - a tuning failure must not block the launch
-        print(f"proton-wrapper: no FEX config written ({exc}); using Proton's own", file=sys.stderr)
+        print(f"{PROG}: no FEX config written ({exc}); using Proton's own", file=sys.stderr)
 
     try:
         apply_env(settings)
     except Exception as exc:  # noqa: BLE001 - same contract as the FEX block above
-        print(f"proton-wrapper: per-game env skipped ({exc})", file=sys.stderr)
+        print(f"{PROG}: per-game env skipped ({exc})", file=sys.stderr)
 
     try:
-        os.execv(proton, [proton, *sys.argv[2:]])
+        os.execv(command, [command, *sys.argv[2:]])
     except OSError as exc:
-        raise SystemExit(f"proton-wrapper: cannot exec {proton}: {exc}")
+        raise SystemExit(f"{PROG}: cannot exec {command}: {exc}")
 
 
 if __name__ == "__main__":

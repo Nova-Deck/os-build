@@ -3,6 +3,7 @@ import { useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import { SelectEdit, SliderEdit, ToggleRow } from "../components/widgets";
 import { editTargetOptions } from "../lib/games";
+import { syncLaunchWrapper } from "../lib/launchWrapper";
 import { clone } from "../lib/util";
 import type { Config, GameTweaks } from "../types";
 
@@ -73,7 +74,15 @@ export function Games({ config, setConfig }: { config: Config; setConfig: Dispat
             label="Enable tweaks for this game"
             description="Off keeps the settings but stops applying them."
             value={settings.enabled === true}
-            onChange={(on) => (settings.enabled === undefined && !on ? removeGameEntry() : patch({ enabled: on }))}
+            onChange={(on) => {
+              // The launch-options wrapper rides the same switch, because it is what carries the
+              // FEX half of these settings to a compat tool we do not own — Valve's arm64 Proton,
+              // which Steam now picks by default. Fire-and-forget: it is best effort by contract,
+              // and the tweaks themselves must save whether or not Steam accepted the write.
+              void syncLaunchWrapper(target, on);
+              if (settings.enabled === undefined && !on) removeGameEntry();
+              else patch({ enabled: on });
+            }}
           />
         ) : null}
       </PanelSection>

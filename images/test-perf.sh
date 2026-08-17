@@ -393,6 +393,38 @@ os.environ["HOME"] = str(fex_home)
 check("relative XDG_CACHE_HOME falls back to ~/.cache",
       pw.config_dir(), fex_home / ".cache" / "novadeck-fex")
 
+# --- game-launch: the launch-options entry point, end to end.
+# Steam expands `%command%` to the whole chain it assembled, so this must exec argv[1] with the
+# rest verbatim -- anything else silently drops the game. Run as a SUBPROCESS through the symlink,
+# because the two things worth proving (the symlink resolves, and exec actually happens) cannot be
+# observed by importing the module.
+import subprocess
+launch_link = os.path.join(os.environ["PERF_DIR"], "game-launch")
+check("game-launch ships as a symlink to proton-wrapper",
+      os.path.islink(launch_link) and os.readlink(launch_link), "proton-wrapper")
+
+# The subprocess runs the REAL script, which reads /usr/share/novadeck/fex-profiles.json — absent
+# on a build host. That is the point: this asserts the contract that matters at launch time, that
+# a game still starts when tuning cannot be resolved. The config-writing half is covered above,
+# against a monkeypatched BASE_CONFIG.
+marker = tmp / "launched.txt"
+fake_game = tmp / "fake-game.sh"
+fake_game.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$MARKER"\nexit 0\n')
+fake_game.chmod(0o755)
+env = dict(os.environ)
+env.update({"MARKER": str(marker), "SteamAppId": "620", "XDG_CACHE_HOME": str(fex_home)})
+env.pop("FEX_APP_CONFIG", None)
+rc = subprocess.call([launch_link, str(fake_game), "--verb=waitforexitandrun", "arg with space"],
+                     env=env, stderr=subprocess.DEVNULL)
+check("game-launch exits through the command it exec'd", rc, 0)
+check("game-launch passes the whole chain through verbatim",
+      marker.read_text().splitlines() if marker.exists() else [],
+      ["--verb=waitforexitandrun", "arg with space"])
+
+# Same entry point, nothing to exec: it must refuse rather than exit 0 having launched nothing.
+rc = subprocess.call([launch_link], env=env, stderr=subprocess.DEVNULL)
+check("game-launch with no command is an error", rc != 0, True)
+
 for status, name in results:
     print(f"{status} {name}")
 sys.exit(1 if any(s == "FAIL" for s, _ in results) else 0)

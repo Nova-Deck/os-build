@@ -125,6 +125,59 @@ else
   bad "the CEF sentinel touch is missing or re-gated: Decky polls forever and no plugin UI appears"
 fi
 
+# --- the launch-options wrapper ---------------------------------------------------------------
+# The plugin writes `<wrapper> %command%` into a game's Steam launch options, which is how per-game
+# FEX tuning reaches a compat tool we do NOT own — Valve's arm64 Proton, now Steam's default for
+# Windows titles. Two files with no reason to be edited together have to agree on one absolute
+# path: the plugin's constant, and the entry point the image ships. Drift is silent — Steam stores
+# the string happily and the launch just runs unwrapped.
+LAUNCH_LIB="$PLUGIN/src/lib/launchWrapper.ts"
+LAUNCH_ENTRY="$ROOT/fs-overlay/usr/lib/novadeck/game-launch"
+if [ -f "$LAUNCH_LIB" ]; then
+  wrapper_path=$(sed -n 's/^export const LAUNCH_WRAPPER = "\(.*\)";$/\1/p' "$LAUNCH_LIB")
+  [ -n "$wrapper_path" ] \
+    && ok "launchWrapper.ts declares a wrapper path ($wrapper_path)" \
+    || bad "launchWrapper.ts has no LAUNCH_WRAPPER constant to check"
+
+  # The image side: an entry point must exist at exactly that path.
+  if [ -n "$wrapper_path" ] && [ -e "$ROOT/fs-overlay$wrapper_path" ]; then
+    ok "the image ships an entry point at the path the plugin writes"
+  else
+    bad "no fs-overlay$wrapper_path — the plugin would write launch options naming nothing"
+  fi
+
+  # It is a symlink to proton-wrapper, which is what makes both entry points the same code.
+  if [ -L "$LAUNCH_ENTRY" ] && [ "$(readlink "$LAUNCH_ENTRY")" = "proton-wrapper" ]; then
+    ok "game-launch is a symlink to proton-wrapper (one implementation, two names)"
+  else
+    bad "game-launch is not a symlink to proton-wrapper"
+  fi
+
+  # Absolute, because launch options run through a shell whose PATH is not ours.
+  case $wrapper_path in
+    /*) ok "the wrapper path is absolute (launch options get a minimal PATH)" ;;
+    *)  bad "the wrapper path is relative — it would not resolve from Steam's launch shell" ;;
+  esac
+
+  # Idempotency: Steam keeps whatever string it is given, so a second wrap would nest the wrapper
+  # inside itself and hand the inner one its own path as the command.
+  grep -q 'if (options.includes(LAUNCH_WRAPPER)) return null;' "$LAUNCH_LIB" \
+    && ok "wrapLaunchOptions is idempotent (already-wrapped options are left alone)" \
+    || bad "wrapLaunchOptions has no already-wrapped guard — re-enabling a game would nest it"
+
+  # The user's own options must survive. Steam appends bare options as ARGUMENTS to the command,
+  # so they have to stay after %command% or they arrive at the wrapper instead of the game.
+  grep -q 'LAUNCH_WRAPPER} ${COMMAND_TOKEN} ${trimmed}' "$LAUNCH_LIB" \
+    && ok "user launch options are preserved after %command%" \
+    || bad "user launch options are dropped or placed before %command%"
+
+  grep -q 'syncLaunchWrapper' "$PLUGIN/src/tabs/Games.tsx" \
+    && ok "the Games tab syncs the wrapper with the per-game enable switch" \
+    || bad "nothing in the Games tab writes launch options — the wrapper would never be applied"
+else
+  bad "no launchWrapper.ts at ${LAUNCH_LIB#"$ROOT"/}"
+fi
+
 # --- the sync script, driven against a fabricated tree -------------------------------------
 if [ ! -x "$SYNC" ]; then
   bad "decky-sync missing or not executable"

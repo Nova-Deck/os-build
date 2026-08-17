@@ -53,11 +53,26 @@ half-finished entry left in the file never silently retunes a game. `thunks` is 
 under `"fexProfile": "custom"`, which also takes a literal `"fexConfig": {…}`; the named presets
 always run the full thunk set.
 
-## `usr/lib/novadeck/proton-wrapper`
+## `usr/lib/novadeck/proton-wrapper` (and `game-launch`)
 
-Sits in front of Proton's `proton` entry point. It resolves the effective profile for the running
-appid, writes a merged FEX config under `$XDG_CACHE_HOME`, and exports `FEX_APP_CONFIG` before
-exec'ing the real Proton.
+Resolves the effective profile for the running appid, writes a merged FEX config under
+`$XDG_CACHE_HOME`, exports `FEX_APP_CONFIG`, and execs the command it was given.
+
+**One script, two entry points**, because the first cannot reach every launch:
+
+| | reaches | how it is applied |
+|---|---|---|
+| `proton-wrapper` | only Protons **we bake** | `assemble-rootfs.sh` rewrites their `commandline` to the in-tool `novadeck-proton` shim — automatic, no per-game state |
+| `game-launch` | **whatever tool Steam picked** | Steam launch options, `game-launch %command%`, written per game by novadeck-control |
+
+`game-launch` is a symlink to `proton-wrapper`; the name only changes which one a diagnostic
+mentions. It exists because Valve's own arm64 Proton (app `4628740`) is client-owned data whose
+`toolmanifest.vdf` we must not rewrite — and since the FEX-tool client update, it is what Steam
+selects by default for Windows titles. Without launch options those launches get no profile, no
+per-game FEX config and no `cores` topology, and nothing reports it.
+
+The two compose rather than collide: whichever runs first writes `FEX_APP_CONFIG`, and the inner
+one honours a value that is already set.
 
 This works because Proton only generates its own FEX config **if `FEX_APP_CONFIG` is unset** — a
 pre-set value is honoured as-is. Proton also reads `STEAM_FEX_TSOENABLED` / `STEAM_FEX_MULTIBLOCK`

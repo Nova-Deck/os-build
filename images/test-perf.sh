@@ -89,7 +89,7 @@ cat > "$TMP/tweaks.json" <<'EOF'
 EOF
 
 NOVADECK_PERF_SYSCPU="$SYS" NOVADECK_PERF_PROC="$PROC" \
-TEST_TMP="$TMP" PERF_DIR="$PERF_DIR" SYSU="$SYSU" PROCNC="$PROCNC" \
+TEST_TMP="$TMP" PERF_DIR="$PERF_DIR" ROOT_DIR="$ROOT" SYSU="$SYSU" PROCNC="$PROCNC" \
 python3 - <<'PYEOF'
 import os, pathlib, sys
 
@@ -392,6 +392,21 @@ os.environ["XDG_CACHE_HOME"] = "relative/cache"
 os.environ["HOME"] = str(fex_home)
 check("relative XDG_CACHE_HOME falls back to ~/.cache",
       pw.config_dir(), fex_home / ".cache" / "novadeck-fex")
+
+# --- fex-profiles.json: the presets a user actually picks between.
+# Nothing else reads these values until a game launches, so a preset that lost its point is
+# invisible until someone plays the title it was supposed to rescue.
+profiles_path = os.path.join(os.environ["ROOT_DIR"], "fs-overlay/usr/share/novadeck/fex-profiles.json")
+contract = _json.loads(pathlib.Path(profiles_path).read_text())
+profs = contract["profiles"]
+check("the three presets exist", sorted(profs), ["compatible", "default", "fast"])
+check("default runs Multiblock (matches the system FEX config)",
+      profs["default"]["config"]["Multiblock"], "1")
+# The escape hatch: at least one preset must stay conservative, or "try Compatible" stops meaning
+# anything for a title that miscompiles under the aggressive JIT.
+check("compatible keeps the conservative JIT settings",
+      (profs["compatible"]["config"]["Multiblock"], profs["compatible"]["config"]["X87ReducedPrecision"]),
+      ("0", "0"))
 
 # --- game-launch: the launch-options entry point, end to end.
 # Steam expands `%command%` to the whole chain it assembled, so this must exec argv[1] with the

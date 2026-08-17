@@ -94,9 +94,19 @@ path before launching the client.
 
 **How per-game tuning reaches Proton's internal FEX.** Proton generates its own FEX config only if
 `FEX_APP_CONFIG` is unset, and honours a pre-set value otherwise. `proton-wrapper` resolves the
-profile for the running appid, writes a merged config into `$XDG_RUNTIME_DIR` (`/usr` is
+profile for the running appid, writes a merged config under `$XDG_CACHE_HOME` (`/usr` is
 read-only), exports `FEX_APP_CONFIG`, and execs the real `proton`. A failure to write that config
 is never fatal — the wrapper logs and execs Proton anyway.
+
+The cache dir rather than `$XDG_RUNTIME_DIR` because pressure-vessel shares the cache path into
+the container and does not share the runtime dir, and FEX skips an unreadable `FEX_APP_CONFIG`
+**silently** — which presents as "the profile did nothing", not as an error. Our Protons run bare
+today, so either location works; this one keeps working if that ever changes.
+
+The merged config also drops `RootFS`, `ThunkGuestLibs` and `ThunkHostLibs` before it is written.
+Those name the *system* FEX's tree, and this config is read by a different FEX — Proton's bundled
+WoW64 build — which resolves its own. Passing them along points that FEX at a tree that is not its
+own.
 
 **erofsfuse is a hard dependency.** FEXServer `execvpe`s `erofsfuse` to mount the guest rootfs; if
 the binary is missing, the exec fails inside a forked child and FEXServer aborts, taking every x86

@@ -100,10 +100,24 @@ def resolve_thunks(settings, names):
     return {name: 1 if chosen.get(name, True) else 0 for name in names}
 
 
-def runtime_dir():
-    # /usr is read-only, so the generated config cannot live beside the base config.
-    base = os.environ.get("XDG_RUNTIME_DIR")
-    return pathlib.Path(base) / "novadeck-fex" if base else pathlib.Path(f"/tmp/novadeck-fex-{os.getuid()}")
+def config_dir():
+    """Where the generated config lands. /usr is read-only, so it cannot live beside the base.
+
+    THE CACHE DIR, not $XDG_RUNTIME_DIR, and the difference is load-bearing the day a title runs
+    inside pressure-vessel: PV shares the cache path into the container and does NOT share the
+    runtime dir, so a config written there is simply invisible to the FEX that reads it — and FEX
+    skips an unreadable FEX_APP_CONFIG SILENTLY, which surfaces as "the profile did nothing"
+    rather than as an error. Our Protons run bare today (assemble-rootfs.sh strips
+    require_tool_appid), so the runtime dir happens to work; that is a property of a decision
+    elsewhere in the tree, which is exactly the kind of coupling not worth keeping.
+
+    A relative XDG_CACHE_HOME is invalid per the XDG spec and would be re-anchored by portable
+    FEX, so it is rejected rather than joined.
+    """
+    cache = os.environ.get("XDG_CACHE_HOME")
+    if cache and pathlib.Path(cache).is_absolute():
+        return pathlib.Path(cache) / "novadeck-fex"
+    return pathlib.Path.home() / ".cache" / "novadeck-fex"
 
 
 def reap_stale(directory):
@@ -120,6 +134,14 @@ def write_config(settings, game_id, profiles):
     with BASE_CONFIG.open(encoding="utf-8") as f:
         config = json.load(f)
 
+    # PATH BINDINGS BELONG TO THE FEX THAT SHIPPED THEM, never to us. The base config is the
+    # SYSTEM FEX's, so it names the system rootfs and the system thunk directories; handing those
+    # to a different FEX — Proton's bundled WoW64 build, or Steam's own FEX compat tool — points it
+    # at a tree that is not its own and empties the rootfs it was going to use. Each FEX resolves
+    # these from its own global or template config, so drop them and pass tuning only.
+    for key in ("RootFS", "ThunkGuestLibs", "ThunkHostLibs"):
+        config.get("Config", {}).pop(key, None)
+
     # Only keys some profile actually declares may be overridden — a typo in game-tweaks.json
     # must not inject arbitrary keys into FEX's config.
     allowed = set().union(*(profile["config"].keys() for profile in profiles.values()))
@@ -127,7 +149,7 @@ def write_config(settings, game_id, profiles):
     config.setdefault("Config", {}).update({k: v for k, v in resolved.items() if k in allowed})
     config["ThunksDB"] = resolve_thunks(settings, config.get("ThunksDB", {}).keys())
 
-    directory = runtime_dir()
+    directory = config_dir()
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     reap_stale(directory)
 

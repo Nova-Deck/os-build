@@ -56,7 +56,7 @@ always run the full thunk set.
 ## `usr/lib/novadeck/proton-wrapper`
 
 Sits in front of Proton's `proton` entry point. It resolves the effective profile for the running
-appid, writes a merged FEX config to `$XDG_RUNTIME_DIR`, and exports `FEX_APP_CONFIG` before
+appid, writes a merged FEX config under `$XDG_CACHE_HOME`, and exports `FEX_APP_CONFIG` before
 exec'ing the real Proton.
 
 This works because Proton only generates its own FEX config **if `FEX_APP_CONFIG` is unset** — a
@@ -64,7 +64,12 @@ pre-set value is honoured as-is. Proton also reads `STEAM_FEX_TSOENABLED` / `STE
 / `STEAM_COMPAT_FEX_CONFIG` directly, which is the simpler mechanism when a single knob will do;
 the wrapper exists for named presets and per-game overrides.
 
-The generated config must land in `$XDG_RUNTIME_DIR` because `/usr` is read-only.
+The generated config cannot live beside the base one because `/usr` is read-only. It lands under
+`$XDG_CACHE_HOME` (falling back to `~/.cache`) rather than `$XDG_RUNTIME_DIR`: pressure-vessel
+shares the cache path into a container and not the runtime dir, and an unreadable `FEX_APP_CONFIG`
+is skipped **silently**, so the failure would read as "the profile did nothing". It also strips
+`RootFS`/`ThunkGuestLibs`/`ThunkHostLibs` from the copy — those belong to the system FEX, and the
+FEX reading this file is Proton's own.
 
 ## Native x86 Linux games run on Xwayland, not native Wayland
 

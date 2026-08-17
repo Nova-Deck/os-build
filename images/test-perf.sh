@@ -360,6 +360,39 @@ os.environ.pop("WINE_CPU_TOPOLOGY", None)
 pw.apply_env({"cores": "bogus", "env": {"STILL": "applied"}})
 check("bad cores does not block env", os.environ.get("STILL"), "applied")
 
+# --- write_config: WHERE the config lands, and what it must not carry there.
+# Both are silent failures in production — FEX skips an unreadable FEX_APP_CONFIG without a word,
+# and a stray RootFS/Thunk*Libs points a foreign FEX at our tree instead of erroring.
+import json as _json
+fex_home = tmp / "fexhome"
+fex_home.mkdir(exist_ok=True)
+base_fex = tmp / "base-fex.json"
+base_fex.write_text(_json.dumps(
+    {"Config": {"RootFS": "ArchLinux.ero", "ThunkHostLibs": "/usr/lib/fex-emu/HostThunks",
+                "ThunkGuestLibs": "/usr/share/fex-emu/GuestThunks", "TSOEnabled": "1"},
+     "ThunksDB": {"Vulkan": 0, "GL": 0}}))
+pw.BASE_CONFIG = base_fex
+fake_profiles = {"default": {"config": {"TSOEnabled": "1"}}, "fast": {"config": {"TSOEnabled": "0"}}}
+
+os.environ["XDG_CACHE_HOME"] = str(fex_home)
+os.environ["XDG_RUNTIME_DIR"] = str(tmp / "runtimedir")
+written = pw.write_config({"fexProfile": "fast"}, "620", fake_profiles)
+check("config lands under XDG_CACHE_HOME", written.parent, fex_home / "novadeck-fex")
+check("config does not land in the runtime dir", (tmp / "runtimedir").exists(), False)
+generated = _json.loads(written.read_text())
+for key in ("RootFS", "ThunkHostLibs", "ThunkGuestLibs"):
+    check(f"{key} is not handed to another FEX", key in generated["Config"], False)
+check("tuning still applied", generated["Config"]["TSOEnabled"], "0")
+# The base config's OWN thunk values are not preserved -- a named preset runs the full set (see
+# resolve_thunks). What must survive the key drop above is the ThunksDB object itself.
+check("ThunksDB survives the key drop", generated["ThunksDB"], {"Vulkan": 1, "GL": 1})
+
+# A relative XDG_CACHE_HOME is invalid per XDG and portable FEX would re-anchor it.
+os.environ["XDG_CACHE_HOME"] = "relative/cache"
+os.environ["HOME"] = str(fex_home)
+check("relative XDG_CACHE_HOME falls back to ~/.cache",
+      pw.config_dir(), fex_home / ".cache" / "novadeck-fex")
+
 for status, name in results:
     print(f"{status} {name}")
 sys.exit(1 if any(s == "FAIL" for s, _ in results) else 0)

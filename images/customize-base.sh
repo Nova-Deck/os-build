@@ -142,7 +142,7 @@ BOOTSTRAP_PKGS=(base)
 # with no mangohud on the image toggling it CRASHES the launch (HW 2026-07-07). NOT in the holo repos
 # (no mango* in the synced core/extra dbs), so it is built from source into the [novadeck] overlay
 # (packages/mangohud, with the Qualcomm/Adreno GPU+battery patches) and resolves here.
-# python: the interpreter behind our shipped #!/usr/bin/env python3 tools — proton-wrapper (per-game
+# python: the interpreter behind our shipped #!/usr/bin/env python3 tools — game-launch (per-game
 # FEX tuning, on every Windows-game launch) and proton-unlock (registers user-downloaded arm64 Proton).
 # It arrives transitively today, but a launch failing at the shebang would be silent, so declare it.
 # python-gobject: PyGObject (the `gi` bindings) for novadeck-powerd + novadeck-steamos-manager, the

@@ -328,9 +328,12 @@ PYVDF
 
   # In-tool shim: Steam resolves `commandline` relative to the tool directory, so the wrapper is
   # reached through a path Steam accepts, while the wrapper itself stays a normal system file.
+  # It is the SAME /usr/lib/novadeck/game-launch that novadeck-control writes into a game's Steam
+  # launch options — this shim is just the caller that needs no per-game state, and covers only
+  # the tools we bake.
   cat >"$tool_dir/novadeck-proton" <<'PROTONSHIM'
 #!/bin/sh
-exec /usr/lib/novadeck/proton-wrapper "$(dirname "$0")/proton" "$@"
+exec /usr/lib/novadeck/game-launch "$(dirname "$0")/proton" "$@"
 PROTONSHIM
   chmod 0755 "$tool_dir/novadeck-proton"
   echo "  wired Proton compat tool '$stable_name' ($display) — require_tool dropped, FEX wrapper in front, stable name"

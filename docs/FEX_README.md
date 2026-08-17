@@ -1,7 +1,7 @@
 # FEX — x86 emulation runtime configuration
 
 The config lives in the unified overlay payload (`fs-overlay/usr/share/fex-emu/`,
-`fs-overlay/usr/lib/novadeck/proton-wrapper`), copied wholesale into the rootfs by
+`fs-overlay/usr/lib/novadeck/game-launch`), copied wholesale into the rootfs by
 `images/assemble-rootfs.sh`. JSON has no comment syntax, so the rationale lives here.
 
 ## The two x86 paths are independent
@@ -17,7 +17,7 @@ Proton translates only the game's *Windows* x86 code; the Linux syscalls are mad
 side of Wine. That is why its bundled FEX config declares neither `RootFS` nor `ThunksDB`, and
 why a Windows game works even if the `fex-emu` package and the guest rootfs are absent.
 
-Everything in this directory serves the **second** column, except `proton-wrapper`, which bridges
+Everything in this directory serves the **second** column, except `game-launch`, which bridges
 the two: it lets us drive the *Proton-internal* FEX with the same tuning vocabulary.
 
 ## `usr/share/fex-emu/Config.json`
@@ -38,7 +38,7 @@ defaults here keeps them user-overridable.
 ## `usr/share/novadeck/fex-profiles.json`
 
 Named tuning presets (`default` / `fast` / `compatible`) plus the thunk defaults. Read by
-`proton-wrapper`. Users select a profile per game through `/etc/novadeck/game-tweaks.json`
+`game-launch`. Users select a profile per game through `/etc/novadeck/game-tweaks.json`
 (absent by default; `/etc` is an overlay, so writing it is a supported local change):
 
 ```json
@@ -53,7 +53,7 @@ half-finished entry left in the file never silently retunes a game. `thunks` is 
 under `"fexProfile": "custom"`, which also takes a literal `"fexConfig": {…}`; the named presets
 always run the full thunk set.
 
-## `usr/lib/novadeck/proton-wrapper` (and `game-launch`)
+## `usr/lib/novadeck/game-launch`
 
 Resolves the effective profile for the running appid, writes a merged FEX config under
 `$XDG_CACHE_HOME`, exports `FEX_APP_CONFIG`, and execs the command it was given.
@@ -62,11 +62,12 @@ Resolves the effective profile for the running appid, writes a merged FEX config
 
 | | reaches | how it is applied |
 |---|---|---|
-| `proton-wrapper` | only Protons **we bake** | `assemble-rootfs.sh` rewrites their `commandline` to the in-tool `novadeck-proton` shim — automatic, no per-game state |
-| `game-launch` | **whatever tool Steam picked** | Steam launch options, `game-launch %command%`, written per game by novadeck-control |
+| the in-tool shim | only Protons **we bake** | `assemble-rootfs.sh` rewrites their `commandline` to the in-tool `novadeck-proton` shim — automatic, no per-game state |
+| launch options | **whatever tool Steam picked** | `game-launch %command%`, written per game by novadeck-control |
 
-`game-launch` is a symlink to `proton-wrapper`; the name only changes which one a diagnostic
-mentions. It exists because Valve's own arm64 Proton (app `4628740`) is client-owned data whose
+Both callers run the SAME file — the shim is just the caller that needs no per-game state. A fix
+to per-game tuning therefore cannot land for one caller and miss the other. Launch options exist
+because Valve's own arm64 Proton (app `4628740`) is client-owned data whose
 `toolmanifest.vdf` we must not rewrite — and since the FEX-tool client update, it is what Steam
 selects by default for Windows titles. Without launch options those launches get no profile, no
 per-game FEX config and no `cores` topology, and nothing reports it.

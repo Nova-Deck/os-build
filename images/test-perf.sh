@@ -17,7 +17,7 @@
 # apply_game_tree's touched-thread bookkeeping (which threads it writes, and that it puts
 # them back) since that is decision logic rather than kernel effect.
 #
-# It also covers proton-wrapper's apply_env, the launch-time half of the same settings file.
+# It also covers game-launch's apply_env, the launch-time half of the same settings file.
 #
 # Runs on the host with no root and no device.
 set -uo pipefail
@@ -133,7 +133,7 @@ check("empty inherits", np.resolve_cores(""), None)
 check("explicit list", np.resolve_cores("2,7"), [2, 7])
 raises("reject offline cpu", lambda: np.resolve_cores("12"))
 
-# tweaks merge — the proton-wrapper contract
+# tweaks merge — the game-launch contract
 np.TWEAKS_CONFIG = tmp / "tweaks.json"
 tweaks = np.load_tweaks()
 check("global only", np.settings_for(tweaks, None).get("gamescopeNice"), 5)
@@ -330,12 +330,12 @@ check("tick merges newest game", values.get("gamescopeNice"), 5)  # 990 lacks en
 check("tick reaches enforcement", seen.get("gamescopeNice"), 5)
 check("tick hands the game tree over", seen.get("_pids"), [1500])
 
-# --- proton-wrapper's half of the split: Wine-only env, applied before exec.
+# --- game-launch's half of the split: Wine-only env, applied before exec.
 # Loaded by path because it ships without a .py extension. It imports
 # novadeck_perf itself, which resolves to the fake-configured module above.
 import importlib.machinery
 import importlib.util
-pw_path = os.path.join(os.environ["PERF_DIR"], "proton-wrapper")
+pw_path = os.path.join(os.environ["PERF_DIR"], "game-launch")
 spec = importlib.util.spec_from_loader(
     "pw", importlib.machinery.SourceFileLoader("pw", pw_path))
 pw = importlib.util.module_from_spec(spec)
@@ -400,8 +400,9 @@ check("relative XDG_CACHE_HOME falls back to ~/.cache",
 # observed by importing the module.
 import subprocess
 launch_link = os.path.join(os.environ["PERF_DIR"], "game-launch")
-check("game-launch ships as a symlink to proton-wrapper",
-      os.path.islink(launch_link) and os.readlink(launch_link), "proton-wrapper")
+check("game-launch ships as one executable file (both callers run the same code)",
+      os.path.isfile(launch_link) and not os.path.islink(launch_link)
+      and os.access(launch_link, os.X_OK), True)
 
 # The subprocess runs the REAL script, which reads /usr/share/novadeck/fex-profiles.json — absent
 # on a build host. That is the point: this asserts the contract that matters at launch time, that

@@ -102,13 +102,13 @@ Notes:
 
 Games launch three ways — Proton (compat tool), native x86 Linux via the system FEX
 (binfmt_misc, no compat tool), native arm64 (direct exec) — and only the Proton path has
-`proton-wrapper` in its exec chain. So the keys split by *binding time*, not by file:
+`game-launch` in its exec chain. So the keys split by *binding time*, not by file:
 
 - **Scheduling for the game tree** (`nice`, `cores`) needs no launch hook at all, and is
   enforced post-launch by `novadeck-powerd` on **every** path. Caveat: enforcement lands up to
   one tick (~3 s) after launch, so the first moments run untuned.
 - **Wine/Proton env** (`env`, `WINE_CPU_TOPOLOGY` from `cores`) must exist before exec, and
-  `proton-wrapper` is in the exec chain precisely for this path. Meaningless for non-Wine
+  `game-launch` is in the exec chain precisely for this path. Meaningless for non-Wine
   titles, so no coverage gap.
 
 Still open, deliberately:

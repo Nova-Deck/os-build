@@ -49,7 +49,7 @@ q6asm/ADM path rather than AudioReach, and the AYN Thor Lite additionally needs
 COPP is a bit-exact passthrough and UCM has no key for the sample format.
 
 **FEX (layer) — x86 emulation runtime config**
-`usr/share/fex-emu/Config.json` + the Proton FEX profiles + `usr/lib/novadeck/proton-wrapper`. The
+`usr/share/fex-emu/Config.json` + the Proton FEX profiles + `usr/lib/novadeck/game-launch`. The
 binaries come from pacman; this tree is config only. Two independent x86 paths: Windows games use
 Proton's own bundled WoW64 FEX (no system FEX/rootfs); native x86 Linux ELFs use the `fex-emu`
 package + guest rootfs (auto-registered with binfmt_misc). See `docs/FEX_README.md`.

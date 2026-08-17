@@ -89,7 +89,7 @@ Separately, Valve's own arm64 Proton declares `require_tool_appid` for an arm64 
 container. On a non-Deckard client that dependency was never *registered* as a compat tool even
 when its files were installed, so the launch died before Proton ran (`AppError_51`).
 `images/assemble-rootfs.sh` therefore strips `require_tool_appid` from the
-baked tool's `toolmanifest.vdf` and repoints its `commandline` at `proton-wrapper`; it also
+baked tool's `toolmanifest.vdf` and repoints its `commandline` at `game-launch`; it also
 rewrites `compatibilitytool.vdf` to a **stable, version-free internal name** (`proton-cachyos-arm64`)
 and a friendly `display_name`, because Steam records the internal name — not the directory — against
 every game the tool is forced on, so leaving upstream's dated name would unpin every game on a
@@ -100,7 +100,7 @@ lists — not `/usr/share/steam/compatibilitytools.d` on its own — so `novadec
 path before launching the client.
 
 **How per-game tuning reaches Proton's internal FEX.** Proton generates its own FEX config only if
-`FEX_APP_CONFIG` is unset, and honours a pre-set value otherwise. `proton-wrapper` resolves the
+`FEX_APP_CONFIG` is unset, and honours a pre-set value otherwise. `game-launch` resolves the
 profile for the running appid, writes a merged config under `$XDG_CACHE_HOME` (`/usr` is
 read-only), exports `FEX_APP_CONFIG`, and execs the real `proton`. A failure to write that config
 is never fatal — the wrapper logs and execs Proton anyway.
@@ -116,8 +116,8 @@ Since the client update that unlocked the FEX compat tool, that Proton is also w
 DEFAULT for Windows titles, so the shim's coverage shrank from "every Windows launch" to "launches
 the user pointed at our tool". For everything else, `novadeck-control` writes Steam launch options
 of the form `/usr/lib/novadeck/game-launch %command%`: Steam evaluates those on the host and
-expands `%command%` to the whole chain it assembled, whichever tool that is. `game-launch` is the
-same script as `proton-wrapper`, reached under a second name.
+expands `%command%` to the whole chain it assembled, whichever tool that is. It is the same file
+the in-tool shim calls, so both paths tune a game identically.
 
 The merged config also drops `RootFS`, `ThunkGuestLibs` and `ThunkHostLibs` before it is written.
 Those name the *system* FEX's tree, and this config is read by a different FEX — Proton's bundled

@@ -146,11 +146,12 @@ if [ -f "$LAUNCH_LIB" ]; then
     bad "no fs-overlay$wrapper_path — the plugin would write launch options naming nothing"
   fi
 
-  # It is a symlink to proton-wrapper, which is what makes both entry points the same code.
-  if [ -L "$LAUNCH_ENTRY" ] && [ "$(readlink "$LAUNCH_ENTRY")" = "proton-wrapper" ]; then
-    ok "game-launch is a symlink to proton-wrapper (one implementation, two names)"
+  # One file, called by both the in-tool shim and the launch options -- so a fix to per-game
+  # tuning cannot land for one caller and miss the other.
+  if [ -f "$LAUNCH_ENTRY" ] && [ -x "$LAUNCH_ENTRY" ]; then
+    ok "game-launch is an executable the in-tool shim and launch options both call"
   else
-    bad "game-launch is not a symlink to proton-wrapper"
+    bad "game-launch is missing or not executable"
   fi
 
   # Absolute, because launch options run through a shell whose PATH is not ours.

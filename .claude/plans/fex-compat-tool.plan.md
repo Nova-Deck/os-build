@@ -471,6 +471,41 @@ own — which is a client-side question, not something the OS can fix.
 
 ---
 
+## Guest rootfs bumped to 2026-08-11 (main, 2026-08-17)
+
+`packages/fex-rootfs` moved off the 2026-01-08 image. Phase 0's contract table above was
+re-derived against the new one rather than assumed to still hold, by extracting both images
+with `fsck.erofs`/`dump.erofs` in a throwaway Arch container and diffing the facts:
+
+- Every path the manifest names still exists, and the `dri` inventory is the **same 66 entries**
+  in both arches, `msm_dri.so` and `kgsl_dri.so` included.
+- `usr/lib/locale` still carries **`C.utf8` alone**, so `locales: false` stays right — and the
+  open "trimmed locales break x86 game launchers" problem is *not* fixed by the bump.
+- `gconv` is now 256 entries in both arches (was 255 / 256).
+- The guest stack moved: mesa `1:25.3.3` → `1:26.1.6`, glibc `2.42` → `2.44`, gcc-libs
+  `15.2.1` → `16.2.1`, vulkan-icd-loader `1.4.335.0` → `1.4.357.0`. Under our thunkless config
+  that Mesa **is** the renderer for native x86 Linux titles, so Phase 2's A/B gate now has a
+  second reason to run.
+
+**Correction to Phase 1's stated reasoning — `va_api: false` was justified with a false fact.**
+The commit message for `feat(fex): surface the guest rootfs as a Steam graphics provider` and
+`docs/FEX_README.md` both claimed the image has no `*_drv_video.so`. It has five, in both `dri`
+dirs (d3d12, nouveau, r600, radeonsi, virtio_gpu), and so did the 2026-01-08 image — the claim
+was wrong when written, not made wrong by the bump. The setting itself is unchanged and still
+correct for the real reason: Mesa ships no VA-API driver for freedreno, so none of those five is
+for this GPU.
+
+Also settled while checking the download: the upstream index's `Hash` is **XXH3-64**
+(`xxhsum -H3`), not the tool's default XXH64. It matched, so the artifact is now verifiable
+against upstream's own integrity value instead of only self-hashing. The pin records the command.
+
+`packages/fex-emu`'s x86 sysroot moved with the guest, as its PKGBUILD has always said it must.
+It had drifted to glibc 2.43 against a 2.42 guest — thunks built against a *newer* glibc than the
+guest supplies, which is the direction that yields missing symbol versions. It now matches the
+guest exactly. Inert while `ThunksDB` is all-zero, but the invariant is the point.
+
+---
+
 ## Phase 2 — A/B validation on hardware (GATE)
 
 Nothing is deleted until this passes.

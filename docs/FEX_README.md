@@ -156,9 +156,14 @@ pinned image rather than copied from the man page's example:
   carries `etc/ld.so.cache`, both `ldconfig`s and both interoperable linkers.
 - **`locales: false`** — the guest ships only `C.utf8` under `usr/lib/locale`. Left at its `true`
   default, PV would take locale data from a guest that has essentially none.
-- **`va_api: false`** — there are no `*_drv_video.so` drivers in the image.
-- **Per-arch paths** — `usr/lib/dri` and `usr/lib32/dri` (66 drivers each), `usr/lib/gbm`,
-  `usr/lib/gconv` (255) and `usr/lib32/gconv` (256). `usr/lib32` is also given as a
+- **`va_api: false`** — the image *does* ship `*_drv_video.so` (d3d12, nouveau, r600, radeonsi,
+  virtio_gpu, in both `dri` dirs), and an earlier revision of this file claimed the opposite. The
+  setting stands on the real reason: not one of them is an Adreno driver, because Mesa has no
+  VA-API driver for freedreno at all. Exposing the provider's VA-API would advertise decoders for
+  hardware this device does not have.
+- **Per-arch paths** — `usr/lib/dri` and `usr/lib32/dri` (66 entries each: 61 `*_dri.so` plus the
+  5 `*_drv_video.so` above), `usr/lib/gbm`, `usr/lib/gconv` and `usr/lib32/gconv` (256 each).
+  `usr/lib32` is also given as a
   `fallback_library_paths` entry, since 32-bit libraries live there rather than in `usr/lib`.
 - **`vdpau` is deliberately absent**, i.e. left at its default: the guest does carry
   `usr/lib{,32}/vdpau`.

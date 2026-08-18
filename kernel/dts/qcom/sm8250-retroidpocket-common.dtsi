@@ -1524,6 +1524,11 @@
 	remote-endpoint = <&redriver_phy_con_ss>;
 };
 
+/* Video decode. The label is upstream's and says "venus", but qcom-iris.ko is what binds this
+ * node — venus/core.c compiles its qcom,sm8250-venus entry out whenever IRIS is enabled, and we
+ * no longer build venus at all. Do not "clean this up" by removing it: this override is what
+ * turns the decoder on, and its firmware is pinned under IRIS's name in firmware/LINUX_FW.pin.
+ */
 &venus {
 	status = "okay";
 };

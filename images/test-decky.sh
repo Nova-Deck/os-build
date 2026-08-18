@@ -93,8 +93,9 @@ preset="$ROOT/fs-overlay/usr/lib/systemd/system-preset/60-novadeck-decky.preset"
 # The loader running is NOT the loader working: Decky's frontend lives in Steam's CEF, injected
 # over 127.0.0.1:8080, and upstream v3.2.8-pre1 drops that websocket permanently the first time
 # the tab goes stale mid-connect (main.py's loader_reinjector guards get_gamepadui_tab but not
-# the open_websocket on the next line). novadeck-steam's exit-42 relaunch does exactly that on
-# every boot. Everything below drives the watchdog's decision loop against fake ss/systemctl —
+# the open_websocket on the next line). novadeck-steam's exit-42 relaunch puts a webhelper death in
+# that window on every boot; whether it lands there is timing, and it has landed.
+# Everything below drives the watchdog's decision loop against fake ss/systemctl —
 # the loop is the whole mechanism, so an untested loop is an untested fix.
 WATCHDOG="$ROOT/fs-overlay/usr/lib/novadeck/decky-inject-watchdog"
 [ -x "$WATCHDOG" ] \

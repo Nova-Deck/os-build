@@ -7,16 +7,21 @@
 # active, the plugin is loaded, the journal says nothing further, and no amount of reading
 # plugin_loader.service's status shows a fault.
 #
-# Upstream v3.2.8-pre1 loses it deterministically on this image. decky_loader/main.py's
+# Upstream v3.2.8-pre1 can lose it for good. decky_loader/main.py's
 # loader_reinjector wraps get_gamepadui_tab() in a try/except for exactly this class of error,
 # but the NEXT line — `await tab.open_websocket()` — sits outside it. A tab that goes stale
 # between those two calls raises ClientConnectorError out of the whole coroutine; the task dies
 # ("Task exception was never retrieved") and there is no retry loop left to recover it.
 #
-# That is not a rare race here. novadeck-steam's exit-42 relaunch tears the first webhelper down
-# ~15 seconds into every boot, right inside Decky's injection window. Measured 2026-08-18 on a
-# dev card: loader up 21:10:50, tab acquired ~21:11:05, webhelper gone 21:11:07 (injection dead),
-# CEF listening again 21:11:35, and zero further attempts in the following eight minutes.
+# The EXPOSURE is on every boot: novadeck-steam's exit-42 relaunch tears the first webhelper down
+# seconds after Decky starts reaching for it. Whether it lands in that two-line window is timing,
+# and both outcomes are on record (2026-08-18, same day, two cards):
+#   lost — webhelper died 8s after opening, Decky still mid-connect: ClientConnectorError,
+#          reinjector task dead, no "Loading Decky frontend!" ever, nothing for eight minutes.
+#   won  — Decky had been connected 23s, so CEF sent a proper Inspector.detached (the handled
+#          path), the outer loop survived and re-injected 5s later, unaided.
+# A race Decky sometimes wins is still worth a mechanism, because losing it is silent and
+# permanent: no recovery short of a manual restart, and nothing in the journal to say why.
 #
 # We cannot fix it where it breaks: the loader is upstream's pinned x86_64 PyInstaller build that
 # we run under FEX, not something this image compiles. So the invariant gets restored from the

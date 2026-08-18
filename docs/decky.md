@@ -37,9 +37,20 @@ v3.2.8-pre1 drops that websocket permanently the first time the tab goes stale m
 leaves `await tab.open_websocket()` on the next line outside it, so the exception kills the whole
 coroutine — "Task exception was never retrieved" — and no retry loop survives.
 
-That is deterministic here, not a rare race: `novadeck-steam`'s exit-42 relaunch tears the first
-webhelper down about fifteen seconds into every boot, squarely inside Decky's injection window.
-The symptom is entirely silent — unit active, plugin loaded, empty QAM.
+The *exposure* is on every boot: `novadeck-steam`'s exit-42 relaunch tears the first webhelper
+down seconds after Decky starts reaching for it. Whether it lands inside that two-line window is
+timing, and both outcomes have been seen on hardware:
+
+- 2026-08-18, card at `d93555d`: webhelper died 8s after opening, while Decky was still
+  mid-connect. `ClientConnectorError` out of `open_websocket`, reinjector task dead, no
+  `Loading Decky frontend!` ever, and zero further attempts in the following eight minutes.
+- 2026-08-18, card at `de08339` (fresh flash): Decky injected 6s after CEF came up and had been
+  connected 23s when the relaunch arrived. CEF sent a proper `Inspector.detached` — the handled
+  path — so the outer loop survived and re-injected 5s later, unaided.
+
+So this is a race that Decky sometimes wins, not a certainty. What makes it worth a mechanism is
+that losing it is silent and permanent: unit active, plugin loaded, empty QAM, nothing further in
+the journal, and no recovery short of a manual restart.
 
 `novadeck-decky-watchdog.service` restores the invariant from outside, since the loader is
 upstream's pinned x86_64 binary and not ours to patch. Every 15s: if CEF is listening and no
@@ -120,5 +131,11 @@ loader or Steam-channel bump.
 
 The watchdog's own two branches were HW-validated 2026-08-18 by running the script by hand on a
 dev card (healthy → no restart; probe pointed at a listening port the loader is not connected to
-→ restart, followed by `Loading Decky frontend!` and a fresh CEF connection). What that does not
-cover is the unit doing it unattended across a real boot's exit-42 relaunch — that needs a flash.
+→ restart, followed by `Loading Decky frontend!` and a fresh CEF connection). The unit was then
+confirmed on a `de08339` flash: active across a real boot, and — usefully — silent through a
+Steam relaunch that took injection down for five legitimate seconds, so the two-tick settle does
+not fire on Decky's own reconnect.
+
+Still unobserved on a real boot: the watchdog recovering an injection that actually died, because
+that boot's race went Decky's way. Catching it needs cold boots until the losing side comes up;
+`journalctl -u novadeck-decky-watchdog -b` names the reason when it does.

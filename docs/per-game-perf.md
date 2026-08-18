@@ -41,24 +41,40 @@ The game itself:
 | `cores` | cpulist or preset | pin the game's threads to these CPUs |
 | `env` | object | environment variables for the launch (`null` unsets one) — Proton titles only |
 | `wineTopology` | bool | set `false` to pin via `cores` without reshaping what Wine reports |
+
+Overrides of a system-wide setting, per-game only (see below):
+
+| Key | Type | Effect |
+|-----|------|--------|
 | `scheduler` | `"none"` or `"lavd"` | CPU scheduler to run while this game is running |
+| `powerProfile` | `"eco"`, `"balanced"` or `"performance"` | power profile to hold while this game is running |
 
-### `scheduler` is per-game only
+### `scheduler` and `powerProfile` are per-game only
 
-Every other key here can also be set in `global`. `scheduler` cannot, and the omission is
-deliberate: the system-wide CPU scheduler already has exactly one home — `novadeck-powerd`'s
-persisted `CpuScheduler` property, which both `novadeck-scheduler` and the plugin's **Power** tab
-drive. A `global.scheduler` would be a second place to set the same value with no way for either
-to show the other's state.
+Every other key here can also be set in `global`. These two cannot, and the omission is
+deliberate: each already has exactly one system-wide home — `novadeck-powerd`'s persisted
+`CpuScheduler` and `Profile` properties, driven by `novadeck-scheduler` and the plugin's **Power**
+tab. A `global.scheduler` would be a second place to set the same value with no way for either to
+show the other's state, and the same goes for the profile. The plugin therefore offers both
+controls on a game target only.
 
-So the order is: a running game's `scheduler` wins; otherwise the system-wide `CpuScheduler`
-applies. `"none"` is spelled out rather than implied, because forcing stock for one title on a
-device whose system-wide choice is `lavd` is exactly what it is for.
+So the order is: a running game's value wins; otherwise the system-wide property applies. A value
+equal to the system-wide default is still worth spelling out — `"none"` forces stock for one title
+on a device whose choice is `lavd`, `"balanced"` holds one title back on a device left in
+`performance`.
 
-The override is temporary. `novadeck-powerd` starts or stops `scx.service` when the game starts and
-puts the persisted choice back when it exits — the saved choice is never rewritten, so one launch of
-one game cannot change the setting for everything else. `org.novadeck.Power1.ActiveCpuScheduler`
-reports what is actually loaded, and differs from `CpuScheduler` only while an override holds.
+`powerProfile` is a profile **id**, never the UI label an operator may have renamed in
+`power-profiles.conf`. It moves the whole profile — CPU governor and frequency caps, GPU limits,
+and the fan curve, which is a property of a thermal policy and travels with it. While an override
+holds, the fan-curve editor addresses the overriding profile, because that is the curve in force.
+
+Both overrides are temporary. `novadeck-powerd` applies them when the game starts and puts the
+persisted choice back when it exits — the saved choice is never rewritten, so one launch of one
+game cannot change the setting for everything else. `org.novadeck.Power1.ActiveCpuScheduler` and
+`ActiveProfile` report what is really in force, and differ from `CpuScheduler` / `Profile` only
+while an override holds. The power-profiles-daemon compatibility interfaces report the overridden
+profile too, so `scx_lavd --autopower` picks its internal power mode from what the machine is
+actually doing.
 
 `lavd` is `scx_lavd`; see [`packages/scx-scheds/source.pin`](../packages/scx-scheds/source.pin) for
 the measurements behind it and why the shipped default is still stock.

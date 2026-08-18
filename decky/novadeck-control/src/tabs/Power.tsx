@@ -54,7 +54,7 @@ export function Power({ config, setConfig }: { config: Config; setConfig: Dispat
   }, []);
 
   const selectProfile = async (label: string) => {
-    adopt({ ...power, activeProfile: label });
+    adopt({ ...power, profile: label });
     try {
       adopt(await setActiveProfile(label));
     } catch (error) {
@@ -152,6 +152,9 @@ export function Power({ config, setConfig }: { config: Config; setConfig: Dispat
   // left as a dropdown that silently disagrees with the machine.
   const schedulerOverridden =
     !!power.activeCpuScheduler && power.activeCpuScheduler !== power.cpuScheduler;
+  // Same treatment for the profile: powerd reports the one in force separately, so a game's
+  // `powerProfile` tweak is stated here instead of silently contradicting the dropdown.
+  const profileOverridden = !!power.activeProfile && power.activeProfile !== power.profile;
   // Same capability-by-enumeration rule again: no stops means a powerd that does not serve
   // the curve, and a fan the daemon cannot see means nothing to edit.
   const stops = power.fanCurveStops || [];
@@ -171,12 +174,14 @@ export function Power({ config, setConfig }: { config: Config; setConfig: Dispat
         {power.error ? <Field label={power.error} /> : null}
         <SelectEdit
           label="Active profile"
-          value={power.activeProfile}
+          value={power.profile}
           options={(power.profiles || []).map((label) => ({ data: label, label }))}
           onChange={selectProfile}
         />
         <div className="novadeck-field-note">
-          Applies immediately, directly to the power daemon.
+          {profileOverridden
+            ? `The running game overrides this — ${power.activeProfile} is in force until it exits.`
+            : "Applies immediately, directly to the power daemon."}
         </div>
       </PanelSection>
       {hasSchedulerChoice ? (

@@ -184,6 +184,32 @@ check("lavd accepted", np.scheduler_for({"games": {"1": {"enabled": True, "sched
 # powerd imports this as its D-Bus enum, so the two domains cannot drift.
 check("scheduler domain", list(np.SCHEDULERS), ["none", "lavd"])
 
+# powerProfile: the same per-game-only contract, against powerd's persisted Profile. Asserted
+# separately from `scheduler` because the two share per_game_choice() -- a change that broke the
+# gating for one would break it for both, and this is what says so.
+check("powerProfile not a sanitize_perf key",
+      "powerProfile" in np.sanitize_perf({"powerProfile": "performance"}), False)
+profile_tweaks = {
+    "global": {"powerProfile": "performance"},
+    "games": {
+        "620": {"enabled": True, "powerProfile": "eco"},
+        "700": {"enabled": True, "powerProfile": "turbo"},
+        "800": {"enabled": False, "powerProfile": "performance"},
+        "900": {"enabled": True},
+    },
+}
+check("global powerProfile ignored", np.profile_for(profile_tweaks, None), None)
+check("global profile not inherited by a game", np.profile_for(profile_tweaks, "900"), None)
+check("per-game profile applies", np.profile_for(profile_tweaks, "620"), "eco")
+check("bad profile dropped", np.profile_for(profile_tweaks, "700"), None)
+check("disabled game has no profile", np.profile_for(profile_tweaks, "800"), None)
+check("unknown appid has no profile", np.profile_for(profile_tweaks, "12345"), None)
+# A LABEL is not a profile: the file speaks ids, and an operator's renamed label must not resolve.
+check("label is not an id",
+      np.profile_for({"games": {"1": {"enabled": True, "powerProfile": "Eco"}}}, "1"), None)
+# powerd imports this as its PROFILES, and every id needs a [profile.<id>] section to exist.
+check("profile domain", list(np.POWER_PROFILES), ["eco", "balanced", "performance"])
+
 # /proc tree walk + appid detection
 check("find steam", np.pids_by_comm(np.STEAM_COMMS), [1234])
 # One walk answering both comm sets: the index must group by comm, and feeding it
@@ -329,6 +355,20 @@ check("tick shares the walk with gamescope", sorted(seen.get("_gs_index") or {})
 check("tick merges newest game", values.get("gamescopeNice"), 5)  # 990 lacks enabled -> global
 check("tick reaches enforcement", seen.get("gamescopeNice"), 5)
 check("tick hands the game tree over", seen.get("_pids"), [1500])
+# 990 is the running game and it lacks "enabled", so neither system-wide override may appear --
+# absence is what powerd reads as "restore the persisted choice".
+check("no scheduler override for a disabled game", "scheduler" in values, False)
+check("no profile override for a disabled game", "powerProfile" in values, False)
+
+# ...and the same tick with 990 enabled carries both, keyed off the running game alone.
+(tmp / "tweaks-override.json").write_text(
+    '{"global": {"gamescopeNice": 5},'
+    ' "games": {"990": {"enabled": true, "scheduler": "lavd", "powerProfile": "performance"}}}')
+np.TWEAKS_CONFIG = tmp / "tweaks-override.json"
+values = np.Enforcer().tick()
+np.TWEAKS_CONFIG = tmp / "tweaks.json"
+check("tick carries the scheduler override", values.get("scheduler"), "lavd")
+check("tick carries the profile override", values.get("powerProfile"), "performance")
 
 # --- game-launch's half of the split: Wine-only env, applied before exec.
 # Loaded by path because it ships without a .py extension. It imports

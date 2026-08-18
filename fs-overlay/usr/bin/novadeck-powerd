@@ -19,7 +19,11 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 BUS_NAME = "org.novadeck.Power"
 OBJECT_PATH = "/org/novadeck/Power"
 IFACE = "org.novadeck.Power1"
-PROFILES = ["eco", "balanced", "performance"]
+# Single domain, shared with the tweaks file's per-game `powerProfile` key, the same
+# anti-drift rule CPU_SCHEDULERS follows: a profile a tweak may select is exactly a profile
+# power-profiles.conf must carry a [profile.<id>] section for. These are IDS; the UI labels
+# come from that config and are looked up through label_for().
+PROFILES = list(novadeck_perf.POWER_PROFILES)
 STATE_FILE = Path("/var/lib/novadeck/powerd.state")
 # Overridable so images/test-fan-curve.sh can drive the real parse/write paths against a
 # fabricated tree, the same trick novadeck_perf uses for /proc and /sys.
@@ -150,6 +154,11 @@ XML = f"""
     </method>
     <property name="AvailableProfiles" type="as" access="read"/>
     <property name="Profile" type="s" access="readwrite"/>
+    <!-- The profile actually in force. Equals Profile unless a running game's `powerProfile`
+         tweak is overriding it, which is the only way the two ever diverge. Speaks UI labels,
+         like Profile — NOT to be confused with the PPD interfaces' ActiveProfile below, which
+         is the same value in PPD's own id vocabulary. -->
+    <property name="ActiveProfile" type="s" access="read"/>
     <property name="SuggestedDefaultProfile" type="s" access="read"/>
     <property name="AvailableGpuPerformanceLevels" type="as" access="read"/>
     <property name="GpuPerformanceLevel" type="s" access="readwrite"/>
@@ -466,7 +475,13 @@ class NovadeckPower:
         self.fan_config = {}
         self.suspend_config = {}
         self.default_profile = ""
+        # profile is the PERSISTED CHOICE, exactly like cpu_scheduler below and for the same
+        # reason: there is no `global.powerProfile` in game-tweaks.json, so this stays the only
+        # home of the system-wide value. profile_override holds a running game's `powerProfile`
+        # tweak; active_profile() is what everything that TOUCHES HARDWARE resolves through, and
+        # the override is never written back as the choice.
         self.profile = ""
+        self.profile_override = None
         self.gpu_level = "auto"
         self.manual_gpu_clock = 0
         # cpu_scheduler is the PERSISTED CHOICE and the system-wide setting — there is no
@@ -863,12 +878,22 @@ class NovadeckPower:
             return settings["cpu_max_policy"].get(policy_id, freqs[-1])
         return int(freqs[-1] * settings["cpu_max"])
 
+    def active_profile(self):
+        """The profile in force: a running game's override, else the user's choice.
+
+        Every consumer that acts on a profile -- the cpu/gpu writes, the fan curve, and the
+        curve EDITORS -- goes through here rather than through self.profile, so an override
+        is a complete profile switch and not a partial one. The two exceptions are the Profile
+        property and save_state(), which are about the choice itself."""
+        return self.profile_override or self.profile
+
     def profile_settings(self):
-        return self.profile_config.get(self.profile, self.profile_config["balanced"])
+        return self.profile_config.get(self.active_profile(), self.profile_config["balanced"])
 
     def active_curve(self, profile=None):
         """The effective curve for a profile, as points -- factory or custom, resolved."""
-        settings = self.profile_config.get(profile or self.profile, self.profile_settings())
+        settings = self.profile_config.get(
+            profile or self.active_profile(), self.profile_settings())
         curve = settings["fan_curve"]
         if isinstance(curve, str):
             curve = self.fan_curves.get(curve, [])
@@ -876,7 +901,7 @@ class NovadeckPower:
 
     def active_curve_name(self, profile=None):
         curve = self.profile_config.get(
-            profile or self.profile, self.profile_settings())["fan_curve"]
+            profile or self.active_profile(), self.profile_settings())["fan_curve"]
         return curve if isinstance(curve, str) else ""
 
     def fan_curve_pwms(self):
@@ -915,14 +940,18 @@ class NovadeckPower:
         }
 
     def set_fan_curve(self, pwms):
+        # Scoped to the ACTIVE profile, which is what FanCurve reads back and therefore what
+        # the editor is showing: under a game override the curve being dragged is the
+        # override's, and that is the one this writes.
+        profile = self.active_profile()
         stops = self.fan_config["curve_stops"]
         clean = clean_curve_pwms(
             pwms, stops, self.fan_config["min_pwm"], self.fan_config["max_pwm"])
         curves = read_fan_dropin()
-        curves[self.profile] = list(zip(stops, clean))
+        curves[profile] = list(zip(stops, clean))
         self.write_fan_dropin(curves)
-        print(f"novadeck-powerd: fan curve for {self.profile} set to "
-              f"{format_fan_curve(curves[self.profile])}", file=sys.stderr)
+        print(f"novadeck-powerd: fan curve for {profile} set to "
+              f"{format_fan_curve(curves[profile])}", file=sys.stderr)
 
     def reset_fan_curve(self, every=False):
         # Unconditional, including when there was nothing to remove: the reload has to run
@@ -931,9 +960,9 @@ class NovadeckPower:
         curves = {}
         if not every:
             curves = read_fan_dropin()
-            curves.pop(self.profile, None)
+            curves.pop(self.active_profile(), None)
         self.write_fan_dropin(curves)
-        target = "all profiles" if every else self.profile
+        target = "all profiles" if every else self.active_profile()
         print(f"novadeck-powerd: fan curve reset to factory for {target}", file=sys.stderr)
 
     def write_governor(self, path, preferred):
@@ -1166,7 +1195,9 @@ class NovadeckPower:
         # kill the timer: a bad tweaks entry must cost one tick, not the tool.
         try:
             if not self.suspended:
-                self.apply_scheduler_tweak(self.perf.tick())
+                values = self.perf.tick()
+                self.apply_scheduler_tweak(values)
+                self.apply_profile_tweak(values)
         except Exception as exc:
             print(f"novadeck-powerd: perf tick failed: {exc}", file=sys.stderr)
         return True
@@ -1184,6 +1215,42 @@ class NovadeckPower:
         # Deliberately not a PropertiesChanged on CpuScheduler: the property is the user's choice
         # and it has not changed. ActiveCpuScheduler is where the override is observable.
         self.apply_scheduler(target)
+
+    def apply_profile_tweak(self, values):
+        """Honour the running game's `powerProfile` tweak. Absent means no opinion, which
+        restores the persisted choice — that is what makes the override end when the game does.
+
+        The whole profile moves, not just the cpu/gpu caps: the fan curve is a property of a
+        thermal policy, so an override brings its curve with it (hence the fan tick and the
+        FanCurve re-emit here). PPD's ActiveProfile follows too, because scx_lavd --autopower
+        polls it to pick its own internal power mode and must see what is really in force."""
+        # No domain check here: novadeck_perf validates against POWER_PROFILES, which IS
+        # PROFILES (imported above), so an unknown value never reaches this.
+        want = values.get("powerProfile")
+        if want == self.profile_override:
+            return
+        self.profile_override = want
+        self.apply_profile()
+        if self.gpu_level == "manual" and self.manual_gpu_clock:
+            # apply_profile() leaves the GPU alone in manual mode; keep the clock we were told
+            # to hold rather than letting the profile's auto limits reappear.
+            self.set_gpu_manual_clock(self.manual_gpu_clock)
+        self.fan_tick()
+        # __init__ runs the first perf tick BEFORE main() registers us on the bus, so a game
+        # already running at powerd start reaches here with no connection — and no GLib either,
+        # since gi is imported in main(). Nothing is listening yet and the profile is already
+        # applied, so there is nothing to announce.
+        #
+        # Not a PropertiesChanged on Profile — the user's choice has not changed, and a tab that
+        # rewrote its dropdown from this would then save the override as the choice.
+        if self.connection is not None:
+            self.emit_properties({
+                "ActiveProfile": GLib.Variant("s", self.label_for(self.active_profile())),
+                **self.fan_curve_changed(),
+            })
+            self.emit_ppd_profile()
+        print(f"novadeck-powerd: profile override {want or 'cleared'} "
+              f"(choice {self.profile}, active {self.active_profile()})", file=sys.stderr)
 
     def fan_safe(self):
         if not self.fan_pwm:
@@ -1213,6 +1280,8 @@ class NovadeckPower:
             return GLib.Variant("as", [self.label_for(p) for p in PROFILES])
         if prop == "Profile":
             return GLib.Variant("s", self.label_for(self.profile))
+        if prop == "ActiveProfile":
+            return GLib.Variant("s", self.label_for(self.active_profile()))
         if prop == "SuggestedDefaultProfile":
             return GLib.Variant("s", self.label_for(self.default_profile))
         if prop == "AvailableGpuPerformanceLevels":
@@ -1285,6 +1354,9 @@ class NovadeckPower:
             raise ValueError(profile)
         previous = self.profile
         self.profile = profile
+        # apply_profile() resolves through active_profile(), so while a game override holds
+        # this re-applies the OVERRIDE and the new choice simply waits for the game to exit --
+        # the same rule set_cpu_scheduler() follows. The write itself is idempotent.
         self.apply_profile()
         # Logged unconditionally, including a re-select of the value already in effect. The
         # question this answers is "what changed my profile, and when" LONG after the fact, and a
@@ -1300,6 +1372,7 @@ class NovadeckPower:
         # PropertiesChanged would otherwise keep showing the previous profile's curve.
         return {
             "Profile": GLib.Variant("s", self.label_for(self.profile)),
+            "ActiveProfile": GLib.Variant("s", self.label_for(self.active_profile())),
             **self.fan_curve_changed(),
         }
 
@@ -1348,6 +1421,8 @@ class NovadeckPower:
         gpu_min, gpu_max = self.resolved_gpu_auto_limits()
         return {
             "profile": self.get_property("Profile"),
+            # In force right now; differs from `profile` only under a per-game override.
+            "active_profile": self.get_property("ActiveProfile"),
             "default_profile": self.get_property("SuggestedDefaultProfile"),
             "cpu_underclock": GLib.Variant("s", self.profile_settings()["cpu_underclock"]),
             "cpu_caps": GLib.Variant("a{su}", self.resolved_cpu_caps()),
@@ -1384,7 +1459,9 @@ class NovadeckPower:
     def emit_ppd_profile(self):
         # lavd polls, so this is not what makes the coupling work — but real PPD emits it and
         # glib's GPowerProfileMonitor subscribes to it rather than polling.
-        changed = {"ActiveProfile": GLib.Variant("s", PPD_PROFILES[self.profile])}
+        # The profile in FORCE, override included: a PPD client asks what the machine is doing,
+        # not what the user picked. lavd's autopower is the consumer that must not be lied to.
+        changed = {"ActiveProfile": GLib.Variant("s", PPD_PROFILES[self.active_profile()])}
         for _bus_name, path, iface in PPD_NAMES:
             self.emit_properties(changed, path=path, iface=iface)
 
@@ -1445,7 +1522,7 @@ class NovadeckPower:
 
     def ppd_get_property(self, _conn, _sender, _path, _iface, prop):
         if prop == "ActiveProfile":
-            return GLib.Variant("s", PPD_PROFILES[self.profile])
+            return GLib.Variant("s", PPD_PROFILES[self.active_profile()])
         if prop == "Profiles":
             return GLib.Variant(
                 "aa{sv}",

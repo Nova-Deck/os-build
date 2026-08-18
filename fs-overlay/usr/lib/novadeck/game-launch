@@ -112,12 +112,24 @@ def resolve_config(settings, profiles):
     return profiles["default"]["config"]
 
 
-def resolve_thunks(settings, names):
-    """Thunks are only user-selectable under a custom profile; presets keep the full set on."""
-    chosen = settings.get("thunks") if settings.get("fexProfile") == "custom" else None
+def resolve_thunks(settings, base_thunks):
+    """Per-thunk overrides, defaulting to WHAT THE BASE CONFIG SHIPPED -- never to "on".
+
+    The base config is the source of truth for which thunks run, and ours is THUNKLESS on
+    purpose: the host GPU thunks were HW-proven to SIGSEGV native x86-64 Linux games under FEX
+    (see Config.json's own Comment). Defaulting an absent override to "on" silently reverts that
+    fix on every launch, which is exactly what it did -- Parking Garage Rally Circuit, one of the
+    two titles the fix was proven against, SIGSEGV'd three launches for three.
+
+    It is worse for a config we hand to a FOREIGN FEX (Valve's compat tool, Proton's WoW64
+    build): write_config drops the thunk PATH bindings so that FEX uses its own, so enabling a
+    thunk here names one whose host libs we just declined to point at.
+    """
+    chosen = settings.get("thunks")
     if not isinstance(chosen, dict):
         chosen = {}
-    return {name: 1 if chosen.get(name, True) else 0 for name in names}
+    return {name: 1 if chosen.get(name, bool(shipped)) else 0
+            for name, shipped in base_thunks.items()}
 
 
 def config_dir():
@@ -167,7 +179,7 @@ def write_config(settings, game_id, profiles):
     allowed = set().union(*(profile["config"].keys() for profile in profiles.values()))
     resolved = resolve_config(settings, profiles)
     config.setdefault("Config", {}).update({k: v for k, v in resolved.items() if k in allowed})
-    config["ThunksDB"] = resolve_thunks(settings, config.get("ThunksDB", {}).keys())
+    config["ThunksDB"] = resolve_thunks(settings, config.get("ThunksDB", {}))
 
     directory = config_dir()
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)

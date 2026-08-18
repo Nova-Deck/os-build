@@ -446,6 +446,30 @@ def cmd_apply():
     if remote is None:
         return EXIT_NONE
 
+    # THE GATE cmd_check() HAS AND THIS PATH DID NOT, and its absence was not academic: STEAM
+    # DECIDES WHEN TO APPLY, and it does not have to have asked us first. steamui.so's updater enum
+    # carries k_EUpdaterType_Aggregated alongside _Client and _OS, and the Software Updates page
+    # drives the aggregate — so a CLIENT update going available is enough to reach this path with
+    # the OS already up to date. `--enable-duplicate-detection` is Steam asking us to notice; this
+    # is where we notice, unconditionally, rather than trusting the flag to be passed.
+    #
+    # HW-OBSERVED 2026-08-18: a card took 0.2.3 -> 0.2.4 correctly, then installed 0.2.4 A SECOND
+    # TIME after Valve published a client update, leaving BOTH slots on 0.2.4.
+    #
+    # That is not merely a wasted transfer. usr/lib/rauc/post-install.sh gives the target slot a
+    # fresh per-slot /var and re-arms its boot conf, so a redundant apply overwrites the previous
+    # release — the rollback target — and puts the device on a trial boot of the version it was
+    # already running. The one thing an A/B system exists to keep is the other side.
+    #
+    # EXIT_OK, not EXIT_NONE: the state Steam asked for already holds, and 7 here would be read as
+    # a failed update. Terminal 100% and nothing else, so the bar completes and the UI settles on
+    # up-to-date. Same shape as the staged branch above, for the same reason.
+    if identity_of(remote) == identity_of(device_identity()):
+        log(f"already running {identity_of(remote)} — nothing to install")
+        emit = progress_emitter()
+        emit(100)
+        return EXIT_OK
+
     # ONE JOB NOW, so the bar is rauc's from end to end. There is no download half to weight against
     # an install half: rauc fetches and writes in the same pass, and its own progress already spans
     # both. Note the number it reports is progress through the INSTALL, not through the transfer --
@@ -505,6 +529,28 @@ file for the contract that shapes the output."""
 
 
 def main(argv):
+    # THE DEFAULT ACTION IS AN INSTALL, so what this loop does with an argument it does not
+    # recognise is a real decision and not parser hygiene. It used to fall through to apply for
+    # ANYTHING unrecognised -- `--enable-duplicate-detection` reached the right place by accident,
+    # and so did `chekc`.
+    #
+    # The split is between the two shapes an unknown argument comes in, because they have opposite
+    # right answers:
+    #
+    #   -SOMETHING  a flag, and IGNORED ON PURPOSE. Steam adds flags to this command line over time
+    #               -- --enable-duplicate-detection IS one, arriving after the interface was first
+    #               written -- and a client that refused an unfamiliar one would stop applying
+    #               updates fleet-wide, silently, the day Valve shipped the next. Forward
+    #               compatibility is worth more here than strictness, and a flag we do not know
+    #               cannot change what apply does anyway.
+    #
+    #   something   a WORD, i.e. subcommand-shaped, and REFUSED. `chekc` is not a request to
+    #               install 4G over the inactive slot; nothing that means it omits the word for it.
+    #
+    # EXIT_NONE, and the usage goes to STDERR unlike the -h branch above it: this path is reachable
+    # from a caller that PARSES STDOUT as a version string, and "an update is available, called
+    # usage:" is the failure the whole contract is arranged to avoid.
+    unknown = []
     for arg in argv:
         if arg == "--supports-duplicate-detection":
             return EXIT_OK
@@ -515,6 +561,12 @@ def main(argv):
             return cmd_check()
         if arg == "status":
             return cmd_status()
+        if not arg.startswith("-"):
+            unknown.append(arg)
+    if unknown:
+        log(f"unknown subcommand {unknown[0]!r} — refusing to fall through to an install")
+        print(USAGE, file=sys.stderr)
+        return EXIT_NONE
     return cmd_apply()
 
 

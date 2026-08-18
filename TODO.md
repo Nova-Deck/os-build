@@ -20,7 +20,11 @@ them. The full rationale otherwise lives in the linked memories and commit histo
     **one** uncleared attempt is enough, and the fallback arm then writes `image-invalid 1`. This is
     arguably correct behaviour; it is recorded here because it makes a rare early reboot look like a
     slot-integrity failure, and it is a plausible source of otherwise-unexplained slot demotions and
-    of an update client deciding a slot needs reinstalling.
+    of an update client deciding a slot needs reinstalling. **A SECOND cause of that last symptom
+    was found and fixed 2026-08-18** — `cmd_apply()` had no "am I already running this?" test, so a
+    spurious apply reinstalled the running version (see the OTA-inequality item below). Do not
+    attribute a rewritten slot to this entry without first checking whether the image predates that
+    fix.
   - **The fault is invisible by construction, and this was checked the hard way 2026-08-06 by
     pulling the card.** THREE independent recorders are all unavailable at that point in boot:
     - the journal IS persistent, but it lives at
@@ -75,8 +79,32 @@ them. The full rationale otherwise lives in the linked memories and commit histo
     way `manifest()` already does.
   - Note the version string KEEPS its `v` prefix (`v0.2.1`, see [[card-ota-version-keeps-the-v-prefix]]),
     so any ordering comparison has to strip it rather than assume a bare semver.
+  - **Whatever lands must land in BOTH `cmd_check()` and `cmd_apply()`, and this is not a style
+    note.** Until 2026-08-18 the equality test existed only in `cmd_check()`, and `cmd_apply()`
+    installed whatever the channel named — so a device reinstalled the version it was already
+    running whenever Steam reached apply without having asked first (HW-observed: both slots left
+    on 0.2.4, the previous release and hence the rollback target destroyed). Fixed, with
+    `apply-refuses-a-reinstall` in `images/test-update.sh` holding it. An ordering comparison added
+    to the query path alone would reintroduce exactly that shape: **Steam decides when to apply,
+    and nothing obliges it to have called `check` first.**
   - Worth deciding at the same time whether a downgrade should ever be offered deliberately (a
     rollback path the user can choose) rather than silently, since the machinery would be shared.
+
+- [ ] **HW GATE: the redundant-OTA guard has never been exercised on a device.** Offline evidence
+  only. `cmd_apply()` now refuses to install the version the device already runs, and the case in
+  `images/test-update.sh` goes red without it — but the trigger was never identified. The reading
+  is that a Steam CLIENT update drives the aggregated updater
+  (`k_EUpdaterType_Aggregated` sits next to `_Client` and `_OS` in `steamui.so`) into the OS
+  updater's apply with the OS already current; that is inference from an enum name, not
+  disassembly. The guard is deliberately trigger-agnostic so it does not depend on being right.
+  - **What closes this:** a card on an image carrying the fix, sitting through a Valve client
+    update, with the inactive slot untouched afterwards (`novadeck-bootctl status` — the other
+    slot still on the PREVIOUS release, not a second copy of the running one).
+  - **The card in hand cannot answer it.** The client that runs is the BOOTED slot's, so a device
+    stays exposed until it has taken an OTA carrying the new client AND rebooted — the update that
+    delivers the fix is itself applied by the vulnerable client.
+  - The 0.2.3/0.2.4 card that found this is not recoverable by the fix: both slots are 0.2.4 and
+    0.2.3 is gone. Reflash if a known-good other side is wanted.
 
 - [ ] **Steam's boot-time update check always fails the network, so an update can only be DISCOVERED
   in-session — never at boot.** MEASURED three times 2026-08-06. At ~+5s from boot the startup check

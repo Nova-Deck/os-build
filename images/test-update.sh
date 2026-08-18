@@ -278,6 +278,135 @@ out="$(cat "$W/stream.verdict" 2>/dev/null)"
 rm -f "$W/stage/staged.json"
 
 # =================================================================================================
+CASE="apply-refuses-a-reinstall"
+#
+# HW-OBSERVED 2026-08-18, and invisible to every other apply case here because they all offer a
+# version the device is not running. A card took 0.2.3 -> 0.2.4 correctly, then installed 0.2.4 A
+# SECOND TIME shortly after Valve published a Steam client update, ending with BOTH slots on 0.2.4.
+#
+# WHY IT HAPPENS: `check` compares the running version to the channel's, but `apply` did not — and
+# STEAM DECIDES WHEN TO APPLY. steamui.so's updater enum carries k_EUpdaterType_Aggregated next to
+# _Client and _OS, so a CLIENT update going available is enough to drive the OS updater's apply
+# with the OS already up to date. Nothing on the device calls this path: Steam is the only caller,
+# and it is not obliged to have asked first.
+#
+# WHY IT MATTERS more than a wasted transfer: usr/lib/rauc/post-install.sh gives the target slot a
+# fresh per-slot /var and re-arms its boot conf. A redundant apply therefore overwrites the
+# PREVIOUS RELEASE — the rollback target — and puts the device on a trial boot of what it was
+# already running. The whole point of A/B is that the other side survives.
+#
+# Note that the request count cannot detect this: rauc streams the bundle, so a redundant install
+# makes exactly the same one curl request (the manifest) as a refused one. The exit code and stdout
+# are the discriminators, because they are also what Steam reads.
+bundle_file uptodate novadeck-9.9.9.raucb 4096
+manifest uptodate '{"version":"9.9.9","bundle":"novadeck-9.9.9.raucb","size":4096}'
+rm -f "$W/stage/staged.json"
+run NOVADECK_RELEASE_FILE="$(release_file 9.9.9)" NOVADECK_OTA_CHANNEL=uptodate
+# EXIT_OK, not 7: the state Steam asked for already holds, and 7 is how this client reports a
+# FAILED update. Before the guard this returned 7 — the install was attempted and died on the
+# absent bus — so the exit code alone separates the two behaviours.
+[ "$RC" = 0 ] && ok "apply on an up-to-date device succeeds instead of failing" \
+              || bad "exit $RC — 7 here means the install was attempted, or is reported as a failure"
+[ "$OUT" = "100%" ] && ok "the bar completes and stdout stays a bare 100%" \
+                    || bad "stdout was '$OUT', not '100%'"
+[ ! -f "$W/stage/staged.json" ] \
+  && ok "no staged stamp is written for an install that never happened" \
+  || bad "a staged.json was written — the next check would report restart-pending forever"
+
+# ...and the assertion the exit code cannot make on its own: that install() was never REACHED.
+# Same module seam as streams-rather-than-downloading above, because a bus-less environment makes
+# "did not install" and "tried and failed" look alike from outside.
+cat >"$W/reinstall_test.py" <<'PY'
+import importlib.util, os
+from importlib.machinery import SourceFileLoader
+loader = SourceFileLoader("nvu", os.environ["CLIENT"])
+spec = importlib.util.spec_from_loader("nvu", loader)
+nvu = importlib.util.module_from_spec(spec); loader.exec_module(nvu)
+
+called = []
+nvu.steam_logged_in = lambda: True
+nvu.config = lambda: ("https://updates.example.test", "stable")
+nvu.device_identity = lambda: {
+    "version": "9.9.9", "build": "20260101T000000Z", "git": "abc1234", "mode": "release",
+}
+nvu.manifest = lambda base, ch: {
+    "version": "9.9.9", "build": "20260202T000000Z", "git": "def5678",
+    "bundle": "novadeck-9.9.9.raucb", "size": 4096,
+    "url": f"{base}/{ch}/novadeck-9.9.9.raucb",
+}
+# Nothing is staged: this is the state a device is in AFTER the reboot that completed the real
+# update, which is exactly when the spurious apply arrived.
+nvu.staged_identity = lambda installer=None: None
+nvu.install = lambda source, on_percent: called.append(source) or True
+
+fails = []
+if nvu.cmd_apply() != nvu.EXIT_OK:
+    fails.append("apply did not report success on an up-to-date device")
+if called:
+    fails.append(f"InstallBundle was called with {called[0]!r} — the running version was reinstalled")
+# The BUILD and GIT differ above while the version matches, deliberately: identity_of() keys on the
+# version for a real release, so a rebuild of the same release must not read as a new update.
+with open(os.environ["VERDICT"], "w") as handle:
+    handle.write("\n".join(fails))
+PY
+CLIENT="$CLIENT" NOVADECK_OTA_STAGE="$W/stage" VERDICT="$W/reinstall.verdict" \
+  python3 "$W/reinstall_test.py" >/dev/null 2>&1
+out="$(cat "$W/reinstall.verdict" 2>/dev/null)"
+[ -z "$out" ] && ok "InstallBundle is never reached when the device already runs that version" \
+              || bad "$out"
+rm -f "$W/stage/staged.json"
+
+# =================================================================================================
+CASE="argv-fails-closed-on-a-word-and-open-on-a-flag"
+#
+# THE DEFAULT ACTION OF THIS PROGRAM IS AN INSTALL, so what main() does with an argument it does not
+# recognise decides whether a typo writes the inactive slot. It used to fall through to apply for
+# anything unrecognised -- `--enable-duplicate-detection` landed in the right place by accident.
+#
+# The two shapes have OPPOSITE right answers, and this case asserts both, because either one alone
+# is satisfiable by a parser that is wrong in the other direction:
+#
+#   a FLAG must still reach apply. Steam grows flags on this command line over time --
+#   --enable-duplicate-detection is itself one that arrived after the interface existed -- and a
+#   client that refused an unfamiliar one would stop applying updates FLEET-WIDE and silently, the
+#   day Valve shipped the next one.
+#
+#   a WORD must not. `chekc` is not a request to install over the other slot.
+#
+# The channel is the up-to-date one from the case above, deliberately: apply then answers 0 with a
+# bare `100%` while a refusal answers 7 with nothing, so the two paths are told apart by what Steam
+# would actually read, and neither needs a bus.
+for flag in --enable-duplicate-detection --a-flag-valve-has-not-shipped-yet; do
+  rm -f "$W/stage/staged.json"
+  run NOVADECK_RELEASE_FILE="$(release_file 9.9.9)" NOVADECK_OTA_CHANNEL=uptodate "$flag"
+  [ "$RC" = 0 ] && [ "$OUT" = "100%" ] \
+    && ok "'$flag' still reaches apply (forward-compatible)" \
+    || bad "'$flag' did not reach apply: exit $RC, stdout '$OUT' — a new Valve flag would stop the fleet updating"
+done
+
+for word in chekc refresh ""; do
+  rm -f "$W/stage/staged.json"
+  run NOVADECK_RELEASE_FILE="$(release_file 9.9.9)" NOVADECK_OTA_CHANNEL=uptodate "$word"
+  [ "$RC" = 7 ] && ok "'$word' is refused rather than treated as apply" \
+                || bad "'$word' exited $RC — an unknown word fell through to an install"
+  # The assertion that outranks the exit code: this path is reachable from a caller that PARSES
+  # STDOUT as a version, so a usage message there would offer the fleet an update called 'usage:'.
+  [ -z "$OUT" ] && ok "'$word' says nothing on stdout" \
+                || bad "'$word' printed '$OUT' on stdout — Steam would read that as a version"
+  [ "$(requests)" = 0 ] && ok "'$word' is refused before any request is made" \
+                        || bad "'$word' reached the network before being refused"
+done
+case "$ERR" in
+  *usage:*) ok "the usage message goes to stderr, where it cannot be parsed as a version" ;;
+  *) bad "no usage on stderr — a refused invocation says nothing anywhere" ;;
+esac
+# ...and the one that must NOT have moved: an explicit -h still prints usage to STDOUT for a human.
+run -h
+[ "$RC" = 0 ] && case "$OUT" in *usage:*) ok "-h still prints usage on stdout and exits 0" ;;
+  *) bad "-h printed '$OUT'" ;; esac || bad "-h exited $RC"
+rm -f "$W/stage/staged.json"
+
+# =================================================================================================
 CASE="apply-progress"
 # Steam's bar reads stdout. Every line must be N%, forward-only. The install then fails here (no
 # bus), which is expected and must still leave stdout clean.

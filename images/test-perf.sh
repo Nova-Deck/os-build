@@ -383,9 +383,35 @@ generated = _json.loads(written.read_text())
 for key in ("RootFS", "ThunkHostLibs", "ThunkGuestLibs"):
     check(f"{key} is not handed to another FEX", key in generated["Config"], False)
 check("tuning still applied", generated["Config"]["TSOEnabled"], "0")
-# The base config's OWN thunk values are not preserved -- a named preset runs the full set (see
-# resolve_thunks). What must survive the key drop above is the ThunksDB object itself.
-check("ThunksDB survives the key drop", generated["ThunksDB"], {"Vulkan": 1, "GL": 1})
+# REGRESSION GUARD, and the reason it is an ABSENCE rather than a value. FEX applies ThunksDB per
+# library name across every config layer, FEX_APP_CONFIG last and therefore winning, and skips a
+# layer that has no ThunksDB property at all (FileManagement.cpp). So writing the key here SEIZES
+# every thunk from the FEX actually running the game -- which is usually not ours: Valve's compat
+# tool curates ThunksDB per title, and FEX has its own Steam_<appid>_<exe> config mechanism.
+# Until 2026-08-18 this wrote all-ON, reverting the thunkless base config on every launch and
+# SIGSEGV'ing Valve's FEX on a native x86-64 Linux title (Parking Garage Rally Circuit, three
+# launches for three crashes). Writing the base values instead would fix the crash but keep the
+# seizure, so with no override we emit nothing.
+check("no override writes no ThunksDB at all", "ThunksDB" in generated, False)
+
+# resolve_thunks directly: EXPLICIT overrides only, honoured on ANY profile. The override used to
+# be gated behind fexProfile == "custom", which no UI could ever select and which is not a profile
+# in fex-profiles.json -- so it was unreachable and the "on" default was the only behaviour the
+# product had. `base_thunks` now bounds the namespace and nothing else.
+base_thunks = {"Vulkan": 0, "GL": 0, "asound": 1}
+check("absent override defers entirely", pw.resolve_thunks({}, base_thunks), {})
+check("override emits ONLY the named thunk",
+      pw.resolve_thunks({"fexProfile": "fast", "thunks": {"Vulkan": True}}, base_thunks),
+      {"Vulkan": 1})
+check("override can also turn one off",
+      pw.resolve_thunks({"fexProfile": "default", "thunks": {"asound": False}}, base_thunks),
+      {"asound": 0})
+# The base config decides which thunks EXIST; a stray name cannot inject one, the same rule the
+# `allowed` filter enforces for Config keys.
+check("unknown thunk name is ignored",
+      pw.resolve_thunks({"thunks": {"NotAThunk": True, "GL": True}}, base_thunks), {"GL": 1})
+check("malformed thunks block is not a launch failure",
+      pw.resolve_thunks({"thunks": "nonsense"}, base_thunks), {})
 
 # A relative XDG_CACHE_HOME is invalid per XDG and portable FEX would re-anchor it.
 os.environ["XDG_CACHE_HOME"] = "relative/cache"

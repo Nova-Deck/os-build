@@ -48,8 +48,22 @@ qca/hmtnv20.bin            qca/hmtnv20.bin          c26b340bbc8b617304610c774627
 qca/hmtnv20.b10f           qca/hmtnv20.b10f         f8d027c5f0ea54456d23b903c55e1a87b06df97ff26b83e3fd02ac6b265b5264
 qca/hmtnv20.b112           qca/hmtnv20.b112         f8d027c5f0ea54456d23b903c55e1a87b06df97ff26b83e3fd02ac6b265b5264
 
-# Iris VPU (gen33): driver hard-requests vpu33_p4.mbn; upstream ships the _s7 signed variant
+# Iris VPU. Both rows follow the same upstream convention: WHENCE declares the requested name as
+# a SYMLINK to a signed variant, and cgit's plain/ endpoint cannot serve a symlink (it 404s), so
+# the real blob is pulled and RENAMED on install. Which variant is not guessable from the name —
+# take it from WHENCE, e.g. `Link: qcom/vpu/vpu30_p4.mbn -> vpu30_p4_s7.mbn`. Getting it wrong
+# means a signature the SoC rejects, not a missing file.
+#
+# gen33 (SM8650): iris_platform_vpu3x.c sm8650_data -> "qcom/vpu/vpu33_p4.mbn"
 qcom/vpu/vpu33_p4_s7.mbn   qcom/vpu/vpu33_p4.mbn    7b829fc1c8ce7cca836d10e898b99c5bcbd86e22073b690147168c9d0a5de378
+# gen30 (SM8550 / QCS8550): iris_platform_vpu3x.c sm8550_data -> "qcom/vpu/vpu30_p4.mbn".
+# Added 2026-08-18. Every qcs8550 board already had `&iris { status = "okay"; }` (via
+# qcs8550-ayn-common.dtsi / qcs8550-ayaneo-pocket-common.dtsi) and CONFIG_VIDEO_QCOM_IRIS=m
+# comes from defconfig, so the node probed and then failed the firmware request — hardware
+# video decode was simply absent on the whole SM8550 half of the fleet. Do NOT reach for
+# vpu30_p4_s6.mbn: that is a different signing, requested by a different platform desc
+# (iris_vpu30_p4_s6_gen2_desc), and it is not what sm8550_data asks for.
+qcom/vpu/vpu30_p4_s7.mbn   qcom/vpu/vpu30_p4.mbn    98d40a86af3b300bb55faa694bf130f4d4de8d4b5c5ba74e03214f5037368ae0
 
 # ---------------------------------------------------------------------------------------
 # SM8250 (Snapdragon 865) — Retroid Pocket 5 / Flip2 / Mini / Mini V2, AYN Thor Lite,

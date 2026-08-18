@@ -86,12 +86,14 @@ Three tabs; the backend runs as root inside the loader (`"flags": ["root"]`).
   contract as [per-game-perf.md](per-game-perf.md)). Scheduling keys apply within one powerd
   tick; exec-time keys (FEX profile, Wine topology) need a game relaunch. The sanitizer refuses
   appid `0` — Valve's "no app" sentinel can never grow a section.
-- **Power** — active profile plus GPU frequency control (auto/manual level, MHz slider bounded
+- **Power** — the system-wide profile plus GPU frequency control (auto/manual level, MHz slider bounded
   by powerd's reported min/max), straight to powerd's `org.novadeck.Power1` on the system bus
   (via `busctl`; the loader's bundled Python has no dbus module). The plugin is the ONLY UI
   surface for these: the steamos-manager shim no longer exports `PerformanceProfile1` or
   `GpuPerformanceLevel1` to SteamUI. Also carries the editable fan curve for the active
-  profile — one slider per fixed temperature stop, see [fan-curve.md](fan-curve.md).
+  profile — one slider per fixed temperature stop, see [fan-curve.md](fan-curve.md). The
+  profile and scheduler rows state when a running game's per-game override is what is in force,
+  rather than leaving a dropdown that silently disagrees with the machine.
 - **Monitor** — live load, clocks, governors, per-zone CPU/GPU temperatures, memory and load
   average from `/proc` and `/sys`, plus fan speed from powerd. It also shows powerd's own
   blended, smoothed *curve input* as a separate figure, labelled as such: that number — not

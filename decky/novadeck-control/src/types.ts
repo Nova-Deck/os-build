@@ -8,6 +8,9 @@ export interface GameTweaks {
   gamescopeCores?: string;
   /** Per-game only — the system-wide scheduler is PowerStatus.cpuScheduler, not a tweak. */
   scheduler?: string;
+  /** Per-game only, same rule: the system-wide profile is PowerStatus.profile. A profile ID
+   *  ("eco"/"balanced"/"performance"), never the UI label. */
+  powerProfile?: string;
   fexProfile?: string;
   env?: Record<string, string | null>;
   [key: string]: any;
@@ -19,7 +22,11 @@ export interface Tweaks {
 }
 
 export interface PowerStatus {
+  /** UI labels, in profile order — the dropdown's options and what `profile` speaks. */
   profiles: string[];
+  /** The system-wide choice. */
+  profile: string;
+  /** What is in force now; differs from profile only under a per-game override. */
   activeProfile: string;
   gpuLevels: string[];
   gpuLevel: string;

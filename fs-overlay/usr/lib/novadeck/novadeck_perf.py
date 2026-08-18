@@ -8,7 +8,9 @@ Owns three things:
   2. The game-tweaks read path: /etc/novadeck/game-tweaks.json, the SAME file
      and merge contract proton-wrapper uses for FEX profiles (global section,
      per-appid sections gated on "enabled": true). This module consumes the
-     perf keys: gamescopeNice, gamescopeRr, gamescopeCores.
+     perf keys: gamescopeNice, gamescopeRr, gamescopeCores — plus the two
+     per-game-only overrides of a system-wide setting, scheduler and
+     powerProfile, which it resolves for powerd to apply (see per_game_choice).
   3. The enforcement tick novadeck-powerd runs: find gamescope, find the
      running game's appid (walk the Steam client's process tree via
      /proc/<pid>/task/<tid>/children and read the game's environ — root only),
@@ -34,6 +36,10 @@ CORE_PRESETS = ("all", "big", "prime", "little")
 # CPU_SCHEDULERS so the D-Bus enum and the tweaks-file domain cannot drift apart.
 # "none" is the stock in-kernel scheduler; "lavd" is scx_lavd via scx.service.
 SCHEDULERS = ("none", "lavd")
+# The power profiles a tweak may select, by ID — never by the configurable UI label
+# ("Eco"), which is cosmetic and an operator may rename in power-profiles.conf.
+# novadeck-powerd imports this as its own PROFILES, same anti-drift rule as SCHEDULERS.
+POWER_PROFILES = ("eco", "balanced", "performance")
 GAMESCOPE_COMMS = ("gamescope", "gamescope-wl")
 STEAM_COMMS = ("steam",)
 # Preference order matters: STEAM_COMPAT_APP_ID is set only on compat-tool
@@ -205,25 +211,39 @@ def sanitize_perf(settings):
     return clean
 
 
-def scheduler_for(tweaks, appid):
-    """The per-game CPU scheduler, or None for "no opinion".
+def per_game_choice(tweaks, appid, key, domain):
+    """A per-game override of a SYSTEM-WIDE setting: the running game's value for
+    `key`, or None for "no opinion".
 
     Deliberately NOT part of sanitize_perf/settings_for, and deliberately not
-    readable from the "global" section: the system-wide scheduler already has
-    exactly one home — novadeck-powerd's persisted CpuScheduler property, which
-    `novadeck-scheduler` and the plugin both drive. A `global.scheduler` here
-    would be a second place to set the same value, with no way for either to
-    show the other's state. So this key is per-game only, it is an override that
-    lasts as long as the game does, and "none" spells out "stock for this title"
-    against a persisted lavd.
+    readable from the "global" section: each setting reached through here already
+    has exactly one system-wide home — a persisted novadeck-powerd property that
+    a CLI and the plugin both drive. A `global.<key>` would be a second place to
+    set the same value, with no way for either to show the other's state. So
+    these keys are per-game only, they are overrides that last as long as the
+    game does, and a value equal to the shipped default is still meaningful: it
+    spells out "stock for this title" against a different persisted choice.
 
-    Unlike every other perf key, powerd applies this one itself (it drives
-    scx.service); novadeck_perf only resolves it."""
+    Unlike every other perf key, powerd applies these itself (it owns the units
+    and the sysfs writes); novadeck_perf only resolves them."""
     game = (tweaks.get("games") or {}).get(str(appid)) if appid else None
     if not isinstance(game, dict) or game.get("enabled") is not True:
         return None
-    value = game.get("scheduler")
-    return value if value in SCHEDULERS else None
+    value = game.get(key)
+    return value if value in domain else None
+
+
+def scheduler_for(tweaks, appid):
+    """The per-game CPU scheduler, against powerd's persisted CpuScheduler.
+    "none" forces stock for one title on a device whose choice is lavd."""
+    return per_game_choice(tweaks, appid, "scheduler", SCHEDULERS)
+
+
+def profile_for(tweaks, appid):
+    """The per-game power profile, against powerd's persisted Profile. This is a
+    profile ID, not a UI label; powerd applies the whole profile (cpu governor
+    and caps, gpu limits, fan curve) for as long as the game runs."""
+    return per_game_choice(tweaks, appid, "powerProfile", POWER_PROFILES)
 
 
 # -------------------------------------------------------------- /proc walk ---
@@ -592,9 +612,13 @@ class Enforcer:
         values = sanitize_perf(settings_for(tweaks, appid))
         apply_gamescope(values, index)
         apply_game_tree(values, pids, self.game_state)
-        # Carried on the return, not applied here — powerd owns scx.service. Left absent
-        # rather than set to None so "no opinion" and "explicitly none" stay distinguishable.
+        # Carried on the return, not applied here — powerd owns scx.service and the power
+        # profile. Left absent rather than set to None so "no opinion" and an explicit value
+        # that happens to equal the default stay distinguishable.
         scheduler = scheduler_for(tweaks, appid)
         if scheduler is not None:
             values["scheduler"] = scheduler
+        profile = profile_for(tweaks, appid)
+        if profile is not None:
+            values["powerProfile"] = profile
         return values

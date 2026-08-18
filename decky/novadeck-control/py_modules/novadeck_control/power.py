@@ -73,7 +73,7 @@ def _call(method):
 
 def _error_status(message):
     return {
-        "profiles": [], "activeProfile": "",
+        "profiles": [], "profile": "", "activeProfile": "",
         "gpuLevels": [], "gpuLevel": "",
         "manualGpuClock": 0, "manualGpuClockMin": 0, "manualGpuClockMax": 0,
         "cpuSchedulers": [], "cpuScheduler": "", "activeCpuScheduler": "",
@@ -94,7 +94,11 @@ def power_status():
         props = _get_all()
         return {
             "profiles": [str(p) for p in props.get("AvailableProfiles", [])],
-            "activeProfile": str(props.get("Profile", "")),
+            "profile": str(props.get("Profile", "")),
+            # What is actually in force. Differs from `profile` only while a running game's
+            # per-game `powerProfile` tweak overrides it — the tab says so rather than showing
+            # the dropdown disagreeing with the machine, same as the scheduler pair below.
+            "activeProfile": str(props.get("ActiveProfile", "")),
             "gpuLevels": [str(l) for l in props.get("AvailableGpuPerformanceLevels", [])],
             "gpuLevel": str(props.get("GpuPerformanceLevel", "")),
             "manualGpuClock": int(props.get("ManualGpuClock", 0)),
@@ -143,6 +147,8 @@ def _set_property(prop, signature, *values):
 
 
 def set_active_profile(label):
+    """The SYSTEM-WIDE profile, by UI label. A running game's `powerProfile` tweak temporarily
+    overrides what is applied without changing this choice — see status()'s activeProfile."""
     try:
         _set_property("Profile", "s", label)
     except (OSError, subprocess.SubprocessError) as exc:

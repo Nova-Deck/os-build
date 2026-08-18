@@ -45,6 +45,10 @@ the curve's own value there.
 **Reset** returns the active profile to its factory curve. The button appears only once
 the profile is actually on a custom curve.
 
+"Active profile" means the one in force, which under a running game's
+[`powerProfile` override](per-game-perf.md) is the game's, not the user's saved choice — so an
+edit made while an override holds lands on the curve that is actually running.
+
 ## Where a custom curve is stored
 
 Config is three layers, lowest first:

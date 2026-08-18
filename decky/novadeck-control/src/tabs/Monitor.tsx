@@ -88,6 +88,7 @@ export function Monitor() {
   const power = data.power;
   const fanPercent = ratio(power.fanPwm, power.fanCurveMaxPwm || 255);
   const overridden = !!power.activeCpuScheduler && power.activeCpuScheduler !== power.cpuScheduler;
+  const profileOverridden = !!power.activeProfile && power.activeProfile !== power.profile;
   const schedulerLabel = (name: string) => (name === "none" ? "Stock (EEVDF)" : name);
   // Normally one value across every policy. "mixed" rather than picking one at random: if the
   // policies ever disagree that is worth seeing, not worth hiding behind whichever sorted first.
@@ -154,7 +155,16 @@ export function Monitor() {
         ) : null}
       </PanelSection>
       <PanelSection title="RUNTIME">
-        <Metric label="Power profile" value={power.activeProfile || "—"} />
+        {/* The profile in force, which is what this tab is for — flagged when a game's tweak,
+            not the user's own choice, is what put it there. */}
+        <Metric
+          label="Power profile"
+          value={
+            profileOverridden
+              ? `${power.activeProfile} (game override)`
+              : power.activeProfile || "—"
+          }
+        />
         <Metric label="CPU governor" value={cpuGovernor || "—"} />
         {data.gpu.maxHz ? <Metric label="GPU governor" value={data.gpu.governor || "—"} /> : null}
         <Metric

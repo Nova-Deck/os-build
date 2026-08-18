@@ -1343,6 +1343,7 @@
 	remote-endpoint = <&pm8150b_typec_mux_in>;
 };
 
+/* Video decode — bound by qcom-iris.ko despite the label; see sm8250-retroidpocket-common.dtsi. */
 &venus {
 	status = "okay";
 };

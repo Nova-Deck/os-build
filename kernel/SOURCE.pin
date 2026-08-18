@@ -1,39 +1,39 @@
 # novadeck kernel source pin — Phase 1
 # The TARBALL + its sha256 is the canonical pin. Validated 2026-06-17; re-pinned 2026-07-25
-# (7.1.5, HW-validated on Pocket S2 + Pocket ACE); re-pinned 2026-08-03 (7.1.6).
-version:    7.1.6
-url:        https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.1.6.tar.xz
-sha256:     995dd7188d924662b94b48fd6fb783587267590e5b8bb33dade2c771e7d855c1
-git_tag:    v7.1.6
-git_commit: 2609d60e2f6d0b8a96563baa08b56482962cebaa
+# (7.1.5, HW-validated on Pocket S2 + Pocket ACE); re-pinned 2026-08-03 (7.1.6); re-pinned
+# 2026-08-18 (7.2 — mainline, released 2026-08-16; NOT HW-validated yet, see the gate below).
+version:    7.2
+url:        https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.2.tar.xz
+sha256:     f9fef3d14c0df53819026f4be74459835c2a0b0dcbf5b5bbd9ea19f0829402b3
+git_tag:    v7.2
+git_commit: 8d3ae59288f1e7d58d76558a6ee96d533bc5019f
 
 # The sha256 above is the one kernel.org publishes in the SIGNED sha256sums.asc for v7.x, not a
-# hash of whatever the CDN happened to serve — checked 2026-08-03. git_commit is the DEREFERENCED
-# tag (`git ls-remote 'v7.1.6^{}'`), matching how the 7.1.5 line was recorded; the annotated tag
-# object is ea09c82324a76af76dc0cadf3fff4fef7025ca57 and is NOT what belongs here.
+# hash of whatever the CDN happened to serve — checked 2026-08-18. git_commit is the DEREFERENCED
+# tag (`git ls-remote 'v7.2^{}'`), matching how the 7.1.5/7.1.6 lines were recorded; the annotated
+# tag object is 237a1c39e8dfd3e1c6f1f023eea37a48ec04cc63 and is NOT what belongs here.
+#
+# 7.2 is MAINLINE, not stable: there is no 7.2.x point release yet. Re-pin to 7.2.1 when it ships.
 
-# Config validation (kernel/kernel.config) against THIS tree, re-run 2026-08-10 for the SM8250
-# import (previous full run 2026-08-03 for 7.1.6):
-#   - all 377 referenced CONFIG_* symbols exist in the PATCHED 7.1.6 tree. Zero corrections were
-#     needed this time — the renames below were already carried in from the 7.1.5 bump.
-#   - all 71 out-of-tree patches in kernel/patches/ apply to 7.1.6 with ZERO rejects, applied
+# Config validation (kernel/*.config) against THIS tree, run 2026-08-18 for the 7.2 bump:
+#   - all 427 referenced CONFIG_* symbols (kernel.config + trim-platforms.config) exist in the
+#     PATCHED 7.2 tree, EXCEPT one, now deleted — see kernel.config's header:
+#       READ_ONLY_THP_FOR_FS -> removed upstream in 7.2; file THP is unconditional now.
+#   - all 69 out-of-tree patches in kernel/patches/ apply to 7.2 with ZERO rejects, applied
 #     CUMULATIVELY in lexical order, which is the only order that means anything (see below).
-#     10 of them need fuzz; kernel/build.sh passes no -F0, so patch's default fuzz=2 accepts them.
-#     Patch-apply half re-run 2026-08-10 after the 0120/0121 GX-rail rework and again after the
-#     18 SM8250 patches landed: still clean, still the same 10 fuzz patches, and neither
-#     0120/0121 nor any SM8250 patch is among them (all apply at fuzz 0).
-#   - the 2026-08-10 run went one step further than a symbol-existence check and MERGED the
-#     fragments for real (`merge_config.sh -m defconfig kernel/*.config` + `make olddefconfig`,
-#     trim-platforms.config included), then asserted every requested symbol kept its requested
-#     value. Only DEBUG_INFO_BTF/SCHED_CLASS_EXT came out unset, and only because that run was
-#     on a host without `dwarves` — PAHOLE_VERSION resolves to 0 there. Inside build/Dockerfile
-#     it is present, and kernel/build.sh asserts both anyway.
+#     21 of them need fuzz (was 10 on 7.1.6); kernel/build.sh passes no -F0, so patch's default
+#     fuzz=2 accepts them.
+#   - the fragments were then MERGED for real inside build/Dockerfile (`merge_config.sh -m
+#     defconfig kernel/*.config` + `make olddefconfig`, trim-platforms.config included) and every
+#     requested symbol asserted to have kept its requested value. merge_config emitted ZERO
+#     warnings and zero symbols came out wrong — including DEBUG_INFO_BTF/SCHED_CLASS_EXT, which
+#     resolve correctly here because the container ships `dwarves` (pahole v1.31).
 #
 # HOW TO RE-RUN THIS VALIDATION, and the mistake that makes it lie: patches must be applied
-# cumulatively to ONE tree, exactly as kernel/build.sh:56 does. Dry-running each patch independently
+# cumulatively to ONE tree, exactly as kernel/build.sh does. Dry-running each patch independently
 # against a pristine tree reports ~8 false failures, because several patches depend on files an
 # earlier patch CREATES (1002 patches the qcom-hv-haptics.c that 1000 adds; 1003 patches the
-# rsinput.c that 0031 adds) and the six drm/panel patches all extend one Makefile, each one's
+# rsinput.c that 0031 adds) and the drm/panel patches all extend one Makefile, each one's
 # context containing the line its predecessor added. Zero of those are real.
 #
 # Corrections applied during the 7.1.5 validation, still current and still load-bearing in
@@ -45,3 +45,48 @@ git_commit: 2609d60e2f6d0b8a96563baa08b56482962cebaa
 #   PHY_QCOM_SNPS_EUSB2 -> PHY_SNPS_EUSB2 (+ PHY_QCOM_EUSB2_REPEATER)
 #   SM_DISPCC_8650      -> SM_DISPCC_8550 (SM8650 reuses the 8550 display clock controller;
 #                          no separate _8650 dispcc upstream — symbols jump 8550 -> 8750)
+#
+# --- What 7.2 took over from us, and what that cost ---
+# Two of our patches went upstream in 7.2 and were DELETED here rather than carried:
+#   0101 (sm8550 DDR/LLCC/L3 CPU bandwidth scaling) — landed verbatim; all 11 hunks read as
+#         already-applied against 7.2's sm8550.dtsi. Pure deletion, no other change.
+#   0065 (sgm3804 panel-power regulator) — landed as a REWRITE, not our version, and with an
+#         INCOMPATIBLE DT binding. Upstream's driver registers TWO rails from `pos`/`neg` child
+#         nodes each carrying `enable-gpios`; ours was one rail with both GPIOs in `reset-gpios`
+#         on the parent, hardcoding 5.2V (reg 0x0c) over I2C while telling the framework 5.0V.
+#         Keeping both was not an option: same compatible, same file path, duplicate Kconfig
+#         symbol. So the binding was migrated across all six board nodes and the panels that
+#         consume it — see the HW gate below, this is the risky half of the bump.
+#
+# HW GATE, NOT YET RUN. The sgm3804 migration changes how panel power is brought up on
+# Pocket ACE / DMG / DS / S1K / S2K, Pocket S2 and konkr-pf:
+#   - `avdd-supply` now points at the positive rail only; the negative rail is a SECOND regulator
+#     that nothing enabled before, so every panel driver that used to get both rails from one
+#     `avdd` now takes an `avee` supply too (patches 0051/0052/0054/0066/0067/0068). A board left
+#     un-migrated would come up with AVEE dead — a lit backlight over a black panel.
+#   - the rails are pinned to 5200000 uV, NOT the 5000000 the old DTS asked for. 5.2V is what the
+#     hardware was actually running: our driver ignored the DT constraint and wrote selector 0x0c,
+#     which is 4.0V + 12*100mV on upstream's linear range. Asking for 5.0V here would be a real,
+#     silent voltage change dressed up as a no-op.
+#   - upstream's driver declares enable_time = 40ms per rail; ours had none. regulator_bulk_enable
+#     is async so both rails come up in parallel, but panel prepare is now ~40ms slower.
+#
+# The migration above was CROSS-CHECKED against the not-yet-merged upstream Pocket S2 display
+# series (Neil Armstrong, Linaro), which is the reference for how these nodes are meant to look:
+#   [v5] arm64: dts: qcom: sm8650-ayaneo-pocket-s2: add display nodes -- 2026-07-28, state `new`
+#   https://patchwork.kernel.org/project/linux-arm-msm/patch/20260728-topic-sm8650-ayaneo-pocket-s2-display-dt-v5-1-892ab9bcecfe@linaro.org/
+# (lore.kernel.org is behind an Anubis proof-of-work wall and cannot be fetched; patchwork's
+# /api/1.2/ and /raw/ endpoints serve the same mail and are not gated. Use those.)
+# It independently confirms 5200000 uV on both rails and the same tlmm 59=pos / 58=neg order we
+# already had, and it carries three properties this tree was missing, now added to all six nodes:
+#   vin-supply = <&vph_pwr>       the chip's input rail (label reachable on every board with an
+#                                 sgm3804: qcs8550-ayaneo-pocket-common.dtsi + sm8650-ayaneo-common.dtsi)
+#   regulator-active-discharge = <1>   restores the discharge bits our old driver wrote to reg 0x03
+#                                 unconditionally; upstream only writes them when DT asks
+#   regulator-boot-on             the rail can already be up at handoff (bootloader splash)
+#
+# WHERE WE STILL DIVERGE, deliberately: upstream names the panel's rails `vsp-supply`/`vsn-supply`
+# and drives the S2 panel with a generic `renesas,r63419` driver (compatible "ayaneo,wt0630-2k",
+# "renesas,r63419"). Neither that driver nor that series is in 7.2, so our six panel drivers stay
+# and keep their own `avdd`/`avee` names. If we ever drop them for the upstream r63419 driver, the
+# DTS supply names have to become vsp/vsn at the same time — they are a driver-side contract.

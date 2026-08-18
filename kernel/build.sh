@@ -183,7 +183,15 @@ CC=(${CROSS_COMPILE:+CROSS_COMPILE=$CROSS_COMPILE})
   #       A declared invariant that nothing checks is not a guard -- so check it here.
   #   =y  SQUASHFS + OVERLAY_FS: the /etc overlay mounts a squashfs seed. Losing either leaves
   #       a root that boots with an empty or read-only /etc.
-  for pair in CFG80211=m MAC80211=m TOUCHSCREEN_CHIPONE_TDDI=m \
+  #   =m  VIDEO_QCOM_IRIS: the video decoder on ALL THREE SoCs, and the hinge of an interlock
+  #       that is invisible from either side on its own. venus/core.c hides its
+  #       qcom,sm8250-venus entry behind #if !IS_ENABLED(CONFIG_VIDEO_QCOM_IRIS), so with iris
+  #       enabled it is the sole claimant of that node and firmware/LINUX_FW.pin ships the blob
+  #       under IRIS's name (qcom/vpu/vpu20_p4.mbn). Drop iris to =n and venus silently takes
+  #       the node back, asks for qcom/vpu-1.0/venus.mbn, and finds nothing -- and we have
+  #       dropped VIDEO_QCOM_VENUS anyway, so the node would simply go unclaimed. Either way
+  #       the only symptom is video decode quietly not working on a device with no console.
+  for pair in CFG80211=m MAC80211=m TOUCHSCREEN_CHIPONE_TDDI=m VIDEO_QCOM_IRIS=m \
               BLK_DEV_DM=y DM_VERITY=y VFAT_FS=y BLK_DEV_LOOP=y \
               ZRAM=y ZRAM_BACKEND_ZSTD=y \
               DRM_MSM=y PCIE_QCOM=y PCI_PWRCTRL_GENERIC=y MMC_SDHCI_MSM=y SCSI_UFSHCD=y \

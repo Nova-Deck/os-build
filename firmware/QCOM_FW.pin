@@ -32,6 +32,9 @@ commit: dbf238bd885d5858543b9588fbee9d0645a25d4f
 #       the other boards). linux-firmware carries ONLY qcom/sm8250/Thundercomm/RB5/slpi.mbn
 #       — a different board's signing — so it cannot be installed under the requested name.
 #       Confirmed against the WHENCE at the pinned linux-firmware commit, not just a 404.
+#       Re-confirmed 2026-08-18 at the 20260810 release (LINUX_FW.pin's new commit): qcom/sm8250/
+#       still holds only a650_zap.mbn, adsp.mbn, cdsp.mbn, the three .jsn configs and
+#       Thundercomm/RB5. The gap is unchanged, so auto-rotation stays dead on SM8250.
 #       Cost while missing: the sensor DSP never boots, i.e. no accelerometer, so no
 #       auto-rotation. Nothing else depends on it; QCOM_Q6V5_PAS is =m and the failed
 #       request is a log line, not a boot failure.

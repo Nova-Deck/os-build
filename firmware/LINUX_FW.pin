@@ -14,7 +14,16 @@
 #
 # Fetch + verify with:  firmware/fetch-linux-fw.sh   (no arguments — one flat tree for
 # every SoC; the unified Image embeds the union.)
-commit: e7eb98afc667913acc533ab910c608bee7d08f25
+# Pinned to a NAMED upstream release rather than a drive-by main commit, so the pin says what
+# it is and a bump is reviewable. 20260810 is the tag; the commit below is that tag dereferenced
+# (`git ls-remote '20260810^{}'`), because the plain/?id= endpoint wants a commit.
+#
+# Re-pinned 2026-08-18 from e7eb98afc667913acc533ab910c608bee7d08f25 (an untagged main commit)
+# to the 20260810 release. Every one of the 23 rows below was re-downloaded at the new commit
+# and hashed: ALL 23 are byte-identical, so not one sha changed. That is the expected result for
+# a stable part -- these blobs only move when the vendor reships them -- and it is recorded here
+# so the next bump does not read "no sha changed" as evidence the fetch silently no-op'd.
+commit: 2135b2f7714a3a514c989b9728f51f36144cab6f
 base:   https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain
 
 # Adreno gen70900 (A750 / SM8650) GPU firmware — also embedded in the kernel Image (CONFIG_EXTRA_FIRMWARE)
@@ -39,8 +48,22 @@ qca/hmtnv20.bin            qca/hmtnv20.bin          c26b340bbc8b617304610c774627
 qca/hmtnv20.b10f           qca/hmtnv20.b10f         f8d027c5f0ea54456d23b903c55e1a87b06df97ff26b83e3fd02ac6b265b5264
 qca/hmtnv20.b112           qca/hmtnv20.b112         f8d027c5f0ea54456d23b903c55e1a87b06df97ff26b83e3fd02ac6b265b5264
 
-# Iris VPU (gen33): driver hard-requests vpu33_p4.mbn; upstream ships the _s7 signed variant
+# Iris VPU. Both rows follow the same upstream convention: WHENCE declares the requested name as
+# a SYMLINK to a signed variant, and cgit's plain/ endpoint cannot serve a symlink (it 404s), so
+# the real blob is pulled and RENAMED on install. Which variant is not guessable from the name —
+# take it from WHENCE, e.g. `Link: qcom/vpu/vpu30_p4.mbn -> vpu30_p4_s7.mbn`. Getting it wrong
+# means a signature the SoC rejects, not a missing file.
+#
+# gen33 (SM8650): iris_platform_vpu3x.c sm8650_data -> "qcom/vpu/vpu33_p4.mbn"
 qcom/vpu/vpu33_p4_s7.mbn   qcom/vpu/vpu33_p4.mbn    7b829fc1c8ce7cca836d10e898b99c5bcbd86e22073b690147168c9d0a5de378
+# gen30 (SM8550 / QCS8550): iris_platform_vpu3x.c sm8550_data -> "qcom/vpu/vpu30_p4.mbn".
+# Added 2026-08-18. Every qcs8550 board already had `&iris { status = "okay"; }` (via
+# qcs8550-ayn-common.dtsi / qcs8550-ayaneo-pocket-common.dtsi) and CONFIG_VIDEO_QCOM_IRIS=m
+# comes from defconfig, so the node probed and then failed the firmware request — hardware
+# video decode was simply absent on the whole SM8550 half of the fleet. Do NOT reach for
+# vpu30_p4_s6.mbn: that is a different signing, requested by a different platform desc
+# (iris_vpu30_p4_s6_gen2_desc), and it is not what sm8550_data asks for.
+qcom/vpu/vpu30_p4_s7.mbn   qcom/vpu/vpu30_p4.mbn    98d40a86af3b300bb55faa694bf130f4d4de8d4b5c5ba74e03214f5037368ae0
 
 # ---------------------------------------------------------------------------------------
 # SM8250 (Snapdragon 865) — Retroid Pocket 5 / Flip2 / Mini / Mini V2, AYN Thor Lite,
@@ -63,12 +86,33 @@ qcom/sm8250/a650_zap.mbn   qcom/sm8250/a650_zap.mbn 0624d84e0ecc5e08dce55e33c4e0
 qcom/sm8250/adsp.mbn       qcom/sm8250/adsp.mbn     7fd1fa907d0cb44a87e7339ffa0ce279cf08d6a70f8e7cd199a3fcd10d000a38
 qcom/sm8250/cdsp.mbn       qcom/sm8250/cdsp.mbn     42b371d64e87b7c40775ed9474e5f4f1b5d84b3a6766ba1d74a5bcfa255016a1
 
-# Venus video codec. The driver hard-requests qcom/vpu-1.0/venus.mbn (sm8250_res.fwname in
-# drivers/media/platform/qcom/venus/core.c). In linux-firmware that path is a SYMLINK to
-# qcom/vpu/vpu20_p4.mbn, and cgit's plain/ endpoint cannot serve a symlink — fetching the
-# link path returns 404. Pull the real blob and rename on install, exactly as the SM8650
-# vpu33 row above does.
-qcom/vpu/vpu20_p4.mbn      qcom/vpu-1.0/venus.mbn   a66e86e34dc69a870fe631c73ed4a93d9fcfea6f3f2a4ac02cb118cb505bbbb2
+# SM8250 video codec — IRIS owns this node, NOT venus, and the name below reflects that.
+#
+# The &venus node's compatible is "qcom,sm8250-venus", so the obvious reading is that
+# drivers/media/platform/qcom/venus/ serves it and wants its sm8250_res.fwname,
+# qcom/vpu-1.0/venus.mbn. That reading is wrong, and it cost this tree working video decode on
+# all six SM8250 boards. venus/core.c guards its two newest entries:
+#
+#     #if (!IS_ENABLED(CONFIG_VIDEO_QCOM_IRIS))
+#         { .compatible = "qcom,sc7280-venus", ... },
+#         { .compatible = "qcom,sm8250-venus", ... },
+#     #endif
+#
+# and IS_ENABLED() is true for =m as well as =y. We carry CONFIG_VIDEO_QCOM_IRIS=m (it is the
+# SM8550/SM8650 decoder and comes from defconfig), so those two entries are COMPILED OUT and
+# qcom-iris.ko is the sole claimant of qcom,sm8250-venus. Verified against the built modules
+# rather than the source: venus-core.ko carries no sm8250 alias at all, qcom-iris.ko does.
+#
+# iris then asks for iris_vpu20_p4_gen1_desc.fwname = "qcom/vpu/vpu20_p4.mbn" — the plain
+# upstream name, which unlike the vpu30/vpu33 rows above is a REAL FILE, not a symlink. So this
+# row installs it under its own name and does not rename.
+#
+# The old row installed the same blob as qcom/vpu-1.0/venus.mbn and is deleted, not kept as a
+# fallback: with IRIS enabled nothing can ever request that name, so it was a ~1.9M file the
+# kernel had no way to ask for. If CONFIG_VIDEO_QCOM_IRIS is ever turned off, venus reclaims
+# qcom,sm8250-venus and this row must go back to `qcom/vpu/vpu20_p4.mbn qcom/vpu-1.0/venus.mbn`
+# (in linux-firmware that path is a symlink, so the rename is mandatory — plain/ 404s on it).
+qcom/vpu/vpu20_p4.mbn      qcom/vpu/vpu20_p4.mbn    a66e86e34dc69a870fe631c73ed4a93d9fcfea6f3f2a4ac02cb118cb505bbbb2
 
 # QCA6390 Wi-Fi (ath11k) — the SM8250 radio is ath11k/QCA6390, not the ath12k/WCN7850 the
 # SM8650 boards carry, and unlike WCN7850 its blobs are OPEN (WCN7850's live in qcom-fw).

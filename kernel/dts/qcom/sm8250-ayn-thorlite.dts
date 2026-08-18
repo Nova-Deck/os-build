@@ -1827,8 +1827,18 @@
 //	remote-endpoint = <&redriver_phy_con_ss>;
 //};
 
+/* Video decode — bound by qcom-iris.ko despite the label; see sm8250-retroidpocket-common.dtsi.
+ *
+ * DIVERGENCE, on purpose: this was "disabled" from the original SM8250 import, and the distro
+ * that import came from still disables it on Thor Lite alone while enabling it on all five
+ * other SM8250 boards. That asymmetry looks deliberate on their side, but neither their tree
+ * nor ours records a reason, and the block, its clocks and its IOMMU are identical to the
+ * boards where it works. Enabled here to find out. iris is =m and loads after the rootfs, so
+ * the downside if Thor Lite really is special is a failed probe in the log, not a boot failure.
+ * If it misbehaves on hardware, put the line back and write the reason down this time.
+ */
 &venus {
-	status = "disabled";
+	status = "okay";
 };
 
 &wsamacro {

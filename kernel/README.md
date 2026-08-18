@@ -37,8 +37,8 @@ Two rules when editing it:
 assumes 4K pages.** Standardized across all three SoCs.
 
 ## Status (Phase 1)
-- ✅ Source pinned: currently linux 7.1.6 — `kernel/SOURCE.pin` is the authority (tarball
-  URL + sha256 + the bump history).
+- ✅ Source pinned: currently linux 7.2 — `kernel/SOURCE.pin` is the authority (tarball
+  URL + sha256 + the bump history, including what 7.2 took over from `patches/`).
 - ✅ Config symbols validated against that tree (see header of `kernel.config`).
 - ✅ Builds `Image.gz` + all board dtbs and stages loadable modules to `out/modroot`
   for the rootfs assembler — the `=m` handheld-panel drivers (display) ride along.

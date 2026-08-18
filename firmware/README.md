@@ -21,10 +21,15 @@ in `linux-firmware`. Two SM8250 blobs are missing from both sources and are docu
 open gaps at the bottom of `QCOM_FW.pin`.
 
 One trap worth knowing when adding rows: `linux-firmware` uses **symlinks** for several
-driver-facing names (e.g. `qcom/vpu-1.0/venus.mbn` → `../vpu/vpu20_p4.mbn`), and cgit's
+driver-facing names (e.g. `qcom/vpu/vpu30_p4.mbn` → `vpu30_p4_s7.mbn`), and cgit's
 `plain/` endpoint returns 404 for a symlink. A 404 is therefore not proof the firmware is
 absent — check `WHENCE` at the pinned commit, then pin the real blob and rename it via the
-row's install-path column.
+row's install-path column. Which signed variant the link points at is not guessable from the
+name: `vpu30_p4_s6.mbn` sits right next to `vpu30_p4_s7.mbn` and belongs to a different SoC.
+
+The second trap is the one that actually cost us working SM8250 decode: pin the name the
+**binding driver** asks for, not the one the DT node's label suggests. `&venus` on SM8250 is
+claimed by `qcom-iris.ko`, not venus — see the SM8250 block in `LINUX_FW.pin`.
 
 | File | Purpose |
 |---|---|

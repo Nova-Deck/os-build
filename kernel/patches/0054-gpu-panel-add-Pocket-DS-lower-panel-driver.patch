@@ -60,6 +60,7 @@ diff -rupbN linux.orig/drivers/gpu/drm/panel/panel-ar11-5inch.c linux/drivers/gp
 +
 +static const struct regulator_bulk_data panel_supplies[] = {
 +	{ .supply = "avdd" },
++	{ .supply = "avee" },
 +	{ .supply = "vci" },
 +	{ .supply = "vddio" },
 +};
@@ -254,9 +255,10 @@ diff -rupbN linux.orig/drivers/gpu/drm/panel/panel-ar11-5inch.c linux/drivers/gp
 +	struct ar11_5inch *ctx;
 +	int ret;
 +
-+	ctx = devm_kzalloc(dev, sizeof(*ctx), GFP_KERNEL);
-+	if (!ctx)
-+		return -ENOMEM;
++	ctx = devm_drm_panel_alloc(dev, struct ar11_5inch, panel,
++				   &ar11_5inch_panel_funcs, DRM_MODE_CONNECTOR_DSI);
++	if (IS_ERR(ctx))
++		return PTR_ERR(ctx);
 +
 +	ret = devm_regulator_bulk_get_const(dev, ARRAY_SIZE(panel_supplies),
 +		panel_supplies, &ctx->supplies);
@@ -289,8 +291,6 @@ diff -rupbN linux.orig/drivers/gpu/drm/panel/panel-ar11-5inch.c linux/drivers/gp
 +		return ret;
 +	}
 +
-+	drm_panel_init(&ctx->panel, dev, &ar11_5inch_panel_funcs,
-+		       DRM_MODE_CONNECTOR_DSI);
 +	ctx->panel.prepare_prev_first = true;
 +
 +	ret = drm_panel_of_backlight(&ctx->panel);

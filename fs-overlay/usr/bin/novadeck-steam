@@ -130,6 +130,21 @@ export vk_xwayland_wait_ready=false            # don't block on buffers idling b
 # -noshaders: disable Steam's shader pre-caching (background shader download + compile). Orthogonal to
 #   the update path — pure CPU/battery saver on the handheld; safe to keep.
 #
+# NO -cef-enable-vaapi, deliberately. It reads like the switch for hardware video decode in CEF
+#   ("Enable VA-API video decoding on Linux", per steamclient.so) and it is a NO-OP here. Measured
+#   on device 2026-08-19 by diffing the webhelper argv with and without it: the only difference is
+#   that it adds `VaapiVideoDecodeLinuxGL` to --enable-features, and Valve's arm64 libcef.so
+#   contains no VA-API at all (it is built use_v4l2_codec=true, and VA-API is impossible on Adreno
+#   anyway — no video engine; the VPU is separate silicon Mesa never touches).
+#
+#   Everything that actually matters is ALREADY the arm64 client's default: it passes
+#   --ignore-gpu-blocklist and --enable-features=PlatformHEVCDecoderSupport,V4L2VideoDecode, and it
+#   does NOT pass --disable-accelerated-video-decode. So there is nothing here to turn on.
+#
+#   And you do not want it on. See docs/video-decode.md: CEF's V4L2 path on iris is SLOWER than
+#   plain CPU decode on this hardware. What gates it is a /dev/video-dec0 symlink, which we
+#   deliberately do not ship.
+#
 # DO NOT add -nobootstrapupdate / -skipinitialbootstrap / -norepairfiles here. Those
 # implement a PINNED-client model: the client downloads an update but the bootstrap is
 # forbidden from applying it, so the running client never advances — even across reboots (HW-observed
@@ -146,6 +161,13 @@ export vk_xwayland_wait_ready=false            # don't block on buffers idling b
 # (the freeze hunts have all wanted it). The port binds localhost only.
 : >"${STEAM}/.cef-enable-remote-debugging" 2>/dev/null \
   && echo "[novadeck-steam] CEF remote debugging enabled (${STEAM}/.cef-enable-remote-debugging)" >&2
+
+# Do NOT set STEAM_CEF_GPU_CMD_PREFIX here. steamclient.so turns it into `--gpu-launcher='%s'` and
+# those quotes reach Chromium LITERALLY — it does not shell-parse the value — so the wrapper path
+# can never resolve. Confirmed on device 2026-08-19: the argv really did read
+# `--gpu-launcher='/usr/lib/novadeck/cef-gpu-launcher'`. It failed harmlessly (Chromium fell back to
+# the zygote rather than losing the renderer), but it is not an injection point that works. If a
+# Chromium switch ever genuinely has to be added, find another way in.
 
 # Run from the client dir. Steam's bootstrapper resolves some helper paths relative to cwd, so launch
 # with steamrtarm64/ as the working directory.

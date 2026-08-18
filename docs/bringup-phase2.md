@@ -156,6 +156,15 @@ freeze** that stops the *game*, not just the screen.
   (cpu-offline, rfkill, cpu+gpu powersave governor) live in the shared `usr/lib/novadeck/power-ops.sh`
   (`power_enter`/`power_leave`, guarded by `NOVADECK_SUSPEND_SKIP`), applied AFTER the freeze and
   restored BEFORE the thaw (pure sysfs, safe while frozen).
+- **Wi-Fi across the cycle** — `power-ops.sh` soft-blocks the radios via sysfs `rfkill` on the way in
+  and unblocks on the way out, then primes the scan cache on the AP's saved channel (detached via
+  `systemd-run`, so a slow scan can never gate resume). Kernel patch `0507` is the other half of that
+  story: ath12k computes a scan priority per hardware scan and never puts it on the wire, so every
+  host scan reaches the WCN7850 firmware as `VERY_LOW` and loses to the 11d country scan the firmware
+  runs at `MEDIUM` — the scans right after each radio bring-up come back refused
+  (`WMI_SCAN_REASON_INTERNAL_FAILURE`), NM sees aborted scans and falls back to full sweeps with
+  growing backoff. **HW gate pending.** If reconnect is consistently fast with the patch, the
+  channel-priming in `_pow_rf_leave` becomes a candidate for deletion — do not drop it before then.
 - **`novadeck-waked`** — the wake agent: `libinput debug-events --device event0` (pmic_pwrkey) times
   the key. Short **tap** → `novadeck-suspend toggle`; **hold ≥ `NOVADECK_WAKE_LONGPRESS_MS`** (default
   2000ms) → thaw-then-`systemctl poweroff`. Runs in a top-level **`novadeck-wake.slice`** (sibling of

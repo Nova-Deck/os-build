@@ -1,0 +1,19 @@
+[Unit]
+Description=novadeck Decky injection watchdog
+# Decky's frontend injection is a websocket into Steam's CEF debugger, and upstream v3.2.8-pre1
+# drops it for good the first time Steam relaunches under it (novadeck-steam's exit-42 loop does
+# that on every boot). The loader stays "active" throughout, so nothing else notices. This
+# watches the connection itself — see /usr/lib/novadeck/decky-inject-watchdog for the full why.
+After=plugin_loader.service
+Wants=plugin_loader.service
+
+[Service]
+Type=simple
+ExecStart=/usr/lib/novadeck/decky-inject-watchdog
+Restart=always
+RestartSec=10
+# Root because the whole job is `systemctl restart plugin_loader.service`.
+User=root
+
+[Install]
+WantedBy=multi-user.target

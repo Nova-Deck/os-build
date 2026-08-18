@@ -89,6 +89,124 @@ preset="$ROOT/fs-overlay/usr/lib/systemd/system-preset/60-novadeck-decky.preset"
   && ok "preset enables both units" \
   || bad "60-novadeck-decky.preset does not enable both units"
 
+# --- the injection watchdog ----------------------------------------------------------------
+# The loader running is NOT the loader working: Decky's frontend lives in Steam's CEF, injected
+# over 127.0.0.1:8080, and upstream v3.2.8-pre1 drops that websocket permanently the first time
+# the tab goes stale mid-connect (main.py's loader_reinjector guards get_gamepadui_tab but not
+# the open_websocket on the next line). novadeck-steam's exit-42 relaunch does exactly that on
+# every boot. Everything below drives the watchdog's decision loop against fake ss/systemctl —
+# the loop is the whole mechanism, so an untested loop is an untested fix.
+WATCHDOG="$ROOT/fs-overlay/usr/lib/novadeck/decky-inject-watchdog"
+[ -x "$WATCHDOG" ] \
+  && ok "decky-inject-watchdog present and executable" \
+  || bad "decky-inject-watchdog missing or not executable"
+wunit="$UNITDIR/novadeck-decky-watchdog.service"
+if [ -f "$wunit" ]; then
+  ok "novadeck-decky-watchdog.service present"
+  grep -q '^ExecStart=/usr/lib/novadeck/decky-inject-watchdog$' "$wunit" \
+    && ok "watchdog unit execs the watchdog" \
+    || bad "watchdog unit ExecStart does not point at /usr/lib/novadeck/decky-inject-watchdog"
+  grep -q '^Restart=always$' "$wunit" \
+    && ok "watchdog is Restart=always — a watchdog that can die once is not one" \
+    || bad "watchdog unit is not Restart=always"
+else
+  bad "novadeck-decky-watchdog.service missing from fs-overlay"
+fi
+[ -L "$WANTSDIR/novadeck-decky-watchdog.service" ] \
+  && ok "watchdog wants-symlink present" \
+  || bad "watchdog has no multi-user.target.wants symlink"
+grep -q '^enable novadeck-decky-watchdog.service$' "$preset" 2>/dev/null \
+  && ok "preset enables the watchdog" \
+  || bad "60-novadeck-decky.preset does not enable the watchdog"
+
+if [ -x "$WATCHDOG" ]; then
+  WD_TMP="$(mktemp -d)"
+  mkdir -p "$WD_TMP/bin" "$WD_TMP/cgroup"
+  # ss speaks two dialects here and the shim answers both: -tln is "is CEF listening", -tnp is
+  # "who holds an established connection to it". The pid it reports is 4242 throughout.
+  cat >"$WD_TMP/bin/ss" <<'SH'
+#!/bin/sh
+for a in "$@"; do
+  case "$a" in
+    -tln) [ "${FAKE_CEF:-0}" = 1 ] && echo "LISTEN 0 10 127.0.0.1:8080 0.0.0.0:*"; exit 0 ;;
+    -tnp) [ "${FAKE_CONN:-0}" = 1 ] && \
+          echo '0 0 127.0.0.1:37046 127.0.0.1:8080 users:(("Decky Loader",pid=4242,fd=12))'; exit 0 ;;
+  esac
+done
+exit 0
+SH
+  cat >"$WD_TMP/bin/systemctl" <<'SH'
+#!/bin/sh
+case "$1" in
+  is-active) [ "${FAKE_ACTIVE:-1}" = 1 ] ;;
+  restart)   echo "restart $2" >>"$FAKE_LOG" ;;
+  *)         : ;;
+esac
+SH
+  # Faking sleep is what makes a 15-second interval and a 15-minute backoff testable at all: the
+  # naps become an assertable transcript instead of wall time.
+  cat >"$WD_TMP/bin/sleep" <<'SH'
+#!/bin/sh
+echo "sleep $1" >>"$FAKE_LOG"
+SH
+  chmod 0755 "$WD_TMP/bin/ss" "$WD_TMP/bin/systemctl" "$WD_TMP/bin/sleep"
+
+  # scenario <name> <cef> <conn> <active> <cgroup-pids> <ticks> -> transcript on stdout
+  wd_run() {
+    printf '%s\n' $5 >"$WD_TMP/cgroup/cgroup.procs"
+    : >"$WD_TMP/log"
+    PATH="$WD_TMP/bin:$PATH" \
+    FAKE_CEF="$2" FAKE_CONN="$3" FAKE_ACTIVE="$4" FAKE_LOG="$WD_TMP/log" \
+    NOVADECK_DECKY_LOADER_CGROUP="$WD_TMP/cgroup" \
+    NOVADECK_DECKY_WATCHDOG_TICKS="$6" \
+      "$WATCHDOG" 2>/dev/null || true
+    cat "$WD_TMP/log"
+  }
+  wd_restarts() { grep -c '^restart ' <<<"$1" || true; }
+
+  t="$(wd_run healthy 1 1 1 "843 846 4242" 5)"
+  [ "$(wd_restarts "$t")" -eq 0 ] \
+    && ok "watchdog: CEF up + loader connected -> never restarts (it is a watchdog, not a timer)" \
+    || bad "watchdog restarts a healthy loader"
+
+  t="$(wd_run no-cef 0 0 1 "843 846 4242" 5)"
+  [ "$(wd_restarts "$t")" -eq 0 ] \
+    && ok "watchdog: no debugger -> no restart (Steam being down is a state, not a fault)" \
+    || bad "watchdog restarts the loader while Steam is down — it would thrash the whole boot"
+
+  t="$(wd_run inactive 1 0 0 "843 846 4242" 5)"
+  [ "$(wd_restarts "$t")" -eq 0 ] \
+    && ok "watchdog: loader stopped -> left stopped (an operator debugging it keeps it stopped)" \
+    || bad "watchdog restarts a deliberately stopped loader"
+
+  t="$(wd_run dead-injection 1 0 1 "843 846 4242" 4)"
+  [ "$(wd_restarts "$t")" -ge 1 ] \
+    && ok "watchdog: CEF up + no connection -> restarts the loader (the bug this exists for)" \
+    || bad "watchdog does NOT restart on a dead injection — the QAM tab stays gone"
+
+  # The pid match is a substring test against ss output, so a cgroup pid that is a PREFIX of the
+  # connected one must not read as healthy. 424 vs pid=4242.
+  t="$(wd_run pid-prefix 1 1 1 "424" 4)"
+  [ "$(wd_restarts "$t")" -ge 1 ] \
+    && ok "watchdog: pid 424 does not match pid=4242 — the membership test is not a prefix test" \
+    || bad "watchdog treats a prefix pid as connected: a foreign connection would mask a dead loader"
+
+  # Backoff: settle=2 with interval 15 means a restart on every second tick, and each nap after
+  # one doubles from 30s. A flat retry here would respawn a 190MB loader every 30s forever.
+  t="$(wd_run backoff 1 0 1 "4242" 8)"
+  naps="$(grep '^sleep ' <<<"$t" | awk '{print $2}' | tr '\n' ' ')"
+  [ "$naps" = "15 30 15 60 15 120 15 240 " ] \
+    && ok "watchdog: naps back off 30/60/120/240 between failed recoveries" \
+    || bad "watchdog backoff transcript is '$naps', expected '15 30 15 60 15 120 15 240 '"
+
+  t="$(wd_run backoff-ceiling 1 0 1 "4242" 80)"
+  [ "$(grep -c '^sleep 900$' <<<"$t")" -ge 1 ] \
+    && ok "watchdog: backoff clamps at the 900s ceiling (it keeps trying, it never gives up)" \
+    || bad "watchdog backoff never reaches its 900s clamp"
+
+  rm -rf "$WD_TMP"
+fi
+
 # --- the FEX AppConfig ---------------------------------------------------------------------
 if python3 -c "import json,sys; json.load(open('$APPCONF'))" 2>/dev/null; then
   ok "AppConfig/PluginLoader.json parses — a broken file silently reverts FEX to defaults"

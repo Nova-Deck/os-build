@@ -1,0 +1,100 @@
+#!/bin/bash
+# novadeck decky-inject-watchdog — keep Decky's UI injection alive across Steam restarts.
+#
+# WHY THIS EXISTS. Decky does not run inside Steam. It injects its frontend over CEF's remote
+# debugger (127.0.0.1:8080) and holds that websocket open for the life of the session. Losing it
+# is precisely what "the Decky tab is not in the QAM" looks like from the outside: the unit is
+# active, the plugin is loaded, the journal says nothing further, and no amount of reading
+# plugin_loader.service's status shows a fault.
+#
+# Upstream v3.2.8-pre1 loses it deterministically on this image. decky_loader/main.py's
+# loader_reinjector wraps get_gamepadui_tab() in a try/except for exactly this class of error,
+# but the NEXT line — `await tab.open_websocket()` — sits outside it. A tab that goes stale
+# between those two calls raises ClientConnectorError out of the whole coroutine; the task dies
+# ("Task exception was never retrieved") and there is no retry loop left to recover it.
+#
+# That is not a rare race here. novadeck-steam's exit-42 relaunch tears the first webhelper down
+# ~15 seconds into every boot, right inside Decky's injection window. Measured 2026-08-18 on a
+# dev card: loader up 21:10:50, tab acquired ~21:11:05, webhelper gone 21:11:07 (injection dead),
+# CEF listening again 21:11:35, and zero further attempts in the following eight minutes.
+#
+# We cannot fix it where it breaks: the loader is upstream's pinned x86_64 PyInstaller build that
+# we run under FEX, not something this image compiles. So the invariant gets restored from the
+# outside instead — while CEF is listening, the loader must hold a connection to it, or the
+# loader gets restarted.
+set -euo pipefail
+
+# Every default below is the real device value. The overrides exist for the offline suite
+# (images/test-decky.sh) ONLY — same pattern as decky-sync's roots: the suite fakes `ss` and
+# `systemctl` on PATH and drives this loop through each branch with no device and no bus.
+port="${NOVADECK_DECKY_CEF_PORT:-8080}"
+unit="${NOVADECK_DECKY_LOADER_UNIT:-plugin_loader.service}"
+cgroup="${NOVADECK_DECKY_LOADER_CGROUP:-/sys/fs/cgroup/system.slice/${unit}}"
+interval="${NOVADECK_DECKY_WATCHDOG_INTERVAL:-15}"
+settle="${NOVADECK_DECKY_WATCHDOG_SETTLE:-2}"
+recover="${NOVADECK_DECKY_WATCHDOG_RECOVER:-30}"
+recover_max="${NOVADECK_DECKY_WATCHDOG_RECOVER_MAX:-900}"
+ticks="${NOVADECK_DECKY_WATCHDOG_TICKS:-0}"   # 0 = run forever; N = N ticks then exit (the suite)
+
+# The debugger socket is Steam's, not ours: it appears when steamwebhelper starts and vanishes for
+# the seconds around every relaunch. Its absence is a state, never a fault.
+cef_listening() {
+  [[ -n "$(ss -H -tln state listening "( sport = :${port} )")" ]]
+}
+
+# Injection is alive iff some process in the LOADER'S CGROUP holds an established connection to
+# that port. Membership, not MainPID: the Python process is a FEX child several forks down (824
+# was the unit's main pid on the boot above, 899 the process that actually spoke to CEF), so
+# matching MainPID would read "dead" on a perfectly healthy loader. And this is the resource
+# whose loss IS the bug, which beats every proxy for it — no log scraping, no CDP round-trip, and
+# it stays true while a game is running.
+loader_injected() {
+  local established pid
+  [[ -r "${cgroup}/cgroup.procs" ]] || return 1
+  established="$(ss -H -tnp state established "( dport = :${port} )")" || return 1
+  while read -r pid; do
+    [[ -n "$pid" ]] || continue
+    # The trailing comma is load-bearing: without it pid 299 matches "pid=2990".
+    [[ "$established" == *"pid=${pid},"* ]] && return 0
+  done < "${cgroup}/cgroup.procs"
+  return 1
+}
+
+unhealthy=0     # consecutive ticks with CEF up and no connection to it
+recoveries=0    # restarts since injection was last observed healthy
+tick=0
+
+while (( ticks == 0 || tick < ticks )); do
+  tick=$(( tick + 1 ))
+  nap="$interval"
+
+  if ! systemctl is-active --quiet "$unit"; then
+    # Stopped, or still coming up under its own Restart=always. Not ours to override: an operator
+    # who stops the loader to debug it does not want it back fifteen seconds later. `recoveries`
+    # is deliberately NOT reset — a restart we just issued lands here before it lands healthy.
+    unhealthy=0
+  elif ! cef_listening; then
+    # Steam is down, still starting, or between relaunches. Nothing exists to inject into.
+    unhealthy=0; recoveries=0
+  elif loader_injected; then
+    unhealthy=0; recoveries=0
+  else
+    unhealthy=$(( unhealthy + 1 ))
+    if (( unhealthy >= settle )); then
+      printf 'decky-inject-watchdog: CEF up on %s but the loader has held no connection for %ds — restarting %s (attempt %d)\n' \
+             "$port" "$(( unhealthy * interval ))" "$unit" "$(( recoveries + 1 ))" >&2
+      unhealthy=0
+      recoveries=$(( recoveries + 1 ))
+      systemctl restart "$unit"
+      # Back off when restarting is not what fixes it. A loader that can never reach CEF would
+      # otherwise be respawned every settle window forever, and each respawn is ~190MB plus a FEX
+      # rootfs mount. Doubling to a fifteen-minute ceiling keeps trying without eating the
+      # battery; any healthy tick resets it to the first, fast retry.
+      shift_by=$(( recoveries - 1 )); (( shift_by <= 16 )) || shift_by=16
+      nap=$(( recover << shift_by ))
+      (( nap <= recover_max )) || nap="$recover_max"
+    fi
+  fi
+
+  sleep "$nap"
+done

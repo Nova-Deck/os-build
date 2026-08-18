@@ -666,6 +666,14 @@ if [ ! -s "$STAGE/usr/share/decky-plugins/novadeck-control/dist/index.js" ]; the
 else
   echo "    ok  novadeck-control plugin staged with its dist"
 fi
+# The watchdog is what keeps the QAM tab there at all past the first Steam relaunch. Without its
+# exec bit the unit EACCESes into Restart=always and the tab is simply absent on every boot —
+# the same invisible failure the loader's own exec bit produces.
+if [ ! -x "$STAGE/usr/lib/novadeck/decky-inject-watchdog" ]; then
+  bad "decky-inject-watchdog missing or not executable — injection dies at the first Steam relaunch"
+else
+  echo "    ok  Decky injection watchdog present and executable"
+fi
 
 # ------------------------------------------------------------------------------------------
 # 10. No host Python bytecode rode in.

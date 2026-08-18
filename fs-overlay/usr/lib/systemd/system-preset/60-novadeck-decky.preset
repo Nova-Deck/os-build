@@ -1,2 +1,3 @@
 enable novadeck-decky-sync.service
 enable plugin_loader.service
+enable novadeck-decky-watchdog.service

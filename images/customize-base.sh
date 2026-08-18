@@ -154,8 +154,11 @@ BOOTSTRAP_PKGS=(base)
 # is built from source into the [novadeck] overlay (packages/scx-scheds) and resolves here. Installing
 # it only PLACES the binaries + scx.service; the unit is deliberately never `enable`d. What actually
 # selects a scheduler is novadeck-powerd, and its DEFAULT_CPU_SCHEDULER is "none" — lavd ships
-# installed but OFF until the user picks it via novadeck-scheduler (reported to cost in-game
-# performance; see issue #32).
+# installed but OFF until the user picks it via novadeck-scheduler. NOT because it is slow: the
+# in-game regression that originally motivated this default was REFUTED on hardware 2026-08-09
+# (lavd +56% FPS on Darksiders II; stock EEVDF leaves the cap-1024 prime core idle). Staying off by
+# default is a deliberate conservative choice about shipping an out-of-tree scheduler to every
+# device, not a performance claim. See issue #32 for the measurements.
 # rauc: the A/B update client (Phase 4b pass 2). The pinned snapshot's `extra` repo has it, but
 # only at 1.14 — and 1.14 cannot install a dm-verity bundle on a kernel >= 6.19 (upstream fixed
 # that first in v1.15.1), which is every kernel we ship. So it is built from source at 1.15.2

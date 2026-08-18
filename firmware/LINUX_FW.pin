@@ -86,12 +86,33 @@ qcom/sm8250/a650_zap.mbn   qcom/sm8250/a650_zap.mbn 0624d84e0ecc5e08dce55e33c4e0
 qcom/sm8250/adsp.mbn       qcom/sm8250/adsp.mbn     7fd1fa907d0cb44a87e7339ffa0ce279cf08d6a70f8e7cd199a3fcd10d000a38
 qcom/sm8250/cdsp.mbn       qcom/sm8250/cdsp.mbn     42b371d64e87b7c40775ed9474e5f4f1b5d84b3a6766ba1d74a5bcfa255016a1
 
-# Venus video codec. The driver hard-requests qcom/vpu-1.0/venus.mbn (sm8250_res.fwname in
-# drivers/media/platform/qcom/venus/core.c). In linux-firmware that path is a SYMLINK to
-# qcom/vpu/vpu20_p4.mbn, and cgit's plain/ endpoint cannot serve a symlink — fetching the
-# link path returns 404. Pull the real blob and rename on install, exactly as the SM8650
-# vpu33 row above does.
-qcom/vpu/vpu20_p4.mbn      qcom/vpu-1.0/venus.mbn   a66e86e34dc69a870fe631c73ed4a93d9fcfea6f3f2a4ac02cb118cb505bbbb2
+# SM8250 video codec — IRIS owns this node, NOT venus, and the name below reflects that.
+#
+# The &venus node's compatible is "qcom,sm8250-venus", so the obvious reading is that
+# drivers/media/platform/qcom/venus/ serves it and wants its sm8250_res.fwname,
+# qcom/vpu-1.0/venus.mbn. That reading is wrong, and it cost this tree working video decode on
+# all six SM8250 boards. venus/core.c guards its two newest entries:
+#
+#     #if (!IS_ENABLED(CONFIG_VIDEO_QCOM_IRIS))
+#         { .compatible = "qcom,sc7280-venus", ... },
+#         { .compatible = "qcom,sm8250-venus", ... },
+#     #endif
+#
+# and IS_ENABLED() is true for =m as well as =y. We carry CONFIG_VIDEO_QCOM_IRIS=m (it is the
+# SM8550/SM8650 decoder and comes from defconfig), so those two entries are COMPILED OUT and
+# qcom-iris.ko is the sole claimant of qcom,sm8250-venus. Verified against the built modules
+# rather than the source: venus-core.ko carries no sm8250 alias at all, qcom-iris.ko does.
+#
+# iris then asks for iris_vpu20_p4_gen1_desc.fwname = "qcom/vpu/vpu20_p4.mbn" — the plain
+# upstream name, which unlike the vpu30/vpu33 rows above is a REAL FILE, not a symlink. So this
+# row installs it under its own name and does not rename.
+#
+# The old row installed the same blob as qcom/vpu-1.0/venus.mbn and is deleted, not kept as a
+# fallback: with IRIS enabled nothing can ever request that name, so it was a ~1.9M file the
+# kernel had no way to ask for. If CONFIG_VIDEO_QCOM_IRIS is ever turned off, venus reclaims
+# qcom,sm8250-venus and this row must go back to `qcom/vpu/vpu20_p4.mbn qcom/vpu-1.0/venus.mbn`
+# (in linux-firmware that path is a symlink, so the rename is mandatory — plain/ 404s on it).
+qcom/vpu/vpu20_p4.mbn      qcom/vpu/vpu20_p4.mbn    a66e86e34dc69a870fe631c73ed4a93d9fcfea6f3f2a4ac02cb118cb505bbbb2
 
 # QCA6390 Wi-Fi (ath11k) — the SM8250 radio is ath11k/QCA6390, not the ath12k/WCN7850 the
 # SM8650 boards carry, and unlike WCN7850 its blobs are OPEN (WCN7850's live in qcom-fw).

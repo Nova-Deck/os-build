@@ -210,10 +210,13 @@ creds, an SSH key and the dev package set baked in.
 | `ci/` | Signing-CA generator + notes for `.github/workflows/` |
 | `build/` | `Dockerfile` for the cross-compile image |
 
-Most of those directories carry their own `README.md` documenting them file-by-file. `TODO.md` holds
-the OPEN items; `DONE.md` holds the closed ones and is the decision record — resolved entries keep
-their measurements, HW-validation dates and dead ends, because several are the only written record
-of why something is shaped the way it is.
+Most of those directories carry their own `README.md` documenting them file-by-file.
+
+**Open work lives in [GitHub issues](https://github.com/Nova-Deck/os-build/issues)**, prioritised
+`P0`–`P3` and grouped by `area/*` label. `DONE.md` is the decision record for work closed before
+2026-08-18 — resolved entries keep their measurements, HW-validation dates and dead ends, because
+several are the only written record of why something is shaped the way it is. Work closed after
+that date keeps its reasoning in the closed issue instead.
 
 ### Adding a board
 

@@ -5,7 +5,7 @@
 #   make test-signing
 #
 # WHY A TEST FOR A TEST. verify-signing.sh is a check, and the failure mode of a check is not
-# "it breaks" — it is "it stays green while asserting nothing". TODO.md called that out as worse
+# "it breaks" — it is "it stays green while asserting nothing". That was called out as worse
 # than having no check at all, and the file had two ways to get there: it carried a hand-copy of
 # the release cert's extensions (drift → passing for a profile we do not ship), and nothing
 # confirmed those extensions ever reached the throwaway cert (an empty profile mints an EKU-less

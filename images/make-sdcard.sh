@@ -181,8 +181,8 @@ echo "[novadeck] SD image: ${fixed_mib}MiB fixed layout ($([ "$SLOT_B" = 1 ] && 
 # btrfstune -U rewrites the fsid in the superblocks and in every metadata block header, which is
 # why it needs its own copy of the file rather than an in-place round trip.
 #
-# (RAUC will hit this too: every `rauc install` writes identical bytes to the inactive slot. Its
-# post-install hook needs the same treatment — tracked in TODO.md.)
+# (RAUC hits this too: every `rauc install` writes identical bytes to the inactive slot. Its
+# post-install hook does the same, `fs-overlay/usr/lib/rauc/post-install.sh`.)
 if [ "$SLOT_B" = 1 ]; then
   rm -f "$ROOTFS_B"
   cp --reflink=auto "$ROOTFS" "$ROOTFS_B"

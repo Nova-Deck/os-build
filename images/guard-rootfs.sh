@@ -493,7 +493,7 @@ fi
 #    HTTP-Range helper; without the module `genl_ctrl_resolve(nl, "nbd")` fails and the install
 #    dies. It is CONFIG_BLK_DEV_NBD=m from the arm64 defconfig with no ARCH_* gate, so today it
 #    survives kernel/trim-platforms.config by accident rather than by decision -- and the open
-#    "residual foreign-hardware drivers" item in TODO.md proposes exactly the kind of per-driver
+#    "residual foreign-hardware drivers" item (issue #44) proposes exactly the kind of per-driver
 #    negative pass that would take it out. No modprobe is needed at runtime (nbd.c declares
 #    MODULE_ALIAS_GENL_FAMILY and genetlink request_module()s an unknown family by name), so the
 #    only requirement is that the .ko is present.

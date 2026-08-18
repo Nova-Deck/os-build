@@ -14,7 +14,7 @@ version=@VERSION@
 # for exactly that case, so both have to travel with the bundle. `[meta.*]` is RAUC's forward-
 # compatible free-form metadata: it is not interpreted, and it reaches `rauc info`, InspectBundle and
 # the install handlers as RAUC_META_NOVADECK_* — which is where a post-install hook would read them
-# if it ever needs to record what a slot was updated TO (see TODO.md, the trial-stamp fix sketch).
+# if it ever needs to record what a slot was updated TO (see issue #34, the trial-stamp fix sketch).
 #
 # `mode` is dev|release, copied from the payload's own /etc/novadeck-release. A DEV image carries
 # Wi-Fi credentials and an authorized_keys, and signing one with the real release key makes it
@@ -37,7 +37,7 @@ filename=rootfs.img
 # time rauc looks each block up in BOTH slots and fetches only the ones it cannot find locally, so
 # an OS-only update moves the delta instead of the whole slot. Measured 2026-08-04 on two
 # independent pairs of real bundles: 96.1% of non-zero blocks are reused and ~125M crosses the wire
-# instead of 3.90G (TODO.md carries the table and the method).
+# instead of 3.90G (DONE.md carries the table and the method).
 #
 # Matching is CONTENT-addressed, not offset-based, and every local hit is re-hashed against this
 # index before use -- which is why post-install.sh's `btrfstune -U` is harmless here. It diverges

@@ -74,7 +74,8 @@ writes the same bytes it always did. It simply gains nothing from adaptive — t
 to shrink.
 
 Step 2 is not optional and is not ceremony. Nothing on the device ends an unconfirmed trial boot
-(`TODO.md`), so a bundle that comes up to a black screen needs about six manual power-cycles to
+([#34](https://github.com/Nova-Deck/os-build/issues/34)), so a bundle that comes up to a black
+screen needs about six manual power-cycles to
 recover — on a device with no serial console. Every published bundle gets a hardware install first.
 That is the entire mitigation, and it was accepted as such on 2026-08-03.
 
@@ -369,4 +370,4 @@ it needs no device-side change.
 `<policy context="default"><allow send_destination="de.pengutronix.rauc"/></policy>` and 1.15.2 has
 no polkit policy at all, so any local process can call `InstallBundle`. Bounded by signature
 verification, so not arbitrary code execution — but it is the actual mechanism behind "unprivileged
-install", and it is not polkit. Tracked in `TODO.md`.
+install", and it is not polkit. Accepted as a design choice; recorded in `DONE.md`.

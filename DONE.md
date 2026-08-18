@@ -1,9 +1,14 @@
 # novadeck — DONE
 
-Resolved items, split out of [TODO.md](TODO.md) on 2026-08-04 so the open queue is
-scannable. Nothing here is an archive to be pruned: these entries carry the measurements,
-the HW-validation dates and the dead ends, and open items in TODO.md reference them by
-name. Order is as it was in TODO.md — roughly the order things were closed, not a ranking.
+**Frozen 2026-08-18.** This is the decision record for everything closed up to that date. It is
+not an archive to be pruned: these entries carry the measurements, the HW-validation dates and the
+dead ends, and shipped source cites them by name for the rationale behind a shape. Order is roughly
+the order things were closed, not a ranking.
+
+Nothing new lands here. Open work moved to
+[GitHub issues](https://github.com/Nova-Deck/os-build/issues) on 2026-08-18 (`TODO.md` was deleted
+in the same change; `git log -- TODO.md` has its history), and work closed after that date keeps
+its reasoning in the closed issue.
 
 ## Closed
 
@@ -202,7 +207,7 @@ name. Order is as it was in TODO.md — roughly the order things were closed, no
     `ctrlappids=0[]` — the fallback carries Big Picture on screen before Steam publishes its control
     atoms, which under the old code left global focus NULL until they landed. So `0005` also shrinks
     the post-gamescope boot black gap. Duration unmeasured (gamescope's focus lines are
-    untimestamped) — see the splash item in TODO.md.
+    untimestamped) — see the splash item, issue #45.
   - **How the boot install actually works** (this corrects the original entry's mechanism): the
     startup check CANNOT discover an update — it runs before the network is up and fails all three
     mirrors with `http error 0` every time. Discovery is the in-session background loop. But once
@@ -485,7 +490,7 @@ name. Order is as it was in TODO.md — roughly the order things were closed, no
   state transitions prove the restore LOGIC ran; they do not prove the right BYTES came back.
   Proving that needs two genuinely different builds — bump `VERSION` and rebuild so `boot.img`
   differs, then re-run either branch. Cheap to do next time an image is built for another reason.
-  See also the still-open unconfirmed-trial item in TODO.md: the rollback is automatic ON NEXT BOOT, and nothing
+  See also the still-open unconfirmed-trial item, issue #34: the rollback is automatic ON NEXT BOOT, and nothing
   in the system causes that boot to happen.
 
   Two things made this harder to test than it looks, both learned 2026-07-28 and both still true:
@@ -1084,7 +1089,7 @@ name. Order is as it was in TODO.md — roughly the order things were closed, no
   `GpuPerformanceLevel1` to powerd). HW-confirmed: all three profiles apply live (SM8650 policy0/2/5/7
   caps + `3d00000.gpu` clamps), and the fan handoff (`novadeck-suspend` → powerd `Suspend`/`Resume`)
   stops/restarts the fan on sleep/wake — **closes the fan half of the suspend-polish item, still
-  open in TODO.md**
+  open as issue #41**
   (`bl_power` panel-blank fallback still open). `novadeck-session` now reads panel/output from device-env
   (dropped `detect_panel()`). **KEY GOTCHA:** the Steam client reads the manager on the deck **SESSION
   bus**, not the system bus — a system-only instance leaves QAM controls empty (`daemon not present`); we
@@ -1740,7 +1745,7 @@ name. Order is as it was in TODO.md — roughly the order things were closed, no
   titles". It was never an API class; it was one title's presentation mode. ROCKNIX's route (in-process
   MangoHud `fps_limit` sleeping in the swap call, no gamescope) remains unreachable in our mangoapp
   architecture and was correctly not pursued. **Productization is a separate item, still open in
-  TODO.md** (how `vblank_mode=3` ships).
+  issue #39** (how `vblank_mode=3` ships).
 
 - [x] **`STEAM_DISPLAY_REFRESH_LIMITS=40,60` was a fabricated range — RESOLVED, COMMITTED `6960aa8`
   (registry-derived; NOT booted).** The hardcoded `40,60` was the Steam Deck LCD device-quirk and was

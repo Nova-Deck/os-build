@@ -4,7 +4,7 @@
 # novadeck-powerd owns the CPU scheduler as a D-Bus property (org.novadeck.Power1.CpuScheduler):
 # "none" is the in-kernel scheduler, "lavd" is scx_lavd via scx.service, the unit is never
 # `enable`d, and powerd applies the saved choice at boot. "none" is the default (lavd was reported
-# to cost in-game performance — see TODO.md), so `status` on an untouched device reports it and
+# to cost in-game performance — see issue #32), so `status` on an untouched device reports it and
 # selecting "lavd" here is what opts a device into sched_ext.
 #
 # The Steam client ships the generated CpuScheduler1 proxy but NO rendered control in the pinned

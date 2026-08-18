@@ -16,7 +16,7 @@
 # reflash. So CI gets its own principal, and the blast radius of a leaked CI secret is exactly the
 # set of bytes CI is allowed to publish anyway.
 #
-# WHY NOT A FORCED COMMAND, which is the reflex answer and is what TODO.md originally proposed.
+# WHY NOT A FORCED COMMAND, which is the reflex answer and is what was originally proposed.
 # `command="rrsync /srv/novadeck-ota"` covers rsync and nothing else, and publish-bundle.sh is not
 # an rsync wrapper: it runs `mkdir -p`, `df -kP`, `mv -f && chmod`, `sha256sum` and a `bash -s`
 # prune over ssh, in that order, with the pointer flip LAST. Every one of those would have to be

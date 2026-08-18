@@ -155,7 +155,7 @@ BOOTSTRAP_PKGS=(base)
 # it only PLACES the binaries + scx.service; the unit is deliberately never `enable`d. What actually
 # selects a scheduler is novadeck-powerd, and its DEFAULT_CPU_SCHEDULER is "none" — lavd ships
 # installed but OFF until the user picks it via novadeck-scheduler (reported to cost in-game
-# performance; see TODO.md).
+# performance; see issue #32).
 # rauc: the A/B update client (Phase 4b pass 2). The pinned snapshot's `extra` repo has it, but
 # only at 1.14 — and 1.14 cannot install a dm-verity bundle on a kernel >= 6.19 (upstream fixed
 # that first in v1.15.1), which is every kernel we ship. So it is built from source at 1.15.2

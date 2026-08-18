@@ -407,7 +407,7 @@ such filesystems on one disk make the second one scanned look like the first hav
 mounting p5 can hand you p4, on the one test whose purpose is proving which slot booted.
 `images/make-sdcard.sh` gives slot B a fresh fsid with `btrfstune -U`. **RAUC will hit this too** —
 every `rauc install` writes identical bytes into the inactive slot — so its post-install hook needs
-the same treatment. Tracked in `TODO.md`.
+the same treatment. Done: `fs-overlay/usr/lib/rauc/post-install.sh` runs `btrfstune -f -U`.
 
 ### Hard prerequisite, independent of the design
 
@@ -427,7 +427,7 @@ where both slots see the identical value. With that bug fixed, each slot generat
 its own per-slot overlay on first boot and the divergence above appears exactly as described. So
 the prerequisite is not weakened by this measurement — it is currently *masked* by it, and fixing
 `machine-id` makes the `/var` hook more necessary, not less. The `machine-id` defect is not a 4b
-problem and is tracked separately in `TODO.md`.
+problem; it was closed separately and is recorded in `DONE.md`.
 
 A second reason this pass could not exercise the prerequisite: the test image injects Wi-Fi
 credentials into the **shared rootfs** (`images/assemble-rootfs.sh`), not the per-slot `/etc`
@@ -611,7 +611,8 @@ step, on a card whose root has already been replaced.
   hook in the init that writes half the state and then `exit 1`s — the kernel panics, `panic=5`
   reboots, and the `umount` durability barrier never runs, reproducing an interrupted write at the
   exact instant, deterministically. That needs no `MAGIC_SYSRQ` (which `kernel/kernel.config` does
-  not declare) and is strictly more repeatable than a power yank. Tracked in `TODO.md`.
+  not declare) and is strictly more repeatable than a power yank. Never transcribed into the issue
+  tracker — this paragraph is the only record of the idea.
 - **`/run/novadeck/boot` was internally inconsistent on any boot that rewrites state — FIXED
   2026-07-28, after HW validation.** `write_state()` updated `STATE_GEN` but left
   `STATE_ACTIVE`/`STATE_PENDING`/`STATE_TRIES` at their pre-write values, and the handoff is emitted
@@ -751,4 +752,6 @@ export`, and reintroducing it would be an architectural change, not an accident.
 **Named, because 4c does not close it:** `packages/inputplumber`'s prebuilt tarball is still
 unpacked at `/` with `strip-components=1`, so a third-party archive can still place arbitrary
 paths in the root. Two marker names were never a guard for that. The real guard is an
-assertion that every file in the tree is package-owned or declared — tracked in `TODO.md`.
+assertion that every file in the tree is package-owned or declared — tracked as
+[#35](https://github.com/Nova-Deck/os-build/issues/35) and
+[#36](https://github.com/Nova-Deck/os-build/issues/36).

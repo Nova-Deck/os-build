@@ -611,8 +611,21 @@ step, on a card whose root has already been replaced.
   hook in the init that writes half the state and then `exit 1`s — the kernel panics, `panic=5`
   reboots, and the `umount` durability barrier never runs, reproducing an interrupted write at the
   exact instant, deterministically. That needs no `MAGIC_SYSRQ` (which `kernel/kernel.config` does
-  not declare) and is strictly more repeatable than a power yank. Never transcribed into the issue
-  tracker — this paragraph is the only record of the idea.
+  not declare) and is strictly more repeatable than a power yank.
+
+  > **SUPERSEDED 2026-08-18 — the scheme this risk is about no longer ships.** Both halves of it
+  > are gone: the two-file generation-counter state scheme went with the `/KERNEL` flow in
+  > `0d714ed` ("rootfs carries its own boot half"), which also deleted
+  > `images/initramfs/test-slot-state.sh`, the offline rejection test cited above. Slot state now
+  > lives in the ESP's `SteamOS/conf/<SLOT>.conf`, written through Valve's `steamos-bootconf`, with
+  > GRUB owning `boot-attempts` — `novadeck-bootctl` has no generation counter and does no
+  > two-file write. `/run/novadeck/boot` is tmpfs, so it carries no durability question at all.
+  >
+  > The panic-injection harness was never filed as an issue, and should not be filed as written:
+  > it targets a design that does not exist. The underlying concern *does* survive — a torn write
+  > to the ESP conf under power loss is still possible — but it is a different file, written by a
+  > third-party tool, so it needs restating from scratch rather than transcribing. Kept here as the
+  > historical account of why Phase 4b accepted the risk rather than testing it.
 - **`/run/novadeck/boot` was internally inconsistent on any boot that rewrites state — FIXED
   2026-07-28, after HW validation.** `write_state()` updated `STATE_GEN` but left
   `STATE_ACTIVE`/`STATE_PENDING`/`STATE_TRIES` at their pre-write values, and the handoff is emitted

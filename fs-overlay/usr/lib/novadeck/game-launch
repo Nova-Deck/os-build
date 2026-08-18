@@ -113,23 +113,33 @@ def resolve_config(settings, profiles):
 
 
 def resolve_thunks(settings, base_thunks):
-    """Per-thunk overrides, defaulting to WHAT THE BASE CONFIG SHIPPED -- never to "on".
+    """EXPLICIT overrides only. An absent one is silence, not a value.
 
-    The base config is the source of truth for which thunks run, and ours is THUNKLESS on
-    purpose: the host GPU thunks were HW-proven to SIGSEGV native x86-64 Linux games under FEX
-    (see Config.json's own Comment). Defaulting an absent override to "on" silently reverts that
-    fix on every launch, which is exactly what it did -- Parking Garage Rally Circuit, one of the
-    two titles the fix was proven against, SIGSEGV'd three launches for three.
+    ThunksDB is the one thing in this file that must not be restated. FEX walks every config
+    layer it has -- its own global and user configs, then per-application and per-Steam-appid
+    ones, then FEX_APP_CONFIG last -- and applies ThunksDB PER LIBRARY NAME, later layers
+    winning; a layer with no ThunksDB property is skipped entirely
+    (FileManagement.cpp, FileManager::FileManager). So omitting a name defers to whoever owns
+    it, while naming one seizes it at the highest priority there is.
 
-    It is worse for a config we hand to a FOREIGN FEX (Valve's compat tool, Proton's WoW64
-    build): write_config drops the thunk PATH bindings so that FEX uses its own, so enabling a
-    thunk here names one whose host libs we just declined to point at.
+    Restating the base here therefore does NOT mean "keep the default" -- it PINS it, over the
+    reading FEX's own per-title curation. That matters because the FEX reading this file is
+    usually not the one whose config we copied: Valve's compat tool ships its own thunk libs and
+    fills ThunksDB from a Valve-curated per-title database (via STEAM_COMPAT_FEX_CONFIG), and
+    FEX has a Steam_<appid>_<exe> config mechanism of its own. Both are theirs to decide.
+
+    Getting this backwards is what broke it before: an absent override defaulted to "on", which
+    reverted the thunkless base config on every launch and SIGSEGV'd Valve's FEX on native
+    x86-64 Linux titles. Defaulting to the base value instead would fix the crash but keep the
+    pin, so the default is now no key at all.
+
+    base_thunks is consulted only to bound the namespace -- the base config decides which thunks
+    EXIST, the same rule the `allowed` filter enforces for Config keys.
     """
     chosen = settings.get("thunks")
     if not isinstance(chosen, dict):
-        chosen = {}
-    return {name: 1 if chosen.get(name, bool(shipped)) else 0
-            for name, shipped in base_thunks.items()}
+        return {}
+    return {name: 1 if chosen[name] else 0 for name in base_thunks if name in chosen}
 
 
 def config_dir():
@@ -179,7 +189,14 @@ def write_config(settings, game_id, profiles):
     allowed = set().union(*(profile["config"].keys() for profile in profiles.values()))
     resolved = resolve_config(settings, profiles)
     config.setdefault("Config", {}).update({k: v for k, v in resolved.items() if k in allowed})
-    config["ThunksDB"] = resolve_thunks(settings, config.get("ThunksDB", {}))
+    # No override means no ThunksDB key at all -- see resolve_thunks. An empty object would be
+    # equivalent to FEX (it iterates the members and there are none), so this is for the reader:
+    # a config with no ThunksDB plainly states that we are not touching anyone's thunks.
+    thunks = resolve_thunks(settings, config.get("ThunksDB", {}))
+    if thunks:
+        config["ThunksDB"] = thunks
+    else:
+        config.pop("ThunksDB", None)
 
     directory = config_dir()
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)

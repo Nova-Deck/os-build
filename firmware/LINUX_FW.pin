@@ -14,7 +14,16 @@
 #
 # Fetch + verify with:  firmware/fetch-linux-fw.sh   (no arguments — one flat tree for
 # every SoC; the unified Image embeds the union.)
-commit: e7eb98afc667913acc533ab910c608bee7d08f25
+# Pinned to a NAMED upstream release rather than a drive-by main commit, so the pin says what
+# it is and a bump is reviewable. 20260810 is the tag; the commit below is that tag dereferenced
+# (`git ls-remote '20260810^{}'`), because the plain/?id= endpoint wants a commit.
+#
+# Re-pinned 2026-08-18 from e7eb98afc667913acc533ab910c608bee7d08f25 (an untagged main commit)
+# to the 20260810 release. Every one of the 23 rows below was re-downloaded at the new commit
+# and hashed: ALL 23 are byte-identical, so not one sha changed. That is the expected result for
+# a stable part -- these blobs only move when the vendor reships them -- and it is recorded here
+# so the next bump does not read "no sha changed" as evidence the fetch silently no-op'd.
+commit: 2135b2f7714a3a514c989b9728f51f36144cab6f
 base:   https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain
 
 # Adreno gen70900 (A750 / SM8650) GPU firmware — also embedded in the kernel Image (CONFIG_EXTRA_FIRMWARE)

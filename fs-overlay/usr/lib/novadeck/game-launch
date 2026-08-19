@@ -136,9 +136,14 @@ def steam_curated():
     here first, from the same inputs (`generate_app_config` in the shipped tool, and upstream
     `Source/Steam/CompatTool.cpp`): STEAM_FEX_TSOENABLED / STEAM_FEX_MULTIBLOCK carry the
     appinfo-driven per-title baseline, and STEAM_COMPAT_FEX_CONFIG carries the user's choices in
-    Steam's OWN per-title FEX UI — which pins all four of its keys explicitly whenever it is set,
-    substring-matched exactly as Valve's tool does, deliberately bug-compatible. Outside Steam
-    (system-FEX launches) none of these exist and this contributes nothing.
+    Steam's OWN per-title FEX UI. Outside Steam (system-FEX launches) none of these exist and
+    this contributes nothing.
+
+    STEAM_COMPAT_FEX_CONFIG keys are TRI-STATE, matching upstream CompatTool.cpp after
+    `2b0d94536` ("Become more picky about configs"): `Key:1` sets it, `Key:0` clears it, an
+    absent key contributes NOTHING. The release python tool still pins every absent key to 0;
+    upstream declared that a bug, and reproducing it here would pin TSO/Multiblock/thunks the
+    user never touched — the exact seizure this file exists to avoid.
     """
     config = {}
     thunks = {}
@@ -150,12 +155,23 @@ def steam_curated():
             config[key] = "1" if int(value) else "0"
         except ValueError:
             pass  # same as Valve's tool: a malformed value contributes nothing
-    ui = os.environ.get("STEAM_COMPAT_FEX_CONFIG")
-    if ui:
-        config["TSOEnabled"] = "1" if "TSOEnabled:1" in ui else "0"
-        config["Multiblock"] = "1" if "Multiblock:1" in ui else "0"
-        thunks["GL"] = 1 if "ThunksDB_GL:1" in ui else 0
-        thunks["Vulkan"] = 1 if "ThunksDB_Vulkan:1" in ui else 0
+    ui = os.environ.get("STEAM_COMPAT_FEX_CONFIG", "")
+
+    def flag(option):
+        if f"{option}:1" in ui:
+            return True
+        if f"{option}:0" in ui:
+            return False
+        return None
+
+    for option, key in (("TSOEnabled", "TSOEnabled"), ("Multiblock", "Multiblock")):
+        chosen = flag(option)
+        if chosen is not None:
+            config[key] = "1" if chosen else "0"
+    for option, name in (("ThunksDB_GL", "GL"), ("ThunksDB_Vulkan", "Vulkan")):
+        chosen = flag(option)
+        if chosen is not None:
+            thunks[name] = 1 if chosen else 0
     return config, thunks
 
 

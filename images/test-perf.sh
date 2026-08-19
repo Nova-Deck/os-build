@@ -479,9 +479,11 @@ written = pw.write_config({"fexProfile": "default"}, "620", fake_profiles)
 generated = _json.loads(written.read_text())
 check("explicit profile beats appinfo curation", generated["Config"]["TSOEnabled"], "1")
 
-# Steam's own per-title UI (STEAM_COMPAT_FEX_CONFIG) pins all four of its keys when set — the
-# reproduction is deliberately bug-compatible with Valve's substring matching — and our explicit
-# thunk states overlay it per name: their Vulkan choice survives, our GL choice wins.
+# Steam's own per-title UI (STEAM_COMPAT_FEX_CONFIG) keys are TRI-STATE, matching upstream
+# CompatTool.cpp after 2b0d94536: Key:1 sets, Key:0 clears, an ABSENT key contributes nothing.
+# The release python tool still pins absent keys to 0; upstream declared that a bug, and
+# reproducing it would pin values the user never touched. Our explicit thunk states overlay the
+# curated ones per name: their Vulkan choice survives, our GL choice wins.
 os.environ["STEAM_COMPAT_FEX_CONFIG"] = "TSOEnabled:1,Multiblock:1,ThunksDB_Vulkan:1"
 written = pw.write_config({"thunks": {"GL": True, "Vulkan": False}}, "620", fake_profiles)
 generated = _json.loads(written.read_text())
@@ -490,8 +492,14 @@ check("curated thunks merge with ours, ours winning per name",
       generated["ThunksDB"], {"GL": 1, "Vulkan": 0})
 written = pw.write_config({"fexProfile": "fast"}, "620", fake_profiles)
 generated = _json.loads(written.read_text())
-check("curated thunks survive a profile-only override",
-      generated["ThunksDB"], {"GL": 0, "Vulkan": 1})
+check("curated thunks survive a profile-only override, absent names left unpinned",
+      generated["ThunksDB"], {"Vulkan": 1})
+os.environ["STEAM_COMPAT_FEX_CONFIG"] = "ThunksDB_Vulkan:0"
+written = pw.write_config({"fexProfile": "fast"}, "620", fake_profiles)
+generated = _json.loads(written.read_text())
+check("a curated :0 is an explicit clear, not an absence", generated["ThunksDB"], {"Vulkan": 0})
+check("tri-state: keys the Steam UI never named stay unpinned",
+      generated["Config"]["TSOEnabled"], "0")  # fast profile's value, not a curated pin
 
 for var in ("STEAM_FEX_TSOENABLED", "STEAM_FEX_MULTIBLOCK", "STEAM_COMPAT_FEX_CONFIG"):
     os.environ.pop(var, None)

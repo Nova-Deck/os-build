@@ -12,7 +12,7 @@ from novadeck_control.power import (
 from novadeck_control.steam import installed_games
 from novadeck_control.telemetry import telemetry
 from novadeck_control.system import os_version
-from novadeck_control.tweaks import load_fex_profiles, load_tweaks, save_tweaks
+from novadeck_control.tweaks import load_base_thunks, load_fex_profiles, load_tweaks, save_tweaks
 
 
 class Plugin:
@@ -63,6 +63,7 @@ class Plugin:
         return {
             "tweaks": load_tweaks(),
             "fexProfiles": load_fex_profiles(),
+            "fexThunks": load_base_thunks(),
             "power": power_status(),
             "osVersion": os_version(),
         }

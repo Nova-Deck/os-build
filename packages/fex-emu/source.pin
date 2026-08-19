@@ -27,8 +27,10 @@
 #                  root (build-overlay.sh injects them after the first `cd` in prepare(), which is
 #                  `cd "$srcdir/FEX"` for exactly this reason), in the order listed.
 #
-# Both patches are still REQUIRED at FEX-2608 with clang 21 on aarch64 — neither is upstream. A
-# peer distro bumped to 2607, dropped both, and had to restore them. See patches/README.md.
+# 0001/0005 are still REQUIRED at FEX-2608 with clang 21 on aarch64 — neither is upstream. A
+# peer distro bumped to 2607, dropped both, and had to restore them. 0006 is our behaviour fix
+# for thunk overlays on Arch-layout guests (issue #49) — drop it once upstream takes it. See
+# patches/README.md.
 #
 # To bump: edit _commit + pkgver in packages/fex-emu/PKGBUILD (use a FEX-<ver> tag resolved with
 # `git rev-parse FEX-<ver>^{commit}`, NOT the tag object's sha) and re-verify both patches apply
@@ -36,4 +38,4 @@
 name: fex-emu
 pkgbuild_local: PKGBUILD
 pkgrel_suffix: 1
-patches: 0001-fexcore-aarch64-workaround-llvm18-ice.patch 0005-host-thunks-aarch64-char-signed-char.patch
+patches: 0001-fexcore-aarch64-workaround-llvm18-ice.patch 0005-host-thunks-aarch64-char-signed-char.patch 0006-thunk-overlays-arch-style-lib-prefixes.patch

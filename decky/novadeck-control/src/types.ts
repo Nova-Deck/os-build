@@ -12,6 +12,9 @@ export interface GameTweaks {
    *  ("eco"/"balanced"/"performance"), never the UI label. */
   powerProfile?: string;
   fexProfile?: string;
+  /** EXPLICIT overrides only — an entry pins that thunk at FEX's highest config priority,
+   *  over Valve's per-title curation. "As shipped" is NO entry, never `false`. */
+  thunks?: Record<string, boolean>;
   env?: Record<string, string | null>;
   [key: string]: any;
 }
@@ -88,6 +91,9 @@ export interface GameRef {
 export interface Config {
   tweaks: Tweaks;
   fexProfiles: Record<string, string>;
+  /** Thunk names from the base FEX config's ThunksDB — the namespace the UI may offer.
+   *  game-launch ignores any name not in the base, so there is nothing else worth listing. */
+  fexThunks: string[];
   power: PowerStatus;
   osVersion: string;
   installedGames?: InstalledGame[];

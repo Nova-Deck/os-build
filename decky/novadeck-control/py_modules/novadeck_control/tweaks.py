@@ -21,6 +21,7 @@ import tempfile
 
 TWEAKS_CONFIG = pathlib.Path("/etc/novadeck/game-tweaks.json")
 FEX_PROFILES_CONFIG = pathlib.Path("/usr/share/novadeck/fex-profiles.json")
+FEX_BASE_CONFIG = pathlib.Path("/usr/share/fex-emu/Config.json")
 MAX_PAYLOAD = 256 * 1024
 
 
@@ -54,6 +55,25 @@ def load_fex_profiles():
         }
     except (OSError, ValueError):
         return {}
+
+
+def load_base_thunks():
+    """Thunk NAMES from the base config's ThunksDB, in base order. Names only, never values.
+
+    The base config decides which thunks EXIST — game-launch's resolve_thunks ignores any name
+    not in it — so the UI enumerates from here rather than carrying its own list. A copy drifted
+    before (fex-profiles.json once shipped an EGL key the base does not have; issue #47), which
+    is why this is a read of the shipped file and not a constant.
+    """
+    try:
+        with FEX_BASE_CONFIG.open(encoding="utf-8") as f:
+            base = json.load(f)
+        thunks = base.get("ThunksDB")
+        if not isinstance(thunks, dict):
+            return []
+        return [name for name in thunks if isinstance(name, str)]
+    except (OSError, ValueError):
+        return []
 
 
 def load_tweaks():

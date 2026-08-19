@@ -1,12 +1,13 @@
 # FEX patches
 
-Both are **build fixes for aarch64 + clang**, not behaviour changes, and both are still required
-at FEX-2608 (`e869aa6`). Neither is upstream — re-verified absent from the FEX-2608 tree on
-2026-08-06 (`FEXCore/Source/CMakeLists.txt` has no `set_source_files_properties` for
+`0001`/`0005` are **build fixes for aarch64 + clang**, not behaviour changes, and both are still
+required at FEX-2608 (`e869aa6`). Neither is upstream — re-verified absent from the FEX-2608 tree
+on 2026-08-06 (`FEXCore/Source/CMakeLists.txt` has no `set_source_files_properties` for
 `InterpreterFallbacks.cpp`; `ThunkLibs/include/common/Host.h` has no `signed char*` conversion).
+`0006` is our one **behaviour fix** (issue #49), an upstream candidate.
 
-They are numbered `0001`/`0005` to match the numbering of the upstream patch series they came from
-(a Qualcomm-handheld distro's FEX package); the gap is not a missing file.
+`0001`/`0005` are numbered to match the upstream patch series they came from (a Qualcomm-handheld
+distro's FEX package); the gaps are not missing files.
 
 ## `0001-fexcore-aarch64-workaround-llvm18-ice.patch`
 
@@ -27,6 +28,23 @@ conversion operators to `ThunkLibs/include/common/Host.h`.
 
 Only bites when building the thunks (`BUILD_THUNKS=ON`), which we do — so it is not optional here
 even though a thunk-less FEX would compile without it.
+
+## `0006-thunk-overlays-arch-style-lib-prefixes.patch`
+
+Behaviour fix (issue #49), HW-diagnosed 2026-08-19. On a **non-multiarch** guest rootfs,
+`FileManager::LoadThunkDatabase` generates thunk overlay path prefixes Fedora-style only
+(`lib64/` for 64-bit, `lib/` for 32-bit). Our guest is Arch-layout: `/usr/lib` is the canonical
+64-bit dir (`lib64` is a symlink) and 32-bit lives in `/usr/lib32` — so the guest ld.so never
+opens a path the overlay map keys, and **every enabled 64-bit thunk is a silent no-op**. Proven
+both ways on Super Meat Boy amd64 under system-FEX: `ThunksDB {"GL": 1}` delivered with no
+engagement; the same launch with `LD_LIBRARY_PATH=/usr/lib64` (forcing the Fedora spelling)
+loaded `libGL-guest.so` and forwarded to the host.
+
+The patch generates both spellings in both bitness modes. Extra prefixes are harmless where the
+layout doesn't use them: overlay keys nothing ever opens are never consulted.
+
+Upstream candidate — it also fixes Steam's own per-title thunk toggles (Valve's compat tool) for
+any Arch-layout guest, though only once Valve's FEX builds carry it. Drop when upstream takes it.
 
 ## Bumping FEX
 

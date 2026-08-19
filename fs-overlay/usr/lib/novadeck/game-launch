@@ -26,6 +26,14 @@ value otherwise. So exporting FEX_APP_CONFIG here is a supported override, not a
 is also what lets the two callers stack without fighting: whichever runs first wins, the inner
 one then leaves it alone.
 
+FEX_APP_CONFIG IS ONE SLOT, NOT A STACK (issue #50). Valve's fex-compat-tool — and Proton — skip
+generating their curated per-title config entirely when the variable is already set, so exporting
+it does not out-rank Steam's curation, it PREVENTS it. Two consequences shape this file: we only
+claim the slot when the user explicitly tuned FEX (an enabled game with only perf tweaks exports
+nothing and Steam's own curation keeps working), and when we do claim it we first reproduce the
+curation from the same env vars Valve's tool reads (steam_curated), so our overrides sit ON TOP
+of Steam's per-title knowledge instead of erasing it.
+
 Failing to tune FEX must never stop a game from launching: every error below degrades to "exec
 the command with whatever config it would have picked itself".
 """
@@ -103,13 +111,68 @@ def settings_for(tweaks, game_id):
 
 
 def resolve_config(settings, profiles):
+    """The user's EXPLICIT tuning choice, or None when they made none.
+
+    None used to fall back to the default profile — a restatement of the base config's values —
+    which looked harmless but was the issue #50 clobber: writing those values into FEX_APP_CONFIG
+    overrode Steam's per-title TSO/Multiblock curation with our defaults on every launch that had
+    any tweak enabled. Nothing explicit now means nothing resolved; the caller decides whether a
+    config is written at all.
+    """
     profile_id = settings.get("fexProfile")
     if isinstance(profile_id, str) and profile_id in profiles:
         return profiles[profile_id]["config"]
     explicit = settings.get("fexConfig")
     if isinstance(explicit, dict):
         return explicit
-    return profiles["default"]["config"]
+    return None
+
+
+def steam_curated():
+    """Steam's per-title FEX curation, reproduced from the same env its compat tool reads.
+
+    Because FEX_APP_CONFIG is one slot (see the module docstring), claiming it silences Valve's
+    fex-compat-tool's own config generation — so anything it would have said has to be restated
+    here first, from the same inputs (`generate_app_config` in the shipped tool, and upstream
+    `Source/Steam/CompatTool.cpp`): STEAM_FEX_TSOENABLED / STEAM_FEX_MULTIBLOCK carry the
+    appinfo-driven per-title baseline, and STEAM_COMPAT_FEX_CONFIG carries the user's choices in
+    Steam's OWN per-title FEX UI. Outside Steam (system-FEX launches) none of these exist and
+    this contributes nothing.
+
+    STEAM_COMPAT_FEX_CONFIG keys are TRI-STATE, matching upstream CompatTool.cpp after
+    `2b0d94536` ("Become more picky about configs"): `Key:1` sets it, `Key:0` clears it, an
+    absent key contributes NOTHING. The release python tool still pins every absent key to 0;
+    upstream declared that a bug, and reproducing it here would pin TSO/Multiblock/thunks the
+    user never touched — the exact seizure this file exists to avoid.
+    """
+    config = {}
+    thunks = {}
+    for env_name, key in (("STEAM_FEX_TSOENABLED", "TSOEnabled"), ("STEAM_FEX_MULTIBLOCK", "Multiblock")):
+        value = os.environ.get(env_name)
+        if value is None:
+            continue
+        try:
+            config[key] = "1" if int(value) else "0"
+        except ValueError:
+            pass  # same as Valve's tool: a malformed value contributes nothing
+    ui = os.environ.get("STEAM_COMPAT_FEX_CONFIG", "")
+
+    def flag(option):
+        if f"{option}:1" in ui:
+            return True
+        if f"{option}:0" in ui:
+            return False
+        return None
+
+    for option, key in (("TSOEnabled", "TSOEnabled"), ("Multiblock", "Multiblock")):
+        chosen = flag(option)
+        if chosen is not None:
+            config[key] = "1" if chosen else "0"
+    for option, name in (("ThunksDB_GL", "GL"), ("ThunksDB_Vulkan", "Vulkan")):
+        chosen = flag(option)
+        if chosen is not None:
+            thunks[name] = 1 if chosen else 0
+    return config, thunks
 
 
 def resolve_thunks(settings, base_thunks):
@@ -125,8 +188,10 @@ def resolve_thunks(settings, base_thunks):
     Restating the base here therefore does NOT mean "keep the default" -- it PINS it, over the
     reading FEX's own per-title curation. That matters because the FEX reading this file is
     usually not the one whose config we copied: Valve's compat tool ships its own thunk libs and
-    fills ThunksDB from a Valve-curated per-title database (via STEAM_COMPAT_FEX_CONFIG), and
-    FEX has a Steam_<appid>_<exe> config mechanism of its own. Both are theirs to decide.
+    fills ThunksDB from STEAM_COMPAT_FEX_CONFIG (Steam's per-title FEX UI) -- but only when
+    FEX_APP_CONFIG is unset, so when we DO write a config, steam_curated() restates its mapping
+    and this function's result overlays it. FEX also has a Steam_<appid>_<exe> config mechanism
+    of its own; that one is a real lower layer and stays theirs.
 
     Getting this backwards is what broke it before: an absent override defaulted to "on", which
     reverted the thunkless base config on every launch and SIGSEGV'd Valve's FEX on native
@@ -184,15 +249,29 @@ def write_config(settings, game_id, profiles):
     for key in ("RootFS", "ThunkGuestLibs", "ThunkHostLibs"):
         config.get("Config", {}).pop(key, None)
 
-    # Only keys some profile actually declares may be overridden — a typo in game-tweaks.json
-    # must not inject arbitrary keys into FEX's config.
-    allowed = set().union(*(profile["config"].keys() for profile in profiles.values()))
     resolved = resolve_config(settings, profiles)
-    config.setdefault("Config", {}).update({k: v for k, v in resolved.items() if k in allowed})
+    thunk_overrides = resolve_thunks(settings, config.get("ThunksDB", {}))
+    if resolved is None and not thunk_overrides:
+        # Nothing explicit — don't claim the slot at all (issue #50). FEX_APP_CONFIG is one
+        # slot: Valve's compat tool and Proton generate Steam's curated per-title config only
+        # when it is unset, so a config written here "for completeness" erases that curation.
+        return None
+
+    # Seed with Steam's curation FIRST, so our explicit choices override it rather than erase it:
+    # base config -> Steam's per-title curation -> the user's explicit profile/thunks.
+    curated_config, curated_thunks = steam_curated()
+    config.setdefault("Config", {}).update(curated_config)
+
+    if resolved is not None:
+        # Only keys some profile actually declares may be overridden — a typo in game-tweaks.json
+        # must not inject arbitrary keys into FEX's config.
+        allowed = set().union(*(profile["config"].keys() for profile in profiles.values()))
+        config["Config"].update({k: v for k, v in resolved.items() if k in allowed})
+
     # No override means no ThunksDB key at all -- see resolve_thunks. An empty object would be
     # equivalent to FEX (it iterates the members and there are none), so this is for the reader:
     # a config with no ThunksDB plainly states that we are not touching anyone's thunks.
-    thunks = resolve_thunks(settings, config.get("ThunksDB", {}))
+    thunks = {**curated_thunks, **thunk_overrides}
     if thunks:
         config["ThunksDB"] = thunks
     else:
@@ -267,7 +346,9 @@ def main():
         # game-launch writes the config and the in-tool shim then finds it already set and does
         # not write a second one.
         if "FEX_APP_CONFIG" not in os.environ:
-            os.environ["FEX_APP_CONFIG"] = str(write_config(settings, appid(), contract["profiles"]))
+            written = write_config(settings, appid(), contract["profiles"])
+            if written is not None:  # nothing explicit: Steam's own curation keeps the slot
+                os.environ["FEX_APP_CONFIG"] = str(written)
     except Exception as exc:  # noqa: BLE001 - a tuning failure must not block the launch
         print(f"{PROG}: no FEX config written ({exc}); using Proton's own", file=sys.stderr)
 

@@ -35,6 +35,17 @@ const POWER_PROFILE_OPTIONS = [
   { data: "performance", label: "Performance" },
 ];
 
+// Tri-state on purpose, and the third state is the default (issue #47). FEX applies ThunksDB
+// per library name across every config layer, ours last — so writing an entry PINS that thunk
+// over whatever the FEX running the game decided (for native x86 titles that is Valve's compat
+// tool and its per-title curation). A plain checkbox would write a value for every thunk and
+// silently seize all of it; only the two explicit states may reach game-tweaks.json.
+const THUNK_OPTIONS = [
+  { data: "", label: "(as shipped)" },
+  { data: "on", label: "Force on" },
+  { data: "off", label: "Force off" },
+];
+
 const NICE_MIN = -20;
 const NICE_MAX = 19;
 
@@ -75,6 +86,19 @@ export function Games({ config, setConfig }: { config: Config; setConfig: Dispat
     { data: "", label: "(unchanged)" },
     ...Object.entries(config.fexProfiles).map(([name, label]) => ({ data: name, label })),
   ];
+
+  const thunkValue = (name: string) => {
+    const chosen = settings.thunks ? settings.thunks[name] : undefined;
+    return chosen === undefined ? "" : chosen ? "on" : "off";
+  };
+  const setThunk = (name: string, state: string) => {
+    // "(as shipped)" removes the entry, and an emptied map removes the `thunks` key itself —
+    // absence is the contract (see THUNK_OPTIONS), and game-launch then emits no ThunksDB at all.
+    const next = { ...(settings.thunks || {}) };
+    if (state === "") delete next[name];
+    else next[name] = state === "on";
+    patch({ thunks: Object.keys(next).length > 0 ? next : undefined });
+  };
 
   return (
     <>
@@ -176,6 +200,21 @@ export function Games({ config, setConfig }: { config: Config; setConfig: Dispat
         <SelectEdit label="FEX profile" value={settings.fexProfile || ""} options={fexOptions}
           disabled={!gameEnabled} onChange={(v) => patch({ fexProfile: v || undefined })} />
       </PanelSection>
+      {/* Per-game only, though the consumer would honour a global map too: forcing a thunk is a
+          known-crashy experiment (see the note below), so it stays scoped to one title. */}
+      {isGame && config.fexThunks.length > 0 ? (
+        <PanelSection title="FEX THUNKS">
+          <div className="novadeck-field-note">
+            Routes a guest library to the host driver. Ours ship OFF on purpose — host GPU thunks
+            are known to crash native x86-64 Linux games. Forcing one is an experiment, not a fix.
+            Takes effect on next launch.
+          </div>
+          {config.fexThunks.map((name) => (
+            <SelectEdit key={name} label={name} value={thunkValue(name)} options={THUNK_OPTIONS}
+              disabled={!gameEnabled} onChange={(v) => setThunk(name, v)} />
+          ))}
+        </PanelSection>
+      ) : null}
     </>
   );
 }

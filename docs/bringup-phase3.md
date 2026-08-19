@@ -9,7 +9,7 @@ Phase 3 — see `.claude/plans/novadeck.plan.md`.
 | File | Role |
 |------|------|
 | `STEAM_SEED.pin` + `fetch-steam-seed.sh` | **Build host**: fetch the native arm64 client seed + SR3 runtime (channel `steamdeck_publicbeta`) into `work/steam-seed/`. `make-sdcard.sh` pre-seeds it **directly into the `/home` partition** — the only client copy in the image. |
-| `usr/bin/novadeck-steam` | Launcher `NOVADECK_SESSION_CMD` points at: sets `HOME`/`LD_LIBRARY_PATH`, execs the native client **raw on the host** (no pressure-vessel) in `-gamepadui -steamos3 -steampal -steamdeck`. |
+| `usr/bin/novadeck-steam` | Launcher `NOVADECK_SESSION_CMD` points at: sets `HOME`/`LD_LIBRARY_PATH`, execs the native client **raw on the host** (no pressure-vessel) in `-gamepadui -steamos3 -steamdeck`. |
 
 The native client is **pre-seeded directly into the `/home` partition** by `make-sdcard.sh` (a
 ready-to-run `/home/deck/.local/share/Steam`, owned `deck:deck` via `mkfs.ext4 -d`), so a healthy

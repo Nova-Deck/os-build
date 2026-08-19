@@ -121,7 +121,26 @@ export SRT_URLOPEN_PREFER_STEAM=1
 export SDL_VIDEO_MINIMIZE_ON_FOCUS_LOSS=0      # keep the shell up when it loses focus
 export vk_xwayland_wait_ready=false            # don't block on buffers idling before present to gamescope
 
-# -steamdeck/-steamos3/-steampal: Deck handheld behaviour. -gamepadui: Big Picture as the shell.
+# -steamdeck/-steamos3: Deck handheld behaviour. -gamepadui: Big Picture as the shell.
+#
+# NOT -deckard, and this is not a preference. -deckard asserts Steam Frame device identity, which
+# sets ON_FRAME in the client's UI bundle, and the guided-tour wrapper reads
+#
+#     onButtonDown: ON_FRAME ? void 0 : e.onAction   (same for onActivate and onKeyDown)
+#
+# so under -deckard the ONE screen that says "PRESS any button to continue" has nothing listening,
+# on a device the same client serves the Deck step list to. A fresh card cannot get past it: no
+# button, no keyboard, no synthetic DOM or vgp_* event dismisses it, and a release card has no SSH
+# to escape from. Measured on HW 2026-08-19 by reading the live listeners under both flags, one
+# variable changed — -steamdeck wires vgp_onbuttondown, -deckard leaves only focus/direction.
+# The tour itself fires whenever Deck_GuidedTourVersionSeen reads absent, which is every freshly
+# flashed card, so this is the normal first-boot path and not an edge case.
+#
+# NO -steampal. It was here only because an early flag set was copied wholesale from a peer distro,
+# the same way the pinned-client trio below arrived; nothing here ever established what it does for
+# us. It is a SECOND device-identity assertion, so at best redundant and plausibly contradictory.
+# It is also EXONERATED for the welcome screen — a clean single-trial fresh login without it still
+# showed the tour — so it stays dropped on the copied-wholesale reasoning alone. Dropped 2026-08-19.
 #
 # -noverifyfiles: skip the client's startup file-verification pass. We bake a hand-assembled offline
 #   shell (pre-seeded into /home by make-sdcard.sh) that won't checksum-match Valve's manifests, and there's no network
@@ -151,7 +170,7 @@ export vk_xwayland_wait_ready=false            # don't block on buffers idling b
 # 2026-07-03: update downloaded, SteamUI relaunched, logo/version unchanged). We want the Deck-faithful
 # self-updating client, so those three were removed while -noshaders (unrelated) stays.
 # Word-splitting on the extra-args is intentional (sh).
-: "${NOVADECK_STEAM_ARGS:=-gamepadui -steamos3 -steampal -steamdeck -noverifyfiles -noshaders}"
+: "${NOVADECK_STEAM_ARGS:=-gamepadui -steamos3 -steamdeck -noverifyfiles -noshaders}"
 
 # CEF remote-debugging, ALWAYS on (2026-08-08, was NOVADECK_DEBUG-gated). Steam's Big Picture UI
 # is CEF; this sentinel makes the client open its DevTools port. It is the ONLY path Decky Loader

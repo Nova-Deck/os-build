@@ -145,13 +145,13 @@ def resolve_thunks(settings, base_thunks):
 def config_dir():
     """Where the generated config lands. /usr is read-only, so it cannot live beside the base.
 
-    THE CACHE DIR, not $XDG_RUNTIME_DIR, and the difference is load-bearing the day a title runs
+    THE CACHE DIR, not $XDG_RUNTIME_DIR, and the difference is load-bearing whenever a title runs
     inside pressure-vessel: PV shares the cache path into the container and does NOT share the
     runtime dir, so a config written there is simply invisible to the FEX that reads it — and FEX
     skips an unreadable FEX_APP_CONFIG SILENTLY, which surfaces as "the profile did nothing"
-    rather than as an error. Our Protons run bare today (assemble-rootfs.sh strips
-    require_tool_appid), so the runtime dir happens to work; that is a property of a decision
-    elsewhere in the tree, which is exactly the kind of coupling not worth keeping.
+    rather than as an error. That is not a hypothetical any more: our Protons run INSIDE SLR4
+    today, because assemble-rootfs.sh leaves `require_tool_appid` intact (it asserts it rather
+    than stripping it). The runtime dir would break per-game tuning for every Proton title.
 
     A relative XDG_CACHE_HOME is invalid per the XDG spec and would be re-anchored by portable
     FEX, so it is rejected rather than joined.

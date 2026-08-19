@@ -123,7 +123,10 @@ fi
 rm -rf "$SEED_DIR"
 mkdir -p "$SEED_DIR/package"
 
-# Channel marker so the client tracks the arm64 publicbeta line (not the x86 default).
+# Channel marker so the client tracks an arm64 line (not the x86 default). We write it, but we do not
+# OWN it: the client rewrites this file to match the flag it was started with, so it has to already
+# agree with the launch flag below (see STEAM_SEED.pin). A disagreement surfaces in the post-install
+# gate, which reports the channel the client actually ended on.
 echo "${CHANNEL}" >"$SEED_DIR/package/beta"
 # Reuse the manifest we already fetched (no second GET); Steam's updater reads it below.
 cp "$LIVE_MANIFEST" "$STAGED_MANIFEST"
@@ -234,6 +237,14 @@ docker run --rm --platform linux/arm64 \
     if [ ! -f "$STEAM/steamrtarm64/steamui.so" ] || [ ! -f "$INSTALLED" ]; then
       echo "[fetch-steam-seed] ERROR: self-install incomplete (updater rc ${rc}): steamui.so or .installed missing;" >&2
       echo "                        the seed would re-install on first boot." >&2
+      # A RENAMED .installed reads exactly like a FAILED one, so say which it is. The client rewrites
+      # package/beta to match its launch flag; when that lands on a channel the pin does not name, the
+      # install succeeded and only our derived name is wrong (2026-08-19: -deckard moved the client to
+      # linux_arm64_beta_* while the pin still said steamdeck_publicbeta).
+      echo "                        expected:      package/${MANIFEST_NAME}.installed" >&2
+      echo "                        client set beta to: $(cat "$STEAM/package/beta" 2>/dev/null || echo "<none>")" >&2
+      echo "                        .installed present: $(ls -1 "$STEAM"/package/*.installed 2>/dev/null | xargs -r -n1 basename | tr "\n" " ")" >&2
+      echo "                        (a channel differing from the pin means the launch flag and STEAM_SEED.pin disagree)" >&2
       echo "--- steam stdout (tail) ---" >&2; tail -n 30 /tmp/steam.stdout >&2 || true
       echo "--- steam stderr (tail) ---" >&2; tail -n 30 /tmp/steam.stderr >&2 || true
       exit 1

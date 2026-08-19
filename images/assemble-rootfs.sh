@@ -283,12 +283,17 @@ echo "  RAUC: keyring.pem + stage-1/2 boot software + /usr/bin/steamos-bootconf 
 # WE NO LONGER TOUCH toolmanifest.vdf AT ALL, and both edits that used to live there are worth
 # their epitaphs:
 #
-#   `require_tool_appid` was STRIPPED, because it names Valve's arm64 SLR container (4185400) and a
-#   non-Deckard client never *registered* that as a compat tool even with its files installed — the
-#   launch died before Proton ran (AppError_51). The client that unlocked Valve's FEX compat tool
-#   fixed this: HW-confirmed 2026-08-17, it registers 4185400, installs it on demand, and composes
-#   the SLR4 entry point around a tool that asks for it. Stripping it now would opt us OUT of the
+#   `require_tool_appid` was STRIPPED, because it names Valve's arm64 SLR container (4185400) and an
+#   older client never *registered* that as a compat tool even with its files installed — the launch
+#   died before Proton ran (AppError_51). Once the account gate on Valve's FEX compat tool opened,
+#   that stopped being true: the client registers 4185400, installs it on demand, and composes the
+#   SLR4 entry point around a tool that asks for it. Stripping it now would opt us OUT of the
 #   container Valve builds and tests against, for nothing.
+#
+#   This was written up as a property of the "Deckard client" — it is NOT. Proton has since been
+#   tested on a non-deckard build and runs, so the fix rode the ACCOUNT GATE, not the launch flag or
+#   the client channel. Corrected 2026-08-19, after the stale wording nearly blocked reverting
+#   -deckard on the false belief that the revert would cost us Proton.
 #
 #   `commandline` was REPOINTED at an in-tool shim, so per-game FEX tuning ran in front of Proton
 #   automatically. That shim exec'd /usr/lib/novadeck/game-launch — a path that does not exist

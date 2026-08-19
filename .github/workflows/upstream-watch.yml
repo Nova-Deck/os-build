@@ -1,0 +1,105 @@
+# Daily upstream watchers. Neither job bumps anything — each detects that an upstream we track
+# moved and opens ONE issue assigned to the maintainer to run the manual revalidation drill.
+# Both are deliberately stateless:
+#   - the rootfs job's baseline IS packages/fex-rootfs/prebuilt.pin (repo state, no side channel);
+#   - the compat-tool job carries its state in the issue TITLE (searched across open AND closed
+#     issues, so closing an issue marks that build as handled and it is never re-filed).
+# Both jobs FAIL when their upstream parse yields nothing: a watcher that cannot see must go red,
+# not stay quietly green.
+name: upstream-watch
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  issues: write
+  contents: read
+
+env:
+  ASSIGNEE: loki666
+
+jobs:
+  fex-rootfs:
+    name: FEX guest RootFS update
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compare upstream index against the pin
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          pinned="$(sed -n 's/^version:[[:space:]]*//p' packages/fex-rootfs/prebuilt.pin | head -1)"
+          [ -n "$pinned" ] || { echo "::error::prebuilt.pin has no version: field"; exit 1; }
+
+          # Schema-agnostic on purpose: pull every ArchLinux/<date>/ArchLinux.ero mention out of
+          # the index and take the newest date. A schema change that hides them goes red here.
+          latest="$(curl -fsSL --retry 3 https://rootfs.fex-emu.gg/RootFS_links.json \
+            | grep -oE 'ArchLinux/[0-9]{4}-[0-9]{2}-[0-9]{2}/ArchLinux\.ero' \
+            | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}' | sort -u | tail -1)"
+          [ -n "$latest" ] || { echo "::error::no ArchLinux.ero entries found in RootFS_links.json"; exit 1; }
+
+          echo "pinned=$pinned latest=$latest"
+          if [ "$latest" \> "$pinned" ]; then
+            title="upstream: FEX guest RootFS $latest published (pinned: $pinned)"
+            if [ "$(gh issue list --state all --search "in:title \"$title\"" --json number --jq length)" -gt 0 ]; then
+              echo "issue already filed for $latest"; exit 0
+            fi
+            gh issue create --title "$title" --assignee "$ASSIGNEE" \
+              --label P2 --label area/steam --body "$(cat <<EOF
+          Upstream published a newer FEX guest RootFS: **$latest** (we pin **$pinned**).
+          Index: https://rootfs.fex-emu.gg/RootFS_links.json
+
+          Bump drill (see the fex-guest-rootfs-bump notes — a bump drags more than the pin):
+          - [ ] \`packages/fex-rootfs/prebuilt.pin\`: version + url + sha256 together; verify the download against upstream's XXH3 first
+          - [ ] \`packages/fex-emu\` sysroot pins (guest thunks compile against the guest's packages) + overlay rebuild
+          - [ ] \`packages/mesa-x86/builder.pin\`: snapshot must match the new guest date (build.sh asserts it)
+          - [ ] verify by extracting the .ero, not by boot: locales (C.utf8-only?), ICD library_path shape, manifest presence
+          - [ ] revalidate the mesa-x86 relative-ICD workaround: check a compat-tool title's maps for libvulkan_freedreno — the failure mode is a SILENT GL fallback, "the game runs" proves nothing
+          - [ ] HW pass on the two canonical native x86 titles (Super Meat Boy, Parking Garage Rally Circuit)
+          EOF
+          )"
+          else
+            echo "pin is current"
+          fi
+
+  fex-compat-tool:
+    name: FEX compat tool release channel
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the public branch buildid
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # Valve's FEX Steam Play tool, app 3127680. Anonymous appinfo is public; the docker
+          # image saves us a steamcmd install. app_info_update forces a fresh appinfo cache.
+          vdf="$(docker run --rm steamcmd/steamcmd:latest \
+            +login anonymous +app_info_update 1 +app_info_print 3127680 +quit)"
+          buildid="$(printf '%s\n' "$vdf" \
+            | awk '/"public"/{f=1} f && /"buildid"/{gsub(/"/,""); print $2; exit}')"
+          [ -n "$buildid" ] || { echo "::error::could not parse public-branch buildid for app 3127680"; exit 1; }
+
+          echo "public buildid=$buildid"
+          title="upstream: FEX compat tool public build $buildid"
+          if [ "$(gh issue list --state all --search "in:title \"$title\"" --json number --jq length)" -gt 0 ]; then
+            echo "build $buildid already filed"; exit 0
+          fi
+          gh issue create --title "$title" --assignee "$ASSIGNEE" \
+            --label P2 --label area/steam --body "$(cat <<EOF
+          Valve shipped a new **public** (release channel) build of the FEX compat tool
+          (app 3127680): buildid **$buildid**. The device picks it up on its own — what needs
+          re-checking is every behavior we verified against the previous build:
+
+          - [ ] one-slot \`FEX_APP_CONFIG\`: with tweaks enabled, does the tool still skip its own config generation? (environ of the FEX process names OUR ~/.cache/novadeck-fex file; no /tmp/fex-app-config-*.json)
+          - [ ] \`STEAM_COMPAT_FEX_CONFIG\` parsing: tri-state (Key:1/Key:0/absent) or the old absent-means-0? game-launch's steam_curated() must match (#50)
+          - [ ] provider ICD handling: does an as-shipped Vulkan title load libvulkan_freedreno from /run/gfx, or silently fall back to GL? (maps, never "the game runs")
+          - [ ] thunk engagement: did the /run/gfx + pv-overrides overlay prefixes (FEX-Emu/FEX#5821) reach release? Force Vulkan on PGRC and read the maps
+          - [ ] the #49-class lib64 prefix behavior in their shipped FEX binary
+
+          Close this issue when the checks are done; a closed issue marks this buildid handled.
+          EOF
+          )"

@@ -1,0 +1,53 @@
+From: Philippe Simons <simons.philippe@gmail.com>
+Subject: [PATCH] FileManagement: generate Arch-style lib prefixes for thunk overlays
+
+On a non-multiarch guest rootfs the thunk overlay path prefixes are
+generated Fedora-style only: lib64/ for 64-bit, lib/ for 32-bit. Arch
+layouts spell it the other way around (lib/ is 64-bit, lib32/ is 32-bit,
+lib64 is a symlink to lib), and the guest ld.so resolves libraries
+through the canonical spelling -- so on an Arch guest every 64-bit
+overlay key names a path no open() ever uses, and enabling a thunk is a
+silent no-op. HW-observed: ThunksDB {"GL": 1} delivered, config read,
+game renders on the guest Mesa with no redirect; forcing the lib64
+spelling via LD_LIBRARY_PATH=/usr/lib64 made the same launch load
+libGL-guest.so and forward to the host.
+
+Generate both spellings in both modes. Extra prefixes are harmless where
+they do not exist: overlay keys nothing opens are never consulted.
+---
+--- a/Source/Tools/LinuxEmulation/LinuxSyscalls/FileManagement.cpp	2026-08-19 21:41:04.178590994 +0200
++++ b/Source/Tools/LinuxEmulation/LinuxSyscalls/FileManagement.cpp	2026-08-19 21:41:27.636528253 +0200
+@@ -76,9 +76,15 @@
+         PathPrefixes.emplace_back(fextl::fmt::format("{}/{}", Prefix, ArchPrefix));
+       }
+     } else {
+-      // Non multi-arch supporting distros like Fedora and Debian have a much more simple layout.
++      // Non multi-arch supporting distros have two library layouts. Fedora-style:
+       // lib/ folders refer to 32-bit library folders.
+-      // li64/ folders refer to 64-bit library folders.
++      // lib64/ folders refer to 64-bit library folders.
++      // Arch-style (lib64 is a symlink to lib):
++      // lib/ folders refer to 64-bit library folders.
++      // lib32/ folders refer to 32-bit library folders.
++      // Generate both spellings: an Arch guest's ld.so resolves through the canonical lib/
++      // paths, so without them every 64-bit thunk overlay misses and enabling a thunk is a
++      // silent no-op.
+       constexpr static std::array<std::string_view, 4> LibPrefixes = {
+         "/usr",
+         "/usr/local",
+@@ -87,10 +93,13 @@
+       };
+ 
+       // We only need to generate 32-bit or 64-bit depending on the operating mode.
+-      const auto ArchPrefix = Is64BitMode() ? "lib64" : "lib";
++      const auto ArchPrefixes = Is64BitMode() ? std::array<std::string_view, 2> {"lib64", "lib"} :
++                                                std::array<std::string_view, 2> {"lib", "lib32"};
+ 
+       for (auto Prefix : LibPrefixes) {
+-        PathPrefixes.emplace_back(fextl::fmt::format("{}/{}", Prefix, ArchPrefix));
++        for (auto ArchPrefix : ArchPrefixes) {
++          PathPrefixes.emplace_back(fextl::fmt::format("{}/{}", Prefix, ArchPrefix));
++        }
+       }
+     }
+ 

@@ -81,6 +81,23 @@ install -Dm0644 build-x86_64/src/freedreno/vulkan/freedreno_icd.x86_64.json "$OU
 install -Dm0644 build-i686/src/freedreno/vulkan/libvulkan_freedreno.so      "$OUT/usr/lib32/libvulkan_freedreno.so"
 install -Dm0644 build-i686/src/freedreno/vulkan/freedreno_icd.i686.json     "$OUT/usr/share/vulkan/icd.d/freedreno_icd.i686.json"
 
+# TEMPORARY WORKAROUND (2026-08-19) — revalidate at the next fex-rootfs bump. Mesa writes an
+# ABSOLUTE library_path into the ICD, which is only correct when this tree is mounted at /. It
+# is not: Valve's compat tool republishes it as the /run/gfx graphics-provider mount, where
+# /usr/lib/... resolves to the CONTAINER's /usr instead of the provider copy. A bare filename
+# makes the Vulkan loader resolve through the dlopen search path, which is correct on every
+# mount point (and is how Valve's own runtime ICDs are shipped). The guest ld.so.cache lists
+# both drivers, so the merged-mount consumers resolve it identically. If a future guest image
+# ships relative-path ICDs of its own (or Valve's tooling starts rewriting them), drop this.
+sed -i 's|"library_path": "/usr/lib/libvulkan_freedreno.so"|"library_path": "libvulkan_freedreno.so"|' \
+  "$OUT/usr/share/vulkan/icd.d/freedreno_icd.x86_64.json"
+sed -i 's|"library_path": "/usr/lib32/libvulkan_freedreno.so"|"library_path": "libvulkan_freedreno.so"|' \
+  "$OUT/usr/share/vulkan/icd.d/freedreno_icd.i686.json"
+for icd in "$OUT"/usr/share/vulkan/icd.d/freedreno_icd.*.json; do
+  grep -q '"library_path": "libvulkan_freedreno.so"' "$icd" \
+    || { echo "ERROR: mesa-x86: $icd still carries an absolute library_path (mesa changed its ICD format?)" >&2; exit 1; }
+done
+
 # The guest rootfs ships no xcb-keysyms (verified against the 2026-08-11 image), but a Turnip
 # built here links it (mesa's x11 WSI). An ICD with an unresolvable NEEDED is dropped SILENTLY
 # by pressure-vessel's dlopen inspection, so the dep rides along for both arches.

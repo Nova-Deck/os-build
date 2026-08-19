@@ -15,12 +15,12 @@ Before=bluetooth.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/usr/lib/novadeck/gen-bdaddr.sh
-# The script bounds every wait AND every btmgmt call itself, so this is only a backstop. It has to sit
-# above the script's own worst case or it would fire FIRST and kill a run that was still making
-# progress — which is exactly what happened at 60s on the first HW boot: 15s for the controller, then
-# up to 15 address attempts each capped at 10s, then 10s for it to re-register.
-TimeoutStartSec=300
+ExecStart=/usr/lib/novadeck/gen-bdaddr.py
+# The script speaks the mgmt socket directly and bounds every wait and every read, so this is only a
+# backstop. It sits above the script's own worst case (30s for the controller + 20s for it to
+# re-register + socket timeouts) — a backstop below the thing it backstops is not one, which is how
+# the first HW boot got SIGTERM'd at 60s mid-run.
+TimeoutStartSec=180
 
 [Install]
 WantedBy=multi-user.target

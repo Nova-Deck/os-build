@@ -16,9 +16,11 @@ Before=bluetooth.service
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/lib/novadeck/gen-bdaddr.sh
-# The script bounds its own waits (15s for the controller, 10s for it to re-register); this is the
-# backstop if btmgmt itself hangs on a wedged controller.
-TimeoutStartSec=60
+# The script bounds every wait AND every btmgmt call itself, so this is only a backstop. It has to sit
+# above the script's own worst case or it would fire FIRST and kill a run that was still making
+# progress — which is exactly what happened at 60s on the first HW boot: 15s for the controller, then
+# up to 15 address attempts each capped at 10s, then 10s for it to re-register.
+TimeoutStartSec=300
 
 [Install]
 WantedBy=multi-user.target

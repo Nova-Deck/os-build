@@ -20,9 +20,18 @@ set -eu
 
 STATE=/var/lib/novadeck
 DEV_WAIT=15   # seconds to wait for the controller to be created by the QCA setup
+SET_TRIES=15  # attempts at handing it the address (it may not reach mgmt until setup finishes)
 CFG_WAIT=10   # seconds to wait for it to re-appear CONFIGURED after we set the address
 
 log() { echo "[novadeck-bdaddr] $*" >&2; }
+
+# EVERY btmgmt call goes through this, and the reason is a real failure: at boot this unit hung past
+# its TimeoutStartSec and was SIGTERM'd, having produced NO output at all — so it blocked before its
+# first log line, on a btmgmt that returns instantly by hand. The race is that
+# /sys/class/bluetooth/hci0 appears when hci_register_dev() runs, ~2s BEFORE the QCA firmware download
+# finishes, so the sysfs node is not a promise that mgmt knows about the controller yet. Nothing here
+# may block indefinitely on a controller that is still coming up.
+mgmt() { timeout 10 btmgmt "$@" 2>/dev/null; }
 
 # The controller is created by the QCA setup, not by us, and that lands a few seconds into boot. Wait
 # rather than race it. A board with no bluetooth node never produces one — that is not this unit's
@@ -36,7 +45,7 @@ done
 
 # Already configured (a board whose DTS or bootloader DOES supply an address) — leave it alone. Its
 # address is the hardware's, and ours would be a downgrade.
-if btmgmt info 2>/dev/null | grep -q '^hci0:'; then
+if mgmt info | grep -q '^hci0:'; then
   log "hci0 is already configured — leaving its address alone"
   exit 0
 fi
@@ -65,14 +74,23 @@ else
   ( umask 022; printf '%s\n' "$BDADDR" >"$STATE/bdaddr" )
 fi
 
-log "configuring hci0 with $BDADDR"
-btmgmt --index 0 public-addr "$BDADDR" >/dev/null
+# Retry the set itself rather than assuming one shot lands: until setup completes, index 0 may not
+# exist in either list. Each attempt is bounded, so the worst case is SET_TRIES*(10+1)s, well inside
+# the unit's TimeoutStartSec.
+n=0
+until mgmt --index 0 public-addr "$BDADDR" >/dev/null; do
+  n=$((n + 1))
+  [ "$n" -ge "$SET_TRIES" ] && { log "ERROR: btmgmt public-addr $BDADDR did not succeed in $SET_TRIES tries — controller never reached mgmt"; exit 1; }
+  [ "$n" = 1 ] && log "controller not ready for a public address yet; retrying"
+  sleep 1
+done
+log "set public address $BDADDR (attempt $((n + 1)))"
 
 # Setting the address makes the kernel tear the controller down and re-run QCA setup, so the
 # configured controller appears a second or two LATER. Confirm it actually arrived — a silent success
 # here would look identical to the bug this whole unit exists to fix.
 n=0
-while ! btmgmt info 2>/dev/null | grep -q '^hci0:'; do
+while ! mgmt info | grep -q '^hci0:'; do
   n=$((n + 1))
   [ "$n" -ge "$CFG_WAIT" ] && { log "ERROR: hci0 still not in the mgmt index list ${CFG_WAIT}s after setting $BDADDR"; exit 1; }
   sleep 1

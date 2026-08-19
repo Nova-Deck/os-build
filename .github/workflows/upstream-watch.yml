@@ -69,30 +69,39 @@ jobs:
     name: FEX compat tool release channel
     runs-on: ubuntu-latest
     steps:
-      - name: Check the public branch buildid
+      - name: Check the app change number
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          # Valve's FEX Steam Play tool, app 3127680. Anonymous appinfo is public; the docker
-          # image saves us a steamcmd install. app_info_update forces a fresh appinfo cache.
-          vdf="$(docker run --rm steamcmd/steamcmd:latest \
-            +login anonymous +app_info_update 1 +app_info_print 3127680 +quit)"
-          buildid="$(printf '%s\n' "$vdf" \
-            | awk '/"public"/{f=1} f && /"buildid"/{gsub(/"/,""); print $2; exit}')"
-          [ -n "$buildid" ] || { echo "::error::could not parse public-branch buildid for app 3127680"; exit 1; }
+          # Valve's FEX Steam Play tool, app 3127680. Anonymous appinfo exposes NO depots/branches
+          # section for this app (verified 2026-08-19), so the public-branch buildid is not
+          # reachable without credentials. What IS visible is the PICS CHANGE NUMBER in
+          # app_info_print's header line, which bumps on every app change — builds included,
+          # store metadata too, so an issue can occasionally be a metadata-only bump; the issue
+          # body says how to tell. app_info_print runs twice because the first query of a
+          # steamcmd session often returns before the appinfo cache is populated.
+          out="$(docker run --rm steamcmd/steamcmd:latest \
+            +login anonymous +app_info_update 1 +app_info_print 3127680 +app_info_print 3127680 +quit 2>&1)"
+          change="$(printf '%s\n' "$out" | grep -m1 -oE 'change number : [0-9]+' | grep -oE '[0-9]+' || true)"
+          if [ -z "$change" ]; then
+            echo "::group::steamcmd output (parse failed)"; printf '%s\n' "$out" | tail -40; echo "::endgroup::"
+            echo "::error::could not parse the change number for app 3127680"; exit 1
+          fi
 
-          echo "public buildid=$buildid"
-          title="upstream: FEX compat tool public build $buildid"
+          echo "change number=$change"
+          title="upstream: FEX compat tool changed (change $change)"
           if [ "$(gh issue list --state all --search "in:title \"$title\"" --json number --jq length)" -gt 0 ]; then
-            echo "build $buildid already filed"; exit 0
+            echo "change $change already filed"; exit 0
           fi
           gh issue create --title "$title" --assignee "$ASSIGNEE" \
             --label P2 --label area/steam --body "$(cat <<EOF
-          Valve shipped a new **public** (release channel) build of the FEX compat tool
-          (app 3127680): buildid **$buildid**. The device picks it up on its own — what needs
-          re-checking is every behavior we verified against the previous build:
+          Valve's FEX compat tool (app 3127680) changed: PICS change number **$change**. This
+          fires on ANY app change — check https://steamdb.info/app/3127680/history/ first to see
+          whether it is a real public-branch build or metadata only (anonymous appinfo hides the
+          buildid, so this watch cannot tell them apart). For a real build, re-check every
+          behavior we verified against the previous one:
 
           - [ ] one-slot \`FEX_APP_CONFIG\`: with tweaks enabled, does the tool still skip its own config generation? (environ of the FEX process names OUR ~/.cache/novadeck-fex file; no /tmp/fex-app-config-*.json)
           - [ ] \`STEAM_COMPAT_FEX_CONFIG\` parsing: tri-state (Key:1/Key:0/absent) or the old absent-means-0? game-launch's steam_curated() must match (#50)
@@ -100,6 +109,7 @@ jobs:
           - [ ] thunk engagement: did the /run/gfx + pv-overrides overlay prefixes (FEX-Emu/FEX#5821) reach release? Force Vulkan on PGRC and read the maps
           - [ ] the #49-class lib64 prefix behavior in their shipped FEX binary
 
-          Close this issue when the checks are done; a closed issue marks this buildid handled.
+          Close this issue when the checks are done (or immediately for a metadata-only bump);
+          a closed issue marks this change number handled.
           EOF
           )"

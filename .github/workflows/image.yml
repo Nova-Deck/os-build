@@ -104,8 +104,41 @@ permissions:
   contents: read
 
 jobs:
+  # The one artifact in the build that targets the x86 FEX guest rather than the arm64 host:
+  # the Turnip payload images/assemble-rootfs.sh stages into the image (packages/mesa-x86/).
+  # ITS OWN JOB, ON AN x86_64 RUNNER, because a runner arch is the one thing a per-package
+  # container cannot change: on the arm64 build runner the pinned x86 Arch container would run
+  # under qemu-x86_64, turning a ~10-minute native build into an hour against this workflow's
+  # budget. The payload crosses to the build job as a workflow artifact — deterministic within
+  # the run, unlike a cache restore — and the build job's own `make` re-runs build.sh as a
+  # host-side no-op (its input digest travels with the payload). The cache only spares THIS job
+  # the rebuild when the mesa inputs did not move, which is almost every run.
+  mesa-x86:
+    name: mesa-x86 payload
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/cache@v6
+        with:
+          path: work/mesa-x86
+          key: mesa-x86-${{ hashFiles('packages/mesa-x86/**', 'packages/mesa/PKGBUILD', 'packages/mesa/source.pin', 'packages/mesa/patches/*.patch', 'packages/fex-rootfs/prebuilt.pin') }}
+      - name: build the FEX-guest Turnip payload
+        run: make mesa-x86
+      - name: upload the payload
+        uses: actions/upload-artifact@v7
+        with:
+          name: mesa-x86-payload
+          path: work/mesa-x86
+          # The input-digest marker (.inputs.sha256) is a dotfile, and upload-artifact skips
+          # hidden files by default — without it the build job would try to rebuild under qemu.
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 3
+
   build:
     name: ${{ inputs.artifact }}
+    needs: mesa-x86
     runs-on: ${{ vars.OVERLAY_RUNNER || 'ubuntu-24.04-arm' }}
     # THE ENVIRONMENT IS THE AUTHORIZATION BOUNDARY FOR SIGNING, and it has to be declared here
     # rather than by the caller: a reusable workflow's job cannot be attached to an environment from
@@ -160,6 +193,15 @@ jobs:
           path: work/pacman-cache
           key: pacman-cache-${{ hashFiles('snapshot.pin', 'images/manifest.lock') }}
           restore-keys: pacman-cache-
+
+      # The x86 Turnip payload for the FEX guest, built natively in the mesa-x86 job above. The
+      # rootfs assembly hard-requires it; landing it here means the mesa-x86 make stamp resolves
+      # to a digest-check no-op instead of an emulated build.
+      - name: fetch the mesa-x86 payload
+        uses: actions/download-artifact@v8
+        with:
+          name: mesa-x86-payload
+          path: work/mesa-x86
 
       # ~34 minutes cold for the 8 from-source packages. The runner is fresh, so this is always
       # cold; there is no stamp cache to hit here the way there is on a dev box.

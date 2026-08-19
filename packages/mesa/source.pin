@@ -26,4 +26,4 @@
 name: mesa
 pkgbuild_local: PKGBUILD
 pkgrel_suffix: 1
-patches: 0001-add-a830-chip-id.patch 0002-freedreno-ir3-vulkan-disable-bindless-ubo-const-lowering.patch
+patches: 0001-add-a830-chip-id.patch

@@ -1,0 +1,24 @@
+[Unit]
+Description=novadeck stable Bluetooth address (configures the controller mgmt cannot see)
+# Our DTS bluetooth node has no local-bd-address, so the controller comes up HCI_UNCONFIGURED and is
+# absent from the normal mgmt index list — no BT audio, no controllers, no BLE, and no error anywhere
+# to say why. This hands it a per-unit address so it registers for real. See gen-bdaddr.sh.
+#
+# Before bluetooth.service is the intent, not a hard requirement: bluetoothd picks up an index-added
+# event whenever it arrives (HW-observed — the controller was configured under a running bluetoothd
+# and appeared immediately). After local-fs.target so /var/lib (the write-once store) is mounted.
+# Waits for the controller the QCA setup creates, so it is NOT DefaultDependencies=no like macgen —
+# it can afford to run in the normal ordering.
+After=local-fs.target
+Before=bluetooth.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/novadeck/gen-bdaddr.sh
+# The script bounds its own waits (15s for the controller, 10s for it to re-register); this is the
+# backstop if btmgmt itself hangs on a wedged controller.
+TimeoutStartSec=60
+
+[Install]
+WantedBy=multi-user.target

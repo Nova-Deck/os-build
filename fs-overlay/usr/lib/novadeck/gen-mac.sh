@@ -7,9 +7,17 @@
 # a stable MAC, so we synthesise one: derive a locally-administered UNICAST address from a
 # hardware-unique per-unit seed, persist it write-once, and re-apply it every boot.
 #
-# Bluetooth is deliberately NOT handled here: this controller's mgmt interface is unreachable until
-# bluetoothd initialises it, and a public-address override is only accepted while it is powered off —
-# the two windows never overlap, so a stable BT address is not achievable this way (HW 2026-07-07).
+# Bluetooth is handled by its SIBLING, gen-bdaddr.sh — not here, because it is a different problem:
+# the BT controller has no address at all and is therefore INVISIBLE, where the Wi-Fi radio works and
+# merely needs pinning. It also has to run later (it waits for the controller the QCA setup creates),
+# and this unit must stay early and fast for NetworkManager.
+#
+# An earlier note here claimed a stable BT address was unachievable — "the mgmt interface is
+# unreachable until bluetoothd initialises it, and a public-address override is only accepted while it
+# is powered off, so the two windows never overlap" (HW 2026-07-07). BOTH HALVES ARE WRONG, and the
+# error cost us working Bluetooth for a month: mgmt is a KERNEL socket (AF_BLUETOOTH /
+# HCI_CHANNEL_CONTROL) that bluetoothd is merely another client of, and an unconfigured controller sits
+# powered-off waiting for exactly that call — the windows overlap permanently. HW-disproved 2026-08-19.
 #
 # Persistence lands on the writable side (/var/lib), never the root fs: /var stays read-write even
 # under the Phase-4 immutable root, and the drop-in is regenerated into /run (tmpfs) each boot, so

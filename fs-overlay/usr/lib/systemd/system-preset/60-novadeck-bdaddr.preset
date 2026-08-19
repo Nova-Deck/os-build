@@ -1,0 +1,6 @@
+# novadeck: enable the Bluetooth address generator on release. /etc/machine-id is empty on a fresh
+# image so systemd runs preset-all on first boot, where the stock 99-default.preset is "disable *";
+# this higher-priority preset (60 < 99) keeps it enabled. A build-time multi-user.target.wants symlink
+# ships alongside as a fallback (cf. 60-novadeck-macgen.preset). Without this unit the device has NO
+# working Bluetooth at all, so it is not optional.
+enable novadeck-bdaddr.service

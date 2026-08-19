@@ -453,6 +453,49 @@ check("unknown thunk name is ignored",
 check("malformed thunks block is not a launch failure",
       pw.resolve_thunks({"thunks": "nonsense"}, base_thunks), {})
 
+# --- issue #50: FEX_APP_CONFIG is ONE SLOT. Valve's compat tool and Proton generate Steam's
+# curated per-title config only when the variable is unset, so a config we write "for
+# completeness" ERASES that curation. Nothing explicit must therefore write nothing at all, and
+# an explicit override must carry the curation along, reproduced from the same env vars.
+for var in ("STEAM_FEX_TSOENABLED", "STEAM_FEX_MULTIBLOCK", "STEAM_COMPAT_FEX_CONFIG"):
+    os.environ.pop(var, None)
+
+check("nothing explicit claims no slot (perf-only tweaks leave Steam's curation alive)",
+      pw.write_config({"nice": -5, "cores": "big"}, "620", fake_profiles), None)
+# A profile name no profile declares is not an explicit choice either — falling back to the
+# default profile here is exactly the old clobber in disguise.
+check("bogus profile name is not an explicit choice",
+      pw.write_config({"fexProfile": "bogus"}, "620", fake_profiles), None)
+
+# Curation seeds the config; an explicit thunk override rides ON TOP of it, not instead of it.
+os.environ["STEAM_FEX_TSOENABLED"] = "0"
+written = pw.write_config({"thunks": {"GL": True}}, "620", fake_profiles)
+generated = _json.loads(written.read_text())
+check("appinfo curation survives a thunks-only override", generated["Config"]["TSOEnabled"], "0")
+check("the explicit thunk override is carried", generated["ThunksDB"], {"GL": 1})
+
+# An explicit profile is the user's deliberate choice and beats the curated value.
+written = pw.write_config({"fexProfile": "default"}, "620", fake_profiles)
+generated = _json.loads(written.read_text())
+check("explicit profile beats appinfo curation", generated["Config"]["TSOEnabled"], "1")
+
+# Steam's own per-title UI (STEAM_COMPAT_FEX_CONFIG) pins all four of its keys when set — the
+# reproduction is deliberately bug-compatible with Valve's substring matching — and our explicit
+# thunk states overlay it per name: their Vulkan choice survives, our GL choice wins.
+os.environ["STEAM_COMPAT_FEX_CONFIG"] = "TSOEnabled:1,Multiblock:1,ThunksDB_Vulkan:1"
+written = pw.write_config({"thunks": {"GL": True, "Vulkan": False}}, "620", fake_profiles)
+generated = _json.loads(written.read_text())
+check("Steam-UI curation seeds the config", generated["Config"]["Multiblock"], "1")
+check("curated thunks merge with ours, ours winning per name",
+      generated["ThunksDB"], {"GL": 1, "Vulkan": 0})
+written = pw.write_config({"fexProfile": "fast"}, "620", fake_profiles)
+generated = _json.loads(written.read_text())
+check("curated thunks survive a profile-only override",
+      generated["ThunksDB"], {"GL": 0, "Vulkan": 1})
+
+for var in ("STEAM_FEX_TSOENABLED", "STEAM_FEX_MULTIBLOCK", "STEAM_COMPAT_FEX_CONFIG"):
+    os.environ.pop(var, None)
+
 # A relative XDG_CACHE_HOME is invalid per XDG and portable FEX would re-anchor it.
 os.environ["XDG_CACHE_HOME"] = "relative/cache"
 os.environ["HOME"] = str(fex_home)

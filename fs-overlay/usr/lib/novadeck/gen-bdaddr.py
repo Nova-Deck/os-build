@@ -47,7 +47,12 @@ HCI_DEV_NONE = 0xFFFF
 HCI_CHANNEL_CONTROL = 3
 
 MGMT_OP_READ_INDEX_LIST = 0x0003
-MGMT_OP_SET_PUBLIC_ADDRESS = 0x0044
+# From the kernel's own mgmt.h, not from counting down a table: 0x0044 is GET_PHY_CONFIGURATION,
+# which the handler table does NOT mark HCI_MGMT_UNCONFIGURED — so an unconfigured controller
+# rejects it with INVALID_INDEX (0x11), the one status that reads like "no such controller" on the
+# one controller we can see. Shipped wrong once; cost a card flash to catch, because the
+# already-configured no-op path above never sends it.
+MGMT_OP_SET_PUBLIC_ADDRESS = 0x0039
 MGMT_EV_CMD_COMPLETE = 0x0001
 MGMT_EV_CMD_STATUS = 0x0002
 

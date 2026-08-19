@@ -400,34 +400,37 @@ if ! grep -q 'LABEL=novadeck-home' "$stage/etc/fstab" 2>/dev/null; then
     >>"$stage/etc/fstab"
 fi
 
-# 4g-bis. The FEX guest rootfs, surfaced as a pressure-vessel GRAPHICS PROVIDER.
+# 4g-bis. The FEX guest rootfs + our x86 Turnip payload, surfaced as ONE merged tree.
 #
 # Valve publishes FEX as a Steam Play compat tool (app 3127680). On its public branch the tool
 # ships the emulator and thunks only — its rootfs depot is empty — and it expects the OS to
 # provide the x86 guest at a fixed path, /usr/share/guestos/fex-mesa. Our pinned ArchLinux.ero
-# already satisfies that contract in full (both arches carry a complete Mesa, dri/, gbm/, gconv/,
-# both interoperable linkers, ld.so.cache, ldconfig, merged-/usr) — see .claude/plans/.
+# satisfies that contract in full (both arches carry a complete Mesa, dri/, gbm/, gconv/,
+# both interoperable linkers, ld.so.cache, ldconfig, merged-/usr) — see .claude/plans/. The tool
+# PROBES that fixed path for /graphics_provider.json, which the guest ships at its root, and the
+# same path is what the tool hands FEX as `RootFS`.
 #
-# ONE mount, since the 2026-08-11 guest. The tool PROBES a fixed path for the manifest,
-# /usr/share/guestos/fex-mesa/graphics_provider.json (it derives the rootfs from the manifest's own
-# directory only in the other branch, where STEAM_COMPAT_GRAPHICS_PROVIDER is already set) -- and
-# upstream now SHIPS that manifest at the root of the image. So loop-mounting the guest at the
-# probed path puts the manifest exactly where the tool looks, and the same mount is a real guest
-# tree for the other consumer: that path is also what the tool hands FEX as `RootFS`.
+# TWO mounts, since the mesa-x86 payload landed. The guest's own libvulkan_freedreno.so (both
+# arches) is a mesa git snapshot owned by NO guest package — whatever the FEX rootfs pipeline
+# happened to build — and under our THUNKLESS system-FEX config it is the driver that actually
+# renders every native x86 Linux title. So the pinned image loop-mounts read-only as a LOWER
+# layer at /run/novadeck/guestos-lower, and an overlayfs lays the payload staged below (the
+# Turnip built by packages/mesa-x86 from the host mesa's exact source pin + patch list) over it
+# at /usr/share/guestos/fex-mesa. The guest tree every consumer sees carries OUR driver; the
+# pinned artifact itself stays byte-identical to its pin.
 #
-# We used to overlay a manifest of our own here, because the 2026-01-08 guest carried none. That
-# overlay is now redundant and was removed with the pin bump. Ours and upstream's differ only in
-# ways that favour theirs: upstream drops `gbm` for x86_64, adds `fallback_library_paths` for it,
-# and states `vdpau: false` rather than leaving it to default true.
+# BOTH x86 consumers read the merged mountpoint: the compat tool probes it, and fs-overlay's
+# Config.json points the system FEX's `RootFS` at the same path — one tree for every x86
+# consumer, and FEXServer no longer erofsfuse-mounts the image per-user. (Mechanism adopted from
+# a peer distro's guestos mount for the same guest image; see the commit that added it.)
 #
-# The image is read from its CURRENT fex-emu location on purpose. This stage is additive: the
-# system FEX (packages/fex-emu) keeps working off the same file, unchanged, so the validated
-# baseline survives and the change is free to roll back. Relocating the .ero belongs with the
-# retirement of that package, not here.
+# systemd itself creates missing mountpoints under /run, and x-systemd.requires-mounts-for on
+# the overlay row orders it after the lower mount — no unit, no tmpfiles.
 #
-# nofail, deliberately: this feeds native x86 Linux games only. A missing or corrupt guest must
-# cost x86 Linux titles, never a boot. That makes every failure here a quiet one -- hence the gate
-# below, and images/test-graphics-provider.sh for the parts visible in committed files.
+# nofail on both, deliberately: this feeds native x86 Linux games only. A missing or corrupt
+# guest must cost x86 Linux titles, never a boot. That makes every failure here a quiet one --
+# hence the gates below, and images/test-graphics-provider.sh for the parts visible in
+# committed files.
 #
 # THE GATE IS NOT OPTIONAL, and its exit code is not the signal. `dump.erofs --path` returns 0 for
 # a path that does not exist (it only prints "read inode failed" to stderr), so the check has to be
@@ -450,14 +453,51 @@ for arch in ("x86_64-linux-gnu", "i386-linux-gnu"):
         sys.exit(f"the guest manifest does not declare {arch}")
 ' || { echo "ERROR: FEX guest graphics-provider manifest check failed (see above)" >&2; exit 1; }
 
+# The x86 Turnip payload (make mesa-x86). REQUIRED, not best-effort: the Makefile orders the
+# build so it always exists here, and a partial payload shadowing half the driver pair is the
+# exact quiet failure this stage exists to prevent.
+payload="$ROOT/work/mesa-x86/out"
+payload_dest="usr/share/novadeck/guestos-x86-mesa"
+echo "  staging FEX guest x86 Turnip payload (/$payload_dest)"
+for f in usr/lib/libvulkan_freedreno.so usr/lib32/libvulkan_freedreno.so \
+         usr/share/vulkan/icd.d/freedreno_icd.x86_64.json \
+         usr/share/vulkan/icd.d/freedreno_icd.i686.json \
+         usr/lib/libxcb-keysyms.so.1 usr/lib32/libxcb-keysyms.so.1; do
+  [ -s "$payload/$f" ] || { echo "ERROR: mesa-x86 payload incomplete: missing $f (make mesa-x86)" >&2; exit 1; }
+done
+mkdir -p "$stage/$payload_dest"
+cp -a "$payload/usr" "$stage/$payload_dest/"
+
+# NEEDED-closure gate: every DT_NEEDED of every payload .so must resolve inside the merged guest
+# (the guest's own libdir, or the payload itself, which overlays it). An ICD with an unresolvable
+# dep is dropped SILENTLY by pressure-vessel's dlopen inspection and dies quietly under system
+# FEX, so this is the same class of check as the manifest gate above — a build-time answer to a
+# question that otherwise reaches a player first. readelf is arch-agnostic, so the aarch64 build
+# container reads these x86 ELFs fine.
+for libdir in usr/lib usr/lib32; do
+  guest_libs="$(dump.erofs --ls --path="/$libdir" "$guest_ero" 2>/dev/null | awk '{print $NF}')"
+  [ -n "$guest_libs" ] || { echo "ERROR: could not list /$libdir out of the pinned FEX guest" >&2; exit 1; }
+  for so in "$stage/$payload_dest/$libdir"/*.so*; do
+    for need in $(readelf -d "$so" | sed -n 's/.*(NEEDED).*\[\(.*\)\].*/\1/p'); do
+      if ! printf '%s\n' "$guest_libs" | grep -qxF "$need" \
+         && [ ! -e "$stage/$payload_dest/$libdir/$need" ]; then
+        echo "ERROR: ${so#"$stage"} NEEDs $need, which neither the guest /$libdir nor the payload provides" >&2
+        exit 1
+      fi
+    done
+  done
+done
+
 mkdir -p "$stage/usr/share/guestos/fex-mesa"
 if ! grep -q '/usr/share/guestos/fex-mesa' "$stage/etc/fstab" 2>/dev/null; then
   printf '%s\n' \
-    '# FEX x86 guest rootfs for Valve'"'"'s FEX compat tool (Steam app 3127680), as a' \
-    '# pressure-vessel graphics provider. The guest ships its own graphics_provider.json' \
-    '# at its root, which this mount lands on the path the tool probes.' \
-    '# nofail: this must never hold up a boot.' \
-    '/usr/share/fex-emu/RootFS/ArchLinux.ero  /usr/share/guestos/fex-mesa  erofs  loop,ro,nofail,noatime  0 0' \
+    '# FEX x86 guest: the pinned guest image, loop-mounted as the LOWER layer of the merged' \
+    '# guest tree below. nofail: a missing or corrupt guest must never hold up a boot.' \
+    '/usr/share/fex-emu/RootFS/ArchLinux.ero  /run/novadeck/guestos-lower  erofs  loop,ro,nofail,noatime  0 0' \
+    '# The merged FEX guest, for BOTH x86 consumers: Valve'"'"'s FEX compat tool (Steam app' \
+    '# 3127680) probes this path for graphics_provider.json, and the system FEX Config.json' \
+    '# points RootFS here. Our x86 Turnip payload overlays the guest'"'"'s stock driver.' \
+    'overlay  /usr/share/guestos/fex-mesa  overlay  ro,nofail,lowerdir=/usr/share/novadeck/guestos-x86-mesa:/run/novadeck/guestos-lower,x-systemd.requires-mounts-for=/run/novadeck/guestos-lower  0 0' \
     >>"$stage/etc/fstab"
 fi
 

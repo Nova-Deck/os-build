@@ -6,6 +6,14 @@ source with novadeck patches (`source.pin`) and pinned precompiled tarballs
 HW-support layer and the Steam shell — live at top-level `hw-support/` and `steam/`, not
 here; the FEX runtime *configuration* likewise lives at top-level `fex/`.)
 
+One directory here is neither: `mesa-x86/` carries no pin of either kind (so
+`build-overlay.sh` and `customize-base.sh` both ignore it) and builds the **x86_64 + i686
+Turnip payload for the FEX guest rootfs** — a plain file tree, not a pacman package — from
+the same source pin + patch list as `mesa/`, in its own pinned x86 Arch container. See
+`mesa-x86/builder.pin` for the why and the pin pairing with `fex-rootfs/prebuilt.pin`;
+`images/assemble-rootfs.sh` stages its output and injects the overlayfs mount that lays it
+over the guest image.
+
 ## Precompiled external packages (`prebuilt.pin`)
 
 Components that aren't in the holo pacman repo and aren't built from source here are

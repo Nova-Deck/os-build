@@ -283,6 +283,17 @@ DECKY_SRC    := $(shell find $(DECKY_PLUGIN)/src $(DECKY_PLUGIN)/py_modules $(DE
                               $(DECKY_PLUGIN)/tsconfig.json -type f 2>/dev/null)
 NODE_IMG := docker.io/library/node:22-slim@sha256:d649c27dae7ba0137b3cef5dd75baa422c08dc3d9e3fc0c23dfb172dc3cc6436
 
+# x86_64 + i686 Turnip payload for the FEX guest rootfs (packages/mesa-x86/) — built from the
+# SAME source pin + patch list as the host mesa, in a pinned x86 Arch container (native on an
+# x86_64 dev box; CI runs it as its own native x86_64 job and hands the payload to the arm64
+# image job as an artifact — the recipe's build.sh self-caches on an input digest, so the arm64
+# job re-runs it as a host-side no-op). The patch wildcard mirrors build.sh's input digest: a
+# mesa patch add/drop must re-trigger this stamp, not only the overlay.
+MESA_X86_STAMP := work/.mesa-x86.stamp
+MESA_X86_SRC   := packages/mesa-x86/build.sh packages/mesa-x86/container-build.sh \
+                  packages/mesa-x86/builder.pin packages/mesa/PKGBUILD packages/mesa/source.pin \
+                  packages/fex-rootfs/prebuilt.pin $(wildcard packages/mesa/patches/*.patch)
+
 # Kernel inputs: any change re-triggers the (full, from-scratch) kernel build. The unified
 # kernel globs every fragment/patch/dts, and bakes the firmware embed list.
 # There is no cmdline file to list: the common boot args live in boot/gen-grub-cfg.sh and land on
@@ -321,7 +332,7 @@ KERNEL_SRC_HASH := work/.kernel-src.hash
 # Phony orchestration targets
 # ==============================================================================
 .PHONY: help all image toolchain kernel fw-linux fw-qcom base overlay verify-lock \
-        rootfs relock \
+        rootfs relock mesa-x86 \
         initramfs steamcl grub sdcard verify-card test bundle sign-bundle publish-bundle deploy clean clean-base clean-overlay distclean
 
 # An always-out-of-date prerequisite, for rules that must re-evaluate their own inputs every run
@@ -636,9 +647,18 @@ $(VERSION_STAMP):
 # /usr/lib/novadeck/boot mirror the RAUC hook refreshes the ESP and the slot's efi partition FROM.
 # That is what makes "this root and the software that boots it came from one build" true by
 # construction. No cycle: the initramfs is built from work/base, never from the assembled root.
-$(ROOTFS): $(KERNEL) $(INITRAMFS) $(STEAMCL) $(GRUB) $(BASE_STAMP) $(FW_LINUX) $(FW_QCOM) $(STEAM_SEED) $(ASSEMBLE_SRC) $(DECKY_DIST) $(MODE_STAMP) $(VERSION_STAMP) | $(BUILD_STAMP)
+$(ROOTFS): $(KERNEL) $(INITRAMFS) $(STEAMCL) $(GRUB) $(BASE_STAMP) $(FW_LINUX) $(FW_QCOM) $(STEAM_SEED) $(ASSEMBLE_SRC) $(DECKY_DIST) $(MESA_X86_STAMP) $(MODE_STAMP) $(VERSION_STAMP) | $(BUILD_STAMP)
 	$(DOCKER) $(DEV_ENV) $(ID_ENV) -e NOVADECK_DEBUG $(BUILD_IMG) \
 	  images/assemble-rootfs.sh /src/work/base
+
+# Host docker (its own pinned x86 Arch image, NOT $(BUILD_IMG)): the one artifact in this build
+# that targets the x86 FEX guest rather than the arm64 host. build.sh self-caches on an input
+# digest, so a satisfied stamp whose inputs moved still costs only the digest check.
+$(MESA_X86_STAMP): $(MESA_X86_SRC)
+	packages/mesa-x86/build.sh
+	@mkdir -p $(@D) && touch $@
+
+mesa-x86: $(MESA_X86_STAMP) ## Build the x86 Turnip payload for the FEX guest (host docker, x86)
 
 # Host docker, not $(BUILD_IMG): the cross-compile toolchain image has no node, and the plugin
 # is pure frontend TS -> one bundle, nothing arch-specific. -u keeps dist/ host-owned (the
@@ -766,11 +786,13 @@ clean-base: ## Remove the (root-owned) bootstrapped root tree
 clean-overlay: ## Remove the built (arch-scoped) overlay pacman repo + build tree
 	rm -rf work/repo work/overlay-build
 
-# THREE THINGS THIS DELIBERATELY DOES *NOT* REMOVE, all of which surprise people:
+# FOUR THINGS THIS DELIBERATELY DOES *NOT* REMOVE, all of which surprise people:
 #
 #   work/prebuilt      the pinned-download cache (customize-base.sh documents it as persistent).
 #   work/pacman-cache  the package cache.
 #   work/repo          the built overlay packages (NOT clean-overlay — this target no longer runs it).
+#   work/mesa-x86      the FEX-guest Turnip payload (digest-checked by its own build.sh, same
+#                      content-addressed logic — a stale payload cannot be served).
 #
 # Together they are ~3.5G, i.e. essentially everything left under work/ after this target runs,
 # which is why "distclean left stuff behind" is a reasonable first reading. It is a CHOICE: every
@@ -779,7 +801,7 @@ clean-overlay: ## Remove the built (arch-scoped) overlay pacman repo + build tre
 # Nothing in the build reads them as INPUT to a decision; they only ever save a download. To drop
 # them anyway (moving machines, reclaiming disk, or proving a pin still resolves upstream):
 #
-#   rm -rf work/prebuilt work/pacman-cache && make clean-overlay
+#   rm -rf work/prebuilt work/pacman-cache work/mesa-x86 && make clean-overlay
 #
 # work/repo is the newest member and the one with real history. It used to go via clean-overlay,
 # and because images/manifest.lock then pinned the overlay's ARTIFACT bytes — which our

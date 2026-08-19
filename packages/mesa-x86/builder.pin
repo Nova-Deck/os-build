@@ -1,0 +1,37 @@
+# mesa-x86 — x86_64 + i686 Turnip for the FEX guest rootfs, built in a pinned x86 Arch container.
+#
+# WHY THIS EXISTS. The pinned FEX guest (packages/fex-rootfs/prebuilt.pin) already ships a Turnip
+# for both x86 arches, but it is whatever mesa git snapshot the FEX rootfs pipeline happened to
+# build (the .so is owned by NO pacman package in the guest — the guest's Arch mesa package ships
+# no freedreno files at all). Since the system FEX runs THUNKLESS (fs-overlay Config.json), that
+# guest driver is what actually renders every native x86 Linux title, and it silently diverges
+# from packages/mesa the day we patch or bump the host driver. This package rebuilds the guest
+# Turnip from the SAME source pin + patch list as the host mesa, so the two cannot drift.
+#
+# NOT a pacman package and NOT a prebuilt: neither source.pin nor prebuilt.pin lives here, so
+# build-overlay.sh and customize-base.sh both ignore this directory. build.sh produces a plain
+# payload tree (work/mesa-x86/out/usr/...) that images/assemble-rootfs.sh stages into the image;
+# the runtime overlayfs mount lays it over the guest rootfs (see the fstab injection there).
+#
+# THE TWO PINS BELOW ARE A PAIR, and both are coupled to packages/fex-rootfs/prebuilt.pin:
+#
+#   snapshot  Arch Archive date the container's pacman is locked to. It MUST be the fex-rootfs
+#             pin's version (2026-08-11 -> 2026/08/11): the built driver must not reference glibc
+#             symbols newer than the guest rootfs ships, and pinning the whole toolchain to the
+#             rootfs date is what guarantees that (build.sh also gates the produced .so's glibc
+#             symbol ceiling against the container's glibc). build.sh ASSERTS this equality and
+#             refuses to build on drift — bump this together with the fex-rootfs pin.
+#
+#   image     The dockerhub archlinux:base-devel tag the build runs in, dated just BEFORE the
+#             snapshot: a newer image downgrading to the snapshot trips package-split file
+#             conflicts and keyring-rejected signatures. Bump it to the last tag preceding the
+#             new snapshot whenever the snapshot moves.
+#
+# Provenance: build recipe and pin pairing adapted from a peer distro's guest-mesa package for
+# the same 2026-08-11 guest image (see the commit that added this file).
+#
+# The mesa SOURCE is deliberately NOT pinned here: build.sh reads the tarball URL + sha256 from
+# packages/mesa/PKGBUILD and the patch list from packages/mesa/source.pin, so a host mesa bump IS
+# a guest mesa bump. There is nothing to keep in step by hand except the pair above.
+image: archlinux:base-devel-20260809.0.570793
+snapshot: 2026/08/11

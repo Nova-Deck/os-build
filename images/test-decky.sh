@@ -410,6 +410,19 @@ else
   fi
 fi
 
+# --- the thunk override UI (issue #47) -------------------------------------------------------
+# The tweaks-file contract lives in game-launch (tested by test-perf.sh); what CAN regress here
+# is the plugin half: the backend serving the namespace, and the tab offering a tri-state.
+grep -q '"fexThunks"' "$PLUGIN/main.py" \
+  && ok "_build_config serves the thunk namespace alongside fexProfiles" \
+  || bad "main.py does not expose fexThunks — the tab has nothing to enumerate"
+grep -q 'fexThunks' "$PLUGIN/src/tabs/Games.tsx" \
+  && ok "Games tab enumerates thunks from the backend-served base list" \
+  || bad "Games tab has no thunk controls — the override is hand-edit-only again (issue #47)"
+grep -q 'as shipped' "$PLUGIN/src/tabs/Games.tsx" \
+  && ok "thunk control is tri-state — 'as shipped' is a distinct default state, not a checkbox" \
+  || bad "no 'as shipped' state in the thunk control: a plain checkbox would write a value for every thunk and seize Valve's per-title curation"
+
 # --- the plugin backend --------------------------------------------------------------------
 if python3 -m py_compile "$PLUGIN/main.py" "$PLUGIN"/py_modules/novadeck_control/*.py 2>/dev/null; then
   ok "plugin backend compiles (the loader would swallow a SyntaxError into a blank tab)"
@@ -452,6 +465,23 @@ try:
     bad("sanitizer accepted a non-dict payload")
 except ValueError:
     ok("sanitizer rejects a non-dict payload")
+
+# The thunk namespace the UI offers must be EXACTLY the shipped base config's ThunksDB —
+# enumerated, never restated. A restated list drifted before (fex-profiles.json once carried an
+# EGL key the base does not have; issue #47), and game-launch ignores any name outside the base,
+# so a drifted UI offers dead controls.
+import pathlib
+root = pathlib.Path(sys.argv[1]).resolve().parents[1]
+base_config = root / "fs-overlay/usr/share/fex-emu/Config.json"
+shipped = list(json.load(open(base_config))["ThunksDB"])
+tweaks.FEX_BASE_CONFIG = base_config
+if tweaks.load_base_thunks() != shipped:
+    bad("load_base_thunks does not enumerate the shipped ThunksDB — the UI namespace drifted from the base")
+ok("thunk namespace: the UI enumerates exactly the base config's ThunksDB (no restated list to drift)")
+tweaks.FEX_BASE_CONFIG = root / "does-not-exist.json"
+if tweaks.load_base_thunks() != []:
+    bad("an absent base config must yield an empty thunk list (the UI then hides the section), not raise")
+ok("thunk namespace: absent base config degrades to an empty list")
 
 # PyInstaller exports LD_LIBRARY_PATH=<bundle dir> to children; a busctl spawned with it loads
 # the bundle's libcrypto and dies (HW-observed as "AvailableProfiles returned non-zero exit

@@ -394,7 +394,7 @@ verify-card: $(SDCARD) | $(BUILD_STAMP) ## Verify the built A/B card image (in c
 verify-lock: ## Check the lock's novadeck rows against packages/ (host, seconds, no build)
 	bash packages/verify-lock-rows.sh
 
-test: verify-lock ## Run the offline bootctl/post-install/pairingd/quirks/stage-2/unit/coredump/perf/fan-curve/decky/update/publish/install/steamos-manager/graphics-provider/video-decode suites (host, no build needed)
+test: verify-lock ## Run the offline bootctl/post-install/pairingd/quirks/stage-2/unit/coredump/perf/fan-curve/decky/update/publish/install/steamos-manager/graphics-provider/video-decode/proton-dxvk suites (host, no build needed)
 	bash images/test-bootctl.sh
 	bash images/test-post-install.sh
 	bash images/test-pairingd.sh
@@ -411,6 +411,7 @@ test: verify-lock ## Run the offline bootctl/post-install/pairingd/quirks/stage-
 	bash install/test-install.sh
 	bash images/test-graphics-provider.sh
 	bash images/test-video-decode.sh
+	bash images/test-proton-dxvk.sh
 
 # The fourth suite, separate because it is the one that CANNOT run on the host: it signs real
 # bundles and verifies them through the shipped system.conf, so it needs rauc. Every case in it is

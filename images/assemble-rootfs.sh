@@ -346,6 +346,78 @@ PYVDF
   echo "  wired Proton compat tool '$stable_name' ($display) — stable name, SLR4 dependency intact"
 }
 
+# widen_dxvk_probe <tool_dir> — teach the CachyOS DXVK selector about 8-bit storage.
+#
+# THE DEFECT. proton-cachyos now bundles DXVK 3 (our pin carries doitsujin/dxvk v3.0.2+2), and
+# DXVK 3 REQUIRES storageBuffer8BitAccess: src/dxvk/dxvk_device_info.cpp lists it as
+# `ENABLE_FEATURE(vk12, storageBuffer8BitAccess, true)`, right beside descriptorIndexing. Turnip
+# only advertises that feature where freedreno_devices.py sets `storage_8bit`, and that appears
+# exactly once in the whole device table — inside a7xx_base. So it is TRUE on Adreno 740/750
+# (SM8550/SM8650) and FALSE on Adreno 650 (SM8250, the Pocket Max).
+#
+# Upstream's own capability probe would route around this, except it asks the wrong question: it
+# probes ['descriptorIndexing'] alone, which a6xx passes. The device is then handed a DXVK it
+# cannot initialise, and the dxvk-sarek fallback that ships right next to it (a full
+# aarch64/x86_64/i386 DLL set in the arm64 tarball — checked, not assumed) is never selected.
+#
+# WHY A PROBE AND NOT A DEVICE LIST. We ship ONE image for every SoC, so the selection has to be
+# made on the running GPU, not on a table we maintain. The probe is already runtime and already
+# feature-based — utilities.primary_gpu_supports_vulkan() dlopens libvulkan.so.1, walks
+# vkGetPhysicalDeviceFeatures2 over the Vulkan 1.1-1.4 feature structs, and reduces each device to
+# a SET OF FEATURE NAMES that came back true. Adding a name to the list it checks is the whole fix;
+# vulkan.py already declares the field. A7xx keeps DXVK 3 with no per-device knowledge anywhere,
+# and the day Turnip gains 8-bit storage on a6xx, this corrects itself.
+#
+# KNOWN LIMIT, stated so a green build is not mistaken for a working device: the probe fails OPEN
+# (`if not primary_category: return True`). proton runs inside SLR4, where the ICD arrives via the
+# graphics-provider path, so if the probe's own loader enumerates no GPU it concludes modern DXVK
+# is fine and we are back where we started. This edit is necessary; only hardware can show it is
+# sufficient. Verify BOTH legs: that the probe sees the Adreno at all, and that a D3D11 title then
+# loads the sarek DLLs.
+#
+# GE is deliberately not touched: its proton script has no probe and no sarek to fall back to.
+widen_dxvk_probe() {
+  local tool_dir="$1"
+  local script="$tool_dir/proton"
+  [ -f "$script" ] || { echo "ERROR: CachyOS Proton tool has no proton script at $script" >&2; exit 1; }
+
+  python3 - "$script" <<'PYDXVK'
+import re, sys
+
+path = sys.argv[1]
+NEEDED = "storageBuffer8BitAccess"
+ANCHOR = "descriptorIndexing"
+
+text = open(path).read()
+# The assignment is matched positionally and must be unique: an upstream shape we do not recognise
+# has to stop the build, not be half-rewritten into something that silently probes nothing.
+pattern = re.compile(
+    r"^([ \t]*MODERN_DXVK_FEATURES[ \t]*=[ \t]*)\[([^]\n]*)\]([ \t]*(?:#.*)?)$", re.MULTILINE)
+matches = list(pattern.finditer(text))
+if len(matches) != 1:
+    sys.exit("proton: expected exactly one MODERN_DXVK_FEATURES assignment, found %d" % len(matches))
+
+match = matches[0]
+features = [f.strip() for f in match.group(2).split(",") if f.strip()]
+names = [f.strip("'\"") for f in features]
+
+if NEEDED in names:
+    # Not a no-op success: if upstream widened its own probe, this whole function is dead weight
+    # sitting on top of their logic and should be deleted, not left to shadow it.
+    sys.exit("proton: MODERN_DXVK_FEATURES already probes %s — upstream fixed this; "
+             "drop widen_dxvk_probe from assemble-rootfs.sh" % NEEDED)
+if ANCHOR not in names:
+    sys.exit("proton: MODERN_DXVK_FEATURES does not probe %s (found %r) — upstream changed the "
+             "probe; re-derive what DXVK now requires before touching this" % (ANCHOR, names))
+
+widened = ", ".join(features + ["'%s'" % NEEDED])
+open(path, "w").write(
+    text[:match.start()] + match.group(1) + "[" + widened + "]" + match.group(3) + text[match.end():])
+PYDXVK
+
+  echo "  widened the CachyOS DXVK probe with storageBuffer8BitAccess (a6xx falls back to dxvk-sarek)"
+}
+
 COMPAT_DIR="$stage/usr/share/steam/compatibilitytools.d"
 BAKED_PROTON=0
 
@@ -356,6 +428,7 @@ if [ -d "$PROTON_CACHY_TOOL" ]; then
   PVER="$(sed -n 's/.*cachyos-\([0-9][0-9.]*-[0-9]\{6,\}\).*/\1/p' "$PROTON_CACHY_TOOL/version")"
   [ -n "$PVER" ] || { echo "ERROR: could not parse CachyOS Proton version from $(cat "$PROTON_CACHY_TOOL/version")" >&2; exit 1; }
   rewrite_proton_tool "$PROTON_CACHY_TOOL" "proton-cachyos-11.0-arm64" "Proton ${PVER} (CachyOS, arm64)"
+  widen_dxvk_probe "$PROTON_CACHY_TOOL"
   BAKED_PROTON=1
 fi
 

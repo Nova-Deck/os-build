@@ -450,8 +450,26 @@ write_confirm_facts() {  # <file>
       printf 'UD_INDEX=%s\n' "$UD_INDEX"
       printf 'UD_GIB_NOW=%s\n' "$ud_gib"
       printf 'UD_GIB_AFTER=%s\n' "$UD_GIB"
-      printf 'NOVADECK_GIB=%s\n' "$(( (CEIL - UD_START + 1) / (1073741824 / SECTOR) - UD_GIB ))"
+      # THE REMAINING TWO FACTS COME FROM carve.sh --plan, NOT FROM ARITHMETIC HERE. An earlier
+      # version computed the free space from select-target's CEIL, and that is the wrong input: CEIL
+      # stops at whatever follows userdata, which on a disk we already own is our own ESP, so the
+      # expression yields zero. MEASURED on the Pocket ACE 2026-08-21 -- the screen said "NovaDeck
+      # will use the remaining 0 GiB" and the carve then handed it 90853 MiB. carve.sh's
+      # effective_ceiling is the rule that is right, and asking it is what stops a second copy of
+      # that rule existing here to drift away from it again.
+      #
+      # Best-effort in the SAME sense home_gib_or_unknown is: a plan this could not obtain must not
+      # become numbers this invented. A screen that says `unknown` is honest; a screen that says 0
+      # is what shipped, and it was wrong.
+      local plan
+      plan="$("$CARVE" plan "$DISK" "$UD_GIB" 2>/dev/null)" || plan=""
+      printf 'NOVADECK_GIB=%s\n' "$(field "$plan" NOVADECK_GIB | grep -E '^[0-9]+$' || echo unknown)"
+      printf 'REPLACES_OURS=%s\n' "$(field "$plan" REPLACES_OURS | grep -E '^[01]$' || echo unknown)"
+      # What the fresh path does to an EXISTING novadeck /home, which is the whole reason
+      # REPLACES_OURS exists. carve.sh has always said "it is being replaced, /home included" -- but
+      # it says it after consent has been taken, where nobody can act on it.
       printf 'HOME_ACTION=create\n'
+      printf 'HOME_GIB=%s\n' "$(home_gib_or_unknown)"
     else
       # The reinstall screen, and it is a SEPARATE branch rather than a variation, because the
       # Android-wipe text is flatly false here: there is no userdata to destroy. The two must not

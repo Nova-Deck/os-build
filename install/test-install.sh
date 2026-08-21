@@ -1107,6 +1107,16 @@ EOF
   cat >"$SP_STUBS/carve.sh" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "carve.sh $*" >>"$SP_CALLS"
+# `plan` writes nothing and answers the two facts the consent screen cannot derive. $SP_PLAN_RC is
+# how a case makes it unavailable, which must degrade to `unknown` on the screen and never to a
+# number the spine invented -- the 0 GiB that shipped was exactly such a number.
+if [ "${1:-}" = plan ]; then
+  [ "${SP_PLAN_RC:-0}" = 0 ] || exit "$SP_PLAN_RC"
+  printf 'CEIL=%s\nNEW_END=%s\nNOVADECK_MIB=%s\nNOVADECK_GIB=%s\nREPLACES_OURS=%s\n' \
+    499999999 100000000 "$(( ${SP_PLAN_GIB:-72} * 1024 ))" "${SP_PLAN_GIB:-72}" \
+    "${SP_PLAN_REPLACES:-0}"
+  exit 0
+fi
 [ "${SP_CARVE_RC:-0}" = 0 ] || exit "$SP_CARVE_RC"
 cat <<MAP
 NOVADECK-ESP=3
@@ -1218,6 +1228,7 @@ EOF
   SP_INFO_RC=0; SP_RAUC_RC=0; SP_CARVE_RC=0
   # The default is a /home that EXISTS, so only the case that clears it exercises the refusal.
   SP_HOME_FSTYPE=ext4
+  SP_PLAN_RC=0; SP_PLAN_GIB=72; SP_PLAN_REPLACES=0
 }
 
 spine_run() {  # extra args passed through to the spine
@@ -1228,6 +1239,7 @@ spine_run() {  # extra args passed through to the spine
       SP_SEL_UDEND="$SP_SEL_UDEND" SP_SEL_CEIL="$SP_SEL_CEIL" \
       SP_INFO_RC="$SP_INFO_RC" SP_RAUC_RC="$SP_RAUC_RC" SP_CARVE_RC="$SP_CARVE_RC" \
       SP_HOME_FSTYPE="$SP_HOME_FSTYPE" \
+      SP_PLAN_RC="$SP_PLAN_RC" SP_PLAN_GIB="$SP_PLAN_GIB" SP_PLAN_REPLACES="$SP_PLAN_REPLACES" \
       NOVADECK_INSTALL_RUN="$SP_RUN" DEVTEST=-e REQUIRE_ROOT=0 \
       PARTUUID_DIR="$SP_PART" DISKTEST=-e \
       DECK_UID="$(id -u)" DECK_GID="$(id -g)" \
@@ -1244,6 +1256,13 @@ spine_run() {  # extra args passed through to the spine
 
 # The order of two recorded calls, by first occurrence. Returns non-zero if either never happened,
 # which is an answer in itself for most of the cases below.
+# DID THE DISK GET WRITTEN? Not the same question as "was carve.sh called", since 2026-08-21:
+# `carve.sh plan` is a read-only query the spine makes BEFORE drawing the consent screen, because
+# the screen has to quote the space NovaDeck ends up with and only carve.sh can compute it. Every
+# "nothing was written" assertion below therefore has to name the destructive invocations, or it
+# fires on a query and the four ordering guards go red for the wrong reason. They did, once.
+carve_wrote() { grep -qE 'carve\.sh (fresh|reinstall|uninstall) ' "$SP/calls"; }
+
 sp_before() {  # <pattern-a> <pattern-b>
   local a b
   a=$(grep -n -- "$1" "$SP/calls" | head -1 | cut -d: -f1)
@@ -1256,13 +1275,13 @@ spine_dir happy
 out="$(spine_run)" && ok "exits 0 with every component stubbed" || bad "failed: $out"
 
 CASE="spine: the order, and what each boundary buys"
-sp_before 'rauc-session --info' 'carve.sh' \
+sp_before 'rauc-session --info' 'carve.sh fresh' \
   && ok "the bundle is verified BEFORE the carve (a bundle that will not verify must not cost the user Android)" \
   || bad "the carve ran before the bundle was verified"
-sp_before 'confirm ' 'carve.sh' \
+sp_before 'confirm ' 'carve.sh fresh' \
   && ok "consent is taken BEFORE the first write" \
   || bad "the carve ran before consent was taken"
-sp_before 'carve.sh' 'mkfs.vfat' \
+sp_before 'carve.sh fresh' 'mkfs.vfat' \
   && ok "the partitions exist before anything is formatted" \
   || bad "a filesystem was created before the carve"
 sp_before 'mkfs.vfat' 'rauc-session install' \
@@ -1352,7 +1371,7 @@ spine_dir noconsent
 SP_CONFIRM_OVERRIDE=/bin/true
 out="$(spine_run)" && bad "installed with /bin/true as the consent program" \
   || ok "a program that exits 0 and says nothing does NOT satisfy the gate"
-if grep -q 'carve.sh' "$SP/calls"; then
+if carve_wrote; then
   bad "the carve ran anyway -- the user's Android data is gone and consent was never given"
 else
   ok "and nothing was written"
@@ -1379,7 +1398,7 @@ seqs=$(grep '^confirm ' "$SP/calls" | sort -u | wc -l)
 [ "$seqs" -ge 2 ] \
   && ok "the sequence is re-randomised between attempts, so a mistake cannot be brute-forced by repetition" \
   || bad "the same sequence was shown every time"
-if grep -q 'carve.sh' "$SP/calls"; then bad "the carve ran after consent was refused"; else ok "nothing was written"; fi
+if carve_wrote; then bad "the carve ran after consent was refused"; else ok "nothing was written"; fi
 unset SP_CONFIRM_OVERRIDE
 
 CASE="spine: no variable and no file on the medium can pre-satisfy the gate"
@@ -1396,7 +1415,7 @@ out="$(spine_run)" && bad "one of the bypass variables satisfied the gate" \
   || ok "none of NOVADECK_CONSENT/YES/ASSUME_YES/FORCE/CONFIRMED means consent"
 unset NOVADECK_CONSENT NOVADECK_YES NOVADECK_ASSUME_YES NOVADECK_FORCE \
       NOVADECK_INSTALL_CONFIRMED CONFIRMED ASSUME_YES FORCE YES
-if grep -q 'carve.sh' "$SP/calls"; then bad "the carve ran"; else ok "and nothing was written"; fi
+if carve_wrote; then bad "the carve ran"; else ok "and nothing was written"; fi
 # Comments stripped first: the spine EXPLAINS the ban at length ("no consent.txt, no --yes"), and
 # an assertion that could not tell the prohibition from the thing prohibited would fail on its own
 # documentation and then be deleted.
@@ -1459,6 +1478,76 @@ grep -qx 'HOME_ACTION=erase' "$SP_FACTS" \
   && ok "and the screen says so, so the gate quotes what is being destroyed" \
   || bad "the screen did not say /home was being erased"
 
+CASE="spine: the free-space figure comes from carve.sh, not from select-target's CEIL"
+# THE 0 GiB BUG, 2026-08-21. The screen derived the space NovaDeck gets as
+# (CEIL - UD_START)/GiB - UD_GIB. CEIL stops at whatever follows userdata, which on a disk that
+# already carries novadeck is our OWN ESP -- so the expression yields 0 while the carve went on to
+# hand NovaDeck 90853 MiB. The number now comes from `carve.sh plan`, which derives it from
+# effective_ceiling, the rule that is right.
+spine_dir plan_number
+SP_SEL_MODE=reinstall; SP_PLAN_GIB=88; SP_PLAN_REPLACES=1
+out="$(spine_run --intent fresh)" || bad "run failed: $out"
+grep -q 'carve.sh plan ' "$SP/calls" \
+  && ok "the spine asks carve.sh what the carve will actually do" \
+  || bad "the spine never asked carve.sh for a plan"
+sp_before 'carve.sh plan' 'confirm ' \
+  && ok "and asks BEFORE the screen is drawn, which is the only time the answer is useful" \
+  || bad "the plan was fetched after consent was taken"
+grep -qx 'NOVADECK_GIB=88' "$SP_FACTS" \
+  && ok "the screen quotes 88 GiB -- carve's figure, not a ceiling that stops at our own ESP" \
+  || bad "NOVADECK_GIB is not carve's figure: $(grep NOVADECK_GIB "$SP_FACTS" 2>/dev/null)"
+grep -qx 'NOVADECK_GIB=0' "$SP_FACTS" \
+  && bad "the 0 GiB bug is back" \
+  || ok "and it is not 0"
+# `plan` must not write. If it ever does, the whole ordering guarantee is void: it runs BEFORE
+# consent, so a plan with side effects means the disk is touched before the user has agreed.
+sp_before 'carve.sh plan' 'carve.sh fresh' \
+  && ok "plan runs before the destructive carve, and is a separate invocation from it" \
+  || bad "plan and fresh are not distinguishable in the call log"
+
+CASE="spine: a plan it could not obtain says so, rather than inventing a number"
+spine_dir plan_missing
+SP_SEL_MODE=reinstall; SP_PLAN_RC=1
+out="$(spine_run --intent fresh)" || bad "run failed: $out"
+grep -qx 'NOVADECK_GIB=unknown' "$SP_FACTS" \
+  && ok "an unavailable plan degrades to 'unknown' -- 'we could not tell' and a confident 0 must not look the same" \
+  || bad "a failed plan did not produce unknown: $(grep NOVADECK_GIB "$SP_FACTS" 2>/dev/null)"
+
+CASE="spine + confirm-tty: a fresh install over an existing novadeck says it is destroying /home"
+# THE SERIOUS HALF OF THE SAME FINDING. `fresh` on a disk we already own destroys the existing
+# /home -- carve.sh has always printed "it is being replaced, /home included", but it printed it
+# AFTER consent, where nobody could act on it. Worse, the screen reassured "your game library is
+# safe", which is true when the games are on the SD card and flatly false once they are on the
+# internal /home this is about to erase.
+spine_dir replaces
+SP_SEL_MODE=reinstall; SP_PLAN_REPLACES=1
+out="$(spine_run --intent fresh)" || bad "run failed: $out"
+grep -qx 'REPLACES_OURS=1' "$SP_FACTS" \
+  && ok "the facts record that an existing install is being replaced" \
+  || bad "REPLACES_OURS is not set on a fresh-over-ours disk"
+screen="$("$ROOT/install/confirm-tty" --facts "$SP_FACTS" --sequence ABXY </dev/null 2>&1 >/dev/null || true)"
+printf '%s\n' "$screen" | grep -qi 'DELETES THE NOVADECK INSTALL ALREADY ON THIS DISK' \
+  && ok "and the screen says so, in its own block" \
+  || bad "the screen does not disclose that an existing novadeck install is destroyed"
+printf '%s\n' "$screen" | grep -qi 'games' \
+  && ok "in the user's terms -- 'games' is the word that stops someone, not '/home'" \
+  || bad "the screen never mentions games"
+printf '%s\n' "$screen" | grep -q 'your game library is safe' \
+  && bad "the screen still reassures 'your game library is safe' while erasing the disk holding it" \
+  || ok "and it no longer reassures about a library it is about to delete"
+
+CASE="confirm-tty: the SD-card reassurance survives on the disk where it is true"
+spine_dir noreplace
+SP_SEL_MODE=fresh; SP_PLAN_REPLACES=0
+out="$(spine_run --intent fresh)" || bad "run failed: $out"
+screen="$("$ROOT/install/confirm-tty" --facts "$SP_FACTS" --sequence ABXY </dev/null 2>&1 >/dev/null || true)"
+printf '%s\n' "$screen" | grep -q 'your game library is safe' \
+  && ok "a stock Android disk still gets it -- there the games really are on the card" \
+  || bad "the reassurance was lost on the disk where it is true"
+printf '%s\n' "$screen" | grep -qi 'DELETES THE NOVADECK INSTALL ALREADY' \
+  && bad "a stock Android disk rendered the replace-existing block" \
+  || ok "and it does not claim to be replacing an install that is not there"
+
 CASE="spine: a reinstall that keeps /home refuses when there is no /home to keep"
 # FOUND ON HARDWARE 2026-08-21, on the Pocket ACE after the Phase 4a gate: eight partitions in
 # place, only root-A and var-A carrying filesystems. Nothing downstream catches it -- the keep path
@@ -1476,7 +1565,7 @@ printf '%s\n' "$out" | grep -q 'holds no filesystem' \
 printf '%s\n' "$out" | grep -q -- '--erase-home' \
   && ok "and names the flag that fixes it -- a refusal with no way forward is a dead end on a recovery tool" \
   || bad "the refusal does not name --erase-home: $out"
-grep -q 'carve.sh' "$SP/calls" \
+carve_wrote \
   && bad "it refused AFTER the carve -- the whole value of this check is that the disk is untouched" \
   || ok "and nothing was written: the refusal lands before the carve"
 # The direction matters as much as the refusal. Quietly upgrading to --erase-home would answer
@@ -1501,7 +1590,7 @@ spine_dir intent
 SP_SEL_MODE=reinstall
 out="$(spine_run)" && bad "it picked an intent for a disk that admits three different answers" \
   || ok "a disk that already carries novadeck refuses to default -- reinstall, resize and remove all fit it, and two of those guesses erase something the user wanted kept"
-if grep -q 'carve.sh' "$SP/calls"; then bad "it wrote anyway"; else ok "and nothing was written"; fi
+if carve_wrote; then bad "it wrote anyway"; else ok "and nothing was written"; fi
 spine_dir intent2
 SP_SEL_MODE=fresh
 out="$(spine_run --intent reinstall)" && bad "it reinstalled over a disk with no install on it" \
@@ -1512,7 +1601,7 @@ CASE="spine: a bundle that will not verify costs the user nothing"
 spine_dir badbundle
 SP_INFO_RC=1
 out="$(spine_run)" && bad "installed a bundle that did not verify" || ok "refuses"
-if grep -q 'carve.sh' "$SP/calls"; then
+if carve_wrote; then
   bad "the carve ran first -- Android's data is gone to reach an error that was free at second zero"
 else
   ok "and the disk was never touched"
@@ -1527,7 +1616,7 @@ CASE="spine: the /home seed is checked against the pin baked into the INSTALLER"
 spine_dir badseed
 printf '%064d\n' 0 >"$SP_PIN"          # a well-formed sha256 that is not the seed's
 out="$(spine_run)" && bad "installed a seed that does not match the baked pin" || ok "refuses"
-if grep -q 'carve.sh' "$SP/calls"; then bad "the carve ran first"; else ok "and the disk was never touched"; fi
+if carve_wrote; then bad "the carve ran first"; else ok "and the disk was never touched"; fi
 
 CASE="spine: a missing pin is fatal, not skippable"
 spine_dir nopin
@@ -1547,7 +1636,7 @@ out="$(spine_run)" && bad "ran with one of its tools absent" \
 printf '%s' "$out" | grep -q 'novadeck-no-such-tool' \
   && ok "and it names what is missing, rather than failing later at the use site" \
   || bad "the error does not name the missing tool: $out"
-if grep -q 'carve.sh' "$SP/calls"; then bad "the carve ran anyway"; else ok "and nothing was written"; fi
+if carve_wrote; then bad "the carve ran anyway"; else ok "and nothing was written"; fi
 unset SP_SGDISK
 
 # --- confirm-tty, the renderer behind the seam ---------------------------------------------------

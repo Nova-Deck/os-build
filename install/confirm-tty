@@ -60,6 +60,39 @@ DISK="$(fact DISK)"
 # template with conditionals inside it is precisely the shape that lets that happen.
 case "$SCREEN" in
   android-wipe)
+    # TWO OPTIONAL BLOCKS, both of them consequences of the same case: `fresh` on a disk that
+    # ALREADY carries novadeck. That is a supported mode -- carve.sh calls it "I want a different
+    # split" -- and until 2026-08-21 this screen did not know it existed. It told the operator on
+    # the Pocket ACE that NovaDeck would get "0 GiB", and it reassured them their game library was
+    # safe while the carve was about to delete the /home holding it. Both are fixed here.
+    novadeck_space="NovaDeck will use the remaining $(fact NOVADECK_GIB) GiB."
+    [ "$(fact NOVADECK_GIB)" = unknown ] \
+      && novadeck_space="NovaDeck will use the rest of the disk."
+
+    # The SD-card reassurance is TRUE ONLY WHEN THE GAMES ARE ON THE SD CARD. Once there is a
+    # novadeck /home on this disk, that is where they are, and "your game library is safe" becomes
+    # the most misleading sentence on the screen -- it reassures about the exact thing being erased.
+    library_line="     Your SD card is never written to. Nothing on it is read, moved or
+     erased -- your game library is safe."
+    replaces_block=""
+    if [ "$(fact REPLACES_OURS)" = 1 ]; then
+      library_line="     Your SD card is never written to. Nothing on it is read, moved or
+     erased. Anything on the INTERNAL disk is a different matter -- see above."
+      home_gib="$(fact HOME_GIB)"
+      case "$home_gib" in
+        ''|unknown) home_size="Its size could not be read." ;;
+        *)          home_size="It is using ${home_gib} GiB today." ;;
+      esac
+      replaces_block="
+   THIS ALSO DELETES THE NOVADECK INSTALL ALREADY ON THIS DISK.
+
+     NovaDeck is already installed here. A fresh install replaces all of it,
+     and that includes /home -- where your installed games, saves and settings
+     live. ${home_size} It is NOT recoverable.
+
+     If you meant to keep them, stop now and re-run with --intent reinstall.
+"
+    fi
     cat <<EOF
 
   ================================================================
@@ -75,16 +108,14 @@ case "$SCREEN" in
      or by us. There is no backup and no way to put it back.
 
      Android's data partition is $(fact UD_GIB_NOW) GiB today. It will be
-     recreated at $(fact UD_GIB_AFTER) GiB, and NovaDeck will use the
-     remaining $(fact NOVADECK_GIB) GiB.
-
+     recreated at $(fact UD_GIB_AFTER) GiB, and ${novadeck_space}
+$replaces_block
    WHAT SURVIVES:
 
      Android itself still boots. It will start up factory-reset, as if the
      device were new. Its system is untouched.
 
-     Your SD card is never written to. Nothing on it is read, moved or
-     erased -- your game library is safe.
+$library_line
 
    AFTERWARDS:
 

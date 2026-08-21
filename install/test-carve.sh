@@ -230,6 +230,44 @@ out="$(carve reinstall "$part")"
 # THE CASE THE EFFECTIVE CEILING EXISTS FOR. select-target's CEIL stops at whatever follows userdata,
 # which on a disk we own is our own ESP -- a window of zero sectors. carve computes its own ceiling by
 # skipping anything of ours, so without this the "I want a different split" path cannot run at all.
+CASE="plan answers what fresh WOULD do, and writes nothing"
+# The mode exists because the consent screen has to quote the space NovaDeck ends up with, and the
+# only correct source for that is effective_ceiling here. Until 2026-08-21 the spine derived it from
+# select-target's CEIL instead, which stops at our own ESP on a disk we already own -- so the screen
+# told a Pocket ACE operator "the remaining 0 GiB" while this code handed NovaDeck 90853 MiB.
+pl="$T/plan.img"; cp --sparse=always "$(board_img "AYANEO Pocket S2")" "$pl"
+pl_before="$(rows "$pl")"
+plan_stock="$(carve plan "$pl" 33)"
+[ "$(rows "$pl")" = "$pl_before" ] \
+  && ok "plan on a stock disk wrote nothing at all" \
+  || bad "plan modified the partition table"
+printf '%s\n' "$plan_stock" | grep -qx 'REPLACES_OURS=0' \
+  && ok "and reports that nothing of ours is being replaced" \
+  || bad "REPLACES_OURS is not 0 on a stock disk: $plan_stock"
+stock_gib="$(printf '%s\n' "$plan_stock" | sed -n 's/^NOVADECK_GIB=//p')"
+[ -n "$stock_gib" ] && [ "$stock_gib" -gt 0 ] \
+  && ok "and quotes a real figure ($stock_gib GiB)" \
+  || bad "plan reported no usable NOVADECK_GIB: $plan_stock"
+
+# THE CASE THAT WAS BROKEN. Carve it for real, then ask plan again: the disk now carries our eight,
+# which is exactly the shape where select-target's CEIL collapses to userdata's own end.
+carve fresh "$pl" 33 >/dev/null 2>&1
+ours_before="$(rows "$pl")"
+plan_ours="$(carve plan "$pl" 33)"
+[ "$(rows "$pl")" = "$ours_before" ] \
+  && ok "plan on a disk that is already ours also wrote nothing" \
+  || bad "plan modified a disk that already carries our eight"
+printf '%s\n' "$plan_ours" | grep -qx 'REPLACES_OURS=1' \
+  && ok "and reports that an existing install -- and its /home -- is being replaced" \
+  || bad "REPLACES_OURS is not 1 on a disk we already own: $plan_ours"
+ours_gib="$(printf '%s\n' "$plan_ours" | sed -n 's/^NOVADECK_GIB=//p')"
+[ -n "$ours_gib" ] && [ "$ours_gib" -gt 0 ] \
+  && ok "and the figure is NOT zero ($ours_gib GiB) -- the whole point of the mode" \
+  || bad "plan reported '$ours_gib' GiB on a disk we own; this is the 0 GiB bug"
+[ "$ours_gib" = "$stock_gib" ] \
+  && ok "and it matches the stock answer, because deleting our eight restores the same span" \
+  || bad "plan disagrees with itself across a carve: $stock_gib then $ours_gib"
+
 CASE="a resize on a disk that is already ours"
 rz="$(board_img "AYN Odin 2")"
 before="$(foreign "$rz")"

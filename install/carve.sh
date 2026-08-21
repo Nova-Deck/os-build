@@ -3,8 +3,14 @@
 # .claude/plans/internal-install.plan.md.
 #
 #   install/carve.sh fresh     <disk> <userdata-gib>   # shrink userdata, append our eight
+#   install/carve.sh plan      <disk> <userdata-gib>   # writes NOTHING; what `fresh` WOULD do
 #   install/carve.sh reinstall <disk>                  # writes NOTHING; reports where the eight are
 #   install/carve.sh uninstall <disk>                  # remove our eight, give userdata its span back
+#
+# `plan` is `fresh` up to but not including the first delete. It answers the two questions the
+# consent screen cannot answer for itself -- how much space NovaDeck ends up with, and whether an
+# existing novadeck install (and its /home) is about to be replaced -- and it answers them from THIS
+# script's arithmetic, which is the only one that is right. See the block at the mode itself.
 #
 # On success it prints the name=index map on stdout and exits 0 -- the same shape genpart.sh emits,
 # because that map is what `write_parts_env` turns into /EFI/steamos/parts.env, and stage 2 on this
@@ -67,6 +73,7 @@ die() { printf 'carve: %s\n' "$*" >&2; exit 1; }
 
 usage() {
   say "usage: carve.sh fresh <disk> <userdata-gib>"
+  say "       carve.sh plan  <disk> <userdata-gib>   (writes nothing)"
   say "       carve.sh reinstall <disk>"
   say "       carve.sh uninstall <disk>"
   exit 2
@@ -262,7 +269,7 @@ case "$INTENT" in
     for name in "${OUR_NAMES[@]}"; do printf '%s=%s\n' "$name" "$(index_of "$name")"; done
     ;;
 
-  fresh)
+  fresh|plan)
     [ $# -ge 3 ] || usage
     GIB="$3"
     case "$GIB" in *[!0-9]*|'') die "userdata size must be a whole number of GiB, got '$GIB'" ;; esac
@@ -277,6 +284,27 @@ case "$INTENT" in
     WINDOW=$(( CEIL - NEW_END ))
     [ "$WINDOW" -ge "$(( MIN_MIB * PER_MIB ))" ] \
       || die "a ${GIB} GiB userdata leaves $(( WINDOW / PER_MIB )) MiB, and the layout needs ${MIN_MIB} MiB"
+
+    # `plan` STOPS HERE, having written nothing. It exists because the consent screen has to quote
+    # the resulting free space (plan §4d) and that number is only correct if it comes from this
+    # arithmetic: NOVADECK_MIB is derived from effective_ceiling, and select-target's CEIL is the
+    # WRONG input for it on a disk we already own -- it stops at our own ESP and yields zero.
+    #
+    # MEASURED, not theorised: on the Pocket ACE 2026-08-21 the consent screen told the operator
+    # "NovaDeck will use the remaining 0 GiB" while this code went on to give it 90853 MiB. The
+    # screen was deriving from CEIL. That is what this mode exists to stop, and it is why the number
+    # is fetched from here rather than recomputed in the spine -- a second copy of the ceiling rule
+    # is exactly how the two halves end up disagreeing again.
+    #
+    # REPLACES_OURS is the other half of the same finding: `fresh` on a disk we already own destroys
+    # the existing /home, and the screen has to say so. carve.sh has always PRINTED that line; it
+    # printed it after consent had been taken, where nobody could act on it.
+    if [ "$INTENT" = plan ]; then
+      printf 'CEIL=%s\nNEW_END=%s\nNOVADECK_MIB=%s\nNOVADECK_GIB=%s\nREPLACES_OURS=%s\n' \
+        "$CEIL" "$NEW_END" "$(( WINDOW / PER_MIB ))" "$(( WINDOW / PER_GIB ))" \
+        "$([ "$STATE" = fresh ] && printf 0 || printf 1)"
+      exit 0
+    fi
 
     say "[carve] fresh install on $DISK"
     say "  userdata p$UD_INDEX: $(( (UD_END - UD_START + 1) / PER_GIB )) GiB -> ${GIB} GiB (Android is factory reset)"

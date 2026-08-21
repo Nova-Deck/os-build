@@ -1627,6 +1627,33 @@ consent cannot install.
   satisfies the gate; that the sequence is not constant across runs (seed it, assert two runs
   differ); and that a wrong press re-randomises rather than advancing.
 
+> **THERE ARE THREE CASES, NOT TWO — found on hardware 2026-08-21, fixed the same day.** The two
+> screens below are "a stock Android disk" and "a disk that is already ours, being repaired". The
+> case neither covers is **`--intent fresh` on a disk that is already ours** — the supported "I want
+> a different split" mode `carve.sh` documents. It renders the android-wipe screen, and on the ACE
+> that screen was wrong twice:
+>
+> - It said **"NovaDeck will use the remaining 0 GiB"** while the carve went on to hand it 90853 MiB.
+>   The figure was derived as `(CEIL − UD_START)/GiB − UD_GIB`, and `select-target`'s `CEIL` stops at
+>   whatever follows userdata — which on a disk we already own is *our own ESP*, so the expression
+>   collapses to zero. `carve.sh`'s `effective_ceiling` is the rule that is right, and its own comment
+>   had said so since Phase 3; the spine was simply not asking it. It now does, through a new
+>   read-only **`carve.sh plan <disk> <gib>`** mode, so the number the screen quotes comes from the
+>   arithmetic that will perform the carve. A plan it cannot obtain renders `unknown` — never a
+>   confident zero.
+> - Worse: that path **destroys the existing NovaDeck `/home`**, and the screen said nothing about it
+>   while actively reassuring *"your game library is safe"*. That sentence is true when the games are
+>   on the SD card, which is the stock-Android case it was written for, and flatly false once they are
+>   on the internal `/home` about to be erased. `carve.sh` had always printed "it is being replaced,
+>   /home included" — after consent was taken, where nobody could act on it. The screen now carries a
+>   `REPLACES_OURS` block quoting the `/home` size, and the SD-card sentence drops its second clause
+>   on that path.
+>
+> It cost nothing on the ACE because `/home` was empty. The next operator with a populated one would
+> have read "your game library is safe" and lost it. **A consent screen that reassures about the
+> thing it destroys is the worst failure this gate has**, and no offline case caught it: the suite
+> drove `fresh` with a fresh disk and `reinstall` with a reinstall disk, and never the diagonal.
+
 **The reinstall case has its own screen — resolved 2026-08-05.** §3 rule 8 accepts an
 already-NovaDeck disk via the idempotency path. There is no Android `userdata` there to destroy,
 so the wipe warning above would be flatly false; instead that screen offers **keep `/home`

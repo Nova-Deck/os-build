@@ -1169,6 +1169,50 @@ home       12888616..30150650    65.85 GiB  ← ends exactly at the ceiling
 > late* install, not after any interruption — telling every user to reach for a bootloader option
 > they do not need is its own failure.
 
+#### The defect booting Android found: a carve alone does not stop Android using our span
+
+**Only the other OS could have found this, and the carve had already been declared green.** After
+the 16 GiB carve above, the ACE booted Android, which came up looking perfectly healthy and reported
+**92 GB free of 97** — on a partition that is now 16 GiB. It had mounted the filesystem that was
+there *before* the shrink and believed it owned every sector up to 30150650: our ESP, both roots,
+both vars, `/home`. One large download would have eaten the install, silently, with no error on
+either side. The decisive evidence that it had not reformatted was the user's: **setup-wizard did
+not re-run**.
+
+Three things this turns on, all measured on the board rather than reasoned about:
+
+- **`userdata` is f2fs under metadata encryption** (`dm-default-key`). `blkid /dev/sda11` reports a
+  PARTLABEL and PARTUUID and **no filesystem type at all**, while `metadata` beside it is plain
+  f2fs. The stale filesystem is *inside* the encrypted mapping.
+- **So `wipefs -a` is the wrong tool** — the obvious one, and it would find no signature, erase
+  nothing, and exit 0. Unconditional `dd` is required, and it works because `dm-default-key` is a
+  1:1 offset-preserving mapping: the inner superblock's ciphertext sits where a plaintext one would.
+- **f2fs does not check its superblock size against the device at mount.** ext4 does and would have
+  refused. The quiet mount is a property of the filesystem Android happens to use, not something to
+  rely on staying true.
+
+**Fix, in `carve.sh`: zero the head of `userdata` after the resize, in `fresh` and `uninstall`
+alike.** 8 MiB, bounded to the partition, run before any of our partitions exist. `uninstall` needs
+it for the opposite reason — the filesystem left behind describes the *shrunk* volume, so Android
+would mount 16 GiB on a 96 GiB partition and quietly keep the difference from its owner. The
+partition node is resolved **by PARTUUID**, and the function refuses rather than guessing a device
+name if that lookup fails.
+
+**Verified on hardware, both directions.** Re-carved to 8 GiB: the first 8 MiB of `/dev/sda11` read
+back as **0 non-zero bytes** while 8–9 MiB still held 36728 non-zero bytes — the wipe stopped
+exactly where it should, rather than running into the span where the ESP now lives. Android then
+booted **straight into setup-wizard reporting 8 GB**, with no trip to recovery. That is the
+consent screen's promise — "Android still boots, and arrives factory-reset" — actually delivered.
+
+**Two further facts worth having, both from this session:**
+
+- **A factory reset from recovery does NOT rewrite the GPT.** It formats `metadata` and `userdata`
+  and leaves the table alone; the carve was byte-identical afterwards. **An internal NovaDeck
+  install survives the user factory-resetting Android**, which is a property §4d may state.
+- **A reset does repair the size** — Android formats using the true partition geometry. But nothing
+  prompts a user to perform one, so it is not a substitute for the wipe: without it the danger
+  window runs from the carve until a reset that may never happen.
+
 **Still unreached on hardware, and honestly so.** Rule 9 (two eligible disks → refuse rather than
 pick) cannot fire where only one LUN has a `userdata`, so it keeps `NOVADECK_SELECT_DISKS` and
 stays a fixture-only property. `carve.sh` is **no longer on this list** — see the section above.

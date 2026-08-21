@@ -342,6 +342,37 @@ out=$(PATH="$T/bin:$PATH" NOVADECK_SELECT_DISKS="$RUN_PATH $T/one.img" bash "$SE
   && ok "the scan skips the running disk and takes the other" \
   || bad "the scan did not exclude the running disk: $out"
 
+# --- 9. an eMMC-shaped target, which no board we own can provide -----------------------------------
+# EVERY device in the fleet is UFS -- the internal disk is always sdX and the only mmcblk is the boot
+# SD, so "an mmcblk device SELECTED as a target" has never happened on hardware and, with no eMMC
+# board to test on, cannot. Checked 2026-08-21 across the five captures plus a Thor Lite (UFS 3.1).
+#
+# BE CLEAR ABOUT WHAT THIS REPLACES AND WHAT IT DOES NOT. The fixture seam skips the three sysfs
+# checks, so this is not the hardware test: it cannot show that an eMMC disk reports removable=0, and
+# it cannot show rules 1/2 discriminating when the boot medium and the target are BOTH mmcblk. What
+# it does cover is the half that is name-shaped, which is the half that would break silently:
+# enumeration must reach mmcblk at all, and no rule may parse the disk name to reach a partition
+# (the `p` infix -- mmcblk0p11 against sda11 -- is where that breaks).
+CASE="an eMMC-shaped disk is enumerated and selectable"
+grep -q '/dev/mmcblk?' "$SELECT" \
+  && ok "the default scan glob names mmcblk, so an eMMC disk is a candidate at all" \
+  || bad "the scan glob does not enumerate mmcblk devices -- an eMMC board would be invisible"
+
+emmc="$T/mmcblk0"; cp --sparse=always "$base" "$emmc"
+out=$(NOVADECK_SELECT_DISKS="$emmc" bash "$SELECT" 2>&1)
+{ [ "$(field "$out" TARGET)" = "$emmc" ] && [ -n "$(field "$out" UD_INDEX)" ]; } \
+  && ok "a disk whose name carries no partition-suffix convention is selected, p$(field "$out" UD_INDEX) emitted" \
+  || bad "an mmcblk-named disk was not selected: $out"
+
+# The emitted block must be identical to the same image under an sdX name: anything that differs is
+# a rule reading the device NAME, which is exactly the dependency that cannot be tested on hardware.
+sdx="$T/sda-same"; cp --sparse=always "$base" "$sdx"
+out_sdx=$(NOVADECK_SELECT_DISKS="$sdx" bash "$SELECT" 2>&1)
+[ "$(printf '%s\n' "$out"     | grep -v '^TARGET=')" \
+= "$(printf '%s\n' "$out_sdx" | grep -v '^TARGET=')" ] \
+  && ok "the same image under an mmcblk name and an sdX name emits identical geometry" \
+  || bad "geometry differs by device name -- a rule is parsing the name"
+
 # --- 11. the FIT with its proportions REVERSED -- the case rule 3b was written for -------------------
 # The plan states it plainly: as captured, the FIT is refused partly BY ACCIDENT OF PROPORTIONS --
 # STORAGE (380 GiB) is larger than userdata (64 GiB). An install that had left userdata at 300 GiB

@@ -8,8 +8,8 @@
 # shared ESP chainloads \EFI\steamos\grubaa64.efi on the slot's efi partition, whose per-slot
 # grub.cfg boots the kernel in the slot root's /boot. Each carries the stage-2 GRUB + its
 # identity partsets (/SteamOS/partsets/{A,B,all,shared,self,other}); steamcl matches the efi
-# uuid of the partition it was loaded from against partsets/self. 64M each is ~2x
-# the current stage-2 tree.
+# uuid of the partition it was loaded from against partsets/self. The stage-2 tree is ~2.3M; these
+# are 128M for a filesystem reason, not a capacity one -- see the FAT block near the rows.
 #
 # All 8 partitions mirror the SteamOS layout exactly (esp, efi-A/B, rootfs-A/B, var-A/B, home).
 #
@@ -56,8 +56,8 @@
 # versioned OS components, and sharing them across slots would let an update mutate the running
 # system's emulation stack and break rollback.
 #
-# 'rest' expands to fill the target device. Fixed partitions total ~15.2G (the ESP grew by 256M,
-# see above), so the minimum usable card is 32G (leaving ~15G of /home); 64G+ is the sane target.
+# 'rest' expands to fill the target device. Fixed partitions total ~15.0G, so the minimum
+# usable card is 32G (leaving ~15G of /home); 64G+ is the sane target.
 #
 # 'attrs' is a comma-separated list of GPT attribute bits to set, or '-' for none. Only bit 63
 # ("no-auto") is used today, on home and on the ESP — each for its own reason, both above.
@@ -70,35 +70,43 @@
 #
 # Consumed by images/genpart.sh to emit an sgdisk script. Row order = partition number.
 #
-# THE ESP IS 512M FOR A REASON THAT IS NOT CAPACITY, AND SHRINKING IT IS A REGRESSION.
-# It holds four small files (~200K). It is 512M because a FAT32 filesystem must have at least
-# 65525 data clusters to be one, and cluster count is driven by SECTORS, not bytes:
+# EVERY FAT FILESYSTEM HERE IS CREATED FAT32 *OR* FAT16, CHOSEN FROM THE DISK'S GEOMETRY, and
+# lib-slotwrite.sh's fat_type_for() is what chooses. Do not "simplify" it back to a forced -F 32.
 #
-#   256M on 512-byte sectors   524288 sectors ->  516190 clusters   valid
-#   256M on 4096-byte sectors   65520 sectors ->   65360 clusters   INVALID, by 165
+# A FAT32 needs at least 65525 data clusters to BE a FAT32, and cluster count scales with SECTORS,
+# not bytes. These partitions are sized in bytes, so the same row is a different filesystem on media
+# with different logical sector sizes:
 #
-# Every SD card is 512e and every internal UFS in this fleet is 4Kn, so a 256M ESP is a valid
-# FAT32 on every card ever flashed and an invalid one on every internal install. `mkfs.vfat` was
-# already at `-s 1`, the smallest cluster available, so there was no filesystem-side fix: the
-# partition has to be big enough. 512M gives ~131000 clusters at 4K, with margin.
+#                       512-byte sectors        4096-byte sectors
+#   esp  256M           516190 clusters  FAT32   65376 clusters  too few for FAT32
+#   efi  128M           258078 clusters  FAT32   32672 clusters  too few for FAT32
+#   efi   64M (was)     129022 clusters  FAT32   16320 clusters  too few for FAT32
 #
-# MEASURED, on an AYANEO Pocket ACE, 2026-08-21. The first internal install produced an ESP Linux
-# mounted happily and the ROCKNIX ABL refused, reporting no /EFI/BOOT/bootaa64.efi when the file
-# was demonstrably there. Reformatting that same partition as a spec-valid FAT16 did not help
-# either, so FAT32 is what the firmware wants and the size is the only lever. The peer distro's
-# own internal installer makes its boot partition 2 GiB, which is why it never met this.
+# Every SD card is 512e and every internal UFS in this fleet is 4Kn, so a forced -F 32 produced a
+# valid filesystem on every card ever flashed and an invalid one on every internal install. Nothing
+# offline can catch it either: make-sdcard.sh formats inside an IMAGE FILE, where mkfs.vfat sees
+# 512-byte sectors whatever the eventual target is, and so does every test fixture.
 #
-# CONSEQUENCE FOR DEVICES ALREADY IN THE FIELD, recorded because it is permanent: this file ships
-# INSIDE the rootfs, so after the next OTA a flashed card runs a rootfs whose table says 512M while
-# its disk still has 256M. Nothing breaks -- every runtime consumer (initramfs/init, lib-slotwrite,
-# gen-grub-cfg) reads names and ORDER only, never a size, and OTA never repartitions. But the two
-# do diverge, permanently, and guard-rootfs.sh cannot see it because both copies agree with each
-# other. If anything ever starts validating geometry against this table, that is the case to handle.
+# MEASURED on an AYANEO Pocket ACE, 2026-08-21, and it cost an evening because it surfaces as two
+# unrelated-looking failures:
+#   esp at 256M   ABL's own FatPkg refuses the volume (EFI_VOLUME_CORRUPTED, EnhancedFatDxe/Init.c
+#                 checks MaxCluster < 65525), never produces a SimpleFileSystem handle for it, and
+#                 LoadEFI reports "Failed to load EFI: Not Found" without reading a byte of it.
+#   efi at 64M    the ESP is fine, ABL loads stage 1, and steamcl then cannot mount efi-A/B for the
+#                 same reason -- so it finds no boot candidate and prints "Boot failed, waiting 5s".
+# Both are the same defect. The fix is the filesystem TYPE, not the partition size: growing the ESP
+# to 512M also worked, and was reverted, because it wasted space to buy what FAT16 gives for free.
+#
+# efi-a/efi-b ARE 128M rather than 64M, and that IS about size: at 64M/4Kn even FAT16 lands 7
+# clusters above the FAT12 boundary, which is a margin decided by mkfs.fat's reserved-sector
+# arithmetic rather than by us. 128M gives 8188 -- twice the floor. The content is ~2.3M either way.
+#
+# images/test-partition-table.sh asserts all of this against the table alone, at both sector sizes.
 #
 # name      size  typecode  fs        label            attrs
-esp         512M  ef00      vfat      NOVADECK-ESP     63
-efi-a       64M   0700      vfat      novadeck-efi-A   -
-efi-b       64M   0700      vfat      novadeck-efi-B   -
+esp         256M  ef00      vfat      NOVADECK-ESP     63
+efi-a       128M  0700      vfat      novadeck-efi-A   -
+efi-b       128M  0700      vfat      novadeck-efi-B   -
 rootfs-a    7G    8300      btrfs     novadeck-root-A  -
 rootfs-b    7G    8300      btrfs     novadeck-root-B  -
 var-a       256M  8300      ext4      novadeck-var-A   -

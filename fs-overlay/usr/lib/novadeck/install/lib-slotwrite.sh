@@ -415,12 +415,72 @@ refresh_esp_stage1() {  # <esp> <bootdir>
 # internal install present the same object.
 ESP_FAT_LABEL=NOVADECK
 
+# THE FAT WIDTH IS CHOSEN FROM THE DISK, NEVER FORCED. A FAT32 must have at least 65525 data
+# clusters to be one, and cluster count scales with SECTORS -- so a partition sized in bytes is a
+# different filesystem on 512-byte and 4096-byte media. Every SD card is 512e and every internal UFS
+# here is 4Kn, which is why a hardcoded `-F 32` was valid on every card ever flashed and invalid on
+# every internal install.
+#
+# MEASURED on an AYANEO Pocket ACE, 2026-08-21. It surfaces twice, and the two look unrelated:
+# the ESP fails inside ABL (its FatPkg returns EFI_VOLUME_CORRUPTED, never publishes a
+# SimpleFileSystem handle, and LoadEFI reports "Failed to load EFI: Not Found"), and efi-A/B fail
+# one layer later inside steamcl, which mounts them through the SAME EFI FAT driver and so finds no
+# boot candidate at all. See the block above the rows in images/partition-table.txt.
+#
+# The rule is deliberately OURS rather than mkfs.fat's. Dropping the flag entirely also produces a
+# valid filesystem, but the width would then be picked by a size-threshold table inside the tool,
+# which can move on a version bump and would silently reformat a card's ESP from FAT32 to FAT16.
+#
+# FAT_SECTOR_SIZE is a TEST SEAM and nothing else. blockdev answers only for a block device, and the
+# 4Kn path exists on no card and in no image file -- so without it the one geometry that breaks is
+# the one no suite can reach. images/test-partition-table.sh sets it to drive the rule at 4096
+# against the real table; the installer never sets it, and on a device blockdev is authoritative.
+fat_type_for() {  # <dev> -> 32 or 16
+  local dev="$1" ss bytes sectors
+  ss="${FAT_SECTOR_SIZE:-$(blockdev --getss "$dev" 2>/dev/null || true)}"
+  bytes="$(blockdev --getsize64 "$dev" 2>/dev/null || stat -c %s "$dev" 2>/dev/null || true)"
+  # Unknown geometry keeps the historical answer rather than inventing one: on a card this is right,
+  # and on a device that cannot answer blockdev the mkfs below fails loudly either way.
+  { [ -n "$ss" ] && [ -n "$bytes" ]; } || { printf 32; return 0; }
+  sectors=$(( bytes / ss ))
+  # 65525 clusters at one sector per cluster, plus reserved sectors and two FATs. Below this a
+  # FAT32 cannot exist here whatever mkfs is asked for.
+  if [ "$sectors" -ge 66000 ]; then printf 32; else printf 16; fi
+}
+
+# Read the width back off the superblock and refuse a filesystem outside its own valid range. This
+# is what turns the failure above from "the device does not boot, with no clue why" into a message
+# at the point of creation -- neither the offline suites nor a card build can reach the 4Kn path.
+#
+# FAT_ASSERT=0 is the sandbox seam, and it is the same trade DEVTEST makes. install/test-install.sh
+# stubs mkfs.vfat to a recorder, so there is no superblock to read back and this could only ever
+# fail there. The assertion IS exercised against real filesystems, at both sector sizes, by
+# images/test-partition-table.sh -- which is also the suite that would have caught the defect it
+# exists for. Nothing on a device sets it.
+assert_fat_valid() {  # <dev> <label-for-messages>
+  local dev="$1" what="$2" bps spc rsv nf t16 t32 re fsz tot rootsec cl lo hi
+  [ "${FAT_ASSERT:-1}" = 1 ] || return 0
+  g() { dd if="$dev" bs=1 skip="$1" count="$2" 2>/dev/null | od -An -tu"$2" | tr -d ' '; }
+  bps=$(g 11 2); spc=$(g 13 1); rsv=$(g 14 2); nf=$(g 16 1)
+  t16=$(g 19 2); t32=$(g 32 4); re=$(g 17 2); fsz=$(g 22 2)
+  [ "${fsz:-0}" != 0 ] || fsz=$(g 36 4)
+  tot=$t16; [ "${tot:-0}" != 0 ] || tot=$t32
+  { [ -n "$bps" ] && [ "${spc:-0}" -gt 0 ] && [ "${tot:-0}" -gt 0 ]; } \
+    || die "$what on $dev: unreadable FAT superblock after mkfs"
+  rootsec=$(( (re * 32 + bps - 1) / bps ))
+  cl=$(( (tot - (rsv + nf * fsz + rootsec)) / spc ))
+  if [ "$re" = 0 ]; then lo=65525; hi=268435445; else lo=4085; hi=65524; fi
+  { [ "$cl" -ge "$lo" ] && [ "$cl" -le "$hi" ]; } \
+    || die "$what on $dev has $cl clusters, outside ${lo}..${hi} -- the firmware will refuse to mount it"
+}
+
 # Installer-only: an update never creates a filesystem on the shared ESP, it refreshes files on the
 # one that is already there.
 mkfs_esp() {  # <dev>
   local dev="$1"
-  mkfs.vfat -F 32 -n "$ESP_FAT_LABEL" "$dev" >/dev/null \
+  mkfs.vfat -F "$(fat_type_for "$dev")" -n "$ESP_FAT_LABEL" "$dev" >/dev/null \
     || die "cannot create the ESP filesystem on $dev"
+  assert_fat_valid "$dev" "the ESP"
 }
 
 # The remaining two filesystems the installer creates and an update never does. They live here, next
@@ -434,8 +494,9 @@ mkfs_esp() {  # <dev>
 mkfs_efi() {  # <dev> <slot>
   local dev="$1" slot="${2^^}"
   case "$slot" in A|B) ;; *) die "mkfs_efi: '$2' is not an image name (A or B)" ;; esac
-  mkfs.vfat -F 32 -n "GRUB-$slot" "$dev" >/dev/null \
+  mkfs.vfat -F "$(fat_type_for "$dev")" -n "GRUB-$slot" "$dev" >/dev/null \
     || die "cannot create the efi-${slot,,} filesystem on $dev"
+  assert_fat_valid "$dev" "efi-${slot,,}"
 }
 
 # -m0: no reserved-for-root blocks. /home is user data on a device with no admin, so the 5% default

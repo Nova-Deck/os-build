@@ -30,7 +30,7 @@
 set -euo pipefail
 
 # 32 GiB for novadeck plus 1 GiB kept for Android. This is the POLICY minimum -- below 32 an install
-# is not worth having. It is not `genpart.sh --min` (15489 MiB), which is the MECHANICAL one, the
+# is not worth having. It is not `genpart.sh --min` (15361 MiB), which is the MECHANICAL one, the
 # point below which the eight partitions do not physically fit. Both exist; do not conflate them.
 NOVADECK_MIN_GIB="${NOVADECK_MIN_GIB:-32}"
 ANDROID_FLOOR_GIB="${ANDROID_FLOOR_GIB:-1}"

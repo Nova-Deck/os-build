@@ -1142,6 +1142,17 @@ fi
 if [ "${1:-}" = -p ]; then printf '  13  100  200  8.0 GiB  novadeck-home\n'; exit 0; fi
 exit 0
 EOF
+  # blkid answers ONE question -- does this partition hold a filesystem -- and $SP_HOME_FSTYPE is
+  # how a case says no. It cannot be a silent member of the recorder loop below: those exit 0 with
+  # no output, which this predicate reads as "no filesystem", and every keep-/home case would then
+  # refuse. It also cannot be left to the host's real blkid, which an offline suite inherits on
+  # PATH and which would be asked about a path under $T that is not a block device at all.
+  cat >"$SP_STUBS/blkid" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "blkid $*" >>"$SP_CALLS"
+[ -n "${SP_HOME_FSTYPE:-}" ] || exit 2
+printf '%s\n' "$SP_HOME_FSTYPE"
+EOF
   # Every filesystem creation and every mount, recorded. The mount stub deliberately does NOT
   # populate anything: the mountpoints are pre-seeded below, so the real primitives write into real
   # directories and what they produce can be inspected afterwards.
@@ -1205,6 +1216,8 @@ EOF
   SP_SEL_SECTOR=512; SP_SEL_UDINDEX=11; SP_SEL_UDSTART=2097152
   SP_SEL_UDEND=204800000; SP_SEL_CEIL=500000000
   SP_INFO_RC=0; SP_RAUC_RC=0; SP_CARVE_RC=0
+  # The default is a /home that EXISTS, so only the case that clears it exercises the refusal.
+  SP_HOME_FSTYPE=ext4
 }
 
 spine_run() {  # extra args passed through to the spine
@@ -1214,6 +1227,7 @@ spine_run() {  # extra args passed through to the spine
       SP_SEL_UDINDEX="$SP_SEL_UDINDEX" SP_SEL_UDSTART="$SP_SEL_UDSTART" \
       SP_SEL_UDEND="$SP_SEL_UDEND" SP_SEL_CEIL="$SP_SEL_CEIL" \
       SP_INFO_RC="$SP_INFO_RC" SP_RAUC_RC="$SP_RAUC_RC" SP_CARVE_RC="$SP_CARVE_RC" \
+      SP_HOME_FSTYPE="$SP_HOME_FSTYPE" \
       NOVADECK_INSTALL_RUN="$SP_RUN" DEVTEST=-e REQUIRE_ROOT=0 \
       PARTUUID_DIR="$SP_PART" DISKTEST=-e \
       DECK_UID="$(id -u)" DECK_GID="$(id -g)" \
@@ -1444,6 +1458,43 @@ grep -q "mkfs.ext4 .*000000000013" "$SP/calls" \
 grep -qx 'HOME_ACTION=erase' "$SP_FACTS" \
   && ok "and the screen says so, so the gate quotes what is being destroyed" \
   || bad "the screen did not say /home was being erased"
+
+CASE="spine: a reinstall that keeps /home refuses when there is no /home to keep"
+# FOUND ON HARDWARE 2026-08-21, on the Pocket ACE after the Phase 4a gate: eight partitions in
+# place, only root-A and var-A carrying filesystems. Nothing downstream catches it -- the keep path
+# skips mkfs_home AND skips seed_home -- so the install runs to the last byte, reports success, and
+# leaves a device that cannot mount /home. The failure is invisible until the user reboots into it.
+spine_dir reinst_nohome
+SP_SEL_MODE=reinstall
+SP_HOME_FSTYPE=""                                   # the partition exists; nothing is on it
+out="$(spine_run --intent reinstall)" \
+  && bad "the spine installed over an unformatted /home and called it keeping it" \
+  || ok "it refuses rather than producing an install that cannot mount /home"
+printf '%s\n' "$out" | grep -q 'holds no filesystem' \
+  && ok "and says what is wrong, not just that something is" \
+  || bad "the refusal does not name the empty /home: $out"
+printf '%s\n' "$out" | grep -q -- '--erase-home' \
+  && ok "and names the flag that fixes it -- a refusal with no way forward is a dead end on a recovery tool" \
+  || bad "the refusal does not name --erase-home: $out"
+grep -q 'carve.sh' "$SP/calls" \
+  && bad "it refused AFTER the carve -- the whole value of this check is that the disk is untouched" \
+  || ok "and nothing was written: the refusal lands before the carve"
+# The direction matters as much as the refusal. Quietly upgrading to --erase-home would answer
+# "keep this" by destroying it, which is the one direction that cannot be undone.
+grep -q "mkfs.ext4 .*000000000013" "$SP/calls" \
+  && bad "it silently recreated /home -- the user asked to KEEP it" \
+  || ok "and it did not quietly erase what it was asked to keep"
+
+CASE="spine: --erase-home is what an empty /home needs, and it still works"
+spine_dir reinst_nohome_erase
+SP_SEL_MODE=reinstall
+SP_HOME_FSTYPE=""
+out="$(spine_run --intent reinstall --erase-home)" \
+  && ok "the flag the refusal named actually completes the install" \
+  || bad "--erase-home did not recover the empty-/home case: $out"
+grep -q "mkfs.ext4 .*000000000013" "$SP/calls" \
+  && ok "and /home was created" \
+  || bad "--erase-home did not create /home"
 
 CASE="spine: intent is the user's, never inferred from the disk"
 spine_dir intent

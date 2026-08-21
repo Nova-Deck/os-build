@@ -26,7 +26,7 @@
 #   carve              userdata shrinks, its stale superblock is invalidated, our eight are appended
 #   mkfs               esp, efi-a, efi-b, home. NOT var-a (seed_var reformats it) and NOT var-b
 #   rauc               root-a streamed and verified; the handler randomises its fsid and seeds var-a
-#   seed /home         ~1 GB of Steam client, into the partition just created
+#   seed /home         1.7 GB of Steam client, into the partition just created
 #   efi-a / efi-b      stage-2 GRUB, minted partsets, parts.env -- the map of THIS disk
 #   ESP                grubenv, then A.conf, then stage 1
 #   bootaa64.efi       THE LAST BYTE WRITTEN. See below
@@ -188,7 +188,7 @@ recon() {
 
   local t missing=""
   for t in "$SGDISK" "$CURL" "$SHA256" \
-           mkfs.vfat mkfs.ext4 mkfs.btrfs btrfstune btrfs \
+           mkfs.vfat mkfs.ext4 mkfs.btrfs btrfstune btrfs blkid \
            mount umount tar rauc dbus-daemon gdbus partprobe udevadm; do
     command -v "$t" >/dev/null 2>&1 || missing="$missing $t"
   done
@@ -251,6 +251,33 @@ select_target() {
     || die "--intent reinstall, but $DISK carries no novadeck install to reinstall over"
   [ "$INTENT" != fresh ] || [ -n "$UD_GIB" ] \
     || die "a fresh install needs --userdata-gib: how much of the disk Android keeps"
+
+  # A REINSTALL THAT KEEPS /home HAS TO HAVE A /home TO KEEP, and nothing downstream checks it:
+  # make_filesystems skips mkfs_home on that path and seed_home returns early, so an unformatted
+  # partition yields an install that runs to the last byte, reports success, and leaves a device
+  # that cannot mount /home. The failure is invisible until the user reboots into it.
+  #
+  # Reachable in the field and not only in the lab: an interrupted first install lays the GPT and
+  # dies before mkfs_home, and the natural retry is exactly `--intent reinstall`. FOUND ON HARDWARE
+  # 2026-08-21 -- the Pocket ACE after the Phase 4a gate is precisely this shape, eight partitions
+  # present with only root-A and var-A carrying filesystems.
+  #
+  # It REFUSES rather than quietly upgrading to --erase-home. The user asked to keep something; a
+  # spine that answered by erasing it would be wrong in the one direction that cannot be undone.
+  # Checked here, where the disk is still untouched and the answer costs a message rather than a
+  # reflash.
+  if [ "$INTENT" = reinstall ] && [ "$ERASE_HOME" = 0 ]; then
+    local hidx hdev htype
+    hidx="$("$SGDISK" -p "$DISK" 2>/dev/null | awk '$NF == "novadeck-home" {print $1; exit}')" || true
+    [ -n "${hidx:-}" ] \
+      || die "$DISK carries no novadeck-home partition -- there is no /home to keep, so this is not a reinstall. Use --intent fresh."
+    hdev="$(part_dev "$DISK" "$hidx")" \
+      || die "cannot resolve p$hidx (novadeck-home) by partuuid -- refusing to guess a device name"
+    htype="$(blkid -o value -s TYPE "$hdev" 2>/dev/null || true)"
+    [ -n "$htype" ] \
+      || die "$hdev (novadeck-home) holds no filesystem -- --intent reinstall promises to KEEP /home and there is nothing there to keep. Pass --erase-home to create it, or --intent fresh."
+    log "/home on $hdev is $htype and will be kept"
+  fi
 
   # Best-effort, for the record only. Nothing branches on it -- a wwid this could not read is a
   # forensic gap, not a reason to refuse an install.
@@ -326,7 +353,7 @@ verify_sources() {
 
   # The seed's expected hash comes from the INSTALLER IMAGE, never from the server that serves the
   # seed. A pin file that is missing is fatal rather than skippable: "we could not check" and "it
-  # checked out" must not have the same effect, and an unverified ~1 GB tree unpacked into the
+  # checked out" must not have the same effect, and an unverified 1.7 GB tree unpacked into the
   # user's /home is the largest piece of unsigned content in the whole install.
   [ -r "$SEED_PIN" ] || die "no baked Steam-seed pin at $SEED_PIN -- the seed could not be verified"
   local want; want="$(tr -d '[:space:]' <"$SEED_PIN")"
@@ -334,10 +361,16 @@ verify_sources() {
 
   case "$HOME_SEED" in
     http://*|https://*)
-      # Straight to disk in $RUNDIR: a tmpfs cannot hold ~1 GB on these boards, so this is
-      # deliberately NOT how the release path should end up -- §4b will stream it. Kept simple here
-      # because the alternative (hash while streaming into the mounted /home) cannot refuse before
-      # it has already written, which is the property this whole step exists for.
+      # Straight to disk in $RUNDIR, which is deliberately NOT how the release path should end up --
+      # §4b will stream it. Kept simple here because the alternative (hash while streaming into the
+      # mounted /home) cannot refuse before it has already written, which is the property this whole
+      # step exists for.
+      #
+      # The reason to move off tmpfs is NOT that it will not fit -- measured on the Pocket ACE
+      # 2026-08-21, /run offers 3.7 G and the seed is 1.7 G, so it fits with room. It is that those
+      # 1.7 G are RAM, taken from the machine at the exact moment it is streaming a ~4 GB bundle
+      # through rauc's NBD path. An earlier version of this comment claimed it could not fit; that
+      # was wrong on this hardware, and the real cost is worth stating accurately.
       SEED_LOCAL="$RUNDIR/steam-seed.tar.zst"
       "$CURL" -fsSL --retry 3 -o "$SEED_LOCAL" "$HOME_SEED" \
         || die "cannot fetch the Steam seed from $HOME_SEED"

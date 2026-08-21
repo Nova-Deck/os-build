@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # novadeck /home staging — the deck user's home, built once and used by two writers.
 #
 # SOURCED, never executed (hence mode 0644, like lib-slotwrite.sh).
@@ -12,7 +13,8 @@
 # THE SOURCE IS EITHER A DIRECTORY OR A TARBALL, which is what separates the two callers -- the
 # same shape seed_var uses, for the same reason. make-sdcard.sh has work/steam-seed staged on the
 # build host and passes the directory. The installer has no such tree: it has the published
-# steam-seed-<pin>.tar.zst, ~1 GB, and the mounted /home is the only place with room to put it, so
+# steam-seed-<pin>.tar.zst, 1.7 GB zstd (3.3 GB unpacked, measured 2026-08-21), and the mounted
+# /home is the only place with room to put it, so
 # it passes the tarball and this unpacks straight into the destination. A helper that only took a
 # directory would force the installer to stage a second copy on a tmpfs that cannot hold one.
 

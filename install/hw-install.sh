@@ -159,6 +159,14 @@ log "seed: ${SEED_TAR#"$ROOT"/} ($(du -h "$SEED_TAR" | cut -f1), sha256 ${SEED_S
 # requests, which http.server answers with a 200 and the whole file -- the install then appears to
 # work and is slow, wrong, or both, depending on how rauc reconciles the offsets.
 #
+# EXPECT `using HTTP/1 for streaming, expect slow installation` FROM RAUC, AND DO NOT CHASE IT.
+# Measured 2026-08-21 against the ACE: serving with `http2 on;` (h2c, verified working from the
+# host with `curl --http2-prior-knowledge`) does NOT silence it -- rauc does not attempt
+# prior-knowledge h2 over cleartext, so h2 arrives via TLS ALPN or not at all. The production OTA
+# vhost has both (ota/nginx-novadeck-ota.conf), and giving this lab server TLS would mean a cert
+# the device trusts, for a stream that only has to finish once. So the gate runs on HTTP/1 and is
+# slower than the release path will be. That is a property of the harness, not a defect.
+#
 # THE FILES ARE BIND-MOUNTED ONE BY ONE, not assembled into a docroot. An earlier draft hardlinked
 # them into a staging directory and that is wrong twice: `make bundle` runs in the container so
 # out/images is ROOT-OWNED, and protected_hardlinks refuses a link to a file you do not own, so the

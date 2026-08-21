@@ -56,11 +56,12 @@
 # versioned OS components, and sharing them across slots would let an update mutate the running
 # system's emulation stack and break rollback.
 #
-# 'rest' expands to fill the target device. Fixed partitions total ~14.9G, so the minimum
-# usable card is 32G (leaving ~15G of /home); 64G+ is the sane target.
+# 'rest' expands to fill the target device. Fixed partitions total ~15.2G (the ESP grew by 256M,
+# see above), so the minimum usable card is 32G (leaving ~15G of /home); 64G+ is the sane target.
 #
 # 'attrs' is a comma-separated list of GPT attribute bits to set, or '-' for none. Only bit 63
-# ("no-auto") is used today, on home. home carries the discoverable "Linux /home" type GUID
+# ("no-auto") is used today, on home and on the ESP — each for its own reason, both above.
+# home carries the discoverable "Linux /home" type GUID
 # (8302) because systemd-repart matches it by that GUID to grow it on first boot — matching by
 # type is what guarantees repart can never touch a root partition. But that same GUID also makes
 # systemd's gpt-auto generator synthesize its OWN home.mount, which would silently shadow (or be
@@ -69,8 +70,33 @@
 #
 # Consumed by images/genpart.sh to emit an sgdisk script. Row order = partition number.
 #
+# THE ESP IS 512M FOR A REASON THAT IS NOT CAPACITY, AND SHRINKING IT IS A REGRESSION.
+# It holds four small files (~200K). It is 512M because a FAT32 filesystem must have at least
+# 65525 data clusters to be one, and cluster count is driven by SECTORS, not bytes:
+#
+#   256M on 512-byte sectors   524288 sectors ->  516190 clusters   valid
+#   256M on 4096-byte sectors   65520 sectors ->   65360 clusters   INVALID, by 165
+#
+# Every SD card is 512e and every internal UFS in this fleet is 4Kn, so a 256M ESP is a valid
+# FAT32 on every card ever flashed and an invalid one on every internal install. `mkfs.vfat` was
+# already at `-s 1`, the smallest cluster available, so there was no filesystem-side fix: the
+# partition has to be big enough. 512M gives ~131000 clusters at 4K, with margin.
+#
+# MEASURED, on an AYANEO Pocket ACE, 2026-08-21. The first internal install produced an ESP Linux
+# mounted happily and the ROCKNIX ABL refused, reporting no /EFI/BOOT/bootaa64.efi when the file
+# was demonstrably there. Reformatting that same partition as a spec-valid FAT16 did not help
+# either, so FAT32 is what the firmware wants and the size is the only lever. The peer distro's
+# own internal installer makes its boot partition 2 GiB, which is why it never met this.
+#
+# CONSEQUENCE FOR DEVICES ALREADY IN THE FIELD, recorded because it is permanent: this file ships
+# INSIDE the rootfs, so after the next OTA a flashed card runs a rootfs whose table says 512M while
+# its disk still has 256M. Nothing breaks -- every runtime consumer (initramfs/init, lib-slotwrite,
+# gen-grub-cfg) reads names and ORDER only, never a size, and OTA never repartitions. But the two
+# do diverge, permanently, and guard-rootfs.sh cannot see it because both copies agree with each
+# other. If anything ever starts validating geometry against this table, that is the case to handle.
+#
 # name      size  typecode  fs        label            attrs
-esp         256M  ef00      vfat      NOVADECK-ESP     63
+esp         512M  ef00      vfat      NOVADECK-ESP     63
 efi-a       64M   0700      vfat      novadeck-efi-A   -
 efi-b       64M   0700      vfat      novadeck-efi-B   -
 rootfs-a    7G    8300      btrfs     novadeck-root-A  -

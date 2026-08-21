@@ -745,7 +745,7 @@ by one rule with no fallback:
 
 The 33 GiB is 32 for NovaDeck plus 1 kept for Android. Below 32 GiB a NovaDeck install is not worth
 having, so a disk that cannot give it that is refused rather than half-served. Note this is a
-*policy* minimum and is not the same number as `genpart.sh --min` (15233 MiB), which is the
+*policy* minimum and is not the same number as `genpart.sh --min` (15489 MiB), which is the
 *mechanical* one — the point below which the eight partitions do not physically fit. Both exist;
 they must not be conflated, and neither should drift into the other.
 

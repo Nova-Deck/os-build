@@ -179,9 +179,24 @@ for arg in 470 0 33G -1 ""; do
 done
 # One sector too small for the layout, computed rather than guessed: the largest userdata that still
 # leaves room, plus one GiB, must refuse -- and the boundary below it must succeed.
+#
+# DERIVED FROM THE REAL CEILING, not from userdata's own span. An earlier version approximated the
+# available room as userdata's extent and rounded genpart's minimum UP to whole GiB:
+#
+#     fits = span_gib - (minmib + 1023) / 1024
+#
+# That is conservative by up to 1023 MiB, which is nearly the whole +1 GiB margin the case then
+# leans on -- so the two cancel and the assertion turns into a coin flip against whatever `--min`
+# happens to be. It flipped on 2026-08-21 when the ESP grew 256M -> minmib 15233 -> 15489 crossed a
+# 1024 boundary, the rounding jumped 15 -> 16, and `fits + 1` became exactly the size that had been
+# the largest FITTING one a moment earlier. The carve was right to accept it; the arithmetic here
+# was wrong. Ask carve.sh for the ceiling instead, which is the same number it will act on.
 minmib="$(bash "$ROOT/images/genpart.sh" --min)"
-span_gib=$(( ( $(udfield "$s2" 'Last sector') - $(udfield "$s2" 'First sector') + 1 ) / 2097152 ))
-fits=$(( span_gib - (minmib + 1023) / 1024 ))
+ceil="$(carve plan "$s2" 33 | sed -n 's/^CEIL=//p')"
+[ -n "$ceil" ] || bad "could not read the ceiling from carve plan"
+# Image files always report 512-byte sectors, whatever the captured board had.
+avail_mib=$(( (ceil - $(udfield "$s2" 'First sector') + 1) / 2048 ))
+fits=$(( (avail_mib - minmib) / 1024 ))
 out="$(carve fresh "$s2" $(( fits + 1 )))"
 { [ "$(rows "$s2")" = "$snap" ] && printf '%s\n' "$out" | grep -q "the layout needs"; } \
   && ok "one GiB past what fits -> refused, naming both sizes, table unchanged" \

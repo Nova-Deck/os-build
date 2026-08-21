@@ -16,77 +16,32 @@
 # somebody cares about.
 #
 # TWO binaries are staged rather than assumed, because neither is in the shipped image — both are
-# installer-image packages (plan Phase 6):
-#
-#   sgdisk (gptfdisk)  reads the GPT. Its DT_NEEDED closure — libuuid, libpopt, libstdc++,
-#                      libgcc_s — is satisfied by packages the image already carries
-#                      (util-linux-libs, popt, gcc-libs are all rows in images/manifest.lock).
-#   mdir   (mtools)    reads ESP CONTENT at a byte offset, which is how rule 3b decides whether a
-#                      foreign ESP is one ABL would boot. Needs libc and nothing else.
+# installer-image packages (plan Phase 6). The pins, the closures and the fetch live in
+# install/lib-hwstage.sh, shared with install/hw-install.sh, which stages the same two plus the two
+# more the destructive half needs. That file is where a snapshot bump is done.
 #
 # Staging mdir is not a convenience. Without it select-target.sh refuses outright (it fails closed
 # since 2026-08-21), and before that change its absence made rule 3b answer "not bootable" for
 # every ESP on the disk — which is how the FIT's ROCKNIX install went undetected. Rule 3b has no
 # hardware coverage at all unless this binary travels with the script.
-#
-# Re-check both closures after a snapshot bump; a new dependency surfaces on the DEVICE as a loader
-# error, not here as a failed fetch.
 set -euo pipefail
 
 host="${1:-}"
 [ -n "$host" ] || { echo "usage: ${0##*/} <user@host>   (e.g. root@192.168.1.166)" >&2; exit 2; }
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cache="$ROOT/work/hw-sgdisk"
 
-# The package, pinned by sha256 the same way every other external artifact in this tree is
-# (packages/*/prebuilt.pin, the kernel tarball). The repo it comes from is images/manifest.lock's
-# snapshot, read from the file rather than duplicated, so a `make relock` cannot leave this
-# fetching from a snapshot the image no longer uses. To bump: change VERSION + SHA256 together
-# after a relock, and re-check the NEEDED closure noted above.
-GPTFDISK_PKG="gptfdisk-1.0.10-1-aarch64.pkg.tar.zst"
-GPTFDISK_SHA256="6512d21ab6b504d36f45bec0c4b0f692179ff4a916707e0f050a1c56f4181704"
-# mtools carries an EPOCH, so its filename holds a colon: it must be percent-encoded in the URL and
-# kept out of tar's argument (tar reads `name:path` as a REMOTE host). Both are handled by fetching
-# to a colon-free local name.
-MTOOLS_PKG="mtools-1:4.0.49-1-aarch64.pkg.tar.zst"
-MTOOLS_SHA256="1dde2158e72277060b0a7722d223985200cc377a8dc1e1d7b8adcfbc474d0aa4"
-
-snapshot="$(sed -n 's|^# repo snapshot: *||p' "$ROOT/images/manifest.lock" | head -1)"
-[ -n "$snapshot" ] || { echo "no '# repo snapshot:' line in images/manifest.lock" >&2; exit 1; }
+# shellcheck source=lib-hwstage.sh
+. "$ROOT/install/lib-hwstage.sh"
+hwstage_init "$ROOT"
 
 # --- stage 1: the binaries, fetched once and cached under work/ (gitignored) ------------------
-# <pkg-filename> <sha256> <member-in-package> <local-name>
-fetch_bin() {
-  local pkg="$1" sha="$2" member="$3" out="$4" local_pkg url got
-  [ -x "$cache/$out" ] && return 0
-  mkdir -p "$cache"
-  local_pkg="$cache/${out}.pkg.tar.zst"
-  # The only character needing encoding in these names is the epoch's colon.
-  url="$snapshot/extra/os/aarch64/${pkg//:/%3A}"
-  echo "[novadeck] fetching $pkg" >&2
-  curl -fsSL -o "$local_pkg" "$url"
-  got="$(sha256sum "$local_pkg" | cut -d' ' -f1)"
-  [ "$got" = "$sha" ] || { rm -f "$local_pkg"
-    echo "sha256 mismatch for $pkg: got $got, pinned $sha" >&2; exit 1; }
-  tar -I zstd -C "$cache" -xf "$local_pkg" "$member"
-  # mdir ships as a symlink to the multi-call `mtools` binary, which dispatches on argv[0]; copying
-  # it under the name we want is what makes a single file enough.
-  cp "$cache/$member" "$cache/$out"
-  chmod +x "$cache/$out"
-}
-
-fetch_bin "$GPTFDISK_PKG" "$GPTFDISK_SHA256" usr/bin/sgdisk sgdisk
-fetch_bin "$MTOOLS_PKG"   "$MTOOLS_SHA256"   usr/bin/mtools mdir
-sgdisk="$cache/sgdisk"
-mdir="$cache/mdir"
+hwstage_fetch sgdisk mdir
+sgdisk="$(hwstage_path sgdisk)"
+mdir="$(hwstage_path mdir)"
 
 # --- stage 2: onto the device ----------------------------------------------------------------
-# The dev card's throwaway key (dev.env mints it). IdentitiesOnly, so an agent holding many keys
-# cannot spend the server's auth attempts before this one is offered.
-key="$ROOT/work/dev-ssh/id_ed25519"
-SSHOPTS=(-o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10)
-[ -f "$key" ] && SSHOPTS+=(-i "$key")
+hwstage_ssh_opts
 
 ssh "${SSHOPTS[@]}" "$host" 'mkdir -p /run/novadeck/probe'
 scp "${SSHOPTS[@]}" -q "$sgdisk" "$mdir" "$ROOT/install/select-target.sh" "$host:/run/novadeck/probe/"

@@ -1832,11 +1832,39 @@ gate), `test-units.sh` (new units), and byte-identity of the shipped
    boots, NovaDeck boots from internal with the SD removed, `novadeck-bootctl status` sane,
    one OTA installs into B and switches. **THIS IS THE NEXT THING OWED** — §4c landed offline
    2026-08-21 and every defect this project has found in the install path so far was found by
-   hardware AFTER the suite was green. What the run needs staged beside the bundle: a tar of
-   `work/steam-seed`, its sha256 written to `/usr/lib/novadeck/install/steam-seed.sha256` on the
-   card, and `install/confirm-tty` symlinked to the gate's fixed path (or `NOVADECK_CONFIRM=`
-   pointed at it). Serve both over nginx-in-docker, not `python3 -m http.server` — rauc's NBD
-   streaming needs HTTP Range. `/run` is tmpfs: restage after every reboot.
+   hardware AFTER the suite was green.
+
+   **`install/hw-install.sh` is the stager** — the destructive peer of `hw-select-target.sh`,
+   landed 2026-08-21. It stages, pre-flights, and prints the one destructive command; it never
+   runs it, because a stager that also installed would put "erase this device's Android" one
+   arrow-up away and would have to answer §4d's gate itself. Four gaps separate the dev card
+   from the installer image and it closes all four:
+
+   - **Four binaries are absent from the shipped image** — `sgdisk`, `mdir`, `mkfs.vfat`,
+     `partprobe`. Pins and DT_NEEDED closures live in `install/lib-hwstage.sh`, shared with
+     `hw-select-target.sh`. Only `partprobe` needs a library staged with it (`libparted.so.2`);
+     the other closures are satisfied by rows already in `manifest.lock` — util-linux-libs,
+     popt, gcc-libs, device-mapper. All four are **executed** in the pre-flight, not merely
+     `command -v`'d: a staged binary that resolves on PATH and dies in `ld.so` would surface
+     mid-carve.
+   - **Three fixed paths point into a read-only rootfs** — `NOVADECK_CONFIRM`,
+     `NOVADECK_SEED_PIN` and `POST_INSTALL` all default under `/usr/lib/novadeck/install/`, and
+     the two that are installer-only are not on a dev card. A generated `run-install` wrapper
+     redirects them and nothing else.
+   - **The working tree must win over the card's baked copies** — `genpart.sh`,
+     `partition-table.txt` and `lib-slotwrite.sh` all ship into the rootfs, so a dev card
+     carries whatever they were when it was flashed. Everything is staged into **one flat
+     directory**, which every component's own `$SELFDIR`-first resolver then prefers.
+   - **The seed does not go in `/run`.** `verify_sources` fetches an http seed straight into
+     `$RUNDIR`, and that is ~1 GB of tmpfs taken from the machine about to stream a ~4 GB
+     bundle, re-fetched at every reboot. The stager pushes the tarball once to the dev card's
+     `/home` and passes it as a path; `--seed-mode http` is the release-shaped alternative.
+
+   The bundle is always HTTP, served by **nginx-in-docker** — `python3 -m http.server` answers
+   a Range request with a 200 and the whole file, and rauc streams over NBD. Bind-mount the
+   bundle **file**, do not stage a docroot: `out/images` is root-owned (the build runs in a
+   container) so `protected_hardlinks` refuses the link and the fallback silently copies 4 GB.
+   `/run` is tmpfs: re-run the stager after every reboot — seconds, since the seed stays.
 4. ~~Same, with an old NovaDeck card left inserted.~~ **DROPPED with 1c** — an old novadeck card in
    an internally-installed device is out of scope (see 1c). The supported inserted media are the
    installer/recovery card and a Steam-formatted library card, neither of which carries `novadeck-*`

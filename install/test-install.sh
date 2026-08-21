@@ -940,5 +940,125 @@ printf '%s\n' "$calls" | grep -q "^tar .*$FRESH_SEED_REL" \
   && ok "seeds /var from the tarball inside the root RAUC just wrote, not from the installer medium" \
   || bad "the /var seed did not come from the new root: $calls"
 
+# --- 14. refresh_esp_stage1 writes bootaa64.efi LAST (Phase 4c) ----------------------------------
+# THE ORDER INSIDE THIS FUNCTION IS A HARDWARE FINDING, not a style. ABL's test is content-based:
+# it chainloads /EFI/BOOT/bootaa64.efi off an internal ESP if that file is there, and an internal
+# ESP that exists but is EMPTY does not divert it at all (measured, Pocket ACE 2026-08-21). So on an
+# internal install this one copy is the byte that flips the device off the installer medium, and
+# every interruption before it leaves a device that still boots the card and can simply be re-run.
+# Write it first and an install interrupted a second later boots internal steamcl with no
+# steamcl-version, no font and no restricted flag beside it -- the files steamcl resolves relative
+# to the chainloader. Nothing else in this suite would notice the difference, which is why it is
+# asserted directly against write order rather than against the resulting directory.
+CASE="refresh_esp_stage1: bootaa64.efi is the last write"
+espt="$T/esp-order"; bootd="$T/esp-order-boot"
+mkdir -p "$espt" "$bootd/fonts"
+printf 'steamcl\n'      >"$bootd/steamcl.efi"
+printf 'version\n'      >"$bootd/steamcl-version"
+printf 'font\n'         >"$bootd/fonts/default.pf2"
+# The observation seam: refresh_if_diff is what actually copies, so wrapping it records the order
+# the primitive asked for rather than the order the filesystem happened to produce.
+ESP_ORDER="$T/esp-order.log"; : >"$ESP_ORDER"
+eval "orig_refresh_if_diff() $(declare -f refresh_if_diff | tail -n +2)"
+refresh_if_diff() { printf '%s\n' "${2##*/}" >>"$ESP_ORDER"; orig_refresh_if_diff "$@"; }
+refresh_esp_stage1 "$espt" "$bootd"
+refresh_if_diff() { orig_refresh_if_diff "$@"; }
+[ "$(tail -1 "$ESP_ORDER")" = bootaa64.efi ] \
+  && ok "bootaa64.efi is written last (an interrupted install still boots the medium)" \
+  || bad "bootaa64.efi is not the last write: $(tr '\n' ' ' <"$ESP_ORDER")"
+grep -qx steamcl-version "$ESP_ORDER" && grep -qx default.pf2 "$ESP_ORDER" \
+  && ok "the companions steamcl resolves relative to itself are written before it" \
+  || bad "a companion file was not written: $(tr '\n' ' ' <"$ESP_ORDER")"
+[ -f "$espt/EFI/BOOT/steamcl-restricted" ] \
+  && ok "the restricted flag is still written" \
+  || bad "steamcl-restricted is missing"
+
+# --- 15. part_uuid / part_dev — the index-to-device rule (Phase 4c) ------------------------------
+# The rule every write in the install depends on: an index becomes a device path through the
+# PARTUUID sgdisk reports, never through `${disk}${n}` or `${disk}p${n}`. The `p` infix is what this
+# fleet cannot test -- every board is UFS -- so a bug of that shape would first appear on a
+# customer's eMMC device, mid-install, on a disk whose userdata is already gone. Both halves of the
+# installer (carve.sh and the spine) call THIS function, so a regression here fails once, loudly.
+CASE="part_dev: by partuuid, lower-cased, never name arithmetic"
+sgstub="$T/sgstub"; mkdir -p "$sgstub"
+cat >"$sgstub/sgdisk" <<'EOF'
+#!/usr/bin/env bash
+# Prints the GUID in UPPER case, as the real tool does -- lower-casing is the caller's job and the
+# thing worth asserting.
+[ "${1:-}" = -i ] || exit 1
+printf 'Partition unique GUID: 6F2A1B3C-4D5E-6789-ABCD-EF0123456789\n'
+EOF
+chmod +x "$sgstub/sgdisk"
+uuid="$(PATH="$sgstub:$PATH" part_uuid /dev/anything 12)"
+[ "$uuid" = 6f2a1b3c-4d5e-6789-abcd-ef0123456789 ] \
+  && ok "part_uuid lower-cases sgdisk's upper-case GUID (steamcl string-compares these)" \
+  || bad "part_uuid returned '$uuid'"
+if PATH="$sgstub:$PATH" part_dev "$T/not-a-block-device" 12 >/dev/null 2>&1; then
+  bad "part_dev answered for something that is not a block device -- a caller would open a path that names nothing"
+else
+  ok "part_dev refuses anything that is not a block device rather than inventing a node"
+fi
+# The negative that matters: no output of this function may ever contain the disk name.
+out="$(PATH="$sgstub:$PATH" part_uuid /dev/mmcblk0 12)"
+case "$out" in *mmcblk*) bad "part_uuid leaked the disk name into its answer: $out" ;;
+  *) ok "the answer names no disk, so the p-infix spelling cannot enter it" ;; esac
+
+# --- 16. images/lib-homestage.sh — one /home layout, two writers --------------------------------
+# make-sdcard.sh builds this tree into a card image at build time and novadeck-install builds it
+# onto an internal disk on the device. The drift is SILENT in the worst way: a missing
+# ~/.steam/sdk64 does not stop Steam starting, it makes an x86 title's SteamAPI_Init() fail at
+# launch, on that medium only. So the layout is asserted here and both writers call the same code.
+HOMESTAGE="$ROOT/images/lib-homestage.sh"
+[ -r "$HOMESTAGE" ] || { echo "missing input: $HOMESTAGE" >&2; exit 1; }
+CASE="lib-homestage: the deck home layout"
+# shellcheck source=/dev/null
+( set -e
+  DECK_UID="$(id -u)"; DECK_GID="$(id -g)"   # unprivileged: chown to ourselves is a no-op that still runs
+  . "$HOMESTAGE"
+  seeddir="$T/seed"; mkdir -p "$seeddir/linuxarm64"; : >"$seeddir/steam.sh"
+  hs="$T/homestage-dir"; mkdir -p "$hs"
+  stage_deck_home "$seeddir" "$hs"
+) >/dev/null 2>&1 && ok "stages from a directory (make-sdcard.sh's caller)" \
+  || bad "staging from a directory failed"
+
+# The tarball arm is the INSTALLER's, and it is not a variation: on the device there is no staged
+# tree and no tmpfs with room for one, so the ~1 GB seed is unpacked straight into the mounted
+# /home. A helper that only took a directory would force a second copy that cannot fit.
+CASE="lib-homestage: the tarball arm (the installer's)"
+( set -e
+  DECK_UID="$(id -u)"; DECK_GID="$(id -g)"
+  . "$HOMESTAGE"
+  seeddir="$T/seed2"; mkdir -p "$seeddir/linuxarm64"; : >"$seeddir/steam.sh"
+  tar -cf "$T/seed.tar" -C "$seeddir" .
+  hs="$T/homestage-tar"; mkdir -p "$hs"
+  stage_deck_home "$T/seed.tar" "$hs"
+) >/dev/null 2>&1 && ok "stages from a published tarball (novadeck-install's caller)" \
+  || bad "staging from a tarball failed"
+
+CASE="lib-homestage: both arms produce the same tree"
+a="$(cd "$T/homestage-dir" 2>/dev/null && find . | sort)" || a=""
+b="$(cd "$T/homestage-tar" 2>/dev/null && find . | sort)" || b=""
+[ -n "$a" ] && [ "$a" = "$b" ] \
+  && ok "a directory seed and a tarball seed give byte-identical layouts" \
+  || bad "the two arms disagree:\n$(diff <(printf '%s\n' "$a") <(printf '%s\n' "$b") || true)"
+
+CASE="lib-homestage: the compat symlinks Steam resolves at game launch"
+for l in .steam/steam .steam/root .steam/sdkarm64 .steam/sdk32 .steam/sdk64 .steam/bin32 .steam/bin64; do
+  [ -L "$T/homestage-dir/deck/$l" ] \
+    && ok "~/$l exists" \
+    || bad "~/$l is missing -- an x86 title's SteamAPI_Init() fails at launch and nothing else does"
+done
+CASE="lib-homestage: the links are HOME-relative"
+tgt="$(readlink "$T/homestage-dir/deck/.steam/sdk64")"
+case "$tgt" in
+  /*) bad "sdk64 points at an absolute path ($tgt) -- right in the staging dir, wrong at boot" ;;
+  *)  ok "sdk64 -> $tgt, relative, so it is right under a mountpoint and on the booted device" ;;
+esac
+CASE="lib-homestage: a missing seed is fatal, not silent"
+( DECK_UID="$(id -u)"; DECK_GID="$(id -g)"; . "$HOMESTAGE"; \
+  stage_deck_home "$T/no-such-seed" "$T/homestage-none" ) >/dev/null 2>&1 \
+  && bad "staged a home from a seed that does not exist" \
+  || ok "refuses a seed that is neither a directory nor a file"
+
 printf '\ntest-install.sh: %d passed, %d failed, %d skipped\n' "$PASS" "$FAIL" "$SKIP"
 [ "$FAIL" -eq 0 ]

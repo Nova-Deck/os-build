@@ -48,6 +48,10 @@ set -euo pipefail
 export MTOOLS_SKIP_CHECK=1   # mtools on a file image has no geometry; silence the warning
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# The /home layout, shared with install/novadeck-install. Resolved relative to this script with no
+# seam: both files live in images/, so there is exactly one path and no test-only variant of it.
+# shellcheck source=lib-homestage.sh
+. "$ROOT/images/lib-homestage.sh"
 OUT="$ROOT/out"
 BOOT="$OUT/boot"
 IMGDIR="$OUT/images"
@@ -131,34 +135,18 @@ fi
 # the HOME-relative ~/.steam compat symlinks (mirror SteamOS's layout). Owned by deck (uid/gid 1000,
 # baked into the base) so Steam can write its home immediately — mkfs.ext4 -d preserves this. This is
 # the OFFLINE analog of steamos-create-homedir, done at build time instead of first boot.
-DECK_UID=1000; DECK_GID=1000
+#
+# THE LAYOUT ITSELF LIVES IN images/lib-homestage.sh, because the internal installer builds the same
+# tree on a device from the published seed tarball and the two must not drift. The parts that drift
+# silently are the compat symlinks: a missing sdk64 does not stop Steam starting, it makes an x86
+# title's SteamAPI_Init() fail at launch, on that medium only.
 homestage="$(mktemp -d)"
 # Every name here is ${x:-} because the trap is armed BEFORE most of them exist: under `set -u` an
 # early exit (a `fits` check failing, say) would otherwise die inside the trap on an unset variable
 # and mask the real error. The previous fix for that was a block of empty pre-assignments carrying
 # a comment pointing at a line number, which is a trap of its own.
 trap 'rm -f "${esp:-}" "${efi_a:-}" "${efi_b:-}" "${home:-}" "${ROOTFS_B:-}" "${conf_a:-}" "${conf_b:-}" "${partsenv:-}" "${flag:-}"; rm -rf "${homestage:-}"' EXIT
-deckhome="$homestage/deck"
-install -d "$deckhome/.local/share" "$deckhome/.steam"
-cp -a "$SEED" "$deckhome/.local/share/Steam"
-ln -sfn ../.local/share/Steam            "$deckhome/.steam/steam"
-ln -sfn ../.local/share/Steam            "$deckhome/.steam/root"
-ln -sfn ../.local/share/Steam/linuxarm64 "$deckhome/.steam/sdkarm64"
-# x86 Steam SDK/runtime compat symlinks. A native x86-64 Linux game under system-FEX dlopen()s
-# ~/.steam/sdk64/steamclient.so (32-bit -> sdk32); Steam's reaper also resolves ubuntu12_{32,64}
-# via bin{32,64}. Without these the game's SteamAPI_Init() fails ("cannot open sdk64/steamclient.so")
-# and it exits/crashes. The link targets (linux{32,64}, ubuntu12_{32,64}) are populated by the arm64
-# client on demand when it first runs an x86 title; the symlinks must pre-exist so it can.
-ln -sfn ../.local/share/Steam/linux32     "$deckhome/.steam/sdk32"
-ln -sfn ../.local/share/Steam/linux64     "$deckhome/.steam/sdk64"
-ln -sfn ../.local/share/Steam/ubuntu12_32 "$deckhome/.steam/bin32"
-ln -sfn ../.local/share/Steam/ubuntu12_64 "$deckhome/.steam/bin64"
-# No compat tool is seeded into the deck home. The arm64 Proton that runs x86 Windows
-# games lives in the root slot at /usr/share/steam/compatibilitytools.d, added to the
-# client's search set via STEAM_EXTRA_COMPAT_TOOLS_PATHS (exported by novadeck-steam) —
-# so it is available on first boot without being copied into (and then going stale in)
-# the user's Steam directory, and it is replaced atomically with the OS slot.
-chown -R "$DECK_UID:$DECK_GID" "$deckhome"
+stage_deck_home "$SEED" "$homestage"
 
 # Size /home to the seed + headroom (ext4 metadata + a little slack so mkfs.ext4 -d has room), unless
 # forced. novadeck-grow-home grows it to fill the card on first boot, so this is only the flash-time

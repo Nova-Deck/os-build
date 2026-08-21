@@ -36,6 +36,46 @@ fi
 # callers that do neither.
 SHA256=${SHA256:-sha256sum}
 
+# --- addressing a partition by index, without spelling a device name ----------------------------
+# THE ONE RULE THE INSTALLER'S EVERY WRITE DEPENDS ON. genpart.sh --append hands back indices, and
+# the tempting way to turn an index into something mkfs can open is `${disk}${n}` or `${disk}p${n}`.
+# Do not. The `p` infix depends on the disk's KIND -- `mmcblk0p11` against `sda11` -- so a spine
+# written against one is broken on the other, and we cannot test the difference: every device in the
+# fleet is UFS (five captures plus a Thor Lite, all UFS 3.1; the only mmcblk anywhere is the boot
+# SD). A naming bug of this shape would first appear on a customer's eMMC board, mid-install, on a
+# disk whose userdata is already gone. Nothing on the device concatenates a disk and an index today
+# and nothing new may start.
+#
+# LOWER-CASED, and that is not cosmetic either: sgdisk prints partition GUIDs upper case, steamcl
+# string-compares them against the partsets, and mint_partsets below refuses anything else. One
+# lowercasing site, so a uuid used as a device path and the same uuid written into a partset cannot
+# disagree.
+#
+# TWO SEAMS, and they are the same pair every script in this install documents: an unprivileged
+# offline suite has no block device to offer and no /dev/disk/by-partuuid to populate, so the
+# assertions that matter -- that the answer is lower-cased and that it never contains the disk name
+# -- would otherwise be unreachable. Neither has a use on a device. Named here so the rule above
+# reads as having declared carve-outs rather than as being quietly untrue.
+PARTUUID_DIR=${PARTUUID_DIR:-/dev/disk/by-partuuid}
+DISKTEST=${DISKTEST:--b}
+
+part_uuid() {  # <disk> <index> -> lowercase partition GUID
+  sgdisk -i "$2" "$1" 2>/dev/null \
+    | sed -n 's/^Partition unique GUID: \([0-9A-Fa-f-]*\).*/\1/p' | tr 'A-Z' 'a-z'
+}
+
+# Returns NON-ZERO for an image file, which has no partition nodes at all. Callers must treat that
+# as "there is nothing to open here" rather than falling back to a name they built themselves --
+# guessing a device node to write to is precisely the guess this rule exists to refuse.
+part_dev() {  # <disk> <index> -> /dev/disk/by-partuuid/<uuid>
+  local uuid
+  # shellcheck disable=SC2086  # DISKTEST is a predicate, not a path
+  [ $DISKTEST "$1" ] || return 1
+  uuid="$(part_uuid "$1" "$2")"
+  [ -n "$uuid" ] || return 1
+  printf '%s/%s\n' "$PARTUUID_DIR" "$uuid"
+}
+
 # --- parts.env (phase 1b) -----------------------------------------------------------------------
 # The map stage 2 reads before it can address anything: where our eight partitions ARE on this
 # medium. On a card they are 1..8; on an internal install genpart.sh --append discovers them from
@@ -346,13 +386,25 @@ refresh_esp_stage1() {  # <esp> <bootdir>
   [ -f "$steamcl" ] || die "the installed root carries no /usr/lib/novadeck/boot/steamcl.efi"
 
   mkdir -p "$esp/EFI/BOOT" "$esp/EFI/BOOT/fonts" || die "cannot create $esp/EFI/BOOT"
-  refresh_if_diff "$steamcl" "$esp/EFI/BOOT/bootaa64.efi"
   refresh_if_diff "$steamcl_ver" "$esp/EFI/BOOT/steamcl-version"
   refresh_if_diff "$stage_font" "$esp/EFI/BOOT/fonts/default.pf2"
   # An empty flag file; steamcl reads its existence, not its contents. It restricts chainloading to
   # the same physical device, which is what stops an installer medium from being used to boot
   # something off another disk.
   : >"$esp/EFI/BOOT/steamcl-restricted" || die "cannot write $esp/EFI/BOOT/steamcl-restricted"
+  sync
+  # bootaa64.efi LAST, and the order is the whole point rather than tidiness. ABL's test is
+  # CONTENT-based -- it chainloads /EFI/BOOT/bootaa64.efi if that file is there -- so on an internal
+  # install this one copy is what flips the device from booting the installer medium to booting the
+  # disk being built (measured 2026-08-21: an empty internal ESP does not divert ABL at all). Write
+  # it first and an install interrupted a second later leaves a device that boots internal steamcl
+  # with no steamcl-version, no font and no restricted flag beside it; write it last and every
+  # earlier interruption still boots the medium and a re-run is free. The companions are resolved by
+  # steamcl's resolve_path() relative to the chainloader, so they must already be there when it runs.
+  #
+  # The OTA path gets the same property for the same reason: the shared ESP is the one write in an
+  # update with no A/B copy behind it, so the file with nothing to roll back to goes last.
+  refresh_if_diff "$steamcl" "$esp/EFI/BOOT/bootaa64.efi"
   sync
 }
 
@@ -369,4 +421,27 @@ mkfs_esp() {  # <dev>
   local dev="$1"
   mkfs.vfat -F 32 -n "$ESP_FAT_LABEL" "$dev" >/dev/null \
     || die "cannot create the ESP filesystem on $dev"
+}
+
+# The remaining two filesystems the installer creates and an update never does. They live here, next
+# to mkfs_esp and to the writers that fill them, so that a card and an internal install produce the
+# same objects: images/make-sdcard.sh is the other writer, and its labels are what these repeat.
+#
+# NOTHING RESOLVES AN efi PARTITION BY THIS LABEL either -- steamcl matches the partition uuid it
+# booted from against SteamOS/partsets/self, and the stage-2 grub.cfg addresses partitions by the
+# index parts.env gives it. `GRUB-A`/`GRUB-B` is a human convenience on a mounted disk, and it is
+# again not the GPT name: a FAT label caps at 11 characters.
+mkfs_efi() {  # <dev> <slot>
+  local dev="$1" slot="${2^^}"
+  case "$slot" in A|B) ;; *) die "mkfs_efi: '$2' is not an image name (A or B)" ;; esac
+  mkfs.vfat -F 32 -n "GRUB-$slot" "$dev" >/dev/null \
+    || die "cannot create the efi-${slot,,} filesystem on $dev"
+}
+
+# -m0: no reserved-for-root blocks. /home is user data on a device with no admin, so the 5% default
+# is 5% of the disk nobody can ever use. make-sdcard.sh passes the same.
+mkfs_home() {  # <dev>
+  local dev="$1"
+  mkfs.ext4 -q -F -L novadeck-home -m0 "$dev" \
+    || die "cannot create the /home filesystem on $dev"
 }

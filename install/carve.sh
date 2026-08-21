@@ -30,6 +30,20 @@ set -euo pipefail
 SELFDIR="$(cd "$(dirname "$0")" && pwd)"
 SELECT="${NOVADECK_SELECT_TARGET:-$SELFDIR/select-target.sh}"
 
+# lib-slotwrite.sh, for `part_dev` alone. It is a shipped library and this script is installer-only,
+# so it is resolved by search, exactly as genpart.sh is below. Sourced rather than reimplemented
+# because "turn an index into a device path" is the one rule every write in the install depends on
+# (the `p` infix we cannot test), and a private second copy of it here is how the two halves of the
+# installer end up disagreeing about which partition they are addressing.
+SLOTWRITE="${NOVADECK_SLOTWRITE:-}"
+if [ -z "$SLOTWRITE" ]; then
+  for c in "$SELFDIR/lib-slotwrite.sh" \
+           /usr/lib/novadeck/install/lib-slotwrite.sh \
+           "$SELFDIR/../fs-overlay/usr/lib/novadeck/install/lib-slotwrite.sh"; do
+    [ -r "$c" ] && { SLOTWRITE="$c"; break; }
+  done
+fi
+
 # genpart.sh is SHIPPED (into /usr/lib/novadeck/install/) while this script is installer-only, so
 # the two do not always sit together. Resolved by search rather than by a repo-relative path, for
 # the same reason genpart resolves its table next to itself.
@@ -63,6 +77,12 @@ INTENT="$1"; DISK="$2"
 command -v sgdisk >/dev/null 2>&1 || die "sgdisk not found"
 [ -n "$GENPART" ] && [ -x "$GENPART" ] || die "cannot find genpart.sh (set NOVADECK_GENPART)"
 [ -x "$SELECT" ] || die "cannot find select-target.sh (set NOVADECK_SELECT_TARGET)"
+[ -n "$SLOTWRITE" ] && [ -r "$SLOTWRITE" ] \
+  || die "cannot find lib-slotwrite.sh (set NOVADECK_SLOTWRITE)"
+# Sourced AFTER die() and say() exist: the library only defines its own fallbacks when the caller
+# has none, and this script's `carve: ` prefix is what its suite asserts.
+# shellcheck source=../fs-overlay/usr/lib/novadeck/install/lib-slotwrite.sh
+. "$SLOTWRITE"
 
 # --- reading the disk -----------------------------------------------------------------------------
 gpt_rows() { sgdisk -p "$DISK" 2>/dev/null | awk '/^[[:space:]]*[0-9]+[[:space:]]+[0-9]+/ {print $1, $2, $3, $(NF-1), $NF}'; }
@@ -134,19 +154,6 @@ recreate_userdata() {  # <index> <start> <end> <type-guid>
   say "  userdata recreated: p$idx $start..$end, type $got_type"
 }
 
-# The partition device for an index, resolved BY PARTUUID and never by name arithmetic. `${DISK}p${n}`
-# against `${DISK}${n}` depends on the disk's kind, every device in the fleet is UFS, and a spelling
-# bug of that shape would first appear on somebody's eMMC board mid-install. Lower-cased, as
-# `mint_partsets` requires. Returns non-zero for an image file, which has no partition nodes.
-part_dev() {  # <index>
-  local uuid
-  [ -b "$DISK" ] || return 1
-  uuid="$(sgdisk -i "$1" "$DISK" 2>/dev/null \
-          | sed -n 's/^Partition unique GUID: \([0-9A-Fa-f-]*\).*/\1/p' | tr 'A-Z' 'a-z')"
-  [ -n "$uuid" ] || return 1
-  printf '/dev/disk/by-partuuid/%s\n' "$uuid"
-}
-
 # THE OTHER OS MUST NOT BE ABLE TO MOUNT WHAT WAS THERE BEFORE THE RESIZE, and this exists because it
 # could. MEASURED on the Pocket ACE 2026-08-21: after a carve from 96.72 GiB to 16, Android booted,
 # mounted the OLD superblock without complaint and reported 92 GB free -- every one of those "free"
@@ -185,7 +192,7 @@ invalidate_userdata_fs() {  # <index> <start-sector> <end-sector>
   [ "$count" -le "$(( end - start + 1 ))" ] || count=$(( end - start + 1 ))
 
   settle
-  if dev="$(part_dev "$idx")" && [ -b "$dev" ]; then
+  if dev="$(part_dev "$DISK" "$idx")" && [ -b "$dev" ]; then
     dd if=/dev/zero of="$dev" bs="$SECTOR" count="$count" conv=fsync status=none \
       || die "could not invalidate the old filesystem on $dev"
   elif [ -b "$DISK" ]; then

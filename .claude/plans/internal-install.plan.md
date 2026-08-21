@@ -1300,11 +1300,52 @@ installer's documentation.
 
 ## Phase 4 — The installer runtime
 
-### 4a. Retargeting RAUC — LANDED 2026-08-21, offline only
+### 4a. Retargeting RAUC — LANDED 2026-08-21
 
 `install/rauc-session.sh` and `install/post-install-fresh.sh` are written; `install/test-install.sh`
-120 → **152 cases, green in `novadeck-build`**. Nothing has touched a real disk. Four things the
-writing settled, none of them re-derivable from the sketch below:
+120 → **154 cases, green in `novadeck-build`**. Four things the writing settled, then two the
+hardware did — **both of them in the ten lines of config the offline suite asserts hardest**, and
+neither reachable offline, because no stub can refuse the way the real tool does.
+
+**HARDWARE, Pocket ACE, 2026-08-21 — three defects in three runs, all in the ten lines of config,
+and the third only after the bundle had streamed and verified.**
+
+1. **`--print-pid` takes a file DESCRIPTOR, not a path.** `--print-pid=/run/…/dbus.pid` gets
+   `Invalid file descriptor` and exit 1; the path spelling is `--pidfile=`, which is a different
+   thing again (the daemon writes it when it likes, so a caller reading it back has to wait). The
+   **bare** form prints the forked daemon's pid on stdout before the parent exits, which is the pid
+   and the readiness signal in one, and is what the script now uses. The suite's `dbus-daemon` stub
+   was rewritten to **model the tool** — it refuses a path with the real message — so this shape
+   cannot come back.
+2. **`bootloader=` is NOT optional, and the plan above said it was.** rauc refuses a config without
+   it unconditionally (`config_file.c:1506`, "No bootloader selected in system config") and the
+   service exits before taking the bus. The value is **`bootloader=noop`**: it is in
+   `supported_bootloaders`, and its `set_state`/`set_primary` arms log and return `TRUE` without
+   touching anything. `noop` has **no `get_state` arm at all**, which is the second brace rather
+   than a gap — `determine_boot_states()` skips bootname-less slots so it is unreachable, and if a
+   `bootname=` were ever added by accident the run would fail loudly instead of quietly consulting
+   the installer's own boot state.
+
+3. **`mountprefix=` must be set, and the key is UNHYPHENATED.** rauc defaults `mount_prefix` to
+   `/mnt/rauc` (`config_file.c:426`) and **our root is read-only**, so the install died at
+   `Failed creating mount path '/mnt/rauc/bundle': Read-only file system` — *after* the NBD stream
+   was up and the signature verified against the device's own keyring, which is as late as a cheap
+   failure gets. **The OTA path never meets this and `/etc/rauc/system.conf` does not say why**: the
+   stock `rauc.service` passes `--mount=/run/rauc/mnt` with `RuntimeDirectory=rauc/mnt` behind it.
+   Reading our config file would not have found it; only running the thing did. The key is
+   `mountprefix`, not `mount-prefix` — unhyphenated, unlike every neighbour in the section, and
+   spelled with a hyphen it is an unknown key, so the default silently stands and the failure is
+   the one above with nothing pointing at the typo. Both halves are asserted.
+
+All three are the shape this project keeps finding: **a green suite proves the logic, never the
+tool inventory, the tool's contract, or what a systemd unit was quietly supplying**
+(cf. [[offline-suite-inherits-host-path]]). Each is now a test rather than a memory — and the third
+generalises past 4a: **anything the installer runs that also runs as a unit on the card may be
+depending on that unit's `RuntimeDirectory`, `ExecStart` flags or namespace, none of which the
+installer has.** Check the unit, not just the config, before assuming a shipped tool is portable
+into the spine.
+
+Four things the writing settled, none of them re-derivable from the sketch below:
 
 - **The ownership check needs a pid, not a name.** "Something owns `de.pengutronix.rauc`" is true of
   the exact failure it guards against, so the script matches the name owner's pid (via

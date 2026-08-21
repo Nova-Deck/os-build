@@ -671,10 +671,19 @@ printf '%s\n' "$@" >"$STUBDIR/svc.args"
 printf '%s\n' "$$"  >"$STUBDIR/svc.pid"
 while :; do sleep 1; done
 EOF
+# The stub MODELS the tool rather than obliging the caller: --print-pid takes a file DESCRIPTOR, so
+# handing it a path is `Invalid file descriptor` and exit 1, exactly as the real daemon answered on
+# the Pocket ACE. A stub that quietly accepted a path would have let that ship.
 cat >"$STUBS/dbus-daemon" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$@" >"$STUBDIR/bus.args"
-for a in "$@"; do case "$a" in --print-pid=*) printf '%s\n' "$$" >"${a#--print-pid=}" ;; esac; done
+for a in "$@"; do
+  case "$a" in
+    --print-pid=*) v="${a#--print-pid=}"
+                   case "$v" in ''|*[!0-9]*) printf 'Invalid file descriptor: "%s"\n' "$v" >&2; exit 1 ;; esac ;;
+  esac
+done
+case " $* " in *' --print-pid '*) printf '%s\n' "$$" ;; esac
 exit 0
 EOF
 # GetNameOwner then GetConnectionUnixProcessID, in gdbus' own output spelling -- the script parses
@@ -719,12 +728,25 @@ if [ -f "$conf" ]; then
   grep -q '^bootname=' "$conf" \
     && bad "bootname= is back -- rauc would pick a boot_mark_slot and call a bootloader backend" \
     || ok "no bootname= (so boot_mark_slot is NULL and r_mark_active never runs)"
-  grep -q '^bootloader=' "$conf" \
-    && bad "bootloader= is back -- there is no boot state here for a backend to act on" \
-    || ok "no bootloader="
+  # NOT an omission, and the plan was wrong to call the field optional: config_file.c:1506 refuses
+  # a config without it unconditionally, which is how the Pocket ACE answered on 2026-08-21. `noop`
+  # is the statement that there is no boot state here; any other value names a backend that would
+  # act on the INSTALLER'S boot state, not the target's.
+  grep -qx 'bootloader=noop' "$conf" \
+    && ok "bootloader=noop (required by rauc, and the only value that acts on nothing)" \
+    || bad "the bootloader is not noop: $(grep '^bootloader=' "$conf" || echo '<absent, and rauc refuses that>')"
   grep -q '^data-directory=' "$conf" \
     && bad "data-directory= is back -- a virgin slot has nothing for adaptive to reuse" \
     || ok "no data-directory="
+  # The default (/mnt/rauc) cannot be created on a read-only root, and the key is UNHYPHENATED --
+  # `mount-prefix` is an unknown key, so the default silently stands and the install dies after
+  # streaming and verifying. Both halves asserted, because a hyphen typo looks right.
+  grep -qx "mountprefix=$SESS_RUNDIR/mnt" "$conf" \
+    && ok "mountprefix points into the run dir (the default is unwritable on an ro root)" \
+    || bad "mountprefix is wrong or hyphenated: $(grep -i 'mountprefix\|mount-prefix' "$conf" || echo '<absent>')"
+  [ -d "$SESS_RUNDIR/mnt" ] \
+    && ok "the mount prefix exists before rauc needs it" \
+    || bad "the mount prefix was named but not created"
   grep -q '^check-purpose=codesign' "$conf" \
     && ok "keeps check-purpose=codesign (the release cert's EKU; without it every bundle is rejected)" \
     || bad "check-purpose=codesign is missing -- verification would reject every bundle"
@@ -747,6 +769,19 @@ fi
 grep -q -- '--' "$SESS_RUNDIR/dbus.conf" \
   && bad "a double dash appears in the bus config -- dbus' XML parser rejects the whole file" \
   || ok "no double dash in the bus config"
+
+CASE="rauc-session: how the bus pid is obtained"
+# The first thing hardware found (Pocket ACE, 2026-08-21). --print-pid=<path> is not the path form
+# -- that is --pidfile= -- and dbus-daemon answers a path with `Invalid file descriptor`, so the
+# bus never started. The bare form prints the forked daemon's pid on stdout, which is the pid and
+# the readiness signal in one.
+busargs="$(cat "$SESS_RUNDIR/bus.args" 2>/dev/null)"
+printf '%s\n' "$busargs" | grep -q -- '--print-pid=' \
+  && bad "--print-pid was given a value; it takes a file descriptor, not a path" \
+  || ok "--print-pid is used bare (the pid comes back on stdout)"
+printf '%s\n' "$busargs" | grep -qx -- '--fork' \
+  && ok "the daemon is forked, so the parent's exit is the readiness signal" \
+  || bad "the bus was not started with --fork"
 
 CASE="rauc-session: the two rauc invocations"
 svcargs="$(cat "$SESS_RUNDIR/svc.args" 2>/dev/null)"

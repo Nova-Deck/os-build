@@ -23,8 +23,15 @@
 #                    called. No bootloader backend runs, which is right: the boot state this
 #                    install will have does not exist yet. The orchestrator arms A.conf itself,
 #                    last, once the disk is genuinely bootable.
-#   no bootloader=   belt to that brace. With no bootname there is no call to make; with no
-#                    bootloader configured there is no backend to make it with either.
+#   bootloader=noop  belt to that brace, AND NOT AN OMISSION -- the plan said the field was
+#                    optional and it is not. Measured on the Pocket ACE 2026-08-21: leaving it out
+#                    gets "No bootloader selected in system config" and the service exits before it
+#                    takes the bus (config_file.c:1506, an unconditional check). `noop` is in
+#                    supported_bootloaders, and its set_state/set_primary arms log and return TRUE
+#                    without touching anything. Its get_state has no arm at all -- which is fine
+#                    and is the second brace: determine_boot_states() skips bootname-less slots, so
+#                    that path is unreachable, and if a bootname were ever added by accident the
+#                    run would fail loudly instead of quietly consulting the wrong boot state.
 #   no data-         `adaptive=block-hash-index` in the manifest needs a data directory to reuse
 #   directory=       blocks from, and a virgin slot has nothing to reuse. rauc says so at
 #                    g_message level and falls through to raw_copy (update_handler.c:1003). Plan
@@ -96,6 +103,20 @@ mkdir -p "$RUNDIR" || die "cannot create $RUNDIR"
 SLOT_LINK="$RUNDIR/target-root-a"
 ln -sfn "$TARGET_DEV" "$SLOT_LINK" || die "cannot point $SLOT_LINK at $TARGET_DEV"
 
+# WHERE RAUC MOUNTS THE BUNDLE, and it has to be said because the default cannot work here. rauc
+# defaults mount_prefix to /mnt/rauc (config_file.c:426) and OUR ROOT IS READ-ONLY, so the install
+# dies at "Failed creating mount path '/mnt/rauc/bundle': Read-only file system" -- after streaming
+# and verifying the signature, which is as late as a cheap failure gets. Measured on the Pocket ACE
+# 2026-08-21. The OTA path never meets this because the stock unit passes `--mount=/run/rauc/mnt`
+# with a RuntimeDirectory behind it; nothing in /etc/rauc/system.conf says so, which is exactly why
+# reading that file would not have told us.
+#
+# THE INI KEY IS `mountprefix`, NOT `mount-prefix`. Unhyphenated, unlike every neighbour in the
+# section. Spelled with a hyphen it is simply an unknown key, the default stands, and the failure is
+# the one above with nothing pointing at the typo.
+MOUNTPREFIX="$RUNDIR/mnt"
+mkdir -p "$MOUNTPREFIX" || die "cannot create $MOUNTPREFIX"
+
 CONF="$RUNDIR/rauc.conf"
 cat >"$CONF" <<EOF || die "cannot write $CONF"
 # Synthesized by $PROG. Not a copy of /etc/rauc/system.conf and deliberately not derived from it:
@@ -103,7 +124,9 @@ cat >"$CONF" <<EOF || die "cannot write $CONF"
 # partition on a disk that has never booted. See the header of $PROG for what each omission buys.
 [system]
 compatible=$COMPATIBLE
+bootloader=noop
 bundle-formats=verity
+mountprefix=$MOUNTPREFIX
 
 [keyring]
 path=$KEYRING
@@ -161,11 +184,17 @@ cleanup() {
 }
 trap cleanup EXIT
 
-PIDFILE="$RUNDIR/dbus.pid"
-rm -f "$PIDFILE" "$BUS_SOCKET"
-"$DBUS_DAEMON" --config-file="$BUS_CONF" --fork --print-pid="$PIDFILE" \
+# `--print-pid` TAKES A FILE DESCRIPTOR, NOT A PATH. Measured on the Pocket ACE 2026-08-21, first
+# run: `--print-pid=/run/novadeck/install/dbus.pid` gets `Invalid file descriptor` and exit 1. The
+# path spelling is `--pidfile=`, which is a different thing again -- the daemon writes it whenever
+# it likes, so a caller reading it back has to wait. The bare form prints the forked daemon's pid
+# on stdout before the parent exits, which is both the pid and the readiness signal, so it is what
+# this uses. rm the socket first: one left by a killed daemon is what makes a retry connect to
+# nothing and hang.
+rm -f "$BUS_SOCKET"
+BUS_PID="$("$DBUS_DAEMON" --config-file="$BUS_CONF" --fork --print-pid)" \
   || die "the private system bus would not start"
-BUS_PID="$(cat "$PIDFILE" 2>/dev/null || true)"
+BUS_PID="${BUS_PID//[!0-9]/}"
 [ -n "$BUS_PID" ] || die "the private system bus started but printed no pid"
 export DBUS_SYSTEM_BUS_ADDRESS="unix:path=$BUS_SOCKET"
 log "private system bus at $BUS_SOCKET (pid $BUS_PID)"

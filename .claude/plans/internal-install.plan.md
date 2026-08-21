@@ -1458,17 +1458,45 @@ Then `curl -fsSL <OTA_URL>/<channel>/latest.json`, reusing `novadeck-update`'s h
 verbatim: every manifest field is attacker-controlled, and `bundle` is forced to a bare
 filename (urlparse plus `/`, `\`, leading-dot checks).
 
-### 4c. Orchestration
+### 4c. Orchestration — LANDED 2026-08-21, NOT YET HARDWARE-GATED
 
-`install/novadeck-install` — the ordered spine, each step a named function, nothing before the
-confirm:
+`install/novadeck-install`, `install/confirm-tty`, `images/lib-homestage.sh`;
+`install/test-install.sh` 156 → **233, green**. What ships:
 
 ```
-recon → select-target → BACKUP GPTs → verify sources → [CONFIRM]
-  → shrink userdata → genpart.sh --append → mkfs (esp, efi-a/b, var-a/b, home)
-  → rauc install (rootfs-a)  → seed /home  → write efi-a/efi-b + partsets
-  → write ESP stage 1 + grubenv (incl. nd_* indices) → arm A.conf  ← LAST
+recon → select-target → record → verify sources → [CONFIRM]
+  → carve.sh (shrink userdata + genpart.sh --append) → mkfs (esp, efi-a, efi-b, home)
+  → rauc-session.sh (rootfs-a + var-a) → seed /home → efi-a/efi-b: stage 2 + partsets + parts.env
+  → ESP: grubenv → A.conf (no B.conf) → stage 1, bootaa64.efi  ← LAST
 ```
+
+**Four differences from the sketch above, each of them a correction rather than a shortcut.**
+
+1. **`BACKUP GPTs` is NOT implemented, and must not be added** — it contradicts §3 rule 10, which
+   is the later and considered decision: the installer takes no backups, for four reasons written
+   out there. What ships is rule 10's plain-text **record** (`sfdisk --dump` pre-state, target,
+   `wwid`, the acknowledgement), best-effort and **never able to refuse an install**. The sketch
+   predates the rule; the rule wins.
+2. **`mkfs (… var-a/b …)` is wrong.** `seed_var` reformats var-A itself, because the reformat and
+   the population are one operation and a var that is mkfs'd but not populated is a slot that does
+   not boot. var-B is not touched at all. The spine makes **four** filesystems.
+3. **`arm A.conf ← LAST` is wrong**, superseded by Phase 0's "ABL contract" consequence 2: the last
+   byte is **`/EFI/BOOT/bootaa64.efi`**, because ABL's test is content-based. A.conf, the grubenv
+   and the partsets are all written before it. `refresh_esp_stage1` was reordered to match, which
+   also improves the OTA path (the shared ESP is the one write with no A/B copy behind it).
+4. **The order also fixes `steamos-bootconf`'s own precondition:** it `error(ENOENT)`s and exits
+   unless `--efi-dir` holds `SteamOS/partsets/self`, so efi-a must be written and still mounted
+   when `create --image A` runs. `set-mode first-boot`, not `reboot`: it additionally clears
+   `image-invalid`, `boot-other`, `boot-attempts` and `boot-count`, which is exactly the state of a
+   slot that has never run.
+
+**The consent gate's mechanism landed with the spine; §4d's *pixels* did not.** The spine generates
+the random sequence, derives the facts, and requires the sequence back from a renderer behind a
+fixed path — so the policy sits where the offline suite is. `install/confirm-tty` is the first
+renderer and is §4d's own named fallback (typed phrase, no controller); §5's gamepad screen is a
+second implementation of the same contract, sharing the facts file and no code.
+
+**Still owed by 4c:** the hardware gate (verification step 3), and `install/verify-install.sh`.
 
 > **REQUIREMENT — address the new partitions by PARTUUID, never by name arithmetic.** Every step
 > after `genpart.sh --append` needs a path to a partition it just created, and the tempting form is
@@ -1496,7 +1524,45 @@ recon → select-target → BACKUP GPTs → verify sources → [CONFIRM]
 (which needs `/esp`, `/efi`, `steamos-bootconf this-image` and a running `/var` to rsync,
 none of which apply here) but sources the same `lib-slotwrite.sh`.
 
+**What the spine shares rather than re-writes, and where each lives.** Everything the card build
+already does once, the installer now calls instead of copying:
+
+| artifact | shared as | other writer |
+|---|---|---|
+| the `/home` tree (deck user, `~/.steam` compat symlinks) | `images/lib-homestage.sh` → `stage_deck_home <dir-or-tarball> <home-root>` | `images/make-sdcard.sh` |
+| index → device path | `lib-slotwrite.sh` → `part_uuid` / `part_dev` | `install/carve.sh` |
+| the efi and /home filesystems | `lib-slotwrite.sh` → `mkfs_efi`, `mkfs_home` (beside `mkfs_esp`) | `images/make-sdcard.sh` |
+| bundle verification | `install/rauc-session.sh --info` — the same synthesized config the install runs under | — |
+
+`stage_deck_home` takes a **directory or a tarball**, the same split `seed_var` uses: `make-sdcard.sh`
+has `work/steam-seed` on the build host, and the installer has the published ~1 GB tarball and a
+mounted `/home` that is the only place with room for it.
+
+**The `--info` verify is not a `rauc info` call spelled in the spine, deliberately.** The
+synthesized config *is* the mechanism — `bundle-formats`, the keyring path and `check-purpose` all
+decide whether a bundle is acceptable — so a verify under a config of its own would be checking
+something other than what the install will do, and would be a second copy of those three lines.
+
 ### 4d. The consent gate — `[CONFIRM]` in the spine above
+
+> **PARTLY LANDED with §4c, 2026-08-21 — read this before implementing anything below.** The
+> *mechanism* ships and is asserted (25 cases in `install/test-install.sh`): the spine generates the
+> random sequence, re-randomises on a wrong answer, refuses after a bounded number of attempts, and
+> derives a **facts file** — key=value, per-disk numbers — that the renderer turns into words. Both
+> screens exist in `install/confirm-tty` as separate code paths, and the suite asserts an Android
+> disk cannot produce the reinstall text or the reverse, that two disks quote two different sizes,
+> that `/bin/true` does not satisfy the gate, and that none of nine plausible bypass variables does.
+>
+> **What is still owed: the gamepad renderer** (§5), which is a second implementation of the same
+> contract — `--facts <file> --sequence <ABXY>` in, the pressed sequence on stdout, non-zero to
+> abort — sharing the facts file and no code. And the "no controller and no keyboard → stop" case,
+> which needs an input stack to detect the absence of.
+>
+> **One thing the contract learned the hard way:** the renderer's **stdout is the answer and nothing
+> else**. A renderer that also prints its screen there makes every attempt read as a wrong answer,
+> i.e. an installer that can never take consent, with a symptom pointing nowhere near the cause.
+> `confirm-tty` parks the answer on fd 3 and sends the screen to stderr. Assert this in the gamepad
+> renderer too — the stubbed gate cases all pass without it.
 
 Android's `userdata` is destroyed by design and that is accepted. The whole obligation
 therefore lands here: the user must understand *specifically* what they are losing, and say so
@@ -1704,10 +1770,16 @@ New `install/` stage directory, peer of `boot/`/`images/`/`ota/`:
 
 ```
 install/README.md        pkgs.list       mkroot.sh        mkimage.sh
-        disk-rules.conf  select-target.sh carve.sh        novadeck-install
+        select-target.sh carve.sh        novadeck-install  confirm-tty
         rauc-session.sh  post-install-fresh.sh  verify-install.sh
-        netcfg  ui  units/  test-*.sh
+        lib-gptfixture.sh  netcfg  ui  units/  test-*.sh
 ```
+
+`mkroot.sh` must also install, into `/usr/lib/novadeck/install/` on the **installer** image:
+`lib-slotwrite.sh` and `genpart.sh` + `partition-table.txt` (shipped verbatim, as they already are
+into the rootfs), plus `images/lib-homestage.sh` — the spine resolves all three by search and dies
+if none of the candidates is present. And the two files the spine reads as data:
+`steam-seed.sha256` (the baked pin) and the `confirm` symlink the gate's fixed path names.
 
 - `install/mkroot.sh` — pacstrap the installer package set into `work/installer-base`, then
   `mksquashfs -comp zstd`. Set = systemd + udev (device nodes, unit ordering, journald),
@@ -1729,7 +1801,13 @@ install/README.md        pkgs.list       mkroot.sh        mkimage.sh
 - `.github/workflows/image.yml` — `artifact:` gains `installer`; publish to R2 under
   `installer/vX.Y.Z/`. New `release-installer.yml` on `installer/v*` tags, mirroring
   `release-sdcard.yml`.
-- `steam-seed-<pin>.tar.zst` published alongside, from the existing `steam-seed/` stage.
+- `steam-seed-<pin>.tar.zst` published alongside, from the existing `steam-seed/` stage. **Its
+  content is a plain tar of `work/steam-seed`** — the finished `.local/share/Steam` tree, nothing
+  else. The `/home` layout around it (the `deck/` directory and the `~/.steam` compat symlinks) is
+  `stage_deck_home`'s and is applied on the device, so the artifact and the card seed are the same
+  bytes. The publisher must also emit its sha256 into the installer image as
+  `/usr/lib/novadeck/install/steam-seed.sha256`; the spine refuses outright if that file is missing,
+  because "we could not check" and "it checked out" must not have the same effect.
 - Docs: `docs/install-internal.md`, plus a Recovery section update in `docs/RUNBOOK.md`.
 
 ---
@@ -1737,10 +1815,13 @@ install/README.md        pkgs.list       mkroot.sh        mkimage.sh
 ## Verification
 
 **Offline, in `make test`:** `test-stage2-grub.sh` (PARTUUID + the `parts.env` index map, 199
-assertions), `test-post-install.sh` (unchanged behaviour post-extraction), `test-select-target.sh`
-(≥60 cases on real captured GPTs), `test-install.sh` (step order, confirm gate,
-never-writes-the-boot-disk, and the hand-written env block round-tripping through `grub-editenv`),
-`test-units.sh` (new units), and byte-identity of the shipped `partition-table.txt`/`genpart.sh`.
+assertions), `test-post-install.sh` (unchanged behaviour post-extraction), `test-install.sh`
+(**233 as of 2026-08-21** — the env block round-tripping through `grub-editenv`, the shared
+primitives, `rauc-session.sh`'s config, `post-install-fresh.sh`, and §4c's step order + consent
+gate), `test-units.sh` (new units), and byte-identity of the shipped
+`partition-table.txt`/`genpart.sh`. **Outside `make test`, in `novadeck-build`** (they need
+`sgdisk`, and they hang off the installer-image target that does not exist yet):
+`test-select-target.sh` (83) and `test-carve.sh` (63).
 
 **Hardware, in order — each gates the next:**
 1. ~~Phase 1 alone: boot both slots from SD, run one OTA.~~ **DONE** — 2026-08-05 (both slots + OTA)
@@ -1749,7 +1830,13 @@ never-writes-the-boot-disk, and the hand-written env block round-tripping throug
    2026-08-05.
 3. `novadeck-install` over SSH from a dev card, on a **sacrificial device**: Android still
    boots, NovaDeck boots from internal with the SD removed, `novadeck-bootctl status` sane,
-   one OTA installs into B and switches.
+   one OTA installs into B and switches. **THIS IS THE NEXT THING OWED** — §4c landed offline
+   2026-08-21 and every defect this project has found in the install path so far was found by
+   hardware AFTER the suite was green. What the run needs staged beside the bundle: a tar of
+   `work/steam-seed`, its sha256 written to `/usr/lib/novadeck/install/steam-seed.sha256` on the
+   card, and `install/confirm-tty` symlinked to the gate's fixed path (or `NOVADECK_CONFIRM=`
+   pointed at it). Serve both over nginx-in-docker, not `python3 -m http.server` — rauc's NBD
+   streaming needs HTTP Range. `/run` is tmpfs: restage after every reboot.
 4. ~~Same, with an old NovaDeck card left inserted.~~ **DROPPED with 1c** — an old novadeck card in
    an internally-installed device is out of scope (see 1c). The supported inserted media are the
    installer/recovery card and a Steam-formatted library card, neither of which carries `novadeck-*`

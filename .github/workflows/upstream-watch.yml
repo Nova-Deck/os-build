@@ -233,13 +233,22 @@ jobs:
           gh issue create --title "$title" --assignee "$ASSIGNEE" \
             --label P2 --label area/mesa --body "$(cat <<EOF
           Upstream released **mesa $latest**; we build **$pinned**.
-          Tarball: https://archive.mesa3d.org/mesa-$latest.tar.xz (\`.sha256sum\` sidecar alongside it)
+          Tarball: https://archive.mesa3d.org/mesa-$latest.tar.xz
+
+          Integrity: mesa publishes NO \`.sha256sum\` sidecar — that URL 404s, and this template
+          claimed otherwise until 2026-08-22. The only upstream artifact is the detached \`.sig\`.
+          Compute the sha256 locally from a tarball whose \`.sig\` verifies, and check the signer
+          against the key that signed the release we currently ship — the fingerprint is recorded in
+          the \`sha256sums\` provenance comment in \`packages/mesa/PKGBUILD\`. A GOOD signature from an
+          unknown-trust key only proves the tarball matches whatever key came with it; continuity
+          with the last release we validated on hardware is the load-bearing step.
 
           This bump moves BOTH Turnips. packages/mesa-x86 reads the tarball url/sha256 out of
           packages/mesa/PKGBUILD and the patch list out of packages/mesa/source.pin, so the guest
           (x86) driver rebuilds from whatever the host driver pins — they cannot drift, and they
           cannot be bumped apart either. Drill:
 
+          - [ ] verify the tarball's detached \`.sig\` and confirm the signer is the SAME key as the currently pinned release's, BEFORE recording any sha256 (see Integrity above)
           - [ ] \`packages/mesa/PKGBUILD\`: pkgver + the tarball sha256sums entry together
           - [ ] \`packages/mesa/source.pin\`: the informational url/sha256 comment lines
           - [ ] re-roll every patch under \`packages/mesa/patches/\` against the new tag — they are applied \`patch -p1\` with no fuzz budget, so a rebase failure is a build failure

@@ -1151,11 +1151,23 @@ home       12888616..30150650    65.85 GiB  ← ends exactly at the ceiling
   zero-sector window, because the partition after `userdata` is our own ESP. That is exactly why
   `carve.sh` computes its own ceiling and refuses to trust that one.
 
-> **AND THE BOARD MAY NOT BOOT THE SD CARD UNATTENDED NOW.** The carve writes the GPT and no
-> filesystems, so the internal disk carries an ESP-typed p12 with nothing in it. ABL prefers
-> internal, so recovering the NovaDeck session can require the **force-external** option — the
-> interrupted-install recovery note in Blast radius, met in practice. Android will not come up
-> clean either: its `userdata` is a 16 GiB partition holding a stale filesystem.
+> **A CARVED-BUT-EMPTY INTERNAL ESP DOES NOT DIVERT ABL — MEASURED, and it refines the
+> force-external rule rather than confirming it.** The expectation going in was that the board might
+> now need *force external* to reach the card, since the carve leaves an ESP-typed p12 and ABL
+> prefers internal. It does not: the ACE rebooted with the card in and came straight back to
+> NovaDeck, unattended, and the GPT was byte-identical afterwards — nothing on the boot path
+> rewrote it.
+>
+> The distinction is **content, not partition type**, which is the same thing rule 3b already tests
+> for: ABL wants `/EFI/BOOT/bootaa64.efi`, and an ESP with no filesystem at all offers nothing to
+> chainload, so it falls through. **Force-external becomes necessary only once that file exists** —
+> which the spine writes LAST, deliberately.
+>
+> That turns the ordering rule into a stronger guarantee than it was written as: an install
+> interrupted anywhere before the final ESP write leaves a device that **still boots the installer
+> medium by itself**. The recovery instructions should say force-external is needed after a *failed
+> late* install, not after any interruption — telling every user to reach for a bootloader option
+> they do not need is its own failure.
 
 **Still unreached on hardware, and honestly so.** Rule 9 (two eligible disks → refuse rather than
 pick) cannot fire where only one LUN has a `userdata`, so it keeps `NOVADECK_SELECT_DISKS` and

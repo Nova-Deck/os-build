@@ -3,7 +3,7 @@
 # .claude/plans/internal-install.plan.md.
 #
 # Sourced by install/test-select-target.sh and install/test-carve.sh. It exists because both suites
-# need the same thing: the four boards in docs/internal-storage.md rebuilt as REAL GPTs, with real
+# need the same thing: the boards in docs/internal-storage.md rebuilt as REAL GPTs, with real
 # names, real sizes, real order and real type GUIDs. A rule tightened for one board and silently
 # broken for another is the failure these suites exist to catch, so they run against every captured
 # disk rather than a representative one -- and a second copy of this awk would be the obvious place

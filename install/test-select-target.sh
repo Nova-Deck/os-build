@@ -4,7 +4,7 @@
 #
 #   install/test-select-target.sh          # needs sgdisk + mtools + dosfstools
 #
-# WHAT MAKES THESE DIFFERENT from synthetic fixtures. docs/internal-storage.md holds four boards
+# WHAT MAKES THESE DIFFERENT from synthetic fixtures. docs/internal-storage.md holds five boards
 # captured off hardware, and every partition table here is rebuilt from those rows -- real names,
 # real sizes, real order, including the six names the Odin 2 has that no AYANEO board does and the
 # third-party install on the Pocket FIT. A rule tightened for one board and silently broken for
@@ -42,16 +42,16 @@ T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
 export NOVADECK_SELECT_FIXTURE=1
 
 # --- rebuild a captured disk as a real GPT --------------------------------------------------------
-# Shared with install/test-carve.sh, which needs the same four boards as REAL GPTs. A second copy of
+# Shared with install/test-carve.sh, which needs the same five boards as REAL GPTs. A second copy of
 # that awk would be the obvious place for the two suites to drift apart.
 . "$ROOT/install/lib-gptfixture.sh"
 
 field() { printf '%s\n' "$1" | sed -n "s/^$2=//p"; }
 
-BOARDS=("AYANEO Pocket S2" "AYANEO Pocket ACE" "AYN Odin 2" "KONKR Pocket FIT")
+BOARDS=("AYANEO Pocket S2" "AYANEO Pocket ACE" "AYN Odin 2" "KONKR Pocket FIT" "MANGMI Pocket Max")
 
 # --- 1. every captured data LUN is accepted -------------------------------------------------------
-# The headline claim: all four boards install. A rule that refused one of them would be caught here
+# The headline claim: all five boards install. A rule that refused one of them would be caught here
 # rather than by an owner with a device we cannot debug remotely.
 CASE="every captured data LUN is accepted"
 for board in "${BOARDS[@]}"; do
@@ -267,7 +267,7 @@ out=$(bash "$SELECT" "$T/re.img" 2>&1)
 # changed to read the whole output. Each would have been carved on the strength of a table gdisk made
 # up, which is the one situation where "we cannot tell damaged from not-the-disk-we-think" stops
 # being a slogan. The rule must also stay quiet about ALIGNMENT: stock Android tables are not
-# 2048-aligned, and a first attempt that refused on any Caution refused all four captured boards.
+# 2048-aligned, and a first attempt that refused on any Caution refused every captured board.
 CASE="a damaged or absent GPT is refused"
 sz="$(stat -c %s "$base")"
 

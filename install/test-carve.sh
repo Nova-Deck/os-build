@@ -43,7 +43,7 @@ export NOVADECK_SELECT_FIXTURE=1
 
 OUR_NAMES=(NOVADECK-ESP novadeck-efi-A novadeck-efi-B novadeck-root-A novadeck-root-B \
            novadeck-var-A novadeck-var-B novadeck-home)
-BOARDS=("AYANEO Pocket S2" "AYANEO Pocket ACE" "AYN Odin 2" "KONKR Pocket FIT")
+BOARDS=("AYANEO Pocket S2" "AYANEO Pocket ACE" "AYN Odin 2" "KONKR Pocket FIT" "MANGMI Pocket Max")
 
 carve()  { bash "$CARVE" "$@" 2>&1; }
 rows()   { sgdisk -p "$1" 2>/dev/null | awk '/^[[:space:]]*[0-9]+[[:space:]]+[0-9]+/ {print $1, $2, $3, $NF}'; }
@@ -61,7 +61,7 @@ board_img() {  # <board> -> path to a freshly rebuilt sda fixture
 }
 
 # --- 1. a fresh carve on every captured board -------------------------------------------------------
-# The headline claim, on real geometry rather than a synthetic disk: all four boards carve, our eight
+# The headline claim, on real geometry rather than a synthetic disk: all five boards carve, our eight
 # land after the shrunk userdata, and NOTHING ELSE ON THE DISK MOVES. The Odin 2 earns its place --
 # userdata is p17 there, with sixteen partitions in front of it that must come out untouched.
 CASE="a fresh carve lands the eight and moves nothing else"

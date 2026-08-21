@@ -43,6 +43,19 @@ die()  { printf 'select-target: %s\n' "$*" >&2; exit 1; }
 
 command -v sgdisk >/dev/null 2>&1 || die "sgdisk not found"
 
+# mdir is REQUIRED, and refusing here rather than degrading is the whole point. rule 3b answers
+# "would ABL boot this ESP?" by reading its content with mtools, and `mdir` reports a missing file
+# and a missing BINARY the same way -- non-zero. So without it the rule cannot distinguish "checked,
+# clean" from "could not check", and it silently returns "not bootable" for every ESP on the disk.
+#
+# MEASURED, on the Pocket FIT, 2026-08-21: mtools is not in the shipped image (it is an installer
+# package, exactly like gptfdisk), so 3b never fired and the FIT's sda -- carrying ROCKNIX on a
+# genuine EF00 ESP at p12 -- came back TARGET=/dev/sda MODE=fresh. The 66 offline cases were green
+# throughout, because the build container has mtools on its PATH. An offline suite cannot see the
+# image's tool inventory, so a gate that degrades quietly when a tool is absent is one the tests
+# structurally cannot catch. Fail closed.
+command -v mdir  >/dev/null 2>&1 || die "mdir not found (mtools) -- rule 3b cannot run without it"
+
 # --- which disk is the running system on? ---------------------------------------------------------
 # Never a candidate. On the installer this is the SD card, and rule 2 exists because writing the
 # medium you booted from is the one mistake that takes the recovery path with it.

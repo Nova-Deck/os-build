@@ -213,6 +213,39 @@ if [ -n "$esp_idx" ]; then
   bash "$SELECT" "$fit" >/dev/null 2>&1 \
     && ok "our own NOVADECK-ESP carrying bootaa64.efi -> accepted" \
     || bad "a reinstall refused its own ESP as foreign"
+  # --- rule 3b must not be SKIPPABLE by a missing tool ---------------------------------------
+  # THE DEFECT THIS CASE EXISTS FOR, found on the Pocket FIT 2026-08-21 and invisible to every
+  # case above it. mtools is not in the shipped image, `mdir` reports a missing FILE and a missing
+  # BINARY identically (non-zero), so esp_is_bootable answered "not bootable" for every ESP and the
+  # FIT's sda -- with ROCKNIX on a genuine EF00 ESP -- came back TARGET=/dev/sda MODE=fresh. This
+  # suite stayed green throughout, because the build container has mtools on its PATH: a suite
+  # cannot see the image's tool inventory, so the property has to be asserted as its own case.
+  #
+  # PATH is rebuilt from the commands the script actually calls, minus mdir, rather than shimmed --
+  # a shim would prove a stub was consulted, and what needs proving is that ABSENCE refuses.
+  CASE="a missing mdir refuses rather than skipping rule 3b"
+  mmd -i "$fat" ::/EFI ::/EFI/BOOT >/dev/null 2>&1
+  mcopy -i "$fat" "$T/bootaa64.efi" ::/EFI/BOOT/bootaa64.efi >/dev/null 2>&1
+  sgdisk -c "$esp_idx:ROCKNIX" "$fit" >/dev/null 2>&1
+  dd if="$fat" of="$fit" bs=512 seek="$esp_s" conv=notrunc status=none
+  mkdir -p "$T/nomdir"
+  for c in awk blkid cat findmnt grep head lsblk sed sgdisk sort; do
+    p="$(command -v "$c" 2>/dev/null)" && ln -sf "$p" "$T/nomdir/$c"
+  done
+  # The interpreter goes in by ABSOLUTE path: a `PATH=… bash …` prefix resolves `bash` itself
+  # through the stripped PATH, so the case dies rc=127 before reaching the script and asserts
+  # nothing. Measured -- that is exactly how this case failed when it was first written.
+  out=$(PATH="$T/nomdir" "$(command -v bash)" "$SELECT" "$fit" 2>&1); rc=$?
+  [ "$rc" -ne 0 ] && printf '%s\n' "$out" | grep -qi "mdir not found" \
+    && ok "mdir absent -> refused, naming the tool, not silently accepted" \
+    || bad "with mdir absent the script did not refuse (rc=$rc): $out"
+
+  # And the same disk with mdir back on PATH still refuses -- so the case above proves the tool
+  # gate, not a fixture that had stopped being refusable.
+  out=$(bash "$SELECT" "$fit" 2>&1)
+  printf '%s\n' "$out" | grep -q "bootable ESP that is not ours" \
+    && ok "the same fixture with mdir present -> still refused by 3b itself" \
+    || bad "the no-mdir fixture is not refusable by 3b, so that case proved nothing: $out"
 else
   skip "the FIT capture has no ROCKNIX partition to retype"
 fi

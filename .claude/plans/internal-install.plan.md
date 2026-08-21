@@ -1092,8 +1092,19 @@ refusal: an OEM layout absent from every capture is **accepted**, not refused. `
 It was run expecting eMMC — internal storage that would appear as `mmcblk*` and finally make rules
 1/2 load-bearing rather than true by naming. **That premise does not hold for this unit:** its
 internal storage is UFS (`sda`–`sdh`, every LUN reporting 4096) and the only `mmcblk` present is
-the boot SD. So *"an `mmcblk` device selected as a target"* remains something that has never
-happened, on any board.
+the boot SD.
+
+**And there is no eMMC board to fall back on — the fleet is entirely UFS** (five captures plus a
+Thor Lite, UFS 3.1, checked 2026-08-21). So *"an `mmcblk` device selected as a target"* is not a
+test still queued; it is one no hardware here can run. Two things make that acceptable rather than
+an open hole. Selection and the carve are **name-agnostic by construction** — an index is emitted,
+indices are what reach sgdisk, and rule 1 resolves the running disk through `findmnt`/`lsblk
+PKNAME`, spelled identically either way — and the name-shaped half is now asserted offline: the
+scan glob names `mmcblk`, and the same image under an `mmcblk` name and an `sdX` name must emit
+identical geometry, so a rule that started reading the device name fails a case. What remains
+genuinely untestable is narrow and stated: that an eMMC disk reports `removable=0`, and rules 1/2
+discriminating when boot medium and target are *both* `mmcblk`. **Phase 4's orchestrator is where
+this has to be maintained deliberately** — see the PARTUUID requirement in §4c.
 
 > **AND THE `removable` CHECK IS NOT WHAT PROTECTS THE BOOT MEDIUM.** Measured across all five
 > captures: the boot SD reports **`removable=0`** on every board — the SD host controller is not
@@ -1279,6 +1290,28 @@ recon → select-target → BACKUP GPTs → verify sources → [CONFIRM]
   → rauc install (rootfs-a)  → seed /home  → write efi-a/efi-b + partsets
   → write ESP stage 1 + grubenv (incl. nd_* indices) → arm A.conf  ← LAST
 ```
+
+> **REQUIREMENT — address the new partitions by PARTUUID, never by name arithmetic.** Every step
+> after `genpart.sh --append` needs a path to a partition it just created, and the tempting form is
+> `${disk}${n}` or `${disk}p${n}`. **Do not.** The `p` infix depends on the disk's kind —
+> `mmcblk0p11` against `sda11` — so a spine written against one is broken on the other, and
+> **we cannot test the difference**: every device in the fleet is UFS (five captures plus a Thor
+> Lite, all UFS 3.1; the only `mmcblk` present anywhere is the boot SD). A naming bug of this shape
+> would therefore first appear on a customer's eMMC device, mid-install, on a disk whose `userdata`
+> is already gone.
+>
+> Read the uuid back out of `sgdisk -i <n>` and use `/dev/disk/by-partuuid/<uuid>`, which is what
+> the stage-2, initramfs and card paths already do — nothing on the device concatenates a disk and
+> an index today, and the spine must not be the first. Lower-cased, per `mint_partsets`' rule:
+> sgdisk prints GUIDs upper case and steamcl string-compares them.
+>
+> This is why Phase 3 closing without an `mmcblk` target is acceptable rather than a gap left open.
+> Selection and the carve are index-based and name-agnostic by construction — `select-target.sh`
+> emits an index, `carve.sh` and `genpart.sh` pass indices to sgdisk against the whole-disk path,
+> and rule 1 resolves the running disk through `findmnt`/`lsblk PKNAME`, which is spelled the same
+> either way. `install/test-select-target.sh` asserts both halves of that: the scan glob names
+> `mmcblk`, and the same image under an `mmcblk` name and an `sdX` name emits identical geometry.
+> The orchestrator is the one place the property has to be maintained deliberately.
 
 `install/post-install-fresh.sh` is a distinct handler from `/usr/lib/rauc/post-install.sh`
 (which needs `/esp`, `/efi`, `steamos-bootconf this-image` and a running `/var` to rsync,

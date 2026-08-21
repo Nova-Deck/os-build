@@ -25,8 +25,8 @@
 #
 # THE VICTIM RULE, and there is only one (2026-08-10): a partition named exactly `userdata`, of at
 # least 33 GiB. No name match, or not enough room, and this refuses -- it does not offer another
-# partition, fall back to a size heuristic, or proceed in a reduced mode. All four Phase 0 captures
-# agree on the spelling, and a board that disagrees is refused rather than carved wrongly.
+# partition, fall back to a size heuristic, or proceed in a reduced mode. Every Phase 0 capture
+# agrees on the spelling, and a board that disagrees is refused rather than carved wrongly.
 set -euo pipefail
 
 # 32 GiB for novadeck plus 1 GiB kept for Android. This is the POLICY minimum -- below 32 an install
@@ -111,8 +111,13 @@ examine() {
     :
   else
     [ -b "$disk" ] || { say "  $disk: not a block device"; return 1; }
+    # THIS IS NOT WHAT PROTECTS THE BOOT MEDIUM, despite reading like it. Measured across all five
+    # captures 2026-08-21: the boot SD card reports `removable=0` on every board -- the SD host
+    # controller is not marked removable -- so this check never fires for the card, and rule 1 (the
+    # running disk) is the SOLE thing keeping the installer off the medium it booted from. What this
+    # does catch is USB media, which is worth having and is not the same guarantee.
     [ "$(cat "/sys/block/$base/removable" 2>/dev/null || echo 1)" = 0 ] \
-      || { say "  $disk: removable -- the installer never writes the medium it booted from"; return 1; }
+      || { say "  $disk: removable media is never an install target"; return 1; }
     [ "$(cat "/sys/block/$base/ro" 2>/dev/null || echo 1)" = 0 ] \
       || { say "  $disk: read-only"; return 1; }
   fi
@@ -128,7 +133,7 @@ examine() {
   # goes in the message -- a board refused in the field is only useful if we can see what it said.
   #
   # THE PATTERN NAMES DAMAGE, not severity, and the fixtures are why. Refusing on any Caution or
-  # Warning refused all four captured boards: stock Android tables are not 2048-sector aligned
+  # Warning refused every captured board: stock Android tables are not 2048-sector aligned
   # (`sda1` is two sectors at LBA 6), so every one of them draws "Partition 1 doesn't end on a
   # 2048-sector boundary". That is a remark about tidiness on a disk we did not lay out and never
   # will. What we refuse on is a header or table gdisk could not read and substituted for.

@@ -1082,6 +1082,27 @@ refuse **naming the tool**, and the same fixture with `mdir` restored must still
 itself — otherwise the first case would pass against a fixture that had quietly stopped being
 refusable.
 
+**Board three, MANGMI Pocket Max — a FIFTH board, and it was not in the recon set.** Captured with
+`probe-internal.sh` and added to `docs/internal-storage.md`, so both suites now drive five boards
+rather than four. It contributes `userdata` at **p15** (a third distinct index alongside the ACE's
+p11 and the Odin 2's p17) and exercises live the case the plan says must not regress into a
+refusal: an OEM layout absent from every capture is **accepted**, not refused. `SECTOR=4096`,
+`UD_INDEX=15`, `UD_START=1735208`, `UD_END=27540474`, 98.4 GiB, `CEIL == UD_END` again.
+
+It was run expecting eMMC — internal storage that would appear as `mmcblk*` and finally make rules
+1/2 load-bearing rather than true by naming. **That premise does not hold for this unit:** its
+internal storage is UFS (`sda`–`sdh`, every LUN reporting 4096) and the only `mmcblk` present is
+the boot SD. So *"an `mmcblk` device selected as a target"* remains something that has never
+happened, on any board.
+
+> **AND THE `removable` CHECK IS NOT WHAT PROTECTS THE BOOT MEDIUM.** Measured across all five
+> captures: the boot SD reports **`removable=0`** on every board — the SD host controller is not
+> marked removable — so that check never fires for the card. **Rule 1 (the running disk) is the
+> sole thing keeping the installer off the medium it booted from**, and the code comment claiming
+> otherwise was corrected. What `removable` does catch is USB media, which is worth having and is
+> a different guarantee. This matters because the blast-radius argument reads as though two
+> independent nets cover the card; only one does.
+
 **Still unreached on hardware, and honestly so.** Rule 9 (two eligible disks → refuse rather than
 pick) cannot fire where only one LUN has a `userdata`, so it keeps `NOVADECK_SELECT_DISKS` and
 stays a fixture-only property. The already-NovaDeck reinstall path is reachable only from an

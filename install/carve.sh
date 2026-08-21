@@ -134,6 +134,72 @@ recreate_userdata() {  # <index> <start> <end> <type-guid>
   say "  userdata recreated: p$idx $start..$end, type $got_type"
 }
 
+# The partition device for an index, resolved BY PARTUUID and never by name arithmetic. `${DISK}p${n}`
+# against `${DISK}${n}` depends on the disk's kind, every device in the fleet is UFS, and a spelling
+# bug of that shape would first appear on somebody's eMMC board mid-install. Lower-cased, as
+# `mint_partsets` requires. Returns non-zero for an image file, which has no partition nodes.
+part_dev() {  # <index>
+  local uuid
+  [ -b "$DISK" ] || return 1
+  uuid="$(sgdisk -i "$1" "$DISK" 2>/dev/null \
+          | sed -n 's/^Partition unique GUID: \([0-9A-Fa-f-]*\).*/\1/p' | tr 'A-Z' 'a-z')"
+  [ -n "$uuid" ] || return 1
+  printf '/dev/disk/by-partuuid/%s\n' "$uuid"
+}
+
+# THE OTHER OS MUST NOT BE ABLE TO MOUNT WHAT WAS THERE BEFORE THE RESIZE, and this exists because it
+# could. MEASURED on the Pocket ACE 2026-08-21: after a carve from 96.72 GiB to 16, Android booted,
+# mounted the OLD superblock without complaint and reported 92 GB free -- every one of those "free"
+# sectors past the new end being our ESP, both roots, both vars and /home. It did not re-run
+# setup-wizard, which is how we know it never reformatted: it simply believed the stale geometry.
+#
+# So a carve that rewrites only the GPT hands the user a device where one large download corrupts the
+# install, silently, days later. Zeroing the head of the partition is enough and is the whole fix: the
+# PRIMARY superblock is what mount reads (ext4 at 1 KiB, f2fs at 0 and 4 KiB), and with it gone
+# Android's fs_mgr formats userdata at its true size -- which is the factory reset the consent screen
+# already promises, arriving without the user being sent to recovery.
+#
+# AND IT MUST BE UNCONDITIONAL `dd`, NOT `wipefs -a`, which is what this would otherwise obviously be.
+# Measured on the same board: `blkid /dev/sda11` reports a PARTLABEL and PARTUUID and NO filesystem
+# type at all, because Android holds userdata under metadata encryption (dm-default-key) -- the
+# partition carries ciphertext with no discoverable signature, while `metadata` beside it is plain
+# f2fs. wipefs would find nothing to erase and exit 0, doing precisely nothing, which is the most
+# expensive kind of success. Zeroing works regardless because dm-default-key is a 1:1 offset-
+# preserving mapping: the inner superblock's ciphertext lives where a plaintext one would.
+#
+# It is also why the stale mount succeeded rather than failing loudly. The inner filesystem is f2fs,
+# and f2fs does not check its superblock's size against the device at mount time -- ext4 does, and
+# would have refused. Do not assume a future Android will be as forgiving, and do not rely on it.
+#
+# It writes INSIDE userdata only, before a single one of our partitions exists, and its length is
+# clamped to the partition. Destroying that filesystem is not a new blast radius: it is the one thing
+# every mode here already destroys by design.
+# 8 MiB, where roughly one would do: the superblocks sit in the first few KiB, but the margin is free
+# inside a partition being destroyed anyway, and it covers f2fs's checkpoint area as well as the
+# superblock pair rather than only what mount happens to read first. Independent implementations of
+# this same shrink settle on the same figure, which is weak evidence but not none.
+WIPE_MIB="${NOVADECK_WIPE_MIB:-8}"
+invalidate_userdata_fs() {  # <index> <start-sector> <end-sector>
+  local idx="$1" start="$2" end="$3" count dev
+  count=$(( WIPE_MIB * 1048576 / SECTOR ))
+  [ "$count" -le "$(( end - start + 1 ))" ] || count=$(( end - start + 1 ))
+
+  settle
+  if dev="$(part_dev "$idx")" && [ -b "$dev" ]; then
+    dd if=/dev/zero of="$dev" bs="$SECTOR" count="$count" conv=fsync status=none \
+      || die "could not invalidate the old filesystem on $dev"
+  elif [ -b "$DISK" ]; then
+    # A block device whose partition node did not appear is NOT a case to write around: the fallback
+    # would have to be name arithmetic, and guessing a device node to dd zeros onto is precisely the
+    # guess this project refuses to make.
+    die "cannot resolve the partition node for p$idx by partuuid -- refusing to guess a device name"
+  else
+    dd if=/dev/zero of="$DISK" bs="$SECTOR" seek="$start" count="$count" conv=notrunc,fsync status=none \
+      || die "could not invalidate the old filesystem in $DISK at sector $start"
+  fi
+  say "  old userdata filesystem invalidated (${WIPE_MIB} MiB zeroed at sector $start)"
+}
+
 # A block device needs the kernel to re-read the table before anyone can mkfs /dev/sdaN. sgdisk asks
 # for that itself, but the device nodes appear asynchronously, so the next step in the spine can
 # otherwise race a node that does not exist yet. Image files have no such problem and no such tools.
@@ -212,6 +278,7 @@ case "$INTENT" in
 
     delete_ours
     recreate_userdata "$UD_INDEX" "$UD_START" "$NEW_END" "$UD_TYPE"
+    invalidate_userdata_fs "$UD_INDEX" "$UD_START" "$NEW_END"
     settle
     NOVADECK_APPEND_FLOOR=$(( NEW_END + 1 )) NOVADECK_APPEND_CEIL="$CEIL" "$GENPART" --append "$DISK"
     settle
@@ -229,6 +296,10 @@ case "$INTENT" in
 
     delete_ours
     recreate_userdata "$UD_INDEX" "$UD_START" "$CEIL" "$UD_TYPE"
+    # Also here, for the opposite reason: the filesystem left behind describes the SHRUNK userdata,
+    # so Android would mount a 16 GiB volume on a 96 GiB partition and silently keep the difference
+    # from its owner. Uninstall says "Android is factory reset again"; this is what makes that true.
+    invalidate_userdata_fs "$UD_INDEX" "$UD_START" "$CEIL"
     settle
     printf 'userdata=%s\n' "$UD_INDEX"
     ;;

@@ -94,6 +94,54 @@ for board in "${BOARDS[@]}"; do
     || bad "$board: the name=index map is not eight lines"
 done
 
+# --- 1b. the OLD filesystem must not survive the shrink ---------------------------------------------
+# FOUND ON HARDWARE 2026-08-21, and nothing offline had a reason to look. After a carve from 96.72
+# GiB to 16, the ACE booted Android, which mounted the OLD superblock without complaint and reported
+# 92 GB free -- every sector of that past the new end being our ESP, roots, vars and /home. It did
+# not re-run setup-wizard, so it had not reformatted: it simply believed stale geometry, and one
+# large download would have eaten the install. A factory reset repaired it, but nothing tells a user
+# to perform one, so the carve has to make the stale filesystem unmountable itself.
+#
+# Two claims, and the second is the one that keeps this from being a new blast radius.
+CASE="the old filesystem is invalidated, inside userdata only"
+wipe="$(board_img "AYANEO Pocket ACE")"
+ud_start="$(rows "$wipe" | awk '$4=="userdata" {print $2}')"
+floor=$(( ud_start + 33 * (1073741824 / 512) ))   # fixtures are 512-byte sectors; 33 GiB of them
+# A superblock-shaped marker across the head of userdata, and another where our ESP will land.
+tr '\0' '\377' </dev/zero | dd of="$wipe" bs=512 seek="$ud_start" count=8192 \
+  conv=notrunc status=none 2>/dev/null
+tr '\0' '\377' </dev/zero | dd of="$wipe" bs=512 seek="$floor" count=1 \
+  conv=notrunc status=none 2>/dev/null
+
+if carve fresh "$wipe" 33 >/dev/null 2>&1; then
+  left="$(dd if="$wipe" bs=512 skip="$ud_start" count=8192 status=none | tr -d '\0' | wc -c)"
+  [ "$left" = 0 ] \
+    && ok "the head of the shrunk userdata is zeroed, so Android must reformat" \
+    || bad "$left bytes of the old filesystem survived the carve -- Android will mount it"
+  # The wipe is bounded by the partition it is destroying. A wipe that ran past the new end would
+  # be writing into the ESP we are about to create, which is a different failure from the one above
+  # and a worse one: it would corrupt an install rather than leave a stale one.
+  [ "$(dd if="$wipe" bs=512 skip="$floor" count=1 status=none | tr -d '\377' | wc -c)" = 0 ] \
+    && ok "the sector at the append floor is untouched -- the wipe stayed inside userdata" \
+    || bad "the wipe overran userdata and wrote into our own span"
+else
+  bad "the carve refused a board it accepts elsewhere in this suite"
+fi
+
+# uninstall grows userdata back, so the filesystem left behind describes a SMALLER volume -- not
+# dangerous, but Android would keep the difference from its owner. "Factory reset again" has to mean
+# it, so the same invalidation runs.
+CASE="uninstall invalidates the filesystem too"
+tr '\0' '\377' </dev/zero | dd of="$wipe" bs=512 seek="$ud_start" count=8192 \
+  conv=notrunc status=none 2>/dev/null
+if carve uninstall "$wipe" >/dev/null 2>&1; then
+  [ "$(dd if="$wipe" bs=512 skip="$ud_start" count=8192 status=none | tr -d '\0' | wc -c)" = 0 ] \
+    && ok "the restored userdata carries no mountable filesystem" \
+    || bad "uninstall left the shrunk-size filesystem in place on a full-size partition"
+else
+  bad "uninstall refused a disk it had just carved"
+fi
+
 # --- 2. our eight are inside the freed span, on the board where something FOLLOWS userdata -----------
 # The Pocket FIT is the only capture with a partition after userdata, so it is the one that can catch
 # a home that runs past the ceiling into a neighbour. On the other three the ceiling is the end of the

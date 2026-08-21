@@ -110,17 +110,31 @@ option and no injected libraries are needed.
 ## `usr/share/guestos/fex-mesa/` — the guest as a Steam graphics provider
 
 Valve publishes FEX as a Steam Play compat tool (app `3127680`). On its **public** branch that
-tool ships the emulator and thunks only — its rootfs depot is empty — and it expects the OS to
-provide the x86 guest at a fixed path, `/usr/share/guestos/fex-mesa`. It sets `FEX_PORTABLE=1`, so
-it deliberately ignores a system FEX install and everything in `usr/share/fex-emu/Config.json`
-above. The migration plan is `.claude/plans/fex-compat-tool.plan.md`.
+tool ships the emulator and thunks only — its rootfs depot is empty — so the OS has to provide the
+x86 guest. It sets `FEX_PORTABLE=1`, so it deliberately ignores a system FEX install and everything
+in `usr/share/fex-emu/Config.json` above. The migration plan is
+`.claude/plans/fex-compat-tool.plan.md`.
+
+`/usr/share/guestos/fex-mesa` is the tool's **default**, not a fixed requirement: it returns that
+path unless `STEAM_COMPAT_GRAPHICS_PROVIDER` names a `graphics_provider.json`, in which case that
+file's parent directory wins instead (`Source/Steam/CompatTool.cpp`; the variable is a
+pressure-vessel one that the tool only sets). Taking the default is a choice. Our guest is baked
+into the read-only image and mounted at boot, so it can simply *sit* at the probed path — no
+session plumbing, and it resolves for **any** Steam launch, not only one started through
+`novadeck-session`. An OS whose guest arrives after install, in writable user storage, has no such
+option and must export the variable. The override stays useful to us as a debugging lever: point it
+at an alternate tree to exercise a rebuilt guest without a reflash.
 
 Our pinned `ArchLinux.ero` already satisfies pressure-vessel's graphics-provider contract in full,
-so no new guest has to be built. `images/assemble-rootfs.sh` surfaces it with **one** fstab entry:
-the `.ero`, loop-mounted read-only at the probed path, `nofail`.
+so no new guest has to be built. `images/assemble-rootfs.sh` surfaces it as **two** fstab rows: the
+`.ero` loop-mounted read-only as a lower layer at `/run/novadeck/guestos-lower`, and an overlay at
+the probed path laying our `packages/mesa-x86` Turnip payload over it. Both `nofail`. The merged
+tree is what every x86 consumer reads — the compat tool probes it, and the system FEX `RootFS`
+points at it — so the guest driver carries our mesa patches while the pinned artifact stays
+byte-identical to its pin. The build-time gates on both are documented at that step.
 
-One mount works because **the guest ships its own `/graphics_provider.json`** as of the 2026-08-11
-image. Mounting it at `/usr/share/guestos/fex-mesa` therefore lands the manifest at exactly
+It works with no manifest of ours because **the guest ships its own `/graphics_provider.json`** as
+of the 2026-08-11 image. Mounting the merged tree at `/usr/share/guestos/fex-mesa` lands it at
 `/usr/share/guestos/fex-mesa/graphics_provider.json`, which is the path the tool probes, and the
 same mount is a real guest tree for the tool's other use of that path — it hands it to FEX as
 `RootFS`. (Inside a pressure-vessel container that second use is moot: `emulator.json` forces
@@ -132,16 +146,20 @@ carried none. Upstream's differs from what we had written, and in its favour: no
 ours left the `true` default. Ours was deleted with the pin bump; nothing of ours may live under
 the mountpoint now, because the mount would mask it.
 
-This is **additive**. The image is still read from its `fex-emu` location and the system FEX keeps
-working off the same file, unchanged — the validated baseline survives and the change rolls back
-for free. Relocating the `.ero` belongs with the retirement of `packages/fex-emu`, not here.
+The `.ero` itself is **not relocated**: it stays at its `fex-emu` location and is read from there
+as the overlay's lower layer. Relocating it belongs with the retirement of `packages/fex-emu`, not
+here.
 
-`usr/share/fex-emu/Config.json` deliberately still names `ArchLinux.ero` rather than this mount,
-even though pointing it here would let FEXServer skip its own `erofsfuse` mount of the same image.
+`usr/share/fex-emu/Config.json` points the system FEX's `RootFS` at the merged mount rather than at
+`ArchLinux.ero`. That was **not** the original call, and the reason it changed is worth keeping.
 The mount is `nofail`; if it ever failed, a `RootFS` pointing at it would leave the system FEX
-running x86 binaries against an **empty directory**, where today FEX mounts the image itself and
-keeps working. That trade is only worth taking to share a *modified* guest, which we do not ship —
-and Phase 3 retires this config's consumer outright if Steam ever selects the tool.
+running x86 binaries against an **empty directory**, where FEX mounting the image itself would keep
+working. We judged that trade worth taking only to share a *modified* guest — and with the
+`packages/mesa-x86` payload we now ship exactly that: the guest's stock `libvulkan_freedreno.so` is
+an unowned mesa snapshot, and under our thunkless config it is the driver that renders every native
+x86 Linux title. Sharing one tree is what puts our patched Turnip under both consumers; skipping
+FEXServer's own per-user `erofsfuse` mount is a bonus. Phase 3 retires this config's consumer
+outright if Steam ever selects the tool.
 
 ### The manifest gate
 
@@ -156,9 +174,19 @@ cannot launch an x86 title.
 only prints `read inode failed` to stderr, so the gate has to parse the content. This is also the
 only reason `erofs-utils` is in `build/Dockerfile`.
 
-`images/test-graphics-provider.sh` (in `make test`) guards what committed files can still show:
-that `packages/fex-rootfs/prebuilt.pin`'s `dest` is the mount source, that the mount is read-only
-and `nofail` and its mountpoint exists in the read-only image, that we ship nothing under that
-mountpoint, that the build-time gate above still exists *and still parses* rather than trusting an
-exit status, that the build image carries the tool it needs, and that the kernel can mount any of
-it (`EROFS_FS`, `EROFS_FS_ZIP` for LZ4, `BLK_DEV_LOOP`).
+`images/test-graphics-provider.sh` (in `make test`) guards what committed files can still show, in
+five groups:
+
+- **fstab injection** — `packages/fex-rootfs/prebuilt.pin`'s `dest` is the lower mount's source; the
+  guest is loop-mounted read-only and `nofail`; the overlay row merges the payload over the guest at
+  the probed path and is ordered after the lower mount; the mountpoint exists in the read-only
+  image; we ship nothing under it, since the mount would mask it.
+- **`mesa-x86` payload** — it is staged at the path the overlay row names as its top `lowerdir`; the
+  assembler hard-requires it complete rather than treating it as best-effort; the `Makefile` builds
+  it before the rootfs assembly; the assembler checks its `NEEDED` closure against the guest; and
+  its mesa snapshot matches the `fex-rootfs` pin, so the payload is built against the guest it
+  overlays.
+- **one shared tree** — the system FEX's `RootFS` names the merged mount, not the `.ero`.
+- **the manifest gate** — it still exists, still *parses* rather than trusting an exit status, and
+  the build image carries `erofs-utils` for it.
+- **kernel support** — `EROFS_FS`, `EROFS_FS_ZIP` (LZ4), `BLK_DEV_LOOP`, `OVERLAY_FS`.

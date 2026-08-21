@@ -1059,11 +1059,47 @@ What the run establishes that the 66 offline cases structurally cannot:
   size=25355731` and `last-lba: 30150650`. `CEIL == UD_END` because `userdata` ends on the last
   usable sector: on this board `home` absorbs no trailing free space.
 
+**Board two, KONKR Pocket FIT — and it found the defect the ACE could not.** The FIT is the only
+board carrying another distribution, and rule 3b **did not fire**: `sda`, with `ROCKNIX` on a
+genuine `EF00` ESP at p12 and `STORAGE` at p13, came back `TARGET=/dev/sda MODE=fresh`.
+
+The mechanism is not in the rule, it is under it. `esp_is_bootable()` reads ESP content with
+`mdir`, **mtools is not in the shipped image** (an installer package, exactly like gptfdisk), and
+`mdir` reports a missing file and a missing binary the same way — non-zero. So the rule answered
+"not bootable" for every ESP on the disk and the check silently did not happen. All 66 offline
+cases were green throughout, because the build container has mtools on its PATH — an offline suite
+proves logic, never the image's tool inventory, and that is the whole shape of this bug.
+
+Fixed by making it **fail closed**: `select-target.sh` now requires `mdir` up front the way it
+already required `sgdisk`, so a check that cannot run refuses instead of degrading. With mtools
+staged onto the device the rule fires correctly and names the partition —
+*"partition 12 (ROCKNIX) is a bootable ESP that is not ours"* — and the scan refuses the whole
+board. That is rule 3b's first exercise against a real foreign install rather than a synthesised
+fixture, and the reason the FIT was worth running for more than a second data point.
+
+Two cases guard the regression (`install/test-select-target.sh`): PATH rebuilt without `mdir` must
+refuse **naming the tool**, and the same fixture with `mdir` restored must still be refused by 3b
+itself — otherwise the first case would pass against a fixture that had quietly stopped being
+refusable.
+
 **Still unreached on hardware, and honestly so.** Rule 9 (two eligible disks → refuse rather than
 pick) cannot fire where only one LUN has a `userdata`, so it keeps `NOVADECK_SELECT_DISKS` and
-stays a fixture-only property. Rule 3b has no foreign bootable ESP on this board — the Pocket FIT
-is the capture that carries one, so that one is worth running next for reasons beyond a second
-data point. `carve.sh` needs a sacrificial device and has touched nothing real.
+stays a fixture-only property. The already-NovaDeck reinstall path is reachable only from an
+internal install, since on both boards our own disk is the boot medium and rule 1 takes it first.
+`carve.sh` needs a sacrificial device and has touched nothing real.
+
+**The generalisation, which is the part that outlives this bug.** Every gate in the installer that
+shells out to a tool absent from the shipped image has this failure shape, and none of them can be
+caught by a suite that runs where the tool exists. For each external command, decide whether its
+absence must refuse — and assert that decision as its own case, because the default is to degrade
+quietly.
+
+`carve.sh` was audited the same day and is **clean**: `sgdisk` is required up front, `genpart.sh`
+is ours, and `partprobe`/`udevadm` are best-effort by explicit `|| true` — a visible decision
+rather than an accident, which is the distinction that matters. **Phase 4's orchestrator still
+owes this audit**, and it is the one with the longest tool list (`mkfs.vfat` from dosfstools,
+`mkfs.ext4`, `mkfs.btrfs`, `rauc`, `curl`, `nmcli`), every one of them a tool the shipped image
+does not fully carry.
 
 ### Blast radius, stated plainly
 
@@ -1442,7 +1478,10 @@ install/README.md        pkgs.list       mkroot.sh        mkimage.sh
 
 - `install/mkroot.sh` — pacstrap the installer package set into `work/installer-base`, then
   `mksquashfs -comp zstd`. Set = systemd + udev (device nodes, unit ordering, journald),
-  bash/coreutils/util-linux, **gptfdisk + dosfstools** (not in the shipped image),
+  bash/coreutils/util-linux, **gptfdisk + dosfstools + mtools** (none of them in the shipped
+  image — and `mtools` is not optional: `dosfstools` ships `mkfs.vfat`/`fsck.vfat`, NOT `mdir`,
+  which is what rule 3b reads a foreign ESP's content with. Leaving it out reproduces the
+  2026-08-21 Pocket FIT finding on the installer image itself),
   e2fsprogs/btrfs-progs, rauc + glib + openssl, curl + ca-certificates, dbus,
   NetworkManager + wpa_supplicant, openssh, python, and the Phase-5 graphics stack
   (mesa, vulkan-freedreno, wayland, gamescope, seatd, sdl2, python-pygame). Reuses the

@@ -150,23 +150,65 @@ printf '%s\n' "$out" | grep -q "not supported yet" \
 
 # Shrink it under the floor. super is the largest remaining partition on this board, so this is
 # also the case that proves no size heuristic picks a second candidate.
+#
+# THE FILLER IS LOAD-BEARING. The floor is a question about the ROOM AVAILABLE -- ud_start..CEIL --
+# and not about userdata's own extent; on a stock device those are the same number because userdata
+# runs to the end of the disk. Shrinking userdata inside a full-size capture and stopping there
+# would leave hundreds of GiB of free space behind it, which is genuinely enough room, and refusing
+# would then be the bug. So each fixture below puts a partition immediately after userdata, which is
+# what a board where userdata is followed by something actually looks like.
+fill_after() {  # <img> <ud-index> -- occupy everything after userdata so CEIL == its end
+  local img="$1" idx="$2" e
+  e="$(sgdisk -i "$idx" "$img" | sed -n 's/^Last sector: \([0-9]*\).*/\1/p')"
+  # No -c: sgdisk does not resolve "0" to the just-created partition for a name, and the failure
+  # aborts the whole invocation, silently leaving the free space it was meant to occupy.
+  # -a 1: without it sgdisk aligns the start to 2048 sectors, so the filler begins up to ~1 MiB past
+  # userdata's end and CEIL -- which is filler_start - 1 -- reaches into that gap. On the
+  # one-sector-under-the-floor fixture that gap is the difference between 32 and 33 GiB.
+  sgdisk -a 1 -n "0:$(( e + 1 )):0" "$img" >/dev/null 2>&1
+  sgdisk -p "$img" | awk -v e="$e" '"'"'$1 ~ /^[0-9]+$/ && $2 == e+1'"'"' | grep -q . \
+    || bad "fixture setup: nothing was created after userdata, so the room is still free"
+}
+
 cp --sparse=always "$base" "$T/small.img"
 s="$(sgdisk -i "$ud" "$T/small.img" | sed -n 's/^First sector: \([0-9]*\).*/\1/p')"
 sgdisk -d "$ud" "$T/small.img" >/dev/null 2>&1
 sgdisk -n "$ud:$s:+20G" -c "$ud:userdata" "$T/small.img" >/dev/null 2>&1
+fill_after "$T/small.img" "$ud"
 out=$(bash "$SELECT" "$T/small.img" 2>&1)
 { printf '%s\n' "$out" | grep -q "20 GiB" && printf '%s\n' "$out" | grep -q "33 is the minimum"; } \
-  && ok "a 20 GiB userdata -> refused, naming both numbers" \
+  && ok "a 20 GiB userdata with nothing free after it -> refused, naming both numbers" \
   || bad "a userdata below the 33 GiB floor was not refused clearly: $out"
 
 # One sector under, to prove the boundary is where it is claimed rather than roughly there.
 cp --sparse=always "$base" "$T/edge.img"
 sgdisk -d "$ud" "$T/edge.img" >/dev/null 2>&1
 sgdisk -n "$ud:$s:+$(( 33 * 1024 * 1024 * 1024 / 512 - 1 ))" -c "$ud:userdata" "$T/edge.img" >/dev/null 2>&1
+fill_after "$T/edge.img" "$ud"
 out=$(bash "$SELECT" "$T/edge.img" 2>&1)
 printf '%s\n' "$out" | grep -q "is the minimum" \
   && ok "one sector under 33 GiB -> refused" \
   || bad "a userdata one sector below the floor was accepted: $out"
+
+CASE="the floor measures the ROOM, not userdata's own extent"
+# THE RETRY-AFTER-INTERRUPTION CASE, and it is the reason the distinction matters. An install that
+# dies between the carve and genpart leaves userdata already shrunk with all the room still free
+# behind it -- the exact state an AYANEO Pocket ACE was in on 2026-08-21 when genpart refused
+# mid-carve. Measuring userdata alone reported "userdata is 8 GiB, and 33 is the minimum" while 88
+# GiB sat unallocated immediately after it, which made the re-run impossible. Plan §3 rule 10 keeps
+# no backups precisely because re-running IS the recovery story, so this refusal had no way out.
+cp --sparse=always "$base" "$T/shrunk.img"
+sgdisk -d "$ud" "$T/shrunk.img" >/dev/null 2>&1
+sgdisk -n "$ud:$s:+8G" -c "$ud:userdata" "$T/shrunk.img" >/dev/null 2>&1
+out=$(bash "$SELECT" "$T/shrunk.img" 2>&1)
+printf '%s\n' "$out" | grep -q '^TARGET=' \
+  && ok "an 8 GiB userdata with the room still free behind it -> accepted, so an interrupted install can be re-run" \
+  || bad "a shrunk userdata with free space after it was refused: $out"
+ud_end_s="$(printf '%s\n' "$out" | sed -n 's/^UD_END=//p')"
+ceil_s="$(printf '%s\n' "$out" | sed -n 's/^CEIL=//p')"
+[ -n "$ceil_s" ] && [ "$ceil_s" -gt "$ud_end_s" ] \
+  && ok "and CEIL reaches past userdata into that free space, which is what the carve will use" \
+  || bad "CEIL ($ceil_s) does not extend past userdata ($ud_end_s)"
 
 # --- 4. rule 3b, on the board that actually carries another distribution ---------------------------
 # The Pocket FIT has an internal ROCKNIX install. ABL's test is on CONTENT, so the fixture needs a

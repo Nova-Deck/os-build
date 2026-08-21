@@ -177,15 +177,35 @@ examine() {
   [ -n "$ud_idx" ] \
     || { say "  $disk: no partition named 'userdata' -- this board is not supported yet"; return 1; }
 
+  # CEIL: the last sector our eight may occupy. The sector before whatever starts after userdata,
+  # or the last usable sector when nothing does -- which is what lets home absorb trailing free
+  # space. Computed here because this script can see the whole table and genpart cannot.
+  #
+  # It is computed BEFORE the size test because the size test needs it. See below.
+  next_start="$(printf '%s\n' "$rows" | awk -v e="$ud_end" '$2 > e {print $2}' | sort -n | head -1)"
+  if [ -n "$next_start" ]; then ceil=$(( next_start - 1 )); else ceil="$(last_usable "$disk")"; fi
+  [ -n "$ceil" ] || { say "  $disk: cannot determine the last usable sector"; return 1; }
+
   # The size test is a FRESH-INSTALL question and only ever meant "is there room to make a NovaDeck
   # install here". On a reinstall that has been answered -- and answered by a carve that was allowed
   # to leave userdata as small as ANDROID_FLOOR_GIB, so applying it here refuses to reinstall exactly
   # the devices whose owners gave Android the least. Rule 8's "skip 4-6 on a disk that is already
   # ours" is what this is; the name check above still runs, because the carve needs the extent.
-  local ud_gib=$(( (ud_end - ud_start + 1) * ss / 1073741824 ))
+  #
+  # IT MEASURES ud_start..CEIL, NOT userdata's OWN EXTENT. Those are the same number on a stock
+  # device, because userdata runs to the end of the disk -- which is why measuring the wrong one went
+  # unnoticed. They come apart the moment userdata has been shrunk and our eight are not there:
+  # an install that died between the carve and genpart leaves exactly that, and measuring userdata
+  # alone then reports "userdata is 8 GiB, and 33 is the minimum" while 88 GiB of free space sits
+  # immediately after it.
+  #
+  # That is not a cosmetic error. Plan §3 rule 10 takes no backups precisely because "re-run it" is
+  # the whole recovery story for a carve that died halfway, and this refusal is what made the re-run
+  # impossible. MEASURED on an AYANEO Pocket ACE, 2026-08-21, after genpart refused mid-carve.
+  local span_gib=$(( (ceil - ud_start + 1) * ss / 1073741824 ))
   if [ "$mode" = fresh ]; then
-    [ "$ud_gib" -ge "$UD_MIN_GIB" ] \
-      || { say "  $disk: userdata is ${ud_gib} GiB, and ${UD_MIN_GIB} is the minimum (${NOVADECK_MIN_GIB} for NovaDeck + ${ANDROID_FLOOR_GIB} kept for Android)"; return 1; }
+    [ "$span_gib" -ge "$UD_MIN_GIB" ] \
+      || { say "  $disk: userdata and the free space after it total ${span_gib} GiB, and ${UD_MIN_GIB} is the minimum (${NOVADECK_MIN_GIB} for NovaDeck + ${ANDROID_FLOOR_GIB} kept for Android)"; return 1; }
   fi
 
   # The type GUID has to come back byte-identical on the recreated partition: stock userdata is a
@@ -193,12 +213,7 @@ examine() {
   ud_type="$(sgdisk -i "$ud_idx" "$disk" 2>/dev/null | sed -n 's/^Partition GUID code: \([0-9A-Fa-f-]*\).*/\1/p')"
   [ -n "$ud_type" ] || { say "  $disk: cannot read userdata's type GUID"; return 1; }
 
-  # CEIL: the last sector our eight may occupy. The sector before whatever starts after userdata,
-  # or the last usable sector when nothing does -- which is what lets home absorb trailing free
-  # space. Computed here because this script can see the whole table and genpart cannot.
-  next_start="$(printf '%s\n' "$rows" | awk -v e="$ud_end" '$2 > e {print $2}' | sort -n | head -1)"
-  if [ -n "$next_start" ]; then ceil=$(( next_start - 1 )); else ceil="$(last_usable "$disk")"; fi
-  [ -n "$ceil" ] || { say "  $disk: cannot determine the last usable sector"; return 1; }
+  # CEIL was computed above, before the size test, because that test measures against it.
 
   printf 'TARGET=%s\nMODE=%s\nSECTOR=%s\nUD_INDEX=%s\nUD_START=%s\nUD_END=%s\nUD_TYPE=%s\nCEIL=%s\n' \
     "$disk" "$mode" "$ss" "$ud_idx" "$ud_start" "$ud_end" "$ud_type" "$ceil"

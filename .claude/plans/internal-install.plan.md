@@ -1300,7 +1300,41 @@ installer's documentation.
 
 ## Phase 4 — The installer runtime
 
-### 4a. Retargeting RAUC
+### 4a. Retargeting RAUC — LANDED 2026-08-21, offline only
+
+`install/rauc-session.sh` and `install/post-install-fresh.sh` are written; `install/test-install.sh`
+120 → **152 cases, green in `novadeck-build`**. Nothing has touched a real disk. Four things the
+writing settled, none of them re-derivable from the sketch below:
+
+- **The ownership check needs a pid, not a name.** "Something owns `de.pengutronix.rauc`" is true of
+  the exact failure it guards against, so the script matches the name owner's pid (via
+  `GetConnectionUnixProcessID`, answered by the bus daemon from `SO_PEERCRED`) against the service
+  it started. It also gives the private bus **no `<servicedir>` and no
+  `<standard_system_servicedirs/>`**, so dbus-daemon cannot activate anything onto it at all — a
+  stronger guarantee than winning a race, and the one that matters, because a stock `rauc.service`
+  taking the name would write the bundle to `/dev/disk/by-partlabel/novadeck-root-A`, which during
+  an internal install is the **installer's own medium**.
+- **`RAUC_TARGET_SLOTS` is an iterator of INTEGERS, not of slot names** — `install.c` appends
+  `"%i", slotcnt` and `reference.rst:1745` spells the `eval RAUC_SLOT_DEVICE_${i}` idiom.
+  **This makes the cross-check in `fs-overlay/usr/lib/rauc/post-install.sh` dead code**: it does
+  `case "$RAUC_TARGET_SLOTS" in *rootfs.0*)`, which compares an integer list against a slot name and
+  can never match, so `rauc_target` is always empty and the "RAUC says it wrote X but the booted
+  image is Y" refusal has never once been able to fire. Not fixed here — it is the OTA path, and
+  making a dormant refusal live is its own change with its own hardware gate. Filed as a separate
+  item; `post-install-fresh.sh` reads the indirection correctly and its suite asserts a
+  deliberately non-obvious index (7) so a name-shaped regression fails a test.
+- **The handler owns the SLOT, the spine owns the DISK.** `post-install-fresh.sh` does exactly two
+  things — re-randomise the fsid + label, then seed the slot's `/var` from the tarball inside the
+  root RAUC just wrote — because those are true of the bytes wherever they landed. Everything
+  disk-shaped (efi-a/b, the ESP, partsets, `/home`, `A.conf`) stays in the spine. Consequence for
+  the spine sketch below: **`mkfs (… var-a/b …)` is not a separate step** — `seed_var` does its own
+  `mkfs.ext4`, and `var-b` is not touched at all, matching the release card's empty-B shape. The
+  spine passes the var-A partition in `NOVADECK_TARGET_VAR_A`, inherited down through the service.
+- **The fsid must be randomised on a fresh install too**, which is not obvious when there is no
+  second slot to collide with. The collision here is the internal root against **any other disk
+  carrying the same release** — and the user installing internally is holding one, since a novadeck
+  card is how they booted the installer. Leave the baked fsid and a mount of one can hand them the
+  other.
 
 `rauc install` with the service enabled ignores `-c` and has no `--override-boot-slot` (those
 exist only under `#if ENABLE_SERVICE == 0`), so **the installer owns the service process**.

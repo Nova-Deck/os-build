@@ -644,5 +644,266 @@ printf '%s\n' "$append_script" | grep -q 'NOVADECK_APPEND_FLOOR:-' \
   && bad "the opt-in floor guard is back -- an unset floor would be accepted again" \
   || ok "no opt-in floor guard remains"
 
+# --- 12. install/rauc-session.sh — the synthesized config and who owns the bus (Phase 4a) --------
+# WHAT IS AT RISK. Everything this script does is about making `rauc install` write ONE partition on
+# a FOREIGN disk, and every failure mode is the same failure: it writes somewhere else instead. The
+# config is the whole mechanism -- with the service enabled the install subcommand's own --conf is
+# compiled out, so the config that runs is the service's, and if a stock rauc.service ever won the
+# bus name the bundle would land on /dev/disk/by-partlabel/novadeck-root-A, which on an internal
+# install is the INSTALLER'S OWN MEDIUM. So these assert the config's shape and the ownership proof,
+# and neither can be checked on hardware without doing the destructive thing first.
+SESSION="$ROOT/install/rauc-session.sh"
+FRESH="$ROOT/install/post-install-fresh.sh"
+for f in "$SESSION" "$FRESH"; do
+  [ -x "$f" ] || { echo "missing input: $f" >&2; exit 1; }
+done
+
+# The stub bin dir. `rauc` answers to two invocations and must be told apart by argv, because
+# telling them apart is exactly what the script's two call sites depend on: the SERVICE gets -c and
+# --override-boot-slot, and the INSTALL gets neither. The service stub records its own pid so the
+# gdbus stub can hand back an owner that really is the process the script started -- that identity
+# is the assertion, not the presence of the name.
+STUBS="$T/stubs"; mkdir -p "$STUBS"
+cat >"$STUBS/rauc" <<'EOF'
+#!/usr/bin/env bash
+if [ "${1:-}" = install ]; then printf '%s\n' "$@" >"$STUBDIR/install.args"; exit "${STUB_INSTALL_RC:-0}"; fi
+printf '%s\n' "$@" >"$STUBDIR/svc.args"
+printf '%s\n' "$$"  >"$STUBDIR/svc.pid"
+while :; do sleep 1; done
+EOF
+cat >"$STUBS/dbus-daemon" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$@" >"$STUBDIR/bus.args"
+for a in "$@"; do case "$a" in --print-pid=*) printf '%s\n' "$$" >"${a#--print-pid=}" ;; esac; done
+exit 0
+EOF
+# GetNameOwner then GetConnectionUnixProcessID, in gdbus' own output spelling -- the script parses
+# those two shapes and a stub that emitted bare values would let a parsing bug pass.
+cat >"$STUBS/gdbus" <<'EOF'
+#!/usr/bin/env bash
+case " $* " in
+  *GetNameOwner*)              [ -f "$STUBDIR/svc.pid" ] || exit 1; printf "(':1.7',)\n"; exit 0 ;;
+  *GetConnectionUnixProcessID*) printf '(uint32 %s,)\n' "${STUB_OWNER_PID:-$(cat "$STUBDIR/svc.pid")}"; exit 0 ;;
+esac
+exit 1
+EOF
+chmod +x "$STUBS/rauc" "$STUBS/dbus-daemon" "$STUBS/gdbus"
+
+# The sandbox directory is set by the CALLER, not by the helper. Every call site here runs the
+# helper inside $( ), which is a subshell -- a variable the helper assigned would be gone by the
+# time the assertions below want to look in it.
+sess_dir() { SESS_RUNDIR="$T/run.$1"; rm -rf "$SESS_RUNDIR"; mkdir -p "$SESS_RUNDIR"; }
+
+sess_run() {  # runs rauc-session.sh in the sandbox sess_dir last named
+  local rundir="$SESS_RUNDIR"
+  env PATH="$STUBS:$PATH" STUBDIR="$rundir" \
+      NOVADECK_INSTALL_RUN="$rundir" DEVTEST=-e OWN_TIMEOUT=5 \
+      KEYRING="${SESS_KEYRING:-$T/keyring.pem}" POST_INSTALL="${SESS_POST:-$FRESH}" \
+      ${STUB_OWNER_PID:+STUB_OWNER_PID="$STUB_OWNER_PID"} \
+      "$SESSION" "${1:-$T/target-root}" "${2:-https://example.invalid/b.raucb}" 2>&1
+}
+: >"$T/keyring.pem"; : >"$T/target-root"
+
+CASE="rauc-session: the happy path"
+sess_dir happy
+out="$(sess_run)" && ok "exits 0 with the tools stubbed" || bad "failed: $out"
+conf="$SESS_RUNDIR/rauc.conf"
+
+CASE="rauc-session: the synthesized config"
+if [ -f "$conf" ]; then
+  ok "writes $conf"
+  grep -q '^\[slot\.rootfs\.0\]' "$conf" \
+    && [ "$(grep -c '^\[slot\.' "$conf")" -eq 1 ] \
+    && ok "declares exactly one slot (two make select_inactive_slot_class_member hash-order dependent)" \
+    || bad "the config does not declare exactly one slot"
+  grep -q '^bootname=' "$conf" \
+    && bad "bootname= is back -- rauc would pick a boot_mark_slot and call a bootloader backend" \
+    || ok "no bootname= (so boot_mark_slot is NULL and r_mark_active never runs)"
+  grep -q '^bootloader=' "$conf" \
+    && bad "bootloader= is back -- there is no boot state here for a backend to act on" \
+    || ok "no bootloader="
+  grep -q '^data-directory=' "$conf" \
+    && bad "data-directory= is back -- a virgin slot has nothing for adaptive to reuse" \
+    || ok "no data-directory="
+  grep -q '^check-purpose=codesign' "$conf" \
+    && ok "keeps check-purpose=codesign (the release cert's EKU; without it every bundle is rejected)" \
+    || bad "check-purpose=codesign is missing -- verification would reject every bundle"
+  grep -q "^device=$SESS_RUNDIR/target-root-a\$" "$conf" \
+    && ok "the slot device is the run-dir link, not the raw path" \
+    || bad "the slot device is not the stable run-dir link: $(grep '^device=' "$conf")"
+  [ "$(readlink "$SESS_RUNDIR/target-root-a")" = "$T/target-root" ] \
+    && ok "the link points at the device it was given" \
+    || bad "target-root-a points at $(readlink "$SESS_RUNDIR/target-root-a")"
+else
+  bad "no config written"
+fi
+
+CASE="rauc-session: the bus is not activatable"
+if grep -qi 'servicedir' "$SESS_RUNDIR/dbus.conf"; then
+  bad "the private bus declares an activation directory -- a stock rauc.service could be started onto it"
+else
+  ok "no servicedir: dbus-daemon cannot activate anything onto this bus"
+fi
+grep -q -- '--' "$SESS_RUNDIR/dbus.conf" \
+  && bad "a double dash appears in the bus config -- dbus' XML parser rejects the whole file" \
+  || ok "no double dash in the bus config"
+
+CASE="rauc-session: the two rauc invocations"
+svcargs="$(cat "$SESS_RUNDIR/svc.args" 2>/dev/null)"
+printf '%s\n' "$svcargs" | grep -qx -- '--override-boot-slot=_external_' \
+  && ok "the service is started with --override-boot-slot=_external_" \
+  || bad "the service was not put in external mode: $(printf '%s' "$svcargs" | tr '\n' ' ')"
+printf '%s\n' "$svcargs" | grep -qx -- "$conf" \
+  && ok "the service runs under the synthesized config" \
+  || bad "the service was not given the synthesized config"
+insargs="$(cat "$SESS_RUNDIR/install.args" 2>/dev/null)"
+printf '%s\n' "$insargs" | grep -qx -- '-c' \
+  && bad "install was passed -c, which is compiled out with the service enabled -- it reads as if it did something" \
+  || ok "install is not passed -c (the service's config is the one that counts)"
+printf '%s\n' "$insargs" | grep -qx 'https://example.invalid/b.raucb' \
+  && ok "install is handed the bundle" \
+  || bad "install did not get the bundle: $(printf '%s' "$insargs" | tr '\n' ' ')"
+
+CASE="rauc-session: the ownership proof"
+# THE ASSERTION THAT MATTERS. "Something owns de.pengutronix.rauc" is true of the very failure this
+# guards against, so the script matches the owner's pid against the service it started. Break that
+# and the install proceeds through a service whose config is unknown.
+sess_dir impostor
+out="$( STUB_OWNER_PID=999999 sess_run )" \
+  && bad "an install went ahead against a bus name owned by another process" \
+  || ok "refuses when the name owner is not our service"
+printf '%s\n' "$out" | grep -q 'owned by pid 999999' \
+  && ok "names the impostor pid" \
+  || bad "the refusal does not say who held the name: $out"
+[ -f "$SESS_RUNDIR/install.args" ] \
+  && bad "it refused but still ran the install" \
+  || ok "nothing was installed"
+# In bash a variable assignment preceding a FUNCTION call persists after it returns, unlike one
+# preceding an external command. Left set, this would quietly poison every later sess_run.
+unset STUB_OWNER_PID
+
+CASE="rauc-session: fail-closed on the tools it does not carry"
+# The shipped image carries few of these and the installer image is a different root again. A
+# missing binary and a missing file are indistinguishable to a caller that does not check -- the
+# 2026-08-21 Pocket FIT finding, and the reason these are asserted up front rather than at use.
+# Reached through the seams rather than by emptying PATH, which is the same idiom post-install.sh
+# documents for $SHA256: an offline suite runs with the host's PATH and cannot make a tool absent,
+# so it points the seam at a name that does not exist. Emptying PATH instead breaks the stubs' own
+# `#!/usr/bin/env bash` and tests nothing.
+for seam in RAUC DBUS_DAEMON GDBUS; do
+  rundir="$T/run.miss.$seam"; mkdir -p "$rundir"
+  out="$(env PATH="$STUBS:$PATH" STUBDIR="$rundir" NOVADECK_INSTALL_RUN="$rundir" DEVTEST=-e OWN_TIMEOUT=3 \
+             KEYRING="$T/keyring.pem" POST_INSTALL="$FRESH" "$seam=novadeck-absent-$seam" \
+             "$SESSION" "$T/target-root" b.raucb 2>&1)" \
+    && bad "an absent $seam was not noticed" \
+    || { printf '%s\n' "$out" | grep -q "novadeck-absent-$seam is not on PATH" \
+           && ok "refuses when $seam is absent, and names it" \
+           || bad "an absent $seam produced the wrong error: $out"; }
+done
+
+CASE="rauc-session: the verification inputs"
+sess_dir nokeyring
+out="$( SESS_KEYRING="$T/nope.pem" sess_run )" \
+  && bad "ran with no keyring -- nothing would have been verified" \
+  || { printf '%s\n' "$out" | grep -q 'keyring' && ok "refuses without a readable keyring" \
+       || bad "the wrong error for a missing keyring: $out"; }
+sess_dir nohandler
+out="$( SESS_POST="$T/nope.sh" sess_run )" \
+  && bad "ran with no post-install handler -- the slot would be left with the wrong fsid and no /var" \
+  || { printf '%s\n' "$out" | grep -q 'post-install handler' && ok "refuses without the post-install handler" \
+       || bad "the wrong error for a missing handler: $out"; }
+unset SESS_KEYRING SESS_POST
+
+# --- 13. install/post-install-fresh.sh — the slot half (Phase 4a) --------------------------------
+# RAUC_TARGET_SLOTS IS AN ITERATOR OF INTEGERS, not of slot names: install.c appends "%i" (slotcnt)
+# and reference.rst:1745 spells the `eval RAUC_SLOT_DEVICE_${i}` idiom. A handler that matched it
+# against a slot NAME would compare two things that are never equal, so its check would silently
+# never fire -- which is why the case below uses an index that is deliberately not 0 or 1.
+FRESH_STUBS="$T/fstubs"; mkdir -p "$FRESH_STUBS"
+for t in btrfstune btrfs mkfs.ext4 tar mount umount rsync; do
+  cat >"$FRESH_STUBS/$t" <<EOF
+#!/usr/bin/env bash
+printf '%s %s\n' "$t" "\$*" >>"\$STUBDIR/calls"
+case "$t" in
+  mount) for a in "\$@"; do case "\$a" in -*) ;; *) last="\$a" ;; esac; done; mkdir -p "\$last" ;;
+esac
+exit 0
+EOF
+  chmod +x "$FRESH_STUBS/$t"
+done
+
+# Set by the caller, for the same subshell reason sess_dir is. The mount stub creates a mountpoint
+# but cannot conjure its contents, so the seed is laid down here -- under $MNT, standing in for the
+# root RAUC just wrote, which is the whole point of the case that looks for it there.
+fresh_dir() {
+  FRESH_RUNDIR="$T/fresh.$1"; rm -rf "$FRESH_RUNDIR"
+  mkdir -p "$FRESH_RUNDIR/root/$(dirname "$FRESH_SEED_REL")"
+  : >"$FRESH_RUNDIR/root/$FRESH_SEED_REL"
+}
+
+fresh_run() {  # runs post-install-fresh.sh in the sandbox fresh_dir last named
+  local rundir="$FRESH_RUNDIR"
+  env PATH="$FRESH_STUBS:$PATH" STUBDIR="$rundir" \
+      MNT="$rundir/root" VARMNT="$rundir/var" DEVTEST=-e \
+      NOVADECK_SLOTWRITE="$LIB" VAR_SEED_REL="$FRESH_SEED_REL" \
+      "$@" "$FRESH" 2>&1
+}
+# The seed the handler must find inside the root it just wrote. Pre-created under the mount stub's
+# directory because the stub does not really mount anything; what is being asserted is that the
+# handler looks for it THERE -- in the new root -- and not on the installer medium.
+FRESH_SEED_REL=usr/lib/novadeck/var-seed.tar.zst
+
+CASE="post-install-fresh: refusals before anything destructive"
+fresh_dir novar
+out="$( fresh_run env RAUC_TARGET_SLOTS=1 RAUC_SLOT_DEVICE_1="$T/target-root" )" \
+  && bad "ran without being told where /var goes" \
+  || { printf '%s\n' "$out" | grep -q 'NOVADECK_TARGET_VAR_A' \
+         && ok "refuses when the spine did not name the /var partition" \
+         || bad "the wrong error: $out"; }
+[ -s "$FRESH_RUNDIR/calls" ] \
+  && bad "it refused but had already called $(head -1 "$FRESH_RUNDIR/calls")" \
+  || ok "nothing was called before the refusal"
+
+fresh_dir noslots
+out="$( fresh_run env NOVADECK_TARGET_VAR_A="$T/target-var" )" \
+  && bad "ran outside a rauc transaction" \
+  || { printf '%s\n' "$out" | grep -q 'RAUC_TARGET_SLOTS' \
+         && ok "refuses when not run by rauc" || bad "the wrong error: $out"; }
+: >"$T/target-var"
+
+fresh_dir twoslots
+out="$( fresh_run env NOVADECK_TARGET_VAR_A="$T/target-var" RAUC_TARGET_SLOTS='1 2' \
+                     RAUC_SLOT_DEVICE_1="$T/target-root" RAUC_SLOT_DEVICE_2="$T/target-root" )" \
+  && bad "accepted two target slots -- the config declares one and this handler assumes it" \
+  || ok "refuses when rauc reports more than one target slot"
+
+CASE="post-install-fresh: the integer indirection"
+mkdir -p "$T/fresh-seed-src"
+fresh_dir slot7
+out="$( fresh_run env NOVADECK_TARGET_VAR_A="$T/target-var" RAUC_TARGET_SLOTS=7 \
+                     RAUC_SLOT_DEVICE_7="$T/target-root" )"
+rc=$?
+[ $rc -eq 0 ] && ok "resolves the device through RAUC_SLOT_DEVICE_<n> for a non-obvious n" \
+              || bad "slot 7 was not resolved: $out"
+
+CASE="post-install-fresh: the order is load-bearing"
+calls="$(cat "$FRESH_RUNDIR/calls" 2>/dev/null || true)"
+tune_line=$(printf '%s\n' "$calls" | grep -n '^btrfstune ' | head -1 | cut -d: -f1)
+mount_line=$(printf '%s\n' "$calls" | grep -n '^mount ' | head -1 | cut -d: -f1)
+if [ -n "$tune_line" ] && [ -n "$mount_line" ] && [ "$tune_line" -lt "$mount_line" ]; then
+  ok "the fsid is re-randomised BEFORE anything mounts the target"
+else
+  bad "btrfstune did not run before the first mount (tune=$tune_line mount=$mount_line)"
+fi
+printf '%s\n' "$calls" | grep -q '^btrfs filesystem label .* novadeck-root-A' \
+  && ok "labels the slot novadeck-root-A" \
+  || bad "the slot was not labelled: $calls"
+printf '%s\n' "$calls" | grep -q '^mkfs.ext4 .*novadeck-var-A' \
+  && ok "reformats the slot's /var as novadeck-var-A" \
+  || bad "/var was not reformatted: $calls"
+printf '%s\n' "$calls" | grep -q "^tar .*$FRESH_SEED_REL" \
+  && ok "seeds /var from the tarball inside the root RAUC just wrote, not from the installer medium" \
+  || bad "the /var seed did not come from the new root: $calls"
+
 printf '\ntest-install.sh: %d passed, %d failed, %d skipped\n' "$PASS" "$FAIL" "$SKIP"
 [ "$FAIL" -eq 0 ]

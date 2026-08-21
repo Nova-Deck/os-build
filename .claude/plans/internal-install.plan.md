@@ -1114,11 +1114,59 @@ this has to be maintained deliberately** — see the PARTUUID requirement in §4
 > a different guarantee. This matters because the blast-radius argument reads as though two
 > independent nets cover the card; only one does.
 
+### `carve.sh` on hardware — DONE 2026-08-21, AYANEO Pocket ACE
+
+**The first destructive operation this project has performed on a real disk, and all three modes
+ran in one sitting: `fresh` → `uninstall` → `fresh`, exit 0 each.** A GPT backup was taken first
+(`sgdisk --backup`, kept off-device) because `carve.sh` takes none — the plan puts "BACKUP GPTs" in
+the §4c spine, which does not exist yet, so running the carve directly skips it. **Give the
+orchestrator that step; it is the difference between an exact restore and an equivalent one.**
+
+The board's `userdata` was p11, 96.72 GiB, last on the disk. Carved to 16 GiB:
+
+```
+userdata    4794920..8989223    16.00 GiB   type 1B81E7E6-… preserved
+ESP         8989224..9054759     0.25 GiB   ← starts exactly at the floor
+efi-A/B     9054760..9087527     0.06 GiB each
+root-A/B    9087528..12757543    7.00 GiB each
+var-A/B    12757544..12888615    0.25 GiB each
+home       12888616..30150650    65.85 GiB  ← ends exactly at the ceiling
+```
+
+- **Containment held, asserted against the disk.** `p1`–`p10` are byte-identical to the pre-carve
+  `sfdisk --dump` after the *entire* cycle — three destructive operations, not one. `sgdisk -v`
+  reports no problems and **0 free sectors**: the eight chain with zero gaps from the floor, and
+  `home` ends exactly on the ceiling.
+- **4096-byte sectors, for the first time.** Every offline case runs at 512, so the `--append`
+  arithmetic — floor, ceiling, explicit chained starts — had never executed at the sector size real
+  UFS reports. It placed all eight correctly on the first attempt.
+- **`uninstall` restores the extent exactly.** The only difference across the whole 20-row table is
+  `userdata`'s unique GUID: same start, same 25,355,731 sectors, same vendor type, same name, every
+  other row untouched. The PARTUUID is freshly minted and that is inherent — `uninstall` consults
+  no stored pre-state by design. A GPT backup is what restores the original GUID, which is the
+  second reason the orchestrator should take one.
+- **It is deterministic.** The re-carve after `uninstall` reproduced the first layout to the sector.
+- **`MODE` tracked the disk correctly throughout**, `fresh` → `reinstall` → `fresh` → `reinstall`,
+  and the documented `CEIL` quirk reproduced live: on a disk we own it comes back as `UD_END`, a
+  zero-sector window, because the partition after `userdata` is our own ESP. That is exactly why
+  `carve.sh` computes its own ceiling and refuses to trust that one.
+
+> **AND THE BOARD MAY NOT BOOT THE SD CARD UNATTENDED NOW.** The carve writes the GPT and no
+> filesystems, so the internal disk carries an ESP-typed p12 with nothing in it. ABL prefers
+> internal, so recovering the NovaDeck session can require the **force-external** option — the
+> interrupted-install recovery note in Blast radius, met in practice. Android will not come up
+> clean either: its `userdata` is a 16 GiB partition holding a stale filesystem.
+
 **Still unreached on hardware, and honestly so.** Rule 9 (two eligible disks → refuse rather than
 pick) cannot fire where only one LUN has a `userdata`, so it keeps `NOVADECK_SELECT_DISKS` and
-stays a fixture-only property. The already-NovaDeck reinstall path is reachable only from an
-internal install, since on both boards our own disk is the boot medium and rule 1 takes it first.
-`carve.sh` needs a sacrificial device and has touched nothing real.
+stays a fixture-only property. `carve.sh` is **no longer on this list** — see the section above.
+
+The already-NovaDeck **reinstall** path is the one thing left. `select-target.sh` now reports
+`MODE=reinstall` against the carved ACE, so identification is proven; what has never run is the
+`reinstall` *mode of the carve* on a disk carrying a real install, and it cannot be judged
+meaningfully until Phase 4 has put filesystems and a slot into those eight partitions — its whole
+contract is that it writes no partition table and leaves `/home` alone, which is only observable
+when there is a `/home` worth leaving.
 
 **The generalisation, which is the part that outlives this bug.** Every gate in the installer that
 shells out to a tool absent from the shipped image has this failure shape, and none of them can be

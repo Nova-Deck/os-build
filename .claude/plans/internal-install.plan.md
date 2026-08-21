@@ -1036,6 +1036,35 @@ first — it is the only board we hold that actually carries another distributio
 - A reinstall: our own `NOVADECK-ESP` carrying `bootaa64.efi` → **accepted**, not refused as
   foreign. This is the case that breaks if the exemption is left implicit in rule ordering.
 
+### Hardware — `select-target.sh` on the boards
+
+**One board of four done, 2026-08-21: AYANEO Pocket ACE.** `install/hw-select-target.sh
+root@<device>` stages a pinned `sgdisk` plus the script into `/run/novadeck/probe` (tmpfs) and
+captures the run; the output is committed as `docs/internal-select-target.md`, one section per
+board, the same shape as the Phase 0 recon capture. Nothing it does writes outside `/run`, so it
+is safe against a board carrying an install somebody cares about.
+
+What the run establishes that the 66 offline cases structurally cannot:
+
+- **`SECTOR=4096`.** Every fixture case runs at 512, because sgdisk asks the kernel for the
+  logical size only on a block device. The ACE's `sda` reports 4096 and the script carried it
+  through — the sector-size path now has one real reading behind it.
+- **Rules 1/2 unshimmed, and the ordering trap with them.** `/dev/mmcblk0` — the dev card, an
+  *already-NovaDeck* disk carrying all eight of our partitions — was refused as *"the disk the
+  running system is on"* rather than accepted as a reinstall. That is the ordering the plan calls
+  its sharpest design point, firing on live hardware instead of behind a `findmnt` shim.
+- **Real LUN enumeration.** Six UFS LUNs, exactly one picked, the other five refused by name.
+- **Agreement with the Phase 0 capture, to the sector.** `UD_INDEX=11`, `UD_START=4794920`,
+  `UD_END=30150650`, type `1B81E7E6-…` against the committed dump's `start=4794920,
+  size=25355731` and `last-lba: 30150650`. `CEIL == UD_END` because `userdata` ends on the last
+  usable sector: on this board `home` absorbs no trailing free space.
+
+**Still unreached on hardware, and honestly so.** Rule 9 (two eligible disks → refuse rather than
+pick) cannot fire where only one LUN has a `userdata`, so it keeps `NOVADECK_SELECT_DISKS` and
+stays a fixture-only property. Rule 3b has no foreign bootable ESP on this board — the Pocket FIT
+is the capture that carries one, so that one is worth running next for reasons beyond a second
+data point. `carve.sh` needs a sacrificial device and has touched nothing real.
+
 ### Blast radius, stated plainly
 
 **The recovery model, stated once: for a bricked device there is exactly one recovery, and it is
@@ -1048,9 +1077,15 @@ This is *why* the blast radius is one partition rather than a matter of taste. T
 precisely because we touch `userdata` and nothing else — but it is low by construction, not by
 luck, so the construction is the thing under test:
 
-- **Wrong LUN carrying `xbl`/`abl`** → hard brick, EDL only. Rule 5 is the sole thing preventing
-  it, which is why selection is a separate side-effect-free script with its own test suite. This
-  single failure mode justifies the entire `disk-rules.conf` + double-check design.
+- **Wrong LUN carrying `xbl`/`abl`** → hard brick, EDL only. **The victim rule is what prevents
+  it** — not a deny list, which was dropped with `disk-rules.conf` on 2026-08-10. A boot LUN has
+  no partition named `userdata`, so it is refused before any geometry is computed, and this
+  single failure mode is why selection is a separate side-effect-free script with its own suite.
+  **Confirmed on hardware 2026-08-21** (`docs/internal-select-target.md`, Pocket ACE): `sdb`/`sdc`
+  (`xbl_a`, `xbl_config_a`) and `sde` (`abl_a`/`abl_b`) were each refused with *"no partition named
+  'userdata'"*. Refusing by name-of-victim rather than by name-of-danger is the stronger property —
+  a board whose firmware partitions are spelled differently is still refused, where a deny list
+  would have had to know the spelling.
 - **Right LUN, interrupted** → recoverable by re-running, *provided* `/EFI/BOOT/bootaa64.efi` on
   the internal ESP is the **last** thing written. Order the installer exactly as
   `post-install.sh` orders itself: nothing points at the new install until the new install is

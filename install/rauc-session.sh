@@ -70,8 +70,26 @@ OWN_TIMEOUT=${OWN_TIMEOUT:-30}
 
 BUS_NAME=de.pengutronix.rauc
 
-[ $# -eq 2 ] || die "usage: $PROG <target-root-dev> <bundle-url-or-path>"
-TARGET_DEV="$1"; BUNDLE="$2"
+# --info is the SOURCE-VERIFICATION mode the spine runs before it touches the partition table
+# (plan §3 rule 11: sources verified before the first sgdisk). It exists HERE rather than as a
+# `rauc info` call in novadeck-install because the config is the whole mechanism of this file, and a
+# verify that ran under a config of its own would be verifying something other than what the install
+# will do -- bundle-formats, the keyring path and check-purpose all decide whether a bundle is
+# acceptable, and all three would be a second copy waiting to drift. So the config is synthesized
+# exactly once, and this mode stops before the bus.
+#
+# No target device is needed or accepted: nothing is written, and demanding a block device that does
+# not exist yet is what would push the check after the carve, which is the opposite of the point.
+INFO_ONLY=0
+if [ "${1:-}" = --info ]; then
+  INFO_ONLY=1; shift
+  [ $# -eq 1 ] || die "usage: $PROG --info <bundle-url-or-path>"
+  TARGET_DEV=""; BUNDLE="$1"
+else
+  [ $# -eq 2 ] || die "usage: $PROG <target-root-dev> <bundle-url-or-path>
+       $PROG --info <bundle-url-or-path>"
+  TARGET_DEV="$1"; BUNDLE="$2"
+fi
 
 # --- fail closed on every tool, before anything starts ------------------------------------------
 # The shipped image carries few of these and the installer image is a different root again, so a
@@ -79,13 +97,19 @@ TARGET_DEV="$1"; BUNDLE="$2"
 # than discovered at three different use sites -- the last of which would be after the service is
 # up and a bundle is half-streamed. See the 2026-08-21 Pocket FIT finding: a missing binary and a
 # missing file are indistinguishable to a caller that does not check.
+# The bus tools are checked even in --info mode, which does not use them. Deliberate: --info is the
+# pre-flight the spine runs BEFORE the carve, so "the installer image is missing dbus-daemon" is
+# exactly the kind of thing it exists to discover while the disk is still intact. Discovering it
+# after userdata is gone is the failure this ordering is for.
 for t in "$RAUC" "$DBUS_DAEMON" "$GDBUS"; do
   command -v "$t" >/dev/null 2>&1 || die "$t is not on PATH -- the installer image is missing it"
 done
 [ -r "$KEYRING" ] || die "no readable RAUC keyring at $KEYRING -- nothing would be verified"
 [ -x "$POST_INSTALL" ] || die "no post-install handler at $POST_INSTALL"
-# shellcheck disable=SC2086  # DEVTEST is a predicate, not a path
-[ $DEVTEST "$TARGET_DEV" ] || die "$TARGET_DEV is not a block device"
+if [ "$INFO_ONLY" = 0 ]; then
+  # shellcheck disable=SC2086  # DEVTEST is a predicate, not a path
+  [ $DEVTEST "$TARGET_DEV" ] || die "$TARGET_DEV is not a block device"
+fi
 [ -n "$BUNDLE" ] || die "no bundle given"
 
 mkdir -p "$RUNDIR" || die "cannot create $RUNDIR"
@@ -101,7 +125,13 @@ mkdir -p "$RUNDIR" || die "cannot create $RUNDIR"
 #   spine resolves it; nothing here concatenates a disk and an index, per the plan's §4c
 #   requirement. `ln -sfn` rather than a fresh mkdir so a retry after a failed stream is clean.
 SLOT_LINK="$RUNDIR/target-root-a"
-ln -sfn "$TARGET_DEV" "$SLOT_LINK" || die "cannot point $SLOT_LINK at $TARGET_DEV"
+# In --info mode the link is not created and the config still names it. That is the point: the
+# config TEXT is identical in both modes, so what the verify accepted is what the install runs, and
+# `rauc info` never opens a slot. A mode that emitted a different config would be checking a
+# different thing and saying it had checked this one.
+if [ "$INFO_ONLY" = 0 ]; then
+  ln -sfn "$TARGET_DEV" "$SLOT_LINK" || die "cannot point $SLOT_LINK at $TARGET_DEV"
+fi
 
 # WHERE RAUC MOUNTS THE BUNDLE, and it has to be said because the default cannot work here. rauc
 # defaults mount_prefix to /mnt/rauc (config_file.c:426) and OUR ROOT IS READ-ONLY, so the install
@@ -139,6 +169,23 @@ post-install=$POST_INSTALL
 device=$SLOT_LINK
 type=raw
 EOF
+
+# --- --info stops here --------------------------------------------------------------------------
+# `rauc info` is NOT a D-Bus client (only `install` is, once ENABLE_SERVICE is on), so this needs
+# neither the private bus nor the service -- and starting them anyway would mean the spine's
+# pre-flight took the bus name for a few seconds during a step that writes nothing.
+#
+# --keyring is passed as well as being in the config, and it is not redundant: main.c refuses
+# --keyring only on the paths that talk to the service, so on `info` it is accepted and it makes the
+# keyring the verify used visible in the process arguments -- which is where an operator running
+# this by hand looks. Verification is NOT disabled anywhere: no --no-verify, ever, on this path.
+if [ "$INFO_ONLY" = 1 ]; then
+  log "verifying $BUNDLE against $KEYRING"
+  "$RAUC" -c "$CONF" info --keyring "$KEYRING" "$BUNDLE" \
+    || die "the bundle did not verify against $KEYRING -- refusing to go on"
+  log "bundle verified"
+  exit 0
+fi
 
 # --- a private system bus -----------------------------------------------------------------------
 # Started BEFORE anything else touches the bus, so the service we are about to run is the only

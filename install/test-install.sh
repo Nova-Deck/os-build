@@ -1060,5 +1060,523 @@ CASE="lib-homestage: a missing seed is fatal, not silent"
   && bad "staged a home from a seed that does not exist" \
   || ok "refuses a seed that is neither a directory nor a file"
 
+# --- 17. install/novadeck-install — the spine (Phase 4c) ----------------------------------------
+# WHAT IS AT RISK. Every other file in this install has a narrow job with its own suite; this one's
+# entire content is an ORDER, and the two things the order buys cannot be checked anywhere else:
+#
+#   NOTHING DESTRUCTIVE HAPPENS BEFORE THE CONFIRM. A bundle that will not verify, a seed that does
+#   not match its pin, a missing mkfs -- each of those is free to discover before the carve and
+#   costs the user their Android data to discover after it. There is no way back: userdata cannot
+#   be restored, by us or by them.
+#
+#   bootaa64.efi IS THE LAST BYTE. ABL's test is content-based, so that copy is what flips the
+#   device off the installer medium. Everything before it is re-runnable; after it, recovery needs
+#   ABL's force-external.
+#
+# Neither can be checked on hardware without doing the destructive thing first, so they are checked
+# here, against the real script, with every external command stubbed and recording its arguments.
+SPINE="$ROOT/install/novadeck-install"
+CONFIRM_TTY="$ROOT/install/confirm-tty"
+for f in "$SPINE" "$CONFIRM_TTY"; do
+  [ -x "$f" ] || { echo "missing input: $f" >&2; exit 1; }
+done
+
+# The sandbox. One directory per case, so a failure leaves that run's evidence alone.
+spine_dir() {  # <name>
+  local i i12
+  SP="$T/spine.$1"; rm -rf "$SP"
+  SP_STUBS="$SP/bin"; SP_RUN="$SP/run"; SP_PART="$SP/by-partuuid"
+  mkdir -p "$SP_STUBS" "$SP_RUN" "$SP_PART" "$SP/disks"
+  : >"$SP/calls"
+  SP_DISK="$SP/disks/sda"; : >"$SP_DISK"
+
+  # --- the components, stubbed at their own boundary -------------------------------------------
+  # select-target.sh emits the geometry the real one does. Two fixtures below drive it with
+  # different numbers, which is how the derived-text assertions get their teeth.
+  cat >"$SP_STUBS/select-target.sh" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "select-target.sh $*" >>"$SP_CALLS"
+printf 'TARGET=%s\nMODE=%s\nSECTOR=%s\nUD_INDEX=%s\nUD_START=%s\nUD_END=%s\nUD_TYPE=%s\nCEIL=%s\n' \
+  "$SP_SEL_TARGET" "$SP_SEL_MODE" "$SP_SEL_SECTOR" "$SP_SEL_UDINDEX" \
+  "$SP_SEL_UDSTART" "$SP_SEL_UDEND" \
+  "0FC63DAF-8483-4772-8E79-3D69D8477DE4" "$SP_SEL_CEIL"
+EOF
+  # carve.sh prints the name=index map on stdout, at INDICES THAT ARE NOT 1..8 and not contiguous:
+  # the Pocket-FIT-shaped case, where our ESP fills a hole at p3 and the rest land at 7..13. A spine
+  # that quietly assumed row order would pass against 1..8 and destroy a real board.
+  cat >"$SP_STUBS/carve.sh" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "carve.sh $*" >>"$SP_CALLS"
+[ "${SP_CARVE_RC:-0}" = 0 ] || exit "$SP_CARVE_RC"
+cat <<MAP
+NOVADECK-ESP=3
+novadeck-efi-A=7
+novadeck-efi-B=8
+novadeck-root-A=9
+novadeck-root-B=10
+novadeck-var-A=11
+novadeck-var-B=12
+novadeck-home=13
+MAP
+EOF
+  # rauc-session.sh answers to two shapes and must be told apart by argv, because telling them apart
+  # is what the spine's ordering depends on: --info is the pre-carve verify and the two-argument
+  # form is the ~4 GB stream.
+  cat >"$SP_STUBS/rauc-session.sh" <<'EOF'
+#!/usr/bin/env bash
+if [ "${1:-}" = --info ]; then
+  printf '%s\n' "rauc-session --info $2" >>"$SP_CALLS"
+  exit "${SP_INFO_RC:-0}"
+fi
+printf '%s\n' "rauc-session install $1 $2 var=${NOVADECK_TARGET_VAR_A:-<unset>}" >>"$SP_CALLS"
+exit "${SP_RAUC_RC:-0}"
+EOF
+  # sgdisk answers -i with a per-index GUID in UPPER case, so the lower-casing in part_uuid is
+  # exercised end to end rather than only in its own unit case.
+  cat >"$SP_STUBS/sgdisk" <<'EOF'
+#!/usr/bin/env bash
+if [ "${1:-}" = -i ]; then
+  printf 'Partition unique GUID: AAAAAAAA-BBBB-CCCC-DDDD-%012d\n' "$2"
+  exit 0
+fi
+if [ "${1:-}" = -p ]; then printf '  13  100  200  8.0 GiB  novadeck-home\n'; exit 0; fi
+exit 0
+EOF
+  # Every filesystem creation and every mount, recorded. The mount stub deliberately does NOT
+  # populate anything: the mountpoints are pre-seeded below, so the real primitives write into real
+  # directories and what they produce can be inspected afterwards.
+  for i in mkfs.vfat mkfs.ext4 mkfs.btrfs btrfstune btrfs mount umount tar rauc dbus-daemon \
+           gdbus partprobe udevadm sfdisk curl df; do
+    printf '#!/usr/bin/env bash\nprintf "%%s\\n" "%s $*" >>"$SP_CALLS"\nexit 0\n' "$i" >"$SP_STUBS/$i"
+  done
+  # The one stub that must produce a file, because the spine asserts the file afterwards.
+  cat >"$SP_STUBS/steamos-bootconf" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "steamos-bootconf $*" >>"$SP_CALLS"
+conf=""; img=""
+while [ $# -gt 0 ]; do
+  case "$1" in --conf-dir) conf="$2"; shift 2 ;; --image) img="$2"; shift 2 ;; *) shift ;; esac
+done
+[ -n "$conf" ] && [ -n "$img" ] && { mkdir -p "$conf"; printf 'title: novadeck %s\n' "$img" >"$conf/$img.conf"; }
+exit 0
+EOF
+  chmod +x "$SP_STUBS"/*
+
+  # The freshly written root, as it will look mounted read-only: the boot software the efi and ESP
+  # steps take their files from, plus the bootconf binary. Pre-seeded rather than produced by the
+  # mount stub, so the real primitives copy real bytes.
+  mkdir -p "$SP_RUN/root-a/usr/lib/novadeck/boot/fonts" "$SP_RUN/root-a/usr/bin"
+  for i in steamcl.efi steamcl-version grubaa64.efi grub-a.cfg grub-b.cfg grubenv; do
+    printf '%s\n' "$i" >"$SP_RUN/root-a/usr/lib/novadeck/boot/$i"
+  done
+  printf 'font\n' >"$SP_RUN/root-a/usr/lib/novadeck/boot/fonts/default.pf2"
+  printf 'font\n' >"$SP_RUN/root-a/usr/lib/novadeck/boot/fonts/dejavu-mono.pf2"
+  cp "$SP_STUBS/steamos-bootconf" "$SP_RUN/root-a/usr/bin/steamos-bootconf"
+
+  # The partition "devices". DEVTEST is -e in the sandbox, so a regular file stands in for a block
+  # device; PARTUUID_DIR is what points part_dev at them instead of /dev.
+  for i in 3 7 8 9 10 11 12 13; do
+    printf -v i12 '%012d' "$i"
+    : >"$SP_PART/aaaaaaaa-bbbb-cccc-dddd-$i12"
+  done
+  SP_KEYRING="$SP/keyring.pem"; : >"$SP_KEYRING"
+  SP_SEED="$SP/steam-seed.tar"
+  mkdir -p "$SP/seedsrc/linuxarm64"; : >"$SP/seedsrc/steam.sh"
+  tar -cf "$SP_SEED" -C "$SP/seedsrc" .
+  SP_PIN="$SP/seed.sha256"; sha256sum <"$SP_SEED" | awk '{print $1}' >"$SP_PIN"
+
+  # The default consent program: it echoes back the sequence it was told to display, i.e. a user who
+  # read the screen. Every refusal case below replaces it.
+  SP_FACTS="$SP/facts.seen"
+  SP_CONFIRM="$SP/confirm"
+  cat >"$SP_CONFIRM" <<'EOF'
+#!/usr/bin/env bash
+seq=""; facts=""
+while [ $# -gt 0 ]; do
+  case "$1" in --sequence) seq="$2"; shift 2 ;; --facts) facts="$2"; shift 2 ;; *) shift ;; esac
+done
+printf '%s\n' "confirm $seq" >>"$SP_CALLS"
+[ -n "$facts" ] && cp "$facts" "$SP_FACTS" 2>/dev/null
+printf '%s\n' "$seq"
+EOF
+  chmod +x "$SP_CONFIRM"
+
+  SP_SEL_TARGET="$SP_DISK"; SP_SEL_MODE=fresh
+  SP_SEL_SECTOR=512; SP_SEL_UDINDEX=11; SP_SEL_UDSTART=2097152
+  SP_SEL_UDEND=204800000; SP_SEL_CEIL=500000000
+  SP_INFO_RC=0; SP_RAUC_RC=0; SP_CARVE_RC=0
+}
+
+spine_run() {  # extra args passed through to the spine
+  env PATH="$SP_STUBS:$PATH" \
+      SP_CALLS="$SP/calls" SP_FACTS="$SP_FACTS" \
+      SP_SEL_TARGET="$SP_SEL_TARGET" SP_SEL_MODE="$SP_SEL_MODE" SP_SEL_SECTOR="$SP_SEL_SECTOR" \
+      SP_SEL_UDINDEX="$SP_SEL_UDINDEX" SP_SEL_UDSTART="$SP_SEL_UDSTART" \
+      SP_SEL_UDEND="$SP_SEL_UDEND" SP_SEL_CEIL="$SP_SEL_CEIL" \
+      SP_INFO_RC="$SP_INFO_RC" SP_RAUC_RC="$SP_RAUC_RC" SP_CARVE_RC="$SP_CARVE_RC" \
+      NOVADECK_INSTALL_RUN="$SP_RUN" DEVTEST=-e REQUIRE_ROOT=0 \
+      PARTUUID_DIR="$SP_PART" DISKTEST=-e \
+      DECK_UID="$(id -u)" DECK_GID="$(id -g)" \
+      KEYRING="$SP_KEYRING" NOVADECK_SEED_PIN="$SP_PIN" SGDISK="${SP_SGDISK:-sgdisk}" \
+      NOVADECK_CONFIRM="${SP_CONFIRM_OVERRIDE:-$SP_CONFIRM}" \
+      NOVADECK_SELECT_TARGET="$SP_STUBS/select-target.sh" \
+      NOVADECK_CARVE="$SP_STUBS/carve.sh" \
+      NOVADECK_RAUC_SESSION="$SP_STUBS/rauc-session.sh" \
+      NOVADECK_SLOTWRITE="$LIB" \
+      NOVADECK_HOMESTAGE="$ROOT/images/lib-homestage.sh" \
+      "$SPINE" --bundle https://example.invalid/b.raucb --home-seed "$SP_SEED" \
+      --userdata-gib 16 "$@" 2>&1
+}
+
+# The order of two recorded calls, by first occurrence. Returns non-zero if either never happened,
+# which is an answer in itself for most of the cases below.
+sp_before() {  # <pattern-a> <pattern-b>
+  local a b
+  a=$(grep -n -- "$1" "$SP/calls" | head -1 | cut -d: -f1)
+  b=$(grep -n -- "$2" "$SP/calls" | head -1 | cut -d: -f1)
+  [ -n "$a" ] && [ -n "$b" ] && [ "$a" -lt "$b" ]
+}
+
+CASE="spine: the happy path"
+spine_dir happy
+out="$(spine_run)" && ok "exits 0 with every component stubbed" || bad "failed: $out"
+
+CASE="spine: the order, and what each boundary buys"
+sp_before 'rauc-session --info' 'carve.sh' \
+  && ok "the bundle is verified BEFORE the carve (a bundle that will not verify must not cost the user Android)" \
+  || bad "the carve ran before the bundle was verified"
+sp_before 'confirm ' 'carve.sh' \
+  && ok "consent is taken BEFORE the first write" \
+  || bad "the carve ran before consent was taken"
+sp_before 'carve.sh' 'mkfs.vfat' \
+  && ok "the partitions exist before anything is formatted" \
+  || bad "a filesystem was created before the carve"
+sp_before 'mkfs.vfat' 'rauc-session install' \
+  && ok "the filesystems exist before the root is streamed" \
+  || bad "the root was streamed before the filesystems existed"
+sp_before 'rauc-session install' 'steamos-bootconf' \
+  && ok "the boot state is armed after there is a root to boot" \
+  || bad "A.conf was armed before the root existed"
+
+CASE="spine: bootaa64.efi is the last byte written"
+# Asserted against the ESP the run actually produced: the file exists, and every other artifact the
+# install writes was in place before it. Its position INSIDE refresh_esp_stage1 is case 14's; this
+# is the same property one level up, where the ordering of the whole install decides it.
+esp="$SP_RUN/esp"
+[ -f "$esp/EFI/BOOT/bootaa64.efi" ] \
+  && ok "the ESP carries the stage-1 loader ABL chainloads" \
+  || bad "no bootaa64.efi on the ESP -- the device would not boot internally at all"
+[ -f "$esp/EFI/steamos/grubenv" ] && [ -f "$esp/SteamOS/conf/A.conf" ] \
+  && ok "the grubenv and A.conf were in place before it" \
+  || bad "the ESP is missing the grubenv or A.conf"
+[ ! -e "$esp/SteamOS/conf/B.conf" ] \
+  && ok "NO B.conf -- steamcl requires a config for an image before that partition enters found[], so slot B is not a candidate at all" \
+  || bad "a B.conf exists; a never-booted B reports boot-attempts 0 and wins steamcl's alt pick"
+
+CASE="spine: the efi partitions carry the map of THIS disk"
+for slot in a b; do
+  pe="$SP_RUN/efi-$slot/EFI/steamos/parts.env"
+  if [ -f "$pe" ]; then
+    grep -aq 'nd_esp=3' "$pe" && grep -aq 'nd_home=13' "$pe" \
+      && ok "efi-$slot parts.env names the indices the carve reported, not 1..8" \
+      || bad "efi-$slot parts.env does not carry the carve's indices"
+  else
+    bad "efi-$slot has no parts.env -- stage 2 cannot address anything on this disk"
+  fi
+  [ -f "$SP_RUN/efi-$slot/EFI/steamos/grubaa64.efi" ] \
+    && ok "efi-$slot carries stage 2 out of the root that was just written" \
+    || bad "efi-$slot has no stage-2 GRUB"
+done
+
+CASE="spine: partsets are minted from the new GPT, and only self/other differ"
+a_self="$(cat "$SP_RUN/efi-a/SteamOS/partsets/self" 2>/dev/null || true)"
+b_self="$(cat "$SP_RUN/efi-b/SteamOS/partsets/self" 2>/dev/null || true)"
+[ -n "$a_self" ] && [ "$a_self" != "$b_self" ] \
+  && ok "efi-a and efi-b resolve to different images (steamcl matches the booted uuid against these)" \
+  || bad "the two partsets/self are the same or missing"
+if printf '%s' "$a_self" | grep -q '[A-Z]'; then
+  bad "the partset uuid is not lower-cased -- steamcl string-compares it and would match nothing"
+else
+  ok "the partset uuid is lower-cased"
+fi
+
+CASE="spine: var-a is the handler's and var-b is never touched"
+grep -q 'rauc-session install .* var=' "$SP/calls" \
+  && ok "the spine names the /var partition for the handler (it cannot derive it: the config declares one slot)" \
+  || bad "NOVADECK_TARGET_VAR_A was not passed to the session"
+grep -q "var=$SP_PART/aaaaaaaa-bbbb-cccc-dddd-000000000011" "$SP/calls" \
+  && ok "and it is var-A's partuuid path, resolved from the carve's index" \
+  || bad "the var device is not the resolved partuuid"
+if grep -q 'mkfs.ext4 .*000000000012' "$SP/calls"; then
+  bad "var-B was formatted -- a release install leaves B empty, matching the card"
+else
+  ok "var-B is untouched, matching the release card's empty-B shape"
+fi
+if grep -q 'mkfs.ext4 .*000000000011' "$SP/calls"; then
+  bad "the spine formatted var-A; seed_var reformats AND populates it as one operation, and a var that is mkfs'd but not populated is a slot that does not boot"
+else
+  ok "the spine does not format var-A -- the handler owns the slot, the spine owns the disk"
+fi
+
+CASE="spine: every device it opens is addressed by partuuid"
+# The rule the whole install depends on. Concatenation gives ${disk}${n} on one kind of disk and
+# ${disk}p${n} on the other, no board in the fleet is eMMC, and a bug of that shape would first
+# surface on a customer's device mid-install. So: no recorded argument may be the disk path with
+# digits or a p stuck on the end.
+if grep -Eq "$SP_DISK[0-9p]" "$SP/calls"; then
+  bad "the spine built a device name by concatenation"
+else
+  ok "no call names the disk with an index appended"
+fi
+grep -q "mkfs.vfat .*$SP_PART/" "$SP/calls" \
+  && ok "the filesystems were created on by-partuuid paths" \
+  || bad "a filesystem was created on something that is not a partuuid path"
+
+# --- the consent gate ---------------------------------------------------------------------------
+CASE="spine: it refuses without a completed confirm"
+spine_dir noconsent
+SP_CONFIRM_OVERRIDE=/bin/true
+out="$(spine_run)" && bad "installed with /bin/true as the consent program" \
+  || ok "a program that exits 0 and says nothing does NOT satisfy the gate"
+if grep -q 'carve.sh' "$SP/calls"; then
+  bad "the carve ran anyway -- the user's Android data is gone and consent was never given"
+else
+  ok "and nothing was written"
+fi
+unset SP_CONFIRM_OVERRIDE
+
+CASE="spine: a wrong answer re-randomises rather than advancing"
+spine_dir wrong
+SP_CONFIRM_OVERRIDE="$T/confirm-wrong"
+cat >"$SP_CONFIRM_OVERRIDE" <<'EOF'
+#!/usr/bin/env bash
+seq=""
+while [ $# -gt 0 ]; do case "$1" in --sequence) seq="$2"; shift 2 ;; *) shift ;; esac; done
+printf '%s\n' "confirm $seq" >>"$SP_CALLS"
+printf 'YYYY\n'          # always wrong, and never one of the permutations
+EOF
+chmod +x "$SP_CONFIRM_OVERRIDE"
+out="$(spine_run)" && bad "a wrong sequence installed the device" || ok "a wrong sequence refuses"
+tries=$(grep -c '^confirm ' "$SP/calls")
+[ "$tries" -ge 2 ] \
+  && ok "it asked again ($tries attempts) rather than locking out on the first slip -- this is a recovery tool" \
+  || bad "it gave up after one attempt"
+seqs=$(grep '^confirm ' "$SP/calls" | sort -u | wc -l)
+[ "$seqs" -ge 2 ] \
+  && ok "the sequence is re-randomised between attempts, so a mistake cannot be brute-forced by repetition" \
+  || bad "the same sequence was shown every time"
+if grep -q 'carve.sh' "$SP/calls"; then bad "the carve ran after consent was refused"; else ok "nothing was written"; fi
+unset SP_CONFIRM_OVERRIDE
+
+CASE="spine: no variable and no file on the medium can pre-satisfy the gate"
+# The medium legitimately carries wifi.conf, so a "drop a file to configure it" idiom already exists
+# here. Consent must never join it. This drives the spine with every plausible bypass set at once
+# and a consent program that refuses, and requires the refusal to stand.
+spine_dir bypass
+SP_CONFIRM_OVERRIDE=/bin/true
+printf 'yes\n' >"$SP_RUN/consent.txt"
+printf 'yes\n' >"$SP/consent.txt"
+export NOVADECK_CONSENT=1 NOVADECK_YES=1 NOVADECK_ASSUME_YES=1 NOVADECK_FORCE=1 \
+       NOVADECK_INSTALL_CONFIRMED=1 CONFIRMED=1 ASSUME_YES=1 FORCE=1 YES=1
+out="$(spine_run)" && bad "one of the bypass variables satisfied the gate" \
+  || ok "none of NOVADECK_CONSENT/YES/ASSUME_YES/FORCE/CONFIRMED means consent"
+unset NOVADECK_CONSENT NOVADECK_YES NOVADECK_ASSUME_YES NOVADECK_FORCE \
+      NOVADECK_INSTALL_CONFIRMED CONFIRMED ASSUME_YES FORCE YES
+if grep -q 'carve.sh' "$SP/calls"; then bad "the carve ran"; else ok "and nothing was written"; fi
+# Comments stripped first: the spine EXPLAINS the ban at length ("no consent.txt, no --yes"), and
+# an assertion that could not tell the prohibition from the thing prohibited would fail on its own
+# documentation and then be deleted.
+if sed 's/[[:space:]]*#.*$//' "$SPINE" | grep -qE '(--yes|--assume-yes|--force|consent\.txt)'; then
+  bad "the spine names a bypass flag or a consent file"
+else
+  ok "the spine contains no --yes, no --force and no consent.txt"
+fi
+unset SP_CONFIRM_OVERRIDE
+
+CASE="spine: the consent screen is DERIVED, never a fixed string"
+spine_dir derived1
+SP_SEL_UDSTART=2097152; SP_SEL_UDEND=204800000
+out="$(spine_run)" || bad "run failed: $out"
+gib_small="$(sed -n 's/^UD_GIB_NOW=//p' "$SP_FACTS" 2>/dev/null || true)"
+spine_dir derived2
+SP_SEL_UDSTART=2097152; SP_SEL_UDEND=838860800    # a much larger userdata
+out="$(spine_run)" || bad "run failed: $out"
+gib_big="$(sed -n 's/^UD_GIB_NOW=//p' "$SP_FACTS" 2>/dev/null || true)"
+facts_wipe="$(cat "$SP_FACTS" 2>/dev/null || true)"
+if [ -n "$gib_small" ] && [ -n "$gib_big" ] && [ "$gib_small" != "$gib_big" ]; then
+  ok "two disks quote two different userdata sizes ($gib_small GiB vs $gib_big GiB) -- a fixed 'this will erase your data, continue?' does not discharge the obligation here"
+else
+  bad "the quoted size did not change with the disk"
+fi
+
+CASE="spine: an Android disk and a NovaDeck disk cannot produce each other's screen"
+printf '%s\n' "$facts_wipe" | grep -qx 'SCREEN=android-wipe' \
+  && ok "a disk with no novadeck on it renders the userdata-wipe screen" \
+  || bad "an Android disk did not produce the android-wipe screen"
+spine_dir reinst
+SP_SEL_MODE=reinstall
+out="$(spine_run --intent reinstall)" || bad "the reinstall path failed: $out"
+facts_re="$(cat "$SP_FACTS" 2>/dev/null || true)"
+printf '%s\n' "$facts_re" | grep -qx 'SCREEN=reinstall' \
+  && ok "a disk that already carries novadeck renders the /home choice instead" \
+  || bad "a novadeck disk did not produce the reinstall screen"
+if printf '%s\n' "$facts_re" | grep -q 'UD_GIB_NOW'; then
+  bad "the reinstall screen quotes a userdata size -- there is no userdata to destroy on that path and the wipe text would be flatly false"
+else
+  ok "and it quotes no userdata size at all"
+fi
+printf '%s\n' "$facts_re" | grep -qx 'HOME_ACTION=keep' \
+  && ok "the default reinstall keeps /home" \
+  || bad "the reinstall default is not keep"
+if grep -q "mkfs.ext4 .*000000000013" "$SP/calls"; then
+  bad "a keep-/home reinstall recreated /home -- that promise is the only content of the mode"
+else
+  ok "and /home was not recreated"
+fi
+
+CASE="spine: --erase-home is the only thing that recreates /home on a reinstall"
+spine_dir reinst_erase
+SP_SEL_MODE=reinstall
+out="$(spine_run --intent reinstall --erase-home)" || bad "failed: $out"
+grep -q "mkfs.ext4 .*000000000013" "$SP/calls" \
+  && ok "--erase-home recreates it" \
+  || bad "--erase-home did not recreate /home"
+grep -qx 'HOME_ACTION=erase' "$SP_FACTS" \
+  && ok "and the screen says so, so the gate quotes what is being destroyed" \
+  || bad "the screen did not say /home was being erased"
+
+CASE="spine: intent is the user's, never inferred from the disk"
+spine_dir intent
+SP_SEL_MODE=reinstall
+out="$(spine_run)" && bad "it picked an intent for a disk that admits three different answers" \
+  || ok "a disk that already carries novadeck refuses to default -- reinstall, resize and remove all fit it, and two of those guesses erase something the user wanted kept"
+if grep -q 'carve.sh' "$SP/calls"; then bad "it wrote anyway"; else ok "and nothing was written"; fi
+spine_dir intent2
+SP_SEL_MODE=fresh
+out="$(spine_run --intent reinstall)" && bad "it reinstalled over a disk with no install on it" \
+  || ok "--intent reinstall on a stock disk is refused"
+
+# --- sources verified before the first sgdisk (plan §3 rule 11) ----------------------------------
+CASE="spine: a bundle that will not verify costs the user nothing"
+spine_dir badbundle
+SP_INFO_RC=1
+out="$(spine_run)" && bad "installed a bundle that did not verify" || ok "refuses"
+if grep -q 'carve.sh' "$SP/calls"; then
+  bad "the carve ran first -- Android's data is gone to reach an error that was free at second zero"
+else
+  ok "and the disk was never touched"
+fi
+if grep -q '^confirm ' "$SP/calls"; then
+  bad "it asked for consent before it knew the sources were good"
+else
+  ok "it did not even ask for consent"
+fi
+
+CASE="spine: the /home seed is checked against the pin baked into the INSTALLER"
+spine_dir badseed
+printf '%064d\n' 0 >"$SP_PIN"          # a well-formed sha256 that is not the seed's
+out="$(spine_run)" && bad "installed a seed that does not match the baked pin" || ok "refuses"
+if grep -q 'carve.sh' "$SP/calls"; then bad "the carve ran first"; else ok "and the disk was never touched"; fi
+
+CASE="spine: a missing pin is fatal, not skippable"
+spine_dir nopin
+rm -f "$SP_PIN"
+out="$(spine_run)" && bad "installed with no pin to check the seed against" \
+  || ok "'we could not check' and 'it checked out' must not have the same effect"
+
+CASE="spine: it fails closed on a missing tool"
+# AN OFFLINE SUITE INHERITS THE HOST'S PATH and so cannot make a real tool absent -- and emptying
+# PATH does not work either, because the script's own `#!/usr/bin/env bash` needs it. The way in is
+# the seam, exactly as images/test-post-install.sh reaches its die(): point one of the tool names at
+# something that does not exist. It is the same loop and the same refusal.
+spine_dir notool
+SP_SGDISK=novadeck-no-such-tool
+out="$(spine_run)" && bad "ran with one of its tools absent" \
+  || ok "a missing tool is found at second zero, not after userdata is gone"
+printf '%s' "$out" | grep -q 'novadeck-no-such-tool' \
+  && ok "and it names what is missing, rather than failing later at the use site" \
+  || bad "the error does not name the missing tool: $out"
+if grep -q 'carve.sh' "$SP/calls"; then bad "the carve ran anyway"; else ok "and nothing was written"; fi
+unset SP_SGDISK
+
+# --- confirm-tty, the renderer behind the seam ---------------------------------------------------
+# It is one implementation of the contract; §5's gamepad screen is another. What is asserted here is
+# that it renders the FACTS (not a fixed string) and that the two screens share no path.
+CASE="spine + confirm-tty: the real renderer satisfies the real gate"
+# THE CASE THAT CATCHES THE SEAM ITSELF. Every gate case above drives a stub that prints the
+# sequence and nothing else -- so all of them pass against a renderer whose stdout also carries the
+# screen, and the spine then reads several hundred lines of prose, decides that was not the
+# sequence, re-randomises, and refuses. An installer that can NEVER take consent, with a symptom
+# ("that was not the sequence shown") pointing nowhere near the cause. Measured while writing this,
+# which is why the case exists. The wrapper is only a keyboard: it types the sequence it was told to
+# display, and the real confirm-tty does everything else.
+spine_dir tty
+SP_CONFIRM_OVERRIDE="$T/confirm-typist"
+cat >"$SP_CONFIRM_OVERRIDE" <<EOF
+#!/usr/bin/env bash
+seq=""
+for a in "\$@"; do [ "\$prev" = --sequence ] && seq="\$a"; prev="\$a"; done
+printf '%s\n' "\$seq" | "$CONFIRM_TTY" "\$@"
+EOF
+chmod +x "$SP_CONFIRM_OVERRIDE"
+out="$(spine_run)" \
+  && ok "the shipped renderer's answer is accepted on the first attempt" \
+  || bad "the real confirm-tty did not satisfy the gate: $out"
+[ -f "$SP_RUN/esp/EFI/BOOT/bootaa64.efi" ] \
+  && ok "and the install ran to the last byte" \
+  || bad "the install did not complete"
+unset SP_CONFIRM_OVERRIDE
+
+CASE="confirm-tty: renders the numbers the spine measured"
+cat >"$T/facts-wipe" <<'EOF'
+SCREEN=android-wipe
+DISK=/dev/sda
+WWID=UFS:test
+SECTOR=512
+UD_INDEX=11
+UD_GIB_NOW=96
+UD_GIB_AFTER=16
+NOVADECK_GIB=80
+HOME_ACTION=create
+EOF
+wipe_render="$("$CONFIRM_TTY" --facts "$T/facts-wipe" --sequence BXAY </dev/null 2>&1 || true)"
+printf '%s' "$wipe_render" | grep -q '96 GiB' && printf '%s' "$wipe_render" | grep -q '16 GiB' \
+  && ok "quotes both the size lost and the size kept" \
+  || bad "the rendering does not quote the measured sizes"
+printf '%s' "$wipe_render" | grep -qi 'NOT recoverable' \
+  && ok "says the data is not recoverable, in the user's terms" \
+  || bad "the screen does not say the loss is permanent"
+printf '%s' "$wipe_render" | grep -qi 'SD card is never written' \
+  && ok "says the SD card is never written -- the one reassurance that is both true and load-bearing" \
+  || bad "the screen does not mention the SD card"
+printf '%s' "$wipe_render" | grep -qi 'Volume Up' \
+  && ok "names how to get back to Android" \
+  || bad "the screen does not say how to reach Android afterwards"
+
+CASE="confirm-tty: the reinstall screen shares no text with the wipe screen"
+cat >"$T/facts-reinst" <<'EOF'
+SCREEN=reinstall
+DISK=/dev/sda
+WWID=UFS:test
+SECTOR=512
+HOME_ACTION=keep
+HOME_GIB=214
+EOF
+re_render="$("$CONFIRM_TTY" --facts "$T/facts-reinst" --sequence BXAY </dev/null 2>&1 || true)"
+if printf '%s' "$re_render" | grep -qi 'DELETES ANDROID'; then
+  bad "the reinstall screen renders the Android-wipe warning, which is flatly false there"
+else
+  ok "no Android-wipe text on the reinstall path"
+fi
+printf '%s' "$re_render" | grep -q '214 GiB' \
+  && ok "it quotes the /home figure instead -- 'erase 214 GiB of games and saves' is the number that stops someone" \
+  || bad "the reinstall screen does not quote the /home size"
+
+CASE="confirm-tty: it echoes back what was typed, and nothing else"
+typed="$(printf 'b x a y\n' | "$CONFIRM_TTY" --facts "$T/facts-wipe" --sequence BXAY 2>/dev/null || true)"
+[ "$(printf '%s' "$typed" | tr -d '[:space:]')" = BXAY ] \
+  && ok "typed with the spacing shown, upper-cased, is accepted (a gate that fails on whitespace teaches retyping, not reading)" \
+  || bad "it did not echo the typed sequence"
+
 printf '\ntest-install.sh: %d passed, %d failed, %d skipped\n' "$PASS" "$FAIL" "$SKIP"
 [ "$FAIL" -eq 0 ]

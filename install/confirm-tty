@@ -1,0 +1,171 @@
+#!/usr/bin/env bash
+# novadeck internal install — the CONSENT SCREEN, terminal rendering. Phase 4c/§4d of
+# .claude/plans/internal-install.plan.md.
+#
+#   confirm-tty --facts <file> --sequence <ABXY>
+#
+# Renders the screen novadeck-install derived, reads the sequence back, prints what was entered on
+# stdout and exits 0. A non-zero exit means the user aborted. That contract is the whole interface:
+# the spine owns the policy (what is randomised, how many attempts, what counts as consent) and this
+# owns the words and the input device. §5's gamepad screen is a second implementation of the same
+# contract and shares no code with this one -- it shares the facts file.
+#
+# WHY A TERMINAL VERSION EXISTS AT ALL, given the device has a gamepad and a panel. Two reasons, and
+# neither is a stopgap:
+#
+#   §4d names it. "If no controller is detected, fall back to a typed phrase on a USB keyboard if
+#   one is attached." This is that fallback, and it is also what an operator gets over SSH.
+#
+#   The whole spine is hardware-gated over SSH from a dev card BEFORE any GUI exists (plan's
+#   verification step 3). Without this there would be no way to take consent during the run that
+#   proves the install works, and the temptation would be an --assume-yes flag -- which §4d
+#   forbids outright and which would then be permanently reachable.
+#
+# IT PRINTS NUMBERS THE SPINE MEASURED, never a fixed string. "This will erase your data, continue?"
+# does not discharge the obligation here; "your Android data partition, 96 GiB, will be deleted and
+# is not recoverable" does. Every figure below comes out of the facts file.
+set -euo pipefail
+
+PROG=${0##*/}
+die() { printf '%s: %s\n' "$PROG" "$1" >&2; exit 2; }
+
+FACTS=""; SEQUENCE=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --facts)    FACTS="${2:-}"; shift 2 ;;
+    --sequence) SEQUENCE="${2:-}"; shift 2 ;;
+    *) die "unknown argument $1" ;;
+  esac
+done
+[ -n "$FACTS" ] && [ -r "$FACTS" ] || die "no readable --facts file"
+[ -n "$SEQUENCE" ] || die "no --sequence given"
+
+fact() { sed -n "s/^$1=//p" "$FACTS" | head -1; }
+
+# STDOUT IS THE ANSWER AND NOTHING ELSE. The spine reads this program's stdout in a command
+# substitution and compares it to the sequence it asked for, so a single stray line of screen text
+# on stdout makes every attempt look like a wrong answer -- an installer that can never take
+# consent, failing in the one direction where the symptom ("that was not the sequence shown") points
+# nowhere near the cause. So the answer is parked on fd 3 and everything else, the whole screen
+# included, goes to stderr where the operator still sees it.
+exec 3>&1 1>&2
+answer_out() { printf '%s\n' "$1" >&3; }
+
+SCREEN="$(fact SCREEN)"
+DISK="$(fact DISK)"
+
+# Both screens are written out in full, separately, and they share no text. §4d requires that the
+# two consent paths cannot produce each other's rendering: an Android disk must produce the userdata
+# text and a NovaDeck disk the /home choice, with no way for a variable to swap them. A single
+# template with conditionals inside it is precisely the shape that lets that happen.
+case "$SCREEN" in
+  android-wipe)
+    cat <<EOF
+
+  ================================================================
+   INSTALL NOVADECK ON THIS DEVICE'S INTERNAL STORAGE
+  ================================================================
+
+   Target disk: $DISK  ($(fact WWID))
+
+   THIS DELETES ANDROID'S DATA.
+
+     Everything stored in Android -- apps, saves, photos, downloads and
+     signed-in accounts -- will be deleted. It is NOT recoverable, by you
+     or by us. There is no backup and no way to put it back.
+
+     Android's data partition is $(fact UD_GIB_NOW) GiB today. It will be
+     recreated at $(fact UD_GIB_AFTER) GiB, and NovaDeck will use the
+     remaining $(fact NOVADECK_GIB) GiB.
+
+   WHAT SURVIVES:
+
+     Android itself still boots. It will start up factory-reset, as if the
+     device were new. Its system is untouched.
+
+     Your SD card is never written to. Nothing on it is read, moved or
+     erased -- your game library is safe.
+
+   AFTERWARDS:
+
+     The device will boot NovaDeck from internal storage by default.
+     Hold Volume Up at startup to reach the bootloader menu and choose
+     Android, or boot this installer again, at any time.
+
+  ----------------------------------------------------------------
+EOF
+    ;;
+  reinstall)
+    # No userdata is destroyed on this path, so the wipe text above would be flatly false. What is
+    # at stake instead is /home, and only if the user asked for it to go.
+    home_action="$(fact HOME_ACTION)"
+    home_gib="$(fact HOME_GIB)"
+    cat <<EOF
+
+  ================================================================
+   REPAIR THE NOVADECK INSTALL ON THIS DEVICE
+  ================================================================
+
+   Target disk: $DISK  ($(fact WWID))
+
+   This rewrites NovaDeck's system partitions. Android's data is NOT
+   touched on this path -- it was already resized when NovaDeck was first
+   installed, and nothing here changes it.
+
+EOF
+    if [ "$home_action" = erase ]; then
+      cat <<EOF
+   YOU ASKED TO ERASE /home.
+
+     Your games, saves, screenshots and Steam settings will be deleted.
+     ${home_gib} GiB is in use there today. It is NOT recoverable.
+
+     Games can be downloaded again; saves that are not in Steam Cloud
+     cannot.
+
+EOF
+    else
+      cat <<EOF
+   YOUR GAMES AND SAVES ARE KEPT.
+
+     /home is left exactly as it is -- ${home_gib} GiB in use. Only the
+     system partitions are rewritten.
+
+EOF
+    fi
+    printf '  ----------------------------------------------------------------\n'
+    ;;
+  *)
+    die "the facts file names no screen I know how to render ('$SCREEN')"
+    ;;
+esac
+
+# THE ACKNOWLEDGEMENT. On the gamepad screen these are four face buttons pressed in the order shown;
+# here they are four letters typed in the order shown. Same cost, same property: the sequence is
+# regenerated by the spine on every attempt, so it cannot be given from memory or from habit -- it
+# has to be read off the screen at that moment.
+printf '\n   To go ahead, type these four letters in this order and press Enter:\n\n'
+printf '        %s\n\n' "$(printf '%s' "$SEQUENCE" | sed 's/./&  /g')"
+printf '   Anything else cancels or asks again. Ctrl-C stops the installer.\n\n'
+printf '   > '
+
+# READ STDIN, and only stdin. The spine captures this program's STDOUT in a command substitution and
+# leaves stdin alone, so stdin is still whatever the installer was started on -- the SSH session, the
+# console. An earlier version reached for /dev/tty instead, on the theory that stdout being captured
+# might have taken the terminal with it; it does not, and /dev/tty is worse in the case that matters:
+# under a systemd unit with StandardInput=null there IS no controlling terminal, and reading a handle
+# that does not exist is a different failure from reading one that gives EOF.
+#
+# EOF here yields an empty answer, which is not the sequence, so the spine re-randomises and
+# eventually refuses. That is the right behaviour for an installer started with no way to answer:
+# it fails closed, and it does so through the ordinary wrong-answer path rather than a special case.
+answer=""
+read -r answer || true
+printf '\n'
+
+# Upper-cased and stripped, because "a  b  x  y" typed with the spacing shown is the same intent as
+# "abxy" and a consent gate that failed on whitespace would be teaching people to retype rather than
+# to read. The spine strips whitespace too; doing it here as well keeps this program honest on its
+# own terms.
+answer="${answer//[[:space:]]/}"
+answer_out "${answer^^}"

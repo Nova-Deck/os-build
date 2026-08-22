@@ -1894,6 +1894,18 @@ is up* and has to hand the screen back when answered — the install is still ru
     exists on the disk (77 → 82 cases).
   - **Every adjustment re-asks `carve.sh`** rather than interpolating, so the figure beside the
     knob is always the one that carve would produce for that choice.
+  - **HARDWARE-VALIDATED 2026-08-22 on an AYANEO Pocket S2**, via `install/hw-preflight.sh` — the
+    read-only peer of `hw-select-target.sh`, which stages `sgdisk`/`mdir` plus the model half of the
+    UI into `/run/novadeck/probe` (tmpfs) and renders the screen against the device's own disk. It
+    never invokes the spine, and the bundle is deliberately left unset so the run also checks the
+    refusal. On a 464 GiB UFS LUN: `MODE=fresh`, userdata `p11`, "NovaDeck gets 430 GiB" against the
+    captured 446.24 GiB span, a destroy list of exactly one partition on a stock Android disk, and
+    the knob re-asking carve at each step.
+  - **It found a defect the whole offline suite had passed over**: `device-env` emits with
+    `printf '%s=%q\n'`, and bash's `%q` **escapes** rather than quotes when it can, so the title
+    read *"Install NovaDeck on AYANEO\\ Pocket\\ S2"*. Every stub had emitted the single-quoted
+    form — the other thing `%q` produces. Parsed with `shlex` now, and the stub emits through
+    `printf '%q'` so the suite sees what the device sees.
 - **Confirm** — **LANDED 2026-08-22**, `install/ui`'s `ConsentScreen` + `install/confirm-ui`,
   33 cases in `install/test-ui.sh` plus 3 end-to-end against the real spine in
   `install/test-install.sh`. The §4d random sequence, the four face buttons drawn **by position**

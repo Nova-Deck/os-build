@@ -515,6 +515,32 @@ fi
 echo "  injecting FEX guest graphics-provider mount (/usr/share/guestos/fex-mesa)"
 guest_ero="$stage/usr/share/fex-emu/RootFS/ArchLinux.ero"
 [ -f "$guest_ero" ] || { echo "ERROR: FEX guest rootfs missing at ${guest_ero#"$stage"}" >&2; exit 1; }
+
+# A LISTING'S LENGTH IS NOT ITS COMPLETENESS, and both gates below read listings off this image.
+# `[ -n "$guest_libs" ]` proves only that the read returned SOMETHING, and a short read of a 2 GB
+# image returns a non-empty PREFIX: the libraries before the truncation point resolve, the ones
+# after it do not, and the NEEDED gate then reports the first casualty as a missing dependency.
+#
+# MEASURED 2026-08-22: two release builds in a row failed with "libvulkan_freedreno.so NEEDs
+# libdrm.so.2", both immediately after work/base's ArchLinux.ero had been rewritten by the dev ->
+# release base switch -- while that same libdrm.so.2 was demonstrably present in the source AND in
+# a hand-made copy of the staged image, listed with the same command. The third build passed with
+# nothing changed. An hour went into hunting a dependency break that did not exist, and the error
+# message pointed at mesa the whole time.
+#
+# So establish that the staged image IS the source image before trusting anything read out of it.
+# Size is the entire check: cp either brought all 2 GB across or it did not, and a mismatch is a
+# short copy rather than anything about drivers -- which is what the message has to say, because
+# the failure it replaces was convincing and wrong.
+src_ero="$BASE/usr/share/fex-emu/RootFS/ArchLinux.ero"
+if [ -f "$src_ero" ]; then
+  staged_bytes="$(stat -c %s "$guest_ero")"
+  src_bytes="$(stat -c %s "$src_ero")"
+  [ "$staged_bytes" = "$src_bytes" ] || {
+    echo "ERROR: the staged FEX guest is $staged_bytes bytes against $src_bytes at the source --" >&2
+    echo "       a short copy, NOT a dependency problem. Do not go looking at mesa." >&2
+    exit 1; }
+fi
 dump.erofs --cat --path=/graphics_provider.json "$guest_ero" 2>/dev/null | python3 -c '
 import json, sys
 try:
@@ -550,18 +576,30 @@ cp -a "$payload/usr" "$stage/$payload_dest/"
 # FEX, so this is the same class of check as the manifest gate above — a build-time answer to a
 # question that otherwise reaches a player first. readelf is arch-agnostic, so the aarch64 build
 # container reads these x86 ELFs fine.
+# `2>/dev/null` USED TO BE ON THE dump.erofs BELOW, and it hid the only evidence that mattered.
+# When the listing comes back short, every NEEDED after the cut looks unresolvable and the gate
+# blames the first one -- a message naming mesa for a fault that has nothing to do with it. Keep
+# the tool's own complaint and print it with the refusal, along with how much of a listing we
+# actually got, so the next reader can tell "the guest does not ship this" from "the read failed".
 for libdir in usr/lib usr/lib32; do
-  guest_libs="$(dump.erofs --ls --path="/$libdir" "$guest_ero" 2>/dev/null | awk '{print $NF}')"
-  [ -n "$guest_libs" ] || { echo "ERROR: could not list /$libdir out of the pinned FEX guest" >&2; exit 1; }
+  guest_err="$stage/.erofs-ls-stderr"
+  guest_libs="$(dump.erofs --ls --path="/$libdir" "$guest_ero" 2>"$guest_err" | awk '{print $NF}')"
+  [ -n "$guest_libs" ] || {
+    echo "ERROR: could not list /$libdir out of the pinned FEX guest" >&2
+    sed 's/^/       dump.erofs: /' "$guest_err" >&2; exit 1; }
   for so in "$stage/$payload_dest/$libdir"/*.so*; do
     for need in $(readelf -d "$so" | sed -n 's/.*(NEEDED).*\[\(.*\)\].*/\1/p'); do
       if ! printf '%s\n' "$guest_libs" | grep -qxF "$need" \
          && [ ! -e "$stage/$payload_dest/$libdir/$need" ]; then
         echo "ERROR: ${so#"$stage"} NEEDs $need, which neither the guest /$libdir nor the payload provides" >&2
+        echo "       the guest listing held $(printf '%s\n' "$guest_libs" | grep -c .) entries from a $(stat -c %s "$guest_ero")-byte image" >&2
+        [ -s "$guest_err" ] && sed 's/^/       dump.erofs: /' "$guest_err" >&2
+        echo "       if that entry count looks short, this is a failed READ of the guest, not a missing dependency" >&2
         exit 1
       fi
     done
   done
+  rm -f "$guest_err"
 done
 
 mkdir -p "$stage/usr/share/guestos/fex-mesa"

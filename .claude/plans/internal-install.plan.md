@@ -1224,11 +1224,17 @@ meaningfully until Phase 4 has put filesystems and a slot into those eight parti
 contract is that it writes no partition table and leaves `/home` alone, which is only observable
 when there is a `/home` worth leaving.
 
-> **THAT BLOCKER IS GONE as of 2026-08-22:** the ACE now carries a real internal install with a
-> populated `/home`, so the `reinstall` gate is runnable and is the next hardware item. Note what
-> today did NOT cover: the second and third installs ran `fresh` over an existing install
-> (`REPLACES_OURS=1`), which is the path that *destroys* `/home`. `reinstall` is the opposite
-> claim and shares no code path with it.
+> **ONE BLOCKER LIFTED 2026-08-22, A SECOND ONE STANDS.** The ACE now carries a real internal
+> install with a populated `/home`, so there is finally a `/home` worth leaving. But the gate is
+> still not runnable from a DEV CARD: the card ships the same `novadeck-*` filesystem labels as
+> the install, so `/home` and `/esp` cross-mount to the internal disk (§1c). `reinstall`'s whole
+> claim is "the user's games survive", and that cannot be judged on a device where the `/home` in
+> question is not unambiguously addressable. **It waits on the Phase 6 installer image, which
+> carries its own labels** — it is not merely the next thing to schedule.
+>
+> Note also what 2026-08-22 did NOT cover: all three installs that day ran `fresh` over an
+> existing install (`REPLACES_OURS=1`), which is the path that *destroys* `/home`. `reinstall` is
+> the opposite claim and shares no code path with it.
 
 **The generalisation, which is the part that outlives this bug.** Every gate in the installer that
 shells out to a tool absent from the shipped image has this failure shape, and none of them can be

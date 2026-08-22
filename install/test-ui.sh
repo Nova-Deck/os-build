@@ -386,6 +386,44 @@ NET_LEASE=1 NET_HOST_RC=0 NOVADECK_OTA_CONFIG="$T/net/ota.conf" PATH="$T/bin:$PA
   && ok "and /etc/novadeck/ota.conf overrides the built-in, as it does for the OTA client" \
   || bad "the config file was ignored"
 
+CASE="§5: the button that says Power off powers off"
+# A screen that says "Power off" and merely exits is worse than one that says nothing: the UI dies,
+# gamescope dies with it, and the device sits at a black panel having promised otherwise. That is
+# what it did until 2026-08-22.
+powercheck() {  # <state-or-rc> -- prints the result tuple the screen produces for SELECT / S
+  WHICH="$1" python3 -c '
+import json, os, sys
+sys.path.insert(0, os.path.join(os.environ["ROOT"], "install"))
+import uiflow
+w = os.environ["WHICH"]
+if w.startswith("net:"):
+    s = uiflow.NetworkScreen({"STATE": w[4:], "SSID": "x"}); s.handle("BACK")
+else:
+    class R: tail = []
+    s = uiflow.ProgressScreen(R()); s.finish(int(w)); s.handle("S")
+print(json.dumps(s.result))'
+}
+[ "$(powercheck 0)" = '["poweroff"]' ] \
+  && ok "a finished install powers the device off, as its button says" \
+  || bad "the success screen's Power off button does not power off: $(powercheck 0)"
+[ "$(powercheck 1)" = '["quit"]' ] \
+  && ok "a FAILED one does not -- its button says Continue, and the user still has a log to read" \
+  || bad "a failed install powered the device off"
+[ "$(powercheck net:no-conf)" = '["poweroff"]' ] \
+  && ok "and a network failure's SELECT, labelled Power off, does too" \
+  || bad "the network failure screen's Power off button does not power off"
+[ "$(powercheck net:need-join)" = '["quit"]' ] \
+  && ok "while the join prompt's SELECT is Cancel, and only cancels" \
+  || bad "cancelling a join offer powered the device off"
+# The guard that keeps this suite from halting the machine it runs on.
+grep -q 'isinstance(source, ScriptedInput)' "$UI" \
+  && ok "a scripted run refuses to power off, rather than trusting every case to set the seam" \
+  || bad "nothing stops a scripted run from halting the build host"
+# NOT asserted here: the guard firing end to end. Reaching it through the loop needs a completed
+# install, i.e. the spine, and a case that passes whether or not the path was reached asserts
+# nothing at all -- which is the failure mode this suite exists to avoid. The guard is read out of
+# the source above; the four result tuples are the behaviour.
+
 CASE="§4b: the screen turns each state into a different fix"
 netscreen() {  # <key=value...>
   FACTS="$1" python3 -c '

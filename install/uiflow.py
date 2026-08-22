@@ -239,7 +239,9 @@ class NetworkScreen:
 
     def handle(self, token):
         if token in (TOKEN_BACK, TOKEN_QUIT):
-            self.result = ("quit",)
+            # SELECT is labelled Cancel while a join is being offered and Power off once something
+            # has failed. The result has to say which, or the button lies about what it does.
+            self.result = ("quit",) if self.state() == "need-join" else ("poweroff",)
         elif token == "S":
             st = self.state()
             self.result = ("join",) if st == "need-join" else \
@@ -469,8 +471,12 @@ class ProgressScreen:
             self.message = m.group(2)
 
     def handle(self, token):
-        if self.rc is not None and token in ("S", TOKEN_BACK, TOKEN_QUIT):
-            self.result = ("quit",)
+        if self.rc is None:
+            return
+        # A finished install offers one button and it says Power off -- §5, "Remove the SD card,
+        # then power the device off". A FAILED one offers Continue, because the user still has a
+        # log to read and a device that may need re-running.
+        self.result = ("poweroff",) if self.rc == 0 else ("quit",)
 
     def finish(self, rc):
         self.rc = rc

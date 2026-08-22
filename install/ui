@@ -361,6 +361,29 @@ class ConfirmServer:
 # =================================================================================================
 # the loop
 # =================================================================================================
+# The command behind the one button that says "Power off". §5 chose power-off over reboot until
+# Phase 0 item 4 answers the ABL scan order, so this is the decided action, not a placeholder.
+POWEROFF = os.environ.get("NOVADECK_UI_POWEROFF", "systemctl poweroff")
+
+
+def power_off(source):
+    """
+    Halt the machine, unless this is a scripted run.
+
+    TWO LAYERS, because the failure mode is halting a developer's workstation mid-suite. The
+    command is a seam so a test can assert WHICH command was issued -- and a scripted source means
+    a test by construction, so this refuses outright there rather than trusting every future case
+    to remember to set the seam. A screen that says "Power off" and merely exits is worse than
+    either: the UI dies, gamescope dies with it, and the device sits at a black panel having
+    promised something else.
+    """
+    if isinstance(source, ScriptedInput):
+        log("scripted run: NOT powering off (would have run: %s)" % POWEROFF)
+        return
+    log("powering off: %s" % POWEROFF)
+    os.system(POWEROFF)                                        # noqa: S605 - a fixed command
+
+
 def build_io():
     """
     The view and the input source come as a pair: scripted events mean no window at all.
@@ -474,6 +497,9 @@ def run(server, view, source, base, deadline=0):
             elif result[0] == "start":
                 spine = SpineRun(result[1], server.path)
                 stack.append(ProgressScreen(spine))
+            elif result[0] == "poweroff":
+                power_off(source)
+                return 0
             elif result[0] == "quit":
                 return 0
             break

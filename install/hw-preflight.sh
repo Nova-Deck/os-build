@@ -50,6 +50,7 @@ scp "${SSHOPTS[@]}" -q \
   "$(hwstage_path sgdisk)" "$(hwstage_path mdir)" \
   "$ROOT/install/select-target.sh" \
   "$ROOT/install/carve.sh" \
+  "$ROOT/install/netcfg" \
   "$ROOT/install/ui" \
   "$ROOT/install/uipad.py" \
   "$ROOT/install/uiflow.py" \
@@ -72,6 +73,14 @@ export NOVADECK_DEVICE_ENV=/usr/lib/novadeck/device-env
 # a bundle would be a probe one keystroke away from being an installer.
 export NOVADECK_INSTALL_BUNDLE=""
 export NOVADECK_INSTALL_SEED=""
+export NOVADECK_NETCFG="$P/netcfg"
+
+# §4b, and DIAGNOSE ONLY. `netcfg join` is the mode that talks to NetworkManager; it is deliberately
+# not run here, so this stays a probe rather than something that reconfigures a device's network
+# out from under whoever is using it. `diagnose` runs `ip`, `curl` and reads wifi.conf.
+echo "=== network (netcfg diagnose, read-only)"
+"$P/netcfg" diagnose
+echo
 
 python3 - <<'PY'
 import os, sys
@@ -79,6 +88,15 @@ sys.path.insert(0, "/run/novadeck/probe")
 import uiflow
 
 print("=" * 78)
+net = uiflow.net_diagnose()
+print("network state: %s" % net.get("STATE"))
+ns = uiflow.NetworkScreen(net).describe()
+print("  %s" % ns["title"])
+for head, body in ns["blocks"]:
+    print("    %-22s %s" % (head + ":", body))
+print("  buttons: %s" % [b["label"] for b in ns["buttons"]])
+print("=" * 78)
+
 facts = uiflow.gather_preflight()
 if facts is None:
     print("NO TARGET: select-target.sh found nothing installable on this device.")

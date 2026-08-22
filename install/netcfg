@@ -27,7 +27,22 @@ log() { printf '[%s] %s\n' "$PROG" "$*" >&2; }
 # Test seams, in the spirit of the rest of install/: install/test-netcfg.sh executes THIS file with
 # every tool stubbed and every path redirected. What runs under test is the artifact that ships.
 WIFI_CONF=${NOVADECK_WIFI_CONF:-/esp/novadeck/wifi.conf}
-OTA_URL=${NOVADECK_OTA_URL:-https://ota.novadeck.org}
+
+# THE OTA URL IS RESOLVED THE WAY novadeck-update RESOLVES IT: the environment, then OTA_URL in
+# /etc/novadeck/ota.conf, then the same built-in default. Reachability of THAT host is what
+# `no-host` means, so a URL of our own invention here would report a healthy network as broken --
+# which is exactly the misdiagnosis this file exists to prevent. It was, briefly: this default read
+# `ota.novadeck.org`, a host that does not exist.
+#
+# The literal is written twice, here and in fs-overlay/usr/bin/novadeck-update, because one is
+# shell and the other Python. install/test-ui.sh asserts the two agree; that assertion is the only
+# thing that keeps them the same URL.
+OTA_CONFIG=${NOVADECK_OTA_CONFIG:-/etc/novadeck/ota.conf}
+OTA_DEFAULT_URL=https://updates.novadeck.cloud-ip.cc
+if [ -z "${NOVADECK_OTA_URL:-}" ] && [ -r "$OTA_CONFIG" ]; then
+  NOVADECK_OTA_URL=$(sed -n 's/^[[:space:]]*OTA_URL=//p' "$OTA_CONFIG" | tail -1 | tr -d '"'"'"' \r')
+fi
+OTA_URL=${NOVADECK_OTA_URL:-$OTA_DEFAULT_URL}
 NMCLI=${NMCLI:-nmcli}
 CURL=${CURL:-curl}
 IP=${IP:-ip}

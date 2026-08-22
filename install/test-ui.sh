@@ -348,6 +348,25 @@ netcfg join | grep -q 'hunter2' \
   || ok "the PSK appears in no state, on any path"
 unset NET_LEASE NET_HOST_RC
 
+CASE="§4b: netcfg and novadeck-update agree on which host 'reachable' means"
+# THE URL IS WRITTEN TWICE -- shell here, Python in fs-overlay/usr/bin/novadeck-update -- and this
+# assertion is the only thing that keeps them the same URL. It is not hypothetical: netcfg shipped
+# for an hour with an invented default (`ota.novadeck.org`), which would have reported every
+# healthy network as `no-host`, the exact misdiagnosis §4b's table exists to prevent. Same shape as
+# test-update.sh's identity-rules-agree, and for the same reason.
+net_default="$(sed -n 's/^OTA_DEFAULT_URL=//p' "$NETCFG" | head -1)"
+upd_default="$(sed -n 's/^DEFAULT_URL = "\(.*\)"$/\1/p' "$ROOT/fs-overlay/usr/bin/novadeck-update" | head -1)"
+[ -n "$net_default" ] && [ "$net_default" = "$upd_default" ] \
+  && ok "both default to $net_default" \
+  || bad "netcfg says '$net_default', novadeck-update says '$upd_default'"
+# And the config file the running system actually carries wins over both.
+printf 'OTA_URL=https://from-the-conf.example\n' >"$T/net/ota.conf"
+NET_LEASE=1 NET_HOST_RC=0 NOVADECK_OTA_CONFIG="$T/net/ota.conf" PATH="$T/bin:$PATH" \
+  NOVADECK_WIFI_CONF="$T/net/wifi.conf" "$NETCFG" diagnose 2>/dev/null \
+  | grep -q 'from-the-conf.example' \
+  && ok "and /etc/novadeck/ota.conf overrides the built-in, as it does for the OTA client" \
+  || bad "the config file was ignored"
+
 CASE="§4b: the screen turns each state into a different fix"
 netscreen() {  # <key=value...>
   FACTS="$1" python3 -c '

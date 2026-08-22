@@ -397,11 +397,20 @@ verify_sources() {
 # the rendering lives where the display and the gamepad are.
 #
 # THE CONTRACT:
-#     $CONFIRM --facts <file> --sequence <ABXY>
+#     $CONFIRM --facts <file> --sequence <NESW>
 #   displays the facts and the four face buttons in the order given, reads four presses, prints the
 #   pressed sequence on stdout and exits 0. A non-zero exit means the user aborted.
 #
-# WHAT THE RANDOM SEQUENCE IS FOR. A single `A` on a focused Continue is one thumb-twitch from an
+# THE BUTTONS ARE NAMED BY POSITION, NOT BY THEIR PRINTED LETTER -- N/E/S/W, one character each.
+# The letters silkscreened on the face cluster are NOT the same across the boards this installer is
+# unified over: `A` is the EAST button on the AYANEO Pocket ACE and the SOUTH button on the Pocket
+# S2. A screen that says "press A" therefore names a different physical button per device, and it
+# does it on the one screen in this project where a misread is an erased Android. Position is the
+# thing the hardware actually agrees on -- it is also what the wire carries, since InputPlumber
+# presents a virtual Xbox pad and the kernel's own names (BTN_NORTH/EAST/SOUTH/WEST) are positional.
+# So the alphabet is cardinal from the spine outwards, and both renderers draw the position.
+#
+# WHAT THE RANDOM SEQUENCE IS FOR. A single press on a focused Continue is one thumb-twitch from an
 # erased Android, and a 3-second hold can be performed while looking away -- and a user who has done
 # it once does it faster the second time. A sequence that is regenerated every attempt cannot be
 # performed without reading the screen at that moment, which is the property the alternatives lack.
@@ -418,7 +427,9 @@ verify_sources() {
 # "drop a file to configure it" idiom already exists here, and consent must never join it. If an
 # unattended path is ever wanted it is a separate, deliberately-named artifact, never a quiet bypass.
 CONFIRM_TRIES=${CONFIRM_TRIES:-5}
-FACE_BUTTONS=${FACE_BUTTONS:-A B X Y}
+# One character per button, because random_sequence concatenates them and the renderers hand back a
+# string this compares. Cardinal points, for the reason written out above.
+FACE_BUTTONS=${FACE_BUTTONS:-N E S W}
 
 # Seeded through RANDOM so the suite can assert two runs differ AND that a given seed reproduces.
 random_sequence() {

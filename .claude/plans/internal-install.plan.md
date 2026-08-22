@@ -1626,7 +1626,7 @@ something other than what the install will do, and would be a second copy of tho
 > that `/bin/true` does not satisfy the gate, and that none of nine plausible bypass variables does.
 >
 > **What is still owed: the gamepad renderer** (§5), which is a second implementation of the same
-> contract — `--facts <file> --sequence <ABXY>` in, the pressed sequence on stdout, non-zero to
+> contract — `--facts <file> --sequence <NESW>` in, the pressed sequence on stdout, non-zero to
 > abort — sharing the facts file and no code. And the "no controller and no keyboard → stop" case,
 > which needs an input stack to detect the absence of.
 >
@@ -1656,15 +1656,27 @@ It must state, in the user's terms and not ours:
   switches back to Android at any time.
 
 **The acknowledgement must cost something to give — with gamepad input only.** No keyboard, no
-guaranteed touchscreen, and after §4b no text-entry widget exists to borrow. A single `A` on a
+guaranteed touchscreen, and after §4b no text-entry widget exists to borrow. A single press on a
 focused "Continue" is one thumb-twitch from an accidental wipe, so it cannot be that either.
 
-**Mechanism: a random button sequence, echoed back.** The screen shows four face buttons in a
-random order generated per run — e.g. `B  X  A  Y` — and the user presses them in that order.
+**Mechanism: a random button sequence, echoed back.** The screen shows the four face buttons in a
+random order generated per run — e.g. `S  W  N  E` — and the user presses them in that order.
 It is the gamepad analogue of typing `ERASE`, and it is the strongest option actually available
 here:
 
 - No keyboard, no touchscreen, no text entry, no new widget.
+- **The buttons are named and drawn by POSITION — N/E/S/W — never by the letter printed on
+  them** (decided 2026-08-22, implemented the same day). The silkscreen is not the same across the
+  boards this one installer is unified over: `A` is the **EAST** button on the AYANEO Pocket ACE
+  and the **SOUTH** button on the Pocket S2. "Press A" therefore names a different physical button
+  per device, on the one screen in this project where a misread is an erased Android. Position is
+  what the hardware agrees on and what the wire already carries — InputPlumber presents a virtual
+  Xbox pad and the kernel's own names (`BTN_NORTH`/`EAST`/`SOUTH`/`WEST`) are positional — so the
+  alphabet is cardinal from `random_sequence` outwards. **Both renderers draw it**: one diamond of
+  four dots per press, the target dot filled, the position's name under it, read left to right,
+  plus the sentence *"it is the POSITION on the pad, not the letter printed on the button"*. The
+  terminal renderer draws the same picture in ASCII (it has to survive a Linux console font) and
+  takes the four initials typed, `SOUTH WEST NORTH EAST` accepted as `SWNE`.
 - **Randomised per run, so it cannot become muscle memory.** This is the property hold-to-confirm
   lacks: a 3-second hold can be performed while looking away, and a user who has done it once
   will do it faster the second time. A sequence that changes cannot be performed without reading
@@ -1731,7 +1743,8 @@ already-NovaDeck disk via the idempotency path. There is no Android `userdata` t
 so the wipe warning above would be flatly false; instead that screen offers **keep `/home`
 (default) or erase and recreate it**, and only the erase branch arms a gate. Consequences:
 
-- Choosing *keep* is non-destructive to user data — no sequence gate, a plain `A` is right.
+- Choosing *keep* is non-destructive to user data — no sequence gate, a plain confirm press
+  (`SOUTH`, the position the UI uses for "yes" throughout) is right.
 - Choosing *erase* takes the full sequence gate, with its own derived text quoting the current
   `/home` size and, if cheaply available, the installed game count or used space. "Erase 214 GiB
   of games and saves" is the number that stops someone; "erase /home" is not.
@@ -1822,20 +1835,25 @@ than reimplementing it — the orchestrator stays the testable spine and the GUI
   for free if one is attached. **No text entry anywhere** — §4b moved Wi-Fi credentials to a file
   on the ESP, so no on-screen keyboard is built. Every screen is navigable with dpad + buttons
   alone. If neither a controller nor a keyboard is present, §4d says stop.
+  **The face buttons are cardinal points end to end** — SDL's `CONTROLLER_BUTTON_A`/`B`/`X`/`Y`
+  are *positional* constants (bottom/right/left/top of the cluster, whatever the pad prints), so
+  the mapping to `S`/`E`/`W`/`N` happens once, at the event boundary, and no letter travels any
+  further into the UI. The keyboard equivalents are the initials, as in `confirm-tty`.
 - **Screens**: network status (diagnosis only — the §4b table, no picker) → pre-flight → confirm
   → progress → result. Strictly smaller than the earlier draft: dropping the SSID picker and the
   key grid removes the only two widgets that needed text input.
 - **Pre-flight**: device name (from `fs-overlay/usr/lib/novadeck/devices/`), target disk model
   and size, the **full list of partitions about to be destroyed**, the new Android `userdata`
   size (adjusted with left/right, not typed), and the bundle version about to be fetched.
-- **Confirm**: the §4d random button sequence — four face buttons shown in a per-run random
-  order, echoed back on the pad; `B`-then-abort at any point, and a wrong press re-randomises
-  and redraws. Nothing writes before it completes. Hold-to-confirm is the documented fallback if
-  controller events prove unreliable.
+- **Confirm**: the §4d random button sequence — the four face buttons drawn **by position** as
+  diamonds in a per-run random order, echoed back on the pad; `EAST`-then-abort at any point, and
+  a wrong press re-randomises and redraws. Nothing writes before it completes. Hold-to-confirm is
+  the documented fallback if controller events prove unreliable.
 - **Progress**: a bar per phase. The rootfs percentage comes from RAUC's D-Bus `Progress`
   `(isi)` property — `fs-overlay/usr/bin/novadeck-update` already subscribes to exactly that;
   reuse its subscription code rather than re-deriving it.
-- **Result**: on success, "Remove the SD card, then press A to power off" — power-off rather
+- **Result**: on success, "Remove the SD card, then press the bottom button to power off" — the
+  UI never prints a face-button letter anywhere, for §4d's reason — power-off rather
   than reboot until Phase 0 item 4 answers the ABL scan order. On failure, the error plus an
   accurate statement of which of two states we are in ("nothing was written, the device is
   unchanged" vs "the disk was modified; re-run, or restore the GPT from `<path>`").

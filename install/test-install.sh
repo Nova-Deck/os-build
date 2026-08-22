@@ -1421,7 +1421,7 @@ cat >"$SP_CONFIRM_OVERRIDE" <<'EOF'
 seq=""
 while [ $# -gt 0 ]; do case "$1" in --sequence) seq="$2"; shift 2 ;; *) shift ;; esac; done
 printf '%s\n' "confirm $seq" >>"$SP_CALLS"
-printf 'YYYY\n'          # always wrong, and never one of the permutations
+printf 'ZZZZ\n'          # always wrong, and never one of the permutations
 EOF
 chmod +x "$SP_CONFIRM_OVERRIDE"
 out="$(spine_run)" && bad "a wrong sequence installed the device" || ok "a wrong sequence refuses"
@@ -1434,6 +1434,27 @@ seqs=$(grep '^confirm ' "$SP/calls" | sort -u | wc -l)
   && ok "the sequence is re-randomised between attempts, so a mistake cannot be brute-forced by repetition" \
   || bad "the same sequence was shown every time"
 if carve_wrote; then bad "the carve ran after consent was refused"; else ok "nothing was written"; fi
+
+# Same spine directory, so $SP/calls still holds the sequences that were asked for above.
+CASE="spine: the buttons are named by POSITION, not by the letter printed on them"
+# The face cluster's silkscreen is not the same across the boards this installer is unified over --
+# `A` is EAST on the AYANEO Pocket ACE and SOUTH on the Pocket S2. A sequence carrying `A` therefore
+# names a different physical button per device, on the one screen where a misread erases an Android
+# install. This asserts the alphabet the spine actually emits, not what a comment says it emits.
+asked=$(grep '^confirm ' "$SP/calls" | awk '{print $2}')
+[ -n "$asked" ] || bad "no sequence was recorded to check"
+if printf '%s\n' "$asked" | grep -qvE '^[NESW]{4}$'; then
+  bad "a sequence used something other than N/E/S/W: $(printf '%s' "$asked" | tr '\n' ' ')"
+else
+  ok "every sequence is four cardinal points -- no A/B/X/Y reaches a screen"
+fi
+if printf '%s\n' "$asked" | while read -r s; do
+     [ "$(printf '%s' "$s" | grep -o . | sort | tr -d '\n')" = ENSW ] || exit 1
+   done; then
+  ok "and each one is a permutation of all four, so no button is asked for twice"
+else
+  bad "a sequence repeated or dropped a button"
+fi
 unset SP_CONFIRM_OVERRIDE
 
 CASE="spine: no variable and no file on the medium can pre-satisfy the gate"
@@ -1560,7 +1581,7 @@ out="$(spine_run --intent fresh)" || bad "run failed: $out"
 grep -qx 'REPLACES_OURS=1' "$SP_FACTS" \
   && ok "the facts record that an existing install is being replaced" \
   || bad "REPLACES_OURS is not set on a fresh-over-ours disk"
-screen="$("$ROOT/install/confirm-tty" --facts "$SP_FACTS" --sequence ABXY </dev/null 2>&1 >/dev/null || true)"
+screen="$("$ROOT/install/confirm-tty" --facts "$SP_FACTS" --sequence NESW </dev/null 2>&1 >/dev/null || true)"
 printf '%s\n' "$screen" | grep -qi 'DELETES THE NOVADECK INSTALL ALREADY ON THIS DISK' \
   && ok "and the screen says so, in its own block" \
   || bad "the screen does not disclose that an existing novadeck install is destroyed"
@@ -1575,7 +1596,7 @@ CASE="confirm-tty: the SD-card reassurance survives on the disk where it is true
 spine_dir noreplace
 SP_SEL_MODE=fresh; SP_PLAN_REPLACES=0
 out="$(spine_run --intent fresh)" || bad "run failed: $out"
-screen="$("$ROOT/install/confirm-tty" --facts "$SP_FACTS" --sequence ABXY </dev/null 2>&1 >/dev/null || true)"
+screen="$("$ROOT/install/confirm-tty" --facts "$SP_FACTS" --sequence NESW </dev/null 2>&1 >/dev/null || true)"
 printf '%s\n' "$screen" | grep -q 'your game library is safe' \
   && ok "a stock Android disk still gets it -- there the games really are on the card" \
   || bad "the reassurance was lost on the disk where it is true"
@@ -1714,7 +1735,7 @@ UD_GIB_AFTER=16
 NOVADECK_GIB=80
 HOME_ACTION=create
 EOF
-wipe_render="$("$CONFIRM_TTY" --facts "$T/facts-wipe" --sequence BXAY </dev/null 2>&1 || true)"
+wipe_render="$("$CONFIRM_TTY" --facts "$T/facts-wipe" --sequence SWNE </dev/null 2>&1 || true)"
 printf '%s' "$wipe_render" | grep -q '96 GiB' && printf '%s' "$wipe_render" | grep -q '16 GiB' \
   && ok "quotes both the size lost and the size kept" \
   || bad "the rendering does not quote the measured sizes"
@@ -1737,7 +1758,7 @@ SECTOR=512
 HOME_ACTION=keep
 HOME_GIB=214
 EOF
-re_render="$("$CONFIRM_TTY" --facts "$T/facts-reinst" --sequence BXAY </dev/null 2>&1 || true)"
+re_render="$("$CONFIRM_TTY" --facts "$T/facts-reinst" --sequence SWNE </dev/null 2>&1 || true)"
 if printf '%s' "$re_render" | grep -qi 'DELETES ANDROID'; then
   bad "the reinstall screen renders the Android-wipe warning, which is flatly false there"
 else
@@ -1748,10 +1769,43 @@ printf '%s' "$re_render" | grep -q '214 GiB' \
   || bad "the reinstall screen does not quote the /home size"
 
 CASE="confirm-tty: it echoes back what was typed, and nothing else"
-typed="$(printf 'b x a y\n' | "$CONFIRM_TTY" --facts "$T/facts-wipe" --sequence BXAY 2>/dev/null || true)"
-[ "$(printf '%s' "$typed" | tr -d '[:space:]')" = BXAY ] \
+typed="$(printf 's w n e\n' | "$CONFIRM_TTY" --facts "$T/facts-wipe" --sequence SWNE 2>/dev/null || true)"
+[ "$(printf '%s' "$typed" | tr -d '[:space:]')" = SWNE ] \
   && ok "typed with the spacing shown, upper-cased, is accepted (a gate that fails on whitespace teaches retyping, not reading)" \
   || bad "it did not echo the typed sequence"
+# The screen prints SOUTH/WEST/NORTH/EAST under the diamonds, so someone will type that. It is the
+# same intent and the same reading of the same screen; only the abbreviation differs.
+typed="$(printf 'south west north east\n' | "$CONFIRM_TTY" --facts "$T/facts-wipe" --sequence SWNE 2>/dev/null || true)"
+[ "$(printf '%s' "$typed" | tr -d '[:space:]')" = SWNE ] \
+  && ok "and the full words under the diamonds are accepted as their initials" \
+  || bad "typing the words printed on the screen was not accepted: '$typed'"
+# But it is not a filter that throws away whatever it does not recognise: that would forgive a
+# wrong answer with a right answer buried in it.
+typed="$(printf 'a b x y\n' | "$CONFIRM_TTY" --facts "$T/facts-wipe" --sequence SWNE 2>/dev/null || true)"
+[ "$(printf '%s' "$typed" | tr -d '[:space:]')" = SWNE ] \
+  && bad "an answer that is not the sequence was normalised into one" \
+  || ok "a wrong answer stays wrong -- junk is not filtered out of it"
+
+CASE="confirm-tty: it draws the POSITION, and says the printed letter is not it"
+# The face cluster's silkscreen differs across the boards this installer is unified over (`A` is
+# EAST on the AYANEO Pocket ACE, SOUTH on the Pocket S2), so the screen must not name a letter.
+draw="$("$CONFIRM_TTY" --facts "$T/facts-wipe" --sequence SWNE </dev/null 2>&1 >/dev/null || true)"
+printf '%s' "$draw" | grep -q 'SOUTH' && printf '%s' "$draw" | grep -q 'NORTH' \
+  && ok "the four presses are named as positions" \
+  || bad "the acknowledgement does not name the positions"
+printf '%s' "$draw" | grep -qi 'not the letter printed on the button' \
+  && ok "and it says outright that the printed letter is not what is meant" \
+  || bad "nothing on the screen warns that the silkscreen differs between devices"
+# Three rows of diamonds, one column per press: the picture is the instruction for anyone who
+# reads the panel rather than the words.
+[ "$(printf '%s\n' "$draw" | grep -c '^ *[o#]\( *[o#]\)* *$')" -ge 3 ] \
+  && ok "and it draws them, one diamond per press" \
+  || bad "the diamonds were not drawn"
+# A sequence naming a button it cannot draw is a contract violation between the spine and the
+# renderer, and it must be loud: a blank diamond would mean the two disagree about what was shown.
+"$CONFIRM_TTY" --facts "$T/facts-wipe" --sequence ABXY </dev/null >/dev/null 2>&1 \
+  && bad "a sequence of printed-letter buttons rendered as if it were positions" \
+  || ok "a sequence it cannot draw is refused, not rendered blank"
 
 printf '\ntest-install.sh: %d passed, %d failed, %d skipped\n' "$PASS" "$FAIL" "$SKIP"
 [ "$FAIL" -eq 0 ]

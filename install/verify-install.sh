@@ -109,6 +109,23 @@ done
 [ "${#DEV[@]}" = 8 ] || { printf '\nverify-install: %d of 8 partitions unusable -- stopping\n' \
   "$(( 8 - ${#DEV[@]} ))" >&2; exit 1; }
 
+# READ THROUGH AN EXISTING MOUNT WHEN THERE IS ONE. This script is meant to run from the installer,
+# where nothing on the target is mounted -- but it is at least as useful run on the installed system
+# afterwards, and there /esp and /efi are already mounted read-write by the running OS. `mount -o ro`
+# on a device that is already mounted fails with "would change RO state", which would report the ESP
+# as unreadable on a perfectly good install. We only ever read, so an existing mount serves.
+USE_PATH=""; USE_OURS=0
+use_fs() {  # <dev> <tmp-mountpoint> -> 0 with USE_PATH set
+  local existing
+  USE_PATH=""; USE_OURS=0
+  existing="$(findmnt -no TARGET --source "$1" 2>/dev/null | head -1)"
+  if [ -n "$existing" ]; then USE_PATH="$existing"; return 0; fi
+  mkdir -p "$2"
+  mount -o ro "$1" "$2" 2>/dev/null || return 1
+  USE_PATH="$2"; USE_OURS=1
+}
+release_fs() { [ "$USE_OURS" = 1 ] && umount "$USE_PATH" >/dev/null 2>&1; USE_OURS=0; return 0; }
+
 fstype() { blkid -o value -s TYPE  "$1" 2>/dev/null; }
 fsuuid() { blkid -o value -s UUID  "$1" 2>/dev/null; }
 fslabel() { blkid -o value -s LABEL "$1" 2>/dev/null; }
@@ -157,28 +174,36 @@ fi
 
 # --- 3. the slot witness -------------------------------------------------------------------------
 echo "  2. slot witness"
-mkdir -p "$T/var"
-if mount -o ro "${DEV[novadeck-var-A]}" "$T/var" 2>/dev/null; then
-  got="$(cat "$T/var/lib/novadeck/slot" 2>/dev/null | tr -d '[:space:]')"
-  [ "$got" = a ] && ok "var-A /var/lib/novadeck/slot = a" \
-                 || bad "var-A slot witness: expected 'a', got '${got:-<missing>}'"
-  umount "$T/var"
+# UPPERCASE, and that is not a detail to normalise away. images/test-post-install.sh states the
+# convention -- the witness records the slot "in the bootconf naming (A/B)" -- and asserts 'B' for
+# slot B. seed_var writes $SLOT, which is that same naming.
+#
+# THE CARD DISAGREES: images/verify-card.sh expects lowercase 'a', and passes, so a card's var-a
+# really does carry 'a' while an install's var-A carries 'A'. Nothing reads this file at runtime --
+# it is a witness for diagnosis, and the two verifiers are its only readers -- so it costs nothing
+# today. It is still two artifacts answering the same question differently, which is the thing
+# these parallel check lists exist to surface. Asserted here as the installer actually writes it.
+if use_fs "${DEV[novadeck-var-A]}" "$T/var"; then
+  got="$(tr -d '[:space:]' <"$USE_PATH/lib/novadeck/slot" 2>/dev/null)"
+  [ "$got" = A ] && ok "var-A /var/lib/novadeck/slot = A" \
+                 || bad "var-A slot witness: expected 'A', got '${got:-<missing>}'"
+  release_fs
 else
-  bad "cannot mount var-A read-only"
+  bad "cannot read var-A"
 fi
 
 # --- 4. the ESP (stage 1) ------------------------------------------------------------------------
 # ABL boots /EFI/BOOT/bootaa64.efi from here. The boot confs and the shared grubenv live here too,
 # because they are per-DISK rather than per-slot.
 echo "  3. ESP (stage 1)"
-mkdir -p "$T/esp"
-if mount -o ro "${DEV[NOVADECK-ESP]}" "$T/esp" 2>/dev/null; then
+if use_fs "${DEV[NOVADECK-ESP]}" "$T/esp"; then
+  esp="$USE_PATH"
   for f in /EFI/BOOT/bootaa64.efi /EFI/BOOT/steamcl-version /EFI/BOOT/fonts/default.pf2 \
            /EFI/steamos/grubenv /SteamOS/conf/A.conf; do
-    [ -s "$T/esp$f" ] && ok "$f present" || bad "$f missing or empty"
+    [ -s "$esp$f" ] && ok "$f present" || bad "$f missing or empty"
   done
-  [ -e "$T/esp/EFI/BOOT/steamcl-restricted" ] \
-    && { [ -s "$T/esp/EFI/BOOT/steamcl-restricted" ] \
+  [ -e "$esp/EFI/BOOT/steamcl-restricted" ] \
+    && { [ -s "$esp/EFI/BOOT/steamcl-restricted" ] \
            && bad "steamcl-restricted should be empty" \
            || ok "steamcl-restricted present and empty"; } \
     || bad "/EFI/BOOT/steamcl-restricted missing"
@@ -186,36 +211,36 @@ if mount -o ro "${DEV[NOVADECK-ESP]}" "$T/esp" 2>/dev/null; then
   # B.conf is what makes steamcl offer B as a boot candidate. On a fresh install slot B holds
   # nothing, so a B.conf here points the bootloader at an empty partition.
   if [ "${NOVADECK_SLOT_B:-0}" = 1 ]; then
-    [ -s "$T/esp/SteamOS/conf/B.conf" ] && ok "B.conf present (slot B is populated)" \
+    [ -s "$esp/SteamOS/conf/B.conf" ] && ok "B.conf present (slot B is populated)" \
                                         || bad "B.conf missing though slot B is populated"
   else
-    [ -e "$T/esp/SteamOS/conf/B.conf" ] \
+    [ -e "$esp/SteamOS/conf/B.conf" ] \
       && bad "B.conf present with an empty slot B -- steamcl would offer B as a boot candidate" \
       || ok "no B.conf (empty slot B is not a boot candidate)"
   fi
 
-  grep -aq "GRUB Environment Block" "$T/esp/EFI/steamos/grubenv" \
+  grep -aq "GRUB Environment Block" "$esp/EFI/steamos/grubenv" \
     && ok "grubenv is a valid GRUB env block" || bad "grubenv has no GRUB magic header"
 
   # A.conf must be armed for a first boot: a stamp to order it against B, and a clean attempt
   # count. `boot-attempts` non-zero here would mean the slot arrives already part-way through its
   # trial, with fewer tries than it is owed.
-  a_stamp="$(sed -n 's/^boot-requested-at: *//p' "$T/esp/SteamOS/conf/A.conf" | head -1)"
+  a_stamp="$(sed -n 's/^boot-requested-at: *//p' "$esp/SteamOS/conf/A.conf" | head -1)"
   case "$a_stamp" in
     [0-9]*) ok "A.conf boot-requested-at = $a_stamp" ;;
     *)      bad "A.conf has no valid boot-requested-at (got '${a_stamp:-<none>}')" ;;
   esac
   for k in boot-attempts image-invalid; do
-    v="$(sed -n "s/^$k: *//p" "$T/esp/SteamOS/conf/A.conf" | head -1)"
+    v="$(sed -n "s/^$k: *//p" "$esp/SteamOS/conf/A.conf" | head -1)"
     [ "$v" = 0 ] && ok "A.conf $k = 0" || bad "A.conf $k = '${v:-<none>}', expected 0"
   done
 
   for junk in /KERNEL /NOVADECK; do
-    [ -e "$T/esp$junk" ] && bad "$junk present on a Phase 5 ESP" || ok "no $junk"
+    [ -e "$esp$junk" ] && bad "$junk present on a Phase 5 ESP" || ok "no $junk"
   done
-  umount "$T/esp"
+  release_fs
 else
-  bad "cannot mount the ESP read-only"
+  bad "cannot read the ESP"
 fi
 
 # --- 5. efi-A (stage 2) --------------------------------------------------------------------------
@@ -226,29 +251,29 @@ fi
 # thing telling stage 2 where anything is. A map that disagrees with the disk it sits on is a boot
 # failure with no diagnostic, on a device with no serial console.
 echo "  4. efi-A (stage 2)"
-mkdir -p "$T/efi"
-if mount -o ro "${DEV[novadeck-efi-A]}" "$T/efi" 2>/dev/null; then
+if use_fs "${DEV[novadeck-efi-A]}" "$T/efi"; then
+  efi="$USE_PATH"
   for f in /EFI/steamos/grubaa64.efi /EFI/steamos/grub.cfg \
            /EFI/steamos/fonts/dejavu-mono.pf2 /EFI/steamos/parts.env; do
-    [ -s "$T/efi$f" ] && ok "$f present" || bad "$f missing or empty"
+    [ -s "$efi$f" ] && ok "$f present" || bad "$f missing or empty"
   done
-  grep -aq "GRUB Environment Block" "$T/efi/EFI/steamos/parts.env" \
+  grep -aq "GRUB Environment Block" "$efi/EFI/steamos/parts.env" \
     && ok "parts.env is a valid GRUB env block" || bad "parts.env has no GRUB magic header"
   for kv in "nd_esp=${IDX[NOVADECK-ESP]}"     "nd_efi_a=${IDX[novadeck-efi-A]}" \
             "nd_efi_b=${IDX[novadeck-efi-B]}" "nd_root_a=${IDX[novadeck-root-A]}" \
             "nd_root_b=${IDX[novadeck-root-B]}" "nd_var_a=${IDX[novadeck-var-A]}" \
             "nd_var_b=${IDX[novadeck-var-B]}"   "nd_home=${IDX[novadeck-home]}"; do
-    grep -aqx -- "$kv" "$T/efi/EFI/steamos/parts.env" \
+    grep -aqx -- "$kv" "$efi/EFI/steamos/parts.env" \
       && ok "parts.env $kv" \
       || bad "parts.env does not carry $kv -- the map disagrees with the GPT it sits on"
   done
   # steamos-bootconf errors and EXITS without these, so their absence is not cosmetic.
   for s in A B all other self shared; do
-    [ -e "$T/efi/SteamOS/partsets/$s" ] && ok "partsets/$s present" || bad "partsets/$s missing"
+    [ -e "$efi/SteamOS/partsets/$s" ] && ok "partsets/$s present" || bad "partsets/$s missing"
   done
-  umount "$T/efi"
+  release_fs
 else
-  bad "cannot mount efi-A read-only"
+  bad "cannot read efi-A"
 fi
 
 # --- 6. the other OS ------------------------------------------------------------------------------

@@ -142,6 +142,144 @@ def gather_preflight():
     }
 
 
+# =================================================================================================
+# the network screen — §4b's table, and nothing else
+# =================================================================================================
+# DIAGNOSIS ONLY. There is no SSID picker and no on-screen keyboard: §4b moved credentials to a
+# file on the installer's ESP because this device has no keyboard and no guaranteed touchscreen, so
+# the only thing a screen can usefully do here is say WHICH failure this is. Each row of §4b's
+# table has a different fix, and getting it wrong costs the user a power-off, a card pulled, an
+# edit on another computer and a reboot. That price is why "network failed" is not an option.
+#
+# The words are here and the facts are in install/netcfg, the same split the consent gate uses.
+NETCFG = os.environ.get("NOVADECK_NETCFG", "/usr/lib/novadeck/install/netcfg")
+
+
+def net_diagnose(action="diagnose"):
+    """Run install/netcfg and return its key=value output. A failure is itself a diagnosis."""
+    rc, out = run_tool([NETCFG, action], timeout=180)
+    facts = kv(out)
+    if not facts.get("STATE"):
+        facts = {"STATE": "netcfg-failed", "DETAIL": out.strip().splitlines()[-1:] and
+                 out.strip().splitlines()[-1] or "netcfg produced no diagnosis (rc=%d)" % rc}
+    return facts
+
+
+class NetworkScreen:
+    """
+    §4b's table, one state at a time, with the SSID quoted back.
+
+    `need-join` is the confirm-before-connecting state, and it is deliberately a plain button press
+    rather than the §4d sequence: nothing destructive happens here. Its job is the STALE FILE — a
+    card round-tripped through an earlier install names an SSID the user recognises as wrong, and
+    they see it before a failed attempt rather than after one.
+    """
+
+    name = "network"
+
+    # state -> (title, what happened, what the user does about it)
+    TABLE = {
+        "no-conf": (
+            "No Wi-Fi settings on this card",
+            "The installer downloads NovaDeck over the network, and it found no {path} to tell it "
+            "which network to join.",
+            "On another computer, copy wifi.conf.example next to it and fill in SSID and PSK. Or "
+            "plug in a USB-C Ethernet adapter -- that needs no file at all.",
+        ),
+        "unparsable": (
+            "The Wi-Fi settings could not be read",
+            "{path} exists, but {where}.",
+            "Edit it on another computer. Each line is SSID=... or PSK=..., and anything else is "
+            "a comment starting with #.",
+        ),
+        "not-found": (
+            "'{ssid}' was not found",
+            "The installer scanned for the network named in the settings on this card and did not "
+            "see it.",
+            "Check the name for a typo -- it is case-sensitive. A 5 GHz-only access point may "
+            "simply be out of range.",
+        ),
+        "auth-failed": (
+            "'{ssid}' rejected the password",
+            "The network is there and the installer reached it, but the key on this card was not "
+            "accepted.",
+            "Correct PSK= on another computer. Nothing else about the card needs changing.",
+        ),
+        "no-lease": (
+            "'{ssid}' gave out no address",
+            "The installer joined the network, and then waited for an address that never arrived.",
+            "This is the access point, not the installer -- its DHCP is not answering. Try another "
+            "network, or a USB-C Ethernet adapter.",
+        ),
+        "no-host": (
+            "Connected, but the update server is unreachable",
+            "This device has an address, and {url} does not answer.",
+            "This is upstream or DNS, not the installer. Check the connection on another device on "
+            "the same network.",
+        ),
+        "netcfg-failed": (
+            "The network could not be checked",
+            "The installer's own network helper did not answer: {detail}",
+            "Report this. The installer will not continue without knowing the network is up.",
+        ),
+    }
+
+    def __init__(self, facts):
+        self.facts = facts
+        self.result = None      # ("join",) | ("retry",) | ("continue",) | ("quit",)
+
+    def state(self):
+        return self.facts.get("STATE", "netcfg-failed")
+
+    def handle(self, token):
+        if token in (TOKEN_BACK, TOKEN_QUIT):
+            self.result = ("quit",)
+        elif token == "S":
+            st = self.state()
+            self.result = ("join",) if st == "need-join" else \
+                          ("continue",) if st == "online" else ("retry",)
+
+    def describe(self):
+        f, st = self.facts, self.state()
+        ssid = f.get("SSID", "?")
+        if st == "online":
+            blocks = [("Network is up", f.get("DETAIL", "The installer can reach the update "
+                                                        "server."))]
+            title, buttons = "Connected", [{"pos": "S", "label": "Continue"}]
+        elif st == "need-join":
+            title = "Join '%s'?" % ssid
+            blocks = [
+                ("The settings on this card name this network",
+                 "The installer will connect to '%s' using the password stored on the card. The "
+                 "password itself is never shown." % ssid),
+                ("If that is not your network",
+                 "Cancel, power off, and edit novadeck/wifi.conf on another computer. A card used "
+                 "for an earlier install can still be carrying its old network."),
+            ]
+            buttons = [{"pos": "S", "label": "Join"}, {"pos": "SELECT", "label": "Cancel"}]
+        else:
+            title, what, fix = self.TABLE.get(st, self.TABLE["netcfg-failed"])
+            where = "it names no network" if f.get("LINE") == "0" \
+                else "line %s is not something it understands" % f.get("LINE", "?")
+            fmt = {"ssid": ssid, "path": f.get("PATH_", "the settings file"),
+                   "url": f.get("URL", "the update server"), "where": where,
+                   "detail": f.get("DETAIL", "no reason given")}
+            title = title.format(**fmt)
+            blocks = [("What happened", what.format(**fmt)), ("What to do", fix.format(**fmt))]
+            buttons = [{"pos": "S", "label": "Check again"}, {"pos": "SELECT", "label": "Power off"}]
+        return {
+            "screen": "network",
+            "state": st,
+            "title": title,
+            "blocks": blocks,
+            "diamonds": [],
+            "prompt": "",
+            "note": "Nothing has been written to this device.",
+            "buttons": buttons,
+            "abort": "",
+        }
+
+
 class PreflightScreen:
     """
     The last screen before the consent gate, and the only one with a knob on it.

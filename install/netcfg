@@ -1,0 +1,159 @@
+#!/usr/bin/env bash
+# novadeck internal install — §4b's NETWORK DIAGNOSIS. Phase 4b/5 of
+# .claude/plans/internal-install.plan.md.
+#
+#   netcfg diagnose      read-only: which of §4b's states is this machine in?
+#   netcfg join          attempt to join the network wifi.conf names, then diagnose
+#
+# IT EMITS key=value AND NO PROSE, exactly as the consent gate's facts file does, and for the same
+# reason: the words belong to whatever is drawing the screen, the facts belong here. install/uiflow
+# turns STATE= into a sentence and a fix; a terminal caller can read the same line.
+#
+# WHY EACH STATE IS SEPARATE, and why "network failed" is not acceptable. This is a network-only
+# installer with NO on-device credential entry (§4b, 2026-08-05): no keyboard is guaranteed, no
+# touchscreen is guaranteed, so the SSID and PSK arrive as `novadeck/wifi.conf` on the installer's
+# own ESP, written from the user's PC before booting. A wrong file therefore costs a power-off,
+# pulling the card, editing it on another computer and rebooting. Every one of the states below has
+# a DIFFERENT fix, and a user who is told only "network failed" has to guess which -- at that
+# price per guess. The table in §4b is the acceptance criterion for this file.
+#
+# THE PSK IS NEVER PRINTED, not even in a debug line. It is plaintext on a FAT partition the user
+# controls, it never reaches the installed system, and it must not reach the install log either.
+set -uo pipefail
+
+PROG=${0##*/}
+log() { printf '[%s] %s\n' "$PROG" "$*" >&2; }
+
+# Test seams, in the spirit of the rest of install/: install/test-netcfg.sh executes THIS file with
+# every tool stubbed and every path redirected. What runs under test is the artifact that ships.
+WIFI_CONF=${NOVADECK_WIFI_CONF:-/esp/novadeck/wifi.conf}
+OTA_URL=${NOVADECK_OTA_URL:-https://ota.novadeck.org}
+NMCLI=${NMCLI:-nmcli}
+CURL=${CURL:-curl}
+IP=${IP:-ip}
+CONNECT_TIMEOUT=${NOVADECK_NET_TIMEOUT:-20}
+
+emit() { printf '%s=%s\n' "$1" "$2"; }
+
+# --- the individual questions ---------------------------------------------------------------------
+have_lease() {
+  # Any global-scope v4 address on any interface. Deliberately not "is wlan0 up": a USB-C Ethernet
+  # adapter is the zero-config path (§4b) and NetworkManager brings it up with no file at all, so
+  # the wired case must satisfy this without ever looking at wifi.conf.
+  [ -n "$("$IP" -4 addr show scope global 2>/dev/null | grep -c 'inet ' | tr -d ' \n')" ] \
+    && "$IP" -4 addr show scope global 2>/dev/null | grep -q 'inet '
+}
+
+host_reachable() {
+  # The OTA host specifically, not "the internet". A lease behind a captive portal or a DNS that
+  # cannot resolve our host is a different fix from a dead AP, and the user is told which.
+  "$CURL" -fsS --max-time "$CONNECT_TIMEOUT" -o /dev/null "$OTA_URL/" 2>/dev/null
+}
+
+# --- wifi.conf ------------------------------------------------------------------------------------
+# Parsed strictly, and the LINE NUMBER of the first offending line is reported: "present but
+# unparseable" with no location is the same unhelpful answer as "network failed", one level down.
+SSID=""; PSK=""; BAD_LINE=""
+parse_conf() {
+  local n=0 line key val
+  SSID=""; PSK=""; BAD_LINE=""
+  while IFS= read -r line || [ -n "$line" ]; do
+    n=$((n + 1))
+    case "$line" in ''|'#'*) continue ;; esac
+    case "$line" in
+      *=*) key=${line%%=*}; val=${line#*=} ;;
+      *)   BAD_LINE=$n; return 1 ;;
+    esac
+    # Trim surrounding quotes the way a user who copied dev.env would have written them.
+    val=${val#[\"\']}; val=${val%[\"\']}
+    case "$(printf '%s' "$key" | tr -d '[:space:]')" in
+      SSID|NOVADECK_WIFI_SSID) SSID=$val ;;
+      PSK|PASSWORD|NOVADECK_WIFI_PSK) PSK=$val ;;
+      *) BAD_LINE=$n; return 1 ;;
+    esac
+  done <"$WIFI_CONF"
+  [ -n "$SSID" ] || { BAD_LINE=0; return 1; }   # 0 = the file parsed but names no SSID
+  return 0
+}
+
+# --- the diagnosis ----------------------------------------------------------------------------------
+# ORDER IS THE DESIGN. Connectivity is checked BEFORE wifi.conf is even looked for, so a device on
+# USB-C Ethernet never sees a word about a file it does not need; and the SSID is checked against
+# the scan before a join is attempted, so "typo" and "wrong PSK" stay distinguishable.
+diagnose() {  # <joined?>
+  local joined="${1:-0}"
+
+  if have_lease; then
+    if host_reachable; then
+      emit STATE online
+      emit DETAIL "the installer can reach $OTA_URL"
+      return 0
+    fi
+    emit STATE no-host
+    emit URL "$OTA_URL"
+    emit DETAIL "an address is held, but $OTA_URL does not answer"
+    return 0
+  fi
+
+  if [ ! -r "$WIFI_CONF" ]; then
+    emit STATE no-conf
+    emit PATH_ "$WIFI_CONF"
+    return 0
+  fi
+  if ! parse_conf; then
+    emit STATE unparsable
+    emit PATH_ "$WIFI_CONF"
+    emit LINE "$BAD_LINE"
+    return 0
+  fi
+  emit SSID "$SSID"
+
+  if [ "$joined" = 0 ]; then
+    # Nothing has been attempted yet: this is the confirm-before-connecting state §4b asks for.
+    # Its job is the STALE FILE -- a card round-tripped through an earlier install, or edited for
+    # another network, names an SSID the user recognises as wrong BEFORE a failed attempt.
+    emit STATE need-join
+    return 0
+  fi
+
+  if ! "$NMCLI" -t -f SSID device wifi list --rescan yes 2>/dev/null | grep -qxF "$SSID"; then
+    emit STATE not-found
+    return 0
+  fi
+  emit STATE no-lease
+  emit DETAIL "associated with the network, but no address was offered"
+}
+
+join() {
+  if ! [ -r "$WIFI_CONF" ] || ! parse_conf; then
+    diagnose 0
+    return 0
+  fi
+  emit SSID "$SSID"
+  # The one place the PSK is used, and it is passed as an argument to nmcli and nowhere else. Its
+  # value is never logged, never emitted and never written.
+  if "$NMCLI" device wifi connect "$SSID" password "$PSK" >/dev/null 2>"$TMP_ERR"; then
+    diagnose 1
+    return 0
+  fi
+  # nmcli says which of the two failures this is, and they have different fixes: a wrong PSK is
+  # retyped, an absent SSID is a typo or an AP out of range.
+  if grep -qiE 'secrets were required|password|encryption key' "$TMP_ERR" 2>/dev/null; then
+    emit STATE auth-failed
+    emit DETAIL "the network rejected the key in $WIFI_CONF"
+    return 0
+  fi
+  if ! "$NMCLI" -t -f SSID device wifi list --rescan yes 2>/dev/null | grep -qxF "$SSID"; then
+    emit STATE not-found
+    return 0
+  fi
+  diagnose 1
+}
+
+TMP_ERR="$(mktemp)"; trap 'rm -f "$TMP_ERR"' EXIT
+
+case "${1:-diagnose}" in
+  diagnose) diagnose 0 ;;
+  join)     join ;;
+  *) log "usage: $PROG [diagnose|join]"; exit 2 ;;
+esac

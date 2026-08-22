@@ -44,9 +44,6 @@ def log(msg):
 
 
 # =================================================================================================
-# input sources
-# =================================================================================================
-# =================================================================================================
 # is there anything to answer with? — §4d
 # =================================================================================================
 # "If neither a controller nor a keyboard is present, the installer STOPS and says so. There is no
@@ -111,6 +108,9 @@ def typing_keyboard_present(path=None):
     return False
 
 
+# =================================================================================================
+# input sources
+# =================================================================================================
 class ScriptedInput:
     """
     A file of tokens, one per line, consumed one per frame. The headless seam.
@@ -129,8 +129,12 @@ class ScriptedInput:
 
     def poll(self, screen):
         # Nothing is pressed at a screen that asks for nothing. Without this the scripted presses
-        # would be spent before the spine has even connected, since the UI is started first.
-        if screen.name == "idle" or self.i >= len(self.tokens):
+        # are spent before the spine has even connected, since the UI is started first -- and the
+        # run then ends early, which looks exactly like a UI that crashed.
+        #
+        # Asked as a PROPERTY of the screen rather than by name: a name list is a list somebody
+        # forgets to extend, and both times this loop grew a screen that is what happened.
+        if not getattr(screen, "interactive", True) or self.i >= len(self.tokens):
             return []
         tok = self.tokens[self.i]
         self.i += 1

@@ -45,7 +45,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from uipad import (                                                            # noqa: E402
     CARDINALS, CARDINAL_NAME, NullView, PadInput, ScriptedInput, TOKEN_BACK, TOKEN_QUIT, log)
 from uiflow import (                                                           # noqa: E402
-    PreflightScreen, ProgressScreen, SpineRun, gather_preflight)
+    NetworkScreen, PreflightScreen, ProgressScreen, SpineRun, gather_preflight, net_diagnose)
 
 SOCK_PATH = os.environ.get("NOVADECK_UI_SOCK", "/run/novadeck/installer-ui.sock")
 # A file of one token per line drives the UI instead of a pad, and selects the null view. This is
@@ -239,6 +239,9 @@ class NoInputScreen:
     """
 
     name = "no-input"
+    # There is nothing to press it with, by definition -- so a scripted run must not spend a press
+    # here either.
+    interactive = False
 
     def handle(self, token):
         pass
@@ -267,6 +270,7 @@ class IdleScreen:
     """What is on the panel when nothing has asked for the screen yet."""
 
     name = "idle"
+    interactive = False          # it asks for nothing, so nothing is pressed at it
 
     def handle(self, token):
         pass
@@ -454,6 +458,19 @@ def run(server, view, source, base, deadline=0):
             if screen.name == "consent":
                 server.answer({"abort": True} if result[0] == "abort" else {"answer": result[1]})
                 stack.pop()                          # back to whatever asked -- usually progress
+            elif result[0] in ("join", "retry"):
+                # The only two buttons the network screen has. `join` is the one that touches
+                # NetworkManager; both end in a fresh diagnosis, because the state after an attempt
+                # is the only thing worth showing.
+                log("network: %s" % result[0])
+                stack[-1] = NetworkScreen(net_diagnose("join" if result[0] == "join" else
+                                                       "diagnose"))
+            elif result[0] == "continue":
+                # The network is up, so the pre-flight facts can finally be gathered -- they need
+                # nothing from the network themselves, but there is no point drawing a disk the
+                # installer cannot then fetch a bundle for.
+                facts = gather_preflight()
+                stack[-1] = PreflightScreen(facts) if facts else IdleScreen()
             elif result[0] == "start":
                 spine = SpineRun(result[1], server.path)
                 stack.append(ProgressScreen(spine))
@@ -461,8 +478,12 @@ def run(server, view, source, base, deadline=0):
                 return 0
             break
 
+        # A scripted run is over when its tokens are spent and nothing is still owed an answer.
+        # Deliberately NOT keyed on which screen is up: a screen this condition forgot to name is a
+        # suite that hangs until the deadline, which is how adding the network screen announced
+        # itself.
         if isinstance(source, ScriptedInput) and source.i >= len(source.tokens) \
-                and server.pending is None and spine is None and screen.name in ("idle", "progress"):
+                and server.pending is None and spine is None:
             return 0
         if deadline and time.monotonic() - started > deadline:
             log("gave up waiting after %ds" % deadline)
@@ -486,8 +507,24 @@ def main(argv):
     # NO TARGET IS NOT AN ERROR. The UI is also started on a machine where the spine is being driven
     # over SSH (that is how Phase 4 was hardware-gated), and there its whole job is to render consent
     # when the shim asks. It says so in the journal and waits.
+    # NO TARGET, NO OPINION ABOUT THE NETWORK. Both checks are read-only, and the order between
+    # them is a UX decision rather than a technical one: a machine with nothing to install onto is
+    # one where this UI is only a consent renderer (that is how Phase 4 is hardware-gated, with the
+    # spine driven over SSH), and greeting that operator with a Wi-Fi error would be answering a
+    # question nobody asked.
+    #
+    # WHEN THERE IS A TARGET, THE NETWORK IS THE FIRST THING SHOWN, because §4b's failures are the
+    # ones a user cannot fix in place: a wrong wifi.conf costs a power-off, a pulled card, an edit
+    # on another computer and a reboot. Finding that out after the pre-flight screen has raised
+    # expectations is worse than finding it out at second zero. A machine already online (USB-C
+    # Ethernet, §4b's zero-config path) never sees the screen at all.
     facts = gather_preflight()
-    base = PreflightScreen(facts) if facts else IdleScreen()
+    if facts is None:
+        base = IdleScreen()
+    else:
+        net = net_diagnose()
+        log("network: %s" % net.get("STATE", "?"))
+        base = PreflightScreen(facts) if net.get("STATE") == "online" else NetworkScreen(net)
     try:
         return run(server, view, source, base,
                    deadline=float(os.environ.get("NOVADECK_UI_DEADLINE", "0")))

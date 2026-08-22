@@ -263,6 +263,143 @@ printf '%s' "$a" | grep -q 'your game library is safe' \
   || bad "the reassurance was lost on the disk where it is true"
 
 # =================================================================================================
+# §4b: the network table -- every row has a different fix
+# =================================================================================================
+# A generic "network failed" is not acceptable here and this is why: there is NO on-device
+# credential entry, so the fix for every row below costs a power-off, a pulled card, an edit on
+# another computer and a reboot. A user told only "it failed" pays that price per guess.
+NETCFG="$ROOT/install/netcfg"
+[ -x "$NETCFG" ] || { echo "no netcfg: $NETCFG" >&2; exit 1; }
+# $T/bin is shared with the sections below, and this is the FIRST of them to write into it -- the
+# stubs silently did not exist when it was not created here, so the real ip/curl ran and every
+# diagnosis came back as whatever this build host's network happens to be.
+mkdir -p "$T/net" "$T/bin"
+
+# The stubs. Each case sets NET_* to steer them, and they record nothing the PSK could leak into.
+cat >"$T/bin/ip" <<'EOF'
+#!/usr/bin/env bash
+[ "${NET_LEASE:-0}" = 1 ] && echo "    inet 192.168.1.50/24 scope global wlan0"
+exit 0
+EOF
+cat >"$T/bin/curl" <<'EOF'
+#!/usr/bin/env bash
+exit "${NET_HOST_RC:-0}"
+EOF
+cat >"$T/bin/nmcli" <<'EOF'
+#!/usr/bin/env bash
+case "$*" in
+  *"device wifi list"*) [ "${NET_SCAN_HIT:-1}" = 1 ] && printf '%s\n' "${NET_SSID:-home-wifi}"; exit 0 ;;
+  *"device wifi connect"*)
+     # The PSK must never be echoed, logged or recorded. This stub asserts that by never seeing it.
+     [ "${NET_JOIN_RC:-0}" = 0 ] && exit 0
+     printf 'Error: Secrets were required, but not provided.\n' >&2; exit 4 ;;
+esac
+exit 0
+EOF
+chmod +x "$T/bin"/*
+
+netcfg() {  # <mode> -- prints netcfg's key=value output
+  PATH="$T/bin:$PATH" NOVADECK_WIFI_CONF="${CONF-$T/net/wifi.conf}" \
+    NOVADECK_OTA_URL="https://ota.example" NOVADECK_NET_TIMEOUT=1 \
+    "$NETCFG" "${1:-diagnose}" 2>/dev/null
+}
+state() { printf '%s\n' "$1" | sed -n 's/^STATE=//p'; }
+
+printf 'SSID=home-wifi\nPSK=hunter2\n' >"$T/net/wifi.conf"
+
+CASE="§4b: netcfg names which failure this is"
+NET_LEASE=1 NET_HOST_RC=0; export NET_LEASE NET_HOST_RC
+[ "$(state "$(netcfg)")" = online ] \
+  && ok "a lease plus a reachable update server is 'online' -- and it never looks at wifi.conf" \
+  || bad "a working network was not reported as online"
+NET_HOST_RC=7
+[ "$(state "$(netcfg)")" = no-host ] \
+  && ok "a lease with an unreachable server is 'no-host', not a Wi-Fi problem" \
+  || bad "an unreachable server was misdiagnosed"
+NET_LEASE=0 NET_HOST_RC=0
+CONF="$T/net/absent.conf" ; [ "$(state "$(netcfg)")" = no-conf ] \
+  && ok "no wifi.conf on the card is its own state, with the path quoted" \
+  || bad "a missing wifi.conf was not diagnosed"
+unset CONF
+printf 'SSID=home-wifi\nthis is not a setting\n' >"$T/net/bad.conf"
+out="$(CONF="$T/net/bad.conf" netcfg)"
+[ "$(state "$out")" = unparsable ] && printf '%s' "$out" | grep -qx 'LINE=2' \
+  && ok "an unparseable file reports the OFFENDING LINE -- 'unparseable' alone is the same dead end" \
+  || bad "the bad line was not located: $out"
+[ "$(state "$(netcfg join)")" = no-lease ] \
+  && ok "associated but no address is the access point's DHCP, not ours" \
+  || bad "a missing lease was misdiagnosed"
+NET_JOIN_RC=4; export NET_JOIN_RC
+[ "$(state "$(netcfg join)")" = auth-failed ] \
+  && ok "a rejected key is 'auth-failed' -- the fix is the PSK and nothing else" \
+  || bad "a wrong PSK was not diagnosed"
+unset NET_JOIN_RC
+NET_SCAN_HIT=0; export NET_SCAN_HIT
+[ "$(state "$(netcfg join)")" = not-found ] \
+  && ok "an SSID missing from the scan is a typo or an AP out of range, not a bad password" \
+  || bad "a missing SSID was not diagnosed"
+unset NET_SCAN_HIT
+[ "$(state "$(netcfg)")" = need-join ] \
+  && ok "and before any attempt it asks -- the stale-file case §4b wants caught" \
+  || bad "it joined without confirming"
+# The one thing that must never appear anywhere in the output.
+netcfg join | grep -q 'hunter2' \
+  && bad "the PSK was printed" \
+  || ok "the PSK appears in no state, on any path"
+unset NET_LEASE NET_HOST_RC
+
+CASE="§4b: the screen turns each state into a different fix"
+netscreen() {  # <key=value...>
+  FACTS="$1" python3 -c '
+import importlib.util, json, os, sys
+sys.path.insert(0, os.path.join(os.environ["ROOT"], "install"))
+import uiflow
+s = uiflow.NetworkScreen(uiflow.kv(os.environ["FACTS"].replace(";", "\n")))
+print(json.dumps(s.describe()))'
+}
+n="$(netscreen 'STATE=no-conf;PATH_=/esp/novadeck/wifi.conf')"
+printf '%s' "$n" | grep -q 'wifi.conf.example' \
+  && ok "no-conf points at the example file that is on the card for exactly this" \
+  || bad "no-conf does not say how to create the file"
+printf '%s' "$n" | grep -qi 'Ethernet' \
+  && ok "and names the adapter path that needs no file at all" \
+  || bad "no-conf hides the zero-config alternative"
+n="$(netscreen 'STATE=unparsable;PATH_=/esp/novadeck/wifi.conf;LINE=2')"
+printf '%s' "$n" | grep -q 'line 2' \
+  && ok "unparsable quotes the line number the user has to go and look at" \
+  || bad "the line number is not on the screen"
+n="$(netscreen 'STATE=auth-failed;SSID=home-wifi')"
+printf '%s' "$n" | grep -q "home-wifi" \
+  && ok "auth-failed quotes the SSID back" \
+  || bad "the SSID is not quoted back"
+printf '%s' "$n" | grep -qi 'PSK' \
+  && ok "and names the one field to change" \
+  || bad "it does not say what to fix"
+n="$(netscreen 'STATE=no-lease;SSID=home-wifi')"
+printf '%s' "$n" | grep -qi 'not the installer\|access point' \
+  && ok "no-lease says the problem is the access point, so the user stops debugging us" \
+  || bad "no-lease blames nobody"
+n="$(netscreen 'STATE=need-join;SSID=home-wifi')"
+printf '%s' "$n" | grep -q 'Join' \
+  && ok "need-join offers a plain button press -- nothing destructive happens here" \
+  || bad "the join confirmation has no join button"
+printf '%s' "$n" | grep -qi 'never shown' \
+  && ok "and says the password is never displayed" \
+  || bad "it does not reassure about the PSK"
+printf '%s' "$n" | grep -qi 'earlier install' \
+  && ok "naming the stale-card case that is the whole reason this screen exists" \
+  || bad "the stale-file case is not mentioned"
+# Every state must produce a fix, or the table has a hole in it.
+for st in no-conf unparsable not-found auth-failed no-lease no-host netcfg-failed; do
+  if [ "$(netscreen "STATE=$st;SSID=x;LINE=1" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(len(d["blocks"]))')" = 2 ]; then
+    :
+  else
+    bad "$st does not render both what happened and what to do"
+  fi
+done
+ok "every state in the table renders both what happened and what to do"
+
+# =================================================================================================
 # §4d: no controller and no keyboard -> stop
 # =================================================================================================
 # Both fixtures are shaped like the real file, and both traps in them were measured on a device:

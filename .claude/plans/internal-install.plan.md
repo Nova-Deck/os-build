@@ -139,11 +139,29 @@ wins. The ESP partition itself, its `grubenv`, the partsets and `A.conf` can all
 earlier — it is that one file that flips the device over.
 6. **LUN enumeration stability across boots** — if `/dev/sdX` is not stable, target
    selection must key on `wwid`/LUN, not the kernel name.
-7. **gamescope without a logind session.** The main image gets an active `seat0` via SDDM
-   autologin, and `[[sm8650-gamescope-session-plumbing]]` says gamescope MUST use the libseat
-   logind backend there. The installer has no user session — confirm gamescope comes up as
-   root over `seatd` (already in `PKGS`) or `LIBSEAT_BACKEND=builtin`, on-panel, with
-   `--use-rotation-shader`. Blocks Phase 5.
+7. **gamescope without a logind session — MOSTLY ANSWERED ALREADY, by Phase 2 (2026-08-22).**
+   The main image gets an active `seat0` via SDDM autologin, and
+   `[[sm8650-gamescope-session-plumbing]]` says gamescope MUST use the libseat logind backend
+   *there*. The installer has no user session, and that case is exactly what bring-up Phase 2 ran:
+   `docs/bringup-phase2.md` gate 1b — **gamescope as root via `seatd-launch`**, no logind session,
+   `/dev/dri/card0` open, DSI-1 at native `1440x2560@60`, first modeset commit scanning out — and
+   gate 1c, `--use-rotation-shader` putting vkcube upright on the panel. Line 117 states the design
+   outright: *"runs as root via seatd-launch (the deck-user/logind-seat model is a later phase)"*.
+   - **`LIBSEAT_BACKEND=builtin` IS NOT AN OPTION — do not spend a hardware slot on it.** Gate 1b
+     records why `seatd-launch` is there at all: the libseat we ship **has no `builtin` backend**.
+     (And in the *main* image the rule is the opposite of forcing anything: `novadeck-session`
+     must not set `LIBSEAT_BACKEND`/`SEATD_SOCK`, or libseat prefers seatd, gamescope grabs the VT
+     behind logind's back and stock polkit's `allow_active` stops authorizing Wi-Fi.)
+   - **Two unit bugs are already paid for, and the installer's unit inherits both** — same file,
+     "a system service is NOT an interactive SSH run": do **not** bind the unit to a VT
+     (`TTYPath=/dev/tty1` + `StandardInput=tty` made gamescope exit 0 at boot, because seatd's
+     VT-bound seat activates a VT itself); and **`seatd-launch` leaks `/run/seatd.sock`** on unclean
+     exit, so the next start fails "Socket file found … refusing to start" — fatal under
+     `Restart=on-failure`, and an installer is a thing people re-run after a crash. Clear a stale
+     socket before launch, as `novadeck-session` does.
+   - **What is genuinely still open** is therefore narrow: the same path as a **systemd unit in the
+     installer image** (Phase 2 ran it by hand over SSH, deliberately not as a unit) and the pad
+     half below.
 
    **And in the same run, confirm the pad enumerates.** §4d takes *consent* on the pad and §5 has
    no text entry to fall back to, so input is load-bearing beyond the GUI. **The installer ships
@@ -1832,6 +1850,26 @@ Consequences:
 after `novadeck-installer-gamescope.service`, and it drives `install/novadeck-install` rather
 than reimplementing it — the orchestrator stays the testable spine and the GUI is a view.
 
+**FOUR FILES, and the split is the doctrine made physical** (2026-08-22 — one file had reached 914
+lines, past this repo's 800 ceiling):
+
+| file | what it owns | imports pygame |
+|---|---|---|
+| `install/ui` | the loop, the screen **stack**, the consent socket, `ConsentScreen` | never |
+| `install/uipad.py` | the button vocabulary, the SDL mapping, the input sources | never |
+| `install/uiflow.py` | pre-flight, the spine as a child process, progress | never |
+| `install/uiview.py` | pixels, and nothing else | **the only one**, inside the view |
+
+`install/ui` loads `uiview` inside `build_io()`, i.e. only once something has decided to open a
+display, and the suite asserts all of that: the state machine cannot reach pygame, so every screen
+is drivable on a build host with no SDL, no panel and no pad. The three model files find each other
+by directory (`sys.path.insert(…dirname(__file__))`), which works when `ui` is executed, when the
+suite loads it as a module from the repo root, and when Phase 6 installs the set into
+`/usr/lib/novadeck/install/`.
+
+**The screen stack, not a screen variable**: the consent request arrives *while the progress screen
+is up* and has to hand the screen back when answered — the install is still running underneath it.
+
 - **Input**: `SDL_GameController` for the pads; SDL keyboard events mean a USB keyboard works
   for free if one is attached. **No text entry anywhere** — §4b moved Wi-Fi credentials to a file
   on the ESP, so no on-screen keyboard is built. Every screen is navigable with dpad + buttons
@@ -1843,9 +1881,19 @@ than reimplementing it — the orchestrator stays the testable spine and the GUI
 - **Screens**: network status (diagnosis only — the §4b table, no picker) → pre-flight → confirm
   → progress → result. Strictly smaller than the earlier draft: dropping the SSID picker and the
   key grid removes the only two widgets that needed text input.
-- **Pre-flight**: device name (from `fs-overlay/usr/lib/novadeck/devices/`), target disk model
-  and size, the **full list of partitions about to be destroyed**, the new Android `userdata`
-  size (adjusted with left/right, not typed), and the bundle version about to be fetched.
+- **Pre-flight** — **LANDED 2026-08-22** (`uiflow.py`, `PreflightScreen`). Device name (via
+  `/usr/lib/novadeck/device-env`, the runtime source of truth, not the conf files directly), target
+  disk model and size from sysfs, the **full list of partitions about to be destroyed**, the new
+  Android `userdata` size (adjusted with left/right, never typed), and the bundle about to be
+  fetched. It refuses to start with no bundle configured rather than inventing a default.
+  - **The destroy list comes from `carve.sh plan`, which now emits one `DESTROY=<idx> <name>
+    <fate>` line per partition it will destroy.** The UI reading the table and applying its own
+    idea of which partitions are ours would be a second copy of a rule that has already drifted
+    once and cost a hardware run. `test-carve.sh` asserts a stock disk loses exactly one (userdata),
+    a disk that already carries our eight loses nine, `/home` is named, and every index on the list
+    exists on the disk (77 → 82 cases).
+  - **Every adjustment re-asks `carve.sh`** rather than interpolating, so the figure beside the
+    knob is always the one that carve would produce for that choice.
 - **Confirm** — **LANDED 2026-08-22**, `install/ui`'s `ConsentScreen` + `install/confirm-ui`,
   33 cases in `install/test-ui.sh` plus 3 end-to-end against the real spine in
   `install/test-install.sh`. The §4d random sequence, the four face buttons drawn **by position**
@@ -1871,14 +1919,29 @@ than reimplementing it — the orchestrator stays the testable spine and the GUI
   - **It fails closed on every transport failure** — no UI, a UI that dies mid-wait, a malformed
     reply, facts naming a screen it cannot render: all non-zero, which the spine reads as an abort.
     "We could not ask" must never look like "they said yes".
-- **Progress**: a bar per phase. The rootfs percentage comes from RAUC's D-Bus `Progress`
-  `(isi)` property — `fs-overlay/usr/bin/novadeck-update` already subscribes to exactly that;
-  reuse its subscription code rather than re-deriving it.
+- **Progress** — **LANDED 2026-08-22** (`uiflow.py`, `SpineRun` + `ProgressScreen`). A bar per
+  phase, and the phases are **the spine's own `step()` markers** rather than a second list that
+  could fall out of step with it.
+  - **The rootfs percentage is read off the spine's pipe, NOT from a D-Bus subscription** —
+    a deliberate departure from this plan's earlier line ("reuse `novadeck-update`'s subscription
+    code"). That is the right call in `novadeck-update`, which talks to the *system* rauc. It is the
+    wrong one here: the rauc the spine drives lives on the **private system bus `rauc-session.sh`
+    starts for the occasion**, so the UI would have to find that bus to subscribe to it. `rauc
+    install` already prints `NN% <message>`, on a pipe the UI is holding anyway — same number, same
+    source, no second bus client in the installer.
+  - **A failure states which of two states the device is in**, which is the one thing a failure
+    owes the user: *"Nothing was written. The device is exactly as it was."* versus *"The disk WAS
+    modified … Android's data is already gone."* The discriminator is whether the `carve` step was
+    ever reached, and both are asserted.
 - **Result**: on success, "Remove the SD card, then press the bottom button to power off" — the
   UI never prints a face-button letter anywhere, for §4d's reason — power-off rather
   than reboot until Phase 0 item 4 answers the ABL scan order. On failure, the error plus an
   accurate statement of which of two states we are in ("nothing was written, the device is
   unchanged" vs "the disk was modified; re-run, or restore the GPT from `<path>`").
+  **LANDED 2026-08-22 as the terminal state of the progress screen, not a fifth screen** — the
+  phase list is what the user was already reading, and a screen swap at the moment of failure
+  throws away the context that says how far it got. The tail of the spine's own output is shown
+  with it. What is still owed here: the actual power-off, which waits on Phase 0 item 4.
 
 ### The fallback path, which is not optional
 

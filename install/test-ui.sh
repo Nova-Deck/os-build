@@ -24,9 +24,11 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 UI="$ROOT/install/ui"
 SHIM="$ROOT/install/confirm-ui"
+VIEW="$ROOT/install/uiview.py"
 for f in "$UI" "$SHIM"; do
   [ -x "$f" ] || { echo "not executable: $f" >&2; exit 1; }
 done
+[ -f "$VIEW" ] || { echo "no view module: $VIEW" >&2; exit 1; }
 
 PASS=0; FAIL=0; CASE=""
 ok()  { PASS=$((PASS+1)); printf '  ok   %s -- %s\n' "$CASE" "$1"; }
@@ -194,14 +196,12 @@ ui_ask "$T/ev-ok2" "$T/facts-bogus" SWNE \
 CASE="ui: the buttons are POSITIONS, and the mapping is the only place a letter exists"
 python3 - <<'PY' && ok "SDL's positional constants map to N/E/S/W at the event boundary" \
                  || bad "the button mapping is not positional"
-import importlib.util, os, sys
-from importlib.machinery import SourceFileLoader
-loader = SourceFileLoader("nvui", os.path.join(os.environ["ROOT"], "install/ui"))
-spec = importlib.util.spec_from_loader("nvui", loader)
-ui = importlib.util.module_from_spec(spec); loader.exec_module(ui)
+import os, sys
+sys.path.insert(0, os.path.join(os.environ["ROOT"], "install"))
+import uipad
 # SDL_CONTROLLER_BUTTON_A/B/X/Y are 0/1/2/3 and are defined by POSITION: bottom, right, left, top.
 want = {0: "S", 1: "E", 2: "W", 3: "N"}
-sys.exit(0 if ui.BUTTON_TO_CARDINAL == want and set(ui.CARDINALS) == {"N","E","S","W"} else 1)
+sys.exit(0 if uipad.BUTTON_TO_CARDINAL == want and set(uipad.CARDINALS) == {"N","E","S","W"} else 1)
 PY
 # The silkscreen differs between boards (`A` is EAST on the Pocket ACE, SOUTH on the Pocket S2), so
 # a button letter must not survive into anything drawn. This reads what describe() actually returns
@@ -262,17 +262,24 @@ printf '%s' "$a" | grep -q 'your game library is safe' \
   || bad "the reassurance was lost on the disk where it is true"
 
 CASE="ui: the model is separable from the view"
-# Everything above ran with no SDL, no display and no pad, which is only true while pygame is
-# imported inside the view. A module-scope import would make the whole suite unrunnable on a build
-# host, and the plan's headless case with it.
-if grep -nE '^import pygame|^from pygame' "$UI"; then
-  bad "pygame is imported at module scope"
+# Everything above ran with no SDL, no display and no pad, and that is only true while the state
+# machine cannot reach pygame at all. The separation is physical: install/ui names pygame nowhere,
+# install/uiview.py is the only file that imports it, and install/ui loads that module inside
+# build_io() -- i.e. only once something has decided to open a display.
+if grep -nE '^[[:space:]]*(import pygame|from pygame)' "$UI"; then
+  bad "install/ui imports pygame"
 else
-  ok "pygame is imported lazily, inside the view"
+  ok "install/ui never imports pygame -- it only ever holds a handle the view gave it"
 fi
-[ "$(grep -c 'import pygame' "$UI")" -eq 1 ] \
-  && ok "and in exactly one place" \
-  || bad "pygame is imported in more than one place"
+[ "$(grep -c 'import pygame' "$VIEW")" -eq 1 ] \
+  && ok "install/uiview.py imports it exactly once" \
+  || bad "uiview.py imports pygame more than once"
+grep -qE '^\s+import pygame' "$VIEW" \
+  && ok "and that import is inside the view class, not at module scope" \
+  || bad "uiview.py imports pygame at module scope"
+grep -q 'import uiview' "$UI" \
+  && ok "install/ui loads the view lazily, in build_io()" \
+  || bad "install/ui does not load the view module"
 
 CASE="ui: the consent socket is root-only"
 printf 'SHOWN\n' >"$T/ev-perm"
@@ -285,6 +292,159 @@ mode="$(stat -c %a "$SOCK" 2>/dev/null)"
   && ok "mode 0600 -- nothing else on the medium has business answering for the user" \
   || bad "the socket is mode $mode"
 kill "$p" 2>/dev/null; wait "$p" 2>/dev/null
+
+# =================================================================================================
+# pre-flight — §5's screen before the gate
+# =================================================================================================
+# Stubs for the three read-only tools the screen derives from. The carve stub RECORDS its calls, so
+# a case can assert the screen re-asks rather than interpolating between answers.
+mkdir -p "$T/bin"
+cat >"$T/bin/select-target.sh" <<'EOF'
+#!/usr/bin/env bash
+printf 'TARGET=/dev/sda\nMODE=fresh\nSECTOR=512\nUD_INDEX=11\nUD_START=100\nUD_END=200\nCEIL=999\n'
+EOF
+cat >"$T/bin/carve.sh" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$CARVE_CALLS"
+printf 'CEIL=999\nNEW_END=500\nNOVADECK_MIB=81920\nNOVADECK_GIB=%s\nREPLACES_OURS=1\n' "$(( 96 - $3 ))"
+printf 'DESTROY=11 userdata data-erased\n'
+printf 'DESTROY=17 novadeck-home replaced\n'
+EOF
+cat >"$T/bin/device-env" <<'EOF'
+#!/usr/bin/env bash
+printf "NOVADECK_DEVICE_NAME='AYANEO Pocket ACE'\nNOVADECK_SOC_CLASS=SM8550\n"
+EOF
+chmod +x "$T/bin"/*
+export CARVE_CALLS="$T/carve-calls"; : >"$CARVE_CALLS"
+
+flow() {  # <python snippet reading `pf` (a PreflightScreen)>
+  NOVADECK_SELECT_TARGET="$T/bin/select-target.sh" NOVADECK_CARVE="$T/bin/carve.sh" \
+  NOVADECK_DEVICE_ENV="$T/bin/device-env" NOVADECK_INSTALL_BUNDLE="${BUNDLE_OVERRIDE-https://x/b.raucb}" \
+  NOVADECK_INSTALL_SEED="${SEED_OVERRIDE-/seed.tar.zst}" SNIPPET="$1" python3 - <<'PY'
+import json, os, sys
+sys.path.insert(0, os.path.join(os.environ["ROOT"], "install"))
+import uiflow
+facts = uiflow.gather_preflight()
+pf = uiflow.PreflightScreen(facts) if facts else None
+exec(os.environ["SNIPPET"])
+PY
+}
+
+CASE="pre-flight: every figure comes from the tool that will act on it"
+out="$(flow 'print(json.dumps(pf.describe()))')"
+printf '%s' "$out" | grep -q 'AYANEO Pocket ACE' \
+  && ok "the board names itself, from device-env rather than from a guess" \
+  || bad "the device name is missing: $out"
+printf '%s' "$out" | grep -q '/dev/sda' \
+  && ok "and the target is the one select-target.sh chose" \
+  || bad "the target is not what select-target returned"
+printf '%s' "$out" | grep -q 'p11' && printf '%s' "$out" | grep -q 'p17' \
+  && ok "the full list of partitions about to be destroyed is on the screen, by index" \
+  || bad "the destroy list is not rendered: $out"
+printf '%s' "$out" | grep -qi 'novadeck-home' \
+  && ok "including /home, which is the one that costs a user their games" \
+  || bad "/home is not named in the destroy list"
+printf '%s' "$out" | grep -qi 'Nothing has been written yet' \
+  && ok "and it says nothing has happened yet, because nothing has" \
+  || bad "the screen does not say the disk is still untouched"
+
+CASE="pre-flight: the size knob re-asks carve.sh, it does not interpolate"
+: >"$CARVE_CALLS"
+out="$(flow '
+pf.handle("RIGHT"); a = pf.describe()
+pf.handle("LEFT"); pf.handle("LEFT"); b = pf.describe()
+print(json.dumps({"gib": pf.gib, "a": a, "b": b}))')"
+[ "$(grep -c . "$CARVE_CALLS")" -ge 4 ] \
+  && ok "every adjustment asks carve.sh again ($(grep -c . "$CARVE_CALLS") calls)" \
+  || bad "the screen adjusted without re-asking carve: $(cat "$CARVE_CALLS")"
+grep -q 'plan /dev/sda 20' "$CARVE_CALLS" && grep -q 'plan /dev/sda 12' "$CARVE_CALLS" \
+  && ok "and it asks about the size it is showing, not the one it started with" \
+  || bad "carve was not asked about the adjusted sizes: $(cat "$CARVE_CALLS")"
+printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d["gib"]==12 else 1)' \
+  && ok "left and right move it by a step each, with a floor under them" \
+  || bad "the adjustment did not land where it should"
+
+CASE="pre-flight: it cannot start an install it has no bundle for"
+out="$(BUNDLE_OVERRIDE= flow 'pf.handle("S"); print(json.dumps({"r": pf.result, "d": pf.describe()}))')"
+printf '%s' "$out" | grep -q '"r": null' \
+  && ok "pressing continue with no bundle configured does nothing at all" \
+  || bad "it started an install with no bundle: $out"
+printf '%s' "$out" | grep -qi 'NO BUNDLE CONFIGURED' \
+  && ok "and the screen says why, rather than looking broken" \
+  || bad "the screen does not explain why it will not start"
+
+# =================================================================================================
+# progress
+# =================================================================================================
+progress() {  # <python snippet with `p` (a ProgressScreen) and `feed(lines)`>
+  SNIPPET="$1" python3 - <<'PY'
+import json, os, sys
+sys.path.insert(0, os.path.join(os.environ["ROOT"], "install"))
+import uiflow
+class FakeRun:
+    tail = ["mkfs.ext4: No such file or directory", "novadeck-install: ERROR: the carve failed"]
+p = uiflow.ProgressScreen(FakeRun())
+def feed(*lines):
+    for l in lines: p.feed(l)
+exec(os.environ["SNIPPET"])
+PY
+}
+
+CASE="progress: the phases are the spine's own step markers"
+out="$(progress '
+feed("[novadeck-install] == recon ==", "[novadeck-install] == carve ==")
+print(json.dumps(p.describe()))')"
+printf '%s' "$out" | python3 -c '
+import json,sys
+rows = json.load(sys.stdin)["rows"]
+active = [r for r in rows if r["state"] == "active"]
+sys.exit(0 if len(active) == 1 and active[0]["label"] == "Repartitioning" else 1)' \
+  && ok "the step the spine last printed is the one shown as running" \
+  || bad "the active phase does not follow the spine: $out"
+out="$(progress '
+feed("[novadeck-install] == root slot ==", "  42% Copying image to rootfs.0")
+print(json.dumps(p.describe()))')"
+printf '%s' "$out" | grep -q '42' \
+  && ok "and rauc's own percentage is read off the same pipe -- no second bus client in the installer" \
+  || bad "the rauc percentage was not picked up: $out"
+out="$(progress '
+feed("[novadeck-install] == recon ==", "  42% something")
+print(json.dumps(p.describe()))')"
+printf '%s' "$out" | python3 -c '
+import json,sys
+rows = json.load(sys.stdin)["rows"]
+sys.exit(0 if all(r["percent"] is None for r in rows if r["state"] != "active") else 1)' \
+  && ok "a percentage belongs to the phase that is running, and to no other" \
+  || bad "a stale percentage leaked onto another phase"
+
+CASE="progress: a failure says WHICH of two states the device is in"
+# The one thing a failure owes the user. "It failed" is not actionable; "nothing was written" and
+# "Android's data is already gone" are different situations and only one needs anything done.
+out="$(progress '
+feed("[novadeck-install] == verify sources ==")
+p.finish(1); print(json.dumps(p.describe()))')"
+printf '%s' "$out" | grep -qi 'Nothing was written' \
+  && ok "a failure before the carve says the device is exactly as it was" \
+  || bad "it does not tell the user the disk is untouched: $out"
+printf '%s' "$out" | grep -qi 'was modified' \
+  && bad "it claims the disk was modified when the carve never ran" \
+  || ok "and it does not claim otherwise"
+out="$(progress '
+feed("[novadeck-install] == carve ==", "[novadeck-install] == filesystems ==")
+p.finish(1); print(json.dumps(p.describe()))')"
+printf '%s' "$out" | grep -qi 'disk WAS modified' \
+  && ok "a failure after the carve says so, and that Android's data is already gone" \
+  || bad "a failure past the carve still claims nothing was written: $out"
+printf '%s' "$out" | grep -q 'the carve failed' \
+  && ok "and it shows the tail of what the spine actually said" \
+  || bad "the error text is not on the screen"
+out="$(progress 'p.finish(0); print(json.dumps(p.describe()))')"
+printf '%s' "$out" | grep -qi 'Remove the SD card' \
+  && ok "success tells the user the one thing they must do next" \
+  || bad "the success screen does not say to remove the card"
+printf '%s' "$out" | grep -qiE '\bpress [ABXY]\b' \
+  && bad "the result screen names a face-button letter" \
+  || ok "and it still names no face-button letter"
 
 printf '\ntest-ui.sh: %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

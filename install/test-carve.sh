@@ -292,6 +292,36 @@ ours_gib="$(printf '%s\n' "$plan_ours" | sed -n 's/^NOVADECK_GIB=//p')"
   && ok "and it matches the stock answer, because deleting our eight restores the same span" \
   || bad "plan disagrees with itself across a carve: $stock_gib then $ours_gib"
 
+CASE="plan names every partition it will destroy, for the pre-flight screen"
+# §5 shows "the full list of partitions about to be destroyed" before anything is written, and the
+# list has to come from the mode that will do the destroying -- the UI applying its own idea of
+# which partitions are ours would be a second copy of a rule that has already drifted once.
+ud_idx="$(rows "$pl" | awk '$4=="userdata" {print $1}')"
+stock_destroy="$(printf '%s\n' "$plan_stock" | grep '^DESTROY=' || true)"
+[ "$(printf '%s\n' "$stock_destroy" | grep -c .)" -eq 1 ] \
+  && ok "a stock disk loses exactly one partition -- there is nothing of ours on it yet" \
+  || bad "a stock disk listed something other than userdata alone: $stock_destroy"
+printf '%s\n' "$stock_destroy" | grep -qx "DESTROY=$ud_idx userdata data-erased" \
+  && ok "and it is userdata, by its real index, marked as losing its data" \
+  || bad "userdata is not the partition named: $stock_destroy"
+ours_destroy="$(printf '%s\n' "$plan_ours" | grep '^DESTROY=' || true)"
+[ "$(printf '%s\n' "$ours_destroy" | grep -c .)" -eq 9 ] \
+  && ok "a disk that already carries our eight loses nine -- userdata and all eight of ours" \
+  || bad "the list on a disk we own is not userdata plus our eight: $ours_destroy"
+printf '%s\n' "$ours_destroy" | grep -q 'novadeck-home replaced' \
+  && ok "and /home is named on it, which is the one a user has to see before consenting" \
+  || bad "/home is missing from the destroy list on a disk we own"
+# Every index it names must actually be on the disk: a list quoting partitions that are not there
+# is worse than no list, because it is read as authoritative.
+missing=0
+while read -r line; do
+  idx="${line#DESTROY=}"; idx="${idx%% *}"
+  rows "$pl" | awk -v i="$idx" '$1 == i {found=1} END {exit !found}' || missing=$((missing+1))
+done < <(printf '%s\n' "$ours_destroy")
+[ "$missing" -eq 0 ] \
+  && ok "and every index on the list exists on the disk right now" \
+  || bad "$missing listed partitions do not exist"
+
 CASE="a resize on a disk that is already ours"
 rz="$(board_img "AYN Odin 2")"
 before="$(foreign "$rz")"

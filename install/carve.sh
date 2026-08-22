@@ -371,6 +371,27 @@ case "$INTENT" in
       printf 'CEIL=%s\nNEW_END=%s\nNOVADECK_MIB=%s\nNOVADECK_GIB=%s\nREPLACES_OURS=%s\n' \
         "$CEIL" "$NEW_END" "$(( WINDOW / PER_MIB ))" "$(( WINDOW / PER_GIB ))" \
         "$([ "$STATE" = fresh ] && printf 0 || printf 1)"
+      # ONE `DESTROY=` LINE PER PARTITION THIS CARVE WILL DESTROY, for §5's pre-flight screen, which
+      # has to show "the full list of partitions about to be destroyed" before anything is written.
+      # It is emitted HERE, by the mode that will perform the carve, for the same reason NOVADECK_GIB
+      # is: the alternative is the UI reading the table and applying its own idea of which partitions
+      # are ours, which is a second copy of a rule that has already drifted once and cost a hardware
+      # run. The list is exactly what the two destructive calls below touch -- recreate_userdata's
+      # target, then everything delete_ours finds.
+      #
+      # Not listed: drop_residue's dead GPT entries. They name no live partition and hold nobody's
+      # data, so putting them on a consent-adjacent screen would pad the list with entries a user
+      # cannot act on.
+      printf 'DESTROY=%s userdata data-erased\n' "$UD_INDEX"
+      # An `if`, not `[ -n "$_idx" ] && printf`: under `set -e` an AND-list whose left side fails is
+      # a failing command, and on a stock disk (where none of our eight exists) every iteration
+      # would take that branch and kill the plan on the first one.
+      for _name in "${OUR_NAMES[@]}"; do
+        _idx="$(index_of "$_name")"
+        if [ -n "$_idx" ]; then
+          printf 'DESTROY=%s %s replaced\n' "$_idx" "$_name"
+        fi
+      done
       exit 0
     fi
 

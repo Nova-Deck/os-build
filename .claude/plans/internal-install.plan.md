@@ -1646,8 +1646,15 @@ something other than what the install will do, and would be a second copy of tho
 > **The gamepad renderer LANDED 2026-08-22** — `install/ui` (`ConsentScreen`) behind
 > `install/confirm-ui`, a second implementation of the same contract sharing the facts file and no
 > code, with its own end-to-end case against the real spine. See §5 for the shim decision and for
-> why abort cannot be a face button. **Still owed from this section:** the "no controller and no
-> keyboard → stop" case, which needs an input stack to detect the absence of.
+> why abort cannot be a face button. **The "no controller and no keyboard → stop" case landed the
+> same day** — the pad half asks SDL (a pad it cannot map produces no events, which is an AYANEO
+> Pocket ACE in AYANEO mode), the keyboard half asks the kernel's device list whether anything can
+> type `S/W/N/E`, and it excludes `/devices/virtual/`: InputPlumber always publishes a virtual
+> keyboard covering the alphabet, and on a real Pocket S2 with nothing attached it is the ONLY
+> device claiming those letters — without the exclusion this stop could never fire on any board we
+> ship. The screen is not the mechanism: while it is up a consent request is **answered with an
+> error** rather than drawn, so the spine stops instead of blocking on an answer nobody can give.
+> **§4d is now complete.**
 >
 > **One thing the contract learned the hard way:** the renderer's **stdout is the answer and nothing
 > else**. A renderer that also prints its screen there makes every attempt read as a wrong answer,

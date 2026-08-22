@@ -172,6 +172,23 @@ log "seed: ${SEED_TAR#"$ROOT"/} ($(du -h "$SEED_TAR" | cut -f1), sha256 ${SEED_S
 # out/images is ROOT-OWNED, and protected_hardlinks refuses a link to a file you do not own, so the
 # fallback silently COPIED 4 GB on every run. Binding the individual files also means nothing else
 # in out/images is exposed on the LAN, which mounting the directory would have done.
+#
+# CONSEQUENCE: THIS SERVES FILES, NOT AN OTA CHANNEL, and that is correct for what it is for -- the
+# installer fetches ONE bundle by direct URL and verifies it against the device's keyring. But
+# `novadeck-update` wants `<url>/<channel>/latest.json` and resolves `bundle` relative to it, which
+# is a DIRECTORY shape this server cannot answer: every path under /stable/ is a 404.
+#
+# So the OTA leg of the hardware gate needs its own server, e.g.
+#   docker run -d --name nd-ota-http -p 8089:80 \
+#     -v "$PWD/out/images:/usr/share/nginx/html:ro" nginx:alpine
+# with out/images/stable/{latest.json, <symlink to the bundle>}. Do not "fix" this one to mount the
+# directory -- the two reasons above still hold.
+#
+# WHEN IT LOOKS LIKE THE SERVER IS BROKEN, IT USUALLY IS NOT. `novadeck-update` exits instantly and
+# silently in two very different situations: a 404 on latest.json, and Steam not being signed in
+# (it defers on purpose, so OOBE never starts a 4 GB download). `novadeck-update status` separates
+# them in one command -- it prints the resolved server URL, `logged in:`, and `available:`. Reach
+# for it before touching the server. Cost 20 minutes and a wrong hypothesis on 2026-08-22.
 CONTAINER=novadeck-hw-http
 BUNDLE_NAME="$(basename "$BUNDLE")"
 SEED_NAME="$(basename "$SEED_TAR")"

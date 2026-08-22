@@ -1237,6 +1237,60 @@ owes this audit**, and it is the one with the longest tool list (`mkfs.vfat` fro
 `mkfs.ext4`, `mkfs.btrfs`, `rauc`, `curl`, `nmcli`), every one of them a tool the shipped image
 does not fully carry.
 
+### A disk another distribution's uninstaller left behind — issue #56, fixed 2026-08-22
+
+A GPT entry whose type GUID is all zeroes is **unused** by the spec. The kernel does not enumerate
+it, `sgdisk -i N` answers *"Partition #N does not exist"* — and `sgdisk -p` still renders a row for
+it, carrying whatever start/end LBAs the slot was left with. All three of our scans read that
+listing and believed it: `genpart.sh`'s containment check, `select-target.sh`'s `gpt_rows`/CEIL/ESP
+scan, and `carve.sh`'s `gpt_rows`/`effective_ceiling`.
+
+That is exactly what ROCKNIX's LinuxLoader leaves behind. `PerformUninstallCfw()` zeroes the type
+GUID, unique GUID and name of every entry after `userdata` **while keeping the LBAs**, then grows
+`userdata` back over the space. **Captured on an AYANEO Pocket ACE before and after, 2026-08-22**
+(`work/ace-carve/issue-56/`, and the after-state is a board of its own in
+`docs/internal-storage.md`):
+
+- eight residue rows, p12–p19, LBAs intact, `attrs="GUID:63"` preserved on p19;
+- `userdata` regrown to `size=25355734` — **three sectors LARGER than stock**, reaching `last-lba`
+  and consuming the slack the factory left, so "restored to stock" is not what happens;
+- its type rewritten from the Android vendor GUID to Linux filesystem data, **with its unique GUID
+  unchanged** — so the uuid is not a discriminator and the type is the only one;
+- the residue therefore sits **inside** the regrown `userdata`, which rules out any geometric test.
+
+**The half the issue got wrong, and it is the half that mattered.** The issue reasoned that sgdisk
+"will happily allocate over" such an entry, so filtering the three scans would be enough. It does
+not. Measured against a fixture rebuilt from the ACE's own capture, gdisk 1.0.10:
+
+```
+sgdisk -i 12 <disk>                    -> Partition #12 does not exist.
+sgdisk -p <disk>                       -> still renders row 12, code FFFF, no name
+sgdisk -n 12:55136576:+1048576 <disk>  -> Could not create partition 12 from 55136576 to 56185151
+```
+
+sgdisk disowns the entry when asked about it and still treats its sectors as occupied when asked to
+allocate them. A scan-only fix would have gone green offline and died on hardware one step later
+than before — at the first `sgdisk -n` of the append, with `userdata` already shrunk. So the fix has
+two halves: **read past the residue** (`images/lib-gpt.sh`, one `sfdisk --dump` per call, shared by
+all three scans so the halves cannot disagree) and **remove it** (`gpt_drop_dead_entries`, called
+from `carve.sh` before its first write). Neither tool will delete such a row — `sgdisk -d` says
+"out of range", `sfdisk --delete` says "failed to delete" — so the table is rebuilt from its own
+`sfdisk --dump` with those rows omitted, which is what recovered the ACE by hand, and the function
+verifies the live-partition set is unchanged afterwards rather than trusting the rewrite.
+
+`userdata`'s type is restored to the Android vendor GUID **only on a disk that still carries the
+residue**, because that residue is the evidence something else rewrote the table. Without it we
+keep what we find; a board whose stock type genuinely differs is not ours to correct. (The install
+record's pre-state was the other candidate and cannot serve — in this scenario we are the ones who
+were uninstalled, so no record of ours survives.)
+
+Two things this cost that are worth keeping. `sfdisk` was **not in the build container** — Debian
+ships it in `fdisk`, not `util-linux` — so the suites could not run the code under test until it
+was added. And `install/lib-gptfixture.sh` was building fixtures from the markdown **table**, which
+is rendered from `lsblk` and therefore silently drops every zero-type row: the five captured boards
+had been losing their `last_parti` entries all along, and no fixture could express this state at
+all. It reads the `sfdisk --dump` blocks now.
+
 ### Blast radius, stated plainly
 
 **The recovery model, stated once: for a bricked device there is exactly one recovery, and it is

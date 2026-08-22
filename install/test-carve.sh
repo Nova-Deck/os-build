@@ -416,5 +416,43 @@ out="$(carve fresh "$img" 33)"
   && ok "a foreign partition one sector inside the window -> nothing of ours is created" \
   || bad "a partition overlapping the window by one sector did not stop the carve: $out"
 
+# --- a carve onto a disk a foreign uninstaller left behind (issue #56) ----------------------------
+# The end-to-end half of the case test-select-target.sh makes read-only. This is the run that failed
+# on an AYANEO Pocket ACE on 2026-08-21: genpart refused with "partition 12 occupies 6892072..",
+# AFTER carve.sh had already shrunk userdata, leaving the disk mid-carve with no way to re-run.
+#
+# Two things have to hold, and the first is the one a scan-only fix would have missed. sgdisk
+# disowns a zeroed entry when asked about it and still refuses to allocate its sectors, so reading
+# past the residue is not enough -- carve has to drop it, and the eight partitions that follow are
+# the proof it did.
+CASE="a disk a foreign uninstaller left behind can be carved"
+res="$T/ace-post-uninstall.img"
+if rows_for 'AYANEO Pocket ACE (after a ROCKNIX uninstall)' /dev/sda \
+     | FIXTURE_LAYOUT=captured build "$res"; then
+  before_oem="$(rows "$res" | awk '$1+0 <= 10')"
+  out="$(carve fresh "$res" 8)"
+
+  [ "$(ours "$res")" = 8 ] \
+    && ok "all eight are laid down where the residue used to be" \
+    || bad "carve left $(ours "$res") of ours on a post-uninstall disk: $out"
+
+  # The residue is gone rather than merely ignored -- and nothing else went with it. `foreign` is
+  # every row that is neither ours nor userdata, so p1..p10 are inside this comparison.
+  dead_left="$(sfdisk --dump "$res" 2>/dev/null | grep -ci 'type=00000000-0000-0000-0000-000000000000')"
+  [ "${dead_left:-1}" = 0 ] \
+    && ok "the zeroed entries are removed from the table, not left for the next tool to trip on" \
+    || bad "$dead_left zeroed entries survived the carve"
+  [ "$(rows "$res" | awk '$1+0 <= 10')" = "$before_oem" ] \
+    && ok "the OEM rows p1..p10 come through the drop unchanged" \
+    || bad "rewriting the table to drop the residue moved a real partition"
+
+  # userdata comes back the size asked for AND typed for Android, not typed the way ROCKNIX left it.
+  [ "$(udfield "$res" 'Partition GUID code')" = "1B81E7E6-F50D-419B-A739-2AEEF8DA3335" ] \
+    && ok "userdata is handed back the Android vendor type ROCKNIX had overwritten" \
+    || bad "userdata came back typed $(udfield "$res" 'Partition GUID code')"
+else
+  bad "could not rebuild the post-uninstall capture"
+fi
+
 printf '\ntest-carve.sh: %d passed, %d failed, %d skipped\n' "$PASS" "$FAIL" "$SKIP"
 [ "$FAIL" -eq 0 ]

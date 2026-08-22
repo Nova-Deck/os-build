@@ -74,10 +74,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       xz-utils patch device-tree-compiler \
       curl \
       make python3 \
-      btrfs-progs gdisk dosfstools mtools e2fsprogs \
+      btrfs-progs gdisk fdisk dosfstools mtools e2fsprogs \
       casync \
       erofs-utils \
     && rm -rf /var/lib/apt/lists/*
+# `fdisk` is NOT redundant with `gdisk`, and neither is it implied by util-linux: Debian ships
+# sfdisk in the `fdisk` package while blkid and partx come from util-linux in the base image, so
+# `command -v sfdisk` was empty here while every device had it. images/lib-gpt.sh reads type GUIDs
+# with `sfdisk --dump` -- one call for the whole table -- to tell a live partition from a GPT entry
+# whose type a foreign uninstaller zeroed (issue #56). Without it the installer suites cannot run
+# the code they are testing at all.
+#
 # erofs-utils is here for ONE assertion, and it earns its place: assemble-rootfs.sh reads the
 # graphics_provider.json out of the pinned FEX guest .ero to prove the guest still carries one.
 # The mount that surfaces it is `nofail`, so without this the answer arrives at x86 game launch,

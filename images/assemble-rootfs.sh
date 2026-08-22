@@ -272,6 +272,9 @@ install -D -m0444 "$BOOTDIR_SRC/grubenv"          "$stage/usr/lib/novadeck/boot/
 # and behaves identically from images/ in the repo and from /usr/lib/novadeck/install/ on a device.
 install -D -m0555 "$ROOT/images/genpart.sh"          "$stage/usr/lib/novadeck/install/genpart.sh"
 install -D -m0444 "$ROOT/images/partition-table.txt" "$stage/usr/lib/novadeck/install/partition-table.txt"
+# lib-gpt.sh is sourced by the script genpart.sh emits, so it ships beside it or the append mode
+# refuses. 0444: sourced, never executed, like lib-slotwrite.sh.
+install -D -m0444 "$ROOT/images/lib-gpt.sh"          "$stage/usr/lib/novadeck/install/lib-gpt.sh"
 echo "  RAUC: keyring.pem + stage-1/2 boot software + /usr/bin/steamos-bootconf installed"
 
 # Rewrite the baked Proton compat tools. We bake TWO — proton-cachyos and proton-ge — so the user

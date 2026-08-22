@@ -56,6 +56,28 @@ command -v sgdisk >/dev/null 2>&1 || die "sgdisk not found"
 # structurally cannot catch. Fail closed.
 command -v mdir  >/dev/null 2>&1 || die "mdir not found (mtools) -- rule 3b cannot run without it"
 
+# sfdisk, for the same fail-closed reason and with the same consequence if it degrades quietly.
+# lib-gpt.sh reads type GUIDs with it to tell a real partition from an entry the GPT no longer
+# uses; without it every scan below is back to believing residue rows (issue #56), and the disks
+# that breaks are precisely the ones a user has already tried another distribution on.
+command -v sfdisk >/dev/null 2>&1 || die "sfdisk not found -- the table cannot be read without it"
+
+# lib-gpt.sh is SHIPPED (into /usr/lib/novadeck/install/, beside genpart.sh) while this script is
+# installer-only, so the two do not always sit together. Resolved by search, exactly as carve.sh
+# resolves genpart.sh and lib-slotwrite.sh.
+LIBGPT="${NOVADECK_LIB_GPT:-}"
+if [ -z "$LIBGPT" ]; then
+  for c in "$(cd "$(dirname "$0")" && pwd)/lib-gpt.sh" \
+           /usr/lib/novadeck/install/lib-gpt.sh \
+           "$(cd "$(dirname "$0")" && pwd)/../images/lib-gpt.sh"; do
+    [ -r "$c" ] && { LIBGPT="$c"; break; }
+  done
+fi
+[ -n "$LIBGPT" ] && [ -r "$LIBGPT" ] || die "cannot find lib-gpt.sh (set NOVADECK_LIB_GPT)"
+# Sourced AFTER die() exists, so its refusals carry this script's prefix.
+# shellcheck source=../images/lib-gpt.sh
+. "$LIBGPT"
+
 # --- which disk is the running system on? ---------------------------------------------------------
 # Never a candidate. On the installer this is the SD card, and rule 2 exists because writing the
 # medium you booted from is the one mistake that takes the recovery path with it.
@@ -73,9 +95,10 @@ running_disk() {
 }
 
 # --- the GPT, read once per disk ------------------------------------------------------------------
-# `sgdisk -p` gives index/start/end/code/name in one shot. Names in every capture are single words,
-# so the last field is the name; a name with spaces would need -i per partition and none exists.
-gpt_rows() { sgdisk -p "$1" 2>/dev/null | awk '/^[[:space:]]*[0-9]+[[:space:]]+[0-9]+/ {print $1, $2, $3, $(NF-1), $NF}'; }
+# gpt_rows() comes from lib-gpt.sh: index/start/end/code/name per LIVE partition. It used to be a
+# one-line `sgdisk -p | awk` here, and the rows it could not tell apart -- entries whose type GUID
+# a foreign uninstaller zeroed -- are issue #56. The three scans below (rule 3b, the victim rule,
+# CEIL) all read it, and all three were wrong in the same way on the same disks.
 
 sector_size() {
   sgdisk -p "$1" 2>/dev/null | sed -n 's/^Sector size (logical[^)]*): \([0-9]*\).*/\1/p'
@@ -212,6 +235,25 @@ examine() {
   # vendor type, and the Pocket FIT shows what a Linux type does to a board that expects its own.
   ud_type="$(sgdisk -i "$ud_idx" "$disk" 2>/dev/null | sed -n 's/^Partition GUID code: \([0-9A-Fa-f-]*\).*/\1/p')"
   [ -n "$ud_type" ] || { say "  $disk: cannot read userdata's type GUID"; return 1; }
+
+  # ...EXCEPT when what is on the disk is not the original either. ROCKNIX's uninstaller rewrites
+  # userdata's type to Linux filesystem data on its way out (UninstallCfwMenu.c stamps
+  # 0FC63DAF-… rather than restoring the Android type), so a carve that faithfully preserves what
+  # it finds propagates the wrong type and Android may not recognise its own data partition.
+  # MEASURED on the Pocket ACE, 2026-08-22: 1B81E7E6-… before the uninstall, 0FC63DAF-… after,
+  # with the unique GUID unchanged across it -- so the uuid is not a discriminator, only the type.
+  #
+  # THE TRIGGER IS EVIDENCE, NOT A BLANKET REWRITE. We restore the Android type only on a disk that
+  # still carries the uninstaller's residue, because that residue is positive proof something else
+  # rewrote this table. Without it we keep what we find: a board whose stock userdata genuinely is
+  # some other type is not ours to correct, and guessing would be the same class of mistake in the
+  # other direction. (The install record's `sfdisk --dump` pre-state was the other candidate source
+  # and cannot serve here -- in this scenario we were the ones uninstalled, so no record survives.)
+  if [ "${ud_type^^}" != "$NOVADECK_ANDROID_USERDATA_GUID" ] && gpt_has_dead_entries "$disk"; then
+    say "  $disk: userdata is typed $ud_type on a table that still carries zeroed GPT entries --"
+    say "  $disk: restoring the Android type $NOVADECK_ANDROID_USERDATA_GUID (a foreign uninstaller left this disk behind)"
+    ud_type="$NOVADECK_ANDROID_USERDATA_GUID"
+  fi
 
   # CEIL was computed above, before the size test, because that test measures against it.
 

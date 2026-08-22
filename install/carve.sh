@@ -60,6 +60,14 @@ if [ -z "$GENPART" ]; then
   done
 fi
 
+# lib-gpt.sh, shipped beside genpart.sh and resolved the same way.
+LIBGPT="${NOVADECK_LIB_GPT:-}"
+if [ -z "$LIBGPT" ]; then
+  for c in "$SELFDIR/lib-gpt.sh" /usr/lib/novadeck/install/lib-gpt.sh "$SELFDIR/../images/lib-gpt.sh"; do
+    [ -r "$c" ] && { LIBGPT="$c"; break; }
+  done
+fi
+
 # The GPT names of our eight, in layout order. Deletion is BY NAME and only by name: an index is
 # never trusted from a caller or from arithmetic, because the difference between deleting p9 and
 # deleting p8 is the difference between our ESP and somebody's `abl`.
@@ -82,7 +90,9 @@ usage() {
 [ $# -ge 2 ] || usage
 INTENT="$1"; DISK="$2"
 command -v sgdisk >/dev/null 2>&1 || die "sgdisk not found"
+command -v sfdisk >/dev/null 2>&1 || die "sfdisk not found -- the table cannot be read without it"
 [ -n "$GENPART" ] && [ -x "$GENPART" ] || die "cannot find genpart.sh (set NOVADECK_GENPART)"
+[ -n "$LIBGPT" ] && [ -r "$LIBGPT" ] || die "cannot find lib-gpt.sh (set NOVADECK_LIB_GPT)"
 [ -x "$SELECT" ] || die "cannot find select-target.sh (set NOVADECK_SELECT_TARGET)"
 [ -n "$SLOTWRITE" ] && [ -r "$SLOTWRITE" ] \
   || die "cannot find lib-slotwrite.sh (set NOVADECK_SLOTWRITE)"
@@ -90,10 +100,16 @@ command -v sgdisk >/dev/null 2>&1 || die "sgdisk not found"
 # has none, and this script's `carve: ` prefix is what its suite asserts.
 # shellcheck source=../fs-overlay/usr/lib/novadeck/install/lib-slotwrite.sh
 . "$SLOTWRITE"
+# shellcheck source=../images/lib-gpt.sh
+. "$LIBGPT"
 
 # --- reading the disk -----------------------------------------------------------------------------
-gpt_rows() { sgdisk -p "$DISK" 2>/dev/null | awk '/^[[:space:]]*[0-9]+[[:space:]]+[0-9]+/ {print $1, $2, $3, $(NF-1), $NF}'; }
-field()    { printf '%s\n' "$1" | sed -n "s/^$2=//p"; }
+# gpt_rows() comes from lib-gpt.sh -- the same function select-target.sh reads the table through,
+# which is the point: `genpart` decides what is in the way, this script decides what belongs to us,
+# and select-target decides the ceiling. Three scans of one table, and issue #56 is what happened
+# when one of them counted rows the GPT no longer uses. A private copy here is how the halves
+# disagree, so there is not one.
+field() { printf '%s\n' "$1" | sed -n "s/^$2=//p"; }
 
 is_ours() {  # <gpt-name>
   local n
@@ -102,7 +118,7 @@ is_ours() {  # <gpt-name>
 }
 
 index_of() {  # <gpt-name> -> index, or nothing
-  gpt_rows | awk -v want="$1" '$5 == want {print $1; exit}'
+  gpt_rows "$DISK" | awk -v want="$1" '$5 == want {print $1; exit}'
 }
 
 # The last sector our partitions may occupy, and it is NOT always select-target's CEIL. That one
@@ -112,7 +128,7 @@ index_of() {  # <gpt-name> -> index, or nothing
 # none does. On a stock disk no partition is ours and the two agree, which is asserted below.
 effective_ceiling() {  # <ud_end> -> sector
   local ud_end="$1" next
-  next="$(gpt_rows | awk -v e="$ud_end" '$2 > e {print $2, $5}' | sort -n | while read -r s n; do
+  next="$(gpt_rows "$DISK" | awk -v e="$ud_end" '$2 > e {print $2, $5}' | sort -n | while read -r s n; do
             is_ours "$n" || { printf '%s\n' "$s"; break; }
           done)"
   if [ -n "$next" ]; then
@@ -123,6 +139,25 @@ effective_ceiling() {  # <ud_end> -> sector
 }
 
 # --- writing ----------------------------------------------------------------------------------------
+# Residue from a foreign uninstaller, cleared before the first write of the carve -- issue #56.
+#
+# It is not enough to have taught the scans to ignore these entries. sgdisk disowns them when asked
+# (`-i N` says the partition does not exist) and STILL refuses to allocate their sectors, so the
+# append would die on its first `sgdisk -n` with userdata already shrunk. See the measurement in
+# lib-gpt.sh; this is the step that makes such a disk installable at all.
+#
+# FIRST, ahead of delete_ours and the resize, so a disk that cannot be cleaned is left exactly as
+# it was found rather than mid-carve. Silent and free on every disk that has no residue, which is
+# every stock board we have captured.
+drop_residue() {
+  local n
+  gpt_has_dead_entries "$DISK" || return 0
+  say "  $DISK carries GPT entries the table itself no longer uses -- a foreign uninstaller left them"
+  n="$(gpt_drop_dead_entries "$DISK")"
+  say "  unused GPT entries removed: ${n:-0}; every live partition is unchanged"
+  settle
+}
+
 delete_ours() {  # deletes every partition of ours that exists, by name; prints what it removed
   local name idx removed=0
   for name in "${OUR_NAMES[@]}"; do
@@ -311,6 +346,7 @@ case "$INTENT" in
     say "  novadeck gets $(( WINDOW / PER_MIB )) MiB, sectors $(( NEW_END + 1 ))..$CEIL"
     [ "$STATE" = fresh ] || say "  this disk already carries a novadeck install; it is being replaced, /home included"
 
+    drop_residue
     delete_ours
     recreate_userdata "$UD_INDEX" "$UD_START" "$NEW_END" "$UD_TYPE"
     invalidate_userdata_fs "$UD_INDEX" "$UD_START" "$NEW_END"
@@ -329,6 +365,7 @@ case "$INTENT" in
     say "[carve] uninstall on $DISK"
     say "  userdata p$UD_INDEX: $(( (UD_END - UD_START + 1) / PER_GIB )) GiB -> $(( (CEIL - UD_START + 1) / PER_GIB )) GiB (Android is factory reset again)"
 
+    drop_residue
     delete_ours
     recreate_userdata "$UD_INDEX" "$UD_START" "$CEIL" "$UD_TYPE"
     # Also here, for the opposite reason: the filesystem left behind describes the SHRUNK userdata,

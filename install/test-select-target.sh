@@ -45,6 +45,9 @@ export NOVADECK_SELECT_FIXTURE=1
 # Shared with install/test-carve.sh, which needs the same five boards as REAL GPTs. A second copy of
 # that awk would be the obvious place for the two suites to drift apart.
 . "$ROOT/install/lib-gptfixture.sh"
+# lib-gpt.sh too: the residue case below asserts against the same live-index reader the script
+# under test uses, and against the Android type GUID it names.
+. "$ROOT/images/lib-gpt.sh"
 
 field() { printf '%s\n' "$1" | sed -n "s/^$2=//p"; }
 
@@ -453,6 +456,72 @@ if [ -n "$stor" ] && [ -n "$rock" ]; then
     || bad "the layout the plan says would have succeeded was not refused by 3b: $out"
 else
   skip "the FIT capture has no ROCKNIX/STORAGE pair to reverse"
+fi
+
+# --- a disk a foreign uninstaller left behind (issue #56) -----------------------------------------
+# The board is the same AYANEO Pocket ACE, captured after an uninstall from ROCKNIX LinuxLoader:
+# eight GPT entries whose type GUID was zeroed while their LBAs were kept, with userdata regrown
+# across them. FIXTURE_LAYOUT=captured because the OFFSETS are the finding -- a packed rebuild
+# cannot express residue sitting inside a live partition, which is what this disk is.
+#
+# It is not a hypothetical shape. "Try one distro, then try another" is ordinary, and before this
+# the refusal landed after carve.sh had already shrunk userdata, leaving the disk mid-carve and
+# permanently uninstallable.
+CASE="a disk a foreign uninstaller left behind is still installable"
+RESIDUE_BOARD='AYANEO Pocket ACE (after a ROCKNIX uninstall)'
+res="$T/ace-post-uninstall.img"
+if rows_for "$RESIDUE_BOARD" /dev/sda | FIXTURE_LAYOUT=captured build "$res"; then
+  # The fixture is the disk it claims to be: sgdisk renders 19 rows, the GPT uses 11.
+  rendered="$(sgdisk -p "$res" 2>/dev/null | awk '/^[[:space:]]*[0-9]+[[:space:]]+[0-9]+/' | wc -l)"
+  live="$(gpt_live_indices "$res" | wc -l)"
+  { [ "$rendered" = 19 ] && [ "$live" = 11 ]; } \
+    && ok "the fixture reproduces the capture: sgdisk -p renders $rendered rows, the GPT uses $live" \
+    || bad "the fixture is not the captured state: $rendered rendered, $live live (want 19 and 11)"
+
+  # The residue overlaps userdata, which is what makes a geometric rule impossible and the type
+  # GUID the only discriminator. Asserted rather than assumed: a fixture that quietly lost the
+  # overlap would still pass everything below and prove nothing.
+  ud_e="$(sgdisk -p "$res" | awk '$NF=="userdata" {print $3}')"
+  p12_s="$(sgdisk -p "$res" | awk '$1==12 {print $2}')"
+  { [ -n "$p12_s" ] && [ "$p12_s" -lt "$ud_e" ]; } \
+    && ok "the residue sits INSIDE userdata (p12 at $p12_s, userdata ends $ud_e)" \
+    || bad "the fixture lost the overlap: p12 at '$p12_s', userdata ends '$ud_e'"
+
+  if out=$(bash "$SELECT" "$res" 2>&1); then
+    ok "accepted, where every scan used to count the residue as something in the way"
+    [ "$(field "$out" MODE)" = fresh ] \
+      && ok "MODE=fresh -- zeroed entries are not a novadeck install" \
+      || bad "MODE is '$(field "$out" MODE)', want fresh"
+    [ "$(field "$out" UD_INDEX)" = 11 ] \
+      && ok "picked p11, the regrown userdata" \
+      || bad "picked p$(field "$out" UD_INDEX), the capture puts userdata at p11"
+    # CEIL must reach the end of the disk. Reading the residue put it at 6892072-1 on hardware --
+    # a window of zero sectors, which is the refusal in the issue.
+    lastu="$(sgdisk -p "$res" 2>/dev/null | sed -n 's/.*last usable sector is \([0-9]*\).*/\1/p' | head -1)"
+    [ "$(field "$out" CEIL)" = "$lastu" ] \
+      && ok "CEIL reaches the last usable sector $lastu, not the first residue row" \
+      || bad "CEIL is $(field "$out" CEIL), want the last usable sector $lastu"
+    # The other half of #56: ROCKNIX stamps userdata Linux-filesystem on its way out, and a carve
+    # that preserved what it found would hand Android a partition it does not recognise.
+    [ "$(field "$out" UD_TYPE)" = "$NOVADECK_ANDROID_USERDATA_GUID" ] \
+      && ok "UD_TYPE is restored to the Android vendor type, not the Linux type left on the disk" \
+      || bad "UD_TYPE is $(field "$out" UD_TYPE), want $NOVADECK_ANDROID_USERDATA_GUID"
+  else
+    bad "refused: $out"
+  fi
+
+  # The restore is EVIDENCE-DRIVEN, not a blanket rewrite. Drop the residue and userdata's own
+  # type must be left exactly as found -- a board whose stock type genuinely differs is not ours
+  # to correct.
+  clean="$T/ace-residue-dropped.img"; cp "$res" "$clean"
+  gpt_drop_dead_entries "$clean" >/dev/null
+  out=$(bash "$SELECT" "$clean" 2>&1) || out=""
+  got="$(field "$out" UD_TYPE)"
+  [ "${got^^}" = "0FC63DAF-8483-4772-8E79-3D69D8477DE4" ] \
+    && ok "with the residue gone there is no evidence to act on, so the type on the disk is kept" \
+    || bad "UD_TYPE is '$got' on a residue-free disk -- the restore must not fire without evidence"
+else
+  bad "could not rebuild the post-uninstall capture"
 fi
 
 printf '\ntest-select-target.sh: %d passed, %d failed, %d skipped\n' "$PASS" "$FAIL" "$SKIP"

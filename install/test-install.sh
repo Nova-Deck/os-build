@@ -574,6 +574,23 @@ echo "stub sgdisk: refusing to partition" >&2
 exit 1
 STUB
 chmod +x "$T/stub/sgdisk"
+
+# lib-gpt.sh reads type GUIDs with `sfdisk --dump` to tell a live GPT entry from one the table no
+# longer uses (issue #56), so the stub disk has to answer that too -- and answering it is what lets
+# the last case below put a DEAD row inside the window and assert it is not a refusal. STUB_DEAD is
+# the list of indices to render with an all-zero type; everything else is a real partition.
+cat >"$T/stub/sfdisk" <<'STUB'
+#!/usr/bin/env bash
+[ "${1:-}" = "--dump" ] || { echo "stub sfdisk: only --dump is served" >&2; exit 1; }
+printf 'label: gpt\ndevice: %s\nunit: sectors\n\n' "$2"
+while read -r n s e _; do
+  [ -n "$n" ] || continue
+  t=0FC63DAF-8483-4772-8E79-3D69D8477DE4
+  case " ${STUB_DEAD:-} " in *" $n "*) t=00000000-0000-0000-0000-000000000000 ;; esac
+  printf '%s%s : start=%s, size=%s, type=%s\n' "$2" "$n" "$s" "$(( e - s + 1 ))" "$t"
+done <<<"$STUB_ROWS"
+STUB
+chmod +x "$T/stub/sfdisk"
 : >"$T/nodisk.img"
 
 # 40 GiB disk; userdata shrunk to 8 GiB ending at 16812031, an OEM partition at 62949376. So the
@@ -583,9 +600,13 @@ STUB_TABLE='   1            2048           34815   16.0 MiB    8300  oem-early
    3        62949376        63080447   64.0 MiB    8300  oem-late'
 FLOOR=16812032
 CEIL=62949375
-try_window() {  # <floor> <ceil> [rows] -> the run's output
+try_window() {  # <floor> <ceil> [rows] [dead-indices] -> the run's output
   ( export NOVADECK_APPEND_FLOOR="$1" NOVADECK_APPEND_CEIL="$2"
-    STUB_ROWS="${3-$STUB_TABLE}" DISK="$T/nodisk.img" PATH="$T/stub:$PATH" \
+    # The emitted script resolves lib-gpt.sh from /usr/lib/novadeck/install by default -- that is
+    # the shipped location, and it is not where the repo copy lives. genpart.sh exports this same
+    # variable when it applies the script itself.
+    STUB_ROWS="${3-$STUB_TABLE}" STUB_DEAD="${4-}" DISK="$T/nodisk.img" PATH="$T/stub:$PATH" \
+    NOVADECK_LIB_GPT="$ROOT/images/lib-gpt.sh" \
     bash -euo pipefail -c "$append_script" ) 2>&1
 }
 
@@ -625,6 +646,20 @@ out=$(try_window "$((FLOOR - 1))" "$CEIL")
 printf '%s\n' "$out" | grep -q 'inside the window' \
   && ok "a floor one sector inside the shrunk userdata is refused" \
   || bad "the window was allowed to overlap the userdata we just recreated: $out"
+
+# A GPT ENTRY THE TABLE NO LONGER USES IS NOT SOMETHING IN THE WAY -- issue #56. `sgdisk -p` keeps
+# rendering a row for an entry whose type GUID was zeroed by a foreign uninstaller, carrying stale
+# LBAs, and the containment check believed it: on an AYANEO Pocket ACE, 2026-08-21, it refused with
+# "partition 12 occupies 6892072..6957607, inside the window" on a disk with nothing there. Same
+# window, same rows, and the only difference is whether the entry is live.
+out=$(try_window "$FLOOR" "$((CEIL + 1))")
+printf '%s\n' "$out" | grep -q 'inside the window' \
+  && ok "oem-late inside the window is a refusal while it is a real partition" \
+  || bad "the live-partition case stopped refusing, so the case below proves nothing: $out"
+out=$(try_window "$FLOOR" "$((CEIL + 1))" "$STUB_TABLE" "3")
+printf '%s\n' "$out" | grep -q 'inside the window' \
+  && bad "a zeroed GPT entry inside the window still refuses -- the disk stays uninstallable: $out" \
+  || ok "the same row with an all-zero type GUID is not in the way"
 
 # A 4096-byte logical sector is what a real UFS LUN reports, and it changes MiB->sectors eightfold.
 # Read wrong, the size check compares against a window 8x too small and refuses every real install.

@@ -119,7 +119,16 @@ echo
 # ----------------------------------------------------------------------------- per-disk detail
 found_internal=0
 for d in $(disks); do
-  [ "$d" = "$boot_disk" ] && continue            # not a target; its table is noise here
+  # The boot medium is not an install target (rule 2), so its table is normally noise here -- but
+  # ONCE NOVADECK IS INSTALLED INTERNALLY IT BOOTS FROM THE DISK THE CARVE ACTED ON, and skipping
+  # it then omits the one table the capture exists for. MEASURED 2026-08-22: a capture taken on an
+  # installed AYANEO Pocket ACE carried sdb..sdf and not a single row of sda, the disk in question.
+  # So the skip is conditional on the disk carrying no `userdata` -- which keeps a card-booted
+  # capture identical to what it always was, and makes an internally-booted one useful.
+  if [ "$d" = "$boot_disk" ] \
+     && ! lsblk -Pno PARTLABEL "/dev/$d" 2>/dev/null | grep -qi 'PARTLABEL="userdata'; then
+    continue
+  fi
   [ "$(sysval "$d" removable)" = "1" ] && continue
   found_internal=1
 

@@ -24,6 +24,19 @@ SELFDIR="$(cd "$(dirname "$0")" && pwd)"
 TABLE="${NOVADECK_PARTITION_TABLE:-$SELFDIR/partition-table.txt}"
 [ -f "$TABLE" ] || { echo "no partition table: $TABLE" >&2; exit 1; }
 
+# lib-gpt.sh ships beside this script and beside the table, and is resolved the same way for the
+# same reason. It is not sourced HERE: the containment check that needs it lives in the script this
+# one emits, which runs in a bare `bash -c` with nothing but the environment. So the path travels
+# as an environment variable and the emitted TEXT stays identical whichever copy generated it --
+# which is what install/test-install.sh case 9 asserts, and what would break if the resolved path
+# were baked into the output.
+LIBGPT="${NOVADECK_LIB_GPT:-}"
+if [ -z "$LIBGPT" ]; then
+  for c in "$SELFDIR/lib-gpt.sh" /usr/lib/novadeck/install/lib-gpt.sh "$SELFDIR/../images/lib-gpt.sh"; do
+    [ -r "$c" ] && { LIBGPT="$c"; break; }
+  done
+fi
+
 MODE=create
 if [ "${1:-}" = "--append" ]; then MODE=append; shift; fi
 TARGET="${1:-}"
@@ -147,27 +160,45 @@ if [ "$nd_window" -lt "$(( nd_min_mib * nd_per_mib ))" ]; then
   exit 1
 fi
 
+# The rows below are read through lib-gpt.sh, not straight out of `sgdisk -p`, and that is the
+# whole of issue #56. `sgdisk -p` renders a row for every GPT entry that still carries LBAs,
+# INCLUDING the ones a third-party uninstaller zeroed the type GUID of -- entries the spec calls
+# unused, the kernel does not enumerate, and sgdisk itself will allocate straight over. Read raw,
+# those rows are indistinguishable from partitions that are really in the way, and the containment
+# check below then refuses forever on a disk with nothing in it.
+#
+# die() first, so the library's refusals carry this script's prefix rather than its own. It does
+# NOT claim nothing was written: the same reader is used again by nd_index_of, after partitions
+# exist, and a refusal there that promised an untouched disk would be a lie at the worst moment.
+# The containment check below prints that line itself, where it is true.
+die() { echo "genpart: $1" >&2; exit 1; }
+nd_libgpt="${NOVADECK_LIB_GPT:-/usr/lib/novadeck/install/lib-gpt.sh}"
+[ -r "$nd_libgpt" ] || die "cannot read $nd_libgpt -- the containment check cannot run without it"
+# shellcheck source=lib-gpt.sh
+. "$nd_libgpt"
+
 # CONTAINMENT, asserted here rather than inferred. Every sector we are about to write lies in
 # [floor, ceil], so the one thing that can still make that unsafe is an existing partition inside
 # the window. Refuse if any row overlaps it -- this is the check that means no pre-existing
 # partition is ever written, and it holds whatever the caller got wrong.
-while read -r nd_idx nd_start nd_end; do
+while read -r nd_idx nd_start nd_end _; do
   [ -n "$nd_idx" ] || continue
   if [ "$nd_start" -le "$NOVADECK_APPEND_CEIL" ] && [ "$nd_end" -ge "$NOVADECK_APPEND_FLOOR" ]; then
     echo "genpart: partition $nd_idx occupies $nd_start..$nd_end, inside the window $NOVADECK_APPEND_FLOOR..$NOVADECK_APPEND_CEIL -- refusing" >&2
     echo "genpart: nothing has been written to $DISK" >&2
     exit 1
   fi
-done < <(sgdisk -p "$DISK" | awk '/^[[:space:]]*[0-9]+[[:space:]]+[0-9]+/ {print $1, $2, $3}')
+done < <(gpt_rows "$DISK")
 
 # Which index did a just-created partition get? Asked by GPT name, which is unique across our eight.
+# Through gpt_rows for the same reason as the containment check: a residue row carries no name at
+# all, so a positional read of `sgdisk -p` would take the wrong field on it. It also answers in one
+# process rather than one `sgdisk -i` per partition per lookup.
 nd_index_of() {  # <gpt-name> -> index on stdout
-  local n want="$1" got
-  for n in $(sgdisk -p "$DISK" | awk '/^[[:space:]]*[0-9]+[[:space:]]+[0-9]+/ {print $1}'); do
-    got="$(sgdisk -i "$n" "$DISK" | sed -n "s/^Partition name: '\(.*\)'$/\1/p")"
-    [ "$got" = "$want" ] && { printf '%s\n' "$n"; return 0; }
-  done
-  return 1
+  local idx
+  idx="$(gpt_rows "$DISK" | awk -v want="$1" '$5 == want {print $1; exit}')"
+  [ -n "$idx" ] || return 1
+  printf '%s\n' "$idx"
 }
 
 # The running start sector. Every partition is placed EXPLICITLY from here, because `-n 0:0:+size`
@@ -213,8 +244,11 @@ PREAMBLE
 if [ "$MODE" = append ]; then
   if [ -z "$TARGET" ]; then emit_append; exit 0; fi
   command -v sgdisk >/dev/null 2>&1 || { echo "sgdisk not found (run inside novadeck-build)" >&2; exit 1; }
+  command -v sfdisk >/dev/null 2>&1 \
+    || { echo "sfdisk not found -- the containment check reads type GUIDs with it" >&2; exit 1; }
+  [ -n "$LIBGPT" ] && [ -r "$LIBGPT" ] || { echo "genpart: cannot find lib-gpt.sh (set NOVADECK_LIB_GPT)" >&2; exit 1; }
   echo "[novadeck] appending the A/B GPT to $TARGET (min ${minmib} MiB of free space)" >&2
-  DISK="$TARGET" bash -euo pipefail -c "$(emit_append)"
+  DISK="$TARGET" NOVADECK_LIB_GPT="$LIBGPT" bash -euo pipefail -c "$(emit_append)"
   exit 0
 fi
 

@@ -454,7 +454,7 @@ fi
 # The exec bit is checked for the same reason post-install.sh's is: a shipped script losing it in a
 # tree refactor is a failure this project has already paid for once, and here it would strand an
 # install between "GPT written" and "nothing written to it".
-for f in genpart.sh partition-table.txt; do
+for f in genpart.sh partition-table.txt lib-gpt.sh; do
   shipped="$STAGE/usr/lib/novadeck/install/$f"
   if [ ! -s "$shipped" ]; then
     bad "/usr/lib/novadeck/install/$f is missing — the installer cannot lay out a GPT"

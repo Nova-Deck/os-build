@@ -651,6 +651,40 @@ else
   fi
 fi
 
+# 8b. deck has a subordinate id range.
+#
+# Same class as the pin above — an id allocation that is a BUILD PRODUCT here — but nothing in this
+# tree declares it. /etc/subuid and /etc/subgid get deck's range from shadow's `useradd` defaults
+# (SUB_UID_MIN/SUB_UID_COUNT in its login.defs), which rootfs/customize-base.sh relies on without
+# asking for: it runs a plain `useradd -M -u 1000 -U ... deck`.
+#
+# It became load-bearing when the image gained podman, for Valve's Lepton compat tool (issue #58).
+# Rootless podman maps the container's uids through newuidmap/newgidmap, and those consult exactly
+# these two files; with no row for deck, every container operation fails and Lepton dies without
+# building a container at all — which is the failure this guard would have caught at build time
+# rather than on hardware. Nothing else on the image reads them, so the day shadow changes that
+# default is the day Android titles silently stop launching and no other test notices.
+#
+# The COUNT is checked, not just the presence of a row: a row with a zero range parses fine and
+# maps nothing. The specific base (100000) is deliberately NOT asserted — it is shadow's choice
+# and no part of this image cares which range it gets, only that there is one.
+for sub in subuid subgid; do
+  subfile="$STAGE/etc/$sub"
+  if [ ! -s "$subfile" ]; then
+    bad "/etc/$sub is missing or empty — rootless podman has no id range to map, so Lepton (issue #58) cannot start a container"
+  else
+    subrow="$(awk -F: -v u=deck '$1 == u { print; exit }' "$subfile")"
+    subcount="$(printf '%s' "$subrow" | awk -F: '{ print $3 }')"
+    if [ -z "$subrow" ]; then
+      bad "/etc/$sub has no row for deck — useradd stopped allocating a subordinate range (shadow's login.defs defaults changed); rootless podman cannot map ids"
+    elif ! [ "${subcount:-0}" -gt 0 ] 2>/dev/null; then
+      bad "/etc/$sub gives deck the range '$subrow' — a count of '${subcount:-}' maps nothing, which fails the same way as having no row"
+    else
+      echo "    ok  /etc/$sub gives deck $subcount subordinate ids"
+    fi
+  fi
+done
+
 # ------------------------------------------------------------------------------------------
 # 9. The Decky stack is complete.
 #

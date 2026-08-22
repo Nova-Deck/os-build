@@ -190,7 +190,38 @@ BOOTSTRAP_PKGS=(base)
 # the SD card). It needs CONFIG_ZRAM, which kernel/kernel.config only gained alongside it, so the two
 # have to move together; kernel/build.sh asserts the symbol survived. Both packages resolve from the
 # pinned snapshot's `extra` (earlyoom 1.9.0, zram-generator 1.2.1) — no overlay build needed.
-PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-tools mesa gamescope seatd sddm mangohud fex-emu bluez bluez-utils networkmanager alsa-ucm-conf pipewire wireplumber pipewire-pulse pipewire-alsa unzip openal gtk2 ffmpeg e2fsprogs xorg-xwayland lsof noto-fonts noto-fonts-cjk noto-fonts-emoji python python-gobject scx-scheds rauc btrfs-progs rsync earlyoom zram-generator)
+# podman crun passt fuse-overlayfs: the rootless container runtime Valve's Lepton compat tool
+# (Steam app 3029110, Android titles) drives. Lepton resolves `podman` from PATH for every
+# container operation and vendors no copy of it, so with no runtime on the image the tool is
+# selected correctly by the client and then dies ~5s into every launch without building a
+# container at all (issue #58, measured on a Pocket ACE / SM8550). This is the FIRST container
+# runtime this image has ever carried — a gap, not a regression.
+#   podman        the thing Lepton actually calls (`podman run|start|wait|exec|stop|rm|ps|events|
+#                 inspect`, and an `env -i PATH=… $(which podman) exec` in liblepton.sh).
+#   crun          the OCI runtime. podman depends on the virtual `oci-runtime`, and crun is its
+#                 ONLY provider in the pinned snapshot (there is no runc). crun in turn hard-
+#                 depends on criu, so ~28 MB of checkpoint/restore machinery (criu, protobuf,
+#                 python-protobuf, libnet, nftables) arrives that Lepton never uses. Dropping it
+#                 would mean carrying a patched crun in the overlay; not worth a maintained
+#                 from-source package to save 28 MB of a 8.3 GB root.
+#   passt         pasta, the rootless network backend. NOT slirp4netns: liblepton/networking.sh
+#                 builds `-I eth0 --ipv4-only --no-ndp --no-dhcp --no-dhcpv6`, which are pasta
+#                 flags. It is also a hard dep of podman, so it would arrive regardless.
+#   fuse-overlayfs  rootless overlay storage driver. A podman OPTdepend, so it must be named
+#                 here or it does not ship. `overlay` and `fuse` are both in /proc/filesystems.
+# netavark + aardvark-dns (~15 MB) come in behind containers-common, which hard-depends on the
+# virtual `container-network-stack` that only netavark provides. Lepton uses pasta, so that pair
+# ships installed and unused; same argument as criu.
+# The rest of the rootless prerequisites were already satisfied and needed no CHANGE — newuidmap/
+# newgidmap (shadow), /etc/subuid + /etc/subgid for deck, user namespaces, overlay, fuse, and
+# podman's other hard deps (gpgme, sqlite, libseccomp, iptables) are all already there. Two of them
+# were satisfied only by ACCIDENT, though, and are now asserted where they are produced rather than
+# left to be discovered on a device: deck's subordinate id range is a `useradd` default nothing here
+# asks for (rootfs/guard-rootfs.sh, 8b) and CONFIG_USER_NS comes from the arm64 defconfig rather
+# than from any novadeck fragment (kernel/build.sh's symbol loop). Neither is DECLARED here; both
+# are now checked, because rootless podman is the first thing on this image that needs them.
+# Closing this needs an Android title actually rendering on hardware — the issue is hw-gate.
+PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-tools mesa gamescope seatd sddm mangohud fex-emu bluez bluez-utils networkmanager alsa-ucm-conf pipewire wireplumber pipewire-pulse pipewire-alsa unzip openal gtk2 ffmpeg e2fsprogs xorg-xwayland lsof noto-fonts noto-fonts-cjk noto-fonts-emoji python python-gobject scx-scheds rauc btrfs-progs rsync earlyoom zram-generator podman crun passt fuse-overlayfs)
 
 # Dev-only packages — installed ONLY under NOVADECK_DEV=1, NEVER in a release base.
 # On-device bring-up tools: evtest reads raw /dev/input events; usbutils provides lsusb.

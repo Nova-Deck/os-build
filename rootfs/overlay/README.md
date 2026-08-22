@@ -62,6 +62,13 @@ package + guest rootfs (auto-registered with binfmt_misc). See `docs/FEX_README.
 SEED itself is build machinery, not rootfs content — it lives in `build/steam-seed/` and is pre-seeded
 into `/home` at image build time (`image/make-sdcard.sh`). See `docs/bringup-phase3.md`.
 
+`usr/bin/steamvr` is the same shape one layer out: Valve's **Lepton** compat tool (Android titles,
+Steam app 3029110) asks `steamvr logpath` where to write, and with no answer its log path collapses
+to `/lepton-.log` on a read-only root and every diagnostic it has — including the automatic logcat
+dump on an early exit — is silently discarded. The stub answers `logpath` and fails every other
+verb, because this image has no VR runtime and must not claim one. Lepton's actual runtime is
+`podman`, which ships from the pinned snapshot (`PKGS` in `rootfs/customize-base.sh`); see issue #58.
+
 **System hygiene — identity, memory, and the `/var` shape**
 Four files that are not a subsystem but are load-bearing for the immutable A/B model, because on
 this image `/etc/passwd` and `/var` are *build products* rather than device state:

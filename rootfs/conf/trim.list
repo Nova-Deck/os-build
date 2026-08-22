@@ -108,3 +108,21 @@ glob usr/lib/lib@(a|t|l|ub)san.so.*
 # it IS linked — by libb2, libsoxr, libvidstab and the fftw *_omp variants that ffmpeg pulls in.
 # libgcc_s / libstdc++ / libatomic are linked essentially everywhere. libitm and libobjc are
 # unreferenced too, but together they are 1.4M and not worth a row.
+
+# ------------------------------------------------------------------------------------------
+# podman's remote client.
+#
+# podman ships two ~40M Go binaries: `podman`, which does the work, and `podman-remote`, a
+# client that does NOTHING locally — it only speaks the REST API of a podman service over a
+# socket, and reports "unable to connect" without one. We ship podman for exactly one caller,
+# Valve's Lepton compat tool (issue #58), which invokes the local `podman` binary directly and
+# never starts podman.service or podman.socket (nothing enables either: the stock
+# 99-default.preset is "disable *" and the package ships no .wants symlink).
+#
+# 34M — a quarter of everything the container runtime added — for a binary with no local
+# function on this image. Same class as the gcc-libs rows above: the package stays installed
+# and stays in rootfs/manifest.lock, only an unreferenced artefact of it goes.
+#
+# Not removed alongside it: usr/lib/podman/quadlet (2.5M), which the podman-system-generator
+# and podman-user-generator DO exec on every boot and every user session.
+glob usr/bin/podman-remote

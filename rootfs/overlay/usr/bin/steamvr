@@ -1,0 +1,82 @@
+#!/usr/bin/bash
+# `steamvr logpath` — the one verb of SteamVR's helper that Valve's Lepton compat tool depends on,
+# implemented for an image that has no SteamVR and never will.
+#
+# THE CALLER IS LEPTON (Steam app 3029110), and the contract is not ours to choose. liblepton
+# resolves `steamvr` from PATH and asks it where to write:
+#
+#     liblepton/utils.sh:85    STEAMVR_LOGS_DIR="$(steamvr logpath || true)"
+#     liblepton/utils.sh:103   print "${1:-/${STEAMVR_LOGS_DIR}/lepton-${CONTEXT}.log}"
+#
+# WHY THIS FILE EXISTS. With no `steamvr` on PATH the `|| true` swallows the failure, so
+# STEAMVR_LOGS_DIR is EMPTY and that log path collapses to `/lepton-.log` — on a root mounted
+# ro,relatime. log_to_file's `tee` then fails into its own `|| true` and every line Lepton would
+# have written is discarded. The same empty variable also disables logcat_debug_dir()
+# (liblepton/performance_debugging.sh:3) and the EARLY_SHUTDOWN automatic logcat dump (lepton:205),
+# which fires on any exit under 30 seconds. That is three diagnostics, and the third is the one
+# that fires on exactly the failure mode we hit: Lepton dying ~5s into a launch (issue #58) left no
+# trail at all, and the root cause had to be read out of liblepton's source instead of its log.
+#
+# WHY A SHIM AND NOT AN ENVIRONMENT VARIABLE. Exporting STEAMVR_LOGS_DIR before launch does not
+# work: line 85 is an unconditional assignment, so it clobbers whatever the environment carried.
+# The thing Lepton actually asks is "run steamvr and read its stdout", so answering that question
+# is what fixes it. Same shape as /usr/bin/steamos-update and the steamos-polkit-helpers here —
+# implement the caller's contract, do not reimplement the caller.
+#
+# THE PATH IS ABSOLUTE ON PURPOSE. Lepton prefixes the value with a literal `/`, which suggests
+# upstream's steamvr returns a root-relative path. Returning an absolute one instead yields
+# `//home/deck/...`; Linux collapses two leading slashes to one, so it resolves correctly either
+# way, whereas returning a relative path would land the log at the root of a read-only filesystem —
+# the exact bug this file exists to fix. Absolute is the reading that cannot be wrong.
+#
+# NOT $HOME/.steam/steam/logs, where the real SteamVR would write: that tree belongs to the Steam
+# client, is reached through a symlink Steam maintains, and does not exist before first launch.
+# Our own directory under XDG_DATA_HOME is unconditionally ours and unconditionally writable.
+#
+# WHY `path` AND `configpath` ANSWER TOO, rather than failing honestly. They are the SteamVR
+# runtime and config directories, and this image has neither — so the first version of this file
+# failed them, on the reasoning that claiming a VR runtime we do not have is worse than saying no.
+# Measured on a Pocket ACE 2026-08-22, that reasoning was wrong, and Lepton is what makes it wrong:
+#
+#     liblepton/mounting.sh:473   podman_mount_entry "$(steamvr path)" "/data/steamvr/runtime" rw
+#     liblepton/mounting.sh:476   podman_mount_entry "$(steamvr configpath)" "/data/steamvr/config" ro
+#
+# `podman_mount_entry` does NOT guard its source — unlike the `_optional` variant right above it,
+# which tests `[[ -e "${SRC}" ]]`. So a failing verb does not skip the mount, it builds
+# `--mount type=bind,source=,...` and podman refuses the whole container:
+#
+#     Error: host directory cannot be empty: must provide an argument for option
+#
+# Failing was therefore not the conservative choice; it was the choice that stops every Android
+# title from launching. Both are mounted UNCONDITIONALLY on any non-sysbake launch (the block is
+# `if ! is_sysbake`), so there is no path where a non-VR title avoids them. Answering with real,
+# empty directories makes the mounts valid and leaves /data/steamvr/{runtime,config} empty inside
+# the container, which is what a device with no VR runtime should present.
+#
+# EVERY OTHER VERB STILL FAILS, loudly and with a nonzero exit. This is not SteamVR and must never
+# answer as though it were — a caller probing `steamvr --version` to decide whether a VR runtime
+# is present has to get "no". These three are implemented because Lepton demands them by name and
+# treats a failure as a fatal malformed mount; that is the whole of the justification, and a
+# fourth verb does not inherit it. (Checked: `build` and `config` appear in liblepton only inside
+# comments, so `logpath`, `path` and `configpath` are the complete set it actually invokes.)
+set -eu
+
+BASE="${XDG_DATA_HOME:-${HOME:?steamvr: no HOME and no XDG_DATA_HOME}/.local/share}/lepton"
+
+# Each verb gets its OWN subdirectory rather than sharing BASE: STEAMVR_LOGS_DIR is itself a mount
+# source (mounting.sh:475), so returning BASE for `logpath` would mount the runtime and config
+# directories inside the container's /data/steamvr/logs.
+case "${1:-}" in
+  logpath)    sub=logs    ;;
+  path)       sub=runtime ;;
+  configpath) sub=config  ;;
+  *)
+    echo "steamvr: this image ships no SteamVR runtime; only 'logpath', 'path' and 'configpath'" >&2
+    echo "         are implemented, because Lepton mounts their output unconditionally (novadeck)" >&2
+    exit 1
+    ;;
+esac
+
+# Lepton opens the log by path and mounts all three; it creates none of them itself.
+mkdir -p "$BASE/$sub"
+printf '%s\n' "$BASE/$sub"

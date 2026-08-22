@@ -161,6 +161,40 @@ CC=(${CROSS_COMPILE:+CROSS_COMPILE=$CROSS_COMPILE})
   #       60-novadeck-gaming.conf's vm.swappiness=180 quietly does nothing. The backend is checked
   #       separately from ZRAM because losing just that one leaves zram working but rejecting the
   #       `compression-algorithm = zstd` the shipped generator config asks for.
+  #   =y  USER_NS: rootless containers. THIS ONE IS DIFFERENT FROM EVERY OTHER ROW HERE — it is the
+  #       only symbol asserted that kernel/kernel.config does not itself set. It arrives from
+  #       arch/arm64/configs/defconfig, and the assertion is deliberately not paired with adding it
+  #       to the fragment: the fragment is what we ask the kernel to BE, and nothing about this
+  #       image's design wants to own a symbol the upstream arm64 defconfig has had on for years.
+  #       What the assertion owns is the DEPENDENCY on it, which is new: podman is on the image for
+  #       Valve's Lepton compat tool (issue #58) and maps container ids through user namespaces, so
+  #       a kernel without this launches no Android title and says nothing about why.
+  #       It is also the row most likely to actually fire, because BASE_CONFIG mode replaces the
+  #       whole .config with a foreign verbatim one (a ROCKNIX config, say) that never promised us
+  #       this symbol at all — inherited, not declared, is exactly the value worth checking.
+  #   =y  FUSE_FS: the other half of the same dependency, and the opposite case to USER_NS —
+  #       kernel.config DOES set it, and it is actively OVERRIDING the arm64 defconfig, which ships
+  #       this =m (merge_config says so on every build: "Previous value: CONFIG_FUSE_FS=m").
+  #       That is what makes the row worth having AND what makes its failure message a special
+  #       case: the realistic way to lose it is not kconfig dropping it, it is somebody deleting
+  #       that line, and what you land on then is the defconfig's =m rather than =n.
+  #       What it needs is a reason to still be here. Its original consumer
+  #       is gone: FEXServer used to erofsfuse-mount the x86 guest image per-user, and
+  #       rootfs/assemble-rootfs.sh replaced that with a kernel EROFS loop mount plus an overlayfs
+  #       (the erofsfuse binary is still installed, but nothing on the boot path invokes it). That
+  #       left a declared =y symbol with no caller — precisely the kind of row a later size pass
+  #       deletes as dead weight, correctly by the evidence available to it. It is load-bearing
+  #       again, for an unrelated subsystem: fuse-overlayfs is podman's rootless storage driver
+  #       whenever native rootless overlayfs is unavailable, and with FUSE_FS at =n podman does not
+  #       fail — it silently falls back to the `vfs` driver, which full-copies every image layer
+  #       instead of stacking it. On a handheld whose bulk storage is an SD card, that is the
+  #       difference between an Android title starting and one that appears to hang (issue #58).
+  #       Be honest about the two failures being different: at =m the module autoloads and
+  #       fuse-overlayfs works, so that case is a DECLARATION drift, not a broken image. Only =n
+  #       actually costs the storage driver. The row asserts =y because =y is what we declare and
+  #       this loop checks declared values exactly (same convention as ZRAM, which would also
+  #       function as a module) — but the hint below has to tell those two apart, or it sends a
+  #       reader hunting an unmet dependency that was never the problem.
   #
   # The block below guards the Qualcomm platform path against kernel/trim-platforms.config.
   # That fragment disables ~47 non-Qualcomm ARCH_* platform gates and lets kconfig's dependency
@@ -193,7 +227,7 @@ CC=(${CROSS_COMPILE:+CROSS_COMPILE=$CROSS_COMPILE})
   #       the only symptom is video decode quietly not working on a device with no console.
   for pair in CFG80211=m MAC80211=m TOUCHSCREEN_CHIPONE_TDDI=m VIDEO_QCOM_IRIS=m \
               BLK_DEV_DM=y DM_VERITY=y VFAT_FS=y BLK_DEV_LOOP=y \
-              ZRAM=y ZRAM_BACKEND_ZSTD=y \
+              ZRAM=y ZRAM_BACKEND_ZSTD=y USER_NS=y FUSE_FS=y \
               DRM_MSM=y PCIE_QCOM=y PCI_PWRCTRL_GENERIC=y MMC_SDHCI_MSM=y SCSI_UFSHCD=y \
               ARM_SMMU=y ARM64_4K_PAGES=y SCHED_CLASS_EXT=y DEBUG_INFO_BTF=y \
               SQUASHFS=y OVERLAY_FS=y; do
@@ -203,6 +237,22 @@ CC=(${CROSS_COMPILE:+CROSS_COMPILE=$CROSS_COMPILE})
       echo "CONFIG_$sym resolved to '$got', expected '$want'" >&2
       if [ "$want" = m ]; then
         echo "  something built-in selects it; find it with: grep -rn \"select $sym\" ." >&2
+      elif [ "$sym" = USER_NS ]; then
+        # The generic advice below is wrong for the one symbol kernel/kernel.config does not set:
+        # nothing here asked for it, so it did not get "dropped" -- whatever config we started from
+        # simply does not carry it. Point at that instead of at a dependency hunt that finds nothing.
+        echo "  this one is INHERITED, not declared: no novadeck fragment sets it, so the config we" >&2
+        echo "  started from is what lost it${BASE_CONFIG:+ (BASE_CONFIG=$BASE_CONFIG)}." >&2
+        echo "  Rootless podman maps container ids through user namespaces; without this, Valve's" >&2
+        echo "  Lepton compat tool launches no Android title and reports nothing (issue #58)." >&2
+        echo "  Set CONFIG_USER_NS=y in that config -- or add it to kernel/kernel.config and own it." >&2
+      elif [ "$sym" = FUSE_FS ] && [ "$got" = m ]; then
+        # =m is the arm64 defconfig's own value, so this is what deleting our line looks like --
+        # not an unmet dependency. Say which one it is, and be straight that the image still works.
+        echo "  =m is the arm64 defconfig's value, so kernel/kernel.config's CONFIG_FUSE_FS=y line" >&2
+        echo "  is gone or stopped applying -- this is declaration drift, not a broken kernel:" >&2
+        echo "  the module autoloads and podman's fuse-overlayfs driver still works. Restore the" >&2
+        echo "  line, or drop this row if =m is now the intended value." >&2
       else
         echo "  a dependency is unmet, so kconfig dropped it; check: grep -rn \"config $sym\" -A5 ." >&2
       fi

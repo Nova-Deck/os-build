@@ -89,15 +89,37 @@ if [ -e "$SEATD_SOCKET" ] && ! $SEATD_PGREP -x seatd >/dev/null 2>&1; then
     rm -f "$SEATD_SOCKET"
 fi
 
+
+
+# THE SEAT DECISION IS MADE BEFORE THE DRY RUN PRINTS, so a dry run cannot advertise a command
+# that differs from the one that would execute. It did, briefly, and the suite caught it.
+#
+# A SEATD THAT IS ALREADY RUNNING IS USED, NOT DUPLICATED. seatd-launch starts its own seatd and
+# refuses outright when the socket exists ("Socket file found ... refusing to start"), and the
+# shipped image enables seatd.service -- measured on a Pocket S2, 2026-08-22, pid 710 with
+# /run/seatd.sock root:seat 0770. Whether the installer image enables it too is Phase 6's choice,
+# and this file should not care: if a seat daemon is there, take the seat from it; if not, launch
+# one. Forcing LIBSEAT_BACKEND is safe HERE precisely because there is no logind session to prefer
+# -- the opposite of novadeck-session, where forcing it broke polkit's allow_active.
+#
+# The UI is gamescope's OWN CHILD (`--`), not a sibling: when it exits, gamescope exits, and the
+# unit's ExecStopPost gets to collect the log. That is also the model bring-up validated.
+# `-e`, not `-S`, matching the stale-socket check above: liveness is established by the pgrep, and
+# the two tests must agree or one path can think the socket is there while the other does not.
+if $SEATD_PGREP -x seatd >/dev/null 2>&1 && [ -e "$SEATD_SOCKET" ]; then
+    log "using the seatd already running on $SEATD_SOCKET"
+    export SEATD_SOCK="$SEATD_SOCKET" LIBSEAT_BACKEND=seatd
+    set -- "$GAMESCOPE" "$@" -- "$UI"
+else
+    set -- "$SEATD_LAUNCH" -- "$GAMESCOPE" "$@" -- "$UI"
+fi
+
 if [ "$DRYRUN" = 1 ]; then
     # The WHOLE command, seat launcher included -- a dry run that printed only the gamescope half
     # would let the seat path change without the suite noticing, and the seat path is the part that
     # has to work with no logind session.
-    printf '%s -- %s %s -- %s\n' "$SEATD_LAUNCH" "$GAMESCOPE" "$*" "$UI"
+    printf '%s\n' "$*"
     exit 0
 fi
-log "starting: $SEATD_LAUNCH -- $GAMESCOPE $* -- $UI"
-
-# The UI is gamescope's OWN CHILD (`--`), not a sibling: when it exits, gamescope exits, and the
-# unit's ExecStopPost gets to collect the log. That is also the model bring-up validated.
-exec "$SEATD_LAUNCH" -- "$GAMESCOPE" "$@" -- "$UI"
+log "starting: $*"
+exec "$@"

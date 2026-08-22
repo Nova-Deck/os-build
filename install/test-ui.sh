@@ -864,6 +864,23 @@ NOVADECK_INSTALLER_DRYRUN=1 NOVADECK_UI="$UI" NOVADECK_SEATD_PGREP="$T/bin/yes-s
   && ok "a socket with a live seatd behind it is left alone" \
   || bad "it removed a live seatd's socket"
 
+CASE="session: a seatd that is already running is used, not duplicated"
+# seatd-launch starts its OWN seatd and refuses when the socket exists, and the shipped image
+# enables seatd.service (Pocket S2, 2026-08-22: pid 710, /run/seatd.sock root:seat 0770). An
+# installer-session that always reached for seatd-launch would die before gamescope started.
+: >"$T/seatd.sock"
+cmd="$(NOVADECK_INSTALLER_DRYRUN=1 NOVADECK_UI="$UI" NOVADECK_SEATD_PGREP="$T/bin/yes-seatd" \
+  NOVADECK_DEVICE_ENV="$T/bin/device-env-panel" NOVADECK_SEATD_SOCK="$T/seatd.sock" \
+  "$SESSION" 2>"$T/session.err")"
+grep -qi 'using the seatd already running' "$T/session.err" \
+  && ok "it takes the seat from the running daemon instead of launching a second" \
+  || bad "it did not notice a live seatd: $(cat "$T/session.err")"
+rm -f "$T/seatd.sock"
+cmd="$(session)"
+printf '%s' "$cmd" | grep -q 'seatd-launch -- ' \
+  && ok "and with no seat daemon there, it launches one -- the bring-up path" \
+  || bad "it stopped using seatd-launch when nothing was running: $cmd"
+
 CASE="session: it refuses rather than drawing nothing"
 NOVADECK_INSTALLER_DRYRUN=1 NOVADECK_UI="$T/not-here" NOVADECK_DEVICE_ENV="$T/bin/device-env-panel" \
   "$SESSION" >/dev/null 2>&1 \

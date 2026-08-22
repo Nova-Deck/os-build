@@ -18,6 +18,16 @@
 #     two and read /sys/block. There is no write path in it, and the spine is never invoked.
 # Staged files live in /run/novadeck/probe — tmpfs, gone at the next boot.
 #
+# WHAT THIS CANNOT SHOW FROM A DEV CARD, so nobody plans the trip twice: the `REPLACES_OURS=1`
+# screen — a disk that ALREADY carries novadeck, whose destroy list names novadeck-home. Reaching it
+# needs a device booted from removable media with our eight on internal, and a dev card carries the
+# SAME `novadeck-*` filesystem labels as the install, so /esp and /home cross-mount onto the target
+# (seen during the §4a gate, 2026-08-21). The installer image gets its own labels; until then that
+# path is Phase 6 hardware step 6 and its only coverage is install/test-carve.sh, against a fixture
+# that has been carved for real. A device booted FROM internal cannot be its own target either —
+# select-target rule 1/2 refuses it, confirmed on a Pocket ACE 2026-08-22:
+# "select-target: /dev/sda is the disk the running system is on".
+#
 # WHY IT IS WORTH RUNNING AT ALL, given install/test-ui.sh drives the same code offline: the suite
 # feeds it stub tools and a synthetic GPT at 512-byte sectors. A real UFS LUN reports 4096, the
 # partition list is the board's own, and the destroy list comes from a carve plan over real

@@ -159,9 +159,16 @@ earlier — it is that one file that flips the device over.
      exit, so the next start fails "Socket file found … refusing to start" — fatal under
      `Restart=on-failure`, and an installer is a thing people re-run after a crash. Clear a stale
      socket before launch, as `novadeck-session` does.
-   - **What is genuinely still open** is therefore narrow: the same path as a **systemd unit in the
-     installer image** (Phase 2 ran it by hand over SSH, deliberately not as a unit) and the pad
-     half below.
+   - **ANSWERED IN FULL 2026-08-22, on a Pocket S2** — `install/installer-session` run by hand with
+     the Steam session killed: gamescope came up **as root with no logind session**, took DRM
+     master, and drew our UI as its only client at 2560x1440. Both pads enumerated through SDL and
+     a human completed §4d's consent sequence on the panel. What remains is only the same path
+     **as a systemd unit inside the installer image**, which is Phase 6's to run.
+   - **The seat came from the seatd that was ALREADY RUNNING, not from `seatd-launch`.**
+     `seatd.service` is active on the shipped image (pid 710, `/run/seatd.sock` root:seat 0770) and
+     `seatd-launch` starts its own and refuses when the socket exists — so it would have died
+     before gamescope started. `installer-session` now uses whichever exists. Whether the installer
+     image enables `seatd.service` is therefore Phase 6's choice, not a constraint.
 
    **And in the same run, confirm the pad enumerates.** §4d takes *consent* on the pad and §5 has
    no text entry to fall back to, so input is load-bearing beyond the GUI. **The installer ships
@@ -1546,7 +1553,8 @@ Each is a distinct screen with the SSID quoted back. This table is the acceptanc
 in place.
 
 **A confirm screen before connecting.** Once `wifi.conf` is parsed, show the SSID it names and
-wait for `A` to join, `B` to abort. Nothing destructive happens here, so a plain button press is
+wait for the **bottom** button to join and SELECT to cancel (the UI prints no face-button letters
+anywhere — §4d). Nothing destructive happens here, so a plain button press is
 the right weight — deliberately *not* the §4d sequence gate. Its job is to catch the stale-file
 case: a card that has been round-tripped through a previous install, or edited for a different
 network, names the wrong SSID and the user sees it before a connection attempt rather than after
@@ -1840,8 +1848,12 @@ Consequences:
   `boot/boards.map` column and no kernel console rotation is needed at all.
 - **No Plymouth in the installer.** `[[boot-splash-plymouth]]`: plymouthd starves gamescope's
   DRM master. The installer boots to a black panel for a few seconds instead.
-- The installer squashfs gains mesa, vulkan-freedreno, wayland, gamescope, seatd, SDL2 — all
-  already built by the overlay and pinned in `images/manifest.lock`, so no new package work.
+- The installer squashfs gains mesa, vulkan-freedreno, wayland, gamescope, seatd — those are in the
+  repos and the lock. **The Python SDL binding is NOT** (corrected 2026-08-22, measured against the
+  pinned builder): there is no `python-pygame` and no `PySDL2` in the holo repos, and no plain
+  `sdl2` either — only `sdl2-compat`, `sdl2_ttf`, `sdl2_image`, `sdl3`. This bullet used to say "no
+  new package work" and it was wrong; `mkroot.sh` would have found out. See
+  `install/pygame-ce.pin`.
   Mind `[[mesa-freedreno-depends-libdisplay-info]]`: runtime depends must match each `.so`'s
   `NEEDED`.
 - **It also ships InputPlumber** (`packages/inputplumber/prebuilt.pin`, auto-discovered by
@@ -1866,10 +1878,12 @@ Consequences:
 
 ### The client
 
-`install/ui` — Python + SDL2 (`python-pygame`), matching the repo's existing Python idiom
-(`novadeck-update`, `novadeck-hotkeyd`). Started by `install/units/novadeck-installer-ui.service`
-after `novadeck-installer-gamescope.service`, and it drives `install/novadeck-install` rather
-than reimplementing it — the orchestrator stays the testable spine and the GUI is a view.
+`install/ui` — Python + SDL2 via **`pygame-ce`, shipped as `install/pygame-ce.pin`**
+(there is no such package in the repos; see above), matching the repo's existing Python idiom
+(`novadeck-update`, `novadeck-hotkeyd`). Started by `install/units/novadeck-installer.service` —
+**one unit, not the two this sketch first described**; see the fallback section for why — and it
+drives `install/novadeck-install` rather than reimplementing it: the orchestrator stays the
+testable spine and the GUI is a view.
 
 **FOUR FILES, and the split is the doctrine made physical** (2026-08-22 — one file had reached 914
 lines, past this repo's 800 ceiling):
@@ -2103,7 +2117,9 @@ if none of the candidates is present. And the two files the spine reads as data:
   2026-08-21 Pocket FIT finding on the installer image itself),
   e2fsprogs/btrfs-progs, rauc + glib + openssl, curl + ca-certificates, dbus,
   NetworkManager + wpa_supplicant, openssh, python, and the Phase-5 graphics stack
-  (mesa, vulkan-freedreno, wayland, gamescope, seatd, sdl2, python-pygame). Reuses the
+  (mesa, vulkan-freedreno, wayland, gamescope, seatd — but NOT sdl2 or python-pygame, neither of
+  which exists in these repos: the SDL binding arrives as `install/pygame-ce.pin`, whose
+  wheel vendors its own SDL2 with the wayland driver, HW-proven on a Pocket S2). Reuses the
   existing overlay repo and `images/manifest.lock` pinning — no new package builds.
 - `install/mkimage.sh` — the 2-partition GPT above; ESP populated with steamcl + GRUB (a
   dedicated `grub.cfg` variant that boots `root=PARTUUID=` of p2, `rootfstype=squashfs`,

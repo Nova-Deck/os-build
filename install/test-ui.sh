@@ -576,6 +576,29 @@ printf '%s' "$noinput" | grep -qi 'Nothing has been written' \
   && ok "while saying the device is untouched, which is the question a stuck installer raises" \
   || bad "it does not say whether anything was written"
 
+CASE="§6: the pygame wheel is pinned to the Python the image actually ships"
+# A WHEEL IS ABI-LOCKED. install/pygame-ce.pin carries a cp313 build because images/manifest.lock
+# ships python 3.13; a python bump in the lock makes that wheel unimportable, and the symptom would
+# be an installer that comes up to a black panel with an ImportError in a child's stderr -- which
+# is exactly how the pygame.controller bug presented. Two files, one fact, so assert they agree.
+PIN="$ROOT/install/pygame-ce.pin"
+[ -f "$PIN" ] || bad "no pygame pin at $PIN"
+pin_py="$(sed -n 's/^python:[[:space:]]*//p' "$PIN" | head -1)"
+lock_py="$(awk '$1 == "python" {print $2}' "$ROOT/images/manifest.lock" | head -1)"
+want="cp$(printf '%s' "$lock_py" | cut -d. -f1)$(printf '%s' "$lock_py" | cut -d. -f2)"
+[ -n "$pin_py" ] && [ "$pin_py" = "$want" ] \
+  && ok "the wheel is $pin_py and the lock ships python $lock_py" \
+  || bad "the wheel is '$pin_py' but the lock ships python '$lock_py' (wants $want)"
+# The extraction target has to name that same python, or the wheel lands where nothing imports it.
+grep -q "^dest:.*python3\.$(printf '%s' "$lock_py" | cut -d. -f2)/" "$PIN" \
+  && ok "and it is extracted into that interpreter's site-packages" \
+  || bad "the pin's dest does not name python3.$(printf '%s' "$lock_py" | cut -d. -f2): $(grep '^dest:' "$PIN")"
+# It is deliberately NOT under packages/, which images/customize-base.sh auto-discovers into the
+# RELEASE base -- 39 MB of SDL bindings on every shipped device, for a program that does not ship.
+[ -f "$ROOT/packages/pygame-ce/prebuilt.pin" ] \
+  && bad "the pygame pin is under packages/, so customize-base will put it in the release image" \
+  || ok "and it is not under packages/, where it would land in every shipped image"
+
 CASE="ui: the game-controller API is the one pygame actually has"
 # `pygame.controller` does not exist as a top-level module in either pygame or pygame-ce -- it is
 # pygame._sdl2.controller. Written from the docs rather than the library, that line took the whole

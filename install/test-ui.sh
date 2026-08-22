@@ -283,6 +283,7 @@ exit 0
 EOF
 cat >"$T/bin/curl" <<'EOF'
 #!/usr/bin/env bash
+printf '%s\n' "$*" >>"${NET_CURL_CALLS:-/dev/null}"
 exit "${NET_HOST_RC:-0}"
 EOF
 cat >"$T/bin/nmcli" <<'EOF'
@@ -316,6 +317,24 @@ NET_HOST_RC=7
 [ "$(state "$(netcfg)")" = no-host ] \
   && ok "a lease with an unreachable server is 'no-host', not a Wi-Fi problem" \
   || bad "an unreachable server was misdiagnosed"
+printf '%s' "$(NET_HOST_RC=7 netcfg)" | grep -qi 'nothing accepted a connection' \
+  && ok "and it says WHICH failure -- curl's exit code, mapped to something a person can act on" \
+  || bad "no-host does not distinguish DNS from a refused connection"
+printf '%s' "$(NET_HOST_RC=6 netcfg)" | grep -qi 'could not be resolved' \
+  && ok "a name that does not resolve says so, because that is a different fix" \
+  || bad "a DNS failure reads the same as a dead host"
+# THE REGRESSION THIS FILE EXISTS TO HOLD. `curl -f` turns a 404 into a failure, and the OTA root
+# legitimately 404s -- it serves <channel>/latest.json, not an index. netcfg shipped with -f and
+# called a reachable server unreachable on a Pocket S2, on the very network the probe ran over.
+NET_CURL_CALLS="$T/net/curl-calls"; export NET_CURL_CALLS; : >"$NET_CURL_CALLS"
+NET_HOST_RC=0 netcfg >/dev/null
+grep -qE '(^| )-[a-zA-Z]*f' "$NET_CURL_CALLS" \
+  && bad "netcfg passes -f to curl, so any 4xx reads as an unreachable host" \
+  || ok "reachability is curl's EXIT code, never its HTTP status -- no -f is passed"
+grep -q 'ota.example' "$NET_CURL_CALLS" \
+  && ok "and it probes the OTA base URL it was configured with" \
+  || bad "it probed something other than the configured URL: $(cat "$NET_CURL_CALLS")"
+unset NET_CURL_CALLS
 NET_LEASE=0 NET_HOST_RC=0
 CONF="$T/net/absent.conf" ; [ "$(state "$(netcfg)")" = no-conf ] \
   && ok "no wifi.conf on the card is its own state, with the path quoted" \
@@ -601,6 +620,18 @@ printf '%s' "$out" | grep -q 'AYANEO Pocket ACE' \
 printf '%s' "$out" | grep -q 'AYANEO\\\\ Pocket' \
   && bad "the shell escaping reached the screen -- this is the Pocket S2 backslash" \
   || ok "and the shell escaping device-env applies is undone, not printed"
+# THE OTHER PRODUCER. netcfg emits plain prose with spaces, and the parser that unescapes
+# device-env's %q must not truncate it -- taking the first shlex token rendered a real device's
+# "the installer can reach https://..." as the single word "the".
+kvcheck="$(python3 -c '
+import os, sys
+sys.path.insert(0, os.path.join(os.environ["ROOT"], "install"))
+import uiflow
+d = uiflow.kv("DETAIL=the installer can reach https://x\nNAME=AYANEO\\ Pocket\\ S2\n")
+print("%s|%s" % (d["DETAIL"], d["NAME"]))')"
+[ "$kvcheck" = "the installer can reach https://x|AYANEO Pocket S2" ] \
+  && ok "and a value with spaces survives whole, from either producer" \
+  || bad "kv() mangled a value: $kvcheck"
 printf '%s' "$out" | grep -q '/dev/sda' \
   && ok "and the target is the one select-target.sh chose" \
   || bad "the target is not what select-target returned"

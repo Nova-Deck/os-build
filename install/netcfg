@@ -59,10 +59,31 @@ have_lease() {
     && "$IP" -4 addr show scope global 2>/dev/null | grep -q 'inet '
 }
 
+# THE HOST ANSWERING IS THE QUESTION -- NOT WHAT IT ANSWERS. No `-f`, deliberately: with it, curl
+# turns any 4xx into a failure, and this reported `no-host` for a server that had completed a TLS
+# handshake and replied 404. MEASURED on a Pocket S2, 2026-08-22, on a network the probe was
+# running over. The OTA root legitimately 404s (it serves `<channel>/latest.json`, not an index),
+# and so, at that moment, did the dev channel's manifest -- a published release is not a promise
+# that any given channel has one.
+#
+# What `no-host` must mean is §4b's row: "upstream or DNS, not ours". That is exactly curl's EXIT
+# code -- 6 cannot resolve, 7 cannot connect, 28 timed out, 35 TLS -- and never its HTTP status. A
+# server that says 404 is a server the installer can reach.
+CURL_RC=0
 host_reachable() {
-  # The OTA host specifically, not "the internet". A lease behind a captive portal or a DNS that
-  # cannot resolve our host is a different fix from a dead AP, and the user is told which.
-  "$CURL" -fsS --max-time "$CONNECT_TIMEOUT" -o /dev/null "$OTA_URL/" 2>/dev/null
+  "$CURL" -sS --max-time "$CONNECT_TIMEOUT" -o /dev/null "$OTA_URL/" >/dev/null 2>&1
+  CURL_RC=$?
+  [ "$CURL_RC" = 0 ]
+}
+
+curl_reason() {
+  case "$CURL_RC" in
+    6)  printf 'the name %s could not be resolved (DNS)' "${OTA_URL#https://}" ;;
+    7)  printf 'nothing accepted a connection' ;;
+    28) printf 'it did not answer within %ss' "$CONNECT_TIMEOUT" ;;
+    35|60) printf 'the secure connection could not be established' ;;
+    *)  printf 'curl gave up with code %s' "$CURL_RC" ;;
+  esac
 }
 
 # --- wifi.conf ------------------------------------------------------------------------------------
@@ -106,7 +127,7 @@ diagnose() {  # <joined?>
     fi
     emit STATE no-host
     emit URL "$OTA_URL"
-    emit DETAIL "an address is held, but $OTA_URL does not answer"
+    emit DETAIL "an address is held, but $(curl_reason)"
     return 0
   fi
 

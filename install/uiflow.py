@@ -68,10 +68,16 @@ def kv(text):
             continue
         k, v = line.split("=", 1)
         try:
+            # JOINED, not parts[0]. Both producers feed this: device-env emits one %q-escaped token
+            # (`AYANEO\ Pocket\ S2`), which shlex returns as a single element -- but netcfg emits
+            # plain prose with spaces (`DETAIL=the installer can reach https://...`), which splits
+            # into many. Taking the first element rendered that as "the" on a real Pocket S2.
+            # Joining handles both; the only loss is a run of consecutive spaces, which no producer
+            # here emits and no screen would show.
             parts = shlex.split(v.strip())
-        except ValueError:                       # an unbalanced quote is not worth dying over
+        except ValueError:                       # an unbalanced quote (an SSID with an apostrophe)
             parts = [v.strip().strip("'\"")]
-        out[k.strip()] = parts[0] if parts else ""
+        out[k.strip()] = " ".join(parts)
     return out
 
 

@@ -225,6 +225,44 @@ class ConsentScreen:
         return {"title": "Repair the NovaDeck install on this device", "blocks": blocks}
 
 
+class NoInputScreen:
+    """
+    §4d: no controller and no keyboard means the installer STOPS and says so.
+
+    It is a dead end on purpose — it handles nothing, because there is nothing to handle it with.
+    What makes it more than a message is the refusal in the loop: while this screen is up, a
+    consent request is answered with an error instead of being drawn, so the spine stops rather
+    than waiting forever on a screen nobody can answer. An installer that cannot take consent
+    cannot install, and it should say which of those two it is.
+
+    It re-checks, so plugging a keyboard in recovers without a reboot.
+    """
+
+    name = "no-input"
+
+    def handle(self, token):
+        pass
+
+    def describe(self):
+        return {
+            "screen": "no-input",
+            "title": "No controller or keyboard",
+            "blocks": [
+                ("Nothing to answer with",
+                 "This installer asks you to confirm before it erases anything, and it cannot "
+                 "find a game controller or a USB keyboard to take that confirmation on."),
+                ("What to do",
+                 "Attach a USB keyboard, or fix the controller, and this screen will go away on "
+                 "its own. Nothing has been written and nothing will be."),
+            ],
+            "diamonds": [],
+            "prompt": "",
+            "note": "",
+            "buttons": [],
+            "abort": "",
+        }
+
+
 class IdleScreen:
     """What is on the panel when nothing has asked for the screen yet."""
 
@@ -348,8 +386,20 @@ def run(server, view, source, base, deadline=0):
     stack = [base]
     spine = None
     started = time.monotonic()
+    # §4d's input check, throttled: it reads the kernel's device list, which is cheap but not free
+    # at frame rate, and the answer only changes when somebody plugs something in.
+    no_input = NoInputScreen()
+    have_input, input_checked = source.present(), time.monotonic()
+    if not have_input:
+        log("no controller and no keyboard -- consent cannot be taken on this machine (§4d)")
     while True:
-        screen = stack[-1]
+        if time.monotonic() - input_checked > 2:
+            was, have_input = have_input, source.present()
+            input_checked = time.monotonic()
+            if was != have_input:
+                log("input devices: %s" % ("present again" if have_input else "gone"))
+
+        screen = no_input if not have_input else stack[-1]
 
         # The install, if one is running. Read before drawing so a frame shows the newest step.
         if spine is not None:
@@ -366,6 +416,14 @@ def run(server, view, source, base, deadline=0):
                 spine = None
 
         req = server.poll()
+        if req is not None and not have_input:
+            # THE REFUSAL THAT MAKES THE SCREEN MORE THAN A MESSAGE. Drawing a consent screen on a
+            # machine with nothing to press it with would leave the spine blocked on an answer that
+            # can never come; answering with an error makes the shim exit non-zero, which the spine
+            # reads as an abort and stops on. It fails closed, and it fails at once.
+            log("refusing a consent request: there is no input device to take consent on (§4d)")
+            server.answer({"error": "no controller or keyboard is attached"})
+            req = None
         if req is not None:
             try:
                 facts = read_facts(req["facts"])

@@ -82,7 +82,8 @@ EOF
 ui_ask() {  # <events-file> <facts> <sequence>
   local events="$1" facts="$2" seq="$3" i=0
   SOCK="$T/sock.$RANDOM"
-  NOVADECK_UI_SOCK="$SOCK" NOVADECK_UI_EVENTS="$events" "$UI" >"$T/ui.log" 2>&1 &
+  NOVADECK_UI_SOCK="$SOCK" NOVADECK_UI_EVENTS="$events" NOVADECK_UI_INPUT_DEVICES="${DEVFILE-}" \
+    "$UI" >"$T/ui.log" 2>&1 &
   UI_PID=$!
   while [ ! -S "$SOCK" ]; do
     i=$((i+1)); [ "$i" -gt 300 ] && { echo "the UI never created its socket" >&2; return 9; }
@@ -260,6 +261,106 @@ printf '%s' "$r" | grep -q '180 GiB' \
 printf '%s' "$a" | grep -q 'your game library is safe' \
   && ok "while a stock Android disk still gets it -- there the games really are on the card" \
   || bad "the reassurance was lost on the disk where it is true"
+
+# =================================================================================================
+# §4d: no controller and no keyboard -> stop
+# =================================================================================================
+# Both fixtures are shaped like the real file, and both traps in them were measured on a device:
+# InputPlumber ALWAYS publishes a virtual keyboard whose bitmap covers the alphabet, and
+# pmic_pwrkey/gpio-keys carry `Handlers=kbd` while being unable to type a letter.
+cat >"$T/devices-none" <<'EOF'
+I: Bus=0000 Vendor=0000 Product=0000 Version=0000
+N: Name="pmic_pwrkey"
+S: Sysfs=/devices/platform/soc@0/c400000.spmi/spmi-0/0-00/input/input0
+H: Handlers=kbd event0
+B: EV=3
+B: KEY=10000000000000 0
+
+I: Bus=0019 Vendor=0001 Product=0001 Version=0100
+N: Name="gpio-keys"
+S: Sysfs=/devices/platform/gpio-keys/input/input4
+H: Handlers=kbd event3
+B: EV=3
+B: KEY=8000000000000 0
+
+I: Bus=0003 Vendor=1234 Product=5678 Version=0111
+N: Name="InputPlumber Keyboard"
+S: Sysfs=/devices/virtual/input/input10
+H: Handlers=sysrq kbd event8
+B: EV=3
+B: KEY=300000c07 ff9f207ac07057ff fabeffdfffefffff fffffffffffffffe
+EOF
+{ cat "$T/devices-none"; cat <<'EOF'
+
+I: Bus=0003 Vendor=413c Product=2113 Version=0111
+N: Name="Dell KB216 Wired Keyboard"
+S: Sysfs=/devices/platform/soc@0/1c08000.pcie/usb1/1-3/1-3:1.0/input/input14
+H: Handlers=sysrq kbd event12
+B: EV=120013
+B: KEY=1000000000007 ff9f207ac14057ff febeffdfffefffff fffffffffffffffe
+EOF
+} >"$T/devices-kbd"
+
+keycheck() {  # <devices-file> -> prints True/False
+  NOVADECK_UI_INPUT_DEVICES="$1" python3 -c '
+import os, sys
+sys.path.insert(0, os.path.join(os.environ["ROOT"], "install"))
+import uipad
+print(uipad.typing_keyboard_present())'
+}
+
+CASE="§4d: what counts as something to answer with"
+[ "$(keycheck "$T/devices-kbd")" = True ] \
+  && ok "a USB keyboard counts" \
+  || bad "a real keyboard was not detected"
+[ "$(keycheck "$T/devices-none")" = False ] \
+  && ok "and a machine with only power/volume keys and InputPlumber's virtual keyboard does not" \
+  || bad "something that cannot type a letter was counted as a keyboard"
+# The two exclusions, named individually so a regression says which one broke.
+grep -q 'devices/virtual' install/uipad.py \
+  && ok "the virtual keyboard is excluded by sysfs path -- it is fed BY the pad that is missing" \
+  || bad "nothing excludes InputPlumber's own keyboard"
+[ "$(keycheck "$T/nonexistent-devices-file")" = True ] \
+  && ok "an unreadable device list reports PRESENT -- the gate is the safety property, not this" \
+  || bad "a missing /proc file made the installer refuse to run"
+
+CASE="§4d: with nothing to answer with, consent is refused rather than drawn"
+# The screen alone would leave the spine blocked on an answer that can never come.
+printf 'SHOWN\n' >"$T/ev-noinput"
+DEVFILE="$T/devices-none" ui_ask "$T/ev-noinput" "$T/facts-wipe" SWNE \
+  && bad "consent was granted on a machine with no input device" \
+  || ok "the shim exits non-zero, which the spine reads as an abort"
+[ -z "$OUT" ] \
+  && ok "and nothing reaches stdout, so nothing can be mistaken for an answer" \
+  || bad "it put something on stdout: $(printf '%q' "$OUT")"
+grep -q 'no input device to take consent on' "$T/ui.log" \
+  && ok "the journal says which of the two failures this is" \
+  || bad "the refusal is not explained: $(cat "$T/ui.log")"
+# And it must be the refusal, not a crash: a machine that gets a keyboard back must recover.
+DEVFILE="$T/devices-kbd" ui_ask "$T/ev-noinput" "$T/facts-wipe" SWNE \
+  && ok "the same run with a keyboard attached takes consent normally" \
+  || bad "a machine WITH a keyboard was also refused: $ERR"
+[ "$OUT" = SWNE ] \
+  && ok "so the stop is about the input device and nothing else" \
+  || bad "the answer was wrong with a keyboard present: $OUT"
+
+CASE="§4d: the screen says what is wrong and what to do"
+noinput="$(python3 -c '
+import importlib.util, json, os, sys
+from importlib.machinery import SourceFileLoader
+loader = SourceFileLoader("nvui", os.path.join(os.environ["ROOT"], "install/ui"))
+spec = importlib.util.spec_from_loader("nvui", loader)
+ui = importlib.util.module_from_spec(spec); loader.exec_module(ui)
+print(json.dumps(ui.NoInputScreen().describe()))')"
+printf '%s' "$noinput" | grep -qi 'controller or .*keyboard' \
+  && ok "it names both things it looked for" \
+  || bad "the screen does not say what is missing"
+printf '%s' "$noinput" | grep -qi 'USB keyboard' \
+  && ok "and tells the user the one thing that fixes it" \
+  || bad "the screen offers no way out"
+printf '%s' "$noinput" | grep -qi 'Nothing has been written' \
+  && ok "while saying the device is untouched, which is the question a stuck installer raises" \
+  || bad "it does not say whether anything was written"
 
 CASE="ui: the model is separable from the view"
 # Everything above ran with no SDL, no display and no pad, and that is only true while the state

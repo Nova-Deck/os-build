@@ -46,6 +46,67 @@ def log(msg):
 # =================================================================================================
 # input sources
 # =================================================================================================
+# =================================================================================================
+# is there anything to answer with? — §4d
+# =================================================================================================
+# "If neither a controller nor a keyboard is present, the installer STOPS and says so. There is no
+# bypass. An installer that cannot take consent cannot install."
+#
+# The keyboard half cannot be asked of SDL, so it is read from the kernel's device list — and the
+# question is not "is there a keyboard" but "is there something that can type the four letters the
+# consent screen asks for". That is the same question, asked in the form that can be answered.
+INPUT_DEVICES = os.environ.get("NOVADECK_UI_INPUT_DEVICES", "/proc/bus/input/devices")
+
+# KEY_S, KEY_W, KEY_N, KEY_E — the initials install/confirm-tty takes and this UI accepts.
+TYPING_KEYS = (31, 17, 49, 18)
+
+
+def _key_mask(words):
+    """The `B: KEY=` bitmask, printed high word first, as one integer."""
+    try:
+        return int("".join(w.rjust(16, "0") for w in words), 16)
+    except ValueError:
+        return 0
+
+
+def typing_keyboard_present(path=None):
+    """
+    A device that can type S/W/N/E, and is not one of ours.
+
+    TWO EXCLUSIONS, and both were measured rather than guessed:
+
+    * `/devices/virtual/` is skipped. InputPlumber always creates an "InputPlumber Keyboard" whose
+      capability bitmap covers the whole alphabet, so a naive scan reports a keyboard on every
+      board this project ships — including one with nothing attached at all. It is fed BY the pad,
+      so when the pad is the thing that is missing, it types nothing.
+    * capability, not the `kbd` handler. `pmic_pwrkey`, `gpio-keys` and even the headset jack carry
+      `Handlers=kbd`; none of them can type a letter.
+
+    A device list that cannot be READ reports present, deliberately. This check is an early and
+    friendly stop, not the safety property — the safety property is the consent gate itself, which
+    still cannot be satisfied without a person pressing something. Refusing to install because
+    /proc looked odd would trade a real capability for a guess.
+    """
+    p = path or INPUT_DEVICES
+    try:
+        blocks = open(p, "r", encoding="utf-8", errors="replace").read().split("\n\n")
+    except OSError as e:
+        log("cannot read %s (%s) -- assuming an input device is present" % (p, e))
+        return True
+    for block in blocks:
+        sysfs, mask = "", 0
+        for line in block.splitlines():
+            if line.startswith("S: Sysfs="):
+                sysfs = line.split("=", 1)[1].strip()
+            elif line.startswith("B: KEY="):
+                mask = _key_mask(line.split("=", 1)[1].split())
+        if not mask or sysfs.startswith("/devices/virtual/"):
+            continue
+        if all((mask >> k) & 1 for k in TYPING_KEYS):
+            return True
+    return False
+
+
 class ScriptedInput:
     """
     A file of tokens, one per line, consumed one per frame. The headless seam.
@@ -73,6 +134,12 @@ class ScriptedInput:
             seq = getattr(screen, "sequence", "")
             return list(seq)
         return [tok]
+
+    def present(self):
+        # This source IS an input device -- it replays presses, which is what a keyboard does. It
+        # defers to the device scan only when a test points it at a fixture explicitly, which is
+        # how §4d's no-input case is driven with no SDL in the picture.
+        return typing_keyboard_present() if os.environ.get("NOVADECK_UI_INPUT_DEVICES") else True
 
     def close(self):
         pass
@@ -110,7 +177,12 @@ class PadInput:
         log("controller attached: %s" % c.name)
 
     def present(self):
-        return bool(self.pads)
+        # A PAD SDL CANNOT MAP DOES NOT COUNT, which is why this asks SDL rather than the kernel:
+        # an AYANEO Pocket ACE in AYANEO mode exposes a perfectly good gamepad that SDL has no
+        # mapping for (2026-08-22), and a screen whose buttons cannot be named is not a screen
+        # anyone can give consent on. The keyboard half has no SDL equivalent, so it is read from
+        # the device list.
+        return bool(self.pads) or typing_keyboard_present()
 
     def poll(self, screen):
         pg = self.pygame

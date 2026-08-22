@@ -19,6 +19,9 @@ git_commit: 8d3ae59288f1e7d58d76558a6ee96d533bc5019f
 #   - all 427 referenced CONFIG_* symbols (kernel.config + trim-platforms.config) exist in the
 #     PATCHED 7.2 tree, EXCEPT one, now deleted — see kernel.config's header:
 #       READ_ONLY_THP_FOR_FS -> removed upstream in 7.2; file THP is unconditional now.
+#     428 as of 2026-08-22: SCHED_CACHE was added to kernel.config and checked the same way
+#     (init/Kconfig:1025, `default y`, `depends on SMP`) — it was already resolving to =y here,
+#     so the pin records an inherited default rather than changing one.
 #   - all 69 out-of-tree patches in kernel/patches/ apply to 7.2 with ZERO rejects, applied
 #     CUMULATIVELY in lexical order, which is the only order that means anything (see below).
 #     21 of them need fuzz (was 10 on 7.1.6); kernel/build.sh passes no -F0, so patch's default

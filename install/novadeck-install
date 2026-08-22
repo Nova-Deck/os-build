@@ -548,6 +548,31 @@ carve() {
   done
   record "layout: $(for name in "${!PART[@]}"; do printf '%s=%s ' "$name" "${PART[$name]}"; done)"
 
+  # A SETTLE IS NOT A BARRIER. part_dev builds the by-partuuid path from the GPT, but it is udev
+  # that has to publish the symlink, and it does that asynchronously. carve.sh settles after the
+  # append, and that is still not enough on a RE-carve: the table is rewritten twice in quick
+  # succession (delete_ours, then the append), so the old nodes are being removed while the new
+  # ones are appearing, and `udevadm settle` can return before the kernel has queued the uevents it
+  # would have waited for.
+  #
+  # MEASURED on the Pocket ACE, 2026-08-22, second install onto a disk that already carried ours:
+  # seven of the eight symlinks were present and novadeck-efi-B was not, so the run died on
+  # "not a block device" -- on a disk whose userdata had already been shrunk and zeroed. The wait
+  # is bounded (10s) and costs nothing when the node is already there, which is every other run.
+  wait_for_dev() {  # <path> -> 0 once it exists, non-zero after ~10s
+    local dev="$1" i
+    for i in $(seq 1 50); do
+      # shellcheck disable=SC2086  # DEVTEST is a predicate, not a path
+      [ $DEVTEST "$dev" ] && return 0
+      if [ "$i" = 1 ] && command -v udevadm >/dev/null 2>&1; then
+        udevadm settle >/dev/null 2>&1 || true
+        continue                                   # re-test immediately after the settle
+      fi
+      sleep 0.2
+    done
+    return 1
+  }
+
   # THE INDEX -> DEVICE STEP, and the one rule every write below depends on. Resolved by PARTUUID
   # through lib-slotwrite.sh's part_dev; nothing here concatenates a disk and an index, because the
   # `p` infix (mmcblk0p11 against sda11) is exactly what this fleet cannot test -- every board is
@@ -556,8 +581,8 @@ carve() {
   for name in "${!PART[@]}"; do
     DEV["$name"]="$(part_dev "$DISK" "${PART[$name]}")" \
       || die "cannot resolve p${PART[$name]} ($name) by partuuid -- refusing to guess a device name"
-    # shellcheck disable=SC2086  # DEVTEST is a predicate, not a path
-    [ $DEVTEST "${DEV[$name]}" ] || die "${DEV[$name]} ($name) is not a block device"
+    wait_for_dev "${DEV[$name]}" \
+      || die "${DEV[$name]} ($name) is not a block device"
   done
   log "eight partitions resolved by partuuid"
 }

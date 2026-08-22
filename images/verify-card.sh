@@ -110,8 +110,8 @@ check_slot() {  # <partnum> <expected letter>
   [ "$got" = "$2" ] && ok "p$1 /var/lib/novadeck/slot = $2" \
                     || bad "p$1 slot witness: expected '$2', got '$got'"
 }
-check_slot "$P_VARA" a
-[ "$SLOT_B" = 1 ] && check_slot "$P_VARB" b
+check_slot "$P_VARA" A
+[ "$SLOT_B" = 1 ] && check_slot "$P_VARB" B
 
 # ----------------------------------------------------------------------------------------------
 # 3. The ESP (stage 1 home). steamcl at /EFI/BOOT/bootaa64.efi is the only thing ABL can find,

@@ -1305,7 +1305,16 @@ mkdir -p "$IMGDIR"
 # reason: /home is mounted by LABEL, and duplicate filesystem identity across slots is the hazard.
 install -d -m0755 "$varstage/lib/novadeck"
 for slot in a b; do
-  printf '%s\n' "$slot" >"$varstage/lib/novadeck/slot"
+  # UPPERCASE, matching the boot chain and the installer. The loop variable stays lowercase because
+  # it names the images and the partitions (var-a, novadeck-var-A via ${slot^^}), but the WITNESS is
+  # in bootconf naming: the kernel command line carries novadeck.slot=A|B, seed_var writes $SLOT,
+  # and images/test-post-install.sh asserts 'B'. This wrote 'a' and was the only thing in the
+  # system spelling it lowercase -- discovered 2026-08-22 when install/verify-install.sh, which
+  # runs the card's check list against a real install, disagreed with images/verify-card.sh about
+  # the same file. Nothing reads it at runtime (the initramfs takes the slot from the cmdline), so
+  # this was cosmetic -- but a witness that answers differently depending on how the disk was made
+  # is not a witness.
+  printf '%s\n' "${slot^^}" >"$varstage/lib/novadeck/slot"
   case "$slot" in
     a) img=$VARIMG ;;
     b) img=$VARIMG_B ;;

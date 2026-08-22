@@ -288,7 +288,10 @@ Offline, in `make test` — all green at the time of writing:
 * Picking a board boots it: `/proc/device-tree/model` reads `AYANEO Pocket S2`, and the cmdline
   carries `root=`/`novadeck.var=`/`novadeck.efi=` all pointing at the A slot.
 * The initramfs resolves `novadeck.efi=PARTLABEL=` and mounts p2 at `/efi`; `/esp` is p1 from
-  fstab; root is ro on p4, `/var` on p6, `/var/lib/novadeck/slot` = `a`.
+  fstab; root is ro on p4, `/var` on p6, `/var/lib/novadeck/slot` = `a`. (That reading is kept as
+  observed; cards built after 2026-08-22 write `A`, in the same bootconf naming as
+  `novadeck.slot=` and the installer — nothing reads the file at runtime, so the change is
+  cosmetic.)
 * **`save_env` writes the ESP grubenv** — `saved_entry=ayaneo-pocket-s2` — and a reboot takes it
   with no input at all. This is the assertion the whole grubenv rework exists for.
 * The health unit confirms the boot (`boot-count` 1 → 2, `boot-attempts` 0, `image-invalid` 0),

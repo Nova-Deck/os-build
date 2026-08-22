@@ -107,10 +107,15 @@ CASE="the old filesystem is invalidated, inside userdata only"
 wipe="$(board_img "AYANEO Pocket ACE")"
 ud_start="$(rows "$wipe" | awk '$4=="userdata" {print $2}')"
 floor=$(( ud_start + 33 * (1073741824 / 512) ))   # fixtures are 512-byte sectors; 33 GiB of them
-# A superblock-shaped marker across the head of userdata, and another where our ESP will land.
+# A superblock-shaped marker across the head of userdata, and another inside the ESP we are about
+# to create -- 2 MiB in, NOT at the floor itself. wipe_our_heads deliberately clears the first MiB
+# of each of our eight (stale signatures make udev refuse the partition outright), so a probe at
+# the floor now reads as zero for a reason that has nothing to do with this claim. Past that MiB
+# the only thing that could write is a userdata wipe that overran, which is what this asserts.
+probe=$(( floor + 4096 ))                          # 2 MiB in, in 512-byte fixture sectors
 tr '\0' '\377' </dev/zero | dd of="$wipe" bs=512 seek="$ud_start" count=8192 \
   conv=notrunc status=none 2>/dev/null
-tr '\0' '\377' </dev/zero | dd of="$wipe" bs=512 seek="$floor" count=1 \
+tr '\0' '\377' </dev/zero | dd of="$wipe" bs=512 seek="$probe" count=1 \
   conv=notrunc status=none 2>/dev/null
 
 if carve fresh "$wipe" 33 >/dev/null 2>&1; then
@@ -121,9 +126,13 @@ if carve fresh "$wipe" 33 >/dev/null 2>&1; then
   # The wipe is bounded by the partition it is destroying. A wipe that ran past the new end would
   # be writing into the ESP we are about to create, which is a different failure from the one above
   # and a worse one: it would corrupt an install rather than leave a stale one.
-  [ "$(dd if="$wipe" bs=512 skip="$floor" count=1 status=none | tr -d '\377' | wc -c)" = 0 ] \
-    && ok "the sector at the append floor is untouched -- the wipe stayed inside userdata" \
+  [ "$(dd if="$wipe" bs=512 skip="$probe" count=1 status=none | tr -d '\377' | wc -c)" = 0 ] \
+    && ok "the marker 2 MiB into our span is untouched -- the wipe stayed inside userdata" \
     || bad "the wipe overran userdata and wrote into our own span"
+  # And the head clear itself did happen, so the case above is not passing because nothing ran.
+  [ "$(dd if="$wipe" bs=512 skip="$floor" count=2048 status=none | tr -d '\0' | wc -c)" = 0 ] \
+    && ok "the first MiB of the ESP is cleared -- no stale signature for udev to choke on" \
+    || bad "wipe_our_heads did not clear the head of the ESP"
 else
   bad "the carve refused a board it accepts elsewhere in this suite"
 fi
@@ -450,6 +459,43 @@ if rows_for 'AYANEO Pocket ACE (after a ROCKNIX uninstall)' /dev/sda \
   [ "$(udfield "$res" 'Partition GUID code')" = "1B81E7E6-F50D-419B-A739-2AEEF8DA3335" ] \
     && ok "userdata is handed back the Android vendor type ROCKNIX had overwritten" \
     || bad "userdata came back typed $(udfield "$res" 'Partition GUID code')"
+
+  # A GPT ENTRY IS NOT A FILESYSTEM, and a re-carve is where that bites. The sectors our eight
+  # occupy were somebody else's one layout ago, so a new partition inherits their superblocks.
+  # MEASURED on the Pocket ACE 2026-08-22: the new efi-B carried a stale vfat signature at 0x0 and
+  # a stale btrfs one at 0x10040; libblkid calls two conflicting signatures ambiguous and refuses,
+  # udev's blkid builtin fails EPERM, and /dev/disk/by-partuuid/<efi-B> is never created. The
+  # install died resolving a partition that was present, correct and readable.
+  #
+  # Planted at BOTH offsets that mattered, then re-carved, because one signature probes fine and
+  # it took two to break it.
+  CASE="a re-carve leaves no stale filesystem signatures under the new partitions"
+  planted=0
+  while read -r pidx pstart _ pname; do
+    is_ours_name=0
+    for n in "${OUR_NAMES[@]}"; do [ "$pname" = "$n" ] && is_ours_name=1; done
+    [ "$is_ours_name" = 1 ] || continue
+    printf 'STALEFS' | dd of="$res" bs=512 seek="$pstart" conv=notrunc status=none
+    printf '_BHRfS_M' | dd of="$res" bs=1 seek=$(( pstart * 512 + 65600 )) conv=notrunc status=none
+    planted=$(( planted + 1 ))
+  done < <(rows "$res")
+  [ "$planted" = 8 ] \
+    && ok "planted stale signatures at 0x0 and 0x10040 of all eight" \
+    || bad "planted $planted markers, expected 8 -- the case below would prove nothing"
+
+  carve fresh "$res" 8 >/dev/null 2>&1
+  dirty=""
+  while read -r pidx pstart _ pname; do
+    for n in "${OUR_NAMES[@]}"; do
+      [ "$pname" = "$n" ] || continue
+      if [ -n "$(dd if="$res" bs=512 skip="$pstart" count=2048 status=none | tr -d '\0')" ]; then
+        dirty="$dirty $pname"
+      fi
+    done
+  done < <(rows "$res")
+  [ -z "$dirty" ] \
+    && ok "every one of the eight comes back with a zeroed head -- nothing for libblkid to find" \
+    || bad "stale bytes survived the re-carve on:$dirty"
 else
   bad "could not rebuild the post-uninstall capture"
 fi

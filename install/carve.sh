@@ -158,6 +158,39 @@ drop_residue() {
   settle
 }
 
+# A GPT ENTRY IS NOT A FILESYSTEM. A newly appended partition inherits whatever bytes were already
+# under it, and on any disk that has carried a layout before, those sectors were somebody else's --
+# our own previous ESP, efi-B or root-A, one layout ago.
+#
+# MEASURED on the Pocket ACE, 2026-08-22, re-installing after the ESP went 512M -> 256M and the efi
+# partitions 64M -> 128M: the new efi-B (p14) came up carrying a stale vfat superblock at 0x0 AND a
+# stale btrfs one at 0x10040. libblkid's safeprobe calls two conflicting signatures ambiguous and
+# refuses to answer, systemd-udevd's blkid builtin then fails with EPERM, and so udev never
+# publishes ID_PART_ENTRY_* or /dev/disk/by-partuuid/<uuid> for that partition AT ALL. The install
+# died resolving a partition that was present, correct in the GPT and readable with dd. Nothing in
+# the error pointed at a filesystem signature, and no amount of settling or re-triggering helps --
+# udev is not late, it is refusing.
+#
+# 1 MiB at the head covers every superblock that matters (vfat and xfs at 0, ext at 0x400, btrfs at
+# 0x10000), and it is addressed BY DISK OFFSET rather than through a partition node. That is the
+# point and not an incidental choice: the node is exactly what the stale signature prevents from
+# existing, so anything that needed /dev/disk/by-partuuid here could never run.
+WIPE_HEAD_MIB="${NOVADECK_WIPE_HEAD_MIB:-1}"
+wipe_our_heads() {
+  local name idx start count
+  count=$(( WIPE_HEAD_MIB * 1048576 / SECTOR ))
+  for name in "${OUR_NAMES[@]}"; do
+    idx="$(index_of "$name")"
+    [ -n "$idx" ] || die "cannot find $name after the append -- refusing to leave stale signatures"
+    start="$(sgdisk -i "$idx" "$DISK" 2>/dev/null | sed -n 's/^First sector: \([0-9]*\).*/\1/p')"
+    [ -n "$start" ] || die "cannot read the start sector of $name (p$idx)"
+    dd if=/dev/zero of="$DISK" bs="$SECTOR" seek="$start" count="$count" \
+       conv=notrunc,fsync status=none \
+      || die "could not clear the head of $name (p$idx)"
+  done
+  say "  stale filesystem signatures cleared from the head of all eight (${WIPE_HEAD_MIB} MiB each)"
+}
+
 delete_ours() {  # deletes every partition of ours that exists, by name; prints what it removed
   local name idx removed=0
   for name in "${OUR_NAMES[@]}"; do
@@ -352,6 +385,9 @@ case "$INTENT" in
     invalidate_userdata_fs "$UD_INDEX" "$UD_START" "$NEW_END"
     settle
     NOVADECK_APPEND_FLOOR=$(( NEW_END + 1 )) NOVADECK_APPEND_CEIL="$CEIL" "$GENPART" --append "$DISK"
+    # Before the settle, not after: the settle is what gives udev its chance to probe these
+    # partitions, and it must not find a stale signature when it does.
+    wipe_our_heads
     settle
     ;;
 

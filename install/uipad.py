@@ -75,10 +75,14 @@ def typing_keyboard_present(path=None):
 
     TWO EXCLUSIONS, and both were measured rather than guessed:
 
-    * `/devices/virtual/` is skipped. InputPlumber always creates an "InputPlumber Keyboard" whose
-      capability bitmap covers the whole alphabet, so a naive scan reports a keyboard on every
-      board this project ships — including one with nothing attached at all. It is fed BY the pad,
-      so when the pad is the thing that is missing, it types nothing.
+    * `/devices/virtual/` is skipped. InputPlumber always creates an "InputPlumber Keyboard", and
+      it DECLARES a full keyboard — the capability bitmap covers the whole alphabet — while
+      carrying almost nothing: across every capability map we ship, 130 events target the gamepad
+      and 3 target the keyboard, all of them `KeyHome`/`KeyF1` quick-access buttons on boards with
+      extra controls that do not fit an Xbox layout. Not one letter. So it can never type these
+      four keys no matter what the pad is doing, and a scan that trusted its bitmap would report a
+      keyboard on every board this project ships — including one with nothing attached at all,
+      which is the only case this check exists for.
     * capability, not the `kbd` handler. `pmic_pwrkey`, `gpio-keys` and even the headset jack carry
       `Handlers=kbd`; none of them can type a letter.
 

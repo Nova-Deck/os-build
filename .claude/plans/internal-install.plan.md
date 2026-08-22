@@ -1650,9 +1650,10 @@ something other than what the install will do, and would be a second copy of tho
 > same day** — the pad half asks SDL (a pad it cannot map produces no events, which is an AYANEO
 > Pocket ACE in AYANEO mode), the keyboard half asks the kernel's device list whether anything can
 > type `S/W/N/E`, and it excludes `/devices/virtual/`: InputPlumber always publishes a virtual
-> keyboard covering the alphabet, and on a real Pocket S2 with nothing attached it is the ONLY
-> device claiming those letters — without the exclusion this stop could never fire on any board we
-> ship. The screen is not the mechanism: while it is up a consent request is **answered with an
+> keyboard that **declares** the whole alphabet while carrying almost nothing (130 gamepad targets
+> against 3 keyboard ones across every capability map we ship, all `KeyHome`/`KeyF1` quick-access
+> buttons), and on a real Pocket S2 with nothing attached it is the ONLY device claiming those
+> letters — without the exclusion this stop could never fire on any board we ship. The screen is not the mechanism: while it is up a consent request is **answered with an
 > error** rather than drawn, so the spine stops instead of blocking on an answer nobody can give.
 > **§4d is now complete.**
 >

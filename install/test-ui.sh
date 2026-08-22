@@ -266,8 +266,9 @@ printf '%s' "$a" | grep -q 'your game library is safe' \
 # §4d: no controller and no keyboard -> stop
 # =================================================================================================
 # Both fixtures are shaped like the real file, and both traps in them were measured on a device:
-# InputPlumber ALWAYS publishes a virtual keyboard whose bitmap covers the alphabet, and
-# pmic_pwrkey/gpio-keys carry `Handlers=kbd` while being unable to type a letter.
+# InputPlumber ALWAYS publishes a virtual keyboard that DECLARES the whole alphabet while carrying
+# only a couple of quick-access buttons (KeyHome/KeyF1 -- no letters), and pmic_pwrkey/gpio-keys
+# carry `Handlers=kbd` while being unable to type a letter.
 cat >"$T/devices-none" <<'EOF'
 I: Bus=0000 Vendor=0000 Product=0000 Version=0000
 N: Name="pmic_pwrkey"
@@ -318,7 +319,7 @@ CASE="§4d: what counts as something to answer with"
   || bad "something that cannot type a letter was counted as a keyboard"
 # The two exclusions, named individually so a regression says which one broke.
 grep -q 'devices/virtual' install/uipad.py \
-  && ok "the virtual keyboard is excluded by sysfs path -- it is fed BY the pad that is missing" \
+  && ok "the virtual keyboard is excluded by sysfs path -- it declares letters it never carries" \
   || bad "nothing excludes InputPlumber's own keyboard"
 [ "$(keycheck "$T/nonexistent-devices-file")" = True ] \
   && ok "an unreadable device list reports PRESENT -- the gate is the safety property, not this" \

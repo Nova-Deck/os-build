@@ -280,6 +280,19 @@ believing they own the boot chain, with no rule having objected.
 **If the target disk carries an ESP (type `C12A7328-…`) that is not ours and that holds either
 `/EFI/BOOT/bootaa64.efi` or `/KERNEL` → refuse, and tell the user to remove the other OS first.**
 
+> **HW-VALIDATED 2026-08-22 on a KONKR Pocket FIT carrying a real ROCKNIX install** — the board
+> whose install this rule once failed to see. Booted from an SD card, so internal `/dev/sda` was a
+> legitimate candidate, and it *would* otherwise have qualified: `p11 userdata` 64 GiB with 380 GiB
+> of ROCKNIX `STORAGE` past it. `install/hw-preflight.sh` reported:
+>
+>     /dev/sda: partition 12 (ROCKNIX) is a bootable ESP that is not ours -- remove the other OS first
+>     select-target: /dev/sda is not a valid target
+>
+> And the fail-closed half was checked on the same disk by hiding the staged binary:
+> `mdir not found (mtools) -- rule 3b cannot run without it`. So it names the other OS when it can
+> read the ESP, and refuses to answer when it cannot — never the old "not bootable", which is what
+> let this exact disk through. **`mdir` travelling with the script is load-bearing, not tidiness.**
+
 The rule is worth stating in terms of *why it is the right one*: it is the exact test ABL performs.
 Per "The ABL contract", Linux mode boots the internal ESP carrying either of those two files, and the
 test is on **content**, not on the partition existing. So two such ESPs on one disk is not a

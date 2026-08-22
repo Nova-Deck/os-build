@@ -1971,6 +1971,20 @@ gate), `test-units.sh` (new units), and byte-identity of the shipped
    installer/recovery card and a Steam-formatted library card, neither of which carries `novadeck-*`
    names.
 5. The standalone installer image end-to-end, including `wifi.conf` and the picker.
+6. **The `reinstall` carve mode, on a disk carrying a real install with a populated `/home`.**
+   It lands here rather than in Phase 4 because it is BLOCKED on this image and not merely
+   unscheduled: a dev card ships the same `novadeck-*` filesystem labels as the install, so `/home`
+   and `/esp` cross-mount to the internal disk (§1c), and "the user's games survive" cannot be
+   judged where the `/home` in question is not unambiguously addressable. The installer image
+   carries its own labels, which is what makes the question answerable at all.
+
+   What to assert, and why none of it is covered by anything run so far: `reinstall` writes NO
+   partition table and leaves `/home` untouched, which is the OPPOSITE claim to the one Phase 4's
+   hardware gate exercised — all three installs on 2026-08-22 ran `fresh` over an existing install
+   (`REPLACES_OURS=1`), the path that destroys `/home`, and the two share no code path. So: seed
+   `/home` with a recognisable file, run `reinstall`, and assert the file survives, the eight
+   PARTUUIDs are unchanged, and `install/verify-install.sh` passes afterwards. A `reinstall` that
+   silently re-lays the partitions would move the floor and take the game library with it.
 
 **Note on the SD game library:** it cannot be exercised before step 3. These devices have ONE SD
 slot and novadeck occupies it, so there is no free slot to insert a library card into until the

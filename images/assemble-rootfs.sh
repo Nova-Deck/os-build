@@ -581,25 +581,35 @@ cp -a "$payload/usr" "$stage/$payload_dest/"
 # blames the first one -- a message naming mesa for a fault that has nothing to do with it. Keep
 # the tool's own complaint and print it with the refusal, along with how much of a listing we
 # actually got, so the next reader can tell "the guest does not ship this" from "the read failed".
+# ASK ABOUT ONE FILE AT A TIME. This used to list the whole directory once and grep the result,
+# and that instrument is not reliable here: release builds failed intermittently -- five runs went
+# fail, fail, pass, fail, pass with nothing changed -- each time naming a DIFFERENT library the
+# guest demonstrably ships (libdrm.so.2 on three runs, libX11-xcb.so.1 on another). The listing was
+# not short when it happened: 2067 entries off the full-size image, dump.erofs silent. So the fault
+# was in matching against a 2000-entry blob, not in the read, and the error it produced sent the
+# reader to mesa for a fault that had nothing to do with mesa.
+#
+# A per-path query has no such failure mode and is exact: present prints the entry, absent prints
+# nothing (and "read inode failed" on stderr, which is why the EXIT CODE is not the signal here --
+# same reason as the manifest gate above). Forty-odd invocations at build time is a fair price for
+# a gate that means what it says.
+guest_has() {  # <libdir> <soname> -> 0 if the pinned guest ships it
+  [ -n "$(dump.erofs --ls --path="/$1/$2" "$guest_ero" 2>/dev/null)" ]
+}
 for libdir in usr/lib usr/lib32; do
-  guest_err="$stage/.erofs-ls-stderr"
-  guest_libs="$(dump.erofs --ls --path="/$libdir" "$guest_ero" 2>"$guest_err" | awk '{print $NF}')"
-  [ -n "$guest_libs" ] || {
-    echo "ERROR: could not list /$libdir out of the pinned FEX guest" >&2
-    sed 's/^/       dump.erofs: /' "$guest_err" >&2; exit 1; }
+  # The instrument itself is checked once per libdir, against a file every guest must have: if this
+  # cannot find libc, the query is broken and every answer below is worthless.
+  guest_has "$libdir" libc.so.6 \
+    || { echo "ERROR: cannot read /$libdir/libc.so.6 out of the pinned FEX guest -- the guest image or dump.erofs is unusable, and no dependency verdict below can be trusted" >&2; exit 1; }
   for so in "$stage/$payload_dest/$libdir"/*.so*; do
     for need in $(readelf -d "$so" | sed -n 's/.*(NEEDED).*\[\(.*\)\].*/\1/p'); do
-      if ! printf '%s\n' "$guest_libs" | grep -qxF "$need" \
+      if ! guest_has "$libdir" "$need" \
          && [ ! -e "$stage/$payload_dest/$libdir/$need" ]; then
         echo "ERROR: ${so#"$stage"} NEEDs $need, which neither the guest /$libdir nor the payload provides" >&2
-        echo "       the guest listing held $(printf '%s\n' "$guest_libs" | grep -c .) entries from a $(stat -c %s "$guest_ero")-byte image" >&2
-        [ -s "$guest_err" ] && sed 's/^/       dump.erofs: /' "$guest_err" >&2
-        echo "       if that entry count looks short, this is a failed READ of the guest, not a missing dependency" >&2
         exit 1
       fi
     done
   done
-  rm -f "$guest_err"
 done
 
 mkdir -p "$stage/usr/share/guestos/fex-mesa"

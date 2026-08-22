@@ -1723,6 +1723,37 @@ out="$(spine_run)" \
   || bad "the install did not complete"
 unset SP_CONFIRM_OVERRIDE
 
+CASE="spine + ui + confirm-ui: the GAMEPAD renderer satisfies the same gate"
+# The second implementation of the contract, driven end to end against the real spine: the real
+# install/ui (headless -- it imports pygame only inside its view), the real install/confirm-ui, and
+# the real random sequence. §4d requires this renderer to have its own case rather than inherit the
+# tty one's confidence, because the stubbed gate cases all pass without the property that matters.
+#
+# `SHOWN` in the events file is the pad equivalent of confirm-typist above: it presses the sequence
+# the screen is displaying. The sequence is random per attempt, so a driver that could not read the
+# screen could not answer at all -- which is exactly the user's position, and is why this is a
+# keyboard rather than a bypass.
+spine_dir gamepad
+UI_SOCK="$T/ui-e2e.sock"
+printf 'SHOWN\n' >"$T/ui-events"
+NOVADECK_UI_SOCK="$UI_SOCK" NOVADECK_UI_EVENTS="$T/ui-events" NOVADECK_UI_DEADLINE=60 \
+  PYTHONPYCACHEPREFIX="$T/pycache" "$ROOT/install/ui" >"$T/ui-e2e.log" 2>&1 &
+ui_pid=$!
+for _ in $(seq 1 500); do [ -S "$UI_SOCK" ] && break; sleep 0.02; done
+export NOVADECK_UI_SOCK="$UI_SOCK"
+SP_CONFIRM_OVERRIDE="$ROOT/install/confirm-ui"
+out="$(spine_run)" \
+  && ok "the answer the UI collected on the pad is accepted on the first attempt" \
+  || bad "the gamepad renderer did not satisfy the gate: $out"
+[ -f "$SP_RUN/esp/EFI/BOOT/bootaa64.efi" ] \
+  && ok "and the install ran to the last byte" \
+  || bad "the install did not complete"
+grep -q 'consent requested for ' "$T/ui-e2e.log" \
+  && ok "and it was the UI that drew the screen, not the shim -- the shim only carried the answer" \
+  || bad "the UI never saw the request: $(cat "$T/ui-e2e.log")"
+unset SP_CONFIRM_OVERRIDE NOVADECK_UI_SOCK
+kill "$ui_pid" 2>/dev/null; wait "$ui_pid" 2>/dev/null
+
 CASE="confirm-tty: renders the numbers the spine measured"
 cat >"$T/facts-wipe" <<'EOF'
 SCREEN=android-wipe

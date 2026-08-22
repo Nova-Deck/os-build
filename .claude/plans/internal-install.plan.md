@@ -1625,10 +1625,11 @@ something other than what the install will do, and would be a second copy of tho
 > disk cannot produce the reinstall text or the reverse, that two disks quote two different sizes,
 > that `/bin/true` does not satisfy the gate, and that none of nine plausible bypass variables does.
 >
-> **What is still owed: the gamepad renderer** (§5), which is a second implementation of the same
-> contract — `--facts <file> --sequence <NESW>` in, the pressed sequence on stdout, non-zero to
-> abort — sharing the facts file and no code. And the "no controller and no keyboard → stop" case,
-> which needs an input stack to detect the absence of.
+> **The gamepad renderer LANDED 2026-08-22** — `install/ui` (`ConsentScreen`) behind
+> `install/confirm-ui`, a second implementation of the same contract sharing the facts file and no
+> code, with its own end-to-end case against the real spine. See §5 for the shim decision and for
+> why abort cannot be a face button. **Still owed from this section:** the "no controller and no
+> keyboard → stop" case, which needs an input stack to detect the absence of.
 >
 > **One thing the contract learned the hard way:** the renderer's **stdout is the answer and nothing
 > else**. A renderer that also prints its screen there makes every attempt read as a wrong answer,
@@ -1845,10 +1846,31 @@ than reimplementing it — the orchestrator stays the testable spine and the GUI
 - **Pre-flight**: device name (from `fs-overlay/usr/lib/novadeck/devices/`), target disk model
   and size, the **full list of partitions about to be destroyed**, the new Android `userdata`
   size (adjusted with left/right, not typed), and the bundle version about to be fetched.
-- **Confirm**: the §4d random button sequence — the four face buttons drawn **by position** as
-  diamonds in a per-run random order, echoed back on the pad; `EAST`-then-abort at any point, and
-  a wrong press re-randomises and redraws. Nothing writes before it completes. Hold-to-confirm is
-  the documented fallback if controller events prove unreliable.
+- **Confirm** — **LANDED 2026-08-22**, `install/ui`'s `ConsentScreen` + `install/confirm-ui`,
+  33 cases in `install/test-ui.sh` plus 3 end-to-end against the real spine in
+  `install/test-install.sh`. The §4d random sequence, the four face buttons drawn **by position**
+  as diamonds in a per-run random order, echoed back on the pad; a wrong press ends the attempt at
+  once (so the spine re-randomises and redraws on the press, not three presses later). Nothing
+  writes before it completes. Hold-to-confirm is still the documented fallback if controller events
+  prove unreliable.
+  - **Abort is SELECT (`CONTROLLER_BUTTON_BACK`) or Escape, never a face button.** The earlier
+    draft said "`B`-then-abort"; that was never implementable and the positional alphabet makes it
+    obvious why — **all four face buttons are in every sequence**, so a face button that also meant
+    "cancel" would be ambiguous on the one screen where ambiguity erases an Android install.
+  - **`$CONFIRM` is a shim, not a second SDL client** (decided 2026-08-22). The obvious shape — a
+    standalone window opening over gamescope while the UI idles — puts two Wayland clients in
+    contention for focus and for the pad, and its failure mode is *a consent screen that never
+    appears*, on a device with no serial console. We already carry gamescope patch 0005 because a
+    second client's focus did **not** work by default. So `install/confirm-ui` connects to the
+    running UI over a root-only unix socket (`/run/novadeck/installer-ui.sock`), passes the facts
+    **by path** and the sequence, and prints the answer. One Wayland client, one input owner.
+  - **What that does to §4d's trap is structural**: the UI's stdout is not the shim's stdout, so
+    the renderer can log freely to its journal and the only code that can violate "stdout is the
+    answer and nothing else" is ~10 lines at the bottom of a file with no display code in it. It
+    is still asserted, both ways.
+  - **It fails closed on every transport failure** — no UI, a UI that dies mid-wait, a malformed
+    reply, facts naming a screen it cannot render: all non-zero, which the spine reads as an abort.
+    "We could not ask" must never look like "they said yes".
 - **Progress**: a bar per phase. The rootfs percentage comes from RAUC's D-Bus `Progress`
   `(isi)` property — `fs-overlay/usr/bin/novadeck-update` already subscribes to exactly that;
   reuse its subscription code rather than re-deriving it.

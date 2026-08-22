@@ -1,0 +1,615 @@
+#!/usr/bin/env python3
+# novadeck internal install — the on-device UI. Phase 5 of .claude/plans/internal-install.plan.md.
+#
+#   install/ui [--socket <path>]
+#
+# The installer's front end: one SDL2 client on a gamescope compositor, driven by the gamepad. It is
+# a VIEW over install/novadeck-install, which stays the testable spine — this file decides what is
+# on screen and nothing about what is written to a disk.
+#
+# WHY ONE CLIENT, AND WHAT THE SOCKET IS FOR. The spine takes consent by executing $CONFIRM (§4d),
+# a separate program, and by then this UI already owns the screen and the pad. Rather than open a
+# second Wayland window and contend for gamescope's focus — the failure mode being a consent screen
+# that never appears, in the one tool that must work when the device is broken — $CONFIRM is
+# install/confirm-ui, a shim that passes the request here over a unix socket and prints the answer.
+# So: one Wayland client, one input owner, and the consent screen is an ordinary state of this
+# machine rather than a second program with its own display stack.
+#
+# THE MODEL IS SEPARABLE FROM THE VIEW, and the suite depends on it: every screen produces a plain
+# dict describing what is to be drawn (`describe()`), and a view turns that into pixels. pygame is
+# imported LAZILY, inside the pygame view only, so the whole state machine — including the consent
+# screen and its socket — runs on a build host that has no SDL and no display at all. That is how
+# §5's end-to-end case against the real renderer runs offline instead of waiting for hardware.
+#
+# THE FACE BUTTONS ARE CARDINAL POINTS END TO END. SDL's CONTROLLER_BUTTON_A/B/X/Y are POSITIONAL
+# constants — bottom/right/left/top of the cluster, whatever the pad happens to print on it — and
+# the silkscreen is not the same across the boards this one installer is unified over (`A` is EAST
+# on the AYANEO Pocket ACE and SOUTH on the Pocket S2). The mapping to N/E/S/W happens once, at the
+# event boundary in pad_token(), and no button letter travels any further into this file or onto
+# the screen. See §4d.
+#
+# TEST SEAMS, in the spirit of novadeck-update's: install/test-ui.sh executes THIS file and
+# redirects the socket and the input source into a sandbox. What runs under test is what ships.
+import json
+import os
+import socket
+import sys
+import time
+
+PROG = os.path.basename(sys.argv[0])
+
+SOCK_PATH = os.environ.get("NOVADECK_UI_SOCK", "/run/novadeck/installer-ui.sock")
+# A file of one token per line drives the UI instead of a pad, and selects the null view. This is
+# the headless seam the plan's Tests section asks for ("no SDL window; the model is separable from
+# the view"), and it is why nothing in this file imports pygame at module scope.
+EVENTS_FILE = os.environ.get("NOVADECK_UI_EVENTS", "")
+
+# =================================================================================================
+# input — positions, never printed letters
+# =================================================================================================
+CARDINALS = ("N", "E", "S", "W")
+CARDINAL_NAME = {"N": "NORTH", "E": "EAST", "S": "SOUTH", "W": "WEST"}
+
+# SDL_CONTROLLER_BUTTON_A/B/X/Y = 0/1/2/3, and SDL defines them by POSITION: A is the bottom button
+# of the face cluster, B the right, X the left, Y the top, regardless of what the pad prints. That
+# is the whole reason this mapping is trustworthy on both silkscreens, and the reason it is written
+# out as numbers with this comment rather than as pygame.CONTROLLER_BUTTON_A: it is a wire format,
+# not a pygame detail, and the installer ships InputPlumber's virtual Xbox pad in front of it.
+BUTTON_TO_CARDINAL = {0: "S", 1: "E", 2: "W", 3: "N"}
+BUTTON_BACK = 4  # SDL_CONTROLLER_BUTTON_BACK — "select"/"view". The abort, see below.
+
+# Keyboard equivalents, the same initials install/confirm-tty takes. A USB keyboard therefore works
+# for free, which §4d needs: it is the named fallback when no controller enumerates.
+KEY_TO_CARDINAL = {"n": "N", "e": "E", "s": "S", "w": "W"}
+
+TOKEN_BACK = "BACK"     # abort
+TOKEN_QUIT = "QUIT"     # the window went away
+
+
+def log(msg):
+    # This file's stdout is NOT the consent answer — confirm-ui's is — so logging here is free.
+    # That separation is deliberate; see the header of install/confirm-ui.
+    print("%s: %s" % (PROG, msg), file=sys.stderr, flush=True)
+
+
+# =================================================================================================
+# the consent screen — §4d, the gamepad half of the contract
+# =================================================================================================
+def read_facts(path):
+    """The key=value file the spine derived. Unknown keys are kept; missing ones are absent."""
+    facts = {}
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            facts[k] = v
+    return facts
+
+
+class ConsentScreen:
+    """
+    The four face buttons, drawn by position, pressed in the order shown.
+
+    IT KNOWS THE ANSWER AND STILL CANNOT GIVE IT. The sequence is an argument — it has to be, the
+    screen draws it — so the policy of what counts as consent stays in the spine, which generates
+    the sequence, compares what comes back and re-randomises. This class collects presses and hands
+    them over. Nothing here decides that consent was given.
+
+    A WRONG PRESS ENDS THE ATTEMPT IMMEDIATELY rather than collecting three more that cannot matter.
+    What is returned is what was pressed, which is not the sequence, so the spine re-randomises and
+    asks again — §4d's "a wrong press re-randomises and redraws", with the redraw arriving on the
+    press instead of three presses later. It is not a lockout and it costs the user nothing but the
+    slip itself.
+
+    ABORT IS THE BACK BUTTON, NOT A FACE BUTTON, and it cannot be anything else: all four face
+    buttons are in every sequence, so a face button that also meant "cancel" would be ambiguous on
+    the one screen where ambiguity erases an Android install. (The plan said `B`-then-abort; that
+    predates the positional alphabet and was never implementable for this reason.)
+    """
+
+    name = "consent"
+
+    def __init__(self, facts, sequence):
+        self.facts = facts
+        self.sequence = sequence
+        self.pressed = ""
+        self.result = None      # ("answer", str) | ("abort",)
+
+    def handle(self, token):
+        if token in (TOKEN_BACK, TOKEN_QUIT):
+            self.result = ("abort",)
+            return
+        if token not in CARDINALS:
+            return
+        self.pressed += token
+        want = self.sequence[: len(self.pressed)]
+        if self.pressed != want:
+            self.result = ("answer", self.pressed)      # wrong, and deliberately returned as such
+        elif len(self.pressed) == len(self.sequence):
+            self.result = ("answer", self.pressed)
+
+    def diamonds(self):
+        """One diamond per press: its position, and whether it has been pressed yet."""
+        return [
+            {"pos": p, "name": CARDINAL_NAME[p], "done": i < len(self.pressed)}
+            for i, p in enumerate(self.sequence)
+        ]
+
+    def describe(self):
+        f = self.facts
+        screen = f.get("SCREEN", "")
+        if screen == "android-wipe":
+            body = self._android_wipe(f)
+        elif screen == "reinstall":
+            body = self._reinstall(f)
+        else:
+            # The renderer must not invent a screen for facts it does not understand. Failing here
+            # is an abort, which is the safe direction.
+            raise ValueError("the facts file names no screen I know how to render (%r)" % screen)
+        return {
+            "screen": "consent",
+            "kind": screen,
+            "title": body["title"],
+            "blocks": body["blocks"],
+            "diamonds": self.diamonds(),
+            "prompt": "Press these four buttons in this order",
+            # The sentence that does the work the letters used to do badly. It is on screen, not in
+            # a manual: the person holding the device is the one who has to know that the drawing
+            # means a position and not the letter under their thumb.
+            "note": "It is the POSITION on the pad, not the letter printed on the button.",
+            "abort": "Press SELECT to cancel. Nothing has been written yet.",
+        }
+
+    # The two screens are written out separately and share no text, for the same reason
+    # confirm-tty's are: §4d requires that an Android disk cannot produce the reinstall wording or
+    # the reverse, and a single template with conditionals inside it is the shape that lets it.
+    def _android_wipe(self, f):
+        blocks = [
+            ("Target", "%s  (%s)" % (f.get("DISK", "?"), f.get("WWID", "?"))),
+            (
+                "This deletes Android's data",
+                "Everything stored in Android -- apps, saves, photos, downloads and signed-in "
+                "accounts -- will be deleted. It is NOT recoverable, by you or by us.",
+            ),
+            (
+                "The numbers",
+                "Android's data partition is %s GiB today. It will be recreated at %s GiB, and %s"
+                % (
+                    f.get("UD_GIB_NOW", "?"),
+                    f.get("UD_GIB_AFTER", "?"),
+                    "NovaDeck will use the rest of the disk."
+                    if f.get("NOVADECK_GIB", "unknown") == "unknown"
+                    else "NovaDeck will use the remaining %s GiB." % f.get("NOVADECK_GIB"),
+                ),
+            ),
+        ]
+        # `fresh` on a disk that is ALREADY ours is a supported mode, and it destroys the novadeck
+        # /home holding the games. The tty screen learned this on hardware on 2026-08-21 while
+        # reassuring the operator that their game library was safe. Do not let this renderer repeat
+        # it: the reassurance below is true only when the games are on the SD card.
+        if f.get("REPLACES_OURS") == "1":
+            home = f.get("HOME_GIB", "unknown")
+            blocks.append((
+                "This also deletes the NovaDeck install already here",
+                "A fresh install replaces all of it, /home included -- your installed games, saves "
+                "and settings. %s It is NOT recoverable. To keep them, cancel and choose Repair."
+                % ("Its size could not be read."
+                   if home in ("", "unknown") else "It is using %s GiB today." % home),
+            ))
+            blocks.append((
+                "What survives",
+                "Android itself still boots, factory-reset; its system is untouched. Your SD card "
+                "is never written to -- but anything on the INTERNAL disk is a different matter, "
+                "see above.",
+            ))
+        else:
+            blocks.append((
+                "What survives",
+                "Android itself still boots, factory-reset; its system is untouched. Your SD card "
+                "is never written to: nothing on it is read, moved or erased -- your game library "
+                "is safe.",
+            ))
+        blocks.append((
+            "Afterwards",
+            "The device boots NovaDeck from internal storage by default. Hold Volume Up at startup "
+            "to reach the bootloader menu and choose Android, at any time.",
+        ))
+        return {"title": "Install NovaDeck on this device's internal storage", "blocks": blocks}
+
+    def _reinstall(self, f):
+        home = f.get("HOME_GIB", "unknown")
+        blocks = [
+            ("Target", "%s  (%s)" % (f.get("DISK", "?"), f.get("WWID", "?"))),
+            (
+                "Android is not touched",
+                "This rewrites NovaDeck's system partitions. Android's data was already resized "
+                "when NovaDeck was first installed, and nothing here changes it.",
+            ),
+        ]
+        if f.get("HOME_ACTION") == "erase":
+            blocks.append((
+                "You asked to erase /home",
+                "Your games, saves, screenshots and Steam settings will be deleted. %s GiB is in "
+                "use there today. It is NOT recoverable. Games can be downloaded again; saves that "
+                "are not in Steam Cloud cannot." % home,
+            ))
+        else:
+            blocks.append((
+                "Your games and saves are kept",
+                "/home is left exactly as it is -- %s GiB in use. Only the system partitions are "
+                "rewritten." % home,
+            ))
+        return {"title": "Repair the NovaDeck install on this device", "blocks": blocks}
+
+
+class IdleScreen:
+    """What is on the panel when nothing has asked for the screen yet."""
+
+    name = "idle"
+
+    def handle(self, token):
+        pass
+
+    def describe(self):
+        return {
+            "screen": "idle",
+            "title": "NovaDeck installer",
+            "blocks": [("", "Waiting for the installer.")],
+            "diamonds": [],
+            "prompt": "",
+            "note": "",
+            "abort": "",
+        }
+
+
+# =================================================================================================
+# the socket — install/confirm-ui's other end
+# =================================================================================================
+class ConfirmServer:
+    """
+    One request at a time, and every path answers or closes: confirm-ui exits non-zero on anything
+    that is not an answer, and the spine reads that as an abort. Failing closed is the whole point.
+    """
+
+    def __init__(self, path):
+        self.path = path
+        self.pending = None      # (conn, request)
+        d = os.path.dirname(path)
+        if d:
+            os.makedirs(d, exist_ok=True)
+        if os.path.exists(path):
+            os.unlink(path)
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.sock.bind(path)
+        # Root-only. The installer runs as root and nothing else on the medium has business here.
+        os.chmod(path, 0o600)
+        self.sock.listen(1)
+        self.sock.setblocking(False)
+
+    def poll(self):
+        """Accept at most one new request per call. Returns the request dict, or None."""
+        try:
+            conn, _ = self.sock.accept()
+        except BlockingIOError:
+            return None
+        except OSError as e:
+            log("accept failed: %s" % e)
+            return None
+        conn.settimeout(5)
+        try:
+            with conn.makefile("r", encoding="utf-8") as f:
+                line = f.readline()
+            req = json.loads(line)
+        except (OSError, ValueError) as e:
+            log("a malformed consent request was refused: %s" % e)
+            self._reply_and_close(conn, {"error": "malformed request"})
+            return None
+        if self.pending is not None:
+            # A second spine asking while one is on screen. There is only one screen.
+            self._reply_and_close(conn, {"error": "busy"})
+            return None
+        self.pending = conn
+        return req
+
+    def answer(self, payload):
+        conn, self.pending = self.pending, None
+        if conn is not None:
+            self._reply_and_close(conn, payload)
+
+    @staticmethod
+    def _reply_and_close(conn, payload):
+        try:
+            conn.sendall((json.dumps(payload) + "\n").encode())
+        except OSError:
+            pass
+        finally:
+            conn.close()
+
+    def close(self):
+        self.sock.close()
+        try:
+            os.unlink(self.path)
+        except OSError:
+            pass
+
+
+# =================================================================================================
+# input sources
+# =================================================================================================
+class ScriptedInput:
+    """
+    A file of tokens, one per line, consumed one per frame. The headless seam.
+
+    `SHOWN` is the direct analogue of install/test-install.sh's confirm-typist wrapper: it presses,
+    in order, the sequence the screen is displaying right now. It is a KEYBOARD, not a bypass — the
+    sequence is random per attempt, so a driver that could not read the screen could not answer at
+    all, which is exactly the user's position. Every wrong-answer case in the suite is written with
+    literal tokens instead.
+    """
+
+    def __init__(self, path):
+        with open(path, "r", encoding="utf-8") as f:
+            self.tokens = [t.strip() for t in f if t.strip()]
+        self.i = 0
+
+    def poll(self, screen):
+        # Nothing is pressed at a screen that asks for nothing. Without this the scripted presses
+        # would be spent before the spine has even connected, since the UI is started first.
+        if screen.name == "idle" or self.i >= len(self.tokens):
+            return []
+        tok = self.tokens[self.i]
+        self.i += 1
+        if tok == "SHOWN":
+            seq = getattr(screen, "sequence", "")
+            return list(seq)
+        return [tok]
+
+    def close(self):
+        pass
+
+
+class PadInput:
+    """SDL_GameController and the keyboard, mapped to positions at the boundary."""
+
+    def __init__(self, pygame):
+        self.pygame = pygame
+        pygame.controller.init()
+        self.pads = {}
+        for i in range(pygame.joystick.get_count()):
+            self._open(i)
+
+    def _open(self, index):
+        pg = self.pygame
+        # A pad that SDL has no mapping for enumerates as a joystick and produces no
+        # CONTROLLERBUTTONDOWN at all — i.e. positions we cannot name. The installer ships
+        # InputPlumber's virtual Xbox pad precisely so that this is never the case here, so an
+        # unmapped device is worth a line in the journal rather than a silent skip.
+        if not pg.controller.is_controller(index):
+            log("input device %d is not a mapped game controller -- ignored" % index)
+            return
+        c = pg.controller.Controller(index)
+        self.pads[index] = c
+        log("controller attached: %s" % c.name)
+
+    def present(self):
+        return bool(self.pads)
+
+    def poll(self, screen):
+        pg = self.pygame
+        out = []
+        for ev in pg.event.get():
+            if ev.type == pg.QUIT:
+                out.append(TOKEN_QUIT)
+            elif ev.type == pg.CONTROLLERDEVICEADDED:
+                self._open(ev.device_index)
+            elif ev.type == pg.CONTROLLERBUTTONDOWN:
+                if ev.button in BUTTON_TO_CARDINAL:
+                    out.append(BUTTON_TO_CARDINAL[ev.button])
+                elif ev.button == BUTTON_BACK:
+                    out.append(TOKEN_BACK)
+            elif ev.type == pg.KEYDOWN:
+                name = pg.key.name(ev.key)
+                if name in KEY_TO_CARDINAL:
+                    out.append(KEY_TO_CARDINAL[name])
+                elif ev.key == pg.K_ESCAPE:
+                    out.append(TOKEN_BACK)
+        return out
+
+    def close(self):
+        pass
+
+
+# =================================================================================================
+# views
+# =================================================================================================
+class NullView:
+    """Draws nothing and records the last description, so a test can assert what would be drawn."""
+
+    def __init__(self):
+        self.last = None
+
+    def draw(self, desc):
+        self.last = desc
+
+    def close(self):
+        pass
+
+
+class PygameView:
+    """
+    The SDL2 client. Everything it knows about a screen arrives as the dict from describe().
+
+    The font is pygame's own bundled face by default: a UI that dies because fontconfig came up
+    empty is a black panel on a device with no serial console, and the installer is the one tool
+    that has to work when everything else is broken.
+    """
+
+    BG = (16, 18, 22)
+    FG = (232, 234, 238)
+    DIM = (150, 155, 165)
+    WARN = (240, 180, 90)
+    DOT = (90, 96, 108)
+    DOT_ON = (240, 240, 245)
+
+    def __init__(self):
+        import pygame                                            # lazy: see this file's header
+
+        self.pygame = pygame
+        pygame.init()
+        pygame.display.set_caption("NovaDeck installer")
+        self.surface = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
+        self.w, self.h = self.surface.get_size()
+        base = max(14, int(self.h / 34))
+        self.f_title = pygame.font.Font(None, int(base * 1.9))
+        self.f_head = pygame.font.Font(None, int(base * 1.25))
+        self.f_body = pygame.font.Font(None, base)
+
+    def draw(self, desc):
+        pg = self.pygame
+        self.surface.fill(self.BG)
+        m = int(self.w * 0.06)
+        y = m
+        y = self._text(desc.get("title", ""), self.f_title, self.FG, m, y) + int(self.h * 0.02)
+        for head, body in desc.get("blocks", []):
+            if head:
+                y = self._text(head, self.f_head, self.WARN, m, y)
+            y = self._wrap(body, self.f_body, self.DIM, m, y, self.w - 2 * m)
+            y += int(self.h * 0.012)
+        diamonds = desc.get("diamonds", [])
+        if diamonds:
+            y = self._text(desc.get("prompt", ""), self.f_head, self.FG, m, y + int(self.h * 0.01))
+            y = self._diamonds(diamonds, m, y + int(self.h * 0.015))
+            y = self._text(desc.get("note", ""), self.f_body, self.DIM, m, y + int(self.h * 0.01))
+        if desc.get("abort"):
+            self._text(desc["abort"], self.f_body, self.DIM, m, self.h - m)
+        pg.display.flip()
+
+    def _text(self, s, font, colour, x, y):
+        if not s:
+            return y
+        surf = font.render(s, True, colour)
+        self.surface.blit(surf, (x, y))
+        return y + surf.get_height()
+
+    def _wrap(self, s, font, colour, x, y, width):
+        words, line = s.split(), ""
+        for w in words:
+            trial = (line + " " + w).strip()
+            if font.size(trial)[0] > width and line:
+                y = self._text(line, font, colour, x, y)
+                line = w
+            else:
+                line = trial
+        return self._text(line, font, colour, x, y)
+
+    def _diamonds(self, diamonds, x, y):
+        """One diamond of four dots per press, the target filled, its position named underneath."""
+        pg = self.pygame
+        r = max(6, int(self.h / 90))          # dot radius
+        span = r * 5                          # centre-to-centre of opposite dots
+        cell = span * 2 + r * 6
+        for i, d in enumerate(diamonds):
+            cx = x + int(cell * (i + 0.5))
+            cy = y + span
+            for pos, (dx, dy) in (
+                ("N", (0, -span)), ("E", (span, 0)), ("S", (0, span)), ("W", (-span, 0))
+            ):
+                filled = pos == d["pos"]
+                colour = self.DOT_ON if filled else self.DOT
+                pg.draw.circle(self.surface, colour, (cx + dx, cy + dy), r, 0 if filled else 2)
+            label = self.f_body.render(d["name"], True, self.FG if not d["done"] else self.DIM)
+            self.surface.blit(label, (cx - label.get_width() // 2, cy + span + r * 2))
+        return y + span * 2 + r * 4 + self.f_body.get_height()
+
+    def close(self):
+        self.pygame.quit()
+
+
+# =================================================================================================
+# the loop
+# =================================================================================================
+def build_io():
+    """The view and the input source come as a pair: scripted events mean no window at all."""
+    if EVENTS_FILE:
+        return NullView(), ScriptedInput(EVENTS_FILE)
+    view = PygameView()
+    return view, PadInput(view.pygame)
+
+
+def run(server, view, source, deadline=0):
+    """
+    Returns when the scripted source runs out (tests) or the window goes away.
+
+    `deadline` is a wall-clock bound in seconds, for the headless runs only: a UI that is waiting
+    for a request that never comes must fail the suite rather than hang it. 0 means no bound.
+    """
+    screen = IdleScreen()
+    started = time.monotonic()
+    while True:
+        req = server.poll()
+        if req is not None:
+            try:
+                facts = read_facts(req["facts"])
+                screen = ConsentScreen(facts, req["sequence"])
+                screen.describe()        # raises on a screen this renderer does not know
+                # Logged deliberately, and it is safe to log: the sequence is not a secret, it is
+                # on the panel. What it proves in the journal is WHICH screen was shown and what
+                # was asked for, next to the spine's own record of what came back.
+                log("consent requested for %s (%s), sequence %s"
+                    % (facts.get("DISK", "?"), facts.get("SCREEN", "?"), req["sequence"]))
+            except (KeyError, OSError, ValueError) as e:
+                log("refusing a consent request: %s" % e)
+                server.answer({"error": str(e)})
+                screen = IdleScreen()
+
+        view.draw(screen.describe())
+
+        for token in source.poll(screen):
+            if token == TOKEN_QUIT and server.pending is None:
+                # The window went away with nothing pending. During a consent request QUIT is an
+                # abort instead, which the screen turns into one -- an answer, not a silent exit.
+                return 0
+            screen.handle(token)
+            result = getattr(screen, "result", None)
+            if result is not None:
+                if result[0] == "abort":
+                    server.answer({"abort": True})
+                else:
+                    server.answer({"answer": result[1]})
+                screen = IdleScreen()
+                break
+
+        if isinstance(source, ScriptedInput) and source.i >= len(source.tokens) \
+                and server.pending is None and screen.name == "idle":
+            return 0
+        if deadline and time.monotonic() - started > deadline:
+            log("gave up waiting after %ds" % deadline)
+            return 1
+        time.sleep(1 / 60)
+
+
+def main(argv):
+    global SOCK_PATH
+    args = list(argv)
+    while args:
+        a = args.pop(0)
+        if a == "--socket" and args:
+            SOCK_PATH = args.pop(0)
+        else:
+            log("unknown argument %s" % a)
+            return 2
+
+    server = ConfirmServer(SOCK_PATH)
+    view, source = build_io()
+    try:
+        return run(server, view, source, deadline=float(os.environ.get("NOVADECK_UI_DEADLINE", "0")))
+    finally:
+        source.close()
+        view.close()
+        server.close()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

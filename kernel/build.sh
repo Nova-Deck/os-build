@@ -195,6 +195,17 @@ CC=(${CROSS_COMPILE:+CROSS_COMPILE=$CROSS_COMPILE})
   #       this loop checks declared values exactly (same convention as ZRAM, which would also
   #       function as a module) — but the hint below has to tell those two apart, or it sends a
   #       reader hunting an unmet dependency that was never the problem.
+  #   =y  ANDROID_BINDER_IPC + ANDROID_BINDERFS: the Android service layer for Valve's Lepton
+  #       compat tool. Both default n upstream and nothing else on this image wants them, so they
+  #       exist purely because kernel.config asks — exactly the shape that gets deleted as dead
+  #       weight by someone who cannot see what needs it. What losing them costs is invisible from
+  #       the host: servicemanager/hwservicemanager/vndservicemanager SIGABRT on a missing
+  #       /dev/binder inside the guest, init terminates, and every Android title fails with
+  #       symptoms that point somewhere else entirely (issue #58 spent four HW attempts on adbd
+  #       init-rc theories before the guest's logcat named binder). BINDERFS is checked separately
+  #       from IPC because losing just that one leaves binder working for a ROOTFUL caller while
+  #       silently removing the per-IPC-namespace mount a rootless container needs to make its own
+  #       devices — which is the only way we use it.
   #
   # The block below guards the Qualcomm platform path against kernel/trim-platforms.config.
   # That fragment disables ~47 non-Qualcomm ARCH_* platform gates and lets kconfig's dependency
@@ -228,6 +239,7 @@ CC=(${CROSS_COMPILE:+CROSS_COMPILE=$CROSS_COMPILE})
   for pair in CFG80211=m MAC80211=m TOUCHSCREEN_CHIPONE_TDDI=m VIDEO_QCOM_IRIS=m \
               BLK_DEV_DM=y DM_VERITY=y VFAT_FS=y BLK_DEV_LOOP=y \
               ZRAM=y ZRAM_BACKEND_ZSTD=y USER_NS=y FUSE_FS=y \
+              ANDROID_BINDER_IPC=y ANDROID_BINDERFS=y \
               DRM_MSM=y PCIE_QCOM=y PCI_PWRCTRL_GENERIC=y MMC_SDHCI_MSM=y SCSI_UFSHCD=y \
               ARM_SMMU=y ARM64_4K_PAGES=y SCHED_CLASS_EXT=y DEBUG_INFO_BTF=y \
               SQUASHFS=y OVERLAY_FS=y; do

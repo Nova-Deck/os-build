@@ -51,11 +51,27 @@ def run_tool(argv, timeout=120):
 
 
 def kv(text):
+    """
+    KEY=VALUE lines, parsed the way the SHELL would parse them.
+
+    Not `.strip("'\\"")`. device-env emits with `printf '%s=%q\\n'`, and bash's %q escapes rather
+    than quotes when it can: a board called `AYANEO Pocket S2` arrives as `AYANEO\\ Pocket\\ S2`.
+    Stripping quotes leaves the backslash in, and it goes on the panel -- measured on a real Pocket
+    S2, 2026-08-22, where the pre-flight title read "Install NovaDeck on AYANEO\\ Pocket\\ S2".
+    Every offline stub had emitted the single-quoted form, which is the other thing %q produces.
+    """
+    import shlex
+
     out = {}
     for line in text.splitlines():
-        if "=" in line and not line.startswith("#"):
-            k, v = line.split("=", 1)
-            out[k.strip()] = v.strip().strip("'\"")
+        if "=" not in line or line.startswith("#"):
+            continue
+        k, v = line.split("=", 1)
+        try:
+            parts = shlex.split(v.strip())
+        except ValueError:                       # an unbalanced quote is not worth dying over
+            parts = [v.strip().strip("'\"")]
+        out[k.strip()] = parts[0] if parts else ""
     return out
 
 

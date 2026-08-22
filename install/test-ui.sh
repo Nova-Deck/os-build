@@ -310,9 +310,14 @@ printf 'CEIL=999\nNEW_END=500\nNOVADECK_MIB=81920\nNOVADECK_GIB=%s\nREPLACES_OUR
 printf 'DESTROY=11 userdata data-erased\n'
 printf 'DESTROY=17 novadeck-home replaced\n'
 EOF
+# EMITTED THE WAY THE REAL ONE EMITS IT: device-env uses `printf '%s=%q\n'`, and bash's %q escapes
+# rather than quotes when it can, so a board name arrives as `AYANEO\ Pocket\ ACE`. The stub used to
+# emit the single-quoted form -- the other thing %q produces -- and a parser that only stripped
+# quotes passed here while putting a backslash on the panel of a real Pocket S2.
 cat >"$T/bin/device-env" <<'EOF'
 #!/usr/bin/env bash
-printf "NOVADECK_DEVICE_NAME='AYANEO Pocket ACE'\nNOVADECK_SOC_CLASS=SM8550\n"
+printf '%s=%q\n' NOVADECK_DEVICE_NAME 'AYANEO Pocket ACE'
+printf '%s=%q\n' NOVADECK_SOC_CLASS SM8550
 EOF
 chmod +x "$T/bin"/*
 export CARVE_CALLS="$T/carve-calls"; : >"$CARVE_CALLS"
@@ -335,6 +340,9 @@ out="$(flow 'print(json.dumps(pf.describe()))')"
 printf '%s' "$out" | grep -q 'AYANEO Pocket ACE' \
   && ok "the board names itself, from device-env rather than from a guess" \
   || bad "the device name is missing: $out"
+printf '%s' "$out" | grep -q 'AYANEO\\\\ Pocket' \
+  && bad "the shell escaping reached the screen -- this is the Pocket S2 backslash" \
+  || ok "and the shell escaping device-env applies is undone, not printed"
 printf '%s' "$out" | grep -q '/dev/sda' \
   && ok "and the target is the one select-target.sh chose" \
   || bad "the target is not what select-target returned"

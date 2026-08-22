@@ -576,6 +576,23 @@ printf '%s' "$noinput" | grep -qi 'Nothing has been written' \
   && ok "while saying the device is untouched, which is the question a stuck installer raises" \
   || bad "it does not say whether anything was written"
 
+CASE="ui: the game-controller API is the one pygame actually has"
+# `pygame.controller` does not exist as a top-level module in either pygame or pygame-ce -- it is
+# pygame._sdl2.controller. Written from the docs rather than the library, that line took the whole
+# UI down with an AttributeError the first time it ran against a real pygame (Pocket S2,
+# 2026-08-22), AFTER gamescope had come up, so the symptom was a black panel. Nothing offline could
+# catch it: the suite never imports pygame, by design.
+grep -q 'from pygame._sdl2 import controller' "$ROOT/install/uipad.py" \
+  && ok "the controller module is imported from pygame._sdl2, where it lives" \
+  || bad "uipad.py does not import the controller API from pygame._sdl2"
+# Comments stripped first -- the file EXPLAINS the trap at length, and an assertion that could not
+# tell the warning from the thing warned about would fail on its own documentation.
+if sed 's/#.*$//' "$ROOT/install/uipad.py" | grep -qE '(^|[^_.])pygame\.controller'; then
+  bad "something still reaches for the top-level pygame.controller, which does not exist"
+else
+  ok "and nothing reaches for the top-level name that does not exist"
+fi
+
 CASE="ui: the model is separable from the view"
 # Everything above ran with no SDL, no display and no pad, and that is only true while the state
 # machine cannot reach pygame at all. The separation is physical: install/ui names pygame nowhere,

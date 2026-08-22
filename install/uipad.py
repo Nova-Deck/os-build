@@ -158,10 +158,28 @@ class PadInput:
 
     def __init__(self, pygame):
         self.pygame = pygame
-        pygame.controller.init()
+        # `pygame.controller` DOES NOT EXIST as a top-level module -- the game-controller API lives
+        # at pygame._sdl2.controller in both pygame and pygame-ce. Written from the docs rather than
+        # the library, this line was `pygame.controller.init()` and it took the whole UI down with
+        # an AttributeError the first time it ran against a real pygame (Pocket S2, 2026-08-22) --
+        # after gamescope had already come up, so the symptom was a black panel.
+        self.controller = self._controller_module(pygame)
+        if self.controller is None:
+            log("this pygame exposes no game-controller API -- keyboard only")
+            self.pads = {}
+            return
+        self.controller.init()
         self.pads = {}
         for i in range(pygame.joystick.get_count()):
             self._open(i)
+
+    @staticmethod
+    def _controller_module(pygame):
+        try:
+            from pygame._sdl2 import controller          # pygame and pygame-ce 2.x
+            return controller
+        except ImportError:
+            return getattr(pygame, "controller", None)   # whatever a future version calls it
 
     def _open(self, index):
         pg = self.pygame
@@ -177,10 +195,10 @@ class PadInput:
         # Fixed where it belongs, in the source list of
         # fs-overlay/etc/inputplumber/devices.d/sm8550-ayaneo-controller-japanese.yaml — not here.
         # This line staying loud is what would name the next mode nobody has seen yet.
-        if not pg.controller.is_controller(index):
+        if not self.controller.is_controller(index):
             log("input device %d is not a mapped game controller -- ignored" % index)
             return
-        c = pg.controller.Controller(index)
+        c = self.controller.Controller(index)
         self.pads[index] = c
         log("controller attached: %s" % c.name)
 

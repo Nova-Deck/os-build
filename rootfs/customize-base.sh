@@ -220,8 +220,15 @@ BOOTSTRAP_PKGS=(base)
 # asks for (rootfs/guard-rootfs.sh, 8b) and CONFIG_USER_NS comes from the arm64 defconfig rather
 # than from any novadeck fragment (kernel/build.sh's symbol loop). Neither is DECLARED here; both
 # are now checked, because rootless podman is the first thing on this image that needs them.
+# which: `liblepton/liblepton.sh:356` runs `env -i PATH="…" $(which podman) exec …` to get a shell
+# inside the Android container. This image had no `which` at all — nothing else on it wants one,
+# since every other caller here resolves binaries by absolute path or through PATH directly — so
+# that substitution came out EMPTY and the line degraded to `env -i PATH=… exec …`, which fails as
+# `env: 'exec': No such file or directory`. Measured on a Pocket ACE 2026-08-22 (issue #58); it is
+# 72 KB from the pinned snapshot's `core`. Note this is the real GNU which, not a shell builtin:
+# `command -v` would do the same job, but the line is Valve's and is not ours to change.
 # Closing this needs an Android title actually rendering on hardware — the issue is hw-gate.
-PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-tools mesa gamescope seatd sddm mangohud fex-emu bluez bluez-utils networkmanager alsa-ucm-conf pipewire wireplumber pipewire-pulse pipewire-alsa unzip openal gtk2 ffmpeg e2fsprogs xorg-xwayland lsof noto-fonts noto-fonts-cjk noto-fonts-emoji python python-gobject scx-scheds rauc btrfs-progs rsync earlyoom zram-generator podman crun passt fuse-overlayfs)
+PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-tools mesa gamescope seatd sddm mangohud fex-emu bluez bluez-utils networkmanager alsa-ucm-conf pipewire wireplumber pipewire-pulse pipewire-alsa unzip openal gtk2 ffmpeg e2fsprogs xorg-xwayland lsof noto-fonts noto-fonts-cjk noto-fonts-emoji python python-gobject scx-scheds rauc btrfs-progs rsync earlyoom zram-generator podman crun passt fuse-overlayfs which)
 
 # Dev-only packages — installed ONLY under NOVADECK_DEV=1, NEVER in a release base.
 # On-device bring-up tools: evtest reads raw /dev/input events; usbutils provides lsusb.

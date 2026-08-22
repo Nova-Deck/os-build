@@ -655,6 +655,46 @@ if ! grep -q '/usr/share/guestos/fex-mesa' "$stage/etc/fstab" 2>/dev/null; then
     >>"$stage/etc/fstab"
 fi
 
+# The ANDROID guest's slot in the same /usr/share/guestos namespace, for Valve's Lepton compat tool
+# (Steam app 3029110). Deliberately an EMPTY DIRECTORY and deliberately not an fstab row: unlike
+# fex-mesa there is no image to mount here, because Lepton ships the Android rootfs itself
+# (its images/rootfs, ~4200 files). What this path is for is the DISTRO's contribution INTO that
+# guest — liblepton/mounting.sh walks it with `find . -type f` and bind-mounts every file at its
+# matching absolute path in the container, so a file at vendor/etc/init/foo.rc here lands at
+# /vendor/etc/init/foo.rc inside Android.
+#
+# It must exist even while empty. mounting.sh does `pushd "${OVERLAY}"` under `set -e`, so an
+# ABSENT directory kills the launch outright, before any container is built — measured on a
+# Pocket ACE 2026-08-22 (issue #58):
+#
+#     liblepton/mounting.sh: line 79: pushd: /usr/share/guestos/android: No such file or directory
+#
+# Empty, the walk simply contributes no mounts and Lepton proceeds to boot the guest. That is the
+# whole reason this line exists, and it is why an empty directory is a fix and not a placeholder.
+#
+# What it does NOT yet carry is the one thing still keeping an Android title from running (issue
+# #58, measured on a Pocket S2 2026-08-23): an Android/bionic MESA build. liblepton/properties.sh
+# defaults to `ro.hardware.egl=mesa` + `ro.hardware.vulkan=freedreno` (with
+# mesa.loader.driver.override=zink, so GLES is zink over Turnip), which makes Android's loader want
+# /vendor/lib64/egl/libEGL_mesa.so. Lepton's image ships only the *_swiftshader.so trio, so libEGL
+# aborts — `couldn't find an OpenGL ES implementation` — taking surfaceflinger and the composer HAL
+# with it. On `lepton start dev` that is fatal and the guest never finishes booting; a Steam launch
+# has been seen to reach `Boot complete!` anyway (init restarts the crashed services), so the abort
+# costs rendering rather than the boot on that path. Either way this slot owes
+# vendor/lib64/egl/lib{EGL,GLESv1_CM,GLESv2}_mesa.so, vendor/lib64/hw/vulkan.freedreno.so, and
+# vendor/bin/restore_vulkan_layers.sh (mounting.sh execs it by path). Our aarch64 Turnip is
+# glibc-linked and cannot load in the guest, so this is an NDK cross-build off the same source pin
+# as packages/mesa — the third sibling of packages/mesa-x86.
+#
+# NOT owed, though an earlier revision of this comment claimed otherwise: gralloc. Lepton already
+# ships gralloc.minigbm_msm.so and the matching mapper@4.0 impl. adbd is not owed either — it runs
+# on its own and listens on tcp:5555 once the kernel carries binder.
+#
+# `LEPTON_FORCE_SOFTWARE=true` selects the shipped SwiftShader and boots the guest today, which is
+# how the rest of the stack (binder, system_server, boot_completed, adbd, the pasta forward) was
+# confirmed healthy while this slot is still empty.
+mkdir -p "$stage/usr/share/guestos/android"
+
 # Grow the home PARTITION to fill the device with systemd-repart (declarative, online — it issues
 # a BLKPG resize so it works while the disk is in use, and relocates the GPT backup header for us).
 # The stock systemd-repart.service is initrd-only (no [Install], Before=initrd-root-fs.target) and

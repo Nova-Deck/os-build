@@ -1224,6 +1224,12 @@ meaningfully until Phase 4 has put filesystems and a slot into those eight parti
 contract is that it writes no partition table and leaves `/home` alone, which is only observable
 when there is a `/home` worth leaving.
 
+> **THAT BLOCKER IS GONE as of 2026-08-22:** the ACE now carries a real internal install with a
+> populated `/home`, so the `reinstall` gate is runnable and is the next hardware item. Note what
+> today did NOT cover: the second and third installs ran `fresh` over an existing install
+> (`REPLACES_OURS=1`), which is the path that *destroys* `/home`. `reinstall` is the opposite
+> claim and shares no code path with it.
+
 **The generalisation, which is the part that outlives this bug.** Every gate in the installer that
 shells out to a tool absent from the shipped image has this failure shape, and none of them can be
 caught by a suite that runs where the tool exists. For each external command, decide whether its
@@ -1232,10 +1238,11 @@ quietly.
 
 `carve.sh` was audited the same day and is **clean**: `sgdisk` is required up front, `genpart.sh`
 is ours, and `partprobe`/`udevadm` are best-effort by explicit `|| true` — a visible decision
-rather than an accident, which is the distinction that matters. **Phase 4's orchestrator still
-owes this audit**, and it is the one with the longest tool list (`mkfs.vfat` from dosfstools,
-`mkfs.ext4`, `mkfs.btrfs`, `rauc`, `curl`, `nmcli`), every one of them a tool the shipped image
-does not fully carry.
+rather than an accident, which is the distinction that matters. ~~**Phase 4's orchestrator still
+owes this audit**~~ — **DONE.** The spine checks its whole tool list up front and fails closed
+before anything is written (`tools: all present` is its first line on a healthy run, and
+`test-install.sh` asserts the refusal shape). `select-target.sh` and `carve.sh` gained the same
+treatment for `sfdisk` with issue #56.
 
 ### A disk another distribution's uninstaller left behind — issue #56, fixed 2026-08-22
 
@@ -1550,7 +1557,12 @@ fixed path — so the policy sits where the offline suite is. `install/confirm-t
 renderer and is §4d's own named fallback (typed phrase, no controller); §5's gamepad screen is a
 second implementation of the same contract, sharing the facts file and no code.
 
-**Still owed by 4c:** the hardware gate (verification step 3), and `install/verify-install.sh`.
+**Still owed by 4c:** `install/verify-install.sh`. ~~the hardware gate (verification step 3)~~ —
+**PASSED 2026-08-22 on the AYANEO Pocket ACE, from committed code**, onto a disk a ROCKNIX
+uninstall had left behind: carve → append → four filesystems → RAUC into root-A → ESP + efi-A →
+`A.conf` at first-boot; boots from internal with the card out; Android factory-reset at 8 GiB; and
+one OTA switched A→B (`/dev/sda16`, `/var` sda18, `/efi` sda14, B boot-count 1, A intact as
+rollback). The earlier pass was on partitions reformatted by hand; this one was not.
 
 > **REQUIREMENT — address the new partitions by PARTUUID, never by name arithmetic.** Every step
 > after `genpart.sh --append` needs a path to a partition it just created, and the tempting form is
@@ -1759,8 +1771,10 @@ so the saving is roughly gamescope and libwayland. The *risk* delta is large: th
 historically been the hardest part of this port (blue panel with three distinct causes, DCS
 ordering, the `cont_splash` carve-out, `efifb:off`), and every one of those fights was won
 against the gamescope path. Spending ~200 MB to not re-fight them in an installer that runs
-on a device with no serial console is the right trade. Record SDL2/KMSDRM in `TODO.md` as the
-documented fallback if Phase 0 item 7 goes badly.
+on a device with no serial console is the right trade. Record SDL2/KMSDRM as the documented
+fallback if Phase 0 item 7 goes badly — as a GitHub issue: `TODO.md` was deleted on 2026-08-18
+(see `DONE.md`), and every reference to it in this plan is provenance for where a decision came
+from, never a place to write one down.
 
 Consequences:
 - **Phase 0 item 7 replaces the old `fbcon=rotate:` item** — gamescope owns rotation, so no

@@ -1889,6 +1889,21 @@ is up* and has to hand the screen back when answered — the install is still ru
 - **Screens**: network status (diagnosis only — the §4b table, no picker) → pre-flight → confirm
   → progress → result. Strictly smaller than the earlier draft: dropping the SSID picker and the
   key grid removes the only two widgets that needed text input.
+  **ALL LANDED 2026-08-22.** The network screen came last and brought §4b's diagnosis with it —
+  `install/netcfg`, which had never been written (the spine says so itself: *"it does not join a
+  network (§4b) and it does not resolve latest.json. It is handed URLs."*). It emits `key=value`
+  and no prose, the same split the consent gate uses; the screen owns the words.
+  - **Seven states, seven fixes**: `no-conf`, `unparsable` (with the offending `LINE=`),
+    `not-found`, `auth-failed`, `no-lease`, `no-host`, `need-join`. The suite asserts each renders
+    both what happened and what to do, because §4b's table is the acceptance criterion.
+  - **Order is the design.** Connectivity is checked *before* `wifi.conf` is looked for, so a
+    device on USB-C Ethernet never reads a word about a file it does not need; the SSID is checked
+    against the scan *before* a join, so "typo" and "wrong PSK" stay distinguishable.
+  - **`need-join` exists for the stale card** — one round-tripped through an earlier install names
+    an SSID the user recognises as wrong *before* a failed attempt. Plain press, not the §4d gate.
+  - **The PSK is never printed on any path**, and the suite greps for it.
+  - **No target, no opinion about the network**: with nothing to install onto, this UI is only a
+    consent renderer (how Phase 4 is hardware-gated, spine over SSH) and shows no network error.
 - **Pre-flight** — **LANDED 2026-08-22** (`uiflow.py`, `PreflightScreen`). Device name (via
   `/usr/lib/novadeck/device-env`, the runtime source of truth, not the conf files directly), target
   disk model and size from sysfs, the **full list of partitions about to be destroyed**, the new

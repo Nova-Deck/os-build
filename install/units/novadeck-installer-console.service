@@ -1,0 +1,20 @@
+[Unit]
+Description=NovaDeck installer fallback console (the GUI did not survive)
+# THE POINT OF THIS UNIT: a GUI that fails to start on a device with no serial console is a black
+# screen and nothing else. Started by OnFailure= from novadeck-installer.service, it puts the end of
+# the log on the panel and hands the VT back to a getty, so the person holding the device sees what
+# happened and can act on it. §5, "the fallback path, which is not optional".
+#
+# It carries NO ConditionKernelCommandLine of its own. An OnFailure= activation still evaluates
+# conditions, so a condition here would silently disarm the fallback on exactly the boots it is for.
+After=novadeck-installer.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# --console prints the tail to /dev/tty1 as well as writing the file and copying it to the medium's
+# ESP. `-` because the console is a nicety and the getty below is not.
+ExecStart=-/usr/lib/novadeck/install/save-log.sh --console
+# The failed session Conflicts= getty@tty1, so nothing owns the panel's VT at this point. --no-block
+# because a blocking `systemctl start` from inside a unit can deadlock against its own job.
+ExecStartPost=-/usr/bin/systemctl --no-block start getty@tty1.service

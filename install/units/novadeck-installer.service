@@ -1,0 +1,43 @@
+[Unit]
+Description=NovaDeck installer session (gamescope + the installer UI)
+# ONE UNIT, NOT TWO. The plan sketched a gamescope service with the UI service ordered after it;
+# that shape needs the UI to find gamescope's Wayland socket and race it to be ready, and it leaves
+# a gamescope failure -- the case that actually produces a black panel -- outside the OnFailure=
+# below. install/installer-session runs `gamescope ... -- ui`, i.e. the UI is gamescope's own child,
+# which is the model bring-up validated on hardware (docs/bringup-phase2.md gate 1b/1c) and which
+# makes either half dying one failure this unit can react to.
+#
+# novadeck.install.debug on the kernel command line skips the GUI entirely: the condition below
+# fails, this unit does not start, nothing Conflicts= getty@tty1 any more, and the image's ordinary
+# getty owns the panel. A condition, not a flag inside the session -- an unmet condition is not a
+# failure, so it does not trip OnFailure= and does not look like a crash in the journal.
+ConditionKernelCommandLine=!novadeck.install.debug
+After=systemd-udevd.service dbus.service inputplumber.service
+Wants=dbus.service inputplumber.service
+# Take the panel's VT from the getty, and give it back if we fail.
+Conflicts=getty@tty1.service
+After=getty@tty1.service
+OnFailure=novadeck-installer-console.service
+
+[Service]
+Type=simple
+ExecStartPre=/usr/bin/mkdir -p /run/novadeck
+ExecStart=/usr/lib/novadeck/install/installer-session
+# `-` so a log that cannot be saved never turns a successful install into a failed unit. It runs on
+# every stop, success or failure, which is what makes a failure diagnosable by pulling the card.
+ExecStopPost=-/usr/lib/novadeck/install/save-log.sh
+# NO TTYPath= AND NO StandardInput=tty. Binding the unit to /dev/tty1 made gamescope exit 0 at boot
+# on the main image: seatd's VT-bound seat activates a VT itself and the two clash
+# (docs/bringup-phase2.md, "a system service is NOT an interactive SSH run"). This unit inherits
+# that bug for free if anyone "fixes" the missing TTY directives.
+StandardInput=null
+# Restart=no, deliberately, for two reasons. Re-launching gamescope after a prior instance takes the
+# L2 path, which intermittently wedges the next client on a buffer-release fence (bringup-phase2
+# step 1e) -- so an automatic restart is the risky path, not the safe one. And an installer that
+# silently restarts after a failure hides the failure from the person holding the device, when the
+# whole fallback design below exists to show it to them.
+Restart=no
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

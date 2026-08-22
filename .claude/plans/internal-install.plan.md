@@ -1943,26 +1943,71 @@ is up* and has to hand the screen back when answered — the install is still ru
   throws away the context that says how far it got. The tail of the spine's own output is shown
   with it. What is still owed here: the actual power-off, which waits on Phase 0 item 4.
 
-### The fallback path, which is not optional
+### The fallback path, which is not optional — LANDED 2026-08-22
 
 A GUI that fails to start on a device with no serial console is a black screen and nothing
 else. So:
 
 - `install/novadeck-install` is fully driveable **headless over SSH** (that is how Phase 4 is
   validated), and the installer image ships sshd with the medium's own key.
-- If `novadeck-installer-ui.service` fails, a `OnFailure=` unit starts a plain getty on tty1
-  with the log on screen.
+- If the session fails, a `OnFailure=` unit
+  (`install/units/novadeck-installer-console.service`) puts the tail of the log on tty1 and hands
+  the VT back to a getty. **It carries no `ConditionKernelCommandLine` of its own, deliberately**:
+  an `OnFailure=` activation still evaluates conditions, so a condition there would silently disarm
+  the fallback on exactly the boots it exists for.
 - Every run writes `/run/novadeck/install.log` and copies it to the installer medium's **FAT
-  ESP**, so a failure is diagnosable on a PC by pulling the card. That single decision is worth
-  more than the rest of the UI.
-- `novadeck.install.debug` on the cmdline skips the GUI entirely and drops to a shell.
+  ESP** (`install/save-log.sh`), so a failure is diagnosable on a PC by pulling the card. That
+  single decision is worth more than the rest of the UI.
+  - It carries the session's journal **and the spine's own install record**, which the journal does
+    not have, and it checks that the ESP is a **mount point** rather than a directory of that name —
+    the case where a copy "succeeds" and the file is nowhere to be found on the card.
+  - **Every branch exits 0.** A log that cannot be saved must not turn a successful install into a
+    failed unit, nor mask the real failure of a failed one.
+- `novadeck.install.debug` on the cmdline skips the GUI entirely and drops to a shell — as
+  `ConditionKernelCommandLine=!novadeck.install.debug` on the session unit, so an unmet condition is
+  not a failure (it does not trip `OnFailure=`), nothing `Conflicts=` the getty any more, and the
+  image's ordinary `getty@tty1` owns the panel. No extra unit, no flag inside the session.
+
+**ONE SESSION UNIT, NOT A GAMESCOPE UNIT PLUS A UI UNIT** (2026-08-22). Two units would need the UI
+to find gamescope's Wayland socket and race it to be ready, and — worse — would leave a *gamescope*
+failure, the case that actually produces a black panel, outside the `OnFailure=`.
+`install/installer-session` runs `seatd-launch -- gamescope --backend drm … -- install/ui`, so the
+UI is gamescope's own child, either half dying is one failure the unit reacts to, and the shape is
+the one bring-up validated (`docs/bringup-phase2.md` gates 1b/1c).
+
+Three things in that unit are inherited scar tissue, all asserted:
+- **No `TTYPath=`, no `StandardInput=tty`.** Binding the unit to `/dev/tty1` made gamescope exit 0
+  at boot on the main image — seatd's VT-bound seat activates a VT itself and the two clash.
+- **The launcher clears a stale `/run/seatd.sock`** (seatd-launch leaks it on unclean exit; the next
+  start then refuses) — but only when nothing is listening on it, since removing a live one would
+  break a running session.
+- **`Restart=no`.** Re-launching gamescope takes the L2 path that intermittently wedges the next
+  client on a buffer-release fence (bringup-phase2 step 1e), so an automatic restart is the risky
+  path; and an installer that silently restarts hides the failure this whole section exists to show.
+
+**No `--use-rotation-shader` anywhere.** That flag is from the ROCKNIX-patch era; our gamescope
+carries upstream PR #2228 composite rotation and auto-engages it off the DRM connector's panel
+orientation. The suite asserts the flag is *absent*, because this plan still mentions it and that is
+exactly how it would come back.
 
 ### Tests
 
-Units under `install/units/` covered by `images/test-units.sh` — systemd's parser only *logs*
-unknown directives, cf. `[[systemd-execonfailure-is-not-a-directive]]`. A headless test drives
-the UI state machine (no SDL window; the model is separable from the view) with synthetic
-events and asserts the destructive step is unreachable without a completed 3-second hold.
+**DONE 2026-08-22 — `install/test-ui.sh`, 83 cases, in `make test`.** Units under `install/units/`
+are covered by `images/test-units.sh`, which now walks that directory too: systemd's parser only
+*logs* unknown directives, cf. `[[systemd-execonfailure-is-not-a-directive]]`, and these units ship
+on the one image that has to work when the device is broken. The headless test drives the UI state
+machine (no SDL window; the model is separable from the view) with synthetic events.
+
+What that suite actually holds, beyond the screens: that the consent shim's stdout is the answer and
+nothing else and fails closed on every transport failure; that the pre-flight figures come from the
+tools that will act on them; that a failure names which of two states the device is in; that the
+session's command line is the one bring-up validated (seat launcher, DRM backend, swapped logical
+output, gamescope's own child, **no `--use-rotation-shader`**); that a stale `seatd.sock` is cleared
+but a live one is not; and that the log reaches the ESP only when the ESP is really mounted.
+
+*(The old line here said the destructive step must be unreachable "without a completed 3-second
+hold". Hold-to-confirm is the documented fallback, not the mechanism — the gate is the random
+sequence, and `install/test-install.sh` is where its unreachability is asserted, against the spine.)*
 
 Touch (ChipOne TDDI) is a follow-up; gamepad + USB keyboard for v1.
 
@@ -1976,7 +2021,9 @@ New `install/` stage directory, peer of `boot/`/`images/`/`ota/`:
 install/README.md        pkgs.list       mkroot.sh        mkimage.sh
         select-target.sh carve.sh        novadeck-install  confirm-tty
         rauc-session.sh  post-install-fresh.sh  verify-install.sh
-        lib-gptfixture.sh  netcfg  ui  units/  test-*.sh
+        lib-gptfixture.sh  netcfg  test-*.sh
+        confirm-ui  ui  uipad.py  uiflow.py  uiview.py      <- the §5 UI, four model/view files
+        installer-session  save-log.sh  units/              <- the §5 session and its fallback
 ```
 
 `mkroot.sh` must also install, into `/usr/lib/novadeck/install/` on the **installer** image:
@@ -1984,6 +2031,21 @@ install/README.md        pkgs.list       mkroot.sh        mkimage.sh
 into the rootfs), plus `images/lib-homestage.sh` — the spine resolves all three by search and dies
 if none of the candidates is present. And the two files the spine reads as data:
 `steam-seed.sha256` (the baked pin) and the `confirm` symlink the gate's fixed path names.
+
+**The §5 set travels with it, and two of its dependencies are not in `install/` at all:**
+- All seven UI files (`ui`, `uipad.py`, `uiflow.py`, `uiview.py`, `confirm-ui`, `installer-session`,
+  `save-log.sh`) into the same directory — they find each other by `dirname(__file__)` and by
+  `$SELFDIR`, so one flat directory is the whole layout requirement.
+- `install/units/*.service` into `/usr/lib/systemd/system/`, with `novadeck-installer.service`
+  enabled into `multi-user.target.wants/`. The console unit is started by `OnFailure=` and must
+  **not** be enabled.
+- **`fs-overlay/usr/lib/novadeck/device-env` AND `fs-overlay/usr/lib/novadeck/devices/*.conf`** —
+  from the main image's overlay, not from `install/`. The pre-flight screen names the board with it
+  and the session derives the panel's logical output from it. Without them the installer still runs
+  (both fall back), but every board draws a generic 1920x1080 and calls itself "this device", which
+  is the kind of degradation nobody notices until a user reports it.
+- `/esp` must be a real **mount point** for the installer medium's own ESP, or `save-log.sh` keeps
+  the log in `/run` and the one artifact that can leave a failed device never leaves it.
 
 - `install/mkroot.sh` — pacstrap the installer package set into `work/installer-base`, then
   `mksquashfs -comp zstd`. Set = systemd + udev (device nodes, unit ordering, journald),

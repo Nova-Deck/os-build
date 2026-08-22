@@ -446,5 +446,177 @@ printf '%s' "$out" | grep -qiE '\bpress [ABXY]\b' \
   && bad "the result screen names a face-button letter" \
   || ok "and it still names no face-button letter"
 
+# =================================================================================================
+# the session — gamescope on the panel, with the UI as its only client
+# =================================================================================================
+SESSION="$ROOT/install/installer-session"
+SAVELOG="$ROOT/install/save-log.sh"
+[ -x "$SESSION" ] && [ -x "$SAVELOG" ] || { echo "session scripts missing" >&2; exit 1; }
+
+cat >"$T/bin/device-env-panel" <<'EOF'
+#!/usr/bin/env bash
+printf "NOVADECK_DEVICE_NAME='AYANEO Pocket ACE'\n"
+printf 'NOVADECK_PRIMARY_CONNECTOR=DSI-1\n'
+printf 'NOVADECK_PANEL_NATIVE_WIDTH=1080\n'
+printf 'NOVADECK_PANEL_NATIVE_HEIGHT=1620\n'
+printf 'NOVADECK_PANEL_REFRESH_RATES=60,120\n'
+EOF
+printf '#!/bin/sh\nexit 1\n' >"$T/bin/no-seatd"        # "no seatd is running"
+chmod +x "$T/bin"/*
+
+session() {  # env overrides passed through
+  NOVADECK_INSTALLER_DRYRUN=1 NOVADECK_UI="$UI" NOVADECK_SEATD_PGREP="$T/bin/no-seatd" \
+    NOVADECK_DEVICE_ENV="${DEVENV-$T/bin/device-env-panel}" \
+    NOVADECK_SEATD_SOCK="${SOCKARG-$T/seatd.sock}" "$SESSION" 2>"$T/session.err"
+}
+
+CASE="session: the command line is the one bring-up validated on hardware"
+cmd="$(session)"
+printf '%s' "$cmd" | grep -q 'seatd-launch -- ' \
+  && ok "gamescope runs under seatd-launch -- root, no logind session, which is the installer's case" \
+  || bad "the seat launcher is missing: $cmd"
+printf '%s' "$cmd" | grep -q -- '--backend drm' \
+  && ok "the DRM backend, not a nested one" \
+  || bad "no --backend drm: $cmd"
+printf '%s' "$cmd" | grep -q -- '-W 1620 -H 1080' \
+  && ok "the portrait panel is swapped to a landscape logical canvas (1080x1620 -> 1620x1080)" \
+  || bad "the logical output was not swapped: $cmd"
+printf '%s' "$cmd" | grep -q -- '-r 60' \
+  && ok "and the refresh is the panel's first declared rate, not the whole list" \
+  || bad "the refresh rate is wrong: $cmd"
+printf '%s' "$cmd" | grep -q -- '--prefer-output DSI-1' \
+  && ok "pinned to the board's own connector" \
+  || bad "the connector is not pinned: $cmd"
+printf '%s' "$cmd" | grep -q -- "-- $UI" \
+  && ok "and the UI is gamescope's own child, so either half dying is one failure the unit sees" \
+  || bad "the UI is not gamescope's child: $cmd"
+# The ROCKNIX-era flag. Our gamescope carries upstream PR #2228 composite rotation and auto-engages
+# it off the connector's panel orientation, so passing it would be passing a flag that no longer
+# exists -- and the plan still mentions it, which is exactly how that would happen.
+printf '%s' "$cmd" | grep -q -- '--use-rotation-shader' \
+  && bad "it passes --use-rotation-shader, which our patched gamescope no longer has" \
+  || ok "no --use-rotation-shader -- rotation is auto-engaged from the connector"
+
+CASE="session: an unknown board still gets a screen"
+printf '#!/bin/sh\nexit 0\n' >"$T/bin/device-env-empty"; chmod +x "$T/bin/device-env-empty"
+cmd="$(DEVENV="$T/bin/device-env-empty" session)"
+printf '%s' "$cmd" | grep -q -- '-W 1920 -H 1080' \
+  && ok "a board device-env does not know falls back to generic landscape" \
+  || bad "an unknown board produced: $cmd"
+printf '%s' "$cmd" | grep -q -- '--prefer-output' \
+  && bad "it pinned a connector it was never told about" \
+  || ok "and pins no connector, rather than inventing one"
+
+CASE="session: it clears the socket seatd-launch leaks"
+# docs/bringup-phase2.md: seatd-launch leaks /run/seatd.sock on an unclean exit and the next start
+# dies "Socket file found ... refusing to start". An installer is a tool people re-run after a
+# crash, so this would bite on exactly the second attempt.
+: >"$T/seatd.sock"
+session >/dev/null
+[ ! -e "$T/seatd.sock" ] \
+  && ok "a stale socket left by an earlier run is removed" \
+  || bad "the stale socket survived; the next start would refuse"
+grep -qi 'stale' "$T/session.err" \
+  && ok "and it says so, rather than deleting a socket silently" \
+  || bad "the removal is not logged"
+# But only when nothing is listening: removing a LIVE seatd's socket breaks a running session.
+: >"$T/seatd.sock"
+printf '#!/bin/sh\nexit 0\n' >"$T/bin/yes-seatd"; chmod +x "$T/bin/yes-seatd"
+NOVADECK_INSTALLER_DRYRUN=1 NOVADECK_UI="$UI" NOVADECK_SEATD_PGREP="$T/bin/yes-seatd" \
+  NOVADECK_DEVICE_ENV="$T/bin/device-env-panel" NOVADECK_SEATD_SOCK="$T/seatd.sock" \
+  "$SESSION" >/dev/null 2>&1
+[ -e "$T/seatd.sock" ] \
+  && ok "a socket with a live seatd behind it is left alone" \
+  || bad "it removed a live seatd's socket"
+
+CASE="session: it refuses rather than drawing nothing"
+NOVADECK_INSTALLER_DRYRUN=1 NOVADECK_UI="$T/not-here" NOVADECK_DEVICE_ENV="$T/bin/device-env-panel" \
+  "$SESSION" >/dev/null 2>&1 \
+  && bad "it started a session with no UI to run" \
+  || ok "a missing UI is a loud failure at second zero, not a black panel"
+
+# =================================================================================================
+# the fallback — the log has to be able to leave the machine
+# =================================================================================================
+cat >"$T/bin/journalctl" <<'EOF'
+#!/usr/bin/env bash
+printf 'Aug 22 12:00:00 deck installer-session[1]: gamescope: could not open /dev/dri/card0\n'
+EOF
+printf '#!/bin/sh\nexit 0\n' >"$T/bin/mountpoint"      # "yes, it is mounted"
+chmod +x "$T/bin"/*
+mkdir -p "$T/esp" "$T/run/install"
+printf 'consent: given at 2026-08-22T10:00:00Z, sequence SWNE, attempt 1\n' >"$T/run/install/record"
+
+savelog() {
+  PATH="$T/bin:$PATH" NOVADECK_INSTALL_RUNDIR="$T/run" NOVADECK_INSTALL_LOG="$T/run/install.log" \
+    NOVADECK_INSTALLER_ESP="${ESPARG-$T/esp}" NOVADECK_INSTALL_RECORD="$T/run/install/record" \
+    NOVADECK_INSTALL_CONSOLE="$T/console" JOURNALCTL="${JC-$T/bin/journalctl}" \
+    "$SAVELOG" "$@" 2>"$T/savelog.err"
+}
+
+CASE="fallback: the log is written and copied where a PC can read it"
+savelog && ok "it exits 0" || bad "save-log.sh failed"
+grep -q 'could not open /dev/dri/card0' "$T/run/install.log" \
+  && ok "the session's journal is in it -- the failure that produced a black panel" \
+  || bad "the journal is not in the log"
+grep -q 'consent: given' "$T/run/install.log" \
+  && ok "and the spine's own install record, which the journal does not carry" \
+  || bad "the install record is missing from the log"
+cmp -s "$T/run/install.log" "$T/esp/novadeck-install.log" \
+  && ok "copied to the installer medium's ESP -- pull the card, read it on a PC" \
+  || bad "the log did not reach the ESP"
+
+CASE="fallback: a log that cannot be saved never fails the unit"
+# Every branch of this exits 0 on purpose: a missing journalctl, an unmounted ESP or a read-only
+# medium must not turn a successful install into a failed one, nor mask a real failure.
+JC="$T/bin/nonexistent-journalctl" savelog \
+  && ok "no journalctl on the image is a line in the log, not an error" \
+  || bad "a missing journalctl failed the unit"
+grep -q 'no journalctl' "$T/run/install.log" \
+  && ok "and it says which part is missing" \
+  || bad "the log does not record why it is empty"
+printf '#!/bin/sh\nexit 1\n' >"$T/bin/mountpoint"      # "not a mount point"
+rm -f "$T/esp/novadeck-install.log"
+savelog && ok "an ESP that is not mounted is not an error either" || bad "an unmounted ESP failed"
+[ ! -e "$T/esp/novadeck-install.log" ] \
+  && ok "and nothing is copied into a directory that is merely SHAPED like the mount" \
+  || bad "it copied into an unmounted /esp, where nobody will ever find it"
+grep -qi 'not a mount point' "$T/savelog.err" \
+  && ok "saying so, so the operator knows to look at /run instead" \
+  || bad "it did not say where the log actually is"
+
+CASE="fallback: the panel shows what happened"
+printf '#!/bin/sh\nexit 0\n' >"$T/bin/mountpoint"
+# The console stands in for /dev/tty1, which exists on the device. save-log.sh writes to it only if
+# it is there and writable -- a machine with no VT at all is a skip, not a failure.
+: >"$T/console"
+savelog --console
+grep -q 'could not open /dev/dri/card0' "$T/console" \
+  && ok "the tail of the log reaches the console the OnFailure unit hands to a getty" \
+  || bad "nothing was printed to the console"
+grep -qi 'installer medium' "$T/console" \
+  && ok "and it names where the full copy is, which is the only artefact that leaves the device" \
+  || bad "the console does not say where the full log is"
+
+CASE="units: the fallback is actually armed"
+UNITDIR="$ROOT/install/units"
+grep -q '^OnFailure=novadeck-installer-console.service' "$UNITDIR/novadeck-installer.service" \
+  && ok "the session names the console unit on failure" \
+  || bad "nothing starts the fallback console"
+grep -q '^ConditionKernelCommandLine=!novadeck.install.debug' "$UNITDIR/novadeck-installer.service" \
+  && ok "novadeck.install.debug skips the GUI entirely, as a condition" \
+  || bad "the debug cmdline escape is missing"
+# An OnFailure= activation still evaluates conditions, so a condition on the console unit would
+# disarm the fallback on exactly the boots it exists for.
+grep -q '^ConditionKernelCommandLine' "$UNITDIR/novadeck-installer-console.service" \
+  && bad "the console unit carries a condition, which would disarm it on a normal boot" \
+  || ok "and the console unit carries no condition of its own"
+grep -qE '^(TTYPath|StandardInput=tty)' "$UNITDIR/novadeck-installer.service" \
+  && bad "the session unit binds a TTY -- that made gamescope exit 0 at boot on the main image" \
+  || ok "the session unit binds no TTY, which is what bring-up paid to learn"
+grep -q '^ExecStopPost=-/usr/lib/novadeck/install/save-log.sh' "$UNITDIR/novadeck-installer.service" \
+  && ok "and every stop, successful or not, tries to save the log" \
+  || bad "the log is not collected on stop"
+
 printf '\ntest-ui.sh: %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

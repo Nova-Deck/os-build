@@ -25,7 +25,12 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # System and user units. Deliberately NOT fs-overlay/usr/share/dbus-1/**/*.service -- those are
 # D-Bus activation files, a different format that happens to share the extension. The enable
 # symlinks under fs-overlay/etc/systemd/system point back into these, so they add no coverage.
-UNITDIRS=("$ROOT/fs-overlay/usr/lib/systemd/system" "$ROOT/fs-overlay/usr/lib/systemd/user")
+#
+# install/units/ is here too, and not because it is convenient: those units ship on the INSTALLER
+# image, which has no suite of its own until Phase 6 and which is the one artifact that has to work
+# when the device is broken. An invented directive there fails on a machine with no serial console.
+UNITDIRS=("$ROOT/fs-overlay/usr/lib/systemd/system" "$ROOT/fs-overlay/usr/lib/systemd/user"
+          "$ROOT/install/units")
 
 PASS=0; FAIL=0; SKIP=0
 ok()   { PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }

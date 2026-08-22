@@ -94,6 +94,14 @@ class PadInput:
         # CONTROLLERBUTTONDOWN at all — i.e. positions we cannot name. The installer ships
         # InputPlumber's virtual Xbox pad precisely so that this is never the case here, so an
         # unmapped device is worth a line in the journal rather than a silent skip.
+        #
+        # NOT HYPOTHETICAL. Measured on an AYANEO Pocket ACE, 2026-08-22: the controller MCU has two
+        # modes (Xbox -> `045e:028e`, AYANEO -> `4001:0428`) and the unit came up in the second,
+        # which no InputPlumber config claimed. The raw pad has no gamecontrollerdb entry, so this
+        # check would have skipped it and the consent screen would have found no controller at all.
+        # Fixed where it belongs, in the source list of
+        # fs-overlay/etc/inputplumber/devices.d/sm8550-ayaneo-controller-japanese.yaml — not here.
+        # This line staying loud is what would name the next mode nobody has seen yet.
         if not pg.controller.is_controller(index):
             log("input device %d is not a mapped game controller -- ignored" % index)
             return

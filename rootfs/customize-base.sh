@@ -454,11 +454,13 @@ for pin in "${PREBUILT_PINS[@]}"; do
   url="$(pin_field "$pin" url)";  sha="$(pin_field "$pin" sha256)"
   kind="$(pin_field "$pin" kind)"; kind="${kind:-tar}"
   : "${name:?$pin: missing name}"; : "${url:?$pin: missing url}"; : "${sha:?$pin: missing sha256}"
-  # `.blob` for a raw file (copied verbatim), `.tar` for an archive (tar autodetects gz/xz/zst).
+  # `.blob` for a raw file (copied verbatim), `.tar` for an archive (tar autodetects gz/xz/zst),
+  # `.zip` for one GNU tar cannot read — staged pristine and unpacked container-side with bsdtar.
   case "$kind" in
     tar)  staged="$PREBUILT_DIR/$name.tar" ;;
+    zip)  staged="$PREBUILT_DIR/$name.zip" ;;
     file) staged="$PREBUILT_DIR/$name.blob" ;;
-    *)    echo "$pin: unknown kind '$kind' (want: tar|file)" >&2; exit 1 ;;
+    *)    echo "$pin: unknown kind '$kind' (want: tar|zip|file)" >&2; exit 1 ;;
   esac
   # Reuse a cached blob only if its sha already matches the pin (guards against a partial download
   # or a bumped url reusing the old file); otherwise (re)fetch and verify.
@@ -638,6 +640,7 @@ docker run --rm --platform linux/arm64 -v "$PREBUILT_DIR":/prebuilt:ro \
   #   kind=tar  -> extract with the pin'"'"'s strip-components into `dest` (default /). Archive roots
   #                differ, so strip is per-package (InputPlumber is rooted at inputplumber/usr ->
   #                strip 1 lands at /usr; Proton strips its versioned dir into a stable name).
+  #   kind=zip  -> as kind=tar, but unpacked with bsdtar because GNU tar cannot read a zip.
   #   kind=file -> copy verbatim to `dest`, which is the full destination FILE path (the FEX
   #                guest rootfs is a raw erofs image, not an archive).
   # `dest` is a path in the TARGET root, so every one is prefixed here -- an unprefixed dest
@@ -661,6 +664,19 @@ docker run --rm --platform linux/arm64 -v "$PREBUILT_DIR":/prebuilt:ro \
           # read-only system root legitimately belongs to a build account, so extract as root.
           tar -C "/target$p_dest" --no-same-owner --strip-components="${p_strip:-0}" \
               -xf "/prebuilt/$p_name.tar"
+          ;;
+        zip)
+          # Same contract as kind=tar, different reader: GNU tar cannot open a zip, and upstreams
+          # that publish only a zip (Google`s platform-tools) would otherwise need repacking on the
+          # host, which would mean the staged blob no longer being the bytes the pin`s sha covers.
+          # bsdtar reads zip natively and is always present here -- it ships in libarchive, which
+          # pacman itself depends on, so it cannot go missing while this container can install
+          # anything. It also honours the unix mode in the zip`s external attributes, which is what
+          # keeps adb/fastboot executable at rest (verified on r37.0.1: 0755 survives extraction).
+          command -v bsdtar >/dev/null || { echo "prebuilt $p_name: kind=zip needs bsdtar" >&2; exit 1; }
+          mkdir -p "/target$p_dest"
+          bsdtar -C "/target$p_dest" --no-same-owner --strip-components="${p_strip:-0}" \
+                 -xf "/prebuilt/$p_name.zip"
           ;;
         file)
           # mode comes from the pin (default 0644): the FEX rootfs is data, but decky-loader

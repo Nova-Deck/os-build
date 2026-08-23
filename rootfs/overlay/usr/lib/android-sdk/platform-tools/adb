@@ -1,0 +1,106 @@
+#!/bin/bash
+# adb wrapper for Valve's Lepton — retries `connect`, passes everything else straight through.
+#
+# WHY THIS EXISTS
+#
+# Lepton drives its Android guest entirely over adb and hardcodes this exact path:
+#
+#     liblepton.sh:17   ADB="/usr/lib/android-sdk/platform-tools/adb"
+#
+# with no environment override. It then connects like this:
+#
+#     liblepton.sh:445  "$ADB" -P "${TEMP_PORT}" connect localhost:"${ADB_PORT}" >/dev/null 2>/dev/null
+#     liblepton.sh:462  "$ADB" -P "${TEMP_PORT}" -s localhost:"${ADB_PORT}" install -g "${APK_PATH}"
+#
+# ONE connect. Output discarded. Return value never checked. And the moment it chooses to connect
+# is not when the guest is ready: `Boot complete!` is printed UNCONDITIONALLY by liblepton.sh:225-250,
+# which runs a waiter for /data/lepton-onboot alongside a second waiter that `podman wait`s and then
+# `pkill`s the first when the container exits — so the message appears whether the guest booted or
+# died. Measured on hardware: sys.boot_completed was empty in every sample of every run that printed
+# it.
+#
+# The result on this device (SM8650, guest on an SD card): the container comes up at T+0, Lepton
+# announces boot and connects within a second or two, the guest's adbd opens its listener at ~T+2,
+# pasta mirrors it onto the host immediately after — and nothing ever tries again. The port is open
+# and unused when Lepton tears the container down over a failed install.
+#
+# Patching liblepton.sh is not an option: Lepton is a Steam app and any edit is overwritten on
+# update. This path, however, is ours — it is the `dest` of packages/adb/prebuilt.pin — so a wrapper
+# here is the one durable place to fix it.
+#
+# WHY A RETRY IS THE RIGHT SHAPE, AND WHY IT IS BOUNDED
+#
+# A retry was tried and rejected earlier in this investigation on the reasoning that it "cannot help,
+# the port never opens". That was wrong: on faster storage the port demonstrably opens, ~2s after
+# container start, and Lepton simply misses it. The earlier disproof also ran before the netd kernel
+# fix, with --no-splice still in play, so it was measuring a different failure.
+#
+# It is bounded at CONNECT_TIMEOUT seconds because an unbounded retry is genuinely harmful: a
+# previous version turned every failing launch into a ~7 minute hang, which distorted every timing
+# measurement taken while it was installed. If the guest has not opened the port within the timeout,
+# something other than a race is wrong and the failure should surface immediately.
+set -u
+
+REAL="/usr/lib/android-sdk/platform-tools-upstream/adb"
+CONNECT_TIMEOUT="${NOVADECK_ADB_CONNECT_TIMEOUT:-45}"
+RETRY_INTERVAL="${NOVADECK_ADB_CONNECT_INTERVAL:-0.5}"
+
+# Lepton calls connect as `"$ADB" … connect … >/dev/null 2>/dev/null`, so ANYTHING this wrapper
+# writes to stdout or stderr on that call is discarded. Without a file we cannot tell a retry from
+# a first-try connect -- i.e. we cannot tell whether this wrapper is doing anything at all, which
+# makes every launch after it uninterpretable. So log to a file as well.
+#
+# Best-effort by design: a wrapper that fails because its log is unwritable would break adb, and
+# therefore Lepton, for a diagnostic. Every write below is guarded and the log path is overridable.
+LOG="${NOVADECK_ADB_LOG:-${XDG_RUNTIME_DIR:-/tmp}/novadeck-adb-wrapper.log}"
+log() {
+    # `2>/dev/null || true` so a read-only or missing directory is silently tolerated.
+    { printf '%s %s\n' "$(date '+%H:%M:%S')" "$*" >>"$LOG"; } 2>/dev/null || true
+}
+
+if [ ! -x "$REAL" ]; then
+    echo "adb wrapper: $REAL missing or not executable" >&2
+    exit 127
+fi
+
+# Only `connect` is retried. Everything else — install, push, shell, get-state, kill-server — is
+# handed over untouched, so this cannot change the behaviour or exit status of any other verb.
+is_connect=0
+for arg in "$@"; do
+    if [ "$arg" = "connect" ]; then is_connect=1; break; fi
+done
+
+if [ "$is_connect" -eq 0 ]; then
+    exec "$REAL" "$@"
+fi
+
+# `adb connect` exits 0 even when it failed ("failed to connect to ..."), so the OUTPUT is the only
+# reliable signal. "already connected" counts as success.
+start=$(date +%s)
+deadline=$(( start + CONNECT_TIMEOUT ))
+attempt=0
+log "connect requested: $*"
+while :; do
+    attempt=$((attempt + 1))
+    out="$("$REAL" "$@" 2>&1)"
+    rc=$?
+
+    case "$out" in
+        *"connected to"*)
+            # Covers both "connected to" and "already connected to".
+            log "connected after ${attempt} attempt(s), $(( $(date +%s) - start ))s: $*"
+            [ "$attempt" -gt 1 ] && echo "adb wrapper: connected after ${attempt} attempts" >&2
+            printf '%s\n' "$out"
+            exit 0
+            ;;
+    esac
+
+    if [ "$(date +%s)" -ge "$deadline" ]; then
+        log "GAVE UP after ${attempt} attempt(s) in ${CONNECT_TIMEOUT}s: $* -- last: ${out}"
+        echo "adb wrapper: no connection after ${attempt} attempts in ${CONNECT_TIMEOUT}s" >&2
+        printf '%s\n' "$out"
+        exit "${rc:-1}"
+    fi
+
+    sleep "$RETRY_INTERVAL"
+done

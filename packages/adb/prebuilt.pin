@@ -1,0 +1,89 @@
+# adb — Android Debug Bridge, for Valve's Lepton compat tool (Steam app 3029110, Android titles).
+#
+# Lepton drives its Android guest entirely over adb: liblepton/liblepton.sh:17 hardcodes
+#   ADB="/usr/lib/android-sdk/platform-tools/adb"
+# with no env override, and every APK install and app launch goes through it. Without adb at
+# exactly that path nothing Android runs, so this is a hard runtime dependency and not tooling.
+# `dest` below is that literal path — do not "tidy" it to /usr/bin without patching Lepton.
+#
+# NOT FROM PACMAN, because it cannot be: re-verified 2026-08-23 against the pinned snapshot's
+# databases (4560 packages) — there is no `android-tools`, `adb` or `fastboot` provider in the
+# holo aarch64 repo at all.
+#
+# x86_64 ON PURPOSE, and this is the second instance of that call on this image, not a new one:
+# Google publishes platform-tools for LINUX only as x86_64, and it runs under the system FEX
+# binfmt (packages/fex-emu) exactly as packages/decky-loader's PluginLoader does. HW-proven on
+# 2026-08-22 before being pinned: `adb version` in 1.09s, the fork-server daemonizes correctly and
+# holds a TCP listener, and it needs nothing from the guest rootfs beyond glibc and libgcc_s. It
+# touches no GPU and no USB in this role — Lepton talks to the guest over TCP on localhost — so
+# none of the emulation risk that makes FEX interesting for games applies here.
+#
+# "Does Google not ship arm64 adb?" — they do, and it does not help, so here is the check written
+# down rather than re-run. Probed against r37.0.1 on 2026-08-23: only `-linux` and `-darwin` assets
+# exist; -linux-aarch64, -linux-arm64, -linux_aarch64 and the `latest` aarch64 spelling all 404.
+# The DARWIN build is a Mach-O universal binary that genuinely contains an arm64 slice — but FEX
+# emulates x86_64 LINUX, and a Mach-O linking lib64/libc++.dylib is not an ELF and cannot be run
+# here under FEX or natively. There is no Linux aarch64 asset from Google at all.
+#
+# aarch64 Linux adb DOES exist elsewhere — Debian android-tools-adb, Arch Linux ARM android-tools,
+# Termux. The ALARM one is a genuine drop-in candidate and was evaluated properly rather than waved
+# off; it fails on a specific ABI fact, measured 2026-08-23 against ALARM's android-tools 37.0.0-2:
+#
+#   its adb NEEDs libprotobuf.so.35.1.0  -> our snapshot ships protobuf 33.0-2
+#   ALARM's protobuf 35.1 needs abseil    -> abseil-cpp 20260526.0 vs our 20250814.1
+#
+# Everything else it links is already here and satisfied (fmt 12, brotli, lz4, zstd, libusb, zlib,
+# libstdc++/libgcc_s, and glibc 2.42 against its GLIBC_2.38 floor). So the gap is protobuf alone —
+# but protobuf encodes its full version in the soname and ABI-breaks every release, and it hard-
+# depends on abseil, whose sonames are date-stamped. Adopting it means shipping ALARM's protobuf AND
+# a second abseil generation beside holo's, plus a wrapper at the hardcoded path above to point
+# LD_LIBRARY_PATH at them: a parallel C++ stack for one 3 MB binary. Building android-tools from
+# source against holo's protobuf 33 avoids the duplication but buys a rebuild on every holo protobuf
+# bump.
+#
+# THE ARGUMENT FOR x86 IS THEREFORE DURABILITY, NOT EFFORT: an x86 binary under FEX resolves against
+# the FEX guest rootfs's own libraries, so no holo protobuf/abseil bump can break it. Any native
+# aarch64 adb, prebuilt or source-built, is welded to a host ABI that moves. Revisit if FEX ever
+# leaves the image, or if holo's protobuf catches up to what upstream android-tools links.
+#
+# kind: zip because that is the only format Google ships. The whole platform-tools directory is
+# extracted rather than just the one binary, because adb links the bundled lib64/libc++.so — taking
+# only `adb` would need that library placed and found separately, for no saving worth the coupling.
+# The rest (fastboot, mke2fs, make_f2fs, sqlite3, NOTICE.txt, ~6 MB) is dropped from the RELEASE
+# root by rootfs/conf/trim.list; dev builds keep it, which is where anyone would want fastboot anyway.
+#
+# The zip carries unix modes in its external attributes and bsdtar honours them, so adb arrives
+# 0755 with no `mode:` row — verified on r37.0.1. If a future release ever ships 0644 instead, adb
+# fails with EACCES and Lepton dies exactly as it did before it had adb at all, so check this on a
+# bump.
+#
+# Fields: see packages/inputplumber/prebuilt.pin for the base set and
+# packages/decky-loader/prebuilt.pin for kind/dest/mode.
+#
+# To bump: platform-tools releases are listed at
+# https://developer.android.com/tools/releases/platform-tools — set version + url together and
+# recompute sha256 from the downloaded asset (Google publishes no checksum sidecar). The version
+# here matches the `adb 37.0.1` that was hand-staged on the card during the issue #58 bring-up, so
+# the first build with this pin reproduces a configuration already measured.
+name: adb
+version: r37.0.1
+url: https://dl.google.com/android/repository/platform-tools_r37.0.1-linux.zip
+sha256: d230f13842f60f782a8645f9c813f8f845bf36089ea7289f28c48f17979313f1
+kind: zip
+strip: 1
+# NOT the path Lepton calls. Lepton hardcodes /usr/lib/android-sdk/platform-tools/adb
+# (liblepton.sh:17) and that path is now a WRAPPER shipped from
+# rootfs/overlay/usr/lib/android-sdk/platform-tools/adb, which retries `adb connect` and then execs
+# the binary extracted here. The wrapper exists because Lepton fires exactly ONE connect
+# (liblepton.sh:445), discards its output and never checks it, immediately after a `Boot complete!`
+# that is printed unconditionally whether or not the guest booted -- so on a slow guest it connects
+# before adbd is listening and the launch dies with `device 'localhost:5555' not found`.
+#
+# Upstream is relocatable: verified by copying the whole tree elsewhere and running it (`adb
+# version` reports `Installed as <newpath>/adb` and exits 0), so moving it away from the hardcoded
+# path does not break the bundled lib64/libc++.so it links.
+#
+# rootfs/overlay lands during rootfs assembly, AFTER prebuilts are extracted into the base, so an
+# overlay file at the extraction path would silently REPLACE the real binary. Separating the two
+# paths is what makes the wrapper order-independent instead of a race.
+dest: /usr/lib/android-sdk/platform-tools-upstream

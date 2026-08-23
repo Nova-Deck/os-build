@@ -126,3 +126,30 @@ glob usr/lib/lib@(a|t|l|ub)san.so.*
 # Not removed alongside it: usr/lib/podman/quadlet (2.5M), which the podman-system-generator
 # and podman-user-generator DO exec on every boot and every user session.
 glob usr/bin/podman-remote
+
+# ------------------------------------------------------------------------------------------
+# Android platform-tools, minus adb.
+#
+# packages/adb/prebuilt.pin extracts Google's whole platform-tools directory, because adb links
+# the bundled lib64/libc++.so and separating the two would buy nothing. The other eight files in
+# it have no consumer on this image: Lepton calls `adb` and only `adb` (liblepton.sh:17), and
+# nothing else on a sealed handheld flashes bootloaders or builds filesystems.
+#
+# The pin now lands in platform-tools-UPSTREAM, not platform-tools: the path Lepton hardcodes is a
+# retry wrapper shipped from rootfs/overlay (see that file, and the pin, for why). These globs therefore
+# name the upstream tree -- a glob matching nothing is a hard error, so if the pin's dest and these
+# rows ever drift apart, the build says so instead of silently shipping ~6M of dead weight.
+#
+# ~6M. Kept deliberately: `adb` itself and `lib64/libc++.so`, which it needs to start at all.
+#
+# These rows are release-only, so a DEV build still carries fastboot — which is where anyone
+# would actually want it, on a device that can be bricked.
+glob usr/lib/android-sdk/platform-tools-upstream/fastboot
+glob usr/lib/android-sdk/platform-tools-upstream/etc1tool
+glob usr/lib/android-sdk/platform-tools-upstream/hprof-conv
+glob usr/lib/android-sdk/platform-tools-upstream/make_f2fs
+glob usr/lib/android-sdk/platform-tools-upstream/make_f2fs_casefold
+glob usr/lib/android-sdk/platform-tools-upstream/mke2fs
+glob usr/lib/android-sdk/platform-tools-upstream/mke2fs.conf
+glob usr/lib/android-sdk/platform-tools-upstream/sqlite3
+glob usr/lib/android-sdk/platform-tools-upstream/NOTICE.txt

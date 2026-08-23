@@ -1,0 +1,42 @@
+# novadeck: take Lepton's Android guest OFF zink and onto the freedreno gallium driver.
+#
+# WHY. liblepton/properties.sh writes `mesa.loader.driver.override=zink` into the guest's props
+# whenever the mesa path is selected (i.e. unless LEPTON_FORCE_SOFTWARE=true), so GLES is meant to
+# be zink-over-Turnip. With our Mesa build that override cannot produce a DRI2 screen, and the
+# failure is fatal to the whole guest:
+#
+#     W MESA-EGL: DRI2: failed to create screen / Failed to open any DRM device
+#     W libEGL  : eglInitialize(...) failed (EGL_NOT_INITIALIZED)
+#     F RenderEngine: eglQueryStringImplementationANDROID(EGL_VERSION) failed
+#     -> SurfaceFlinger never registers -> ServiceManager blocks -> libc++abi: terminating (pid 1)
+#
+# The container then dies ~4s in, which ALSO takes down adbd before it can open its listener --
+# so the visible symptom is an APK install that fails with `adb: device offline`, nowhere near the
+# actual cause. Measured on a Pocket S2 (Adreno 750), 2026-08-23.
+#
+# `msm` is the kernel driver name freedreno registers under, and it is what mesa's loader wants
+# here. With this one property changed and nothing else, the same image goes from a 4-second death
+# to a fully booted guest:
+#
+#     I RenderEngine: vendor: freedreno | renderer: FD750 | version: OpenGL ES 3.2 Mesa 26.2.1
+#     I SurfaceFlinger: Boot is finished (2207 ms)
+#     -> adb connects, `Performing Streamed Install` -> Success, UnityPlayerActivity starts
+#
+# WHY A PROPERTY AND NOT A PATCH. Lepton is a Steam app (3029110); any edit to liblepton is
+# overwritten on update. The override is NOT a `ro.` property, so a later setprop wins -- and this
+# slot is ours, so an init script here is the durable place to do it. Lepton bind-mounts every file
+# under /usr/share/guestos/android at its matching absolute path, which lands this at
+# /vendor/etc/init/novadeck-gfx.rc, where Android's init parses it.
+#
+# BOTH TRIGGERS ARE DELIBERATE, and this is the configuration that was actually validated on
+# hardware. A `getprop` sampled 2s in still read `zink` while the value was `msm` by the time
+# SurfaceFlinger started, so which of the two landed was never attributed. `setprop` is idempotent;
+# shipping only one of them would be an untested configuration for no gain.
+#
+# REMOVE THIS when Lepton stops forcing zink, or when our mesa build can satisfy it -- at which
+# point tests/test-android-guestos.sh will need its matching check dropped too.
+on early-init
+    setprop mesa.loader.driver.override msm
+
+on post-fs
+    setprop mesa.loader.driver.override msm

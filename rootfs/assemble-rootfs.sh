@@ -687,6 +687,11 @@ fi
 # which is why this is its own NDK cross-build rather than a copy of the host driver — off the
 # same source pin and patch list, so the three drivers cannot drift. See packages/mesa-android.
 #
+# IT ALSO CARRIES ONE INIT SCRIPT, from rootfs/overlay rather than the mesa build:
+# vendor/etc/init/novadeck-gfx.rc, which takes the guest off Lepton's forced
+# `mesa.loader.driver.override=zink` and onto freedreno. Without it the driver loads and then
+# SurfaceFlinger aborts, killing the guest ~4s into boot. The file documents the measurement.
+#
 # NOT owed, though an earlier revision of this comment claimed otherwise: gralloc (Lepton already
 # ships gralloc.minigbm_msm.so and the matching mapper@4.0 impl) and adbd (it runs on its own and
 # listens on tcp:5555 once the kernel carries binder). /vendor/bin/restore_vulkan_layers.sh is
@@ -715,8 +720,20 @@ for f in vendor/lib64/hw/vulkan.freedreno.so \
          vendor/lib64/dri_gbm.so; do
   [ -s "$android_payload/$f" ] || { echo "ERROR: mesa-android payload incomplete: missing $f (make mesa-android)" >&2; exit 1; }
 done
+# THE SLOT HAS TWO SOURCES, and they MERGE here. rootfs/overlay (injected far above, ~line 205)
+# already placed vendor/etc/init/novadeck-gfx.rc in this tree; `cp -a .../vendor` onto an existing
+# vendor/ merges into it rather than nesting. That ordering is load-bearing and invisible: reorder
+# these two stages, or switch this to an `rm -rf` + copy, and the .rc disappears from the image
+# with no error -- and the guest goes back to dying 4s into boot on zink. Hence the gate below.
 mkdir -p "$stage/$android_slot"
 cp -a "$android_payload/vendor" "$stage/$android_slot/"
+
+# The driver-selection init script must have survived the merge. It is the difference between a
+# guest that renders and one whose SurfaceFlinger aborts; see the file itself for the measurement.
+android_rc="$stage/$android_slot/vendor/etc/init/novadeck-gfx.rc"
+[ -s "$android_rc" ] || { echo "ERROR: ${android_rc#"$stage"} is missing -- rootfs/overlay's copy was clobbered by the payload merge, and the guest will die on zink" >&2; exit 1; }
+grep -q 'mesa.loader.driver.override msm' "$android_rc" \
+  || { echo "ERROR: ${android_rc#"$stage"} no longer sets the mesa driver override -- Lepton forces zink and the guest cannot create a DRI2 screen" >&2; exit 1; }
 # The payload is handed back to the build USER by its container (so the host can cache it), and
 # that uid means nothing inside the image. Modes are already 0644/0755 from `install`, so this is
 # ownership only — but a read-only root whose files claim to belong to uid 1000 is a lie that

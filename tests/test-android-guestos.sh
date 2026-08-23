@@ -106,6 +106,36 @@ grep -q 'mesa-android payload incomplete' "$ASSEMBLE" \
     || bad "assembler does not hard-require the mesa-android payload"
 
 echo
+echo "the driver-selection init script"
+
+# Lepton forces mesa.loader.driver.override=zink, which cannot create a DRI2 screen with our build:
+# SurfaceFlinger aborts and the guest dies ~4s in, surfacing as an APK install that fails with
+# "adb: device offline" -- nowhere near the cause. The .rc that overrides it back to freedreno is
+# the difference between a rendering guest and a dead one, and it arrives from rootfs/overlay rather
+# than the mesa build, so nothing in packages/ would notice if it vanished.
+RC="$ROOT/rootfs/overlay/$SLOT/vendor/etc/init/novadeck-gfx.rc"
+if [[ -s $RC ]]; then
+    ok "rootfs/overlay ships vendor/etc/init/novadeck-gfx.rc"
+else
+    bad "no novadeck-gfx.rc in rootfs/overlay -- the guest would run on zink and die 4s into boot"
+fi
+grep -q 'setprop mesa.loader.driver.override msm' "$RC" 2>/dev/null \
+    && ok "it overrides the mesa loader onto freedreno (msm)" \
+    || bad "novadeck-gfx.rc does not setprop mesa.loader.driver.override msm"
+
+# Android init only parses this from a path Lepton will bind-mount, i.e. under the slot.
+case "$RC" in
+    */rootfs/overlay/"$SLOT"/vendor/etc/init/*.rc) ok "it sits under the slot, so Lepton mounts it at /vendor/etc/init/" ;;
+    *) bad "the .rc is not under $SLOT/vendor/etc/init -- Android init would never see it" ;;
+esac
+
+# The assembler merges rootfs/overlay and the mesa payload into one tree. If that merge ever becomes a
+# clobber, the .rc disappears silently -- so the assembler has to check it survived.
+grep -q 'rootfs/overlay.s copy was clobbered by the payload merge' "$ASSEMBLE" \
+    && ok "assembler verifies the .rc survived the payload merge" \
+    || bad "no build-time check that the .rc is still in the staged slot"
+
+echo
 echo "build recipe"
 
 # 9. ZINK. Lepton sets mesa.loader.driver.override=zink alongside ro.hardware.egl=mesa, so GLES in

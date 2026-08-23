@@ -40,11 +40,12 @@ KCONFIG="$ROOT/kernel/kernel.config"
 DOCKERFILE="$ROOT/build/Dockerfile"
 MAKEFILE="$ROOT/Makefile"
 FEXCONF="$ROOT/rootfs/overlay/usr/share/fex-emu/Config.json"
-OURS="$ROOT/rootfs/overlay/usr/share/guestos"
 
 MOUNTPOINT=/usr/share/guestos/fex-mesa
 LOWER=/run/novadeck/guestos-lower
 PAYLOAD=/usr/share/novadeck/guestos-x86-mesa
+
+OURS="$ROOT/rootfs/overlay$MOUNTPOINT"   # the MOUNTPOINT only, not its parent -- see check 5
 
 PASS=0; FAIL=0
 ok()   { printf '  ok   %s\n' "$1"; PASS=$((PASS + 1)); }
@@ -97,13 +98,19 @@ grep -q "mkdir -p \"\$stage$MOUNTPOINT\"" "$ASSEMBLE" \
     && ok "mountpoint is created in the image" \
     || bad "$MOUNTPOINT is never created -- /usr is read-only at runtime"
 
-# 5. Nothing of ours may sit under the mountpoint. The overlay covers that directory whole, so
-#    a file re-added here would be masked at runtime and read as live in the tree -- the exact
-#    shape of a config that looks authoritative and does nothing.
+# 5. Nothing of ours may sit under THE MOUNTPOINT. The overlay covers that directory whole, so a
+#    file re-added here would be masked at runtime and read as live in the tree -- the exact shape
+#    of a config that looks authoritative and does nothing.
+#
+#    SCOPED TO fex-mesa, NOT to /usr/share/guestos as a whole. This used to check the parent, which
+#    was equivalent while fex-mesa was the only slot -- and then wrongly failed the day the ANDROID
+#    slot started shipping vendor/etc/init/novadeck-gfx.rc from rootfs/overlay. That slot has NO mount
+#    over it (Lepton bind-mounts the files out of it one by one), so content there is not masked;
+#    it is the whole point. See tests/test-android-guestos.sh for its own checks.
 if [[ -e $OURS ]]; then
     bad "rootfs/overlay${OURS#"$ROOT"/rootfs/overlay} exists -- the guest mount masks it; it cannot take effect"
 else
-    ok "we ship nothing under the mountpoint (the merged mount provides everything)"
+    ok "we ship nothing under the fex-mesa mountpoint (the merged mount provides everything)"
 fi
 
 echo

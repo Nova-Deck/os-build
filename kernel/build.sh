@@ -206,6 +206,14 @@ CC=(${CROSS_COMPILE:+CROSS_COMPILE=$CROSS_COMPILE})
   #       from IPC because losing just that one leaves binder working for a ROOTFUL caller while
   #       silently removing the per-IPC-namespace mount a rootless container needs to make its own
   #       devices — which is the only way we use it.
+  #   =y  NETFILTER_NETLINK + NETFILTER_NETLINK_LOG + XFRM_USER: the same Lepton guest, one layer
+  #       up from binder. NETFILTER_NETLINK is the load-bearing one — it registers netlink family
+  #       12, which the guest's netd needs — but it has no prompt, so kernel.config cannot set it
+  #       and instead reaches it by `select` from NETFILTER_NETLINK_LOG. That indirection is
+  #       exactly why both are asserted: if a future tree drops or re-parents the selector, the
+  #       fragment still merges cleanly, NETFILTER_NETLINK quietly goes back to n, and the only
+  #       symptom is netd exiting on a failed NFLogListener 21 times inside a container while
+  #       system_server's watchdog kills it — nothing a host-side check would ever notice.
   #
   # The block below guards the Qualcomm platform path against kernel/trim-platforms.config.
   # That fragment disables ~47 non-Qualcomm ARCH_* platform gates and lets kconfig's dependency
@@ -240,6 +248,7 @@ CC=(${CROSS_COMPILE:+CROSS_COMPILE=$CROSS_COMPILE})
               BLK_DEV_DM=y DM_VERITY=y VFAT_FS=y BLK_DEV_LOOP=y \
               ZRAM=y ZRAM_BACKEND_ZSTD=y USER_NS=y FUSE_FS=y \
               ANDROID_BINDER_IPC=y ANDROID_BINDERFS=y \
+              NETFILTER_NETLINK=y NETFILTER_NETLINK_LOG=y XFRM_USER=y \
               DRM_MSM=y PCIE_QCOM=y PCI_PWRCTRL_GENERIC=y MMC_SDHCI_MSM=y SCSI_UFSHCD=y \
               ARM_SMMU=y ARM64_4K_PAGES=y SCHED_CLASS_EXT=y DEBUG_INFO_BTF=y \
               SQUASHFS=y OVERLAY_FS=y; do

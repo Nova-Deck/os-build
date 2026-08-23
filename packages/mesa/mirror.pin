@@ -1,0 +1,32 @@
+# The fallback mirror for the mesa release tarball. Read by ./fetch-source.sh, which is the one
+# fetch shared by all three mesa builds (packages/mesa via makepkg, packages/mesa-x86,
+# packages/mesa-android).
+#
+# WHY A SEPARATE FILE, and not a field in ./source.pin: packages/inputhash.sh hashes source.pin
+# into rootfs/manifest.lock's `novadeck` rows, so anything in there is a claim that changing it
+# changes what gets BUILT. A mirror location cannot change that -- fetch-source.sh verifies the
+# tarball against the sha256 pinned in ./PKGBUILD no matter which host answered, and refuses
+# anything else. Keeping the value here means refreshing it costs neither a `make relock` nor a
+# full mesa rebuild for a byte-identical artifact.
+#
+# WHY FEDORA'S LOOKASIDE. It serves the PRISTINE upstream tarball, byte-identical -- confirmed for
+# 26.2.1 by fetching it and comparing against our pinned sha256. It is independently hosted from
+# freedesktop, which is the entire point: archive.mesa3d.org is one machine
+# (annarchy.freedesktop.org) with no CDN, and mesa.freedesktop.org is Fastly-fronted but fills
+# from that same origin, so the two fail together. MEASURED 2026-08-23: both unreachable for over
+# half an hour. The alternatives were checked and rejected -- Debian repacks mesa, Gentoo's
+# distfiles did not carry 26.2.1, and sources.archlinux.org does not rehost it.
+#
+#   sha512  SHA512 of the tarball, used ONLY to build the mirror's URL: Fedora's lookaside embeds
+#           it in the path. NOT an integrity check -- the sha256 in ./PKGBUILD is, and it is the
+#           hash that was verified against upstream's PGP signature.
+#
+# ON A MESA BUMP: read the new value from the directory index at
+#
+#   https://src.fedoraproject.org/repo/pkgs/mesa/mesa-<ver>.tar.xz/sha512/
+#
+# If Fedora has not packaged the version yet, leave the field EMPTY (`sha512:` with nothing after
+# it). fetch-source.sh then behaves exactly as the builds did before a mirror existed -- upstream
+# or a clear failure -- rather than pretending to have a fallback. Getting the value WRONG costs a
+# 404 on the fallback path only; it can never produce a wrong build.
+sha512: d4bc755442c6573a1b75cafad50ec66594fa0ca7599c525f368bdecbd551a970e890ed6b044d9251f84278d27dcaa30649fbf4f4bf0adbaa76e1cc1ba6a1181f

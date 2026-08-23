@@ -7,6 +7,13 @@ set -euxo pipefail
 : "${SNAPSHOT:?}" "${HOST_UID:?}" "${HOST_GID:?}"
 OUT=/repo/work/mesa-x86/out
 
+# HAND THE OUTPUT TREE BACK TO THE BUILD USER ON *ANY* EXIT, not just success. The gates below run
+# AFTER `install`, so a gate that fires leaves a populated, root-owned out/ behind -- and the host
+# half's `rm -rf "$WORKDIR/out"` on the next run then dies with "Permission denied" on every file,
+# turning one honest gate failure into a build that cannot be retried without a container to clean
+# up after it. Measured 2026-08-23, on the first failure this gate ever caught.
+trap 'chown -R "$HOST_UID:$HOST_GID" /repo/work/mesa-x86 2>/dev/null || true' EXIT
+
 # Pin the whole container to the guest rootfs snapshot: the driver must not reference glibc
 # symbols newer than the rootfs ships, and every build dep must come from the rootfs's own
 # package generation. multilib supplies the lib32-* halves for the i686 build.
@@ -21,18 +28,15 @@ pacman -S --noconfirm --needed \
   lib32-libxshmfence lib32-libxrandr lib32-xcb-util-keysyms \
   lib32-wayland lib32-zlib lib32-expat lib32-zstd
 
-# The mesa source is whatever the HOST mesa builds: source the PKGBUILD (top-level assignments
-# only — functions are defined, not run) and take its first source entry + sha256. One source of
-# truth; a host mesa bump is a guest mesa bump with nothing else to edit.
-SOURCE_URL="$(bash -c 'source /repo/packages/mesa/PKGBUILD >/dev/null 2>&1; echo "${source[0]}"')"
-SOURCE_SHA256="$(bash -c 'source /repo/packages/mesa/PKGBUILD >/dev/null 2>&1; echo "${sha256sums[0]}"')"
-SOURCE_TARBALL="${SOURCE_URL##*/}"
-: "${SOURCE_URL:?packages/mesa/PKGBUILD yielded no source url}"
-: "${SOURCE_SHA256:?packages/mesa/PKGBUILD yielded no sha256}"
+# The mesa source is whatever the HOST mesa builds, fetched through the one helper every mesa
+# build shares: it reads the URL + sha256 out of packages/mesa/PKGBUILD, tries upstream, falls
+# back to the verified mirror, and refuses anything that does not match the pinned hash. One
+# source of truth; a host mesa bump is a guest mesa bump with nothing else to edit.
+/repo/packages/mesa/fetch-source.sh /tmp
+SOURCE_TARBALL="$(bash -c 'source /repo/packages/mesa/PKGBUILD >/dev/null 2>&1; echo "${source[0]##*/}"')"
+: "${SOURCE_TARBALL:?packages/mesa/PKGBUILD yielded no source url}"
 
 cd /tmp
-curl --fail --location --retry 3 --remote-name "$SOURCE_URL"
-printf '%s  %s\n' "$SOURCE_SHA256" "$SOURCE_TARBALL" | sha256sum --check --strict
 tar xf "$SOURCE_TARBALL"
 cd "$(tar tf "$SOURCE_TARBALL" | head -1 | cut -d/ -f1)"
 
@@ -116,4 +120,3 @@ for so in "$OUT/usr/lib/libvulkan_freedreno.so" "$OUT/usr/lib32/libvulkan_freedr
   fi
 done
 
-chown -R "$HOST_UID:$HOST_GID" /repo/work/mesa-x86

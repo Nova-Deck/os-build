@@ -655,45 +655,73 @@ if ! grep -q '/usr/share/guestos/fex-mesa' "$stage/etc/fstab" 2>/dev/null; then
     >>"$stage/etc/fstab"
 fi
 
-# The ANDROID guest's slot in the same /usr/share/guestos namespace, for Valve's Lepton compat tool
-# (Steam app 3029110). Deliberately an EMPTY DIRECTORY and deliberately not an fstab row: unlike
-# fex-mesa there is no image to mount here, because Lepton ships the Android rootfs itself
-# (its images/rootfs, ~4200 files). What this path is for is the DISTRO's contribution INTO that
-# guest — liblepton/mounting.sh walks it with `find . -type f` and bind-mounts every file at its
-# matching absolute path in the container, so a file at vendor/etc/init/foo.rc here lands at
-# /vendor/etc/init/foo.rc inside Android.
+# 4g-ter. The ANDROID guest's slot in the same /usr/share/guestos namespace, for Valve's Lepton
+# compat tool (Steam app 3029110).
 #
-# It must exist even while empty. mounting.sh does `pushd "${OVERLAY}"` under `set -e`, so an
-# ABSENT directory kills the launch outright, before any container is built — measured on a
-# Pocket ACE 2026-08-22 (issue #58):
+# NOT a mount and deliberately not an fstab row, unlike fex-mesa above: there is no image to
+# mount here, because Lepton ships the Android rootfs itself (its images/rootfs, ~4200 files).
+# What this path is for is the DISTRO's contribution INTO that guest — liblepton/mounting.sh
+# walks it with `find . -type f` and bind-mounts every file at its matching absolute path in the
+# container, so a file at vendor/lib64/egl/libEGL_mesa.so here lands at
+# /vendor/lib64/egl/libEGL_mesa.so inside Android.
+#
+# The DIRECTORY must exist even when it has nothing in it. mounting.sh does `pushd "${OVERLAY}"`
+# under `set -e`, so an ABSENT directory kills the launch outright, before any container is built
+# — measured on a Pocket ACE 2026-08-22 (issue #58):
 #
 #     liblepton/mounting.sh: line 79: pushd: /usr/share/guestos/android: No such file or directory
 #
-# Empty, the walk simply contributes no mounts and Lepton proceeds to boot the guest. That is the
-# whole reason this line exists, and it is why an empty directory is a fix and not a placeholder.
+# WHAT IT CARRIES: the Android/bionic Mesa build from packages/mesa-android — Turnip plus the
+# EGL/GLES trio and the gallium/gbm libraries around them. liblepton/properties.sh defaults the
+# guest to `ro.hardware.egl=mesa` + `ro.hardware.vulkan=freedreno` +
+# `mesa.loader.driver.override=zink`, which makes Android's loader open
+# /vendor/lib64/egl/libEGL_mesa.so and /vendor/lib64/hw/vulkan.freedreno.so by those exact
+# FILENAMES. Lepton's own image ships only the *_swiftshader.so trio, so with this slot empty
+# libEGL aborted — `couldn't find an OpenGL ES implementation` — taking surfaceflinger and the
+# composer HAL with it (issue #58, measured on a Pocket S2 2026-08-23). On `lepton start dev`
+# that was fatal and the guest never finished booting; a Steam launch reached `Boot complete!`
+# anyway because init restarts the crashed services, so there the abort cost rendering rather
+# than the boot. Either way it is why an Android title started and immediately went dark.
 #
-# What it does NOT yet carry is the one thing still keeping an Android title from running (issue
-# #58, measured on a Pocket S2 2026-08-23): an Android/bionic MESA build. liblepton/properties.sh
-# defaults to `ro.hardware.egl=mesa` + `ro.hardware.vulkan=freedreno` (with
-# mesa.loader.driver.override=zink, so GLES is zink over Turnip), which makes Android's loader want
-# /vendor/lib64/egl/libEGL_mesa.so. Lepton's image ships only the *_swiftshader.so trio, so libEGL
-# aborts — `couldn't find an OpenGL ES implementation` — taking surfaceflinger and the composer HAL
-# with it. On `lepton start dev` that is fatal and the guest never finishes booting; a Steam launch
-# has been seen to reach `Boot complete!` anyway (init restarts the crashed services), so the abort
-# costs rendering rather than the boot on that path. Either way this slot owes
-# vendor/lib64/egl/lib{EGL,GLESv1_CM,GLESv2}_mesa.so, vendor/lib64/hw/vulkan.freedreno.so, and
-# vendor/bin/restore_vulkan_layers.sh (mounting.sh execs it by path). Our aarch64 Turnip is
-# glibc-linked and cannot load in the guest, so this is an NDK cross-build off the same source pin
-# as packages/mesa — the third sibling of packages/mesa-x86.
+# Our aarch64 Turnip from packages/mesa is glibc-linked and could never load in a bionic process,
+# which is why this is its own NDK cross-build rather than a copy of the host driver — off the
+# same source pin and patch list, so the three drivers cannot drift. See packages/mesa-android.
 #
-# NOT owed, though an earlier revision of this comment claimed otherwise: gralloc. Lepton already
-# ships gralloc.minigbm_msm.so and the matching mapper@4.0 impl. adbd is not owed either — it runs
-# on its own and listens on tcp:5555 once the kernel carries binder.
+# NOT owed, though an earlier revision of this comment claimed otherwise: gralloc (Lepton already
+# ships gralloc.minigbm_msm.so and the matching mapper@4.0 impl) and adbd (it runs on its own and
+# listens on tcp:5555 once the kernel carries binder). /vendor/bin/restore_vulkan_layers.sh is
+# NOT owed either — that one was listed here in error: the guest already runs it, which is where
+# the benign `find: '/vendor/enabled_vulkan_layers/'` in the logcat comes from (mounting.sh
+# creates that directory only when a vulkan layer is enabled, and none is by default).
 #
-# `LEPTON_FORCE_SOFTWARE=true` selects the shipped SwiftShader and boots the guest today, which is
-# how the rest of the stack (binder, system_server, boot_completed, adbd, the pasta forward) was
-# confirmed healthy while this slot is still empty.
-mkdir -p "$stage/usr/share/guestos/android"
+# `LEPTON_FORCE_SOFTWARE=true` still selects the shipped SwiftShader and bypasses everything
+# staged here — which is how the rest of the stack (binder, system_server, boot_completed, adbd,
+# the pasta forward) was confirmed healthy while this slot was empty, and remains the control to
+# fall back to when separating a driver fault from anything else.
+#
+# REQUIRED, not best-effort, for the same reason as the mesa-x86 payload above: the Makefile
+# orders the build so it always exists here, and a HALF-staged driver set is the exact quiet
+# failure this stage exists to prevent — Android's loader gives no useful diagnostic for a
+# missing library, and the abort takes the process that would have logged it.
+android_payload="$ROOT/work/mesa-android/out"
+android_slot="usr/share/guestos/android"
+echo "  staging Android guest Mesa payload (/$android_slot)"
+for f in vendor/lib64/hw/vulkan.freedreno.so \
+         vendor/lib64/egl/libEGL_mesa.so \
+         vendor/lib64/egl/libGLESv2_mesa.so \
+         vendor/lib64/egl/libGLESv1_CM_mesa.so \
+         vendor/lib64/libgallium_dri.so \
+         vendor/lib64/libgbm_mesa.so \
+         vendor/lib64/dri_gbm.so; do
+  [ -s "$android_payload/$f" ] || { echo "ERROR: mesa-android payload incomplete: missing $f (make mesa-android)" >&2; exit 1; }
+done
+mkdir -p "$stage/$android_slot"
+cp -a "$android_payload/vendor" "$stage/$android_slot/"
+# The payload is handed back to the build USER by its container (so the host can cache it), and
+# that uid means nothing inside the image. Modes are already 0644/0755 from `install`, so this is
+# ownership only — but a read-only root whose files claim to belong to uid 1000 is a lie that
+# costs someone an afternoon later.
+chown -R 0:0 "$stage/$android_slot"
 
 # Grow the home PARTITION to fill the device with systemd-repart (declarative, online — it issues
 # a BLKPG resize so it works while the disk is in use, and relocates the GPT backup header for us).

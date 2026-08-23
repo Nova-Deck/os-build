@@ -1,0 +1,59 @@
+# mesa-android — aarch64/bionic Turnip + EGL/GLES for the Android guest's guestos slot.
+#
+# WHY THIS EXISTS. Valve's Lepton compat tool (Steam app 3029110) ships the Android rootfs but
+# NOT a GPU driver for it: its images/rootfs carries only the *_swiftshader.so trio. Meanwhile
+# liblepton/properties.sh defaults the guest to `ro.hardware.egl=mesa` +
+# `ro.hardware.vulkan=freedreno` + `mesa.loader.driver.override=zink`, so Android's loader goes
+# looking for /vendor/lib64/egl/libEGL_mesa.so and /vendor/lib64/hw/vulkan.freedreno.so. With
+# neither present libEGL aborts ("couldn't find an OpenGL ES implementation"), taking
+# surfaceflinger and the composer HAL with it. Supplying those libraries is the DISTRO's half of
+# the contract, and /usr/share/guestos/android is where Lepton reads it from (mounting.sh walks
+# that tree with `find . -type f` and bind-mounts every file at its matching absolute path in the
+# container, so vendor/lib64/... here lands at /vendor/lib64/... inside Android).
+#
+# Our aarch64 Turnip from packages/mesa is glibc-linked and cannot load in a bionic process, so
+# this is a separate cross-build off the SAME source pin and patch list — the third sibling of
+# packages/mesa (host) and packages/mesa-x86 (FEX guest). None of the three may drift.
+#
+# NOT a pacman package and NOT a prebuilt: neither source.pin nor prebuilt.pin lives here, so
+# build-overlay.sh and customize-base.sh both ignore this directory. build.sh produces a plain
+# payload tree (work/mesa-android/out/vendor/...) that rootfs/assemble-rootfs.sh copies into the
+# image at /usr/share/guestos/android/vendor. No mount, no unit — Lepton does the mounting.
+#
+# THE PINS:
+#
+#   android_api  Target API level, and the ONE number here that is not a free choice. It must not
+#                exceed the guest's own SDK level: bionic resolves the NDK's versioned symbols at
+#                load time, and a driver built against a newer API can reference symbols the
+#                guest's libc does not export, which the linker reports as a plain "cannot locate
+#                symbol" and the loader turns into the same silent no-GLES abort this package
+#                exists to fix. MEASURED on the Lepton guest 2026-08-23 over adb: SDK 30 /
+#                Android 11 (the image is a Waydroid fork, and Waydroid's own vendor tree carries
+#                a base-patches-30 set, which agrees). A peer distro's equivalent package targets
+#                33 because its guest is a NEWER Android; do not copy that number over.
+#
+#   ndk_version  Google's NDK release, with its sha256. Host binaries are published for
+#                linux-x86_64 ONLY, which is why build.sh runs --platform linux/amd64 like
+#                mesa-x86 rather than in the arm64 cross image the rest of the build uses.
+#
+#   image        The dockerhub archlinux:base-devel tag the build runs in, and
+#   snapshot     the Arch Archive date its pacman is locked to.
+#
+#                DELIBERATELY NOT COUPLED to packages/fex-rootfs/prebuilt.pin, unlike mesa-x86's
+#                identically-named pins. There the container's glibc IS the target's glibc, so
+#                the two dates are one decision. Here the NDK supplies the entire target
+#                toolchain and sysroot; the container contributes host build tools only (meson,
+#                ninja, python, bison/flex), and nothing it ships ends up in the payload. These
+#                two exist for reproducibility, and may be bumped on their own.
+#
+# The mesa SOURCE is deliberately NOT pinned here: build.sh reads the tarball URL + sha256 from
+# packages/mesa/PKGBUILD and the patch list from packages/mesa/source.pin, so a host mesa bump IS
+# an Android mesa bump, exactly as it is for mesa-x86.
+#
+# Provenance: build recipe (NDK cross file, meson option set, the filename-not-soname install
+# mapping) adapted from a peer distro's Android mesa package; see the commit that added this file.
+android_api: 30
+ndk_version: r28c
+ndk_sha256: dfb20d396df28ca02a8c708314b814a4d961dc9074f9a161932746f815aa552f
+image: archlinux:base-devel-20260809.0.570793
+snapshot: 2026/08/11

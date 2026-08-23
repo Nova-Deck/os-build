@@ -184,6 +184,25 @@ for pin in "${PINS[@]}"; do
     cp "$pdir/patches/$p" "$bd/$p"
   done
 
+  # PRE-SEED an upstream source the package provides its own fetcher for. Convention, not
+  # configuration: if packages/<name>/fetch-source.sh exists and is executable, run it with the
+  # staging dir as its destination and let it put the tarball there before makepkg looks.
+  #
+  # WHY THIS EXISTS. makepkg has no mirror fallback -- one URL per source entry, and a dead host
+  # is a dead build. But it does skip downloading a source file that is ALREADY in the build
+  # directory, so a fetcher that drops the right filename there is all it takes. packages/mesa is
+  # the one user today: its tarball comes from a single un-CDN'd freedesktop machine that was
+  # unreachable for over half an hour on 2026-08-23, and the same helper serves mesa-x86 and
+  # mesa-android so all three drivers fetch through one verified path.
+  #
+  # The helper owns verification (it checks the PKGBUILD's sha256 whichever host answered), which
+  # matters here because makepkg runs with --skipinteg -- so without this, the host mesa tarball
+  # was the one input in this pipeline nothing checked at all.
+  if [ -x "$pdir/fetch-source.sh" ]; then
+    echo "[overlay] $name: pre-seeding source via fetch-source.sh" >&2
+    "$pdir/fetch-source.sh" "$bd"
+  fi
+
   # Edit the PKGBUILD: bump pkgrel, register our patches as local sources (so makepkg copies
   # them into $srcdir), and apply them right after the first `cd <dir>` in prepare().
   PATCHES="$patches" SUFFIX="$suffix" python3 - "$bd/PKGBUILD" <<'PY'

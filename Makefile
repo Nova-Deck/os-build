@@ -308,6 +308,16 @@ MESA_X86_SRC   := packages/mesa-x86/build.sh packages/mesa-x86/container-build.s
                   packages/mesa-x86/builder.pin packages/mesa/PKGBUILD packages/mesa/source.pin \
                   packages/fex-rootfs/prebuilt.pin $(wildcard packages/mesa/patches/*.patch)
 
+# aarch64/bionic Mesa payload for the ANDROID guest's /usr/share/guestos/android slot
+# (packages/mesa-android/) — same source pin + patch list again, cross-built with Google's NDK.
+# Google publishes NDK host binaries for linux-x86_64 only, so like mesa-x86 this runs in an x86
+# container on host docker rather than in $(BUILD_IMG). No fex-rootfs pin in the input list: the
+# NDK is the whole target toolchain, so nothing here is coupled to the FEX guest's generation.
+MESA_ANDROID_STAMP := work/.mesa-android.stamp
+MESA_ANDROID_SRC   := packages/mesa-android/build.sh packages/mesa-android/container-build.sh \
+                      packages/mesa-android/builder.pin packages/mesa/PKGBUILD \
+                      packages/mesa/source.pin $(wildcard packages/mesa/patches/*.patch)
+
 # Kernel inputs: any change re-triggers the (full, from-scratch) kernel build. The unified
 # kernel globs every fragment/patch/dts, and bakes the firmware embed list.
 # There is no cmdline file to list: the common boot args live in boot/gen-grub-cfg.sh and land on
@@ -346,7 +356,7 @@ KERNEL_SRC_HASH := work/.kernel-src.hash
 # Phony orchestration targets
 # ==============================================================================
 .PHONY: help all image toolchain kernel fw-linux fw-qcom base overlay verify-lock \
-        rootfs relock mesa-x86 installer installer-root relock-installer verify-image \
+        rootfs relock mesa-x86 mesa-android installer installer-root relock-installer verify-image \
         initramfs steamcl grub sdcard verify-card test test-disk bundle sign-bundle publish-bundle \
         steam-seed-artifact deploy clean clean-base clean-overlay distclean
 
@@ -409,7 +419,7 @@ verify-card: $(SDCARD) | $(BUILD_STAMP) ## Verify the built A/B card image (in c
 verify-lock: ## Check the lock's novadeck rows against packages/ (host, seconds, no build)
 	bash packages/verify-lock-rows.sh
 
-test: verify-lock ## Run the offline bootctl/post-install/pairingd/quirks/power-led/stage-2/partition-table/unit/coredump/perf/fan-curve/decky/update/publish/install/mkroot/steamos-manager/graphics-provider/video-decode/proton-dxvk suites (host, no build needed)
+test: verify-lock ## Run the offline bootctl/post-install/pairingd/quirks/power-led/stage-2/partition-table/unit/coredump/perf/fan-curve/decky/update/publish/install/mkroot/steamos-manager/graphics-provider/android-guestos/mesa-source/video-decode/proton-dxvk suites (host, no build needed)
 	bash $(TESTS_DIR)/test-bootctl.sh
 	bash $(TESTS_DIR)/test-post-install.sh
 	bash $(TESTS_DIR)/test-pairingd.sh
@@ -432,6 +442,8 @@ test: verify-lock ## Run the offline bootctl/post-install/pairingd/quirks/power-
 	bash $(TESTS_DIR)/test-mkroot.sh
 	bash $(TESTS_DIR)/test-mkimage.sh
 	bash $(TESTS_DIR)/test-graphics-provider.sh
+	bash $(TESTS_DIR)/test-android-guestos.sh
+	bash $(TESTS_DIR)/test-mesa-source.sh
 	bash $(TESTS_DIR)/test-video-decode.sh
 	bash $(TESTS_DIR)/test-proton-dxvk.sh
 
@@ -754,7 +766,7 @@ $(VERSION_STAMP):
 # /usr/lib/novadeck/boot mirror the RAUC hook refreshes the ESP and the slot's efi partition FROM.
 # That is what makes "this root and the software that boots it came from one build" true by
 # construction. No cycle: the initramfs is built from work/base, never from the assembled root.
-$(ROOTFS): $(KERNEL) $(INITRAMFS) $(STEAMCL) $(GRUB) $(BASE_STAMP) $(FW_LINUX) $(FW_QCOM) $(STEAM_SEED) $(ASSEMBLE_SRC) $(DECKY_DIST) $(MESA_X86_STAMP) $(MODE_STAMP) $(VERSION_STAMP) | $(BUILD_STAMP)
+$(ROOTFS): $(KERNEL) $(INITRAMFS) $(STEAMCL) $(GRUB) $(BASE_STAMP) $(FW_LINUX) $(FW_QCOM) $(STEAM_SEED) $(ASSEMBLE_SRC) $(DECKY_DIST) $(MESA_X86_STAMP) $(MESA_ANDROID_STAMP) $(MODE_STAMP) $(VERSION_STAMP) | $(BUILD_STAMP)
 	$(DOCKER) $(DEV_ENV) $(ID_ENV) -e NOVADECK_DEBUG $(BUILD_IMG) \
 	  $(ROOTFS_DIR)/assemble-rootfs.sh /src/work/base
 
@@ -766,6 +778,14 @@ $(MESA_X86_STAMP): $(MESA_X86_SRC)
 	@mkdir -p $(@D) && touch $@
 
 mesa-x86: $(MESA_X86_STAMP) ## Build the x86 Turnip payload for the FEX guest (host docker, x86)
+
+# Same shape as mesa-x86 above and for the same reason (an x86-only vendor toolchain, here
+# Google's NDK); the target is aarch64/bionic rather than x86/glibc.
+$(MESA_ANDROID_STAMP): $(MESA_ANDROID_SRC)
+	packages/mesa-android/build.sh
+	@mkdir -p $(@D) && touch $@
+
+mesa-android: $(MESA_ANDROID_STAMP) ## Build the bionic Mesa payload for the Android guest (host docker, x86)
 
 # Host docker, not $(BUILD_IMG): the cross-compile toolchain image has no node, and the plugin
 # is pure frontend TS -> one bundle, nothing arch-specific. -u keeps dist/ host-owned (the
@@ -894,13 +914,14 @@ clean-base: ## Remove the (root-owned) bootstrapped root tree
 clean-overlay: ## Remove the built (arch-scoped) overlay pacman repo + build tree
 	rm -rf work/repo work/overlay-build
 
-# FOUR THINGS THIS DELIBERATELY DOES *NOT* REMOVE, all of which surprise people:
+# FIVE THINGS THIS DELIBERATELY DOES *NOT* REMOVE, all of which surprise people:
 #
 #   work/prebuilt      the pinned-download cache (customize-base.sh documents it as persistent).
 #   work/pacman-cache  the package cache.
 #   work/repo          the built overlay packages (NOT clean-overlay — this target no longer runs it).
 #   work/mesa-x86      the FEX-guest Turnip payload (digest-checked by its own build.sh, same
 #                      content-addressed logic — a stale payload cannot be served).
+#   work/mesa-android  the Android-guest Mesa payload, same digest-check, same reasoning.
 #
 # Together they are ~3.5G, i.e. essentially everything left under work/ after this target runs,
 # which is why "distclean left stuff behind" is a reasonable first reading. It is a CHOICE: every
@@ -909,7 +930,7 @@ clean-overlay: ## Remove the built (arch-scoped) overlay pacman repo + build tre
 # Nothing in the build reads them as INPUT to a decision; they only ever save a download. To drop
 # them anyway (moving machines, reclaiming disk, or proving a pin still resolves upstream):
 #
-#   rm -rf work/prebuilt work/pacman-cache work/mesa-x86 && make clean-overlay
+#   rm -rf work/prebuilt work/pacman-cache work/mesa-x86 work/mesa-android && make clean-overlay
 #
 # work/repo is the newest member and the one with real history. It used to go via clean-overlay,
 # and because rootfs/manifest.lock then pinned the overlay's ARTIFACT bytes — which our

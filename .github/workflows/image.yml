@@ -176,15 +176,51 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
+  # The SECOND cross-target payload for the host image, same shape and same reason as mesa-x86:
+  # packages/mesa-android builds the bionic driver for Lepton's Android guest, and Google publishes
+  # NDK host binaries for linux-x86_64 ONLY -- so it must not run on the arm64 build runner, where
+  # the pinned x86 container would drag the NDK through qemu. Separate job, x86 runner, artifact
+  # across.
+  #
+  # NOT COUPLED to the mesa-x86 job despite the near-identical shape: the two share only the mesa
+  # source, and the FEX rootfs pin that keys mesa-x86's cache is meaningless here (the NDK supplies
+  # the whole target toolchain). Keeping them apart also means one failing does not mask the other.
+  #
+  # NOT FOR THE INSTALLER, same as the two FEX-guest payloads: rootfs/lib-assemble-storage.sh stages
+  # it, and the installer root never runs that script and carries no Lepton.
+  mesa-android:
+    name: mesa-android payload
+    if: inputs.artifact != 'installer'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/cache@v6
+        with:
+          path: work/mesa-android
+          key: mesa-android-${{ hashFiles('packages/mesa-android/**', 'packages/mesa/PKGBUILD', 'packages/mesa/source.pin', 'packages/mesa/patches/*.patch') }}
+      - name: build the Android-guest Mesa payload
+        run: make mesa-android
+      - name: upload the payload
+        uses: actions/upload-artifact@v7
+        with:
+          name: mesa-android-payload
+          path: work/mesa-android
+          # Same dotfile trap as mesa-x86: .inputs.sha256 is what makes the build job's `make`
+          # a no-op instead of an emulated rebuild, and upload-artifact skips hidden files.
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 3
+
   build:
     name: ${{ inputs.artifact }}
-    needs: [mesa-x86, lsfg-vk-x86]
+    needs: [mesa-x86, lsfg-vk-x86, mesa-android]
     # A SKIPPED `needs` SKIPS THE DEPENDENT JOB, which is how an installer release would otherwise
-    # produce nothing at all while reporting green -- and BOTH payload jobs skip for the installer,
-    # so this guard now carries twice the weight it did. `!cancelled()` rather than `always()` so a
+    # produce nothing at all while reporting green -- and EVERY payload job skips for the installer,
+    # so this guard carries the whole weight. `!cancelled()` rather than `always()` so a
     # cancelled run still stops, and `!= 'failure'` per job so a payload that genuinely broke still
     # blocks the artifacts that contain it, while a skipped one does not.
-    if: ${{ !cancelled() && needs.mesa-x86.result != 'failure' && needs.lsfg-vk-x86.result != 'failure' }}
+    if: ${{ !cancelled() && needs.mesa-x86.result != 'failure' && needs.lsfg-vk-x86.result != 'failure' && needs.mesa-android.result != 'failure' }}
     runs-on: ${{ vars.OVERLAY_RUNNER || 'ubuntu-24.04-arm' }}
     # THE ENVIRONMENT IS THE AUTHORIZATION BOUNDARY FOR SIGNING, and it has to be declared here
     # rather than by the caller: a reusable workflow's job cannot be attached to an environment from
@@ -266,6 +302,16 @@ jobs:
         with:
           name: lsfg-vk-x86-payload
           path: work/lsfg-vk-x86
+
+      # Same for the Android guest's driver. rootfs/lib-assemble-storage.sh hard-requires this
+      # payload too, so without it the rootfs assembly fails outright rather than producing a
+      # guestless image.
+      - name: fetch the mesa-android payload
+        if: inputs.artifact != 'installer'
+        uses: actions/download-artifact@v8
+        with:
+          name: mesa-android-payload
+          path: work/mesa-android
 
       # ~34 minutes cold for the 8 from-source packages. The runner is fresh, so this is always
       # cold; there is no stamp cache to hit here the way there is on a dev box.

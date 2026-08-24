@@ -136,6 +136,58 @@ grep -q 'rootfs/overlay.s copy was clobbered by the payload merge' "$ASSEMBLE" \
     || bad "no build-time check that the .rc is still in the staged slot"
 
 echo
+echo "the logcat capture (dev cards only)"
+
+# A debugging instrument, not a feature: it writes continuously to the SD card for the life of
+# every Android title. The whole reason it lives in rootfs/guestos/ instead of rootfs/overlay/ is that
+# rootfs/overlay is copied into EVERY image unconditionally -- there is no gate to be had there, so a
+# copy in that tree ships to users. These three checks are what keep it out of a release image.
+LOGRC="$ROOT/rootfs/guestos/novadeck-logcat.rc"
+if [[ -s $LOGRC ]]; then
+    ok "rootfs/guestos ships novadeck-logcat.rc"
+
+    [[ ! -e $ROOT/rootfs/overlay/$SLOT/vendor/etc/init/novadeck-logcat.rc ]] \
+        && ok "it is NOT in rootfs/overlay, where it would ship in release" \
+        || bad "novadeck-logcat.rc is in rootfs/overlay -- that tree is unconditional, so it would ship to users"
+
+    # The staging must be inside a NOVADECK_DEV branch. Checking that the filename appears is not
+    # enough: an unguarded install line would match that and ship the file anyway.
+    awk '/NOVADECK_DEV/ { dev = NR }
+         /rootfs\/guestos\/novadeck-logcat\.(rc|sh)/ { if (dev && NR - dev < 14) found++ }
+         END { exit !(found >= 2) }' "$ASSEMBLE" \
+        && ok "the assembler stages it only under NOVADECK_DEV=1 (both files)" \
+        || bad "novadeck-logcat.{rc,sh} is not staged behind a NOVADECK_DEV gate -- it would ship in release images"
+
+    # The .rc execs a script from the slot's vendor/bin. Two files that must agree on one path,
+    # with the failure being a service that never starts and a capture that is simply absent.
+    LOGSH="$ROOT/rootfs/guestos/novadeck-logcat.sh"
+    [[ -s $LOGSH ]] \
+        && ok "rootfs/guestos ships the novadeck-logcat.sh writer" \
+        || bad "novadeck-logcat.sh is missing -- the service would exec a script that is not there"
+    grep -qF '/vendor/bin/novadeck-logcat.sh' "$LOGRC" \
+        && ok "the .rc execs the script at its bind-mounted slot path" \
+        || bad "the .rc does not reference /vendor/bin/novadeck-logcat.sh"
+
+    # Lepton deletes compatdata/<appid>/baked/ -- and data_overlay inside it -- on an early app
+    # exit, which destroyed one capture between the run and reading it. Only external/ (the guest's
+    # /data/media/0) and internal/ survive that. Writing anywhere else under /data looks durable
+    # and is not.
+    grep -qF '/data/media/0' "$LOGSH" \
+        && ok "the capture writes to /data/media/0, which survives Lepton's baked/ clear" \
+        || bad "the capture does not write to /data/media/0 -- Lepton's cleanup deletes anything else under /data"
+    # Comments in this file discuss the paths it must NOT use, so strip them before looking.
+    sed 's/#.*//' "$LOGSH" | grep -qE '/data/local|/data/novadeck' \
+        && bad "the capture still writes under /data/local or /data/novadeck -- both are inside baked/ and get deleted" \
+        || ok "it writes nowhere that Lepton's cleanup removes"
+
+    # A shell read loop cannot keep pace with boot spew: unfiltered, it captured 2s of a 90s run.
+    # The filter is what makes the durable stream viable, so its absence is a real regression.
+    grep -qF '*:S' "$LOGSH" \
+        && ok "the line-durable stream is tag-filtered, so it can keep up" \
+        || bad "the durable stream is unfiltered -- the shell loop falls behind and loses everything after boot"
+fi
+
+echo
 echo "build recipe"
 
 # 9. ZINK. Lepton sets mesa.loader.driver.override=zink alongside ro.hardware.egl=mesa, so GLES in

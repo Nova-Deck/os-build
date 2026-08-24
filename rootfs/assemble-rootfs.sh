@@ -734,6 +734,26 @@ android_rc="$stage/$android_slot/vendor/etc/init/novadeck-gfx.rc"
 [ -s "$android_rc" ] || { echo "ERROR: ${android_rc#"$stage"} is missing -- rootfs/overlay's copy was clobbered by the payload merge, and the guest will die on zink" >&2; exit 1; }
 grep -q 'mesa.loader.driver.override msm' "$android_rc" \
   || { echo "ERROR: ${android_rc#"$stage"} no longer sets the mesa driver override -- Lepton forces zink and the guest cannot create a DRI2 screen" >&2; exit 1; }
+# A SECOND init script, DEV CARDS ONLY: a logcat capture that writes inside the guest to /data,
+# whose overlay upperdir lives on the host and so outlives the container. Every host-side capture
+# of this guest has been an `adb logcat` racing Lepton's teardown, and the race is unwinnable --
+# each one ends exactly at app start, which is why "the title starts and immediately exits" is
+# still unmeasured (issue #58). See the file for the rest of the reasoning.
+#
+# It is staged from rootfs/guestos/ rather than rootfs/overlay/ SPECIFICALLY so that this gate can
+# exist. rootfs/overlay is copied into every image unconditionally, so a debugging instrument placed
+# there ships to users -- and this one writes continuously, to an SD card, for the life of every
+# Android title. tests/test-android-guestos.sh asserts the gate is still here.
+if [ "${NOVADECK_DEV:-}" = "1" ]; then
+  echo "  [TEST] staging the Android guest logcat capture (dev cards only)"
+  install -Dm0644 "$ROOT/rootfs/guestos/novadeck-logcat.rc" \
+                  "$stage/$android_slot/vendor/etc/init/novadeck-logcat.rc"
+  # 0755: the .rc runs it as `sh <script>`, but a capture instrument that silently does nothing
+  # because it lost its exec bit is the exact failure this whole slot keeps producing.
+  install -Dm0755 "$ROOT/rootfs/guestos/novadeck-logcat.sh" \
+                  "$stage/$android_slot/vendor/bin/novadeck-logcat.sh"
+fi
+
 # The payload is handed back to the build USER by its container (so the host can cache it), and
 # that uid means nothing inside the image. Modes are already 0644/0755 from `install`, so this is
 # ownership only — but a read-only root whose files claim to belong to uid 1000 is a lie that

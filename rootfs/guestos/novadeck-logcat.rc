@@ -1,0 +1,67 @@
+# novadeck: capture the Android guest's logcat to /data, where it SURVIVES the container's death.
+#
+# WHY. Every capture of this guest so far has been a host-side `adb logcat` racing Lepton's
+# teardown, and the race is unwinnable: Lepton kills the container within seconds of a title
+# exiting, which takes adbd and the capture with it. The measured symptom is a log that ends
+# EXACTLY at app start (`am_proc_start` / UnityPlayerActivity) with nothing after it, which is why
+# "the app starts and immediately exits" has stayed UNMEASURED across several sessions (issue #58).
+#
+# A writer INSIDE the guest does not have that race. The /data overlay's upperdir lives on the
+# host and outlives the container, so whatever logcat has flushed is still on disk to read after
+# the fact. Read it from the host afterwards under the title's compat data path:
+#
+#     .../compatdata/<appid>/data_overlay/**/local/tmp/novadeck-logcat.txt
+#
+# WHERE, and why not /data/novadeck. /data/local/tmp is a path every Android image already has a
+# policy for, so a file there needs none of its own; a fresh top-level /data directory invented by
+# this .rc would be unlabeled, and if the guest is ever enforcing that is the kind of quiet denial
+# that costs a session. Same overlay either way, so the persistence that makes this work is
+# unchanged.
+#
+# We `mkdir` it ourselves rather than assume it. It is NOT in Lepton's shipped rootfs (checked:
+# images/rootfs/data is empty) -- stock init creates it during post-fs-data, so relying on it would
+# make this file depend on .rc PARSE ORDER, and vendor scripts are imported after init.rc. That
+# happens to work today. init's mkdir is a no-op when the directory exists, so doing it here costs
+# nothing and removes the dependency; the mode and ownership match what stock init uses.
+#
+# THE TRIGGER MARKER IS DELIBERATE. With only a log file, an ABSENT file cannot distinguish "init
+# never parsed this .rc" (the slot did not mount, the filename is wrong, the syntax is bad) from
+# "init got here and logcat failed to start". The marker splits those: marker present + no log
+# means the service is what failed, and the guest's own logcat still has the reason.
+#
+# `-b all` is what makes this worth having -- the crash buffer is where a native abort lands, and
+# the last three fatals in this guest were all aborts.
+#
+# WHY NOT `logcat -f`, WHICH IS THE OBVIOUS WAY. Measured 2026-08-24, first capture: `-f` writes
+# through stdio, and the container is SIGKILLed, so the last buffered block is never flushed. The
+# log ended mid-sentence at Unity's startup -- ONE line before the GfxDevice selection that the
+# whole exercise exists to read. A capture instrument that loses its tail is worse than useless
+# here, because the tail is the only part anyone wants: everything before it was already known.
+#
+# Piping through a shell read loop makes each line a write(2) from the builtin, so what is on disk
+# is what was logged, right up to the kill. It costs a process and a syscall per line -- nothing
+# against a boot that logs ~7.5k lines in 52s, and the point is durability, not throughput.
+#
+# DEV CARDS ONLY, and that is why this file lives here instead of in rootfs/overlay/ next to
+# novadeck-gfx.rc. Everything under rootfs/overlay is `cp -a`'d into EVERY image, so a copy there would
+# ship in RELEASE with no way to switch it off; rootfs/assemble-rootfs.sh stages this one into the
+# slot only under NOVADECK_DEV=1. It is a debugging instrument, not a shipping feature -- it writes
+# continuously for the life of every Android title, onto an SD card.
+#
+# REMOVE THIS once the exit is diagnosed.
+
+# No mkdir here for the output directory. /data/media/0 is vold's, with ownership and a label that
+# init creating it early would get wrong, and a broken media volume is a worse bug than a missing
+# log; the script does an ordinary mkdir -p as root instead. The capture's own banner line is the
+# "init reached post-fs-data and started us" evidence that a separate marker file used to provide.
+on post-fs-data
+    start novadeck-logcat
+
+# The loop lives in a script rather than inline. Android init's parser has its own quoting and
+# backslash escapes, so an inline `sh -c "... \"$l\" ..."` nests two levels of quoting in a file
+# nobody can test without booting a guest -- exactly the kind of thing that fails silently and
+# looks like the service never started. The script is bind-mounted from the same slot.
+service novadeck-logcat /system/bin/sh /vendor/bin/novadeck-logcat.sh
+    user root
+    group root log system
+    disabled

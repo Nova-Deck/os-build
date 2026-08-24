@@ -41,6 +41,7 @@ KERNEL="$ROOT/out/Image"
 DTBDIR="$ROOT/out/dtbs"
 GRUB_EFI="$BOOT/grubaa64.efi"
 GRUB_FONT="$BOOT/fonts/dejavu-mono.pf2"
+WIFI_EXAMPLE="$ROOT/install/wifi.conf.example"
 WORK="$ROOT/work/installer-image"
 
 log() { echo "[novadeck] $*" >&2; }
@@ -114,6 +115,15 @@ fatdir() {  # <img> <msdos path, no leading '::'>
 fatdir "$esp" EFI/BOOT
 fatdir "$esp" EFI/steamos/fonts
 fatdir "$esp" dtbs
+fatdir "$esp" novadeck
+
+# The Wi-Fi template, at the path install/netcfg reads its real counterpart from
+# (/esp/novadeck/wifi.conf). HW-FOUND 2026-08-24: the no-Wi-Fi screen has always told the operator
+# to "copy wifi.conf.example next to it", and THE FILE HAD NEVER EXISTED -- nothing in this tree
+# wrote one and nothing put it on a medium. Instructions naming a file that is not there are worse
+# than no instructions: they read as a fault in the person following them.
+[ -f "$WIFI_EXAMPLE" ] || die "missing ${WIFI_EXAMPLE#"$ROOT"/} — the no-Wi-Fi screen tells the user to copy it"
+mcopy -i "$esp" "$WIFI_EXAMPLE" ::/novadeck/wifi.conf.example
 
 # GRUB itself, at the removable-media path ABL loads. No steamcl: see the header.
 mcopy -i "$esp" "$GRUB_EFI" ::/EFI/BOOT/bootaa64.efi

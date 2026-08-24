@@ -994,6 +994,80 @@ done
   && ok "every token the screens handle is producible ($(printf '%s' "$handled" | wc -w) checked)" \
   || bad "screens handle tokens no input can emit:$unreachable"
 
+CASE="wifi.conf survives being written on Windows"
+# The medium's boot partition is typed 0700 SO THAT Windows and macOS will show it, which makes
+# "another computer" very often Windows and the editor very often Notepad -- which saves CRLF.
+# parse_conf did not strip the carriage return, so the PSK became "secret<CR>", the access point
+# rejected it, and the screen reported a wrong password with complete confidence. The user would
+# then check a password that was correct all along, from a photograph of a panel.
+{ sed -n '/^parse_conf/,/^}/p' "$ROOT/install/netcfg"
+  printf 'WIFI_CONF="$1"\nif parse_conf; then printf "[%%s][%%s]" "$SSID" "$PSK"; else printf "FAIL:%%s" "$BAD_LINE"; fi\n'
+} >"$T/pc.sh"
+printf 'SSID=my net\r\nPSK=secret\r\n' >"$T/crlf.conf"
+printf 'SSID=my net\nPSK=secret\n'     >"$T/lf.conf"
+crlf="$(bash "$T/pc.sh" "$T/crlf.conf")"
+lf="$(bash "$T/pc.sh" "$T/lf.conf")"
+[ "$crlf" = "[my net][secret]" ] \
+  && ok "a CRLF file parses to the same values as a LF one ($crlf)" \
+  || bad "CRLF breaks the parse: $crlf"
+[ "$crlf" = "$lf" ] && ok "byte-identical to the LF result" || bad "CRLF=$crlf LF=$lf"
+
+CASE="the file the screen tells you to copy actually exists"
+# It told the operator to "copy wifi.conf.example next to it" and NO SUCH FILE EXISTED anywhere --
+# not in the tree, not on any medium (HW 2026-08-24). Instructions naming a file that is not there
+# read as a fault in the person following them.
+EX="$ROOT/install/wifi.conf.example"
+[ -f "$EX" ] && ok "install/wifi.conf.example exists" \
+  || bad "the example the screen names is still missing"
+grep -q '^SSID=' "$EX" && grep -q '^PSK=' "$EX" \
+  && ok "it carries the two keys netcfg reads" || bad "the template does not show the real keys"
+# It must parse: a template that fails the parser teaches the wrong shape.
+tmpl="$(bash "$T/pc.sh" "$EX")"
+case "$tmpl" in \[*\]\[*\]) ok "and it parses cleanly ($tmpl)" ;; *) bad "the template does not parse: $tmpl" ;; esac
+grep -qi 'wifi.conf' "$EX" && ok "it names the file to copy itself to" \
+  || bad "the template does not say what to rename it to"
+# The screen must give the steps, not just the filename.
+conf="$(cd "$ROOT/install" && python3 -c '
+import uiflow
+print(uiflow.NetworkScreen.TABLE["no-conf"][2])' 2>&1)"
+printf '%s' "$conf" | grep -qi 'wifi.conf.example' \
+  && ok "the screen names the example file" || bad "the screen does not name it"
+printf '%s' "$conf" | grep -qi 'novadeck folder' \
+  && ok "and where to find it" || bad "the screen does not say where the file is"
+printf '%s' "$conf" | grep -qiE 'ethernet' \
+  && ok "and still offers the no-file alternative" || bad "the USB-C Ethernet route was lost"
+
+CASE="no-conf offers no retry, because a retry cannot succeed"
+# HW 2026-08-24, on the first RELEASE medium to reach this screen: it offered "Check again", which
+# cannot work. The card is inside the device, so nobody can write wifi.conf to it while it runs --
+# the remedies are power off / write the file / boot, or USB-C Ethernet, which the periodic re-probe
+# now notices by itself. The button pointed at the one thing that could not help, gave no feedback
+# when pressed (the state is unchanged, so the redraw is identical), and sat where the eye goes
+# first, while Power off -- what the advice text actually asks for -- was secondary.
+btns="$(cd "$ROOT/install" && python3 -c '
+import uiflow
+s = uiflow.NetworkScreen({"STATE": "no-conf", "PATH_": "/esp/novadeck/wifi.conf"})
+print(",".join(b["label"] for b in s.describe()["buttons"]))
+s.handle("S"); print("S=%r" % (s.result,))' 2>&1)"
+printf '%s' "$btns" | head -1 | grep -qi 'power off' \
+  && ok "SELECT still powers off" || bad "the power-off button went too: $btns"
+printf '%s' "$btns" | head -1 | grep -qi 'check again' \
+  && bad "Check again is still offered on no-conf" \
+  || ok "no Check again — nothing on this screen could make it succeed"
+printf '%s' "$btns" | grep -q 'S=None' \
+  && ok "and the South press is inert, not a hidden control behind a removed button" \
+  || bad "S still acts on no-conf: $btns"
+# The states where a retry CAN change something must keep it.
+for st in no-host not-found no-lease; do
+  keep="$(cd "$ROOT/install" && python3 -c "
+import uiflow
+s = uiflow.NetworkScreen({'STATE': '$st', 'URL': 'u', 'SSID': 'x', 'DETAIL': 'd'})
+print(','.join(b['label'] for b in s.describe()['buttons']))" 2>&1)"
+  printf '%s' "$keep" | grep -qi 'check again' \
+    && ok "$st keeps Check again" \
+    || bad "$st lost its retry, and a retry there can succeed: $keep"
+done
+
 CASE="associating: no wifi.conf is not the same as no configuration"
 # User's catch, 2026-08-24. have_lease is false for the WHOLE association window, so anything
 # without a lease fell through to `no-conf` -- "No Wi-Fi settings on this card" -- and told the

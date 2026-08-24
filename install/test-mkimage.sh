@@ -194,5 +194,19 @@ grep -q 'grubenv' "$MKIMAGE" && grep -qE '^[^#]*mcopy.*grubenv' "$MKIMAGE" \
   && bad "mkimage writes a grubenv — this medium is meant to remember nothing" \
   || ok "no grubenv on the medium (nothing here saves state between boots)"
 
+CASE="the Wi-Fi template is on the medium"
+# The no-Wi-Fi screen tells the operator to copy wifi.conf.example, and until 2026-08-24 nothing
+# ever put one on a card. netcfg reads /esp/novadeck/wifi.conf, so the template has to sit beside
+# that path, on the boot partition that is typed 0700 so Windows and macOS will show it.
+grep -q 'novadeck/wifi.conf.example' "$MKIMAGE" \
+  && ok "mkimage writes it to /novadeck/ on the boot partition" \
+  || bad "the file the screen tells the user to copy is not put on the medium"
+grep -q 'fatdir "$esp" novadeck' "$MKIMAGE" \
+  && ok "and creates the folder netcfg reads wifi.conf from" \
+  || bad "the novadeck folder is not created"
+grep -q 'die "missing' "$MKIMAGE" && grep -q 'WIFI_EXAMPLE' "$MKIMAGE" \
+  && ok "a missing template fails the build rather than shipping bad instructions" \
+  || bad "the template can go missing silently"
+
 printf '\ntest-mkimage.sh: %d passed, %d failed, %d skipped\n' "$PASS" "$FAIL" "$SKIP"
 [ "$FAIL" -eq 0 ]

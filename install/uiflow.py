@@ -196,12 +196,19 @@ class NetworkScreen:
 
     # state -> (title, what happened, what the user does about it)
     TABLE = {
+        # THE STEPS ARE NUMBERED AND THE FILE IS REALLY THERE. This said "copy wifi.conf.example
+        # next to it", and until 2026-08-24 no such file existed anywhere -- not in the tree, not on
+        # any medium. Instructions naming a file that is not there read as a fault in the person
+        # following them. install/mkimage.sh now writes it to /novadeck/ on the medium's boot
+        # partition, which is typed 0700 precisely so Windows and macOS will show it.
         "no-conf": (
             "No Wi-Fi settings on this card",
-            "The installer downloads NovaDeck over the network, and it found no {path} to tell it "
+            "The installer downloads NovaDeck over the network, and it found no {path} telling it "
             "which network to join.",
-            "On another computer, copy wifi.conf.example next to it and fill in SSID and PSK. Or "
-            "plug in a USB-C Ethernet adapter -- that needs no file at all.",
+            "Power off and take the card out. On another computer, open the NDINSTALLER volume and "
+            "look in the novadeck folder: copy wifi.conf.example to a file named wifi.conf, open "
+            "the copy, and put your network name and password in it. Put the card back and switch "
+            "on. Or plug in a USB-C Ethernet adapter -- that needs no file at all.",
         ),
         "unparsable": (
             "The Wi-Fi settings could not be read",
@@ -265,6 +272,19 @@ class NetworkScreen:
         ),
     }
 
+    # STATES WITH NOTHING FOR A RETRY TO DO. HW 2026-08-24, on the first release medium to reach
+    # this screen: `no-conf` offered "Check again", and it cannot succeed. The card is inside the
+    # device, so nobody can write wifi.conf to it while it is running -- the only remedies are to
+    # power off, write the file on another computer and boot again, or to plug in USB-C Ethernet,
+    # which the periodic re-probe now notices by itself. So the button pointed at the one thing that
+    # could not help, gave no feedback when pressed (the state is unchanged, so the screen redraws
+    # identically), and sat where the eye looks first, while "Power off" -- the action the advice
+    # text actually asks for -- was the secondary.
+    #
+    # SELECT keeps Power off. Nothing replaces the South button: an installer that offers no action
+    # is telling the truth about a state that needs the operator to go and do something elsewhere.
+    NO_RETRY = ("no-conf",)
+
     def __init__(self, facts):
         self.facts = facts
         self.result = None      # ("join",) | ("retry",) | ("continue",) | ("quit",)
@@ -279,6 +299,8 @@ class NetworkScreen:
             self.result = ("quit",) if self.state() == "need-join" else ("poweroff",)
         elif token == "S":
             st = self.state()
+            if st in self.NO_RETRY:
+                return          # no button is drawn for it, so nothing may act on the press either
             self.result = ("join",) if st == "need-join" else \
                           ("continue",) if st == "online" else ("retry",)
 
@@ -309,7 +331,8 @@ class NetworkScreen:
                    "detail": f.get("DETAIL", "no reason given")}
             title = title.format(**fmt)
             blocks = [("What happened", what.format(**fmt)), ("What to do", fix.format(**fmt))]
-            buttons = [{"pos": "S", "label": "Check again"}, {"pos": "SELECT", "label": "Power off"}]
+            buttons = [{"pos": "SELECT", "label": "Power off"}] if st in self.NO_RETRY else \
+                      [{"pos": "S", "label": "Check again"}, {"pos": "SELECT", "label": "Power off"}]
         return {
             "screen": "network",
             "state": st,

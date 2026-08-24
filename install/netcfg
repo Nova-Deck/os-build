@@ -130,8 +130,17 @@ SSID=""; PSK=""; BAD_LINE=""
 parse_conf() {
   local n=0 line key val
   SSID=""; PSK=""; BAD_LINE=""
+  # STRIP THE CARRIAGE RETURN FIRST. This file is meant to be written on another computer, and
+  # since the medium's boot partition is typed 0700 so Windows and macOS will show it, "another
+  # computer" is very often Windows and the editor is very often Notepad -- which saves CRLF. A
+  # trailing \r rides into the value, so the PSK becomes "secret<CR>", the access point rejects it,
+  # and the screen reports a wrong password with complete confidence. The user then checks a
+  # password that was correct all along. Costed nothing to prevent and would have been miserable
+  # to diagnose from a photograph of a panel.
+  local cr; cr=$(printf '\r')
   while IFS= read -r line || [ -n "$line" ]; do
     n=$((n + 1))
+    line=${line%"$cr"}
     case "$line" in ''|'#'*) continue ;; esac
     case "$line" in
       *=*) key=${line%%=*}; val=${line#*=} ;;

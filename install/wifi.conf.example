@@ -1,0 +1,26 @@
+# NovaDeck installer -- Wi-Fi settings.
+#
+# HOW TO USE THIS FILE
+#   1. Copy it, in this same folder, to a file named exactly:   wifi.conf
+#   2. Open the copy and put your network name and password below.
+#   3. Eject the card, put it back in the device, and switch it on.
+#
+# The installer downloads NovaDeck over the network, so it needs a network to join. If you
+# would rather not use Wi-Fi at all, plug a USB-C Ethernet adapter into the device instead --
+# that needs no file and no editing.
+#
+# Leave this example file alone so it is still here next time. The installer only reads
+# wifi.conf; it ignores this one.
+#
+# NOTES
+#   - Only these two settings are read. Anything else is an error, and the installer will tell
+#     you which line it did not understand.
+#   - A line starting with # is a comment.
+#   - Quotes around the values are optional. Spaces in a network name are fine.
+#   - The password is never shown on screen and is never written to the log.
+#   - 5 GHz networks are supported.
+#
+# Replace the two values below.
+
+SSID=my network name
+PSK=my wifi password

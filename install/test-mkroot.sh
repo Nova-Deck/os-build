@@ -263,6 +263,50 @@ grep -q 'kernel/embed.list' "$MKROOT" \
   && ok "it records why the GPU worked without any of this (those blobs are in the kernel)" \
   || bad "the embed.list relationship is undocumented — the next reader repeats the diagnosis"
 
+CASE="kernel modules, without which firmware is inert"
+# HW-FOUND on the boot AFTER the firmware fix: still no Wi-Fi. The 802.11 stack is MODULAR
+# (CONFIG_CFG80211=m, CONFIG_MAC80211=m, CONFIG_ATH11K=m) and the root had no /usr/lib/modules at
+# all, so the medium carried the firmware and no driver to load it — a symptom identical to having
+# neither.
+grep -q '/modroot:ro' "$MKROOT" && ok "the built module tree is mounted into the bootstrap" \
+  || bad "no modules are installed — the wifi firmware would have no driver"
+grep -q 'usr/lib/modules' "$MKROOT" && ok "they land at /usr/lib/modules" \
+  || bad "modules are mounted but never installed"
+grep -q 'make kernel' "$MKROOT" \
+  && ok "a missing module tree fails the build naming the target that builds it" \
+  || bad "a missing module tree would produce a silently driver-less medium"
+# The drivers really are modular — if these ever become =y this case should be revisited, not the
+# module install quietly dropped.
+for sym in CONFIG_CFG80211 CONFIG_MAC80211 CONFIG_ATH11K; do
+  grep -qx "$sym=m" "$ROOT/kernel/kernel.config" \
+    && ok "$sym is =m, so the module tree is load-bearing" \
+    || skip "$sym is not =m in this config — recheck why modules are shipped"
+done
+
+CASE="overlay udev rules"
+grep -q 'fs-overlay/usr/lib/udev/rules.d' "$MKROOT" \
+  && ok "the overlay udev rules are staged" \
+  || bad "no udev rules — InputPlumber cannot reach /dev/uinput"
+n=$(ls "$ROOT/fs-overlay/usr/lib/udev/rules.d"/*.rules 2>/dev/null | wc -l)
+[ "$n" -gt 0 ] && ok "$n rules to ship" || bad "the overlay rules directory is empty"
+# Taken whole, for the same reason as firmware: hand-picking from a hardware-support set is what
+# produced the ath11k hole.
+grep -qE 'install -m0644 /prebuilt/udev-rules/\*\.rules' "$MKROOT" \
+  && ok "all of them, not a selection" \
+  || bad "udev rules are being filtered — that is the curation that already failed once"
+
+CASE="everything assemble-rootfs.sh installs that packages do not"
+# THE STRUCTURAL POINT, and the reason three separate hardware trips shared one cause: the installer
+# root never runs images/assemble-rootfs.sh, so every stage of that script which puts NON-PACKAGE
+# content on the card has to be repeated in mkroot.sh or deliberately ruled out. Firmware (3/3b),
+# modules (2b) and the overlay payload (4b) were each found the hard way, one boot at a time.
+# This case is a tripwire, not a proof: if that script grows a new numbered stage, come back and
+# decide whether the medium needs it.
+stages=$(grep -cE "^# [0-9]+[a-z]?\. " "$ROOT/images/assemble-rootfs.sh")
+[ "$stages" -eq 21 ] \
+  && ok "assemble-rootfs.sh still has $stages stages — the audit behind this file is current" \
+  || bad "assemble-rootfs.sh now has $stages stages, not 21 — re-audit which ones the medium needs, then update this count"
+
 CASE="InputPlumber board configs"
 # HW-FOUND the same boot: the UI drew and stopped on §4d's "No controller or keyboard". The prebuilt
 # tarball ships the daemon and its generic configs; the per-board MCU gamepad definitions are OURS

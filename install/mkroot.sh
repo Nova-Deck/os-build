@@ -200,6 +200,31 @@ IP_DIR="$ROOT/fs-overlay/etc/inputplumber"
 #
 # The cost is ~260 MB raw on a medium written to an SD card, which is the cheapest thing being
 # traded here.
+# ---- kernel modules, without which the firmware above is inert ---------------------------------------
+# HW-FOUND 2026-08-24, the boot AFTER the firmware fix: still no Wi-Fi. The whole 802.11 stack is
+# MODULAR (CONFIG_CFG80211=m, CONFIG_MAC80211=m, CONFIG_ATH11K=m), and this root had no
+# /usr/lib/modules at all -- so the medium carried ath11k/ath12k firmware and no driver to load it.
+# Firmware with no driver does exactly nothing, and the symptom is identical to having neither: no
+# wlan interface, nothing to associate, nothing on the router.
+#
+# This is the THIRD thing missing for one reason -- the installer root never runs
+# images/assemble-rootfs.sh, so everything that script installs beyond packages has to be repeated
+# here. Its stage 2b is this one. Fixing them one symptom at a time is what let the same cause
+# produce three separate hardware trips; the remaining stages were audited rather than guessed
+# (kernel/dtbs and /boot are on the ESP instead, and the slot/var/home stages have no meaning on a
+# medium with no slots).
+MODROOT="$ROOT/out/modroot"
+KVER="$(ls "$MODROOT/lib/modules" 2>/dev/null | head -1)"
+[ -n "$KVER" ] && [ -f "$MODROOT/lib/modules/$KVER/modules.dep" ] \
+  || die "no built kernel modules at ${MODROOT#"$ROOT"/} — run: make kernel"
+
+# The overlay's udev rules, ALL of them. Two are input-path (uinput permissions, which InputPlumber
+# needs, and the SM8250 gamepad rules); the rest are hardware behaviour that is simply inert when
+# the device is absent. Taken whole for the same reason the firmware trees are: hand-picking from a
+# hardware-support set is what produced the ath11k hole.
+UDEV_DIR="$ROOT/fs-overlay/usr/lib/udev/rules.d"
+[ -d "$UDEV_DIR" ] || die "no ${UDEV_DIR#"$ROOT"/} — uinput permissions and the pad rules would be missing"
+
 FW_QCOM_DIR="$ROOT/firmware/qcom-fw"
 FW_LINUX_DIR="$ROOT/firmware/linux-fw"
 FW_QCOM_STAMP="$FW_QCOM_DIR/sha256sums.txt"
@@ -253,6 +278,8 @@ seed:${SEED_SHA:-none}
 esplabel:$ESP_LABEL
 firmware:$(sha256sum "$FW_QCOM_STAMP" "$FW_LINUX_STAMP" | sha256sum | cut -d' ' -f1)
 inputplumber:$(cat "$IP_DIR"/*/*.yaml 2>/dev/null | sha256sum | cut -d' ' -f1)
+udev:$(cat "$UDEV_DIR"/*.rules 2>/dev/null | sha256sum | cut -d' ' -f1)
+modules:$KVER:$(sha256sum "$MODROOT/lib/modules/$KVER/modules.dep" | cut -d' ' -f1)
 dev:${DEV:-0}
 sshkey:$(printf '%s' "${NOVADECK_SSH_PUBKEY:-none}" | sha256sum | cut -d' ' -f1)
 wifi:$(printf '%s\n%s\n%s' "${NOVADECK_WIFI:-}" "${NOVADECK_WIFI_SSID:-none}" "${NOVADECK_WIFI_PSK:-none}" | sha256sum | cut -d' ' -f1)"
@@ -307,6 +334,8 @@ cp -p "$DEVICES_DIR"/*.conf "$STAGE/devices/"
 # intact so the container can lay them down without knowing which source tree each came from.
 mkdir -p "$STAGE/inputplumber"
 cp -a "$IP_DIR/." "$STAGE/inputplumber/"
+mkdir -p "$STAGE/udev-rules"
+cp -a "$UDEV_DIR/." "$STAGE/udev-rules/"
 # The firmware trees are NOT copied into the staging directory: they are ~260 MB and would be
 # duplicated on every build. They cross as their own read-only mounts instead (see the docker run).
 cp    "$KEYRING_SRC" "$STAGE/keyring.pem"
@@ -434,6 +463,7 @@ docker run --rm --platform linux/arm64 \
   -v "$STAGE":/prebuilt:ro \
   -v "$FW_QCOM_DIR":/fw-qcom:ro \
   -v "$FW_LINUX_DIR":/fw-linux:ro \
+  -v "$MODROOT":/modroot:ro \
   -v "$PACMAN_CACHE":/var/cache/pacman/pkg \
   -v "$OVERLAY_REPO":/novarepo:ro \
   -v "$DEST":/target \
@@ -558,6 +588,27 @@ docker run --rm --platform linux/arm64 \
   rm -f /target/usr/lib/firmware/sha256sums.txt /target/usr/lib/firmware/.fetched.stamp
   chmod -R u=rwX,go=rX /target/usr/lib/firmware
   echo "[novadeck] firmware: $(find /target/usr/lib/firmware -type f | wc -l) files, $(du -sh /target/usr/lib/firmware | cut -f1)" >&2
+
+  # Kernel modules. The 802.11 stack is modular, so without these the firmware above is inert and
+  # there is no wlan interface at all. modroot is the tree kernel/build.sh produced with
+  # modules_install, so modules.dep and friends are already generated and correct for this kernel;
+  # it is copied verbatim rather than re-depmod-ed in an emulated container.
+  if [ -d /modroot/lib/modules ]; then
+    install -d -m0755 /target/usr/lib/modules
+    cp -a /modroot/lib/modules/. /target/usr/lib/modules/
+    echo "[novadeck] modules: $(find /target/usr/lib/modules -name \*.ko | wc -l) for kernel $(ls /target/usr/lib/modules | head -1)" >&2
+  else
+    echo "no kernel modules mounted at /modroot -- the medium would have no wifi driver" >&2
+    exit 1
+  fi
+
+  # The overlay udev rules, all of them (see the host half). Without 70-novadeck-uinput.rules
+  # InputPlumber cannot get at /dev/uinput.
+  if [ -d /prebuilt/udev-rules ]; then
+    install -d -m0755 /target/usr/lib/udev/rules.d
+    install -m0644 /prebuilt/udev-rules/*.rules /target/usr/lib/udev/rules.d/
+    echo "[novadeck] udev: $(ls /prebuilt/udev-rules/*.rules | wc -l) overlay rules" >&2
+  fi
 
   # InputPlumber board configs. Without them the daemon runs but recognises none of the handheld
   # MCU gamepads, and the UI stops on the no-input screen -- HW-found on the first medium that got

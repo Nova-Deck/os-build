@@ -35,6 +35,23 @@ KEY_TO_CARDINAL = {"n": "N", "e": "E", "s": "S", "w": "W"}
 
 TOKEN_BACK = "BACK"     # abort
 TOKEN_QUIT = "QUIT"     # the window went away
+TOKEN_LEFT = "LEFT"     # adjust a value down
+TOKEN_RIGHT = "RIGHT"   # adjust a value up
+
+# THE D-PAD, which had no tokens at all until hardware said so (2026-08-24). PreflightScreen has
+# handled LEFT and RIGHT since it was written -- they are how the operator chooses how much of the
+# disk Android keeps -- and NOTHING COULD EVER PRODUCE THEM: this file translated the four face
+# buttons and BACK, and stopped there. The screen offered a control no input could reach, and the
+# only visible symptom was that the number would not move.
+#
+# The face buttons are cardinal POSITIONS because their printed letters differ between boards
+# (§4d). The d-pad needs no such care: left is left on every one of them, so these map straight
+# through. SDL numbers them 11..14 (UP/DOWN/LEFT/RIGHT) as CONTROLLER_BUTTON_DPAD_*; only the two
+# horizontal ones are bound, because they are the only ones any screen asks for -- an unbound
+# direction is inert rather than surprising.
+BUTTON_TO_NAV = {13: TOKEN_LEFT, 14: TOKEN_RIGHT}
+# Arrow keys for the USB-keyboard fallback §4d requires, alongside the n/e/s/w initials above.
+KEY_TO_NAV = {"left": TOKEN_LEFT, "right": TOKEN_RIGHT}
 
 
 def log(msg):
@@ -221,12 +238,16 @@ class PadInput:
             elif ev.type == pg.CONTROLLERBUTTONDOWN:
                 if ev.button in BUTTON_TO_CARDINAL:
                     out.append(BUTTON_TO_CARDINAL[ev.button])
+                elif ev.button in BUTTON_TO_NAV:
+                    out.append(BUTTON_TO_NAV[ev.button])
                 elif ev.button == BUTTON_BACK:
                     out.append(TOKEN_BACK)
             elif ev.type == pg.KEYDOWN:
                 name = pg.key.name(ev.key)
                 if name in KEY_TO_CARDINAL:
                     out.append(KEY_TO_CARDINAL[name])
+                elif name in KEY_TO_NAV:
+                    out.append(KEY_TO_NAV[name])
                 elif ev.key == pg.K_ESCAPE:
                     out.append(TOKEN_BACK)
         return out

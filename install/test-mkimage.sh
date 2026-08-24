@@ -45,8 +45,14 @@ n=$(rows | wc -l)
 read -r _ esp_size esp_type esp_fs esp_label _ < <(rows | sed -n 1p)
 read -r rt_name rt_size rt_type _ rt_label _ < <(rows | sed -n 2p)
 
-[ "$esp_type" = ef00 ] && ok "p1 is ef00 (ABL finds the ESP by type GUID)" \
-  || bad "p1 type is $esp_type, not ef00 — ABL would not find it"
+# 0700, NOT ef00, and the reasoning is measured rather than assumed. An EFI System Partition is
+# hidden from users by Windows and macOS, which makes this installer's own advice — "copy
+# wifi.conf.example next to it on another computer" — impossible, and loses the install log on the
+# way back out. ABL does not select by type: a working ROCKNIX card is MBR (`dos`) with a plain
+# 0xc FAT32 partition carrying /EFI/BOOT/bootaa64.efi and no EFI System Partition anywhere
+# (measured 2026-08-24). The loader is found by CONTENT.
+[ "$esp_type" = 0700 ] && ok "p1 is 0700, so every OS shows it (ABL boots by content, not type)" \
+  || bad "p1 type is $esp_type — an ef00 here is invisible on Windows/macOS, where wifi.conf is written"
 [ "$esp_fs" = vfat ] && ok "p1 is vfat" || bad "p1 fs is $esp_fs"
 [ "$rt_name" = root ] && ok "p2 is the root" || bad "p2 is named $rt_name"
 [ "$rt_size" = rest ] && ok "p2 takes the rest of the medium" \

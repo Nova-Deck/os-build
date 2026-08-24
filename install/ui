@@ -451,18 +451,23 @@ def run(server, view, source, base, deadline=0):
     have_input, input_checked = source.present(), time.monotonic()
     if not have_input:
         log("no controller and no keyboard -- consent cannot be taken on this machine (§4d)")
-    # A state that clears ITSELF must not need a human to notice. `no-clock` is the whole reason
-    # this exists: these boards have no clock battery, so on a cold boot the clock sits at the epoch
-    # until systemd-timesyncd syncs, and every HTTPS probe fails until it does. HW 2026-08-24 -- the
-    # operator reached the network screen and "had to retry a couple of times", pressing Check again
-    # at a condition that was already fixing itself. Making a person poll on the installer's behalf
-    # is the installer offloading its own bookkeeping onto the one screen where they can least
-    # afford to be confused.
+    # THE NETWORK SCREEN RE-DIAGNOSES ITSELF, whatever it currently says. A person should never have
+    # to press a button to find out that a condition already fixed itself.
     #
-    # ONLY the self-clearing state re-probes. Every other row of §4b's table names something the
-    # operator has to go and change -- a PSK, an access point, a cable -- and silently re-running
-    # those would replace a stable, readable diagnosis with a screen that flickers between guesses.
-    SELF_CLEARING = ("no-clock", "associating", "no-lease")
+    # This began as an allowlist -- no-clock, associating, no-lease -- on the reasoning that every
+    # OTHER row names something a human has to go and change, so re-running those would flicker
+    # between guesses. THAT REASONING WAS WRONG, and hardware said so within the hour (2026-08-24):
+    # the operator hit "Connected, but the update server is unreachable" and stayed on it, while the
+    # device behind it had long since gone STATE=online -- the clock had synced and DNS had come up.
+    # `no-host` at boot is usually DNS not being ready yet, which is exactly the self-clearing shape
+    # the allowlist was built to catch, and I had excluded it by name.
+    #
+    # The allowlist was the wrong question. Re-probing is ALWAYS safe -- net_diagnose() defaults to
+    # `diagnose`, which is read-only and never joins anything -- and the screen only changes when
+    # the STATE actually changes, so a stable fault stays stable and readable. What varies is not
+    # whether to look, it is what to do with the answer: `online` leaves the screen, anything else
+    # redraws it. No guessing, and no state can be forgotten by omission from a list again.
+    NET_RECHECK_S = 5
     net_checked = time.monotonic()
     while True:
         if time.monotonic() - input_checked > 2:
@@ -473,8 +478,7 @@ def run(server, view, source, base, deadline=0):
 
         top = stack[-1]
         if (getattr(top, "name", "") == "network"
-                and top.facts.get("STATE") in SELF_CLEARING
-                and time.monotonic() - net_checked > 3):
+                and time.monotonic() - net_checked > NET_RECHECK_S):
             net_checked = time.monotonic()
             fresh = net_diagnose()
             if fresh.get("STATE") != top.facts.get("STATE"):

@@ -939,17 +939,60 @@ grep -qE 'CURL_RC" = 60|CURL_RC" = 35' "$ROOT/install/netcfg" \
   && ok "keyed on curl's TLS exit codes, not its HTTP status" \
   || bad "the clock state is not keyed on the exit code"
 # The UI must re-probe it without a human, and ONLY it.
-# Membership, not the literal tuple: the set grew from one state to three and an assertion pinned
-# to its exact text failed on a correct change.
-selfclear="$(grep -oE 'SELF_CLEARING = \([^)]*\)' "$ROOT/install/ui")"
-for st in no-clock associating no-lease; do
-  printf '%s' "$selfclear" | grep -q "\"$st\"" \
-    && ok "$st re-probes on its own" \
-    || bad "$st still needs a human to press Check again at a condition that fixes itself"
+# NO ALLOWLIST. This was a tuple of "self-clearing" states, and hardware refuted the idea within the
+# hour: the operator sat on "Connected, but the update server is unreachable" while the device had
+# long since gone online, because `no-host` had been excluded BY NAME on the reasoning that it names
+# something a human must change. At boot it usually means DNS is not up yet — the very shape the
+# allowlist existed to catch. Re-probing is always safe (net_diagnose defaults to read-only
+# `diagnose`), so the screen re-checks whatever it says and no state can be forgotten by omission.
+grep -q 'SELF_CLEARING' "$ROOT/install/ui" \
+  && bad "the allowlist is back — a state omitted from it strands the operator on a stale screen" \
+  || ok "no allowlist: every network state re-diagnoses itself"
+grep -q 'getattr(top, "name", "") == "network"' "$ROOT/install/ui" \
+  && ok "the re-check is gated on being ON the network screen, not on which state it shows" \
+  || bad "the periodic re-check is gated on something else"
+# It must only redraw on a real change, or a stable fault becomes an unreadable flicker.
+grep -q 'if fresh.get("STATE") != top.facts.get("STATE")' "$ROOT/install/ui" \
+  && ok "and only acts when the state actually changes" \
+  || bad "it redraws unconditionally, so a stable diagnosis would flicker"
+
+CASE="every token a screen handles must be one the pad can produce"
+# HW-FOUND 2026-08-24 (user): "left/right to change the android userdata size doesn't work".
+# PreflightScreen has handled LEFT and RIGHT since it was written -- they are how the operator
+# decides how much of the disk Android keeps -- and NOTHING COULD EVER PRODUCE THEM. uipad
+# translated the four face buttons and BACK and stopped there, so those branches were unreachable
+# code and the only symptom was a number that would not move.
+#
+# The specific fix is the d-pad mapping. The general check is this case: a screen that handles a
+# token no input emits is a control that does not exist, and nothing else would notice.
+produced="$(cd "$ROOT/install" && python3 -c '
+import uipad
+toks = set(uipad.BUTTON_TO_CARDINAL.values()) | set(uipad.KEY_TO_CARDINAL.values())
+toks |= set(uipad.BUTTON_TO_NAV.values()) | set(uipad.KEY_TO_NAV.values())
+toks |= {uipad.TOKEN_BACK, uipad.TOKEN_QUIT}
+print(" ".join(sorted(toks)))' 2>&1)"
+printf '%s' "$produced" | grep -q LEFT && printf '%s' "$produced" | grep -q RIGHT \
+  && ok "the pad can produce LEFT and RIGHT ($produced)" \
+  || bad "LEFT/RIGHT are still unreachable: $produced"
+# Both input paths, because §4d names a USB keyboard as the fallback when no pad enumerates.
+grep -q 'BUTTON_TO_NAV = {13: TOKEN_LEFT, 14: TOKEN_RIGHT}' "$ROOT/install/uipad.py" \
+  && ok "from the d-pad (SDL CONTROLLER_BUTTON_DPAD_LEFT/RIGHT)" \
+  || bad "the d-pad is not mapped"
+grep -q 'KEY_TO_NAV' "$ROOT/install/uipad.py" \
+  && ok "and from the arrow keys" || bad "no keyboard equivalent"
+grep -q 'elif ev.button in BUTTON_TO_NAV' "$ROOT/install/uipad.py" \
+  && ok "poll() actually consults the map" \
+  || bad "the map exists but no event path reads it"
+# The invariant itself: every literal token the screens compare against must be producible.
+handled="$(grep -ohE 'token == "[A-Z]+"' "$ROOT/install/ui" "$ROOT/install/uiflow.py" \
+          | grep -oE '"[A-Z]+"' | tr -d '"' | sort -u)"
+unreachable=""
+for t in $handled; do
+  printf '%s' "$produced" | grep -qw "$t" || unreachable="$unreachable $t"
 done
-grep -q 'and top.facts.get("STATE") in SELF_CLEARING' "$ROOT/install/ui" \
-  && ok "and only that state — the other rows name something a human must change" \
-  || bad "auto-re-probing is not restricted to the self-clearing row"
+[ -z "$unreachable" ] \
+  && ok "every token the screens handle is producible ($(printf '%s' "$handled" | wc -w) checked)" \
+  || bad "screens handle tokens no input can emit:$unreachable"
 
 CASE="associating: no wifi.conf is not the same as no configuration"
 # User's catch, 2026-08-24. have_lease is false for the WHOLE association window, so anything

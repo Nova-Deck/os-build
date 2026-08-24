@@ -9,6 +9,7 @@
 # was derived independently it said "NovaDeck will use the remaining 0 GiB" while the carve handed
 # it 90853 MiB (Pocket ACE, 2026-08-21). A second copy of a rule is how the halves drift apart.
 import os
+import time
 
 from uipad import TOKEN_BACK, TOKEN_QUIT, log
 
@@ -489,6 +490,76 @@ PHASES = [
     ("done", "Done"),
 ]
 PHASE_ALIAS = {"/home (kept)": "/home"}
+
+
+class NetJoin:
+    """
+    netcfg join as a child process, so the frame keeps drawing while nmcli works.
+
+    It was a synchronous run_tool with a 180s timeout, which did not merely fail to acknowledge the
+    press -- it blocked the whole UI loop, so nothing redrew and a slow access point made the device
+    look dead. HW 2026-08-24.
+    """
+
+    def __init__(self):
+        import subprocess
+
+        log("joining the network")
+        self.proc = subprocess.Popen(
+            [NETCFG, "join"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=0)
+        os.set_blocking(self.proc.stdout.fileno(), False)
+        self.chunks = []
+
+    def _drain(self):
+        try:
+            d = self.proc.stdout.read()
+            if d:
+                self.chunks.append(d)
+        except (BlockingIOError, ValueError, OSError):
+            pass
+
+    def poll(self):
+        """The diagnosis once the join has finished, or None while it is still running."""
+        self._drain()
+        if self.proc.poll() is None:
+            return None
+        self._drain()
+        out = b"".join(self.chunks).decode("utf-8", "replace")
+        facts = kv(out)
+        if not facts.get("STATE"):
+            last = (out.strip().splitlines() or ["netcfg produced no diagnosis"])[-1]
+            facts = {"STATE": "netcfg-failed", "DETAIL": last}
+        log("join finished: %s" % facts.get("STATE"))
+        return facts
+
+
+class ConnectingScreen:
+    """Shown the instant Join is pressed, so the press is visibly registered."""
+
+    name = "connecting"
+    interactive = False          # it asks for nothing, so a scripted source spends no press on it
+
+    def __init__(self, ssid):
+        self.ssid = ssid or "the network"
+        self.started = time.monotonic()
+
+    def handle(self, token):
+        pass
+
+    def describe(self):
+        # Animated from elapsed time rather than a frame counter, so it moves at the same rate
+        # whatever the panel is doing.
+        dots = "." * (1 + int((time.monotonic() - self.started) * 2) % 3)
+        return {
+            "screen": "connecting",
+            "title": "Connecting to '%s'" % self.ssid,
+            "blocks": [("", "Joining the network, then asking it for an address%s" % dots),
+                       ("", "This usually takes a few seconds.")],
+            "diamonds": [],
+            "prompt": "",
+            "note": "",
+            "abort": "",
+        }
 
 
 class SpineRun:

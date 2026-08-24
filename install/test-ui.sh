@@ -994,6 +994,39 @@ done
   && ok "every token the screens handle is producible ($(printf '%s' "$handled" | wc -w) checked)" \
   || bad "screens handle tokens no input can emit:$unreachable"
 
+CASE="pressing Join is acknowledged, and the frame keeps drawing"
+# HW 2026-08-24: the join was a synchronous run_tool with a 180s timeout, so pressing Join blocked
+# the whole UI loop. Nothing redrew -- no acknowledgement that the press had registered, and a slow
+# access point made the device look dead. A spinner cannot animate while the loop is blocked, so
+# the feedback and the animation are the same fix.
+conn="$(cd "$ROOT/install" && python3 -c '
+import uiflow, time
+s = uiflow.ConnectingScreen("MYNET")
+d = s.describe()
+print(d["title"]); print(d["blocks"][0][1]); print("interactive=%s" % s.interactive)
+a = s.describe()["blocks"][0][1]
+time.sleep(0.6)
+b = s.describe()["blocks"][0][1]
+print("animates=%s" % (a != b))' 2>&1)"
+printf '%s' "$conn" | grep -qi "connecting to 'MYNET'" \
+  && ok "a Connecting screen names the network" || bad "no connecting screen: $conn"
+printf '%s' "$conn" | grep -q 'interactive=False' \
+  && ok "it asks for nothing, so no press is spent on it" || bad "it is interactive"
+printf '%s' "$conn" | grep -q 'animates=True' \
+  && ok "and it animates, so a slow join still looks alive" || bad "the screen is static: $conn"
+# The join itself must be a child process, not a blocking call.
+grep -q 'class NetJoin' "$ROOT/install/uiflow.py" \
+  && ok "NetJoin runs netcfg as a child" || bad "the join is still synchronous"
+grep -A 24 "class NetJoin" "$ROOT/install/uiflow.py" | grep -q "subprocess.Popen" \
+  && ok "via Popen, so the loop is never blocked by it" || bad "NetJoin does not use Popen"
+grep -q 'stack\[-1\] = ConnectingScreen' "$ROOT/install/ui" \
+  && ok "the press swaps the screen before the work starts" \
+  || bad "the operator still gets no feedback on the press"
+grep -q 'netjoin = NetJoin()' "$ROOT/install/ui" \
+  && ok "and the join starts in the background" || bad "the loop does not start an async join"
+grep -q 'joined = netjoin.poll()' "$ROOT/install/ui" \
+  && ok "the loop polls it and moves on when it finishes" || bad "nothing collects the result"
+
 CASE="wifi.conf survives being written on Windows"
 # The medium's boot partition is typed 0700 SO THAT Windows and macOS will show it, which makes
 # "another computer" very often Windows and the editor very often Notepad -- which saves CRLF.

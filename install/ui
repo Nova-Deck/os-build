@@ -45,7 +45,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from uipad import (                                                            # noqa: E402
     CARDINALS, CARDINAL_NAME, NullView, PadInput, ScriptedInput, TOKEN_BACK, TOKEN_QUIT, log)
 from uiflow import (                                                           # noqa: E402
-    NetworkScreen, PreflightScreen, ProgressScreen, SpineRun, gather_preflight, net_diagnose)
+    ConnectingScreen, NetJoin, NetworkScreen, PreflightScreen, ProgressScreen, SpineRun,
+    gather_preflight, net_diagnose)
 
 SOCK_PATH = os.environ.get("NOVADECK_UI_SOCK", "/run/novadeck/installer-ui.sock")
 # A file of one token per line drives the UI instead of a pad, and selects the null view. This is
@@ -488,6 +489,7 @@ def run(server, view, source, base, deadline=0):
     # redraws it. No guessing, and no state can be forgotten by omission from a list again.
     NET_RECHECK_S = 5
     net_checked = time.monotonic()
+    netjoin = None          # a join running in the background, so the frame keeps drawing
     while True:
         if time.monotonic() - input_checked > 2:
             was, have_input = have_input, source.present()
@@ -496,6 +498,20 @@ def run(server, view, source, base, deadline=0):
                 log("input devices: %s" % ("present again" if have_input else "gone"))
 
         top = stack[-1]
+
+        # A join in flight. Polled before the re-probe below so the two never race for the answer.
+        if netjoin is not None:
+            joined = netjoin.poll()
+            if joined is not None:
+                netjoin = None
+                net_checked = time.monotonic()
+                if joined.get("STATE") == "online":
+                    facts, why = gather_preflight()
+                    stack[-1] = PreflightScreen(facts) if facts else IdleScreen(why)
+                else:
+                    stack[-1] = NetworkScreen(joined)
+                top = stack[-1]
+
         if (getattr(top, "name", "") == "network"
                 and time.monotonic() - net_checked > NET_RECHECK_S):
             net_checked = time.monotonic()
@@ -574,8 +590,15 @@ def run(server, view, source, base, deadline=0):
                 # NetworkManager; both end in a fresh diagnosis, because the state after an attempt
                 # is the only thing worth showing.
                 log("network: %s" % result[0])
-                stack[-1] = NetworkScreen(net_diagnose("join" if result[0] == "join" else
-                                                       "diagnose"))
+                if result[0] == "join":
+                    # Acknowledge the press IMMEDIATELY and run the join as a child. It used to be
+                    # a synchronous call with a 180s timeout, which blocked the loop: nothing
+                    # redrew, so the operator had no sign the press registered and a slow access
+                    # point made the device look dead.
+                    stack[-1] = ConnectingScreen(top.facts.get("SSID", ""))
+                    netjoin = NetJoin()
+                else:
+                    stack[-1] = NetworkScreen(net_diagnose("diagnose"))
             elif result[0] == "continue":
                 # The network is up, so the pre-flight facts can finally be gathered -- they need
                 # nothing from the network themselves, but there is no point drawing a disk the

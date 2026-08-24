@@ -232,6 +232,52 @@ grep -q 'fetchlock.sh" "\$STAGE/install.list" "\$LOCKFILE"' "$MKROOT" \
   && ok "mkroot.sh passes install/manifest.lock, not the shipped one" \
   || bad "mkroot.sh does not pass its own lock to fetchlock.sh"
 
+CASE="firmware: the same two trees the card gets"
+# HW-FOUND 2026-08-24: the first medium had a 16 KB /usr/lib/firmware and NO Wi-Fi. pkgs.list has no
+# `linux-firmware`; the shipped image gets firmware from two staging trees that only
+# images/assemble-rootfs.sh installs from, and this image never runs it. It read as a hostname or
+# DHCP problem and was neither — there was no wlan interface at all.
+#
+# WHOLESALE, NOT CURATED. The first fix shipped a hand-written list carrying ath12k, because the
+# board on the bench was an SM8650 — the SM8250 machines use a QCA6390 on ath11k and would have hit
+# the identical invisible failure. A list enumerating every radio across a growing fleet goes stale
+# silently, on the tool you reach for when a device is already broken. So these cases assert that
+# NOTHING is being selected.
+[ -e "$ROOT/install/firmware.list" ] \
+  && bad "a curated firmware list is back — it will go stale per-board, as it already did once" \
+  || ok "no curated firmware list; both trees are taken whole"
+grep -q '/fw-qcom:ro' "$MKROOT" && grep -q '/fw-linux:ro' "$MKROOT" \
+  && ok "both staging trees are mounted into the bootstrap" \
+  || bad "a firmware tree is not mounted — the medium ships without it"
+grep -qE 'cp -a "\$src/\." /target/usr/lib/firmware/' "$MKROOT" \
+  && ok "each tree is copied whole, with no filter" \
+  || bad "firmware is filtered on the way in — that is the curation this replaced"
+grep -q 'make fw-qcom' "$MKROOT" && grep -q 'make fw-linux' "$MKROOT" \
+  && ok "a missing tree fails the build naming the target that fetches it" \
+  || bad "a missing firmware tree would produce a silently radio-less medium"
+# The bookkeeping files describe the staging trees, not the device; they must not land in /lib/firmware.
+grep -q 'rm -f /target/usr/lib/firmware/sha256sums.txt' "$MKROOT" \
+  && ok "the staging bookkeeping files are removed from the image" \
+  || bad "sha256sums.txt/.fetched.stamp would ship inside /usr/lib/firmware"
+grep -q 'kernel/embed.list' "$MKROOT" \
+  && ok "it records why the GPU worked without any of this (those blobs are in the kernel)" \
+  || bad "the embed.list relationship is undocumented — the next reader repeats the diagnosis"
+
+CASE="InputPlumber board configs"
+# HW-FOUND the same boot: the UI drew and stopped on §4d's "No controller or keyboard". The prebuilt
+# tarball ships the daemon and its generic configs; the per-board MCU gamepad definitions are OURS
+# and live in the overlay. Without them nothing recognises the pad and the stop fires correctly.
+grep -q 'fs-overlay/etc/inputplumber' "$MKROOT" \
+  && ok "the board configs are staged from the overlay" \
+  || bad "no InputPlumber board configs — the UI stops on 'No controller or keyboard'"
+for d in capability_maps.d devices.d; do
+  n=$(ls "$ROOT/fs-overlay/etc/inputplumber/$d"/*.yaml 2>/dev/null | wc -l)
+  [ "$n" -gt 0 ] && ok "$d has $n configs to ship" || bad "$d is empty in the overlay"
+done
+grep -q 'etc/inputplumber' "$MKROOT" \
+  && ok "they land at /etc/inputplumber on the medium" \
+  || bad "the configs are staged but never installed"
+
 CASE="remote access is TEST-ONLY"
 # The same split [[wifi-config-is-test-only]] draws for the shipped image. A published recovery
 # medium anyone can download must not carry a credential anyone can extract, so the release

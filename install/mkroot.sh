@@ -164,8 +164,48 @@ done
 # until a user reports it.
 DEVICE_ENV="$ROOT/fs-overlay/usr/lib/novadeck/device-env"
 DEVICES_DIR="$ROOT/fs-overlay/usr/lib/novadeck/devices"
+# InputPlumber's BOARD configs, which are ours and live in the overlay — the prebuilt tarball ships
+# the daemon and its generic configs, not the per-board ones. HW-FOUND 2026-08-24: without these the
+# daemon comes up, recognises none of the handheld MCU gamepads, SDL sees no mappable controller,
+# and the UI stops on §4d's "No controller or keyboard" screen — correctly, having been told the
+# truth. The installer ships InputPlumber precisely so its input path is IDENTICAL to the
+# HW-validated main-image one, and the configs are most of what makes it identical.
+IP_DIR="$ROOT/fs-overlay/etc/inputplumber"
 [ -x "$DEVICE_ENV" ] || die "no ${DEVICE_ENV#"$ROOT"/} — every board would draw a generic output"
 [ -d "$DEVICES_DIR" ] || die "no ${DEVICES_DIR#"$ROOT"/} — device-env would resolve no board"
+[ -d "$IP_DIR/devices.d" ] && [ -d "$IP_DIR/capability_maps.d" ] \
+  || die "no ${IP_DIR#"$ROOT"/} — the pad would not be recognised and the UI would stop on 'No controller'"
+
+# ---- firmware: THE SAME TWO TREES THE CARD GETS, wholesale -------------------------------------------
+# install/pkgs.list has no `linux-firmware`. The shipped image gets firmware from these two staging
+# trees, installed by images/assemble-rootfs.sh (its blocks 3 and 3b) — and this image never runs
+# that script, so the first medium had a 16 KB /usr/lib/firmware and no Wi-Fi at all: no ath12k, so
+# no wlan interface, so nothing to associate and nothing for a router to show. It read as a hostname
+# or DHCP fault and was neither. (The GPU worked regardless, which is what hid it: the Adreno
+# SQE/GMU/zap blobs are compiled INTO the kernel via kernel/embed.list, so Turnip came up on an
+# Adreno 750 with an essentially empty firmware tree.)
+#
+# WHOLESALE, NOT CURATED, and the first attempt here got that wrong (user's call, 2026-08-24). I
+# shipped a hand-written firmware.list carrying ath12k because the board on the bench was an
+# SM8650 — and the SM8250 machines use a QCA6390 on **ath11k**, a different driver whose blobs live
+# in the other tree, so those boards would have hit the identical invisible no-Wi-Fi failure. One
+# medium serves the whole fleet, and a list that must enumerate every radio across a growing fleet
+# goes stale silently, on the one tool you reach for when a device is ALREADY broken.
+#
+# It is also the principle this image already applies to input: InputPlumber ships here so the
+# installer's input path is IDENTICAL to the HW-validated main-image one rather than a second stack.
+# Curating firmware by hand was the opposite of that, in the same file. Taking both trees whole
+# makes hardware support identical to the image being installed BY CONSTRUCTION, and adding a board
+# or a blob to the main image covers the installer with no second edit.
+#
+# The cost is ~260 MB raw on a medium written to an SD card, which is the cheapest thing being
+# traded here.
+FW_QCOM_DIR="$ROOT/firmware/qcom-fw"
+FW_LINUX_DIR="$ROOT/firmware/linux-fw"
+FW_QCOM_STAMP="$FW_QCOM_DIR/sha256sums.txt"
+FW_LINUX_STAMP="$FW_LINUX_DIR/.fetched.stamp"
+[ -f "$FW_QCOM_STAMP" ]  || die "no device firmware at ${FW_QCOM_DIR#"$ROOT"/} — run: make fw-qcom"
+[ -f "$FW_LINUX_STAMP" ] || die "no linux-firmware at ${FW_LINUX_DIR#"$ROOT"/} — run: make fw-linux"
 # The RAUC keyring. The spine refuses outright without a readable one, and correctly: an installer
 # that could not verify a bundle would write unverified bytes to a stranger's internal disk. Same
 # CA the shipped image gets from images/assemble-rootfs.sh, so one bundle verifies against both.
@@ -211,6 +251,8 @@ script:$(sha256sum "$0" | cut -d' ' -f1)
 osrelease:$(sha256sum "$OSRELEASE" | cut -d' ' -f1)
 seed:${SEED_SHA:-none}
 esplabel:$ESP_LABEL
+firmware:$(sha256sum "$FW_QCOM_STAMP" "$FW_LINUX_STAMP" | sha256sum | cut -d' ' -f1)
+inputplumber:$(cat "$IP_DIR"/*/*.yaml 2>/dev/null | sha256sum | cut -d' ' -f1)
 dev:${DEV:-0}
 sshkey:$(printf '%s' "${NOVADECK_SSH_PUBKEY:-none}" | sha256sum | cut -d' ' -f1)
 wifi:$(printf '%s\n%s\n%s' "${NOVADECK_WIFI:-}" "${NOVADECK_WIFI_SSID:-none}" "${NOVADECK_WIFI_PSK:-none}" | sha256sum | cut -d' ' -f1)"
@@ -261,6 +303,12 @@ for spec in "${FOREIGN_FILES[@]}"; do cp -p "$ROOT/${spec%%:*}" "$STAGE/flat/${s
 cp -p "$ROOT"/install/units/*.service "$STAGE/units/"
 cp -p "$DEVICE_ENV" "$STAGE/device-env"
 cp -p "$DEVICES_DIR"/*.conf "$STAGE/devices/"
+# InputPlumber's board configs and the declared firmware, staged with their tree-relative paths
+# intact so the container can lay them down without knowing which source tree each came from.
+mkdir -p "$STAGE/inputplumber"
+cp -a "$IP_DIR/." "$STAGE/inputplumber/"
+# The firmware trees are NOT copied into the staging directory: they are ~260 MB and would be
+# duplicated on every build. They cross as their own read-only mounts instead (see the docker run).
 cp    "$KEYRING_SRC" "$STAGE/keyring.pem"
 cp    "$PACMANCONF"  "$STAGE/pacman.conf"
 cp    "$OSRELEASE"   "$STAGE/os-release"
@@ -384,6 +432,8 @@ fi
 
 docker run --rm --platform linux/arm64 \
   -v "$STAGE":/prebuilt:ro \
+  -v "$FW_QCOM_DIR":/fw-qcom:ro \
+  -v "$FW_LINUX_DIR":/fw-linux:ro \
   -v "$PACMAN_CACHE":/var/cache/pacman/pkg \
   -v "$OVERLAY_REPO":/novarepo:ro \
   -v "$DEST":/target \
@@ -494,6 +544,31 @@ docker run --rm --platform linux/arm64 \
   install -Dm0755 /prebuilt/device-env /target/usr/lib/novadeck/device-env
   install -d -m0755 /target/usr/lib/novadeck/devices
   install -m0644 /prebuilt/devices/*.conf /target/usr/lib/novadeck/devices/
+
+  # Firmware, both trees whole -- the same content images/assemble-rootfs.sh puts on the card, from
+  # the same sources, so hardware support is identical to the image being installed BY CONSTRUCTION
+  # rather than by a list somebody has to remember to extend. /usr/lib/firmware is where the kernel
+  # looks; the shipped image writes /lib/firmware, the same directory through the usr-merge symlink.
+  # The two bookkeeping files are excluded: they describe the staging trees, not the device.
+  install -d -m0755 /target/usr/lib/firmware
+  for src in /fw-qcom /fw-linux; do
+    [ -d "$src" ] || continue
+    cp -a "$src/." /target/usr/lib/firmware/
+  done
+  rm -f /target/usr/lib/firmware/sha256sums.txt /target/usr/lib/firmware/.fetched.stamp
+  chmod -R u=rwX,go=rX /target/usr/lib/firmware
+  echo "[novadeck] firmware: $(find /target/usr/lib/firmware -type f | wc -l) files, $(du -sh /target/usr/lib/firmware | cut -f1)" >&2
+
+  # InputPlumber board configs. Without them the daemon runs but recognises none of the handheld
+  # MCU gamepads, and the UI stops on the no-input screen -- HW-found on the first medium that got
+  # far enough to draw anything.
+  if [ -d /prebuilt/inputplumber ]; then
+    install -d -m0755 /target/etc/inputplumber
+    cp -a /prebuilt/inputplumber/. /target/etc/inputplumber/
+    chmod -R u=rwX,go=rX /target/etc/inputplumber
+    # \*.yaml, not the quoted form: a single quote here would end the enclosing bash -c string.
+    echo "[novadeck] inputplumber: $(find /target/etc/inputplumber -name \*.yaml | wc -l) board configs" >&2
+  fi
 
   # The RAUC keyring, at the path the spine and /etc/rauc/system.conf both name. 0444: it is a
   # public certificate and nothing on this image should ever rewrite it.

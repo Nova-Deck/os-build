@@ -840,7 +840,7 @@ printf '#!/bin/sh\nexit 1\n' >"$T/bin/no-seatd"        # "no seatd is running"
 chmod +x "$T/bin"/*
 
 session() {  # env overrides passed through
-  NOVADECK_INSTALLER_DRYRUN=1 NOVADECK_UI="$UI" NOVADECK_SEATD_PGREP="$T/bin/no-seatd" \
+  NOVADECK_INSTALLER_DRYRUN=1 NOVADECK_XDG_RUNTIME_DIR="$T/xdg" NOVADECK_UI="$UI" NOVADECK_SEATD_PGREP="$T/bin/no-seatd" \
     NOVADECK_DEVICE_ENV="${DEVENV-$T/bin/device-env-panel}" \
     NOVADECK_SEATD_SOCK="${SOCKARG-$T/seatd.sock}" "$SESSION" 2>"$T/session.err"
 }
@@ -897,19 +897,51 @@ grep -qi 'stale' "$T/session.err" \
 # But only when nothing is listening: removing a LIVE seatd's socket breaks a running session.
 : >"$T/seatd.sock"
 printf '#!/bin/sh\nexit 0\n' >"$T/bin/yes-seatd"; chmod +x "$T/bin/yes-seatd"
-NOVADECK_INSTALLER_DRYRUN=1 NOVADECK_UI="$UI" NOVADECK_SEATD_PGREP="$T/bin/yes-seatd" \
+NOVADECK_INSTALLER_DRYRUN=1 NOVADECK_XDG_RUNTIME_DIR="$T/xdg" NOVADECK_UI="$UI" NOVADECK_SEATD_PGREP="$T/bin/yes-seatd" \
   NOVADECK_DEVICE_ENV="$T/bin/device-env-panel" NOVADECK_SEATD_SOCK="$T/seatd.sock" \
   "$SESSION" >/dev/null 2>&1
 [ -e "$T/seatd.sock" ] \
   && ok "a socket with a live seatd behind it is left alone" \
   || bad "it removed a live seatd's socket"
 
+CASE="session: XDG_RUNTIME_DIR is provided, because nothing else does"
+# THE FIRST HARDWARE BOOT OF THE INSTALLER MEDIUM DIED HERE (Pocket S2, 2026-08-24). gamescope came
+# all the way up -- seatd, DRM master, Turnip on an Adreno 750, DSI-1 at 1440x2560 -- then logged
+# "XDG_RUNTIME_DIR is invalid or not set" 128 times, failed to open its wayland socket, and ABORTED
+# with a core dump. libwayland will not create a socket without that variable, and it is LOGIND that
+# normally makes /run/user/<uid> and exports it -- this session has no logind session by design.
+#
+# It passed by hand on the panel in August because that run came from an interactive root SSH login,
+# where logind had already done both. Nothing in the command line differed. So this case checks the
+# ENVIRONMENT, not the command: a dry run must still leave the directory there, 0700, because that
+# is the side effect gamescope depends on.
+rm -rf "$T/xdg2"
+NOVADECK_INSTALLER_DRYRUN=1 NOVADECK_XDG_RUNTIME_DIR="$T/xdg2" NOVADECK_UI="$UI" \
+  NOVADECK_SEATD_PGREP="$T/bin/yes-seatd" NOVADECK_DEVICE_ENV="$T/bin/device-env-panel" \
+  NOVADECK_SEATD_SOCK="$T/seatd.sock" "$SESSION" >/dev/null 2>&1
+[ -d "$T/xdg2" ] \
+  && ok "the runtime directory is created" \
+  || bad "no XDG_RUNTIME_DIR is created -- gamescope aborts on its wayland socket"
+[ "$(stat -c%a "$T/xdg2" 2>/dev/null)" = 700 ] \
+  && ok "it is 0700 (the wayland socket lives in it)" \
+  || bad "the runtime directory is $(stat -c%a "$T/xdg2" 2>/dev/null), not 0700"
+grep -q 'export XDG_RUNTIME_DIR=' "$SESSION" \
+  && ok "and it is EXPORTED, so gamescope and the UI both inherit it" \
+  || bad "the variable is set but never exported"
+# /run/user/0 is logind's namespace; fabricating it would collide the day anything here starts a
+# real session.
+# Non-comment lines only: the script EXPLAINS at length why it avoids /run/user/0, and a plain grep
+# matched that prose and failed on correct code the first time this case ran.
+grep -vE '^[[:space:]]*#' "$SESSION" | grep -q '/run/user/0' \
+  && bad "it fabricates /run/user/0, which belongs to logind" \
+  || ok "it does not squat on logind's /run/user/0"
+
 CASE="session: a seatd that is already running is used, not duplicated"
 # seatd-launch starts its OWN seatd and refuses when the socket exists, and the shipped image
 # enables seatd.service (Pocket S2, 2026-08-22: pid 710, /run/seatd.sock root:seat 0770). An
 # installer-session that always reached for seatd-launch would die before gamescope started.
 : >"$T/seatd.sock"
-cmd="$(NOVADECK_INSTALLER_DRYRUN=1 NOVADECK_UI="$UI" NOVADECK_SEATD_PGREP="$T/bin/yes-seatd" \
+cmd="$(NOVADECK_INSTALLER_DRYRUN=1 NOVADECK_XDG_RUNTIME_DIR="$T/xdg" NOVADECK_UI="$UI" NOVADECK_SEATD_PGREP="$T/bin/yes-seatd" \
   NOVADECK_DEVICE_ENV="$T/bin/device-env-panel" NOVADECK_SEATD_SOCK="$T/seatd.sock" \
   "$SESSION" 2>"$T/session.err")"
 grep -qi 'using the seatd already running' "$T/session.err" \

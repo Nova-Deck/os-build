@@ -212,7 +212,11 @@ osrelease:$(sha256sum "$OSRELEASE" | cut -d' ' -f1)
 seed:${SEED_SHA:-none}
 esplabel:$ESP_LABEL
 dev:${DEV:-0}
-sshkey:$(printf '%s' "${NOVADECK_SSH_PUBKEY:-none}" | sha256sum | cut -d' ' -f1)"
+sshkey:$(printf '%s' "${NOVADECK_SSH_PUBKEY:-none}" | sha256sum | cut -d' ' -f1)
+wifi:$(printf '%s\n%s\n%s' "${NOVADECK_WIFI:-}" "${NOVADECK_WIFI_SSID:-none}" "${NOVADECK_WIFI_PSK:-none}" | sha256sum | cut -d' ' -f1)"
+# The credentials are HASHED into the key, never written to it: this marker is installed into the
+# image as /usr/lib/novadeck/pkgs, so a plaintext PSK here would ship on the medium. Hashing still
+# busts the cache when either value changes, which is the only thing the key needs to do.
 # Every file that lands in the tree, hashed. These are the installer -- an edit to install/ui or to
 # a unit changes the image completely while leaving the package set untouched, so without this the
 # next build would happily reuse a tree carrying the previous code.
@@ -270,6 +274,46 @@ if [ -n "$DEV" ]; then
   else
     log "WARNING: NOVADECK_DEV=1 but NOVADECK_SSH_PUBKEY is unset — sshd is key-only, so it will"
     log "         admit nobody. Source dev.env before building a bring-up medium."
+  fi
+
+  # A Wi-Fi profile, and it is what makes the sshd above WORTH having. Joining a network otherwise
+  # happens through the UI's §4b network screen — so on the one failure this medium exists to
+  # diagnose, a dead GUI, there is no way to drive the join and therefore no network and no shell.
+  # USB-C Ethernet covers it, but only if one is to hand. Same NOVADECK_WIFI intent knob and same
+  # creds as the dev card (dev.env), so there is one place to set them.
+  if [ "${NOVADECK_WIFI:-}" != 0 ] && [ -n "${NOVADECK_WIFI_SSID:-}" ] && [ -n "${NOVADECK_WIFI_PSK:-}" ]; then
+    # Written on the HOST and carried in as a file: the PSK must not be interpolated into the
+    # container's single-quoted bash -c (a quote in a passphrase would end the string), and a file
+    # keeps it off any process command line. umask 077 because NM IGNORES a profile that is not
+    # 0600 root-owned, logging only "ignoring due to permissions".
+    ( umask 077; cat >"$STAGE/wifi.nmconnection" <<WIFIEOF
+[connection]
+id=${NOVADECK_WIFI_SSID}
+type=wifi
+autoconnect=true
+
+[wifi]
+mode=infrastructure
+ssid=${NOVADECK_WIFI_SSID}
+
+[wifi-security]
+key-mgmt=wpa-psk
+psk=${NOVADECK_WIFI_PSK}
+
+[ipv4]
+method=auto
+
+[ipv6]
+method=auto
+WIFIEOF
+    )
+    printf '%s\n' "$NOVADECK_WIFI_SSID" >"$STAGE/wifi.ssid"
+    log "TEST BUILD: baking a Wi-Fi profile for '$NOVADECK_WIFI_SSID' (the PSK is never logged)"
+  elif [ "${NOVADECK_WIFI:-}" = 1 ]; then
+    die "NOVADECK_WIFI=1 requires NOVADECK_WIFI_SSID + NOVADECK_WIFI_PSK"
+  else
+    log "TEST BUILD: no Wi-Fi profile (set NOVADECK_WIFI_SSID + NOVADECK_WIFI_PSK in dev.env.local)."
+    log "            Without one the medium is reachable over USB-C Ethernet only."
   fi
 fi
 printf '%s\n' "$ESP_LABEL" >"$STAGE/esp-label"
@@ -562,6 +606,25 @@ docker run --rm --platform linux/arm64 \
   # reasons that block gives for not baking still apply, and are why the key is generated per boot
   # into tmpfs rather than shipped: a baked key is a property of the BUILD, extractable by anyone
   # holding the published image, and identical on every device flashed from it.
+  # The Wi-Fi profile. Independent of the SSH block below on purpose -- they are two separate
+  # test-only injections and either is useful without the other.
+  #
+  # IT GOES IN /usr/lib, NOT /etc, and this image forces that rather than preferring it. The
+  # keyfile plugin`s `path=` was pointed at /run further up so nmcli can write on a read-only root,
+  # and `path=` is the ONE directory NM both reads and writes -- so a profile dropped under
+  # /etc/NetworkManager/system-connections would never be looked at. NM ALSO reads
+  # /usr/lib/NetworkManager/system-connections and /run/... as read-only sources whatever `path=`
+  # says; all three strings are compiled into the NetworkManager binary this image ships, checked
+  # with `strings` rather than taken from documentation. /usr/lib is the right one of the two: it is
+  # the distro-defaults location, genuinely read-only here, and cannot be clobbered at runtime by a
+  # profile nmcli writes into /run.
+  if [ -f /prebuilt/wifi.nmconnection ]; then
+    install -d -m0755 /target/usr/lib/NetworkManager/system-connections
+    install -m0600 /prebuilt/wifi.nmconnection \
+      "/target/usr/lib/NetworkManager/system-connections/$(cat /prebuilt/wifi.ssid).nmconnection"
+    echo "[novadeck] TEST BUILD: Wi-Fi profile baked (autoconnect at boot)" >&2
+  fi
+
   if [ -f /prebuilt/authorized_keys ]; then
     install -d -m0700 /target/root/.ssh
     install -m0600 /prebuilt/authorized_keys /target/root/.ssh/authorized_keys

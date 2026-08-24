@@ -270,6 +270,34 @@ grep -qE 'ssh-keygen[^\n]*-f /target/etc/ssh' "$MKROOT" \
   && bad "a host key is baked into the image — every medium would share one private key" \
   || ok "no host key is baked into the image"
 
+CASE="the TEST-ONLY Wi-Fi profile"
+# It is what makes the sshd above worth having: joining otherwise happens through the UI's network
+# screen, so on the one failure this medium exists to diagnose — a dead GUI — there is no way to
+# drive the join, and therefore no network and no shell.
+grep -q 'NOVADECK_WIFI_SSID' "$MKROOT" && ok "a dev build can bake a Wi-Fi profile" \
+  || bad "no Wi-Fi injection — a dead GUI means no network and no way in"
+# /etc is the WRONG place here and it fails silently: keyfile `path=` is redirected to /run so nmcli
+# can write on a read-only root, and `path=` is the one directory NM both reads and writes.
+grep -q 'usr/lib/NetworkManager/system-connections' "$MKROOT" \
+  && ok "the profile goes in /usr/lib (a read-only source NM reads whatever path= says)" \
+  || bad "the profile is not in /usr/lib — with path= redirected to /run it would never be read"
+grep -qE 'install -m0600 /prebuilt/wifi.nmconnection' "$MKROOT" \
+  && ok "installed 0600 (NM ignores a profile with looser permissions)" \
+  || bad "the profile is not 0600 — NM logs 'ignoring due to permissions' and moves on"
+# The PSK crosses as a FILE. Interpolated into the container's single-quoted bash -c, a quote in a
+# passphrase would end the string; and a file keeps it off any process command line.
+grep -q 'STAGE/wifi.nmconnection' "$MKROOT" \
+  && ok "the PSK crosses as a file, not interpolated into the container script" \
+  || bad "the PSK is interpolated somewhere — a quote in a passphrase would break the build"
+# The reuse marker is INSTALLED INTO THE IMAGE as /usr/lib/novadeck/pkgs, so a plaintext credential
+# in the cache key would ship on the medium.
+grep -qE '^wifi:\$\(printf .* \| sha256sum' "$MKROOT" \
+  && ok "credentials are hashed into the reuse key, never written to it" \
+  || bad "the reuse key may carry a plaintext PSK, and that marker ships inside the image"
+grep -q 'NOVADECK_WIFI=1 requires' "$MKROOT" \
+  && ok "NOVADECK_WIFI=1 without creds is a hard error, not a quiet skip" \
+  || bad "an explicit Wi-Fi request can be silently ignored"
+
 CASE="a read-only /etc, and its three writers"
 # The root is squashfs with NO overlay (the shipped image's overlay is what forces an initramfs,
 # and it exists to persist a user's config — neither applies to a tool that runs once from

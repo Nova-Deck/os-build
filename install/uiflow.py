@@ -394,7 +394,32 @@ class PreflightScreen:
                 for x in destroy)
         else:
             lost = "carve.sh could not be asked what it would destroy -- do not continue."
-        blocks = [
+        # WHAT KIND OF INSTALL THIS IS, said before anything else. HW 2026-08-24, Pocket ACE with
+        # NovaDeck already on its internal disk: the screen listed our own eight partitions in the
+        # destroy list and never said the word reinstall, so nothing on it distinguished "install
+        # alongside Android" from "replace the NovaDeck that is already here". The mode was in the
+        # facts the whole time and simply was not drawn.
+        #
+        # AND THE PLAN REALLY IS A FRESH CARVE. select-target.sh reports MODE=reinstall when our
+        # eight are present, but plan_carve() calls `carve.sh plan`, and carve.sh handles `plan` in
+        # the same branch as `fresh` -- so what is being described, and what pressing through would
+        # do, destroys /home. The `reinstall` mode that keeps /home is not reachable from this UI at
+        # all. Saying so is the honest thing until it is: the operator is not choosing wrong, the
+        # choice does not exist yet.
+        if f.get("mode") == "reinstall":
+            blocks = [
+                ("This device already has NovaDeck",
+                 "Everything currently installed will be erased and replaced, INCLUDING /home -- "
+                 "your games, saves and settings. This installer cannot yet repair an existing "
+                 "install while keeping them; it only does a full replacement."),
+            ]
+        else:
+            blocks = [
+                ("This device is running Android",
+                 "NovaDeck will be installed alongside it. Android keeps the space you choose "
+                 "below, and everything else on that partition is erased."),
+            ]
+        blocks += [
             ("Target", "%s  %s  %s GiB" % (f["disk"], d["model"], d["size_gib"])),
             ("Android keeps", "%s GiB   (left / right to change)" % self.gib),
             ("NovaDeck gets", "%s GiB" % self.plan["NOVADECK_GIB"]),
@@ -403,7 +428,10 @@ class PreflightScreen:
         ]
         return {
             "screen": "preflight",
-            "title": "Install NovaDeck on %s" % f["device"],
+            # The title carries it too: the first block explains, but a person glancing at the panel
+            # reads the heading, and "Install" and "Replace" are different promises.
+            "title": ("Replace the NovaDeck on %s" if f.get("mode") == "reinstall"
+                      else "Install NovaDeck on %s") % f["device"],
             "blocks": blocks,
             "diamonds": [],
             "prompt": "",

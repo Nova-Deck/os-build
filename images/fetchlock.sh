@@ -2,7 +2,7 @@
 # novadeck lock materializer — turn images/manifest.lock into a verified install list
 # (Phase 4a step 2). Host-side: no container, no emulation, everything it needs is a file.
 #
-#   images/fetchlock.sh <install-list-out>
+#   images/fetchlock.sh <install-list-out> [lock]     (default lock: images/manifest.lock)
 #
 # Writes one CONTAINER-visible package path per line to <install-list-out>, which
 # images/customize-base.sh stages into the bootstrap container and feeds to a single
@@ -70,12 +70,25 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-LOCK="$ROOT/images/manifest.lock"
 CACHE="$ROOT/work/pacman-cache"
 OVERLAY_REPO="$ROOT/work/repo/aarch64"
 SNAPFILE="$ROOT/snapshot.pin"
 
-OUT="${1:?usage: images/fetchlock.sh <install-list-out>}"
+OUT="${1:?usage: images/fetchlock.sh <install-list-out> [lock]}"
+# The lock to materialize. Defaults to the shipped image's; install/mkroot.sh passes
+# install/manifest.lock, which is the SAME format written by a different generator over a
+# different root (Phase 6). Nothing in this script is specific to which image a lock describes —
+# it fetches rows, verifies hashes and emits container paths — so the two share it rather than
+# growing a near-copy that would drift on the next class or provenance change.
+LOCK="${2:-$ROOT/images/manifest.lock}"
+LOCKREL="${LOCK#"$ROOT"/}"
+# The command that regenerates THIS lock, named in every hint below. Sending someone to `make
+# relock` when the stale artifact is install/manifest.lock points them at a 20-minute rebuild of
+# the wrong root, and the lock they were told to fix comes back unchanged.
+case "$LOCKREL" in
+  install/*) RELOCK="make relock-installer" ;;
+  *)         RELOCK="make relock" ;;
+esac
 
 # Repos configured in the base's pacman.conf, in that order. See the header note on guessing.
 REPOS=(core extra)
@@ -83,7 +96,7 @@ REPOS=(core extra)
 # aarch64/ while its FILENAME ends in -any.pkg.tar.zst — conflating the two 404s on 18 rows.
 REPO_ARCH=aarch64
 
-[ -f "$LOCK" ] || { echo "no manifest: $LOCK (run \`make relock\`)" >&2; exit 1; }
+[ -f "$LOCK" ] || { echo "no manifest: $LOCK (run \`$RELOCK\`)" >&2; exit 1; }
 [ -f "$SNAPFILE" ] || { echo "no snapshot pin: $SNAPFILE" >&2; exit 1; }
 SNAPSHOT="$(grep -vE '^[[:space:]]*(#|$)' "$SNAPFILE" | tail -1)"
 mkdir -p "$CACHE"
@@ -120,7 +133,7 @@ fetch_pkg() {
     fi
     rm -f "$dest.part"
     echo "$file: sha256 mismatch against the lock at $url" >&2
-    echo "  the pinned revision republished this version — bump snapshot.pin or \`make relock\`" >&2
+    echo "  the pinned revision republished this version — bump snapshot.pin or \`$RELOCK\`" >&2
     return 1
   done
   rm -f "$dest.part"
@@ -153,7 +166,7 @@ while read -r name ver arch src sha; do
       # nothing here, an edited patch or bumped pin is what has to move the lock.
       if [ ! -f "$OVERLAY_REPO/$file" ]; then
         echo "$file: missing from the overlay repo (${OVERLAY_REPO#"$ROOT"/})" >&2
-        echo "  build it (\`make overlay\`) or \`make relock\` if the version moved" >&2
+        echo "  build it (\`make overlay\`) or \`$RELOCK\` if the version moved" >&2
         exit 1
       fi
       entry="${PINHASH["$file"]:-}"
@@ -163,7 +176,7 @@ while read -r name ver arch src sha; do
         exit 1
       fi
       if [ "${entry%%	*}" != "$sha" ]; then
-        echo "$file: built from different sources than images/manifest.lock records" >&2
+        echo "$file: built from different sources than $LOCKREL records" >&2
         echo "    lock: $sha" >&2
         echo "    tree: ${entry%%	*}   (${entry#*	}: source.pin + patches + PKGBUILD)" >&2
         # A dev card is not a provenance artifact, and requiring the lock to be adopted mid-loop
@@ -186,7 +199,7 @@ while read -r name ver arch src sha; do
           rows=$((rows + 1))
           continue
         fi
-        echo "  review that source change and \`make relock\` to adopt it" >&2
+        echo "  review that source change and \`$RELOCK\` to adopt it" >&2
         exit 1
       fi
       overlay=$((overlay + 1))
@@ -209,5 +222,5 @@ echo "[novadeck] lock: $rows packages verified ($cached cached, $fetched fetched
 # not, and it names the one command that clears the state.
 if [ "$unadopted" -gt 0 ]; then
   echo "[novadeck] lock: $unadopted overlay row(s) built from UNADOPTED sources (dev build)." >&2
-  echo "[novadeck]       run \`make relock\` before committing or building a release." >&2
+  echo "[novadeck]       run \`$RELOCK\` before committing or building a release." >&2
 fi

@@ -332,7 +332,7 @@ KERNEL_SRC_HASH := work/.kernel-src.hash
 # Phony orchestration targets
 # ==============================================================================
 .PHONY: help all image toolchain kernel fw-linux fw-qcom base overlay verify-lock \
-        rootfs relock mesa-x86 \
+        rootfs relock mesa-x86 installer-root relock-installer \
         initramfs steamcl grub sdcard verify-card test bundle sign-bundle publish-bundle deploy clean clean-base clean-overlay distclean
 
 # An always-out-of-date prerequisite, for rules that must re-evaluate their own inputs every run
@@ -394,7 +394,7 @@ verify-card: $(SDCARD) | $(BUILD_STAMP) ## Verify the built A/B card image (in c
 verify-lock: ## Check the lock's novadeck rows against packages/ (host, seconds, no build)
 	bash packages/verify-lock-rows.sh
 
-test: verify-lock ## Run the offline bootctl/post-install/pairingd/quirks/stage-2/partition-table/unit/coredump/perf/fan-curve/decky/update/publish/install/steamos-manager/graphics-provider/video-decode/proton-dxvk suites (host, no build needed)
+test: verify-lock ## Run the offline bootctl/post-install/pairingd/quirks/stage-2/partition-table/unit/coredump/perf/fan-curve/decky/update/publish/install/mkroot/steamos-manager/graphics-provider/video-decode/proton-dxvk suites (host, no build needed)
 	bash images/test-bootctl.sh
 	bash images/test-post-install.sh
 	bash images/test-pairingd.sh
@@ -411,6 +411,7 @@ test: verify-lock ## Run the offline bootctl/post-install/pairingd/quirks/stage-
 	bash images/test-steamos-manager.sh
 	bash install/test-install.sh
 	bash install/test-ui.sh
+	bash install/test-mkroot.sh
 	bash images/test-graphics-provider.sh
 	bash images/test-video-decode.sh
 	bash images/test-proton-dxvk.sh
@@ -630,6 +631,34 @@ relock: $(if $(OVERLAY_PINS),$(OVERLAY_STAMP)) ## Re-resolve from PKGS and regen
 	images/genmanifest.sh
 	rm -f $(BASE_STAMP) work/.base-mode-*   # the tree left behind is a RESOLVE tree: claim no mode for it
 	@echo "review the diff, commit it, then rebuild: git diff images/manifest.lock"
+
+# ==============================================================================
+# Installer image (host docker + qemu) — the standalone medium that installs to internal storage
+# ==============================================================================
+# Phase 6 of .claude/plans/internal-install.plan.md. A SEPARATE root from the shipped one, with its
+# own package declaration (install/pkgs.list) and its own lock (install/manifest.lock): the
+# installer carries partition and filesystem tools that no device ever gets, so folding them into
+# images/manifest.lock would make the shipped image's reviewed artifact describe content that image
+# never contains. install/genlock.sh's header carries the full reasoning.
+#
+# install/mkroot.sh self-caches on its own input key (packages, pins, snapshot, builder, and a hash
+# over every file it places), so an unchanged tree costs the key check and nothing else. That is why
+# these are phony rather than file targets — the script owns the reuse decision, exactly as
+# images/customize-base.sh does for the shipped base.
+installer-root: $(if $(OVERLAY_PINS),$(OVERLAY_STAMP)) ## Bootstrap the installer root -> work/installer-base (host; docker+qemu)
+	install/mkroot.sh >/dev/null
+
+# Mirrors `relock` above, including why it must NOT go through the locked path: relocking a tree
+# that was itself installed from the lock can only ever reproduce that lock. FORCE=1 because the
+# reuse key folds the mode in, so an existing locked tree would otherwise satisfy this.
+#
+# The overlay repo IS a prerequisite: install/pkgs.list names gamescope, which exists in no holo
+# repo, and without work/repo/aarch64 the resolve would either fail or — worse — satisfy it from a
+# snapshot and lock an unpatched upstream binary under a `snapshot` class.
+relock-installer: $(if $(OVERLAY_PINS),$(OVERLAY_STAMP)) ## Re-resolve install/pkgs.list and regenerate install/manifest.lock (host)
+	NOVADECK_RESOLVE=1 FORCE=1 install/mkroot.sh >/dev/null
+	install/genlock.sh
+	@echo "review the diff, commit it, then rebuild: git diff install/manifest.lock"
 
 # ==============================================================================
 # Read-only root (container) — base userspace + kernel + firmware -> Btrfs image

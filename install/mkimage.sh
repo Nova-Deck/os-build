@@ -46,7 +46,7 @@ WORK="$ROOT/work/installer-image"
 log() { echo "[novadeck] $*" >&2; }
 die() { echo "$*" >&2; exit 1; }
 
-for t in mksquashfs sgdisk mkfs.vfat mcopy mmd grub-editenv; do
+for t in mksquashfs sgdisk mkfs.vfat mcopy mmd; do
   command -v "$t" >/dev/null 2>&1 || die "$t not found — run this inside the build image"
 done
 for f in "$TABLE" "$GENPART" "$GENCFG" "$KERNEL" "$GRUB_EFI" "$GRUB_FONT"; do
@@ -126,13 +126,11 @@ cfg="$WORK/grub.cfg"
 "$GENCFG" "$ROOT_UUID" "$cfg"
 mcopy -i "$esp" "$cfg" ::/EFI/steamos/grub.cfg
 
-# A pristine grubenv, so the first `save_env` of the board choice has a block to write into.
-# grub-editenv creates the 1024-byte GRUB environment block; without it load_env finds nothing and
-# save_env fails, and the user would re-pick their board on every single boot.
-env_file="$WORK/grubenv"
-rm -f "$env_file"
-grub-editenv "$env_file" create
-mcopy -i "$esp" "$env_file" ::/EFI/steamos/grubenv
+# NO grubenv. The medium remembers nothing on purpose (install/gen-grub-cfg.sh's header): it travels
+# between boards, so a saved board choice is a card that installed one device preselecting its
+# devicetree on the next, different one — and a wrong DTB is worse than re-picking. Nothing else on
+# this medium needs an environment block either; there is no boot-attempt counting on a medium with
+# nothing to fall back to.
 
 # The kernel and every dtb, at the FAT root. GRUB reads them from the partition it booted from.
 mcopy -i "$esp" "$KERNEL" ::/Image

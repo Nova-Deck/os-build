@@ -119,10 +119,21 @@ else
   else
     bad "rotation must be set BEFORE terminal_output (rotation=$rot terminal_output=$tout)"
   fi
-  # savedefault is not a builtin; a config that calls it without defining it saves nothing and the
-  # user re-picks their board on every boot.
-  grep -q '^function savedefault' "$cfg" && ok "savedefault is defined, not just called" \
-    || bad "savedefault is called but never defined — the board choice would never persist"
+  # THE MEDIUM REMEMBERS NOTHING, and that is the opposite of the shipped card on purpose. This one
+  # travels between boards, so a saved choice means a card that installed a Pocket S2 preselecting
+  # the S2 devicetree when it is next booted on an ACE — and booting a wrong DTB after a 3s timeout
+  # is a worse outcome than making the operator pick.
+  # Comments stripped first. The config EXPLAINS that it saves nothing, naming each of these, and a
+  # plain grep matched that prose and failed on correct code — the second time in this session that
+  # a "this string must be absent" assertion caught a comment instead of a line of config.
+  grep -vE '^[[:space:]]*#' "$cfg" >"$T/cfg.code"
+  for leftover in savedefault save_env load_env grubenv saved_entry; do
+    grep -q "$leftover" "$T/cfg.code" \
+      && bad "the config still references '$leftover' — the medium would remember a board" \
+      || ok "no '$leftover' in the config"
+  done
+  grep -q '^set timeout=-1' "$cfg" && ok "the menu waits indefinitely, every boot" \
+    || bad "the menu has a timeout — it would auto-boot a board nobody chose"
 
   # Every dtb the config names must exist as a source .dts, or the entry is unbootable.
   missing=0
@@ -173,9 +184,9 @@ grep -q 'EFI/BOOT/bootaa64.efi' "$MKIMAGE" \
 grep -q 'EFI/steamos/grub.cfg' "$MKIMAGE" \
   && ok "the config is at \$prefix (/EFI/steamos/grub.cfg)" \
   || bad "the config is not at the prefix boot/grub.sh builds in"
-grep -q 'grub-editenv' "$MKIMAGE" \
-  && ok "a pristine grubenv is created (else the board choice cannot be saved)" \
-  || bad "no grubenv — save_env would fail and the board would be re-picked every boot"
+grep -q 'grubenv' "$MKIMAGE" && grep -qE '^[^#]*mcopy.*grubenv' "$MKIMAGE" \
+  && bad "mkimage writes a grubenv — this medium is meant to remember nothing" \
+  || ok "no grubenv on the medium (nothing here saves state between boots)"
 
 printf '\ntest-mkimage.sh: %d passed, %d failed, %d skipped\n' "$PASS" "$FAIL" "$SKIP"
 [ "$FAIL" -eq 0 ]

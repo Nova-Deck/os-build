@@ -684,7 +684,7 @@ flow() {  # <python snippet reading `pf` (a PreflightScreen)>
 import json, os, sys
 sys.path.insert(0, os.path.join(os.environ["ROOT"], "install"))
 import uiflow
-facts = uiflow.gather_preflight()
+facts, _why = uiflow.gather_preflight()
 pf = uiflow.PreflightScreen(facts) if facts else None
 exec(os.environ["SNIPPET"])
 PY
@@ -903,6 +903,149 @@ NOVADECK_INSTALLER_DRYRUN=1 NOVADECK_XDG_RUNTIME_DIR="$T/xdg" NOVADECK_UI="$UI" 
 [ -e "$T/seatd.sock" ] \
   && ok "a socket with a live seatd behind it is left alone" \
   || bad "it removed a live seatd's socket"
+
+CASE="the clock is its own network row, and it clears itself"
+# HW 2026-08-24: these boards have no clock battery (the PMIC RTC probe defers forever, issue #38),
+# so a cold boot starts at the epoch and OpenSSL rejects every certificate as not-yet-valid. That
+# surfaced as "Connected, but the update server is unreachable" -- a row whose advice is to go and
+# check your router, for a fault in neither the router nor the server. Then, with the message fixed,
+# the operator still "had to retry a couple of times", pressing Check again at a condition that was
+# already fixing itself.
+clockrow="$(cd "$ROOT/install" && python3 -c '
+import uiflow
+t = uiflow.NetworkScreen.TABLE["no-clock"]
+print(t[0]); print(t[1]); print(t[2])' 2>&1)"
+printf '%s' "$clockrow" | grep -qiE 'waiting for the time|clock' \
+  && ok "no-clock has its own row, not the unreachable one" \
+  || bad "no dedicated clock row: $clockrow"
+printf '%s' "$clockrow" | grep -qi 'no clock battery' \
+  && ok "it explains WHY the device does not know the date" \
+  || bad "it does not say why the clock is wrong"
+printf '%s' "$clockrow" | grep -qiE 'nothing to fix|sets itself' \
+  && ok "the advice is to change nothing (it is the only self-clearing row)" \
+  || bad "it sends the operator to fix something that fixes itself"
+# The no-host row must NOT be what a wrong clock lands on.
+hostrow="$(cd "$ROOT/install" && python3 -c '
+import uiflow
+print(uiflow.NetworkScreen.TABLE["no-host"][2])' 2>&1)"
+printf '%s' "$hostrow" | grep -qi 'upstream or DNS' \
+  && ok "no-host still means what it meant (upstream or DNS)" \
+  || bad "the no-host row drifted: $hostrow"
+# netcfg has to EMIT the state, or the row is unreachable prose.
+grep -q 'emit STATE no-clock' "$ROOT/install/netcfg" \
+  && ok "netcfg emits STATE=no-clock" \
+  || bad "nothing ever produces the state the row renders"
+grep -qE 'CURL_RC" = 60|CURL_RC" = 35' "$ROOT/install/netcfg" \
+  && ok "keyed on curl's TLS exit codes, not its HTTP status" \
+  || bad "the clock state is not keyed on the exit code"
+# The UI must re-probe it without a human, and ONLY it.
+# Membership, not the literal tuple: the set grew from one state to three and an assertion pinned
+# to its exact text failed on a correct change.
+selfclear="$(grep -oE 'SELF_CLEARING = \([^)]*\)' "$ROOT/install/ui")"
+for st in no-clock associating no-lease; do
+  printf '%s' "$selfclear" | grep -q "\"$st\"" \
+    && ok "$st re-probes on its own" \
+    || bad "$st still needs a human to press Check again at a condition that fixes itself"
+done
+grep -q 'and top.facts.get("STATE") in SELF_CLEARING' "$ROOT/install/ui" \
+  && ok "and only that state — the other rows name something a human must change" \
+  || bad "auto-re-probing is not restricted to the self-clearing row"
+
+CASE="associating: no wifi.conf is not the same as no configuration"
+# User's catch, 2026-08-24. have_lease is false for the WHOLE association window, so anything
+# without a lease fell through to `no-conf` -- "No Wi-Fi settings on this card" -- and told the
+# operator to write a file on another computer while the radio was mid-handshake. On a TEST medium,
+# whose network is a baked NM profile and which carries no wifi.conf at all, that was every cold
+# boot rather than a corner case. NOTE the dev build cannot reach the state this protects, so
+# `no-conf` itself still wants a release-image run before it is believed.
+assoc="$(cd "$ROOT/install" && python3 -c '
+import uiflow
+t = uiflow.NetworkScreen.TABLE["associating"]
+print(t[0]); print(t[1]); print(t[2])' 2>&1)"
+printf '%s' "$assoc" | grep -qiE 'joining|associat' \
+  && ok "there is a row for a network that is still being joined" \
+  || bad "no associating row: $assoc"
+printf '%s' "$assoc" | grep -qi 'address' \
+  && ok "it says an address is what is being waited for" \
+  || bad "it does not name what the wait is for"
+printf '%s' "$assoc" | grep -qiE 'nothing to fix|by itself' \
+  && ok "the advice is to change nothing" \
+  || bad "it asks the operator to act on a state that clears itself"
+grep -q 'emit STATE associating' "$ROOT/install/netcfg" \
+  && ok "netcfg emits it" || bad "nothing produces the state"
+grep -q 'has_wifi_profile' "$ROOT/install/netcfg" \
+  && ok "it consults NM's own profiles, not just wifi.conf on the ESP" \
+  || bad "a baked profile still reads as 'no Wi-Fi settings'"
+grep -q 'wifi_busy' "$ROOT/install/netcfg" \
+  && ok "and the radio's actual state" || bad "association is not detected"
+# Ordering is the whole bug: the busy check must precede the no-conf branch.
+awk '/emit STATE associating/{a=NR} /emit STATE no-conf/{b=NR} END{exit !(a && b && a<b)}' \
+  "$ROOT/install/netcfg" \
+  && ok "the associating check runs BEFORE the no-conf branch" \
+  || bad "no-conf still wins during the association window, which is the defect"
+
+CASE="online is not a screen, it is the reason to leave one"
+# User's follow-on: once an address arrives, move on rather than showing a success message with a
+# button. Pressing Continue and waiting for the same condition should not be two different things.
+grep -q 'if fresh.get("STATE") == "online"' "$ROOT/install/ui" \
+  && ok "reaching online advances instead of re-rendering the network screen" \
+  || bad "the operator is left looking at a success message with a Continue button"
+grep -A10 'if fresh.get("STATE") == "online"' "$ROOT/install/ui" | grep -q 'gather_preflight' \
+  && ok "and it takes the same step Continue takes (pre-flight, still read-only)" \
+  || bad "the auto-advance does not go where Continue goes"
+
+CASE="no target: the screen says WHY, it does not just wait"
+# HW-FOUND 2026-08-24 (user): the medium shipped without lib-gpt.sh, select-target.sh died with
+# "cannot find lib-gpt.sh", gather_preflight() read that non-zero exit as the NORMAL no-target
+# outcome, and the panel sat on "Waiting for the installer." with no other word. A person holding
+# the device could not tell a broken build from a disk the installer refuses to touch. The reason
+# was already being logged and then thrown away by returning a bare None.
+noreason="$(cd "$ROOT/install" && python3 -c '
+import importlib.util, os, sys
+from importlib.machinery import SourceFileLoader
+sys.path.insert(0, os.path.abspath("."))
+loader = SourceFileLoader("nvui", "ui"); spec = importlib.util.spec_from_loader("nvui", loader)
+ui = importlib.util.module_from_spec(spec); loader.exec_module(ui)
+d = ui.IdleScreen("select-target: cannot find lib-gpt.sh").describe()
+print(d["title"])
+for h, b in d["blocks"]:
+    print("%s|%s" % (h, b))
+print("NOTE|%s" % d["note"])
+' 2>&1)"
+printf '%s' "$noreason" | grep -qi 'cannot find lib-gpt.sh' \
+  && ok "the reason from the tool is on the screen, verbatim" \
+  || bad "the reason is not shown: $noreason"
+printf '%s' "$noreason" | grep -qiE 'no disk to install onto|nothing .* install' \
+  && ok "it states plainly that there is no target" \
+  || bad "the screen does not say what the situation is"
+printf '%s' "$noreason" | grep -qi 'nothing has been written' \
+  && ok "it says nothing has been written (the operator's first question)" \
+  || bad "it does not reassure that the disk is untouched"
+# The SSH-driven consent-renderer case is legitimate and must still be explained, not dropped.
+printf '%s' "$noreason" | grep -qi 'ssh' \
+  && ok "it still accounts for the consent-renderer case" \
+  || bad "the legitimate 'driven over SSH' case is no longer explained"
+# With no reason available the screen must still be useful rather than blank.
+blank="$(cd "$ROOT/install" && python3 -c '
+import importlib.util, os, sys
+from importlib.machinery import SourceFileLoader
+sys.path.insert(0, os.path.abspath("."))
+loader = SourceFileLoader("nvui", "ui"); spec = importlib.util.spec_from_loader("nvui", loader)
+ui = importlib.util.module_from_spec(spec); loader.exec_module(ui)
+print(len(ui.IdleScreen().describe()["blocks"]))' 2>&1)"
+[ "$blank" -ge 2 ] 2>/dev/null \
+  && ok "it still renders $blank blocks when no reason was captured" \
+  || bad "with no reason the screen degrades to nothing useful: $blank"
+# It asks for nothing, so a scripted source must not spend a press on it.
+noninter="$(cd "$ROOT/install" && python3 -c '
+import importlib.util, os, sys
+from importlib.machinery import SourceFileLoader
+sys.path.insert(0, os.path.abspath("."))
+loader = SourceFileLoader("nvui", "ui"); spec = importlib.util.spec_from_loader("nvui", loader)
+ui = importlib.util.module_from_spec(spec); loader.exec_module(ui)
+print(ui.IdleScreen().interactive)' 2>&1)"
+[ "$noninter" = "False" ] && ok "still non-interactive (a screen that asks nothing takes no press)" \
+  || bad "IdleScreen became interactive: $noninter"
 
 CASE="session: XDG_RUNTIME_DIR is provided, because nothing else does"
 # THE FIRST HARDWARE BOOT OF THE INSTALLER MEDIUM DIED HERE (Pocket S2, 2026-08-24). gamescope came

@@ -76,12 +76,49 @@ host_reachable() {
   [ "$CURL_RC" = 0 ]
 }
 
+# THE CLOCK IS A SEPARATE ROW, and on these boards it is the one that actually happens. There is no
+# /dev/rtc -- the PMIC RTC probe defers forever (issue #38) -- so until systemd-timesyncd has synced,
+# the clock sits at the epoch and OpenSSL rejects every certificate as not-yet-valid. HW-FOUND
+# 2026-08-24: that surfaced as "Connected, but the update server is unreachable", which sent the
+# operator looking at their network and their router for a fault in neither. curl exit 60 with an
+# unsynchronised clock is a WAITING state, not a reachability failure: it clears itself, and the
+# only correct advice is to wait a moment and check again.
+# Is the radio mid-join? nmcli reports a device state like "connecting (getting IP configuration)",
+# so the prefix is what is matched -- the parenthetical names the phase and there are several.
+wifi_busy() {
+  "$NMCLI" -t -f TYPE,STATE device 2>/dev/null \
+    | awk -F: '$1 == "wifi" && $2 ~ /^connecting/ { found = 1 } END { exit !found }'
+}
+
+# Does NetworkManager hold a wifi profile of its own? A TEST medium bakes one in
+# (/usr/lib/NetworkManager/system-connections) and carries no wifi.conf, so "no wifi.conf" says
+# nothing there about whether a network is configured.
+has_wifi_profile() {
+  "$NMCLI" -t -f TYPE connection show 2>/dev/null | grep -qx '802-11-wireless'
+}
+
+# The network being joined, for the screen. Empty is fine -- the row reads without it.
+active_ssid() {
+  "$NMCLI" -t -f NAME,TYPE connection show --active 2>/dev/null \
+    | awk -F: '$2 == "802-11-wireless" { print $1; exit }'
+}
+
+clock_unsynced() {
+  [ "$(timedatectl show -p NTPSynchronized --value 2>/dev/null)" = "no" ]
+}
+
 curl_reason() {
   case "$CURL_RC" in
     6)  printf 'the name %s could not be resolved (DNS)' "${OTA_URL#https://}" ;;
     7)  printf 'nothing accepted a connection' ;;
     28) printf 'it did not answer within %ss' "$CONNECT_TIMEOUT" ;;
-    35|60) printf 'the secure connection could not be established' ;;
+    35|60)
+        if clock_unsynced; then
+          printf 'this device has no clock battery, and the time is not set yet (%s), so every certificate looks not-yet-valid. It fixes itself within a minute of joining a network' \
+                 "$(date -u '+%Y-%m-%d' 2>/dev/null)"
+        else
+          printf 'the secure connection could not be established'
+        fi ;;
     *)  printf 'curl gave up with code %s' "$CURL_RC" ;;
   esac
 }
@@ -125,9 +162,51 @@ diagnose() {  # <joined?>
       emit DETAIL "the installer can reach $OTA_URL"
       return 0
     fi
+    # THE CLOCK IS ITS OWN STATE, because it has its own fix and the fix is "wait". §4b's table is
+    # seven states because each one sends the operator somewhere different; reporting this as
+    # `no-host` sent them to look at their router for a fault in neither the router nor the server
+    # (HW, 2026-08-24). It is also the only row here that clears ITSELF, so the advice is not to
+    # change anything.
+    if [ "$CURL_RC" = 60 ] || [ "$CURL_RC" = 35 ]; then
+      if clock_unsynced; then
+        emit STATE no-clock
+        emit URL "$OTA_URL"
+        emit DETAIL "the clock reads $(date -u '+%Y-%m-%d %H:%M' 2>/dev/null) UTC and has not been set from the network yet"
+        return 0
+      fi
+    fi
     emit STATE no-host
     emit URL "$OTA_URL"
     emit DETAIL "an address is held, but $(curl_reason)"
+    return 0
+  fi
+
+  # A NETWORK THAT HAS NOT FINISHED JOINING IS NOT A MISSING CONFIGURATION, and the order of the
+  # checks used to say otherwise: have_lease fails for the whole association window, so anything
+  # without a lease fell through to `no-conf` -- "No Wi-Fi settings on this card" -- and told the
+  # operator to go and write a file on another computer while the radio was mid-handshake.
+  #
+  # THE ABSENCE OF wifi.conf IS NOT THE ABSENCE OF CONFIGURATION. A TEST medium carries its network
+  # baked in as an NM profile and has no wifi.conf at all, so that path is not a corner case there,
+  # it is every cold boot. A RELEASE medium has neither, and `no-conf` is then exactly right --
+  # which is why this needs trying on a release image before it is believed: the dev build cannot
+  # reach the state it is meant to protect.
+  #
+  # Self-clearing, like no-clock: the only correct advice is to wait.
+  if wifi_busy; then
+    emit STATE associating
+    emit SSID "$(active_ssid)"
+    emit DETAIL "the radio is joining a network and no address has been handed out yet"
+    return 0
+  fi
+
+  if [ ! -r "$WIFI_CONF" ] && has_wifi_profile; then
+    # Configured, not busy, no lease: NM has a profile and is not currently working on it. Say that
+    # rather than claiming there is no configuration -- the file the `no-conf` advice talks about is
+    # not where this network came from.
+    emit STATE associating
+    emit SSID "$(active_ssid)"
+    emit DETAIL "a network is configured on this medium, and no address has been handed out yet"
     return 0
   fi
 

@@ -100,6 +100,12 @@ class PygameView:
         pg = self.pygame
         r = max(4, int(self.h / 150))
         span = r * 4
+        # The gap between a diamond and the word it labels. It was r -- the east dot`s edge sits at
+        # cx + span + r and the label started at cx + span + r*2 -- which is about 9px on a
+        # 1440-high panel, so "Continue" read as part of the glyph rather than a caption for it.
+        # Reported from the panel twice (2026-08-24), on the network screen and again on the
+        # connected one. Derived from r so it tracks the dot size on any output.
+        gap = r * 6
         for b in buttons:
             if b["pos"] == "SELECT":
                 x = self._inline(x, y, "SELECT", b["label"])
@@ -112,8 +118,11 @@ class PygameView:
                 pg.draw.circle(self.surface, self.DOT_ON if filled else self.DOT,
                                (cx + dx, cy + dy), r, 0 if filled else 2)
             label = self.f_body.render(b["label"], True, self.FG)
-            self.surface.blit(label, (cx + span + r * 2, cy - label.get_height() // 2))
-            x = cx + span + r * 3 + label.get_width() + int(self.w * 0.05)
+            self.surface.blit(label, (cx + span + gap, cy - label.get_height() // 2))
+            # The advance clears the dot, the gap and the word, so the next control starts free of
+            # all three -- it used to add r*3, which double-counted nothing and left the spacing
+            # between controls dependent on a constant that no longer describes the layout.
+            x = cx + span + gap + label.get_width() + int(self.w * 0.05)
 
     def _inline(self, x, y, key, label):
         surf = self.f_body.render("%s  %s" % (key, label), True, self.FG)

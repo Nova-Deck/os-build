@@ -162,13 +162,46 @@ for f in hw-install.sh hw-select-target.sh hw-preflight.sh lib-hwstage.sh lib-gp
 done
 
 CASE="the files the spine resolves by search"
-mapfile -t FOREIGN < <(sed -n '/^FOREIGN_FILES=(/,/^)/p' "$MKROOT" | sed -e '1d' -e '$d' | tr -d '"' | tr ' ' '\n' | grep -v '^$')
-[ "${#FOREIGN[@]}" -eq 4 ] && ok "FOREIGN_FILES parses to 4 entries" \
+# Comment lines are dropped: the array carries an explanatory block about lib-gpt.sh, and without
+# this the extraction tokenized the prose into 80-odd "entries".
+mapfile -t FOREIGN < <(sed -n '/^FOREIGN_FILES=(/,/^)/p' "$MKROOT" \
+  | sed -e '1d' -e '$d' -e '/^[[:space:]]*#/d' | tr -d '"' | tr ' ' '\n' | grep -v '^$')
+[ "${#FOREIGN[@]}" -eq 5 ] && ok "FOREIGN_FILES parses to 5 entries" \
   || bad "FOREIGN_FILES parsed to ${#FOREIGN[@]} entries, expected 4"
 for spec in "${FOREIGN[@]}"; do
   [ -f "$ROOT/${spec%%:*}" ] && ok "${spec%%:*} exists" \
     || bad "mkroot.sh places ${spec%%:*}, which is not in the tree"
 done
+
+CASE="the searched-for set is COMPLETE, not merely present"
+# HW-FOUND 2026-08-24, and it is the gap that let it through that matters. select-target.sh sources
+# lib-gpt.sh; the medium did not carry it; select-target died with "cannot find lib-gpt.sh";
+# gather_preflight() reads a non-zero exit as "no install target" — a NORMAL outcome — so the UI
+# showed its idle screen and reported nothing. The cases below already checked that every file in
+# FOREIGN_FILES exists in the tree. Nothing checked the LIST WAS COMPLETE against what the shipped
+# code actually reaches for, which is a different question and the one that was wrong.
+#
+# So: derive the requirement from the code. Comments are stripped first — post-install.sh is named
+# only in prose, and an extraction that counted it would demand a file nothing loads. (Twice today
+# an assertion of mine matched a comment instead of a line of code.)
+shipped_names=$(printf '%s\n' "${FLAT[@]}"; for s in "${FOREIGN[@]}"; do printf '%s\n' "${s##*:}"; done)
+referenced=$(for f in "${FLAT[@]}"; do
+    [ -f "$ROOT/install/$f" ] || continue
+    sed -e 's/#.*//' "$ROOT/install/$f"
+  done | grep -oE '(^|[^/A-Za-z0-9._-])(lib-[a-z0-9-]+\.sh|genpart\.sh|partition-table\.txt)([^/A-Za-z0-9._-]|$)' \
+       | grep -oE '(lib-[a-z0-9-]+\.sh|genpart\.sh|partition-table\.txt)' | sort -u)
+[ -n "$referenced" ] && ok "the payload reaches for $(printf '%s' "$referenced" | wc -l) support files" \
+  || bad "could not extract any support-file references — the extraction broke, not the code"
+for r in $referenced; do
+  printf '%s\n' "$shipped_names" | grep -qx "$r" \
+    && ok "$r is shipped" \
+    || bad "the payload sources $r and the medium does not carry it — select-target/spine dies at run time"
+done
+# The one that cost a hardware trip, named so a reader sees it in the list.
+printf '%s\n' "$shipped_names" | grep -qx lib-gpt.sh \
+  && ok "lib-gpt.sh specifically (select-target.sh sources it; its absence reads as 'no target')" \
+  || bad "lib-gpt.sh is missing again"
+
 
 # ---------------------------------------------------------------------------------------------
 CASE="units"
@@ -282,6 +315,36 @@ for sym in CONFIG_CFG80211 CONFIG_MAC80211 CONFIG_ATH11K; do
     && ok "$sym is =m, so the module tree is load-bearing" \
     || skip "$sym is not =m in this config — recheck why modules are shipped"
 done
+
+CASE="the clock, because these boards have no RTC"
+# HW-FOUND 2026-08-24: the medium reached the network screen and said the update server was
+# unreachable. It was neither DNS (resolved fine) nor the server (404 from the build host, which
+# netcfg correctly counts as reachable). curl said "certificate is not yet valid or the system clock
+# is incorrect": the clock read Jul 06 against a real date of Aug 24, because there is NO /dev/rtc on
+# these boards (the PMIC RTC probe defers forever, issue #38) so it starts at systemd's epoch and
+# every TLS certificate is not-yet-valid. VERIFIED on the device: starting the unit by hand moved the
+# clock to the correct date and netcfg went STATE=no-host -> STATE=online.
+grep -q 'enable systemd-timesyncd.service' "$MKROOT" \
+  && ok "systemd-timesyncd is enabled by preset" \
+  || bad "no NTP — with no RTC the clock never becomes correct and HTTPS never works"
+grep -q 'sysinit.target.wants/systemd-timesyncd.service' "$MKROOT" \
+  && ok "and by the wants symlink (preset-proof, as NetworkManager and seatd are)" \
+  || bad "the preset alone can be undone by preset-all on first boot"
+grep -q 'dbus-org.freedesktop.timesync1.service' "$MKROOT" \
+  && ok "the dbus activation alias is created too" \
+  || bad "timedatectl could not start the daemon on demand"
+# It MUST be build-time: the runtime path is closed by the very read-only /etc this image chose.
+grep -q 'Read-only file system' "$MKROOT" \
+  && ok "it records that timedatectl set-ntp cannot work here" \
+  || bad "the reason this is build-time and not runtime is undocumented"
+# netcfg must not report a wrong clock as an unreachable server — that sent the operator looking at
+# their router for a fault in neither.
+grep -q 'clock_unsynced' "$ROOT/install/netcfg" \
+  && ok "netcfg distinguishes an unsynced clock from a reachability failure" \
+  || bad "a wrong clock still reads as 'the update server is unreachable'"
+grep -q 'NTPSynchronized' "$ROOT/install/netcfg" \
+  && ok "it asks timedatectl rather than guessing from the date" \
+  || bad "the clock check is not asking the authority"
 
 CASE="overlay udev rules"
 grep -q 'fs-overlay/usr/lib/udev/rules.d' "$MKROOT" \

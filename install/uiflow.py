@@ -120,19 +120,30 @@ def plan_carve(disk, gib):
 
 def gather_preflight():
     """
-    Everything the pre-flight screen shows, or None if there is nothing to install onto.
+    (facts, reason) -- facts for the pre-flight screen, or None with the reason there are none.
 
-    Returning None is a normal outcome, not a failure: the UI is also started on a machine where the
-    spine is being driven over SSH, and there its only job is to render consent when asked.
+    THE REASON IS RETURNED, NOT JUST LOGGED, and that is the whole point of the second element.
+    This used to return a bare None for every no-target outcome, so the panel fell back to a screen
+    saying "Waiting for the installer." and nothing else. That reads as correct in exactly one
+    situation -- the UI running as a consent renderer for a spine driven over SSH -- and it was
+    silently swallowing two others that look nothing like it: a device that genuinely has no target
+    (booted from internal, rule 1), and select-target.sh failing to RUN at all.
+
+    HW-FOUND 2026-08-24: the medium shipped without lib-gpt.sh, select-target.sh died with
+    "cannot find lib-gpt.sh", and the operator got "Waiting for the installer." forever with no clue
+    that anything had gone wrong. A person holding the device could not tell a broken build from a
+    disk this installer refuses to touch. Whatever the caller does with it, the reason has to reach
+    the screen.
     """
     rc, out = run_tool([SELECT_TARGET])
     if rc != 0:
-        log("no install target (%s); serving consent only" % out.strip().splitlines()[-1:])
-        return None
+        last = (out.strip().splitlines() or ["select-target.sh failed with no output"])[-1]
+        log("no install target (%s); serving consent only" % last)
+        return None, last
     target = kv(out)
     disk = target.get("TARGET", "")
     if not disk:
-        return None
+        return None, "select-target.sh named no disk"
     name = "this device"
     drc, dout = run_tool([DEVICE_ENV])
     if drc == 0:
@@ -145,7 +156,7 @@ def gather_preflight():
         "disk_facts": disk_facts(disk),
         "bundle": BUNDLE,
         "seed": HOME_SEED,
-    }
+    }, ""
 
 
 # =================================================================================================
@@ -216,6 +227,30 @@ class NetworkScreen:
             "The installer joined the network, and then waited for an address that never arrived.",
             "This is the access point, not the installer -- its DHCP is not answering. Try another "
             "network, or a USB-C Ethernet adapter.",
+        ),
+        # CONFIGURED BUT NOT YET JOINED. Self-clearing, like no-clock. have_lease is false for the
+        # whole association window, so before this row existed everything in that window fell
+        # through to `no-conf` and told the operator to go and write a file on another computer
+        # while the radio was mid-handshake -- and on a TEST medium, whose network is a baked NM
+        # profile with no wifi.conf at all, that was every cold boot rather than a corner case.
+        "associating": (
+            "Joining the network",
+            "{detail}. This device asks the access point for an address, and that takes a few "
+            "seconds after the radio associates.",
+            "Nothing to fix. It moves on by itself as soon as an address arrives.",
+        ),
+        # THE ONLY ROW WHOSE FIX IS TO DO NOTHING. These boards have no clock battery -- the PMIC
+        # RTC probe defers forever (issue #38) -- so on every cold boot the clock starts at the
+        # epoch and OpenSSL rejects every certificate as not-yet-valid until systemd-timesyncd has
+        # synced. HW 2026-08-24: this surfaced as "the update server is unreachable", which is a row
+        # that sends the operator to check their router, and it is neither their router nor the
+        # server. It clears itself within a few seconds of joining a network.
+        "no-clock": (
+            "Waiting for the time to be set",
+            "This device has no clock battery, so it does not know the date until the network tells "
+            "it -- {detail}. Until then every secure connection looks expired, including {url}.",
+            "Nothing to fix. Give it a few seconds and press Check again; it sets itself as soon as "
+            "the network answers.",
         ),
         "no-host": (
             "Connected, but the update server is unreachable",

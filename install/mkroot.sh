@@ -151,6 +151,12 @@ FOREIGN_FILES=(
   "images/genpart.sh:genpart.sh"
   "images/partition-table.txt:partition-table.txt"
   "images/lib-homestage.sh:lib-homestage.sh"
+  # HW-FOUND 2026-08-24: select-target.sh sources lib-gpt.sh and died with "cannot find lib-gpt.sh"
+  # on the first medium that got far enough to look for a disk. gather_preflight() read that
+  # non-zero exit as "no install target", which is a NORMAL outcome, so the UI fell back to its
+  # idle screen and said nothing at all. install/test-mkroot.sh checked that the four files listed
+  # here existed; nothing checked the list was COMPLETE against what the code actually sources.
+  "images/lib-gpt.sh:lib-gpt.sh"
 )
 for f in "${INSTALL_FILES[@]}"; do
   [ -f "$ROOT/install/$f" ] || die "install/$f is missing — the installer cannot ship without it"
@@ -699,6 +705,33 @@ docker run --rm --platform linux/arm64 \
          /target/etc/systemd/system/multi-user.target.wants/NetworkManager.service
   ln -sf /usr/lib/systemd/system/NetworkManager.service \
          /target/etc/systemd/system/dbus-org.freedesktop.NetworkManager.service
+
+  # systemd-timesyncd IS ENABLED, and on these boards it is not optional -- it is the only way this
+  # machine can ever know the time. HW-FOUND 2026-08-24: the medium reached the network screen and
+  # reported the update server unreachable. It was neither DNS nor the server (which answered 404
+  # from the build host, and netcfg correctly treats a 404 as reachable). curl said:
+  #
+  #   curl: (60) certificate is not yet valid or the system clock is incorrect (9)
+  #
+  # The clock read Jul 06 with the real date Aug 24, because THERE IS NO /dev/rtc on these boards --
+  # the PMIC RTC probe defers forever (issue #38) -- so the clock starts at systemd`s epoch and
+  # every TLS certificate is not-yet-valid. The shipped image gets away with more here; a recovery
+  # medium that must fetch a multi-gigabyte bundle over HTTPS does not.
+  #
+  # IT HAS TO BE ENABLED AT BUILD TIME. `timedatectl set-ntp true` fails on this image with
+  # "File /etc/systemd/system/dbus-org.freedesktop.timesync1.service: Read-only file system" --
+  # the read-only /etc means the runtime path is closed, so the preset and the symlink are the only
+  # way in. VERIFIED on the device before shipping: starting the unit by hand moved the clock from
+  # Jul 06 to the correct Aug 24, NTPSynchronized=yes, curl returned HTTP 404 and netcfg went from
+  # STATE=no-host to STATE=online.
+  echo "enable systemd-timesyncd.service" >>/target/etc/systemd/system-preset/60-novadeck-network.preset
+  install -d -m0755 /target/etc/systemd/system/sysinit.target.wants
+  ln -sf /usr/lib/systemd/system/systemd-timesyncd.service \
+         /target/etc/systemd/system/sysinit.target.wants/systemd-timesyncd.service
+  # dbus activation, the same pair `systemctl enable` would make. Without it timedatectl and
+  # anything else talking to org.freedesktop.timesync1 cannot start the daemon on demand.
+  ln -sf /usr/lib/systemd/system/systemd-timesyncd.service \
+         /target/etc/systemd/system/dbus-org.freedesktop.timesync1.service
 
   # seatd.service IS enabled, and that is a Phase 6 choice installer-session explicitly left open.
   # It takes either branch -- use a seatd that is already listening, or launch one via seatd-launch

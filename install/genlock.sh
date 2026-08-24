@@ -70,6 +70,16 @@ PREBUILT_MARKER="$BASE/usr/lib/novadeck/prebuilt.manifest"
   echo "${MARKER#"$ROOT"/} is absent — that tree is a half-finished bootstrap, not an image" >&2
   exit 1
 }
+# The lock describes the RELEASE installer. A dev tree additionally carries remote access (sshd
+# enabled, a baked authorized_keys), and while that adds no PACKAGES today — openssh is declared for
+# both — locking one would record a marker claiming to describe a medium that is not the one we
+# publish. mkroot.sh records dev:1 precisely so this is detectable rather than inferred. `make
+# relock-installer` clears NOVADECK_DEV for the same reason `make relock` does.
+if grep -qx 'dev:1' "$MARKER" 2>/dev/null; then
+  echo "refusing to lock a DEV installer root: ${MARKER#"$ROOT"/} says dev:1" >&2
+  echo "  rebuild release first (unset NOVADECK_DEV), or just run \`make relock-installer\`" >&2
+  exit 1
+fi
 
 # Index the two package directories ONCE by exact filename. Deliberately not a per-package glob:
 # the cache accumulates stale versions, so a glob would happily match the wrong artifact. Exact

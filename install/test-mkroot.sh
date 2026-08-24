@@ -232,6 +232,44 @@ grep -q 'fetchlock.sh" "\$STAGE/install.list" "\$LOCKFILE"' "$MKROOT" \
   && ok "mkroot.sh passes install/manifest.lock, not the shipped one" \
   || bad "mkroot.sh does not pass its own lock to fetchlock.sh"
 
+CASE="remote access is TEST-ONLY"
+# The same split [[wifi-config-is-test-only]] draws for the shipped image. A published recovery
+# medium anyone can download must not carry a credential anyone can extract, so the release
+# installer leaves sshd installed and never enabled — it listens on nothing.
+grep -q 'authorized_keys' "$MKROOT" && ok "a dev build can bake an authorized_keys" \
+  || bad "no dev credential path at all — an early failure would be undiagnosable"
+grep -q 'if \[ -f /prebuilt/authorized_keys \]' "$MKROOT" \
+  && ok "sshd is enabled ONLY when that key was staged (i.e. NOVADECK_DEV=1)" \
+  || bad "sshd enablement is not gated on the dev credential"
+# The host key must not be in /etc: that is squashfs here, so openssh's own sshdgenkeys would fail
+# every boot and sshd, which only Wants= it, would start with no key and refuse every connection.
+grep -q 'HostKey /run/ssh/ssh_host_ed25519_key' "$MKROOT" \
+  && ok "the host key lives in /run, not the read-only /etc" \
+  || bad "the host key would be written to a read-only /etc"
+# The generator is a COMMITTED unit, so images/test-units.sh lints it with systemd-analyze — a unit
+# printf-ed from inside mkroot.sh's container half would be linted by nothing, and systemd IGNORES
+# a misspelled directive silently ([[systemd-execonfailure-is-not-a-directive]]).
+HOSTKEY_UNIT="$UNITS/novadeck-installer-hostkey.service"
+[ -f "$HOSTKEY_UNIT" ] && ok "the key generator is a committed unit file, so it gets linted" \
+  || bad "no install/units/novadeck-installer-hostkey.service — a generated unit is an unlinted one"
+grep -q 'ConditionPathExists=!/run/ssh/ssh_host_ed25519_key' "$HOSTKEY_UNIT" 2>/dev/null \
+  && ok "regeneration is conditional (ssh-keygen prompts rather than overwriting)" \
+  || bad "an sshd restart within a boot would wedge on the key generator"
+# ...and it must NOT be installed by the unconditional units glob, or it lands on release media too.
+# Narrowly the INSTALL command, not the staging copy: staging every unit into /prebuilt is fine and
+# expected, and an earlier version of this case matched that line and failed on correct code.
+grep -q 'install -m0644 /prebuilt/units/\*\.service' "$MKROOT" \
+  && bad "units are installed by glob — the TEST-BUILD hostkey unit would ship on a released medium" \
+  || ok "units are installed by name, so the test-build unit stays out of release media"
+grep -q 'sshdgenkeys.service' "$MKROOT" \
+  && ok "openssh's own generator is masked rather than left failing" \
+  || bad "sshdgenkeys would fail on /etc and litter the one journal that is the whole diagnostic"
+# A baked host key is a property of the BUILD: extractable from the published image and identical
+# on every device flashed from it. The main image argues this at length; the conclusion holds here.
+grep -qE 'ssh-keygen[^\n]*-f /target/etc/ssh' "$MKROOT" \
+  && bad "a host key is baked into the image — every medium would share one private key" \
+  || ok "no host key is baked into the image"
+
 CASE="a read-only /etc, and its three writers"
 # The root is squashfs with NO overlay (the shipped image's overlay is what forces an initramfs,
 # and it exists to persist a user's config — neither applies to a tool that runs once from

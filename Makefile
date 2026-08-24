@@ -665,7 +665,7 @@ installer: installer-root $(KERNEL) $(GRUB) | $(BUILD_STAMP) ## Build the flasha
 # repo, and without work/repo/aarch64 the resolve would either fail or — worse — satisfy it from a
 # snapshot and lock an unpatched upstream binary under a `snapshot` class.
 relock-installer: $(if $(OVERLAY_PINS),$(OVERLAY_STAMP)) ## Re-resolve install/pkgs.list and regenerate install/manifest.lock (host)
-	NOVADECK_RESOLVE=1 FORCE=1 install/mkroot.sh >/dev/null
+	NOVADECK_DEV= NOVADECK_RESOLVE=1 FORCE=1 install/mkroot.sh >/dev/null
 	install/genlock.sh
 	@echo "review the diff, commit it, then rebuild: git diff install/manifest.lock"
 

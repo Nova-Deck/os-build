@@ -46,6 +46,17 @@ OSRELEASE="$ROOT/install/os-release"
 PKGSLIST="$ROOT/install/pkgs.list"
 DEST="$ROOT/work/installer-base"
 STAGE="$ROOT/work/installer-stage"
+# TEST-ONLY remote access, exactly the split [[wifi-config-is-test-only]] describes for the shipped
+# image: a RELEASE installer has no sshd enabled and no key, because a published recovery medium
+# that anyone can download must not carry a credential anyone can extract. NOVADECK_DEV=1 turns it
+# on for a bring-up medium, and that is the only build that can be logged into.
+#
+# WHY IT IS WORTH HAVING AT ALL. This image has no UART ([[sm8650-no-uart]]), the panel has no
+# keyboard, and install/save-log.sh only writes the ESP once systemd has got far enough to STOP the
+# unit. So an early failure — the squashfs not mounting, systemd.volatile=state misbehaving without
+# an initrd — is a black panel and no evidence whatsoever. Three assumptions on this medium are
+# reasoned rather than measured, and this is what makes the first one that breaks diagnosable.
+DEV="${NOVADECK_DEV:-}"
 PACMAN_CACHE="$ROOT/work/pacman-cache"
 OVERLAY_REPO="$ROOT/work/repo/aarch64"
 OVERLAY_DB="$OVERLAY_REPO/novadeck.db.tar.zst"
@@ -199,7 +210,9 @@ overlay:$(sha256sum "$OVERLAY_DB" | cut -d' ' -f1)
 script:$(sha256sum "$0" | cut -d' ' -f1)
 osrelease:$(sha256sum "$OSRELEASE" | cut -d' ' -f1)
 seed:${SEED_SHA:-none}
-esplabel:$ESP_LABEL"
+esplabel:$ESP_LABEL
+dev:${DEV:-0}
+sshkey:$(printf '%s' "${NOVADECK_SSH_PUBKEY:-none}" | sha256sum | cut -d' ' -f1)"
 # Every file that lands in the tree, hashed. These are the installer -- an edit to install/ui or to
 # a unit changes the image completely while leaving the package set untouched, so without this the
 # next build would happily reuse a tree carrying the previous code.
@@ -248,6 +261,17 @@ cp    "$KEYRING_SRC" "$STAGE/keyring.pem"
 cp    "$PACMANCONF"  "$STAGE/pacman.conf"
 cp    "$OSRELEASE"   "$STAGE/os-release"
 if [ -n "$SEED_SHA" ]; then printf '%s\n' "$SEED_SHA" >"$STAGE/steam-seed.sha256"; fi
+# The dev credential crosses as a FILE, and its presence is what the container branches on — the
+# same idiom images/customize-base.sh uses for dev.pkgs, and for the same reason: it keeps another
+# layer of quoting out of the single-quoted bash -c.
+if [ -n "$DEV" ]; then
+  if [ -n "${NOVADECK_SSH_PUBKEY:-}" ]; then
+    printf '%s\n' "$NOVADECK_SSH_PUBKEY" >"$STAGE/authorized_keys"
+  else
+    log "WARNING: NOVADECK_DEV=1 but NOVADECK_SSH_PUBKEY is unset — sshd is key-only, so it will"
+    log "         admit nobody. Source dev.env before building a bring-up medium."
+  fi
+fi
 printf '%s\n' "$ESP_LABEL" >"$STAGE/esp-label"
 # The package names alone, as their own file. The reuse-cache marker below is a superset (it also
 # carries the pins, the mode and the payload hash) and filtering the names back out of it in the
@@ -438,7 +462,13 @@ docker run --rm --platform linux/arm64 \
   fi
 
   # ---- units --------------------------------------------------------------------------------------
-  install -m0644 /prebuilt/units/*.service /target/usr/lib/systemd/system/
+  # Named, not globbed: install/units/ also holds novadeck-installer-hostkey.service, which is a
+  # TEST-BUILD unit and is installed further down only when a dev credential was staged. A glob
+  # here would put it on the released medium too — inert, since nothing pulls it in without the
+  # sshd drop-in, but a test artifact on a published image is how the next one stops being inert.
+  install -m0644 /prebuilt/units/novadeck-installer.service \
+                 /prebuilt/units/novadeck-installer-console.service \
+                 /target/usr/lib/systemd/system/
   mkdir -p /target/etc/systemd/system/multi-user.target.wants
   # ONLY the session unit is enabled. The console unit is started by OnFailure= and enabling it
   # would run the fallback on every boot, including the ones that worked.
@@ -518,6 +548,56 @@ docker run --rm --platform linux/arm64 \
   else
     echo "inputplumber.service is not in the tree — the prebuilt layout moved" >&2
     exit 1
+  fi
+
+  # ---- TEST-ONLY remote access ----------------------------------------------------------------------
+  # Present only when the host staged an authorized_keys, i.e. NOVADECK_DEV=1 with a key. A release
+  # installer leaves sshd installed but never enabled, so it listens on nothing.
+  #
+  # HOST KEYS GO IN /run, AND THAT IS THE DIFFERENCE FROM THE MAIN IMAGE. images/assemble-rootfs.sh
+  # argues at length for NOT baking host keys and letting openssh`s own sshdgenkeys.service run
+  # `ssh-keygen -A` at first start -- correct there, because its /etc is an overlayfs with the upper
+  # in /var and therefore writable. Here /etc is squashfs. sshdgenkeys would fail on every boot, and
+  # sshd only Wants= it so it would then start with no host key and refuse every connection. The two
+  # reasons that block gives for not baking still apply, and are why the key is generated per boot
+  # into tmpfs rather than shipped: a baked key is a property of the BUILD, extractable by anyone
+  # holding the published image, and identical on every device flashed from it.
+  if [ -f /prebuilt/authorized_keys ]; then
+    install -d -m0700 /target/root/.ssh
+    install -m0600 /prebuilt/authorized_keys /target/root/.ssh/authorized_keys
+
+    install -d -m0755 /target/etc/ssh/sshd_config.d
+    printf "%s\n" \
+      "# novadeck installer, TEST BUILD ONLY: the root is read-only squashfs, so the host key" \
+      "# cannot live in /etc. It is generated into tmpfs per boot by the drop-in below." \
+      "HostKey /run/ssh/ssh_host_ed25519_key" \
+      >/target/etc/ssh/sshd_config.d/00-novadeck-installer.conf
+
+    # The key generator is a COMMITTED unit file (install/units/), not text printf-ed from here.
+    # A unit generated inside this container is a unit images/test-units.sh never lints, and a
+    # misspelled directive is silently IGNORED by systemd rather than rejected
+    # ([[systemd-execonfailure-is-not-a-directive]]) — so the one unit whose failure mode is "no
+    # remote access on the image whose remote access is the whole point" would have been the one
+    # nothing checked. It carries its own reasoning; see the file.
+    install -m0644 /prebuilt/units/novadeck-installer-hostkey.service \
+                   /target/usr/lib/systemd/system/novadeck-installer-hostkey.service
+
+    install -d -m0755 /target/etc/systemd/system/sshd.service.d
+    printf "%s\n" \
+      "[Unit]" \
+      "Requires=novadeck-installer-hostkey.service" \
+      "After=novadeck-installer-hostkey.service" \
+      >/target/etc/systemd/system/sshd.service.d/00-novadeck-installer.conf
+
+    # Mask openssh`s own generator rather than leave it failing. sshd only Wants= it, so its failure
+    # would not stop the boot -- it would just put a red unit and a misleading "permission denied"
+    # on /etc/ssh in the journal of the one image whose journal is the whole diagnostic.
+    ln -sf /dev/null /target/etc/systemd/system/sshdgenkeys.service
+
+    echo "enable sshd.service" >>/target/etc/systemd/system-preset/60-novadeck-network.preset
+    ln -sf /usr/lib/systemd/system/sshd.service \
+           /target/etc/systemd/system/multi-user.target.wants/sshd.service
+    echo "[novadeck] TEST BUILD: sshd enabled, key-only root, host key regenerated per boot" >&2
   fi
 
   # ---- /esp, a REAL mount point -------------------------------------------------------------------

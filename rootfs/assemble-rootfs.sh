@@ -734,6 +734,27 @@ android_rc="$stage/$android_slot/vendor/etc/init/novadeck-gfx.rc"
 [ -s "$android_rc" ] || { echo "ERROR: ${android_rc#"$stage"} is missing -- rootfs/overlay's copy was clobbered by the payload merge, and the guest will die on zink" >&2; exit 1; }
 grep -q 'mesa.loader.driver.override msm' "$android_rc" \
   || { echo "ERROR: ${android_rc#"$stage"} no longer sets the mesa driver override -- Lepton forces zink and the guest cannot create a DRI2 screen" >&2; exit 1; }
+# Take the freeform windowing feature away from the guest. Lepton's images/rootfs declares
+# android.software.freeform_window_management unconditionally, and NOTHING in the guest gates it on
+# persist.waydroid.multi_windows the way stock waydroid does. With the feature declared but
+# multi_windows unset, the two halves disagree: the composer runs single-window -- one wl_surface
+# carrying the whole Android display -- while Android still opens the title into a FREEFORM window.
+# The guest then presents a small floating window, title bar and all, sitting on the launcher
+# wallpaper. Measured on a Pocket ACE 2026-08-24: task mode=freeform, bounds 824x464 inside a
+# 2560x1440 display, with the launcher fullscreen behind it.
+#
+# There is no runtime lever. ActivityTaskManagerService ORs the PackageManager feature with
+# development_enable_freeform_windows_support, so clearing the setting is a no-op while the feature
+# is declared; and `am start --windowingMode 1` does not stick, because TaskLaunchParamsModifier
+# puts the task straight back into freeform (measured -- the relaunched task came back mode=freeform).
+# Removing the DECLARATION is the only thing that works, and Lepton's overlay is a per-file bind
+# mount that can replace a file but never delete one -- hence an empty <permissions/> shadowing
+# Valve's copy at the same path, rather than an absence.
+#
+# NOT gated on NOVADECK_DEV: this is a fix every image wants, not an instrument.
+install -Dm0644 "$ROOT/rootfs/guestos/android.software.freeform_window_management.xml" \
+                "$stage/$android_slot/system/etc/permissions/android.software.freeform_window_management.xml"
+
 # A SECOND init script, DEV CARDS ONLY: a logcat capture that writes inside the guest to /data,
 # whose overlay upperdir lives on the host and so outlives the container. Every host-side capture
 # of this guest has been an `adb logcat` racing Lepton's teardown, and the race is unwinnable --

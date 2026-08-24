@@ -188,6 +188,48 @@ if [[ -s $LOGRC ]]; then
 fi
 
 echo
+echo "the freeform windowing shadow"
+
+# Lepton's rootfs declares android.software.freeform_window_management unconditionally, with none of
+# stock waydroid's gating on persist.waydroid.multi_windows. Declared-but-single-window is the state
+# that puts the title in a floating 824x464 window on the launcher wallpaper instead of filling the
+# screen. We shadow the declaration with an empty one at the same path; there is no runtime override
+# (the feature is ORed with the developer setting, and --windowingMode does not stick).
+FREEFORM_XML=android.software.freeform_window_management.xml
+FFSRC="$ROOT/rootfs/guestos/$FREEFORM_XML"
+
+[[ -s $FFSRC ]] \
+    && ok "rootfs/guestos ships $FREEFORM_XML" \
+    || bad "$FREEFORM_XML is missing -- the guest keeps Valve's declaration and titles open freeform"
+
+# The whole point is that it declares NOTHING. A copy of Valve's file, or any <feature> line, would
+# stage cleanly, bind-mount cleanly, and change nothing at all.
+if [[ -s $FFSRC ]]; then
+    grep -q '<permissions' "$FFSRC" \
+        && ok "it is a well-formed <permissions> document" \
+        || bad "$FREEFORM_XML has no <permissions> element -- PackageManager would not parse it"
+    sed 's/<!--.*-->//' "$FFSRC" | grep -q '<feature' \
+        && bad "$FREEFORM_XML still declares a <feature> -- shadowing it with a declaration is a no-op" \
+        || ok "it declares no feature, which is what takes freeform away"
+fi
+
+# Path has to be exact: Lepton walks the slot with a bare `find . -type f` and bind-mounts each file
+# at the matching absolute path, so one directory off is a file the guest never opens.
+grep -qF "\$android_slot/system/etc/permissions/$FREEFORM_XML" "$ASSEMBLE" \
+    && ok "the assembler stages it at system/etc/permissions/ inside the slot" \
+    || bad "the assembler does not stage $FREEFORM_XML at /$SLOT/system/etc/permissions/"
+
+# Unlike the logcat instrument, this one must NOT be dev-gated -- every image wants it.
+# Only a real `if [ NOVADECK_DEV ]` counts as a gate. The comment above the install line names
+# NOVADECK_DEV to say it is deliberately NOT gated, so prose has to be skipped or it reads as one.
+awk -v xml="$FREEFORM_XML" '
+    /NOVADECK_DEV/ && $0 !~ /^[[:space:]]*#/ { dev = NR }
+    index($0, xml) && dev && NR - dev < 14 { found++ }
+    END { exit(found ? 0 : 1) }' "$ASSEMBLE" \
+    && bad "$FREEFORM_XML is staged behind a NOVADECK_DEV gate -- release images would keep freeform" \
+    || ok "it is staged unconditionally, not only on dev cards"
+
+echo
 echo "build recipe"
 
 # 9. ZINK. Lepton sets mesa.loader.driver.override=zink alongside ro.hardware.egl=mesa, so GLES in

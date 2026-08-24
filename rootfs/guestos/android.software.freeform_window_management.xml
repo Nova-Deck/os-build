@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- novadeck: shadow Valve's copy of this file to take the freeform feature away.
+
+     Lepton's images/rootfs ships android.software.freeform_window_management.xml
+     unconditionally, with nothing in the guest gating it on persist.waydroid.multi_windows.
+     With the feature present but multi_windows unset, the composer runs in single-window
+     mode (one wl_surface carrying the whole Android display) while Android still opens the
+     title to a freeform window -- so the guest presents a small floating window sitting on
+     the launcher wallpaper instead of the title filling the screen.
+
+     Settings cannot switch this off: ActivityTaskManagerService ORs the PackageManager
+     feature with development_enable_freeform_windows_support, so clearing the setting is a
+     no-op while the feature is declared. `am start --windowingMode 1` does not stick either;
+     TaskLaunchParamsModifier puts the task back into freeform. Removing the DECLARATION is
+     the only lever.
+
+     liblepton/mounting.sh bind-mounts /usr/share/guestos/android over the guest per file,
+     after Valve's own images/rootfs_overlay, so this empty declaration shadows the upstream
+     file. An overlay can add and replace but never delete, hence an empty <permissions/>
+     rather than a removal. -->
+<permissions>
+</permissions>

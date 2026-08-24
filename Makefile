@@ -332,7 +332,7 @@ KERNEL_SRC_HASH := work/.kernel-src.hash
 # Phony orchestration targets
 # ==============================================================================
 .PHONY: help all image toolchain kernel fw-linux fw-qcom base overlay verify-lock \
-        rootfs relock mesa-x86 installer-root relock-installer \
+        rootfs relock mesa-x86 installer installer-root relock-installer \
         initramfs steamcl grub sdcard verify-card test bundle sign-bundle publish-bundle deploy clean clean-base clean-overlay distclean
 
 # An always-out-of-date prerequisite, for rules that must re-evaluate their own inputs every run
@@ -412,6 +412,7 @@ test: verify-lock ## Run the offline bootctl/post-install/pairingd/quirks/stage-
 	bash install/test-install.sh
 	bash install/test-ui.sh
 	bash install/test-mkroot.sh
+	bash install/test-mkimage.sh
 	bash images/test-graphics-provider.sh
 	bash images/test-video-decode.sh
 	bash images/test-proton-dxvk.sh
@@ -647,6 +648,14 @@ relock: $(if $(OVERLAY_PINS),$(OVERLAY_STAMP)) ## Re-resolve from PKGS and regen
 # images/customize-base.sh does for the shipped base.
 installer-root: $(if $(OVERLAY_PINS),$(OVERLAY_STAMP)) ## Bootstrap the installer root -> work/installer-base (host; docker+qemu)
 	install/mkroot.sh >/dev/null
+
+# The medium itself. Host-side mkroot.sh produces the tree; this compresses it and lays the two
+# partitions, and it runs IN THE CONTAINER because the tree is root-owned — a squashfs built by the
+# build user would put every file on the medium under uid 1000, and the installer runs as root
+# against a stranger's disk. $(KERNEL) and $(GRUB) are real prerequisites: the kernel, the dtbs and
+# the stage-2 GRUB all land on the medium's ESP, since there is no slot root for them to live in.
+installer: installer-root $(KERNEL) $(GRUB) | $(BUILD_STAMP) ## Build the flashable installer medium -> out/images/installer.img
+	$(DOCKER) $(BUILD_IMG) install/mkimage.sh
 
 # Mirrors `relock` above, including why it must NOT go through the locked path: relocking a tree
 # that was itself installed from the lock can only ever reproduce that lock. FORCE=1 because the

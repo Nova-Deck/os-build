@@ -232,5 +232,38 @@ grep -q 'fetchlock.sh" "\$STAGE/install.list" "\$LOCKFILE"' "$MKROOT" \
   && ok "mkroot.sh passes install/manifest.lock, not the shipped one" \
   || bad "mkroot.sh does not pass its own lock to fetchlock.sh"
 
+CASE="a read-only /etc, and its three writers"
+# The root is squashfs with NO overlay (the shipped image's overlay is what forces an initramfs,
+# and it exists to persist a user's config — neither applies to a tool that runs once from
+# removable media). That trade is only safe while the writers stay enumerated, so each is asserted
+# here and the payload is scanned for new ones below.
+grep -q ':.*>/target/etc/machine-id' "$MKROOT" \
+  && ok "an empty /etc/machine-id exists (systemd bind-mounts a transient one over it on ro root)" \
+  || bad "no /etc/machine-id is created — PID1 fails early on a read-only root without it"
+grep -q 'path=/run/NetworkManager/system-connections' "$MKROOT" \
+  && ok "NM keyfile profiles are redirected to tmpfs (nmcli would write /etc otherwise)" \
+  || bad "NM would write profiles into a read-only /etc — install/netcfg fails"
+grep -q 'rc-manager=unmanaged' "$MKROOT" \
+  && ok "NM is told not to rewrite /etc/resolv.conf" \
+  || bad "NM would try to replace the resolv.conf symlink and log a failure every connect"
+grep -q 'ln -sf /run/NetworkManager/resolv.conf /target/etc/resolv.conf' "$MKROOT" \
+  && ok "/etc/resolv.conf points into /run, where NM does maintain one" \
+  || bad "no resolv.conf symlink — name resolution would not work"
+
+# THE DRIFT GUARD. A component that starts writing to /etc fails on the device, at whatever step
+# happens to reach it, with an error about the file rather than about the root being read-only.
+# Comments are excluded: rauc-session.sh discusses /etc/rauc/system.conf at length without touching it.
+writers="$(grep -nE '(>|>>|install -|cp |mv |tee |mkdir -p|touch|ln -s)[^|#]*/etc/' \
+             "${FLAT[@]/#/$ROOT/install/}" 2>/dev/null || true)"
+[ -z "$writers" ] \
+  && ok "no shipped component writes under /etc" \
+  || bad "a shipped component writes under /etc, which is read-only here: $(printf '%s' "$writers" | head -3 | tr '\n' ' ')"
+
+# /var is the other half and is handled on the cmdline, not here — assert the two stay paired, since
+# a squashfs root with a writable /etc plan and no /var plan still cannot run journald or NM.
+grep -q 'systemd.volatile=state' "$ROOT/install/gen-grub-cfg.sh" \
+  && ok "/var is a tmpfs via systemd.volatile=state on the kernel line" \
+  || bad "nothing makes /var writable — journald and NM state have nowhere to go"
+
 printf '\ntest-mkroot.sh: %d passed, %d failed, %d skipped\n' "$PASS" "$FAIL" "$SKIP"
 [ "$FAIL" -eq 0 ]

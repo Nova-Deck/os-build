@@ -445,10 +445,44 @@ docker run --rm --platform linux/arm64 \
   ln -sf /usr/lib/systemd/system/novadeck-installer.service \
          /target/etc/systemd/system/multi-user.target.wants/novadeck-installer.service
 
-  # systemd-firstboot would block sysinit forever. No package owns /etc/machine-id, so the tree
-  # ships without one (ConditionFirstBoot=yes) and the unit prompts for locale and a root password
-  # on a console with no usable input. systemd.firstboot=off on the cmdline disables PID1`s builtin
-  # query, NOT this unit -- mask it. machine-id is still generated on first boot.
+  # ---- a READ-ONLY /etc, and the three things that would write to it ------------------------------
+  # The root is squashfs, so /etc cannot be written at runtime and there is NO overlay: the shipped
+  # image gets one, but that overlay is what forces an initramfs, and it exists so a user can
+  # persist config across updates -- neither of which an installer that runs once from removable
+  # media needs. The writers are few and enumerable, so each is pointed at /run instead. A writer
+  # nobody enumerated is the risk this trades for; install/test-mkroot.sh greps the shipped payload
+  # for new ones, and /var is a tmpfs at runtime via systemd.volatile=state on the cmdline.
+  #
+  # 1. machine-id. The file must EXIST for systemd to bind-mount a transient one over it from tmpfs
+  #    on a read-only root; absent entirely, PID1 fails early instead. Empty means "not yet set",
+  #    which is exactly the state we want on every boot of a tool that is not a persistent system.
+  : >/target/etc/machine-id
+  chmod 0444 /target/etc/machine-id
+
+  # 2. NetworkManager profiles. install/netcfg creates a connection with nmcli, and the keyfile
+  #    plugin writes it to /etc/NetworkManager/system-connections by default. Point it at tmpfs --
+  #    a Wi-Fi profile on an installer is per-run state, not configuration, and the PSK is better
+  #    off never touching the medium anyway.
+  install -d -m0755 /target/etc/NetworkManager/conf.d
+  printf "%s\n" \
+    "# novadeck installer: the root is read-only squashfs (install/mkroot.sh)." \
+    "[keyfile]" \
+    "path=/run/NetworkManager/system-connections" \
+    "" \
+    "[main]" \
+    "# Do not try to rewrite /etc/resolv.conf; it is a symlink into /run (below)." \
+    "rc-manager=unmanaged" \
+    >/target/etc/NetworkManager/conf.d/00-novadeck-installer.conf
+
+  # 3. resolv.conf. NM maintains /run/NetworkManager/resolv.conf whatever rc-manager says, so the
+  #    symlink is what makes name resolution work; rc-manager=unmanaged above is what stops NM
+  #    trying to replace the symlink with a regular file and logging a failure every connect.
+  ln -sf /run/NetworkManager/resolv.conf /target/etc/resolv.conf
+
+  # systemd-firstboot would block sysinit forever. The machine-id written above is EMPTY, which is
+  # still ConditionFirstBoot=yes, so the unit runs and prompts for locale and a root password on a
+  # console with no usable input. systemd.firstboot=off on the cmdline disables PID1`s builtin
+  # query, NOT this unit -- mask it. A transient machine-id is still established at boot.
   mkdir -p /target/etc/systemd/system
   ln -sf /dev/null /target/etc/systemd/system/systemd-firstboot.service
 

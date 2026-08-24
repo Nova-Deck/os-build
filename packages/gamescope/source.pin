@@ -32,4 +32,4 @@
 name: gamescope
 pkgbuild_local: PKGBUILD
 pkgrel_suffix: 1
-patches: 0002-sanitize-nightmode-atom.patch 0003-drmbackend-fake-output-mm.patch 0004-fps-limit-atom-persist.patch 0005-steamcontrolled-steam-focus-fallback.patch 0007-vendor-wayland-protocols-wrap.patch
+patches: 0002-sanitize-nightmode-atom.patch 0003-drmbackend-fake-output-mm.patch 0004-fps-limit-atom-persist.patch 0005-steamcontrolled-steam-focus-fallback.patch 0007-vendor-wayland-protocols-wrap.patch 0008-focus-title-beats-steam-baselayer.patch

@@ -1,0 +1,146 @@
+From 0000000000000000000000000000000000000006 Mon Sep 17 00:00:00 2001
+From: Philippe Simons <simons.philippe@gmail.com>
+Date: Mon, 24 Aug 2026 17:30:00 +0200
+Subject: [PATCH 8/8] fix: don't let Steam's own window outrank a
+ native-Wayland title
+
+An Android title run through Valve's Lepton compat tool renders correctly and is
+never shown: the guest's composer maps an `xdg_toplevel` and drives a healthy
+commit loop, `gamescopectl screenshot` shows Steam, and the guest's own
+`screencap` shows the title. The panel keeps Steam's Big Picture window for the
+whole session.
+
+The window is not missing an appid, and it is not missing from the focus
+candidates. Instrumented on HW (`0006-focus-candidate-instrumentation`), the
+global pass sees both windows and picks the wrong one:
+
+    cand: global pick from 2 candidate(s), controlled=1(strategy=SteamControlled[1]
+          ctrlwin=0x0 ctrlappids=3[413091,769,4545850])
+    cand:   focus 0x1c00015 "Steam Big Picture Mode" appID=769 ... -> PRESENTING
+    (the other candidate: xdg 0x1 appID=4545850, the title)
+
+`pick_primary_focus_and_override()` walks `ctxFocusControlAppIDs` --
+`GAMESCOPECTRL_BASELAYER_APPID`, published by Steam -- and takes the first
+published appid that any candidate window carries. 769 is Steam's own client and
+it is listed ahead of the title's 4545850, so Steam's window matches first and
+the title never gets the screen. This is not a race. The same capture shows the
+list arriving in the right order at launch, `[413091,4545850,769]`, and Steam
+then demoting the title to the back: `[413091,769,4545850]`, where it stays.
+
+Steam demotes it because gamescope never tells Steam the title has a window.
+`determine_and_apply_focus()` builds both `GAMESCOPE_FOCUSABLE_APPS` and
+`GAMESCOPE_FOCUSABLE_WINDOWS` from a loop that opens with
+
+    if ( focusable_window->type != steamcompmgr_win_type_t::XWAYLAND )
+        continue;
+
+so a native-Wayland window is structurally invisible to the client whose ordering
+gamescope then obeys. Steam waits for a focusable window that can never be
+reported, concludes the app has no window, and puts its own UI back on top. The
+ordering is therefore not Steam expressing a preference over the title -- it is
+Steam having never heard of it.
+
+So stop treating a Steam-client match as final. Hold it, keep reading the
+published list, and let a native-Wayland (XDG) window matching a later appid take
+it instead. Everything else is unchanged, deliberately:
+
+  * Only Steam's own window is ever deferred (`window_is_steam()`: 769 or
+    `isSteamLegacyBigPicture`). A game window matching an earlier appid still
+    wins outright, exactly as before.
+  * Only an XDG window can beat a deferred Steam window -- precisely the class
+    that is missing from the focusable-apps report, so the class whose position
+    in Steam's list carries no information. An XWayland window matching a later
+    appid restores the deferred Steam window instead, which is the pick upstream
+    would have made.
+  * With no XDG candidate the deferred window is taken one iteration later, with
+    the same `localGameFocused` upstream sets. An XWayland-only session is
+    bit-identical.
+  * Both local passes are bit-identical too, and structurally so: an
+    `xwayland_ctx_t` candidate list contains no XDG windows, and the XDG list
+    contains no Steam window. Only the global pass mixes the two, which is where
+    the defect lives.
+
+Known trade-off, accepted: while a native-Wayland title holds a published appid,
+Steam cannot take the base layer back by reordering its list. The QuickAccess and
+Steam overlays are unaffected -- those are `isOverlay` windows picked elsewhere
+in `determine_and_apply_focus()`, not base-layer focus -- but "return to the
+library while the title keeps running" will keep showing the title. The real fix
+is to report XDG windows in `GAMESCOPE_FOCUSABLE_APPS` so Steam can order them
+itself; that needs Steam-side behaviour we have not observed (the companion
+`GAMESCOPE_FOCUSABLE_WINDOWS` triplet wants an X window id an XDG window does not
+have), so it is not attempted here.
+
+Not sent upstream, and nothing upstream addresses it: checked `origin/master` at
+`eeaa4a52`, 41 commits past 3.16.25, which touches focus repeatedly (`focus_info`,
+keyboard-focus recovery, override painting) but never the control-appid order and
+never reports native-Wayland windows to Steam.
+
+NOT YET VALIDATED ON HARDWARE. The mechanism and both list orderings above are
+measured on a Pocket ACE; that the title presents once it wins focus is not. The
+same capture shows the guest's window `HELD, no done commit` at the moment it was
+picked locally, so a stuck commit queue is a separate live suspect and this patch
+is necessary rather than known-sufficient. Rebuild with
+`0006-focus-candidate-instrumentation` in `source.pin` to confirm the winner.
+---
+ src/steamcompmgr.cpp | 31 +++++++++++++++++++++++++++++++
+ 1 file changed, 31 insertions(+)
+
+diff --git a/src/steamcompmgr.cpp b/src/steamcompmgr.cpp
+--- a/src/steamcompmgr.cpp
++++ b/src/steamcompmgr.cpp
+@@ -3552,18 +3552,53 @@
+ 				}
+ 			}
+
++			// novadeck: Steam's own window does not get to outrank a native-Wayland title. Hold it
++			// and keep reading the list instead of taking it, because the order of that list cannot
++			// be trusted for a window Steam was never told about -- GAMESCOPE_FOCUSABLE_APPS is
++			// built from XWayland windows only, so Steam sees no window for the title's appid and
++			// demotes it below its own UI. Measured: [413091,4545850,769] at launch, then
++			// [413091,769,4545850] for the rest of the session.
++			steamcompmgr_win_t *pDeferredSteamFocus = nullptr;
++
+ 			for ( auto focusable_appid : ctxFocusControlAppIDs )
+ 			{
+ 				for ( steamcompmgr_win_t *focusable_window : vecPossibleFocusWindows )
+ 				{
+ 					if ( focusable_window->appID == focusable_appid )
+ 					{
++						// Hold the first one and move on to the next published appid; every other
++						// window matching THIS appid is a Steam window too.
++						if ( window_is_steam( focusable_window ) )
++						{
++							if ( !pDeferredSteamFocus )
++								pDeferredSteamFocus = focusable_window;
++							break;
++						}
++
++						// Only a native-Wayland window gets to beat what we are holding: it is the
++						// one class Steam cannot see and so cannot have ordered. For anything else
++						// upstream's answer was the Steam window it matched first -- give it back.
++						if ( pDeferredSteamFocus && focusable_window->type != steamcompmgr_win_type_t::XDG )
++						{
++							focus = pDeferredSteamFocus;
++							localGameFocused = true;
++							goto found;
++						}
++
+ 						focus = focusable_window;
+ 						localGameFocused = true;
+ 						goto found;
+ 					}
+ 				}
+ 			}
++
++			// Nothing beat it, so this is upstream's pick, one iteration later.
++			if ( pDeferredSteamFocus )
++			{
++				focus = pDeferredSteamFocus;
++				localGameFocused = true;
++				goto found;
++			}
+ 		}
+ 		else
+ 		{
+--
+2.54.0

@@ -15,6 +15,7 @@ root (the `gamescope/` checkout inside makepkg's `$srcdir`) by
 0005-steamcontrolled-steam-focus-fallback.patch
 0006-focus-candidate-instrumentation.patch   (present but NOT in source.pin — diagnostic, see below)
 0007-vendor-wayland-protocols-wrap.patch
+0008-focus-title-beats-steam-baselayer.patch
 ```
 
 `0001` — **GONE, and deliberately not replaced: it is UPSTREAM as of 3.16.28.** It rotated the
@@ -28,7 +29,7 @@ behaviour our session depends on is byte-for-byte the one we had. Still needs no
 gamescope reads the panel orientation from the DRM connector (our DTS declares `rotation=<90>`) and
 auto-engages compositor rotation when the primary plane can't rotate at scanout;
 `--force-composition-rotation` remains available for hardware that advertises a rotation it cannot
-actually present. The `0002`-`0006` numbering is kept as-is rather than renumbered, so old commit
+actually present. The `0002`-`0008` numbering is kept as-is rather than renumbered, so old commit
 messages and memories still resolve.
 
 `0002` — sanitize the night-mode color atom.
@@ -53,8 +54,8 @@ a game — so a live client's choice can't be overridden. Full derivation in the
 `0006` — **diagnostic, kept in the tree but deliberately ABSENT from `source.pin`'s `patches:` line,
 so a stock build does not carry it.** It logs why each window is or is not a focus candidate, which
 one wins, and the winner's commit-queue state. This is the instrument that localized `0005` and then
-confirmed it on HW, which is why it is kept rather than deleted — the next focus mystery should not
-have to re-derive it.
+confirmed it on HW, and that caught the baselayer-appid reorder `0008` fixes, which is why it is kept
+rather than deleted — the next focus mystery should not have to re-derive it.
 
 To use it: add it back to `source.pin`, rebuild, and `export GAMESCOPE_DEBUG_FOCUS=1` in
 `/etc/novadeck/session.conf` (the only way to catch a defect at boot, before SSH is up), or
@@ -85,6 +86,17 @@ to let us drop `0001` needs `0007`.
 **While it is in `source.pin`, `fetchlock.sh` reports the gamescope row as built from UNADOPTED
 sources.** That is expected on a dev card and is exactly why it must come back out, with a
 `make relock`, before any commit or release build.
+
+`0008` — stop Steam's own window from outranking a native-Wayland title. Under `SteamControlled`,
+`pick_primary_focus_and_override()` takes the first `GAMESCOPECTRL_BASELAYER_APPID` entry any
+candidate carries, and Steam publishes `769` (itself) ahead of a Lepton title's appid — so an Android
+guest that maps a healthy `xdg_toplevel` renders forever behind Steam's Big Picture window. Steam
+demotes the title because `GAMESCOPE_FOCUSABLE_APPS` is built from XWayland windows only, so it is
+never told the title has a window: the list order carries no information about native-Wayland
+windows. The patch defers a Steam-client match and lets an XDG window matching a later published
+appid take it; an XWayland match restores the deferred Steam window, so XWayland-only sessions and
+both local passes are bit-identical. Trade-off and the real fix (report XDG windows to Steam) in the
+patch header.
 
 (A patch that once held the `0003` slot swapped `wl_output`'s `phys_width/phys_height` on the rotated
 path as a coherence fix, but HW showed it does NOT move SteamUI's auto-scale — the swap is

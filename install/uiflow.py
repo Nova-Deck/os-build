@@ -554,7 +554,8 @@ class ConnectingScreen:
             "screen": "connecting",
             "title": "Connecting to '%s'" % self.ssid,
             "blocks": [("", "Joining the network, then asking it for an address%s" % dots),
-                       ("", "This usually takes a few seconds.")],
+                       ("", "Usually a few seconds. Some access points take up to a minute to "
+                            "hand out an address.")],
             "diamonds": [],
             "prompt": "",
             "note": "",

@@ -47,6 +47,11 @@ NMCLI=${NMCLI:-nmcli}
 CURL=${CURL:-curl}
 IP=${IP:-ip}
 CONNECT_TIMEOUT=${NOVADECK_NET_TIMEOUT:-20}
+# How long nmcli may take to associate AND get a lease. Left to nmcli's own default it gave up
+# before slow access points finished (HW 2026-08-25). Association is fast; DHCP is what drags, and
+# a join that times out costs the operator a full retry, so err long -- the UI animates throughout
+# and the child is polled, so waiting is not a frozen screen.
+JOIN_TIMEOUT=${NOVADECK_NET_JOIN_TIMEOUT:-90}
 
 emit() { printf '%s=%s\n' "$1" "$2"; }
 
@@ -256,7 +261,8 @@ join() {
   emit SSID "$SSID"
   # The one place the PSK is used, and it is passed as an argument to nmcli and nowhere else. Its
   # value is never logged, never emitted and never written.
-  if "$NMCLI" device wifi connect "$SSID" password "$PSK" >/dev/null 2>"$TMP_ERR"; then
+  if "$NMCLI" -w "$JOIN_TIMEOUT" device wifi connect "$SSID" password "$PSK" \
+       >/dev/null 2>"$TMP_ERR"; then
     diagnose 1
     return 0
   fi

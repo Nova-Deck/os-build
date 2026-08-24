@@ -1003,7 +1003,7 @@ conn="$(cd "$ROOT/install" && python3 -c '
 import uiflow, time
 s = uiflow.ConnectingScreen("MYNET")
 d = s.describe()
-print(d["title"]); print(d["blocks"][0][1]); print("interactive=%s" % s.interactive)
+print(d["title"]); print(d["blocks"][0][1]); print(d["blocks"][1][1]); print("interactive=%s" % s.interactive)
 a = s.describe()["blocks"][0][1]
 time.sleep(0.6)
 b = s.describe()["blocks"][0][1]
@@ -1026,6 +1026,16 @@ grep -q 'netjoin = NetJoin()' "$ROOT/install/ui" \
   && ok "and the join starts in the background" || bad "the loop does not start an async join"
 grep -q 'joined = netjoin.poll()' "$ROOT/install/ui" \
   && ok "the loop polls it and moves on when it finishes" || bad "nothing collects the result"
+# nmcli's own default gave up before slow access points finished (HW 2026-08-25). Association is
+# quick; DHCP is what drags, and a timed-out join costs the operator a full retry.
+grep -q 'JOIN_TIMEOUT=${NOVADECK_NET_JOIN_TIMEOUT:-90}' "$ROOT/install/netcfg" \
+  && ok "the join waits 90s, not nmcli's default" || bad "the join timeout is nmcli's default again"
+grep -q '"\$NMCLI" -w "\$JOIN_TIMEOUT" device wifi connect' "$ROOT/install/netcfg" \
+  && ok "and nmcli is actually told about it" || bad "JOIN_TIMEOUT is set but never passed to nmcli"
+# The screen must not promise seconds when it may take a minute.
+printf '%s' "$conn" | grep -qi 'up to a minute' \
+  && ok "the screen says how long it may really take" \
+  || bad "it still promises a few seconds"
 
 CASE="wifi.conf survives being written on Windows"
 # The medium's boot partition is typed 0700 SO THAT Windows and macOS will show it, which makes

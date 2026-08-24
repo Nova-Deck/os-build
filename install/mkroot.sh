@@ -231,8 +231,12 @@ if [ -z "${FORCE:-}" ] \
 fi
 
 # ---- stage everything the container needs ---------------------------------------------------------
-# One read-only staging directory, mounted at /stage. The repo itself is NOT mounted: the container
-# runs as root and a writable repo mount is how a build starts editing the tree it was built from.
+# One read-only staging directory. It MUST be mounted at /prebuilt and the name is not ours to
+# pick: images/pacman.conf is a shared committed declaration carrying `Include =
+# /prebuilt/mirrorlist`, so a staging dir mounted anywhere else makes pacman fail with "config file
+# /prebuilt/mirrorlist could not be read" — after the builder pull and the root wipe, far from the
+# cause. (Measured 2026-08-24, on the first real run.) The repo itself is NOT mounted: the container
+# runs as root, and a writable repo mount is how a build starts editing the tree it was built from.
 rm -rf "$STAGE"
 mkdir -p "$STAGE/flat" "$STAGE/units" "$STAGE/devices" "$STAGE/prebuilt" "$PACMAN_CACHE"
 for f in "${INSTALL_FILES[@]}"; do cp -p "$ROOT/install/$f" "$STAGE/flat/$f"; done
@@ -311,7 +315,7 @@ else
 fi
 
 docker run --rm --platform linux/arm64 \
-  -v "$STAGE":/stage:ro \
+  -v "$STAGE":/prebuilt:ro \
   -v "$PACMAN_CACHE":/var/cache/pacman/pkg \
   -v "$OVERLAY_REPO":/novarepo:ro \
   -v "$DEST":/target \
@@ -323,7 +327,7 @@ docker run --rm --platform linux/arm64 \
   # in this image is never read; --cachedir is the persistent host cache, since a root-relative one
   # would put the cache INSIDE the image being built. dbpath defaults to /target/var/lib/pacman,
   # which is where it belongs -- install/genlock.sh reads that database to write the lock.
-  PA=(pacman -r /target --config /stage/pacman.conf --cachedir /var/cache/pacman/pkg)
+  PA=(pacman -r /target --config /prebuilt/pacman.conf --cachedir /var/cache/pacman/pkg)
   mkdir -p /target/var/lib/pacman
 
   # A minimal /dev, because pacman runs install scriptlets CHROOTED into the target and the target
@@ -336,15 +340,15 @@ docker run --rm --platform linux/arm64 \
   mknod -m 0666 /target/dev/urandom c 1 9 2>/dev/null || true
   mknod -m 0600 /target/dev/console c 5 1 2>/dev/null || true
 
-  if [ -s /stage/install.list ]; then
+  if [ -s /prebuilt/install.list ]; then
     # No -Sy anywhere on this path: nothing syncs a repo database, so pacman CANNOT resolve
     # anything of its own accord -- it installs exactly these host-verified files, and its
     # dependency check over the batch is then a free proof that the lock is a closed set.
-    mapfile -t lockpkgs < /stage/install.list
+    mapfile -t lockpkgs < /prebuilt/install.list
     echo "laying down ${#lockpkgs[@]} locked packages into an empty root"
     "${PA[@]}" -U --noconfirm "${lockpkgs[@]}"
   else
-    mapfile -t want < /stage/declared.pkgs
+    mapfile -t want < /prebuilt/declared.pkgs
     "${PA[@]}" -Sy --noconfirm --disable-download-timeout "${want[@]}"
   fi
 
@@ -353,7 +357,7 @@ docker run --rm --platform linux/arm64 \
   # succeeds and the package is simply absent on the medium. -T reports unsatisfied names and
   # honours provides (unlike -Q), which catches exactly that. For this image the stakes are
   # concrete -- a missing mtools is a rule 3b that fails on a stranger foreign ESP.
-  mapfile -t declared < /stage/declared.pkgs
+  mapfile -t declared < /prebuilt/declared.pkgs
   unmet="$("${PA[@]}" -T "${declared[@]}" || true)"
   if [ -n "$unmet" ]; then
     echo "the bootstrap did not satisfy the declared package set; unsatisfied:" >&2
@@ -367,7 +371,7 @@ docker run --rm --platform linux/arm64 \
   # /usr/lib/os-release, an unset LANG and a compiled-in hostname -- i.e. an installer that
   # announces itself as someone else`s distro on the one console a person reads when it has failed.
   rm -f /target/etc/os-release
-  install -Dm0644 /stage/os-release /target/etc/os-release
+  install -Dm0644 /prebuilt/os-release /target/etc/os-release
   printf "LANG=en_US.UTF-8\n" >/target/etc/locale.conf
   printf "novadeck-installer\n" >/target/etc/hostname
   grep -q "^en_US.UTF-8 UTF-8" /target/etc/locale.gen || echo "en_US.UTF-8 UTF-8" >>/target/etc/locale.gen
@@ -388,19 +392,19 @@ docker run --rm --platform linux/arm64 \
     mkdir -p "/target$p_dest"
     case "${p_kind:-tar}" in
       tar) tar -C "/target$p_dest" --no-same-owner --strip-components="${p_strip:-0}" \
-               -xf "/stage/prebuilt/$p_name.tar" ;;
-      zip) bsdtar -C "/target$p_dest" --no-same-owner -xf "/stage/prebuilt/$p_name.zip" ;;
+               -xf "/prebuilt/prebuilt/$p_name.tar" ;;
+      zip) bsdtar -C "/target$p_dest" --no-same-owner -xf "/prebuilt/prebuilt/$p_name.zip" ;;
       *)   echo "prebuilt $p_name: unknown kind ${p_kind}" >&2; exit 1 ;;
     esac
-  done < /stage/prebuilt.manifest
-  install -Dm0644 /stage/prebuilt.manifest /target/usr/lib/novadeck/prebuilt.manifest
+  done < /prebuilt/prebuilt.manifest
+  install -Dm0644 /prebuilt/prebuilt.manifest /target/usr/lib/novadeck/prebuilt.manifest
 
   # ---- the installer itself -----------------------------------------------------------------------
   # ONE FLAT DIRECTORY. Every component resolves $SELFDIR / dirname(__file__) first, so this is the
   # whole layout requirement -- and it is what makes the spine`s search succeed on its first
   # candidate here rather than falling through to a path that happens to exist.
   install -d -m0755 /target/usr/lib/novadeck/install
-  for f in /stage/flat/*; do
+  for f in /prebuilt/flat/*; do
     case "$(basename "$f")" in
       *.txt|*.py) install -m0644 "$f" /target/usr/lib/novadeck/install/ ;;
       lib-*.sh)   install -m0644 "$f" /target/usr/lib/novadeck/install/ ;;
@@ -419,22 +423,22 @@ docker run --rm --platform linux/arm64 \
 
   # The device registry. Both consumers fall back without it, to a generic 1920x1080 output and a
   # board that calls itself "this device".
-  install -Dm0755 /stage/device-env /target/usr/lib/novadeck/device-env
+  install -Dm0755 /prebuilt/device-env /target/usr/lib/novadeck/device-env
   install -d -m0755 /target/usr/lib/novadeck/devices
-  install -m0644 /stage/devices/*.conf /target/usr/lib/novadeck/devices/
+  install -m0644 /prebuilt/devices/*.conf /target/usr/lib/novadeck/devices/
 
   # The RAUC keyring, at the path the spine and /etc/rauc/system.conf both name. 0444: it is a
   # public certificate and nothing on this image should ever rewrite it.
-  install -Dm0444 /stage/keyring.pem /target/etc/rauc/keyring.pem
+  install -Dm0444 /prebuilt/keyring.pem /target/etc/rauc/keyring.pem
 
   # The baked seed pin, when the build was given one. Absent, the spine refuses at the seed step --
   # which is the correct behaviour and is checked THERE, not duplicated here.
-  if [ -f /stage/steam-seed.sha256 ]; then
-    install -Dm0644 /stage/steam-seed.sha256 /target/usr/lib/novadeck/install/steam-seed.sha256
+  if [ -f /prebuilt/steam-seed.sha256 ]; then
+    install -Dm0644 /prebuilt/steam-seed.sha256 /target/usr/lib/novadeck/install/steam-seed.sha256
   fi
 
   # ---- units --------------------------------------------------------------------------------------
-  install -m0644 /stage/units/*.service /target/usr/lib/systemd/system/
+  install -m0644 /prebuilt/units/*.service /target/usr/lib/systemd/system/
   mkdir -p /target/etc/systemd/system/multi-user.target.wants
   # ONLY the session unit is enabled. The console unit is started by OnFailure= and enabling it
   # would run the fallback on every boot, including the ones that worked.
@@ -490,7 +494,7 @@ docker run --rm --platform linux/arm64 \
   # diagnostic. `x-systemd.device-timeout` so a medium without the partition does not spend 90s at it.
   install -d -m0755 /target/esp
   printf "LABEL=%s /esp vfat rw,nofail,noatime,umask=0077,x-systemd.device-timeout=5s 0 2\n" \
-      "$(cat /stage/esp-label)" >>/target/etc/fstab
+      "$(cat /prebuilt/esp-label)" >>/target/etc/fstab
 
   # ---- offline application ------------------------------------------------------------------------
   # tmpfiles and the journal catalog, both run with --root= rather than chrooted. pacman`s own
@@ -509,7 +513,7 @@ docker run --rm --platform linux/arm64 \
   # Recorded LAST, so the marker`s presence proves the whole bootstrap ran. A run that died anywhere
   # above leaves none, so the next build re-bootstraps instead of shipping a half-populated root --
   # and install/genlock.sh refuses to lock a tree without it.
-  install -Dm0644 /stage/pkgs /target/usr/lib/novadeck/pkgs
+  install -Dm0644 /prebuilt/pkgs /target/usr/lib/novadeck/pkgs
 ' >&2
 # ^ the container`s stdout (pacman progress) goes to stderr: this script`s stdout must carry ONLY
 #   the rootfs path, which the Makefile and install/mkimage.sh capture.

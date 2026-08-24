@@ -509,6 +509,7 @@ class NetJoin:
             [NETCFG, "join"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=0)
         os.set_blocking(self.proc.stdout.fileno(), False)
         self.chunks = []
+        self.started = time.monotonic()
 
     def _drain(self):
         try:
@@ -529,7 +530,8 @@ class NetJoin:
         if not facts.get("STATE"):
             last = (out.strip().splitlines() or ["netcfg produced no diagnosis"])[-1]
             facts = {"STATE": "netcfg-failed", "DETAIL": last}
-        log("join finished: %s" % facts.get("STATE"))
+        log("join finished after %.1fs: %s  (%s)" % (
+            time.monotonic() - self.started, facts.get("STATE"), facts.get("DETAIL", "")))
         return facts
 
 

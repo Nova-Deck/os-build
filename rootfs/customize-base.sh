@@ -227,8 +227,29 @@ BOOTSTRAP_PKGS=(base)
 # `env: 'exec': No such file or directory`. Measured on a Pocket ACE 2026-08-22 (issue #58); it is
 # 72 KB from the pinned snapshot's `core`. Note this is the real GNU which, not a shell builtin:
 # `command -v` would do the same job, but the line is Valve's and is not ours to change.
+# inotify-tools: the same class of bug as `which`, and the one that was actually costing us the
+# Android titles. `liblepton/utils.sh:57` (wait_for_file) backgrounds `inotifywait` with BOTH streams
+# sent to /dev/null and then `wait`s on it. With no binary on PATH the subshell dies of
+# command-not-found instantly and silently, `wait` returns at once, and so EVERY wait_for_file in
+# Lepton returns IMMEDIATELY and UNCONDITIONALLY -- it degrades from "block until this file appears"
+# to "do nothing", with no error anywhere. Two things Lepton does with it, both load-bearing:
+#   start_container's "Waiting for boot..." is wait_for_container_file /data/lepton-onboot, so
+#   `Boot complete!` is printed a few ms after the container starts rather than when the guest has
+#   booted. install_app then runs against an adbd that is not listening yet -- which is `blocker 1`,
+#   the adb race we papered over with a connect retry wrapper instead of fixing here.
+#   wait_for_container waits on wait_for_file "$(onexit_path)" when is_app, i.e. on the STEAM path.
+#   It returns instantly, Lepton concludes the title exited, and teardown SIGKILLs the container
+#   ~2.2s after the app process starts -- measured twice, 2.30s and 2.22s, whatever the app is doing.
+#   (The exit MARKER then appears too: `pkill -P` kills the `podman wait` child but not its subshell,
+#   which carries on to `touch` the file. That is why compatdata/.../lepton-on-app-exit is created
+#   239ms BEFORE the game's `Start proc` line -- it is Lepton writing its own exit signal.)
+# The dev path is untouched because `is_app` is false for `lepton start dev`, so wait_for_container
+# takes its else branch and waits on `podman wait`, which works. That asymmetry is the whole reason
+# the same APK runs to its login screen under `lepton start dev` and dies under Steam, and it sent
+# this investigation through Unity, Vulkan, zink, gralloc and the app-data mounts first. Measured
+# 2026-08-24 on a Pocket S2 by instrumenting wait_for_container on the card (issue #58).
 # Closing this needs an Android title actually rendering on hardware — the issue is hw-gate.
-PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-tools mesa gamescope seatd sddm mangohud fex-emu bluez bluez-utils networkmanager alsa-ucm-conf pipewire wireplumber pipewire-pulse pipewire-alsa unzip openal gtk2 ffmpeg e2fsprogs xorg-xwayland lsof noto-fonts noto-fonts-cjk noto-fonts-emoji python python-gobject scx-scheds rauc btrfs-progs rsync earlyoom zram-generator podman crun passt fuse-overlayfs which)
+PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-tools mesa gamescope seatd sddm mangohud fex-emu bluez bluez-utils networkmanager alsa-ucm-conf pipewire wireplumber pipewire-pulse pipewire-alsa unzip openal gtk2 ffmpeg e2fsprogs xorg-xwayland lsof noto-fonts noto-fonts-cjk noto-fonts-emoji python python-gobject scx-scheds rauc btrfs-progs rsync earlyoom zram-generator podman crun passt fuse-overlayfs which inotify-tools)
 
 # Dev-only packages — installed ONLY under NOVADECK_DEV=1, NEVER in a release base.
 # On-device bring-up tools: evtest reads raw /dev/input events; usbutils provides lsusb.

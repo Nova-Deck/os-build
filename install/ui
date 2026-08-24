@@ -297,6 +297,28 @@ class IdleScreen:
         pass
 
     def describe(self):
+        # THE ADVICE MUST NOT INVENT A CAUSE. This used to end with "a device already running from
+        # its internal disk is refused on purpose", flatly, whatever the actual reason was -- so on
+        # a Pocket FIT refused for carrying ROCKNIX (rule 3b) it explained a cause that had nothing
+        # to do with that disk, in the confident voice of the real one. HW 2026-08-24. A screen that
+        # explains the WRONG reason is worse than one that explains none.
+        #
+        # So: the reason comes from select-target.sh verbatim, and the advice is chosen from what
+        # that reason actually says. Anything unrecognised gets the honest fallback rather than a
+        # guess -- the same facts-from-the-tool / words-from-the-UI split §4b uses.
+        low = self.reason.lower()
+        if "not ours" in low or "remove the other os" in low:
+            advice = ("Another operating system is installed on this device's internal disk. "
+                      "NovaDeck will not install alongside it, because the firmware would then "
+                      "have two systems to choose between and no way to be told which. Remove "
+                      "that installation first, then run this installer again.")
+        elif "running system" in low:
+            advice = ("This installer is running from the internal disk itself, so there is "
+                      "nothing for it to install onto. Boot it from an SD card instead.")
+        else:
+            advice = ("If you expected this device to be installable, this is a fault worth "
+                      "reporting: power off, take the medium out, and read novadeck-install.log "
+                      "on it for the full reason.")
         blocks = [
             ("No disk to install onto",
              "This installer found nothing on this device it is willing to install to, so it has "
@@ -304,17 +326,14 @@ class IdleScreen:
         ]
         if self.reason:
             blocks.append(("Why", self.reason))
-        blocks.append(
-            ("If this is wrong",
-             "A device already running from its internal disk is refused on purpose. Otherwise "
-             "this is a fault: pull the medium and read novadeck-install.log on it."))
+        blocks.append(("What to do", advice))
         return {
             "screen": "idle",
             "title": "NovaDeck installer",
             "blocks": blocks,
             "diamonds": [],
             "prompt": "",
-            "note": "Waiting, in case the installer is being driven over SSH.",
+            "note": "",
             "abort": "",
         }
 

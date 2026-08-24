@@ -137,9 +137,22 @@ def gather_preflight():
     """
     rc, out = run_tool([SELECT_TARGET])
     if rc != 0:
-        last = (out.strip().splitlines() or ["select-target.sh failed with no output"])[-1]
-        log("no install target (%s); serving consent only" % last)
-        return None, last
+        # KEEP THE REASONS, NOT THE SUMMARY. select-target.sh prints one INDENTED line per disk
+        # explaining why that disk was rejected, then ends with "no disk qualifies -- see the
+        # reasons above". Taking splitlines()[-1] kept only the summary, so the panel told the
+        # operator to look above it -- on a screen with no above. HW 2026-08-24, Pocket FIT: rule 3b
+        # correctly refused a disk carrying ROCKNIX and said so in as many words ("partition 12
+        # (ROCKNIX) is a bootable ESP that is not ours -- remove the other OS first"), and that
+        # sentence was the one thrown away.
+        lines = [ln.strip() for ln in out.strip().splitlines() if ln.strip()]
+        detail = [ln for ln in lines if ln.startswith(("/dev/", "  /dev/"))] or \
+                 [ln for ln in lines if ln.startswith("/dev/")]
+        # The indented per-disk lines are the answer; fall back to everything, then to the summary,
+        # so a message shape we did not anticipate still reaches the screen instead of vanishing.
+        reason = "\n".join(detail) if detail else ("\n".join(lines[-3:]) if lines
+                                                   else "select-target.sh failed with no output")
+        log("no install target (%s); serving consent only" % reason.replace("\n", " | "))
+        return None, reason
     target = kv(out)
     disk = target.get("TARGET", "")
     if not disk:

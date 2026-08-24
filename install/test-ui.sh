@@ -1138,10 +1138,54 @@ printf '%s' "$noreason" | grep -qiE 'no disk to install onto|nothing .* install'
 printf '%s' "$noreason" | grep -qi 'nothing has been written' \
   && ok "it says nothing has been written (the operator's first question)" \
   || bad "it does not reassure that the disk is untouched"
-# The SSH-driven consent-renderer case is legitimate and must still be explained, not dropped.
+# THE ADVICE MUST NOT INVENT A CAUSE. It used to end with "a device already running from its
+# internal disk is refused on purpose" whatever the real reason was, so on a Pocket FIT refused for
+# carrying ROCKNIX it explained a cause that had nothing to do with that disk, in the confident
+# voice of the real one (HW 2026-08-24).
+foreign="$(cd "$ROOT/install" && python3 -c '
+import importlib.util, os, sys
+from importlib.machinery import SourceFileLoader
+sys.path.insert(0, os.path.abspath("."))
+l = SourceFileLoader("nvui", "ui"); s = importlib.util.spec_from_loader("nvui", l)
+ui = importlib.util.module_from_spec(s); l.exec_module(ui)
+d = ui.IdleScreen("/dev/sda: partition 12 (ROCKNIX) is a bootable ESP that is not ours -- remove the other OS first").describe()
+print(d["blocks"][-1][1])' 2>&1)"
+printf '%s' "$foreign" | grep -qi 'another operating system' \
+  && ok "a foreign install is named as such" \
+  || bad "rule 3b does not tell the operator there is another OS: $foreign"
+printf '%s' "$foreign" | grep -qi 'remove that installation first' \
+  && ok "and says it must be removed before NovaDeck can install" \
+  || bad "it does not say what to do about it"
+printf '%s' "$foreign" | grep -qi 'running from its internal disk is refused' \
+  && bad "it still asserts the running-disk cause on a foreign-OS refusal" \
+  || ok "it does not assert a cause that is not this one"
+# An unrecognised reason must fall back honestly rather than guess.
+other="$(cd "$ROOT/install" && python3 -c '
+import importlib.util, os, sys
+from importlib.machinery import SourceFileLoader
+sys.path.insert(0, os.path.abspath("."))
+l = SourceFileLoader("nvui", "ui"); s = importlib.util.spec_from_loader("nvui", l)
+ui = importlib.util.module_from_spec(s); l.exec_module(ui)
+print(ui.IdleScreen("something nobody anticipated").describe()["blocks"][-1][1])' 2>&1)"
+printf '%s' "$other" | grep -qi 'worth reporting' \
+  && ok "an unrecognised reason falls back to 'report it', not to a guess" \
+  || bad "an unknown refusal still gets a confident explanation: $other"
+# And the reason itself must survive select-target's summary line.
+sel="$(cd "$ROOT/install" && python3 -c '
+import uiflow, unittest.mock as m
+out = "scanning\n  /dev/sda: partition 12 (ROCKNIX) is a bootable ESP that is not ours -- remove the other OS first\nno disk qualifies -- see the reasons above"
+with m.patch.object(uiflow, "run_tool", lambda *a, **k: (1, out)):
+    print(uiflow.gather_preflight()[1])' 2>&1 | tail -1)"
+printf '%s' "$sel" | grep -qi 'ROCKNIX' \
+  && ok "the per-disk reason survives, not just the summary" \
+  || bad "gather_preflight kept the summary and dropped the reason: $sel"
+printf '%s' "$sel" | grep -qi 'see the reasons above' \
+  && bad "the screen would tell the operator to look above it, on a panel with no above" \
+  || ok "the useless summary line is not what reaches the screen"
+# No SSH note: a release medium enables no sshd, so it was false there as well as unhelpful.
 printf '%s' "$noreason" | grep -qi 'ssh' \
-  && ok "it still accounts for the consent-renderer case" \
-  || bad "the legitimate 'driven over SSH' case is no longer explained"
+  && bad "the panel still mentions SSH, which a release medium does not have" \
+  || ok "no developer context on the panel"
 # With no reason available the screen must still be useful rather than blank.
 blank="$(cd "$ROOT/install" && python3 -c '
 import importlib.util, os, sys

@@ -210,7 +210,11 @@ for dtb in "$DTBDIR"/*.dtb; do
   dtb_n=$((dtb_n + 1))
 done
 [ "$dtb_n" -gt 0 ] || die "no dtbs copied from ${DTBDIR#"$ROOT"/} — every menuentry would fail"
-log "ESP: grub + grubenv + Image + $dtb_n dtbs"
+# NOT "grub + grubenv + ...", which is what this line said until 2026-08-25 — twenty lines below the
+# block explaining why this medium deliberately writes NO grubenv, and contradicting it. A build log
+# is read by someone diagnosing a medium that did not boot, and a file named there that is not on
+# the partition sends them looking for a fault in the wrong half.
+log "ESP: grub + wifi.conf.example + Image + $dtb_n dtbs (no grubenv: this medium remembers nothing)"
 
 # --- 4. write the filesystems into their partitions ---------------------------------------------------
 # Every populated filesystem must fit the slot the table gave it. A silently truncated dd produces a

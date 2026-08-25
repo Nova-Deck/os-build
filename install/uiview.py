@@ -36,15 +36,87 @@ class PygameView:
         pygame.display.set_caption("NovaDeck installer")
         self.surface = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
         self.w, self.h = self.surface.get_size()
-        base = max(14, int(self.h / 34))
+        # THE PANEL IS HELD AT ARM'S LENGTH, NOT SAT IN FRONT OF. h/34 came from reading these
+        # screens on a monitor; on the device they were consistently a little small (reported
+        # 2026-08-25), which on the one screen that matters -- a failure naming the file to edit and
+        # the computer to edit it on -- is the difference between advice read and advice squinted
+        # at. h/28 is about 20% larger. Everything else scales off this, so the title and headings
+        # keep their relationship to the body and only the one number moves.
+        self._base = max(16, int(self.h / 28))
+        self._fonts(self._base)
+        # Set while MEASURING rather than drawing: every blit in this file is suppressed, so the
+        # same code that lays a screen out can be asked how tall it comes to before anything is on
+        # the panel. See draw().
+        self._dry = False
+
+    def _fonts(self, base):
+        pygame = self.pygame
         self.f_title = pygame.font.Font(None, int(base * 1.9))
         self.f_head = pygame.font.Font(None, int(base * 1.25))
         self.f_body = pygame.font.Font(None, base)
 
     def draw(self, desc):
+        """
+        THE BUTTON ROW IS RESERVED, and the content is shrunk until it fits above it.
+
+        Everything except the buttons flows down the screen; the buttons are pinned to the bottom.
+        So a screen whose content grew -- a long board name, a consent screen with three paragraphs
+        and a row of diamonds -- ran straight through them: text on top of the one row that says
+        which button does what, on the one screen where that matters most. Reported on an AYANEO
+        Pocket ACE (consent, 2026-08-25); the pre-flight screen had hit the same wall in August and
+        was fixed by compacting ITS content, which fixed one screen and left the mechanism.
+        NOTHING IS ELIDED to achieve it, and on a consent screen nothing may be: the fix is a
+        smaller type scale, chosen by measuring, not less text. The floor is 60% of the base size --
+        past that a screen is unreadable anyway, and the honest failure is small text rather than
+        hidden text.
+        """
         pg = self.pygame
-        self.surface.fill(self.BG)
         m = int(self.w * 0.06)
+        # The top of the button row, less a gap. _buttons() centres itself on this line.
+        limit = self.h - m - int(self.h * 0.06) - int(self.h * 0.02)
+        floor = max(12, int(self._base * 0.6))
+        # THE LARGEST SIZE THAT FITS, not the first one found going down. This stepped down by 8%
+        # a time and stopped at the first size under the limit, so it undershot by up to a whole
+        # step -- the type came out smaller than it needed to be AND left a visible gap above the
+        # button row. Reported on an AYANEO Pocket ACE (1620x1080, consent, 2026-08-25).
+        # `_flow` is monotone in `base` (every glyph and every wrap gets smaller together), so the
+        # largest fitting size is a bisection rather than a walk, at about the same number of dry
+        # passes. If even `floor` overflows, `floor` is what we use: the honest failure is small
+        # text, never hidden text.
+        self._dry = True
+        self._fonts(self._base)
+        if self._flow(desc, m) <= limit:
+            base = self._base
+        else:
+            lo, hi = floor, self._base - 1
+            while lo < hi:
+                mid = (lo + hi + 1) // 2
+                self._fonts(mid)
+                if self._flow(desc, m) <= limit:
+                    lo = mid
+                else:
+                    hi = mid - 1
+            base = lo
+        self._dry = False
+        # What the search settled on, so a test can assert it is MAXIMAL (base+1 overflows) rather
+        # than merely small enough. Nothing draws from this.
+        self._chosen = base
+        # MUST be re-set: the last dry pass measured whatever size the bisection probed last, which
+        # is not necessarily the one it settled on. The old walk broke immediately after measuring
+        # the size it kept, so the fonts happened to be right; a search has no such luck.
+        self._fonts(base)
+
+        self.surface.fill(self.BG)
+        self._flow(desc, m)
+        if desc.get("buttons"):
+            self._buttons(desc["buttons"], m, self.h - m - int(self.h * 0.06))
+        if desc.get("abort"):
+            self._text(desc["abort"], self.f_body, self.DIM, m, self.h - m)
+        pg.display.flip()
+        self._fonts(self._base)          # the next screen starts from the full size again
+
+    def _flow(self, desc, m):
+        """Everything that flows down the screen. Returns the y it ended at."""
         y = m
         y = self._text(desc.get("title", ""), self.f_title, self.FG, m, y) + int(self.h * 0.02)
         for head, body in desc.get("blocks", []):
@@ -64,11 +136,7 @@ class PygameView:
             y = self._text(desc.get("note", ""), self.f_body, self.DIM, m, y + int(self.h * 0.01))
         if desc.get("note") and not diamonds:
             y = self._text(desc["note"], self.f_body, self.DIM, m, y + int(self.h * 0.02))
-        if desc.get("buttons"):
-            self._buttons(desc["buttons"], m, self.h - m - int(self.h * 0.06))
-        if desc.get("abort"):
-            self._text(desc["abort"], self.f_body, self.DIM, m, self.h - m)
-        pg.display.flip()
+        return y
 
     def _phases(self, rows, x, y):
         """One line per phase the spine has reached, with a bar on the one that is running."""
@@ -81,10 +149,11 @@ class PygameView:
             y = self._text(r["label"], self.f_body, colour, x, y)
             if r["state"] == "active":
                 h = max(4, int(self.h / 160))
-                pg.draw.rect(self.surface, self.DOT, (x, y + h, width, h))
-                if r["percent"] is not None:
-                    pg.draw.rect(self.surface, self.DOT_ON,
-                                 (x, y + h, int(width * r["percent"] / 100), h))
+                if not self._dry:
+                    pg.draw.rect(self.surface, self.DOT, (x, y + h, width, h))
+                    if r["percent"] is not None:
+                        pg.draw.rect(self.surface, self.DOT_ON,
+                                     (x, y + h, int(width * r["percent"] / 100), h))
                 y += h * 3
             y += int(self.h * 0.006)
         return y
@@ -100,11 +169,23 @@ class PygameView:
         pg = self.pygame
         r = max(4, int(self.h / 150))
         span = r * 4
+        # The gap between a diamond and the word it labels. It was r -- the east dot`s edge sits at
+        # cx + span + r and the label started at cx + span + r*2 -- which is about 9px on a
+        # 1440-high panel, so "Continue" read as part of the glyph rather than a caption for it.
+        # Reported from the panel twice (2026-08-24), on the network screen and again on the
+        # connected one. Derived from r so it tracks the dot size on any output.
+        gap = r * 6
+        # ONE BASELINE FOR EVERY CONTROL IN THE ROW. A diamond's label is centred on the diamond,
+        # at y + span; SELECT was blitted at y, the row's TOP, so the two captions sat a whole span
+        # apart on the same row and "SELECT Cancel" rode high above "Join" next to it. Reported from
+        # the panel, 2026-08-25. The centre line is a property of the ROW, not of whichever control
+        # happens to be drawn, so it is computed once here and both paths are given it.
+        cy = y + span
         for b in buttons:
             if b["pos"] == "SELECT":
-                x = self._inline(x, y, "SELECT", b["label"])
+                x = self._inline(x, cy, "SELECT", b["label"])
                 continue
-            cx, cy = x + span, y + span
+            cx = x + span
             for pos, (dx, dy) in (
                 ("N", (0, -span)), ("E", (span, 0)), ("S", (0, span)), ("W", (-span, 0))
             ):
@@ -112,19 +193,24 @@ class PygameView:
                 pg.draw.circle(self.surface, self.DOT_ON if filled else self.DOT,
                                (cx + dx, cy + dy), r, 0 if filled else 2)
             label = self.f_body.render(b["label"], True, self.FG)
-            self.surface.blit(label, (cx + span + r * 2, cy - label.get_height() // 2))
-            x = cx + span + r * 3 + label.get_width() + int(self.w * 0.05)
+            self.surface.blit(label, (cx + span + gap, cy - label.get_height() // 2))
+            # The advance clears the dot, the gap and the word, so the next control starts free of
+            # all three -- it used to add r*3, which double-counted nothing and left the spacing
+            # between controls dependent on a constant that no longer describes the layout.
+            x = cx + span + gap + label.get_width() + int(self.w * 0.05)
 
-    def _inline(self, x, y, key, label):
+    def _inline(self, x, cy, key, label):
+        """A control with no glyph to draw, centred on the row's centre line like the diamonds."""
         surf = self.f_body.render("%s  %s" % (key, label), True, self.FG)
-        self.surface.blit(surf, (x, y))
+        self.surface.blit(surf, (x, cy - surf.get_height() // 2))
         return x + surf.get_width() + int(self.w * 0.05)
 
     def _text(self, s, font, colour, x, y):
         if not s:
             return y
         surf = font.render(s, True, colour)
-        self.surface.blit(surf, (x, y))
+        if not self._dry:
+            self.surface.blit(surf, (x, y))
         return y + surf.get_height()
 
     def _wrap(self, s, font, colour, x, y, width):
@@ -152,9 +238,11 @@ class PygameView:
             ):
                 filled = pos == d["pos"]
                 colour = self.DOT_ON if filled else self.DOT
-                pg.draw.circle(self.surface, colour, (cx + dx, cy + dy), r, 0 if filled else 2)
+                if not self._dry:
+                    pg.draw.circle(self.surface, colour, (cx + dx, cy + dy), r, 0 if filled else 2)
             label = self.f_body.render(d["name"], True, self.FG if not d["done"] else self.DIM)
-            self.surface.blit(label, (cx - label.get_width() // 2, cy + span + r * 2))
+            if not self._dry:
+                self.surface.blit(label, (cx - label.get_width() // 2, cy + span + r * 2))
         return y + span * 2 + r * 4 + self.f_body.get_height()
 
     def close(self):

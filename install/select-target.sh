@@ -79,19 +79,34 @@ fi
 . "$LIBGPT"
 
 # --- which disk is the running system on? ---------------------------------------------------------
-# Never a candidate. On the installer this is the SD card, and rule 2 exists because writing the
+# Never a candidate. On the installer this is the SD card, and rule 1 exists because writing the
 # medium you booted from is the one mistake that takes the recovery path with it.
+#
+# IT FAILS CLOSED, and it did not until 2026-08-25. This used to print nothing when it could not
+# resolve a parent, and an empty answer excluded nothing -- so a resolution failure silently removed
+# the rule rather than stopping the run. That is the wrong direction for this particular rule,
+# because the check that READS like the boot medium's protection is not: the removable test below
+# never fires for an SD card (measured on all five captures 2026-08-21 -- the host controller
+# reports removable=0), so this is the one that keeps the installer off the card it booted from.
+#
+# What saved it in practice was an accident rather than a design: the victim rule wants a partition
+# literally named `userdata` of at least 33 GiB, and no boot medium of ours carries one. Depending on
+# that is depending on a second rule's side effect, and the answer to "which disk am I running on?"
+# being unknown is a fine reason to refuse an install outright.
+#
+# Prints the disk on success. Returns 1 -- with NOTHING on stdout -- when it cannot tell.
 running_disk() {
   local src parent
   src="$(findmnt -no SOURCE / 2>/dev/null || true)"
-  [ -n "$src" ] || return 0
+  [ -n "$src" ] || return 1
   # A loop/squashfs root has no PKNAME; fall back to whatever /run/novadeck/boot recorded.
   parent="$(lsblk -no PKNAME "$src" 2>/dev/null | head -1 || true)"
   if [ -z "$parent" ] && [ -r /run/novadeck/boot ]; then
     src="$(sed -n 's/.*root=\([^ ]*\).*/\1/p' /run/novadeck/boot | head -1)"
     [ -n "$src" ] && parent="$(lsblk -no PKNAME "$(blkid -o device -t "$src" 2>/dev/null || echo "$src")" 2>/dev/null | head -1 || true)"
   fi
-  [ -n "$parent" ] && printf '/dev/%s\n' "$parent"
+  [ -n "$parent" ] || return 1
+  printf '/dev/%s\n' "$parent"
 }
 
 # --- the GPT, read once per disk ------------------------------------------------------------------
@@ -125,8 +140,9 @@ examine() {
   local disk="$1" base ss rows ud_idx="" ud_start ud_end ud_type next_start ceil mode=fresh
   base="${disk#/dev/}"
 
-  # NOVADECK_SELECT_FIXTURE lets the suite drive a GPT in an image file. It relaxes the three sysfs
-  # checks and NOTHING else -- every rule that decides what gets carved still runs. The scan path
+  # NOVADECK_SELECT_FIXTURE lets the suite drive a GPT in an image file. It relaxes these three sysfs
+  # checks, plus the running-disk resolution at the bottom of the file (the container's root is an
+  # overlay with no block parent), and NOTHING else -- every rule that decides what gets carved still runs. The scan path
   # globs /dev/*, so this cannot widen a real selection; and since this script writes nothing, the
   # seam cannot turn into a write path. Without it the rules below are untestable off a device,
   # which is the trade genpart.sh's table seam already makes for the same reason.
@@ -262,7 +278,25 @@ examine() {
 }
 
 # --- drive ----------------------------------------------------------------------------------------
-RUNNING="$(running_disk || true)"
+# NOT `|| true`. An unresolvable running disk is a refusal, not a missing value: see running_disk's
+# header for why this rule in particular cannot be allowed to evaporate quietly. The message says
+# what could not be answered rather than naming a disk, because there is no disk to name.
+#
+# EXCEPT UNDER THE FIXTURE FLAG, which is the fourth thing it relaxes and for the same reason as the
+# other three: install/test-select-target.sh runs in the build container, where `/` is an overlay
+# with no block parent at all, so the question this rule asks has no answer there and every case
+# would refuse. The flag cannot widen a real selection -- nothing on the medium sets it, the scan
+# still globs /dev/*, and this script writes nothing -- and the refusal itself is exercised with the
+# flag UNSET, which is the only way to test the path that matters.
+RUNNING=""
+if ! RUNNING="$(running_disk)" && [ -z "${NOVADECK_SELECT_FIXTURE:-}" ]; then
+  die "cannot determine which disk this system is running from, so no disk can be ruled out.
+  Every other rule here decides whether a disk is a SUITABLE target; this one is what keeps the
+  installer off the medium it booted from, and without it a carve could take the recovery path with
+  it. Nothing was examined and nothing was written.
+    findmnt -no SOURCE /     ->  $(findmnt -no SOURCE / 2>/dev/null || echo '<nothing>')
+    lsblk -no PKNAME <that>  ->  <nothing>"
+fi
 
 if [ $# -ge 1 ]; then
   [ "$1" != "$RUNNING" ] || die "$1 is the disk the running system is on"

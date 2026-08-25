@@ -22,9 +22,21 @@
 #              expands it to fill the card on first boot, so nothing may follow it.
 #
 # efi-a/efi-b are typed 0700 (Microsoft basic data), NOT ef00 — exactly as SteamOS types
-# them. Only p1 is an EFI System partition. The ROCKNIX ABL finds the ESP by type GUID, so
-# a second ef00 on the disk would give it two candidates to choose between. The stage-2
-# grubaa64.efi is reached by steamcl, not by UEFI firmware scan, so it does not need ef00.
+# them. Only p1 is an EFI System partition, and keeping exactly one avoids handing a
+# firmware scan two candidates. The stage-2 grubaa64.efi is reached by steamcl, not by a
+# UEFI firmware scan, so it does not need ef00.
+#
+# CORRECTION 2026-08-24: this block used to say "the ROCKNIX ABL finds the ESP by type GUID".
+# That is WRONG, and it is load-bearing enough to correct rather than leave — it is the only
+# reason retyping a boot partition ever looked dangerous. Measured against a working ROCKNIX
+# card: its boot medium is not even GPT. `lsblk -o PTTYPE,PARTTYPE,PARTFLAGS` reports `dos`,
+# partition type `0xc` (W95 FAT32 LBA) with the 0x80 bootable flag, carrying
+# /EFI/BOOT/bootaa64.efi — an MBR table, a plain FAT partition, no EFI System Partition type
+# GUID anywhere on the disk — and ABL boots it. ABL finds the loader by CONTENT, which is what
+# [[abl-internal-efi-path-works]] already said. p1 stays ef00 here because this image has no
+# user-facing files on its ESP and there is nothing to gain by changing it; the INSTALLER
+# medium does have them, and types its boot partition 0700 so a person can see it on Windows
+# or macOS to write wifi.conf (install/medium-table.txt).
 #
 # The ESP carries GPT bit 63 ("no-auto") for the same reason home does: that GUID would make
 # systemd's gpt-auto generator auto-mount it at /efi, and /efi is the name the initramfs

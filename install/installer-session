@@ -47,8 +47,35 @@ SEATD_SOCKET=${NOVADECK_SEATD_SOCK:-/run/seatd.sock}
 SEATD_PGREP=${NOVADECK_SEATD_PGREP:-pgrep}
 UI=${NOVADECK_UI:-$SELFDIR/ui}
 DRYRUN=${NOVADECK_INSTALLER_DRYRUN:-0}
+XDG_DIR=${NOVADECK_XDG_RUNTIME_DIR:-/run/novadeck/xdg}
 
 [ -x "$UI" ] || die "no installer UI at $UI"
+
+# --- XDG_RUNTIME_DIR, which nothing else here provides ---------------------------------------------
+# HW-FOUND 2026-08-24, first boot of the installer medium on a Pocket S2: gamescope came all the way
+# up -- seat taken from seatd, DRM master on /dev/dri/card0, Turnip on an Adreno 750, DSI-1 selected
+# at 1440x2560 -- and then died with
+#
+#   wlserver: [wayland] error: XDG_RUNTIME_DIR is invalid or not set in the environment   (x128)
+#   wlserver: Unable to open wayland socket: No such file or directory
+#   gamescope: wlr_backend_finish: Assertion `wl_list_empty(...)` failed.  -> SIGABRT, core dumped
+#
+# libwayland refuses to create its socket without this variable, and NOTHING sets it for a system
+# service: it is logind that makes /run/user/<uid> and exports it, and this session deliberately has
+# no logind session at all (that is the whole point of the seatd path below).
+#
+# WHY IT PASSED ON THE PANEL IN AUGUST AND FAILED AT BOOT. The 2026-08-22 Pocket S2 run drove this
+# same script BY HAND over SSH, where logind had created /run/user/0 for the root login and exported
+# the variable -- so the one difference between that run and this one was invisible in the command.
+# It is the same trap the unit already carries a warning about for TTYPath=: **a system service is
+# NOT an interactive SSH run**, and anything the shell gave you for free has to be provided here.
+#
+# NOT /run/user/0: that path is logind`s namespace, and fabricating it would collide the day
+# anything on this image starts a real session. A directory of our own under /run costs nothing and
+# says what it is. 0700 because the Wayland socket lives in it.
+mkdir -p "$XDG_DIR" || die "cannot create $XDG_DIR -- gamescope cannot open a wayland socket without it"
+chmod 0700 "$XDG_DIR"
+export XDG_RUNTIME_DIR="$XDG_DIR"
 
 # --- the panel, from the device registry ---------------------------------------------------------
 # device-env is the runtime source of truth for per-board facts (it resolves the devicetree model to

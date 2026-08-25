@@ -45,7 +45,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from uipad import (                                                            # noqa: E402
     CARDINALS, CARDINAL_NAME, NullView, PadInput, ScriptedInput, TOKEN_BACK, TOKEN_QUIT, log)
 from uiflow import (                                                           # noqa: E402
-    NetworkScreen, PreflightScreen, ProgressScreen, SpineRun, gather_preflight, net_diagnose)
+    ConnectingScreen, NetJoin, NetworkScreen, PreflightScreen, ProgressScreen, SpineRun,
+    gather_preflight, net_diagnose, release_facts)
 
 SOCK_PATH = os.environ.get("NOVADECK_UI_SOCK", "/run/novadeck/installer-ui.sock")
 # A file of one token per line drives the UI instead of a pad, and selects the null view. This is
@@ -267,19 +268,70 @@ class NoInputScreen:
 
 
 class IdleScreen:
-    """What is on the panel when nothing has asked for the screen yet."""
+    """
+    What is on the panel when there is nothing to install onto -- AND WHY.
+
+    It used to say "Waiting for the installer." and nothing else. That is honest in exactly one
+    situation: the UI running as a consent renderer for a spine driven over SSH, which is how
+    Phase 4 was hardware-gated. It was also being shown for two situations that look nothing like
+    it -- a device that genuinely has no target (booted from internal, rule 1), and select-target.sh
+    failing to run at all -- and telling the operator neither.
+
+    HW-FOUND 2026-08-24 (user): the medium shipped without lib-gpt.sh, select-target.sh died on it,
+    gather_preflight() read the non-zero exit as the normal "no target" outcome, and the panel sat
+    on "Waiting for the installer." forever. A person holding the device could not distinguish a
+    broken build from a disk this installer refuses to touch. So the reason is shown, verbatim,
+    from the tool that produced it -- the same facts-from-the-tool/words-from-the-UI split the
+    consent gate and the network screen both use.
+
+    STILL NOT INTERACTIVE, and still not an error state: there is nothing here for a person to press
+    and nothing has been written. It just stops being a screen that withholds what it knows.
+    """
 
     name = "idle"
     interactive = False          # it asks for nothing, so nothing is pressed at it
+
+    def __init__(self, reason=""):
+        self.reason = (reason or "").strip()
 
     def handle(self, token):
         pass
 
     def describe(self):
+        # THE ADVICE MUST NOT INVENT A CAUSE. This used to end with "a device already running from
+        # its internal disk is refused on purpose", flatly, whatever the actual reason was -- so on
+        # a Pocket FIT refused for carrying ROCKNIX (rule 3b) it explained a cause that had nothing
+        # to do with that disk, in the confident voice of the real one. HW 2026-08-24. A screen that
+        # explains the WRONG reason is worse than one that explains none.
+        #
+        # So: the reason comes from select-target.sh verbatim, and the advice is chosen from what
+        # that reason actually says. Anything unrecognised gets the honest fallback rather than a
+        # guess -- the same facts-from-the-tool / words-from-the-UI split §4b uses.
+        low = self.reason.lower()
+        if "not ours" in low or "remove the other os" in low:
+            advice = ("Another operating system is installed on this device's internal disk. "
+                      "NovaDeck will not install alongside it, because the firmware would then "
+                      "have two systems to choose between and no way to be told which. Remove "
+                      "that installation first, then run this installer again.")
+        elif "running system" in low:
+            advice = ("This installer is running from the internal disk itself, so there is "
+                      "nothing for it to install onto. Boot it from an SD card instead.")
+        else:
+            advice = ("If you expected this device to be installable, this is a fault worth "
+                      "reporting: power off, take the medium out, and read novadeck-install.log "
+                      "on it for the full reason.")
+        blocks = [
+            ("No disk to install onto",
+             "This installer found nothing on this device it is willing to install to, so it has "
+             "not started. Nothing has been written."),
+        ]
+        if self.reason:
+            blocks.append(("Why", self.reason))
+        blocks.append(("What to do", advice))
         return {
             "screen": "idle",
             "title": "NovaDeck installer",
-            "blocks": [("", "Waiting for the installer.")],
+            "blocks": blocks,
             "diamonds": [],
             "prompt": "",
             "note": "",
@@ -419,12 +471,64 @@ def run(server, view, source, base, deadline=0):
     have_input, input_checked = source.present(), time.monotonic()
     if not have_input:
         log("no controller and no keyboard -- consent cannot be taken on this machine (§4d)")
+    # THE NETWORK SCREEN RE-DIAGNOSES ITSELF, whatever it currently says. A person should never have
+    # to press a button to find out that a condition already fixed itself.
+    #
+    # This began as an allowlist -- no-clock, associating, no-lease -- on the reasoning that every
+    # OTHER row names something a human has to go and change, so re-running those would flicker
+    # between guesses. THAT REASONING WAS WRONG, and hardware said so within the hour (2026-08-24):
+    # the operator hit "Connected, but the update server is unreachable" and stayed on it, while the
+    # device behind it had long since gone STATE=online -- the clock had synced and DNS had come up.
+    # `no-host` at boot is usually DNS not being ready yet, which is exactly the self-clearing shape
+    # the allowlist was built to catch, and I had excluded it by name.
+    #
+    # The allowlist was the wrong question. Re-probing is ALWAYS safe -- net_diagnose() defaults to
+    # `diagnose`, which is read-only and never joins anything -- and the screen only changes when
+    # the STATE actually changes, so a stable fault stays stable and readable. What varies is not
+    # whether to look, it is what to do with the answer: `online` leaves the screen, anything else
+    # redraws it. No guessing, and no state can be forgotten by omission from a list again.
+    NET_RECHECK_S = 5
+    net_checked = time.monotonic()
+    netjoin = None          # a join running in the background, so the frame keeps drawing
     while True:
         if time.monotonic() - input_checked > 2:
             was, have_input = have_input, source.present()
             input_checked = time.monotonic()
             if was != have_input:
                 log("input devices: %s" % ("present again" if have_input else "gone"))
+
+        top = stack[-1]
+
+        # A join in flight. Polled before the re-probe below so the two never race for the answer.
+        if netjoin is not None:
+            joined = netjoin.poll()
+            if joined is not None:
+                netjoin = None
+                net_checked = time.monotonic()
+                if joined.get("STATE") == "online":
+                    facts, why = gather_preflight()
+                    stack[-1] = PreflightScreen(facts) if facts else IdleScreen(why)
+                else:
+                    stack[-1] = NetworkScreen(joined)
+                top = stack[-1]
+
+        if (getattr(top, "name", "") == "network"
+                and time.monotonic() - net_checked > NET_RECHECK_S):
+            net_checked = time.monotonic()
+            fresh = net_diagnose()
+            if fresh.get("STATE") != top.facts.get("STATE"):
+                log("network: %s (was %s, re-checked on its own)"
+                    % (fresh.get("STATE"), top.facts.get("STATE")))
+                if fresh.get("STATE") == "online":
+                    # ONLINE IS NOT A SCREEN, it is the reason to leave this one. Replacing the
+                    # network screen with a network screen that says "online" would leave a person
+                    # looking at a success message with a Continue button, having already waited --
+                    # so take the same step pressing Continue takes. Nothing is written by it: the
+                    # pre-flight screen is the last read-only stop before consent.
+                    facts, why = gather_preflight()
+                    stack[-1] = PreflightScreen(facts) if facts else IdleScreen(why)
+                else:
+                    stack[-1] = NetworkScreen(fresh)
 
         screen = no_input if not have_input else stack[-1]
 
@@ -486,17 +590,48 @@ def run(server, view, source, base, deadline=0):
                 # NetworkManager; both end in a fresh diagnosis, because the state after an attempt
                 # is the only thing worth showing.
                 log("network: %s" % result[0])
-                stack[-1] = NetworkScreen(net_diagnose("join" if result[0] == "join" else
-                                                       "diagnose"))
+                if result[0] == "join":
+                    # Acknowledge the press IMMEDIATELY and run the join as a child. It used to be
+                    # a synchronous call with a 180s timeout, which blocked the loop: nothing
+                    # redrew, so the operator had no sign the press registered and a slow access
+                    # point made the device look dead.
+                    netjoin = NetJoin()
+                    stack[-1] = ConnectingScreen(top.facts.get("SSID", ""), netjoin.attempt)
+                else:
+                    stack[-1] = NetworkScreen(net_diagnose("diagnose"))
             elif result[0] == "continue":
                 # The network is up, so the pre-flight facts can finally be gathered -- they need
                 # nothing from the network themselves, but there is no point drawing a disk the
                 # installer cannot then fetch a bundle for.
-                facts = gather_preflight()
-                stack[-1] = PreflightScreen(facts) if facts else IdleScreen()
+                facts, why = gather_preflight()
+                stack[-1] = PreflightScreen(facts) if facts else IdleScreen(why)
+            elif result[0] == "recheck":
+                # The pre-flight screen could not say what it would install. Ask the update server
+                # again -- and ONLY that: the disk was already read, and rebuilding the screen from
+                # scratch would throw away the size the operator had dialled in, which is the one
+                # thing on it they chose. release-info caches nothing it failed to resolve, so this
+                # really does re-ask.
+                log("re-asking the update server what there is to install")
+                stack[-1] = PreflightScreen(dict(top.facts, **release_facts()), top.gib)
             elif result[0] == "start":
-                spine = SpineRun(result[1], server.path)
+                # `fresh`, ALWAYS, because it is the only thing this UI can honestly promise. On a
+                # disk of ours the pre-flight screen says the install "will be erased and replaced,
+                # INCLUDING /home", and plan_carve() showed the operator exactly that carve --
+                # carve.sh handles `plan` in the same branch as `fresh`. The spine's other intent,
+                # `reinstall`, keeps /home and is not reachable from any screen here yet, so naming
+                # it would be a promise nothing behind it keeps.
+                spine = SpineRun(result[1], server.path,
+                                 top.facts["bundle"], top.facts["seed"], "fresh")
                 stack.append(ProgressScreen(spine))
+            elif result[0] == "retry":
+                # A failed install, from the top. Re-running IS the recovery -- the installer keeps
+                # no backups precisely because it has to be -- and the facts are re-gathered rather
+                # than reused, since a partial carve has changed the very disk they describe.
+                log("retrying after a failed install")
+                spine = None
+                stack.pop()
+                facts, why = gather_preflight()
+                stack[-1] = PreflightScreen(facts) if facts else IdleScreen(why)
             elif result[0] == "poweroff":
                 power_off(source)
                 return 0
@@ -544,9 +679,9 @@ def main(argv):
     # on another computer and a reboot. Finding that out after the pre-flight screen has raised
     # expectations is worse than finding it out at second zero. A machine already online (USB-C
     # Ethernet, §4b's zero-config path) never sees the screen at all.
-    facts = gather_preflight()
+    facts, why = gather_preflight()
     if facts is None:
-        base = IdleScreen()
+        base = IdleScreen(why)
     else:
         net = net_diagnose()
         log("network: %s" % net.get("STATE", "?"))

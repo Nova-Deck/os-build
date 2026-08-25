@@ -250,6 +250,9 @@ SDCARD       := $(OUT)/images/sdcard.img
 # directly into the /home partition, so a healthy first boot does no copy and needs no network. The
 # client binary it stages is the make target; the pin + fetcher are its prerequisites.
 STEAM_SEED   := work/steam-seed/steamrtarm64/steam
+# The packed tree the INSTALLER MEDIUM carries. A card needs no such artifact: make-sdcard
+# seeds /home from the directory directly, with mkfs.ext4 -d.
+SEED_ARTIFACT := out/steam-seed/steam-seed.tar.zst
 
 # Repo sources the rootfs assembler reads directly (itself + the unified fs-overlay/ payload tree
 # it copies in wholesale). find recurses, so files added under fs-overlay/ are tracked
@@ -332,8 +335,9 @@ KERNEL_SRC_HASH := work/.kernel-src.hash
 # Phony orchestration targets
 # ==============================================================================
 .PHONY: help all image toolchain kernel fw-linux fw-qcom base overlay verify-lock \
-        rootfs relock mesa-x86 \
-        initramfs steamcl grub sdcard verify-card test bundle sign-bundle publish-bundle deploy clean clean-base clean-overlay distclean
+        rootfs relock mesa-x86 installer installer-root relock-installer verify-image \
+        initramfs steamcl grub sdcard verify-card test test-disk bundle sign-bundle publish-bundle \
+        steam-seed-artifact deploy clean clean-base clean-overlay distclean
 
 # An always-out-of-date prerequisite, for rules that must re-evaluate their own inputs every run
 # rather than trust a prerequisite's mtime. Only $(KERNEL_SRC_HASH) uses it; see the note there.
@@ -394,7 +398,7 @@ verify-card: $(SDCARD) | $(BUILD_STAMP) ## Verify the built A/B card image (in c
 verify-lock: ## Check the lock's novadeck rows against packages/ (host, seconds, no build)
 	bash packages/verify-lock-rows.sh
 
-test: verify-lock ## Run the offline bootctl/post-install/pairingd/quirks/stage-2/partition-table/unit/coredump/perf/fan-curve/decky/update/publish/install/steamos-manager/graphics-provider/video-decode/proton-dxvk suites (host, no build needed)
+test: verify-lock ## Run the offline bootctl/post-install/pairingd/quirks/stage-2/partition-table/unit/coredump/perf/fan-curve/decky/update/publish/install/mkroot/steamos-manager/graphics-provider/video-decode/proton-dxvk suites (host, no build needed)
 	bash images/test-bootctl.sh
 	bash images/test-post-install.sh
 	bash images/test-pairingd.sh
@@ -408,9 +412,12 @@ test: verify-lock ## Run the offline bootctl/post-install/pairingd/quirks/stage-
 	bash images/test-decky.sh
 	bash images/test-update.sh
 	bash images/test-publish-bundle.sh
+	bash images/test-publish-card.sh
 	bash images/test-steamos-manager.sh
 	bash install/test-install.sh
 	bash install/test-ui.sh
+	bash install/test-mkroot.sh
+	bash install/test-mkimage.sh
 	bash images/test-graphics-provider.sh
 	bash images/test-video-decode.sh
 	bash images/test-proton-dxvk.sh
@@ -428,6 +435,20 @@ test: verify-lock ## Run the offline bootctl/post-install/pairingd/quirks/stage-
 # its own first layer, so docker reuses it rather than fetching anything twice.
 test-signing: $(SIGN_STAMP) ## Prove the RAUC signing self-test still catches what it claims (container; PKIDIR= adds the keyring check)
 	$(DOCKER) $(PKI_MOUNT) $(SIGN_IMG) images/test-verify-signing.sh
+
+# The fifth suite pair, and the reason they are not in `test`: they need sgdisk, mtools and
+# dosfstools, which a plain dev box does not have (and which the shipped image never gets, because
+# select-target.sh and carve.sh are installer-only and are never staged into the rootfs). So they
+# run in the container, where those tools already live for verify-image.
+#
+# They had no target and no CI job until 2026-08-25 — 181 assertions over the two scripts that
+# CHOOSE a stranger's disk and then DELETE partitions on it, run only when someone remembered to
+# type the path. That is the same failure this repo has already paid for twice: a check nothing
+# invokes is a check that is not asserting anything. Nothing here needs root and nothing is
+# mounted; the fixtures are sparse images rebuilt from the real GPTs in docs/internal-storage.md.
+test-disk: | $(BUILD_STAMP) ## Run the select-target + carve suites, which need sgdisk/mtools (container)
+	$(INBUILD) install/test-select-target.sh
+	$(INBUILD) install/test-carve.sh
 
 # ==============================================================================
 # Toolchain images
@@ -478,6 +499,19 @@ steam-seed-sync:
 $(STEAM_SEED): steam-seed/STEAM_SEED.pin steam-seed/fetch-steam-seed.sh | steam-seed-sync
 	@[ -x "$@" ] || { echo "steam seed missing after sync: $@" >&2; exit 1; }
 	@touch $@
+
+# The same tree, PACKED, because the installer medium has to carry it. A card seeds /home from the
+# directory directly (mkfs.ext4 -d, images/lib-homestage.sh); the medium builds /home on someone
+# else's disk months later, so the tree travels with it. install/mkimage.sh stages this file into
+# the root and writes its sha256 beside it as the pin the spine checks.
+#
+# A REAL FILE TARGET, keyed on the staged tree: $(STEAM_SEED)'s mtime only moves when the fetcher
+# restages, so an unchanged Steam tree costs nothing rather than 2m46s of zstd -19 on every build.
+$(SEED_ARTIFACT): $(STEAM_SEED) steam-seed/pack-seed.sh
+	steam-seed/pack-seed.sh
+
+.PHONY: steam-seed-artifact
+steam-seed-artifact: $(SEED_ARTIFACT) ## Pack work/steam-seed -> out/steam-seed/steam-seed.tar.zst (host)
 
 # ==============================================================================
 # From-source overlay packages (host — build-overlay.sh drives docker + qemu binfmt)
@@ -632,6 +666,63 @@ relock: $(if $(OVERLAY_PINS),$(OVERLAY_STAMP)) ## Re-resolve from PKGS and regen
 	@echo "review the diff, commit it, then rebuild: git diff images/manifest.lock"
 
 # ==============================================================================
+# Installer image (host docker + qemu) — the standalone medium that installs to internal storage
+# ==============================================================================
+# Phase 6 of .claude/plans/internal-install.plan.md. A SEPARATE root from the shipped one, with its
+# own package declaration (install/pkgs.list) and its own lock (install/manifest.lock): the
+# installer carries partition and filesystem tools that no device ever gets, so folding them into
+# images/manifest.lock would make the shipped image's reviewed artifact describe content that image
+# never contains. install/genlock.sh's header carries the full reasoning.
+#
+# install/mkroot.sh self-caches on its own input key (packages, pins, snapshot, builder, and a hash
+# over every file it places), so an unchanged tree costs the key check and nothing else. That is why
+# these are phony rather than file targets — the script owns the reuse decision, exactly as
+# images/customize-base.sh does for the shipped base.
+# $(KERNEL) IS A REAL PREREQUISITE, not decoration: mkroot.sh ships the kernel's MODULES into the
+# installer root (the 802.11 stack is =m, so firmware with no driver is indistinguishable from no
+# firmware) and reads them out of out/modroot, which the kernel build produces. Without this line
+# `make installer` builds the root FIRST and dies on a tree that has never built a kernel — which is
+# every CI runner, and was the first thing the 2026-08-25 smoke run hit.
+installer-root: $(KERNEL) $(if $(OVERLAY_PINS),$(OVERLAY_STAMP)) ## Bootstrap the installer root -> work/installer-base (host; docker+qemu)
+	install/mkroot.sh >/dev/null
+
+# The medium itself. Host-side mkroot.sh produces the tree; this compresses it and lays the two
+# partitions, and it runs IN THE CONTAINER because the tree is root-owned — a squashfs built by the
+# build user would put every file on the medium under uid 1000, and the installer runs as root
+# against a stranger's disk. $(KERNEL) and $(GRUB) are real prerequisites: the kernel, the dtbs and
+# the stage-2 GRUB all land on the medium's ESP, since there is no slot root for them to live in.
+#
+# $(ID_ENV) because install/mkimage.sh stamps the medium's identity (see its section 0): without it
+# every installer image ever built calls itself the same thing, which is the first question asked at
+# the fallback console. NOT $(DEV_ENV): the dev/release mode is read back out of the ROOT's own
+# reuse marker, so it cannot disagree with what was actually baked in.
+installer: installer-root $(SEED_ARTIFACT) $(KERNEL) $(GRUB) | $(BUILD_STAMP) ## Build the flashable installer medium -> out/images/installer.img
+	$(DOCKER) $(ID_ENV) $(BUILD_IMG) install/mkimage.sh
+
+# Asserts the BUILT medium, the way verify-card.sh asserts the built card. The suites in `make test`
+# read the SCRIPTS — a script that says the right thing while producing the wrong image passes every
+# one of them — and this is the only thing that opens the image. No dependency on `installer`:
+# verifying a downloaded or CI-built medium is a normal thing to do, and rebuilding it here from a
+# possibly-newer tree would verify something other than the file in front of you.
+#
+# NOVADECK_INSTALLER_ALLOW_DEV=1 to accept a dev medium (sshd + a baked Wi-Fi PSK); without it that
+# is a failure, because a dev medium must never be the one that gets published.
+verify-image: | $(BUILD_STAMP) ## Verify a built installer medium (in container; IMG= to point elsewhere)
+	$(DOCKER) -e NOVADECK_INSTALLER_ALLOW_DEV $(BUILD_IMG) install/verify-image.sh $(IMG)
+
+# Mirrors `relock` above, including why it must NOT go through the locked path: relocking a tree
+# that was itself installed from the lock can only ever reproduce that lock. FORCE=1 because the
+# reuse key folds the mode in, so an existing locked tree would otherwise satisfy this.
+#
+# The overlay repo IS a prerequisite: install/pkgs.list names gamescope, which exists in no holo
+# repo, and without work/repo/aarch64 the resolve would either fail or — worse — satisfy it from a
+# snapshot and lock an unpatched upstream binary under a `snapshot` class.
+relock-installer: $(if $(OVERLAY_PINS),$(OVERLAY_STAMP)) ## Re-resolve install/pkgs.list and regenerate install/manifest.lock (host)
+	NOVADECK_DEV= NOVADECK_RESOLVE=1 FORCE=1 install/mkroot.sh >/dev/null
+	install/genlock.sh
+	@echo "review the diff, commit it, then rebuild: git diff install/manifest.lock"
+
+# ==============================================================================
 # Read-only root (container) — base userspace + kernel + firmware -> Btrfs image
 # ==============================================================================
 # Switching NOVADECK_DEV swaps which stamp exists, so the rootfs is rebuilt on the next make.
@@ -763,6 +854,7 @@ publish-bundle: ## Publish BUNDLE=<file.raucb> to the OTA server (host; needs NO
 	@test -n "$(BUNDLE)" || { echo "pass BUNDLE=out/images/novadeck-<version>.raucb" >&2; exit 2; }
 	ota/publish-bundle.sh "$(BUNDLE)" $(CHANNEL)
 
+
 # ==============================================================================
 # Deploy (host) — copy the stage-1 steamcl tree onto a mounted ESP
 # ==============================================================================
@@ -778,7 +870,7 @@ deploy: $(STEAMCL) ## Install the stage-1 steamcl tree onto ESP=<mountpoint>
 # the artifacts from inside a throwaway container as root, like clean-base. (out/.build-image.stamp
 # is host-owned and deliberately kept so the toolchain image isn't rebuilt.)
 clean: ## Remove built artifacts (out/), keep firmware/base caches + toolchain stamp
-	docker run --rm -v $(CURDIR)/out:/wo busybox rm -rf /wo/Image /wo/Image.gz /wo/dtbs /wo/modroot /wo/images /wo/boot /wo/initramfs.cpio.gz
+	docker run --rm -v $(CURDIR)/out:/wo busybox rm -rf /wo/Image /wo/Image.gz /wo/dtbs /wo/modroot /wo/images /wo/boot /wo/initramfs.cpio.gz /wo/steam-seed
 
 # work/base is root-owned (the bootstrap's pacman writes it as root inside a container), so a
 # plain rm fails for the build user — remove it from inside a throwaway container as root.

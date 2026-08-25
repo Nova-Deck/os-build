@@ -1,0 +1,66 @@
+# novadeck INSTALLER MEDIUM partition table. Phase 6 of .claude/plans/internal-install.plan.md.
+#
+# TWO partitions, and that is the whole difference from the shipped card: there are no slots here.
+# The installer boots once, writes NovaDeck to the device's internal disk, and is thrown away — so
+# there is nothing to update atomically, nothing to roll back to, and no /home to preserve. A/B on
+# a recovery medium would be machinery guarding a property nobody wants.
+#
+#   p1 esp    the boot partition AND the two things a person has to exchange with this medium: the
+#             wifi.conf they write onto it, and the install log save-log.sh writes back. It is typed
+#             0700 (Microsoft basic data), NOT ef00, and that is deliberate — see below.
+#
+#             IT MUST BE VISIBLE ON A NORMAL COMPUTER, which an EFI System Partition is not. Windows
+#             and macOS deliberately do not surface an ef00 to users, so the advice this installer
+#             gives on its own no-Wi-Fi screen — "copy wifi.conf.example next to it on another
+#             computer" — is impossible for most people if this is an ESP. The same partition is
+#             where the install log comes OUT, so an invisible one loses the diagnostic too.
+#
+#             ABL DOES NOT CARE, MEASURED 2026-08-24 against a working ROCKNIX card: its boot medium
+#             is not even GPT. `lsblk -o PTTYPE,PARTTYPE,PARTFLAGS` reports `dos`, partition type
+#             `0xc` (W95 FAT32 LBA) with the 0x80 bootable flag, carrying /EFI/BOOT/bootaa64.efi —
+#             an MBR table and a plain FAT partition, with no EFI System Partition type GUID
+#             anywhere on the disk, and ABL boots it. So the loader is found by CONTENT, exactly as
+#             [[abl-internal-efi-path-works]] says. images/partition-table.txt asserts the opposite
+#             ("the ROCKNIX ABL finds the ESP by type GUID"); that claim is wrong, and it is the
+#             only thing that made this change look risky.
+#
+#             The shipped card keeps ef00 and is not touched here: it has no user-facing files on
+#             its ESP, so it gains nothing from this and the change is not worth the boot risk on
+#             the image people actually live on.
+#   p2 root   the read-only squashfs. Sized by install/mkimage.sh from the actual filesystem, not
+#             declared here: the size is an output of what got built, and a fixed number would
+#             either waste medium or fail the fits() check on a package addition.
+#
+# THE FAT LABEL IS NOT A `novadeck-*` ONE, deliberately. A dev card and an internal install already
+# share those labels, which is exactly why REPLACES_OURS=1 cannot be judged from a dev card — and an
+# installer whose /esp matched the TARGET's ESP would mount the disk it is about to overwrite and
+# write its failure log there. NDINSTALLER is 11 characters, all a FAT label has room for.
+#
+# ON FAT WIDTH, because images/partition-table.txt carries a loud warning against forcing -F 32 and
+# this file does force it (install/mkimage.sh, like images/make-sdcard.sh). The warning is about
+# 4Kn media: a 256M FAT32 has 65376 clusters at 4096-byte sectors, below the 65525 a FAT32 must
+# have, and ABL's FatPkg then refuses the volume outright. It does not apply here for two
+# independent reasons — the filesystem is built INSIDE AN IMAGE FILE, where mkfs.vfat sees 512-byte
+# sectors whatever the eventual target is, and the installer medium is removable (SD or USB), all
+# of which is 512e. Every internal UFS in this fleet is 4Kn; none of it is ever this partition.
+# If an installer image is ever targeted at 4Kn media, this is the line that breaks first.
+#
+# esp is 256M for headroom, not need: GRUB is ~2.3M, the kernel Image ~40M and the dtbs ~2M. The
+# slack is for the log, and for a future initramfs if the read-only-/etc decision is ever revisited.
+#
+# The ESP carries NO GPT bit 63 here, unlike the shipped card. That bit exists to stop systemd's
+# gpt-auto generator claiming /efi, a name the shipped initramfs reserves for the slot's efi
+# partition. This medium has no initramfs, no slots and no /efi — and the fstab entry naming
+# LABEL=NDINSTALLER is the only mount definition either way.
+#
+# Consumed by images/genpart.sh exactly as the shipped table is. Row order = partition number.
+#
+# IT IS CALLED medium-table.txt, NOT partition-table.txt, and the name matters. install/mkroot.sh
+# ships images/partition-table.txt — the EIGHT-partition A/B layout — into the installer's flat
+# directory under that exact basename, because the spine carves the TARGET disk with it. Two files
+# named partition-table.txt, one describing the medium and one describing what the medium installs,
+# is a mistake waiting to be made by whoever next edits either.
+#
+# name      size  typecode  fs         label            attrs
+esp         256M  0700      vfat       NDINSTALLER      -
+root        rest  8300      squashfs   novadeck-instrt  -

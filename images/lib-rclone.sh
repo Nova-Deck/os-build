@@ -15,6 +15,14 @@ pin_field() { sed -n "s/^$2:[[:space:]]*//p" "$1" | head -1; }
 # repo: the tool that moves our artifacts should not float between a runner and a developer's box.
 rclone_bin() {
   local ver url sha host dest zip dir
+  # THE ONE TEST SEAM, and the only way either publisher can be exercised offline. The path this
+  # returns is absolute and lives under work/tools/, so a suite cannot stub it by shadowing PATH,
+  # and pre-creating that path would overwrite the real binary an operator has already fetched.
+  # images/test-publish-card.sh sets this; nothing in CI or in a publish ever should.
+  if [ -n "${NOVADECK_RCLONE:-}" ]; then
+    printf '%s\n' "$NOVADECK_RCLONE"
+    return 0
+  fi
   [ -f "$RCLONE_PIN" ] || die "no rclone pin: $RCLONE_PIN"
   ver="$(pin_field "$RCLONE_PIN" version)"
   case "$(uname -m)" in

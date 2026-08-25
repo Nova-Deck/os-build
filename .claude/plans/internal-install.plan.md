@@ -58,9 +58,12 @@ construction*. A squashfs is also demand-paged rather than fully resident, and
 asserted at `kernel/build.sh:187` — this finally makes that assertion's stated rationale
 true (it currently claims "the /etc overlay mounts a squashfs seed", which is stale).
 
-Total image ≈ 1 GB, ≈ 400 MB compressed (the graphics stack for the GUI dominates — see
-Phase 5). It carries no bundle and needs no reflash per release; the release card is ~5 GiB
-compressed by comparison.
+Total image **2.1 GB, ~1.9 GiB compressed** (measured 2026-08-25). The estimate here was ≈1 GB
+until the medium started CARRYING the Steam tree `/home` is built from — 1.4 GiB of it — which is
+the single largest thing on it; the graphics stack for the GUI dominates the rest (see Phase 5).
+It carries no OS BUNDLE and needs no reflash per OS release, since the bundle is resolved from the
+channel at install time; a newer Steam tree does mean a new medium, which is a medium build rather
+than a second artifact. The release card is ~5 GiB compressed by comparison.
 
 ---
 
@@ -590,7 +593,7 @@ New `fs-overlay/usr/lib/novadeck/install/lib-slotwrite.sh`, sourced by
 | var-a / var-b | **new**: `assemble-rootfs.sh` also writes its `$varstage` to `/usr/lib/novadeck/var-seed.tar.zst` inside the root (`work/base/var` is ~13 MB, negligible in a 7 G slot) |
 | rootfs-a | the signed RAUC bundle (Phase 4) |
 | rootfs-b | nothing — left empty and **no `B.conf`**, matching the release-card shape so steamcl sees one image and retries A rather than switching (`make-sdcard.sh`'s `mkconf` site explains why). First OTA fills B |
-| `/home` Steam seed (~1 GB) | **new published artifact** `steam-seed-<pin>.tar.zst`, sha256 verified against the pin **baked into the installer image**, not against `latest.json` (explicitly not a trust boundary). Folding it into the bundle instead does not fit: rootfs-a is 7 G with ~0.9 G margin |
+| `/home` Steam seed (1.4 GiB) | **carried by the medium** at `/usr/lib/novadeck/install/steam-seed.tar.zst`, sha256 verified against the pin staged beside it by `install/mkimage.sh` (which computes it from the bytes it places, so the two cannot disagree). It was briefly a published, content-addressed artifact fetched at install time; that bound the medium to one seed just as firmly while adding a publisher, a workflow and 1.7 GB of tmpfs during the stream — see `steam-seed/pack-seed.sh`. Folding it into the BUNDLE still does not fit: rootfs-a is 7 G with ~0.9 G margin |
 
 ### `write_parts_env` — emit the env block directly, do not reach for `grub-editenv`
 
@@ -1564,6 +1567,18 @@ Then `curl -fsSL <OTA_URL>/<channel>/latest.json`, reusing `novadeck-update`'s h
 verbatim: every manifest field is attacker-controlled, and `bundle` is forced to a bare
 filename (urlparse plus `/`, `\`, leading-dot checks).
 
+**LANDED as `install/release-info`** — a peer of `netcfg`, key=value out, always exit 0, and a
+separate program on purpose: `netcfg` must read a 404 as a REACHABLE server (measured on a Pocket
+S2, 2026-08-22) and a 404 on `<channel>/latest.json` is precisely what this one has to name. Five
+states, each with a different fix — `ok`, `no-release` (the channel is empty; curl's 22),
+`unreachable` (any other curl exit) and `malformed` (the port of novadeck-update's `manifest()`).
+It resolves the BUNDLE only: the Steam seed is carried by the medium, so the UI adds a fifth state
+of its own, `no-seed`, for a medium assembled without one. The pre-flight screen prints the `DETAIL`
+line under *To install* and offers **Check again** for the ones a re-ask could change; `no-seed`
+gets no button, the same rule as `no-conf` on the network screen. The default URL literal now exists in three files and
+`install/test-ui.sh` binds all three: `netcfg` reporting `online` against one host while
+`release-info` fetched a manifest from another is the failure that assertion exists to prevent.
+
 ### 4c. Orchestration — LANDED 2026-08-21, NOT YET HARDWARE-GATED
 
 `install/novadeck-install`, `install/confirm-tty`, `images/lib-homestage.sh`;
@@ -1646,8 +1661,9 @@ already does once, the installer now calls instead of copying:
 | bundle verification | `install/rauc-session.sh --info` — the same synthesized config the install runs under | — |
 
 `stage_deck_home` takes a **directory or a tarball**, the same split `seed_var` uses: `make-sdcard.sh`
-has `work/steam-seed` on the build host, and the installer has the published ~1 GB tarball and a
-mounted `/home` that is the only place with room for it.
+has `work/steam-seed` on the build host, and the installer has the 1.4 GiB tarball it carries and a
+mounted `/home` to unpack it into. Proven on a built medium 2026-08-25 — the staged tree is
+identical to `work/steam-seed`, all 21,287 entries.
 
 **The `--info` verify is not a `rauc info` call spelled in the spine, deliberately.** The
 synthesized config *is* the mechanism — `bundle-formats`, the keyring path and `check-purpose` all
@@ -2083,7 +2099,7 @@ New `install/` stage directory, peer of `boot/`/`images/`/`ota/`:
 install/README.md        pkgs.list       mkroot.sh        mkimage.sh
         select-target.sh carve.sh        novadeck-install  confirm-tty
         rauc-session.sh  post-install-fresh.sh  verify-install.sh
-        lib-gptfixture.sh  netcfg  test-*.sh
+        lib-gptfixture.sh  netcfg  release-info  test-*.sh
         confirm-ui  ui  uipad.py  uiflow.py  uiview.py      <- the §5 UI, four model/view files
         installer-session  save-log.sh  units/              <- the §5 session and its fallback
 ```
@@ -2130,14 +2146,31 @@ if none of the candidates is present. And the two files the spine reads as data:
   `install/verify-image.sh`.
 - `.github/workflows/image.yml` — `artifact:` gains `installer`; publish to R2 under
   `installer/vX.Y.Z/`. New `release-installer.yml` on `installer/v*` tags, mirroring
-  `release-sdcard.yml`.
-- `steam-seed-<pin>.tar.zst` published alongside, from the existing `steam-seed/` stage. **Its
-  content is a plain tar of `work/steam-seed`** — the finished `.local/share/Steam` tree, nothing
-  else. The `/home` layout around it (the `deck/` directory and the `~/.steam` compat symlinks) is
-  `stage_deck_home`'s and is applied on the device, so the artifact and the card seed are the same
-  bytes. The publisher must also emit its sha256 into the installer image as
-  `/usr/lib/novadeck/install/steam-seed.sha256`; the spine refuses outright if that file is missing,
-  because "we could not check" and "it checked out" must not have the same effect.
+  `release-sdcard.yml`. **LANDED 2026-08-25**, with one correction to the sketch above: the SEED IS
+  PART OF THE SAME RUN. `release-installer.yml` is prep → build (`image.yml` with
+  `artifact: installer`) → publish (R2, `installer/<version>/`) → release, and the build runs
+  `make verify-image` before the artifact leaves the job. There is no seed job and no pin input:
+  `make installer` depends on the packed seed, so the medium carries it (2026-08-25). The
+  intermediate design — a `seed` workflow publishing a content-addressed tarball and emitting its
+  hash as a job output — is recorded in `steam-seed/pack-seed.sh`'s header as the thing that bought
+  nothing. `mesa-x86` is skipped for this
+  artifact (it is staged by `assemble-rootfs.sh`, which the installer root never runs), which is why
+  the build job carries an explicit `!cancelled() && needs.mesa-x86.result != 'failure'`.
+  `images/publish-card.sh` gained `NOVADECK_R2_KIND` so one publisher serves both prefixes.
+- **The medium CARRIES the Steam seed** (2026-08-25, user's call, reversing the published-artifact
+  design that shipped earlier the same day). `steam-seed/pack-seed.sh` packs `work/steam-seed` into
+  `out/steam-seed/steam-seed.tar.zst` — **its content is a plain tar of that directory**, the
+  finished `.local/share/Steam` tree and nothing else, because `stage_deck_home()` unpacks it INTO
+  an already-created `.local/share/Steam` while the card path copies the directory ONTO that path.
+  `install/mkimage.sh` stages it into the root and writes its sha256 beside it as the pin, DERIVED
+  FROM THE BYTES IT PLACED rather than taken as an input — the two cannot disagree.
+
+  What the published version cost, for no gain (a medium is bound to one seed either way): a
+  publisher, a workflow, a hash handed between two CI jobs, a `seed/` docroot that could never be
+  pruned without retiring media in the field, and 1.7 GB of tmpfs while rauc streams the bundle.
+  What carrying it costs: the medium goes ~650 MB → ~2.1 GB, and R2 keeps 2 media rather than 3.
+  `install/verify-image.sh` gets stronger for it — it can hash the actual seed against the actual
+  pin, which is the spine's own check and was impossible while the bytes lived on a server.
 - Docs: `docs/install-internal.md`, plus a Recovery section update in `docs/RUNBOOK.md`.
 
 ---
@@ -2199,7 +2232,15 @@ gate), `test-units.sh` (new units), and byte-identity of the shipped
    an internally-installed device is out of scope (see 1c). The supported inserted media are the
    installer/recovery card and a Steam-formatted library card, neither of which carries `novadeck-*`
    names.
-5. The standalone installer image end-to-end, including `wifi.conf` and the picker.
+5. The standalone installer image end-to-end, including `wifi.conf` and the picker. **PARTLY DONE,
+   2026-08-25, AYANEO Pocket ACE.** Reached the consent gate from a real medium: GRUB board pick,
+   session, gamescope, UI, controller, the `wifi.conf`/join path (7.4s, first attempt), the clock,
+   target selection, pre-flight with real numbers, and `verify sources` — the bundle's signature
+   read over HTTP Range in ~150 ms and the carried seed hashed against its pin in ~25 s.
+   **Everything past consent is still untried from a medium**: the carve, the RAUC stream, the seed
+   unpack, the efi/ESP writes and a first boot from internal. Three defects came out of that run,
+   all fixed and re-shipped — no `--intent` (an install on a disk of ours could never start), a
+   failure screen offering "Continue", and the consent screen overlapping its own button row.
 6. **The `reinstall` carve mode, on a disk carrying a real install with a populated `/home`.**
    It lands here rather than in Phase 4 because it is BLOCKED on this image and not merely
    unscheduled: a dev card ships the same `novadeck-*` filesystem labels as the install, so `/home`

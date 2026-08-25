@@ -14,6 +14,24 @@ Description=NovaDeck installer session (gamescope + the installer UI)
 ConditionKernelCommandLine=!novadeck.install.debug
 After=systemd-udevd.service dbus.service inputplumber.service
 Wants=dbus.service inputplumber.service
+# /esp IS THE DELIVERABLE, AND ORDERING IS WHAT KEEPS IT ALIVE LONG ENOUGH TO WRITE TO. ExecStopPost=
+# below copies the run's log there, and units are stopped in the REVERSE of their After= order, so
+# After=esp.mount is what stops systemd unmounting the ESP while this unit is still stopping.
+#
+# Without it there is no ordering between the two AT ALL: fstab's `nofail` explicitly drops the
+# mount's Before=local-fs.target (systemd.mount(5): the Before= is added "unless one or more mount
+# options among nofail, x-systemd.wanted-by=, and x-systemd.required-by= is set"), so the transitive
+# path through basic.target that would otherwise order a service after its filesystems is gone. At
+# poweroff systemd was then free to unmount /esp concurrently with this unit -- and this unit takes
+# its time, because ExecStopPost only runs once gamescope has finished with SIGTERM, which is the
+# slow path by design (TimeoutStopSec=30 below). HW 2026-08-25: a clean shutdown, and no
+# novadeck-install.log on the ESP.
+#
+# Wants=, never Requires= or RequiresMountsFor=: those add the ordering AND a requirement, so an ESP
+# that will not mount would take the whole session down and leave a black panel. An unmountable ESP
+# must degrade to "no log", which is what save-log.sh already treats as a line in the log.
+Wants=esp.mount
+After=esp.mount
 # Take the panel's VT from the getty, and give it back if we fail.
 Conflicts=getty@tty1.service
 After=getty@tty1.service

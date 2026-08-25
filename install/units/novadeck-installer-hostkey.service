@@ -1,0 +1,29 @@
+[Unit]
+# TEST BUILDS ONLY. install/mkroot.sh installs this unit and the sshd drop-in that pulls it in
+# solely when NOVADECK_DEV=1 staged an authorized_keys; a release installer medium enables no sshd
+# at all, because a recovery image anyone can download must not carry a credential anyone can
+# extract ([[wifi-config-is-test-only]]).
+#
+# WHY THE HOST KEY IS NOT IN /etc, AND NOT BAKED. The installer root is squashfs, so /etc cannot be
+# written at runtime — openssh's own sshdgenkeys.service runs `ssh-keygen -A` into /etc/ssh and
+# would fail every boot, and sshd only Wants= it, so sshd would then start with no host key and
+# refuse every connection. mkroot.sh masks that unit and points sshd_config at /run instead.
+# Baking a key into the image was the other option and is worse: it is a property of the BUILD,
+# extractable by anyone holding the published medium and identical on every device flashed from it
+# (images/assemble-rootfs.sh makes the same argument at length for the shipped image).
+#
+# WHY THIS IS A UNIT RATHER THAN AN ExecStartPre= ON sshd. ssh-keygen PROMPTS rather than
+# overwriting when the key already exists, so a plain ExecStartPre would wedge any sshd restart
+# within a boot. The condition below makes the second run a no-op instead — an unmet condition is a
+# success, not a failure. The obvious alternative, `sh -c test -f … ||`, needs single quotes, and
+# mkroot.sh's whole container half is one single-quoted `bash -c` string where one of those ends
+# the string and leaks the rest of the build to the host shell.
+Description=Generate a transient SSH host key for the installer (TEST BUILD)
+ConditionPathExists=!/run/ssh/ssh_host_ed25519_key
+Before=sshd.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/install -d -m0755 /run/ssh
+ExecStart=/usr/bin/ssh-keygen -q -t ed25519 -N "" -f /run/ssh/ssh_host_ed25519_key

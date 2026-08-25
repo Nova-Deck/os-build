@@ -356,6 +356,55 @@ printf '%s\n' "$out" | grep -q "running system is on" \
   && ok "an explicit target that is the running disk -> refused" \
   || bad "the running disk was accepted as an explicit target: $out"
 
+CASE="a running disk that cannot be resolved refuses EVERYTHING"
+# FAIL CLOSED, and this case is the whole reason it does. The check that READS like the boot medium's
+# protection is not: an SD card reports removable=0 on every board we have captured, so rule 1 is the
+# one keeping the installer off the card it booted from -- and until 2026-08-25 an unresolvable root
+# printed nothing, which excluded nothing, which quietly removed the rule instead of stopping.
+#
+# What saved it in practice was the victim rule wanting a partition named `userdata`, which no boot
+# medium of ours carries. That is a second rule's side effect, not a design, and "I cannot tell which
+# disk I am running from" is a fine reason to refuse an install outright.
+#
+# RUN WITH THE FIXTURE FLAG UNSET, which is the only way to reach the refusal: the flag relaxes it,
+# because the build container's root is an overlay with no block parent and every case here would
+# otherwise refuse. What the disk list holds does not matter -- the refusal happens before the first
+# disk is examined, which is the property.
+printf '#!/bin/sh\nexit 1\n' >"$T/bin/findmnt"       # findmnt answers nothing at all
+chmod +x "$T/bin/findmnt"
+out=$(PATH="$T/bin:$PATH" NOVADECK_SELECT_FIXTURE= NOVADECK_SELECT_DISKS="$T/running.img" \
+      bash "$SELECT" 2>&1); rc=$?
+[ "$rc" != 0 ] && ok "the scan refuses (exit $rc) rather than proceeding with one fewer rule" \
+               || bad "an unresolvable running disk still selected something: $out"
+printf '%s\n' "$out" | grep -q "cannot determine which disk" \
+  && ok "and says which question it could not answer" \
+  || bad "the refusal does not name the cause: $out"
+[ -z "$(field "$out" TARGET)" ] \
+  && ok "with no TARGET emitted for a caller to act on" \
+  || bad "it emitted a target anyway: $out"
+# The same must hold for an explicit target, which is the path install/hw-install.sh drives.
+out=$(PATH="$T/bin:$PATH" NOVADECK_SELECT_FIXTURE= bash "$SELECT" "$T/running.img" 2>&1); rc=$?
+[ "$rc" != 0 ] && ok "an explicit target is refused too -- naming a disk does not answer the question" \
+               || bad "an explicit target bypassed the refusal: $out"
+# lsblk failing where findmnt succeeded is the other half: a source with no resolvable parent.
+printf '#!/bin/sh\necho /dev/nvme0n1p2\n' >"$T/bin/findmnt"
+printf '#!/bin/sh\nexit 1\n' >"$T/bin/lsblk"
+chmod +x "$T/bin/findmnt" "$T/bin/lsblk"
+out=$(PATH="$T/bin:$PATH" NOVADECK_SELECT_FIXTURE= NOVADECK_SELECT_DISKS="$T/running.img" \
+      bash "$SELECT" 2>&1); rc=$?
+[ "$rc" != 0 ] \
+  && ok "a source whose parent cannot be resolved refuses as well" \
+  || bad "an unresolvable parent still selected: $out"
+# And the flag relaxes exactly this, which is what keeps the other 90 cases runnable in a container.
+out=$(PATH="$T/bin:$PATH" NOVADECK_SELECT_DISKS="$T/running.img" bash "$SELECT" 2>&1)
+[ -n "$(field "$out" TARGET)" ] \
+  && ok "and under NOVADECK_SELECT_FIXTURE it is relaxed, as the three sysfs checks are" \
+  || bad "the fixture flag no longer relaxes the running-disk rule: $out"
+# RESTORE case 7's shims: the scan cases below depend on them to make running.img the running disk.
+printf '#!/bin/sh\necho /dev/nvme0n1p2\n' >"$T/bin/findmnt"
+printf '#!/bin/sh\necho ..%s\n' "$T/running.img" >"$T/bin/lsblk"
+chmod +x "$T/bin/findmnt" "$T/bin/lsblk"
+
 # --- 8. the scan -- rule 9, which the explicit-target path cannot reach -----------------------------
 # Zero says why, one prints it, two or more refuses rather than picks. The last is the rule with
 # teeth: on a disk it did not choose, every geometric guarantee in this script is about the wrong

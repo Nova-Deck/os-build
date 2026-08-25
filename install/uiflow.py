@@ -9,6 +9,7 @@
 # was derived independently it said "NovaDeck will use the remaining 0 GiB" while the carve handed
 # it 90853 MiB (Pocket ACE, 2026-08-21). A second copy of a rule is how the halves drift apart.
 import os
+import time
 
 from uipad import TOKEN_BACK, TOKEN_QUIT, log
 
@@ -26,9 +27,20 @@ SELECT_TARGET = os.environ.get(
     "NOVADECK_SELECT_TARGET", "/usr/lib/novadeck/install/select-target.sh")
 CARVE = os.environ.get("NOVADECK_CARVE", "/usr/lib/novadeck/install/carve.sh")
 SPINE = os.environ.get("NOVADECK_SPINE", "/usr/lib/novadeck/install/novadeck-install")
-# Phase 6 gives the installer medium a config file for these two; until it exists they are the
-# environment, and the pre-flight screen refuses to start an install without them rather than
-# inventing a default that would download something nobody asked for.
+# WHERE THE BYTES COME FROM, and the two halves arrive differently on purpose. The OS bundle is
+# resolved from the update channel at install time by install/release-info, so any medium installs
+# the current release. The Steam seed /home is built from is CARRIED BY THE MEDIUM -- 1.4 GiB staged
+# into this root by install/mkimage.sh, with its sha256 beside it -- because a medium is bound to one
+# seed whichever way it arrives, and fetching it only added a publisher, a pin handed between CI jobs
+# and 1.7 GB of tmpfs taken while rauc streams the bundle.
+#
+# Both remain overridable, for the hardware stager (install/hw-install.sh serves a bundle off a
+# laptop and points the seed at a path on the card) and for the suite.
+RELEASE_INFO = os.environ.get("NOVADECK_RELEASE_INFO", "/usr/lib/novadeck/install/release-info")
+# A seam like every other path here, so install/test-ui.sh can exercise both "the medium
+# carries one" and "it does not" without a /usr/lib to write into.
+SEED_ON_MEDIUM = os.environ.get(
+    "NOVADECK_SEED_ON_MEDIUM", "/usr/lib/novadeck/install/steam-seed.tar.zst")
 BUNDLE = os.environ.get("NOVADECK_INSTALL_BUNDLE", "")
 HOME_SEED = os.environ.get("NOVADECK_INSTALL_SEED", "")
 
@@ -118,34 +130,126 @@ def plan_carve(disk, gib):
     }
 
 
+_RELEASE = None     # a resolved release, cached. A FAILURE IS NEVER CACHED, so Check again re-asks.
+
+
+def resolve_release():
+    """
+    {bundle, seed, state, detail} -- what this medium would install, or why it cannot.
+
+    THE FACTS BELONG TO release-info AND THE WORDS TO THE SCREEN, the same split as netcfg. All this
+    does is prefer the environment over the server, per source rather than as a pair: the hardware
+    stager serves a bundle off a laptop and hands the seed over as a local path (~1 GB that must not
+    be re-fetched into tmpfs at every reboot), so the two arrive from different places there and
+    an all-or-nothing override would make that run ask the server for a seed it already has.
+
+    Only a resolved release is remembered. Every failure here is one a person can act on -- the
+    server was not up yet, the channel had nothing published, DNS was still settling -- and a cached
+    "no" would make the Check again button on the pre-flight screen a button that redraws itself.
+    """
+    global _RELEASE
+    # THE SEED IS A FILE ON THIS MEDIUM, and a missing one is a fact worth a screen rather than a
+    # spine that dies at verify_sources with the disk untouched but nothing on the panel to explain
+    # it. mkimage refuses to build a medium without one, so this only fires for a hand-assembled
+    # tree -- which is exactly when a plain answer is worth most.
+    seed = HOME_SEED or (SEED_ON_MEDIUM if os.path.exists(SEED_ON_MEDIUM) else "")
+    if BUNDLE and seed:
+        return {"bundle": BUNDLE, "seed": seed, "state": "ok", "detail": ""}
+    if _RELEASE is not None:
+        return _RELEASE
+    # SYNCHRONOUS, and bounded so it can stay that way. This blocks the frame like every other tool
+    # the pre-flight gathers from (select-target.sh, carve.sh), and it is reached only after netcfg
+    # has already pronounced the same host reachable within its own 20s -- so the fetch is a few
+    # hundred bytes over a connection just proven to work. `netcfg join` is a child process instead
+    # because it waits on an access point for up to 90s, which is a frozen panel and looks like a
+    # dead device (HW 2026-08-24). Keep this the short one, or it earns the same treatment.
+    rc, out = run_tool([RELEASE_INFO], timeout=45)
+    facts = kv(out)
+    state = facts.get("STATE", "")
+    if not state:
+        # release-info always prints a STATE, so no STATE means it did not run: a medium that
+        # shipped without it, or a python that could not start. HW 2026-08-24 taught this shape
+        # once already, with lib-gpt.sh -- a tool that is missing must not read as an answer.
+        state, facts = "no-tool", {
+            "DETAIL": "the installer's own release helper did not answer: %s"
+                      % ((out.strip().splitlines() or ["it produced nothing (rc=%d)" % rc])[-1])}
+    if state == "ok" and not seed:
+        # The bundle resolved and the medium has no Steam tree: say which half is missing, since the
+        # screen would otherwise show a perfectly good release next to a Continue that never appears.
+        state = "no-seed"
+        facts = {"DETAIL": "this medium carries no Steam seed (no %s) -- it cannot build /home"
+                           % SEED_ON_MEDIUM}
+    release = {
+        "bundle": BUNDLE or facts.get("BUNDLE", ""),
+        "seed": seed,
+        "state": state,
+        "detail": facts.get("DETAIL", ""),
+    }
+    log("release: %s (%s)" % (state, release["detail"] or "no detail"))
+    if release["bundle"] and release["seed"]:
+        _RELEASE = release
+    return release
+
+
 def gather_preflight():
     """
-    Everything the pre-flight screen shows, or None if there is nothing to install onto.
+    (facts, reason) -- facts for the pre-flight screen, or None with the reason there are none.
 
-    Returning None is a normal outcome, not a failure: the UI is also started on a machine where the
-    spine is being driven over SSH, and there its only job is to render consent when asked.
+    THE REASON IS RETURNED, NOT JUST LOGGED, and that is the whole point of the second element.
+    This used to return a bare None for every no-target outcome, so the panel fell back to a screen
+    saying "Waiting for the installer." and nothing else. That reads as correct in exactly one
+    situation -- the UI running as a consent renderer for a spine driven over SSH -- and it was
+    silently swallowing two others that look nothing like it: a device that genuinely has no target
+    (booted from internal, rule 1), and select-target.sh failing to RUN at all.
+
+    HW-FOUND 2026-08-24: the medium shipped without lib-gpt.sh, select-target.sh died with
+    "cannot find lib-gpt.sh", and the operator got "Waiting for the installer." forever with no clue
+    that anything had gone wrong. A person holding the device could not tell a broken build from a
+    disk this installer refuses to touch. Whatever the caller does with it, the reason has to reach
+    the screen.
     """
     rc, out = run_tool([SELECT_TARGET])
     if rc != 0:
-        log("no install target (%s); serving consent only" % out.strip().splitlines()[-1:])
-        return None
+        # KEEP THE REASONS, NOT THE SUMMARY. select-target.sh prints one INDENTED line per disk
+        # explaining why that disk was rejected, then ends with "no disk qualifies -- see the
+        # reasons above". Taking splitlines()[-1] kept only the summary, so the panel told the
+        # operator to look above it -- on a screen with no above. HW 2026-08-24, Pocket FIT: rule 3b
+        # correctly refused a disk carrying ROCKNIX and said so in as many words ("partition 12
+        # (ROCKNIX) is a bootable ESP that is not ours -- remove the other OS first"), and that
+        # sentence was the one thrown away.
+        lines = [ln.strip() for ln in out.strip().splitlines() if ln.strip()]
+        detail = [ln for ln in lines if ln.startswith(("/dev/", "  /dev/"))] or \
+                 [ln for ln in lines if ln.startswith("/dev/")]
+        # The indented per-disk lines are the answer; fall back to everything, then to the summary,
+        # so a message shape we did not anticipate still reaches the screen instead of vanishing.
+        reason = "\n".join(detail) if detail else ("\n".join(lines[-3:]) if lines
+                                                   else "select-target.sh failed with no output")
+        log("no install target (%s); serving consent only" % reason.replace("\n", " | "))
+        return None, reason
     target = kv(out)
     disk = target.get("TARGET", "")
     if not disk:
-        return None
+        return None, "select-target.sh named no disk"
     name = "this device"
     drc, dout = run_tool([DEVICE_ENV])
     if drc == 0:
         name = kv(dout).get("NOVADECK_DEVICE_NAME", name)
-    return {
+    facts = {
         "device": name,
         "disk": disk,
         "mode": target.get("MODE", "?"),
         "ud_index": target.get("UD_INDEX", "?"),
         "disk_facts": disk_facts(disk),
-        "bundle": BUNDLE,
-        "seed": HOME_SEED,
     }
+    facts.update(release_facts())
+    return facts, ""
+
+
+def release_facts():
+    """The three keys the pre-flight screen reads about the download, as a fresh dict."""
+    r = resolve_release()
+    return {"bundle": r["bundle"], "seed": r["seed"],
+            "release": r["state"], "release_detail": r["detail"]}
 
 
 # =================================================================================================
@@ -185,12 +289,19 @@ class NetworkScreen:
 
     # state -> (title, what happened, what the user does about it)
     TABLE = {
+        # THE STEPS ARE NUMBERED AND THE FILE IS REALLY THERE. This said "copy wifi.conf.example
+        # next to it", and until 2026-08-24 no such file existed anywhere -- not in the tree, not on
+        # any medium. Instructions naming a file that is not there read as a fault in the person
+        # following them. install/mkimage.sh now writes it to /novadeck/ on the medium's boot
+        # partition, which is typed 0700 precisely so Windows and macOS will show it.
         "no-conf": (
             "No Wi-Fi settings on this card",
-            "The installer downloads NovaDeck over the network, and it found no {path} to tell it "
+            "The installer downloads NovaDeck over the network, and it found no {path} telling it "
             "which network to join.",
-            "On another computer, copy wifi.conf.example next to it and fill in SSID and PSK. Or "
-            "plug in a USB-C Ethernet adapter -- that needs no file at all.",
+            "Power off and take the card out. On another computer, open the NDINSTALLER volume and "
+            "look in the novadeck folder: copy wifi.conf.example to a file named wifi.conf, open "
+            "the copy, and put your network name and password in it. Put the card back and switch "
+            "on. Or plug in a USB-C Ethernet adapter -- that needs no file at all.",
         ),
         "unparsable": (
             "The Wi-Fi settings could not be read",
@@ -217,6 +328,30 @@ class NetworkScreen:
             "This is the access point, not the installer -- its DHCP is not answering. Try another "
             "network, or a USB-C Ethernet adapter.",
         ),
+        # CONFIGURED BUT NOT YET JOINED. Self-clearing, like no-clock. have_lease is false for the
+        # whole association window, so before this row existed everything in that window fell
+        # through to `no-conf` and told the operator to go and write a file on another computer
+        # while the radio was mid-handshake -- and on a TEST medium, whose network is a baked NM
+        # profile with no wifi.conf at all, that was every cold boot rather than a corner case.
+        "associating": (
+            "Joining the network",
+            "{detail}. This device asks the access point for an address, and that takes a few "
+            "seconds after the radio associates.",
+            "Nothing to fix. It moves on by itself as soon as an address arrives.",
+        ),
+        # THE ONLY ROW WHOSE FIX IS TO DO NOTHING. These boards have no clock battery -- the PMIC
+        # RTC probe defers forever (issue #38) -- so on every cold boot the clock starts at the
+        # epoch and OpenSSL rejects every certificate as not-yet-valid until systemd-timesyncd has
+        # synced. HW 2026-08-24: this surfaced as "the update server is unreachable", which is a row
+        # that sends the operator to check their router, and it is neither their router nor the
+        # server. It clears itself within a few seconds of joining a network.
+        "no-clock": (
+            "Waiting for the time to be set",
+            "This device has no clock battery, so it does not know the date until the network tells "
+            "it -- {detail}. Until then every secure connection looks expired, including {url}.",
+            "Nothing to fix. Give it a few seconds and press Check again; it sets itself as soon as "
+            "the network answers.",
+        ),
         "no-host": (
             "Connected, but the update server is unreachable",
             "This device has an address, and {url} does not answer.",
@@ -229,6 +364,19 @@ class NetworkScreen:
             "Report this. The installer will not continue without knowing the network is up.",
         ),
     }
+
+    # STATES WITH NOTHING FOR A RETRY TO DO. HW 2026-08-24, on the first release medium to reach
+    # this screen: `no-conf` offered "Check again", and it cannot succeed. The card is inside the
+    # device, so nobody can write wifi.conf to it while it is running -- the only remedies are to
+    # power off, write the file on another computer and boot again, or to plug in USB-C Ethernet,
+    # which the periodic re-probe now notices by itself. So the button pointed at the one thing that
+    # could not help, gave no feedback when pressed (the state is unchanged, so the screen redraws
+    # identically), and sat where the eye looks first, while "Power off" -- the action the advice
+    # text actually asks for -- was the secondary.
+    #
+    # SELECT keeps Power off. Nothing replaces the South button: an installer that offers no action
+    # is telling the truth about a state that needs the operator to go and do something elsewhere.
+    NO_RETRY = ("no-conf",)
 
     def __init__(self, facts):
         self.facts = facts
@@ -244,6 +392,8 @@ class NetworkScreen:
             self.result = ("quit",) if self.state() == "need-join" else ("poweroff",)
         elif token == "S":
             st = self.state()
+            if st in self.NO_RETRY:
+                return          # no button is drawn for it, so nothing may act on the press either
             self.result = ("join",) if st == "need-join" else \
                           ("continue",) if st == "online" else ("retry",)
 
@@ -274,7 +424,8 @@ class NetworkScreen:
                    "detail": f.get("DETAIL", "no reason given")}
             title = title.format(**fmt)
             blocks = [("What happened", what.format(**fmt)), ("What to do", fix.format(**fmt))]
-            buttons = [{"pos": "S", "label": "Check again"}, {"pos": "SELECT", "label": "Power off"}]
+            buttons = [{"pos": "SELECT", "label": "Power off"}] if st in self.NO_RETRY else \
+                      [{"pos": "S", "label": "Check again"}, {"pos": "SELECT", "label": "Power off"}]
         return {
             "screen": "network",
             "state": st,
@@ -311,6 +462,13 @@ class PreflightScreen:
         self.gib = gib
         self.plan = plan_carve(self.facts["disk"], gib)
 
+    # A RELEASE FAILURE A RE-ASK CANNOT CURE. Same reasoning as the network screen's NO_RETRY, and
+    # it comes from the same finding: a button that cannot succeed, sitting where the eye looks
+    # first, is worse than no button (HW 2026-08-24). `no-pin` is a property of how this medium was
+    # BUILT: the Steam tree it would build /home from is not on it, and no amount of asking the
+    # update server again will put it there. The screen says so instead of offering to try.
+    NO_RETRY = ("no-seed",)
+
     def handle(self, token):
         if token == "LEFT":
             self._replan(self.gib - UD_GIB_STEP)
@@ -321,36 +479,123 @@ class PreflightScreen:
             # bundle and THEN takes consent -- the disk is still untouched on the other side of it.
             if self.ready():
                 self.result = ("start", self.gib)
+            elif self.facts.get("release") not in self.NO_RETRY:
+                # The disk is already known; it is the download that is not. Ask again for that
+                # alone -- and keep the size the operator chose, which is why this is a result the
+                # loop acts on rather than a fresh screen built here.
+                self.result = ("recheck",)
         elif token in (TOKEN_BACK, TOKEN_QUIT):
             self.result = ("quit",)
 
     def ready(self):
         return bool(self.facts.get("bundle")) and bool(self.facts.get("seed"))
 
+    def to_install(self):
+        """
+        What is about to be downloaded, or WHY THERE IS NOTHING TO DOWNLOAD.
+
+        This block used to be the bundle URL or the words "NO BUNDLE CONFIGURED", which named the
+        symptom and no cause: an unreachable server, a channel with nothing published, a manifest
+        that did not parse and a medium built with no seed pin all produced the same four words on
+        the same dead-end screen. release-info knows which it is and says so in one line
+        ([[screens-must-say-what-the-code-knows]]), so this passes that line through rather than
+        writing a fifth version of it here.
+        """
+        f = self.facts
+        if self.ready():
+            return f.get("release_detail") or f["bundle"]
+        detail = f.get("release_detail")
+        if detail:
+            return detail
+        return ("This installer has not been told what to install, and cannot continue."
+                if f.get("release") else
+                "The download has not been worked out yet -- press Check again.")
+
     def describe(self):
         f, d = self.facts, self.facts["disk_facts"]
         destroy = self.plan["destroy"]
-        if destroy:
-            lost = "\n".join(
-                "p%s  %s  (%s)" % (x["index"], x["name"], x["fate"].replace("-", " "))
-                for x in destroy)
-        else:
+        # ONE LINE PER PARTITION DOES NOT FIT, and this screen is the one that must. HW 2026-08-25,
+        # Pocket ACE with NovaDeck already installed: eight partitions at one line each, under a
+        # heading, above four more blocks, ran off the bottom of the panel and collided with the
+        # SELECT row -- worse after the type scale went up, which it did because these screens were
+        # too small to read.
+        #
+        # NOTHING IS ELIDED TO ACHIEVE IT. This is the list a person consents to losing; "and 4
+        # more" is not a thing a consent screen may say. When every partition shares one fate --
+        # which is exactly the eight-of-ours case -- the fate is stated ONCE in the heading and the
+        # names run together as prose the wrapper can break, so eight lines become two and every
+        # index and name is still on the panel. Mixed fates stay one per line, because there the
+        # fate is the information and the list is short anyway.
+        lost_head = "These partitions will be destroyed"
+        if not destroy:
             lost = "carve.sh could not be asked what it would destroy -- do not continue."
-        blocks = [
+        else:
+            # ONE LINE PER FATE, NOT PER PARTITION. carve.sh emits `userdata data-erased` and then
+            # one `replaced` per partition of ours that exists, so a reinstall is nine lines under
+            # a heading with four blocks below it -- which ran off the panel and collided with the
+            # SELECT row on a Pocket ACE (HW 2026-08-25).
+            #
+            # GROUPING, NOT A SINGLE-FATE SPECIAL CASE. The first attempt at this compacted only
+            # when every fate matched, and no real disk produces that: userdata is always in the
+            # list with a fate of its own, so the branch could not fire on hardware and the screen
+            # was unchanged. Grouping has no such condition -- it is the same code path for one
+            # fate or five, which is why it cannot quietly not happen.
+            order, groups = [], {}
+            for x in destroy:
+                fate = x["fate"].replace("-", " ")
+                if fate not in groups:
+                    groups[fate] = []
+                    order.append(fate)
+                groups[fate].append("p%s %s" % (x["index"], x["name"]))
+            lost_head = "These %d partitions will be destroyed" % len(destroy)
+            # Every index and name still reaches the panel: this is the list a person consents to
+            # losing, so it is compacted, never shortened. The wrapper breaks the long group.
+            lost = "\n".join("%s:  %s" % (fate, ",  ".join(groups[fate])) for fate in order)
+        # WHAT KIND OF INSTALL THIS IS, said before anything else. HW 2026-08-24, Pocket ACE with
+        # NovaDeck already on its internal disk: the screen listed our own eight partitions in the
+        # destroy list and never said the word reinstall, so nothing on it distinguished "install
+        # alongside Android" from "replace the NovaDeck that is already here". The mode was in the
+        # facts the whole time and simply was not drawn.
+        #
+        # AND THE PLAN REALLY IS A FRESH CARVE. select-target.sh reports MODE=reinstall when our
+        # eight are present, but plan_carve() calls `carve.sh plan`, and carve.sh handles `plan` in
+        # the same branch as `fresh` -- so what is being described, and what pressing through would
+        # do, destroys /home. The `reinstall` mode that keeps /home is not reachable from this UI at
+        # all. Saying so is the honest thing until it is: the operator is not choosing wrong, the
+        # choice does not exist yet.
+        if f.get("mode") == "reinstall":
+            blocks = [
+                ("This device already has NovaDeck",
+                 "Everything currently installed will be erased and replaced, INCLUDING /home -- "
+                 "your games, saves and settings. This installer cannot yet repair an existing "
+                 "install while keeping them; it only does a full replacement."),
+            ]
+        else:
+            blocks = [
+                ("This device is running Android",
+                 "NovaDeck will be installed alongside it. Android keeps the space you choose "
+                 "below, and everything else on that partition is erased."),
+            ]
+        blocks += [
             ("Target", "%s  %s  %s GiB" % (f["disk"], d["model"], d["size_gib"])),
             ("Android keeps", "%s GiB   (left / right to change)" % self.gib),
             ("NovaDeck gets", "%s GiB" % self.plan["NOVADECK_GIB"]),
-            ("These partitions will be destroyed", lost),
-            ("To install", f["bundle"] or "NO BUNDLE CONFIGURED -- this installer cannot continue."),
+            (lost_head, lost),
+            ("To install", self.to_install()),
         ]
         return {
             "screen": "preflight",
-            "title": "Install NovaDeck on %s" % f["device"],
+            # The title carries it too: the first block explains, but a person glancing at the panel
+            # reads the heading, and "Install" and "Replace" are different promises.
+            "title": ("Replace the NovaDeck on %s" if f.get("mode") == "reinstall"
+                      else "Install NovaDeck on %s") % f["device"],
             "blocks": blocks,
             "diamonds": [],
             "prompt": "",
             "note": "Nothing has been written yet, and nothing will be until you confirm.",
-            "buttons": ([{"pos": "S", "label": "Continue"}] if self.ready() else [])
+            "buttons": ([{"pos": "S", "label": "Continue"}] if self.ready() else
+                        [] if f.get("release") in self.NO_RETRY else
+                        [{"pos": "S", "label": "Check again"}])
             + [{"pos": "SELECT", "label": "Cancel"}],
             "abort": "",
         }
@@ -392,10 +637,130 @@ PHASES = [
 PHASE_ALIAS = {"/home (kept)": "/home"}
 
 
+class NetJoin:
+    """
+    netcfg join as a child process, so the frame keeps drawing while nmcli works.
+
+    It was a synchronous run_tool with a 180s timeout, which did not merely fail to acknowledge the
+    press -- it blocked the whole UI loop, so nothing redrew and a slow access point made the device
+    look dead. HW 2026-08-24.
+    """
+
+    def __init__(self):
+        import subprocess
+
+        log("joining the network")
+        self.proc = subprocess.Popen(
+            [NETCFG, "join"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=0)
+        os.set_blocking(self.proc.stdout.fileno(), False)
+        self.chunks = []
+        self.started = time.monotonic()
+
+    def _drain(self):
+        try:
+            d = self.proc.stdout.read()
+            if d:
+                self.chunks.append(d)
+        except (BlockingIOError, ValueError, OSError):
+            pass
+
+    def attempt(self):
+        """
+        Which activation netcfg is on, read from the output it has produced SO FAR.
+
+        netcfg emits ATTEMPT= before each try, and this is drained mid-flight rather than at the end,
+        which is the whole point: a second activation must be something the connecting screen can
+        say while it is happening. A join that has printed nothing yet is attempt 1.
+        """
+        self._drain()
+        out = b"".join(self.chunks).decode("utf-8", "replace")
+        n = 1
+        for line in out.splitlines():
+            if line.startswith("ATTEMPT="):
+                try:
+                    n = int(line.split("=", 1)[1].strip())
+                except ValueError:
+                    pass
+        return n
+
+    def poll(self):
+        """The diagnosis once the join has finished, or None while it is still running."""
+        self._drain()
+        if self.proc.poll() is None:
+            return None
+        self._drain()
+        out = b"".join(self.chunks).decode("utf-8", "replace")
+        facts = kv(out)
+        if not facts.get("STATE"):
+            last = (out.strip().splitlines() or ["netcfg produced no diagnosis"])[-1]
+            facts = {"STATE": "netcfg-failed", "DETAIL": last}
+        log("join finished after %.1fs: %s  (%s)" % (
+            time.monotonic() - self.started, facts.get("STATE"), facts.get("DETAIL", "")))
+        # EVERYTHING THE CHILD SAID, NOT JUST THE FACTS IT EMITTED. netcfg logs how long nmcli took
+        # and whether it returned OK or failed -- the two lines that separate "we judged the lease
+        # too early" from "nmcli failed in a shape neither error grep catches" -- and it writes them
+        # to STDERR. This class captures stderr into stdout so the frame can keep drawing, so those
+        # lines land in this buffer and went NOWHERE: kv() keeps the key=value lines and the prose
+        # was dropped on the floor whenever STATE parsed. HW 2026-08-25, an installer log that could
+        # not answer the question the instrumentation had been added for a day earlier.
+        #
+        # Re-emitting is safe BECAUSE netcfg guarantees it: "THE PSK IS NEVER PRINTED, not even in a
+        # debug line". This is the loop that would publish it to the journal and the ESP if that
+        # ever stopped being true, so it is the loop that has to keep naming the guarantee.
+        for line in out.splitlines():
+            line = line.strip()
+            if line and "=" not in line.split(" ", 1)[0]:
+                log("  netcfg: %s" % line)
+        return facts
+
+
+class ConnectingScreen:
+    """Shown the instant Join is pressed, so the press is visibly registered."""
+
+    name = "connecting"
+    interactive = False          # it asks for nothing, so a scripted source spends no press on it
+
+    def __init__(self, ssid, attempt=None):
+        self.ssid = ssid or "the network"
+        self.started = time.monotonic()
+        # A callable, not a number: the attempt changes WHILE this screen is up, and a screen that
+        # took a copy at construction would keep claiming the first one through the second.
+        self.attempt = attempt or (lambda: 1)
+
+    def handle(self, token):
+        pass
+
+    def describe(self):
+        # Animated from elapsed time rather than a frame counter, so it moves at the same rate
+        # whatever the panel is doing.
+        dots = "." * (1 + int((time.monotonic() - self.started) * 2) % 3)
+        # THE SECOND ACTIVATION IS SAID OUT LOUD. netcfg re-activates once when the first join lands
+        # without an address (HW 2026-08-25), and an operator watching an unexplained wait get twice
+        # as long is exactly who this screen exists for -- silence here would undo the reason the
+        # join was made asynchronous in the first place.
+        try:
+            n = self.attempt()
+        except Exception:                                          # noqa: BLE001 - never a screen
+            n = 1
+        second = [("", "The first attempt joined without being given an address. Trying once "
+                       "more -- this is the attempt that usually succeeds.")] if n > 1 else []
+        return {
+            "screen": "connecting",
+            "title": "Connecting to '%s'" % self.ssid,
+            "blocks": [("", "Joining the network, then asking it for an address%s" % dots)] + second
+                      + [("", "Usually a few seconds. Some access points take up to a minute to "
+                              "hand out an address.")],
+            "diamonds": [],
+            "prompt": "",
+            "note": "",
+            "abort": "",
+        }
+
+
 class SpineRun:
     """install/novadeck-install as a child process, read without blocking the frame."""
 
-    def __init__(self, gib, sock_path, intent=None):
+    def __init__(self, gib, sock_path, bundle, seed, intent):
         import subprocess
 
         env = dict(os.environ)
@@ -404,9 +769,22 @@ class SpineRun:
         env["NOVADECK_CONFIRM"] = os.path.join(
             os.path.dirname(os.path.abspath(__file__)), "confirm-ui")
         env["NOVADECK_UI_SOCK"] = sock_path
-        argv = [SPINE, "--bundle", BUNDLE, "--home-seed", HOME_SEED, "--userdata-gib", str(gib)]
-        if intent:
-            argv += ["--intent", intent]
+        # THE URLS COME FROM THE SCREEN THAT WAS SHOWN, not from a second call to release-info and
+        # not from the module's environment defaults. Whatever the pre-flight printed under "To
+        # install" is what gets installed: resolving again here would be a second copy of the rule,
+        # free to answer differently from the one the operator read (the update server can publish
+        # between the two calls) -- the same drift the screen's every-figure-is-measured rule exists
+        # to prevent.
+        # --intent IS NOT OPTIONAL, and it was until hardware said so. On a disk that already
+        # carries NovaDeck the spine refuses to pick for us -- "a disk that already carries a
+        # novadeck install admits three different answers and this script may not pick one" -- so an
+        # install on such a disk died at select-target, every time, with the UI having done
+        # everything else right (Pocket ACE, 2026-08-25). This argument existed and nothing ever
+        # passed it, which is why a REQUIRED parameter now rather than a default: the same shape as
+        # bundle and seed, which were silently taken from the module's environment until the day
+        # they were empty.
+        argv = [SPINE, "--bundle", bundle, "--home-seed", seed,
+                "--userdata-gib", str(gib), "--intent", intent]
         log("starting the spine: %s" % " ".join(argv))
         self.proc = subprocess.Popen(
             argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, bufsize=0)
@@ -474,9 +852,18 @@ class ProgressScreen:
         if self.rc is None:
             return
         # A finished install offers one button and it says Power off -- §5, "Remove the SD card,
-        # then power the device off". A FAILED one offers Continue, because the user still has a
-        # log to read and a device that may need re-running.
-        self.result = ("poweroff",) if self.rc == 0 else ("quit",)
+        # then power the device off".
+        #
+        # A FAILED one offered "Continue", which named nothing that happens: it quit the UI and left
+        # a blank panel. Flagged on hardware 2026-08-25, and the operator was right to find it odd --
+        # a failure screen has exactly two useful actions, and neither of them is continuing. Trying
+        # again is the DOCUMENTED recovery (the installer takes no backups precisely because
+        # re-running has to work), and powering off is what gets the log onto the ESP, since
+        # save-log.sh runs when the unit stops.
+        if self.rc == 0:
+            self.result = ("poweroff",)
+        else:
+            self.result = ("retry",) if token == "S" else ("poweroff",)
 
     def finish(self, rc):
         self.rc = rc
@@ -496,8 +883,14 @@ class ProgressScreen:
                 "state": state,
                 "percent": self.percent if state == "active" else None,
             })
-        blocks = [("", r["label"] + ("  %d%%" % r["percent"] if r["percent"] is not None else ""))
-                  for r in rows if r["state"] != "pending"]
+        # NOT a second copy of the phase list. uiview's _phases() renders `rows` -- with the
+        # done/active colour, the bar and the percentage -- and this used to ALSO build one
+        # plain-text line per reached phase, which _flow() draws immediately above it. So every
+        # phase the spine reached appeared twice on the panel: once flat, once as a real row.
+        # Observed on an AYANEO Pocket ACE, 2026-08-25 ("Reading the disk / Choosing the target /
+        # Writing the install record", each twice). `rows` is the renderer; `blocks` carries only
+        # what has no row of its own.
+        blocks = []
         title = "Installing NovaDeck"
         note = "Do not power the device off."
         buttons = []
@@ -513,7 +906,8 @@ class ProgressScreen:
             note = ("The disk WAS modified. Re-run the installer; Android's data is already gone."
                     if self.reached_carve else
                     "Nothing was written. The device is exactly as it was.")
-            buttons = [{"pos": "S", "label": "Continue"}]
+            buttons = [{"pos": "S", "label": "Try again"},
+                       {"pos": "SELECT", "label": "Power off"}]
             blocks = blocks + [("What happened", "\n".join(self.run.tail[-6:]))]
         return {
             "screen": "progress",

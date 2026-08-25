@@ -1,0 +1,66 @@
+# TEMPORARY — DELETE THIS FILE BEFORE MERGING `install/phase6-image`.
+#
+# It exists to run the installer half of image.yml ONCE, on real CI, before any of it is trusted.
+# `release-installer.yml` is the real entry point and this is not a second one: it publishes
+# nothing, holds no credential, and names no environment.
+#
+# WHY A PUSH TRIGGER RATHER THAN A DISPATCH. `workflow_dispatch` only exists for workflows that are
+# on the DEFAULT branch, and these are not — so `gh workflow run "release installer"` answers "could
+# not find any workflows named release installer" until they land on main. A push trigger is the one
+# way to run a workflow that lives only on a feature branch.
+#
+# AND WHY IT CANNOT BE THE REAL WORKFLOW. `release-installer.yml`'s seed job declares
+# `environment: release-signing`, whose deployment-branch policy is `ota/v*`, and its publish job
+# declares `release-cards`, whose policy is `main` + `card/v*`. Both would REJECT a run from this
+# branch (and from an `installer/v*` tag) before the job starts. Widening those policies is a repo
+# settings change and a decision of its own; this file needs neither, because it stops at the
+# workflow artifact.
+#
+# WHAT IT ACTUALLY PROVES, none of which offline suites can:
+#   - `artifact: installer` passes image.yml's validation, and the seed_pin gate accepts a real pin
+#   - the mesa-x86 job is SKIPPED and the build job still runs (a skipped `needs` skips its
+#     dependents unless the condition allows it — the failure mode is a green run with no artifact)
+#   - `make installer` completes on a GitHub arm64 runner from a COLD tree: no cached installer
+#     root, no cached overlay, the whole emulation-free native path
+#   - `make verify-image` passes on what that produced — the gate between a green build and a
+#     published medium
+#   - the compress + metadata + upload steps produce the artifacts release-installer.yml's publish
+#     job expects to download, under the names it expects
+#
+# WHAT IT DOES NOT PROVE: the seed publish, the pin flowing out of that job, and the R2 upload.
+# Those need the two environments above.
+#
+# PATH-FILTERED so ordinary work on this branch does not each cost a multi-hour arm64 run. It fires
+# only when THIS file changes — to re-run it, touch the file and push.
+name: installer smoke (temporary)
+
+on:
+  push:
+    branches:
+      - install/phase6-image
+    paths:
+      - .github/workflows/installer-smoke.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: installer-smoke
+  cancel-in-progress: true
+
+jobs:
+  installer:
+    uses: ./.github/workflows/image.yml
+    with:
+      artifact: installer
+      # Stamped into the medium's own /etc/novadeck-release and os-release, so the artifact says
+      # what it is rather than borrowing a release version it is not.
+      version: smoke
+      # A REAL PIN, from the seed packed on 2026-08-25 (3.3 GB of staged tree -> 1449 MiB). It is not
+      # published yet, which this build cannot tell and does not need to: mkroot bakes the hash and
+      # verify-image asserts it is a well-formed sha256 that landed inside the squashfs. The only
+      # thing a published seed would add here is a URL that resolves, which nothing in this run
+      # fetches.
+      seed_pin: cceeb14c9c55788967ac9e7c8f7265c26f2d94a0c0cdd93f215b92d83cb8cba6
+      # No environment, and therefore no secret in scope for the whole build.
+      environment: ''

@@ -43,8 +43,12 @@ KEEP="${NOVADECK_CARD_KEEP:-1}"
 # the default and the only one this script had; `installer/<version>/` is the recovery medium
 # release-installer.yml publishes. Both are the same act — a file a person downloads and writes to a
 # card — so they are one publisher rather than a second copy of the upload, the retention and the
-# public-readability check. The retention knob above applies to whichever prefix this names; an
-# installer is ~600 MiB against the card's ~5 GiB, so its caller sets a larger KEEP.
+# public-readability check. The retention knob above applies to whichever prefix this names, and its
+# caller sets it: a medium is ~2.1 GB against the card's 5.08 GiB, so two of each is about all a
+# 10 GB free tier holds.
+#
+# THE PRUNE IS SCOPED TO THIS PREFIX, which is the part to be careful with — it is an `rclone purge`,
+# and a KIND that leaked between callers would delete the other artifact's back catalogue.
 KIND="${NOVADECK_R2_KIND:-cards}"
 
 log() { printf '[publish] %s\n' "$*" >&2; }
@@ -52,8 +56,12 @@ die() { printf '[publish] %s\n' "$*" >&2; exit 1; }
 
 # Validated AFTER die() exists: a check that calls it two lines earlier dies with `die: command not
 # found` and exit 127, which says nothing about the variable it was checking.
+# NO EMPTY BRANCH HERE, and its absence is deliberate: `:-` above already substitutes the default
+# for an empty value as well as an unset one, so `''` in this case could never fire. That is also the
+# behaviour to want — a `NOVADECK_R2_KIND: ${{ vars.X }}` that evaluates empty in CI should publish
+# a card, not break the release. Same `:-` semantics as NOVADECK_CARD_KEEP above.
 case "$KIND" in
-  ''|*[!a-z0-9-]*) die "NOVADECK_R2_KIND must be a plain lowercase bucket prefix, got '$KIND'" ;;
+  *[!a-z0-9-]*) die "NOVADECK_R2_KIND must be a plain lowercase bucket prefix, got '$KIND'" ;;
 esac
 
 . "$ROOT/images/lib-rclone.sh"

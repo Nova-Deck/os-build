@@ -412,6 +412,7 @@ test: verify-lock ## Run the offline bootctl/post-install/pairingd/quirks/stage-
 	bash images/test-decky.sh
 	bash images/test-update.sh
 	bash images/test-publish-bundle.sh
+	bash images/test-publish-card.sh
 	bash images/test-steamos-manager.sh
 	bash install/test-install.sh
 	bash install/test-ui.sh

@@ -36,7 +36,13 @@ class PygameView:
         pygame.display.set_caption("NovaDeck installer")
         self.surface = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
         self.w, self.h = self.surface.get_size()
-        base = max(14, int(self.h / 34))
+        # THE PANEL IS HELD AT ARM'S LENGTH, NOT SAT IN FRONT OF. h/34 came from reading these
+        # screens on a monitor; on the device they were consistently a little small (reported
+        # 2026-08-25), which on the one screen that matters -- a failure naming the file to edit and
+        # the computer to edit it on -- is the difference between advice read and advice squinted
+        # at. h/28 is about 20% larger. Everything else scales off this, so the title and headings
+        # keep their relationship to the body and only the one number moves.
+        base = max(16, int(self.h / 28))
         self.f_title = pygame.font.Font(None, int(base * 1.9))
         self.f_head = pygame.font.Font(None, int(base * 1.25))
         self.f_body = pygame.font.Font(None, base)
@@ -106,11 +112,17 @@ class PygameView:
         # Reported from the panel twice (2026-08-24), on the network screen and again on the
         # connected one. Derived from r so it tracks the dot size on any output.
         gap = r * 6
+        # ONE BASELINE FOR EVERY CONTROL IN THE ROW. A diamond's label is centred on the diamond,
+        # at y + span; SELECT was blitted at y, the row's TOP, so the two captions sat a whole span
+        # apart on the same row and "SELECT Cancel" rode high above "Join" next to it. Reported from
+        # the panel, 2026-08-25. The centre line is a property of the ROW, not of whichever control
+        # happens to be drawn, so it is computed once here and both paths are given it.
+        cy = y + span
         for b in buttons:
             if b["pos"] == "SELECT":
-                x = self._inline(x, y, "SELECT", b["label"])
+                x = self._inline(x, cy, "SELECT", b["label"])
                 continue
-            cx, cy = x + span, y + span
+            cx = x + span
             for pos, (dx, dy) in (
                 ("N", (0, -span)), ("E", (span, 0)), ("S", (0, span)), ("W", (-span, 0))
             ):
@@ -124,9 +136,10 @@ class PygameView:
             # between controls dependent on a constant that no longer describes the layout.
             x = cx + span + gap + label.get_width() + int(self.w * 0.05)
 
-    def _inline(self, x, y, key, label):
+    def _inline(self, x, cy, key, label):
+        """A control with no glyph to draw, centred on the row's centre line like the diamonds."""
         surf = self.f_body.render("%s  %s" % (key, label), True, self.FG)
-        self.surface.blit(surf, (x, y))
+        self.surface.blit(surf, (x, cy - surf.get_height() // 2))
         return x + surf.get_width() + int(self.w * 0.05)
 
     def _text(self, s, font, colour, x, y):

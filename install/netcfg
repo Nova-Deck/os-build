@@ -52,6 +52,16 @@ CONNECT_TIMEOUT=${NOVADECK_NET_TIMEOUT:-20}
 # a join that times out costs the operator a full retry, so err long -- the UI animates throughout
 # and the child is polled, so waiting is not a frozen screen.
 JOIN_TIMEOUT=${NOVADECK_NET_JOIN_TIMEOUT:-90}
+# HOW MANY ACTIVATIONS ONE JOIN IS WORTH. HW 2026-08-25, from the first ESP log this medium ever
+# delivered: the first attempt reached `no-lease` 10.2s into a 90s budget, the self re-check 5s later
+# still found no address, and a SECOND activation was online in 3.9s. So the lease does not arrive
+# late -- it does not arrive at all until the connection is activated again, and waiting longer is
+# the one thing that provably does not help (which is why JOIN_TIMEOUT above is not the knob).
+# Re-activating is what the operator did by hand, twice, and this is that, done for them.
+#
+# 2, not more: a second attempt costs the operator ~10s of animation, and past that a failure is a
+# real one that a screen should name rather than a loop should hide.
+JOIN_ATTEMPTS=${NOVADECK_NET_JOIN_ATTEMPTS:-2}
 
 emit() { printf '%s=%s\n' "$1" "$2"; }
 
@@ -88,6 +98,24 @@ host_reachable() {
 # operator looking at their network and their router for a fault in neither. curl exit 60 with an
 # unsynchronised clock is a WAITING state, not a reachability failure: it clears itself, and the
 # only correct advice is to wait a moment and check again.
+# Is $SSID on the air? `ssid_on_air` forces a fresh sweep; `ssid_on_air cached` reads whatever
+# NetworkManager already holds and costs nothing.
+#
+# A COUNTING GREP, NOT `grep -q`, and that is not a style choice: this file runs under `set -o
+# pipefail`, where `grep -q` exiting the instant it matches can SIGPIPE the producer and turn the
+# whole pipeline's status into 141 -- i.e. a MATCH reported as a failure. The two callers below both
+# ask "is it there?" and both act on a false negative by telling the operator their SSID is not
+# on the air, which is the wrong screen and an expensive one to be sent to.
+ssid_on_air() {
+  local mode=yes n
+  [ "${1:-}" = cached ] && mode=no
+  # `grep -c` PRINTS the count and THEN exits 1 when it is zero, so there is nothing to fall back
+  # to: a `|| echo 0` here appends a second zero and the test compares against "0\n0", which is not
+  # "0" and reports every network as on the air.
+  n=$("$NMCLI" -t -f SSID device wifi list --rescan "$mode" 2>/dev/null | grep -cxF "$SSID")
+  [ "${n:-0}" -gt 0 ]
+}
+
 # Is the radio mid-join? nmcli reports a device state like "connecting (getting IP configuration)",
 # so the prefix is what is matched -- the parenthetical names the phase and there are several.
 wifi_busy() {
@@ -245,7 +273,7 @@ diagnose() {  # <joined?>
     return 0
   fi
 
-  if ! "$NMCLI" -t -f SSID device wifi list --rescan yes 2>/dev/null | grep -qxF "$SSID"; then
+  if ! ssid_on_air; then
     emit STATE not-found
     return 0
   fi
@@ -265,26 +293,67 @@ join() {
   # below is only as good as the moment it is taken, so record how long nmcli actually took and what
   # it said -- the ESP log is the only evidence a release medium can produce. nmcli's stderr never
   # contains the key.
-  _t0=$(date +%s 2>/dev/null || echo 0)
-  if "$NMCLI" -w "$JOIN_TIMEOUT" device wifi connect "$SSID" password "$PSK" \
-       >/dev/null 2>"$TMP_ERR"; then
-    log "nmcli connect returned OK after $(( $(date +%s) - _t0 ))s of a ${JOIN_TIMEOUT}s budget"
-    diagnose 1
-    return 0
+  # WARM THE SCAN CACHE BEFORE THE FIRST ATTEMPT. HW 2026-08-25, from the ESP log: four seconds
+  # after the radio came up, `nmcli device wifi connect` failed in 0s with "No network with SSID
+  # 'x' found" -- NetworkManager simply had no scan result for it yet. The retry below then worked,
+  # because the not-found check between the two attempts runs a `--rescan yes` and populates the
+  # very cache the first attempt was missing. So the join was paying a whole failed activation to
+  # do a scan it could have done up front.
+  #
+  # IT NEVER GATES THE ATTEMPT. A hidden network is not in any scan by definition -- NM connects to
+  # one by setting scan_ssid=1 -- so "not in the scan" must not become "do not try". This warms the
+  # cache and nothing more; the connect below runs either way, and `not-found` is still decided
+  # after a real failure, by the fresh sweep that has always decided it.
+  if ! ssid_on_air cached; then
+    log "'$SSID' is not in the scan cache yet -- scanning before the first attempt"
+    ssid_on_air >/dev/null 2>&1 || true
   fi
-  log "nmcli connect FAILED after $(( $(date +%s) - _t0 ))s of a ${JOIN_TIMEOUT}s budget: $(head -1 "$TMP_ERR" 2>/dev/null)"
-  # nmcli says which of the two failures this is, and they have different fixes: a wrong PSK is
-  # retyped, an absent SSID is a typo or an AP out of range.
-  if grep -qiE 'secrets were required|password|encryption key' "$TMP_ERR" 2>/dev/null; then
-    emit STATE auth-failed
-    emit DETAIL "the network rejected the key in $WIFI_CONF"
-    return 0
-  fi
-  if ! "$NMCLI" -t -f SSID device wifi list --rescan yes 2>/dev/null | grep -qxF "$SSID"; then
-    emit STATE not-found
-    return 0
-  fi
-  diagnose 1
+
+  local attempt=1
+  while :; do
+    # The UI reads this WHILE the join runs -- its ConnectingScreen names the attempt, so a second
+    # activation is something the operator is told about rather than a longer unexplained wait.
+    emit ATTEMPT "$attempt"
+    _t0=$(date +%s 2>/dev/null || echo 0)
+    if "$NMCLI" -w "$JOIN_TIMEOUT" device wifi connect "$SSID" password "$PSK" \
+         >/dev/null 2>"$TMP_ERR"; then
+      log "nmcli connect returned OK after $(( $(date +%s) - _t0 ))s of a ${JOIN_TIMEOUT}s budget"
+      # THE VERDICT IS ONLY AS GOOD AS THE MOMENT IT IS TAKEN, and this is that moment. have_lease
+      # is the single question `no-lease` turns on, so asking it here -- before diagnose commits to
+      # a state -- is what makes one more activation possible instead of a screen the operator
+      # answers by pressing Join again.
+      if have_lease || [ "$attempt" -ge "$JOIN_ATTEMPTS" ]; then
+        diagnose 1
+        return 0
+      fi
+      log "activated with no v4 address; re-activating (attempt $((attempt + 1)) of $JOIN_ATTEMPTS)"
+      attempt=$((attempt + 1))
+      continue
+    fi
+    log "nmcli connect FAILED after $(( $(date +%s) - _t0 ))s of a ${JOIN_TIMEOUT}s budget: $(head -1 "$TMP_ERR" 2>/dev/null)"
+    # nmcli says which of the two failures this is, and they have different fixes: a wrong PSK is
+    # retyped, an absent SSID is a typo or an AP out of range.
+    #
+    # NEITHER IS EVER RETRIED. A key the network rejected is rejected again a second later, and an
+    # SSID that is not on the air does not appear because we asked twice -- retrying those would buy
+    # nothing and cost the operator another wait before the screen that names their actual fix.
+    if grep -qiE 'secrets were required|password|encryption key' "$TMP_ERR" 2>/dev/null; then
+      emit STATE auth-failed
+      emit DETAIL "the network rejected the key in $WIFI_CONF"
+      return 0
+    fi
+    if ! ssid_on_air; then
+      emit STATE not-found
+      return 0
+    fi
+    # A failure that is neither, on a network that IS on the air: the shape a retry actually cures.
+    if [ "$attempt" -ge "$JOIN_ATTEMPTS" ]; then
+      diagnose 1
+      return 0
+    fi
+    log "retrying the join (attempt $((attempt + 1)) of $JOIN_ATTEMPTS)"
+    attempt=$((attempt + 1))
+  done
 }
 
 TMP_ERR="$(mktemp)"; trap 'rm -f "$TMP_ERR"' EXIT

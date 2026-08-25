@@ -28,7 +28,13 @@ ESP=${NOVADECK_INSTALLER_ESP:-/esp}
 # without root and without a real filesystem.
 MOUNT=${NOVADECK_INSTALLER_MOUNT:-mount}
 UMOUNT=${NOVADECK_INSTALLER_UMOUNT:-umount}
-UNITS=${NOVADECK_INSTALL_UNITS:-novadeck-installer.service}
+# NETWORKMANAGER IS HERE BECAUSE THE INSTALLER'S OWN JOURNAL CANNOT ANSWER A NETWORK QUESTION.
+# HW 2026-08-25: the first join reached `no-lease` after 10.2s of a 90s budget and a second attempt
+# was online in 3.9s, and this log could say nothing about WHY -- the association, the DHCP
+# transaction and the address that never arrived all belong to NM, which was not collected. The
+# installer downloads the OS over the network, so "the network half-worked" is not a side issue
+# here, it is the failure mode.
+UNITS=${NOVADECK_INSTALL_UNITS:-novadeck-installer.service NetworkManager.service}
 JOURNALCTL=${JOURNALCTL:-journalctl}
 CONSOLE=${NOVADECK_INSTALL_CONSOLE:-/dev/tty1}
 RECORD=${NOVADECK_INSTALL_RECORD:-$RUNDIR/install/record}
@@ -48,6 +54,19 @@ mkdir -p "$RUNDIR" 2>/dev/null || true
             printf '(no journalctl on this image)\n'
         fi
     done
+    # THE KERNEL RING, because the driver is where a network fault stops being ours. ath12k answers
+    # a scan refusal storm with `scan event start failed ... reason 4`, and whether those lines are
+    # present or absent is what separates a driver bug from a NetworkManager one -- a distinction
+    # this log was asked to make on 2026-08-25 and could not. Absence is the useful reading as often
+    # as presence: zero refusals rules the driver out.
+    #
+    # -b, not -k alone, and never -b -1 for the reason the unit loop above gives.
+    printf '\n--- kernel ring ---\n'
+    if command -v "$JOURNALCTL" >/dev/null 2>&1; then
+        "$JOURNALCTL" -b -k --no-pager 2>&1 || printf '(no kernel journal)\n'
+    else
+        printf '(no journalctl on this image)\n'
+    fi
     # The spine keeps its own plain-text record of what it did and what the user consented to
     # (§3 rule 10). It is the half of the story the journal does not carry.
     if [ -r "$RECORD" ]; then

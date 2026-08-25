@@ -595,8 +595,8 @@ def run(server, view, source, base, deadline=0):
                     # a synchronous call with a 180s timeout, which blocked the loop: nothing
                     # redrew, so the operator had no sign the press registered and a slow access
                     # point made the device look dead.
-                    stack[-1] = ConnectingScreen(top.facts.get("SSID", ""))
                     netjoin = NetJoin()
+                    stack[-1] = ConnectingScreen(top.facts.get("SSID", ""), netjoin.attempt)
                 else:
                     stack[-1] = NetworkScreen(net_diagnose("diagnose"))
             elif result[0] == "continue":

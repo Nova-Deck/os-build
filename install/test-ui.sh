@@ -278,6 +278,14 @@ mkdir -p "$T/net" "$T/bin"
 # The stubs. Each case sets NET_* to steer them, and they record nothing the PSK could leak into.
 cat >"$T/bin/ip" <<'EOF'
 #!/usr/bin/env bash
+# NET_LEASE_AFTER models the HW 2026-08-25 failure: the address does not arrive until the Nth
+# ACTIVATION, so it is the connect count -- not elapsed time -- that decides whether there is a
+# lease. That is the whole distinction between "wait longer" and "activate again".
+if [ -n "${NET_LEASE_AFTER:-}" ]; then
+  n=$(wc -l <"${NET_CONNECT_CALLS:-/dev/null}" 2>/dev/null || echo 0)
+  [ "${n:-0}" -ge "$NET_LEASE_AFTER" ] && echo "    inet 192.168.1.50/24 scope global wlan0"
+  exit 0
+fi
 [ "${NET_LEASE:-0}" = 1 ] && echo "    inet 192.168.1.50/24 scope global wlan0"
 exit 0
 EOF
@@ -289,11 +297,20 @@ EOF
 cat >"$T/bin/nmcli" <<'EOF'
 #!/usr/bin/env bash
 case "$*" in
-  *"device wifi list"*) [ "${NET_SCAN_HIT:-1}" = 1 ] && printf '%s\n' "${NET_SSID:-home-wifi}"; exit 0 ;;
+  *"device wifi list"*)
+     printf '%s\n' "$*" >>"${NET_SCAN_CALLS:-/dev/null}"
+     # A cold cache is `--rescan no` finding nothing while `--rescan yes` finds it: exactly the
+     # boot-time state that made the first connect fail in 0s (HW 2026-08-25).
+     case "$*" in
+       *"--rescan no"*) [ "${NET_CACHE_HIT:-1}" = 1 ] || exit 0 ;;
+     esac
+     [ "${NET_SCAN_HIT:-1}" = 1 ] && printf '%s\n' "${NET_SSID:-home-wifi}"; exit 0 ;;
   *"device wifi connect"*)
      # The PSK must never be echoed, logged or recorded. This stub asserts that by never seeing it.
+     printf 'connect\n' >>"${NET_CONNECT_CALLS:-/dev/null}"
      [ "${NET_JOIN_RC:-0}" = 0 ] && exit 0
-     printf 'Error: Secrets were required, but not provided.\n' >&2; exit 4 ;;
+     printf '%s\n' "${NET_JOIN_ERR:-Error: Secrets were required, but not provided.}" >&2
+     exit 4 ;;
 esac
 exit 0
 EOF
@@ -307,6 +324,80 @@ netcfg() {  # <mode> -- prints netcfg's key=value output
 state() { printf '%s\n' "$1" | sed -n 's/^STATE=//p'; }
 
 printf 'SSID=home-wifi\nPSK=hunter2\n' >"$T/net/wifi.conf"
+
+CASE="§4b: a join that lands without an address activates again"
+# HW 2026-08-25, from the first ESP log this medium delivered: the first join reached no-lease 10.2s
+# into a 90s budget, the self re-check 5s later STILL found no address, and a second activation was
+# online in 3.9s. So the lease does not arrive late, it arrives on the next activation -- and this
+# is the operator's second Join press, done for them.
+: >"$T/net/connects"
+NET_CONNECT_CALLS="$T/net/connects" NET_LEASE_AFTER=2 NET_HOST_RC=0
+export NET_CONNECT_CALLS NET_LEASE_AFTER NET_HOST_RC
+unset NET_LEASE
+out="$(netcfg join)"
+[ "$(state "$out")" = online ] \
+  && ok "an address that only the second activation produces still ends as 'online'" \
+  || bad "the retry did not happen or did not help: $out"
+[ "$(wc -l <"$T/net/connects")" = 2 ] \
+  && ok "exactly two activations -- one retry, not a loop" \
+  || bad "wrong number of activations: $(wc -l <"$T/net/connects")"
+printf '%s' "$out" | grep -q '^ATTEMPT=2' \
+  && ok "and it says so while it runs, so the connecting screen can name the second attempt" \
+  || bad "nothing tells the UI a second attempt is under way"
+
+CASE="§4b: a cold scan cache is warmed before the first attempt, not after a failed one"
+# HW 2026-08-25: four seconds after the radio came up, connect failed in 0s with "No network with
+# SSID found" -- NM had no scan result yet. The retry only worked because the not-found check
+# between attempts runs a fresh sweep, i.e. the join spent a whole activation doing a scan.
+: >"$T/net/connects"; : >"$T/net/scans"
+# The case above leaves NET_LEASE_AFTER set, which would make the ip stub withhold the lease until
+# the second activation -- i.e. it would force the very retry this case exists to prove unnecessary.
+unset NET_LEASE_AFTER
+NET_CONNECT_CALLS="$T/net/connects" NET_SCAN_CALLS="$T/net/scans" NET_CACHE_HIT=0 NET_LEASE=1
+export NET_CONNECT_CALLS NET_SCAN_CALLS NET_CACHE_HIT NET_LEASE
+out="$(netcfg join)"
+[ "$(state "$out")" = online ] && [ "$(wc -l <"$T/net/connects")" = 1 ] \
+  && ok "a cold cache now joins on the FIRST attempt" \
+  || bad "the cold-cache join still costs an activation: $out"
+# The cache is PROBED first (`--rescan no`, free) and only then swept, so the sweep is the second
+# call, not the first. With one activation and no failure, any `--rescan yes` here can only be the
+# warm-up -- the post-failure sweep needs a failure it never had.
+grep -q -- "--rescan yes" "$T/net/scans" \
+  && ok "because the sweep happens before the connect, where it is worth something" \
+  || bad "no warming sweep ran: $(cat "$T/net/scans")"
+# A warm cache must not pay for a sweep it does not need.
+: >"$T/net/scans"; NET_CACHE_HIT=1
+netcfg join >/dev/null
+[ "$(grep -c -- "--rescan yes" "$T/net/scans")" = 0 ] \
+  && ok "and a warm cache is a cache read, not another sweep" \
+  || bad "a warm cache still forced a rescan: $(cat "$T/net/scans")"
+# HIDDEN NETWORKS. Not being in any scan is what hidden MEANS, so the warm-up must never decide.
+: >"$T/net/connects"; NET_CACHE_HIT=0 NET_SCAN_HIT=0; export NET_SCAN_HIT
+netcfg join >/dev/null
+[ "$(wc -l <"$T/net/connects")" -ge 1 ] \
+  && ok "an SSID no scan can see is still attempted -- that is how a hidden network joins" \
+  || bad "the pre-scan gated the attempt, which breaks hidden networks"
+unset NET_SCAN_HIT NET_CACHE_HIT NET_SCAN_CALLS NET_CONNECT_CALLS NET_LEASE
+
+CASE="§4b: the failures a retry cannot cure are never retried"
+# A key the network rejected is rejected again a second later, and an SSID that is not on the air
+# does not appear because we asked twice. Retrying either only delays the screen naming the fix.
+: >"$T/net/connects"
+# Exported HERE rather than inherited from a case above: this counts activations, and a case that
+# borrows another's recording path silently counts nothing the moment that case stops exporting it.
+NET_CONNECT_CALLS="$T/net/connects"; export NET_CONNECT_CALLS
+NET_JOIN_RC=4 NET_LEASE_AFTER=99; export NET_JOIN_RC NET_LEASE_AFTER
+out="$(netcfg join)"
+[ "$(state "$out")" = auth-failed ] && [ "$(wc -l <"$T/net/connects")" = 1 ] \
+  && ok "a rejected key is one attempt and a screen about the key" \
+  || bad "auth-failed was retried or misdiagnosed: $out"
+: >"$T/net/connects"
+NET_SCAN_HIT=0 NET_JOIN_ERR="Error: No network with SSID 'home-wifi' found."; export NET_SCAN_HIT NET_JOIN_ERR
+out="$(netcfg join)"
+[ "$(state "$out")" = not-found ] && [ "$(wc -l <"$T/net/connects")" = 1 ] \
+  && ok "an SSID that is not on the air is one attempt and a screen about the name" \
+  || bad "not-found was retried or misdiagnosed: $out"
+unset NET_SCAN_HIT NET_JOIN_ERR NET_JOIN_RC NET_CONNECT_CALLS NET_LEASE_AFTER
 
 CASE="§4b: netcfg names which failure this is"
 NET_LEASE=1 NET_HOST_RC=0; export NET_LEASE NET_HOST_RC
@@ -636,6 +727,27 @@ grep -q 'import uiview' "$UI" \
   && ok "install/ui loads the view lazily, in build_io()" \
   || bad "install/ui does not load the view module"
 
+CASE="the prompt row sits on ONE baseline"
+# There is no pygame on the build host -- this suite exists precisely so the UI can be tested with
+# no SDL, no panel and no pad -- so these are structural. A diamond's label is centred on the
+# diamond; SELECT used to be blitted at the row's top, a whole span higher, so the two captions in
+# the same row did not line up (reported from the panel, 2026-08-25).
+grep -q 'cy - surf.get_height() // 2' "$VIEW" \
+  && ok "SELECT's caption is centred on the row's centre line, like the diamond captions" \
+  || bad "the wordy control is not centred on the row"
+grep -qE '_inline\(x, cy,' "$VIEW" \
+  && ok "and the centre line is passed in, so one row cannot have two of them" \
+  || bad "_inline still takes the row's top instead of its centre"
+
+CASE="the type scale is one number"
+# The panel is held at arm's length; h/34 read small on the device. Everything is derived from
+# `base` so a size complaint moves one number and the title/heading/body relationship survives it.
+grep -qE 'base = max\(16, int\(self\.h / 28\)\)' "$VIEW" \
+  && ok "the body size is h/28" || bad "the base type size is not what this suite expects"
+[ "$(grep -cE 'pygame\.font\.Font\(None, (int\()?base' "$VIEW")" -eq 3 ] \
+  && ok "and the title and headings are multiples of it, not sizes of their own" \
+  || bad "a font size is set independently of base -- a scale change will skew the hierarchy"
+
 CASE="ui: the consent socket is root-only"
 printf 'SHOWN\n' >"$T/ev-perm"
 SOCK="$T/perm.sock"
@@ -719,6 +831,53 @@ printf '%s' "$out" | grep -q 'p11' && printf '%s' "$out" | grep -q 'p17' \
 printf '%s' "$out" | grep -qi 'novadeck-home' \
   && ok "including /home, which is the one that costs a user their games" \
   || bad "/home is not named in the destroy list"
+printf '%s' "$out" | grep -q 'data erased:  p11 userdata' \
+  && ok "grouped under its fate, which is stated once for the group" \
+  || bad "the destroy list is not grouped by fate: $out"
+
+CASE="pre-flight: a reinstall's partition list fits on the panel"
+# NINE LINES DID NOT FIT. HW 2026-08-25, Pocket ACE mid-reinstall: one line per partition ran off
+# the bottom and collided with the SELECT row -- worse after the type scale went up, which it did
+# because these screens were too small to read.
+#
+# THIS FIXTURE MIRRORS carve.sh, and the first attempt at the fix failed because an earlier one did
+# not. carve.sh ALWAYS emits `userdata data-erased` and THEN one `replaced` per partition of ours,
+# so a reinstall has two fates, always. A fix that compacted only when every fate matched could
+# therefore never fire on hardware -- and a fixture of eight identical fates, which no disk
+# produces, let it pass here anyway. Emit what the real tool emits.
+cat >"$T/bin/carve.sh" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$CARVE_CALLS"
+printf 'CEIL=999\nNEW_END=500\nNOVADECK_MIB=81920\nNOVADECK_GIB=%s\nREPLACES_OURS=1\n' "$(( 96 - $3 ))"
+printf 'DESTROY=11 userdata data-erased\n'
+for i in 1 2 3 4 5 6 7 8; do printf 'DESTROY=%s novadeck-p%s replaced\n' "$i" "$i"; done
+EOF
+chmod +x "$T/bin/carve.sh"
+nine="$(flow 'print(json.dumps(pf.describe()))')"
+printf '%s' "$nine" | grep -q 'These 9 partitions will be destroyed' \
+  && ok "the heading carries the count, so the number is never inferred from line-counting" \
+  || bad "the destroy heading does not carry the count: $nine"
+printf '%s' "$nine" | grep -q 'data erased:  p11 userdata' \
+  && ok "userdata is grouped under its own fate" \
+  || bad "the data-erased group is missing: $nine"
+printf '%s' "$nine" | grep -q 'replaced:  p1 novadeck-p1,  p2 novadeck-p2' \
+  && ok "and our eight share one 'replaced' line instead of eight of their own" \
+  || bad "the replaced group is not one line: $nine"
+missing=""
+for i in 1 2 3 4 5 6 7 8; do
+  printf '%s' "$nine" | grep -q "p$i novadeck-p$i" || missing="$missing p$i"
+done
+printf '%s' "$nine" | grep -q 'p11 userdata' || missing="$missing p11"
+[ -z "$missing" ] \
+  && ok "with every index and name still on the panel -- compacted, never shortened" \
+  || bad "the destroy list dropped partitions:$missing"
+# The whole point is the line count, so count them: two groups is two lines, not nine.
+[ "$(printf '%s' "$nine" | python3 -c 'import json,sys
+d = json.load(sys.stdin)
+b = [x for x in d["blocks"] if "will be destroyed" in x[0]][0][1]
+print(len(b.split("\n")))')" = 2 ] \
+  && ok "two fates, two lines -- the six the panel did not have are back" \
+  || bad "the destroy body is not one line per fate"
 printf '%s' "$out" | grep -qi 'Nothing has been written yet' \
   && ok "and it says nothing has happened yet, because nothing has" \
   || bad "the screen does not say the disk is still untouched"
@@ -1014,6 +1173,22 @@ printf '%s' "$conn" | grep -q 'interactive=False' \
   && ok "it asks for nothing, so no press is spent on it" || bad "it is interactive"
 printf '%s' "$conn" | grep -q 'animates=True' \
   && ok "and it animates, so a slow join still looks alive" || bad "the screen is static: $conn"
+# THE SECOND ACTIVATION IS SAID OUT LOUD. netcfg re-activates once when the first join lands without
+# an address, which doubles the wait -- and an unexplained wait getting longer is exactly what
+# making the join asynchronous was meant to stop.
+conn2="$(cd "$ROOT/install" && python3 -c '
+import uiflow
+n = [1]
+s = uiflow.ConnectingScreen("MYNET", lambda: n[0])
+print("one=%s" % " | ".join(b[1] for b in s.describe()["blocks"]))
+n[0] = 2
+print("two=%s" % " | ".join(b[1] for b in s.describe()["blocks"]))' 2>&1)"
+printf '%s' "$conn2" | grep '^one=' | grep -qi 'trying once more' \
+  && bad "the first attempt already claims to be a retry" \
+  || ok "the first attempt says nothing about retrying"
+printf '%s' "$conn2" | grep '^two=' | grep -qi 'trying once more' \
+  && ok "and the second names itself, so the longer wait has a reason on screen" \
+  || bad "the second activation is silent: $conn2"
 # The join itself must be a child process, not a blocking call.
 grep -q 'class NetJoin' "$ROOT/install/uiflow.py" \
   && ok "NetJoin runs netcfg as a child" || bad "the join is still synchronous"
@@ -1026,6 +1201,39 @@ grep -q 'netjoin = NetJoin()' "$ROOT/install/ui" \
   && ok "and the join starts in the background" || bad "the loop does not start an async join"
 grep -q 'joined = netjoin.poll()' "$ROOT/install/ui" \
   && ok "the loop polls it and moves on when it finishes" || bad "nothing collects the result"
+# EVERYTHING THE CHILD SAID REACHES THE JOURNAL, not just the facts it emitted. netcfg writes how
+# long nmcli took and whether it returned OK to STDERR, NetJoin captures stderr into stdout, and
+# kv() keeps only the key=value lines -- so the instrumentation added for the "no address too early"
+# case was dropped on the floor. HW 2026-08-25: an ESP log that could not answer the question it
+# had been extended to answer the day before.
+cat >"$T/bin/netcfg-chatty" <<'EOF'
+#!/bin/sh
+echo '[netcfg] nmcli connect returned OK after 10s of a 90s budget' >&2
+echo 'STATE=no-lease'
+echo 'DETAIL=associated with the network, but no address was offered'
+EOF
+chmod +x "$T/bin/netcfg-chatty"
+join_out="$(NOVADECK_NETCFG="$T/bin/netcfg-chatty" python3 - <<'PY' 2>&1
+import os, sys, time
+sys.path.insert(0, os.environ["ROOT"] + "/install")
+import uiflow
+j = uiflow.NetJoin()
+while True:
+    f = j.poll()
+    if f is not None:
+        break
+    time.sleep(0.02)
+print("STATE=%s" % f.get("STATE"))
+PY
+)"
+printf '%s' "$join_out" | grep -q 'STATE=no-lease' \
+  && ok "the parsed facts still decide the screen" || bad "the join lost its facts: $join_out"
+printf '%s' "$join_out" | grep -q 'netcfg: .*returned OK after 10s' \
+  && ok "and netcfg's own reasoning reaches the journal, where the ESP log picks it up" \
+  || bad "the child's instrumentation is still swallowed: $join_out"
+printf '%s' "$join_out" | grep -q 'netcfg: STATE=no-lease' \
+  && bad "it re-logs the key=value lines too, doubling every fact" \
+  || ok "without re-logging the key=value lines the facts already carry"
 # nmcli's own default gave up before slow access points finished (HW 2026-08-25). Association is
 # quick; DHCP is what drags, and a timed-out join costs the operator a full retry.
 grep -q 'JOIN_TIMEOUT=${NOVADECK_NET_JOIN_TIMEOUT:-90}' "$ROOT/install/netcfg" \
@@ -1311,7 +1519,10 @@ NOVADECK_INSTALLER_DRYRUN=1 NOVADECK_UI="$T/not-here" NOVADECK_DEVICE_ENV="$T/bi
 # =================================================================================================
 cat >"$T/bin/journalctl" <<'EOF'
 #!/usr/bin/env bash
+# Echoes back which query it was asked, so the suite can assert the log collects more than the
+# installer's own unit -- a network fault lives in NM's journal and the kernel ring, not in ours.
 printf 'Aug 22 12:00:00 deck installer-session[1]: gamescope: could not open /dev/dri/card0\n'
+printf 'journalctl-args: %s\n' "$*"
 EOF
 printf '#!/bin/sh\nexit 0\n' >"$T/bin/mountpoint"      # "yes, it is mounted"
 chmod +x "$T/bin"/*
@@ -1336,6 +1547,20 @@ grep -q 'consent: given' "$T/run/install.log" \
 cmp -s "$T/run/install.log" "$T/esp/novadeck-install.log" \
   && ok "copied to the installer medium's ESP -- pull the card, read it on a PC" \
   || bad "the log did not reach the ESP"
+
+CASE="fallback: the log carries the network's side of the story too"
+# HW 2026-08-25: the first join reached no-lease in 10.2s of a 90s budget and a retry was online in
+# 3.9s, and this log could say nothing about why -- only the installer's own unit was collected, so
+# the association, the DHCP transaction and any ath12k scan refusal were all absent.
+grep -q 'journalctl-args:.*-u novadeck-installer.service' "$T/run/install.log" \
+  && ok "the installer's own unit is collected" \
+  || bad "the installer's journal is missing"
+grep -q 'journalctl-args:.*-u NetworkManager.service' "$T/run/install.log" \
+  && ok "and NetworkManager's, which owns the association and the lease" \
+  || bad "a network-only installer collects no network journal"
+grep -q 'journalctl-args:.*-k' "$T/run/install.log" \
+  && ok "and the kernel ring, where a driver-level scan refusal would show" \
+  || bad "the kernel ring is missing -- a driver fault cannot be ruled in or out"
 
 CASE="fallback: a log that cannot be saved never fails the unit"
 # Every branch of this exits 0 on purpose: a missing journalctl, an unmounted ESP or a read-only

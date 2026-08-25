@@ -402,12 +402,43 @@ class PreflightScreen:
     def describe(self):
         f, d = self.facts, self.facts["disk_facts"]
         destroy = self.plan["destroy"]
-        if destroy:
-            lost = "\n".join(
-                "p%s  %s  (%s)" % (x["index"], x["name"], x["fate"].replace("-", " "))
-                for x in destroy)
-        else:
+        # ONE LINE PER PARTITION DOES NOT FIT, and this screen is the one that must. HW 2026-08-25,
+        # Pocket ACE with NovaDeck already installed: eight partitions at one line each, under a
+        # heading, above four more blocks, ran off the bottom of the panel and collided with the
+        # SELECT row -- worse after the type scale went up, which it did because these screens were
+        # too small to read.
+        #
+        # NOTHING IS ELIDED TO ACHIEVE IT. This is the list a person consents to losing; "and 4
+        # more" is not a thing a consent screen may say. When every partition shares one fate --
+        # which is exactly the eight-of-ours case -- the fate is stated ONCE in the heading and the
+        # names run together as prose the wrapper can break, so eight lines become two and every
+        # index and name is still on the panel. Mixed fates stay one per line, because there the
+        # fate is the information and the list is short anyway.
+        lost_head = "These partitions will be destroyed"
+        if not destroy:
             lost = "carve.sh could not be asked what it would destroy -- do not continue."
+        else:
+            # ONE LINE PER FATE, NOT PER PARTITION. carve.sh emits `userdata data-erased` and then
+            # one `replaced` per partition of ours that exists, so a reinstall is nine lines under
+            # a heading with four blocks below it -- which ran off the panel and collided with the
+            # SELECT row on a Pocket ACE (HW 2026-08-25).
+            #
+            # GROUPING, NOT A SINGLE-FATE SPECIAL CASE. The first attempt at this compacted only
+            # when every fate matched, and no real disk produces that: userdata is always in the
+            # list with a fate of its own, so the branch could not fire on hardware and the screen
+            # was unchanged. Grouping has no such condition -- it is the same code path for one
+            # fate or five, which is why it cannot quietly not happen.
+            order, groups = [], {}
+            for x in destroy:
+                fate = x["fate"].replace("-", " ")
+                if fate not in groups:
+                    groups[fate] = []
+                    order.append(fate)
+                groups[fate].append("p%s %s" % (x["index"], x["name"]))
+            lost_head = "These %d partitions will be destroyed" % len(destroy)
+            # Every index and name still reaches the panel: this is the list a person consents to
+            # losing, so it is compacted, never shortened. The wrapper breaks the long group.
+            lost = "\n".join("%s:  %s" % (fate, ",  ".join(groups[fate])) for fate in order)
         # WHAT KIND OF INSTALL THIS IS, said before anything else. HW 2026-08-24, Pocket ACE with
         # NovaDeck already on its internal disk: the screen listed our own eight partitions in the
         # destroy list and never said the word reinstall, so nothing on it distinguished "install
@@ -437,7 +468,7 @@ class PreflightScreen:
             ("Target", "%s  %s  %s GiB" % (f["disk"], d["model"], d["size_gib"])),
             ("Android keeps", "%s GiB   (left / right to change)" % self.gib),
             ("NovaDeck gets", "%s GiB" % self.plan["NOVADECK_GIB"]),
-            ("These partitions will be destroyed", lost),
+            (lost_head, lost),
             ("To install", f["bundle"] or "NO BUNDLE CONFIGURED -- this installer cannot continue."),
         ]
         return {
@@ -519,6 +550,25 @@ class NetJoin:
         except (BlockingIOError, ValueError, OSError):
             pass
 
+    def attempt(self):
+        """
+        Which activation netcfg is on, read from the output it has produced SO FAR.
+
+        netcfg emits ATTEMPT= before each try, and this is drained mid-flight rather than at the end,
+        which is the whole point: a second activation must be something the connecting screen can
+        say while it is happening. A join that has printed nothing yet is attempt 1.
+        """
+        self._drain()
+        out = b"".join(self.chunks).decode("utf-8", "replace")
+        n = 1
+        for line in out.splitlines():
+            if line.startswith("ATTEMPT="):
+                try:
+                    n = int(line.split("=", 1)[1].strip())
+                except ValueError:
+                    pass
+        return n
+
     def poll(self):
         """The diagnosis once the join has finished, or None while it is still running."""
         self._drain()
@@ -532,6 +582,21 @@ class NetJoin:
             facts = {"STATE": "netcfg-failed", "DETAIL": last}
         log("join finished after %.1fs: %s  (%s)" % (
             time.monotonic() - self.started, facts.get("STATE"), facts.get("DETAIL", "")))
+        # EVERYTHING THE CHILD SAID, NOT JUST THE FACTS IT EMITTED. netcfg logs how long nmcli took
+        # and whether it returned OK or failed -- the two lines that separate "we judged the lease
+        # too early" from "nmcli failed in a shape neither error grep catches" -- and it writes them
+        # to STDERR. This class captures stderr into stdout so the frame can keep drawing, so those
+        # lines land in this buffer and went NOWHERE: kv() keeps the key=value lines and the prose
+        # was dropped on the floor whenever STATE parsed. HW 2026-08-25, an installer log that could
+        # not answer the question the instrumentation had been added for a day earlier.
+        #
+        # Re-emitting is safe BECAUSE netcfg guarantees it: "THE PSK IS NEVER PRINTED, not even in a
+        # debug line". This is the loop that would publish it to the journal and the ESP if that
+        # ever stopped being true, so it is the loop that has to keep naming the guarantee.
+        for line in out.splitlines():
+            line = line.strip()
+            if line and "=" not in line.split(" ", 1)[0]:
+                log("  netcfg: %s" % line)
         return facts
 
 
@@ -541,9 +606,12 @@ class ConnectingScreen:
     name = "connecting"
     interactive = False          # it asks for nothing, so a scripted source spends no press on it
 
-    def __init__(self, ssid):
+    def __init__(self, ssid, attempt=None):
         self.ssid = ssid or "the network"
         self.started = time.monotonic()
+        # A callable, not a number: the attempt changes WHILE this screen is up, and a screen that
+        # took a copy at construction would keep claiming the first one through the second.
+        self.attempt = attempt or (lambda: 1)
 
     def handle(self, token):
         pass
@@ -552,12 +620,22 @@ class ConnectingScreen:
         # Animated from elapsed time rather than a frame counter, so it moves at the same rate
         # whatever the panel is doing.
         dots = "." * (1 + int((time.monotonic() - self.started) * 2) % 3)
+        # THE SECOND ACTIVATION IS SAID OUT LOUD. netcfg re-activates once when the first join lands
+        # without an address (HW 2026-08-25), and an operator watching an unexplained wait get twice
+        # as long is exactly who this screen exists for -- silence here would undo the reason the
+        # join was made asynchronous in the first place.
+        try:
+            n = self.attempt()
+        except Exception:                                          # noqa: BLE001 - never a screen
+            n = 1
+        second = [("", "The first attempt joined without being given an address. Trying once "
+                       "more -- this is the attempt that usually succeeds.")] if n > 1 else []
         return {
             "screen": "connecting",
             "title": "Connecting to '%s'" % self.ssid,
-            "blocks": [("", "Joining the network, then asking it for an address%s" % dots),
-                       ("", "Usually a few seconds. Some access points take up to a minute to "
-                            "hand out an address.")],
+            "blocks": [("", "Joining the network, then asking it for an address%s" % dots)] + second
+                      + [("", "Usually a few seconds. Some access points take up to a minute to "
+                              "hand out an address.")],
             "diamonds": [],
             "prompt": "",
             "note": "",

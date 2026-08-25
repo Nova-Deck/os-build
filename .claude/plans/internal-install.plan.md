@@ -2142,7 +2142,17 @@ if none of the candidates is present. And the two files the spine reads as data:
   `install/verify-image.sh`.
 - `.github/workflows/image.yml` — `artifact:` gains `installer`; publish to R2 under
   `installer/vX.Y.Z/`. New `release-installer.yml` on `installer/v*` tags, mirroring
-  `release-sdcard.yml`.
+  `release-sdcard.yml`. **LANDED 2026-08-25**, with one correction to the sketch above: the SEED IS
+  PART OF THE SAME RUN. `release-installer.yml` is prep → **seed** (`release-seed.yml` as a
+  `workflow_call`, emitting the published sha as a job output) → build (`image.yml` with
+  `artifact: installer` + `seed_pin`) → publish (R2, `installer/<version>/`) → release. A published
+  seed on its own is bytes nobody fetches, and the first arrangement — two workflows, the pin read
+  off one job summary and typed into the next — put the one value that must not be wrong in a
+  person's hands. `image.yml` REFUSES `artifact: installer` with an empty `seed_pin`, and the build
+  runs `make verify-image` before the artifact leaves the job. `mesa-x86` is skipped for this
+  artifact (it is staged by `assemble-rootfs.sh`, which the installer root never runs), which is why
+  the build job carries an explicit `!cancelled() && needs.mesa-x86.result != 'failure'`.
+  `images/publish-card.sh` gained `NOVADECK_R2_KIND` so one publisher serves both prefixes.
 - `steam-seed-<pin>.tar.zst` published alongside, from the existing `steam-seed/` stage. **Its
   content is a plain tar of `work/steam-seed`** — the finished `.local/share/Steam` tree, nothing
   else. **The published path is `<OTA_URL>/seed/steam-seed-<sha256>.tar.zst`, where the sha256 is

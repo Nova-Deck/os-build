@@ -39,9 +39,22 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 KEEP="${NOVADECK_CARD_KEEP:-1}"
+# WHICH BUCKET PREFIX, and therefore which kind of flashable image this is. `cards/<version>/` is
+# the default and the only one this script had; `installer/<version>/` is the recovery medium
+# release-installer.yml publishes. Both are the same act — a file a person downloads and writes to a
+# card — so they are one publisher rather than a second copy of the upload, the retention and the
+# public-readability check. The retention knob above applies to whichever prefix this names; an
+# installer is ~600 MiB against the card's ~5 GiB, so its caller sets a larger KEEP.
+KIND="${NOVADECK_R2_KIND:-cards}"
 
 log() { printf '[publish] %s\n' "$*" >&2; }
 die() { printf '[publish] %s\n' "$*" >&2; exit 1; }
+
+# Validated AFTER die() exists: a check that calls it two lines earlier dies with `die: command not
+# found` and exit 127, which says nothing about the variable it was checking.
+case "$KIND" in
+  ''|*[!a-z0-9-]*) die "NOVADECK_R2_KIND must be a plain lowercase bucket prefix, got '$KIND'" ;;
+esac
 
 . "$ROOT/images/lib-rclone.sh"
 
@@ -63,7 +76,7 @@ r2_env
 RCLONE="$(rclone_bin)"
 
 name="$(basename "$IMG")"
-prefix="cards/$VERSION"
+prefix="$KIND/$VERSION"
 
 log "uploading $name -> r2:$R2_BUCKET/$prefix/ (multipart)"
 "$RCLONE" copyto --s3-chunk-size 64M --retries 5 --low-level-retries 10 \
@@ -97,13 +110,13 @@ case "$KEEP" in
   ''|*[!0-9]*) die "NOVADECK_CARD_KEEP must be a whole number, got '$KEEP'" ;;
 esac
 if [ "$KEEP" -ge 1 ]; then
-  mapfile -t old < <("$RCLONE" lsf --dirs-only "r2:$R2_BUCKET/cards/" 2>/dev/null | sed 's:/$::' | sort -V)
+  mapfile -t old < <("$RCLONE" lsf --dirs-only "r2:$R2_BUCKET/$KIND/" 2>/dev/null | sed 's:/$::' | sort -V)
   n=${#old[@]}
   if [ "$n" -gt "$KEEP" ]; then
     for d in "${old[@]:0:$((n - KEEP))}"; do
       [ "$d" = "$VERSION" ] && continue
-      log "pruning older card: cards/$d"
-      "$RCLONE" purge "r2:$R2_BUCKET/cards/$d" || log "could not prune cards/$d (continuing)"
+      log "pruning older $KIND: $KIND/$d"
+      "$RCLONE" purge "r2:$R2_BUCKET/$KIND/$d" || log "could not prune $KIND/$d (continuing)"
     done
   fi
 fi

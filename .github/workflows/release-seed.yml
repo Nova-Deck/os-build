@@ -26,14 +26,32 @@
 # copying it into GitHub's artifact store too would cost the upload twice over to produce a second
 # copy nothing fetches. The pin in the job summary is what a later build needs.
 #
-# DISPATCH ONLY, no tag trigger. A seed tracks VALVE's cadence (steam-seed/STEAM_SEED.pin names two
-# live rolling channels), not ours, so there is no repo tag that means "the seed changed" — and
-# re-running this when nothing has changed is free: pack-seed.sh is deterministic, so an unchanged
-# tree packs to the same name and publish-seed.sh finds it already there and exits.
+# CALLED BY release-installer.yml, AND THAT IS THE NORMAL WAY IT RUNS. A published seed on its own
+# is bytes nobody will ever fetch: the only thing that downloads one is an installer medium built
+# against its hash, so "release a seed" and "cut an installer" are one act. Splitting them also made
+# a PERSON carry the pin between two runs — reading a sha off one job summary and typing it into the
+# next — which is the single value in this system that must not be wrong. It is a `workflow_call`
+# output now, and the medium's build takes it from there.
+#
+# THE DISPATCH TRIGGER STAYS, for the one case that is genuinely a seed alone: publishing a seed so
+# a medium built by hand on a build box (`NOVADECK_SEED_SHA256=… make installer`) can fetch it over
+# the network on a hardware trip. Same shape as image.yml, which is workflow_call-only for the
+# opposite reason — it has no standalone use at all.
+#
+# NO TAG TRIGGER. A seed tracks VALVE's cadence (steam-seed/STEAM_SEED.pin names two live rolling
+# channels), not ours, so there is no repo tag that means "the seed changed" — and re-running when
+# nothing has changed is free: pack-seed.sh is deterministic, so an unchanged tree packs to the same
+# name and publish-seed.sh finds it already there and exits without uploading.
 name: release-seed
 
 on:
   workflow_dispatch:
+  workflow_call:
+    outputs:
+      pin:
+        description: 'sha256 of the published seed — an installer image built with
+          NOVADECK_SEED_SHA256=<pin> fetches exactly this one'
+        value: ${{ jobs.publish.outputs.pin }}
 
 permissions:
   contents: read
@@ -60,6 +78,12 @@ jobs:
     environment: ${{ vars.SIGNING_ENVIRONMENT || 'release-signing' }}
     # The fetch is a full Steam self-install from Valve's CDN; the pack is zstd -19 over 3.3 GB.
     timeout-minutes: 180
+    # EMITTED ONLY AFTER THE PUBLISH STEP, which is what makes it safe for a caller to build a medium
+    # against: a pin handed out before the bytes were on the server would name something no medium
+    # could fetch. The publish step is between `pack` and the job's end, and a failure there fails
+    # the job, so this output exists only for a seed that is actually published and readable.
+    outputs:
+      pin: ${{ steps.pack.outputs.sha }}
     steps:
       - uses: actions/checkout@v7
 

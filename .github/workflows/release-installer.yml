@@ -1,0 +1,200 @@
+# novadeck release INSTALLER — the recovery medium that installs NovaDeck onto a device's internal
+# storage. Phase 6 of .claude/plans/internal-install.plan.md.
+#
+# ONE RUN PUBLISHES THE SEED AND THE MEDIUM, and that is the whole reason this workflow exists in
+# this shape. A published Steam seed on its own is bytes nobody will ever fetch: the only thing that
+# downloads one is an installer medium built against its hash, and a medium built against a hash
+# nobody published is a medium that stops before consent. They are two halves of one release.
+#
+# THE PIN NEVER PASSES THROUGH A PERSON. release-seed.yml emits the sha256 it published as a job
+# output; the build job takes it as an input and install/mkroot.sh bakes it in. The first version of
+# this arrangement printed the sha in a job summary for someone to paste into a second workflow —
+# the one value in this system that must not be wrong, carried by hand between two runs.
+#
+# TAG NAMESPACE: `installer/v*`, its own, for the reason card/ and ota/ have theirs — three
+# artifacts with three cadences. A medium is cut when the installer changes or when a new seed is
+# worth shipping, which is neither the card's cadence nor the OTA's.
+#
+# NEEDS NO SIGNING KEY, exactly like the card: the medium is flashed over USB by someone holding the
+# device, so there is no signature for anything to verify. What it does need is the OTA credentials
+# (to publish the seed) and the R2 credentials (to publish the medium) — two protected environments,
+# declared by the jobs that use them, and therefore two approvals per release. That is the right
+# shape rather than an accident: "may this seed reach the server" and "may this medium reach the
+# public bucket" are different questions.
+#
+# THE MEDIUM IS NOT PINNED TO AN OS BUNDLE. It resolves <channel>/latest.json at install time, so
+# any medium installs the current release — which is why there is no bundle input here and why an
+# old medium never installs an old OS. Only the seed is pinned, because only the seed is unsigned.
+name: release installer
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version for this medium (default: date-shortsha)'
+        required: false
+        type: string
+        default: ''
+      publish:
+        description: 'Publish the seed + upload the medium to R2 (off for a plain test build)'
+        required: false
+        type: boolean
+        default: false
+  push:
+    tags:
+      - 'installer/v*'
+
+permissions:
+  contents: read
+
+jobs:
+  prep:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      publish: ${{ steps.v.outputs.publish }}
+    steps:
+      - id: v
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_PUBLISH: ${{ inputs.publish }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [ -n "${INPUT_VERSION:-}" ]; then
+            v="$INPUT_VERSION"
+          elif [ "$GITHUB_REF_TYPE" = tag ]; then
+            v="${REF_NAME#installer/}"
+          else
+            v="$(date -u +%Y%m%d)-$(echo "$GITHUB_SHA" | cut -c1-7)"
+          fi
+          case "$v" in
+            *[!A-Za-z0-9._-]*) echo "::error::version '$v' has characters that do not belong in a URL path"; exit 1 ;;
+          esac
+          if [ "$GITHUB_REF_TYPE" = tag ] || [ "${INPUT_PUBLISH:-false}" = true ]; then
+            p=true
+          else
+            p=false
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "publish=$p" >> "$GITHUB_OUTPUT"
+          echo "version=$v publish=$p" >> "$GITHUB_STEP_SUMMARY"
+
+  # THE SEED, FIRST, because the medium is built against its hash and a medium naming bytes that are
+  # not on the server yet is a medium that cannot install. Publishing is idempotent: pack-seed.sh is
+  # deterministic, so an unchanged Steam tree packs to the same name and publish-seed.sh finds it
+  # already there and exits without uploading — a re-cut of the same medium costs nothing here.
+  #
+  # IT RUNS EVEN ON A NON-PUBLISHING DISPATCH, and that is deliberate rather than an oversight. A
+  # test build still has to produce a medium that WORKS, which means a pin whose bytes are fetchable
+  # — and since a republish of an unchanged seed uploads nothing, the cost of being honest here is a
+  # fetch and a pack. A `publish: false` run that baked an unpublished pin would produce exactly the
+  # artifact this whole design exists to prevent.
+  seed:
+    needs: prep
+    uses: ./.github/workflows/release-seed.yml
+    secrets: inherit
+
+  build:
+    needs: [prep, seed]
+    uses: ./.github/workflows/image.yml
+    with:
+      artifact: installer
+      version: ${{ needs.prep.outputs.version }}
+      seed_pin: ${{ needs.seed.outputs.pin }}
+      # No environment: nothing in an installer build is signed, so the long job — bootstrapping a
+      # second rootfs and compiling the overlay from third-party sources as uid 0 — holds no
+      # credential at all. It ends at a workflow artifact, exactly as the card build does.
+      environment: ''
+
+  publish:
+    needs: [prep, seed, build]
+    if: needs.prep.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      medium_url: ${{ steps.publish.outputs.url }}
+    # The same environment the card publishes from — the same bucket, the same push-only credential,
+    # and the same fact that it can DELETE as well as add (see the retention note in
+    # images/publish-card.sh). Declaring it here is what makes those secrets resolve at all.
+    environment: ${{ vars.CARDS_ENVIRONMENT || 'release-cards' }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: fetch the medium
+        uses: actions/download-artifact@v8
+        with:
+          name: novadeck-installer
+          path: upload
+
+      - name: fetch the metadata
+        uses: actions/download-artifact@v8
+        with:
+          name: novadeck-installer-meta
+          path: meta
+
+      - name: upload the medium to R2
+        id: publish
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ vars.R2_BUCKET }}
+          R2_PUBLIC_BASE: ${{ vars.R2_PUBLIC_BASE }}
+          VERSION: ${{ needs.prep.outputs.version }}
+          # A SEPARATE PREFIX FROM THE CARDS, so the two retentions cannot prune each other.
+          NOVADECK_R2_KIND: installer
+          # Deeper than the card's N=1 because a medium is ~600 MiB against a card's ~5 GiB: three of
+          # them is under 2 GiB of a 10 GB free tier. Worth keeping, because an older medium is
+          # still a working recovery tool — its pinned seed stays on the update server forever.
+          NOVADECK_CARD_KEEP: '3'
+        run: images/publish-card.sh "$VERSION" upload/installer.img.gz meta
+
+  release:
+    needs: [prep, seed, publish]
+    if: needs.prep.outputs.publish == 'true' && github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: novadeck-installer-meta
+          path: meta
+      - name: cut the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.prep.outputs.version }}
+          MEDIUM_URL: ${{ needs.publish.outputs.medium_url }}
+          SEED_PIN: ${{ needs.seed.outputs.pin }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## novadeck installer \`$VERSION\`"
+            echo
+            echo 'Writes NovaDeck to a device'"'"'s internal storage, alongside Android. Flash it to'
+            echo 'an SD card, boot the device from it, and follow the screens.'
+            echo
+            echo '```bash'
+            echo "curl -LO $MEDIUM_URL"
+            echo "gzip -dc $(basename "$MEDIUM_URL") | sudo dd of=/dev/sdX bs=4M status=progress"
+            echo '```'
+            echo
+            echo '**Before you boot it:** the medium'"'"'s first partition is a plain FAT volume that'
+            echo 'Windows and macOS both show. Copy `novadeck/wifi.conf.example` to'
+            echo '`novadeck/wifi.conf` and put your network name and password in it — the installer'
+            echo 'downloads NovaDeck over the network and has no way to ask you for them. A USB-C'
+            echo 'Ethernet adapter needs no file at all. If an install fails, that same partition is'
+            echo 'where `novadeck-install.log` comes out.'
+            echo
+            echo '**What it destroys:** Android'"'"'s user data on the target device. Android itself'
+            echo 'still boots, factory-reset, with the space you choose on screen. The installer'
+            echo 'says all of this and takes a per-run button sequence as consent before it writes.'
+            echo
+            echo "This medium installs the current OS release from the update channel — it is not"
+            echo "pinned to one. It carries a pinned Steam client seed, \`$SEED_PIN\`."
+          } > notes.md
+          gh release create "$GITHUB_REF_NAME" \
+            --title "novadeck installer $VERSION" \
+            --notes-file notes.md \
+            meta/sha256sums.txt meta/provenance/manifest.lock

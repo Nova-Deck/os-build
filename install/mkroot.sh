@@ -220,7 +220,18 @@ IP_DIR="$ROOT/fs-overlay/etc/inputplumber"
 # (kernel/dtbs and /boot are on the ESP instead, and the slot/var/home stages have no meaning on a
 # medium with no slots).
 MODROOT="$ROOT/out/modroot"
-KVER="$(ls "$MODROOT/lib/modules" 2>/dev/null | head -1)"
+# `|| true`, and without it the die below can NEVER PRINT. `ls` on a missing directory returns 2 with
+# its message suppressed; under this file's `set -euo pipefail` that status propagates out of the
+# pipeline, out of the command substitution, and into the ASSIGNMENT -- which is a simple command, so
+# set -e kills the script THERE, at exit 2, having said nothing at all.
+#
+# CI found it on 2026-08-25, on the first cold tree this script had ever run in: `make installer`
+# builds the root before the kernel, so out/modroot did not exist yet and the build failed with
+# nothing but `Error 2` to go on. The guard on the next line -- which exists precisely to say "run:
+# make kernel" -- was unreachable in the one case it was written for. Same family as the
+# `compgen -G` trap in images/guard-rootfs.sh and the `grep -q` one in install/netcfg: a status from
+# inside a substitution, under set -e, killing the check that was supposed to report it.
+KVER="$(ls "$MODROOT/lib/modules" 2>/dev/null | head -1 || true)"
 [ -n "$KVER" ] && [ -f "$MODROOT/lib/modules/$KVER/modules.dep" ] \
   || die "no built kernel modules at ${MODROOT#"$ROOT"/} — run: make kernel"
 

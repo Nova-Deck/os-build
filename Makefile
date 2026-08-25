@@ -664,7 +664,12 @@ relock: $(if $(OVERLAY_PINS),$(OVERLAY_STAMP)) ## Re-resolve from PKGS and regen
 # over every file it places), so an unchanged tree costs the key check and nothing else. That is why
 # these are phony rather than file targets — the script owns the reuse decision, exactly as
 # images/customize-base.sh does for the shipped base.
-installer-root: $(if $(OVERLAY_PINS),$(OVERLAY_STAMP)) ## Bootstrap the installer root -> work/installer-base (host; docker+qemu)
+# $(KERNEL) IS A REAL PREREQUISITE, not decoration: mkroot.sh ships the kernel's MODULES into the
+# installer root (the 802.11 stack is =m, so firmware with no driver is indistinguishable from no
+# firmware) and reads them out of out/modroot, which the kernel build produces. Without this line
+# `make installer` builds the root FIRST and dies on a tree that has never built a kernel — which is
+# every CI runner, and was the first thing the 2026-08-25 smoke run hit.
+installer-root: $(KERNEL) $(if $(OVERLAY_PINS),$(OVERLAY_STAMP)) ## Bootstrap the installer root -> work/installer-base (host; docker+qemu)
 	install/mkroot.sh >/dev/null
 
 # The medium itself. Host-side mkroot.sh produces the tree; this compresses it and lays the two

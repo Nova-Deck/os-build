@@ -139,6 +139,27 @@ done
 # The file lists, read back out of mkroot.sh. Extracting them from the script rather than
 # re-declaring them here is the point: a second copy would drift in the same commit that broke the
 # first, and agree with it.
+CASE="a cold tree fails with a MESSAGE, not a silent exit 2"
+# FOUND BY CI, 2026-08-25, on the first tree that had never built a kernel. `ls` on a missing
+# out/modroot returns 2 with its message suppressed; under `set -euo pipefail` that status leaves the
+# pipeline, leaves the command substitution, and lands in the ASSIGNMENT -- a simple command, so
+# set -e kills the script there, at exit 2, having printed nothing. The `|| die` on the next line,
+# whose entire job is to say "run: make kernel", was unreachable in the one case it was written for.
+#
+# Third time in this repo for this shape: `compgen -G` in guard-rootfs.sh, `grep -q` under pipefail
+# in netcfg, and now this. The assertion is on the specific line rather than the class, because the
+# class is not greppable and this line is the one that cost a CI run.
+grep -qE 'KVER="\$\(ls .*\|\| true\)"' "$MKROOT" \
+  && ok "the KVER probe cannot abort before its own guard runs" \
+  || bad "KVER= is unguarded: a missing out/modroot exits 2 silently instead of naming the fix"
+grep -q 'run: make kernel' "$MKROOT" \
+  && ok "and the guard names the command that fixes it" \
+  || bad "nothing tells the operator to build the kernel first"
+# ...and the ordering that means a normal build never reaches that guard at all.
+grep -qE '^installer-root: \$\(KERNEL\)' "$ROOT/Makefile" \
+  && ok "make builds the kernel before the installer root, since mkroot ships its modules" \
+  || bad "installer-root does not depend on \$(KERNEL) — a cold `make installer` dies in mkroot"
+
 CASE="the files mkroot.sh places"
 mapfile -t FLAT < <(sed -n '/^INSTALL_FILES=(/,/^)/p' "$MKROOT" | sed -e '1d' -e '$d' -e 's/#.*//' | tr ' ' '\n' | grep -v '^$')
 [ "${#FLAT[@]}" -ge 10 ] && ok "INSTALL_FILES parses to ${#FLAT[@]} entries" \

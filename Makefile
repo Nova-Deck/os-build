@@ -336,7 +336,7 @@ KERNEL_SRC_HASH := work/.kernel-src.hash
 # ==============================================================================
 .PHONY: help all image toolchain kernel fw-linux fw-qcom base overlay verify-lock \
         rootfs relock mesa-x86 installer installer-root relock-installer verify-image \
-        initramfs steamcl grub sdcard verify-card test bundle sign-bundle publish-bundle \
+        initramfs steamcl grub sdcard verify-card test test-disk bundle sign-bundle publish-bundle \
         steam-seed-artifact deploy clean clean-base clean-overlay distclean
 
 # An always-out-of-date prerequisite, for rules that must re-evaluate their own inputs every run
@@ -435,6 +435,20 @@ test: verify-lock ## Run the offline bootctl/post-install/pairingd/quirks/stage-
 # its own first layer, so docker reuses it rather than fetching anything twice.
 test-signing: $(SIGN_STAMP) ## Prove the RAUC signing self-test still catches what it claims (container; PKIDIR= adds the keyring check)
 	$(DOCKER) $(PKI_MOUNT) $(SIGN_IMG) images/test-verify-signing.sh
+
+# The fifth suite pair, and the reason they are not in `test`: they need sgdisk, mtools and
+# dosfstools, which a plain dev box does not have (and which the shipped image never gets, because
+# select-target.sh and carve.sh are installer-only and are never staged into the rootfs). So they
+# run in the container, where those tools already live for verify-image.
+#
+# They had no target and no CI job until 2026-08-25 — 181 assertions over the two scripts that
+# CHOOSE a stranger's disk and then DELETE partitions on it, run only when someone remembered to
+# type the path. That is the same failure this repo has already paid for twice: a check nothing
+# invokes is a check that is not asserting anything. Nothing here needs root and nothing is
+# mounted; the fixtures are sparse images rebuilt from the real GPTs in docs/internal-storage.md.
+test-disk: | $(BUILD_STAMP) ## Run the select-target + carve suites, which need sgdisk/mtools (container)
+	$(INBUILD) install/test-select-target.sh
+	$(INBUILD) install/test-carve.sh
 
 # ==============================================================================
 # Toolchain images

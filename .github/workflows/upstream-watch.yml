@@ -1,15 +1,18 @@
 # Daily upstream watchers. NO job bumps anything — each detects that an upstream we track moved
 # and opens ONE issue assigned to the maintainer to run the manual revalidation drill.
-# All are deliberately stateless:
-#   - the rootfs, Proton and mesa jobs take their baseline FROM REPO STATE (the pin / the PKGBUILD),
-#     so there is no side channel to keep in step and a bump silences its own watcher;
-#   - the compat-tool job carries its state in the issue TITLE (searched across open AND closed
-#     issues, so closing an issue marks that build as handled and it is never re-filed).
+# Every job is deliberately stateless: it takes its baseline FROM REPO STATE (the pin / the
+# PKGBUILD), so there is no side channel to keep in step and a bump silences its own watcher.
 # Every job FAILS when its upstream parse yields nothing: a watcher that cannot see must go red,
 # not stay quietly green.
 #
 # Issue titles are the dedupe key everywhere (searched across open AND closed), so a watcher that
 # reports a version we decide NOT to take is answered by closing its issue once.
+#
+# Valve's FEX compat tool (app 3127680) is deliberately NOT watched. Anonymous appinfo hides the
+# public-branch buildid, so the only visible signal is the PICS change number, which bumps on
+# store-metadata edits too — it filed a near-daily issue that was closed unread every time. There
+# is no watch worth having here until a build-level signal is reachable; check
+# https://steamdb.info/app/3127680/history/ by hand when the tool's behavior is in question.
 name: upstream-watch
 
 on:
@@ -68,55 +71,6 @@ jobs:
           else
             echo "pin is current"
           fi
-
-  fex-compat-tool:
-    name: FEX compat tool release channel
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check the app change number
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          # Valve's FEX Steam Play tool, app 3127680. Anonymous appinfo exposes NO depots/branches
-          # section for this app (verified 2026-08-19), so the public-branch buildid is not
-          # reachable without credentials. What IS visible is the PICS CHANGE NUMBER in
-          # app_info_print's header line, which bumps on every app change — builds included,
-          # store metadata too, so an issue can occasionally be a metadata-only bump; the issue
-          # body says how to tell. app_info_print runs twice because the first query of a
-          # steamcmd session often returns before the appinfo cache is populated.
-          out="$(docker run --rm steamcmd/steamcmd:latest \
-            +login anonymous +app_info_update 1 +app_info_print 3127680 +app_info_print 3127680 +quit 2>&1)"
-          change="$(printf '%s\n' "$out" | grep -m1 -oE 'change number : [0-9]+' | grep -oE '[0-9]+' || true)"
-          if [ -z "$change" ]; then
-            echo "::group::steamcmd output (parse failed)"; printf '%s\n' "$out" | tail -40; echo "::endgroup::"
-            echo "::error::could not parse the change number for app 3127680"; exit 1
-          fi
-
-          echo "change number=$change"
-          title="upstream: FEX compat tool changed (change $change)"
-          if [ "$(gh issue list --state all --search "in:title \"$title\"" --json number --jq length)" -gt 0 ]; then
-            echo "change $change already filed"; exit 0
-          fi
-          gh issue create --title "$title" --assignee "$ASSIGNEE" \
-            --label P2 --label area/steam --body "$(cat <<EOF
-          Valve's FEX compat tool (app 3127680) changed: PICS change number **$change**. This
-          fires on ANY app change — check https://steamdb.info/app/3127680/history/ first to see
-          whether it is a real public-branch build or metadata only (anonymous appinfo hides the
-          buildid, so this watch cannot tell them apart). For a real build, re-check every
-          behavior we verified against the previous one:
-
-          - [ ] one-slot \`FEX_APP_CONFIG\`: with tweaks enabled, does the tool still skip its own config generation? (environ of the FEX process names OUR ~/.cache/novadeck-fex file; no /tmp/fex-app-config-*.json)
-          - [ ] \`STEAM_COMPAT_FEX_CONFIG\` parsing: tri-state (Key:1/Key:0/absent) or the old absent-means-0? game-launch's steam_curated() must match (#50)
-          - [ ] provider ICD handling: does an as-shipped Vulkan title load libvulkan_freedreno from /run/gfx, or silently fall back to GL? (maps, never "the game runs")
-          - [ ] thunk engagement: did the /run/gfx + pv-overrides overlay prefixes (FEX-Emu/FEX#5821) reach release? Force Vulkan on PGRC and read the maps
-          - [ ] the #49-class lib64 prefix behavior in their shipped FEX binary
-
-          Close this issue when the checks are done (or immediately for a metadata-only bump);
-          a closed issue marks this change number handled.
-          EOF
-          )"
 
   proton:
     name: Proton compat tool release (${{ matrix.pkg }})

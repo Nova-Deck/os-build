@@ -30,7 +30,20 @@ exec(os.environ["DESC"])                                         # noqa: S102 - 
 view.draw(desc)
 
 blits = fakepygame.display.surface.blits
-if os.environ.get("COUNT"):
+if os.environ.get("MAXIMAL"):
+    # Is the type size draw() settled on the LARGEST that fits, or merely small enough? The shrink
+    # used to step down 8% at a time and keep the first size under the limit, which undershot by up
+    # to a step: smaller text than necessary, with a gap left above the button row (Pocket ACE,
+    # 2026-08-25). "yes" means base+1 genuinely overflows, or the floor was reached.
+    m = int(view.w * 0.06)
+    limit = view.h - m - int(view.h * 0.06) - int(view.h * 0.02)
+    floor = max(12, int(view._base * 0.6))
+    view._dry = True
+    view._fonts(view._chosen + 1)
+    over = view._flow(desc, m)
+    view._dry = False
+    print("yes" if view._chosen == view._base or view._chosen <= floor or over > limit else "no")
+elif os.environ.get("COUNT"):
     print(len(blits))
 else:
     m = int(view.w * 0.06)

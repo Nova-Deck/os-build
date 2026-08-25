@@ -74,14 +74,37 @@ class PygameView:
         m = int(self.w * 0.06)
         # The top of the button row, less a gap. _buttons() centres itself on this line.
         limit = self.h - m - int(self.h * 0.06) - int(self.h * 0.02)
-        base, floor = self._base, max(12, int(self._base * 0.6))
+        floor = max(12, int(self._base * 0.6))
+        # THE LARGEST SIZE THAT FITS, not the first one found going down. This stepped down by 8%
+        # a time and stopped at the first size under the limit, so it undershot by up to a whole
+        # step -- the type came out smaller than it needed to be AND left a visible gap above the
+        # button row. Reported on an AYANEO Pocket ACE (1620x1080, consent, 2026-08-25).
+        # `_flow` is monotone in `base` (every glyph and every wrap gets smaller together), so the
+        # largest fitting size is a bisection rather than a walk, at about the same number of dry
+        # passes. If even `floor` overflows, `floor` is what we use: the honest failure is small
+        # text, never hidden text.
         self._dry = True
-        while True:
-            self._fonts(base)
-            if self._flow(desc, m) <= limit or base <= floor:
-                break
-            base = max(floor, int(base * 0.92))
+        self._fonts(self._base)
+        if self._flow(desc, m) <= limit:
+            base = self._base
+        else:
+            lo, hi = floor, self._base - 1
+            while lo < hi:
+                mid = (lo + hi + 1) // 2
+                self._fonts(mid)
+                if self._flow(desc, m) <= limit:
+                    lo = mid
+                else:
+                    hi = mid - 1
+            base = lo
         self._dry = False
+        # What the search settled on, so a test can assert it is MAXIMAL (base+1 overflows) rather
+        # than merely small enough. Nothing draws from this.
+        self._chosen = base
+        # MUST be re-set: the last dry pass measured whatever size the bisection probed last, which
+        # is not necessarily the one it settled on. The old walk broke immediately after measuring
+        # the size it kept, so the fonts happened to be right; a search has no such luck.
+        self._fonts(base)
 
         self.surface.fill(self.BG)
         self._flow(desc, m)

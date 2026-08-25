@@ -1233,6 +1233,19 @@ read -r bottom row < <(layout 1280 720 "$BIG")
   && ok "content larger than any real screen still clears the row ($bottom <= $row)" \
   || bad "the shrink did not engage: $bottom vs $row"
 
+CASE="the shrink stops at the LARGEST size that fits, not the first one under the limit"
+# It stepped down 8% a time and kept the first size that cleared the row, so it undershot by up to a
+# whole step: the type came out smaller than it needed to be and left a gap above the buttons.
+# Reported on an AYANEO Pocket ACE (1620x1080) 2026-08-25. "yes" means base+1 really does overflow,
+# so the size on the panel is maximal rather than merely safe. The ACE's own geometry is one of the
+# cases -- a 3:2 panel, which is where the margin arithmetic is least forgiving.
+for geom in 1620x1080 1280x720 1920x1080; do
+  gw="${geom%x*}"; gh="${geom#*x}"
+  [ "$(MAXIMAL=1 layout "$gw" "$gh" "$BIG")" = yes ] \
+    && ok "$geom: the chosen type size is the largest that clears the row" \
+    || bad "$geom: a larger type size would still have fitted -- the shrink overshot"
+done
+
 CASE="the view shrinks rather than eliding"
 # NOTHING MAY BE DROPPED from a consent screen -- "and 4 more" is not a thing it may say. So the fix
 # is a smaller type scale, and the proof is that every block still reaches the surface.

@@ -56,3 +56,5 @@ jobs:
       version: smoke
       # No environment, and therefore no secret in scope for the whole build.
       environment: ''
+
+# Re-run trigger: 2026-08-25, after the cold-tree fix (installer-root now depends on $(KERNEL)).

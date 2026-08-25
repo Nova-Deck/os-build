@@ -348,6 +348,14 @@ is the most likely version of this, and it is not a novadeck fault to debug — 
 Nothing on the SD-card-only path is affected: with no internal ESP present, ABL falls through to
 the card unaided and no option needs setting.
 
+**The installer medium is the recovery medium.** Force external boots it the same way it boots a
+normal card, and re-running an install is the designed recovery for one that died partway — it takes
+no backups precisely because "run it again" has to work. Its own log comes out on its FAT partition
+as `novadeck-install.log`, readable on any computer, and it is written when the installer's unit
+STOPS: a device sitting on a failed screen has not produced one yet, so power-cycle before pulling
+the card. Full procedure, including what an install destroys and what it refuses:
+[install-internal.md](install-internal.md).
+
 **The journal is not on the slot's `/var`.** `/var/log` is bind-mounted onto
 `/home/.novadeck/offload/var/log`, so it lives on the shared **home** partition and survives both
 slots:

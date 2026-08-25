@@ -242,6 +242,7 @@ to `defaults.conf` and still boots.
 | [`docs/decky.md`](docs/decky.md) | Decky Loader + the `novadeck-control` plugin — the in-UI surface for everything below |
 | [`docs/per-game-perf.md`](docs/per-game-perf.md) | `game-tweaks.json` — the per-game performance keys and which launch path enforces each |
 | [`docs/fan-curve.md`](docs/fan-curve.md) | The temperature→PWM curve, why it belongs to the power profile, and how a user edits it |
+| [`docs/install-internal.md`](docs/install-internal.md) | **The installer medium** — putting NovaDeck on the device's internal storage alongside Android: what it destroys, the Wi-Fi file it needs, and how a release is cut |
 | [`docs/internal-storage.md`](docs/internal-storage.md) | Per-board internal-storage captures — the fixtures the install target's rules are written against |
 | [`docs/base-pin.md`](docs/base-pin.md) | What we pin of the upstream aarch64 Arch port, and how |
 | [`docs/windows-games-fex.md`](docs/windows-games-fex.md) | Running x86/x86-64 games: the two independent Proton/FEX paths |

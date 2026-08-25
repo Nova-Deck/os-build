@@ -883,8 +883,14 @@ class ProgressScreen:
                 "state": state,
                 "percent": self.percent if state == "active" else None,
             })
-        blocks = [("", r["label"] + ("  %d%%" % r["percent"] if r["percent"] is not None else ""))
-                  for r in rows if r["state"] != "pending"]
+        # NOT a second copy of the phase list. uiview's _phases() renders `rows` -- with the
+        # done/active colour, the bar and the percentage -- and this used to ALSO build one
+        # plain-text line per reached phase, which _flow() draws immediately above it. So every
+        # phase the spine reached appeared twice on the panel: once flat, once as a real row.
+        # Observed on an AYANEO Pocket ACE, 2026-08-25 ("Reading the disk / Choosing the target /
+        # Writing the install record", each twice). `rows` is the renderer; `blocks` carries only
+        # what has no row of its own.
+        blocks = []
         title = "Installing NovaDeck"
         note = "Do not power the device off."
         buttons = []

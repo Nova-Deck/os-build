@@ -1285,6 +1285,21 @@ rows = json.load(sys.stdin)["rows"]
 sys.exit(0 if all(r["percent"] is None for r in rows if r["state"] != "active") else 1)' \
   && ok "a percentage belongs to the phase that is running, and to no other" \
   || bad "a stale percentage leaked onto another phase"
+# uiview draws `blocks` and THEN `rows`, so a phase named in both is painted twice on the panel.
+# It was: describe() built one plain-text block per reached phase as well as the row, and every
+# phase the spine reached appeared twice. Observed on an AYANEO Pocket ACE, 2026-08-25.
+out="$(progress '
+feed("[novadeck-install] == recon ==", "[novadeck-install] == select-target ==",
+     "[novadeck-install] == install record ==")
+print(json.dumps(p.describe()))')"
+printf '%s' "$out" | python3 -c '
+import json,sys
+d = json.load(sys.stdin)
+labels = {r["label"] for r in d["rows"]}
+text = " ".join(h + " " + b for h, b in d["blocks"])
+sys.exit(0 if not [l for l in labels if l in text] else 1)' \
+  && ok "a phase is named once -- the rows are the renderer, blocks does not shadow them" \
+  || bad "a phase label appears in blocks AND rows, so the panel draws it twice: $out"
 
 CASE="progress: a failure says WHICH of two states the device is in"
 # The one thing a failure owes the user. "It failed" is not actionable; "nothing was written" and

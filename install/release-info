@@ -9,9 +9,9 @@
 # STATE= into a sentence; a terminal caller reads the same line. Like netcfg it always exits 0 --
 # a failure is itself an answer, and STATE is where the answer lives.
 #
-# WHY THIS IS NOT PART OF netcfg. The medium carries no bundle at all (the install is network-only,
-# decided 2026-08-05), so between "the network is up" and "here is what will happen to your disk"
-# something has to ask the server what there is to install. netcfg answers whether the HOST answers;
+# WHY THIS IS NOT PART OF netcfg. The medium carries no OS bundle -- it carries the Steam tree /home
+# is built from, and nothing else -- so between "the network is up" and "here is what will happen to
+# your disk" something has to ask the server what there is to install. netcfg answers whether the HOST answers;
 # this answers what it SERVES. That split is load-bearing rather than tidy: netcfg deliberately
 # ignores HTTP status, because a server that replies 404 is a server the installer can reach
 # (measured on a Pocket S2, 2026-08-22, when the OTA root's own 404 was being read as an unreachable

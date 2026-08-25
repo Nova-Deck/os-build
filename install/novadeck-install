@@ -26,7 +26,8 @@
 #   carve              userdata shrinks, its stale superblock is invalidated, our eight are appended
 #   mkfs               esp, efi-a, efi-b, home. NOT var-a (seed_var reformats it) and NOT var-b
 #   rauc               root-a streamed and verified; the handler randomises its fsid and seeds var-a
-#   seed /home         1.7 GB of Steam client, into the partition just created
+#   seed /home         the Steam client tree (1.4 GiB packed, ~3.3 GB unpacked), into the
+#                      partition just created -- read off the MEDIUM, which carries it
 #   efi-a / efi-b      stage-2 GRUB, minted partsets, parts.env -- the map of THIS disk
 #   ESP                grubenv, then A.conf, then stage 1
 #   bootaa64.efi       THE LAST BYTE WRITTEN. See below
@@ -353,7 +354,7 @@ verify_sources() {
 
   # The seed's expected hash comes from the INSTALLER IMAGE, never from the server that serves the
   # seed. A pin file that is missing is fatal rather than skippable: "we could not check" and "it
-  # checked out" must not have the same effect, and an unverified 1.7 GB tree unpacked into the
+  # checked out" must not have the same effect, and an unverified 1.4 GiB tree unpacked into the
   # user's /home is the largest piece of unsigned content in the whole install.
   [ -r "$SEED_PIN" ] || die "no baked Steam-seed pin at $SEED_PIN -- the seed could not be verified"
   local want; want="$(tr -d '[:space:]' <"$SEED_PIN")"
@@ -361,16 +362,18 @@ verify_sources() {
 
   case "$HOME_SEED" in
     http://*|https://*)
-      # Straight to disk in $RUNDIR, which is deliberately NOT how the release path should end up --
-      # §4b will stream it. Kept simple here because the alternative (hash while streaming into the
-      # mounted /home) cannot refuse before it has already written, which is the property this whole
-      # step exists for.
+      # NOT THE RELEASE PATH ANY MORE. Since 2026-08-25 the medium CARRIES the seed and the UI passes
+      # a path, so this branch is reached only by install/hw-install.sh, which serves one off a
+      # laptop for a hardware gate. It is kept for exactly that, and because a path and a URL are one
+      # `case` apart.
       #
-      # The reason to move off tmpfs is NOT that it will not fit -- measured on the Pocket ACE
-      # 2026-08-21, /run offers 3.7 G and the seed is 1.7 G, so it fits with room. It is that those
-      # 1.7 G are RAM, taken from the machine at the exact moment it is streaming a ~4 GB bundle
-      # through rauc's NBD path. An earlier version of this comment claimed it could not fit; that
-      # was wrong on this hardware, and the real cost is worth stating accurately.
+      # Its cost is why the release path stopped using it: the file lands in $RUNDIR, which is
+      # tmpfs, and those ~1.4 GiB are RAM taken from the machine at the exact moment it is streaming
+      # a ~4 GB bundle through rauc's NBD path. (It does FIT -- measured on the Pocket ACE
+      # 2026-08-21, /run offers 3.7 G. An earlier version of this comment claimed it could not, and
+      # that was wrong on this hardware.) Hashing while streaming into the mounted /home would avoid
+      # the RAM but cannot refuse before it has already written, which is the property this whole
+      # step exists for.
       SEED_LOCAL="$RUNDIR/steam-seed.tar.zst"
       "$CURL" -fsSL --retry 3 -o "$SEED_LOCAL" "$HOME_SEED" \
         || die "cannot fetch the Steam seed from $HOME_SEED"

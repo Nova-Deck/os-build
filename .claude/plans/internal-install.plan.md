@@ -58,9 +58,12 @@ construction*. A squashfs is also demand-paged rather than fully resident, and
 asserted at `kernel/build.sh:187` — this finally makes that assertion's stated rationale
 true (it currently claims "the /etc overlay mounts a squashfs seed", which is stale).
 
-Total image ≈ 1 GB, ≈ 400 MB compressed (the graphics stack for the GUI dominates — see
-Phase 5). It carries no bundle and needs no reflash per release; the release card is ~5 GiB
-compressed by comparison.
+Total image **2.1 GB, ~1.9 GiB compressed** (measured 2026-08-25). The estimate here was ≈1 GB
+until the medium started CARRYING the Steam tree `/home` is built from — 1.4 GiB of it — which is
+the single largest thing on it; the graphics stack for the GUI dominates the rest (see Phase 5).
+It carries no OS BUNDLE and needs no reflash per OS release, since the bundle is resolved from the
+channel at install time; a newer Steam tree does mean a new medium, which is a medium build rather
+than a second artifact. The release card is ~5 GiB compressed by comparison.
 
 ---
 
@@ -590,7 +593,7 @@ New `fs-overlay/usr/lib/novadeck/install/lib-slotwrite.sh`, sourced by
 | var-a / var-b | **new**: `assemble-rootfs.sh` also writes its `$varstage` to `/usr/lib/novadeck/var-seed.tar.zst` inside the root (`work/base/var` is ~13 MB, negligible in a 7 G slot) |
 | rootfs-a | the signed RAUC bundle (Phase 4) |
 | rootfs-b | nothing — left empty and **no `B.conf`**, matching the release-card shape so steamcl sees one image and retries A rather than switching (`make-sdcard.sh`'s `mkconf` site explains why). First OTA fills B |
-| `/home` Steam seed (~1 GB) | **new published artifact** `steam-seed-<pin>.tar.zst`, sha256 verified against the pin **baked into the installer image**, not against `latest.json` (explicitly not a trust boundary). Folding it into the bundle instead does not fit: rootfs-a is 7 G with ~0.9 G margin |
+| `/home` Steam seed (1.4 GiB) | **carried by the medium** at `/usr/lib/novadeck/install/steam-seed.tar.zst`, sha256 verified against the pin staged beside it by `install/mkimage.sh` (which computes it from the bytes it places, so the two cannot disagree). It was briefly a published, content-addressed artifact fetched at install time; that bound the medium to one seed just as firmly while adding a publisher, a workflow and 1.7 GB of tmpfs during the stream — see `steam-seed/pack-seed.sh`. Folding it into the BUNDLE still does not fit: rootfs-a is 7 G with ~0.9 G margin |
 
 ### `write_parts_env` — emit the env block directly, do not reach for `grub-editenv`
 
@@ -1658,8 +1661,9 @@ already does once, the installer now calls instead of copying:
 | bundle verification | `install/rauc-session.sh --info` — the same synthesized config the install runs under | — |
 
 `stage_deck_home` takes a **directory or a tarball**, the same split `seed_var` uses: `make-sdcard.sh`
-has `work/steam-seed` on the build host, and the installer has the published ~1 GB tarball and a
-mounted `/home` that is the only place with room for it.
+has `work/steam-seed` on the build host, and the installer has the 1.4 GiB tarball it carries and a
+mounted `/home` to unpack it into. Proven on a built medium 2026-08-25 — the staged tree is
+identical to `work/steam-seed`, all 21,287 entries.
 
 **The `--info` verify is not a `rauc info` call spelled in the spine, deliberately.** The
 synthesized config *is* the mechanism — `bundle-formats`, the keyring path and `check-purpose` all
@@ -2228,7 +2232,15 @@ gate), `test-units.sh` (new units), and byte-identity of the shipped
    an internally-installed device is out of scope (see 1c). The supported inserted media are the
    installer/recovery card and a Steam-formatted library card, neither of which carries `novadeck-*`
    names.
-5. The standalone installer image end-to-end, including `wifi.conf` and the picker.
+5. The standalone installer image end-to-end, including `wifi.conf` and the picker. **PARTLY DONE,
+   2026-08-25, AYANEO Pocket ACE.** Reached the consent gate from a real medium: GRUB board pick,
+   session, gamescope, UI, controller, the `wifi.conf`/join path (7.4s, first attempt), the clock,
+   target selection, pre-flight with real numbers, and `verify sources` — the bundle's signature
+   read over HTTP Range in ~150 ms and the carried seed hashed against its pin in ~25 s.
+   **Everything past consent is still untried from a medium**: the carve, the RAUC stream, the seed
+   unpack, the efi/ESP writes and a first boot from internal. Three defects came out of that run,
+   all fixed and re-shipped — no `--intent` (an install on a disk of ours could never start), a
+   failure screen offering "Continue", and the consent screen overlapping its own button row.
 6. **The `reinstall` carve mode, on a disk carrying a real install with a populated `/home`.**
    It lands here rather than in Phase 4 because it is BLOCKED on this image and not merely
    unscheduled: a dev card ships the same `novadeck-*` filesystem labels as the install, so `/home`

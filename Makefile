@@ -332,7 +332,7 @@ KERNEL_SRC_HASH := work/.kernel-src.hash
 # Phony orchestration targets
 # ==============================================================================
 .PHONY: help all image toolchain kernel fw-linux fw-qcom base overlay verify-lock \
-        rootfs relock mesa-x86 installer installer-root relock-installer \
+        rootfs relock mesa-x86 installer installer-root relock-installer verify-image \
         initramfs steamcl grub sdcard verify-card test bundle sign-bundle publish-bundle \
         steam-seed-artifact publish-seed deploy clean clean-base clean-overlay distclean
 
@@ -668,8 +668,24 @@ installer-root: $(if $(OVERLAY_PINS),$(OVERLAY_STAMP)) ## Bootstrap the installe
 # build user would put every file on the medium under uid 1000, and the installer runs as root
 # against a stranger's disk. $(KERNEL) and $(GRUB) are real prerequisites: the kernel, the dtbs and
 # the stage-2 GRUB all land on the medium's ESP, since there is no slot root for them to live in.
+#
+# $(ID_ENV) because install/mkimage.sh stamps the medium's identity (see its section 0): without it
+# every installer image ever built calls itself the same thing, which is the first question asked at
+# the fallback console. NOT $(DEV_ENV): the dev/release mode is read back out of the ROOT's own
+# reuse marker, so it cannot disagree with what was actually baked in.
 installer: installer-root $(KERNEL) $(GRUB) | $(BUILD_STAMP) ## Build the flashable installer medium -> out/images/installer.img
-	$(DOCKER) $(BUILD_IMG) install/mkimage.sh
+	$(DOCKER) $(ID_ENV) $(BUILD_IMG) install/mkimage.sh
+
+# Asserts the BUILT medium, the way verify-card.sh asserts the built card. The suites in `make test`
+# read the SCRIPTS — a script that says the right thing while producing the wrong image passes every
+# one of them — and this is the only thing that opens the image. No dependency on `installer`:
+# verifying a downloaded or CI-built medium is a normal thing to do, and rebuilding it here from a
+# possibly-newer tree would verify something other than the file in front of you.
+#
+# NOVADECK_INSTALLER_ALLOW_DEV=1 to accept a dev medium (sshd + a baked Wi-Fi PSK); without it that
+# is a failure, because a dev medium must never be the one that gets published.
+verify-image: | $(BUILD_STAMP) ## Verify a built installer medium (in container; IMG= to point elsewhere)
+	$(DOCKER) -e NOVADECK_INSTALLER_ALLOW_DEV $(BUILD_IMG) install/verify-image.sh $(IMG)
 
 # Mirrors `relock` above, including why it must NOT go through the locked path: relocking a tree
 # that was itself installed from the lock can only ever reproduce that lock. FORCE=1 because the

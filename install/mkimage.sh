@@ -67,6 +67,65 @@ grep -q '^ID=novadeck-installer$' "$BASE/etc/os-release" 2>/dev/null \
 
 rm -rf "$WORK"; mkdir -p "$WORK" "$OUT"
 
+# --- 0. the medium's identity ----------------------------------------------------------------------
+# WHICH IMAGE AM I LOOKING AT. install/os-release is deliberately static so a rebuild does not churn
+# the tree, and until this block every installer medium ever built answered identically — the same
+# NAME, the same ID, no version, no date. That is the first question a person asks at the fallback
+# console, which exists precisely for the moment something has gone wrong, and the medium could not
+# answer it. Same shape as images/assemble-rootfs.sh section 4a: one stamp, in one place, read back
+# by everything downstream.
+#
+# STAMPED HERE AND NOT IN install/mkroot.sh, because this is the half that makes an ARTIFACT.
+# mkroot's tree is reused across builds on its own input key — a per-build timestamp written there
+# would either bust that cache on every run (a full emulated pacstrap) or, worse, survive a reuse
+# and describe a build that happened yesterday. The root is the cacheable part; the image is the
+# published part; the identity belongs to the published part.
+#
+# IDEMPOTENT BY CONSTRUCTION: os-release is REWRITTEN from the committed file plus this block, never
+# appended to. The tree it lands in is cached, so appending would stack a fresh block on every
+# `make installer` until the file carried a dozen contradictory VERSION= lines, the last one
+# winning by accident.
+#
+# THE MODE IS READ OUT OF THE TREE, NOT OUT OF THE ENVIRONMENT. install/mkroot.sh folds `dev:0|1`
+# into the reuse marker it installs at /usr/lib/novadeck/pkgs, so the tree states what was baked
+# into it. Deriving it from $NOVADECK_DEV here would let `NOVADECK_DEV=1 make installer-root`
+# followed by a plain `make installer` stamp `release` on a medium carrying an authorized_keys and
+# a Wi-Fi PSK — the exact drift assemble-rootfs.sh's "both read the one flag" note is about, except
+# that here the two halves are separate processes and cannot share a variable.
+OSRELEASE_SRC="$ROOT/install/os-release"
+[ -f "$OSRELEASE_SRC" ] || die "missing input: ${OSRELEASE_SRC#"$ROOT"/}"
+if grep -qx 'dev:1' "$BASE/usr/lib/novadeck/pkgs" 2>/dev/null; then
+  IMG_MODE=dev
+else
+  IMG_MODE=release
+fi
+IMG_VERSION="${NOVADECK_VERSION:-dev}"
+IMG_GIT="${NOVADECK_GIT:-unknown}"
+IMG_BUILD="$(date -u +%Y%m%dT%H%M%SZ)"
+{
+  echo "NOVADECK_VARIANT=installer"
+  echo "NOVADECK_BUILD=$IMG_BUILD"
+  echo "NOVADECK_VERSION=$IMG_VERSION"
+  echo "NOVADECK_GIT=$IMG_GIT"
+  echo "NOVADECK_MODE=$IMG_MODE"
+} >"$BASE/etc/novadeck-release"
+chmod 0644 "$BASE/etc/novadeck-release"
+{
+  cat "$OSRELEASE_SRC"
+  echo "VARIANT=\"installer\""
+  echo "VARIANT_ID=installer"
+  echo "VERSION_ID=$IMG_VERSION"
+  echo "VERSION=\"$IMG_VERSION ($IMG_GIT)\""
+  echo "BUILD_ID=$IMG_BUILD"
+} >"$BASE/etc/os-release"
+chmod 0644 "$BASE/etc/os-release"
+# The same fields OUTSIDE the image, as a sidecar beside it. A publisher must be able to name the
+# artifact without mounting a squashfs out of the middle of a GPT — images/genbundle.sh reads
+# rootfs.release for exactly that reason, and a release workflow for this medium will want the same.
+cp "$BASE/etc/novadeck-release" "$OUT/installer.release"
+log "identity: $IMG_VERSION ($IMG_GIT) build $IMG_BUILD, mode $IMG_MODE"
+[ "$IMG_MODE" = release ] || log "NOTE: this medium was built from a DEV root (sshd + baked Wi-Fi)"
+
 # --- 1. the root filesystem ------------------------------------------------------------------------
 # zstd because the kernel has CONFIG_SQUASHFS_ZSTD=y and it is the best ratio of the three the
 # kernel can read. -noappend so a rebuild replaces rather than accumulating; -no-xattrs is NOT set

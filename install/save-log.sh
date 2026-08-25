@@ -38,11 +38,25 @@ UNITS=${NOVADECK_INSTALL_UNITS:-novadeck-installer.service NetworkManager.servic
 JOURNALCTL=${JOURNALCTL:-journalctl}
 CONSOLE=${NOVADECK_INSTALL_CONSOLE:-/dev/tty1}
 RECORD=${NOVADECK_INSTALL_RECORD:-$RUNDIR/install/record}
+# The per-build identity install/mkimage.sh stamps. Same path as the shipped image's, so a person
+# reading either log finds the answer in the same place.
+RELEASE_FILE=${NOVADECK_INSTALL_RELEASE:-/etc/novadeck-release}
 
 mkdir -p "$RUNDIR" 2>/dev/null || true
 
 {
     printf '=== novadeck installer log, %s ===\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null)"
+    # WHICH MEDIUM PRODUCED THIS LOG. The file is meant to be read on another computer, hours later,
+    # possibly next to logs from a different build, and until install/mkimage.sh started stamping an
+    # identity every medium answered that question identically. Printed here rather than left to the
+    # journal because this header is what survives: the ESP copy is the one artefact that leaves a
+    # device that could not finish. Absent, it says so rather than printing nothing -- a log with no
+    # identity line and a log from an image that carries none must not look the same.
+    if [ -r "$RELEASE_FILE" ]; then
+        printf 'medium: %s\n' "$(tr '\n' ' ' <"$RELEASE_FILE")"
+    else
+        printf 'medium: no %s on this image\n' "$RELEASE_FILE"
+    fi
     # -b, the CURRENT boot, and never -b -1: the boot index is not trustworthy on these devices,
     # whose RTC comes up stale (see the project's journal notes). This runs inside the boot it is
     # describing, so the current boot is the right question anyway.

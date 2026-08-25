@@ -1785,10 +1785,13 @@ chmod +x "$T/bin"/*
 mkdir -p "$T/esp" "$T/run/install"
 printf 'consent: given at 2026-08-22T10:00:00Z, sequence SWNE, attempt 1\n' >"$T/run/install/record"
 
+printf 'NOVADECK_VARIANT=installer\nNOVADECK_BUILD=20260825T090000Z\nNOVADECK_VERSION=1.2.3\nNOVADECK_GIT=abc1234\nNOVADECK_MODE=release\n' >"$T/run/novadeck-release"
+
 savelog() {
   PATH="$T/bin:$PATH" NOVADECK_INSTALL_RUNDIR="$T/run" NOVADECK_INSTALL_LOG="$T/run/install.log" \
     NOVADECK_INSTALLER_ESP="${ESPARG-$T/esp}" NOVADECK_INSTALL_RECORD="$T/run/install/record" \
     NOVADECK_INSTALL_CONSOLE="$T/console" JOURNALCTL="${JC-$T/bin/journalctl}" \
+    NOVADECK_INSTALL_RELEASE="${RELARG-$T/run/novadeck-release}" \
     "$SAVELOG" "$@" 2>"$T/savelog.err"
 }
 
@@ -1803,6 +1806,24 @@ grep -q 'consent: given' "$T/run/install.log" \
 cmp -s "$T/run/install.log" "$T/esp/novadeck-install.log" \
   && ok "copied to the installer medium's ESP -- pull the card, read it on a PC" \
   || bad "the log did not reach the ESP"
+
+CASE="fallback: the log says which medium produced it"
+# This file is read on another computer, hours later, quite possibly beside a log from a different
+# build -- and every installer medium ever built answered "which image is this" identically until
+# install/mkimage.sh started stamping one. The ESP copy is the one artefact that leaves a device
+# that could not finish, so the identity belongs in its header rather than in a journal that stays
+# on the machine.
+grep -q '^medium: .*NOVADECK_VERSION=1.2.3' "$T/run/install.log" \
+  && ok "the header names the version the medium was built as" \
+  || bad "the log does not identify the medium: $(head -3 "$T/run/install.log")"
+grep -q '^medium: .*NOVADECK_MODE=release' "$T/run/install.log" \
+  && ok "and whether it is a dev medium, which changes what is baked into it" \
+  || bad "the mode is not in the header"
+RELARG="$T/run/absent" savelog
+grep -q '^medium: no .*absent' "$T/run/install.log" \
+  && ok "an image carrying no identity says so, rather than printing nothing" \
+  || bad "a missing release file is silent: $(head -3 "$T/run/install.log")"
+savelog   # restore the log the cases below read
 
 CASE="fallback: the log carries the network's side of the story too"
 # HW 2026-08-25: the first join reached no-lease in 10.2s of a 90s budget and a retry was online in

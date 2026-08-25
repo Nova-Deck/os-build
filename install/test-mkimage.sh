@@ -208,5 +208,75 @@ grep -q 'die "missing' "$MKIMAGE" && grep -q 'WIFI_EXAMPLE' "$MKIMAGE" \
   && ok "a missing template fails the build rather than shipping bad instructions" \
   || bad "the template can go missing silently"
 
+CASE="the medium says which build it is"
+# Until this landed, every installer image ever built answered identically: the same NAME, the same
+# ID, no version, no date. That is the first question asked at the fallback console -- the thing
+# that exists for the moment something has gone wrong -- and the medium could not answer it.
+grep -q '>"$BASE/etc/novadeck-release"' "$MKIMAGE" \
+  && ok "mkimage writes /etc/novadeck-release, the path the shipped image uses too" \
+  || bad "no per-build identity is written into the tree"
+for f in NOVADECK_VARIANT NOVADECK_BUILD NOVADECK_VERSION NOVADECK_GIT NOVADECK_MODE; do
+  grep -q "echo \"$f=" "$MKIMAGE" && ok "$f is stamped" || bad "$f is missing from the stamp"
+done
+# REWRITTEN, NEVER APPENDED. The tree is cached between builds, so `>>` would stack a fresh block on
+# every `make installer` until os-release carried a dozen contradictory VERSION= lines, the last one
+# winning by accident.
+grep -q '>>"$BASE/etc/os-release"' "$MKIMAGE" \
+  && bad "os-release is APPENDED to, and the tree it lands in is cached across builds" \
+  || ok "os-release is rewritten from the committed file plus the stamp, so a rebuild cannot stack blocks"
+grep -q 'cat "$OSRELEASE_SRC"' "$MKIMAGE" \
+  && ok "and the static half comes from install/os-release rather than a second copy of it" \
+  || bad "the rewritten os-release does not start from the committed file"
+# THE MODE COMES FROM THE TREE. `NOVADECK_DEV=1 make installer-root` followed by a plain
+# `make installer` must not stamp `release` on a medium carrying an authorized_keys and a Wi-Fi PSK;
+# mkroot folds `dev:0|1` into the reuse marker precisely so this half can read it back.
+grep -q "grep -qx 'dev:1' \"\$BASE/usr/lib/novadeck/pkgs\"" "$MKIMAGE" \
+  && ok "the dev/release mode is read out of the root's own reuse marker" \
+  || bad "the mode is not derived from the tree"
+# Non-comment lines only: the block above EXPLAINS why it does not read that variable, and a naive
+# grep reads its own rationale as the violation.
+grep -qE '^[^#]*NOVADECK_DEV' "$MKIMAGE" \
+  && bad "mkimage reads NOVADECK_DEV — a stale environment could disagree with what was baked in" \
+  || ok "and never from the environment, which cannot disagree with the tree"
+grep -q 'installer.release' "$MKIMAGE" \
+  && ok "the same fields land beside the image, so a publisher need not open a squashfs to name it" \
+  || bad "no identity sidecar is written next to installer.img"
+# install/os-release is an INPUT to mkroot's reuse key: a per-build field there re-bootstraps the
+# whole emulated root on every build.
+grep -qE '^(VERSION_ID|BUILD_ID|VERSION)=' "$ROOT/install/os-release" \
+  && bad "install/os-release carries a per-build field — it is hashed into mkroot's reuse key" \
+  || ok "install/os-release stays static, as mkroot's cache key requires"
+# And the identity has to reach the container at all.
+grep -qE '^installer:.*' "$ROOT/Makefile" \
+  && grep -A3 '^installer:' "$ROOT/Makefile" | grep -q '$(ID_ENV)' \
+  && ok "the Makefile forwards \$(ID_ENV), or NOVADECK_VERSION would never reach the stamp" \
+  || bad "make installer does not pass ID_ENV into the container"
+
+CASE="the verifier knows about everything the medium ships"
+# install/verify-image.sh is the ONLY thing that opens the built image; this file and test-mkroot.sh
+# read the scripts, and a script that says the right thing while producing the wrong image passes
+# both. So the verifier's list of what must be on the medium has to keep up with what mkroot puts
+# there — otherwise a file added to the image is a file nothing ever checks arrived. Asserted in
+# this direction only: the verifier states its own expectations (deriving them from the builder
+# would make it agree with the builder by construction), but it may not fall behind.
+VERIFY="$ROOT/install/verify-image.sh"
+[ -f "$VERIFY" ] || bad "install/verify-image.sh is missing"
+if [ -f "$VERIFY" ]; then
+  mapfile -t SHIPS < <(sed -n '/^INSTALL_FILES=(/,/^)/p' "$ROOT/install/mkroot.sh" \
+    | sed -e '1d' -e '$d' -e 's/#.*//' | tr ' ' '\n' | grep -v '^$')
+  mapfile -t FOREIGN < <(sed -n '/^FOREIGN_FILES=(/,/^)/p' "$ROOT/install/mkroot.sh" \
+    | sed -e '1d' -e '$d' -e '/^[[:space:]]*#/d' | tr -d '"' | tr ' ' '\n' | grep -v '^$')
+  unchecked=""
+  for f in "${SHIPS[@]}"; do
+    grep -q -- "$f" "$VERIFY" || unchecked="$unchecked $f"
+  done
+  for spec in "${FOREIGN[@]}"; do
+    grep -q -- "${spec##*:}" "$VERIFY" || unchecked="$unchecked ${spec##*:}"
+  done
+  [ -z "$unchecked" ] \
+    && ok "verify-image.sh names all ${#SHIPS[@]} shipped files and all ${#FOREIGN[@]} searched ones" \
+    || bad "these reach the medium and nothing verifies they arrived:$unchecked"
+fi
+
 printf '\ntest-mkimage.sh: %d passed, %d failed, %d skipped\n' "$PASS" "$FAIL" "$SKIP"
 [ "$FAIL" -eq 0 ]

@@ -28,6 +28,99 @@ env:
   ASSIGNEE: loki666
 
 jobs:
+  kernel:
+    name: linux release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compare kernel.org releases against the pin
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Baseline is kernel/SOURCE.pin's version:, read with the same parse kernel/build.sh
+          # uses, so the watcher and the build can never disagree about what we ship.
+          pinned="$(sed -n 's/^version:[[:space:]]*//p' kernel/SOURCE.pin | head -1)"
+          [ -n "$pinned" ] || { echo "::error::kernel/SOURCE.pin has no version: field"; exit 1; }
+          # First two components: 7.2 and 7.2.4 are both in series 7.2.
+          series="$(printf '%s' "$pinned" | cut -d. -f1,2)"
+
+          json="$(curl -fsSL --retry 3 https://www.kernel.org/releases.json)"
+          # Real release lines only. linux-next is a daily snapshot we would never pin, and an EOL
+          # line is a dead end. Anything carrying a dash is an -rc: mainline sits at 7.3-rcN for
+          # weeks before 7.3 exists, and reporting one would be reporting a tarball we cannot ship.
+          versions="$(printf '%s' "$json" | jq -r '.releases[]
+              | select(.iseol == false)
+              | select(.moniker == "mainline" or .moniker == "stable" or .moniker == "longterm")
+              | .version' | grep -v -- '-' || true)"
+          [ -n "$versions" ] || { echo "::error::no shippable release lines in releases.json"; exit 1; }
+
+          # Titles carry ONLY the upstream version, never the pinned one. The dedupe key has to
+          # survive our own re-pins: taking 7.2.1 while 7.2.4 is out leaves us behind, and a title
+          # with "(pinned: ...)" in it would re-file the 7.2.4 issue we already closed.
+          file_issue() {
+            local title="$1" body="$2"
+            if [ "$(gh issue list --state all --search "in:title \"$title\"" --json number --jq length)" -gt 0 ]; then
+              echo "issue already filed: $title"; return 0
+            fi
+            gh issue create --title "$title" --assignee "$ASSIGNEE" \
+              --label P2 --label area/kernel --body "$body"
+          }
+          src() { printf '%s' "$json" | jq -r --arg v "$1" '.releases[] | select(.version == $v) | .source'; }
+
+          # --- the point release in the series we already ship ---
+          esc="$(printf '%s' "$series" | sed 's/\./\\./g')"
+          latest="$(printf '%s\n' "$versions" | grep -E "^${esc}\.[0-9]+$" | sort -V | tail -1 || true)"
+          # sort -V, not text: 7.2.10 is newer than 7.2.9. Quiet when we already pin the newest,
+          # and quiet if we ever pin ahead of the index.
+          newest="$(printf '%s\n%s\n' "$pinned" "${latest:-$pinned}" | sort -V | tail -1)"
+          if [ -n "$latest" ] && [ "$latest" != "$pinned" ] && [ "$newest" = "$latest" ]; then
+            file_issue "upstream: linux $latest released" "$(cat <<EOF
+          Upstream released **linux $latest**; we pin **$pinned**. Same series, so this is the
+          cheap bump: no patch rebase is expected, and the risk is that it quietly is not.
+          Tarball: $(src "$latest")
+          Changelog: https://cdn.kernel.org/pub/linux/kernel/v${series%%.*}.x/ChangeLog-$latest
+
+          - [ ] \`kernel/SOURCE.pin\`: version + url + sha256 together. Take the sha256 from kernel.org's **signed** \`sha256sums.asc\` for the series — hashing whatever the CDN served proves only that the CDN is self-consistent
+          - [ ] \`git_tag\` + \`git_commit\`: the **dereferenced** tag (\`git ls-remote ... 'v$latest^{}'\`), not the annotated tag object
+          - [ ] re-apply \`kernel/patches/\` **cumulatively, in lexical order, to one tree** — the way build.sh does. Dry-running each patch against a pristine tree reports false failures, because several of them patch files an earlier patch creates
+          - [ ] fuzz budget: build.sh passes no \`-F0\`, so patch accepts fuzz=2 silently. A hunk that starts fuzzing is a hunk to read, not to wave through
+          - [ ] config: every \`CONFIG_*\` named in \`kernel.config\` + \`trim-platforms.config\` must still exist in the patched tree, then merge for real in \`build/Dockerfile\` and assert each requested symbol kept its requested value
+          - [ ] HW pass before this becomes the shipped kernel
+
+          Closing this issue is a legitimate answer — a point release we decide to skip stays
+          skipped, and the title dedupe will not re-file it.
+          EOF
+          )"
+          fi
+
+          # --- a whole new series ---
+          # Series-level compare, so this fires ONCE when 7.3 lands and stays quiet while its own
+          # point releases roll past under the stable moniker.
+          upstream_series="$(printf '%s\n' "$versions" | cut -d. -f1,2 | sort -uV | tail -1)"
+          top="$(printf '%s\n%s\n' "$series" "$upstream_series" | sort -V | tail -1)"
+          if [ "$upstream_series" != "$series" ] && [ "$top" = "$upstream_series" ]; then
+            head_version="$(printf '%s\n' "$versions" | grep -E "^$(printf '%s' "$upstream_series" | sed 's/\./\\./g')(\.[0-9]+)?$" | sort -V | head -1)"
+            file_issue "upstream: linux $upstream_series opened" "$(cat <<EOF
+          Upstream opened the **linux $upstream_series** series; we pin **$pinned**. This is the
+          expensive bump — treat it as a project, not a pin edit.
+          Tarball: $(src "$head_version")
+          Diff: https://git.kernel.org/torvalds/ds/v$upstream_series/v$series
+
+          Everything in the point-release drill applies, plus the two things that only a series
+          bump can do to us:
+
+          - [ ] **find the patches upstream took**, and delete them rather than carry them. Read *how* it took them: 7.2 landed our sm8550 bandwidth patch verbatim, but rewrote the sgm3804 panel-power driver with an **incompatible DT binding**, which forced a migration across all six board nodes and every panel driver that consumes them
+          - [ ] **read what upstream deleted.** A \`CONFIG_*\` symbol removed upstream is silently ignored by kconfig, so a stale name in our fragments is invisible until the driver is missing on hardware
+          - [ ] budget a full display/panel HW gate on the affected boards. The failure mode of a bad panel-power migration is a lit backlight over a black panel — it does not look like a kernel problem
+          - [ ] record the outcome in \`kernel/SOURCE.pin\`'s header, including what was taken over and what it cost. That header is how the next bump knows what to re-check
+
+          There is no deadline here: a series we choose not to take is answered by closing this
+          issue once.
+          EOF
+          )"
+          fi
+
   fex-rootfs:
     name: FEX guest RootFS update
     runs-on: ubuntu-latest

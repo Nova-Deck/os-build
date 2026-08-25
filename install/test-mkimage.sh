@@ -277,6 +277,24 @@ grep -qE '^installer:.*\$\(SEED_ARTIFACT\)' "$ROOT/Makefile" \
   && ok "make installer depends on the packed seed" \
   || bad "the installer target does not require the seed artifact"
 
+CASE="the verifier looks at the seed's CONTENT, not just its hash"
+VERIFY="$ROOT/install/verify-image.sh"
+# THE PIN PROVES NOTHING ON ITS OWN. mkimage computes it from the file it stages, so a pin and its
+# seed agree by construction -- point NOVADECK_SEED_TARBALL at the wrong file and the medium carries
+# a perfectly self-consistent non-seed. The spine then hashes it before consent, the hash matches,
+# the disk is CARVED, and the install dies at seed_home. Checked with a junk archive while writing
+# this: 3 entries, no steamui.so, correctly refused.
+grep -q "grep -qx './steamrtarm64/steamui.so'" "$VERIFY" \
+  && ok "verify-image asserts the archive really is the Steam tree" \
+  || bad "nothing checks the seed's content — a self-consistent wrong seed reaches the carve"
+grep -q 'package/\.\*\\\.installed\|package/.*installed' "$VERIFY" \
+  && ok "and that the completeness marker survived, so first boot needs no self-heal" \
+  || bad "the .installed marker is not asserted on the medium"
+# It must ride the pass that is already reading the seed, or it doubles the slowest check here.
+grep -q 'tee >(zstd -dc' "$VERIFY" \
+  && ok "in the same decompress that computes the hash" \
+  || bad "the content check reads the seed a second time"
+
 CASE="the verifier knows about everything the medium ships"
 # install/verify-image.sh is the ONLY thing that opens the built image; this file and test-mkroot.sh
 # read the scripts, and a script that says the right thing while producing the wrong image passes
@@ -284,7 +302,6 @@ CASE="the verifier knows about everything the medium ships"
 # there — otherwise a file added to the image is a file nothing ever checks arrived. Asserted in
 # this direction only: the verifier states its own expectations (deriving them from the builder
 # would make it agree with the builder by construction), but it may not fall behind.
-VERIFY="$ROOT/install/verify-image.sh"
 [ -f "$VERIFY" ] || bad "install/verify-image.sh is missing"
 if [ -f "$VERIFY" ]; then
   mapfile -t SHIPS < <(sed -n '/^INSTALL_FILES=(/,/^)/p' "$ROOT/install/mkroot.sh" \

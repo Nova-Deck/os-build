@@ -262,17 +262,43 @@ sqfs usr/lib/novadeck/install/confirm >/dev/null 2>&1 \
 # hash it, and compare against the sha256 staged beside it — exactly what the spine does on the
 # device, before consent. A medium that fails here would carve a disk and then refuse.
 #
-# It reads ~1.4 GiB out of the image to do it. That is the whole point: nothing else between this
-# and a stranger's /home looks at the bytes, because the seed carries no signature.
+# AND THAT IT IS A STEAM TREE, not merely self-consistent bytes. The pin is computed by mkimage from
+# the file it stages, so a pin and its seed agree BY CONSTRUCTION -- point NOVADECK_SEED_TARBALL at
+# the wrong file and the medium carries a perfectly self-consistent non-seed. Nothing downstream
+# catches it either: the spine hashes it before consent, the hash matches, the disk is carved, and
+# the install dies at seed_home AFTER the point of no return. That is exactly the window the
+# pre-consent verification exists to close. steam-seed/pack-seed.sh makes this check on its own
+# output; this is the one that looks at what actually landed on the medium.
+#
+# It reads ~1.4 GiB out of the image to do it, and the listing rides along in the same pass: the
+# bytes are already streaming past to be hashed. Nothing else between this and a stranger's /home
+# looks at them at all, because the seed carries no signature.
 if unsquashfs -o "$ROOT_OFF" -q -cat "$IMG" usr/lib/novadeck/install/steam-seed.sha256 >"$T/pin" 2>/dev/null \
    && [ -s "$T/pin" ]; then
   pin=$(tr -d '[:space:]' <"$T/pin")
   if [ "${#pin}" -eq 64 ]; then
     ok "a 64-character Steam-seed pin is staged"
+    # tee, so one decompress feeds both the hash and the listing. `zstd -dc | tar -t` reads the
+    # archive without unpacking 3.3 GB of it.
     got=$(unsquashfs -o "$ROOT_OFF" -q -cat "$IMG" usr/lib/novadeck/install/steam-seed.tar.zst 2>/dev/null \
+          | tee >(zstd -dc 2>/dev/null | tar -tf - >"$T/seed.list" 2>/dev/null) \
           | sha256sum | cut -d' ' -f1)
     if [ "$got" = "$pin" ]; then
       ok "and the seed on the medium hashes to it — /home can actually be built from this image"
+      # The two files stage_deck_home's output is useless without. `.installed` is what stops Steam
+      # re-installing itself over the user's network on first boot, which is the whole point of the
+      # offline bake.
+      if grep -qx './steamrtarm64/steamui.so' "$T/seed.list" 2>/dev/null; then
+        ok "and it IS the Steam tree ($(wc -l <"$T/seed.list") entries), not just bytes that agree with a hash"
+      else
+        bad "THE SEED IS NOT A STEAM TREE. It hashes to its pin — which proves nothing, since mkimage
+        computes the pin from whatever it was given — but carries no ./steamrtarm64/steamui.so.
+        A medium like this passes 'verify sources', CARVES THE DISK, and then fails at seed_home.
+        Rebuild with a real out/steam-seed/steam-seed.tar.zst (make steam-seed-artifact)."
+      fi
+      grep -q '^\./package/.*\.installed$' "$T/seed.list" 2>/dev/null \
+        && ok "with the completeness marker, so first boot needs no self-heal over the user's network" \
+        || bad "the seed carries no package/*.installed — this /home would re-install Steam on first boot"
     else
       bad "THE SEED DOES NOT MATCH ITS PIN. staged: $pin
         actual: ${got:-<no seed on the medium>}

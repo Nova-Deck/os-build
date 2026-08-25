@@ -356,11 +356,25 @@ cp    "$OSRELEASE"   "$STAGE/os-release"
 # same idiom images/customize-base.sh uses for dev.pkgs, and for the same reason: it keeps another
 # layer of quoting out of the single-quoted bash -c.
 if [ -n "$DEV" ]; then
+  # FATAL, not a warning, and it matches the Wi-Fi rule below rather than sitting one notch softer
+  # than it. sshd here is key-only, so a dev medium built without a key admits NOBODY -- it is a
+  # release medium that took the dev code path, and the only thing it has to show for it is the
+  # test-only surface. You find that out over SSH, on a hardware trip, at the moment the panel has
+  # gone black and the shell was the entire reason for building it. The two credentials failed
+  # differently until 2026-08-25: NOVADECK_WIFI=1 with no creds died, this one printed a line the
+  # build then buried under twenty emulated minutes of pacstrap.
+  #
+  # NOVADECK_DEV_NO_SSH=1 is the way to ask for the other half on purpose -- a medium with the baked
+  # Wi-Fi and no way in -- which is a real thing to want when the point is to watch the network
+  # screen behave on a board you can reach some other way.
   if [ -n "${NOVADECK_SSH_PUBKEY:-}" ]; then
     printf '%s\n' "$NOVADECK_SSH_PUBKEY" >"$STAGE/authorized_keys"
+  elif [ "${NOVADECK_DEV_NO_SSH:-}" = 1 ]; then
+    log "TEST BUILD: no authorized_keys (NOVADECK_DEV_NO_SSH=1) — sshd stays disabled on this medium."
   else
-    log "WARNING: NOVADECK_DEV=1 but NOVADECK_SSH_PUBKEY is unset — sshd is key-only, so it will"
-    log "         admit nobody. Source dev.env before building a bring-up medium."
+    die "NOVADECK_DEV=1 requires NOVADECK_SSH_PUBKEY: sshd is key-only, so a dev medium without one
+  admits nobody and is a release medium that took the dev path. Source dev.env, or pass
+  NOVADECK_DEV_NO_SSH=1 if a medium with the Wi-Fi profile and no shell is what you meant."
   fi
 
   # A Wi-Fi profile, and it is what makes the sshd above WORTH having. Joining a network otherwise

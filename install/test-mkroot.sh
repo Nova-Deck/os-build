@@ -139,6 +139,23 @@ done
 # The file lists, read back out of mkroot.sh. Extracting them from the script rather than
 # re-declaring them here is the point: a second copy would drift in the same commit that broke the
 # first, and agree with it.
+CASE="the two dev credentials fail the same way"
+# THEY DID NOT UNTIL 2026-08-25. NOVADECK_WIFI=1 with no creds died; NOVADECK_DEV=1 with no
+# NOVADECK_SSH_PUBKEY printed a warning that the build then buried under twenty emulated minutes of
+# pacstrap. sshd on this medium is KEY-ONLY, so that second one produces a "dev" medium that admits
+# nobody -- a release medium that took the dev path -- and you find out over SSH, on a hardware trip,
+# at the moment the panel has gone black and the shell was the whole reason for building it.
+grep -q 'die "NOVADECK_DEV=1 requires NOVADECK_SSH_PUBKEY' "$MKROOT" \
+  && ok "a dev build with no pubkey is fatal, like a dev build with no Wi-Fi creds" \
+  || bad "a missing NOVADECK_SSH_PUBKEY is still only a warning — the medium admits nobody"
+grep -q 'NOVADECK_DEV_NO_SSH' "$MKROOT" \
+  && ok "and there is a way to ask for that on purpose (NOVADECK_DEV_NO_SSH=1)" \
+  || bad "no opt-out: a Wi-Fi-only dev medium is a real thing to want and cannot be built"
+# Both refusals name the variable AND what to do, since dev.env is where both actually live.
+grep -q 'Source dev.env' "$MKROOT" \
+  && ok "and the refusal points at dev.env, where both credentials come from" \
+  || bad "the refusal does not say where to set it"
+
 CASE="a cold tree fails with a MESSAGE, not a silent exit 2"
 # FOUND BY CI, 2026-08-25, on the first tree that had never built a kernel. `ls` on a missing
 # out/modroot returns 2 with its message suppressed; under `set -euo pipefail` that status leaves the

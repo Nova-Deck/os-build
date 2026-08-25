@@ -1,0 +1,58 @@
+# TEMPORARY — DELETE THIS FILE BEFORE MERGING `install/phase6-image`.
+#
+# It runs the installer half of image.yml once, on real CI, before any of it is trusted. It
+# publishes nothing, holds no credential, and names no environment.
+#
+# WHY A PUSH TRIGGER RATHER THAN A DISPATCH. `workflow_dispatch` only exists for workflows that are
+# on the DEFAULT branch, and these are not — `gh workflow run "release installer"` answers "could
+# not find any workflows named release installer" until they land on main. A push trigger is the one
+# way to run a workflow that lives only on a feature branch.
+#
+# ONCE THEY ARE ON main, THIS FILE IS REDUNDANT AND SHOULD GO. A `release installer` dispatch with
+# `publish: false` is a strictly better test: it exercises the real prep job, the real wiring, and
+# the same build — and since the medium now CARRIES its Steam seed, that run touches no protected
+# environment at all (the publish job is skipped, and there is no longer a seed job wanting the OTA
+# credentials). The only thing it still cannot reach is the R2 upload, which needs `installer/v*`
+# added to the `release-cards` deployment-branch policy.
+#
+# WHAT IT PROVES, none of which an offline suite can:
+#   - `artifact: installer` passes image.yml's validation
+#   - the mesa-x86 job is SKIPPED and the build job still runs (a skipped `needs` skips its
+#     dependents unless the condition allows it — the failure mode is a green run with no artifact)
+#   - the Steam seed is FETCHED FROM VALVE AND PACKED on the runner, which is new: `make installer`
+#     depends on out/steam-seed/steam-seed.tar.zst since the medium started carrying it, and no CI
+#     run has ever done that. Locally it is a cache hit; here it is the whole ~3.3 GB self-install.
+#   - `make installer` completes on a GitHub arm64 runner from a COLD tree
+#   - `make verify-image` passes on what that produced — including the check that the seed inside
+#     the squashfs hashes to the pin staged beside it
+#   - the compress + metadata + upload steps produce the artifact names release-installer.yml's
+#     publish job downloads, for a ~2.1 GB image rather than the ~650 MB one they were written for
+#
+# PATH-FILTERED to itself, so ordinary work on this branch does not each cost a multi-hour arm64
+# run. To re-run it, touch this file and push.
+name: installer smoke (temporary)
+
+on:
+  push:
+    branches:
+      - install/phase6-image
+    paths:
+      - .github/workflows/installer-smoke.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: installer-smoke
+  cancel-in-progress: true
+
+jobs:
+  installer:
+    uses: ./.github/workflows/image.yml
+    with:
+      artifact: installer
+      # Stamped into the medium's own /etc/novadeck-release and os-release, so the artifact says
+      # what it is rather than borrowing a release version it is not.
+      version: smoke
+      # No environment, and therefore no secret in scope for the whole build.
+      environment: ''

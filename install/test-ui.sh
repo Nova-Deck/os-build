@@ -1369,6 +1369,60 @@ grep -qi 'installer medium' "$T/console" \
   && ok "and it names where the full copy is, which is the only artefact that leaves the device" \
   || bad "the console does not say where the full log is"
 
+CASE="fallback: an ESP nobody mounted is mounted here rather than diagnosed"
+# HW 2026-08-25: a clean shutdown, and NO log on the ESP at all. Two causes produce that and they
+# are indistinguishable from inside the script -- the fstab mount was skipped (nofail plus a 5s
+# device timeout, and nothing retries), or shutdown unmounted it while gamescope was still taking
+# its time over SIGTERM. So the script tries the mount itself. These stubs make "is it mounted"
+# answer honestly by tracking one marker file, which is what lets the branch be driven without root.
+cat >"$T/bin/mountpoint" <<EOF
+#!/bin/sh
+[ -e "$T/mounted" ]
+EOF
+cat >"$T/bin/mount" <<EOF
+#!/bin/sh
+: >"$T/mounted"
+EOF
+cat >"$T/bin/umount" <<EOF
+#!/bin/sh
+rm -f "$T/mounted"
+EOF
+chmod +x "$T/bin"/*
+rm -f "$T/mounted" "$T/esp/novadeck-install.log"
+savelog && ok "it exits 0" || bad "save-log.sh failed after mounting the ESP itself"
+cmp -s "$T/run/install.log" "$T/esp/novadeck-install.log" \
+  && ok "the log reaches the ESP even though nothing had mounted it" \
+  || bad "an unmounted ESP still loses the log"
+grep -qi 'mounted it to save the log' "$T/savelog.err" \
+  && ok "and it says it had to, so the missing fstab mount is visible in the log itself" \
+  || bad "it mounted the ESP silently"
+[ ! -e "$T/mounted" ] \
+  && ok "then unmounts it -- a dirty FAT does not survive a finger on the power button" \
+  || bad "it left its own mount behind"
+
+CASE="fallback: a mount that will not mount is still not an error"
+printf '#!/bin/sh\nexit 1\n' >"$T/bin/mount"      # "no such device", a read-only medium, anything
+chmod +x "$T/bin"/*
+rm -f "$T/mounted" "$T/esp/novadeck-install.log"
+savelog && ok "an ESP that cannot be mounted exits 0 like every other saving failure" \
+  || bad "a failed mount failed the unit"
+[ ! -e "$T/esp/novadeck-install.log" ] \
+  && ok "and nothing is written into the bare directory, where nobody would ever find it" \
+  || bad "it copied into an unmounted /esp"
+grep -qi 'could not be mounted' "$T/savelog.err" \
+  && ok "saying the mount was tried and failed, not merely that nothing was mounted" \
+  || bad "the operator cannot tell a skipped mount from a failed one"
+
+CASE="fallback: an fstab mount is never stolen from whoever owns it"
+printf '#!/bin/sh\n: >"'"$T"'/mounted"\n' >"$T/bin/mount"
+chmod +x "$T/bin"/*
+: >"$T/mounted"                                   # already mounted, by fstab, before this ran
+rm -f "$T/esp/novadeck-install.log"
+savelog && ok "it exits 0" || bad "save-log.sh failed against an already-mounted ESP"
+[ -e "$T/mounted" ] \
+  && ok "and leaves the mount alone -- unmounting under a running installer is the worse bug" \
+  || bad "it unmounted an ESP it did not mount"
+
 CASE="units: the fallback is actually armed"
 UNITDIR="$ROOT/install/units"
 grep -q '^OnFailure=novadeck-installer-console.service' "$UNITDIR/novadeck-installer.service" \
@@ -1388,6 +1442,15 @@ grep -qE '^(TTYPath|StandardInput=tty)' "$UNITDIR/novadeck-installer.service" \
 grep -q '^ExecStopPost=-/usr/lib/novadeck/install/save-log.sh' "$UNITDIR/novadeck-installer.service" \
   && ok "and every stop, successful or not, tries to save the log" \
   || bad "the log is not collected on stop"
+# The ExecStopPost above writes to /esp, and units stop in the REVERSE of their After= order, so
+# this line is the whole reason the mount is still there when it runs. fstab's `nofail` drops the
+# mount's Before=local-fs.target, so nothing else orders these two at all.
+grep -q '^After=esp.mount' "$UNITDIR/novadeck-installer.service" \
+  && ok "and /esp is ordered so shutdown cannot unmount it out from under that log" \
+  || bad "nothing keeps /esp mounted while the log is being written to it"
+grep -qE '^(Requires|RequiresMountsFor)=.*esp' "$UNITDIR/novadeck-installer.service" \
+  && bad "the session REQUIRES /esp -- an ESP that will not mount would black out the panel" \
+  || ok "and wants it rather than requiring it, so a bad ESP costs the log and not the installer"
 
 printf '\ntest-ui.sh: %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

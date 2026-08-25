@@ -292,6 +292,10 @@ EOF
 cat >"$T/bin/curl" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"${NET_CURL_CALLS:-/dev/null}"
+# A BODY, for the release-info section below. netcfg only ever asks whether the host answers and
+# sends the answer to /dev/null, so one stub serves both callers: what it says is invisible to the
+# one and the whole question for the other.
+[ -n "${NET_CURL_BODY:-}" ] && printf '%s' "$NET_CURL_BODY"
 exit "${NET_HOST_RC:-0}"
 EOF
 cat >"$T/bin/nmcli" <<'EOF'
@@ -459,16 +463,22 @@ netcfg join | grep -q 'hunter2' \
 unset NET_LEASE NET_HOST_RC
 
 CASE="§4b: netcfg and novadeck-update agree on which host 'reachable' means"
-# THE URL IS WRITTEN TWICE -- shell here, Python in fs-overlay/usr/bin/novadeck-update -- and this
-# assertion is the only thing that keeps them the same URL. It is not hypothetical: netcfg shipped
-# for an hour with an invented default (`ota.novadeck.org`), which would have reported every
-# healthy network as `no-host`, the exact misdiagnosis §4b's table exists to prevent. Same shape as
-# test-update.sh's identity-rules-agree, and for the same reason.
+# THE URL IS WRITTEN THREE TIMES -- shell here, Python in fs-overlay/usr/bin/novadeck-update, Python
+# again in install/release-info -- and this assertion is the only thing that keeps them the same
+# URL. It is not hypothetical: netcfg shipped for an hour with an invented default
+# (`ota.novadeck.org`), which would have reported every healthy network as `no-host`, the exact
+# misdiagnosis §4b's table exists to prevent. Same shape as test-update.sh's identity-rules-agree,
+# and for the same reason. The third copy is the one that would hurt most quietly: netcfg would
+# report `online` against one host while release-info fetched a manifest from another.
 net_default="$(sed -n 's/^OTA_DEFAULT_URL=//p' "$NETCFG" | head -1)"
 upd_default="$(sed -n 's/^DEFAULT_URL = "\(.*\)"$/\1/p' "$ROOT/fs-overlay/usr/bin/novadeck-update" | head -1)"
+rel_default="$(sed -n 's/^DEFAULT_URL = "\(.*\)"$/\1/p' "$ROOT/install/release-info" | head -1)"
 [ -n "$net_default" ] && [ "$net_default" = "$upd_default" ] \
   && ok "both default to $net_default" \
   || bad "netcfg says '$net_default', novadeck-update says '$upd_default'"
+[ -n "$rel_default" ] && [ "$rel_default" = "$net_default" ] \
+  && ok "and release-info fetches its manifest from the host netcfg pronounced reachable" \
+  || bad "release-info says '$rel_default', netcfg says '$net_default'"
 # And the config file the running system actually carries wins over both.
 printf 'OTA_URL=https://from-the-conf.example\n' >"$T/net/ota.conf"
 NET_LEASE=1 NET_HOST_RC=0 NOVADECK_OTA_CONFIG="$T/net/ota.conf" PATH="$T/bin:$PATH" \
@@ -761,6 +771,124 @@ mode="$(stat -c %a "$SOCK" 2>/dev/null)"
 kill "$p" 2>/dev/null; wait "$p" 2>/dev/null
 
 # =================================================================================================
+# release-info — what the medium would install, and why it sometimes cannot
+# =================================================================================================
+# The medium carries no bundle at all, so this is the program that turns "the network is up" into
+# "here is what will be downloaded". Every failure below reaches a person as a line on the pre-flight
+# screen; the whole reason it is a separate program from netcfg is that netcfg must treat a 404 as a
+# REACHABLE server (measured on a Pocket S2, 2026-08-22) and a 404 on <channel>/latest.json is
+# exactly the answer this file has to name.
+RELINFO="$ROOT/install/release-info"
+[ -x "$RELINFO" ] || { echo "no release-info: $RELINFO" >&2; exit 1; }
+mkdir -p "$T/rel"
+PIN=0000000000000000000000000000000000000000000000000000000000000001
+printf '%s\n' "$PIN" >"$T/rel/pin"
+export REL_CALLS="$T/rel/curl-calls"
+relinfo() {  # prints release-info's key=value output
+  : >"$REL_CALLS"
+  PATH="$T/bin:$PATH" NET_CURL_CALLS="$REL_CALLS" \
+    NOVADECK_OTA_URL="${REL_URL-https://ota.example}" \
+    NOVADECK_OTA_CONFIG="${REL_CONF-/dev/null}" \
+    NOVADECK_SEED_PIN="${REL_PIN-$T/rel/pin}" \
+    "$RELINFO" 2>/dev/null
+}
+MANIFEST='{"version":"0.2.0","build":"20260825","bundle":"novadeck-0.2.0.raucb","size":4294967296,"sha256":"deadbeef"}'
+
+CASE="release-info: a published release becomes a bundle URL and a seed URL"
+out="$(NET_CURL_BODY="$MANIFEST" relinfo)"
+[ "$(state "$out")" = ok ] && ok "a manifest that parses is STATE=ok" || bad "not ok: $out"
+printf '%s' "$out" | grep -qx 'BUNDLE=https://ota.example/stable/novadeck-0.2.0.raucb' \
+  && ok "the bundle URL is the channel's, with the manifest's bare filename on the end" \
+  || bad "the bundle URL is wrong: $out"
+printf '%s' "$out" | grep -qx "SEED=https://ota.example/seed/steam-seed-$PIN.tar.zst" \
+  && ok "and the seed is named by the sha256 BAKED INTO THIS IMAGE, not by anything the server said" \
+  || bad "the seed URL is wrong: $out"
+printf '%s' "$out" | grep -q '^DETAIL=NovaDeck 0.2.0, 4.0 GiB from ota.example' \
+  && ok "one line for the panel: the version, the download size and the host it comes from" \
+  || bad "the detail line is not what the screen puts under 'To install': $out"
+
+CASE="release-info: the seed URL follows the pin, so a medium can only fetch its own seed"
+# THE PIN IS THE NAME, and that is the whole design. novadeck-install verifies the seed against this
+# same file and refuses on a mismatch, so a URL derived from anything else -- a `seed` field in the
+# manifest, a newest-published pointer -- could only ever hand this medium bytes it would then throw
+# away after downloading 1.7 GB of them. Content-addressed means an older medium keeps working after
+# a newer seed is published: it asks for its own by hash.
+printf '%s\n' 00000000000000000000000000000000000000000000000000000000000000ff >"$T/rel/pin2"
+out="$(REL_PIN="$T/rel/pin2" NET_CURL_BODY="$MANIFEST" relinfo)"
+printf '%s' "$out" | grep -q 'steam-seed-00000000000000000000000000000000000000000000000000000000000000ff' \
+  && ok "a different pin names a different seed" \
+  || bad "the seed URL does not follow the pin: $out"
+
+CASE="release-info: a medium built with no seed pin says so, and asks the server nothing"
+# It cannot install -- install/mkroot.sh warns about this at build time -- and no network will fix
+# it, so the honest place to say it is the screen before the first write rather than twenty minutes
+# into one, at the seed step, with Android's data already gone.
+out="$(REL_PIN="$T/rel/absent" NET_CURL_BODY="$MANIFEST" relinfo)"
+[ "$(state "$out")" = no-pin ] && ok "STATE=no-pin" || bad "a missing pin was not reported: $out"
+[ ! -s "$REL_CALLS" ] \
+  && ok "and nothing is fetched -- the answer cannot come from the network" \
+  || bad "it went to the server for a release it could never install: $(cat "$REL_CALLS")"
+printf '%s\n' "not-a-sha256" >"$T/rel/pin3"
+[ "$(state "$(REL_PIN="$T/rel/pin3" NET_CURL_BODY="$MANIFEST" relinfo)")" = no-pin ] \
+  && ok "a pin that is not a sha256 is no pin at all" \
+  || bad "a malformed pin was accepted"
+
+CASE="release-info: a channel with nothing published is not an unreachable server"
+out="$(NET_HOST_RC=22 relinfo)"
+[ "$(state "$out")" = no-release ] \
+  && ok "curl's 22 -- an HTTP error -- is STATE=no-release" \
+  || bad "a 404 was not read as an empty channel: $out"
+printf '%s' "$out" | grep -q "stable" \
+  && ok "and the channel is named, because that is what the operator would have to change" \
+  || bad "the channel is not in the message: $out"
+out="$(NET_HOST_RC=6 relinfo)"
+[ "$(state "$out")" = unreachable ] \
+  && ok "every other curl failure is STATE=unreachable, kept apart from an empty channel" \
+  || bad "a transport failure was not reported as unreachable: $out"
+
+CASE="release-info: a manifest that does not parse is not a release"
+[ "$(state "$(NET_CURL_BODY='<html>hi</html>' relinfo)")" = malformed ] \
+  && ok "a captive portal's HTML is STATE=malformed, not a bundle" \
+  || bad "non-JSON was accepted"
+[ "$(state "$(NET_CURL_BODY='{"version":"1","bundle":"b.raucb"}' relinfo)")" = malformed ] \
+  && ok "a manifest with no size is refused, as novadeck-update refuses it" \
+  || bad "a sizeless manifest was accepted"
+[ "$(state "$(NET_CURL_BODY='{"bundle":"b.raucb","size":10}' relinfo)")" = malformed ] \
+  && ok "and one that names no version, which is what the screen would have to call it" \
+  || bad "a versionless manifest was accepted"
+
+CASE="release-info: the manifest cannot aim this medium at another host"
+# THE MANIFEST IS NOT A TRUST BOUNDARY. Left unchecked, `bundle` is a redirect primitive: the
+# signature would still reject whatever came back, but a manifest must not be able to point the
+# installer somewhere else at all. These are novadeck-update's shapes, checked against the port.
+for b in 'http://evil.example/x.raucb' '../../etc/passwd' '/etc/passwd' '..\\x.raucb' '.hidden'; do
+  out="$(NET_CURL_BODY="{\"version\":\"1\",\"bundle\":\"$b\",\"size\":10}" relinfo)"
+  if [ "$(state "$out")" = malformed ] && ! printf '%s' "$out" | grep -q '^BUNDLE='; then
+    ok "$b is refused, and no BUNDLE is emitted for it"
+  else
+    bad "$b produced a bundle: $out"
+  fi
+done
+
+CASE="release-info: the channel comes from the same file the OTA client reads"
+printf 'OTA_CHANNEL=dev\n' >"$T/rel/ota.conf"
+out="$(REL_CONF="$T/rel/ota.conf" NET_CURL_BODY="$MANIFEST" relinfo)"
+printf '%s' "$out" | grep -qx 'URL=https://ota.example/dev/latest.json' \
+  && ok "/etc/novadeck/ota.conf's OTA_CHANNEL steers it, as it steers novadeck-update" \
+  || bad "the channel from the config file was ignored: $out"
+printf '%s' "$out" | grep -q 'BUNDLE=https://ota.example/dev/' \
+  && ok "and the bundle comes from that channel, not from stable" \
+  || bad "the bundle URL kept the default channel: $out"
+
+CASE="release-info: a failure is an answer, not an error"
+# netcfg's contract, deliberately shared: the caller reads STATE and never a shell status, so there
+# is one rule for both tools instead of two.
+NET_HOST_RC=6 relinfo >/dev/null 2>&1 \
+  && ok "it exits 0 even when it could not resolve a release" \
+  || bad "release-info exits non-zero, and its caller only reads STATE"
+unset NET_CURL_BODY NET_HOST_RC
+
+# =================================================================================================
 # pre-flight — §5's screen before the gate
 # =================================================================================================
 # Stubs for the three read-only tools the screen derives from. The carve stub RECORDS its calls, so
@@ -789,9 +917,18 @@ EOF
 chmod +x "$T/bin"/*
 export CARVE_CALLS="$T/carve-calls"; : >"$CARVE_CALLS"
 
+# THE REAL release-info, NOT A STUB, with the curl above under it: the screen's "To install" line is
+# the last hop of a chain (curl -> manifest validation -> the baked pin -> the panel) and stubbing the
+# middle of it would leave the two halves free to disagree about what a resolved release looks like.
+# The cases that set BUNDLE_OVERRIDE/SEED_OVERRIDE never reach it -- both set is the hardware
+# stager's shape, and it short-circuits.
 flow() {  # <python snippet reading `pf` (a PreflightScreen)>
+  PATH="$T/bin:$PATH" \
   NOVADECK_SELECT_TARGET="$T/bin/select-target.sh" NOVADECK_CARVE="$T/bin/carve.sh" \
   NOVADECK_DEVICE_ENV="$T/bin/device-env" NOVADECK_INSTALL_BUNDLE="${BUNDLE_OVERRIDE-https://x/b.raucb}" \
+  NOVADECK_RELEASE_INFO="${RELINFO_OVERRIDE-$ROOT/install/release-info}" \
+  NOVADECK_OTA_URL=https://ota.example NOVADECK_OTA_CONFIG=/dev/null \
+  NOVADECK_SEED_PIN="${REL_PIN-$T/rel/pin}" \
   NOVADECK_INSTALL_SEED="${SEED_OVERRIDE-/seed.tar.zst}" SNIPPET="$1" python3 - <<'PY'
 import json, os, sys
 sys.path.insert(0, os.path.join(os.environ["ROOT"], "install"))
@@ -898,14 +1035,125 @@ printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.ex
   && ok "left and right move it by a step each, with a floor under them" \
   || bad "the adjustment did not land where it should"
 
+CASE="pre-flight: the medium works out for itself what it would install"
+# THE POINT OF PHASE 6. Nothing is configured into this medium but the pin: the bundle comes from
+# the channel manifest and the seed from the pin, and until they did the screen ended at "NO BUNDLE
+# CONFIGURED" with a Cancel button -- which is where the first end-to-end hardware run stopped.
+out="$(BUNDLE_OVERRIDE= SEED_OVERRIDE= NET_CURL_BODY="$MANIFEST" \
+  flow 'pf.handle("S"); print(json.dumps({"r": pf.result, "d": pf.describe(), "f": pf.facts}))')"
+printf '%s' "$out" | grep -q '"r": \["start", 16\]' \
+  && ok "a resolved release makes the screen startable with nothing else configured" \
+  || bad "it will not start against a published release: $out"
+printf '%s' "$out" | grep -q 'NovaDeck 0.2.0, 4.0 GiB from ota.example' \
+  && ok "and 'To install' names the version, the size and the host" \
+  || bad "the screen does not say what it would download: $out"
+printf '%s' "$out" | grep -q "steam-seed-$PIN.tar.zst" \
+  && ok "with the seed the pin names, which is the only one the spine would accept" \
+  || bad "the seed did not reach the facts: $out"
+
+CASE="pre-flight: the spine is started with the URLs the screen showed"
+# THE ONE THAT WOULD HAVE SHIPPED SILENTLY. SpineRun used to read the module's own BUNDLE/HOME_SEED
+# -- the environment, i.e. empty on a medium -- so a screen that had resolved a release perfectly
+# would still have handed `--bundle ''` to the spine. Resolving a SECOND time here would be no
+# better: the server can publish between the two calls, and then what installs is not what the
+# operator read and consented to. It is the screen's own facts or nothing.
+cat >"$T/bin/spine-recorder" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >"$T/rel/spine-argv"
+EOF
+chmod +x "$T/bin/spine-recorder"
+rm -f "$T/rel/spine-argv"
+BUNDLE_OVERRIDE= SEED_OVERRIDE= NET_CURL_BODY="$MANIFEST" NOVADECK_SPINE="$T/bin/spine-recorder" \
+  flow '
+import time
+r = uiflow.SpineRun(16, "/nonexistent.sock", pf.facts["bundle"], pf.facts["seed"])
+for _ in range(500):
+    if r.returncode() is not None: break
+    time.sleep(0.01)' >/dev/null 2>&1
+argv="$(cat "$T/rel/spine-argv" 2>/dev/null)"
+printf '%s' "$argv" | grep -q -- '--bundle https://ota.example/stable/novadeck-0.2.0.raucb' \
+  && ok "the resolved bundle URL reaches the spine's command line" \
+  || bad "the spine was started with something else: $argv"
+printf '%s' "$argv" | grep -q -- "--home-seed https://ota.example/seed/steam-seed-$PIN.tar.zst" \
+  && ok "and so does the seed the baked pin names" \
+  || bad "the seed did not reach the spine: $argv"
+grep -q 'top.facts\["bundle"\], top.facts\["seed"\]' "$ROOT/install/ui" \
+  && ok "and the loop passes the SCREEN's facts, so nothing re-resolves behind the consent" \
+  || bad "install/ui does not hand SpineRun the screen's own bundle"
+
 CASE="pre-flight: it cannot start an install it has no bundle for"
-out="$(BUNDLE_OVERRIDE= flow 'pf.handle("S"); print(json.dumps({"r": pf.result, "d": pf.describe()}))')"
+out="$(BUNDLE_OVERRIDE= SEED_OVERRIDE= NET_HOST_RC=22 \
+  flow 'pf.handle("S"); print(json.dumps({"r": pf.result, "d": pf.describe()}))')"
+printf '%s' "$out" | grep -q '"start"' \
+  && bad "it started an install with no bundle: $out" \
+  || ok "pressing continue with no release resolved starts nothing"
+# The quotes release-info puts round the channel are gone by the time this reaches a screen: kv()
+# parses values the way the shell would, which is what undoes device-env's %q escaping. Prose is
+# prose either way, and the terminal caller still sees the quoted form.
+printf '%s' "$out" | grep -q "nothing published in the stable channel" \
+  && ok "and the screen says WHICH failure it is, not that a bundle is 'not configured'" \
+  || bad "the screen does not explain why it will not start: $out"
+printf '%s' "$out" | grep -q '"label": "Check again"' \
+  && ok "the button asks the server again, which is the one thing that could change the answer" \
+  || bad "there is no way to re-ask: $out"
+printf '%s' "$out" | grep -q '"r": \["recheck"\]' \
+  && ok "and pressing it says so to the loop, which keeps the size the operator dialled in" \
+  || bad "the press produced no recheck: $out"
+
+CASE="pre-flight: a medium that cannot install offers no button that pretends otherwise"
+# `no-pin` is a property of the BUILD. Same finding as the network screen's no-conf row (HW
+# 2026-08-24): a button that cannot succeed, sitting where the eye looks first, is worse than none.
+out="$(BUNDLE_OVERRIDE= SEED_OVERRIDE= REL_PIN="$T/rel/absent" NET_CURL_BODY="$MANIFEST" \
+  flow 'pf.handle("S"); print(json.dumps({"r": pf.result, "d": pf.describe()}))')"
+printf '%s' "$out" | grep -q 'Check again' \
+  && bad "it offers to re-ask the server about a pin the server does not have: $out" \
+  || ok "no Check again -- no network answer can supply a seed pin"
 printf '%s' "$out" | grep -q '"r": null' \
-  && ok "pressing continue with no bundle configured does nothing at all" \
-  || bad "it started an install with no bundle: $out"
-printf '%s' "$out" | grep -qi 'NO BUNDLE CONFIGURED' \
-  && ok "and the screen says why, rather than looking broken" \
-  || bad "the screen does not explain why it will not start"
+  && ok "and the press does nothing, since no button is drawn for it" \
+  || bad "the press produced a result for a screen with no button: $out"
+printf '%s' "$out" | grep -q 'no network will fix that' \
+  && ok "the screen says it is the medium, not the network" \
+  || bad "the screen does not name the build defect: $out"
+
+CASE="pre-flight: the hardware stager's overrides win, and cost no round trip"
+# install/hw-install.sh serves a bundle off a laptop and hands the seed over as a LOCAL PATH -- ~1 GB
+# that must not be re-fetched into tmpfs at every reboot. With both set there is nothing to ask.
+cat >"$T/bin/release-info-marker" <<EOF
+#!/usr/bin/env bash
+: >"$T/rel/was-run"
+EOF
+chmod +x "$T/bin/release-info-marker"
+rm -f "$T/rel/was-run"
+out="$(RELINFO_OVERRIDE="$T/bin/release-info-marker" flow 'print(json.dumps(pf.facts))')"
+[ ! -e "$T/rel/was-run" ] \
+  && ok "release-info is never run when both are given" \
+  || bad "it went to the server for facts it had been handed"
+printf '%s' "$out" | grep -q '/seed.tar.zst' \
+  && ok "and the local seed path reaches the screen unchanged" \
+  || bad "the override did not reach the facts: $out"
+
+CASE="pre-flight: a failed resolution is never cached, or Check again could not work"
+# The button's whole promise. A cached "no" would make it redraw the same screen forever, and the
+# operator would be pressing a button that cannot answer -- the shape §4b already paid for once.
+twice="$(PATH="$T/bin:$PATH" NOVADECK_RELEASE_INFO="$ROOT/install/release-info" \
+  NOVADECK_OTA_URL=https://ota.example NOVADECK_OTA_CONFIG=/dev/null \
+  NOVADECK_SEED_PIN="$T/rel/pin" NOVADECK_INSTALL_BUNDLE= NOVADECK_INSTALL_SEED= \
+  MANIFEST="$MANIFEST" python3 - <<'PY'
+import json, os, sys
+sys.path.insert(0, os.path.join(os.environ["ROOT"], "install"))
+import uiflow
+os.environ["NET_HOST_RC"] = "22"
+first = uiflow.resolve_release()["state"]
+del os.environ["NET_HOST_RC"]
+os.environ["NET_CURL_BODY"] = os.environ["MANIFEST"]
+second = uiflow.resolve_release()["state"]
+third = uiflow.resolve_release()
+print(json.dumps([first, second, third["state"], third["bundle"]]))
+PY
+)"
+printf '%s' "$twice" | grep -q '\["no-release", "ok", "ok"' \
+  && ok "a resolution that failed is asked again the next time" \
+  || bad "the failure stuck: $twice"
 
 # =================================================================================================
 # progress
@@ -1192,6 +1440,14 @@ printf '%s' "$conn2" | grep '^two=' | grep -qi 'trying once more' \
 # The join itself must be a child process, not a blocking call.
 grep -q 'class NetJoin' "$ROOT/install/uiflow.py" \
   && ok "NetJoin runs netcfg as a child" || bad "the join is still synchronous"
+# ...and the loop has to ACT on a recheck, or the pre-flight screen's Check again is a button that
+# returns a result nobody reads. The screen half is asserted above; this is the other half.
+grep -q 'result\[0\] == "recheck"' "$ROOT/install/ui" \
+  && ok "and the loop acts on a recheck, re-asking only the release" \
+  || bad "nothing in install/ui handles the pre-flight recheck"
+grep -q 'PreflightScreen(dict(top.facts, \*\*release_facts()), top.gib)' "$ROOT/install/ui" \
+  && ok "keeping the size the operator dialled in, which is the one thing on that screen they chose" \
+  || bad "the recheck rebuilds the screen from scratch and loses the size"
 grep -A 24 "class NetJoin" "$ROOT/install/uiflow.py" | grep -q "subprocess.Popen" \
   && ok "via Popen, so the loop is never blocked by it" || bad "NetJoin does not use Popen"
 grep -q 'stack\[-1\] = ConnectingScreen' "$ROOT/install/ui" \

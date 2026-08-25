@@ -27,9 +27,12 @@ SELECT_TARGET = os.environ.get(
     "NOVADECK_SELECT_TARGET", "/usr/lib/novadeck/install/select-target.sh")
 CARVE = os.environ.get("NOVADECK_CARVE", "/usr/lib/novadeck/install/carve.sh")
 SPINE = os.environ.get("NOVADECK_SPINE", "/usr/lib/novadeck/install/novadeck-install")
-# Phase 6 gives the installer medium a config file for these two; until it exists they are the
-# environment, and the pre-flight screen refuses to start an install without them rather than
-# inventing a default that would download something nobody asked for.
+# WHERE THE BYTES COME FROM. The medium carries no bundle -- the install is network-only -- so
+# install/release-info asks the update server what there is to install and derives the Steam seed's
+# URL from the sha256 baked into this image. These two remain the override, for the hardware stager
+# (install/hw-install.sh serves a bundle off a laptop and hands the seed over as a local path) and
+# for the suite; either one alone is honoured, and both together mean release-info is never run.
+RELEASE_INFO = os.environ.get("NOVADECK_RELEASE_INFO", "/usr/lib/novadeck/install/release-info")
 BUNDLE = os.environ.get("NOVADECK_INSTALL_BUNDLE", "")
 HOME_SEED = os.environ.get("NOVADECK_INSTALL_SEED", "")
 
@@ -119,6 +122,56 @@ def plan_carve(disk, gib):
     }
 
 
+_RELEASE = None     # a resolved release, cached. A FAILURE IS NEVER CACHED, so Check again re-asks.
+
+
+def resolve_release():
+    """
+    {bundle, seed, state, detail} -- what this medium would install, or why it cannot.
+
+    THE FACTS BELONG TO release-info AND THE WORDS TO THE SCREEN, the same split as netcfg. All this
+    does is prefer the environment over the server, per source rather than as a pair: the hardware
+    stager serves a bundle off a laptop and hands the seed over as a local path (~1 GB that must not
+    be re-fetched into tmpfs at every reboot), so the two arrive from different places there and
+    an all-or-nothing override would make that run ask the server for a seed it already has.
+
+    Only a resolved release is remembered. Every failure here is one a person can act on -- the
+    server was not up yet, the channel had nothing published, DNS was still settling -- and a cached
+    "no" would make the Check again button on the pre-flight screen a button that redraws itself.
+    """
+    global _RELEASE
+    if BUNDLE and HOME_SEED:
+        return {"bundle": BUNDLE, "seed": HOME_SEED, "state": "ok", "detail": ""}
+    if _RELEASE is not None:
+        return _RELEASE
+    # SYNCHRONOUS, and bounded so it can stay that way. This blocks the frame like every other tool
+    # the pre-flight gathers from (select-target.sh, carve.sh), and it is reached only after netcfg
+    # has already pronounced the same host reachable within its own 20s -- so the fetch is a few
+    # hundred bytes over a connection just proven to work. `netcfg join` is a child process instead
+    # because it waits on an access point for up to 90s, which is a frozen panel and looks like a
+    # dead device (HW 2026-08-24). Keep this the short one, or it earns the same treatment.
+    rc, out = run_tool([RELEASE_INFO], timeout=45)
+    facts = kv(out)
+    state = facts.get("STATE", "")
+    if not state:
+        # release-info always prints a STATE, so no STATE means it did not run: a medium that
+        # shipped without it, or a python that could not start. HW 2026-08-24 taught this shape
+        # once already, with lib-gpt.sh -- a tool that is missing must not read as an answer.
+        state, facts = "no-tool", {
+            "DETAIL": "the installer's own release helper did not answer: %s"
+                      % ((out.strip().splitlines() or ["it produced nothing (rc=%d)" % rc])[-1])}
+    release = {
+        "bundle": BUNDLE or facts.get("BUNDLE", ""),
+        "seed": HOME_SEED or facts.get("SEED", ""),
+        "state": state,
+        "detail": facts.get("DETAIL", ""),
+    }
+    log("release: %s (%s)" % (state, release["detail"] or "no detail"))
+    if release["bundle"] and release["seed"]:
+        _RELEASE = release
+    return release
+
+
 def gather_preflight():
     """
     (facts, reason) -- facts for the pre-flight screen, or None with the reason there are none.
@@ -162,15 +215,22 @@ def gather_preflight():
     drc, dout = run_tool([DEVICE_ENV])
     if drc == 0:
         name = kv(dout).get("NOVADECK_DEVICE_NAME", name)
-    return {
+    facts = {
         "device": name,
         "disk": disk,
         "mode": target.get("MODE", "?"),
         "ud_index": target.get("UD_INDEX", "?"),
         "disk_facts": disk_facts(disk),
-        "bundle": BUNDLE,
-        "seed": HOME_SEED,
-    }, ""
+    }
+    facts.update(release_facts())
+    return facts, ""
+
+
+def release_facts():
+    """The three keys the pre-flight screen reads about the download, as a fresh dict."""
+    r = resolve_release()
+    return {"bundle": r["bundle"], "seed": r["seed"],
+            "release": r["state"], "release_detail": r["detail"]}
 
 
 # =================================================================================================
@@ -383,6 +443,13 @@ class PreflightScreen:
         self.gib = gib
         self.plan = plan_carve(self.facts["disk"], gib)
 
+    # A RELEASE FAILURE A RE-ASK CANNOT CURE. Same reasoning as the network screen's NO_RETRY, and
+    # it comes from the same finding: a button that cannot succeed, sitting where the eye looks
+    # first, is worse than no button (HW 2026-08-24). `no-pin` is a property of how this medium was
+    # BUILT -- install/mkroot.sh warns about it at build time -- so no amount of asking the server
+    # again will change the answer, and the screen says so instead of offering to try.
+    NO_RETRY = ("no-pin",)
+
     def handle(self, token):
         if token == "LEFT":
             self._replan(self.gib - UD_GIB_STEP)
@@ -393,11 +460,37 @@ class PreflightScreen:
             # bundle and THEN takes consent -- the disk is still untouched on the other side of it.
             if self.ready():
                 self.result = ("start", self.gib)
+            elif self.facts.get("release") not in self.NO_RETRY:
+                # The disk is already known; it is the download that is not. Ask again for that
+                # alone -- and keep the size the operator chose, which is why this is a result the
+                # loop acts on rather than a fresh screen built here.
+                self.result = ("recheck",)
         elif token in (TOKEN_BACK, TOKEN_QUIT):
             self.result = ("quit",)
 
     def ready(self):
         return bool(self.facts.get("bundle")) and bool(self.facts.get("seed"))
+
+    def to_install(self):
+        """
+        What is about to be downloaded, or WHY THERE IS NOTHING TO DOWNLOAD.
+
+        This block used to be the bundle URL or the words "NO BUNDLE CONFIGURED", which named the
+        symptom and no cause: an unreachable server, a channel with nothing published, a manifest
+        that did not parse and a medium built with no seed pin all produced the same four words on
+        the same dead-end screen. release-info knows which it is and says so in one line
+        ([[screens-must-say-what-the-code-knows]]), so this passes that line through rather than
+        writing a fifth version of it here.
+        """
+        f = self.facts
+        if self.ready():
+            return f.get("release_detail") or f["bundle"]
+        detail = f.get("release_detail")
+        if detail:
+            return detail
+        return ("This installer has not been told what to install, and cannot continue."
+                if f.get("release") else
+                "The download has not been worked out yet -- press Check again.")
 
     def describe(self):
         f, d = self.facts, self.facts["disk_facts"]
@@ -469,7 +562,7 @@ class PreflightScreen:
             ("Android keeps", "%s GiB   (left / right to change)" % self.gib),
             ("NovaDeck gets", "%s GiB" % self.plan["NOVADECK_GIB"]),
             (lost_head, lost),
-            ("To install", f["bundle"] or "NO BUNDLE CONFIGURED -- this installer cannot continue."),
+            ("To install", self.to_install()),
         ]
         return {
             "screen": "preflight",
@@ -481,7 +574,9 @@ class PreflightScreen:
             "diamonds": [],
             "prompt": "",
             "note": "Nothing has been written yet, and nothing will be until you confirm.",
-            "buttons": ([{"pos": "S", "label": "Continue"}] if self.ready() else [])
+            "buttons": ([{"pos": "S", "label": "Continue"}] if self.ready() else
+                        [] if f.get("release") in self.NO_RETRY else
+                        [{"pos": "S", "label": "Check again"}])
             + [{"pos": "SELECT", "label": "Cancel"}],
             "abort": "",
         }
@@ -646,7 +741,7 @@ class ConnectingScreen:
 class SpineRun:
     """install/novadeck-install as a child process, read without blocking the frame."""
 
-    def __init__(self, gib, sock_path, intent=None):
+    def __init__(self, gib, sock_path, bundle, seed, intent=None):
         import subprocess
 
         env = dict(os.environ)
@@ -655,7 +750,13 @@ class SpineRun:
         env["NOVADECK_CONFIRM"] = os.path.join(
             os.path.dirname(os.path.abspath(__file__)), "confirm-ui")
         env["NOVADECK_UI_SOCK"] = sock_path
-        argv = [SPINE, "--bundle", BUNDLE, "--home-seed", HOME_SEED, "--userdata-gib", str(gib)]
+        # THE URLS COME FROM THE SCREEN THAT WAS SHOWN, not from a second call to release-info and
+        # not from the module's environment defaults. Whatever the pre-flight printed under "To
+        # install" is what gets installed: resolving again here would be a second copy of the rule,
+        # free to answer differently from the one the operator read (the update server can publish
+        # between the two calls) -- the same drift the screen's every-figure-is-measured rule exists
+        # to prevent.
+        argv = [SPINE, "--bundle", bundle, "--home-seed", seed, "--userdata-gib", str(gib)]
         if intent:
             argv += ["--intent", intent]
         log("starting the spine: %s" % " ".join(argv))

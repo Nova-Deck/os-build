@@ -46,7 +46,7 @@ from uipad import (                                                            #
     CARDINALS, CARDINAL_NAME, NullView, PadInput, ScriptedInput, TOKEN_BACK, TOKEN_QUIT, log)
 from uiflow import (                                                           # noqa: E402
     ConnectingScreen, NetJoin, NetworkScreen, PreflightScreen, ProgressScreen, SpineRun,
-    gather_preflight, net_diagnose)
+    gather_preflight, net_diagnose, release_facts)
 
 SOCK_PATH = os.environ.get("NOVADECK_UI_SOCK", "/run/novadeck/installer-ui.sock")
 # A file of one token per line drives the UI instead of a pad, and selects the null view. This is
@@ -605,8 +605,17 @@ def run(server, view, source, base, deadline=0):
                 # installer cannot then fetch a bundle for.
                 facts, why = gather_preflight()
                 stack[-1] = PreflightScreen(facts) if facts else IdleScreen(why)
+            elif result[0] == "recheck":
+                # The pre-flight screen could not say what it would install. Ask the update server
+                # again -- and ONLY that: the disk was already read, and rebuilding the screen from
+                # scratch would throw away the size the operator had dialled in, which is the one
+                # thing on it they chose. release-info caches nothing it failed to resolve, so this
+                # really does re-ask.
+                log("re-asking the update server what there is to install")
+                stack[-1] = PreflightScreen(dict(top.facts, **release_facts()), top.gib)
             elif result[0] == "start":
-                spine = SpineRun(result[1], server.path)
+                spine = SpineRun(result[1], server.path,
+                                 top.facts["bundle"], top.facts["seed"])
                 stack.append(ProgressScreen(spine))
             elif result[0] == "poweroff":
                 power_off(source)

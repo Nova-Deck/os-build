@@ -61,6 +61,7 @@ scp "${SSHOPTS[@]}" -q \
   "$ROOT/install/select-target.sh" \
   "$ROOT/install/carve.sh" \
   "$ROOT/install/netcfg" \
+  "$ROOT/install/release-info" \
   "$ROOT/install/ui" \
   "$ROOT/install/uipad.py" \
   "$ROOT/install/uiflow.py" \
@@ -69,7 +70,7 @@ scp "${SSHOPTS[@]}" -q \
   "$ROOT/images/partition-table.txt" \
   "$ROOT/fs-overlay/usr/lib/novadeck/install/lib-slotwrite.sh" \
   "$host:$PROBE/"
-ssh "${SSHOPTS[@]}" "$host" "chmod +x $PROBE/sgdisk $PROBE/mdir $PROBE/*.sh $PROBE/ui"
+ssh "${SSHOPTS[@]}" "$host" "chmod +x $PROBE/sgdisk $PROBE/mdir $PROBE/*.sh $PROBE/ui $PROBE/netcfg $PROBE/release-info"
 
 ssh "${SSHOPTS[@]}" "$host" 'bash -s' <<'REMOTE'
 set -u
@@ -78,12 +79,18 @@ export PATH="$P:$PATH"
 export NOVADECK_SELECT_TARGET="$P/select-target.sh"
 export NOVADECK_CARVE="$P/carve.sh"
 export NOVADECK_DEVICE_ENV=/usr/lib/novadeck/device-env
-# Left EMPTY on purpose. The pre-flight screen refuses to start an install with no bundle
-# configured, and seeing that refusal is part of what this run is checking — a probe that supplied
-# a bundle would be a probe one keystroke away from being an installer.
+# Left EMPTY on purpose — and since Phase 6 that no longer means "no bundle". release-info resolves
+# the channel manifest and derives the seed from the pin baked into whatever this is running on, so
+# what the probe prints is what a medium would print: on an installer image, a real release; on a
+# dev card, `no-pin`, because a card carries no seed pin. Either is the truth about THIS machine,
+# which is the whole point of running the screen here rather than reasoning about it.
+#
+# It stays a probe regardless: this renders describe() and never runs the UI loop, so no press
+# reaches anything. Nothing below writes to the disk.
 export NOVADECK_INSTALL_BUNDLE=""
 export NOVADECK_INSTALL_SEED=""
 export NOVADECK_NETCFG="$P/netcfg"
+export NOVADECK_RELEASE_INFO="$P/release-info"
 
 # §4b, and DIAGNOSE ONLY. `netcfg join` is the mode that talks to NetworkManager; it is deliberately
 # not run here, so this stays a probe rather than something that reconfigures a device's network
@@ -107,11 +114,16 @@ for head, body in ns["blocks"]:
 print("  buttons: %s" % [b["label"] for b in ns["buttons"]])
 print("=" * 78)
 
-facts = uiflow.gather_preflight()
+# TWO VALUES, and the second is the one hardware taught us to keep: gather_preflight returns
+# (facts, reason), and a run that unpacked only the first printed "Waiting for the installer" for a
+# medium whose select-target.sh had died (HW 2026-08-24). The reason is why there is no target.
+facts, why = uiflow.gather_preflight()
 if facts is None:
     print("NO TARGET: select-target.sh found nothing installable on this device.")
+    print("  %s" % why.replace("\n", "\n  "))
     print("(That is a legitimate outcome -- the UI then serves consent only.)")
     raise SystemExit(0)
+print("release      %s (%s)" % (facts.get("release"), facts.get("release_detail") or "no detail"))
 
 for k in ("device", "disk", "mode", "ud_index"):
     print("%-12s %s" % (k, facts[k]))
@@ -140,9 +152,11 @@ for token in ("RIGHT", "RIGHT", "LEFT"):
     print("  %-6s -> android %3s GiB   novadeck %s GiB   destroys %d"
           % (token, pf.gib, pf.plan["NOVADECK_GIB"], len(pf.plan["destroy"])))
 
-# And the refusal, which is the reason no bundle was supplied above.
+# And what the bottom button would do. PRINTED, NOT ACTED ON: nothing here runs the UI loop, so a
+# ("start", N) here means the screen is satisfied with what it resolved, not that anything began.
+# On a medium with no release it is ("recheck",) or None, which is the refusal this probe checks.
 pf.handle("S")
-print("\n  continue with no bundle configured -> result=%r (nothing started)" % (pf.result,))
+print("\n  the bottom button would return %r (printed only -- this probe runs no loop)" % (pf.result,))
 PY
 REMOTE
 

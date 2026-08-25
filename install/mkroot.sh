@@ -139,7 +139,7 @@ fi
 # suites, this script, and a __pycache__ that a glob would happily ship.
 INSTALL_FILES=(
   carve.sh select-target.sh novadeck-install rauc-session.sh post-install-fresh.sh
-  verify-install.sh netcfg confirm-tty confirm-ui
+  verify-install.sh netcfg release-info confirm-tty confirm-ui
   ui uipad.py uiflow.py uiview.py installer-session save-log.sh
 )
 # ...and three the spine resolves by SEARCH, which live outside install/ because the shipped image

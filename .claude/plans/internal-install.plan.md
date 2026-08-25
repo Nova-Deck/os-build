@@ -1564,6 +1564,18 @@ Then `curl -fsSL <OTA_URL>/<channel>/latest.json`, reusing `novadeck-update`'s h
 verbatim: every manifest field is attacker-controlled, and `bundle` is forced to a bare
 filename (urlparse plus `/`, `\`, leading-dot checks).
 
+**LANDED as `install/release-info`** — a peer of `netcfg`, key=value out, always exit 0, and a
+separate program on purpose: `netcfg` must read a 404 as a REACHABLE server (measured on a Pocket
+S2, 2026-08-22) and a 404 on `<channel>/latest.json` is precisely what this one has to name. Five
+states, each with a different fix — `ok`, `no-release` (the channel is empty; curl's 22),
+`unreachable` (any other curl exit), `malformed` (the port of novadeck-update's `manifest()`), and
+`no-pin`, which is checked FIRST and never goes near the network because nothing on it can cure a
+medium built without a seed pin. The pre-flight screen prints its `DETAIL` line under *To install*
+and offers **Check again** for the four a re-ask could change; `no-pin` gets no button, the same
+rule as `no-conf` on the network screen. The default URL literal now exists in three files and
+`install/test-ui.sh` binds all three: `netcfg` reporting `online` against one host while
+`release-info` fetched a manifest from another is the failure that assertion exists to prevent.
+
 ### 4c. Orchestration — LANDED 2026-08-21, NOT YET HARDWARE-GATED
 
 `install/novadeck-install`, `install/confirm-tty`, `images/lib-homestage.sh`;
@@ -2083,7 +2095,7 @@ New `install/` stage directory, peer of `boot/`/`images/`/`ota/`:
 install/README.md        pkgs.list       mkroot.sh        mkimage.sh
         select-target.sh carve.sh        novadeck-install  confirm-tty
         rauc-session.sh  post-install-fresh.sh  verify-install.sh
-        lib-gptfixture.sh  netcfg  test-*.sh
+        lib-gptfixture.sh  netcfg  release-info  test-*.sh
         confirm-ui  ui  uipad.py  uiflow.py  uiview.py      <- the §5 UI, four model/view files
         installer-session  save-log.sh  units/              <- the §5 session and its fallback
 ```
@@ -2133,7 +2145,13 @@ if none of the candidates is present. And the two files the spine reads as data:
   `release-sdcard.yml`.
 - `steam-seed-<pin>.tar.zst` published alongside, from the existing `steam-seed/` stage. **Its
   content is a plain tar of `work/steam-seed`** — the finished `.local/share/Steam` tree, nothing
-  else. The `/home` layout around it (the `deck/` directory and the `~/.steam` compat symlinks) is
+  else. **The published path is `<OTA_URL>/seed/steam-seed-<sha256>.tar.zst`, where the sha256 is
+  the artifact's own** — content-addressed, and NOT under a channel: `install/release-info` (landed)
+  derives that URL from the pin baked into the medium rather than from anything the server says, so
+  an older installer image keeps working after a newer seed is published (it asks for its own bytes
+  by hash and gets them or gets a 404), and a manifest can never hand it a tree the pin would then
+  reject 1.7 GB into the download. The publisher therefore keeps old seeds; a medium in the field
+  names exactly one. The `/home` layout around it (the `deck/` directory and the `~/.steam` compat symlinks) is
   `stage_deck_home`'s and is applied on the device, so the artifact and the card seed are the same
   bytes. The publisher must also emit its sha256 into the installer image as
   `/usr/lib/novadeck/install/steam-seed.sha256`; the spine refuses outright if that file is missing,

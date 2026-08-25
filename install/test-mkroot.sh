@@ -153,6 +153,14 @@ for f in ui uipad.py uiflow.py uiview.py novadeck-install confirm-ui installer-s
   printf '%s\n' "${FLAT[@]}" | grep -qx "$f" && ok "$f travels with the image" \
     || bad "$f is NOT placed — it is resolved by dirname/SELFDIR and there is no fallback"
 done
+# The two tools the UI runs by absolute path, and the reason they are named rather than left to the
+# loop above: neither is resolved by dirname/$SELFDIR, so a missing one is not a crash but a screen.
+# netcfg absent reads as "the network could not be checked"; release-info absent reads as "the
+# installer's own release helper did not answer" -- both honest, both a medium that cannot install.
+for f in netcfg release-info; do
+  printf '%s\n' "${FLAT[@]}" | grep -qx "$f" && ok "$f travels with the image" \
+    || bad "$f is NOT placed — the medium boots and can then neither join a network nor find a bundle"
+done
 # ...and the ones that are build-host only. Shipping a stager onto the medium would put a
 # sha256-pinned download path inside the tool, which is the opposite of what the medium is for.
 for f in hw-install.sh hw-select-target.sh hw-preflight.sh lib-hwstage.sh lib-gptfixture.sh probe-internal.sh mkroot.sh genlock.sh; do

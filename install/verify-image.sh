@@ -13,8 +13,8 @@
 # finds out within a minute. This medium is downloaded by a stranger, booted on a handheld with no
 # serial console, and asked to repartition the disk their Android install lives on. Its two failure
 # modes are silent: a grub.cfg naming a PARTUUID the GPT does not carry (an unbootable medium, and
-# the panel says nothing), and a root that boots fine and then cannot install — no seed pin, a
-# missing tool, a dev medium published by accident.
+# the panel says nothing), and a root that boots fine and then cannot install — a missing tool, a
+# Steam seed that does not match its pin, a dev medium published by accident.
 #
 # Everything here is unprivileged — read the GPT with sgdisk, the FAT with mtools, and the root with
 # `unsquashfs -o <offset>`, which reads the squashfs straight out of the image at its partition
@@ -239,7 +239,7 @@ echo "  6. it can actually install"
 # THE DISK IS NOT AT RISK FROM ANY OF IT. The spine verifies sources BEFORE take_consent and
 # therefore before the first sgdisk (plan §3 rule 11), so a medium that is missing something stops
 # with Android intact. That is the point of checking here anyway: the cost is a wasted trip to the
-# hardware, not a wasted device.
+# hardware, not a wasted device — and for the seed it is a ~2 GiB download per person who tries.
 #
 # THE LIST IS STATED HERE, not read out of install/mkroot.sh: a verifier that derives its
 # expectations from the builder can only ever agree with it. install/test-mkimage.sh asserts the
@@ -257,17 +257,35 @@ done
 sqfs usr/lib/novadeck/install/confirm >/dev/null 2>&1 \
   && ok "the confirm symlink the gate's fixed path names" \
   || bad "no usr/lib/novadeck/install/confirm — the spine cannot take consent"
-# THE SEED PIN. Without it the medium boots, draws consent, CARVES, and then refuses at the seed
-# step — install/mkroot.sh only warns at build time, because a dev build has legitimate reasons to
-# lack one. A published medium does not.
-if sqfs usr/lib/novadeck/install/steam-seed.sha256 >"$T/pin" 2>/dev/null && [ -s "$T/pin" ]; then
+# THE STEAM SEED, AND ITS PIN, AND THAT THEY AGREE. The medium carries the tree /home is built
+# from, so this is the one check that can be made completely: extract the file from the squashfs,
+# hash it, and compare against the sha256 staged beside it — exactly what the spine does on the
+# device, before consent. A medium that fails here would carve a disk and then refuse.
+#
+# It reads ~1.4 GiB out of the image to do it. That is the whole point: nothing else between this
+# and a stranger's /home looks at the bytes, because the seed carries no signature.
+if unsquashfs -o "$ROOT_OFF" -q -cat "$IMG" usr/lib/novadeck/install/steam-seed.sha256 >"$T/pin" 2>/dev/null \
+   && [ -s "$T/pin" ]; then
   pin=$(tr -d '[:space:]' <"$T/pin")
-  [ "${#pin}" -eq 64 ] && ok "a 64-character Steam-seed pin is baked in" \
-    || bad "the baked seed pin is not a sha256: '$pin'"
+  if [ "${#pin}" -eq 64 ]; then
+    ok "a 64-character Steam-seed pin is staged"
+    got=$(unsquashfs -o "$ROOT_OFF" -q -cat "$IMG" usr/lib/novadeck/install/steam-seed.tar.zst 2>/dev/null \
+          | sha256sum | cut -d' ' -f1)
+    if [ "$got" = "$pin" ]; then
+      ok "and the seed on the medium hashes to it — /home can actually be built from this image"
+    else
+      bad "THE SEED DOES NOT MATCH ITS PIN. staged: $pin
+        actual: ${got:-<no seed on the medium>}
+        The spine checks this before consent, so the medium refuses rather than half-installing —
+        but it is a medium that cannot install at all. Rebuild it."
+    fi
+  else
+    bad "the staged seed pin is not a sha256: '$pin'"
+  fi
 else
-  bad "NO STEAM-SEED PIN. This medium boots and reaches pre-flight, then stops at 'verify sources'
-        before consent — nothing written, and nothing it can install.
-        Build it with NOVADECK_SEED_SHA256=<sha of a published seed> (see .github/workflows/release-seed.yml)."
+  bad "NO STEAM SEED PIN. This medium carries no Steam tree to build /home from: it boots, reaches
+        pre-flight and stops at 'verify sources' before consent. Build it with
+        'make steam-seed-artifact' available (make installer does that for you)."
 fi
 # The session unit has to be ENABLED, and the console unit must NOT be: the second is started by
 # OnFailure= and enabling it would put a getty on the panel beside the installer.

@@ -126,6 +126,31 @@ cp "$BASE/etc/novadeck-release" "$OUT/installer.release"
 log "identity: $IMG_VERSION ($IMG_GIT) build $IMG_BUILD, mode $IMG_MODE"
 [ "$IMG_MODE" = release ] || log "NOTE: this medium was built from a DEV root (sshd + baked Wi-Fi)"
 
+# --- 0b. the Steam seed the medium carries ----------------------------------------------------------
+# THE MEDIUM CARRIES /home's CONTENT, because it has to build /home on a stranger's disk months after
+# it was written. The card's equivalent is mkfs.ext4 -d straight from work/steam-seed; this is the
+# same tree, packed, and stage_deck_home() unpacks it on the device.
+#
+# STAGED HERE RATHER THAN IN install/mkroot.sh for the same reason the identity is: mkroot's tree is
+# reused on an input key, and 1.4 GiB that changes whenever Valve ships a client would either bust
+# that cache on every run or survive a reuse and ship a seed the pin does not describe.
+#
+# THE PIN IS COMPUTED FROM THE BYTES BEING PLACED, never passed in. It used to arrive as
+# NOVADECK_SEED_SHA256 from a separate CI job that had published the seed elsewhere, which meant the
+# hash and the bytes came from different places and could disagree — the failure being an install
+# that carves the disk, unpacks nothing, and blames the seed. Here they cannot: one file is read,
+# hashed, and both halves written from that read.
+SEED_SRC="${NOVADECK_SEED_TARBALL:-$ROOT/out/steam-seed/steam-seed.tar.zst}"
+[ -f "$SEED_SRC" ] || die "no Steam seed at ${SEED_SRC#"$ROOT"/} — run 'make steam-seed-artifact' first.
+  The medium carries the tree /home is built from; without it this image boots, reaches pre-flight
+  and stops at 'verify sources' before consent, with nothing installed and nothing written."
+seed_sha="$(sha256sum "$SEED_SRC" | cut -d' ' -f1)"
+seed_mib=$(( ( $(stat -c%s "$SEED_SRC") + 1048575 ) / 1048576 ))
+install -Dm0444 "$SEED_SRC" "$BASE/usr/lib/novadeck/install/steam-seed.tar.zst"
+printf '%s\n' "$seed_sha" >"$BASE/usr/lib/novadeck/install/steam-seed.sha256"
+chmod 0444 "$BASE/usr/lib/novadeck/install/steam-seed.sha256"
+log "steam seed: ${seed_mib} MiB, sha256 $seed_sha"
+
 # --- 1. the root filesystem ------------------------------------------------------------------------
 # zstd because the kernel has CONFIG_SQUASHFS_ZSTD=y and it is the best ratio of the three the
 # kernel can read. -noappend so a rebuild replaces rather than accumulating; -no-xattrs is NOT set

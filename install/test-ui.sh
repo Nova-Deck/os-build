@@ -781,57 +781,31 @@ kill "$p" 2>/dev/null; wait "$p" 2>/dev/null
 RELINFO="$ROOT/install/release-info"
 [ -x "$RELINFO" ] || { echo "no release-info: $RELINFO" >&2; exit 1; }
 mkdir -p "$T/rel"
-PIN=0000000000000000000000000000000000000000000000000000000000000001
-printf '%s\n' "$PIN" >"$T/rel/pin"
 export REL_CALLS="$T/rel/curl-calls"
 relinfo() {  # prints release-info's key=value output
   : >"$REL_CALLS"
   PATH="$T/bin:$PATH" NET_CURL_CALLS="$REL_CALLS" \
     NOVADECK_OTA_URL="${REL_URL-https://ota.example}" \
     NOVADECK_OTA_CONFIG="${REL_CONF-/dev/null}" \
-    NOVADECK_SEED_PIN="${REL_PIN-$T/rel/pin}" \
     "$RELINFO" 2>/dev/null
 }
 MANIFEST='{"version":"0.2.0","build":"20260825","bundle":"novadeck-0.2.0.raucb","size":4294967296,"sha256":"deadbeef"}'
 
-CASE="release-info: a published release becomes a bundle URL and a seed URL"
+CASE="release-info: a published release becomes a bundle URL"
 out="$(NET_CURL_BODY="$MANIFEST" relinfo)"
 [ "$(state "$out")" = ok ] && ok "a manifest that parses is STATE=ok" || bad "not ok: $out"
 printf '%s' "$out" | grep -qx 'BUNDLE=https://ota.example/stable/novadeck-0.2.0.raucb' \
   && ok "the bundle URL is the channel's, with the manifest's bare filename on the end" \
   || bad "the bundle URL is wrong: $out"
-printf '%s' "$out" | grep -qx "SEED=https://ota.example/seed/steam-seed-$PIN.tar.zst" \
-  && ok "and the seed is named by the sha256 BAKED INTO THIS IMAGE, not by anything the server said" \
-  || bad "the seed URL is wrong: $out"
+# THE SEED IS NOT ITS BUSINESS ANY MORE. The medium carries the Steam tree, so nothing here should
+# ever emit a seed URL again -- asserted, because re-adding one would silently reintroduce a
+# publisher, a pin handed between CI jobs and a download during the install.
+printf '%s' "$out" | grep -q '^SEED=' \
+  && bad "release-info emits a SEED url -- the medium carries its own seed" \
+  || ok "and no seed URL at all: the medium carries the Steam tree it builds /home from"
 printf '%s' "$out" | grep -q '^DETAIL=NovaDeck 0.2.0, 4.0 GiB from ota.example' \
   && ok "one line for the panel: the version, the download size and the host it comes from" \
   || bad "the detail line is not what the screen puts under 'To install': $out"
-
-CASE="release-info: the seed URL follows the pin, so a medium can only fetch its own seed"
-# THE PIN IS THE NAME, and that is the whole design. novadeck-install verifies the seed against this
-# same file and refuses on a mismatch, so a URL derived from anything else -- a `seed` field in the
-# manifest, a newest-published pointer -- could only ever hand this medium bytes it would then throw
-# away after downloading 1.7 GB of them. Content-addressed means an older medium keeps working after
-# a newer seed is published: it asks for its own by hash.
-printf '%s\n' 00000000000000000000000000000000000000000000000000000000000000ff >"$T/rel/pin2"
-out="$(REL_PIN="$T/rel/pin2" NET_CURL_BODY="$MANIFEST" relinfo)"
-printf '%s' "$out" | grep -q 'steam-seed-00000000000000000000000000000000000000000000000000000000000000ff' \
-  && ok "a different pin names a different seed" \
-  || bad "the seed URL does not follow the pin: $out"
-
-CASE="release-info: a medium built with no seed pin says so, and asks the server nothing"
-# It cannot install -- install/mkroot.sh warns about this at build time -- and no network will fix
-# it, so the honest place to say it is the screen before the first write rather than twenty minutes
-# into one, at the seed step, with Android's data already gone.
-out="$(REL_PIN="$T/rel/absent" NET_CURL_BODY="$MANIFEST" relinfo)"
-[ "$(state "$out")" = no-pin ] && ok "STATE=no-pin" || bad "a missing pin was not reported: $out"
-[ ! -s "$REL_CALLS" ] \
-  && ok "and nothing is fetched -- the answer cannot come from the network" \
-  || bad "it went to the server for a release it could never install: $(cat "$REL_CALLS")"
-printf '%s\n' "not-a-sha256" >"$T/rel/pin3"
-[ "$(state "$(REL_PIN="$T/rel/pin3" NET_CURL_BODY="$MANIFEST" relinfo)")" = no-pin ] \
-  && ok "a pin that is not a sha256 is no pin at all" \
-  || bad "a malformed pin was accepted"
 
 CASE="release-info: a channel with nothing published is not an unreachable server"
 out="$(NET_HOST_RC=22 relinfo)"
@@ -916,6 +890,9 @@ printf '%s=%q\n' NOVADECK_SOC_CLASS SM8550
 EOF
 chmod +x "$T/bin"/*
 export CARVE_CALLS="$T/carve-calls"; : >"$CARVE_CALLS"
+# The Steam tree a real medium carries at /usr/lib/novadeck/install/steam-seed.tar.zst. Its CONTENT
+# is never read here -- the spine hashes it on the device -- so a placeholder is the whole fixture.
+mkdir -p "$T/rel"; printf 'a steam tree\n' >"$T/rel/on-medium.tar.zst"
 
 # THE REAL release-info, NOT A STUB, with the curl above under it: the screen's "To install" line is
 # the last hop of a chain (curl -> manifest validation -> the baked pin -> the panel) and stubbing the
@@ -928,7 +905,7 @@ flow() {  # <python snippet reading `pf` (a PreflightScreen)>
   NOVADECK_DEVICE_ENV="$T/bin/device-env" NOVADECK_INSTALL_BUNDLE="${BUNDLE_OVERRIDE-https://x/b.raucb}" \
   NOVADECK_RELEASE_INFO="${RELINFO_OVERRIDE-$ROOT/install/release-info}" \
   NOVADECK_OTA_URL=https://ota.example NOVADECK_OTA_CONFIG=/dev/null \
-  NOVADECK_SEED_PIN="${REL_PIN-$T/rel/pin}" \
+  NOVADECK_SEED_ON_MEDIUM="${SEED_ON_MEDIUM-$T/rel/on-medium.tar.zst}" \
   NOVADECK_INSTALL_SEED="${SEED_OVERRIDE-/seed.tar.zst}" SNIPPET="$1" python3 - <<'PY'
 import json, os, sys
 sys.path.insert(0, os.path.join(os.environ["ROOT"], "install"))
@@ -1047,8 +1024,8 @@ printf '%s' "$out" | grep -q '"r": \["start", 16\]' \
 printf '%s' "$out" | grep -q 'NovaDeck 0.2.0, 4.0 GiB from ota.example' \
   && ok "and 'To install' names the version, the size and the host" \
   || bad "the screen does not say what it would download: $out"
-printf '%s' "$out" | grep -q "steam-seed-$PIN.tar.zst" \
-  && ok "with the seed the pin names, which is the only one the spine would accept" \
+printf '%s' "$out" | grep -q 'on-medium.tar.zst' \
+  && ok "and the seed is the one the MEDIUM carries, not a URL" \
   || bad "the seed did not reach the facts: $out"
 
 CASE="pre-flight: the spine is started with the URLs the screen showed"
@@ -1074,8 +1051,8 @@ argv="$(cat "$T/rel/spine-argv" 2>/dev/null)"
 printf '%s' "$argv" | grep -q -- '--bundle https://ota.example/stable/novadeck-0.2.0.raucb' \
   && ok "the resolved bundle URL reaches the spine's command line" \
   || bad "the spine was started with something else: $argv"
-printf '%s' "$argv" | grep -q -- "--home-seed https://ota.example/seed/steam-seed-$PIN.tar.zst" \
-  && ok "and so does the seed the baked pin names" \
+printf '%s' "$argv" | grep -q -- "--home-seed $T/rel/on-medium.tar.zst" \
+  && ok "and the spine is pointed at the seed ON THE MEDIUM, never at a download" \
   || bad "the seed did not reach the spine: $argv"
 grep -q 'top.facts\["bundle"\], top.facts\["seed"\]' "$ROOT/install/ui" \
   && ok "and the loop passes the SCREEN's facts, so nothing re-resolves behind the consent" \
@@ -1101,9 +1078,10 @@ printf '%s' "$out" | grep -q '"r": \["recheck"\]' \
   || bad "the press produced no recheck: $out"
 
 CASE="pre-flight: a medium that cannot install offers no button that pretends otherwise"
-# `no-pin` is a property of the BUILD. Same finding as the network screen's no-conf row (HW
-# 2026-08-24): a button that cannot succeed, sitting where the eye looks first, is worse than none.
-out="$(BUNDLE_OVERRIDE= SEED_OVERRIDE= REL_PIN="$T/rel/absent" NET_CURL_BODY="$MANIFEST" \
+# `no-seed` is a property of the BUILD -- the medium was assembled without the Steam tree it builds
+# /home from. Same finding as the network screen's no-conf row (HW 2026-08-24): a button that cannot
+# succeed, sitting where the eye looks first, is worse than none.
+out="$(BUNDLE_OVERRIDE= SEED_OVERRIDE= SEED_ON_MEDIUM="$T/rel/absent.tar.zst" NET_CURL_BODY="$MANIFEST" \
   flow 'pf.handle("S"); print(json.dumps({"r": pf.result, "d": pf.describe()}))')"
 printf '%s' "$out" | grep -q 'Check again' \
   && bad "it offers to re-ask the server about a pin the server does not have: $out" \
@@ -1111,7 +1089,7 @@ printf '%s' "$out" | grep -q 'Check again' \
 printf '%s' "$out" | grep -q '"r": null' \
   && ok "and the press does nothing, since no button is drawn for it" \
   || bad "the press produced a result for a screen with no button: $out"
-printf '%s' "$out" | grep -q 'no network will fix that' \
+printf '%s' "$out" | grep -q 'carries no Steam seed' \
   && ok "the screen says it is the medium, not the network" \
   || bad "the screen does not name the build defect: $out"
 
@@ -1137,7 +1115,7 @@ CASE="pre-flight: a failed resolution is never cached, or Check again could not 
 # operator would be pressing a button that cannot answer -- the shape §4b already paid for once.
 twice="$(PATH="$T/bin:$PATH" NOVADECK_RELEASE_INFO="$ROOT/install/release-info" \
   NOVADECK_OTA_URL=https://ota.example NOVADECK_OTA_CONFIG=/dev/null \
-  NOVADECK_SEED_PIN="$T/rel/pin" NOVADECK_INSTALL_BUNDLE= NOVADECK_INSTALL_SEED= \
+  NOVADECK_SEED_ON_MEDIUM="$T/rel/on-medium.tar.zst" NOVADECK_INSTALL_BUNDLE= NOVADECK_INSTALL_SEED= \
   MANIFEST="$MANIFEST" python3 - <<'PY'
 import json, os, sys
 sys.path.insert(0, os.path.join(os.environ["ROOT"], "install"))

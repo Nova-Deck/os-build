@@ -243,15 +243,10 @@ FW_LINUX_STAMP="$FW_LINUX_DIR/.fetched.stamp"
 KEYRING_SRC="$ROOT/images/rauc/novadeck-ca.pem"
 [ -f "$KEYRING_SRC" ] || die "no RAUC CA at ${KEYRING_SRC#"$ROOT"/}"
 
-# The baked steam-seed pin. The spine checks the published seed against THIS file and refuses if it
-# is absent, because "we could not check" and "it checked out" must not have the same effect. The
-# publisher that emits it is the other half of Phase 6 and does not exist yet, so accept it as an
-# input and say plainly what an image without one can and cannot do -- the refusal already lives in
-# the spine, and duplicating it here would just mean two places to fix when the publisher lands.
-SEED_SHA="${NOVADECK_SEED_SHA256:-}"
-if [ -z "$SEED_SHA" ] && [ -f "$ROOT/install/steam-seed.sha256" ]; then
-  SEED_SHA="$(tr -d '[:space:]' <"$ROOT/install/steam-seed.sha256")"
-fi
+# NO STEAM SEED HERE, and that is deliberate. The medium carries the tree /home is built from, but
+# install/mkimage.sh stages it and derives the pin from the bytes it placed -- because this tree is
+# REUSED on the input key below, and 1.4 GiB that changes whenever Valve ships a client would either
+# bust that cache on every build or survive a reuse and ship a seed the pin does not describe.
 
 # ---- the reuse-cache key -------------------------------------------------------------------------
 # The bootstrap is a slow emulated install, so it is reused unless an INPUT moved. Every input that
@@ -280,7 +275,6 @@ snapshot:$SNAPSHOT
 overlay:$(sha256sum "$OVERLAY_DB" | cut -d' ' -f1)
 script:$(sha256sum "$0" | cut -d' ' -f1)
 osrelease:$(sha256sum "$OSRELEASE" | cut -d' ' -f1)
-seed:${SEED_SHA:-none}
 esplabel:$ESP_LABEL
 firmware:$(sha256sum "$FW_QCOM_STAMP" "$FW_LINUX_STAMP" | sha256sum | cut -d' ' -f1)
 inputplumber:$(cat "$IP_DIR"/*/*.yaml 2>/dev/null | sha256sum | cut -d' ' -f1)
@@ -347,7 +341,6 @@ cp -a "$UDEV_DIR/." "$STAGE/udev-rules/"
 cp    "$KEYRING_SRC" "$STAGE/keyring.pem"
 cp    "$PACMANCONF"  "$STAGE/pacman.conf"
 cp    "$OSRELEASE"   "$STAGE/os-release"
-if [ -n "$SEED_SHA" ]; then printf '%s\n' "$SEED_SHA" >"$STAGE/steam-seed.sha256"; fi
 # The dev credential crosses as a FILE, and its presence is what the container branches on — the
 # same idiom images/customize-base.sh uses for dev.pkgs, and for the same reason: it keeps another
 # layer of quoting out of the single-quoted bash -c.
@@ -631,13 +624,6 @@ docker run --rm --platform linux/arm64 \
   # public certificate and nothing on this image should ever rewrite it.
   install -Dm0444 /prebuilt/keyring.pem /target/etc/rauc/keyring.pem
 
-  # The baked seed pin, when the build was given one. Absent, the spine refuses in verify_sources --
-  # before consent and before the first write, which is the correct behaviour and is checked THERE,
-  # not duplicated here.
-  if [ -f /prebuilt/steam-seed.sha256 ]; then
-    install -Dm0644 /prebuilt/steam-seed.sha256 /target/usr/lib/novadeck/install/steam-seed.sha256
-  fi
-
   # ---- units --------------------------------------------------------------------------------------
   # Named, not globbed: install/units/ also holds novadeck-installer-hostkey.service, which is a
   # TEST-BUILD unit and is installed further down only when a dev credential was staged. A glob
@@ -855,16 +841,5 @@ docker run --rm --platform linux/arm64 \
 # ^ the container`s stdout (pacman progress) goes to stderr: this script`s stdout must carry ONLY
 #   the rootfs path, which the Makefile and install/mkimage.sh capture.
 
-if [ -z "$SEED_SHA" ]; then
-  log "WARNING: no steam-seed pin baked in (NOVADECK_SEED_SHA256= or install/steam-seed.sha256)."
-  # WHERE IT STOPS, precisely, because the two answers carry very different risk. The pin is read in
-  # verify_sources, which the spine runs BEFORE take_consent and therefore before the first sgdisk
-  # (plan §3 rule 11: a bundle that will not verify must not cost the user their Android data). So
-  # this medium stops with the disk UNTOUCHED and Android intact -- it is a medium that cannot
-  # install, not a device that gets half-installed. This warning said "draws consent and carves, and
-  # then REFUSES at the seed step" until 2026-08-25, which is the spine's step ORDER read backwards.
-  log "         It boots and reaches pre-flight, then stops at 'verify sources' BEFORE consent,"
-  log "         with nothing written to the target disk. Unusable, but not destructive."
-fi
 log "installer root ready ($(du -sh "$DEST" 2>/dev/null | cut -f1) at ${DEST#"$ROOT"/})"
 echo "$DEST"

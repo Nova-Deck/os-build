@@ -1568,11 +1568,11 @@ filename (urlparse plus `/`, `\`, leading-dot checks).
 separate program on purpose: `netcfg` must read a 404 as a REACHABLE server (measured on a Pocket
 S2, 2026-08-22) and a 404 on `<channel>/latest.json` is precisely what this one has to name. Five
 states, each with a different fix — `ok`, `no-release` (the channel is empty; curl's 22),
-`unreachable` (any other curl exit), `malformed` (the port of novadeck-update's `manifest()`), and
-`no-pin`, which is checked FIRST and never goes near the network because nothing on it can cure a
-medium built without a seed pin. The pre-flight screen prints its `DETAIL` line under *To install*
-and offers **Check again** for the four a re-ask could change; `no-pin` gets no button, the same
-rule as `no-conf` on the network screen. The default URL literal now exists in three files and
+`unreachable` (any other curl exit) and `malformed` (the port of novadeck-update's `manifest()`).
+It resolves the BUNDLE only: the Steam seed is carried by the medium, so the UI adds a fifth state
+of its own, `no-seed`, for a medium assembled without one. The pre-flight screen prints the `DETAIL`
+line under *To install* and offers **Check again** for the ones a re-ask could change; `no-seed`
+gets no button, the same rule as `no-conf` on the network screen. The default URL literal now exists in three files and
 `install/test-ui.sh` binds all three: `netcfg` reporting `online` against one host while
 `release-info` fetched a manifest from another is the failure that assertion exists to prevent.
 
@@ -2143,46 +2143,30 @@ if none of the candidates is present. And the two files the spine reads as data:
 - `.github/workflows/image.yml` — `artifact:` gains `installer`; publish to R2 under
   `installer/vX.Y.Z/`. New `release-installer.yml` on `installer/v*` tags, mirroring
   `release-sdcard.yml`. **LANDED 2026-08-25**, with one correction to the sketch above: the SEED IS
-  PART OF THE SAME RUN. `release-installer.yml` is prep → **seed** (`release-seed.yml` as a
-  `workflow_call`, emitting the published sha as a job output) → build (`image.yml` with
-  `artifact: installer` + `seed_pin`) → publish (R2, `installer/<version>/`) → release. A published
-  seed on its own is bytes nobody fetches, and the first arrangement — two workflows, the pin read
-  off one job summary and typed into the next — put the one value that must not be wrong in a
-  person's hands. `image.yml` REFUSES `artifact: installer` with an empty `seed_pin`, and the build
-  runs `make verify-image` before the artifact leaves the job. `mesa-x86` is skipped for this
+  PART OF THE SAME RUN. `release-installer.yml` is prep → build (`image.yml` with
+  `artifact: installer`) → publish (R2, `installer/<version>/`) → release, and the build runs
+  `make verify-image` before the artifact leaves the job. There is no seed job and no pin input:
+  `make installer` depends on the packed seed, so the medium carries it (2026-08-25). The
+  intermediate design — a `seed` workflow publishing a content-addressed tarball and emitting its
+  hash as a job output — is recorded in `steam-seed/pack-seed.sh`'s header as the thing that bought
+  nothing. `mesa-x86` is skipped for this
   artifact (it is staged by `assemble-rootfs.sh`, which the installer root never runs), which is why
   the build job carries an explicit `!cancelled() && needs.mesa-x86.result != 'failure'`.
   `images/publish-card.sh` gained `NOVADECK_R2_KIND` so one publisher serves both prefixes.
-- `steam-seed-<pin>.tar.zst` published alongside, from the existing `steam-seed/` stage. **Its
-  content is a plain tar of `work/steam-seed`** — the finished `.local/share/Steam` tree, nothing
-  else. **The published path is `<OTA_URL>/seed/steam-seed-<sha256>.tar.zst`, where the sha256 is
-  the artifact's own** — content-addressed, and NOT under a channel: `install/release-info` (landed)
-  derives that URL from the pin baked into the medium rather than from anything the server says, so
-  an older installer image keeps working after a newer seed is published (it asks for its own bytes
-  by hash and gets them or gets a 404), and a manifest can never hand it a tree the pin would then
-  reject 1.7 GB into the download. The publisher therefore keeps old seeds; a medium in the field
-  names exactly one.
+- **The medium CARRIES the Steam seed** (2026-08-25, user's call, reversing the published-artifact
+  design that shipped earlier the same day). `steam-seed/pack-seed.sh` packs `work/steam-seed` into
+  `out/steam-seed/steam-seed.tar.zst` — **its content is a plain tar of that directory**, the
+  finished `.local/share/Steam` tree and nothing else, because `stage_deck_home()` unpacks it INTO
+  an already-created `.local/share/Steam` while the card path copies the directory ONTO that path.
+  `install/mkimage.sh` stages it into the root and writes its sha256 beside it as the pin, DERIVED
+  FROM THE BYTES IT PLACED rather than taken as an input — the two cannot disagree.
 
-  **LANDED 2026-08-25**: `steam-seed/pack-seed.sh` (`make steam-seed-artifact`) packs
-  `work/steam-seed` — measured, 3.3 GB → 1449 MiB in 2m46s at `zstd -19` — reads the archive back
-  before naming it, and writes `out/steam-seed/steam-seed-<sha>.tar.zst`. `ota/publish-seed.sh`
-  puts it at `<OTA_URL>/seed/`, gated on the file hashing to its own name (there is no signature to
-  gate on; the name IS the pin), refusing to overwrite a name that exists with different bytes and
-  no-opping on a byte-identical republish. `.github/workflows/release-seed.yml` is the normal
-  caller — dispatch-only, environment-gated, because the credentials are what make CI the publisher.
-  `images/test-publish-seed.sh` (23) covers the gate and the never-prune rule.
-
-  **THE PIN IS AN OUTPUT OF THAT RUN, NOT A TRACKED FILE.** The workflow prints the sha; an
-  installer image built afterwards passes `NOVADECK_SEED_SHA256=`, which `install/mkroot.sh` already
-  reads ahead of `install/steam-seed.sha256`. Committing a pin first and publishing to match it is
-  the same shape backwards: there would be a window where the tracked hash names bytes nobody has
-  uploaded, and a medium built in that window stops at `verify sources` — before consent and before
-  the first sgdisk (§3 rule 11), so the disk survives and the medium does not. So
-  `release-installer.yml`, when it exists, takes the pin as an input rather than reading the tree. The `/home` layout around it (the `deck/` directory and the `~/.steam` compat symlinks) is
-  `stage_deck_home`'s and is applied on the device, so the artifact and the card seed are the same
-  bytes. The publisher must also emit its sha256 into the installer image as
-  `/usr/lib/novadeck/install/steam-seed.sha256`; the spine refuses outright if that file is missing,
-  because "we could not check" and "it checked out" must not have the same effect.
+  What the published version cost, for no gain (a medium is bound to one seed either way): a
+  publisher, a workflow, a hash handed between two CI jobs, a `seed/` docroot that could never be
+  pruned without retiring media in the field, and 1.7 GB of tmpfs while rauc streams the bundle.
+  What carrying it costs: the medium goes ~650 MB → ~2.1 GB, and R2 keeps 2 media rather than 3.
+  `install/verify-image.sh` gets stronger for it — it can hash the actual seed against the actual
+  pin, which is the spine's own check and was impossible while the bytes lived on a server.
 - Docs: `docs/install-internal.md`, plus a Recovery section update in `docs/RUNBOOK.md`.
 
 ---

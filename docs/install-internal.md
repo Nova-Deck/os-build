@@ -9,9 +9,10 @@ and the slot is free.
 > [issue #42](https://github.com/Nova-Deck/os-build/issues/42), and it is the reason the internal
 > install exists rather than a consequence of it that already works.
 
-It is a separate image from the card: a small, self-contained recovery tool that boots on the
-handheld, draws its own screens on the panel, and is driven with the gamepad. It carries no copy of
-NovaDeck — it downloads the current release while you watch.
+It is a separate image from the card: a self-contained recovery tool that boots on the handheld,
+draws its own screens on the panel, and is driven with the gamepad. It carries the Steam client tree
+your `/home` is built from, and downloads the current NovaDeck release while you watch — so the only
+thing it needs from the network is the OS itself.
 
 - [What it does to the device](#what-it-does-to-the-device)
 - [Before you boot it](#before-you-boot-it)
@@ -56,8 +57,9 @@ curl -LO https://<the URL from the release>/installer.img.gz
 gzip -dc installer.img.gz | sudo dd of=/dev/sdX bs=4M status=progress conv=fsync
 ```
 
-Check it against the release's `sha256sums.txt` first. It is ~715 MiB uncompressed (measured
-2026-08-25) and the card only has to be big enough to hold that.
+Check it against the release's `sha256sums.txt` first. It is ~2.1 GB uncompressed — most of that is
+the Steam client tree it carries so your `/home` is not a second download — and the card only has to
+be big enough to hold it.
 
 ### 2. Put your Wi-Fi on it — this is the mechanism, not a fallback
 
@@ -124,8 +126,9 @@ simply run it again; after it, internal wins and you need force external.
 5. **Progress** — the spine's own steps, with the download percentage read off its output.
 6. **Done** — remove the card and power off. It boots from internal storage from then on.
 
-Nothing is written to the disk until after step 4. The bundle and the Steam seed are both fetched
-and verified *before* consent is asked, so a download that will not verify costs you nothing.
+Nothing is written to the disk until after step 4. The bundle is downloaded and verified, and the
+Steam tree on the medium is checked against its hash, *before* consent is asked — so a download that
+will not verify costs you nothing.
 
 ---
 
@@ -171,47 +174,43 @@ cannot keep), so a second run is designed to be the answer.
 
 ## Cutting a release (maintainers)
 
-**One workflow, one run: `release installer`.** Tag `installer/v1.2.3`, or dispatch it with
-`publish: false` for a test build.
+**One workflow: `release installer`.** Tag `installer/v1.2.3`, or dispatch it with `publish: false`
+for a test build.
 
 ```
-prep  ->  seed  ->  build  ->  publish  ->  release
-          |         |          |
-          |         |          R2 under installer/<version>/, KEEP=3
-          |         make installer + make verify-image
-          release-seed.yml, emitting the published seed's sha256
+prep  ->  build  ->  publish  ->  release
+          |          |
+          |          R2 under installer/<version>/, KEEP=2
+          make installer (fetches + packs the Steam tree, stages it) + make verify-image
 ```
 
-**The seed is part of the same run on purpose.** The medium downloads the Steam client tree that
-`/home` is seeded from, and verifies it against a sha256 **baked in at build time** — so the seed
-must be published *before* the medium is built, and the medium must be built against *that* hash.
-Two workflows meant a person carried that sha between runs; it is a job output now. See
-[ota.md](ota.md#seed--the-home-seed-and-why-it-is-not-a-channel) for why the seed is
-content-addressed and never pruned.
+**A new Steam tree needs a new medium; a new OS release does not.** The bundle is resolved from the
+channel at install time, so any medium installs the current OS — that is why an old medium is never
+an old install. The Steam tree is on the medium, so refreshing it means cutting a medium, which is
+what this workflow does anyway.
 
-**A new seed therefore needs a new medium; a new OS release does not.** The bundle is resolved from
-the channel at install time, so any medium installs the current OS. Only the seed is pinned, because
-only the seed is unsigned — a bundle carries a signature that chains to the CA baked into the
-medium, and a seed carries nothing, so the only trust available for it is knowing its hash in
-advance.
+It briefly worked the other way: the seed was published to the update server as a content-addressed
+artifact and fetched at install time from a URL the medium derived from a baked hash. That bound the
+medium to exactly one seed *as well* — the same constraint — while adding a publisher, a workflow, a
+hash handed between two CI jobs, a server directory that could never be pruned without retiring
+media in the field, and 1.7 GB of tmpfs consumed while rauc streams the bundle. Carrying the file
+costs ~1.4 GiB of medium and deletes all of it.
 
-Two protected environments and therefore two approvals: *may this seed reach the update server*, and
-*may this medium reach the public bucket*. Nothing here is signed — a medium is flashed over USB by
-someone holding the device.
+One protected environment, one approval: *may this medium reach the public bucket*. Nothing here is
+signed — a medium is flashed over USB by someone holding the device.
 
 ---
 
 ## Building one by hand
 
 ```bash
-# the seed the medium will fetch /home from
-make steam-seed-artifact                    # -> out/steam-seed/steam-seed-<sha>.tar.zst
-make publish-seed SEED=out/steam-seed/steam-seed-<sha>.tar.zst
-
-# the medium itself, pinned to it
-NOVADECK_SEED_SHA256=<sha> make installer    # -> out/images/installer.img
-make verify-image
+make installer      # fetches + packs the Steam tree, then lays the medium
+make verify-image   # -> out/images/installer.img
 ```
+
+`make installer` depends on `out/steam-seed/steam-seed.tar.zst`, so the first build fetches the
+Steam client tree from Valve's CDN (slow) and packs it (~3 min). Later builds re-use it: the packer
+only re-runs when the fetcher restages the tree.
 
 `make verify-image` is the only thing that opens the built image — everything in `make test` reads
 the scripts, and a script that says the right thing while producing the wrong image passes all of
@@ -220,12 +219,13 @@ PARTUUID, the root, the build identity, and whether the medium can actually inst
 install path resolves at runtime, the seed pin, and the session unit being enabled while the
 `OnFailure=` console unit is not.
 
+`verify-image` reads the Steam tree back out of the squashfs and hashes it against the pin staged
+beside it — the same check the spine makes on the device, before consent. It is the one part of the
+medium nothing else can vouch for, since the seed carries no signature.
+
 **A dev medium fails verification** unless you pass `NOVADECK_INSTALLER_ALLOW_DEV=1`, because it
 bakes an `authorized_keys` and a Wi-Fi PSK and must never be the one that gets published. Build one
 with `source dev.env` — it is what makes live diagnosis over SSH possible on a hardware trip.
-
-Without a pin the build still succeeds and warns. That medium boots, reaches pre-flight and stops at
-`verify sources` — before consent, before any write.
 
 **Read-only rehearsals against a real device**, both of which stage the tools onto a dev card over
 SSH and touch nothing:
@@ -255,7 +255,7 @@ install/hw-install.sh       root@<device>   # stages, pre-flights, and PRINTS th
 
 ## See also
 
-- [ota.md](ota.md) — the update server, the channel layout, and the seed directory
+- [ota.md](ota.md) — the update server and the channel the medium fetches its bundle from
 - [internal-storage.md](internal-storage.md) — the captured partition layouts these rules were
   derived from
 - [RUNBOOK.md](RUNBOOK.md#recovery-when-it-does-not-boot) — recovery for a device that will not boot

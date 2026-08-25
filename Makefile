@@ -250,6 +250,9 @@ SDCARD       := $(OUT)/images/sdcard.img
 # directly into the /home partition, so a healthy first boot does no copy and needs no network. The
 # client binary it stages is the make target; the pin + fetcher are its prerequisites.
 STEAM_SEED   := work/steam-seed/steamrtarm64/steam
+# The packed tree the INSTALLER MEDIUM carries. A card needs no such artifact: make-sdcard
+# seeds /home from the directory directly, with mkfs.ext4 -d.
+SEED_ARTIFACT := out/steam-seed/steam-seed.tar.zst
 
 # Repo sources the rootfs assembler reads directly (itself + the unified fs-overlay/ payload tree
 # it copies in wholesale). find recurses, so files added under fs-overlay/ are tracked
@@ -334,7 +337,7 @@ KERNEL_SRC_HASH := work/.kernel-src.hash
 .PHONY: help all image toolchain kernel fw-linux fw-qcom base overlay verify-lock \
         rootfs relock mesa-x86 installer installer-root relock-installer verify-image \
         initramfs steamcl grub sdcard verify-card test bundle sign-bundle publish-bundle \
-        steam-seed-artifact publish-seed deploy clean clean-base clean-overlay distclean
+        steam-seed-artifact deploy clean clean-base clean-overlay distclean
 
 # An always-out-of-date prerequisite, for rules that must re-evaluate their own inputs every run
 # rather than trust a prerequisite's mtime. Only $(KERNEL_SRC_HASH) uses it; see the note there.
@@ -409,7 +412,6 @@ test: verify-lock ## Run the offline bootctl/post-install/pairingd/quirks/stage-
 	bash images/test-decky.sh
 	bash images/test-update.sh
 	bash images/test-publish-bundle.sh
-	bash images/test-publish-seed.sh
 	bash images/test-steamos-manager.sh
 	bash install/test-install.sh
 	bash install/test-ui.sh
@@ -483,17 +485,18 @@ $(STEAM_SEED): steam-seed/STEAM_SEED.pin steam-seed/fetch-steam-seed.sh | steam-
 	@[ -x "$@" ] || { echo "steam seed missing after sync: $@" >&2; exit 1; }
 	@touch $@
 
-# The same tree, packed for the NETWORK installer. A card pre-seeds /home from the directory
-# (mkfs.ext4 -d); the internal installer carries nothing and has to fetch it, so it needs an
-# artifact — content-addressed, because the medium verifies it against a sha256 baked in at build
-# time and install/release-info derives the URL from that same pin.
+# The same tree, PACKED, because the installer medium has to carry it. A card seeds /home from the
+# directory directly (mkfs.ext4 -d, images/lib-homestage.sh); the medium builds /home on someone
+# else's disk months later, so the tree travels with it. install/mkimage.sh stages this file into
+# the root and writes its sha256 beside it as the pin the spine checks.
 #
-# PHONY, and it does not depend on $(STEAM_SEED): the output name is a hash of the input, so make
-# cannot express the target, and pack-seed.sh is deterministic (measured: an unchanged tree packs to
-# the same name). Sync first if you want a fresh seed — `make steam-seed-sync steam-seed-artifact`.
-.PHONY: steam-seed-artifact
-steam-seed-artifact: ## Pack work/steam-seed -> out/steam-seed/steam-seed-<sha256>.tar.zst (host)
+# A REAL FILE TARGET, keyed on the staged tree: $(STEAM_SEED)'s mtime only moves when the fetcher
+# restages, so an unchanged Steam tree costs nothing rather than 2m46s of zstd -19 on every build.
+$(SEED_ARTIFACT): $(STEAM_SEED) steam-seed/pack-seed.sh
 	steam-seed/pack-seed.sh
+
+.PHONY: steam-seed-artifact
+steam-seed-artifact: $(SEED_ARTIFACT) ## Pack work/steam-seed -> out/steam-seed/steam-seed.tar.zst (host)
 
 # ==============================================================================
 # From-source overlay packages (host — build-overlay.sh drives docker + qemu binfmt)
@@ -673,7 +676,7 @@ installer-root: $(if $(OVERLAY_PINS),$(OVERLAY_STAMP)) ## Bootstrap the installe
 # every installer image ever built calls itself the same thing, which is the first question asked at
 # the fallback console. NOT $(DEV_ENV): the dev/release mode is read back out of the ROOT's own
 # reuse marker, so it cannot disagree with what was actually baked in.
-installer: installer-root $(KERNEL) $(GRUB) | $(BUILD_STAMP) ## Build the flashable installer medium -> out/images/installer.img
+installer: installer-root $(SEED_ARTIFACT) $(KERNEL) $(GRUB) | $(BUILD_STAMP) ## Build the flashable installer medium -> out/images/installer.img
 	$(DOCKER) $(ID_ENV) $(BUILD_IMG) install/mkimage.sh
 
 # Asserts the BUILT medium, the way verify-card.sh asserts the built card. The suites in `make test`
@@ -831,13 +834,6 @@ publish-bundle: ## Publish BUNDLE=<file.raucb> to the OTA server (host; needs NO
 	@test -n "$(BUNDLE)" || { echo "pass BUNDLE=out/images/novadeck-<version>.raucb" >&2; exit 2; }
 	ota/publish-bundle.sh "$(BUNDLE)" $(CHANNEL)
 
-# The /home seed the network installer downloads. No channel argument: seeds are content-addressed
-# and live in one flat seed/ directory, because a Steam tree has nothing to do with which OS channel
-# a medium was built from. .github/workflows/release-seed.yml is the normal caller — the credentials
-# are what make CI the publisher — and this target is the same script by hand.
-publish-seed: ## Publish SEED=<steam-seed-<sha256>.tar.zst> to the OTA server (host; needs NOVADECK_OTA_SSH_KEY)
-	@test -n "$(SEED)" || { echo "pass SEED=out/steam-seed/steam-seed-<sha256>.tar.zst" >&2; exit 2; }
-	ota/publish-seed.sh "$(SEED)"
 
 # ==============================================================================
 # Deploy (host) — copy the stage-1 steamcl tree onto a mounted ESP

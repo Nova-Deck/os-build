@@ -78,14 +78,6 @@ on:
         description: 'Which release artifact to produce: sdcard | bundle | rootfs | installer'
         required: true
         type: string
-      seed_pin:
-        description: 'installer only — sha256 of the PUBLISHED Steam seed the medium will fetch.
-          It comes from release-seed.yml as a job output, never from a file in the tree: a tracked
-          pin would name bytes nobody had uploaded yet. Empty produces a medium that reaches
-          pre-flight and then stops at "verify sources", before consent and before any write.'
-        required: false
-        type: string
-        default: ''
       version:
         description: 'Version stamped into the image (the R2 prefix is named by the caller)'
         required: false
@@ -184,9 +176,6 @@ jobs:
       # release-sdcard.yml's publish job, from the same prep output that feeds this input.
       NOVADECK_VERSION: ${{ inputs.version }}
       ARTIFACT: ${{ inputs.artifact }}
-      # The medium's own identity is stamped by install/mkimage.sh from these two (Makefile ID_ENV
-      # forwards them into the container); the seed pin is what it will fetch /home from.
-      NOVADECK_SEED_SHA256: ${{ inputs.seed_pin }}
     steps:
       - uses: actions/checkout@v7
 
@@ -197,17 +186,6 @@ jobs:
             sdcard|bundle|rootfs|installer) ;;
             *) echo "::error::artifact must be sdcard, bundle, rootfs or installer, got '$ARTIFACT'"; exit 1 ;;
           esac
-          # AN INSTALLER WITH NO PIN IS NOT PUBLISHABLE, so this refuses rather than warning. The
-          # medium would boot, reach pre-flight and stop at `verify sources` — before consent and
-          # before any write, so nothing is at risk, but every copy of it is a wasted download and a
-          # wasted trip to the hardware. install/mkroot.sh only warns because a local build has
-          # legitimate reasons to lack one; a release does not.
-          if [ "$ARTIFACT" = installer ] && [ -z "${NOVADECK_SEED_SHA256:-}" ]; then
-            echo "::error::artifact 'installer' needs seed_pin — the sha256 of a PUBLISHED Steam"
-            echo "::error::seed. release-installer.yml takes it from release-seed.yml's output;"
-            echo "::error::a dispatch without one would publish a medium that cannot install."
-            exit 1
-          fi
 
       # No reclaiming of the runner image's preinstalled toolchains: there is ~109 G free and the
       # build peaks near 50, so `sudo rm -rf` over /usr/share/dotnet and friends would be real risk
@@ -277,10 +255,11 @@ jobs:
             fi
           elif [ "$ARTIFACT" = installer ]; then
             # The recovery medium. No signing key of any kind: like a card, it is flashed over USB
-            # by someone holding the device, so there is no signature for anything to verify — what
-            # it DOES carry is the seed pin above, which is the only thing that makes the /home it
-            # downloads verifiable. `make installer` bootstraps its own root (a separate package set
-            # and a separate lock from the shipped image) and lays the two-partition medium.
+            # by someone holding the device, so there is no signature for anything to verify. It
+            # CARRIES the Steam tree /home is built from, so `make installer` fetches and packs that
+            # first (steam-seed/pack-seed.sh) and mkimage stages it with its sha256 beside it; then
+            # it bootstraps the installer root — a separate package set and lock from the shipped
+            # image — and lays the two-partition medium.
             make installer
             # THE ONLY THING THAT OPENS THE BUILT IMAGE. Everything in `make test` reads the
             # scripts, and a script that says the right thing while producing the wrong image passes

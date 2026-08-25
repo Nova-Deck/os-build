@@ -1,26 +1,31 @@
 #!/usr/bin/env bash
-# novadeck Steam seed PACKER (build host) — turn work/steam-seed into the artifact the network
-# installer downloads. Phase 6 of .claude/plans/internal-install.plan.md.
+# novadeck Steam seed PACKER (build host) — turn work/steam-seed into the file the installer medium
+# CARRIES. Phase 6 of .claude/plans/internal-install.plan.md.
 #
-#   steam-seed/pack-seed.sh            -> out/images/steam-seed-<sha256>.tar.zst
-#                                      -> out/images/steam-seed.sha256   (the pin, one line)
+#   steam-seed/pack-seed.sh            -> out/steam-seed/steam-seed.tar.zst
+#                                      -> out/steam-seed/steam-seed.sha256   (the pin, one line)
 #
 # WHY THIS EXISTS AT ALL. `make sdcard` pre-seeds /home from the DIRECTORY (mkfs.ext4 -d, via
-# images/lib-homestage.sh), so a card needs no artifact. The internal installer carries no bundle and
-# no seed — it is network-only — so the same tree has to be fetchable, and 3.3 GB of it.
+# images/lib-homestage.sh), so a card needs no artifact — it writes the tree straight into the
+# filesystem it is building. The installer medium cannot: it builds /home on someone else's disk,
+# hours or months later, so it has to carry the tree with it. install/mkimage.sh stages this file
+# into the medium's root and writes its sha256 beside it as the pin the spine checks before it
+# unpacks anything.
 #
-# THE FILENAME IS THE PIN, and that is the whole integrity story for this artifact. There is no
-# signature on it: install/novadeck-install hashes what it downloads and compares against
-# /usr/lib/novadeck/install/steam-seed.sha256, baked into the medium at build time, and refuses on a
-# mismatch ("we could not check" and "it checked out" must not have the same effect). So the artifact
-# is content-addressed and install/release-info derives its URL from the baked pin rather than from
-# anything the server says — a medium asks for its own bytes by hash, and gets them or gets a 404.
+# IT WAS BRIEFLY A PUBLISHED, CONTENT-ADDRESSED ARTIFACT — named steam-seed-<sha>.tar.zst, uploaded
+# to the update server, fetched at install time from a URL the medium derived from its own baked
+# pin. That worked, and it bought nothing: a medium is bound to exactly one seed either way, so
+# downloading it only added a publisher, a workflow, a pin handed between CI jobs, a `seed/`
+# directory that could never be pruned without retiring media in the field, and 1.7 GB of tmpfs
+# consumed at the exact moment the installer is streaming a ~4 GB bundle through rauc's NBD path.
+# The card has always carried its seed; the medium does too now. (User's call, 2026-08-25.)
 #
-# THE PACK IS DETERMINISTIC, so an unchanged seed keeps its pin. Sorted names, owner and group forced
+# THE PACK IS DETERMINISTIC, so an unchanged seed produces an unchanged medium. Sorted names, owner
+# and group forced
 # to 0 (the installer chowns the tree wholesale after unpacking; the MODES are what must survive) and
 # a FIXED zstd thread count, because zstd's multithreaded output depends on how many jobs it split
 # into — `-T0` on a 16-core runner and a 4-core laptop produce different bytes for the same input,
-# which would mean a new pin, a new upload and a new installer image for no change at all.
+# and every rebuild would then produce a different medium for no change at all.
 #
 # ITS MEMBERS ARE THE CONTENTS OF work/steam-seed, not the directory: stage_deck_home() unpacks it
 # INTO an already-created `.local/share/Steam`, while the card path copies the directory ONTO that
@@ -83,13 +88,12 @@ grep -q '^\./package/.*\.installed$' "$tmp.list" \
 rm -f "$tmp.list"
 
 sha="$(sha256sum "$tmp" | cut -d' ' -f1)"
-art="$OUT_DIR/steam-seed-$sha.tar.zst"
+art="$OUT_DIR/steam-seed.tar.zst"
 mv -f "$tmp" "$art"
 trap - EXIT
 printf '%s\n' "$sha" >"$OUT_DIR/steam-seed.sha256"
 
 size="$(stat -c %s "$art")"
 log "$(basename "$art")  $((size / 1024 / 1024)) MiB"
-log "pin: $sha"
-log "bake it in with:  NOVADECK_SEED_SHA256=$sha make installer"
-log "publish it with:  make publish-seed SEED=${art#"$ROOT"/}"
+log "sha256: $sha"
+log "install/mkimage.sh stages it into the medium, and writes that hash beside it as the pin"

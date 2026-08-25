@@ -24,8 +24,6 @@ the first path segment:
   stable/
     latest.json               -> https://updates.novadeck.cloud-ip.cc/stable/latest.json
     novadeck-0.2.0.raucb      -> https://updates.novadeck.cloud-ip.cc/stable/novadeck-0.2.0.raucb
-  seed/
-    steam-seed-<sha256>.tar.zst -> https://updates.novadeck.cloud-ip.cc/seed/steam-seed-<sha256>.tar.zst
   .well-known/acme-challenge/ (certbot)
 ```
 
@@ -50,40 +48,6 @@ chosen at publish time. `bundle` must be a **bare filename** — the client reje
 before and after the download. `sha256` is not checked by the client: the RAUC signature is the
 integrity gate, and a hash in a file fetched from the same server proves nothing an attacker could
 not also rewrite.
-
-### `seed/` — the /home seed, and why it is not a channel
-
-The internal installer (`install/`) carries no payload at all: it downloads the OS bundle from a
-channel *and* the Steam client tree that `/home` is seeded from. A flashed SD card needs no such
-artifact — `images/make-sdcard.sh` pre-seeds the same tree directly with `mkfs.ext4 -d`.
-
-**Seeds are content-addressed, and that is the whole design.** `install/novadeck-install` verifies
-the download against a sha256 **baked into the installer medium at build time**, refusing on a
-mismatch, and `install/release-info` builds the URL out of that same pin. So the filename *is* the
-pin, there is no pointer file, and a medium asks for its own bytes by hash — it gets them, or it
-gets a 404. A manifest cannot name a seed; the only thing that power could achieve is a refusal.
-
-Consequences worth knowing before touching that directory:
-
-- **Nothing supersedes anything.** An installer medium built six months ago names exactly one seed
-  and always will. `ota/publish-seed.sh` therefore does **not** prune by default; `NOVADECK_SEED_KEEP`
-  is opt-in, and deleting a seed does not make an old medium fetch a newer one — it retires that
-  medium, and every copy of it in the field. The failure is safe (the spine verifies its sources
-  before consent, so the disk is untouched and Android is intact) but it is not recoverable: there
-  is nothing on the medium to repoint.
-- **A new seed needs a new installer image, and a new bundle does not.** The bundle is resolved from
-  `<channel>/latest.json` at install time, so any medium installs the current OS; the seed is pinned
-  at build time, so a medium installs the seed it was built against and no other. The asymmetry is
-  the trust model, not an oversight: a bundle carries a signature that chains to the CA baked into
-  the medium, so bytes it has never seen can still be trusted — a seed carries nothing, so the only
-  trust available is knowing its hash in advance. The cost of an old pin is small: the client
-  self-updates on first launch, so a stale seed means a slower first boot, not a broken install.
-- **A republish is free.** `steam-seed/pack-seed.sh` is deterministic, so an unchanged tree packs to
-  the same name and the publisher recognises it and exits without uploading.
-- **The pin is an output, not an input.** `.github/workflows/release-seed.yml` publishes a seed and
-  prints the sha; an installer image built afterwards passes it as `NOVADECK_SEED_SHA256`. Nothing
-  in the repo tracks it, deliberately — a committed hash would name bytes nobody had uploaded yet.
-- Measured 2026-08-25: 3.3 GB of staged tree packs to **1449 MiB** in 2m46s (`zstd -19`, 4 threads).
 
 ## Cutting an update
 

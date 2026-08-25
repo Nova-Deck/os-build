@@ -1,30 +1,27 @@
 # novadeck release INSTALLER — the recovery medium that installs NovaDeck onto a device's internal
 # storage. Phase 6 of .claude/plans/internal-install.plan.md.
 #
-# ONE RUN PUBLISHES THE SEED AND THE MEDIUM, and that is the whole reason this workflow exists in
-# this shape. A published Steam seed on its own is bytes nobody will ever fetch: the only thing that
-# downloads one is an installer medium built against its hash, and a medium built against a hash
-# nobody published is a medium that stops before consent. They are two halves of one release.
+# THE MEDIUM CARRIES ITS OWN /home SEED, so there is nothing to publish alongside it and nothing to
+# hand between jobs. `make installer` fetches the Steam tree, packs it, and install/mkimage.sh
+# stages it into the medium with its sha256 beside it as the pin the spine checks.
 #
-# THE PIN NEVER PASSES THROUGH A PERSON. release-seed.yml emits the sha256 it published as a job
-# output; the build job takes it as an input and install/mkroot.sh bakes it in. The first version of
-# this arrangement printed the sha in a job summary for someone to paste into a second workflow —
-# the one value in this system that must not be wrong, carried by hand between two runs.
+# It briefly worked the other way — a `seed` job publishing a content-addressed tarball to the update
+# server and emitting its hash as an output for the build to bake in. That was two artifacts, two
+# publishers and a value that had to survive the trip between two jobs, to achieve exactly what
+# carrying the file achieves: a medium bound to one seed. See steam-seed/pack-seed.sh's header.
 #
 # TAG NAMESPACE: `installer/v*`, its own, for the reason card/ and ota/ have theirs — three
-# artifacts with three cadences. A medium is cut when the installer changes or when a new seed is
-# worth shipping, which is neither the card's cadence nor the OTA's.
+# artifacts with three cadences. A medium is cut when the installer changes or when a newer Steam
+# tree is worth carrying, which is neither the card's cadence nor the OTA's.
 #
 # NEEDS NO SIGNING KEY, exactly like the card: the medium is flashed over USB by someone holding the
-# device, so there is no signature for anything to verify. What it does need is the OTA credentials
-# (to publish the seed) and the R2 credentials (to publish the medium) — two protected environments,
-# declared by the jobs that use them, and therefore two approvals per release. That is the right
-# shape rather than an accident: "may this seed reach the server" and "may this medium reach the
-# public bucket" are different questions.
+# device, so there is no signature for anything to verify. The only credential in the whole workflow
+# is the R2 one, in the publish job, which is the only job that names an environment.
 #
 # THE MEDIUM IS NOT PINNED TO AN OS BUNDLE. It resolves <channel>/latest.json at install time, so
 # any medium installs the current release — which is why there is no bundle input here and why an
-# old medium never installs an old OS. Only the seed is pinned, because only the seed is unsigned.
+# old medium never installs an old OS. The seed is the opposite: it is on the medium, so a newer one
+# means a newer medium — which costs nothing, since cutting a medium is what this workflow does.
 name: release installer
 
 on:
@@ -36,7 +33,7 @@ on:
         type: string
         default: ''
       publish:
-        description: 'Publish the seed + upload the medium to R2 (off for a plain test build)'
+        description: 'Upload the medium to R2 and cut a Release (off for a plain test build)'
         required: false
         type: boolean
         default: false
@@ -80,35 +77,19 @@ jobs:
           echo "publish=$p" >> "$GITHUB_OUTPUT"
           echo "version=$v publish=$p" >> "$GITHUB_STEP_SUMMARY"
 
-  # THE SEED, FIRST, because the medium is built against its hash and a medium naming bytes that are
-  # not on the server yet is a medium that cannot install. Publishing is idempotent: pack-seed.sh is
-  # deterministic, so an unchanged Steam tree packs to the same name and publish-seed.sh finds it
-  # already there and exits without uploading — a re-cut of the same medium costs nothing here.
-  #
-  # IT RUNS EVEN ON A NON-PUBLISHING DISPATCH, and that is deliberate rather than an oversight. A
-  # test build still has to produce a medium that WORKS, which means a pin whose bytes are fetchable
-  # — and since a republish of an unchanged seed uploads nothing, the cost of being honest here is a
-  # fetch and a pack. A `publish: false` run that baked an unpublished pin would produce exactly the
-  # artifact this whole design exists to prevent.
-  seed:
-    needs: prep
-    uses: ./.github/workflows/release-seed.yml
-    secrets: inherit
-
   build:
-    needs: [prep, seed]
+    needs: prep
     uses: ./.github/workflows/image.yml
     with:
       artifact: installer
       version: ${{ needs.prep.outputs.version }}
-      seed_pin: ${{ needs.seed.outputs.pin }}
       # No environment: nothing in an installer build is signed, so the long job — bootstrapping a
       # second rootfs and compiling the overlay from third-party sources as uid 0 — holds no
       # credential at all. It ends at a workflow artifact, exactly as the card build does.
       environment: ''
 
   publish:
-    needs: [prep, seed, build]
+    needs: [prep, build]
     if: needs.prep.outputs.publish == 'true'
     runs-on: ubuntu-latest
     outputs:
@@ -143,14 +124,15 @@ jobs:
           VERSION: ${{ needs.prep.outputs.version }}
           # A SEPARATE PREFIX FROM THE CARDS, so the two retentions cannot prune each other.
           NOVADECK_R2_KIND: installer
-          # Deeper than the card's N=1 because a medium is ~600 MiB against a card's ~5 GiB: three of
-          # them is under 2 GiB of a 10 GB free tier. Worth keeping, because an older medium is
-          # still a working recovery tool — its pinned seed stays on the update server forever.
-          NOVADECK_CARD_KEEP: '3'
+          # TWO, not the card's one, and not more. A medium now carries the Steam tree, so it is
+          # ~2 GiB rather than ~650 MiB: two of them plus one 5.08 GiB card is ~9 GiB against a
+          # 10 GB free tier, which is as much back catalogue as that tier affords. An older medium
+          # stays a working recovery tool — it needs nothing from the server but the OS bundle.
+          NOVADECK_CARD_KEEP: '2'
         run: images/publish-card.sh "$VERSION" upload/installer.img.gz meta
 
   release:
-    needs: [prep, seed, publish]
+    needs: [prep, publish]
     if: needs.prep.outputs.publish == 'true' && github.ref_type == 'tag'
     runs-on: ubuntu-latest
     permissions:
@@ -166,7 +148,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.prep.outputs.version }}
           MEDIUM_URL: ${{ needs.publish.outputs.medium_url }}
-          SEED_PIN: ${{ needs.seed.outputs.pin }}
         run: |
           set -euo pipefail
           {
@@ -192,7 +173,8 @@ jobs:
             echo 'says all of this and takes a per-run button sequence as consent before it writes.'
             echo
             echo "This medium installs the current OS release from the update channel — it is not"
-            echo "pinned to one. It carries a pinned Steam client seed, \`$SEED_PIN\`."
+            echo "pinned to one. It carries the Steam client tree /home is built from, so the only"
+            echo "download during an install is the OS itself."
           } > notes.md
           gh release create "$GITHUB_REF_NAME" \
             --title "novadeck installer $VERSION" \

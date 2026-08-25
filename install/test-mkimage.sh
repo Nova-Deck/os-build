@@ -252,6 +252,31 @@ grep -qE '^installer:.*' "$ROOT/Makefile" \
   && ok "the Makefile forwards \$(ID_ENV), or NOVADECK_VERSION would never reach the stamp" \
   || bad "make installer does not pass ID_ENV into the container"
 
+CASE="the medium carries the Steam tree it builds /home from"
+# THE MEDIUM CARRIES IT, since 2026-08-25. A card seeds /home from the directory with mkfs.ext4 -d;
+# this one builds /home on someone else's disk months later, so the tree travels with it. It used to
+# be downloaded from a content-addressed URL the medium derived from a baked pin, which bought
+# nothing -- a medium is bound to one seed either way -- and cost a publisher, a workflow, a pin
+# handed between CI jobs and 1.7 GB of tmpfs while rauc streams the bundle.
+grep -q 'steam-seed.tar.zst' "$MKIMAGE" \
+  && ok "mkimage stages the packed tree into the root" \
+  || bad "nothing puts a Steam seed on the medium"
+grep -q 'sha256sum "\$SEED_SRC"' "$MKIMAGE" \
+  && ok "and derives the pin from the bytes it is placing" \
+  || bad "the pin is not computed from the staged file"
+# THE PIN IS NOT AN INPUT. It arrived as NOVADECK_SEED_SHA256 from a separate CI job while the seed
+# was published elsewhere, so the hash and the bytes came from different places and could disagree.
+grep -qE '^[^#]*NOVADECK_SEED_SHA256' "$MKIMAGE" "$ROOT/install/mkroot.sh" \
+  && bad "a seed pin is still taken as an input — it must be computed from the staged file" \
+  || ok "no pin input anywhere: one file is read, hashed, and both halves written from that read"
+grep -q 'die "no Steam seed at' "$MKIMAGE" \
+  && ok "a build with no seed fails loudly rather than shipping a medium that cannot install" \
+  || bad "a missing seed is not refused"
+# And the build actually depends on it, or `make installer` races the packer.
+grep -qE '^installer:.*\$\(SEED_ARTIFACT\)' "$ROOT/Makefile" \
+  && ok "make installer depends on the packed seed" \
+  || bad "the installer target does not require the seed artifact"
+
 CASE="the verifier knows about everything the medium ships"
 # install/verify-image.sh is the ONLY thing that opens the built image; this file and test-mkroot.sh
 # read the scripts, and a script that says the right thing while producing the wrong image passes

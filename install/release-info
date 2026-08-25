@@ -25,21 +25,15 @@
 # host. install/test-ui.sh asserts the two agree, both on the default URL literal and on the shapes
 # they reject; that assertion is the only thing keeping the copies together.
 #
-# THE SEED IS NOT IN THE MANIFEST, and leaving it out is the design rather than an omission. The
-# spine verifies the Steam seed against a sha256 BAKED INTO THIS IMAGE (novadeck-install's
-# SEED_PIN), never against anything the server says -- so the only seed this medium can install is
-# the one it was built against, and the pin is therefore the seed's NAME:
-#
-#     <OTA_URL>/seed/steam-seed-<pin>.tar.zst
-#
-# Content-addressed and channel-independent, which is what makes an older installer medium keep
-# working after a newer seed is published: it asks for its own bytes by hash and gets them or gets
-# a 404, and it can never be handed a different tree that the pin would then reject halfway through
-# an install. A `seed` field in latest.json would give a manifest the power to pick, and the only
-# thing it could do with that power is cause a refusal.
+# THE SEED IS NOT HERE AT ALL, and it never comes over the network: the medium CARRIES the Steam
+# tree /home is built from (install/mkimage.sh stages it, and the spine checks it against the sha256
+# staged beside it). This file used to derive a download URL for it from that pin. Bundling it
+# deleted the publisher, the workflow, the pin handed between CI jobs and 1.7 GB of tmpfs consumed
+# while rauc streams the bundle -- and cost nothing, because a medium is bound to exactly one seed
+# either way. So the only thing left to resolve is the bundle.
+
 import json
 import os
-import re
 import subprocess
 import sys
 import urllib.parse
@@ -60,20 +54,12 @@ def emit(key, value):
 CONFIG_FILE = os.environ.get("NOVADECK_OTA_CONFIG", "/etc/novadeck/ota.conf")
 CURL = os.environ.get("NOVADECK_CURL", "curl")
 TIMEOUT = os.environ.get("NOVADECK_NET_TIMEOUT", "20")
-# THE SAME NAME AND THE SAME DEFAULT AS THE SPINE'S. install/hw-install.sh redirects NOVADECK_SEED_PIN
-# when it stages the spine onto a dev card, and this file then follows it there without being told:
-# the screen and the program that acts on it cannot end up pinned to two different seeds.
-SEED_PIN = os.environ.get("NOVADECK_SEED_PIN", "/usr/lib/novadeck/install/steam-seed.sha256")
-
 # The server this medium fetches from, resolved exactly as novadeck-update resolves it: the
 # environment, then OTA_URL/OTA_CHANNEL in /etc/novadeck/ota.conf, then these built-in defaults. The
 # literals are written a third time here because the other two are Python and shell in files that do
 # not ship together; install/test-ui.sh asserts all three agree.
 DEFAULT_URL = "https://updates.novadeck.cloud-ip.cc"
 DEFAULT_CHANNEL = "stable"
-# Where a published seed lives. Not under a channel: a seed is not channel-specific, and an
-# installer built against a dev bundle needs the same Steam tree as one built against a stable one.
-SEED_PATH = "seed"
 
 
 def read_env_file(path):
@@ -97,25 +83,6 @@ def config():
     url = os.environ.get("NOVADECK_OTA_URL") or conf.get("OTA_URL") or DEFAULT_URL
     channel = os.environ.get("NOVADECK_OTA_CHANNEL") or conf.get("OTA_CHANNEL") or DEFAULT_CHANNEL
     return url.rstrip("/"), channel
-
-
-def baked_pin():
-    """
-    (pin, complaint) -- the sha256 this image will accept for the Steam seed.
-
-    READ THE WAY THE SPINE READS IT: all whitespace stripped, exactly 64 characters. It is stricter
-    here by one check -- the characters must be hex -- because this file does not merely compare the
-    pin, it puts it in a URL, and a pin that is not a hash names a file that cannot exist.
-    """
-    try:
-        with open(SEED_PIN, "r") as handle:
-            raw = handle.read()
-    except OSError:
-        return "", "this installer was built without a Steam-seed pin (no %s)" % SEED_PIN
-    pin = re.sub(r"\s+", "", raw)
-    if not re.fullmatch(r"[0-9a-f]{64}", pin):
-        return "", "%s does not hold a sha256" % SEED_PIN
-    return pin, ""
 
 
 def fetch(url):
@@ -184,16 +151,6 @@ def gib(n):
 def main():
     base, channel = config()
 
-    # THE PIN IS CHECKED FIRST, before a byte moves, because nothing on the network can cure it.
-    # An image built with no pin boots, draws consent and carves, and then refuses at the seed step
-    # (install/mkroot.sh warns about exactly this at build time) -- so the honest place to say it is
-    # the screen before the first write, not twenty minutes into one.
-    pin, complaint = baked_pin()
-    if not pin:
-        emit("STATE", "no-pin")
-        emit("DETAIL", complaint + " -- it cannot install, and no network will fix that")
-        return 0
-
     url = "%s/%s/latest.json" % (base, channel)
     emit("URL", url)
     emit("CHANNEL", channel)
@@ -219,7 +176,6 @@ def main():
         emit("BUILD", release["build"])
     emit("SIZE", release["size"])
     emit("BUNDLE", "%s/%s/%s" % (base, channel, urllib.parse.quote(release["bundle"])))
-    emit("SEED", "%s/%s/steam-seed-%s.tar.zst" % (base, SEED_PATH, pin))
     # ONE LINE, AND IT NAMES THE HOST. This is what the pre-flight screen puts under "To install",
     # and the alternative -- the bundle URL itself -- is long enough to wrap twice on a panel that
     # has already overflowed once (HW 2026-08-25). The host is the part an operator needs: it is

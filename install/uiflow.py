@@ -27,12 +27,20 @@ SELECT_TARGET = os.environ.get(
     "NOVADECK_SELECT_TARGET", "/usr/lib/novadeck/install/select-target.sh")
 CARVE = os.environ.get("NOVADECK_CARVE", "/usr/lib/novadeck/install/carve.sh")
 SPINE = os.environ.get("NOVADECK_SPINE", "/usr/lib/novadeck/install/novadeck-install")
-# WHERE THE BYTES COME FROM. The medium carries no bundle -- the install is network-only -- so
-# install/release-info asks the update server what there is to install and derives the Steam seed's
-# URL from the sha256 baked into this image. These two remain the override, for the hardware stager
-# (install/hw-install.sh serves a bundle off a laptop and hands the seed over as a local path) and
-# for the suite; either one alone is honoured, and both together mean release-info is never run.
+# WHERE THE BYTES COME FROM, and the two halves arrive differently on purpose. The OS bundle is
+# resolved from the update channel at install time by install/release-info, so any medium installs
+# the current release. The Steam seed /home is built from is CARRIED BY THE MEDIUM -- 1.4 GiB staged
+# into this root by install/mkimage.sh, with its sha256 beside it -- because a medium is bound to one
+# seed whichever way it arrives, and fetching it only added a publisher, a pin handed between CI jobs
+# and 1.7 GB of tmpfs taken while rauc streams the bundle.
+#
+# Both remain overridable, for the hardware stager (install/hw-install.sh serves a bundle off a
+# laptop and points the seed at a path on the card) and for the suite.
 RELEASE_INFO = os.environ.get("NOVADECK_RELEASE_INFO", "/usr/lib/novadeck/install/release-info")
+# A seam like every other path here, so install/test-ui.sh can exercise both "the medium
+# carries one" and "it does not" without a /usr/lib to write into.
+SEED_ON_MEDIUM = os.environ.get(
+    "NOVADECK_SEED_ON_MEDIUM", "/usr/lib/novadeck/install/steam-seed.tar.zst")
 BUNDLE = os.environ.get("NOVADECK_INSTALL_BUNDLE", "")
 HOME_SEED = os.environ.get("NOVADECK_INSTALL_SEED", "")
 
@@ -140,8 +148,13 @@ def resolve_release():
     "no" would make the Check again button on the pre-flight screen a button that redraws itself.
     """
     global _RELEASE
-    if BUNDLE and HOME_SEED:
-        return {"bundle": BUNDLE, "seed": HOME_SEED, "state": "ok", "detail": ""}
+    # THE SEED IS A FILE ON THIS MEDIUM, and a missing one is a fact worth a screen rather than a
+    # spine that dies at verify_sources with the disk untouched but nothing on the panel to explain
+    # it. mkimage refuses to build a medium without one, so this only fires for a hand-assembled
+    # tree -- which is exactly when a plain answer is worth most.
+    seed = HOME_SEED or (SEED_ON_MEDIUM if os.path.exists(SEED_ON_MEDIUM) else "")
+    if BUNDLE and seed:
+        return {"bundle": BUNDLE, "seed": seed, "state": "ok", "detail": ""}
     if _RELEASE is not None:
         return _RELEASE
     # SYNCHRONOUS, and bounded so it can stay that way. This blocks the frame like every other tool
@@ -160,9 +173,15 @@ def resolve_release():
         state, facts = "no-tool", {
             "DETAIL": "the installer's own release helper did not answer: %s"
                       % ((out.strip().splitlines() or ["it produced nothing (rc=%d)" % rc])[-1])}
+    if state == "ok" and not seed:
+        # The bundle resolved and the medium has no Steam tree: say which half is missing, since the
+        # screen would otherwise show a perfectly good release next to a Continue that never appears.
+        state = "no-seed"
+        facts = {"DETAIL": "this medium carries no Steam seed (no %s) -- it cannot build /home"
+                           % SEED_ON_MEDIUM}
     release = {
         "bundle": BUNDLE or facts.get("BUNDLE", ""),
-        "seed": HOME_SEED or facts.get("SEED", ""),
+        "seed": seed,
         "state": state,
         "detail": facts.get("DETAIL", ""),
     }
@@ -446,9 +465,9 @@ class PreflightScreen:
     # A RELEASE FAILURE A RE-ASK CANNOT CURE. Same reasoning as the network screen's NO_RETRY, and
     # it comes from the same finding: a button that cannot succeed, sitting where the eye looks
     # first, is worse than no button (HW 2026-08-24). `no-pin` is a property of how this medium was
-    # BUILT -- install/mkroot.sh warns about it at build time -- so no amount of asking the server
-    # again will change the answer, and the screen says so instead of offering to try.
-    NO_RETRY = ("no-pin",)
+    # BUILT: the Steam tree it would build /home from is not on it, and no amount of asking the
+    # update server again will put it there. The screen says so instead of offering to try.
+    NO_RETRY = ("no-seed",)
 
     def handle(self, token):
         if token == "LEFT":

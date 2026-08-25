@@ -631,8 +631,9 @@ docker run --rm --platform linux/arm64 \
   # public certificate and nothing on this image should ever rewrite it.
   install -Dm0444 /prebuilt/keyring.pem /target/etc/rauc/keyring.pem
 
-  # The baked seed pin, when the build was given one. Absent, the spine refuses at the seed step --
-  # which is the correct behaviour and is checked THERE, not duplicated here.
+  # The baked seed pin, when the build was given one. Absent, the spine refuses in verify_sources --
+  # before consent and before the first write, which is the correct behaviour and is checked THERE,
+  # not duplicated here.
   if [ -f /prebuilt/steam-seed.sha256 ]; then
     install -Dm0644 /prebuilt/steam-seed.sha256 /target/usr/lib/novadeck/install/steam-seed.sha256
   fi
@@ -856,7 +857,14 @@ docker run --rm --platform linux/arm64 \
 
 if [ -z "$SEED_SHA" ]; then
   log "WARNING: no steam-seed pin baked in (NOVADECK_SEED_SHA256= or install/steam-seed.sha256)."
-  log "         This image boots, draws consent and carves, and then REFUSES at the seed step."
+  # WHERE IT STOPS, precisely, because the two answers carry very different risk. The pin is read in
+  # verify_sources, which the spine runs BEFORE take_consent and therefore before the first sgdisk
+  # (plan §3 rule 11: a bundle that will not verify must not cost the user their Android data). So
+  # this medium stops with the disk UNTOUCHED and Android intact -- it is a medium that cannot
+  # install, not a device that gets half-installed. This warning said "draws consent and carves, and
+  # then REFUSES at the seed step" until 2026-08-25, which is the spine's step ORDER read backwards.
+  log "         It boots and reaches pre-flight, then stops at 'verify sources' BEFORE consent,"
+  log "         with nothing written to the target disk. Unusable, but not destructive."
 fi
 log "installer root ready ($(du -sh "$DEST" 2>/dev/null | cut -f1) at ${DEST#"$ROOT"/})"
 echo "$DEST"

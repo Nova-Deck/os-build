@@ -155,9 +155,14 @@ esac
 # --- 7. prune, opt-in and never by default ---------------------------------------------------------
 # READ THIS BEFORE SETTING IT. Old seeds are not superseded: an installer medium built six months ago
 # names exactly one seed by hash and will name it forever. Deleting that seed does not make the
-# medium fetch a newer one — release-info derives the URL from the medium's own pin — it makes the
-# install stop at the seed step on a device whose Android data is already gone. Bundles supersede
-# each other and prune safely; these do not.
+# medium fetch a newer one — release-info derives the URL from the medium's own pin — it RETIRES
+# that medium: every copy of it in the field stops being able to install anything.
+#
+# It stops SAFELY. The spine verifies its sources before consent and therefore before the first
+# sgdisk (plan §3 rule 11), so the operator gets a failure with Android intact rather than a
+# half-installed device. That bounds the damage to a wasted trip; it does not make the deletion
+# recoverable, because nothing on that medium can be repointed. Bundles supersede each other and
+# prune safely; these do not.
 if [ "$KEEP" -ge 1 ]; then
   log "NOVADECK_SEED_KEEP=$KEEP — pruning all but the $KEEP newest seeds"
   log "any installer medium pinned to a pruned seed can no longer complete an install"

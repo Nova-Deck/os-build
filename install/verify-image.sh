@@ -231,10 +231,15 @@ fi
 
 # ----------------------------------------------------------------------------------------------
 echo "  6. it can actually install"
-# A MEDIUM THAT BOOTS AND CANNOT INSTALL IS THE EXPENSIVE FAILURE: it draws consent, carves the
-# disk, and then stops — on a device whose Android data is already gone. Everything below is
-# something the install path resolves by ABSOLUTE PATH at runtime, where a miss is a screen rather
-# than a crash, so nothing earlier in the build fails loudly for it.
+# A MEDIUM THAT BOOTS AND CANNOT INSTALL is the failure this section exists for. Everything below
+# is resolved by ABSOLUTE PATH at runtime, where a miss is a screen or a `die` rather than a build
+# error, so nothing earlier fails loudly for any of it — the image is produced happily and the
+# operator finds out on hardware.
+#
+# THE DISK IS NOT AT RISK FROM ANY OF IT. The spine verifies sources BEFORE take_consent and
+# therefore before the first sgdisk (plan §3 rule 11), so a medium that is missing something stops
+# with Android intact. That is the point of checking here anyway: the cost is a wasted trip to the
+# hardware, not a wasted device.
 #
 # THE LIST IS STATED HERE, not read out of install/mkroot.sh: a verifier that derives its
 # expectations from the builder can only ever agree with it. install/test-mkimage.sh asserts the
@@ -260,7 +265,8 @@ if sqfs usr/lib/novadeck/install/steam-seed.sha256 >"$T/pin" 2>/dev/null && [ -s
   [ "${#pin}" -eq 64 ] && ok "a 64-character Steam-seed pin is baked in" \
     || bad "the baked seed pin is not a sha256: '$pin'"
 else
-  bad "NO STEAM-SEED PIN. This medium carves the disk and then refuses at the seed step.
+  bad "NO STEAM-SEED PIN. This medium boots and reaches pre-flight, then stops at 'verify sources'
+        before consent — nothing written, and nothing it can install.
         Build it with NOVADECK_SEED_SHA256=<sha of a published seed> (see .github/workflows/release-seed.yml)."
 fi
 # The session unit has to be ENABLED, and the console unit must NOT be: the second is started by

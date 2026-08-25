@@ -67,8 +67,17 @@ Consequences worth knowing before touching that directory:
 
 - **Nothing supersedes anything.** An installer medium built six months ago names exactly one seed
   and always will. `ota/publish-seed.sh` therefore does **not** prune by default; `NOVADECK_SEED_KEEP`
-  is opt-in, and deleting a seed does not make an old medium fetch a newer one — it makes the
-  install stop at the seed step, on a device whose Android data is already gone.
+  is opt-in, and deleting a seed does not make an old medium fetch a newer one — it retires that
+  medium, and every copy of it in the field. The failure is safe (the spine verifies its sources
+  before consent, so the disk is untouched and Android is intact) but it is not recoverable: there
+  is nothing on the medium to repoint.
+- **A new seed needs a new installer image, and a new bundle does not.** The bundle is resolved from
+  `<channel>/latest.json` at install time, so any medium installs the current OS; the seed is pinned
+  at build time, so a medium installs the seed it was built against and no other. The asymmetry is
+  the trust model, not an oversight: a bundle carries a signature that chains to the CA baked into
+  the medium, so bytes it has never seen can still be trusted — a seed carries nothing, so the only
+  trust available is knowing its hash in advance. The cost of an old pin is small: the client
+  self-updates on first launch, so a stale seed means a slower first boot, not a broken install.
 - **A republish is free.** `steam-seed/pack-seed.sh` is deterministic, so an unchanged tree packs to
   the same name and the publisher recognises it and exits without uploading.
 - **The pin is an output, not an input.** `.github/workflows/release-seed.yml` publishes a seed and

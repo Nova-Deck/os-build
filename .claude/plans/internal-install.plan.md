@@ -2166,7 +2166,8 @@ if none of the candidates is present. And the two files the spine reads as data:
   installer image built afterwards passes `NOVADECK_SEED_SHA256=`, which `install/mkroot.sh` already
   reads ahead of `install/steam-seed.sha256`. Committing a pin first and publishing to match it is
   the same shape backwards: there would be a window where the tracked hash names bytes nobody has
-  uploaded, and a medium built in that window refuses at the seed step — after the carve. So
+  uploaded, and a medium built in that window stops at `verify sources` — before consent and before
+  the first sgdisk (§3 rule 11), so the disk survives and the medium does not. So
   `release-installer.yml`, when it exists, takes the pin as an input rather than reading the tree. The `/home` layout around it (the `deck/` directory and the `~/.steam` compat symlinks) is
   `stage_deck_home`'s and is applied on the device, so the artifact and the card seed are the same
   bytes. The publisher must also emit its sha256 into the installer image as

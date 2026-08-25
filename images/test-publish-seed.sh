@@ -146,8 +146,10 @@ printf '%s' "$ERR" | grep -q 'hashes to its own name' \
 CASE="a file that does not hash to its own name is refused"
 # THE GATE. There is no signature on this artifact: the name IS the pin, and release-info builds the
 # URL from the pin baked into the medium. Bytes published under a name they do not hash to would
-# answer a medium's request with a tree the spine then refuses -- after a 3 GB download, on a device
-# whose Android data is already gone.
+# answer a medium's request with a tree the spine then refuses -- after a 1.5 GB download, and for
+# every operator who tries. It refuses SAFELY (verify_sources runs before consent, so nothing is
+# written), which bounds it to a wasted trip rather than a wasted device -- and a wasted trip per
+# medium is still the most expensive kind of bug this publisher can ship.
 reset_server
 liar="$W/art/steam-seed-$(printf 'a%.0s' $(seq 64)).tar.zst"
 cp "$SEED" "$liar"
@@ -216,8 +218,8 @@ run NOVADECK_TEST_UNSERVED=1
 # =================================================================================================
 CASE="nothing is pruned unless asked"
 # The one that matters most in a year. An old seed is not stale: a medium built against it names it
-# by hash and always will, so deleting it does not make that medium fetch a newer one -- it makes
-# the install stop at the seed step. Bundles supersede each other; seeds do not.
+# by hash and always will, so deleting it does not make that medium fetch a newer one -- it retires
+# every copy of that medium. Bundles supersede each other; seeds do not.
 reset_server
 OLD="$(pack "$W/old")"; OLDNAME="$(basename "$OLD")"
 run "$OLD"
@@ -245,8 +247,8 @@ printf '%s' "$ERR" | grep -q 'can no longer complete an install' \
 CASE="the publisher and the installer agree on where seeds live"
 # TWO HALVES OF ONE URL, WRITTEN IN TWO FILES. ota/publish-seed.sh chooses the directory under the
 # docroot; install/release-info builds the URL a medium fetches from its baked pin. A drift between
-# them is invisible in both files and shows up as every install 404ing at the seed step — after the
-# carve, on a device whose Android data is already gone. Same shape as the OTA URL literal that
+# them is invisible in both files and shows up as every install 404ing on the seed, on every medium
+# ever published. Same shape as the OTA URL literal that
 # install/test-ui.sh binds across netcfg, novadeck-update and release-info.
 pub_dir="$(sed -n 's/^DEST="\$DOCROOT\/\(.*\)"$/\1/p' "$PUBLISH" | head -1)"
 rel_dir="$(sed -n 's/^SEED_PATH = "\(.*\)"$/\1/p' "$ROOT/install/release-info" | head -1)"

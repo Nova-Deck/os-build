@@ -1172,6 +1172,77 @@ printf '%s' "$twice" | grep -q '\["no-release", "ok", "ok"' \
   || bad "the failure stuck: $twice"
 
 # =================================================================================================
+# the VIEW's layout -- the half nothing could see until 2026-08-25
+# =================================================================================================
+# THE CONSENT SCREEN OVERLAPPED ITS OWN BUTTON ROW on an AYANEO Pocket ACE. Everything except the
+# buttons flows down the screen and the buttons are pinned to the bottom, so content that grew ran
+# straight through them -- text over the one row that says which button does what, on the screen
+# where that matters most. The pre-flight screen hit the same wall in August and was fixed by
+# compacting ITS content, which fixed one screen and left the mechanism in place.
+#
+# install/fakepygame.py is what lets this be asserted at all: uiview imports pygame lazily, so a
+# stand-in with deterministic metrics can be injected and every blit recorded. It proves the
+# ARITHMETIC, not the pixels -- that the flow is measured against the button row and shrunk until it
+# clears it. The real metrics still come from a real SDL on the device.
+CONSENT='desc = {"screen": "consent", "title": "Erase Android data on AYANEO Pocket ACE?",
+  "blocks": [("This device is running Android",
+              "NovaDeck will be installed alongside it. Android keeps the space you chose and "
+              "everything else on that partition is erased, including apps, saves and photos. "
+              "This cannot be undone and there is no backup."),
+             ("What happens next",
+              "The disk is repartitioned, NovaDeck is downloaded and written, and the device "
+              "reboots into it. Android still boots afterwards, factory-reset.")],
+  "diamonds": [{"pos": p, "name": n, "done": False} for p, n in
+               (("S","BOTTOM"),("W","LEFT"),("N","TOP"),("E","RIGHT"))],
+  "prompt": "Press these four buttons in this order",
+  "note": "It is the POSITION on the pad, not the letter printed on the button.",
+  "buttons": [{"pos": "SELECT", "label": "Cancel"}], "abort": ""}'
+
+layout() {  # <w> <h> <python building `desc`>  -> "<lowest flow pixel> <button row y>"
+  SCR_W="$1" SCR_H="$2" DESC="$3" python3 "$ROOT/install/layout-probe.py"
+}
+
+CASE="the view reserves the button row"
+read -r bottom row < <(layout 1920 1080 "$CONSENT")
+[ "${bottom:-0}" -le "${row:-0}" ] && [ -n "$bottom" ] \
+  && ok "1920x1080: the content ends at $bottom, above the button row at $row" \
+  || bad "the consent screen overlaps its buttons ($bottom vs $row)"
+read -r bottom row < <(layout 1080 1920 "$CONSENT")
+[ "${bottom:-0}" -le "${row:-0}" ] && [ -n "$bottom" ] \
+  && ok "1080x1920 (portrait): clears it too" \
+  || bad "portrait overlaps ($bottom vs $row)"
+read -r bottom row < <(layout 1280 720 "$CONSENT")
+[ "${bottom:-0}" -le "${row:-0}" ] && [ -n "$bottom" ] \
+  && ok "1280x720: clears it on a short panel, which is where it breaks first" \
+  || bad "720p overlaps ($bottom vs $row)"
+
+CASE="the shrink is what prevents the overlap, not luck"
+# MEASURED BOTH WAYS while writing this: with the shrink, this content ends at 534 on a 720p panel
+# whose button row is at 601; with the loop disabled it ends at 607, six pixels into the row. A test
+# whose fixture fits anyway would prove nothing, so this one is deliberately larger than any real
+# screen -- two long blocks plus the diamonds -- and it is the case that fails if the loop goes.
+BIG='desc = {"title":"Erase Android data?",
+  "blocks":[("Heading one","word "*160),("Heading two","word "*160)],
+  "diamonds":[{"pos":p,"name":n,"done":False} for p,n in
+              (("S","BOTTOM"),("W","LEFT"),("N","TOP"),("E","RIGHT"))],
+  "prompt":"Press these four buttons in this order",
+  "note":"It is the POSITION on the pad.",
+  "buttons":[{"pos":"SELECT","label":"Cancel"}]}'
+read -r bottom row < <(layout 1280 720 "$BIG")
+[ "${bottom:-0}" -le "${row:-0}" ] && [ -n "$bottom" ] \
+  && ok "content larger than any real screen still clears the row ($bottom <= $row)" \
+  || bad "the shrink did not engage: $bottom vs $row"
+
+CASE="the view shrinks rather than eliding"
+# NOTHING MAY BE DROPPED from a consent screen -- "and 4 more" is not a thing it may say. So the fix
+# is a smaller type scale, and the proof is that every block still reaches the surface.
+n_big=$(COUNT=1 layout 1920 1080 "$CONSENT")
+n_small=$(COUNT=1 layout 1280 720 "$CONSENT")
+[ "${n_small:-0}" -ge "${n_big:-0}" ] && [ "${n_small:-0}" -gt 20 ] \
+  && ok "a short panel still draws everything ($n_small pieces vs $n_big on a tall one)" \
+  || bad "content went missing rather than shrinking ($n_small vs $n_big)"
+
+# =================================================================================================
 # progress
 # =================================================================================================
 progress() {  # <python snippet with `p` (a ProgressScreen) and `feed(lines)`>

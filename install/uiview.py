@@ -42,15 +42,58 @@ class PygameView:
         # the computer to edit it on -- is the difference between advice read and advice squinted
         # at. h/28 is about 20% larger. Everything else scales off this, so the title and headings
         # keep their relationship to the body and only the one number moves.
-        base = max(16, int(self.h / 28))
+        self._base = max(16, int(self.h / 28))
+        self._fonts(self._base)
+        # Set while MEASURING rather than drawing: every blit in this file is suppressed, so the
+        # same code that lays a screen out can be asked how tall it comes to before anything is on
+        # the panel. See draw().
+        self._dry = False
+
+    def _fonts(self, base):
+        pygame = self.pygame
         self.f_title = pygame.font.Font(None, int(base * 1.9))
         self.f_head = pygame.font.Font(None, int(base * 1.25))
         self.f_body = pygame.font.Font(None, base)
 
     def draw(self, desc):
+        """
+        THE BUTTON ROW IS RESERVED, and the content is shrunk until it fits above it.
+
+        Everything except the buttons flows down the screen; the buttons are pinned to the bottom.
+        So a screen whose content grew -- a long board name, a consent screen with three paragraphs
+        and a row of diamonds -- ran straight through them: text on top of the one row that says
+        which button does what, on the one screen where that matters most. Reported on an AYANEO
+        Pocket ACE (consent, 2026-08-25); the pre-flight screen had hit the same wall in August and
+        was fixed by compacting ITS content, which fixed one screen and left the mechanism.
+        NOTHING IS ELIDED to achieve it, and on a consent screen nothing may be: the fix is a
+        smaller type scale, chosen by measuring, not less text. The floor is 60% of the base size --
+        past that a screen is unreadable anyway, and the honest failure is small text rather than
+        hidden text.
+        """
         pg = self.pygame
-        self.surface.fill(self.BG)
         m = int(self.w * 0.06)
+        # The top of the button row, less a gap. _buttons() centres itself on this line.
+        limit = self.h - m - int(self.h * 0.06) - int(self.h * 0.02)
+        base, floor = self._base, max(12, int(self._base * 0.6))
+        self._dry = True
+        while True:
+            self._fonts(base)
+            if self._flow(desc, m) <= limit or base <= floor:
+                break
+            base = max(floor, int(base * 0.92))
+        self._dry = False
+
+        self.surface.fill(self.BG)
+        self._flow(desc, m)
+        if desc.get("buttons"):
+            self._buttons(desc["buttons"], m, self.h - m - int(self.h * 0.06))
+        if desc.get("abort"):
+            self._text(desc["abort"], self.f_body, self.DIM, m, self.h - m)
+        pg.display.flip()
+        self._fonts(self._base)          # the next screen starts from the full size again
+
+    def _flow(self, desc, m):
+        """Everything that flows down the screen. Returns the y it ended at."""
         y = m
         y = self._text(desc.get("title", ""), self.f_title, self.FG, m, y) + int(self.h * 0.02)
         for head, body in desc.get("blocks", []):
@@ -70,11 +113,7 @@ class PygameView:
             y = self._text(desc.get("note", ""), self.f_body, self.DIM, m, y + int(self.h * 0.01))
         if desc.get("note") and not diamonds:
             y = self._text(desc["note"], self.f_body, self.DIM, m, y + int(self.h * 0.02))
-        if desc.get("buttons"):
-            self._buttons(desc["buttons"], m, self.h - m - int(self.h * 0.06))
-        if desc.get("abort"):
-            self._text(desc["abort"], self.f_body, self.DIM, m, self.h - m)
-        pg.display.flip()
+        return y
 
     def _phases(self, rows, x, y):
         """One line per phase the spine has reached, with a bar on the one that is running."""
@@ -87,10 +126,11 @@ class PygameView:
             y = self._text(r["label"], self.f_body, colour, x, y)
             if r["state"] == "active":
                 h = max(4, int(self.h / 160))
-                pg.draw.rect(self.surface, self.DOT, (x, y + h, width, h))
-                if r["percent"] is not None:
-                    pg.draw.rect(self.surface, self.DOT_ON,
-                                 (x, y + h, int(width * r["percent"] / 100), h))
+                if not self._dry:
+                    pg.draw.rect(self.surface, self.DOT, (x, y + h, width, h))
+                    if r["percent"] is not None:
+                        pg.draw.rect(self.surface, self.DOT_ON,
+                                     (x, y + h, int(width * r["percent"] / 100), h))
                 y += h * 3
             y += int(self.h * 0.006)
         return y
@@ -146,7 +186,8 @@ class PygameView:
         if not s:
             return y
         surf = font.render(s, True, colour)
-        self.surface.blit(surf, (x, y))
+        if not self._dry:
+            self.surface.blit(surf, (x, y))
         return y + surf.get_height()
 
     def _wrap(self, s, font, colour, x, y, width):
@@ -174,9 +215,11 @@ class PygameView:
             ):
                 filled = pos == d["pos"]
                 colour = self.DOT_ON if filled else self.DOT
-                pg.draw.circle(self.surface, colour, (cx + dx, cy + dy), r, 0 if filled else 2)
+                if not self._dry:
+                    pg.draw.circle(self.surface, colour, (cx + dx, cy + dy), r, 0 if filled else 2)
             label = self.f_body.render(d["name"], True, self.FG if not d["done"] else self.DIM)
-            self.surface.blit(label, (cx - label.get_width() // 2, cy + span + r * 2))
+            if not self._dry:
+                self.surface.blit(label, (cx - label.get_width() // 2, cy + span + r * 2))
         return y + span * 2 + r * 4 + self.f_body.get_height()
 
     def close(self):

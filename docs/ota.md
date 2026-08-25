@@ -93,6 +93,16 @@ consecutive bundles: **96.1% of non-zero blocks are reused, ~125 MB crosses the 
 3.90 GB.** Matching is content-addressed, and every local hit is re-hashed against the index inside
 the signed bundle before use — a corrupt or tampered local index can only cost bandwidth.
 
+**The server must speak HTTP/2 for that to be quick.** rauc's NBD helper turns block reads into many
+concurrent Range requests, which is the request pattern HTTP/1 serialises — and rauc warns about it
+at the start of every stream (`using HTTP/1 for streaming, expect slow installation`), observed on a
+Pocket ACE installing from this server. The vhost disabled HTTP/2 until 2026-08-25 on the stated
+reasoning that "the only client is curl fetching one large file with a Range header", which was
+never true of this server: **the bundle has always been fetched by rauc**, and the only thing curl
+fetches is `<channel>/latest.json` — a few hundred bytes, for which the protocol is irrelevant.
+`listen 443 ssl http2` (the pre-1.25 spelling, which is what Ubuntu 24.04's nginx 1.24 understands)
+is now in `ota/nginx-novadeck-ota.conf`.
+
 Three consequences worth knowing before reading a slow first result:
 
 - **Getting here takes two hops, and the first one measures nothing.** rauc runs from the RUNNING

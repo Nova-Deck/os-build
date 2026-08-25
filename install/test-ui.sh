@@ -507,9 +507,38 @@ print(json.dumps(s.result))'
 [ "$(powercheck 0)" = '["poweroff"]' ] \
   && ok "a finished install powers the device off, as its button says" \
   || bad "the success screen's Power off button does not power off: $(powercheck 0)"
-[ "$(powercheck 1)" = '["quit"]' ] \
-  && ok "a FAILED one does not -- its button says Continue, and the user still has a log to read" \
-  || bad "a failed install powered the device off"
+# A FAILED install offers the two actions that exist. It offered "Continue" until 2026-08-25, which
+# named nothing that happens -- it quit the UI and left a blank panel, and the operator running it on
+# a Pocket ACE said so. Trying again is the documented recovery (no backups are kept precisely
+# because re-running has to work); powering off is what gets the log onto the ESP, since save-log.sh
+# runs when the unit stops.
+[ "$(powercheck 1)" = '["retry"]' ] \
+  && ok "a FAILED one retries on the bottom button -- the documented recovery" \
+  || bad "the failure screen's bottom button does not retry: $(powercheck 1)"
+failsel=$(SNIPPET= python3 - <<'PY2'
+import json, os, sys
+sys.path.insert(0, os.path.join(os.environ["ROOT"], "install"))
+import uiflow
+class R: tail = []
+s = uiflow.ProgressScreen(R()); s.finish(1); s.handle(uiflow.TOKEN_BACK)
+print(json.dumps(s.result))
+PY2
+)
+[ "$failsel" = '["poweroff"]' ] \
+  && ok "and SELECT powers off, which is what writes the log to the ESP" \
+  || bad "SELECT on a failed install does not power off: $failsel"
+labels=$(SNIPPET= python3 - <<'PY2'
+import json, os, sys
+sys.path.insert(0, os.path.join(os.environ["ROOT"], "install"))
+import uiflow
+class R: tail = ["boom"]
+s = uiflow.ProgressScreen(R()); s.finish(1)
+print(json.dumps([b["label"] for b in s.describe()["buttons"]]))
+PY2
+)
+printf '%s' "$labels" | grep -q Continue \
+  && bad "the failure screen still offers Continue, which continues nothing: $labels" \
+  || ok "and neither button says Continue ($labels)"
 [ "$(powercheck net:no-conf)" = '["poweroff"]' ] \
   && ok "and a network failure's SELECT, labelled Power off, does too" \
   || bad "the network failure screen's Power off button does not power off"
@@ -1043,7 +1072,7 @@ rm -f "$T/rel/spine-argv"
 BUNDLE_OVERRIDE= SEED_OVERRIDE= NET_CURL_BODY="$MANIFEST" NOVADECK_SPINE="$T/bin/spine-recorder" \
   flow '
 import time
-r = uiflow.SpineRun(16, "/nonexistent.sock", pf.facts["bundle"], pf.facts["seed"])
+r = uiflow.SpineRun(16, "/nonexistent.sock", pf.facts["bundle"], pf.facts["seed"], "fresh")
 for _ in range(500):
     if r.returncode() is not None: break
     time.sleep(0.01)' >/dev/null 2>&1
@@ -1057,6 +1086,15 @@ printf '%s' "$argv" | grep -q -- "--home-seed $T/rel/on-medium.tar.zst" \
 grep -q 'top.facts\["bundle"\], top.facts\["seed"\]' "$ROOT/install/ui" \
   && ok "and the loop passes the SCREEN's facts, so nothing re-resolves behind the consent" \
   || bad "install/ui does not hand SpineRun the screen's own bundle"
+# --intent, WHICH HARDWARE FOUND MISSING. On a disk that already carries NovaDeck the spine refuses
+# to choose for us, so an install there died at select-target every time -- with the UI having done
+# everything else right (Pocket ACE, 2026-08-25). The argument existed; nothing passed it.
+printf '%s' "$argv" | grep -q -- '--intent fresh' \
+  && ok "and --intent fresh, which is what the pre-flight screen promised" \
+  || bad "the spine is started with no intent, so a disk of ours refuses: $argv"
+grep -q '"fresh")' "$ROOT/install/ui" \
+  && ok "the loop names the intent explicitly rather than leaving it to a default" \
+  || bad "install/ui does not pass an intent to SpineRun"
 
 CASE="pre-flight: it cannot start an install it has no bundle for"
 out="$(BUNDLE_OVERRIDE= SEED_OVERRIDE= NET_HOST_RC=22 \

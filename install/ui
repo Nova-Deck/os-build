@@ -614,9 +614,24 @@ def run(server, view, source, base, deadline=0):
                 log("re-asking the update server what there is to install")
                 stack[-1] = PreflightScreen(dict(top.facts, **release_facts()), top.gib)
             elif result[0] == "start":
+                # `fresh`, ALWAYS, because it is the only thing this UI can honestly promise. On a
+                # disk of ours the pre-flight screen says the install "will be erased and replaced,
+                # INCLUDING /home", and plan_carve() showed the operator exactly that carve --
+                # carve.sh handles `plan` in the same branch as `fresh`. The spine's other intent,
+                # `reinstall`, keeps /home and is not reachable from any screen here yet, so naming
+                # it would be a promise nothing behind it keeps.
                 spine = SpineRun(result[1], server.path,
-                                 top.facts["bundle"], top.facts["seed"])
+                                 top.facts["bundle"], top.facts["seed"], "fresh")
                 stack.append(ProgressScreen(spine))
+            elif result[0] == "retry":
+                # A failed install, from the top. Re-running IS the recovery -- the installer keeps
+                # no backups precisely because it has to be -- and the facts are re-gathered rather
+                # than reused, since a partial carve has changed the very disk they describe.
+                log("retrying after a failed install")
+                spine = None
+                stack.pop()
+                facts, why = gather_preflight()
+                stack[-1] = PreflightScreen(facts) if facts else IdleScreen(why)
             elif result[0] == "poweroff":
                 power_off(source)
                 return 0

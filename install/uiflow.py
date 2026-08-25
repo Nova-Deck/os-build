@@ -760,7 +760,7 @@ class ConnectingScreen:
 class SpineRun:
     """install/novadeck-install as a child process, read without blocking the frame."""
 
-    def __init__(self, gib, sock_path, bundle, seed, intent=None):
+    def __init__(self, gib, sock_path, bundle, seed, intent):
         import subprocess
 
         env = dict(os.environ)
@@ -775,9 +775,16 @@ class SpineRun:
         # free to answer differently from the one the operator read (the update server can publish
         # between the two calls) -- the same drift the screen's every-figure-is-measured rule exists
         # to prevent.
-        argv = [SPINE, "--bundle", bundle, "--home-seed", seed, "--userdata-gib", str(gib)]
-        if intent:
-            argv += ["--intent", intent]
+        # --intent IS NOT OPTIONAL, and it was until hardware said so. On a disk that already
+        # carries NovaDeck the spine refuses to pick for us -- "a disk that already carries a
+        # novadeck install admits three different answers and this script may not pick one" -- so an
+        # install on such a disk died at select-target, every time, with the UI having done
+        # everything else right (Pocket ACE, 2026-08-25). This argument existed and nothing ever
+        # passed it, which is why a REQUIRED parameter now rather than a default: the same shape as
+        # bundle and seed, which were silently taken from the module's environment until the day
+        # they were empty.
+        argv = [SPINE, "--bundle", bundle, "--home-seed", seed,
+                "--userdata-gib", str(gib), "--intent", intent]
         log("starting the spine: %s" % " ".join(argv))
         self.proc = subprocess.Popen(
             argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, bufsize=0)
@@ -845,9 +852,18 @@ class ProgressScreen:
         if self.rc is None:
             return
         # A finished install offers one button and it says Power off -- §5, "Remove the SD card,
-        # then power the device off". A FAILED one offers Continue, because the user still has a
-        # log to read and a device that may need re-running.
-        self.result = ("poweroff",) if self.rc == 0 else ("quit",)
+        # then power the device off".
+        #
+        # A FAILED one offered "Continue", which named nothing that happens: it quit the UI and left
+        # a blank panel. Flagged on hardware 2026-08-25, and the operator was right to find it odd --
+        # a failure screen has exactly two useful actions, and neither of them is continuing. Trying
+        # again is the DOCUMENTED recovery (the installer takes no backups precisely because
+        # re-running has to work), and powering off is what gets the log onto the ESP, since
+        # save-log.sh runs when the unit stops.
+        if self.rc == 0:
+            self.result = ("poweroff",)
+        else:
+            self.result = ("retry",) if token == "S" else ("poweroff",)
 
     def finish(self, rc):
         self.rc = rc
@@ -884,7 +900,8 @@ class ProgressScreen:
             note = ("The disk WAS modified. Re-run the installer; Android's data is already gone."
                     if self.reached_carve else
                     "Nothing was written. The device is exactly as it was.")
-            buttons = [{"pos": "S", "label": "Continue"}]
+            buttons = [{"pos": "S", "label": "Try again"},
+                       {"pos": "SELECT", "label": "Power off"}]
             blocks = blocks + [("What happened", "\n".join(self.run.tail[-6:]))]
         return {
             "screen": "progress",

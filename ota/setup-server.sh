@@ -148,6 +148,12 @@ for ch in $CHANNELS; do
   install -d -o "$OWNER" -g "$OWNER" -m "$DOCROOT_MODE" "$DOCROOT/$ch"
   say "channel: $DOCROOT/$ch"
 done
+# The Steam seeds the network installer fetches, and NOT a channel — the client tree has nothing to
+# do with which OS channel a medium was built from, and every seed is named by its own sha256
+# (ota/publish-seed.sh). One flat directory, kept forever: an installer medium names exactly one seed
+# by hash and always will, so a seed is never superseded by a newer one.
+install -d -o "$OWNER" -g "$OWNER" -m "$DOCROOT_MODE" "$DOCROOT/seed"
+say "seeds:   $DOCROOT/seed"
 # A channel with no latest.json is the CORRECT resting state between releases, not a gap: the client
 # gets a 404, fails closed and exits 7 silently. A placeholder pointing at a bundle that is not there
 # would be worse — it would offer an update whose download 404s after the user said yes.

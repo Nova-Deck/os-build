@@ -333,7 +333,8 @@ KERNEL_SRC_HASH := work/.kernel-src.hash
 # ==============================================================================
 .PHONY: help all image toolchain kernel fw-linux fw-qcom base overlay verify-lock \
         rootfs relock mesa-x86 installer installer-root relock-installer \
-        initramfs steamcl grub sdcard verify-card test bundle sign-bundle publish-bundle deploy clean clean-base clean-overlay distclean
+        initramfs steamcl grub sdcard verify-card test bundle sign-bundle publish-bundle \
+        steam-seed-artifact publish-seed deploy clean clean-base clean-overlay distclean
 
 # An always-out-of-date prerequisite, for rules that must re-evaluate their own inputs every run
 # rather than trust a prerequisite's mtime. Only $(KERNEL_SRC_HASH) uses it; see the note there.
@@ -408,6 +409,7 @@ test: verify-lock ## Run the offline bootctl/post-install/pairingd/quirks/stage-
 	bash images/test-decky.sh
 	bash images/test-update.sh
 	bash images/test-publish-bundle.sh
+	bash images/test-publish-seed.sh
 	bash images/test-steamos-manager.sh
 	bash install/test-install.sh
 	bash install/test-ui.sh
@@ -480,6 +482,18 @@ steam-seed-sync:
 $(STEAM_SEED): steam-seed/STEAM_SEED.pin steam-seed/fetch-steam-seed.sh | steam-seed-sync
 	@[ -x "$@" ] || { echo "steam seed missing after sync: $@" >&2; exit 1; }
 	@touch $@
+
+# The same tree, packed for the NETWORK installer. A card pre-seeds /home from the directory
+# (mkfs.ext4 -d); the internal installer carries nothing and has to fetch it, so it needs an
+# artifact — content-addressed, because the medium verifies it against a sha256 baked in at build
+# time and install/release-info derives the URL from that same pin.
+#
+# PHONY, and it does not depend on $(STEAM_SEED): the output name is a hash of the input, so make
+# cannot express the target, and pack-seed.sh is deterministic (measured: an unchanged tree packs to
+# the same name). Sync first if you want a fresh seed — `make steam-seed-sync steam-seed-artifact`.
+.PHONY: steam-seed-artifact
+steam-seed-artifact: ## Pack work/steam-seed -> out/steam-seed/steam-seed-<sha256>.tar.zst (host)
+	steam-seed/pack-seed.sh
 
 # ==============================================================================
 # From-source overlay packages (host — build-overlay.sh drives docker + qemu binfmt)
@@ -801,6 +815,14 @@ publish-bundle: ## Publish BUNDLE=<file.raucb> to the OTA server (host; needs NO
 	@test -n "$(BUNDLE)" || { echo "pass BUNDLE=out/images/novadeck-<version>.raucb" >&2; exit 2; }
 	ota/publish-bundle.sh "$(BUNDLE)" $(CHANNEL)
 
+# The /home seed the network installer downloads. No channel argument: seeds are content-addressed
+# and live in one flat seed/ directory, because a Steam tree has nothing to do with which OS channel
+# a medium was built from. .github/workflows/release-seed.yml is the normal caller — the credentials
+# are what make CI the publisher — and this target is the same script by hand.
+publish-seed: ## Publish SEED=<steam-seed-<sha256>.tar.zst> to the OTA server (host; needs NOVADECK_OTA_SSH_KEY)
+	@test -n "$(SEED)" || { echo "pass SEED=out/steam-seed/steam-seed-<sha256>.tar.zst" >&2; exit 2; }
+	ota/publish-seed.sh "$(SEED)"
+
 # ==============================================================================
 # Deploy (host) — copy the stage-1 steamcl tree onto a mounted ESP
 # ==============================================================================
@@ -816,7 +838,7 @@ deploy: $(STEAMCL) ## Install the stage-1 steamcl tree onto ESP=<mountpoint>
 # the artifacts from inside a throwaway container as root, like clean-base. (out/.build-image.stamp
 # is host-owned and deliberately kept so the toolchain image isn't rebuilt.)
 clean: ## Remove built artifacts (out/), keep firmware/base caches + toolchain stamp
-	docker run --rm -v $(CURDIR)/out:/wo busybox rm -rf /wo/Image /wo/Image.gz /wo/dtbs /wo/modroot /wo/images /wo/boot /wo/initramfs.cpio.gz
+	docker run --rm -v $(CURDIR)/out:/wo busybox rm -rf /wo/Image /wo/Image.gz /wo/dtbs /wo/modroot /wo/images /wo/boot /wo/initramfs.cpio.gz /wo/steam-seed
 
 # work/base is root-owned (the bootstrap's pacman writes it as root inside a container), so a
 # plain rm fails for the build user — remove it from inside a throwaway container as root.

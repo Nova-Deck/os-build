@@ -2151,7 +2151,23 @@ if none of the candidates is present. And the two files the spine reads as data:
   an older installer image keeps working after a newer seed is published (it asks for its own bytes
   by hash and gets them or gets a 404), and a manifest can never hand it a tree the pin would then
   reject 1.7 GB into the download. The publisher therefore keeps old seeds; a medium in the field
-  names exactly one. The `/home` layout around it (the `deck/` directory and the `~/.steam` compat symlinks) is
+  names exactly one.
+
+  **LANDED 2026-08-25**: `steam-seed/pack-seed.sh` (`make steam-seed-artifact`) packs
+  `work/steam-seed` — measured, 3.3 GB → 1449 MiB in 2m46s at `zstd -19` — reads the archive back
+  before naming it, and writes `out/steam-seed/steam-seed-<sha>.tar.zst`. `ota/publish-seed.sh`
+  puts it at `<OTA_URL>/seed/`, gated on the file hashing to its own name (there is no signature to
+  gate on; the name IS the pin), refusing to overwrite a name that exists with different bytes and
+  no-opping on a byte-identical republish. `.github/workflows/release-seed.yml` is the normal
+  caller — dispatch-only, environment-gated, because the credentials are what make CI the publisher.
+  `images/test-publish-seed.sh` (23) covers the gate and the never-prune rule.
+
+  **THE PIN IS AN OUTPUT OF THAT RUN, NOT A TRACKED FILE.** The workflow prints the sha; an
+  installer image built afterwards passes `NOVADECK_SEED_SHA256=`, which `install/mkroot.sh` already
+  reads ahead of `install/steam-seed.sha256`. Committing a pin first and publishing to match it is
+  the same shape backwards: there would be a window where the tracked hash names bytes nobody has
+  uploaded, and a medium built in that window refuses at the seed step — after the carve. So
+  `release-installer.yml`, when it exists, takes the pin as an input rather than reading the tree. The `/home` layout around it (the `deck/` directory and the `~/.steam` compat symlinks) is
   `stage_deck_home`'s and is applied on the device, so the artifact and the card seed are the same
   bytes. The publisher must also emit its sha256 into the installer image as
   `/usr/lib/novadeck/install/steam-seed.sha256`; the spine refuses outright if that file is missing,

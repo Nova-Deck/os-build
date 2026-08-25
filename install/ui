@@ -46,7 +46,7 @@ from uipad import (                                                            #
     CARDINALS, CARDINAL_NAME, NullView, PadInput, ScriptedInput, TOKEN_BACK, TOKEN_QUIT, log)
 from uiflow import (                                                           # noqa: E402
     ConnectingScreen, NetJoin, NetworkScreen, PreflightScreen, ProgressScreen, SpineRun,
-    gather_preflight, net_diagnose, release_facts)
+    VerifyRun, gather_preflight, net_diagnose, release_facts)
 
 SOCK_PATH = os.environ.get("NOVADECK_UI_SOCK", "/run/novadeck/installer-ui.sock")
 # A file of one token per line drives the UI instead of a pad, and selects the null view. This is
@@ -464,6 +464,7 @@ def run(server, view, source, base, deadline=0):
     # to hand the screen back when it is answered -- the install is still running underneath it.
     stack = [base]
     spine = None
+    verify = None      # verify-install.sh, once an install has succeeded (#66)
     started = time.monotonic()
     # §4d's input check, throttled: it reads the kernel's device list, which is cheap but not free
     # at frame rate, and the answer only changes when somebody plugs something in.
@@ -545,6 +546,34 @@ def run(server, view, source, base, deadline=0):
                     progress.finish(rc)
                 log("the spine exited %d" % rc)
                 spine = None
+                # A SUCCESSFUL INSTALL IS NOT A VERIFIED ONE, and until now nothing ever read back
+                # what was written (#66). verify-install.sh is launched from HERE rather than from
+                # the spine on purpose -- "the spine writes; this reads" -- and it has to happen
+                # while the card is still in, which is the window its own header asks for and the
+                # one the done screen was about to tell the operator to close.
+                if rc == 0 and progress is not None:
+                    try:
+                        verify = VerifyRun(progress.disk)
+                        progress.begin_verify()
+                    except OSError as e:
+                        # A verifier that will not start is reported, never fatal: the install
+                        # itself succeeded and the operator still needs the screen that says so.
+                        log("could not start the check: %s" % e)
+                        progress.finish_verify(1)
+
+        # The check, once the install has won. Same non-blocking read as the spine.
+        if verify is not None:
+            progress = next((s for s in stack if s.name == "progress"), None)
+            for line in verify.poll():
+                log("verify: %s" % line)
+                if progress is not None:
+                    progress.feed_verify(line)
+            vrc = verify.returncode()
+            if vrc is not None and not verify.buf:
+                if progress is not None:
+                    progress.finish_verify(vrc)
+                log("the check exited %d" % vrc)
+                verify = None
 
         req = server.poll()
         if req is not None and not have_input:
@@ -622,13 +651,19 @@ def run(server, view, source, base, deadline=0):
                 # it would be a promise nothing behind it keeps.
                 spine = SpineRun(result[1], server.path,
                                  top.facts["bundle"], top.facts["seed"], "fresh")
-                stack.append(ProgressScreen(spine))
+                # The disk travels WITH the screen: when the spine finishes, the pre-flight that
+                # knew which disk this is has long been off the stack, and the checker must not
+                # go looking for it a second time.
+                stack.append(ProgressScreen(spine, top.facts["disk"]))
             elif result[0] == "retry":
                 # A failed install, from the top. Re-running IS the recovery -- the installer keeps
                 # no backups precisely because it has to be -- and the facts are re-gathered rather
                 # than reused, since a partial carve has changed the very disk they describe.
                 log("retrying after a failed install")
                 spine = None
+                if verify is not None:
+                    verify.stop()
+                    verify = None
                 stack.pop()
                 facts, why = gather_preflight()
                 stack[-1] = PreflightScreen(facts) if facts else IdleScreen(why)

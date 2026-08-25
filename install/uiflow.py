@@ -27,6 +27,8 @@ SELECT_TARGET = os.environ.get(
     "NOVADECK_SELECT_TARGET", "/usr/lib/novadeck/install/select-target.sh")
 CARVE = os.environ.get("NOVADECK_CARVE", "/usr/lib/novadeck/install/carve.sh")
 SPINE = os.environ.get("NOVADECK_SPINE", "/usr/lib/novadeck/install/novadeck-install")
+VERIFY_INSTALL = os.environ.get(
+    "NOVADECK_VERIFY_INSTALL", "/usr/lib/novadeck/install/verify-install.sh")
 # WHERE THE BYTES COME FROM, and the two halves arrive differently on purpose. The OS bundle is
 # resolved from the update channel at install time by install/release-info, so any medium installs
 # the current release. The Steam seed /home is built from is CARRIED BY THE MEDIUM -- 1.4 GiB staged
@@ -757,7 +759,76 @@ class ConnectingScreen:
         }
 
 
-class SpineRun:
+class ChildLines:
+    """
+    Whole lines from a child's merged stdout/stderr, without ever blocking the frame.
+
+    Shared by SpineRun and VerifyRun because they read the same way and only differ in what they
+    launch. Subclasses set `self.proc` (non-blocking stdout) and call `_init_lines()`.
+    """
+
+    def _init_lines(self):
+        os.set_blocking(self.proc.stdout.fileno(), False)
+        self.buf = b""
+        self.tail = []          # the last few lines, for the failure text
+
+    def poll(self):
+        """Whatever whole lines are available right now. Never blocks."""
+        try:
+            chunk = self.proc.stdout.read()
+        except (BlockingIOError, ValueError):
+            chunk = None
+        if chunk:
+            self.buf += chunk
+        lines = []
+        while b"\n" in self.buf:
+            line, self.buf = self.buf.split(b"\n", 1)
+            text = line.decode("utf-8", "replace").rstrip()
+            if text:
+                lines.append(text)
+                self.tail = (self.tail + [text])[-12:]
+        return lines
+
+    def returncode(self):
+        return self.proc.poll()
+
+    def stop(self):
+        if self.proc.poll() is None:
+            self.proc.terminate()
+
+
+class VerifyRun(ChildLines):
+    """
+    install/verify-install.sh as a child, run by the UI once the spine reports success.
+
+    THE UI RUNS IT, NOT THE SPINE, and that is the whole point. verify-install.sh exists as a
+    separate program because "the spine writes; this reads -- an installer that graded its own work
+    would share the bug with its grader", so folding it into the spine's success path would undo
+    the reason it is a separate file. Running it from here keeps the two judgements apart while
+    still getting the answer in front of the operator.
+
+    IT HAD NO CALLER AT ALL UNTIL NOW (#66). The script's own header says to run it "after the
+    install and BEFORE the card comes out, while there is still a shell that can fix things" -- and
+    a release medium has no shell: no sshd, no Wi-Fi, and a session whose only client is this UI.
+    So the tool shipped on every medium and nothing could ever invoke it. Confirmed by the first
+    end-to-end install (Pocket ACE, 2026-08-25): zero mentions in the whole ESP log.
+
+    The disk is PASSED, never discovered. verify-install.sh can find the installed disk itself, but
+    we already know which one the spine just wrote -- and asking it to search is a second copy of a
+    rule that has exactly one right answer here.
+    """
+
+    def __init__(self, disk):
+        import subprocess
+
+        argv = [VERIFY_INSTALL] + ([disk] if disk else [])
+        log("checking the install: %s" % " ".join(argv))
+        self.proc = subprocess.Popen(
+            argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=0)
+        self._init_lines()
+
+
+class SpineRun(ChildLines):
     """install/novadeck-install as a child process, read without blocking the frame."""
 
     def __init__(self, gib, sock_path, bundle, seed, intent):
@@ -788,33 +859,7 @@ class SpineRun:
         log("starting the spine: %s" % " ".join(argv))
         self.proc = subprocess.Popen(
             argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, bufsize=0)
-        os.set_blocking(self.proc.stdout.fileno(), False)
-        self.buf = b""
-        self.tail = []          # the last few lines, for the failure text
-
-    def poll(self):
-        """Whatever whole lines are available right now. Never blocks."""
-        try:
-            chunk = self.proc.stdout.read()
-        except (BlockingIOError, ValueError):
-            chunk = None
-        if chunk:
-            self.buf += chunk
-        lines = []
-        while b"\n" in self.buf:
-            line, self.buf = self.buf.split(b"\n", 1)
-            text = line.decode("utf-8", "replace").rstrip()
-            if text:
-                lines.append(text)
-                self.tail = (self.tail + [text])[-12:]
-        return lines
-
-    def returncode(self):
-        return self.proc.poll()
-
-    def stop(self):
-        if self.proc.poll() is None:
-            self.proc.terminate()
+        self._init_lines()
 
 
 class ProgressScreen:
@@ -822,14 +867,38 @@ class ProgressScreen:
 
     name = "progress"
 
-    def __init__(self, run):
+    def __init__(self, run, disk=None):
         self.run = run
+        self.disk = disk                # which disk to hand verify-install.sh when the spine wins
         self.phase = None
         self.percent = None
         self.message = ""
         self.rc = None
         self.reached_carve = False      # i.e. whether the disk has been modified
         self.result = None              # ("quit",)
+        # None = not started, "running", "ok", "bad", "unrunnable". A successful install is not the
+        # same claim as a verified one, and the screen must not merge them.
+        self.verify = None
+        self.verify_bad = []            # the `!!` lines, which are what the operator has to read
+        self.verify_tail = []           # its last few lines, for the case where it refused to run
+
+    def begin_verify(self):
+        self.verify = "running"
+
+    def feed_verify(self, line):
+        """verify-install.sh prints `    ok  ...` and `    !!  ...`; only the failures go on screen."""
+        text = line.strip()
+        self.verify_tail = (self.verify_tail + [text])[-6:]
+        if text.startswith("!!"):
+            self.verify_bad.append(text[2:].strip())
+
+    def finish_verify(self, rc):
+        # rc 1 is BOTH "a check failed" and "it could not run" (its die() also exits 1), so the
+        # `!!` lines are what tells them apart: a run that refused printed none.
+        if rc == 0:
+            self.verify = "ok"
+        else:
+            self.verify = "bad" if self.verify_bad else "unrunnable"
 
     def feed(self, line):
         import re
@@ -860,7 +929,11 @@ class ProgressScreen:
         # again is the DOCUMENTED recovery (the installer takes no backups precisely because
         # re-running has to work), and powering off is what gets the log onto the ESP, since
         # save-log.sh runs when the unit stops.
-        if self.rc == 0:
+        # A VERIFIED install offers only Power off, so any press means that. An install the CHECK
+        # rejected offers the same two actions a failed one does -- it is the one rc==0 state where
+        # trying again is the right answer, so it must route like a failure rather than powering
+        # off on a press meant for "Try again".
+        if self.rc == 0 and self.verify != "bad":
             self.result = ("poweroff",)
         else:
             self.result = ("retry",) if token == "S" else ("poweroff",)
@@ -896,8 +969,33 @@ class ProgressScreen:
         buttons = []
         if self.rc == 0:
             title = "NovaDeck is installed"
-            note = "Remove the SD card, then power the device off."
+            # THE CARD MUST NOT COME OUT UNTIL THE CHECK HAS SPOKEN. verify-install.sh is the only
+            # thing that reads back what was written, and its own header asks to be run "BEFORE the
+            # card comes out, while there is still a shell that can fix things" -- so telling the
+            # operator to remove it while the check is still running would waste the one window it
+            # has. Power off stays offered throughout: a check that hangs must never trap anyone.
             buttons = [{"pos": "S", "label": "Power off"}]
+            if self.verify in (None, "running"):
+                note = "Checking the install -- leave the SD card in."
+            elif self.verify == "ok":
+                note = "Remove the SD card, then power the device off."
+                blocks = blocks + [("Checked", "The eight partitions carry what the boot chain "
+                                               "looks for. This does not prove the device boots -- "
+                                               "that is the next thing to try.")]
+            elif self.verify == "unrunnable":
+                # NOT a failed install, and it may not be reported as one. Say which question went
+                # unanswered instead of inventing an answer to it.
+                note = "Remove the SD card, then power the device off."
+                blocks = blocks + [("The check could not run",
+                                    "The install finished, but the verifier did not run, so "
+                                    "nothing has read back what was written.\n"
+                                    + "\n".join(self.verify_tail[-4:]))]
+            else:
+                title = "NovaDeck is installed, but the check did not pass"
+                note = ("Do not remove the SD card. Re-running the installer is the recovery.")
+                blocks = blocks + [("What did not check out", "\n".join(self.verify_bad))]
+                buttons = [{"pos": "S", "label": "Try again"},
+                           {"pos": "SELECT", "label": "Power off"}]
         elif self.rc is not None:
             title = "The install did not finish"
             # THE ONE THING A FAILURE OWES THE USER: which of two states the device is in. "It

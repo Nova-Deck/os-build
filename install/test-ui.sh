@@ -1335,10 +1335,66 @@ printf '%s' "$out" | grep -qi 'disk WAS modified' \
 printf '%s' "$out" | grep -q 'the carve failed' \
   && ok "and it shows the tail of what the spine actually said" \
   || bad "the error text is not on the screen"
-out="$(progress 'p.finish(0); print(json.dumps(p.describe()))')"
+CASE="progress: a successful install is not a VERIFIED install (#66)"
+# verify-install.sh shipped on every medium and NOTHING could invoke it -- a release medium has no
+# shell, and the first end-to-end install (Pocket ACE, 2026-08-25) mentioned it zero times in the
+# whole ESP log. The UI runs it now, and the done screen must not tell anyone to pull the card
+# before it has spoken: that window is the only one the check gets.
+out="$(progress 'p.finish(0); p.begin_verify(); print(json.dumps(p.describe()))')"
+printf '%s' "$out" | grep -qi 'Remove the SD card' \
+  && bad "it says to remove the card while the check is still running: $out" \
+  || ok "while the check runs it does NOT tell the operator to pull the card"
+printf '%s' "$out" | grep -qi 'leave the SD card in' \
+  && ok "and says to leave it in, which is what the check needs" \
+  || bad "it does not say to leave the card in: $out"
+printf '%s' "$out" | grep -q 'Power off' \
+  && ok "Power off stays offered throughout -- a check that hangs must not trap anyone" \
+  || bad "a running check leaves the operator with no button at all: $out"
+
+out="$(progress '
+p.finish(0); p.begin_verify()
+p.feed_verify("    !!  novadeck-root-A is empty")
+p.finish_verify(1); print(json.dumps(p.describe()))')"
+printf '%s' "$out" | grep -q 'novadeck-root-A is empty' \
+  && ok "a failed check puts the !! line on screen, not just a verdict" \
+  || bad "the failing check is not named: $out"
+# NOT a bare grep for "Remove the SD card": the correct screen says "Do NOT remove the SD card",
+# which contains it. The first version of this case asserted the negation and passed on the bug.
+printf '%s' "$out" | grep -qi 'do not remove the SD card' \
+  && ok "and it tells them to LEAVE the card in, not to remove it" \
+  || bad "a failed check does not warn against removing the card: $out"
+printf '%s' "$out" | python3 -c '
+import json,sys
+d = json.load(sys.stdin)
+sys.exit(0 if [b for b in d["buttons"] if b["label"] == "Try again"] else 1)' \
+  && ok "a rejected install offers Try again -- the documented recovery" \
+  || bad "a rejected install offers no way to re-run it: $out"
+# A press on that screen must RETRY, not power off. rc==0 used to mean "any press = poweroff".
+out="$(progress '
+p.finish(0); p.begin_verify()
+p.feed_verify("    !!  something")
+p.finish_verify(1); p.handle("S"); print(p.result[0])')"
+[ "$out" = retry ] \
+  && ok "and pressing it retries rather than powering off" \
+  || bad "the press did not route to retry: $out"
+
+# rc 1 is BOTH "a check failed" and "it could not run" -- die() also exits 1 -- so the !! lines are
+# what tells them apart. A verifier that refused must not be reported as a failed install.
+out="$(progress 'p.finish(0); p.begin_verify(); p.finish_verify(1); print(json.dumps(p.describe()))')"
+printf '%s' "$out" | grep -qi 'could not run' \
+  && ok "a check that REFUSED to run says so, instead of claiming the install failed" \
+  || bad "an unrunnable check is reported as a failed one: $out"
+printf '%s' "$out" | grep -qi 'did not pass' \
+  && bad "it claims the check failed when the check never ran: $out" \
+  || ok "and it does not claim the install was rejected"
+
+out="$(progress 'p.finish(0); p.begin_verify(); p.finish_verify(0); print(json.dumps(p.describe()))')"
 printf '%s' "$out" | grep -qi 'Remove the SD card' \
   && ok "success tells the user the one thing they must do next" \
   || bad "the success screen does not say to remove the card"
+printf '%s' "$out" | grep -qi 'does not prove the device boots' \
+  && ok "and the check does not overclaim -- it never says the device will boot" \
+  || bad "the verified screen overstates what was checked: $out"
 printf '%s' "$out" | grep -qiE '\bpress [ABXY]\b' \
   && bad "the result screen names a face-button letter" \
   || ok "and it still names no face-button letter"

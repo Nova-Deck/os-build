@@ -132,7 +132,7 @@ class ScriptedInput:
     """
     A file of tokens, one per line, consumed one per frame. The headless seam.
 
-    `SHOWN` is the direct analogue of install/test-install.sh's confirm-typist wrapper: it presses,
+    `SHOWN` is the direct analogue of tests/test-install.sh's confirm-typist wrapper: it presses,
     in order, the sequence the screen is displaying right now. It is a KEYBOARD, not a bypass — the
     sequence is random per attempt, so a driver that could not read the screen could not answer at
     all, which is exactly the user's position. Every wrong-answer case in the suite is written with

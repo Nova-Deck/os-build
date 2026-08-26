@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Offline tests for the INSTALLER MEDIUM — Phase 6 of .claude/plans/internal-install.plan.md.
 #
-#   install/test-mkimage.sh
+#   tests/test-mkimage.sh
 #
 # Host-only: no docker, no root, no built tree, no network. Run via `make test`. Peer of
-# install/test-mkroot.sh, which covers the ROOT; this covers what gets written around it — the
+# tests/test-mkroot.sh, which covers the ROOT; this covers what gets written around it — the
 # two-partition table, the boot chain and the generated grub.cfg.
 #
 # THE ONE THAT EARNS ITS KEEP IS THE DTB PARITY CHECK. install/gen-grub-cfg.sh and

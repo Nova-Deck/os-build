@@ -65,7 +65,7 @@ cosign.key
 # key and therefore never runs on a push. A cert whose key we no longer hold ships a device that
 # rejects every future bundle, and nothing else in the repo can see that. Rotation becomes a commit,
 # which is an audit trail rather than a chore. Two negations is where this stops: every PEM under
-# images/rauc/ is asserted to contain no PRIVATE KEY by images/test-verify-signing.sh, so the
+# images/rauc/ is asserted to contain no PRIVATE KEY by tests/test-verify-signing.sh, so the
 # exception is policed by a test and not by care.
 !/images/rauc/release.cert.pem
 # Dev-card Wi-Fi credentials for throwaway dev cards (NOVADECK_DEV=1) — never committed.

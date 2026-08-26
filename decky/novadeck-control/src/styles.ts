@@ -34,7 +34,7 @@ export const styles = `
          comment ENDS the string: every rule below the stray one silently disappears and each
          tab renders unstyled. It does not fail the build -- what follows the truncation parses
          as a valid expression -- so tsc and rollup both stay green (cost two broken deploys,
-         2026-08-09). images/test-decky.sh now asserts on it. */
+         2026-08-09). tests/test-decky.sh now asserts on it. */
       /* No overflow:hidden. This wrapper is the only element between PanelSectionRow and the
          slider, and Decky paints a focused row's highlight slightly OUTSIDE the row's own box
          (see the bare-dropdown note above) -- clipping here cropped the highlight back to the

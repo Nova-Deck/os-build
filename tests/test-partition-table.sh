@@ -2,7 +2,7 @@
 # Every FAT partition in partition-table.txt must be a filesystem the FIRMWARE can mount, on BOTH
 # media we ship to — 512-byte SD cards and 4096-byte internal UFS.
 #
-#   images/test-partition-table.sh          # needs dosfstools
+#   tests/test-partition-table.sh          # needs dosfstools
 #
 # WHY THIS SUITE EXISTS. A FAT32 needs at least 65525 data clusters to be one, and cluster count
 # scales with SECTORS, not bytes. The table sizes partitions in bytes, so one row is two different

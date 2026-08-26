@@ -35,7 +35,7 @@
 # are not the same binary, and a 1.14-on-device/1.15-in-container skew is exactly how the verity
 # install bug reached hardware. Only an HW `rauc install` is evidence about the device.
 #
-# What proves this file's own negatives bite: images/test-verify-signing.sh, which feeds it
+# What proves this file's own negatives bite: tests/test-verify-signing.sh, which feeds it
 # deliberately broken configs and profiles and requires it to go RED for each one.
 #
 # Needs rauc + openssl, so it runs inside novadeck-build:

@@ -2,7 +2,7 @@
 # Offline checks for the Decky stack: the loader pin, the homebrew seed/sync, the units that run
 # it, the FEX AppConfig, the CEF sentinel, and the novadeck-control plugin backend.
 #
-#   images/test-decky.sh
+#   tests/test-decky.sh
 #
 # WHY THIS FILE EXISTS. Almost everything decky-shaped fails INVISIBLY on device: a loader without
 # its exec bit, a unit condition on a path the image spells differently, a sync that clobbers a
@@ -570,7 +570,7 @@ grep -q 'decky-loader/PluginLoader' "$ROOT/images/guard-rootfs.sh" \
   || bad "guard-rootfs has no loader assertion: an incomplete image would ship undetected"
 grep -q 'test-decky.sh' "$ROOT/Makefile" \
   && ok "this suite is wired into make test (a suite nothing runs is documentation)" \
-  || bad "images/test-decky.sh is not in the Makefile test target"
+  || bad "tests/test-decky.sh is not in the Makefile test target"
 
 rm -rf "$PYCACHE_TMP"   # no trap: one is already claimed for EXIT below, and a strand in /tmp is
                         # harmless — the thing that must never be dirtied is the tree, and the

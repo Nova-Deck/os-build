@@ -2,7 +2,7 @@
 # Offline tests for carve.sh, the DESTRUCTIVE half — Phase 3 of
 # .claude/plans/internal-install.plan.md.
 #
-#   install/test-carve.sh          # needs sgdisk; run inside novadeck-build
+#   tests/test-carve.sh          # needs sgdisk; run inside novadeck-build
 #
 # THIS IS THE SCRIPT THAT DELETES PARTITIONS, so the assertion budget goes on the two claims that
 # stand between a user and an EDL recovery, and both are checked against the RESULTING GPT rather
@@ -39,7 +39,7 @@ command -v sgdisk >/dev/null 2>&1 || {
 
 T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
 export NOVADECK_SELECT_FIXTURE=1
-. "$ROOT/install/lib-gptfixture.sh"
+. "$ROOT/tests/lib-gptfixture.sh"
 
 OUR_NAMES=(NOVADECK-ESP novadeck-efi-A novadeck-efi-B novadeck-root-A novadeck-root-B \
            novadeck-var-A novadeck-var-B novadeck-home)

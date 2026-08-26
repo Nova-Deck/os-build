@@ -8,7 +8,7 @@
 #
 # <device-id> and <name> mirror NOVADECK_DEVICE_ID / NOVADECK_DEVICE_NAME in the
 # runtime profiles (the menuentry id/title must match the identity the OS
-# reports); images/test-stage2-grub.sh cross-checks the two stay in sync. Every
+# reports); tests/test-stage2-grub.sh cross-checks the two stay in sync. Every
 # <dtb> must exist under kernel/dts/qcom/ and every board DTB must be covered
 # here or by the filename-derived top-dpad entry.
 #

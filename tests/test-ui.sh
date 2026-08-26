@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Offline test for install/ui and install/confirm-ui — the gamepad half of §4d's consent contract.
 #
-#   install/test-ui.sh
+#   tests/test-ui.sh
 #
 # WHY THIS FILE EXISTS. §4d has one trap that every stubbed gate case passes without: THE
 # RENDERER'S STDOUT IS THE ANSWER AND NOTHING ELSE. A renderer that also writes its screen there
@@ -16,7 +16,7 @@
 # real unix socket, and is driven by the real install/confirm-ui. What is NOT covered is anything
 # with a pixel in it: the drawing is asserted through describe(), which is what the view is handed.
 #
-# The end-to-end against the SPINE lives in install/test-install.sh, next to its sandbox, for the
+# The end-to-end against the SPINE lives in tests/test-install.sh, next to its sandbox, for the
 # same reason the tty renderer's does: the sandbox that stubs sgdisk/mkfs/rauc is that file's, and
 # a second copy of it here would be a regression rather than a convenience.
 set -uo pipefail
@@ -37,7 +37,7 @@ bad() { FAIL=$((FAIL+1)); printf '  FAIL %s -- %s\n' "$CASE" "$1"; }
 T="$(mktemp -d)"
 trap 'rm -rf "$T"; pkill -f "$UI" 2>/dev/null' EXIT
 # Loading install/ui as a module writes a __pycache__ next to it, which the installer image build
-# would then copy verbatim. Keep the bytecode in the sandbox. Same reason as images/test-update.sh.
+# would then copy verbatim. Keep the bytecode in the sandbox. Same reason as tests/test-update.sh.
 export PYTHONPYCACHEPREFIX="$T/pycache"
 export NOVADECK_UI_DEADLINE=30
 

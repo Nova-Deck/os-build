@@ -2,12 +2,12 @@
 # Offline test for /usr/lib/rauc/post-install.sh — the RAUC handler that turns a freshly written
 # slot into a bootable one.
 #
-#   images/test-post-install.sh
+#   tests/test-post-install.sh
 #
 # WHY THIS FILE EXISTS. The hook is the most destructive program we ship: it runs `mkfs.ext4` and
 # `btrfstune -f -U` against a partition it picks itself, and the only two places its answer could
 # come from disagree by design (steamos-bootconf this-image vs RAUC's exported slot names). Until
-# this file, none of that had offline coverage — images/test-bootctl.sh asserts the calls the hook
+# this file, none of that had offline coverage — tests/test-bootctl.sh asserts the calls the hook
 # MAKES through the backend, never the hook itself. That is the same gap that let `set-state <slot>
 # bad` ship broken and cost a hardware install at 40%.
 #

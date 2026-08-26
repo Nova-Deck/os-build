@@ -7,7 +7,7 @@
 > again (`boot-count` 1 → 2). Designed the same day after `steamenv_init`
 > was tried on hardware and failed; built the same day. The module is
 > `boot/patches/grub/0002-add-the-novadeck-stage-2-module.patch`, the call site is
-> `boot/gen-grub-cfg.sh`, and `images/test-stage2-grub.sh` asserts it. `steamenv` is gone from the
+> `boot/gen-grub-cfg.sh`, and `tests/test-stage2-grub.sh` asserts it. `steamenv` is gone from the
 > tree. The question this doc originally left open — whether ABL publishes the ESP as a filesystem
 > handle — is now **answered from steamcl's source**, not deferred to a boot: see "Why the ESP is
 > reachable" below.
@@ -95,7 +95,7 @@ deleted rather than left to rot:
   `steamenv_boot` — the reasons (UEFI `ChainLoader*` poking meaningless on ABL, cmdline juggling, a
   redundant `steamos.efi=PARTUUID=` append) are recorded here and in `dd8bec5`, so nothing is lost;
 * the `grub-*.cfg boots with plain linux, not steamenv_boot` assertion in
-  `images/test-stage2-grub.sh`, along with the `steamenv_init` presence and ordering assertions
+  `tests/test-stage2-grub.sh`, along with the `steamenv_init` presence and ordering assertions
   added in `dd8bec5` — all three describe a module that will not exist.
 
 What replaces them is one assertion that the config invokes `novadeck_bootattempts` with this

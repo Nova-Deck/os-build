@@ -12,7 +12,7 @@
 # images/partition-table.txt. A mismatch anywhere is a board that cannot be selected, a menu entry
 # that boots the wrong DTB, or a slot that mounts the other slot's /var.
 #
-#   images/test-stage2-grub.sh
+#   tests/test-stage2-grub.sh
 #
 # Everything runs on the host with no root, no device and no cross-build: the configs under test
 # are GENERATED here into a temp dir, so this never skips and never asserts against a stale

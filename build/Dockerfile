@@ -53,7 +53,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Set here rather than in `full` so both stages carry them — a derived stage inherits its parent's
-# config, and images/test-verify-signing.sh is invoked as a bare argument (the ENTRYPOINT bash is
+# config, and tests/test-verify-signing.sh is invoked as a bare argument (the ENTRYPOINT bash is
 # what runs it).
 WORKDIR /src
 ENTRYPOINT ["/bin/bash"]
@@ -108,7 +108,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 #
 # grub-common carries the host-side tools both stages use: grub-mkfont (steamcl's font and ours),
 # grub-mkimage, grub-editenv (seeding the stage-2 env block) and grub-script-check (which
-# images/test-stage2-grub.sh runs over the generated grub.cfg files).
+# tests/test-stage2-grub.sh runs over the generated grub.cfg files).
 #
 # zstd is the BINARY, which GNU tar shells out to for --zstd; tar 1.35 accepts the flag either way
 # and fails at run time without it. images/assemble-rootfs.sh needs it for var-seed.tar.zst, the

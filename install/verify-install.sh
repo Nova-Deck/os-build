@@ -174,7 +174,7 @@ fi
 
 # --- 3. the slot witness -------------------------------------------------------------------------
 echo "  2. slot witness"
-# UPPERCASE, and that is not a detail to normalise away. images/test-post-install.sh states the
+# UPPERCASE, and that is not a detail to normalise away. tests/test-post-install.sh states the
 # convention -- the witness records the slot "in the bootconf naming (A/B)" -- and asserts 'B' for
 # slot B. seed_var writes $SLOT, which is that same naming.
 #

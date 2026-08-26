@@ -51,7 +51,7 @@
 # with a resume flag and a stall guard, then install from disk; see the block above EXIT_OK for
 # what each of those did and which one has no replacement.
 #
-# TEST SEAMS, in the same spirit as novadeck-bootctl's: images/test-update.sh executes THIS file
+# TEST SEAMS, in the same spirit as novadeck-bootctl's: tests/test-update.sh executes THIS file
 # and overrides the environment below to redirect the release file, the config, the staging
 # directory, the fetch tool and the bus into a sandbox. What runs under test is the artifact that
 # ships.

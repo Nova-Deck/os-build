@@ -2,7 +2,7 @@
 # Offline tests for select-target.sh, driven off the REAL captured GPTs — Phase 3 of
 # .claude/plans/internal-install.plan.md.
 #
-#   install/test-select-target.sh          # needs sgdisk + mtools + dosfstools
+#   tests/test-select-target.sh          # needs sgdisk + mtools + dosfstools
 #
 # WHAT MAKES THESE DIFFERENT from synthetic fixtures. docs/internal-storage.md holds five boards
 # captured off hardware, and every partition table here is rebuilt from those rows -- real names,
@@ -42,9 +42,9 @@ T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
 export NOVADECK_SELECT_FIXTURE=1
 
 # --- rebuild a captured disk as a real GPT --------------------------------------------------------
-# Shared with install/test-carve.sh, which needs the same five boards as REAL GPTs. A second copy of
+# Shared with tests/test-carve.sh, which needs the same five boards as REAL GPTs. A second copy of
 # that awk would be the obvious place for the two suites to drift apart.
-. "$ROOT/install/lib-gptfixture.sh"
+. "$ROOT/tests/lib-gptfixture.sh"
 # lib-gpt.sh too: the residue case below asserts against the same live-index reader the script
 # under test uses, and against the Android type GUID it names.
 . "$ROOT/images/lib-gpt.sh"

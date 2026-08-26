@@ -212,7 +212,7 @@ check_efi() {  # <partnum> <letter> <self> <other>
   # The shipped grub.cfg must be EXACTLY what boot/gen-grub-cfg.sh produces for THIS slot. One
   # comparison covers the whole class: a stale out/boot from an older build, slot A's config
   # written onto slot B's partition, or a generator change that never reached the card. What the
-  # config has to CONTAIN is asserted by images/test-stage2-grub.sh; this asserts it arrived.
+  # config has to CONTAIN is asserted by tests/test-stage2-grub.sh; this asserts it arrived.
   if [ -x "$ROOT/boot/gen-grub-cfg.sh" ]; then
     if "$ROOT/boot/gen-grub-cfg.sh" "$letter" "$T/expect-$letter.cfg" >/dev/null 2>&1; then
       mtype -i "$IMG@@$off" ::/EFI/steamos/grub.cfg >"$T/oncard-$letter.cfg" 2>/dev/null || true

@@ -505,7 +505,7 @@ fi
 #
 # nofail on both, deliberately: this feeds native x86 Linux games only. A missing or corrupt
 # guest must cost x86 Linux titles, never a boot. That makes every failure here a quiet one --
-# hence the gates below, and images/test-graphics-provider.sh for the parts visible in
+# hence the gates below, and tests/test-graphics-provider.sh for the parts visible in
 # committed files.
 #
 # THE GATE IS NOT OPTIONAL, and its exit code is not the signal. `dump.erofs --path` returns 0 for
@@ -1308,7 +1308,7 @@ for slot in a b; do
   # UPPERCASE, matching the boot chain and the installer. The loop variable stays lowercase because
   # it names the images and the partitions (var-a, novadeck-var-A via ${slot^^}), but the WITNESS is
   # in bootconf naming: the kernel command line carries novadeck.slot=A|B, seed_var writes $SLOT,
-  # and images/test-post-install.sh asserts 'B'. This wrote 'a' and was the only thing in the
+  # and tests/test-post-install.sh asserts 'B'. This wrote 'a' and was the only thing in the
   # system spelling it lowercase -- discovered 2026-08-22 when install/verify-install.sh, which
   # runs the card's check list against a real install, disagreed with images/verify-card.sh about
   # the same file. Nothing reads it at runtime (the initramfs takes the slot from the cmdline), so

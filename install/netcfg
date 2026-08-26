@@ -24,7 +24,7 @@ set -uo pipefail
 PROG=${0##*/}
 log() { printf '[%s] %s\n' "$PROG" "$*" >&2; }
 
-# Test seams, in the spirit of the rest of install/: install/test-netcfg.sh executes THIS file with
+# Test seams, in the spirit of the rest of install/: tests/test-netcfg.sh executes THIS file with
 # every tool stubbed and every path redirected. What runs under test is the artifact that ships.
 WIFI_CONF=${NOVADECK_WIFI_CONF:-/esp/novadeck/wifi.conf}
 
@@ -35,7 +35,7 @@ WIFI_CONF=${NOVADECK_WIFI_CONF:-/esp/novadeck/wifi.conf}
 # `ota.novadeck.org`, a host that does not exist.
 #
 # The literal is written twice, here and in fs-overlay/usr/bin/novadeck-update, because one is
-# shell and the other Python. install/test-ui.sh asserts the two agree; that assertion is the only
+# shell and the other Python. tests/test-ui.sh asserts the two agree; that assertion is the only
 # thing that keeps them the same URL.
 OTA_CONFIG=${NOVADECK_OTA_CONFIG:-/etc/novadeck/ota.conf}
 OTA_DEFAULT_URL=https://updates.novadeck.cloud-ip.cc

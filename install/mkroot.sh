@@ -154,7 +154,7 @@ FOREIGN_FILES=(
   # HW-FOUND 2026-08-24: select-target.sh sources lib-gpt.sh and died with "cannot find lib-gpt.sh"
   # on the first medium that got far enough to look for a disk. gather_preflight() read that
   # non-zero exit as "no install target", which is a NORMAL outcome, so the UI fell back to its
-  # idle screen and said nothing at all. install/test-mkroot.sh checked that the four files listed
+  # idle screen and said nothing at all. tests/test-mkroot.sh checked that the four files listed
   # here existed; nothing checked the list was COMPLETE against what the code actually sources.
   "images/lib-gpt.sh:lib-gpt.sh"
 )
@@ -668,7 +668,7 @@ docker run --rm --platform linux/arm64 \
   # image gets one, but that overlay is what forces an initramfs, and it exists so a user can
   # persist config across updates -- neither of which an installer that runs once from removable
   # media needs. The writers are few and enumerable, so each is pointed at /run instead. A writer
-  # nobody enumerated is the risk this trades for; install/test-mkroot.sh greps the shipped payload
+  # nobody enumerated is the risk this trades for; tests/test-mkroot.sh greps the shipped payload
   # for new ones, and /var is a tmpfs at runtime via systemd.volatile=state on the cmdline.
   #
   # 1. machine-id. The file must EXIST for systemd to bind-mount a transient one over it from tmpfs
@@ -808,7 +808,7 @@ docker run --rm --platform linux/arm64 \
       >/target/etc/ssh/sshd_config.d/00-novadeck-installer.conf
 
     # The key generator is a COMMITTED unit file (install/units/), not text printf-ed from here.
-    # A unit generated inside this container is a unit images/test-units.sh never lints, and a
+    # A unit generated inside this container is a unit tests/test-units.sh never lints, and a
     # misspelled directive is silently IGNORED by systemd rather than rejected
     # ([[systemd-execonfailure-is-not-a-directive]]) — so the one unit whose failure mode is "no
     # remote access on the image whose remote access is the whole point" would have been the one

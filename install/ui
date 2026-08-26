@@ -28,7 +28,7 @@
 # event boundary in pad_token(), and no button letter travels any further into this file or onto
 # the screen. See §4d.
 #
-# TEST SEAMS, in the spirit of novadeck-update's: install/test-ui.sh executes THIS file and
+# TEST SEAMS, in the spirit of novadeck-update's: tests/test-ui.sh executes THIS file and
 # redirects the socket and the input source into a sandbox. What runs under test is what ships.
 import json
 import os

@@ -28,7 +28,7 @@ TABLE="${NOVADECK_PARTITION_TABLE:-$SELFDIR/partition-table.txt}"
 # same reason. It is not sourced HERE: the containment check that needs it lives in the script this
 # one emits, which runs in a bare `bash -c` with nothing but the environment. So the path travels
 # as an environment variable and the emitted TEXT stays identical whichever copy generated it --
-# which is what install/test-install.sh case 9 asserts, and what would break if the resolved path
+# which is what tests/test-install.sh case 9 asserts, and what would break if the resolved path
 # were baked into the output.
 LIBGPT="${NOVADECK_LIB_GPT:-}"
 if [ -z "$LIBGPT" ]; then

@@ -113,7 +113,7 @@
 # clusters above the FAT12 boundary, which is a margin decided by mkfs.fat's reserved-sector
 # arithmetic rather than by us. 128M gives 8188 -- twice the floor. The content is ~2.3M either way.
 #
-# images/test-partition-table.sh asserts all of this against the table alone, at both sector sizes.
+# tests/test-partition-table.sh asserts all of this against the table alone, at both sector sizes.
 #
 # name      size  typecode  fs        label            attrs
 esp         256M  ef00      vfat      NOVADECK-ESP     63

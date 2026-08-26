@@ -17,7 +17,7 @@
 # one owner of the input, and this program is a message passed to it.
 #
 # WHAT THAT BUYS, beyond the focus fight: the consent screen becomes part of the UI's own state
-# machine, which is drivable headless with no SDL window at all (install/test-ui.sh), so §5's
+# machine, which is drivable headless with no SDL window at all (tests/test-ui.sh), so §5's
 # end-to-end case against the real renderer runs offline instead of waiting for hardware.
 #
 # STDOUT IS THE ANSWER AND NOTHING ELSE — the trap the tty renderer paid for and the reason this
@@ -37,7 +37,7 @@ import os
 import socket
 import sys
 
-# Test seams, in the spirit of novadeck-update's: install/test-ui.sh redirects the socket into a
+# Test seams, in the spirit of novadeck-update's: tests/test-ui.sh redirects the socket into a
 # sandbox and executes THIS file. What runs under test is the artifact that ships.
 SOCK = os.environ.get("NOVADECK_UI_SOCK", "/run/novadeck/installer-ui.sock")
 # The wait for the UI to ACCEPT is bounded — it is either up or it is not. The wait for the ANSWER

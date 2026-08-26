@@ -5,7 +5,7 @@
 #   make verify-image
 #
 # Same doctrine as images/verify-card.sh: assert the ARTIFACT, not the source diff. The suites that
-# run in `make test` read the SCRIPTS — install/test-mkimage.sh greps mkimage.sh, test-mkroot.sh
+# run in `make test` read the SCRIPTS — tests/test-mkimage.sh greps mkimage.sh, test-mkroot.sh
 # greps mkroot.sh — and a script that says the right thing while producing the wrong image passes
 # both. This is the only thing that opens the image.
 #
@@ -242,7 +242,7 @@ echo "  6. it can actually install"
 # hardware, not a wasted device — and for the seed it is a ~2 GiB download per person who tries.
 #
 # THE LIST IS STATED HERE, not read out of install/mkroot.sh: a verifier that derives its
-# expectations from the builder can only ever agree with it. install/test-mkimage.sh asserts the
+# expectations from the builder can only ever agree with it. tests/test-mkimage.sh asserts the
 # other direction — that everything mkroot ships is named here — so a new file on the medium cannot
 # quietly go unchecked.
 for f in novadeck-install carve.sh select-target.sh rauc-session.sh post-install-fresh.sh \

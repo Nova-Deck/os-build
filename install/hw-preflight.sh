@@ -11,7 +11,7 @@
 # NOTHING HERE WRITES TO THE DISK. Three claims, each checkable rather than promised:
 #   * select-target.sh is pure by construction (plan §3) — hw-select-target.sh, its peer, is run
 #     against boards carrying installs somebody cares about for exactly that reason.
-#   * `carve.sh plan` stops before the first delete. install/test-carve.sh asserts it by dumping
+#   * `carve.sh plan` stops before the first delete. tests/test-carve.sh asserts it by dumping
 #     the partition table before and after, on a stock disk AND on one that already carries our
 #     eight ("plan on a stock disk wrote nothing at all").
 #   * the UI code reached here is gather_preflight() + PreflightScreen.describe(), which run those
@@ -23,12 +23,12 @@
 # needs a device booted from removable media with our eight on internal, and a dev card carries the
 # SAME `novadeck-*` filesystem labels as the install, so /esp and /home cross-mount onto the target
 # (seen during the §4a gate, 2026-08-21). The installer image gets its own labels; until then that
-# path is Phase 6 hardware step 6 and its only coverage is install/test-carve.sh, against a fixture
+# path is Phase 6 hardware step 6 and its only coverage is tests/test-carve.sh, against a fixture
 # that has been carved for real. A device booted FROM internal cannot be its own target either —
 # select-target rule 1/2 refuses it, confirmed on a Pocket ACE 2026-08-22:
 # "select-target: /dev/sda is the disk the running system is on".
 #
-# WHY IT IS WORTH RUNNING AT ALL, given install/test-ui.sh drives the same code offline: the suite
+# WHY IT IS WORTH RUNNING AT ALL, given tests/test-ui.sh drives the same code offline: the suite
 # feeds it stub tools and a synthetic GPT at 512-byte sectors. A real UFS LUN reports 4096, the
 # partition list is the board's own, and the destroy list comes from a carve plan over real
 # geometry. Every install defect this project has found so far was found by hardware after the

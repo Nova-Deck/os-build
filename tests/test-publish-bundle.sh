@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Offline test for ota/publish-bundle.sh — specifically its INTEGRITY GATE (step 3b).
 #
-#   images/test-publish-bundle.sh
+#   tests/test-publish-bundle.sh
 #
 # WHY THIS FILE EXISTS. publish-bundle.sh had three gates and only two of them looked at the bundle:
 # the signature (step 1) and the mode stamp (step 2). Everything after the upload asked "is this
@@ -28,7 +28,7 @@
 #
 # WHAT THIS CANNOT COVER: that a real rsync-over-ssh to Frankfurt preserves bytes, and that a real
 # rauc accepts the signature. Both are covered where they belong — the first by step 3b itself in
-# production, the second by images/test-verify-signing.sh.
+# production, the second by tests/test-verify-signing.sh.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

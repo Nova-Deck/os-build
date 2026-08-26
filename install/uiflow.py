@@ -39,7 +39,7 @@ VERIFY_INSTALL = os.environ.get(
 # Both remain overridable, for the hardware stager (install/hw-install.sh serves a bundle off a
 # laptop and points the seed at a path on the card) and for the suite.
 RELEASE_INFO = os.environ.get("NOVADECK_RELEASE_INFO", "/usr/lib/novadeck/install/release-info")
-# A seam like every other path here, so install/test-ui.sh can exercise both "the medium
+# A seam like every other path here, so tests/test-ui.sh can exercise both "the medium
 # carries one" and "it does not" without a /usr/lib to write into.
 SEED_ON_MEDIUM = os.environ.get(
     "NOVADECK_SEED_ON_MEDIUM", "/usr/lib/novadeck/install/steam-seed.tar.zst")

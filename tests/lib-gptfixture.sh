@@ -2,7 +2,7 @@
 # Shared GPT-fixture builder for the installer suites — Phase 3 of
 # .claude/plans/internal-install.plan.md.
 #
-# Sourced by install/test-select-target.sh and install/test-carve.sh. It exists because both suites
+# Sourced by tests/test-select-target.sh and tests/test-carve.sh. It exists because both suites
 # need the same thing: the boards in docs/internal-storage.md rebuilt as REAL GPTs, with real
 # names, real sizes, real order and real type GUIDs. A rule tightened for one board and silently
 # broken for another is the failure these suites exist to catch, so they run against every captured

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Offline test for /usr/bin/novadeck-update — the OTA client SteamUI drives.
 #
-#   images/test-update.sh
+#   tests/test-update.sh
 #
 # WHY THIS FILE EXISTS. The caller is the Steam client and the contract is not ours to choose: it
 # was read out of the baked steamui.so. Steam PARSES STDOUT. `check` printing the wrong thing is not

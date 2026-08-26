@@ -1,7 +1,7 @@
 """
 A pygame stand-in with DETERMINISTIC metrics, so install/uiview.py's layout can be tested.
 
-install/test-ui.sh injects this into sys.modules before constructing the view. uiview imports pygame
+tests/test-ui.sh injects this into sys.modules before constructing the view. uiview imports pygame
 lazily, inside the view only — the whole reason the rest of the UI runs headless — and this is what
 extends that reach to the one part that was left out: where things land on the screen.
 

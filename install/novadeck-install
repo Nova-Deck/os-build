@@ -62,7 +62,7 @@ step() { printf '\n[%s] == %s ==\n' "$PROG" "$1"; }
 SELFDIR="$(cd "$(dirname "$0")" && pwd)"
 
 # --- seams ---------------------------------------------------------------------------------------
-# install/test-install.sh executes THIS file, so what it asserts is the artifact that ships.
+# tests/test-install.sh executes THIS file, so what it asserts is the artifact that ships.
 # Overriding these points it at a sandbox and at stub binaries. DEVTEST is the one assertion a
 # sandbox cannot keep -- an unprivileged test has no block device to offer -- and it is the same
 # pair rauc-session.sh and post-install.sh document: everything a wrong answer destroys lives behind

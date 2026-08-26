@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Offline test for images/publish-card.sh — specifically its BUCKET PREFIX and its PRUNE.
 #
-#   images/test-publish-card.sh
+#   tests/test-publish-card.sh
 #
 # WHY THIS FILE EXISTS. The bundle publisher has had a suite since its integrity gate was written;
 # this one had none, and it is the one that DELETES. Retention here is `rclone purge` over a whole

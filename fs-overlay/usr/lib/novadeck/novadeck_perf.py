@@ -19,7 +19,7 @@ Owns three things:
 Everything degrades to a no-op: a missing tweaks file, an absent gamescope, a
 kernel without CONFIG_PROC_CHILDREN, or an unreadable environ must never take
 the daemon down. All /proc and /sys access goes through PROC_ROOT/SYS_CPU_ROOT
-so the offline suite (images/test-perf.sh) can drive this against a fabricated
+so the offline suite (tests/test-perf.sh) can drive this against a fabricated
 tree with no root and no device.
 """
 import json

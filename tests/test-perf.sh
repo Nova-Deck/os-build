@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Offline check for the per-game perf library (fs-overlay/usr/lib/novadeck/novadeck_perf.py).
 #
-#   images/test-perf.sh
+#   tests/test-perf.sh
 #
 # WHY THIS EXISTS. Every input to the perf tick is a file whose absence is legal: the tweaks
 # json is operator-created, /proc/<pid>/task/<tid>/children only exists with

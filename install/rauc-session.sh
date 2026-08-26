@@ -51,7 +51,7 @@ PROG=${0##*/}
 log() { printf '[%s] %s\n' "$PROG" "$1"; }
 die() { printf '[%s] ERROR: %s\n' "$PROG" "$1" >&2; exit 1; }
 
-# Test seams. install/test-install.sh executes THIS file, so what it asserts is the artifact that
+# Test seams. tests/test-install.sh executes THIS file, so what it asserts is the artifact that
 # ships; overriding these points it at a sandbox run directory and stub binaries. DEVTEST is the
 # assertion a sandbox cannot keep -- an unprivileged test has no block device to offer -- and it is
 # the same pair post-install.sh documents: everything a wrong answer destroys lives behind the

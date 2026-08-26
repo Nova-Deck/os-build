@@ -53,6 +53,14 @@ BASE_CONFIG ?=
 
 OUT := out
 
+# Source-tree layout, as variables rather than the ~120 hardcoded strings they replace. The repo
+# was flat until 2026-08-26 and every directory name appeared verbatim in dozens of recipes, so a
+# rename was a repo-wide sed with no way to tell a path from prose. These make the next move a
+# one-line change. They name SOURCE directories only — build outputs stay under $(OUT), and
+# $(OUT)/images/ is deliberately NOT tied to any of them (release workflows and muscle memory
+# both depend on those artifact paths).
+TESTS_DIR := tests
+
 # work/ must be created by the HOST, and before anything else runs. Several stages that write
 # into it are root inside docker (the kernel build's modules_install, the base export), so on a
 # tree where work/ does not exist — a fresh clone, or a `rm -rf work` full-rebuild test —
@@ -399,28 +407,28 @@ verify-lock: ## Check the lock's novadeck rows against packages/ (host, seconds,
 	bash packages/verify-lock-rows.sh
 
 test: verify-lock ## Run the offline bootctl/post-install/pairingd/quirks/stage-2/partition-table/unit/coredump/perf/fan-curve/decky/update/publish/install/mkroot/steamos-manager/graphics-provider/video-decode/proton-dxvk suites (host, no build needed)
-	bash images/test-bootctl.sh
-	bash images/test-post-install.sh
-	bash images/test-pairingd.sh
-	bash images/test-device-quirks.sh
-	bash images/test-stage2-grub.sh
-	bash images/test-partition-table.sh
-	bash images/test-units.sh
-	bash images/test-coredump-limit.sh
-	bash images/test-perf.sh
-	bash images/test-fan-curve.sh
-	bash images/test-decky.sh
-	bash images/test-update.sh
-	bash images/test-publish-bundle.sh
-	bash images/test-publish-card.sh
-	bash images/test-steamos-manager.sh
-	bash install/test-install.sh
-	bash install/test-ui.sh
-	bash install/test-mkroot.sh
-	bash install/test-mkimage.sh
-	bash images/test-graphics-provider.sh
-	bash images/test-video-decode.sh
-	bash images/test-proton-dxvk.sh
+	bash $(TESTS_DIR)/test-bootctl.sh
+	bash $(TESTS_DIR)/test-post-install.sh
+	bash $(TESTS_DIR)/test-pairingd.sh
+	bash $(TESTS_DIR)/test-device-quirks.sh
+	bash $(TESTS_DIR)/test-stage2-grub.sh
+	bash $(TESTS_DIR)/test-partition-table.sh
+	bash $(TESTS_DIR)/test-units.sh
+	bash $(TESTS_DIR)/test-coredump-limit.sh
+	bash $(TESTS_DIR)/test-perf.sh
+	bash $(TESTS_DIR)/test-fan-curve.sh
+	bash $(TESTS_DIR)/test-decky.sh
+	bash $(TESTS_DIR)/test-update.sh
+	bash $(TESTS_DIR)/test-publish-bundle.sh
+	bash $(TESTS_DIR)/test-publish-card.sh
+	bash $(TESTS_DIR)/test-steamos-manager.sh
+	bash $(TESTS_DIR)/test-install.sh
+	bash $(TESTS_DIR)/test-ui.sh
+	bash $(TESTS_DIR)/test-mkroot.sh
+	bash $(TESTS_DIR)/test-mkimage.sh
+	bash $(TESTS_DIR)/test-graphics-provider.sh
+	bash $(TESTS_DIR)/test-video-decode.sh
+	bash $(TESTS_DIR)/test-proton-dxvk.sh
 
 # The fourth suite, separate because it is the one that CANNOT run on the host: it signs real
 # bundles and verifies them through the shipped system.conf, so it needs rauc. Every case in it is
@@ -434,7 +442,7 @@ test: verify-lock ## Run the offline bootctl/post-install/pairingd/quirks/stage-
 # share cannot drift. Anyone who already has the full image loses nothing — the signing stage is
 # its own first layer, so docker reuses it rather than fetching anything twice.
 test-signing: $(SIGN_STAMP) ## Prove the RAUC signing self-test still catches what it claims (container; PKIDIR= adds the keyring check)
-	$(DOCKER) $(PKI_MOUNT) $(SIGN_IMG) images/test-verify-signing.sh
+	$(DOCKER) $(PKI_MOUNT) $(SIGN_IMG) $(TESTS_DIR)/test-verify-signing.sh
 
 # The fifth suite pair, and the reason they are not in `test`: they need sgdisk, mtools and
 # dosfstools, which a plain dev box does not have (and which the shipped image never gets, because
@@ -447,8 +455,8 @@ test-signing: $(SIGN_STAMP) ## Prove the RAUC signing self-test still catches wh
 # invokes is a check that is not asserting anything. Nothing here needs root and nothing is
 # mounted; the fixtures are sparse images rebuilt from the real GPTs in docs/internal-storage.md.
 test-disk: | $(BUILD_STAMP) ## Run the select-target + carve suites, which need sgdisk/mtools (container)
-	$(INBUILD) install/test-select-target.sh
-	$(INBUILD) install/test-carve.sh
+	$(INBUILD) $(TESTS_DIR)/test-select-target.sh
+	$(INBUILD) $(TESTS_DIR)/test-carve.sh
 
 # ==============================================================================
 # Toolchain images

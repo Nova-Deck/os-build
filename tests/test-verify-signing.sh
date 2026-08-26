@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Offline test for images/rauc/verify-signing.sh — the RAUC signing self-test.
 #
-#   docker run --rm -v "$PWD":/src -w /src novadeck-build images/test-verify-signing.sh
+#   docker run --rm -v "$PWD":/src -w /src novadeck-build tests/test-verify-signing.sh
 #   make test-signing
 #
 # WHY A TEST FOR A TEST. verify-signing.sh is a check, and the failure mode of a check is not

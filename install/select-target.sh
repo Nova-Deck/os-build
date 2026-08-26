@@ -283,7 +283,7 @@ examine() {
 # what could not be answered rather than naming a disk, because there is no disk to name.
 #
 # EXCEPT UNDER THE FIXTURE FLAG, which is the fourth thing it relaxes and for the same reason as the
-# other three: install/test-select-target.sh runs in the build container, where `/` is an overlay
+# other three: tests/test-select-target.sh runs in the build container, where `/` is an overlay
 # with no block parent at all, so the question this rule asks has no answer there and every case
 # would refuse. The flag cannot widen a real selection -- nothing on the medium sets it, the scan
 # still globs /dev/*, and this script writes nothing -- and the refusal itself is exercised with the

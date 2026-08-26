@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Offline check for the systemd-coredump limits, fs-overlay/etc/systemd/coredump.conf.d/.
 #
-#   images/test-coredump-limit.sh
+#   tests/test-coredump-limit.sh
 #
 # WHY THIS FILE EXISTS. /var/lib/systemd/coredump is an OFFLOAD path — bind-mounted from the shared
 # /home tree, so it lands on the same card as the user's Steam library, root and /var. With the

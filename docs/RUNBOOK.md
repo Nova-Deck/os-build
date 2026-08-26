@@ -387,7 +387,7 @@ cat /mnt-efi/SteamOS/partsets/self            # which image this efi partition I
 `image-invalid: 1` on the conf of the image that just failed means it was demoted — by the health
 unit's failure path, by hand, or by an interrupted install. `boot-attempts:` will read 0 whatever
 happened, until the stage-2 counter is wired up.
-`steamos-bootconf` is the authoritative tool; `images/test-bootctl.sh` documents the semantics.
+`steamos-bootconf` is the authoritative tool; `tests/test-bootctl.sh` documents the semantics.
 
 The initramfs is written to **degrade loudly rather than brick**: if it cannot assemble the
 `/etc` overlay it falls back to a writable un-overlaid root and says so via `/dev/kmsg`. A device

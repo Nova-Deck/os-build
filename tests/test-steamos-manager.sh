@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Offline test for the SteamOS-Manager compatibility shim, /usr/bin/novadeck-steamos-manager.
 #
-#   images/test-steamos-manager.sh
+#   tests/test-steamos-manager.sh
 #
 # WHAT THE SHIM IS NOW. It carries no settings. PerformanceProfile1, GpuPerformanceLevel1 and
 # finally CpuScheduler1 all moved to the novadeck-control Decky plugin, which talks straight to

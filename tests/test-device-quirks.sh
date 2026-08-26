@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Offline check for the per-board runtime quirks helper.
 #
-#   images/test-device-quirks.sh
+#   tests/test-device-quirks.sh
 #
 # WHY THIS EXISTS. A quirk is a write to a sysfs knob that nothing else reads back, applied on a
 # board most builds never run on. Every failure mode is silent: the knob moves to a new path, the

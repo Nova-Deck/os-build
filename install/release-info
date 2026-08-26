@@ -22,7 +22,7 @@
 # to verify against the baked CA before a single partition is touched. Every field in it is
 # attacker-controlled, and the validation below is fs-overlay/usr/bin/novadeck-update's, ported: the
 # `bundle` field is forced to a BARE FILENAME so a manifest can never aim this device at another
-# host. install/test-ui.sh asserts the two agree, both on the default URL literal and on the shapes
+# host. tests/test-ui.sh asserts the two agree, both on the default URL literal and on the shapes
 # they reject; that assertion is the only thing keeping the copies together.
 #
 # THE SEED IS NOT HERE AT ALL, and it never comes over the network: the medium CARRIES the Steam
@@ -49,7 +49,7 @@ def emit(key, value):
     print("%s=%s" % (key, value))
 
 
-# Test seams, in the spirit of the rest of install/: install/test-ui.sh executes THIS file with curl
+# Test seams, in the spirit of the rest of install/: tests/test-ui.sh executes THIS file with curl
 # stubbed and every path redirected. What runs under test is the artifact that ships.
 CONFIG_FILE = os.environ.get("NOVADECK_OTA_CONFIG", "/etc/novadeck/ota.conf")
 CURL = os.environ.get("NOVADECK_CURL", "curl")
@@ -57,7 +57,7 @@ TIMEOUT = os.environ.get("NOVADECK_NET_TIMEOUT", "20")
 # The server this medium fetches from, resolved exactly as novadeck-update resolves it: the
 # environment, then OTA_URL/OTA_CHANNEL in /etc/novadeck/ota.conf, then these built-in defaults. The
 # literals are written a third time here because the other two are Python and shell in files that do
-# not ship together; install/test-ui.sh asserts all three agree.
+# not ship together; tests/test-ui.sh asserts all three agree.
 DEFAULT_URL = "https://updates.novadeck.cloud-ip.cc"
 DEFAULT_CHANNEL = "stable"
 

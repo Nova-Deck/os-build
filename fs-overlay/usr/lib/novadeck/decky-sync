@@ -26,7 +26,7 @@
 set -euo pipefail
 
 # Env-overridable roots, defaults are the real device paths. The overrides exist for the offline
-# suite (images/test-decky.sh) ONLY — same pattern as NOVADECK_PERF_PROC in novadeck_perf.py: the
+# suite (tests/test-decky.sh) ONLY — same pattern as NOVADECK_PERF_PROC in novadeck_perf.py: the
 # suite drives every branch below against a fabricated tree, no root and no device needed.
 user_name="${NOVADECK_DECKY_USER:-deck}"
 user_group="${NOVADECK_DECKY_GROUP:-${user_name}}"

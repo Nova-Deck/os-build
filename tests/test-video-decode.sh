@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Guard against re-enabling CEF's V4L2 video decode on iris.
 #
-#   images/test-video-decode.sh
+#   tests/test-video-decode.sh
 #
 # WHY THIS EXISTS. Everything in Valve's binaries points at turning this on, and the hardware says
 # no. `strings` on the arm64 libcef.so shows a full ChromeOS V4L2 stack built in

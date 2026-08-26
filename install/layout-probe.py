@@ -5,7 +5,7 @@ Lay one screen out against install/fakepygame.py and report where it landed.
       -> "<lowest pixel the FLOW reached> <the y the button row draws at>"
     COUNT=1  -> "<how many pieces were drawn>" instead
 
-Its own file rather than a heredoc inside install/test-ui.sh, because that suite is itself full of
+Its own file rather than a heredoc inside tests/test-ui.sh, because that suite is itself full of
 heredocs and nesting two with the same delimiter silently truncates the outer one — which is exactly
 what happened while writing this (2026-08-25).
 

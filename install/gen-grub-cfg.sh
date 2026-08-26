@@ -145,7 +145,7 @@ done
 # THE RULE IS `-top-dpad`, NOT a generic last-segment strip, and the derived NAME comes from the
 # .dts `model =` line rather than being synthesized. Both mirror boot/gen-grub-cfg.sh exactly. I
 # hand-copied this wrong the first time and it failed on the one board it exists for, which is why
-# install/test-mkroot.sh now asserts the two generators emit the SAME set of DTB names — the
+# tests/test-mkroot.sh now asserts the two generators emit the SAME set of DTB names — the
 # catalog is shared data, so a divergence here is a board that boots from a card and not from the
 # installer, discovered on hardware.
 for dts in "$DTS"/*.dts; do

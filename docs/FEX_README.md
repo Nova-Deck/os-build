@@ -174,7 +174,7 @@ cannot launch an x86 title.
 only prints `read inode failed` to stderr, so the gate has to parse the content. This is also the
 only reason `erofs-utils` is in `build/Dockerfile`.
 
-`images/test-graphics-provider.sh` (in `make test`) guards what committed files can still show, in
+`tests/test-graphics-provider.sh` (in `make test`) guards what committed files can still show, in
 five groups:
 
 - **fstab injection** — `packages/fex-rootfs/prebuilt.pin`'s `dest` is the lower mount's source; the

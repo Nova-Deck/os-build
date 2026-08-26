@@ -42,7 +42,7 @@ log()  { printf '[%s] %s\n' "$PROG" "$1"; }
 die()  { printf '[%s] ERROR: %s\n' "$PROG" "$1" >&2; exit 1; }
 
 # Test seams, documented exactly as novadeck-bootctl documents its own. The offline suite
-# (images/test-post-install.sh) executes THIS file -- not a copy -- so what it asserts is the
+# (tests/test-post-install.sh) executes THIS file -- not a copy -- so what it asserts is the
 # artifact that ships; overriding them points it at a sandbox ESP/efi/var and fake slot devices.
 # Nothing here is otherwise conditional on being under test, and the defaults are what every real
 # invocation uses. DEVTEST is the one assertion the sandbox cannot keep: an unprivileged test has

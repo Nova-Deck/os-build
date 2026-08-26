@@ -3,7 +3,7 @@
 #
 #   install/hw-select-target.sh root@<device> > docs/internal-select-target.md
 #
-# The offline suite (install/test-select-target.sh) drives the same script against GPTs rebuilt
+# The offline suite (tests/test-select-target.sh) drives the same script against GPTs rebuilt
 # from the Phase 0 captures, and it is green — but on IMAGE FILES, where sgdisk always reports
 # 512-byte sectors because it only asks the kernel for the logical size on a block device. Real
 # UFS LUNs report 4096. So the whole sector-size path, the LUN enumeration, and rules 1/2 (the

@@ -38,7 +38,7 @@ log() { printf '[%s] %s\n' "$PROG" "$*" >&2; }
 die() { log "ERROR: $*"; exit 1; }
 
 SELFDIR=$(cd "$(dirname "$0")" && pwd)
-# Every one of these is a test seam as well as an override point; install/test-ui.sh drives this
+# Every one of these is a test seam as well as an override point; tests/test-ui.sh drives this
 # file with all of them redirected into a sandbox, exactly as test-update.sh drives novadeck-update.
 DEVICE_ENV=${NOVADECK_DEVICE_ENV:-/usr/lib/novadeck/device-env}
 GAMESCOPE=${NOVADECK_GAMESCOPE:-gamescope}

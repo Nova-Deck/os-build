@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Offline check for the CachyOS DXVK capability-probe widening.
 #
-#   images/test-proton-dxvk.sh
+#   tests/test-proton-dxvk.sh
 #
 # WHY THIS EXISTS. assemble-rootfs.sh rewrites a THIRD-PARTY python script that is not in this
 # tree — the `proton` script inside the pinned proton-cachyos tarball. Everything about that is

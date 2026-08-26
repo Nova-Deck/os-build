@@ -375,7 +375,7 @@ readable; it is a degrade path, and taking it logs loudly.
 
 **Three cases that are easy to get wrong**, all covered at the time by
 `images/initramfs/test-slot-state.sh` — deleted in phase 5 (`0d714ed`) along with the /KERNEL flow
-it exercised; the equivalent coverage now lives in the `images/test-*.sh` suites that `make test`
+it exercised; the equivalent coverage now lives in the `tests/test-*.sh` suites that `make test`
 runs:
 honouring `pending` without a durable decrement would retry a broken slot *forever* (the counter
 never reaches zero, so the rollback never fires), so a read-only ESP boots `active` instead; a
@@ -496,7 +496,7 @@ recovery mechanism when you have the card in a reader.
 |---|---|
 | slot selection, decrement, rollback, failover | `images/initramfs/init` |
 | offline test of the decision table (109 checks) | `images/initramfs/test-slot-state.sh` |
-| offline test of the RAUC backend contract (101 checks) | `images/test-bootctl.sh` |
+| offline test of the RAUC backend contract (101 checks) | `tests/test-bootctl.sh` |
 | both suites, host-side, no build needed | `make test` |
 | `umount` + `/esp` staged into the cpio | `images/mkinitramfs.sh` |
 | both slots populated, distinct fsid, state seeded | `images/make-sdcard.sh`, `images/assemble-rootfs.sh` |

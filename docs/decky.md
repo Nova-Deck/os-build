@@ -100,7 +100,7 @@ Three tabs; the backend runs as root inside the loader (`"flags": ["root"]`).
   either per-zone reading — is what the fan curve is evaluated against, so the two are
   deliberately different and the tab says so. Zone classification is by `type` prefix
   (`cpu*`, `gpu*`), covering both SoCs' naming (`gpuss0` on SM8650, `gpuss-0` on SM8550);
-  `images/test-decky.sh` asserts it against the real names from each dtsi. Polls at 1 Hz, and
+  `tests/test-decky.sh` asserts it against the real names from each dtsi. Polls at 1 Hz, and
   only while it is the tab on screen.
 
 Frontend: TypeScript + `@decky/ui`, built by `make decky-plugin` (npm ci in a digest-pinned
@@ -124,7 +124,7 @@ it (its restart is logged to the journal with the reason).
 
 ## What the offline suite cannot prove
 
-`images/test-decky.sh` (in `make test`) covers the pin, units, sync decisions, the sanitizer, and
+`tests/test-decky.sh` (in `make test`) covers the pin, units, sync decisions, the sanitizer, and
 the watchdog's decision loop (driven against fake `ss`/`systemctl`); guard-rootfs assertion 9
 covers image completeness. None of it can prove PluginLoader executes under our FEX build, nor
 that injection works against our Steam client — both were HW-validated 2026-08-08 (erofs guest

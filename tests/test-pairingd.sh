@@ -2,7 +2,7 @@
 # Offline test for the remote-access path: /usr/bin/novadeck-pairingd and the switch that drives
 # it, /usr/bin/steamos-polkit-helpers/steamos-devkit-mode.
 #
-#   images/test-pairingd.sh
+#   tests/test-pairingd.sh
 #
 # WHY THIS FILE EXISTS. The pairing agent listens on an unauthenticated port and its answer to a
 # single POST decides whether a stranger on the same Wi-Fi gets a shell on the device. Its

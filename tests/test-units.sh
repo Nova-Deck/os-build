@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Offline systemd unit check for everything under fs-overlay.
 #
-#   images/test-units.sh
+#   tests/test-units.sh
 #
 # WHY THIS EXISTS. systemd's parser is permissive about directives it does not recognise: it logs
 # "Unknown key name '<X>' in section [<Y>], ignoring" and starts the unit anyway. A unit carrying

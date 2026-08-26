@@ -11,7 +11,7 @@
 # or to terminate TLS if it ever leaks out of CI. That EKU is also why system.conf needs
 # check-purpose=codesign: RAUC's default verification purpose is smimesign, which accepts only
 # emailProtection or no EKU at all, so the two ends have to be changed together. They are asserted
-# to agree by verify-signing.sh, and images/test-verify-signing.sh asserts that assertion bites.
+# to agree by verify-signing.sh, and tests/test-verify-signing.sh asserts that assertion bites.
 #
 # OpenSSL x509v3 extension format (openssl x509 -req -extfile). Comments are '#'.
 basicConstraints=critical,CA:FALSE

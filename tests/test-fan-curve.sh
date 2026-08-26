@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Offline check for the editable fan curve (fs-overlay/usr/bin/novadeck-powerd).
 #
-#   images/test-fan-curve.sh
+#   tests/test-fan-curve.sh
 #
 # WHY THIS EXISTS. The curve is a three-layer config (/usr factory -> the operator's /etc
 # file -> our own drop-in) whose failure modes are all SILENT. A drop-in that stops
@@ -15,7 +15,7 @@
 # It also covers powerd's half of the per-game `powerProfile` override, because the curve is
 # scoped to the profile IN FORCE: the override moves which curve is read, written and reset, and
 # that is decision logic on the same config layers. novadeck_perf's half -- resolving the key
-# out of game-tweaks.json -- is in images/test-perf.sh.
+# out of game-tweaks.json -- is in tests/test-perf.sh.
 #
 # NOT covered here: pwm1 writes and the D-Bus surface itself -- those need gi, a bus and a
 # device. The property handlers are thin wrappers over the functions checked here.
@@ -184,7 +184,7 @@ check("and the operator layer is still in charge", power.active_curve_name(), "o
 # ------------------------------------------------ per-game power profile override ---
 # The curve is scoped to the profile IN FORCE, so a `powerProfile` tweak has to move it. This is
 # the half of that feature that lives in powerd: novadeck_perf only resolves the key
-# (images/test-perf.sh), and everything below is powerd deciding what to do with it.
+# (tests/test-perf.sh), and everything below is powerd deciding what to do with it.
 power = fresh()
 power.fan_tick = lambda: None         # no fan hwmon on the host
 power.gpu = None                      # no GPU either: get_property() probes it for the freq list

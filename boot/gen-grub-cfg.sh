@@ -4,7 +4,7 @@
 #   boot/gen-grub-cfg.sh <A|B> <outfile>
 #
 # Emits the grub.cfg installed as /EFI/steamos/grub.cfg on that slot's efi partition. Pure text:
-# no toolchain, no cross-build, no network — so images/test-stage2-grub.sh can generate and assert
+# no toolchain, no cross-build, no network — so tests/test-stage2-grub.sh can generate and assert
 # the real artifact on a bare host. boot/grub.sh calls it twice after building grubaa64.efi.
 #
 # Two input files, both of which are the single source of truth for what they carry:

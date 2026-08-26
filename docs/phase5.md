@@ -80,7 +80,7 @@ comes up. Text render targets are deliberately left unrotated; the rotation happ
 blit to the framebuffer, so rotating them too would double-rotate.
 
 ✅ Hardware-validated 2026-08-02: `set rotation=270` in `boot/gen-grub-cfg.sh` puts the board menu
-the right way up on the panel. `images/test-stage2-grub.sh` asserts both that the line is emitted
+the right way up on the panel. `tests/test-stage2-grub.sh` asserts both that the line is emitted
 and that it lands BEFORE `terminal_output gfxterm` — the ordering is the failure mode worth a test,
 because a `set rotation=` after that point parses, ships, and silently does nothing.
 
@@ -104,7 +104,7 @@ pristine tarball plus the three patches, in the build container, with no warning
 ### The config (`boot/gen-grub-cfg.sh`)
 
 Generation is a separate script from the build because it needs no toolchain — which is what lets
-`images/test-stage2-grub.sh` generate the real artifact and assert on it instead of skipping when
+`tests/test-stage2-grub.sh` generate the real artifact and assert on it instead of skipping when
 `out/boot` is empty. It reads `boot/boards.map` and `images/partition-table.txt`.
 
 **Partitions are found by index, not by filesystem label.** Stage 2 was chainloaded off this slot's
@@ -119,7 +119,7 @@ set slotroot="$bootdisk,gpt4"      # gpt5 in the B config
 The parentheses are OPTIONAL for a reason: GRUB stores `root` as the bare device name
 (`hd0,gpt2`) and only parenthesises it when building `$prefix`, which is why every path is written
 `($root)/...`. A pattern that requires them never matches — that shipped, and the only symptom was
-the fallback's message and its 3s pause. `images/test-stage2-grub.sh` now runs the pattern through
+the fallback's message and its 3s pause. `tests/test-stage2-grub.sh` now runs the pattern through
 `sed -E` (GRUB's `regexp` uses `REG_EXTENDED`, so it is the same matcher) instead of grepping for
 it.
 
@@ -253,7 +253,7 @@ partition with re-pointed partsets, refreshes the ESP's steamcl, and re-arms the
 
 `novadeck-boot-good.service` used `ExecOnFailure=`, which **is not a systemd directive**: the
 parser logs "Unknown key name" and carries on, so the demote never ran. It is now
-`OnFailure=novadeck-boot-bad.service`, and `images/test-units.sh` runs `systemd-analyze` over every
+`OnFailure=novadeck-boot-bad.service`, and `tests/test-units.sh` runs `systemd-analyze` over every
 unit in `fs-overlay` so a fabricated directive cannot survive review again.
 
 With that fixed:

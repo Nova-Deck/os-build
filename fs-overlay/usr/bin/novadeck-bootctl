@@ -34,7 +34,7 @@
 #
 # THE CONTRACT IS THE EXIT STATUS. RAUC treats a non-zero backend exit as a failed install, so
 # every legal call must exit 0 — including no-ops. That is asserted per-subcommand offline by
-# images/test-bootctl.sh, which executes THIS file (not a copy) against a stubbed steamos-bootconf.
+# tests/test-bootctl.sh, which executes THIS file (not a copy) against a stubbed steamos-bootconf.
 #
 # SteamOS splits the decision in two, and so do we:
 #   * "Is this slot OK?" is OS-arbitrated. The boot service confirms (set-mode booted); a failed

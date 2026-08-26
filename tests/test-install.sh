@@ -2,7 +2,7 @@
 # Offline tests for the internal-install primitives — Phase 2 of
 # .claude/plans/internal-install.plan.md.
 #
-#   install/test-install.sh
+#   tests/test-install.sh
 #
 # Everything runs on the host with no root, no device and no cross-build. Run via `make test`.
 #
@@ -175,7 +175,7 @@ CASE="write_parts_env with no mountpoint"
 
 # --- 5. the primitives shared with the OTA path -------------------------------------------------
 # write_efi_partition and refresh_esp_stage1 came OUT of post-install.sh, and that hook's suite
-# (images/test-post-install.sh) is what proves the extraction did not change what an UPDATE does.
+# (tests/test-post-install.sh) is what proves the extraction did not change what an UPDATE does.
 # What it cannot cover is the installer's side of the same functions: it always calls them with the
 # OTA path's arguments, on a target chosen by bootconf. These cases drive them directly, with plain
 # directories standing in for mountpoints, which is all either function needs.
@@ -1683,7 +1683,7 @@ out="$(spine_run)" && bad "installed with no pin to check the seed against" \
 CASE="spine: it fails closed on a missing tool"
 # AN OFFLINE SUITE INHERITS THE HOST'S PATH and so cannot make a real tool absent -- and emptying
 # PATH does not work either, because the script's own `#!/usr/bin/env bash` needs it. The way in is
-# the seam, exactly as images/test-post-install.sh reaches its die(): point one of the tool names at
+# the seam, exactly as tests/test-post-install.sh reaches its die(): point one of the tool names at
 # something that does not exist. It is the same loop and the same refusal.
 spine_dir notool
 SP_SGDISK=novadeck-no-such-tool

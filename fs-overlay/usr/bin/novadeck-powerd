@@ -25,7 +25,7 @@ IFACE = "org.novadeck.Power1"
 # come from that config and are looked up through label_for().
 PROFILES = list(novadeck_perf.POWER_PROFILES)
 STATE_FILE = Path("/var/lib/novadeck/powerd.state")
-# Overridable so images/test-fan-curve.sh can drive the real parse/write paths against a
+# Overridable so tests/test-fan-curve.sh can drive the real parse/write paths against a
 # fabricated tree, the same trick novadeck_perf uses for /proc and /sys.
 FACTORY_CONFIG_FILE = Path(os.environ.get(
     "NOVADECK_POWERD_FACTORY", "/usr/share/novadeck/power-profiles.conf"))

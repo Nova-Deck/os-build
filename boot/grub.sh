@@ -163,7 +163,7 @@ grub-editenv "$OUT/grubenv" create
   || { echo "grubenv is not pristine -- it carries: $(grub-editenv "$OUT/grubenv" list | tr '\n' ' ')" >&2; exit 1; }
 
 # The per-slot configs. Generation is a separate script on purpose: it needs no toolchain, so
-# images/test-stage2-grub.sh can produce and assert them on a bare host with no cross-build.
+# tests/test-stage2-grub.sh can produce and assert them on a bare host with no cross-build.
 "$ROOT/boot/gen-grub-cfg.sh" A "$OUT/grub-a.cfg"
 "$ROOT/boot/gen-grub-cfg.sh" B "$OUT/grub-b.cfg"
 

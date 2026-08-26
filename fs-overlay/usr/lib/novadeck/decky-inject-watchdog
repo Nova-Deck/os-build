@@ -30,7 +30,7 @@
 set -euo pipefail
 
 # Every default below is the real device value. The overrides exist for the offline suite
-# (images/test-decky.sh) ONLY — same pattern as decky-sync's roots: the suite fakes `ss` and
+# (tests/test-decky.sh) ONLY — same pattern as decky-sync's roots: the suite fakes `ss` and
 # `systemctl` on PATH and drives this loop through each branch with no device and no bus.
 port="${NOVADECK_DECKY_CEF_PORT:-8080}"
 unit="${NOVADECK_DECKY_LOADER_UNIT:-plugin_loader.service}"

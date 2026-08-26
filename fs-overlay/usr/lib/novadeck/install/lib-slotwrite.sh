@@ -433,7 +433,7 @@ ESP_FAT_LABEL=NOVADECK
 #
 # FAT_SECTOR_SIZE is a TEST SEAM and nothing else. blockdev answers only for a block device, and the
 # 4Kn path exists on no card and in no image file -- so without it the one geometry that breaks is
-# the one no suite can reach. images/test-partition-table.sh sets it to drive the rule at 4096
+# the one no suite can reach. tests/test-partition-table.sh sets it to drive the rule at 4096
 # against the real table; the installer never sets it, and on a device blockdev is authoritative.
 fat_type_for() {  # <dev> -> 32 or 16
   local dev="$1" ss bytes sectors
@@ -452,10 +452,10 @@ fat_type_for() {  # <dev> -> 32 or 16
 # is what turns the failure above from "the device does not boot, with no clue why" into a message
 # at the point of creation -- neither the offline suites nor a card build can reach the 4Kn path.
 #
-# FAT_ASSERT=0 is the sandbox seam, and it is the same trade DEVTEST makes. install/test-install.sh
+# FAT_ASSERT=0 is the sandbox seam, and it is the same trade DEVTEST makes. tests/test-install.sh
 # stubs mkfs.vfat to a recorder, so there is no superblock to read back and this could only ever
 # fail there. The assertion IS exercised against real filesystems, at both sector sizes, by
-# images/test-partition-table.sh -- which is also the suite that would have caught the defect it
+# tests/test-partition-table.sh -- which is also the suite that would have caught the defect it
 # exists for. Nothing on a device sets it.
 assert_fat_valid() {  # <dev> <label-for-messages>
   local dev="$1" what="$2" bps spc rsv nf t16 t32 re fsz tot rootsec cl lo hi

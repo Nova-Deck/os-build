@@ -2,7 +2,7 @@
 # Offline tests for the INSTALLER image's declarations — Phase 6 of
 # .claude/plans/internal-install.plan.md.
 #
-#   install/test-mkroot.sh
+#   tests/test-mkroot.sh
 #
 # Everything runs on the host with no root, no docker, no network and no built tree. Run via
 # `make test`.
@@ -445,7 +445,7 @@ grep -q 'if \[ -f /prebuilt/authorized_keys \]' "$MKROOT" \
 grep -q 'HostKey /run/ssh/ssh_host_ed25519_key' "$MKROOT" \
   && ok "the host key lives in /run, not the read-only /etc" \
   || bad "the host key would be written to a read-only /etc"
-# The generator is a COMMITTED unit, so images/test-units.sh lints it with systemd-analyze — a unit
+# The generator is a COMMITTED unit, so tests/test-units.sh lints it with systemd-analyze — a unit
 # printf-ed from inside mkroot.sh's container half would be linted by nothing, and systemd IGNORES
 # a misspelled directive silently ([[systemd-execonfailure-is-not-a-directive]]).
 HOSTKEY_UNIT="$UNITS/novadeck-installer-hostkey.service"

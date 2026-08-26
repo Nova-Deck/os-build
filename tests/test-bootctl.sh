@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Offline test for /usr/bin/novadeck-bootctl — above all, for its RAUC backend contract.
 #
-#   images/test-bootctl.sh
+#   tests/test-bootctl.sh
 #
 # WHY THIS FILE EXISTS. The Phase 4 suite proved that a broken backend ships silently and costs a
 # hardware install at 40%: `set-state <slot> bad` returned exit 1 for the slot RAUC was about to

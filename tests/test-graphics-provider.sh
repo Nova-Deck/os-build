@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Offline check for the FEX guest graphics provider + the mesa-x86 Turnip overlay.
 #
-#   images/test-graphics-provider.sh
+#   tests/test-graphics-provider.sh
 #
 # WHY THIS EXISTS. The fstab rows injected by images/assemble-rootfs.sh carry `nofail` on
 # purpose: a missing or unmountable x86 guest must cost native x86 Linux games, never a boot. That

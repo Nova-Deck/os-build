@@ -1,6 +1,6 @@
 # novadeck OTA release signing certificate profile — the ONE definition of it.
 #
-# Read by BOTH ci/gen-signing-ca.sh (which mints the real cert with it) and
+# Read by BOTH ota/gen-signing-ca.sh (which mints the real cert with it) and
 # ota/rauc/verify-signing.sh (which mints a throwaway cert with it and proves the shipped
 # /etc/rauc/system.conf accepts one). It is a file rather than a heredoc in each because it used to
 # be a heredoc in each: the self-test carried a hand-copy of these three lines, so a change here

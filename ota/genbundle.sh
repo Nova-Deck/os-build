@@ -8,7 +8,7 @@
 #   RAUC_CERT=cert.pem RAUC_KEY=key.pem ota/genbundle.sh
 #
 # For local/dev builds, omit the keys to mint an ephemeral self-signed cert (NOT for
-# release — production bundles must be signed with the release key, see ci/).
+# release — production bundles must be signed with the release key, see ota/gen-signing-ca.sh).
 #
 # Run inside the build image (needs rauc + openssl):
 #   docker run --rm -v "$PWD":/src -w /src novadeck-build ota/genbundle.sh

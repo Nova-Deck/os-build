@@ -570,7 +570,7 @@ if [ "$rauc_ok" = 1 ] && [ -s "$STAGE/etc/rauc/system.conf" ]; then
   # moment the two are separated -- which is exactly what happened.
   if ! signing_out="$("$ROOT/ota/rauc/verify-signing.sh" "$STAGE/etc/rauc/system.conf" 2>&1)"; then
     rauc_ok=0
-    bad "the shipped system.conf cannot verify a bundle signed the way ci/gen-signing-ca.sh signs one"
+    bad "the shipped system.conf cannot verify a bundle signed the way ota/gen-signing-ca.sh signs one"
     printf '%s\n' "$signing_out" | sed 's/^/      /' >&2
   fi
 fi

@@ -223,8 +223,8 @@ fi
 # Two things the overlay tree cannot carry, because both are BUILD OUTPUTS rather than static files.
 #
 # 1. The keyring. /etc/rauc/system.conf points at /etc/rauc/keyring.pem; it is installed here from
-#    the committed CA so there is ONE copy in the repo (ota/rauc/novadeck-ca.pem, which ci/
-#    also signs bundles against) rather than a duplicate under rootfs/overlay that could drift.
+#    the committed CA so there is ONE copy in the repo (ota/rauc/novadeck-ca.pem, which
+#    ota/gen-signing-ca.sh also signs bundles against) rather than a duplicate under rootfs/overlay that could drift.
 #
 # 2. The boot software, mirrored under /usr/lib/novadeck/boot (Phase 5; docs/phase5.md). The stage-1
 #    steamcl and both per-slot stage-2 GRUB builds are owned by the same build that ships /boot/Image
@@ -236,7 +236,7 @@ fi
 #    reader both the RAUC backend (novadeck-bootctl) and the health service call.
 CA_SRC="$ROOT/ota/rauc/novadeck-ca.pem"
 BOOTDIR_SRC="$OUT/boot"
-[ -f "$CA_SRC" ] || { echo "no RAUC CA at ${CA_SRC#"$ROOT"/} (run ci/gen-signing-ca.sh)" >&2; exit 1; }
+[ -f "$CA_SRC" ] || { echo "no RAUC CA at ${CA_SRC#"$ROOT"/} (run ota/gen-signing-ca.sh)" >&2; exit 1; }
 for f in steamcl.efi steamcl-version holo-bootconf fonts/default.pf2 \
          grubaa64.efi grub-a.cfg grub-b.cfg fonts/dejavu-mono.pf2 grubenv; do
   [ -f "$BOOTDIR_SRC/$f" ] || { echo "no boot artifact: ${BOOTDIR_SRC#"$ROOT"/}/$f (run boot/steamcl.sh + boot/grub.sh)" >&2; exit 1; }

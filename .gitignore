@@ -54,7 +54,7 @@ cosign.key
 # ...with exactly ONE exception: the RAUC device keyring is a public CA CERTIFICATE, and it is
 # the thing every device trusts (it ships as /etc/rauc/keyring.pem). It has to be committed, or
 # what the image trusts is not reviewable. Private key material lives under out/pki -- covered
-# by /out/ above, and ci/gen-signing-ca.sh refuses to write a key anywhere else in the tree.
+# by /out/ above, and ota/gen-signing-ca.sh refuses to write a key anywhere else in the tree.
 # The negation works only because no parent directory of this path is itself excluded. Verify
 # with `git status --short`: the keyring must appear as `??` (untracked). Note `git check-ignore
 # -v` is NOT the check -- it prints this negation line and exits 0 for a file it does not ignore.

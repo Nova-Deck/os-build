@@ -503,7 +503,7 @@ recovery mechanism when you have the card in a reader.
 | `status` / `try` / `mark-good` / `rollback` + RAUC's custom-bootloader contract | `rootfs/overlay/usr/bin/novadeck-bootctl` |
 | trial-boot confirmation | `novadeck-boot-good.{path,service}`, marker from `novadeck-session` |
 | dm-verity, declared vfat/loop | `kernel/kernel.config`, asserted in `kernel/build.sh` |
-| signing CA; only the CA cert is committed | `ci/gen-signing-ca.sh`, `ota/rauc/novadeck-ca.pem` |
+| signing CA; only the CA cert is committed | `ota/gen-signing-ca.sh`, `ota/rauc/novadeck-ca.pem` |
 | release cert profile, defined once and read by both the CA script and the self-test | `ota/rauc/release.ext` |
 
 ### Pass 2 — RAUC (core install path IMPLEMENTED, not yet HW-validated)

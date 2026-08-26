@@ -240,7 +240,7 @@ jobs:
           elif [ "$ARTIFACT" = bundle ]; then
             # $RUNNER_TEMP, never the workspace — the repo tree gets uploaded as artifacts and
             # cached, and a private key that lands in either is a leaked key. This is the convention
-            # ci/README.md already set for this secret; it also mirrors how PKIDIR works locally
+            # docs/ci.md already set for this secret; it also mirrors how PKIDIR works locally
             # (~/novadeck-pki), i.e. outside anything the build can sweep up.
             if [ -n "${RAUC_CERT_PEM:-}" ] && [ -n "${RAUC_KEY_PEM:-}" ]; then
               pki="$RUNNER_TEMP/pki"

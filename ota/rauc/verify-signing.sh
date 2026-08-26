@@ -5,14 +5,14 @@
 #
 # Signs a throwaway bundle and verifies it THROUGH the shipped system.conf. This exists because
 # every other check in this repo confirmed the update path was present, and the update path was
-# still broken: the release cert carries extendedKeyUsage=codeSigning (ci/gen-signing-ca.sh, so a
+# still broken: the release cert carries extendedKeyUsage=codeSigning (ota/gen-signing-ca.sh, so a
 # leaked signing key cannot terminate TLS), while RAUC's DEFAULT verification purpose is smimesign,
 # which accepts only emailProtection or no EKU. Both halves were individually defensible and the
 # pair rejected every bundle with "unsuitable certificate purpose" -- a failure that surfaces on
 # the device, at `rauc install`, on hardware with no serial console.
 #
 # WHAT THIS ASSERTS, and why each half is load-bearing:
-#   - the cert profile ci/gen-signing-ca.sh actually mints is one the shipped [keyring] accepts
+#   - the cert profile ota/gen-signing-ca.sh actually mints is one the shipped [keyring] accepts
 #     (check-purpose). Minted here from the SAME ota/rauc/release.ext rather than by reusing
 #     out/pki, so this runs in CI where the release key does not exist.
 #   - that the profile actually LANDED on the throwaway cert. An empty or garbled release.ext mints
@@ -47,7 +47,7 @@ CONF="${1:-$ROOT/rootfs/overlay/etc/rauc/system.conf}"
 TEMPLATE="$ROOT/ota/rauc/manifest.raucm.in"
 
 # Test seams, as novadeck-bootctl and post-install.sh document their own. RELEASE_EXT is THE cert
-# profile, shared with ci/gen-signing-ca.sh so neither can drift; PKIDIR matches that script's.
+# profile, shared with ota/gen-signing-ca.sh so neither can drift; PKIDIR matches that script's.
 RELEASE_EXT="${RELEASE_EXT:-$ROOT/ota/rauc/release.ext}"
 RELEASE_CERT="${RELEASE_CERT:-$ROOT/ota/rauc/release.cert.pem}"
 KEYRING="${KEYRING:-$ROOT/ota/rauc/novadeck-ca.pem}"
@@ -74,7 +74,7 @@ mint_ca() { # <prefix>
 }
 
 # The signer is minted from the SHIPPED profile, not from a copy of it. That is the whole point:
-# ci/gen-signing-ca.sh mints the real release cert from this same file, so there is no pair of
+# ota/gen-signing-ca.sh mints the real release cert from this same file, so there is no pair of
 # extension lists that can drift apart and leave this passing for a cert we do not ship.
 mint_signer() { # <prefix>
   openssl req -newkey rsa:2048 -nodes -sha256 \
@@ -158,7 +158,7 @@ if [ -f "$RELEASE_CERT" ] && [ -f "$KEYRING" ]; then
   else
     echo "  FAIL  ${KEYRING#"$ROOT"/} is NOT the CA behind ${RELEASE_CERT#"$ROOT"/}" >&2
     echo "        a device flashed with this keyring would reject every bundle you can sign." >&2
-    echo "        commit the keyring and release cert from the SAME ci/gen-signing-ca.sh run." >&2
+    echo "        commit the keyring and release cert from the SAME ota/gen-signing-ca.sh run." >&2
     exit 1
   fi
 else

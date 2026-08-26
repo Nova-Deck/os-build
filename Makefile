@@ -105,7 +105,7 @@ ifeq ($(PKI_REAL),)
 $(error PKIDIR=$(PKIDIR) does not exist (if it starts with ~, quote it differently: PKIDIR=$$HOME/...))
 endif
 PKI_MOUNT := -v $(PKI_REAL):/pki:ro -e PKIDIR=/pki
-# The filenames ci/gen-signing-ca.sh always mints, so `PKIDIR=... make bundle` is enough on its own.
+# The filenames ota/gen-signing-ca.sh always mints, so `PKIDIR=... make bundle` is enough on its own.
 # ?= keeps an explicit RAUC_CERT/RAUC_KEY (env or command line) winning over these.
 RAUC_CERT ?= /pki/release.cert.pem
 RAUC_KEY  ?= /pki/release.key.pem

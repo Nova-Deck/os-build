@@ -1,4 +1,4 @@
-# ci/
+# CI
 
 ## Today: `.github/workflows/ci.yml`
 
@@ -109,7 +109,7 @@ warning loudly when they are not. The shape is settled by the PKI:
   stale or truncated secret fails there instead of producing bundles no device accepts.
 - **the CA key never reaches a runner.** That is what the two-level PKI is for: if the release key
   leaks, mint a new cert offline under the same CA, commit it, update the one secret — no device is
-  affected. See `ci/gen-signing-ca.sh`.
+  affected. See `ota/gen-signing-ca.sh`.
 - worth considering before real releases: signing off-CI, or via an HSM/KMS the runner reaches by
   OIDC, so the key never exists as a file. A key that can push arbitrary code to devices with no
   serial console is a large thing to keep in a CI secret store.

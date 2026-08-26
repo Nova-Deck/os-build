@@ -10,7 +10,7 @@
 # the release cert's extensions (drift → passing for a profile we do not ship), and nothing
 # confirmed those extensions ever reached the throwaway cert (an empty profile mints an EKU-less
 # cert, which RAUC's DEFAULT smimesign purpose happily accepts). Both are now closed —
-# ota/rauc/release.ext is read by ci/gen-signing-ca.sh and verify-signing.sh alike, and the
+# ota/rauc/release.ext is read by ota/gen-signing-ca.sh and verify-signing.sh alike, and the
 # minted profile is asserted — and this file is what keeps them closed.
 #
 # SO EVERY CASE HERE IS A NEGATIVE. It feeds verify-signing.sh a deliberately broken config or
@@ -27,7 +27,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VS="$ROOT/ota/rauc/verify-signing.sh"
 CONF="$ROOT/rootfs/overlay/etc/rauc/system.conf"
 EXT="$ROOT/ota/rauc/release.ext"
-CA="$ROOT/ci/gen-signing-ca.sh"
+CA="$ROOT/ota/gen-signing-ca.sh"
 [ -f "$VS" ] || { echo "no verify-signing.sh: $VS" >&2; exit 1; }
 command -v rauc >/dev/null 2>&1 || { echo "rauc not found — run inside novadeck-build" >&2; exit 1; }
 
@@ -165,7 +165,7 @@ done_
 
 t "the-real-signing-key-matches-the-committed-cert"
 # Only reachable where the PKI is mounted (PKIDIR=... make test-signing). This is what would catch
-# a release cert committed from a different ci/gen-signing-ca.sh run than the key CI signs with.
+# a release cert committed from a different ota/gen-signing-ca.sh run than the key CI signs with.
 if [ -f "$PKI/release.key.pem" ]; then
   vs "$CONF"
   expect_rc 0
@@ -181,8 +181,8 @@ echo "== the profile has exactly one definition =="
 # against was two hand-copies of three lines, so assert there is still only one copy. A future
 # heredoc in either script would restore the original bug silently.
 t "both-scripts-read-the-shared-profile"
-grep -q 'RELEASE_EXT' "$CA" && ok "ci/gen-signing-ca.sh reads RELEASE_EXT" \
-  || bad "ci/gen-signing-ca.sh no longer reads the shared profile"
+grep -q 'RELEASE_EXT' "$CA" && ok "ota/gen-signing-ca.sh reads RELEASE_EXT" \
+  || bad "ota/gen-signing-ca.sh no longer reads the shared profile"
 grep -q 'RELEASE_EXT' "$VS" && ok "verify-signing.sh reads RELEASE_EXT" \
   || bad "verify-signing.sh no longer reads the shared profile"
 for f in "$CA" "$VS"; do

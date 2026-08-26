@@ -18,8 +18,8 @@
 # Every private key stays under $PKIDIR, which defaults inside out/ precisely because
 # .gitignore already excludes /out/ wholesale. Nothing here should ever need `git add -f`.
 #
-#   ci/gen-signing-ca.sh                 # mint into out/pki/, install the keyring
-#   PKIDIR=~/novadeck-pki ci/gen-signing-ca.sh
+#   ota/gen-signing-ca.sh                 # mint into out/pki/, install the keyring
+#   PKIDIR=~/novadeck-pki ota/gen-signing-ca.sh
 #
 # Then sign a bundle with:
 #   RAUC_CERT=out/pki/release.cert.pem RAUC_KEY=out/pki/release.key.pem make bundle

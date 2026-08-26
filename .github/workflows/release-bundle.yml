@@ -187,7 +187,7 @@ jobs:
         run: |
           set -euo pipefail
           # $RUNNER_TEMP, never the workspace — the repo tree gets uploaded as artifacts and cached,
-          # and a private key that lands in either is a leaked key. Same convention as ci/README.md
+          # and a private key that lands in either is a leaked key. Same convention as docs/ci.md
           # and as PKIDIR locally (~/novadeck-pki): outside anything the build can sweep up.
           if [ -n "${RAUC_CERT_PEM:-}" ] && [ -n "${RAUC_KEY_PEM:-}" ]; then
             pki="$RUNNER_TEMP/pki"

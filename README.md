@@ -197,20 +197,28 @@ creds, an SSH key and the dev package set baked in.
 
 | Path | Purpose |
 |---|---|
-| `rootfs/` | What is inside a root: the package closure (`manifest.lock`), the bootstrap that lays it down, and the seal/trim/guard trio |
-| `image/` | Turning a root into partitions: the A/B layout, the initramfs, the card assembler and its verifier |
-| `tests/` | Every offline suite — `make test`, plus the container-only signing and disk suites |
+The tree follows the order a build happens in: assemble a root, lay it onto a disk, ship it to a
+device.
+
+| Path | Purpose |
+|---|---|
+| `rootfs/` | **What is inside a root.** The package closure (`manifest.lock` + its generator and materializer), the bootstrap that lays it down, and the seal/trim/guard trio that says what a release root must not be able to do |
+| `rootfs/overlay/` | The payload injected into every root with a single `cp -a` — one tree mirroring the device's own filesystem |
+| `rootfs/conf/` | The declarative inputs: `pacman.conf`, `os-release`, `trim.list`, `seal.list` |
+| `image/` | **Turning a root into partitions.** The A/B layout and its `sgdisk` emitter, the initramfs, the card assembler, and the verifier that reads the result back |
+| `ota/` | **Getting an image onto a device already in the field.** Signed RAUC bundles, the publishers, and the nginx/CI-user setup for the OTA host |
+| `installer/` | The standalone installer medium: the read-only board probe, the partition carve, and the on-device UI |
 | `packages/` | From-source overlay: PKGBUILDs + source pins for what we patch or version-bump, plus the builder that turns them into a local pacman repo |
 | `kernel/` | Unified kernel: config fragments, patches, all device trees, firmware embed list |
 | `firmware/` | Vendor firmware fetch/verify recipes + their pins |
-| `rootfs/overlay/` | Rootfs overlay payload — one filesystem-mirror tree injected with a single `cp -a` |
-| `build/steam-seed/` | Native arm64 Steam client seed fetcher + pin |
 | `boot/` | Two-stage UEFI boot: steamcl (stage 1) + GRUB (stage 2), both built from pinned sources |
 | `apps/decky/` | `novadeck-control` — the first-party Decky plugin (per-game tweaks, power, fan curve) |
-| `installer/` | Internal-storage install: the read-only board probe, partition carve, and its offline suites |
-| `ota/` | Getting an image onto a device already in the field: signed RAUC bundles, the publishers, and the nginx/CI-user setup for the OTA host |
+| `tests/` | Every offline suite. `make test` runs the host ones; the signing and disk suites need a container |
+| `build/` | Where the build itself is pinned: the cross-compile `Dockerfile`, the builder digest, the repo snapshot, and the Steam seed fetcher |
 | `ci/` | Signing-CA generator + notes for `.github/workflows/` |
-| `build/` | `Dockerfile` for the cross-compile image |
+
+`dev.env` stays at the root: it is sourced by hand before every `make`, so it is the one path that
+earns its place there.
 
 Most of those directories carry their own `README.md` documenting them file-by-file.
 

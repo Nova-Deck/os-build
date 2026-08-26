@@ -196,7 +196,7 @@ grep -q '^extendedKeyUsage=critical,codeSigning' "$EXT" \
   && ok "the profile itself still says codeSigning" || bad "ota/rauc/release.ext lost its EKU"
 done_
 
-t "no-private-key-is-committed-under-images-rauc"
+t "no-private-key-is-committed-under-ota-rauc"
 # .gitignore blanket-excludes *.pem with exactly two negations, both public certificates. This is
 # what polices that exception: widening a rule whose job is "no key material in git" has to be
 # enforced by something other than care. Scans what is actually THERE, so a third negation added

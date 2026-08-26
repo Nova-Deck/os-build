@@ -43,7 +43,7 @@ tooling) and are unaffected.
 > **Superseded (in-tree, HW-validation pending):** the ROCKNIX `--use-rotation-shader` patch below
 > was replaced by upstream gamescope PR #2228 (composite-rotation pass). The shipped launcher now
 > passes **no** rotation flag — gamescope auto-engages compositor rotation off the DRM connector
-> panel orientation (DTS `rotation=<90>`). See DONE.md and
+> panel orientation (DTS `rotation=<90>`). See docs/worklog/DONE.md and
 > `packages/gamescope/patches/0001-composite-rotation-pr2228.patch`. The historical account of the
 > original fix follows.
 The Pocket S2 panel (`sm8650-ayaneo-ps2.dts`, `compatible="ayaneo,wt0630-2k"`) declares
@@ -78,7 +78,7 @@ state — and a clean teardown does **not** prevent it (graceful SIGTERM re-laun
 
 **Decision: keep `ENABLE_GAMESCOPE_WSI=1`** (the upstream + ChimeraOS `gamescope-session-plus`
 default — see their [`gamescope-session-plus`](https://github.com/ChimeraOS/gamescope-session/blob/73d2da8/usr/share/gamescope-session-plus/gamescope-session-plus#L51)),
-set in `fs-overlay/usr/bin/novadeck-session` (env-overridable, defaults on). The FROG
+set in `rootfs/overlay/usr/bin/novadeck-session` (env-overridable, defaults on). The FROG
 WSI layer is the **standard present path** — framerate limiter / frame pacing, latency control,
 adaptive-sync hints AND HDR — so disabling it is **not** just an HDR loss; it degrades all of those.
 Since the release product boots gamescope **once per power-on** (the clean L1 case), the re-launch
@@ -104,9 +104,9 @@ Turns the hand-run smoke into **session plumbing**: a long-running gamescope com
 systemd unit. Native arm64 Steam lands in Phase 3 — Step 2 is the *compositor + session unit*, not
 the Steam client.
 
-### Plumbing — the session layer of `fs-overlay/`
-A static, SoC-agnostic overlay mirror-copied into the rootfs by `images/assemble-rootfs.sh`
-(this tree was the standalone `session/` before the trees were merged into `fs-overlay/`):
+### Plumbing — the session layer of `rootfs/overlay/`
+A static, SoC-agnostic overlay mirror-copied into the rootfs by `rootfs/assemble-rootfs.sh`
+(this tree was the standalone `session/` before the trees were merged into `rootfs/overlay/`):
 
 | File | Role |
 |---|---|
@@ -134,7 +134,7 @@ gamescope line to the smoke. Input (step 1d) reaches the hosted client.
 ## Step 3 — novadeck Qualcomm HW-support (layer C) [DONE]
 Port/replace `jupiter-hw-support` + `steamos-manager` affordances onto Qualcomm backings per the
 layer-C matrix in `.claude/plans/novadeck.plan.md`. Backings ship as a static, SoC-agnostic overlay
-under `fs-overlay/`, mirror-copied into the rootfs by `images/assemble-rootfs.sh`.
+under `rootfs/overlay/`, mirror-copied into the rootfs by `rootfs/assemble-rootfs.sh`.
 
 | Deck-UI affordance | Qualcomm backing | Notes |
 |---|---|---|

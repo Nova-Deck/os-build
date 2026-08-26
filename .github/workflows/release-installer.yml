@@ -2,13 +2,13 @@
 # storage. Phase 6 of .claude/plans/internal-install.plan.md.
 #
 # THE MEDIUM CARRIES ITS OWN /home SEED, so there is nothing to publish alongside it and nothing to
-# hand between jobs. `make installer` fetches the Steam tree, packs it, and install/mkimage.sh
+# hand between jobs. `make installer` fetches the Steam tree, packs it, and installer/mkimage.sh
 # stages it into the medium with its sha256 beside it as the pin the spine checks.
 #
 # It briefly worked the other way — a `seed` job publishing a content-addressed tarball to the update
 # server and emitting its hash as an output for the build to bake in. That was two artifacts, two
 # publishers and a value that had to survive the trip between two jobs, to achieve exactly what
-# carrying the file achieves: a medium bound to one seed. See steam-seed/pack-seed.sh's header.
+# carrying the file achieves: a medium bound to one seed. See build/steam-seed/pack-seed.sh's header.
 #
 # TAG NAMESPACE: `installer/v*`, its own, for the reason card/ and ota/ have theirs — three
 # artifacts with three cadences. A medium is cut when the installer changes or when a newer Steam
@@ -96,7 +96,7 @@ jobs:
       medium_url: ${{ steps.publish.outputs.url }}
     # The same environment the card publishes from — the same bucket, the same push-only credential,
     # and the same fact that it can DELETE as well as add (see the retention note in
-    # images/publish-card.sh). Declaring it here is what makes those secrets resolve at all.
+    # ota/publish-card.sh). Declaring it here is what makes those secrets resolve at all.
     environment: ${{ vars.CARDS_ENVIRONMENT || 'release-cards' }}
     steps:
       - uses: actions/checkout@v7
@@ -129,7 +129,7 @@ jobs:
           # 10 GB free tier, which is as much back catalogue as that tier affords. An older medium
           # stays a working recovery tool — it needs nothing from the server but the OS bundle.
           NOVADECK_CARD_KEEP: '2'
-        run: images/publish-card.sh "$VERSION" upload/installer.img.gz meta
+        run: ota/publish-card.sh "$VERSION" upload/installer.img.gz meta
 
   release:
     needs: [prep, publish]

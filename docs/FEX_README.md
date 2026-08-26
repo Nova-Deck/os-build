@@ -1,8 +1,8 @@
 # FEX — x86 emulation runtime configuration
 
-The config lives in the unified overlay payload (`fs-overlay/usr/share/fex-emu/`,
-`fs-overlay/usr/lib/novadeck/game-launch`), copied wholesale into the rootfs by
-`images/assemble-rootfs.sh`. JSON has no comment syntax, so the rationale lives here.
+The config lives in the unified overlay payload (`rootfs/overlay/usr/share/fex-emu/`,
+`rootfs/overlay/usr/lib/novadeck/game-launch`), copied wholesale into the rootfs by
+`rootfs/assemble-rootfs.sh`. JSON has no comment syntax, so the rationale lives here.
 
 ## The two x86 paths are independent
 
@@ -126,7 +126,7 @@ option and must export the variable. The override stays useful to us as a debugg
 at an alternate tree to exercise a rebuilt guest without a reflash.
 
 Our pinned `ArchLinux.ero` already satisfies pressure-vessel's graphics-provider contract in full,
-so no new guest has to be built. `images/assemble-rootfs.sh` surfaces it as **two** fstab rows: the
+so no new guest has to be built. `rootfs/assemble-rootfs.sh` surfaces it as **two** fstab rows: the
 `.ero` loop-mounted read-only as a lower layer at `/run/novadeck/guestos-lower`, and an overlay at
 the probed path laying our `packages/mesa-x86` Turnip payload over it. Both `nofail`. The merged
 tree is what every x86 consumer reads — the compat tool probes it, and the system FEX `RootFS`
@@ -140,7 +140,7 @@ same mount is a real guest tree for the tool's other use of that path — it han
 `RootFS`. (Inside a pressure-vessel container that second use is moot: `emulator.json` forces
 `FEX_ROOTFS` empty and the container supplies the x86 userspace. Out of container it matters.)
 
-Until that image, we overlaid a manifest of our own from `fs-overlay` — the 2026-01-08 guest
+Until that image, we overlaid a manifest of our own from `rootfs/overlay` — the 2026-01-08 guest
 carried none. Upstream's differs from what we had written, and in its favour: no `gbm` entry for
 `x86_64-linux-gnu`, a `fallback_library_paths` for it instead, and an explicit `vdpau: false` where
 ours left the `true` default. Ours was deleted with the pin bump; nothing of ours may live under
@@ -164,7 +164,7 @@ outright if Steam ever selects the tool.
 ### The manifest gate
 
 The manifest now lives inside a 2 GiB pinned artifact that is not in the tree, so it cannot be
-checked by reading committed files. `images/assemble-rootfs.sh` reads it out of the image at build
+checked by reading committed files. `rootfs/assemble-rootfs.sh` reads it out of the image at build
 time instead — `dump.erofs --cat --path=/graphics_provider.json`, parsed, with both architectures
 required (FEX emulates x86-64 *and* i386; dropping i386 silently breaks every 32-bit title). A
 rootfs bump to an image without a manifest would otherwise surface as a card that boots fine and
@@ -174,7 +174,7 @@ cannot launch an x86 title.
 only prints `read inode failed` to stderr, so the gate has to parse the content. This is also the
 only reason `erofs-utils` is in `build/Dockerfile`.
 
-`images/test-graphics-provider.sh` (in `make test`) guards what committed files can still show, in
+`tests/test-graphics-provider.sh` (in `make test`) guards what committed files can still show, in
 five groups:
 
 - **fstab injection** — `packages/fex-rootfs/prebuilt.pin`'s `dest` is the lower mount's source; the

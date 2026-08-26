@@ -1,0 +1,33 @@
+# novadeck INSTALLER /etc/os-release (Phase 6).
+#
+# Installed as /etc/os-release by installer/mkroot.sh, the way rootfs/conf/os-release is installed by
+# rootfs/customize-base.sh — see that file for why a from-packages bootstrap has to own this
+# rather than inherit the vendor's.
+#
+# WHY A SECOND FILE RATHER THAN REUSING rootfs/conf/os-release. The two images are not the same
+# product and the difference has to be legible from inside a running system. `ID=novadeck` is what
+# the shipped image answers, and the install spine's own rules key off "is this disk ours" — so an
+# installer that also answered `novadeck` would be a device claiming to be an install of the thing
+# it is about to install. It is also the string a person reads off a fallback console at the moment
+# something has gone wrong (novadeck-installer-console.service), where "which image am I even
+# looking at" is the first question.
+#
+# NO PER-BUILD FIELDS HERE, same rule as the main image: this file is static so a rebuild does not
+# churn the tree — and it is an INPUT to installer/mkroot.sh's reuse key, so a field that moved every
+# build would re-bootstrap the whole emulated root every build.
+#
+# installer/mkimage.sh writes the per-build identity: it rewrites /etc/os-release as this file plus
+# VARIANT/VERSION_ID/VERSION/BUILD_ID, and writes the same fields to /etc/novadeck-release and to
+# out/images/installer.release beside the image. It is stamped THERE rather than in mkroot.sh
+# because the root is the cacheable half and the image is the published one — a timestamp in the
+# root would either bust that cache on every run or survive a reuse and describe yesterday's build.
+#
+# ID_LIKE lists novadeck first and arch second: tooling that branches on "is this a novadeck
+# system" should match, and tooling that branches on distro family gets the Arch answer that this
+# actually is.
+NAME="NovaDeck Installer"
+PRETTY_NAME="NovaDeck Installer"
+ID=novadeck-installer
+ID_LIKE="novadeck arch"
+ANSI_COLOR="1;35"
+HOME_URL="https://github.com/Nova-Deck/os-build"

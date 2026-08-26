@@ -1,0 +1,28 @@
+[Unit]
+Description=Decky Loader (SteamDeck Plugin Loader)
+# VENDORED from upstream decky-loader dist/plugin_loader-prerelease.service (the sed target
+# ${HOMEBREW_FOLDER} resolved to /home/deck/homebrew) rather than fetched at build time —
+# committed config, like every other unit here. The upstream NAME is kept on purpose: Decky's
+# self-updater manages `plugin_loader.service` by name, and a renamed unit would leave it
+# managing a ghost.
+# The binary is x86_64 and runs under the system FEX binfmt (see packages/decky-loader/
+# prebuilt.pin); its FEX knobs are rootfs/overlay/usr/share/fex-emu/AppConfig/PluginLoader.json.
+# One deliberate drop from upstream: Environment=LOG_LEVEL=DEBUG — an always-on service does not
+# get to write debug-volume logs into a journal that shares the card with the Steam library.
+After=network.target novadeck-decky-sync.service
+Wants=novadeck-decky-sync.service
+RequiresMountsFor=/home/deck
+
+[Service]
+Type=simple
+User=root
+Restart=always
+KillMode=process
+TimeoutStopSec=15
+ExecStart=/home/deck/homebrew/services/PluginLoader
+WorkingDirectory=/home/deck/homebrew/services
+Environment=UNPRIVILEGED_PATH=/home/deck/homebrew
+Environment=PRIVILEGED_PATH=/home/deck/homebrew
+
+[Install]
+WantedBy=multi-user.target

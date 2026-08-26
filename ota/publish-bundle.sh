@@ -4,14 +4,14 @@
 #
 #   ota/publish-bundle.sh out/images/novadeck-0.2.0.raucb [channel]
 #
-# Shaped after images/publish-card.sh — credentials from the environment only, an explicit KEEP
+# Shaped after ota/publish-card.sh — credentials from the environment only, an explicit KEEP
 # retention, and verification at the PUBLIC url rather than trust in the upload — but over SSH/rsync
 # rather than rclone. This is not S3: it is a rented Ubuntu box serving a directory, so the transport
 # is the one that box already has, and there is no write surface exposed to the internet at all.
 #
 # THE SIGNATURE GATE RUNS FIRST, BEFORE A BYTE MOVES, and it has no override. A bundle is accepted
 # only if it verifies against the CA that is baked into every device's keyring
-# (images/rauc/novadeck-ca.pem, installed as /etc/rauc/keyring.pem by images/assemble-rootfs.sh).
+# (ota/rauc/novadeck-ca.pem, installed as /etc/rauc/keyring.pem by rootfs/assemble-rootfs.sh).
 # Publishing an unsigned or dev-cert bundle would not be a near miss: `make bundle` without PKIDIR
 # mints an EPHEMERAL 7-day cert that is deleted with its tempdir, so the result is a ~4G download
 # every device in the field throws away at the last step, over Wi-Fi, having already asked the user
@@ -26,7 +26,7 @@
 # purpose, which accepts only emailProtection or no EKU at all, and rejects our codeSigning release
 # cert with "unsuitable certificate purpose" — a bundle that every device would happily install.
 # --keyring overrides only [keyring] path=, which names /etc/rauc/keyring.pem: an on-device absolute
-# path that does not exist here. Same pair as images/rauc/verify-signing.sh and docs/RUNBOOK.md.
+# path that does not exist here. Same pair as ota/rauc/verify-signing.sh and docs/RUNBOOK.md.
 #
 # ORDER OF OPERATIONS IS THE WHOLE DESIGN. Bytes first under a .part name, renamed into place,
 # hashed ON THE SERVER, and latest.json flipped LAST. A device that checks mid-publish must see
@@ -84,8 +84,8 @@ SSH_OPTS=(-o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout
 remote() { ssh "${SSH_OPTS[@]}" "$USER_@$HOST" "$@"; }
 
 # --- 1. the signature gate -----------------------------------------------------------------------
-CONF_REL="fs-overlay/etc/rauc/system.conf"
-KEYRING_REL="images/rauc/novadeck-ca.pem"
+CONF_REL="rootfs/overlay/etc/rauc/system.conf"
+KEYRING_REL="ota/rauc/novadeck-ca.pem"
 [ -f "$ROOT/$CONF_REL" ]    || die "no $CONF_REL — run this from the novadeck tree"
 [ -f "$ROOT/$KEYRING_REL" ] || die "no $KEYRING_REL — run this from the novadeck tree"
 

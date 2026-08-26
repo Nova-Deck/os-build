@@ -20,7 +20,7 @@ itself, so it is a menu on first boot and a saved answer afterwards.
 | `grub.pin` | Pinned source for stage 2: the **GNU GRUB 2.14 release tarball** from ftp.gnu.org. |
 | `patches/grub/` | Our delta on it: framebuffer rotation, the `novadeck` boot-attempts module, and the `Makefile.core.def` stanza that builds it. Applied lexically, like `kernel/patches/`. |
 | `grub.sh` | Cross-build stage 2 → `out/boot/grubaa64.efi` + `fonts/dejavu-mono.pf2`, then generate both configs. |
-| `gen-grub-cfg.sh <A\|B> <out>` | Generate one slot's `grub.cfg`. No toolchain — `images/test-stage2-grub.sh` runs it directly. |
+| `gen-grub-cfg.sh <A\|B> <out>` | Generate one slot's `grub.cfg`. No toolchain — `tests/test-stage2-grub.sh` runs it directly. |
 | `boards.map` | Build-time board catalog: `id⇥name⇥dtb⇥bootargs`. Cross-checked against the runtime device profiles by that test. |
 | `deploy.sh <esp>` | Dev helper: write the stage-1 tree to a mounted ESP. Stage 2 comes from `make sdcard` or a RAUC install. |
 
@@ -35,7 +35,7 @@ which is why the board args moved out of the DTS `/chosen/bootargs` too. They co
 |---|---|
 | common args | `BOOT_CMDLINE` in `gen-grub-cfg.sh` |
 | board args | the fourth column of `boards.map` |
-| `root=` `novadeck.var=` `novadeck.efi=` | per slot, as `PARTUUID=` read out of the GPT at boot with `probe --part-uuid`; `PARTLABEL=` from `images/partition-table.txt` is the announced fallback |
+| `root=` `novadeck.var=` `novadeck.efi=` | per slot, as `PARTUUID=` read out of the GPT at boot with `probe --part-uuid`; `PARTLABEL=` from `image/partition-table.txt` is the announced fallback |
 | `novadeck.slot=` | per slot, stated outright — a PARTUUID carries no slot letter for the initramfs to match |
 
 The specs are `PARTUUID=` because every novadeck medium carries the same eight GPT names: with a
@@ -43,7 +43,7 @@ card inserted on a device installed to internal storage, `PARTLABEL=` resolves t
 enumerates first. The UUIDs are derived from the disk stage 2 was chainloaded off, at boot, so
 they name that disk by construction and no update has to rewrite them. This needs `probe` in the
 embedded `MODULES` — an unembedded module is an "unknown command" that leaves the variable unset
-and takes the fallback on every boot, so `images/test-stage2-grub.sh` asserts the module list.
+and takes the fallback on every boot, so `tests/test-stage2-grub.sh` asserts the module list.
 
 ## The novadeck module
 
@@ -85,6 +85,6 @@ make steamcl      # stage 1
 make grub         # stage 2 + both grub.cfg files
 ```
 
-The stage-1/2 binaries reach a card through `images/make-sdcard.sh`, and reach an updated slot
+The stage-1/2 binaries reach a card through `image/make-sdcard.sh`, and reach an updated slot
 through the RAUC post-install hook, which takes them from `/usr/lib/novadeck/boot/` inside the root
 it just installed — so a root and the software that boots it always come from one build.

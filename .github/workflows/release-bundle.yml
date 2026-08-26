@@ -150,7 +150,7 @@ jobs:
   # `format=verity` bundles (it truncates the old signature and regenerates — _reference/rauc/src/
   # bundle.c, resign_bundle). It was rejected anyway: resigning means the build job first mints a
   # DEV-cert bundle over the exact payload that is about to ship, and a bundle whose only difference
-  # from the shippable one is which key signed it is precisely the artifact images/rauc/
+  # from the shippable one is which key signed it is precisely the artifact ota/rauc/
   # manifest.raucm.in's `mode` field exists to keep distinguishable. Wrapping the rootfs here instead
   # means a tagged payload is signed exactly once, by the real key, and no other signature over those
   # bytes ever exists.
@@ -187,7 +187,7 @@ jobs:
         run: |
           set -euo pipefail
           # $RUNNER_TEMP, never the workspace — the repo tree gets uploaded as artifacts and cached,
-          # and a private key that lands in either is a leaked key. Same convention as ci/README.md
+          # and a private key that lands in either is a leaked key. Same convention as docs/ci.md
           # and as PKIDIR locally (~/novadeck-pki): outside anything the build can sweep up.
           if [ -n "${RAUC_CERT_PEM:-}" ] && [ -n "${RAUC_KEY_PEM:-}" ]; then
             pki="$RUNNER_TEMP/pki"
@@ -210,7 +210,7 @@ jobs:
 
       # Over the SIGNED bundle, which is why this moved here from image.yml: the sum a consumer
       # checks has to be the sum of the bytes they receive, and those bytes do not exist until the
-      # step above runs. card-meta.sh's other half — the provenance copy of images/manifest.lock —
+      # step above runs. card-meta.sh's other half — the provenance copy of rootfs/manifest.lock —
       # comes from this job's checkout, which is the same commit the build job used.
       - name: stage release metadata
         run: |
@@ -218,7 +218,7 @@ jobs:
           f=$(find upload -maxdepth 1 -name '*.raucb' -print -quit)
           [ -n "$f" ] && [ -f "$f" ] || { echo "::error::no bundle to hash"; exit 1; }
           mkdir -p meta
-          images/card-meta.sh "$f" meta
+          image/card-meta.sh "$f" meta
 
       - name: upload metadata artifact
         uses: actions/upload-artifact@v7

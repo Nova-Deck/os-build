@@ -3,7 +3,7 @@
 The operational path, end to end. Design rationale lives elsewhere: [`phase4.md`](phase4.md) for
 why A/B looks like this, [`remote-access.md`](remote-access.md) for why SSH is shaped the way it
 is, [GitHub issues](https://github.com/Nova-Deck/os-build/issues) for the open items, and
-[`DONE.md`](../DONE.md) for the hardware-validation record each step here rests on.
+[`docs/worklog/DONE.md`](../docs/worklog/DONE.md) for the hardware-validation record each step here rests on.
 
 Every `make` invocation below runs from the repo root. A dev build needs its environment sourced
 **before every one of them** (`set -a; . ./dev.env; set +a`) — see the README's Building section.
@@ -38,7 +38,7 @@ dead card. That is a setting, not a fault.
 
 ## The disk it all operates on
 
-<!-- AUTO-GENERATED from images/partition-table.txt — regenerate with /ecc:update-docs -->
+<!-- AUTO-GENERATED from image/partition-table.txt — regenerate with /ecc:update-docs -->
 
 | # | Partition | Size | FS | Label |
 |---|---|---|---|---|
@@ -53,8 +53,8 @@ dead card. That is a setting, not a fault.
 
 <!-- END AUTO-GENERATED -->
 
-`images/partition-table.txt` is the single source of truth for sizes, typecodes and labels;
-`images/genpart.sh` emits the `sgdisk` script from it. Three facts drive most of what follows:
+`image/partition-table.txt` is the single source of truth for sizes, typecodes and labels;
+`image/genpart.sh` emits the `sgdisk` script from it. Three facts drive most of what follows:
 
 - **The shared ESP carries the bootconf, not a kernel.** SteamOS/conf/{A,B}.conf on the ESP decide
   which image boots and how many failed attempts it is allowed; the stage-1 steamcl (as
@@ -130,7 +130,7 @@ with the native arm64 Steam client. Each `efi-*` partition carries that slot's s
   of an already-compressed root, surviving release compression whole — it was ~4 of the ~9 GiB a
   card compressed to until 2026-08-04, for a failover window that closes the first time RAUC writes
   the slot. Empty, a card compresses to ~5 GiB instead. Omitting the conf is what keeps steamcl from
-  offering the empty slot as a boot candidate; see the seeding site in `images/make-sdcard.sh` for
+  offering the empty slot as a boot candidate; see the seeding site in `image/make-sdcard.sh` for
   the `SUPERMAX_BOOT_FAILURES` path it closes. The first update writes B in full and creates its
   conf.
 
@@ -225,7 +225,7 @@ verification` at creation, so a green `make` is not evidence the bundle is valid
 it yourself, **through the shipped config**:
 
 ```sh
-rauc --conf=fs-overlay/etc/rauc/system.conf info out/images/novadeck-<version>.raucb
+rauc --conf=rootfs/overlay/etc/rauc/system.conf info out/images/novadeck-<version>.raucb
 ```
 
 Do not use `rauc info --keyring <ca>` — that applies rauc's default `smimesign` purpose, which
@@ -254,7 +254,7 @@ and cert renewal are in **`docs/ota.md`**.
 Drive the install **as `deck` over SSH** — rauc's D-Bus service authorizes it with no `sudo` on the
 box and no password anywhere. (The mechanism is rauc's *open bus policy*, not polkit: 1.15.2 ships
 no polkit policy, and its `de.pengutronix.rauc.conf` allows any local user to call the installer. The
-signature is the gate. See `docs/ota.md` and `DONE.md` — it was accepted as a design choice.)
+signature is the gate. See `docs/ota.md` and `docs/worklog/DONE.md` — it was accepted as a design choice.)
 
 ```sh
 ssh deck@<device> rauc install /path/to/novadeck-<version>.raucb
@@ -387,7 +387,7 @@ cat /mnt-efi/SteamOS/partsets/self            # which image this efi partition I
 `image-invalid: 1` on the conf of the image that just failed means it was demoted — by the health
 unit's failure path, by hand, or by an interrupted install. `boot-attempts:` will read 0 whatever
 happened, until the stage-2 counter is wired up.
-`steamos-bootconf` is the authoritative tool; `images/test-bootctl.sh` documents the semantics.
+`steamos-bootconf` is the authoritative tool; `tests/test-bootctl.sh` documents the semantics.
 
 The initramfs is written to **degrade loudly rather than brick**: if it cannot assemble the
 `/etc` overlay it falls back to a writable un-overlaid root and says so via `/dev/kmsg`. A device

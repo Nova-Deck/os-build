@@ -1,0 +1,19 @@
+# novadeck OTA release signing certificate profile — the ONE definition of it.
+#
+# Read by BOTH ota/gen-signing-ca.sh (which mints the real cert with it) and
+# ota/rauc/verify-signing.sh (which mints a throwaway cert with it and proves the shipped
+# /etc/rauc/system.conf accepts one). It is a file rather than a heredoc in each because it used to
+# be a heredoc in each: the self-test carried a hand-copy of these three lines, so a change here
+# would have left it passing for a cert profile we no longer ship — a green check asserting the
+# wrong thing, which is worse than no check at all.
+#
+# extendedKeyUsage=codeSigning and CA:FALSE are what stop this cert being usable to mint more certs
+# or to terminate TLS if it ever leaks out of CI. That EKU is also why system.conf needs
+# check-purpose=codesign: RAUC's default verification purpose is smimesign, which accepts only
+# emailProtection or no EKU at all, so the two ends have to be changed together. They are asserted
+# to agree by verify-signing.sh, and tests/test-verify-signing.sh asserts that assertion bites.
+#
+# OpenSSL x509v3 extension format (openssl x509 -req -extfile). Comments are '#'.
+basicConstraints=critical,CA:FALSE
+keyUsage=critical,digitalSignature
+extendedKeyUsage=critical,codeSigning

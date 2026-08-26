@@ -15,7 +15,7 @@
 # .github/workflows/overlay.yml for the measurements behind that.
 #
 # THE TWO ARTIFACTS SHIP TO DIFFERENT PLACES, AND NEITHER SHIPS FROM HERE. A CARD goes to the public
-# Cloudflare R2 bucket a person downloads and flashes from (see images/publish-card.sh for why not a
+# Cloudflare R2 bucket a person downloads and flashes from (see ota/publish-card.sh for why not a
 # GitHub release asset: ~5 GiB against a 2 GiB cap). A BUNDLE goes to the Oracle Cloud instance
 # devices fetch their OTAs from — a different host, different credentials, different audience. Both
 # paths stop at a workflow artifact here and are handed off to a publishing job in the caller.
@@ -105,7 +105,7 @@ permissions:
 
 jobs:
   # The one artifact in the build that targets the x86 FEX guest rather than the arm64 host:
-  # the Turnip payload images/assemble-rootfs.sh stages into the image (packages/mesa-x86/).
+  # the Turnip payload rootfs/assemble-rootfs.sh stages into the image (packages/mesa-x86/).
   # ITS OWN JOB, ON AN x86_64 RUNNER, because a runner arch is the one thing a per-package
   # container cannot change: on the arm64 build runner the pinned x86 Arch container would run
   # under qemu-x86_64, turning a ~10-minute native build into an hour against this workflow's
@@ -116,7 +116,7 @@ jobs:
   mesa-x86:
     name: mesa-x86 payload
     # NOT FOR THE INSTALLER. This payload is staged into the shipped rootfs by
-    # images/assemble-rootfs.sh, and the installer root never runs that script — it has its own
+    # rootfs/assemble-rootfs.sh, and the installer root never runs that script — it has its own
     # package set, no FEX and no x86 guest at all. Building it for an installer release would be up
     # to 45 minutes for bytes the artifact cannot contain.
     if: inputs.artifact != 'installer'
@@ -165,8 +165,8 @@ jobs:
     timeout-minutes: 350
     env:
       # NOVADECK_VERSION is the ONLY version knob the build has. The Makefile's ID_ENV forwards it
-      # into the rootfs container, images/assemble-rootfs.sh stamps it into /etc/novadeck-release,
-      # and images/genbundle.sh reads it back out of the assembled image to name the bundle. Absent,
+      # into the rootfs container, rootfs/assemble-rootfs.sh stamps it into /etc/novadeck-release,
+      # and ota/genbundle.sh reads it back out of the assembled image to name the bundle. Absent,
       # the artifact ships identifying itself as `dev`.
       #
       # There used to be a second knob, `VERSION`, which named the bundle independently — the pair
@@ -201,7 +201,7 @@ jobs:
       - uses: actions/cache@v6
         with:
           path: work/pacman-cache
-          key: pacman-cache-${{ hashFiles('snapshot.pin', 'images/manifest.lock') }}
+          key: pacman-cache-${{ hashFiles('build/snapshot.pin', 'rootfs/manifest.lock') }}
           restore-keys: pacman-cache-
 
       # The x86 Turnip payload for the FEX guest, built natively in the mesa-x86 job above. The
@@ -240,7 +240,7 @@ jobs:
           elif [ "$ARTIFACT" = bundle ]; then
             # $RUNNER_TEMP, never the workspace — the repo tree gets uploaded as artifacts and
             # cached, and a private key that lands in either is a leaked key. This is the convention
-            # ci/README.md already set for this secret; it also mirrors how PKIDIR works locally
+            # docs/ci.md already set for this secret; it also mirrors how PKIDIR works locally
             # (~/novadeck-pki), i.e. outside anything the build can sweep up.
             if [ -n "${RAUC_CERT_PEM:-}" ] && [ -n "${RAUC_KEY_PEM:-}" ]; then
               pki="$RUNNER_TEMP/pki"
@@ -257,7 +257,7 @@ jobs:
             # The recovery medium. No signing key of any kind: like a card, it is flashed over USB
             # by someone holding the device, so there is no signature for anything to verify. It
             # CARRIES the Steam tree /home is built from, so `make installer` fetches and packs that
-            # first (steam-seed/pack-seed.sh) and mkimage stages it with its sha256 beside it; then
+            # first (build/steam-seed/pack-seed.sh) and mkimage stages it with its sha256 beside it; then
             # it bootstraps the installer root — a separate package set and lock from the shipped
             # image — and lays the two-partition medium.
             make installer
@@ -279,7 +279,7 @@ jobs:
       # identical.
       #
       # Those numbers predate 2026-08-04, when release cards stopped populating slot B (a second
-      # copy of an incompressible root: see images/make-sdcard.sh). The same gz -6 over the same
+      # copy of an incompressible root: see image/make-sdcard.sh). The same gz -6 over the same
       # 19G-apparent card now measures 5.08 GiB — 3.89 GiB less, 43% off. Nothing about the CHOICE
       # changes: the payload is still already-compressed and the formats still land within a
       # fraction of each other, so the comparison above is kept as the record of why .gz.
@@ -305,10 +305,10 @@ jobs:
       # and writes to a card with balenaEtcher or Raspberry Pi Imager. It is ~600 MiB rather than the
       # card's ~5 GiB, so the compression time the card's note measures barely registers here.
       #
-      # AND THE IDENTITY SIDECAR, which install/mkimage.sh writes from the same values it stamped
+      # AND THE IDENTITY SIDECAR, which installer/mkimage.sh writes from the same values it stamped
       # inside the image. The publish job names the R2 prefix from the release tag, but a person
       # holding the downloaded file needs the build to be nameable without opening a squashfs out of
-      # the middle of a GPT — and install/verify-image.sh asserts the two are byte-identical.
+      # the middle of a GPT — and installer/verify-image.sh asserts the two are byte-identical.
       - name: compress the installer medium
         if: inputs.artifact == 'installer'
         run: |
@@ -336,7 +336,7 @@ jobs:
           cp --sparse=always out/images/rootfs.img out/images/rootfs.release upload/
           ls -lh upload/ >> "$GITHUB_STEP_SUMMARY"
 
-      # Checksums + the pins this image was actually built against. One producer (images/card-meta.sh)
+      # Checksums + the pins this image was actually built against. One producer (image/card-meta.sh)
       # for both the R2 copy and the workflow artifact, so the two cannot drift.
       #
       # NOT ON THE ROOTFS PATH. The sums here are what a consumer checks against the thing they
@@ -363,7 +363,7 @@ jobs:
           # Makefile's clean targets shell out to busybox rather than using host rm. The runner
           # cannot mkdir inside it. This bit once already; do not "tidy" the path back into out/.
           mkdir -p meta
-          images/card-meta.sh "$f" meta
+          image/card-meta.sh "$f" meta
 
       - name: upload metadata artifact
         if: inputs.artifact != 'rootfs'

@@ -111,7 +111,7 @@ three layers without restarting the daemon.
 
 ## Tests
 
-`images/test-fan-curve.sh` (part of `make test`) drives the real parse, resample, write and
+`tests/test-fan-curve.sh` (part of `make test`) drives the real parse, resample, write and
 reset paths against fabricated config trees: layer precedence, that an operator's comments
 survive a write, that a reset drops only the active profile, and that a bad drop-in is
 quarantined rather than re-broken on the next boot.

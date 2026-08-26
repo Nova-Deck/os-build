@@ -167,7 +167,7 @@ package() {
   # PowerProfiles.ActiveProfile on the system bus once a second and switches its own
   # performance/balanced/powersave mode live, with no unit restart. novadeck-powerd answers that
   # name (we ship no power-profiles-daemon) — see the PPD_NAMES block in
-  # fs-overlay/usr/bin/novadeck-powerd for why both bus names exist and why ordering matters.
+  # rootfs/overlay/usr/bin/novadeck-powerd for why both bus names exist and why ordering matters.
   # Deliberately set HERE and not via a scx.service.d drop-in: upstream's ExecStart is
   # `${SCX_FLAGS_OVERRIDE:-$SCX_FLAGS}`, so a drop-in would silently outrank a user's own edit to
   # this file. Keeping it in the file means a user can see it and change it.

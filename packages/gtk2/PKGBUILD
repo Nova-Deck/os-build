@@ -7,7 +7,7 @@
 # (and pulls gdk-pixbuf2/pango/cairo via its deps). The earlier plan resolved these from inside
 # Steam's bundled SR3 runtime via pressure-vessel; we now provide gtk2 on the HOST from this
 # overlay instead, so the client resolves its UI libs against the release base. See
-# images/customize-base.sh (gtk2 is in PKGS) and the holo-pacman-no-gtk2 note.
+# rootfs/customize-base.sh (gtk2 is in PKGS) and the holo-pacman-no-gtk2 note.
 #
 # This tracks the Arch `gtk2` recipe (gitlab.archlinux.org/.../packages/gtk2) as closely as
 # possible. Deviations from Arch, all driven by the overlay build mechanism / our use case:

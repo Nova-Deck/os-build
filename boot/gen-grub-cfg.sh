@@ -4,12 +4,12 @@
 #   boot/gen-grub-cfg.sh <A|B> <outfile>
 #
 # Emits the grub.cfg installed as /EFI/steamos/grub.cfg on that slot's efi partition. Pure text:
-# no toolchain, no cross-build, no network — so images/test-stage2-grub.sh can generate and assert
+# no toolchain, no cross-build, no network — so tests/test-stage2-grub.sh can generate and assert
 # the real artifact on a bare host. boot/grub.sh calls it twice after building grubaa64.efi.
 #
 # Two input files, both of which are the single source of truth for what they carry:
 #   boot/boards.map              build-time board catalog (id / menu name / dtb / board bootargs)
-#   images/partition-table.txt   partition ORDER and GPT labels
+#   image/partition-table.txt   partition ORDER and GPT labels
 #
 # THE ONE THING THIS FILE EXISTS TO GET RIGHT is telling GRUB where things are. Stage 2 was
 # chainloaded by steamcl off THIS slot's efi partition, so at the top of the script $root is that
@@ -64,7 +64,7 @@ esac
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BOARDS="$ROOT/boot/boards.map"
-TABLE="$ROOT/images/partition-table.txt"
+TABLE="$ROOT/image/partition-table.txt"
 DTS="$ROOT/kernel/dts/qcom"
 slot_lc="${SLOT,,}"
 
@@ -73,7 +73,7 @@ for f in "$BOARDS" "$TABLE"; do
 done
 
 # --- partition table lookups ------------------------------------------------------------------
-# Row order IS the partition number (images/genpart.sh emits the sgdisk script from the same
+# Row order IS the partition number (image/genpart.sh emits the sgdisk script from the same
 # file, so these cannot disagree without genpart.sh disagreeing too).
 part_num()   { awk -v n="$1" '/^[[:space:]]*#/||/^[[:space:]]*$/{next} {i++; if ($1==n) {print i; exit}}' "$TABLE"; }
 part_label() { awk -v n="$1" '/^[[:space:]]*#/||/^[[:space:]]*$/{next} {if ($1==n) {print $5; exit}}' "$TABLE"; }
@@ -93,7 +93,7 @@ done
 # cannot even hold the same value here, since a FAT label is capped at 11 characters and
 # NOVADECK-ESP is twelve. Searching for a file the ESP is the only partition to carry needs no
 # agreement between this generator and the card assembler at all, which is the point: the last
-# version of this config searched for a FAT label that images/make-sdcard.sh had stopped writing,
+# version of this config searched for a FAT label that image/make-sdcard.sh had stopped writing,
 # and nothing failed — the grubenv simply went missing.
 ESP_MARKER="/SteamOS/conf/$SLOT.conf"
 
@@ -140,7 +140,7 @@ insmod regexp
 
 # --- where our eight partitions actually are ----------------------------------------------------
 # The indices are the one thing in this config an install to internal storage can invalidate. On a
-# card images/genpart.sh owns the whole medium and lays us down at 1..8, so the build-time constants
+# card image/genpart.sh owns the whole medium and lays us down at 1..8, so the build-time constants
 # below are right by construction. An internal install APPENDS our eight to the OEM's existing GPT
 # instead, and where that lands is a per-vendor fact — userdata is sda11 on the AYANEO-family boards
 # and sda17 on the Odin 2 — so a baked gpt1 would address an OEM partition.
@@ -148,14 +148,14 @@ insmod regexp
 # Stage 2 cannot work them out for itself. Searching by label is the exact ambiguity the PARTUUID
 # work below exists to kill; \`probe --part-uuid\` needs the index before it can return anything and
 # has no --part-label to go the other way; and GRUB script has no arithmetic. So whoever CREATED the
-# partitions writes the numbers down — images/make-sdcard.sh for a card, the installer for an
+# partitions writes the numbers down — image/make-sdcard.sh for a card, the installer for an
 # internal install — and this reads them back.
 #
 # THE FILE IS ON THIS SLOT'S EFI PARTITION, NOT THE SHARED ESP, and that is forced rather than
 # chosen: locating the ESP is itself one of the numbers, so an ESP-resident map cannot be read
 # without already knowing what it says. (\$root) is the partition steamcl chainloaded us from, which
 # makes it the one place reachable with no index at all. It survives an update because the efi
-# partition is not a RAUC slot and fs-overlay/usr/lib/rauc/post-install.sh only copies files onto
+# partition is not a RAUC slot and rootfs/overlay/usr/lib/rauc/post-install.sh only copies files onto
 # it — unlike /var, which that hook reformats.
 #
 # Defaults first and the env second, mirroring the PARTLABEL→PARTUUID upgrade further down. The

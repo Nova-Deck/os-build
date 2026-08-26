@@ -78,7 +78,7 @@ diff -urN a/grub-core/commands/efi/novadeck.c b/grub-core/commands/efi/novadeck.
 + *       just attempt the open on every handle and take the first that works.
 + *       No uuid arithmetic, and no assumption about which handles a minimal
 + *       UEFI implementation chooses to publish. The conf lives only on the ESP
-+ *       (images/make-sdcard.sh), so the first hit is the right one.
++ *       (image/make-sdcard.sh), so the first hit is the right one.
 + *
 + *    3. IT FAILS LOUDLY. steamenv's process_boot_config() acts only if the
 + *       load succeeded and returns GRUB_ERR_NONE either way, so "found no

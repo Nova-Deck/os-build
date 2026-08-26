@@ -1,6 +1,6 @@
 # STATUS: BUILDS AND SHIPS, HW-validated on SM8650. `make overlay` produces
 # scx-scheds-1.1.2-1.1-aarch64.pkg.tar.zst carrying scx_lavd + scx_bpfland + scx_rusty
-# (aarch64 ELF), scx.service and /etc/default/scx. It is in images/customize-base.sh PKGS.
+# (aarch64 ELF), scx.service and /etc/default/scx. It is in rootfs/customize-base.sh PKGS.
 #
 # scx_lavd is NOT the default CPU scheduler — it is opt-in. The default is "none" (the stock
 # in-kernel EEVDF).

@@ -1,0 +1,811 @@
+#!/usr/bin/env bash
+# novadeck internal install — THE SPINE. Phase 4c of .claude/plans/internal-install.plan.md.
+#
+#   novadeck-install --bundle <url> --home-seed <url|path> [--disk <dev>] [--userdata-gib N]
+#                    [--intent fresh|reinstall] [--erase-home]
+#
+# Installs NovaDeck onto a device's INTERNAL storage, from an installer medium that is not a slot of
+# the system being built, beside an Android that stays bootable. It is the ordered list of steps and
+# nothing else: every step is a named function, each one delegates to a component that already has
+# its own suite, and the ordering IS the contract.
+#
+# THE ORDER, and what each boundary buys:
+#
+#   recon              nothing has been read yet; the tools are checked here, together, so a missing
+#                      mkfs.btrfs is found now and not after userdata is gone
+#   select-target      pure, side-effect free, its own 83-case suite. Refuses the running disk, a
+#                      damaged GPT, a foreign bootable ESP, two eligible disks
+#   record             the pre-state, appended to the medium if it is writable. NOT A BACKUP -- see
+#                      the block at write_install_record for why the installer deliberately keeps
+#                      none, and why this can never refuse an install
+#   verify sources     the bundle verifies against THIS device's keyring and the home seed matches
+#                      the baked pin. Plan §3 rule 11: before the first sgdisk, because a bundle
+#                      that will not verify must not cost the user their Android data
+#   ------------------ everything above is reversible; nothing below is
+#   CONFIRM            §4d. The last point at which the disk is untouched
+#   carve              userdata shrinks, its stale superblock is invalidated, our eight are appended
+#   mkfs               esp, efi-a, efi-b, home. NOT var-a (seed_var reformats it) and NOT var-b
+#   rauc               root-a streamed and verified; the handler randomises its fsid and seeds var-a
+#   seed /home         the Steam client tree (1.4 GiB packed, ~3.3 GB unpacked), into the
+#                      partition just created -- read off the MEDIUM, which carries it
+#   efi-a / efi-b      stage-2 GRUB, minted partsets, parts.env -- the map of THIS disk
+#   ESP                grubenv, then A.conf, then stage 1
+#   bootaa64.efi       THE LAST BYTE WRITTEN. See below
+#
+# WHY bootaa64.efi IS LAST, and it is a hardware finding rather than a convention. ABL's test is
+# CONTENT-based: it chainloads /EFI/BOOT/bootaa64.efi from an internal ESP if that file exists, and
+# measured on the Pocket ACE 2026-08-21 an internal ESP that exists but is EMPTY does not divert it
+# at all -- the device came straight back to the card. So every interruption before that one copy
+# leaves a device that still boots the installer medium and can simply be re-run, and only after it
+# does recovery need ABL's "force external". That is the difference between a recoverable device and
+# one the user believes we bricked, and it is bought by ordering alone. refresh_esp_stage1() writes
+# that file last for the same reason.
+#
+# WHAT THIS SCRIPT DOES NOT DO, deliberately:
+#   - it does not join a network (§4b) and it does not resolve latest.json. It is handed URLs.
+#   - it does not render the consent screen (§4d). It decides WHETHER consent was given; the screen
+#     is a separate program behind $CONFIRM, so that the policy lives where the offline suite is and
+#     the pixels live where the display is.
+#   - it does not write `devinfo` to make internal the default boot target. Refused on purpose and
+#     permanently: the format is ABL-private, and on Qualcomm parts devinfo also carries unlock and
+#     verity state. The closing message tells the user to hold Volume Up instead.
+#   - it never touches the SD card, and never touches a partition it did not create. The one
+#     exception is userdata, which carve.sh recreates at a new size -- that is the whole consent.
+set -euo pipefail
+
+PROG=${0##*/}
+log()  { printf '[%s] %s\n' "$PROG" "$1"; }
+warn() { printf '[%s] WARNING: %s\n' "$PROG" "$1" >&2; }
+die()  { printf '[%s] ERROR: %s\n' "$PROG" "$1" >&2; exit 1; }
+step() { printf '\n[%s] == %s ==\n' "$PROG" "$1"; }
+
+SELFDIR="$(cd "$(dirname "$0")" && pwd)"
+
+# --- seams ---------------------------------------------------------------------------------------
+# tests/test-install.sh executes THIS file, so what it asserts is the artifact that ships.
+# Overriding these points it at a sandbox and at stub binaries. DEVTEST is the one assertion a
+# sandbox cannot keep -- an unprivileged test has no block device to offer -- and it is the same
+# pair rauc-session.sh and post-install.sh document: everything a wrong answer destroys lives behind
+# a device argument, so treat RUNDIR and DEVTEST as related.
+RUNDIR=${NOVADECK_INSTALL_RUN:-/run/novadeck/install}
+DEVTEST=${DEVTEST:--b}
+# The other assertion a sandbox cannot keep: the suite is not root, and running it as root to reach
+# these code paths would mean an offline test with the privileges to destroy the developer's disk.
+REQUIRE_ROOT=${REQUIRE_ROOT:-1}
+SGDISK=${SGDISK:-sgdisk}
+CURL=${CURL:-curl}
+SHA256=${SHA256:-sha256sum}
+KEYRING=${KEYRING:-/etc/rauc/keyring.pem}
+
+# The consent program. A FIXED PATH with a seam that names WHO renders the screen -- never a value
+# that means "consent given". There is deliberately no variable, flag or file on the medium that
+# satisfies the gate: see take_consent() for the contract, which any substitute still has to
+# implement. An installer that cannot take consent cannot install.
+CONFIRM=${NOVADECK_CONFIRM:-/usr/lib/novadeck/install/confirm}
+
+# The sha256 of the published Steam seed, BAKED INTO THE INSTALLER IMAGE at build time. Explicitly
+# not read from latest.json: the manifest is not a trust boundary (novadeck-update says so at
+# length), and a seed whose hash came from the same server as the seed is not verified at all.
+SEED_PIN=${NOVADECK_SEED_PIN:-/usr/lib/novadeck/install/steam-seed.sha256}
+
+# The components. Resolved by search rather than by repo-relative paths, exactly as carve.sh
+# resolves genpart.sh: some of these ship into the rootfs (/usr/lib/novadeck/install/) and some are
+# installer-only, so on the installer image they sit together and in the repo they do not.
+find_component() {  # <name> <repo-subdir>
+  local name="$1" sub="$2" c
+  for c in "$SELFDIR/$name" "/usr/lib/novadeck/install/$name" "$SELFDIR/../$sub/$name"; do
+    [ -e "$c" ] && { printf '%s\n' "$c"; return 0; }
+  done
+  return 1
+}
+SELECT=${NOVADECK_SELECT_TARGET:-$(find_component select-target.sh install || true)}
+CARVE=${NOVADECK_CARVE:-$(find_component carve.sh install || true)}
+SESSION=${NOVADECK_RAUC_SESSION:-$(find_component rauc-session.sh install || true)}
+HOMESTAGE=${NOVADECK_HOMESTAGE:-$(find_component lib-homestage.sh images || true)}
+SLOTWRITE=${NOVADECK_SLOTWRITE:-$(find_component lib-slotwrite.sh \
+            rootfs/overlay/usr/lib/novadeck/install || true)}
+
+# --- arguments -----------------------------------------------------------------------------------
+usage() {
+  printf 'usage: %s --bundle <url> --home-seed <url|path> [options]\n' "$PROG" >&2
+  printf '  --disk <dev>          target disk; omitted, exactly one must pass selection\n' >&2
+  printf '  --userdata-gib <n>    size Android'"'"'s data partition is recreated at (fresh only)\n' >&2
+  printf '  --intent fresh|reinstall   what the USER asked for; never inferred from the disk\n' >&2
+  printf '  --erase-home          reinstall only: recreate /home instead of keeping it\n' >&2
+  exit 2
+}
+
+DISK=""; UD_GIB=""; BUNDLE=""; HOME_SEED=""; INTENT=""; ERASE_HOME=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --disk)         DISK="${2:-}"; shift 2 ;;
+    --userdata-gib) UD_GIB="${2:-}"; shift 2 ;;
+    --bundle)       BUNDLE="${2:-}"; shift 2 ;;
+    --home-seed)    HOME_SEED="${2:-}"; shift 2 ;;
+    --intent)       INTENT="${2:-}"; shift 2 ;;
+    --erase-home)   ERASE_HOME=1; shift ;;
+    -h|--help)      usage ;;
+    *)              printf '%s: unknown argument %s\n' "$PROG" "$1" >&2; usage ;;
+  esac
+done
+[ -n "$BUNDLE" ] || die "no --bundle given"
+[ -n "$HOME_SEED" ] || die "no --home-seed given"
+
+# THE INTENT IS THE USER'S AND IT IS AN ARGUMENT, never read off the disk -- carve.sh's header makes
+# the same point and it is the same reason: the disk only distinguishes "ours" from "not ours", and
+# a script that inferred intent from that would have to guess between reinstalling, resizing
+# Android's share, and removing us. Two of those three guesses erase something the user wanted kept.
+# The default is `fresh` only because a disk with no novadeck on it admits nothing else, and
+# recon() below refuses the combination that would make the default wrong.
+case "${INTENT:-}" in
+  ''|fresh|reinstall) ;;
+  *) die "--intent must be fresh or reinstall, got '$INTENT'" ;;
+esac
+
+# --- state carried between steps -----------------------------------------------------------------
+MODE=""; SECTOR=""; UD_INDEX=""; UD_START=""; UD_END=""; CEIL=""; WWID=""
+declare -A PART=()          # gpt name -> index, from carve.sh
+declare -A DEV=()           # gpt name -> /dev/disk/by-partuuid/...
+MOUNTS=()                   # unwound by the EXIT trap, deepest first
+
+# ONE EXIT TRAP FOR THE WHOLE RUN, armed before the first mount. seed_var() in lib-slotwrite.sh
+# chains onto whatever handler it finds and restores it afterwards precisely so this one survives
+# the RAUC handler running underneath it; that arrangement only works if this is armed first.
+cleanup() {
+  local st=$? i
+  for (( i=${#MOUNTS[@]}-1; i>=0; i-- )); do
+    umount "${MOUNTS[$i]}" 2>/dev/null || true
+  done
+  return $st
+}
+trap cleanup EXIT
+
+mount_at() {  # <dev> <mountpoint> [options...]
+  local dev="$1" mnt="$2"; shift 2
+  mkdir -p "$mnt" || die "cannot create $mnt"
+  mount "$@" "$dev" "$mnt" || die "cannot mount $dev at $mnt"
+  MOUNTS+=("$mnt")
+}
+
+unmount_at() {  # <mountpoint> -- drop it from the trap's list too, so a later failure does not retry
+  local mnt="$1" i keep=()
+  umount "$mnt" || die "cannot unmount $mnt"
+  for i in "${MOUNTS[@]}"; do [ "$i" = "$mnt" ] || keep+=("$i"); done
+  MOUNTS=("${keep[@]+"${keep[@]}"}")
+}
+
+# =================================================================================================
+# 1. recon
+# =================================================================================================
+# EVERY EXTERNAL COMMAND, ASSERTED TOGETHER AND FIRST. The installer image is a different root from
+# the shipped one and from this repo, so "it was there yesterday" is not an argument -- and an
+# offline suite inherits the HOST's PATH, so it proves the logic and never the image's tool
+# inventory. The cost of finding out late is the point: mkfs.btrfs is not called until after
+# userdata has been destroyed, and a spine that discovered it there would have taken the user's
+# Android data to reach an error it could have printed at second zero.
+recon() {
+  step "recon"
+  [ "$REQUIRE_ROOT" = 0 ] || [ "$(id -u)" = 0 ] || die "must run as root"
+
+  local t missing=""
+  for t in "$SGDISK" "$CURL" "$SHA256" \
+           mkfs.vfat mkfs.ext4 mkfs.btrfs btrfstune btrfs blkid \
+           mount umount tar rauc dbus-daemon gdbus partprobe udevadm; do
+    command -v "$t" >/dev/null 2>&1 || missing="$missing $t"
+  done
+  [ -z "$missing" ] && log "tools: all present" \
+    || die "the installer image is missing:$missing"
+
+  local c
+  for c in "$SELECT" "$CARVE" "$SESSION"; do
+    [ -n "$c" ] && [ -x "$c" ] || die "cannot find an executable component (looked for select-target.sh, carve.sh, rauc-session.sh)"
+  done
+  for c in "$SLOTWRITE" "$HOMESTAGE"; do
+    [ -n "$c" ] && [ -r "$c" ] || die "cannot find lib-slotwrite.sh / lib-homestage.sh"
+  done
+  [ -r "$KEYRING" ] || die "no readable RAUC keyring at $KEYRING -- nothing would be verified"
+  [ -x "$CONFIRM" ] || die "no consent program at $CONFIRM -- an installer that cannot take consent cannot install"
+
+  mkdir -p "$RUNDIR" || die "cannot create $RUNDIR"
+
+  # shellcheck source=../rootfs/overlay/usr/lib/novadeck/install/lib-slotwrite.sh
+  . "$SLOTWRITE"
+  # shellcheck source=../image/lib-homestage.sh
+  . "$HOMESTAGE"
+}
+
+# =================================================================================================
+# 2. select-target
+# =================================================================================================
+# Delegated entirely. select-target.sh is pure and has its own suite; every refusal in it -- the
+# running disk, a damaged GPT, a foreign bootable ESP, a board whose data partition is not called
+# userdata, two eligible disks -- stands between this script and a write. carve.sh runs it AGAIN
+# before it writes, deliberately, so nothing here is trusted downstream.
+field() { printf '%s\n' "$1" | sed -n "s/^$2=//p"; }
+
+select_target() {
+  step "select-target"
+  local sel
+  sel="$("$SELECT" ${DISK:+"$DISK"})" \
+    || die "no disk passed target selection -- nothing has been written"
+
+  DISK="$(field "$sel" TARGET)"
+  MODE="$(field "$sel" MODE)"
+  SECTOR="$(field "$sel" SECTOR)"
+  UD_INDEX="$(field "$sel" UD_INDEX)"
+  UD_START="$(field "$sel" UD_START)"
+  UD_END="$(field "$sel" UD_END)"
+  CEIL="$(field "$sel" CEIL)"
+  local v
+  for v in DISK MODE SECTOR UD_INDEX UD_START UD_END CEIL; do
+    [ -n "${!v}" ] || die "select-target.sh emitted no $v"
+  done
+
+  # The default intent, and the one combination where defaulting would be wrong. A disk that already
+  # carries a novadeck install admits three different answers and this script may not pick one.
+  if [ -z "$INTENT" ]; then
+    [ "$MODE" = fresh ] \
+      || die "$DISK already carries a novadeck install -- say --intent reinstall (keeps /home) or --intent fresh (erases it, and Android's data again)"
+    INTENT=fresh
+  fi
+  [ "$INTENT" != reinstall ] || [ "$MODE" = reinstall ] \
+    || die "--intent reinstall, but $DISK carries no novadeck install to reinstall over"
+  [ "$INTENT" != fresh ] || [ -n "$UD_GIB" ] \
+    || die "a fresh install needs --userdata-gib: how much of the disk Android keeps"
+
+  # A REINSTALL THAT KEEPS /home HAS TO HAVE A /home TO KEEP, and nothing downstream checks it:
+  # make_filesystems skips mkfs_home on that path and seed_home returns early, so an unformatted
+  # partition yields an install that runs to the last byte, reports success, and leaves a device
+  # that cannot mount /home. The failure is invisible until the user reboots into it.
+  #
+  # Reachable in the field and not only in the lab: an interrupted first install lays the GPT and
+  # dies before mkfs_home, and the natural retry is exactly `--intent reinstall`. FOUND ON HARDWARE
+  # 2026-08-21 -- the Pocket ACE after the Phase 4a gate is precisely this shape, eight partitions
+  # present with only root-A and var-A carrying filesystems.
+  #
+  # It REFUSES rather than quietly upgrading to --erase-home. The user asked to keep something; a
+  # spine that answered by erasing it would be wrong in the one direction that cannot be undone.
+  # Checked here, where the disk is still untouched and the answer costs a message rather than a
+  # reflash.
+  if [ "$INTENT" = reinstall ] && [ "$ERASE_HOME" = 0 ]; then
+    local hidx hdev htype
+    hidx="$("$SGDISK" -p "$DISK" 2>/dev/null | awk '$NF == "novadeck-home" {print $1; exit}')" || true
+    [ -n "${hidx:-}" ] \
+      || die "$DISK carries no novadeck-home partition -- there is no /home to keep, so this is not a reinstall. Use --intent fresh."
+    hdev="$(part_dev "$DISK" "$hidx")" \
+      || die "cannot resolve p$hidx (novadeck-home) by partuuid -- refusing to guess a device name"
+    htype="$(blkid -o value -s TYPE "$hdev" 2>/dev/null || true)"
+    [ -n "$htype" ] \
+      || die "$hdev (novadeck-home) holds no filesystem -- --intent reinstall promises to KEEP /home and there is nothing there to keep. Pass --erase-home to create it, or --intent fresh."
+    log "/home on $hdev is $htype and will be kept"
+  fi
+
+  # Best-effort, for the record only. Nothing branches on it -- a wwid this could not read is a
+  # forensic gap, not a reason to refuse an install.
+  local base; base="${DISK#/dev/}"
+  WWID="$(cat "/sys/block/$base/device/wwid" 2>/dev/null || true)"
+  WWID="${WWID:-<unreadable>}"
+
+  log "target $DISK (mode=$MODE, intent=$INTENT), userdata p$UD_INDEX ${UD_START}..${UD_END}, ${SECTOR}-byte sectors"
+}
+
+# =================================================================================================
+# 3. the install record
+# =================================================================================================
+# A RECORD, NOT A BACKUP, and never a refusal condition. Decided 2026-08-05 (plan §3 rule 10) and
+# written down here so it is not reintroduced by someone reading the §4c sketch's older
+# "BACKUP GPTs" step:
+#
+#   - there is nowhere durable to put a backup. The only writable persistent medium is the
+#     installer card, which means mutating the user's card to hold something nobody restores from;
+#     $RUNDIR is tmpfs and evaporates at reboot.
+#   - a restored GPT would point at a userdata we have already destroyed BY DESIGN, so it buys
+#     nothing in the expected path. It helps only in a narrow bug window, and in the wrong-disk case
+#     the user is in no state to run a restore anyway.
+#   - an earlier draft refused to install if the backups could not be written. That was an outright
+#     defect: a full or write-protected medium would block an install to protect a file nobody
+#     reads. Hence best-effort throughout, and every failure here is a warn().
+#
+# What is kept is text: the pre-state dump, the target and its wwid, and the acknowledgement. It is
+# forensics for a field failure and evidence of what the user agreed to.
+RECORD=""
+record() { [ -n "$RECORD" ] && printf '%s\n' "$*" >>"$RECORD" 2>/dev/null || true; }
+
+open_install_record() {
+  step "install record"
+  # The medium's own ESP if it is mounted and writable, else the run dir -- which is honest about
+  # being temporary rather than pretending to be a record.
+  local d
+  for d in /esp/novadeck "$RUNDIR"; do
+    mkdir -p "$d" 2>/dev/null && [ -w "$d" ] && { RECORD="$d/install.log"; break; }
+  done
+  [ -n "$RECORD" ] || { warn "nowhere writable for the install record; continuing without one"; return 0; }
+
+  record "=== novadeck-install $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
+  record "target: $DISK  wwid: $WWID"
+  record "mode: $MODE  intent: $INTENT  userdata: p$UD_INDEX $UD_START..$UD_END  ceiling: $CEIL"
+  # sfdisk's dump is the pre-state in text: partition-for-partition, with uuids. Not a restore
+  # source -- reading it back would recreate a table pointing at data that no longer exists.
+  if command -v sfdisk >/dev/null 2>&1; then
+    record "--- pre-state (sfdisk --dump) ---"
+    sfdisk --dump "$DISK" >>"$RECORD" 2>/dev/null || warn "could not dump the pre-state"
+  else
+    record "--- pre-state: sfdisk is not on the installer image ---"
+  fi
+  log "recording to $RECORD"
+}
+
+# =================================================================================================
+# 4. verify sources — BEFORE THE FIRST sgdisk
+# =================================================================================================
+# Plan §3 rule 11. Both of these can fail for ordinary reasons -- a half-published bundle, a seed
+# that got re-cut, an expired certificate, a captive portal answering 200 with HTML -- and every one
+# of them is free to discover here and costs the user their Android data to discover later.
+#
+# THE BUNDLE IS VERIFIED THROUGH rauc-session.sh --info, not through a `rauc info` spelled here. The
+# synthesized config IS the mechanism of the install (bundle-formats, the keyring path,
+# check-purpose), so a verify under a config of its own would be checking something other than what
+# the install will do, and would be a second copy of that config waiting to drift.
+SEED_LOCAL=""
+verify_sources() {
+  step "verify sources"
+
+  "$SESSION" --info "$BUNDLE" || die "the bundle did not verify -- refusing to touch the disk"
+
+  # The seed's expected hash comes from the INSTALLER IMAGE, never from the server that serves the
+  # seed. A pin file that is missing is fatal rather than skippable: "we could not check" and "it
+  # checked out" must not have the same effect, and an unverified 1.4 GiB tree unpacked into the
+  # user's /home is the largest piece of unsigned content in the whole install.
+  [ -r "$SEED_PIN" ] || die "no baked Steam-seed pin at $SEED_PIN -- the seed could not be verified"
+  local want; want="$(tr -d '[:space:]' <"$SEED_PIN")"
+  [ ${#want} -eq 64 ] || die "$SEED_PIN does not hold a sha256 ($want)"
+
+  case "$HOME_SEED" in
+    http://*|https://*)
+      # NOT THE RELEASE PATH ANY MORE. Since 2026-08-25 the medium CARRIES the seed and the UI passes
+      # a path, so this branch is reached only by installer/hw-install.sh, which serves one off a
+      # laptop for a hardware gate. It is kept for exactly that, and because a path and a URL are one
+      # `case` apart.
+      #
+      # Its cost is why the release path stopped using it: the file lands in $RUNDIR, which is
+      # tmpfs, and those ~1.4 GiB are RAM taken from the machine at the exact moment it is streaming
+      # a ~4 GB bundle through rauc's NBD path. (It does FIT -- measured on the Pocket ACE
+      # 2026-08-21, /run offers 3.7 G. An earlier version of this comment claimed it could not, and
+      # that was wrong on this hardware.) Hashing while streaming into the mounted /home would avoid
+      # the RAM but cannot refuse before it has already written, which is the property this whole
+      # step exists for.
+      SEED_LOCAL="$RUNDIR/steam-seed.tar.zst"
+      "$CURL" -fsSL --retry 3 -o "$SEED_LOCAL" "$HOME_SEED" \
+        || die "cannot fetch the Steam seed from $HOME_SEED"
+      ;;
+    *)
+      [ -f "$HOME_SEED" ] || die "no Steam seed at $HOME_SEED"
+      SEED_LOCAL="$HOME_SEED"
+      ;;
+  esac
+
+  local got; got="$("$SHA256" <"$SEED_LOCAL" | awk '{print $1}')"
+  [ "$got" = "$want" ] \
+    || die "the Steam seed hashes $got, the baked pin says $want -- refusing to install an unrecognised /home"
+  log "bundle verified against $KEYRING; Steam seed matches the baked pin"
+  record "bundle: $BUNDLE (verified)"
+  record "home seed: $HOME_SEED (sha256 $got, matches the baked pin)"
+}
+
+# =================================================================================================
+# 5. CONFIRM — the last point at which the disk is untouched
+# =================================================================================================
+# §4d. This function decides WHETHER consent was given; it does not draw anything. The screen is
+# $CONFIRM, a separate program, so that the policy lives where the offline suite can drive it and
+# the rendering lives where the display and the gamepad are.
+#
+# THE CONTRACT:
+#     $CONFIRM --facts <file> --sequence <NESW>
+#   displays the facts and the four face buttons in the order given, reads four presses, prints the
+#   pressed sequence on stdout and exits 0. A non-zero exit means the user aborted.
+#
+# THE BUTTONS ARE NAMED BY POSITION, NOT BY THEIR PRINTED LETTER -- N/E/S/W, one character each.
+# The letters silkscreened on the face cluster are NOT the same across the boards this installer is
+# unified over: `A` is the EAST button on the AYANEO Pocket ACE and the SOUTH button on the Pocket
+# S2. A screen that says "press A" therefore names a different physical button per device, and it
+# does it on the one screen in this project where a misread is an erased Android. Position is the
+# thing the hardware actually agrees on -- it is also what the wire carries, since InputPlumber
+# presents a virtual Xbox pad and the kernel's own names (BTN_NORTH/EAST/SOUTH/WEST) are positional.
+# So the alphabet is cardinal from the spine outwards, and both renderers draw the position.
+#
+# WHAT THE RANDOM SEQUENCE IS FOR. A single press on a focused Continue is one thumb-twitch from an
+# erased Android, and a 3-second hold can be performed while looking away -- and a user who has done
+# it once does it faster the second time. A sequence that is regenerated every attempt cannot be
+# performed without reading the screen at that moment, which is the property the alternatives lack.
+# It is the gamepad analogue of typing ERASE, and there is no text entry on this device to borrow.
+#
+# A WRONG PRESS RE-RANDOMISES AND REDRAWS rather than locking out. This is a recovery tool and it
+# should not punish a slip; re-randomising is also what stops a mistake being brute-forced by
+# repetition. The attempt budget is small and finite because an unbounded loop on a device with a
+# stuck button is not consent either.
+#
+# THERE IS NO VALUE OF ANY VARIABLE THAT MEANS "CONSENT GIVEN". $CONFIRM names who renders the
+# screen -- a substitute still has to run and return a sequence it was told to display. No
+# consent.txt on the medium, no --yes: the medium legitimately carries wifi.conf, so a
+# "drop a file to configure it" idiom already exists here, and consent must never join it. If an
+# unattended path is ever wanted it is a separate, deliberately-named artifact, never a quiet bypass.
+CONFIRM_TRIES=${CONFIRM_TRIES:-5}
+# One character per button, because random_sequence concatenates them and the renderers hand back a
+# string this compares. Cardinal points, for the reason written out above.
+FACE_BUTTONS=${FACE_BUTTONS:-N E S W}
+
+# Seeded through RANDOM so the suite can assert two runs differ AND that a given seed reproduces.
+random_sequence() {
+  local pool=($FACE_BUTTONS) out="" i n
+  while [ ${#pool[@]} -gt 0 ]; do
+    n=${#pool[@]}
+    i=$(( RANDOM % n ))
+    out="$out${pool[$i]}"
+    pool=("${pool[@]:0:$i}" "${pool[@]:$((i+1))}")
+  done
+  printf '%s\n' "$out"
+}
+
+# The facts the screen is DERIVED from -- never a fixed string. Vague totals invite "sure, whatever";
+# a concrete "your Android data partition, 96.4 GiB, will be deleted" does not. Emitted as key=value
+# so the renderer owns the words and this owns the numbers, and so the suite can assert that two
+# different disks produce two different screens without parsing prose.
+write_confirm_facts() {  # <file>
+  local f="$1" ud_gib=$(( (UD_END - UD_START + 1) / (1073741824 / SECTOR) ))
+  {
+    printf 'INTENT=%s\n' "$INTENT"
+    printf 'DISK=%s\n' "$DISK"
+    printf 'WWID=%s\n' "$WWID"
+    printf 'SECTOR=%s\n' "$SECTOR"
+    if [ "$INTENT" = fresh ]; then
+      # The Android-wipe screen. UD_GIB is what the user chose to leave Android, so both numbers are
+      # quoted: what is lost and what remains.
+      printf 'SCREEN=android-wipe\n'
+      printf 'UD_INDEX=%s\n' "$UD_INDEX"
+      printf 'UD_GIB_NOW=%s\n' "$ud_gib"
+      printf 'UD_GIB_AFTER=%s\n' "$UD_GIB"
+      # THE REMAINING TWO FACTS COME FROM carve.sh --plan, NOT FROM ARITHMETIC HERE. An earlier
+      # version computed the free space from select-target's CEIL, and that is the wrong input: CEIL
+      # stops at whatever follows userdata, which on a disk we already own is our own ESP, so the
+      # expression yields zero. MEASURED on the Pocket ACE 2026-08-21 -- the screen said "NovaDeck
+      # will use the remaining 0 GiB" and the carve then handed it 90853 MiB. carve.sh's
+      # effective_ceiling is the rule that is right, and asking it is what stops a second copy of
+      # that rule existing here to drift away from it again.
+      #
+      # Best-effort in the SAME sense home_gib_or_unknown is: a plan this could not obtain must not
+      # become numbers this invented. A screen that says `unknown` is honest; a screen that says 0
+      # is what shipped, and it was wrong.
+      local plan
+      plan="$("$CARVE" plan "$DISK" "$UD_GIB" 2>/dev/null)" || plan=""
+      printf 'NOVADECK_GIB=%s\n' "$(field "$plan" NOVADECK_GIB | grep -E '^[0-9]+$' || echo unknown)"
+      printf 'REPLACES_OURS=%s\n' "$(field "$plan" REPLACES_OURS | grep -E '^[01]$' || echo unknown)"
+      # What the fresh path does to an EXISTING novadeck /home, which is the whole reason
+      # REPLACES_OURS exists. carve.sh has always said "it is being replaced, /home included" -- but
+      # it says it after consent has been taken, where nobody can act on it.
+      printf 'HOME_ACTION=create\n'
+      printf 'HOME_GIB=%s\n' "$(home_gib_or_unknown)"
+    else
+      # The reinstall screen, and it is a SEPARATE branch rather than a variation, because the
+      # Android-wipe text is flatly false here: there is no userdata to destroy. The two must not
+      # share a path that could render one on the other's disk.
+      printf 'SCREEN=reinstall\n'
+      printf 'HOME_ACTION=%s\n' "$([ "$ERASE_HOME" = 1 ] && echo erase || echo keep)"
+      printf 'HOME_GIB=%s\n' "$(home_gib_or_unknown)"
+    fi
+  } >"$f" || die "cannot write the consent facts to $f"
+}
+
+# Cheap and best-effort: the number that stops someone is "erase 214 GiB of games and saves", and a
+# figure this could not read must not become a figure this invented.
+home_gib_or_unknown() {
+  local idx dev out
+  idx="$("$SGDISK" -p "$DISK" 2>/dev/null | awk '$NF == "novadeck-home" {print $1; exit}')" || true
+  [ -n "${idx:-}" ] || { printf 'unknown\n'; return 0; }
+  dev="$(part_dev "$DISK" "$idx" 2>/dev/null)" || { printf 'unknown\n'; return 0; }
+  out="$(df -BG --output=used "$dev" 2>/dev/null | tail -1 | tr -dc '0-9')" || true
+  printf '%s\n' "${out:-unknown}"
+}
+
+take_consent() {
+  step "CONFIRM"
+  local facts="$RUNDIR/confirm-facts" seq got attempt=1
+  write_confirm_facts "$facts"
+
+  while [ "$attempt" -le "$CONFIRM_TRIES" ]; do
+    seq="$(random_sequence)"
+    # `|| true` on the capture, then an explicit test: a non-zero exit from the renderer is an
+    # ABORT, which is a legitimate answer and must not read as a crash.
+    got="$("$CONFIRM" --facts "$facts" --sequence "$seq")" || {
+      record "consent: aborted by the user at attempt $attempt"
+      die "the install was cancelled -- nothing has been written"
+    }
+    got="${got//[[:space:]]/}"
+    if [ "$got" = "$seq" ]; then
+      record "consent: given at $(date -u +%Y-%m-%dT%H:%M:%SZ), sequence $seq, attempt $attempt"
+      record "--- what was shown ---"
+      [ -n "$RECORD" ] && cat "$facts" >>"$RECORD" 2>/dev/null || true
+      log "consent given"
+      return 0
+    fi
+    warn "that was not the sequence shown; try again ($attempt/$CONFIRM_TRIES)"
+    attempt=$(( attempt + 1 ))
+  done
+  record "consent: NOT given after $CONFIRM_TRIES attempts"
+  die "consent was not given after $CONFIRM_TRIES attempts -- nothing has been written"
+}
+
+# =================================================================================================
+# 6. the carve — the first write
+# =================================================================================================
+# Delegated to carve.sh, which re-runs select-target.sh itself and has its own 63-case suite plus a
+# hardware gate (Pocket ACE, 2026-08-21: fresh -> uninstall -> fresh, p1..p10 byte-identical after
+# the whole cycle). Nothing about the geometry is passed in beyond the user's chosen Android share:
+# the carve acts on the disk as it is at that moment, not on what this script read a minute ago.
+carve() {
+  step "carve"
+  local map
+  if [ "$INTENT" = fresh ]; then
+    map="$("$CARVE" fresh "$DISK" "$UD_GIB")" || die "the carve failed -- see above"
+  else
+    map="$("$CARVE" reinstall "$DISK")" || die "$DISK is not a complete novadeck install"
+  fi
+
+  local name idx
+  while IFS='=' read -r name idx; do
+    [ -n "$name" ] || continue
+    PART["$name"]="$idx"
+  done <<<"$map"
+
+  for name in NOVADECK-ESP novadeck-efi-A novadeck-efi-B novadeck-root-A novadeck-root-B \
+              novadeck-var-A novadeck-var-B novadeck-home; do
+    [ -n "${PART[$name]:-}" ] || die "the carve did not report an index for $name"
+  done
+  record "layout: $(for name in "${!PART[@]}"; do printf '%s=%s ' "$name" "${PART[$name]}"; done)"
+
+  # A SETTLE IS NOT A BARRIER. part_dev builds the by-partuuid path from the GPT, but it is udev
+  # that has to publish the symlink, and it does that asynchronously. carve.sh settles after the
+  # append, and that is still not enough on a RE-carve: the table is rewritten twice in quick
+  # succession (delete_ours, then the append), so the old nodes are being removed while the new
+  # ones are appearing, and `udevadm settle` can return before the kernel has queued the uevents it
+  # would have waited for.
+  #
+  # MEASURED on the Pocket ACE, 2026-08-22, second install onto a disk that already carried ours:
+  # seven of the eight symlinks were present and novadeck-efi-B was not, so the run died on
+  # "not a block device" -- on a disk whose userdata had already been shrunk and zeroed. The wait
+  # is bounded (10s) and costs nothing when the node is already there, which is every other run.
+  wait_for_dev() {  # <path> -> 0 once it exists, non-zero after ~10s
+    local dev="$1" i
+    for i in $(seq 1 50); do
+      # shellcheck disable=SC2086  # DEVTEST is a predicate, not a path
+      [ $DEVTEST "$dev" ] && return 0
+      if [ "$i" = 1 ] && command -v udevadm >/dev/null 2>&1; then
+        udevadm settle >/dev/null 2>&1 || true
+        continue                                   # re-test immediately after the settle
+      fi
+      sleep 0.2
+    done
+    return 1
+  }
+
+  # THE INDEX -> DEVICE STEP, and the one rule every write below depends on. Resolved by PARTUUID
+  # through lib-slotwrite.sh's part_dev; nothing here concatenates a disk and an index, because the
+  # `p` infix (mmcblk0p11 against sda11) is exactly what this fleet cannot test -- every board is
+  # UFS. A naming bug of that shape would first appear on a customer's eMMC device, mid-install, on
+  # a disk whose userdata is already gone.
+  for name in "${!PART[@]}"; do
+    DEV["$name"]="$(part_dev "$DISK" "${PART[$name]}")" \
+      || die "cannot resolve p${PART[$name]} ($name) by partuuid -- refusing to guess a device name"
+    wait_for_dev "${DEV[$name]}" \
+      || die "${DEV[$name]} ($name) is not a block device"
+  done
+  log "eight partitions resolved by partuuid"
+}
+
+# =================================================================================================
+# 7. filesystems
+# =================================================================================================
+# FOUR, not six. var-a is NOT here: seed_var() reformats it itself, because the reformat and the
+# population are one operation -- a var partition that has been mkfs'd and not populated is a slot
+# that does not boot. And var-b is not touched AT ALL, matching the release card's empty-B shape;
+# the first OTA fills it. root-a is RAUC's.
+#
+# /home is skipped on a reinstall that keeps it. That is the whole content of the reinstall promise
+# and it is the only line here that implements it.
+make_filesystems() {
+  step "filesystems"
+  mkfs_esp "${DEV[NOVADECK-ESP]}";           log "esp    ${DEV[NOVADECK-ESP]}"
+  mkfs_efi "${DEV[novadeck-efi-A]}" A;       log "efi-a  ${DEV[novadeck-efi-A]}"
+  mkfs_efi "${DEV[novadeck-efi-B]}" B;       log "efi-b  ${DEV[novadeck-efi-B]}"
+  if [ "$INTENT" = fresh ] || [ "$ERASE_HOME" = 1 ]; then
+    mkfs_home "${DEV[novadeck-home]}";       log "home   ${DEV[novadeck-home]} (recreated)"
+  else
+    log "home   ${DEV[novadeck-home]} (kept -- games and saves untouched)"
+  fi
+}
+
+# =================================================================================================
+# 8. the root slot
+# =================================================================================================
+# rauc-session.sh owns this entirely: the synthesized config, the private bus, the proof that the
+# service holding de.pengutronix.rauc is the one we started, and the ~4 GB stream. NOVADECK_TARGET_VAR_A
+# is how the spine tells the handler where /var goes -- the handler cannot derive it, because the
+# config declares exactly one slot and it is the root.
+install_root() {
+  step "root slot"
+  NOVADECK_TARGET_VAR_A="${DEV[novadeck-var-A]}" \
+    "$SESSION" "${DEV[novadeck-root-A]}" "$BUNDLE" \
+    || die "the root slot was not installed"
+  record "root-a: installed from $BUNDLE"
+}
+
+# =================================================================================================
+# 9. /home
+# =================================================================================================
+# The layout is image/lib-homestage.sh, shared verbatim with make-sdcard.sh, so an installed device
+# and a flashed card present the same home. The failure this shares against is quiet: a missing
+# ~/.steam/sdk64 does not stop Steam starting, it makes an x86 title's SteamAPI_Init() fail at
+# launch, on that medium only.
+seed_home() {
+  if [ "$INTENT" = reinstall ] && [ "$ERASE_HOME" = 0 ]; then
+    step "/home (kept)"
+    log "left untouched, as the reinstall promised"
+    record "home: kept"
+    return 0
+  fi
+  step "/home"
+  local mnt="$RUNDIR/home"
+  mount_at "${DEV[novadeck-home]}" "$mnt"
+  stage_deck_home "$SEED_LOCAL" "$mnt"
+  sync
+  unmount_at "$mnt"
+  record "home: seeded from $HOME_SEED"
+  log "seeded"
+}
+
+# =================================================================================================
+# 10. the efi partitions
+# =================================================================================================
+# Both of them, both fully populated, and B populated even though nothing will boot it yet: steamcl
+# builds its candidate list by walking efi partitions and requiring a CONFIG for the image each one
+# resolves to, so B stays a non-candidate purely by having no B.conf. Its stage 2 being ready means
+# the first OTA has nothing to lay down but a root and a var.
+#
+# THE FILES COME OUT OF THE ROOT WE JUST WROTE, never off the installer medium. grubaa64.efi and
+# grub-<slot>.cfg are boot software owned by the same build that ships /boot/Image and
+# /lib/modules/<ver> inside that rootfs, so taking them from there makes the pairing true by
+# construction: there is no way to install a root whose stage 2 does not boot it.
+ROOTMNT=""
+mount_new_root() {
+  ROOTMNT="$RUNDIR/root-a"
+  mount_at "${DEV[novadeck-root-A]}" "$ROOTMNT" -o ro
+  [ -d "$ROOTMNT/usr/lib/novadeck/boot" ] \
+    || die "the freshly written root carries no /usr/lib/novadeck/boot -- it is not a novadeck rootfs"
+}
+
+write_efi_partitions() {
+  step "efi-a / efi-b"
+  local bootdir="$ROOTMNT/usr/lib/novadeck/boot"
+
+  # parts.env: WHERE OUR EIGHT ACTUALLY ARE on this disk. On a card they are 1..8; here they are
+  # whatever genpart.sh --append found room for, which is neither row order nor contiguous. Stage 2
+  # cannot address anything without this, and it is the one artifact whose contents are per-disk.
+  local envkv=()
+  local kv
+  while read -r kv; do envkv+=("$kv"); done < <(
+    for name in NOVADECK-ESP novadeck-efi-A novadeck-efi-B novadeck-root-A \
+                novadeck-root-B novadeck-var-A novadeck-var-B novadeck-home; do
+      printf '%s=%s\n' "$name" "${PART[$name]}"
+    done | parts_env_from_genpart_map
+  )
+
+  local esp_uuid efia_uuid efib_uuid
+  esp_uuid="$(part_uuid "$DISK" "${PART[NOVADECK-ESP]}")"
+  efia_uuid="$(part_uuid "$DISK" "${PART[novadeck-efi-A]}")"
+  efib_uuid="$(part_uuid "$DISK" "${PART[novadeck-efi-B]}")"
+
+  local slot mnt
+  for slot in A B; do
+    mnt="$RUNDIR/efi-${slot,,}"
+    mount_at "${DEV[novadeck-efi-$slot]}" "$mnt"
+    write_efi_partition "$mnt" "$slot" "$bootdir"
+    # MINTED, not copied. post-install.sh copies the partsets off the running /efi because they
+    # describe the disk it is already running from; here there is no such disk, so they come from
+    # the GPT that was laid down twenty seconds ago.
+    mint_partsets "$mnt" "$slot" "$esp_uuid" "$efia_uuid" "$efib_uuid"
+    write_parts_env "$mnt" "${envkv[@]}"
+    sync
+    log "efi-${slot,,}: stage 2, partsets (self=$slot), parts.env"
+  done
+  record "efi: parts.env ${envkv[*]}"
+  # efi-a stays mounted: steamos-bootconf needs an --efi-dir with SteamOS/partsets/self in it, which
+  # only exists now, and that is what makes arm_boot_conf() run after this and not beside it.
+  unmount_at "$RUNDIR/efi-b"
+}
+
+# =================================================================================================
+# 11. the shared ESP, and the last byte
+# =================================================================================================
+# Ordered inside the step as carefully as the steps are ordered against each other:
+#   grubenv       the pristine stage-2 env block, copied from the root (not minted with
+#                 grub-editenv, which the shipped image does not carry)
+#   A.conf        via steamos-bootconf, which needs partsets/self on an efi partition to exist --
+#                 hence efi-a still being mounted from the previous step
+#   NO B.conf     load-bearing. steamcl honours image-invalid only as a sort demotion, and its
+#                 alt-entry pick never consults the disabled flag, so a marked-invalid B is still a
+#                 candidate and a never-booted slot reports boot-attempts 0 and wins that pick.
+#                 Omitting the conf makes efi-b fail the "is there a config for this image?" test
+#                 and the partition never enters found[] at all.
+#   stage 1       refresh_esp_stage1, whose own last write is bootaa64.efi -- the byte that flips
+#                 ABL from the installer medium to this disk.
+BC=${BC:-}
+arm_esp() {
+  step "ESP"
+  local esp="$RUNDIR/esp" bootdir="$ROOTMNT/usr/lib/novadeck/boot"
+  mount_at "${DEV[NOVADECK-ESP]}" "$esp"
+
+  mkdir -p "$esp/EFI/steamos" "$esp/SteamOS/conf" || die "cannot create the ESP directories"
+  [ -f "$bootdir/grubenv" ] \
+    || die "the installed root carries no pristine grubenv at /usr/lib/novadeck/boot/grubenv"
+  cp -f "$bootdir/grubenv" "$esp/EFI/steamos/grubenv" || die "cannot install the grubenv"
+  sync
+
+  # steamos-bootconf comes out of the ROOT WE JUST WROTE by preference, so the tool and the format
+  # it writes are the pair that shipped together; the installer image's own copy is the fallback.
+  local bc="${BC:-$ROOTMNT/usr/bin/steamos-bootconf}"
+  [ -x "$bc" ] || bc="$(command -v steamos-bootconf 2>/dev/null || true)"
+  [ -n "$bc" ] && [ -x "$bc" ] || die "no steamos-bootconf to arm the boot state with"
+
+  local bcargs=(--conf-dir "$esp/SteamOS/conf" --efi-dir "$RUNDIR/efi-a")
+  "$bc" "${bcargs[@]}" create --image A || die "steamos-bootconf could not create A.conf"
+  # first-boot rather than reboot: it sets the highest boot-requested-at AND clears image-invalid,
+  # boot-other, boot-attempts and boot-count, which is exactly the state of a slot that has never
+  # run. `create` already produces a skeleton with those at zero, so this is belt to that brace and
+  # says what it means.
+  "$bc" "${bcargs[@]}" --image A set-mode first-boot \
+    || die "steamos-bootconf could not arm A.conf"
+  [ -f "$esp/SteamOS/conf/A.conf" ] || die "steamos-bootconf reported success but wrote no A.conf"
+  [ ! -e "$esp/SteamOS/conf/B.conf" ] \
+    || die "a B.conf exists -- slot B is empty and must not be a boot candidate"
+  sync
+  log "A.conf armed, no B.conf"
+  record "boot: A.conf armed, B left absent"
+
+  # THE LAST WRITE OF THE INSTALL.
+  refresh_esp_stage1 "$esp" "$bootdir"
+  unmount_at "$esp"
+  unmount_at "$RUNDIR/efi-a"
+  unmount_at "$ROOTMNT"
+  record "esp: stage 1 written; the device now boots internally"
+  log "stage 1 written -- this disk is now what ABL chainloads"
+}
+
+# =================================================================================================
+main() {
+  recon
+  select_target
+  open_install_record
+  verify_sources
+  take_consent
+  carve
+  make_filesystems
+  install_root
+  seed_home
+  mount_new_root
+  write_efi_partitions
+  arm_esp
+  sync
+
+  step "done"
+  cat <<EOF
+NovaDeck is installed on $DISK.
+
+  Android still boots and arrives factory-reset; its apps, saves and photos are gone.
+  Your SD card was never written to.
+  The device now boots NovaDeck from internal storage by default.
+  To boot Android, or to boot this installer again, hold Volume Up at startup and pick it
+  from the bootloader's own menu -- "force external" is what reaches the card once an
+  internal install exists.
+EOF
+}
+
+main

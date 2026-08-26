@@ -3,14 +3,14 @@
 # WHY THIS EXISTS. The pinned FEX guest (packages/fex-rootfs/prebuilt.pin) already ships a Turnip
 # for both x86 arches, but it is whatever mesa git snapshot the FEX rootfs pipeline happened to
 # build (the .so is owned by NO pacman package in the guest — the guest's Arch mesa package ships
-# no freedreno files at all). Since the system FEX runs THUNKLESS (fs-overlay Config.json), that
+# no freedreno files at all). Since the system FEX runs THUNKLESS (rootfs/overlay Config.json), that
 # guest driver is what actually renders every native x86 Linux title, and it silently diverges
 # from packages/mesa the day we patch or bump the host driver. This package rebuilds the guest
 # Turnip from the SAME source pin + patch list as the host mesa, so the two cannot drift.
 #
 # NOT a pacman package and NOT a prebuilt: neither source.pin nor prebuilt.pin lives here, so
 # build-overlay.sh and customize-base.sh both ignore this directory. build.sh produces a plain
-# payload tree (work/mesa-x86/out/usr/...) that images/assemble-rootfs.sh stages into the image;
+# payload tree (work/mesa-x86/out/usr/...) that rootfs/assemble-rootfs.sh stages into the image;
 # the runtime overlayfs mount lays it over the guest rootfs (see the fstab injection there).
 #
 # THE TWO PINS BELOW ARE A PAIR, and both are coupled to packages/fex-rootfs/prebuilt.pin:

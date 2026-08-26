@@ -1,0 +1,582 @@
+#!/usr/bin/env python3
+# novadeck-update — the OS update client SteamUI drives, over the RAUC A/B path.
+#
+# THE CALLER IS THE STEAM CLIENT, and the contract is not ours to choose. It was read out of the
+# baked client (work/steam-seed/steamrtarm64/steamui.so), which builds these command lines:
+#
+#     /usr/bin/steamos-polkit-helpers/steamos-update --supports-duplicate-detection
+#     /usr/bin/steamos-polkit-helpers/steamos-update check 2>&1
+#     /usr/bin/steamos-polkit-helpers/steamos-update [--enable-duplicate-detection]
+#
+#   probe  --supports-duplicate-detection -> exit 0 opts in to duplicate detection.
+#   check  -> STDOUT IS PARSED AS THE AVAILABLE VERSION. exit 0 = an update is available,
+#             exit 7 = none. Steam refuses to re-offer a version it has already applied, so
+#             every exit-0 must print a STABLE per-build identity; printing something that
+#             changes between two calls makes one update look like two.
+#   apply  -> emit `N%` lines on STDOUT, forward-only. exit 0 = success. Everything else this
+#             program or its children have to say goes to STDERR, or Steam parses it as progress.
+#
+# Steam maps a check that reprints the ALREADY-STAGED version to "restart pending" rather than to
+# a fresh download, which is how the UI stops offering an update that is sitting on disk waiting
+# for a reboot. That is what staged_identity() below exists for.
+#
+# WHY THE WHOLE CLIENT IS ONE FILE. The alternative shape — a sourced shell lib plus two entry
+# points — is what a bootc-based system needs, because its work is a sequence of subprocesses. Ours
+# is a D-Bus conversation: InstallBundle is asynchronous, progress arrives as PropertiesChanged on
+# a (isi) tuple, and completion arrives as a signal carrying the result code. Driving that from
+# shell means a background reader on a FIFO and a second process to translate it; driving it from
+# Python is a main loop. python-gobject is already in PKGS and already how novadeck-steamos-manager
+# and novadeck-powerd talk to the bus.
+#
+# PRIVILEGE: none required, deliberately. rauc's shipped bus policy
+# (de.pengutronix.rauc.conf: "This config allows anyone to control rauc") lets any local user call
+# the installer, and the SIGNATURE is the actual gate — the device installs a bundle only if it
+# chains to /etc/rauc/keyring.pem with check-purpose=codesign. So this runs as the Steam user with
+# no pkexec, no sudo, no polkit action of our own. HW-proven 2026-07-29: a full release-signed
+# install driven as `deck` over SSH with no sudo on the box.
+#
+# THE MANIFEST IS NOT A TRUST BOUNDARY. latest.json says which bundle to fetch and nothing more. It
+# cannot select a keyring, a verification mode or an install flag, and a bundle it points at still
+# has to verify. Treat every field in it as attacker-controlled: `bundle` is forced to a bare
+# filename so a manifest can never redirect the download to another host.
+#
+# THE BUNDLE IS STREAMED, NOT DOWNLOADED, and that is what makes an OTA cheap. This program hands
+# InstallBundle an https:// URL; rauc fetches it over NBD with HTTP Range requests and, because
+# ota/rauc/manifest.raucm.in marks the image `adaptive=block-hash-index`, transfers only the
+# 4KiB blocks it cannot already find in one of the two slots. Measured 2026-08-04 on two pairs of
+# real consecutive bundles: 96.1% of non-zero blocks are reused, ~125M crosses the wire instead of
+# 3.90G. Nothing is staged on the device, so an update no longer needs free space in /home at all.
+#
+# That is also why this file no longer owns a transfer. It used to curl the bundle to STAGE_DIR
+# with a resume flag and a stall guard, then install from disk; see the block above EXIT_OK for
+# what each of those did and which one has no replacement.
+#
+# TEST SEAMS, in the same spirit as novadeck-bootctl's: tests/test-update.sh executes THIS file
+# and overrides the environment below to redirect the release file, the config, the staging
+# directory, the fetch tool and the bus into a sandbox. What runs under test is the artifact that
+# ships.
+import json
+import os
+import subprocess
+import sys
+import urllib.parse
+
+# --- the seams ----------------------------------------------------------------------------------
+RELEASE_FILE = os.environ.get("NOVADECK_RELEASE_FILE", "/etc/novadeck-release")
+CONFIG_FILE = os.environ.get("NOVADECK_OTA_CONFIG", "/etc/novadeck/ota.conf")
+STAGE_DIR = os.environ.get("NOVADECK_OTA_STAGE", "/home/deck/.local/share/novadeck/updates")
+LOGINUSERS = os.environ.get(
+    "NOVADECK_STEAM_LOGINUSERS", "/home/deck/.local/share/Steam/config/loginusers.vdf"
+)
+CURL = os.environ.get("NOVADECK_CURL", "curl")
+
+# The server this device fetches from. Overridable in CONFIG_FILE so a device is never locked to
+# one host by its image ([[devices-are-operator-reachable]]); the shipped default is the release
+# channel and needs no configuration on a normal device.
+#
+# The host is dedicated to updates and the docroot is its root, so there is no path prefix: a
+# channel is the first segment, giving /<channel>/latest.json. Note that `updates.novadeck` is not
+# a typo for `novadeck` — novadeck.cloud-ip.cc is a DNS sub-zone with no address of its own.
+DEFAULT_URL = "https://updates.novadeck.cloud-ip.cc"
+DEFAULT_CHANNEL = "stable"
+
+# Steam's exit-code contract. 7 is "no update available" and is ALSO how every recoverable failure
+# exits: a check that cannot reach the server or cannot parse the manifest must not answer "yes"
+# and must not answer with a crash. Fail closed.
+EXIT_OK = 0
+EXIT_NONE = 7
+
+# WHAT USED TO BE HERE, because its absence is a deliberate decision and not an oversight.
+#
+# This program used to download the bundle to STAGE_DIR with curl and then hand rauc a local PATH.
+# That needed three things that are now gone: a free-space check with a margin (STAGE_MARGIN_BYTES),
+# a resumable transfer (`curl -C -`), and a THROUGHPUT guard -- abort at under 1 KiB/s for two
+# minutes -- because a download with no total time limit otherwise hangs forever on a wedged
+# connection, leaving Steam on a frozen bar and the user with nothing but the power button.
+#
+# rauc streams the bundle over NBD now, which is what makes `adaptive=block-hash-index` in the
+# manifest pay: it fetches only the blocks it cannot already find in the two slots (measured
+# 2026-08-04: ~125M instead of 3.90G). There is nothing left to stage, so the space check and the
+# progress split went with it.
+#
+# THE STALL GUARD COULD NOT BE CARRIED OVER, and this is the one real regression. rauc's D-Bus API
+# has no Cancel method -- Install, InstallBundle, Info, InspectBundle, Mark, GetSlotStatus,
+# GetPrimary, and that is all of it -- so once InstallBundle is accepted, this program cannot call
+# it off. What replaces the guard is inside rauc: nbd.c sets CURLOPT_CONNECTTIMEOUT 20 and retries a
+# failed range request five times before failing the install. That bounds a connection that BREAKS.
+# It does not bound one that merely stalls, which is bounded only by the kernel's TCP timeout.
+#
+# Accepted, because adaptive changes the cost of being wrong: a failed attempt leaves correct blocks
+# already written into the target slot, and the next attempt finds them locally instead of
+# re-fetching them. Retrying is cheap now in a way it never was when the unit of work was a 4G file.
+
+
+def log(msg):
+    # STDERR, always. Anything on stdout that is not `N%` or the version string corrupts the
+    # contract above.
+    print(f"novadeck-update: {msg}", file=sys.stderr, flush=True)
+
+
+def read_env_file(path):
+    """Parse a KEY=VALUE file. Not a shell: no expansion, no substitution, no execution."""
+    values = {}
+    try:
+        with open(path, "r") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                values[key.strip()] = value.strip().strip('"').strip("'")
+    except OSError:
+        pass
+    return values
+
+
+def config():
+    conf = read_env_file(CONFIG_FILE)
+    url = os.environ.get("NOVADECK_OTA_URL") or conf.get("OTA_URL") or DEFAULT_URL
+    channel = os.environ.get("NOVADECK_OTA_CHANNEL") or conf.get("OTA_CHANNEL") or DEFAULT_CHANNEL
+    return url.rstrip("/"), channel
+
+
+def device_identity():
+    """What this image calls itself. rootfs/assemble-rootfs.sh writes these three fields, and its
+    comment designates this file as where anything wanting to know which image is running looks."""
+    rel = read_env_file(RELEASE_FILE)
+    return {
+        "version": rel.get("NOVADECK_VERSION", ""),
+        "build": rel.get("NOVADECK_BUILD", ""),
+        "git": rel.get("NOVADECK_GIT", ""),
+        # dev|release. Not used by the update logic — a dev image updates exactly like a release one
+        # — but it is the only thing that distinguishes a test image from a shippable one, and
+        # `status` is where you go to find out what is actually running.
+        "mode": rel.get("NOVADECK_MODE", ""),
+    }
+
+
+def identity_of(info):
+    """The string Steam sees, and the key duplicate detection turns on. VERSION when the build has
+    a real one (CI sets it from the release tag), BUILD otherwise — a local build renders VERSION
+    as the literal `dev`, which every dev image shares, so keying on it would make two different
+    dev bundles look like the same update. Never a bare timestamp on a release, never a constant
+    on a dev build."""
+    version = info.get("version", "")
+    if version and version != "dev":
+        return version
+    return info.get("build", "") or version
+
+
+# --- the manifest -------------------------------------------------------------------------------
+
+
+def fetch(url, timeout=30):
+    """GET a small document with the pinned fetch tool. Returns bytes, or None.
+
+    THE MANIFEST ONLY. This used to have a second mode that streamed a multi-gigabyte bundle to
+    disk, with `-C -` to resume and a throughput guard to abort a wedged transfer. rauc streams the
+    bundle itself now (see install()), so the only thing curl still fetches is latest.json -- a few
+    hundred bytes, for which one flat timeout is the whole story."""
+    result = subprocess.run(
+        [CURL, "-fsSL", "--max-time", str(timeout), url],
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+    )
+    if result.returncode != 0:
+        return None
+    return result.stdout
+
+
+def manifest(base_url, channel):
+    """The channel's latest.json, validated. Every field is attacker-controlled; nothing here may
+    widen what the caller can reach."""
+    raw = fetch(f"{base_url}/{channel}/latest.json")
+    if raw is None:
+        log(f"cannot reach the update server at {base_url}/{channel}/latest.json")
+        return None
+    try:
+        data = json.loads(raw)
+    except ValueError as exc:
+        log(f"malformed latest.json: {exc}")
+        return None
+    if not isinstance(data, dict):
+        log("malformed latest.json: not an object")
+        return None
+
+    bundle = str(data.get("bundle", ""))
+    # A BARE FILENAME, enforced. Left unchecked, `bundle` is a redirect primitive: "../../x",
+    # "http://elsewhere/x" and "/etc/passwd" all become part of a URL we then fetch and hand to the
+    # installer. urlparse catches the scheme/netloc forms; the separator and dot-dot checks catch
+    # the path forms. The signature would still reject whatever came back, but a manifest must not
+    # be able to aim this device at another host at all.
+    parsed = urllib.parse.urlparse(bundle)
+    if (
+        not bundle
+        or parsed.scheme
+        or parsed.netloc
+        or "/" in bundle
+        or "\\" in bundle
+        or bundle.startswith(".")
+    ):
+        log(f"latest.json names an unusable bundle {bundle!r} (must be a bare filename)")
+        return None
+
+    try:
+        size = int(data.get("size", 0))
+    except (TypeError, ValueError):
+        size = 0
+    if size <= 0:
+        log("latest.json has no usable size")
+        return None
+
+    version = str(data.get("version", ""))
+    build = str(data.get("build", ""))
+    if not identity_of({"version": version, "build": build}):
+        log("latest.json carries no version or build to identify the update by")
+        return None
+
+    return {
+        "version": version,
+        "build": build,
+        "git": str(data.get("git", "")),
+        "bundle": bundle,
+        "size": size,
+        "url": f"{base_url}/{channel}/{urllib.parse.quote(bundle)}",
+    }
+
+
+# --- staged state -------------------------------------------------------------------------------
+#
+# What we installed and have not yet rebooted into. RAUC cannot answer this for us: our slots are
+# `type=raw`, and the journal says as much on every install ("Using per-slot statusfile. System
+# status information not supported!"), so there is nowhere for RAUC to keep a version. We keep it
+# ourselves, next to the staging directory, and the reboot is what clears it.
+
+STAGED_FILE = os.path.join(STAGE_DIR, "staged.json")
+
+
+def read_staged():
+    try:
+        with open(STAGED_FILE, "r") as handle:
+            data = json.load(handle)
+        return data if isinstance(data, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
+def write_staged(info):
+    os.makedirs(STAGE_DIR, exist_ok=True)
+    tmp = STAGED_FILE + ".tmp"
+    with open(tmp, "w") as handle:
+        json.dump(info, handle)
+    os.replace(tmp, STAGED_FILE)
+
+
+def staged_identity(installer=None):
+    """The identity of an update that is installed and waiting for a reboot, or None.
+
+    Two conditions, both required. The stamp says WHAT we installed; the bootloader says whether it
+    is still pending. Trusting the stamp alone would keep reporting restart-pending forever after
+    the reboot actually happened, and Steam would never offer the next update."""
+    stamp = read_staged()
+    if not stamp:
+        return None
+    try:
+        installer = installer or rauc()
+        primary = installer.call_sync("GetPrimary", None, 0, 5000, None).unpack()[0]
+        # BOTH SIDES OUT OF ONE SOURCE, and that is the whole point. GetPrimary answers with a slot
+        # NAME ("rootfs.1"); the BootSlot property answers with a BOOTNAME ("B"). Comparing those
+        # two is never equal, so the pending test below was always true, the "stamp is spent" branch
+        # was unreachable, and a device reported restart-pending forever after its first update --
+        # exactly the failure this function's docstring warns about. Steam then never offers the
+        # next update, so the fleet takes one OTA and stops. HW-caught 2026-08-03 by re-checking
+        # after a real reboot; a check before the reboot cannot see it.
+        status = installer.call_sync("GetSlotStatus", None, 0, 5000, None).unpack()[0]
+        booted = next((name for name, data in status if data.get("state") == "booted"), "")
+    except Exception as exc:
+        log(f"cannot ask rauc whether an update is pending: {exc}")
+        return None
+    if primary and booted and primary != booted:
+        return identity_of(stamp)
+    # The reboot happened (or the slot was demoted under us). The stamp is spent.
+    try:
+        os.unlink(STAGED_FILE)
+    except OSError:
+        pass
+    return None
+
+
+# --- rauc ---------------------------------------------------------------------------------------
+#
+# Imported lazily so `check` never needs the bus: a check runs on every visit to the settings page
+# and during OOBE, and it must not fail because a system service is slow to activate.
+
+RAUC_BUS = "de.pengutronix.rauc"
+RAUC_PATH = "/"
+RAUC_IFACE = "de.pengutronix.rauc.Installer"
+
+
+def rauc():
+    from gi.repository import Gio
+
+    return Gio.DBusProxy.new_for_bus_sync(
+        Gio.BusType.SYSTEM, Gio.DBusProxyFlags.NONE, None, RAUC_BUS, RAUC_PATH, RAUC_IFACE, None
+    )
+
+
+def install(source, on_percent):
+    """Drive InstallBundle to completion, reporting 0-100 through on_percent.
+
+    `source` is an https:// URL. rauc resolves it by creating an NBD device and an unprivileged
+    helper (user `nobody`) that turns the block reads into HTTP Range requests, so the bundle is
+    never written to this device's storage. A local path still works and is what a workstation
+    install uses; this program only ever passes a URL.
+
+    Asynchronous by design: InstallBundle returns as soon as the work is accepted, progress arrives
+    as PropertiesChanged on the (isi) Progress tuple, and the result arrives on Completed. Returns
+    True on success. A non-zero result code is a failed install, and LastError is the only place
+    rauc says why."""
+    import gi
+
+    gi.require_version("Gio", "2.0")
+    from gi.repository import GLib, Gio
+
+    loop = GLib.MainLoop()
+    proxy = rauc()
+    state = {"ok": False}
+
+    def on_properties(_proxy, changed, _invalidated):
+        if "Progress" not in changed.keys():
+            return
+        percentage, message, _depth = changed["Progress"]
+        on_percent(percentage)
+        if message:
+            log(f"rauc: {percentage}% {message}")
+
+    def on_signal(_proxy, _sender, signal, params):
+        if signal != "Completed":
+            return
+        result = params.unpack()[0]
+        state["ok"] = result == 0
+        if not state["ok"]:
+            try:
+                error = proxy.get_cached_property("LastError").get_string()
+            except Exception:
+                error = f"result {result}"
+            log(f"install failed: {error}")
+        loop.quit()
+
+    proxy.connect("g-properties-changed", on_properties)
+    proxy.connect("g-signal", on_signal)
+    try:
+        proxy.call_sync(
+            "InstallBundle",
+            GLib.Variant("(sa{sv})", (source, {})),
+            Gio.DBusCallFlags.NONE,
+            -1,
+            None,
+        )
+    except Exception as exc:
+        log(f"rauc refused the install: {exc}")
+        return False
+    loop.run()
+    return state["ok"]
+
+
+# --- gates --------------------------------------------------------------------------------------
+
+
+def steam_logged_in():
+    """No update before somebody has signed in.
+
+    The update screen in OOBE is exactly what the stub this replaces existed to unblock, and a
+    multi-gigabyte download over first-boot Wi-Fi, before the user has even reached the library, is
+    the wrong first impression. Steam writes an AccountName into loginusers.vdf once a real login
+    lands, so that file is the signal."""
+    try:
+        with open(LOGINUSERS, "r") as handle:
+            return '"AccountName"' in handle.read()
+    except OSError:
+        return False
+
+
+# room_for() lived here: a free-space check against the bundle size plus a margin, run before the
+# download rather than after it. Nothing is staged any more -- rauc streams straight into the
+# inactive slot, which is a fixed-size raw partition that the bundle is built to fit by
+# construction -- so there is no longer a disk to run out of. Removed rather than kept as a no-op.
+
+
+# --- the subcommands ------------------------------------------------------------------------------
+
+
+def cmd_check():
+    if not steam_logged_in():
+        return EXIT_NONE
+
+    # An update already on disk is reported by reprinting its version, which Steam reads as
+    # restart-pending rather than as a new download to start.
+    pending = staged_identity()
+    if pending:
+        print(pending, flush=True)
+        return EXIT_OK
+
+    base_url, channel = config()
+    remote = manifest(base_url, channel)
+    if remote is None:
+        return EXIT_NONE
+
+    if identity_of(remote) == identity_of(device_identity()):
+        return EXIT_NONE
+    print(identity_of(remote), flush=True)
+    return EXIT_OK
+
+
+def cmd_apply():
+    if not steam_logged_in():
+        return EXIT_NONE
+
+    if staged_identity():
+        # Already installed and waiting for a reboot. Re-installing would rewrite the same slot and
+        # re-arm the same trial for no gain, so report success and let Steam ask for the restart.
+        emit = progress_emitter()
+        emit(100)
+        return EXIT_OK
+
+    base_url, channel = config()
+    remote = manifest(base_url, channel)
+    if remote is None:
+        return EXIT_NONE
+
+    # THE GATE cmd_check() HAS AND THIS PATH DID NOT, and its absence was not academic: STEAM
+    # DECIDES WHEN TO APPLY, and it does not have to have asked us first. steamui.so's updater enum
+    # carries k_EUpdaterType_Aggregated alongside _Client and _OS, and the Software Updates page
+    # drives the aggregate — so a CLIENT update going available is enough to reach this path with
+    # the OS already up to date. `--enable-duplicate-detection` is Steam asking us to notice; this
+    # is where we notice, unconditionally, rather than trusting the flag to be passed.
+    #
+    # HW-OBSERVED 2026-08-18: a card took 0.2.3 -> 0.2.4 correctly, then installed 0.2.4 A SECOND
+    # TIME after Valve published a client update, leaving BOTH slots on 0.2.4.
+    #
+    # That is not merely a wasted transfer. usr/lib/rauc/post-install.sh gives the target slot a
+    # fresh per-slot /var and re-arms its boot conf, so a redundant apply overwrites the previous
+    # release — the rollback target — and puts the device on a trial boot of the version it was
+    # already running. The one thing an A/B system exists to keep is the other side.
+    #
+    # EXIT_OK, not EXIT_NONE: the state Steam asked for already holds, and 7 here would be read as
+    # a failed update. Terminal 100% and nothing else, so the bar completes and the UI settles on
+    # up-to-date. Same shape as the staged branch above, for the same reason.
+    if identity_of(remote) == identity_of(device_identity()):
+        log(f"already running {identity_of(remote)} — nothing to install")
+        emit = progress_emitter()
+        emit(100)
+        return EXIT_OK
+
+    # ONE JOB NOW, so the bar is rauc's from end to end. There is no download half to weight against
+    # an install half: rauc fetches and writes in the same pass, and its own progress already spans
+    # both. Note the number it reports is progress through the INSTALL, not through the transfer --
+    # with adaptive most blocks come from the local slots, so the bar advances through stretches
+    # where nothing crosses the network at all.
+    emit = progress_emitter()
+    log(f"streaming {remote['url']} ({remote['size']} bytes at most; adaptive fetches less)")
+    if not install(remote["url"], emit):
+        return EXIT_NONE
+    write_staged(remote)
+    emit(100)
+    return EXIT_OK
+
+
+def progress_emitter():
+    """Forward-only integer percentages on stdout. Steam's bar cannot go backwards, and the two
+    halves of the job report independently, so the clamp belongs here rather than in each caller."""
+    last = [-1]
+
+    def emit(value):
+        value = int(value)
+        if value > last[0] and value <= 100:
+            print(f"{value}%", flush=True)
+            last[0] = value
+
+    return emit
+
+
+# download() lived here: curl the bundle to STAGE_DIR, reporting 0..PROGRESS_DOWNLOAD_END by polling
+# the growing file, then check the final size against the manifest. rauc does the fetching now, so
+# all of it is gone -- including that size check, which was never integrity (the signature is) and
+# only ever existed to turn a truncated file into an obvious error instead of a confusing verity
+# one. A streamed bundle cannot be truncated on disk, because it is never on disk.
+
+
+def cmd_status():
+    base_url, channel = config()
+    local = device_identity()
+    print(f"device:   {identity_of(local) or '<unidentified>'} ({local.get('mode') or 'mode unknown'})")
+    print(f"server:   {base_url}/{channel}")
+    print(f"logged in: {'yes' if steam_logged_in() else 'no (updates deferred)'}")
+    pending = staged_identity()
+    print(f"staged:   {pending or '<none>'}")
+    remote = manifest(base_url, channel)
+    print(f"available: {identity_of(remote) if remote else '<unreachable>'}")
+    return EXIT_OK
+
+
+USAGE = """usage: novadeck-update [check|status|--supports-duplicate-detection]
+
+  (no argument)  apply the available update: download, install, arm the trial
+  check          exit 0 and print the version if an update is available, else exit 7
+  status         human-readable diagnostics
+
+Called by SteamUI through /usr/bin/steamos-polkit-helpers/steamos-update; see the header of this
+file for the contract that shapes the output."""
+
+
+def main(argv):
+    # THE DEFAULT ACTION IS AN INSTALL, so what this loop does with an argument it does not
+    # recognise is a real decision and not parser hygiene. It used to fall through to apply for
+    # ANYTHING unrecognised -- `--enable-duplicate-detection` reached the right place by accident,
+    # and so did `chekc`.
+    #
+    # The split is between the two shapes an unknown argument comes in, because they have opposite
+    # right answers:
+    #
+    #   -SOMETHING  a flag, and IGNORED ON PURPOSE. Steam adds flags to this command line over time
+    #               -- --enable-duplicate-detection IS one, arriving after the interface was first
+    #               written -- and a client that refused an unfamiliar one would stop applying
+    #               updates fleet-wide, silently, the day Valve shipped the next. Forward
+    #               compatibility is worth more here than strictness, and a flag we do not know
+    #               cannot change what apply does anyway.
+    #
+    #   something   a WORD, i.e. subcommand-shaped, and REFUSED. `chekc` is not a request to
+    #               install 4G over the inactive slot; nothing that means it omits the word for it.
+    #
+    # EXIT_NONE, and the usage goes to STDERR unlike the -h branch above it: this path is reachable
+    # from a caller that PARSES STDOUT as a version string, and "an update is available, called
+    # usage:" is the failure the whole contract is arranged to avoid.
+    unknown = []
+    for arg in argv:
+        if arg == "--supports-duplicate-detection":
+            return EXIT_OK
+        if arg in ("-h", "--help", "help"):
+            print(USAGE)
+            return EXIT_OK
+        if arg == "check":
+            return cmd_check()
+        if arg == "status":
+            return cmd_status()
+        if not arg.startswith("-"):
+            unknown.append(arg)
+    if unknown:
+        log(f"unknown subcommand {unknown[0]!r} — refusing to fall through to an install")
+        print(USAGE, file=sys.stderr)
+        return EXIT_NONE
+    return cmd_apply()
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except KeyboardInterrupt:
+        sys.exit(EXIT_NONE)
+    except Exception as exc:
+        # Fail closed. An unhandled traceback on stdout would be parsed by Steam as a version
+        # string, and "an update is available, called Traceback" is worse than "no update".
+        log(f"unhandled error: {exc}")
+        sys.exit(EXIT_NONE)

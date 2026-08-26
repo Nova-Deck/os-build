@@ -116,7 +116,7 @@ The whole path, end to end: switch → helper → daemon → `POST /register` �
 - mDNS advertising works. (It shipped once as a fatal `ExecStartPre` writing into `/etc` under
   `ProtectSystem=full`, which mounts `/etc` read-only; the write failed `EROFS` and took the whole
   daemon down with it — port closed, switch apparently dead. Fixed by making the advertisement
-  non-fatal and carving out `/etc/avahi`; `images/test-pairingd.sh` pins both.)
+  non-fatal and carving out `/etc/avahi`; `tests/test-pairingd.sh` pins both.)
 
 ## Deliberately not done: an on-screen approval prompt
 

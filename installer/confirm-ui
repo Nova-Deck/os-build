@@ -1,0 +1,115 @@
+#!/usr/bin/env python3
+# novadeck internal install — the CONSENT SCREEN, gamepad rendering. Phase 5/§4d of
+# .claude/plans/internal-install.plan.md.
+#
+#   confirm-ui --facts <file> --sequence <NESW>
+#
+# This is the second implementation of §4d's consent contract, the peer of `installer/confirm-tty`.
+# It renders nothing itself: it hands the request to the installer UI that is already on screen and
+# waits for the answer. Everything about the contract is unchanged — the sequence goes in, the
+# pressed sequence comes back on stdout, a non-zero exit is an abort.
+#
+# WHY A SHIM AND NOT A SECOND SDL PROGRAM. The obvious shape is a standalone window that opens over
+# gamescope while the UI idles. Two Wayland clients then contend for focus and for the pad, and the
+# failure mode is a consent screen that never appears — on a device with no serial console, in the
+# one tool that has to work when the device is broken. We already carry a gamescope patch (0005)
+# because a second client's focus did NOT work by default. So there is exactly one Wayland client,
+# one owner of the input, and this program is a message passed to it.
+#
+# WHAT THAT BUYS, beyond the focus fight: the consent screen becomes part of the UI's own state
+# machine, which is drivable headless with no SDL window at all (tests/test-ui.sh), so §5's
+# end-to-end case against the real renderer runs offline instead of waiting for hardware.
+#
+# STDOUT IS THE ANSWER AND NOTHING ELSE — the trap the tty renderer paid for and the reason this
+# file is as short as it is. The spine reads this program's stdout in a command substitution and
+# compares it to the sequence it asked for, so one stray line here makes every attempt read as a
+# wrong answer: an installer that can never take consent, failing in the one direction where the
+# symptom ("that was not the sequence shown") points nowhere near the cause. Note what the shim
+# shape does to that risk — the UI process can print whatever it likes to its own journal, because
+# the UI's stdout is not this program's stdout. The only code that can violate the rule is here,
+# and it is one printed line at the very bottom.
+#
+# IT FAILS CLOSED. No UI, a UI that dies mid-wait, a socket that is not there: all of them exit
+# non-zero, which the spine reads as an abort and stops on. There is no path through this file that
+# yields a right answer without a person having produced it.
+import json
+import os
+import socket
+import sys
+
+# Test seams, in the spirit of novadeck-update's: tests/test-ui.sh redirects the socket into a
+# sandbox and executes THIS file. What runs under test is the artifact that ships.
+SOCK = os.environ.get("NOVADECK_UI_SOCK", "/run/novadeck/installer-ui.sock")
+# The wait for the UI to ACCEPT is bounded — it is either up or it is not. The wait for the ANSWER
+# is not, deliberately: the person is reading a screen that tells them their Android data is about
+# to be destroyed, and a consent gate that expires while it is being read is a gate that teaches
+# people to answer without reading.
+CONNECT_TIMEOUT = float(os.environ.get("NOVADECK_UI_CONNECT_TIMEOUT", "15"))
+
+EXIT_ABORT = 3      # the user said no. A legitimate answer.
+EXIT_NO_UI = 4      # we could not ask. Not an answer at all, and it must not look like one.
+EXIT_USAGE = 2
+
+
+def die(msg, code=EXIT_NO_UI):
+    print("confirm-ui: %s" % msg, file=sys.stderr)
+    raise SystemExit(code)
+
+
+def main(argv):
+    facts = sequence = None
+    args = list(argv)
+    while args:
+        a = args.pop(0)
+        if a == "--facts" and args:
+            facts = args.pop(0)
+        elif a == "--sequence" and args:
+            sequence = args.pop(0)
+        else:
+            die("unknown argument %s" % a, EXIT_USAGE)
+    if not facts or not os.access(facts, os.R_OK):
+        die("no readable --facts file", EXIT_USAGE)
+    if not sequence:
+        die("no --sequence given", EXIT_USAGE)
+
+    # The FACTS FILE IS PASSED BY PATH, not by value. The UI runs as the same root user on the same
+    # machine, so it reads the file the spine wrote — which keeps §4d's "the screen is derived from
+    # what select-target actually found" true of this renderer too, rather than making this program
+    # a place where facts could be reworded on the way past.
+    request = json.dumps({"facts": os.path.abspath(facts), "sequence": sequence}) + "\n"
+
+    try:
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(CONNECT_TIMEOUT)
+        sock.connect(SOCK)
+        sock.sendall(request.encode())
+    except OSError as e:
+        die("cannot reach the installer UI on %s (%s)" % (SOCK, e))
+
+    sock.settimeout(None)
+    with sock.makefile("r", encoding="utf-8") as f:
+        line = f.readline()
+    if not line:
+        # The UI went away mid-wait. Not an abort by the user, and not consent either.
+        die("the installer UI closed the connection without answering")
+    try:
+        reply = json.loads(line)
+    except ValueError:
+        die("the installer UI answered with something that is not JSON")
+    if not isinstance(reply, dict):
+        die("the installer UI answered with something that is not an object")
+
+    if reply.get("abort"):
+        print("confirm-ui: cancelled on the device", file=sys.stderr)
+        raise SystemExit(EXIT_ABORT)
+    answer = reply.get("answer")
+    if not isinstance(answer, str):
+        die("the installer UI answered without a sequence")
+
+    # The one line on stdout. Everything above this point writes to stderr or exits.
+    print(answer)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

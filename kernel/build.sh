@@ -154,7 +154,7 @@ CC=(${CROSS_COMPILE:+CROSS_COMPILE=$CROSS_COMPILE})
   #       the panel is up. A silent promotion back to =y costs the touchscreen AND the boot.
   #   =y  dm-verity: rauc installs a format=verity bundle from the sealed root; a module on the
   #       update path can be missing exactly when an update is applied.
-  #   =y  vfat + loop: images/initramfs/init mounts the ESP to read the A/B slot state. Losing
+  #   =y  vfat + loop: image/initramfs/init mounts the ESP to read the A/B slot state. Losing
   #       vfat makes every boot silently fall back to the cmdline root= instead.
   #   =y  zram + the zstd backend: the ONLY swap device on this image comes from zram-generator,
   #       and a kernel without it produces no zram0, no swap and no error — while
@@ -263,7 +263,7 @@ cp "$SRCDIR/arch/arm64/boot/Image" "$OUT/"
 rm -f "$OUT/Image.gz"   # a leftover from a pre-phase-5 out/ would be stale, and nothing reads it
 for b in "${BOARDS[@]}"; do cp "$QCOM_DTS/${b}.dtb" "$OUT/dtbs/"; done
 
-# Install loadable modules into a staging tree consumed by images/assemble-rootfs.sh.
+# Install loadable modules into a staging tree consumed by rootfs/assemble-rootfs.sh.
 # INSTALL_MOD_PATH yields a self-contained /lib/modules/<kver> (with depmod metadata)
 # and never writes the host's /lib. The =m drivers (e.g. handheld panels needed for
 # display bring-up) live here. Drop the build/source symlinks — they point back into

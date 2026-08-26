@@ -42,7 +42,7 @@ novadeck runs from the card and does not touch your Android install.
 
 ## Supported devices
 
-<!-- AUTO-GENERATED from fs-overlay/usr/lib/novadeck/devices/*.conf — regenerate with /ecc:update-docs -->
+<!-- AUTO-GENERATED from rootfs/overlay/usr/lib/novadeck/devices/*.conf — regenerate with /ecc:update-docs -->
 
 | Board | SoC | Profile | HW-validated |
 |---|---|---|---|
@@ -197,23 +197,32 @@ creds, an SSH key and the dev package set baked in.
 
 | Path | Purpose |
 |---|---|
-| `images/` | Image assembly (A/B layout, Btrfs, RAUC bundles) |
+The tree follows the order a build happens in: assemble a root, lay it onto a disk, ship it to a
+device.
+
+| Path | Purpose |
+|---|---|
+| `rootfs/` | **What is inside a root.** The package closure (`manifest.lock` + its generator and materializer), the bootstrap that lays it down, and the seal/trim/guard trio that says what a release root must not be able to do |
+| `rootfs/overlay/` | The payload injected into every root with a single `cp -a` — one tree mirroring the device's own filesystem |
+| `rootfs/conf/` | The declarative inputs: `pacman.conf`, `os-release`, `trim.list`, `seal.list` |
+| `image/` | **Turning a root into partitions.** The A/B layout and its `sgdisk` emitter, the initramfs, the card assembler, and the verifier that reads the result back |
+| `ota/` | **Getting an image onto a device already in the field.** Signed RAUC bundles and the signing CA that mints their cert, the publishers, and the nginx/CI-user setup for the OTA host |
+| `installer/` | The standalone installer medium: the read-only board probe, the partition carve, and the on-device UI |
 | `packages/` | From-source overlay: PKGBUILDs + source pins for what we patch or version-bump, plus the builder that turns them into a local pacman repo |
 | `kernel/` | Unified kernel: config fragments, patches, all device trees, firmware embed list |
 | `firmware/` | Vendor firmware fetch/verify recipes + their pins |
-| `fs-overlay/` | Rootfs overlay payload — one filesystem-mirror tree injected with a single `cp -a` |
-| `steam-seed/` | Native arm64 Steam client seed fetcher + pin |
 | `boot/` | Two-stage UEFI boot: steamcl (stage 1) + GRUB (stage 2), both built from pinned sources |
-| `decky/` | `novadeck-control` — the first-party Decky plugin (per-game tweaks, power, fan curve) |
-| `install/` | Internal-storage install: the read-only board probe, partition carve, and its offline suites |
-| `ota/` | Update-server side: publish script + the nginx/CI-user setup for the OTA host |
-| `ci/` | Signing-CA generator + notes for `.github/workflows/` |
-| `build/` | `Dockerfile` for the cross-compile image |
+| `apps/decky/` | `novadeck-control` — the first-party Decky plugin (per-game tweaks, power, fan curve) |
+| `tests/` | Every offline suite. `make test` runs the host ones; the signing and disk suites need a container |
+| `build/` | Where the build itself is pinned: the cross-compile `Dockerfile`, the builder digest, the repo snapshot, and the Steam seed fetcher |
+
+`dev.env` stays at the root: it is sourced by hand before every `make`, so it is the one path that
+earns its place there.
 
 Most of those directories carry their own `README.md` documenting them file-by-file.
 
 **Open work lives in [GitHub issues](https://github.com/Nova-Deck/os-build/issues)**, prioritised
-`P0`–`P3` and grouped by `area/*` label. `DONE.md` is the decision record for work closed before
+`P0`–`P3` and grouped by `area/*` label. `docs/worklog/DONE.md` is the decision record for work closed before
 2026-08-18 — resolved entries keep their measurements, HW-validation dates and dead ends, because
 several are the only written record of why something is shaped the way it is. Work closed after
 that date keeps its reasoning in the closed issue instead.
@@ -221,7 +230,7 @@ that date keeps its reasoning in the closed issue instead.
 ### Adding a board
 
 Three pieces of data, all discovered automatically: a DTS under `kernel/dts/qcom/`, a device
-profile under `fs-overlay/usr/lib/novadeck/devices/` plus its `model` case in `device-env`, and —
+profile under `rootfs/overlay/usr/lib/novadeck/devices/` plus its `model` case in `device-env`, and —
 if the gamepad is not already covered — an InputPlumber config. An unmatched board falls through
 to `defaults.conf` and still boots.
 
@@ -248,6 +257,7 @@ to `defaults.conf` and still boots.
 | [`docs/windows-games-fex.md`](docs/windows-games-fex.md) | Running x86/x86-64 games: the two independent Proton/FEX paths |
 | [`docs/FEX_README.md`](docs/FEX_README.md) | The FEX runtime configuration itself (rationale for the comment-less JSON) |
 | [`docs/remote-access.md`](docs/remote-access.md) | SSH on a release image: key-only sshd, and what the devkit toggle actually gates |
+| [`docs/ci.md`](docs/ci.md) | What each workflow under `.github/workflows/` runs, what it needs, and the signing PKI behind the release jobs |
 
 <!-- END AUTO-GENERATED -->
 

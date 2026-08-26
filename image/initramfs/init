@@ -1,0 +1,221 @@
+#!/bin/sh
+# novadeck initramfs init — Phase 5: mount the booted slot's root (ro) + var, mount the slot's
+# efi partition at /efi, stack the /etc overlay, then hand off to systemd.
+#
+# WHAT PICKED THE SLOT IS NOT HERE. Slot selection moved out of the initramfs in Phase 5
+# (docs/phase5.md): the bootloader chain — ABL -> steamcl (stage 1, on the ESP) -> per-slot GRUB
+# (stage 2) — picks the image and appends the full cmdline. This init merely carries out what
+# the cmdline says:
+#
+#   root=PARTUUID=...                   the slot's btrfs root, mounted ro
+#   novadeck.var=PARTUUID=...           the slot's ext4 /var (overlay upper + per-slot identity)
+#   novadeck.efi=PARTUUID=...           the slot's efi-a/b partition, mounted at /efi
+#   novadeck.slot=A|B                   which slot the above three are
+#
+#                                       The first three are PARTUUID because every novadeck medium
+#                                       carries the same eight PARTLABELs, so with a card inserted
+#                                       on a device installed to internal storage a PARTLABEL
+#                                       resolves to whichever disk enumerates first. Stage 2 reads
+#                                       the UUIDs off the disk it was chainloaded from with
+#                                       `probe --part-uuid`; PARTLABEL= is still accepted here,
+#                                       because it is stage 2's announced fallback.
+#   steamos.efi=PARTUUID=...            the same thing, as SteamOS states it -- appended by the
+#                                       bootloader from the partition the stage-2 binary was
+#                                       loaded from. Accepted as a FALLBACK so the two forms can
+#                                       coexist; nothing we ship emits it, because our stage-2
+#                                       grub.cfg states novadeck.efi= itself (it knows the slot,
+#                                       so it knows the partition). See docs/phase5.md.
+#
+# The old design-C machinery — the /NOVADECK/STATE.* read/write, slot selection, failover,
+# kernel-mismatch warning and KERNEL.BAK rollback — is gone. The stage-2 boot-attempts counter + stock
+# steamcl's failsafe own "did a slot come up", and the OS owns "is this slot OK" via
+# novadeck-boot-good.service (set-mode booted / set-state bad). Nothing here chooses anything.
+#
+# WHY THE /ETC OVERLAY IS IN THE INITRAMFS AT ALL: it cannot be assembled after PID1 starts.
+# systemd reads /etc/fstab (via generators), /etc/machine-id, /etc/hostname and system.conf
+# before any unit can run, so an overlay mounted by a unit would leave every one of those reading
+# the read-only lower dir forever. The machine-id case is the sharpest: a read-only /etc makes
+# systemd fall back to a transient /run/machine-id, which makes EVERY boot look like a first boot
+# (re-running preset-all). So the overlay has to be in place before we exec systemd.
+#
+# We need no modules: btrfs, ext4, vfat and overlayfs are all =y in kernel.config, and every
+# block/storage driver is builtin too. So this is a plain shell script over a handful of
+# util-linux binaries, staged by image/mkinitramfs.sh. No udev, no modprobe, no systemd-in-initrd.
+#
+# Layout (image/partition-table.txt):
+#   root  <- PARTUUID=... (root=)             btrfs, ro
+#   var   <- PARTUUID=... (novadeck.var=)     ext4, rw   (overlay upper+work; /lib/novadeck/slot)
+#   efi   <- PARTUUID=... (novadeck.efi=)     vfat, rw   (the SLOT's efi-a/b: SteamOS/partsets)
+#   /etc  <- overlay(lower=/sysroot/etc, upper=/sysroot/var/lib/overlays/etc/upper)
+#
+# The efi mountpoint is INSIDE the btrfs root ($SYSROOT/efi), so the mount survives switch_root:
+# it is a mount on the new root's filesystem, not on this initramfs's root. The shared ESP is
+# deliberately NOT mounted here at all — the booted system mounts it at /esp from /etc/fstab, and
+# GPT bit 63 (partition-table.txt) keeps gpt-auto from trying to shadow /efi with it.
+#
+# DEGRADED BOOT: this device has no serial console ([[sm8650-no-uart]]), so a hard failure here
+# is only debuggable by pulling the card and mounting it. Every step past "root is mounted"
+# therefore falls back rather than dying: we log the reason to /dev/kmsg (which lands in the
+# journal, readable offline via `journalctl -D`) and boot with a writable root and no overlay —
+# which is exactly the configuration that shipped before this change, so the fallback is
+# known-good rather than novel. The failure is loud, not silent.
+#
+# A root that will not mount is different: with no root there is no system, so that is a panic
+# (panic=5 on the grub.cfg cmdline reboots). Failover to the other slot is NOT done here — that
+# is the bootloader's job, and doing it here too would fight the boot-attempts counter's accounting.
+set -u
+
+SYSROOT=/sysroot
+
+log()  { printf '<6>novadeck-init: %s\n' "$*" >/dev/kmsg 2>/dev/null || :; }
+warn() { printf '<3>novadeck-init: %s\n' "$*" >/dev/kmsg 2>/dev/null || :; }
+
+# Everything under here is pre-created in the cpio, so no mkdir is needed before /dev exists.
+mount -t proc     -o nosuid,noexec,nodev proc /proc
+mount -t sysfs    -o nosuid,noexec,nodev sys  /sys
+mount -t devtmpfs -o nosuid,mode=0755    dev  /dev
+# /run is mounted here because util-linux switch_root walks {/dev,/proc,/sys,/run} and moves each
+# into $SYSROOT; when /run is not a mountpoint that move fails and prints a "failed to mount
+# moving /run to /sysroot/run" warning to the console. The boot recovers (systemd mounts its own
+# /run post-pivot), so this is cosmetic — but on a no-UART device ([[sm8650-no-uart]]) a spurious
+# boot-console error is a debugging trap, so we give switch_root a real tmpfs to hand over.
+mount -t tmpfs    -o nosuid,nodev,mode=0755 run /run
+
+ROOTSPEC=''; VARSPEC=''; EFISPEC=''; EFISPEC_ALT=''; SLOTSPEC=''; ROOTFSTYPE=btrfs
+read -r _cmdline </proc/cmdline
+for _arg in $_cmdline; do
+  case "$_arg" in
+    root=*)          ROOTSPEC=${_arg#root=} ;;
+    rootfstype=*)    ROOTFSTYPE=${_arg#rootfstype=} ;;
+    novadeck.var=*)  VARSPEC=${_arg#novadeck.var=} ;;
+    novadeck.efi=*)  EFISPEC=${_arg#novadeck.efi=} ;;
+    novadeck.slot=*) SLOTSPEC=${_arg#novadeck.slot=} ;;
+    steamos.efi=*)   EFISPEC_ALT=${_arg#steamos.efi=} ;;
+  esac
+done
+# novadeck.efi= wins when both are present. It comes from the generated grub.cfg, which knows
+# which slot it is and therefore which partition to name; steamos.efi= is SteamOS's form, appended
+# by the bootloader from the partition it was chainloaded from. They should always agree, and when they do not it is
+# the config that is authoritative -- it is the file the update path installs alongside the root.
+[ -n "$EFISPEC" ] || EFISPEC=$EFISPEC_ALT
+
+# Resolve a root=-style spec (PARTLABEL=/LABEL=/UUID=/PARTUUID=/bare path) to a block device,
+# polling for it. There is no udev here and storage probes asynchronously, so the device may
+# simply not exist yet on the first pass — this is what the kernel's own `rootwait` does for us
+# when it mounts root itself. ~30s, then give up.
+resolve() {
+  _spec=$1 _i=0
+  while [ "$_i" -lt 300 ]; do
+    case "$_spec" in
+      /dev/*) [ -b "$_spec" ] && { printf '%s' "$_spec"; return 0; } ;;
+      *)      _d=$(findfs "$_spec" 2>/dev/null) && [ -b "$_d" ] && { printf '%s' "$_d"; return 0; } ;;
+    esac
+    sleep 0.1; _i=$((_i + 1))
+  done
+  return 1
+}
+
+# The slot letter for /run/novadeck/boot. Stage 2 states it outright — it is generated per slot, so
+# it knows statically which one it is — and that is now the only thing that can tell us: the root=
+# spec it emits is a PARTUUID, which carries no slot letter at all.
+#
+# The PARTLABEL match is kept for one boot: an OLD stage-2 grub.cfg on the other slot's efi
+# partition, which has not been rewritten yet because post-install.sh only touches the slot it
+# just installed. Without it, booting back into a not-yet-updated slot reports slot='' and
+# novadeck-bootctl mark-good treats a real slot boot as a dev boot — so boot-attempts is never
+# cleared and a healthy image gets marked bad.
+#
+# Empty on any other root (a dev boot) — which is exactly what mark-good needs to know.
+SLOT=''
+case "$SLOTSPEC" in
+  A|B) SLOT=$SLOTSPEC ;;
+esac
+if [ -z "$SLOT" ]; then
+  case "$ROOTSPEC" in
+    PARTLABEL=novadeck-root-A) SLOT=A ;;
+    PARTLABEL=novadeck-root-B) SLOT=B ;;
+  esac
+fi
+
+# ---------------------------------------------------------------------------------------------
+# Root
+# ---------------------------------------------------------------------------------------------
+[ -n "$ROOTSPEC" ] || { warn "no root= on the kernel cmdline — cannot continue"; exit 1; }
+if ! ROOTDEV=$(resolve "$ROOTSPEC"); then
+  warn "root device '$ROOTSPEC' never appeared after 30s — panicking (panic=5 reboots)"
+  exit 1
+fi
+if ! mount -t "$ROOTFSTYPE" -o ro "$ROOTDEV" "$SYSROOT"; then
+  warn "cannot mount root $ROOTDEV ($ROOTFSTYPE) — panicking (panic=5 reboots)"
+  exit 1
+fi
+log "root $ROOTDEV mounted ro (slot=${SLOT:-?})"
+
+# From here on, failures degrade instead of panicking (see the header).
+degrade() {
+  warn "DEGRADED: $1"
+  warn "DEGRADED: booting with a writable root and no /etc overlay (pre-initramfs behaviour)"
+  mount -o remount,rw "$SYSROOT" || warn "DEGRADED: remount,rw failed too — root stays read-only"
+}
+
+# ---------------------------------------------------------------------------------------------
+# /var + the /etc overlay
+# ---------------------------------------------------------------------------------------------
+# Kept inline rather than in a function: a $(...) capture would run the mounts in a subshell
+# and swallow the device names we want to log.
+overlay_ok=0
+if [ -z "$VARSPEC" ]; then
+  degrade "no novadeck.var= on the kernel cmdline"
+elif ! VARDEV=$(resolve "$VARSPEC"); then
+  degrade "var device '$VARSPEC' never appeared after 30s"
+elif ! mount -t ext4 "$VARDEV" "$SYSROOT/var"; then
+  degrade "cannot mount var $VARDEV at $SYSROOT/var"
+else
+  # upper and work MUST share a filesystem (overlayfs rename requirement) — both live on /var.
+  OVL=$SYSROOT/var/lib/overlays/etc
+  # lowerdir is the /etc we just mounted read-only; overlayfs resolves it now, at mount time,
+  # so mounting the result over that same path is safe.
+  if mkdir -p "$OVL/upper" "$OVL/work" \
+     && mount -t overlay etc \
+          -o "lowerdir=$SYSROOT/etc,upperdir=$OVL/upper,workdir=$OVL/work" "$SYSROOT/etc"; then
+    overlay_ok=1
+    log "var $VARDEV mounted; /etc overlay stacked (upper=/var/lib/overlays/etc/upper)"
+  else
+    degrade "cannot stack the /etc overlay on $VARDEV"
+  fi
+fi
+
+# ---------------------------------------------------------------------------------------------
+# The slot's efi partition at /efi (novadeck.efi=PARTLABEL=, or SteamOS's steamos.efi=PARTUUID=)
+# ---------------------------------------------------------------------------------------------
+# Either form names the partition the stage-2 GRUB was chainloaded from, so this mounts the
+# partition whose partsets name THIS image. post-install.sh
+# and novadeck-bootctl need it (this-image reads partsets/self), and the mount persists across
+# switch_root because it is on the new root's filesystem.
+efi_ok=0
+if [ -z "$EFISPEC" ]; then
+  warn "no steamos.efi=PARTUUID= on the kernel cmdline — /efi will not be mounted (post-install needs it)"
+elif ! EFIDEV=$(resolve "$EFISPEC"); then
+  warn "efi device '$EFISPEC' never appeared after 30s — /efi will not be mounted"
+elif ! mkdir -p "$SYSROOT/efi" || ! mount -t vfat "$EFIDEV" "$SYSROOT/efi"; then
+  warn "cannot mount $EFIDEV at $SYSROOT/efi — /efi will not be mounted"
+else
+  efi_ok=1
+  log "efi $EFIDEV mounted at /efi (slot=$SLOT)"
+fi
+
+# Hand the decision to the running system. /run is moved into the new root by switch_root, so
+# this survives the pivot. novadeck-bootctl mark-good reads slot= to tell "a slot boot" from a
+# "dev/cmdline boot" (nothing to confirm), and the fields are the first evidence when debugging
+# a boot offline.
+mkdir -p /run/novadeck
+{ printf 'slot=%s\n'   "${SLOT}"
+  printf 'source=%s\n' 'grub'
+  printf 'root=%s\n'   "${ROOTDEV:-}"
+  printf 'var=%s\n'    "${VARDEV:-}"
+  printf 'efi=%s\n'    "${EFIDEV:-}"
+} >/run/novadeck/boot 2>/dev/null || warn "cannot write /run/novadeck/boot"
+
+[ "$overlay_ok" -eq 1 ] || warn "DEGRADED: handing off to systemd on a writable, un-overlaid root"
+[ "$efi_ok" -eq 1 ] || warn "DEGRADED: /efi is not mounted — updates and boot confirmation will fail"
+exec switch_root "$SYSROOT" /usr/lib/systemd/systemd

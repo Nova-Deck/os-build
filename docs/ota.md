@@ -86,7 +86,7 @@ device backed by an unprivileged helper (user `nobody`) that turns block reads i
 requests, so a bundle never occupies storage on the device — there is no staging directory to fill
 and no free-space precondition on an update.
 
-Because `images/rauc/manifest.raucm.in` marks the image `adaptive=block-hash-index`, the bundle also
+Because `ota/rauc/manifest.raucm.in` marks the image `adaptive=block-hash-index`, the bundle also
 carries a SHA256 index of every 4 KiB block. rauc looks each block up in **both** slots and fetches
 only what it cannot find locally. Measured 2026-08-04 across two independent pairs of real
 consecutive bundles: **96.1% of non-zero blocks are reused, ~125 MB crosses the wire instead of
@@ -124,7 +124,7 @@ Three consequences worth knowing before reading a slow first result:
   (5 range-request retries, then the install fails); a merely stalled one is bounded only by TCP.
 
 Both halves fail *silently* if lost — a rauc built without streaming, or a kernel without `nbd.ko`,
-degrades to a full download that still succeeds. `images/guard-rootfs.sh` asserts both at build time.
+degrades to a full download that still succeeds. `rootfs/guard-rootfs.sh` asserts both at build time.
 
 `publish-bundle.sh` does, in order: verify the signature against the device keyring, read the version
 back out of the bundle, check free space on the server, upload to a `.part` name and rename, **hash
@@ -159,7 +159,7 @@ There are two questions here, they are not the same one, and the second answers 
 was settled by reading both ends rather than by running it, because the two halves name the same
 missing file:
 
-- The phase-5 build ships **no** `/usr/lib/novadeck/boot.img` — `images/assemble-rootfs.sh:202`, the
+- The phase-5 build ships **no** `/usr/lib/novadeck/boot.img` — `rootfs/assemble-rootfs.sh:202`, the
   boot *directory* replaces it.
 - A `card/v0.1.0` device's own `post-install.sh:194` hard-fails without exactly that file:
   `die "the installed root carries no boot image at /usr/lib/novadeck/boot.img"`.
@@ -380,4 +380,4 @@ it needs no device-side change.
 `<policy context="default"><allow send_destination="de.pengutronix.rauc"/></policy>` and 1.15.2 has
 no polkit policy at all, so any local process can call `InstallBundle`. Bounded by signature
 verification, so not arbitrary code execution — but it is the actual mechanism behind "unprivileged
-install", and it is not polkit. Accepted as a design choice; recorded in `DONE.md`.
+install", and it is not polkit. Accepted as a design choice; recorded in `docs/worklog/DONE.md`.

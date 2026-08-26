@@ -235,7 +235,7 @@ jobs:
           - [ ] \`$pin\`: version + url + sha256 together. Upstream publishes a **sha512** sidecar only — verify the download against THAT, then record the sha256 of the same bytes
           - [ ] leave \`dest\` alone. The directory is version-free on purpose, and assemble-rootfs.sh rewrites the tool's INTERNAL name (what Steam actually pins a game to) to a stable id — changing either unpins every game
           - [ ] re-verify ${{ matrix.parse }} still matches the shipped \`version\` file, and that compatibilitytool.vdf still has a compat_tools internal name + display_name and toolmanifest.vdf still declares require_tool_appid (rewrite_proton_tool asserts all four and fails the build loudly)
-          - [ ] \`images/manifest.lock\`: the prebuilt row is generated straight from the pin's name/version/sha256 — update that row (a full \`make relock\` re-resolves the whole snapshot and is not what this needs)
+          - [ ] \`rootfs/manifest.lock\`: the prebuilt row is generated straight from the pin's name/version/sha256 — update that row (a full \`make relock\` re-resolves the whole snapshot and is not what this needs)
           - [ ] HW pass: launch an x86 Windows title forced onto THIS tool and confirm Steam kept the per-game selection across the bump
 
           Read the release notes before taking it — a hotfix-only release may be worth jumping to, a Wine-base rebase is worth a real gameplay pass.
@@ -299,7 +299,7 @@ jobs:
           - [ ] \`packages/mesa/PKGBUILD\`: pkgver + the tarball sha256sums entry together
           - [ ] \`packages/mesa/source.pin\`: the informational url/sha256 comment lines
           - [ ] re-roll every patch under \`packages/mesa/patches/\` against the new tag — they are applied \`patch -p1\` with no fuzz budget, so a rebase failure is a build failure
-          - [ ] \`images/manifest.lock\`: mesa emits SEVERAL packages and every row it owns carries the pkgbase input hash — regenerate rather than editing one row, and let packages/verify-lock-rows.sh (in \`make test\`) confirm no sibling row kept the old hash
+          - [ ] \`rootfs/manifest.lock\`: mesa emits SEVERAL packages and every row it owns carries the pkgbase input hash — regenerate rather than editing one row, and let packages/verify-lock-rows.sh (in \`make test\`) confirm no sibling row kept the old hash
           - [ ] guest side: confirm the mesa-x86 build still passes its glibc symbol-ceiling gate against the pinned container (build.sh asserts it) — a mesa that needs a newer glibc than the FEX guest rootfs ships fails HERE, not on device
           - [ ] HW pass on BOTH consumers: a native arm64 Vulkan title (host Turnip) and a native x86 title under system FEX (guest Turnip). For the x86 leg, read the maps for libvulkan_freedreno — the failure mode is a SILENT GL fallback, so "the game runs" proves nothing
           EOF

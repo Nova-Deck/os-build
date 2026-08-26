@@ -1,0 +1,215 @@
+#!/bin/sh
+# novadeck-suspend — userspace suspend/resume ENGINE (SteamOS layer C). Replaces the immature kernel
+# s2idle/s2ram path (out of scope on these SoCs) with a cgroup-freeze "fake suspend": it stops the
+# running session so the game actually halts, lowers power, then BLOCKS until the power key wakes it.
+#
+# Invoked as systemd-suspend.service's ExecStart (via a drop-in), so EVERY logind-mediated Suspend()
+# lands here — the Steam power menu, an idle timeout, or the power key (forwarded to Steam by
+# novadeck-powerbuttond, which turns it into a logind Suspend()). logind's sleep lifecycle — and
+# Steam's own blank — lasts exactly as long as this one blocking call, just as an in-kernel suspend
+# would. Resume is OURS: this engine grabs the power key and wakes on it; there is no wake daemon.
+#
+# Only user.slice is frozen: this engine, journald, logind and the SYSTEM bus all live in system.slice
+# and stay responsive, so a system-wide freeze's "thaw before you can reach dbus" hazard does not apply
+# to THEM, and no separate never-frozen slice is needed.
+#
+# The SESSION bus is a different story, and it is a hard constraint rather than a caveat: dbus-broker
+# and `systemd --user` sit in session.slice, which is INSIDE user.slice, so they are frozen along with
+# everything else. Anything that talks to the session bus — `systemctl --user`, `gamescopectl` — will
+# BLOCK until the thaw. So: use the system bus (this is exactly why the powerd fan handoff is a busctl
+# call into system.slice), or do the work before the freeze / after the thaw. Do not "fix" a hang here
+# by adding a thaw-then-retry; the call simply does not belong inside the frozen window.
+#
+# Freezing a narrower subtree would keep the session bus live, but it is not obviously expressible on
+# our layout and is NOT a drop-in — see the "narrow the fake-suspend freeze set" entry in docs/worklog/DONE.md.
+#
+# gamescope is inside user.slice and is frozen DELIBERATELY: it holds the blank KMS modeset statically
+# while frozen, so we blank BEFORE the freeze and unblank AFTER the thaw.
+set -u
+
+CONF=/etc/novadeck/rest.conf
+[ -r "$CONF" ] && . "$CONF"
+: "${NOVADECK_REST_SCREEN:=internal}"
+# Freeze the deck's LOGIN SCOPE, not all of user.slice. Measured on HW: session-<n>.scope holds
+# gamescope, both Xwaylands, the session scripts, mangoapp, the Steam client AND the game, while the
+# user session bus, `systemd --user` and steamos-manager sit outside it under user@1000.service — so
+# this halts the workload while leaving the session bus answerable. GLOB, not session-1: the scope
+# number is per-login. Expanded (split + globbed) in freeze(), so keep it unquoted there.
+: "${NOVADECK_SUSPEND_FREEZE_CGROUPS:=/sys/fs/cgroup/user.slice/user-1000.slice/session-*.scope}"
+: "${NOVADECK_SUSPEND_SKIP:=}"          # power ops to skip: cpu rfkill governor gpugov (e.g. "rfkill" over SSH)
+: "${NOVADECK_WAKE_KEY:=KEY_POWER}"
+: "${NOVADECK_WAKE_DEBOUNCE_MS:=1000}"  # ignore a KEY_POWER within this of arming the wait (press bounce)
+: "${XDG_RUNTIME_DIR:=/run/user/0}"
+export XDG_RUNTIME_DIR
+
+STATE=/run/novadeck/suspended
+FIFO=/run/novadeck/wake.fifo
+LOG=/var/log/novadeck-suspend.log
+# Log to a FILE, not the journal, on the suspend/resume path — habit from when the whole system froze;
+# harmless now that journald stays up (system.slice), and it keeps a durable trace on plain disk I/O.
+log() { echo "$(date '+%F %T') novadeck-suspend: $*" >> "$LOG" 2>/dev/null; }
+
+# Resolve the LIVE gamescope control socket (not a blind gamescope-0 default) — see the helper header
+# for the stale-socket DPMS bug. panel() only runs while gamescope is un-frozen (blank before freeze,
+# unblank after thaw), so its /proc/<pid>/environ is readable. Fallback no-op if the overlay lib is absent.
+GS_LIB=/usr/lib/novadeck/gamescope-display.sh
+if [ -r "$GS_LIB" ]; then . "$GS_LIB"; else gs_resolve_display() { :; }; fi
+
+# Reversible power-lowering primitives (cpu offline / rfkill / cpufreq+devfreq governors), shared
+# verbatim with novadeck-rest. Applied AFTER the freeze and restored BEFORE the thaw. State records
+# share novadeck-rest's dir (the two states are mutually exclusive). NOVADECK_SUSPEND_SKIP maps to POWER_SKIP.
+POWER_STATE_DIR=/run/novadeck/rest.d
+POWER_SKIP=$NOVADECK_SUSPEND_SKIP
+POW_LIB=/usr/lib/novadeck/power-ops.sh
+if [ -r "$POW_LIB" ]; then . "$POW_LIB"; else power_enter() { :; }; power_leave() { :; }; fi
+
+# Hand the fan + clocks to novadeck-powerd for the sleep window: its Suspend() parks the fan on the
+# suspend curve (closing the "fan keeps spinning during fake-suspend" gap — power-ops.sh never owned
+# the fan) and pins CPU/GPU to minimum; Resume() restores the active profile. powerd is in
+# system.slice, never frozen, so this D-Bus call lands even while user.slice is frozen. Best-effort:
+# a down/absent powerd must NOT block the freeze/thaw. Skip via NOVADECK_SUSPEND_SKIP="powerd".
+powerd_call() {  # $1 = Suspend | Resume
+  case " $POWER_SKIP " in *" powerd "*) return 0 ;; esac
+  command -v busctl >/dev/null 2>&1 || { log "busctl missing; powerd $1 skipped"; return 0; }
+  busctl call org.novadeck.Power /org/novadeck/Power org.novadeck.Power1 "$1" >/dev/null 2>&1 \
+    || log "powerd $1 call failed (daemon down?)"
+}
+
+now_ms() { date +%s%3N; }   # GNU date; millisecond epoch for the wake debounce
+
+# Echo the first /dev/input/event* whose kernel name looks like a power key (pmic_pwrkey on SM8650,
+# "Power Button" on gpio-keys boards); non-zero if none — caller then grabs all devices.
+find_power_dev() {
+  for d in /dev/input/event*; do
+    [ -e "$d" ] || continue
+    n=$(cat "/sys/class/input/${d##*/}/device/name" 2>/dev/null) || continue
+    case "$n" in *pwrkey*|*[Pp]ower*[Bb]utton*) echo "$d"; return 0 ;; esac
+  done
+  return 1
+}
+
+panel() {  # $1 = 1 (blank) | 0 (unblank) — via gamescope's own KMS modeset
+  command -v gamescopectl >/dev/null 2>&1 || return 0
+  gs_resolve_display || log "no live gamescope socket; trying ${GAMESCOPE_WAYLAND_DISPLAY:-gamescope-0}"
+  gamescopectl "drm_sleep_${NOVADECK_REST_SCREEN}_screen" "$1" 2>/dev/null \
+    || log "gamescopectl unreachable; panel unchanged"
+}
+
+freeze() {  # $1 = 1 (freeze) | 0 (thaw) — direct sysfs write, no dbus/systemctl dependency
+  for cg in $NOVADECK_SUSPEND_FREEZE_CGROUPS; do
+    [ -w "$cg/cgroup.freeze" ] && echo "$1" > "$cg/cgroup.freeze" 2>/dev/null
+  done
+}
+
+# Wait for the internal panel connector to reach the requested KMS state before proceeding. gamescope
+# applies the drm_sleep convar on its own main loop (~300ms after gamescopectl returns), so we must NOT
+# freeze it until the blank has truly landed (freezing mid-apply traps it lit). Poll the connector's
+# sysfs `enabled` attr (plain attribute read — not debugfs, no display hitch).
+: "${NOVADECK_PANEL_WAIT_DS:=30}"   # max wait, deciseconds (3s); generous over the ~300ms apply
+PANEL_GLOB="/sys/class/drm/card*-DSI-*"
+wait_panel() {  # $1 = enabled|disabled
+  _i=0
+  while [ "$_i" -lt "$NOVADECK_PANEL_WAIT_DS" ]; do
+    _all=1; _seen=0
+    for _c in $PANEL_GLOB; do
+      [ -r "$_c/enabled" ] || continue
+      [ "$(cat "$_c/status" 2>/dev/null)" = connected ] || continue
+      _seen=1
+      [ "$(cat "$_c/enabled" 2>/dev/null)" = "$1" ] || _all=0
+    done
+    [ "$_seen" = 1 ] && [ "$_all" = 1 ] && return 0
+    sleep 0.1; _i=$((_i + 1))
+  done
+  return 1
+}
+
+do_suspend() {
+  [ -e "$STATE" ] && { log "already suspended"; return 0; }
+  mkdir -p "$(dirname "$STATE")"
+  log "suspending: blank panel"
+  panel 1
+  if wait_panel disabled; then log "panel blank confirmed"; else log "panel blank NOT confirmed in ${NOVADECK_PANEL_WAIT_DS}ds; freezing anyway"; fi
+  log "freezing: $NOVADECK_SUSPEND_FREEZE_CGROUPS"
+  freeze 1
+  # Lower power AFTER the freeze (no frozen workload left to schedule): offline non-boot CPUs, block
+  # radios, drop cpufreq + GPU devfreq governors to powersave. Records prior state for do_resume;
+  # honours NOVADECK_SUSPEND_SKIP.
+  log "lowering power (skip='${NOVADECK_SUSPEND_SKIP}')"
+  power_enter
+  # Park the fan (and pin clocks) via powerd's suspend mode, after our own power_enter.
+  powerd_call Suspend
+  : > "$STATE"
+  log "suspended"
+}
+
+# Block until the power key wakes us. The key is grabbed EXCLUSIVELY (EVIOCGRAB via libinput --grab)
+# so the wake press does NOT also reach the (un-frozen) novadeck-powerbuttond forwarder and bounce us
+# straight back into suspend on thaw. A short debounce ignores the tail of the press that got us here.
+li=""
+wake_cleanup() { [ -n "$li" ] && kill "$li" 2>/dev/null; li=""; rm -f "$FIFO"; }
+wait_for_wake() {
+  command -v libinput >/dev/null 2>&1 || { log "libinput missing; cannot arm wake — resuming"; return 0; }
+  rm -f "$FIFO"; mkfifo "$FIFO" 2>/dev/null || true
+  pdev=$(find_power_dev || true)
+  if [ -n "$pdev" ]; then
+    log "waiting for wake ($NOVADECK_WAKE_KEY on $pdev, grabbed)"
+    libinput debug-events --grab --device "$pdev" > "$FIFO" 2>/dev/null &
+  else
+    log "waiting for wake ($NOVADECK_WAKE_KEY, all devices grabbed)"
+    libinput debug-events --grab > "$FIFO" 2>/dev/null &
+  fi
+  li=$!
+  t0=$(now_ms)
+  while IFS= read -r line; do
+    case "$line" in
+      *"$NOVADECK_WAKE_KEY"*pressed*)
+        [ $(( $(now_ms) - t0 )) -lt "$NOVADECK_WAKE_DEBOUNCE_MS" ] && continue
+        log "wake ($NOVADECK_WAKE_KEY)"; break ;;
+    esac
+  done < "$FIFO"
+  wake_cleanup   # release the grab so the key works again once awake
+}
+
+do_resume() {
+  [ -e "$STATE" ] || { log "not suspended"; return 0; }
+  rm -f "$STATE"
+  # Resume powerd first so the fan spins back up on its active-profile curve as we restore.
+  powerd_call Resume
+  # Restore power BEFORE the thaw so the workload wakes onto its full CPU/governor budget (reverse of
+  # power_enter; restores exactly what was changed).
+  log "restoring power"
+  power_leave
+  log "resuming: thaw"
+  freeze 0
+  log "unblank panel"
+  panel 0
+  if wait_panel enabled; then log "panel restore confirmed"; else log "panel restore NOT confirmed in ${NOVADECK_PANEL_WAIT_DS}ds"; fi
+  # post-resume hooks (run un-frozen, after thaw): generic extension point. None ship by default (NM
+  # re-associates unaided after the rfkill-unblock). Missing dir = no hooks, no-op.
+  for h in /etc/novadeck/resume.d/*; do
+    [ -x "$h" ] || continue
+    log "resume hook: $h"
+    "$h" >> "$LOG" 2>&1 || log "resume hook failed: $h"
+  done
+  log "resumed"
+}
+
+case "${1:-sleep}" in
+  sleep|suspend)
+    [ -e "$STATE" ] && exit 0
+    # If the unit is stopped/killed mid-sleep (e.g. `systemctl stop systemd-suspend.service` as a
+    # force-wake), always release the grab and resume so nothing is stranded frozen.
+    trap 'wake_cleanup; do_resume; exit 0' INT TERM
+    do_suspend
+    wait_for_wake
+    do_resume
+    trap - INT TERM
+    ;;
+  resume)
+    # Manual/override resume: stop the blocked engine (its trap releases the grab + resumes), then
+    # resume here too (idempotent) in case the engine already exited.
+    systemctl stop systemd-suspend.service 2>/dev/null || true
+    do_resume ;;
+  status)  if [ -e "$STATE" ]; then echo suspended; else echo awake; fi ;;
+  *) echo "usage: novadeck-suspend {sleep|resume|status}" >&2; exit 2 ;;
+esac

@@ -80,7 +80,7 @@ comes up. Text render targets are deliberately left unrotated; the rotation happ
 blit to the framebuffer, so rotating them too would double-rotate.
 
 ✅ Hardware-validated 2026-08-02: `set rotation=270` in `boot/gen-grub-cfg.sh` puts the board menu
-the right way up on the panel. `images/test-stage2-grub.sh` asserts both that the line is emitted
+the right way up on the panel. `tests/test-stage2-grub.sh` asserts both that the line is emitted
 and that it lands BEFORE `terminal_output gfxterm` — the ordering is the failure mode worth a test,
 because a `set rotation=` after that point parses, ships, and silently does nothing.
 
@@ -104,8 +104,8 @@ pristine tarball plus the three patches, in the build container, with no warning
 ### The config (`boot/gen-grub-cfg.sh`)
 
 Generation is a separate script from the build because it needs no toolchain — which is what lets
-`images/test-stage2-grub.sh` generate the real artifact and assert on it instead of skipping when
-`out/boot` is empty. It reads `boot/boards.map` and `images/partition-table.txt`.
+`tests/test-stage2-grub.sh` generate the real artifact and assert on it instead of skipping when
+`out/boot` is empty. It reads `boot/boards.map` and `image/partition-table.txt`.
 
 **Partitions are found by index, not by filesystem label.** Stage 2 was chainloaded off this slot's
 efi partition, so `$root` is that partition and everything else is on the same disk:
@@ -119,7 +119,7 @@ set slotroot="$bootdisk,gpt4"      # gpt5 in the B config
 The parentheses are OPTIONAL for a reason: GRUB stores `root` as the bare device name
 (`hd0,gpt2`) and only parenthesises it when building `$prefix`, which is why every path is written
 `($root)/...`. A pattern that requires them never matches — that shipped, and the only symptom was
-the fallback's message and its 3s pause. `images/test-stage2-grub.sh` now runs the pattern through
+the fallback's message and its 3s pause. `tests/test-stage2-grub.sh` now runs the pattern through
 `sed -E` (GRUB's `regexp` uses `REG_EXTENDED`, so it is the same matcher) instead of grepping for
 it.
 
@@ -206,7 +206,7 @@ else. `mark-good` then cleared it (`boot-count` 1 → 2), closing the loop. The 
 just before the menu paints, so on a normal 3s boot it is easy to miss; absence of the message is
 not absence of the increment.
 
-## Card layout (`images/make-sdcard.sh`)
+## Card layout (`image/make-sdcard.sh`)
 
 * **ESP (p1)** — `/EFI/BOOT/{bootaa64.efi, steamcl-version, steamcl-restricted, fonts/default.pf2}`,
   `/EFI/steamos/grubenv` (the saved board choice; on the ESP so it survives a slot switch and an
@@ -253,8 +253,8 @@ partition with re-pointed partsets, refreshes the ESP's steamcl, and re-arms the
 
 `novadeck-boot-good.service` used `ExecOnFailure=`, which **is not a systemd directive**: the
 parser logs "Unknown key name" and carries on, so the demote never ran. It is now
-`OnFailure=novadeck-boot-bad.service`, and `images/test-units.sh` runs `systemd-analyze` over every
-unit in `fs-overlay` so a fabricated directive cannot survive review again.
+`OnFailure=novadeck-boot-bad.service`, and `tests/test-units.sh` runs `systemd-analyze` over every
+unit in `rootfs/overlay` so a fabricated directive cannot survive review again.
 
 With that fixed:
 
@@ -274,7 +274,7 @@ Offline, in `make test` — all green at the time of writing:
 | Suite | What it pins down |
 |---|---|
 | `test-stage2-grub.sh` | Generates both configs and asserts them: one entry per DTB, per-slot `root=`/`novadeck.var=`/`novadeck.efi=`/`novadeck.slot=` and never the other slot's, the three `probe --part-uuid` derivations with their `"none"` guards and the PARTLABEL fallback defaulted *before* them, `probe` present in `boot/grub.sh`'s embedded `MODULES`, the partitions addressed by index VARIABLE with the `parts.env` map read from `($root)` behind a `[ -f ]` guard — all-or-nothing, this slot's keys only, defaults from `partition-table.txt` set before the load and the load before the first use — `savedefault` defined, grubenv load *and* save, both timeout paths, `novadeck_bootattempts` naming this slot and never the other one and running after `terminal_output gfxterm`, and `grub-script-check` parses it. Also catalog ↔ DTB ↔ device-profile parity, and that the dtsi bootargs are gone. |
-| `test-units.sh` | `systemd-analyze` over every unit in `fs-overlay`; any unknown key or section fails. |
+| `test-units.sh` | `systemd-analyze` over every unit in `rootfs/overlay`; any unknown key or section fails. |
 | `test-bootctl.sh` | The RAUC backend contract against a stubbed `steamos-bootconf`. |
 | `test-post-install.sh` | The hook against a sandboxed ESP/efi/var, including the fsid + label re-stamp. |
 | `verify-card.sh` (`make verify-card`) | The BUILT card: distinct fsids, per-slot btrfs labels, the ESP stage-1 tree + confs + grubenv, the efi stage-2 trees + partset identity matrix, and that each on-card `grub.cfg` is byte-identical to what `gen-grub-cfg.sh` produces for that slot. |
@@ -318,7 +318,7 @@ primary path was dead. See the commit; the test now executes the pattern rather 
   `get-state self` reads `good`.
 
 Two things worth knowing before the next bundle. The RAUC keyring is the committed
-`images/rauc/novadeck-ca.pem` in **dev builds too**, so a bundle for a card built from this tree
+`ota/rauc/novadeck-ca.pem` in **dev builds too**, so a bundle for a card built from this tree
 must be signed with `PKIDIR=~/novadeck-pki`; `genbundle.sh`'s ephemeral cert is self-signed and the
 card rejects it. And verifying a bundle by hand needs `check-purpose=codesign` — `rauc info`
 defaults to the smimesign purpose and fails with "unsuitable certificate purpose", which is a

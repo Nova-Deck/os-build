@@ -1,6 +1,6 @@
 # InputPlumber — precompiled aarch64 package pin.
 #
-# Auto-discovered by images/customize-base.sh (every packages/*/prebuilt.pin is fetched,
+# Auto-discovered by rootfs/customize-base.sh (every packages/*/prebuilt.pin is fetched,
 # sha256-verified on the host, and extracted into the release base). To add another external
 # package not in the holo repo, drop a sibling packages/<name>/prebuilt.pin — no code change.
 #

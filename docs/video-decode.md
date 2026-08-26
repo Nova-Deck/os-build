@@ -179,6 +179,6 @@ resolves `NOVADECK_SOC_CLASS` per board.
 
 ## Offline check
 
-`images/test-video-decode.sh` (part of `make test`) is a **regression guard**: it asserts the
+`tests/test-video-decode.sh` (part of `make test`) is a **regression guard**: it asserts the
 symlink rule is not in the overlay and the no-op flag is not in the launch args, and it keeps the
 reasoning attached to the assertion so the next person finds this document instead of the strings.

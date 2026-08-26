@@ -668,6 +668,60 @@ grep -q 'devices/virtual' installer/uipad.py \
   && ok "an unreadable device list reports PRESENT -- the gate is the safety property, not this" \
   || bad "a missing /proc file made the installer refuse to run"
 
+CASE="#69: the UI attaches InputPlumber's pad, never the sources it is built from"
+# Real /proc/bus/input/devices content, AYANEO Pocket ACE 2026-08-26, the boot that lost the race.
+{
+  cat <<'EOF'
+I: Bus=0003 Vendor=4001 Product=0428 Version=0111
+N: Name="AYANEO Controller"
+S: Sysfs=/devices/platform/soc@0/1c08000.pcie/pci0001:00/0001:00:00.0/usb1/1-2/1-2:1.0/0003:4001:0428.0003/input/input5
+H: Handlers=js0 event5
+B: EV=20000b
+
+I: Bus=0003 Vendor=045e Product=0b12 Version=0001
+N: Name="Microsoft Xbox Series S|X Controller"
+S: Sysfs=/devices/virtual/input/input9
+H: Handlers=kbd js1 event9
+B: EV=20000b
+
+I: Bus=0003 Vendor=28de Product=11ff Version=0001
+N: Name="Microsoft X-Box 360 pad 0"
+S: Sysfs=/devices/virtual/input/input10
+H: Handlers=js2 event10
+B: EV=20000b
+EOF
+} >"$T/devices-pads"
+
+padids() {  # <devices-file> -> prints the sorted vendor:product set
+  python3 -c '
+import os, sys
+sys.path.insert(0, os.path.join(os.environ["ROOT"], "installer"))
+import uipad
+print(" ".join(sorted(uipad.virtual_pad_ids(sys.argv[1]))))' "$1"
+}
+
+[ "$(padids "$T/devices-pads")" = "045e:0b12 28de:11ff" ] \
+  && ok "the two uinput pads are found and the physical AYANEO source is not" \
+  || bad "virtual_pad_ids did not separate InputPlumber's target from its source: got '$(padids "$T/devices-pads")'"
+case "$(padids "$T/devices-pads")" in
+  *4001:0428*) bad "the raw source pad was classed as virtual -- the UI would hold it and break the gate" ;;
+  *) ok "4001:0428 stays out: holding it is what took the composite device down" ;;
+esac
+[ -z "$(padids "$T/nonexistent-devices-file")" ] \
+  && ok "an unreadable device list yields no ids, so every pad is attached rather than none" \
+  || bad "a missing /proc file was treated as an allow-list"
+# The identity must NOT be matched by name: SDL renames a pad to gamecontrollerdb's string, so the
+# device above reaches the UI as "Xbox Series X Controller" and would match nothing.
+python3 -c '
+import sys
+guid = "030000005e040000120b000001000000"   # bus 0003, vendor 045e, product 0b12
+sys.exit(0 if "%04x:%04x" % (int(guid[10:12]+guid[8:10],16), int(guid[18:20]+guid[16:18],16)) == "045e:0b12" else 1)' \
+  && ok "vendor:product survives SDL's rename via the joystick GUID byte layout" \
+  || bad "the GUID vendor/product offsets are wrong -- every pad would read as unidentified"
+grep -q '_drop_sources' "$ROOT/installer/uipad.py" \
+  && ok "a source opened before InputPlumber's target appears is released when it does" \
+  || bad "nothing releases a source pad grabbed while winning the race, which ordering cannot fix"
+
 CASE="§4d: with nothing to answer with, consent is refused rather than drawn"
 # The screen alone would leave the spine blocked on an answer that can never come.
 printf 'SHOWN\n' >"$T/ev-noinput"

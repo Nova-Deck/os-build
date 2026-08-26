@@ -83,6 +83,58 @@ def _key_mask(words):
         return 0
 
 
+def virtual_pad_ids(path=None):
+    """
+    {"vvvv:pppp"} for every input device the kernel says is VIRTUAL, i.e. uinput.
+
+    THIS IS HOW THE INSTALLER TELLS InputPlumber's PAD FROM THE ONE IT IS BUILT FROM (#69). Both
+    enumerate, both are mapped game controllers, and SDL will happily open both -- but only one of
+    them is the composite device whose buttons this file's cardinal mapping was written against.
+    Holding the other is what breaks the consent gate: InputPlumber wants its sources exclusively,
+    and a UI sitting on one of them cost a hardware gate on 2026-08-26.
+
+    Measured on an AYANEO Pocket ACE, and the split is total:
+
+        AYANEO Controller           4001:0428  /devices/platform/soc@0/...  <- a SOURCE
+        Microsoft Xbox Series S|X   045e:0b12  /devices/virtual/input/...   <- the TARGET
+        Microsoft X-Box 360 pad 0   28de:11ff  /devices/virtual/input/...   <- Steam's own
+
+    NOT MATCHED BY NAME, deliberately. SDL renames a pad to whatever gamecontrollerdb calls it, so
+    the same device is "Microsoft Xbox Series S|X Controller" here and "Xbox Series X Controller"
+    to the UI -- a name comparison across that boundary silently matches nothing. vendor:product
+    survives the rename because SDL carries it in the joystick GUID.
+
+    Same `/devices/virtual/` test typing_keyboard_present() already relies on, for the same reason:
+    it is the kernel's own answer to "did a program make this up?", and it needs no allow-list of
+    boards or target names to keep current.
+
+    An unreadable device list returns empty, which restores the old open-everything behaviour rather
+    than leaving the operator with no pad at all -- the consent gate is the safety property, not
+    this.
+    """
+    p = path or INPUT_DEVICES
+    try:
+        blocks = open(p, "r", encoding="utf-8", errors="replace").read().split("\n\n")
+    except OSError as e:
+        log("cannot read %s (%s) -- every pad will be treated as usable" % (p, e))
+        return set()
+    ids = set()
+    for block in blocks:
+        sysfs, ident = "", ""
+        for line in block.splitlines():
+            if line.startswith("S: Sysfs="):
+                sysfs = line.split("=", 1)[1].strip()
+            elif line.startswith("I: "):
+                fields = dict(
+                    kv.split("=", 1) for kv in line[3:].split() if "=" in kv
+                )
+                if "Vendor" in fields and "Product" in fields:
+                    ident = "%s:%s" % (fields["Vendor"].lower(), fields["Product"].lower())
+        if ident and sysfs.startswith("/devices/virtual/"):
+            ids.add(ident)
+    return ids
+
+
 def typing_keyboard_present(path=None):
     """
     A device that can type S/W/N/E, and is not one of ours.
@@ -187,6 +239,9 @@ class PadInput:
             return
         self.controller.init()
         self.pads = {}
+        # Which pads are uinput, so a source claimed later can be dropped -- see _open and #69.
+        self._virtual = virtual_pad_ids()
+        self._raw = set()
         for i in range(pygame.joystick.get_count()):
             self._open(i)
 
@@ -197,6 +252,67 @@ class PadInput:
             return controller
         except ImportError:
             return getattr(pygame, "controller", None)   # whatever a future version calls it
+
+    def _device_ident(self, index):
+        """
+        "vvvv:pppp" for an SDL device index, read out of the joystick GUID -- or None.
+
+        SDL packs vendor at bytes 4-5 and product at bytes 8-9 of the 16-byte GUID, little-endian,
+        which is hex characters 8..11 and 16..19. Spelled out rather than taken from a helper
+        because pygame exposes no accessor for either, and a GUID is a wire format that does not
+        move.
+
+        ANYTHING UNEXPECTED RETURNS None, AND A PAD WITH NO id IS ATTACHED, not skipped. The bug
+        this guards against is holding one pad too many; refusing to open one we could not identify
+        would trade that for no pad at all, and §4d says the operator must still be able to answer.
+        """
+        try:
+            j = self.pygame.joystick.Joystick(index)
+        except Exception as e:                                    # noqa: BLE001 -- see docstring
+            log("cannot open input device %d to read its id (%s)" % (index, e))
+            return None
+        try:
+            guid = j.get_guid()
+        except Exception as e:                                    # noqa: BLE001
+            log("this pygame exposes no joystick GUID (%s) -- pads cannot be told apart" % e)
+            return None
+        finally:
+            j.quit()
+        if not isinstance(guid, str) or len(guid) < 20:
+            return None
+        try:
+            vendor = int(guid[10:12] + guid[8:10], 16)
+            product = int(guid[18:20] + guid[16:18], 16)
+        except ValueError:
+            return None
+        if not vendor and not product:
+            return None
+        return "%04x:%04x" % (vendor, product)
+
+    def _drop_sources(self):
+        """
+        Let go of any source pad still held, once InputPlumber's target is actually up (#69).
+
+        Needed because InputPlumber's discovery is ASYNCHRONOUS: its target can appear after this
+        UI has already enumerated, in which case a source was opened while it was the only pad
+        there. Ordering the units cannot express that -- inputplumber.service is already
+        Before=novadeck-installer.service, and it did not help.
+
+        Only fires while a non-source pad is held, so a board where InputPlumber never comes up
+        keeps whatever it has rather than being left with nothing.
+        """
+        if not self._raw or not any(i not in self._raw for i in self.pads):
+            return
+        for index in sorted(self._raw):
+            c = self.pads.pop(index, None)
+            if c is None:
+                continue
+            try:
+                c.quit()
+            except Exception:                                     # noqa: BLE001
+                pass
+            log("controller released: device %d was a source, InputPlumber's pad is up" % index)
+        self._raw.clear()
 
     def _open(self, index):
         pg = self.pygame
@@ -215,9 +331,23 @@ class PadInput:
         if not self.controller.is_controller(index):
             log("input device %d is not a mapped game controller -- ignored" % index)
             return
+        # WHICH PAD IS THIS, in terms the kernel agrees with? SDL's name is gamecontrollerdb's, not
+        # the device's, so ask the GUID -- it carries the real vendor:product through the rename.
+        ident = self._device_ident(index)
         c = self.controller.Controller(index)
+        if self._virtual and ident and ident not in self._virtual:
+            # A SOURCE of InputPlumber's composite, not its target. Let go of it AT ONCE: holding a
+            # source is what made add_source_device fail with EBUSY and took the whole composite
+            # down with it, leaving the consent gate answerable by nothing (#69, HW 2026-08-26).
+            # The pad still works -- through the target, where the buttons mean what §4d says.
+            c.quit()
+            log("controller ignored: %s (%s is a source device, not InputPlumber's pad)"
+                % (c.name, ident))
+            return
         self.pads[index] = c
-        log("controller attached: %s" % c.name)
+        if ident and ident not in self._virtual:
+            self._raw.add(index)
+        log("controller attached: %s (%s)" % (c.name, ident or "no id"))
 
     def present(self):
         # A PAD SDL CANNOT MAP DOES NOT COUNT, which is why this asks SDL rather than the kernel:
@@ -234,7 +364,13 @@ class PadInput:
             if ev.type == pg.QUIT:
                 out.append(TOKEN_QUIT)
             elif ev.type == pg.CONTROLLERDEVICEADDED:
+                # Re-read the kernel's list first: a target that InputPlumber creates AFTER this UI
+                # started is not in the set built at __init__, and would otherwise be mistaken for
+                # a source and dropped -- the exact inversion of the bug (#69). Keep the old set if
+                # the list cannot be read, rather than falling back to "nothing is virtual".
+                self._virtual = virtual_pad_ids() or self._virtual
                 self._open(ev.device_index)
+                self._drop_sources()
             elif ev.type == pg.CONTROLLERBUTTONDOWN:
                 if ev.button in BUTTON_TO_CARDINAL:
                     out.append(BUTTON_TO_CARDINAL[ev.button])

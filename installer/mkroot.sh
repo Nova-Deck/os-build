@@ -292,6 +292,7 @@ inputplumber:$(cat "$IP_DIR"/*/*.yaml 2>/dev/null | sha256sum | cut -d' ' -f1)
 udev:$(cat "$UDEV_DIR"/*.rules 2>/dev/null | sha256sum | cut -d' ' -f1)
 modules:$KVER:$(sha256sum "$MODROOT/lib/modules/$KVER/modules.dep" | cut -d' ' -f1)
 dev:${DEV:-0}
+otachannel:${NOVADECK_OTA_CHANNEL:-none}
 sshkey:$(printf '%s' "${NOVADECK_SSH_PUBKEY:-none}" | sha256sum | cut -d' ' -f1)
 wifi:$(printf '%s\n%s\n%s' "${NOVADECK_WIFI:-}" "${NOVADECK_WIFI_SSID:-none}" "${NOVADECK_WIFI_PSK:-none}" | sha256sum | cut -d' ' -f1)"
 # The credentials are HASHED into the key, never written to it: this marker is installed into the
@@ -416,6 +417,25 @@ WIFIEOF
     log "TEST BUILD: no Wi-Fi profile (set NOVADECK_WIFI_SSID + NOVADECK_WIFI_PSK in dev.env.local)."
     log "            Without one the medium is reachable over USB-C Ethernet only."
   fi
+fi
+# THE OTA CHANNEL, AND IT IS DELIBERATELY OUTSIDE THE DEV BLOCK ABOVE. A channel name is not a
+# credential -- unlike the Wi-Fi PSK and the authorized_keys, it neither admits anyone nor leaks
+# anything -- and "a release medium that installs from a beta channel" is a real thing to want, not
+# a test-only affordance. Gating it on NOVADECK_DEV would have made the only way to get one a medium
+# that also carries a shell and a PSK.
+#
+# It writes /etc/novadeck/ota.conf, which is the SAME override file the operator edits by hand and
+# the same one a dev rootfs gets from rootfs/assemble-rootfs.sh -- not a new code path
+# ([[devices-are-operator-reachable]]). Unset means no file, and release-info falls through to its
+# built-in "stable", which is what every medium built before this did.
+if [ -n "${NOVADECK_OTA_CHANNEL:-}" ]; then
+  case "$NOVADECK_OTA_CHANNEL" in
+    *[!A-Za-z0-9._-]*)
+      die "NOVADECK_OTA_CHANNEL='$NOVADECK_OTA_CHANNEL' has characters that do not belong in a URL
+  path. It becomes a path segment in <base>/<channel>/latest.json, which the medium fetches." ;;
+  esac
+  printf '%s\n' "$NOVADECK_OTA_CHANNEL" >"$STAGE/ota.channel"
+  log "OTA channel pinned to '$NOVADECK_OTA_CHANNEL' (this medium will not see 'stable')"
 fi
 printf '%s\n' "$ESP_LABEL" >"$STAGE/esp-label"
 # The package names alone, as their own file. The reuse-cache marker below is a superset (it also
@@ -794,6 +814,26 @@ docker run --rm --platform linux/arm64 \
     install -m0600 /prebuilt/wifi.nmconnection \
       "/target/usr/lib/NetworkManager/system-connections/$(cat /prebuilt/wifi.ssid).nmconnection"
     echo "[novadeck] TEST BUILD: Wi-Fi profile baked (autoconnect at boot)" >&2
+  fi
+
+  # The channel pin. Staged unconditionally by the host half (a channel is not a credential), so
+  # this sits OUTSIDE the dev-only block below it and a release medium can carry one too.
+  #
+  # NOT ONE APOSTROPHE BELOW, in the text or the comments: this whole section is inside the
+  # single-quoted bash -c string, and a single quote ends it. It cost a full rebuild to relearn,
+  # which is what the three warnings further up this file were already saying.
+  if [ -f /prebuilt/ota.channel ]; then
+    install -d -m0755 /target/etc/novadeck
+    {
+      echo "# Written by installer/mkroot.sh from NOVADECK_OTA_CHANNEL at build time."
+      echo "# The documented override file for novadeck-update and release-info, so an operator can"
+      echo "# still repoint this medium by hand: editing it changes where the NEXT check looks."
+      echo "# A medium built without NOVADECK_OTA_CHANNEL ships no such file at all and falls"
+      echo "# through to the built-in stable default."
+      echo "OTA_CHANNEL=$(cat /prebuilt/ota.channel)"
+    } >/target/etc/novadeck/ota.conf
+    chmod 0644 /target/etc/novadeck/ota.conf
+    echo "[novadeck] OTA channel pinned: $(cat /prebuilt/ota.channel)" >&2
   fi
 
   if [ -f /prebuilt/authorized_keys ]; then

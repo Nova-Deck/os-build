@@ -99,7 +99,25 @@ cp "$ROOTFS" "$content/rootfs.img"
 rm -f "$BUNDLE"
 echo "[novadeck] bundling v$VERSION (build $IMG_BUILD, git $IMG_GIT, mode ${IMG_MODE:-unknown}) -> ${BUNDLE#"$ROOT"/}"
 [ "$IMG_MODE" = release ] || echo "[novadeck] NOTE: mode='${IMG_MODE:-unknown}' — installable, but ota/publish-bundle.sh will refuse to publish it"
-rauc bundle --cert="$CERT" --key="$KEY" "$content" "$BUNDLE"
+# THE SQUASHFS BLOCK SIZE IS THE STREAMING REQUEST SIZE (#65). rauc reads the payload THROUGH the
+# squashfs mount -- bundle.c:2950 mounts it on dm-verity, which sits on the nbd stream -- so squashfs
+# decides how large one device read may be, and mksquashfs would otherwise default to `-b 128K`.
+# One bundle serves both consumers, so both were measured on hardware against the real server
+# (2026-08-26):
+#
+#   installer, raw_copy       32,372 requests -> 4,283;  stream 30m49s -> 14m34s
+#   device OTA, adaptive      A->B fetched 59.5 MB in 182 requests, whole update 56s
+#
+# Overridable so the sizes can be A/B'd without editing this file. Note the single dash: an UNSET
+# variable takes the default, an explicitly EMPTY one omits the flag and restores mksquashfs' own.
+MKSQUASHFS_ARGS="${NOVADECK_MKSQUASHFS_ARGS--b 1M}"
+bundle_args=()
+if [ -n "$MKSQUASHFS_ARGS" ]; then
+  bundle_args+=(--mksquashfs-args="$MKSQUASHFS_ARGS")
+  echo "[novadeck] squashfs args: $MKSQUASHFS_ARGS (see #65)"
+fi
+
+rauc bundle --cert="$CERT" --key="$KEY" "${bundle_args[@]}" "$content" "$BUNDLE"
 
 echo "  ok   $(du -h "$BUNDLE" | cut -f1)  $(basename "$BUNDLE")"
 echo "Verify with:  rauc info --no-verify ${BUNDLE#"$ROOT"/}"

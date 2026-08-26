@@ -188,6 +188,18 @@ def resolve_release():
         "detail": facts.get("DETAIL", ""),
     }
     log("release: %s (%s)" % (state, release["detail"] or "no detail"))
+    # PROBE: the facts release-info resolved, recorded verbatim. The line above is the one the SCREEN
+    # is built from, and it deliberately names only the host -- one line that has already overflowed a
+    # panel once. This one is for the LOG, and it names the channel and the exact bundle URL.
+    #
+    # It exists because a run on a non-default channel could not previously be audited from its own
+    # journal: release-info has always emitted URL and CHANNEL, and nothing wrote them down, so
+    # "which bundle did this medium actually stream?" was answerable only by inference from the host.
+    # A screen may summarise; a log must not lose what the code already knew
+    # ([[screens-must-say-what-the-code-knows]]).
+    log("release probe: channel=%s url=%s version=%s build=%s size=%s bundle=%s"
+        % (facts.get("CHANNEL", "?"), facts.get("URL", "?"), facts.get("VERSION", "?"),
+           facts.get("BUILD", "?"), facts.get("SIZE", "?"), release["bundle"] or "?"))
     if release["bundle"] and release["seed"]:
         _RELEASE = release
     return release

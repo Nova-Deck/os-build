@@ -26,7 +26,11 @@
 #   build/steam-seed/fetch-steam-seed.sh
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# TWO levels up, not one: this script lives at build/steam-seed/, so `..` reaches build/ rather
+# than the repo root. Every path below is written repo-root-relative ($ROOT/build, $ROOT/work),
+# so getting this wrong does not fail loudly -- it looks for build/build/steam-seed/ and reports
+# a missing pin that is sitting right there.
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 PIN="$ROOT/build/steam-seed/STEAM_SEED.pin"
 SEED_DIR="$ROOT/work/steam-seed"
 CDN="https://client-update.steamstatic.com"

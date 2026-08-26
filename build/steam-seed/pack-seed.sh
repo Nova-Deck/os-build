@@ -33,7 +33,9 @@
 # .local/share/Steam/steam-seed and produce a /home that looks right and boots to nothing.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# TWO levels up — see fetch-steam-seed.sh. This script lives at build/steam-seed/, and its
+# $ROOT/work and $ROOT/out paths are repo-root-relative.
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 SEED_DIR="${NOVADECK_SEED_DIR:-$ROOT/work/steam-seed}"
 # out/steam-seed, NOT out/images: this runs on the HOST (the seed tree is host-fetched and
 # host-owned) and out/images belongs to root — every image stage writes it from inside a container,

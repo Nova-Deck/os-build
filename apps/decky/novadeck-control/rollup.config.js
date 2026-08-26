@@ -1,3 +1,3 @@
-import deckyPlugin from "@apps/decky/rollup";
+import deckyPlugin from "@decky/rollup";
 
 export default deckyPlugin();

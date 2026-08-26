@@ -1,4 +1,4 @@
-import { PanelSection } from "@apps/decky/ui";
+import { PanelSection } from "@decky/ui";
 import { useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import { SelectEdit, SliderEdit, ToggleRow } from "../components/widgets";

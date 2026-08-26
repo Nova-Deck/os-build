@@ -1,4 +1,4 @@
-import { Router } from "@apps/decky/ui";
+import { Router } from "@decky/ui";
 import type { Config, DropdownChoice, GameRef } from "../types";
 
 export function gameDisplayName(game: GameRef | null | undefined): string {

@@ -1,4 +1,4 @@
-import { ButtonItem, Field, PanelSection, PanelSectionRow } from "@apps/decky/ui";
+import { ButtonItem, Field, PanelSection, PanelSectionRow } from "@decky/ui";
 import { useEffect, useRef } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import {

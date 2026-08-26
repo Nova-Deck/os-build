@@ -1,4 +1,4 @@
-import { definePlugin } from "@apps/decky/api";
+import { definePlugin } from "@decky/api";
 import { Content } from "./Content";
 
 export default definePlugin(() => ({

@@ -1,10 +1,10 @@
-import { Dropdown, Field, PanelSectionRow, SliderField, ToggleField } from "@apps/decky/ui";
+import { Dropdown, Field, PanelSectionRow, SliderField, ToggleField } from "@decky/ui";
 import type { ReactNode } from "react";
 import type { DropdownChoice } from "../types";
 
 type Option = string | DropdownChoice;
 
-/* A labelled row is Field + Dropdown, NEVER DropdownItemInternal. Both come from @apps/decky/ui, but
+/* A labelled row is Field + Dropdown, NEVER DropdownItemInternal. Both come from @decky/ui, but
    they are found in Valve's bundle by very different means: Dropdown matches on the class
    (prototype.SetSelectedOption && prototype.BuildMenu), while DropdownItemInternal is matched by
    REGEX over the minified mod.toString(), looking for the literal prop names "dropDownControlRef"

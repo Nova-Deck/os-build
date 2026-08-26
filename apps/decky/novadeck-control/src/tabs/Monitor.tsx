@@ -1,4 +1,4 @@
-import { Field, PanelSection, PanelSectionRow } from "@apps/decky/ui";
+import { Field, PanelSection, PanelSectionRow } from "@decky/ui";
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { getTelemetry } from "../backend";

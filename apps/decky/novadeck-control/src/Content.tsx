@@ -1,4 +1,4 @@
-import { Field, PanelSection, Tabs } from "@apps/decky/ui";
+import { Field, PanelSection, Tabs } from "@decky/ui";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { getConfig, getInstalledGames } from "./backend";

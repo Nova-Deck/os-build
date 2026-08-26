@@ -1,4 +1,4 @@
-import { call } from "@apps/decky/api";
+import { call } from "@decky/api";
 import type { Config, InstalledGame, PowerStatus, Telemetry, Tweaks } from "./types";
 
 export const getConfig = () => call<[], Config>("get_config");

@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# novadeck lock rows — do images/manifest.lock's `novadeck` rows still name the sources in packages/?
+# novadeck lock rows — do rootfs/manifest.lock's `novadeck` rows still name the sources in packages/?
 #
 #   packages/verify-lock-rows.sh
 #
 # Runs in about a second, on any machine, from COMMITTED FILES ONLY: no work/, no overlay repo, no
 # container, no network. That is the entire point — see below.
 #
-# WHY THIS EXISTS AS A SEPARATE, EARLIER CHECK. images/fetchlock.sh already makes exactly this
+# WHY THIS EXISTS AS A SEPARATE, EARLIER CHECK. rootfs/fetchlock.sh already makes exactly this
 # comparison and refuses to install when it fails, so nothing here is a new claim. What is new is
 # WHEN it can be made. fetchlock needs a populated work/repo/<arch> plus the ~382 snapshot packages
 # it verifies alongside ours, so the first thing that runs it on a clean machine is the overlay
@@ -43,7 +43,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-LOCK="$ROOT/images/manifest.lock"
+LOCK="$ROOT/rootfs/manifest.lock"
 
 log() { printf '[lock] %s\n' "$*" >&2; }
 die() { printf '[lock] %s\n' "$*" >&2; exit 1; }

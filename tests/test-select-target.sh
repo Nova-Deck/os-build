@@ -47,7 +47,7 @@ export NOVADECK_SELECT_FIXTURE=1
 . "$ROOT/tests/lib-gptfixture.sh"
 # lib-gpt.sh too: the residue case below asserts against the same live-index reader the script
 # under test uses, and against the Android type GUID it names.
-. "$ROOT/images/lib-gpt.sh"
+. "$ROOT/image/lib-gpt.sh"
 
 field() { printf '%s\n' "$1" | sed -n "s/^$2=//p"; }
 

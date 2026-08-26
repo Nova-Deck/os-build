@@ -7,7 +7,7 @@ Two jobs, no secrets, on every push and pull request:
 | job | what it runs | needs |
 |---|---|---|
 | `test` | `make test` — 354 checks across the initramfs slot-state reader, `novadeck-bootctl`, and the RAUC post-install hook | nothing (host shell) |
-| `signing` | `make test-signing` — every case a negative against `images/rauc/verify-signing.sh` | `build/Dockerfile`'s `signing` stage (rauc + openssl + mksquashfs, ~66 MB) |
+| `signing` | `make test-signing` — every case a negative against `ota/rauc/verify-signing.sh` | `build/Dockerfile`'s `signing` stage (rauc + openssl + mksquashfs, ~66 MB) |
 
 ## Today: `.github/workflows/overlay.yml` — the package compile pass
 
@@ -49,8 +49,8 @@ fex-emu 5m, gamescope 4m, scx-scheds 4m, mangohud 3m, rauc 1m` — **~34 minutes
 a release card build that already ran 33–41 minutes. Both PAT secrets can be deleted; nothing reads
 them. If reintroducing a cache is ever proposed, re-measure those figures first.
 
-The signing job checks the committed keyring (`images/rauc/novadeck-ca.pem`) against the committed
-release certificate (`images/rauc/release.cert.pem`). Both are public, so it runs on a fork's PR
+The signing job checks the committed keyring (`ota/rauc/novadeck-ca.pem`) against the committed
+release certificate (`ota/rauc/release.cert.pem`). Both are public, so it runs on a fork's PR
 with access to nothing. The private half — does the signing *key* match that cert — announces
 itself as skipped there and runs wherever a PKI is mounted:
 
@@ -77,7 +77,7 @@ built a card and *never* a bundle. `card/v1.3.0` and `ota/v1.3.0` on one commit 
 delivered two ways.
 
 **A card is ~5 GiB, which is why it is not a release asset** — GitHub caps those at 2 GiB. It goes to
-a public R2 bucket (`images/publish-card.sh`, retention N=1 to stay inside the 10 GB free tier) and
+a public R2 bucket (`ota/publish-card.sh`, retention N=1 to stay inside the 10 GB free tier) and
 the Release carries only `sha256sums.txt`, `manifest.lock` and the link.
 
 **CI is the only thing that PUBLISHES a release image**, because the R2 and signing credentials live
@@ -87,7 +87,7 @@ when the artifact-pin gate was retired along with the store.
 
 The blocker that once made a release build impossible on a clean runner is worth recording. A clean
 runner has no `work/`, so it rebuilt the overlay, and because our builds are not bit-reproducible
-`images/fetchlock.sh` failed every run — the lock pinned those rows to artifact bytes only the last
+`rootfs/fetchlock.sh` failed every run — the lock pinned those rows to artifact bytes only the last
 `make relock` machine could reproduce. The lock now pins them to their **sources**, which is the
 claim that survives crossing a machine. A release image's overlay is compiled in the same run that
 publishes it, so those source pins are also its byte provenance. See `packages/README.md`.
@@ -104,7 +104,7 @@ warning loudly when they are not. The shape is settled by the PKI:
   any workflow on any branch can read it). Write it to `$RUNNER_TEMP`, never the workspace — the
   repo tree gets uploaded as artifacts and cached.
 - `PKIDIR=$RUNNER_TEMP/pki make bundle` mounts it read-only at `/pki` and points `RAUC_CERT` /
-  `RAUC_KEY` at it. Copy the committed `images/rauc/release.cert.pem` in alongside the key.
+  `RAUC_KEY` at it. Copy the committed `ota/rauc/release.cert.pem` in alongside the key.
 - `verify-signing.sh` then asserts the key matches the committed cert *as public-key digests*, so a
   stale or truncated secret fails there instead of producing bundles no device accepts.
 - **the CA key never reaches a runner.** That is what the two-level PKI is for: if the release key

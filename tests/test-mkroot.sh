@@ -13,7 +13,7 @@
 # stranger's data. The three shapes it guards:
 #
 #   1. THE DECLARATION LOSING A TOOL. install/pkgs.list names four packages that are in NONE of
-#      images/manifest.lock's rows because they ship on no device — and one of them, mtools, has
+#      rootfs/manifest.lock's rows because they ship on no device — and one of them, mtools, has
 #      already cost this project a hardware slot: without `mdir`, select-target.sh's rule 3b could
 #      not read a foreign ESP, so it failed OPEN and offered to carve a Pocket FIT that was running
 #      ROCKNIX (2026-08-21). `dosfstools` looks like it covers mtools and does not: it ships
@@ -26,7 +26,7 @@
 #   3. THE apostrophe TRAP. The bootstrap's container half is one single-quoted `bash -c` string.
 #      A bare apostrophe anywhere in it — in a comment, in prose — closes that string and leaks the
 #      remainder to the HOST shell, which then runs a fragment of an image build as the build user.
-#      images/customize-base.sh carries the same hazard and the same warning.
+#      rootfs/customize-base.sh carries the same hazard and the same warning.
 #
 # It also asserts what the installer must NOT be. The whole risk in a second image is that it drifts
 # towards the first one, and drift arrives as an innocuous-looking line in a package list.
@@ -129,7 +129,7 @@ for pin in "$ROOT/packages/inputplumber/prebuilt.pin" "$ROOT/install/pygame-ce.p
       || bad "$rel declares dep '$dep', which pkgs.list does not carry"
   done
 done
-# pygame-ce must stay OUT of packages/, or images/customize-base.sh's auto-discovery ships 39 MB of
+# pygame-ce must stay OUT of packages/, or rootfs/customize-base.sh's auto-discovery ships 39 MB of
 # SDL bindings to every device. That is the whole reason the pin lives where it does.
 [ -e "$ROOT/packages/pygame-ce" ] \
   && bad "packages/pygame-ce exists — customize-base.sh would ship the wheel to every device" \
@@ -296,7 +296,7 @@ printf '%s\n' "$inner" | bash -n 2>/dev/null \
   && ok "the container script parses as bash" || bad "the container script does not parse"
 
 CASE="host halves parse"
-for s in "$MKROOT" "$GENLOCK" "$ROOT/images/fetchlock.sh"; do
+for s in "$MKROOT" "$GENLOCK" "$ROOT/rootfs/fetchlock.sh"; do
   bash -n "$s" 2>/dev/null && ok "${s#"$ROOT"/} parses" || bad "${s#"$ROOT"/} does not parse"
 done
 
@@ -304,7 +304,7 @@ CASE="the lock is a second artifact, not a fork of the first"
 # fetchlock.sh must take the lock as an argument, or mkroot.sh silently materializes the SHIPPED
 # image's lock into the installer root — which resolves, installs, and produces an image with no
 # sgdisk on it.
-grep -q 'LOCK="${2:-\$ROOT/images/manifest.lock}"' "$ROOT/images/fetchlock.sh" \
+grep -q 'LOCK="${2:-\$ROOT/rootfs/manifest.lock}"' "$ROOT/rootfs/fetchlock.sh" \
   && ok "fetchlock.sh takes the lock as an optional second argument" \
   || bad "fetchlock.sh has no lock argument — mkroot.sh cannot use it"
 grep -q 'fetchlock.sh" "\$STAGE/install.list" "\$LOCKFILE"' "$MKROOT" \
@@ -314,7 +314,7 @@ grep -q 'fetchlock.sh" "\$STAGE/install.list" "\$LOCKFILE"' "$MKROOT" \
 CASE="firmware: the same two trees the card gets"
 # HW-FOUND 2026-08-24: the first medium had a 16 KB /usr/lib/firmware and NO Wi-Fi. pkgs.list has no
 # `linux-firmware`; the shipped image gets firmware from two staging trees that only
-# images/assemble-rootfs.sh installs from, and this image never runs it. It read as a hostname or
+# rootfs/assemble-rootfs.sh installs from, and this image never runs it. It read as a hostname or
 # DHCP problem and was neither — there was no wlan interface at all.
 #
 # WHOLESALE, NOT CURATED. The first fix shipped a hand-written list carrying ath12k, because the
@@ -406,12 +406,12 @@ grep -qE 'install -m0644 /prebuilt/udev-rules/\*\.rules' "$MKROOT" \
 
 CASE="everything assemble-rootfs.sh installs that packages do not"
 # THE STRUCTURAL POINT, and the reason three separate hardware trips shared one cause: the installer
-# root never runs images/assemble-rootfs.sh, so every stage of that script which puts NON-PACKAGE
+# root never runs rootfs/assemble-rootfs.sh, so every stage of that script which puts NON-PACKAGE
 # content on the card has to be repeated in mkroot.sh or deliberately ruled out. Firmware (3/3b),
 # modules (2b) and the overlay payload (4b) were each found the hard way, one boot at a time.
 # This case is a tripwire, not a proof: if that script grows a new numbered stage, come back and
 # decide whether the medium needs it.
-stages=$(grep -cE "^# [0-9]+[a-z]?\. " "$ROOT/images/assemble-rootfs.sh")
+stages=$(grep -cE "^# [0-9]+[a-z]?\. " "$ROOT/rootfs/assemble-rootfs.sh")
 [ "$stages" -eq 21 ] \
   && ok "assemble-rootfs.sh still has $stages stages — the audit behind this file is current" \
   || bad "assemble-rootfs.sh now has $stages stages, not 21 — re-audit which ones the medium needs, then update this count"

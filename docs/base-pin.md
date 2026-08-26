@@ -43,7 +43,7 @@ Two artifacts, pinned by different mechanisms and for different reasons:
 
 There used to be a third, `base.digest`, pinning the `…/base` container image the root was
 `docker export`ed from. **Phase 4c deleted it.** The root is now bootstrapped —
-`pacman -r <empty-dir>` against the pinned snapshot (`images/customize-base.sh`) — so no
+`pacman -r <empty-dir>` against the pinned snapshot (`rootfs/customize-base.sh`) — so no
 container image contributes files to what ships, and the one that remains is only where
 aarch64 binaries are *executed*. Docker is still required, and so is qemu binfmt: laying an
 aarch64 root down means running an aarch64 pacman and its install scriptlets.
@@ -55,7 +55,7 @@ registry.gitlab.steamos.cloud/holo/holo-core-aarch64-preview/base@sha256:edd05b6
 ```
 
 Reference any image **by digest**, never by tag — `base-devel.digest` follows the same rule,
-and `images/customize-base.sh` refuses a ref that is not `…@sha256:<digest>`.
+and `rootfs/customize-base.sh` refuses a ref that is not `…@sha256:<digest>`.
 
 ### How to re-resolve / detect drift
 

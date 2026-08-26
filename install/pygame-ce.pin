@@ -2,7 +2,7 @@
 # .claude/plans/internal-install.plan.md.
 #
 # WHY THIS IS NOT UNDER packages/. Every `packages/*/prebuilt.pin` is auto-discovered by
-# images/customize-base.sh and extracted into the RELEASE base. This one is 39 MB of Python SDL
+# rootfs/customize-base.sh and extracted into the RELEASE base. This one is 39 MB of Python SDL
 # bindings that only install/ui uses, and install/ui does not ship on the release image at all —
 # so it would be pure weight on every device. install/mkroot.sh (Phase 6) reads it instead, using
 # the same field names so the parsing idiom is shared.

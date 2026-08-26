@@ -29,7 +29,7 @@ ok()   { PASS=$((PASS+1)); printf '  ok   %s -- %s\n' "$CASE" "$1"; }
 bad()  { FAIL=$((FAIL+1)); printf '  FAIL %s -- %s\n' "$CASE" "$1"; }
 skip() { SKIP=$((SKIP+1)); printf '  skip %s -- %s\n' "$CASE" "$1"; }
 
-for f in "$CARVE" "$CAPTURES" "$ROOT/install/select-target.sh" "$ROOT/images/genpart.sh"; do
+for f in "$CARVE" "$CAPTURES" "$ROOT/install/select-target.sh" "$ROOT/image/genpart.sh"; do
   [ -e "$f" ] || { echo "missing input: $f" >&2; exit 1; }
 done
 command -v sgdisk >/dev/null 2>&1 || {
@@ -200,7 +200,7 @@ done
 # 1024 boundary, the rounding jumped 15 -> 16, and `fits + 1` became exactly the size that had been
 # the largest FITTING one a moment earlier. The carve was right to accept it; the arithmetic here
 # was wrong. Ask carve.sh for the ceiling instead, which is the same number it will act on.
-minmib="$(bash "$ROOT/images/genpart.sh" --min)"
+minmib="$(bash "$ROOT/image/genpart.sh" --min)"
 ceil="$(carve plan "$s2" 33 | sed -n 's/^CEIL=//p')"
 [ -n "$ceil" ] || bad "could not read the ceiling from carve plan"
 # Image files always report 512-byte sectors, whatever the captured board had.
@@ -415,7 +415,7 @@ done
 # right": an off-by-one that escapes the span is the entire failure mode, and every arithmetic path
 # in carve and genpart chains from this one comparison.
 CASE="the window bound is exact to the sector"
-minsec=$(( $(bash "$ROOT/images/genpart.sh" --min) * 2048 ))   # 512-byte sectors, as image files report
+minsec=$(( $(bash "$ROOT/image/genpart.sh" --min) * 2048 ))   # 512-byte sectors, as image files report
 ud_start=2048
 ud_sectors=$(( 33 * 2097152 ))                                  # 33 GiB, the smallest userdata selection accepts
 floor=$(( ud_start + ud_sectors ))

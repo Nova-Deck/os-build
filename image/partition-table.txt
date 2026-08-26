@@ -1,0 +1,126 @@
+# novadeck A/B image partition table.
+#
+# SteamOS-style atomic-update layout (cf. the steamos-teardown reference):
+# a shared ESP, A/B boot partitions, A/B read-only Btrfs roots, A/B /var, and a shared
+# /home. RAUC writes the inactive rootfs/var slot, then the bootloader switches on success.
+#
+# efi-a/efi-b are each a slot's STAGE 2 home (Phase 5; docs/phase5.md): steamcl.efi on the
+# shared ESP chainloads \EFI\steamos\grubaa64.efi on the slot's efi partition, whose per-slot
+# grub.cfg boots the kernel in the slot root's /boot. Each carries the stage-2 GRUB + its
+# identity partsets (/SteamOS/partsets/{A,B,all,shared,self,other}); steamcl matches the efi
+# uuid of the partition it was loaded from against partsets/self. The stage-2 tree is ~2.3M; these
+# are 128M for a filesystem reason, not a capacity one -- see the FAT block near the rows.
+#
+# All 8 partitions mirror the SteamOS layout exactly (esp, efi-A/B, rootfs-A/B, var-A/B, home).
+#
+#   p8 home  — the deck user's home. Two build-time choices, neither a layout divergence:
+#              it is PRE-SEEDED with the native arm64 Steam client (image/make-sdcard.sh) so a
+#              first boot needs no network — Steam's own OOBE owns first-boot Wi-Fi, and the
+#              pre-seeded /home is the only client copy. There is no in-place re-seed: a factory
+#              reset is a reflash of the card, and an internal UFS install is recovered by booting
+#              a separate SD-card image. And home must stay LAST on disk: novadeck-grow-home
+#              expands it to fill the card on first boot, so nothing may follow it.
+#
+# efi-a/efi-b are typed 0700 (Microsoft basic data), NOT ef00 — exactly as SteamOS types
+# them. Only p1 is an EFI System partition, and keeping exactly one avoids handing a
+# firmware scan two candidates. The stage-2 grubaa64.efi is reached by steamcl, not by a
+# UEFI firmware scan, so it does not need ef00.
+#
+# CORRECTION 2026-08-24: this block used to say "the ROCKNIX ABL finds the ESP by type GUID".
+# That is WRONG, and it is load-bearing enough to correct rather than leave — it is the only
+# reason retyping a boot partition ever looked dangerous. Measured against a working ROCKNIX
+# card: its boot medium is not even GPT. `lsblk -o PTTYPE,PARTTYPE,PARTFLAGS` reports `dos`,
+# partition type `0xc` (W95 FAT32 LBA) with the 0x80 bootable flag, carrying
+# /EFI/BOOT/bootaa64.efi — an MBR table, a plain FAT partition, no EFI System Partition type
+# GUID anywhere on the disk — and ABL boots it. ABL finds the loader by CONTENT, which is what
+# [[abl-internal-efi-path-works]] already said. p1 stays ef00 here because this image has no
+# user-facing files on its ESP and there is nothing to gain by changing it; the INSTALLER
+# medium does have them, and types its boot partition 0700 so a person can see it on Windows
+# or macOS to write wifi.conf (install/medium-table.txt).
+#
+# The ESP carries GPT bit 63 ("no-auto") for the same reason home does: that GUID would make
+# systemd's gpt-auto generator auto-mount it at /efi, and /efi is the name the initramfs
+# reserves for the SLOT's efi-a/b partition (mounted from steamos.efi=PARTUUID=, phase 5).
+# The ESP's one and only mount definition is the /esp entry rootfs/assemble-rootfs.sh puts in
+# /etc/fstab — bit 63 disables the competing generator without touching the type GUID the
+# firmware scans by.
+#
+# Root slots are 7G. They carry, on top of the ~1.8G OS, three large x86-emulation artifacts
+# that must travel WITH the slot to keep an A/B update atomic and rollback-safe: the FEX x86
+# guest rootfs (~1.9G, an erofs image) and TWO bundled arm64 Proton compat tools (~2.0G each —
+# the user picks per title). That is ~7.6G of content uncompressed, but the root is sealed
+# read-only and baked with zstd (assemble-rootfs.sh). The emulation payloads are already packed
+# and compress little (the .ero gives back barely 30%), so most of the result is incompressible
+# and won't shrink in future builds. The OS half is now the SMALL half: at zstd:3 the three
+# payloads are ~2.9G of the image and everything else is ~0.8G.
+#
+# Size against the image's APPARENT size, not its content. mkfs.btrfs --shrink cannot pack
+# below its block-group granularity, so the image reports ~2G more than it actually occupies
+# (5.7G apparent vs 3.7G on disk, measured 2026-07-27) — and the apparent size is what has to
+# fit the partition. These slots were 6G, sized off the ~5.0G compressed content with a
+# nominal ~1G of headroom; that accounting was against the wrong number, and the slot
+# overflowed by 21MiB once scx-scheds and a newer Proton landed. 7G restores real headroom.
+#
+# The 2026-07-27 trim (rootfs/conf/trim.list + the mesa/scx-scheds dependency surgery) took 914MiB
+# off the staged tree and 392MiB off the apparent image. The slots stay at 7G: the headroom is
+# the point, and 4b needs room for a bundle to land next to a running system.
+# Both are deliberately kept INSIDE the root slot rather than on a shared partition: they are
+# versioned OS components, and sharing them across slots would let an update mutate the running
+# system's emulation stack and break rollback.
+#
+# 'rest' expands to fill the target device. Fixed partitions total ~15.0G, so the minimum
+# usable card is 32G (leaving ~15G of /home); 64G+ is the sane target.
+#
+# 'attrs' is a comma-separated list of GPT attribute bits to set, or '-' for none. Only bit 63
+# ("no-auto") is used today, on home and on the ESP — each for its own reason, both above.
+# home carries the discoverable "Linux /home" type GUID
+# (8302) because systemd-repart matches it by that GUID to grow it on first boot — matching by
+# type is what guarantees repart can never touch a root partition. But that same GUID also makes
+# systemd's gpt-auto generator synthesize its OWN home.mount, which would silently shadow (or be
+# shadowed by) the one /etc/fstab already declares, with different options and no growfs. Bit 63
+# tells gpt-auto to skip the partition while leaving the type GUID — and so repart — intact.
+#
+# Consumed by image/genpart.sh to emit an sgdisk script. Row order = partition number.
+#
+# EVERY FAT FILESYSTEM HERE IS CREATED FAT32 *OR* FAT16, CHOSEN FROM THE DISK'S GEOMETRY, and
+# lib-slotwrite.sh's fat_type_for() is what chooses. Do not "simplify" it back to a forced -F 32.
+#
+# A FAT32 needs at least 65525 data clusters to BE a FAT32, and cluster count scales with SECTORS,
+# not bytes. These partitions are sized in bytes, so the same row is a different filesystem on media
+# with different logical sector sizes:
+#
+#                       512-byte sectors        4096-byte sectors
+#   esp  256M           516190 clusters  FAT32   65376 clusters  too few for FAT32
+#   efi  128M           258078 clusters  FAT32   32672 clusters  too few for FAT32
+#   efi   64M (was)     129022 clusters  FAT32   16320 clusters  too few for FAT32
+#
+# Every SD card is 512e and every internal UFS in this fleet is 4Kn, so a forced -F 32 produced a
+# valid filesystem on every card ever flashed and an invalid one on every internal install. Nothing
+# offline can catch it either: make-sdcard.sh formats inside an IMAGE FILE, where mkfs.vfat sees
+# 512-byte sectors whatever the eventual target is, and so does every test fixture.
+#
+# MEASURED on an AYANEO Pocket ACE, 2026-08-21, and it cost an evening because it surfaces as two
+# unrelated-looking failures:
+#   esp at 256M   ABL's own FatPkg refuses the volume (EFI_VOLUME_CORRUPTED, EnhancedFatDxe/Init.c
+#                 checks MaxCluster < 65525), never produces a SimpleFileSystem handle for it, and
+#                 LoadEFI reports "Failed to load EFI: Not Found" without reading a byte of it.
+#   efi at 64M    the ESP is fine, ABL loads stage 1, and steamcl then cannot mount efi-A/B for the
+#                 same reason -- so it finds no boot candidate and prints "Boot failed, waiting 5s".
+# Both are the same defect. The fix is the filesystem TYPE, not the partition size: growing the ESP
+# to 512M also worked, and was reverted, because it wasted space to buy what FAT16 gives for free.
+#
+# efi-a/efi-b ARE 128M rather than 64M, and that IS about size: at 64M/4Kn even FAT16 lands 7
+# clusters above the FAT12 boundary, which is a margin decided by mkfs.fat's reserved-sector
+# arithmetic rather than by us. 128M gives 8188 -- twice the floor. The content is ~2.3M either way.
+#
+# tests/test-partition-table.sh asserts all of this against the table alone, at both sector sizes.
+#
+# name      size  typecode  fs        label            attrs
+esp         256M  ef00      vfat      NOVADECK-ESP     63
+efi-a       128M  0700      vfat      novadeck-efi-A   -
+efi-b       128M  0700      vfat      novadeck-efi-B   -
+rootfs-a    7G    8300      btrfs     novadeck-root-A  -
+rootfs-b    7G    8300      btrfs     novadeck-root-B  -
+var-a       256M  8300      ext4      novadeck-var-A   -
+var-b       256M  8300      ext4      novadeck-var-B   -
+home        rest  8302      ext4      novadeck-home    63

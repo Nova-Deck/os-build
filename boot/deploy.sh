@@ -2,7 +2,7 @@
 # novadeck dev deploy — install the stage-1 steamcl tree onto a mounted ESP (Phase 5).
 #
 # ABL chainloads /EFI/BOOT/bootaa64.efi when it is present. This is the dev-side quick flash for
-# iterating on stage 1 only: it writes the same ESP layout that images/make-sdcard.sh seeds and the
+# iterating on stage 1 only: it writes the same ESP layout that image/make-sdcard.sh seeds and the
 # RAUC post-install hook refreshes. It does NOT touch the slot's efi-a/b partitions (stage 2) or
 # the boot confs — for those, rebuild the card (`make sdcard`) or install a bundle.
 #

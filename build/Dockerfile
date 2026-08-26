@@ -44,7 +44,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 ARG RAUC_VERSION=1.15.1-1
 
 # squashfs-tools is NOT incidental: `rauc bundle` shells out to mksquashfs for the verity format,
-# so images/rauc/verify-signing.sh cannot mint the bundles it then breaks on purpose without it.
+# so ota/rauc/verify-signing.sh cannot mint the bundles it then breaks on purpose without it.
 # openssl mints the throwaway cert profiles the negative cases feed in.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       openssl ca-certificates \
@@ -80,7 +80,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 # `fdisk` is NOT redundant with `gdisk`, and neither is it implied by util-linux: Debian ships
 # sfdisk in the `fdisk` package while blkid and partx come from util-linux in the base image, so
-# `command -v sfdisk` was empty here while every device had it. images/lib-gpt.sh reads type GUIDs
+# `command -v sfdisk` was empty here while every device had it. image/lib-gpt.sh reads type GUIDs
 # with `sfdisk --dump` -- one call for the whole table -- to tell a live partition from a GPT entry
 # whose type a foreign uninstaller zeroed (issue #56). Without it the installer suites cannot run
 # the code they are testing at all.
@@ -111,7 +111,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # tests/test-stage2-grub.sh runs over the generated grub.cfg files).
 #
 # zstd is the BINARY, which GNU tar shells out to for --zstd; tar 1.35 accepts the flag either way
-# and fails at run time without it. images/assemble-rootfs.sh needs it for var-seed.tar.zst, the
+# and fails at run time without it. rootfs/assemble-rootfs.sh needs it for var-seed.tar.zst, the
 # /var the internal installer unpacks onto a fresh slot. Note this is the one compressor here that
 # the IMAGE also carries (work/base/usr/bin/zstd, a pacman dependency), which is what lets the
 # installer extract what this container packs.

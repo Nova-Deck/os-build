@@ -141,7 +141,7 @@ file "$OUT/grubaa64.efi" | grep -q "ARM64" || { echo "grubaa64.efi not ARM64" >&
 # /EFI/steamos/grubenv, and `save_env` writes the user's board choice into it so the choice survives
 # slot updates (the ESP is the only partition an A/B update does not replace).
 #
-#   images/make-sdcard.sh  mcopy's this file rather than running `grub-editenv create` a second time
+#   image/make-sdcard.sh  mcopy's this file rather than running `grub-editenv create` a second time
 #   the internal installer  cp's it out of /usr/lib/novadeck/boot/ of the root it just wrote
 #
 # THE INSTALLER IS WHY IT IS AN ARTIFACT AT ALL. grub-editenv is not on the shipped image -- no grub

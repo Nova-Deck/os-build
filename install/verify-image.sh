@@ -4,7 +4,7 @@
 #   docker run --rm -v "$PWD":/src -w /src novadeck-build install/verify-image.sh
 #   make verify-image
 #
-# Same doctrine as images/verify-card.sh: assert the ARTIFACT, not the source diff. The suites that
+# Same doctrine as image/verify-card.sh: assert the ARTIFACT, not the source diff. The suites that
 # run in `make test` read the SCRIPTS — tests/test-mkimage.sh greps mkimage.sh, test-mkroot.sh
 # greps mkroot.sh — and a script that says the right thing while producing the wrong image passes
 # both. This is the only thing that opens the image.

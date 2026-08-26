@@ -8,7 +8,7 @@
 # x86 games launched from here go through FEX/Proton (later in Phase 3).
 #
 # The WHOLE Big Picture shell is baked offline (release can't fetch — Steam owns OOBE Wi-Fi):
-# images/make-sdcard.sh pre-seeds the native client+runtime directly into the writable /home at image
+# image/make-sdcard.sh pre-seeds the native client+runtime directly into the writable /home at image
 # build, and we launch with -noverifyfiles so the client runs exactly the baked bits without
 # attempting an (offline, doomed) self-update/repair.
 set -eu

@@ -30,7 +30,7 @@ from-packages root makes the image pipeline's provenance story uniform.
 
 ### Where we are
 
-`images/customize-base.sh` pulls the digest-pinned base image (`base.digest`) and runs
+`rootfs/customize-base.sh` pulls the digest-pinned base image (`base.digest`) and runs
 `pacman -Sy` over it under emulation. The mirror is a **frozen snapshot**
 (`…/mash-20251118/$repo/os/$arch`), so the resolved set is already stable build-to-build —
 reproducibility is not the pressing problem.
@@ -77,7 +77,7 @@ manifest: the snapshot repo (`PKGS`), the local `[novadeck]` repo built from sou
 
 ### Steps
 
-**1. Record — `images/manifest.lock` (committed).**
+**1. Record — `rootfs/manifest.lock` (committed).**
 Emit one sorted line per installed package: `name version repo sha256`, covering all
 three sources. No behaviour change; the value is that a base rebuild becomes a reviewable
 diff instead of a 267-package black box. Land this by itself.
@@ -88,7 +88,7 @@ Replace `pacman -Sy <names>` with an explicit install of lock-resolved package f
 resolution stops happening implicitly at build time; the lock is regenerated only by an
 explicit `make relock`.
 
-`images/fetchlock.sh` materializes the lock's 274 installable rows on the host — snapshot rows
+`rootfs/fetchlock.sh` materializes the lock's 274 installable rows on the host — snapshot rows
 from the pinned repo via the cache, `novadeck` rows from the overlay repo, never fetched — and
 verifies every one against the committed sha256 before the container starts. The container then
 runs one `pacman -U` over that list and syncs no database at all, which pacman itself reports:
@@ -134,7 +134,7 @@ is preserved as provenance under `/usr/lib/novadeck/`, outside any path the pack
 manager would consult. This is the step that removes the shutdown stall — by deleting the
 daemon rather than masking it.
 
-`images/seal.list` declares it (4 packages, 2 paths) and `images/seal-rootfs.sh` executes it,
+`rootfs/conf/seal.list` declares it (4 packages, 2 paths) and `rootfs/seal-rootfs.sh` executes it,
 expanding each declared package through its own DB file list and then `rmdir`-ing only the
 directories that end up empty — so a path another package still occupies survives by
 construction. Measured on the release tree: 471 files and 30 empty directories removed, 20 MiB
@@ -163,7 +163,7 @@ explicit and asserted (step 4), not derived from the package database.
 
 **Decision: the removal list is an explicit, committed artifact, and the lock marks what it
 removes.** Sealing deletes files while preserving the package DB as provenance, so the DB —
-which `images/genmanifest.sh` reads — keeps listing packages the shipped image no longer has.
+which `rootfs/genmanifest.sh` reads — keeps listing packages the shipped image no longer has.
 Left alone the lock and the image diverge silently. So the removal list is declared rather
 than derived, and those rows are emitted in the lock under a `stripped` class instead of
 `base`/`snapshot`. One artifact then describes the real image, and a change to what we strip
@@ -198,7 +198,7 @@ trusting a built tree it never inspected (a file-mode regression that reached ha
 assertion is the deliverable, not a nicety — and steps 1–3 are all *declarations*, which is
 exactly what a declaration that is never checked against its artifact degrades into.
 
-`images/guard-rootfs.sh` runs from `assemble-rootfs.sh` at the last point the tree is both
+`rootfs/guard-rootfs.sh` runs from `assemble-rootfs.sh` at the last point the tree is both
 complete and still a directory: after every injection and after the seal, before section 5 carves
 `/var` out into `var.img`. What `mkfs.btrfs --rootdir` bakes in section 6 is that directory,
 unmodified. Release-only, mirroring the seal — a test tree keeps the package manager on purpose
@@ -211,7 +211,7 @@ Five assertions; the first four fail the build. Measured on the release tree:
 | 1 | every file the stripped packages own is gone, expanded through the preserved DB | 4 packages, 471 files, 2 paths |
 | 2 | the named entry points are gone (`pacman`, `pacman-key`, `makepkg`, `gpg`, `dirmngr`, `etc/pacman.conf`, `var/lib/pacman`, the keyring timer) | 14 paths |
 | 3 | no dangling systemd enable-symlink | 108 links, all resolve |
-| 4 | `images/manifest.lock` still describes the tree | 394 packages, name+version |
+| 4 | `rootfs/manifest.lock` still describes the tree | 394 packages, name+version |
 | 5 | size delta against the previous build | report only |
 
 **Decision: read `seal.list` and the package DB from the IMAGE, not from the repo.** The sealer
@@ -249,7 +249,7 @@ is the only step between the two.
 
 **5. Trim — the seal's size counterpart.** *(landed)*
 The seal removes what a sealed root must not be able to *do*; the trim removes what it does not
-need to *weigh*. `images/trim.list` declares it, `images/trim-rootfs.sh` applies it right after
+need to *weigh*. `rootfs/conf/trim.list` declares it, `rootfs/trim-rootfs.sh` applies it right after
 the seal, and guard assertion 5 re-expands the image's own copy of the list and fails the build if
 anything it names survived — the same declare/apply/assert shape as the seal, for the same reason
 (a declaration nothing checks is a comment).
@@ -294,14 +294,14 @@ work), and the CJK font weights (~226 MB — font coverage is a first-boot UX pr
 
 ### What already exists
 
-The partition layout is in place and documented (`images/partition-table.txt`): shared
+The partition layout is in place and documented (`image/partition-table.txt`): shared
 ESP, `efi-a`/`efi-b`, `rootfs-a`/`rootfs-b` (7G, read-only btrfs), `var-a`/`var-b`, shared
 `home`. `make sdcard` now populates **both** slots. Bundle generation exists —
-`images/genbundle.sh`, `images/rauc/manifest.raucm.in`, `make bundle` — and `rauc` **is** in
+`ota/genbundle.sh`, `ota/rauc/manifest.raucm.in`, `make bundle` — and `rauc` **is** in
 the build image (`build/Dockerfile`, 1.15.1), which an earlier draft of this document doubted.
 
 **Measured 2026-07-27: `rauc-1.14-1` is in the pinned snapshot's `extra` repo.** Every one of
-its dependencies is already in `images/manifest.lock` except `json-glib`.
+its dependencies is already in `rootfs/manifest.lock` except `json-glib`.
 
 **Overturned on hardware 2026-07-28: the snapshot's 1.14 is unusable here.** It cannot install a
 dm-verity bundle on a kernel `>= 6.19` — a DM/verity handling bug upstream fixed first in
@@ -316,7 +316,7 @@ Note the two rauc binaries are unrelated and must not be conflated: the one in `
 recipe builds is the device-side *installer*.
 
 What does **not** exist: `rauc` on the device (not in `PKGS`), `/etc/rauc/system.conf`, and the
-device keyring (the CA is minted, `images/rauc/novadeck-ca.pem`, but nothing installs it yet).
+device keyring (the CA is minted, `ota/rauc/novadeck-ca.pem`, but nothing installs it yet).
 
 ### The actual problem: no A/B-aware bootloader
 
@@ -331,7 +331,7 @@ Three designs were considered:
   slot's image over `/KERNEL`. Simple, but a slot that fails to boot leaves nothing
   running to copy the previous image back: recovery is a reflash.
 - **B** — a single slot-agnostic `/KERNEL`; the initramfs picks the slot from a
-  try-counter state file on the ESP. We own `images/initramfs/init`, so this yields real
+  try-counter state file on the ESP. We own `image/initramfs/init`, so this yields real
   rollback with zero bootloader support. The kernel is shared across slots, so kernel
   updates need separate care.
 - **C** — B, plus a `KERNEL.bak` on the ESP so a failed health check restores the previous
@@ -374,7 +374,7 @@ loop. Design C is still honoured in that the cmdline is *never* consulted when t
 readable; it is a degrade path, and taking it logs loudly.
 
 **Three cases that are easy to get wrong**, all covered at the time by
-`images/initramfs/test-slot-state.sh` — deleted in phase 5 (`0d714ed`) along with the /KERNEL flow
+`image/initramfs/test-slot-state.sh` — deleted in phase 5 (`0d714ed`) along with the /KERNEL flow
 it exercised; the equivalent coverage now lives in the `tests/test-*.sh` suites that `make test`
 runs:
 honouring `pending` without a durable decrement would retry a broken slot *forever* (the counter
@@ -405,7 +405,7 @@ the new kernel, so a root-side oneshot can do the restore properly, with real fs
 every image we build has `devid=1` — exactly the pair btrfs keys its in-kernel device list on. Two
 such filesystems on one disk make the second one scanned look like the first having *moved*, so
 mounting p5 can hand you p4, on the one test whose purpose is proving which slot booted.
-`images/make-sdcard.sh` gives slot B a fresh fsid with `btrfstune -U`. **RAUC will hit this too** —
+`image/make-sdcard.sh` gives slot B a fresh fsid with `btrfstune -U`. **RAUC will hit this too** —
 every `rauc install` writes identical bytes into the inactive slot — so its post-install hook needs
 the same treatment. Done: `fs-overlay/usr/lib/rauc/post-install.sh` runs `btrfstune -f -U`.
 
@@ -420,7 +420,7 @@ uppers. This is required under A, B and C alike.
 
 **Measured 2026-07-28, and the result is misleading until you know why.** Booting slot B produced
 the *same* MAC and the same DHCP lease as A — apparently contradicting the paragraph above. It does
-not. `machine-id` is supposed to be absent from the shipped image (`images/assemble-rootfs.sh`
+not. `machine-id` is supposed to be absent from the shipped image (`rootfs/assemble-rootfs.sh`
 states the invariant explicitly, so that systemd runs `preset-all` on first boot), but the built
 `rootfs.img` **ships a populated one**, and it therefore lives in the shared read-only lower layer
 where both slots see the identical value. With that bug fixed, each slot generates its own id into
@@ -430,7 +430,7 @@ the prerequisite is not weakened by this measurement — it is currently *masked
 problem; it was closed separately and is recorded in `DONE.md`.
 
 A second reason this pass could not exercise the prerequisite: the test image injects Wi-Fi
-credentials into the **shared rootfs** (`images/assemble-rootfs.sh`), not the per-slot `/etc`
+credentials into the **shared rootfs** (`rootfs/assemble-rootfs.sh`), not the per-slot `/etc`
 overlay, so "the other slot has no saved Wi-Fi" cannot reproduce on a `NOVADECK_DEV=1` card at
 all. Validating the `/var` migration hook needs a release image — the same trap as the OOBE work.
 
@@ -463,7 +463,7 @@ One bug was found and fixed here: `novadeck-boot-good.service` was a bare `Type=
 — so it retriggered every 30s for the whole uptime of the device. `RemainAfterExit=yes` fixes it
 while keeping the failure path retryable. See the unit's own comment.
 
-The state file grammar, normative. `images/initramfs/init` is the reference implementation.
+The state file grammar, normative. `image/initramfs/init` is the reference implementation.
 
 ```
 /KERNEL                 the running boot image — ABL reads only this
@@ -494,17 +494,17 @@ recovery mechanism when you have the card in a reader.
 
 | what | where |
 |---|---|
-| slot selection, decrement, rollback, failover | `images/initramfs/init` |
-| offline test of the decision table (109 checks) | `images/initramfs/test-slot-state.sh` |
+| slot selection, decrement, rollback, failover | `image/initramfs/init` |
+| offline test of the decision table (109 checks) | `image/initramfs/test-slot-state.sh` |
 | offline test of the RAUC backend contract (101 checks) | `tests/test-bootctl.sh` |
 | both suites, host-side, no build needed | `make test` |
-| `umount` + `/esp` staged into the cpio | `images/mkinitramfs.sh` |
-| both slots populated, distinct fsid, state seeded | `images/make-sdcard.sh`, `images/assemble-rootfs.sh` |
+| `umount` + `/esp` staged into the cpio | `image/mkinitramfs.sh` |
+| both slots populated, distinct fsid, state seeded | `image/make-sdcard.sh`, `rootfs/assemble-rootfs.sh` |
 | `status` / `try` / `mark-good` / `rollback` + RAUC's custom-bootloader contract | `fs-overlay/usr/bin/novadeck-bootctl` |
 | trial-boot confirmation | `novadeck-boot-good.{path,service}`, marker from `novadeck-session` |
 | dm-verity, declared vfat/loop | `kernel/kernel.config`, asserted in `kernel/build.sh` |
-| signing CA; only the CA cert is committed | `ci/gen-signing-ca.sh`, `images/rauc/novadeck-ca.pem` |
-| release cert profile, defined once and read by both the CA script and the self-test | `images/rauc/release.ext` |
+| signing CA; only the CA cert is committed | `ci/gen-signing-ca.sh`, `ota/rauc/novadeck-ca.pem` |
+| release cert profile, defined once and read by both the CA script and the self-test | `ota/rauc/release.ext` |
 
 ### Pass 2 — RAUC (core install path IMPLEMENTED, not yet HW-validated)
 
@@ -514,7 +514,7 @@ in this pass is attributable to the update machinery rather than to the UI wirin
 
 **The kernel travels inside the rootfs, not in the bundle.** The plan for this pass was to add the
 boot image to the bundle as a second payload the post-install hook consumes. It ships at
-`/usr/lib/novadeck/boot.img` instead, installed by `images/assemble-rootfs.sh`, and the hook copies
+`/usr/lib/novadeck/boot.img` instead, installed by `rootfs/assemble-rootfs.sh`, and the hook copies
 it out of the slot it just wrote. Two reasons, and the second is the one that decided it:
 
 - It removes a dependency on RAUC's handler environment. A bundle-side payload has to be located
@@ -553,7 +553,7 @@ back. A field maintained on the happy path only is the defect this one was fixed
 > system is not healthy". A kernel that does not boot at all leaves nothing running to restore
 > anything — that is still a reflash, and design C never claimed otherwise.
 
-Verified offline: `images/initramfs/test-slot-state.sh` (109 checks, up from 56) covers restore, a
+Verified offline: `image/initramfs/test-slot-state.sh` (109 checks, up from 56) covers restore, a
 missing backup file, a read-only ESP, a *failed* restore's correcting write, and the kernel/slot
 mismatch warning in all three of its states (mismatched, matching, unrecorded). Guard assertion 7
 asserts the built tree can actually perform an update: `rauc`, keyring, `system.conf`, `boot.img`,
@@ -568,7 +568,7 @@ step, on a card whose root has already been replaced.
 1. `PKGS += rauc` and `make relock` (it is in the pinned snapshot; `json-glib` comes with it).
 2. `/etc/rauc/system.conf`: two slot groups, `bootloader=custom` pointed at `novadeck-bootctl`
    (whose `get-primary`/`set-primary`/`get-state`/`set-state` already implement that contract),
-   and `keyring=/etc/rauc/keyring.pem` installed from `images/rauc/novadeck-ca.pem`.
+   and `keyring=/etc/rauc/keyring.pem` installed from `ota/rauc/novadeck-ca.pem`.
 3. Post-install hook: randomise the target slot's btrfs fsid (see the decision above), then the
    `/var` migration below.
 4. The kernel half of design C: install the new boot image, keep `KERNEL.BAK`, and restore it
@@ -594,7 +594,7 @@ step, on a card whose root has already been replaced.
   Pass 2 tightens it with a second marker from `novadeck-steamos-manager`.
 - **Power-off inside the 30s confirm window rolls back a healthy update.** The cost is a
   rollback, not a brick; `tries` is the tunable. Pass 1 uses `tries=1` so tests are deterministic.
-- **`degrade()` remounts the root rw** (`images/initramfs/init`), which under A/B mutates a slot
+- **`degrade()` remounts the root rw** (`image/initramfs/init`), which under A/B mutates a slot
    — possibly the one on trial, which breaks any "is this slot still the bytes we installed"
   reasoning and, once verity bundles are normal, the invariant `CONFIG_DM_VERITY` exists to
   check. The right fix is a tmpfs upperdir instead of a writable root. Worth doing, but as its
@@ -616,7 +616,7 @@ step, on a card whose root has already been replaced.
   > **SUPERSEDED 2026-08-18 — the scheme this risk is about no longer ships.** Both halves of it
   > are gone: the two-file generation-counter state scheme went with the `/KERNEL` flow in
   > `0d714ed` ("rootfs carries its own boot half"), which also deleted
-  > `images/initramfs/test-slot-state.sh`, the offline rejection test cited above. Slot state now
+  > `image/initramfs/test-slot-state.sh`, the offline rejection test cited above. Slot state now
   > lives in the ESP's `SteamOS/conf/<SLOT>.conf`, written through Valve's `steamos-bootconf`, with
   > GRUB owning `boot-attempts` — `novadeck-bootctl` has no generation counter and does no
   > two-file write. `/run/novadeck/boot` is tmpfs, so it carries no durability question at all.
@@ -644,7 +644,7 @@ step, on a card whose root has already been replaced.
   gone: it existed to carry a value the state itself now holds, and a second variable tracking the
   same fact is how the skew got in. On the boots that write nothing (`esp=ro`, `esp=none`) the
   read values are still what is on the card, so the invariant holds there without a special case.
-  `images/initramfs/test-slot-state.sh` asserts handoff-mirrors-ESP on every write path; reverting
+  `image/initramfs/test-slot-state.sh` asserts handoff-mirrors-ESP on every write path; reverting
   the one-line fix fails 6 of its 56 checks, including the exact `pending=b` vs `pending=''` skew
   that hardware showed.
 
@@ -659,7 +659,7 @@ The tree still originates as `docker export` of the digest-pinned vendor image
 (`base.digest`), and everything after that layers on top. The lock records the
 consequence honestly: **116 of its 398 rows are class `base`** — packages that arrived as
 image content, with no package file to install and therefore no sha256 to verify.
-`images/fetchlock.sh` can only check the other 282.
+`rootfs/fetchlock.sh` can only check the other 282.
 
 That is not a reproducibility hole. `base.digest` is a real byte-level pin, and a rebuild
 gets the same bytes. It is an **opacity** hole and an **inherited-content** one: ~29% of
@@ -698,7 +698,7 @@ bootstrap runs — not losses. The rest are `passwd-`/`group-`/`.pwd.lock` backu
 no package owns: `etc/os-release`, `etc/locale.conf`, `etc/hostname`.
 
 **Closure check.** `pacman -r <empty> -Sy base <PKGS> libiio` against the pinned snapshot
-plus the local `[novadeck]` repo resolves **394 packages that match `images/manifest.lock`
+plus the local `[novadeck]` repo resolves **394 packages that match `rootfs/manifest.lock`
 name-for-name and version-for-version** — the exact set the export-plus-install path
 produces today. The bootstrap is not an approximation of the current image; it is the same
 image by a reviewable route.
@@ -742,7 +742,7 @@ way for a file to be on the image without a package that put it there.
 
 **We own the three identity files.** `filesystem` ships `/usr/lib/os-release` and points
 `/etc/os-release` at it, so a bootstrap that does nothing would ship holo's identity string
-— which is arguably a bug in what we ship today, independent of 4c. `images/os-release`
+— which is arguably a bug in what we ship today, independent of 4c. `rootfs/conf/os-release`
 becomes a committed declaration installed over the symlink at bootstrap time (the `/etc`
 override is exactly what os-release's spec is for), alongside a one-line `/etc/locale.conf`
 and an `/etc/hostname` that finally says `novadeck` instead of being a 0-byte stub the

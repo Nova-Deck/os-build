@@ -1,0 +1,33 @@
+# novadeck /etc/os-release (Phase 4c).
+#
+# Installed as /etc/os-release by rootfs/customize-base.sh. Overriding in /etc is what
+# os-release(5) defines /etc for; /usr/lib/os-release stays as the `filesystem` package
+# shipped it, so nothing is edited in place and no package file is silently modified.
+#
+# WHY WE OWN THIS. Before 4c the root was `docker export` of the vendor image, and its
+# hand-written /etc/os-release came along — so the image identified itself as "Holo core
+# Aarch64 port (preview)", ID=holo-core, with the vendor's VERSION_ID and BUILD_ID. That was
+# never true of what we ship, and it is one of the three identity files no package owns (the
+# others being /etc/locale.conf and /etc/hostname), so a from-packages bootstrap has to
+# answer for it rather than inherit it.
+#
+# NO PER-BUILD FIELDS *HERE*. This file is static so that rebuilding does not churn the tree.
+# The per-build identity — variant, version, git and build timestamp — is written by
+# rootfs/assemble-rootfs.sh to /etc/novadeck-release, which is where novadeck's own tooling
+# looks. That same script then APPENDS the os-release spellings of those values
+# (VARIANT/VARIANT_ID/VERSION/VERSION_ID/BUILD_ID) to the installed copy of this file, because
+# software that is not ours reads them from here: SteamUI's Settings -> System renders OS
+# Variant / Version / Build straight out of os-release and showed them blank until it did
+# (HW-observed 2026-08-09). Add static identity here; add per-build identity there.
+#
+# ID_LIKE=arch is load-bearing for third-party tooling that branches on distro family
+# (Arch-style paths and package names are what this actually is). ID is ours.
+
+# NAME/PRETTY_NAME carry the BRAND spelling; ID is the machine identifier and os-release(5)
+# requires it lowercase, so the two differ on purpose and neither is a typo for the other.
+NAME="NovaDeck"
+PRETTY_NAME="NovaDeck"
+ID=novadeck
+ID_LIKE=arch
+ANSI_COLOR="1;35"
+HOME_URL="https://github.com/Nova-Deck/os-build"

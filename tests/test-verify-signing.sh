@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Offline test for images/rauc/verify-signing.sh — the RAUC signing self-test.
+# Offline test for ota/rauc/verify-signing.sh — the RAUC signing self-test.
 #
 #   docker run --rm -v "$PWD":/src -w /src novadeck-build tests/test-verify-signing.sh
 #   make test-signing
@@ -10,7 +10,7 @@
 # the release cert's extensions (drift → passing for a profile we do not ship), and nothing
 # confirmed those extensions ever reached the throwaway cert (an empty profile mints an EKU-less
 # cert, which RAUC's DEFAULT smimesign purpose happily accepts). Both are now closed —
-# images/rauc/release.ext is read by ci/gen-signing-ca.sh and verify-signing.sh alike, and the
+# ota/rauc/release.ext is read by ci/gen-signing-ca.sh and verify-signing.sh alike, and the
 # minted profile is asserted — and this file is what keeps them closed.
 #
 # SO EVERY CASE HERE IS A NEGATIVE. It feeds verify-signing.sh a deliberately broken config or
@@ -24,9 +24,9 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-VS="$ROOT/images/rauc/verify-signing.sh"
+VS="$ROOT/ota/rauc/verify-signing.sh"
 CONF="$ROOT/fs-overlay/etc/rauc/system.conf"
-EXT="$ROOT/images/rauc/release.ext"
+EXT="$ROOT/ota/rauc/release.ext"
 CA="$ROOT/ci/gen-signing-ca.sh"
 [ -f "$VS" ] || { echo "no verify-signing.sh: $VS" >&2; exit 1; }
 command -v rauc >/dev/null 2>&1 || { echo "rauc not found — run inside novadeck-build" >&2; exit 1; }
@@ -46,7 +46,7 @@ done_() { rm -rf "$SB"; }
 PKI="${PKIDIR:-$ROOT/out/pki}"
 
 vs() {
-  OUT=$(RELEASE_EXT="${USE_EXT:-$EXT}" KEYRING="${USE_KEYRING:-$ROOT/images/rauc/novadeck-ca.pem}" \
+  OUT=$(RELEASE_EXT="${USE_EXT:-$EXT}" KEYRING="${USE_KEYRING:-$ROOT/ota/rauc/novadeck-ca.pem}" \
         PKIDIR="${USE_PKI:-$PKI}" bash "$VS" "$1" 2>&1)
   RC=$?
   USE_EXT=""; USE_KEYRING=""; USE_PKI=""
@@ -91,7 +91,7 @@ expect_has "was REJECTED"
 done_
 
 t "a-conf-whose-bundle-format-disagrees-with-the-manifest-fails"
-# system.conf and images/rauc/manifest.raucm.in each say they must agree with the other. This is
+# system.conf and ota/rauc/manifest.raucm.in each say they must agree with the other. This is
 # what makes that more than a comment.
 vs "$(conf_sed 's/^bundle-formats=.*/bundle-formats=plain/')"
 expect_rc 1
@@ -193,7 +193,7 @@ for f in "$CA" "$VS"; do
   fi
 done
 grep -q '^extendedKeyUsage=critical,codeSigning' "$EXT" \
-  && ok "the profile itself still says codeSigning" || bad "images/rauc/release.ext lost its EKU"
+  && ok "the profile itself still says codeSigning" || bad "ota/rauc/release.ext lost its EKU"
 done_
 
 t "no-private-key-is-committed-under-images-rauc"
@@ -201,7 +201,7 @@ t "no-private-key-is-committed-under-images-rauc"
 # what polices that exception: widening a rule whose job is "no key material in git" has to be
 # enforced by something other than care. Scans what is actually THERE, so a third negation added
 # for a file that turns out to hold a key fails here.
-for f in "$ROOT"/images/rauc/*.pem; do
+for f in "$ROOT"/ota/rauc/*.pem; do
   [ -f "$f" ] || continue
   if grep -q 'PRIVATE KEY' "$f"; then
     bad "${f#"$ROOT"/} contains PRIVATE KEY -- it must never be committed"

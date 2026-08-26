@@ -13,35 +13,35 @@
 # shipped image and must never drift towards it: no Steam, no `deck` user, no SDDM, no Bluetooth,
 # no audio, no FEX. See install/pkgs.list, which is the declaration this reads.
 #
-# PEER OF images/customize-base.sh, and deliberately a separate script rather than a mode of it.
+# PEER OF rootfs/customize-base.sh, and deliberately a separate script rather than a mode of it.
 # The shipped bootstrap carries five things this one has no analogue for -- the UID/GID pin (there
 # is no persistent /home here to keep uids stable for), the `deck` and `sddm` accounts, auto-
 # discovery of every packages/*/prebuilt.pin, the dev-tooling branch, and a seal that strips pacman
 # back out. Folding an installer mode into it would have made each of those a conditional in the
 # one file whose value is that a reviewer can read it top to bottom and know what is on a device.
-# What the two genuinely share -- materializing a lock -- IS shared: images/fetchlock.sh takes the
+# What the two genuinely share -- materializing a lock -- IS shared: rootfs/fetchlock.sh takes the
 # lock as an argument and neither knows which image it is serving.
 #
 # IT PRODUCES A TREE, NOT A SQUASHFS. The plan sketched mksquashfs at the end of this script;
-# install/mkimage.sh does it instead, for the same reason images/assemble-rootfs.sh rather than
-# images/customize-base.sh builds the shipped image: the tree is root-owned, so compressing it
+# install/mkimage.sh does it instead, for the same reason rootfs/assemble-rootfs.sh rather than
+# rootfs/customize-base.sh builds the shipped image: the tree is root-owned, so compressing it
 # while preserving ownership needs the build container, and this script is host-side by design
 # (its only container is the emulated pacman). One stage per artifact, same as the main pipeline.
 #
-# NO SEAL, NO GUARD. The release image is sealed (images/seal-rootfs.sh removes pacman) and then
-# asserted against images/manifest.lock, because it is the thing a user lives on for years. The
+# NO SEAL, NO GUARD. The release image is sealed (rootfs/seal-rootfs.sh removes pacman) and then
+# asserted against rootfs/manifest.lock, because it is the thing a user lives on for years. The
 # installer runs once, from removable media, as root, and is thrown away. A package manager on it
 # is a diagnosable installer, and there is no measurement after the fact for a seal to protect.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # The EXECUTION environment, not the content source. The SAME pinned arm64 builder
-# images/customize-base.sh and packages/build-overlay.sh use -- one builder for the whole tree, so
+# rootfs/customize-base.sh and packages/build-overlay.sh use -- one builder for the whole tree, so
 # a bump cannot leave the two images laid down by different pacmans.
 PINFILE="$ROOT/base-devel.digest"
 SNAPFILE="$ROOT/snapshot.pin"
 LOCKFILE="$ROOT/install/manifest.lock"
-PACMANCONF="$ROOT/images/pacman.conf"
+PACMANCONF="$ROOT/rootfs/conf/pacman.conf"
 OSRELEASE="$ROOT/install/os-release"
 PKGSLIST="$ROOT/install/pkgs.list"
 DEST="$ROOT/work/installer-base"
@@ -81,7 +81,7 @@ mapfile -t PKGS < <(sed -e 's/#.*//' -e 's/[[:space:]]*$//' "$PKGSLIST" | grep -
 [ "${#PKGS[@]}" -gt 0 ] || die "${PKGSLIST#"$ROOT"/} declares no packages"
 
 # ---- the two prebuilt pins, named rather than discovered -----------------------------------------
-# images/customize-base.sh globs packages/*/prebuilt.pin, which is exactly the behaviour
+# rootfs/customize-base.sh globs packages/*/prebuilt.pin, which is exactly the behaviour
 # install/pygame-ce.pin exists OUTSIDE packages/ to stay clear of -- 39 MB of Python SDL bindings
 # that only install/ui uses would otherwise be pure weight on every shipped device. So this image
 # names its two, and the list is short enough to read:
@@ -148,15 +148,15 @@ INSTALL_FILES=(
 #   <source>:<name in the flat directory>
 FOREIGN_FILES=(
   "fs-overlay/usr/lib/novadeck/install/lib-slotwrite.sh:lib-slotwrite.sh"
-  "images/genpart.sh:genpart.sh"
-  "images/partition-table.txt:partition-table.txt"
-  "images/lib-homestage.sh:lib-homestage.sh"
+  "image/genpart.sh:genpart.sh"
+  "image/partition-table.txt:partition-table.txt"
+  "image/lib-homestage.sh:lib-homestage.sh"
   # HW-FOUND 2026-08-24: select-target.sh sources lib-gpt.sh and died with "cannot find lib-gpt.sh"
   # on the first medium that got far enough to look for a disk. gather_preflight() read that
   # non-zero exit as "no install target", which is a NORMAL outcome, so the UI fell back to its
   # idle screen and said nothing at all. tests/test-mkroot.sh checked that the four files listed
   # here existed; nothing checked the list was COMPLETE against what the code actually sources.
-  "images/lib-gpt.sh:lib-gpt.sh"
+  "image/lib-gpt.sh:lib-gpt.sh"
 )
 for f in "${INSTALL_FILES[@]}"; do
   [ -f "$ROOT/install/$f" ] || die "install/$f is missing — the installer cannot ship without it"
@@ -184,7 +184,7 @@ IP_DIR="$ROOT/fs-overlay/etc/inputplumber"
 
 # ---- firmware: THE SAME TWO TREES THE CARD GETS, wholesale -------------------------------------------
 # install/pkgs.list has no `linux-firmware`. The shipped image gets firmware from these two staging
-# trees, installed by images/assemble-rootfs.sh (its blocks 3 and 3b) — and this image never runs
+# trees, installed by rootfs/assemble-rootfs.sh (its blocks 3 and 3b) — and this image never runs
 # that script, so the first medium had a 16 KB /usr/lib/firmware and no Wi-Fi at all: no ath12k, so
 # no wlan interface, so nothing to associate and nothing for a router to show. It read as a hostname
 # or DHCP fault and was neither. (The GPU worked regardless, which is what hid it: the Adreno
@@ -214,7 +214,7 @@ IP_DIR="$ROOT/fs-overlay/etc/inputplumber"
 # wlan interface, nothing to associate, nothing on the router.
 #
 # This is the THIRD thing missing for one reason -- the installer root never runs
-# images/assemble-rootfs.sh, so everything that script installs beyond packages has to be repeated
+# rootfs/assemble-rootfs.sh, so everything that script installs beyond packages has to be repeated
 # here. Its stage 2b is this one. Fixing them one symptom at a time is what let the same cause
 # produce three separate hardware trips; the remaining stages were audited rather than guessed
 # (kernel/dtbs and /boot are on the ESP instead, and the slot/var/home stages have no meaning on a
@@ -229,7 +229,7 @@ MODROOT="$ROOT/out/modroot"
 # builds the root before the kernel, so out/modroot did not exist yet and the build failed with
 # nothing but `Error 2` to go on. The guard on the next line -- which exists precisely to say "run:
 # make kernel" -- was unreachable in the one case it was written for. Same family as the
-# `compgen -G` trap in images/guard-rootfs.sh and the `grep -q` one in install/netcfg: a status from
+# `compgen -G` trap in rootfs/guard-rootfs.sh and the `grep -q` one in install/netcfg: a status from
 # inside a substitution, under set -e, killing the check that was supposed to report it.
 KVER="$(ls "$MODROOT/lib/modules" 2>/dev/null | head -1 || true)"
 [ -n "$KVER" ] && [ -f "$MODROOT/lib/modules/$KVER/modules.dep" ] \
@@ -250,8 +250,8 @@ FW_LINUX_STAMP="$FW_LINUX_DIR/.fetched.stamp"
 [ -f "$FW_LINUX_STAMP" ] || die "no linux-firmware at ${FW_LINUX_DIR#"$ROOT"/} — run: make fw-linux"
 # The RAUC keyring. The spine refuses outright without a readable one, and correctly: an installer
 # that could not verify a bundle would write unverified bytes to a stranger's internal disk. Same
-# CA the shipped image gets from images/assemble-rootfs.sh, so one bundle verifies against both.
-KEYRING_SRC="$ROOT/images/rauc/novadeck-ca.pem"
+# CA the shipped image gets from rootfs/assemble-rootfs.sh, so one bundle verifies against both.
+KEYRING_SRC="$ROOT/ota/rauc/novadeck-ca.pem"
 [ -f "$KEYRING_SRC" ] || die "no RAUC CA at ${KEYRING_SRC#"$ROOT"/}"
 
 # NO STEAM SEED HERE, and that is deliberate. The medium carries the tree /home is built from, but
@@ -329,7 +329,7 @@ fi
 
 # ---- stage everything the container needs ---------------------------------------------------------
 # One read-only staging directory. It MUST be mounted at /prebuilt and the name is not ours to
-# pick: images/pacman.conf is a shared committed declaration carrying `Include =
+# pick: rootfs/conf/pacman.conf is a shared committed declaration carrying `Include =
 # /prebuilt/mirrorlist`, so a staging dir mounted anywhere else makes pacman fail with "config file
 # /prebuilt/mirrorlist could not be read" — after the builder pull and the root wipe, far from the
 # cause. (Measured 2026-08-24, on the first real run.) The repo itself is NOT mounted: the container
@@ -353,7 +353,7 @@ cp    "$KEYRING_SRC" "$STAGE/keyring.pem"
 cp    "$PACMANCONF"  "$STAGE/pacman.conf"
 cp    "$OSRELEASE"   "$STAGE/os-release"
 # The dev credential crosses as a FILE, and its presence is what the container branches on — the
-# same idiom images/customize-base.sh uses for dev.pkgs, and for the same reason: it keeps another
+# same idiom rootfs/customize-base.sh uses for dev.pkgs, and for the same reason: it keeps another
 # layer of quoting out of the single-quoted bash -c.
 if [ -n "$DEV" ]; then
   # FATAL, not a warning, and it matches the Wi-Fi rule below rather than sitting one notch softer
@@ -455,7 +455,7 @@ done
 # package fails the build with a hash mismatch instead of after 20 minutes of emulated install.
 # Resolve mode writes no list, which is how the container tells the modes apart.
 if [ -z "$RESOLVE" ]; then
-  "$ROOT/images/fetchlock.sh" "$STAGE/install.list" "$LOCKFILE"
+  "$ROOT/rootfs/fetchlock.sh" "$STAGE/install.list" "$LOCKFILE"
 else
   log "NOVADECK_RESOLVE=1 — re-resolving from ${PKGSLIST#"$ROOT"/}, this tree is for relock only"
 fi
@@ -599,7 +599,7 @@ docker run --rm --platform linux/arm64 \
   install -d -m0755 /target/usr/lib/novadeck/devices
   install -m0644 /prebuilt/devices/*.conf /target/usr/lib/novadeck/devices/
 
-  # Firmware, both trees whole -- the same content images/assemble-rootfs.sh puts on the card, from
+  # Firmware, both trees whole -- the same content rootfs/assemble-rootfs.sh puts on the card, from
   # the same sources, so hardware support is identical to the image being installed BY CONSTRUCTION
   # rather than by a list somebody has to remember to extend. /usr/lib/firmware is where the kernel
   # looks; the shipped image writes /lib/firmware, the same directory through the usr-merge symlink.
@@ -769,7 +769,7 @@ docker run --rm --platform linux/arm64 \
   # Present only when the host staged an authorized_keys, i.e. NOVADECK_DEV=1 with a key. A release
   # installer leaves sshd installed but never enabled, so it listens on nothing.
   #
-  # HOST KEYS GO IN /run, AND THAT IS THE DIFFERENCE FROM THE MAIN IMAGE. images/assemble-rootfs.sh
+  # HOST KEYS GO IN /run, AND THAT IS THE DIFFERENCE FROM THE MAIN IMAGE. rootfs/assemble-rootfs.sh
   # argues at length for NOT baking host keys and letting openssh`s own sshdgenkeys.service run
   # `ssh-keygen -A` at first start -- correct there, because its /etc is an overlayfs with the upper
   # in /var and therefore writable. Here /etc is squashfs. sshdgenkeys would fail on every boot, and

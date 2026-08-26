@@ -17,8 +17,8 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LIB="$ROOT/fs-overlay/usr/lib/novadeck/install/lib-slotwrite.sh"
-GENPART="$ROOT/images/genpart.sh"
-TABLE="$ROOT/images/partition-table.txt"
+GENPART="$ROOT/image/genpart.sh"
+TABLE="$ROOT/image/partition-table.txt"
 
 PASS=0; FAIL=0; SKIP=0; CASE=""
 ok()   { PASS=$((PASS+1)); printf '  ok   %s -- %s\n' "$CASE" "$1"; }
@@ -282,7 +282,7 @@ expect_partset other "efi $U_EFIB"
 CASE="mint_partsets rejects an upper-case uuid"
 # sgdisk PRINTS partition GUIDs in upper case, and steamcl compares these strings. A set minted from
 # raw sgdisk output is well-formed, matches nothing, and the symptom is a disk that does not boot --
-# visible only on hardware. images/make-sdcard.sh lowercases at the same seam.
+# visible only on hardware. image/make-sdcard.sh lowercases at the same seam.
 ( mint_partsets "$T/ps-upper" B "${U_ESP^^}" "$U_EFIA" "$U_EFIB" >/dev/null 2>&1 ) \
   && bad "an upper-case partition uuid was accepted" \
   || ok "refuses an upper-case partition uuid"
@@ -362,10 +362,10 @@ declare -F mkfs_esp >/dev/null \
   || bad "mkfs_esp is not defined"
 
 # --- 8. the /var seed: one archive, two programs, and they must agree ---------------------------
-# images/assemble-rootfs.sh PACKS var-seed.tar.zst and lib-slotwrite.sh's seed_var UNPACKS it, and
+# rootfs/assemble-rootfs.sh PACKS var-seed.tar.zst and lib-slotwrite.sh's seed_var UNPACKS it, and
 # between them they have to reproduce what the OTA path gets from `rsync -aHAX --numeric-ids`. The
 # flags are the whole contract: nothing fails if they drift, the slot just comes up subtly wrong.
-ASSEMBLE="$ROOT/images/assemble-rootfs.sh"
+ASSEMBLE="$ROOT/rootfs/assemble-rootfs.sh"
 
 CASE="the pack and unpack flag sets agree"
 for flag in -- --numeric-owner --xattrs --acls; do
@@ -426,7 +426,7 @@ fi
 
 # --- 9. genpart.sh + the table, from the SHIPPED layout -----------------------------------------
 # Both files are installed verbatim into /usr/lib/novadeck/install/ of the built root, and
-# images/guard-rootfs.sh diffs them against images/ at build time. Byte-identity is not the whole
+# rootfs/guard-rootfs.sh diffs them against image/ at build time. Byte-identity is not the whole
 # claim though: the shipped copies also have to WORK from that directory, which is a different
 # thing and is what genpart.sh's `TABLE=$SELFDIR/partition-table.txt` seam exists for. A copy that
 # resolved the table through a repo-relative path would be byte-identical and dead on a device.
@@ -448,7 +448,7 @@ for mode in create append; do
     && ok "$mode mode emits from the shipped location" \
     || bad "$mode mode emitted nothing from the shipped location -- did it fail to find its table?"
   [ "$repo_out" = "$ship_out" ] \
-    && ok "$mode mode is identical from images/ and from the shipped dir" \
+    && ok "$mode mode is identical from image/ and from the shipped dir" \
     || bad "$mode mode differs between the repo and the shipped copy"
 done
 
@@ -606,7 +606,7 @@ try_window() {  # <floor> <ceil> [rows] [dead-indices] -> the run's output
     # the shipped location, and it is not where the repo copy lives. genpart.sh exports this same
     # variable when it applies the script itself.
     STUB_ROWS="${3-$STUB_TABLE}" STUB_DEAD="${4-}" DISK="$T/nodisk.img" PATH="$T/stub:$PATH" \
-    NOVADECK_LIB_GPT="$ROOT/images/lib-gpt.sh" \
+    NOVADECK_LIB_GPT="$ROOT/image/lib-gpt.sh" \
     bash -euo pipefail -c "$append_script" ) 2>&1
 }
 
@@ -669,7 +669,7 @@ printf '%s\n' "$out" | grep -q 'the layout needs' \
   || ok "a 4096-byte logical sector is handled (what a UFS LUN reports)"
 
 CASE="the shipped copy carries the mandatory form"
-# Byte-identity with images/ is asserted elsewhere; what is asserted here is that the emitted text
+# Byte-identity with image/ is asserted elsewhere; what is asserted here is that the emitted text
 # is the MANDATORY shape, so a revert to the opt-in `[ -n "${NOVADECK_APPEND_FLOOR:-}" ] && ...`
 # guard fails a test rather than quietly restoring luck-based containment.
 printf '%s\n' "$append_script" | grep -q 'NOVADECK_APPEND_FLOOR:?' \
@@ -1038,12 +1038,12 @@ out="$(PATH="$sgstub:$PATH" part_uuid /dev/mmcblk0 12)"
 case "$out" in *mmcblk*) bad "part_uuid leaked the disk name into its answer: $out" ;;
   *) ok "the answer names no disk, so the p-infix spelling cannot enter it" ;; esac
 
-# --- 16. images/lib-homestage.sh — one /home layout, two writers --------------------------------
+# --- 16. image/lib-homestage.sh — one /home layout, two writers --------------------------------
 # make-sdcard.sh builds this tree into a card image at build time and novadeck-install builds it
 # onto an internal disk on the device. The drift is SILENT in the worst way: a missing
 # ~/.steam/sdk64 does not stop Steam starting, it makes an x86 title's SteamAPI_Init() fail at
 # launch, on that medium only. So the layout is asserted here and both writers call the same code.
-HOMESTAGE="$ROOT/images/lib-homestage.sh"
+HOMESTAGE="$ROOT/image/lib-homestage.sh"
 [ -r "$HOMESTAGE" ] || { echo "missing input: $HOMESTAGE" >&2; exit 1; }
 CASE="lib-homestage: the deck home layout"
 # shellcheck source=/dev/null
@@ -1284,7 +1284,7 @@ spine_run() {  # extra args passed through to the spine
       NOVADECK_CARVE="$SP_STUBS/carve.sh" \
       NOVADECK_RAUC_SESSION="$SP_STUBS/rauc-session.sh" \
       NOVADECK_SLOTWRITE="$LIB" \
-      NOVADECK_HOMESTAGE="$ROOT/images/lib-homestage.sh" \
+      NOVADECK_HOMESTAGE="$ROOT/image/lib-homestage.sh" \
       "$SPINE" --bundle https://example.invalid/b.raucb --home-seed "$SP_SEED" \
       --userdata-gib 16 "$@" 2>&1
 }

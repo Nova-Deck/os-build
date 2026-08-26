@@ -25,7 +25,7 @@
 #                          zero. That asymmetry is the whole point of recon(), so the stager honours
 #                          the hard requirement rather than routing around it.
 #
-# DT_NEEDED CLOSURES, checked against images/manifest.lock rather than assumed. Three of the four
+# DT_NEEDED CLOSURES, checked against rootfs/manifest.lock rather than assumed. Three of the four
 # are satisfied by packages the image already carries — libuuid/libblkid (util-linux-libs),
 # libpopt (popt), libstdc++/libgcc_s (gcc-libs), libdevmapper (device-mapper). `partprobe` is the
 # exception: it needs libparted.so.2, which nothing on the image provides, so the library is staged
@@ -38,13 +38,13 @@
 # re-derive the closure. The repo the package comes from is part of the pin — dosfstools is in
 # `core` and the other three are in `extra`, and a wrong repo is a 404 rather than a wrong file.
 
-# The snapshot is READ from images/manifest.lock rather than duplicated here, so a `make relock`
+# The snapshot is READ from rootfs/manifest.lock rather than duplicated here, so a `make relock`
 # cannot leave the stager fetching from a snapshot the image no longer uses.
 hwstage_init() {  # <repo-root>
   HWSTAGE_ROOT="$1"
-  HWSTAGE_SNAPSHOT="$(sed -n 's|^# repo snapshot: *||p' "$HWSTAGE_ROOT/images/manifest.lock" | head -1)"
+  HWSTAGE_SNAPSHOT="$(sed -n 's|^# repo snapshot: *||p' "$HWSTAGE_ROOT/rootfs/manifest.lock" | head -1)"
   [ -n "$HWSTAGE_SNAPSHOT" ] \
-    || { echo "no '# repo snapshot:' line in images/manifest.lock" >&2; return 1; }
+    || { echo "no '# repo snapshot:' line in rootfs/manifest.lock" >&2; return 1; }
   HWSTAGE_CACHE="$HWSTAGE_ROOT/work/hw-stage"
   mkdir -p "$HWSTAGE_CACHE/bin" "$HWSTAGE_CACHE/lib"
 }

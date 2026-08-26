@@ -10,7 +10,7 @@
 #
 # NOT a pacman package and NOT a prebuilt: neither source.pin nor prebuilt.pin lives here, so
 # build-overlay.sh and customize-base.sh both ignore this directory. build.sh produces a plain
-# payload tree (work/mesa-x86/out/usr/...) that images/assemble-rootfs.sh stages into the image;
+# payload tree (work/mesa-x86/out/usr/...) that rootfs/assemble-rootfs.sh stages into the image;
 # the runtime overlayfs mount lays it over the guest rootfs (see the fstab injection there).
 #
 # THE TWO PINS BELOW ARE A PAIR, and both are coupled to packages/fex-rootfs/prebuilt.pin:

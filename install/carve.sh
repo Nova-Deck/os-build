@@ -55,7 +55,7 @@ fi
 # the same reason genpart resolves its table next to itself.
 GENPART="${NOVADECK_GENPART:-}"
 if [ -z "$GENPART" ]; then
-  for c in "$SELFDIR/genpart.sh" /usr/lib/novadeck/install/genpart.sh "$SELFDIR/../images/genpart.sh"; do
+  for c in "$SELFDIR/genpart.sh" /usr/lib/novadeck/install/genpart.sh "$SELFDIR/../image/genpart.sh"; do
     [ -x "$c" ] && { GENPART="$c"; break; }
   done
 fi
@@ -63,7 +63,7 @@ fi
 # lib-gpt.sh, shipped beside genpart.sh and resolved the same way.
 LIBGPT="${NOVADECK_LIB_GPT:-}"
 if [ -z "$LIBGPT" ]; then
-  for c in "$SELFDIR/lib-gpt.sh" /usr/lib/novadeck/install/lib-gpt.sh "$SELFDIR/../images/lib-gpt.sh"; do
+  for c in "$SELFDIR/lib-gpt.sh" /usr/lib/novadeck/install/lib-gpt.sh "$SELFDIR/../image/lib-gpt.sh"; do
     [ -r "$c" ] && { LIBGPT="$c"; break; }
   done
 fi
@@ -100,7 +100,7 @@ command -v sfdisk >/dev/null 2>&1 || die "sfdisk not found -- the table cannot b
 # has none, and this script's `carve: ` prefix is what its suite asserts.
 # shellcheck source=../fs-overlay/usr/lib/novadeck/install/lib-slotwrite.sh
 . "$SLOTWRITE"
-# shellcheck source=../images/lib-gpt.sh
+# shellcheck source=../image/lib-gpt.sh
 . "$LIBGPT"
 
 # --- reading the disk -----------------------------------------------------------------------------

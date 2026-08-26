@@ -96,7 +96,7 @@ jobs:
       medium_url: ${{ steps.publish.outputs.url }}
     # The same environment the card publishes from — the same bucket, the same push-only credential,
     # and the same fact that it can DELETE as well as add (see the retention note in
-    # images/publish-card.sh). Declaring it here is what makes those secrets resolve at all.
+    # ota/publish-card.sh). Declaring it here is what makes those secrets resolve at all.
     environment: ${{ vars.CARDS_ENVIRONMENT || 'release-cards' }}
     steps:
       - uses: actions/checkout@v7
@@ -129,7 +129,7 @@ jobs:
           # 10 GB free tier, which is as much back catalogue as that tier affords. An older medium
           # stays a working recovery tool — it needs nothing from the server but the OS bundle.
           NOVADECK_CARD_KEEP: '2'
-        run: images/publish-card.sh "$VERSION" upload/installer.img.gz meta
+        run: ota/publish-card.sh "$VERSION" upload/installer.img.gz meta
 
   release:
     needs: [prep, publish]

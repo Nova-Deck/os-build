@@ -20,7 +20,7 @@
 #             `0xc` (W95 FAT32 LBA) with the 0x80 bootable flag, carrying /EFI/BOOT/bootaa64.efi —
 #             an MBR table and a plain FAT partition, with no EFI System Partition type GUID
 #             anywhere on the disk, and ABL boots it. So the loader is found by CONTENT, exactly as
-#             [[abl-internal-efi-path-works]] says. images/partition-table.txt asserts the opposite
+#             [[abl-internal-efi-path-works]] says. image/partition-table.txt asserts the opposite
 #             ("the ROCKNIX ABL finds the ESP by type GUID"); that claim is wrong, and it is the
 #             only thing that made this change look risky.
 #
@@ -36,8 +36,8 @@
 # installer whose /esp matched the TARGET's ESP would mount the disk it is about to overwrite and
 # write its failure log there. NDINSTALLER is 11 characters, all a FAT label has room for.
 #
-# ON FAT WIDTH, because images/partition-table.txt carries a loud warning against forcing -F 32 and
-# this file does force it (install/mkimage.sh, like images/make-sdcard.sh). The warning is about
+# ON FAT WIDTH, because image/partition-table.txt carries a loud warning against forcing -F 32 and
+# this file does force it (install/mkimage.sh, like image/make-sdcard.sh). The warning is about
 # 4Kn media: a 256M FAT32 has 65376 clusters at 4096-byte sectors, below the 65525 a FAT32 must
 # have, and ABL's FatPkg then refuses the volume outright. It does not apply here for two
 # independent reasons — the filesystem is built INSIDE AN IMAGE FILE, where mkfs.vfat sees 512-byte
@@ -53,10 +53,10 @@
 # partition. This medium has no initramfs, no slots and no /efi — and the fstab entry naming
 # LABEL=NDINSTALLER is the only mount definition either way.
 #
-# Consumed by images/genpart.sh exactly as the shipped table is. Row order = partition number.
+# Consumed by image/genpart.sh exactly as the shipped table is. Row order = partition number.
 #
 # IT IS CALLED medium-table.txt, NOT partition-table.txt, and the name matters. install/mkroot.sh
-# ships images/partition-table.txt — the EIGHT-partition A/B layout — into the installer's flat
+# ships image/partition-table.txt — the EIGHT-partition A/B layout — into the installer's flat
 # directory under that exact basename, because the spine carves the TARGET disk with it. Two files
 # named partition-table.txt, one describing the medium and one describing what the medium installs,
 # is a mistake waiting to be made by whoever next edits either.

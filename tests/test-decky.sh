@@ -296,7 +296,7 @@ if [ -f "$LAUNCH_LIB" ]; then
   # the shim exec'd a host path that does not exist inside SLR4, and the strip was what kept our
   # Protons out of SLR4 in the first place. Re-adding either alone produces a tool that cannot
   # launch at all -- `exec: /usr/lib/novadeck/game-launch: not found`.
-  ASSEMBLE="$ROOT/images/assemble-rootfs.sh"
+  ASSEMBLE="$ROOT/rootfs/assemble-rootfs.sh"
   grep -q 'novadeck-proton' "$ASSEMBLE" \
     && bad "assemble-rootfs.sh writes an in-tool shim again — it cannot resolve /usr inside SLR4" \
     || ok "no in-tool shim is written (tuning comes from launch options)"
@@ -562,10 +562,10 @@ sys.exit(0 if m.get('flags') == ['root'] and m.get('name') else 1)
   || bad "plugin.json is missing flags:[root] (or a name)"
 
 # --- the assembler + Makefile wiring -------------------------------------------------------
-grep -q 'decky-plugins/novadeck-control' "$ROOT/images/assemble-rootfs.sh" \
+grep -q 'decky-plugins/novadeck-control' "$ROOT/rootfs/assemble-rootfs.sh" \
   && ok "assembler stages the plugin (4c-3)" \
   || bad "assembler has no plugin staging block"
-grep -q 'decky-loader/PluginLoader' "$ROOT/images/guard-rootfs.sh" \
+grep -q 'decky-loader/PluginLoader' "$ROOT/rootfs/guard-rootfs.sh" \
   && ok "guard-rootfs asserts the loader (assertion 9) — image completeness is checked at build" \
   || bad "guard-rootfs has no loader assertion: an incomplete image would ship undetected"
 grep -q 'test-decky.sh' "$ROOT/Makefile" \

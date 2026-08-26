@@ -11,12 +11,12 @@
 # by the host user would put every file on the medium under uid 1000, and the installer runs as
 # root against a stranger's disk. install/mkroot.sh is the host-side half (its only container is
 # the emulated pacman); this is the container-side half. Same division as
-# images/customize-base.sh -> images/assemble-rootfs.sh, and the reason the plan's sketch of
+# rootfs/customize-base.sh -> rootfs/assemble-rootfs.sh, and the reason the plan's sketch of
 # mksquashfs-inside-mkroot.sh was not followed.
 #
 # UNPRIVILEGED IN THE SENSE THAT MATTERS: no loop devices and no mounts. Each filesystem is built
 # in a plain FILE (mksquashfs from a directory, mtools into a FAT image) and then dd'd into the
-# partition at the offset sgdisk assigned it. That is images/make-sdcard.sh's technique, and it is
+# partition at the offset sgdisk assigned it. That is image/make-sdcard.sh's technique, and it is
 # what lets the whole medium be assembled in a container with no privileged flags.
 #
 # THE BOOT CHAIN IS SHORTER THAN THE CARD'S, BY ONE LINK. The shipped card is
@@ -35,7 +35,7 @@ OUT="$ROOT/out/images"
 BOOT="$ROOT/out/boot"
 IMG="$OUT/installer.img"
 TABLE="$ROOT/install/medium-table.txt"
-GENPART="$ROOT/images/genpart.sh"
+GENPART="$ROOT/image/genpart.sh"
 GENCFG="$ROOT/install/gen-grub-cfg.sh"
 KERNEL="$ROOT/out/Image"
 DTBDIR="$ROOT/out/dtbs"
@@ -72,7 +72,7 @@ rm -rf "$WORK"; mkdir -p "$WORK" "$OUT"
 # the tree, and until this block every installer medium ever built answered identically — the same
 # NAME, the same ID, no version, no date. That is the first question a person asks at the fallback
 # console, which exists precisely for the moment something has gone wrong, and the medium could not
-# answer it. Same shape as images/assemble-rootfs.sh section 4a: one stamp, in one place, read back
+# answer it. Same shape as rootfs/assemble-rootfs.sh section 4a: one stamp, in one place, read back
 # by everything downstream.
 #
 # STAMPED HERE AND NOT IN install/mkroot.sh, because this is the half that makes an ARTIFACT.
@@ -120,7 +120,7 @@ chmod 0644 "$BASE/etc/novadeck-release"
 } >"$BASE/etc/os-release"
 chmod 0644 "$BASE/etc/os-release"
 # The same fields OUTSIDE the image, as a sidecar beside it. A publisher must be able to name the
-# artifact without mounting a squashfs out of the middle of a GPT — images/genbundle.sh reads
+# artifact without mounting a squashfs out of the middle of a GPT — ota/genbundle.sh reads
 # rootfs.release for exactly that reason, and a release workflow for this medium will want the same.
 cp "$BASE/etc/novadeck-release" "$OUT/installer.release"
 log "identity: $IMG_VERSION ($IMG_GIT) build $IMG_BUILD, mode $IMG_MODE"
@@ -164,7 +164,7 @@ log "root.squashfs: ${squash_mib}M (from $(du -sh "$BASE" 2>/dev/null | cut -f1)
 
 # --- 2. the GPT ------------------------------------------------------------------------------------
 # The medium is sized to its content plus slack, not to a card: this image is published and
-# downloaded, and `rest` in the table expands to whatever the file happens to be. images/genpart.sh
+# downloaded, and `rest` in the table expands to whatever the file happens to be. image/genpart.sh
 # emits the sgdisk script from the table exactly as it does for the shipped card.
 esp_mib=$(awk '/^[[:space:]]*#/||/^[[:space:]]*$/{next} $1=="esp"{sub(/M$/,"",$2); print $2; exit}' "$TABLE")
 [ -n "$esp_mib" ] || die "cannot read the esp size from ${TABLE#"$ROOT"/}"
@@ -172,7 +172,7 @@ esp_mib=$(awk '/^[[:space:]]*#/||/^[[:space:]]*$/{next} $1=="esp"{sub(/M$/,"",$2
 # zero free sectors behind it is the kind of thing that works until one package grows.
 total_mib=$(( 1 + esp_mib + squash_mib + 64 + 1 ))
 truncate -s "${total_mib}M" "$IMG"
-# The env var is images/genpart.sh's own override for which table it reads; it defaults to the
+# The env var is image/genpart.sh's own override for which table it reads; it defaults to the
 # eight-partition shipped one sitting beside it, which is precisely what must NOT be used here.
 NOVADECK_PARTITION_TABLE="$TABLE" "$GENPART" "$IMG" >/dev/null
 sgdisk -p "$IMG" >&2
@@ -183,7 +183,7 @@ ROOT_UUID="$(part_uuid 2)"
 [ -n "$ROOT_UUID" ] || die "sgdisk did not report a partition uuid for p2"
 
 # --- 3. the ESP ------------------------------------------------------------------------------------
-# -F 32 is forced here for the same reason images/make-sdcard.sh forces it, and install/medium-table.txt
+# -F 32 is forced here for the same reason image/make-sdcard.sh forces it, and install/medium-table.txt
 # carries the full argument: the filesystem is built inside an image FILE, where mkfs.vfat sees
 # 512-byte sectors regardless of the eventual target, and every installer medium is removable and
 # therefore 512e. The 4Kn hazard the shipped table warns about cannot reach this partition.

@@ -12,7 +12,7 @@
 # The second reason is duplicate detection. Steam refuses to re-offer a version it already applied,
 # so an identity that changes between two calls makes one update look like two, and an identity
 # that never changes makes a real update invisible. That rule is written TWICE — in shell in
-# images/genbundle.sh and in Python here — and `identity-rules-agree` below is the only thing that
+# ota/genbundle.sh and in Python here — and `identity-rules-agree` below is the only thing that
 # makes them stay the same rule. Phase 2 exists because those two strings had drifted apart.
 #
 # HOW IT WORKS: the real, shipped fs-overlay/usr/bin/novadeck-update is executed — not a copy, not a
@@ -28,7 +28,7 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CLIENT="$ROOT/fs-overlay/usr/bin/novadeck-update"
-GENBUNDLE="$ROOT/images/genbundle.sh"
+GENBUNDLE="$ROOT/ota/genbundle.sh"
 [ -f "$CLIENT" ] || { echo "no novadeck-update: $CLIENT" >&2; exit 1; }
 
 PASS=0; FAIL=0; CASE=""
@@ -438,7 +438,7 @@ done <<<"$OUT"
 CASE="identity-rules-agree"
 #
 # THE ONE CASE THAT IS NOT ABOUT THE CLIENT. The rule "version when it is real, build timestamp
-# otherwise" is implemented twice — in shell in images/genbundle.sh and in Python in the client —
+# otherwise" is implemented twice — in shell in ota/genbundle.sh and in Python in the client —
 # and nothing but this makes them the same rule. Phase 2 exists because they drifted: the bundle was
 # named from a date while the image called itself something else, so the comparison the entire
 # update path rests on was between two unrelated strings, and a device could be offered its own

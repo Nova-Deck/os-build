@@ -6,7 +6,7 @@
 #                                      -> out/steam-seed/steam-seed.sha256   (the pin, one line)
 #
 # WHY THIS EXISTS AT ALL. `make sdcard` pre-seeds /home from the DIRECTORY (mkfs.ext4 -d, via
-# images/lib-homestage.sh), so a card needs no artifact — it writes the tree straight into the
+# image/lib-homestage.sh), so a card needs no artifact — it writes the tree straight into the
 # filesystem it is building. The installer medium cannot: it builds /home on someone else's disk,
 # hours or months later, so it has to carry the tree with it. install/mkimage.sh stages this file
 # into the medium's root and writes its sha256 beside it as the pin the spine checks before it

@@ -36,7 +36,7 @@ plugins_src="${NOVADECK_DECKY_PLUGINS:-/usr/share/decky-plugins}"
 seed_marker="${homebrew}/services/.novadeck-seeded"
 
 # No existence guard on the loader: it ships in every image (asserted at build time by
-# images/guard-rootfs.sh), and set -e makes the sha256sum below fail this unit loudly anyway
+# rootfs/guard-rootfs.sh), and set -e makes the sha256sum below fail this unit loudly anyway
 # if a broken image ever reaches a device.
 install -d -m 0755 "${homebrew}" "${homebrew}/services" "${homebrew}/plugins" "${homebrew}/settings"
 

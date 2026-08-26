@@ -223,7 +223,7 @@ seed_var() {  # <dev> <slot> <mnt> <source>
   trap "umount $(printf %q "$mnt") 2>/dev/null || true${prev_cmd:+; $prev_cmd}" EXIT
 
   if [ "$mode" = dir ]; then
-    # rsync, in the image for exactly this (images/customize-base.sh PKGS). -aHAX preserves modes,
+    # rsync, in the image for exactly this (rootfs/customize-base.sh PKGS). -aHAX preserves modes,
     # owners, hard links, ACLs and xattrs. Modes matter more than they look: sshd refuses to start
     # if a private host key is group/world-readable, so a mode-losing copy would take SSH down on
     # the updated slot and nowhere else. --numeric-ids because we are copying between two roots
@@ -244,7 +244,7 @@ seed_var() {  # <dev> <slot> <mnt> <source>
     # `rsync -aHAX --numeric-ids` promises, and tar preserves hard links natively. An installed slot
     # and an updated one must reach the same /var, and the modes are the sharp end -- sshd refuses
     # to start if a private host key is group/world-readable, so a mode-losing unpack takes SSH down
-    # on installed devices and nowhere else. images/assemble-rootfs.sh packs with the same set.
+    # on installed devices and nowhere else. rootfs/assemble-rootfs.sh packs with the same set.
     #
     # -p IS NOT REDUNDANT, even though this runs as root and tar defaults to it there. Measured:
     # without -p the sticky bit on /var/tmp comes back 0777 instead of 1777 -- the bit IS in the
@@ -342,7 +342,7 @@ mint_partsets() {  # <mnt> <self-image> <esp-uuid> <efi-a-uuid> <efi-b-uuid>
   # LOWERCASE, and asserted. sgdisk prints partition GUIDs in upper case and steamcl compares these
   # strings against the uuid of the partition it booted from; a set minted from raw sgdisk output
   # would be well-formed, would match nothing, and the symptom is a disk that does not boot -- found
-  # only on hardware. images/make-sdcard.sh lowercases at the same seam for the same reason.
+  # only on hardware. image/make-sdcard.sh lowercases at the same seam for the same reason.
   for u in "$esp_uuid" "$efia" "$efib"; do
     [[ "$u" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] \
       || die "mint_partsets: '$u' is not a lowercase partition uuid"
@@ -411,7 +411,7 @@ refresh_esp_stage1() {  # <esp> <bootdir>
 # NOTHING RESOLVES THE ESP BY THIS LABEL: ABL finds it by type GUID (ef00), the OS mounts it by
 # PARTLABEL from /etc/fstab, and the stage-2 grub.cfg addresses it by partition index. It is a human
 # convenience on a mounted disk, and it is deliberately NOT the GPT name -- a FAT label caps at 11
-# characters and NOVADECK-ESP is twelve. Kept identical to images/make-sdcard.sh's so a card and an
+# characters and NOVADECK-ESP is twelve. Kept identical to image/make-sdcard.sh's so a card and an
 # internal install present the same object.
 ESP_FAT_LABEL=NOVADECK
 
@@ -425,7 +425,7 @@ ESP_FAT_LABEL=NOVADECK
 # the ESP fails inside ABL (its FatPkg returns EFI_VOLUME_CORRUPTED, never publishes a
 # SimpleFileSystem handle, and LoadEFI reports "Failed to load EFI: Not Found"), and efi-A/B fail
 # one layer later inside steamcl, which mounts them through the SAME EFI FAT driver and so finds no
-# boot candidate at all. See the block above the rows in images/partition-table.txt.
+# boot candidate at all. See the block above the rows in image/partition-table.txt.
 #
 # The rule is deliberately OURS rather than mkfs.fat's. Dropping the flag entirely also produces a
 # valid filesystem, but the width would then be picked by a size-threshold table inside the tool,
@@ -485,7 +485,7 @@ mkfs_esp() {  # <dev>
 
 # The remaining two filesystems the installer creates and an update never does. They live here, next
 # to mkfs_esp and to the writers that fill them, so that a card and an internal install produce the
-# same objects: images/make-sdcard.sh is the other writer, and its labels are what these repeat.
+# same objects: image/make-sdcard.sh is the other writer, and its labels are what these repeat.
 #
 # NOTHING RESOLVES AN efi PARTITION BY THIS LABEL either -- steamcl matches the partition uuid it
 # booted from against SteamOS/partsets/self, and the stage-2 grub.cfg addresses partitions by the

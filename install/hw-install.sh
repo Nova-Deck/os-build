@@ -234,9 +234,9 @@ scp "${SSHOPTS[@]}" -q \
   "$ROOT/install/rauc-session.sh" \
   "$ROOT/install/post-install-fresh.sh" \
   "$ROOT/install/confirm-tty" \
-  "$ROOT/images/genpart.sh" \
-  "$ROOT/images/partition-table.txt" \
-  "$ROOT/images/lib-homestage.sh" \
+  "$ROOT/image/genpart.sh" \
+  "$ROOT/image/partition-table.txt" \
+  "$ROOT/image/lib-homestage.sh" \
   "$ROOT/fs-overlay/usr/lib/novadeck/install/lib-slotwrite.sh" \
   "$SEED_SHA_FILE" \
   "$HOST:$STAGE/" || die "cannot stage the scripts"

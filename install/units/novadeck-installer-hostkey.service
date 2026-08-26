@@ -10,7 +10,7 @@
 # refuse every connection. mkroot.sh masks that unit and points sshd_config at /run instead.
 # Baking a key into the image was the other option and is worse: it is a property of the BUILD,
 # extractable by anyone holding the published medium and identical on every device flashed from it
-# (images/assemble-rootfs.sh makes the same argument at length for the shipped image).
+# (rootfs/assemble-rootfs.sh makes the same argument at length for the shipped image).
 #
 # WHY THIS IS A UNIT RATHER THAN AN ExecStartPre= ON sshd. ssh-keygen PROMPTS rather than
 # overwriting when the key already exists, so a plain ExecStartPre would wedge any sshd restart

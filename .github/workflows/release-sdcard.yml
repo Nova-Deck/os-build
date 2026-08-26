@@ -17,7 +17,7 @@
 #
 # THE R2 CREDENTIALS ARE STILL GATED, since 2026-08-04, in the `release-cards` environment — not
 # repo-wide. "Not a root of trust" bounds the damage; it does not make the credential free. Blank is
-# what an unauthorised caller gets, and `rclone purge`-based retention (KEEP=1, images/publish-card.sh)
+# what an unauthorised caller gets, and `rclone purge`-based retention (KEEP=1, ota/publish-card.sh)
 # means these are DESTRUCTIVE, not merely additive: they can delete the published card, not just add
 # one. Repo-wide, any `workflow_dispatch` by anyone with write access reached them.
 #
@@ -141,7 +141,7 @@ jobs:
     # reusing it would reject every `card/v*` tag outright. Two artifacts, two cadences, two gates.
     #
     # Declaring it HERE is what makes the R2 secrets resolve at all — an environment-scoped secret
-    # reads as the empty string in any job that does not name its environment. images/lib-rclone.sh's
+    # reads as the empty string in any job that does not name its environment. ota/lib-rclone.sh's
     # r2_env stops on an empty one with a hint rather than uploading nothing and going green, so the
     # failure is loud, but the fix is always this line rather than the secret.
     environment: ${{ vars.CARDS_ENVIRONMENT || 'release-cards' }}
@@ -168,7 +168,7 @@ jobs:
           name: novadeck-sdcard-meta
           path: meta
 
-      # rclone is fetched and sha256-verified by images/lib-rclone.sh against images/rclone.pin, so
+      # rclone is fetched and sha256-verified by ota/lib-rclone.sh against ota/rclone.pin, so
       # this job needs nothing from the runner image beyond curl.
       - name: upload the card to R2
         id: publish
@@ -179,10 +179,10 @@ jobs:
           R2_BUCKET: ${{ vars.R2_BUCKET }}
           R2_PUBLIC_BASE: ${{ vars.R2_PUBLIC_BASE }}
           VERSION: ${{ needs.prep.outputs.version }}
-        run: images/publish-card.sh "$VERSION" upload/sdcard.img.gz meta
+        run: ota/publish-card.sh "$VERSION" upload/sdcard.img.gz meta
 
   # The Release carries only small files — checksums, the provenance pins, and the link. The card
-  # itself is well over GitHub's 2 GiB per-asset cap and lives in R2; see images/publish-card.sh.
+  # itself is well over GitHub's 2 GiB per-asset cap and lives in R2; see ota/publish-card.sh.
   #
   # A separate job so `contents: write` is scoped to it alone: the long build job, which runs far
   # more third-party code, stays read-only.

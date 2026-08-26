@@ -4,7 +4,7 @@
 # Read by install/mkroot.sh (which lays the root down from it) and by `make relock-installer`
 # (which re-resolves it against the pinned snapshot and writes install/manifest.lock). It is the
 # human-editable DECLARATION of intent; the lock is the resolved closure. Edit here, relock, read
-# the diff — exactly the loop images/customize-base.sh's PKGS array has with images/manifest.lock.
+# the diff — exactly the loop rootfs/customize-base.sh's PKGS array has with rootfs/manifest.lock.
 #
 # THIS IS NOT THE SHIPPED IMAGE'S SET AND MUST NOT DRIFT TOWARDS IT. The installer is a tool that
 # runs as root against a stranger's internal disk and then goes away. It carries no Steam, no

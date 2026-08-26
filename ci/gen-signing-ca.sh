@@ -13,7 +13,7 @@
 # A single self-signed key would make key rotation a reflash, which on this device means a
 # screwdriver and an SD card reader.
 #
-# WHAT ENTERS THE REPO: exactly one file, images/rauc/novadeck-ca.pem -- the CA CERTIFICATE,
+# WHAT ENTERS THE REPO: exactly one file, ota/rauc/novadeck-ca.pem -- the CA CERTIFICATE,
 # which is public by construction (it is shipped on every device as /etc/rauc/keyring.pem).
 # Every private key stays under $PKIDIR, which defaults inside out/ precisely because
 # .gitignore already excludes /out/ wholesale. Nothing here should ever need `git add -f`.
@@ -27,8 +27,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PKIDIR="${PKIDIR:-$ROOT/out/pki}"
-KEYRING="$ROOT/images/rauc/novadeck-ca.pem"
-RELEASE_EXT="$ROOT/images/rauc/release.ext"   # shared with images/rauc/verify-signing.sh
+KEYRING="$ROOT/ota/rauc/novadeck-ca.pem"
+RELEASE_EXT="$ROOT/ota/rauc/release.ext"   # shared with ota/rauc/verify-signing.sh
 
 CA_DAYS="${CA_DAYS:-7300}"        # 20 years: the device's trust root, replaced only by reflash
 REL_DAYS="${REL_DAYS:-800}"       # ~2 years: rotated under the CA without touching devices
@@ -76,8 +76,8 @@ openssl req -newkey rsa:4096 -nodes -sha256 \
   -keyout release.key.pem -out release.csr.pem \
   -subj "/O=$ORG/CN=$ORG OTA release" >/dev/null 2>&1
 
-# The cert profile lives in images/rauc/release.ext and is read, not restated: this script MINTS
-# the release cert and images/rauc/verify-signing.sh proves the shipped system.conf accepts one, so
+# The cert profile lives in ota/rauc/release.ext and is read, not restated: this script MINTS
+# the release cert and ota/rauc/verify-signing.sh proves the shipped system.conf accepts one, so
 # a copy in either place is a profile that can drift out from under the other.
 # index.txt/serial are kept so a CRL can be issued later against this same CA. `openssl ca`
 # needs them to exist; creating them now avoids having to reconstruct the CA's issuance state

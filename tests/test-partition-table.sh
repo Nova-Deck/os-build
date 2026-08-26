@@ -20,7 +20,7 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-TABLE="$ROOT/images/partition-table.txt"
+TABLE="$ROOT/image/partition-table.txt"
 LIB="$ROOT/fs-overlay/usr/lib/novadeck/install/lib-slotwrite.sh"
 
 PASS=0; FAIL=0; SKIP=0; CASE=""

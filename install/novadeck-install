@@ -210,7 +210,7 @@ recon() {
 
   # shellcheck source=../fs-overlay/usr/lib/novadeck/install/lib-slotwrite.sh
   . "$SLOTWRITE"
-  # shellcheck source=../images/lib-homestage.sh
+  # shellcheck source=../image/lib-homestage.sh
   . "$HOMESTAGE"
 }
 
@@ -641,7 +641,7 @@ install_root() {
 # =================================================================================================
 # 9. /home
 # =================================================================================================
-# The layout is images/lib-homestage.sh, shared verbatim with make-sdcard.sh, so an installed device
+# The layout is image/lib-homestage.sh, shared verbatim with make-sdcard.sh, so an installed device
 # and a flashed card present the same home. The failure this shares against is quiet: a missing
 # ~/.steam/sdk64 does not stop Steam starting, it makes an x86 title's SteamAPI_Init() fail at
 # launch, on that medium only.

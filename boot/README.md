@@ -35,7 +35,7 @@ which is why the board args moved out of the DTS `/chosen/bootargs` too. They co
 |---|---|
 | common args | `BOOT_CMDLINE` in `gen-grub-cfg.sh` |
 | board args | the fourth column of `boards.map` |
-| `root=` `novadeck.var=` `novadeck.efi=` | per slot, as `PARTUUID=` read out of the GPT at boot with `probe --part-uuid`; `PARTLABEL=` from `images/partition-table.txt` is the announced fallback |
+| `root=` `novadeck.var=` `novadeck.efi=` | per slot, as `PARTUUID=` read out of the GPT at boot with `probe --part-uuid`; `PARTLABEL=` from `image/partition-table.txt` is the announced fallback |
 | `novadeck.slot=` | per slot, stated outright — a PARTUUID carries no slot letter for the initramfs to match |
 
 The specs are `PARTUUID=` because every novadeck medium carries the same eight GPT names: with a
@@ -85,6 +85,6 @@ make steamcl      # stage 1
 make grub         # stage 2 + both grub.cfg files
 ```
 
-The stage-1/2 binaries reach a card through `images/make-sdcard.sh`, and reach an updated slot
+The stage-1/2 binaries reach a card through `image/make-sdcard.sh`, and reach an updated slot
 through the RAUC post-install hook, which takes them from `/usr/lib/novadeck/boot/` inside the root
 it just installed — so a root and the software that boots it always come from one build.

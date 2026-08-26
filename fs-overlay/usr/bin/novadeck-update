@@ -42,7 +42,7 @@
 #
 # THE BUNDLE IS STREAMED, NOT DOWNLOADED, and that is what makes an OTA cheap. This program hands
 # InstallBundle an https:// URL; rauc fetches it over NBD with HTTP Range requests and, because
-# images/rauc/manifest.raucm.in marks the image `adaptive=block-hash-index`, transfers only the
+# ota/rauc/manifest.raucm.in marks the image `adaptive=block-hash-index`, transfers only the
 # 4KiB blocks it cannot already find in one of the two slots. Measured 2026-08-04 on two pairs of
 # real consecutive bundles: 96.1% of non-zero blocks are reused, ~125M crosses the wire instead of
 # 3.90G. Nothing is staged on the device, so an update no longer needs free space in /home at all.
@@ -141,7 +141,7 @@ def config():
 
 
 def device_identity():
-    """What this image calls itself. images/assemble-rootfs.sh writes these three fields, and its
+    """What this image calls itself. rootfs/assemble-rootfs.sh writes these three fields, and its
     comment designates this file as where anything wanting to know which image is running looks."""
     rel = read_env_file(RELEASE_FILE)
     return {

@@ -22,7 +22,7 @@ over:
   before `loadfont`/`insmod gfxterm`/`terminal_output gfxterm` and before any `menuentry` was
   defined, so if the call never returns nothing is ever drawn and no menu exists to draw.
 * **The conf was never written.** Read offline from the card afterwards, `SteamOS/conf/A.conf` was
-  still `boot-attempts: 0`, `boot-count: 0`, `comment: seeded by images/make-sdcard.sh` — i.e.
+  still `boot-attempts: 0`, `boot-count: 0`, `comment: seeded by image/make-sdcard.sh` — i.e.
   untouched by anything.
 
 Note the module does **not** apply a video mode; that hypothesis was checked and is wrong.

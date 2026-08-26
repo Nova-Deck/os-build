@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Offline test for images/publish-card.sh — specifically its BUCKET PREFIX and its PRUNE.
+# Offline test for ota/publish-card.sh — specifically its BUCKET PREFIX and its PRUNE.
 #
 #   tests/test-publish-card.sh
 #
@@ -14,7 +14,7 @@
 # here is scaffolding around it.
 #
 # HOW IT WORKS: the real, shipped script runs — not a copy. Its seams are the NOVADECK_*/R2_*
-# variables it already documents, plus NOVADECK_RCLONE, which images/lib-rclone.sh honours precisely
+# variables it already documents, plus NOVADECK_RCLONE, which ota/lib-rclone.sh honours precisely
 # so this can exist: rclone_bin returns an ABSOLUTE path under work/tools/, so a stub cannot be
 # shadowed onto PATH, and pre-creating that path would overwrite a real operator's binary.
 #
@@ -24,7 +24,7 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-PUBLISH="$ROOT/images/publish-card.sh"
+PUBLISH="$ROOT/ota/publish-card.sh"
 [ -f "$PUBLISH" ] || { echo "no publish-card.sh: $PUBLISH" >&2; exit 1; }
 
 PASS=0; FAIL=0; CASE=""
@@ -34,7 +34,7 @@ bad() { FAIL=$((FAIL+1)); printf '  FAIL %s -- %s\n' "$CASE" "$1"; }
 W="$(mktemp -d)"; trap 'rm -rf "$W"' EXIT
 mkdir -p "$W/bin" "$W/bucket" "$W/meta/provenance"
 
-# The metadata publish-card.sh refuses to run without. Content is irrelevant here — images/
+# The metadata publish-card.sh refuses to run without. Content is irrelevant here — image/
 # card-meta.sh owns what goes in it — but the FILES have to exist, because their absence is one of
 # the script's own preconditions.
 printf 'deadbeef  sdcard.img.gz\n' >"$W/meta/sha256sums.txt"

@@ -58,16 +58,16 @@ cosign.key
 # The negation works only because no parent directory of this path is itself excluded. Verify
 # with `git status --short`: the keyring must appear as `??` (untracked). Note `git check-ignore
 # -v` is NOT the check -- it prints this negation line and exits 0 for a file it does not ignore.
-!/images/rauc/novadeck-ca.pem
+!/ota/rauc/novadeck-ca.pem
 # ...and ONE more, on the same reasoning: the release SIGNING certificate is public too (a cert is
 # what you hand out; the key is what you keep), and committing it is what lets CI prove the keyring
 # above is the CA behind the cert that signs releases -- a check that otherwise needs the private
 # key and therefore never runs on a push. A cert whose key we no longer hold ships a device that
 # rejects every future bundle, and nothing else in the repo can see that. Rotation becomes a commit,
 # which is an audit trail rather than a chore. Two negations is where this stops: every PEM under
-# images/rauc/ is asserted to contain no PRIVATE KEY by tests/test-verify-signing.sh, so the
+# ota/rauc/ is asserted to contain no PRIVATE KEY by tests/test-verify-signing.sh, so the
 # exception is policed by a test and not by care.
-!/images/rauc/release.cert.pem
+!/ota/rauc/release.cert.pem
 # Dev-card Wi-Fi credentials for throwaway dev cards (NOVADECK_DEV=1) — never committed.
 # ./dev.env IS tracked and holds no secrets; it sources this file when it exists. The split is
 # what lets a fresh clone run `set -a; . ./dev.env; set +a` with nothing to edit, while a PSK
@@ -83,7 +83,7 @@ cosign.key
 # executed — so a __pycache__ there only ever comes from a host-side test importing one of them.
 #
 # THIS RULE DOES NOT KEEP IT OUT OF AN IMAGE, which is what the comment here used to claim.
-# fs-overlay/ is injected with `cp -a` of the WORKING TREE (images/assemble-rootfs.sh), and a copy
+# fs-overlay/ is injected with `cp -a` of the WORKING TREE (rootfs/assemble-rootfs.sh), and a copy
 # does not consult .gitignore — so v0.2.x dev cards shipped host-CPython 3.14 .pyc into an image
 # running 3.13, dead bytes the device can never load. Found on hardware 2026-08-10. The image is
 # kept clean by three other things: the suites redirect bytecode via PYTHONPYCACHEPREFIX, the

@@ -5,7 +5,7 @@
 #   install/verify-install.sh            # discover the installed disk
 #   install/verify-install.sh /dev/sda   # check exactly this disk
 #
-# THE SAME CHECK LIST AS images/verify-card.sh, against real mounts. That one is unprivileged and
+# THE SAME CHECK LIST AS image/verify-card.sh, against real mounts. That one is unprivileged and
 # reads image files at byte offsets with mtools; this one has root and real block devices, so it
 # mounts read-only instead. The lists are kept deliberately parallel: a card and an install that
 # pass different checks are two artifacts nobody can reason about together.
@@ -43,7 +43,7 @@ done
 # (index -> /dev/disk/by-partuuid/...). Resolved by search exactly as carve.sh resolves them.
 LIBGPT="${NOVADECK_LIB_GPT:-}"
 if [ -z "$LIBGPT" ]; then
-  for c in "$SELFDIR/lib-gpt.sh" /usr/lib/novadeck/install/lib-gpt.sh "$SELFDIR/../images/lib-gpt.sh"; do
+  for c in "$SELFDIR/lib-gpt.sh" /usr/lib/novadeck/install/lib-gpt.sh "$SELFDIR/../image/lib-gpt.sh"; do
     [ -r "$c" ] && { LIBGPT="$c"; break; }
   done
 fi
@@ -56,7 +56,7 @@ if [ -z "$SLOTWRITE" ]; then
 fi
 [ -n "$LIBGPT" ]    && [ -r "$LIBGPT" ]    || die "cannot find lib-gpt.sh (set NOVADECK_LIB_GPT)"
 [ -n "$SLOTWRITE" ] && [ -r "$SLOTWRITE" ] || die "cannot find lib-slotwrite.sh (set NOVADECK_SLOTWRITE)"
-# shellcheck source=../images/lib-gpt.sh
+# shellcheck source=../image/lib-gpt.sh
 . "$LIBGPT"
 # shellcheck source=../fs-overlay/usr/lib/novadeck/install/lib-slotwrite.sh
 . "$SLOTWRITE"
@@ -152,7 +152,7 @@ if [ "${NOVADECK_SLOT_B:-0}" = 1 ]; then
   expect_fs novadeck-root-B btrfs
   expect_fs novadeck-var-B  ext4
   # Content-identical roots that SHARE an fsid make mounting B hand you A, and every slot test
-  # after that is meaningless. Same check, same reason, as images/verify-card.sh.
+  # after that is meaningless. Same check, same reason, as image/verify-card.sh.
   a="$(fsuuid "${DEV[novadeck-root-A]}")"; b="$(fsuuid "${DEV[novadeck-root-B]}")"
   { [ -n "$a" ] && [ "$a" != "$b" ]; } \
     && ok "root-A / root-B fsids differ (${a:0:8} vs ${b:0:8})" \
@@ -178,7 +178,7 @@ echo "  2. slot witness"
 # convention -- the witness records the slot "in the bootconf naming (A/B)" -- and asserts 'B' for
 # slot B. seed_var writes $SLOT, which is that same naming.
 #
-# THE CARD DISAGREES: images/verify-card.sh expects lowercase 'a', and passes, so a card's var-a
+# THE CARD DISAGREES: image/verify-card.sh expects lowercase 'a', and passes, so a card's var-a
 # really does carry 'a' while an install's var-A carries 'A'. Nothing reads this file at runtime --
 # it is a witness for diagnosis, and the two verifiers are its only readers -- so it costs nothing
 # today. It is still two artifacts answering the same question differently, which is the thing

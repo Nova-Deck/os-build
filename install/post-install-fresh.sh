@@ -111,7 +111,7 @@ log "fsid randomised, label set to novadeck-root-$SLOT"
 # The source is a TARBALL here, and that is what makes this the installer case: the OTA path passes
 # the RUNNING /var because there is a live system whose state describes the device, and here the
 # running system is the installer image, whose /var describes the INSTALLER. So the seed comes out
-# of the root that was just written -- images/assemble-rootfs.sh packs $varstage into it for exactly
+# of the root that was just written -- rootfs/assemble-rootfs.sh packs $varstage into it for exactly
 # this. Safe to mount now: step 1 re-randomised the fsid, so this cannot alias another disk's root.
 mkdir -p "$MNT" || die "cannot create $MNT"
 mount -o ro "$ROOT_DEV" "$MNT" || die "cannot mount the freshly written root to read its /var seed"

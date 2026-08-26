@@ -16,9 +16,9 @@
 # self-selects which packages actually need the slow build.
 #
 # That hash is computed by packages/inputhash.sh, NOT here, because it has a second job: it is
-# also what images/manifest.lock records for the `novadeck` rows (our builds are not
+# also what rootfs/manifest.lock records for the `novadeck` rows (our builds are not
 # bit-reproducible, so the lock pins the sources rather than the artifact bytes — see that script
-# and images/fetchlock.sh). Three readers, one formula.
+# and rootfs/fetchlock.sh). Three readers, one formula.
 #
 # Host-side (drives docker, like customize-base.sh). Network required: the PKGBUILD comes from
 # the GitLab raw endpoint and makepkg clones the actual sources from public GitHub/freedesktop.
@@ -111,8 +111,8 @@ for pin in "${PINS[@]}"; do
   # pin flows into the hash; anything makepkg fetches is downstream of these inputs.
   #
   # Delegated to packages/inputhash.sh rather than computed here, because this value is no longer
-  # only a local cache key: images/genmanifest.sh writes the same digest into manifest.lock as the
-  # `novadeck` rows' pin and images/fetchlock.sh re-derives it, so all three have to agree byte for
+  # only a local cache key: rootfs/genmanifest.sh writes the same digest into manifest.lock as the
+  # `novadeck` rows' pin and rootfs/fetchlock.sh re-derives it, so all three have to agree byte for
   # byte. That script also documents why it is deliberately path-independent — the formula that
   # used to be inlined here was not, which was harmless for a per-machine stamp and would have
   # quietly broken the lock across machines.

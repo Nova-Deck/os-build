@@ -3,22 +3,22 @@
 #
 #   install/genlock.sh [installer-rootfs-dir]        (default: work/installer-base)
 #
-# Peer of images/genmanifest.sh, which does the same job for the shipped image. Runs on the HOST
+# Peer of rootfs/genmanifest.sh, which does the same job for the shipped image. Runs on the HOST
 # against the already-bootstrapped tree — no container, no emulation: everything it needs is a file.
 # The output format is IDENTICAL (`name version arch source sha256`), which is what lets
-# images/fetchlock.sh materialize either lock with no idea which image it describes.
+# rootfs/fetchlock.sh materialize either lock with no idea which image it describes.
 #
 # WHY A SECOND LOCK RATHER THAN ONE COVERING BOTH IMAGES (decided 2026-08-24). The installer's set
 # is not a subset of the shipped one: gptfdisk, dosfstools, mtools and parted are in none of
-# images/manifest.lock's 399 rows, because none of them ships on a device. Folding them in would
+# rootfs/manifest.lock's 399 rows, because none of them ships on a device. Folding them in would
 # make the shipped image's reviewed artifact describe ~40 rows of content that image never carries,
 # and "the lock is green" would stop meaning "this is what is on the device". Two locks, each
 # describing exactly one image, one mechanism, one format.
 #
-# WHY THIS IS SMALLER THAN images/genmanifest.sh, rather than a flag on it. That script is bound to
+# WHY THIS IS SMALLER THAN rootfs/genmanifest.sh, rather than a flag on it. That script is bound to
 # the release image in three ways this one has no analogue for, and each would have become a
 # conditional in a file whose whole value is being reviewable:
-#   - it reads images/seal.list to reclassify the `stripped` rows. There is no seal here: the
+#   - it reads rootfs/conf/seal.list to reclassify the `stripped` rows. There is no seal here: the
 #     installer keeps its pacman, deliberately (see install/pkgs.list).
 #   - it refuses a `dev:1` base. install/mkroot.sh has no dev mode to refuse.
 #   - it walks packages/*/prebuilt.pin by auto-discovery, which is exactly the behaviour
@@ -27,18 +27,18 @@
 #     built rather than re-deriving the intent behind it.
 #
 # THREE PROVENANCE CLASSES, pinned by genuinely different mechanisms — the same three
-# images/manifest.lock uses, minus `stripped`:
+# rootfs/manifest.lock uses, minus `stripped`:
 #
 #   snapshot  installed from the pinned repo revision; hash = the .pkg.tar.zst we installed.
 #   novadeck  built from source by packages/build-overlay.sh; hash = packages/inputhash.sh over the
 #             package's COMMITTED SOURCES, NOT the built artifact. Our overlay builds are not
 #             bit-reproducible, so an artifact hash moves on every rebuild from identical inputs and
-#             only ever verifies on the machine that last relocked. See images/fetchlock.sh's header
+#             only ever verifies on the machine that last relocked. See rootfs/fetchlock.sh's header
 #             for the full reasoning; this lock inherits it unchanged, because it is the same
 #             work/repo/aarch64 and the same packages/*/source.pin behind both images.
 #   prebuilt  not pacman packages at all: the sha256-pinned tarballs/wheels install/mkroot.sh
 #             places by name. Carried so the lock covers the whole image, exactly as the shipped
-#             one does. images/fetchlock.sh skips them — they are placed, not installed.
+#             one does. rootfs/fetchlock.sh skips them — they are placed, not installed.
 #
 # Every installed package must be traceable to a file that can be hashed. A row with no file means
 # something reached the tree outside the install path, and this fails on it rather than recording a
@@ -94,7 +94,7 @@ index_dir() {
   done
 }
 # Cache first, overlay second, so the overlay OVERWRITES on collision — matching the repo ORDER in
-# images/pacman.conf, where the overlay sits ahead of the snapshot repos and order beats version.
+# rootfs/conf/pacman.conf, where the overlay sits ahead of the snapshot repos and order beats version.
 index_dir "$CACHE" snapshot
 index_dir "$OVERLAY_REPO" novadeck
 
@@ -137,7 +137,7 @@ for d in "$LOCALDB"/*/; do
   src="${entry%%	*}"; file="${entry#*	}"
   if [ "$src" = novadeck ]; then
     # Pinned by its sources, not its bytes (header). No fallback to the artifact sha: that would
-    # write a row images/fetchlock.sh reads with the other meaning.
+    # write a row rootfs/fetchlock.sh reads with the other meaning.
     sha="${PINHASH["$(basename "$file")"]:-}"
     [ -n "$sha" ] || {
       echo "$(basename "$file"): built into the overlay repo but no source pin claims it" >&2
@@ -180,7 +180,7 @@ BUILDER="$(grep -vE '^[[:space:]]*(#|$)' "$PINFILE" | tail -1)"
 # Regenerate with \`make relock-installer\` after any change to install/pkgs.list; review the diff.
 #
 # This describes the INSTALLER image (install/mkroot.sh), NOT the image that ships on a device —
-# that one is images/manifest.lock. The two are separate artifacts on purpose: the installer
+# that one is rootfs/manifest.lock. The two are separate artifacts on purpose: the installer
 # carries partition and filesystem tools that no device ever gets, and a single lock covering both
 # would stop meaning "this is what is on the device". See this generator's header.
 #

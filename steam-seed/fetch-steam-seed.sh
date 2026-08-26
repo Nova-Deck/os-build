@@ -5,7 +5,7 @@
 # Steam BOOTSTRAP client + the arm64 SR3 runtime named in steam-seed/STEAM_SEED.pin, then RUNS Steam's
 # own updater headless under arm64 qemu emulation (`steam -steamdeck -exitsteam`) so Steam self-installs
 # the WHOLE client tree from the CDN AT BUILD TIME and writes its `.installed` manifest. The finished
-# `.local/share/Steam` tree is staged into work/steam-seed/; images/make-sdcard.sh pre-seeds it DIRECTLY
+# `.local/share/Steam` tree is staged into work/steam-seed/; image/make-sdcard.sh pre-seeds it DIRECTLY
 # into the /home partition (a ready-to-run home, no first-boot copy and no network). See STEAM_SEED.pin.
 #
 # WHY run Steam instead of hand-unzipping packages: the seed used to bake a hand-picked SUBSET of the

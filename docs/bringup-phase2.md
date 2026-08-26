@@ -105,7 +105,7 @@ systemd unit. Native arm64 Steam lands in Phase 3 — Step 2 is the *compositor 
 the Steam client.
 
 ### Plumbing — the session layer of `fs-overlay/`
-A static, SoC-agnostic overlay mirror-copied into the rootfs by `images/assemble-rootfs.sh`
+A static, SoC-agnostic overlay mirror-copied into the rootfs by `rootfs/assemble-rootfs.sh`
 (this tree was the standalone `session/` before the trees were merged into `fs-overlay/`):
 
 | File | Role |
@@ -134,7 +134,7 @@ gamescope line to the smoke. Input (step 1d) reaches the hosted client.
 ## Step 3 — novadeck Qualcomm HW-support (layer C) [DONE]
 Port/replace `jupiter-hw-support` + `steamos-manager` affordances onto Qualcomm backings per the
 layer-C matrix in `.claude/plans/novadeck.plan.md`. Backings ship as a static, SoC-agnostic overlay
-under `fs-overlay/`, mirror-copied into the rootfs by `images/assemble-rootfs.sh`.
+under `fs-overlay/`, mirror-copied into the rootfs by `rootfs/assemble-rootfs.sh`.
 
 | Deck-UI affordance | Qualcomm backing | Notes |
 |---|---|---|

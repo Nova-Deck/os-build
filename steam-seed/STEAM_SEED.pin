@@ -2,7 +2,7 @@
 #
 # The native arm64 Steam BOOTSTRAP client + the arm64 SR3 runtime are fetched HERE, on the build host;
 # the fetcher then RUNS Steam's updater under arm64 qemu so Steam self-installs the COMPLETE client tree
-# from the CDN AT BUILD TIME and writes its `.installed` manifest. images/make-sdcard.sh pre-seeds that
+# from the CDN AT BUILD TIME and writes its `.installed` manifest. image/make-sdcard.sh pre-seeds that
 # finished tree DIRECTLY into the /home partition (a ready-to-run /home/deck/.local/share/Steam) so first
 # boot fetches nothing, copies nothing, and needs NO self-heal. This is critical: the OS side never has
 # network before Steam's OOBE owns Wi-Fi (an OS-side fetch would deadlock — see steam-must-be-baked-

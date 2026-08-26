@@ -3,7 +3,7 @@
 # Drives the whole Phase-1 pipeline — toolchain image, kernel, firmware, base
 # rootfs, read-only root, boot artifact, SD card / RAUC bundle — as one incremental
 # dependency graph so each stage rebuilds only when its inputs change. The individual
-# stage scripts under kernel/ firmware/ images/ boot/ stay the source of truth; this
+# stage scripts under kernel/ firmware/ rootfs/ image/ ota/ boot/ stay the source of truth; this
 # file only wires them together and pins WHERE each one runs (host vs container).
 #
 # Quick start:
@@ -59,7 +59,10 @@ OUT := out
 # one-line change. They name SOURCE directories only — build outputs stay under $(OUT), and
 # $(OUT)/images/ is deliberately NOT tied to any of them (release workflows and muscle memory
 # both depend on those artifact paths).
-TESTS_DIR := tests
+ROOTFS_DIR := rootfs
+IMAGE_DIR  := image
+OTA_DIR    := ota
+TESTS_DIR  := tests
 
 # work/ must be created by the HOST, and before anything else runs. Several stages that write
 # into it are root inside docker (the kernel build's modules_install, the base export), so on a
@@ -113,12 +116,12 @@ endif
 # RAUC_KEY only exist inside the ifdef above -- expanding this eagerly would bake in their values
 # from before that block ran.
 GENBUNDLE = $(DOCKER) $(PKI_MOUNT) -e RAUC_CERT="$(RAUC_CERT)" -e RAUC_KEY="$(RAUC_KEY)" $(BUILD_IMG) \
-	  images/genbundle.sh
+	  $(OTA_DIR)/genbundle.sh
 
 # Dev-only credential env, forwarded into the rootfs assembler (no-op unless NOVADECK_DEV=1).
 DEV_ENV := -e NOVADECK_DEV -e NOVADECK_WIFI -e NOVADECK_WIFI_SSID -e NOVADECK_WIFI_PSK -e NOVADECK_SSH_PUBKEY
 
-# Per-build identity, stamped into /etc/novadeck-release by images/assemble-rootfs.sh so a flashed
+# Per-build identity, stamped into /etc/novadeck-release by rootfs/assemble-rootfs.sh so a flashed
 # device can name the release it came from. NOVADECK_VERSION is set by CI from the release tag and
 # is empty for a local build, which assemble-rootfs.sh renders as `dev`. The git sha is resolved on
 # the HOST: /src is bind-mounted into the container, but git itself is not in the build image.
@@ -128,7 +131,7 @@ DEV_ENV := -e NOVADECK_DEV -e NOVADECK_WIFI -e NOVADECK_WIFI_SSID -e NOVADECK_WI
 # independently of what the image called itself. The OTA client compares the manifest's identity
 # against the device's /etc/novadeck-release to decide whether an update is available, so two
 # unrelated strings meant that comparison was meaningless — a device could be offered its own build
-# forever, or never be offered a real one. images/genbundle.sh now reads the identity back OUT of
+# forever, or never be offered a real one. ota/genbundle.sh now reads the identity back OUT of
 # the assembled image (out/images/rootfs.release) instead of being told, so the bundle cannot name
 # a version the bytes inside it do not carry, and `VERSION` is GONE rather than kept as a
 # cross-check: with $(VERSION_STAMP) below, a stale image cannot survive a version change, so a
@@ -165,7 +168,7 @@ VERSION_STAMP := work/.rootfs-version-$(if $(NOVADECK_VERSION),$(NOVADECK_VERSIO
 # image looking up-to-date: the assembler is skipped and you flash the PREVIOUS card, still
 # auto-joining, while believing you are testing the offline first boot. No error anywhere.
 #
-# DEV_WIFI mirrors the assembler's own decision (images/assemble-rootfs.sh, `dev_wifi`) and must
+# DEV_WIFI mirrors the assembler's own decision (rootfs/assemble-rootfs.sh, `dev_wifi`) and must
 # keep mirroring it: it is the EFFECTIVE outcome, not the knob. That distinction is the point —
 # forgetting to source dev.env.local is indistinguishable from asking for no Wi-Fi as far as the
 # image is concerned, so both must land on the same stamp. (NOVADECK_WIFI=1 with no creds is a hard
@@ -175,7 +178,7 @@ ROOTFS_MODE  := $(if $(filter 1,$(NOVADECK_DEV)),dev$(if $(DEV_WIFI),,-nowifi),r
 MODE_STAMP   := work/.rootfs-mode-$(ROOTFS_MODE)
 
 # The BASE tree is mode-dependent for the same reason and needs the same treatment: NOVADECK_DEV=1
-# adds DEV_PKGS (evtest, usbutils) to the bootstrap (images/customize-base.sh:176), so a dev base
+# adds DEV_PKGS (evtest, usbutils) to the bootstrap (rootfs/customize-base.sh:176), so a dev base
 # and a release base are DIFFERENT trees. Every $(BASE_STAMP) prerequisite is a file and none of them
 # encodes the mode, so without this a base built in one mode looks up-to-date to the other and make
 # never invokes customize-base.sh at all — its mode-aware reuse key (`dev:1`, line 306) is
@@ -240,7 +243,7 @@ OVERLAY_STAMP   := work/repo/$(OVERLAY_ARCH)/.overlay.stamp
 BASE_STAMP   := work/.base.stamp
 KERNEL       := $(OUT)/Image
 ROOTFS       := $(OUT)/images/rootfs.img
-# Sibling image the assembler emits alongside the root (see images/partition-table.txt):
+# Sibling image the assembler emits alongside the root (see image/partition-table.txt):
 # the writable state partition, which also carries the /etc overlay upper.
 VARIMG       := $(OUT)/images/var.img
 # Slot B's var, emitted by the same run. Identical but for /var/lib/novadeck/slot, which is the
@@ -266,18 +269,18 @@ SEED_ARTIFACT := out/steam-seed/steam-seed.tar.zst
 # it copies in wholesale). find recurses, so files added under fs-overlay/ are tracked
 # automatically — no per-file Makefile edits.
 #
-# images/seal.list + images/seal-rootfs.sh are assembler inputs too: the seal is the last thing
+# rootfs/conf/seal.list + rootfs/seal-rootfs.sh are assembler inputs too: the seal is the last thing
 # that touches the staged tree (Phase 4a step 3), so editing what gets stripped changes the image
 # exactly as editing fs-overlay/ does.
 #
-# images/guard-rootfs.sh is listed for the opposite reason -- it changes no bytes in the image, but
+# rootfs/guard-rootfs.sh is listed for the opposite reason -- it changes no bytes in the image, but
 # it decides whether one is produced at all (Phase 4a step 4). A tightened assertion has to re-run
 # against the tree it was tightened for, not wait for the next unrelated fs-overlay edit.
-# images/manifest.lock is one of its inputs (it asserts the tree still matches the lock) and is
+# rootfs/manifest.lock is one of its inputs (it asserts the tree still matches the lock) and is
 # already a $(BASE_STAMP) prerequisite, which reaches the rootfs transitively.
 #
-ASSEMBLE_SRC := $(shell find images/assemble-rootfs.sh images/seal-rootfs.sh images/seal.list \
-                              images/guard-rootfs.sh fs-overlay -type f 2>/dev/null)
+ASSEMBLE_SRC := $(shell find $(ROOTFS_DIR)/assemble-rootfs.sh $(ROOTFS_DIR)/seal-rootfs.sh $(ROOTFS_DIR)/conf/seal.list \
+                              $(ROOTFS_DIR)/guard-rootfs.sh fs-overlay -type f 2>/dev/null)
 
 # Decky plugin frontend (decky/novadeck-control) — TypeScript compiled to dist/index.js in a
 # digest-pinned node container (the ONLY npm use in the build; the lockfile is committed, npm ci
@@ -380,7 +383,7 @@ sdcard:    $(SDCARD)       ## Build the flashable SD-card image (in container)
 # staged tree (it runs before mkfs), so nothing else checks the GPT, the ESP, or the per-slot
 # filesystem identities an A/B switch depends on. Unprivileged: no loop mounts, no root.
 verify-card: $(SDCARD) | $(BUILD_STAMP) ## Verify the built A/B card image (in container)
-	$(INBUILD) images/verify-card.sh
+	$(INBUILD) $(IMAGE_DIR)/verify-card.sh
 
 # The two offline suites over the A/B boot logic. Neither needs a build, a container, root or a
 # device — they are pure shell over temp-dir state — so there is no reason not to run them, and
@@ -388,7 +391,7 @@ verify-card: $(SDCARD) | $(BUILD_STAMP) ## Verify the built A/B card image (in c
 # offline coverage at all, and a broken one reached hardware and aborted a real install.
 #
 # HOST-SIDE ON PURPOSE, unlike everything else here. All three scripts execute the shipped artifacts
-# (images/initramfs/init, fs-overlay/usr/bin/novadeck-bootctl and fs-overlay/usr/lib/rauc/
+# (image/initramfs/init, fs-overlay/usr/bin/novadeck-bootctl and fs-overlay/usr/lib/rauc/
 # post-install.sh) against a sandbox; putting them in the container would test the same files
 # through an extra layer that can only add failure modes.
 #
@@ -397,12 +400,12 @@ verify-card: $(SDCARD) | $(BUILD_STAMP) ## Verify the built A/B card image (in c
 # while reformatting a partition. None of them needs root — the hook suite stubs the commands that
 # would touch real storage.
 # A second's worth of committed-file arithmetic, and the reason it is a PREREQUISITE of `test`
-# rather than a step inside images/fetchlock.sh: fetchlock makes the same comparison but needs a
+# rather than a step inside rootfs/fetchlock.sh: fetchlock makes the same comparison but needs a
 # populated work/repo plus the ~382 snapshot packages it verifies alongside, so on a clean machine
 # nothing runs it until the overlay pipeline's retrieval job — hours of aarch64 compiles after the
 # wrong row was pushed. Hanging it off `test` is what puts it on every push and every PR: the ci
 # workflow runs `make test`, and it triggers on paths overlay.yml deliberately ignores, so a commit
-# touching ONLY images/manifest.lock is still checked.
+# touching ONLY rootfs/manifest.lock is still checked.
 verify-lock: ## Check the lock's novadeck rows against packages/ (host, seconds, no build)
 	bash packages/verify-lock-rows.sh
 
@@ -432,7 +435,7 @@ test: verify-lock ## Run the offline bootctl/post-install/pairingd/quirks/stage-
 
 # The fourth suite, separate because it is the one that CANNOT run on the host: it signs real
 # bundles and verifies them through the shipped system.conf, so it needs rauc. Every case in it is
-# a negative — it feeds images/rauc/verify-signing.sh a deliberately broken config or cert profile
+# a negative — it feeds ota/rauc/verify-signing.sh a deliberately broken config or cert profile
 # and requires it to go red — because the failure mode of a check is not "it breaks", it is "it
 # stays green while asserting nothing".
 #
@@ -509,7 +512,7 @@ $(STEAM_SEED): steam-seed/STEAM_SEED.pin steam-seed/fetch-steam-seed.sh | steam-
 	@touch $@
 
 # The same tree, PACKED, because the installer medium has to carry it. A card seeds /home from the
-# directory directly (mkfs.ext4 -d, images/lib-homestage.sh); the medium builds /home on someone
+# directory directly (mkfs.ext4 -d, image/lib-homestage.sh); the medium builds /home on someone
 # else's disk months later, so the tree travels with it. install/mkimage.sh stages this file into
 # the root and writes its sha256 beside it as the pin the spine checks.
 #
@@ -567,13 +570,13 @@ $(OVERLAY_STAMP): $(OVERLAY_DB)
 # no files to the root, but it is the pacman that lays them down). snapshot.pin selects the
 # package-repo revision every row is installed from.
 #
-# images/manifest.lock is the strongest input: under the default LOCKED mode customize-base.sh
+# rootfs/manifest.lock is the strongest input: under the default LOCKED mode customize-base.sh
 # installs exactly the package FILES it declares (Phase 4a step 2), so editing the lock changes
-# the tree. images/fetchlock.sh is listed for the same reason build scripts generally are -- it
-# is what turns the lock into that install. images/pacman.conf and images/os-release are the
+# the tree. rootfs/fetchlock.sh is listed for the same reason build scripts generally are -- it
+# is what turns the lock into that install. rootfs/conf/pacman.conf and rootfs/conf/os-release are the
 # two committed declarations the bootstrap stages into the container: the repo set the root is
 # resolved from, and the root's own identity.
-# images/customize-base.sh is listed LAST but matters most: it is the script that turns all of
+# rootfs/customize-base.sh is listed LAST but matters most: it is the script that turns all of
 # the above into a tree, so editing it changes the tree. Its absence here meant a fix to the
 # bootstrap was silently a no-op -- make saw the stamp as satisfied and never invoked it. (Cost a
 # build cycle on 2026-07-26: a `make sdcard` after a script fix rebuilt nothing.) The script also
@@ -588,10 +591,10 @@ $(OVERLAY_STAMP): $(OVERLAY_DB)
 # place. customize-base.sh records `dev:1` in its own reuse key for a dev bootstrap, so the built
 # tree states its own mode: assert that against the mode we asked for. This guards BOTH directions,
 # which nothing downstream does -- guard-rootfs.sh only ever runs on a release build.
-$(BASE_STAMP): base-devel.digest snapshot.pin images/manifest.lock images/fetchlock.sh \
-               images/pacman.conf images/os-release images/customize-base.sh $(PREBUILT_PINS) \
+$(BASE_STAMP): base-devel.digest snapshot.pin $(ROOTFS_DIR)/manifest.lock $(ROOTFS_DIR)/fetchlock.sh \
+               $(ROOTFS_DIR)/conf/pacman.conf $(ROOTFS_DIR)/conf/os-release $(ROOTFS_DIR)/customize-base.sh $(PREBUILT_PINS) \
                $(BASE_MODE_STAMP)
-	images/customize-base.sh
+	$(ROOTFS_DIR)/customize-base.sh
 	@test -f work/base/usr/bin/sshd   # sentinel: sshd present => release runtime laid down
 	@: "sentinel: the pairing agent's interpreter and key validator. Both arrive as transitive"; \
 	 : "dependencies of other packages, so a dependency change elsewhere could remove them and"; \
@@ -644,7 +647,7 @@ $(KERNEL): $(KERNEL_SRC_HASH) $(FW_LINUX) $(FW_QCOM) | $(BUILD_STAMP)
 	$(DOCKER) $(if $(BASE_CONFIG),-e BASE_CONFIG=/src/$(BASE_CONFIG)) \
 	  $(BUILD_IMG) kernel/build.sh
 
-# Regenerate images/manifest.lock (Phase 4a). Deliberately NOT a dependency of the image build:
+# Regenerate rootfs/manifest.lock (Phase 4a). Deliberately NOT a dependency of the image build:
 # the lock is a reviewed artifact, so it is regenerated on purpose and its diff is read, never
 # refreshed as a silent build side effect.
 #
@@ -667,11 +670,11 @@ $(KERNEL): $(KERNEL_SRC_HASH) $(FW_LINUX) $(FW_QCOM) | $(BUILD_STAMP)
 # resolve would satisfy mesa/gamescope/sddm from the snapshot instead of from our patched builds
 # — locking upstream binaries under a `snapshot` class. That is a silently WRONG lock, which is
 # worse than a failed one, so declare the overlay directly.
-relock: $(if $(OVERLAY_PINS),$(OVERLAY_STAMP)) ## Re-resolve from PKGS and regenerate images/manifest.lock (host; release only)
-	NOVADECK_DEV= NOVADECK_RESOLVE=1 FORCE=1 images/customize-base.sh
-	images/genmanifest.sh
+relock: $(if $(OVERLAY_PINS),$(OVERLAY_STAMP)) ## Re-resolve from PKGS and regenerate rootfs/manifest.lock (host; release only)
+	NOVADECK_DEV= NOVADECK_RESOLVE=1 FORCE=1 $(ROOTFS_DIR)/customize-base.sh
+	$(ROOTFS_DIR)/genmanifest.sh
 	rm -f $(BASE_STAMP) work/.base-mode-*   # the tree left behind is a RESOLVE tree: claim no mode for it
-	@echo "review the diff, commit it, then rebuild: git diff images/manifest.lock"
+	@echo "review the diff, commit it, then rebuild: git diff $(ROOTFS_DIR)/manifest.lock"
 
 # ==============================================================================
 # Installer image (host docker + qemu) — the standalone medium that installs to internal storage
@@ -679,13 +682,13 @@ relock: $(if $(OVERLAY_PINS),$(OVERLAY_STAMP)) ## Re-resolve from PKGS and regen
 # Phase 6 of .claude/plans/internal-install.plan.md. A SEPARATE root from the shipped one, with its
 # own package declaration (install/pkgs.list) and its own lock (install/manifest.lock): the
 # installer carries partition and filesystem tools that no device ever gets, so folding them into
-# images/manifest.lock would make the shipped image's reviewed artifact describe content that image
+# rootfs/manifest.lock would make the shipped image's reviewed artifact describe content that image
 # never contains. install/genlock.sh's header carries the full reasoning.
 #
 # install/mkroot.sh self-caches on its own input key (packages, pins, snapshot, builder, and a hash
 # over every file it places), so an unchanged tree costs the key check and nothing else. That is why
 # these are phony rather than file targets — the script owns the reuse decision, exactly as
-# images/customize-base.sh does for the shipped base.
+# rootfs/customize-base.sh does for the shipped base.
 # $(KERNEL) IS A REAL PREREQUISITE, not decoration: mkroot.sh ships the kernel's MODULES into the
 # installer root (the 802.11 stack is =m, so firmware with no driver is indistinguishable from no
 # firmware) and reads them out of out/modroot, which the kernel build produces. Without this line
@@ -751,7 +754,7 @@ $(VERSION_STAMP):
 # construction. No cycle: the initramfs is built from work/base, never from the assembled root.
 $(ROOTFS): $(KERNEL) $(INITRAMFS) $(STEAMCL) $(GRUB) $(BASE_STAMP) $(FW_LINUX) $(FW_QCOM) $(STEAM_SEED) $(ASSEMBLE_SRC) $(DECKY_DIST) $(MESA_X86_STAMP) $(MODE_STAMP) $(VERSION_STAMP) | $(BUILD_STAMP)
 	$(DOCKER) $(DEV_ENV) $(ID_ENV) -e NOVADECK_DEBUG $(BUILD_IMG) \
-	  images/assemble-rootfs.sh /src/work/base
+	  $(ROOTFS_DIR)/assemble-rootfs.sh /src/work/base
 
 # Host docker (its own pinned x86 Arch image, NOT $(BUILD_IMG)): the one artifact in this build
 # that targets the x86 FEX guest rather than the arm64 host. build.sh self-caches on an input
@@ -777,8 +780,8 @@ decky-plugin: $(DECKY_DIST) ## Build the novadeck-control Decky plugin frontend 
 # ==============================================================================
 # The initramfs mounts the slot's root + var + efi partition, stacks the /etc overlay, and
 # switch_roots. It is staged out of the base rootfs (bash + util-linux), so the base is a prereq.
-$(INITRAMFS): images/mkinitramfs.sh images/initramfs/init $(BASE_STAMP) | $(BUILD_STAMP)
-	$(INBUILD) images/mkinitramfs.sh /src/work/base
+$(INITRAMFS): $(IMAGE_DIR)/mkinitramfs.sh $(IMAGE_DIR)/initramfs/init $(BASE_STAMP) | $(BUILD_STAMP)
+	$(INBUILD) $(IMAGE_DIR)/mkinitramfs.sh /src/work/base
 
 # Stage-1 steamcl + the steamos-bootconf binary the OS side installs (boot/steamcl.sh, pinned
 # source). Independent of the kernel: it is bootloader software, not a payload.
@@ -787,17 +790,17 @@ $(STEAMCL): boot/steamcl.sh boot/steamos-efi.pin | $(BUILD_STAMP)
 
 # Stage-2 GRUB + the two per-slot grub.cfg files + grubenv. The patch set and the board catalog are
 # prerequisites because both change the artifact: a new patch changes grubaa64.efi, and a new
-# board row changes the configs generated beside it. images/partition-table.txt is in there for
+# board row changes the configs generated beside it. image/partition-table.txt is in there for
 # the same reason -- the configs address partitions by index out of that file.
 #
 # THE CO-PRODUCTS ARE NOT SEPARATE TARGETS, here or in the steamcl rule above, and the cost is worth
 # knowing: make only stats grubaa64.efi, so deleting a co-product on its own does NOT retrigger this
-# rule. It fails at the consumer instead -- images/assemble-rootfs.sh and images/make-sdcard.sh both
+# rule. It fails at the consumer instead -- rootfs/assemble-rootfs.sh and image/make-sdcard.sh both
 # check each file by name and name this script in the error. Loud, and one recipe run rather than
 # four. Giving grubenv its own rule would mean either running boot/grub.sh twice or minting the
 # block outside it, which is the second writer that shipping it as an artifact exists to remove.
 $(GRUB): boot/grub.sh boot/gen-grub-cfg.sh boot/grub.pin boot/boards.map \
-         images/partition-table.txt $(wildcard boot/patches/grub/*.patch) | $(BUILD_STAMP)
+         $(IMAGE_DIR)/partition-table.txt $(wildcard boot/patches/grub/*.patch) | $(BUILD_STAMP)
 	$(INBUILD) boot/grub.sh
 
 # var.img and var-b.img are co-products of the same assembler run as rootfs.img.
@@ -810,8 +813,8 @@ $(VARIMG_B): $(ROOTFS)
 # slot B for a dev card and leaves it empty for a release card, and an unforwarded NOVADECK_DEV
 # would build every card release-shaped. No mode stamp is needed on top: $(ROOTFS) already depends
 # on $(MODE_STAMP), so flipping the mode rebuilds the rootfs and this rule with it.
-$(SDCARD): $(ROOTFS) $(VARIMG) $(VARIMG_B) $(STEAMCL) $(GRUB) $(STEAM_SEED) images/make-sdcard.sh | $(BUILD_STAMP)
-	$(DOCKER) -e NOVADECK_DEV -e NOVADECK_SLOT_B $(BUILD_IMG) images/make-sdcard.sh
+$(SDCARD): $(ROOTFS) $(VARIMG) $(VARIMG_B) $(STEAMCL) $(GRUB) $(STEAM_SEED) $(IMAGE_DIR)/make-sdcard.sh | $(BUILD_STAMP)
+	$(DOCKER) -e NOVADECK_DEV -e NOVADECK_SLOT_B $(BUILD_IMG) $(IMAGE_DIR)/make-sdcard.sh
 
 # Signed RAUC OTA bundle (Phase 4). Dev builds mint an ephemeral cert. For a real signature use
 # PKIDIR=~/novadeck-pki (mounts the PKI at /pki and points RAUC_CERT/RAUC_KEY at it), or set
@@ -860,7 +863,7 @@ sign-bundle: | $(BUILD_STAMP) ## Sign a RAUC bundle around an EXISTING out/image
 # tested. Pass the file you actually installed on a device.
 publish-bundle: ## Publish BUNDLE=<file.raucb> to the OTA server (host; needs NOVADECK_OTA_SSH_KEY)
 	@test -n "$(BUNDLE)" || { echo "pass BUNDLE=out/images/novadeck-<version>.raucb" >&2; exit 2; }
-	ota/publish-bundle.sh "$(BUNDLE)" $(CHANNEL)
+	$(OTA_DIR)/publish-bundle.sh "$(BUNDLE)" $(CHANNEL)
 
 
 # ==============================================================================
@@ -907,11 +910,11 @@ clean-overlay: ## Remove the built (arch-scoped) overlay pacman repo + build tre
 #   rm -rf work/prebuilt work/pacman-cache work/mesa-x86 && make clean-overlay
 #
 # work/repo is the newest member and the one with real history. It used to go via clean-overlay,
-# and because images/manifest.lock then pinned the overlay's ARTIFACT bytes — which our
+# and because rootfs/manifest.lock then pinned the overlay's ARTIFACT bytes — which our
 # non-reproducible builds move on every rebuild from identical inputs — `make distclean && make
 # sdcard` could not succeed on its own: it stopped at work/.base.stamp on a hash mismatch and
 # needed a full `make relock` to get going again. The lock now pins those rows to their SOURCES
-# (packages/inputhash.sh, read by images/fetchlock.sh), so a rebuild is no longer a lock change
+# (packages/inputhash.sh, read by rootfs/fetchlock.sh), so a rebuild is no longer a lock change
 # and that hard stop is gone. Keeping the repo is now purely about not re-paying for it: rebuilding
 # all ~10 packages under qemu is the single most expensive thing in this build, and fex-emu alone
 # dominates it. `make clean-overlay` is still there when you actually want them rebuilt.

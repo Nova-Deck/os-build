@@ -105,7 +105,7 @@ pristine tarball plus the three patches, in the build container, with no warning
 
 Generation is a separate script from the build because it needs no toolchain — which is what lets
 `tests/test-stage2-grub.sh` generate the real artifact and assert on it instead of skipping when
-`out/boot` is empty. It reads `boot/boards.map` and `images/partition-table.txt`.
+`out/boot` is empty. It reads `boot/boards.map` and `image/partition-table.txt`.
 
 **Partitions are found by index, not by filesystem label.** Stage 2 was chainloaded off this slot's
 efi partition, so `$root` is that partition and everything else is on the same disk:
@@ -206,7 +206,7 @@ else. `mark-good` then cleared it (`boot-count` 1 → 2), closing the loop. The 
 just before the menu paints, so on a normal 3s boot it is easy to miss; absence of the message is
 not absence of the increment.
 
-## Card layout (`images/make-sdcard.sh`)
+## Card layout (`image/make-sdcard.sh`)
 
 * **ESP (p1)** — `/EFI/BOOT/{bootaa64.efi, steamcl-version, steamcl-restricted, fonts/default.pf2}`,
   `/EFI/steamos/grubenv` (the saved board choice; on the ESP so it survives a slot switch and an
@@ -318,7 +318,7 @@ primary path was dead. See the commit; the test now executes the pattern rather 
   `get-state self` reads `good`.
 
 Two things worth knowing before the next bundle. The RAUC keyring is the committed
-`images/rauc/novadeck-ca.pem` in **dev builds too**, so a bundle for a card built from this tree
+`ota/rauc/novadeck-ca.pem` in **dev builds too**, so a bundle for a card built from this tree
 must be signed with `PKIDIR=~/novadeck-pki`; `genbundle.sh`'s ephemeral cert is self-signed and the
 card rejects it. And verifying a bundle by hand needs `check-purpose=codesign` — `rauc info`
 defaults to the smimesign purpose and fails with "unsuitable certificate purpose", which is a

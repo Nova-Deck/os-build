@@ -53,7 +53,7 @@
 set -euo pipefail
 
 # TEST SEAM, as before: the offline suite executes this file and stubs these. BOOTINFO is the
-# initramfs handoff (written by images/initramfs/init on every boot, including degraded ones) that
+# initramfs handoff (written by image/initramfs/init on every boot, including degraded ones) that
 # mark-good uses to tell "a slot boot" from a "cmdline-fallback boot". SESSION_MARKER is the ready
 # marker the health service waits on; its default is exactly the path novadeck-boot-good.path
 # watches. BC is the bootconf binary; on a device it is /usr/bin/steamos-bootconf (holo-bootconf

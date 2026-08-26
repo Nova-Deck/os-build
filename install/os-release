@@ -1,10 +1,10 @@
 # novadeck INSTALLER /etc/os-release (Phase 6).
 #
-# Installed as /etc/os-release by install/mkroot.sh, the way images/os-release is installed by
-# images/customize-base.sh — see that file for why a from-packages bootstrap has to own this
+# Installed as /etc/os-release by install/mkroot.sh, the way rootfs/conf/os-release is installed by
+# rootfs/customize-base.sh — see that file for why a from-packages bootstrap has to own this
 # rather than inherit the vendor's.
 #
-# WHY A SECOND FILE RATHER THAN REUSING images/os-release. The two images are not the same
+# WHY A SECOND FILE RATHER THAN REUSING rootfs/conf/os-release. The two images are not the same
 # product and the difference has to be legible from inside a running system. `ID=novadeck` is what
 # the shipped image answers, and the install spine's own rules key off "is this disk ours" — so an
 # installer that also answered `novadeck` would be a device claiming to be an install of the thing

@@ -11,7 +11,7 @@ One directory here is neither: `mesa-x86/` carries no pin of either kind (so
 Turnip payload for the FEX guest rootfs** — a plain file tree, not a pacman package — from
 the same source pin + patch list as `mesa/`, in its own pinned x86 Arch container. See
 `mesa-x86/builder.pin` for the why and the pin pairing with `fex-rootfs/prebuilt.pin`;
-`images/assemble-rootfs.sh` stages its output and injects the overlayfs mount that lays it
+`rootfs/assemble-rootfs.sh` stages its output and injects the overlayfs mount that lays it
 over the guest image.
 
 ## Precompiled external packages (`prebuilt.pin`)
@@ -34,7 +34,7 @@ deps: libiio                       # optional: holo-repo runtime deps (space-sep
 copies the artifact verbatim **to** `dest`, which is then the full destination *file* path — for
 artifacts that aren't archives at all, such as the FEX guest rootfs image.
 
-`images/customize-base.sh` auto-discovers every `prebuilt.pin`, fetches + sha256-verifies
+`rootfs/customize-base.sh` auto-discovers every `prebuilt.pin`, fetches + sha256-verifies
 it on the host, and extracts it into the release base — **adding a package is just a new
 pin file, no code change**. Any `deps:` a pin declares are pacman-installed into the base
 alongside the prebuilt (e.g. shared libraries the binary links), so a prebuilt's runtime
@@ -121,7 +121,7 @@ about the code that actually executes guest x86.
 **Why these flags live in each `PKGBUILD` and not a shared toolchain file.**
 `packages/inputhash.sh` hashes exactly three things per package — `source.pin`, its declared patches,
 and the local `PKGBUILD`. A shared flags file would be **invisible** to it: changing the flags would
-move the artifact bytes while leaving the inputhash unchanged, so `images/manifest.lock` would keep
+move the artifact bytes while leaving the inputhash unchanged, so `rootfs/manifest.lock` would keep
 asserting the same provenance for different bytes, and — worse — `build-overlay.sh` would consider
 every package up to date and never rebuild any of them, so the flag change would silently not happen
 at all. Putting the flags in the `PKGBUILD` keeps them inside the hashed input set, so a flag change
@@ -198,8 +198,8 @@ that one formula, and they have to agree byte for byte:
 | reader | what it does with it |
 |---|---|
 | `build-overlay.sh` | incremental-rebuild cache key (`work/repo/<arch>/.stamps/<name>.hash`) |
-| `images/genmanifest.sh` | writes it into `images/manifest.lock` as the `novadeck` rows' hash |
-| `images/fetchlock.sh` | re-derives it and refuses the install when the lock disagrees |
+| `rootfs/genmanifest.sh` | writes it into `rootfs/manifest.lock` as the `novadeck` rows' hash |
+| `rootfs/fetchlock.sh` | re-derives it and refuses the install when the lock disagrees |
 | `packages/verify-lock-rows.sh` | the same comparison from committed files only, so it can run **before** a build (`make verify-lock`) |
 
 So the lock pins these rows to their **sources**, not to the built artifact's bytes — these builds

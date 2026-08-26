@@ -69,13 +69,13 @@ LIBGPT="${NOVADECK_LIB_GPT:-}"
 if [ -z "$LIBGPT" ]; then
   for c in "$(cd "$(dirname "$0")" && pwd)/lib-gpt.sh" \
            /usr/lib/novadeck/install/lib-gpt.sh \
-           "$(cd "$(dirname "$0")" && pwd)/../images/lib-gpt.sh"; do
+           "$(cd "$(dirname "$0")" && pwd)/../image/lib-gpt.sh"; do
     [ -r "$c" ] && { LIBGPT="$c"; break; }
   done
 fi
 [ -n "$LIBGPT" ] && [ -r "$LIBGPT" ] || die "cannot find lib-gpt.sh (set NOVADECK_LIB_GPT)"
 # Sourced AFTER die() exists, so its refusals carry this script's prefix.
-# shellcheck source=../images/lib-gpt.sh
+# shellcheck source=../image/lib-gpt.sh
 . "$LIBGPT"
 
 # --- which disk is the running system on? ---------------------------------------------------------

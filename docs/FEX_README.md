@@ -2,7 +2,7 @@
 
 The config lives in the unified overlay payload (`fs-overlay/usr/share/fex-emu/`,
 `fs-overlay/usr/lib/novadeck/game-launch`), copied wholesale into the rootfs by
-`images/assemble-rootfs.sh`. JSON has no comment syntax, so the rationale lives here.
+`rootfs/assemble-rootfs.sh`. JSON has no comment syntax, so the rationale lives here.
 
 ## The two x86 paths are independent
 
@@ -126,7 +126,7 @@ option and must export the variable. The override stays useful to us as a debugg
 at an alternate tree to exercise a rebuilt guest without a reflash.
 
 Our pinned `ArchLinux.ero` already satisfies pressure-vessel's graphics-provider contract in full,
-so no new guest has to be built. `images/assemble-rootfs.sh` surfaces it as **two** fstab rows: the
+so no new guest has to be built. `rootfs/assemble-rootfs.sh` surfaces it as **two** fstab rows: the
 `.ero` loop-mounted read-only as a lower layer at `/run/novadeck/guestos-lower`, and an overlay at
 the probed path laying our `packages/mesa-x86` Turnip payload over it. Both `nofail`. The merged
 tree is what every x86 consumer reads — the compat tool probes it, and the system FEX `RootFS`
@@ -164,7 +164,7 @@ outright if Steam ever selects the tool.
 ### The manifest gate
 
 The manifest now lives inside a 2 GiB pinned artifact that is not in the tree, so it cannot be
-checked by reading committed files. `images/assemble-rootfs.sh` reads it out of the image at build
+checked by reading committed files. `rootfs/assemble-rootfs.sh` reads it out of the image at build
 time instead — `dump.erofs --cat --path=/graphics_provider.json`, parsed, with both architectures
 required (FEX emulates x86-64 *and* i386; dropping i386 silently breaks every 32-bit title). A
 rootfs bump to an image without a manifest would otherwise surface as a card that boots fine and

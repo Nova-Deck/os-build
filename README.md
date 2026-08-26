@@ -197,7 +197,9 @@ creds, an SSH key and the dev package set baked in.
 
 | Path | Purpose |
 |---|---|
-| `images/` | Image assembly (A/B layout, Btrfs, RAUC bundles) |
+| `rootfs/` | What is inside a root: the package closure (`manifest.lock`), the bootstrap that lays it down, and the seal/trim/guard trio |
+| `image/` | Turning a root into partitions: the A/B layout, the initramfs, the card assembler and its verifier |
+| `tests/` | Every offline suite — `make test`, plus the container-only signing and disk suites |
 | `packages/` | From-source overlay: PKGBUILDs + source pins for what we patch or version-bump, plus the builder that turns them into a local pacman repo |
 | `kernel/` | Unified kernel: config fragments, patches, all device trees, firmware embed list |
 | `firmware/` | Vendor firmware fetch/verify recipes + their pins |
@@ -206,7 +208,7 @@ creds, an SSH key and the dev package set baked in.
 | `boot/` | Two-stage UEFI boot: steamcl (stage 1) + GRUB (stage 2), both built from pinned sources |
 | `decky/` | `novadeck-control` — the first-party Decky plugin (per-game tweaks, power, fan curve) |
 | `install/` | Internal-storage install: the read-only board probe, partition carve, and its offline suites |
-| `ota/` | Update-server side: publish script + the nginx/CI-user setup for the OTA host |
+| `ota/` | Getting an image onto a device already in the field: signed RAUC bundles, the publishers, and the nginx/CI-user setup for the OTA host |
 | `ci/` | Signing-CA generator + notes for `.github/workflows/` |
 | `build/` | `Dockerfile` for the cross-compile image |
 

@@ -1,7 +1,7 @@
 """Small read-only system facts for the plugin header."""
 from pathlib import Path
 
-# Written by images/assemble-rootfs.sh. KEY=VALUE lines, NOT a bare version string — reading
+# Written by rootfs/assemble-rootfs.sh. KEY=VALUE lines, NOT a bare version string — reading
 # the file whole put the entire build stamp in the plugin's header (HW-observed 2026-08-09).
 OS_VERSION_PATH = Path("/etc/novadeck-release")
 OS_RELEASE_PATH = Path("/etc/os-release")

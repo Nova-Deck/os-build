@@ -1,7 +1,7 @@
 # fs-overlay — the unified rootfs overlay payload
 
 Every SoC-agnostic file that novadeck lays over the base rootfs lives here, in **one tree that
-mirrors the target filesystem exactly**. `images/assemble-rootfs.sh` injects it with a single
+mirrors the target filesystem exactly**. `rootfs/assemble-rootfs.sh` injects it with a single
 `cp -a fs-overlay/. "$stage/"` (release path, step 4b). The tree carries final paths, executable
 bits (tracked in git), and the systemd presets + `*.target.wants` symlinks that enable each
 service — so the assembler generates and `chmod`s nothing. Ownership is normalized to `root:root`
@@ -60,7 +60,7 @@ package + guest rootfs (auto-registered with binfmt_misc). See `docs/FEX_README.
 `jupiter-initial-firmware-update` — SteamUI shells to these past the Wi-Fi/timezone screens), and
 `50-novadeck-timezone.rules` (the one polkit grant stock polkit still prompts for). The Steam client
 SEED itself is build machinery, not rootfs content — it lives in `../steam-seed/` and is pre-seeded
-into `/home` at image build time (`images/make-sdcard.sh`). See `docs/bringup-phase3.md`.
+into `/home` at image build time (`image/make-sdcard.sh`). See `docs/bringup-phase3.md`.
 
 **System hygiene — identity, memory, and the `/var` shape**
 Four files that are not a subsystem but are load-bearing for the immutable A/B model, because on
@@ -70,9 +70,9 @@ this image `/etc/passwd` and `/var` are *build products* rather than device stat
   `systemd-sysusers` would otherwise allocate by counting down from 999. Adding one package with a
   sysusers entry shifts every id below it, and the RAUC post-install hook copies `/var` wholesale
   across an update, so drifting ids reassign the ownership of persisted state. **This file is also
-  read by `images/customize-base.sh`**, which stages it into the target root *before* the pacman
+  read by `rootfs/customize-base.sh`**, which stages it into the target root *before* the pacman
   transaction — the pin only works if it is there when the sysusers hook runs. Its sha is in the
-  base reuse key, and `images/guard-rootfs.sh` assertion 8 checks the built tree against it. There
+  base reuse key, and `rootfs/guard-rootfs.sh` assertion 8 checks the built tree against it. There
   is no end-of-line comment syntax in sysusers.d; a trailing `#` silently rejects the line.
 - `usr/lib/tmpfiles.d/novadeck-var.conf` — declares the `/var` hierarchy in the ROOT. A fresh flash
   gets `/var` from the build; an *updated* slot gets the previous version's `/var`, so a directory a

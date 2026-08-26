@@ -9,7 +9,7 @@
 #   fs-overlay/usr/lib/novadeck/devices/*.conf   the identity the RUNNING system reports
 #
 # and then boot/gen-grub-cfg.sh turns the first into a grub.cfg whose per-slot cmdline has to match
-# images/partition-table.txt. A mismatch anywhere is a board that cannot be selected, a menu entry
+# image/partition-table.txt. A mismatch anywhere is a board that cannot be selected, a menu entry
 # that boots the wrong DTB, or a slot that mounts the other slot's /var.
 #
 #   tests/test-stage2-grub.sh
@@ -22,7 +22,7 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEVICES="$ROOT/fs-overlay/usr/lib/novadeck/devices"
 BOARDS="$ROOT/boot/boards.map"
-TABLE="$ROOT/images/partition-table.txt"
+TABLE="$ROOT/image/partition-table.txt"
 DTS="$ROOT/kernel/dts/qcom"
 GEN="$ROOT/boot/gen-grub-cfg.sh"
 

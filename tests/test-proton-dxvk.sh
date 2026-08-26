@@ -24,7 +24,7 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ASSEMBLE="$ROOT/images/assemble-rootfs.sh"
+ASSEMBLE="$ROOT/rootfs/assemble-rootfs.sh"
 
 PASS=0; FAIL=0
 ok()  { printf '  ok   %s\n' "$1"; PASS=$((PASS + 1)); }

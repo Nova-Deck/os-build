@@ -1,7 +1,7 @@
 # novadeck HW-access ACLs — grant the gamescope session (deck user, member of `wheel`)
 # write access to the sysfs knobs SteamUI's Quick Access drives. The root is read-only, so
 # these can't be chmod'd at build time on a live device; a udev rule re-applies them each
-# time the device appears (deck is in wheel, see images/customize-base.sh) — covers CPU/GPU
+# time the device appears (deck is in wheel, see rootfs/customize-base.sh) — covers CPU/GPU
 # perf sliders AND the panel-backlight brightness.
 #
 # Backlight is the one that unblocks the QuickAccess brightness slider: gamescope runs as the

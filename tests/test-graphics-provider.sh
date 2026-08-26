@@ -3,7 +3,7 @@
 #
 #   tests/test-graphics-provider.sh
 #
-# WHY THIS EXISTS. The fstab rows injected by images/assemble-rootfs.sh carry `nofail` on
+# WHY THIS EXISTS. The fstab rows injected by rootfs/assemble-rootfs.sh carry `nofail` on
 # purpose: a missing or unmountable x86 guest must cost native x86 Linux games, never a boot. That
 # is the right runtime behaviour and the wrong failure mode to leave unguarded -- it means every
 # way this can break breaks QUIETLY, on a device with no serial console.
@@ -32,7 +32,7 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ASSEMBLE="$ROOT/images/assemble-rootfs.sh"
+ASSEMBLE="$ROOT/rootfs/assemble-rootfs.sh"
 PIN="$ROOT/packages/fex-rootfs/prebuilt.pin"
 BUILDER_PIN="$ROOT/packages/mesa-x86/builder.pin"
 BUILD_SH="$ROOT/packages/mesa-x86/build.sh"

@@ -102,7 +102,7 @@ repoint `commandline` at an in-tool `novadeck-proton` shim, which exec'd
 too, and per-game tuning arrives the way it does for every other tool: Steam launch options,
 written by novadeck-control, evaluated on the host.
 
-`images/assemble-rootfs.sh` now touches only `compatibilitytool.vdf`, where it rewrites the tool to
+`rootfs/assemble-rootfs.sh` now touches only `compatibilitytool.vdf`, where it rewrites the tool to
 a **stable, version-free internal name** (`proton-cachyos-arm64`) and a friendly `display_name` —
 because Steam records the internal name, not the directory, against every game the tool is forced
 on, so leaving upstream's dated build string would unpin every game on a Proton bump. It still

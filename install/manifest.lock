@@ -2,7 +2,7 @@
 # Regenerate with `make relock-installer` after any change to install/pkgs.list; review the diff.
 #
 # This describes the INSTALLER image (install/mkroot.sh), NOT the image that ships on a device —
-# that one is images/manifest.lock. The two are separate artifacts on purpose: the installer
+# that one is rootfs/manifest.lock. The two are separate artifacts on purpose: the installer
 # carries partition and filesystem tools that no device ever gets, and a single lock covering both
 # would stop meaning "this is what is on the device". See this generator's header.
 #

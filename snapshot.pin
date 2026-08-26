@@ -14,10 +14,10 @@
 # The unsuffixed path is byte-identical to .3 and will follow .4 when it lands. So the repo
 # we build against was moving under us. It never bit us because all three revisions publish
 # an identical 4560-package set (byte-identical sorted name-version lists over core+extra)
-# — but equal versions do not prove equal package FILES, which is what images/manifest.lock
+# — but equal versions do not prove equal package FILES, which is what rootfs/manifest.lock
 # records a per-package sha256 for.
 #
 # Pin = last non-comment, non-blank line: a repo base URL ending in an EXPLICIT .N revision.
-# images/customize-base.sh appends /$repo/os/$arch and refuses an unsuffixed (alias) URL.
+# rootfs/customize-base.sh appends /$repo/os/$arch and refuses an unsuffixed (alias) URL.
 # Bumping is deliberate: change this line, `make relock`, review the manifest diff.
 https://holo-packages.steamos.cloud/holo-core-aarch64-preview/mash-20251118.3

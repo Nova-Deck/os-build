@@ -38,7 +38,7 @@ dead card. That is a setting, not a fault.
 
 ## The disk it all operates on
 
-<!-- AUTO-GENERATED from images/partition-table.txt — regenerate with /ecc:update-docs -->
+<!-- AUTO-GENERATED from image/partition-table.txt — regenerate with /ecc:update-docs -->
 
 | # | Partition | Size | FS | Label |
 |---|---|---|---|---|
@@ -53,8 +53,8 @@ dead card. That is a setting, not a fault.
 
 <!-- END AUTO-GENERATED -->
 
-`images/partition-table.txt` is the single source of truth for sizes, typecodes and labels;
-`images/genpart.sh` emits the `sgdisk` script from it. Three facts drive most of what follows:
+`image/partition-table.txt` is the single source of truth for sizes, typecodes and labels;
+`image/genpart.sh` emits the `sgdisk` script from it. Three facts drive most of what follows:
 
 - **The shared ESP carries the bootconf, not a kernel.** SteamOS/conf/{A,B}.conf on the ESP decide
   which image boots and how many failed attempts it is allowed; the stage-1 steamcl (as
@@ -130,7 +130,7 @@ with the native arm64 Steam client. Each `efi-*` partition carries that slot's s
   of an already-compressed root, surviving release compression whole — it was ~4 of the ~9 GiB a
   card compressed to until 2026-08-04, for a failover window that closes the first time RAUC writes
   the slot. Empty, a card compresses to ~5 GiB instead. Omitting the conf is what keeps steamcl from
-  offering the empty slot as a boot candidate; see the seeding site in `images/make-sdcard.sh` for
+  offering the empty slot as a boot candidate; see the seeding site in `image/make-sdcard.sh` for
   the `SUPERMAX_BOOT_FAILURES` path it closes. The first update writes B in full and creates its
   conf.
 

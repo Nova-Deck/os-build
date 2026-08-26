@@ -150,7 +150,7 @@ log "disarmed slot $target for the duration of the install (re-armed at the end)
 btrfstune -f -U "$(cat /proc/sys/kernel/random/uuid)" "$dev_root" >/dev/null \
   || die "btrfstune could not re-randomise the fsid of $dev_root"
 
-# The LABEL is the other identity the byte copy got wrong. images/assemble-rootfs.sh bakes
+# The LABEL is the other identity the byte copy got wrong. rootfs/assemble-rootfs.sh bakes
 # novadeck-root-A into the image, RAUC writes that image verbatim to whichever slot it targets,
 # and nothing else corrects it -- so without this, both partitions answer to novadeck-root-A.
 # Stage 2 normally addresses the root by partition index, so this is not what makes the slot boot;

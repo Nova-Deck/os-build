@@ -30,7 +30,7 @@ PERF_DIR="$ROOT/fs-overlay/usr/lib/novadeck"
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 
 # Importing novadeck_perf makes CPython write a __pycache__ NEXT TO THE SOURCE — inside
-# fs-overlay/, which images/assemble-rootfs.sh copies into the rootfs verbatim. Redirect the
+# fs-overlay/, which rootfs/assemble-rootfs.sh copies into the rootfs verbatim. Redirect the
 # bytecode into the sandbox so merely running the tests cannot dirty the tree. (The assembler
 # prunes it and guard-rootfs.sh asserts on it; this is the near end of the same problem.)
 export PYTHONPYCACHEPREFIX="$TMP/pycache"

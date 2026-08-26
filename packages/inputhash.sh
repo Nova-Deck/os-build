@@ -11,8 +11,8 @@
 # SIX CALLERS, ONE FORMULA, and they have to agree or the build breaks in confusing ways:
 #
 #   packages/build-overlay.sh   incremental-rebuild cache key (work/repo/<arch>/.stamps/<n>.hash)
-#   images/genmanifest.sh       writes it into images/manifest.lock as the `novadeck` rows' pin
-#   images/fetchlock.sh         re-derives it and refuses the install when the lock disagrees
+#   rootfs/genmanifest.sh       writes it into rootfs/manifest.lock as the `novadeck` rows' pin
+#   rootfs/fetchlock.sh         re-derives it and refuses the install when the lock disagrees
 #   packages/verify-lock-rows.sh  the same comparison as fetchlock but from COMMITTED FILES ONLY,
 #                               so it runs in a second before any build rather than after one
 #   packages/build-overlay.sh   the per-package rebuild stamp, work/repo/<arch>/.stamps/<name>.hash

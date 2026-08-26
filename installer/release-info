@@ -1,0 +1,190 @@
+#!/usr/bin/env python3
+# novadeck internal install — WHICH RELEASE THIS MEDIUM INSTALLS. Phase 6 of
+# .claude/plans/internal-install.plan.md, and the last unanswered question in §4b.
+#
+#   release-info          resolve <OTA_URL>/<channel>/latest.json and print key=value
+#
+# IT EMITS key=value AND NO PROSE, exactly as installer/netcfg and the consent gate's facts file do:
+# the words belong to whatever is drawing the screen, the facts belong here. installer/uiflow turns
+# STATE= into a sentence; a terminal caller reads the same line. Like netcfg it always exits 0 --
+# a failure is itself an answer, and STATE is where the answer lives.
+#
+# WHY THIS IS NOT PART OF netcfg. The medium carries no OS bundle -- it carries the Steam tree /home
+# is built from, and nothing else -- so between "the network is up" and "here is what will happen to
+# your disk" something has to ask the server what there is to install. netcfg answers whether the HOST answers;
+# this answers what it SERVES. That split is load-bearing rather than tidy: netcfg deliberately
+# ignores HTTP status, because a server that replies 404 is a server the installer can reach
+# (measured on a Pocket S2, 2026-08-22, when the OTA root's own 404 was being read as an unreachable
+# host) -- and a 404 on <channel>/latest.json is precisely the state THIS file has to name.
+#
+# THE MANIFEST IS NOT A TRUST BOUNDARY. latest.json says which bundle to fetch and nothing more; it
+# cannot select a keyring, a verification mode or an install flag, and the bundle it names still has
+# to verify against the baked CA before a single partition is touched. Every field in it is
+# attacker-controlled, and the validation below is fs-overlay/usr/bin/novadeck-update's, ported: the
+# `bundle` field is forced to a BARE FILENAME so a manifest can never aim this device at another
+# host. tests/test-ui.sh asserts the two agree, both on the default URL literal and on the shapes
+# they reject; that assertion is the only thing keeping the copies together.
+#
+# THE SEED IS NOT HERE AT ALL, and it never comes over the network: the medium CARRIES the Steam
+# tree /home is built from (installer/mkimage.sh stages it, and the spine checks it against the sha256
+# staged beside it). This file used to derive a download URL for it from that pin. Bundling it
+# deleted the publisher, the workflow, the pin handed between CI jobs and 1.7 GB of tmpfs consumed
+# while rauc streams the bundle -- and cost nothing, because a medium is bound to exactly one seed
+# either way. So the only thing left to resolve is the bundle.
+
+import json
+import os
+import subprocess
+import sys
+import urllib.parse
+
+PROG = os.path.basename(sys.argv[0])
+
+
+def log(msg):
+    print("[%s] %s" % (PROG, msg), file=sys.stderr)
+
+
+def emit(key, value):
+    print("%s=%s" % (key, value))
+
+
+# Test seams, in the spirit of the rest of installer/: tests/test-ui.sh executes THIS file with curl
+# stubbed and every path redirected. What runs under test is the artifact that ships.
+CONFIG_FILE = os.environ.get("NOVADECK_OTA_CONFIG", "/etc/novadeck/ota.conf")
+CURL = os.environ.get("NOVADECK_CURL", "curl")
+TIMEOUT = os.environ.get("NOVADECK_NET_TIMEOUT", "20")
+# The server this medium fetches from, resolved exactly as novadeck-update resolves it: the
+# environment, then OTA_URL/OTA_CHANNEL in /etc/novadeck/ota.conf, then these built-in defaults. The
+# literals are written a third time here because the other two are Python and shell in files that do
+# not ship together; tests/test-ui.sh asserts all three agree.
+DEFAULT_URL = "https://updates.novadeck.cloud-ip.cc"
+DEFAULT_CHANNEL = "stable"
+
+
+def read_env_file(path):
+    """Parse a KEY=VALUE file. Not a shell: no expansion, no substitution, no execution."""
+    values = {}
+    try:
+        with open(path, "r") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                values[key.strip()] = value.strip().strip('"').strip("'")
+    except OSError:
+        pass
+    return values
+
+
+def config():
+    conf = read_env_file(CONFIG_FILE)
+    url = os.environ.get("NOVADECK_OTA_URL") or conf.get("OTA_URL") or DEFAULT_URL
+    channel = os.environ.get("NOVADECK_OTA_CHANNEL") or conf.get("OTA_CHANNEL") or DEFAULT_CHANNEL
+    return url.rstrip("/"), channel
+
+
+def fetch(url):
+    """(rc, bytes) for a small document. `-f` ON PURPOSE, unlike netcfg's reachability probe: here
+    the HTTP status IS the question, and curl's 22 for a 4xx is what separates "this channel has no
+    release" from "this network cannot reach the server"."""
+    try:
+        result = subprocess.run(
+            [CURL, "-fsSL", "--max-time", str(TIMEOUT), url],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        )
+    except OSError as exc:
+        log("cannot run %s: %s" % (CURL, exc))
+        return 127, b""
+    return result.returncode, result.stdout
+
+
+def manifest(raw):
+    """
+    (release, complaint) -- the validated manifest, or why it is unusable.
+
+    novadeck-update's manifest() with its download logic removed. Every check here is one of that
+    file's, and for the same reason: left unchecked, `bundle` is a redirect primitive -- "../../x",
+    "http://elsewhere/x" and "/etc/passwd" all become part of a URL this medium then fetches and
+    hands to rauc. The signature would still reject whatever came back, but a manifest must not be
+    able to aim the installer at another host at all.
+    """
+    try:
+        data = json.loads(raw)
+    except ValueError as exc:
+        return None, "the release manifest is not valid JSON (%s)" % exc
+    if not isinstance(data, dict):
+        return None, "the release manifest is not an object"
+
+    bundle = str(data.get("bundle", ""))
+    parsed = urllib.parse.urlparse(bundle)
+    if (
+        not bundle
+        or parsed.scheme
+        or parsed.netloc
+        or "/" in bundle
+        or "\\" in bundle
+        or bundle.startswith(".")
+    ):
+        return None, "the release manifest names an unusable bundle %r (must be a bare filename)" % bundle
+
+    try:
+        size = int(data.get("size", 0))
+    except (TypeError, ValueError):
+        size = 0
+    if size <= 0:
+        return None, "the release manifest gives no usable size"
+
+    version = str(data.get("version", ""))
+    build = str(data.get("build", ""))
+    if not version and not build:
+        return None, "the release manifest carries no version to name the release by"
+
+    return {"version": version, "build": build, "bundle": bundle, "size": size}, ""
+
+
+def gib(n):
+    return "%.1f" % (n / float(1 << 30))
+
+
+def main():
+    base, channel = config()
+
+    url = "%s/%s/latest.json" % (base, channel)
+    emit("URL", url)
+    emit("CHANNEL", channel)
+    rc, raw = fetch(url)
+    if rc == 22:
+        emit("STATE", "no-release")
+        emit("DETAIL", "the update server has nothing published in the '%s' channel" % channel)
+        return 0
+    if rc != 0:
+        emit("STATE", "unreachable")
+        emit("DETAIL", "the update server did not answer (curl exit %d)" % rc)
+        return 0
+
+    release, complaint = manifest(raw)
+    if release is None:
+        emit("STATE", "malformed")
+        emit("DETAIL", complaint)
+        return 0
+
+    emit("STATE", "ok")
+    emit("VERSION", release["version"])
+    if release["build"]:
+        emit("BUILD", release["build"])
+    emit("SIZE", release["size"])
+    emit("BUNDLE", "%s/%s/%s" % (base, channel, urllib.parse.quote(release["bundle"])))
+    # ONE LINE, AND IT NAMES THE HOST. This is what the pre-flight screen puts under "To install",
+    # and the alternative -- the bundle URL itself -- is long enough to wrap twice on a panel that
+    # has already overflowed once (HW 2026-08-25). The host is the part an operator needs: it is
+    # the one thing about this install they may have repointed ([[devices-are-operator-reachable]]).
+    emit("DETAIL", "NovaDeck %s, %s GiB from %s"
+         % (release["version"] or release["build"], gib(release["size"]),
+            urllib.parse.urlparse(base).netloc or base))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

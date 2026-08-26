@@ -36,7 +36,7 @@
 # [[abl-internal-efi-path-works]] already said. p1 stays ef00 here because this image has no
 # user-facing files on its ESP and there is nothing to gain by changing it; the INSTALLER
 # medium does have them, and types its boot partition 0700 so a person can see it on Windows
-# or macOS to write wifi.conf (install/medium-table.txt).
+# or macOS to write wifi.conf (installer/medium-table.txt).
 #
 # The ESP carries GPT bit 63 ("no-auto") for the same reason home does: that GUID would make
 # systemd's gpt-auto generator auto-mount it at /efi, and /efi is the name the initramfs

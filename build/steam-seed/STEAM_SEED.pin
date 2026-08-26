@@ -1,0 +1,46 @@
+# novadeck Steam seed pin — what build/steam-seed/fetch-steam-seed.sh stages for the /home pre-seed.
+#
+# The native arm64 Steam BOOTSTRAP client + the arm64 SR3 runtime are fetched HERE, on the build host;
+# the fetcher then RUNS Steam's updater under arm64 qemu so Steam self-installs the COMPLETE client tree
+# from the CDN AT BUILD TIME and writes its `.installed` manifest. image/make-sdcard.sh pre-seeds that
+# finished tree DIRECTLY into the /home partition (a ready-to-run /home/deck/.local/share/Steam) so first
+# boot fetches nothing, copies nothing, and needs NO self-heal. This is critical: the OS side never has
+# network before Steam's OOBE owns Wi-Fi (an OS-side fetch would deadlock — see steam-must-be-baked-
+# offline), and once the seed tracks the exact live build, Steam no longer self-updates to complete a
+# partial tree. Shipping a genuinely-installed tree (real `.installed`) is what removes that dependency.
+#
+# Neither the client build nor the runtime snapshot is pinned to a fixed version here: both channels
+# are live rolling pointers, and every run resolves whatever Valve publishes NOW. The fetcher resolves
+# runtime_channel to a CONCRETE snapshot id (a `<channel>.txt` GET) instead of downloading through the
+# floating alias directory, so the exact runtime that got baked is logged and — critically — compared
+# against the staged tree on the next run. Without that, a runtime bump that lands WITHOUT a client
+# build bump would slip past the restage check and leave a stale runtime in the seed forever.
+# Override the resolution with STEAM_RUNTIME_SNAPSHOT=<id> to pin one build reproducibly.
+#
+# channel:         Steam client channel (an arm64 line — NOT the x86 default). THIS IS COUPLED TO THE
+#                  LAUNCH FLAG in novadeck-steam, and the coupling is enforced by the client, not by us:
+#                  it OWNS `package/beta` and repoints it to match the flag it was started with.
+#                  `-steamdeck` tracks steamdeck_publicbeta (what we launch, so what we pin);
+#                  `-deckard` tracks a gated arm64 line named by a branch-key hash.
+#
+#                  A DISAGREEMENT IS EXPENSIVE IN BOTH DIRECTIONS, both measured 2026-08-19:
+#                    pin ahead of flag — the client rewrote the marker mid-fetch, and every name derived
+#                      from the channel (the .manifest we compare, the .installed we gate on) then pointed
+#                      at a build that was never staged. A successful install read as a failed one.
+#                    flag ahead of pin — booting a deckard-channel seed with -steamdeck made the client
+#                      repoint to steamdeck_stable and pull a ~631MB update on the device, downgrading the
+#                      baked build and defeating the whole point of the offline bake.
+#                  So change these two together or not at all. The post-install gate in
+#                  fetch-steam-seed.sh prints the channel the client actually ended on, for when they drift.
+#
+#                  WHY NOT the gated -deckard line, which serves a newer build (1787104891 vs publicbeta's
+#                  1787097529): that client asserts Steam Frame identity, which strips the guided tour's
+#                  button handlers and leaves a fresh card stuck on an undismissable welcome screen. See
+#                  the flag comment in fs-overlay/usr/bin/novadeck-steam. Its hash is also a GATED BETA
+#                  BRANCH key rather than a build id, so Valve can rotate it out from under us.
+# runtime_base:    steamrt3 image root; `<base>/<snapshot>/steam-runtime-steamrt-arm64.tar.xz` is the
+#                  arm64 runtime tarball the native client links against.
+# runtime_channel: rolling pointer under runtime_base; `<base>/<channel>.txt` holds the snapshot id.
+channel: steamdeck_publicbeta
+runtime_base: https://repo.steampowered.com/steamrt3c/images
+runtime_channel: latest-public-beta

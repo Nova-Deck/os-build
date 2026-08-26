@@ -17,7 +17,7 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SELECT="$ROOT/install/select-target.sh"
+SELECT="$ROOT/installer/select-target.sh"
 CAPTURES="$ROOT/docs/internal-storage.md"
 
 PASS=0; FAIL=0; SKIP=0; CASE=""
@@ -382,7 +382,7 @@ printf '%s\n' "$out" | grep -q "cannot determine which disk" \
 [ -z "$(field "$out" TARGET)" ] \
   && ok "with no TARGET emitted for a caller to act on" \
   || bad "it emitted a target anyway: $out"
-# The same must hold for an explicit target, which is the path install/hw-install.sh drives.
+# The same must hold for an explicit target, which is the path installer/hw-install.sh drives.
 out=$(PATH="$T/bin:$PATH" NOVADECK_SELECT_FIXTURE= bash "$SELECT" "$T/running.img" 2>&1); rc=$?
 [ "$rc" != 0 ] && ok "an explicit target is refused too -- naming a disk does not answer the question" \
                || bad "an explicit target bypassed the refusal: $out"

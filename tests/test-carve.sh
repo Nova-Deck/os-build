@@ -21,7 +21,7 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CARVE="$ROOT/install/carve.sh"
+CARVE="$ROOT/installer/carve.sh"
 CAPTURES="$ROOT/docs/internal-storage.md"
 
 PASS=0; FAIL=0; SKIP=0; CASE=""
@@ -29,7 +29,7 @@ ok()   { PASS=$((PASS+1)); printf '  ok   %s -- %s\n' "$CASE" "$1"; }
 bad()  { FAIL=$((FAIL+1)); printf '  FAIL %s -- %s\n' "$CASE" "$1"; }
 skip() { SKIP=$((SKIP+1)); printf '  skip %s -- %s\n' "$CASE" "$1"; }
 
-for f in "$CARVE" "$CAPTURES" "$ROOT/install/select-target.sh" "$ROOT/image/genpart.sh"; do
+for f in "$CARVE" "$CAPTURES" "$ROOT/installer/select-target.sh" "$ROOT/image/genpart.sh"; do
   [ -e "$f" ] || { echo "missing input: $f" >&2; exit 1; }
 done
 command -v sgdisk >/dev/null 2>&1 || {

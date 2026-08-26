@@ -14,7 +14,7 @@
 
 ## What happened, so nobody re-derives it
 
-The recorded decision — "call `steamenv_init`, keep plain `linux`" (now in `DONE.md`) — was reasoned
+The recorded decision — "call `steamenv_init`, keep plain `linux`" (now in `docs/worklog/DONE.md`) — was reasoned
 entirely from reading Valve's source. It was HW-tested 2026-08-02 on a fresh card and failed twice
 over:
 

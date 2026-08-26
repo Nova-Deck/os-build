@@ -150,7 +150,7 @@ patches: 0001-foo.patch 0002-bar.patch          # applied -p1 in the source root
 `make overlay` (→ `packages/build-overlay.sh`) fetches the PKGBUILD from the monorepo raw endpoint
 at the pinned commit (anonymous read; the PKGBUILD pulls the upstream source from public GitHub),
 applies the patches, bumps `pkgrel`, and `makepkg`s it inside the pinned `base-devel` image
-(`base-devel.digest`) under arm64 qemu. Output is a local pacman repo at **`work/repo/<arch>/`** —
+(`build/base-devel.digest`) under arm64 qemu. Output is a local pacman repo at **`work/repo/<arch>/`** —
 **arch-scoped**, since one aarch64 build serves every aarch64 SoC (NOT per-device). `customize-base.sh`
 adds it as a `file://` repo **ahead of the holo repos** so the patched package wins (`pacman -S`
 resolves by repo order, not version — the higher `pkgrel` only matters for later upgrades), and

@@ -201,7 +201,7 @@ jobs:
       - uses: actions/cache@v6
         with:
           path: work/pacman-cache
-          key: pacman-cache-${{ hashFiles('snapshot.pin', 'rootfs/manifest.lock') }}
+          key: pacman-cache-${{ hashFiles('build/snapshot.pin', 'rootfs/manifest.lock') }}
           restore-keys: pacman-cache-
 
       # The x86 Turnip payload for the FEX guest, built natively in the mesa-x86 job above. The
@@ -257,7 +257,7 @@ jobs:
             # The recovery medium. No signing key of any kind: like a card, it is flashed over USB
             # by someone holding the device, so there is no signature for anything to verify. It
             # CARRIES the Steam tree /home is built from, so `make installer` fetches and packs that
-            # first (steam-seed/pack-seed.sh) and mkimage stages it with its sha256 beside it; then
+            # first (build/steam-seed/pack-seed.sh) and mkimage stages it with its sha256 beside it; then
             # it bootstraps the installer root — a separate package set and lock from the shipped
             # image — and lays the two-partition medium.
             make installer
@@ -305,10 +305,10 @@ jobs:
       # and writes to a card with balenaEtcher or Raspberry Pi Imager. It is ~600 MiB rather than the
       # card's ~5 GiB, so the compression time the card's note measures barely registers here.
       #
-      # AND THE IDENTITY SIDECAR, which install/mkimage.sh writes from the same values it stamped
+      # AND THE IDENTITY SIDECAR, which installer/mkimage.sh writes from the same values it stamped
       # inside the image. The publish job names the R2 prefix from the release tag, but a person
       # holding the downloaded file needs the build to be nameable without opening a squashfs out of
-      # the middle of a GPT — and install/verify-image.sh asserts the two are byte-identical.
+      # the middle of a GPT — and installer/verify-image.sh asserts the two are byte-identical.
       - name: compress the installer medium
         if: inputs.artifact == 'installer'
         run: |

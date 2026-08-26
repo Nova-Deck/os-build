@@ -1,5 +1,5 @@
 # Decky Loader — the plugin host that gives SteamUI features an in-UI surface (Quick Access
-# Menu tab). First consumer: the novadeck-control plugin (decky/novadeck-control), the UI for
+# Menu tab). First consumer: the novadeck-control plugin (apps/decky/novadeck-control), the UI for
 # /etc/novadeck/game-tweaks.json and the power profiles — settings that until now were
 # ssh-edit-a-json-file only.
 #

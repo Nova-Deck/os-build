@@ -1,0 +1,152 @@
+#!/bin/sh
+# novadeck internal install — the installer's SESSION: gamescope on the panel with installer/ui as
+# its only client. Phase 5 of .claude/plans/internal-install.plan.md.
+#
+#   installer-session          (started by novadeck-installer.service)
+#
+# THIS IS NOT novadeck-session. That one is the main image's Steam shell: it runs inside SDDM's
+# logind session as the `deck` user, and it uses gamescope's --steam/-R model where the client is
+# gamescope's SIBLING so SteamUI can drive the limiter, brightness and the colour pipeline over the
+# stats channel. None of that applies here. There is no Steam, no user, no logind session and
+# nothing to hand a control channel to, so this is the plain shape:
+#
+#     seatd-launch -- gamescope --backend drm -W .. -H .. -r .. --prefer-output .. -- installer/ui
+#
+# WHICH IS THE SHAPE BRING-UP ALREADY VALIDATED ON HARDWARE. docs/bringup-phase2.md gate 1b:
+# gamescope AS ROOT via seatd-launch, no logind session and no display manager at all, opening
+# /dev/dri/card0 with the panel at its native mode and scanning out on the first modeset commit;
+# gate 1c is a Vulkan client rendering upright under it. The installer's situation is that one,
+# not the main image's -- which is why the installer needs no SDDM: SDDM is a login manager, its
+# greeter is never even started here, and what it contributes to the main image (an ACTIVE seat0
+# logind session so stock polkit's allow_active authorizes Wi-Fi) is meaningless for a tool that
+# runs as root.
+#
+# libseat has NO `builtin` backend in the libseat we ship -- that is precisely why seatd-launch is
+# here rather than LIBSEAT_BACKEND=builtin. Do not spend a hardware slot rediscovering that.
+#
+# NO --use-rotation-shader. Our patched gamescope carries upstream PR #2228 composite rotation and
+# auto-engages it off the DRM connector's panel orientation, so the flag the plan mentions is from
+# the ROCKNIX-patch era and no longer exists. The logical canvas stays landscape; -W/-H below are
+# the panel's portrait native mode swapped, exactly as novadeck-session derives them.
+#
+# NO PLYMOUTH anywhere near this: plymouthd holds DRM master and starves gamescope of it. The
+# installer boots to a black panel for a few seconds instead, deliberately.
+set -eu
+
+PROG=${0##*/}
+log() { printf '[%s] %s\n' "$PROG" "$*" >&2; }
+die() { log "ERROR: $*"; exit 1; }
+
+SELFDIR=$(cd "$(dirname "$0")" && pwd)
+# Every one of these is a test seam as well as an override point; tests/test-ui.sh drives this
+# file with all of them redirected into a sandbox, exactly as test-update.sh drives novadeck-update.
+DEVICE_ENV=${NOVADECK_DEVICE_ENV:-/usr/lib/novadeck/device-env}
+GAMESCOPE=${NOVADECK_GAMESCOPE:-gamescope}
+SEATD_LAUNCH=${NOVADECK_SEATD_LAUNCH:-seatd-launch}
+SEATD_SOCKET=${NOVADECK_SEATD_SOCK:-/run/seatd.sock}
+SEATD_PGREP=${NOVADECK_SEATD_PGREP:-pgrep}
+UI=${NOVADECK_UI:-$SELFDIR/ui}
+DRYRUN=${NOVADECK_INSTALLER_DRYRUN:-0}
+XDG_DIR=${NOVADECK_XDG_RUNTIME_DIR:-/run/novadeck/xdg}
+
+[ -x "$UI" ] || die "no installer UI at $UI"
+
+# --- XDG_RUNTIME_DIR, which nothing else here provides ---------------------------------------------
+# HW-FOUND 2026-08-24, first boot of the installer medium on a Pocket S2: gamescope came all the way
+# up -- seat taken from seatd, DRM master on /dev/dri/card0, Turnip on an Adreno 750, DSI-1 selected
+# at 1440x2560 -- and then died with
+#
+#   wlserver: [wayland] error: XDG_RUNTIME_DIR is invalid or not set in the environment   (x128)
+#   wlserver: Unable to open wayland socket: No such file or directory
+#   gamescope: wlr_backend_finish: Assertion `wl_list_empty(...)` failed.  -> SIGABRT, core dumped
+#
+# libwayland refuses to create its socket without this variable, and NOTHING sets it for a system
+# service: it is logind that makes /run/user/<uid> and exports it, and this session deliberately has
+# no logind session at all (that is the whole point of the seatd path below).
+#
+# WHY IT PASSED ON THE PANEL IN AUGUST AND FAILED AT BOOT. The 2026-08-22 Pocket S2 run drove this
+# same script BY HAND over SSH, where logind had created /run/user/0 for the root login and exported
+# the variable -- so the one difference between that run and this one was invisible in the command.
+# It is the same trap the unit already carries a warning about for TTYPath=: **a system service is
+# NOT an interactive SSH run**, and anything the shell gave you for free has to be provided here.
+#
+# NOT /run/user/0: that path is logind`s namespace, and fabricating it would collide the day
+# anything on this image starts a real session. A directory of our own under /run costs nothing and
+# says what it is. 0700 because the Wayland socket lives in it.
+mkdir -p "$XDG_DIR" || die "cannot create $XDG_DIR -- gamescope cannot open a wayland socket without it"
+chmod 0700 "$XDG_DIR"
+export XDG_RUNTIME_DIR="$XDG_DIR"
+
+# --- the panel, from the device registry ---------------------------------------------------------
+# device-env is the runtime source of truth for per-board facts (it resolves the devicetree model to
+# a profile). A board it does not recognise yields nothing and we fall back to generic landscape --
+# an installer that refuses to draw because a conf is missing is worse than one drawing 1920x1080.
+if [ -x "$DEVICE_ENV" ]; then
+    eval "$("$DEVICE_ENV" 2>/dev/null || true)"
+else
+    log "no device-env at $DEVICE_ENV -- falling back to a generic landscape output"
+fi
+
+if [ -n "${NOVADECK_PANEL_NATIVE_WIDTH:-}" ] && [ -n "${NOVADECK_PANEL_NATIVE_HEIGHT:-}" ]; then
+    # Swap portrait native -> landscape logical. The composite-rotation patch keeps gamescope's
+    # logical output landscape and rotates only the final scanout store.
+    GS_W=$NOVADECK_PANEL_NATIVE_HEIGHT
+    GS_H=$NOVADECK_PANEL_NATIVE_WIDTH
+else
+    GS_W=1920
+    GS_H=1080
+fi
+_rr=${NOVADECK_PANEL_REFRESH_RATES:-}
+GS_R=${_rr%%,*}
+[ -n "$GS_R" ] || GS_R=60
+
+set -- --backend drm -W "$GS_W" -H "$GS_H" -r "$GS_R"
+if [ -n "${NOVADECK_PRIMARY_CONNECTOR:-}" ]; then
+    set -- "$@" --prefer-output "$NOVADECK_PRIMARY_CONNECTOR"
+fi
+
+# --- the seat -------------------------------------------------------------------------------------
+# seatd-launch LEAKS ITS SOCKET on an unclean exit, and the next start then dies with "Socket file
+# found ... refusing to start". docs/bringup-phase2.md paid for that once on the main image; an
+# installer is a tool people re-run after a crash, so it would bite here every time. Clear a stale
+# socket -- but ONLY when no seatd is actually listening on it, because removing a live one would
+# break a running session.
+if [ -e "$SEATD_SOCKET" ] && ! $SEATD_PGREP -x seatd >/dev/null 2>&1; then
+    log "clearing a stale $SEATD_SOCKET left by an earlier run"
+    rm -f "$SEATD_SOCKET"
+fi
+
+
+
+# THE SEAT DECISION IS MADE BEFORE THE DRY RUN PRINTS, so a dry run cannot advertise a command
+# that differs from the one that would execute. It did, briefly, and the suite caught it.
+#
+# A SEATD THAT IS ALREADY RUNNING IS USED, NOT DUPLICATED. seatd-launch starts its own seatd and
+# refuses outright when the socket exists ("Socket file found ... refusing to start"), and the
+# shipped image enables seatd.service -- measured on a Pocket S2, 2026-08-22, pid 710 with
+# /run/seatd.sock root:seat 0770. Whether the installer image enables it too is Phase 6's choice,
+# and this file should not care: if a seat daemon is there, take the seat from it; if not, launch
+# one. Forcing LIBSEAT_BACKEND is safe HERE precisely because there is no logind session to prefer
+# -- the opposite of novadeck-session, where forcing it broke polkit's allow_active.
+#
+# The UI is gamescope's OWN CHILD (`--`), not a sibling: when it exits, gamescope exits, and the
+# unit's ExecStopPost gets to collect the log. That is also the model bring-up validated.
+# `-e`, not `-S`, matching the stale-socket check above: liveness is established by the pgrep, and
+# the two tests must agree or one path can think the socket is there while the other does not.
+if $SEATD_PGREP -x seatd >/dev/null 2>&1 && [ -e "$SEATD_SOCKET" ]; then
+    log "using the seatd already running on $SEATD_SOCKET"
+    export SEATD_SOCK="$SEATD_SOCKET" LIBSEAT_BACKEND=seatd
+    set -- "$GAMESCOPE" "$@" -- "$UI"
+else
+    set -- "$SEATD_LAUNCH" -- "$GAMESCOPE" "$@" -- "$UI"
+fi
+
+if [ "$DRYRUN" = 1 ]; then
+    # The WHOLE command, seat launcher included -- a dry run that printed only the gamescope half
+    # would let the seat path change without the suite noticing, and the seat path is the part that
+    # has to work with no logind session.
+    printf '%s\n' "$*"
+    exit 0
+fi
+log "starting: $*"
+exec "$@"

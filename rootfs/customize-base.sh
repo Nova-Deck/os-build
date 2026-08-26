@@ -10,7 +10,7 @@
 #
 # Docker is still here, and still needs qemu binfmt: an aarch64 root has to be laid down by an
 # aarch64 pacman running aarch64 install scriptlets, and a container is how we get an aarch64
-# userspace on an x86 host. It is the EXECUTION ENVIRONMENT (base-devel.digest, the same pin
+# userspace on an x86 host. It is the EXECUTION ENVIRONMENT (build/base-devel.digest, the same pin
 # packages/build-overlay.sh builds in) and no longer the CONTENT SOURCE. Consequences:
 #   - /.dockerenv is never created in the target root, so it cannot reach a device and make
 #     systemd-detect-virt report a container (which silently skips ~13 units).
@@ -64,8 +64,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # The EXECUTION environment, not the content source (see the header). Shared with
 # packages/build-overlay.sh: one pinned arm64 builder image, used by both stages.
-PINFILE="$ROOT/base-devel.digest"
-SNAPFILE="$ROOT/snapshot.pin"
+PINFILE="$ROOT/build/base-devel.digest"
+SNAPFILE="$ROOT/build/snapshot.pin"
 LOCKFILE="$ROOT/rootfs/manifest.lock"
 PACMANCONF="$ROOT/rootfs/conf/pacman.conf"
 OSRELEASE="$ROOT/rootfs/conf/os-release"
@@ -206,7 +206,7 @@ PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno v
 # silent, and with no ALSA tools on the image every "which control is wrong" question had to be
 # answered by reading driver source and guessing. Worse than slow — `amixer` being ABSENT made
 # every control query print nothing, which reads exactly like "the control does not exist" and
-# sent that investigation down a wrong path (see DONE.md). The card is a handheld whose audio
+# sent that investigation down a wrong path (see docs/worklog/DONE.md). The card is a handheld whose audio
 # routing is per-board UCM; not being able to inspect it is a permanent tax.
 DEV_PKGS=(evtest usbutils xorg-xprop xorg-xwininfo alsa-utils)
 
@@ -308,7 +308,7 @@ esac
 EXPECTED_PKGS="$EXPECTED_PKGS
 env:$REF"
 
-# Package-repo snapshot pin (snapshot.pin) — the repo every row of the root is installed from.
+# Package-repo snapshot pin (build/snapshot.pin) — the repo every row of the root is installed from.
 # The vendor's mirrorlist points at the UNSUFFIXED snapshot path, which is an alias that tracks
 # the newest revision, so an inherited one would move under us. We write our own from this pin
 # (rootfs/conf/pacman.conf Includes it) and refuse the alias.
@@ -497,7 +497,7 @@ docker run --rm --platform linux/arm64 -v "$PREBUILT_DIR":/prebuilt:ro \
   #   -r /target        install into the bind-mounted empty tree, NOT into this container. The
   #                     container is the execution environment; nothing it owns ships.
   #   --config          rootfs/conf/pacman.conf, a committed declaration staged into /prebuilt, which
-  #                     Includes the mirrorlist the host wrote from snapshot.pin. The vendor
+  #                     Includes the mirrorlist the host wrote from build/snapshot.pin. The vendor
   #                     /etc/pacman.conf in this image is never read and never edited.
   #   --cachedir        the persistent host cache (a bind mount). Root-relative paths would put
   #                     it INSIDE the image being built.

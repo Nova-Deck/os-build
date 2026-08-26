@@ -59,7 +59,7 @@ package + guest rootfs (auto-registered with binfmt_misc). See `docs/FEX_README.
 (`steamos-update`, `steamos-mandatory-update`, `jupiter-biosupdate`,
 `jupiter-initial-firmware-update` — SteamUI shells to these past the Wi-Fi/timezone screens), and
 `50-novadeck-timezone.rules` (the one polkit grant stock polkit still prompts for). The Steam client
-SEED itself is build machinery, not rootfs content — it lives in `../steam-seed/` and is pre-seeded
+SEED itself is build machinery, not rootfs content — it lives in `build/steam-seed/` and is pre-seeded
 into `/home` at image build time (`image/make-sdcard.sh`). See `docs/bringup-phase3.md`.
 
 **System hygiene — identity, memory, and the `/var` shape**

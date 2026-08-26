@@ -258,7 +258,7 @@ if [ -z "$TARGET" ]; then
 fi
 
 command -v sgdisk >/dev/null 2>&1 || { echo "sgdisk not found (run inside novadeck-build)" >&2; exit 1; }
-# "A/B" is not said here on purpose: NOVADECK_PARTITION_TABLE also serves install/medium-table.txt,
+# "A/B" is not said here on purpose: NOVADECK_PARTITION_TABLE also serves installer/medium-table.txt,
 # a two-partition installer medium with no slots at all, and a build log announcing an A/B layout
 # for it describes something that is not happening. The table names itself in the line instead.
 echo "[novadeck] applying the GPT from ${TABLE##*/} to $TARGET (min ${minmib} MiB)" >&2

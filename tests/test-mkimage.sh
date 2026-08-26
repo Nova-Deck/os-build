@@ -7,7 +7,7 @@
 # tests/test-mkroot.sh, which covers the ROOT; this covers what gets written around it — the
 # two-partition table, the boot chain and the generated grub.cfg.
 #
-# THE ONE THAT EARNS ITS KEEP IS THE DTB PARITY CHECK. install/gen-grub-cfg.sh and
+# THE ONE THAT EARNS ITS KEEP IS THE DTB PARITY CHECK. installer/gen-grub-cfg.sh and
 # boot/gen-grub-cfg.sh read the SAME board catalog (boot/boards.map) but emit different configs,
 # and the derivation rule for a catalog-less .dts is subtle: the parent is found by stripping the
 # literal `-top-dpad` suffix, not by dropping the last dash-segment, and the menu title comes from
@@ -18,9 +18,9 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-TABLE="$ROOT/install/medium-table.txt"
-GENCFG="$ROOT/install/gen-grub-cfg.sh"
-MKIMAGE="$ROOT/install/mkimage.sh"
+TABLE="$ROOT/installer/medium-table.txt"
+GENCFG="$ROOT/installer/gen-grub-cfg.sh"
+MKIMAGE="$ROOT/installer/mkimage.sh"
 SHIPPED_GENCFG="$ROOT/boot/gen-grub-cfg.sh"
 DTS="$ROOT/kernel/dts/qcom"
 
@@ -69,7 +69,7 @@ case "$esp_label" in
   [Nn][Oo][Vv][Aa][Dd][Ee][Cc][Kk]*) bad "the ESP label is a novadeck-* one — it would collide with the target" ;;
   *) ok "the ESP label does not collide with an install's labels" ;;
 esac
-grep -q 'NDINSTALLER' "$ROOT/install/mkroot.sh" \
+grep -q 'NDINSTALLER' "$ROOT/installer/mkroot.sh" \
   && ok "mkroot.sh's fstab entry names the same label" \
   || bad "mkroot.sh does not mention NDINSTALLER — /esp would never mount"
 
@@ -225,7 +225,7 @@ grep -q '>>"$BASE/etc/os-release"' "$MKIMAGE" \
   && bad "os-release is APPENDED to, and the tree it lands in is cached across builds" \
   || ok "os-release is rewritten from the committed file plus the stamp, so a rebuild cannot stack blocks"
 grep -q 'cat "$OSRELEASE_SRC"' "$MKIMAGE" \
-  && ok "and the static half comes from install/os-release rather than a second copy of it" \
+  && ok "and the static half comes from installer/os-release rather than a second copy of it" \
   || bad "the rewritten os-release does not start from the committed file"
 # THE MODE COMES FROM THE TREE. `NOVADECK_DEV=1 make installer-root` followed by a plain
 # `make installer` must not stamp `release` on a medium carrying an authorized_keys and a Wi-Fi PSK;
@@ -241,11 +241,11 @@ grep -qE '^[^#]*NOVADECK_DEV' "$MKIMAGE" \
 grep -q 'installer.release' "$MKIMAGE" \
   && ok "the same fields land beside the image, so a publisher need not open a squashfs to name it" \
   || bad "no identity sidecar is written next to installer.img"
-# install/os-release is an INPUT to mkroot's reuse key: a per-build field there re-bootstraps the
+# installer/os-release is an INPUT to mkroot's reuse key: a per-build field there re-bootstraps the
 # whole emulated root on every build.
-grep -qE '^(VERSION_ID|BUILD_ID|VERSION)=' "$ROOT/install/os-release" \
-  && bad "install/os-release carries a per-build field — it is hashed into mkroot's reuse key" \
-  || ok "install/os-release stays static, as mkroot's cache key requires"
+grep -qE '^(VERSION_ID|BUILD_ID|VERSION)=' "$ROOT/installer/os-release" \
+  && bad "installer/os-release carries a per-build field — it is hashed into mkroot's reuse key" \
+  || ok "installer/os-release stays static, as mkroot's cache key requires"
 # And the identity has to reach the container at all.
 grep -qE '^installer:.*' "$ROOT/Makefile" \
   && grep -A3 '^installer:' "$ROOT/Makefile" | grep -q '$(ID_ENV)' \
@@ -266,7 +266,7 @@ grep -q 'sha256sum "\$SEED_SRC"' "$MKIMAGE" \
   || bad "the pin is not computed from the staged file"
 # THE PIN IS NOT AN INPUT. It arrived as NOVADECK_SEED_SHA256 from a separate CI job while the seed
 # was published elsewhere, so the hash and the bytes came from different places and could disagree.
-grep -qE '^[^#]*NOVADECK_SEED_SHA256' "$MKIMAGE" "$ROOT/install/mkroot.sh" \
+grep -qE '^[^#]*NOVADECK_SEED_SHA256' "$MKIMAGE" "$ROOT/installer/mkroot.sh" \
   && bad "a seed pin is still taken as an input — it must be computed from the staged file" \
   || ok "no pin input anywhere: one file is read, hashed, and both halves written from that read"
 grep -q 'die "no Steam seed at' "$MKIMAGE" \
@@ -278,7 +278,7 @@ grep -qE '^installer:.*\$\(SEED_ARTIFACT\)' "$ROOT/Makefile" \
   || bad "the installer target does not require the seed artifact"
 
 CASE="the verifier looks at the seed's CONTENT, not just its hash"
-VERIFY="$ROOT/install/verify-image.sh"
+VERIFY="$ROOT/installer/verify-image.sh"
 # THE PIN PROVES NOTHING ON ITS OWN. mkimage computes it from the file it stages, so a pin and its
 # seed agree by construction -- point NOVADECK_SEED_TARBALL at the wrong file and the medium carries
 # a perfectly self-consistent non-seed. The spine then hashes it before consent, the hash matches,
@@ -296,17 +296,17 @@ grep -q 'tee >(zstd -dc' "$VERIFY" \
   || bad "the content check reads the seed a second time"
 
 CASE="the verifier knows about everything the medium ships"
-# install/verify-image.sh is the ONLY thing that opens the built image; this file and test-mkroot.sh
+# installer/verify-image.sh is the ONLY thing that opens the built image; this file and test-mkroot.sh
 # read the scripts, and a script that says the right thing while producing the wrong image passes
 # both. So the verifier's list of what must be on the medium has to keep up with what mkroot puts
 # there — otherwise a file added to the image is a file nothing ever checks arrived. Asserted in
 # this direction only: the verifier states its own expectations (deriving them from the builder
 # would make it agree with the builder by construction), but it may not fall behind.
-[ -f "$VERIFY" ] || bad "install/verify-image.sh is missing"
+[ -f "$VERIFY" ] || bad "installer/verify-image.sh is missing"
 if [ -f "$VERIFY" ]; then
-  mapfile -t SHIPS < <(sed -n '/^INSTALL_FILES=(/,/^)/p' "$ROOT/install/mkroot.sh" \
+  mapfile -t SHIPS < <(sed -n '/^INSTALL_FILES=(/,/^)/p' "$ROOT/installer/mkroot.sh" \
     | sed -e '1d' -e '$d' -e 's/#.*//' | tr ' ' '\n' | grep -v '^$')
-  mapfile -t FOREIGN < <(sed -n '/^FOREIGN_FILES=(/,/^)/p' "$ROOT/install/mkroot.sh" \
+  mapfile -t FOREIGN < <(sed -n '/^FOREIGN_FILES=(/,/^)/p' "$ROOT/installer/mkroot.sh" \
     | sed -e '1d' -e '$d' -e '/^[[:space:]]*#/d' | tr -d '"' | tr ' ' '\n' | grep -v '^$')
   unchecked=""
   for f in "${SHIPS[@]}"; do

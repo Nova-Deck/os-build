@@ -5,7 +5,7 @@
 #
 # WHY THIS FILE EXISTS, and it is the same argument lib-slotwrite.sh opens with: the pre-seeded
 # /home is written twice -- once by image/make-sdcard.sh into a card image at build time, and once
-# by install/novadeck-install onto an internal disk on the device -- and the two must produce the
+# by installer/novadeck-install onto an internal disk on the device -- and the two must produce the
 # same tree. The parts that drift silently are the ~/.steam compat symlinks: a missing sdk64 does
 # not stop Steam starting, it makes an x86 title's SteamAPI_Init() fail at launch, on that medium
 # only. So the layout lives here and both callers ask for it.

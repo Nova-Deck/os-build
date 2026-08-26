@@ -427,7 +427,7 @@ where both slots see the identical value. With that bug fixed, each slot generat
 its own per-slot overlay on first boot and the divergence above appears exactly as described. So
 the prerequisite is not weakened by this measurement — it is currently *masked* by it, and fixing
 `machine-id` makes the `/var` hook more necessary, not less. The `machine-id` defect is not a 4b
-problem; it was closed separately and is recorded in `DONE.md`.
+problem; it was closed separately and is recorded in `docs/worklog/DONE.md`.
 
 A second reason this pass could not exercise the prerequisite: the test image injects Wi-Fi
 credentials into the **shared rootfs** (`rootfs/assemble-rootfs.sh`), not the per-slot `/etc`

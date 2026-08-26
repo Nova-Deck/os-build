@@ -118,7 +118,7 @@ build() {  # <img> ; rows "index name bytes type start-bytes" on stdin
   # until the zeroing below has made the dead rows unused -- and even then it is written by SFDISK,
   # not sgdisk. MEASURED, gdisk 1.0.10: sgdisk refuses ("Could not create partition 11 from …")
   # while libfdisk does not count a zero-type entry as occupying its sectors and writes the row.
-  # That difference is not a fixture detail -- it is why install/carve.sh has to drop the residue
+  # That difference is not a fixture detail -- it is why installer/carve.sh has to drop the residue
   # outright instead of appending past it, and lib-gpt.sh records the same measurement.
   for idx in "${order[@]}"; do
     overlaps=0

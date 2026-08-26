@@ -3,7 +3,7 @@
 The operational path, end to end. Design rationale lives elsewhere: [`phase4.md`](phase4.md) for
 why A/B looks like this, [`remote-access.md`](remote-access.md) for why SSH is shaped the way it
 is, [GitHub issues](https://github.com/Nova-Deck/os-build/issues) for the open items, and
-[`DONE.md`](../DONE.md) for the hardware-validation record each step here rests on.
+[`docs/worklog/DONE.md`](../docs/worklog/DONE.md) for the hardware-validation record each step here rests on.
 
 Every `make` invocation below runs from the repo root. A dev build needs its environment sourced
 **before every one of them** (`set -a; . ./dev.env; set +a`) — see the README's Building section.
@@ -254,7 +254,7 @@ and cert renewal are in **`docs/ota.md`**.
 Drive the install **as `deck` over SSH** — rauc's D-Bus service authorizes it with no `sudo` on the
 box and no password anywhere. (The mechanism is rauc's *open bus policy*, not polkit: 1.15.2 ships
 no polkit policy, and its `de.pengutronix.rauc.conf` allows any local user to call the installer. The
-signature is the gate. See `docs/ota.md` and `DONE.md` — it was accepted as a design choice.)
+signature is the gate. See `docs/ota.md` and `docs/worklog/DONE.md` — it was accepted as a design choice.)
 
 ```sh
 ssh deck@<device> rauc install /path/to/novadeck-<version>.raucb

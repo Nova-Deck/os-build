@@ -380,4 +380,4 @@ it needs no device-side change.
 `<policy context="default"><allow send_destination="de.pengutronix.rauc"/></policy>` and 1.15.2 has
 no polkit policy at all, so any local process can call `InstallBundle`. Bounded by signature
 verification, so not arbitrary code execution — but it is the actual mechanism behind "unprivileged
-install", and it is not polkit. Accepted as a design choice; recorded in `DONE.md`.
+install", and it is not polkit. Accepted as a design choice; recorded in `docs/worklog/DONE.md`.

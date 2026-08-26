@@ -21,7 +21,7 @@
 # by adding a thaw-then-retry; the call simply does not belong inside the frozen window.
 #
 # Freezing a narrower subtree would keep the session bus live, but it is not obviously expressible on
-# our layout and is NOT a drop-in — see the "narrow the fake-suspend freeze set" entry in DONE.md.
+# our layout and is NOT a drop-in — see the "narrow the fake-suspend freeze set" entry in docs/worklog/DONE.md.
 #
 # gamescope is inside user.slice and is frozen DELIBERATELY: it holds the blank KMS modeset statically
 # while frozen, so we blank BEFORE the freeze and unblank AFTER the thaw.

@@ -419,7 +419,7 @@ expect_file "$(tvar B)/lib/systemd/random-seed" 'seed'
 done_
 
 t "the-saved-wifi-rides-across"
-# DONE.md rates this brick-class on a RELEASE image: the NetworkManager connections live in the
+# docs/worklog/DONE.md rates this brick-class on a RELEASE image: the NetworkManager connections live in the
 # /etc overlay's upper dir, which lives in the PER-SLOT /var. A target slot without them boots a
 # Wi-Fi-only, headless, serial-console-less device with no network and no way back in.
 run

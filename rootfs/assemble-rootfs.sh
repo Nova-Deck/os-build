@@ -971,7 +971,7 @@ fi
 # the loader actually loads from.
 # dist/ is built by `make decky-plugin` (a $(ROOTFS) prerequisite); missing means a stale
 # invocation bypassed make — fail rather than assemble an image without its settings UI.
-plugin_src="$ROOT/decky/novadeck-control"
+plugin_src="$ROOT/apps/decky/novadeck-control"
 plugin_dest="$stage/usr/share/decky-plugins/novadeck-control"
 [ -s "$plugin_src/dist/index.js" ] || {
   echo "decky plugin dist missing: ${plugin_src#"$ROOT"/}/dist/index.js (run: make decky-plugin)" >&2
@@ -1309,7 +1309,7 @@ for slot in a b; do
   # it names the images and the partitions (var-a, novadeck-var-A via ${slot^^}), but the WITNESS is
   # in bootconf naming: the kernel command line carries novadeck.slot=A|B, seed_var writes $SLOT,
   # and tests/test-post-install.sh asserts 'B'. This wrote 'a' and was the only thing in the
-  # system spelling it lowercase -- discovered 2026-08-22 when install/verify-install.sh, which
+  # system spelling it lowercase -- discovered 2026-08-22 when installer/verify-install.sh, which
   # runs the card's check list against a real install, disagreed with image/verify-card.sh about
   # the same file. Nothing reads it at runtime (the initramfs takes the slot from the cmdline), so
   # this was cosmetic -- but a witness that answers differently depending on how the disk was made

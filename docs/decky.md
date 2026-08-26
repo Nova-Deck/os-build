@@ -103,7 +103,7 @@ Three tabs; the backend runs as root inside the loader (`"flags": ["root"]`).
   `tests/test-decky.sh` asserts it against the real names from each dtsi. Polls at 1 Hz, and
   only while it is the tab on screen.
 
-Frontend: TypeScript + `@decky/ui`, built by `make decky-plugin` (npm ci in a digest-pinned
+Frontend: TypeScript + `@apps/decky/ui`, built by `make decky-plugin` (npm ci in a digest-pinned
 node container; lockfile committed; `dist/` gitignored). The dist is a `$(ROOTFS)`
 prerequisite, so a card can never assemble without its settings UI.
 

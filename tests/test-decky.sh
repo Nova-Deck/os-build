@@ -18,7 +18,7 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SYNC="$ROOT/fs-overlay/usr/lib/novadeck/decky-sync"
 PIN="$ROOT/packages/decky-loader/prebuilt.pin"
-PLUGIN="$ROOT/decky/novadeck-control"
+PLUGIN="$ROOT/apps/decky/novadeck-control"
 UNITDIR="$ROOT/fs-overlay/usr/lib/systemd/system"
 WANTSDIR="$ROOT/fs-overlay/etc/systemd/system/multi-user.target.wants"
 APPCONF="$ROOT/fs-overlay/usr/share/fex-emu/AppConfig/PluginLoader.json"
@@ -29,7 +29,7 @@ bad() { FAIL=$((FAIL+1)); printf '  FAIL %s\n' "$1"; }
 
 pin_field() { sed -n "s/^$2:[[:space:]]*//p" "$1" | head -1; }
 
-# Two checks below make CPython write a __pycache__ NEXT TO THE SOURCE, inside decky/, which the
+# Two checks below make CPython write a __pycache__ NEXT TO THE SOURCE, inside apps/decky/, which the
 # build stages into the image: the py_compile of the plugin backend, and the block that imports
 # novadeck_control to exercise sanitize_tweaks. Redirect all bytecode out of the tree.
 #
@@ -471,7 +471,7 @@ except ValueError:
 # EGL key the base does not have; issue #47), and game-launch ignores any name outside the base,
 # so a drifted UI offers dead controls.
 import pathlib
-root = pathlib.Path(sys.argv[1]).resolve().parents[1]
+root = pathlib.Path(sys.argv[1]).resolve().parents[2]   # apps/decky/novadeck-control -> repo root
 base_config = root / "fs-overlay/usr/share/fex-emu/Config.json"
 shipped = list(json.load(open(base_config))["ThunksDB"])
 tweaks.FEX_BASE_CONFIG = base_config

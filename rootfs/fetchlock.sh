@@ -20,7 +20,7 @@
 #
 # Three of the lock's four provenance classes are installable and handled here:
 #
-#   snapshot  from the pinned repo revision (snapshot.pin) via work/pacman-cache, which is
+#   snapshot  from the pinned repo revision (build/snapshot.pin) via work/pacman-cache, which is
 #             bind-mounted into the container at /var/cache/pacman/pkg. Fetched on a cache
 #             miss, verified either way.
 #   stripped  fetched and verified EXACTLY like a snapshot row — the class marks disposition,
@@ -72,21 +72,21 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CACHE="$ROOT/work/pacman-cache"
 OVERLAY_REPO="$ROOT/work/repo/aarch64"
-SNAPFILE="$ROOT/snapshot.pin"
+SNAPFILE="$ROOT/build/snapshot.pin"
 
 OUT="${1:?usage: rootfs/fetchlock.sh <install-list-out> [lock]}"
-# The lock to materialize. Defaults to the shipped image's; install/mkroot.sh passes
-# install/manifest.lock, which is the SAME format written by a different generator over a
+# The lock to materialize. Defaults to the shipped image's; installer/mkroot.sh passes
+# installer/manifest.lock, which is the SAME format written by a different generator over a
 # different root (Phase 6). Nothing in this script is specific to which image a lock describes —
 # it fetches rows, verifies hashes and emits container paths — so the two share it rather than
 # growing a near-copy that would drift on the next class or provenance change.
 LOCK="${2:-$ROOT/rootfs/manifest.lock}"
 LOCKREL="${LOCK#"$ROOT"/}"
 # The command that regenerates THIS lock, named in every hint below. Sending someone to `make
-# relock` when the stale artifact is install/manifest.lock points them at a 20-minute rebuild of
+# relock` when the stale artifact is installer/manifest.lock points them at a 20-minute rebuild of
 # the wrong root, and the lock they were told to fix comes back unchanged.
 case "$LOCKREL" in
-  install/*) RELOCK="make relock-installer" ;;
+  installer/*) RELOCK="make relock-installer" ;;
   *)         RELOCK="make relock" ;;
 esac
 
@@ -133,7 +133,7 @@ fetch_pkg() {
     fi
     rm -f "$dest.part"
     echo "$file: sha256 mismatch against the lock at $url" >&2
-    echo "  the pinned revision republished this version — bump snapshot.pin or \`$RELOCK\`" >&2
+    echo "  the pinned revision republished this version — bump build/snapshot.pin or \`$RELOCK\`" >&2
     return 1
   done
   rm -f "$dest.part"

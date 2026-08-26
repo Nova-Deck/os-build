@@ -7,7 +7,7 @@ What is inside the root is `rootfs/`; laying it onto a disk is `image/`.
 Updates are A/B and atomic (RAUC + Btrfs read-only root). A slot switch carries `/etc` with it,
 because `/etc` is an overlay whose upper dir lives on the per-slot `/var` — which is why the
 post-install hook rsyncs `/var` across on update
-(`fs-overlay/usr/lib/rauc/post-install.sh`; rationale and HW evidence in `DONE.md`).
+(`fs-overlay/usr/lib/rauc/post-install.sh`; rationale and HW evidence in `docs/worklog/DONE.md`).
 
 ## The bundle
 

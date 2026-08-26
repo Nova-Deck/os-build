@@ -12,8 +12,8 @@
 # three believed the row:
 #
 #   image/genpart.sh        the --append containment check   -> "something is in the way", refuse
-#   install/select-target.sh gpt_rows(), CEIL, the ESP scan   -> a ceiling below the real one
-#   install/carve.sh         gpt_rows(), effective_ceiling    -> the same, on the destructive side
+#   installer/select-target.sh gpt_rows(), CEIL, the ESP scan   -> a ceiling below the real one
+#   installer/carve.sh         gpt_rows(), effective_ceiling    -> the same, on the destructive side
 #
 # MEASURED on an AYANEO Pocket ACE, 2026-08-22, after an uninstall from ROCKNIX's LinuxLoader
 # (QcomModulePkg/Library/BootLib/UninstallCfwMenu.c, PerformUninstallCfw): it zeroes the type GUID,

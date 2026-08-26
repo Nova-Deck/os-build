@@ -14,7 +14,7 @@ Two jobs, no secrets, on every push and pull request:
 Builds the from-source overlay packages a **pull request** touches, to prove they still compile.
 It publishes nothing and needs no secrets. Triggered by a change to any overlay input
 (`packages/*/source.pin`, its patches, a local `PKGBUILD`, `build-overlay.sh`, `inputhash.sh`,
-`base-devel.digest`), plus `workflow_dispatch`.
+`build/base-devel.digest`), plus `workflow_dispatch`.
 
 | job | runner | what it runs |
 |---|---|---|

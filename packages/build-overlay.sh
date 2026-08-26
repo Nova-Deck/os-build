@@ -22,7 +22,7 @@
 #
 # Host-side (drives docker, like customize-base.sh). Network required: the PKGBUILD comes from
 # the GitLab raw endpoint and makepkg clones the actual sources from public GitHub/freedesktop.
-# Reads base-devel.digest. Re-run is cheap to invoke but an emulated build itself is slow.
+# Reads build/base-devel.digest. Re-run is cheap to invoke but an emulated build itself is slow.
 #
 #   packages/build-overlay.sh [--only <name>]... [--no-index]
 #
@@ -66,7 +66,7 @@ GL="https://gitlab.steamos.cloud"
 REPO_DIR="$ROOT/work/repo/$ARCH"
 STAMPS="$REPO_DIR/.stamps"
 STAGE="$ROOT/work/overlay-build/$ARCH"
-DEVEL_PIN="$ROOT/base-devel.digest"
+DEVEL_PIN="$ROOT/build/base-devel.digest"
 
 shopt -s nullglob
 PINS=("$ROOT"/packages/*/source.pin)

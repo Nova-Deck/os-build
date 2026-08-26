@@ -12,14 +12,14 @@
 # suite does not catch is a failure discovered twenty minutes in, or worse, on a device holding a
 # stranger's data. The three shapes it guards:
 #
-#   1. THE DECLARATION LOSING A TOOL. install/pkgs.list names four packages that are in NONE of
+#   1. THE DECLARATION LOSING A TOOL. installer/pkgs.list names four packages that are in NONE of
 #      rootfs/manifest.lock's rows because they ship on no device — and one of them, mtools, has
 #      already cost this project a hardware slot: without `mdir`, select-target.sh's rule 3b could
 #      not read a foreign ESP, so it failed OPEN and offered to carve a Pocket FIT that was running
 #      ROCKNIX (2026-08-21). `dosfstools` looks like it covers mtools and does not: it ships
 #      mkfs.vfat, never mdir. [[offline-suite-inherits-host-path]].
-#   2. THE FILE LISTS DRIFTING FROM THE TREE. install/mkroot.sh names every file it places, one by
-#      one, rather than globbing — deliberately, since install/ also holds the hw-* stagers, the
+#   2. THE FILE LISTS DRIFTING FROM THE TREE. installer/mkroot.sh names every file it places, one by
+#      one, rather than globbing — deliberately, since installer/ also holds the hw-* stagers, the
 #      suites and a __pycache__. The cost of that choice is a list that can go stale when a file is
 #      renamed, and a renamed UI module is an installer that dies on import with the panel already
 #      black. So the lists are read back OUT of the script and checked against the tree.
@@ -33,11 +33,11 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PKGSLIST="$ROOT/install/pkgs.list"
-MKROOT="$ROOT/install/mkroot.sh"
-GENLOCK="$ROOT/install/genlock.sh"
-OSREL="$ROOT/install/os-release"
-UNITS="$ROOT/install/units"
+PKGSLIST="$ROOT/installer/pkgs.list"
+MKROOT="$ROOT/installer/mkroot.sh"
+GENLOCK="$ROOT/installer/genlock.sh"
+OSREL="$ROOT/installer/os-release"
+UNITS="$ROOT/installer/units"
 
 PASS=0; FAIL=0; SKIP=0; CASE=""
 ok()   { PASS=$((PASS+1)); printf '  ok   %s -- %s\n' "$CASE" "$1"; }
@@ -71,7 +71,7 @@ has_pkg base && ok "declares the 'base' metapackage as the foundation" \
   || bad "no 'base' — the tree would have no systemd, no udev and no coreutils"
 
 # ---------------------------------------------------------------------------------------------
-# The four the SHIPPED image does not have. install/lib-hwstage.sh exists solely to stage these
+# The four the SHIPPED image does not have. installer/lib-hwstage.sh exists solely to stage these
 # onto a dev card for the hardware gates; the installer image is where they are supposed to arrive
 # as packages instead, and this is the only check standing between that intent and a silent hole.
 CASE="the four tools no device carries"
@@ -110,7 +110,7 @@ done
 # twenty minutes in, with a message about a target not found.
 for ghost in python-pygame python-pysdl2 sdl2; do
   has_pkg "$ghost" \
-    && bad "$ghost is declared, and no holo repo has it — the SDL binding is install/pygame-ce.pin" \
+    && bad "$ghost is declared, and no holo repo has it — the SDL binding is installer/pygame-ce.pin" \
     || ok "no $ghost (the binding is the pinned wheel)"
 done
 
@@ -119,7 +119,7 @@ done
 # same thing at build time; this is the copy that runs in `make test`, where a pin bump is reviewed.
 CASE="prebuilt pins"
 pin_field() { sed -n "s/^$2:[[:space:]]*//p" "$1" | head -1; }
-for pin in "$ROOT/packages/inputplumber/prebuilt.pin" "$ROOT/install/pygame-ce.pin"; do
+for pin in "$ROOT/packages/inputplumber/prebuilt.pin" "$ROOT/installer/pygame-ce.pin"; do
   rel="${pin#"$ROOT"/}"
   if [ ! -f "$pin" ]; then bad "$rel is missing — mkroot.sh names it explicitly"; continue; fi
   ok "$rel is present"
@@ -182,8 +182,8 @@ mapfile -t FLAT < <(sed -n '/^INSTALL_FILES=(/,/^)/p' "$MKROOT" | sed -e '1d' -e
 [ "${#FLAT[@]}" -ge 10 ] && ok "INSTALL_FILES parses to ${#FLAT[@]} entries" \
   || bad "INSTALL_FILES parsed to ${#FLAT[@]} entries — the extraction or the array shape changed"
 for f in "${FLAT[@]}"; do
-  [ -f "$ROOT/install/$f" ] && ok "install/$f exists" \
-    || bad "mkroot.sh places install/$f, which is not in the tree"
+  [ -f "$ROOT/installer/$f" ] && ok "installer/$f exists" \
+    || bad "mkroot.sh places installer/$f, which is not in the tree"
 done
 # The four §5 model/view files and the spine specifically: they find each other by
 # dirname(__file__) and $SELFDIR, so all of them or none of them.
@@ -232,8 +232,8 @@ CASE="the searched-for set is COMPLETE, not merely present"
 # an assertion of mine matched a comment instead of a line of code.)
 shipped_names=$(printf '%s\n' "${FLAT[@]}"; for s in "${FOREIGN[@]}"; do printf '%s\n' "${s##*:}"; done)
 referenced=$(for f in "${FLAT[@]}"; do
-    [ -f "$ROOT/install/$f" ] || continue
-    sed -e 's/#.*//' "$ROOT/install/$f"
+    [ -f "$ROOT/installer/$f" ] || continue
+    sed -e 's/#.*//' "$ROOT/installer/$f"
   done | grep -oE '(^|[^/A-Za-z0-9._-])(lib-[a-z0-9-]+\.sh|genpart\.sh|partition-table\.txt)([^/A-Za-z0-9._-]|$)' \
        | grep -oE '(lib-[a-z0-9-]+\.sh|genpart\.sh|partition-table\.txt)' | sort -u)
 [ -n "$referenced" ] && ok "the payload reaches for $(printf '%s' "$referenced" | wc -l) support files" \
@@ -274,11 +274,11 @@ grep -qE 'ln -sf +confirm-ui .*/install/confirm$' "$MKROOT" \
 
 CASE="identity"
 grep -q '^ID=novadeck-installer$' "$OSREL" && ok "ID=novadeck-installer" \
-  || bad "install/os-release does not set ID=novadeck-installer"
+  || bad "installer/os-release does not set ID=novadeck-installer"
 # It must not answer the same ID as an install. The spine's own rules key off "is this disk ours",
 # and a medium claiming to be novadeck is a device claiming to be the thing it is about to install.
 grep -q '^ID=novadeck$' "$OSREL" \
-  && bad "install/os-release claims ID=novadeck — that is the SHIPPED image's identity" \
+  && bad "installer/os-release claims ID=novadeck — that is the SHIPPED image's identity" \
   || ok "it does not claim the shipped image's identity"
 
 # ---------------------------------------------------------------------------------------------
@@ -308,7 +308,7 @@ grep -q 'LOCK="${2:-\$ROOT/rootfs/manifest.lock}"' "$ROOT/rootfs/fetchlock.sh" \
   && ok "fetchlock.sh takes the lock as an optional second argument" \
   || bad "fetchlock.sh has no lock argument — mkroot.sh cannot use it"
 grep -q 'fetchlock.sh" "\$STAGE/install.list" "\$LOCKFILE"' "$MKROOT" \
-  && ok "mkroot.sh passes install/manifest.lock, not the shipped one" \
+  && ok "mkroot.sh passes installer/manifest.lock, not the shipped one" \
   || bad "mkroot.sh does not pass its own lock to fetchlock.sh"
 
 CASE="firmware: the same two trees the card gets"
@@ -322,7 +322,7 @@ CASE="firmware: the same two trees the card gets"
 # the identical invisible failure. A list enumerating every radio across a growing fleet goes stale
 # silently, on the tool you reach for when a device is already broken. So these cases assert that
 # NOTHING is being selected.
-[ -e "$ROOT/install/firmware.list" ] \
+[ -e "$ROOT/installer/firmware.list" ] \
   && bad "a curated firmware list is back — it will go stale per-board, as it already did once" \
   || ok "no curated firmware list; both trees are taken whole"
 grep -q '/fw-qcom:ro' "$MKROOT" && grep -q '/fw-linux:ro' "$MKROOT" \
@@ -385,10 +385,10 @@ grep -q 'Read-only file system' "$MKROOT" \
   || bad "the reason this is build-time and not runtime is undocumented"
 # netcfg must not report a wrong clock as an unreachable server — that sent the operator looking at
 # their router for a fault in neither.
-grep -q 'clock_unsynced' "$ROOT/install/netcfg" \
+grep -q 'clock_unsynced' "$ROOT/installer/netcfg" \
   && ok "netcfg distinguishes an unsynced clock from a reachability failure" \
   || bad "a wrong clock still reads as 'the update server is unreachable'"
-grep -q 'NTPSynchronized' "$ROOT/install/netcfg" \
+grep -q 'NTPSynchronized' "$ROOT/installer/netcfg" \
   && ok "it asks timedatectl rather than guessing from the date" \
   || bad "the clock check is not asking the authority"
 
@@ -450,7 +450,7 @@ grep -q 'HostKey /run/ssh/ssh_host_ed25519_key' "$MKROOT" \
 # a misspelled directive silently ([[systemd-execonfailure-is-not-a-directive]]).
 HOSTKEY_UNIT="$UNITS/novadeck-installer-hostkey.service"
 [ -f "$HOSTKEY_UNIT" ] && ok "the key generator is a committed unit file, so it gets linted" \
-  || bad "no install/units/novadeck-installer-hostkey.service — a generated unit is an unlinted one"
+  || bad "no installer/units/novadeck-installer-hostkey.service — a generated unit is an unlinted one"
 grep -q 'ConditionPathExists=!/run/ssh/ssh_host_ed25519_key' "$HOSTKEY_UNIT" 2>/dev/null \
   && ok "regeneration is conditional (ssh-keygen prompts rather than overwriting)" \
   || bad "an sshd restart within a boot would wedge on the key generator"
@@ -507,7 +507,7 @@ grep -q ':.*>/target/etc/machine-id' "$MKROOT" \
   || bad "no /etc/machine-id is created — PID1 fails early on a read-only root without it"
 grep -q 'path=/run/NetworkManager/system-connections' "$MKROOT" \
   && ok "NM keyfile profiles are redirected to tmpfs (nmcli would write /etc otherwise)" \
-  || bad "NM would write profiles into a read-only /etc — install/netcfg fails"
+  || bad "NM would write profiles into a read-only /etc — installer/netcfg fails"
 grep -q 'rc-manager=unmanaged' "$MKROOT" \
   && ok "NM is told not to rewrite /etc/resolv.conf" \
   || bad "NM would try to replace the resolv.conf symlink and log a failure every connect"
@@ -519,14 +519,14 @@ grep -q 'ln -sf /run/NetworkManager/resolv.conf /target/etc/resolv.conf' "$MKROO
 # happens to reach it, with an error about the file rather than about the root being read-only.
 # Comments are excluded: rauc-session.sh discusses /etc/rauc/system.conf at length without touching it.
 writers="$(grep -nE '(>|>>|install -|cp |mv |tee |mkdir -p|touch|ln -s)[^|#]*/etc/' \
-             "${FLAT[@]/#/$ROOT/install/}" 2>/dev/null || true)"
+             "${FLAT[@]/#/$ROOT/installer/}" 2>/dev/null || true)"
 [ -z "$writers" ] \
   && ok "no shipped component writes under /etc" \
   || bad "a shipped component writes under /etc, which is read-only here: $(printf '%s' "$writers" | head -3 | tr '\n' ' ')"
 
 # /var is the other half and is handled on the cmdline, not here — assert the two stay paired, since
 # a squashfs root with a writable /etc plan and no /var plan still cannot run journald or NM.
-grep -q 'systemd.volatile=state' "$ROOT/install/gen-grub-cfg.sh" \
+grep -q 'systemd.volatile=state' "$ROOT/installer/gen-grub-cfg.sh" \
   && ok "/var is a tmpfs via systemd.volatile=state on the kernel line" \
   || bad "nothing makes /var writable — journald and NM state have nowhere to go"
 

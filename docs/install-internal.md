@@ -231,9 +231,9 @@ with `source dev.env` — it is what makes live diagnosis over SSH possible on a
 SSH and touch nothing:
 
 ```bash
-install/hw-select-target.sh root@<device>   # which disk would it choose, and why
-install/hw-preflight.sh     root@<device>   # the actual pre-flight screen, on that board's geometry
-install/hw-install.sh       root@<device>   # stages, pre-flights, and PRINTS the destructive command
+installer/hw-select-target.sh root@<device>   # which disk would it choose, and why
+installer/hw-preflight.sh     root@<device>   # the actual pre-flight screen, on that board's geometry
+installer/hw-install.sh       root@<device>   # stages, pre-flights, and PRINTS the destructive command
 ```
 
 ---

@@ -45,7 +45,7 @@ on:
       - 'packages/*/PKGBUILD'
       - 'packages/build-overlay.sh'
       - 'packages/inputhash.sh'
-      - 'base-devel.digest'
+      - 'build/base-devel.digest'
       - '.github/workflows/overlay.yml'
       # mesa-x86 (the FEX-guest Turnip payload) is not an overlay package, but it is a package
       # build this workflow proof-compiles the same way. Its other inputs — the mesa PKGBUILD,
@@ -144,7 +144,7 @@ jobs:
             changed="$(git diff --name-only "origin/$BASE_REF...HEAD")"
             # A change to the builder itself, the hash formula, or the container it builds in can
             # break any package, so it selects all of them.
-            if printf '%s\n' "$changed" | grep -qE '^(packages/build-overlay\.sh|packages/inputhash\.sh|base-devel\.digest)$'; then
+            if printf '%s\n' "$changed" | grep -qE '^(packages/build-overlay\.sh|packages/inputhash\.sh|build/base-devel\.digest)$'; then
               sel="$(all)"
               why="the builder or its base image moved — building everything"
             else

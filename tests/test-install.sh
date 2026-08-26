@@ -679,7 +679,7 @@ printf '%s\n' "$append_script" | grep -q 'NOVADECK_APPEND_FLOOR:-' \
   && bad "the opt-in floor guard is back -- an unset floor would be accepted again" \
   || ok "no opt-in floor guard remains"
 
-# --- 12. install/rauc-session.sh — the synthesized config and who owns the bus (Phase 4a) --------
+# --- 12. installer/rauc-session.sh — the synthesized config and who owns the bus (Phase 4a) --------
 # WHAT IS AT RISK. Everything this script does is about making `rauc install` write ONE partition on
 # a FOREIGN disk, and every failure mode is the same failure: it writes somewhere else instead. The
 # config is the whole mechanism -- with the service enabled the install subcommand's own --conf is
@@ -687,8 +687,8 @@ printf '%s\n' "$append_script" | grep -q 'NOVADECK_APPEND_FLOOR:-' \
 # bus name the bundle would land on /dev/disk/by-partlabel/novadeck-root-A, which on an internal
 # install is the INSTALLER'S OWN MEDIUM. So these assert the config's shape and the ownership proof,
 # and neither can be checked on hardware without doing the destructive thing first.
-SESSION="$ROOT/install/rauc-session.sh"
-FRESH="$ROOT/install/post-install-fresh.sh"
+SESSION="$ROOT/installer/rauc-session.sh"
+FRESH="$ROOT/installer/post-install-fresh.sh"
 for f in "$SESSION" "$FRESH"; do
   [ -x "$f" ] || { echo "missing input: $f" >&2; exit 1; }
 done
@@ -884,7 +884,7 @@ out="$( SESS_POST="$T/nope.sh" sess_run )" \
        || bad "the wrong error for a missing handler: $out"; }
 unset SESS_KEYRING SESS_POST
 
-# --- 13. install/post-install-fresh.sh — the slot half (Phase 4a) --------------------------------
+# --- 13. installer/post-install-fresh.sh — the slot half (Phase 4a) --------------------------------
 # RAUC_TARGET_SLOTS IS AN ITERATOR OF INTEGERS, not of slot names: install.c appends "%i" (slotcnt)
 # and reference.rst:1745 spells the `eval RAUC_SLOT_DEVICE_${i}` idiom. A handler that matched it
 # against a slot NAME would compare two things that are never equal, so its check would silently
@@ -1095,7 +1095,7 @@ CASE="lib-homestage: a missing seed is fatal, not silent"
   && bad "staged a home from a seed that does not exist" \
   || ok "refuses a seed that is neither a directory nor a file"
 
-# --- 17. install/novadeck-install — the spine (Phase 4c) ----------------------------------------
+# --- 17. installer/novadeck-install — the spine (Phase 4c) ----------------------------------------
 # WHAT IS AT RISK. Every other file in this install has a narrow job with its own suite; this one's
 # entire content is an ORDER, and the two things the order buys cannot be checked anywhere else:
 #
@@ -1110,8 +1110,8 @@ CASE="lib-homestage: a missing seed is fatal, not silent"
 #
 # Neither can be checked on hardware without doing the destructive thing first, so they are checked
 # here, against the real script, with every external command stubbed and recording its arguments.
-SPINE="$ROOT/install/novadeck-install"
-CONFIRM_TTY="$ROOT/install/confirm-tty"
+SPINE="$ROOT/installer/novadeck-install"
+CONFIRM_TTY="$ROOT/installer/confirm-tty"
 for f in "$SPINE" "$CONFIRM_TTY"; do
   [ -x "$f" ] || { echo "missing input: $f" >&2; exit 1; }
 done
@@ -1581,7 +1581,7 @@ out="$(spine_run --intent fresh)" || bad "run failed: $out"
 grep -qx 'REPLACES_OURS=1' "$SP_FACTS" \
   && ok "the facts record that an existing install is being replaced" \
   || bad "REPLACES_OURS is not set on a fresh-over-ours disk"
-screen="$("$ROOT/install/confirm-tty" --facts "$SP_FACTS" --sequence NESW </dev/null 2>&1 >/dev/null || true)"
+screen="$("$ROOT/installer/confirm-tty" --facts "$SP_FACTS" --sequence NESW </dev/null 2>&1 >/dev/null || true)"
 printf '%s\n' "$screen" | grep -qi 'DELETES THE NOVADECK INSTALL ALREADY ON THIS DISK' \
   && ok "and the screen says so, in its own block" \
   || bad "the screen does not disclose that an existing novadeck install is destroyed"
@@ -1596,7 +1596,7 @@ CASE="confirm-tty: the SD-card reassurance survives on the disk where it is true
 spine_dir noreplace
 SP_SEL_MODE=fresh; SP_PLAN_REPLACES=0
 out="$(spine_run --intent fresh)" || bad "run failed: $out"
-screen="$("$ROOT/install/confirm-tty" --facts "$SP_FACTS" --sequence NESW </dev/null 2>&1 >/dev/null || true)"
+screen="$("$ROOT/installer/confirm-tty" --facts "$SP_FACTS" --sequence NESW </dev/null 2>&1 >/dev/null || true)"
 printf '%s\n' "$screen" | grep -q 'your game library is safe' \
   && ok "a stock Android disk still gets it -- there the games really are on the card" \
   || bad "the reassurance was lost on the disk where it is true"
@@ -1725,7 +1725,7 @@ unset SP_CONFIRM_OVERRIDE
 
 CASE="spine + ui + confirm-ui: the GAMEPAD renderer satisfies the same gate"
 # The second implementation of the contract, driven end to end against the real spine: the real
-# install/ui (headless -- it imports pygame only inside its view), the real install/confirm-ui, and
+# installer/ui (headless -- it imports pygame only inside its view), the real installer/confirm-ui, and
 # the real random sequence. §4d requires this renderer to have its own case rather than inherit the
 # tty one's confidence, because the stubbed gate cases all pass without the property that matters.
 #
@@ -1737,11 +1737,11 @@ spine_dir gamepad
 UI_SOCK="$T/ui-e2e.sock"
 printf 'SHOWN\n' >"$T/ui-events"
 NOVADECK_UI_SOCK="$UI_SOCK" NOVADECK_UI_EVENTS="$T/ui-events" NOVADECK_UI_DEADLINE=60 \
-  PYTHONPYCACHEPREFIX="$T/pycache" "$ROOT/install/ui" >"$T/ui-e2e.log" 2>&1 &
+  PYTHONPYCACHEPREFIX="$T/pycache" "$ROOT/installer/ui" >"$T/ui-e2e.log" 2>&1 &
 ui_pid=$!
 for _ in $(seq 1 500); do [ -S "$UI_SOCK" ] && break; sleep 0.02; done
 export NOVADECK_UI_SOCK="$UI_SOCK"
-SP_CONFIRM_OVERRIDE="$ROOT/install/confirm-ui"
+SP_CONFIRM_OVERRIDE="$ROOT/installer/confirm-ui"
 out="$(spine_run)" \
   && ok "the answer the UI collected on the pad is accepted on the first attempt" \
   || bad "the gamepad renderer did not satisfy the gate: $out"

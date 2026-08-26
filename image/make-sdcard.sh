@@ -48,7 +48,7 @@ set -euo pipefail
 export MTOOLS_SKIP_CHECK=1   # mtools on a file image has no geometry; silence the warning
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-# The /home layout, shared with install/novadeck-install. Resolved relative to this script with no
+# The /home layout, shared with installer/novadeck-install. Resolved relative to this script with no
 # seam: both files live in image/, so there is exactly one path and no test-only variant of it.
 # shellcheck source=lib-homestage.sh
 . "$ROOT/image/lib-homestage.sh"
@@ -99,7 +99,7 @@ done
 [ -f "$ROOTFS" ] || { echo "no rootfs: ${ROOTFS#"$ROOT"/} (run rootfs/build-image.sh)" >&2; exit 1; }
 [ -f "$VARIMG" ] || { echo "no var image: ${VARIMG#"$ROOT"/} (run rootfs/build-image.sh)" >&2; exit 1; }
 [ -x "$SEED/steamrtarm64/steam" ] || {
-  echo "no Steam seed at ${SEED#"$ROOT"/} (run steam-seed/fetch-steam-seed.sh)" >&2; exit 1; }
+  echo "no Steam seed at ${SEED#"$ROOT"/} (run build/steam-seed/fetch-steam-seed.sh)" >&2; exit 1; }
 
 # Partition number and size (MiB) for a row of the table, so the two files can never drift.
 part_num()  { awk -v n="$1" '/^[[:space:]]*#/||/^[[:space:]]*$/{next} {i++; if ($1==n) {print i; exit}}' "$TABLE"; }

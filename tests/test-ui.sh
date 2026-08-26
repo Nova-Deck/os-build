@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Offline test for install/ui and install/confirm-ui — the gamepad half of §4d's consent contract.
+# Offline test for installer/ui and installer/confirm-ui — the gamepad half of §4d's consent contract.
 #
 #   tests/test-ui.sh
 #
@@ -10,10 +10,10 @@
 # for that finding once; the plan requires the gamepad renderer to have its own case against the
 # real thing rather than inherit the confidence.
 #
-# HOW IT RUNS WITH NO SDL, NO PANEL AND NO PAD. install/ui imports pygame lazily, inside its view
+# HOW IT RUNS WITH NO SDL, NO PANEL AND NO PAD. installer/ui imports pygame lazily, inside its view
 # only, and takes its input from a file of tokens when NOVADECK_UI_EVENTS is set. So the real
 # shipped file — not a copy, not a mangled variant — runs here as its own state machine, answers a
-# real unix socket, and is driven by the real install/confirm-ui. What is NOT covered is anything
+# real unix socket, and is driven by the real installer/confirm-ui. What is NOT covered is anything
 # with a pixel in it: the drawing is asserted through describe(), which is what the view is handed.
 #
 # The end-to-end against the SPINE lives in tests/test-install.sh, next to its sandbox, for the
@@ -22,9 +22,9 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-UI="$ROOT/install/ui"
-SHIM="$ROOT/install/confirm-ui"
-VIEW="$ROOT/install/uiview.py"
+UI="$ROOT/installer/ui"
+SHIM="$ROOT/installer/confirm-ui"
+VIEW="$ROOT/installer/uiview.py"
 for f in "$UI" "$SHIM"; do
   [ -x "$f" ] || { echo "not executable: $f" >&2; exit 1; }
 done
@@ -36,7 +36,7 @@ bad() { FAIL=$((FAIL+1)); printf '  FAIL %s -- %s\n' "$CASE" "$1"; }
 
 T="$(mktemp -d)"
 trap 'rm -rf "$T"; pkill -f "$UI" 2>/dev/null' EXIT
-# Loading install/ui as a module writes a __pycache__ next to it, which the installer image build
+# Loading installer/ui as a module writes a __pycache__ next to it, which the installer image build
 # would then copy verbatim. Keep the bytecode in the sandbox. Same reason as tests/test-update.sh.
 export PYTHONPYCACHEPREFIX="$T/pycache"
 export NOVADECK_UI_DEADLINE=30
@@ -101,7 +101,7 @@ describe() {  # <facts> <sequence> [pressed]
   FACTS="$1" SEQ="$2" PRESSED="${3:-}" python3 - <<'PY'
 import importlib.util, json, os
 from importlib.machinery import SourceFileLoader
-loader = SourceFileLoader("nvui", os.path.join(os.environ["ROOT"], "install/ui"))
+loader = SourceFileLoader("nvui", os.path.join(os.environ["ROOT"], "installer/ui"))
 spec = importlib.util.spec_from_loader("nvui", loader)
 ui = importlib.util.module_from_spec(spec); loader.exec_module(ui)
 s = ui.ConsentScreen(ui.read_facts(os.environ["FACTS"]), os.environ["SEQ"])
@@ -198,7 +198,7 @@ CASE="ui: the buttons are POSITIONS, and the mapping is the only place a letter 
 python3 - <<'PY' && ok "SDL's positional constants map to N/E/S/W at the event boundary" \
                  || bad "the button mapping is not positional"
 import os, sys
-sys.path.insert(0, os.path.join(os.environ["ROOT"], "install"))
+sys.path.insert(0, os.path.join(os.environ["ROOT"], "installer"))
 import uipad
 # SDL_CONTROLLER_BUTTON_A/B/X/Y are 0/1/2/3 and are defined by POSITION: bottom, right, left, top.
 want = {0: "S", 1: "E", 2: "W", 3: "N"}
@@ -268,7 +268,7 @@ printf '%s' "$a" | grep -q 'your game library is safe' \
 # A generic "network failed" is not acceptable here and this is why: there is NO on-device
 # credential entry, so the fix for every row below costs a power-off, a pulled card, an edit on
 # another computer and a reboot. A user told only "it failed" pays that price per guess.
-NETCFG="$ROOT/install/netcfg"
+NETCFG="$ROOT/installer/netcfg"
 [ -x "$NETCFG" ] || { echo "no netcfg: $NETCFG" >&2; exit 1; }
 # $T/bin is shared with the sections below, and this is the FIRST of them to write into it -- the
 # stubs silently did not exist when it was not created here, so the real ip/curl ran and every
@@ -464,7 +464,7 @@ unset NET_LEASE NET_HOST_RC
 
 CASE="§4b: netcfg and novadeck-update agree on which host 'reachable' means"
 # THE URL IS WRITTEN THREE TIMES -- shell here, Python in fs-overlay/usr/bin/novadeck-update, Python
-# again in install/release-info -- and this assertion is the only thing that keeps them the same
+# again in installer/release-info -- and this assertion is the only thing that keeps them the same
 # URL. It is not hypothetical: netcfg shipped for an hour with an invented default
 # (`ota.novadeck.org`), which would have reported every healthy network as `no-host`, the exact
 # misdiagnosis §4b's table exists to prevent. Same shape as test-update.sh's identity-rules-agree,
@@ -472,7 +472,7 @@ CASE="§4b: netcfg and novadeck-update agree on which host 'reachable' means"
 # report `online` against one host while release-info fetched a manifest from another.
 net_default="$(sed -n 's/^OTA_DEFAULT_URL=//p' "$NETCFG" | head -1)"
 upd_default="$(sed -n 's/^DEFAULT_URL = "\(.*\)"$/\1/p' "$ROOT/fs-overlay/usr/bin/novadeck-update" | head -1)"
-rel_default="$(sed -n 's/^DEFAULT_URL = "\(.*\)"$/\1/p' "$ROOT/install/release-info" | head -1)"
+rel_default="$(sed -n 's/^DEFAULT_URL = "\(.*\)"$/\1/p' "$ROOT/installer/release-info" | head -1)"
 [ -n "$net_default" ] && [ "$net_default" = "$upd_default" ] \
   && ok "both default to $net_default" \
   || bad "netcfg says '$net_default', novadeck-update says '$upd_default'"
@@ -494,7 +494,7 @@ CASE="§5: the button that says Power off powers off"
 powercheck() {  # <state-or-rc> -- prints the result tuple the screen produces for SELECT / S
   WHICH="$1" python3 -c '
 import json, os, sys
-sys.path.insert(0, os.path.join(os.environ["ROOT"], "install"))
+sys.path.insert(0, os.path.join(os.environ["ROOT"], "installer"))
 import uiflow
 w = os.environ["WHICH"]
 if w.startswith("net:"):
@@ -517,7 +517,7 @@ print(json.dumps(s.result))'
   || bad "the failure screen's bottom button does not retry: $(powercheck 1)"
 failsel=$(SNIPPET= python3 - <<'PY2'
 import json, os, sys
-sys.path.insert(0, os.path.join(os.environ["ROOT"], "install"))
+sys.path.insert(0, os.path.join(os.environ["ROOT"], "installer"))
 import uiflow
 class R: tail = []
 s = uiflow.ProgressScreen(R()); s.finish(1); s.handle(uiflow.TOKEN_BACK)
@@ -529,7 +529,7 @@ PY2
   || bad "SELECT on a failed install does not power off: $failsel"
 labels=$(SNIPPET= python3 - <<'PY2'
 import json, os, sys
-sys.path.insert(0, os.path.join(os.environ["ROOT"], "install"))
+sys.path.insert(0, os.path.join(os.environ["ROOT"], "installer"))
 import uiflow
 class R: tail = ["boom"]
 s = uiflow.ProgressScreen(R()); s.finish(1)
@@ -558,7 +558,7 @@ CASE="§4b: the screen turns each state into a different fix"
 netscreen() {  # <key=value...>
   FACTS="$1" python3 -c '
 import importlib.util, json, os, sys
-sys.path.insert(0, os.path.join(os.environ["ROOT"], "install"))
+sys.path.insert(0, os.path.join(os.environ["ROOT"], "installer"))
 import uiflow
 s = uiflow.NetworkScreen(uiflow.kv(os.environ["FACTS"].replace(";", "\n")))
 print(json.dumps(s.describe()))'
@@ -648,7 +648,7 @@ EOF
 keycheck() {  # <devices-file> -> prints True/False
   NOVADECK_UI_INPUT_DEVICES="$1" python3 -c '
 import os, sys
-sys.path.insert(0, os.path.join(os.environ["ROOT"], "install"))
+sys.path.insert(0, os.path.join(os.environ["ROOT"], "installer"))
 import uipad
 print(uipad.typing_keyboard_present())'
 }
@@ -661,7 +661,7 @@ CASE="§4d: what counts as something to answer with"
   && ok "and a machine with only power/volume keys and InputPlumber's virtual keyboard does not" \
   || bad "something that cannot type a letter was counted as a keyboard"
 # The two exclusions, named individually so a regression says which one broke.
-grep -q 'devices/virtual' install/uipad.py \
+grep -q 'devices/virtual' installer/uipad.py \
   && ok "the virtual keyboard is excluded by sysfs path -- it declares letters it never carries" \
   || bad "nothing excludes InputPlumber's own keyboard"
 [ "$(keycheck "$T/nonexistent-devices-file")" = True ] \
@@ -692,7 +692,7 @@ CASE="§4d: the screen says what is wrong and what to do"
 noinput="$(python3 -c '
 import importlib.util, json, os, sys
 from importlib.machinery import SourceFileLoader
-loader = SourceFileLoader("nvui", os.path.join(os.environ["ROOT"], "install/ui"))
+loader = SourceFileLoader("nvui", os.path.join(os.environ["ROOT"], "installer/ui"))
 spec = importlib.util.spec_from_loader("nvui", loader)
 ui = importlib.util.module_from_spec(spec); loader.exec_module(ui)
 print(json.dumps(ui.NoInputScreen().describe()))')"
@@ -707,11 +707,11 @@ printf '%s' "$noinput" | grep -qi 'Nothing has been written' \
   || bad "it does not say whether anything was written"
 
 CASE="§6: the pygame wheel is pinned to the Python the image actually ships"
-# A WHEEL IS ABI-LOCKED. install/pygame-ce.pin carries a cp313 build because rootfs/manifest.lock
+# A WHEEL IS ABI-LOCKED. installer/pygame-ce.pin carries a cp313 build because rootfs/manifest.lock
 # ships python 3.13; a python bump in the lock makes that wheel unimportable, and the symptom would
 # be an installer that comes up to a black panel with an ImportError in a child's stderr -- which
 # is exactly how the pygame.controller bug presented. Two files, one fact, so assert they agree.
-PIN="$ROOT/install/pygame-ce.pin"
+PIN="$ROOT/installer/pygame-ce.pin"
 [ -f "$PIN" ] || bad "no pygame pin at $PIN"
 pin_py="$(sed -n 's/^python:[[:space:]]*//p' "$PIN" | head -1)"
 lock_py="$(awk '$1 == "python" {print $2}' "$ROOT/rootfs/manifest.lock" | head -1)"
@@ -735,12 +735,12 @@ CASE="ui: the game-controller API is the one pygame actually has"
 # UI down with an AttributeError the first time it ran against a real pygame (Pocket S2,
 # 2026-08-22), AFTER gamescope had come up, so the symptom was a black panel. Nothing offline could
 # catch it: the suite never imports pygame, by design.
-grep -q 'from pygame._sdl2 import controller' "$ROOT/install/uipad.py" \
+grep -q 'from pygame._sdl2 import controller' "$ROOT/installer/uipad.py" \
   && ok "the controller module is imported from pygame._sdl2, where it lives" \
   || bad "uipad.py does not import the controller API from pygame._sdl2"
 # Comments stripped first -- the file EXPLAINS the trap at length, and an assertion that could not
 # tell the warning from the thing warned about would fail on its own documentation.
-if sed 's/#.*$//' "$ROOT/install/uipad.py" | grep -qE '(^|[^_.])pygame\.controller'; then
+if sed 's/#.*$//' "$ROOT/installer/uipad.py" | grep -qE '(^|[^_.])pygame\.controller'; then
   bad "something still reaches for the top-level pygame.controller, which does not exist"
 else
   ok "and nothing reaches for the top-level name that does not exist"
@@ -748,23 +748,23 @@ fi
 
 CASE="ui: the model is separable from the view"
 # Everything above ran with no SDL, no display and no pad, and that is only true while the state
-# machine cannot reach pygame at all. The separation is physical: install/ui names pygame nowhere,
-# install/uiview.py is the only file that imports it, and install/ui loads that module inside
+# machine cannot reach pygame at all. The separation is physical: installer/ui names pygame nowhere,
+# installer/uiview.py is the only file that imports it, and installer/ui loads that module inside
 # build_io() -- i.e. only once something has decided to open a display.
 if grep -nE '^[[:space:]]*(import pygame|from pygame)' "$UI"; then
-  bad "install/ui imports pygame"
+  bad "installer/ui imports pygame"
 else
-  ok "install/ui never imports pygame -- it only ever holds a handle the view gave it"
+  ok "installer/ui never imports pygame -- it only ever holds a handle the view gave it"
 fi
 [ "$(grep -c 'import pygame' "$VIEW")" -eq 1 ] \
-  && ok "install/uiview.py imports it exactly once" \
+  && ok "installer/uiview.py imports it exactly once" \
   || bad "uiview.py imports pygame more than once"
 grep -qE '^\s+import pygame' "$VIEW" \
   && ok "and that import is inside the view class, not at module scope" \
   || bad "uiview.py imports pygame at module scope"
 grep -q 'import uiview' "$UI" \
-  && ok "install/ui loads the view lazily, in build_io()" \
-  || bad "install/ui does not load the view module"
+  && ok "installer/ui loads the view lazily, in build_io()" \
+  || bad "installer/ui does not load the view module"
 
 CASE="the prompt row sits on ONE baseline"
 # There is no pygame on the build host -- this suite exists precisely so the UI can be tested with
@@ -807,7 +807,7 @@ kill "$p" 2>/dev/null; wait "$p" 2>/dev/null
 # screen; the whole reason it is a separate program from netcfg is that netcfg must treat a 404 as a
 # REACHABLE server (measured on a Pocket S2, 2026-08-22) and a 404 on <channel>/latest.json is
 # exactly the answer this file has to name.
-RELINFO="$ROOT/install/release-info"
+RELINFO="$ROOT/installer/release-info"
 [ -x "$RELINFO" ] || { echo "no release-info: $RELINFO" >&2; exit 1; }
 mkdir -p "$T/rel"
 export REL_CALLS="$T/rel/curl-calls"
@@ -932,12 +932,12 @@ flow() {  # <python snippet reading `pf` (a PreflightScreen)>
   PATH="$T/bin:$PATH" \
   NOVADECK_SELECT_TARGET="$T/bin/select-target.sh" NOVADECK_CARVE="$T/bin/carve.sh" \
   NOVADECK_DEVICE_ENV="$T/bin/device-env" NOVADECK_INSTALL_BUNDLE="${BUNDLE_OVERRIDE-https://x/b.raucb}" \
-  NOVADECK_RELEASE_INFO="${RELINFO_OVERRIDE-$ROOT/install/release-info}" \
+  NOVADECK_RELEASE_INFO="${RELINFO_OVERRIDE-$ROOT/installer/release-info}" \
   NOVADECK_OTA_URL=https://ota.example NOVADECK_OTA_CONFIG=/dev/null \
   NOVADECK_SEED_ON_MEDIUM="${SEED_ON_MEDIUM-$T/rel/on-medium.tar.zst}" \
   NOVADECK_INSTALL_SEED="${SEED_OVERRIDE-/seed.tar.zst}" SNIPPET="$1" python3 - <<'PY'
 import json, os, sys
-sys.path.insert(0, os.path.join(os.environ["ROOT"], "install"))
+sys.path.insert(0, os.path.join(os.environ["ROOT"], "installer"))
 import uiflow
 facts, _why = uiflow.gather_preflight()
 pf = uiflow.PreflightScreen(facts) if facts else None
@@ -958,7 +958,7 @@ printf '%s' "$out" | grep -q 'AYANEO\\\\ Pocket' \
 # "the installer can reach https://..." as the single word "the".
 kvcheck="$(python3 -c '
 import os, sys
-sys.path.insert(0, os.path.join(os.environ["ROOT"], "install"))
+sys.path.insert(0, os.path.join(os.environ["ROOT"], "installer"))
 import uiflow
 d = uiflow.kv("DETAIL=the installer can reach https://x\nNAME=AYANEO\\ Pocket\\ S2\n")
 print("%s|%s" % (d["DETAIL"], d["NAME"]))')"
@@ -1083,18 +1083,18 @@ printf '%s' "$argv" | grep -q -- '--bundle https://ota.example/stable/novadeck-0
 printf '%s' "$argv" | grep -q -- "--home-seed $T/rel/on-medium.tar.zst" \
   && ok "and the spine is pointed at the seed ON THE MEDIUM, never at a download" \
   || bad "the seed did not reach the spine: $argv"
-grep -q 'top.facts\["bundle"\], top.facts\["seed"\]' "$ROOT/install/ui" \
+grep -q 'top.facts\["bundle"\], top.facts\["seed"\]' "$ROOT/installer/ui" \
   && ok "and the loop passes the SCREEN's facts, so nothing re-resolves behind the consent" \
-  || bad "install/ui does not hand SpineRun the screen's own bundle"
+  || bad "installer/ui does not hand SpineRun the screen's own bundle"
 # --intent, WHICH HARDWARE FOUND MISSING. On a disk that already carries NovaDeck the spine refuses
 # to choose for us, so an install there died at select-target every time -- with the UI having done
 # everything else right (Pocket ACE, 2026-08-25). The argument existed; nothing passed it.
 printf '%s' "$argv" | grep -q -- '--intent fresh' \
   && ok "and --intent fresh, which is what the pre-flight screen promised" \
   || bad "the spine is started with no intent, so a disk of ours refuses: $argv"
-grep -q '"fresh")' "$ROOT/install/ui" \
+grep -q '"fresh")' "$ROOT/installer/ui" \
   && ok "the loop names the intent explicitly rather than leaving it to a default" \
-  || bad "install/ui does not pass an intent to SpineRun"
+  || bad "installer/ui does not pass an intent to SpineRun"
 
 CASE="pre-flight: it cannot start an install it has no bundle for"
 out="$(BUNDLE_OVERRIDE= SEED_OVERRIDE= NET_HOST_RC=22 \
@@ -1132,7 +1132,7 @@ printf '%s' "$out" | grep -q 'carries no Steam seed' \
   || bad "the screen does not name the build defect: $out"
 
 CASE="pre-flight: the hardware stager's overrides win, and cost no round trip"
-# install/hw-install.sh serves a bundle off a laptop and hands the seed over as a LOCAL PATH -- ~1 GB
+# installer/hw-install.sh serves a bundle off a laptop and hands the seed over as a LOCAL PATH -- ~1 GB
 # that must not be re-fetched into tmpfs at every reboot. With both set there is nothing to ask.
 cat >"$T/bin/release-info-marker" <<EOF
 #!/usr/bin/env bash
@@ -1151,12 +1151,12 @@ printf '%s' "$out" | grep -q '/seed.tar.zst' \
 CASE="pre-flight: a failed resolution is never cached, or Check again could not work"
 # The button's whole promise. A cached "no" would make it redraw the same screen forever, and the
 # operator would be pressing a button that cannot answer -- the shape §4b already paid for once.
-twice="$(PATH="$T/bin:$PATH" NOVADECK_RELEASE_INFO="$ROOT/install/release-info" \
+twice="$(PATH="$T/bin:$PATH" NOVADECK_RELEASE_INFO="$ROOT/installer/release-info" \
   NOVADECK_OTA_URL=https://ota.example NOVADECK_OTA_CONFIG=/dev/null \
   NOVADECK_SEED_ON_MEDIUM="$T/rel/on-medium.tar.zst" NOVADECK_INSTALL_BUNDLE= NOVADECK_INSTALL_SEED= \
   MANIFEST="$MANIFEST" python3 - <<'PY'
 import json, os, sys
-sys.path.insert(0, os.path.join(os.environ["ROOT"], "install"))
+sys.path.insert(0, os.path.join(os.environ["ROOT"], "installer"))
 import uiflow
 os.environ["NET_HOST_RC"] = "22"
 first = uiflow.resolve_release()["state"]
@@ -1180,7 +1180,7 @@ printf '%s' "$twice" | grep -q '\["no-release", "ok", "ok"' \
 # where that matters most. The pre-flight screen hit the same wall in August and was fixed by
 # compacting ITS content, which fixed one screen and left the mechanism in place.
 #
-# install/fakepygame.py is what lets this be asserted at all: uiview imports pygame lazily, so a
+# installer/fakepygame.py is what lets this be asserted at all: uiview imports pygame lazily, so a
 # stand-in with deterministic metrics can be injected and every blit recorded. It proves the
 # ARITHMETIC, not the pixels -- that the flow is measured against the button row and shrunk until it
 # clears it. The real metrics still come from a real SDL on the device.
@@ -1199,7 +1199,7 @@ CONSENT='desc = {"screen": "consent", "title": "Erase Android data on AYANEO Poc
   "buttons": [{"pos": "SELECT", "label": "Cancel"}], "abort": ""}'
 
 layout() {  # <w> <h> <python building `desc`>  -> "<lowest flow pixel> <button row y>"
-  SCR_W="$1" SCR_H="$2" DESC="$3" python3 "$ROOT/install/layout-probe.py"
+  SCR_W="$1" SCR_H="$2" DESC="$3" python3 "$ROOT/installer/layout-probe.py"
 }
 
 CASE="the view reserves the button row"
@@ -1261,7 +1261,7 @@ n_small=$(COUNT=1 layout 1280 720 "$CONSENT")
 progress() {  # <python snippet with `p` (a ProgressScreen) and `feed(lines)`>
   SNIPPET="$1" python3 - <<'PY'
 import json, os, sys
-sys.path.insert(0, os.path.join(os.environ["ROOT"], "install"))
+sys.path.insert(0, os.path.join(os.environ["ROOT"], "installer"))
 import uiflow
 class FakeRun:
     tail = ["mkfs.ext4: No such file or directory", "novadeck-install: ERROR: the carve failed"]
@@ -1402,8 +1402,8 @@ printf '%s' "$out" | grep -qiE '\bpress [ABXY]\b' \
 # =================================================================================================
 # the session — gamescope on the panel, with the UI as its only client
 # =================================================================================================
-SESSION="$ROOT/install/installer-session"
-SAVELOG="$ROOT/install/save-log.sh"
+SESSION="$ROOT/installer/installer-session"
+SAVELOG="$ROOT/installer/save-log.sh"
 [ -x "$SESSION" ] && [ -x "$SAVELOG" ] || { echo "session scripts missing" >&2; exit 1; }
 
 cat >"$T/bin/device-env-panel" <<'EOF'
@@ -1489,7 +1489,7 @@ CASE="the clock is its own network row, and it clears itself"
 # check your router, for a fault in neither the router nor the server. Then, with the message fixed,
 # the operator still "had to retry a couple of times", pressing Check again at a condition that was
 # already fixing itself.
-clockrow="$(cd "$ROOT/install" && python3 -c '
+clockrow="$(cd "$ROOT/installer" && python3 -c '
 import uiflow
 t = uiflow.NetworkScreen.TABLE["no-clock"]
 print(t[0]); print(t[1]); print(t[2])' 2>&1)"
@@ -1503,17 +1503,17 @@ printf '%s' "$clockrow" | grep -qiE 'nothing to fix|sets itself' \
   && ok "the advice is to change nothing (it is the only self-clearing row)" \
   || bad "it sends the operator to fix something that fixes itself"
 # The no-host row must NOT be what a wrong clock lands on.
-hostrow="$(cd "$ROOT/install" && python3 -c '
+hostrow="$(cd "$ROOT/installer" && python3 -c '
 import uiflow
 print(uiflow.NetworkScreen.TABLE["no-host"][2])' 2>&1)"
 printf '%s' "$hostrow" | grep -qi 'upstream or DNS' \
   && ok "no-host still means what it meant (upstream or DNS)" \
   || bad "the no-host row drifted: $hostrow"
 # netcfg has to EMIT the state, or the row is unreachable prose.
-grep -q 'emit STATE no-clock' "$ROOT/install/netcfg" \
+grep -q 'emit STATE no-clock' "$ROOT/installer/netcfg" \
   && ok "netcfg emits STATE=no-clock" \
   || bad "nothing ever produces the state the row renders"
-grep -qE 'CURL_RC" = 60|CURL_RC" = 35' "$ROOT/install/netcfg" \
+grep -qE 'CURL_RC" = 60|CURL_RC" = 35' "$ROOT/installer/netcfg" \
   && ok "keyed on curl's TLS exit codes, not its HTTP status" \
   || bad "the clock state is not keyed on the exit code"
 # The UI must re-probe it without a human, and ONLY it.
@@ -1523,14 +1523,14 @@ grep -qE 'CURL_RC" = 60|CURL_RC" = 35' "$ROOT/install/netcfg" \
 # something a human must change. At boot it usually means DNS is not up yet — the very shape the
 # allowlist existed to catch. Re-probing is always safe (net_diagnose defaults to read-only
 # `diagnose`), so the screen re-checks whatever it says and no state can be forgotten by omission.
-grep -q 'SELF_CLEARING' "$ROOT/install/ui" \
+grep -q 'SELF_CLEARING' "$ROOT/installer/ui" \
   && bad "the allowlist is back — a state omitted from it strands the operator on a stale screen" \
   || ok "no allowlist: every network state re-diagnoses itself"
-grep -q 'getattr(top, "name", "") == "network"' "$ROOT/install/ui" \
+grep -q 'getattr(top, "name", "") == "network"' "$ROOT/installer/ui" \
   && ok "the re-check is gated on being ON the network screen, not on which state it shows" \
   || bad "the periodic re-check is gated on something else"
 # It must only redraw on a real change, or a stable fault becomes an unreadable flicker.
-grep -q 'if fresh.get("STATE") != top.facts.get("STATE")' "$ROOT/install/ui" \
+grep -q 'if fresh.get("STATE") != top.facts.get("STATE")' "$ROOT/installer/ui" \
   && ok "and only acts when the state actually changes" \
   || bad "it redraws unconditionally, so a stable diagnosis would flicker"
 
@@ -1543,7 +1543,7 @@ CASE="every token a screen handles must be one the pad can produce"
 #
 # The specific fix is the d-pad mapping. The general check is this case: a screen that handles a
 # token no input emits is a control that does not exist, and nothing else would notice.
-produced="$(cd "$ROOT/install" && python3 -c '
+produced="$(cd "$ROOT/installer" && python3 -c '
 import uipad
 toks = set(uipad.BUTTON_TO_CARDINAL.values()) | set(uipad.KEY_TO_CARDINAL.values())
 toks |= set(uipad.BUTTON_TO_NAV.values()) | set(uipad.KEY_TO_NAV.values())
@@ -1553,16 +1553,16 @@ printf '%s' "$produced" | grep -q LEFT && printf '%s' "$produced" | grep -q RIGH
   && ok "the pad can produce LEFT and RIGHT ($produced)" \
   || bad "LEFT/RIGHT are still unreachable: $produced"
 # Both input paths, because §4d names a USB keyboard as the fallback when no pad enumerates.
-grep -q 'BUTTON_TO_NAV = {13: TOKEN_LEFT, 14: TOKEN_RIGHT}' "$ROOT/install/uipad.py" \
+grep -q 'BUTTON_TO_NAV = {13: TOKEN_LEFT, 14: TOKEN_RIGHT}' "$ROOT/installer/uipad.py" \
   && ok "from the d-pad (SDL CONTROLLER_BUTTON_DPAD_LEFT/RIGHT)" \
   || bad "the d-pad is not mapped"
-grep -q 'KEY_TO_NAV' "$ROOT/install/uipad.py" \
+grep -q 'KEY_TO_NAV' "$ROOT/installer/uipad.py" \
   && ok "and from the arrow keys" || bad "no keyboard equivalent"
-grep -q 'elif ev.button in BUTTON_TO_NAV' "$ROOT/install/uipad.py" \
+grep -q 'elif ev.button in BUTTON_TO_NAV' "$ROOT/installer/uipad.py" \
   && ok "poll() actually consults the map" \
   || bad "the map exists but no event path reads it"
 # The invariant itself: every literal token the screens compare against must be producible.
-handled="$(grep -ohE 'token == "[A-Z]+"' "$ROOT/install/ui" "$ROOT/install/uiflow.py" \
+handled="$(grep -ohE 'token == "[A-Z]+"' "$ROOT/installer/ui" "$ROOT/installer/uiflow.py" \
           | grep -oE '"[A-Z]+"' | tr -d '"' | sort -u)"
 unreachable=""
 for t in $handled; do
@@ -1577,7 +1577,7 @@ CASE="pressing Join is acknowledged, and the frame keeps drawing"
 # the whole UI loop. Nothing redrew -- no acknowledgement that the press had registered, and a slow
 # access point made the device look dead. A spinner cannot animate while the loop is blocked, so
 # the feedback and the animation are the same fix.
-conn="$(cd "$ROOT/install" && python3 -c '
+conn="$(cd "$ROOT/installer" && python3 -c '
 import uiflow, time
 s = uiflow.ConnectingScreen("MYNET")
 d = s.describe()
@@ -1595,7 +1595,7 @@ printf '%s' "$conn" | grep -q 'animates=True' \
 # THE SECOND ACTIVATION IS SAID OUT LOUD. netcfg re-activates once when the first join lands without
 # an address, which doubles the wait -- and an unexplained wait getting longer is exactly what
 # making the join asynchronous was meant to stop.
-conn2="$(cd "$ROOT/install" && python3 -c '
+conn2="$(cd "$ROOT/installer" && python3 -c '
 import uiflow
 n = [1]
 s = uiflow.ConnectingScreen("MYNET", lambda: n[0])
@@ -1609,24 +1609,24 @@ printf '%s' "$conn2" | grep '^two=' | grep -qi 'trying once more' \
   && ok "and the second names itself, so the longer wait has a reason on screen" \
   || bad "the second activation is silent: $conn2"
 # The join itself must be a child process, not a blocking call.
-grep -q 'class NetJoin' "$ROOT/install/uiflow.py" \
+grep -q 'class NetJoin' "$ROOT/installer/uiflow.py" \
   && ok "NetJoin runs netcfg as a child" || bad "the join is still synchronous"
 # ...and the loop has to ACT on a recheck, or the pre-flight screen's Check again is a button that
 # returns a result nobody reads. The screen half is asserted above; this is the other half.
-grep -q 'result\[0\] == "recheck"' "$ROOT/install/ui" \
+grep -q 'result\[0\] == "recheck"' "$ROOT/installer/ui" \
   && ok "and the loop acts on a recheck, re-asking only the release" \
-  || bad "nothing in install/ui handles the pre-flight recheck"
-grep -q 'PreflightScreen(dict(top.facts, \*\*release_facts()), top.gib)' "$ROOT/install/ui" \
+  || bad "nothing in installer/ui handles the pre-flight recheck"
+grep -q 'PreflightScreen(dict(top.facts, \*\*release_facts()), top.gib)' "$ROOT/installer/ui" \
   && ok "keeping the size the operator dialled in, which is the one thing on that screen they chose" \
   || bad "the recheck rebuilds the screen from scratch and loses the size"
-grep -A 24 "class NetJoin" "$ROOT/install/uiflow.py" | grep -q "subprocess.Popen" \
+grep -A 24 "class NetJoin" "$ROOT/installer/uiflow.py" | grep -q "subprocess.Popen" \
   && ok "via Popen, so the loop is never blocked by it" || bad "NetJoin does not use Popen"
-grep -q 'stack\[-1\] = ConnectingScreen' "$ROOT/install/ui" \
+grep -q 'stack\[-1\] = ConnectingScreen' "$ROOT/installer/ui" \
   && ok "the press swaps the screen before the work starts" \
   || bad "the operator still gets no feedback on the press"
-grep -q 'netjoin = NetJoin()' "$ROOT/install/ui" \
+grep -q 'netjoin = NetJoin()' "$ROOT/installer/ui" \
   && ok "and the join starts in the background" || bad "the loop does not start an async join"
-grep -q 'joined = netjoin.poll()' "$ROOT/install/ui" \
+grep -q 'joined = netjoin.poll()' "$ROOT/installer/ui" \
   && ok "the loop polls it and moves on when it finishes" || bad "nothing collects the result"
 # EVERYTHING THE CHILD SAID REACHES THE JOURNAL, not just the facts it emitted. netcfg writes how
 # long nmcli took and whether it returned OK to STDERR, NetJoin captures stderr into stdout, and
@@ -1642,7 +1642,7 @@ EOF
 chmod +x "$T/bin/netcfg-chatty"
 join_out="$(NOVADECK_NETCFG="$T/bin/netcfg-chatty" python3 - <<'PY' 2>&1
 import os, sys, time
-sys.path.insert(0, os.environ["ROOT"] + "/install")
+sys.path.insert(0, os.environ["ROOT"] + "/installer")
 import uiflow
 j = uiflow.NetJoin()
 while True:
@@ -1663,9 +1663,9 @@ printf '%s' "$join_out" | grep -q 'netcfg: STATE=no-lease' \
   || ok "without re-logging the key=value lines the facts already carry"
 # nmcli's own default gave up before slow access points finished (HW 2026-08-25). Association is
 # quick; DHCP is what drags, and a timed-out join costs the operator a full retry.
-grep -q 'JOIN_TIMEOUT=${NOVADECK_NET_JOIN_TIMEOUT:-90}' "$ROOT/install/netcfg" \
+grep -q 'JOIN_TIMEOUT=${NOVADECK_NET_JOIN_TIMEOUT:-90}' "$ROOT/installer/netcfg" \
   && ok "the join waits 90s, not nmcli's default" || bad "the join timeout is nmcli's default again"
-grep -q '"\$NMCLI" -w "\$JOIN_TIMEOUT" device wifi connect' "$ROOT/install/netcfg" \
+grep -q '"\$NMCLI" -w "\$JOIN_TIMEOUT" device wifi connect' "$ROOT/installer/netcfg" \
   && ok "and nmcli is actually told about it" || bad "JOIN_TIMEOUT is set but never passed to nmcli"
 # The screen must not promise seconds when it may take a minute.
 printf '%s' "$conn" | grep -qi 'up to a minute' \
@@ -1678,7 +1678,7 @@ CASE="wifi.conf survives being written on Windows"
 # parse_conf did not strip the carriage return, so the PSK became "secret<CR>", the access point
 # rejected it, and the screen reported a wrong password with complete confidence. The user would
 # then check a password that was correct all along, from a photograph of a panel.
-{ sed -n '/^parse_conf/,/^}/p' "$ROOT/install/netcfg"
+{ sed -n '/^parse_conf/,/^}/p' "$ROOT/installer/netcfg"
   printf 'WIFI_CONF="$1"\nif parse_conf; then printf "[%%s][%%s]" "$SSID" "$PSK"; else printf "FAIL:%%s" "$BAD_LINE"; fi\n'
 } >"$T/pc.sh"
 printf 'SSID=my net\r\nPSK=secret\r\n' >"$T/crlf.conf"
@@ -1694,8 +1694,8 @@ CASE="the file the screen tells you to copy actually exists"
 # It told the operator to "copy wifi.conf.example next to it" and NO SUCH FILE EXISTED anywhere --
 # not in the tree, not on any medium (HW 2026-08-24). Instructions naming a file that is not there
 # read as a fault in the person following them.
-EX="$ROOT/install/wifi.conf.example"
-[ -f "$EX" ] && ok "install/wifi.conf.example exists" \
+EX="$ROOT/installer/wifi.conf.example"
+[ -f "$EX" ] && ok "installer/wifi.conf.example exists" \
   || bad "the example the screen names is still missing"
 grep -q '^SSID=' "$EX" && grep -q '^PSK=' "$EX" \
   && ok "it carries the two keys netcfg reads" || bad "the template does not show the real keys"
@@ -1705,7 +1705,7 @@ case "$tmpl" in \[*\]\[*\]) ok "and it parses cleanly ($tmpl)" ;; *) bad "the te
 grep -qi 'wifi.conf' "$EX" && ok "it names the file to copy itself to" \
   || bad "the template does not say what to rename it to"
 # The screen must give the steps, not just the filename.
-conf="$(cd "$ROOT/install" && python3 -c '
+conf="$(cd "$ROOT/installer" && python3 -c '
 import uiflow
 print(uiflow.NetworkScreen.TABLE["no-conf"][2])' 2>&1)"
 printf '%s' "$conf" | grep -qi 'wifi.conf.example' \
@@ -1722,7 +1722,7 @@ CASE="no-conf offers no retry, because a retry cannot succeed"
 # now notices by itself. The button pointed at the one thing that could not help, gave no feedback
 # when pressed (the state is unchanged, so the redraw is identical), and sat where the eye goes
 # first, while Power off -- what the advice text actually asks for -- was secondary.
-btns="$(cd "$ROOT/install" && python3 -c '
+btns="$(cd "$ROOT/installer" && python3 -c '
 import uiflow
 s = uiflow.NetworkScreen({"STATE": "no-conf", "PATH_": "/esp/novadeck/wifi.conf"})
 print(",".join(b["label"] for b in s.describe()["buttons"]))
@@ -1737,7 +1737,7 @@ printf '%s' "$btns" | grep -q 'S=None' \
   || bad "S still acts on no-conf: $btns"
 # The states where a retry CAN change something must keep it.
 for st in no-host not-found no-lease; do
-  keep="$(cd "$ROOT/install" && python3 -c "
+  keep="$(cd "$ROOT/installer" && python3 -c "
 import uiflow
 s = uiflow.NetworkScreen({'STATE': '$st', 'URL': 'u', 'SSID': 'x', 'DETAIL': 'd'})
 print(','.join(b['label'] for b in s.describe()['buttons']))" 2>&1)"
@@ -1753,7 +1753,7 @@ CASE="associating: no wifi.conf is not the same as no configuration"
 # whose network is a baked NM profile and which carries no wifi.conf at all, that was every cold
 # boot rather than a corner case. NOTE the dev build cannot reach the state this protects, so
 # `no-conf` itself still wants a release-image run before it is believed.
-assoc="$(cd "$ROOT/install" && python3 -c '
+assoc="$(cd "$ROOT/installer" && python3 -c '
 import uiflow
 t = uiflow.NetworkScreen.TABLE["associating"]
 print(t[0]); print(t[1]); print(t[2])' 2>&1)"
@@ -1766,26 +1766,26 @@ printf '%s' "$assoc" | grep -qi 'address' \
 printf '%s' "$assoc" | grep -qiE 'nothing to fix|by itself' \
   && ok "the advice is to change nothing" \
   || bad "it asks the operator to act on a state that clears itself"
-grep -q 'emit STATE associating' "$ROOT/install/netcfg" \
+grep -q 'emit STATE associating' "$ROOT/installer/netcfg" \
   && ok "netcfg emits it" || bad "nothing produces the state"
-grep -q 'has_wifi_profile' "$ROOT/install/netcfg" \
+grep -q 'has_wifi_profile' "$ROOT/installer/netcfg" \
   && ok "it consults NM's own profiles, not just wifi.conf on the ESP" \
   || bad "a baked profile still reads as 'no Wi-Fi settings'"
-grep -q 'wifi_busy' "$ROOT/install/netcfg" \
+grep -q 'wifi_busy' "$ROOT/installer/netcfg" \
   && ok "and the radio's actual state" || bad "association is not detected"
 # Ordering is the whole bug: the busy check must precede the no-conf branch.
 awk '/emit STATE associating/{a=NR} /emit STATE no-conf/{b=NR} END{exit !(a && b && a<b)}' \
-  "$ROOT/install/netcfg" \
+  "$ROOT/installer/netcfg" \
   && ok "the associating check runs BEFORE the no-conf branch" \
   || bad "no-conf still wins during the association window, which is the defect"
 
 CASE="online is not a screen, it is the reason to leave one"
 # User's follow-on: once an address arrives, move on rather than showing a success message with a
 # button. Pressing Continue and waiting for the same condition should not be two different things.
-grep -q 'if fresh.get("STATE") == "online"' "$ROOT/install/ui" \
+grep -q 'if fresh.get("STATE") == "online"' "$ROOT/installer/ui" \
   && ok "reaching online advances instead of re-rendering the network screen" \
   || bad "the operator is left looking at a success message with a Continue button"
-grep -A10 'if fresh.get("STATE") == "online"' "$ROOT/install/ui" | grep -q 'gather_preflight' \
+grep -A10 'if fresh.get("STATE") == "online"' "$ROOT/installer/ui" | grep -q 'gather_preflight' \
   && ok "and it takes the same step Continue takes (pre-flight, still read-only)" \
   || bad "the auto-advance does not go where Continue goes"
 
@@ -1795,7 +1795,7 @@ CASE="no target: the screen says WHY, it does not just wait"
 # outcome, and the panel sat on "Waiting for the installer." with no other word. A person holding
 # the device could not tell a broken build from a disk the installer refuses to touch. The reason
 # was already being logged and then thrown away by returning a bare None.
-noreason="$(cd "$ROOT/install" && python3 -c '
+noreason="$(cd "$ROOT/installer" && python3 -c '
 import importlib.util, os, sys
 from importlib.machinery import SourceFileLoader
 sys.path.insert(0, os.path.abspath("."))
@@ -1820,7 +1820,7 @@ printf '%s' "$noreason" | grep -qi 'nothing has been written' \
 # internal disk is refused on purpose" whatever the real reason was, so on a Pocket FIT refused for
 # carrying ROCKNIX it explained a cause that had nothing to do with that disk, in the confident
 # voice of the real one (HW 2026-08-24).
-foreign="$(cd "$ROOT/install" && python3 -c '
+foreign="$(cd "$ROOT/installer" && python3 -c '
 import importlib.util, os, sys
 from importlib.machinery import SourceFileLoader
 sys.path.insert(0, os.path.abspath("."))
@@ -1838,7 +1838,7 @@ printf '%s' "$foreign" | grep -qi 'running from its internal disk is refused' \
   && bad "it still asserts the running-disk cause on a foreign-OS refusal" \
   || ok "it does not assert a cause that is not this one"
 # An unrecognised reason must fall back honestly rather than guess.
-other="$(cd "$ROOT/install" && python3 -c '
+other="$(cd "$ROOT/installer" && python3 -c '
 import importlib.util, os, sys
 from importlib.machinery import SourceFileLoader
 sys.path.insert(0, os.path.abspath("."))
@@ -1849,7 +1849,7 @@ printf '%s' "$other" | grep -qi 'worth reporting' \
   && ok "an unrecognised reason falls back to 'report it', not to a guess" \
   || bad "an unknown refusal still gets a confident explanation: $other"
 # And the reason itself must survive select-target's summary line.
-sel="$(cd "$ROOT/install" && python3 -c '
+sel="$(cd "$ROOT/installer" && python3 -c '
 import uiflow, unittest.mock as m
 out = "scanning\n  /dev/sda: partition 12 (ROCKNIX) is a bootable ESP that is not ours -- remove the other OS first\nno disk qualifies -- see the reasons above"
 with m.patch.object(uiflow, "run_tool", lambda *a, **k: (1, out)):
@@ -1865,7 +1865,7 @@ printf '%s' "$noreason" | grep -qi 'ssh' \
   && bad "the panel still mentions SSH, which a release medium does not have" \
   || ok "no developer context on the panel"
 # With no reason available the screen must still be useful rather than blank.
-blank="$(cd "$ROOT/install" && python3 -c '
+blank="$(cd "$ROOT/installer" && python3 -c '
 import importlib.util, os, sys
 from importlib.machinery import SourceFileLoader
 sys.path.insert(0, os.path.abspath("."))
@@ -1876,7 +1876,7 @@ print(len(ui.IdleScreen().describe()["blocks"]))' 2>&1)"
   && ok "it still renders $blank blocks when no reason was captured" \
   || bad "with no reason the screen degrades to nothing useful: $blank"
 # It asks for nothing, so a scripted source must not spend a press on it.
-noninter="$(cd "$ROOT/install" && python3 -c '
+noninter="$(cd "$ROOT/installer" && python3 -c '
 import importlib.util, os, sys
 from importlib.machinery import SourceFileLoader
 sys.path.insert(0, os.path.abspath("."))
@@ -1981,7 +1981,7 @@ cmp -s "$T/run/install.log" "$T/esp/novadeck-install.log" \
 CASE="fallback: the log says which medium produced it"
 # This file is read on another computer, hours later, quite possibly beside a log from a different
 # build -- and every installer medium ever built answered "which image is this" identically until
-# install/mkimage.sh started stamping one. The ESP copy is the one artefact that leaves a device
+# installer/mkimage.sh started stamping one. The ESP copy is the one artefact that leaves a device
 # that could not finish, so the identity belongs in its header rather than in a journal that stays
 # on the machine.
 grep -q '^medium: .*NOVADECK_VERSION=1.2.3' "$T/run/install.log" \
@@ -2097,7 +2097,7 @@ savelog && ok "it exits 0" || bad "save-log.sh failed against an already-mounted
   || bad "it unmounted an ESP it did not mount"
 
 CASE="units: the fallback is actually armed"
-UNITDIR="$ROOT/install/units"
+UNITDIR="$ROOT/installer/units"
 grep -q '^OnFailure=novadeck-installer-console.service' "$UNITDIR/novadeck-installer.service" \
   && ok "the session names the console unit on failure" \
   || bad "nothing starts the fallback console"

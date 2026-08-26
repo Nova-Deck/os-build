@@ -204,10 +204,10 @@ creds, an SSH key and the dev package set baked in.
 | `kernel/` | Unified kernel: config fragments, patches, all device trees, firmware embed list |
 | `firmware/` | Vendor firmware fetch/verify recipes + their pins |
 | `fs-overlay/` | Rootfs overlay payload — one filesystem-mirror tree injected with a single `cp -a` |
-| `steam-seed/` | Native arm64 Steam client seed fetcher + pin |
+| `build/steam-seed/` | Native arm64 Steam client seed fetcher + pin |
 | `boot/` | Two-stage UEFI boot: steamcl (stage 1) + GRUB (stage 2), both built from pinned sources |
-| `decky/` | `novadeck-control` — the first-party Decky plugin (per-game tweaks, power, fan curve) |
-| `install/` | Internal-storage install: the read-only board probe, partition carve, and its offline suites |
+| `apps/decky/` | `novadeck-control` — the first-party Decky plugin (per-game tweaks, power, fan curve) |
+| `installer/` | Internal-storage install: the read-only board probe, partition carve, and its offline suites |
 | `ota/` | Getting an image onto a device already in the field: signed RAUC bundles, the publishers, and the nginx/CI-user setup for the OTA host |
 | `ci/` | Signing-CA generator + notes for `.github/workflows/` |
 | `build/` | `Dockerfile` for the cross-compile image |
@@ -215,7 +215,7 @@ creds, an SSH key and the dev package set baked in.
 Most of those directories carry their own `README.md` documenting them file-by-file.
 
 **Open work lives in [GitHub issues](https://github.com/Nova-Deck/os-build/issues)**, prioritised
-`P0`–`P3` and grouped by `area/*` label. `DONE.md` is the decision record for work closed before
+`P0`–`P3` and grouped by `area/*` label. `docs/worklog/DONE.md` is the decision record for work closed before
 2026-08-18 — resolved entries keep their measurements, HW-validation dates and dead ends, because
 several are the only written record of why something is shaped the way it is. Work closed after
 that date keeps its reasoning in the closed issue instead.

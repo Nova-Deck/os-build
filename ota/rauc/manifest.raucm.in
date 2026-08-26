@@ -37,7 +37,7 @@ filename=rootfs.img
 # time rauc looks each block up in BOTH slots and fetches only the ones it cannot find locally, so
 # an OS-only update moves the delta instead of the whole slot. Measured 2026-08-04 on two
 # independent pairs of real bundles: 96.1% of non-zero blocks are reused and ~125M crosses the wire
-# instead of 3.90G (DONE.md carries the table and the method).
+# instead of 3.90G (docs/worklog/DONE.md carries the table and the method).
 #
 # Matching is CONTENT-addressed, not offset-based, and every local hit is re-hashed against this
 # index before use -- which is why post-install.sh's `btrfstune -U` is harmless here. It diverges

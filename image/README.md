@@ -28,7 +28,7 @@ kernel (`kernel/build.sh`), fetched firmware (`firmware/fetch-qcom-fw.sh` +
 | File | Purpose |
 |---|---|
 | `make-sdcard.sh` | Lay the **full** GPT from the table and populate **both** slots (Phase 5): the ESP carries the stage-1 steamcl + `SteamOS/conf` + a seeded grubenv; each slot's `efi-*` partition carries its stage-2 GRUB + partsets; root-A/B + var-A/B + home. `/home` is pre-seeded with the native arm64 Steam client. → `out/images/sdcard.img`. Unprivileged (mtools + sgdisk + `dd`, no loop). |
-| `lib-homestage.sh` | Sourced, never executed. The deck user's `/home`, built once and used by two writers — `make-sdcard.sh` at build time and `install/novadeck-install` on the device — because the two must produce the same tree. The parts that drift silently are the `~/.steam` compat symlinks: a missing sdk64 does not stop Steam starting, it makes an x86 title's `SteamAPI_Init()` fail at launch, on that medium only. |
+| `lib-homestage.sh` | Sourced, never executed. The deck user's `/home`, built once and used by two writers — `make-sdcard.sh` at build time and `installer/novadeck-install` on the device — because the two must produce the same tree. The parts that drift silently are the `~/.steam` compat symlinks: a missing sdk64 does not stop Steam starting, it makes an x86 title's `SteamAPI_Init()` fail at launch, on that medium only. |
 | `verify-card.sh` | Read the built card back and assert what actually landed: the GPT against the table, each slot's stage-2 config, the seeded grubenv. `make verify-card`. |
 | `card-meta.sh` | Emit the card's own metadata (version, git, mode, sizes) for the release workflows and `ota/publish-card.sh`. |
 

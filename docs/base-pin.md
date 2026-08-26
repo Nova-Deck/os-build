@@ -38,8 +38,8 @@ Two artifacts, pinned by different mechanisms and for different reasons:
 
 | Pin | File | What it selects |
 |---|---|---|
-| Package repo revision | [`snapshot.pin`](../snapshot.pin) | the repo **every file on the image is installed from** |
-| arm64 builder image | [`base-devel.digest`](../base-devel.digest) | the **execution environment** the build runs pacman/makepkg in |
+| Package repo revision | [`build/snapshot.pin`](../build/snapshot.pin) | the repo **every file on the image is installed from** |
+| arm64 builder image | [`build/base-devel.digest`](../build/base-devel.digest) | the **execution environment** the build runs pacman/makepkg in |
 
 There used to be a third, `base.digest`, pinning the `…/base` container image the root was
 `docker export`ed from. **Phase 4c deleted it.** The root is now bootstrapped —
@@ -54,7 +54,7 @@ The digest it held, for the record:
 registry.gitlab.steamos.cloud/holo/holo-core-aarch64-preview/base@sha256:edd05b6cf82e4a7f8bab2fb8dd453c45fc44405d7e5a25e36fe229607a224e88
 ```
 
-Reference any image **by digest**, never by tag — `base-devel.digest` follows the same rule,
+Reference any image **by digest**, never by tag — `build/base-devel.digest` follows the same rule,
 and `rootfs/customize-base.sh` refuses a ref that is not `…@sha256:<digest>`.
 
 ### How to re-resolve / detect drift
@@ -72,4 +72,4 @@ curl -sI -H "Authorization: Bearer $tok" \
 ```
 
 > TODO(Phase 7): add a CI step that re-resolves the builder digest and fails if it drifts
-> from `base-devel.digest` without an explicit bump.
+> from `build/base-devel.digest` without an explicit bump.

@@ -1,6 +1,7 @@
-# STATUS: BUILDS AND SHIPS, HW-validated on SM8650. `make overlay` produces
-# scx-scheds-1.1.2-1.1-aarch64.pkg.tar.zst carrying scx_lavd + scx_bpfland + scx_rusty
+# STATUS: BUILDS AND SHIPS. `make overlay` produces
+# scx-scheds-1.1.3-1.1-aarch64.pkg.tar.zst carrying scx_lavd + scx_bpfland + scx_rusty
 # (aarch64 ELF), scx.service and /etc/default/scx. It is in rootfs/customize-base.sh PKGS.
+# HW-validated on SM8650 at 1.1.2; 1.1.3 is a fresh bump and is NOT HW-validated yet.
 #
 # scx_lavd is NOT the default CPU scheduler — it is opt-in. The default is "none" (the stock
 # in-kernel EEVDF).
@@ -87,6 +88,28 @@
 # services/scx.service and services/scx still exist at those paths in the new tarball (package()
 # installs both). Also re-read upstream's own kernel.config in the tarball root — it is the
 # authoritative list of required CONFIG_* symbols, and it does change between releases.
+#
+# Bump to 1.1.3 (upstream release 2026-08-19), checked 2026-08-27 against the v1.1.3 tarball:
+#   - services/scx.service and services/scx both still present, and services/scx still has the
+#     three lines package()'s sed rewrites (`SCX_SCHEDULER=`, the `# Set custom flags` comment,
+#     `#SCX_FLAGS=`). The `SCX_FLAGS='--autopower'` grep assertion therefore still fires.
+#   - scheds/rust/scx_{lavd,bpfland,rusty} all still exist, Cargo.lock is still checked in
+#     (--locked/--frozen hold), and scx_cargo still uses the `disable_rustfmt` sentinel at three
+#     call sites — so the qemu shim in build() still matches and is still needed.
+#   - upstream kernel.config is BYTE-IDENTICAL to 1.1.2's. Nothing to do in kernel/kernel.config.
+#
+# One new runtime dependency that upstream's kernel.config already covers but our fragment does
+# not name, so it was traced rather than assumed. 1.1.3's scx_lavd drops ops.cpu_acquire/release
+# on kernels >= 6.19 and attaches `SEC("?tp_btf/sched_switch")` instead — ours is 7.2, so that
+# path IS taken and CONFIG_BPF_EVENTS is now load-bearing where it was not at 1.1.2. It resolves
+# to =y here without an entry: on arm64 ARCH_SUPPORTS_UPROBES is def_bool y, so UPROBE_EVENTS
+# takes its `default y`, and BPF_EVENTS is a promptless `default y` gated on
+# (KPROBE_EVENTS || UPROBE_EVENTS) && PERF_EVENTS && BPF_SYSCALL, all of which hold. Do NOT add
+# CONFIG_BPF_EVENTS to kernel/kernel.config — it has no prompt and is already right.
+# The other kfuncs 1.1.3 migrated to (scx_bpf_task_set_slice/_dsq_vtime, added in 6.19) are
+# __weak ksyms behind bpf_ksym_exists() in scheds/include/scx/compat.bpf.h, so they are safe on
+# an older kernel too.
+
 name: scx-scheds
 pkgbuild_local: PKGBUILD
 pkgrel_suffix: 1

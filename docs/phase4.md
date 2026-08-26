@@ -63,7 +63,7 @@ Two consequences for 4a:
 The pressing problem is what stays behind. The shipped root carries the entire
 package-manager runtime: `pacman`, `gnupg` (and therefore `dirmngr`), the keyring package
 and its vendor-enabled weekly refresh timer, `/var/lib/pacman/`, `/etc/pacman.d/gnupg`.
-Nothing in `fs-overlay/usr/bin` or `fs-overlay/usr/lib` uses any of it at runtime — it is
+Nothing in `rootfs/overlay/usr/bin` or `rootfs/overlay/usr/lib` uses any of it at runtime — it is
 pure dead weight on a sealed read-only root, and it is not inert: the weekly key-refresh
 timer is a vendor enable-symlink under `/usr/lib/systemd/system/timers.target.wants/`,
 which no preset can disable. When it fires it activates `dirmngr@etc-pacman.d-gnupg`,
@@ -407,7 +407,7 @@ such filesystems on one disk make the second one scanned look like the first hav
 mounting p5 can hand you p4, on the one test whose purpose is proving which slot booted.
 `image/make-sdcard.sh` gives slot B a fresh fsid with `btrfstune -U`. **RAUC will hit this too** —
 every `rauc install` writes identical bytes into the inactive slot — so its post-install hook needs
-the same treatment. Done: `fs-overlay/usr/lib/rauc/post-install.sh` runs `btrfstune -f -U`.
+the same treatment. Done: `rootfs/overlay/usr/lib/rauc/post-install.sh` runs `btrfstune -f -U`.
 
 ### Hard prerequisite, independent of the design
 
@@ -500,7 +500,7 @@ recovery mechanism when you have the card in a reader.
 | both suites, host-side, no build needed | `make test` |
 | `umount` + `/esp` staged into the cpio | `image/mkinitramfs.sh` |
 | both slots populated, distinct fsid, state seeded | `image/make-sdcard.sh`, `rootfs/assemble-rootfs.sh` |
-| `status` / `try` / `mark-good` / `rollback` + RAUC's custom-bootloader contract | `fs-overlay/usr/bin/novadeck-bootctl` |
+| `status` / `try` / `mark-good` / `rollback` + RAUC's custom-bootloader contract | `rootfs/overlay/usr/bin/novadeck-bootctl` |
 | trial-boot confirmation | `novadeck-boot-good.{path,service}`, marker from `novadeck-session` |
 | dm-verity, declared vfat/loop | `kernel/kernel.config`, asserted in `kernel/build.sh` |
 | signing CA; only the CA cert is committed | `ci/gen-signing-ca.sh`, `ota/rauc/novadeck-ca.pem` |

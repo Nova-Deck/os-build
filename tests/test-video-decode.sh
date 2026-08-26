@@ -22,8 +22,8 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-STEAM_SH="$ROOT/fs-overlay/usr/bin/novadeck-steam"
-RULE="$ROOT/fs-overlay/usr/lib/udev/rules.d/70-novadeck-iris-video-dec.rules"
+STEAM_SH="$ROOT/rootfs/overlay/usr/bin/novadeck-steam"
+RULE="$ROOT/rootfs/overlay/usr/lib/udev/rules.d/70-novadeck-iris-video-dec.rules"
 DOC="$ROOT/docs/video-decode.md"
 
 PASS=0; FAIL=0
@@ -48,7 +48,7 @@ fi
 
 # 2. Any other rule that hands CEF a ChromeOS decoder name does the same damage, so match on the
 #    symlink target rather than on our old filename.
-stray=$(grep -rlE 'SYMLINK\+="video-(dec|enc)' "$ROOT/fs-overlay/usr/lib/udev/rules.d" 2>/dev/null || true)
+stray=$(grep -rlE 'SYMLINK\+="video-(dec|enc)' "$ROOT/rootfs/overlay/usr/lib/udev/rules.d" 2>/dev/null || true)
 if [[ -n $stray ]]; then
     bad "a udev rule still creates a ChromeOS video-dec/enc name: $stray"
 else

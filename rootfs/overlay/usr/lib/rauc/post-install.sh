@@ -70,8 +70,8 @@ SHA256=${SHA256:-sha256sum}
 # of that logic drift in the direction "the installed system boots, the updated one does not", which
 # is discoverable only on hardware. So they live in one file and this sources it.
 #
-# Resolved RELATIVE TO THIS SCRIPT, with no seam, because fs-overlay/ mirrors the device layout
-# exactly: /usr/lib/rauc/../novadeck/install/ and fs-overlay/usr/lib/rauc/../novadeck/install/ are
+# Resolved RELATIVE TO THIS SCRIPT, with no seam, because rootfs/overlay/ mirrors the device layout
+# exactly: /usr/lib/rauc/../novadeck/install/ and rootfs/overlay/usr/lib/rauc/../novadeck/install/ are
 # both right, so the offline suite exercises the shipped path rather than a test-only one. Sourced
 # AFTER the seams above so the library picks up an overridden $SHA256 rather than its own default.
 SELFDIR="$(cd "$(dirname "$0")" && pwd)"

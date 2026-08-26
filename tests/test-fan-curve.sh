@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Offline check for the editable fan curve (fs-overlay/usr/bin/novadeck-powerd).
+# Offline check for the editable fan curve (rootfs/overlay/usr/bin/novadeck-powerd).
 #
 #   tests/test-fan-curve.sh
 #
@@ -24,15 +24,15 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-POWERD="$ROOT/fs-overlay/usr/bin/novadeck-powerd"
-FACTORY="$ROOT/fs-overlay/usr/share/novadeck/power-profiles.conf"
+POWERD="$ROOT/rootfs/overlay/usr/bin/novadeck-powerd"
+FACTORY="$ROOT/rootfs/overlay/usr/share/novadeck/power-profiles.conf"
 
 [[ -f $POWERD ]]  || { echo "novadeck-powerd missing: $POWERD" >&2; exit 1; }
 [[ -f $FACTORY ]] || { echo "power-profiles.conf missing: $FACTORY" >&2; exit 1; }
 
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 
-# Loading novadeck-powerd as a module writes a __pycache__ into fs-overlay/usr/bin, which the
+# Loading novadeck-powerd as a module writes a __pycache__ into rootfs/overlay/usr/bin, which the
 # assembler copies into the rootfs verbatim. Keep the bytecode in the sandbox. See test-perf.sh.
 export PYTHONPYCACHEPREFIX="$TMP/pycache"
 
@@ -49,7 +49,7 @@ powerd_path, root, tmp = sys.argv[1], sys.argv[2], pathlib.Path(sys.argv[3])
 
 # novadeck-powerd does `sys.path.insert(0, "/usr/lib/novadeck"); import novadeck_perf` at
 # module scope. That path does not exist on the host, so point at the repo's copy first.
-sys.path.insert(0, os.path.join(root, "fs-overlay/usr/lib/novadeck"))
+sys.path.insert(0, os.path.join(root, "rootfs/overlay/usr/lib/novadeck"))
 spec = importlib.util.spec_from_loader(
     "powerd", importlib.machinery.SourceFileLoader("powerd", powerd_path))
 pd = importlib.util.module_from_spec(spec)

@@ -36,7 +36,7 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-HOOK="$ROOT/fs-overlay/usr/lib/rauc/post-install.sh"
+HOOK="$ROOT/rootfs/overlay/usr/lib/rauc/post-install.sh"
 [ -f "$HOOK" ] || { echo "no post-install hook: $HOOK" >&2; exit 1; }
 
 PASS=0; FAIL=0; CASE=""; SB=""

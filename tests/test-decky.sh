@@ -16,12 +16,12 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SYNC="$ROOT/fs-overlay/usr/lib/novadeck/decky-sync"
+SYNC="$ROOT/rootfs/overlay/usr/lib/novadeck/decky-sync"
 PIN="$ROOT/packages/decky-loader/prebuilt.pin"
 PLUGIN="$ROOT/apps/decky/novadeck-control"
-UNITDIR="$ROOT/fs-overlay/usr/lib/systemd/system"
-WANTSDIR="$ROOT/fs-overlay/etc/systemd/system/multi-user.target.wants"
-APPCONF="$ROOT/fs-overlay/usr/share/fex-emu/AppConfig/PluginLoader.json"
+UNITDIR="$ROOT/rootfs/overlay/usr/lib/systemd/system"
+WANTSDIR="$ROOT/rootfs/overlay/etc/systemd/system/multi-user.target.wants"
+APPCONF="$ROOT/rootfs/overlay/usr/share/fex-emu/AppConfig/PluginLoader.json"
 
 PASS=0; FAIL=0; SKIP=0
 ok()  { PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }
@@ -67,7 +67,7 @@ fi
 # --- the units -----------------------------------------------------------------------------
 for unit in novadeck-decky-sync.service plugin_loader.service; do
   f="$UNITDIR/$unit"
-  if [ ! -f "$f" ]; then bad "$unit missing from fs-overlay"; continue; fi
+  if [ ! -f "$f" ]; then bad "$unit missing from rootfs/overlay"; continue; fi
   grep -q '^RequiresMountsFor=/home/deck$' "$f" \
     && ok "$unit orders after the /home mount — the payload lives there" \
     || bad "$unit lacks RequiresMountsFor=/home/deck: a race with home.mount seeds into the bare root"
@@ -84,7 +84,7 @@ grep -Eq '^After=.*novadeck-decky-sync\.service' "$UNITDIR/plugin_loader.service
 grep -q '^ExecStart=/home/deck/homebrew/services/PluginLoader$' "$UNITDIR/plugin_loader.service" 2>/dev/null \
   && ok "loader execs the SEEDED copy on /home, not the read-only master" \
   || bad "loader ExecStart is not the seeded /home path — self-updates would be impossible"
-preset="$ROOT/fs-overlay/usr/lib/systemd/system-preset/60-novadeck-decky.preset"
+preset="$ROOT/rootfs/overlay/usr/lib/systemd/system-preset/60-novadeck-decky.preset"
 { grep -q '^enable novadeck-decky-sync.service$' "$preset" && grep -q '^enable plugin_loader.service$' "$preset"; } 2>/dev/null \
   && ok "preset enables both units" \
   || bad "60-novadeck-decky.preset does not enable both units"
@@ -97,7 +97,7 @@ preset="$ROOT/fs-overlay/usr/lib/systemd/system-preset/60-novadeck-decky.preset"
 # that window on every boot; whether it lands there is timing, and it has landed.
 # Everything below drives the watchdog's decision loop against fake ss/systemctl —
 # the loop is the whole mechanism, so an untested loop is an untested fix.
-WATCHDOG="$ROOT/fs-overlay/usr/lib/novadeck/decky-inject-watchdog"
+WATCHDOG="$ROOT/rootfs/overlay/usr/lib/novadeck/decky-inject-watchdog"
 [ -x "$WATCHDOG" ] \
   && ok "decky-inject-watchdog present and executable" \
   || bad "decky-inject-watchdog missing or not executable"
@@ -111,7 +111,7 @@ if [ -f "$wunit" ]; then
     && ok "watchdog is Restart=always — a watchdog that can die once is not one" \
     || bad "watchdog unit is not Restart=always"
 else
-  bad "novadeck-decky-watchdog.service missing from fs-overlay"
+  bad "novadeck-decky-watchdog.service missing from rootfs/overlay"
 fi
 [ -L "$WANTSDIR/novadeck-decky-watchdog.service" ] \
   && ok "watchdog wants-symlink present" \
@@ -238,7 +238,7 @@ fi
 # --- the CEF sentinel ----------------------------------------------------------------------
 # Unconditional by decision (2026-08-08): it is Decky's only injection path. The regression this
 # catches is someone "cleaning up" the always-on touch back behind a debug gate.
-if grep -q '^: >"${STEAM}/.cef-enable-remote-debugging"' "$ROOT/fs-overlay/usr/bin/novadeck-steam"; then
+if grep -q '^: >"${STEAM}/.cef-enable-remote-debugging"' "$ROOT/rootfs/overlay/usr/bin/novadeck-steam"; then
   ok "novadeck-steam touches the CEF sentinel unconditionally (Decky's only injection path)"
 else
   bad "the CEF sentinel touch is missing or re-gated: Decky polls forever and no plugin UI appears"
@@ -251,7 +251,7 @@ fi
 # path: the plugin's constant, and the entry point the image ships. Drift is silent — Steam stores
 # the string happily and the launch just runs unwrapped.
 LAUNCH_LIB="$PLUGIN/src/lib/launchWrapper.ts"
-LAUNCH_ENTRY="$ROOT/fs-overlay/usr/lib/novadeck/game-launch"
+LAUNCH_ENTRY="$ROOT/rootfs/overlay/usr/lib/novadeck/game-launch"
 if [ -f "$LAUNCH_LIB" ]; then
   wrapper_path=$(sed -n 's/^export const LAUNCH_WRAPPER = "\(.*\)";$/\1/p' "$LAUNCH_LIB")
   [ -n "$wrapper_path" ] \
@@ -259,10 +259,10 @@ if [ -f "$LAUNCH_LIB" ]; then
     || bad "launchWrapper.ts has no LAUNCH_WRAPPER constant to check"
 
   # The image side: an entry point must exist at exactly that path.
-  if [ -n "$wrapper_path" ] && [ -e "$ROOT/fs-overlay$wrapper_path" ]; then
+  if [ -n "$wrapper_path" ] && [ -e "$ROOT/rootfs/overlay$wrapper_path" ]; then
     ok "the image ships an entry point at the path the plugin writes"
   else
-    bad "no fs-overlay$wrapper_path — the plugin would write launch options naming nothing"
+    bad "no rootfs/overlay$wrapper_path — the plugin would write launch options naming nothing"
   fi
 
   # The single entry point every tuned launch goes through, now that the in-tool shim is gone.
@@ -472,7 +472,7 @@ except ValueError:
 # so a drifted UI offers dead controls.
 import pathlib
 root = pathlib.Path(sys.argv[1]).resolve().parents[2]   # apps/decky/novadeck-control -> repo root
-base_config = root / "fs-overlay/usr/share/fex-emu/Config.json"
+base_config = root / "rootfs/overlay/usr/share/fex-emu/Config.json"
 shipped = list(json.load(open(base_config))["ThunksDB"])
 tweaks.FEX_BASE_CONFIG = base_config
 if tweaks.load_base_thunks() != shipped:

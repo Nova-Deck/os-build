@@ -55,7 +55,7 @@ IMG_GIT="$(field NOVADECK_GIT)"
 # an image assembled before this field existed, which ota/publish-bundle.sh treats as "not release".
 IMG_MODE="$(field NOVADECK_MODE)"
 
-# The identity rule, and it MUST stay in lockstep with identity_of() in fs-overlay/usr/bin/
+# The identity rule, and it MUST stay in lockstep with identity_of() in rootfs/overlay/usr/bin/
 # novadeck-update: the version when the build has a real one, the build timestamp otherwise. A local
 # build renders VERSION as the literal `dev`, which every dev image shares — keying on it would make
 # two different dev bundles look like the same update, and duplicate detection would suppress the

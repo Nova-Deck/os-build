@@ -16,7 +16,7 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-LIB="$ROOT/fs-overlay/usr/lib/novadeck/install/lib-slotwrite.sh"
+LIB="$ROOT/rootfs/overlay/usr/lib/novadeck/install/lib-slotwrite.sh"
 GENPART="$ROOT/image/genpart.sh"
 TABLE="$ROOT/image/partition-table.txt"
 

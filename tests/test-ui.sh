@@ -463,7 +463,7 @@ netcfg join | grep -q 'hunter2' \
 unset NET_LEASE NET_HOST_RC
 
 CASE="§4b: netcfg and novadeck-update agree on which host 'reachable' means"
-# THE URL IS WRITTEN THREE TIMES -- shell here, Python in fs-overlay/usr/bin/novadeck-update, Python
+# THE URL IS WRITTEN THREE TIMES -- shell here, Python in rootfs/overlay/usr/bin/novadeck-update, Python
 # again in installer/release-info -- and this assertion is the only thing that keeps them the same
 # URL. It is not hypothetical: netcfg shipped for an hour with an invented default
 # (`ota.novadeck.org`), which would have reported every healthy network as `no-host`, the exact
@@ -471,7 +471,7 @@ CASE="§4b: netcfg and novadeck-update agree on which host 'reachable' means"
 # and for the same reason. The third copy is the one that would hurt most quietly: netcfg would
 # report `online` against one host while release-info fetched a manifest from another.
 net_default="$(sed -n 's/^OTA_DEFAULT_URL=//p' "$NETCFG" | head -1)"
-upd_default="$(sed -n 's/^DEFAULT_URL = "\(.*\)"$/\1/p' "$ROOT/fs-overlay/usr/bin/novadeck-update" | head -1)"
+upd_default="$(sed -n 's/^DEFAULT_URL = "\(.*\)"$/\1/p' "$ROOT/rootfs/overlay/usr/bin/novadeck-update" | head -1)"
 rel_default="$(sed -n 's/^DEFAULT_URL = "\(.*\)"$/\1/p' "$ROOT/installer/release-info" | head -1)"
 [ -n "$net_default" ] && [ "$net_default" = "$upd_default" ] \
   && ok "both default to $net_default" \

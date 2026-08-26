@@ -18,9 +18,9 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DAEMON="$ROOT/fs-overlay/usr/bin/novadeck-pairingd"
-SWITCH="$ROOT/fs-overlay/usr/bin/steamos-polkit-helpers/steamos-devkit-mode"
-UNIT="$ROOT/fs-overlay/usr/lib/systemd/system/novadeck-pairingd.service"
+DAEMON="$ROOT/rootfs/overlay/usr/bin/novadeck-pairingd"
+SWITCH="$ROOT/rootfs/overlay/usr/bin/steamos-polkit-helpers/steamos-devkit-mode"
+UNIT="$ROOT/rootfs/overlay/usr/lib/systemd/system/novadeck-pairingd.service"
 
 PASS=0; FAIL=0; SKIP=0; CASE=""
 ok()   { PASS=$((PASS+1)); printf '  ok   %s -- %s\n' "$CASE" "$1"; }
@@ -40,7 +40,7 @@ if ! command -v ssh-keygen >/dev/null 2>&1; then
   skip "ssh-keygen not on PATH — cannot generate or validate test keys"
 else
   # -B is load-bearing: importing the daemon by path writes __pycache__ NEXT TO IT, i.e. inside
-  # fs-overlay/usr/bin, which assemble-rootfs.sh copies wholesale into the image. Without this,
+  # rootfs/overlay/usr/bin, which assemble-rootfs.sh copies wholesale into the image. Without this,
   # running the tests silently bakes a stale .pyc of the pairing agent into the shipped rootfs.
   agent_out="$(python3 -B - "$DAEMON" <<'PY'
 import importlib.machinery, importlib.util

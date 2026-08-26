@@ -22,7 +22,7 @@ SteamUI                                  injected via the CEF debugger port (the
 ```
 
 - The loader is x86_64 (upstream ships no aarch64 build) and runs under the system FEX binfmt.
-  Its FEX knobs live in `fs-overlay/usr/share/fex-emu/AppConfig/PluginLoader.json` — keyed by
+  Its FEX knobs live in `rootfs/overlay/usr/share/fex-emu/AppConfig/PluginLoader.json` — keyed by
   binary name, TSO fully on, Multiblock off, UI thunks enabled.
 - There is no runtime existence-gating: the loader ships in every image, so image completeness
   is asserted at build time (guard-rootfs assertion 9 — loader executable, plugin dist staged,

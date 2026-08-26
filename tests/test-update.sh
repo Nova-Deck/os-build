@@ -15,7 +15,7 @@
 # ota/genbundle.sh and in Python here — and `identity-rules-agree` below is the only thing that
 # makes them stay the same rule. Phase 2 exists because those two strings had drifted apart.
 #
-# HOW IT WORKS: the real, shipped fs-overlay/usr/bin/novadeck-update is executed — not a copy, not a
+# HOW IT WORKS: the real, shipped rootfs/overlay/usr/bin/novadeck-update is executed — not a copy, not a
 # sed-mangled variant. It exposes the environment seams documented in its own header
 # (NOVADECK_RELEASE_FILE, NOVADECK_OTA_CONFIG, NOVADECK_OTA_STAGE, NOVADECK_STEAM_LOGINUSERS,
 # NOVADECK_CURL, NOVADECK_OTA_URL) and they exist for this file. curl is stubbed on disk so no test
@@ -27,7 +27,7 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-CLIENT="$ROOT/fs-overlay/usr/bin/novadeck-update"
+CLIENT="$ROOT/rootfs/overlay/usr/bin/novadeck-update"
 GENBUNDLE="$ROOT/ota/genbundle.sh"
 [ -f "$CLIENT" ] || { echo "no novadeck-update: $CLIENT" >&2; exit 1; }
 
@@ -38,7 +38,7 @@ bad() { FAIL=$((FAIL+1)); printf '  FAIL %s -- %s\n' "$CASE" "$1"; }
 W="$(mktemp -d)"
 trap 'rm -rf "$W"' EXIT
 
-# Loading novadeck-update as a module writes a __pycache__ into fs-overlay/usr/bin, which the
+# Loading novadeck-update as a module writes a __pycache__ into rootfs/overlay/usr/bin, which the
 # assembler copies into the rootfs verbatim. Keep the bytecode in the sandbox. See test-perf.sh.
 export PYTHONPYCACHEPREFIX="$W/pycache"
 

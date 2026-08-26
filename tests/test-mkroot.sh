@@ -393,10 +393,10 @@ grep -q 'NTPSynchronized' "$ROOT/installer/netcfg" \
   || bad "the clock check is not asking the authority"
 
 CASE="overlay udev rules"
-grep -q 'fs-overlay/usr/lib/udev/rules.d' "$MKROOT" \
+grep -q 'rootfs/overlay/usr/lib/udev/rules.d' "$MKROOT" \
   && ok "the overlay udev rules are staged" \
   || bad "no udev rules — InputPlumber cannot reach /dev/uinput"
-n=$(ls "$ROOT/fs-overlay/usr/lib/udev/rules.d"/*.rules 2>/dev/null | wc -l)
+n=$(ls "$ROOT/rootfs/overlay/usr/lib/udev/rules.d"/*.rules 2>/dev/null | wc -l)
 [ "$n" -gt 0 ] && ok "$n rules to ship" || bad "the overlay rules directory is empty"
 # Taken whole, for the same reason as firmware: hand-picking from a hardware-support set is what
 # produced the ath11k hole.
@@ -420,11 +420,11 @@ CASE="InputPlumber board configs"
 # HW-FOUND the same boot: the UI drew and stopped on §4d's "No controller or keyboard". The prebuilt
 # tarball ships the daemon and its generic configs; the per-board MCU gamepad definitions are OURS
 # and live in the overlay. Without them nothing recognises the pad and the stop fires correctly.
-grep -q 'fs-overlay/etc/inputplumber' "$MKROOT" \
+grep -q 'rootfs/overlay/etc/inputplumber' "$MKROOT" \
   && ok "the board configs are staged from the overlay" \
   || bad "no InputPlumber board configs — the UI stops on 'No controller or keyboard'"
 for d in capability_maps.d devices.d; do
-  n=$(ls "$ROOT/fs-overlay/etc/inputplumber/$d"/*.yaml 2>/dev/null | wc -l)
+  n=$(ls "$ROOT/rootfs/overlay/etc/inputplumber/$d"/*.yaml 2>/dev/null | wc -l)
   [ "$n" -gt 0 ] && ok "$d has $n configs to ship" || bad "$d is empty in the overlay"
 done
 grep -q 'etc/inputplumber' "$MKROOT" \

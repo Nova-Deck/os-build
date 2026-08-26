@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Offline check for the systemd-coredump limits, fs-overlay/etc/systemd/coredump.conf.d/.
+# Offline check for the systemd-coredump limits, rootfs/overlay/etc/systemd/coredump.conf.d/.
 #
 #   tests/test-coredump-limit.sh
 #
@@ -19,7 +19,7 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CONF="$ROOT/fs-overlay/etc/systemd/coredump.conf.d/10-novadeck-coredump-limit.conf"
+CONF="$ROOT/rootfs/overlay/etc/systemd/coredump.conf.d/10-novadeck-coredump-limit.conf"
 
 PASS=0; FAIL=0; SKIP=0
 ok()  { PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }

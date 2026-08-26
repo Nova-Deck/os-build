@@ -6,7 +6,7 @@
 #
 #   boot/boards.map                              build-time catalog: id / menu name / dtb / bootargs
 #   kernel/dts/qcom/*.dts                        the DTBs that actually ship
-#   fs-overlay/usr/lib/novadeck/devices/*.conf   the identity the RUNNING system reports
+#   rootfs/overlay/usr/lib/novadeck/devices/*.conf   the identity the RUNNING system reports
 #
 # and then boot/gen-grub-cfg.sh turns the first into a grub.cfg whose per-slot cmdline has to match
 # image/partition-table.txt. A mismatch anywhere is a board that cannot be selected, a menu entry
@@ -20,7 +20,7 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DEVICES="$ROOT/fs-overlay/usr/lib/novadeck/devices"
+DEVICES="$ROOT/rootfs/overlay/usr/lib/novadeck/devices"
 BOARDS="$ROOT/boot/boards.map"
 TABLE="$ROOT/image/partition-table.txt"
 DTS="$ROOT/kernel/dts/qcom"
@@ -84,13 +84,13 @@ done
 
 # --- 2b. device-env can actually REACH every profile --------------------------------------------
 # A fourth file has to agree and nothing checked it until a six-board SoC import made the gap
-# obvious. fs-overlay/usr/lib/novadeck/device-env maps the devicetree `model` string to a profile
+# obvious. rootfs/overlay/usr/lib/novadeck/device-env maps the devicetree `model` string to a profile
 # name with a hand-written case. Miss a board there and it does not fail: it falls through to
 # defaults.conf, so the running system reports device-id `unknown`, exports no SOC_CLASS (powerd
 # loses its underclock table) and no panel dims (novadeck-session falls back to a generic
 # landscape 1920x1080 on the wrong connector). No error, just a subtly wrong session.
 CASE="device-env <-> profiles"
-DEVENV="$ROOT/fs-overlay/usr/lib/novadeck/device-env"
+DEVENV="$ROOT/rootfs/overlay/usr/lib/novadeck/device-env"
 if [ ! -r "$DEVENV" ]; then
   bad "cannot read $DEVENV"
 else

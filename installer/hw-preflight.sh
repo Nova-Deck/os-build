@@ -68,7 +68,7 @@ scp "${SSHOPTS[@]}" -q \
   "$ROOT/image/genpart.sh" \
   "$ROOT/image/lib-gpt.sh" \
   "$ROOT/image/partition-table.txt" \
-  "$ROOT/fs-overlay/usr/lib/novadeck/install/lib-slotwrite.sh" \
+  "$ROOT/rootfs/overlay/usr/lib/novadeck/install/lib-slotwrite.sh" \
   "$host:$PROBE/"
 ssh "${SSHOPTS[@]}" "$host" "chmod +x $PROBE/sgdisk $PROBE/mdir $PROBE/*.sh $PROBE/ui $PROBE/netcfg $PROBE/release-info"
 

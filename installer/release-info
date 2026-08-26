@@ -20,7 +20,7 @@
 # THE MANIFEST IS NOT A TRUST BOUNDARY. latest.json says which bundle to fetch and nothing more; it
 # cannot select a keyring, a verification mode or an install flag, and the bundle it names still has
 # to verify against the baked CA before a single partition is touched. Every field in it is
-# attacker-controlled, and the validation below is fs-overlay/usr/bin/novadeck-update's, ported: the
+# attacker-controlled, and the validation below is rootfs/overlay/usr/bin/novadeck-update's, ported: the
 # `bundle` field is forced to a BARE FILENAME so a manifest can never aim this device at another
 # host. tests/test-ui.sh asserts the two agree, both on the default URL literal and on the shapes
 # they reject; that assertion is the only thing keeping the copies together.

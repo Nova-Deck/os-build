@@ -254,7 +254,7 @@ partition with re-pointed partsets, refreshes the ESP's steamcl, and re-arms the
 `novadeck-boot-good.service` used `ExecOnFailure=`, which **is not a systemd directive**: the
 parser logs "Unknown key name" and carries on, so the demote never ran. It is now
 `OnFailure=novadeck-boot-bad.service`, and `tests/test-units.sh` runs `systemd-analyze` over every
-unit in `fs-overlay` so a fabricated directive cannot survive review again.
+unit in `rootfs/overlay` so a fabricated directive cannot survive review again.
 
 With that fixed:
 
@@ -274,7 +274,7 @@ Offline, in `make test` — all green at the time of writing:
 | Suite | What it pins down |
 |---|---|
 | `test-stage2-grub.sh` | Generates both configs and asserts them: one entry per DTB, per-slot `root=`/`novadeck.var=`/`novadeck.efi=`/`novadeck.slot=` and never the other slot's, the three `probe --part-uuid` derivations with their `"none"` guards and the PARTLABEL fallback defaulted *before* them, `probe` present in `boot/grub.sh`'s embedded `MODULES`, the partitions addressed by index VARIABLE with the `parts.env` map read from `($root)` behind a `[ -f ]` guard — all-or-nothing, this slot's keys only, defaults from `partition-table.txt` set before the load and the load before the first use — `savedefault` defined, grubenv load *and* save, both timeout paths, `novadeck_bootattempts` naming this slot and never the other one and running after `terminal_output gfxterm`, and `grub-script-check` parses it. Also catalog ↔ DTB ↔ device-profile parity, and that the dtsi bootargs are gone. |
-| `test-units.sh` | `systemd-analyze` over every unit in `fs-overlay`; any unknown key or section fails. |
+| `test-units.sh` | `systemd-analyze` over every unit in `rootfs/overlay`; any unknown key or section fails. |
 | `test-bootctl.sh` | The RAUC backend contract against a stubbed `steamos-bootconf`. |
 | `test-post-install.sh` | The hook against a sandboxed ESP/efi/var, including the fsid + label re-stamp. |
 | `verify-card.sh` (`make verify-card`) | The BUILT card: distinct fsids, per-slot btrfs labels, the ESP stage-1 tree + confs + grubenv, the efi stage-2 trees + partset identity matrix, and that each on-card `grub.cfg` is byte-identical to what `gen-grub-cfg.sh` produces for that slot. |

@@ -265,22 +265,22 @@ STEAM_SEED   := work/steam-seed/steamrtarm64/steam
 # seeds /home from the directory directly, with mkfs.ext4 -d.
 SEED_ARTIFACT := out/steam-seed/steam-seed.tar.zst
 
-# Repo sources the rootfs assembler reads directly (itself + the unified fs-overlay/ payload tree
-# it copies in wholesale). find recurses, so files added under fs-overlay/ are tracked
+# Repo sources the rootfs assembler reads directly (itself + the unified rootfs/overlay/ payload tree
+# it copies in wholesale). find recurses, so files added under rootfs/overlay/ are tracked
 # automatically — no per-file Makefile edits.
 #
 # rootfs/conf/seal.list + rootfs/seal-rootfs.sh are assembler inputs too: the seal is the last thing
 # that touches the staged tree (Phase 4a step 3), so editing what gets stripped changes the image
-# exactly as editing fs-overlay/ does.
+# exactly as editing rootfs/overlay/ does.
 #
 # rootfs/guard-rootfs.sh is listed for the opposite reason -- it changes no bytes in the image, but
 # it decides whether one is produced at all (Phase 4a step 4). A tightened assertion has to re-run
-# against the tree it was tightened for, not wait for the next unrelated fs-overlay edit.
+# against the tree it was tightened for, not wait for the next unrelated rootfs/overlay edit.
 # rootfs/manifest.lock is one of its inputs (it asserts the tree still matches the lock) and is
 # already a $(BASE_STAMP) prerequisite, which reaches the rootfs transitively.
 #
 ASSEMBLE_SRC := $(shell find $(ROOTFS_DIR)/assemble-rootfs.sh $(ROOTFS_DIR)/seal-rootfs.sh $(ROOTFS_DIR)/conf/seal.list \
-                              $(ROOTFS_DIR)/guard-rootfs.sh fs-overlay -type f 2>/dev/null)
+                              $(ROOTFS_DIR)/guard-rootfs.sh rootfs/overlay -type f 2>/dev/null)
 
 # Decky plugin frontend (apps/decky/novadeck-control) — TypeScript compiled to dist/index.js in a
 # digest-pinned node container (the ONLY npm use in the build; the lockfile is committed, npm ci
@@ -391,7 +391,7 @@ verify-card: $(SDCARD) | $(BUILD_STAMP) ## Verify the built A/B card image (in c
 # offline coverage at all, and a broken one reached hardware and aborted a real install.
 #
 # HOST-SIDE ON PURPOSE, unlike everything else here. All three scripts execute the shipped artifacts
-# (image/initramfs/init, fs-overlay/usr/bin/novadeck-bootctl and fs-overlay/usr/lib/rauc/
+# (image/initramfs/init, rootfs/overlay/usr/bin/novadeck-bootctl and rootfs/overlay/usr/lib/rauc/
 # post-install.sh) against a sandbox; putting them in the container would test the same files
 # through an extra layer that can only add failure modes.
 #

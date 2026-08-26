@@ -25,7 +25,7 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VS="$ROOT/ota/rauc/verify-signing.sh"
-CONF="$ROOT/fs-overlay/etc/rauc/system.conf"
+CONF="$ROOT/rootfs/overlay/etc/rauc/system.conf"
 EXT="$ROOT/ota/rauc/release.ext"
 CA="$ROOT/ci/gen-signing-ca.sh"
 [ -f "$VS" ] || { echo "no verify-signing.sh: $VS" >&2; exit 1; }

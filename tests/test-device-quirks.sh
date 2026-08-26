@@ -9,7 +9,7 @@
 # and still logs nothing alarming. The workaround is simply gone, and the symptom it prevented
 # comes back looking like a fresh hardware bug.
 #
-# So this drives the REAL fs-overlay/usr/lib/novadeck/device-quirks against a fabricated sysfs
+# So this drives the REAL rootfs/overlay/usr/lib/novadeck/device-quirks against a fabricated sysfs
 # tree and a fabricated device-env, and asserts on the knob's contents afterwards rather than on
 # the script's exit status. It also asserts the negatives: a non-SM8550 board must not touch the
 # knob, and a renamed idle state must be reported, not skipped in silence.
@@ -18,7 +18,7 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-QUIRKS="$ROOT/fs-overlay/usr/lib/novadeck/device-quirks"
+QUIRKS="$ROOT/rootfs/overlay/usr/lib/novadeck/device-quirks"
 
 PASS=0; FAIL=0
 ok()   { printf '  ok   %s\n' "$1"; PASS=$((PASS + 1)); }

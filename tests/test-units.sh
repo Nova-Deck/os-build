@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Offline systemd unit check for everything under fs-overlay.
+# Offline systemd unit check for everything under rootfs/overlay.
 #
 #   tests/test-units.sh
 #
@@ -22,14 +22,14 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-# System and user units. Deliberately NOT fs-overlay/usr/share/dbus-1/**/*.service -- those are
+# System and user units. Deliberately NOT rootfs/overlay/usr/share/dbus-1/**/*.service -- those are
 # D-Bus activation files, a different format that happens to share the extension. The enable
-# symlinks under fs-overlay/etc/systemd/system point back into these, so they add no coverage.
+# symlinks under rootfs/overlay/etc/systemd/system point back into these, so they add no coverage.
 #
 # installer/units/ is here too, and not because it is convenient: those units ship on the INSTALLER
 # image, which has no suite of its own until Phase 6 and which is the one artifact that has to work
 # when the device is broken. An invented directive there fails on a machine with no serial console.
-UNITDIRS=("$ROOT/fs-overlay/usr/lib/systemd/system" "$ROOT/fs-overlay/usr/lib/systemd/user"
+UNITDIRS=("$ROOT/rootfs/overlay/usr/lib/systemd/system" "$ROOT/rootfs/overlay/usr/lib/systemd/user"
           "$ROOT/installer/units")
 
 PASS=0; FAIL=0; SKIP=0
@@ -68,7 +68,7 @@ for u in "$d"/*.service "$d"/*.path "$d"/*.timer "$d"/*.socket "$d"/*.target "$d
   fi
 done
 done
-[ "$n" -gt 0 ] || bad "no units found under fs-overlay/usr/lib/systemd"
+[ "$n" -gt 0 ] || bad "no units found under rootfs/overlay/usr/lib/systemd"
 
 printf '\n%s: %d passed, %d failed, %d skipped\n' "$(basename "$0")" "$PASS" "$FAIL" "$SKIP"
 [ "$FAIL" -eq 0 ]

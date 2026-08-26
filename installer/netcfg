@@ -34,7 +34,7 @@ WIFI_CONF=${NOVADECK_WIFI_CONF:-/esp/novadeck/wifi.conf}
 # which is exactly the misdiagnosis this file exists to prevent. It was, briefly: this default read
 # `ota.novadeck.org`, a host that does not exist.
 #
-# The literal is written twice, here and in fs-overlay/usr/bin/novadeck-update, because one is
+# The literal is written twice, here and in rootfs/overlay/usr/bin/novadeck-update, because one is
 # shell and the other Python. tests/test-ui.sh asserts the two agree; that assertion is the only
 # thing that keeps them the same URL.
 OTA_CONFIG=${NOVADECK_OTA_CONFIG:-/etc/novadeck/ota.conf}

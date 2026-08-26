@@ -147,7 +147,7 @@ INSTALL_FILES=(
 # is what makes the installer image the case where the search succeeds on its first candidate.
 #   <source>:<name in the flat directory>
 FOREIGN_FILES=(
-  "fs-overlay/usr/lib/novadeck/install/lib-slotwrite.sh:lib-slotwrite.sh"
+  "rootfs/overlay/usr/lib/novadeck/install/lib-slotwrite.sh:lib-slotwrite.sh"
   "image/genpart.sh:genpart.sh"
   "image/partition-table.txt:partition-table.txt"
   "image/lib-homestage.sh:lib-homestage.sh"
@@ -168,15 +168,15 @@ done
 # the panel's logical output from it. Both fall back if it is absent, but every board would then
 # draw a generic 1920x1080 and call itself "this device" -- the kind of degradation nobody notices
 # until a user reports it.
-DEVICE_ENV="$ROOT/fs-overlay/usr/lib/novadeck/device-env"
-DEVICES_DIR="$ROOT/fs-overlay/usr/lib/novadeck/devices"
+DEVICE_ENV="$ROOT/rootfs/overlay/usr/lib/novadeck/device-env"
+DEVICES_DIR="$ROOT/rootfs/overlay/usr/lib/novadeck/devices"
 # InputPlumber's BOARD configs, which are ours and live in the overlay — the prebuilt tarball ships
 # the daemon and its generic configs, not the per-board ones. HW-FOUND 2026-08-24: without these the
 # daemon comes up, recognises none of the handheld MCU gamepads, SDL sees no mappable controller,
 # and the UI stops on §4d's "No controller or keyboard" screen — correctly, having been told the
 # truth. The installer ships InputPlumber precisely so its input path is IDENTICAL to the
 # HW-validated main-image one, and the configs are most of what makes it identical.
-IP_DIR="$ROOT/fs-overlay/etc/inputplumber"
+IP_DIR="$ROOT/rootfs/overlay/etc/inputplumber"
 [ -x "$DEVICE_ENV" ] || die "no ${DEVICE_ENV#"$ROOT"/} — every board would draw a generic output"
 [ -d "$DEVICES_DIR" ] || die "no ${DEVICES_DIR#"$ROOT"/} — device-env would resolve no board"
 [ -d "$IP_DIR/devices.d" ] && [ -d "$IP_DIR/capability_maps.d" ] \
@@ -239,7 +239,7 @@ KVER="$(ls "$MODROOT/lib/modules" 2>/dev/null | head -1 || true)"
 # needs, and the SM8250 gamepad rules); the rest are hardware behaviour that is simply inert when
 # the device is absent. Taken whole for the same reason the firmware trees are: hand-picking from a
 # hardware-support set is what produced the ath11k hole.
-UDEV_DIR="$ROOT/fs-overlay/usr/lib/udev/rules.d"
+UDEV_DIR="$ROOT/rootfs/overlay/usr/lib/udev/rules.d"
 [ -d "$UDEV_DIR" ] || die "no ${UDEV_DIR#"$ROOT"/} — uinput permissions and the pad rules would be missing"
 
 FW_QCOM_DIR="$ROOT/firmware/qcom-fw"

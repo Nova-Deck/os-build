@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # novadeck RAUC signing self-test — Phase 4b pass 2.
 #
-#   ota/rauc/verify-signing.sh [system.conf]      (default: fs-overlay/etc/rauc/system.conf)
+#   ota/rauc/verify-signing.sh [system.conf]      (default: rootfs/overlay/etc/rauc/system.conf)
 #
 # Signs a throwaway bundle and verifies it THROUGH the shipped system.conf. This exists because
 # every other check in this repo confirmed the update path was present, and the update path was
@@ -43,7 +43,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-CONF="${1:-$ROOT/fs-overlay/etc/rauc/system.conf}"
+CONF="${1:-$ROOT/rootfs/overlay/etc/rauc/system.conf}"
 TEMPLATE="$ROOT/ota/rauc/manifest.raucm.in"
 
 # Test seams, as novadeck-bootctl and post-install.sh document their own. RELEASE_EXT is THE cert

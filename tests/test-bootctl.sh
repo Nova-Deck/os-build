@@ -22,7 +22,7 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-BOOTCTL="$ROOT/fs-overlay/usr/bin/novadeck-bootctl"
+BOOTCTL="$ROOT/rootfs/overlay/usr/bin/novadeck-bootctl"
 [ -f "$BOOTCTL" ] || { echo "no novadeck-bootctl: $BOOTCTL" >&2; exit 1; }
 
 PASS=0; FAIL=0; CASE=""; SB=""
@@ -512,13 +512,13 @@ done_
 t "the-shipped-unit-passes--wait-and-carries-no-sleep-of-its-own"
 # The tool growing --wait is worthless if the unit still sleeps in an ExecStartPre, so assert the
 # artifact that ships, not just the tool. This is the drift that would silently restore the bug.
-UNIT="$ROOT/fs-overlay/usr/lib/systemd/system/novadeck-boot-good.service"
+UNIT="$ROOT/rootfs/overlay/usr/lib/systemd/system/novadeck-boot-good.service"
 grep -qE '^ExecStart=.*mark-good .*--wait 30' "$UNIT" \
   && ok "boot-good ExecStart passes --wait 30" || bad "boot-good does not pass --wait 30"
 grep -qE '^ExecStartPre=.*sleep' "$UNIT" \
   && bad "boot-good still sleeps in ExecStartPre -- the signal lands on the sleep again" \
   || ok "boot-good has no ExecStartPre sleep"
-BADUNIT="$ROOT/fs-overlay/usr/lib/systemd/system/novadeck-boot-bad.service"
+BADUNIT="$ROOT/rootfs/overlay/usr/lib/systemd/system/novadeck-boot-bad.service"
 grep -qE '^ExecCondition=' "$BADUNIT" \
   && ok "boot-bad is gated by an ExecCondition" || bad "boot-bad has no shutdown guard"
 grep -qE '^ExecCondition=.*is-system-running' "$BADUNIT" \

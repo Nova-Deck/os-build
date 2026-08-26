@@ -14,7 +14,7 @@
 #                                     as the lower mount's source.
 #   packages/mesa-x86/builder.pin     pins the payload build's snapshot to the SAME guest date;
 #                                     build.sh asserts it at build time, this asserts it offline.
-#   fs-overlay .../fex-emu/Config.json  points the system FEX's RootFS at the merged mountpoint
+#   rootfs/overlay .../fex-emu/Config.json  points the system FEX's RootFS at the merged mountpoint
 #                                     the assembler injects -- two files, one path.
 #   the assembler's payload staging   names the dir the overlay row lists as its top lowerdir.
 #
@@ -39,8 +39,8 @@ BUILD_SH="$ROOT/packages/mesa-x86/build.sh"
 KCONFIG="$ROOT/kernel/kernel.config"
 DOCKERFILE="$ROOT/build/Dockerfile"
 MAKEFILE="$ROOT/Makefile"
-FEXCONF="$ROOT/fs-overlay/usr/share/fex-emu/Config.json"
-OURS="$ROOT/fs-overlay/usr/share/guestos"
+FEXCONF="$ROOT/rootfs/overlay/usr/share/fex-emu/Config.json"
+OURS="$ROOT/rootfs/overlay/usr/share/guestos"
 
 MOUNTPOINT=/usr/share/guestos/fex-mesa
 LOWER=/run/novadeck/guestos-lower
@@ -92,7 +92,7 @@ grep -q "mkdir -p \"\$stage$MOUNTPOINT\"" "$ASSEMBLE" \
 #    a file re-added here would be masked at runtime and read as live in the tree -- the exact
 #    shape of a config that looks authoritative and does nothing.
 if [[ -e $OURS ]]; then
-    bad "fs-overlay${OURS#"$ROOT"/fs-overlay} exists -- the guest mount masks it; it cannot take effect"
+    bad "rootfs/overlay${OURS#"$ROOT"/rootfs/overlay} exists -- the guest mount masks it; it cannot take effect"
 else
     ok "we ship nothing under the mountpoint (the merged mount provides everything)"
 fi

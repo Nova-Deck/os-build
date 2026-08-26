@@ -26,10 +26,10 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SHIM="$ROOT/fs-overlay/usr/bin/novadeck-steamos-manager"
-USER_UNIT="$ROOT/fs-overlay/usr/lib/systemd/user/novadeck-steamos-manager.service"
-SYS_UNIT="$ROOT/fs-overlay/usr/lib/systemd/system/novadeck-steamos-manager.service"
-USER_WANTS="$ROOT/fs-overlay/usr/lib/systemd/user/default.target.wants/novadeck-steamos-manager.service"
+SHIM="$ROOT/rootfs/overlay/usr/bin/novadeck-steamos-manager"
+USER_UNIT="$ROOT/rootfs/overlay/usr/lib/systemd/user/novadeck-steamos-manager.service"
+SYS_UNIT="$ROOT/rootfs/overlay/usr/lib/systemd/system/novadeck-steamos-manager.service"
+USER_WANTS="$ROOT/rootfs/overlay/usr/lib/systemd/user/default.target.wants/novadeck-steamos-manager.service"
 
 PASS=0; FAIL=0; SKIP=0; CASE=""
 ok()   { PASS=$((PASS+1)); printf '  ok   %s -- %s\n' "$CASE" "$1"; }
@@ -49,7 +49,7 @@ if ! python3 -c 'import gi; gi.require_version("Gio","2.0"); from gi.repository 
   skip "python-gi not on the host — cannot drive the shim's GLib.Variant paths"
 else
   # -B is load-bearing: importing the shim by path writes __pycache__ NEXT TO IT, i.e. inside
-  # fs-overlay/usr/bin, which assemble-rootfs.sh copies wholesale into the image. Without this,
+  # rootfs/overlay/usr/bin, which assemble-rootfs.sh copies wholesale into the image. Without this,
   # running the tests silently bakes a stale .pyc of the manager into the shipped rootfs.
   shim_out="$(python3 -B - "$SHIM" <<'PY'
 import importlib.machinery, importlib.util

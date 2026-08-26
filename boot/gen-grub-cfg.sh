@@ -155,7 +155,7 @@ insmod regexp
 # chosen: locating the ESP is itself one of the numbers, so an ESP-resident map cannot be read
 # without already knowing what it says. (\$root) is the partition steamcl chainloaded us from, which
 # makes it the one place reachable with no index at all. It survives an update because the efi
-# partition is not a RAUC slot and fs-overlay/usr/lib/rauc/post-install.sh only copies files onto
+# partition is not a RAUC slot and rootfs/overlay/usr/lib/rauc/post-install.sh only copies files onto
 # it — unlike /var, which that hook reformats.
 #
 # Defaults first and the env second, mirroring the PARTLABEL→PARTUUID upgrade further down. The

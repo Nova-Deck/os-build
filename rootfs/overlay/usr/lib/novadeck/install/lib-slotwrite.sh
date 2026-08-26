@@ -3,7 +3,7 @@
 # SOURCED, never executed (hence mode 0644, like gamescope-display.sh and power-ops.sh).
 #
 # WHY THIS FILE EXISTS: everything a RAUC bundle does NOT carry has to be written twice -- once by
-# the OTA path (fs-overlay/usr/lib/rauc/post-install.sh) and once by the internal installer, which
+# the OTA path (rootfs/overlay/usr/lib/rauc/post-install.sh) and once by the internal installer, which
 # writes the same artifacts onto a disk that has no novadeck on it yet. Two copies of that logic
 # would drift, and the direction they drift in is "the installed system boots, the updated one does
 # not" or the reverse -- discoverable only on hardware, on a device with no serial console. So the

@@ -6,7 +6,7 @@
 # x86_64 ON PURPOSE. Upstream ships exactly one asset, the x86_64 PyInstaller binary; there is
 # no aarch64 build. It runs under the system FEX binfmt (packages/fex-emu) — the same mechanism
 # as native x86 Linux games, a combination already proven on aarch64 handhelds elsewhere, with
-# the AppConfig knobs we mirror in fs-overlay/usr/share/fex-emu/AppConfig/PluginLoader.json
+# the AppConfig knobs we mirror in rootfs/overlay/usr/share/fex-emu/AppConfig/PluginLoader.json
 # (TSO on, Multiblock off, GL/Vulkan/Wayland/asound thunks). A Python runtime is far tamer
 # under emulation than a game: no JIT of its own, no GPU fast path to lose.
 #

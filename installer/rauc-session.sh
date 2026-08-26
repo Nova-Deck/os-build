@@ -8,7 +8,7 @@
 # cannot be pointed at a foreign disk from the command line.
 #
 # WHY A WHOLE SESSION AND NOT A FLAG. With the service enabled -- and ours is, the OTA path is a
-# D-Bus conversation (fs-overlay/usr/bin/novadeck-update) -- the install subcommand's `-c/--conf`
+# D-Bus conversation (rootfs/overlay/usr/bin/novadeck-update) -- the install subcommand's `-c/--conf`
 # and `--override-boot-slot` are compiled OUT: _reference/rauc/src/main.c's entries_install puts
 # both behind `#if ENABLE_SERVICE == 0`, and the client half just forwards a bundle path to
 # whatever already owns de.pengutronix.rauc. So the config the install runs under is the config of

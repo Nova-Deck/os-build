@@ -42,7 +42,7 @@ novadeck runs from the card and does not touch your Android install.
 
 ## Supported devices
 
-<!-- AUTO-GENERATED from fs-overlay/usr/lib/novadeck/devices/*.conf — regenerate with /ecc:update-docs -->
+<!-- AUTO-GENERATED from rootfs/overlay/usr/lib/novadeck/devices/*.conf — regenerate with /ecc:update-docs -->
 
 | Board | SoC | Profile | HW-validated |
 |---|---|---|---|
@@ -203,7 +203,7 @@ creds, an SSH key and the dev package set baked in.
 | `packages/` | From-source overlay: PKGBUILDs + source pins for what we patch or version-bump, plus the builder that turns them into a local pacman repo |
 | `kernel/` | Unified kernel: config fragments, patches, all device trees, firmware embed list |
 | `firmware/` | Vendor firmware fetch/verify recipes + their pins |
-| `fs-overlay/` | Rootfs overlay payload — one filesystem-mirror tree injected with a single `cp -a` |
+| `rootfs/overlay/` | Rootfs overlay payload — one filesystem-mirror tree injected with a single `cp -a` |
 | `build/steam-seed/` | Native arm64 Steam client seed fetcher + pin |
 | `boot/` | Two-stage UEFI boot: steamcl (stage 1) + GRUB (stage 2), both built from pinned sources |
 | `apps/decky/` | `novadeck-control` — the first-party Decky plugin (per-game tweaks, power, fan curve) |
@@ -223,7 +223,7 @@ that date keeps its reasoning in the closed issue instead.
 ### Adding a board
 
 Three pieces of data, all discovered automatically: a DTS under `kernel/dts/qcom/`, a device
-profile under `fs-overlay/usr/lib/novadeck/devices/` plus its `model` case in `device-env`, and —
+profile under `rootfs/overlay/usr/lib/novadeck/devices/` plus its `model` case in `device-env`, and —
 if the gamepad is not already covered — an InputPlumber config. An unmatched board falls through
 to `defaults.conf` and still boots.
 

@@ -170,7 +170,7 @@ echo "[novadeck] SD image: ${fixed_mib}MiB fixed layout ($([ "$SLOT_B" = 1 ] && 
 # why it needs its own copy of the file rather than an in-place round trip.
 #
 # (RAUC hits this too: every `rauc install` writes identical bytes to the inactive slot. Its
-# post-install hook does the same, `fs-overlay/usr/lib/rauc/post-install.sh`.)
+# post-install hook does the same, `rootfs/overlay/usr/lib/rauc/post-install.sh`.)
 if [ "$SLOT_B" = 1 ]; then
   rm -f "$ROOTFS_B"
   cp --reflink=auto "$ROOTFS" "$ROOTFS_B"

@@ -237,7 +237,7 @@ scp "${SSHOPTS[@]}" -q \
   "$ROOT/image/genpart.sh" \
   "$ROOT/image/partition-table.txt" \
   "$ROOT/image/lib-homestage.sh" \
-  "$ROOT/fs-overlay/usr/lib/novadeck/install/lib-slotwrite.sh" \
+  "$ROOT/rootfs/overlay/usr/lib/novadeck/install/lib-slotwrite.sh" \
   "$SEED_SHA_FILE" \
   "$HOST:$STAGE/" || die "cannot stage the scripts"
 

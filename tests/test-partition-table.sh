@@ -21,7 +21,7 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TABLE="$ROOT/image/partition-table.txt"
-LIB="$ROOT/fs-overlay/usr/lib/novadeck/install/lib-slotwrite.sh"
+LIB="$ROOT/rootfs/overlay/usr/lib/novadeck/install/lib-slotwrite.sh"
 
 PASS=0; FAIL=0; SKIP=0; CASE=""
 ok()   { PASS=$((PASS+1)); printf '  ok   %s -- %s\n' "$CASE" "$1"; }
@@ -38,7 +38,7 @@ command -v mkfs.vfat >/dev/null 2>&1 || {
 }
 
 die() { printf 'lib: %s\n' "$*" >&2; return 1; }
-# shellcheck source=../fs-overlay/usr/lib/novadeck/install/lib-slotwrite.sh
+# shellcheck source=../rootfs/overlay/usr/lib/novadeck/install/lib-slotwrite.sh
 . "$LIB"
 
 T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT

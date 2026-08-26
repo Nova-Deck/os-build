@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Offline check for the per-game perf library (fs-overlay/usr/lib/novadeck/novadeck_perf.py).
+# Offline check for the per-game perf library (rootfs/overlay/usr/lib/novadeck/novadeck_perf.py).
 #
 #   tests/test-perf.sh
 #
@@ -23,14 +23,14 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PERF_DIR="$ROOT/fs-overlay/usr/lib/novadeck"
+PERF_DIR="$ROOT/rootfs/overlay/usr/lib/novadeck"
 
 [[ -f $PERF_DIR/novadeck_perf.py ]] || { echo "novadeck_perf.py missing: $PERF_DIR" >&2; exit 1; }
 
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 
 # Importing novadeck_perf makes CPython write a __pycache__ NEXT TO THE SOURCE — inside
-# fs-overlay/, which rootfs/assemble-rootfs.sh copies into the rootfs verbatim. Redirect the
+# rootfs/overlay/, which rootfs/assemble-rootfs.sh copies into the rootfs verbatim. Redirect the
 # bytecode into the sandbox so merely running the tests cannot dirty the tree. (The assembler
 # prunes it and guard-rootfs.sh asserts on it; this is the near end of the same problem.)
 export PYTHONPYCACHEPREFIX="$TMP/pycache"
@@ -513,7 +513,7 @@ check("relative XDG_CACHE_HOME falls back to ~/.cache",
 # --- fex-profiles.json: the presets a user actually picks between.
 # Nothing else reads these values until a game launches, so a preset that lost its point is
 # invisible until someone plays the title it was supposed to rescue.
-profiles_path = os.path.join(os.environ["ROOT_DIR"], "fs-overlay/usr/share/novadeck/fex-profiles.json")
+profiles_path = os.path.join(os.environ["ROOT_DIR"], "rootfs/overlay/usr/share/novadeck/fex-profiles.json")
 contract = _json.loads(pathlib.Path(profiles_path).read_text())
 profs = contract["profiles"]
 check("the three presets exist", sorted(profs), ["compatible", "default", "fast"])

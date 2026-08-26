@@ -1,7 +1,7 @@
 # FEX — x86 emulation runtime configuration
 
-The config lives in the unified overlay payload (`fs-overlay/usr/share/fex-emu/`,
-`fs-overlay/usr/lib/novadeck/game-launch`), copied wholesale into the rootfs by
+The config lives in the unified overlay payload (`rootfs/overlay/usr/share/fex-emu/`,
+`rootfs/overlay/usr/lib/novadeck/game-launch`), copied wholesale into the rootfs by
 `rootfs/assemble-rootfs.sh`. JSON has no comment syntax, so the rationale lives here.
 
 ## The two x86 paths are independent
@@ -140,7 +140,7 @@ same mount is a real guest tree for the tool's other use of that path — it han
 `RootFS`. (Inside a pressure-vessel container that second use is moot: `emulator.json` forces
 `FEX_ROOTFS` empty and the container supplies the x86 userspace. Out of container it matters.)
 
-Until that image, we overlaid a manifest of our own from `fs-overlay` — the 2026-01-08 guest
+Until that image, we overlaid a manifest of our own from `rootfs/overlay` — the 2026-01-08 guest
 carried none. Upstream's differs from what we had written, and in its favour: no `gbm` entry for
 `x86_64-linux-gnu`, a `fallback_library_paths` for it instead, and an explicit `vdpau: false` where
 ours left the `true` default. Ours was deleted with the pin bump; nothing of ours may live under

@@ -36,7 +36,7 @@
 #                  WHY NOT the gated -deckard line, which serves a newer build (1787104891 vs publicbeta's
 #                  1787097529): that client asserts Steam Frame identity, which strips the guided tour's
 #                  button handlers and leaves a fresh card stuck on an undismissable welcome screen. See
-#                  the flag comment in fs-overlay/usr/bin/novadeck-steam. Its hash is also a GATED BETA
+#                  the flag comment in rootfs/overlay/usr/bin/novadeck-steam. Its hash is also a GATED BETA
 #                  BRANCH key rather than a build id, so Valve can rotate it out from under us.
 # runtime_base:    steamrt3 image root; `<base>/<snapshot>/steam-runtime-steamrt-arm64.tar.xz` is the
 #                  arm64 runtime tarball the native client links against.

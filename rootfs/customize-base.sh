@@ -69,11 +69,11 @@ SNAPFILE="$ROOT/build/snapshot.pin"
 LOCKFILE="$ROOT/rootfs/manifest.lock"
 PACMANCONF="$ROOT/rootfs/conf/pacman.conf"
 OSRELEASE="$ROOT/rootfs/conf/os-release"
-# The pinned system UID/GID range. It SHIPS from fs-overlay (the device's own boot-time sysusers
+# The pinned system UID/GID range. It SHIPS from rootfs/overlay (the device's own boot-time sysusers
 # run must agree with it), but it has to be in the target root BEFORE the transaction whose
 # sysusers hook allocates the ids — so this script reads it from there and stages it in early.
 # There is exactly one copy; assemble-rootfs.sh later re-lays the identical file with the overlay.
-IDPIN="$ROOT/fs-overlay/usr/lib/sysusers.d/01-novadeck-enforce-ids.conf"
+IDPIN="$ROOT/rootfs/overlay/usr/lib/sysusers.d/01-novadeck-enforce-ids.conf"
 DEST="$ROOT/work/base"
 RESOLVE="${NOVADECK_RESOLVE:-}"
 
@@ -183,9 +183,9 @@ BOOTSTRAP_PKGS=(base)
 # systemd but ships disabled and nothing enabled it — so the only backstop was the kernel OOM
 # killer, which acts after allocation already failed. On a gamepad-only device with no serial
 # console that difference is a power cycle. Policy (absolute thresholds sized for an 8-16 GB spread,
-# and which processes are off-limits) is in fs-overlay/.../earlyoom.service.d/novadeck.conf; it is
+# and which processes are off-limits) is in rootfs/overlay/.../earlyoom.service.d/novadeck.conf; it is
 # enabled by 60-novadeck-earlyoom.preset plus a build-time .wants symlink, like every other unit here.
-# zram-generator: creates the zram0 swap device from fs-overlay/usr/lib/systemd/zram-generator.conf.
+# zram-generator: creates the zram0 swap device from rootfs/overlay/usr/lib/systemd/zram-generator.conf.
 # This is the image's ONLY swap device (no swap file — read-only root, and the only bulk storage is
 # the SD card). It needs CONFIG_ZRAM, which kernel/kernel.config only gained alongside it, so the two
 # have to move together; kernel/build.sh asserts the symbol survived. Both packages resolve from the

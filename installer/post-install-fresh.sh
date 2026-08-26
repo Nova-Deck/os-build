@@ -52,19 +52,19 @@ VAR_DEV=${NOVADECK_TARGET_VAR_A:-}
 
 # lib-slotwrite.sh, resolved by search for the same reason carve.sh resolves genpart.sh that way:
 # on the installer image it is installed beside this file, and in the repo it lives under
-# fs-overlay/ because the OTA path ships it. Both are right; neither is a repo-relative constant.
+# rootfs/overlay/ because the OTA path ships it. Both are right; neither is a repo-relative constant.
 SELFDIR="$(cd "$(dirname "$0")" && pwd)"
 SLOTWRITE="${NOVADECK_SLOTWRITE:-}"
 if [ -z "$SLOTWRITE" ]; then
   for c in "$SELFDIR/lib-slotwrite.sh" \
            /usr/lib/novadeck/install/lib-slotwrite.sh \
-           "$SELFDIR/../fs-overlay/usr/lib/novadeck/install/lib-slotwrite.sh"; do
+           "$SELFDIR/../rootfs/overlay/usr/lib/novadeck/install/lib-slotwrite.sh"; do
     [ -r "$c" ] && { SLOTWRITE="$c"; break; }
   done
 fi
 [ -n "$SLOTWRITE" ] && [ -r "$SLOTWRITE" ] \
   || die "cannot find lib-slotwrite.sh (set NOVADECK_SLOTWRITE)"
-# shellcheck source=../fs-overlay/usr/lib/novadeck/install/lib-slotwrite.sh
+# shellcheck source=../rootfs/overlay/usr/lib/novadeck/install/lib-slotwrite.sh
 . "$SLOTWRITE"
 
 # --- which device did RAUC just write? ----------------------------------------------------------

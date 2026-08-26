@@ -45,7 +45,7 @@ SLOTWRITE="${NOVADECK_SLOTWRITE:-}"
 if [ -z "$SLOTWRITE" ]; then
   for c in "$SELFDIR/lib-slotwrite.sh" \
            /usr/lib/novadeck/install/lib-slotwrite.sh \
-           "$SELFDIR/../fs-overlay/usr/lib/novadeck/install/lib-slotwrite.sh"; do
+           "$SELFDIR/../rootfs/overlay/usr/lib/novadeck/install/lib-slotwrite.sh"; do
     [ -r "$c" ] && { SLOTWRITE="$c"; break; }
   done
 fi
@@ -98,7 +98,7 @@ command -v sfdisk >/dev/null 2>&1 || die "sfdisk not found -- the table cannot b
   || die "cannot find lib-slotwrite.sh (set NOVADECK_SLOTWRITE)"
 # Sourced AFTER die() and say() exist: the library only defines its own fallbacks when the caller
 # has none, and this script's `carve: ` prefix is what its suite asserts.
-# shellcheck source=../fs-overlay/usr/lib/novadeck/install/lib-slotwrite.sh
+# shellcheck source=../rootfs/overlay/usr/lib/novadeck/install/lib-slotwrite.sh
 . "$SLOTWRITE"
 # shellcheck source=../image/lib-gpt.sh
 . "$LIBGPT"

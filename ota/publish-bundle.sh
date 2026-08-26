@@ -84,7 +84,7 @@ SSH_OPTS=(-o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout
 remote() { ssh "${SSH_OPTS[@]}" "$USER_@$HOST" "$@"; }
 
 # --- 1. the signature gate -----------------------------------------------------------------------
-CONF_REL="fs-overlay/etc/rauc/system.conf"
+CONF_REL="rootfs/overlay/etc/rauc/system.conf"
 KEYRING_REL="ota/rauc/novadeck-ca.pem"
 [ -f "$ROOT/$CONF_REL" ]    || die "no $CONF_REL — run this from the novadeck tree"
 [ -f "$ROOT/$KEYRING_REL" ] || die "no $KEYRING_REL — run this from the novadeck tree"

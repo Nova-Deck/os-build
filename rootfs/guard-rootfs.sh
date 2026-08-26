@@ -39,10 +39,10 @@
 #   7. the RAUC update path is installable — rauc, the keyring, system.conf and this slot's
 #      own boot.img are all present, and the hook that consumes them is executable;
 #   8. the system UID/GID allocation matches the pin — the ids baked into this tree's passwd and
-#      group are the ones fs-overlay's sysusers.d pin names, not whatever sysusers counted down to
+#      group are the ones rootfs/overlay's sysusers.d pin names, not whatever sysusers counted down to
 #   9. the Decky stack is complete — the loader is executable and the baked plugin's dist staged;
 #      nothing at runtime guards this (decky-sync assumes a complete image, by design)
-#  10. no __pycache__ — host-CPython bytecode the device cannot load, which fs-overlay's verbatim
+#  10. no __pycache__ — host-CPython bytecode the device cannot load, which rootfs/overlay's verbatim
 #      copy will carry in whenever an offline suite has imported one of its Python clients
 #  11. a size delta against the previous build (report only — never fails a build)
 set -euo pipefail
@@ -363,7 +363,7 @@ fi
 #
 # The exec bit on the hook is checked because it is exactly the failure this project has already
 # paid for once: a shipped script that lost its exec bit in a tree refactor, where the symptom was
-# a black screen rather than an error (see fs-overlay/README.md).
+# a black screen rather than an error (see rootfs/overlay/README.md).
 # ------------------------------------------------------------------------------------------
 echo "  7. RAUC update path"
 rauc_ok=1
@@ -535,7 +535,7 @@ fi
 # client. Three things have to survive the copy into $STAGE, and each fails SILENTLY on a device
 # with no serial console — the symptom is the update button in Settings doing nothing at all.
 #
-# THE SYMLINK IS THE ONE THAT NEEDS SAYING. fs-overlay/usr/bin/steamos-update -> novadeck-update is
+# THE SYMLINK IS THE ONE THAT NEEDS SAYING. rootfs/overlay/usr/bin/steamos-update -> novadeck-update is
 # the FIRST symlink in usr/bin/, and `btrfs restore` drops symlinks unless it is given -S: a tree
 # extracted for verification would show it simply absent, which reads as "we never shipped it"
 # rather than "the extraction lost it". Assert it is still a symlink, not merely present, so a copy
@@ -561,7 +561,7 @@ fi
 # every bundle we can sign: the release cert's codeSigning EKU and RAUC's default smimesign
 # verification purpose disagreed, and the first thing that would have noticed was `rauc install`
 # on a device with no serial console. So sign a throwaway bundle and verify it THROUGH the tree's
-# own system.conf. Run against $STAGE, not fs-overlay, for the reason in this file's header: what
+# own system.conf. Run against $STAGE, not rootfs/overlay, for the reason in this file's header: what
 # ships is the built tree, and a source file that is correct before the copy has been wrong after.
 if [ "$rauc_ok" = 1 ] && [ -s "$STAGE/etc/rauc/system.conf" ]; then
   if ! signing_out="$("$(dirname "$0")/rauc/verify-signing.sh" "$STAGE/etc/rauc/system.conf" 2>&1)"; then
@@ -586,11 +586,11 @@ fi
 # so a pin that never applied still yields a plausible-looking passwd.
 #
 # What it costs to miss: the ids are recorded in the inodes of /home and of each slot's /var, and
-# fs-overlay/usr/lib/rauc/post-install.sh copies /var wholesale across an update. So a build whose
+# rootfs/overlay/usr/lib/rauc/post-install.sh copies /var wholesale across an update. So a build whose
 # allocation silently moved ships an update that reassigns ownership of persisted state — noticed
 # on a device, after the fact, as a service that cannot read its own state directory.
 #
-# Read from the STAGE, not from fs-overlay, for this file's usual reason: what ships is the built
+# Read from the STAGE, not from rootfs/overlay, for this file's usual reason: what ships is the built
 # tree, and the pin is only load-bearing if it is IN it. An absent pin is a failure, not a skip.
 # ------------------------------------------------------------------------------------------
 echo "  8. system UID/GID allocation"
@@ -678,7 +678,7 @@ fi
 # ------------------------------------------------------------------------------------------
 # 10. No host Python bytecode rode in.
 #
-# fs-overlay/ is injected with `cp -a` of the WORKING TREE, and the offline suites import its
+# rootfs/overlay/ is injected with `cp -a` of the WORKING TREE, and the offline suites import its
 # Python clients as modules — CPython then writes a __pycache__ next to the source, inside the
 # very tree that gets copied. .gitignore covers the repo and does nothing for that copy; the
 # assembler prunes it, and this is the check that the prune actually ran.

@@ -1,8 +1,8 @@
-# fs-overlay — the unified rootfs overlay payload
+# rootfs/overlay — the unified rootfs overlay payload
 
 Every SoC-agnostic file that novadeck lays over the base rootfs lives here, in **one tree that
 mirrors the target filesystem exactly**. `rootfs/assemble-rootfs.sh` injects it with a single
-`cp -a fs-overlay/. "$stage/"` (release path, step 4b). The tree carries final paths, executable
+`cp -a rootfs/overlay/. "$stage/"` (release path, step 4b). The tree carries final paths, executable
 bits (tracked in git), and the systemd presets + `*.target.wants` symlinks that enable each
 service — so the assembler generates and `chmod`s nothing. Ownership is normalized to `root:root`
 afterwards (assemble step 4z).

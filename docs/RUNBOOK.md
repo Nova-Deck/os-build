@@ -225,7 +225,7 @@ verification` at creation, so a green `make` is not evidence the bundle is valid
 it yourself, **through the shipped config**:
 
 ```sh
-rauc --conf=fs-overlay/etc/rauc/system.conf info out/images/novadeck-<version>.raucb
+rauc --conf=rootfs/overlay/etc/rauc/system.conf info out/images/novadeck-<version>.raucb
 ```
 
 Do not use `rauc info --keyring <ca>` — that applies rauc's default `smimesign` purpose, which

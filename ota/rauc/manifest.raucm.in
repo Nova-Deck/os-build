@@ -51,6 +51,6 @@ filename=rootfs.img
 # workstation still works exactly as before and still gains nothing, which is the point: the
 # pre-publish hardware install stays the same test it always was.
 #
-# It needs `data-directory` in fs-overlay/etc/rauc/system.conf. Without it this line is INERT and
+# It needs `data-directory` in rootfs/overlay/etc/rauc/system.conf. Without it this line is INERT and
 # says so only at g_message level -- see the long comment there.
 adaptive=block-hash-index

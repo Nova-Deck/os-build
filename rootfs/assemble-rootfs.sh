@@ -197,26 +197,26 @@ release_file="$stage/etc/novadeck-release"
 # 4b. RELEASE overlay payload (SteamOS layers B/C/D). Every SoC-agnostic rootfs overlay —
 # the gamescope-session plumbing, the HW-support backings, the InputPlumber device/profile
 # config, the ALSA UCM2 machine profiles, the FEX runtime config and the native arm64 Steam
-# shell — lives in ONE filesystem-mirror tree under fs-overlay/ and is injected with a single
+# shell — lives in ONE filesystem-mirror tree under rootfs/overlay/ and is injected with a single
 # cp -a. The tree already carries final target paths, executable bits (tracked in git) and the
 # systemd presets + .wants symlinks that enable each service, so nothing is generated or chmod'd
-# here. fs-overlay/README.md documents what each backing does and WHY (the per-layer rationale
+# here. rootfs/overlay/README.md documents what each backing does and WHY (the per-layer rationale
 # that used to live in this script). Ownership is normalized to root:root in step 4z below.
-OVERLAY="$ROOT/fs-overlay"
+OVERLAY="$ROOT/rootfs/overlay"
 if [ -d "$OVERLAY" ]; then
-  echo "  injecting fs-overlay payload -> session + HW-support + InputPlumber + audio + FEX + Steam shell (ARMED: boots to Deck shell)"
+  echo "  injecting rootfs/overlay payload -> session + HW-support + InputPlumber + audio + FEX + Steam shell (ARMED: boots to Deck shell)"
   cp -a "$OVERLAY"/. "$stage/"
-  rm -f "$stage/README.md"   # fs-overlay/README.md documents the tree; it is NOT rootfs content
+  rm -f "$stage/README.md"   # rootfs/overlay/README.md documents the tree; it is NOT rootfs content
   # Host-side Python bytecode, same class of thing as the README: build-tree litter, not rootfs
-  # content. The offline suites import fs-overlay's clients as modules (test-perf.sh, -fan-curve,
-  # -update), and CPython writes a __pycache__ NEXT TO THE SOURCE — inside fs-overlay/, which this
+  # content. The offline suites import rootfs/overlay's clients as modules (test-perf.sh, -fan-curve,
+  # -update), and CPython writes a __pycache__ NEXT TO THE SOURCE — inside rootfs/overlay/, which this
   # cp copies verbatim. .gitignore covers the repo but NOT this copy, and the difference is not
   # theoretical: v0.2.x dev cards shipped .pyc files that the device can never load, because they
   # are the HOST's CPython ABI (3.14) and the image runs 3.13. Pruned here rather than left to the
   # release-only guard, since a dev card is exactly where it happened.
   find "$stage" -name __pycache__ -type d -prune -exec rm -rf {} +
 else
-  echo "  (no fs-overlay/ tree — skipping overlay injection)" >&2
+  echo "  (no rootfs/overlay/ tree — skipping overlay injection)" >&2
 fi
 
 # --- RAUC: the device keyring and the slot's own kernel (Phase 4b pass 2) ----------------------
@@ -224,7 +224,7 @@ fi
 #
 # 1. The keyring. /etc/rauc/system.conf points at /etc/rauc/keyring.pem; it is installed here from
 #    the committed CA so there is ONE copy in the repo (ota/rauc/novadeck-ca.pem, which ci/
-#    also signs bundles against) rather than a duplicate under fs-overlay that could drift.
+#    also signs bundles against) rather than a duplicate under rootfs/overlay that could drift.
 #
 # 2. The boot software, mirrored under /usr/lib/novadeck/boot (Phase 5; docs/phase5.md). The stage-1
 #    steamcl and both per-slot stage-2 GRUB builds are owned by the same build that ships /boot/Image
@@ -495,7 +495,7 @@ fi
 # at /usr/share/guestos/fex-mesa. The guest tree every consumer sees carries OUR driver; the
 # pinned artifact itself stays byte-identical to its pin.
 #
-# BOTH x86 consumers read the merged mountpoint: the compat tool probes it, and fs-overlay's
+# BOTH x86 consumers read the merged mountpoint: the compat tool probes it, and rootfs/overlay's
 # Config.json points the system FEX's `RootFS` at the same path — one tree for every x86
 # consumer, and FEXServer no longer erofsfuse-mounts the image per-user. (Mechanism adopted from
 # a peer distro's guestos mount for the same guest image; see the commit that added it.)
@@ -768,7 +768,7 @@ OFFLOAD_ROOT=/home/.novadeck/offload
 # unit-name<TAB>path pairs; unit names must be the systemd-escaped path (see systemd-escape -p).
 OFFLOAD_PATHS='opt root srv var/log var/tmp var/cache/pacman var/lib/flatpak var/lib/systemd/coredump'
 
-# rauc's data-directory (fs-overlay/etc/rauc/system.conf), where it keeps the per-slot block-hash
+# rauc's data-directory (rootfs/overlay/etc/rauc/system.conf), where it keeps the per-slot block-hash
 # indices that make adaptive updates work, plus central.raucs. Created by the same prepare service
 # because it has the same precondition -- a real directory on the /home partition, which does not
 # exist in the staged tree (that /home is only a mount point).
@@ -966,7 +966,7 @@ fi
 # 4c-3. Decky plugin payload — EVERY build, not a dev injection (it sits between the 4c dev
 # blocks only because it depends on nothing before step 4d). The loader binary arrives via its
 # prebuilt pin as a BASE ingredient; the novadeck-control plugin is OUR source in this repo, so
-# it stages here like fs-overlay content. /usr/share is the read-only master copy;
+# it stages here like rootfs/overlay content. /usr/share is the read-only master copy;
 # /usr/lib/novadeck/decky-sync materializes it into /home/deck/homebrew at boot, which is where
 # the loader actually loads from.
 # dist/ is built by `make decky-plugin` (a $(ROOTFS) prerequisite); missing means a stale
@@ -1033,7 +1033,7 @@ fi
 # either on a profile that may not exist would make a no-network dev card less useful than it
 # needs to be, for no reason.
 if [ "${NOVADECK_DEV:-}" = "1" ]; then
-  # sshd itself is NOT enabled here anymore: it ships always-on for EVERY build via the fs-overlay
+  # sshd itself is NOT enabled here anymore: it ships always-on for EVERY build via the rootfs/overlay
   # (60-novadeck-sshd.preset + the committed multi-user.target.wants/sshd.service symlink), because
   # release remote access is key-only and a keyless sshd admits nobody. NetworkManager is likewise
   # enabled for every build in customize-base.sh. So this block only adds the TEST credential
@@ -1054,7 +1054,7 @@ if [ "${NOVADECK_DEV:-}" = "1" ]; then
   #     changed the host key purely because it came from a different build.)
   #
   # So: leave /etc/ssh alone and let sshdgenkeys generate per-device keys at first sshd start. They
-  # land in the /etc overlay upper, i.e. in this slot's /var, and fs-overlay/usr/lib/rauc/post-install.sh carries
+  # land in the /etc overlay upper, i.e. in this slot's /var, and rootfs/overlay/usr/lib/rauc/post-install.sh carries
   # them to the other slot on update so they survive an OTA. That is the same shape as machine-id.
 
   # SSH authorized key (key-only root; default PermitRootLogin=prohibit-password).
@@ -1161,7 +1161,7 @@ fi
 # and enforced in none, and the built tree had one — measured 2026-07-28 on rootfs.img: a real
 # 33-byte id, identical on every unit ever flashed from that image. Two silent consequences:
 #
-#   - fs-overlay/usr/lib/novadeck/gen-mac.sh seeds the Wi-Fi MAC from /etc/machine-id, falling back
+#   - rootfs/overlay/usr/lib/novadeck/gen-mac.sh seeds the Wi-Fi MAC from /etc/machine-id, falling back
 #     to /sys/devices/soc0/serial_number and then to random. The SoC serial IS per-unit, so the
 #     fallback would already give every device a distinct MAC — a populated machine-id is exactly
 #     what stops line 27 ever falling through to it. The bug is not that the chain is wrong; it is
@@ -1188,7 +1188,7 @@ fi
 rm -f "$stage/etc/machine-id"
 echo "  dropped /etc/machine-id (first-boot identity is generated per device)"
 
-# 4z. Normalize overlay ownership to root. The fs-overlay/ tree (and the other cp -a injections)
+# 4z. Normalize overlay ownership to root. The rootfs/overlay/ tree (and the other cp -a injections)
 # is copied with `cp -a`, which PRESERVES the host build user's
 # uid/gid (the repo checkout owner, typically 1000). In the image uid 1000 is `deck`, so /etc, /,
 # and every injected file end up deck-owned — a real bug (HW journal 2026-07-01: systemd-tmpfiles
@@ -1242,7 +1242,7 @@ fi
 # The OTA path fills a target slot's /var by rsyncing the RUNNING one -- there is a live system that
 # describes this device, and copying it is the whole point. An install has no such source: the
 # running system is the INSTALLER, whose /var describes the installer. So the /var a fresh slot
-# starts from ships inside the root, and fs-overlay/usr/lib/novadeck/install/lib-slotwrite.sh's
+# starts from ships inside the root, and rootfs/overlay/usr/lib/novadeck/install/lib-slotwrite.sh's
 # seed_var unpacks it (that function takes a directory OR a tarball for exactly this reason).
 #
 # It is the same $varstage the two var images below are built from, so a slot installed from the

@@ -50,7 +50,7 @@ fi
 SLOTWRITE="${NOVADECK_SLOTWRITE:-}"
 if [ -z "$SLOTWRITE" ]; then
   for c in "$SELFDIR/lib-slotwrite.sh" /usr/lib/novadeck/install/lib-slotwrite.sh \
-           "$SELFDIR/../fs-overlay/usr/lib/novadeck/install/lib-slotwrite.sh"; do
+           "$SELFDIR/../rootfs/overlay/usr/lib/novadeck/install/lib-slotwrite.sh"; do
     [ -r "$c" ] && { SLOTWRITE="$c"; break; }
   done
 fi
@@ -58,7 +58,7 @@ fi
 [ -n "$SLOTWRITE" ] && [ -r "$SLOTWRITE" ] || die "cannot find lib-slotwrite.sh (set NOVADECK_SLOTWRITE)"
 # shellcheck source=../image/lib-gpt.sh
 . "$LIBGPT"
-# shellcheck source=../fs-overlay/usr/lib/novadeck/install/lib-slotwrite.sh
+# shellcheck source=../rootfs/overlay/usr/lib/novadeck/install/lib-slotwrite.sh
 . "$SLOTWRITE"
 
 T="$(mktemp -d)"

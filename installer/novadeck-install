@@ -103,7 +103,7 @@ CARVE=${NOVADECK_CARVE:-$(find_component carve.sh install || true)}
 SESSION=${NOVADECK_RAUC_SESSION:-$(find_component rauc-session.sh install || true)}
 HOMESTAGE=${NOVADECK_HOMESTAGE:-$(find_component lib-homestage.sh images || true)}
 SLOTWRITE=${NOVADECK_SLOTWRITE:-$(find_component lib-slotwrite.sh \
-            fs-overlay/usr/lib/novadeck/install || true)}
+            rootfs/overlay/usr/lib/novadeck/install || true)}
 
 # --- arguments -----------------------------------------------------------------------------------
 usage() {
@@ -208,7 +208,7 @@ recon() {
 
   mkdir -p "$RUNDIR" || die "cannot create $RUNDIR"
 
-  # shellcheck source=../fs-overlay/usr/lib/novadeck/install/lib-slotwrite.sh
+  # shellcheck source=../rootfs/overlay/usr/lib/novadeck/install/lib-slotwrite.sh
   . "$SLOTWRITE"
   # shellcheck source=../image/lib-homestage.sh
   . "$HOMESTAGE"

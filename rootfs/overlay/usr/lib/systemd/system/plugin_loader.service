@@ -6,7 +6,7 @@ Description=Decky Loader (SteamDeck Plugin Loader)
 # self-updater manages `plugin_loader.service` by name, and a renamed unit would leave it
 # managing a ghost.
 # The binary is x86_64 and runs under the system FEX binfmt (see packages/decky-loader/
-# prebuilt.pin); its FEX knobs are fs-overlay/usr/share/fex-emu/AppConfig/PluginLoader.json.
+# prebuilt.pin); its FEX knobs are rootfs/overlay/usr/share/fex-emu/AppConfig/PluginLoader.json.
 # One deliberate drop from upstream: Environment=LOG_LEVEL=DEBUG — an always-on service does not
 # get to write debug-volume logs into a journal that shares the card with the Steam library.
 After=network.target novadeck-decky-sync.service

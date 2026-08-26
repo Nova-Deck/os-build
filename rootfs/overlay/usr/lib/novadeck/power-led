@@ -1,0 +1,129 @@
+#!/bin/bash
+# novadeck power-led — light the power-button RGB LED green while the system is up.
+#
+# Most boards carry an RGB LED behind the power button, wired to the PM8550 LPG and declared as a
+# `power_led` node in the shared dtsi (qcs8550-ayn-common, qcs8550-ayaneo-pocket-common,
+# sm8650-ayaneo-common). leds-qcom-lpg registers it as ONE multicolor device, /sys/class/leds/power-led.
+#
+# It ships dark, and not because anything is broken: a multicolor LED emits nothing until BOTH
+# halves are set. `brightness` is the master scale and `multi_intensity` is the per-channel mix,
+# and the driver leaves the mix at "0 0 0" — so `brightness` alone, however high, still multiplies
+# out to black. That is why the kernel's `default-on` trigger cannot do this job on its own: it
+# drives `brightness` and nothing else. Setting the mix is userspace's to do, and this is it.
+#
+# The sm8250 boards (Thor Lite, Pocket Max, RP5, Flip2, RP Mini, RP Mini V2) have no such node.
+# Their absence is the gate — there is no board list here, because a list would be a second source
+# of truth that drifts from the devicetree. If /sys/class/leds/power-led is not there, this is a
+# logged no-op.
+#
+# It lights at a QUARTER of the hardware maximum. These panels sit a centimetre from the player's
+# thumb in a dark room, and full scale on a 511-step LPG channel is a glare rather than an
+# indicator. 25% is not a cap — the knob below goes to 100 for anyone who wants it.
+#
+# Why a quarter and not a half: eye response to light is roughly logarithmic, so halving the PWM
+# duty barely reads as a change. 50% was tried on a Pocket ACE and was indistinguishable from full
+# by eye; 25% is the first step that actually looks dimmer. Judge this knob by looking at a device
+# in a dark room, never by the arithmetic.
+#
+# Operator override — /etc/novadeck/power-led.conf, sourced if present:
+#     NOVADECK_POWER_LED=off                 # leave the LED dark
+#     NOVADECK_POWER_LED_COLOR='255 191 0'   # canonical R G B, 0-255, scaled to the hw maximum
+#     NOVADECK_POWER_LED_BRIGHTNESS=100      # percent of max_brightness (default 25)
+set -uo pipefail
+
+# Overridable so the offline suite can point this at a fabricated /sys and assert the LED node's
+# contents afterwards. A write nothing reads back is not a feature, it is a comment.
+SYSFS=${NOVADECK_SYSFS_ROOT:-/sys}
+CONF=${NOVADECK_POWER_LED_CONF:-/etc/novadeck/power-led.conf}
+LED=$SYSFS/class/leds/power-led
+
+log() { printf 'power-led: %s\n' "$*" >&2; }
+
+: "${NOVADECK_POWER_LED:=on}"
+: "${NOVADECK_POWER_LED_COLOR:=0 255 0}"
+: "${NOVADECK_POWER_LED_BRIGHTNESS:=25}"
+
+if [[ -r $CONF ]]; then
+    # shellcheck source=/dev/null
+    source "$CONF" || log "$CONF failed to parse — ignoring it"
+fi
+
+# ---------------------------------------------------------------------------- resolve the hardware
+
+if [[ ! -d $LED ]]; then
+    log "no power-led on this board — nothing to do"
+    exit 0
+fi
+
+if [[ ${NOVADECK_POWER_LED,,} == off ]]; then
+    log "disabled by $CONF (NOVADECK_POWER_LED=off) — leaving the LED dark"
+    exit 0
+fi
+
+for attr in multi_index multi_max_intensity max_brightness; do
+    if [[ ! -r $LED/$attr ]]; then
+        log "NOT applied — $LED/$attr is absent (not a multicolor LED?)"
+        exit 0
+    fi
+done
+
+read -r -a index <<<"$(cat "$LED/multi_index")"
+read -r -a chan_max <<<"$(cat "$LED/multi_max_intensity")"
+read -r max_brightness <"$LED/max_brightness"
+
+if (( ${#index[@]} == 0 || ${#index[@]} != ${#chan_max[@]} )); then
+    log "NOT applied — multi_index '${index[*]}' and multi_max_intensity '${chan_max[*]}' disagree"
+    exit 0
+fi
+
+# ---------------------------------------------------------------------------- compose the mix
+#
+# The colour is given in canonical R G B 0-255 and placed by CHANNEL NAME, never by position:
+# multi_index is the driver's declared ordering and a kernel bump is free to change it. A
+# positional write would still exit 0 and would simply light the wrong colour.
+#
+# Each channel is then scaled to its own multi_max_intensity — 511 on the Pocket S2, not the 255
+# the colour is written in — because a mix capped at 255 against a 511 maximum is a half-lit LED
+# that looks like a dim or failing one.
+declare -A want=()
+read -r -a rgb <<<"$NOVADECK_POWER_LED_COLOR"
+if (( ${#rgb[@]} != 3 )); then
+    log "NOT applied — NOVADECK_POWER_LED_COLOR='$NOVADECK_POWER_LED_COLOR' is not three values"
+    exit 0
+fi
+want[red]=${rgb[0]} want[green]=${rgb[1]} want[blue]=${rgb[2]}
+
+intensity=()
+for i in "${!index[@]}"; do
+    name=${index[$i]}
+    level=${want[$name]:-}
+    if [[ -z $level ]]; then
+        log "channel '$name' is not one of red/green/blue — driving it to 0"
+        level=0
+    fi
+    intensity+=( $(( level * ${chan_max[$i]} / 255 )) )
+done
+
+# ---------------------------------------------------------------------------- apply
+#
+# Mix first, then the master scale: writing brightness while the mix is still "0 0 0" would light
+# nothing, and the LED would sit dark for however long the second write took.
+write_attr() {  # write_attr <path> <value>
+    local path=$1 value=$2
+    if ! printf '%s\n' "$value" >"$path" 2>/dev/null; then
+        log "NOT applied — write of '$value' to $path failed"
+        return 1
+    fi
+}
+
+if [[ ! $NOVADECK_POWER_LED_BRIGHTNESS =~ ^[0-9]+$ ]] || (( NOVADECK_POWER_LED_BRIGHTNESS > 100 )); then
+    log "NOT applied — NOVADECK_POWER_LED_BRIGHTNESS='$NOVADECK_POWER_LED_BRIGHTNESS' is not a percent (0-100)"
+    exit 0
+fi
+brightness=$(( max_brightness * NOVADECK_POWER_LED_BRIGHTNESS / 100 ))
+
+write_attr "$LED/multi_intensity" "${intensity[*]}" || exit 0
+write_attr "$LED/brightness" "$brightness" || exit 0
+
+log "applied — multi_intensity = ${intensity[*]} (${index[*]}), brightness = $brightness/$max_brightness (${NOVADECK_POWER_LED_BRIGHTNESS}%)"
+exit 0

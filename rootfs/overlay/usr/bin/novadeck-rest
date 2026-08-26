@@ -34,7 +34,7 @@ CONF=/etc/novadeck/rest.conf
 : "${NOVADECK_REST_GOVERNOR:=powersave}"
 : "${NOVADECK_REST_GPU_GOVERNOR:=powersave}"   # GPU devfreq governor on enter (restored on leave)
 : "${NOVADECK_REST_SCREEN:=internal}"   # gamescope target: drm_sleep_<internal|external>_screen
-: "${NOVADECK_REST_SKIP:=}"             # space-separated ops to skip: panel cpu rfkill governor gpugov
+: "${NOVADECK_REST_SKIP:=}"             # space-separated ops to skip: panel cpu rfkill governor gpugov led
 : "${XDG_RUNTIME_DIR:=/run/user/0}"     # where gamescope's wayland socket lives (session runs as root)
 export XDG_RUNTIME_DIR
 
@@ -48,7 +48,7 @@ if [ -r "$GS_LIB" ]; then . "$GS_LIB"; else gs_resolve_display() { :; }; fi
 
 # Reversible power-lowering primitives (cpu offline / rfkill / cpufreq+devfreq governors) live in a
 # shared library so novadeck-rest and novadeck-suspend apply byte-identical ops. State records land
-# in our STATE_DIR; the skip keys (cpu rfkill governor gpugov) come from NOVADECK_REST_SKIP.
+# in our STATE_DIR; the skip keys (cpu rfkill governor gpugov led) come from NOVADECK_REST_SKIP.
 POWER_STATE_DIR=$STATE_DIR
 POWER_SKIP=$NOVADECK_REST_SKIP
 POW_LIB=/usr/lib/novadeck/power-ops.sh

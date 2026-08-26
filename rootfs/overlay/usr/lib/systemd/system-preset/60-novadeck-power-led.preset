@@ -1,0 +1,5 @@
+# novadeck: enable the power-button LED on release. /etc/machine-id is empty on a fresh image so
+# systemd runs preset-all on first boot, where the stock 99-default.preset is "disable *"; this
+# higher-priority preset (60 < 99) keeps it enabled. A build-time multi-user.target.wants symlink
+# ships alongside as a fallback (cf. 60-novadeck-powerbuttond.preset).
+enable novadeck-power-led.service

@@ -409,11 +409,12 @@ verify-card: $(SDCARD) | $(BUILD_STAMP) ## Verify the built A/B card image (in c
 verify-lock: ## Check the lock's novadeck rows against packages/ (host, seconds, no build)
 	bash packages/verify-lock-rows.sh
 
-test: verify-lock ## Run the offline bootctl/post-install/pairingd/quirks/stage-2/partition-table/unit/coredump/perf/fan-curve/decky/update/publish/install/mkroot/steamos-manager/graphics-provider/video-decode/proton-dxvk suites (host, no build needed)
+test: verify-lock ## Run the offline bootctl/post-install/pairingd/quirks/power-led/stage-2/partition-table/unit/coredump/perf/fan-curve/decky/update/publish/install/mkroot/steamos-manager/graphics-provider/video-decode/proton-dxvk suites (host, no build needed)
 	bash $(TESTS_DIR)/test-bootctl.sh
 	bash $(TESTS_DIR)/test-post-install.sh
 	bash $(TESTS_DIR)/test-pairingd.sh
 	bash $(TESTS_DIR)/test-device-quirks.sh
+	bash $(TESTS_DIR)/test-power-led.sh
 	bash $(TESTS_DIR)/test-stage2-grub.sh
 	bash $(TESTS_DIR)/test-partition-table.sh
 	bash $(TESTS_DIR)/test-units.sh

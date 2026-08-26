@@ -1,0 +1,20 @@
+[Unit]
+Description=novadeck power-button LED (green while the system is up)
+Documentation=file:///usr/lib/novadeck/power-led
+# The LED's sysfs attributes are root:root 0644, so this has to be a system service rather than
+# anything in the session. Nothing races it and nothing waits on it: it writes two sysfs files on a
+# device the rest of the boot never touches, so ordinary dependencies are enough. After
+# local-fs.target because the script sources /etc/novadeck/power-led.conf if the operator left one.
+#
+# Deliberately NOT ordered early like novadeck-device-quirks: a quirk has to land before the
+# hardware misbehaves, whereas this one is cosmetic. Lighting it a second later costs nothing;
+# lighting it before /etc is mounted would silently ignore the operator's override.
+After=local-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/novadeck/power-led
+
+[Install]
+WantedBy=multi-user.target

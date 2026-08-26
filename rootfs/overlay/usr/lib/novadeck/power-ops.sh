@@ -11,7 +11,7 @@
 #
 # Caller contract — set these before calling power_enter / power_leave:
 #   POWER_STATE_DIR             dir for the per-op state records (default /run/novadeck/rest.d)
-#   POWER_SKIP                  space-separated ops to skip: cpu rfkill governor gpugov
+#   POWER_SKIP                  space-separated ops to skip: cpu rfkill governor gpugov led
 #   NOVADECK_REST_GOVERNOR      target cpufreq governor   (default powersave)
 #   NOVADECK_REST_GPU_GOVERNOR  target GPU devfreq governor (default powersave)
 # The library does NOT own the panel (that is gamescope, caller-specific) and does NOT log — the
@@ -139,12 +139,39 @@ _pow_gpu_gov_leave() {
   done < "$POWER_STATE_DIR/gpu_governors"
 }
 
+# --- power-button LED: extinguish it while the device is down, relight it on resume. A green LED
+# on a sleeping handheld is worse than a dark one — it draws current from the PMIC rail (which
+# stays up across s2idle) and it tells the owner the device is awake when it is not.
+#
+# Only `brightness` moves. The mix in multi_intensity is left exactly as novadeck-power-led wrote
+# it, so leave restores the operator's colour rather than this library's idea of it. Boards with no
+# power_led node (every sm8250 handheld) have no file to write and record nothing, so leave is a
+# clean no-op there.
+_pow_led_enter() {
+  f=/sys/class/leds/power-led/brightness
+  [ -w "$f" ] || return 0
+  cur=$(cat "$f" 2>/dev/null) || return 0
+  [ "$cur" = "0" ] && return 0
+  echo 0 > "$f" 2>/dev/null && echo "$cur" > "$POWER_STATE_DIR/led_brightness"
+}
+_pow_led_leave() {
+  [ -r "$POWER_STATE_DIR/led_brightness" ] || return 0
+  f=/sys/class/leds/power-led/brightness
+  cur=$(cat "$POWER_STATE_DIR/led_brightness" 2>/dev/null) || return 0
+  [ -w "$f" ] && echo "$cur" > "$f" 2>/dev/null
+}
+
 # power_enter — lower power, recording prior state. Governors first, then offline CPUs, then radios.
 # power_leave — restore in REVERSE (radios, CPUs, governors), then drop the state records.
-# Both honour POWER_SKIP per-op (keys: cpu rfkill governor gpugov) so bring-up can keep, e.g., the
-# Wi-Fi link up over SSH with POWER_SKIP="rfkill".
+# Both honour POWER_SKIP per-op (keys: cpu rfkill governor gpugov led) so bring-up can keep, e.g.,
+# the Wi-Fi link up over SSH with POWER_SKIP="rfkill".
+#
+# The LED goes out FIRST on enter and comes back LAST on leave, so it brackets the whole sequence:
+# it is the only op the owner can see, and it should read "down" for no longer than the device is
+# actually down.
 power_enter() {
   mkdir -p "$POWER_STATE_DIR"
+  _pow_skip led      || _pow_led_enter
   _pow_skip governor || _pow_gov_enter
   _pow_skip gpugov   || _pow_gpu_gov_enter
   _pow_skip cpu      || _pow_cpu_enter
@@ -155,6 +182,8 @@ power_leave() {
   _pow_skip cpu      || _pow_cpu_leave
   _pow_skip gpugov   || _pow_gpu_gov_leave
   _pow_skip governor || _pow_gov_leave
+  _pow_skip led      || _pow_led_leave
   rm -f "$POWER_STATE_DIR/cpus" "$POWER_STATE_DIR/rfkill" "$POWER_STATE_DIR/wifi-freq" \
-        "$POWER_STATE_DIR/governors" "$POWER_STATE_DIR/gpu_governors"
+        "$POWER_STATE_DIR/governors" "$POWER_STATE_DIR/gpu_governors" \
+        "$POWER_STATE_DIR/led_brightness"
 }

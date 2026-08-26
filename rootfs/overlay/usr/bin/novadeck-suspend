@@ -36,7 +36,7 @@ CONF=/etc/novadeck/rest.conf
 # this halts the workload while leaving the session bus answerable. GLOB, not session-1: the scope
 # number is per-login. Expanded (split + globbed) in freeze(), so keep it unquoted there.
 : "${NOVADECK_SUSPEND_FREEZE_CGROUPS:=/sys/fs/cgroup/user.slice/user-1000.slice/session-*.scope}"
-: "${NOVADECK_SUSPEND_SKIP:=}"          # power ops to skip: cpu rfkill governor gpugov (e.g. "rfkill" over SSH)
+: "${NOVADECK_SUSPEND_SKIP:=}"          # power ops to skip: cpu rfkill governor gpugov led (e.g. "rfkill" over SSH)
 : "${NOVADECK_WAKE_KEY:=KEY_POWER}"
 : "${NOVADECK_WAKE_DEBOUNCE_MS:=1000}"  # ignore a KEY_POWER within this of arming the wait (press bounce)
 : "${XDG_RUNTIME_DIR:=/run/user/0}"

@@ -508,6 +508,36 @@ fi
 # hence the gates below, and tests/test-graphics-provider.sh for the parts visible in
 # committed files.
 #
+# x-systemd.before=local-fs.target ON BOTH ROWS, and it is not decoration: `nofail` does TWO
+# things, and the second one is a shutdown bug. Besides demoting local-fs.target's dependency
+# from Requires= to Wants= (which is what we want), it also DROPS the unit's
+# Before=local-fs.target ordering. Without that ordering these two mounts are torn down in the
+# FIRST shutdown wave, concurrently with the session that is still using them, instead of after
+# local-fs.target stops like every other filesystem on the box.
+#
+# MEASURED on HW (dev card, three consecutive reboots, 2026-08-27), each one identical:
+#
+#   [44.716] Unmounting /usr/share/guestos/fex-mesa...     <- session still up
+#   [44.755] umount: /usr/share/guestos/fex-mesa: target is busy.
+#   [44.759] Failed unmounting /usr/share/guestos/fex-mesa.
+#   [44.844] Unmounting /run/novadeck/guestos-lower...     <- overlay STILL MOUNTED
+#   [44.877] Unmounted /run/novadeck/guestos-lower.        <- and it SUCCEEDS
+#   [44.941] session-1.scope: Deactivated successfully.    <- the holder, 185ms too late
+#
+# The busy is Decky's PluginLoader: it is an x86 binary run under system FEX, so its guest libs
+# are mapped out of the merged tree and it holds the overlay until the session scope dies. The
+# real damage is the line after it -- a FAILED stop job is still a COMPLETED job, so the ordering
+# between the two mounts is satisfied and systemd pulls the erofs lower out from under a live
+# overlay. The superblock survives (the overlay pins it), so this has cost us nothing visible
+# yet, but "lowerdir is a detached mount" is not a state to leave a shutdown in.
+#
+# Restoring the ordering moves both unmounts into the late wave, next to /tmp and the offload
+# binds, by which time the session scope is long gone. It does NOT re-arm the boot hazard nofail
+# exists to prevent: Wants= is untouched, so a missing or corrupt guest still cannot fail the
+# boot, and neither row can hang local-fs.target waiting -- both mount a file that is already on
+# the mounted root (no device probe, no network), and the overlay Requires= the lower via
+# requires-mounts-for, so a missing guest fails both rows immediately instead of stalling.
+#
 # THE GATE IS NOT OPTIONAL, and its exit code is not the signal. `dump.erofs --path` returns 0 for
 # a path that does not exist (it only prints "read inode failed" to stderr), so the check has to be
 # on the CONTENT: pipe the file out and parse it. A rootfs bump to an image without a manifest
@@ -617,11 +647,11 @@ if ! grep -q '/usr/share/guestos/fex-mesa' "$stage/etc/fstab" 2>/dev/null; then
   printf '%s\n' \
     '# FEX x86 guest: the pinned guest image, loop-mounted as the LOWER layer of the merged' \
     '# guest tree below. nofail: a missing or corrupt guest must never hold up a boot.' \
-    '/usr/share/fex-emu/RootFS/ArchLinux.ero  /run/novadeck/guestos-lower  erofs  loop,ro,nofail,noatime  0 0' \
+    '/usr/share/fex-emu/RootFS/ArchLinux.ero  /run/novadeck/guestos-lower  erofs  loop,ro,nofail,noatime,x-systemd.before=local-fs.target  0 0' \
     '# The merged FEX guest, for BOTH x86 consumers: Valve'"'"'s FEX compat tool (Steam app' \
     '# 3127680) probes this path for graphics_provider.json, and the system FEX Config.json' \
     '# points RootFS here. Our x86 Turnip payload overlays the guest'"'"'s stock driver.' \
-    'overlay  /usr/share/guestos/fex-mesa  overlay  ro,nofail,lowerdir=/usr/share/novadeck/guestos-x86-mesa:/run/novadeck/guestos-lower,x-systemd.requires-mounts-for=/run/novadeck/guestos-lower  0 0' \
+    'overlay  /usr/share/guestos/fex-mesa  overlay  ro,nofail,lowerdir=/usr/share/novadeck/guestos-x86-mesa:/run/novadeck/guestos-lower,x-systemd.requires-mounts-for=/run/novadeck/guestos-lower,x-systemd.before=local-fs.target  0 0' \
     >>"$stage/etc/fstab"
 fi
 

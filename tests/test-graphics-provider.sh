@@ -68,15 +68,24 @@ else
     bad "lower mount source does not match pin dest '$dest' -- the guest mount would source a stale path"
 fi
 
-# 2. Guest image mounted read-only, and never able to hold up a boot.
-grep -q "erofs  loop,ro,nofail" "$ASSEMBLE" \
-    && ok "guest image is loop-mounted read-only, nofail" \
-    || bad "no read-only nofail loop mount for the guest image"
+# 2. Guest image mounted read-only, never able to hold up a boot, and torn down AFTER the session.
+#    x-systemd.before is not redundant with nofail -- it is there BECAUSE of nofail, which drops
+#    the unit's Before=local-fs.target along with the Requires=. Both rows need it (the overlay
+#    row is checked whole in 3); without it the mounts are stopped in the first shutdown wave,
+#    while the session still holds them: the overlay unmount fails EBUSY, and systemd then takes
+#    that failed stop job as complete and unmounts this erofs lower out from under the still-
+#    mounted overlay. Measured on HW over three reboots; see the comment in the assembler.
+#
+#    Guarded because losing it degrades QUIETLY -- the mount still works, the boot still comes up,
+#    and the only evidence is two lines in a shutdown log nobody reads.
+grep -q "erofs  loop,ro,nofail,noatime,x-systemd.before=local-fs.target" "$ASSEMBLE" \
+    && ok "guest image is loop-mounted read-only + nofail, ordered before local-fs.target" \
+    || bad "guest image row reshaped -- expected erofs loop,ro,nofail,noatime,x-systemd.before=local-fs.target"
 
 # 3. The overlay row: merged at the probed path, payload as the TOP lower layer, ordered after
 #    the guest mount. One grep because the row only works whole -- a reordered lowerdir silently
 #    renders on the guest's stock driver, and a missing requires-mounts-for races the lower mount.
-if grep -qF "overlay  $MOUNTPOINT  overlay  ro,nofail,lowerdir=$PAYLOAD:$LOWER,x-systemd.requires-mounts-for=$LOWER" "$ASSEMBLE"; then
+if grep -qF "overlay  $MOUNTPOINT  overlay  ro,nofail,lowerdir=$PAYLOAD:$LOWER,x-systemd.requires-mounts-for=$LOWER,x-systemd.before=local-fs.target" "$ASSEMBLE"; then
     ok "overlay row merges payload over guest at $MOUNTPOINT, ordered after the lower mount"
 else
     bad "overlay fstab row missing or reshaped -- expected lowerdir=$PAYLOAD:$LOWER at $MOUNTPOINT"

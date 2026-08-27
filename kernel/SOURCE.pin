@@ -2,30 +2,37 @@
 # The TARBALL + its sha256 is the canonical pin. Validated 2026-06-17; re-pinned 2026-07-25
 # (7.1.5, HW-validated on Pocket S2 + Pocket ACE); re-pinned 2026-08-03 (7.1.6); re-pinned
 # 2026-08-18 (7.2 — mainline, released 2026-08-16; NOT HW-validated yet, see the gate below).
-version:    7.2
-url:        https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.2.tar.xz
-sha256:     f9fef3d14c0df53819026f4be74459835c2a0b0dcbf5b5bbd9ea19f0829402b3
-git_tag:    v7.2
-git_commit: 8d3ae59288f1e7d58d76558a6ee96d533bc5019f
+version:    7.2.1
+url:        https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.2.1.tar.xz
+sha256:     4158098c8a28ea8fbe068c855d3aa6341e03d06282add3cb9049f3a24e4557b3
+git_tag:    v7.2.1
+git_commit: 458fbaaefba2fc5450c325a6834453dc4f4e52ae
 
 # The sha256 above is the one kernel.org publishes in the SIGNED sha256sums.asc for v7.x, not a
-# hash of whatever the CDN happened to serve — checked 2026-08-18. git_commit is the DEREFERENCED
-# tag (`git ls-remote 'v7.2^{}'`), matching how the 7.1.5/7.1.6 lines were recorded; the annotated
-# tag object is 237a1c39e8dfd3e1c6f1f023eea37a48ec04cc63 and is NOT what belongs here.
+# hash of whatever the CDN happened to serve — checked 2026-08-27. git_commit is the DEREFERENCED
+# tag (`git ls-remote 'v7.2.1^{}'`), matching how the 7.1.5/7.1.6/7.2 lines were recorded; the
+# annotated tag object is 2ea1dee74fcca4b229d780ade5f9a5352cbc4dd7 and is NOT what belongs here.
 #
-# 7.2 is MAINLINE, not stable: there is no 7.2.x point release yet. Re-pin to 7.2.1 when it ships.
+# 7.2 was MAINLINE with no point release; 7.2.1 (2026-08-2x) is the first stable one and is what
+# this now pins. Precedent from 7.1.3 -> 7.1.5: a point release INSIDE a series is a pure pin edit
+# — but that is a prediction, not a licence to skip the patch/config gates below. Re-run them.
 
-# Config validation (kernel/*.config) against THIS tree, run 2026-08-18 for the 7.2 bump:
-#   - all 427 referenced CONFIG_* symbols (kernel.config + trim-platforms.config) exist in the
-#     PATCHED 7.2 tree, EXCEPT one, now deleted — see kernel.config's header:
+# Config validation (kernel/*.config) against THIS tree, RE-RUN 2026-08-27 for the 7.2.1 re-pin
+# (numbers below are 7.2.1's; the 7.2 run they replace found 427/1-missing and 69 patches/21 fuzz):
+#   - all 428 referenced CONFIG_* symbols (kernel.config + trim-platforms.config) exist in the
+#     PATCHED 7.2.1 tree, with NONE missing. Sweep: strip `CONFIG_x=` and `# CONFIG_x is not set`
+#     to bare names, diff against every `config`/`menuconfig` name in the tree's Kconfig files.
+#     The one 7.2 casualty stays deleted and its note is still why — see kernel.config's header:
 #       READ_ONLY_THP_FOR_FS -> removed upstream in 7.2; file THP is unconditional now.
-#     428 as of 2026-08-22: SCHED_CACHE was added to kernel.config and checked the same way
-#     (init/Kconfig:1025, `default y`, `depends on SMP`) — it was already resolving to =y here,
-#     so the pin records an inherited default rather than changing one.
-#   - all 69 out-of-tree patches in kernel/patches/ apply to 7.2 with ZERO rejects, applied
+#     SCHED_CACHE (added 2026-08-22) still resolves the same way (init/Kconfig, `default y`,
+#     `depends on SMP`) — the pin records an inherited default rather than changing one.
+#   - all 71 out-of-tree patches in kernel/patches/ apply to 7.2.1 with ZERO rejects, applied
 #     CUMULATIVELY in lexical order, which is the only order that means anything (see below).
-#     21 of them need fuzz (was 10 on 7.1.6); kernel/build.sh passes no -F0, so patch's default
-#     fuzz=2 accepts them.
+#     26 of them need fuzz (was 21 on 7.2, 10 on 7.1.6); kernel/build.sh passes no -F0, so patch's
+#     default fuzz=2 accepts them. The fuzz count CLIMBS with every point release — when it
+#     reaches 2 on a hunk that matters, patch will start applying it in the wrong place silently.
+#   - `patch unexpectedly ends in middle of line` x4 is NOT a reject: patches 0004 (IFPC) and 0203
+#     (S16_LE) have no trailing newline. Both hunks succeed. Pre-existing, unrelated to any bump.
 #   - the fragments were then MERGED for real inside build/Dockerfile (`merge_config.sh -m
 #     defconfig kernel/*.config` + `make olddefconfig`, trim-platforms.config included) and every
 #     requested symbol asserted to have kept its requested value. merge_config emitted ZERO

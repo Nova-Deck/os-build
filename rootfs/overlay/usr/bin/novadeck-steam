@@ -146,8 +146,21 @@ export vk_xwayland_wait_ready=false            # don't block on buffers idling b
 #   shell (pre-seeded into /home by make-sdcard.sh) that won't checksum-match Valve's manifests, and there's no network
 #   at first boot (Steam owns OOBE Wi-Fi) — so verification can only waste time re-hashing the baked
 #   tree or stall trying to re-fetch. This leaves the SELF-UPDATE path intact.
-# -noshaders: disable Steam's shader pre-caching (background shader download + compile). Orthogonal to
-#   the update path — pure CPU/battery saver on the handheld; safe to keep.
+# NO -noshaders, deliberately — and an earlier comment here called it a "pure CPU/battery saver,
+#   safe to keep", which is WRONG on recent Protons and is why this took two passes to fix.
+#   The flag disables Steam's shader pre-caching (background shader download + compile), but those
+#   same shader depots ALSO deliver Proton's pre-transcoded media. Without them a Media Foundation
+#   video title falls back to MEDIACONV_BLANK_VIDEO_FILE and plays BLACK videos, so what reads like
+#   a battery tweak silently breaks cutscenes and logo videos.
+#
+#   The cost of leaving it off is real but bounded: the first launch of each game runs a fossilize
+#   "Processing Vulkan shaders" pass, which is heavy on CPU and iowait on an SD card. That pass is
+#   EXPECTED and is not a hang — do not "fix" it by putting this flag back.
+#
+#   Scope note, so this is not mis-cited as a cure-all for black video: it only reaches titles that
+#   decode through Media Foundation (mfplat/winegstreamer/mediaconv). A game bundling an in-process
+#   decoder — Bink, say, where only binkw64.dll is mapped — never touches that path, so a black or
+#   stalled video there has a different cause and this flag is not it.
 #
 # NO -cef-enable-vaapi, deliberately. It reads like the switch for hardware video decode in CEF
 #   ("Enable VA-API video decoding on Linux", per steamclient.so) and it is a NO-OP here. Measured
@@ -168,9 +181,10 @@ export vk_xwayland_wait_ready=false            # don't block on buffers idling b
 # implement a PINNED-client model: the client downloads an update but the bootstrap is
 # forbidden from applying it, so the running client never advances — even across reboots (HW-observed
 # 2026-07-03: update downloaded, SteamUI relaunched, logo/version unchanged). We want the Deck-faithful
-# self-updating client, so those three were removed while -noshaders (unrelated) stays.
+# self-updating client, so those three were removed. -noshaders was a separate question and is
+# also gone now, for the media reason above.
 # Word-splitting on the extra-args is intentional (sh).
-: "${NOVADECK_STEAM_ARGS:=-gamepadui -steamos3 -steamdeck -noverifyfiles -noshaders}"
+: "${NOVADECK_STEAM_ARGS:=-gamepadui -steamos3 -steamdeck -noverifyfiles}"
 
 # CEF remote-debugging, ALWAYS on (2026-08-08, was NOVADECK_DEBUG-gated). Steam's Big Picture UI
 # is CEF; this sentinel makes the client open its DevTools port. It is the ONLY path Decky Loader

@@ -492,6 +492,9 @@ class NovadeckPower:
         self.cpu_scheduler = DEFAULT_CPU_SCHEDULER
         self.scheduler_live = DEFAULT_CPU_SCHEDULER
         self.scheduler_override = None
+        # One-tick debounce latch for a per-game `scheduler` tweak going absent; see
+        # apply_scheduler_tweak(). Only ever True between two consecutive ticks.
+        self.scheduler_drop_seen = False
         self.smoothed_temp = 0.0
         self.last_pwm = 0
         self.suspended = False
@@ -777,6 +780,30 @@ class NovadeckPower:
         except (OSError, subprocess.SubprocessError) as exc:
             print(f"novadeck-powerd: {SCX_UNIT} reset-failed failed: {exc}", file=sys.stderr)
 
+    def reconcile_scheduler_live(self):
+        """Re-derive scheduler_live from the unit. Returns True if it changed.
+
+        scheduler_live is a BELIEF, and the kernel can invalidate it without telling us:
+        sched_ext ejects a misbehaving BPF scheduler on its own (`disabled (runtime error)`,
+        `disabled (runnable task stall)`) and reverts every task to the stock scheduler. scx_lavd
+        usually re-attaches in-process — its own `loop { .. should_restart() }` — so the unit
+        survives and there is nothing to reconcile; but when it exits instead, the unit goes
+        inactive while we still report "lavd". That is how ActiveCpuScheduler came to claim lavd
+        across five consecutive ejections on 2026-08-27 while the system was actually on EEVDF.
+
+        Deliberately the UNIT and not /sys/kernel/sched_ext/state: the sysfs file reads `disabled`
+        for ~1s while scx_lavd attaches, so trusting it here would report "none" every time the
+        scheduler is legitimately starting. GetStatus already carries the raw sysfs value for
+        anyone who needs the kernel's own view.
+        """
+        if len(self.available_cpu_schedulers()) == 1:
+            return False
+        live = "lavd" if self.scx_unit_active() else "none"
+        if live == self.scheduler_live:
+            return False
+        self.scheduler_live = live
+        return True
+
     def restore_cpu_scheduler(self):
         # Apply the saved choice at daemon start, or DEFAULT_CPU_SCHEDULER ("none") when nothing
         # is saved. scx.service is never `enable`d, so this (and an explicit `systemctl start`) is
@@ -812,6 +839,11 @@ class NovadeckPower:
     def apply_scheduler(self, scheduler):
         """Make `scheduler` the LIVE one by starting/stopping scx.service. Touches
         scheduler_live only — the caller owns whether this was a choice or an override."""
+        # Re-derive first: the guard below is the only thing standing between a caller and a
+        # redundant unit cycle, and it is worthless if it compares against a stale belief. If the
+        # kernel ejected lavd and scx_lavd exited, this is what lets the next apply start it again
+        # instead of early-returning because we still think it is loaded.
+        self.reconcile_scheduler_live()
         if scheduler == self.scheduler_live:
             return
         action = "stop" if scheduler == "none" else "start"
@@ -1195,6 +1227,14 @@ class NovadeckPower:
         # kill the timer: a bad tweaks entry must cost one tick, not the tool.
         try:
             if not self.suspended:
+                # Before anything reads or acts on scheduler_live, notice if the scheduler went
+                # away underneath us (sched_ext ejection that scx_lavd did not survive). Nothing
+                # else announces that, so a client would otherwise keep rendering "LAVD" for a
+                # system that is back on the stock scheduler.
+                if self.reconcile_scheduler_live() and self.connection is not None:
+                    self.emit_properties({
+                        "ActiveCpuScheduler": GLib.Variant("s", self.scheduler_live),
+                    })
                 values = self.perf.tick()
                 self.apply_scheduler_tweak(values)
                 self.apply_profile_tweak(values)
@@ -1208,6 +1248,23 @@ class NovadeckPower:
         want = values.get("scheduler")
         if want is not None and want not in self.available_cpu_schedulers():
             want = None
+        # A tweak that vanishes for a SINGLE tick must not cycle the system CPU scheduler.
+        # `values` comes from a fresh /proc walk every 3s (novadeck_perf.scan_games), and that
+        # walk answers "no game" for any tick where the tagged set comes back empty — a tick
+        # starved under load, a tree briefly unreadable. Absent reads as "no opinion", which
+        # falls back to the persisted choice below; with the documented setup of persisted
+        # "none" + a per-game "lavd" tweak, one such tick stops scx.service and the next one
+        # starts it again. Swapping the scheduler under a running game costs a visible hitch,
+        # and apply_scheduler() clears the unit's rate limit on every start, so nothing upstream
+        # of us would damp that. Require the absence to REPEAT before acting on it.
+        #
+        # Only the drop is debounced: a tweak arriving, or changing to a different scheduler, is
+        # still applied on the tick it is seen. The cost is one extra tick (3s) of holding an
+        # override after a game genuinely exits.
+        if want is None and self.scheduler_override is not None and not self.scheduler_drop_seen:
+            self.scheduler_drop_seen = True
+            return
+        self.scheduler_drop_seen = False
         if want == self.scheduler_override:
             return
         self.scheduler_override = want

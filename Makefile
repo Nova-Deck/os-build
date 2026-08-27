@@ -421,6 +421,7 @@ test: verify-lock ## Run the offline bootctl/post-install/pairingd/quirks/power-
 	bash $(TESTS_DIR)/test-coredump-limit.sh
 	bash $(TESTS_DIR)/test-perf.sh
 	bash $(TESTS_DIR)/test-fan-curve.sh
+	bash $(TESTS_DIR)/test-cpu-scheduler.sh
 	bash $(TESTS_DIR)/test-decky.sh
 	bash $(TESTS_DIR)/test-update.sh
 	bash $(TESTS_DIR)/test-publish-bundle.sh

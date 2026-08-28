@@ -1,0 +1,58 @@
+Subject: [PATCH] subprojects: vendor a wayland-protocols wrap for the wlroots 0.20 floor
+
+gamescope 3.16.26+ bumped its wlroots submodule to 0.20 (upstream fc6a965e), and wlroots 0.20
+requires `wayland-protocols >= 1.47` in subprojects/wlroots/protocol/meson.build. Our overlay
+builds against the pinned holo snapshot (build/snapshot.pin, mash-20251118.3), which ships
+wayland-protocols 1.45, so the build dies at configure time:
+
+    wlroots| Dependency wayland-protocols found: NO found 1.45 but need: '>=1.47'
+    gamescope/subprojects/wlroots/protocol/meson.build:1:17: ERROR:
+      Dependency 'wayland-protocols' is required but not found.
+
+Bumping the holo snapshot to satisfy one build-time floor would move the entire sealed base for
+every package in the image, which is wildly out of proportion -- and that snapshot is upstream's to
+move, not ours, so it may not happen on any useful timescale. Instead vendor the dependency the way
+wlroots itself is vendored: declare the wrap here and add `wayland-protocols` to
+`-Dforce_fallback_for` in the PKGBUILD, so meson builds it as a subproject regardless of what the
+container ships.
+
+This is cheap to carry because wayland-protocols is DATA, not a library we link: XML protocol
+definitions plus a pkg-config file. Nothing from it ends up in the shipped binary beyond generated
+protocol glue, so it cannot drift from the base's runtime libraries.
+
+*** PIN 1.48, NOT LATEST. THIS IS LOAD-BEARING. ***
+
+The container's wayland-scanner is 1.24.0, and its built-in DTD has no `<!ATTLIST interface frozen>`
+-- that ATTLIST is the ONLY difference between wayland 1.24.0's and 1.26.0's protocol/wayland.dtd.
+wayland-protocols 1.49 marks two interfaces `frozen=`, so scanning it with the container's scanner
+fails header generation under --strict:
+
+    FAILED: .../color-management-v1-enum.h
+    * WARNING: XML failed validation against built-in DTD *
+
+1.47 and 1.48 contain ZERO `frozen=` occurrences. Verified rather than assumed: all 64 XML files in
+1.48 pass `xmllint --dtdvalid` against wayland 1.24.0's shipped DTD. So 1.48 is the sweet spot --
+above wlroots' 1.47 floor, below the scanner's ceiling.
+
+Vendoring 1.49 instead forces vendoring a newer wayland for its scanner too, and that in turn breaks
+on gamescope's own `protocol/meson.build`, which asks for the scanner path via
+`get_variable(pkgconfig: ...)` and cannot read it from an InternalDependency. That path costs two
+wraps, three subproject option overrides and a patch to upstream's meson. None of it is needed.
+
+To bump: check the candidate version for `frozen=` (and re-run the xmllint sweep against the
+container's DTD) BEFORE raising this pin. Take the OLDEST version that clears whatever floor the
+vendored wlroots asks for, not the newest available.
+
+--- /dev/null
++++ b/subprojects/wayland-protocols.wrap
+@@ -0,0 +1,10 @@
++[wrap-file]
++directory = wayland-protocols-1.48
++source_url = https://gitlab.freedesktop.org/wayland/wayland-protocols/-/releases/1.48/downloads/wayland-protocols-1.48.tar.xz
++source_filename = wayland-protocols-1.48.tar.xz
++source_hash = 398036ac0eb6484982ddbde7ff86848d753231f9cdeeae983f06b52946625aa1
++source_fallback_url = https://wrapdb.mesonbuild.com/v2/wayland-protocols_1.48-1/get_source/wayland-protocols-1.48.tar.xz
++wrapdb_version = 1.48-1
++
++[provide]
++dependency_names = wayland-protocols

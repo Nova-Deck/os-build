@@ -20,7 +20,7 @@ CONF=/etc/novadeck/session.conf
 
 # --- Internal panel -> landscape LOGICAL output (--prefer-output / -W / -H / -r) ------------------
 # All from the device-env registry now (replaces the old runtime sysfs auto-detect). The
-# composite-rotation patch keeps gamescope's LOGICAL output in landscape (g_nOutputWidth/Height
+# composite rotation keeps gamescope's LOGICAL output in landscape (g_nOutputWidth/Height
 # unswapped) and rotates only the final scanout store, so the logical canvas (-W/-H) the client fills
 # must be the panel's PORTRAIT native mode SWAPPED to landscape: W <- native height, H <- native width.
 # session.conf may override any of these (it is sourced after device-env). Multi-panel boards are a
@@ -87,9 +87,10 @@ fi
 # features above. Distinct from the earlier crash ValveSoftware/gamescope#1520 (fixed pre-3.16.17).
 export ENABLE_GAMESCOPE_WSI="${ENABLE_GAMESCOPE_WSI:-1}"
 
-# Patched gamescope (from-source overlay): composite rotation is upstream PR #2228
-# (packages/gamescope/patches/0001-composite-rotation-pr2228.patch), which replaced the ROCKNIX
-# --use-rotation-shader patch. No flag is needed: gamescope reads the panel orientation from the DRM
+# Composite rotation is UPSTREAM as of gamescope 3.16.28 (commit 38fb50fc, our PR #2228 merged
+# verbatim); we no longer carry a patch for it, so this needs nothing from the from-source overlay
+# beyond the version. It replaced the ROCKNIX --use-rotation-shader patch. No flag is needed:
+# gamescope reads the panel orientation from the DRM
 # connector (our DTS declares rotation=<90>, published as the connector "panel orientation") and
 # AUTO-ENGAGES compositor rotation when the primary plane can't do that rotation at scanout — which
 # is the case here (the msm DPU can't ROTATE_90 a LINEAR plane). The scene stays in logical landscape

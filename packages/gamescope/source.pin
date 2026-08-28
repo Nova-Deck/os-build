@@ -4,15 +4,19 @@
 # gamescope tag + its submodules) named in it.
 #
 # This switched from the holo `pkgbuild_repo` fetch (was pinned at holo's 3.16.17-1) to a local
-# PKGBUILD bumped to gamescope 3.16.25. Reason: 3.16.17's Wayland explicit-sync
+# PKGBUILD bumped to gamescope 3.16.28. Reason: 3.16.17's Wayland explicit-sync
 # (linux-drm-syncobj) WSI present path intermittently deadlocks on the first frame on this HW,
 # wedging ~2/3 of cold session starts. We already rebuild gamescope from source for the
 # composite-rotation patch, so we bump the version here (same medicine as packages/mesa) rather than
 # carry a runtime workaround. See docs/bringup-phase2.md step 1e + the gamescope-flip-blocker
 # memory, and packages/README.md for the overlay mechanism.
 #
-# Why source-built at all: the msm DPU cannot ROTATE_90 a LINEAR plane, so gamescope must rotate the
-# portrait-native Pocket S2 panel in its GPU composite step (a code change → a package rebuild).
+# Why source-built at all: originally because the msm DPU cannot ROTATE_90 a LINEAR plane, so
+# gamescope had to rotate the portrait-native Pocket S2 panel in its GPU composite step. That patch
+# (our PR #2228) is UPSTREAM as of 3.16.28 and was dropped from `patches:` below — upstream
+# auto-engages composite rotation when the primary plane lacks the needed rotation bit, which is the
+# same condition our patch tested, so behaviour is unchanged and no launch flag is needed. We still
+# build from source for 0002-0005, which are ours and not upstream.
 #
 # Fields:
 #   name           pkgname (must match the PKGBUILD); also the work/ build-dir + repo entry
@@ -28,4 +32,4 @@
 name: gamescope
 pkgbuild_local: PKGBUILD
 pkgrel_suffix: 1
-patches: 0001-composite-rotation-pr2228.patch 0002-sanitize-nightmode-atom.patch 0003-drmbackend-fake-output-mm.patch 0004-fps-limit-atom-persist.patch 0005-steamcontrolled-steam-focus-fallback.patch
+patches: 0002-sanitize-nightmode-atom.patch 0003-drmbackend-fake-output-mm.patch 0004-fps-limit-atom-persist.patch 0005-steamcontrolled-steam-focus-fallback.patch 0007-vendor-wayland-protocols-wrap.patch

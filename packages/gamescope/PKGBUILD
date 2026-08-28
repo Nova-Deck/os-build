@@ -1,7 +1,7 @@
 # novadeck gamescope — built FROM SOURCE via a novadeck-owned PKGBUILD (pkgbuild_local in
 # packages/gamescope/source.pin), NOT fetched from the holo monorepo. This is a near-verbatim copy
 # of the upstream Arch / holo gamescope recipe (same maintainers) with ONE deliberate change: the
-# version is bumped from holo's pinned 3.16.17 to 3.16.25.
+# version is bumped from holo's pinned 3.16.17 to 3.16.28.
 #
 # Why we own + bump it: holo is pinned at gamescope 3.16.17, whose Wayland explicit-sync
 # (linux-drm-syncobj) WSI present path intermittently DEADLOCKS on the first frame on this HW
@@ -10,19 +10,21 @@
 # signals). See docs/bringup-phase2.md step 1e and the gamescope-flip-blocker memory.
 # We were already rebuilding gamescope from source for the composite-rotation patch (the msm DPU
 # can't ROTATE_90 a LINEAR plane), so we apply the same medicine as mesa: pin a newer upstream
-# release in a checked-in PKGBUILD rather than carrying a runtime workaround.
+# release in a checked-in PKGBUILD rather than carrying a runtime workaround. That patch is now
+# UPSTREAM (3.16.28 carries it as 38fb50fc, our PR #2228 merged verbatim) and has been dropped from
+# source.pin, but we still own this recipe for patches 0002-0005.
 #
 # The git submodule commits are pinned by the gamescope tree at the tag itself (`git submodule
-# update` checks out the gitlinked commits recorded in gamescope@3.16.25), so bumping pkgver
+# update` checks out the gitlinked commits recorded in gamescope@3.16.28), so bumping pkgver
 # auto-selects the matching wlroots/etc. Our patches are applied by packages/build-overlay.sh
-# (inserted after `cd gamescope` in prepare()); the composite-rotation patch (upstream PR #2228,
-# based on master) applies -p1 against 3.16.25 with line-offset fuzz.
+# (inserted after `cd gamescope` in prepare()).
 #
 # To bump gamescope: change pkgver, re-verify the patches apply against the new tag
 # (patch -p1 --dry-run against a shallow clone), and re-roll them only if a hunk fails. ALSO diff
 # the tag's .gitmodules against the source=() URLs below and its meson_options.txt against the
 # -D flags in build(): pkgver carries neither a submodule URL change nor a new build option, and
-# 3.16.25 introduced one of each.
+# 3.16.25 introduced one of each. Checked for 3.16.28: .gitmodules URLs unchanged, and
+# meson_options.txt still declares both `enable_tests` and `pipewire`.
 #
 # Maintainer: Maxime Gauduin <alucryd@archlinux.org>
 # Maintainer: Giancarlo Razzolini <grazzolini@archlinux.org>
@@ -31,7 +33,7 @@
 # Contributor: PedroHLC <root@pedrohlc.com>
 
 pkgname=gamescope
-pkgver=3.16.25
+pkgver=3.16.28
 pkgrel=1
 pkgdesc='SteamOS session compositing window manager'
 arch=(x86_64 aarch64)
@@ -127,15 +129,28 @@ prepare() {
 build() {
   # wlroots STAYS in force_fallback_for even though 3.16.25 dropped it from upstream's
   # default_options. Upstream only stopped MANDATING the vendored copy; src/meson.build still
-  # declares `fallback: 'wlroots'`, and the dependency moved to wlroots-0.19 (>= 0.19.0, < 0.20.0),
-  # which holo does not ship. Forcing the fallback keeps us on the submodule pinned by the tag
-  # instead of failing to find a system wlroots.
+  # declares `fallback: 'wlroots'`, and 3.16.28 moved the dependency again -- it now asks for
+  # `wlroots-0.20` (was wlroots-0.19), which holo does not ship either. Forcing the fallback keeps
+  # us on the submodule pinned by the tag instead of failing to find a system wlroots.
+  #
+  # wayland-protocols is forced too, and that one is NOT cosmetic. The 0.19 -> 0.20 move looks like
+  # a no-op because we vendor wlroots either way -- it is not: wlroots 0.20 raised its own
+  # build-time floor to `wayland-protocols >= 1.47`, the pinned holo snapshot ships 1.45, and the
+  # build died at configure time until this was forced. patches/0007 declares the wrap; this makes
+  # meson use it instead of the container's copy. See that patch header for why vendoring beats
+  # bumping the snapshot.
+  #
+  # The wrap pins wayland-protocols 1.48 DELIBERATELY, not latest: the container's wayland-scanner
+  # is 1.24.0 and 1.49 marks interfaces `frozen=`, an attribute absent from that scanner's DTD, so
+  # scanning 1.49 fails header generation. 1.48 clears wlroots' 1.47 floor and stays under the
+  # scanner's ceiling. Vendoring 1.49 instead drags in a whole second wrap for a newer scanner and
+  # then breaks on gamescope's own protocol/meson.build. See patches/0007 before raising that pin.
   #
   # enable_tests is new in 3.16.25 and defaults to TRUE, which adds subdir('tests') to the build.
   # Turned off explicitly: a release image has no use for the unit tests, and they are pure build
   # cost under arm64 emulation.
   arch-meson gamescope build \
-    -Dforce_fallback_for=glm,stb,libdisplay-info,libliftoff,vkroots,wlroots \
+    -Dforce_fallback_for=glm,stb,libdisplay-info,libliftoff,vkroots,wlroots,wayland-protocols \
     -Denable_tests=false \
     -Dpipewire=enabled
   meson compile -C build

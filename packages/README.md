@@ -238,9 +238,10 @@ first `cd` in `prepare()`, and `makepkg`s it under arm64 qemu. The PKGBUILD stil
 upstream source (e.g. a release tarball), so this stays "from-source", just with a recipe we own.
 
 Current overlay:
-- `gamescope/` — **local PKGBUILD** building gamescope `3.16.25` (newer-Turnip/ROCKNIX parity)
-  with the composite-rotation patch for the portrait Pocket S2 panel under
-  `packages/gamescope/patches/`. (Was a fetched holo PKGBUILD at 3.16.17; moved local for the bump.)
+- `gamescope/` — **local PKGBUILD** building gamescope `3.16.28` (newer-Turnip/ROCKNIX parity)
+  with our remaining patches under `packages/gamescope/patches/`. The composite-rotation patch for
+  the portrait Pocket S2 panel is UPSTREAM as of 3.16.28 and no longer carried. (Was a fetched holo
+  PKGBUILD at 3.16.17; moved local for the bump.)
 - `mesa/` — **local PKGBUILD** building mesa `26.2.0` from the upstream tarball. It tracks the
   Arch/holo recipe (same `arch-meson` invocation + meson options) as closely as possible; the only
   deviations are `gallium-drivers`/`vulkan-drivers` narrowed to **freedreno** (GL) + **freedreno**

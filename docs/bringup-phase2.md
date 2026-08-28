@@ -43,9 +43,9 @@ tooling) and are unaffected.
 > **Superseded (in-tree, HW-validation pending):** the ROCKNIX `--use-rotation-shader` patch below
 > was replaced by upstream gamescope PR #2228 (composite-rotation pass). The shipped launcher now
 > passes **no** rotation flag — gamescope auto-engages compositor rotation off the DRM connector
-> panel orientation (DTS `rotation=<90>`). See docs/worklog/DONE.md and
-> `packages/gamescope/patches/0001-composite-rotation-pr2228.patch`. The historical account of the
-> original fix follows.
+> panel orientation (DTS `rotation=<90>`). PR #2228 was merged upstream as `38fb50fc` and ships in
+> gamescope 3.16.28, so we no longer carry a patch for it — see docs/worklog/DONE.md. The historical
+> account of the original fix follows.
 The Pocket S2 panel (`sm8650-ayaneo-ps2.dts`, `compatible="ayaneo,wt0630-2k"`) declares
 `rotation = <90>`, published as the connector `panel orientation`. gamescope applied a compensating
 **90° plane rotation**; msm `dpu_plane.c` only advertises `ROTATE_0|180|REFLECT_*` on a normal pipe

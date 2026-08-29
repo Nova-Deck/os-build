@@ -17,7 +17,7 @@
 # fronts our FEX wrapper, pins a stable internal name + friendly display_name). Do not "fix" the
 # manifest here; the tarball is upstream content and is extracted verbatim.
 #
-# strip: 1 + dest: the archive is rooted at the versioned directory (GE-Proton11-5-aarch64/), so
+# strip: 1 + dest: the archive is rooted at the versioned directory (GE-Proton11-6-aarch64/), so
 # stripping that component lands its CONTENTS directly in a stable, version-free directory name.
 # NOTE the directory name is cosmetic: Steam pins a game to the tool's INTERNAL name (the
 # compat_tools key inside compatibilitytool.vdf), not the directory — so assemble-rootfs.sh also
@@ -38,9 +38,9 @@
 # stay pinned to the same tool name. Re-verify the version parse in assemble-rootfs.sh's GE block
 # still matches (it fails loudly if upstream changes the `version` file format).
 name: proton-ge
-version: GE-Proton11-5
-url: https://github.com/GloriousEggroll/proton-ge-custom/releases/download/GE-Proton11-5/GE-Proton11-5-aarch64.tar.gz
-sha256: 65ec846365ca975f57c29605236d4406f2ca775de9622f3131acfff18f214546
+version: GE-Proton11-6
+url: https://github.com/GloriousEggroll/proton-ge-custom/releases/download/GE-Proton11-6/GE-Proton11-6-aarch64.tar.gz
+sha256: 77929dcd5f951b1a1b89fe594d91878a3adf9516406f68076971988ee2cfdf43
 kind: tar
 strip: 1
 dest: /usr/share/steam/compatibilitytools.d/proton-ge-arm64

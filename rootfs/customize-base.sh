@@ -249,7 +249,17 @@ BOOTSTRAP_PKGS=(base)
 # this investigation through Unity, Vulkan, zink, gralloc and the app-data mounts first. Measured
 # 2026-08-24 on a Pocket S2 by instrumenting wait_for_container on the card (issue #58).
 # Closing this needs an Android title actually rendering on hardware — the issue is hw-gate.
-PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-tools mesa gamescope seatd sddm mangohud fex-emu bluez bluez-utils networkmanager alsa-ucm-conf pipewire wireplumber pipewire-pulse pipewire-alsa unzip openal gtk2 ffmpeg e2fsprogs xorg-xwayland lsof noto-fonts noto-fonts-cjk noto-fonts-emoji python python-gobject scx-scheds rauc btrfs-progs rsync earlyoom zram-generator podman crun passt fuse-overlayfs which inotify-tools)
+#
+# jq: the THIRD instance of the same class, and fatal on the Steam path exactly like the other two.
+# Lepton resolves a vulkan layer's ID by shelling out to it — `liblepton/vulkan_layers.sh:80`:
+#     find /usr/share/vulkan -name '*.json' -print0 | xargs -0 jq -r --arg LAYER_PATH … .name
+# maps a layer's .so basename to the ID it writes into the guest's settings, and
+# `get_vulkan_layer_id` REQUIRES exactly one candidate: zero matches is `ERROR: Unable to determine
+# Layer ID` + `return 1`, under `set -euo pipefail`. With no jq the pipeline is empty and every
+# lookup fails that way — indistinguishable from a genuinely absent layer, which is the failure
+# packages/fossilize-stub-android exists to prevent. ~1.1 MB (jq + oniguruma).
+# Measured 2026-08-29 on a Pocket ACE, Lepton v2.8.9 (issue #58).
+PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-tools mesa gamescope seatd sddm mangohud fex-emu bluez bluez-utils networkmanager alsa-ucm-conf pipewire wireplumber pipewire-pulse pipewire-alsa unzip openal gtk2 ffmpeg e2fsprogs xorg-xwayland lsof noto-fonts noto-fonts-cjk noto-fonts-emoji python python-gobject scx-scheds rauc btrfs-progs rsync earlyoom zram-generator podman crun passt fuse-overlayfs which inotify-tools jq)
 
 # Dev-only packages — installed ONLY under NOVADECK_DEV=1, NEVER in a release base.
 # On-device bring-up tools: evtest reads raw /dev/input events; usbutils provides lsusb.

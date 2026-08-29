@@ -1,0 +1,35 @@
+# Toolchain pin for the fossilize stub layer (packages/fossilize-stub-android).
+#
+# WHAT THIS PACKAGE IS. Lepton enables the fossilize shader-cache layer on EVERY launch with no
+# guard and no opt-out (liblepton/vulkan_layers.sh:181, unlike the RPO and FDM layers immediately
+# above it, which are env-gated). It looks for the .so in the DISTRO's slot,
+# /usr/share/guestos/android/vendor/vulkan_layers/, and lepton runs under `set -euo pipefail`, so a
+# missing layer is a fatal launch failure for every Android title. This builds a valid no-op
+# passthrough layer under that filename. See layer.c for the full derivation, and issue #58.
+#
+# NOT A PORT OF FOSSILIZE. Fossilize is a shader cache; it does nothing for getting a title on
+# screen, and porting it is an NDK cross-build of a substantial CMake project. If real shader
+# caching in the guest is ever wanted, this package is replaced and nothing else moves.
+#
+# WHY ITS OWN x86 JOB, same reasoning as packages/mesa-android: Google publishes NDK host binaries
+# for linux-x86_64 ONLY, so this must not run on the arm64 build image, where the pinned x86
+# container would drag the NDK through qemu.
+#
+# THE TOOLCHAIN PIN IS DELIBERATELY THE SAME AS packages/mesa-android's. Both produce bionic
+# aarch64 objects that load into the SAME guest process, so building them against different API
+# levels or NDKs is a way to get a subtle loader mismatch for no benefit. If mesa-android's pin
+# moves, move this one with it.
+#
+# Fields:
+#   android_api   the guest's SDK level; the NDK's aarch64-linux-android<API>-clang wrapper sets
+#                 both the target triple and the sysroot's __ANDROID_API__, so a symbol newer than
+#                 the guest cannot link by accident. 30 is at or below the guest's measured SDK.
+#   ndk_version   Google NDK release; ndk_sha256 covers the zip the container fetches.
+#   image         the pinned x86 Arch container the build runs in (host tools only; the NDK
+#                 supplies the entire target toolchain, so nothing from the image reaches the .so).
+#   snapshot      pacman snapshot for that image's host tools. Carried for reproducibility only.
+android_api: 30
+ndk_version: r28c
+ndk_sha256: dfb20d396df28ca02a8c708314b814a4d961dc9074f9a161932746f815aa552f
+image: archlinux:base-devel-20260809.0.570793
+snapshot: 2026/08/11

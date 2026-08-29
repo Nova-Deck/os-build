@@ -734,6 +734,43 @@ android_rc="$stage/$android_slot/vendor/etc/init/novadeck-gfx.rc"
 [ -s "$android_rc" ] || { echo "ERROR: ${android_rc#"$stage"} is missing -- rootfs/overlay's copy was clobbered by the payload merge, and the guest will die on zink" >&2; exit 1; }
 grep -q 'mesa.loader.driver.override msm' "$android_rc" \
   || { echo "ERROR: ${android_rc#"$stage"} no longer sets the mesa driver override -- Lepton forces zink and the guest cannot create a DRI2 screen" >&2; exit 1; }
+# THE FOSSILIZE STUB LAYER, and the host-side manifest that makes it findable. Both are REQUIRED
+# for any Android title to launch at all — this is not a rendering nicety.
+#
+# Lepton enables the fossilize shader-cache layer on every launch with no guard and no opt-out
+# (liblepton/vulkan_layers.sh:181; the RPO and FDM layers immediately above it ARE env-gated), and
+# runs under `set -euo pipefail`. `find_vulkan_layer` looks only in the slot dir below, so an absent
+# layer is a fatal launch failure ~5s in, with nothing in the session log — Lepton logs to
+# ~/.local/share/lepton/logs/lepton-steamlaunch-<appid>.log. Measured on a Pocket ACE 2026-08-29,
+# Lepton v2.8.9 (issue #58). See packages/fossilize-stub-android for why a stub and not a port.
+fossilize_payload="$ROOT/work/fossilize-stub-android/out"
+fossilize_so="$fossilize_payload/vendor/vulkan_layers/libVkLayer_fossilize.so"
+[ -s "$fossilize_so" ] \
+  || { echo "ERROR: fossilize stub payload missing: ${fossilize_so#"$ROOT"/} (make fossilize-stub-android)" >&2; exit 1; }
+echo "  staging the fossilize stub vulkan layer (/$android_slot/vendor/vulkan_layers)"
+install -Dm0644 "$fossilize_so" "$stage/$android_slot/vendor/vulkan_layers/libVkLayer_fossilize.so"
+
+# THE MANIFEST IS THE OTHER HALF, and it is the half that is easy to forget: Lepton maps the .so's
+# basename to the layer ID it writes into the guest's settings with
+#   find /usr/share/vulkan -name '*.json' | xargs jq -r '… select(.library_path | endswith($NAME)) | .name'
+# and get_vulkan_layer_id requires EXACTLY ONE match — zero or two both return 1, the same fatal
+# path as a missing .so. (`jq` itself is in PKGS for exactly this; without it the pipeline is empty
+# and every lookup fails identically.)
+#
+# NOT in implicit_layer.d/ or explicit_layer.d/. Those are the directories the HOST's vulkan loader
+# scans, and this manifest points at an Android/bionic .so the host must never try to load. Lepton's
+# find is recursive over /usr/share/vulkan, so a sibling directory satisfies it while staying
+# invisible to the host loader. Changing this path to a *_layer.d/ name would make every host vulkan
+# app try to load a bionic library.
+install -Dm0644 "$ROOT/packages/fossilize-stub-android/layer.json" \
+                "$stage/usr/share/vulkan/novadeck-guest-layer.d/novadeck-fossilize-stub.json"
+
+# The manifest's library_path must name the file we just staged, or the ID lookup finds nothing and
+# the launch dies exactly as if the layer were absent. Two files, one path, drifting independently.
+grep -q '/usr/share/guestos/android/vendor/vulkan_layers/libVkLayer_fossilize.so' \
+     "$stage/usr/share/vulkan/novadeck-guest-layer.d/novadeck-fossilize-stub.json" \
+  || { echo "ERROR: the staged vulkan layer manifest does not point at the staged layer" >&2; exit 1; }
+
 # Take the freeform windowing feature away from the guest. Lepton's images/rootfs declares
 # android.software.freeform_window_management unconditionally, and NOTHING in the guest gates it on
 # persist.waydroid.multi_windows the way stock waydroid does. With the feature declared but

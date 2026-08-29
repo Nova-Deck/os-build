@@ -318,6 +318,18 @@ MESA_ANDROID_SRC   := packages/mesa-android/build.sh packages/mesa-android/conta
                       packages/mesa-android/builder.pin packages/mesa/PKGBUILD \
                       packages/mesa/source.pin $(wildcard packages/mesa/patches/*.patch)
 
+# The fossilize STUB vulkan layer for the same Android slot (packages/fossilize-stub-android/).
+# Third x86-only payload, same reason as the two above: Google's NDK is linux-x86_64 only. Lepton
+# enables the fossilize layer UNCONDITIONALLY (liblepton/vulkan_layers.sh:181, unlike the env-gated
+# layers beside it) and dies under `set -e` when it is absent, so this is required for ANY Android
+# title to launch — not an optimisation. See that package's README and issue #58.
+FOSSILIZE_STUB_STAMP := work/.fossilize-stub-android.stamp
+FOSSILIZE_STUB_SRC   := packages/fossilize-stub-android/build.sh \
+                        packages/fossilize-stub-android/container-build.sh \
+                        packages/fossilize-stub-android/builder.pin \
+                        packages/fossilize-stub-android/layer.c \
+                        packages/fossilize-stub-android/layer.json
+
 # Kernel inputs: any change re-triggers the (full, from-scratch) kernel build. The unified
 # kernel globs every fragment/patch/dts, and bakes the firmware embed list.
 # There is no cmdline file to list: the common boot args live in boot/gen-grub-cfg.sh and land on
@@ -356,7 +368,7 @@ KERNEL_SRC_HASH := work/.kernel-src.hash
 # Phony orchestration targets
 # ==============================================================================
 .PHONY: help all image toolchain kernel fw-linux fw-qcom base overlay verify-lock \
-        rootfs relock mesa-x86 mesa-android installer installer-root relock-installer verify-image \
+        rootfs relock mesa-x86 mesa-android fossilize-stub-android installer installer-root relock-installer verify-image \
         initramfs steamcl grub sdcard verify-card test test-disk bundle sign-bundle publish-bundle \
         steam-seed-artifact deploy clean clean-base clean-overlay distclean
 
@@ -766,7 +778,7 @@ $(VERSION_STAMP):
 # /usr/lib/novadeck/boot mirror the RAUC hook refreshes the ESP and the slot's efi partition FROM.
 # That is what makes "this root and the software that boots it came from one build" true by
 # construction. No cycle: the initramfs is built from work/base, never from the assembled root.
-$(ROOTFS): $(KERNEL) $(INITRAMFS) $(STEAMCL) $(GRUB) $(BASE_STAMP) $(FW_LINUX) $(FW_QCOM) $(STEAM_SEED) $(ASSEMBLE_SRC) $(DECKY_DIST) $(MESA_X86_STAMP) $(MESA_ANDROID_STAMP) $(MODE_STAMP) $(VERSION_STAMP) | $(BUILD_STAMP)
+$(ROOTFS): $(KERNEL) $(INITRAMFS) $(STEAMCL) $(GRUB) $(BASE_STAMP) $(FW_LINUX) $(FW_QCOM) $(STEAM_SEED) $(ASSEMBLE_SRC) $(DECKY_DIST) $(MESA_X86_STAMP) $(MESA_ANDROID_STAMP) $(FOSSILIZE_STUB_STAMP) $(MODE_STAMP) $(VERSION_STAMP) | $(BUILD_STAMP)
 	$(DOCKER) $(DEV_ENV) $(ID_ENV) -e NOVADECK_DEBUG $(BUILD_IMG) \
 	  $(ROOTFS_DIR)/assemble-rootfs.sh /src/work/base
 
@@ -786,6 +798,13 @@ $(MESA_ANDROID_STAMP): $(MESA_ANDROID_SRC)
 	@mkdir -p $(@D) && touch $@
 
 mesa-android: $(MESA_ANDROID_STAMP) ## Build the bionic Mesa payload for the Android guest (host docker, x86)
+
+# Same shape again. One clang invocation after the NDK fetch, so it is the cheapest of the three.
+$(FOSSILIZE_STUB_STAMP): $(FOSSILIZE_STUB_SRC)
+	packages/fossilize-stub-android/build.sh
+	@mkdir -p $(@D) && touch $@
+
+fossilize-stub-android: $(FOSSILIZE_STUB_STAMP) ## Build the no-op fossilize vulkan layer Lepton requires (host docker, x86)
 
 # Host docker, not $(BUILD_IMG): the cross-compile toolchain image has no node, and the plugin
 # is pure frontend TS -> one bundle, nothing arch-specific. -u keeps dist/ host-owned (the
@@ -930,7 +949,7 @@ clean-overlay: ## Remove the built (arch-scoped) overlay pacman repo + build tre
 # Nothing in the build reads them as INPUT to a decision; they only ever save a download. To drop
 # them anyway (moving machines, reclaiming disk, or proving a pin still resolves upstream):
 #
-#   rm -rf work/prebuilt work/pacman-cache work/mesa-x86 work/mesa-android && make clean-overlay
+#   rm -rf work/prebuilt work/pacman-cache work/mesa-x86 work/mesa-android work/fossilize-stub-android && make clean-overlay
 #
 # work/repo is the newest member and the one with real history. It used to go via clean-overlay,
 # and because rootfs/manifest.lock then pinned the overlay's ARTIFACT bytes — which our

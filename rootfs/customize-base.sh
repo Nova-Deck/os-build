@@ -105,6 +105,14 @@ BOOTSTRAP_PKGS=(base)
 # (audio/ overlay, cards SM8650-APS2/SM8650-KPF) Include; pipewire-pulse/-alsa give the
 # PA/ALSA shims so games + BlueZ (A2DP/HFP) route through PipeWire, wireplumber is the
 # session manager. (pipewire-jack omitted — not needed for game/BT audio.)
+# rtkit: REQUIRED for PipeWire to get realtime priority at all. pipewire.conf asks module-rt for
+# rt.prio = 88 / nice.level = -11; without rtkit-daemon on the bus that fails with
+# `mod.rt: RTKit error: org.freedesktop.DBus.Error.ServiceUnknown` and every PipeWire thread,
+# data-loop.0 included, runs SCHED_OTHER priority 0. Granting RLIMIT_RTPRIO instead is NOT enough
+# and was tried and rejected: with the rlimit at 95/95 on the pipewire process (HW-tested, Pocket
+# ACE, 2026-08-29) module-rt STILL committed to the RTKit path, clamped max prio to 1 and never
+# fell back to direct sched_setscheduler. module-rt wants the daemon, so ship the daemon.
+# It is D-Bus activated (org.freedesktop.RealtimeKit1), so there is nothing to enable.
 # unzip: Steam's own first-launch self-update unpacks .zip payloads in /home (the pre-seeded client
 # is UI-incomplete and updates itself). curl/tar/xz are already in the base.
 # openal: a HOST system lib the native arm64 Steam client links (libopenal.so.1); it IS in the holo
@@ -190,7 +198,7 @@ BOOTSTRAP_PKGS=(base)
 # the SD card). It needs CONFIG_ZRAM, which kernel/kernel.config only gained alongside it, so the two
 # have to move together; kernel/build.sh asserts the symbol survived. Both packages resolve from the
 # pinned snapshot's `extra` (earlyoom 1.9.0, zram-generator 1.2.1) — no overlay build needed.
-PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-tools mesa gamescope seatd sddm mangohud fex-emu bluez bluez-utils networkmanager alsa-ucm-conf pipewire wireplumber pipewire-pulse pipewire-alsa unzip openal gtk2 ffmpeg e2fsprogs xorg-xwayland lsof noto-fonts noto-fonts-cjk noto-fonts-emoji python python-gobject scx-scheds rauc btrfs-progs rsync earlyoom zram-generator)
+PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-tools mesa gamescope seatd sddm mangohud fex-emu bluez bluez-utils networkmanager alsa-ucm-conf pipewire wireplumber pipewire-pulse pipewire-alsa rtkit unzip openal gtk2 ffmpeg e2fsprogs xorg-xwayland lsof noto-fonts noto-fonts-cjk noto-fonts-emoji python python-gobject scx-scheds rauc btrfs-progs rsync earlyoom zram-generator)
 
 # Dev-only packages — installed ONLY under NOVADECK_DEV=1, NEVER in a release base.
 # On-device bring-up tools: evtest reads raw /dev/input events; usbutils provides lsusb.

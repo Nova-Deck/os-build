@@ -310,32 +310,82 @@ else
   bad "unit is not Restart=on-failure: a crash would silently drop pairing while the switch shows on"
 fi
 
-if grep -q '^ExecStopPost=.*rm -f /etc/avahi/services/' "$UNIT"; then
+# WITHDRAWAL IS THE LOAD-BEARING HALF, and it has to be in the unit rather than in the daemon.
+# Measured on a Pocket ACE (systemd 258): a resolved DNS-SD registration is NOT bound to the
+# caller's bus connection, so the daemon exiting does not retract it -- the advert stays live and
+# the object stays on the bus. ExecStopPost runs however the daemon ends, which is the only way
+# to honour "a device that is not in pairing mode does not announce a pairing port".
+if grep -qE '^ExecStopPost=.*UnregisterService' "$UNIT"; then
   ok "withdraws its network advertisement on stop"
 else
-  bad "unit leaves its advertisement published after it stops"
+  bad "unit leaves its advertisement published after it stops — a closed port stays advertised"
+fi
+
+# THE CROSS-FILE COUPLING. resolved derives the registration's object path from the service id by
+# escaping it ('-' -> '_2d'), so the id in the daemon fixes the path the unit must unregister.
+# Nothing at runtime notices a mismatch: registration succeeds, withdrawal silently addresses an
+# object that does not exist, and the advert outlives the switch. Derive the path here rather
+# than spelling it out, so this fails when either side moves.
+sid="$(sed -n 's/^DNSSD_SERVICE_ID = "\(.*\)"$/\1/p' "$DAEMON")"
+if [ -z "$sid" ]; then
+  bad "cannot read DNSSD_SERVICE_ID from the daemon — the unit's unregister path cannot be checked"
+else
+  # systemd escapes any non-alphanumeric byte as _<hex>; the id only ever contains [a-z-] here.
+  escaped="$(printf '%s' "$sid" | sed 's/-/_2d/g')"
+  want="/org/freedesktop/resolve1/dnssd/$escaped"
+  # Read the path back OUT of the unit and compare exactly, rather than grepping for the expected
+  # one: a substring match passes when the id is a PREFIX of what the unit unregisters (shortening
+  # 'novadeck-pairing' to 'novadeck-pair' still "matched"), which is precisely the drift this
+  # guards and the loosest possible spelling of it.
+  have="$(sed -n 's|^ExecStopPost=.*UnregisterService o \([^ ]*\).*|\1|p' "$UNIT")"
+  if [ "$have" = "$want" ]; then
+    ok "the unit unregisters the object path DNSSD_SERVICE_ID ('$sid') actually produces"
+  else
+    bad "the unit unregisters '$have' but DNSSD_SERVICE_ID ('$sid') produces '$want' — the advert would survive the switch"
+  fi
 fi
 
 # The advertisement must never decide whether remote access works. It shipped once as a FATAL
 # ExecStartPre writing into /etc under ProtectSystem=full -- which mounts /etc read-only -- so
 # the install failed EROFS and took the entire pairing path down with it: port closed, on-screen
 # switch apparently dead, and no way to see why on a device with no shell and no serial console.
-# Both halves are asserted because either one alone would have prevented that.
-if grep -qE '^ExecStartPre=-' "$UNIT"; then
+# Publishing is inside the daemon now, so the two halves are asserted where they each live.
+if grep -qE '^ExecStopPost=-' "$UNIT"; then
+  ok "withdrawing the advertisement is non-fatal — it cannot block a clean stop"
+else
+  bad "ExecStopPost is fatal: a failed withdrawal would make stopping the agent fail"
+fi
+if grep -q 'log(f"could not advertise' "$DAEMON"; then
   ok "publishing the advertisement is non-fatal — it cannot block pairing"
 else
-  bad "ExecStartPre is fatal: a failure to advertise would stop the agent starting at all"
+  bad "the daemon does not swallow an advertisement failure: mDNS trouble would stop key delivery"
 fi
 
-# ProtectSystem=full/strict makes /etc read-only, so anything the unit genuinely has to write
-# there needs an explicit carve-out. Without this the line above would silently degrade to
-# "mDNS never works" instead of failing loudly.
-if grep -qE '^ProtectSystem=(full|strict)' "$UNIT"; then
-  if grep -qE '^ReadWritePaths=-?/etc/avahi' "$UNIT"; then
-    ok "ProtectSystem=full is carved out for /etc/avahi so the advertisement can be written"
-  else
-    bad "ProtectSystem makes /etc read-only but nothing grants /etc/avahi: advertisement cannot be published"
-  fi
+# Publishing writes nothing now, so the carve-out that used to let it write /etc/avahi must be
+# gone -- a stale ReadWritePaths is standing write access to /etc that nothing needs.
+if grep -qE '^ReadWritePaths=' "$UNIT"; then
+  bad "unit still grants ReadWritePaths: registering over D-Bus needs no write access to /etc"
+else
+  ok "no /etc write access: the advertisement costs the unit no ReadWritePaths at all"
+fi
+
+# avahi was the second mDNS stack on 5353 and the point of the change is that nothing pulls it in
+# any more. Matched on DIRECTIVES, not on the word: both files explain in prose why avahi is gone,
+# and that prose is the reason the next person does not re-add it. What actually reintroduces the
+# daemon is an ordering/dependency line or an Exec line naming it, either of which is invisible in
+# behaviour until two responders are back on the wire.
+if grep -qE '^(Wants|Requires|Requisite|BindsTo|PartOf|After|Before|Exec[A-Za-z]*)=.*avahi' "$UNIT"; then
+  bad "a unit directive names avahi again — that puts a second responder on 5353: $(grep -nE '^[A-Za-z]+=.*avahi' "$UNIT" | head -1)"
+else
+  ok "no unit directive pulls avahi in"
+fi
+
+# The service file publishing was moved off. Left in the overlay it is dead weight that reads as
+# live configuration, and it is the thing an ExecStartPre would be re-pointed at.
+if [ -e "$ROOT/rootfs/overlay/usr/share/novadeck/pairing.avahi-service" ]; then
+  bad "pairing.avahi-service is still in the overlay — publishing moved to the resolve1 bus, nothing reads that file"
+else
+  ok "the avahi service file is gone from the overlay"
 fi
 
 printf '\n%s: %d passed, %d failed, %d skipped\n' "$(basename "$0")" "$PASS" "$FAIL" "$SKIP"

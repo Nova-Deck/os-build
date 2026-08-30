@@ -1,24 +1,41 @@
 [Unit]
 Description=novadeck key-pairing agent (accepts an SSH key while the remote-access switch is on)
 # Soft dependency: the advertisement is a convenience so a user can reach the device by name
-# instead of hunting for its address. If the responder is not installed or not running, pairing
-# still works over the address shown in the on-screen network settings.
-Wants=avahi-daemon.service
-After=avahi-daemon.service network.target
+# instead of hunting for its address. If the responder is not running, pairing still works over
+# the address shown in the on-screen network settings.
+#
+# The responder is systemd-resolved, not avahi. resolved already answers mDNS here — it is what
+# resolves novadeck.local, since nsswitch carries no mdns_minimal and nss-mdns is not installed
+# — so avahi was a SECOND mDNS stack on 5353 that existed to publish one advert, and it warned
+# about exactly that on every start. Nothing pulls avahi in any more.
+Wants=systemd-resolved.service
+After=systemd-resolved.service network.target
 
 [Service]
 Type=simple
 ExecStart=/usr/bin/novadeck-pairingd
 
 # The advertisement exists only while the agent does, so a device that is not in pairing mode
-# does not announce a pairing port to the network. Leading '-' on BOTH: the advertisement is a
-# convenience (see Wants= above), so neither publishing nor removing it may decide whether
-# remote access works at all. Without the '-' on the setup line this unit was un-startable --
-# ProtectSystem=full below mounts /etc read-only, the install failed EROFS, and a fatal
-# ExecStartPre took the whole pairing path down with it. A device that cannot advertise must
-# still pair over the address shown in the on-screen network settings.
-ExecStartPre=-/usr/bin/install -Dm0644 /usr/share/novadeck/pairing.avahi-service /etc/avahi/services/novadeck-pairing.service
-ExecStopPost=-/usr/bin/rm -f /etc/avahi/services/novadeck-pairing.service
+# does not announce a pairing port to the network. PUBLISHING moved into the daemon (it now
+# registers over D-Bus once its socket is bound, rather than an ExecStartPre advertising a port
+# nothing answers on yet); WITHDRAWING has to stay here, and this is the load-bearing half.
+#
+# Measured on a Pocket ACE, systemd 258, because the obvious assumptions are both false:
+#   - the registration is NOT tied to the caller's bus connection. The daemon exiting without
+#     unregistering leaves the advert live and the object still on the bus, so a `finally` in
+#     the daemon would not be enough even if it always ran -- and on SIGTERM it does not.
+#   - a .dnssd file plus `systemctl reload systemd-resolved` cannot express this at all: after
+#     the file is removed a reload still answers for the service. Only a resolved restart drops
+#     it, which is not something a pairing toggle may do.
+# ExecStopPost runs however the daemon ends -- clean stop, crash, or kill -- which is exactly
+# the guarantee "does not announce a port that is closed" needs. UnregisterService takes the
+# object path from ANY connection, so a plain busctl call can do it.
+#
+# The path is fixed by DNSSD_SERVICE_ID in the daemon: resolved escapes 'novadeck-pairing' into
+# 'novadeck_2dpairing'. Change one and you must change the other, or the advert outlives the
+# switch. Leading '-' as before: withdrawing must never be what decides whether the unit stops
+# cleanly, and a stop when nothing was registered is an ordinary no-op.
+ExecStopPost=-/usr/bin/busctl call org.freedesktop.resolve1 /org/freedesktop/resolve1 org.freedesktop.resolve1.Manager UnregisterService o /org/freedesktop/resolve1/dnssd/novadeck_2dpairing
 
 # Restart on failure so the running daemon keeps matching the switch: if it crashes while the
 # switch is on, the UI still shows "on", so it should come back rather than leave the port
@@ -35,12 +52,10 @@ ProtectSystem=full
 ProtectHome=no
 PrivateTmp=yes
 
-# ProtectSystem=full mounts /etc read-only too, which is the intent everywhere EXCEPT the one
-# directory this unit has to write: the avahi service file it drops on start and removes on
-# stop. Narrowed to that subtree rather than weakening ProtectSystem to 'true' for the whole
-# unit. Leading '-' so an image without the responder installed still starts the agent --
-# pairing by address does not depend on any of this.
-ReadWritePaths=-/etc/avahi
+# No ReadWritePaths. ProtectSystem=full mounts /etc read-only, and this unit used to need a
+# carve-out for /etc/avahi/services because publishing meant dropping a file there. Registering
+# over D-Bus writes nothing, so the carve-out is gone with it -- the advertisement no longer
+# costs this unit any write access to /etc at all.
 
 # Deliberately NO [Install] section: systemd must not start this on its own. It is started and
 # stopped only by the on-screen remote-access switch (steamos-polkit-helpers/steamos-devkit-mode).

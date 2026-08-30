@@ -54,6 +54,17 @@ SERVICE_PORT = 32000
 # so an installed key survives A/B updates untouched.
 SESSION_USER = "deck"
 
+# The mDNS advertisement. The type is the one existing pairing tooling already browses for, so
+# third-party clients discover the device without knowing anything about this implementation.
+#
+# DNSSD_SERVICE_ID is not cosmetic: resolved derives the registration's bus object path from it
+# by escaping the name (a '-' becomes '_2d'), so this id fixes the path
+# /org/freedesktop/resolve1/dnssd/novadeck_2dpairing that the unit's ExecStopPost hardcodes to
+# withdraw the advert. Changing it here without changing it there leaves the advert up after the
+# switch goes off. See advertise() for why the withdrawal lives in the unit at all.
+DNSSD_SERVICE_ID = "novadeck-pairing"
+DNSSD_TYPE = "_steamos-devkit._tcp"
+
 # Accepted key algorithms. Anything else is refused rather than passed to ssh-keygen, so an
 # exotic or deprecated type cannot become a login on this device by accident.
 ALLOWED_KEY_TYPES = {
@@ -254,6 +265,55 @@ class PairingServer(http.server.ThreadingHTTPServer):
         super().handle_error(request, client_address)
 
 
+def advertise():
+    """Publish the pairing service over mDNS through systemd-resolved. Never raises.
+
+    WHY RESOLVED AND NOT AVAHI. resolved already answers mDNS on this image — it is what
+    resolves novadeck.local, since /etc/nsswitch.conf carries no mdns_minimal and nss-mdns is
+    not installed — so avahi existed only to publish this one advert, and starting it put a
+    SECOND responder on port 5353. avahi says so itself on every start: "Detected another IPv4
+    mDNS stack running on this host. This makes mDNS unreliable and is thus not recommended."
+    Publishing through the responder that is already there leaves one stack in every state.
+
+    WHY THE ADVERT IS TAKEN DOWN BY THE UNIT AND NOT HERE. Measured on a Pocket ACE, systemd
+    258, because both of the obvious assumptions are false:
+      - a .dnssd file removed from /etc/systemd/dnssd plus `systemctl reload systemd-resolved`
+        does NOT retract the advert; only a full restart does. So the file mechanism cannot
+        express "stop advertising now", which is the one thing this daemon needs.
+      - the registration is NOT bound to the caller's bus connection. Registering and exiting
+        without unregistering leaves the advert live and the object still on the bus.
+    Retraction therefore has to be explicit, and the unit's ExecStopPost is where it goes: that
+    runs however this process ends — clean stop, crash, or kill — where a `finally` here runs
+    only for some of those. UnregisterService accepts the object path from ANY connection, which
+    is what lets a separate busctl call do it.
+
+    KNOWN LIMIT: the registration lives in resolved's memory, so restarting systemd-resolved
+    while the switch is on drops the advert until this daemon is restarted. That is the same
+    standing the advert had under avahi — a convenience, never the mechanism. Pairing over the
+    address shown in the on-screen network settings is unaffected, which is why every failure
+    below is logged and swallowed.
+    """
+    try:
+        from gi.repository import Gio, GLib
+    except ImportError as exc:
+        log(f"no gi bindings ({exc}) — not advertising, pair by address")
+        return
+    try:
+        bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+        # "%H" is expanded by resolved into the hostname, so the instance is novadeck._steamos-
+        # devkit._tcp.local — the same name the avahi service file produced with replace-wildcards.
+        args = GLib.Variant("(sssqqqaa{say})",
+                            (DNSSD_SERVICE_ID, "%H", DNSSD_TYPE, SERVICE_PORT, 0, 0,
+                             [{"login": SESSION_USER.encode()}]))
+        path = bus.call_sync("org.freedesktop.resolve1", "/org/freedesktop/resolve1",
+                             "org.freedesktop.resolve1.Manager", "RegisterService",
+                             args, GLib.VariantType("(o)"),
+                             Gio.DBusCallFlags.NONE, -1, None).unpack()[0]
+        log(f"advertising {DNSSD_TYPE} on :{SERVICE_PORT} as {path}")
+    except Exception as exc:                                     # noqa: BLE001 — see docstring
+        log(f"could not advertise ({exc}) — pair by address")
+
+
 def main():
     if os.geteuid() != 0:
         log("must run as root")
@@ -265,6 +325,10 @@ def main():
 
     server = PairingServer(("", SERVICE_PORT), PairingHandler)
     log(f"listening on :{SERVICE_PORT}, accepting keys until stopped")
+    # Advertise only once the socket is bound. The avahi file this replaces was installed by an
+    # ExecStartPre, i.e. before the daemon existed, so a client could discover the service and
+    # then fail to connect to it; an advert for a port nothing answers on is worse than none.
+    advertise()
     try:
         server.serve_forever(poll_interval=1.0)
     except KeyboardInterrupt:

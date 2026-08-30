@@ -116,7 +116,24 @@ The whole path, end to end: switch → helper → daemon → `POST /register` �
 - mDNS advertising works. (It shipped once as a fatal `ExecStartPre` writing into `/etc` under
   `ProtectSystem=full`, which mounts `/etc` read-only; the write failed `EROFS` and took the whole
   daemon down with it — port closed, switch apparently dead. Fixed by making the advertisement
-  non-fatal and carving out `/etc/avahi`; `tests/test-pairingd.sh` pins both.)
+  non-fatal; `tests/test-pairingd.sh` pins that it stays non-fatal on both halves.)
+- **The advert is published by systemd-resolved, not avahi.** resolved already answers mDNS on
+  this image — it is what resolves `novadeck.local`, since `nsswitch.conf` carries no
+  `mdns_minimal` and `nss-mdns` is not installed — so avahi existed to publish this one service
+  and put a *second* responder on 5353, which it warned about on every start. The daemon now
+  registers on the `org.freedesktop.resolve1` bus once its socket is bound, and the unit's
+  `ExecStopPost` withdraws it. Two things about that were measured on a Pocket ACE (systemd 258)
+  rather than assumed, and both are load-bearing:
+  - the registration is **not** tied to the caller's bus connection. The daemon exiting without
+    unregistering leaves the advert live, which is why withdrawal is an `ExecStopPost` (it runs
+    however the daemon ends) and not a `finally` in the daemon.
+  - a `.dnssd` file removed from `/etc/systemd/dnssd` plus `systemctl reload systemd-resolved`
+    does **not** retract the advert — only a resolved restart does. So the file mechanism cannot
+    express "stop advertising now", which is exactly what a pairing switch needs.
+
+  Known limit: the registration lives in resolved's memory, so restarting `systemd-resolved`
+  while the switch is on drops the advert until the daemon is restarted. Same standing the advert
+  always had — a convenience, never the mechanism; pairing by address is unaffected.
 
 ## Deliberately not done: an on-screen approval prompt
 

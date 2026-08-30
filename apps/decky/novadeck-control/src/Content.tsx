@@ -6,7 +6,6 @@ import { useDebouncedTweaksSave } from "./hooks/useDebouncedSave";
 import { currentGame } from "./lib/games";
 import { styles } from "./styles";
 import { Games } from "./tabs/Games";
-import { Monitor } from "./tabs/Monitor";
 import { Power } from "./tabs/Power";
 import type { Config } from "./types";
 
@@ -85,9 +84,6 @@ export function Content() {
         tabs={[
           { id: "Games", title: "Games", content: tabContent(<Games config={config} setConfig={setConfig} />) },
           { id: "Power", title: "Power", content: tabContent(<Power config={config} setConfig={setConfig} />) },
-          // Only the active tab's content is mounted, so the 1 Hz poll inside Monitor runs
-          // only while it is on screen.
-          { id: "Monitor", title: "Monitor", content: tabContent(<Monitor />) },
         ]}
       />
     </div>

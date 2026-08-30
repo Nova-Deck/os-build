@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Offline checks for the Decky stack: the loader pin, the homebrew seed/sync, the units that run
-# it, the FEX AppConfig, the CEF sentinel, and the novadeck-control plugin backend.
+# it, the FEX AppConfig, the CEF sentinel, and both first-party plugin backends.
 #
 #   tests/test-decky.sh
 #
@@ -18,7 +18,12 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SYNC="$ROOT/rootfs/overlay/usr/lib/novadeck/decky-sync"
 PIN="$ROOT/packages/decky-loader/prebuilt.pin"
+# The two first-party plugins. novadeck-control is the settings surface (Games + Power, writes
+# game-tweaks.json, drives every powerd setter); novadeck-monitor is the read-only live panel,
+# split out of control's third tab. They are separate Decky plugins with separate py_modules
+# trees, so every per-plugin check below runs against both.
 PLUGIN="$ROOT/apps/decky/novadeck-control"
+MONITOR="$ROOT/apps/decky/novadeck-monitor"
 UNITDIR="$ROOT/rootfs/overlay/usr/lib/systemd/system"
 WANTSDIR="$ROOT/rootfs/overlay/etc/systemd/system/multi-user.target.wants"
 APPCONF="$ROOT/rootfs/overlay/usr/share/fex-emu/AppConfig/PluginLoader.json"
@@ -222,18 +227,22 @@ fi
 
 # --- the stylesheet is one template literal --------------------------------------------------
 # A backtick anywhere inside src/styles.ts ENDS the string early, so every rule after it is
-# dropped and the QAM tabs render unstyled. Nothing catches it: what follows the truncation
+# dropped and the QAM panel renders unstyled. Nothing catches it: what follows the truncation
 # parses as a valid expression, so tsc and rollup both stay green and the damage only appears
 # on device. Two backticks exactly -- the ones opening and closing the literal.
-styles_ts="$PLUGIN/src/styles.ts"
-if [ -f "$styles_ts" ]; then
-  ticks=$(tr -cd '`' <"$styles_ts" | wc -c)
-  [ "$ticks" -eq 2 ] \
-    && ok "styles.ts holds exactly 2 backticks — the CSS template literal is not truncated" \
-    || bad "styles.ts has $ticks backticks (want 2): a stray one silently drops every CSS rule below it"
-else
-  bad "no styles.ts at ${styles_ts#"$ROOT"/}"
-fi
+# BOTH plugins carry their own stylesheet (the metric/meter rules left novadeck-control with the
+# Monitor tab), so both are exposed to this and both are checked.
+for styles_ts in "$PLUGIN/src/styles.ts" "$MONITOR/src/styles.ts"; do
+  rel="${styles_ts#"$ROOT"/}"
+  if [ -f "$styles_ts" ]; then
+    ticks=$(tr -cd '`' <"$styles_ts" | wc -c)
+    [ "$ticks" -eq 2 ] \
+      && ok "$rel holds exactly 2 backticks — the CSS template literal is not truncated" \
+      || bad "$rel has $ticks backticks (want 2): a stray one silently drops every CSS rule below it"
+  else
+    bad "no styles.ts at $rel"
+  fi
+done
 
 # --- the CEF sentinel ----------------------------------------------------------------------
 # Unconditional by decision (2026-08-08): it is Decky's only injection path. The regression this
@@ -324,9 +333,14 @@ else
   T="$(mktemp -d)"
   trap 'rm -rf "$T"' EXIT
   share="$T/share"; home="$T/homebrew"
-  mkdir -p "$share/decky-loader" "$share/decky-plugins/novadeck-control/dist"
+  # TWO baked plugins in the fake tree, matching what the image now ships: the sync takes no
+  # list, it copies every directory under the plugins root, and a one-plugin fixture could not
+  # tell that apart from a hardcoded name.
+  mkdir -p "$share/decky-loader" "$share/decky-plugins/novadeck-control/dist" \
+           "$share/decky-plugins/novadeck-monitor/dist"
   printf 'LOADER-V1' >"$share/decky-loader/PluginLoader"; chmod 0755 "$share/decky-loader/PluginLoader"
   printf 'dist-v1'   >"$share/decky-plugins/novadeck-control/dist/index.js"
+  printf 'mon-v1'    >"$share/decky-plugins/novadeck-monitor/dist/index.js"
   run_sync() {
     NOVADECK_DECKY_USER="$(id -un)" NOVADECK_DECKY_GROUP="$(id -gn)" \
     NOVADECK_DECKY_HOMEBREW="$home" \
@@ -347,6 +361,9 @@ else
   [ -f "$home/plugins/novadeck-control/dist/index.js" ] \
     && ok "fresh seed: baked plugin copied into homebrew/plugins" \
     || bad "fresh seed: plugin did not seed"
+  [ -f "$home/plugins/novadeck-monitor/dist/index.js" ] \
+    && ok "fresh seed: EVERY baked plugin seeds, not just the first (the sync globs, it has no list)" \
+    || bad "fresh seed: the second baked plugin did not seed"
 
   # normal boot: no-op
   before="$(stat -c %Y "$home/services/PluginLoader")"
@@ -425,16 +442,24 @@ grep -q 'as shipped' "$PLUGIN/src/tabs/Games.tsx" \
 
 # --- the plugin backend --------------------------------------------------------------------
 if python3 -m py_compile "$PLUGIN/main.py" "$PLUGIN"/py_modules/novadeck_control/*.py 2>/dev/null; then
-  ok "plugin backend compiles (the loader would swallow a SyntaxError into a blank tab)"
+  ok "novadeck-control backend compiles (the loader would swallow a SyntaxError into a blank tab)"
 else
-  bad "plugin backend does not compile"
+  bad "novadeck-control backend does not compile"
+fi
+if python3 -m py_compile "$MONITOR/main.py" "$MONITOR"/py_modules/novadeck_monitor/*.py 2>/dev/null; then
+  ok "novadeck-monitor backend compiles"
+else
+  bad "novadeck-monitor backend does not compile"
 fi
 
 # The python block prints the same `  ok  `/`  FAIL` lines; fold them into THIS script's
 # counters so the summary line counts every check that was actually shown.
-pyout="$(python3 - "$PLUGIN" <<'PY'
+pyout="$(python3 - "$PLUGIN" "$MONITOR" <<'PY'
 import json, sys
+# Both plugins' py_modules on the path. The packages are distinct (novadeck_control,
+# novadeck_monitor), so there is nothing to shadow.
 sys.path.insert(0, sys.argv[1] + "/py_modules")
+sys.path.insert(0, sys.argv[2] + "/py_modules")
 from novadeck_control import tweaks
 
 def ok(m): print(f"  ok   {m}")
@@ -486,19 +511,33 @@ ok("thunk namespace: absent base config degrades to an empty list")
 # PyInstaller exports LD_LIBRARY_PATH=<bundle dir> to children; a busctl spawned with it loads
 # the bundle's libcrypto and dies (HW-observed as "AvailableProfiles returned non-zero exit
 # status 1" in the Power tab). The backend must strip it — or restore PyInstaller's saved _ORIG.
+#
+# Checked in BOTH plugins. The two _clean_env implementations are independent copies (separate
+# processes, separate py_modules trees — see novadeck_monitor/powerd.py's header), which is
+# exactly why one can regress while the other stays correct.
 import os
 from novadeck_control import power
-os.environ["LD_LIBRARY_PATH"] = "/tmp/_MEIfake"
-os.environ.pop("LD_LIBRARY_PATH_ORIG", None)
-if "LD_LIBRARY_PATH" in power._clean_env():
-    bad("subprocess env keeps the PyInstaller LD_LIBRARY_PATH — busctl dies on the bundled libcrypto")
-ok("subprocess env drops the PyInstaller LD_LIBRARY_PATH")
-os.environ["LD_LIBRARY_PATH_ORIG"] = "/real/path"
-if power._clean_env().get("LD_LIBRARY_PATH") != "/real/path":
-    bad("subprocess env does not restore LD_LIBRARY_PATH_ORIG when PyInstaller saved one")
-ok("subprocess env restores PyInstaller's saved LD_LIBRARY_PATH_ORIG")
+from novadeck_monitor import powerd
+for label, mod in (("novadeck-control", power), ("novadeck-monitor", powerd)):
+    os.environ["LD_LIBRARY_PATH"] = "/tmp/_MEIfake"
+    os.environ.pop("LD_LIBRARY_PATH_ORIG", None)
+    if "LD_LIBRARY_PATH" in mod._clean_env():
+        bad(f"{label}: subprocess env keeps the PyInstaller LD_LIBRARY_PATH — busctl dies on the bundled libcrypto")
+    ok(f"{label}: subprocess env drops the PyInstaller LD_LIBRARY_PATH")
+    os.environ["LD_LIBRARY_PATH_ORIG"] = "/real/path"
+    if mod._clean_env().get("LD_LIBRARY_PATH") != "/real/path":
+        bad(f"{label}: subprocess env does not restore LD_LIBRARY_PATH_ORIG when PyInstaller saved one")
+    ok(f"{label}: subprocess env restores PyInstaller's saved LD_LIBRARY_PATH_ORIG")
 
-# The Monitor's CPU/GPU rows classify thermal zones by their `type` prefix. Getting that
+# The monitor is READ ONLY by construction: it renders powerd, it never writes it. A setter
+# arriving in its backend is the regression that turns a display into a control surface with no
+# UI to gate it, so the module's public surface is pinned here.
+setters = [n for n in dir(powerd) if n.startswith(("set_", "reset_"))]
+if setters:
+    bad(f"novadeck-monitor's powerd module grew setters: {setters} — the monitor must only read")
+ok("novadeck-monitor's powerd module exposes no setters (it renders powerd, it never writes it)")
+
+# novadeck-monitor's CPU/GPU rows classify thermal zones by their `type` prefix. Getting that
 # wrong shows a dash forever rather than an error, so drive it with the REAL zone names from
 # both SoCs we ship. These are the sysfs `type` strings VERBATIM, captured off an SM8650
 # device 2026-08-09 -- note they KEEP the "-thermal" suffix of the DT node name, which is why
@@ -507,7 +546,7 @@ ok("subprocess env restores PyInstaller's saved LD_LIBRARY_PATH_ORIG")
 # `cpussN-thermal` and `cpuN-middle-thermal`. Zones we must NOT count as either are in there
 # too -- a hot modem or DSP is not a hot CPU.
 import pathlib, tempfile
-from novadeck_control import telemetry
+from novadeck_monitor import telemetry
 
 def fake_zones(zones):
     root = pathlib.Path(tempfile.mkdtemp())
@@ -554,17 +593,43 @@ printf '%s\n' "$pyout"
 PASS=$((PASS + $(grep -c '^  ok ' <<<"$pyout" || true)))
 if grep -q '^  FAIL' <<<"$pyout"; then FAIL=$((FAIL+1)); fi
 
-python3 -c "
+# flags:[root] on both. novadeck-control needs it to write /etc; novadeck-monitor only reads
+# (world-readable sysfs, and `deck` is in wheel, which powerd's bus policy already allows), so
+# dropping it there is a live option — but it is the PROVEN path, and a wrong guess here reads
+# as a blank panel with an EACCES nobody sees. Changing it is a deliberate act with its own HW
+# gate, which is what this assertion makes it.
+for manifest in "$PLUGIN/plugin.json" "$MONITOR/plugin.json"; do
+  rel="${manifest#"$ROOT"/}"
+  python3 -c "
 import json, sys
-m = json.load(open('$PLUGIN/plugin.json'))
+m = json.load(open('$manifest'))
 sys.exit(0 if m.get('flags') == ['root'] and m.get('name') else 1)
-" && ok "plugin.json declares flags:[root] — without it every /etc write turns into EACCES" \
-  || bad "plugin.json is missing flags:[root] (or a name)"
+" && ok "$rel declares flags:[root] and a name" \
+    || bad "$rel is missing flags:[root] (or a name)"
+done
+
+# The two plugins must not collide in the QAM: Decky keys the plugin list by plugin.json name.
+if [ "$(python3 -c "
+import json
+print(json.load(open('$PLUGIN/plugin.json'))['name'] == json.load(open('$MONITOR/plugin.json'))['name'])
+")" = "False" ]; then
+  ok "the two plugins declare distinct names (Decky keys its plugin list by name)"
+else
+  bad "both plugins declare the SAME name — Decky would load one and silently drop the other"
+fi
 
 # --- the assembler + Makefile wiring -------------------------------------------------------
-grep -q 'decky-plugins/novadeck-control' "$ROOT/rootfs/assemble-rootfs.sh" \
-  && ok "assembler stages the plugin (4c-3)" \
-  || bad "assembler has no plugin staging block"
+for plugin_name in novadeck-control novadeck-monitor; do
+  grep -qE "^for plugin_name in ([^;]*[[:space:]])?$plugin_name([[:space:]]|;)" "$ROOT/rootfs/assemble-rootfs.sh" \
+    && ok "assembler stages $plugin_name (4c-3)" \
+    || bad "assembler does not stage $plugin_name"
+  grep -q "$plugin_name" "$ROOT/rootfs/guard-rootfs.sh" \
+    && ok "guard-rootfs asserts $plugin_name staged (assertion 9)" \
+    || bad "guard-rootfs has no assertion for $plugin_name: it could ship missing, undetected"
+  grep -q "$plugin_name" "$ROOT/Makefile" \
+    && ok "$plugin_name is in the Makefile's plugin list (its dist is a rootfs prerequisite)" \
+    || bad "$plugin_name is not named in the Makefile: its dist would never build"
+done
 grep -q 'decky-loader/PluginLoader' "$ROOT/rootfs/guard-rootfs.sh" \
   && ok "guard-rootfs asserts the loader (assertion 9) — image completeness is checked at build" \
   || bad "guard-rootfs has no loader assertion: an incomplete image would ship undetected"

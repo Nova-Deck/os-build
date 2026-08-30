@@ -665,11 +665,16 @@ if [ ! -x "$STAGE/usr/share/decky-loader/PluginLoader" ]; then
 else
   echo "    ok  Decky loader present and executable"
 fi
-if [ ! -s "$STAGE/usr/share/decky-plugins/novadeck-control/dist/index.js" ]; then
-  bad "novadeck-control plugin dist missing — the settings UI did not stage"
-else
-  echo "    ok  novadeck-control plugin staged with its dist"
-fi
+# Both first-party plugins, named individually rather than globbed: a glob over an EMPTY
+# plugins directory finds nothing and would pass silently, which is the exact failure this
+# assertion exists to catch. Keep in step with DECKY_PLUGINS (Makefile) and 4c-3 (assembler).
+for decky_plugin in novadeck-control novadeck-monitor; do
+  if [ ! -s "$STAGE/usr/share/decky-plugins/$decky_plugin/dist/index.js" ]; then
+    bad "$decky_plugin plugin dist missing — its QAM surface did not stage"
+  else
+    echo "    ok  $decky_plugin plugin staged with its dist"
+  fi
+done
 # The watchdog is what keeps the QAM tab there at all past the first Steam relaunch. Without its
 # exec bit the unit EACCESes into Restart=always and the tab is simply absent on every boot —
 # the same invisible failure the loader's own exec bit produces.

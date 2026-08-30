@@ -22,8 +22,8 @@ three things the curve does not express:
 | `min_pwm` / `max_pwm` | `51` / `255` | Hard floor and ceiling; the floor is what keeps the fan from stalling |
 
 The temperature fed into the curve is a blended average of the hottest three of the
-CPU/GPU/video/memory thermal zones — the Monitor tab reports that same number, so what it
-shows is what the curve is evaluated against.
+CPU/GPU/video/memory thermal zones — the novadeck-monitor plugin reports that same number, so
+what it shows is what the curve is evaluated against.
 
 ## Editing from the Quick Access Menu
 

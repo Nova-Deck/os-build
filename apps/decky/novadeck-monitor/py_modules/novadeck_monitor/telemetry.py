@@ -1,8 +1,8 @@
-"""Live numbers for the Monitor tab.
+"""Live numbers for the novadeck-monitor panel.
 
 Split by WHO OWNS THE TRUTH rather than by where the bytes live:
 
-  * Fan speed and the CURVE INPUT come from novadeck-powerd (power.power_status), because
+  * Fan speed and the CURVE INPUT come from novadeck-powerd (powerd.power_snapshot), because
     powerd is what decides them. Its Temperature is a blended top-3 average across the
     CPU/GPU/video/memory zones, EWMA-smoothed -- the exact number the fan curve is
     evaluated against, and the only one that explains why the fan is where it is.
@@ -14,7 +14,7 @@ Split by WHO OWNS THE TRUTH rather than by where the bytes live:
   * Everything else (load, clocks, governors, memory) has no owner but the kernel, so it
     is read straight from /proc and /sys.
 
-Every read degrades to a zero. A monitor that takes the tab down because one sysfs file
+Every read degrades to a zero. A monitor that takes the panel down because one sysfs file
 moved between kernels is worse than a monitor showing a dash.
 """
 import pathlib

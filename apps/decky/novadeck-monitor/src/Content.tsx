@@ -1,8 +1,9 @@
 import { Field, PanelSection, PanelSectionRow } from "@decky/ui";
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
-import { getTelemetry } from "../backend";
-import type { Telemetry } from "../types";
+import { getOsVersion, getTelemetry } from "./backend";
+import { styles } from "./styles";
+import type { Telemetry } from "./types";
 
 // One unit for the pair, not one each: "1804 / 2035 MHz" rather than "1804 MHz / 2035 MHz".
 // The panel is 300px, and the repeated unit was enough to push the cluster labels into an
@@ -25,11 +26,12 @@ function Bar({ percent }: { percent: number }) {
 function Metric({ label, value, percent }: { label: ReactNode; value: string; percent?: number }) {
   return (
     <PanelSectionRow>
-      {/* focusable is what makes the tab SCROLLABLE: every other tab is built from sliders and
-          dropdowns, which take focus by nature, so the D-pad walks them and the panel follows.
-          A tab of read-only Fields has no focus targets at all, leaving anything below the fold
-          unreachable. These rows are not interactive — being focusable is purely what gives the
-          stick something to move between.
+      {/* focusable is what makes the panel SCROLLABLE. The QAM is driven entirely by the
+          gamepad: it scrolls by moving focus, so a panel built only of read-only Fields has no
+          focus targets at all and everything below the fold is unreachable. These rows are not
+          interactive — being focusable is purely what gives the stick something to move
+          between. (This mattered even as a tab, where the sibling tabs got it for free from
+          their sliders and dropdowns; as a standalone panel there is no such fallback at all.)
 
           The row owns its whole layout inside `children` rather than using Field's `label` and
           `description` slots. Those two lay out as a LABEL COLUMN beside the value, so a bar in
@@ -50,9 +52,23 @@ function Metric({ label, value, percent }: { label: ReactNode; value: string; pe
   );
 }
 
-export function Monitor() {
+export function Content() {
   const [data, setData] = useState<Telemetry | null>(null);
   const [error, setError] = useState("");
+  const [osVersion, setOsVersion] = useState("");
+
+  // The release stamp never changes under a running session — fetch it once, not on the poll.
+  useEffect(() => {
+    let cancelled = false;
+    getOsVersion()
+      .then((version) => {
+        if (!cancelled) setOsVersion(version);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -63,7 +79,7 @@ export function Monitor() {
         setData(next);
         setError("");
       } catch (reason) {
-        // Keep the last good frame on screen rather than blanking the tab: at 1 Hz a
+        // Keep the last good frame on screen rather than blanking the panel: at 1 Hz a
         // single dropped sample is a blink, and a monitor that flickers to an error and
         // back is harder to read than one that briefly stops moving.
         if (!cancelled && !data) setError(String(reason));
@@ -77,13 +93,19 @@ export function Monitor() {
     };
   }, []);
 
-  if (!data) {
-    return (
-      <PanelSection title="MONITOR">
-        <Field label={error || "Reading sensors"} />
-      </PanelSection>
-    );
-  }
+  // Everything the panel renders sits inside one scope div carrying the stylesheet, and the
+  // release stamp closes it out — that line is what tells two dev cards apart in a bug report,
+  // and a screenshot of this panel is exactly the artifact a bug report carries.
+  const frame = (content: ReactNode) => (
+    <div className="novadeck-monitor">
+      <style>{styles}</style>
+      {content}
+      {osVersion ? <div className="novadeck-version-row">novadeck {osVersion}</div> : null}
+    </div>
+  );
+
+  // No section title on this one: the QAM header already reads "Novadeck Monitor".
+  if (!data) return frame(<PanelSection><Field label={error || "Reading sensors"} /></PanelSection>);
 
   const power = data.power;
   const fanPercent = ratio(power.fanPwm, power.fanCurveMaxPwm || 255);
@@ -94,7 +116,7 @@ export function Monitor() {
   // policies ever disagree that is worth seeing, not worth hiding behind whichever sorted first.
   const governors = [...new Set(data.cpuClusters.map((c) => c.governor).filter(Boolean))];
   const cpuGovernor = governors.length === 1 ? governors[0] : governors.length ? "mixed" : "";
-  return (
+  return frame(
     <>
       <PanelSection title="LOAD">
         <Metric label="CPU" value={`${data.cpuPercent.toFixed(1)}%`} percent={data.cpuPercent} />
@@ -177,6 +199,6 @@ export function Monitor() {
         />
         {power.error ? <Field label={power.error} /> : null}
       </PanelSection>
-    </>
+    </>,
   );
 }

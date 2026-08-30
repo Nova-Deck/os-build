@@ -60,53 +60,8 @@ export const styles = `
         line-height: 16px;
         opacity: 0.62;
       }
-      /* A Monitor row: label and value on one line, the bar spanning the full width beneath.
-         The row is one full-width child of a Field (see Monitor.tsx) rather than Field's own
-         label/description slots, because those lay out as a label COLUMN and squeeze the bar
-         against the value. Horizontal inset stays PanelSectionRow's, so these line up with
-         the sliders and dropdowns on the other tabs. */
-      .novadeck-control-tabs .novadeck-metric {
-        width: 100%;
-        min-width: 0;
-      }
-      .novadeck-control-tabs .novadeck-metric-head {
-        display: flex;
-        align-items: baseline;
-        justify-content: space-between;
-        gap: 12px;
-      }
-      /* The label yields: a long one (cluster rows carry their core list and governor) must
-         ellipsize rather than wrap or push the value off the row. */
-      .novadeck-control-tabs .novadeck-metric-label {
-        min-width: 0;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-      }
-      /* The fill is transitioned so a 1 Hz sample reads as movement rather than as a row of
-         numbers snapping between frames. */
-      .novadeck-control-tabs .novadeck-meter {
-        height: 6px;
-        margin-top: 6px;
-        width: 100%;
-        border-radius: 3px;
-        overflow: hidden;
-        background: rgba(255, 255, 255, 0.14);
-      }
-      .novadeck-control-tabs .novadeck-meter-fill {
-        height: 100%;
-        background: currentColor;
-        opacity: 0.75;
-        transition: width 0.35s linear;
-      }
-      /* Tabular figures: without them the last digit of a live value jitters the whole
-         right-aligned column on every sample. flex-shrink:0 so the value keeps its room and
-         the label is what gives way. */
-      .novadeck-control-tabs .novadeck-metric-value {
-        flex: 0 0 auto;
-        font-variant-numeric: tabular-nums;
-        font-weight: 600;
-      }
+      /* The metric/meter rules that used to live here left with the Monitor tab -- they are
+         now novadeck-monitor's styles.ts, rescoped to that plugin's own root class. */
       .novadeck-control-tabs .novadeck-version-row {
         padding: 4px 16px 0;
         font-size: 11px;

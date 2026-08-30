@@ -21,9 +21,10 @@ including Windows games, translated to ARM on the fly.
   an update fails to boot, the device rolls back to the version that worked.
 - **Suspend and resume**, per-device power profiles, brightness and volume keys, and the
   Quick Access menu — the handheld things you would miss immediately if they were missing.
-- **Tuning from inside the UI.** Every image ships Decky Loader and a first-party
-  **novadeck-control** plugin: power profile, GPU clocks, an editable fan curve, and
-  performance settings you can pin *per game* rather than globally.
+- **Tuning from inside the UI.** Every image ships Decky Loader and two first-party plugins:
+  **novadeck-control** (power profile, GPU clocks, an editable fan curve, and performance
+  settings you can pin *per game* rather than globally) and **novadeck-monitor** (live load,
+  clocks, temperatures and fan speed while a game runs).
 
 ### Honest status
 
@@ -213,7 +214,7 @@ device.
 | `kernel/` | Unified kernel: config fragments, patches, all device trees, firmware embed list |
 | `firmware/` | Vendor firmware fetch/verify recipes + their pins |
 | `boot/` | Two-stage UEFI boot: steamcl (stage 1) + GRUB (stage 2), both built from pinned sources |
-| `apps/decky/` | `novadeck-control` — the first-party Decky plugin (per-game tweaks, power, fan curve) |
+| `apps/decky/` | The first-party Decky plugins: `novadeck-control` (per-game tweaks, power, fan curve) and `novadeck-monitor` (the live panel) |
 | `tests/` | Every offline suite. `make test` runs the host ones; the signing and disk suites need a container |
 | `build/` | Where the build itself is pinned: the cross-compile `Dockerfile`, the builder digest, the repo snapshot, and the Steam seed fetcher |
 
@@ -249,7 +250,7 @@ to `defaults.conf` and still boots.
 | [`docs/phase5.md`](docs/phase5.md) | Phase 5 — the SteamDeck-style boot chain: steamcl + GRUB, update path, demote-on-failure |
 | [`docs/phase5-bootattempts.md`](docs/phase5-bootattempts.md) | The `boot-attempts` GRUB module that replaces Valve's steamenv counter |
 | [`docs/ota.md`](docs/ota.md) | The update *server*: publishing a bundle, and how the OTA host is set up |
-| [`docs/decky.md`](docs/decky.md) | Decky Loader + the `novadeck-control` plugin — the in-UI surface for everything below |
+| [`docs/decky.md`](docs/decky.md) | Decky Loader + the `novadeck-control` and `novadeck-monitor` plugins — the in-UI surface for everything below |
 | [`docs/per-game-perf.md`](docs/per-game-perf.md) | `game-tweaks.json` — the per-game performance keys and which launch path enforces each |
 | [`docs/fan-curve.md`](docs/fan-curve.md) | The temperature→PWM curve, why it belongs to the power profile, and how a user edits it |
 | [`docs/install-internal.md`](docs/install-internal.md) | **The installer medium** — putting NovaDeck on the device's internal storage alongside Android: what it destroys, the Wi-Fi file it needs, and how a release is cut |

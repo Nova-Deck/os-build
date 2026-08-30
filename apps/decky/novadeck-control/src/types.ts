@@ -60,27 +60,6 @@ export interface PowerStatus {
   error: string;
 }
 
-export interface CpuCluster {
-  /** The policy's affected_cpus, verbatim ("0-1"). */
-  cores: string;
-  khz: number;
-  /** scaling_max_freq — the cap the active profile really imposes, not the silicon's. */
-  maxKhz: number;
-  governor: string;
-}
-
-export interface Telemetry {
-  cpuPercent: number;
-  cpuClusters: CpuCluster[];
-  gpu: { hz: number; maxHz: number; governor: string };
-  /** Hottest CPU and GPU zone, raw. Not powerd's blended curve input — see telemetry.py. */
-  temperatures: { cpuC: number; gpuC: number };
-  memory: { usedMb: number; totalMb: number; percent: number };
-  loadAverage: number[];
-  /** Fan and temperature come from powerd, which owns them; see telemetry.py. */
-  power: PowerStatus;
-}
-
 export interface InstalledGame {
   appid: string;
   name: string;

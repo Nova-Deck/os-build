@@ -1,0 +1,6 @@
+{
+  "name": "Novadeck Monitor",
+  "author": "novadeck",
+  "flags": ["root"],
+  "api_version": 1
+}

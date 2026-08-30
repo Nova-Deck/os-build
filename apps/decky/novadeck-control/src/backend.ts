@@ -1,5 +1,5 @@
 import { call } from "@decky/api";
-import type { Config, InstalledGame, PowerStatus, Telemetry, Tweaks } from "./types";
+import type { Config, InstalledGame, PowerStatus, Tweaks } from "./types";
 
 export const getConfig = () => call<[], Config>("get_config");
 export const getInstalledGames = () => call<[], InstalledGame[]>("get_installed_games");
@@ -11,4 +11,3 @@ export const setManualGpuClock = (mhz: number) => call<[number], PowerStatus>("s
 export const setCpuScheduler = (scheduler: string) => call<[string], PowerStatus>("set_cpu_scheduler", scheduler);
 export const setFanCurve = (pwms: number[]) => call<[number[]], PowerStatus>("set_fan_curve", pwms);
 export const resetFanCurve = (every: boolean) => call<[boolean], PowerStatus>("reset_fan_curve", every);
-export const getTelemetry = () => call<[], Telemetry>("get_telemetry");

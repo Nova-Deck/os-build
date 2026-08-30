@@ -1,8 +1,17 @@
-# Decky Loader + novadeck-control
+# Decky Loader + the first-party plugins
 
 Decky Loader is the plugin host that gives SteamUI features an in-UI surface (a Quick Access
-Menu tab). Every image ships it plus one first-party plugin, **novadeck-control**, which is the
-UI for [per-game tweaks](per-game-perf.md), power profile selection, and GPU clock control.
+Menu tab). Every image ships it plus **two** first-party plugins:
+
+- **novadeck-control** — the settings surface: [per-game tweaks](per-game-perf.md), power
+  profile selection, GPU clock control, the fan curve. It writes.
+- **novadeck-monitor** — the live panel: load, clocks, governors, temperatures, fan. It only
+  reads.
+
+They are split because they are different things used at different times — you open control to
+change something and close it, and you open monitor to watch a number while a game runs — and
+because the split is what lets the monitor's 1 Hz poll be bounded by its own panel being on
+screen rather than by which tab of a bigger plugin happens to be selected.
 
 ## How the pieces fit
 
@@ -12,6 +21,7 @@ packages/decky-loader/prebuilt.pin       sha256-pinned upstream PluginLoader (x8
         v
 /usr/share/decky-loader/PluginLoader     read-only master copy
 /usr/share/decky-plugins/novadeck-control  baked plugin (assemble-rootfs 4c-3)
+/usr/share/decky-plugins/novadeck-monitor  baked plugin (same block, same loop)
         │ novadeck-decky-sync.service (oneshot, Before=plugin_loader.service)
         v
 /home/deck/homebrew/…                    what actually runs; survives OTA, wiped by reflash
@@ -25,8 +35,12 @@ SteamUI                                  injected via the CEF debugger port (the
   Its FEX knobs live in `rootfs/overlay/usr/share/fex-emu/AppConfig/PluginLoader.json` — keyed by
   binary name, TSO fully on, Multiblock off, UI thunks enabled.
 - There is no runtime existence-gating: the loader ships in every image, so image completeness
-  is asserted at build time (guard-rootfs assertion 9 — loader executable, plugin dist staged,
-  watchdog executable) and a genuinely broken image fails its units loudly on device.
+  is asserted at build time (guard-rootfs assertion 9 — loader executable, **both** plugin dists
+  staged, watchdog executable) and a genuinely broken image fails its units loudly on device.
+- Adding a first-party plugin touches three lists that must stay in step: `DECKY_PLUGINS` in the
+  Makefile, the `for plugin_name in …` loop in `rootfs/assemble-rootfs.sh` (4c-3), and assertion
+  9 in `rootfs/guard-rootfs.sh`. `tests/test-decky.sh` asserts all three name every plugin.
+  `decky-sync` needs nothing: it globs the plugins directory.
 
 ## The injection watchdog (`/usr/lib/novadeck/decky-inject-watchdog`)
 
@@ -80,7 +94,7 @@ user's branch choice sticks.
 
 ## novadeck-control
 
-Three tabs; the backend runs as root inside the loader (`"flags": ["root"]`).
+Two tabs; the backend runs as root inside the loader (`"flags": ["root"]`).
 
 - **Games** — edits `/etc/novadeck/game-tweaks.json` (atomic writes, same file + `enabled:true`
   contract as [per-game-perf.md](per-game-perf.md)). Scheduling keys apply within one powerd
@@ -94,18 +108,37 @@ Three tabs; the backend runs as root inside the loader (`"flags": ["root"]`).
   profile — one slider per fixed temperature stop, see [fan-curve.md](fan-curve.md). The
   profile and scheduler rows state when a running game's per-game override is what is in force,
   rather than leaving a dropdown that silently disagrees with the machine.
-- **Monitor** — live load, clocks, governors, per-zone CPU/GPU temperatures, memory and load
-  average from `/proc` and `/sys`, plus fan speed from powerd. It also shows powerd's own
-  blended, smoothed *curve input* as a separate figure, labelled as such: that number — not
-  either per-zone reading — is what the fan curve is evaluated against, so the two are
-  deliberately different and the tab says so. Zone classification is by `type` prefix
-  (`cpu*`, `gpu*`), covering both SoCs' naming (`gpuss0` on SM8650, `gpuss-0` on SM8550);
-  `tests/test-decky.sh` asserts it against the real names from each dtsi. Polls at 1 Hz, and
-  only while it is the tab on screen.
+## novadeck-monitor
 
-Frontend: TypeScript + `@decky/ui`, built by `make decky-plugin` (npm ci in a digest-pinned
-node container; lockfile committed; `dist/` gitignored). The dist is a `$(ROOTFS)`
-prerequisite, so a card can never assemble without its settings UI.
+One panel, no tabs. Live load, clocks, governors, per-zone CPU/GPU temperatures, memory and
+load average from `/proc` and `/sys`, plus fan speed from powerd. It also shows powerd's own
+blended, smoothed *curve input* as a separate figure, labelled as such: that number — not
+either per-zone reading — is what the fan curve is evaluated against, so the two are
+deliberately different and the panel says so. Zone classification is by `type` prefix
+(`cpu*`, `gpu*`), covering both SoCs' naming (`gpuss0` on SM8650, `gpuss-0` on SM8550);
+`tests/test-decky.sh` asserts it against the real names from each dtsi.
+
+Polls at 1 Hz — one sysfs sweep paired with one powerd `GetAll` per tick, so one `busctl`
+subprocess a second, not two. The plugin deliberately does **not** set `alwaysRender`: the
+panel unmounts when the QAM closes and the poll stops with it. (As a tab of novadeck-control
+the same bound came for free, from only the active tab's content being mounted.)
+
+Its backend reads powerd through its own trimmed, **read-only** `powerd.py` — the nine
+properties the panel renders, no setters. Those live in novadeck-control, which owns the
+`org.novadeck.Power1` write surface. The `_clean_env`/`_busctl` pair is duplicated between the
+two plugins on purpose: they are separate processes with separate `py_modules` trees, and a
+shared module staged in by the build would be invisible to the offline suite, which imports
+straight from the repo checkout. `tests/test-decky.sh` therefore asserts the PyInstaller
+`LD_LIBRARY_PATH` strip in *both* copies.
+
+## Building the frontends
+
+TypeScript + `@decky/ui`, built by `make decky-plugin` — one `npm ci` + rollup per plugin, each
+in the same digest-pinned node container; lockfiles committed, `dist/` gitignored. Both dists
+are `$(ROOTFS)` prerequisites, so a card can never assemble without its UI. Each plugin's
+prerequisite list includes its *backend* files too: the assembler copies those from the repo,
+but make only tracks `apps/decky/` through the dists, so a backend-only edit has to bump the
+dist mtime or the re-assembly silently would not happen.
 
 ## Verifying on device
 
@@ -116,7 +149,9 @@ journalctl -u plugin_loader -b                       # "Loading Decky frontend!"
 ss -tnp state established '( dport = :8080 )'        # a "Decky Loader" row = injection alive
 ```
 
-The QAM tab appears under the plug icon. If the loader runs but no tab appears, check that
+Both plugins appear under the plug icon — sliders glyph for control, pulse trace for monitor.
+Seeing only one is a staging problem, not an injection one (`ls /home/deck/homebrew/plugins`).
+If the loader runs but *no* tab appears, check that
 `~/.local/share/Steam/.cef-enable-remote-debugging` exists in the deck user's Steam root —
 novadeck-steam touches it unconditionally at launch — and that the watchdog is running: an
 empty `ss` row with CEF listening is the upstream injection bug, and the watchdog is what clears

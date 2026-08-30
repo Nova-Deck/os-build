@@ -139,18 +139,43 @@ def preset_cpus(name):
     return [c for c in online if caps.get(c) in keep]
 
 
-def resolve_cores(value):
+def resolve_cores(value, single=False):
     """None/"" = unset (inherit). "all" is explicit: a per-game "all" must
-    clear a restrictive global. Unknown CPUs are an error, not a truncation."""
+    clear a restrictive global. Unknown CPUs are an error, not a truncation.
+
+    `single` NARROWS whatever the preset or cpulist resolved to down to exactly
+    one cpu: the highest-capacity member, ties broken by lowest cpu number. It
+    composes with the selection rather than replacing it, which is the whole
+    point — "little" + single pins one LITTLE core (enough for a cheap title
+    that merely needs to stop racing), "all" + single pins the prime one.
+
+    Why a modifier and not a "single" PRESET: a preset would have to pick the
+    capacity class for you, and the only defensible pick is the prime core —
+    which needlessly burns the fastest core on a game that does not need it.
+
+    Ties are the reason this exists at all. `prime` returns the whole
+    top-capacity CLASS, so on a SoC with two matched top cores it yields TWO
+    cpus; a one-core workaround that silently becomes two-core is exactly the
+    failure this must not have. With no `cores` at all it narrows the full
+    online set, so ticking the box on its own is still meaningful.
+    """
     if value in (None, ""):
-        return None
-    if value in CORE_PRESETS:
-        return preset_cpus(value)
-    cpus = parse_cpulist(value)
-    online = set(online_cpus())
-    unknown = [c for c in cpus if c not in online]
-    if unknown:
-        raise ValueError(f"unknown cpus: {unknown}")
+        if not single:
+            return None
+        cpus = list(online_cpus())
+    elif value in CORE_PRESETS:
+        cpus = preset_cpus(value)
+    else:
+        cpus = parse_cpulist(value)
+        online = set(online_cpus())
+        unknown = [c for c in cpus if c not in online]
+        if unknown:
+            raise ValueError(f"unknown cpus: {unknown}")
+    if single and cpus:
+        # A cpu with no cpu_capacity sorts below every real one, so a genuine
+        # big core still wins wherever capacities are exposed at all.
+        caps = cpu_capacities()
+        cpus = [max(cpus, key=lambda c: (caps.get(c, -1), -c))]
     return cpus
 
 
@@ -190,9 +215,13 @@ def sanitize_perf(settings):
     clean = {}
     if _is_int(settings.get("nice")):
         clean["nice"] = clamp(settings["nice"], NICE_MIN, NICE_MAX)
-    if "cores" in settings:
+    # singleCore is a MODIFIER on `cores`, and is meaningful on its own (it then
+    # narrows the full online set). Deliberately NOT applied to gamescopeCores:
+    # pinning the compositor to one cpu is never the workaround being asked for.
+    single = settings.get("singleCore") is True
+    if "cores" in settings or single:
         try:
-            cores = resolve_cores(settings.get("cores"))
+            cores = resolve_cores(settings.get("cores"), single=single)
             if cores is not None:
                 clean["cores"] = cores
         except ValueError:

@@ -306,9 +306,10 @@ def apply_env(settings):
     without also reshaping what Wine reports.
     """
     cores = None
-    if novadeck_perf is not None and "cores" in settings:
+    single = settings.get("singleCore") is True
+    if novadeck_perf is not None and ("cores" in settings or single):
         try:
-            cores = novadeck_perf.resolve_cores(settings.get("cores"))
+            cores = novadeck_perf.resolve_cores(settings.get("cores"), single=single)
         except ValueError as exc:
             print(f"{PROG}: ignoring bad 'cores' ({exc})", file=sys.stderr)
     if (cores and settings.get("wineTopology") is not False

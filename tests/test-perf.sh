@@ -48,6 +48,15 @@ SYSU="$TMP/sys-cpu-uniform"
 for c in 0 1 2 3; do mkdir -p "$SYSU/cpu$c"; printf '1024\n' > "$SYSU/cpu$c/cpu_capacity"; done
 printf '0-3\n' > "$SYSU/online"
 
+# TIED-TOP variant: 2 little (300) + TWO matched top cores (1024). This is the topology
+# `prime` gets wrong -- it returns the whole top-capacity class, i.e. 2 cpus -- and the
+# reason singleCore is a modifier that guarantees exactly one.
+SYST="$TMP/sys-cpu-tied"
+for c in 0 1 2 3; do mkdir -p "$SYST/cpu$c"; done
+for c in 0 1; do printf '300\n'  > "$SYST/cpu$c/cpu_capacity"; done
+for c in 2 3; do printf '1024\n' > "$SYST/cpu$c/cpu_capacity"; done
+printf '0-3\n' > "$SYST/online"
+
 # --- fabricated /proc: steam(1234) -> reaper(1300, appid 620, older) -> pv(1400, appid 620)
 #     plus a second, NEWER launch chain steam -> reaper(1500, appid 990)
 #     and gamescope(2000) with a non-gamescope child (2100)
@@ -89,7 +98,7 @@ cat > "$TMP/tweaks.json" <<'EOF'
 EOF
 
 NOVADECK_PERF_SYSCPU="$SYS" NOVADECK_PERF_PROC="$PROC" \
-TEST_TMP="$TMP" PERF_DIR="$PERF_DIR" ROOT_DIR="$ROOT" SYSU="$SYSU" PROCNC="$PROCNC" \
+TEST_TMP="$TMP" PERF_DIR="$PERF_DIR" ROOT_DIR="$ROOT" SYSU="$SYSU" SYST="$SYST" PROCNC="$PROCNC" \
 python3 - <<'PYEOF'
 import os, pathlib, sys
 
@@ -125,7 +134,46 @@ check("preset all", np.preset_cpus("all"), [0, 1, 2, 3, 4, 5, 6, 7])
 
 np.SYS_CPU_ROOT = pathlib.Path(os.environ["SYSU"])
 check("uniform capacity collapses", np.preset_cpus("little"), [0, 1, 2, 3])
+# ...but singleCore must still yield exactly one, not "all online".
+check("single on uniform still narrows to one",
+      np.resolve_cores("all", single=True), [0])
 np.SYS_CPU_ROOT = pathlib.Path(os.environ["NOVADECK_PERF_SYSCPU"])
+
+# singleCore: a MODIFIER on the selection, never a replacement for it. The class comes from
+# the preset, the count comes from the flag -- so a cheap title can pin one LITTLE core.
+check("single narrows all -> fastest", np.resolve_cores("all", single=True), [7])
+check("single narrows big -> fastest big", np.resolve_cores("big", single=True), [7])
+check("single narrows little -> one little", np.resolve_cores("little", single=True), [0])
+check("single with no preset narrows all online", np.resolve_cores(None, single=True), [7])
+check("single narrows an explicit cpulist", np.resolve_cores("2,3", single=True), [2])
+check("ties break to the lowest cpu number", np.resolve_cores("4,5,6", single=True), [4])
+# The flag must not change anything when it is off -- including the inherit contract.
+check("no single leaves the preset alone", np.resolve_cores("big"), [2, 3, 4, 5, 6, 7])
+check("no single still inherits", np.resolve_cores(None), None)
+raises("single does not excuse an unknown cpu",
+       lambda: np.resolve_cores("99", single=True))
+
+# THE REGRESSION GUARD this key exists for: two matched top cores. `prime` yields TWO cpus
+# there, so a one-core workaround built on it silently becomes a two-core pin and the races
+# it was hiding come back. singleCore must yield exactly one on the same topology.
+np.SYS_CPU_ROOT = pathlib.Path(os.environ["SYST"])
+check("prime returns the whole tied top class", np.preset_cpus("prime"), [2, 3])
+check("single beats the tie", np.resolve_cores("prime", single=True), [2])
+check("single beats the tie via all", np.resolve_cores("all", single=True), [2])
+np.SYS_CPU_ROOT = pathlib.Path(os.environ["NOVADECK_PERF_SYSCPU"])
+
+# sanitize_perf wiring: the flag rides on `cores`, works alone, and never touches gamescope.
+check("sanitize applies singleCore",
+      np.sanitize_perf({"cores": "big", "singleCore": True})["cores"], [7])
+check("sanitize honours singleCore with no cores key",
+      np.sanitize_perf({"singleCore": True})["cores"], [7])
+check("sanitize leaves cores wide without the flag",
+      np.sanitize_perf({"cores": "big"})["cores"], [2, 3, 4, 5, 6, 7])
+check("singleCore never narrows gamescopeCores",
+      np.sanitize_perf({"gamescopeCores": "big", "singleCore": True})["gamescopeCores"],
+      [2, 3, 4, 5, 6, 7])
+check("a non-true singleCore is not a pin",
+      "cores" in np.sanitize_perf({"singleCore": "yes"}), False)
 
 # resolve_cores
 check("unset inherits", np.resolve_cores(None), None)

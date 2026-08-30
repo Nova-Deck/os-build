@@ -39,6 +39,7 @@ The game itself:
 |-----|------|--------|
 | `nice` | int −20…19 | niceness applied to every thread of the game's process tree |
 | `cores` | cpulist or preset | pin the game's threads to these CPUs |
+| `singleCore` | bool | narrow `cores` to exactly one CPU — the fastest of those selected |
 | `env` | object | environment variables for the launch (`null` unsets one) — Proton titles only |
 | `wineTopology` | bool | set `false` to pin via `cores` without reshaping what Wine reports |
 
@@ -81,6 +82,24 @@ the measurements behind it and why the shipped default is still stock.
 
 `cores` also derives `WINE_CPU_TOPOLOGY` for Proton titles, so Wine reports the CPUs the game
 will actually get instead of the machine's full set.
+
+`singleCore` narrows whatever `cores` selected down to **exactly one** CPU: the highest-capacity
+member, ties broken by the lowest CPU number. It is a modifier, not a preset, so the class still
+comes from `cores` while the count comes from the flag — `"cores": "little"` with `singleCore`
+pins one *little* core, which is all a cheap title needs, while `"all"` pins the prime one.
+Set on its own it narrows every online CPU. It never applies to `gamescopeCores`.
+
+**This is the lever for games from roughly the mid-2000s that hang or freeze under load.** Titles
+of that era spin-wait and assume a few identical cores, which this hardware is the opposite of —
+heterogeneous big.LITTLE — so their threading can livelock or deadlock outright. Pinning to one
+core removes every cross-core race at once. It is a workaround, not a fix: the defect is in the
+game binary. Reach for it early on an old title, before renderer or Proton tuning, and check
+whether the game even needs more than one core first (`cpu median` under 1.0 means it does not).
+
+Do not use `"cores": "prime"` for this. `prime` is a capacity *class*, and on a SoC with two
+matched top cores it resolves to two CPUs — a one-core workaround that silently becomes a
+two-core pin, bringing the races back with nothing to indicate why. `singleCore` always yields
+one, whatever the topology.
 
 `gamescopeCores` accepts a kernel-style cpulist (`"0,3-5"`) or a named preset: `all`, `little`,
 `big` (everything that is not little, prime included), `prime`. Presets are resolved from the live

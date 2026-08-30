@@ -137,7 +137,14 @@ export function Games({ config, setConfig }: { config: Config; setConfig: Dispat
         ) : null}
         <SelectEdit label="CPU cores" value={settings.cores || ""} options={CORE_OPTIONS}
           disabled={!gameEnabled} onChange={(v) => patch({ cores: v || undefined })} />
-        {settings.cores ? (
+        <ToggleRow
+          label="Pin to a single core"
+          description="Narrows the selection above to one core, the fastest of those chosen. Fixes older games whose threading breaks across many cores."
+          value={settings.singleCore === true}
+          disabled={!gameEnabled}
+          onChange={(on) => patch({ singleCore: on ? true : undefined })}
+        />
+        {settings.cores || settings.singleCore ? (
           <ToggleRow
             label="Shape Wine CPU topology"
             description="Wine/Proton reports only the pinned cores. Takes effect on next launch."

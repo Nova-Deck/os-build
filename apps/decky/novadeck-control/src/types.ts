@@ -6,6 +6,10 @@ export interface GameTweaks {
   gamescopeNice?: number;
   gamescopeRr?: boolean;
   gamescopeCores?: string;
+  /** Modifier on `cores`: narrow the selection to exactly ONE cpu (the fastest of those
+   *  chosen, ties by lowest cpu number). Meaningful on its own, where it narrows all online
+   *  cpus. Never applied to gamescopeCores. */
+  singleCore?: boolean;
   /** Per-game only — the system-wide scheduler is PowerStatus.cpuScheduler, not a tweak. */
   scheduler?: string;
   /** Per-game only, same rule: the system-wide profile is PowerStatus.profile. A profile ID

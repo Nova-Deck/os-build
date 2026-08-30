@@ -265,6 +265,19 @@ class PairingServer(http.server.ThreadingHTTPServer):
         super().handle_error(request, client_address)
 
 
+def dnssd_object_path():
+    """The bus object resolved derives from DNSSD_SERVICE_ID.
+
+    resolved escapes each byte that is not alphanumeric as _<hex>, so 'novadeck-pairing' becomes
+    'novadeck_2dpairing'. Derived rather than spelled out because the unit's ExecStopPost spells
+    out the same path, and tests/test-pairingd.sh pins the two to this one id — three copies of a
+    literal would rot independently, and a mismatch is invisible at runtime (the withdrawal
+    addresses an object that does not exist and the advert outlives the switch).
+    """
+    escaped = "".join(c if c.isalnum() else f"_{ord(c):02x}" for c in DNSSD_SERVICE_ID)
+    return f"/org/freedesktop/resolve1/dnssd/{escaped}"
+
+
 def advertise():
     """Publish the pairing service over mDNS through systemd-resolved. Never raises.
 
@@ -300,6 +313,25 @@ def advertise():
         return
     try:
         bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+
+        # Take the name over rather than assuming it is free. systemd does NOT run ExecStopPost on
+        # the Restart= auto-restart path -- measured on a dev card, systemd 258: an ExecStopPost
+        # probe logged on a `systemctl restart` and did NOT log between a SIGKILL and the restart
+        # it triggered -- so a crashed instance leaves its registration behind and RegisterService
+        # then fails DnssdServiceExists. That is exactly the case Restart=on-failure exists to
+        # cover, so it must not be the case that loses the advert. Clearing first makes this
+        # idempotent and leaves the live registration owned by the daemon that is actually
+        # listening; with nothing registered the call simply fails and is ignored, which is the
+        # normal path on a clean start.
+        try:
+            bus.call_sync("org.freedesktop.resolve1", "/org/freedesktop/resolve1",
+                          "org.freedesktop.resolve1.Manager", "UnregisterService",
+                          GLib.Variant("(o)", (dnssd_object_path(),)), None,
+                          Gio.DBusCallFlags.NONE, -1, None)
+            log("cleared a registration left by a previous instance")
+        except Exception:                                        # noqa: BLE001 — nothing to clear
+            pass
+
         # "%H" is expanded by resolved into the hostname, so the instance is novadeck._steamos-
         # devkit._tcp.local — the same name the avahi service file produced with replace-wildcards.
         args = GLib.Variant("(sssqqqaa{say})",

@@ -343,6 +343,33 @@ else
   else
     bad "the unit unregisters '$have' but DNSSD_SERVICE_ID ('$sid') produces '$want' — the advert would survive the switch"
   fi
+  # The daemon derives the same path for its own take-over call below, so the escaping must agree
+  # with the literal in the unit. Run the daemon's function rather than re-implementing it.
+  # The daemon guards its entry point with `if __name__ == "__main__"`, so executing the module
+  # body under any other name defines its functions and starts nothing.
+  derived="$(python3 -c "
+ns = {'__name__': 'pairingd'}
+exec(open('$DAEMON').read(), ns)
+print(ns['dnssd_object_path']())
+" 2>/dev/null)"
+  if [ "$derived" = "$want" ]; then
+    ok "the daemon derives the same object path the unit spells out"
+  else
+    bad "the daemon derives '$derived' but the unit unregisters '$want' — a crashed instance's registration would never be cleared"
+  fi
+fi
+
+# THE CRASH-RESTART PATH, and it took hardware to find. systemd does NOT run ExecStopPost on the
+# Restart= auto-restart path -- measured on a dev card (systemd 258) with an ExecStopPost probe
+# that logged on `systemctl restart` and did NOT log between a SIGKILL and the restart it
+# triggered. So the replacement instance meets its predecessor's registration still in place, and
+# a plain RegisterService fails DnssdServiceExists: the advert survives, but owned by nothing, and
+# the daemon that is actually listening believes it failed to advertise. Restart=on-failure is the
+# whole reason this daemon survives a crash, so it must not be the path that loses the advert.
+if grep -q 'UnregisterService' "$DAEMON"; then
+  ok "the daemon clears a previous instance's registration before registering its own"
+else
+  bad "the daemon only registers: after a crash-restart RegisterService fails DnssdServiceExists and the advert is orphaned"
 fi
 
 # The advertisement must never decide whether remote access works. It shipped once as a FATAL

@@ -54,6 +54,8 @@ novadeck runs from the card and does not touch your Android install.
 | Retroid Pocket Nova | SM8550 | `retroid-pocket-nova` | yes (120 Hz mode selection open) |
 | AYN Thor Lite | SM8250 | `ayn-thor-lite` | yes |
 | MANGMI Pocket Max | SM8250 | `mangmi-pocket-max` | yes |
+| Retroid Pocket 5 | SM8250 | `retroid-pocket-5` | yes (user report) |
+| Retroid Pocket Flip2 | SM8250 | `retroid-pocket-flip2` | yes (user report) |
 | AYANEO Pocket DMG | SM8550 | `ayaneo-pocket-dmg` | — |
 | AYANEO Pocket DS | SM8550 | `ayaneo-pocket-ds` | no - panel stays black |
 | AYANEO Pocket EVO | SM8550 | `ayaneo-pocket-evo` | no - panel stays black |
@@ -62,16 +64,15 @@ novadeck runs from the card and does not touch your Android install.
 | AYN Odin 2 Mini | SM8550 | `ayn-odin-2-mini` | — |
 | AYN Odin 2 Portal | SM8550 | `ayn-odin-2-portal` | yes |
 | Retroid Pocket 6 | SM8550 | `retroid-pocket-6` | — |
-| Retroid Pocket 5 | SM8250 | `retroid-pocket-5` | — |
-| Retroid Pocket Flip2 | SM8250 | `retroid-pocket-flip2` | — |
 | Retroid Pocket Mini | SM8250 | `retroid-pocket-mini` | — |
 | Retroid Pocket Mini V2 | SM8250 | `retroid-pocket-mini-v2` | — |
 
 <!-- END AUTO-GENERATED -->
 
-**"HW-validated"** means someone has actually booted novadeck on that unit. The rest ship support
-data that looks right but has never met the hardware — they may work, and reports either way are
-genuinely useful.
+**"HW-validated"** means someone has actually booted novadeck on that unit; **"(user report)"**
+marks the ones where that someone was a user rather than us, so we cannot debug them first-hand.
+The rest ship support data that looks right but has never met the hardware — they may work, and
+reports either way are genuinely useful.
 
 > **SM8250 boards have no sensor DSP.** The `slpi.mbn` firmware for that SoC is published in no
 > open source, so every Snapdragon 865 board is without its accelerometer — no auto-rotation.

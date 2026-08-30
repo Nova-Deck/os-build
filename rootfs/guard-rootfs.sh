@@ -44,7 +44,9 @@
 #      nothing at runtime guards this (decky-sync assumes a complete image, by design)
 #  10. no __pycache__ — host-CPython bytecode the device cannot load, which rootfs/overlay's verbatim
 #      copy will carry in whenever an offline suite has imported one of its Python clients
-#  11. a size delta against the previous build (report only — never fails a build)
+#  11. every path is owned by a uid and gid this tree's own /etc/passwd and /etc/group declare, and
+#      no setuid/setgid file arrived that the permit list does not name
+#  12. a size delta against the previous build (report only — never fails a build)
 set -euo pipefail
 shopt -s nullglob
 
@@ -706,7 +708,120 @@ else
 fi
 
 # ------------------------------------------------------------------------------------------
-# 11. Size delta (report only).
+# 11. Every path is owned by an id this tree declares, and nothing is unexpectedly setuid.
+#
+# Every assertion above asks about the package set or about a declaration. None of them opens a
+# file's OWNER, which is how a /usr owned end to end by uid 1001 passed all of them on every build
+# it shipped in: the package set was right, the seal was right, the tree was wrong. That is the
+# second correct-diff/wrong-tree defect here — the first was the git-644 mode regression that
+# blacked out the OOBE — and the lesson written down after that one, "diff the MODE manifest of
+# built trees", stayed prose. This is it as an assertion.
+#
+# WHY THE TREE'S OWN passwd IS THE ORACLE, rather than a list of approved ids kept in this file: a
+# uid means nothing without a name database, and the one that ships in the image is the one the
+# device resolves against. An id absent from it is unresolvable BY CONSTRUCTION — `ls` renders a
+# bare number and anything checking ownership by name fails — so the question here is not "is this
+# id approved" but "can the shipped system name its own files at all". That needs no list, and so
+# has nothing to go stale. Assertion 8 asks the complementary question, whether the ids the tree
+# declares are the PINNED ones; neither implies the other, and the 1001 tree passed 8.
+#
+# assemble-rootfs.sh step 4z is NOT this check. It reclaims exactly one uid — the repo checkout's,
+# `stat`'d off the script at run time — so it ignored 1001 in silence while its own comment cited
+# the uid-1000 symptom. A blind reclaim is a fix; this is the measurement that says it worked.
+#
+# SETUID IS A SEPARATE QUESTION ON THE SAME `find`, and worth the second walk. rootfs/overlay is
+# copied out of a git checkout, and git cannot carry a setuid bit at all — so every entry below
+# arrived from a package or from a third-party prebuilt, and those unpack at `/` with nothing
+# constraining what they place there. A new setuid-root binary is the highest-consequence thing
+# such a tarball can add quietly: invisible in a diff of the pins, invisible in the lock (prebuilt
+# rows carry a hash, not a file list), and indistinguishable from a legitimate one once installed.
+#
+# The list is what a release tree MEASURES, not what a distribution usually ships. It is a PERMIT
+# list read in one direction only: an entry disappearing is not a failure (trimming a package takes
+# its setuid binary with it, which is the direction we want), an arrival is.
+# ------------------------------------------------------------------------------------------
+echo "  11. file ownership and setuid"
+OWN_PASSWD="$STAGE/etc/passwd"
+OWN_GROUP="$STAGE/etc/group"
+
+# Measured against a built release tree 2026-08-30. Paths are relative to the tree root.
+SETUID_PERMITTED=(
+  usr/bin/chage usr/bin/chfn usr/bin/chsh usr/bin/expiry usr/bin/gpasswd usr/bin/groupmems
+  usr/bin/newgrp usr/bin/passwd usr/bin/sg usr/bin/su usr/bin/unix_chkpwd   # shadow
+  usr/bin/mount usr/bin/umount                                             # util-linux
+  usr/bin/fusermount usr/bin/fusermount3                                   # fuse2 / fuse3
+  usr/bin/pkexec usr/lib/polkit-1/polkit-agent-helper-1                     # polkit
+  usr/lib/dbus-daemon-launch-helper                                        # dbus
+  usr/lib/ssh/ssh-keysign                                                  # openssh
+  usr/bin/ksu                                                              # krb5
+  usr/bin/wall usr/bin/write                                               # setgid tty, not setuid
+)
+
+if [ ! -s "$OWN_PASSWD" ] || [ ! -s "$OWN_GROUP" ]; then
+  bad "/etc/passwd or /etc/group is missing or empty — the tree cannot name its own files, so ownership cannot be checked at all"
+else
+  # One walk, reported by OWNER rather than by path: a subtree that got copied with the wrong
+  # identity is thousands of files and a single wrong id, and it is the id — plus one example to
+  # locate it — that says which step wrote them. A per-file list would bury that under its own size.
+  #
+  # Tab-separated because %P is a path and may contain spaces. TOTAL rides out on the same stream
+  # (the `measure` helper below does the same thing) and is split back off with sed, not grep:
+  # `grep -v` finds nothing when the tree is clean, and a non-zero grep under `pipefail` would kill
+  # the guard here with no output — the third time that shape has been hit in this repo.
+  own_scan="$(
+    find "$STAGE" -printf '%U\t%G\t%P\n' \
+    | awk -F'\t' -v pw="$OWN_PASSWD" -v gr="$OWN_GROUP" '
+        BEGIN {
+          while ((getline line < pw) > 0) { split(line, f, ":"); uid[f[3]] = 1 }
+          while ((getline line < gr) > 0) { split(line, f, ":"); gid[f[3]] = 1 }
+        }
+        {
+          who = ""
+          if (!($1 in uid)) who = "uid " $1
+          if (!($2 in gid)) who = (who == "" ? "" : who " + ") "gid " $2
+          if (who == "") next
+          n[who]++
+          # `find` lists the tree root first and its %P is empty. Take a deeper path as the example
+          # the moment one appears: "/" locates nothing, and if the root itself is misowned so is
+          # everything under it, which the count already says.
+          if (!(who in eg) || eg[who] == "/") eg[who] = ($3 == "" ? "/" : "/" $3)
+        }
+        END {
+          printf "TOTAL\t%d\n", NR
+          for (k in n) printf "%s  —  %d path%s, e.g. %s\n", k, n[k], (n[k] == 1 ? "" : "s"), eg[k]
+        }'
+  )"
+  own_scanned="$(sed -n 's/^TOTAL\t//p' <<<"$own_scan")"
+  own_offenders="$(sed '/^TOTAL\t/d' <<<"$own_scan" | LC_ALL=C sort)"
+
+  if [ -n "$own_offenders" ]; then
+    bad "paths owned by an id /etc/passwd or /etc/group does not declare — the shipped system cannot resolve them to a name:"
+    while IFS= read -r line; do printf '      %s\n' "$line" >&2; done <<<"$own_offenders"
+  else
+    echo "    ok  $own_scanned paths, every uid and gid declared by this tree"
+  fi
+fi
+
+declare -A SETUID_OK
+for permitted in "${SETUID_PERMITTED[@]}"; do SETUID_OK["$permitted"]=1; done
+
+suid_seen=0
+suid_new=()
+while IFS= read -r rel; do
+  [ -n "$rel" ] || continue
+  suid_seen=$((suid_seen + 1))
+  [ -n "${SETUID_OK[$rel]:-}" ] || suid_new+=("$rel")
+done < <(find "$STAGE" -type f -perm /6000 -printf '%P\n' | LC_ALL=C sort)
+
+if [ "${#suid_new[@]}" -gt 0 ]; then
+  bad "setuid/setgid files the permit list does not name — a git checkout cannot set that bit, so these came from a package or a prebuilt tarball:"
+  for rel in "${suid_new[@]}"; do printf '      /%s\n' "$rel" >&2; done
+else
+  echo "    ok  $suid_seen setuid/setgid files, all permitted"
+fi
+
+# ------------------------------------------------------------------------------------------
+# 12. Size delta (report only).
 #
 # Never fails a build — there is no defensible threshold, and a guard that blocks on growth would
 # be disabled the first time a legitimate package got bigger. Its job is to put the number in

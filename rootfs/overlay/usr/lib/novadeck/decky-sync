@@ -71,8 +71,20 @@ if [[ -d "${plugins_src}" ]]; then
   done
 fi
 
-# The loader runs as root but the tree belongs to the user: Decky's store installs, its settings
-# writes and its self-updates all happen via the loader on the user's behalf, and a root-owned
-# leftover would turn each of those into EACCES.
+# services/ and settings/ belong to the user: the loader self-updates and writes its settings on
+# the user's behalf, and a root-owned leftover would turn those into EACCES.
+#
+# plugins/ IS DELIBERATELY NOT HERE. Decky owns that directory's ownership and re-asserts it
+# seconds after this unit finishes, so chowning it was dead work that only made this file lie
+# about the resulting state (measured on device: services/ and settings/ deck-owned, plugins/
+# root-owned, ctime 3s past our exit). Upstream v3.2.8-pre1, two places:
+#   * main.py, at import: chown(PRIVILEGED_PATH/plugins, EFFECTIVE_USER) -- non-recursive, gated
+#     on CHOWN_PLUGIN_PATH which DEFAULTS TO "1". The loader is root (User=root, upstream's own
+#     unit), so EFFECTIVE_USER is root.
+#   * browser.py, per plugin on load: chown(plugin_dir, EFFECTIVE_USER if root_plugin else
+#     HOST_USER, recursive) -- so a dir's owner tracks the uid its backend will run as. OUR two
+#     plugins declare flags:["root"], which is exactly why they land root-owned.
+# That second line is also why a store plugin cannot be stranded by this: without the root flag
+# it is chowned to the host user instead. Nothing here needs to help.
 chown "${user_name}:${user_group}" "${homebrew}"
-chown -R "${user_name}:${user_group}" "${homebrew}/services" "${homebrew}/plugins" "${homebrew}/settings"
+chown -R "${user_name}:${user_group}" "${homebrew}/services" "${homebrew}/settings"

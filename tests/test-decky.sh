@@ -427,6 +427,24 @@ else
   fi
 fi
 
+# --- the sync does NOT chown plugins/ --------------------------------------------------------
+# Decky owns that directory's ownership and re-asserts it seconds after the sync exits (upstream
+# v3.2.8-pre1: main.py chowns PRIVILEGED_PATH/plugins to the effective user, gated on
+# CHOWN_PLUGIN_PATH which defaults on; browser.py then chowns each plugin dir to root or the host
+# user depending on its root flag). Chowning it here was dead work that made decky-sync's comment
+# describe a state that does not survive boot. The fabricated-tree run above cannot catch a
+# re-addition -- it runs as the invoking user, so a stray chown to self is a silent no-op -- so
+# assert on the line itself.
+sync_chown=$(grep -E '^chown -R' "$SYNC")
+if grep -q 'plugins' <<<"$sync_chown"; then
+  bad "decky-sync chowns plugins/ again — Decky undoes it every boot; the ownership is upstream's, not ours"
+else
+  ok "decky-sync leaves plugins/ ownership to Decky (it chowns it per plugin, by root flag)"
+fi
+{ grep -q 'services' <<<"$sync_chown" && grep -q 'settings' <<<"$sync_chown"; } \
+  && ok "decky-sync still chowns services/ and settings/ — those the loader writes as the user" \
+  || bad "decky-sync no longer chowns services/ or settings/: the loader's own writes turn into EACCES"
+
 # --- the thunk override UI (issue #47) -------------------------------------------------------
 # The tweaks-file contract lives in game-launch (tested by test-perf.sh); what CAN regress here
 # is the plugin half: the backend serving the namespace, and the tab offering a tri-state.

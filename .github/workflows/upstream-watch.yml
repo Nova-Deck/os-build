@@ -160,6 +160,7 @@ jobs:
           - [ ] \`packages/fex-rootfs/prebuilt.pin\`: version + url + sha256 together; verify the download against upstream's XXH3 first
           - [ ] \`packages/fex-emu\` sysroot pins (guest thunks compile against the guest's packages) + overlay rebuild
           - [ ] \`packages/mesa-x86/builder.pin\`: snapshot must match the new guest date (build.sh asserts it)
+          - [ ] \`packages/lsfg-vk-x86/builder.pin\`: SAME snapshot coupling as mesa-x86 — the frame-generation layer loads inside the guest too, and its build.sh asserts the pin the same way
           - [ ] verify by extracting the .ero, not by boot: locales (C.utf8-only?), ICD library_path shape, manifest presence
           - [ ] revalidate the mesa-x86 relative-ICD workaround: check a compat-tool title's maps for libvulkan_freedreno — the failure mode is a SILENT GL fallback, "the game runs" proves nothing
           - [ ] HW pass on the two canonical native x86 titles (Super Meat Boy, Parking Garage Rally Circuit)

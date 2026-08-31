@@ -1,0 +1,117 @@
+# novadeck lsfg-vk — the HOST aarch64 Vulkan layer, built FROM SOURCE via this novadeck-owned
+# PKGBUILD (referenced by packages/lsfg-vk/source.pin: pkgbuild_local). Not in the holo repos, and
+# upstream publishes no arm64 binary at all — builds.lsfg-vk.dev carries x86_64 and i686 only.
+#
+# WHY AN ARM64 BUILD EXISTS AT ALL, when every game here is x86. Measured on HW 2026-08-30: there
+# are THREE x86 paths and they do not share a Vulkan stack.
+#   * system FEX, and Valve's compat tool running a NATIVE x86-64 Linux title, both render on the
+#     GUEST x86 Turnip. The x86 layer (packages/lsfg-vk-x86) serves those, and is proven working.
+#   * a PROTON title is different: Valve's compat tool thunks the game's x86 Vulkan calls out to
+#     the HOST arm64 driver (/run/host/usr/lib/libvulkan.so, freedreno_icd.aarch64.json), and
+#     pressure-vessel pins VK_IMPLICIT_LAYER_PATH to its own overrides directory, which it
+#     populates by importing from the host's /usr/share/vulkan/implicit_layer.d.
+# A Vulkan layer must match the driver it fronts. For Proton titles — most of the library — that
+# driver is aarch64, so the layer has to be too, and it has to be installed HOST-side where
+# pressure-vessel will find and import it. The x86 layer is not a substitute; it is the other half.
+#
+# LICENCE, and why this file is unusual for this repo. lsfg-vk 2.x is CC-BY-NC-ND-4.0.
+# NonCommercial is satisfied (Nova-Deck is not a commercial product). NoDerivatives means there is
+# NO patches list here and there cannot be one: this builds the tag exactly as upstream cut it, and
+# any Adreno or FEX fix has to land upstream before we can carry it. If you find yourself wanting
+# to add a `patches:` line to source.pin, that is the moment to talk to upstream instead — see
+# .claude/plans/lsfg-vk-upstream-outreach.md, which asks about precisely this build.
+#
+# Recipe follows upstream's own documented one (https://lsfg-vk.dev/docs/installation/building-from-source/):
+#   * clang, Ninja, Release, IPO on — what upstream recommends and tests
+#   * LSFGVK_MANAGED=ON — upstream asks distro packagers to set it; it stops the layer
+#     second-guessing an installation a package manager owns
+#   * LSFGVK_BUILD_UI=OFF — Qt6 desktop app, unusable in a gamescope session, and its replacement
+#     is the novadeck-framegen Decky plugin. Keeping it off also keeps qt6-base/qt6-declarative out
+#     of the image entirely.
+#   * LSFGVK_LAYER_LIBRARY_PATH is deliberately NOT set. It only needs overriding for a non-system
+#     prefix; installed at /usr the default (a bare filename, resolved through the loader's search
+#     path) is correct, and it matches how VkLayer_MESA_device_select already ships here.
+#
+# Deps are minimal because thirdparty/ vendors toml++, the Vulkan headers, vk_video and the
+# Vulkan-Hpp umbrella. The built .so NEEDs libstdc++/libgcc_s (gcc-libs) and libm/libc (glibc) and
+# nothing else — verified with readelf on upstream's x86 artifact, and re-asserted at package time
+# below rather than trusted.
+#
+# To bump: change pkgver + the tag together, and re-run packages/lsfg-vk/probe-benchmark.sh. The
+# per-SoC flow-scale defaults in the Decky plugin are MEASURED, not derived, and a pipeline change
+# moves them.
+
+pkgname=lsfg-vk
+# Arch pkgver cannot contain a hyphen; upstream's tag is 2.0.0-rc1. _tag is the real one.
+pkgver=2.0.0rc1
+_tag=2.0.0-rc1
+pkgrel=1
+pkgdesc='Lossless Scaling frame generation as a Vulkan layer (aarch64 host layer + CLI)'
+arch=(aarch64)
+url=https://lsfg-vk.dev
+license=('LicenseRef-CC-BY-NC-ND-4.0')
+depends=(
+  gcc-libs
+  glibc
+)
+makedepends=(
+  clang
+  cmake
+  git
+  llvm
+  ninja
+  vulkan-headers
+)
+source=("git+https://git.lsfg-vk.dev/lsfg-vk.git#tag=${_tag}")
+b2sums=('SKIP')
+
+build() {
+  cd lsfg-vk
+  cmake -B build -G Ninja \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON \
+    -DCMAKE_INSTALL_PREFIX=/usr \
+    -DCMAKE_INSTALL_LIBDIR=lib \
+    -DCMAKE_CXX_COMPILER=clang++ \
+    -DLSFGVK_MANAGED=ON \
+    -DLSFGVK_BUILD_LAYER=ON \
+    -DLSFGVK_BUILD_CLI=ON \
+    -DLSFGVK_BUILD_UI=OFF \
+    -DLSFGVK_INSTALL_LIBRARIES=OFF
+  cmake --build build
+}
+
+package() {
+  cd lsfg-vk
+  DESTDIR="$pkgdir" cmake --install build
+
+  # The layer manifest is the whole point of this package: without it in the host's
+  # implicit_layer.d, pressure-vessel has nothing to import and Proton titles get no frame
+  # generation — silently, because a layer that is never discovered logs nothing at all.
+  local manifest="$pkgdir/usr/share/vulkan/implicit_layer.d/VkLayer_LSFGVK_frame_generation.json"
+  [ -f "$manifest" ] || {
+    echo "ERROR: lsfg-vk: no implicit layer manifest was installed (upstream changed its layout?)" >&2
+    exit 1; }
+  [ -f "$pkgdir/usr/lib/liblsfg-vk-layer.so" ] || {
+    echo "ERROR: lsfg-vk: no liblsfg-vk-layer.so at /usr/lib" >&2; exit 1; }
+
+  # The declared depends must cover every NEEDED, or the layer is dropped at load time with no
+  # error the user can see. Assert rather than assume: this is the same class of failure that
+  # packages/mesa's depends list exists to prevent.
+  local need
+  for need in $(readelf -d "$pkgdir/usr/lib/liblsfg-vk-layer.so" \
+                | sed -n 's/.*(NEEDED).*\[\(.*\)\].*/\1/p'); do
+    case "$need" in
+      # ld-linux-aarch64.so.1 is glibc's dynamic linker and IS listed as a NEEDED on aarch64,
+      # unlike x86-64 where it appears only as the INTERP. glibc already covers it; leaving it out
+      # of this list failed the build on an entirely correct package.
+      libstdc++.so.6|libgcc_s.so.1|libm.so.6|libc.so.6|ld-linux-aarch64.so.1) ;;
+      *) echo "ERROR: lsfg-vk: unexpected NEEDED $need -- add its package to depends()" >&2
+         exit 1 ;;
+    esac
+  done
+
+  install -Dm644 LICENSE.txt "$pkgdir/usr/share/licenses/${pkgname}/LICENSE.txt"
+}
+
+# vim: ts=2 sw=2 et:

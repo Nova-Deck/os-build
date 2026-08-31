@@ -684,8 +684,9 @@ printf '%s\n' "$append_script" | grep -q 'NOVADECK_APPEND_FLOOR:-' \
 # a FOREIGN disk, and every failure mode is the same failure: it writes somewhere else instead. The
 # config is the whole mechanism -- with the service enabled the install subcommand's own --conf is
 # compiled out, so the config that runs is the service's, and if a stock rauc.service ever won the
-# bus name the bundle would land on /dev/disk/by-partlabel/novadeck-root-A, which on an internal
-# install is the INSTALLER'S OWN MEDIUM. So these assert the config's shape and the ownership proof,
+# bus name the bundle would land wherever THAT config says slot A is rather than in the partition
+# the session was handed -- on an installer medium, plausibly the medium itself. So these assert
+# the config's shape and the ownership proof,
 # and neither can be checked on hardware without doing the destructive thing first.
 SESSION="$ROOT/installer/rauc-session.sh"
 FRESH="$ROOT/installer/post-install-fresh.sh"

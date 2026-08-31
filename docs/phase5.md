@@ -141,6 +141,72 @@ than by the config. The initramfs accepts both, ours winning, so the two can coe
 Board bootargs moved out of the dtsi `/chosen/bootargs` onto the `linux` line, where they now have
 to be: the EFI stub overwrites `/chosen/bootargs` with the loader's command line.
 
+## What the running system resolves — `/dev/novadeck/`
+
+The `PARTUUID=` work above covers the **bootloader → kernel** handoff and stops there. Stage 1 is
+restricted to the disk it was loaded from (`steamcl-restricted`, and `on_same_device()` in
+steamcl's candidate scan); stage 2 derives `root`/`var`/`efi` with `probe --part-uuid` off
+`$bootdisk`; the initramfs mounts exactly what the cmdline names. So the card boots its own kernel,
+root, `/var` and efi partition — that half was never ambiguous.
+
+Everything the running system resolved *after* `switch_root` was still on labels, and the eight GPT
+names are identical on every novadeck medium. udev publishes **one** symlink per duplicate name, so
+with two media attached the loser gets no link at all — not merely ambiguous, invisible. Four
+consumers, in ascending order of how much it costs to get wrong:
+
+| Consumer | Was | Cost of naming the other disk |
+|---|---|---|
+| `/home` (fstab) | `LABEL=novadeck-home` | The Steam library and rauc's `data-directory` are on the other disk — or `/home` does not mount at all (`nofail`). |
+| `/esp` (fstab) | `PARTLABEL=NOVADECK-ESP` | Stage 2 increments `boot-attempts` on the **booted** disk's ESP; `mark-good` clears it through this mount. On the wrong ESP the counter climbs every boot until steamcl's failsafe fires, and the other install's `A.conf` is stamped over. Both files are named `A.conf`, so nothing downstream can notice. |
+| `novadeck-grow-home` | `/dev/disk/by-label/novadeck-home` | It hands that partition's **parent disk** to `systemd-repart`, so it can rewrite the internal disk's GPT while booted off a card. |
+| rauc slots (`system.conf`) | `/dev/disk/by-partlabel/novadeck-root-{A,B}` | An OTA taken from the card writes the bundle into the internal install's slot. |
+
+All four now name **`/dev/novadeck/<GPT name>`** — the same set of links as `by-partlabel`, scoped
+to the disk we booted from. `usr/lib/udev/rules.d/69-novadeck-bootdisk.rules` matches every
+`novadeck-*`/`NOVADECK-*` GPT name through `usr/lib/novadeck/on-boot-disk`, which compares the
+candidate's parent disk in sysfs against the `root=` device the initramfs already resolved into
+`/run/novadeck/boot`. The rule enumerates no partition names (it copies `ID_PART_ENTRY_NAME`
+through), so it cannot drift from `image/partition-table.txt`.
+
+Two properties worth stating outright, because the whole change rests on them:
+
+* **It fails open.** Whenever the boot disk cannot be determined — no `/run/novadeck/boot`, no
+  `root=` line, a root that is not a partition — every novadeck partition gets a link. That is
+  exactly the old `by-partlabel` behaviour, so a single-disk device cannot be made worse by this,
+  and a device whose `/run` handoff went missing still mounts `/home` and still updates. It fails
+  *closed* only for a candidate that cannot be inspected once the boot disk **is** known.
+* **`69-`, not `60-`.** `ID_PART_ENTRY_NAME` is exported by the blkid builtin that
+  `60-persistent-storage.rules` imports, and udev sorts rule files lexically —
+  `60-novadeck-bootdisk` sorts *before* `60-persistent-storage` and would match an unset variable,
+  creating no links and saying nothing.
+
+`rootfs/guard-rootfs.sh` assertion 7b fails the build if the rule or its match program is missing
+or non-executable, if the rule names a program path that does not exist, or if any of the four
+consumers has been left on a bare label — a half-applied version of this is worse than none, since
+the consumers would then disagree about which disk they are on.
+
+### Upgrading a device that already has both
+
+The fix only takes effect once the device is *booted into* an image carrying it, so on a machine
+with an internal install and a card inserted:
+
+* **Take the update with the card removed.** The install itself is performed by the **running**
+  (old) system's `post-install.sh` and its `by-partlabel` slot devices, so the last old-hook run is
+  still ambiguous. Nothing in the bundle can change that; removing the second medium can.
+* **`/home` may appear to change.** If the wrong disk's home was being mounted, the first boot on
+  the new image mounts the right one, and the Steam library that was visible before is now on the
+  other disk (untouched, still there). rauc's block-hash index went with it, so the next OTA is a
+  full download once before it is incremental again.
+* **A broken rollout self-rolls-back.** If the links never appear, `/esp` does not mount,
+  `mark-good` fails, `OnFailure=novadeck-boot-bad.service` demotes the image and the next boot
+  returns to the other slot. That is the same path a bad slot already takes.
+
+The installer medium carries the rule (the udev rules are copied wholesale) and its match program,
+but nothing on it reads the links: it is booted from a medium whose own partitions are not named
+`novadeck-*`, and it addresses the target disk explicitly through mountpoints under `/run`. The
+program travels with the rule only so a medium whose whole job is to be diagnosable does not log a
+udev worker error for every partition uevent.
+
 ## The `boot-attempts` counter
 
 The generated config calls, once, after `terminal_output gfxterm`:
@@ -277,6 +343,7 @@ Offline, in `make test` — all green at the time of writing:
 | `test-units.sh` | `systemd-analyze` over every unit in `rootfs/overlay`; any unknown key or section fails. |
 | `test-bootctl.sh` | The RAUC backend contract against a stubbed `steamos-bootconf`. |
 | `test-post-install.sh` | The hook against a sandboxed ESP/efi/var, including the fsid + label re-stamp. |
+| `test-boot-disk.sh` | Executes `on-boot-disk` against a two-disk sysfs fixture — the one thing hardware cannot test, since a device only ever has the disk it booted. Both directions of the card+internal case, a single-disk device keeping all eight links, every fail-open state, the one fail-closed state, and that all four consumers plus the rule's name match still agree with `partition-table.txt`. |
 | `verify-card.sh` (`make verify-card`) | The BUILT card: distinct fsids, per-slot btrfs labels, the ESP stage-1 tree + confs + grubenv, the efi stage-2 trees + partset identity matrix, and that each on-card `grub.cfg` is byte-identical to what `gen-grub-cfg.sh` produces for that slot. |
 
 ## Hardware status

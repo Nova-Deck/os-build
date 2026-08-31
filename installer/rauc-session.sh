@@ -195,8 +195,12 @@ fi
 #
 # NO <servicedir> AND NO <standard_system_servicedirs/>, which is the actual guarantee. Without an
 # activation directory dbus-daemon cannot start anything at all, so a stock rauc.service cannot be
-# activated onto this bus and win the name with /etc/rauc/system.conf -- the failure that would put
-# the bundle in /dev/disk/by-partlabel/novadeck-root-A, i.e. on the INSTALLER'S OWN medium.
+# activated onto this bus and win the name with a config that is not this one -- the failure that
+# would put the bundle wherever THAT config says slot A is, rather than in the partition this
+# script was handed. The shipped image names its slots /dev/novadeck/novadeck-root-{A,B} now
+# (docs/phase5.md), so the specific wrong destination has changed and the hazard has not: the
+# whole point of synthesizing a config is that the destination comes from our argument, and any
+# path where some other config wins is a path where it does not.
 #
 # The policy is open because the socket is not: it lives in $RUNDIR on a tmpfs, and the installer
 # runs as root and only as root. (Do not write `--` inside these comments. dbus' XML parser treats

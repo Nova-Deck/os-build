@@ -104,7 +104,7 @@ export function Content() {
     </div>
   );
 
-  // No section title on this one: the QAM header already reads "Novadeck Monitor".
+  // No section title on this one: the QAM header already reads "NovaDeck Monitor".
   if (!data) return frame(<PanelSection><Field label={error || "Reading sensors"} /></PanelSection>);
 
   const power = data.power;

@@ -2,7 +2,7 @@ import { definePlugin } from "@decky/api";
 import { Content } from "./Content";
 
 export default definePlugin(() => ({
-  name: "Novadeck Control",
+  name: "NovaDeck Control",
   content: <Content />,
   icon: (
     <svg

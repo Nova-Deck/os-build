@@ -2,7 +2,7 @@ import { definePlugin } from "@decky/api";
 import { Content } from "./Content";
 
 export default definePlugin(() => ({
-  name: "Novadeck Monitor",
+  name: "NovaDeck Monitor",
   content: <Content />,
   // A pulse trace, deliberately nothing like novadeck-control's sliders glyph: the two plugins
   // sit next to each other in the QAM's plugin list and the icon is all that distinguishes them

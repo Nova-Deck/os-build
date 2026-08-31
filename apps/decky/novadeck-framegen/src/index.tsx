@@ -2,7 +2,7 @@ import { definePlugin } from "@decky/api";
 import { Content } from "./Content";
 
 export default definePlugin(() => ({
-  name: "Novadeck Frame Gen",
+  name: "NovaDeck Frame Gen",
   content: <Content />,
   // Three stacked frames with the middle one dashed: the inserted frame. Deliberately unlike
   // novadeck-control's sliders and novadeck-monitor's pulse trace -- all three sit together in

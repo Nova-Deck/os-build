@@ -64,7 +64,7 @@ export function Content() {
 
   useDebouncedTweaksSave({ config, snapshot: savedTweaksSnapshot, setConfig, onError: load });
 
-  if (!config) return <PanelSection title="Novadeck Control"><Field label={message} /></PanelSection>;
+  if (!config) return <PanelSection title="NovaDeck Control"><Field label={message} /></PanelSection>;
   // The version line lives at the end of the SCROLLABLE tab content, not as a sibling of
   // <Tabs>: the tab strip fills the container's height, so anything after it lands on the
   // container's bottom edge and is eaten by overflow:hidden (HW-observed 2026-08-09 — the row

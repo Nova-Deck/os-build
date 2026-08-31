@@ -88,10 +88,20 @@ def installed_games():
                 continue
             for line in lines:
                 parts = line.strip().split('"')
-                if len(parts) >= 4 and parts[1] in ("appid", "name"):
+                if len(parts) >= 4 and parts[1] in ("appid", "name", "installdir"):
                     values[parts[1]] = parts[3]
             appid = values.get("appid")
             name = values.get("name")
+            # SKIP COMPAT TOOLS AND RUNTIMES. Proton, the Steam Linux Runtimes and Valve's FEX compat
+            # tool install as ordinary apps with their own appmanifest, so they land in this list
+            # beside real games -- and a per-game tweak on one is meaningless, since nothing ever
+            # launches them directly. The test is MECHANICAL rather than a name match or an appid
+            # list: a compat tool ships toolmanifest.vdf in its install directory, which is the same
+            # file that makes Steam treat it as a tool. An appid list would rot the next time Valve
+            # ships another runtime, and a name match would catch a game called "Proton".
+            installdir = values.get("installdir")
+            if installdir and (steamapps_dir / "common" / installdir / "toolmanifest.vdf").exists():
+                continue
             if appid and name and appid not in seen:
                 games.append({"appid": str(appid), "name": name})
                 seen.add(appid)

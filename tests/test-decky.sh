@@ -476,6 +476,47 @@ else
   bad "novadeck-framegen backend does not compile"
 fi
 
+# COMPAT TOOLS MUST NOT REACH THE GAME PICKER. Proton, the Steam Linux Runtimes and Valve's FEX
+# compat tool install as ordinary apps with their own appmanifest, so they arrive in installed_games()
+# beside real titles -- and a per-game tweak on one is meaningless, because nothing launches them
+# directly. Both plugins carry the same enumerator, so both are exercised against ONE fake library:
+# a real game plus three tools, each of which is a tool only because its install directory holds a
+# toolmanifest.vdf. That is the marker the filter uses; asserting it here is what stops someone
+# "simplifying" it into an appid list that rots on the next Valve runtime.
+for _p in "$PLUGIN/py_modules/novadeck_control/steam.py" "$FRAMEGEN/py_modules/novadeck_framegen/steam.py"; do
+  _got="$(python3 - "$_p" <<'PY' 2>/dev/null
+import sys, tempfile, pathlib, importlib.util
+mod_path = pathlib.Path(sys.argv[1])
+d = pathlib.Path(tempfile.mkdtemp())
+apps = d / "steamapps"; (apps / "common").mkdir(parents=True)
+def mk(appid, name, installdir, is_tool):
+    (apps / f"appmanifest_{appid}.acf").write_text(
+        '"AppState"\n{\n\t"appid"\t\t"%s"\n\t"name"\t\t"%s"\n\t"installdir"\t\t"%s"\n}\n'
+        % (appid, name, installdir))
+    p = apps / "common" / installdir
+    p.mkdir(parents=True, exist_ok=True)
+    if is_tool:
+        (p / "toolmanifest.vdf").write_text('"manifest"\n{\n"require_tool_appid" "4185400"\n}\n')
+mk("2737300", "A Real Game", "A Real Game", False)
+mk("1391110", "Steam Linux Runtime - Soldier", "SteamLinuxRuntime_soldier", True)
+mk("1580130", "Proton 9.0", "Proton 9.0", True)
+mk("3127680", "FEX", "FEX", True)
+spec = importlib.util.spec_from_file_location("steam_under_test", mod_path)
+m = importlib.util.module_from_spec(spec)
+sys.modules["steam_under_test"] = m
+spec.loader.exec_module(m)
+m.STEAM_APPS_DIR = apps
+m.STEAM_ROOT = d
+print("|".join(g["name"] for g in m.installed_games()))
+PY
+)"
+  if [ "$_got" = "A Real Game" ]; then
+    ok "$(basename "$(dirname "$(dirname "$(dirname "$_p")")")"): compat tools are filtered out of the game list"
+  else
+    bad "$(basename "$(dirname "$(dirname "$(dirname "$_p")")")"): game list was '${_got:-<empty>}', expected only the real game"
+  fi
+done
+
 # novadeck-framegen hand-rolls a TOML writer (the stdlib reads TOML but cannot write it), and it
 # rewrites a file the LAYER and the USER both also write. So the round trip is checked for real
 # rather than assumed: an invalid file breaks frame generation outright, and a lossy one quietly

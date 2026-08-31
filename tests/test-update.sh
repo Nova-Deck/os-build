@@ -629,6 +629,34 @@ for junk in '../../etc' 'stable extra' 'STABLE' '/beta'; do
 done
 printf 'beta\n' >"$W/update-channel"
 
+CASE="a-pinned-image-offers-no-picker"
+# THE DEV CARD. rootfs/assemble-rootfs.sh pins OTA_CHANNEL=dev on a dev image because `check`
+# compares for INEQUALITY and a dev build stamps NOVADECK_VERSION=dev, so every stable release
+# reads as an available update -- HW-observed writing 3.7 GB of the release whose bug the card
+# existed to test a fix for. The picker must not be a way back around that pin: a tap in Settings
+# would be a downgrade that also overwrites the rollback slot.
+printf 'OTA_CHANNEL=dev\n' >"$W/dev.conf"
+printf 'beta\n' >"$W/update-channel"     # a pick made before the image was pinned, or on another card
+branch NOVADECK_OTA_CONFIG="$W/dev.conf" -l
+[ "$RC" = 0 ] && ok "-l still exits 0 (a device with no choice is not a broken hook)" \
+              || bad "exit $RC, expected 0"
+[ -z "$OUT" ] && ok "lists no branches, so the client renders no control" \
+              || bad "offered '$OUT' on an image pinned off the user-facing channels"
+branch NOVADECK_OTA_CONFIG="$W/dev.conf" beta
+[ "$RC" != 0 ] && ok "refuses a switch it never advertised" \
+               || bad "ACCEPTED a switch on a pinned image"
+# The one that matters: the pin, not the stale pick, is what the fetch follows.
+run NOVADECK_RELEASE_FILE="$(release_file dev)" \
+    NOVADECK_OTA_CONFIG="$W/dev.conf" \
+    NOVADECK_OTA_CHANNEL_STATE="$W/update-channel" check
+[ "$RC" = 7 ] && [ -z "$OUT" ] && ok "check follows the pin and fails closed on the empty dev channel" \
+                              || bad "exit $RC out='$OUT' — the stale pick outranked the dev pin"
+# ... while a pin naming a channel the picker DOES manage stays an operator default, not a lock.
+printf 'OTA_CHANNEL=stable\n' >"$W/ota.conf"
+branch NOVADECK_OTA_CONFIG="$W/ota.conf" -l
+[ "$OUT" = "$(printf 'rel\nbeta')" ] && ok "a stable pin still renders the full picker" \
+                                     || bad "listed '$OUT' under a stable pin"
+
 CASE="picker-args-under-the-update-name"
 # THE HAZARD THE argv[0] DISPATCH EXISTS FOR. `-l` and `-c` are flag-shaped, and novadeck-update
 # deliberately IGNORES unrecognised flags on the way to applying an update (forward compatibility

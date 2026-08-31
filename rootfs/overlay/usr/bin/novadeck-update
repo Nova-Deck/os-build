@@ -210,13 +210,37 @@ def config():
     # ([[devices-are-operator-reachable]] cuts both ways: the override surface exists, but it does
     # not get to make the Settings picker lie). `-c` reports whatever comes out of here, so the UI
     # and the fetch can never disagree about which channel this device is on.
-    channel = (
-        os.environ.get("NOVADECK_OTA_CHANNEL")
-        or selected_channel()
-        or conf.get("OTA_CHANNEL")
-        or DEFAULT_CHANNEL
-    )
+    #
+    # WITH ONE EXCEPTION, AND IT IS NOT A HEDGE: a pin naming a channel the picker does not offer
+    # is not an operator's preference BETWEEN the channels a user may choose — it is a statement
+    # that this image does not belong on any of them. The case that exists today is a DEV card,
+    # which rootfs/assemble-rootfs.sh pins to `dev` for a reason it learned on hardware: a dev
+    # image stamps NOVADECK_VERSION=dev, `check` compares for INEQUALITY, so every stable release
+    # reads as an available update forever — and one was observed writing 3.7 GB of the very
+    # release whose bug that card existed to test a fix for. A tap in Settings outranking that pin
+    # would hand the user a downgrade that also overwrites the rollback slot.
+    #
+    # So the pick applies only where the pin is one the picker manages. The picker declines to
+    # render at all in the other case (see picker_channels), which is what keeps this from being a
+    # control that accepts a choice and then quietly ignores it.
+    channel = os.environ.get("NOVADECK_OTA_CHANNEL") or ""
+    if not channel:
+        pinned = conf.get("OTA_CHANNEL", "")
+        if pinned and pinned not in CHANNELS:
+            channel = pinned
+        else:
+            channel = selected_channel() or pinned or DEFAULT_CHANNEL
     return url.rstrip("/"), channel
+
+
+def picker_channels():
+    """The channels Settings may offer on THIS device, or () when it must offer none.
+
+    An empty list is how a dev card ends up with no OS Update Channel control at all rather than
+    one that lies: the client renders the branches `-l` returns, so returning nothing is the only
+    way to say "this image is not on a channel you may switch between" in a vocabulary it has."""
+    _, channel = config()
+    return CHANNELS if channel in CHANNELS else ()
 
 
 def device_identity():
@@ -602,7 +626,11 @@ def cmd_branch(argv):
         return 1
 
     if argv[0] == "-l":
-        for channel in CHANNELS:
+        # Possibly nothing, and that is a supported answer rather than a failure: an image pinned
+        # off the user-facing channels (a dev card) offers no switch, and the client renders no
+        # control for a device that lists no branches. Exit 0 either way — a non-zero here would
+        # be logged as a broken hook rather than as a device with nothing to choose between.
+        for channel in picker_channels():
             print(CHANNEL_TOKENS[channel], flush=True)
         return 0
 
@@ -624,6 +652,14 @@ def cmd_branch(argv):
     # `rc` or `main` onto a channel we do not publish would put a device on a directory that 404s,
     # and the user's evidence for it would be an update button that has quietly stopped working.
     wanted = argv[0]
+    # The pin wins here too, and it has to be checked before the token is even parsed: `-l`
+    # advertised nothing on such a device, so any value arriving here is one the user cannot have
+    # been shown. Refusing is what makes the empty list above honest rather than cosmetic.
+    if not picker_channels():
+        _, current = config()
+        log(f"this image is pinned to the {current!r} channel and offers no switch — refusing")
+        return 1
+
     channel = ""
     if wanted in CHANNELS:
         channel = wanted

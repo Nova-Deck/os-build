@@ -84,6 +84,19 @@ jobs:
           case "$v" in
             *[!A-Za-z0-9._-]*) echo "::error::version '$v' has characters that do not belong in a URL path"; exit 1 ;;
           esac
+          # THERE IS NO SUCH THING AS A BETA CARD. release-bundle.yml reads a semver pre-release
+          # suffix as "publish to the beta channel" (its prep job carries the reasoning), so
+          # `card/v0.3.0-beta.1` is a tag that LOOKS like it selects something and cannot: a card is
+          # a flashable image, not a channel, and every card lands a device on `stable` —
+          # rootfs/assemble-rootfs.sh ships no /etc/novadeck/ota.conf on a release image, so
+          # novadeck-update falls through to its built-in DEFAULT_CHANNEL.
+          #
+          # Refused rather than silently accepted, because the failure is otherwise invisible: the
+          # card would build, publish, flash and run, and the only symptom of the misunderstanding
+          # would be a device someone believed was on beta quietly taking stable releases.
+          case "$v" in
+            *-*) echo "::error::version '$v' carries a pre-release suffix, which on an ota/ tag means the beta channel. There is no beta card: every card lands on stable. Tag the card without the suffix."; exit 1 ;;
+          esac
           # A tag always publishes. A dispatch publishes only when asked, so the common case —
           # "does this still build?" — cannot overwrite a released card or spend the free tier.
           if [ "$GITHUB_REF_TYPE" = tag ] || [ "${INPUT_PUBLISH:-false}" = true ]; then

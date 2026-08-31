@@ -1,22 +1,33 @@
-# Draft: upstream outreach to PancakeTAS (lsfg-vk)
+# Upstream outreach to PancakeTAS (lsfg-vk) — SENT, and approved
 
-**NOT SENT.** Speaking to a third party on the project's behalf is the operator's call, and
-neither channel is one an agent should post to unattended.
+**SENT by the operator over Discord (`https://discord.gg/5cCP6aACgT`, where the author says they
+are reachable). The author APPROVED the aarch64 build.** Recorded 2026-08-31; the merge that
+landed frame generation on `main` cites it.
 
-**Channels** (from lsfg-vk.dev): Discord `https://discord.gg/5cCP6aACgT`, or GitHub Discussions on
-the archived repo `https://github.com/PancakeTAS/lsfg-vk/discussions`. Discord is where the author
-says they are reachable; Discussions is public and durable. Discord is probably the better first
-contact.
+**What the approval covers, and what it does not.** The ask was the one at the bottom of the
+message: building lsfg-vk for aarch64 from the author's *unmodified* source and shipping that
+binary, because upstream publishes x86_64 and i686 only and a Proton title's Vulkan calls are
+thunked out to the HOST arm64 driver. That is what was granted, and it is why
+`packages/lsfg-vk/PKGBUILD` exists at all.
 
-**Why bother:** the license asks integrators to make contact ("If you want to integrate lsfg-vk,
-perhaps maintain a fork, reach out to me and we can discuss it"), and we have data they almost
-certainly do not — three Adreno generations, measured. It costs nothing and it is the difference
-between shipping under a licence that forbids derivatives with the author's knowledge and without
-it.
+It changes NOTHING else. The licence is still CC-BY-NC-ND-4.0 and **NoDerivatives still binds**:
+no `patches:` line in `packages/lsfg-vk/source.pin` or `packages/lsfg-vk-x86/`, ever, on either
+arch — a test on each fails if one appears. Permission to compile the tag as cut is not permission
+to change it. An Adreno or FEX fix still has to land upstream before we can carry it, and that
+conversation now has a channel to happen on.
+
+**Why it was worth doing:** the licence asks integrators to make contact ("If you want to integrate
+lsfg-vk, perhaps maintain a fork, reach out to me and we can discuss it"), and we had data the
+author almost certainly did not — three Adreno generations, measured. It cost nothing and it is the
+difference between shipping under a licence that forbids derivatives with the author's knowledge
+and without it.
+
+The other channel, if a follow-up ever wants a public and durable one: GitHub Discussions on the
+archived repo, `https://github.com/PancakeTAS/lsfg-vk/discussions`.
 
 ---
 
-## Draft
+## The message, as sent
 
 Hi — I maintain Nova-Deck, a SteamOS-style distro for aarch64 Qualcomm handhelds (SM8250 / SM8550 /
 SM8650, Adreno 650/740/750). It's a non-commercial hobby project: https://github.com/Nova-Deck/os-build

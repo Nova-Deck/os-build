@@ -66,6 +66,20 @@ def _shortcut_games():
     return games
 
 
+# THE TWO THAT NO MECHANISM CATCHES, listed by appid because nothing in their appmanifest or their
+# install tree distinguishes them from a game -- no toolmanifest.vdf, same StateFlags, same shape.
+# Kept deliberately tiny: the toolmanifest test above is the general rule and covers every Proton,
+# every Steam Linux Runtime and Valve's FEX tool without naming any of them. This is the exception
+# list, and an entry earns its place only by being a stable appid that is never launched.
+#
+#   228980  Steamworks Common Redistributables -- a shared depot other apps pull in. It has no
+#           launch configuration at all, so it can never be the thing a tweak applies to.
+#   993090  Lossless Scaling -- on this platform it exists so lsfg-vk can read its DLL out of the
+#           depot (see novadeck_framegen/prereq.py). It is a Windows overlay app; launching it here
+#           does nothing, and its beta branch is switched in Steam's own UI, not ours.
+NEVER_A_GAME = {"228980", "993090"}
+
+
 def installed_games():
     steamapps_dirs = {STEAM_APPS_DIR}
     for library_file in (STEAM_APPS_DIR / "libraryfolders.vdf", STEAM_ROOT / "config/libraryfolders.vdf"):
@@ -92,6 +106,9 @@ def installed_games():
                     values[parts[1]] = parts[3]
             appid = values.get("appid")
             name = values.get("name")
+            # The two the mechanism below cannot see (see NEVER_A_GAME above).
+            if appid in NEVER_A_GAME:
+                continue
             # SKIP COMPAT TOOLS AND RUNTIMES. Proton, the Steam Linux Runtimes and Valve's FEX compat
             # tool install as ordinary apps with their own appmanifest, so they land in this list
             # beside real games -- and a per-game tweak on one is meaningless, since nothing ever

@@ -501,6 +501,9 @@ mk("2737300", "A Real Game", "A Real Game", False)
 mk("1391110", "Steam Linux Runtime - Soldier", "SteamLinuxRuntime_soldier", True)
 mk("1580130", "Proton 9.0", "Proton 9.0", True)
 mk("3127680", "FEX", "FEX", True)
+# No toolmanifest.vdf and nothing else in the manifest marks these -- they are the appid exceptions.
+mk("228980", "Steamworks Common Redistributables", "Steamworks Shared", False)
+mk("993090", "Lossless Scaling", "Lossless Scaling", False)
 spec = importlib.util.spec_from_file_location("steam_under_test", mod_path)
 m = importlib.util.module_from_spec(spec)
 sys.modules["steam_under_test"] = m

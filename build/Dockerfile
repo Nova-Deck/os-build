@@ -77,6 +77,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       btrfs-progs gdisk fdisk dosfstools mtools e2fsprogs \
       casync \
       erofs-utils \
+      libcap2-bin \
     && rm -rf /var/lib/apt/lists/*
 # `fdisk` is NOT redundant with `gdisk`, and neither is it implied by util-linux: Debian ships
 # sfdisk in the `fdisk` package while blkid and partx come from util-linux in the base image, so

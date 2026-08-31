@@ -820,6 +820,24 @@ else
   echo "    ok  $suid_seen setuid/setgid files, all permitted"
 fi
 
+# FILE CAPABILITIES, checked here because they are the same class of thing as the setuid bit above
+# and fail in the opposite direction: a setuid bit that ARRIVES is the danger, a capability that
+# GOES MISSING is. assemble-rootfs.sh section 4za grants gamescope cap_sys_nice so it can request
+# realtime Vulkan queues (upstream gates that request on the capability and silently skips it
+# otherwise). The grant is an xattr, so it has to survive cp -a, rsync -X and mkfs.btrfs --rootdir
+# to reach the image — and if it does not, nothing anywhere reports it: gamescope starts, composites
+# at normal priority, and every measurement taken afterwards answers the wrong question. Assert it
+# on the tree that gets baked rather than trusting the setcap call that produced it.
+if [ -f "$STAGE/usr/bin/gamescope" ]; then
+  gs_cap="$(getcap "$STAGE/usr/bin/gamescope" 2>/dev/null || true)"
+  case "$gs_cap" in
+    *cap_sys_nice*) echo "    ok  gamescope carries cap_sys_nice (realtime Vulkan queues)" ;;
+    *) bad "gamescope has NO cap_sys_nice — the grant did not survive into the tree, and its realtime queue request will be silently skipped (getcap: ${gs_cap:-<nothing>})" ;;
+  esac
+else
+  bad "no /usr/bin/gamescope in the tree to check for cap_sys_nice"
+fi
+
 # ------------------------------------------------------------------------------------------
 # 12. Size delta (report only).
 #

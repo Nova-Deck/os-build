@@ -1281,6 +1281,55 @@ if [ "$ov_uid" != "0" ]; then
   find "$stage" -uid "$ov_uid" -exec chown -h 0:0 {} +
 fi
 
+# 4za. FILE CAPABILITIES — gamescope gets CAP_SYS_NICE, for the realtime Vulkan queues.
+#
+# WHAT IT BUYS. Upstream gamescope already requests VK_QUEUE_GLOBAL_PRIORITY_REALTIME_EXT for its
+# own Vulkan queues, but only `if HasCapSysNice()` (rendervulkan.cpp). Without the capability that
+# request is never made, so the compositor competes with the game on equal footing in the msm
+# scheduler. It matters only when gamescope actually COMPOSITES rather than direct-scanning-out the
+# game buffer -- rotation, scaling, an overlay -- because that is when its work sits on the critical
+# path every frame: a small composite job queued behind a saturated game misses vblank, and the
+# output judders while the game's own frame pacing still looks clean.
+#
+# ONE CAPABILITY, TWO UNRELATED THINGS, and that is the thing to know before changing it. CAP_SYS_NICE
+# gates CPU thread priority AND this GPU queue request, so they cannot be separated: taking the
+# capability away to drop the CPU half silently drops the GPU half too. There is a third-party patch
+# that decouples them (--force-vulkan-realtime); we deliberately do NOT carry it, because we own the
+# image and can grant the capability, which is upstream's supported path and needs no rebasing.
+#
+# WHY IT IS SAFE HERE. setcap puts a binary in secure-execution mode (AT_SECURE), so the loader
+# ignores LD_PRELOAD/LD_LIBRARY_PATH for THAT process -- the usual reason distros back this out. We
+# set neither for gamescope: novadeck-steam exports LD_LIBRARY_PATH for the Steam process, which is
+# a different one, and ENABLE_GAMESCOPE_WSI is ordinary env the loader does not strip. Children do
+# not inherit AT_SECURE, so games and Steam are unaffected.
+#
+# WHAT IT IS WORTH IS PER-SOC, and an SM8250 will make it look like the whole thing does nothing.
+# msm maps a submitqueue priority onto (ring, sched_prio), and there are only multiple rings when
+# preemption is on: a6xx_gpu.c takes `nr_rings = 4` when the module param says so or when the part
+# carries ADRENO_QUIRK_PREEMPTION. In the a6xx catalog that quirk is on the 7XX/8XX entries --
+# 0x43050a01 (A740, SM8550) and 0x43051401 (A750, SM8650) among them -- and on NO a6xx entry, so
+# Adreno 650 / SM8250 runs one ring. There, a realtime queue can only reorder work still QUEUED; it
+# cannot preempt work already on the GPU. Measure this on an A740 or A750, and do not conclude from
+# an SM8250 that the capability is inert.
+#
+# NOTE THE DRIVER DOES NOT GATE ON THE CAPABILITY AT ALL: there is no CAP_SYS_NICE check anywhere in
+# drivers/gpu/drm/msm, so msm honours whatever priority it is handed. gamescope is the only gate --
+# without the capability it never asks, which is exactly why granting it is the whole fix.
+#
+# FAIL LOUDLY. The capability is an xattr (security.capability); it must survive `cp -a`, rsync -X
+# and mkfs.btrfs --rootdir to reach the image, and a capability that silently did not survive looks
+# exactly like one that was granted and changed nothing -- you would then measure the wrong
+# conclusion. rootfs/guard-rootfs.sh asserts it on the built tree for the same reason.
+gs_bin="$stage/usr/bin/gamescope"
+[ -f "$gs_bin" ] || { echo "ERROR: no $gs_bin to grant cap_sys_nice to" >&2; exit 1; }
+command -v setcap >/dev/null 2>&1 || { echo "ERROR: setcap not found (libcap2-bin missing from the build image)" >&2; exit 1; }
+setcap cap_sys_nice+ep "$gs_bin"
+gs_cap="$(getcap "$gs_bin")"
+case "$gs_cap" in
+  *cap_sys_nice*) echo "  granted CAP_SYS_NICE to /usr/bin/gamescope (${gs_cap#* })" ;;
+  *) echo "ERROR: setcap reported success but getcap shows '${gs_cap:-<nothing>}'" >&2; exit 1 ;;
+esac
+
 # 4zy. /var, finalized — and packed as the installer's seed.
 #
 # This block used to open section 5, below the guard. It runs HERE now because the seed tarball it

@@ -88,11 +88,39 @@ find_power_dev() {
   return 1
 }
 
-panel() {  # $1 = 1 (blank) | 0 (unblank) — via gamescope's own KMS modeset
-  command -v gamescopectl >/dev/null 2>&1 || return 0
+# $1 = 1 (blank) | 0 (unblank) — via gamescope's own KMS modeset. RETURNS NON-ZERO when gamescope
+# could not be reached, which is the signal for the bl_power fallback below. It used to return 0 for
+# a missing gamescopectl, i.e. "nothing to do" — but there IS something to do, and reporting success
+# is what let a suspend proceed with the panel lit.
+panel() {
+  command -v gamescopectl >/dev/null 2>&1 || { log "no gamescopectl on PATH"; return 1; }
   gs_resolve_display || log "no live gamescope socket; trying ${GAMESCOPE_WAYLAND_DISPLAY:-gamescope-0}"
-  gamescopectl "drm_sleep_${NOVADECK_REST_SCREEN}_screen" "$1" 2>/dev/null \
-    || log "gamescopectl unreachable; panel unchanged"
+  gamescopectl "drm_sleep_${NOVADECK_REST_SCREEN}_screen" "$1" 2>/dev/null && return 0
+  log "gamescopectl unreachable; panel unchanged"
+  return 1
+}
+
+# THE FALLBACK, and the reason this file needs one. HW 2026-07-26: a cycle entered via
+# `systemctl suspend` — i.e. any path that is not Steam's own sleep flow — left the panel LIT for the
+# whole ~70s frozen window. novadeck-suspend runs as systemd-suspend.service (root, system.slice) and
+# cannot resolve the live gamescope socket from there, so the KMS blank above never happens: the
+# recorder read `panel=enabled` on all 43 frozen samples. Steam's client blank was the only thing
+# turning the screen off, which means idle timeout, a direct Suspend(), and every non-Steam entry
+# point slept with the backlight on.
+#
+# bl_power is the one lever reachable from system.slice with no session, no bus and no compositor:
+# 4 is FB_BLANK_POWERDOWN, 0 is FB_BLANK_UNBLANK. It does NOT disable the connector, so the DRM
+# `enabled` attribute wait_panel polls stays "enabled" — do not wait on it after using this, the
+# screen is dark but the connector is not. Glob is a seam so a test can point it at a fake tree.
+: "${NOVADECK_BL_GLOB:=/sys/class/backlight/*}"
+bl_power() {  # $1 = 4 (powerdown) | 0 (unblank)
+  _bl_n=0
+  for _bl in $NOVADECK_BL_GLOB; do
+    [ -w "$_bl/bl_power" ] || continue
+    echo "$1" > "$_bl/bl_power" 2>/dev/null && _bl_n=$((_bl_n + 1))
+  done
+  [ "$_bl_n" -gt 0 ] || return 1
+  log "backlight: bl_power=$1 on $_bl_n device(s)"
 }
 
 freeze() {  # $1 = 1 (freeze) | 0 (thaw) — direct sysfs write, no dbus/systemctl dependency
@@ -127,8 +155,15 @@ do_suspend() {
   [ -e "$STATE" ] && { log "already suspended"; return 0; }
   mkdir -p "$(dirname "$STATE")"
   log "suspending: blank panel"
-  panel 1
-  if wait_panel disabled; then log "panel blank confirmed"; else log "panel blank NOT confirmed in ${NOVADECK_PANEL_WAIT_DS}ds; freezing anyway"; fi
+  # SHORT-CIRCUIT ON PURPOSE: when panel 1 reports gamescope unreachable there is nothing that will
+  # ever flip the connector, so waiting the full NOVADECK_PANEL_WAIT_DS for it is 3s of the suspend
+  # path spent proving a foregone conclusion. Go straight to the backlight instead.
+  if panel 1 && wait_panel disabled; then
+    log "panel blank confirmed"
+  else
+    log "no KMS blank; falling back to the backlight"
+    bl_power 4 || log "no writable bl_power either — SLEEPING WITH THE PANEL LIT"
+  fi
   log "freezing: $NOVADECK_SUSPEND_FREEZE_CGROUPS"
   freeze 1
   # Lower power AFTER the freeze (no frozen workload left to schedule): offline non-boot CPUs, block
@@ -182,8 +217,15 @@ do_resume() {
   log "resuming: thaw"
   freeze 0
   log "unblank panel"
-  panel 0
-  if wait_panel enabled; then log "panel restore confirmed"; else log "panel restore NOT confirmed in ${NOVADECK_PANEL_WAIT_DS}ds"; fi
+  # bl_power 0 FIRST and UNCONDITIONALLY, whichever way the blank happened. It is a no-op when the
+  # backlight is already on, and if the blank came from the fallback then nothing else will undo it —
+  # gamescope never knew the screen was off. Getting this wrong strands a woken device dark.
+  bl_power 0
+  if panel 0 && wait_panel enabled; then
+    log "panel restore confirmed"
+  else
+    log "panel restore NOT confirmed in ${NOVADECK_PANEL_WAIT_DS}ds"
+  fi
   # post-resume hooks (run un-frozen, after thaw): generic extension point. None ship by default (NM
   # re-associates unaided after the rfkill-unblock). Missing dir = no hooks, no-op.
   for h in /etc/novadeck/resume.d/*; do

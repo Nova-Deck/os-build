@@ -600,6 +600,34 @@ done
 mkdir -p "$stage/$payload_dest"
 cp -a "$payload/usr" "$stage/$payload_dest/"
 
+# The lsfg-vk frame-generation Vulkan layer (make lsfg-vk), into the SAME payload so it rides the
+# same overlay and the same NEEDED gate below. REQUIRED for the same reason the Turnip is: half a
+# layer pair is worse than none, and the Makefile orders the fetch so this always exists here.
+#
+# It is INERT unless three things line up: the user owns Lossless Scaling, has switched it to the
+# `lsfg-vk` Steam beta branch (the only place the v2 shader DLL is published), and has enabled
+# frame generation for a specific game. It is an implicit layer, so it would otherwise load into
+# every x86 Vulkan app on the device -- DISABLE_LSFGVK=1 in the session env is what keeps it off,
+# and the per-game env tombstone is what lifts it. See packages/lsfg-vk/payload.pin.
+lsfg_payload="$ROOT/work/lsfg-vk-x86/out"
+echo "  staging FEX guest lsfg-vk frame-generation layer (/$payload_dest)"
+for f in usr/lib/liblsfg-vk-layer.so usr/lib/liblsfg-vk-layer.x86.so usr/bin/lsfg-vk-cli \
+         usr/share/vulkan/implicit_layer.d/VkLayer_LSFGVK_frame_generation.json \
+         usr/share/vulkan/implicit_layer.d/VkLayer_LSFGVK_frame_generation.x86.json; do
+  [ -s "$lsfg_payload/$f" ] \
+    || { echo "ERROR: lsfg-vk payload incomplete: missing $f (make lsfg-vk)" >&2; exit 1; }
+done
+cp -a "$lsfg_payload/usr" "$stage/$payload_dest/"
+
+# Re-assert the manifest-relative library_path on the STAGED copy, not just where fetch.sh checked
+# it. An absolute path here resolves against the container's /usr under Valve's /run/gfx republish
+# and the Vulkan loader drops the layer with NO error -- the same silent-drop class the mesa ICDs
+# are rewritten for above, and a silent drop is indistinguishable from "frame generation is off".
+for m in "$stage/$payload_dest"/usr/share/vulkan/implicit_layer.d/VkLayer_LSFGVK_*.json; do
+  grep -q '"library_path": "\.\./\.\./\.\./lib/' "$m" \
+    || { echo "ERROR: ${m#"$stage"} lost its manifest-relative library_path between fetch and stage" >&2; exit 1; }
+done
+
 # NEEDED-closure gate: every DT_NEEDED of every payload .so must resolve inside the merged guest
 # (the guest's own libdir, or the payload itself, which overlays it). An ICD with an unresolvable
 # dep is dropped SILENTLY by pressure-vessel's dlopen inspection and dies quietly under system
@@ -632,10 +660,26 @@ for libdir in usr/lib usr/lib32; do
   guest_has "$libdir" libc.so.6 \
     || { echo "ERROR: cannot read /$libdir/libc.so.6 out of the pinned FEX guest -- the guest image or dump.erofs is unusable, and no dependency verdict below can be trusted" >&2; exit 1; }
   for so in "$stage/$payload_dest/$libdir"/*.so*; do
+    [ -e "$so" ] || continue   # a libdir with no .so at all must not match the glob literally
+    # THE LIBDIR TO COMPARE AGAINST IS CHOSEN BY ELF CLASS, NOT BY DIRECTORY, and that is not
+    # pedantry: since lsfg-vk, usr/lib holds a 32-bit ELF on purpose. Upstream's Vulkan layer
+    # manifests carry a manifest-relative library_path (`../../../lib/liblsfg-vk-layer.x86.so`),
+    # which is exactly what makes them resolve under both our overlay and Valve's /run/gfx
+    # republish -- so the i686 layer has to sit in usr/lib beside the 64-bit one, and the licence
+    # (CC-BY-NC-ND) says we do not rewrite their manifest to move it. Judging that file against
+    # the guest's 64-bit /usr/lib would still PASS, because the sonames it needs (libstdc++.so.6,
+    # libm, libgcc_s, libc) exist in both libdirs -- so the gate would be right by luck and would
+    # stay right by luck until the day some payload needed a soname present in only one arch.
+    case "$(readelf -h "$so" | sed -n 's/.*Class:[[:space:]]*ELF\(32\|64\).*/\1/p')" in
+      32) needdir=usr/lib32 ;;
+      64) needdir=usr/lib   ;;
+      *)  echo "ERROR: ${so#"$stage"}: cannot read ELF class -- not an ELF, or readelf failed" >&2; exit 1 ;;
+    esac
     for need in $(readelf -d "$so" | sed -n 's/.*(NEEDED).*\[\(.*\)\].*/\1/p'); do
-      if ! guest_has "$libdir" "$need" \
+      if ! guest_has "$needdir" "$need" \
+         && [ ! -e "$stage/$payload_dest/$needdir/$need" ] \
          && [ ! -e "$stage/$payload_dest/$libdir/$need" ]; then
-        echo "ERROR: ${so#"$stage"} NEEDs $need, which neither the guest /$libdir nor the payload provides" >&2
+        echo "ERROR: ${so#"$stage"} NEEDs $need, which neither the guest /$needdir nor the payload provides" >&2
         exit 1
       fi
     done
@@ -1003,7 +1047,7 @@ fi
 # dist/ is built by `make decky-plugin` (a $(ROOTFS) prerequisite); missing means a stale
 # invocation bypassed make — fail rather than assemble an image without its settings UI.
 # Keep this list in step with DECKY_PLUGINS in the Makefile and assertion 9 in guard-rootfs.sh.
-for plugin_name in novadeck-control novadeck-monitor; do
+for plugin_name in novadeck-control novadeck-monitor novadeck-framegen; do
   plugin_src="$ROOT/apps/decky/$plugin_name"
   plugin_dest="$stage/usr/share/decky-plugins/$plugin_name"
   [ -s "$plugin_src/dist/index.js" ] || {

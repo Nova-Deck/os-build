@@ -229,6 +229,30 @@ else
         NOVADECK_DEV, or pass NOVADECK_INSTALLER_ALLOW_DEV=1 if a dev medium is what you asked for."
 fi
 
+# A RELEASE MEDIUM INSTALLS THE LATEST STABLE RELEASE, and that is asserted here rather than
+# assumed. The medium is not pinned to a bundle — it resolves <channel>/latest.json at install time
+# — so "which channel" is the whole of "which OS does this install". release-info resolves it the
+# way novadeck-update does (environment, then /etc/novadeck/ota.conf, then a built-in `stable`), so
+# the default is correct but it is a DEFAULT, not a constant: mkroot.sh writes that ota.conf when
+# built with NOVADECK_OTA_CHANNEL, and a medium carrying one installs from somewhere else with no
+# outward sign. Nothing in CI sets it, which is exactly the kind of thing that stays true until it
+# quietly does not.
+#
+# Same shape as the mode check above, and gated on the same distinction: a dev medium may point
+# wherever it likes (that is what the pin is for), a release medium may not.
+pin=""
+if sqfs etc/novadeck/ota.conf >"$T/ota.conf" 2>/dev/null && [ -s "$T/ota.conf" ]; then
+  pin=$(sed -n 's/^OTA_CHANNEL=//p' "$T/ota.conf" | tail -1)
+fi
+if [ -z "$pin" ]; then
+  ok "no channel pin — this medium installs the latest release from 'stable'"
+elif [ "$mode" != release ] || [ "$ALLOW_DEV" = 1 ]; then
+  ok "channel pinned to '$pin' (dev medium — it will not see 'stable')"
+else
+  bad "a RELEASE medium is pinned to the '$pin' channel and will not install the latest stable
+        release. That pin comes from NOVADECK_OTA_CHANNEL at mkroot.sh time; rebuild without it."
+fi
+
 # ----------------------------------------------------------------------------------------------
 echo "  6. it can actually install"
 # A MEDIUM THAT BOOTS AND CANNOT INSTALL is the failure this section exists for. Everything below

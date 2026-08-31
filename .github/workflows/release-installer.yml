@@ -68,6 +68,16 @@ jobs:
           case "$v" in
             *[!A-Za-z0-9._-]*) echo "::error::version '$v' has characters that do not belong in a URL path"; exit 1 ;;
           esac
+          # NO PRE-RELEASE MEDIA, for the reason release-sdcard.yml refuses them: release-bundle.yml
+          # reads a semver pre-release suffix as "publish to the beta channel", so the suffix now
+          # means something a medium cannot deliver. A medium is not pinned to a bundle at all — it
+          # resolves <channel>/latest.json at install time and a release one resolves `stable`
+          # (asserted in installer/verify-image.sh) — so `installer/v0.0.2-beta.1` would install
+          # exactly what `installer/v0.0.2` installs, while reading as though it had installed a
+          # beta. Refuse the tag rather than ship that ambiguity.
+          case "$v" in
+            *-*) echo "::error::version '$v' carries a pre-release suffix, which on an ota/ tag selects the beta channel. A medium installs the latest STABLE release whatever its own version says, so the suffix would be a lie. Tag the installer without it."; exit 1 ;;
+          esac
           if [ "$GITHUB_REF_TYPE" = tag ] || [ "${INPUT_PUBLISH:-false}" = true ]; then
             p=true
           else

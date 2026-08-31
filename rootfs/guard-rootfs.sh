@@ -582,6 +582,67 @@ if [ "$rauc_ok" = 1 ]; then
 fi
 
 # ------------------------------------------------------------------------------------------
+# 7b. The boot-disk-scoped partition links exist, and everything that names them agrees.
+#
+# FOUR consumers resolve a partition by name after switch_root -- /esp and /home in /etc/fstab,
+# grow-home's repart target, and rauc's slot devices -- and all four now go through
+# /dev/novadeck/<GPT name>, which exists only for partitions on the disk we booted from. The rule
+# and its match program are what create those links; without either, the links are simply absent and
+# NOTHING SAYS SO AT RUNTIME. What the device does instead is boot with no /home and no /esp, fail
+# to confirm the trial, and roll back to the other slot -- survivable by design, and a full release
+# cycle to diagnose from the symptom. This is the cheap place to notice.
+#
+# ASSERTED AGAINST THE BUILT TREE, and the exec bit is checked for the reason assertion 7 already
+# gives: a shipped script that loses its exec bit in a tree refactor is a failure with no error
+# message. A udev PROGRAM that cannot be executed does not match, and a rule that does not match
+# creates no link and logs nothing a user will ever see.
+#
+# The last two checks are the ones that catch a HALF-APPLIED change: a tree where the links exist
+# but fstab still says LABEL=, or where system.conf was reverted, is a tree where the ambiguity is
+# back for that consumer alone -- which is strictly worse than not having the mechanism, because the
+# other three consumers now disagree with it about which disk they are on.
+# ------------------------------------------------------------------------------------------
+echo "  7b. boot-disk-scoped partition links"
+bootdisk_ok=1
+BD_RULE="$STAGE/usr/lib/udev/rules.d/69-novadeck-bootdisk.rules"
+BD_PROG="$STAGE/usr/lib/novadeck/on-boot-disk"
+
+if [ ! -s "$BD_RULE" ]; then
+  bootdisk_ok=0
+  bad "/usr/lib/udev/rules.d/69-novadeck-bootdisk.rules is missing — /dev/novadeck/* would never be created, so /esp, /home and the rauc slots all resolve to nothing"
+fi
+if [ ! -s "$BD_PROG" ]; then
+  bootdisk_ok=0
+  bad "/usr/lib/novadeck/on-boot-disk is missing — the rule's PROGRAM cannot match, so no link is created"
+elif [ ! -x "$BD_PROG" ]; then
+  bootdisk_ok=0
+  bad "/usr/lib/novadeck/on-boot-disk is not executable — udev cannot run it, the rule never matches, and no link is created"
+fi
+# The rule has to name the program at the path the program actually occupies. They are two files in
+# two different trees (udev/rules.d and novadeck/), so a move renames one and not the other.
+if [ -s "$BD_RULE" ] && ! grep -q '/usr/lib/novadeck/on-boot-disk' "$BD_RULE"; then
+  bootdisk_ok=0
+  bad "69-novadeck-bootdisk.rules does not name /usr/lib/novadeck/on-boot-disk — its PROGRAM points somewhere else"
+fi
+for row in NOVADECK-ESP:/esp novadeck-home:/home; do
+  if ! grep -q "^/dev/novadeck/${row%%:*}[[:space:]]" "$STAGE/etc/fstab" 2>/dev/null; then
+    bootdisk_ok=0
+    bad "/etc/fstab does not mount ${row##*:} from /dev/novadeck/${row%%:*} — that mount follows whichever disk udev enumerated first"
+  fi
+done
+if grep -qE '^(PARTLABEL|LABEL)=(NOVADECK-ESP|novadeck-home)[[:space:]]' "$STAGE/etc/fstab" 2>/dev/null; then
+  bootdisk_ok=0
+  bad "/etc/fstab still carries a bare PARTLABEL=/LABEL= row for the ESP or home — the scoped link and the label row would race for the same mountpoint"
+fi
+if [ -s "$STAGE/etc/rauc/system.conf" ] && grep -q '^device=/dev/disk/by-partlabel/' "$STAGE/etc/rauc/system.conf"; then
+  bootdisk_ok=0
+  bad "etc/rauc/system.conf still names its slots by-partlabel — an OTA can write the other disk's slot"
+fi
+if [ "$bootdisk_ok" = 1 ]; then
+  echo "    ok  69-novadeck-bootdisk.rules + executable on-boot-disk; fstab and rauc slots both name /dev/novadeck/"
+fi
+
+# ------------------------------------------------------------------------------------------
 # 8. The system UID/GID allocation matches the pin.
 #
 # /usr/lib/sysusers.d/01-novadeck-enforce-ids.conf declares an id for every name in the range

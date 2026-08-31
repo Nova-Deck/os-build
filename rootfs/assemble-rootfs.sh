@@ -449,8 +449,8 @@ fi
 
 # 4g. First-boot STORAGE (the deck user's growable home). SteamOS sizes /home to the disk at
 # install time; we dd a fixed image to a card, so we grow on first boot instead. Three pieces:
-#  - /etc/fstab mounts the dedicated home partition (LABEL=novadeck-home, ext4) at /home. nofail so
-#    a card without that partition (the old 2-partition test image) still boots.
+#  - /etc/fstab mounts the dedicated home partition (/dev/novadeck/novadeck-home, ext4) at /home.
+#    nofail so a card without that partition (the old 2-partition test image) still boots.
 #  - novadeck-grow-home: a oneshot that extends the home partition (systemd-repart) + its ext4
 #    (resize2fs from e2fsprogs, in the base) to fill the device on first boot, before /home mounts.
 #  - the deck user (uid 1000) is baked into the base /etc (customize-base.sh); the seeder above
@@ -459,20 +459,30 @@ fi
 #  definition: GPT bit 63 (partition-table.txt) keeps gpt-auto from auto-mounting it at /efi.
 echo "  injecting first-boot storage: /home mount + grow (deck user baked in base)"
 mkdir -p "$stage/etc"
-if ! grep -q 'PARTLABEL=NOVADECK-ESP' "$stage/etc/fstab" 2>/dev/null; then
+#
+# BOTH ROWS NAME /dev/novadeck/<GPT name>, NOT PARTLABEL=/LABEL=. Every novadeck medium carries the
+# same eight GPT names, so with a card inserted in a device installed to internal storage a label
+# names whichever disk udev enumerated first — and udev publishes ONE symlink per duplicate name, so
+# the loser gets none at all. /dev/novadeck/* is the same set of links scoped to the disk we booted
+# from (usr/lib/udev/rules.d/69-novadeck-bootdisk.rules + usr/lib/novadeck/on-boot-disk), which is
+# the only disk either of these mounts can correctly mean. It matters most for the ESP: stage 2
+# INCREMENTS boot-attempts on the booted disk's ESP, and mark-good clears it through this mount — on
+# the wrong ESP the counter climbs every boot until steamcl's failsafe fires, and the other
+# install's A.conf is stamped over. Both confs are named A.conf, so nothing downstream can notice.
+if ! grep -q '/dev/novadeck/NOVADECK-ESP' "$stage/etc/fstab" 2>/dev/null; then
   printf '%s\n' \
     '# novadeck shared ESP — SteamOS/conf + steamcl (stage 1). Mounted here at /esp; GPT bit 63' \
     '# keeps gpt-auto away so the initramfs can mount the slot efi partition at /efi instead.' \
-    'PARTLABEL=NOVADECK-ESP  /esp  vfat  defaults,nofail,noatime  0 2' \
+    '/dev/novadeck/NOVADECK-ESP  /esp  vfat  defaults,nofail,noatime  0 2' \
     >>"$stage/etc/fstab"
 fi
-if ! grep -q 'LABEL=novadeck-home' "$stage/etc/fstab" 2>/dev/null; then
+if ! grep -q '/dev/novadeck/novadeck-home' "$stage/etc/fstab" 2>/dev/null; then
   printf '%s\n' \
     '# novadeck shared data partition — the deck user home + Steam library live here.' \
     '# novadeck-grow-home.service grows BOTH the partition (systemd-repart) and the ext4 (resize2fs)' \
     '# before this mounts. x-systemd.growfs stays only as a belt-and-suspenders fallback (a no-op' \
     '# once grow-home has already sized the fs to the partition).' \
-    'LABEL=novadeck-home  /home  ext4  defaults,nofail,x-systemd.growfs  0 2' \
+    '/dev/novadeck/novadeck-home  /home  ext4  defaults,nofail,x-systemd.growfs  0 2' \
     >>"$stage/etc/fstab"
 fi
 
@@ -733,12 +743,17 @@ cat >"$stage/usr/lib/novadeck/grow-home.sh" <<'GROW'
 # x-systemd.growfs that lost a race to home.mount and left the ext4 at the flashed ~1G. Idempotent.
 set -eu
 
-HOME_DEV=/dev/disk/by-label/novadeck-home
+# /dev/novadeck/, NOT /dev/disk/by-label/: this script resolves the partition and then hands its
+# PARENT DISK to systemd-repart, which writes the GPT. With two novadeck media attached, by-label
+# names an arbitrary one, so the by-label version of this line could grow the internal install's
+# home partition — and rewrite the internal disk's GPT — while booted off a card. The scoped link
+# only ever names a partition on the disk we booted from (69-novadeck-bootdisk.rules).
+HOME_DEV=/dev/novadeck/novadeck-home
 
-# Wait for udev to publish the home partition's by-label symlink. Even ordered After
-# systemd-udev-trigger, the probe that creates the symlink is async, so settle the queue and then
-# poll briefly. A card without a home partition (nofail / old 2-partition test image) never shows it,
-# so time out after ~10s and no-op (x-systemd.growfs covers any fs at mount) rather than hang boot.
+# Wait for udev to publish the home partition's symlink. Even ordered After systemd-udev-trigger,
+# the probe that creates the symlink is async, so settle the queue and then poll briefly. A card
+# without a home partition (nofail / old 2-partition test image) never shows it, so time out after
+# ~10s and no-op (x-systemd.growfs covers any fs at mount) rather than hang boot.
 udevadm settle --timeout=30 2>/dev/null || true
 i=0
 while [ ! -b "$HOME_DEV" ] && [ "$i" -lt 50 ]; do

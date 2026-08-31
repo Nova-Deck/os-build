@@ -53,7 +53,12 @@ EFI=${EFI:-/efi}              # the RUNNING slot's efi partition (SteamOS/partse
 MNT=${MNT:-/run/novadeck/rauc-target}
 EFIMNT=${EFIMNT:-/run/novadeck/rauc-efi}
 VAR=${VAR:-/var}
-DEVDIR=${DEVDIR:-/dev/disk/by-partlabel}
+# /dev/novadeck/, NOT /dev/disk/by-partlabel/: the same GPT names exist on every novadeck medium, so
+# by-partlabel would let this hook reformat the /var and rewrite the efi partition of the OTHER disk
+# when two are attached. The links here are scoped to the disk we booted from
+# (/usr/lib/udev/rules.d/69-novadeck-bootdisk.rules), which is the disk rauc just wrote a slot on --
+# etc/rauc/system.conf names its slot devices through the same links, so the two cannot disagree.
+DEVDIR=${DEVDIR:-/dev/novadeck}
 DEVTEST=${DEVTEST:--b}
 BC=${BC:-steamos-bootconf}
 BC_ARGS=(--conf-dir "$ESP/SteamOS/conf" --efi-dir "$EFI")

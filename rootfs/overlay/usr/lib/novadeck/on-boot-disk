@@ -1,0 +1,82 @@
+#!/bin/sh
+# novadeck boot-disk test — the match half of usr/lib/udev/rules.d/69-novadeck-bootdisk.rules.
+#
+#   /usr/lib/novadeck/on-boot-disk <kernel name>      exit 0 = this partition is on the boot disk
+#
+# WHY THIS EXISTS. Every novadeck medium carries the same eight GPT names (image/partition-table.txt),
+# so the instant a card is inserted in a device that is also installed to internal storage,
+# /dev/disk/by-partlabel/novadeck-root-A and /dev/disk/by-label/novadeck-home name whichever disk
+# udev enumerated first. udev creates ONE symlink per duplicate name, so the loser gets no link at
+# all — the choice is not merely ambiguous, it is invisible.
+#
+# The BOOTLOADER half of this problem was closed by naming root/var/efi on the kernel cmdline by
+# PARTUUID (boot/gen-grub-cfg.sh derives them with `probe --part-uuid` off the disk steamcl
+# chainloaded from). Everything the RUNNING system resolves was left on labels, and four things
+# resolve partitions after switch_root:
+#
+#   /esp     /etc/fstab      the shared ESP — SteamOS/conf, where boot-attempts is CLEARED. Stage 2
+#                            increments the counter on the booted disk's ESP; if the OS clears it on
+#                            the OTHER disk's ESP the counter climbs every boot until steamcl's
+#                            failsafe fires, and the other install's conf is stamped over.
+#   /home    /etc/fstab      the deck user's home and rauc's data-directory.
+#   home     grow-home.sh    which then runs systemd-repart on that partition's PARENT DISK — i.e.
+#                            it can rewrite the other disk's GPT.
+#   slots    rauc            /etc/rauc/system.conf, so an OTA can land in the other disk's slot.
+#
+# All four now name /dev/novadeck/<GPT name>, which exists only for partitions on the disk we
+# actually booted.
+#
+# HOW THE BOOT DISK IS KNOWN. The initramfs resolved root= (a PARTUUID) to a real device node and
+# wrote it to /run/novadeck/boot before switch_root; /run is moved into the new root by switch_root,
+# so it is there before udev's coldplug trigger runs. Nothing has to be derived twice and nothing
+# has to agree with the build.
+#
+# IT FAILS OPEN, DELIBERATELY. When the boot disk cannot be determined — no /run/novadeck/boot (a
+# dev boot, or an initramfs that degraded), no root= line, a root that is not a partition — this
+# exits 0 and every novadeck partition gets a link. That is EXACTLY today's by-partlabel behaviour,
+# so a single-disk device can never be made worse by this file, and a device whose /run handoff is
+# missing still mounts /home and still updates. The only thing lost in that case is the
+# disambiguation, which is what there was none of before.
+#
+# It fails CLOSED in one place: a candidate partition whose own sysfs entry cannot be read, once the
+# boot disk IS known. There, "cannot tell" must not mean "link it" — the boot disk's own partitions
+# are readable by construction, so the only partitions that arm can drop are ones on some other
+# device we could not inspect.
+#
+# NO STATE, NO CACHE, NO LOGGING. This runs from a udev rule for every partition uevent, including
+# coldplug, so it is three file reads and a string compare. udev discards stdout of a PROGRAM match
+# and stderr goes to the journal as a udev worker error, so a chatty version of this would be noise
+# on every boot on every device.
+set -u
+
+# Seams, for tests/test-boot-disk.sh — which executes THIS file, not a copy, so what it asserts is
+# what ships. Both default to the real paths and nothing here is otherwise conditional on being
+# under test: the suite builds a sysfs-shaped fixture with two disks and points them at it.
+SYSBLOCK=${NOVADECK_SYSBLOCK:-/sys/class/block}
+BOOTINFO=${NOVADECK_BOOTINFO:-/run/novadeck/boot}
+
+part=${1:-}
+[ -n "$part" ] || exit 0
+
+# The containing disk of a partition, as a canonical path. Fails when the argument is not a
+# partition at all, which is the case both callers below have to distinguish from "a different disk".
+parent_disk() {  # <kernel name>
+  [ -e "$SYSBLOCK/$1/partition" ] || return 1
+  readlink -f "$SYSBLOCK/$1/.." 2>/dev/null
+}
+
+[ -r "$BOOTINFO" ] || exit 0
+# `root=` is written by image/initramfs/init as the RESOLVED device node (findfs output), not as the
+# PARTUUID spec it came from. readlink -f is belt to that brace and costs nothing.
+rootdev=$(sed -n 's/^root=//p' "$BOOTINFO" 2>/dev/null | head -1)
+[ -n "$rootdev" ] || exit 0
+rootdev=$(readlink -f "$rootdev" 2>/dev/null) || exit 0
+[ -n "$rootdev" ] || exit 0
+
+bootdisk=$(parent_disk "${rootdev##*/}") || exit 0
+[ -n "$bootdisk" ] || exit 0
+
+candidate=$(parent_disk "$part") || exit 1
+[ -n "$candidate" ] || exit 1
+
+[ "$candidate" = "$bootdisk" ]

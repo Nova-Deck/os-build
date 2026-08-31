@@ -1,0 +1,29 @@
+# novadeck: /dev/novadeck/<GPT name> — the by-partlabel links, scoped to the disk we booted from.
+#
+# The whole rationale is in /usr/lib/novadeck/on-boot-disk, which decides the match. In one line:
+# every novadeck medium carries the same eight GPT names, so /dev/disk/by-partlabel/* and
+# /dev/disk/by-label/* name an arbitrary disk once a card is inserted in a device that is installed
+# to internal storage — and the four things the RUNNING system resolves by name (/esp, /home,
+# grow-home's repart target, and rauc's slot devices) all followed that arbitrary choice.
+#
+# 69-, NOT 60-. ID_PART_ENTRY_NAME is exported by the blkid builtin that 60-persistent-storage.rules
+# imports, and udev sorts rule FILES lexically across every rules directory: "60-novadeck-bootdisk"
+# sorts before "60-persistent-storage", so at 60 this would match an unset variable and silently
+# link nothing. 69 is after that import and still before the 70- input rules this tree already ships.
+#
+# The name is copied through verbatim rather than mapped to a short role, so this file enumerates
+# NOTHING and cannot drift from image/partition-table.txt. Adding a ninth partition needs no edit
+# here; it needs one at the consumer that wants to name it.
+
+ACTION=="remove", GOTO="novadeck_bootdisk_end"
+SUBSYSTEM!="block", GOTO="novadeck_bootdisk_end"
+ENV{DEVTYPE}!="partition", GOTO="novadeck_bootdisk_end"
+ENV{ID_PART_ENTRY_SCHEME}!="gpt", GOTO="novadeck_bootdisk_end"
+ENV{ID_PART_ENTRY_NAME}!="novadeck-*|NOVADECK-*", GOTO="novadeck_bootdisk_end"
+
+# PROGRAM is a MATCH key: the SYMLINK is added only on exit 0. on-boot-disk exits 0 for "on the boot
+# disk" AND for "the boot disk cannot be determined" — see its header for why the second is
+# deliberate, and why it is the only behaviour that cannot regress a single-disk device.
+PROGRAM=="/usr/lib/novadeck/on-boot-disk %k", SYMLINK+="novadeck/$env{ID_PART_ENTRY_NAME}"
+
+LABEL="novadeck_bootdisk_end"

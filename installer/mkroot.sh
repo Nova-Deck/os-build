@@ -241,6 +241,12 @@ KVER="$(ls "$MODROOT/lib/modules" 2>/dev/null | head -1 || true)"
 # hardware-support set is what produced the ath11k hole.
 UDEV_DIR="$ROOT/rootfs/overlay/usr/lib/udev/rules.d"
 [ -d "$UDEV_DIR" ] || die "no ${UDEV_DIR#"$ROOT"/} — uinput permissions and the pad rules would be missing"
+# The one rule above that is not self-contained: 69-novadeck-bootdisk.rules matches through this
+# program. Required, not optional — the rules are copied wholesale, so the rule ships either way and
+# the only choice here is whether its PROGRAM exists. It is also hashed into the cache key with the
+# rules, so editing it rebuilds the medium; hashing the rules alone would let it go stale.
+BOOTDISK_PROG="$ROOT/rootfs/overlay/usr/lib/novadeck/on-boot-disk"
+[ -f "$BOOTDISK_PROG" ] || die "no ${BOOTDISK_PROG#"$ROOT"/} — 69-novadeck-bootdisk.rules would log a udev error per partition"
 
 FW_QCOM_DIR="$ROOT/firmware/qcom-fw"
 FW_LINUX_DIR="$ROOT/firmware/linux-fw"
@@ -289,7 +295,7 @@ osrelease:$(sha256sum "$OSRELEASE" | cut -d' ' -f1)
 esplabel:$ESP_LABEL
 firmware:$(sha256sum "$FW_QCOM_STAMP" "$FW_LINUX_STAMP" | sha256sum | cut -d' ' -f1)
 inputplumber:$(cat "$IP_DIR"/*/*.yaml 2>/dev/null | sha256sum | cut -d' ' -f1)
-udev:$(cat "$UDEV_DIR"/*.rules 2>/dev/null | sha256sum | cut -d' ' -f1)
+udev:$(cat "$UDEV_DIR"/*.rules "$BOOTDISK_PROG" 2>/dev/null | sha256sum | cut -d' ' -f1)
 modules:$KVER:$(sha256sum "$MODROOT/lib/modules/$KVER/modules.dep" | cut -d' ' -f1)
 dev:${DEV:-0}
 otachannel:${NOVADECK_OTA_CHANNEL:-none}
@@ -348,6 +354,12 @@ mkdir -p "$STAGE/inputplumber"
 cp -a "$IP_DIR/." "$STAGE/inputplumber/"
 mkdir -p "$STAGE/udev-rules"
 cp -a "$UDEV_DIR/." "$STAGE/udev-rules/"
+# 69-novadeck-bootdisk.rules matches through a PROGRAM, and the rules above are copied WHOLESALE, so
+# the medium gets that rule whether or not it wants it. It is inert here -- the installer medium's
+# own partitions are not named novadeck-*, and the target disk's links are written by nothing this
+# image reads -- but a rule whose PROGRAM is absent logs a udev worker error for every partition
+# uevent, on a medium whose whole job is to be diagnosable. So the match program travels with it.
+cp -p "$ROOT/rootfs/overlay/usr/lib/novadeck/on-boot-disk" "$STAGE/on-boot-disk"
 # The firmware trees are NOT copied into the staging directory: they are ~260 MB and would be
 # duplicated on every build. They cross as their own read-only mounts instead (see the docker run).
 cp    "$KEYRING_SRC" "$STAGE/keyring.pem"
@@ -652,6 +664,12 @@ docker run --rm --platform linux/arm64 \
     install -d -m0755 /target/usr/lib/udev/rules.d
     install -m0644 /prebuilt/udev-rules/*.rules /target/usr/lib/udev/rules.d/
     echo "[novadeck] udev: $(ls /prebuilt/udev-rules/*.rules | wc -l) overlay rules" >&2
+  fi
+  # The PROGRAM that 69-novadeck-bootdisk.rules matches through, at the absolute path the rule
+  # names. See the host half for why a medium that never uses the links still carries it.
+  # (No apostrophes in here: this whole block is inside a single-quoted bash -c.)
+  if [ -f /prebuilt/on-boot-disk ]; then
+    install -Dm0755 /prebuilt/on-boot-disk /target/usr/lib/novadeck/on-boot-disk
   fi
 
   # InputPlumber board configs. Without them the daemon runs but recognises none of the handheld

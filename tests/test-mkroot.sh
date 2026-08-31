@@ -129,6 +129,52 @@ for pin in "$ROOT/packages/inputplumber/prebuilt.pin" "$ROOT/installer/pygame-ce
       || bad "$rel declares dep '$dep', which pkgs.list does not carry"
   done
 done
+# Every `prebuilt` row in either lock is a pure function of a pin file: rootfs/genmanifest.sh walks
+# packages/*/prebuilt.pin directly, and installer/genlock.sh reads the marker installer/mkroot.sh
+# wrote from the same fields. So a pin bump that skipped `make relock` leaves a lock claiming a
+# version and a sha the build no longer places — a provenance record that is quietly wrong, and one
+# nothing else checks: rootfs/guard-rootfs.sh's lock assertion EXCLUDES prebuilt rows on purpose
+# (they are tarballs, not pacman packages).
+#
+# Driven from the LOCK ROWS outward, not from the pins: the two images carry different prebuilt
+# SETS — the medium takes inputplumber + the pygame-ce wheel, the OS root takes all of packages/*
+# and not the wheel — so "every pin has a row" is true of rootfs/manifest.lock only, and is
+# asserted separately below.
+find_pin() {   # a lock row names a prebuilt; locate the pin that declares it, wherever it lives
+  local want="$1" p
+  for p in "$ROOT"/packages/*/prebuilt.pin "$ROOT"/installer/*.pin; do
+    [ -e "$p" ] || continue
+    [ "$(pin_field "$p" name)" = "$want" ] && { echo "$p"; return 0; }
+  done
+  return 1
+}
+for spec in "rootfs/manifest.lock" "installer/manifest.lock"; do
+  lock="$ROOT/$spec"
+  if [ ! -f "$lock" ]; then bad "$spec is missing"; continue; fi
+  while read -r l_name l_ver l_sha; do
+    [ -n "$l_name" ] || continue
+    if ! pin="$(find_pin "$l_name")"; then
+      bad "$spec has a prebuilt row for '$l_name', and no pin declares it"
+      continue
+    fi
+    p_ver="$(pin_field "$pin" version)"; p_sha="$(pin_field "$pin" sha256)"
+    if [ "$l_ver $l_sha" = "$p_ver $p_sha" ]; then
+      ok "$spec records $l_name $l_ver at the pinned sha"
+    else
+      bad "$spec says '$l_name $l_ver $l_sha', ${pin#"$ROOT"/} says '$p_ver $p_sha' — relock it"
+    fi
+  done < <(awk '!/^#/ && $4 == "prebuilt" { print $1, $2, $5 }' "$lock")
+done
+# The OS root takes every pin under packages/ (customize-base.sh auto-discovers the directory), so
+# a pin with no row there means the lock predates it.
+for pin in "$ROOT"/packages/*/prebuilt.pin; do
+  [ -e "$pin" ] || continue
+  p_name="$(pin_field "$pin" name)"
+  awk -v n="$p_name" '!/^#/ && $1 == n && $4 == "prebuilt" { found = 1 } END { exit !found }' \
+      "$ROOT/rootfs/manifest.lock" \
+    && ok "rootfs/manifest.lock has a row for $p_name" \
+    || bad "rootfs/manifest.lock has no row for '$p_name', which customize-base.sh will place — run make relock"
+done
 # pygame-ce must stay OUT of packages/, or rootfs/customize-base.sh's auto-discovery ships 39 MB of
 # SDL bindings to every device. That is the whole reason the pin lives where it does.
 [ -e "$ROOT/packages/pygame-ce" ] \

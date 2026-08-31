@@ -92,6 +92,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.v.outputs.version }}
+      channel: ${{ steps.v.outputs.channel }}
     steps:
       - id: v
         env:
@@ -110,6 +111,39 @@ jobs:
             v=""
           fi
           echo "version=$v" >> "$GITHUB_OUTPUT"
+
+          # ============================================================================
+          # WHICH CHANNEL THIS TAG PUBLISHES TO: the semver PRE-RELEASE suffix, and
+          # nothing else. `ota/v0.3.0` -> stable. `ota/v0.3.0-beta.1` -> beta.
+          # ============================================================================
+          # The channel is the first path segment on the update server, and it is what a
+          # device's Settings -> System -> OS Update Channel picker selects between
+          # (rootfs/overlay/usr/bin/novadeck-update, CHANNELS). So this line is what makes
+          # that picker mean anything: without a beta directory on the server, choosing
+          # `Beta` points a device at a 404 and its update button quietly stops working.
+          #
+          # NOT A SEPARATE TAG NAMESPACE (`ota-beta/v*`), which is the obvious alternative
+          # and the shape the ota/ + card/ split would suggest. The suffix wins because the
+          # VERSION STRING ITSELF then records the channel, and duplicate detection turns on
+          # that string: novadeck-update's check compares the offered identity against the
+          # running one for INEQUALITY, so two channels publishing the same `0.3.0` would
+          # leave a device that switches stable -> beta believing it is already up to date.
+          # `0.3.0` and `0.3.0-beta.1` are distinct identities by construction, and the
+          # version the user reads in Settings says which channel they are on.
+          #
+          # A beta bundle is signed with the SAME release key and gated exactly as hard --
+          # the keyring and the dev-image refusal in ota/publish-bundle.sh are not relaxed
+          # here. The channel decides who is offered it, not whether it is trustworthy.
+          #
+          # Retention is per-channel for free: publish-bundle.sh writes to $DOCROOT/$CHANNEL
+          # and prunes within it, so a run of betas can never evict the stable release a
+          # device on `rel` is still being offered.
+          case "$v" in
+            *-*) channel=beta ;;
+            *)   channel=stable ;;
+          esac
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+          echo "::notice::version '${v:-<dev>}' publishes to the '$channel' channel"
 
   # ============================================================================================
   # build -> sign -> publish. THE BUILD HOLDS NO KEY AND NAMES NO ENVIRONMENT, so it starts the
@@ -240,7 +274,12 @@ jobs:
   # protected environment, and it is written rather than commented out so that decision is a matter
   # of adding secrets, not of writing a job under time pressure on release day.
   publish:
-    needs: sign
+    # `prep` alongside `sign` because the publish step below reads needs.prep.outputs.channel —
+    # a job cannot reference the outputs of one it does not declare a need on, and the reference
+    # would resolve to the EMPTY STRING rather than failing. publish-bundle.sh falls back to
+    # `stable` on an empty channel, so the symptom of forgetting this would be beta tags shipping
+    # to every device in the field.
+    needs: [prep, sign]
     # Only a tag can have produced a signed bundle, and only a signed bundle can be published. On a
     # dispatch this job would exist solely to fail its own keyring gate, so it does not run at all —
     # a skipped job that is always skipped teaches people to ignore skipped jobs.
@@ -323,8 +362,18 @@ jobs:
           # key is not in otapub's authorized_keys. CI is the other caller and names its own
           # principal — the one ota/setup-ci-user.sh created and the secret above authenticates as.
           NOVADECK_OTA_USER: ${{ vars.OTA_USER || 'otapub' }}
+          # Derived in `prep` from the tag's pre-release suffix; that step carries the reasoning.
+          # publish-bundle.sh reads this (its $2 default) and it is the ONLY thing that decides
+          # which directory devices are offered this bundle from.
+          NOVADECK_OTA_CHANNEL: ${{ needs.prep.outputs.channel }}
         run: |
           set -euo pipefail
+          # An empty channel would silently mean `stable` inside publish-bundle.sh — the one
+          # direction a mistake here must not go. Fail before the key is written to disk.
+          [ -n "${NOVADECK_OTA_CHANNEL:-}" ] || {
+            echo "::error::no channel came out of the prep job — refusing to fall back to stable"
+            exit 1
+          }
           key="$RUNNER_TEMP/ota_key"
           printf '%s\n' "$OTA_SSH_KEY" > "$key"
           chmod 600 "$key"

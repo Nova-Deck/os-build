@@ -57,7 +57,10 @@ package + guest rootfs (auto-registered with binfmt_misc). See `docs/FEX_README.
 **Steam shell (layer D) — native arm64 Steam plumbing**
 `usr/bin/novadeck-steam` (the session launcher target), the OOBE update-check stubs
 (`steamos-update`, `steamos-mandatory-update`, `jupiter-biosupdate`,
-`jupiter-initial-firmware-update` — SteamUI shells to these past the Wi-Fi/timezone screens), and
+`jupiter-initial-firmware-update` — SteamUI shells to these past the Wi-Fi/timezone screens),
+`steamos-select-branch` (Settings → System → *OS Update Channel*; a **symlink to
+`novadeck-update`**, which picks picker-vs-updater mode from `argv[0]` — the polkit wrapper execs
+the symlink for exactly that reason), and
 `50-novadeck-timezone.rules` (the one polkit grant stock polkit still prompts for). The Steam client
 SEED itself is build machinery, not rootfs content — it lives in `build/steam-seed/` and is pre-seeded
 into `/home` at image build time (`image/make-sdcard.sh`). See `docs/bringup-phase3.md`.

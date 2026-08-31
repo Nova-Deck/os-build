@@ -1,0 +1,20 @@
+#!/usr/bin/bash
+# Settings -> System -> OS Update Channel, the SETTER half. The Steam client reads the branch list
+# and the current branch off PATH (`steamos-select-branch -l` / `-c`) but writes through this path
+# (confirmed in the baked client, work/steam-seed/linuxarm64/steamclient.so):
+#
+#   /usr/bin/steamos-polkit-helpers/steamos-select-branch <branch>
+#
+# THIS WRAPPER IS NOT A PRIVILEGE BOUNDARY, for the same reason its steamos-update sibling is not:
+# the polkit-helpers directory holds pkexec wrappers shipped by jupiter-hw-support on SteamOS, and
+# we do not bake that package — so the path is only a path here. Nothing on this path needs
+# privileges either. Recording a channel writes one deck-owned file in /var (created by
+# usr/lib/tmpfiles.d/novadeck-var.conf); the bundle signature is what actually gates an install, on
+# whichever channel the device ends up pointed at.
+#
+# IT EXECS THE SYMLINK, NOT THE TARGET, and that is the whole reason this is not `exec
+# /usr/bin/novadeck-update "$@"` like the steamos-update wrapper next to it. novadeck-update picks
+# its mode from argv[0]: reached under its own name, `-l` and `-c` are unrecognised flags that it
+# ignores on the way to APPLYING AN UPDATE. Going through /usr/bin/steamos-select-branch keeps the
+# name, and with it the mode.
+exec /usr/bin/steamos-select-branch "$@"

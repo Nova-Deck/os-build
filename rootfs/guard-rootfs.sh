@@ -543,7 +543,9 @@ fi
 # rather than "the extraction lost it". Assert it is still a symlink, not merely present, so a copy
 # that dereferenced it (cp without -a, an rsync without -l) is caught here rather than by its
 # absence somewhere downstream. See [[declared-invariants-need-assertions]].
-for f in "$STAGE/usr/bin/novadeck-update" "$STAGE/usr/bin/steamos-polkit-helpers/steamos-update"; do
+for f in "$STAGE/usr/bin/novadeck-update" \
+         "$STAGE/usr/bin/steamos-polkit-helpers/steamos-update" \
+         "$STAGE/usr/bin/steamos-polkit-helpers/steamos-select-branch"; do
   if [ ! -s "$f" ]; then
     bad "${f#"$STAGE"} is missing — SteamUI's update button has nothing to call"
   elif [ ! -x "$f" ]; then
@@ -551,12 +553,30 @@ for f in "$STAGE/usr/bin/novadeck-update" "$STAGE/usr/bin/steamos-polkit-helpers
     bad "${f#"$STAGE"} is not executable — Steam runs it directly, so a lost mode bit is a dead button"
   fi
 done
-if [ ! -L "$STAGE/usr/bin/steamos-update" ]; then
-  if [ -e "$STAGE/usr/bin/steamos-update" ]; then
-    bad "/usr/bin/steamos-update is a regular file — it must stay a SYMLINK to novadeck-update (a dereferencing copy: cp without -a, rsync without -l)"
-  else
-    bad "/usr/bin/steamos-update is missing — the CLI entry point to the update client (btrfs restore drops symlinks without -S)"
+for l in steamos-update steamos-select-branch; do
+  if [ ! -L "$STAGE/usr/bin/$l" ]; then
+    if [ -e "$STAGE/usr/bin/$l" ]; then
+      bad "/usr/bin/$l is a regular file — it must stay a SYMLINK to novadeck-update (a dereferencing copy: cp without -a, rsync without -l)"
+    else
+      bad "/usr/bin/$l is missing — the CLI entry point to the update client (btrfs restore drops symlinks without -S)"
+    fi
   fi
+done
+
+# THE PICKER'S MODE IS ITS NAME, so the name is an invariant and not a convenience. novadeck-update
+# reads argv[0] to tell "list the OS update channels" from "install an update": under its own name
+# `-l` and `-c` are unrecognised FLAGS, which it ignores by design on the way to an install. Two
+# things therefore have to hold, and neither is visible in a directory listing:
+#
+#   - the symlink is named exactly steamos-select-branch (asserted just above, with the others), and
+#   - the polkit-helpers wrapper execs THAT PATH rather than /usr/bin/novadeck-update, which is
+#     what its sibling does and what anyone tidying the two into a matching pair would write.
+#
+# Get the second wrong and the OS Update Channel picker starts writing 4G over the inactive slot.
+if [ -s "$STAGE/usr/bin/steamos-polkit-helpers/steamos-select-branch" ] \
+   && ! grep -qE '^[[:space:]]*exec[[:space:]]+/usr/bin/steamos-select-branch\b' \
+        "$STAGE/usr/bin/steamos-polkit-helpers/steamos-select-branch"; then
+  bad "the steamos-select-branch polkit wrapper does not exec /usr/bin/steamos-select-branch — execing novadeck-update directly loses the argv[0] that selects picker mode, and turns a channel query into an install"
 fi
 
 # Presence is not installability. Every check above passed on a tree whose system.conf rejected

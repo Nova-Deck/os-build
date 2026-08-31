@@ -525,5 +525,134 @@ else
 fi
 
 # =================================================================================================
+# THE OS UPDATE CHANNEL PICKER — the same shipped file, reached under its other name.
+#
+# Steam finds `steamos-select-branch` on PATH and drives it with -l / -c / <token>. The mode is
+# chosen by argv[0], so the symlink is what these cases exercise: running the client through a link
+# of that name is the ONLY way to reach the picker, and running it under its own name with the same
+# arguments must still mean "install an update". Both directions are asserted below, because the
+# failure they guard is not symmetric — one is a dead settings page, the other writes 4G over the
+# inactive slot.
+BRANCH="$W/bin/steamos-select-branch"
+ln -sf "$CLIENT" "$BRANCH"
+
+# Same env seams as run(), minus the ones only the update path uses. NOVADECK_OTA_CHANNEL is NOT
+# set here: it outranks the user's pick by design, and setting it would make every case below pass
+# for the wrong reason.
+branch() { # <arg...> -- env assignments allowed first
+  local -a envs=()
+  while [ $# -gt 0 ] && [[ $1 == *=* ]]; do envs+=("$1"); shift; done
+  : >"$W/requests.log"
+  OUT="$(env PATH="$W/bin:$PATH" WWW="$W/www" \
+      NOVADECK_CURL="$W/bin/curl" \
+      NOVADECK_OTA_URL="https://updates.example" \
+      NOVADECK_OTA_CONFIG="$W/nonexistent.conf" \
+      NOVADECK_OTA_CHANNEL_STATE="$W/update-channel" \
+      NOVADECK_OTA_STAGE="$W/stage" \
+      NOVADECK_STEAM_LOGINUSERS="$W/loginusers.vdf" \
+      "${envs[@]}" python3 "$BRANCH" "$@" 2>"$W/err")"
+  RC=$?
+  ERR="$(cat "$W/err")"
+}
+
+CASE="branch-list"
+rm -f "$W/update-channel"
+branch -l
+[ "$RC" = 0 ] && ok "exit 0" || bad "exit $RC, expected 0"
+# The tokens are Valve's, not ours: steamclient's EOSBranch enum is closed and SelectOSBranch
+# refuses anything outside it, so a channel renamed without its token being remapped would render
+# as a branch the client rejects the moment it is clicked.
+[ "$OUT" = "$(printf 'rel\nbeta')" ] && ok "lists Valve's tokens, one per line ('rel', 'beta')" \
+                                     || bad "listed '$OUT', expected 'rel' then 'beta'"
+
+CASE="branch-current-default"
+branch -c
+[ "$OUT" = "rel" ] && ok "an unselected device reports the default channel's token" \
+                   || bad "reported '$OUT', expected 'rel'"
+[ "$(requests)" = 0 ] && ok "answered without touching the network" \
+                      || bad "made $(requests) request(s) — Settings would stall with no Wi-Fi"
+
+CASE="branch-set"
+branch beta
+[ "$RC" = 0 ] && ok "accepts the token it advertised" || bad "exit $RC for 'beta'"
+[ "$(cat "$W/update-channel")" = "beta" ] && ok "records the CHANNEL name, not the token" \
+                                          || bad "recorded '$(cat "$W/update-channel")'"
+branch -c
+[ "$OUT" = "beta" ] && ok "-c reflects the pick" || bad "reported '$OUT' after picking beta"
+
+CASE="branch-drives-the-fetch"
+# The point of the whole feature: a pick has to change which directory `check` reads. If -c and the
+# manifest URL ever disagree, the UI says one channel and the device fetches another.
+manifest beta '{"version":"2.0.0","bundle":"novadeck-2.0.0.raucb","size":100}'
+manifest stable '{"version":"1.0.0","bundle":"novadeck-1.0.0.raucb","size":100}'
+run NOVADECK_RELEASE_FILE="$(release_file 1.0.0)" \
+    NOVADECK_OTA_CHANNEL_STATE="$W/update-channel" check
+[ "$OUT" = "2.0.0" ] && ok "check follows the selected channel" \
+                     || bad "printed '$OUT', expected beta's '2.0.0'"
+
+CASE="branch-beats-ota-conf"
+# The precedence decision, asserted rather than described: an operator pin in ota.conf sets the
+# channel a device STARTS on, not one the picker cannot leave.
+printf 'OTA_CHANNEL=stable\n' >"$W/ota.conf"
+run NOVADECK_RELEASE_FILE="$(release_file 1.0.0)" \
+    NOVADECK_OTA_CONFIG="$W/ota.conf" \
+    NOVADECK_OTA_CHANNEL_STATE="$W/update-channel" check
+[ "$OUT" = "2.0.0" ] && ok "the user's pick outranks OTA_CHANNEL in ota.conf" \
+                     || bad "printed '$OUT' — ota.conf overrode the picker"
+# env still outranks both: it is the test and operator escape hatch.
+run NOVADECK_RELEASE_FILE="$(release_file 1.0.0)" \
+    NOVADECK_OTA_CONFIG="$W/ota.conf" \
+    NOVADECK_OTA_CHANNEL_STATE="$W/update-channel" \
+    NOVADECK_OTA_CHANNEL=stable check
+[ "$RC" = 7 ] && ok "NOVADECK_OTA_CHANNEL still outranks the pick" \
+              || bad "exit $RC out='$OUT' — env no longer wins"
+
+CASE="branch-rejects-unknown"
+# steamclient's enum is wider than what we publish. Mapping `main` or `rc` onto a channel with no
+# directory on the server would point the device at a 404 and read as an update button that has
+# stopped working, so an unadvertised branch is refused and the old pick stands.
+for evil in main rc preview staging '' '../stable' 'beta stable'; do
+  branch "$evil"
+  [ "$RC" != 0 ] && ok "refused branch '$evil'" || bad "ACCEPTED branch '$evil'"
+done
+[ "$(cat "$W/update-channel")" = "beta" ] && ok "a refused switch leaves the previous pick intact" \
+                                          || bad "a refusal clobbered the recorded channel"
+
+CASE="branch-state-is-validated"
+# The state file is deck-writable and rewritten in place, so a torn or tampered value is reachable.
+# It becomes a URL path segment, so it is validated on READ by exact match, not merely on write.
+for junk in '../../etc' 'stable extra' 'STABLE' '/beta'; do
+  printf '%s\n' "$junk" >"$W/update-channel"
+  branch -c
+  [ "$OUT" = "rel" ] && ok "fell back to the default on state '$junk'" \
+                     || bad "state '$junk' produced '$OUT'"
+done
+printf 'beta\n' >"$W/update-channel"
+
+CASE="picker-args-under-the-update-name"
+# THE HAZARD THE argv[0] DISPATCH EXISTS FOR. `-l` and `-c` are flag-shaped, and novadeck-update
+# deliberately IGNORES unrecognised flags on the way to applying an update (forward compatibility
+# with flags Valve adds to steamos-update). So under its own name these arguments must not reach a
+# picker -- and must not reach an install either, which is what this asserts: with no manifest for
+# the configured channel the apply path fails closed at 7 rather than printing branch tokens.
+run NOVADECK_RELEASE_FILE="$(release_file 1.0.0)" NOVADECK_OTA_CHANNEL=missing -l
+case "$OUT" in
+  *rel*|*beta*) bad "novadeck-update -l answered as the picker — the mode is leaking across names" ;;
+  *)            ok "novadeck-update -l is not the picker (stdout: '${OUT:-<empty>}')" ;;
+esac
+
+CASE="picker-wrapper-keeps-argv0"
+# The polkit wrapper is the SETTER's entry point. Its sibling execs /usr/bin/novadeck-update
+# directly, and writing this one the same way would lose the name that selects picker mode -- which
+# is the difference between recording a channel and starting a 4G install. guard-rootfs.sh asserts
+# this on the built tree; here it is asserted on the source.
+WRAP="$ROOT/rootfs/overlay/usr/bin/steamos-polkit-helpers/steamos-select-branch"
+if grep -qE '^[[:space:]]*exec[[:space:]]+/usr/bin/steamos-select-branch\b' "$WRAP"; then
+  ok "the polkit wrapper execs the symlink, preserving argv[0]"
+else
+  bad "the polkit wrapper does not exec /usr/bin/steamos-select-branch — picker mode would be lost"
+fi
+
+# =================================================================================================
 printf '\ntest-update.sh: %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

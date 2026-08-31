@@ -20,6 +20,31 @@
 # a fresh download, which is how the UI stops offering an update that is sitting on disk waiting
 # for a reboot. That is what staged_identity() below exists for.
 #
+# THE SECOND NAME THIS FILE ANSWERS TO: steamos-select-branch, the OS Update Channel picker in
+# Settings -> System. Read out of the same client (work/steam-seed/linuxarm64/steamclient.so,
+# CSystemManagerGetOSBranchListJob / GetCurrentOSBranchJob / SelectOSBranchJob), which builds:
+#
+#     steamos-select-branch -l                                     (from PATH, unprivileged)
+#     steamos-select-branch -c                                     (from PATH, unprivileged)
+#     /usr/bin/steamos-polkit-helpers/steamos-select-branch <token>
+#
+#   -l     -> one branch TOKEN per line. The client caps the reply and rejects an over-long list.
+#   -c     -> the token for the channel this device will actually fetch from. One line.
+#   <token>-> record the choice. Non-zero is surfaced to the user as a failed switch.
+#
+# THE TOKEN VOCABULARY IS VALVE'S, NOT OURS. steamclient's EOSBranch enum is a fixed set — Release,
+# ReleaseCandidate, Beta, BetaCandidate, Preview, PreviewCandidate, Main, Staging — and
+# SelectOSBranch answers anything outside it with "unknown OS branch". So the tokens below are a
+# TRANSLATION LAYER onto our own channel names (the first path segment on the update server), not
+# a naming choice: `rel` is the token, `stable` is the directory.
+#
+# WHY IT IS THIS FILE AND NOT ITS OWN SCRIPT. The picker has to report the channel that will
+# actually be used, which means running the same precedence config() resolves — env, then the
+# user's pick, then the operator's ota.conf, then the default. A second program answering `-c` from
+# its own copy of that ladder is a UI that says `beta` while the device fetches `stable`, and the
+# drift would only ever show up as "the update button offers nothing". One resolver, two entry
+# points: /usr/bin/steamos-select-branch is a symlink to this file and the mode is chosen by argv[0].
+#
 # WHY THE WHOLE CLIENT IS ONE FILE. The alternative shape — a sourced shell lib plus two entry
 # points — is what a bootc-based system needs, because its work is a sequence of subprocesses. Ours
 # is a D-Bus conversation: InstallBundle is asynchronous, progress arrives as PropertiesChanged on
@@ -80,6 +105,25 @@ CURL = os.environ.get("NOVADECK_CURL", "curl")
 DEFAULT_URL = "https://updates.novadeck.cloud-ip.cc"
 DEFAULT_CHANNEL = "stable"
 
+# Where the user's pick from Settings -> System is recorded. /var, not /etc: the setter runs as the
+# SESSION USER with no privileges (see the polkit-helpers wrapper — that directory is a path here,
+# not a privilege boundary), and /etc is the overlay's, owned by root. The file is created empty
+# and deck-owned by usr/lib/tmpfiles.d/novadeck-var.conf.
+#
+# IT SURVIVES AN UPDATE, which is the only reason a per-slot /var is an acceptable home for it:
+# usr/lib/rauc/post-install.sh step 2 copies the RUNNING /var over the target slot wholesale, so a
+# device that picks `beta` and takes an OTA stays on beta. Were that not true, every update would
+# silently return the device to the default channel — on the one path where nobody would look.
+CHANNEL_STATE = os.environ.get("NOVADECK_OTA_CHANNEL_STATE", "/var/lib/novadeck/update-channel")
+
+# The channels this device may be pointed at, and Valve's token for each (see the header). The list
+# is the WHOLE contract in both directions: it is what `-l` advertises, and it is the only thing a
+# write is allowed to record. A channel name becomes a URL PATH SEGMENT in manifest(), so an
+# unvalidated value out of the state file is a redirect primitive of the same family as a manifest's
+# `bundle` field — hence an exact-match membership test on read, never a pattern.
+CHANNELS = ("stable", "beta")
+CHANNEL_TOKENS = {"stable": "rel", "beta": "beta"}
+
 # Steam's exit-code contract. 7 is "no update available" and is ALSO how every recoverable failure
 # exits: a check that cannot reach the server or cannot parse the manifest must not answer "yes"
 # and must not answer with a crash. Fail closed.
@@ -133,10 +177,45 @@ def read_env_file(path):
     return values
 
 
+def selected_channel():
+    """The channel the user picked in Settings -> System, or "" if they never did.
+
+    VALIDATED AGAINST CHANNELS BY EXACT MATCH, and silently ignored otherwise. Two reasons, and the
+    second is the one that matters. The obvious one: the value ends up as a path segment in the
+    manifest URL, so a corrupt multi-word or ../-shaped line must never reach it. The other: the
+    write below is an in-place rewrite rather than a temp-and-rename, because the state FILE is
+    deck-owned inside a root-owned directory and an unprivileged setter cannot rename into it. A
+    torn write is therefore possible, and this is what makes it harmless — a half-written value
+    matches nothing, so the device falls back to the configured channel instead of chasing a
+    truncated one."""
+    try:
+        with open(CHANNEL_STATE, "r") as handle:
+            value = handle.readline().strip()
+    except OSError:
+        return ""
+    if not value:
+        return ""
+    if value not in CHANNELS:
+        log(f"ignoring unknown channel {value!r} in {CHANNEL_STATE}")
+        return ""
+    return value
+
+
 def config():
     conf = read_env_file(CONFIG_FILE)
     url = os.environ.get("NOVADECK_OTA_URL") or conf.get("OTA_URL") or DEFAULT_URL
-    channel = os.environ.get("NOVADECK_OTA_CHANNEL") or conf.get("OTA_CHANNEL") or DEFAULT_CHANNEL
+    # PRECEDENCE, and the middle rung is the decision. env is the test/operator escape hatch and
+    # wins outright. Then the USER'S PICK, then ota.conf, then the default — so an operator who
+    # pins OTA_CHANNEL sets the channel a device starts on rather than one it can never leave
+    # ([[devices-are-operator-reachable]] cuts both ways: the override surface exists, but it does
+    # not get to make the Settings picker lie). `-c` reports whatever comes out of here, so the UI
+    # and the fetch can never disagree about which channel this device is on.
+    channel = (
+        os.environ.get("NOVADECK_OTA_CHANNEL")
+        or selected_channel()
+        or conf.get("OTA_CHANNEL")
+        or DEFAULT_CHANNEL
+    )
     return url.rstrip("/"), channel
 
 
@@ -505,11 +584,93 @@ def progress_emitter():
 # one. A streamed bundle cannot be truncated on disk, because it is never on disk.
 
 
+# --- the OS Update Channel picker (argv[0] == steamos-select-branch) ------------------------------
+
+
+def cmd_branch(argv):
+    """`-l`, `-c` and `<token>`; see this file's header for where the contract comes from.
+
+    EXIT CODES ARE NOT THE UPDATE CLIENT'S HERE. EXIT_NONE (7) means "no update available" to the
+    caller of `check`; on this path Steam only asks whether the command succeeded, and a 7 for
+    "unknown branch" would be an ordinary failure wearing a meaningful number. 0 or 1.
+
+    NOTHING ON THIS PATH TOUCHES THE NETWORK. `-c` is re-run by the UI whenever the System page
+    renders, and a picker that blocked on a manifest fetch would stall Settings on a device with no
+    Wi-Fi. config() is a file read and nothing more."""
+    if not argv or argv[0] in ("-h", "--help"):
+        print(BRANCH_USAGE, file=sys.stderr)
+        return 1
+
+    if argv[0] == "-l":
+        for channel in CHANNELS:
+            print(CHANNEL_TOKENS[channel], flush=True)
+        return 0
+
+    if argv[0] == "-c":
+        _, channel = config()
+        # A channel with no token is reachable: an operator can pin anything in ota.conf, and this
+        # must still answer with ONE line the client can map. Falling back to the default channel's
+        # token is the honest approximation -- the alternative is an empty reply, which the client
+        # logs as "returned an empty string" and renders as no selection at all.
+        token = CHANNEL_TOKENS.get(channel)
+        if token is None:
+            log(f"channel {channel!r} has no Steam branch token; reporting {CHANNEL_TOKENS[DEFAULT_CHANNEL]}")
+            token = CHANNEL_TOKENS[DEFAULT_CHANNEL]
+        print(token, flush=True)
+        return 0
+
+    # The setter. ACCEPTED VALUES ARE EXACTLY WHAT `-l` ADVERTISED, plus our own channel names so
+    # the command is usable by hand over SSH. Deliberately not a permissive alias table: mapping
+    # `rc` or `main` onto a channel we do not publish would put a device on a directory that 404s,
+    # and the user's evidence for it would be an update button that has quietly stopped working.
+    wanted = argv[0]
+    channel = ""
+    if wanted in CHANNELS:
+        channel = wanted
+    else:
+        for name, token in CHANNEL_TOKENS.items():
+            if token == wanted:
+                channel = name
+                break
+    if not channel:
+        log(f"unknown branch {wanted!r} — this device offers: "
+            f"{' '.join(CHANNEL_TOKENS[c] for c in CHANNELS)}")
+        return 1
+
+    try:
+        os.makedirs(os.path.dirname(CHANNEL_STATE), exist_ok=True)
+        with open(CHANNEL_STATE, "w") as handle:
+            handle.write(f"{channel}\n")
+    except OSError as exc:
+        # The one failure a user can actually hit: the tmpfiles line that makes this file
+        # deck-owned did not run, so an unprivileged Steam cannot write it. Say which file.
+        log(f"cannot record the channel in {CHANNEL_STATE}: {exc}")
+        return 1
+    log(f"OS update channel set to {channel!r}")
+    return 0
+
+
+BRANCH_USAGE = """usage: steamos-select-branch <-l|-c|BRANCH>
+
+  -l       list the branch tokens this device offers, one per line
+  -c       print the token for the channel this device will fetch from
+  BRANCH   record BRANCH as the channel to fetch from
+
+Called by the Steam client to drive Settings -> System -> OS Update Channel; see the header of
+/usr/bin/novadeck-update for the contract that shapes the output."""
+
+
 def cmd_status():
     base_url, channel = config()
     local = device_identity()
     print(f"device:   {identity_of(local) or '<unidentified>'} ({local.get('mode') or 'mode unknown'})")
     print(f"server:   {base_url}/{channel}")
+    # WHERE the channel came from, not just what it is. The picker, ota.conf and the built-in
+    # default all render identically in the line above, and "why is this device on beta" is the
+    # question this command gets asked.
+    picked = selected_channel()
+    print(f"channel:  {channel} ({'user selection' if picked == channel else 'not user-selected'};"
+          f" offers {' '.join(CHANNELS)})")
     print(f"logged in: {'yes' if steam_logged_in() else 'no (updates deferred)'}")
     pending = staged_identity()
     print(f"staged:   {pending or '<none>'}")
@@ -529,6 +690,20 @@ file for the contract that shapes the output."""
 
 
 def main(argv):
+    # WHICH NAME WAS THIS INVOKED BY, and it is the FIRST thing decided rather than a branch inside
+    # the loop below, because the two contracts collide in the worst possible direction.
+    #
+    # THE DEFAULT ACTION IS AN INSTALL and the loop below deliberately IGNORES unrecognised
+    # flag-shaped arguments (forward compatibility with flags Valve adds to steamos-update). Every
+    # argument the picker is called with — `-l`, `-c` — is flag-shaped. So a select-branch call
+    # that reached that loop would be ignored into a fall-through, and asking this device which
+    # channels it offers would begin writing a bundle over the inactive slot.
+    #
+    # basename, so it fires for both `/usr/bin/steamos-select-branch` (the symlink Steam finds on
+    # PATH) and the polkit-helpers wrapper, which execs that path precisely to keep argv[0].
+    if os.path.basename(sys.argv[0]) == "steamos-select-branch":
+        return cmd_branch(argv)
+
     # THE DEFAULT ACTION IS AN INSTALL, so what this loop does with an argument it does not
     # recognise is a real decision and not parser hygiene. It used to fall through to apply for
     # ANYTHING unrecognised -- `--enable-duplicate-detection` reached the right place by accident,

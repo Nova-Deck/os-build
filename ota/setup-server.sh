@@ -55,7 +55,16 @@ DOCROOT_MODE=2775
 # timer breaks, and an expired cert takes every device's update check offline with no device-side
 # symptom beyond "unreachable".
 EMAIL="${NOVADECK_OTA_EMAIL:-simons.philippe@gmail.com}"
-CHANNELS="${NOVADECK_OTA_CHANNELS:-stable}"
+# THE CHANNELS A DEVICE CAN BE POINTED AT, and the list must match the one the picker offers —
+# rootfs/overlay/usr/bin/novadeck-update's CHANNELS, which is what Settings -> System -> OS Update
+# Channel renders. This is not what MAKES a channel work (publish-bundle.sh runs `mkdir -p` on the
+# destination, so the first publish to a new channel creates it either way); it is what makes a
+# freshly bootstrapped server look like the fleet's, so `ls $DOCROOT` answers "which channels exist"
+# with the same list a device believes in.
+#
+# An empty channel directory is the correct resting state — see the note below the loop that creates
+# them: a device fetching a channel with no latest.json gets a 404, fails closed and exits 7.
+CHANNELS="${NOVADECK_OTA_CHANNELS:-stable beta}"
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 VHOST_SRC="${NOVADECK_OTA_VHOST:-$HERE/nginx-novadeck-ota.conf}"

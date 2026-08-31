@@ -1,0 +1,142 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/ShadowBlip/InputPlumber/main/rootfs/usr/share/inputplumber/schema/composite_device_v1.json
+#
+# KONKR Pocket FIT, described the way UPSTREAM describes the AYANEO Pocket S2.
+#
+# WHY THIS FILE EXISTS. InputPlumber 0.78.0 began shipping its own Pocket S2 config
+# (devices/50-ayaneo_pocket_s2.yaml, upstream ac09f37), which describes that board very differently
+# from the way we do: a different capability map on the MCU device, a different source grouping, and
+# xbox-elite + mouse where we target xbox-series. Before deciding whose description to keep we want
+# a reading of upstream's on real hardware — and the Pocket S2 cannot provide one, because it holds
+# an internal installation.
+#
+# The Pocket FIT can. The two boards are the same hardware apart from the panel:
+# kernel/dts/qcom/sm8650-konkr-pf.dts is 1080x1920@144 against the S2's 1440x2560@60, and the FIT's
+# own panel node is `compatible = "ayaneo,ar14-144hz"`.
+#
+# THIS IS NOW THE ONLY sm8650 INPUT CONFIG WE SHIP. Our sm8650-ayaneo-controller.yaml and its
+# capability map sm8650-ayaneo_mcu_xbox_standard.yaml are deleted on this branch, so upstream is
+# solely responsible for the Pocket S2 — this file names only the FIT, and nothing of ours matches
+# `AYANEO Pocket S2` any more. The file name follows upstream's convention rather than our
+# `<soc>-<vendor>-` one, because the whole point is to sit in the same namespace and sort order as
+# the configs it is being compared against.
+#
+# THE QUOTED IDS ARE COSMETIC, NOT LOAD-BEARING — corrected on hardware 2026-08-31, having been
+# claimed as the opposite here. The reasoning was: upstream's S2 file is the only one in their set
+# leaving vendor_id/product_id bare, so `4001` and `0002` are YAML integers against
+# `Option<String>` fields (src/config/mod.rs), serde would refuse, and load_device_configs would log
+# `Failed to parse composite device config` and skip the file. On a KONKR Pocket FIT running 0.78.1
+# the journal carries ZERO parse failures and ZERO warnings of any kind, with upstream's S2 file
+# present in /usr/share/inputplumber/devices the whole time. serde_yaml resolves a plain scalar
+# against the TARGET type, so a bare `4001` deserializes into a String perfectly well. The quotes
+# below are kept because every other upstream config has them, not because anything needs them.
+#
+# What that also settles, for the peer branch: upstream's Pocket S2 config parses, loads, and would
+# genuinely shadow a config of ours on an S2. The collision is real, not theoretical.
+#
+# ONE DELIBERATE DIVERGENCE from the file this copies, marked below: the four ids are quoted.
+# Everything else — the source groups, the capability maps, the phys_path on the xinput source, the
+# target devices — is upstream's verbatim, because upstream's description is the thing under test.
+# If it reads wrong on hardware, that is the result, not a bug in this file.
+#
+# WHAT ACTUALLY BOUND, first boot on a Pocket FIT (2026-08-31): CompositeDevice0 formed from
+# event4 `AYANEO Controller` 4001:0428 under dinput_generic and event5 `AYANEO DEVICE` 1c4f:0002
+# under aya9, emitting all three targets — Microsoft X-Box One Elite 2 pad, InputPlumber Keyboard,
+# InputPlumber Mouse. The xinput source below bound NOTHING, and correctly so: no 045e:028e device
+# exists while the controller sits in Ayaneo mode. Note upstream's phys_path is not wrong for this
+# board — `usb-0001:01:00.0-1/input0` is exactly where AYANEO Controller enumerates here; the FIT
+# simply presents the dinput device at that path rather than the xinput one.
+#
+# AND IT READS CORRECTLY — HW-confirmed on the same board, same day. Face buttons, sticks, d-pad and
+# triggers work, but those arrive over the dinput source where our description and upstream's agreed
+# anyway. The verdict is in the buttons where they DISAGREED, all of which come off the MCU through
+# aya9, and all of which behave: the AYANEO button opens Steam's quick-access panel (upstream reads
+# QuickAccess off BTN6, ours read it off BTN5) and both back paddles register (upstream BTN3/BTN4,
+# ours BTN_Z/BTN_C).
+#
+# Which also means the map this branch DELETED was describing the MCU wrongly, whatever it did on an
+# S2. sm8650_ayaneo_mcu_xbox mapped BTN_SOUTH, ABS_X/Y/RX/RY, ABS_HAT0*, ABS_GAS/ABS_BRAKE onto
+# 1c4f:0002 — and that device advertises `BTN_0`..`BTN_7` and NOTHING else (KEY bitmap bits 256-263,
+# no ABS at all). Most of that mapping could never fire. aya9 claims only what the device emits.
+#
+# The emitted pad advertises what the elite target promises: BTN_TRIGGER_HAPPY1..8 (bits 704-711 —
+# the four extra are why xbox-elite rather than xbox-series carries paddles), KEY_RECORD for
+# Screenshot, the eleven standard gamepad buttons and ABS=3003f (both sticks, both triggers, hat).
+version: 1
+kind: CompositeDevice
+name: KONKR Pocket FIT
+
+maximum_sources: 0
+options:
+  auto_manage: true
+
+# The one intended change: the FIT's own compatible, from kernel/dts/qcom/sm8650-konkr-pf.dts
+# (`compatible = "konkr,pocket-fit", "qcom,sm8650"`). Upstream's own 50-konkr-fit.yaml is NOT this
+# board despite the name — it matches `dmi_data` (product_name KONKR FIT / sys_vendor KONKR), an x86
+# handheld, and no DMI exists here for it to match.
+matches:
+  - udev:
+      sys_path: /sys/firmware/devicetree/base
+      attributes:
+        - name: compatible
+          value: konkr,pocket-fit
+
+source_devices:
+  # THE DIVERGENCE: every vendor_id/product_id below is QUOTED, where upstream's S2 file leaves them
+  # bare. That is not style. `4001` and `0002` bare are YAML integers, src/config/mod.rs types both
+  # fields `Option<String>`, and serde does not coerce — one bare id rejects the whole file (see the
+  # header). Every other config upstream ships quotes them; that one does not.
+  #
+  # Ayaneo mode
+  - group: gamepad
+    capability_map_id: dinput_generic
+    evdev:
+      name: AYANEO Controller
+      vendor_id: "4001"
+      product_id: "0428"
+      handler: event*
+  # Xinput mode.
+  #
+  # KEPT VERBATIM, including the phys_path — this is upstream's, tested as written.
+  #
+  # THIS SOURCE BINDS NOTHING ON THE POCKET FIT, and that is not a defect in the path. Measured
+  # 2026-08-31: no 045e:028e device exists on this board at all while the controller is in Ayaneo
+  # mode, so there is nothing for this entry to claim. The pad still works — it comes in through
+  # the dinput source above.
+  #
+  # Upstream's topology guess is in fact RIGHT for this board: `usb-0001:01:00.0-1/input0` is
+  # exactly where `AYANEO Controller` enumerates here (`AYANEO DEVICE` is on -2/input0). The FIT
+  # just presents the dinput device at that path rather than the xinput one. So this entry is what
+  # would bind if the controller were switched to xinput mode — untested, since nothing here knows
+  # how to make it switch.
+  #
+  # That the FIT can produce a 045e:028e at all is not a guess: boot/boards.map gives this exact
+  # board `usbcore.interrupt_interval_override=045e:028e:2`, the same arg every AYANEO board gets,
+  # and the kernel registers xpad as builtin at boot. A device is expected here; it just is not
+  # present in Ayaneo mode. Measured 2026-08-31: the bus holds only 4001:0428 and 1c4f:0002, so
+  # that boot arg currently matches nothing on a FIT.
+  #
+  # If a future board DOES lose its pad, a wrong phys_path fails SILENTLY — the source matches
+  # nothing and the symptom is indistinguishable from a bad mapping. Tell them apart with
+  # `udevadm info -q path -n /dev/input/eventN` or the PHYS line in evtest, against the sources
+  # InputPlumber logs at startup. Deleting this ONE line falls the match back to vendor/product,
+  # which changes WHICH device is claimed, never how its events are translated.
+  - group: gamepad
+    evdev:
+      phys_path: usb-0001:01:00.0-1/input0
+      vendor_id: "045e"
+      product_id: "028e"
+      handler: event*
+  - group: keyboard
+    capability_map_id: aya9
+    evdev:
+      name: AYANEO DEVICE
+      vendor_id: "1c4f"
+      product_id: "0002"
+      handler: event*
+
+# Upstream's, not ours: xbox-elite where we shipped xbox-series, plus a mouse. Part of what is
+# being tested — the elite target exposes the paddles that aya9 maps to LeftPaddle1/RightPaddle1.
+target_devices:
+  - xbox-elite
+  - keyboard
+  - mouse

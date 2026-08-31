@@ -17,11 +17,24 @@
 #               pacman-installed into the base alongside it (e.g. shared libraries it links)
 #
 # To bump: pick a tag at https://github.com/ShadowBlip/InputPlumber/releases and set
-# version + url + sha256 together.
+# version + url + sha256 together — then re-read the shipped devices/ directory against
+# rootfs/overlay/etc/inputplumber/devices.d, because upstream now ships configs for boards we
+# also describe. See the note below.
 name: inputplumber
-version: 0.77.7
-url: https://github.com/ShadowBlip/InputPlumber/releases/download/v0.77.7/inputplumber-aarch64.tar.gz
-sha256: 8fdc71dc8259a9216669be00acd57bc584918cbbf24aadd89cc72df8b8770c83
+version: 0.78.1
+url: https://github.com/ShadowBlip/InputPlumber/releases/download/v0.78.1/inputplumber-aarch64.tar.gz
+sha256: 1c556d799fb92fdfe4a44c331090a2af2b24b1564cafe49a9ba24638f2bcc368
 strip: 1
+
+# 0.78.0 added devices/50-ayaneo_pocket_s2.yaml (upstream ac09f37), matching DT
+# `compatible: ayaneo,pocket-s2` — the board our own sm8650 config used to match on DT `model`, and
+# describing it differently. This branch evaluates upstream's description instead of suppressing it:
+# our sm8650 config and its capability map are deleted, upstream alone describes the Pocket S2, and
+# the KONKR Pocket FIT moves onto a copy of upstream's shape in
+# rootfs/overlay/etc/inputplumber/devices.d/50-konkr_pocket_fit.yaml, which is where the whole
+# reasoning lives — including the HW result: on a Pocket FIT running 0.78.1 that config binds and
+# emits upstream's three targets, and upstream's own S2 file loads without a parse warning.
+#
 # Binary links libiio.so.0 (IIO sensors/gyro) — pulled from the holo repo, not bundled.
+# Re-read on the 0.78.1 bump: still the only non-base NEEDED entry.
 deps: libiio

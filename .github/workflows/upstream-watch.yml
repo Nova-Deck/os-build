@@ -13,6 +13,12 @@
 # store-metadata edits too — it filed a near-daily issue that was closed unread every time. There
 # is no watch worth having here until a build-level signal is reachable; check
 # https://steamdb.info/app/3127680/history/ by hand when the tool's behavior is in question.
+#
+# Lossless Scaling's `lsfg-vk` Steam beta branch is NOT watched either, for the same reason and
+# despite mattering more: the frame-generation shader DLL ships in a Steam depot on a named beta
+# branch, and anonymous appinfo exposes no build-level signal for it. The lsfg-vk job below
+# watches the LAYER, which is the half we build; the DLL half is a user-side prerequisite that
+# only `packages/lsfg-vk/verify-on-device.sh` can check, on a device that owns the product.
 name: upstream-watch
 
 on:
@@ -390,5 +396,84 @@ jobs:
           - [ ] \`scheds/rust/scx_{lavd,bpfland,rusty}\` still exist and \`Cargo.lock\` is still checked in (build() runs \`--frozen\`)
           - [ ] \`make overlay\` then \`make relock\`; read the \`rootfs/manifest.lock\` diff rather than refreshing it blind
           - [ ] HW pass with the scheduler actually SELECTED (\`novadeck-scheduler lavd\`) and a real gameplay leg — the shipped flags are \`--autopower\`, so also confirm lavd still follows the active power profile off novadeck-powerd's PowerProfiles name
+          EOF
+          )"
+
+  lsfg-vk:
+    name: lsfg-vk release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compare upstream tags against the PKGBUILD
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Baseline is _tag, NOT pkgver: Arch pkgver cannot carry the hyphen in upstream's
+          # `2.0.0-rc1`, so the PKGBUILD keeps both and _tag is the real upstream identity. It is
+          # also the ONE version behind both arches — packages/lsfg-vk-x86/build.sh reads this same
+          # line rather than repeating it — so one baseline covers the host aarch64 layer and the
+          # guest x86 payload, and they can never be reported apart.
+          pinned="$(sed -n 's/^_tag=//p' packages/lsfg-vk/PKGBUILD | head -1)"
+          [ -n "$pinned" ] || { echo "::error::packages/lsfg-vk/PKGBUILD has no _tag= line"; exit 1; }
+
+          # ls-remote, not a release API: upstream left GitHub in 2026-08 and self-hosts now. There
+          # is no feed to parse and no JSON schema to break — refs are the protocol.
+          tags="$(git ls-remote --tags https://git.lsfg-vk.dev/lsfg-vk.git \
+            | sed 's|.*refs/tags/||; s|\^{}$||' \
+            | grep -E '^[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$' || true)"
+          # `|| true` so the guard below does the reporting: under `set -o pipefail` a grep that
+          # matches nothing fails the substitution and `set -e` kills the step SILENTLY at the
+          # assignment — red, as the header requires, but mute. An unreachable forge or a retagging
+          # scheme this pattern stops matching is exactly what the watcher exists to shout about.
+          [ -n "$tags" ] || { echo "::error::no X.Y.Z tags found at git.lsfg-vk.dev"; exit 1; }
+
+          # rc TAGS ARE KEPT, because we ship one: the pin is 2.0.0-rc1, so an rc2 is a real signal
+          # here rather than noise.
+          #
+          # AND `sort -V` GETS THEM BACKWARDS ON ITS OWN. GNU version sort treats `~` as a
+          # pre-release marker and a bare `-` as ordinary text, so it orders 2.0.0-rc1 AFTER 2.0.0
+          # — and this watcher would sit silent on the day the final release we are waiting for
+          # lands, which is the one day it must not. Normalise -rc to ~rc for every comparison and
+          # change it back only for display.
+          latest="$(printf '%s\n' "$tags" | sed 's/-rc/~rc/' | sort -uV | tail -1 | sed 's/~rc/-rc/')"
+
+          echo "pinned=$pinned latest=$latest"
+          # Newer, not merely different: if we ever pin ahead of the tag list this stays quiet.
+          newer="$(printf '%s\n%s\n' "$pinned" "$latest" | sed 's/-rc/~rc/' | sort -V | tail -1 | sed 's/~rc/-rc/')"
+          if [ "$latest" = "$pinned" ] || [ "$newer" != "$latest" ]; then
+            echo "pin is current"
+            exit 0
+          fi
+
+          title="upstream: lsfg-vk $latest tagged (pinned: $pinned)"
+          if [ "$(gh issue list --state all --search "in:title \"$title\"" --json number --jq length)" -gt 0 ]; then
+            echo "issue already filed for $latest"; exit 0
+          fi
+          gh issue create --title "$title" --assignee "$ASSIGNEE" \
+            --label P3 --label area/steam --body "$(cat <<EOF
+          Upstream tagged **lsfg-vk $latest**; we build **$pinned**.
+          Tags: \`git ls-remote --tags https://git.lsfg-vk.dev/lsfg-vk.git\` · docs: https://lsfg-vk.dev/docs
+
+          Frame generation is opt-in twice over (a session-wide \`DISABLE_LSFGVK=1\` lifted per game,
+          and a user who owns Lossless Scaling on its beta branch), so this is a low-risk bump to
+          take and a bad one can sit unnoticed — hence P3 and hence the HW leg below.
+
+          ONE tag drives BOTH arches: \`packages/lsfg-vk-x86/build.sh\` reads \`_tag\` out of
+          \`packages/lsfg-vk/PKGBUILD\`, so the host layer and the guest payload cannot drift apart
+          and both rebuild from one edit. Drill:
+
+          - [ ] \`packages/lsfg-vk/PKGBUILD\`: \`pkgver\` **and** \`_tag\` together — pkgver cannot carry the hyphen in an \`-rcN\` tag, and everything else reads \`_tag\`. Nothing under \`packages/lsfg-vk-x86/\` needs editing
+          - [ ] **NO \`patches:\` line, on either arch, ever.** CC-BY-NC-ND NoDerivatives: we ship the tag as cut. If the new tag needs an Adreno or FEX fix, that is an upstream conversation and there is now a channel for it — the author approved our aarch64 build over Discord (\`.claude/plans/lsfg-vk-upstream-outreach.md\`). A test on each package fails if a patch list appears
+          - [ ] \`rootfs/manifest.lock\`: the \`lsfg-vk\` row's hash is \`packages/inputhash.sh\` over the package's COMMITTED sources, so **any** edit to the PKGBUILD moves it — a comment does. Run \`make relock\` and let packages/verify-lock-rows.sh (in \`make test\`) confirm
+          - [ ] **re-run \`packages/lsfg-vk/probe-benchmark.sh\` on all three SoCs.** The per-SoC flow-scale defaults the Decky plugin ships are MEASURED, not derived — SM8250 needs flow 0.50 where the other two take 1.00 — and a pipeline change moves them. One sample would ship the wrong default: "don't reach for flow scale first" held on A740/A750 and INVERTED on A650
+          - [ ] layer manifests: \`library_path\` must stay **manifest-relative**. An absolute path resolves against the wrong root through our overlay mounts and Valve's graphics-provider republish, and the loader then drops the layer with **no error at all**. \`make test\` asserts all five artifacts (both \`.so\`s, \`lsfg-vk-cli\`, both \`implicit_layer.d\` manifests) are promised by fetch.sh and required by the assembler, and \`package()\` re-asserts every NEEDED against \`depends\`
+          - [ ] config schema: \`make test\` checks that upstream's \`lsfg-vk-cli\` still accepts the \`conf.toml\` the plugin writes. A renamed key does not fail — the panel keeps reporting saves that do nothing
+          - [ ] hot reload still rests on upstream watching the PARENT DIRECTORY (\`IN_CLOSE_WRITE | IN_MOVED_TO\`) against our \`os.replace\` writer, and on the watcher not being armed at all when \`LSFGVK_ENV\` is set. Breaking either fails SILENTLY — demand \`Configuration file has changed, reloading...\` in the session log rather than inferring from an fps change
+          - [ ] the \`lsfg-vk.dll\` prerequisite: v2 wants PE resource \`0x80005008\` off Lossless Scaling's \`lsfg-vk\` beta branch. If a new version moves that, \`prereq.py\`'s detection **and** the message it shows the user both need re-checking
+          - [ ] guest glibc ceiling: container-build.sh gates the x86 \`.so\`'s symbol ceiling against the pinned snapshot, so a tag needing newer glibc fails HERE rather than silently doing nothing inside the guest
+          - [ ] HW pass on BOTH halves — they are independent paths: a **Proton** title (host aarch64 layer) and a **native x86-64** title (guest x86 layer). Run \`packages/lsfg-vk/verify-on-device.sh\`, and snapshot the session log's lsfg line count BEFORE the launch: a stale block from a previous launch otherwise reads as a clean pass for a launch that logged nothing
+
+          An rc we decide to skip is answered by closing this issue once; the title dedupe keeps it closed.
           EOF
           )"

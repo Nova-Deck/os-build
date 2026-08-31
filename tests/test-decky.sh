@@ -24,6 +24,7 @@ PIN="$ROOT/packages/decky-loader/prebuilt.pin"
 # trees, so every per-plugin check below runs against both.
 PLUGIN="$ROOT/apps/decky/novadeck-control"
 MONITOR="$ROOT/apps/decky/novadeck-monitor"
+FRAMEGEN="$ROOT/apps/decky/novadeck-framegen"
 UNITDIR="$ROOT/rootfs/overlay/usr/lib/systemd/system"
 WANTSDIR="$ROOT/rootfs/overlay/etc/systemd/system/multi-user.target.wants"
 APPCONF="$ROOT/rootfs/overlay/usr/share/fex-emu/AppConfig/PluginLoader.json"
@@ -469,6 +470,71 @@ if python3 -m py_compile "$MONITOR/main.py" "$MONITOR"/py_modules/novadeck_monit
 else
   bad "novadeck-monitor backend does not compile"
 fi
+if python3 -m py_compile "$FRAMEGEN/main.py" "$FRAMEGEN"/py_modules/novadeck_framegen/*.py 2>/dev/null; then
+  ok "novadeck-framegen backend compiles"
+else
+  bad "novadeck-framegen backend does not compile"
+fi
+
+# novadeck-framegen hand-rolls a TOML writer (the stdlib reads TOML but cannot write it), and it
+# rewrites a file the LAYER and the USER both also write. So the round trip is checked for real
+# rather than assumed: an invalid file breaks frame generation outright, and a lossy one quietly
+# discards settings the user cannot get back.
+#
+# This caught a real bug before it shipped. `[global]` is a TABLE, so tomllib returns it nested
+# under that key -- an earlier renderer treated top-level scalars as the globals and dropped
+# every one of them, including `dll` (how a user points at a Lossless Scaling install we cannot
+# find) and `allow_fp16` (off is the difference between working and unusable).
+if python3 - "$FRAMEGEN" <<'PYEOF'
+import sys, pathlib, tempfile, tomllib
+sys.path.insert(0, str(pathlib.Path(sys.argv[1]) / "py_modules"))
+from novadeck_framegen import conf
+
+conf.CONFIG_PATH = pathlib.Path(tempfile.mkdtemp()) / "conf.toml"
+conf.CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+conf.CONFIG_PATH.write_text(
+    '[global]\nallow_fp16 = true\ndll = "/x/lsfg-vk.dll"\n\n'
+    '[[profile]]\nname = "mine"\nmultiplier = 3\n')
+
+conf.write_profile("2737300", {"multiplier": 2, "flowScale": 0.5, "performanceMode": True})
+d = tomllib.loads(conf.CONFIG_PATH.read_text())          # parses at all
+assert d["global"]["allow_fp16"] is True, d              # foreign globals survive
+assert d["global"]["dll"] == "/x/lsfg-vk.dll", d
+names = [p["name"] for p in d["profile"]]
+assert "mine" in names and "novadeck-2737300" in names, names   # foreign profile survives
+
+conf.write_profile("111", {"multiplier": 9, "flowScale": 9.0, "performanceMode": True})
+ours = [p for p in tomllib.loads(conf.CONFIG_PATH.read_text())["profile"]
+        if p["name"] == "novadeck-111"][0]
+assert ours["multiplier"] == 4, ours                      # clamped to upstream bounds
+# flow_scale must stay a FLOAT: TOML types 1 and 1.0 differently and upstream parses a float.
+assert isinstance(ours["flow_scale"], float), ours
+
+conf.write_profile("2737300", None)
+names = [p["name"] for p in tomllib.loads(conf.CONFIG_PATH.read_text())["profile"]]
+assert "novadeck-2737300" not in names and "mine" in names, names   # removal is surgical
+
+# The reader is STRICT and every violation is a hard throw that leaves the layer mapped but
+# inert -- which reads as success everywhere except the session log. All four were confirmed
+# against upstream's own validator, and two of them shipped to a device before being caught.
+d = tomllib.loads(conf.CONFIG_PATH.read_text())
+assert d.get("version") == 2, d                       # missing/wrong -> config rejected outright
+assert isinstance(d.get("global"), dict), d           # missing [global] -> "Invalid global section"
+assert set(d) <= {"version", "global", "profile"}, d  # any other top-level key -> "Unknown key"
+assert set(d["global"]) <= {"allow_fp16", "dll", "log_level", "log_file"}, d["global"]
+assert d.get("profile"), d                            # an empty profile array is NOT valid either
+
+# Removing the LAST profile must not leave a profile-less file behind, since an empty profile
+# array is exactly the invalid shape above. Absent is fine: the layer recreates its own default.
+conf.CONFIG_PATH.write_text('version = 2\n\n[global]\n\n[[profile]]\nname = "novadeck-999"\nmultiplier = 2\n')
+conf.write_profile("999", None)
+assert not conf.CONFIG_PATH.exists(), "a profile-less config file was left behind (the reader rejects it)"
+PYEOF
+then
+  ok "novadeck-framegen's conf.toml round-trips and matches the reader's strict schema"
+else
+  bad "novadeck-framegen's conf.toml writer is lossy or invalid -- it would corrupt lsfg-vk's config"
+fi
 
 # The python block prints the same `  ok  `/`  FAIL` lines; fold them into THIS script's
 # counters so the summary line counts every check that was actually shown.
@@ -628,16 +694,111 @@ done
 
 # The two plugins must not collide in the QAM: Decky keys the plugin list by plugin.json name.
 if [ "$(python3 -c "
-import json
-print(json.load(open('$PLUGIN/plugin.json'))['name'] == json.load(open('$MONITOR/plugin.json'))['name'])
-")" = "False" ]; then
-  ok "the two plugins declare distinct names (Decky keys its plugin list by name)"
+import json, pathlib
+names = [json.load(open(p / 'plugin.json'))['name']
+         for p in sorted(pathlib.Path('$ROOT/apps/decky').iterdir()) if (p / 'plugin.json').is_file()]
+print(len(names) == len(set(names)))
+")" = "True" ]; then
+  ok "every plugin declares a distinct name (Decky keys its plugin list by name)"
 else
-  bad "both plugins declare the SAME name — Decky would load one and silently drop the other"
+  bad "two plugins declare the SAME name — Decky would load one and silently drop the other"
+fi
+
+# novadeck-framegen writes the OTHER half of game-tweaks.json from novadeck-control, so the two
+# must agree on the envelope: the appid "0" refusal in particular. "0" is Valve's no-app sentinel
+# and DOES occur on compat-tool probe launches; a section keyed on it would apply to Steam's own
+# helper runs. Both writers reject it independently because either can be the one that creates
+# the file.
+grep -q 'appid == "0"' "$FRAMEGEN/py_modules/novadeck_framegen/tweaks.py" \
+  && ok "novadeck-framegen refuses the appid \"0\" sentinel, as novadeck-control does" \
+  || bad "novadeck-framegen does not refuse appid \"0\" — it could tune Steam's own helper runs"
+
+# The two plugins share this file and must not share an OPT-IN. `enabled` is control's "the user
+# turned on per-game tuning"; framegen borrowing it made switching frame generation on light the
+# game up as tuned. Round-trip it rather than grepping: what matters is the resulting FILE.
+if python3 - "$FRAMEGEN" <<'FGPY' 2>/dev/null; then
+import json, pathlib, sys, tempfile
+sys.path.insert(0, str(pathlib.Path(sys.argv[1]) / "py_modules"))
+from novadeck_framegen import tweaks
+
+tmp = pathlib.Path(tempfile.mkdtemp()) / "game-tweaks.json"
+tweaks.TWEAKS_CONFIG = tmp
+
+# on: our key appears, control's does NOT
+tweaks.set_enabled("123", True)
+game = json.loads(tmp.read_text())["games"]["123"]
+assert game.get("framegen") is True, "framegen key not written"
+assert "enabled" not in game, "framegen claimed control's enabled flag"
+
+# a user's tuning must survive our off-switch
+tmp.write_text(json.dumps({"games": {"123": dict(game, enabled=True, cores="big")}, "global": {}}))
+tweaks.set_enabled("123", False)
+game = json.loads(tmp.read_text())["games"]["123"]
+assert game.get("enabled") is True and game.get("cores") == "big", "disabling framegen ate the tuning"
+assert "framegen" not in game and "env" not in game, "framegen left its own keys behind"
+
+# an entry that was ONLY ours is removed entirely rather than left as litter
+tmp.write_text(json.dumps({"games": {}, "global": {}}))
+tweaks.set_enabled("456", True)
+tweaks.set_enabled("456", False)
+assert "456" not in json.loads(tmp.read_text())["games"], "framegen-only entry left behind"
+FGPY
+  ok "novadeck-framegen opts in with its own key and leaves novadeck-control's tuning intact"
+else
+  bad "novadeck-framegen's game-tweaks round-trip is wrong -- it shares or destroys control's flag"
+fi
+
+# The per-game switch is an env TOMBSTONE, and the session default it lifts lives in a different
+# file entirely. If novadeck-session stops exporting DISABLE_LSFGVK, this plugin's toggle becomes
+# a no-op that still reads as "on".
+grep -q 'DISABLE_LSFGVK' "$ROOT/rootfs/overlay/usr/bin/novadeck-session" \
+  && ok "the session still exports DISABLE_LSFGVK (what novadeck-framegen's toggle lifts)" \
+  || bad "novadeck-session no longer exports DISABLE_LSFGVK — the framegen toggle would do nothing"
+
+# The two copies of the Steam library reader are duplicated ON PURPOSE (separate py_modules per
+# plugin, and the offline suite imports from the checkout). Duplicated is fine; DRIFTED is not.
+if diff -q <(sed -n '/^def _read_cstring/,$p' "$PLUGIN/py_modules/novadeck_control/steam.py") \
+           <(sed -n '/^def _read_cstring/,$p' "$FRAMEGEN/py_modules/novadeck_framegen/steam.py") >/dev/null; then
+  ok "the two steam.py copies agree below the docstring (duplicated, not drifted)"
+else
+  bad "novadeck-control and novadeck-framegen steam.py have drifted — one will list games the other cannot"
+fi
+
+# The checks above encode what the reader requires; THIS one asks the reader itself. The CLI is
+# the x86_64 binary we ship, so it runs natively on an x86_64 dev box and is skipped elsewhere --
+# a skip is honest here, since the assertions above still cover the same ground from our side.
+# It is worth having because reading the source got this wrong twice: `version` and the mandatory
+# empty [global] were both missed, and both shipped.
+LSFG_CLI="$ROOT/work/lsfg-vk/out/usr/bin/lsfg-vk-cli"
+# Runnability probe by OUTPUT, not exit status: a bare invocation prints usage and exits 1 on a
+# machine that can run the binary, so the status says nothing. On one that cannot, the shell
+# fails with ENOEXEC and there is no usage text at all. The output is captured BEFORE the test
+# rather than piped into grep: this script runs under `set -o pipefail`, so the CLI's exit 1
+# would fail the whole pipeline no matter what grep found.
+lsfg_cli_usage="$("$LSFG_CLI" 2>&1 || true)"
+if [ -x "$LSFG_CLI" ] && printf '%s' "$lsfg_cli_usage" | grep -q USAGE; then
+  gen_toml="$(mktemp)"
+  python3 - "$FRAMEGEN" "$gen_toml" <<'PYEOF'
+import sys, pathlib
+sys.path.insert(0, str(pathlib.Path(sys.argv[1]) / "py_modules"))
+from novadeck_framegen import conf
+conf.CONFIG_PATH = pathlib.Path(sys.argv[2])
+conf.write_profile("2737300", {"multiplier": 2, "flowScale": 1.0, "performanceMode": True})
+PYEOF
+  if "$LSFG_CLI" validate -c "$gen_toml" 2>&1 | grep -qiE 'Unsupported configuration|Invalid .* section|Unknown key'; then
+    bad "upstream's own validator REJECTS the config novadeck-framegen writes"
+    "$LSFG_CLI" validate -c "$gen_toml" 2>&1 | tail -3 | sed 's/^/       /'
+  else
+    ok "upstream's lsfg-vk-cli accepts the config novadeck-framegen writes"
+  fi
+  rm -f "$gen_toml"
+else
+  printf '  skip %s\n' "lsfg-vk-cli not runnable here (needs x86_64 + make lsfg-vk) -- schema checked from our side only"
+  SKIP=$((SKIP + 1))
 fi
 
 # --- the assembler + Makefile wiring -------------------------------------------------------
-for plugin_name in novadeck-control novadeck-monitor; do
+for plugin_name in novadeck-control novadeck-monitor novadeck-framegen; do
   grep -qE "^for plugin_name in ([^;]*[[:space:]])?$plugin_name([[:space:]]|;)" "$ROOT/rootfs/assemble-rootfs.sh" \
     && ok "assembler stages $plugin_name (4c-3)" \
     || bad "assembler does not stage $plugin_name"

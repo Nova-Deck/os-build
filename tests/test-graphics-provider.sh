@@ -199,5 +199,149 @@ for sym in CONFIG_EROFS_FS CONFIG_BLK_DEV_LOOP CONFIG_EROFS_FS_ZIP CONFIG_OVERLA
         || bad "$sym is not =y -- the guest cannot be mounted"
 done
 
+echo
+echo "lsfg-vk frame-generation layer"
+
+LSFG_PIN="$ROOT/packages/lsfg-vk-x86/builder.pin"
+
+# 16. The GUEST payload must not acquire a source.pin or prebuilt.pin: either would change where
+#     it lands -- build-overlay.sh would build it as a host package, or customize-base.sh would
+#     extract it into the BASE -- instead of staging it into the guest tree. Both are silent
+#     misplacements; the x86 layer would simply never be where the guest looks.
+#
+#     The HOST package is the opposite case and is checked separately below: it MUST have a
+#     source.pin, because an aarch64 layer only reaches Proton titles by being a real package in
+#     the host rootfs, where pressure-vessel imports implicit layers from.
+for wrong in source.pin prebuilt.pin; do
+    [ -e "$ROOT/packages/lsfg-vk-x86/$wrong" ] \
+        && bad "packages/lsfg-vk-x86/$wrong exists -- that reroutes the guest payload into the base/overlay" \
+        || ok "no packages/lsfg-vk-x86/$wrong (the payload is staged into the guest, not the base)"
+done
+
+# 16b. The two halves cover different Vulkan stacks and neither substitutes for the other: the x86
+#      layer serves system FEX and native x86-64 Linux titles (guest Turnip), the aarch64 one
+#      serves Proton titles (host driver, imported by pressure-vessel). Losing either silently
+#      halves the feature's coverage, which is invisible until someone tries the wrong kind of game.
+[ -e "$ROOT/packages/lsfg-vk/source.pin" ] && [ -e "$ROOT/packages/lsfg-vk/PKGBUILD" ] \
+    && ok "the host aarch64 layer is a source-built overlay package (what Proton titles need)" \
+    || bad "packages/lsfg-vk has no source.pin+PKGBUILD -- Proton titles would get no frame generation"
+
+# 16b-2. A package that is built but never installed is the quietest failure of the lot: the
+#        overlay repo carries it, nothing complains, and Proton titles just get no frame
+#        generation. It has to be named in customize-base.sh's PKGS.
+grep -qE '^PKGS=\(.*[( ]lsfg-vk[ )]' "$ROOT/rootfs/customize-base.sh" \
+    && ok "lsfg-vk is in the base package list (built AND installed)" \
+    || bad "lsfg-vk is not in customize-base.sh PKGS -- it would build and never ship"
+
+# 16c. CC-BY-NC-ND forbids shipping a modified build. A patches line here would do exactly that,
+#      and unlike most licence risks it would be introduced by someone trying to FIX something.
+grep -q '^patches:' "$ROOT/packages/lsfg-vk/source.pin" \
+    && bad "packages/lsfg-vk/source.pin declares patches -- NoDerivatives forbids shipping a modified lsfg-vk" \
+    || ok "the host lsfg-vk build carries no patches (NoDerivatives)"
+
+# 17. ONE upstream version for both arches. The x86 build reads its tag from the HOST package's
+#     PKGBUILD rather than carrying its own, so the aarch64 layer and the x86 layer cannot drift to
+#     different releases -- which would be invisible until a user with one kind of game saw
+#     different behaviour from a user with the other.
+grep -q 'packages/lsfg-vk/PKGBUILD' "$ROOT/packages/lsfg-vk-x86/build.sh" \
+    && ok "the x86 build takes its upstream tag from the host PKGBUILD (the arches cannot drift)" \
+    || bad "packages/lsfg-vk-x86 pins its own version -- the two arches can drift apart"
+
+# 17b. The layer loads INSIDE the FEX guest, so its glibc ceiling is not a detail: a symbol above
+#      what the guest ships loads fine in the build container and fails on device, where the only
+#      symptom is that frame generation quietly does nothing.
+grep -q 'fex-rootfs/prebuilt.pin' "$ROOT/packages/lsfg-vk-x86/build.sh" \
+    && ok "the x86 build asserts its snapshot against the fex-rootfs pin (glibc ceiling)" \
+    || bad "packages/lsfg-vk-x86 does not gate its snapshot against the guest rootfs pin"
+
+# 17c. NoDerivatives again, on the other half. Same reasoning as the host package.
+grep -qE '^\s*(patch|git apply)' "$ROOT/packages/lsfg-vk-x86/container-build.sh" \
+    && bad "packages/lsfg-vk-x86 patches the source -- NoDerivatives forbids shipping a modified lsfg-vk" \
+    || ok "the x86 lsfg-vk build applies no patches (NoDerivatives)"
+
+# 18. Every artifact fetch.sh promises must be one the assembler requires, and vice versa. These
+#     two lists live in different files and have no reason to be edited together, which is the
+#     drift this whole suite exists to catch.
+for f in usr/lib/liblsfg-vk-layer.so usr/lib/liblsfg-vk-layer.x86.so usr/bin/lsfg-vk-cli \
+         usr/share/vulkan/implicit_layer.d/VkLayer_LSFGVK_frame_generation.json \
+         usr/share/vulkan/implicit_layer.d/VkLayer_LSFGVK_frame_generation.x86.json; do
+    if grep -q "$f" "$ROOT/packages/lsfg-vk-x86/container-build.sh" && grep -q "$f" "$ASSEMBLE"; then
+        ok "$f is promised by fetch.sh and required by the assembler"
+    else
+        bad "$f is not in both fetch.sh and the assembler -- one of them will ship a hole"
+    fi
+done
+
+# 19. The i686 layer goes in usr/lib, NOT usr/lib32, because upstream's manifest resolves
+#     ../../../lib/ relative to itself and CC-BY-NC-ND says we do not rewrite their manifest.
+#     "Fixing" this to match our lib32 convention breaks the layer silently.
+grep -q 'usr/lib/liblsfg-vk-layer\.x86\.so' "$ROOT/packages/lsfg-vk-x86/container-build.sh" \
+    && ok "the i686 layer stays in usr/lib (upstream's relative library_path resolves there)" \
+    || bad "the i686 layer is not staged to usr/lib -- the manifest's relative path will not resolve"
+
+# 20. ...which is only safe because the NEEDED gate picks its comparison libdir by ELF class. If
+#     that reverts to picking by directory, a 32-bit ELF in usr/lib gets judged against the
+#     guest's 64-bit libdir and the gate is right only by luck.
+grep -q 'Class:\[\[:space:\]\]\*ELF' "$ASSEMBLE" \
+    && ok "the NEEDED gate selects its libdir by ELF class, not by directory" \
+    || bad "the NEEDED gate no longer reads ELF class -- a 32-bit .so in usr/lib is checked wrongly"
+
+# 21. Both manifests must keep a manifest-relative library_path. An absolute one resolves against
+#     the container's /usr under Valve's /run/gfx republish and the loader drops the layer with no
+#     error at all -- indistinguishable from "the user did not turn frame generation on".
+grep -q '"library_path": "' "$ASSEMBLE" \
+    && ok "the assembler re-asserts the manifest-relative library_path on the staged copy" \
+    || bad "nothing checks library_path at stage time -- an absolute path drops the layer silently"
+
+SESSION="$ROOT/rootfs/overlay/usr/bin/novadeck-session"
+LAUNCH="$ROOT/rootfs/overlay/usr/lib/novadeck/game-launch"
+
+# 22. The payload and the off-switch are two halves of ONE mechanism, and shipping the first
+#     without the second is not a cosmetic gap. lsfg-vk is an IMPLICIT layer, so the loader pulls
+#     it into every x86 Vulkan process; and its constructor calls getOrDefault(), which WRITES a
+#     default ~/.config/lsfg-vk/conf.toml when none exists. Without this export the first game a
+#     user launches drops a config file in their home for a feature they never enabled.
+if grep -q '^export DISABLE_LSFGVK$' "$SESSION" && grep -q '{DISABLE_LSFGVK=1}' "$SESSION"; then
+    ok "the session defaults DISABLE_LSFGVK=1 and exports it"
+else
+    bad "novadeck-session does not export DISABLE_LSFGVK=1 -- the layer loads into every x86 Vulkan app"
+fi
+
+# 23. `${VAR=1}` (no colon) assigns only when UNSET, so session.conf can set it EMPTY and have that
+#     respected. A colon form would silently re-default an empty override and remove the bring-up
+#     lever -- the device has to stay operator-reachable.
+grep -q ': "${DISABLE_LSFGVK=1}"' "$SESSION" \
+    && ok "DISABLE_LSFGVK honours an empty session.conf override (\${VAR=} not \${VAR:=})" \
+    || bad "DISABLE_LSFGVK uses a colon default -- an empty session.conf override is silently ignored"
+
+# 24. The per-game opt-in is a TOMBSTONE, not a second variable: game-tweaks.json carries
+#     "env": {"DISABLE_LSFGVK": null} and game-launch unsets rather than setting empty. An empty
+#     string would NOT disable the layer's disable_environment check -- the layer treats any
+#     non-empty value as "off", and "" as unset -- but relying on that is a coin flip, so the
+#     tombstone path is what has to keep working.
+if grep -q 'if value is None' "$LAUNCH" && grep -q 'os.environ.pop' "$LAUNCH"; then
+    ok "game-launch still unsets on a null env tombstone (the per-game opt-in path)"
+else
+    bad "game-launch no longer treats a null env value as a tombstone -- per-game frame gen cannot turn on"
+fi
+
+# 25. `framegen` and `enabled` are SEPARATE opt-ins. They shared `enabled` once, so switching
+#     frame generation on announced per-game tuning the user never asked for. The two failure
+#     modes are mirror images and both are silent, so assert the shape rather than the wording:
+#     a framegen-only entry must contribute its env, and must NOT pull in the tuning keys.
+if grep -q 'game.get("framegen") is True' "$LAUNCH"; then
+    ok "game-launch honours a framegen-only entry (frame gen no longer needs the tuning flag)"
+else
+    bad "game-launch reads only 'enabled' -- frame generation would have to claim per-game tuning to work"
+fi
+
+# The framegen branch must merge ONLY env. A settings.update(game) there would hand a
+# framegen-only game the cores/scheduler it never enabled -- the same conflation, reversed.
+if awk '/elif game.get\("framegen"\) is True:/,/^    return settings/' "$LAUNCH" | grep -q 'settings.update(game)'; then
+    bad "the framegen branch merges the whole entry -- it would apply tuning the user never enabled"
+else
+    ok "the framegen branch contributes env only, never the tuning keys"
+fi
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [[ $FAIL -eq 0 ]]

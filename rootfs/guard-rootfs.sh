@@ -670,7 +670,7 @@ fi
 # Both first-party plugins, named individually rather than globbed: a glob over an EMPTY
 # plugins directory finds nothing and would pass silently, which is the exact failure this
 # assertion exists to catch. Keep in step with DECKY_PLUGINS (Makefile) and 4c-3 (assembler).
-for decky_plugin in novadeck-control novadeck-monitor; do
+for decky_plugin in novadeck-control novadeck-monitor novadeck-framegen; do
   if [ ! -s "$STAGE/usr/share/decky-plugins/$decky_plugin/dist/index.js" ]; then
     bad "$decky_plugin plugin dist missing — its QAM surface did not stage"
   else

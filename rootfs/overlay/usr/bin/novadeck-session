@@ -87,6 +87,30 @@ fi
 # features above. Distinct from the earlier crash ValveSoftware/gamescope#1520 (fixed pre-3.16.17).
 export ENABLE_GAMESCOPE_WSI="${ENABLE_GAMESCOPE_WSI:-1}"
 
+# --- Frame generation (lsfg-vk) is OFF for the whole session, and lifted per game ----------------
+# The lsfg-vk layer staged into the FEX guest payload (packages/lsfg-vk) is an IMPLICIT Vulkan
+# layer: its manifest sits in the guest's implicit_layer.d, so absent this variable the loader
+# pulls it into EVERY x86 Vulkan process on the device. `disable_environment` in that manifest is
+# the layer's own documented off switch, so this is the supported way to say no.
+#
+# OFF IS NOT MERELY TIDY HERE. The layer's constructor calls utils::getOrDefault()
+# (lsfg-vk-layer/src/hooks.cpp), which WRITES a default ~/.config/lsfg-vk/conf.toml -- seeded with
+# upstream's sample profiles for vkcube and GenshinImpact.exe -- whenever none exists. Without this
+# line, the first game a user launches drops a config file in their home for a feature they never
+# enabled, and one they cannot use at all without owning Lossless Scaling AND switching it to its
+# `lsfg-vk` Steam beta branch.
+#
+# Turning it ON is a per-game decision, made by REMOVING this variable rather than adding another:
+# game-tweaks.json carries `"env": {"DISABLE_LSFGVK": null}` for an enabled title, and
+# game-launch's apply_env already treats null as a TOMBSTONE that unsets. So the whole opt-in
+# needed no change to game-launch, and a game with no tweak inherits the session default.
+#
+# Overridable from session.conf (sourced above) for bring-up: DISABLE_LSFGVK= (empty) restores the
+# layer's default of loading everywhere, which is occasionally what you want when bisecting. The
+# `=` (not `:=`) is what makes an EMPTY override stick rather than being silently re-defaulted.
+: "${DISABLE_LSFGVK=1}"
+export DISABLE_LSFGVK
+
 # Composite rotation is UPSTREAM as of gamescope 3.16.28 (commit 38fb50fc, our PR #2228 merged
 # verbatim); we no longer carry a patch for it, so this needs nothing from the from-source overlay
 # beyond the version. It replaced the ROCKNIX --use-rotation-shader patch. No flag is needed:

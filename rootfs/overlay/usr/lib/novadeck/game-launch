@@ -102,11 +102,31 @@ def load_tweaks(defaults):
 
 
 def settings_for(tweaks, game_id):
-    """Global settings, overlaid with this game's if it has an entry that is explicitly enabled."""
+    """Global settings, overlaid with this game's if it has an entry that is explicitly enabled.
+
+    `enabled` and `framegen` are DIFFERENT OPT-INS and neither implies the other. `enabled` means
+    the user turned on per-game TUNING (cores, scheduler, FEX profile, power profile); `framegen`
+    means they turned on frame generation, which needs nothing but its two env vars.
+
+    They used to share `enabled`, because this function gated the whole entry -- including `env`
+    -- on it, so the frame-generation plugin had to set `enabled` for its env to be read at all.
+    That worked, and made turning on frame generation light the game up as "tweaked" in the
+    control plugin, which is a claim the user never made.
+
+    So: a framegen-only entry contributes its `env` and NOTHING else. Merging the whole dict here
+    would hand it `cores`/`scheduler` the user never enabled -- the same conflation, pointed the
+    other way.
+    """
     settings = dict(tweaks.get("global", {}))
     game = tweaks.get("games", {}).get(str(game_id)) if game_id else None
-    if isinstance(game, dict) and game.get("enabled") is True:
+    if not isinstance(game, dict):
+        return settings
+    if game.get("enabled") is True:
         settings.update(game)
+    elif game.get("framegen") is True:
+        env = game.get("env")
+        if isinstance(env, dict):
+            settings["env"] = env
     return settings
 
 

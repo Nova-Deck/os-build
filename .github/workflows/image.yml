@@ -141,14 +141,50 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
+  # The FEX-guest frame-generation layer, for exactly the same reasons as mesa-x86 above: x86 code
+  # in a pinned x86 container, so a native x86_64 runner rather than qemu on the arm64 one, and the
+  # payload crosses as an artifact so the build job's `make` is a digest-check no-op.
+  #
+  # NOT FOR THE INSTALLER, same as mesa-x86 and for the same reason: this is staged into the
+  # shipped rootfs by rootfs/assemble-rootfs.sh, which the installer root never runs. The installer
+  # has its own package set (installer/pkgs.list), no FEX and no x86 guest, so building this for an
+  # installer release would spend the whole timeout on bytes the artifact cannot carry.
+  #
+  # Its aarch64 SIBLING (packages/lsfg-vk) needs no job here at all -- it is an ordinary overlay
+  # package and is built by `make overlay` in the build job below.
+  lsfg-vk-x86:
+    name: lsfg-vk-x86 payload
+    if: inputs.artifact != 'installer'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/cache@v6
+        with:
+          path: work/lsfg-vk-x86
+          key: lsfg-vk-x86-${{ hashFiles('packages/lsfg-vk-x86/**', 'packages/lsfg-vk/PKGBUILD', 'packages/fex-rootfs/prebuilt.pin') }}
+      - name: build the FEX-guest frame-generation layer
+        run: make lsfg-vk-x86
+      - name: upload the payload
+        uses: actions/upload-artifact@v7
+        with:
+          name: lsfg-vk-x86-payload
+          path: work/lsfg-vk-x86
+          # .inputs.sha256 is a dotfile and upload-artifact skips hidden files by default --
+          # without it the build job rebuilds under qemu instead of hitting the digest check.
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 3
+
   build:
     name: ${{ inputs.artifact }}
-    needs: mesa-x86
+    needs: [mesa-x86, lsfg-vk-x86]
     # A SKIPPED `needs` SKIPS THE DEPENDENT JOB, which is how an installer release would otherwise
-    # produce nothing at all while reporting green. `!cancelled()` rather than `always()` so a
-    # cancelled run still stops, and `!= 'failure'` so a mesa-x86 that genuinely broke still blocks
-    # the artifacts that contain it.
-    if: ${{ !cancelled() && needs.mesa-x86.result != 'failure' }}
+    # produce nothing at all while reporting green -- and BOTH payload jobs skip for the installer,
+    # so this guard now carries twice the weight it did. `!cancelled()` rather than `always()` so a
+    # cancelled run still stops, and `!= 'failure'` per job so a payload that genuinely broke still
+    # blocks the artifacts that contain it, while a skipped one does not.
+    if: ${{ !cancelled() && needs.mesa-x86.result != 'failure' && needs.lsfg-vk-x86.result != 'failure' }}
     runs-on: ${{ vars.OVERLAY_RUNNER || 'ubuntu-24.04-arm' }}
     # THE ENVIRONMENT IS THE AUTHORIZATION BOUNDARY FOR SIGNING, and it has to be declared here
     # rather than by the caller: a reusable workflow's job cannot be attached to an environment from
@@ -213,6 +249,15 @@ jobs:
         with:
           name: mesa-x86-payload
           path: work/mesa-x86
+
+      # The x86 frame-generation layer, built natively in the lsfg-vk-x86 job above. Same
+      # hard-requirement in the rootfs assembly, same reason for landing it here.
+      - name: fetch the lsfg-vk-x86 payload
+        if: inputs.artifact != 'installer'
+        uses: actions/download-artifact@v8
+        with:
+          name: lsfg-vk-x86-payload
+          path: work/lsfg-vk-x86
 
       # ~34 minutes cold for the 8 from-source packages. The runner is fresh, so this is always
       # cold; there is no stamp cache to hit here the way there is on a dev box.

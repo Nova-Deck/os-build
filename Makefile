@@ -293,7 +293,7 @@ ASSEMBLE_SRC := $(shell find $(ROOTFS_DIR)/assemble-rootfs.sh $(ROOTFS_DIR)/seal
 # $(DECKY_DISTS), so a backend-only edit must still bump that plugin's dist mtime (it costs one
 # ~10s no-change npm build) or the re-assembly would silently not happen — the same staleness
 # shape MODE_STAMP exists for.
-DECKY_PLUGINS := novadeck-control novadeck-monitor
+DECKY_PLUGINS := novadeck-control novadeck-monitor novadeck-framegen
 DECKY_DISTS   := $(DECKY_PLUGINS:%=apps/decky/%/dist/index.js)
 decky_src      = $(shell find apps/decky/$(1)/src apps/decky/$(1)/py_modules apps/decky/$(1)/main.py \
                               apps/decky/$(1)/plugin.json apps/decky/$(1)/package.json \
@@ -311,6 +311,15 @@ MESA_X86_STAMP := work/.mesa-x86.stamp
 MESA_X86_SRC   := packages/mesa-x86/build.sh packages/mesa-x86/container-build.sh \
                   packages/mesa-x86/builder.pin packages/mesa/PKGBUILD packages/mesa/source.pin \
                   packages/fex-rootfs/prebuilt.pin $(wildcard packages/mesa/patches/*.patch)
+
+# The x86_64 + i686 lsfg-vk layer for the FEX guest (packages/lsfg-vk-x86/), built from source
+# in the same pinned x86 Arch container mesa-x86 uses -- the layer loads INSIDE the guest, so its
+# glibc ceiling is gated against the guest rootfs pin. Rides the SAME guest payload as the Turnip
+# above. The upstream TAG comes from packages/lsfg-vk/PKGBUILD so the two arches cannot drift.
+LSFG_VK_STAMP := work/.lsfg-vk-x86.stamp
+LSFG_VK_SRC   := packages/lsfg-vk-x86/build.sh packages/lsfg-vk-x86/container-build.sh \
+                 packages/lsfg-vk-x86/builder.pin packages/lsfg-vk/PKGBUILD \
+                 packages/fex-rootfs/prebuilt.pin
 
 # Kernel inputs: any change re-triggers the (full, from-scratch) kernel build. The unified
 # kernel globs every fragment/patch/dts, and bakes the firmware embed list.
@@ -350,7 +359,7 @@ KERNEL_SRC_HASH := work/.kernel-src.hash
 # Phony orchestration targets
 # ==============================================================================
 .PHONY: help all image toolchain kernel fw-linux fw-qcom base overlay verify-lock \
-        rootfs relock mesa-x86 installer installer-root relock-installer verify-image \
+        rootfs relock mesa-x86 lsfg-vk-x86 installer installer-root relock-installer verify-image \
         initramfs steamcl grub sdcard verify-card test test-disk bundle sign-bundle publish-bundle \
         steam-seed-artifact deploy clean clean-base clean-overlay distclean
 
@@ -759,7 +768,7 @@ $(VERSION_STAMP):
 # /usr/lib/novadeck/boot mirror the RAUC hook refreshes the ESP and the slot's efi partition FROM.
 # That is what makes "this root and the software that boots it came from one build" true by
 # construction. No cycle: the initramfs is built from work/base, never from the assembled root.
-$(ROOTFS): $(KERNEL) $(INITRAMFS) $(STEAMCL) $(GRUB) $(BASE_STAMP) $(FW_LINUX) $(FW_QCOM) $(STEAM_SEED) $(ASSEMBLE_SRC) $(DECKY_DISTS) $(MESA_X86_STAMP) $(MODE_STAMP) $(VERSION_STAMP) | $(BUILD_STAMP)
+$(ROOTFS): $(KERNEL) $(INITRAMFS) $(STEAMCL) $(GRUB) $(BASE_STAMP) $(FW_LINUX) $(FW_QCOM) $(STEAM_SEED) $(ASSEMBLE_SRC) $(DECKY_DISTS) $(MESA_X86_STAMP) $(LSFG_VK_STAMP) $(MODE_STAMP) $(VERSION_STAMP) | $(BUILD_STAMP)
 	$(DOCKER) $(DEV_ENV) $(ID_ENV) -e NOVADECK_DEBUG $(BUILD_IMG) \
 	  $(ROOTFS_DIR)/assemble-rootfs.sh /src/work/base
 
@@ -771,6 +780,13 @@ $(MESA_X86_STAMP): $(MESA_X86_SRC)
 	@mkdir -p $(@D) && touch $@
 
 mesa-x86: $(MESA_X86_STAMP) ## Build the x86 Turnip payload for the FEX guest (host docker, x86)
+
+# No container and no compile -- see packages/lsfg-vk-x86/payload.pin for why this one is a prebuilt.
+$(LSFG_VK_STAMP): $(LSFG_VK_SRC)
+	packages/lsfg-vk-x86/build.sh
+	@mkdir -p $(@D) && touch $@
+
+lsfg-vk-x86: $(LSFG_VK_STAMP) ## Build the x86 lsfg-vk layer payload for the FEX guest (host docker, x86)
 
 # Host docker, not $(BUILD_IMG): the cross-compile toolchain image has no node, and a plugin
 # frontend is pure TS -> one bundle, nothing arch-specific. -u keeps dist/ host-owned (the
@@ -790,7 +806,7 @@ apps/decky/$(1)/dist/index.js: $$(call decky_src,$(1))
 endef
 $(foreach plugin,$(DECKY_PLUGINS),$(eval $(call DECKY_RULE,$(plugin))))
 
-decky-plugin: $(DECKY_DISTS) ## Build the Decky plugin frontends: novadeck-control, novadeck-monitor (host docker, node)
+decky-plugin: $(DECKY_DISTS) ## Build the Decky plugin frontends: novadeck-control, novadeck-monitor, novadeck-framegen (host docker, node)
 
 # ==============================================================================
 # Boot stage + bootable media (container)

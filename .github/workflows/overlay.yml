@@ -52,6 +52,7 @@ on:
       # source.pin and patches — are already covered by the globs above; these two are the ones
       # only it cares about (build.sh asserts its snapshot against the fex-rootfs pin).
       - 'packages/mesa-x86/**'
+      - 'packages/lsfg-vk-x86/**'
       - 'packages/fex-rootfs/prebuilt.pin'
   workflow_dispatch:
     inputs:
@@ -79,6 +80,7 @@ jobs:
       matrix: ${{ steps.plan.outputs.matrix }}
       any: ${{ steps.plan.outputs.any }}
       mesa_x86: ${{ steps.plan.outputs.mesa_x86 }}
+      lsfg_vk_x86: ${{ steps.plan.outputs.lsfg_vk_x86 }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -122,6 +124,7 @@ jobs:
           sel=""
           why=""
           mx=false   # the mesa-x86 proof job (not an overlay package; see its job below)
+          lx=false   # the lsfg-vk-x86 proof job, same idea (packages/lsfg-vk-x86)
           if [ -n "${PACKAGES:-}" ]; then
             # Validate against the tree rather than trusting the operator's spelling: a typo must be
             # an error, not a silently empty build set.
@@ -129,6 +132,7 @@ jobs:
               # mesa-x86 is requestable by name but never enters the matrix — it is not built by
               # build-overlay.sh and has its own x86_64 job.
               if [ "$want" = "mesa-x86" ]; then mx=true; continue; fi
+              if [ "$want" = "lsfg-vk-x86" ]; then lx=true; continue; fi
               found=""
               for d in "${!NAMEOF[@]}"; do [ "${NAMEOF[$d]}" = "$want" ] && found=1; done
               [ -n "$found" ] || { echo "::error::no such package: $want"; exit 1; }
@@ -156,6 +160,10 @@ jobs:
             # mesa-x86's inputs: its own dir, the host mesa sources it mirrors, and the fex-rootfs
             # pin its snapshot is asserted against (packages/mesa-x86/build.sh).
             printf '%s\n' "$changed" | grep -qE '^(packages/mesa-x86/|packages/mesa/|packages/fex-rootfs/prebuilt\.pin$)' && mx=true
+            # lsfg-vk-x86's inputs: its own dir, the HOST PKGBUILD it reads the upstream tag from
+            # (so the two arches cannot drift), and the fex-rootfs pin its snapshot is asserted
+            # against (packages/lsfg-vk-x86/build.sh).
+            printf '%s\n' "$changed" | grep -qE '^(packages/lsfg-vk-x86/|packages/lsfg-vk/PKGBUILD$|packages/fex-rootfs/prebuilt\.pin$)' && lx=true
           fi
 
           sel="$(printf '%s' "$sel" | sed '/^$/d' | sort -u)"
@@ -167,7 +175,8 @@ jobs:
           # list unless it is gated, and an empty-list job fails rather than skipping.
           echo "any=$([ "$n" -gt 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
           echo "mesa_x86=$mx" >> "$GITHUB_OUTPUT"
-          echo "$n package(s) to build — $why (mesa-x86 proof: $mx)" >> "$GITHUB_STEP_SUMMARY"
+          echo "lsfg_vk_x86=$lx" >> "$GITHUB_OUTPUT"
+          echo "$n package(s) to build — $why (mesa-x86 proof: $mx, lsfg-vk-x86 proof: $lx)" >> "$GITHUB_STEP_SUMMARY"
           printf '%s\n' "$m" >> "$GITHUB_STEP_SUMMARY"
 
   build:
@@ -214,3 +223,23 @@ jobs:
           key: mesa-x86-${{ hashFiles('packages/mesa-x86/**', 'packages/mesa/PKGBUILD', 'packages/mesa/source.pin', 'packages/mesa/patches/*.patch', 'packages/fex-rootfs/prebuilt.pin') }}
       - name: build
         run: make mesa-x86
+
+  # The FEX-guest frame-generation layer (packages/lsfg-vk-x86) — same shape as mesa-x86 above and
+  # for the same reason: it compiles x86 code in a pinned x86 Arch container, which the arm64
+  # overlay runner could only manage under qemu. Its aarch64 SIBLING (packages/lsfg-vk) is a normal
+  # overlay package and rides the matrix above; these two halves serve different games and neither
+  # substitutes for the other, so both need to go red independently.
+  lsfg-vk-x86:
+    name: build lsfg-vk-x86 (x86_64 guest)
+    needs: plan
+    if: needs.plan.outputs.lsfg_vk_x86 == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/cache@v6
+        with:
+          path: work/lsfg-vk-x86
+          key: lsfg-vk-x86-${{ hashFiles('packages/lsfg-vk-x86/**', 'packages/lsfg-vk/PKGBUILD', 'packages/fex-rootfs/prebuilt.pin') }}
+      - name: build
+        run: make lsfg-vk-x86

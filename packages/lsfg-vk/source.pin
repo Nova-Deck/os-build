@@ -1,0 +1,28 @@
+# lsfg-vk — the HOST aarch64 Vulkan layer, built FROM SOURCE via a novadeck-owned PKGBUILD
+# (packages/lsfg-vk/PKGBUILD), NOT fetched from the holo monorepo: the curated holo aarch64 repos
+# ship no lsfg-vk at all, and upstream publishes no arm64 binary either (builds.lsfg-vk.dev carries
+# x86_64 and i686 only). So there is nothing to `pacman -S` and nothing to download; we build it.
+#
+# WHY IT IS NEEDED despite every game here being x86: a Proton title's Vulkan calls are thunked out
+# to the HOST arm64 driver by Valve's compat tool, and pressure-vessel imports implicit layers from
+# the host's /usr/share/vulkan/implicit_layer.d. A layer must match the driver it fronts, so
+# Proton coverage needs an aarch64 layer installed host-side. The x86 layer
+# (packages/lsfg-vk-x86) covers the OTHER paths -- system FEX and native x86-64 Linux titles under
+# the compat tool, which render on the guest x86 Turnip. The two are complementary, not
+# alternatives. Measured on HW 2026-08-30; see the PKGBUILD header and issue #81.
+#
+# NO `patches:` LINE, EVER. lsfg-vk is CC-BY-NC-ND-4.0 and NoDerivatives means we may not ship a
+# modified build. Wanting to add one here is the signal to talk to upstream instead --
+# .claude/plans/lsfg-vk-upstream-outreach.md asks about exactly this build.
+#
+# Fields (see packages/mangohud/source.pin for the same shape):
+#   name           pkgname (must match the PKGBUILD); build-dir + repo entry
+#   pkgbuild_local path (relative to this dir) to the checked-in PKGBUILD to build
+#   pkgrel_suffix  numeric suffix appended to pkgrel so pacman prefers our build
+#
+# To bump: edit pkgver AND _tag in the PKGBUILD together (Arch pkgver cannot carry the hyphen in
+# upstream's `2.0.0-rc1`), then re-run packages/lsfg-vk/probe-benchmark.sh -- the per-SoC
+# flow-scale defaults the Decky plugin ships are measured, not derived.
+name: lsfg-vk
+pkgbuild_local: PKGBUILD
+pkgrel_suffix: 1

@@ -1,0 +1,41 @@
+# lsfg-vk-x86 — the x86_64 + i686 frame-generation layer for the FEX guest rootfs.
+#
+# NOT a pacman package and NOT a prebuilt: neither source.pin nor prebuilt.pin lives here, so
+# build-overlay.sh and customize-base.sh both ignore this directory. Same shape as
+# packages/mesa-x86 -- build.sh produces a plain payload tree (work/lsfg-vk-x86/out/usr/...) that
+# rootfs/assemble-rootfs.sh stages into the guest overlay payload, where the runtime overlayfs
+# lays it over the guest rootfs.
+#
+# THIS IS THE OTHER HALF OF packages/lsfg-vk, not a duplicate of it. Measured on HW 2026-08-30:
+# system FEX and Valve's compat tool running a NATIVE x86-64 Linux title both render on the GUEST
+# x86 Turnip, so those need an x86 layer inside the guest tree. A PROTON title is thunked out to
+# the HOST arm64 driver instead and needs the aarch64 layer (packages/lsfg-vk). A Vulkan layer has
+# to match the driver it fronts; neither of these covers the other's games.
+#
+# NO PATCHES, EVER -- CC-BY-NC-ND NoDerivatives. This builds upstream's tag exactly as cut. See
+# packages/lsfg-vk/source.pin for the same note and why it matters here specifically.
+#
+# THE TWO PINS BELOW ARE A PAIR, and both are coupled to packages/fex-rootfs/prebuilt.pin, for the
+# same reason packages/mesa-x86/builder.pin is:
+#
+#   snapshot  Arch Archive date the container's pacman is locked to. It MUST equal the fex-rootfs
+#             pin's version: the layer loads INSIDE the guest, so it must not reference glibc
+#             symbols newer than the guest ships. build.sh asserts this and refuses on drift, and
+#             container-build.sh gates the produced .so's symbol ceiling against the container's
+#             own glibc.
+#
+#   image     The dockerhub archlinux:base-devel tag the build runs in, dated just BEFORE the
+#             snapshot: a newer image downgrading to the snapshot trips package-split file
+#             conflicts and keyring-rejected signatures.
+#
+# WORTH KNOWING: upstream's own prebuilt is built on Ubuntu 22.04 and therefore carries a LOWER
+# glibc ceiling (GLIBC_2.34) than anything this container can produce. Building x86 ourselves is
+# not a technical improvement -- it buys a single licence posture and one build path for both
+# arches. If the guest glibc ever moves below what this container emits, the prebuilt is the
+# fallback, and it is a supported one.
+#
+# The lsfg-vk version is NOT pinned here: container-build.sh reads the tag from
+# packages/lsfg-vk/PKGBUILD, so the host aarch64 build and this one cannot drift to different
+# upstream versions. There is nothing to keep in step by hand except the pair above.
+image: archlinux:base-devel-20260809.0.570793
+snapshot: 2026/08/11

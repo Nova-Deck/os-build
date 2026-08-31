@@ -1,0 +1,6 @@
+{
+  "name": "Novadeck Frame Gen",
+  "author": "novadeck",
+  "flags": ["root"],
+  "api_version": 1
+}

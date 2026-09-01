@@ -1310,6 +1310,22 @@
 		pinctrl-0 = <&qup_uart13_default>;
 		pinctrl-names = "default";
 		status = "okay";
+
+		/*
+		 * The controller MCU, and the only thing on this port. Declaring it here binds
+		 * ayaneo-serial-mcu to the UART instead of registering a tty, which is what makes
+		 * the mode switch below a driver's job rather than a boot script's.
+		 *
+		 * `ayaneo,xbox360-mode` asks that driver to switch the MCU out of its direct-input
+		 * personality (4001:0428, no EV_FF, so no rumble) into its Xbox 360 one
+		 * (045e:028e, driven by xpad, which has force feedback). Same MCU as the SM8550
+		 * AYANEO Pockets, on the same kind of dedicated GENI port -- uart13 here where
+		 * they use uart11, which is the only difference.
+		 */
+		mcu {
+			compatible = "ayaneo,serial-mcu";
+			ayaneo,xbox360-mode;
+		};
 	};
 };
 

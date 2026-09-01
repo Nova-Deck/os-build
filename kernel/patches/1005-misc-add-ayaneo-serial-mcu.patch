@@ -1,0 +1,331 @@
+diff -Naur a/drivers/misc/ayaneo-serial-mcu.c b/drivers/misc/ayaneo-serial-mcu.c
+--- a/drivers/misc/ayaneo-serial-mcu.c	1970-01-01 01:00:00.000000000 +0100
++++ b/drivers/misc/ayaneo-serial-mcu.c	2026-09-01 15:18:32.501651198 +0200
+@@ -0,0 +1,292 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * AYANEO handheld controller MCU, serial side.
++ *
++ * The controller on these handhelds is an MCU with two USB personalities. Left alone it
++ * enumerates as a direct-input pad, `4001:0428` "AYANEO Controller", which reports buttons and
++ * axes but advertises NO EV_FF -- so nothing can rumble, on a device whose emulated pad promises
++ * rumble to games. A command on the MCU's own UART switches it to an Xbox 360 personality,
++ * `045e:028e`, which xpad drives and which does have force feedback.
++ *
++ * A second command picks which face-button layout that personality reports, and it matters
++ * because these boards do not all print the same letters on the same buttons. See
++ * AYANEO_MCU_LAYOUT_* below.
++ *
++ * That UART is a dedicated port with nothing else on it, so the switch belongs to a driver that
++ * OWNS the port rather than to a boot script racing whoever opens the tty first. Binding a serdev
++ * driver to it takes the port out of /dev entirely: no tty is registered, the commands go out at
++ * probe before userspace exists, and the mode is settled long before any input daemon enumerates.
++ *
++ * The MCU is write-only as far as this driver is concerned. It does answer, but nothing here
++ * needs the answer, so received bytes are consumed and dropped.
++ */
++
++#include <linux/delay.h>
++#include <linux/hex.h>
++#include <linux/mod_devicetable.h>
++#include <linux/module.h>
++#include <linux/notifier.h>
++#include <linux/property.h>
++#include <linux/serdev.h>
++#include <linux/suspend.h>
++#include <linux/workqueue.h>
++
++#define AYANEO_MCU_BAUD_RATE		115200
++#define AYANEO_MCU_TX_TIMEOUT_MS	100
++#define AYANEO_MCU_DRAIN_TIMEOUT_MS	100
++
++/*
++ * The MCU wants its frames spaced, and this is not a handshake -- there is no reply to wait on,
++ * so the gap is the only thing sequencing them. Every known-good sequence for this MCU uses
++ * 100ms; shortening it has not been tested.
++ */
++#define AYANEO_MCU_FRAME_GAP_MS		100
++
++/*
++ * A command is EIGHT payload bytes, sent twice in two different encodings, and the MCU needs
++ * both:
++ *
++ *   1. a binary frame  0xe7 <payload[8]> <checksum> 0xed
++ *   2. the same payload spelled out as 16 uppercase hex ASCII characters
++ *
++ * The checksum is the low byte of the payload sum. That is not a guess -- it reproduces the
++ * checksum byte of all three known-good commands below (0x5b, 0x33, 0x43), which is why this
++ * computes it instead of carrying opaque constants.
++ */
++#define AYANEO_MCU_PAYLOAD_LEN		8
++#define AYANEO_MCU_BINARY_LEN		(AYANEO_MCU_PAYLOAD_LEN + 3)
++#define AYANEO_MCU_ASCII_LEN		(AYANEO_MCU_PAYLOAD_LEN * 2)
++#define AYANEO_MCU_FRAME_START		0xe7
++#define AYANEO_MCU_FRAME_END		0xed
++
++/* Switch the MCU to its Xbox 360 personality (045e:028e). */
++static const u8 ayaneo_mcu_cmd_xbox360[AYANEO_MCU_PAYLOAD_LEN] = {
++	0x55, 0x05, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00,
++};
++
++/*
++ * Swap the face buttons the Xbox 360 personality reports: A<->B and X<->Y.
++ *
++ * These handhelds do not agree on what is printed where. On a Pocket ACE or DMG the BOTTOM button
++ * is printed `B` and the right one `A`, the Nintendo arrangement; on an EVO, DS, Pocket S or
++ * Pocket S2 the bottom button is `A`, the Xbox arrangement. The MCU reports by LABEL, so on the
++ * first group every face button lands one position from where it should be until this is sent.
++ *
++ * ONLY THE BOARDS THAT NEED THE SWAP SEND ANYTHING. The same command with 0x1f in place of 0x0f
++ * selects the unswapped layout, and the reference this was ported from sends it to the
++ * Xbox-labelled boards -- but those boards report correctly here having never been sent any
++ * layout command at all, so 0x1f is what the MCU already does and saying it again is noise. It is
++ * recorded here rather than implemented, so that a board which ever does come up swapped has a
++ * documented lever instead of a rediscovery.
++ */
++static const u8 ayaneo_mcu_cmd_swap_faces[AYANEO_MCU_PAYLOAD_LEN] = {
++	0x00, 0x00, 0x22, 0x02, 0x00, 0x00, 0x00, 0x0f,
++};
++
++struct ayaneo_mcu {
++	struct serdev_device *serdev;
++	struct notifier_block pm_nb;
++	struct work_struct resume_work;
++	bool xbox360_mode;
++	bool swap_faces;
++};
++
++static size_t ayaneo_mcu_receive_buf(struct serdev_device *serdev, const u8 *data, size_t count)
++{
++	/* Consume everything: the MCU's replies are of no interest to this driver. */
++	return count;
++}
++
++static const struct serdev_device_ops ayaneo_mcu_serdev_ops = {
++	.receive_buf = ayaneo_mcu_receive_buf,
++	.write_wakeup = serdev_device_write_wakeup,
++};
++
++static int ayaneo_mcu_write_full(struct ayaneo_mcu *mcu, const u8 *data, size_t len)
++{
++	ssize_t ret;
++
++	ret = serdev_device_write(mcu->serdev, data, len,
++				  msecs_to_jiffies(AYANEO_MCU_TX_TIMEOUT_MS));
++	if (ret < 0)
++		return ret;
++	if (ret != len)
++		return -ETIMEDOUT;
++
++	serdev_device_wait_until_sent(mcu->serdev,
++				      msecs_to_jiffies(AYANEO_MCU_DRAIN_TIMEOUT_MS));
++	return 0;
++}
++
++/* Send one command: the binary frame, then the same payload as hex ASCII. */
++static int ayaneo_mcu_send_command(struct ayaneo_mcu *mcu, const u8 *payload)
++{
++	u8 binary[AYANEO_MCU_BINARY_LEN];
++	char ascii[AYANEO_MCU_ASCII_LEN];
++	u8 checksum = 0;
++	unsigned int i;
++	int ret;
++
++	binary[0] = AYANEO_MCU_FRAME_START;
++	for (i = 0; i < AYANEO_MCU_PAYLOAD_LEN; i++) {
++		binary[1 + i] = payload[i];
++		checksum += payload[i];
++		hex_byte_pack_upper(&ascii[i * 2], payload[i]);
++	}
++	binary[AYANEO_MCU_PAYLOAD_LEN + 1] = checksum;
++	binary[AYANEO_MCU_PAYLOAD_LEN + 2] = AYANEO_MCU_FRAME_END;
++
++	ret = ayaneo_mcu_write_full(mcu, binary, sizeof(binary));
++	if (ret)
++		return ret;
++	msleep(AYANEO_MCU_FRAME_GAP_MS);
++
++	ret = ayaneo_mcu_write_full(mcu, (const u8 *)ascii, sizeof(ascii));
++	if (ret)
++		return ret;
++	msleep(AYANEO_MCU_FRAME_GAP_MS);
++
++	return 0;
++}
++
++static int ayaneo_mcu_configure(struct ayaneo_mcu *mcu)
++{
++	int ret;
++
++	ret = ayaneo_mcu_send_command(mcu, ayaneo_mcu_cmd_xbox360);
++	if (ret)
++		return ret;
++
++	if (!mcu->swap_faces)
++		return 0;
++
++	return ayaneo_mcu_send_command(mcu, ayaneo_mcu_cmd_swap_faces);
++}
++
++/*
++ * Resend on resume, off a work item rather than from the notifier: the commands sleep for 400ms
++ * in total and the PM notifier chain is not the place to spend that.
++ *
++ * A board that never reaches a real system suspend never runs this, which is the case today --
++ * these handhelds suspend by freezing userspace, where the MCU keeps its state because it was
++ * never powered down. It exists for the boards that do, where losing the mode would silently
++ * return the pad to direct input and take rumble with it.
++ */
++static void ayaneo_mcu_resume_work(struct work_struct *work)
++{
++	struct ayaneo_mcu *mcu = container_of(work, struct ayaneo_mcu, resume_work);
++	int ret;
++
++	ret = ayaneo_mcu_configure(mcu);
++	if (ret)
++		dev_warn(&mcu->serdev->dev,
++			 "could not restore the controller mode after resume: %d\n", ret);
++}
++
++static int ayaneo_mcu_pm_notify(struct notifier_block *nb, unsigned long action, void *data)
++{
++	struct ayaneo_mcu *mcu = container_of(nb, struct ayaneo_mcu, pm_nb);
++
++	switch (action) {
++	case PM_POST_SUSPEND:
++	case PM_POST_HIBERNATION:
++	case PM_POST_RESTORE:
++		schedule_work(&mcu->resume_work);
++		break;
++	default:
++		break;
++	}
++
++	return NOTIFY_DONE;
++}
++
++static void ayaneo_mcu_unregister_pm_notifier(void *data)
++{
++	struct ayaneo_mcu *mcu = data;
++
++	unregister_pm_notifier(&mcu->pm_nb);
++	cancel_work_sync(&mcu->resume_work);
++}
++
++static int ayaneo_mcu_probe(struct serdev_device *serdev)
++{
++	struct device *dev = &serdev->dev;
++	struct ayaneo_mcu *mcu;
++	unsigned int baud;
++	int ret;
++
++	mcu = devm_kzalloc(dev, sizeof(*mcu), GFP_KERNEL);
++	if (!mcu)
++		return -ENOMEM;
++
++	mcu->serdev = serdev;
++	mcu->xbox360_mode = device_property_read_bool(dev, "ayaneo,xbox360-mode");
++	mcu->swap_faces = device_property_read_bool(dev, "ayaneo,swap-face-buttons");
++	INIT_WORK(&mcu->resume_work, ayaneo_mcu_resume_work);
++	serdev_device_set_drvdata(serdev, mcu);
++	serdev_device_set_client_ops(serdev, &ayaneo_mcu_serdev_ops);
++
++	ret = devm_serdev_device_open(dev, serdev);
++	if (ret)
++		return dev_err_probe(dev, ret, "could not open the controller UART\n");
++
++	baud = serdev_device_set_baudrate(serdev, AYANEO_MCU_BAUD_RATE);
++	if (baud != AYANEO_MCU_BAUD_RATE)
++		return dev_err_probe(dev, -EINVAL,
++				     "could not set 115200 baud (got %u)\n", baud);
++
++	serdev_device_set_flow_control(serdev, false);
++	ret = serdev_device_set_parity(serdev, SERDEV_PARITY_NONE);
++	if (ret)
++		return dev_err_probe(dev, ret, "could not set 8N1 framing\n");
++
++	/*
++	 * Without the property this driver still binds and still owns the port, it just sends
++	 * nothing. That is the point of claiming it either way: a board whose MCU should stay in
++	 * direct-input mode says so by omitting the property, not by leaving the UART unowned.
++	 *
++	 * The face-button swap goes with the mode switch and only with it -- it configures the
++	 * Xbox personality, so it has nothing to say to an MCU that is not in it.
++	 */
++	if (mcu->xbox360_mode) {
++		ret = ayaneo_mcu_configure(mcu);
++		if (ret)
++			return dev_err_probe(dev, ret,
++					     "could not configure the controller MCU\n");
++	}
++
++	mcu->pm_nb.notifier_call = ayaneo_mcu_pm_notify;
++	ret = register_pm_notifier(&mcu->pm_nb);
++	if (ret)
++		return dev_err_probe(dev, ret, "could not register the PM notifier\n");
++
++	ret = devm_add_action_or_reset(dev, ayaneo_mcu_unregister_pm_notifier, mcu);
++	if (ret)
++		return ret;
++
++	if (mcu->xbox360_mode)
++		dev_info(dev, "AYANEO serial MCU registered (Xbox 360 mode%s)\n",
++			 mcu->swap_faces ? ", face buttons swapped" : "");
++	else
++		dev_info(dev, "AYANEO serial MCU registered (left in direct-input mode)\n");
++
++	return 0;
++}
++
++static const struct of_device_id ayaneo_mcu_of_match[] = {
++	{ .compatible = "ayaneo,serial-mcu" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, ayaneo_mcu_of_match);
++
++static struct serdev_device_driver ayaneo_mcu_driver = {
++	.probe = ayaneo_mcu_probe,
++	.driver = {
++		.name = "ayaneo-serial-mcu",
++		.of_match_table = ayaneo_mcu_of_match,
++	},
++};
++module_serdev_device_driver(ayaneo_mcu_driver);
++
++MODULE_DESCRIPTION("AYANEO handheld controller MCU serial interface");
++MODULE_LICENSE("GPL");
+diff -Naur a/drivers/misc/Kconfig b/drivers/misc/Kconfig
+--- a/drivers/misc/Kconfig	2026-09-01 15:02:56.606787333 +0200
++++ b/drivers/misc/Kconfig	2026-09-01 15:03:14.852063418 +0200
+@@ -637,6 +637,20 @@
+ source "drivers/misc/c2port/Kconfig"
+ source "drivers/misc/eeprom/Kconfig"
+ source "drivers/misc/cb710/Kconfig"
++config AYANEO_SERIAL_MCU
++	tristate "AYANEO handheld controller MCU serial interface"
++	depends on SERIAL_DEV_BUS
++	depends on OF
++	help
++	  Say Y here to claim the UART that the controller MCU on AYANEO
++	  handhelds is wired to, and to put that MCU into its Xbox 360
++	  personality on boards whose device tree asks for it. Without the
++	  switch the pad enumerates as a direct-input device with no force
++	  feedback, so rumble does not work.
++
++	  To compile this driver as a module, choose M here: the module will
++	  be called ayaneo-serial-mcu.
++
+ source "drivers/misc/lis3lv02d/Kconfig"
+ source "drivers/misc/altera-stapl/Kconfig"
+ source "drivers/misc/mei/Kconfig"
+diff -Naur a/drivers/misc/Makefile b/drivers/misc/Makefile
+--- a/drivers/misc/Makefile	2026-09-01 15:02:56.608445069 +0200
++++ b/drivers/misc/Makefile	2026-09-01 15:03:14.852107300 +0200
+@@ -71,6 +71,7 @@
+ lan966x-pci-objs		:= lan966x_pci.o
+ lan966x-pci-objs		+= lan966x_pci.dtbo.o
+ obj-$(CONFIG_MCHP_LAN966X_PCI)	+= lan966x-pci.o
++obj-$(CONFIG_AYANEO_SERIAL_MCU)	+= ayaneo-serial-mcu.o
+ obj-y				+= keba/
+ obj-y				+= amd-sbi/
+ obj-$(CONFIG_MISC_RP1)		+= rp1/

@@ -1028,8 +1028,8 @@
 		 * the same port; a board that should stay in direct input drops the property.
 		 *
 		 * The face-button layout is NOT set here — it is per-board and the labelling is
-		 * what differs, so the boards printed for a Nintendo layout add
-		 * `ayaneo,swap-face-buttons` to this node themselves.
+		 * what differs, so the boards printed for a Nintendo layout name a more specific
+		 * compatible on this node themselves.
 		 */
 		ayaneo_mcu: mcu {
 			compatible = "ayaneo,serial-mcu";

@@ -1015,6 +1015,26 @@
 		operating-points-v2 = <&qup_opp_table_100mhz>;
 		power-domains = <&rpmhpd RPMHPD_CX>;
 		status = "okay";
+
+		/*
+		 * The controller MCU, and the only thing on this port. Declaring it here binds
+		 * ayaneo-serial-mcu to the UART instead of registering a tty, which is what makes
+		 * the mode switch below a driver's job rather than a boot script's.
+		 *
+		 * `ayaneo,xbox360-mode` asks that driver to switch the MCU out of its direct-input
+		 * personality (4001:0428, no EV_FF, so no rumble) into its Xbox 360 one
+		 * (045e:028e, driven by xpad, which has force feedback). It sits in this common
+		 * rather than per-board because every AYANEO Pocket here carries the same MCU on
+		 * the same port; a board that should stay in direct input drops the property.
+		 *
+		 * The face-button layout is NOT set here — it is per-board and the labelling is
+		 * what differs, so the boards printed for a Nintendo layout name a more specific
+		 * compatible on this node themselves.
+		 */
+		ayaneo_mcu: mcu {
+			compatible = "ayaneo,serial-mcu";
+			ayaneo,xbox360-mode;
+		};
 	};
 };
 

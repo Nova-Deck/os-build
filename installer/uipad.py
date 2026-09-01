@@ -326,7 +326,7 @@ class PadInput:
         # which no InputPlumber config claimed. The raw pad has no gamecontrollerdb entry, so this
         # check would have skipped it and the consent screen would have found no controller at all.
         # Fixed where it belongs, in the source list of
-        # rootfs/overlay/etc/inputplumber/devices.d/sm8550-ayaneo-controller-japanese.yaml — not here.
+        # rootfs/overlay/etc/inputplumber/devices.d/50-ayaneo_pocket_ace.yaml — not here.
         # This line staying loud is what would name the next mode nobody has seen yet.
         if not self.controller.is_controller(index):
             log("input device %d is not a mapped game controller -- ignored" % index)

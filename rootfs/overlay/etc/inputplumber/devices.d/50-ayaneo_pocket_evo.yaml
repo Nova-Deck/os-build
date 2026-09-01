@@ -1,0 +1,55 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/ShadowBlip/InputPlumber/main/rootfs/usr/share/inputplumber/schema/composite_device_v1.json
+#
+# AYANEO Pocket EVO (SM8550). Upstream's Pocket S2 description, with this board's compatible from
+# kernel/dts/qcom/qcs8550-ayaneo-pocketevo.dts. THE REASONING IS IN 50-ayaneo_pocket_ace.yaml: why
+# the family moved onto upstream's shape, what was measured on the shared MCU, and what to watch
+# for on hardware.
+#
+# THE XINPUT phys_path IS THE ACE'S, and it is the whole family's: the gamepad's USB host is
+# declared once in qcs8550-ayaneo-pocket-common.dtsi and no board .dts touches it. The argument is
+# in 50-ayaneo_pocket_ace.yaml, including what the devicetree cannot settle.
+#
+# Not on hardware. The EVO has never been one of the test boards.
+version: 1
+kind: CompositeDevice
+name: AYANEO Pocket EVO
+
+maximum_sources: 0
+options:
+  auto_manage: true
+
+matches:
+  - udev:
+      sys_path: /sys/firmware/devicetree/base
+      attributes:
+        - name: compatible
+          value: ayaneo,pocketevo
+
+source_devices:
+  # Ayaneo mode
+  - group: gamepad
+    capability_map_id: dinput_generic
+    evdev:
+      name: AYANEO Controller
+      vendor_id: "4001"
+      product_id: "0428"
+      handler: event*
+  # Xinput mode
+  - group: gamepad
+    evdev:
+      phys_path: usb-0001:01:00.0-2/input0
+      vendor_id: "045e"
+      product_id: "028e"
+      handler: event*
+  - group: keyboard
+    capability_map_id: aya9
+    evdev:
+      name: AYANEO DEVICE
+      vendor_id: "1c4f"
+      product_id: "0002"
+      handler: event*
+
+target_devices:
+  - xbox-elite
+  - keyboard
+  - mouse

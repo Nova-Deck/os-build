@@ -1,0 +1,61 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/ShadowBlip/InputPlumber/main/rootfs/usr/share/inputplumber/schema/composite_device_v1.json
+#
+# AYANEO Pocket S 1K and Pocket S 2K (SM8550). Upstream's Pocket S2 description. THE REASONING IS
+# IN 50-ayaneo_pocket_ace.yaml: why the family moved onto upstream's shape, what was measured on
+# the shared MCU, and what to watch for on hardware.
+#
+# ONE FILE COVERS BOTH BOARDS, unavoidably: kernel/dts/qcom/qcs8550-ayaneo-pockets1k.dts and
+# -pockets2k.dts declare DIFFERENT models ("AYANEO Pocket S 1K" / "AYANEO Pocket S 2K") but the
+# SAME `compatible = "ayaneo,pocket-s1"`, and this description matches on compatible. That is not a
+# loss here — the two differ by panel (1080p60 vs 1440p) and share the controller entirely, which
+# is why the config this replaces listed both models against one identical source list. If they
+# ever need to diverge, the compatibles have to diverge first, in the devicetree.
+#
+# THE XINPUT phys_path IS THE ACE'S, and it is the whole family's: the gamepad's USB host is
+# declared once in qcs8550-ayaneo-pocket-common.dtsi and no board .dts touches it. The argument is
+# in 50-ayaneo_pocket_ace.yaml, including what the devicetree cannot settle.
+#
+# Not on hardware. Neither S 1K nor S 2K has been one of the test boards.
+version: 1
+kind: CompositeDevice
+name: AYANEO Pocket S
+
+maximum_sources: 0
+options:
+  auto_manage: true
+
+matches:
+  - udev:
+      sys_path: /sys/firmware/devicetree/base
+      attributes:
+        - name: compatible
+          value: ayaneo,pocket-s1
+
+source_devices:
+  # Ayaneo mode
+  - group: gamepad
+    capability_map_id: dinput_generic
+    evdev:
+      name: AYANEO Controller
+      vendor_id: "4001"
+      product_id: "0428"
+      handler: event*
+  # Xinput mode
+  - group: gamepad
+    evdev:
+      phys_path: usb-0001:01:00.0-2/input0
+      vendor_id: "045e"
+      product_id: "028e"
+      handler: event*
+  - group: keyboard
+    capability_map_id: aya9
+    evdev:
+      name: AYANEO DEVICE
+      vendor_id: "1c4f"
+      product_id: "0002"
+      handler: event*
+
+target_devices:
+  - xbox-elite
+  - keyboard
+  - mouse

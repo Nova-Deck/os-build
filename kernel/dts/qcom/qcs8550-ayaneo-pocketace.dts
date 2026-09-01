@@ -141,3 +141,14 @@
 		};
 	};
 };
+
+/*
+ * The BOTTOM face button on this board is printed `B` and the right one `A` -- the Nintendo
+ * arrangement -- while the MCU reports by LABEL by default, so every face button would land one
+ * position from where it is printed. Naming the japanese compatible is what asks the driver to
+ * correct it; the generic string stays as a fallback so a kernel that does not know the specific
+ * one still binds and still gets the Xbox 360 mode switch.
+ */
+&ayaneo_mcu {
+	compatible = "ayaneo,serial-mcu-japanese", "ayaneo,serial-mcu";
+};

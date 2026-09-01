@@ -1,8 +1,9 @@
 Add the novadeck stage-2 module.
 
 One command, novadeck_bootattempts <image-name>, which opens
-\SteamOS\conf\<image-name>.conf on the ESP through the firmware's
-EFI_FILE_PROTOCOL, increments the boot-attempts: value and writes it back.
+\SteamOS\conf\<image-name>.conf on the ESP of the disk this stage 2 was loaded
+from, through the firmware's EFI_FILE_PROTOCOL, increments the boot-attempts:
+value and writes it back.
 
 This REPLACES Valve's steamenv, which did the same increment inside
 steamenv_init and black-screened this device on 2026-08-02 without writing the
@@ -14,17 +15,27 @@ failure when that lookup comes up empty. Here the image name is an argument
 the conf is found by attempting the open on each handle in turn, and every
 failure path returns a grub_error naming what was tried.
 
+The handles tried are only those on OUR OWN disk, compared by the device-path
+prefix that precedes the HD() node. Every novadeck medium carries the same
+\SteamOS\conf\A.conf, so an unscoped sweep counts the boot on whichever volume
+the firmware publishes first -- observed 2026-09-01 incrementing an internal
+install's counter while a card was the medium actually booting. That count is
+never cleared, because the Linux half (novadeck-bootctl mark-good) clears
+through /esp, which is scoped to the booted disk. It climbs once per boot until
+steamcl's failsafe rolls back a healthy slot.
+
 GRUB cannot do this without a module: its own fat driver is read-only, so the
 EFI file protocol is the only way to write the ESP from stage 2.
 
 The file header carries the rest of the rationale, including why the ESP is
-reachable from a binary chainloaded off the SLOT's efi partition, and why we
+reachable from a binary chainloaded off the SLOT's efi partition, why the
+loaded image can name our disk but not the volume we want, and why we
 deliberately do not repeat stage 1's ConnectController sweep.
 
 diff -urN a/grub-core/commands/efi/novadeck.c b/grub-core/commands/efi/novadeck.c
 --- a/grub-core/commands/efi/novadeck.c
 +++ b/grub-core/commands/efi/novadeck.c
-@@ -0,0 +1,530 @@
+@@ -0,0 +1,649 @@
 +/*
 + *  novadeck.mod  --  bump the SteamOS bootconf `boot-attempts` counter.
 + *
@@ -72,23 +83,61 @@ diff -urN a/grub-core/commands/efi/novadeck.c b/grub-core/commands/efi/novadeck.
 + *       simplification, not a fix. Deleting it is still right: it is ~2000
 + *       lines of discovery for a fact the config already has.)
 + *
-+ *    2. FINDING THE CONF IS TRY-EACH-HANDLE, NOT UUID MATCHING. steamenv
-+ *       enumerates SIMPLE_FILE_SYSTEM handles and picks the one whose
-+ *       partition uuid equals the ESP uuid it parsed out of partsets/all. We
-+ *       just attempt the open on every handle and take the first that works.
-+ *       No uuid arithmetic, and no assumption about which handles a minimal
-+ *       UEFI implementation chooses to publish. The conf lives only on the ESP
-+ *       (image/make-sdcard.sh), so the first hit is the right one.
++ *    2. FINDING THE CONF IS TRY-EACH-HANDLE ON OUR OWN DISK, NOT UUID
++ *       MATCHING. steamenv enumerates SIMPLE_FILE_SYSTEM handles and picks the
++ *       one whose partition uuid equals the ESP uuid it parsed out of
++ *       partsets/all. We attempt the open on every handle that belongs to the
++ *       disk this stage 2 was loaded from, and take the first that works. No
++ *       uuid arithmetic, and no assumption about which handles a minimal UEFI
++ *       implementation chooses to publish.
 + *
-+ *    3. IT FAILS LOUDLY. steamenv's process_boot_config() acts only if the
-+ *       load succeeded and returns GRUB_ERR_NONE either way, so "found no
-+ *       conf" is indistinguishable from "counted a boot" — which is exactly
-+ *       what we observed on hardware. Every failure here returns a grub_error
-+ *       naming what was tried, and the success path prints old -> new.
++ *       THE DISK SCOPING IS LOAD-BEARING, and it is the one thing this module
++ *       got wrong for its first year. It used to try every handle in
++ *       enumeration order, on the reasoning that "the conf lives only on the
++ *       ESP, so the first hit is the right one". That holds for exactly one
++ *       novadeck medium. Every novadeck medium carries the same nine
++ *       partitions and the same \SteamOS\conf\A.conf (image/make-sdcard.sh),
++ *       so on a device with an internal install AND a card inserted the first
++ *       hit is whichever volume the firmware happens to publish first —
++ *       observed 2026-09-01 to be the INTERNAL ESP while the card was the
++ *       medium being booted, silently incrementing the internal install's
++ *       counter. Nothing on the OS side can undo that: the Linux half of this
++ *       accounting (novadeck-bootctl mark-good) clears the counter through
++ *       /esp, which is scoped to the BOOTED disk, so a count landing on the
++ *       other disk is never cleared. It climbs once per boot until steamcl's
++ *       failsafe marks a perfectly healthy slot bad and rolls it back. See
++ *       docs/phase5-bootattempts.md.
++ *
++ *       So: if we know our own disk, a volume on any OTHER disk is not a
++ *       candidate, and finding no conf on our own disk is an ERROR rather
++ *       than a licence to write to a neighbour's. We only fall back to the
++ *       unscoped sweep when the firmware will not tell us which disk we came
++ *       from at all, and we say so on screen when we do.
++ *
++ *    3. IT FAILS LOUDLY, AND SUCCEEDS SILENTLY. steamenv's
++ *       process_boot_config() acts only if the load succeeded and returns
++ *       GRUB_ERR_NONE either way, so "found no conf" is indistinguishable from
++ *       "counted a boot" — which is exactly what we observed on hardware.
++ *       Every failure here returns a grub_error naming what was tried, and
++ *       gen-grub-cfg.sh's else-arm holds that on screen for 10s.
++ *
++ *       The success path prints NOTHING, and that is deliberate. It used to
++ *       print `old -> new`, which nobody could ever read: the success arm of
++ *       the config is a bare `true` with no dwell, so GRUB draws the menu and
++ *       clears the line immediately. HW-confirmed 2026-09-01 — not seen even
++ *       on a fresh card's first boot, where the menu waits for input, because
++ *       DRAWING the menu is what clears the screen. Giving the healthy path a
++ *       dwell would tax every boot on every device to report nothing, so the
++ *       line went instead. The counter's effect is read from the conf: from
++ *       the booted system inside the first ~60s, before mark-good clears it,
++ *       and offline afterwards. See docs/phase5-bootattempts.md.
 + *
 + *  WHY THE ESP IS REACHABLE AT ALL is worth stating, because GRUB is
 + *  chainloaded from the SLOT'S efi partition, not from the ESP -- so unlike
-+ *  stage 1 we cannot just ask our own loaded image for it.
++ *  stage 1 we cannot just ask our own loaded image for it. (We do ask the
++ *  loaded image which DISK we are on, per point 2 above; that narrows the
++ *  enumeration but cannot replace it, because the volume we want is not the
++ *  volume we were loaded from.)
 + *
 + *  Stage 1 (steamcl) cannot reach \EFI\steamos\grubaa64.efi on efi-A without
 + *  enumerating SIMPLE_FILE_SYSTEM handles and mounting each in turn
@@ -253,6 +302,58 @@ diff -urN a/grub-core/commands/efi/novadeck.c b/grub-core/commands/efi/novadeck.
 +static char outbuf[CONF_MAX];
 +
 +/* ==========================================================================
++   Scoping the search to the disk we were loaded from.
++
++   A partition's EFI device path is the disk's path with a MEDIA/HARD_DRIVE
++   node appended: PciRoot(..)/../eMMC(..)/HD(1,GPT,<guid>,..). Two partitions
++   are on the same disk exactly when everything BEFORE that HD() node is
++   byte-identical, so that prefix is the whole comparison — no GUIDs, no
++   partition numbers, no assumption about how the firmware spells a disk.
++
++   Our own path comes from the loaded-image protocol: GRUB is chainloaded off
++   the SLOT's efi partition (efi-A or efi-B), which is on the same medium as
++   the ESP we want, because a novadeck medium is one GPT (image/partition-
++   table.txt). So the slot partition we booted from names our disk even though
++   it is not the volume we are looking for.
++   ========================================================================== */
++
++/* Byte length of the device-path nodes that identify the DISK — everything
++   before the first MEDIA/HARD_DRIVE node. 0 means the path names no partition
++   at all, which is this module's "cannot be scoped" signal. */
++static grub_size_t
++disk_prefix_len (const grub_efi_device_path_t *dp)
++{
++  const grub_efi_device_path_t *p = dp;
++  grub_size_t len = 0;
++
++  while (!GRUB_EFI_END_ENTIRE_DEVICE_PATH (p))
++    {
++      if (GRUB_EFI_DEVICE_PATH_TYPE (p) == GRUB_EFI_MEDIA_DEVICE_PATH_TYPE
++          && (GRUB_EFI_DEVICE_PATH_SUBTYPE (p)
++              == GRUB_EFI_HARD_DRIVE_DEVICE_PATH_SUBTYPE))
++        return len;
++
++      len += GRUB_EFI_DEVICE_PATH_LENGTH (p);
++      p = GRUB_EFI_NEXT_DEVICE_PATH (p);
++    }
++
++  return 0;
++}
++
++/* Is `other` a partition of the same disk as the path whose prefix is
++   `self`/`self_len`? A zero-length prefix never matches, so a caller that
++   could not identify its own disk cannot accidentally match everything. */
++static int
++same_disk (const grub_efi_device_path_t *self, grub_size_t self_len,
++           const grub_efi_device_path_t *other)
++{
++  if (self_len == 0 || disk_prefix_len (other) != self_len)
++    return 0;
++
++  return grub_memcmp (self, other, self_len) == 0;
++}
++
++/* ==========================================================================
 +   Locating the conf.
 +   ========================================================================== */
 +
@@ -406,6 +507,10 @@ diff -urN a/grub-core/commands/efi/novadeck.c b/grub-core/commands/efi/novadeck.
 +  grub_guid_t fs_guid = GRUB_EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID;
 +  grub_efi_handle_t *handles = NULL;
 +  grub_efi_uintn_t n_handles = 0;
++  grub_efi_uintn_t n_ondisk = 0;
++  grub_efi_loaded_image_t *li;
++  grub_efi_device_path_t *self_dp = NULL;
++  grub_size_t self_len = 0;
 +  efi_file_protocol_t *root = NULL;
 +  efi_file_protocol_t *fh = NULL;
 +  grub_efi_uintn_t i, len = 0, outlen;
@@ -448,22 +553,51 @@ diff -urN a/grub-core/commands/efi/novadeck.c b/grub-core/commands/efi/novadeck.
 +    path[dirlen + k] = (grub_efi_char16_t) name[k];
 +  grub_memcpy (&path[dirlen + namelen], CONF_EXT, sizeof (CONF_EXT));
 +
++  /* Which disk are we? Both lookups are firmware-owned pointers — nothing to
++     free — and either can legitimately come back empty on a minimal UEFI, so
++     neither is fatal on its own. */
++  li = grub_efi_get_loaded_image (grub_efi_image_handle);
++  if (li && li->device_handle)
++    self_dp = grub_efi_get_device_path (li->device_handle);
++  if (self_dp)
++    self_len = disk_prefix_len (self_dp);
++
++  if (self_len == 0)
++    grub_printf ("novadeck: WARNING: this firmware does not say which disk"
++                 " stage 2 was loaded from -- falling back to the first volume"
++                 " that carries the conf. With two novadeck media present that"
++                 " can be the WRONG one.\n");
++
 +  handles = grub_efi_locate_handle (GRUB_EFI_BY_PROTOCOL, &fs_guid, NULL,
 +                                    &n_handles);
 +
 +  for (i = 0; handles && i < n_handles && !fh; i++)
-+    fh = try_handle (handles[i], path, &root);
++    {
++      if (self_len != 0
++          && !same_disk (self_dp, self_len,
++                         grub_efi_get_device_path (handles[i])))
++        continue;
++
++      n_ondisk++;
++      fh = try_handle (handles[i], path, &root);
++    }
 +
 +  grub_free (handles);
 +
-+  /* The handle count is the diagnostic, not decoration: if this device turns
-+     out to publish only the volume it booted from, this line is what says so
-+     — and it is the fact the first attempt at this failed to establish. */
++  /* The handle counts are the diagnostic, not decoration: tried-of-published
++     separates "this firmware publishes only the volume it booted from" from
++     "our own disk has no ESP", which need opposite fixes. Refusing here is
++     deliberate — see the disk-scoping note in the header. Counting a boot on a
++     volume we cannot place on our own disk is the failure this path exists to
++     avoid, and a slot that goes uncounted fails safe where that one does not:
++     gen-grub-cfg.sh's else-arm holds this message on screen. */
 +  if (!fh)
 +    return grub_error (GRUB_ERR_FILE_NOT_FOUND,
 +                       "novadeck: no volume carries \\SteamOS\\conf\\%s.conf "
-+                       "(%llu simple-filesystem handle(s) tried)",
-+                       name, (unsigned long long) n_handles);
++                       "(%llu of %llu simple-filesystem handle(s) tried%s)",
++                       name, (unsigned long long) n_ondisk,
++                       (unsigned long long) n_handles,
++                       self_len ? ", scoped to the boot disk" : "");
 +
 +  rv = read_conf (fh, &len);
 +  if (rv != GRUB_ERR_NONE)
@@ -527,10 +661,6 @@ diff -urN a/grub-core/commands/efi/novadeck.c b/grub-core/commands/efi/novadeck.
 +               (grub_size_t) (confbuf + len - tail));
 +
 +  rv = write_conf (fh, outbuf, outlen);
-+  if (rv != GRUB_ERR_NONE)
-+    goto out;
-+
-+  grub_printf ("novadeck: %s boot-attempts %lu -> %lu\n", name, val, val + 1);
 +
 + out:
 +  fh->close (fh);

@@ -64,10 +64,13 @@ That deletes the partsets path entirely. (When this was written the partsets pat
 suspect for the failure. Reading steamcl afterwards showed handle enumeration works fine here, so
 this is a simplification rather than a fix — still the right call, but not for the stated reason.)
 
-**Finding the conf: try, don't match.** Enumerate `SIMPLE_FILE_SYSTEM` handles and attempt to open
-`\SteamOS\conf\<name>.conf` read/write on each, taking the first that succeeds. No uuid comparison.
-This is both simpler and more tolerant of whatever ABL does or does not publish, and it is the
-same shape steamcl uses to find the loader on efi-A.
+**Finding the conf: try, don't match — but only on our own disk.** Enumerate `SIMPLE_FILE_SYSTEM`
+handles and attempt to open `\SteamOS\conf\<name>.conf` read/write on each, taking the first that
+succeeds. No uuid comparison. This is both simpler and more tolerant of whatever ABL does or does
+not publish, and it is the same shape steamcl uses to find the loader on efi-A. The sweep is
+scoped to the disk this stage 2 was loaded from — see [Scoping the sweep to our own
+disk](#scoping-the-sweep-to-our-own-disk-issue-84) below, which is the one thing this design got
+wrong on the first pass.
 
 **Fail loudly.** If no handle yields the file, return `grub_error(GRUB_ERR_FILE_NOT_FOUND, ...)`.
 The whole cost of the first attempt was that failure looked identical to success.
@@ -145,9 +148,51 @@ beside `image-invalid`/`boot-count`, where RAUC and `novadeck-bootctl` already r
 `save_env` cannot write the bootconf's format anyway — grubenv is its own 1024-byte block format,
 not `key: value` lines. It would be a second store in a second format needing new OS-side tooling.
 
+## Scoping the sweep to our own disk (issue #84)
+
+The original sweep took the first handle that yielded the conf, on this reasoning, quoted from the
+module header as it shipped:
+
+> The conf lives only on the ESP (`image/make-sdcard.sh`), so the first hit is the right one.
+
+That holds for exactly **one** novadeck medium. Every novadeck medium carries the same nine
+partitions and the same `\SteamOS\conf\A.conf`, so with an internal install and a card both
+present, "the first hit" is whichever volume the firmware chooses to publish first — which need
+not be the one being booted. **Observed on hardware 2026-09-01**: booting a card left the *internal*
+install's `A.conf` at `boot-attempts: 1` over a `boot-count` and `boot-ok` comment that were
+demonstrably written by that install's own `mark-good`. The card's stage 2 had counted the boot on
+the internal ESP.
+
+The OS cannot undo this. `novadeck-bootctl mark-good` clears the counter through `/esp`, which is
+`/dev/novadeck/NOVADECK-ESP` — scoped to the *booted* disk. So a count landing on the other disk is
+never cleared: it climbs once per boot for as long as two media are present, until steamcl's
+failsafe marks a healthy slot bad and rolls it back. It is the pre-Linux twin of the wrong-ESP bug
+that `/dev/novadeck/*` fixed on the Linux side, and the udev fix does not reach it.
+
+**The fix.** A partition's EFI device path is the disk's path with a `MEDIA`/`HARD_DRIVE` node
+appended, so two partitions are on the same disk exactly when everything *before* that node is
+byte-identical. That prefix is the whole comparison: no GUIDs, no partition numbers, no assumption
+about how the firmware spells a disk. Our own path comes from
+`grub_efi_get_loaded_image(grub_efi_image_handle)->device_handle` — the slot's efi partition, which
+is on the same GPT as the ESP we want (`image/partition-table.txt`), so it names our disk even
+though it is not the volume we are looking for.
+
+Two decisions worth keeping explicit:
+
+* **No conf on our own disk is an ERROR**, not a licence to write to a neighbour's. A slot that
+  goes uncounted fails safe; a slot counted on the wrong disk does not, and it damages a second
+  install as it goes. `gen-grub-cfg.sh`'s else-arm already holds that error on screen.
+* **The unscoped sweep survives as a fallback**, taken only when the firmware will not say which
+  disk we came from at all, and it prints a warning naming that as the reason. Losing the counter
+  outright on such firmware would be worse than the single-medium behaviour we had before.
+
+The error message now reports tried-of-published rather than a single count, because those two
+numbers separate "this firmware publishes only the volume it booted from" from "our own disk has no
+ESP" — which need opposite fixes.
+
 ## What shipped, and what the first boot confirms
 
-The module is ~510 lines including its header, builds warning-free under `-Wall -W`, and is
+The module is ~640 lines including its header, builds warning-free under `-Wall -W`, and is
 embedded in `grubaa64.efi`. The config calls it after `terminal_output gfxterm`, wrapped so a
 failure is held on screen:
 
@@ -161,13 +206,28 @@ else
 fi
 ```
 
-The next device boot has exactly three possible outcomes, and each one is a different fix:
+**A HEALTHY BOOT PRINTS NOTHING.** The module used to print `novadeck: A boot-attempts 0 -> 1` on
+success. That line has been removed, because nobody could ever read it: the success arm of the
+config above is a bare `true` with no dwell, so GRUB draws the menu and clears the screen the
+instant the module returns. **HW-confirmed 2026-09-01** — not seen even on a fresh card's first
+boot, where the menu waits for input, because *drawing* the menu is what clears it. Giving the
+healthy path a dwell would tax every boot on every device to report nothing, so the line went
+instead.
+
+So **grade the counter by reading the conf, never the panel**: from the booted system inside the
+first ~60s (`boot-attempts: 1`, before `mark-good` clears it), and offline afterwards
+(`boot-attempts: 0`, `boot-count` incremented). To read it at leisure, mask
+`novadeck-boot-good.{service,path}` first and the value survives the whole session.
+
+What is left on the panel is failure, and **the menu reaching the screen at all is the divider**:
 
 | What the panel shows | What it means | Next |
 |---|---|---|
-| `novadeck: A boot-attempts 0 -> 1` | Works. | Confirm offline that `A.conf` really moved, then the bootloader half of rollback is closed. |
-| `novadeck: no volume carries \SteamOS\conf\A.conf (N ... handles tried)` | The module ran and returned. Not expected — steamcl could not have chainloaded us without enumerating handles (above) — so N is the diagnosis. | Fall back to bumping from the initramfs. |
-| Nothing, or a hang before the menu | Dies inside the call. | Unlike last time this is now distinguishable, because the terminal is up before the call and the menu is already defined. |
+| The menu, nothing above it | Healthy. This is also what a counter that silently did nothing looks like, which is why the conf is the instrument. | Read the conf, per above. |
+| `novadeck: no volume carries \SteamOS\conf\A.conf (N of M ... handles tried, scoped to the boot disk)`, held 10s | The module ran and returned an error, so the else-arm caught it. N-of-M is the diagnosis: `N=0` means the scoping rejected every handle, `N>0` means our own disk really has no conf. | `N=0`: check the loaded-image device path. Otherwise fall back to bumping from the initramfs. |
+| `novadeck: WARNING: this firmware does not say which disk stage 2 was loaded from` | The scoping could not run and the sweep fell back to first-hit-wins. Harmless with one medium, wrong with two. **This line is only readable when the module ALSO fails** — on its own it is cleared by the menu like any success-path output, so it is a companion to the row above, not an independent signal. | Only matters on a device that boots with a card inserted. If you suspect it, mask `mark-good` and compare both disks' confs across a boot. |
+| No menu at all — a hang or a black screen | Dies inside the call. | Unlike the steamenv failure this replaced, this is distinguishable: the terminal is up and the menu is already defined before the call, so reaching the menu proves the module returned. |
 
-That third row is the whole reason the call moved after `gfxterm`: the first attempt could not tell
-"dies inside the call" from "returns cleanly but finds no conf".
+That last row is the whole reason the call moved after `gfxterm`. The first attempt could not tell
+"dies inside the call" from "returns cleanly but finds no conf" — now the first shows no menu, the
+second shows an error above one, and a healthy boot shows a clean menu.

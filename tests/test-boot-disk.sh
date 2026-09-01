@@ -202,6 +202,43 @@ else
   ok "no consumer resolves one of our partitions by bare label any more"
 fi
 
+# --- the fifth consumer, the one udev cannot reach ------------------------------------------------
+# Stage 2 runs before Linux, so /dev/novadeck cannot help it -- and it writes the same boot
+# accounting the four consumers above protect: it increments boot-attempts in
+# \SteamOS\conf\<slot>.conf on the ESP. Its sweep over SIMPLE_FILE_SYSTEM handles used to take the
+# first volume that carried the conf, and every novadeck medium carries one, so with two media
+# inserted the firmware's enumeration order decided which install got counted. A count landing on
+# the disk we did NOT boot is never cleared, because mark-good clears through /esp -- scoped to the
+# booted disk. It climbs once per boot until steamcl's failsafe rolls back a healthy slot. Observed
+# on HW 2026-09-01; see docs/phase5-bootattempts.md and issue #84.
+#
+# The C cannot be exercised offline (it needs a firmware, and the cross-build is the container's
+# job), so these assert the mechanism is still IN the patch that builds the module.
+echo
+echo "stage 2 scopes its ESP sweep to the disk it was loaded from"
+MODPATCH="$ROOT/boot/patches/grub/0002-add-the-novadeck-stage-2-module.patch"
+if [ ! -f "$MODPATCH" ]; then
+  bad "missing $(basename "$MODPATCH") — the boot-attempts counter has no module to build"
+else
+  grep -q 'grub_efi_get_loaded_image (grub_efi_image_handle)' "$MODPATCH" \
+    && ok "the module asks the loaded image which disk stage 2 came from" \
+    || bad "the module never reads its own loaded image — it cannot know its disk"
+  grep -q 'GRUB_EFI_HARD_DRIVE_DEVICE_PATH_SUBTYPE' "$MODPATCH" \
+    && ok "same-disk is decided by the device-path prefix before the HD() node" \
+    || bad "the module does not split device paths at the HARD_DRIVE node"
+  # Ordering is the assertion: the guard has to sit between the handle loop and the open, or it is
+  # decoration. Line numbers, not text shape, so reformatting the loop does not fail this.
+  ln_for=$(grep -n 'for (i = 0; handles' "$MODPATCH" | head -1 | cut -d: -f1)
+  ln_same=$(grep -n 'same_disk (self_dp, self_len' "$MODPATCH" | head -1 | cut -d: -f1)
+  ln_try=$(grep -n 'fh = try_handle (handles\[i\]' "$MODPATCH" | head -1 | cut -d: -f1)
+  if [ -n "$ln_for" ] && [ -n "$ln_same" ] && [ -n "$ln_try" ] \
+     && [ "$ln_for" -lt "$ln_same" ] && [ "$ln_same" -lt "$ln_try" ]; then
+    ok "the sweep tests same_disk before it opens a conf"
+  else
+    bad "the handle sweep opens a conf without a same_disk test — it can count the boot on the other disk's ESP"
+  fi
+fi
+
 # The rule enumerates no partition names on purpose -- it copies ID_PART_ENTRY_NAME through -- so the
 # only thing that can drift is the PREFIX it matches. Assert it covers every name in the table.
 echo

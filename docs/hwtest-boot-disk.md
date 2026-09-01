@@ -87,10 +87,22 @@ on a first boot, so a card that has already grown cannot exercise the destructiv
 - [ ] Internal `/esp/SteamOS/conf/A.conf` unchanged — mount it read-only by PARTUUID, not by label.
       > **Compare contents only; the mtime is NOT an instrument, and a baseline read from a live
       > rw mount is worse than none.** Observed 2026-09-01: `SteamOS/conf` still carried an Aug 22
-      > dirent timestamp while its contents were from that day, and an `A.conf` read from inside the
-      > running internal session showed `boot-attempts: 0` where the disk held `1` — the reset was
-      > still in page cache and never flushed. Take this baseline from a read-only mount, from a
-      > system that is not the one writing it.
+      > dirent timestamp while its contents were from that day. Take this baseline from a read-only
+      > mount, from a system that is not the one writing it — a value read from inside the internal
+      > session is that session's `/esp`, which on a device with a card inserted need not be the
+      > disk you think you are reading.
+      > **`boot-attempts` is the field to watch, and it moves before Linux.** Stage 2 increments it
+      > on the disk it was loaded from (issue #84, fixed in the module by device-path scoping). If
+      > the internal counter is one higher than its baseline after a card boot, the card's stage 2
+      > counted on the wrong ESP — that is a stage-2 regression, not a flush or a udev problem. The
+      > **There is nothing to read off the panel — a healthy count is SILENT.** The module printed
+      > `boot-attempts <n> -> <n+1>` until 2026-09-01, when HW confirmed nobody can see it (the
+      > success arm has no dwell, and drawing the menu clears the screen — true even on a first
+      > boot, where the menu waits). The line was removed rather than given a dwell. Read the conf:
+      > the booted disk's own `A.conf` within ~60s of the session appearing shows `boot-attempts: 1`
+      > before `mark-good` clears it, and the OTHER disk's `A.conf`, read offline, must be unchanged
+      > against a baseline taken before this boot. Mask `novadeck-boot-good.{service,path}` first if
+      > you want the value to survive long enough to read comfortably.
 - [ ] **1.4 Boot accounting stays on the card.** Card's `A.conf` shows `boot-attempts: 0` after the
       session settles; the internal one still shows its baseline value.
 - [ ] **1.5** Reboot (force-external again) → still boots the card, counter still clears. Two clean
@@ -206,6 +218,18 @@ the internal's counter is never reset and climbs on every boot with a card inser
 0 -> 1 -> 2). Left alone that marks a healthy slot bad and triggers a rollback. The card meanwhile
 inherits the internal's `boot-count`/`boot-time`, so **a card used for a Group 2 run is polluted and
 should be reflashed before any further Group 1 work.**
+
+**Group 1 turned up a SECOND, independent wrong-ESP bug in the same counter, on the bootloader side
+where this branch cannot reach it** (issue #84). Stage 2's module swept every `SIMPLE_FILE_SYSTEM`
+handle and counted on the first volume carrying `\SteamOS\conf\A.conf`; every novadeck medium
+carries one, so with two media inserted the firmware's enumeration order picked the install to
+count — observed incrementing the **internal** conf while a card was the medium booting. Since
+`mark-good` clears through `/esp`, which this branch scopes to the booted disk, such a count is
+never cleared. Fixed in `boot/patches/grub/0002-*` by scoping the sweep to the disk stage 2 was
+loaded from (device-path prefix before the `HD()` node); see `docs/phase5-bootattempts.md`.
+It was first filed as a lost vfat flush, which it is not — `holo-bootconf`'s `write_config` does
+`msync` → `rename` → `fsync` file → `fsync` dir, and all four fields of that conf are replaced by
+the one `rename`, so three of them cannot land while the fourth stays stale.
 
 **Group 2 was then re-run after delivering the fix to the internal by OTA, and PASSES** — the same
 hardware, the same card, both media attached, differing only in that the internal now carries the

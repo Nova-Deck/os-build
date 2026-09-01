@@ -26,10 +26,14 @@ lands on**, in both directions, and that nothing writes to the disk it did not b
 This is the evidence every "did it touch the other disk" check compares against. Take it while
 booted from internal, with **no card inserted**.
 
+**`sgdisk` is NOT on the image** — gptfdisk is not in the package list, so every `sgdisk -p` below
+has to be `sfdisk -d`, which is in util-linux and is equally sector-exact (it prints `start=` and
+`size=` per partition). Confirmed missing on a 2026-09-01 DEV card.
+
 ```
 lsblk -o NAME,PARTLABEL,SIZE,PARTUUID,FSTYPE
-sgdisk -p /dev/<internal>            # partition table, sector-exact
-sgdisk -p /dev/<internal> | sha256sum
+sfdisk -d /dev/<internal>            # partition table, sector-exact
+sfdisk -d /dev/<internal> | sha256sum
 ```
 
 - [ ] Baseline saved off-device. The number that matters most is the **end sector of the internal
@@ -47,8 +51,10 @@ The common case, and the one that must not have moved. Run on a board with **no 
 - [ ] `ls -l /dev/novadeck/` → **8 links**, all resolving to partitions of the booted disk.
 - [ ] `findmnt -no SOURCE /home /esp` → both on the booted disk.
 - [ ] `/home` filled the card (`df -h /home` ≈ card size, not the flashed ~1G) — `grow-home` ran.
-- [ ] **0.2 Second boot.** `steamos-bootconf --conf-dir /esp/SteamOS/conf config --image A` →
-      `boot-attempts: 0` once the session has been up 30s (`mark-good` cleared it).
+- [ ] **0.2 Second boot.** `cat /esp/SteamOS/conf/A.conf` → `boot-attempts: 0` once the session
+      has been up 30s (mark-good cleared it), and `boot-count` incremented.
+      > Read the file, do NOT use `steamos-bootconf --conf-dir /esp/SteamOS/conf config --image A`:
+      > that invocation prints nothing and exits 0, so it looks like a pass no matter what.
 
 > If Group 0 regresses, stop. Everything below is about *which* disk; this is about whether the
 > mechanism broke the only configuration that already worked.
@@ -67,7 +73,7 @@ on a first boot, so a card that has already grown cannot exercise the destructiv
       the rule or its PROGRAM is missing.
 - [ ] **1.2** `findmnt -no SOURCE /home` → the **card's** home, not the internal one.
 - [ ] `findmnt -no SOURCE /esp` → the **card's** ESP.
-- [ ] **1.3 The internal disk was not written.** Re-run the baseline `sgdisk -p /dev/<internal>`
+- [ ] **1.3 The internal disk was not written.** Re-run the baseline `sfdisk -d /dev/<internal>`
       and diff. **Must be byte-identical** — in particular the internal `novadeck-home` end sector.
       > This is the check that matters most. Before this branch, `grow-home` resolved home by label,
       > took its parent disk, and ran `systemd-repart --dry-run=no` on it.
@@ -90,7 +96,7 @@ here it is the *card* that must be left alone, and the internal install is the l
 - [ ] `ls -l /dev/novadeck/` → 8 links, all **internal**.
 - [ ] **2.2** `findmnt -no SOURCE /home /esp` → both internal. Confirm `/home` is the internal
       library, not the card's.
-- [ ] **2.3 The card was not written.** `sgdisk -p /dev/<card>` matches what was flashed; the
+- [ ] **2.3 The card was not written.** `sfdisk -d /dev/<card>` matches what was flashed; the
       card's `A.conf` untouched.
 - [ ] The card's ext4 was **not** resized (`dumpe2fs -h /dev/<card-home> | grep 'Block count'`
       against the flashed image).
@@ -129,11 +135,49 @@ No OTA is planned in this configuration. These only confirm rauc *resolves* the 
 
 ---
 
+## What has actually been run
+
+Executed 2026-09-01 on an sm8650 board, DEV card, `NOVADECK_GIT=0d1a284`. The device had **no
+internal novadeck install** — its `sda`–`sde` are the stock Android/UFS stack, and the only
+`novadeck-*` GPT names anywhere on it were on `mmcblk0`. So this run retires the regression risk and
+leaves the branch's actual purpose untested.
+
+| Group | Result |
+| --- | --- |
+| 0 — single medium, two boots | **PASS** |
+| 1 — card booted, internal present | **NOT RUN** — no device with both media |
+| 2 — internal booted, card inserted | **NOT RUN** — same |
+| 3 — fail-open | **PASS**, single-disk variant only (see below) |
+| 4 — rauc resolves, read-only | **PASS** |
+
+Group 0, both boots: `/run/novadeck/boot` named `root=/dev/mmcblk0p4`; `ls /dev/novadeck/` gave 8
+links, all `mmcblk0`; `/home` and `/esp` mounted `mmcblk0p8`/`p1`; `systemd-repart` applied to
+`/dev/mmcblk0` — the booted disk — and `/home` grew to 13.8G (`3622651` 4k blocks). Second boot:
+`boot-attempts: 0`, `boot-count` 1 → 2, and **`grow-home` wrote nothing** (zero occurrences of
+`Writing new partition table` / `Growing existing partition` / `Applying changes`; resize2fs a
+no-op; block count unchanged). Zero udev worker errors naming `on-boot-disk` on either boot.
+
+`/usr/lib/novadeck/on-boot-disk` ships **0755** on the device. Note that this cannot be checked
+offline the obvious way: `btrfs restore -m` errors out on this image's small/inline-extent files
+(`system.conf`, `fstab` and the `.rules` all come back 0 bytes with `-m`, and correct without it),
+so the built image yields content but not modes.
+
+**Group 3 was weaker than written.** With only one novadeck medium attached, moving
+`/run/novadeck/boot` aside and re-triggering gives 8 links, not 16 — it proves the fail-open path
+still *produces* links, but not that it spans both disks. The 16-link discrimination needs Group 1's
+hardware.
+
+**`guard-rootfs.sh` assertion 7b has still never run.** The sealed-root guard is release-only —
+`rootfs/assemble-rootfs.sh` skips it when `NOVADECK_DEV=1` — so the DEV card that proved everything
+above skipped it by construction. It needs a RELEASE build.
+
+---
+
 ## Abort conditions
 
 Stop and capture evidence rather than continuing:
 
-- Any diff in the non-booted disk's `sgdisk -p` output. **This is the failure the branch exists to
+- Any diff in the non-booted disk's `sfdisk -d` output. **This is the failure the branch exists to
   prevent** — capture the full journal for the boot (`journalctl _BOOT_ID=<id>`), especially
   `novadeck-grow-home`.
 - `ls -l /dev/novadeck/` empty on a device booted from a novadeck medium — the rule or

@@ -47,6 +47,46 @@ for t in curl unzip tar xz grep docker; do
   command -v "$t" >/dev/null 2>&1 || { log "$t not found on build host"; exit 1; }
 done
 
+# --- network fetches -----------------------------------------------------------------------------
+#
+# EVERY fetch here retries, because a single dropped connection used to throw away the whole build.
+# MEASURED 2026-09-01: the `card/v0.3.1` release run died 70 minutes in with
+#
+#     curl: (18) transfer closed with 67859794 bytes remaining to read
+#
+# on the bootstrap zip. Nothing was wrong with the build; Valve's CDN just closed the socket early.
+#
+# --retry-all-errors IS THE LOAD-BEARING FLAG, not --retry. Plain --retry covers timeouts, 5xx, 408
+# and 429 — it does NOT cover a truncated transfer, which is exactly the failure above. Without the
+# `all-errors` form the retry policy would look present and still not catch the thing it was added
+# for.
+#
+# The cost is that a genuine 404 is now retried too (five attempts, a few seconds) before it fails.
+# That is the right trade against a four-hour build lost to one flake.
+CURL_RETRY=(--retry 5 --retry-delay 2 --retry-all-errors --connect-timeout 20)
+
+# To a file. -C - is safe here and ONLY here: every target below is a fresh mktemp (see the temp
+# block), so a resume can only ever pick up a partial this run wrote, never a stale one left by an
+# earlier run — the failure mode that makes -C - dangerous in a script with persistent scratch
+# files.
+#
+# VERIFIED 2026-09-01 against both hosts this script uses, rather than assumed: a range request to
+# client-update.steamstatic.com and to repo.steampowered.com each answers 206, and a fetch_to onto
+# a deliberately pre-filled file resumed and landed on exactly the right total size. So a retry
+# after a truncated transfer continues where it stopped instead of re-pulling from zero.
+#
+# If a host ever stops honouring Range and answers 200, curl refuses to resume and fails loudly
+# rather than appending duplicate bytes — and since the first attempt starts from a zero-length
+# file it is a plain GET, a range-less host is no worse off than before this existed.
+fetch_to() {  # <dest> <url>
+  curl -fsSL "${CURL_RETRY[@]}" -C - -o "$1" "$2"
+}
+
+# To stdout, for the two small pointer GETs where there is nothing to resume.
+fetch_out() {  # <url>
+  curl -fsSL "${CURL_RETRY[@]}" "$1"
+}
+
 # base-devel image (arm64) is the throwaway container we run Steam's updater in under qemu — same
 # pinned image the overlay build uses. Its digest does NOT affect seed CONTENT (Steam pulls its own
 # libs), so it is deliberately not a Makefile content prereq.
@@ -89,7 +129,7 @@ trap 'rm -f "$LIVE_MANIFEST" "$boot_zip" "$rt_tar"' EXIT
 # restage only when one differs (or the seed is incomplete). These two small GETs are the only network
 # touches on the skip path; the client tree is downloaded solely when we actually restage.
 log "resolving live ${CHANNEL} client build"
-curl -fsSL -o "$LIVE_MANIFEST" "$MANIFEST_URL"
+fetch_to "$LIVE_MANIFEST" "$MANIFEST_URL"
 LIVE_VERSION="$(manifest_version "$LIVE_MANIFEST")"; : "${LIVE_VERSION:?could not read build id from live manifest}"
 STAGED_VERSION=""; [ -f "$STAGED_MANIFEST" ] && STAGED_VERSION="$(manifest_version "$STAGED_MANIFEST")"
 
@@ -101,7 +141,7 @@ if [ -n "${STEAM_RUNTIME_SNAPSHOT:-}" ]; then
   log "runtime snapshot pinned via STEAM_RUNTIME_SNAPSHOT: ${LIVE_SNAPSHOT}"
 else
   log "resolving live ${RUNTIME_CHANNEL} runtime snapshot"
-  LIVE_SNAPSHOT="$(curl -fsSL "${RUNTIME_BASE}/${RUNTIME_CHANNEL}.txt" | tr -d '[:space:]')"
+  LIVE_SNAPSHOT="$(fetch_out "${RUNTIME_BASE}/${RUNTIME_CHANNEL}.txt" | tr -d '[:space:]')"
   : "${LIVE_SNAPSHOT:?could not resolve ${RUNTIME_CHANNEL} to a runtime snapshot}"
 fi
 RUNTIME_URL="${RUNTIME_BASE}/${LIVE_SNAPSHOT}/steam-runtime-steamrt-arm64.tar.xz"
@@ -142,7 +182,7 @@ cp "$LIVE_MANIFEST" "$STAGED_MANIFEST"
 boot_tok="$(grep -aoE 'bins_linuxarm64_linuxarm64\.zip\.[0-9a-f]+' "$STAGED_MANIFEST" | grep -v '\.vz\.' | head -n1)"
 [ -n "$boot_tok" ] || { log "ERROR: no bootstrap package (bins_linuxarm64_linuxarm64) in manifest"; exit 1; }
 log "fetching bootstrap client ${boot_tok}"
-curl -fsSL -o "$boot_zip" "${CDN}/${boot_tok}"
+fetch_to "$boot_zip" "${CDN}/${boot_tok}"
 cp "$boot_zip" "$SEED_DIR/package/${boot_tok}"
 unzip -q -o "$boot_zip" -d "$SEED_DIR"
 [ -f "$SEED_DIR/steamrtarm64/steam" ] || { log "ERROR: bootstrap did not install steamrtarm64/steam"; exit 1; }
@@ -166,7 +206,7 @@ done < <(find "$SEED_DIR/steamrtarm64" -maxdepth 1 -type f -print0)
 # 2. arm64 SR3 runtime (steamrt3 aarch64): the libs the native client links against. NOT part of the
 #    client manifest (a separate repo.steampowered.com tarball), so we fetch it ourselves.
 log "fetching arm64 steam runtime snapshot ${LIVE_SNAPSHOT}"
-curl -fsSL -o "$rt_tar" "$RUNTIME_URL"
+fetch_to "$rt_tar" "$RUNTIME_URL"
 tar -xJf "$rt_tar" -C "$SEED_DIR"
 
 # The native client dlopen()s libibus from a fixed path; symlink it out of the runtime (the exact

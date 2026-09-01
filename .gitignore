@@ -4,10 +4,19 @@
 # Build outputs
 /out/
 /work/
-# build/ is the docker build CONTEXT (a source dir, not an output): track its inputs
-# (Dockerfile) but ignore any stray artifacts that land in it.
-/build/*
-!/build/Dockerfile
+# build/ IS SOURCE, and everything under it is tracked. It holds the docker build context and the
+# seed fetcher — inputs, not outputs; nothing in the tree writes into it (outputs go to out/ and
+# work/, both ignored above).
+#
+# It used to carry `/build/*` with a lone `!/build/Dockerfile`, which was wrong in a way that hides
+# itself: an ignored path is skipped by a plain `git add` with NO error, so a new input added here
+# looks committed, is absent from the tree, and CI builds without it. Five files were tracked under
+# that rule anyway — .gitignore does not apply to already-tracked files — so the rule policed
+# nothing that existed and only sat waiting for the next new file. Removed rather than patched with
+# a negation per input, which would have been a list to keep in sync forever.
+#
+# The invariant, if this is ever reconsidered: `git ls-files | git check-ignore --stdin` must print
+# NOTHING. Anything it prints is a tracked file the next contributor cannot re-add.
 *.img
 *.img.*
 *.raw

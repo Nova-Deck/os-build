@@ -162,7 +162,7 @@ leaves the branch's actual purpose untested.
 | --- | --- |
 | 0 — single medium, two boots | **PASS** |
 | 1 — card booted, internal present | **PASS** — see below |
-| 2 — internal booted, card inserted | **BUG REPRODUCED** (pre-branch image) — see below |
+| 2 — internal booted, card inserted | **BUG REPRODUCED** pre-branch, then **PASS** after OTA — see below |
 | 3 — fail-open | **PASS**, both variants |
 | 4 — rauc resolves, read-only | **PASS** |
 
@@ -206,6 +206,33 @@ the internal's counter is never reset and climbs on every boot with a card inser
 0 -> 1 -> 2). Left alone that marks a healthy slot bad and triggers a rollback. The card meanwhile
 inherits the internal's `boot-count`/`boot-time`, so **a card used for a Group 2 run is polluted and
 should be reflashed before any further Group 1 work.**
+
+**Group 2 was then re-run after delivering the fix to the internal by OTA, and PASSES** — the same
+hardware, the same card, both media attached, differing only in that the internal now carries the
+branch:
+
+```
+16 duplicate novadeck GPT names visible (8 sda + 8 card)
+/dev/novadeck/ -> 8 links, ALL sda
+/  /home  /esp -> sda16, sda19 (65G), sda12
+grow-home targeted /dev/sda19 (the internal); repart wrote nothing
+```
+
+The OTA path itself is therefore also proven end to end, on a RELEASE device, and is worth
+recording because two steps of it looked like they might block:
+
+- The v0.3.0 keyring still trusts the current signing cert — `ota/rauc/` is unchanged since
+  `9f13131`, and the device reported `Verified inline signature by 'CN = novadeck OTA release'`.
+- **`rauc install` of a LOCAL bundle succeeds as the unprivileged `deck` user**, no sudo and no
+  polkit action required, so this test is repeatable without publishing anything to the OTA server.
+- `post-install.sh` wrote `B.conf` onto an internal ESP that had only ever held `A.conf`. A slot
+  written without its conf is what kills a boot candidate, so this was the substantive check.
+- After the reboot, rauc on the internal resolves its slots as
+  `/dev/novadeck/novadeck-root-{A,B}` — the last consumer that was still on labels there.
+
+One trap when reading any of this: **probe after the session settles.** Immediately post-boot,
+`rauc status` showed a slot `bad` and `B.conf` held `boot-attempts: 2, boot-count: 0`; ~75s later
+both slots were `good` with `boot-attempts: 0, boot-count: 1`. Neither early reading meant anything.
 
 **Two checks in this document could not fail, and were rewritten:** the `sgdisk` baseline (hashing
 empty input) and the A.conf mtime comparison. A third was impossible as written (Group 3's "16

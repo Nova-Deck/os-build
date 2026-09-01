@@ -1,0 +1,135 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/ShadowBlip/InputPlumber/main/rootfs/usr/share/inputplumber/schema/composite_device_v1.json
+#
+# AYANEO Pocket ACE (SM8550), described the way UPSTREAM describes the AYANEO Pocket S2.
+#
+# THIS FILE IS THE ANCHOR FOR THE WHOLE SM8550 AYANEO FAMILY. Its four siblings — pocket_dmg,
+# pocket_ds, pocket_evo, pocket_s1 — are this file with a different `matches` block and a different
+# `name`. The reasoning lives here.
+#
+# WHY THE FAMILY MOVED. These boards carry the SAME controller MCU as the SM8650 pair, exposed the
+# same way over USB. InputPlumber 0.78.0 began shipping its own description of exactly that
+# hardware (devices/50-ayaneo_pocket_s2.yaml, upstream ac09f37) and a Pocket FIT running 0.78.1
+# read it CORRECTLY on hardware — see 50-konkr_pocket_fit.yaml and the commit that landed it. Every
+# place upstream's description disagreed with ours went upstream's way there. So this is upstream's
+# description, not a negotiation with it: nothing here is adjusted to preserve a mapping of ours.
+# If a button reads wrong on hardware, THAT is when a capability map goes in, against a measurement.
+#
+# MEASURED ON THIS BOARD, 2026-09-01, a Pocket ACE on 0.78.1 — all of which upstream's description
+# already assumed:
+#
+#   AYANEO DEVICE      1c4f:0002  usb-0001:01:00.0-1/input0  EV=13  KEY=BTN_0..BTN_7  no ABS
+#   AYANEO Controller  4001:0428  usb-0001:01:00.0-2/input0  EV=1b  KEY=BTN_SOUTH..BTN_THUMBR
+#                                                            ABS=X,Y,Z,RZ,GAS,BRAKE,HAT0X,HAT0Y
+#
+# The MCU device advertises eight buttons and NO axes at all, which is what `aya9` claims and what
+# the sm8550_ayaneo_mcu_* maps deleted with this change did not: they put BTN_SOUTH, ABS_X/Y/RX/RY,
+# ABS_HAT0* and ABS_GAS/ABS_BRAKE on 1c4f:0002, so most of that mapping could never fire. And the
+# pad's axis set is `dinput_generic`'s exactly — right stick on ABS_Z/ABS_RZ, triggers on
+# ABS_GAS/ABS_BRAKE. The old map read the right stick off ABS_RX/ABS_RY, which THIS DEVICE DOES NOT
+# HAVE; it worked only because an unmapped event falls through to the default translation.
+#
+# THE BOARD IS IN AYANEO MODE, and has been every time it has been looked at (2026-08-22,
+# 2026-09-01): there is no 045e:028e device on the bus, so the pad arrives on the dinput source and
+# the xinput source below binds nothing. Same as the FIT.
+#
+# What changes against the sm8550-ayaneo-controller{,-japanese}.yaml this replaces: the match is on
+# devicetree `compatible` rather than `model` (the attribute upstream keys on — two files matching
+# one board on different attributes is how they collide unnoticed); the MCU takes `aya9` in the
+# keyboard group; the pad takes `dinput_generic`; the targets become xbox-elite + keyboard + mouse,
+# the elite target being the one with somewhere to put the paddles `aya9` maps to Left/RightPaddle1;
+# and `maximum_sources: 0` replaces `single_source: false`, which src/config/mod.rs marks DEPRECATED.
+#
+# WHAT TO WATCH FOR ON HARDWARE, i.e. the places this differs from what the board shipped with:
+#
+#   - QuickAccess moves BTN5 -> BTN6 and the paddles BTN_Z/BTN_C -> BTN3/BTN4 on the MCU. Both
+#     corrections are what the FIT confirmed.
+#   - THE FACE BUTTONS ARE THE OPEN QUESTION, and the likely first failure. This board prints `B`
+#     on the BOTTOM button and the MCU emits by LABEL, so the bottom button arrives as BTN_EAST
+#     (measured 2026-08-22). `dinput_generic` passes labels straight through, so bottom will read
+#     as East unless something else intervenes — A/B and X/Y swapped against position. The fix, if
+#     hardware says so, is a capability map on the dinput source that rotates those four rows; it is
+#     deliberately NOT written in advance, because the last such map was written in advance too and
+#     described a device that could not emit most of it.
+#   - The emitted pad becomes a Microsoft X-Box One Elite 2 rather than a Series S|X. The
+#     installer's consent screen does not care — it tells InputPlumber's pad from its sources by
+#     `/devices/virtual/`, not by an id allow-list (installer/uipad.py).
+version: 1
+kind: CompositeDevice
+name: AYANEO Pocket ACE
+
+maximum_sources: 0
+options:
+  auto_manage: true
+
+# From kernel/dts/qcom/qcs8550-ayaneo-pocketace.dts, and confirmed against the running board:
+# `compatible = "ayaneo,pocketace", "qcom,qcs8550", "qcom,sm8550"`.
+matches:
+  - udev:
+      sys_path: /sys/firmware/devicetree/base
+      attributes:
+        - name: compatible
+          value: ayaneo,pocketace
+
+source_devices:
+  # Ayaneo mode. THE ONE DIVERGENCE from upstream's file, here and in every sibling: the ids are
+  # QUOTED. Cosmetic, not load-bearing — upstream leaves them bare and that parses fine on hardware
+  # (a plain scalar deserializes into `Option<String>` without complaint); every OTHER upstream
+  # config quotes them, and this follows the majority.
+  - group: gamepad
+    capability_map_id: dinput_generic
+    evdev:
+      name: AYANEO Controller
+      vendor_id: "4001"
+      product_id: "0428"
+      handler: event*
+  # Xinput mode.
+  #
+  # THE phys_path IS THE FAMILY'S, NOT UPSTREAM'S — upstream says `-1`, which on these boards is
+  # where the MCU sits, not the pad. Measured here on an ACE: the pad is on -2.
+  #
+  # THE SAME LINE IS IN ALL FIVE SM8550 AYANEO FILES, and the devicetree is the argument for that.
+  # Pad and MCU are two devices on ONE bus — usb1, ports -1 and -2 — exposed by a single PCIe<->USB
+  # bridge, the Renesas μPD720201 on pcie1. That bridge is declared ONCE, in
+  # kernel/dts/qcom/qcs8550-ayaneo-pocket-common.dtsi (`&pcie1_port0/usb-controller@0`,
+  # `compatible = "pci1912,0014"`, at the PCI address the measurement shows), together with its
+  # three supplies and the `gamepad_pwr_en` pinctrl — and NOT ONE of the six board .dts files
+  # mentions pcie1, that bridge, or the SoC's own dwc3. One bridge, one bus, one shared
+  # description, no per-board deviation: a device on port 2 of one of these boards is on port 2 of
+  # all of them. boot/boards.map agrees from the other side — all six carry the identical
+  # `usbcore.interrupt_interval_override=045e:028e:2`.
+  #
+  # WHAT THE DEVICETREE CANNOT SAY is anything about the MCU itself. It has no devicetree node and
+  # never will — it is a USB device, discovered by enumeration on that bus, so which downstream
+  # port it lands on is board routing below the controller and appears in no .dts. That routing
+  # varies BETWEEN board families: the Pocket FIT declares an identical controller in
+  # sm8650-ayaneo-common.dtsi and has the pad on -1 with the MCU on -2, exactly reversed. So the
+  # devicetree argument above is about the shared HOST, which is what makes one measured port
+  # number good for all five boards — and it is not transferable past this family.
+  #
+  # One step here is inference rather than measurement: Xbox mode has never been seen on any of
+  # these boards, so `-2` is where the pad sits in AYANEO mode, and the controller is assumed to
+  # come back on the same port when it re-enumerates as 045e:028e.
+  #
+  # A WRONG PATH FAILS SILENTLY: the source matches nothing, the composite forms without a pad, and
+  # it looks exactly like a bad mapping. Deleting this ONE line falls the match back to
+  # vendor/product, which changes WHICH device is claimed and never how its events are translated.
+  # `udevadm info -q path -n /dev/input/eventN`, or the `P: Phys=` line in /proc/bus/input/devices,
+  # is what settles it.
+  - group: gamepad
+    evdev:
+      phys_path: usb-0001:01:00.0-2/input0
+      vendor_id: "045e"
+      product_id: "028e"
+      handler: event*
+  - group: keyboard
+    capability_map_id: aya9
+    evdev:
+      name: AYANEO DEVICE
+      vendor_id: "1c4f"
+      product_id: "0002"
+      handler: event*
+
+target_devices:
+  - xbox-elite
+  - keyboard
+  - mouse

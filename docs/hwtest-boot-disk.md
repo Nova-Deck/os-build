@@ -162,7 +162,7 @@ leaves the branch's actual purpose untested.
 | --- | --- |
 | 0 — single medium, two boots | **PASS** |
 | 1 — card booted, internal present | **PASS** — see below |
-| 2 — internal booted, card inserted | **NOT RUN** |
+| 2 — internal booted, card inserted | **BUG REPRODUCED** (pre-branch image) — see below |
 | 3 — fail-open | **PASS**, both variants |
 | 4 — rauc resolves, read-only | **PASS** |
 
@@ -184,6 +184,28 @@ Moving `/run/novadeck/boot` aside and re-triggering flipped **all 8** links to `
 `novadeck-home -> sda19`. So a pre-branch system booted from that card would have mounted the
 internal home and aimed `systemd-repart` at `/dev/sda`. Restoring the file returned all 8 to
 `mmcblk0` with `/home` and `/esp` unmoved.
+
+**Group 2 against the PRE-BRANCH v0.3.0 internal reproduced the bug in full**, and is the reason
+this branch matters beyond convenience. Booted from internal with the card inserted:
+
+```
+/          /dev/sda15      internal, correct — GRUB resolves root off $bootdisk
+/home      /dev/mmcblk0p8  THE CARD
+/esp       /dev/mmcblk0p1  THE CARD
+grow-home  targeted /dev/mmcblk0p8 (no write: the card had no free tail)
+```
+
+The internal's own home was never mounted (`sda19` mount count unchanged); the card's was
+(`Last mount time` = this boot). **The race also flipped direction between two consecutive boots on
+the same hardware** — `sda` won all eight on the card's boot, `mmcblk0` won all eight here — so
+label resolution across two novadeck media is nondeterministic, not merely wrong.
+
+The damaging consequence is in the boot accounting. The internal's bootloader incremented
+`boot-attempts` on its OWN ESP, then `mark-good` wrote `boot-ok` to the **card's** ESP instead, so
+the internal's counter is never reset and climbs on every boot with a card inserted (observed
+0 -> 1 -> 2). Left alone that marks a healthy slot bad and triggers a rollback. The card meanwhile
+inherits the internal's `boot-count`/`boot-time`, so **a card used for a Group 2 run is polluted and
+should be reflashed before any further Group 1 work.**
 
 **Two checks in this document could not fail, and were rewritten:** the `sgdisk` baseline (hashing
 empty input) and the A.conf mtime comparison. A third was impossible as written (Group 3's "16

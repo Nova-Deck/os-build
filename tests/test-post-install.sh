@@ -590,8 +590,23 @@ t "a-completed-run-ends-armed-and-unmarked"
 run
 expect_rc 0
 expect_conf 'image-invalid 0'
+expect_conf 'boot-attempts 0'
 expect_call 'BC set-mode B reboot'
 expect_has "re-armed for a trial boot"
+done_
+
+t "a-stale-attempt-counter-on-the-target-does-not-survive-the-arming"
+# The counter measures attempts at the trial being armed, so it must start at zero. Nothing else
+# clears it: `set-mode reboot` does not (only mark-good's `set-mode booted`), and a slot that is
+# not booting is never marked good. So whatever the target accumulated while it sat idle is still
+# sitting there -- 2, on the HW that produced issue #84, which would open the trial boot at 3, the
+# failsafe MENU threshold. At 5 it reaches 6 and the trial is auto-rejected for the other slot: a
+# perfect install rolled back on its first boot, for counts it did not earn.
+printf 'image-invalid 1\nboot-attempts 5\n' >"$SB/esp/SteamOS/conf/B.conf"
+run
+expect_rc 0
+expect_conf 'boot-attempts 0'
+expect_order 'BC config B boot-attempts 0' 'BC set-mode B reboot'   # zeroed BEFORE the arming
 done_
 
 t "a-missing-target-conf-is-created"

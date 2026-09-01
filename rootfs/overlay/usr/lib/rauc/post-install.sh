@@ -228,6 +228,16 @@ umount "$MNT"; trap - EXIT
 #                              a COMPLETED install may take that back, and this is the only place
 #                              that knows the install completed. Miss it and the slot stays
 #                              disabled and never boots.
+#   set boot-attempts 0      -- the counter measures attempts at THE TRIAL WE ARE ARMING, so it has
+#                              to start at zero. `set-mode reboot` does not clear it (only
+#                              `set-mode booted`, i.e. mark-good, does), and nothing else ever
+#                              clears a slot that is not booting -- so whatever the target
+#                              accumulated while it sat idle is still there, and the trial inherits
+#                              it. Observed on HW 2026-09-01: a healthy internal slot A sat at 2
+#                              from counts landing on it under issue #84, which would put its next
+#                              trial boot at 3 -- steamcl's failsafe menu threshold -- and a slot
+#                              at 5 would reach 6 and be auto-rejected in favour of the other one.
+#                              A perfect install, rolled back on its first boot, for history.
 #   set-mode reboot          -- the re-arm, the direct inverse of step 0: the target gets the
 #                              highest boot-requested-at so the next boot goes there.
 conf="$ESP/SteamOS/conf/$target.conf"
@@ -237,6 +247,7 @@ if [ ! -f "$conf" ]; then
   log "created $conf"
 fi
 bc --image "$target" config --set image-invalid 0 || die "cannot clear the invalid mark on $target"
+bc --image "$target" config --set boot-attempts 0 || die "cannot reset the attempt counter on $target"
 bc --image "$target" set-mode reboot || die "cannot re-arm slot $target for its trial boot"
 
 log "slot $target re-armed for a trial boot; reboot to try it"

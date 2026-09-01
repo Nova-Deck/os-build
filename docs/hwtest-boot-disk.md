@@ -77,8 +77,20 @@ on a first boot, so a card that has already grown cannot exercise the destructiv
       and diff. **Must be byte-identical** — in particular the internal `novadeck-home` end sector.
       > This is the check that matters most. Before this branch, `grow-home` resolved home by label,
       > took its parent disk, and ran `systemd-repart --dry-run=no` on it.
-- [ ] Internal `/esp/SteamOS/conf/A.conf` unchanged (contents **and** mtime) — mount it read-only
-      by PARTUUID to check, not by label.
+- [ ] **The internal `/home` was never mounted.** From the card (which has root),
+      `dumpe2fs -h /dev/<internal-home> | grep -E 'Last mount time|Mount count'`. A `Last mount
+      time` predating the card's boot proves it, and needs no baseline — the timestamp interprets
+      itself. This is the check that actually carries 1.3; see the ESP note below for why.
+- [ ] `journalctl -b 0 -u novadeck-grow-home | grep -oE '/dev/[a-z0-9]+'` → **only booted-disk
+      devices.** Before this branch `grow-home` resolved home by label, took its parent disk, and
+      ran `systemd-repart --dry-run=no` on it, so this is the destructive path named directly.
+- [ ] Internal `/esp/SteamOS/conf/A.conf` unchanged — mount it read-only by PARTUUID, not by label.
+      > **Compare contents only; the mtime is NOT an instrument, and a baseline read from a live
+      > rw mount is worse than none.** Observed 2026-09-01: `SteamOS/conf` still carried an Aug 22
+      > dirent timestamp while its contents were from that day, and an `A.conf` read from inside the
+      > running internal session showed `boot-attempts: 0` where the disk held `1` — the reset was
+      > still in page cache and never flushed. Take this baseline from a read-only mount, from a
+      > system that is not the one writing it.
 - [ ] **1.4 Boot accounting stays on the card.** Card's `A.conf` shows `boot-attempts: 0` after the
       session settles; the internal one still shows its baseline value.
 - [ ] **1.5** Reboot (force-external again) → still boots the card, counter still clears. Two clean
@@ -113,8 +125,12 @@ With both media attached, booted either way:
 
 - [ ] `mv /run/novadeck/boot /run/novadeck/boot.bak`
 - [ ] `udevadm trigger --subsystem-match=block --action=add && udevadm settle`
-- [ ] `ls -l /dev/novadeck/` → now **16 links**, spanning both disks (or 8 with an arbitrary mix).
-      That is the old `by-partlabel` behaviour, reproduced on demand.
+- [ ] `ls -l /dev/novadeck/` → still **8 links**, but one or more now pointing at the **non-booted**
+      disk. That is the old `by-partlabel` behaviour, reproduced on demand.
+      > It can never be 16. The names collide, and udev keeps exactly ONE symlink per name — which
+      > is the whole bug: the loser gets no link at all, so it is invisible rather than ambiguous.
+      > Observed 2026-09-01 booted from the card with an internal install present: all 8 flipped to
+      > `sda`, including `novadeck-home -> sda19`. Count is not the signal; `readlink -f` is.
 - [ ] `mv /run/novadeck/boot.bak /run/novadeck/boot` and re-trigger → back to **8**, all on the
       booted disk.
 
@@ -145,10 +161,36 @@ leaves the branch's actual purpose untested.
 | Group | Result |
 | --- | --- |
 | 0 — single medium, two boots | **PASS** |
-| 1 — card booted, internal present | **NOT RUN** — no device with both media |
-| 2 — internal booted, card inserted | **NOT RUN** — same |
-| 3 — fail-open | **PASS**, single-disk variant only (see below) |
+| 1 — card booted, internal present | **PASS** — see below |
+| 2 — internal booted, card inserted | **NOT RUN** |
+| 3 — fail-open | **PASS**, both variants |
 | 4 — rauc resolves, read-only | **PASS** |
+
+**Group 1 — the configuration this branch exists for — PASSES.** Run against a v0.3.0 RELEASE
+internal install (`NOVADECK_GIT=9f13131`, i.e. an image PREDATING this branch) with a freshly
+flashed DEV card booted via ABL force-external. Sixteen duplicate GPT names were visible, 8 on
+`sda` and 8 on `mmcblk0`:
+
+- `/dev/novadeck/` held 8 links, **every one on `mmcblk0`**; `/`, `/home`, `/esp` and `/efi` all
+  resolved to the card.
+- **`grow-home` referenced only `/dev/mmcblk0` and `/dev/mmcblk0p8`. Zero `sda` references.**
+- The internal home was never mounted: `sda19` ext4 `Last mount time` was the internal's own boot,
+  12 minutes before the card booted, `Mount count 2`. Nothing from `sda` was mounted at all.
+- The whole boot referenced `sda` exactly once — the kernel enumerating partitions.
+- Internal partition extents identical to baseline (weak, see below).
+
+**Group 3, run properly with both media, is the clearest demonstration of the original bug.**
+Moving `/run/novadeck/boot` aside and re-triggering flipped **all 8** links to `sda`, including
+`novadeck-home -> sda19`. So a pre-branch system booted from that card would have mounted the
+internal home and aimed `systemd-repart` at `/dev/sda`. Restoring the file returned all 8 to
+`mmcblk0` with `/home` and `/esp` unmoved.
+
+**Two checks in this document could not fail, and were rewritten:** the `sgdisk` baseline (hashing
+empty input) and the A.conf mtime comparison. A third was impossible as written (Group 3's "16
+links"). On the tested hardware the internal `novadeck-home` also ends 16 sectors from the end of
+the disk — the installer grows it at repartition time — so there is **no free tail for a
+mistakenly-targeted `systemd-repart` to consume**, and the partition-extent check passes vacuously
+even in the failure case. Weight `dumpe2fs` mount count and the `grow-home` journal instead.
 
 Group 0, both boots: `/run/novadeck/boot` named `root=/dev/mmcblk0p4`; `ls /dev/novadeck/` gave 8
 links, all `mmcblk0`; `/home` and `/esp` mounted `mmcblk0p8`/`p1`; `systemd-repart` applied to

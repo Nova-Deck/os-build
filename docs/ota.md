@@ -46,6 +46,16 @@ under `$HOME` must not repoint every future update.
 `novadeck-update status` prints which of them supplied the channel in effect, which is the fastest
 answer to "why is it checking that channel".
 
+**Which channels exist:** `stable` and `beta`. `ota/setup-server.sh` creates both, and
+`release-bundle.yml` decides between them from the tag's semver pre-release suffix — `ota/v0.3.0`
+publishes to `stable`, `ota/v0.3.0-beta.1` to `beta`. Not a separate tag namespace, because the
+version string then records the channel and duplicate detection turns on that string: two channels
+publishing the same `0.3.0` would leave a device switching stable → beta believing it is already up
+to date. A beta bundle is signed with the same release key and gated exactly as hard; the channel
+decides who is offered it, not whether it is trustworthy. `card/` and `installer/` tags refuse a
+pre-release suffix outright — there is no beta card, and a medium installs the latest `stable`
+whatever its own version says.
+
 A choice made in `~/.config` survives an OTA and a slot switch on its own: `/home` is one partition
 shared by both slots. The copy in `/etc` needs `post-install.sh` to carry it, because that one lives
 in the per-slot `/var` overlay upper.

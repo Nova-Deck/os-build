@@ -28,7 +28,27 @@ the first path segment:
 ```
 
 Adding a `beta` channel is a directory, not a migration. Only `stable` exists today; the client's
-`OTA_CHANNEL` (in `/etc/novadeck/ota.conf`, or `NOVADECK_OTA_CHANNEL`) selects it.
+`OTA_CHANNEL` selects it, from the first of these that has one:
+
+| source | who can write it | note |
+|---|---|---|
+| `NOVADECK_OTA_CHANNEL` | whoever runs the command | one invocation only — SteamUI's own checks carry no environment of ours |
+| `/etc/novadeck/ota.conf` | root | only a **dev** card ships this file, pinned to `dev` so the card is never offered a stable release |
+| `~/.config/novadeck/ota.conf` | the user, no root needed | `/home/deck/.config/novadeck/ota.conf`; the only one reachable on a release device |
+| built-in `stable` | — | |
+
+`/etc` outranks `$HOME` on purpose: a file in `$HOME` must not silently undo the dev card's pin. On
+a release image `/etc/novadeck/ota.conf` does not exist, so the user's file is the only entry in the
+chain. It may set `OTA_CHANNEL` **only** — `OTA_URL` is read from `/etc` and the environment, never
+from `$HOME`, because which host a device fetches from is an operator decision and one writable file
+under `$HOME` must not repoint every future update.
+
+`novadeck-update status` prints which of them supplied the channel in effect, which is the fastest
+answer to "why is it checking that channel".
+
+A choice made in `~/.config` survives an OTA and a slot switch on its own: `/home` is one partition
+shared by both slots. The copy in `/etc` needs `post-install.sh` to carry it, because that one lives
+in the per-slot `/var` overlay upper.
 
 **A channel with no `latest.json` is the correct resting state, not an outage.** The client gets a
 404, fails closed and exits 7 — "no update available". That is exactly right between releases. A
@@ -193,7 +213,11 @@ scp out/images/novadeck-<bumped>.raucb ubuntu@updates.novadeck.cloud-ip.cc:/srv/
 #    then write /srv/novadeck-ota/test/latest.json by hand (schema above; size must be exact)
 
 # 4. point the device at it, and drive the update FROM THE STEAM UI
-ssh deck@<device> 'echo OTA_CHANNEL=test | sudo tee -a /etc/novadeck/ota.conf'
+#    No sudo: this is the user-writable channel file, which is also the only one that works on a
+#    release device (no sudo package on the image, and pairingd only ever gives you `deck`).
+ssh deck@<device> 'mkdir -p ~/.config/novadeck && echo OTA_CHANNEL=test > ~/.config/novadeck/ota.conf'
+#    On a DEV card /etc/novadeck/ota.conf pins the channel to `dev` and outranks this file, so
+#    there you have to edit that one instead (you have root on a dev card).
 ```
 
 Step 4 is the gate: Settings → check → offer → download → install → restart → confirm the new slot
@@ -205,9 +229,11 @@ though rauc's policy is open to both on paper.
 protects `stable` from a test image reaching the fleet; hand-placing a bundle in a channel of your
 own, on your own server, is you doing something explicit. The gate is on publishing, not installing.
 
-**Reset the channel when you are done.** `/etc` is an overlayfs on the per-slot `/var`, and
-`post-install.sh` migrates `/var` to the new slot — so `OTA_CHANNEL=test` **survives the update**. A
-device left pointing at the test channel silently keeps reading it forever.
+**Reset the channel when you are done.** `OTA_CHANNEL=test` **survives the update** either way you
+set it: `~/.config` is on `/home`, one partition shared by both slots, and `/etc` is an overlayfs on
+the per-slot `/var` that `post-install.sh` migrates to the new slot. A device left pointing at the
+test channel silently keeps reading it forever — `novadeck-update status` names the file it came
+from, so a device that has been forgotten will say so.
 
 Only once that passes: tag `card/vX.Y.Z`, then `ota/vX.Y.Z`.
 

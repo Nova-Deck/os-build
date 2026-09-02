@@ -64,6 +64,29 @@ import urllib.parse
 # --- the seams ----------------------------------------------------------------------------------
 RELEASE_FILE = os.environ.get("NOVADECK_RELEASE_FILE", "/etc/novadeck-release")
 CONFIG_FILE = os.environ.get("NOVADECK_OTA_CONFIG", "/etc/novadeck/ota.conf")
+# THE ONE SEAM A USER CAN WRITE WITHOUT ROOT, and it exists because on a release device nothing
+# else is reachable. CONFIG_FILE is root-owned; a release image ships no sudo (there is no `sudo`
+# row in rootfs/manifest.lock), novadeck-pairingd only ever appends to the SESSION user's
+# authorized_keys and never root's, and the OS Update Channel picker was dropped with PR #82. So
+# before this file the channel was fixed at DEFAULT_CHANNEL for anyone but us: a manual
+# `NOVADECK_OTA_CHANNEL=beta novadeck-update check` over SSH worked and told the user nothing
+# about what SteamUI would do, because SteamUI's own invocation carries no such environment and
+# kept checking stable. An override that survives exactly one command line is not a setting.
+#
+# /home/deck rather than $HOME. Nothing runs this as root today (no unit invokes it; SteamUI
+# reaches it through steamos-polkit-helpers/steamos-update, which is not a privilege boundary —
+# see PRIVILEGE in the header), but $HOME would silently become /root the day something does, and
+# then the file the user wrote would stop being read with no error anywhere. The device has
+# exactly one human user, uid 1000, pinned in sysusers.d; STAGE_DIR and LOGINUSERS above spell it
+# out the same way for the same reason.
+#
+# /home is ONE partition shared by both slots, so a choice made here survives an OTA and a slot
+# switch on its own. The copy in CONFIG_FILE does not: it lands in the per-slot /var overlay upper
+# (rootfs/assemble-rootfs.sh writes lib/overlays/etc/ into the var stage) and crosses to the other
+# slot only because usr/lib/rauc/post-install.sh carries it.
+USER_CONFIG_FILE = os.environ.get(
+    "NOVADECK_OTA_USER_CONFIG", "/home/deck/.config/novadeck/ota.conf"
+)
 STAGE_DIR = os.environ.get("NOVADECK_OTA_STAGE", "/home/deck/.local/share/novadeck/updates")
 LOGINUSERS = os.environ.get(
     "NOVADECK_STEAM_LOGINUSERS", "/home/deck/.local/share/Steam/config/loginusers.vdf"
@@ -133,10 +156,40 @@ def read_env_file(path):
     return values
 
 
+def channel_setting():
+    """(channel, where it came from). ONE place decides the order so `status` cannot describe a
+    precedence the fetch does not use — the two used to be one expression, and a second source
+    would have made them two.
+
+    env > /etc > $HOME > built-in, and the middle pair is in THAT order deliberately. The only
+    image that ships CONFIG_FILE is a dev card, where assemble-rootfs.sh pins OTA_CHANNEL=dev so
+    the card is never offered a stable release — taking one downgrades the card to the very
+    release it was built to test against. A user file outranking that would undo the pin silently,
+    which is the failure the pin exists to prevent. On a release image CONFIG_FILE does not exist
+    at all, so the user's choice is the only one in the chain and wins by default rather than by
+    precedence."""
+    for value, source in (
+        (os.environ.get("NOVADECK_OTA_CHANNEL"), "NOVADECK_OTA_CHANNEL"),
+        (read_env_file(CONFIG_FILE).get("OTA_CHANNEL"), CONFIG_FILE),
+        (read_env_file(USER_CONFIG_FILE).get("OTA_CHANNEL"), USER_CONFIG_FILE),
+    ):
+        if value:
+            return value, source
+    return DEFAULT_CHANNEL, "built-in default"
+
+
 def config():
     conf = read_env_file(CONFIG_FILE)
+    # OTA_URL is NOT read from USER_CONFIG_FILE, and the asymmetry is the point. A channel is a
+    # path segment on the host this image already trusts; the URL is the host itself. The
+    # signature is still the gate either way — nothing installs without chaining to
+    # /etc/rauc/keyring.pem — so this is not the line between safe and unsafe. It is that where a
+    # fleet fetches from is an operator decision ([[devices-are-operator-reachable]] put it in
+    # CONFIG_FILE for exactly that reason), and a user-writable host would let anything that can
+    # drop one file in $HOME quietly aim every future update at a server it controls: still
+    # signed, but its choice of which signed release, and when.
     url = os.environ.get("NOVADECK_OTA_URL") or conf.get("OTA_URL") or DEFAULT_URL
-    channel = os.environ.get("NOVADECK_OTA_CHANNEL") or conf.get("OTA_CHANNEL") or DEFAULT_CHANNEL
+    channel, _ = channel_setting()
     return url.rstrip("/"), channel
 
 
@@ -507,9 +560,14 @@ def progress_emitter():
 
 def cmd_status():
     base_url, channel = config()
+    _, channel_from = channel_setting()
     local = device_identity()
     print(f"device:   {identity_of(local) or '<unidentified>'} ({local.get('mode') or 'mode unknown'})")
-    print(f"server:   {base_url}/{channel}")
+    # WHERE the channel came from, not just which one won. Four sources can supply it and three of
+    # them are invisible on the device — an env var in one caller's environment, a file a release
+    # does not ship, a file in $HOME nobody remembers writing. "It is checking the wrong channel"
+    # is otherwise a question this command cannot answer, which is the whole reason it exists.
+    print(f"server:   {base_url}/{channel}  (channel from {channel_from})")
     print(f"logged in: {'yes' if steam_logged_in() else 'no (updates deferred)'}")
     pending = staged_identity()
     print(f"staged:   {pending or '<none>'}")

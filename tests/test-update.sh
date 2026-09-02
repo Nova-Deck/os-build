@@ -17,7 +17,7 @@
 #
 # HOW IT WORKS: the real, shipped rootfs/overlay/usr/bin/novadeck-update is executed — not a copy, not a
 # sed-mangled variant. It exposes the environment seams documented in its own header
-# (NOVADECK_RELEASE_FILE, NOVADECK_OTA_CONFIG, NOVADECK_OTA_STAGE, NOVADECK_STEAM_LOGINUSERS,
+# (NOVADECK_RELEASE_FILE, NOVADECK_OTA_CONFIG, NOVADECK_OTA_USER_CONFIG, NOVADECK_OTA_STAGE, NOVADECK_STEAM_LOGINUSERS,
 # NOVADECK_CURL, NOVADECK_OTA_URL) and they exist for this file. curl is stubbed on disk so no test
 # touches the network. Nothing here needs rauc, a bus, a server or a device.
 #
@@ -147,10 +147,65 @@ run NOVADECK_RELEASE_FILE="$(release_file 1.0.0)" NOVADECK_OTA_CHANNEL=stable ch
 CASE="duplicate-detection"
 # The same check twice must print the SAME string. A version derived from anything time-varying
 # would make one update look like two, and Steam would re-offer it forever.
+#
+# IT READS $OUT FROM THE CASE ABOVE, so it has to stay adjacent to it — inserting a case between
+# the two silently changes what "the same check twice" compares (caught doing exactly that).
 first="$OUT"
 run NOVADECK_RELEASE_FILE="$(release_file 1.0.0)" NOVADECK_OTA_CHANNEL=stable check
 [ "$OUT" = "$first" ] && ok "two checks print the same identity ('$OUT')" \
                       || bad "identity changed between calls: '$first' then '$OUT'"
+
+# =================================================================================================
+CASE="channel-precedence"
+# The channel has FOUR sources and the order between them is a product decision, not a detail.
+# USER_CONFIG_FILE is the only one a user can write on a release device — no sudo on the image,
+# pairingd hands out a `deck` login and never root's — so without it the channel is whatever the
+# image says, forever, and SteamUI (which carries no environment of ours) can never be aimed
+# anywhere else. With it, /etc still wins: the one image that ships /etc/novadeck/ota.conf is a dev
+# card, where the pin stops the card being offered a stable release that would downgrade it, and a
+# file in $HOME must not undo that quietly.
+manifest etcchan  '{"version":"2.0.0","bundle":"novadeck-2.0.0.raucb","size":100}'
+manifest userchan '{"version":"3.0.0","bundle":"novadeck-3.0.0.raucb","size":100}'
+manifest envchan  '{"version":"4.0.0","bundle":"novadeck-4.0.0.raucb","size":100}'
+printf 'OTA_CHANNEL=etcchan\n'  >"$W/etc-ota.conf"
+printf 'OTA_CHANNEL=userchan\n' >"$W/user-ota.conf"
+
+run NOVADECK_RELEASE_FILE="$(release_file 1.0.0)" \
+    NOVADECK_OTA_USER_CONFIG="$W/user-ota.conf" check
+[ "$OUT" = "3.0.0" ] && ok "a user file with no /etc file and no env steers the check" \
+                     || bad "printed '$OUT', expected '3.0.0' — the user file was ignored"
+
+run NOVADECK_RELEASE_FILE="$(release_file 1.0.0)" \
+    NOVADECK_OTA_CONFIG="$W/etc-ota.conf" NOVADECK_OTA_USER_CONFIG="$W/user-ota.conf" check
+[ "$OUT" = "2.0.0" ] && ok "/etc outranks the user file (the dev pin cannot be undone from \$HOME)" \
+                     || bad "printed '$OUT', expected '2.0.0' — the user file overrode the pin"
+
+run NOVADECK_RELEASE_FILE="$(release_file 1.0.0)" NOVADECK_OTA_CHANNEL=envchan \
+    NOVADECK_OTA_CONFIG="$W/etc-ota.conf" NOVADECK_OTA_USER_CONFIG="$W/user-ota.conf" check
+[ "$OUT" = "4.0.0" ] && ok "the environment still outranks both files" \
+                     || bad "printed '$OUT', expected '4.0.0'"
+
+# `status` must name the source, not just the winner. Three of the four are invisible on a device
+# — an env var in someone else's environment, a file a release does not ship, a file in $HOME
+# nobody remembers writing — so "it is checking the wrong channel" is otherwise unanswerable.
+run NOVADECK_RELEASE_FILE="$(release_file 1.0.0)" \
+    NOVADECK_OTA_USER_CONFIG="$W/user-ota.conf" status
+printf '%s\n' "$OUT" | grep -q "channel from $W/user-ota.conf" \
+  && ok "status names the file the channel came from" \
+  || bad "status does not say where the channel came from: $OUT"
+
+# The user file may choose a channel on the pinned host; it may NOT choose the host. Same signature
+# gate either way, but where a device fetches from is an operator decision, and one writable file in
+# $HOME must not silently aim every future update somewhere else.
+printf 'OTA_CHANNEL=userchan\nOTA_URL=https://evil.example\n' >"$W/user-ota.conf"
+run NOVADECK_RELEASE_FILE="$(release_file 1.0.0)" NOVADECK_OTA_URL= \
+    NOVADECK_OTA_USER_CONFIG="$W/user-ota.conf" check
+if grep -q 'evil\.example' "$W/argv.log"; then
+  bad "the user file repointed the server: $(cat "$W/argv.log")"
+else
+  ok "OTA_URL in the user file is ignored — the fetch stayed on the built-in host"
+fi
+printf 'OTA_CHANNEL=userchan\n' >"$W/user-ota.conf"
 
 # =================================================================================================
 CASE="not-logged-in"

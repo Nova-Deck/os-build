@@ -19,6 +19,16 @@
 # branch, and anonymous appinfo exposes no build-level signal for it. The lsfg-vk job below
 # watches the LAYER, which is the half we build; the DLL half is a user-side prerequisite that
 # only `packages/lsfg-vk/verify-on-device.sh` can check, on a device that owns the product.
+#
+# The Steam CLIENT channel is no longer watched. A `steam-stable` job used to ask one question —
+# "has steamdeck_stable caught up with the publicbeta build validated on hardware?" — because
+# stable then lacked SLR app 4185400 and our baked Protons cannot launch without it. It fired once
+# (#85), stable was retested on hardware 2026-09-02 at build 1788291500 with every leg passing, and
+# `build/steam-seed/STEAM_SEED.pin` now names stable. The question is answered, so the job is gone
+# rather than left to compare stable against itself. It was also the only watcher whose baseline was
+# a CONSTANT in this file instead of repo state, which is the exception the header above no longer
+# has to carve out. If a client bump ever breaks the Windows path again, the pin's comment block
+# holds the diagnostic (check `appmanifest_4185400.acf`, not sniper 1628350) and the revert.
 name: upstream-watch
 
 on:
@@ -475,95 +485,5 @@ jobs:
           - [ ] HW pass on BOTH halves — they are independent paths: a **Proton** title (host aarch64 layer) and a **native x86-64** title (guest x86 layer). Run \`packages/lsfg-vk/verify-on-device.sh\`, and snapshot the session log's lsfg line count BEFORE the launch: a stale block from a previous launch otherwise reads as a clean pass for a launch that logged nothing
 
           An rc we decide to skip is answered by closing this issue once; the title dedupe keeps it closed.
-          EOF
-          )"
-
-  steam-stable:
-    name: steamdeck_stable catching up
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Compare the stable client build against the validated beta build
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # THE ONE WATCHER WHOSE BASELINE IS A CONSTANT, and it has to be. Every other job reads a
-          # version out of repo state; build/steam-seed/STEAM_SEED.pin deliberately names CHANNELS and
-          # no version at all (both are live rolling pointers, resolved on every fetch), so there is
-          # nothing in the tree to compare against.
-          #
-          # WHAT THIS NUMBER IS: the steamdeck_publicbeta client build validated on hardware
-          # 2026-08-31 as carrying what an arm64 device needs. It is NOT known to be the build that
-          # first introduced any of it — only that at this build everything works. Treat it as a
-          # floor, not a boundary.
-          #
-          # WHY WE CANNOT SHIP STABLE TODAY, measured the same day on a real card built from
-          # `channel: steamdeck_stable`: the stable client installs neither Valve's FEX compat tool
-          # (app 3127680) nor its arm64 Proton 11, and — the fatal one — never installs SLR
-          # **app 4185400**, which our baked Protons name in `require_tool_appid`. Without it
-          # proton-cachyos cannot launch at all, so every Windows title dies. Native x86-64 Linux
-          # titles still run under system FEX, which makes a stable card look healthy until someone
-          # tries a Windows game. So `steamdeck_publicbeta` is a DEPENDENCY, not a preference.
-          #
-          # This job answers one question — "has stable caught up enough to be worth re-testing?" —
-          # and the build id is a PROXY for it. Crossing this floor is not proof that 4185400 is
-          # served on stable; it is the cue to go and check, by hand, on a card.
-          VALIDATED_BETA_BUILD: "1787790984"
-        run: |
-          set -euo pipefail
-          # Same URL shape and the same `"version"` parse build/steam-seed/fetch-steam-seed.sh uses
-          # (its manifest_version()), so the watcher and the build can never disagree about what a
-          # channel's build id is.
-          cdn=https://client-update.steamstatic.com
-          build_of() { # <channel> -> build id, or empty
-            curl -fsSL --retry 3 "${cdn}/steam_client_$1_linuxarm64" \
-              | grep -aoE '"version"[[:space:]]*"[0-9]+"' | grep -oE '[0-9]+' | head -1 || true
-          }
-
-          stable="$(build_of steamdeck_stable)"
-          beta="$(build_of steamdeck_publicbeta)"
-          # `|| true` above so the guards below report rather than `set -e` killing the step silently
-          # at the assignment — same reason as the mesa and scx jobs. A manifest reshaped so the
-          # version field stops matching is exactly what this must shout about, not die quietly on.
-          [ -n "$stable" ] || { echo "::error::could not read a build id from the steamdeck_stable manifest"; exit 1; }
-          [ -n "$beta" ]   || { echo "::error::could not read a build id from the steamdeck_publicbeta manifest"; exit 1; }
-
-          # Logged every run, firing or not: the gap is the only progress signal there is, and a human
-          # reading a quiet run still wants to know whether stable moved at all.
-          echo "stable=$stable  publicbeta=$beta  floor=$VALIDATED_BETA_BUILD  gap=$((VALIDATED_BETA_BUILD - stable))"
-          if [ "$stable" -lt "$VALIDATED_BETA_BUILD" ]; then
-            echo "stable has not reached the validated build yet"
-            exit 0
-          fi
-
-          # NO BUILD ID IN THE TITLE, deliberately, and this job is the exception to the pattern the
-          # others follow. Crossing the floor is a ONE-TIME event, not a per-version one: with the id
-          # in the title every later stable bump would file a fresh issue for the same answered
-          # question. This way it files once, ever, and closing it closes it for good.
-          title="upstream: steamdeck_stable reached the validated arm64 client build"
-          if [ "$(gh issue list --state all --search "in:title \"$title\"" --json number --jq length)" -gt 0 ]; then
-            echo "issue already filed"; exit 0
-          fi
-          gh issue create --title "$title" --assignee "$ASSIGNEE" \
-            --label P3 --label area/steam --body "$(cat <<EOF
-          \`steamdeck_stable\` is now at build **$stable**, at or past the **$VALIDATED_BETA_BUILD**
-          publicbeta build validated on hardware 2026-08-31. Current publicbeta is **$beta**.
-
-          This is a CUE TO RE-TEST, not evidence that stable works. The build id is a proxy; what
-          actually blocks stable is whether the client installs the pieces an arm64 device needs.
-          Stable was tested on 2026-08-31 and failed on all three.
-
-          Build a dev card with \`build/steam-seed/STEAM_SEED.pin\` set to
-          \`channel: steamdeck_stable\` + \`runtime_channel: latest-public-stable\` (keep the
-          \`latest-public-*\` axis — the \`latest-steam-client-*\` pointers are aliases today and can
-          diverge), then on the device:
-
-          - [ ] **\`steamapps/appmanifest_4185400.acf\` exists.** THE decisive one. Our baked Protons declare \`require_tool_appid "4185400"\`; without that runtime \`proton-cachyos\` cannot launch. Do not go looking for sniper (1628350) — it is the wrong app, and nothing in the failure names the right one
-          - [ ] \`steamapps/appmanifest_3127680.acf\` — Valve's FEX compat tool
-          - [ ] Valve's arm64 Proton 11 appears in the compatibility-tool list
-          - [ ] **a WINDOWS title launches.** Native x86-64 Linux titles run on stable regardless, under our system FEX, so "games still work" proves nothing — it is the weakest path passing
-          - [ ] lsfg-vk still engages on a Proton title: its aarch64 layer arrives via pressure-vessel importing the host's implicit_layer.d, which was only ever proven with Valve's compat tool in the chain
-
-          If those pass, moving is a two-line pin change plus a full re-seed. If they do not, close this
-          and the watcher stays quiet — the title carries no build id, so it files exactly once.
           EOF
           )"

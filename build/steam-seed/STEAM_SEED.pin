@@ -20,7 +20,10 @@
 # channel:         Steam client channel (an arm64 line — NOT the x86 default). THIS IS COUPLED TO THE
 #                  LAUNCH FLAG in novadeck-steam, and the coupling is enforced by the client, not by us:
 #                  it OWNS `package/beta` and repoints it to match the flag it was started with.
-#                  `-steamdeck` tracks steamdeck_publicbeta (what we launch, so what we pin);
+#                  `-steamdeck` accepts EITHER steamdeck_ line and keeps the one the seed carries —
+#                  measured 2026-09-02: a steamdeck_stable seed launched with -steamdeck left
+#                  `package/beta` on steamdeck_stable, no repoint and no on-device update. What it
+#                  will not tolerate is a line it does not own (see the -deckard case below).
 #                  `-deckard` tracks a gated arm64 line named by a branch-key hash.
 #
 #                  A DISAGREEMENT IS EXPENSIVE IN BOTH DIRECTIONS, both measured 2026-08-19:
@@ -33,6 +36,22 @@
 #                  So change these two together or not at all. The post-install gate in
 #                  fetch-steam-seed.sh prints the channel the client actually ended on, for when they drift.
 #
+#                  WHY steamdeck_stable and not steamdeck_publicbeta, which this pin named until
+#                  2026-09-02: publicbeta USED to be the only line that gave an arm64 device the
+#                  pieces a Windows title needs. Stable was tried on HW 2026-08-31 (client
+#                  1785799196) and lost all three — Valve's FEX compat tool (3127680), the arm64
+#                  Proton 11 offer, and SLR app 4185400, which our baked Protons name in
+#                  `require_tool_appid` and without which proton-cachyos cannot launch at all.
+#                  Stable reached 1788291500 and was retested on HW 2026-09-02: all three are back,
+#                  and a Windows exe ran under proton-cachyos-11.0-arm64 via SteamLinuxRuntime_4-arm64
+#                  with lsfg-vk generating frames (30 internal -> 60 presented). If a Windows title
+#                  ever stops launching after a client bump, check
+#                  `steamapps/appmanifest_4185400.acf` FIRST — not sniper (1628350), which is the
+#                  wrong app — and flipping both fields back to the publicbeta pair is the revert.
+#                  The runtimes install LAZILY: a fresh card has no appmanifests at all for the
+#                  first few minutes, and 4185400 arrives only once a Proton title is launched, so
+#                  an early look at an empty steamapps/ is not evidence of anything.
+#
 #                  WHY NOT the gated -deckard line, which serves a newer build (1787104891 vs publicbeta's
 #                  1787097529): that client asserts Steam Frame identity, which strips the guided tour's
 #                  button handlers and leaves a fresh card stuck on an undismissable welcome screen. See
@@ -41,6 +60,6 @@
 # runtime_base:    steamrt3 image root; `<base>/<snapshot>/steam-runtime-steamrt-arm64.tar.xz` is the
 #                  arm64 runtime tarball the native client links against.
 # runtime_channel: rolling pointer under runtime_base; `<base>/<channel>.txt` holds the snapshot id.
-channel: steamdeck_publicbeta
+channel: steamdeck_stable
 runtime_base: https://repo.steampowered.com/steamrt3c/images
-runtime_channel: latest-public-beta
+runtime_channel: latest-public-stable

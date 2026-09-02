@@ -17,7 +17,7 @@
 # but aarch64-only, so we drive it under qemu, like packages/build-overlay.sh — the build host needn't
 # be arm64.
 #
-# Version-aware: re-running resolves the live publicbeta build (a cheap ~12KB manifest GET) AND the live
+# Version-aware: re-running resolves the pinned channel's live build (a cheap ~12KB manifest GET) AND the live
 # runtime snapshot (a one-line GET), and is a no-op only while the staged seed is complete (has
 # `.installed`) and matches BOTH; a bump in either (or an incomplete seed) triggers a full restage.
 # Delete work/steam-seed to force a refetch. The HOME-relative
@@ -124,7 +124,7 @@ LIVE_MANIFEST="$(mktemp)"; boot_zip="$(mktemp)"; rt_tar="$(mktemp)"
 trap 'rm -f "$LIVE_MANIFEST" "$boot_zip" "$rt_tar"' EXIT
 
 # We DON'T pin a build: BOTH channels are live rolling pointers, so every run resolves the CURRENT
-# publicbeta manifest + runtime snapshot and installs whatever Valve publishes now. To stay AWARE of
+# client manifest + runtime snapshot and installs whatever Valve publishes now. To stay AWARE of
 # silent bumps rather than updating blindly, compare each live id against what is actually staged and
 # restage only when one differs (or the seed is incomplete). These two small GETs are the only network
 # touches on the skip path; the client tree is downloaded solely when we actually restage.

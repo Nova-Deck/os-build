@@ -198,7 +198,17 @@ BOOTSTRAP_PKGS=(base)
 # the SD card). It needs CONFIG_ZRAM, which kernel/kernel.config only gained alongside it, so the two
 # have to move together; kernel/build.sh asserts the symbol survived. Both packages resolve from the
 # pinned snapshot's `extra` (earlyoom 1.9.0, zram-generator 1.2.1) — no overlay build needed.
-PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-tools mesa gamescope seatd sddm mangohud lsfg-vk fex-emu bluez bluez-utils networkmanager alsa-ucm-conf pipewire wireplumber pipewire-pulse pipewire-alsa rtkit unzip openal gtk2 ffmpeg e2fsprogs xorg-xwayland lsof noto-fonts noto-fonts-cjk noto-fonts-emoji python python-gobject scx-scheds rauc btrfs-progs rsync earlyoom zram-generator)
+# udisks2: the storage service Settings > Storage is built on, and NOT an optional convenience --
+# the client talks to it DIRECTLY. The baked arm64 steamui.so carries generated D-Bus bindings for
+# the whole org.freedesktop.UDisks2 API (Manager/Block/Drive/Drive.Ata/Filesystem/Partition/
+# PartitionTable/Loop/MDRaid/Swapspace/Job) and a `CUDisksDrive::ThreadedAdopt` -- the path that
+# adopts a drive as a Steam library. With no udisksd on the system bus that page enumerates nothing
+# and an inserted card cannot be adopted, which is the state the image has been in: there was no
+# udisks row in manifest.lock at all, and nothing else on the image mounts removable media.
+# Pairs with usr/share/polkit-1/rules.d/50-novadeck-storage.rules, which grants the shell the verbs
+# stock udisks policy leaves at auth_admin. Mounting a card is only half of #42; formatting one
+# still needs helpers we do not ship (steamos-format-sdcard / steamos-format-device).
+PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-tools mesa gamescope seatd sddm mangohud lsfg-vk fex-emu bluez bluez-utils networkmanager alsa-ucm-conf pipewire wireplumber pipewire-pulse pipewire-alsa rtkit unzip openal gtk2 ffmpeg e2fsprogs xorg-xwayland lsof noto-fonts noto-fonts-cjk noto-fonts-emoji python python-gobject scx-scheds rauc btrfs-progs rsync earlyoom zram-generator udisks2)
 
 # Dev-only packages — installed ONLY under NOVADECK_DEV=1, NEVER in a release base.
 # On-device bring-up tools: evtest reads raw /dev/input events; usbutils provides lsusb.

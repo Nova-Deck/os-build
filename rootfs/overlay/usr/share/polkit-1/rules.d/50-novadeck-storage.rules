@@ -1,0 +1,42 @@
+// Removable storage: let the Steam shell (deck — an active seat0 session, in wheel) drive UDisks2
+// for an SD card without an auth prompt.
+//
+// THE CLIENT SPEAKS UDISKS2 ITSELF, which is what makes this a requirement rather than a
+// convenience. The baked arm64 steamui.so carries generated bindings for the whole
+// org.freedesktop.UDisks2 API and a `CUDisksDrive::ThreadedAdopt` — the "adopt this drive as a
+// Steam library" path behind Settings > Storage. So the authorization subject is the CLIENT, not a
+// helper of ours, and it asks as the deck user over the system bus.
+//
+// ONLY THE VERBS STOCK POLICY LEAVES AT auth_admin ARE LISTED. udisks2 already ships
+// allow_active=yes for the common ones — filesystem-mount on a removable device is authorized for
+// an active session with no rule at all, and our shell is a real active seat0 session because it
+// boots through SDDM autologin (the same property 50-novadeck-timezone.rules relies on). Granting
+// what is already granted would only make this file lie about what it is for.
+//
+// The `-other-seat` variants are here for the reason SteamOS carries them on a single-seat device:
+// the check is against the seat that OWNS the drive's session, and a card mounted by one session
+// and released by another — a session restart, a devkit login, an unmount after the shell was
+// respawned — trips the other-seat form rather than the plain one. Without them the failure is a
+// silent refusal on the bus and a card that will not eject.
+//
+// NOT GRANTED, deliberately: anything that WRITES a device. modify-device (partitioning) and the
+// format helpers stay out until the SD-card format path exists and can refuse the boot disk —
+// see issue #42. A rule that authorizes formatting before anything refuses formatting the running
+// system is the wrong half to ship first.
+polkit.addRule(function(action, subject) {
+    if (!subject.active || !subject.isInGroup("wheel"))
+        return polkit.Result.NOT_HANDLED;
+
+    var allowed = [
+        "org.freedesktop.udisks2.filesystem-unmount-others",
+        "org.freedesktop.udisks2.eject-media",
+        "org.freedesktop.udisks2.eject-media-other-seat",
+        "org.freedesktop.udisks2.power-off-drive",
+        "org.freedesktop.udisks2.power-off-drive-other-seat"
+    ];
+
+    if (allowed.indexOf(action.id) >= 0)
+        return polkit.Result.YES;
+
+    return polkit.Result.NOT_HANDLED;
+});

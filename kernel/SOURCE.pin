@@ -1,36 +1,61 @@
 # novadeck kernel source pin — Phase 1
 # The TARBALL + its sha256 is the canonical pin. Validated 2026-06-17; re-pinned 2026-07-25
 # (7.1.5, HW-validated on Pocket S2 + Pocket ACE); re-pinned 2026-08-03 (7.1.6); re-pinned
-# 2026-08-18 (7.2 — mainline, released 2026-08-16; NOT HW-validated yet, see the gate below).
-version:    7.2.1
-url:        https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.2.1.tar.xz
-sha256:     4158098c8a28ea8fbe068c855d3aa6341e03d06282add3cb9049f3a24e4557b3
-git_tag:    v7.2.1
-git_commit: 458fbaaefba2fc5450c325a6834453dc4f4e52ae
+# 2026-08-18 (7.2 — mainline, released 2026-08-16; NOT HW-validated yet, see the gate below);
+# re-pinned 2026-08-27 (7.2.1); re-pinned 2026-09-03 (7.2.3, issue #86).
+version:    7.2.3
+url:        https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.2.3.tar.xz
+sha256:     8ba259e8e7b13ec6ef0941c8a39ad90b24bd4a4d6c0010ba6bafb794550ecd03
+git_tag:    v7.2.3
+git_commit: 58e7295cfecaddec94629160386412e0f2b1e8fe
 
 # The sha256 above is the one kernel.org publishes in the SIGNED sha256sums.asc for v7.x, not a
-# hash of whatever the CDN happened to serve — checked 2026-08-27. git_commit is the DEREFERENCED
-# tag (`git ls-remote 'v7.2.1^{}'`), matching how the 7.1.5/7.1.6/7.2 lines were recorded; the
-# annotated tag object is 2ea1dee74fcca4b229d780ade5f9a5352cbc4dd7 and is NOT what belongs here.
+# hash of whatever the CDN happened to serve — re-checked 2026-09-03. The .asc itself verifies as
+# a GOOD signature from "Kernel.org checksum autosigner <autosigner@kernel.org>", fingerprint
+# B886 8C80 BA62 A1FF FAF5 FDA9 632D 3A06 589D A6B1. That key carries no trust path here, so the
+# load-bearing check is CONTINUITY: the SAME signed file still lists 7.2.1 as
+# 4158098c8a28ea8fbe068c855d3aa6341e03d06282add3cb9049f3a24e4557b3, byte-for-byte the hash this
+# pin carried and shipped before — so the file describing 7.2.3 is the same file that described
+# the release we already trusted. (Note: keys.openpgp.org serves this key STRIPPED of its user
+# IDs and gpg then refuses it as "no public key"; keyserver.ubuntu.com serves it whole.)
+# git_commit is the DEREFERENCED tag (`git ls-remote 'v7.2.3^{}'`), matching how the
+# 7.1.5/7.1.6/7.2/7.2.1 lines were recorded; the annotated tag object is
+# 296e02a60bcb8223c12ebf58feeb69961f4608c1 and is NOT what belongs here.
 #
-# 7.2 was MAINLINE with no point release; 7.2.1 (2026-08-2x) is the first stable one and is what
-# this now pins. Precedent from 7.1.3 -> 7.1.5: a point release INSIDE a series is a pure pin edit
-# — but that is a prediction, not a licence to skip the patch/config gates below. Re-run them.
+# 7.2 was MAINLINE with no point release; 7.2.1 was the first stable one, and 7.2.3 (2026-09-02)
+# is this pin's second in-series step. Precedent from 7.1.3 -> 7.1.5: a point release INSIDE a
+# series is a pure pin edit — but that is a prediction, not a licence to skip the patch/config
+# gates below. Re-run them.
 
-# Config validation (kernel/*.config) against THIS tree, RE-RUN 2026-08-27 for the 7.2.1 re-pin
-# (numbers below are 7.2.1's; the 7.2 run they replace found 427/1-missing and 69 patches/21 fuzz):
-#   - all 428 referenced CONFIG_* symbols (kernel.config + trim-platforms.config) exist in the
-#     PATCHED 7.2.1 tree, with NONE missing. Sweep: strip `CONFIG_x=` and `# CONFIG_x is not set`
+# Config validation (kernel/*.config) against THIS tree, RE-RUN 2026-09-03 for the 7.2.3 re-pin
+# (numbers below are 7.2.3's; the 7.2.1 run they replace found 428/0-missing and 71 patches/26 fuzz,
+# and the 7.2 run before that 427/1-missing and 69 patches/21 fuzz):
+#   - all 429 referenced CONFIG_* symbols (kernel.config + trim-platforms.config) exist in the
+#     PATCHED 7.2.3 tree, with NONE missing. The count moved 428 -> 429 for a reason that has
+#     nothing to do with the bump: b4ddf2d added AYANEO_SERIAL_MCU, a symbol our OWN patch
+#     1005-add-ayaneo-serial-mcu.patch defines — which is exactly why the sweep must run against
+#     the patched tree and not a pristine one. Sweep: strip `CONFIG_x=` and `# CONFIG_x is not set`
 #     to bare names, diff against every `config`/`menuconfig` name in the tree's Kconfig files.
 #     The one 7.2 casualty stays deleted and its note is still why — see kernel.config's header:
 #       READ_ONLY_THP_FOR_FS -> removed upstream in 7.2; file THP is unconditional now.
 #     SCHED_CACHE (added 2026-08-22) still resolves the same way (init/Kconfig, `default y`,
 #     `depends on SMP`) — the pin records an inherited default rather than changing one.
-#   - all 71 out-of-tree patches in kernel/patches/ apply to 7.2.1 with ZERO rejects, applied
+#   - all 71 out-of-tree patches in kernel/patches/ apply to 7.2.3 with ZERO rejects, applied
 #     CUMULATIVELY in lexical order, which is the only order that means anything (see below).
-#     26 of them need fuzz (was 21 on 7.2, 10 on 7.1.6); kernel/build.sh passes no -F0, so patch's
-#     default fuzz=2 accepts them. The fuzz count CLIMBS with every point release — when it
-#     reaches 2 on a hunk that matters, patch will start applying it in the wrong place silently.
+#     26 hunks need fuzz; kernel/build.sh passes no -F0, so patch's default fuzz=2 accepts them.
+#     The fuzz count CLIMBS with every point release — when it reaches 2 on a hunk that matters,
+#     patch will start applying it in the wrong place silently. So the raw total is the WRONG
+#     instrument: 26 was also 7.2.1's total, and a hunk sliding 1 -> 2 while another slid 2 -> 1
+#     would leave it unmoved. The 7.2.3 run therefore replayed the identical drill against a
+#     pristine 7.2.1 tree and diffed the PER-HUNK profile (patch name + fuzz level, counted): the
+#     two are byte-identical, 16 hunks at fuzz 1 and 10 at fuzz 2, same patches on both sides.
+#     Nothing climbed.
+#   - independent corroboration, and the cheapest signal in this whole drill: applying our patches
+#     to BOTH trees and diffing the results isolates the pure upstream delta. 7.2.1 -> 7.2.3 changes
+#     82 files; our patches touch 127; the INTERSECTION IS EMPTY. Upstream did not go near a single
+#     file we carry a patch for, which is why the fuzz profile could not have moved. Re-run this
+#     intersection on the next bump before reading any hunk: a non-empty result names exactly which
+#     patches deserve a human, and an empty one retires the question.
 #   - `patch unexpectedly ends in middle of line` x4 is NOT a reject: patches 0004 (IFPC) and 0203
 #     (S16_LE) have no trailing newline. Both hunks succeed. Pre-existing, unrelated to any bump.
 #   - the fragments were then MERGED for real inside build/Dockerfile (`merge_config.sh -m

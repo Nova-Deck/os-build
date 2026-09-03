@@ -1,0 +1,42 @@
+#!/usr/bin/bash
+# SteamUI's Settings > Storage calls this by absolute path to format the SD card — the path is in
+# the baked seed's steamui.so alongside steamos-format-device, and the name is the whole reason this
+# file exists at that path.
+#
+# THIS ONE IS A REAL PRIVILEGE BOUNDARY, unlike steamos-update next to it. That one execs a client
+# that needs no privileges (rauc's own bus policy admits any local user and the signature is the
+# gate); this one repartitions a disk, so it pkexecs into the privileged script and the polkit
+# action is what decides whether the caller may. See
+# usr/share/polkit-1/actions/org.novadeck.policykit.storage.policy: allow_active only, so the seat
+# session may format a card and an SSH session may not — the same distinction that makes an
+# `udisksctl mount` over SSH fail while the shell's own mount succeeds.
+#
+# NO DEVICE ARGUMENT, deliberately. The client's contract for this entry point is "the SD card", and
+# --auto resolves that on the device, where the answer is knowable: a removable SD we did not boot
+# from, and exactly one of them. Letting the caller name a disk here would make the client's idea of
+# which card is "the" card authoritative over ours, and the client cannot see which disk this system
+# is running from.
+# See the sibling steamos-format-device for why this is logged here rather than left to pkexec.
+logger -t steamos-format-sdcard -p user.notice -- "invoked: $*"
+
+# RESOLVING WHICH CARD HAPPENS HERE, and that placement is the point. Upstream's equivalent is one
+# line — `format-device.sh --device /dev/mmcblk0` — because on a Deck the SD slot always is
+# mmcblk0. It is not here: eMMC enumerates as mmcblk too, and a device can be RUNNING FROM a card,
+# so a hardcoded mmcblk0 would sometimes name the disk we booted from. storage_target_sd answers
+# "the removable SD we are not running from", and yields nothing when there is more than one.
+#
+# This used to be a --auto flag inside format-device.sh. It was moved out so that helper's option
+# set stays exactly upstream's, diffable against the file it was ported from in one glance — which
+# is what it lacked while its contract was being guessed from client strings. A divergence our
+# hardware forces belongs in our own wrapper, not bolted onto a copied contract.
+#
+# The privileged script re-checks anyway (removable SD, not the system disk), so this is about
+# naming the RIGHT card, not about being the thing that stops the wrong one being erased.
+. /usr/lib/novadeck/storage/lib-storage.sh
+device="$(storage_target_sd)"
+[ -n "$device" ] || {
+    echo "steamos-format-sdcard: no eligible SD card (none present, it is the boot disk, or there is more than one)" >&2
+    logger -t steamos-format-sdcard -p user.notice -- "no eligible SD card to format"
+    exit 19  # ENODEV, the same code the privileged script uses for "no such device"
+}
+exec /usr/bin/pkexec /usr/lib/novadeck/storage/format-device.sh --device "$device" "$@"

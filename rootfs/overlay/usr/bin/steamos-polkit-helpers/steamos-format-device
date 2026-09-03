@@ -1,0 +1,19 @@
+#!/usr/bin/bash
+# SteamUI's Settings > Storage calls this by absolute path to format a NAMED device; its sibling
+# steamos-format-sdcard is the no-argument "the SD card" form. Both land in the same privileged
+# script, which applies the same refusals to both — a device named here is still rejected unless it
+# is a removable SD card this system is not running from, so passing a name buys the caller nothing
+# it could not have had from --auto.
+#
+# The arguments are forwarded verbatim: the script's own parser is the one contract, and
+# re-implementing a subset of it here would be a second place for the two to disagree about what
+# --label means. What the client actually sends is fixed in steamui.so —
+# `--device <dev> --label '<name>' --force [--enable-duplicate-detection]`, plus a
+# `--supports-duplicate-detection` probe — so that vocabulary is not optional; the script accepts
+# all of it.
+# Logged BEFORE pkexec, not after. pkexec's own journal line records what it EXECUTED, so a call
+# that pkexec declines — or one that never gets that far — leaves nothing, and "the client did not
+# call us" and "the client called us and was refused" look identical from the device. They are not
+# the same answer, and on #42 the difference is the whole question.
+logger -t steamos-format-device -p user.notice -- "invoked: $*"
+exec /usr/bin/pkexec /usr/lib/novadeck/storage/format-device.sh "$@"

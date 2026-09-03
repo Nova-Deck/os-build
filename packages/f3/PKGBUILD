@@ -1,0 +1,54 @@
+# f3 — "Fight Flash Fraud". We build and ship exactly ONE of its five binaries.
+#
+# WHY IT IS HERE: usr/lib/novadeck/storage/format-device.sh runs f3probe before it formats a card,
+# when the client asks for it. Settings > Storage's format dialog has a "Run validation tests"
+# checkbox that is ticked BY DEFAULT for SD media, and the client has a whole Testing stage in its
+# format-progress enum for exactly this. Without f3probe that checkbox was a no-op: a counterfeit
+# card — one that reports 512G and stores 8G, wrapping or discarding the rest — formats cleanly,
+# mounts cleanly, and loses games at the point the lie starts.
+#
+# WHY LOCAL AND NOT FETCHED: f3 is not in the holo repo and not in the upstream aarch64 base; it
+# lives in the AUR. The reference platform ships it from a PKGBUILD of the same AUR lineage. Ours
+# is written from scratch rather than copied so the trimming below is ours to explain.
+#
+# WHY ONLY f3probe, when upstream's package installs five binaries:
+#
+#   f3write/f3read   the ORIGINAL pair, and the slow one — they fill the card and read it back.
+#                    f3probe answers the same question in minutes instead of hours by probing
+#                    block-order behaviour, which is why upstream's own tooling calls it.
+#   f3brew           a diagnostic for exploring a known-bad card. Nothing calls it.
+#   f3fix            rewrites the partition table to the card's REAL size, i.e. it rescues a
+#                    counterfeit into something usable. That is the exFAT-rescue path upstream
+#                    offers and we deliberately do not: we refuse the card and say why. It is also
+#                    the ONLY binary here that links libparted (see the Makefile: f3fix is
+#                    `-lparted`, f3probe is `-lm -ludev`), so dropping it keeps parted off the
+#                    image entirely rather than dragging in a partitioning library for a rescue we
+#                    do not perform.
+#
+# So `make build/f3probe` rather than `make extra`, and one install line rather than install-extra.
+# If a rescue path is ever wanted, this is where it comes back — with parted, and with a decision
+# about what a rescued card is allowed to be.
+
+pkgname=f3
+pkgver=10.0
+pkgrel=1
+pkgdesc='Counterfeit flash-card probe (f3probe only) for the SD-card format helper'
+arch=('aarch64')
+url='https://github.com/AltraMayor/f3'
+license=('GPL-3.0-only')
+# libudev, which f3probe uses to resolve the block device it was handed. libm and libc come with
+# the toolchain's own runtime. NOT parted — see above, that is f3fix's and f3fix is not built.
+depends=('systemd-libs')
+source=("${pkgname}-${pkgver}.tar.gz::${url}/archive/v${pkgver}.tar.gz")
+sha256sums=('ce54275b7793f97391583ede33c1d87590901d8da20cce604b1f07a029aefc67')
+
+build() {
+  # The Makefile names its outputs by path (TARGETS/EXTRA_TARGETS are build/f3write, build/f3probe,
+  # …), so a single binary is a first-class target and needs no patching to isolate.
+  make -C "${pkgname}-${pkgver}" build/f3probe
+}
+
+package() {
+  install -Dm755 "${pkgname}-${pkgver}/build/f3probe" "${pkgdir}/usr/bin/f3probe"
+  install -Dm644 "${pkgname}-${pkgver}/LICENSE" -t "${pkgdir}/usr/share/licenses/${pkgname}"
+}

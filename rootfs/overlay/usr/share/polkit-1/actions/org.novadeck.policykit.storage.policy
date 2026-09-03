@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1.0/policyconfig.dtd">
+<!--
+  The pkexec action behind /usr/bin/steamos-polkit-helpers/steamos-format-{sdcard,device}.
+
+  WITHOUT THIS FILE pkexec falls back to org.freedesktop.policykit.exec, which is auth_admin: it
+  would prompt for a password on a device where no account has one, on a screen with no password
+  field. The format button would appear to do nothing at all. Annotating the path is what gives the
+  script an action of its own with an answerable rule.
+
+  allow_active=yes, allow_inactive=no, allow_any=no — the same shape as the udisks verbs granted in
+  usr/share/polkit-1/rules.d/50-novadeck-storage.rules, and the reason is the same: the seat session
+  is the user standing in front of the device, and it is the only subject that should be able to
+  erase a card. An SSH login is not active, so remote access cannot reach this even as deck. That is
+  a real boundary and not an inconvenience to work around: on a release image SSH is a paired
+  developer key, and a paired key should not be able to wipe storage without someone at the screen.
+
+  The script itself refuses anything that is not a removable SD card this system is not running
+  from. That check lives there rather than here because polkit can answer "may this user run this
+  program", not "is this argument a disk we booted from".
+-->
+<policyconfig>
+  <vendor>novadeck</vendor>
+  <vendor_url>https://github.com/Nova-Deck/os-build</vendor_url>
+
+  <action id="org.novadeck.policykit.storage.format-device">
+    <description>Format a removable storage card</description>
+    <message>Authentication is required to format a removable storage card</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/lib/novadeck/storage/format-device.sh</annotate>
+    <annotate key="org.freedesktop.policykit.exec.allow_gui">true</annotate>
+  </action>
+</policyconfig>

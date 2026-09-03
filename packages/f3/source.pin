@@ -1,0 +1,23 @@
+# f3 — built FROM SOURCE via a novadeck-owned PKGBUILD (packages/f3/PKGBUILD), NOT fetched from the
+# holo monorepo: f3 is an AUR package, absent from both holo and the upstream aarch64 base, so there
+# is no repo row to resolve and no upstream PKGBUILD to pull. Same "local PKGBUILD" form as
+# packages/gtk2/source.pin.
+#
+# Why: the client's format dialog offers "Run validation tests", ticked by default for SD media, and
+# f3probe is the test. See the PKGBUILD header for why only ONE of upstream's five binaries is
+# built, and usr/lib/novadeck/storage/format-device.sh for how the verdict is read (f3probe exits 0
+# even for a counterfeit card — the answer is in its stdout).
+#
+# Version: 10.0, upstream's latest release. The reference platform pins 8.0.
+#
+# Fields (see packages/README.md):
+#   name           pkgname (must match the PKGBUILD); also the work/ build-dir + repo entry
+#   pkgbuild_local path (relative to this dir) to the checked-in PKGBUILD to build
+#   pkgrel_suffix  numeric suffix appended to the PKGBUILD's pkgrel so pacman prefers our build
+#
+# To bump f3: edit pkgver + sha256sums in packages/f3/PKGBUILD, and re-check that
+# `build/f3probe` is still a Makefile target and still links only -lm -ludev — a release that moved
+# f3probe onto libparted would silently pull parted onto the image through depends.
+name: f3
+pkgbuild_local: PKGBUILD
+pkgrel_suffix: 1

@@ -1,0 +1,36 @@
+[Unit]
+# Started by SYSTEMD_WANTS from usr/lib/udev/rules.d/99-novadeck-automount.rules, one instance per
+# partition (%i is the kernel name, e.g. mmcblk0p1). Templated rather than a single unit because a
+# card can carry more than one partition and each is its own mount decision.
+#
+# ORDERED AFTER dbus.socket, AND THAT IS THE WHOLE POINT OF THIS BLOCK. The mount is a D-Bus call
+# to udisks, which is bus-activated — so "udisks starts itself when the script calls it" is true
+# only once a bus exists to carry the call. This unit used to declare no ordering at all on exactly
+# that reasoning, which held for the common case (a card inserted long after boot) and failed for
+# the other one: with a card already in the slot at power-on, udev fired this ~8 seconds before
+# dbus-broker was ready, busctl never reached udisks, and the boot ended with a failed unit and an
+# unmounted card (HW-caught 2026-09-03, journal timestamps 08:50:35 vs dbus-broker "Ready"
+# 08:50:43). Wants= as well as After=, so the socket is pulled into the transaction rather than
+# merely ordered against if something else happens to want it.
+#
+# This costs the hotplug case nothing: after boot dbus.socket is long since active, so the ordering
+# is already satisfied when udev fires and the unit starts immediately.
+Description=novadeck automount for %i
+Documentation=file:///usr/lib/novadeck/storage/automount.sh
+DefaultDependencies=no
+Wants=dbus.socket
+After=dbus.socket
+Conflicts=shutdown.target
+Before=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=no
+ExecStart=/usr/lib/novadeck/storage/block-event.sh add %i
+# The remove path only tidies our compatibility symlink; udisks unmounts on its own when the device
+# goes away. It is ExecStop rather than a second rule so removal cannot race the add.
+ExecStop=/usr/lib/novadeck/storage/block-event.sh remove %i
+# A card that fails to mount must not leave a failed unit lying in the journal for every insert of
+# a filesystem we do not handle. The script already logs its reason and exits 0 for the cases that
+# are decisions rather than errors; a real failure is worth seeing, so this does not swallow those.
+TimeoutStartSec=180

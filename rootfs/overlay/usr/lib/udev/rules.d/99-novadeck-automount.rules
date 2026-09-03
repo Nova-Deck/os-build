@@ -1,0 +1,45 @@
+# Automount an inserted SD card for the Steam shell. The match half of
+# usr/lib/novadeck/storage/automount.sh; ported from the reference platform's
+# 99-steamos-automount.rules, narrowed.
+#
+# KERNEL=="mmcblk*p*" — PARTITIONS ONLY, and only on the SD/MMC bus. The upstream rule also matches
+# sd*, which on this hardware is the internal UFS: six LUNs carrying the vendor's own partitions
+# (super, vbmeta, xbl, userdata). Nothing there is ours to mount, and a device booted from a card
+# would happily adopt the phone's firmware storage. The script refuses that too — this is the cheap
+# half of the same answer, and it keeps udev from spawning a unit per LUN at every boot.
+#
+# ID_FS_USAGE=="filesystem" — skip partitions with no mountable signature. A freshly wiped card
+# fires an event with no filesystem, and a unit that starts only to exit 0 is noise in the journal
+# of every format.
+#
+# The work is deliberately NOT done here: udev rules run under a timeout and block the event queue,
+# and mounting talks to udisks over D-Bus. systemd-run-style templating hands it to a unit and lets
+# udev return immediately, which is the same shape the reference platform uses and the reason the
+# script is asynchronous at all.
+# `change` IS DELIBERATELY NOT MATCHED, and this line has now been wrong in both directions, so
+# both are written down.
+#
+# It was added on 2026-09-02 because formatting a card in place left it unmounted: the partition
+# appears FIRST as an `add` with no filesystem (which the ID_FS_USAGE test below correctly drops)
+# and the signature appears SECOND, as a `change`. That reading was right.
+#
+# What it missed is what ELSE emits `change`: the kernel sends one whenever a block device that was
+# open for writing is closed — and unmounting a read-write filesystem is exactly that. So every
+# unmount immediately re-triggered this rule and the card mounted itself straight back. `Unmount`
+# in the client's own menu could not work, which is the whole point of shipping it, and neither
+# could anything else that ever wants a card released (HW-caught 2026-09-03).
+#
+# The format case is now handled where the knowledge actually is: usr/lib/novadeck/storage/
+# format-device.sh mounts the card itself when it finishes, because IT knows it just created a
+# filesystem. A udev rule cannot tell "a filesystem appeared" from "a filesystem was released" —
+# both are a `change` on a device with ID_FS_USAGE=filesystem — so it should not be asked to.
+#
+# Consequence, stated rather than discovered later: a card given a filesystem by something OTHER
+# than our formatter (a hand-run mkfs over SSH) stays unmounted until it is reinserted.
+ACTION!="add|remove",           GOTO="novadeck_automount_end"
+KERNEL!="mmcblk*p*",            GOTO="novadeck_automount_end"
+ENV{ID_FS_USAGE}!="filesystem", GOTO="novadeck_automount_end"
+
+ENV{SYSTEMD_WANTS}+="novadeck-automount@%k.service"
+
+LABEL="novadeck_automount_end"

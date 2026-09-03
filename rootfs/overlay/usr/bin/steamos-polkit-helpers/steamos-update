@@ -12,4 +12,11 @@
 # It stays a separate file rather than a symlink so this comment has somewhere to live: the next
 # person to find a stub-shaped script in a polkit-helpers directory should not have to guess
 # whether the privilege escalation went missing.
+# LOG WHAT THE CLIENT ASKED FOR, BEFORE DOING IT. This wrapper is the one helper the client runs
+# WITHOUT pkexec, so unlike its siblings an invocation here leaves no journal line of any kind —
+# which is a hole in the only instrument we have for "what does the client actually call". It cost
+# real time on #42: `%s --supports-duplicate-detection` is in steamui.so next to both this helper's
+# path and the format helper's, and with no record of a call to either, which one it probes was
+# unanswerable from the device. One line ends that permanently.
+logger -t steamos-update -p user.notice -- "invoked: $*"
 exec /usr/bin/novadeck-update "$@"

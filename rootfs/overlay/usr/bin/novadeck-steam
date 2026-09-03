@@ -101,6 +101,17 @@ export STEAM_GAMESCOPE_FANCY_SCALING_SUPPORT=1
 export STEAM_MULTIPLE_XWAYLANDS=1
 # SteamRT's xdg-open hands http(s):// to the client instead of a (nonexistent) desktop browser.
 export SRT_URLOPEN_PREFER_STEAM=1
+# Storage. These two are THE gate on the SD-card format and eject actions, and nothing an OS ships
+# elsewhere substitutes for them. The client's own drive model lives in steamui.so
+# (CSystemStorageDeviceManagerLinux, which speaks UDisks2 directly — hence the udisks2 dependency);
+# it reads these at session start and reports them back to the shell as is_adopt_supported /
+# is_unmount_supported in StorageDeviceManager.GetState. Settings > Storage renders `Format Drive`
+# only when is_adopt_supported, and `Unmount` only when is_unmount_supported, BEFORE it asks the OS
+# anything — which is why shipping the helpers, the polkit action and the D-Bus interface changed
+# nothing on their own (#42). Unmount also closes the "card pulled while mounted" hole, which today
+# ends in `JBD2: I/O error ... Aborting journal`.
+export STEAM_ALLOW_DRIVE_ADOPT=1
+export STEAM_ALLOW_DRIVE_UNMOUNT=1
 #
 # DELIBERATELY NOT SET (gamescope/ChimeraOS set some of these; each would advertise a control this
 # board cannot honour, or collides with something of ours):

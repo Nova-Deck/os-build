@@ -36,6 +36,23 @@ IFACE_MANAGER = "com.steampowered.SteamOSManager1.Manager2"
 IFACE_SESSION = "com.steampowered.SteamOSManager1.SessionManagement1"
 IFACE_OBJECT_MANAGER = "org.freedesktop.DBus.ObjectManager"
 
+# NO Storage1/Job1 HERE, DELIBERATELY, and this note is the whole record of why.
+#
+# We implemented both — the names, signatures and job indirection copied faithfully from Valve's own
+# steamos-manager — on the theory that Settings > Storage formatted cards by calling this bus name.
+# It does not, and never did. With every unhandled method logged with its arguments, the count of
+# calls the client made to Storage1 on hardware was ZERO (2026-09-02). The client's format path is
+# entirely internal: a native StorageDeviceManager inside steamui.so that speaks UDisks2 itself and
+# execs /usr/bin/steamos-polkit-helpers/steamos-format-device directly — measured in pkexec's own
+# journal line on 2026-09-03. Nothing was ever on the other end of this interface.
+#
+# So it came out. It cost nothing to keep except the belief that it did something, which is the
+# expensive part: it was implemented while chasing the missing Format action, and having it present
+# made "the client is refusing our interface" keep looking plausible for another round.
+#
+# If a front end of OUR own ever needs to format a card without root — the Decky plugin is the
+# candidate — the thing to call is the helper, not to resurrect Valve's interface for one caller.
+
 
 ROOT_XML = f"""
 <node>
@@ -78,6 +95,8 @@ INTERFACES_XML = f"""
     <property name="DefaultLoginMode" type="s" access="readwrite"/>
   </interface>
 """
+
+
 
 
 def shell_env():
@@ -244,7 +263,7 @@ class NovadeckSteamOSManager:
         if iface == IFACE_OBJECT_MANAGER and method == "GetManagedObjects":
             invocation.return_value(GLib.Variant("(a{oa{sa{sv}}})", (self.managed_objects(),)))
             return
-        invocation.return_dbus_error(f"{BUS_NAME}.Error.UnknownMethod", method)
+        self.refuse_unknown(iface, method, _params, invocation)
 
     def handle_method_call(self, _conn, _sender, _path, iface, method, _params, invocation):
         if iface == IFACE_MANAGER and method == "ReloadConfig":
@@ -297,6 +316,30 @@ class NovadeckSteamOSManager:
             if method == "CleanTemporarySessions":
                 invocation.return_value(None)
                 return
+        self.refuse_unknown(iface, method, _params, invocation)
+
+    def refuse_unknown(self, iface, method, params, invocation):
+        """Answer UnknownMethod, and SAY SO IN THE JOURNAL.
+
+        THIS LOG LINE IS THE POINT. A client that asks for something we do not implement gets a
+        D-Bus error it handles silently — a control it simply does not draw — and the only outward
+        sign is a feature that is missing for no stated reason. That cost real time twice: the OS
+        Update Channel picker (a contract we answered that nobody read), and Settings > Storage
+        offering no Format action with no evidence anywhere on the device about what it wanted.
+
+        The parameters are logged too, because the method name alone does not say which device or
+        which signature the caller had in mind, and a refused call is the one moment that
+        information exists."""
+        try:
+            args = params.unpack() if params is not None else ()
+        except Exception:
+            args = "<unreadable>"
+        print(
+            f"novadeck-steamos-manager: UNHANDLED {iface}.{method}{args!r} — "
+            "answered UnknownMethod; if SteamUI wanted this, that is why the control is missing",
+            file=sys.stderr,
+            flush=True,
+        )
         invocation.return_dbus_error(f"{BUS_NAME}.Error.UnknownMethod", method)
 
     def handle_get_property(self, _conn, _sender, _path, iface, prop):
@@ -338,6 +381,8 @@ def main():
     system_bus = "--system" in sys.argv
     loop = GLib.MainLoop()
     manager = NovadeckSteamOSManager()
+    # Which bus we own decides whether a format runs directly or through pkexec (see handle_storage).
+    manager.system_bus = system_bus
 
     def bus_acquired(connection, _name):
         manager.register(connection)

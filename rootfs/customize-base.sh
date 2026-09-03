@@ -206,9 +206,12 @@ BOOTSTRAP_PKGS=(base)
 # and an inserted card cannot be adopted, which is the state the image has been in: there was no
 # udisks row in manifest.lock at all, and nothing else on the image mounts removable media.
 # Pairs with usr/share/polkit-1/rules.d/50-novadeck-storage.rules, which grants the shell the verbs
-# stock udisks policy leaves at auth_admin. Mounting a card is only half of #42; formatting one
-# still needs helpers we do not ship (steamos-format-sdcard / steamos-format-device).
-PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-tools mesa gamescope seatd sddm mangohud lsfg-vk fex-emu bluez bluez-utils networkmanager alsa-ucm-conf pipewire wireplumber pipewire-pulse pipewire-alsa rtkit unzip openal gtk2 ffmpeg e2fsprogs xorg-xwayland lsof noto-fonts noto-fonts-cjk noto-fonts-emoji python python-gobject scx-scheds rauc btrfs-progs rsync earlyoom zram-generator udisks2)
+# stock udisks policy leaves at auth_admin.
+# f3: the counterfeit-card probe behind the format dialog's "Run validation tests", which is ticked
+# BY DEFAULT for SD media — so without it the common path silently skips the check that stops a card
+# claiming 512G and storing 8G from eating a library. Overlay-built (packages/f3/), and trimmed to
+# f3probe alone so it costs one 60K binary and no parted; the PKGBUILD header has the reasoning.
+PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-tools mesa gamescope seatd sddm mangohud lsfg-vk fex-emu bluez bluez-utils networkmanager alsa-ucm-conf pipewire wireplumber pipewire-pulse pipewire-alsa rtkit unzip openal gtk2 ffmpeg e2fsprogs xorg-xwayland lsof noto-fonts noto-fonts-cjk noto-fonts-emoji python python-gobject scx-scheds rauc btrfs-progs rsync earlyoom zram-generator udisks2 f3)
 
 # Dev-only packages — installed ONLY under NOVADECK_DEV=1, NEVER in a release base.
 # On-device bring-up tools: evtest reads raw /dev/input events; usbutils provides lsusb.

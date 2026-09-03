@@ -18,8 +18,8 @@
 #                  add SM875x / a8xx Adreno enablement patches here.
 #
 # Upstream source (informational; the URL + sha also live in the PKGBUILD):
-#   url:    https://archive.mesa3d.org/mesa-26.2.1.tar.xz
-#   sha256: c47e81bddc4760360a41ac3c5acec38acb81f9d750ecef47e7f3adc7021a4442
+#   url:    https://archive.mesa3d.org/mesa-26.2.2.tar.xz
+#   sha256: eeb29ca7e56cfaa8e8a79538dcf834e3b18e501c31bef5145e959ea437cc4216
 #
 # To bump mesa: edit pkgver (and the tarball sha256) in packages/mesa/PKGBUILD, update the
 # url/sha256 lines above, and re-roll any patches under ./patches/ against the new tag.

@@ -27,7 +27,7 @@ pkgname=(
   vulkan-mesa-device-select
   vulkan-mesa-layers
 )
-pkgver=26.2.1
+pkgver=26.2.2
 _pkgver=${pkgver/[a-z]/-&}
 pkgrel=1
 epoch=1
@@ -95,7 +95,7 @@ options=(
 source=(
   "https://archive.mesa3d.org/mesa-$_pkgver.tar.xz"
 )
-# Provenance: sha256 of mesa-26.2.1.tar.xz. build-overlay.sh runs makepkg with --skipinteg (our
+# Provenance: sha256 of mesa-26.2.2.tar.xz. build-overlay.sh runs makepkg with --skipinteg (our
 # locally-added patch sources have no checksums), so this is recorded for human/CI verification and
 # matches the pinned URL+sha in packages/mesa/source.pin. The upstream .sig + validpgpkeys are
 # dropped (the pipeline does not do PGP verification).
@@ -104,17 +104,17 @@ source=(
 # mesa publishes NO .sha256sum next to the tarball (that URL 404s), only a detached .sig. So this
 # was computed locally from a tarball whose PGP signature verifies as a GOOD signature from Eric
 # Engestrom, key 5755 1DE1 5B96 8F63 41C2 48F6 8D8E 31AF C324 28A6 — the SAME issuer fingerprint
-# that signed 26.1.5, 26.1.6 and 26.2.0, the releases this image already shipped and validated on
-# hardware. Checking the signer against the previous release is the load-bearing step: an
-# unknown-trust "good signature" on its own only proves the tarball matches whatever key came with
-# it. Re-confirmed unchanged for 26.2.1, and previously across the 26.1 -> 26.2 branch bump, where
-# mesa could plausibly have rotated the release manager and hence the signing key.
+# that signed 26.1.5, 26.1.6, 26.2.0 and 26.2.1, the releases this image already shipped and
+# validated on hardware. Checking the signer against the previous release is the load-bearing step:
+# an unknown-trust "good signature" on its own only proves the tarball matches whatever key came
+# with it. Re-confirmed unchanged for 26.2.2 (2026-09-02), and previously across the 26.1 -> 26.2
+# branch bump, where mesa could plausibly have rotated the release manager and hence the signing key.
 #
 # Do not believe a bump request that says a `.sha256sum` sidecar exists — our upstream monitor
-# claimed one for 26.2.1 and https://archive.mesa3d.org/mesa-26.2.1.tar.xz.sha256sum still 404s.
-# The .sig is the only upstream integrity artifact; re-run the signer check above every bump.
+# claimed one for 26.2.1, and https://archive.mesa3d.org/mesa-26.2.2.tar.xz.sha256sum still answers
+# 404 today. The .sig is the only upstream integrity artifact; re-run the signer check every bump.
 sha256sums=(
-  'c47e81bddc4760360a41ac3c5acec38acb81f9d750ecef47e7f3adc7021a4442'
+  'eeb29ca7e56cfaa8e8a79538dcf834e3b18e501c31bef5145e959ea437cc4216'
 )
 
 prepare() {

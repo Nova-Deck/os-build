@@ -269,11 +269,18 @@ cd "${STEAM}/steamrtarm64"
 
 # Steam's bootstrapper exits to relaunch itself whenever the client requests a restart — most
 # notably right after the first-launch self-update ("Update complete, launching... / Shutdown"),
-# and on every in-UI "Restart Steam". It signals this with exit code 42. gamescope hosts THIS
-# script as its `--` child, so a bare `exec` would let the process die on that first restart and
-# gamescope would tear the whole session down mid-update instead of entering Big Picture. Loop and
-# relaunch on 42 (mirrors SteamOS's steam-jupiter wrapper); any
+# and on every in-UI "Restart Steam". It signals this with exit code 42. Without a loop the client
+# would simply be gone after that first restart and the session would end mid-update instead of
+# entering Big Picture, so: loop and relaunch on 42 (mirrors SteamOS's steam-jupiter wrapper); any
 # other exit code is a genuine shutdown, so propagate it and let the session end as intended.
+#
+# The reason above used to read "gamescope hosts THIS script as its `--` child", which is NOT how
+# this session is built — novadeck-session backgrounds gamescope with no `--` client and runs us
+# separately, so we are gamescope's SIBLING, not its child. The loop is right either way; only the
+# justification was stale. That sibling relationship is also why the exit code needs no recovering:
+# 42 arrives here directly. A session that DOES put the client under `gamescope --` cannot see it —
+# gamescope's own status masks it — and has to smuggle it out through a temp file, which is what the
+# 42-handling in other distributions' launchers is working around. Do not import that machinery.
 #
 # Past the 42 restart the client previously failed to render the Big Picture UI with
 #   dlmopen steamui.so failed: libgtk-x11-2.0.so.0: cannot open shared object file

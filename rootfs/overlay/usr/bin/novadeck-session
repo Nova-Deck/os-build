@@ -200,6 +200,23 @@ mkdir -p "$(dirname "$GAMESCOPE_MODE_SAVE_FILE")" 2>/dev/null || true
 # to the SteamOS session value so we don't hit EMFILE under load.
 ulimit -n 524288 2>/dev/null || true
 
+# Power-off / reboot sentinels. THIS SCRIPT IS THE CONSUMER; novadeck-steam arms the client gates
+# from these paths and only if they are set, so the two halves cannot ship apart. See the block near
+# the end of this file for what happens when one appears, and novadeck-steam for why the client
+# wants a host to do this instead of calling logind itself.
+#
+# XDG_RUNTIME_DIR rather than /tmp (which is where the upstream session puts them): it is per-user,
+# already private, and cleared with the session. The /tmp fallback is only for a session started
+# without logind having provided one — the client still needs a writable path or it cannot signal at
+# all, and silently losing the ability to power off is worse than using /tmp.
+NOVADECK_SENTINEL_DIR="${XDG_RUNTIME_DIR:-/tmp}"
+export NOVADECK_REBOOT_SENTINEL="${NOVADECK_SENTINEL_DIR}/novadeck-reboot-sentinel"
+export NOVADECK_SHUTDOWN_SENTINEL="${NOVADECK_SENTINEL_DIR}/novadeck-shutdown-sentinel"
+# Clear anything left behind before the client can see it. A sentinel outlives its session if the
+# client is killed after touching one but before exiting cleanly — and a leftover would turn the NEXT
+# session's ordinary "Restart Steam" into a power-off.
+rm -f "$NOVADECK_REBOOT_SENTINEL" "$NOVADECK_SHUTDOWN_SENTINEL" 2>/dev/null || true
+
 # Tear gamescope + the rundir down whenever this script exits (client returned, or a signal).
 GS_PID=""
 cleanup() {
@@ -248,4 +265,45 @@ set +e
 $NOVADECK_SESSION_CMD
 status=$?
 set -e
+
+# The client asked for a power action on its way out. It did NOT call logind — it touched a sentinel
+# and exited cleanly precisely so the host could finish tearing the session down first, which is the
+# race the whole mechanism exists to avoid. Acting on it here is the other half of that bargain.
+#
+# if/elif because this is a three-way choice and reboot must WIN over poweroff when both files
+# somehow exist — matching upstream, which tests reboot first and never reaches the shutdown branch.
+# (Not, as an earlier version of this comment claimed, to dodge `set -e`: a failing test that is the
+# first command of an &&-list is explicitly exempt, so `[ -e X ] && a=reboot` would not abort here.
+# The real `set -e` trap with that form is being the LAST command of a script or function, where the
+# non-zero list result becomes the exit status — which is not this position.)
+if [ -e "$NOVADECK_REBOOT_SENTINEL" ]; then
+  power_action=reboot
+elif [ -e "$NOVADECK_SHUTDOWN_SENTINEL" ]; then
+  power_action=poweroff
+else
+  power_action=""
+fi
+# Consume BOTH whichever matched, and BEFORE acting: a sentinel that survives a failed action would
+# power the device off at the end of the next session, long after anyone asked.
+rm -f "$NOVADECK_REBOOT_SENTINEL" "$NOVADECK_SHUTDOWN_SENTINEL" 2>/dev/null || true
+
+if [ -n "$power_action" ]; then
+  echo "novadeck-session: client requested ${power_action}; stopping gamescope, then handing off" >&2
+  # Stop gamescope before the handoff, so the compositor is not still holding DRM master when
+  # systemd starts killing things. cleanup is idempotent (guarded kill, rm -f), and the EXIT trap
+  # runs it again on the way out.
+  cleanup
+  # A FAILURE HERE MUST BE LOUD. If polkit refuses this, the client has already exited believing the
+  # device is going down, and the only remaining behaviour is SDDM bringing the session back — which
+  # looks like "shutdown does nothing". Say which action failed and why rather than exiting quietly
+  # into that.
+  if ! systemctl "$power_action"; then
+    rc=$?
+    echo "novadeck-session: systemctl ${power_action} FAILED (exit ${rc}) — the session will be" >&2
+    echo "novadeck-session: restarted by SDDM instead of the device going down. Check that this" >&2
+    echo "novadeck-session: session is logind-active and authorised for org.freedesktop.login1." >&2
+    status=$rc
+  fi
+fi
+
 exit "$status"

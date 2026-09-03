@@ -161,6 +161,23 @@ export STEAM_ENABLE_VOLUME_HANDLER=1
 #     board with a WORKING ALS ever lands, derive this per-board from the device-env registry the way
 #     STEAM_DISPLAY_REFRESH_LIMITS is derived above — do not restore a blanket =1.
 
+# Power off / reboot from the client's own menu, WITHOUT it calling logind. Armed, the client touches
+# a sentinel file and exits cleanly instead; whoever hosts it does the actual power action once the
+# client is gone. That ordering is the entire point: the client asking logind directly races its own
+# teardown, and a client SIGKILLed mid-write is one that did not finish flushing config or cloud
+# saves. steamui.so calls it exactly that — "Enabling SteamOS shutdown workaround".
+#
+# ARMED ONLY WHEN SOMETHING IS LISTENING, and that condition is load-bearing rather than defensive.
+# novadeck-session defines these paths and acts on them after we return; it is the only host that
+# does. Arm the gate with no consumer and the client exits, SDDM relaunches the session, and the
+# device comes back to Big Picture instead of powering off — shutdown silently stops working. So a
+# standalone run leaves the gate alone and the client keeps its own logind path, which is what
+# shipped before any of this existed. Do not "simplify" this into an unconditional export.
+if [ -n "${NOVADECK_REBOOT_SENTINEL:-}" ] && [ -n "${NOVADECK_SHUTDOWN_SENTINEL:-}" ]; then
+  export STEAMOS_STEAM_REBOOT_SENTINEL="$NOVADECK_REBOOT_SENTINEL"
+  export STEAMOS_STEAM_SHUTDOWN_SENTINEL="$NOVADECK_SHUTDOWN_SENTINEL"
+fi
+
 # Client-side defaults SteamOS/gamescope sessions set for the Big Picture shell (harmless, standard).
 export SDL_VIDEO_MINIMIZE_ON_FOCUS_LOSS=0      # keep the shell up when it loses focus
 export vk_xwayland_wait_ready=false            # don't block on buffers idling before present to gamescope

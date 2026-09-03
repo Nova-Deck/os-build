@@ -37,14 +37,29 @@
 # nothing else — verified with readelf on upstream's x86 artifact, and re-asserted at package time
 # below rather than trusted.
 #
-# To bump: change pkgver + the tag together, and re-run packages/lsfg-vk/probe-benchmark.sh. The
+# To bump: change pkgver + _rev together, and re-run packages/lsfg-vk/probe-benchmark.sh. The
 # per-SoC flow-scale defaults in the Decky plugin are MEASURED, not derived, and a pipeline change
 # moves them.
 
 pkgname=lsfg-vk
-# Arch pkgver cannot contain a hyphen; upstream's tag is 2.0.0-rc1. _tag is the real one.
-pkgver=2.0.0rc1
-_tag=2.0.0-rc1
+# THIS IS A MASTER SNAPSHOT, NOT A TAG, ON PURPOSE. 2.0.0-rc1 does nothing on the Proton path on
+# this hardware: pressure-vessel imports the layer, the loader keeps it, and no frame is ever
+# generated. Twelve commits landed on master after that tag and three are squarely in that
+# failure's shape — a89098b "fix: Return device proc addr function pointer" (a layer that hands
+# back the wrong vkGetDeviceProcAddr is chained straight out of the dispatch and goes silent),
+# dcb600d "fix: layer: Create separate semaphores for each swapchain image", 0ceed91 "fix: layer:
+# Remove timeout from image acquisition". Building the snapshot answers the question now instead
+# of waiting for rc2 to answer it. NoDerivatives is still satisfied: this is upstream's tree at a
+# commit upstream published, unmodified.
+#
+# _rev is the ONE upstream identity for both arches — packages/lsfg-vk-x86/build.sh reads this
+# very line rather than repeating it, so the host aarch64 layer and the guest x86 payload cannot
+# drift to different source. _baseline is never built from: it is the newest upstream TAG this
+# revision already contains, and exists only so .github/workflows/upstream-watch.yml still has
+# something to compare a freshly cut tag against while the pin is a SHA.
+pkgver=2.0.0rc1.r12.g0ceed91
+_rev=0ceed910d51f93155b052507cf4d7be661daaf04
+_baseline=2.0.0-rc1
 pkgrel=1
 pkgdesc='Lossless Scaling frame generation as a Vulkan layer (aarch64 host layer + CLI)'
 arch=(aarch64)
@@ -62,7 +77,7 @@ makedepends=(
   ninja
   vulkan-headers
 )
-source=("git+https://git.lsfg-vk.dev/lsfg-vk.git#tag=${_tag}")
+source=("git+https://git.lsfg-vk.dev/lsfg-vk.git#commit=${_rev}")
 b2sums=('SKIP')
 
 build() {

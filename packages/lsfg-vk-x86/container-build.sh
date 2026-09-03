@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # lsfg-vk-x86 container half — runs INSIDE the pinned x86 Arch image (see build.sh / builder.pin).
-# Expects: SNAPSHOT (Arch Archive date), LSFG_TAG (upstream tag), HOST_UID/HOST_GID, repo at /repo.
+# Expects: SNAPSHOT (Arch Archive date), LSFG_REV (upstream commit), HOST_UID/HOST_GID, repo at /repo.
 set -euxo pipefail
 
-: "${SNAPSHOT:?}" "${LSFG_TAG:?}" "${HOST_UID:?}" "${HOST_GID:?}"
+: "${SNAPSHOT:?}" "${LSFG_REV:?}" "${HOST_UID:?}" "${HOST_GID:?}"
 OUT=/repo/work/lsfg-vk-x86/out
 
 # Pin the whole container to the guest rootfs snapshot: the layer loads INSIDE the FEX guest, so
@@ -21,10 +21,20 @@ pacman -S --noconfirm --needed \
 
 cd /tmp
 rm -rf lsfg-vk
-# Shallow clone of the exact tag. NO patches are applied anywhere in this file, and none may be:
-# CC-BY-NC-ND forbids shipping a modified build (see builder.pin).
-git clone --depth 1 --branch "$LSFG_TAG" https://git.lsfg-vk.dev/lsfg-vk.git lsfg-vk
+# Depth-1 fetch of the exact COMMIT. `git clone --branch` cannot take a SHA, and the pin is one
+# (packages/lsfg-vk/PKGBUILD says why), so init+fetch is the shape that works -- upstream's forge
+# serves an arbitrary reachable SHA to a want, verified 2026-09-03. NO patches are applied anywhere
+# in this file, and none may be: CC-BY-NC-ND forbids shipping a modified build (see builder.pin).
+git init -q lsfg-vk
 cd lsfg-vk
+git remote add origin https://git.lsfg-vk.dev/lsfg-vk.git
+git fetch -q --depth 1 origin "$LSFG_REV"
+git checkout -q FETCH_HEAD
+# Belt and braces: a fetch by SHA can only land on that SHA, but a future edit that puts a branch
+# name in _rev would silently build a moving target and the x86 half would drift from the aarch64
+# one -- the exact drift build.sh reads the PKGBUILD to prevent.
+[ "$(git rev-parse HEAD)" = "$LSFG_REV" ] \
+  || { echo "ERROR: lsfg-vk-x86: checked out $(git rev-parse HEAD), not the pinned $LSFG_REV" >&2; exit 1; }
 
 # The manifest's library_path must stay MANIFEST-RELATIVE. The payload is mounted at
 # /usr/share/guestos/fex-mesa rather than at /, and Valve's compat tool republishes that tree

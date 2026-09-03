@@ -20,9 +20,10 @@
 #   pkgbuild_local path (relative to this dir) to the checked-in PKGBUILD to build
 #   pkgrel_suffix  numeric suffix appended to pkgrel so pacman prefers our build
 #
-# To bump: edit pkgver AND _tag in the PKGBUILD together (Arch pkgver cannot carry the hyphen in
-# upstream's `2.0.0-rc1`), then re-run packages/lsfg-vk/probe-benchmark.sh -- the per-SoC
-# flow-scale defaults the Decky plugin ships are measured, not derived.
+# To bump: edit pkgver AND _rev in the PKGBUILD together (_rev is the upstream commit -- currently
+# a master snapshot rather than a tag; the PKGBUILD header says why), then re-run
+# packages/lsfg-vk/probe-benchmark.sh -- the per-SoC flow-scale defaults the Decky plugin ships are
+# measured, not derived.
 name: lsfg-vk
 pkgbuild_local: PKGBUILD
 pkgrel_suffix: 1

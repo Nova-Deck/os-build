@@ -315,7 +315,7 @@ MESA_X86_SRC   := packages/mesa-x86/build.sh packages/mesa-x86/container-build.s
 # The x86_64 + i686 lsfg-vk layer for the FEX guest (packages/lsfg-vk-x86/), built from source
 # in the same pinned x86 Arch container mesa-x86 uses -- the layer loads INSIDE the guest, so its
 # glibc ceiling is gated against the guest rootfs pin. Rides the SAME guest payload as the Turnip
-# above. The upstream TAG comes from packages/lsfg-vk/PKGBUILD so the two arches cannot drift.
+# above. The upstream COMMIT comes from packages/lsfg-vk/PKGBUILD so the two arches cannot drift.
 LSFG_VK_STAMP := work/.lsfg-vk-x86.stamp
 LSFG_VK_SRC   := packages/lsfg-vk-x86/build.sh packages/lsfg-vk-x86/container-build.sh \
                  packages/lsfg-vk-x86/builder.pin packages/lsfg-vk/PKGBUILD \

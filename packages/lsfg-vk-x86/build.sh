@@ -28,12 +28,12 @@ IMAGE="$(pin_field "$PKGDIR/builder.pin" image)"
 SNAPSHOT="$(pin_field "$PKGDIR/builder.pin" snapshot)"
 : "${IMAGE:?builder.pin: missing image}"; : "${SNAPSHOT:?builder.pin: missing snapshot}"
 
-# ONE upstream version for both arches. The tag comes from the HOST package's PKGBUILD rather than
-# being repeated here, so the aarch64 layer and the x86 layer cannot drift to different releases --
-# which would be invisible until a user with one kind of game saw different behaviour from a user
-# with the other.
-LSFG_TAG="$(sed -n 's/^_tag=//p' "$HOSTPKG/PKGBUILD" | head -1)"
-: "${LSFG_TAG:?packages/lsfg-vk/PKGBUILD yielded no _tag}"
+# ONE upstream revision for both arches. The commit comes from the HOST package's PKGBUILD rather
+# than being repeated here, so the aarch64 layer and the x86 layer cannot drift to different source
+# -- which would be invisible until a user with one kind of game saw different behaviour from a user
+# with the other. It is a COMMIT and not a tag right now; packages/lsfg-vk/PKGBUILD says why.
+LSFG_REV="$(sed -n 's/^_rev=//p' "$HOSTPKG/PKGBUILD" | head -1)"
+: "${LSFG_REV:?packages/lsfg-vk/PKGBUILD yielded no _rev}"
 
 # The snapshot pin and the guest rootfs pin are one decision (builder.pin). Refuse drift loudly
 # rather than building a layer against the wrong glibc generation: it would load here and fail
@@ -68,14 +68,14 @@ if [ "$(cat "$MARKER" 2>/dev/null)" = "$HASH" ] && complete; then
   exit 0
 fi
 
-echo "[novadeck] lsfg-vk-x86: building $LSFG_TAG in $IMAGE (snapshot $SNAPSHOT)" >&2
+echo "[novadeck] lsfg-vk-x86: building $LSFG_REV in $IMAGE (snapshot $SNAPSHOT)" >&2
 rm -rf "$WORKDIR/out" "$MARKER"
 mkdir -p "$WORKDIR/out"
 
 docker run --rm --platform linux/amd64 \
   -v "$ROOT":/repo \
   -e SNAPSHOT="$SNAPSHOT" \
-  -e LSFG_TAG="$LSFG_TAG" \
+  -e LSFG_REV="$LSFG_REV" \
   -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
   "$IMAGE" bash /repo/packages/lsfg-vk-x86/container-build.sh
 

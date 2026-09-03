@@ -419,13 +419,16 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          # Baseline is _tag, NOT pkgver: Arch pkgver cannot carry the hyphen in upstream's
-          # `2.0.0-rc1`, so the PKGBUILD keeps both and _tag is the real upstream identity. It is
-          # also the ONE version behind both arches — packages/lsfg-vk-x86/build.sh reads this same
-          # line rather than repeating it — so one baseline covers the host aarch64 layer and the
-          # guest x86 payload, and they can never be reported apart.
-          pinned="$(sed -n 's/^_tag=//p' packages/lsfg-vk/PKGBUILD | head -1)"
-          [ -n "$pinned" ] || { echo "::error::packages/lsfg-vk/PKGBUILD has no _tag= line"; exit 1; }
+          # Baseline is _baseline, NOT pkgver and NOT _rev. What we BUILD is _rev, an upstream
+          # commit — currently a master snapshot rather than a tag, because rc1 is dead on the
+          # Proton path (packages/lsfg-vk/PKGBUILD says why). A SHA cannot be version-compared
+          # against a tag list, so the PKGBUILD also carries _baseline: the newest upstream TAG the
+          # pinned revision already contains. That is the only thing a new tag is meaningfully
+          # newer *than*. One baseline still covers both arches — packages/lsfg-vk-x86/build.sh
+          # reads _rev out of this same file — so the host aarch64 layer and the guest x86 payload
+          # can never be reported apart.
+          pinned="$(sed -n 's/^_baseline=//p' packages/lsfg-vk/PKGBUILD | head -1)"
+          [ -n "$pinned" ] || { echo "::error::packages/lsfg-vk/PKGBUILD has no _baseline= line"; exit 1; }
 
           # ls-remote, not a release API: upstream left GitHub in 2026-08 and self-hosts now. There
           # is no feed to parse and no JSON schema to break — refs are the protocol.
@@ -469,11 +472,13 @@ jobs:
           and a user who owns Lossless Scaling on its beta branch), so this is a low-risk bump to
           take and a bad one can sit unnoticed — hence P3 and hence the HW leg below.
 
-          ONE tag drives BOTH arches: \`packages/lsfg-vk-x86/build.sh\` reads \`_tag\` out of
+          ONE revision drives BOTH arches: \`packages/lsfg-vk-x86/build.sh\` reads \`_rev\` out of
           \`packages/lsfg-vk/PKGBUILD\`, so the host layer and the guest payload cannot drift apart
-          and both rebuild from one edit. Drill:
+          and both rebuild from one edit. Note the pin is currently a **master snapshot**, not a
+          tag — rc1 is dead on the Proton path and the PKGBUILD header says why. Check that this
+          new tag actually contains \`_rev\` before treating it as an upgrade. Drill:
 
-          - [ ] \`packages/lsfg-vk/PKGBUILD\`: \`pkgver\` **and** \`_tag\` together — pkgver cannot carry the hyphen in an \`-rcN\` tag, and everything else reads \`_tag\`. Nothing under \`packages/lsfg-vk-x86/\` needs editing
+          - [ ] \`packages/lsfg-vk/PKGBUILD\`: \`pkgver\`, \`_rev\` **and** \`_baseline\` together — \`_rev\` is the commit everything builds from, \`_baseline\` is only what this watcher compares against. Nothing under \`packages/lsfg-vk-x86/\` needs editing
           - [ ] **NO \`patches:\` line, on either arch, ever.** CC-BY-NC-ND NoDerivatives: we ship the tag as cut. If the new tag needs an Adreno or FEX fix, that is an upstream conversation and there is now a channel for it — the author approved our aarch64 build over Discord (\`.claude/plans/lsfg-vk-upstream-outreach.md\`). A test on each package fails if a patch list appears
           - [ ] \`rootfs/manifest.lock\`: the \`lsfg-vk\` row's hash is \`packages/inputhash.sh\` over the package's COMMITTED sources, so **any** edit to the PKGBUILD moves it — a comment does. Run \`make relock\` and let packages/verify-lock-rows.sh (in \`make test\`) confirm
           - [ ] **re-run \`packages/lsfg-vk/probe-benchmark.sh\` on all three SoCs.** The per-SoC flow-scale defaults the Decky plugin ships are MEASURED, not derived — SM8250 needs flow 0.50 where the other two take 1.00 — and a pipeline change moves them. One sample would ship the wrong default: "don't reach for flow scale first" held on A740/A750 and INVERTED on A650

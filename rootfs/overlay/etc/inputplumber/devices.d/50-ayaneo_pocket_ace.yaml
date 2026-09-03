@@ -28,9 +28,30 @@
 # ABS_GAS/ABS_BRAKE. The old map read the right stick off ABS_RX/ABS_RY, which THIS DEVICE DOES NOT
 # HAVE; it worked only because an unmapped event falls through to the default translation.
 #
-# THE BOARD IS IN AYANEO MODE, and has been every time it has been looked at (2026-08-22,
+# THE BOARD IS IN XBOX MODE, BECAUSE WE PUT IT THERE. This paragraph used to say the opposite —
+# "THE BOARD IS IN AYANEO MODE, and has been every time it has been looked at (2026-08-22,
 # 2026-09-01): there is no 045e:028e device on the bus, so the pad arrives on the dinput source and
-# the xinput source below binds nothing. Same as the FIT.
+# the xinput source below binds nothing." That described the board as it behaved BEFORE the MCU had
+# a driver, and it was already stale when it was written: commit b4ddf2d added this file and
+# 1005-misc-add-ayaneo-serial-mcu.patch TOGETHER, and that driver's whole job is to switch the MCU
+# out of direct-input mode. The comment simply did not get updated to match its own commit.
+#
+# qcs8550-ayaneo-pocket-common.dtsi sets `ayaneo,xbox360-mode` on the `ayaneo,serial-mcu` node, so
+# the driver sends the Xbox-360 switch during probe and the pad enumerates as 045e:028e. Measured
+# on an ACE 2026-09-03:
+#
+#   AYANEO DEVICE            1c4f:0002  usb-0001:01:00.0-1/input0  event4   (unchanged, always here)
+#   Microsoft X-Box 360 pad  045e:028e  usb-0001:01:00.0-2/input0  event5   (and NO 4001:0428)
+#
+# CompositeDevice0's SourceDevicePaths read ["/dev/input/event4", "/dev/input/event5"], so the
+# XINPUT row below is the one that binds in the normal case and the dinput row is the FALLBACK —
+# for an MCU the driver did not reach (property absent, driver not loaded, or a board that powers
+# the MCU down and comes back before it is reconfigured). Both rows stay for that reason; neither
+# is dead code, and the port is the same either way — pad on -2, MCU on -1.
+#
+# THE TWO ROWS DO NOT TRANSLATE ALIKE: the dinput row carries `dinput_generic`, the xinput row
+# carries no capability map at all. So a hardware finding belongs to the row it was measured on,
+# and a fix applied to one does not reach the other.
 #
 # What changes against the sm8550-ayaneo-controller{,-japanese}.yaml this replaces: the match is on
 # devicetree `compatible` rather than `model` (the attribute upstream keys on — two files matching
@@ -43,12 +64,20 @@
 #
 #   - QuickAccess moves BTN5 -> BTN6 and the paddles BTN_Z/BTN_C -> BTN3/BTN4 on the MCU. Both
 #     corrections are what the FIT confirmed.
-#   - THE FACE BUTTONS ARE THE OPEN QUESTION, and the likely first failure. This board prints `B`
-#     on the BOTTOM button and the MCU emits by LABEL, so the bottom button arrives as BTN_EAST
-#     (measured 2026-08-22). `dinput_generic` passes labels straight through, so bottom will read
-#     as East unless something else intervenes — A/B and X/Y swapped against position. The fix, if
-#     hardware says so, is a capability map on the dinput source that rotates those four rows; it is
-#     deliberately NOT written in advance, because the last such map was written in advance too and
+#   - THE FACE BUTTONS ARE ALREADY HANDLED, AND NOT BY ANYTHING IN THIS FILE — do not add a
+#     rotation map here. This board prints `B` on the BOTTOM button and the MCU reports by LABEL by
+#     default, so bottom arrives as BTN_EAST (measured 2026-08-22). The fix rides along with the
+#     mode switch: the ACE's `ayaneo,serial-mcu-japanese` compatible makes the driver ask the Xbox
+#     personality for POSITIONAL reporting, and 1005-misc-add-ayaneo-serial-mcu.patch records the
+#     measurement — on a Pocket ACE 2026-09-01, WITH NO CAPABILITY MAP IN THE WAY, 0x0f leaves the
+#     bottom button reporting BTN_EAST and 0x1f makes it report BTN_SOUTH. A map that rotated those
+#     four rows on top of that would undo a correction that has already been applied.
+#
+#     THE FALLBACK ROW DOES NOT INHERIT ANY OF THIS. That command configures the Xbox personality,
+#     so it has nothing to say to an MCU still in direct-input mode: a board that ends up on the
+#     dinput row gets labels again, and `dinput_generic` passes them straight through. If that ever
+#     happens on a Nintendo-printed board, the rotation belongs on THAT row alone — and it is still
+#     not to be written in advance, because the last such map was written in advance too and
 #     described a device that could not emit most of it.
 #   - The emitted pad becomes a Microsoft X-Box One Elite 2 rather than a Series S|X. The
 #     installer's consent screen does not care — it tells InputPlumber's pad from its sources by
@@ -106,9 +135,11 @@ source_devices:
   # devicetree argument above is about the shared HOST, which is what makes one measured port
   # number good for all five boards — and it is not transferable past this family.
   #
-  # One step here is inference rather than measurement: Xbox mode has never been seen on any of
-  # these boards, so `-2` is where the pad sits in AYANEO mode, and the controller is assumed to
-  # come back on the same port when it re-enumerates as 045e:028e.
+  # This step USED TO BE inference: Xbox mode had never been seen on any of these boards, so `-2`
+  # was where the pad sat in AYANEO mode and the controller was ASSUMED to come back on the same
+  # port when it re-enumerated as 045e:028e. 2026-09-03 measured it — an ACE in Xbox mode put
+  # 045e:028e on `usb-0001:01:00.0-2/input0`, the same port, and InputPlumber bound this row. The
+  # assumption held, and this line is no longer resting on one.
   #
   # A WRONG PATH FAILS SILENTLY: the source matches nothing, the composite forms without a pad, and
   # it looks exactly like a bad mapping. Deleting this ONE line falls the match back to

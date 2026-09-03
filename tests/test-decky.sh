@@ -355,10 +355,14 @@ else
   [ -x "$home/services/PluginLoader" ] && [ "$(cat "$home/services/PluginLoader")" = "LOADER-V1" ] \
     && ok "fresh seed: loader lands executable in homebrew/services" \
     || bad "fresh seed: loader missing or wrong content"
-  [ "$(cat "$home/settings/loader.json" 2>/dev/null)" = '{
-  "branch": 1
-}' ] && ok "fresh seed: loader.json pins the prerelease branch (where the arm fixes live)" \
-     || bad "fresh seed: loader.json missing or not branch:1"
+  # NO loader.json IS WRITTEN, and that is the assertion. We used to seed {"branch": 1} to "pin new
+  # installs to the prerelease branch where the arm fixes land" — a misreading: in
+  # decky_loader/updater.py branch 1 filters on tag.startswith("v"), i.e. EVERY release, so it meant
+  # "newest of either kind", never "arm fixes sooner". Left unset, the loader derives the branch
+  # from the version it runs (-pre -> 1, else 0), which keeps the choice in one place: the pin.
+  [ ! -e "$home/settings/loader.json" ] \
+    && ok "fresh seed: no loader.json is written — the loader derives its branch from the pin" \
+    || bad "fresh seed: a loader.json was seeded; the branch is the loader's to decide"
   [ -f "$home/plugins/novadeck-control/dist/index.js" ] \
     && ok "fresh seed: baked plugin copied into homebrew/plugins" \
     || bad "fresh seed: plugin did not seed"
@@ -388,12 +392,14 @@ else
     && ok "self-updated loader: the image keeps its hands off" \
     || bad "self-updated loader was clobbered by the image copy"
 
-  # loader.json is loader-owned state after the first seed
+  # loader.json is loader-owned state and nothing here may touch it — still worth asserting now that
+  # we never create it either, because "we do not write it" and "we do not overwrite it" are
+  # different promises and only the second one protects a choice the user made in Decky's settings.
   printf '{\n  "branch": 0\n}\n' >"$home/settings/loader.json"
   run_sync
   grep -q '"branch": 0' "$home/settings/loader.json" \
     && ok "loader.json: the user's branch choice survives every later sync" \
-    || bad "loader.json was rewritten after the first seed"
+    || bad "loader.json was rewritten by the sync"
 
   # baked plugins force-replace; a plugin SHRINKING must not leave stale files behind
   printf 'stale' >"$home/plugins/novadeck-control/dist/leftover.js"

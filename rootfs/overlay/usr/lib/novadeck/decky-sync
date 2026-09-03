@@ -51,13 +51,25 @@ if [[ -z "${installed_sha}" || ( "${installed_sha}" == "${seeded_sha}" && "${ins
   printf '%s\n' "${bundled_sha}" >"${seed_marker}"
 fi
 
-# First seed only: pin new installs to Decky's prerelease branch ({"branch": 1}) — that is where
-# upstream lands its Steam-on-ARM fixes, and the native arm64 client is what this image runs.
-# Never rewritten after that: the file is loader-owned state (the user can switch branches in
-# Decky's own settings).
-if [[ ! -f "${homebrew}/settings/loader.json" ]]; then
-  printf '{\n  "branch": 1\n}\n' >"${homebrew}/settings/loader.json"
-fi
+# NO loader.json SEED. This used to write {"branch": 1} on a fresh install, to pin new installs to
+# Decky's prerelease branch "where the arm fixes land". That was built on a misreading of what the
+# branch means. From decky_loader/updater.py:
+#
+#   selectedBranch == 0  ->  filter(not ver["prerelease"] ...)      stable only
+#   selectedBranch == 1  ->  filter(ver["tag_name"].startswith("v")) EVERY release
+#
+# So branch 1 is not "prereleases" — it is "the newest release of either kind". It never gave us
+# arm fixes sooner than stable; it gave us whatever was newest, prereleases included, which is a
+# choice about update risk rather than about platform support.
+#
+# Left unset, Decky decides for itself, from the version it is running:
+#
+#   if self.localVer ... "-pre" in self.localVer:  setSetting('branch', 1)
+#   else:                                          setSetting('branch', 0)
+#
+# which is exactly the honest answer: ship a stable build (packages/decky-loader/prebuilt.pin) and
+# the loader tracks stable; ship a -pre and it tracks prereleases. The pin decides, in one place,
+# and nothing here has to be kept in agreement with it.
 
 # Baked system plugins: force-replace by name (image content, see header). cp -a preserves the
 # modes the image baked; the rm guards against a plugin shrinking (a stale dist/ file would

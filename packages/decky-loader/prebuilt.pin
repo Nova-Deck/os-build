@@ -10,10 +10,20 @@
 # (TSO on, Multiblock off, GL/Vulkan/Wayland/asound thunks). A Python runtime is far tamer
 # under emulation than a game: no JIT of its own, no GPU fast path to lose.
 #
-# PRERELEASE on purpose. The -pre channel is where upstream lands its Steam-on-ARM fixes (native
-# arm64 Steam client, which is what this image runs). The stable channel targets the x86 Deck
-# client and lags on exactly the codepaths we need. The seeded loader.json (written by
-# /usr/lib/novadeck/decky-sync) pins new installs to the prerelease branch for the same reason.
+# THE BINARY IS THE STABLE BUILD; NEW INSTALLS STILL TRACK PRERELEASE. Those are two separate
+# things and they are set in two places.
+#
+# This pin was on v3.2.8-pre1 because the -pre channel is where upstream lands its Steam-on-ARM
+# fixes (native arm64 Steam client, which is what this image runs) while the stable channel targets
+# the x86 Deck client. v3.2.8 is that same version promoted to stable on 2026-09-02, so it carries
+# those fixes and is strictly newer than the -pre1 we were on: taking it costs nothing and gains
+# whatever landed between the two.
+#
+# The seeded loader.json (written by /usr/lib/novadeck/decky-sync, {"branch": 1}) is UNCHANGED and
+# still points new installs at the prerelease branch, for the original reason — the next fix we need
+# will land there first, and Decky self-updates from that channel. Shipping a stable binary and
+# tracking prerelease is not a contradiction: the pin decides what the image contains, the branch
+# decides what the loader upgrades itself to.
 #
 # mode: PluginLoader is executed directly by plugin_loader.service; without 0755 the unit fails
 # with EACCES (kind:file installs 0644 by default — right for the FEX rootfs image, not for a
@@ -27,9 +37,9 @@
 # version + url together, and recompute sha256 from the downloaded asset (upstream publishes no
 # checksum sidecar).
 name: decky-loader
-version: v3.2.8-pre1
-url: https://github.com/SteamDeckHomebrew/decky-loader/releases/download/v3.2.8-pre1/PluginLoader
-sha256: 9df160a81df3fc49c96e5665a1d1b3ba5c79de5bf271adc266d6bfedfda399d8
+version: v3.2.8
+url: https://github.com/SteamDeckHomebrew/decky-loader/releases/download/v3.2.8/PluginLoader
+sha256: 4b9a04a1ac4ed0c028dcbbc38cd03383eb438d69744d613775c93f81809afde2
 kind: file
 dest: /usr/share/decky-loader/PluginLoader
 mode: 0755

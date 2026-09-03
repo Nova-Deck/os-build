@@ -1,6 +1,7 @@
 # novadeck: enable the power-policy daemon (performance profiles, GPU level, fan curve) on release.
 # /etc/machine-id is empty on a fresh image so systemd runs preset-all on first boot, where the stock
 # 99-default.preset is "disable *"; this higher-priority preset (60 < 99) keeps it enabled. A
-# build-time multi-user.target.wants symlink ships alongside as a fallback (cf. 60-novadeck-hotkeyd).
+# build-time multi-user.target.wants symlink ships alongside as a fallback (cf.
+# 60-novadeck-powerbuttond.preset).
 # novadeck-powerd owns the fan, so it must run from boot even before SteamUI touches a slider.
 enable novadeck-powerd.service

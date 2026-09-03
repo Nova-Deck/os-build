@@ -1,5 +1,0 @@
-# novadeck: enable the volume/brightness media-key agent on release. Same rationale as
-# 60-novadeck-powerbuttond.preset — /etc/machine-id is empty on a fresh image so systemd runs preset-all on
-# first boot where the stock 99-default.preset is "disable *"; this higher-priority preset (60 < 99)
-# keeps the agent enabled. A build-time multi-user.target.wants symlink ships alongside as a fallback.
-enable novadeck-hotkeyd.service

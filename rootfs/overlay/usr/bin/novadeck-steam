@@ -113,13 +113,46 @@ export SRT_URLOPEN_PREFER_STEAM=1
 export STEAM_ALLOW_DRIVE_ADOPT=1
 export STEAM_ALLOW_DRIVE_UNMOUNT=1
 #
+# Hands the hardware volume keys to the client's own handler. CONFIRMED ON HARDWARE 2026-09-03 on a
+# Pocket ACE (SM8550) and on SM8250 — Thor Lite and Pocket Max: with this set, pressing volume
+# up/down moves the PipeWire sink. The client does the whole job, and NOTHING of ours touches the
+# sink any more: novadeck-hotkeyd, which used to, has been REMOVED outright — with volume handed
+# over, all it had left were brightness keys that no board we support actually carries. (The
+# QuickAccess brightness slider never went through it; gamescope writes the backlight itself, which
+# is what usr/lib/udev/rules.d/60-novadeck-perf-acls.rules grants it.)
+#
+# This used to sit in the DELIBERATELY NOT SET list below, on the grounds that "volume keys are
+# ours (novadeck-hotkeyd)" — that agent no longer exists. The FACT that justified it — no peer
+# distro ships an OS-level volume
+# handler, they all rely on the client — re-checked and still true. The INFERENCE drawn from it did
+# not survive: a peer running the SAME native arm64 client on this SoC family carries no volume
+# daemon at all, only this gate plus enough input plumbing to keep KEY_VOLUME* ungrabbed. And the
+# gate string IS present in the steamrtarm64/steamui.so we bake, so the code path exists here.
+#
+# The recorded negative ("the arm64 client draws its OSD but never moves the sink", a Pocket S2)
+# was taken with the handler NEVER ARMED — this gate has never been set on any build we ship, and a
+# running Pocket ACE session was checked on 2026-09-03 to confirm it is absent from the client's
+# environ. So that test measured a handler that was switched off, and proved nothing either way.
+# The lesson is the reusable part: a gate that was never set cannot have been tested.
+#
+# WHERE THE KEYS ACTUALLY ARE, measured on an ACE 2026-09-03 — worth keeping, because a comment
+# here once claimed they arrive on the AYANEO MCU's keyboard interface and they do not. They are on
+# two DIFFERENT nodes, neither of them the MCU, each advertising that one keycode and nothing else:
+#
+#   KEY_VOLUMEUP   (115)  gpio-keys   event3  /devices/platform/gpio-keys
+#   KEY_VOLUMEDOWN (114)  pmic_resin  event1  ...pon@1300:resin  (the PMIC's volume-down line)
+#
+# and InputPlumber claimed only event4 + event5 (CompositeDevice0.SourceDevicePaths), so it grabs
+# neither. That is what made a dead sink implicate the handler and nothing upstream of it. There is
+# also no KEY_MUTE on that board at all.
+export STEAM_ENABLE_VOLUME_HANDLER=1
+#
 # DELIBERATELY NOT SET (gamescope/ChimeraOS set some of these; each would advertise a control this
 # board cannot honour, or collides with something of ours):
 #   STEAM_GAMESCOPE_TEARING_SUPPORTED / _HAS_TEARING_SUPPORT — gamescope gates them on
 #     SupportsTearing(), which is FALSE here (msm exposes no DRM_CAP_ATOMIC_ASYNC_PAGE_FLIP).
 #   STEAM_GAMESCOPE_HDR_SUPPORTED, STEAM_GAMESCOPE_VRR_SUPPORTED — no HDR/VRR on this DSI panel.
 #   STEAM_GAMESCOPE_COLOR_MANAGED / _VIRTUAL_WHITE — belongs to the night-mode/colour work.
-#   STEAM_ENABLE_VOLUME_HANDLER — volume keys are ours (novadeck-hotkeyd); don't hand them to Steam.
 #   STEAM_USE_DYNAMIC_VRS — RADV-only.
 #   STEAM_ENABLE_DYNAMIC_BACKLIGHT — adaptive brightness needs an ambient-light sensor. Almost none of
 #     the boards we support have one, and for any that do there is most likely no upstream driver, so

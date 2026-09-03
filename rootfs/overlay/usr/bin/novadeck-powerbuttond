@@ -9,7 +9,9 @@
 # Runs as a ROOT system service: it reads the power-key evdev directly (no session-ACL dependency) and
 # dispatches the steam:// URI into the deck user's session via runuser. While asleep novadeck-suspend
 # holds an EXCLUSIVE grab on the power key, so this forwarder sees no events then and cannot bounce the
-# device back into suspend on resume. Mirrors novadeck-hotkeyd's read-as-root / act-as-deck idiom.
+# device back into suspend on resume. Read-as-root / act-as-deck is the idiom: this is now the only
+# agent using it, novadeck-hotkeyd having been removed once it turned out no board carries a
+# brightness key and the volume keys belong to the Steam client (see novadeck-steam).
 set -u
 
 CONF=/etc/novadeck/rest.conf

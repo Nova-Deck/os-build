@@ -195,7 +195,7 @@ lm_sensors 1:3.6.2-1.2 aarch64 snapshot 0227689b3ff48c3f9bf51eca86334c9dd1cf408e
 luajit 2.1.1763148144-1 aarch64 snapshot 720800f582313b84bb6513f84515ce1648c9dd995d6b99b136fc7a0782f60e9c
 lz4 1:1.10.0-2 aarch64 snapshot af5d44c36259e2257ba033b623ef6104dcc2a552271264b6b433ddaf8422f3ee
 lzo 2.10-5 aarch64 snapshot ff11d9a5060ae28fbece3faad126724314232747cc09b836157f02ee09d3869a
-mesa 1:26.2.1-1.1 aarch64 novadeck b2eb4a7b20c129e45232efb18610d65e937a2dcddcf2ee8349cd6b8eb37b3fea
+mesa 1:26.2.2-1.1 aarch64 novadeck ea8dc0e8516e8734d93a7d927bbc644b72c488cc1b25a16e2a5ab6e09075f8cc
 mobile-broadband-provider-info 20251101-1 any snapshot 1b0146d8b72f6ffc3edcccd5709d8de42798c4827a5fccd994c389584d60c56c
 mpdecimal 4.0.1-1 aarch64 snapshot eff733ac090d3010d32720a43a8c5a51085bff934a80d6ebc58f6fbdfa6f1cb6
 mpfr 4.2.2-1 aarch64 snapshot 25f827431b1a13a6f524d76e62c0b0bdc5c1bf6ffd3d849cf73b5f840172ac2f
@@ -248,9 +248,9 @@ tpm2-tss 4.1.3-1 aarch64 snapshot 851d67bd6cb1a86dd405119872b19c543c4d8a982932c3
 tzdata 2025b-1 aarch64 snapshot ce1dd30520445189a7f67f138c8845d3aa2fff6690bd4d41db5c81850851b786
 util-linux 2.41.2-1 aarch64 snapshot 6584cee319e900f12a4deea3a46c7a90f4a403eec460fbe181c47f5325a2245a
 util-linux-libs 2.41.2-1 aarch64 snapshot a4eac719491fdcf326590f586072086ced03a14922e77f51d57e775f3e51553b
-vulkan-freedreno 1:26.2.1-1.1 aarch64 novadeck b2eb4a7b20c129e45232efb18610d65e937a2dcddcf2ee8349cd6b8eb37b3fea
+vulkan-freedreno 1:26.2.2-1.1 aarch64 novadeck ea8dc0e8516e8734d93a7d927bbc644b72c488cc1b25a16e2a5ab6e09075f8cc
 vulkan-icd-loader 1.4.328.1-1 aarch64 snapshot 87e4d267ebaa60d73ad2dc03f22b5d2bde21efaeee1265c72e16a72b6e9019ce
-vulkan-mesa-device-select 1:26.2.1-1.1 aarch64 novadeck b2eb4a7b20c129e45232efb18610d65e937a2dcddcf2ee8349cd6b8eb37b3fea
+vulkan-mesa-device-select 1:26.2.2-1.1 aarch64 novadeck ea8dc0e8516e8734d93a7d927bbc644b72c488cc1b25a16e2a5ab6e09075f8cc
 wayland 1.24.0-1 aarch64 snapshot a7869a1679eeb0d8a02e690bf13939a5f103cb354e7f46dca3f5395b14c8f940
 wireless-regdb 2025.10.07-1 any snapshot fa4c7899f90bae3d39a90f8f12b9949b54eb8da60d29d4b8028998d64c4a87ee
 wpa_supplicant 2:2.11-3 aarch64 snapshot 3201a7af3766be5f15e8899d31a61d4fe30b4133e46b22312e12c8c9d79a213b

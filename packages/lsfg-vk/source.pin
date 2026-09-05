@@ -20,8 +20,8 @@
 #   pkgbuild_local path (relative to this dir) to the checked-in PKGBUILD to build
 #   pkgrel_suffix  numeric suffix appended to pkgrel so pacman prefers our build
 #
-# To bump: edit pkgver AND _rev in the PKGBUILD together (_rev is the upstream commit -- currently
-# a master snapshot rather than a tag; the PKGBUILD header says why), then re-run
+# To bump: edit pkgver, _rev AND _baseline in the PKGBUILD together (_rev is the upstream commit --
+# currently the dereferenced 2.0.0 tag; the PKGBUILD header says why it stays a SHA), then re-run
 # packages/lsfg-vk/probe-benchmark.sh -- the per-SoC flow-scale defaults the Decky plugin ships are
 # measured, not derived.
 name: lsfg-vk

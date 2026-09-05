@@ -21,20 +21,44 @@ pacman -S --noconfirm --needed \
 
 cd /tmp
 rm -rf lsfg-vk
-# Depth-1 fetch of the exact COMMIT. `git clone --branch` cannot take a SHA, and the pin is one
-# (packages/lsfg-vk/PKGBUILD says why), so init+fetch is the shape that works -- upstream's forge
-# serves an arbitrary reachable SHA to a want, verified 2026-09-03. NO patches are applied anywhere
-# in this file, and none may be: CC-BY-NC-ND forbids shipping a modified build (see builder.pin).
+# Fetch of the exact COMMIT, WITH TAGS AND FULL HISTORY. `git clone --branch` cannot take a SHA,
+# and the pin is one (packages/lsfg-vk/PKGBUILD says why), so init+fetch is the shape that works --
+# upstream's forge serves an arbitrary reachable SHA to a want, verified 2026-09-03. NO patches are
+# applied anywhere in this file, and none may be: CC-BY-NC-ND forbids shipping a modified build
+# (see builder.pin).
+#
+# NEITHER `--depth 1` NOR THE MISSING TAGS IS AN OPTIMISATION -- BOTH BREAK THE VERSION STRING.
+# Upstream's cmake/Version.cmake hardcodes `set(LSFGVK_VERSION "<tag>")` and then OVERWRITES it
+# from git whenever git is on PATH. Since 2.0.0 (8a1372e) it checks `rev-parse
+# --is-shallow-repository` first and, when shallow, sets the tag to the literal string `unknown` --
+# so a depth-1 build makes the guest layer announce itself as `unknown.rN.g<sha>` in the session
+# log, while the host aarch64 half (makepkg's `git+...#commit=`, a full clone) reports a real
+# version. Two halves of one pin naming themselves differently is exactly the drift build.sh reads
+# the PKGBUILD to prevent, and the session log is the ONLY instrument that says which build is
+# running (see the triage table in lsfg-vk-adreno-perf-mode). Tags matter for the same reason: the
+# non-shallow branch runs `describe --tags --abbrev=0`, which needs the tag objects present.
+# With both, cmake resolves 2.0.0 -> revcount 0 -> `2.0.0`, and a future SNAPSHOT pin resolves to
+# the `<tag>.r<n>.g<sha>` form the aarch64 half already prints. The whole history is 3.2M over 104
+# commits, so depth-1 was buying nothing measurable. Do NOT reintroduce it, and do not "fix" a
+# version regression by patching Version.cmake -- that would be a derivative work.
 git init -q lsfg-vk
 cd lsfg-vk
 git remote add origin https://git.lsfg-vk.dev/lsfg-vk.git
-git fetch -q --depth 1 origin "$LSFG_REV"
+git fetch -q --tags origin "$LSFG_REV"
 git checkout -q FETCH_HEAD
 # Belt and braces: a fetch by SHA can only land on that SHA, but a future edit that puts a branch
 # name in _rev would silently build a moving target and the x86 half would drift from the aarch64
 # one -- the exact drift build.sh reads the PKGBUILD to prevent.
 [ "$(git rev-parse HEAD)" = "$LSFG_REV" ] \
   || { echo "ERROR: lsfg-vk-x86: checked out $(git rev-parse HEAD), not the pinned $LSFG_REV" >&2; exit 1; }
+# The fetch above is only half the guarantee -- assert the repo cmake will actually see. A future
+# edit that reintroduces --depth 1, or a forge that stops serving tags, otherwise costs nothing
+# here and silently degrades the version string to `unknown` inside the guest, where the only
+# instrument is a log line nobody reads until triage.
+[ "$(git rev-parse --is-shallow-repository)" = "false" ] \
+  || { echo "ERROR: lsfg-vk-x86: shallow checkout -- cmake would stamp the version 'unknown'" >&2; exit 1; }
+git describe --tags --abbrev=0 >/dev/null 2>&1 \
+  || { echo "ERROR: lsfg-vk-x86: no tags fetched -- cmake cannot derive a version" >&2; exit 1; }
 
 # The manifest's library_path must stay MANIFEST-RELATIVE. The payload is mounted at
 # /usr/share/guestos/fex-mesa rather than at /, and Valve's compat tool republishes that tree

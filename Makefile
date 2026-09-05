@@ -428,6 +428,7 @@ test: verify-lock ## Run the offline bootctl/post-install/boot-disk/pairingd/qui
 	bash $(TESTS_DIR)/test-boot-disk.sh
 	bash $(TESTS_DIR)/test-pairingd.sh
 	bash $(TESTS_DIR)/test-device-quirks.sh
+	bash $(TESTS_DIR)/test-display-profile.sh
 	bash $(TESTS_DIR)/test-power-led.sh
 	bash $(TESTS_DIR)/test-suspend.sh
 	bash $(TESTS_DIR)/test-stage2-grub.sh

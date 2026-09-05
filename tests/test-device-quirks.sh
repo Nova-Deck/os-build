@@ -106,5 +106,22 @@ check "broken device-env applies nothing" "$(knob)" "0"
     && ok "device-env's own reason survives to the journal" \
     || bad "device-env's stderr was swallowed: $out"
 
+# --- device-env's emit list must cover every fact the registry declares ------------------------
+#
+# device-env prints a FIXED list of NOVADECK_* names; anything a device conf sets that is not on
+# that list is read from the conf, dropped on the floor, and never reaches a consumer. There is no
+# error and no log line — the feature the variable gates simply never turns on, on the one board
+# that needed it. Adding a fact to defaults.conf and forgetting the emit list is a one-line mistake
+# with no symptom, so it is pinned here rather than left to review.
+DEV_ENV_SRC="$ROOT/rootfs/overlay/usr/lib/novadeck/device-env"
+DEFAULTS="$ROOT/rootfs/overlay/usr/lib/novadeck/devices/defaults.conf"
+missing=""
+while read -r name; do
+    grep -qE "^[[:space:]]+$name\$" "$DEV_ENV_SRC" || missing="$missing $name"
+done < <(grep -oE '^NOVADECK_[A-Z0-9_]+' "$DEFAULTS" | sort -u)
+[[ -z $missing ]] \
+    && ok "every fact in defaults.conf is on device-env's emit list" \
+    || bad "device-env would silently drop:$missing"
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [[ $FAIL -eq 0 ]]

@@ -72,6 +72,14 @@ case "${NOVADECK_PANEL_REFRESH_RATES:-}" in
   *,*) export STEAM_DISPLAY_REFRESH_LIMITS="${NOVADECK_PANEL_REFRESH_RATES%%,*},${NOVADECK_PANEL_REFRESH_RATES##*,}" ;;
 esac
 
+# HDR toggle in the client UI, from the SAME per-board fact that arms gamescope's HDR flags in
+# novadeck-session — one switch, so the toggle cannot appear on a board whose compositor is running
+# SDR. On an SDR board this stays unset and the toggle stays absent, which is the honest answer:
+# a control that is present but cannot change anything is worse than no control.
+if [ "${NOVADECK_PANEL_HDR_NITS:-0}" -gt 0 ] 2>/dev/null; then
+  export STEAM_GAMESCOPE_HDR_SUPPORTED=1
+fi
+
 # gamescope sets the gates below ITSELF in --steam mode (main.cpp UpdateCompatEnvVars) — but only into
 # its own environment, so they reach the processes gamescope SPAWNS (mangoapp) and not this client:
 # novadeck-session runs gamescope in the background and starts us as its SIBLING. Hence we set them by
@@ -151,7 +159,10 @@ export STEAM_ENABLE_VOLUME_HANDLER=1
 # board cannot honour, or collides with something of ours):
 #   STEAM_GAMESCOPE_TEARING_SUPPORTED / _HAS_TEARING_SUPPORT — gamescope gates them on
 #     SupportsTearing(), which is FALSE here (msm exposes no DRM_CAP_ATOMIC_ASYNC_PAGE_FLIP).
-#   STEAM_GAMESCOPE_HDR_SUPPORTED, STEAM_GAMESCOPE_VRR_SUPPORTED — no HDR/VRR on this DSI panel.
+#   STEAM_GAMESCOPE_VRR_SUPPORTED — no VRR on this DSI panel.
+#   (STEAM_GAMESCOPE_HDR_SUPPORTED used to be listed here as "no HDR on this DSI panel". That is no
+#    longer true for every board: it is now set ABOVE, conditionally, for a board that declares a
+#    panel peak in NOVADECK_PANEL_HDR_NITS. It stays unset on the rest.)
 #   STEAM_GAMESCOPE_COLOR_MANAGED / _VIRTUAL_WHITE — belongs to the night-mode/colour work.
 #   STEAM_USE_DYNAMIC_VRS — RADV-only.
 #   STEAM_ENABLE_DYNAMIC_BACKLIGHT — adaptive brightness needs an ambient-light sensor. Almost none of

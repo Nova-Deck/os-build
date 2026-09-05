@@ -81,7 +81,30 @@ build_one() { # build_one <build-dir> <extra cmake args...>
 }
 
 # x86_64: layer + the CLI, which is the on-device diagnostic (healthcheck/benchmark/validate).
+#
+# `_layer_name_suffix` IS LOAD-BEARING AND IS NOT COSMETIC. Upstream names the layer
+# `VK_LAYER_LSFGVK_frame_generation@_layer_name_suffix@` and only ever sets that suffix for the
+# 32-bit multilib build, because upstream ships ONE host layer plus an optional 32-bit sibling. We
+# are the configuration upstream never anticipated: a FOREIGN-ARCH 64-bit GUEST layer living beside
+# the 64-bit HOST aarch64 layer from packages/lsfg-vk. Both would be named
+# `VK_LAYER_LSFGVK_frame_generation`, and inside a pressure-vessel container BOTH are imported into
+# one implicit_layer.d -- where the Vulkan loader deduplicates by layer NAME and IGNORES
+# `library_arch`. The aarch64 manifest wins, the x86_64 guest process is handed an aarch64 library
+# it cannot open, and the layer is dropped with the log line
+#   Removing layer VK_LAYER_LSFGVK_frame_generation (...02-x86_64-linux-gnu.json)
+#     because it is a duplicate of ... (...11-aarch64-linux-gnu.json)
+# followed by a `cannot open shared object file`. Net effect: on the NATIVE x86-64 path frame
+# generation silently does nothing, at every revision -- HW-diagnosed on a Pocket FIT 2026-09-05.
+# The Proton path never showed it, because there the surviving aarch64 layer is the one it wants.
+#
+# Setting the suffix here goes through upstream's OWN template substitution rather than editing the
+# manifest they generate, so NoDerivatives is untouched -- this is a build parameter, not a patch.
+# It leaves `_layer_file_suffix` empty, so the library and manifest FILENAMES stay exactly as
+# upstream installs them and only the layer name gains `_x86_64`. The variable is upstream-internal
+# (leading underscore, not a documented option), so the assertion further down is what makes a
+# future upstream that renames it fail loudly instead of silently reintroducing the collision.
 build_one build-x86_64 \
+  -D_layer_name_suffix=_x86_64 \
   -DLSFGVK_LAYER_LIBRARY_PATH=../../../lib/liblsfg-vk-layer.so \
   -DLSFGVK_BUILD_CLI=ON
 
@@ -124,6 +147,18 @@ n64="$(sed -n 's/.*"name": "\([^"]*\)".*/\1/p' "$OUT/usr/share/vulkan/implicit_l
 n32="$(sed -n 's/.*"name": "\([^"]*\)".*/\1/p' "$OUT/usr/share/vulkan/implicit_layer.d/VkLayer_LSFGVK_frame_generation.x86.json")"
 [ -n "$n64" ] && [ -n "$n32" ] && [ "$n64" != "$n32" ] \
   || { echo "ERROR: lsfg-vk-x86: both manifests declare the same layer name ('$n64')" >&2; exit 1; }
+# ...and NEITHER may collide with the HOST aarch64 layer, which packages/lsfg-vk installs under
+# upstream's unsuffixed base name. Inside a pressure-vessel container all of them land in one
+# implicit_layer.d and the loader dedupes by NAME, ignoring library_arch -- so a guest layer
+# sharing the host's name is silently discarded and the native x86-64 path gets no frame
+# generation at all. This is the assertion that keeps -D_layer_name_suffix above honest: it is an
+# upstream-internal variable, and if a future upstream renames or ignores it the suffix vanishes
+# with no other symptom until someone triages a session log.
+host_name=VK_LAYER_LSFGVK_frame_generation
+for n in "$n64" "$n32"; do
+  [ "$n" != "$host_name" ] \
+    || { echo "ERROR: lsfg-vk-x86: guest layer is named '$n', colliding with the host aarch64 layer -- the loader will drop the guest one" >&2; exit 1; }
+done
 
 # Gate: the produced .so must not need a glibc newer than the container's own, which is pinned to
 # the guest rootfs generation (builder.pin). A symbol version above that ceiling loads fine here

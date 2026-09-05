@@ -37,9 +37,15 @@ export interface Defaults extends Profile {
 export interface State {
   prereq: Prereq;
   defaults: Defaults;
+  /** INSTALLED titles only, from Steam's on-disk state. A game can be frame-gen enabled and
+   *  absent from here — see knownNames. */
   games: Game[];
   profiles: Record<string, Profile>;
   enabled: string[];
+  /** {appid: display name} cached in the shared game-tweaks entry, for titles Steam no longer
+   *  has a manifest for. The same `name` field the control plugin writes, deliberately not a
+   *  second cache of the same fact. */
+  knownNames: Record<string, string>;
   /** appids the control plugin has per-game TUNING enabled for. Separate opt-in from
    *  frame generation; both need the launch wrapper, so it may only be removed when
    *  neither wants it. */

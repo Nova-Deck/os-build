@@ -98,11 +98,29 @@ export function Content() {
   const tweaked = new Set(state.tweaked || []);
   // Only games with an entry are listed under "configured", but the picker offers everything:
   // the common case is turning it on for something for the first time.
+  //
+  // PLUS anything still ENABLED that Steam no longer has installed. Frame generation surviving an
+  // uninstall is not harmless bookkeeping: the env keys stay in the shared tweaks file and the
+  // launch wrapper stays in Steam's launch options, so the feature is live and comes back with
+  // the game — and listing installed titles alone left no row to see or switch it off from.
+  // Its name comes from the cache in the shared entry, since the manifest it was read from is
+  // what the uninstall deleted.
+  const installedIds = new Set(games.map((game) => game.appid));
+  const orphaned = [...enabled]
+    .filter((appid) => !installedIds.has(appid))
+    .map((appid) => ({ appid, name: state.knownNames?.[appid] || `App ${appid}` }))
+    .sort((a, b) => a.name.localeCompare(b.name));
   const gameOptions = [
     { data: "", label: "Select a game…" },
     ...games.map((game) => ({
       data: game.appid,
       label: enabled.has(game.appid) ? `${game.name}  •  on` : game.name,
+    })),
+    ...orphaned.map((game) => ({
+      data: game.appid,
+      // Always "on" — an orphan is only listed because it is enabled — and always flagged as
+      // uninstalled, so a row for a game that is not there reads as deliberate, not as a bug.
+      label: `${game.name} (not installed)  •  on`,
     })),
   ];
 

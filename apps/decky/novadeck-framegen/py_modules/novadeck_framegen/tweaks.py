@@ -95,8 +95,29 @@ def tweaked_games():
     }
 
 
-def set_enabled(appid, on):
-    """Add or remove our two env keys for one game, touching nothing else."""
+def known_names():
+    """{appid: display name} for entries that carry one.
+
+    NOT our own cache. `name` is the control plugin's field in this same shared file, written
+    when an entry is saved so it survives the uninstall that deletes Steam's appmanifest -- the
+    only place a name can otherwise be read from. We write and read the SAME key rather than
+    keeping a parallel one: two caches of the same fact would disagree the first time a game is
+    renamed, and the file is shared precisely so they need not.
+    """
+    return {
+        appid: game["name"]
+        for appid, game in load()["games"].items()
+        if isinstance(game.get("name"), str) and game["name"]
+    }
+
+
+def set_enabled(appid, on, name=""):
+    """Add or remove our two env keys for one game, touching nothing else.
+
+    `name` caches the display name into the shared entry (see known_names). Only ever written,
+    never cleared: a blank must not wipe a good name, which is what an enable would otherwise do
+    for a game whose manifest has already gone.
+    """
     appid = str(appid)
     # "0" is Valve's no-app sentinel and DOES occur (compat-tool probe launches). A section
     # keyed on it would apply to Steam's own helper runs -- refuse it here, as control does.
@@ -116,6 +137,8 @@ def set_enabled(appid, on):
         # announced tuning the user never asked for. game-launch reads `framegen` for the env
         # alone and applies no tuning from it.
         game[FRAMEGEN_KEY] = True
+        if name:
+            game["name"] = name
     else:
         env.pop(DISABLE_VAR, None)
         env.pop(PROFILE_VAR, None)
@@ -130,7 +153,13 @@ def set_enabled(appid, on):
     # which was right while we were the ones who wrote `enabled` -- now that we never do, an
     # `enabled` still standing here is the control plugin's, and deleting it would silently
     # switch off the user's tuning because they toggled frame generation off.
-    if not on and not game:
+    #
+    # `name` does not count towards "not empty": it is a display cache, not a setting, so a
+    # section holding nothing else is still nothing. Without this a game that was only ever
+    # frame-generated would leave a name-only section behind for good, and surface in the
+    # control plugin's list as an entry with no settings in it.
+    remaining = {key: value for key, value in game.items() if key != "name"}
+    if not on and not remaining:
         data["games"].pop(appid, None)
     else:
         data["games"][appid] = game

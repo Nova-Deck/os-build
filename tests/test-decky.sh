@@ -792,6 +792,34 @@ tmp.write_text(json.dumps({"games": {}, "global": {}}))
 tweaks.set_enabled("456", True)
 tweaks.set_enabled("456", False)
 assert "456" not in json.loads(tmp.read_text())["games"], "framegen-only entry left behind"
+
+# THE DISPLAY-NAME CACHE, which is control's `name` field in this same shared file and NOT a
+# second copy of it. It exists because Steam's appmanifest is where a name is read from and the
+# uninstall deletes it, leaving a live entry labelled with a bare appid.
+tmp.write_text(json.dumps({"games": {}, "global": {}}))
+tweaks.set_enabled("789", True, name="Some Game")
+assert json.loads(tmp.read_text())["games"]["789"].get("name") == "Some Game", "name not cached"
+assert tweaks.known_names().get("789") == "Some Game", "known_names does not report it"
+
+# A blank must never wipe a good cached name. This is the UNINSTALLED case: the entry is still
+# there and still enabled, but there is no manifest left to read a name from, so the caller
+# passes "". Note there is deliberately no disable in between — that would drop the name-only
+# section (asserted below) and leave nothing to preserve, which is a different scenario.
+tweaks.set_enabled("789", True, name="")
+assert json.loads(tmp.read_text())["games"]["789"].get("name") == "Some Game", "blank name wiped the cache"
+
+# A section holding nothing but the cache is still EMPTY: the name is a display aid, not a
+# setting. Otherwise a game that was only ever frame-generated leaves a name-only section behind
+# for good, and shows up in the control plugin's list as an entry with no settings in it.
+tweaks.set_enabled("789", False)
+assert "789" not in json.loads(tmp.read_text())["games"], "name-only section left behind"
+
+# ...but the cache must NOT be what keeps a real entry alive, nor be lost from one.
+tmp.write_text(json.dumps({"games": {"111": {"enabled": True, "name": "Kept"}}, "global": {}}))
+tweaks.set_enabled("111", True, name="Kept")
+tweaks.set_enabled("111", False)
+game = json.loads(tmp.read_text())["games"]["111"]
+assert game.get("enabled") is True and game.get("name") == "Kept", "cache lost from a live entry"
 FGPY
   ok "novadeck-framegen opts in with its own key and leaves novadeck-control's tuning intact"
 else

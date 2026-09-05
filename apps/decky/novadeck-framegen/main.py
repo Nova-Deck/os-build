@@ -46,6 +46,11 @@ class Plugin:
             "games": installed_games(),
             "profiles": conf.read_profiles(),
             "enabled": sorted(tweaks.enabled_games()),
+            # Display names for games Steam no longer has a manifest for. `games` above is
+            # INSTALLED titles only, so without this an enabled game that has been uninstalled
+            # has no name to show -- and, before the picker learned to list it at all, no row
+            # either, while its env keys and the launch wrapper stayed live.
+            "knownNames": tweaks.known_names(),
             # Which games the CONTROL plugin has tuning on for. The panel needs it to
             # decide whether the launch wrapper may be removed -- both features need it.
             "tweaked": sorted(tweaks.tweaked_games()),
@@ -56,7 +61,14 @@ class Plugin:
         if on:
             existing = conf.read_profiles().get(appid)
             conf.write_profile(appid, existing or device.defaults())
-            tweaks.set_enabled(appid, True)
+            # Cache the name into the shared entry while Steam still has a manifest to read it
+            # from -- enabling is the last moment we are guaranteed to have one, and the entry
+            # outlives the install.
+            name = next(
+                (game["name"] for game in installed_games() if str(game.get("appid")) == appid),
+                "",
+            )
+            tweaks.set_enabled(appid, True, name=name)
         else:
             # The profile is deliberately LEFT BEHIND on disable. It is a few lines of TOML, it
             # is what the user tuned, and having it survive an off/on cycle is the difference

@@ -82,11 +82,37 @@ export function Games({ config, setConfig }: { config: Config; setConfig: Dispat
     });
   };
 
+  // Keys in a game section that belong to the FRAME GENERATION panel, not to us. We never write
+  // either: `framegen` is that panel's opt-in, and `env` carries the DISABLE_LSFGVK tombstone and
+  // profile name it applies through. Deleting our settings must leave them alone — the two panels
+  // share one file per game, and wiping the other's half from ours would switch frame generation
+  // off in a screen the user is not looking at, with nothing to say so.
+  const FRAMEGEN_KEYS = ["framegen", "env"];
+
+  // Frame generation's own opt-in, read straight from the shared section. No backend round-trip
+  // needed: the section we are editing is the section that holds it.
+  const framegenOn = isGame && (settings as any).framegen === true;
+
+  // Drop OUR settings from the section, preserving the frame-generation half, and remove the
+  // section only when nothing meaningful is left. `name` is a display cache rather than a
+  // setting, so a section reduced to just that counts as empty — the same rule the frame-gen
+  // writer applies, so the two cannot disagree about when an entry is litter.
   const removeGameEntry = () => {
     setConfig((current) => {
       if (!current || !isGame) return current;
       const next = clone(current);
-      delete next.tweaks.games[target];
+      const existing: any = next.tweaks.games[target];
+      if (!existing) return next;
+      const kept: any = {};
+      for (const key of FRAMEGEN_KEYS) {
+        if (existing[key] !== undefined) kept[key] = existing[key];
+      }
+      if (Object.keys(kept).length > 0) {
+        if (existing.name) kept.name = existing.name;
+        next.tweaks.games[target] = kept;
+      } else {
+        delete next.tweaks.games[target];
+      }
       return next;
     });
   };
@@ -97,10 +123,11 @@ export function Games({ config, setConfig }: { config: Config; setConfig: Dispat
   const hasEntry = isGame && config.tweaks.games[target] !== undefined;
 
   const deleteGameEntry = () => {
-    // Drop the launch-options wrapper too. It is written by the same switch that creates the
-    // entry, so leaving it behind would keep Steam launching the game through game-launch with
-    // nothing left for it to apply — a wrapper with no settings, and no UI left to reveal it.
-    void syncLaunchWrapper(target, false);
+    // Drop the launch-options wrapper too — but ONLY if frame generation does not still want it.
+    // BOTH features run through game-launch, so unwrapping because our settings went away would
+    // silently stop frame generation from being applied while its own panel still reads "on".
+    // This is the mirror of the check that panel already makes before unwrapping on our behalf.
+    void syncLaunchWrapper(target, framegenOn);
     removeGameEntry();
     // The entry is gone, so the target it names no longer exists unless the game is installed.
     // Falling back to Global also makes the deletion visible: the row disappears from the list.
@@ -139,7 +166,12 @@ export function Games({ config, setConfig }: { config: Config; setConfig: Dispat
               // FEX half of these settings to a compat tool we do not own — Valve's arm64 Proton,
               // which Steam now picks by default. Fire-and-forget: it is best effort by contract,
               // and the tweaks themselves must save whether or not Steam accepted the write.
-              void syncLaunchWrapper(target, on);
+              //
+              // It may only be REMOVED when frame generation does not want it either. Both
+              // features run through game-launch, so switching our tuning off used to unwrap
+              // unconditionally and silently stop frame generation being applied, while its own
+              // panel still read "on". That panel already guards the reverse direction.
+              void syncLaunchWrapper(target, on || framegenOn);
               if (settings.enabled === undefined && !on) removeGameEntry();
               else patch({ enabled: on });
             }}

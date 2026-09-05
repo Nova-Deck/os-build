@@ -763,6 +763,27 @@ grep -q 'appid == "0"' "$FRAMEGEN/py_modules/novadeck_framegen/tweaks.py" \
   && ok "novadeck-framegen refuses the appid \"0\" sentinel, as novadeck-control does" \
   || bad "novadeck-framegen does not refuse appid \"0\" — it could tune Steam's own helper runs"
 
+# THE LAUNCH WRAPPER IS SHARED AND THE GUARD MUST RUN BOTH WAYS. Both features need game-launch,
+# so either panel switching its own feature off must keep the wrapper while the OTHER still wants
+# it. Framegen has always guarded this; control did not, so turning tuning off unwrapped
+# unconditionally and silently stopped frame generation from being applied while its panel still
+# read "on". Source-level because the logic is TypeScript and this plugin has no test runner —
+# weak, but it catches the guard being deleted, which is the regression that actually happened.
+grep -q 'on || tweaked.has(target)' "$FRAMEGEN/src/Content.tsx" \
+  && ok "novadeck-framegen keeps the launch wrapper while novadeck-control still wants it" \
+  || bad "novadeck-framegen unwraps without checking control — it would break the user's tuning"
+grep -q 'on || framegenOn' "$PLUGIN/src/tabs/Games.tsx" \
+  && ok "novadeck-control keeps the launch wrapper while frame generation still wants it" \
+  || bad "novadeck-control unwraps without checking framegen — it would break frame generation"
+
+# ...and deleting one panel's settings must not delete the other's. The two share ONE section per
+# game, so control's "Remove these settings" has to preserve the frame-gen half rather than drop
+# the section wholesale — otherwise it switches frame generation off from a screen the user is
+# not looking at.
+grep -q 'FRAMEGEN_KEYS' "$PLUGIN/src/tabs/Games.tsx" \
+  && ok "novadeck-control's delete preserves the frame-generation half of a shared section" \
+  || bad "novadeck-control's delete drops the whole section — it would wipe frame-gen settings"
+
 # The two plugins share this file and must not share an OPT-IN. `enabled` is control's "the user
 # turned on per-game tuning"; framegen borrowing it made switching frame generation on light the
 # game up as tuned. Round-trip it rather than grepping: what matters is the resulting FILE.

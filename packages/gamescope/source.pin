@@ -16,7 +16,8 @@
 # (our PR #2228) is UPSTREAM as of 3.16.28 and was dropped from `patches:` below — upstream
 # auto-engages composite rotation when the primary plane lacks the needed rotation bit, which is the
 # same condition our patch tested, so behaviour is unchanged and no launch flag is needed. We still
-# build from source for 0002-0005, which are ours and not upstream.
+# build from source for 0002-0008: 0002-0006 are ours, and 0007/0008 are third-party patches that
+# are not in any gamescope release.
 #
 # Fields:
 #   name           pkgname (must match the PKGBUILD); also the work/ build-dir + repo entry
@@ -32,4 +33,4 @@
 name: gamescope
 pkgbuild_local: PKGBUILD
 pkgrel_suffix: 1
-patches: 0002-sanitize-nightmode-atom.patch 0003-drmbackend-fake-output-mm.patch 0004-fps-limit-atom-persist.patch 0005-steamcontrolled-steam-focus-fallback.patch 0007-vendor-wayland-protocols-wrap.patch
+patches: 0002-sanitize-nightmode-atom.patch 0003-drmbackend-fake-output-mm.patch 0004-fps-limit-atom-persist.patch 0005-steamcontrolled-steam-focus-fallback.patch 0007-vendor-wayland-protocols-wrap.patch 0008-drm-synthesize-edid-for-edidless-internal-panels.patch

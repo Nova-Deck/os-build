@@ -290,6 +290,30 @@ The `tests/meson.build` hunk in `0009`, `0010`, `0011` and `0013` was re-rolled 
 new binary would never have run. Everything else under `src/` and `layer/` is byte-for-byte as
 published.
 
+**NEXT GAMESCOPE BUMP: `0010` WILL CONFLICT, AND IT CAN FAIL QUIETLY.** A gamescope newer than our
+`3.16.28` rewrites the exact site `0010` patches. The single-statement form our patch deletes —
+
+```c
+if ( !SupportsColorManagement() )
+    bNeedsFullComposite |= ( layers.count() > 1 || ... != HDR10_PQ );
+```
+
+becomes a **braced block that gained a second condition**, `bNeedsFullComposite |=
+g_ColorMgmt.current.flBacklightLutGain != 1.0f;`, commented upstream as "Scanout can't apply the
+LUT-baked backlight dim here". `0010`'s deletion hunk no longer matches, and the failure mode is the
+bad one: [`build-overlay.sh`](../../build-overlay.sh) applies these with a bare `patch -p1` and no
+`-F0`, so GNU patch accepts **fuzz 2 silently**. A fuzzy apply here can land the composite decision
+while dropping upstream's backlight-dim line, and the build still reports success — the symptom
+would be HDR compositing correctly *except* when the backlight LUT gain is not 1.0, which no test
+here covers and which reads as a panel bug rather than a patch bug.
+
+So on the next bump, re-roll `0010` by hand and read the result: the
+`DrmHdrOutputRequiresVulkanComposition(...)` call belongs **above** the block, and upstream's
+backlight-dim line must survive **inside** the braces. Do not wave a fuzzy apply through. Expect the
+`tests/meson.build` hunks in `0009`, `0010`, `0011` and `0013` to need re-rolling in the same pass
+for the third time — upstream keeps appending entries to `unittest_src`, so that context line moves
+on essentially every bump and is the cheapest thing here to get silently wrong.
+
 **Which titles can reach native HDR — and the two x86 paths are NOT the same.** The gamescope WSI
 layer, which is what advertises PQ/scRGB swapchain formats to a client, ships aarch64-only. What
 that excludes is narrower than it first appears, because we run x86 code by two independent routes:

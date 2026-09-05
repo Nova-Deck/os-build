@@ -1,5 +1,12 @@
 export interface GameTweaks {
   enabled?: boolean;
+  /** Display name CACHED at write time, so the entry stays readable after the game is
+   *  uninstalled. Names are otherwise resolved from Steam's appmanifest_<appid>.acf, which is
+   *  deleted along with the game — leaving the dropdown showing a bare "App 35700" for settings
+   *  that are still live and will re-apply on reinstall. Purely cosmetic: never read by the
+   *  enforcers, and safe to be stale or absent (a renamed game keeps its old label until its
+   *  next edit, which is better than showing a number). */
+  name?: string;
   nice?: number;
   cores?: string;
   wineTopology?: boolean;

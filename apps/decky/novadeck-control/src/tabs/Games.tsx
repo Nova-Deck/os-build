@@ -2,7 +2,7 @@ import { PanelSection } from "@decky/ui";
 import { useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import { SelectEdit, SliderEdit, ToggleRow } from "../components/widgets";
-import { editTargetOptions } from "../lib/games";
+import { editTargetOptions, knownGameName } from "../lib/games";
 import { syncLaunchWrapper } from "../lib/launchWrapper";
 import { clone } from "../lib/util";
 import type { Config, GameTweaks } from "../types";
@@ -63,6 +63,15 @@ export function Games({ config, setConfig }: { config: Config; setConfig: Dispat
       const section = isGame
         ? (next.tweaks.games[target] = { ...(next.tweaks.games[target] || { enabled: true }) })
         : next.tweaks.global;
+      if (isGame) {
+        // Cache the display name alongside the settings. Names are otherwise read from Steam's
+        // appmanifest, which the uninstall deletes — and these entries outlive the install, so
+        // without this the dropdown shows a bare "App <id>" for settings that are still live.
+        // Only ever written when a name is actually resolvable: a blank must not overwrite a
+        // good cached one, which is what happens when the entry is edited while uninstalled.
+        const known = knownGameName(current, target);
+        if (known) (section as any).name = known;
+      }
       for (const [key, value] of Object.entries(changes)) {
         // undefined is "remove the key": the consumers treat absence as "no opinion",
         // which is different from any concrete value.

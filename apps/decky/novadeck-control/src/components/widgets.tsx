@@ -1,4 +1,4 @@
-import { Dropdown, Field, PanelSectionRow, SliderField, ToggleField } from "@decky/ui";
+import { DialogButton, Dropdown, Field, PanelSectionRow, SliderField, ToggleField } from "@decky/ui";
 import type { ReactNode } from "react";
 import type { DropdownChoice } from "../types";
 
@@ -32,6 +32,28 @@ export function SelectEdit({ label, value, options, onChange, disabled }: {
           <Dropdown disabled={disabled} selectedOption={value} rgOptions={rgOptions} onChange={(option) => onChange(option.data)} />
         </Field>
       )}
+    </PanelSectionRow>
+  );
+}
+
+/* Field + DialogButton, and NOT ButtonItem -- the same lookup-robustness argument as the Dropdown
+   note above, so read that first. @decky/ui finds ButtonItem by regex over the PROP NAMES
+   "highlightOnFocus" and "childrenContainerWidth" in the minified module source, which is exactly
+   the fragile shape that note warns about: a client-side rename resolves it to undefined and the
+   panel ships a button with no gamepad focus handling, with nothing failing at build time.
+   DialogButton is matched on the class-name triple '"DialogButton","_DialogLayout","Secondary"' --
+   the same robustness class as Field, which this file already depends on everywhere. */
+export function ButtonRow({ label, description, onClick, disabled }: {
+  label: ReactNode;
+  description?: ReactNode;
+  onClick: () => void;
+  disabled?: boolean;
+}) {
+  return (
+    <PanelSectionRow>
+      <Field description={description} childrenLayout="below" childrenContainerWidth="max" disabled={disabled}>
+        <DialogButton disabled={disabled} onClick={onClick}>{label}</DialogButton>
+      </Field>
     </PanelSectionRow>
   );
 }

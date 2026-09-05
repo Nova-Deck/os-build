@@ -1,7 +1,7 @@
 import { PanelSection } from "@decky/ui";
 import { useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
-import { SelectEdit, SliderEdit, ToggleRow } from "../components/widgets";
+import { ButtonRow, SelectEdit, SliderEdit, ToggleRow } from "../components/widgets";
 import { editTargetOptions, knownGameName } from "../lib/games";
 import { syncLaunchWrapper } from "../lib/launchWrapper";
 import { clone } from "../lib/util";
@@ -91,6 +91,22 @@ export function Games({ config, setConfig }: { config: Config; setConfig: Dispat
     });
   };
 
+  // Does this target actually have stored settings? Selecting a game in the dropdown does not
+  // create an entry — only editing one does — so the delete affordance must key on the entry
+  // existing, not on a game being selected.
+  const hasEntry = isGame && config.tweaks.games[target] !== undefined;
+
+  const deleteGameEntry = () => {
+    // Drop the launch-options wrapper too. It is written by the same switch that creates the
+    // entry, so leaving it behind would keep Steam launching the game through game-launch with
+    // nothing left for it to apply — a wrapper with no settings, and no UI left to reveal it.
+    void syncLaunchWrapper(target, false);
+    removeGameEntry();
+    // The entry is gone, so the target it names no longer exists unless the game is installed.
+    // Falling back to Global also makes the deletion visible: the row disappears from the list.
+    setTarget("");
+  };
+
   const fexOptions = [
     { data: "", label: "(unchanged)" },
     ...Object.entries(config.fexProfiles).map(([name, label]) => ({ data: name, label })),
@@ -127,6 +143,13 @@ export function Games({ config, setConfig }: { config: Config; setConfig: Dispat
               if (settings.enabled === undefined && !on) removeGameEntry();
               else patch({ enabled: on });
             }}
+          />
+        ) : null}
+        {hasEntry ? (
+          <ButtonRow
+            label="Remove these settings"
+            description="Deletes this game's entry and its launch-options wrapper. The toggle above only stops applying the settings; this is what discards them."
+            onClick={deleteGameEntry}
           />
         ) : null}
       </PanelSection>

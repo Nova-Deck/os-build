@@ -1,0 +1,69 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/ShadowBlip/InputPlumber/main/rootfs/usr/share/inputplumber/schema/capability_map_v2.json
+#
+# The AYANEO Pocket EVO's four SoC-GPIO buttons -- AYA SPACE, =, LC and RC. They arrive on the
+# `aya-keys` gpio-keys device declared in kernel/dts/qcom/qcs8550-ayaneo-pocketevo.dts, which is
+# where the reason they are not on the controller MCU is written down. The EVO is the only board
+# in the family that needs this: on its five siblings the same four buttons come over
+# `AYANEO DEVICE` 1c4f:0002 as BTN3..BTN7, and upstream's aya9 map claims them there.
+#
+# THE FILE NAME KEEPS OUR `<soc>-` CONVENTION, which for capability maps is the SAFE choice and is
+# the opposite of the rule for device configs. src/config/path.rs orders the capability-map search
+# path with /usr/share/inputplumber/capability_maps BEFORE /etc/inputplumber/capability_maps.d, so
+# on a file-name tie UPSTREAM wins -- the reverse of devices.d, where /etc wins. A name upstream
+# will never choose is what keeps this file loadable. The `id` is namespaced for the same reason:
+# a duplicate id across the merged set is the other way two maps can collide.
+#
+# ONE DELIBERATE DIVERGENCE, on the `=` key. The source this was taken from routes it to
+# LeftPaddle2, alongside LC and RC as paddles. Here it is `Keyboard`, the on-screen keyboard, which
+# is what BOTH upstream maps covering this physical button on sibling hardware do: aya9 sends BTN7
+# ("Side button to Keyboard") there, and konkr2 sends BTN6 ("Equals Button") there. The hardware
+# measurement behind this file established WHICH GPIO IS WHICH BUTTON; it did not settle what the
+# `=` button should do, and the silkscreen agrees with upstream. This is the one row to revisit if
+# an EVO ever turns up -- the other three are unambiguous.
+version: 2
+kind: CapabilityMap
+name: AYANEO Pocket EVO GPIO Keys
+id: sm8550_ayaneo_evo_keys
+
+mapping:
+  - name: AYA SPACE
+    source_events:
+      - evdev:
+          event_type: KEY
+          event_code: KEY_F13
+          value_type: button
+    target_event:
+      gamepad:
+        button: QuickAccess
+
+  - name: Menu (=)
+    source_events:
+      - evdev:
+          event_type: KEY
+          event_code: KEY_F14
+          value_type: button
+    target_event:
+      gamepad:
+        button: Keyboard
+
+  - name: LC
+    source_events:
+      - evdev:
+          event_type: KEY
+          event_code: KEY_F15
+          value_type: button
+    target_event:
+      gamepad:
+        button: LeftPaddle1
+
+  - name: RC
+    source_events:
+      - evdev:
+          event_type: KEY
+          event_code: KEY_F16
+          value_type: button
+    target_event:
+      gamepad:
+        button: RightPaddle1
+
+filtered_events: []

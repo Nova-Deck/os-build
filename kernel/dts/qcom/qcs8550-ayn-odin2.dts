@@ -322,3 +322,51 @@
 &spk_amp_r {
 	firmware-name = "qcom/sm8550/ayn/odin2/aw883xx_acf.bin";
 };
+
+&tlmm {
+	paddle_keys_default: paddle-keys-default-state {
+		pins = "gpio57", "gpio58";
+		function = "gpio";
+		bias-pull-up;
+		drive-strength = <2>;
+	};
+};
+
+/*
+ * The Odin 2 has two extra back buttons, M1 and M2, on the lower back of the
+ * case. They are plain active-low SoC TLMM GPIOs -- M1 on gpio57, M2 on gpio58 --
+ * NOT on the gamepad MCU UART and NOT ADC, despite the vendor's Android naming
+ * ("adckey", keydetect.ko). Read out of that driver: gpio_request 358/359, i.e.
+ * TLMM base 301 plus offsets 57 and 58.
+ *
+ * THE NODE NAME IS LOAD-BEARING. InputPlumber's own 50-ayn_odin2.yaml lists a
+ * source device `name: gpio-keys-paddles` and routes it through its rsinput1
+ * capability map, which maps BTN_Z to LeftPaddle1 and BTN_C to RightPaddle1.
+ * gpio-keys takes the input device's name from the DT `label` when one is set
+ * and otherwise from the node name (drivers/input/keyboard/gpio_keys.c), so
+ * this node is deliberately left unlabelled to be named after itself. Rename it
+ * and the paddles go dead again with no other symptom.
+ *
+ * NOT VERIFIED ON OUR HARDWARE -- see the commit that added this.
+ */
+/ {
+	gpio-keys-paddles {
+		compatible = "gpio-keys";
+		pinctrl-names = "default";
+		pinctrl-0 = <&paddle_keys_default>;
+
+		key-paddle-m1 {
+			label = "Back Paddle M1";
+			linux,code = <BTN_Z>;
+			gpios = <&tlmm 57 GPIO_ACTIVE_LOW>;
+			debounce-interval = <15>;
+		};
+
+		key-paddle-m2 {
+			label = "Back Paddle M2";
+			linux,code = <BTN_C>;
+			gpios = <&tlmm 58 GPIO_ACTIVE_LOW>;
+			debounce-interval = <15>;
+		};
+	};
+};

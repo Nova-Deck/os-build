@@ -12,9 +12,89 @@
 	qcom,board-id = <0x1000b 0x01>;
 	qcom,msm-id = <0x258 0x20000>, <0x259 0x20000>;
 	compatible = "ayaneo,pocketevo", "qcom,qcs8550", "qcom,sm8550";
+
+	/*
+	 * AYA SPACE, =, LC and RC hang off SoC GPIOs on THIS BOARD ONLY. Its five
+	 * siblings carry the same four buttons on the controller MCU, where the
+	 * `AYANEO DEVICE` 1c4f:0002 keyboard device reports them as BTN3..BTN7 and
+	 * the aya9 capability map claims them. The MCU on the EVO does not drive
+	 * those lines, so without this node the four buttons are dead: nothing
+	 * else in the tree declares them.
+	 *
+	 * A SEPARATE gpio-keys NODE, not the one in the common dtsi, and that is
+	 * deliberate. InputPlumber grabs the source devices it manages, so folding
+	 * these into the shared node would take volume up with them.
+	 *
+	 * F13-F16 RATHER THAN THE VENDOR'S KEY_A / KEY_EQUAL / KEY_LEFT /
+	 * KEY_RIGHTSHIFT, which type real characters: those would leak into
+	 * whatever has focus during any window where InputPlumber is not grabbing
+	 * the node. The `label` is what InputPlumber matches on -- every gpio-keys
+	 * instance reports the same hardcoded phys `gpio-keys/input0`
+	 * (drivers/input/keyboard/gpio_keys.c), so the name is the only thing that
+	 * can tell two of them apart, and it comes from `label` when one is set.
+	 *
+	 * The GPIOs, bias, drive strength and debounce are the stock Android
+	 * device tree's. NOTE ITS LABELS DO NOT MATCH THE CASE MARKINGS: the
+	 * silkscreen LC is the vendor's rc2_key (gpio170) and RC is its lc_key
+	 * (gpio91). NOT VERIFIED ON OUR HARDWARE -- see the commit that added this
+	 * for whose measurement it rests on.
+	 */
+	aya-keys {
+		compatible = "gpio-keys";
+		label = "aya-keys";
+
+		pinctrl-0 = <&aya_keys_default>;
+		pinctrl-names = "default";
+
+		key-aya-space {
+			label = "AYA Space";
+			debounce-interval = <15>;
+			gpios = <&tlmm 85 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_F13>;
+			wakeup-source;
+		};
+
+		key-menu {
+			label = "Menu";
+			debounce-interval = <15>;
+			gpios = <&tlmm 169 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_F14>;
+			wakeup-source;
+		};
+
+		/* Silkscreen LC; the vendor device tree calls this rc2_key. */
+		key-lc {
+			label = "LC";
+			debounce-interval = <15>;
+			gpios = <&tlmm 170 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_F15>;
+			wakeup-source;
+		};
+
+		/* Silkscreen RC; the vendor device tree calls this lc_key. */
+		key-rc {
+			label = "RC";
+			debounce-interval = <15>;
+			gpios = <&tlmm 91 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_F16>;
+			wakeup-source;
+		};
+	};
 };
 
 &tlmm {
+	/*
+	 * The buttons short to ground and the pins default to pull-down, so
+	 * without this pull-up they read low pressed and unpressed alike and no
+	 * press is detectable at all.
+	 */
+	aya_keys_default: aya-keys-default-state {
+		pins = "gpio85", "gpio91", "gpio169", "gpio170";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-pull-up;
+	};
+
 	panel_pwr_active: panel-pwr-active-state {
 		pins = "gpio152", "gpio153";
 		function = "gpio";

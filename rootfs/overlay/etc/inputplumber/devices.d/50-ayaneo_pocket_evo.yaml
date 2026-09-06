@@ -48,6 +48,19 @@ source_devices:
       vendor_id: "1c4f"
       product_id: "0002"
       handler: event*
+  # AYA SPACE, =, LC and RC. THIS BOARD ONLY, and the one place it departs from its five siblings:
+  # the EVO's MCU does not drive those four lines, so they arrive on SoC GPIOs instead, via the
+  # `aya-keys` node in kernel/dts/qcom/qcs8550-ayaneo-pocketevo.dts. The aya9 rows above that would
+  # otherwise cover them (BTN3..BTN7) are simply inert here, so nothing is claimed twice.
+  #
+  # Matched by NAME because it must be: every gpio-keys instance reports the same hardcoded phys
+  # `gpio-keys/input0`, so phys_path cannot tell this node from the common dtsi's volume-up node.
+  # The name comes from the DT `label`.
+  - group: keyboard
+    capability_map_id: sm8550_ayaneo_evo_keys
+    evdev:
+      name: aya-keys
+      handler: event*
 
 target_devices:
   - xbox-elite

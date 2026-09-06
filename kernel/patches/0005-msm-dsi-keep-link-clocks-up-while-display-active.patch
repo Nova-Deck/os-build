@@ -1,8 +1,78 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Philippe Simons <simons.philippe@gmail.com>
+Date: Sun, 6 Sep 2026 13:05:00 +0200
+Subject: [PATCH] msm/dsi: keep link clocks up while display active
+
+Re-cycling the link clocks on every DCS transfer cuts the byte/pixel clock
+supply to the DSI serializer mid-frame while the MDP frame pipeline is
+running, causing all-lane HS FIFO underflows. Skip the cycle when the display
+is already active: host_power_on()/host_power_off() own the clocks for the
+duration of the display session.
+
+The "is the display active" decision is LATCHED in xfer_prepare() and consumed
+by xfer_restore() rather than being recomputed. Recomputing it is a refcount
+bug: (power_on && enabled) is written by the modeset path
+(msm_dsi_host_enable/disable, msm_dsi_host_power_on/off), which does NOT hold
+cmd_mutex, while an asynchronous DCS transfer -- a DSI-backlight brightness
+write, DCS 0x51 -- holds cmd_mutex across the prepare/restore pair. The flag
+can therefore flip between the two evaluations, in either direction:
+
+  - transfer starts enabled (prepare SKIPS the get), modeset clears `enabled`,
+    restore takes the other branch and PUTS clocks it never took. The refcount
+    underflows: "dsi0_phy_pll_out_dsiclk already disabled / already unprepared".
+
+  - transfer starts disabled (prepare TAKES the get), modeset sets `enabled`,
+    restore SKIPS the put. The get leaks, so the PHY PLL stays on across
+    msm_dsi_host_power_off(): "Turning OFF PHY while PLL is on". The next
+    enable then finds a stale enable count on dsi0_phy_pll_out_dsiclk, skips
+    the real hardware enable, and clk_pixel_set_rate() cannot reprogram the
+    pixel RCG against a parent that is not ticking:
+    "disp_cc_mdss_pclk0_clk_src: rcg didn't update its configuration".
+    Every subsequent DCS transfer then times out with -ETIMEDOUT and the panel
+    never gets its init sequence -- a permanently black screen that only a
+    reboot clears.
+
+Observed on MANGMI Pocket Max (SM8250, chipone ICNA35XX): Steam writes the
+panel brightness over DCS as its UI comes up, which is exactly when gamescope
+takes over and does its first modeset. Intermittent, because it needs the
+brightness write to straddle the flag flip.
+
+cmd_mutex brackets the prepare/restore pair, so a single latched flag on the
+host is sufficient -- transfers cannot nest.
+
+Signed-off-by: Philippe Simons <simons.philippe@gmail.com>
+---
+ drivers/gpu/drm/msm/dsi/dsi_host.c | 38 +++++++++++++++++++++++++++++++++++---
+ 1 file changed, 35 insertions(+), 3 deletions(-)
+
 diff --git a/drivers/gpu/drm/msm/dsi/dsi_host.c b/drivers/gpu/drm/msm/dsi/dsi_host.c
-index e0de545d4..5238279a8 100644
+index 982abaa..6bdeb71 100644
 --- a/drivers/gpu/drm/msm/dsi/dsi_host.c
 +++ b/drivers/gpu/drm/msm/dsi/dsi_host.c
-@@ -2114,8 +2114,18 @@ int msm_dsi_host_xfer_prepare(struct mipi_dsi_host *host,
+@@ -183,10 +183,20 @@ struct msm_dsi_host {
+ 	u32 dma_cmd_ctrl_restore;
+ 
+ 	bool registered;
+ 	bool power_on;
+ 	bool enabled;
++	/*
++	 * Whether THIS command transfer took the link clocks up in
++	 * msm_dsi_host_xfer_prepare() and therefore owes the matching put in
++	 * msm_dsi_host_xfer_restore(). Latched rather than recomputed: the
++	 * (power_on && enabled) state it derives from is written by the
++	 * modeset path, which does not hold cmd_mutex, so re-evaluating it in
++	 * restore() can disagree with prepare() and unbalance the refcount.
++	 * cmd_mutex brackets the prepare/restore pair, so one flag is enough.
++	 */
++	bool xfer_owns_link_clks;
+ 	int irq;
+ };
+ 
+ static inline u32 dsi_read(struct msm_dsi_host *msm_host, u32 reg)
+ {
+@@ -2168,12 +2178,26 @@ int msm_dsi_host_xfer_prepare(struct mipi_dsi_host *host,
+ 	/*
+ 	 * mdss interrupt is generated in mdp core clock domain
  	 * mdp clock need to be enabled to receive dsi interrupt
  	 */
  	pm_runtime_get_sync(&msm_host->pdev->dev);
@@ -10,31 +80,43 @@ index e0de545d4..5238279a8 100644
 -	cfg_hnd->ops->link_clk_enable(msm_host);
 +
 +	/*
-+	 * Skip link clock enable/set_rate when the display is already active.
-+	 * The link clocks are owned by host_power_on()/host_power_off() for
-+	 * the duration of the display session. Re-cycling them here while the
++	 * Skip the link-clock cycle when the display is already active: the
++	 * clocks are owned by host_power_on()/host_power_off() for the
++	 * duration of the display session, and re-cycling them here while the
 +	 * MDP frame pipeline is running cuts the byte/pixel clock supply to
 +	 * the DSI serializer mid-frame, causing all-lane HS FIFO underflows.
++	 *
++	 * LATCHED for xfer_restore(); see the comment on xfer_owns_link_clks.
 +	 */
-+	if (!(msm_host->power_on && msm_host->enabled)) {
++	msm_host->xfer_owns_link_clks =
++		!(msm_host->power_on && msm_host->enabled);
++	if (msm_host->xfer_owns_link_clks) {
 +		cfg_hnd->ops->link_clk_set_rate(msm_host);
 +		cfg_hnd->ops->link_clk_enable(msm_host);
 +	}
  
  	/* TODO: vote for bus bandwidth */
  
-@@ -2146,7 +2156,13 @@ void msm_dsi_host_xfer_restore(struct mipi_dsi_host *host,
+ 	if (!(msg->flags & MIPI_DSI_MSG_USE_LPM))
+ 		dsi_set_tx_power_mode(0, msm_host);
+@@ -2200,11 +2224,19 @@ void msm_dsi_host_xfer_restore(struct mipi_dsi_host *host,
+ 	if (!(msg->flags & MIPI_DSI_MSG_USE_LPM))
+ 		dsi_set_tx_power_mode(1, msm_host);
  
  	/* TODO: unvote for bus bandwidth */
  
 -	cfg_hnd->ops->link_clk_disable(msm_host);
 +	/*
-+	 * Only disable link clocks if the display was not already active when
-+	 * xfer_prepare() ran. Matches the conditional enable above.
++	 * Only put the link clocks if THIS transfer took them, mirroring the
++	 * latched decision in xfer_prepare().
 +	 */
-+	if (!(msm_host->power_on && msm_host->enabled))
++	if (msm_host->xfer_owns_link_clks) {
 +		cfg_hnd->ops->link_clk_disable(msm_host);
++		msm_host->xfer_owns_link_clks = false;
++	}
 +
  	pm_runtime_put(&msm_host->pdev->dev);
  }
  
+ int msm_dsi_host_cmd_tx(struct mipi_dsi_host *host,
+ 				const struct mipi_dsi_msg *msg)

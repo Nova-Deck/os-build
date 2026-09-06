@@ -1,80 +1,48 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/ShadowBlip/InputPlumber/main/rootfs/usr/share/inputplumber/schema/capability_map_v2.json
+#
+# MANGMI Pocket Max SPI MCU joypad -- `mangmi,pocket-max-joypad`, kernel/patches/0037. Nothing
+# upstream describes this part, so this map is ours; 50-mangmi_pocket_max.yaml is the device config
+# that references it.
+#
+# A CAPABILITY MAP CLAIMS ONLY WHAT THE DEFAULT TRANSLATION GETS WRONG OR CANNOT SEE. Every evdev
+# code InputPlumber already understands falls through src/input/event/evdev.rs::as_capability on its
+# own, and a row restating that is dead weight that reads as if it were doing something. This file
+# used to carry twelve such rows -- BTN_MODE, the four face buttons, BTN_START/BTN_SELECT, both
+# bumpers, both sticks and both stick clicks -- all of them identical to the default. They are gone.
+# Upstream's maps are built the same way: ret1 claims a D-pad, a swap and two triggers and nothing
+# else.
+#
+# WHAT REMAINS, AND WHY EACH ROW EARNS ITS PLACE:
+#
+#   KEY_BACK          The default sends this to keyboard KeyBack. This board's F1 key wants F1.
+#   ABS_HAT2X/Y       The triggers. Default capability for both is NotImplemented -- unclaimed,
+#                     they reach nothing at all.
+#   HAPPY1 / HAPPY2   The M1/M2 back buttons. The default table covers BTN_TRIGGER_HAPPY5..10 only,
+#                     so these two are invisible to it. (The other half of making them work is the
+#                     `xbox-elite` target in the device config: src/input/target/xpad.rs gives
+#                     paddle capabilities to the Elite model ONLY, and on the xbox-series this
+#                     config used to emit, these were mapped correctly and then dropped by the
+#                     target.)
+#   ABS_HAT0X/Y       The D-pad. The default sends these to the Hat0 AXIS, and xpad.rs is the one
+#                     target that does not handle Hat0 -- it declares DPadUp/Down/Left/Right as
+#                     BUTTONS and nothing else. Unclaimed, the D-pad is silent on an Xbox target.
+#
+# NO NORTH/WEST SWAP HERE, AND DO NOT ADD ONE. Upstream's ret1, ayn2, ayn3 and rsinput1 all swap
+# BTN_NORTH and BTN_WEST because the drivers behind them report by PHYSICAL POSITION. This driver
+# does not: its keymap labels bit 10 BTN_NORTH /* X */ and bit 11 BTN_WEST /* Y */, which is the
+# xpad convention, since BTN_NORTH and BTN_WEST are aliases of the legacy BTN_X and BTN_Y. The
+# identity the default translation applies is already correct, and a swap would break it.
+#
+# The file name keeps our `<soc>-` convention, which for capability maps is the SAFE choice and the
+# opposite of the rule for device configs: src/config/path.rs searches
+# /usr/share/inputplumber/capability_maps BEFORE /etc/inputplumber/capability_maps.d, so a file-name
+# tie there is won by UPSTREAM. The `id` is namespaced against a duplicate-id collision.
 version: 2
 kind: CapabilityMap
 name: MANGMI Pocket Max Gamepad
 id: sm8250_pocket_max_mcu
 
 mapping:
-  - name: Guide Button
-    source_events:
-      - evdev:
-          event_type: KEY
-          event_code: BTN_MODE
-          value_type: button
-    target_event:
-      gamepad:
-        button: Guide
-
-  - name: South Button
-    source_events:
-      - evdev:
-          event_type: KEY
-          event_code: BTN_SOUTH
-          value_type: button
-    target_event:
-      gamepad:
-        button: South
-
-  - name: East Button
-    source_events:
-      - evdev:
-          event_type: KEY
-          event_code: BTN_EAST
-          value_type: button
-    target_event:
-      gamepad:
-        button: East
-
-  - name: West Button
-    source_events:
-      - evdev:
-          event_type: KEY
-          event_code: BTN_WEST
-          value_type: button
-    target_event:
-      gamepad:
-        button: West
-
-  - name: North Button
-    source_events:
-      - evdev:
-          event_type: KEY
-          event_code: BTN_NORTH
-          value_type: button
-    target_event:
-      gamepad:
-        button: North
-
-  - name: Start Button
-    source_events:
-      - evdev:
-          event_type: KEY
-          event_code: BTN_START
-          value_type: button
-    target_event:
-      gamepad:
-        button: Start
-
-  - name: Select Button
-    source_events:
-      - evdev:
-          event_type: KEY
-          event_code: BTN_SELECT
-          value_type: button
-    target_event:
-      gamepad:
-        button: Select
-
   - name: F1 Key
     source_events:
       - evdev:
@@ -83,26 +51,6 @@ mapping:
           value_type: button
     target_event:
       keyboard: KeyF1
-
-  - name: Right Bumper
-    source_events:
-      - evdev:
-          event_type: KEY
-          event_code: BTN_TR
-          value_type: button
-    target_event:
-      gamepad:
-        button: RightBumper
-
-  - name: Left Bumper
-    source_events:
-      - evdev:
-          event_type: KEY
-          event_code: BTN_TL
-          value_type: button
-    target_event:
-      gamepad:
-        button: LeftBumper
 
   - name: Right Trigger
     source_events:
@@ -126,6 +74,7 @@ mapping:
         trigger:
           name: LeftTrigger
 
+  # M2, the right back button.
   - name: Right Paddle
     source_events:
       - evdev:
@@ -136,6 +85,7 @@ mapping:
       gamepad:
         button: RightPaddle1
 
+  # M1, the left back button.
   - name: Left Paddle
     source_events:
       - evdev:
@@ -145,56 +95,6 @@ mapping:
     target_event:
       gamepad:
         button: LeftPaddle1
-
-  - name: Right Stick
-    source_events:
-      - evdev:
-          event_type: ABS
-          event_code: ABS_RX
-          value_type: joystick_x
-      - evdev:
-          event_type: ABS
-          event_code: ABS_RY
-          value_type: joystick_y
-    target_event:
-      gamepad:
-        axis:
-          name: RightStick
-
-  - name: Left Stick
-    source_events:
-      - evdev:
-          event_type: ABS
-          event_code: ABS_X
-          value_type: joystick_x
-      - evdev:
-          event_type: ABS
-          event_code: ABS_Y
-          value_type: joystick_y
-    target_event:
-      gamepad:
-        axis:
-          name: LeftStick
-
-  - name: Right Stick Click
-    source_events:
-      - evdev:
-          event_type: KEY
-          event_code: BTN_THUMBR
-          value_type: button
-    target_event:
-      gamepad:
-        button: RightStick
-
-  - name: Left Stick Click
-    source_events:
-      - evdev:
-          event_type: KEY
-          event_code: BTN_THUMBL
-          value_type: button
-    target_event:
-      gamepad:
-        button: LeftStick
 
   - name: Dpad Left
     source_events:
@@ -239,3 +139,5 @@ mapping:
     target_event:
       gamepad:
         button: DPadUp
+
+filtered_events: []

@@ -1,0 +1,64 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/ShadowBlip/InputPlumber/main/rootfs/usr/share/inputplumber/schema/composite_device_v1.json
+#
+# MANGMI Pocket Max (sm8250-mangmi-pocket-max.dts). Upstream describes no MANGMI board at any
+# release, and this one could not adopt an upstream description even if it did: the pad is an SPI
+# MCU on its own driver -- `compatible = "mangmi,pocket-max-joypad"`, kernel/patches/0037 -- that
+# nothing else in the tree or upstream's uses. So the capability map stays ours
+# (capability_maps.d/sm8250-pocket_max_mcu.yaml, id sm8250_pocket_max_mcu); only the shape of this
+# file follows upstream's ARM configs.
+#
+# THE MATCH IS ON DEVICETREE `model`, not `compatible`. `mangmi,pocket-max` collides with nothing
+# upstream ships today, so either attribute would work; `model` is the one nothing upstream reads,
+# which keeps this board's claim independent of what upstream adds next. 50-ayn_thor_lite.yaml
+# matches the same way, and its header carries the fuller argument.
+#
+# The file name is upstream's convention on purpose -- both config directories are LOADED and
+# sorted by FILE NAME across the two, first match wins, and a name TIE is the only case where
+# /etc/inputplumber/devices.d wins on directory priority. Under an `sm8250-` name an upstream file
+# for this board would sort first and win silently.
+#
+# TARGET CHANGED to xbox-elite, from the xbox-series this file used to emit. That is a fix, not a
+# style choice: src/input/target/xpad.rs adds LeftPaddle1/RightPaddle1 capabilities to the Elite
+# model ONLY, so on the Series pad the M1/M2 back buttons this board actually has -- mapped off
+# BTN_TRIGGER_HAPPY1/2 by our capability map -- were being dropped by the target. Every other
+# board in this directory already emits an Elite.
+#
+# The keyboard target is required, not decorative: the capability map sends KEY_BACK to keyboard
+# F1, so without it that button reaches nothing. (Note the divergence from 50-ayn_thor_lite.yaml,
+# which takes upstream's ret1 and puts its equivalent button on gamepad QuickAccess instead.
+# Whether this board should follow is a question for hardware, not for this bump.)
+version: 1
+kind: CompositeDevice
+name: MANGMI Pocket Max
+
+# `maximum_sources: 0` means unlimited, and replaces the `single_source: false` this file used to
+# carry -- src/config/mod.rs marks that field DEPRECATED.
+maximum_sources: 0
+
+options:
+    auto_manage: true
+
+matches:
+    - udev:
+          sys_path: /sys/firmware/devicetree/base
+          attributes:
+              - name: model
+                value: MANGMI Pocket Max
+
+# The SPI MCU joypad plus the board's pwm-vibrator, so rumble routes through the same composite
+# device as the buttons.
+source_devices:
+    - group: gamepad
+      capability_map_id: sm8250_pocket_max_mcu
+      evdev:
+          name: MANGMI Pocket Max Joypad
+          phys_path: mangmi-pocket-max/input0
+          handler: event*
+    - group: gamepad
+      evdev:
+          name: pwm-vibrator
+          handler: event*
+
+target_devices:
+    - xbox-elite
+    - keyboard

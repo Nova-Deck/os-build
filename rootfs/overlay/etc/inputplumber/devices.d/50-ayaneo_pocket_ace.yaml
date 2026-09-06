@@ -9,7 +9,9 @@
 # WHY THE FAMILY MOVED. These boards carry the SAME controller MCU as the SM8650 pair, exposed the
 # same way over USB. InputPlumber 0.78.0 began shipping its own description of exactly that
 # hardware (devices/50-ayaneo_pocket_s2.yaml, upstream ac09f37) and a Pocket FIT running 0.78.1
-# read it CORRECTLY on hardware — see 50-konkr_pocket_fit.yaml and the commit that landed it. Every
+# read it CORRECTLY on hardware — see the commit that landed our copy of it, 3ab42e9. (That copy,
+# devices.d/50-konkr_pocket_fit.yaml, is gone: 0.79.0 ships upstream's own Pocket FIT config and
+# ours would have won the name tie and suppressed it.) Every
 # place upstream's description disagreed with ours went upstream's way there. So this is upstream's
 # description, not a negotiation with it: nothing here is adjusted to preserve a mapping of ours.
 # If a button reads wrong on hardware, THAT is when a capability map goes in, against a measurement.

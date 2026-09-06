@@ -1,0 +1,86 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/ShadowBlip/InputPlumber/main/rootfs/usr/share/inputplumber/schema/composite_device_v1.json
+#
+# AYN Thor Lite (sm8250-ayn-thorlite.dts). Upstream 0.79.0 started describing the ARM Retroid
+# boards -- 50-retroid_pocket{5,6,_flip2,_mini,_nova}.yaml -- and this board is one of them in
+# every respect EXCEPT its name: kernel/dts/qcom/sm8250-ayn-thorlite.dts declares the identical
+# `gamepad` node as sm8250-retroidpocket-common.dtsi, byte for byte --
+# `compatible = "retroid,retroid-pocket-gamepad"`, gamepad-name "Retroid Pocket Gamepad",
+# 2020:3001 rev 0001, on the same three MCU GPIOs. So this file is upstream's Retroid description
+# with only the system match changed, and it takes upstream's `ret1` capability map rather than
+# one of ours.
+#
+# IT IS NOT UPSTREAM'S 50-ayn_thor.yaml, WHICH IS THE OBVIOUS GUESS AND IS WRONG. The AYN Thor
+# and the AYN Thor Lite share a brand and nothing else about their input hardware: the Thor is
+# SM8550 and its pad is `gamepad,rsinput` in qcs8550-ayn-common.dtsi, enumerating as
+# "AYN Odin2 Gamepad" on rsinput-gamepad/input0, with a separate `gpio-keys-ayn` node carrying
+# the AYN key on KEY_F24. This board is SM8250, has no such node and no KEY_F24 anywhere in its
+# devicetree — only volume up/down and the hall lid switch — and its pad is the Retroid MCU.
+# Upstream's AYN Thor source rows would therefore bind NOTHING here, and the composite device
+# would never form. The capability maps disagree for the same underlying reason: the rsinput
+# driver puts the triggers on ABS_Z/ABS_RZ, which the default translation already understands,
+# so `ayn2` has no trigger rows at all; the Retroid driver puts them on ABS_HAT2X/ABS_HAT2Y,
+# which MUST be claimed, and `ret1` is the map that claims them.
+#
+# THE MATCH IS ON DEVICETREE `model`, not `compatible`, which is the one place this file
+# deliberately diverges from every upstream ARM config. The board's compatible is
+# `ayn,thor-lite`, and upstream's 50-ayn_thor.yaml keys on `ayn,thor` -- a glob match against
+# the sysfs attribute, which libudev truncates at the first NUL and so reads back as the FIRST
+# compatible string only. `ayn,thor` does not glob-match `ayn,thor-lite`, so the two would not
+# collide today. Matching on `model` keeps it that way without depending on that argument
+# holding: "AYN Thor Lite" is what the board calls itself and nothing upstream reads it.
+# See 50-mangmi_pocket_max.yaml, which is on `model` for the same reason.
+#
+# The file name is upstream's convention, not our `<soc>-<vendor>-` one, and that is
+# load-bearing: /etc/inputplumber/devices.d and /usr/share/inputplumber/devices are both LOADED,
+# sorted by FILE NAME across the two, and the first config that matches wins
+# (src/input/manager.rs, on_source_device_added). Only on a name TIE does directory priority
+# decide, and there /etc wins. So if upstream ever ships a 50-ayn_thor_lite.yaml, ours overrides
+# it and we get to compare; under an `sm8250-` name theirs would simply sort first and win,
+# silently.
+#
+# WHAT CHANGES ON HARDWARE versus the sm8250-retroid-controller.yaml this replaces, i.e. what to
+# check when a Thor Lite is next up:
+#
+#   * The `...` button (BTN_BACK) becomes gamepad QuickAccess -- it opens Steam's quick-access
+#     panel -- where our map emitted keyboard F1. This is the only row where ret1 and the
+#     deleted sm8250_retroid_mcu disagreed on something the hardware can actually produce.
+#   * The emitted pad becomes an X-Box One Elite 2 rather than a Series S|X. Only the Elite
+#     model carries paddle capabilities (src/input/target/xpad.rs), and this board has none, so
+#     nothing here depends on it; it is upstream's choice for every ARM handheld and the AYANEO
+#     files in this directory already follow it.
+#
+# NOTHING IS LOST by dropping our map. kernel/patches/0035 declares the complete key set this
+# driver can emit -- BTN_DPAD_{UP,DOWN,LEFT,RIGHT}, BTN_{NORTH,WEST,EAST,SOUTH}, BTN_{TL,TR},
+# BTN_{SELECT,START}, BTN_{THUMBL,THUMBR}, BTN_MODE, BTN_BACK, plus ABS_{X,Y,RX,RY,Z,RZ} and
+# the ABS_HAT2X/Y triggers. ret1 claims the D-pad, the North/West swap and the two triggers,
+# which is exactly the subset that needs claiming; the rest is what InputPlumber's default
+# translation already does. The two rows our map had beyond that -- BTN_Z and BTN_C as back
+# paddles -- name codes this driver never registers and could never have fired.
+version: 1
+kind: CompositeDevice
+name: AYN Thor Lite
+
+options:
+    auto_manage: true
+
+matches:
+    - udev:
+          sys_path: /sys/firmware/devicetree/base
+          attributes:
+              - name: model
+                value: AYN Thor Lite
+
+source_devices:
+    # Quoted vendor/product ids: bare, `2020` and `3001` are YAML integers and the field is a
+    # string, which rejects the file whole. Upstream quotes them in the Retroid configs too.
+    - group: gamepad
+      capability_map_id: ret1
+      evdev:
+          name: Retroid Pocket Gamepad
+          phys_path: retroid-pocket-gamepad/input0
+          vendor_id: "2020"
+          product_id: "3001"
+          handler: event*
+
+target_devices:
+    - xbox-elite

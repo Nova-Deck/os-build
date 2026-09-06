@@ -21,20 +21,32 @@
 # rootfs/overlay/etc/inputplumber/devices.d, because upstream now ships configs for boards we
 # also describe. See the note below.
 name: inputplumber
-version: 0.78.1
-url: https://github.com/ShadowBlip/InputPlumber/releases/download/v0.78.1/inputplumber-aarch64.tar.gz
-sha256: 1c556d799fb92fdfe4a44c331090a2af2b24b1564cafe49a9ba24638f2bcc368
+version: 0.79.0
+url: https://github.com/ShadowBlip/InputPlumber/releases/download/v0.79.0/inputplumber-aarch64.tar.gz
+sha256: 123c858139d3b78e3f075158ce16b8fdc8067a10e31a93cb1e7f2aea816106bd
 strip: 1
 
-# 0.78.0 added devices/50-ayaneo_pocket_s2.yaml (upstream ac09f37), matching DT
-# `compatible: ayaneo,pocket-s2` — the board our own sm8650 config used to match on DT `model`, and
-# describing it differently. This branch evaluates upstream's description instead of suppressing it:
-# our sm8650 config and its capability map are deleted, upstream alone describes the Pocket S2, and
-# the KONKR Pocket FIT moves onto a copy of upstream's shape in
-# rootfs/overlay/etc/inputplumber/devices.d/50-konkr_pocket_fit.yaml, which is where the whole
-# reasoning lives — including the HW result: on a Pocket FIT running 0.78.1 that config binds and
-# emits upstream's three targets, and upstream's own S2 file loads without a parse warning.
+# 0.78.0 was the release where upstream started describing ARM handhelds at all: it added
+# devices/50-ayaneo_pocket_s2.yaml, matching DT `compatible: ayaneo,pocket-s2`, and we deleted our
+# own sm8650 description rather than suppress it. A Pocket FIT on 0.78.1 then confirmed upstream's
+# reading of that MCU on every point where the two disagreed.
+#
+# 0.79.0 continues it and covers most of the rest of our roster: 50-ayn_odin2.yaml (matching
+# ayn,odin2 AND ayn,odin2portal), 50-ayn_odin2_mini.yaml, 50-ayn_thor.yaml, 50-konkr_pocket_fit.yaml
+# and _elite, and 50-retroid_pocket{5,6,_flip2,_mini,_nova}.yaml — plus the capability maps behind
+# them: ayn2, ayn3, konkr2, konkr3, ret1, ret2, rsinput1. Every one of our device configs that those
+# supersede is deleted with this bump, including our own copy of the Pocket FIT config, which shared
+# a FILE NAME with the one upstream now ships and so would have won the tie and hidden it.
+#
+# What upstream still does NOT describe, and what stays in our overlay:
+#   * the five SM8550 AYANEO Pocket boards — 50-ayaneo_pocket_{ace,dmg,ds,evo,s1}.yaml
+#   * the AYN Thor Lite — 50-ayn_thor_lite.yaml, upstream's Retroid description (its `ret1` map, the
+#     same driver, the same 2020:3001 MCU) behind a DT `model` match, because its `compatible`
+#     `ayn,thor-lite` is not what upstream's 50-ayn_thor.yaml keys on
+#   * the MANGMI Pocket Max — 50-mangmi_pocket_max.yaml plus our sm8250_pocket_max_mcu map; its pad
+#     is an SPI MCU on a driver nothing else uses, so there is nothing upstream to adopt
 #
 # Binary links libiio.so.0 (IIO sensors/gyro) — pulled from the holo repo, not bundled.
-# Re-read on the 0.78.1 bump: still the only non-base NEEDED entry.
+# Re-read on the 0.79.0 bump: still the only non-base NEEDED entry (libudev, libgcc_s, libm, libc
+# are all base).
 deps: libiio

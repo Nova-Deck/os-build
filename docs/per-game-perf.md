@@ -160,3 +160,26 @@ Still open, deliberately:
   registration (a shim before `FEXInterpreter` that reads this file, keyed off `SteamAppId` in
   its own environment). Native arm64 titles would still need `%command%` launch options — an
   accepted gap for the rare case.
+
+## Tweaks that stay in Steam's launch options
+
+Not every per-title knob belongs in this file. One that deliberately does not:
+
+**`vblank_mode=3` — a GL title the frame limiter does not pace.** A Mesa GL client presenting
+faster than gamescope consumes runs ahead of the cap; forcing sync-to-vblank fixes it, proven on
+Gravity Circuit. It ships **per title, in Steam's launch options**:
+
+```
+vblank_mode=3 %command%
+```
+
+It is not a session-wide export and not an `env` entry here, for two separate reasons:
+
+- **Session-wide is the wrong blast radius.** `vblank_mode` is a Mesa **driconf** knob: it reaches
+  only clients rendering through our Mesa GL, does nothing for Vulkan, and forcing a wait on every
+  GL client to fix the few that need it puts the regression risk on titles that already pace
+  correctly.
+- **`env` cannot reach these titles anyway.** It applies to Proton launches only (see the gap
+  above), and a Mesa GL client is typically a native launch — exactly the path with no exec hook.
+  A Proton title rendering through wined3d's GL path *can* use `env`, but that is the rare case,
+  not the one this exists for.

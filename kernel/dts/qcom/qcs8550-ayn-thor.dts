@@ -276,10 +276,15 @@
 		pinctrl-1 = <&ts_p_rst_sleep &ts_p_int_sleep>;
 		pinctrl-names = "default", "sleep";
 
+		/*
+		 * Digitizer axes match the panel raster (1080 wide, portrait-native),
+		 * so no correction belongs here. Undoing the panel rotation is the
+		 * compositor's job, and gamescope applies it to touch coordinates as
+		 * well as to scanout; a swapped-x-y/inverted-x pair here rotates a
+		 * second time and lands X on Y.
+		 */
 		touchscreen-size-x = <1080>;
 		touchscreen-size-y = <1920>;
-		touchscreen-swapped-x-y;
-		touchscreen-inverted-x;
 
 		label = "top_touchscreen";
 	};
@@ -394,10 +399,9 @@
 		pinctrl-1 = <&ts_s_rst_sleep &ts_s_int_sleep>;
 		pinctrl-names = "default", "sleep";
 
+		/* Panel-aligned digitizer — see top_touchscreen above. */
 		touchscreen-size-x = <1080>;
 		touchscreen-size-y = <1240>;
-		touchscreen-swapped-x-y;
-		touchscreen-inverted-x;
 
 		label = "bottom_touchscreen";
 

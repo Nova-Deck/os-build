@@ -14,7 +14,12 @@
 #
 # WHAT REMAINS, AND WHY EACH ROW EARNS ITS PLACE:
 #
-#   KEY_BACK          The default sends this to keyboard KeyBack. This board's F1 key wants F1.
+#   KEY_BACK          The `...` button. The default sends it to keyboard KeyBack; it wants Steam's
+#                     quick-access panel. It emitted keyboard F1 until 2026-09-06, which is what
+#                     the deleted sm8250_retroid_mcu did too -- and when the AYN Thor Lite moved
+#                     onto upstream's ret1, whose equivalent row is gamepad QuickAccess, a press on
+#                     hardware opened QAM and settled which of the two is right. This board is the
+#                     other half of that divergence, closed.
 #   ABS_HAT2X/Y       The triggers. Default capability for both is NotImplemented -- unclaimed,
 #                     they reach nothing at all.
 #   HAPPY1 / HAPPY2   The M1/M2 back buttons. The default table covers BTN_TRIGGER_HAPPY5..10 only,
@@ -43,14 +48,18 @@ name: MANGMI Pocket Max Gamepad
 id: sm8250_pocket_max_mcu
 
 mapping:
-  - name: F1 Key
+  # The `...` button. Steam's quick-access panel, not the keyboard F1 this used to emit -- see the
+  # header. This is the only row in the file that does not simply fill a gap in the default table:
+  # KEY_BACK does translate by default, to keyboard KeyBack, which is not what the button is for.
+  - name: QuickAccess
     source_events:
       - evdev:
           event_type: KEY
           event_code: KEY_BACK
           value_type: button
     target_event:
-      keyboard: KeyF1
+      gamepad:
+        button: QuickAccess
 
   - name: Right Trigger
     source_events:

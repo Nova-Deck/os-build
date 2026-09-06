@@ -23,10 +23,14 @@
 # BTN_TRIGGER_HAPPY1/2 by our capability map -- were being dropped by the target. Every other
 # board in this directory already emits an Elite.
 #
-# The keyboard target is required, not decorative: the capability map sends KEY_BACK to keyboard
-# F1, so without it that button reaches nothing. (Note the divergence from 50-ayn_thor_lite.yaml,
-# which takes upstream's ret1 and puts its equivalent button on gamepad QuickAccess instead.
-# Whether this board should follow is a question for hardware, not for this bump.)
+# THE KEYBOARD TARGET IS GONE, and that follows from the `...` button moving to gamepad QuickAccess
+# (2026-09-06, settled by a press on an AYN Thor Lite running upstream's ret1). It was here for
+# exactly one reason -- the capability map used to send KEY_BACK to keyboard F1 -- and with that row
+# retargeted, nothing in this composite produces a keyboard capability at all. The joypad's whole
+# key set is BTN_* plus that single KEY_BACK (kernel/patches/0037), and the pwm-vibrator is
+# force-feedback only, so the target had nothing left to carry. 50-ayn_thor_lite.yaml and upstream's
+# Retroid configs emit xbox-elite alone for the same reason; the rp6 and nova configs keep a
+# keyboard target only because their gpio-keys volume-up node is a source, which it is not here.
 version: 1
 kind: CompositeDevice
 name: MANGMI Pocket Max
@@ -61,4 +65,3 @@ source_devices:
 
 target_devices:
     - xbox-elite
-    - keyboard

@@ -40,10 +40,39 @@ brightness write to straddle the flag flip.
 cmd_mutex brackets the prepare/restore pair, so a single latched flag on the
 host is sufficient -- transfers cannot nest.
 
+The latch alone is NOT enough, and dsi_host_transfer() takes dev_mutex for the
+whole transfer as well. Its existing `!msm_host->power_on` test is an UNLOCKED
+read of a flag that msm_dsi_host_power_off() clears under dev_mutex, so the
+test can pass and the entire teardown -- host_disable(), host_power_off(),
+msm_dsi_phy_disable() -- then run underneath a transfer already in flight. The
+transfer's link-clock reference outlives the PHY, which is the "Turning OFF PHY
+while PLL is on" above, and the panel is wedged from there. Holding dev_mutex
+excludes power_on()/power_off() for the duration and re-tests power_on under
+it: a modeset now waits for an in-flight DCS write instead of racing it, and a
+brightness write to an unpowered host is refused instead of powering the link
+up behind the modeset's back. Both locks are needed -- dev_mutex does not cover
+`enabled`, which msm_dsi_host_enable/disable() write with no lock at all, so
+the latch is still what keeps the refcount balanced.
+
+MEASURED, both directions, on a MANGMI Pocket Max dev card (2026-09-07). The
+race reproduces on demand in ~15 s -- hammer DCS 0x51 through the backlight
+sysfs while killing the gamescope session tree so it re-modesets -- and that rig
+answers the "is this import even needed" question in both directions:
+
+  - WITHOUT this patch (upstream behaviour), it wedges on iteration 1 from the
+    transfer's own link_clk_set_rate(): dsi_link_clk_set_rate_6g <-
+    msm_dsi_host_xfer_prepare <- dsi_host_transfer <-
+    mipi_dsi_dcs_set_display_brightness_large, straight into "rcg didn't update
+    its configuration". The set_rate skip is load-bearing.
+
+  - WITH the skip and the latch but WITHOUT dev_mutex, it also wedges on
+    iteration 1, from the modeset side. That is the version that shipped in
+    ota/v0.3.4 and did not fix the black screen.
+
 Signed-off-by: Philippe Simons <simons.philippe@gmail.com>
 ---
- drivers/gpu/drm/msm/dsi/dsi_host.c | 38 +++++++++++++++++++++++++++++++++++---
- 1 file changed, 35 insertions(+), 3 deletions(-)
+ drivers/gpu/drm/msm/dsi/dsi_host.c | 67 ++++++++++++++++++++++++++++++++++++--
+ 1 file changed, 64 insertions(+), 3 deletions(-)
 
 diff --git a/drivers/gpu/drm/msm/dsi/dsi_host.c b/drivers/gpu/drm/msm/dsi/dsi_host.c
 index 982abaa..6bdeb71 100644
@@ -70,7 +99,50 @@ index 982abaa..6bdeb71 100644
  
  static inline u32 dsi_read(struct msm_dsi_host *msm_host, u32 reg)
  {
-@@ -2168,12 +2178,26 @@ int msm_dsi_host_xfer_prepare(struct mipi_dsi_host *host,
+@@ -1768,12 +1778,41 @@ static ssize_t dsi_host_transfer(struct mipi_dsi_host *host,
+ 	struct msm_dsi_host *msm_host = to_msm_dsi_host(host);
+ 	int ret;
+
+-	if (!msg || !msm_host->power_on)
++	if (!msg)
+ 		return -EINVAL;
+
++	/*
++	 * dev_mutex, and not just the power_on test: that test is unlocked, and
++	 * power_on is cleared by msm_dsi_host_power_off() from the modeset path,
++	 * which takes dev_mutex and never cmd_mutex. So the test can pass and the
++	 * whole teardown -- host_disable(), host_power_off(), msm_dsi_phy_disable()
++	 * -- then run underneath a transfer that is already in flight.
++	 *
++	 * That window is what wedges the panel. The transfer holds the link clocks
++	 * across msm_dsi_phy_disable(), which turns the PHY off with its PLL still
++	 * running ("Turning OFF PHY while PLL is on"); the next power_on() then
++	 * cannot reprogram the pixel RCG against a parent that is not ticking
++	 * ("disp_cc_mdss_pclk0_clk_src: rcg didn't update its configuration"), and
++	 * from there every DCS transfer times out at -ETIMEDOUT, the panel never
++	 * gets its init sequence, and only a reboot clears it.
++	 *
++	 * Holding dev_mutex for the transfer excludes power_on()/power_off() for
++	 * its duration and re-tests power_on under that lock. A modeset now waits
++	 * for an in-flight DCS write instead of racing it. No deadlock: the
++	 * transfer path never takes dev_mutex below this point, and the modeset
++	 * path calls into the panel (and thus back into ->transfer) only after
++	 * msm_dsi_host_power_on() has already dropped dev_mutex.
++	 */
++	mutex_lock(&msm_host->dev_mutex);
++	if (!msm_host->power_on) {
++		mutex_unlock(&msm_host->dev_mutex);
++		return -EINVAL;
++	}
++
+ 	mutex_lock(&msm_host->cmd_mutex);
+ 	ret = msm_dsi_manager_cmd_xfer(msm_host->id, msg);
+ 	mutex_unlock(&msm_host->cmd_mutex);
++	mutex_unlock(&msm_host->dev_mutex);
+
+ 	return ret;
+ }
+@@ -2168,12 +2207,26 @@ int msm_dsi_host_xfer_prepare(struct mipi_dsi_host *host,
  	/*
  	 * mdss interrupt is generated in mdp core clock domain
  	 * mdp clock need to be enabled to receive dsi interrupt

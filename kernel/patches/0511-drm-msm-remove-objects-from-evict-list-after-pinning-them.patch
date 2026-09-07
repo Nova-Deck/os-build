@@ -1,0 +1,30 @@
+Subject: [PATCH] drm/msm: remove objects from evict list after pinning them
+
+Once objects are pinned they should not be kept in the evict list as that
+will cause drm_gpuvm_validate to keep iterating a growing list of objects
+needlessly.
+
+Once an object is pinned remove it from the list.
+
+Fixes: 2e6a8a1fe2b2 ("drm/msm: Add VM_BIND ioctl")
+
+BACKPORT from the freedreno list, "[PATCH v2] drm/msm: remove objects from
+evit list after pinning them", Anna Maniscalco, 2026-07-23:
+https://www.mail-archive.com/freedreno@lists.freedesktop.org/msg46465.html
+The Fixes: tag points at the VM_BIND ioctl, so this costs us on every
+VM_BIND submit -- which is the path Turnip takes.
+
+---
+
+diff --git a/drivers/gpu/drm/msm/msm_gem_vma.c b/drivers/gpu/drm/msm/msm_gem_vma.c
+--- a/drivers/gpu/drm/msm/msm_gem_vma.c
++++ b/drivers/gpu/drm/msm/msm_gem_vma.c
+@@ -458,6 +458,8 @@
+ 			return ret;
+ 	}
+ 
++	drm_gpuvm_bo_evict(vm_bo, false);
++
+ 	return 0;
+ }
+ 

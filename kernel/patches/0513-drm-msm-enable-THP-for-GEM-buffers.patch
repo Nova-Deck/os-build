@@ -1,0 +1,48 @@
+Subject: [PATCH] drm/msm: enable THP for GEM buffers
+
+More than 2x speedup on darktable benchmark which was bottlenecked on page
+allocation/pinning.
+
+BACKPORT from the freedreno list, "[PATCH 1/2] drm/msm: Enable THP for GEM
+buffers", Rob Clark, 2026-09-03:
+https://www.mail-archive.com/freedreno@lists.freedesktop.org/msg46777.html
+
+The core plumbing (drm_gem_huge_mnt_create(), dev->huge_mnt and the
+shmem_file_setup_with_mnt() path in drm_gem_object_init()) is already in
+the pinned 7.2.3 -- only the msm side is missing, so this is small.
+
+"within_size" only allocates a huge page when it falls fully within the GEM
+object's size, so it does not inflate small buffers.  Failure is not fatal:
+without the mount, drm_gem_object_init() just falls back to the default
+shmem mount, so we log it and carry on rather than failing probe over a
+performance optimisation.
+
+---
+
+diff --git a/drivers/gpu/drm/msm/msm_drv.c b/drivers/gpu/drm/msm/msm_drv.c
+--- a/drivers/gpu/drm/msm/msm_drv.c
++++ b/drivers/gpu/drm/msm/msm_drv.c
+@@ -58,6 +58,10 @@
+ MODULE_PARM_DESC(separate_gpu_drm, "Use separate DRM device for the GPU (0=single DRM device for both GPU and display (default), 1=two DRM devices)");
+ module_param(separate_gpu_kms, bool, 0400);
+ 
++static bool transparent_hugepage = true;
++MODULE_PARM_DESC(transparent_hugepage, "Use transparent hugepages for GEM buffers");
++module_param(transparent_hugepage, bool, 0400);
++
+ DECLARE_FAULT_ATTR(fail_gem_alloc);
+ DECLARE_FAULT_ATTR(fail_gem_iova);
+ 
+@@ -148,6 +152,12 @@
+ 	}
+ 
+ 	dma_set_max_seg_size(dev, UINT_MAX);
++
++	if (transparent_hugepage) {
++		ret = drm_gem_huge_mnt_create(ddev, "within_size");
++		if (ret)
++			DRM_DEV_INFO(dev, "no THP for GEM buffers: %d\n", ret);
++	}
+ 
+ 	/* Bind all our sub-components: */
+ 	if (gpu_ops)

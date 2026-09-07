@@ -1,0 +1,41 @@
+Subject: [PATCH] drm/msm/gem: add modparam to disable shrinker blocking
+
+Normally if we are under enough memory pressure, the shrinker will
+eventually start waiting for BOs to become idle.  In some very latency
+sensitive use-cases this is undesirable.
+
+BACKPORT from the freedreno list, "[PATCH 2/2] drm/msm/gem: Add modparam to
+disable shrinker blocking", Rob Clark, 2026-09-03:
+https://www.mail-archive.com/freedreno@lists.freedesktop.org/msg46776.html
+
+Left at the upstream default (true), i.e. no behaviour change on boot.  The
+point is to expose the knob: a game hitting memory pressure would rather
+drop a frame's worth of reclaim than block the submit path.  Flip it with
+msm.eviction_can_block=0 or via /sys/module/msm/parameters/.
+
+---
+
+diff --git a/drivers/gpu/drm/msm/msm_gem_shrinker.c b/drivers/gpu/drm/msm/msm_gem_shrinker.c
+--- a/drivers/gpu/drm/msm/msm_gem_shrinker.c
++++ b/drivers/gpu/drm/msm/msm_gem_shrinker.c
+@@ -19,6 +19,10 @@
+ MODULE_PARM_DESC(enable_eviction, "Enable swappable GEM buffers");
+ module_param(enable_eviction, bool, 0600);
+ 
++static bool eviction_can_block = true;
++MODULE_PARM_DESC(eviction_can_block, "Allow the shrinker to block waiting for BOs to become idle");
++module_param(eviction_can_block, bool, 0600);
++
+ static bool can_swap(void)
+ {
+ 	return enable_eviction && get_nr_swap_pages() > 0;
+@@ -26,6 +30,9 @@
+ 
+ static bool can_block(struct shrink_control *sc)
+ {
++	if (!eviction_can_block)
++		return false;
++
+ 	return (sc->gfp_mask & __GFP_DIRECT_RECLAIM) ||
+ 	       (current_is_kswapd() && (sc->gfp_mask & __GFP_KSWAPD_RECLAIM));
+ }

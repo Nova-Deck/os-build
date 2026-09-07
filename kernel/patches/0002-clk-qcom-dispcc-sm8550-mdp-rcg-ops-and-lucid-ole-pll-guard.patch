@@ -1,0 +1,103 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Philippe Simons <simons.philippe@gmail.com>
+Date: Mon, 7 Sep 2026 12:30:00 +0200
+Subject: [PATCH] clk: qcom: dispcc-sm8550 mdp RCG ops + Lucid Ole PLL guard
+
+TWO HUNKS, ONE PATCH, DELIBERATELY. They are a pair: the second is fatal without
+the first, in a way nothing reports. Splitting them into two files invites a bump
+to drop one, so they cannot be separated here.
+
+Both are backports from "SM8450 QoL changes (dispcc)" (lore.kernel.org, Esteban
+Urrutia, Reviewed-by Konrad Dybcio), neither in the pinned 7.2.3.
+
+1. clk-alpha-pll.c -- "Check Lucid Ole PLL status before configuring"
+   (Fixes: 3132a9a11e57). Skip clk_lucid_ole_pll_configure() when the PLL is
+   already enabled, because "there are RCGs that will lock up if we disable the
+   PLL below". This is an OMISSION being corrected, not new behaviour: 7.2.3
+   already carries the identical guard in three siblings in the same file --
+   Trion (:1723), Lucid 5LPE (:1945), Lucid Evo (:2341) -- and Lucid Ole is the
+   only one without it.
+
+   It reaches us because our boards hand over with the display already lit (the
+   cont_splash carve-out), so disp_cc_pll0/pll1 are RUNNING when dispcc-sm8550.c
+   probes and calls clk_lucid_ole_pll_configure() on both unconditionally
+   (:1797-1798). That is what produced, on every boot:
+
+     [    0.697] disp_cc_mdss_mdp_clk_src: rcg didn't update its configuration.
+                 update_config <- clk_rcg2_shared_init, CPU#7 swapper/0/1
+
+   The warning was a SYMPTOM of the PLL being reprogrammed under a live RCG.
+
+2. dispcc-sm8550.c -- "Fix disp_cc_mdss_mdp_clk_src ops", retargeted from
+   dispcc-sm8450 (same node, same shape). clk_rcg2_shared_no_init_park_ops leaves
+   the frequency alone at registration instead of parking the RCG, which upstream
+   wants because the park shows as a flicker on a bootloader-lit panel -- ours.
+
+   This also drops a LOCAL GUESS that lived here: CLK_OPS_PARENT_ENABLE, whose
+   commit message claimed it fixed the warning above. It never did -- the flag
+   covers .set_rate and .set_parent while the failing update comes from .init --
+   and the warning survived it for as long as it was in the tree. Removing it
+   changes nothing observable. The node is now byte-for-byte the upstream shape,
+   matching dispcc-x1e80100.
+
+COVERS BOTH SHIPPING SoCs: dispcc-sm8550.c serves SM8650 too, via
+`{ .compatible = "qcom,sm8650-dispcc" }` in its match table.
+
+WHY THEY CANNOT BE SPLIT, measured on an AYANEO Pocket ACE:
+
+  hunk 2 alone, no flag      -> BLACK PANEL   (build 20260907T094603Z)
+  hunk 2 alone, with flag    -> BLACK PANEL   (build 20260907T100424Z)
+  hunk 1 alone               -> works, warning 0 (build 20260907T120035Z)
+  both (this)                -> works, warning 0 (build 20260907T122602Z)
+
+Without the .init park the RCG stays sourced from whatever the bootloader left
+running, and without hunk 1 probe then reprograms exactly that PLL underneath it
+-- the lock-up hunk 1 exists to prevent. And the failure is INVISIBLE to every
+remote probe: the black builds reported no warning, no underrun, no vblank
+timeout, backlight on, connector connected, gamescope presenting and flips
+completing. Only a human looking at the panel could tell them from a good build.
+
+REACHES MORE THAN THE DISPLAY, untested: gpucc-sm8550.c and gpucc-sm8650.c call
+clk_lucid_ole_pll_configure() too, so a bootloader-enabled GPU PLL is no longer
+reconfigured at probe either. Suspect hunk 1 first for any GPU-side surprise.
+
+The sm8450 halves are upstream; these sm8550 retargets are not, and should be
+sent.
+
+Signed-off-by: Esteban Urrutia <esteuwu@proton.me>
+Signed-off-by: Philippe Simons <simons.philippe@gmail.com>
+---
+ drivers/clk/qcom/clk-alpha-pll.c | 9 +++++++++
+ drivers/clk/qcom/dispcc-sm8550.c | 2 +-
+ 2 files changed, 10 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/clk/qcom/clk-alpha-pll.c b/drivers/clk/qcom/clk-alpha-pll.c
+--- a/drivers/clk/qcom/clk-alpha-pll.c
++++ b/drivers/clk/qcom/clk-alpha-pll.c
+@@ -2372,6 +2372,15 @@ void clk_lucid_ole_pll_configure(struct clk_alpha_pll *pll, struct regmap *regma
+ {
+ 	u32 lval = config->l;
+
++	/*
++	 * If the bootloader left the PLL enabled it's likely that there are
++	 * RCGs that will lock up if we disable the PLL below.
++	 */
++	if (trion_pll_is_enabled(pll, regmap)) {
++		pr_debug("Lucid Ole PLL is already enabled, skipping configuration\n");
++		return;
++	}
++
+ 	lval |= TRION_PLL_CAL_VAL << LUCID_EVO_PLL_CAL_L_VAL_SHIFT;
+ 	lval |= TRION_PLL_CAL_VAL << LUCID_OLE_PLL_RINGOSC_CAL_L_VAL_SHIFT;
+ 	clk_alpha_pll_write_config(regmap, PLL_L_VAL(pll), lval);
+diff --git a/drivers/clk/qcom/dispcc-sm8550.c b/drivers/clk/qcom/dispcc-sm8550.c
+--- a/drivers/clk/qcom/dispcc-sm8550.c
++++ b/drivers/clk/qcom/dispcc-sm8550.c
+@@ -622,7 +622,7 @@ static struct clk_rcg2 disp_cc_mdss_mdp_clk_src = {
+ 		.parent_data = disp_cc_parent_data_8,
+ 		.num_parents = ARRAY_SIZE(disp_cc_parent_data_8),
+ 		.flags = CLK_SET_RATE_PARENT,
+-		.ops = &clk_rcg2_shared_ops,
++		.ops = &clk_rcg2_shared_no_init_park_ops,
+ 	},
+ };

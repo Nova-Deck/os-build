@@ -1,0 +1,30 @@
+Subject: [PATCH] drm/msm/dpu: clear pending peripheral flush state
+
+dpu_hw_ctl_clear_pending_flush() resets the cached per-block state after a
+flush transaction, but misses pending_periph_flush_mask.  The peripheral
+flush updater accumulates interface bits in this mask.  A later transaction
+which sets the top-level peripheral flush bit can write stale interface
+bits to CTL_PERIPH_FLUSH together with the current state.
+
+In the pinned 7.2.3 the mask is accumulated by the peripheral flush updater
+and written to CTL_PERIPH_FLUSH, but never cleared -- and the peripheral
+flush path is what command-mode and DSC panels use, which is every internal
+panel we ship.
+
+BACKPORT from the freedreno list, "[PATCH] drm/msm/dpu: clear pending
+peripheral flush state", 2026-08-27:
+https://www.mail-archive.com/freedreno@lists.freedesktop.org/msg46695.html
+
+---
+
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_ctl.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_ctl.c
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_ctl.c
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_ctl.c
+@@ -118,6 +118,7 @@
+ 	ctx->pending_intf_flush_mask = 0;
+ 	ctx->pending_wb_flush_mask = 0;
+ 	ctx->pending_cwb_flush_mask = 0;
++	ctx->pending_periph_flush_mask = 0;
+ 	ctx->pending_merge_3d_flush_mask = 0;
+ 	ctx->pending_dsc_flush_mask = 0;
+ 	ctx->pending_cdm_flush_mask = 0;

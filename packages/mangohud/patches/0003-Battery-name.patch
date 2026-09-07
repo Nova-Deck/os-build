@@ -1,38 +1,67 @@
-From fc30aa5437bee410ada66244f8e2a163eb58a488 Mon Sep 17 00:00:00 2001
-From: John Williams <porschemad911@gmail.com>
-Date: Sun, 24 May 2026 22:28:30 +1000
-Subject: [PATCH 2/3] Battery name
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: novadeck <novadeck@localhost>
+Date: Sun, 7 Sep 2026 19:30:00 +0200
+Subject: [PATCH] Battery: find the pack by supply TYPE, not by name
 
+Upstream matches "BAT" in the power-supply directory name, which is x86 firmware
+naming. No board we ship uses it:
+
+  SM8250            /sys/class/power_supply/battery          (pm8150b fuel gauge)
+  SM8550/8650/8750  /sys/class/power_supply/qcom-battmgr-bat (PMIC GLINK battmgr)
+
+The previous novadeck patch hardcoded the first of those, so on every SM8550 and
+SM8650 board -- i.e. most of the fleet -- the HUD found no battery at all and the
+battery and power fields were blank. Measured on a KONKR Pocket FIT (SM8650).
+
+Match POWER_SUPPLY_PROP_TYPE == "Battery" instead, which is what the kernel
+guarantees and what both names resolve to, and skip scope=Device so a wireless
+controllers own pack cannot be mistaken for the system battery -- something the
+BAT* match used to exclude by accident. battPath holds two entries, so the loop
+now stops at two rather than writing past the end.
 ---
- src/battery.cpp | 12 +++++++-----
- 1 file changed, 7 insertions(+), 5 deletions(-)
-
-diff --git a/src/battery.cpp b/src/battery.cpp
-index 1612bff..16b0355 100644
 --- a/src/battery.cpp
 +++ b/src/battery.cpp
-@@ -10,14 +10,16 @@ void BatteryStats::numBattery() {
-     if (!fs::exists("/sys/class/power_supply/")) {
-          batteryCount = 0;
-     }
--    fs::path path("/sys/class/power_supply/");
--    for (auto& p : fs::directory_iterator(path)) {
+@@ -7,16 +7,32 @@
+ 
+ void BatteryStats::numBattery() {
+     int batteryCount = 0;
+-    if (!fs::exists("/sys/class/power_supply/")) {
+-         batteryCount = 0;
+-    }
++    const int battMax = sizeof(battPath) / sizeof(battPath[0]);
+     fs::path path("/sys/class/power_supply/");
++    if (!fs::exists(path)) {
++        batt_count = 0;
++        batt_check = true;
++        return;
++    }
+     for (auto& p : fs::directory_iterator(path)) {
 -        string fileName = p.path().filename();
 -        if (fileName.find("BAT") != std::string::npos) {
 -            battPath[batteryCount] = p.path();
-+    
-+    else {
-+        string battery = "/sys/class/power_supply/battery";
-+        
-+        if (fs::exists(battery)) {
-+            battPath[batteryCount] = battery;
-             batteryCount += 1;
-         }
+-            batteryCount += 1;
+-        }
++        if (batteryCount >= battMax)
++            break;
++        // Match on the supply's TYPE rather than its name. Only x86 firmware calls the pack
++        // BAT*: a Qualcomm handheld exposes "battery" (pm8150b fuel gauge, SM8250) or
++        // "qcom-battmgr-bat" (PMIC GLINK, SM8550/SM8650/SM8750), and the same directory holds
++        // the charger and wireless supplies, which are not batteries at all.
++        string type;
++        std::ifstream type_input(p.path() / "type");
++        if (!getline(type_input, type) || type.compare(0, 7, "Battery") != 0)
++            continue;
++        // scope=Device is a peripheral's pack -- a wireless controller, a stylus -- not the
++        // system battery. Matching BAT* excluded those by accident; matching the type does not.
++        string scope;
++        std::ifstream scope_input(p.path() / "scope");
++        if (getline(scope_input, scope) && scope.compare(0, 6, "Device") == 0)
++            continue;
++        battPath[batteryCount] = p.path();
++        batteryCount += 1;
      }
-+
      batt_count = batteryCount;
      batt_check = true;
- }
 -- 
 2.47.3
 

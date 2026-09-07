@@ -27,8 +27,11 @@ Stock MangoHud only knows how to read desktop GPUs (amdgpu/i915/nvidia) and gene
 - `0002` — **kgsl/devfreq node probing.** Try `/sys/class/kgsl/kgsl-3d0`, then
   `/sys/class/devfreq/5900000.gpu` (SM6115), then `/sys/class/devfreq/3d00000.gpu`
   (SM8250/SM8550/SM8650/SM8750), and use the first that exists instead of one hardcoded path.
-- `0003` — **Battery name.** Use the single `/sys/class/power_supply/battery` node (Qualcomm PMIC
-  fuel gauge) instead of scanning for `BAT*`.
+- `0003` — **Battery by type.** Pick the power supply whose `type` reads `Battery` instead of
+  scanning for `BAT*`, which is x86 firmware naming that no board we ship uses. The name differs
+  per SoC — `battery` on SM8250 (pm8150b fuel gauge), `qcom-battmgr-bat` on SM8550/8650/8750
+  (PMIC GLINK) — so matching the type is the only form that covers all three. `scope=Device` is
+  skipped so a controller's own pack cannot be mistaken for the system battery.
 - `0004` — **Qualcomm battery power_now.** Prefer `current_now * voltage_now` for discharge
   wattage, fall back to `power_now`.
 - `0005` — **RAM label.** Show `RAM` instead of `PMEM` for the process-memory HUD element.
@@ -39,7 +42,8 @@ Stock MangoHud only knows how to read desktop GPUs (amdgpu/i915/nvidia) and gene
 GPU hwmon layout they target. `0002` now names `3d00000.gpu` as covering SM8650 explicitly, so that
 half is no longer a "close enough" bet. If a HUD field reads wrong on HW, verify the on-device sysfs
 path and adjust the patch: GPU clock comes from `/sys/class/devfreq/3d00000.gpu/cur_freq` (`0002`),
-battery from `/sys/class/power_supply/battery` (`0003`/`0004`/`0006`).
+battery from whichever `/sys/class/power_supply/*` entry reports `type=Battery` — measured
+`qcom-battmgr-bat` on a KONKR Pocket FIT, 2026-09-07 (`0003`/`0004`/`0006`).
 
 **GPU temperature is a substring match, and that is load-bearing.** `0002` used to also repoint the
 hwmon lookup from `find_hwmon_sensor_dir("gpu")` to `"gpuss_0_thermal"`; it no longer does, and

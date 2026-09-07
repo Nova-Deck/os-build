@@ -17,7 +17,26 @@ RequiresMountsFor=/home/deck
 Type=simple
 User=root
 Restart=always
-KillMode=process
+# UPSTREAM SAYS `process`; WE SAY `mixed`, and this is the second deliberate deviation.
+# `process` signals only the main PID, so everything the loader spawned is ORPHANED when the unit
+# stops -- systemd says so itself: "Unit process 914 (FEXServer) remains running after unit
+# stopped" / "Unit process 967 (Decky Loader) remains running". On a Deck that is harmless; here
+# the loader is x86 under FEX, so its children include a ROOT FEXServer, and those survivors sit
+# outside session-N.scope holding three mounts at local-fs teardown: /tmp (the FEXServer socket),
+# /root (root FEX's .local/share/fex-emu Server/RootFS locks -- /root is an offload bind on our
+# layout, unlike SteamOS) and /usr/share/guestos/fex-mesa. Hence "target is busy" x3 on every
+# shutdown. `mixed` keeps upstream's intent -- SIGTERM still goes to the main process ONLY, so a
+# normal restart does not signal plugins directly -- but the SIGKILL at the timeout covers the
+# whole cgroup, so nothing outlives the unit.
+KillMode=mixed
+# 15s IS UPSTREAM'S NUMBER AND IT IS NOW AMPLE -- the whole stop takes ~0.4s (HW, Pocket ACE,
+# 2026-09-07: "Killing plugins..." to "Deactivated successfully"). It used to hit this timeout and
+# get SIGKILLed, and NOT because of FEX: two of three plugins always stopped in 0.1s on a shared
+# hot FEXServer. It was novadeck-monitor holding a non-daemon asyncio.to_thread worker parked in
+# busctl against novadeck-powerd -- which was also what the ~10s "Cancelling tasks..." tail was
+# waiting on, so it looked like an upstream asyncio wart and was ours. Awaiting the subprocess
+# instead removed both. Leave this at 15: nothing needs it now, and a smaller number would only
+# matter on the day something regresses into needing it.
 TimeoutStopSec=15
 ExecStart=/home/deck/homebrew/services/PluginLoader
 WorkingDirectory=/home/deck/homebrew/services

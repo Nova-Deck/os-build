@@ -6,17 +6,16 @@ from novadeck_monitor.telemetry import telemetry
 
 
 class Plugin:
-    # Offload blocking work (sysfs sweeps, busctl) to a thread so a slow call can't stall
-    # Decky's asyncio loop.
+    # The sysfs sweeps go to a thread so a slow read can't stall Decky's asyncio loop. The
+    # busctl call does NOT: it is awaited, because a worker thread parked in a subprocess is
+    # non-daemon and blocks interpreter exit -- which cost the Monitor a SIGKILL on every
+    # shutdown. powerd.py's _busctl docstring has the measurement.
     async def get_telemetry(self):
-        # One call, not two: the panel polls at 1 Hz and the fan/temperature half of what it
+        # One busctl, not two: the panel polls at 1 Hz and the fan/temperature half of what it
         # shows comes from powerd, so pairing the sysfs read with a single GetAll keeps the
-        # panel at one busctl subprocess per second instead of two.
-        return await asyncio.to_thread(self._build_telemetry)
+        # panel at one subprocess per second instead of two.
+        base = await asyncio.to_thread(telemetry)
+        return {**base, "power": await power_snapshot()}
 
     async def get_os_version(self):
         return await asyncio.to_thread(os_version)
-
-    @staticmethod
-    def _build_telemetry():
-        return {**telemetry(), "power": power_snapshot()}

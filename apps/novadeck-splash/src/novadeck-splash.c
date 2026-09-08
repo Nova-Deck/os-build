@@ -23,8 +23,15 @@
 // stb_truetype.h, which is a header.
 //
 // Everything the program will ever need from the filesystem is read BEFORE the main loop, with
-// the single exception of the status and takeover files — both of which live on /run, which
-// switch_root moves into the new root, so those paths stay valid across the pivot.
+// the single exception of the status and takeover files.
+//
+// THOSE TWO ARE REACHED THROUGH A DIRECTORY FD, NEVER A PATH. An earlier version of this comment
+// claimed "/run is moved into the new root, so those paths stay valid across the pivot" — which
+// is true of the MOUNT and false of this process. switch_root chroots itself and its children
+// and then deletes the old root's contents; a process forked before the pivot keeps that now
+// empty root, so every path-based open() fails afterwards. On hardware that produced a splash
+// that painted correctly, ticked forever, and never yielded the display, with nothing in any log.
+// See the note above read_line_at() for the full account.
 //
 // Backends:
 //   drm    KMS dumb buffer on a chosen connector. Holds DRM master for as long as it owns the
@@ -81,13 +88,26 @@ static uint32_t bg = 0xFF000000u;
 static volatile sig_atomic_t running = 1;
 static void on_signal(int s) { (void)s; running = 0; }
 
+// ONE write() per message, deliberately. In the initramfs this program's stderr is /dev/kmsg,
+// where every write becomes its own kernel log record — so the obvious
+// fprintf(prefix) + vfprintf(body) + fputc('\n') split one message into three records, and what
+// landed in the journal was three EMPTY "novadeck-splash:" lines with the actual text lost.
+// On a board with no serial console this program's own stderr is the entire debugging channel
+// ([[sm8650-no-uart]]), so shredding it turns any failure here into a black screen with no
+// account of itself.
 static void note(const char *fmt, ...) {
+    char buf[512];
+    int n = snprintf(buf, sizeof buf, "novadeck-splash: ");
     va_list ap;
     va_start(ap, fmt);
-    fprintf(stderr, "novadeck-splash: ");
-    vfprintf(stderr, fmt, ap);
-    fputc('\n', stderr);
+    int m = vsnprintf(buf + n, sizeof buf - n - 1, fmt, ap);
     va_end(ap);
+    if (m < 0) return;
+    n += m;
+    if (n > (int)sizeof buf - 2) n = (int)sizeof buf - 2;   // vsnprintf truncated; keep room for \n
+    buf[n++] = '\n';
+    ssize_t w = write(STDERR_FILENO, buf, (size_t)n);
+    (void)w;
 }
 
 static void *xalloc(size_t n) {
@@ -429,10 +449,50 @@ static void compose(const char *status) {
 // One line, read fresh each tick. Writers replace the file by rename, so a reader either sees the
 // whole old line or the whole new one — never half of either.
 
-static void read_line_file(const char *path, char *out, size_t n) {
+// THESE FILES ARE REACHED THROUGH A DIRECTORY FD, NEVER A PATH, AND THAT IS THE WHOLE POINT.
+//
+// This process is started from the initramfs and keeps running across switch_root. switch_root
+// chroots ITSELF and its children (systemd) into the new root and then DELETES the old root's
+// contents to free the memory. A process forked before the pivot keeps its old root directory —
+// which is now an empty tree. So every path-based open() fails afterwards, silently: the drawer
+// goes on ticking, the logo stays on screen because the framebuffer was already composed, and
+// the status and takeover files simply read as empty forever. The splash never yields, gamescope
+// never gets DRM master, and the panel is black for the rest of the session with nothing in any
+// log to say why. Measured on hardware 2026-09-08.
+//
+// A directory fd does not go through the process's root at all. /run is a tmpfs that switch_root
+// MOVES rather than recreates, so a dirfd opened on it before the pivot still names the same
+// live directory afterwards, whatever the process's root looks like. openat() from there works
+// in every phase — the pre-pivot drawer, the session, and the shutdown screens — so this is not
+// a special case bolted on for the initramfs, it is just the correct way to hold the reference.
+//
+// (Same shape as the reason plymouth's client/daemon channel is an ABSTRACT unix socket: an
+// identifier that survives the pivot because it never goes through the old root's paths.)
+
+// Split a path into a dirfd on its parent plus the file's basename. Returns -1 when the parent
+// cannot be opened, which the caller reports; a missing directory here is a real error, not a
+// condition to paper over.
+static int open_parent_dir(const char *path, char *name, size_t n) {
+    const char *slash = strrchr(path, '/');
+    const char *base = slash ? slash + 1 : path;
+    if (!*base) return -1;
+    if (snprintf(name, n, "%s", base) >= (int)n) return -1;
+    char dir[512];
+    if (!slash) { snprintf(dir, sizeof dir, "."); }
+    else if (slash == path) { snprintf(dir, sizeof dir, "/"); }
+    else {
+        size_t len = (size_t)(slash - path);
+        if (len >= sizeof dir) return -1;
+        memcpy(dir, path, len);
+        dir[len] = 0;
+    }
+    return open(dir, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+}
+
+static void read_line_at(int dirfd, const char *name, char *out, size_t n) {
     out[0] = 0;
-    if (!path) return;
-    int fd = open(path, O_RDONLY | O_CLOEXEC);
+    if (dirfd < 0 || !name) return;
+    int fd = openat(dirfd, name, O_RDONLY | O_CLOEXEC);
     if (fd < 0) return;
     ssize_t r = read(fd, out, n - 1);
     close(fd);
@@ -908,7 +968,8 @@ static int flag(int argc, char **argv, const char *k) {
 static void usage(void) {
     fputs(
         "usage: novadeck-splash [options]\n"
-        "  --backend drm|fbdev|ppm|auto   default auto (drm if a card is present, else fbdev)\n"
+        "  --backend drm|fbdev|ppm|null|auto  default auto (drm if a card is present, else fbdev)\n"
+        "                                 null = run the control loop, present nowhere (tests)\n"
         "  --card PATH                    DRM device (default /dev/dri/card0)\n"
         "  --connector NAME               e.g. DSI-1; default is the first connected one\n"
         "  --fbdev PATH                   default /dev/fb0\n"
@@ -966,7 +1027,12 @@ int main(int argc, char **argv) {
     int use_ppm = !strcmp(backend, "ppm");
     int use_drm = !strcmp(backend, "drm");
     int use_fb  = !strcmp(backend, "fbdev");
-    if (!use_ppm && !use_drm && !use_fb) {          // auto
+    // `null` runs the full control loop -- status polling, the takeover handshake, the yield --
+    // and presents nowhere. It exists because the loop is otherwise only reachable with a real
+    // display, which is what let the switch_root path bug (see read_line_at) reach hardware
+    // unseen. It is never selected by `auto`; a caller has to ask for it by name.
+    int use_null = !strcmp(backend, "null");
+    if (!use_ppm && !use_drm && !use_fb && !use_null) {          // auto
         if (!access(card, R_OK | W_OK)) use_drm = 1;
         else use_fb = 1;
     }
@@ -979,6 +1045,15 @@ int main(int argc, char **argv) {
         if (angle < 0) angle = 0;
         SW = (angle == 90 || angle == 270) ? ppm_h : ppm_w;
         SH = (angle == 90 || angle == 270) ? ppm_w : ppm_h;
+    } else if (use_null) {
+        if (angle < 0) angle = 0;
+        SW = ppm_w;
+        SH = ppm_h;
+        // Take the DRM control path: it is the one that owns the display and therefore the one
+        // that has to honour the handshake. dr.fd stays -1, so drm_present and drm_yield both
+        // short-circuit into no-ops, and crtc_on suppresses the modeset retry.
+        use_drm = 1;
+        dr.crtc_on = 1;
     } else if (use_drm) {
         if (!drm_open(card, connector, angle)) {
             note("DRM unavailable; falling back to %s", fbdev);
@@ -991,7 +1066,7 @@ int main(int argc, char **argv) {
         if (angle < 0) angle = 0;
         if (!fb_open(fbdev, angle)) return 1;
     }
-    if (!use_ppm && !keep_vt) vt_graphics();
+    if (!use_ppm && !use_null && !keep_vt) vt_graphics();
 
     canvas = xalloc((size_t)SW * SH * 4);
 
@@ -1004,8 +1079,21 @@ int main(int argc, char **argv) {
     else if (image)
         note("continuing without a logo");
 
+    // Resolve both runtime files to (dirfd, name) NOW, while our root still resolves paths --
+    // see the long note on read_line_at() for why a path is useless to us after switch_root.
+    int status_fd = -1, takeover_fd = -1;
+    char status_name[128] = { 0 }, takeover_name[128] = { 0 };
+    if (status) {
+        status_fd = open_parent_dir(status, status_name, sizeof status_name);
+        if (status_fd < 0) note("cannot open the directory holding %s: %s", status, strerror(errno));
+    }
+    if (takeover) {
+        takeover_fd = open_parent_dir(takeover, takeover_name, sizeof takeover_name);
+        if (takeover_fd < 0) note("cannot open the directory holding %s: %s", takeover, strerror(errno));
+    }
+
     char cur[512] = { 0 }, shown[512] = { 0 };
-    read_line_file(status, cur, sizeof cur);
+    read_line_at(status_fd, status_name, cur, sizeof cur);
     compose(cur);
     memcpy(shown, cur, sizeof shown);
 
@@ -1020,9 +1108,10 @@ int main(int argc, char **argv) {
     // successor could write an unclaimed file is closed.
     char mine[32], tk[32];
     snprintf(mine, sizeof mine, "%d", (int)getpid());
-    if (use_drm && takeover) {
-        int fd = open(takeover, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+    if (use_drm && takeover_fd >= 0) {
+        int fd = openat(takeover_fd, takeover_name, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
         if (fd >= 0) { ssize_t w = write(fd, mine, strlen(mine)); (void)w; close(fd); }
+        else note("cannot announce ownership in %s: %s", takeover, strerror(errno));
     }
 
     int tfd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC);
@@ -1040,12 +1129,12 @@ int main(int argc, char **argv) {
         // Keep retrying the first modeset: on the initramfs path the DPU may still be binding.
         if (use_drm && !dr.crtc_on) present();
 
-        if (use_drm && takeover) {
-            read_line_file(takeover, tk, sizeof tk);
+        if (use_drm && takeover_fd >= 0) {
+            read_line_at(takeover_fd, takeover_name, tk, sizeof tk);
             if (tk[0] && strcmp(tk, mine)) { note("yielding display to '%s'", tk); yielded = 1; break; }
         }
 
-        read_line_file(status, cur, sizeof cur);
+        read_line_at(status_fd, status_name, cur, sizeof cur);
         if (strcmp(cur, shown)) {
             compose(cur);
             memcpy(shown, cur, sizeof shown);
@@ -1056,8 +1145,8 @@ int main(int argc, char **argv) {
     // SIGTERM can land between two takeover polls. The successor always announces itself before
     // stopping us, so one final read decides whether this is a handover or a shutdown. No
     // announcement means nobody is waiting for the display and we should just go.
-    if (use_drm && takeover && !yielded) {
-        read_line_file(takeover, tk, sizeof tk);
+    if (use_drm && takeover_fd >= 0 && !yielded) {
+        read_line_at(takeover_fd, takeover_name, tk, sizeof tk);
         yielded = tk[0] && strcmp(tk, mine);
     }
     if (use_drm && yielded) drm_yield(60000);

@@ -251,5 +251,79 @@ grep -q "bad NDS1 header" "$TMP/e3" && ok "a truncated NDS1 asset is rejected by
 "$BIN" --backend ppm --rotate 45 --out "$TMP/bad.ppm" >"$TMP/e4" 2>&1
 [[ $? -ne 0 ]] && ok "an invalid --rotate is refused" || bad "--rotate 45 was accepted"
 
+# ---------------------------------------------------------------------------------------------
+# 5. The handover loop, and surviving switch_root
+# ---------------------------------------------------------------------------------------------
+# THIS IS THE REGRESSION TEST FOR THE BUG THAT REACHED HARDWARE. The drawer is started from the
+# initramfs and keeps running across switch_root, which chroots its children and then deletes the
+# old root's contents -- so the drawer is left with an empty root and every path-based open()
+# fails from then on. It painted correctly, ticked forever, and never yielded the display, with
+# nothing in any log to say why. The fix is to hold a dirfd on the run directory instead of
+# re-resolving paths, and this proves it: the run directory is made UNREACHABLE BY PATH after the
+# drawer starts, exactly as the pivot does, and the handshake must still work.
+#
+# The `null` backend exists for this: it runs the real control loop and presents nowhere, so the
+# loop is reachable without a display.
+echo
+echo "handover across switch_root:"
+
+RUN="$TMP/run/novadeck/splash"
+mkdir -p "$RUN"
+printf 'Starting NovaDeck\n' >"$RUN/status"
+
+"$BIN" --backend null --width 640 --height 480 --image "$ASSET" --font "$FONT" \
+       --status "$RUN/status" --takeover "$RUN/takeover" >"$TMP/null.log" 2>&1 &
+drawer=$!
+# Give it time to announce ownership before anything moves.
+for _ in 1 2 3 4 5 6 7 8 9 10; do [[ -s "$RUN/takeover" ]] && break; sleep 0.2; done
+
+if [[ "$(cat "$RUN/takeover" 2>/dev/null)" == "$drawer" ]]; then
+    ok "the drawer announces its own pid in the takeover file"
+else
+    bad "the drawer did not announce ownership (takeover='$(cat "$RUN/takeover" 2>/dev/null)', pid=$drawer)"
+fi
+
+# Simulate the pivot: the directory keeps existing and keeps its inode (as the moved /run tmpfs
+# does), but the PATH the drawer was given no longer resolves to it. A path-based implementation
+# reads nothing from here on; a dirfd-based one is unaffected.
+mv "$TMP/run" "$TMP/run-moved"
+RUN="$TMP/run-moved/novadeck/splash"
+if [[ -e "$TMP/run/novadeck/splash/takeover" ]]; then
+    bad "the pivot simulation did not actually break the path"
+else
+    ok "the run directory is no longer reachable by its original path"
+fi
+
+# Status must still flow. A regression here is the "splash says Starting NovaDeck forever" half.
+printf 'Installing Steam\n' >"$RUN/status"
+sleep 1
+# Then the handover. A regression here is the half that black-screens the session.
+printf 'sddm\n' >"$RUN/takeover"
+
+gone=0
+for _ in $(seq 1 25); do
+    kill -0 "$drawer" 2>/dev/null || { gone=1; break; }
+    sleep 0.2
+done
+if [[ $gone -eq 1 ]]; then
+    ok "the drawer yields and exits after the pivot (dirfd survived)"
+else
+    bad "the drawer did NOT yield after the pivot -- it is re-resolving paths, not using a dirfd"
+    kill "$drawer" 2>/dev/null
+fi
+wait "$drawer" 2>/dev/null
+grep -q "yielding display to 'sddm'" "$TMP/null.log" \
+    && ok "it names who it yielded to" \
+    || bad "no 'yielding display' line (log: $(tr '\n' '|' <"$TMP/null.log" | head -c 200))"
+
+# The diagnostics themselves: one write() per message, because in the initramfs stderr is
+# /dev/kmsg and every write becomes a separate record. Splitting a message across three writes
+# lost the text entirely on hardware.
+if [[ -s "$TMP/null.log" ]] && ! grep -qE '^novadeck-splash: *$' "$TMP/null.log"; then
+    ok "log lines carry their message (not split across writes)"
+else
+    bad "empty 'novadeck-splash:' lines -- note() is splitting one message into several writes"
+fi
+
 printf '\n%s: %d passed, %d failed\n' "$(basename "$0")" "$PASS" "$FAIL"
 [[ $FAIL -eq 0 ]]

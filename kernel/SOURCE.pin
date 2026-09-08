@@ -36,13 +36,14 @@ git_commit: 5015d0d945b3d3f2b038d2667880d5762f7d9437
 # (numbers below are 7.2.4's; the 7.2.3 run they replace found 429/0-missing and 71 patches/26 fuzz,
 # the 7.2.1 run before that 428/0-missing and 71 patches/26 fuzz, and the 7.2 one 427/1-missing and
 # 69 patches/21 fuzz):
-#   - all 429 referenced CONFIG_* symbols (kernel.config + trim-platforms.config) exist in the
-#     PATCHED 7.2.4 tree, with NONE missing. The count is unmoved from 7.2.3 (it had moved
-#     428 -> 429 there for a reason unrelated to any bump: b4ddf2d added AYANEO_SERIAL_MCU, a symbol
-#     our OWN patch 1005-add-ayaneo-serial-mcu.patch defines — which is exactly why the sweep must
-#     run against the patched tree and not a pristine one). Sweep: strip `CONFIG_x=` and
-#     `# CONFIG_x is not set` to bare names, diff against every `config`/`menuconfig` name in the
-#     tree's Kconfig files.
+#   - all 426 referenced CONFIG_* symbols (kernel.config + trim-platforms.config) exist in the
+#     PATCHED 7.2.4 tree, with NONE missing. The count moved 429 -> 426 by OUR hand, not upstream's:
+#     three dead trim-platforms directives were deleted during this re-pin (see the bullet below).
+#     Before that it had moved 428 -> 429 at 7.2.3, also for a reason unrelated to any bump —
+#     b4ddf2d added AYANEO_SERIAL_MCU, a symbol our OWN patch 1005-add-ayaneo-serial-mcu.patch
+#     defines, which is exactly why the sweep must run against the patched tree and not a pristine
+#     one. Sweep: strip `CONFIG_x=` and `# CONFIG_x is not set` to bare names, diff against every
+#     `config`/`menuconfig` name in the tree's Kconfig files.
 #     The one 7.2 casualty stays deleted and its note is still why — see kernel.config's header:
 #       READ_ONLY_THP_FOR_FS -> removed upstream in 7.2; file THP is unconditional now.
 #     SCHED_CACHE (added 2026-08-22) still resolves the same way (init/Kconfig, `default y`,
@@ -73,14 +74,21 @@ git_commit: 5015d0d945b3d3f2b038d2667880d5762f7d9437
 #     (S16_LE) have no trailing newline. Both hunks succeed. Pre-existing, unrelated to any bump.
 #   - the fragments were then MERGED for real inside build/Dockerfile (`merge_config.sh -m
 #     defconfig kernel/*.config` + `make olddefconfig`, trim-platforms.config included) and every
-#     requested symbol asserted to have kept its requested value. All 429 came out right and zero
+#     requested symbol asserted to have kept its requested value. All 426 came out right and zero
 #     symbols came out wrong — including DEBUG_INFO_BTF/SCHED_CLASS_EXT, which resolve correctly
-#     here because the container ships `dwarves` (pahole v1.31). Three symbols that
-#     trim-platforms.config asks to turn OFF are absent from the final .config rather than written
-#     as `is not set` (ARCH_TESLA_FSD, ARCH_ARTPEC, DRM_NOUVEAU_BACKLIGHT): kconfig omits a symbol
-#     whose dependencies are unmet, which is the same thing as off. Do not read that as a miss —
-#     an assertion that demands the literal `# ... is not set` line will report three false
-#     failures here, and build.sh's own trim check (49 symbols confirmed disabled) agrees.
+#     here because the container ships `dwarves` (pahole v1.31).
+#   - that assertion is also what caught the one real defect this bump surfaced, in OUR tree
+#     rather than upstream's. Three symbols trim-platforms.config asks to turn off came back
+#     `undef` (absent from .config) instead of `n`: ARCH_TESLA_FSD and ARCH_ARTPEC both
+#     `depends on ARCH_EXYNOS`, and DRM_NOUVEAU_BACKLIGHT `depends on DRM_NOUVEAU` — all three
+#     gates that the same file already cuts, so all three lines cut nothing. They were removed
+#     (46 directives now, floor is 40) and build.sh now counts `n` and `undef` apart so the next
+#     one is visible in the build log instead of silent. `undef` still PASSES — it is off either
+#     way — so an assertion that demands the literal `# ... is not set` line reports false
+#     failures. Read the two states as different facts, not as pass/fail.
+#     Re-verified after the deletion: `make kernel` reports `trim-platforms: 46 symbols confirmed
+#     disabled` with no redundant list, and all 426 requested symbols still land on their
+#     requested values. So every directive left in that file is load-bearing.
 #   - and the whole thing was then BUILT: `make kernel` produced Image + all 21 board DTBs +
 #     modules against 7.2.4 on 2026-09-08. That is the gate the offline drill cannot give you.
 #

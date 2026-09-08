@@ -242,16 +242,32 @@ CC=(${CROSS_COMPILE:+CROSS_COMPILE=$CROSS_COMPILE})
       echo "  the file is present but nearly nothing in it is a valid directive" >&2
       exit 1
     }
+    # `n` and `undef` are both "off" and both pass -- but they are not the same fact, so they are
+    # counted apart. `n` means the directive did the cutting. `undef` means kconfig never emitted
+    # the symbol at all, because its dependencies were already unmet -- i.e. something else had
+    # already taken it and this line cut nothing. That is a line drifting back toward the
+    # per-child list the fragment's header forbids, and it is invisible in a passing build unless
+    # it is said out loud. Reported, NOT fatal: an upstream Kconfig reshuffle can add a `depends
+    # on` to a gate we cut and make a line redundant through no fault of ours, and that is a note
+    # for the next editor, not a reason to fail a kernel build.
+    TRIM_CUT=0; TRIM_DEAD=""
     for sym in $TRIM_SYMS; do
       got="$(scripts/config --file .config --state "$sym")"
       case "$got" in
-        n|undef) ;;
+        n)     TRIM_CUT=$((TRIM_CUT + 1)) ;;
+        undef) TRIM_DEAD="$TRIM_DEAD $sym" ;;
         *) echo "CONFIG_$sym is '$got' but kernel/trim-platforms.config asks for it to be unset" >&2
            echo "  something we still enable selects it; find it with: grep -rn \"select $sym\" ." >&2
            exit 1 ;;
       esac
     done
-    echo "[novadeck] trim-platforms: $TRIM_N symbols confirmed disabled"
+    echo "[novadeck] trim-platforms: $TRIM_CUT symbols confirmed disabled"
+    [ -z "$TRIM_DEAD" ] || {
+      echo "[novadeck] trim-platforms: REDUNDANT, cuts nothing --$TRIM_DEAD"
+      echo "[novadeck]   each is already unreachable via a gate this file cuts. Find the parent"
+      echo "[novadeck]   with 'grep -A3 \"^config <SYM>\$\" arch/arm64/Kconfig.platforms' and drop"
+      echo "[novadeck]   the line; see the fragment header's cascade rule."
+    }
   fi
 
   make ARCH=arm64 "${CC[@]}" -j"$(nproc)" Image dtbs modules

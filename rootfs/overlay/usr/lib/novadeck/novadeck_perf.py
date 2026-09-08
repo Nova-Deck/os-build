@@ -46,7 +46,13 @@ STEAM_COMMS = ("steam",)
 # launches (Proton / FEX — everything x86), SteamAppId also appears on native
 # launches, SteamGameId is the shortcut fallback.
 APPID_ENV_KEYS = ("STEAM_COMPAT_APP_ID", "SteamAppId", "SteamGameId")
-RR_PRIORITY = 40
+# The RR priority gamescope gives itself under --rt, which is the minimum (1 on
+# Linux) — see Process::SetRealtime() in gamescope's src/Utils/Process.cpp. The
+# number buys nothing against normal tasks: ANY SCHED_RR thread preempts every
+# SCHED_OTHER/SCHED_EXT one unconditionally, so 1 and 40 are identical for the
+# latency we actually want. It only decides who wins against other RT tasks, and
+# there the compositor has no business outranking anything, so ask for the floor.
+RR_PRIORITY = os.sched_get_priority_min(os.SCHED_RR)
 NICE_MIN, NICE_MAX = -20, 19
 
 

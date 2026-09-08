@@ -265,7 +265,27 @@ to `defaults.conf` and still boots.
 
 </details>
 
-## Licensing & firmware
+## License
+
+NovaDeck's own code is **GPL-2.0-or-later**. The full text of GPL-2.0 is in [LICENSE](LICENSE);
+"or later" is stated here and applies to everything in this repository that is ours — you may use
+this work under GPL-2.0 or, at your option, any later version published by the Free Software
+Foundation.
+
+Third-party material in the tree keeps its own license, and a couple of cases are worth naming
+because the LICENSE file alone would misrepresent them:
+
+| What | License |
+|---|---|
+| `kernel/patches/*` | derivatives of Linux — **GPL-2.0-only**, not "or later" |
+| `boot/patches/grub/*` | derivatives of GRUB — **GPL-3.0-or-later** |
+| `packages/*/patches/*` | each carries the license of the project it patches |
+| `apps/novadeck-splash/src/stb_truetype.h` | stb_truetype v1.26, **public domain** (Sean Barrett), vendored verbatim |
+
+`apps/novadeck-splash` is a from-scratch implementation whose design is derived from Armada's
+`armada-splash` (GPL-2.0-or-later); the commit that introduces it says what came from where.
+
+## Firmware
 
 Proprietary Qualcomm firmware is **never** committed to this repo. `firmware/` holds only
 fetch-and-verify recipes against two pinned sources, both landing in gitignored trees: open

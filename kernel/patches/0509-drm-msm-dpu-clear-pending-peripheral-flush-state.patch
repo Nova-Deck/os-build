@@ -6,7 +6,7 @@ flush updater accumulates interface bits in this mask.  A later transaction
 which sets the top-level peripheral flush bit can write stale interface
 bits to CTL_PERIPH_FLUSH together with the current state.
 
-In the pinned 7.2.3 the mask is accumulated by the peripheral flush updater
+In the pinned 7.2.4 the mask is accumulated by the peripheral flush updater
 and written to CTL_PERIPH_FLUSH, but never cleared -- and the peripheral
 flush path is what command-mode and DSC panels use, which is every internal
 panel we ship.

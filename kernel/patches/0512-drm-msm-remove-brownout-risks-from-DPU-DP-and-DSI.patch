@@ -15,7 +15,7 @@ from DPU", 2026-07-28, into one patch, since the three hunks are one fix:
   [PATCH 2/3] drm/msm/dp:  Drop dev_pm_opp_set_rate(0)
   [PATCH 3/3] drm/msm/dsi: Drop dev_pm_opp_set_rate(0)
 https://www.mail-archive.com/freedreno@lists.freedesktop.org/msg46488.html
-Queued for v7.3; not in the pinned 7.2.3, where all five call sites are
+Queued for v7.3; not in the pinned 7.2.4, where all five call sites are
 still present.
 
 The DPU hunk is an early return rather than a deletion: when the last CRTC

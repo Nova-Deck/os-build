@@ -8,12 +8,12 @@ the first, in a way nothing reports. Splitting them into two files invites a bum
 to drop one, so they cannot be separated here.
 
 Both are backports from "SM8450 QoL changes (dispcc)" (lore.kernel.org, Esteban
-Urrutia, Reviewed-by Konrad Dybcio), neither in the pinned 7.2.3.
+Urrutia, Reviewed-by Konrad Dybcio), neither in the pinned 7.2.4.
 
 1. clk-alpha-pll.c -- "Check Lucid Ole PLL status before configuring"
    (Fixes: 3132a9a11e57). Skip clk_lucid_ole_pll_configure() when the PLL is
    already enabled, because "there are RCGs that will lock up if we disable the
-   PLL below". This is an OMISSION being corrected, not new behaviour: 7.2.3
+   PLL below". This is an OMISSION being corrected, not new behaviour: 7.2.4
    already carries the identical guard in three siblings in the same file --
    Trion (:1723), Lucid 5LPE (:1945), Lucid Evo (:2341) -- and Lucid Ole is the
    only one without it.

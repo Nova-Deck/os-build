@@ -2,67 +2,87 @@
 # The TARBALL + its sha256 is the canonical pin. Validated 2026-06-17; re-pinned 2026-07-25
 # (7.1.5, HW-validated on Pocket S2 + Pocket ACE); re-pinned 2026-08-03 (7.1.6); re-pinned
 # 2026-08-18 (7.2 — mainline, released 2026-08-16; NOT HW-validated yet, see the gate below);
-# re-pinned 2026-08-27 (7.2.1); re-pinned 2026-09-03 (7.2.3, issue #86).
-version:    7.2.3
-url:        https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.2.3.tar.xz
-sha256:     8ba259e8e7b13ec6ef0941c8a39ad90b24bd4a4d6c0010ba6bafb794550ecd03
-git_tag:    v7.2.3
-git_commit: 58e7295cfecaddec94629160386412e0f2b1e8fe
+# re-pinned 2026-08-27 (7.2.1); re-pinned 2026-09-03 (7.2.3, issue #86); re-pinned 2026-09-08 (7.2.4).
+version:    7.2.4
+url:        https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.2.4.tar.xz
+sha256:     01710ee01737dac492f1bae52becd057e08d20d11589089aa06accff415c28dd
+git_tag:    v7.2.4
+git_commit: 5015d0d945b3d3f2b038d2667880d5762f7d9437
 
 # The sha256 above is the one kernel.org publishes in the SIGNED sha256sums.asc for v7.x, not a
-# hash of whatever the CDN happened to serve — re-checked 2026-09-03. The .asc itself verifies as
+# hash of whatever the CDN happened to serve — re-checked 2026-09-08. The .asc itself verifies as
 # a GOOD signature from "Kernel.org checksum autosigner <autosigner@kernel.org>", fingerprint
 # B886 8C80 BA62 A1FF FAF5 FDA9 632D 3A06 589D A6B1. That key carries no trust path here, so the
-# load-bearing check is CONTINUITY: the SAME signed file still lists 7.2.1 as
-# 4158098c8a28ea8fbe068c855d3aa6341e03d06282add3cb9049f3a24e4557b3, byte-for-byte the hash this
-# pin carried and shipped before — so the file describing 7.2.3 is the same file that described
+# load-bearing check is CONTINUITY: the SAME signed file still lists 7.2.3 as
+# 8ba259e8e7b13ec6ef0941c8a39ad90b24bd4a4d6c0010ba6bafb794550ecd03, byte-for-byte the hash this
+# pin carried and shipped before — so the file describing 7.2.4 is the same file that described
 # the release we already trusted. (Note: keys.openpgp.org serves this key STRIPPED of its user
 # IDs and gpg then refuses it as "no public key"; keyserver.ubuntu.com serves it whole.)
-# git_commit is the DEREFERENCED tag (`git ls-remote 'v7.2.3^{}'`), matching how the
-# 7.1.5/7.1.6/7.2/7.2.1 lines were recorded; the annotated tag object is
-# 296e02a60bcb8223c12ebf58feeb69961f4608c1 and is NOT what belongs here.
+# git_commit is the DEREFERENCED tag (`git ls-remote 'v7.2.4^{}'`), matching how the
+# 7.1.5/7.1.6/7.2/7.2.1/7.2.3 lines were recorded; the annotated tag object is
+# 85db2ca353c4308d00fa495b069f1e9336d6426e and is NOT what belongs here.
 #
-# 7.2 was MAINLINE with no point release; 7.2.1 was the first stable one, and 7.2.3 (2026-09-02)
-# is this pin's second in-series step. Precedent from 7.1.3 -> 7.1.5: a point release INSIDE a
+# 7.2 was MAINLINE with no point release; 7.2.1 was the first stable one, and 7.2.4 (2026-09-07)
+# is this pin's third in-series step. Precedent from 7.1.3 -> 7.1.5: a point release INSIDE a
 # series is a pure pin edit — but that is a prediction, not a licence to skip the patch/config
 # gates below. Re-run them.
+#
+# 7.2.4 is NOT HW-validated. Every offline gate below was re-run and is clean, and the build
+# produces Image + DTBs + modules — but nothing has booted this kernel on a device yet. Note also
+# that a new Image invalidates the whole `/lib/modules/<ver>` tree (module BTF), so testing it
+# means flashing a card built from this pin, not swapping /boot/Image on an existing one.
 
-# Config validation (kernel/*.config) against THIS tree, RE-RUN 2026-09-03 for the 7.2.3 re-pin
-# (numbers below are 7.2.3's; the 7.2.1 run they replace found 428/0-missing and 71 patches/26 fuzz,
-# and the 7.2 run before that 427/1-missing and 69 patches/21 fuzz):
+# Config validation (kernel/*.config) against THIS tree, RE-RUN 2026-09-08 for the 7.2.4 re-pin
+# (numbers below are 7.2.4's; the 7.2.3 run they replace found 429/0-missing and 71 patches/26 fuzz,
+# the 7.2.1 run before that 428/0-missing and 71 patches/26 fuzz, and the 7.2 one 427/1-missing and
+# 69 patches/21 fuzz):
 #   - all 429 referenced CONFIG_* symbols (kernel.config + trim-platforms.config) exist in the
-#     PATCHED 7.2.3 tree, with NONE missing. The count moved 428 -> 429 for a reason that has
-#     nothing to do with the bump: b4ddf2d added AYANEO_SERIAL_MCU, a symbol our OWN patch
-#     1005-add-ayaneo-serial-mcu.patch defines — which is exactly why the sweep must run against
-#     the patched tree and not a pristine one. Sweep: strip `CONFIG_x=` and `# CONFIG_x is not set`
-#     to bare names, diff against every `config`/`menuconfig` name in the tree's Kconfig files.
+#     PATCHED 7.2.4 tree, with NONE missing. The count is unmoved from 7.2.3 (it had moved
+#     428 -> 429 there for a reason unrelated to any bump: b4ddf2d added AYANEO_SERIAL_MCU, a symbol
+#     our OWN patch 1005-add-ayaneo-serial-mcu.patch defines — which is exactly why the sweep must
+#     run against the patched tree and not a pristine one). Sweep: strip `CONFIG_x=` and
+#     `# CONFIG_x is not set` to bare names, diff against every `config`/`menuconfig` name in the
+#     tree's Kconfig files.
 #     The one 7.2 casualty stays deleted and its note is still why — see kernel.config's header:
 #       READ_ONLY_THP_FOR_FS -> removed upstream in 7.2; file THP is unconditional now.
 #     SCHED_CACHE (added 2026-08-22) still resolves the same way (init/Kconfig, `default y`,
 #     `depends on SMP`) — the pin records an inherited default rather than changing one.
-#   - all 71 out-of-tree patches in kernel/patches/ apply to 7.2.3 with ZERO rejects, applied
+#   - all 77 out-of-tree patches in kernel/patches/ apply to 7.2.4 with ZERO rejects, applied
 #     CUMULATIVELY in lexical order, which is the only order that means anything (see below).
+#     The patch count moved 71 -> 77 since the 7.2.3 re-pin and NOT because of this bump: six drm/msm
+#     and DPU patches (0508-0513) were added on main in the meantime. All six are new-enough code
+#     that they apply at fuzz 0.
 #     26 hunks need fuzz; kernel/build.sh passes no -F0, so patch's default fuzz=2 accepts them.
 #     The fuzz count CLIMBS with every point release — when it reaches 2 on a hunk that matters,
 #     patch will start applying it in the wrong place silently. So the raw total is the WRONG
-#     instrument: 26 was also 7.2.1's total, and a hunk sliding 1 -> 2 while another slid 2 -> 1
-#     would leave it unmoved. The 7.2.3 run therefore replayed the identical drill against a
-#     pristine 7.2.1 tree and diffed the PER-HUNK profile (patch name + fuzz level, counted): the
+#     instrument: 26 was also 7.2.1's and 7.2.3's total, and a hunk sliding 1 -> 2 while another slid
+#     2 -> 1 would leave it unmoved. The 7.2.4 run therefore replayed the identical drill against a
+#     pristine 7.2.3 tree and diffed the PER-HUNK profile (patch name + fuzz level, counted): the
 #     two are byte-identical, 16 hunks at fuzz 1 and 10 at fuzz 2, same patches on both sides.
 #     Nothing climbed.
-#   - independent corroboration, and the cheapest signal in this whole drill: applying our patches
-#     to BOTH trees and diffing the results isolates the pure upstream delta. 7.2.1 -> 7.2.3 changes
-#     82 files; our patches touch 127; the INTERSECTION IS EMPTY. Upstream did not go near a single
-#     file we carry a patch for, which is why the fuzz profile could not have moved. Re-run this
-#     intersection on the next bump before reading any hunk: a non-empty result names exactly which
-#     patches deserve a human, and an empty one retires the question.
+#   - independent corroboration, and the cheapest signal in this whole drill: the pure upstream delta
+#     read straight off the INCREMENTAL patch, which is far cheaper than diffing two patched trees
+#     and says the same thing (https://cdn.kernel.org/pub/linux/kernel/v7.x/incr/patch-7.2.3-4.xz —
+#     take the `+++ b/` paths). 7.2.3 -> 7.2.4 changes 620 files; our patches touch 135; the
+#     INTERSECTION IS EMPTY. Upstream did not go near a single file we carry a patch for, which is
+#     why the fuzz profile could not have moved. Re-run this intersection on the next bump before
+#     reading any hunk: a non-empty result names exactly which patches deserve a human, and an empty
+#     one retires the question. It also answers the other question a bump raises — nothing of ours
+#     landed upstream this release, so no patch is a candidate for deletion.
 #   - `patch unexpectedly ends in middle of line` x4 is NOT a reject: patches 0004 (IFPC) and 0203
 #     (S16_LE) have no trailing newline. Both hunks succeed. Pre-existing, unrelated to any bump.
 #   - the fragments were then MERGED for real inside build/Dockerfile (`merge_config.sh -m
 #     defconfig kernel/*.config` + `make olddefconfig`, trim-platforms.config included) and every
-#     requested symbol asserted to have kept its requested value. merge_config emitted ZERO
-#     warnings and zero symbols came out wrong — including DEBUG_INFO_BTF/SCHED_CLASS_EXT, which
-#     resolve correctly here because the container ships `dwarves` (pahole v1.31).
+#     requested symbol asserted to have kept its requested value. All 429 came out right and zero
+#     symbols came out wrong — including DEBUG_INFO_BTF/SCHED_CLASS_EXT, which resolve correctly
+#     here because the container ships `dwarves` (pahole v1.31). Three symbols that
+#     trim-platforms.config asks to turn OFF are absent from the final .config rather than written
+#     as `is not set` (ARCH_TESLA_FSD, ARCH_ARTPEC, DRM_NOUVEAU_BACKLIGHT): kconfig omits a symbol
+#     whose dependencies are unmet, which is the same thing as off. Do not read that as a miss —
+#     an assertion that demands the literal `# ... is not set` line will report three false
+#     failures here, and build.sh's own trim check (49 symbols confirmed disabled) agrees.
+#   - and the whole thing was then BUILT: `make kernel` produced Image + all 21 board DTBs +
+#     modules against 7.2.4 on 2026-09-08. That is the gate the offline drill cannot give you.
 #
 # HOW TO RE-RUN THIS VALIDATION, and the mistake that makes it lie: patches must be applied
 # cumulatively to ONE tree, exactly as kernel/build.sh does. Dry-running each patch independently

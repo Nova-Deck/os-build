@@ -9,7 +9,7 @@ https://www.mail-archive.com/freedreno@lists.freedesktop.org/msg46777.html
 
 The core plumbing (drm_gem_huge_mnt_create(), dev->huge_mnt and the
 shmem_file_setup_with_mnt() path in drm_gem_object_init()) is already in
-the pinned 7.2.3 -- only the msm side is missing, so this is small.
+the pinned 7.2.4 -- only the msm side is missing, so this is small.
 
 "within_size" only allocates a huge page when it falls fully within the GEM
 object's size, so it does not inflate small buffers.  Failure is not fatal:

@@ -24,7 +24,7 @@ no fence can reference its scheduler yet.
 BACKPORT from the freedreno list, "[PATCH] drm/msm: RCU-free the
 scheduler-containing ring and VM objects", Dmitry Baryshkov, 2026-09-02:
 https://www.mail-archive.com/freedreno@lists.freedesktop.org/msg46760.html
-Not in the pinned 7.2.3, which still uses plain kfree() in both paths.
+Not in the pinned 7.2.4, which still uses plain kfree() in both paths.
 
 ---
 

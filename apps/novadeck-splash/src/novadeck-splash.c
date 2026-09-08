@@ -907,20 +907,84 @@ static void drm_present(void) {
 //
 // The wait is bounded because an unbounded one turns "the successor crashed" into "the device
 // hangs on a logo with no way out".
+// Has some other client actually put its own framebuffer on our CRTC?
+//
+// GETCRTC IS THE OBVIOUS PLACE TO LOOK AND IT IS USELESS ON THIS DRIVER. Measured on hardware
+// 2026-09-08: with gamescope demonstrably scanning out fb 116 on crtc 107 (debugfs `state` names
+// it, mode_valid=1, active=1), DRM_IOCTL_MODE_GETCRTC still reports fb_id=0. The legacy CRTC
+// framebuffer field is simply not maintained by this atomic driver. So the original version of
+// this check could never fire: every boot waited the full timeout and then released blind, while
+// logging a failure that had not happened.
+//
+// The PLANE does report it — the same moment, GETPLANE gave `plane 59: crtc=107 fb=116`. So walk
+// the planes bound to our CRTC and look for a framebuffer that is not ours.
+//
+// The universal-planes client cap is required, not optional: without it the primary plane is not
+// even listed and only overlays come back. It is set here rather than at open time so that the
+// boot path up to the handover stays byte-identical to the one already validated on hardware.
+static int drm_successor_is_scanning(void) {
+    static int cap_set = 0;
+    if (!cap_set) {
+        struct drm_set_client_cap cap = { .capability = DRM_CLIENT_CAP_UNIVERSAL_PLANES, .value = 1 };
+        if (ioctl(dr.fd, DRM_IOCTL_SET_CLIENT_CAP, &cap)) return -1;   // cannot see planes: unknowable
+        cap_set = 1;
+    }
+
+    struct drm_mode_get_plane_res res;
+    memset(&res, 0, sizeof res);
+    if (ioctl(dr.fd, DRM_IOCTL_MODE_GETPLANERESOURCES, &res) || !res.count_planes) return -1;
+
+    uint32_t n = res.count_planes;
+    uint32_t *ids = calloc(n, sizeof *ids);
+    if (!ids) return -1;
+    memset(&res, 0, sizeof res);
+    res.count_planes = n;
+    res.plane_id_ptr = (uint64_t)(uintptr_t)ids;
+    int found = 0;
+    if (!ioctl(dr.fd, DRM_IOCTL_MODE_GETPLANERESOURCES, &res)) {
+        for (uint32_t i = 0; i < res.count_planes && !found; i++) {
+            struct drm_mode_get_plane pl;
+            memset(&pl, 0, sizeof pl);
+            pl.plane_id = ids[i];
+            if (ioctl(dr.fd, DRM_IOCTL_MODE_GETPLANE, &pl)) continue;
+            if (pl.crtc_id == dr.crtc_id && pl.fb_id && pl.fb_id != dr.fb_id) {
+                note("display handed over (plane %u on crtc %u now scanning fb %u)",
+                     pl.plane_id, pl.crtc_id, pl.fb_id);
+                found = 1;
+            }
+        }
+    }
+    free(ids);
+    return found;
+}
+
+// Hand the display over. Dropping master is not enough on its own: closing our fd (and with it
+// the framebuffer) while the CRTC is still scanning out of it produces a black panel, which is
+// precisely the symptom that ended an earlier splash attempt. So drop master, then wait until
+// something else is provably on the screen before letting go.
+//
+// The wait is bounded because an unbounded one turns "the successor crashed" into "the device
+// hangs on a logo with no way out".
 static void drm_yield(int timeout_ms) {
     if (dr.fd < 0 || !dr.crtc_on) return;
     if (ioctl(dr.fd, DRM_IOCTL_DROP_MASTER, 0)) note("DROP_MASTER: %s", strerror(errno));
+
+    int unknowable = 0;
     for (int waited = 0; waited < timeout_ms; waited += 100) {
-        struct drm_mode_crtc c;
-        memset(&c, 0, sizeof c);
-        c.crtc_id = dr.crtc_id;
-        // A failed query says nothing about what is on screen; only a readable CRTC naming
-        // another framebuffer proves the handoff actually happened.
-        if (!ioctl(dr.fd, DRM_IOCTL_MODE_GETCRTC, &c) && c.fb_id && c.fb_id != dr.fb_id) {
-            note("display handed over (crtc %u now on fb %u)", dr.crtc_id, c.fb_id);
-            return;
-        }
+        int r = drm_successor_is_scanning();
+        if (r > 0) return;                 // proven: it announced which fb, and we are done
+        if (r < 0) { unknowable = 1; break; }
         usleep(100000);
+    }
+
+    if (unknowable) {
+        // No way to observe the screen on this driver. Do not pretend to verify: wait a short
+        // fixed grace for the successor's first commit and go. Saying so explicitly matters more
+        // than the wait does — a message claiming the successor "never took the display" would
+        // send the next person debugging a handover that in fact worked.
+        note("cannot observe scanout on this driver; releasing after a short grace");
+        usleep(2000000);
+        return;
     }
     note("successor never took the display within %dms; releasing anyway", timeout_ms);
 }

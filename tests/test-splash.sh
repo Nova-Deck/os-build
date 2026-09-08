@@ -52,18 +52,42 @@ for cand in "$ROOT/work/base/usr/share/fonts/noto/NotoSansMono-Medium.ttf" \
 done
 [[ -n $FONT ]] || { echo "no TrueType font available to test with" >&2; exit 1; }
 
-# Likewise the logo: use the real asset when the build has produced one, otherwise synthesise a
-# tiny NDS1 so the geometry assertions still mean something.
+# Likewise the logo: use the real asset when the build has produced one, otherwise synthesise one.
+#
+# The stand-in MUST be the size mksplash.sh renders the real asset at. The drawer warns "logo
+# upscaled" whenever the requested size exceeds the asset's LONG EDGE, and the geometry loop below
+# turns that warning into a failure — so a token 64px stand-in trips it on every panel in the
+# registry (the smallest asks for 960*480/1080 = 426px) and reports 80 failures that say nothing
+# about the shipped asset or about RENDER_PX. That is exactly what it did in CI, where this
+# fallback is ALWAYS taken: the offline suites build no image, so work/splash/ never exists, while
+# a dev checkout that has run `make` has the real asset and passes. A suite that only fails where
+# nobody looks is worse than no suite.
+#
+# Reading RENDER_PX out of mksplash.sh rather than repeating the number keeps the stand-in and the
+# real asset from drifting apart, and keeps the upscale assertion meaningful here: it still fails
+# if the registry ever outgrows the render box, which is the thing it was written to catch.
 if [[ ! -f $ASSET ]]; then
     ASSET="$TMP/logo.nds1"
-    python3 - "$ASSET" <<'PY'
+    RENDER_PX=$(sed -n 's/^RENDER_PX=\([0-9][0-9]*\).*/\1/p' "$ROOT/image/mksplash.sh")
+    [[ -n $RENDER_PX ]] || {
+        echo "cannot read RENDER_PX from image/mksplash.sh — the synthetic logo would be the" >&2
+        echo "wrong size and every geometry assertion below would fail for that reason alone." >&2
+        exit 1
+    }
+    python3 - "$ASSET" "$RENDER_PX" <<'PY'
 import struct, sys
-w = h = 64
+w = h = int(sys.argv[2])
 px = bytearray()
 for y in range(h):
     for x in range(w):
         # An opaque disc on a transparent field: enough to test placement and clipping.
-        inside = (x - w / 2) ** 2 + (y - h / 2) ** 2 < (w / 2 - 2) ** 2
+        # The radius is 44% of the box, not the whole of it, because a real logo has margins --
+        # image/splash/logo.svg renders to 677px of ink inside its 768px box, ~88%. The rotation
+        # -direction assertion below measures the drawn content's centre of mass against the panel
+        # midline, and a disc that reaches the very edge inflates the logo's share of that bbox
+        # enough to swamp the text beneath it and tip the comparison the wrong way. Match the real
+        # asset's proportions, not just its size.
+        inside = (x - w / 2) ** 2 + (y - h / 2) ** 2 < (0.44 * w) ** 2
         px += bytes((255, 255, 255, 255)) if inside else bytes(4)
 open(sys.argv[1], "wb").write(b"NDS1" + struct.pack("<II", w, h) + bytes(px))
 PY

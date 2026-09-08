@@ -1078,6 +1078,33 @@ for plugin_name in novadeck-control novadeck-monitor novadeck-framegen; do
 done
 unset plugin_name plugin_src plugin_dest
 
+# 4c-4. Boot splash drawer — the SAME binary and asset the initramfs carries, installed into the
+# sealed root as well. Both copies are needed and neither is redundant: the initramfs one paints
+# from before root is mounted until the session takes the display, and this one paints the
+# shutdown and reboot screens, long after the initramfs has been freed.
+#
+# Built by `make splash` (a $(ROOTFS) prerequisite via $(INITRAMFS)). Missing means a stale
+# invocation bypassed make; fail rather than assemble an image whose shutdown screen is black.
+splash_bin="$ROOT/apps/novadeck-splash/build/novadeck-splash"
+splash_asset="$ROOT/work/splash/logo.nds1"
+splash_font="$stage/usr/share/fonts/noto/NotoSansMono-Medium.ttf"
+[ -s "$splash_bin" ] && [ -s "$splash_asset" ] || {
+  echo "splash payload missing: ${splash_bin#"$ROOT"/} / ${splash_asset#"$ROOT"/} (run: make splash)" >&2
+  exit 1
+}
+[ -s "$splash_font" ] || {
+  echo "splash font missing from the base: ${splash_font#"$stage"/} — the status line needs it" >&2
+  exit 1
+}
+echo "  injecting boot splash -> /usr/lib/novadeck/novadeck-splash"
+install -D -m 0755 "$splash_bin" "$stage/usr/lib/novadeck/novadeck-splash"
+install -D -m 0644 "$splash_asset" "$stage/usr/share/novadeck/splash/logo.nds1"
+# A symlink, not a copy: the font is already in the image and it is 600 KB. The initramfs copy
+# has to be a real file (there is no /usr/share/fonts there), but this one does not.
+install -d -m 0755 "$stage/usr/share/novadeck/splash"
+ln -sfn ../../fonts/noto/NotoSansMono-Medium.ttf "$stage/usr/share/novadeck/splash/font.ttf"
+unset splash_bin splash_asset splash_font
+
 if [ "${NOVADECK_DEV:-}" = "1" ] && [ "$dev_wifi" = "1" ]; then
   echo "  [DEV] injecting Wi-Fi profile for '$NOVADECK_WIFI_SSID' (dev-only)"
 

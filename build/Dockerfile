@@ -74,6 +74,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       xz-utils patch device-tree-compiler \
       curl \
       make python3 \
+      librsvg2-bin \
       btrfs-progs gdisk fdisk dosfstools mtools e2fsprogs \
       casync \
       erofs-utils \
@@ -85,6 +86,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # with `sfdisk --dump` -- one call for the whole table -- to tell a live partition from a GPT entry
 # whose type a foreign uninstaller zeroed (issue #56). Without it the installer suites cannot run
 # the code they are testing at all.
+#
+# librsvg2-bin is `rsvg-convert`, which image/mksplash.sh uses to flatten the boot logo from SVG
+# to a raster on THIS host. It is deliberately a host-native tool: the splash binary is static
+# with no libraries at all, so it carries no SVG or PNG decoder, and the first splash attempt
+# died precisely because a rasteriser was cross-built for the device and then failed to load
+# there. python3 (above) finishes the job — png2nds1.py needs only stdlib zlib.
 #
 # erofs-utils is here for ONE assertion, and it earns its place: assemble-rootfs.sh reads the
 # graphics_provider.json out of the pinned FEX guest .ero to prove the guest still carries one.

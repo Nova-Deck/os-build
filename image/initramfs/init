@@ -81,7 +81,7 @@ mount -t devtmpfs -o nosuid,mode=0755    dev  /dev
 # boot-console error is a debugging trap, so we give switch_root a real tmpfs to hand over.
 mount -t tmpfs    -o nosuid,nodev,mode=0755 run /run
 
-ROOTSPEC=''; VARSPEC=''; EFISPEC=''; EFISPEC_ALT=''; SLOTSPEC=''; ROOTFSTYPE=btrfs
+ROOTSPEC=''; VARSPEC=''; EFISPEC=''; EFISPEC_ALT=''; SLOTSPEC=''; ROOTFSTYPE=btrfs; SPLASH=1
 read -r _cmdline </proc/cmdline
 for _arg in $_cmdline; do
   case "$_arg" in
@@ -90,9 +90,63 @@ for _arg in $_cmdline; do
     novadeck.var=*)  VARSPEC=${_arg#novadeck.var=} ;;
     novadeck.efi=*)  EFISPEC=${_arg#novadeck.efi=} ;;
     novadeck.slot=*) SLOTSPEC=${_arg#novadeck.slot=} ;;
+    novadeck.splash=*) SPLASH=${_arg#novadeck.splash=} ;;
     steamos.efi=*)   EFISPEC_ALT=${_arg#steamos.efi=} ;;
   esac
 done
+
+# ---------------------------------------------------------------------------------------------
+# Boot splash
+# ---------------------------------------------------------------------------------------------
+# Started HERE, before root is even resolved, because everything after this point can take
+# seconds (a device probe poll, a btrfs mount) and all of it is a black panel otherwise.
+#
+# The drawer keeps running across switch_root. There is no systemd in this initramfs to kill it
+# and no unit to exempt: it is simply a background process whose binary and libraries the kernel
+# frees when the initramfs is dropped, which is harmless because it is statically linked and has
+# already read everything it needs into memory (see apps/novadeck-splash/src/novadeck-splash.c).
+# Its status and takeover files live on /run, which switch_root moves into the new root, so both
+# paths stay valid on the far side of the pivot.
+#
+# `novadeck.splash=0` on the cmdline turns it off. That switch is on the CMDLINE and not in /etc
+# on purpose: /etc does not exist yet at this point in boot, and on a board with no serial
+# console the ability to take the splash out of the picture is sometimes the only way to see a
+# kernel message that it would otherwise be covering.
+splash_start() {
+  [ "$SPLASH" = 0 ] && { log "splash disabled on the cmdline"; return; }
+  [ -x /usr/lib/novadeck/novadeck-splash ] || { warn "splash binary missing from the initramfs"; return; }
+
+  # The DPU binds asynchronously, so /dev/dri/card0 does not exist for the first ~3s of boot and
+  # the drawer would find no device at all. Poll rather than sleep a fixed amount: the wait is
+  # usually much shorter than the ceiling, and every 100ms spent here is 100ms of black panel.
+  _i=0
+  while [ "$_i" -lt 50 ]; do
+    [ -e /dev/dri/card0 ] && break
+    sleep 0.1; _i=$((_i + 1))
+  done
+  # No card is not fatal — the drawer falls back to /dev/fb0 by itself, and a board where
+  # neither exists still boots, just without a splash.
+  [ -e /dev/dri/card0 ] || warn "no /dev/dri/card0 after 5s; the splash will try fbdev"
+
+  mkdir -p /run/novadeck/splash
+  printf 'Starting NovaDeck\n' >/run/novadeck/splash/status
+
+  # Rotation is deliberately NOT passed: the drawer reads the panel's own DRM `panel orientation`
+  # property, which the kernel derives from the panel's devicetree `rotation`. That keeps the
+  # fact in one place instead of duplicating it into a per-board config the initramfs would then
+  # have to carry.
+  #
+  # stderr goes to kmsg so that a splash that fails to start says why in the journal, readable
+  # offline from the card ([[sm8650-no-uart]]). Without this the failure is a black screen and
+  # nothing else.
+  /usr/lib/novadeck/novadeck-splash \
+      --image /usr/share/novadeck/splash/logo.nds1 \
+      --font /usr/share/novadeck/splash/font.ttf \
+      --status /run/novadeck/splash/status \
+      --takeover /run/novadeck/splash/takeover \
+      >/dev/kmsg 2>&1 &
+}
+splash_start
 # novadeck.efi= wins when both are present. It comes from the generated grub.cfg, which knows
 # which slot it is and therefore which partition to name; steamos.efi= is SteamOS's form, appended
 # by the bootloader from the partition it was chainloaded from. They should always agree, and when they do not it is

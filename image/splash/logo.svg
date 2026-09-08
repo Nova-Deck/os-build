@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <radialGradient id="novaCore" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="22%" stop-color="#c8f7ff"/>
+      <stop offset="55%" stop-color="#35d6f4"/>
+      <stop offset="82%" stop-color="#0e8fd6" stop-opacity="0.55"/>
+      <stop offset="100%" stop-color="#0e8fd6" stop-opacity="0"/>
+    </radialGradient>
+
+    <filter id="softGlow" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur stdDeviation="14" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+
+    <filter id="bigGlow" x="-120%" y="-120%" width="340%" height="340%">
+      <feGaussianBlur stdDeviation="30" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <!-- No background rect, deliberately: the drawer fills the panel with its own background
+       colour and composites this over it with real alpha. Baking a black square in here would
+       show as a hard-edged box the moment the background is anything but pure black, and would
+       also cost the asset its alpha channel entirely (rsvg-convert emits RGB, not RGBA, for a
+       fully opaque image, which image/png2nds1.py rejects). -->
+
+  <!-- Ambient halo -->
+  <circle cx="512" cy="512" r="340" fill="url(#novaCore)" opacity="0.55"/>
+
+  <!-- Long cardinal rays -->
+  <g fill="#54e0ff" filter="url(#bigGlow)">
+    <path d="M512 60  L534 448 L512 512 L490 448 Z"/>
+    <path d="M512 964 L534 576 L512 512 L490 576 Z"/>
+    <path d="M60  512 L448 534 L512 512 L448 490 Z"/>
+    <path d="M964 512 L576 534 L512 512 L576 490 Z"/>
+  </g>
+
+  <!-- Diagonal rays -->
+  <g fill="#37c8f0" opacity="0.8" filter="url(#bigGlow)">
+    <path d="M286 286 L437 460 L512 512 L460 437 Z"/>
+    <path d="M738 286 L587 460 L512 512 L564 437 Z"/>
+    <path d="M286 738 L437 564 L512 512 L460 587 Z"/>
+    <path d="M738 738 L587 564 L512 512 L564 587 Z"/>
+  </g>
+
+  <!-- Core -->
+  <circle cx="512" cy="512" r="200" fill="url(#novaCore)"/>
+  <circle cx="512" cy="512" r="34" fill="#ffffff" filter="url(#softGlow)"/>
+  <circle cx="512" cy="512" r="66" fill="none" stroke="#8feaff" stroke-width="3" opacity="0.7"/>
+  <circle cx="512" cy="512" r="110" fill="none" stroke="#4fd2f2" stroke-width="2" opacity="0.4"/>
+</svg>

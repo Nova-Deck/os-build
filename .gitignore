@@ -40,9 +40,15 @@
 src/
 pkg/
 /.makepkg/
-# ... but the Decky plugin's TypeScript SOURCE is repo content, not a makepkg build dir.
+# ... but our own apps' SOURCE is repo content, not a makepkg build dir.
 # (An excluded directory's children cannot be re-included, so the dir itself is negated.)
 !/apps/decky/*/src/
+!/apps/novadeck-splash/src/
+
+# The splash drawer's compiled output. Unlike build/ at the repo root, THIS build/ is an
+# artifact directory: `make splash` writes an aarch64 binary and the test suite writes a host
+# one beside it.
+/apps/novadeck-splash/build/
 
 # Device-proprietary firmware, fetched on demand from the pinned Nova-Deck/qcom-firmwares
 # repo + verified against its sha256sums.txt (never committed here — only in that repo).

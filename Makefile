@@ -250,6 +250,17 @@ VARIMG       := $(OUT)/images/var.img
 # independent witness of which slot actually mounted (the roots are content-identical by design).
 VARIMG_B     := $(OUT)/images/var-b.img
 INITRAMFS    := $(OUT)/initramfs.cpio.gz
+# The boot splash drawer (apps/novadeck-splash): one static aarch64 binary with no shared
+# libraries, and the logo flattened to raw pixels beside it. Both go into the initramfs AND the
+# sealed root, because the same program paints the pre-switch_root phase, the session phase and
+# the shutdown screens.
+SPLASH_BIN   := apps/novadeck-splash/build/novadeck-splash
+SPLASH_ASSET := work/splash/logo.nds1
+SPLASH_SRC   := apps/novadeck-splash/Makefile apps/novadeck-splash/src/novadeck-splash.c \
+                apps/novadeck-splash/src/stb_truetype.h
+# The asset is sized from the widest panel in the device registry (image/mksplash.sh reads it and
+# fails the build when it outgrows the render box), so a new board's conf has to re-run it.
+SPLASH_GEOM  := $(wildcard rootfs/overlay/usr/lib/novadeck/devices/*.conf)
 # Stage-1 steamcl (boot/steamcl.sh). The rule's target is steamcl.efi, but the run also emits
 # holo-bootconf, steamcl-version and fonts/default.pf2 into the same out/boot.
 STEAMCL      := $(OUT)/boot/steamcl.efi
@@ -360,7 +371,7 @@ KERNEL_SRC_HASH := work/.kernel-src.hash
 # ==============================================================================
 .PHONY: help all image toolchain kernel fw-linux fw-qcom base overlay verify-lock \
         rootfs relock mesa-x86 lsfg-vk-x86 installer installer-root relock-installer verify-image \
-        initramfs steamcl grub sdcard verify-card test test-disk bundle sign-bundle publish-bundle \
+        initramfs splash steamcl grub sdcard verify-card test test-disk bundle sign-bundle publish-bundle \
         steam-seed-artifact deploy clean clean-base clean-overlay distclean
 
 # An always-out-of-date prerequisite, for rules that must re-evaluate their own inputs every run
@@ -388,6 +399,7 @@ overlay:   $(OVERLAY_DB)   ## Rebuild from-source overlay pkgs (patched gamescop
 base:      $(BASE_STAMP)   ## Bootstrap the aarch64 root from packages (host; docker+qemu)
 rootfs:    $(ROOTFS)       ## Assemble the read-only root + var images (in container)
 initramfs: $(INITRAMFS)    ## Build the initramfs that mounts ro-root + /etc overlay (in container)
+splash:    $(SPLASH_BIN) $(SPLASH_ASSET) ## Build the boot-splash drawer + flattened logo (in container)
 steamcl:   $(STEAMCL)      ## Build the stage-1 steamcl + steamos-bootconf (in container)
 grub:      $(GRUB)         ## Build the stage-2 GRUB + per-slot grub.cfg (in container)
 sdcard:    $(SDCARD)       ## Build the flashable SD-card image (in container)
@@ -439,6 +451,7 @@ test: verify-lock ## Run the offline bootctl/post-install/boot-disk/pairingd/qui
 	bash $(TESTS_DIR)/test-fan-curve.sh
 	bash $(TESTS_DIR)/test-cpu-scheduler.sh
 	bash $(TESTS_DIR)/test-decky.sh
+	bash $(TESTS_DIR)/test-splash.sh
 	bash $(TESTS_DIR)/test-update.sh
 	bash $(TESTS_DIR)/test-publish-bundle.sh
 	bash $(TESTS_DIR)/test-publish-card.sh
@@ -817,8 +830,17 @@ decky-plugin: $(DECKY_DISTS) ## Build the Decky plugin frontends: novadeck-contr
 # ==============================================================================
 # The initramfs mounts the slot's root + var + efi partition, stacks the /etc overlay, and
 # switch_roots. It is staged out of the base rootfs (bash + util-linux), so the base is a prereq.
-$(INITRAMFS): $(IMAGE_DIR)/mkinitramfs.sh $(IMAGE_DIR)/initramfs/init $(BASE_STAMP) | $(BUILD_STAMP)
+$(INITRAMFS): $(IMAGE_DIR)/mkinitramfs.sh $(IMAGE_DIR)/initramfs/init $(SPLASH_BIN) $(SPLASH_ASSET) $(BASE_STAMP) | $(BUILD_STAMP)
 	$(INBUILD) $(IMAGE_DIR)/mkinitramfs.sh /src/work/base
+
+# The boot splash: a static aarch64 drawer plus the flattened logo. Both are initramfs payload,
+# which is why they are prerequisites of it rather than of the rootfs alone — a theme or binary
+# change that did not rebuild the cpio would leave the OLD splash on the card with no sign of it.
+$(SPLASH_BIN): $(SPLASH_SRC) | $(BUILD_STAMP)
+	$(INBUILD) -c 'make -C apps/novadeck-splash'
+
+$(SPLASH_ASSET): $(IMAGE_DIR)/mksplash.sh $(IMAGE_DIR)/png2nds1.py $(IMAGE_DIR)/splash/logo.svg $(SPLASH_GEOM) | $(BUILD_STAMP)
+	$(INBUILD) $(IMAGE_DIR)/mksplash.sh
 
 # Stage-1 steamcl + the steamos-bootconf binary the OS side installs (boot/steamcl.sh, pinned
 # source). Independent of the kernel: it is bootloader software, not a payload.

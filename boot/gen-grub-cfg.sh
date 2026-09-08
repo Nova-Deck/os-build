@@ -102,7 +102,12 @@ ESP_MARKER="/SteamOS/conf/$SLOT.conf"
 # per-slot and added per menuentry. This replaces the old boot/cmdline file, which the android-bootimg backend
 # baked into the image header: with a UEFI chain the EFI stub OVERWRITES /chosen/bootargs with
 # GRUB's command line, so every argument has to be on the `linux` line or it is not applied.
-BOOT_CMDLINE="quiet video=efifb:off console=tty0 cgroup.memory=nokmem,nosocket nosoftlockup panic=5"
+# loglevel=3 is NOT redundant with `quiet`, and the difference is visible on the panel: `quiet`
+# raises the console level to 4, which still prints KERN_ERR. drm/msm emits a steady run of
+# `*ERROR*` lines during DPU bring-up, and every one of them lands on top of the boot splash.
+# 3 keeps the genuinely fatal ones and drops the rest. Nothing is lost — the journal still has
+# them all, which is the only place anyone reads them on a board with no serial console.
+BOOT_CMDLINE="quiet loglevel=3 video=efifb:off console=tty0 cgroup.memory=nokmem,nosocket nosoftlockup panic=5"
 
 # --- board catalog ------------------------------------------------------------------------------
 declare -a pids=() pnames=() pdtbs=() pbootargs=()

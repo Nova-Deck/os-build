@@ -359,7 +359,7 @@ static uint32_t err_fg = 0xFFFF5C5Cu;
 
 // Sizes are derived from the SHORT axis so that text is the same physical height whether the
 // canvas is portrait or landscape. The ratios are against a 1080px reference.
-static int auto_logo_px(int ref) { return ref * 360 / 1080; }
+static int auto_logo_px(int ref) { return ref * 480 / 1080; }
 static int auto_text_px(int ref) { return ref * 44 / 1080; }
 static int auto_gap_px(int ref)  { return ref * 56 / 1080; }
 

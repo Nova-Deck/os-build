@@ -190,24 +190,49 @@ else
     bad "a long status line ran off the panel (x ${lx0}..${lx1})"
 fi
 
-# The '!' prefix is a marker, not content: it must colour the line red and never be drawn. Compare
-# against the same text without it — a red line has far less green than a near-white one.
-green_of() {
-    python3 - "$1" <<'PY'
-import sys
-d = open(sys.argv[1], 'rb').read(); parts = d.split(b'\n', 3)
-w, h = map(int, parts[1].split()); px = parts[3]
-# Sum green only over pixels that are clearly text-bright, ignoring the blue logo.
-print(sum(px[i+1] for i in range(0, w*h*3, 3) if px[i] > 128))
-PY
-}
+# The '!' prefix is a marker, not content: it must colour the line red and never be drawn.
+#
+# Measured by DIFFING the two renders rather than summing each. The only thing that differs
+# between them is the text, so the differing pixels ARE the text -- which makes the assertion
+# independent of the logo's size and position. An earlier version summed green over the whole
+# frame and silently coupled itself to the logo: enlarging the logo diluted the text's share and
+# broke a test that was measuring the right thing for the wrong reason.
 render "$TMP/plain.ppm" 1920 1080 0 "Steam launch failed"
 render "$TMP/err.ppm"   1920 1080 0 "!Steam launch failed"
-gp=$(green_of "$TMP/plain.ppm"); ge=$(green_of "$TMP/err.ppm")
-if [[ $ge -lt $((gp * 3 / 4)) && $ge -gt 0 ]]; then
-    ok "a '!' status line renders red (green $ge vs $gp)"
+read -r ndiff plain_rg err_rg < <(python3 - "$TMP/plain.ppm" "$TMP/err.ppm" <<'REDCHECK'
+import sys
+def load(p):
+    d = open(p, 'rb').read(); parts = d.split(b'\n', 3)
+    w, h = map(int, parts[1].split()); return w * h, parts[3]
+n, a = load(sys.argv[1]); _, b = load(sys.argv[2])
+# Redness = R - G. Near-white text scores ~0; red text scores strongly positive.
+n_diff = pa = pb = 0
+for i in range(0, n * 3, 3):
+    if a[i] != b[i] or a[i+1] != b[i+1] or a[i+2] != b[i+2]:
+        n_diff += 1
+        pa += a[i] - a[i+1]
+        pb += b[i] - b[i+1]
+print(n_diff, pa // max(n_diff, 1), pb // max(n_diff, 1))
+REDCHECK
+)
+if [[ $ndiff -lt 100 ]]; then
+    bad "the '!' marker changed nothing at all ($ndiff pixels differ)"
+elif [[ $err_rg -gt $((plain_rg + 40)) ]]; then
+    ok "a '!' status line renders red (R-G $err_rg vs $plain_rg over $ndiff text pixels)"
 else
-    bad "the '!' error marker did not change the colour (green $ge vs $gp)"
+    bad "the '!' line is not red (R-G $err_rg vs $plain_rg over $ndiff text pixels)"
+fi
+
+# ...and the marker itself must never be drawn. If '!' were rendered as a glyph the error line
+# would be visibly wider than the same text without it.
+render "$TMP/errwidth.ppm" 1920 1080 0 "!AAAA"
+render "$TMP/plainwidth.ppm" 1920 1080 0 "AAAA"
+read -r _ _ ex0 _ ex1 _ _ < <(probe "$TMP/errwidth.ppm")
+read -r _ _ px0 _ px1 _ _ < <(probe "$TMP/plainwidth.ppm")
+if [[ $(( (ex1 - ex0) - (px1 - px0) )) -le 2 ]]; then
+    ok "the '!' marker is stripped, not drawn"
+else
+    bad "the '!' appears to be drawn (error line is $(( (ex1-ex0) - (px1-px0) ))px wider)"
 fi
 
 # An empty status must still draw the logo — a blank panel is exactly what we are trying to avoid.

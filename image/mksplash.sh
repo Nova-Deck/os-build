@@ -46,10 +46,10 @@ NDS="$OUTDIR/logo.nds1"
 # registry outgrows the render box, and the drawer logs an "upscaled" line that
 # tests/test-splash.sh turns into a failure across every geometry in the registry. So a change to
 # either the ratio or the panel line-up is caught, rather than quietly shipping a soft logo.
-LOGO_NUM=360
+LOGO_NUM=480
 LOGO_DEN=1080
 HEADROOM_PCT=20    # covers a --logo-height override and a slightly larger future panel
-RENDER_PX=576
+RENDER_PX=768
 
 DEVDIR="$ROOT/rootfs/overlay/usr/lib/novadeck/devices"
 if [ -d "$DEVDIR" ]; then

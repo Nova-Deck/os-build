@@ -1,0 +1,148 @@
+Subject: [PATCH] drm/msm: serialise framebuffer pin state
+
+prepare_count, iova[] and the pins they describe are updated locklessly,
+but drm_atomic_helper_commit() prepares a new state in parallel with the
+completion of the previous one -- stall_checks() only stalls on the second
+previous commit.  Commit N+1's ->prepare_fb() thus runs while commit N is
+in ->cleanup_fb(), and for a double-buffered flip that is the same
+framebuffer:
+
+  cleanup: prepare_count 1 -> 0
+  prepare: prepare_count 0 -> 1, pins, stores iova[]
+  cleanup: memset(iova, 0)
+
+leaving the plane programmed with a NULL base address:
+
+  arm-smmu 15000000.iommu: Unhandled context fault: fsr=0x402,
+      iova=0x00000100, fsynr=0x3e0023, cbfrsynra=0x1c00, cb=11
+
+The opposite order is broken too since commit 8ac37c88f991 ("drm/msm:
+Refcount framebuffer pins"): a prepare which finds the count non-zero
+returns at once, assuming iova[] is populated.
+
+Both callbacks may sleep, so a mutex will do.
+
+Fixes: 8ac37c88f991 ("drm/msm: Refcount framebuffer pins")
+
+BACKPORT from linux-arm-msm, "[PATCH v2 1/6] drm/msm: fix SMMU fault dumps",
+Dmitry Baryshkov, 2026-09-08:
+https://lore.kernel.org/linux-arm-msm/20260908-fd-kms-fix-smmu-v2-0-9391815742a8@oss.qualcomm.com/
+Patch 1 of 6; we take 1-3 and skip 4-6 (they gate on CRTC colour management,
+which gamescope clears rather than uses, and on drm/ci xfails for SC7180).
+The race needs commit N+1's ->prepare_fb() to overlap commit N's ->cleanup_fb()
+on the same buffer, which is gamescope's steady state: nonblocking atomic
+commits over a double-buffered flip. Both sides of it are present in the pinned
+7.2.4 -- msm_fb.c carries the lockless atomic_t prepare_count, the early return
+that assumes iova[] is populated, and the memset() that clears it.
+
+Not yet reviewed or merged upstream; v2 was posted the day we took it. Upstream
+marks it Assisted-by: LLM.
+
+---
+
+diff --git a/drivers/gpu/drm/msm/msm_fb.c b/drivers/gpu/drm/msm/msm_fb.c
+index 60c108d35d2a..d69591245231 100644
+--- a/drivers/gpu/drm/msm/msm_fb.c
++++ b/drivers/gpu/drm/msm/msm_fb.c
+@@ -22,9 +22,12 @@ struct msm_framebuffer {
+ 	/* Count of # of attached planes which need dirtyfb: */
+ 	refcount_t dirtyfb;
+ 
++	/* Protects the pin state below: */
++	struct mutex lock;
++
+ 	/* Framebuffer per-plane address, if pinned, else zero: */
+ 	uint64_t iova[DRM_FORMAT_MAX_PLANES];
+-	atomic_t prepare_count;
++	unsigned int prepare_count;
+ };
+ #define to_msm_framebuffer(x) container_of(x, struct msm_framebuffer, base)
+ 
+@@ -45,9 +48,17 @@ static int msm_framebuffer_dirtyfb(struct drm_framebuffer *fb,
+ 					 clips, num_clips);
+ }
+ 
++static void msm_framebuffer_destroy(struct drm_framebuffer *fb)
++{
++	struct msm_framebuffer *msm_fb = to_msm_framebuffer(fb);
++
++	mutex_destroy(&msm_fb->lock);
++	drm_gem_fb_destroy(fb);
++}
++
+ static const struct drm_framebuffer_funcs msm_framebuffer_funcs = {
+ 	.create_handle = drm_gem_fb_create_handle,
+-	.destroy = drm_gem_fb_destroy,
++	.destroy = msm_framebuffer_destroy,
+ 	.dirty = msm_framebuffer_dirtyfb,
+ };
+ 
+@@ -76,13 +87,15 @@ int msm_framebuffer_prepare(struct drm_framebuffer *fb, bool needs_dirtyfb)
+ 	struct msm_drm_private *priv = fb->dev->dev_private;
+ 	struct drm_gpuvm *vm = priv->kms->vm;
+ 	struct msm_framebuffer *msm_fb = to_msm_framebuffer(fb);
+-	int ret, i, n = fb->format->num_planes;
++	int ret = 0, i, n = fb->format->num_planes;
+ 
+ 	if (needs_dirtyfb)
+ 		refcount_inc(&msm_fb->dirtyfb);
+ 
+-	if (atomic_inc_return(&msm_fb->prepare_count) > 1)
+-		return 0;
++	mutex_lock(&msm_fb->lock);
++
++	if (msm_fb->prepare_count++)
++		goto out;
+ 
+ 	for (i = 0; i < n; i++) {
+ 		msm_gem_vma_get(fb->obj[i]);
+@@ -90,10 +103,13 @@ int msm_framebuffer_prepare(struct drm_framebuffer *fb, bool needs_dirtyfb)
+ 		drm_dbg_state(fb->dev, "FB[%u]: iova[%d]: %08llx (%d)\n",
+ 			      fb->base.id, i, msm_fb->iova[i], ret);
+ 		if (ret)
+-			return ret;
++			break;
+ 	}
+ 
+-	return 0;
++out:
++	mutex_unlock(&msm_fb->lock);
++
++	return ret;
+ }
+ 
+ void msm_framebuffer_cleanup(struct drm_framebuffer *fb, bool needed_dirtyfb)
+@@ -106,8 +122,10 @@ void msm_framebuffer_cleanup(struct drm_framebuffer *fb, bool needed_dirtyfb)
+ 	if (needed_dirtyfb)
+ 		refcount_dec(&msm_fb->dirtyfb);
+ 
+-	if (atomic_dec_return(&msm_fb->prepare_count))
+-		return;
++	mutex_lock(&msm_fb->lock);
++
++	if (--msm_fb->prepare_count)
++		goto out;
+ 
+ 	memset(msm_fb->iova, 0, sizeof(msm_fb->iova));
+ 
+@@ -115,6 +133,9 @@ void msm_framebuffer_cleanup(struct drm_framebuffer *fb, bool needed_dirtyfb)
+ 		msm_gem_unpin_iova(fb->obj[i], vm);
+ 		msm_gem_vma_put(fb->obj[i]);
+ 	}
++
++out:
++	mutex_unlock(&msm_fb->lock);
+ }
+ 
+ uint32_t msm_framebuffer_iova(struct drm_framebuffer *fb, int plane)
+@@ -206,6 +227,7 @@ msm_framebuffer_init(struct drm_device *dev, const struct drm_format_info *info,
+ 	}
+ 
+ 	refcount_set(&msm_fb->dirtyfb, 1);
++	mutex_init(&msm_fb->lock);
+ 
+ 	drm_dbg_state(dev, "create: FB ID: %d (%p)\n", fb->base.id, fb);
+ 
+
+-- 
+2.47.3

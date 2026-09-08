@@ -1,0 +1,68 @@
+Subject: [PATCH] drm/msm: fix framebuffer pin refcount leak on prepare failure
+
+msm_framebuffer_prepare() bumps prepare_count before pinning, but returns
+straight out of the pin loop on error, leaking the count, the
+msm_gem_vma_get() reference and any planes already pinned.
+drm_atomic_helper_prepare_planes() does not call cleanup_fb() for the
+plane whose prepare_fb() failed, so nothing ever drops it.
+
+Since commit 8ac37c88f991 ("drm/msm: Refcount framebuffer pins") a
+prepare which finds the count already non-zero returns early, assuming
+iova[] is populated.  With the count stuck, every later prepare of that
+framebuffer reports success while iova[] is still zero, and DPU scans out
+from a NULL base address:
+
+  arm-smmu 15000000.iommu: Unhandled context fault: fsr=0x402,
+      iova=0x00000100, fsynr=0x3e0023, cbfrsynra=0x1c00, cb=11
+
+Unwind properly on failure instead.
+
+Fixes: 8ac37c88f991 ("drm/msm: Refcount framebuffer pins")
+
+BACKPORT from the same series as 0515, patch 2 of 6.
+Rarer trigger than 0515 -- it needs a prepare to fail first -- but a worse
+outcome: the count sticks, and from then on every prepare of that framebuffer
+reports success while iova[] is still zero, so DPU scans out from a NULL base
+address. Permanent, not transient.
+
+Not yet reviewed or merged upstream. Upstream marks it Assisted-by: LLM.
+
+---
+
+diff --git a/drivers/gpu/drm/msm/msm_fb.c b/drivers/gpu/drm/msm/msm_fb.c
+index d69591245231..dfe040d5260b 100644
+--- a/drivers/gpu/drm/msm/msm_fb.c
++++ b/drivers/gpu/drm/msm/msm_fb.c
+@@ -102,13 +102,28 @@ int msm_framebuffer_prepare(struct drm_framebuffer *fb, bool needs_dirtyfb)
+ 		ret = msm_gem_get_and_pin_iova(fb->obj[i], vm, &msm_fb->iova[i]);
+ 		drm_dbg_state(fb->dev, "FB[%u]: iova[%d]: %08llx (%d)\n",
+ 			      fb->base.id, i, msm_fb->iova[i], ret);
+-		if (ret)
++		if (ret) {
++			msm_gem_vma_put(fb->obj[i]);
+ 			break;
++		}
++	}
++
++	if (ret) {
++		while (i--) {
++			msm_gem_unpin_iova(fb->obj[i], vm);
++			msm_gem_vma_put(fb->obj[i]);
++		}
++
++		memset(msm_fb->iova, 0, sizeof(msm_fb->iova));
++		msm_fb->prepare_count--;
+ 	}
+ 
+ out:
+ 	mutex_unlock(&msm_fb->lock);
+ 
++	if (ret && needs_dirtyfb)
++		refcount_dec(&msm_fb->dirtyfb);
++
+ 	return ret;
+ }
+ 
+
+-- 
+2.47.3

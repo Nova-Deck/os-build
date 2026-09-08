@@ -27,10 +27,17 @@ git_commit: 5015d0d945b3d3f2b038d2667880d5762f7d9437
 # series is a pure pin edit — but that is a prediction, not a licence to skip the patch/config
 # gates below. Re-run them.
 #
-# 7.2.4 is NOT HW-validated. Every offline gate below was re-run and is clean, and the build
-# produces Image + DTBs + modules — but nothing has booted this kernel on a device yet. Note also
-# that a new Image invalidates the whole `/lib/modules/<ver>` tree (module BTF), so testing it
-# means flashing a card built from this pin, not swapping /boot/Image on an existing one.
+# 7.2.4 IS HW-validated, as of 2026-09-09, on four boards — booted from a dev card built off this
+# pin (with 0515-0517, see below), display up and no issues reported on:
+#   Pocket ACE  qcs8550-ayaneo-pocketace  panel 0051 ayaneo,pocket-ace-panel   VIDEO mode
+#   Pocket S2   sm8650-ayaneo-ps2         panel 0066 ayaneo,wt0630-2k          VIDEO mode
+#   Pocket FIT  sm8650-konkr-pf           panel 0067 ayaneo,ar14-144hz         VIDEO mode
+#   Pocket Max  sm8250-mangmi-pocket-max  panel 0058 mangmi,pocket-max-panel   COMMAND mode
+# Both DSI modes on purpose: 0517's premise is video-mode-specific, so the command-mode panel is
+# there to prove it did not regress the other path, not to exercise it. Four of 21 boards, and
+# three SoCs (qcs8550 / sm8650 / sm8250) — the untested 17 are still untested. Note also that a
+# new Image invalidates the whole `/lib/modules/<ver>` tree (module BTF), so testing it means
+# flashing a card built from this pin, not swapping /boot/Image on an existing one.
 
 # Config validation (kernel/*.config) against THIS tree, RE-RUN 2026-09-08 for the 7.2.4 re-pin
 # (numbers below are 7.2.4's; the 7.2.3 run they replace found 429/0-missing and 71 patches/26 fuzz,
@@ -48,11 +55,13 @@ git_commit: 5015d0d945b3d3f2b038d2667880d5762f7d9437
 #       READ_ONLY_THP_FOR_FS -> removed upstream in 7.2; file THP is unconditional now.
 #     SCHED_CACHE (added 2026-08-22) still resolves the same way (init/Kconfig, `default y`,
 #     `depends on SMP`) — the pin records an inherited default rather than changing one.
-#   - all 77 out-of-tree patches in kernel/patches/ apply to 7.2.4 with ZERO rejects, applied
+#   - all 80 out-of-tree patches in kernel/patches/ apply to 7.2.4 with ZERO rejects, applied
 #     CUMULATIVELY in lexical order, which is the only order that means anything (see below).
 #     The patch count moved 71 -> 77 since the 7.2.3 re-pin and NOT because of this bump: six drm/msm
 #     and DPU patches (0508-0513) were added on main in the meantime. All six are new-enough code
-#     that they apply at fuzz 0.
+#     that they apply at fuzz 0. It then moved 77 -> 80, also NOT a bump: 0515-0517 backport patches
+#     1-3 of Dmitry Baryshkov's "drm/msm: fix SMMU fault dumps" v2 (2026-09-08). Same story — new
+#     code, fuzz 0 — and the gates below were RE-RUN for that addition, not just for the 7.2.4 bump.
 #     26 hunks need fuzz; kernel/build.sh passes no -F0, so patch's default fuzz=2 accepts them.
 #     The fuzz count CLIMBS with every point release — when it reaches 2 on a hunk that matters,
 #     patch will start applying it in the wrong place silently. So the raw total is the WRONG
@@ -60,7 +69,11 @@ git_commit: 5015d0d945b3d3f2b038d2667880d5762f7d9437
 #     2 -> 1 would leave it unmoved. The 7.2.4 run therefore replayed the identical drill against a
 #     pristine 7.2.3 tree and diffed the PER-HUNK profile (patch name + fuzz level, counted): the
 #     two are byte-identical, 16 hunks at fuzz 1 and 10 at fuzz 2, same patches on both sides.
-#     Nothing climbed.
+#     Nothing climbed. The 0515-0517 addition replayed the SAME drill in the other axis — two
+#     pristine 7.2.4 trees, 77 patches on one and 80 on the other — and the profiles are again
+#     byte-identical at 16/10. So the three new patches applied at fuzz 0 AND moved no existing
+#     hunk. Note that "0 rejects" alone does not prove a patch landed, so that run also asserted
+#     each one's code is present in the 80-patch tree and absent from the 77-patch one.
 #   - independent corroboration, and the cheapest signal in this whole drill: the pure upstream delta
 #     read straight off the INCREMENTAL patch, which is far cheaper than diffing two patched trees
 #     and says the same thing (https://cdn.kernel.org/pub/linux/kernel/v7.x/incr/patch-7.2.3-4.xz —
@@ -91,6 +104,10 @@ git_commit: 5015d0d945b3d3f2b038d2667880d5762f7d9437
 #     requested values. So every directive left in that file is load-bearing.
 #   - and the whole thing was then BUILT: `make kernel` produced Image + all 21 board DTBs +
 #     modules against 7.2.4 on 2026-09-08. That is the gate the offline drill cannot give you.
+#     Re-run once more the same day WITH 0515-0517: clean build, 426/0-missing, `trim-platforms:
+#     46 symbols confirmed disabled`, Image + 21 DTBs + modules. A dev card off that build then
+#     booted four boards clean on 2026-09-09 — see the HW-validation paragraph above, which is the
+#     first time this pin has been on hardware at all.
 #
 # HOW TO RE-RUN THIS VALIDATION, and the mistake that makes it lie: patches must be applied
 # cumulatively to ONE tree, exactly as kernel/build.sh does. Dry-running each patch independently
@@ -121,8 +138,11 @@ git_commit: 5015d0d945b3d3f2b038d2667880d5762f7d9437
 #         symbol. So the binding was migrated across all six board nodes and the panels that
 #         consume it — see the HW gate below, this is the risky half of the bump.
 #
-# HW GATE, NOT YET RUN. The sgm3804 migration changes how panel power is brought up on
-# Pocket ACE / DMG / DS / S1K / S2K, Pocket S2 and konkr-pf:
+# HW GATE, PARTLY RUN (3 of 7) as of 2026-09-09. The sgm3804 migration changes how panel power is
+# brought up on Pocket ACE / DMG / DS / S1K / S2K, Pocket S2 and konkr-pf. Three of those seven —
+# Pocket ACE, Pocket S2 and konkr-pf (Pocket FIT) — came up clean on the 2026-09-09 card, which is
+# the failure this gate was written to catch (a lit backlight over a black panel, AVEE dead). DMG,
+# DS, S1K and S2K are STILL UNTESTED, and they are the ones to try next:
 #   - `avdd-supply` now points at the positive rail only; the negative rail is a SECOND regulator
 #     that nothing enabled before, so every panel driver that used to get both rails from one
 #     `avdd` now takes an `avee` supply too (patches 0051/0052/0054/0066/0067/0068). A board left

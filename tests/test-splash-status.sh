@@ -206,5 +206,77 @@ grep -q '^ConditionKernelCommandLine=!novadeck.splash=0' "$UNIT" \
     && ok "enabled via sysinit.target.wants" \
     || bad "not enabled — the unit ships but never runs"
 
+# ---------------------------------------------------------------------------------------------
+# Shutdown / reboot screens
+# ---------------------------------------------------------------------------------------------
+echo
+echo "shutdown + reboot screens:"
+
+SHUT="$ROOT/rootfs/overlay/usr/lib/systemd/system/novadeck-splash-shutdown.service"
+REBOOT="$ROOT/rootfs/overlay/usr/lib/systemd/system/novadeck-splash-reboot.service"
+WANTS="$ROOT/rootfs/overlay/etc/systemd/system"
+
+for u in "$SHUT" "$REBOOT"; do
+    rel="${u#"$ROOT"/}"
+    [[ -f $u ]] || { bad "$rel is missing"; continue; }
+
+    # After=display-manager.service is the subtle one and the reason these can work at all.
+    # During shutdown systemd REVERSES ordering, so for a unit being started as part of the
+    # poweroff/reboot transaction this means "after the display manager has been STOPPED" --
+    # which is when gamescope finally drops DRM master. Without it the drawer starts while
+    # gamescope still holds master, SET_MASTER fails, and the screen never changes.
+    grep -q '^After=display-manager.service' "$u" \
+        && ok "${rel##*/} waits for the display manager to stop (reversed ordering)" \
+        || bad "${rel##*/} has no After=display-manager.service — it will race gamescope for DRM master"
+
+    grep -q '^DefaultDependencies=no' "$u" \
+        && ok "${rel##*/} runs with DefaultDependencies=no" \
+        || bad "${rel##*/} without DefaultDependencies=no is ordered out of the shutdown transaction"
+
+    # Nothing succeeds these, so passing --takeover would put the drawer into the yield path and
+    # make it wait on a handover that is never coming.
+    # Scoped to the command, not the file: the unit's comment explains why it passes no
+    # --takeover, and a whole-file grep matches that explanation instead of the argument.
+    execline=$(sed -n '/^ExecStart=/,/[^\\]$/p' "$u")
+    grep -q -- '--takeover' <<<"$execline" \
+        && bad "${rel##*/} passes --takeover, but nothing succeeds it on the way down" \
+        || ok "${rel##*/} passes no --takeover (nothing succeeds it)"
+
+    grep -q '^ConditionKernelCommandLine=!novadeck.splash=0' "$u" \
+        && ok "${rel##*/} honours novadeck.splash=0" \
+        || bad "${rel##*/} ignores novadeck.splash=0"
+
+    # A splash must never be why a device will not power off.
+    grep -q '^Restart=no' "$u" && ok "${rel##*/} will not restart itself" \
+                              || bad "${rel##*/} may restart during shutdown"
+
+    # The status file still holds the boot's last line; without this the panel says
+    # "Starting NovaDeck" on the way down.
+    grep -q '^ExecStartPre=-/usr/lib/novadeck/splash-progress' "$u" \
+        && ok "${rel##*/} sets its own message before drawing" \
+        || bad "${rel##*/} draws whatever the boot left in the status file"
+done
+
+# Each screen has to be reachable from the target that actually runs. poweroff and halt are
+# DIFFERENT targets and a device told to halt would otherwise show nothing.
+for link in poweroff.target.wants/novadeck-splash-shutdown.service \
+            halt.target.wants/novadeck-splash-shutdown.service \
+            reboot.target.wants/novadeck-splash-reboot.service; do
+    [[ -L "$WANTS/$link" ]] && ok "enabled: ${link%%/*}" \
+                           || bad "not enabled for ${link%%/*} — the unit ships but never runs"
+done
+
+# The two units are near-identical by construction, so the thing worth checking is that they did
+# not end up identical: each must name its own transition and its own message.
+grep -q '^Before=systemd-poweroff.service systemd-halt.service' "$SHUT" \
+    && ok "the shutdown screen is ordered before poweroff and halt" \
+    || bad "the shutdown screen is not ordered before poweroff/halt"
+grep -q '^Before=systemd-reboot.service' "$REBOOT" \
+    && ok "the reboot screen is ordered before reboot" \
+    || bad "the reboot screen is not ordered before reboot"
+[[ "$(grep '^ExecStartPre' "$SHUT")" != "$(grep '^ExecStartPre' "$REBOOT")" ]] \
+    && ok "the two screens say different things" \
+    || bad "both screens publish the same message — one was copied without editing"
+
 printf '\n%s: %d passed, %d failed\n' "$(basename "$0")" "$PASS" "$FAIL"
 [[ $FAIL -eq 0 ]]

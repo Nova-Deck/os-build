@@ -50,9 +50,19 @@ DTS="$ROOT/kernel/dts/qcom"
 [ -f "$BOARDS" ] || { echo "missing board catalog: ${BOARDS#"$ROOT"/}" >&2; exit 1; }
 
 # --- the common kernel command line ---------------------------------------------------------------
-# The first four are the shipped image's BOOT_CMDLINE verbatim (boot/gen-grub-cfg.sh): the EFI stub
-# OVERWRITES /chosen/bootargs with GRUB's command line, so anything not on the `linux` line is not
-# applied at all. video=efifb:off in particular is load-bearing on these panels.
+# BOOT_CMDLINE below is the shipped image's BOOT_CMDLINE **verbatim** (boot/gen-grub-cfg.sh): the EFI
+# stub OVERWRITES /chosen/bootargs with GRUB's command line, so anything not on the `linux` line is
+# not applied at all. video=efifb:off in particular is load-bearing on these panels.
+#
+# The two are hand-copied, so tests/test-mkimage.sh asserts they are byte-identical. That check
+# exists because the drift is otherwise silent: `loglevel=3` was added to the shipped cmdline and
+# not to this one, and nothing anywhere noticed.
+#
+# On loglevel=3 specifically, which matters MORE here than on the shipped image: `quiet` only gates
+# the console to level 4, so KERN_ERR still prints -- and drm/msm emits a steady run of `*ERROR*`
+# lines during DPU bring-up. On the shipped image those land on the boot splash; here they land on
+# the installer's own console UI, which is the screen someone is reading while deciding what to do
+# to their disk. Nothing is lost: the journal still has every line, and save-log.sh collects it.
 #
 # Then three that are the installer's own, and each buys something specific:
 #
@@ -66,7 +76,7 @@ DTS="$ROOT/kernel/dts/qcom"
 #                         whole reason the pair is split like this rather than using =overlay.
 #   systemd.firstboot=off  belt to the braces of the masked systemd-firstboot.service: this kills
 #                         PID1's own builtin locale/root-password query, which the mask does not.
-BOOT_CMDLINE="quiet video=efifb:off console=tty0 cgroup.memory=nokmem,nosocket nosoftlockup panic=5"
+BOOT_CMDLINE="quiet loglevel=3 video=efifb:off console=tty0 cgroup.memory=nokmem,nosocket nosoftlockup panic=5"
 INSTALLER_CMDLINE="root=PARTUUID=$PARTUUID rootfstype=squashfs rootwait ro systemd.volatile=state systemd.firstboot=off"
 
 # --- board catalog, read from the SHARED file -------------------------------------------------------

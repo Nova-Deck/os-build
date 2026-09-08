@@ -150,6 +150,38 @@ else
 fi
 
 # ---------------------------------------------------------------------------------------------
+CASE="boot cmdline parity with the shipped generator"
+# The shared prefix is hand-copied between the two generators, and a divergence is invisible:
+# both media still build, both still boot, and the difference only shows as one of them behaving
+# subtly differently on a panel someone is looking at. That is exactly what happened -- loglevel=3
+# went into the shipped cmdline and not the installer's, and nothing failed.
+#
+# Compared as the assigned VALUE, not as a source line, so a comment or reflow above either one
+# does not make this fail for no reason.
+shipped_cmdline=$(sed -n 's/^BOOT_CMDLINE="\(.*\)"$/\1/p' "$SHIPPED_GENCFG" | head -1)
+installer_cmdline=$(sed -n 's/^BOOT_CMDLINE="\(.*\)"$/\1/p' "$GENCFG" | head -1)
+if [[ -z $shipped_cmdline || -z $installer_cmdline ]]; then
+    bad "could not read BOOT_CMDLINE from both generators (shipped='$shipped_cmdline' installer='$installer_cmdline')"
+elif [[ $shipped_cmdline == "$installer_cmdline" ]]; then
+    ok "both generators emit the same shared prefix"
+else
+    bad "the shared prefix has drifted -- shipped: '$shipped_cmdline' / installer: '$installer_cmdline'"
+fi
+
+# loglevel=3 is called out by name because `quiet` reads like it already covers this and does not:
+# it gates the console to 4, so drm/msm's *ERROR* lines still print over whatever is on screen.
+CASE="the console is quiet enough for a UI to be readable"
+for gen in "$SHIPPED_GENCFG" "$GENCFG"; do
+    # Repo-relative, not basename: both files are called gen-grub-cfg.sh, so a basename here
+    # would report a failure without saying which of the two it is.
+    rel="${gen#"$ROOT"/}"
+    if grep -q 'BOOT_CMDLINE=.*loglevel=3' "$gen"; then
+        ok "$rel sets loglevel=3 (quiet alone only gates to 4)"
+    else
+        bad "$rel has no loglevel=3 -- KERN_ERR will print over the splash/installer UI"
+    fi
+done
+
 CASE="dtb parity with the shipped generator"
 # See the header: the catalog is shared data, the derivation rule is subtle, and a divergence is a
 # board that boots from a card but not from the installer.

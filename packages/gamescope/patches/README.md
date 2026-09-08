@@ -95,7 +95,7 @@ sources.** That is expected on a dev card and is exactly why it must come back o
 `0008` — synthesize a client-facing EDID for internal connectors that expose none (third-party
 patch by virtudude and enjihn, not in any gamescope release; the `From:`/`Subject:` header in the
 file is theirs and is kept verbatim). **Every DSI panel we ship is EDID-less** — the panel drivers
-in `kernel/patches/0058` (`chipone,icna35xx`) and `0070` (`mangmi,pocket-max-panel`) set
+in `kernel/patches/0058` (`chipone,icna35xx` and `mangmi,pocket-max-panel`) set
 `display_info.width_mm/height_mm` but there is no EDID blob on the connector at all — so gamescope
 has had no display identity, no colorimetry, and nothing to hand a client. This builds a valid
 baseline EDID out of the connector's preferred kernel mode and feeds it through the existing
@@ -118,7 +118,7 @@ from the connector's mm while its detailed timing comes from the preferred kerne
 `chipone,icna35xx` descs in `kernel/patches/0058` declare landscape mm (`160x89`, `136x68`) against
 a portrait `1080x1920` mode list, so the synthesized EDID contradicts itself on `ayn-thor-lite`,
 `ayn-thor`, `ayaneo-pocket-ds`, `ayaneo-pocket-evo` and `ayn-odin-2-portal`. `mangmi,pocket-max-panel`
-in `0070` gets it right and is the control. This does not block anything here — an EDID with a wrong
+in the same patch gets it right and is the control. This does not block anything here — an EDID with a wrong
 mm still beats no EDID, and SteamUI's scale does not read it — but the fix belongs in the panel desc,
 not in this patch.
 

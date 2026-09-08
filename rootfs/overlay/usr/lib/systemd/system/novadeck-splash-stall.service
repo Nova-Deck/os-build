@@ -1,0 +1,32 @@
+[Unit]
+Description=novadeck boot-splash stall narrator (name the job the boot is waiting on)
+Documentation=file:///usr/lib/novadeck/splash-stall
+
+# DefaultDependencies=no is what makes this useful rather than decorative. A normal service gets
+# an implicit After=sysinit.target, which is far too late: the delays worth narrating on a first
+# boot -- systemd-repart, systemd-growfs-root -- happen INSIDE sysinit, and a narrator that starts
+# afterwards can only ever report on a boot that already went fine.
+DefaultDependencies=no
+After=systemd-journald.socket
+Before=sysinit.target shutdown.target
+Conflicts=shutdown.target
+
+# No splash on the image, or the operator turned it off on the cmdline: nothing to narrate to.
+# The kernel-cmdline switch is the same one the initramfs honours, so one knob covers both.
+ConditionPathExists=/usr/lib/novadeck/novadeck-splash
+ConditionPathExists=/usr/lib/novadeck/splash-stall
+ConditionKernelCommandLine=!novadeck.splash=0
+
+[Service]
+Type=simple
+ExecStart=/usr/lib/novadeck/splash-stall
+# It exits by itself when the display is handed to the session; this only covers a shutdown
+# landing mid-boot.
+TimeoutStopSec=5
+# A narrator that dies must never take the boot with it, and must never be restarted into a loop
+# against a systemd that is already struggling.
+Restart=no
+SuccessExitStatus=0 TERM
+
+[Install]
+WantedBy=sysinit.target

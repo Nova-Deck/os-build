@@ -452,6 +452,7 @@ test: verify-lock ## Run the offline bootctl/post-install/boot-disk/pairingd/qui
 	bash $(TESTS_DIR)/test-cpu-scheduler.sh
 	bash $(TESTS_DIR)/test-decky.sh
 	bash $(TESTS_DIR)/test-splash.sh
+	bash $(TESTS_DIR)/test-splash-status.sh
 	bash $(TESTS_DIR)/test-update.sh
 	bash $(TESTS_DIR)/test-publish-bundle.sh
 	bash $(TESTS_DIR)/test-publish-card.sh

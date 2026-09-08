@@ -1,0 +1,94 @@
+#!/bin/sh
+# Narrate a stalled boot on the splash: when nothing has published progress for a while, say
+# which systemd job is actually running.
+#
+# WHY THIS IS THE MAIN STATUS PRODUCER, rather than one call per slow unit. The units that hang
+# are the ones nobody predicted. Sprinkling splash-progress calls through the boot path only ever
+# covers the delays already known about, and every one of those is a place someone has to
+# remember to edit; this covers every job systemd has, including units that do not exist yet and
+# units we do not ship. On this device it also names exactly the class of failure that has bitten
+# before — a first boot sitting in systemd-repart or systemd-growfs-root with a logo on screen and
+# no way to tell that from a hang.
+#
+# It is a NARRATOR, not a watchdog: it never kills, restarts or times anything out. If a unit is
+# genuinely stuck, the splash says which one and the boot stays stuck — that is the honest
+# outcome, and it is a great deal more actionable than a logo.
+#
+# Deliberately NOT reporting a job the moment it starts: most jobs are fast, and a splash that
+# flickers through thirty unit names on a healthy boot is noise that trains people to ignore it.
+# Nothing is said until progress has been silent for STALL seconds.
+set -u
+
+STATUS="${NOVADECK_SPLASH_STATUS:-/run/novadeck/splash/status}"
+TAKEOVER="${NOVADECK_SPLASH_TAKEOVER:-/run/novadeck/splash/takeover}"
+PROGRESS="${NOVADECK_SPLASH_PROGRESS:-/usr/lib/novadeck/splash-progress}"
+STALL="${NOVADECK_SPLASH_STALL_SECS:-15}"     # seconds of silence before naming a job
+MAXWAIT="${NOVADECK_SPLASH_STALL_MAX:-600}"   # absolute cap, so this can never outlive a boot
+
+# The splash owns the display until a successor claims it. The drawer writes its own PID into the
+# takeover file at startup, and a successor (sddm, via its ExecStartPre drop-in) writes a NAME —
+# so "the content is no longer a number" is precisely "the handover has begun", with nothing
+# hardcoded about who the successor is. Once the display is being handed over there is no one
+# left to narrate to.
+handover_started() {
+    tk=$(cat "$TAKEOVER" 2>/dev/null) || return 1
+    case "$tk" in
+        '')          return 1 ;;   # nobody has claimed it yet
+        *[!0-9]*)    return 0 ;;   # a name, not a pid: a successor is taking the display
+        *)           return 1 ;;   # still the drawer's own pid
+    esac
+}
+
+# list-jobs --plain --no-legend columns are: JOB UNIT TYPE STATE. The first job in state
+# "running" is the one everything else is queued behind.
+running_job() {
+    systemctl list-jobs --plain --no-legend 2>/dev/null \
+        | awk '$4 == "running" { print $2; exit }'
+}
+
+# Unit names are jargon on a screen a user is looking at, so prefer the unit's own Description
+# ("Repartition Root Disk" over "systemd-repart.service"). The NAME is what a developer wants,
+# and it is not lost — splash-progress journals every line it publishes, so
+# `journalctl -t novadeck-splash` still has the description while the unit name is one
+# `systemctl list-jobs` away in the same boot's journal.
+describe() {
+    d=$(systemctl show -p Description --value "$1" 2>/dev/null)
+    [ -n "$d" ] && printf '%s' "$d" || printf '%s' "$1"
+}
+
+last_stamp=''
+silent=0
+waited=0
+said=''
+
+while [ "$waited" -lt "$MAXWAIT" ]; do
+    handover_started && exit 0
+
+    # mtime, not content: a producer that republishes the same text is still making progress.
+    stamp=$(stat -c %Y "$STATUS" 2>/dev/null || echo 0)
+    if [ "$stamp" = "$last_stamp" ]; then
+        silent=$((silent + 1))
+    else
+        last_stamp=$stamp
+        silent=0
+        said=''      # someone else is talking; let them, and re-arm
+    fi
+
+    if [ "$silent" -ge "$STALL" ]; then
+        job=$(running_job)
+        if [ -n "$job" ] && [ "$job" != "$said" ]; then
+            # Only when the job CHANGES. Republishing the same line every tick would keep
+            # bumping the status mtime, which is the very signal this loop reads to decide
+            # whether anything is happening — it would permanently silence itself.
+            said=$job
+            "$PROGRESS" "Waiting for $(describe "$job")" 2>/dev/null || true
+            # Our own write moved the mtime; resync so the next stall is measured from here.
+            last_stamp=$(stat -c %Y "$STATUS" 2>/dev/null || echo 0)
+            silent=0
+        fi
+    fi
+
+    sleep 1
+    waited=$((waited + 1))
+done
+exit 0

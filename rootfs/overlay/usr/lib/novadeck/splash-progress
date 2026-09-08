@@ -1,0 +1,62 @@
+#!/bin/sh
+# Publish one status line to the boot splash.
+#
+#   /usr/lib/novadeck/splash-progress Installing Steam
+#   /usr/lib/novadeck/splash-progress --error Update failed
+#
+# Every phase of boot that can take long enough to look like a hang should say so through here.
+# The splash drawer (apps/novadeck-splash) re-reads the file four times a second; nothing links
+# against it and nothing has to know it is running — a caller on an image with no splash writes a
+# file nobody reads, which is why there is no guard for that case.
+#
+# WRITTEN BY RENAME, NEVER IN PLACE. The reader is an independent process polling on its own
+# clock, so an in-place write is a real race: it would eventually catch a half-written line and
+# paint it on the panel. A rename is atomic, so a reader sees either the whole old line or the
+# whole new one. The temp file has to be in the SAME directory for that to hold (rename cannot
+# cross filesystems), which is why this does not use /tmp.
+#
+# EVERY LINE IS ALSO JOURNALLED, with the name of whoever wrote it. That is not redundant with
+# the panel: the panel shows one line at a time and keeps no history, so without this there is no
+# way to reconstruct afterwards what the boot actually said and in what order. On a board with no
+# serial console ([[sm8650-no-uart]]) that history is the whole debugging story, and it costs one
+# logger call. Read it back with:  journalctl -t novadeck-splash
+set -u
+
+STATUS="${NOVADECK_SPLASH_STATUS:-/run/novadeck/splash/status}"
+DIR=$(dirname "$STATUS")
+
+prefix=''
+if [ "${1:-}" = "--error" ]; then
+    # A leading '!' is the drawer's marker for "render this red". It is stripped before drawing,
+    # so it never appears on screen.
+    prefix='!'
+    shift
+fi
+msg="$*"
+[ -n "$msg" ] || exit 0
+
+# Best effort throughout: a status line is never important enough to fail the unit that emitted
+# it. A caller that cannot publish its progress should still do its actual job.
+mkdir -p "$DIR" 2>/dev/null || exit 0
+
+# $PPID names the caller rather than this script, which is what makes the journal readable —
+# every line says which unit or script it came from.
+who=$(cat "/proc/$PPID/comm" 2>/dev/null || echo '?')
+logger -t novadeck-splash -- "[$who] ${prefix}${msg}" 2>/dev/null || true
+
+tmp=$(mktemp "$DIR/.status.XXXXXX" 2>/dev/null) || tmp=''
+if [ -n "$tmp" ]; then
+    printf '%s%s\n' "$prefix" "$msg" >"$tmp" 2>/dev/null
+    # 0644 explicitly: mktemp creates 0600, and the session-phase drawer (Phase 6) runs as deck
+    # and has to be able to read this.
+    chmod 0644 "$tmp" 2>/dev/null || true
+    mv -f "$tmp" "$STATUS" 2>/dev/null || {
+        rm -f "$tmp" 2>/dev/null
+        # Losing the rename is worse than the race it avoids: a stale line on the panel says the
+        # wrong thing for the rest of boot. Fall back to a direct write.
+        printf '%s%s\n' "$prefix" "$msg" >"$STATUS" 2>/dev/null || true
+    }
+else
+    printf '%s%s\n' "$prefix" "$msg" >"$STATUS" 2>/dev/null || true
+fi
+exit 0

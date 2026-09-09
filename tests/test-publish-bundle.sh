@@ -84,7 +84,14 @@ dest="${dest#*:}"
 printf 'rsync %s -> %s\n' "$src" "$dest" >> "$SSHLOG"
 cp "$src" "$dest" || exit 1
 if [ "${NOVADECK_TEST_CORRUPT:-0}" = 1 ] && [ "${src##*.}" = raucb ]; then
-  printf 'X' | dd of="$dest" bs=1 seek=3 conv=notrunc status=none
+  # FLIP the byte, never ASSIGN it. This used to write a constant 'X' at offset 3, and the fixture
+  # is 4096 bytes of /dev/urandom -- so roughly one run in 256 drew 0x58 there already, the write
+  # changed nothing, the sha matched, publish-bundle.sh correctly published, and all six assertions
+  # in the two corrupt-* cases failed at once. Green on the retry with identical code, which is the
+  # signature of a flake rather than a break. Seen in CI 2026-09-09 (run 34398610843) and
+  # reproduced locally by forcing byte 3 to 'X'.
+  orig=$(dd if="$dest" bs=1 skip=3 count=1 status=none | od -An -tu1 | tr -d ' ')
+  printf "$(printf '\\%03o' $(( orig ^ 0xFF )))" | dd of="$dest" bs=1 seek=3 conv=notrunc status=none
 fi
 STUB
 

@@ -11,7 +11,7 @@ One directory here is neither: `mesa-x86/` carries no pin of either kind (so
 Turnip payload for the FEX guest rootfs** — a plain file tree, not a pacman package — from
 the same source pin + patch list as `mesa/`, in its own pinned x86 Arch container. See
 `mesa-x86/builder.pin` for the why and the pin pairing with `fex-rootfs/prebuilt.pin`;
-`rootfs/assemble-rootfs.sh` stages its output and injects the overlayfs mount that lays it
+`rootfs/lib-assemble-storage.sh` stages its output and injects the overlayfs mount that lays it
 over the guest image.
 
 ## Precompiled external packages (`prebuilt.pin`)

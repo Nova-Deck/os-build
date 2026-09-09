@@ -430,7 +430,7 @@ the prerequisite is not weakened by this measurement — it is currently *masked
 problem; it was closed separately and is recorded in `docs/worklog/DONE.md`.
 
 A second reason this pass could not exercise the prerequisite: the test image injects Wi-Fi
-credentials into the **shared rootfs** (`rootfs/assemble-rootfs.sh`), not the per-slot `/etc`
+credentials into the **shared rootfs** (`rootfs/lib-assemble-devcard.sh`), not the per-slot `/etc`
 overlay, so "the other slot has no saved Wi-Fi" cannot reproduce on a `NOVADECK_DEV=1` card at
 all. Validating the `/var` migration hook needs a release image — the same trap as the OOBE work.
 

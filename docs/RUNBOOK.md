@@ -1,7 +1,7 @@
 # Runbook — flash, reach, update, recover
 
-The operational path, end to end. Design rationale lives elsewhere: [`phase4.md`](phase4.md) for
-why A/B looks like this, [`remote-access.md`](remote-access.md) for why SSH is shaped the way it
+The operational path, end to end. Design rationale lives elsewhere: [`archive/phase4.md`](archive/phase4.md) for
+why A/B looks like this (a closed-phase record — see [`archive/README.md`](archive/README.md)), [`remote-access.md`](remote-access.md) for why SSH is shaped the way it
 is, [GitHub issues](https://github.com/Nova-Deck/os-build/issues) for the open items, and
 [`docs/worklog/DONE.md`](../docs/worklog/DONE.md) for the hardware-validation record each step here rests on.
 

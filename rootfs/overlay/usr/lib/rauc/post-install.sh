@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# novadeck RAUC post-install handler — Phase 5 (SteamDeck-style boot; docs/phase5.md).
+# novadeck RAUC post-install handler — Phase 5 (SteamDeck-style boot; docs/archive/phase5.md).
 #
 # Runs after RAUC has written and unmounted the target slot. A freshly written slot is NOT usable
 # until this has run: the bytes are an exact copy of the running slot, so it shares an fsid, it has

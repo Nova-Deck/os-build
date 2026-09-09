@@ -242,7 +242,7 @@ Calling `steamenv_init` behind a timeout guard was then tried on hardware (2026-
 a **black screen with the conf still untouched** — because the guard forced the call before
 `loadfont`/`gfxterm`, and because `load_steamenv` discovers the ESP by parsing
 `SteamOS/partsets/*` and matching partition uuids across EFI handles, a path `process_boot_config()`
-then swallows the failure of. The full post-mortem is `docs/phase5-bootattempts.md`.
+then swallows the failure of. The full post-mortem is `docs/archive/phase5-bootattempts.md`.
 
 The replacement drops everything that is not the counter — ~2000 lines of vendor code carried to
 use ~30 — and inverts each of those three failures: the image name is an **argument**, the conf is

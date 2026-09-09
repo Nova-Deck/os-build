@@ -6,7 +6,7 @@
 # the ESP contents, or the filesystem identities the A/B switch depends on. This closes that gap
 # for the parts a slot switch can be silently wrong about.
 #
-# Phase 5 shape (docs/phase5.md): the card boots ABL → steamcl (stage 1, on the ESP) → per-slot
+# Phase 5 shape (docs/archive/phase5.md): the card boots ABL → steamcl (stage 1, on the ESP) → per-slot
 # GRUB (stage 2, on the slot's efi-a/b partition) → kernel. So beyond the filesystem identities
 # this asserts the two boot homes: the ESP carries steamcl + the boot confs + the grubenv, and
 # each efi partition carries its stage-2 GRUB + identity partsets keyed to the disk's partuuids.

@@ -226,7 +226,7 @@ carries one, so with two media inserted the firmware's enumeration order picked 
 count — observed incrementing the **internal** conf while a card was the medium booting. Since
 `mark-good` clears through `/esp`, which this branch scopes to the booted disk, such a count is
 never cleared. Fixed in `boot/patches/grub/0002-*` by scoping the sweep to the disk stage 2 was
-loaded from (device-path prefix before the `HD()` node); see `docs/phase5-bootattempts.md`.
+loaded from (device-path prefix before the `HD()` node); see `docs/archive/phase5-bootattempts.md`.
 It was first filed as a lost vfat flush, which it is not — `holo-bootconf`'s `write_config` does
 `msync` → `rename` → `fsync` file → `fsync` dir, and all four fields of that conf are replaced by
 the one `rename`, so three of them cannot land while the fourth stays stale.

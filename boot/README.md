@@ -1,6 +1,6 @@
 # boot/
 
-The two-stage UEFI boot chain (Phase 5; `docs/phase5.md`):
+The two-stage UEFI boot chain (Phase 5; `docs/archive/phase5.md`):
 
 ```
 ABL  →  steamcl (stage 1, shared ESP)  →  GRUB (stage 2, the slot's efi-a/b)  →  kernel in the slot root
@@ -74,7 +74,7 @@ Three things to know before changing it:
   predecessor was Valve's `steamenv`, whose `steamenv_init` bumped the same counter but overwrote
   `timeout`/`timeout_style` afterwards — so it had to run before any `menuentry` existed, and when
   it wedged on this hardware nothing had been painted and nothing could be. The post-mortem, and
-  the three failure modes this module was shaped to avoid, are in `docs/phase5-bootattempts.md`.
+  the three failure modes this module was shaped to avoid, are in `docs/archive/phase5-bootattempts.md`.
 
 ## Building
 

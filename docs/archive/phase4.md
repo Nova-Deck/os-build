@@ -1,6 +1,6 @@
 # Phase 4 — sealed manifest rootfs + A/B atomic updates
 
-> **Superseded in Phase 5 (`docs/phase5.md`).** The 4b slot-state design this document
+> **Superseded in Phase 5 (`docs/archive/phase5.md`).** The 4b slot-state design this document
 > describes — the `/KERNEL` Android boot image on the shared ESP, the `/NOVADECK/STATE.*`
 > files, design-C slot selection in the initramfs, and the post-install `/KERNEL` rotation —
 > has been replaced by the SteamDeck-style chain (ABL → steamcl stage 1 → per-slot GRUB

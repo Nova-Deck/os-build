@@ -25,7 +25,7 @@ root (the `gamescope/` checkout inside makepkg's `$srcdir`) by
 
 `0001` — **GONE, and deliberately not replaced: it is UPSTREAM as of 3.16.28.** It rotated the
 portrait-native Pocket S2 panel in gamescope's **GPU composite** step (the msm DPU cannot
-`ROTATE_90` a LINEAR plane; root cause in `docs/bringup-phase2.md` step 1e), and it was upstream PR
+`ROTATE_90` a LINEAR plane; root cause in `docs/archive/bringup-phase2.md` step 1e), and it was upstream PR
 [#2228](https://github.com/ValveSoftware/gamescope/pull/2228), merged verbatim as `38fb50fc`
 ("Add composited output rotation for displays that can't rotate at scanout"). Verified before
 dropping: the shipped tree carries the same `drm_plane_supported_rotations()` helper and the same

@@ -10,7 +10,7 @@
 # kernel.config (the device booted for months with no initramfs at all). So the whole job
 # is "mount the slot's root + var + efi partition, stack the /etc overlay, switch_root",
 # which is a shell script and ~5 binaries. Slot selection is NOT here (Phase 5) — the
-# bootloader chain chose it and wrote the cmdline (docs/phase5.md).
+# bootloader chain chose it and wrote the cmdline (docs/archive/phase5.md).
 #
 # Library resolution walks DT_NEEDED with readelf rather than calling ldd: these are aarch64
 # ELFs staged on an x86_64 build host, so nothing here can be executed to introspect it.

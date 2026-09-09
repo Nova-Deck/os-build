@@ -216,7 +216,7 @@ fi
 # inserted the firmware's enumeration order decided which install got counted. A count landing on
 # the disk we did NOT boot is never cleared, because mark-good clears through /esp -- scoped to the
 # booted disk. It climbs once per boot until steamcl's failsafe rolls back a healthy slot. Observed
-# on HW 2026-09-01; see docs/phase5-bootattempts.md and issue #84.
+# on HW 2026-09-01; see docs/archive/phase5-bootattempts.md and issue #84.
 #
 # The C cannot be exercised offline (it needs a firmware, and the cross-build is the container's
 # job), so these assert the mechanism is still IN the patch that builds the module.

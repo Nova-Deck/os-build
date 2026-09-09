@@ -18,7 +18,7 @@
 #    the committed CA so there is ONE copy in the repo (ota/rauc/novadeck-ca.pem, which
 #    ota/gen-signing-ca.sh also signs bundles against) rather than a duplicate under rootfs/overlay that could drift.
 #
-# 2. The boot software, mirrored under /usr/lib/novadeck/boot (Phase 5; docs/phase5.md). The stage-1
+# 2. The boot software, mirrored under /usr/lib/novadeck/boot (Phase 5; docs/archive/phase5.md). The stage-1
 #    steamcl and both per-slot stage-2 GRUB builds are owned by the same build that ships /boot/Image
 #    and /lib/modules/<ver> inside this root, so carrying them here makes the pairing true by
 #    construction: the RAUC post-install hook refreshes the ESP and the slot's efi partition FROM

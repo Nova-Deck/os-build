@@ -1515,7 +1515,7 @@ printf '%s' "$cmd" | grep -q -- '--prefer-output' \
   || ok "and pins no connector, rather than inventing one"
 
 CASE="session: it clears the socket seatd-launch leaks"
-# docs/bringup-phase2.md: seatd-launch leaks /run/seatd.sock on an unclean exit and the next start
+# docs/archive/bringup-phase2.md: seatd-launch leaks /run/seatd.sock on an unclean exit and the next start
 # dies "Socket file found ... refusing to start". An installer is a tool people re-run after a
 # crash, so this would bite on exactly the second attempt.
 : >"$T/seatd.sock"

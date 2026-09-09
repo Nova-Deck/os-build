@@ -1,7 +1,7 @@
 # The update server
 
 Where a device in the field gets its OS updates from. The device half — the client SteamUI drives,
-the RAUC A/B install, the trial boot and rollback — is in `docs/RUNBOOK.md` and `docs/phase5.md`;
+the RAUC A/B install, the trial boot and rollback — is in `docs/RUNBOOK.md` and `docs/archive/phase5.md`;
 this file is the server and the act of publishing.
 
 | | |

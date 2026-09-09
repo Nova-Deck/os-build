@@ -1230,7 +1230,7 @@ its reasoning in the closed issue.
   systemd runs preset-all on first boot", but `out/images/rootfs.img` contains
   `def47b5c6d984873ac0b077c16b18341` (33 bytes). No `rm`, no truncate, and it appears in neither
   `guard-rootfs.sh`, `seal.list` nor `trim.list` — a declaration with no assertion behind it, which
-  is exactly what `docs/phase4.md` step 4 exists to prevent. Two consequences:
+  is exactly what `docs/archive/phase4.md` step 4 exists to prevent. Two consequences:
   (a) **per-device MAC uniqueness is broken** — `fs-overlay/usr/lib/novadeck/gen-mac.sh` states
   "systemd writes a fresh RANDOM id on first boot: unique per device", which is false for this
   artifact, so every flashed device derives the *same* Wi-Fi MAC and two novadecks on one network
@@ -1304,7 +1304,7 @@ its reasoning in the closed issue.
   is not being built.** It cannot be run on this hardware at all: a battery device has no
   interruptible supply, and long-press force-off is ~8–10s against a ~1s write window. The SD
   card's behaviour under abrupt VCC loss stays an accepted, untested risk, recorded as such in
-  `docs/phase4.md`. Do not re-propose the init hook (write half the state fields, `exit 1`, let
+  `docs/archive/phase4.md`. Do not re-propose the init hook (write half the state fields, `exit 1`, let
   `panic=5` reboot so the `umount` durability barrier never runs) — it was designed and
   deliberately declined, not overlooked. What DOES cover the same ground and has passed: torn-state
   rejection (a truncated state file is refused by the parser) and the two-file generation scheme,
@@ -1316,7 +1316,7 @@ its reasoning in the closed issue.
   which opens `\SteamOS\conf\<name>.conf` on the ESP through the firmware's `EFI_FILE_PROTOCOL`,
   increments `boot-attempts:` and writes it back. `boot/gen-grub-cfg.sh` calls it once per boot,
   AFTER `terminal_output gfxterm`. It needs to be a module at all because GRUB's own `fat` driver
-  is read-only. Design and post-mortem: `docs/phase5-bootattempts.md`.
+  is read-only. Design and post-mortem: `docs/archive/phase5-bootattempts.md`.
 
   It REPLACED Valve's `steamenv`, which is gone from the tree — both patches, the `MODULES` entry
   and the `steamenv_boot` guards. `steamenv_init` was tried on hardware 2026-08-02 and reverted
@@ -1353,7 +1353,7 @@ its reasoning in the closed issue.
 
 - [x] **`efi-a`/`efi-b` are unused under design C — CLOSED 2026-08-02 BY PHASE 5** — created +
   formatted vfat, EMPTY, and no longer earmarked for per-boot images. That was design A. Phase 4b
-  picked design **C** (`docs/phase4.md`): one slot-AGNOSTIC `/KERNEL`, slot selection moved out of
+  picked design **C** (`docs/archive/phase4.md`): one slot-AGNOSTIC `/KERNEL`, slot selection moved out of
   the baked cmdline into the initramfs, which reads a try-counter state file on the ESP and falls
   back to the other slot at zero. So `boot/package.sh` does NOT need a slot argument, and there is
   nothing per-slot to store. They stay allocated because the alternative is a reflash if a later
@@ -1361,7 +1361,7 @@ its reasoning in the closed issue.
   check reverts to. 128MiB of card sitting idle. Adding a GRUB stage stays a legitimate fallback if
   C proves unworkable — reconsider it rather than working around it. See
   [[sm8650-rocknix-abl-boot]].
-  **Resolution (Phase 5, `docs/phase5.md`): the "adding a GRUB stage" fallback became the design.**
+  **Resolution (Phase 5, `docs/archive/phase5.md`): the "adding a GRUB stage" fallback became the design.**
   Design C was replaced by the SteamDeck-style chain — ABL → steamcl (stage 1, ESP) → per-slot
   GRUB (stage 2, `efi-a`/`efi-b`) → kernel in the slot root — so `efi-a`/`efi-b` now carry the
   per-slot `grubaa64.efi` + `grub.cfg` + partsets, `/KERNEL` and `/NOVADECK/STATE.*` are gone, and
@@ -1369,7 +1369,7 @@ its reasoning in the closed issue.
 
 - [x] **Phase 4b pass 2 — RAUC on top of the landed boot path — CLOSED 2026-08-02 BY PHASE 5** —
   pass 1 is merged (`d524f09`).
-  **Resolution: absorbed into Phase 5.** The boot-path rework (`docs/phase5.md`) replaced design C
+  **Resolution: absorbed into Phase 5.** The boot-path rework (`docs/archive/phase5.md`) replaced design C
   wholesale: the post-install hook's `/KERNEL`
   rotation and the `KERNEL.BAK`/`kernel=` machinery are gone, the hook now refreshes the slot's
   `efi-a/b` stage 2 + partsets and the ESP steamcl from the installed root's
@@ -1380,7 +1380,7 @@ its reasoning in the closed issue.
   **Steps 1-4 IMPLEMENTED 2026-07-28 on `feat/phase4b-rauc`, NOT yet HW-validated; steps 5-6 are
   deliberately deferred to a follow-up branch** (updates are CLI-driven for now, so a failure in
   this pass is attributable to the update machinery and not to UI wiring on top of it).
-  Two deviations from the original wording below, both explained in `docs/phase4.md`: the new
+  Two deviations from the original wording below, both explained in `docs/archive/phase4.md`: the new
   kernel ships **inside the rootfs** at `/usr/lib/novadeck/boot.img` rather than as bundle content
   (makes kernel/module coherence true by construction, and needs no RAUC handler-environment
   variable), and the `/var` migration copies **`machine-id` alone** rather than rsyncing `/var`
@@ -1394,7 +1394,7 @@ its reasoning in the closed issue.
   as a cache and re-derives identically. Reword this to describe the wholesale copy, or change the
   hook to match the wording; right now the doc and the code disagree.
   Also corrected while implementing: `btrfs-progs` was **not** on the device at all, so step 3's
-  `btrfstune` had nothing to run — it is now in `PKGS` alongside `rauc`. Pass 2, in `docs/phase4.md`:
+  `btrfstune` had nothing to run — it is now in `PKGS` alongside `rauc`. Pass 2, in `docs/archive/phase4.md`:
   1. `PKGS += rauc` + `make relock`. **Measured 2026-07-27: `rauc-1.14-1` IS in the pinned
      snapshot's `extra` repo** and every dep but `json-glib` is already in `manifest.lock` — so no
      `packages/rauc/` from-source recipe is needed, which was the largest unknown.
@@ -1516,7 +1516,7 @@ its reasoning in the closed issue.
   above; keep them in sync.
 
 - [x] **Phase 4c — bootstrap the root from packages — LANDED + HW-VALIDATED 2026-07-26**
-  (design: `docs/phase4.md`; branch `feat/phase4-manifest-rootfs`). The rootfs no
+  (design: `docs/archive/phase4.md`; branch `feat/phase4-manifest-rootfs`). The rootfs no
   longer ORIGINATES as `docker export` of a vendor image: it is `pacman -r <empty-dir>` against the
   pinned snapshot. Docker is still required and so is qemu binfmt — an aarch64 root has to be laid
   down by an aarch64 pacman running aarch64 scriptlets — but it is now the EXECUTION ENVIRONMENT
@@ -1565,7 +1565,7 @@ its reasoning in the closed issue.
   [[dockerenv-systemd-container-misdetect]], [[overlay-package-pipeline]].
 
 - [x] **Phase 4a — sealed manifest rootfs — ALL FIVE STEPS LANDED + HW-VALIDATED 2026-07-26**
-  (plan: `docs/phase4.md`; branch `feat/phase4-manifest-rootfs`). The half of Phase 4 that could not
+  (plan: `docs/archive/phase4.md`; branch `feat/phase4-manifest-rootfs`). The half of Phase 4 that could not
   brick a device (a bad build just fails to boot a card you reflash). A sealed **release** card boots
   to a session on HW, and the guard passes in the release build.
   (0) **Mirror re-pinned** to an explicit `mash-20251118.3` (`6abd676`, `0f82f36`) — `snapshot.pin` is

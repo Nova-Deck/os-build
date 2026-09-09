@@ -207,7 +207,7 @@ if [ "$found_internal" = "0" ]; then
   echo
   echo 'Every block device is either the boot medium or removable. This is itself the answer to'
   echo 'Phase 0 item 3 — **Linux does not see internal storage on this build** — and it blocks the'
-  echo 'entire feature until the UFS controller comes up. `docs/bringup.md` still records UFS as'
+  echo 'entire feature until the UFS controller comes up. `docs/archive/bringup.md` still records UFS as'
   echo 'unverified; `CONFIG_SCSI_UFSHCD` being set is not the same thing.'
   echo
 fi

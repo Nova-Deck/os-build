@@ -28,7 +28,7 @@ The boot-to-compositor path: launcher `/usr/bin/novadeck-session` + its `/etc/no
 SDDM autologin wiring, PAM drop-ins, and `default.target -> graphical.target`. The device boots
 through SDDM autologin the SteamOS way, giving a REAL active `seat0` logind session (so stock polkit
 authorizes Wi-Fi/timezone). `seatd.service` stays enabled — the launcher opens the DRM seat via the
-persistent root seatd; SDDM only wraps it in a login session. See `docs/bringup-phase2.md` step 2.
+persistent root seatd; SDDM only wraps it in a login session. See `docs/archive/bringup-phase2.md` step 2.
 That stack is also what makes `etc/security/limits.d/15-proton-nice.conf` work: `system-login`
 carries `pam_limits.so`, which is the only thing that reads a limits drop-in, and the drop-in is the
 only thing that lets Proton's per-thread `setpriority()` calls succeed instead of failing `EACCES`.
@@ -38,7 +38,7 @@ The stand-ins for AMD's `jupiter-hw-support`: `novadeck-rest` (userspace "rest m
 the suspend engine (a `systemd-suspend.service` drop-in redirects logind `Suspend()` into
 `novadeck-suspend`; `novadeck-powerbuttond` forwards the power key to Steam), Bluetooth, and
 `systemd-timesyncd`. All enabled via shipped presets + `*.target.wants` symlinks. No Wi-Fi resume
-hook ships (NM re-associates unaided). See `docs/bringup-phase2.md` step 3.
+hook ships (NM re-associates unaided). See `docs/archive/bringup-phase2.md` step 3.
 
 **Audio (layer C) — ALSA UCM2 machine profiles**
 `usr/share/alsa/ucm2/Qualcomm/sm8{250,550,650}/<CARD>/` profiles, card-name-matched via relative
@@ -63,7 +63,7 @@ package + guest rootfs (auto-registered with binfmt_misc). See `docs/FEX_README.
 `jupiter-initial-firmware-update` — SteamUI shells to these past the Wi-Fi/timezone screens), and
 `50-novadeck-timezone.rules` (the one polkit grant stock polkit still prompts for). The Steam client
 SEED itself is build machinery, not rootfs content — it lives in `build/steam-seed/` and is pre-seeded
-into `/home` at image build time (`image/make-sdcard.sh`). See `docs/bringup-phase3.md`.
+into `/home` at image build time (`image/make-sdcard.sh`). See `docs/archive/bringup-phase3.md`.
 
 **System hygiene — identity, memory, and the `/var` shape**
 Four files that are not a subsystem but are load-bearing for the immutable A/B model, because on

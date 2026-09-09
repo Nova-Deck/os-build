@@ -15,7 +15,7 @@
 # set by RAUC at deploy time (needs a mount), so it is not applied here. The kernel mounts
 # it `ro` regardless (rootfstype=btrfs ... ro on the stage-2 grub.cfg cmdline).
 #
-# The root carries its own boot half (docs/phase5.md): /boot/{Image, initramfs-novadeck.img,
+# The root carries its own boot half (docs/archive/phase5.md): /boot/{Image, initramfs-novadeck.img,
 # dtbs} that the slot's stage-2 GRUB boots, plus the /usr/lib/novadeck/boot mirror + the
 # /esp//efi mountpoints the update path reads. The stage-1/2 binaries reach the cards through
 # the ESP/efi partitions laid by image/make-sdcard.sh and refreshed by the RAUC hook.
@@ -74,7 +74,7 @@ else cp -a "$BASE"/. "$stage"/; fi
 # that; see issues #35 and #36 for the real one (assert every file is package-owned or declared).
 
 # 2. novadeck kernel + dtbs + initramfs under /boot. These are what the stage-2 grub.cfg boots
-# (docs/phase5.md): `linux ($root)/boot/Image`, `initrd ($root)/boot/initramfs-novadeck.img`,
+# (docs/archive/phase5.md): `linux ($root)/boot/Image`, `initrd ($root)/boot/initramfs-novadeck.img`,
 # `devicetree ($root)/boot/dtbs/<dtb>.dtb`. The kernel must be the UNCOMPRESSED Image — the
 # embedded gzio filter is not in grubaa64.efi's module set, so Image.gz would not decompress.
 install -Dm0644 "$OUT/Image" "$stage/boot/Image"

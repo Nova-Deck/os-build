@@ -243,12 +243,13 @@ to `defaults.conf` and still boots.
 | Doc | Covers |
 |---|---|
 | [`docs/RUNBOOK.md`](docs/RUNBOOK.md) | **Operations** — flash a card, reach the device, ship and install an update, steer the A/B slot state, recover a device that will not boot |
-| [`docs/bringup.md`](docs/bringup.md) | Phase 1 — boot generic arm64 with Turnip Vulkan working (the hardware gate) |
-| [`docs/bringup-phase2.md`](docs/bringup-phase2.md) | Phase 2 — the SteamOS layers: gamescope session, HW-support, InputPlumber, audio |
-| [`docs/bringup-phase3.md`](docs/bringup-phase3.md) | Phase 3 — the native arm64 Steam Deck UI inside the Phase-2 session |
-| [`docs/phase4.md`](docs/phase4.md) | Phase 4 — sealed manifest rootfs (4a), A/B atomic updates (4b), bootstrap from packages (4c) |
-| [`docs/phase5.md`](docs/phase5.md) | Phase 5 — the SteamDeck-style boot chain: steamcl + GRUB, update path, demote-on-failure |
-| [`docs/phase5-bootattempts.md`](docs/phase5-bootattempts.md) | The `boot-attempts` GRUB module that replaces Valve's steamenv counter |
+| [`docs/archive/`](docs/archive/README.md) | **Closed-phase records.** Kept for the design rationale that source comments cite, *not* as a description of current behaviour. Known-stale claims are listed in its README. |
+| [`docs/archive/bringup.md`](docs/archive/bringup.md) | *(archived)* Phase 1 — boot generic arm64 with Turnip Vulkan working (the hardware gate) |
+| [`docs/archive/bringup-phase2.md`](docs/archive/bringup-phase2.md) | Phase 2 — the SteamOS layers: gamescope session, HW-support, InputPlumber, audio |
+| [`docs/archive/bringup-phase3.md`](docs/archive/bringup-phase3.md) | Phase 3 — the native arm64 Steam Deck UI inside the Phase-2 session |
+| [`docs/archive/phase4.md`](docs/archive/phase4.md) | Phase 4 — sealed manifest rootfs (4a), A/B atomic updates (4b), bootstrap from packages (4c) |
+| [`docs/archive/phase5.md`](docs/archive/phase5.md) | Phase 5 — the SteamDeck-style boot chain: steamcl + GRUB, update path, demote-on-failure |
+| [`docs/archive/phase5-bootattempts.md`](docs/archive/phase5-bootattempts.md) | The `boot-attempts` GRUB module that replaces Valve's steamenv counter |
 | [`docs/ota.md`](docs/ota.md) | The update *server*: publishing a bundle, and how the OTA host is set up |
 | [`docs/decky.md`](docs/decky.md) | Decky Loader + the `novadeck-control` and `novadeck-monitor` plugins — the in-UI surface for everything below |
 | [`docs/per-game-perf.md`](docs/per-game-perf.md) | `game-tweaks.json` — the per-game performance keys and which launch path enforces each |

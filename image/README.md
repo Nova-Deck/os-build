@@ -59,6 +59,6 @@ both slots populated by `make-sdcard.sh`, and the offline suites in `make test`
 **Deferred (needs hardware):** the whole chain end to end — ABL chainloading stage 1, the board
 choice persisting to the ESP grubenv, a slot switch, and the demote path. All of those, plus the
 stage-2 `novadeck_bootattempts` counter that rolls back a slot never reaching systemd, are
-HW-validated as of 2026-08-02 (`docs/phase5.md`). `steamos-atomupd` remains out of scope.
+HW-validated as of 2026-08-02 (`docs/archive/phase5.md`). `steamos-atomupd` remains out of scope.
 
 _Phase 5._

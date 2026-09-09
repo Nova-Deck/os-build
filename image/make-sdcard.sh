@@ -3,7 +3,7 @@
 #
 # Lays the FULL SteamOS-style 8-partition GPT from image/partition-table.txt and populates
 # BOTH slots: ESP + rootfs-a/-b + var-a/-b + home, and each slot's efi-a/efi-b partition with
-# that slot's STAGE-2 GRUB (Phase 5; docs/phase5.md).
+# that slot's STAGE-2 GRUB (Phase 5; docs/archive/phase5.md).
 #
 # The boot chain this card boots is SteamOS's three-stage one:
 #
@@ -317,7 +317,7 @@ if [ "$SLOT_B" = 1 ]; then
   mcopy -i "$esp" "$conf_b" ::/SteamOS/conf/B.conf
 fi
 
-# 4d. efi-a / efi-b (p2/p3): each slot's STAGE-2 home. Per docs/phase5.md and the post-install
+# 4d. efi-a / efi-b (p2/p3): each slot's STAGE-2 home. Per docs/archive/phase5.md and the post-install
 # hook's refresh shape, both carry the same /EFI/steamos/{grubaa64.efi, grub.cfg, fonts, parts.env}
 # and the same /SteamOS/partsets/{A,B,all,shared}; only self/other differ, naming THIS partition and
 # the other one. steamcl chainloads \EFI\steamos\grubaa64.efi; the module's grub.cfg is the A or B

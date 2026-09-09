@@ -198,7 +198,7 @@ fi
 # activated onto this bus and win the name with a config that is not this one -- the failure that
 # would put the bundle wherever THAT config says slot A is, rather than in the partition this
 # script was handed. The shipped image names its slots /dev/novadeck/novadeck-root-{A,B} now
-# (docs/phase5.md), so the specific wrong destination has changed and the hazard has not: the
+# (docs/archive/phase5.md), so the specific wrong destination has changed and the hazard has not: the
 # whole point of synthesizing a config is that the destination comes from our argument, and any
 # path where some other config wins is a path where it does not.
 #

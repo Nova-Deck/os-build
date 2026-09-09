@@ -482,7 +482,15 @@ CASE="everything assemble-rootfs.sh installs that packages do not"
 # rootfs/lib-assemble-*.sh helper, the file list below grows and the expected set does not change —
 # which is the whole claim that refactor has to make good on.
 STAGE_SRC=("$ROOT/rootfs/assemble-rootfs.sh" "$ROOT"/rootfs/lib-assemble-*.sh)
-STAGE_IDS_EXPECTED="1 2 2b 2c 3 3b 4 4b 4c 4d 4g 4h 4y 4z 4za 4zy 4zz 5 6"
+# 4e/4f ARE NOT NEW STAGES, which is the question this case exists to make someone answer. They are
+# the Decky plugin payload and the boot splash drawer, which have always run on every build and were
+# numbered 4c-3 and 4c-4 -- sub-numbers under the `4c. DEV-ONLY` banner, and therefore invisible
+# here, because the `-` stops the regex before the `\. `. They were renumbered when they moved to
+# rootfs/lib-assemble-decky-splash.sh (issue #43) so the numbering would stop claiming that a stage
+# every image needs is part of a dev-only one. So the installer-medium audit behind this file is
+# unchanged: nothing was added to the assembler, two things were renamed, and mkroot.sh's
+# relationship to both is exactly what it was.
+STAGE_IDS_EXPECTED="1 2 2b 2c 3 3b 4 4b 4c 4d 4e 4f 4g 4h 4y 4z 4za 4zy 4zz 5 6"
 stage_ids=$(grep -hoE "^# [0-9]+[a-z]{0,2}\. " "${STAGE_SRC[@]}" \
             | sed -e 's/^# //' -e 's/\. $//' | sort -u | tr '\n' ' ')
 stage_ids="${stage_ids% }"

@@ -57,16 +57,20 @@ just no longer one 1535-line file. Each is **sourced**, so it reads the assemble
 | `lib-assemble-proton.sh` | 4b pass 3 — rewrites the two baked Proton compat tools to stable internal ids; widens the DXVK probe | every build |
 | `lib-assemble-storage.sh` | 4g — first-boot storage, `grow-home.sh`, the FEX-guest and `mesa-x86` payload staging and their fstab rows | every build |
 | `lib-assemble-offload.sh` | 4h — the offload bind mounts under `/home/.novadeck/offload` | every build |
-| `lib-assemble-decky-splash.sh` | 4c-3 + 4c-4 — Decky plugin payload and the boot splash drawer | every build |
+| `lib-assemble-decky-splash.sh` | 4e + 4f — Decky plugin payload and the boot splash drawer | every build |
 | `lib-assemble-devcard.sh` | 4c — Wi-Fi profile, OTA channel pin, root `authorized_keys` | **`NOVADECK_DEV=1` only** |
 | `lib-assemble-debug.sh` | 4d — journald debug capture | **`NOVADECK_DEBUG=1` only** |
 
 The last two are sourced *inside* their gate, so a release build never reads those files — the
 test-only and debug injections are separated from the release path by construction.
 
-Note the two `every build` rows that used to sit under the `4c. DEV-ONLY` banner: 4c-3 (Decky) and
-4c-4 (splash) are **not** dev injections despite where they lived, and `guard-rootfs.sh` assertion 9
-requires the plugin dists on a release image. That mis-filing is what the split surfaced.
+Note the two `every build` rows that used to sit under the `4c. DEV-ONLY` banner. They were
+numbered **4c-3** and **4c-4**, which said they were sub-stages of a stage whose heading reads
+*NEVER part of a release/RAUC build* — and they are nothing of the kind: `guard-rootfs.sh`
+assertion 9 requires the plugin dists on a release image. The split surfaced that mis-filing, and
+they were renumbered **4e** and **4f** so the numbering stops contradicting the behaviour. `4e`/`4f`
+were free: the letters have never been in execution order (`4g` and `4h` both run before `4c`), so
+the new IDs carry no ordering claim beyond the one the old comment made — that they precede `4d`.
 
 ## What a release root must not be able to do
 

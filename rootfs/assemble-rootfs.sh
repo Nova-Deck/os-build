@@ -237,7 +237,7 @@ if [ "${NOVADECK_DEV:-}" = "1" ]; then
   . "$ROOT/rootfs/lib-assemble-devcard.sh"
 fi
 
-# 4c-3 + 4c-4 run on EVERY build -- they sat inside the 4c banner but are not dev injections, and
+# 4e + 4f run on EVERY build -- they sat inside the 4c banner as 4c-3/4c-4 but are not dev injections, and
 # guard-rootfs.sh assertion 9 requires the plugin dists on a release image. Sourced after the dev
 # gate rather than between its halves; the assembler records that their position was arbitrary
 # (they only have to precede 4d).

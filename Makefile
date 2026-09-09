@@ -820,7 +820,7 @@ lsfg-vk-x86: $(LSFG_VK_STAMP) ## Build the x86 lsfg-vk layer payload for the FEX
 # prerequisite list has to be computed per plugin (a pattern rule cannot call $(call decky_src)
 # on its own stem without secondary expansion), and a hand-copied rule is exactly where the
 # backend-file prerequisites go missing and a card ships a stale backend. Adding a third plugin
-# is one word in DECKY_PLUGINS -- plus its staging row in rootfs/assemble-rootfs.sh (4c-3) and
+# is one word in DECKY_PLUGINS -- plus its staging row in rootfs/lib-assemble-decky-splash.sh (4e) and
 # its assertion in rootfs/guard-rootfs.sh (9).
 define DECKY_RULE
 apps/decky/$(1)/dist/index.js: $$(call decky_src,$(1))

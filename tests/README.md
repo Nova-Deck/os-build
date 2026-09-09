@@ -10,7 +10,7 @@ needs root, a device, a bus or a built image.
 
 | Command | What runs | Where |
 |---|---|---|
-| `make test` | The 22 host suites | Host. Seconds to a couple of minutes, no build |
+| `make test` | The 32 host suites | Host. Seconds to a couple of minutes, no build |
 | `make test-disk` | `test-select-target.sh`, `test-carve.sh` | Container — they need `sgdisk`, `mtools`, `dosfstools` |
 | `make test-signing` | `test-verify-signing.sh` | Container — it signs real bundles, so it needs `rauc` |
 
@@ -33,7 +33,7 @@ are invoked directly there rather than through `make test-disk` — a failure na
 - **Device behaviour** — `test-device-quirks.sh`, `test-pairingd.sh`, `test-perf.sh`,
   `test-fan-curve.sh`, `test-steamos-manager.sh`, `test-decky.sh`.
 - **Graphics and emulation** — `test-graphics-provider.sh`, `test-video-decode.sh`,
-  `test-proton-dxvk.sh`.
+  `test-proton-dxvk.sh`, `test-proton-nice.sh`.
 - **Publishing** — `test-publish-bundle.sh`, `test-publish-card.sh`, `test-verify-signing.sh`.
 
 ## Adding one

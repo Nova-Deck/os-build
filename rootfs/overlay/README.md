@@ -29,6 +29,9 @@ SDDM autologin wiring, PAM drop-ins, and `default.target -> graphical.target`. T
 through SDDM autologin the SteamOS way, giving a REAL active `seat0` logind session (so stock polkit
 authorizes Wi-Fi/timezone). `seatd.service` stays enabled — the launcher opens the DRM seat via the
 persistent root seatd; SDDM only wraps it in a login session. See `docs/bringup-phase2.md` step 2.
+That stack is also what makes `etc/security/limits.d/15-proton-nice.conf` work: `system-login`
+carries `pam_limits.so`, which is the only thing that reads a limits drop-in, and the drop-in is the
+only thing that lets Proton's per-thread `setpriority()` calls succeed instead of failing `EACCES`.
 
 **HW-support (layer C) — Qualcomm backings for Deck-UI affordances**
 The stand-ins for AMD's `jupiter-hw-support`: `novadeck-rest` (userspace "rest mode"/fake-suspend),

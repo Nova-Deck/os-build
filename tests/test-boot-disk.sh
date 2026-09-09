@@ -27,7 +27,13 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROG="$ROOT/rootfs/overlay/usr/lib/novadeck/on-boot-disk"
 RULE="$ROOT/rootfs/overlay/usr/lib/udev/rules.d/69-novadeck-bootdisk.rules"
-ASSEMBLE="$ROOT/rootfs/assemble-rootfs.sh"
+# The fstab rows and grow-home live in the 4g stage, which is now its own sourced helper
+# (issue #43). Named specifically rather than globbed: a glob would keep passing if the block it
+# checks were deleted from the file it was supposed to be in.
+ASSEMBLE="$ROOT/rootfs/lib-assemble-storage.sh"
+# ...but the by-label ABSENCE sweep below must still cover the whole assembler, entry point and
+# every helper, or the refactor would quietly shrink what it looks at.
+ASSEMBLE_ALL=("$ROOT/rootfs/assemble-rootfs.sh" "$ROOT"/rootfs/lib-assemble-*.sh)
 SYSCONF="$ROOT/rootfs/overlay/etc/rauc/system.conf"
 POSTINST="$ROOT/rootfs/overlay/usr/lib/rauc/post-install.sh"
 TABLE="$ROOT/image/partition-table.txt"
@@ -195,9 +201,9 @@ grep -q '^HOME_DEV=/dev/novadeck/novadeck-home$' "$ASSEMBLE" \
 grep -q '^DEVDIR=${DEVDIR:-/dev/novadeck}$' "$POSTINST" \
   && ok "the post-install hook defaults to the scoped links" \
   || bad "post-install.sh still defaults DEVDIR to by-partlabel"
-if grep -qE '/dev/disk/by-(part)?label/(novadeck|NOVADECK)' "$ASSEMBLE" "$SYSCONF" "$POSTINST"; then
+if grep -qE '/dev/disk/by-(part)?label/(novadeck|NOVADECK)' "${ASSEMBLE_ALL[@]}" "$SYSCONF" "$POSTINST"; then
   bad "a consumer still names /dev/disk/by-{part,}label for one of our partitions:"
-  grep -nE '/dev/disk/by-(part)?label/(novadeck|NOVADECK)' "$ASSEMBLE" "$SYSCONF" "$POSTINST" | sed 's/^/       /'
+  grep -nE '/dev/disk/by-(part)?label/(novadeck|NOVADECK)' "${ASSEMBLE_ALL[@]}" "$SYSCONF" "$POSTINST" | sed 's/^/       /'
 else
   ok "no consumer resolves one of our partitions by bare label any more"
 fi

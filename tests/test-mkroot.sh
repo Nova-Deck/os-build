@@ -481,7 +481,7 @@ CASE="everything assemble-rootfs.sh installs that packages do not"
 # The id set is also what survives the sub-stage decomposition (issue #43): when a stage moves to a
 # rootfs/lib-assemble-*.sh helper, the file list below grows and the expected set does not change —
 # which is the whole claim that refactor has to make good on.
-STAGE_SRC=("$ROOT/rootfs/assemble-rootfs.sh")
+STAGE_SRC=("$ROOT/rootfs/assemble-rootfs.sh" "$ROOT"/rootfs/lib-assemble-*.sh)
 STAGE_IDS_EXPECTED="1 2 2b 2c 3 3b 4 4b 4c 4d 4g 4h 4y 4z 4za 4zy 4zz 5 6"
 stage_ids=$(grep -hoE "^# [0-9]+[a-z]{0,2}\. " "${STAGE_SRC[@]}" \
             | sed -e 's/^# //' -e 's/\. $//' | sort -u | tr '\n' ' ')

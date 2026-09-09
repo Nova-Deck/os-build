@@ -32,7 +32,10 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ASSEMBLE="$ROOT/rootfs/assemble-rootfs.sh"
+# The FEX-guest / mesa-x86 payload staging and its fstab rows are part of the 4g stage, which is
+# its own sourced helper since issue #43. Named specifically rather than globbed, so a block that
+# goes missing from this file fails instead of being found somewhere else.
+ASSEMBLE="$ROOT/rootfs/lib-assemble-storage.sh"
 PIN="$ROOT/packages/fex-rootfs/prebuilt.pin"
 BUILDER_PIN="$ROOT/packages/mesa-x86/builder.pin"
 BUILD_SH="$ROOT/packages/mesa-x86/build.sh"

@@ -290,7 +290,12 @@ SEED_ARTIFACT := out/steam-seed/steam-seed.tar.zst
 # rootfs/manifest.lock is one of its inputs (it asserts the tree still matches the lock) and is
 # already a $(BASE_STAMP) prerequisite, which reaches the rootfs transitively.
 #
-ASSEMBLE_SRC := $(shell find $(ROOTFS_DIR)/assemble-rootfs.sh $(ROOTFS_DIR)/seal-rootfs.sh $(ROOTFS_DIR)/conf/seal.list \
+# The lib-assemble-*.sh helpers are the assembler's sub-stages (issue #43) and MUST be listed:
+# they are sourced, so make sees no dependency on them by itself, and a helper edited without
+# being here would not invalidate this stamp -- the next build would silently reuse the previous
+# rootfs.img and the change would appear to have been "verified" against bytes that predate it.
+ASSEMBLE_SRC := $(shell find $(ROOTFS_DIR)/assemble-rootfs.sh $(ROOTFS_DIR)/lib-assemble-*.sh \
+                              $(ROOTFS_DIR)/seal-rootfs.sh $(ROOTFS_DIR)/conf/seal.list \
                               $(ROOTFS_DIR)/guard-rootfs.sh rootfs/overlay -type f 2>/dev/null)
 
 # Decky plugin frontends — TypeScript compiled to dist/index.js in a digest-pinned node

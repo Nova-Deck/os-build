@@ -306,7 +306,8 @@ if [ -f "$LAUNCH_LIB" ]; then
   # the shim exec'd a host path that does not exist inside SLR4, and the strip was what kept our
   # Protons out of SLR4 in the first place. Re-adding either alone produces a tool that cannot
   # launch at all -- `exec: /usr/lib/novadeck/game-launch: not found`.
-  ASSEMBLE="$ROOT/rootfs/assemble-rootfs.sh"
+  # The Proton tool rewrite moved to its own sourced helper in issue #43.
+  ASSEMBLE="$ROOT/rootfs/lib-assemble-proton.sh"
   grep -q 'novadeck-proton' "$ASSEMBLE" \
     && bad "assemble-rootfs.sh writes an in-tool shim again — it cannot resolve /usr inside SLR4" \
     || ok "no in-tool shim is written (tuning comes from launch options)"
@@ -898,7 +899,7 @@ fi
 
 # --- the assembler + Makefile wiring -------------------------------------------------------
 for plugin_name in novadeck-control novadeck-monitor novadeck-framegen; do
-  grep -qE "^for plugin_name in ([^;]*[[:space:]])?$plugin_name([[:space:]]|;)" "$ROOT/rootfs/assemble-rootfs.sh" \
+  grep -qE "^for plugin_name in ([^;]*[[:space:]])?$plugin_name([[:space:]]|;)" "$ROOT/rootfs/lib-assemble-decky-splash.sh" \
     && ok "assembler stages $plugin_name (4c-3)" \
     || bad "assembler does not stage $plugin_name"
   grep -q "$plugin_name" "$ROOT/rootfs/guard-rootfs.sh" \

@@ -24,7 +24,10 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ASSEMBLE="$ROOT/rootfs/assemble-rootfs.sh"
+# The Proton/DXVK rewrite (and the PYDXVK heredoc this suite extracts) moved to its own sourced
+# helper in issue #43. Named specifically, not globbed: a glob would still pass if the block were
+# deleted from the file that is supposed to hold it.
+ASSEMBLE="$ROOT/rootfs/lib-assemble-proton.sh"
 
 PASS=0; FAIL=0
 ok()  { printf '  ok   %s\n' "$1"; PASS=$((PASS + 1)); }

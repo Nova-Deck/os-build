@@ -105,7 +105,7 @@ permissions:
 
 jobs:
   # The one artifact in the build that targets the x86 FEX guest rather than the arm64 host:
-  # the Turnip payload rootfs/assemble-rootfs.sh stages into the image (packages/mesa-x86/).
+  # the Turnip payload rootfs/lib-assemble-storage.sh stages into the image (packages/mesa-x86/).
   # ITS OWN JOB, ON AN x86_64 RUNNER, because a runner arch is the one thing a per-package
   # container cannot change: on the arm64 build runner the pinned x86 Arch container would run
   # under qemu-x86_64, turning a ~10-minute native build into an hour against this workflow's
@@ -116,7 +116,7 @@ jobs:
   mesa-x86:
     name: mesa-x86 payload
     # NOT FOR THE INSTALLER. This payload is staged into the shipped rootfs by
-    # rootfs/assemble-rootfs.sh, and the installer root never runs that script — it has its own
+    # rootfs/lib-assemble-storage.sh, and the installer root never runs that script — it has its own
     # package set, no FEX and no x86 guest at all. Building it for an installer release would be up
     # to 45 minutes for bytes the artifact cannot contain.
     if: inputs.artifact != 'installer'
@@ -146,7 +146,7 @@ jobs:
   # payload crosses as an artifact so the build job's `make` is a digest-check no-op.
   #
   # NOT FOR THE INSTALLER, same as mesa-x86 and for the same reason: this is staged into the
-  # shipped rootfs by rootfs/assemble-rootfs.sh, which the installer root never runs. The installer
+  # shipped rootfs by rootfs/lib-assemble-storage.sh, which the installer root never runs. The installer
   # has its own package set (installer/pkgs.list), no FEX and no x86 guest, so building this for an
   # installer release would spend the whole timeout on bytes the artifact cannot carry.
   #

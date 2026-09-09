@@ -88,7 +88,8 @@ jobs:
           # suffix as "publish to the beta channel" (its prep job carries the reasoning), so
           # `card/v0.3.0-beta.1` is a tag that LOOKS like it selects something and cannot: a card is
           # a flashable image, not a channel, and every card lands a device on `stable` —
-          # rootfs/assemble-rootfs.sh ships no /etc/novadeck/ota.conf on a release image, so
+          # ota.conf is written only by rootfs/lib-assemble-devcard.sh, which a release build never
+          # sources, so a release image ships no /etc/novadeck/ota.conf and
           # novadeck-update falls through to its built-in DEFAULT_CHANNEL.
           #
           # Refused rather than silently accepted, because the failure is otherwise invisible: the

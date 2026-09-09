@@ -198,12 +198,12 @@ jobs:
             # The pin's version: field is the tag with this prefix stripped.
             tag_prefix: cachyos-
             asset_suffix: -arm64.tar.xz
-            parse: the CachyOS version-file parse in assemble-rootfs.sh (cachyos-VER-DATE-slr)
+            parse: the CachyOS version-file parse in rootfs/lib-assemble-proton.sh (cachyos-VER-DATE-slr)
           - pkg: proton-ge
             repo: GloriousEggroll/proton-ge-custom
             tag_prefix: ""
             asset_suffix: -aarch64.tar.gz
-            parse: the GE version-file parse in assemble-rootfs.sh (GE-ProtonMAJOR-MINOR)
+            parse: the GE version-file parse in rootfs/lib-assemble-proton.sh (GE-ProtonMAJOR-MINOR)
     steps:
       - uses: actions/checkout@v4
       - name: Compare upstream releases against the pin
@@ -270,7 +270,7 @@ jobs:
           the pin, the lock row, and nothing else in the build. Drill:
 
           - [ ] \`$pin\`: version + url + sha256 together. Upstream publishes a **sha512** sidecar only — verify the download against THAT, then record the sha256 of the same bytes
-          - [ ] leave \`dest\` alone. The directory is version-free on purpose, and assemble-rootfs.sh rewrites the tool's INTERNAL name (what Steam actually pins a game to) to a stable id — changing either unpins every game
+          - [ ] leave \`dest\` alone. The directory is version-free on purpose, and rootfs/lib-assemble-proton.sh rewrites the tool's INTERNAL name (what Steam actually pins a game to) to a stable id — changing either unpins every game
           - [ ] re-verify ${{ matrix.parse }} still matches the shipped \`version\` file, and that compatibilitytool.vdf still has a compat_tools internal name + display_name and toolmanifest.vdf still declares require_tool_appid (rewrite_proton_tool asserts all four and fails the build loudly)
           - [ ] \`rootfs/manifest.lock\`: the prebuilt row is generated straight from the pin's name/version/sha256 — update that row (a full \`make relock\` re-resolves the whole snapshot and is not what this needs)
           - [ ] HW pass: launch an x86 Windows title forced onto THIS tool and confirm Steam kept the per-game selection across the bump

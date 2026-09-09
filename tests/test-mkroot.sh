@@ -457,10 +457,38 @@ CASE="everything assemble-rootfs.sh installs that packages do not"
 # modules (2b) and the overlay payload (4b) were each found the hard way, one boot at a time.
 # This case is a tripwire, not a proof: if that script grows a new numbered stage, come back and
 # decide whether the medium needs it.
-stages=$(grep -cE "^# [0-9]+[a-z]?\. " "$ROOT/rootfs/assemble-rootfs.sh")
-[ "$stages" -eq 21 ] \
-  && ok "assemble-rootfs.sh still has $stages stages — the audit behind this file is current" \
-  || bad "assemble-rootfs.sh now has $stages stages, not 21 — re-audit which ones the medium needs, then update this count"
+#
+# IT COUNTS THE STAGE IDs, NOT THE BANNER LINES, and that is a correction — the count it used to
+# assert (21) was wrong in BOTH directions at once, so the tripwire was slack by three stages and
+# noisy by four lines:
+#
+#   FOUR of the 21 lines are not stages. `# 1. The keyring.` / `# 2. The boot software,` are a
+#   sub-list inside 4b's RAUC comment, and `# 1. Grow the partition` / `# 2. Grow the ext4` are
+#   comments inside the grow-home.sh HEREDOC — prose in a generated device script, which the
+#   installer medium could not repeat even if it wanted to.
+#
+#   THREE real stages were invisible. `[a-z]?` matches at most one letter, so 4za (file
+#   capabilities), 4zy (/var finalized + the installer's var seed) and 4zz (the guard) never
+#   reached the count. 4zy is precisely a stage that puts NON-PACKAGE content on the card, which
+#   is the class this case exists to catch.
+#
+# Comparing the SET of ids rather than a total fixes both without needing to know where a banner
+# sits: the four false positives carry ids (1, 2) that real stages already own, so they collapse on
+# `sort -u` and contribute nothing, while a genuinely new stage arrives as a NEW id and the failure
+# names it instead of just moving a number. `4y` legitimately appears twice in the assembler (the
+# seal and the machine-id drop share one id); the set collapses that too.
+#
+# The id set is also what survives the sub-stage decomposition (issue #43): when a stage moves to a
+# rootfs/lib-assemble-*.sh helper, the file list below grows and the expected set does not change —
+# which is the whole claim that refactor has to make good on.
+STAGE_SRC=("$ROOT/rootfs/assemble-rootfs.sh")
+STAGE_IDS_EXPECTED="1 2 2b 2c 3 3b 4 4b 4c 4d 4g 4h 4y 4z 4za 4zy 4zz 5 6"
+stage_ids=$(grep -hoE "^# [0-9]+[a-z]{0,2}\. " "${STAGE_SRC[@]}" \
+            | sed -e 's/^# //' -e 's/\. $//' | sort -u | tr '\n' ' ')
+stage_ids="${stage_ids% }"
+[ "$stage_ids" = "$STAGE_IDS_EXPECTED" ] \
+  && ok "the assembler still declares exactly the $(printf '%s' "$stage_ids" | wc -w) stages this file was audited against" \
+  || bad "assembler stages changed — expected [$STAGE_IDS_EXPECTED], found [$stage_ids]; re-audit which ones the medium needs, then update STAGE_IDS_EXPECTED"
 
 CASE="InputPlumber board configs"
 # HW-FOUND the same boot: the UI drew and stopped on §4d's "No controller or keyboard". The prebuilt

@@ -20,7 +20,7 @@ packages/decky-loader/prebuilt.pin       sha256-pinned upstream PluginLoader (x8
         │ customize-base places it
         v
 /usr/share/decky-loader/PluginLoader     read-only master copy
-/usr/share/decky-plugins/novadeck-control  baked plugin (assemble-rootfs 4c-3)
+/usr/share/decky-plugins/novadeck-control  baked plugin (lib-assemble-decky-splash 4c-3)
 /usr/share/decky-plugins/novadeck-monitor  baked plugin (same block, same loop)
         │ novadeck-decky-sync.service (oneshot, Before=plugin_loader.service)
         v
@@ -38,7 +38,7 @@ SteamUI                                  injected via the CEF debugger port (the
   is asserted at build time (guard-rootfs assertion 9 — loader executable, **both** plugin dists
   staged, watchdog executable) and a genuinely broken image fails its units loudly on device.
 - Adding a first-party plugin touches three lists that must stay in step: `DECKY_PLUGINS` in the
-  Makefile, the `for plugin_name in …` loop in `rootfs/assemble-rootfs.sh` (4c-3), and assertion
+  Makefile, the `for plugin_name in …` loop in `rootfs/lib-assemble-decky-splash.sh` (4c-3), and assertion
   9 in `rootfs/guard-rootfs.sh`. `tests/test-decky.sh` asserts all three name every plugin.
   `decky-sync` needs nothing: it globs the plugins directory.
 

@@ -189,7 +189,7 @@ There are two questions here, they are not the same one, and the second answers 
 was settled by reading both ends rather than by running it, because the two halves name the same
 missing file:
 
-- The phase-5 build ships **no** `/usr/lib/novadeck/boot.img` — `rootfs/assemble-rootfs.sh:202`, the
+- The phase-5 build ships **no** `/usr/lib/novadeck/boot.img` — `rootfs/lib-assemble-boot.sh`, the
   boot *directory* replaces it.
 - A `card/v0.1.0` device's own `post-install.sh:194` hard-fails without exactly that file:
   `die "the installed root carries no boot image at /usr/lib/novadeck/boot.img"`.

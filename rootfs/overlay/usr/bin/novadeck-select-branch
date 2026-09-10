@@ -1,0 +1,321 @@
+#!/usr/bin/env python3
+"""The Steam client's OS Update Channel picker, backed by our OTA channel.
+
+    novadeck-select-branch -l          list the branch tokens this device offers
+    novadeck-select-branch -c          the token for the channel in effect
+    novadeck-select-branch <token>     select that channel
+
+WHO CALLS THIS, and it is not SteamUI. `steamui.so` carries only the string "Failed to select OS
+branch"; the invocation lives in steamclient.so, in all 11 copies of it in the baked seed including
+steamrtarm64/, which is the one our native arm64 shell loads. Three jobs, and they do NOT all use
+the same path (strings, steamrtarm64/steamclient.so):
+
+    CSystemManagerGetOSBranchListJob      steamos-select-branch -l
+    CSystemManagerGetCurrentOSBranchJob   steamos-select-branch -c
+    CSystemManagerSelectOSBranchJob       /usr/bin/steamos-polkit-helpers/steamos-select-branch %s
+
+The two READ paths take the bare name off PATH; only the WRITE path goes through the
+polkit-helpers directory. That is why this ships behind two entry points (see the symlink at
+/usr/bin/steamos-select-branch and the wrapper beside steamos-update). All three are wrapped by the
+client in
+
+    LD_LIBRARY_PATH="${SYSTEM_LD_LIBRARY_PATH-...}" PATH="${SYSTEM_PATH-...}" ...
+
+so this runs against system libraries rather than the Steam runtime's — which is why it is plain
+python3 with no imports outside the standard library.
+
+THE TOKEN VOCABULARY IS FIXED AND IS NOT OURS. The authoritative list is the EOSBranch enum in
+steamui.so -- EIGHT branches plus Unknown, NOT the seven you get by reading the strings adjacent to
+CSystemManagerGetOSBranchListJob (that view silently drops Staging):
+
+    k_EOSBranch_{Release,ReleaseCandidate,Beta,BetaCandidate,Preview,PreviewCandidate,Main,Staging}
+    rel  rc  beta  bc  preview  pc  main  staging
+
+`stable` is NOT among them, and `stable` is what our channels are actually called
+(novadeck-update's DEFAULT_CHANNEL, and the directory publish-bundle.sh writes). So a mapping is
+not decoration: returning our own names would fail the client's check. Its two failure strings for
+this job are "Command '%s' returned: %d" and "Command '%s' returned more than %zu known branch
+names", so an unknown name is not merely ignored — it is counted.
+
+WHAT THIS DOES NOT DO. It never downloads anything. Selecting a channel writes one line and
+returns; steamos-update does the work later, which is what lets SteamUI draw a progress bar instead
+of hanging on the picker. [[ota-pipeline]]
+"""
+
+import os
+import subprocess
+import sys
+
+UPDATE = os.environ.get("NOVADECK_UPDATE_BIN", "/usr/bin/novadeck-update")
+USER_CONFIG_FILE = os.environ.get(
+    "NOVADECK_OTA_USER_CONFIG", "/home/deck/.config/novadeck/ota.conf"
+)
+
+# OUR channel -> the token that REPRESENTS it in the -l LIST, and both must be REAL, NON-ADVANCED
+# branches: Release and Beta. That is not a style choice, it is forced twice over.
+#
+#   Only Release, Beta and Preview survive be()'s advanced filter when they are not the current
+#   branch (see Bv() below), so a list entry naming a CUSTOM branch of ours would vanish the moment
+#   the user selected something else -- which is the whole reason -c and -l speak differently here.
+#
+#   And the LABEL a list entry shows is Valve's, not ours: k() maps the branch to
+#   #Settings_OSBranch_<name>, and English renders Release as "Stable" and Beta as "Beta". So these
+#   strings are never read by the user, and their case is irrelevant -- `Beta` and `beta` parse
+#   identically. They are lowercase here so nothing reads them as display text.
+#
+# Only the two channels the release pipeline actually publishes are offered: ota/setup-server.sh creates stable and beta, and
+# release-bundle.yml routes ota/v0.3.0 to stable and ota/v0.3.0-beta.1 to beta.
+#
+# `dev` and `test` are deliberately NOT here. They are the hand-seeded channels docs/ota.md
+# describes for our own testing, they have no latest.json most of the time, and a channel with no
+# CI behind it should not be one tap away from a user. They stay reachable the way they already
+# are: by writing the file this script writes.
+OFFERED = (("stable", "rel"), ("beta", "beta"))
+
+# THE LIST DEPENDS ON WHICH CHANNEL WE ARE ON, and it has to, because two client rules pull in
+# opposite directions:
+#
+#   1. `be()` keeps a branch in the dropdown only if it is the CURRENT one, or if it is "not
+#      advanced" -- and `Bv()` counts exactly Release, Beta and Preview as not advanced, so an
+#      UNKNOWN branch (which ours is, by design) disappears as soon as it stops being current.
+#
+#      THAT RULE IS READ FROM THE CODE, NOT PROVEN ON HARDWARE. Selecting Beta was observed to
+#      drop the Stable entry (HW, 2026-09-10), but the stale-list bug below was live in the same
+#      build, so the observation does not isolate the two. The reasoning that does: the list then
+#      was the CONSTANT [Stable, Beta], so a refetch would have returned the same two entries and
+#      the filter would still have dropped Stable for not being current. To isolate it properly,
+#      list [Stable, Beta] again, switch to Beta, LEAVE and re-enter Settings to force a refetch,
+#      and see whether Stable is still absent.
+#
+#   2. Reporting `rel` as the CURRENT branch pairs with our stable Steam client and replaces the
+#      whole OS row with the combined `System Update Channel`.
+#
+# Pairing is computed from -c alone, never from the list. So `rel` is safe to LIST while we are on
+# beta -- it keeps a permanently visible "Stable" entry to come back to -- and is omitted while we
+# are ON stable, where the appended current branch supplies that entry instead and a listed `rel`
+# would only duplicate it.
+STABLE_LIST_TOKEN = "rel"
+
+# THE PRICE OF THAT, AND IT IS COSMETIC AND SELF-HEALING. The client caches the two answers under
+# separate query keys and refetches them on different triggers:
+#
+#     ["UpdateStore","OSBranchList"]   -l   refetchOnMount:"always"  -> only on entering Settings
+#     ["UpdateStore","OSBranch"]       -c   invalidated by SelectOSBranch itself
+#
+# So WITHIN one visit to the Settings page the list is frozen while the current updates, and a
+# list that depends on the current channel is briefly inconsistent with it:
+#
+#     stable -> Beta   current=Beta, list still [Beta]      -> the Stable entry is missing
+#     beta -> Stable   current=Stable, list still [rel Beta] -> "Stable" appears TWICE
+#
+# Leaving and re-entering Settings refetches the list and both resolve. The channel FILE is correct
+# throughout — only the dropdown is stale — so this is a display artifact, not a wrong setting.
+# HW-observed 2026-09-10 and accepted deliberately: the alternative is a constant list built from
+# `preview`+`beta`, which never glitches because the current branch is always in it, but labels our
+# stable channel "Preview" permanently for every user. A transient that self-corrects beats a
+# standing lie.
+
+# The reverse direction has to accept MORE than it emits. The client is free to hand back any token
+# from its built-in set, and a picker redraw after an OS update could reasonably send `main`. Every
+# token maps somewhere rather than erroring, because "unknown OS branch" on a name the client
+# itself owns would be our bug, not the user's. The two candidate tokens (bc, pc) fold onto the
+# channel they are candidates for.
+TOKEN_TO_CHANNEL = {
+    "stable": "stable",
+    "rel": "stable",
+    "rc": "stable",
+    "beta": "beta",
+    "bc": "beta",
+    "preview": "beta",
+    "pc": "beta",
+    "main": "beta",
+}
+
+# What a channel with no token of its own shows as. A dev card pins `dev` in /etc and a hand-seeded
+# card may sit on `test`; neither is offered, but -c still has to answer, and it has to answer with
+# something the client recognises -- its failure string for this job is "Command '%s' returned an
+# empty string". `main` is the honest choice: it is the client's name for the least-baked branch,
+# which is what a card pinned off the release channels is.
+def unlisted_token(channel):
+    """A channel we do not offer still has to answer -c, and answers with its own name.
+
+    Capitalised for the same reason as the offered ones: the client renders an unknown branch by
+    its raw name, so `dev` would appear in the dropdown verbatim, in lowercase, next to properly
+    cased entries.
+    """
+    return (channel[:1].upper() + channel[1:]) if channel else "Unknown"
+
+# -c REPORTS A TOKEN THAT IS DELIBERATELY NOT IN EOSBranch, AND THAT IS THE WHOLE MECHANISM.
+#
+# SteamUI shows EITHER a combined `System Update Channel` control -- which moves the Steam CLIENT's
+# branch as well as ours, and is therefore not what we want -- OR a dedicated `OS Update Channel`
+# row. Never both: the section renders `d && <combined/>` and `!d && <os-only/>`, with
+# `d = currentCombinedChannel && !showAdvancedUpdateChannels`.
+#
+# `currentCombinedChannel` resolves for exactly two pairings, and `undefined` otherwise:
+#
+#     OS branch Release + Steam client Stable  -> "Stable"
+#     OS branch Beta    + Steam client on beta -> "Beta"
+#
+# We ship a stable client, so reporting `rel` here lands squarely on the first pairing and the OS
+# row disappears behind the combined control. Reporting a token the client cannot parse makes it
+# `k_EOSBranch_Unknown`, which matches NEITHER pairing, so the combined channel is undefined and
+# the dedicated row renders instead.
+#
+# `-l` still emits `rel`, so the row's OPTIONS are Stable and Beta -- the names a user should see.
+# The unknown current lands in the client's own recovery path: it logs `current OS branch not in
+# branch list`, appends the current branch to the list, and then drops it again when it has no
+# display label. Selecting Stable comes back to us as `rel`, which TOKEN_TO_CHANNEL already maps to
+# our `stable`, so the round trip closes.
+#
+# THIS RIDES ON AN UPSTREAM ERROR PATH and should be re-checked on any Steam client bump: the
+# selected entry may draw blank (the current branch is not among the options by construction), and
+# a client that starts rejecting an unparseable -c rather than mapping it to Unknown would take
+# the row away again. HW-verify both the row and what it shows as selected.
+STABLE_CURRENT_TOKEN = "stable"
+
+EXIT_OK = 0
+EXIT_FAIL = 1
+
+
+def log(msg):
+    print(f"novadeck-select-branch: {msg}", file=sys.stderr, flush=True)
+
+
+def effective_channel():
+    """(channel, source) from novadeck-update, which owns the precedence.
+
+    Fails CLOSED on any trouble reaching it: an exception here would reach the client as a non-zero
+    exit it reports as a command failure, and the picker would be empty rather than wrong. The
+    built-in default is the same one novadeck-update would fall back to.
+    """
+    try:
+        out = subprocess.run(
+            [UPDATE, "channel"], capture_output=True, text=True, timeout=10, check=True
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        log(f"cannot read the channel from {UPDATE}; assuming the built-in default")
+        return "stable", "built-in default"
+    channel, _, source = out.strip().partition("\t")
+    if not channel:
+        log(f"{UPDATE} channel returned nothing; assuming the built-in default")
+        return "stable", "built-in default"
+    return channel, source
+
+
+def channel_to_token(channel):
+    """The token for the -l LIST, where every name must be one the client knows."""
+    for name, token in OFFERED:
+        if name == channel:
+            return token
+    return unlisted_token(channel)
+
+
+def current_token(channel):
+    """The token for -c, which is NOT the same question as the list.
+
+    A NovaDeck release on our `stable` channel is not SteamOS Release, and saying `rel` claims it
+    is. That claim is what pairs with a stable Steam client and replaces the OS-only row with the
+    combined control. Reporting our own channel name instead is both the truthful answer and the
+    one that keeps the OS row.
+    """
+    if channel == "stable":
+        return "Stable"
+    return channel_to_token(channel)
+
+
+def cmd_list():
+    channel, _ = effective_channel()
+    for name, token in OFFERED:
+        # On stable, the current branch is appended by the client under its own raw name; listing
+        # `rel` as well would show "Stable" twice.
+        if name == "stable" and channel == "stable":
+            continue
+        print(token)
+    return EXIT_OK
+
+
+def cmd_current():
+    channel, _ = effective_channel()
+    print(current_token(channel))
+    return EXIT_OK
+
+
+def cmd_select(token):
+    channel = TOKEN_TO_CHANNEL.get(token.lower())
+    if channel is None:
+        log(f"unknown OS branch {token!r}")
+        return EXIT_FAIL
+
+    # REFUSE RATHER THAN LIE. /etc/novadeck/ota.conf outranks the file this writes -- only a dev
+    # card ships it, pinned so the card is never offered a stable release it would downgrade to.
+    # Writing anyway would leave the picker showing the user's choice while every check kept using
+    # the pin, which is the "an override that survives exactly one command line is not a setting"
+    # failure novadeck-update's header already names. A non-zero exit reaches the client as its own
+    # "unknown OS branch" message: not the precise reason, but visibly a refusal.
+    current, source = effective_channel()
+    if source not in (USER_CONFIG_FILE, "built-in default"):
+        log(f"channel is pinned to {current!r} by {source}; refusing to write a choice that it outranks")
+        return EXIT_FAIL
+
+    if channel == current:
+        return EXIT_OK
+
+    try:
+        os.makedirs(os.path.dirname(USER_CONFIG_FILE), exist_ok=True)
+        # REWRITTEN WHOLE, not appended to. read_env_file takes the LAST assignment of a key, so
+        # appending would work and then quietly grow a file of stale channels -- and this file is
+        # also the one a human edits over SSH, where a pile of superseded OTA_CHANNEL lines is a
+        # trap. OTA_URL is not preserved because it is never read from this file: novadeck-update
+        # takes the URL from /etc and the environment only, so a copy here would be inert and
+        # look load-bearing.
+        tmp = f"{USER_CONFIG_FILE}.tmp"
+        with open(tmp, "w") as handle:
+            handle.write(
+                "# Written by the Steam OS Update Channel picker (novadeck-select-branch).\n"
+                "# Safe to edit by hand; OTA_CHANNEL is the only key read from this file.\n"
+                f"OTA_CHANNEL={channel}\n"
+            )
+        os.replace(tmp, USER_CONFIG_FILE)
+    except OSError as error:
+        log(f"cannot write {USER_CONFIG_FILE}: {error}")
+        return EXIT_FAIL
+    log(f"channel set to {channel!r} (token {token})")
+    return EXIT_OK
+
+
+def journal(msg):
+    """One journal line per invocation, and it has to live HERE, not in the polkit wrapper.
+
+    The wrapper covers the WRITE path only -- `-l` and `-c` reach this file through the /usr/bin
+    symlink and never run it. With the logging there alone, `journalctl -t steamos-select-branch`
+    came back EMPTY on a device whose dropdown was demonstrably populated (2026-09-10): the two
+    calls the picker actually depends on were the invisible ones, which is the hole issue #89 could
+    not see into and the reason a day of this was spent inferring device state from screenshots.
+    """
+    try:
+        subprocess.run(
+            ["logger", "-t", "steamos-select-branch", "-p", "user.notice", "--", msg],
+            check=False, timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        pass  # never let the instrument break the thing it measures
+
+
+def main(argv):
+    journal(f"invoked: {' '.join(argv) if argv else '(no arguments)'}")
+    if not argv:
+        print(__doc__.strip().splitlines()[0], file=sys.stderr)
+        return EXIT_FAIL
+    if argv[0] == "-l":
+        return cmd_list()
+    if argv[0] == "-c":
+        return cmd_current()
+    if argv[0] in ("-h", "--help"):
+        print(__doc__.strip())
+        return EXIT_OK
+    return cmd_select(argv[0])
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

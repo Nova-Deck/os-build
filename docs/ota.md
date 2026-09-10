@@ -27,14 +27,14 @@ the first path segment:
   .well-known/acme-challenge/ (certbot)
 ```
 
-Adding a `beta` channel is a directory, not a migration. Only `stable` exists today; the client's
-`OTA_CHANNEL` selects it, from the first of these that has one:
+A channel is a directory, not a migration. The client's `OTA_CHANNEL` selects one, from the first of
+these that has it:
 
 | source | who can write it | note |
 |---|---|---|
 | `NOVADECK_OTA_CHANNEL` | whoever runs the command | one invocation only — SteamUI's own checks carry no environment of ours |
 | `/etc/novadeck/ota.conf` | root | only a **dev** card ships this file, pinned to `dev` so the card is never offered a stable release |
-| `~/.config/novadeck/ota.conf` | the user, no root needed | `/home/deck/.config/novadeck/ota.conf`; the only one reachable on a release device |
+| `~/.config/novadeck/ota.conf` | the user, no root needed | `/home/deck/.config/novadeck/ota.conf`; the only one reachable on a release device, and what the **OS Update Channel picker writes** |
 | built-in `stable` | — | |
 
 `/etc` outranks `$HOME` on purpose: a file in `$HOME` must not silently undo the dev card's pin. On
@@ -44,7 +44,71 @@ from `$HOME`, because which host a device fetches from is an operator decision a
 under `$HOME` must not repoint every future update.
 
 `novadeck-update status` prints which of them supplied the channel in effect, which is the fastest
-answer to "why is it checking that channel".
+answer to "why is it checking that channel". `novadeck-update channel` prints the same pair
+tab-separated for a program to read — it exists so the picker below does not re-derive the
+precedence and then disagree with the fetch.
+
+### The OS Update Channel picker
+
+Settings → System offers a channel dropdown, and it is backed by `/usr/bin/novadeck-select-branch`.
+**Selecting a channel writes `~/.config/novadeck/ota.conf` and nothing else** — the same file the
+SSH recipe below writes, so the picker and the manual override are one setting rather than two that
+disagree. The download happens later, in `steamos-update`, which is what lets SteamUI draw a
+progress bar instead of hanging on the picker.
+
+The invocation is in **`steamclient.so`**, not `steamui.so` — the latter carries only the
+`Failed to select OS branch` error string, which is what made issue #89's premise wrong. Three
+jobs, and they do not share a path:
+
+| client job | command |
+|---|---|
+| `CSystemManagerGetOSBranchListJob` | `steamos-select-branch -l` (bare name, off `PATH`) |
+| `CSystemManagerGetCurrentOSBranchJob` | `steamos-select-branch -c` (bare name, off `PATH`) |
+| `CSystemManagerSelectOSBranchJob` | `/usr/bin/steamos-polkit-helpers/steamos-select-branch <branch>` |
+
+Hence two entry points: a symlink at `/usr/bin/steamos-select-branch` for the reads, and a logging
+wrapper in `steamos-polkit-helpers/` for the write. Neither is a privilege boundary — the target
+file is owned by the session user, which is the whole reason this works on a release device.
+
+**We report our own channel names, not SteamOS branches — and that is the whole design.** Valve's
+branch vocabulary is the `EOSBranch` enum (eight: `rel rc beta bc preview pc main staging`). A
+NovaDeck release on our `stable` channel is *not* SteamOS Release, and saying `rel` claims that it
+is — which is exactly the claim that makes SteamUI replace this row with the combined
+**System Update Channel** control that also moves the Steam **client** branch. That control resolves
+for two pairings only: OS Release + client Stable, or OS Beta + client on beta. We ship a stable
+client, so `rel` lands on the first one.
+
+Reporting `Stable` instead parses as a *custom* branch, pairs with nothing, and keeps the OS-only
+row. The client renders custom branches by their raw name, so these strings are the labels the user
+reads. Inbound still accepts the real tokens case-insensitively, because a real branch comes back as
+its canonical token (`beta`, `rel`) while a custom one comes back as the name we gave it.
+
+**The list depends on which channel you are on, and that is deliberate.** SteamUI keeps an entry in
+the dropdown only if it is the current branch, or if it is one of the three branches it considers
+"not advanced" (Release, Beta, Preview). Our `stable` is reported as a *custom* branch — Valve
+supports these, `SelectOSBranch` has a `set_custom_branch` path for them — and a custom branch is
+"advanced", so a Stable entry named by us survives only while it is selected. To keep Stable
+reachable *from* Beta, `-l` lists the real `rel` branch whenever we are **not** on stable. `rel` is
+never reported as *current*, which is what keeps the pairing above from firing.
+
+| on | `-l` | `-c` |
+|---|---|---|
+| stable | `Beta` | `Stable` |
+| beta | `rel Beta` | `Beta` |
+| a pinned dev card | `rel Beta` | `Dev` |
+
+**A known cosmetic transient, which self-corrects.** The client refetches the branch *list* only
+when you enter the Settings page, while a selection invalidates only the *current* branch. So
+within one visit the two disagree: switching to Beta briefly drops the Stable entry, and switching
+back briefly shows "Stable" twice. Leaving Settings and returning refetches the list and both
+resolve. **The channel file is correct throughout** — only the dropdown is stale. Accepted rather
+than fixed: the alternative is a constant list built from `preview`+`beta`, which never glitches
+but labels our stable channel "Preview" permanently.
+
+**On a dev card the picker refuses.** `/etc/novadeck/ota.conf` outranks the file it writes, so
+accepting the selection would leave the UI showing a channel the device was not checking. Instead
+`-c` reports the pin honestly — an unoffered channel answers with its own capitalised name, so a dev
+card shows `Dev` — and the write exits non-zero.
 
 **Which channels exist:** `stable` and `beta`. `ota/setup-server.sh` creates both, and
 `release-bundle.yml` decides between them from the tag's semver pre-release suffix — `ota/v0.3.0`

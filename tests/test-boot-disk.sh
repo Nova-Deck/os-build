@@ -27,7 +27,7 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROG="$ROOT/rootfs/overlay/usr/lib/novadeck/on-boot-disk"
 RULE="$ROOT/rootfs/overlay/usr/lib/udev/rules.d/69-novadeck-bootdisk.rules"
-# The fstab rows and grow-home live in the 4g stage, which is now its own sourced helper
+# The fstab rows and grow-home live in the first-boot-storage stage, now its own sourced helper
 # (issue #43). Named specifically rather than globbed: a glob would keep passing if the block it
 # checks were deleted from the file it was supposed to be in.
 ASSEMBLE="$ROOT/rootfs/lib-assemble-storage.sh"

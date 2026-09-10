@@ -640,7 +640,7 @@ docker run --rm --platform linux/arm64 -v "$PREBUILT_DIR":/prebuilt:ro \
           # throughout, and it unpacks at / with strip 1, so a root `tar -x` chowned the TARGET`s
           # /usr, /usr/bin, /usr/lib and /usr/share to 1001 -- a uid that does not exist on the
           # image. Long-standing (the same extraction ran before Phase 4c) and missed by
-          # assemble-rootfs.sh step 4z, which reclaims only the repo-checkout uid. Nothing in a
+          # the overlay-ownership stage, which reclaims only the repo-checkout uid. Nothing in a
           # read-only system root legitimately belongs to a build account, so extract as root.
           tar -C "/target$p_dest" --no-same-owner --strip-components="${p_strip:-0}" \
               -xf "/prebuilt/$p_name.tar"

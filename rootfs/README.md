@@ -53,24 +53,37 @@ just no longer one 1535-line file. Each is **sourced**, so it reads the assemble
 
 | File | Stage | Runs on |
 |---|---|---|
-| `lib-assemble-boot.sh` | 4b pass 2 — RAUC keyring, `/usr/lib/novadeck/boot` stage-1/2 mirror, the installer's `genpart.sh` + partition table + `lib-gpt.sh` | every build |
-| `lib-assemble-proton.sh` | 4b pass 3 — rewrites the two baked Proton compat tools to stable internal ids; widens the DXVK probe | every build |
-| `lib-assemble-storage.sh` | 4g — first-boot storage, `grow-home.sh`, the FEX-guest and `mesa-x86` payload staging and their fstab rows | every build |
-| `lib-assemble-offload.sh` | 4h — the offload bind mounts under `/home/.novadeck/offload` | every build |
-| `lib-assemble-decky-splash.sh` | 4e + 4f — Decky plugin payload and the boot splash drawer | every build |
-| `lib-assemble-devcard.sh` | 4c — Wi-Fi profile, OTA channel pin, root `authorized_keys` | **`NOVADECK_DEV=1` only** |
-| `lib-assemble-debug.sh` | 4d — journald debug capture | **`NOVADECK_DEBUG=1` only** |
+| `lib-assemble-boot.sh` | `rauc-boot-mirror` — RAUC keyring, `/usr/lib/novadeck/boot` stage-1/2 mirror, the installer's `genpart.sh` + partition table + `lib-gpt.sh` | every build |
+| `lib-assemble-proton.sh` | `proton-compat-tools` — rewrites the two baked Proton compat tools to stable internal ids; widens the DXVK probe | every build |
+| `lib-assemble-storage.sh` | `first-boot-storage` + `fex-guest-payload` — `grow-home.sh`, the FEX-guest and `mesa-x86` payload staging and their fstab rows | every build |
+| `lib-assemble-offload.sh` | `offload-mounts` — the offload bind mounts under `/home/.novadeck/offload` | every build |
+| `lib-assemble-decky-splash.sh` | `decky-payload` + `boot-splash` | every build |
+| `lib-assemble-devcard.sh` | `dev-wifi-ssh` + `dev-ota-channel` — Wi-Fi profile, OTA channel pin, root `authorized_keys` | **`NOVADECK_DEV=1` only** |
+| `lib-assemble-debug.sh` | `debug-capture` — journald debug capture | **`NOVADECK_DEBUG=1` only** |
 
 The last two are sourced *inside* their gate, so a release build never reads those files — the
 test-only and debug injections are separated from the release path by construction.
 
-Note the two `every build` rows that used to sit under the `4c. DEV-ONLY` banner. They were
-numbered **4c-3** and **4c-4**, which said they were sub-stages of a stage whose heading reads
-*NEVER part of a release/RAUC build* — and they are nothing of the kind: `guard-rootfs.sh`
-assertion 9 requires the plugin dists on a release image. The split surfaced that mis-filing, and
-they were renumbered **4e** and **4f** so the numbering stops contradicting the behaviour. `4e`/`4f`
-were free: the letters have never been in execution order (`4g` and `4h` both run before `4c`), so
-the new IDs carry no ordering claim beyond the one the old comment made — that they precede `4d`.
+### Stages are named, not numbered
+
+Every stage declares itself with a `# STAGE <name>` banner, and `tests/test-mkroot.sh` reads that
+banner set as a tripwire: a stage added to the assembler is a stage the installer medium has to
+repeat or deliberately rule out, and the test fails until someone decides which.
+
+They used to be numbered (`1`, `2b`, `4za`, `4y-2`). The numbering was a fiction — `4g` and `4h`
+ran before `4c` — and it cost more than readability:
+
+- **It collided with three other namespaces.** `Phase 4a/4b/4c` is the build phase, `stage-1`/`stage-2`
+  is the UEFI boot chain, `§4b/§4c/§4d` are installer-plan sections. `4d` meant a different thing in
+  each.
+- **It hid stages.** Seven were invisible to the tripwire: `4za`/`4zy`/`4zz` (one letter too many),
+  the `-` sub-numbers `4a-2`/`4y-2`/`4c-2`, the RAUC boot mirror and the Proton rewrite (no numbered
+  banner at all), and the seal and the machine-id drop, which shared `4y` and collapsed into one.
+- **It mis-filed two stages.** `decky-payload` and `boot-splash` were `4c-3`/`4c-4`, sub-numbers under
+  a heading that reads *NEVER part of a release/RAUC build* — while `guard-rootfs.sh` assertion 9
+  requires the plugin dists on a release image.
+
+Names carry no ordering claim, so nothing is lost: **execution order is file order**.
 
 ## What a release root must not be able to do
 

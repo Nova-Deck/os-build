@@ -32,7 +32,7 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-# The FEX-guest / mesa-x86 payload staging and its fstab rows are part of the 4g stage, which is
+# The FEX-guest / mesa-x86 payload staging and its fstab rows are the fex-guest-payload stage, which is
 # its own sourced helper since issue #43. Named specifically rather than globbed, so a block that
 # goes missing from this file fails instead of being found somewhere else.
 ASSEMBLE="$ROOT/rootfs/lib-assemble-storage.sh"

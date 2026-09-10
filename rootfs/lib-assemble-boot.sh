@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# novadeck read-only root assembler — RAUC keyring, boot mirror and installer GPT (stage 4b, pass 2).
+# novadeck read-only root assembler — stage `rauc-boot-mirror`: RAUC keyring, boot mirror, installer GPT.
 #
 # SOURCED by rootfs/assemble-rootfs.sh, never executed. Split out of it for issue #43; the code
-# and its rationale are unchanged, and the stage banner below is the same one the assembler
-# carried (tests/test-mkroot.sh reads the stage IDs out of this file set).
+# and its rationale are unchanged (tests/test-mkroot.sh reads the `# STAGE <name>` banners out of
+# this file set, and asserts the roster it was audited against).
 #
 # Runs at top level, in place: sourcing it IS the stage.
 #
@@ -11,7 +11,8 @@
 # (repo root), $OUT (build outputs). Turning ~20 implicit globals into positional parameters is
 # where a verbatim move stops being verbatim, so it is deliberately not done.
 
-# --- RAUC: the device keyring and the slot's own kernel (Phase 4b pass 2) ----------------------
+# STAGE rauc-boot-mirror — the device keyring and the slot's own boot software (Phase 4b pass 2).
+# ----------------------------------------------------------------------------------------------
 # Two things the overlay tree cannot carry, because both are BUILD OUTPUTS rather than static files.
 #
 # 1. The keyring. /etc/rauc/system.conf points at /etc/rauc/keyring.pem; it is installed here from

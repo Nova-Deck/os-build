@@ -50,7 +50,7 @@ stage="$(mktemp -d)"
 trap 'rm -rf "$stage"' EXIT
 echo "[novadeck] assembling unified read-only root (base=$BASE)"
 
-# 1. base userspace (the Holo aarch64 preview rootfs)
+# STAGE base-userspace — the Holo aarch64 preview rootfs.
 if command -v rsync >/dev/null 2>&1; then rsync -aHAX --numeric-ids "$BASE"/ "$stage"/
 else cp -a "$BASE"/. "$stage"/; fi
 
@@ -73,7 +73,7 @@ else cp -a "$BASE"/. "$stage"/; fi
 # archive can still place arbitrary paths in the root. Two marker names were never a guard for
 # that; see issues #35 and #36 for the real one (assert every file is package-owned or declared).
 
-# 2. novadeck kernel + dtbs + initramfs under /boot. These are what the stage-2 grub.cfg boots
+# STAGE kernel-boot — novadeck kernel + dtbs + initramfs under /boot. These are what the stage-2 grub.cfg boots
 # (docs/archive/phase5.md): `linux ($root)/boot/Image`, `initrd ($root)/boot/initramfs-novadeck.img`,
 # `devicetree ($root)/boot/dtbs/<dtb>.dtb`. The kernel must be the UNCOMPRESSED Image — the
 # embedded gzio filter is not in grubaa64.efi's module set, so Image.gz would not decompress.
@@ -81,7 +81,7 @@ install -Dm0644 "$OUT/Image" "$stage/boot/Image"
 install -Dm0644 "$OUT/initramfs.cpio.gz" "$stage/boot/initramfs-novadeck.img"
 for dtb in "$OUT"/dtbs/*.dtb; do install -Dm0644 "$dtb" "$stage/boot/dtbs/$(basename "$dtb")"; done
 
-# 2b. loadable kernel modules under /lib/modules (from kernel/build.sh modules_install).
+# STAGE kernel-modules — loadable kernel modules under /lib/modules (from kernel/build.sh modules_install).
 # The =m drivers (e.g. handheld panels) live here; without them display won't probe.
 MODROOT="$OUT/modroot"
 if [ -d "$MODROOT/lib/modules" ]; then
@@ -91,7 +91,7 @@ else
   echo "  (no staged modules at ${MODROOT#"$ROOT"/} — run kernel/build.sh; built-in drivers only)"
 fi
 
-# 2c. /esp + /efi mountpoints (Phase 5). The two boot homes the OS must see are the shared ESP
+# STAGE boot-mountpoints — /esp + /efi (Phase 5). The two boot homes the OS must see are the shared ESP
 # and the booted slot's own efi partition:
 #   /esp  the shared ESP (p1, the only ef00) — SteamOS/conf + steamcl. Mounted HERE by /etc/fstab
 #         (below); gpt-auto is switched off for it by GPT bit 63 in partition-table.txt, because
@@ -105,7 +105,7 @@ install -dm0755 "$stage/esp"
 install -dm0755 "$stage/efi"
 ln -s /efi "$stage/boot/efi"
 
-# 3. device-proprietary firmware under /lib/firmware (paths are already /lib/firmware-relative).
+# STAGE firmware-device — device-proprietary firmware under /lib/firmware (paths are already /lib/firmware-relative).
 # Fetched from the qcom-firmwares repo by firmware/fetch-qcom-fw.sh.
 if [ -d "$FW" ]; then
   while IFS= read -r f; do
@@ -116,7 +116,7 @@ else
   echo "  (no device firmware at ${FW#"$ROOT"/} — run firmware/fetch-qcom-fw.sh; continuing)"
 fi
 
-# 3b. open linux-firmware blobs (Adreno GPU, WCN7850 Wi-Fi/BT, Iris VPU) under
+# STAGE firmware-open — linux-firmware blobs (Adreno GPU, WCN7850 Wi-Fi/BT, Iris VPU) under
 # /lib/firmware. The upstream base ships no /lib/firmware, so without this the GPU/BT/VPU
 # firmware is absent at runtime. Staged by firmware/fetch-linux-fw.sh from the pin.
 if [ -d "$LFW" ]; then
@@ -128,7 +128,7 @@ else
   echo "  (no linux-firmware at ${LFW#"$ROOT"/} — run firmware/fetch-linux-fw.sh; GPU/BT/VPU firmware will be missing)"
 fi
 
-# 4. novadeck marker so the running system can identify the slot's provenance.
+# STAGE release-marker — so the running system can identify the slot's provenance.
 #
 # This is the file rootfs/conf/os-release designates for per-build identity ("NO PER-BUILD FIELDS ... the
 # per-build identity is written by rootfs/assemble-rootfs.sh to /etc/novadeck-release, which is where
@@ -140,7 +140,7 @@ fi
 # someone's box. Without these two fields the only per-build identity was a timestamp, which cannot
 # answer "is this device on the card I flashed, or an OTA past it?".
 # NOVADECK_MODE answers "is this a test image or a shippable one?", which nothing else could. A DEV
-# image carries Wi-Fi credentials and an authorized_keys (section 4c below) and must never reach a
+# image carries Wi-Fi credentials and an authorized_keys (the dev-wifi-ssh stage) and must never reach a
 # device that is not the builder's own — yet a dev image signed with the real release key is
 # INDISTINGUISHABLE from a release one to every check that existed before this line: the signature
 # is over the bytes, not over their provenance, and version/build/git are stamped the same either
@@ -158,7 +158,7 @@ mkdir -p "$stage/etc"
   if [ "${NOVADECK_DEV:-}" = "1" ]; then echo "NOVADECK_MODE=dev"; else echo "NOVADECK_MODE=release"; fi
 } >"$stage/etc/novadeck-release"
 
-# 4a-2. The same identity, in the field names OTHER software reads.
+# STAGE os-release-fields — the same identity, in the field names OTHER software reads.
 #
 # SteamUI's Settings -> System renders OS Variant / Version / Build / Codename straight out of
 # /etc/os-release, and shipped them all BLANK (HW-observed 2026-08-09) because our os-release
@@ -194,14 +194,14 @@ mkdir -p "$stage/etc"
 # failed assembly cannot leave a sidecar describing an image that was never written.
 release_file="$stage/etc/novadeck-release"
 
-# 4b. RELEASE overlay payload (SteamOS layers B/C/D). Every SoC-agnostic rootfs overlay —
+# STAGE overlay-payload — the RELEASE overlay (SteamOS layers B/C/D). Every SoC-agnostic rootfs overlay —
 # the gamescope-session plumbing, the HW-support backings, the InputPlumber device/profile
 # config, the ALSA UCM2 machine profiles, the FEX runtime config and the native arm64 Steam
 # shell — lives in ONE filesystem-mirror tree under rootfs/overlay/ and is injected with a single
 # cp -a. The tree already carries final target paths, executable bits (tracked in git) and the
 # systemd presets + .wants symlinks that enable each service, so nothing is generated or chmod'd
 # here. rootfs/overlay/README.md documents what each backing does and WHY (the per-layer rationale
-# that used to live in this script). Ownership is normalized to root:root in step 4z below.
+# that used to live in this script). Ownership is normalized to root:root by the overlay-ownership stage below.
 OVERLAY="$ROOT/rootfs/overlay"
 if [ -d "$OVERLAY" ]; then
   echo "  injecting rootfs/overlay payload -> session + HW-support + InputPlumber + audio + FEX + Steam shell (ARMED: boots to Deck shell)"
@@ -229,26 +229,26 @@ fi
 
 . "$ROOT/rootfs/lib-assemble-offload.sh"
 
-# 4c is DEV-ONLY and lives in its own file so a release build never reads it (issue #43). dev_wifi
-# stays here: it is the default the release path leaves at 0, and the Makefile's DEV_WIFI mirrors
-# this decision.
+# dev-wifi-ssh / dev-ota-channel are DEV-ONLY and live in their own file so a release build never
+# reads them (issue #43). dev_wifi stays here: it is the default the release path leaves at 0, and
+# the Makefile's DEV_WIFI mirrors this decision.
 dev_wifi=0
 if [ "${NOVADECK_DEV:-}" = "1" ]; then
   . "$ROOT/rootfs/lib-assemble-devcard.sh"
 fi
 
-# 4e + 4f run on EVERY build -- they sat inside the 4c banner as 4c-3/4c-4 but are not dev injections, and
-# guard-rootfs.sh assertion 9 requires the plugin dists on a release image. Sourced after the dev
-# gate rather than between its halves; the assembler records that their position was arbitrary
-# (they only have to precede 4d).
+# decky-payload + boot-splash run on EVERY build -- they sat inside the DEV-ONLY banner as 4c-3/4c-4
+# but are not dev injections, and guard-rootfs.sh assertion 9 requires the plugin dists on a release
+# image. Sourced after the dev gate rather than between its halves; the assembler records that their
+# position was arbitrary (they only have to precede debug-capture).
 . "$ROOT/rootfs/lib-assemble-decky-splash.sh"
 
-# 4d is DEBUG-ONLY, same construction -- and independent of NOVADECK_DEV.
+# debug-capture is DEBUG-ONLY, same construction -- and independent of NOVADECK_DEV.
 if [ "${NOVADECK_DEBUG:-}" = "1" ]; then
   . "$ROOT/rootfs/lib-assemble-debug.sh"
 fi
 
-# 4y. SEAL — strip the package manager from the RELEASE root (Phase 4a step 3).
+# STAGE seal — strip the package manager from the RELEASE root (Phase 4a step 3).
 #
 # Last injection before the tree is frozen: everything above may still add files, and the seal
 # has to be the final word on what a release image carries. It deletes pacman, gnupg/dirmngr and
@@ -261,7 +261,7 @@ fi
 # confined to TOOLING — it touches neither the boot nor the session path, so it does not repeat
 # the "verify OOBE on a release build" trap. The step-4 guard runs against the release tree.
 #
-# 4y-2. TRIM — delete build and documentation artefacts (rootfs/conf/trim.list).
+# STAGE trim — delete build and documentation artefacts (rootfs/conf/trim.list).
 #
 # Ordered AFTER the seal, not before, and the order is load-bearing: the sealer expands each
 # stripped package's own file list and then rmdir's the directories it listed, so running the
@@ -279,7 +279,7 @@ else
   "$ROOT/rootfs/trim-rootfs.sh" "$stage"
 fi
 
-# 4y. Drop /etc/machine-id, for EVERY build.
+# STAGE machine-id-drop — remove /etc/machine-id, for EVERY build.
 #
 # The image is supposed to ship without one so systemd treats the first boot as a first boot:
 # ConditionFirstBoot=yes, a per-device id generated, preset-all run. That was stated in two places
@@ -313,7 +313,7 @@ fi
 rm -f "$stage/etc/machine-id"
 echo "  dropped /etc/machine-id (first-boot identity is generated per device)"
 
-# 4z. Normalize overlay ownership to root. The rootfs/overlay/ tree (and the other cp -a injections)
+# STAGE overlay-ownership — normalize it to root. The rootfs/overlay/ tree (and the other cp -a injections)
 # is copied with `cp -a`, which PRESERVES the host build user's
 # uid/gid (the repo checkout owner, typically 1000). In the image uid 1000 is `deck`, so /etc, /,
 # and every injected file end up deck-owned — a real bug (HW journal 2026-07-01: systemd-tmpfiles
@@ -327,7 +327,7 @@ if [ "$ov_uid" != "0" ]; then
   find "$stage" -uid "$ov_uid" -exec chown -h 0:0 {} +
 fi
 
-# 4za. FILE CAPABILITIES — gamescope gets CAP_SYS_NICE, for the realtime Vulkan queues.
+# STAGE file-capabilities — gamescope gets CAP_SYS_NICE, for the realtime Vulkan queues.
 #
 # WHAT IT BUYS. Upstream gamescope already requests VK_QUEUE_GLOBAL_PRIORITY_REALTIME_EXT for its
 # own Vulkan queues, but only `if HasCapSysNice()` (rendervulkan.cpp). Without the capability that
@@ -376,7 +376,7 @@ case "$gs_cap" in
   *) echo "ERROR: setcap reported success but getcap shows '${gs_cap:-<nothing>}'" >&2; exit 1 ;;
 esac
 
-# 4zy. /var, finalized — and packed as the installer's seed.
+# STAGE var-finalize — /var, finalized, and packed as the installer's seed.
 #
 # This block used to open section 5, below the guard. It runs HERE now because the seed tarball it
 # produces goes INSIDE the root, and rootfs/guard-rootfs.sh's contract is that the tree it inspects
@@ -440,7 +440,7 @@ tar --numeric-owner --xattrs --acls --zstd \
 chmod 0444 "$stage/usr/lib/novadeck/var-seed.tar.zst"
 echo "  var-seed.tar.zst  $(du -h "$stage/usr/lib/novadeck/var-seed.tar.zst" | cut -f1) (installer /var seed, from the same staged tree as var-a/-b)"
 
-# 4zz. GUARD — assert the sealed tree against its declaration (Phase 4a step 4).
+# STAGE guard — assert the sealed tree against its declaration (Phase 4a step 4).
 #
 # Placed here, at the last point the tree is both complete and still a directory: everything above
 # has finished injecting, and section 5 below carves /var out into its own image (so a guard after
@@ -457,10 +457,10 @@ fi
 
 mkdir -p "$IMGDIR"
 
-# 5. carve /var out of the staged tree into its own ext4 image (partition var-a). The root is
+# STAGE var-image — carve /var out of the staged tree into its own ext4 (partition var-a). The root is
 # sealed read-only, so every writable system path has to live here — including the /etc overlay's
 # upper+work dirs, which the initramfs stacks before handing off to systemd. $varstage was
-# finalized, size-checked and packed as the installer's seed in section 4zy, above the guard; what
+# finalized, size-checked and packed as the installer's seed by var-finalize, above the guard; what
 # is left here is turning it into the two per-slot images.
 #
 # One var image per slot (Phase 4b). They differ by exactly one file: /var/lib/novadeck/slot.
@@ -503,7 +503,7 @@ done
 rm -rf "${varstage:?}"
 install -d -m0755 "$varstage"
 
-# 6. bake the Btrfs image (populate without mounting), compressed + shrunk to fit.
+# STAGE root-image — bake the Btrfs image (populate without mounting), compressed + shrunk to fit.
 # Let mkfs.btrfs --rootdir size the device itself: on btrfs-progs v7.0 a PRE-truncated large device
 # (the old `truncate -s 8G`) forces 1 GiB data block-groups, and `--shrink` can only shrink to that
 # coarse granularity — so 6.3 GiB of content rounded up to a 9.25 GiB image that overflowed the 8 GiB
@@ -523,7 +523,7 @@ install -d -m0755 "$varstage"
 rm -f "$IMG"
 mkfs.btrfs --rootdir "$stage" --compress zstd --shrink -L novadeck-root-A -f "$IMG" >/dev/null
 
-# The identity sidecar (see section 4), beside the image and written only now that there is an image
+# The identity sidecar (see release-marker), beside the image and written only now that there is an image
 # to describe. This is the /etc/novadeck-release that is INSIDE $IMG, byte for byte — genbundle.sh
 # reads it to name the bundle, and the device compares the bundle's name against its own copy.
 # Reading it back out of the btrfs image instead would need `btrfs restore` for four lines.

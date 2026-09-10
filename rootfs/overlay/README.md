@@ -2,10 +2,10 @@
 
 Every SoC-agnostic file that novadeck lays over the base rootfs lives here, in **one tree that
 mirrors the target filesystem exactly**. `rootfs/assemble-rootfs.sh` injects it with a single
-`cp -a rootfs/overlay/. "$stage/"` (release path, step 4b). The tree carries final paths, executable
+`cp -a rootfs/overlay/. "$stage/"` (the `overlay-payload` stage). The tree carries final paths, executable
 bits (tracked in git), and the systemd presets + `*.target.wants` symlinks that enable each
 service — so the assembler generates and `chmod`s nothing. Ownership is normalized to `root:root`
-afterwards (assemble step 4z).
+afterwards (the `overlay-ownership` stage).
 
 This directory replaces the former per-subsystem trees (`session/ hw-support/ audio/ fex/usr
 steam/usr devices/inputplumber`), which each mirrored `/` separately. There are **no path

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# novadeck read-only root assembler — stage 4d, debug log capture.
+# novadeck read-only root assembler — stage `debug-capture`.
 #
 # SOURCED by rootfs/assemble-rootfs.sh, never executed. Split out of it for issue #43; the code
-# and its rationale are unchanged, and the stage banner below is the same one the assembler
-# carried (tests/test-mkroot.sh reads the stage IDs out of this file set).
+# and its rationale are unchanged (tests/test-mkroot.sh reads the `# STAGE <name>` banners out of
+# this file set, and asserts the roster it was audited against).
 #
 # NEVER sourced unless NOVADECK_DEBUG=1. Independent of NOVADECK_DEV -- it applies to release builds too.
 #
@@ -11,7 +11,7 @@
 # (repo root), $OUT (build outputs). Turning ~20 implicit globals into positional parameters is
 # where a verbatim move stops being verbatim, so it is deliberately not done.
 
-# 4d. DEBUG log capture (NOVADECK_DEBUG=1) — INDEPENDENT of NOVADECK_DEV, applies to release too.
+# STAGE debug-capture — journald log capture (NOVADECK_DEBUG=1). INDEPENDENT of NOVADECK_DEV, applies to release too.
 # This device has no UART and is usually powered off abruptly, and journald's default
 # SyncIntervalSec=5min means a short boot's system logs (kernel/NetworkManager/wpa_supplicant/
 # regulatory) never reach disk before the power is cut — that is why a released card's persistent

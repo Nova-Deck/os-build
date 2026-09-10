@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# novadeck read-only root assembler — stage 4g, first-boot storage.
+# novadeck read-only root assembler — stages `first-boot-storage` and `fex-guest-payload`.
 #
 # SOURCED by rootfs/assemble-rootfs.sh, never executed. Split out of it for issue #43; the code
-# and its rationale are unchanged, and the stage banner below is the same one the assembler
-# carried (tests/test-mkroot.sh reads the stage IDs out of this file set).
+# and its rationale are unchanged (tests/test-mkroot.sh reads the `# STAGE <name>` banners out of
+# this file set, and asserts the roster it was audited against).
 #
 # Carries the grow-home.sh heredoc verbatim -- do not re-indent it.
 #
@@ -11,7 +11,7 @@
 # (repo root), $OUT (build outputs). Turning ~20 implicit globals into positional parameters is
 # where a verbatim move stops being verbatim, so it is deliberately not done.
 
-# 4g. First-boot STORAGE (the deck user's growable home). SteamOS sizes /home to the disk at
+# STAGE first-boot-storage — the deck user's growable home. SteamOS sizes /home to the disk at
 # install time; we dd a fixed image to a card, so we grow on first boot instead. Three pieces:
 #  - /etc/fstab mounts the dedicated home partition (/dev/novadeck/novadeck-home, ext4) at /home.
 #    nofail so a card without that partition (the old 2-partition test image) still boots.
@@ -50,7 +50,7 @@ if ! grep -q '/dev/novadeck/novadeck-home' "$stage/etc/fstab" 2>/dev/null; then
     >>"$stage/etc/fstab"
 fi
 
-# 4g-bis. The FEX guest rootfs + our x86 Turnip payload, surfaced as ONE merged tree.
+# STAGE fex-guest-payload — the FEX guest rootfs + our x86 Turnip payload, surfaced as ONE merged tree.
 #
 # Valve publishes FEX as a Steam Play compat tool (app 3127680). On its public branch the tool
 # ships the emulator and thunks only — its rootfs depot is empty — and it expects the OS to

@@ -900,7 +900,7 @@ fi
 # --- the assembler + Makefile wiring -------------------------------------------------------
 for plugin_name in novadeck-control novadeck-monitor novadeck-framegen; do
   grep -qE "^for plugin_name in ([^;]*[[:space:]])?$plugin_name([[:space:]]|;)" "$ROOT/rootfs/lib-assemble-decky-splash.sh" \
-    && ok "assembler stages $plugin_name (4e)" \
+    && ok "assembler stages $plugin_name (decky-payload)" \
     || bad "assembler does not stage $plugin_name"
   grep -q "$plugin_name" "$ROOT/rootfs/guard-rootfs.sh" \
     && ok "guard-rootfs asserts $plugin_name staged (assertion 9)" \

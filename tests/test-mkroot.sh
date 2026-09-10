@@ -453,50 +453,93 @@ grep -qE 'install -m0644 /prebuilt/udev-rules/\*\.rules' "$MKROOT" \
 CASE="everything assemble-rootfs.sh installs that packages do not"
 # THE STRUCTURAL POINT, and the reason three separate hardware trips shared one cause: the installer
 # root never runs rootfs/assemble-rootfs.sh, so every stage of that script which puts NON-PACKAGE
-# content on the card has to be repeated in mkroot.sh or deliberately ruled out. Firmware (3/3b),
-# modules (2b) and the overlay payload (4b) were each found the hard way, one boot at a time.
-# This case is a tripwire, not a proof: if that script grows a new numbered stage, come back and
-# decide whether the medium needs it.
+# content on the card has to be repeated in mkroot.sh or deliberately ruled out. Firmware, kernel
+# modules and the overlay payload were each found the hard way, one boot at a time. This case is a
+# tripwire, not a proof: if that script grows a new stage, come back and decide whether the medium
+# needs it.
 #
-# IT COUNTS THE STAGE IDs, NOT THE BANNER LINES, and that is a correction — the count it used to
-# assert (21) was wrong in BOTH directions at once, so the tripwire was slack by three stages and
-# noisy by four lines:
+# THE STAGES ARE NAMED, NOT NUMBERED, and the rename is what makes this case readable. The ids it
+# used to match (`1`, `2b`, `4za`, `4zy`, `4y-2`) were a private ordering fiction that had already
+# stopped being true — `4g` and `4h` run BEFORE `4c` — and every one of the traps below came from
+# trying to read structure out of them:
 #
-#   FOUR of the 21 lines are not stages. `# 1. The keyring.` / `# 2. The boot software,` are a
-#   sub-list inside 4b's RAUC comment, and `# 1. Grow the partition` / `# 2. Grow the ext4` are
-#   comments inside the grow-home.sh HEREDOC — prose in a generated device script, which the
-#   installer medium could not repeat even if it wanted to.
+#   THE NUMBERS COLLIDED WITH THREE OTHER NAMESPACES. `Phase 4a/4b/4c` is the build phase, `stage-1
+#   /stage-2` is the UEFI boot chain, and `§4b/§4c/§4d` is the installer plan. `4d` alone meant the
+#   debug-capture stage, the consent gate, and nothing at all, depending on the file.
 #
-#   THREE real stages were invisible. `[a-z]?` matches at most one letter, so 4za (file
-#   capabilities), 4zy (/var finalized + the installer's var seed) and 4zz (the guard) never
-#   reached the count. 4zy is precisely a stage that puts NON-PACKAGE content on the card, which
-#   is the class this case exists to catch.
+#   FALSE POSITIVES. `# 1. The keyring.` / `# 2. The boot software,` are a sub-list inside the RAUC
+#   comment, and `# 1. Grow the partition` / `# 2. Grow the ext4` are comments inside the
+#   grow-home.sh HEREDOC — prose in a generated device script. They matched a bare `# <n>. ` and
+#   only stopped counting because they collided with ids real stages already owned.
 #
-# Comparing the SET of ids rather than a total fixes both without needing to know where a banner
-# sits: the four false positives carry ids (1, 2) that real stages already own, so they collapse on
-# `sort -u` and contribute nothing, while a genuinely new stage arrives as a NEW id and the failure
-# names it instead of just moving a number. `4y` legitimately appears twice in the assembler (the
-# seal and the machine-id drop share one id); the set collapses that too.
+#   INVISIBLE STAGES, the failure that matters, because these are stages putting NON-PACKAGE
+#   content on the card and this case existed to catch exactly that. `[a-z]?` matched at most one
+#   letter, hiding 4za/4zy/4zz; a `-` stopped the regex before the `\. `, hiding 4a-2 (os-release
+#   fields), 4y-2 (the trim) and 4c-2 (the dev OTA pin); the RAUC boot mirror and the Proton compat
+#   tools carried no numbered banner at all; and the seal and the machine-id drop shared one id
+#   (`4y`), so `sort -u` silently collapsed two stages into one.
 #
-# The id set is also what survives the sub-stage decomposition (issue #43): when a stage moves to a
-# rootfs/lib-assemble-*.sh helper, the file list below grows and the expected set does not change —
-# which is the whole claim that refactor has to make good on.
+# A `# STAGE <name>` banner fixes all four at once. It cannot collide with a phase or a plan
+# section, prose sub-lists are not banners so they never match, a name has no letter-range to
+# outgrow, and two stages cannot share one. The roster below went from 21 ids to the real count.
+#
+# The name set is also what survives the sub-stage decomposition (issue #43): when a stage moves to
+# a rootfs/lib-assemble-*.sh helper, the file list below grows and the expected set does not change
+# — which is the whole claim that refactor has to make good on.
 STAGE_SRC=("$ROOT/rootfs/assemble-rootfs.sh" "$ROOT"/rootfs/lib-assemble-*.sh)
-# 4e/4f ARE NOT NEW STAGES, which is the question this case exists to make someone answer. They are
-# the Decky plugin payload and the boot splash drawer, which have always run on every build and were
-# numbered 4c-3 and 4c-4 -- sub-numbers under the `4c. DEV-ONLY` banner, and therefore invisible
-# here, because the `-` stops the regex before the `\. `. They were renumbered when they moved to
-# rootfs/lib-assemble-decky-splash.sh (issue #43) so the numbering would stop claiming that a stage
-# every image needs is part of a dev-only one. So the installer-medium audit behind this file is
-# unchanged: nothing was added to the assembler, two things were renamed, and mkroot.sh's
-# relationship to both is exactly what it was.
-STAGE_IDS_EXPECTED="1 2 2b 2c 3 3b 4 4b 4c 4d 4e 4f 4g 4h 4y 4z 4za 4zy 4zz 5 6"
-stage_ids=$(grep -hoE "^# [0-9]+[a-z]{0,2}\. " "${STAGE_SRC[@]}" \
-            | sed -e 's/^# //' -e 's/\. $//' | sort -u | tr '\n' ' ')
-stage_ids="${stage_ids% }"
-[ "$stage_ids" = "$STAGE_IDS_EXPECTED" ] \
-  && ok "the assembler still declares exactly the $(printf '%s' "$stage_ids" | wc -w) stages this file was audited against" \
-  || bad "assembler stages changed — expected [$STAGE_IDS_EXPECTED], found [$stage_ids]; re-audit which ones the medium needs, then update STAGE_IDS_EXPECTED"
+# decky-payload/boot-splash ARE NOT NEW STAGES, which is the question this case exists to make
+# someone answer. They have always run on every build and were numbered 4c-3 and 4c-4 -- sub-numbers
+# under the `4c. DEV-ONLY` banner, and therefore invisible here. They were renamed when they moved
+# to rootfs/lib-assemble-decky-splash.sh (issue #43) so the numbering would stop claiming that a
+# stage every image needs is part of a dev-only one. So the installer-medium audit behind this file
+# is unchanged: nothing was added to the assembler, and mkroot.sh's relationship to each stage is
+# exactly what it was.
+#
+# Each row says WHAT THE STAGE PUTS ON THE CARD, because that is what a diff here has to answer.
+# "var-finalize vanished" already names the stage; the description names the class of non-package
+# content that stopped being installed, which is what decides whether mkroot.sh now has to do it.
+declare -A STAGE_EXPECTED=(
+  [base-userspace]="the Holo aarch64 preview rootfs"
+  [kernel-boot]="kernel + dtbs + initramfs under /boot"
+  [kernel-modules]="loadable kernel modules under /lib/modules"
+  [boot-mountpoints]="/esp + /efi"
+  [firmware-device]="device-proprietary firmware under /lib/firmware"
+  [firmware-open]="linux-firmware blobs (Adreno, WCN7850, Iris)"
+  [release-marker]="the marker that identifies the slot's provenance"
+  [os-release-fields]="the same identity in the fields other software reads"
+  [overlay-payload]="the RELEASE overlay (SteamOS layers B/C/D)"
+  [rauc-boot-mirror]="RAUC keyring + /usr/lib/novadeck/boot + the installer's GPT"
+  [proton-compat-tools]="the two baked Proton compat tools, rewritten to stable ids"
+  [first-boot-storage]="the deck user's growable home"
+  [fex-guest-payload]="the FEX guest rootfs + the x86 Turnip payload"
+  [offload-mounts]="the writable paths a read-only root needs"
+  [dev-wifi-ssh]="DEV-ONLY Wi-Fi credentials + root authorized_keys"
+  [dev-ota-channel]="DEV-ONLY OTA channel pin"
+  [decky-payload]="Decky loader + the first-party plugin dists"
+  [boot-splash]="the splash drawer + its asset, in the sealed root"
+  [debug-capture]="DEBUG-ONLY journald log capture"
+  [seal]="strip the package manager from the RELEASE root"
+  [trim]="delete build and documentation artefacts"
+  [machine-id-drop]="remove /etc/machine-id, for every build"
+  [overlay-ownership]="normalize overlay ownership to root"
+  [file-capabilities]="gamescope's CAP_SYS_NICE"
+  [var-finalize]="/var, finalized — and packed as the installer's seed"
+  [guard]="assert the sealed tree against its declaration"
+  [var-image]="carve /var into its own ext4 (partition var-a)"
+  [root-image]="bake the Btrfs root image"
+)
+expected_ids=$(printf '%s\n' "${!STAGE_EXPECTED[@]}" | sort -u)
+stage_ids=$(grep -hoE "^# STAGE [a-z0-9-]+ " "${STAGE_SRC[@]}" \
+            | sed -e 's/^# STAGE //' -e 's/ $//' | sort -u)
+if [ "$stage_ids" = "$expected_ids" ]; then
+  ok "the assembler still declares exactly the $(printf '%s\n' "$stage_ids" | wc -l) stages this file was audited against"
+else
+  gone=$(comm -23 <(printf '%s\n' "$expected_ids") <(printf '%s\n' "$stage_ids") \
+         | while read -r id; do [ -n "$id" ] && printf '%s (%s); ' "$id" "${STAGE_EXPECTED[$id]}"; done)
+  added=$(comm -13 <(printf '%s\n' "$expected_ids") <(printf '%s\n' "$stage_ids") | tr '\n' ' ')
+  [ -n "$gone" ] && bad "assembler stages GONE: ${gone%; } — each one put non-package content on the card; decide whether mkroot.sh must now do it, then drop the row from STAGE_EXPECTED"
+  [ -n "$added" ] && bad "NEW assembler stages: ${added% } — re-audit whether the installer medium needs what they install, then add a NAMED row to STAGE_EXPECTED"
+fi
 
 CASE="InputPlumber board configs"
 # HW-FOUND the same boot: the UI drew and stopped on §4d's "No controller or keyboard". The prebuilt

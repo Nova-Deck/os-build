@@ -1,20 +1,22 @@
 #!/usr/bin/env bash
-# novadeck read-only root assembler — stages 4e and 4f, Decky plugin payload and boot splash.
+# novadeck read-only root assembler — stages `decky-payload` and `boot-splash`.
 #
 # SOURCED by rootfs/assemble-rootfs.sh, never executed. Split out of it for issue #43; the code
-# and its rationale are unchanged, and the stage banner below is the same one the assembler
-# carried (tests/test-mkroot.sh reads the stage IDs out of this file set).
+# and its rationale are unchanged (tests/test-mkroot.sh reads the `# STAGE <name>` banners out of
+# this file set, and asserts the roster it was audited against).
 #
-# EVERY build, release included -- guard-rootfs.sh assertion 9 requires the plugin dists. Split out of the 4c range, which is dev-gated around them; the assembler notes their position there was arbitrary (they only have to precede 4d).
+# EVERY build, release included -- guard-rootfs.sh assertion 9 requires the plugin dists. Split out
+# of the dev-gated blocks that used to bracket them; the assembler notes their position there was
+# arbitrary (they only have to precede debug-capture).
 #
 # Reads the assembler's globals rather than taking arguments -- $stage (the staged tree), $ROOT
 # (repo root), $OUT (build outputs). Turning ~20 implicit globals into positional parameters is
 # where a verbatim move stops being verbatim, so it is deliberately not done.
 
-# 4e. Decky plugin payload — EVERY build, not a dev injection. It was numbered 4c-3 and sat
-# between the 4c DEV-ONLY blocks, which is how a stage every image needs came to be filed under a
-# heading that says NEVER part of a release build; the only thing it ever required of its position
-# was to precede 4d. Renumbered when it moved to this file (issue #43). The loader binary arrives
+# STAGE decky-payload — EVERY build, not a dev injection. It was numbered 4c-3 and sat between the
+# DEV-ONLY blocks, which is how a stage every image needs came to be filed under a heading that says
+# NEVER part of a release build; the only thing it ever required of its position was to precede
+# debug-capture. Renamed when it moved to this file (issue #43). The loader binary arrives
 # via its
 # prebuilt pin as a BASE ingredient; the first-party plugins are OUR source in this repo, so
 # they stage here like rootfs/overlay content. /usr/share is the read-only master copy;
@@ -40,7 +42,7 @@ for plugin_name in novadeck-control novadeck-monitor novadeck-framegen; do
 done
 unset plugin_name plugin_src plugin_dest
 
-# 4f. Boot splash drawer (was 4c-4) — the SAME binary and asset the initramfs carries, installed into the
+# STAGE boot-splash — the drawer (was 4c-4): the SAME binary and asset the initramfs carries, installed into the
 # sealed root as well. Both copies are needed and neither is redundant: the initramfs one paints
 # from before root is mounted until the session takes the display, and this one paints the
 # shutdown and reboot screens, long after the initramfs has been freed.

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# novadeck read-only root assembler — stage 4c, DEV-ONLY Wi-Fi/SSH injection.
+# novadeck read-only root assembler — stages `dev-wifi-ssh` and `dev-ota-channel`, DEV-ONLY.
 #
 # SOURCED by rootfs/assemble-rootfs.sh, never executed. Split out of it for issue #43; the code
-# and its rationale are unchanged, and the stage banner below is the same one the assembler
-# carried (tests/test-mkroot.sh reads the stage IDs out of this file set).
+# and its rationale are unchanged (tests/test-mkroot.sh reads the `# STAGE <name>` banners out of
+# this file set, and asserts the roster it was audited against).
 #
 # NEVER sourced on a release build -- the assembler sources it inside the NOVADECK_DEV gate, so this file is not read at all when building a shippable image. That is the separation issue #43 asked for. 4c-3/4c-4 are NOT here: they run on every build and live in lib-assemble-decky-splash.sh.
 #
@@ -11,7 +11,7 @@
 # (repo root), $OUT (build outputs). Turning ~20 implicit globals into positional parameters is
 # where a verbatim move stops being verbatim, so it is deliberately not done.
 
-# 4c. DEV-ONLY Wi-Fi/SSH injection (NOVADECK_DEV=1). NEVER part of a release/RAUC build:
+# STAGE dev-wifi-ssh — DEV-ONLY Wi-Fi/SSH injection (NOVADECK_DEV=1). NEVER part of a release/RAUC build:
 # the release base is packages-only and first-boot networking is the SteamOS UI's job. Here
 # we add ALL the scaffolding a throwaway card needs to auto-join the LAN and accept an SSH
 # login to run vulkaninfo — a NetworkManager connection profile, regdom, the Wi-Fi PSK + SSH
@@ -53,7 +53,7 @@ if [ "${NOVADECK_DEV:-}" = "1" ]; then
   fi
 fi
 
-# 4c-2. DEV-ONLY OTA channel. A dev card must NEVER be offered a stable release, because taking
+# STAGE dev-ota-channel — DEV-ONLY. A dev card must NEVER be offered a stable release, because taking
 # one is a DOWNGRADE that silently destroys whatever the card was built to test.
 #
 # HW-OBSERVED 2026-08-06: a dev card at NOVADECK_GIT=afabca8 — built specifically to test the

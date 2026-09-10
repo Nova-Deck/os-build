@@ -730,7 +730,7 @@ else
 fi
 # Both first-party plugins, named individually rather than globbed: a glob over an EMPTY
 # plugins directory finds nothing and would pass silently, which is the exact failure this
-# assertion exists to catch. Keep in step with DECKY_PLUGINS (Makefile) and stage 4e
+# assertion exists to catch. Keep in step with DECKY_PLUGINS (Makefile) and the decky-payload stage
 # (rootfs/lib-assemble-decky-splash.sh; it was 4c-3 in the undivided assembler).
 for decky_plugin in novadeck-control novadeck-monitor novadeck-framegen; do
   if [ ! -s "$STAGE/usr/share/decky-plugins/$decky_plugin/dist/index.js" ]; then
@@ -787,7 +787,7 @@ fi
 # has nothing to go stale. Assertion 8 asks the complementary question, whether the ids the tree
 # declares are the PINNED ones; neither implies the other, and the 1001 tree passed 8.
 #
-# assemble-rootfs.sh step 4z is NOT this check. It reclaims exactly one uid — the repo checkout's,
+# The overlay-ownership stage is NOT this check. It reclaims exactly one uid — the repo checkout's,
 # `stat`'d off the script at run time — so it ignored 1001 in silence while its own comment cited
 # the uid-1000 symptom. A blind reclaim is a fix; this is the measurement that says it worked.
 #
@@ -884,7 +884,7 @@ fi
 
 # FILE CAPABILITIES, checked here because they are the same class of thing as the setuid bit above
 # and fail in the opposite direction: a setuid bit that ARRIVES is the danger, a capability that
-# GOES MISSING is. assemble-rootfs.sh section 4za grants gamescope cap_sys_nice so it can request
+# GOES MISSING is. The file-capabilities stage grants gamescope cap_sys_nice so it can request
 # realtime Vulkan queues (upstream gates that request on the capability and silently skips it
 # otherwise). The grant is an xattr, so it has to survive cp -a, rsync -X and mkfs.btrfs --rootdir
 # to reach the image — and if it does not, nothing anywhere reports it: gamescope starts, composites

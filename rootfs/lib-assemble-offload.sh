@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# novadeck read-only root assembler — stage 4h, offload mounts.
+# novadeck read-only root assembler — stage `offload-mounts`.
 #
 # SOURCED by rootfs/assemble-rootfs.sh, never executed. Split out of it for issue #43; the code
-# and its rationale are unchanged, and the stage banner below is the same one the assembler
-# carried (tests/test-mkroot.sh reads the stage IDs out of this file set).
+# and its rationale are unchanged (tests/test-mkroot.sh reads the `# STAGE <name>` banners out of
+# this file set, and asserts the roster it was audited against).
 #
 # Carries the offload heredoc verbatim -- do not re-indent it.
 #
@@ -11,7 +11,7 @@
 # (repo root), $OUT (build outputs). Turning ~20 implicit globals into positional parameters is
 # where a verbatim move stops being verbatim, so it is deliberately not done.
 
-# 4h. OFFLOAD mounts (SteamOS layer). The root is read-only and /var is a 256M partition, so the
+# STAGE offload-mounts — the SteamOS offload layer. The root is read-only and /var is a 256M partition, so the
 # paths that grow without bound are bind-mounted out to the big shared /home partition, under
 # /home/.novadeck/offload/ (SteamOS uses /home/.steamos/offload — same idea, our namespace).
 #

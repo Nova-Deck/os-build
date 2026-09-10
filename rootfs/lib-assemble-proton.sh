@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# novadeck read-only root assembler — baked Proton compat tools (stage 4b, pass 3).
+# novadeck read-only root assembler — stage `proton-compat-tools`: the baked Proton compat tools.
 #
 # SOURCED by rootfs/assemble-rootfs.sh, never executed. Split out of it for issue #43; the code
-# and its rationale are unchanged, and the stage banner below is the same one the assembler
-# carried (tests/test-mkroot.sh reads the stage IDs out of this file set).
+# and its rationale are unchanged (tests/test-mkroot.sh reads the `# STAGE <name>` banners out of
+# this file set, and asserts the roster it was audited against).
 #
 # Defines rewrite_proton_tool() + widen_dxvk_probe() and applies both to the two baked tools.
 #
@@ -11,7 +11,9 @@
 # (repo root), $OUT (build outputs). Turning ~20 implicit globals into positional parameters is
 # where a verbatim move stops being verbatim, so it is deliberately not done.
 
-# Rewrite the baked Proton compat tools. We bake TWO — proton-cachyos and proton-ge — so the user
+# STAGE proton-compat-tools — rewrite the baked Proton compat tools (Phase 4b pass 3).
+#
+# We bake TWO — proton-cachyos and proton-ge — so the user
 # can pick whichever runs a given title better from the Steam UI. Both are the same self-contained
 # arm64 Wine + Valve WoW64-FEX Proton and ship identical toolmanifest.vdf / compatibilitytool.vdf
 # shapes, so a single rewrite serves both. Every edit FAILS LOUDLY if upstream changes shape — a

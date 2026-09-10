@@ -1,0 +1,24 @@
+#!/usr/bin/bash
+# The WRITE half of the Steam client's OS Update Channel picker:
+#   /usr/bin/steamos-polkit-helpers/steamos-select-branch <branch>
+#
+# Confirmed in the baked seed's steamclient.so (not steamui.so — see novadeck-select-branch's
+# header). CSystemManagerSelectOSBranchJob calls this ABSOLUTE path, while the two read jobs
+# (-l, -c) call the bare `steamos-select-branch` off PATH. That asymmetry is the only reason this
+# file exists next to the symlink in /usr/bin: the client asks for the selection in a different
+# place than it asks for the list.
+#
+# THIS WRAPPER IS NOT A PRIVILEGE BOUNDARY, exactly as its steamos-update sibling is not. On
+# SteamOS this directory holds pkexec wrappers from jupiter-hw-support, which we do not bake, so
+# the path is only a path. Nothing here needs privilege anyway: the selection is written to
+# /home/deck/.config/novadeck/ota.conf, which the session user owns. That is deliberate rather
+# than convenient — it is the one channel source reachable on a release device, where there is no
+# sudo and root's authorized_keys is never written.
+#
+# THE JOURNAL LINE IS NOT HERE, unlike the steamos-update wrapper, and that placement is the point.
+# This wrapper is on the WRITE path only; -l and -c reach the implementation through the /usr/bin
+# symlink and never run this script. Logging here alone left `journalctl -t steamos-select-branch`
+# EMPTY on a device whose dropdown was populated — the two calls the picker depends on were the
+# unlogged ones. novadeck-select-branch logs every invocation itself, which covers all three paths;
+# a second logger call here would only double the write path's lines.
+exec /usr/bin/novadeck-select-branch "$@"

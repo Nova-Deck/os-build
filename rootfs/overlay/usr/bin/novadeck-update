@@ -558,6 +558,24 @@ def progress_emitter():
 # one. A streamed bundle cannot be truncated on disk, because it is never on disk.
 
 
+def cmd_channel():
+    """The effective channel and where it came from, for another program to read.
+
+    This exists so novadeck-select-branch does not re-implement channel_setting(). That function's
+    docstring is emphatic that ONE place decides the precedence, and a second reader of the same
+    four sources is exactly the drift it warns about — the SteamUI picker would answer "which
+    channel is in force" from its own guess while the fetch used this one, and on a dev card the
+    two disagree by design.
+
+    TAB-SEPARATED, one line, on STDOUT. The source is a path or a variable name and can contain
+    spaces ("built-in default"); the channel cannot (publish-bundle.sh rejects anything outside
+    [A-Za-z0-9._-]), so a tab splits it unambiguously with no quoting.
+    """
+    channel, source = channel_setting()
+    print(f"{channel}\t{source}")
+    return EXIT_OK
+
+
 def cmd_status():
     base_url, channel = config()
     _, channel_from = channel_setting()
@@ -576,11 +594,12 @@ def cmd_status():
     return EXIT_OK
 
 
-USAGE = """usage: novadeck-update [check|status|--supports-duplicate-detection]
+USAGE = """usage: novadeck-update [check|status|channel|--supports-duplicate-detection]
 
   (no argument)  apply the available update: download, install, arm the trial
   check          exit 0 and print the version if an update is available, else exit 7
   status         human-readable diagnostics
+  channel        the channel in effect and the source that supplied it, tab-separated
 
 Called by SteamUI through /usr/bin/steamos-polkit-helpers/steamos-update; see the header of this
 file for the contract that shapes the output."""
@@ -619,6 +638,8 @@ def main(argv):
             return cmd_check()
         if arg == "status":
             return cmd_status()
+        if arg == "channel":
+            return cmd_channel()
         if not arg.startswith("-"):
             unknown.append(arg)
     if unknown:

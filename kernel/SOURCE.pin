@@ -31,17 +31,43 @@ git_commit: a300e35c0a4b4a38fb53742ea6e2a203c98ee523
 # blacks both SM8650 boards, and carrying patch 0525 is what makes it safe. See the DSI paragraph
 # under the patch bullet below. Re-run every gate, every time.
 #
-# 7.2.5 is NOT HW-validated. The HW gate it owes is the SAME four boards 7.2.4 was validated on,
-# and the two SM8650 ones are no longer a formality — they are the boards patch 0525 exists for:
-#   Pocket ACE  qcs8550-ayaneo-pocketace  panel 0051 ayaneo,pocket-ace-panel   VIDEO mode
-#   Pocket S2   sm8650-ayaneo-ps2         panel 0066 ayaneo,wt0630-2k          VIDEO mode    <- 0525
-#   Pocket FIT  sm8650-konkr-pf           panel 0067 ayaneo,ar14-144hz         VIDEO mode    <- 0525
-#   Pocket Max  sm8250-mangmi-pocket-max  panel 0058 mangmi,pocket-max-panel   COMMAND mode
+# 7.2.5 HW gate: PARTLY RUN (2 of 4) as of 2026-09-11, off a dev card built from this pin at
+# 513cb8f. The gate is the SAME four boards 7.2.4 was validated on, but they are no longer
+# interchangeable — only the two SM8650 ones can exercise 0525 at all:
+#   Pocket ACE  qcs8550-ayaneo-pocketace  panel 0051 ayaneo,pocket-ace-panel   VIDEO mode    PASS
+#   Pocket S2   sm8650-ayaneo-ps2         panel 0066 ayaneo,wt0630-2k          VIDEO mode  <-0525 TODO
+#   Pocket FIT  sm8650-konkr-pf           panel 0067 ayaneo,ar14-144hz         VIDEO mode  <-0525 PASS
+#   Pocket Max  sm8250-mangmi-pocket-max  panel 0058 mangmi,pocket-max-panel   COMMAND mode        TODO
+# WHICH BOARD PROVES WHAT, read off the DSI host's compatible on the device and not from the board
+# name: `qcom,sm8650-dsi-ctrl` binds msm_dsi_6g_v2_9_host_ops (the runtime-reparenting ops, so 0525
+# is live), `qcom,sm8550-dsi-ctrl` and the sm8250 one bind the plain 6g ops (0525 cannot fire in
+# either direction). So ACE and Max are NEGATIVE CONTROLS here: they prove nothing else in 7.2.5
+# broke display bring-up, and nothing at all about the fix.
+#   Pocket FIT, 2026-09-11: panel up 1080x1920, backlight on, gamescope on DSI-1, Steam up, no
+#     failed units, and ZERO hits for the regression's signature ("Failed to set rate pixel clk",
+#     "rcg didn't update", "Turning OFF PHY while PLL is on"). chipone-tddi touch bound, no
+#     i2c/geni errors, no SMMU faults.
+#   Pocket ACE, 2026-09-11: panel up 1080x1620, backlight on, session up, no failed units, no
+#     i2c/geni errors. Three backlight round-trips through the sy7758 (an I2C device behind geni,
+#     /soc@0/geniqup@ac0000/i2c@a80000/sy7758@2e) produced zero kernel output — which tests the
+#     7.2.5 `i2c: qcom-geni` frequency-table change, NOT the DSI DCS path, since that backlight
+#     does not go through the DSI host. A DSI-backlight panel is still needed to exercise that.
+#   The NEGATIVE CONTROL WAS NOT RUN: no one booted 7.2.5 WITHOUT 0525 to watch Pocket FIT go
+#   black. The reasoning that it would (rounding against XO can only return ~19.2 MHz, which is
+#   then multiplied into the PHY bit-clock request) is sound but it is reasoning, not a measurement.
 # Both DSI modes on purpose: 0517's premise is video-mode-specific, so the command-mode panel is
 # there to prove it did not regress the other path, not to exercise it. Four of 21 boards, and
 # three SoCs (qcs8550 / sm8650 / sm8250) — the untested 17 are still untested. Note also that a
 # new Image invalidates the whole `/lib/modules/<ver>` tree (module BTF), so testing it means
 # flashing a card built from this pin, not swapping /boot/Image on an existing one.
+#
+# One observation from the ACE boot, NOT a 7.2.5 defect: a bounded burst of 10 arm-smmu context
+# faults at ~0.77s, all cbfrsynra=0x1c00 (the MDSS node — `iommus = <&apps_smmu 0x1c00 0x2>`),
+# inside a 0.4 ms window, none after, and all of them BEFORE the panel rails come up at 0.854s.
+# The bootloader continuous-splash handoff, i.e. what dpu-quiesce-boot-scanout.patch is for.
+# CONFIRMED not bump fallout: 7.2.5 changes zero iommu/smmu files and exactly one drm/msm file.
+# Pocket FIT shows ZERO such faults on the same kernel, so it is board-specific, not general.
+# STILL OPEN: whether it predates our own 0514/0518-0524 additions. Nobody has checked.
 #
 # 7.2.4 WAS HW-validated, on 2026-09-09, on exactly those four boards (with 0515-0517), display up
 # and no issues reported. That is the fallback if 7.2.5 fails its gate: revert this pin, not the

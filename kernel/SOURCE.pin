@@ -31,11 +31,11 @@ git_commit: a300e35c0a4b4a38fb53742ea6e2a203c98ee523
 # blacks both SM8650 boards, and carrying patch 0525 is what makes it safe. See the DSI paragraph
 # under the patch bullet below. Re-run every gate, every time.
 #
-# 7.2.5 HW gate: PARTLY RUN (3 of 4) as of 2026-09-11, off a dev card built from this pin at
-# 513cb8f. The gate is the SAME four boards 7.2.4 was validated on, but they are no longer
-# interchangeable — only the two SM8650 ones can exercise 0525 at all:
+# 7.2.5 IS HW-validated, as of 2026-09-11, on four boards — booted from a dev card built from this
+# pin at 513cb8f. The gate is the SAME four boards 7.2.4 was validated on, but they are no longer
+# interchangeable — only the two SM8650 ones can exercise 0525 at all, and BOTH passed:
 #   Pocket ACE  qcs8550-ayaneo-pocketace  panel 0051 ayaneo,pocket-ace-panel   VIDEO mode    PASS
-#   Pocket S2   sm8650-ayaneo-ps2         panel 0066 ayaneo,wt0630-2k          VIDEO mode  <-0525 TODO
+#   Pocket S2   sm8650-ayaneo-ps2         panel 0066 ayaneo,wt0630-2k          VIDEO mode  <-0525 PASS
 #   Pocket FIT  sm8650-konkr-pf           panel 0067 ayaneo,ar14-144hz         VIDEO mode  <-0525 PASS
 #   Pocket Max  sm8250-mangmi-pocket-max  panel 0058 mangmi,pocket-max-panel   COMMAND mode  PASS
 # WHICH BOARD PROVES WHAT, read off the DSI host's compatible on the device and not from the board
@@ -47,6 +47,12 @@ git_commit: a300e35c0a4b4a38fb53742ea6e2a203c98ee523
 #     failed units, and ZERO hits for the regression's signature ("Failed to set rate pixel clk",
 #     "rcg didn't update", "Turning OFF PHY while PLL is on"). chipone-tddi touch bound, no
 #     i2c/geni errors, no SMMU faults.
+#   Pocket S2, 2026-09-11: the OTHER v2.9 board, and the same result — panel up 1440x2560 (the
+#     2K wt0630), gamescope at 2560x1440 on DSI-1, Steam up, no failed units, zero signature hits,
+#     zero SMMU faults, Goodix touch bound, no i2c/geni errors, both panel rails at 5200000uV.
+#     Two independent v2.9 boards passing is what closes this gate: one could be luck in the
+#     rounding arithmetic for one particular mode, two different panels at different resolutions
+#     (1080x1920 and 1440x2560, so different byte clocks) is the fix working, not a coincidence.
 #   Pocket ACE, 2026-09-11: panel up 1080x1620, backlight on, session up, no failed units, no
 #     i2c/geni errors. Three backlight round-trips through the sy7758 (an I2C device behind geni,
 #     /soc@0/geniqup@ac0000/i2c@a80000/sy7758@2e) produced zero kernel output — which tests the

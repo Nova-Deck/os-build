@@ -1,0 +1,139 @@
+Subject: [PATCH] drm/msm/dsi: round the byte clock rate after reparenting to the PHY PLL
+
+DSI 6G v2.9 hosts (SM8650, SM8750, Kaanapali, etc.) reparent the byte and
+pixel RCGs to the DSI PHY PLL at runtime from
+dsi_link_clk_set_rate_6g_v2_9(), after the PHY has been enabled. However
+dsi_calc_clk_rate_6g() runs earlier, in order to compute the bit clock
+request for the PHY. At that point the byte RCG still has its reset
+parent (XO), so clk_round_rate() returns a bogus rate, which then ends up
+in the PHY bit clock request and the PLL gets programmed to a wrong
+frequency, breaking the panel.
+
+Move the rounding to dsi_link_clk_set_rate_6g(), which is called after
+the RCGs have been reparented to the PLL. Storing the rounded rate at
+this point still makes later link_clk_set_rate() calls no-ops in the
+CCF. Derive the byte interface clock rate from the rounded byte clock
+rate, otherwise it would keep requesting the idealized rate and
+retrigger the PLL on every transfer.
+
+Fixes: 6cd33b6f4155 ("drm/msm/dsi: round 6G byte clock rate to the PLL-achievable value")
+
+BACKPORT of Dmitry Baryshkov's 2026-09-03 posting, change-id
+20260903-fix-eliza-dsi-8bc2fed2c29b:
+https://www.mail-archive.com/freedreno@lists.freedesktop.org/msg46766.html
+Authored by Dmitry Baryshkov; Reported-by Abel Vesa and Krzysztof Kozlowski;
+Reviewed-by and Tested-by (# SM6115P J606F) Konrad Dybcio. Those tags are
+carried as NAMES ONLY: mail-archive.com redacts every address to
+"[email protected]", so writing them out here would be a guess, and
+lore.kernel.org is behind an Anubis proof-of-work wall (see kernel/SOURCE.pin).
+Restore the real trailers from the posting if this is ever sent anywhere.
+
+NOT YET MERGED anywhere -- checked against both torvalds/master and
+linux-next on 2026-09-11: the newest change to this file in either tree is
+Konrad's 2026-07-31 "drm/msm/dsi: Drop dev_pm_opp_set_rate(0)". We carry it
+because the bug it fixes IS in our tree: 7.2.5 backports the offending commit
+as d152b582d852 ("drm/msm/dsi: round 6G byte clock rate to the PLL-achievable
+value", 6cd33b6f4155 upstream), and 7.2.4 -- the pin this replaces -- did not
+have it.
+
+The regression blacks the SM8650 boards specifically, which for us is Pocket S2
+(sm8650-ayaneo-ps2) and Pocket FIT (sm8650-konkr-pf). sm8650 is one of exactly
+two entries in dsi_cfg.c bound to msm_dsi_6g_v2_9_host_ops, the ops struct
+whose ->link_clk_set_rate is the runtime-reparenting one; SM8550/qcs8550
+(Pocket ACE) and SM8250 (Pocket Max) use the plain 6g ops and are unaffected
+either way. Symptom, per the report: "dsi_link_clk_set_rate_6g: Failed to set
+rate pixel clk, -22" and a dead panel.
+
+DROP THIS PATCH once the fix lands in the pinned stable series -- check
+dsi_calc_clk_rate_6g() for the absence of clk_round_rate(), and the struct for
+byte_intf_clk_div_2, on the next bump.
+
+Not a straight revert of d152b582d852 on purpose: the revert
+(https://www.mail-archive.com/freedreno@lists.freedesktop.org/msg46763.html)
+loses the rounding entirely, and the rounding is what stops every runtime DCS
+transfer from re-locking the PLL. This keeps it, just at the call site where
+the byte RCG is already parented to the PLL it is being rounded against.
+
+---
+
+--- a/drivers/gpu/drm/msm/dsi/dsi_host.c
++++ b/drivers/gpu/drm/msm/dsi/dsi_host.c
+@@ -129,7 +129,7 @@
+ 	struct clk *dsi_pll_pixel_clk;
+ 
+ 	unsigned long byte_clk_rate;
+-	unsigned long byte_intf_clk_rate;
++	bool byte_intf_clk_div_2;
+ 	unsigned long pixel_clk_rate;
+ 	unsigned long esc_clk_rate;
+ 
+@@ -391,8 +391,20 @@
+ 
+ int dsi_link_clk_set_rate_6g(struct msm_dsi_host *msm_host)
+ {
++	unsigned long byte_intf_clk_rate;
++	long rounded_byte_clk_rate;
+ 	int ret;
+ 
++	rounded_byte_clk_rate = clk_round_rate(msm_host->byte_clk,
++					       msm_host->byte_clk_rate);
++	if (rounded_byte_clk_rate < 0) {
++		pr_err("%s: failed to round byte clock rate, %ld\n",
++		       __func__, rounded_byte_clk_rate);
++		return rounded_byte_clk_rate;
++	}
++
++	msm_host->byte_clk_rate = rounded_byte_clk_rate;
++
+ 	DBG("Set clk rates: pclk=%lu, byteclk=%lu",
+ 	    msm_host->pixel_clk_rate, msm_host->byte_clk_rate);
+ 
+@@ -410,7 +422,11 @@
+ 	}
+ 
+ 	if (msm_host->byte_intf_clk) {
+-		ret = clk_set_rate(msm_host->byte_intf_clk, msm_host->byte_intf_clk_rate);
++		byte_intf_clk_rate = msm_host->byte_clk_rate;
++		if (msm_host->byte_intf_clk_div_2)
++			byte_intf_clk_rate /= 2;
++
++		ret = clk_set_rate(msm_host->byte_intf_clk, byte_intf_clk_rate);
+ 		if (ret) {
+ 			pr_err("%s: Failed to set rate byte intf clk, %d\n",
+ 			       __func__, ret);
+@@ -678,24 +694,12 @@
+ 
+ int dsi_calc_clk_rate_6g(struct msm_dsi_host *msm_host, bool is_bonded_dsi)
+ {
+-	long rounded_byte_clk_rate;
+-
+ 	if (!msm_host->mode) {
+ 		pr_err("%s: mode not set\n", __func__);
+ 		return -EINVAL;
+ 	}
+ 
+ 	dsi_calc_pclk(msm_host, is_bonded_dsi);
+-
+-	rounded_byte_clk_rate = clk_round_rate(msm_host->byte_clk,
+-					       msm_host->byte_clk_rate);
+-	if (rounded_byte_clk_rate < 0) {
+-		pr_err("%s: failed to round byte clock rate, %ld\n",
+-		       __func__, rounded_byte_clk_rate);
+-		return rounded_byte_clk_rate;
+-	}
+-
+-	msm_host->byte_clk_rate = rounded_byte_clk_rate;
+ 	msm_host->esc_clk_rate = clk_get_rate(msm_host->esc_clk);
+ 	return 0;
+ }
+@@ -2561,9 +2565,7 @@
+ 		goto unlock_ret;
+ 	}
+ 
+-	msm_host->byte_intf_clk_rate = msm_host->byte_clk_rate;
+-	if (phy_shared_timings->byte_intf_clk_div_2)
+-		msm_host->byte_intf_clk_rate /= 2;
++	msm_host->byte_intf_clk_div_2 = phy_shared_timings->byte_intf_clk_div_2;
+ 
+ 	msm_dsi_sfpb_config(msm_host, true);
+ 

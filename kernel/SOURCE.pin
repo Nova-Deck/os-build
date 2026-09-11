@@ -2,87 +2,128 @@
 # The TARBALL + its sha256 is the canonical pin. Validated 2026-06-17; re-pinned 2026-07-25
 # (7.1.5, HW-validated on Pocket S2 + Pocket ACE); re-pinned 2026-08-03 (7.1.6); re-pinned
 # 2026-08-18 (7.2 — mainline, released 2026-08-16; NOT HW-validated yet, see the gate below);
-# re-pinned 2026-08-27 (7.2.1); re-pinned 2026-09-03 (7.2.3, issue #86); re-pinned 2026-09-08 (7.2.4).
-version:    7.2.4
-url:        https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.2.4.tar.xz
-sha256:     01710ee01737dac492f1bae52becd057e08d20d11589089aa06accff415c28dd
-git_tag:    v7.2.4
-git_commit: 5015d0d945b3d3f2b038d2667880d5762f7d9437
+# re-pinned 2026-08-27 (7.2.1); re-pinned 2026-09-03 (7.2.3, issue #86); re-pinned 2026-09-08 (7.2.4);
+# re-pinned 2026-09-11 (7.2.5, issue #91 — NOT HW-validated yet, and it needs patch 0525, see below).
+version:    7.2.5
+url:        https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.2.5.tar.xz
+sha256:     55ddf0df8325d9dad96fcff7bd93977d22e3f50af06527572af59b77c7632b78
+git_tag:    v7.2.5
+git_commit: a300e35c0a4b4a38fb53742ea6e2a203c98ee523
 
 # The sha256 above is the one kernel.org publishes in the SIGNED sha256sums.asc for v7.x, not a
-# hash of whatever the CDN happened to serve — re-checked 2026-09-08. The .asc itself verifies as
+# hash of whatever the CDN happened to serve — re-checked 2026-09-11. The .asc itself verifies as
 # a GOOD signature from "Kernel.org checksum autosigner <autosigner@kernel.org>", fingerprint
 # B886 8C80 BA62 A1FF FAF5 FDA9 632D 3A06 589D A6B1. That key carries no trust path here, so the
-# load-bearing check is CONTINUITY: the SAME signed file still lists 7.2.3 as
-# 8ba259e8e7b13ec6ef0941c8a39ad90b24bd4a4d6c0010ba6bafb794550ecd03, byte-for-byte the hash this
-# pin carried and shipped before — so the file describing 7.2.4 is the same file that described
-# the release we already trusted. (Note: keys.openpgp.org serves this key STRIPPED of its user
+# load-bearing check is CONTINUITY: the SAME signed file still lists 7.2.4 as
+# 01710ee01737dac492f1bae52becd057e08d20d11589089aa06accff415c28dd and 7.2.3 as
+# 8ba259e8e7b13ec6ef0941c8a39ad90b24bd4a4d6c0010ba6bafb794550ecd03, byte-for-byte the hashes this
+# pin carried and shipped before — so the file describing 7.2.5 is the same file that described
+# the releases we already trusted. (Note: keys.openpgp.org serves this key STRIPPED of its user
 # IDs and gpg then refuses it as "no public key"; keyserver.ubuntu.com serves it whole.)
-# git_commit is the DEREFERENCED tag (`git ls-remote 'v7.2.4^{}'`), matching how the
-# 7.1.5/7.1.6/7.2/7.2.1/7.2.3 lines were recorded; the annotated tag object is
-# 85db2ca353c4308d00fa495b069f1e9336d6426e and is NOT what belongs here.
+# git_commit is the DEREFERENCED tag (`git ls-remote 'v7.2.5^{}'`), matching how the
+# 7.1.5/7.1.6/7.2/7.2.1/7.2.3/7.2.4 lines were recorded; the annotated tag object is
+# 4c440ba64342e015be9eb06f1ea824eb6e81e562 and is NOT what belongs here.
 #
-# 7.2 was MAINLINE with no point release; 7.2.1 was the first stable one, and 7.2.4 (2026-09-07)
-# is this pin's third in-series step. Precedent from 7.1.3 -> 7.1.5: a point release INSIDE a
-# series is a pure pin edit — but that is a prediction, not a licence to skip the patch/config
-# gates below. Re-run them.
+# 7.2 was MAINLINE with no point release; 7.2.1 was the first stable one, and 7.2.5 (2026-09-11)
+# is this pin's fourth in-series step. Precedent from 7.1.3 -> 7.1.5 says a point release INSIDE a
+# series is a pure pin edit — and 7.2.5 is the bump that proves why that is a prediction and not a
+# licence to skip the gates. It is NOT a pure pin edit: it backports a drm/msm/dsi commit that
+# blacks both SM8650 boards, and carrying patch 0525 is what makes it safe. See the DSI paragraph
+# under the patch bullet below. Re-run every gate, every time.
 #
-# 7.2.4 IS HW-validated, as of 2026-09-09, on four boards — booted from a dev card built off this
-# pin (with 0515-0517, see below), display up and no issues reported on:
+# 7.2.5 is NOT HW-validated. The HW gate it owes is the SAME four boards 7.2.4 was validated on,
+# and the two SM8650 ones are no longer a formality — they are the boards patch 0525 exists for:
 #   Pocket ACE  qcs8550-ayaneo-pocketace  panel 0051 ayaneo,pocket-ace-panel   VIDEO mode
-#   Pocket S2   sm8650-ayaneo-ps2         panel 0066 ayaneo,wt0630-2k          VIDEO mode
-#   Pocket FIT  sm8650-konkr-pf           panel 0067 ayaneo,ar14-144hz         VIDEO mode
+#   Pocket S2   sm8650-ayaneo-ps2         panel 0066 ayaneo,wt0630-2k          VIDEO mode    <- 0525
+#   Pocket FIT  sm8650-konkr-pf           panel 0067 ayaneo,ar14-144hz         VIDEO mode    <- 0525
 #   Pocket Max  sm8250-mangmi-pocket-max  panel 0058 mangmi,pocket-max-panel   COMMAND mode
 # Both DSI modes on purpose: 0517's premise is video-mode-specific, so the command-mode panel is
 # there to prove it did not regress the other path, not to exercise it. Four of 21 boards, and
 # three SoCs (qcs8550 / sm8650 / sm8250) — the untested 17 are still untested. Note also that a
 # new Image invalidates the whole `/lib/modules/<ver>` tree (module BTF), so testing it means
 # flashing a card built from this pin, not swapping /boot/Image on an existing one.
+#
+# 7.2.4 WAS HW-validated, on 2026-09-09, on exactly those four boards (with 0515-0517), display up
+# and no issues reported. That is the fallback if 7.2.5 fails its gate: revert this pin, not the
+# patch set — 0525 is inert on 7.2.4, whose dsi_calc_clk_rate_6g() does no rounding at all, so it
+# would fail to apply and must come out with the pin.
 
-# Config validation (kernel/*.config) against THIS tree, RE-RUN 2026-09-08 for the 7.2.4 re-pin
-# (numbers below are 7.2.4's; the 7.2.3 run they replace found 429/0-missing and 71 patches/26 fuzz,
-# the 7.2.1 run before that 428/0-missing and 71 patches/26 fuzz, and the 7.2 one 427/1-missing and
-# 69 patches/21 fuzz):
+# Config validation (kernel/*.config) against THIS tree, RE-RUN 2026-09-11 for the 7.2.5 re-pin
+# (numbers below are 7.2.5's; the 7.2.4 run they replace found 426/0-missing and 80 patches/26 fuzz,
+# the 7.2.3 one 429/0-missing and 71 patches/26 fuzz, the 7.2.1 one 428/0-missing and 71 patches/26
+# fuzz, and the 7.2 one 427/1-missing and 69 patches/21 fuzz):
 #   - all 426 referenced CONFIG_* symbols (kernel.config + trim-platforms.config) exist in the
-#     PATCHED 7.2.4 tree, with NONE missing. The count moved 429 -> 426 by OUR hand, not upstream's:
-#     three dead trim-platforms directives were deleted during this re-pin (see the bullet below).
-#     Before that it had moved 428 -> 429 at 7.2.3, also for a reason unrelated to any bump —
-#     b4ddf2d added AYANEO_SERIAL_MCU, a symbol our OWN patch 1005-add-ayaneo-serial-mcu.patch
-#     defines, which is exactly why the sweep must run against the patched tree and not a pristine
-#     one. Sweep: strip `CONFIG_x=` and `# CONFIG_x is not set` to bare names, diff against every
-#     `config`/`menuconfig` name in the tree's Kconfig files.
+#     PATCHED 7.2.5 tree, with NONE missing. The count did not move at this bump: 426 at 7.2.4, 426
+#     here, and neither fragment was edited. Historically it moves for OUR reasons, not upstream's —
+#     429 -> 426 at 7.2.4 when three dead trim-platforms directives were deleted, and 428 -> 429 at
+#     7.2.3 when b4ddf2d added AYANEO_SERIAL_MCU, a symbol our OWN
+#     1005-misc-add-ayaneo-serial-mcu.patch defines, which is exactly why the sweep must run
+#     against the patched tree and not a pristine one. Sweep: strip `CONFIG_x=` and
+#     `# CONFIG_x is not set` to bare names, diff against every `config`/`menuconfig` name in the
+#     tree's Kconfig files.
 #     The one 7.2 casualty stays deleted and its note is still why — see kernel.config's header:
 #       READ_ONLY_THP_FOR_FS -> removed upstream in 7.2; file THP is unconditional now.
 #     SCHED_CACHE (added 2026-08-22) still resolves the same way (init/Kconfig, `default y`,
 #     `depends on SMP`) — the pin records an inherited default rather than changing one.
-#   - all 80 out-of-tree patches in kernel/patches/ apply to 7.2.4 with ZERO rejects, applied
+#   - all 88 out-of-tree patches in kernel/patches/ apply to 7.2.5 with ZERO rejects, applied
 #     CUMULATIVELY in lexical order, which is the only order that means anything (see below).
-#     The patch count moved 71 -> 77 since the 7.2.3 re-pin and NOT because of this bump: six drm/msm
-#     and DPU patches (0508-0513) were added on main in the meantime. All six are new-enough code
-#     that they apply at fuzz 0. It then moved 77 -> 80, also NOT a bump: 0515-0517 backport patches
-#     1-3 of Dmitry Baryshkov's "drm/msm: fix SMMU fault dumps" v2 (2026-09-08). Same story — new
-#     code, fuzz 0 — and the gates below were RE-RUN for that addition, not just for the 7.2.4 bump.
-#     26 hunks need fuzz; kernel/build.sh passes no -F0, so patch's default fuzz=2 accepts them.
-#     The fuzz count CLIMBS with every point release — when it reaches 2 on a hunk that matters,
-#     patch will start applying it in the wrong place silently. So the raw total is the WRONG
-#     instrument: 26 was also 7.2.1's and 7.2.3's total, and a hunk sliding 1 -> 2 while another slid
-#     2 -> 1 would leave it unmoved. The 7.2.4 run therefore replayed the identical drill against a
-#     pristine 7.2.3 tree and diffed the PER-HUNK profile (patch name + fuzz level, counted): the
-#     two are byte-identical, 16 hunks at fuzz 1 and 10 at fuzz 2, same patches on both sides.
-#     Nothing climbed. The 0515-0517 addition replayed the SAME drill in the other axis — two
-#     pristine 7.2.4 trees, 77 patches on one and 80 on the other — and the profiles are again
-#     byte-identical at 16/10. So the three new patches applied at fuzz 0 AND moved no existing
-#     hunk. Note that "0 rejects" alone does not prove a patch landed, so that run also asserted
-#     each one's code is present in the 80-patch tree and absent from the 77-patch one.
+#     The patch count moved 80 -> 87 since the 7.2.4 re-pin and NOT because of this bump: 0514 and
+#     0518-0524 (the drm/msm VM_BIND shared-VM fallback backport) were added on main in the meantime.
+#     87 -> 88 IS this bump: 0525, and it is the whole story of this re-pin — see the DSI paragraph
+#     below. 26 hunks need fuzz; kernel/build.sh passes no -F0, so patch's default fuzz=2 accepts
+#     them. The fuzz count CLIMBS with every point release — when it reaches 2 on a hunk that
+#     matters, patch will start applying it in the wrong place silently. So the raw total is the
+#     WRONG instrument: 26 was also 7.2.1's, 7.2.3's and 7.2.4's total, and a hunk sliding 1 -> 2
+#     while another slid 2 -> 1 would leave it unmoved. The 7.2.5 run therefore replayed the
+#     identical drill against a pristine 7.2.4 tree and diffed the PER-HUNK profile (patch name +
+#     hunk + fuzz level): the two are byte-identical, 16 hunks at fuzz 1 and 10 at fuzz 2, same
+#     patches on both sides. Nothing climbed. 0525 was then added and the drill replayed in the
+#     other axis — two pristine 7.2.5 trees, 87 patches on one and 88 on the other — and the
+#     profiles are again byte-identical at 16/10, so 0525 applied at fuzz 0 AND moved no existing
+#     hunk. "0 rejects" alone does not prove a patch landed, so that run also asserted 0525's code
+#     is present in the 88-patch tree (`byte_intf_clk_div_2` in the struct, in the byte-intf branch
+#     and in host_power_on; no clk_round_rate left in dsi_calc_clk_rate_6g) and absent from the
+#     87-patch one.
 #   - independent corroboration, and the cheapest signal in this whole drill: the pure upstream delta
 #     read straight off the INCREMENTAL patch, which is far cheaper than diffing two patched trees
-#     and says the same thing (https://cdn.kernel.org/pub/linux/kernel/v7.x/incr/patch-7.2.3-4.xz —
-#     take the `+++ b/` paths). 7.2.3 -> 7.2.4 changes 620 files; our patches touch 135; the
-#     INTERSECTION IS EMPTY. Upstream did not go near a single file we carry a patch for, which is
-#     why the fuzz profile could not have moved. Re-run this intersection on the next bump before
-#     reading any hunk: a non-empty result names exactly which patches deserve a human, and an empty
-#     one retires the question. It also answers the other question a bump raises — nothing of ours
-#     landed upstream this release, so no patch is a candidate for deletion.
+#     and says the same thing (https://cdn.kernel.org/pub/linux/kernel/v7.x/incr/patch-7.2.4-5.xz —
+#     take the `+++ b/` paths). 7.2.4 -> 7.2.5 changes 462 files; our patches touch 153; the
+#     INTERSECTION IS TWO FILES, and reading them is what turned this bump from routine into the
+#     one that needed a new patch. THIS IS THE BULLET THAT EARNED ITS KEEP — it named the problem
+#     before a single hunk was read, and it is the ONLY gate that found it: the fuzz profile could
+#     not, because upstream changed a function none of our patches contexts on, and the config
+#     sweep could not, because no symbol moved. Run it FIRST on every bump.
+#       drivers/gpu/drm/msm/dsi/dsi_host.c  — ours: 0003, 0005, 0512.   THE BLOCKER. 7.2.5 backports
+#         d152b582d852 ("drm/msm/dsi: round 6G byte clock rate to the PLL-achievable value",
+#         6cd33b6f4155 upstream), which rounds the byte clock in dsi_calc_clk_rate_6g() — i.e.
+#         before the DSI 6G v2.9 hosts reparent the byte RCG from XO to the PHY PLL. The rounded-
+#         against-XO rate lands in the PHY bit clock request and the PLL is programmed wrong:
+#         "Failed to set rate pixel clk, -22" and a dead panel. v2.9 is exactly sm8650 + kaanapali
+#         in dsi_cfg.c, so for us it is Pocket S2 and Pocket FIT — two of the four boards 7.2.4
+#         was validated on. Patch 0525 carries Dmitry Baryshkov's fix (move the rounding into
+#         dsi_link_clk_set_rate_6g(), after the reparent). NOT the competing straight revert, which
+#         loses the rounding entirely. None of 0003/0005/0512 owns any line the upstream commit or
+#         the fix touches, verified by diffing the patched tree against the pristine one.
+#       drivers/pmdomain/qcom/rpmhpd.c      — ours: 0121.   BENIGN, but it had to be read to know
+#         that. Upstream reverts the MXC/MMCX additions to eliza_rpmhpds[]; our 0121 adds
+#         presync_floor/skip_retention_level to the gmxc struct ABOVE that table and only uses the
+#         "/* Eliza RPMH powerdomains */" comment as trailing context, which the revert leaves
+#         alone. Eliza is not one of our three SoCs either way.
+#     The other question a bump raises: nothing of OURS landed upstream this release. Both
+#     intersecting changes are upstream's own, and all 88 patches applied forward, so no patch
+#     becomes a deletion candidate at 7.2.5.
+#   - what the intersection CANNOT see, and therefore what the HW gate is actually for: 7.2.5 also
+#     changes drivers we depend on but carry no patch against, so nothing offline will flag them.
+#     Worth a look if the gate turns up something odd:
+#       i2c: qcom-geni: update frequency table to fix timing parameters   — every I2C touchscreen
+#         and DDIC on these boards sits behind geni. A timing change here is the most plausible
+#         source of a "touch works but flakes" or backlight-write result on a board that was fine.
+#       soc: qcom: geni-se: use HW PROG_RAM_DEPTH to validate firmware size
+#       media: qcom: iris: four fixes (gen1 GOP_SIZE cap, disable_irq on power-off, state-change
+#         log, bus_info) — iris is our =m video decoder on all three SoCs, so exercise it with
+#         ffmpeg v4l2m2m and NOT Steam (see the iris/venus node interlock in build.sh's comments).
+#       remoteproc: qcom_q6v5_pas, usb: typec/tcpm qcom-pmic — routine stable fixes, listed only so
+#         the next reader knows they were looked at and not missed.
 #   - `patch unexpectedly ends in middle of line` x4 is NOT a reject: patches 0004 (IFPC) and 0203
 #     (S16_LE) have no trailing newline. Both hunks succeed. Pre-existing, unrelated to any bump.
 #   - the fragments were then MERGED for real inside build/Dockerfile (`merge_config.sh -m
@@ -90,8 +131,10 @@ git_commit: 5015d0d945b3d3f2b038d2667880d5762f7d9437
 #     requested symbol asserted to have kept its requested value. All 426 came out right and zero
 #     symbols came out wrong — including DEBUG_INFO_BTF/SCHED_CLASS_EXT, which resolve correctly
 #     here because the container ships `dwarves` (pahole v1.31).
-#   - that assertion is also what caught the one real defect this bump surfaced, in OUR tree
-#     rather than upstream's. Three symbols trim-platforms.config asks to turn off came back
+#   - that assertion is also what caught the one real defect the 7.2.4 re-pin surfaced, in OUR tree
+#     rather than upstream's. It is kept here because the mechanism is permanent, not because it
+#     recurred: at 7.2.5 the same run reports 46 cut and nothing redundant, unchanged.
+#     Three symbols trim-platforms.config asked to turn off came back
 #     `undef` (absent from .config) instead of `n`: ARCH_TESLA_FSD and ARCH_ARTPEC both
 #     `depends on ARCH_EXYNOS`, and DRM_NOUVEAU_BACKLIGHT `depends on DRM_NOUVEAU` — all three
 #     gates that the same file already cuts, so all three lines cut nothing. They were removed
@@ -102,12 +145,16 @@ git_commit: 5015d0d945b3d3f2b038d2667880d5762f7d9437
 #     Re-verified after the deletion: `make kernel` reports `trim-platforms: 46 symbols confirmed
 #     disabled` with no redundant list, and all 426 requested symbols still land on their
 #     requested values. So every directive left in that file is load-bearing.
-#   - and the whole thing was then BUILT: `make kernel` produced Image + all 21 board DTBs +
-#     modules against 7.2.4 on 2026-09-08. That is the gate the offline drill cannot give you.
-#     Re-run once more the same day WITH 0515-0517: clean build, 426/0-missing, `trim-platforms:
-#     46 symbols confirmed disabled`, Image + 21 DTBs + modules. A dev card off that build then
-#     booted four boards clean on 2026-09-09 — see the HW-validation paragraph above, which is the
-#     first time this pin has been on hardware at all.
+#   - and the whole thing was then BUILT: `make kernel` against 7.2.5 on 2026-09-11, clean, all 88
+#     patches applied including 0525, `trim-platforms: 46 symbols confirmed disabled` with no
+#     redundant list, Image + all 21 board DTBs + 946 modules under /lib/modules/7.2.5. That is the
+#     gate the offline drill cannot give you. 47 compiler warnings; the ones that were read are in
+#     OUR out-of-tree drivers (qcom-hv-haptics.c's bare `rc=%d` in sweep_run_store, and its
+#     missing-prototype set), i.e. in files 7.2.5 does not touch, so they cannot be bump fallout.
+#     They were not diffed against a 7.2.4 build log — no such log was kept — so treat "47" as a
+#     number to compare against next time, not as a verified-unchanged one.
+#     7.2.4 built the same way on 2026-09-08, and a dev card off that build booted four boards
+#     clean on 2026-09-09. 7.2.5 has NOT been on hardware.
 #
 # HOW TO RE-RUN THIS VALIDATION, and the mistake that makes it lie: patches must be applied
 # cumulatively to ONE tree, exactly as kernel/build.sh does. Dry-running each patch independently

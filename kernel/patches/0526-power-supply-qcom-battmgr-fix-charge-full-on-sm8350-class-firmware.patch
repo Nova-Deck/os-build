@@ -1,0 +1,90 @@
+Subject: [PATCH] power: supply: qcom_battmgr: fix CHARGE_FULL* on SM8350-class firmware
+
+battmgr->unit is only ever assigned in the BATTMGR_BAT_INFO handler of
+the SC8280XP callback. The SM8350-class firmware does not implement that
+request - every property is fetched individually via
+BATTMGR_BAT_PROPERTY_GET - so unit keeps its zero-initialised value,
+QCOM_BATTMGR_UNIT_mWh.
+
+POWER_SUPPLY_PROP_CHARGE_FULL and POWER_SUPPLY_PROP_CHARGE_FULL_DESIGN
+are guarded by 'if (unit != QCOM_BATTMGR_UNIT_mAh) return -ENODATA;',
+hence both properties always fail on these platforms, even though the
+values are requested from the firmware and stored in
+info.last_full_capacity and info.design_capacity on every access:
+
+  $ cat /sys/class/power_supply/qcom-battmgr-bat/charge_full
+  cat: read error: No data available
+
+Without a full charge value userspace cannot derive an absolute energy
+level, so UPower reports a zero energy level and never computes a
+time-to-empty/time-to-full estimate:
+
+    energy:              0 Wh
+    energy-full:         0 Wh
+    energy-rate:         12.4713 W
+    percentage:          59%
+
+The firmware of this class reports charge domain values, so set the unit
+statically when registering the SM8350/SM8550 power supplies. With this
+patch the properties read back consistently on a Fairphone 5:
+
+  charge_full         4116000
+  charge_full_design  4260000
+  capacity            85
+
+Fixes: 29e8142b5623 ("power: supply: Introduce Qualcomm PMIC GLINK power supply")
+Signed-off-by: Jan-Michael Brummer <jan.brummer@tabos.org>
+
+BACKPORT of patch 1/2 of Jan-Michael Brummer's 2026-08-29 posting
+"power: supply: qcom_battmgr: report charge levels on SM8350-class firmware":
+https://patchwork.kernel.org/project/linux-arm-msm/patch/20260829054546.86210-2-jan.brummer@tabos.org/
+Message-Id: <20260829054546.86210-2-jan.brummer@tabos.org>
+The commit message above is the author's, verbatim from that posting's mbox;
+only this note and the regenerated diff below are ours. (lore.kernel.org is
+behind an Anubis proof-of-work wall -- see kernel/SOURCE.pin -- so patchwork's
+/api/1.2/ and /mbox/ endpoints are the readable copy.)
+
+NOT MERGED ANYWHERE as of 2026-09-11. Checked torvalds/master and Sebastian
+Reichel's power-supply tree on both for-next and fixes: the newest change to
+this file in any of them is 37689bcbc41b ("power: supply: qcom_battmgr: fix
+battery chemistry strncmp length", 2026-08-12), which is already in 7.2.5.
+Patchwork marks the series "handled-elsewhere" in BOTH linux-pm and
+linux-arm-msm, which is a cross-posting artifact and NOT "applied" -- do not
+read that state as merged. There is no v2; v1 is the only revision.
+
+WHO THIS AFFECTS HERE: every board whose pmic-glink node declares
+"qcom,sm8550-pmic-glink", which the driver maps to QCOM_BATTMGR_SM8550 and
+which takes the same probe branch as the SM8350 fallback. That is all thirteen
+qcs8550 boards (via qcs8550-ayaneo-pocket-common.dtsi and qcs8550-ayn-common.dtsi)
+plus both sm8650 boards, Pocket S2 and Pocket FIT (via sm8650-ayaneo-common.dtsi).
+The six sm8250 boards -- Pocket Max among them -- have no pmic-glink node at all;
+they use qcom_pm8150b_charger + qcom_fg (patch 0072) and are untouched either way.
+
+NO REGRESSION RISK from flipping the unit: neither sm8350_bat_props[] nor
+sm8550_bat_props[] exposes any POWER_SUPPLY_PROP_ENERGY_*, so the mWh side of
+those unit guards was unreachable on this path to begin with. The only change
+visible to userspace is CHARGE_FULL / CHARGE_FULL_DESIGN / CHARGE_EMPTY going
+from -ENODATA to a real value.
+
+DROP THIS PATCH once it lands in the pinned stable series -- grep
+qcom_battmgr_probe() for "battmgr->unit = QCOM_BATTMGR_UNIT_mAh" on the next bump.
+
+---
+
+--- a/drivers/power/supply/qcom_battmgr.c
++++ b/drivers/power/supply/qcom_battmgr.c
+@@ -1690,6 +1690,14 @@
+ 			return dev_err_probe(dev, PTR_ERR(battmgr->wls_psy),
+ 					     "failed to register wireless charing power supply\n");
+ 	} else {
++		/*
++		 * The SM8350-class firmware has no BATTMGR_BAT_INFO request, so
++		 * @unit is never populated from the firmware. It reports charge
++		 * domain values, so set it statically here - otherwise the
++		 * CHARGE_* properties are rejected with -ENODATA.
++		 */
++		battmgr->unit = QCOM_BATTMGR_UNIT_mAh;
++
+ 		if (battmgr->variant == QCOM_BATTMGR_SM8550)
+ 			psy_desc = &sm8550_bat_psy_desc;
+ 		else

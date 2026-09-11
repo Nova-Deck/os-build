@@ -1,0 +1,94 @@
+Subject: [PATCH] power: supply: qcom_battmgr: expose CHARGE_NOW on SM8350-class firmware
+
+The SM8350-class firmware does not implement a dedicated 'charge now'
+property. It does however report BATT_CHG_COUNTER, and on this class of
+firmware that value is the remaining charge in uAh rather than a
+monotonic counter. Measured on a Fairphone 5 with charge_full at
+4116000 uAh:
+
+  BATT_CHG_COUNTER   reported capacity   counter / charge_full
+  2434614            59%                 59.1%
+  3525354            85%                 85.6%
+
+Map POWER_SUPPLY_PROP_CHARGE_NOW onto the same firmware property and
+store the value in status.capacity, which the CHARGE_NOW/ENERGY_NOW case
+of qcom_battmgr_bat_get_property() already reads.
+
+Together with the preceding patch this gives userspace both the full
+charge and the current charge. UPower now derives an energy level and
+runtime estimates in both directions:
+
+    state:               discharging      state:               charging
+    energy:              14.4347 Wh       energy:              15.6003 Wh
+    energy-full:         16.8807 Wh       energy-full:         18.1505 Wh
+    energy-rate:         3.39313 W        energy-rate:         7.3492 W
+    time to empty:       4.3 hours        time to full:        20.8 minutes
+
+Signed-off-by: Jan-Michael Brummer <jan.brummer@tabos.org>
+
+BACKPORT of patch 2/2 of Jan-Michael Brummer's 2026-08-29 posting
+"power: supply: qcom_battmgr: report charge levels on SM8350-class firmware":
+https://patchwork.kernel.org/project/linux-arm-msm/patch/20260829054546.86210-3-jan.brummer@tabos.org/
+Message-Id: <20260829054546.86210-3-jan.brummer@tabos.org>
+The commit message above is the author's, verbatim from that posting's mbox;
+only this note and the regenerated diff below are ours.
+
+DEPENDS ON 0526. On its own this patch changes nothing user-visible: the
+CHARGE_NOW case in qcom_battmgr_bat_get_property() is behind the same
+'unit != QCOM_BATTMGR_UNIT_mAh -> -ENODATA' guard that 0526 unblocks. Keep the
+two together, and drop them together.
+
+NOT MERGED ANYWHERE as of 2026-09-11 -- see the same check recorded in 0526.
+
+WHY status.capacity IS FREE TO WRITE ON THIS PATH: on the SM8350/SM8550
+callback, status.capacity is never assigned. It is written only at the
+BATTMGR_BAT_STATUS_GET handler of the SC8280XP callback, which this firmware
+class never reaches. The battery PERCENTAGE lives in a different field,
+status.percent, written from BATT_CAPACITY -- so this does not clobber the
+percentage Steam already shows. The remaining-charge reading rides alongside
+CHARGE_COUNTER, which keeps reporting the same raw value via info.charge_count.
+
+WHAT IT BUYS: UPower gets energy + energy-full and can finally compute a rate,
+so the Steam Quick Access panel shows a real time-remaining estimate instead of
+"?h ?m". That is the whole point of carrying these two.
+
+---
+
+--- a/drivers/power/supply/qcom_battmgr.c
++++ b/drivers/power/supply/qcom_battmgr.c
+@@ -442,6 +442,7 @@
+ 	[POWER_SUPPLY_PROP_CYCLE_COUNT] = BATT_CYCLE_COUNT,
+ 	[POWER_SUPPLY_PROP_CHARGE_FULL_DESIGN] =  BATT_CHG_FULL_DESIGN,
+ 	[POWER_SUPPLY_PROP_CHARGE_FULL] = BATT_CHG_FULL,
++	[POWER_SUPPLY_PROP_CHARGE_NOW] = BATT_CHG_COUNTER,
+ 	[POWER_SUPPLY_PROP_MODEL_NAME] = BATT_MODEL_NAME,
+ 	[POWER_SUPPLY_PROP_TIME_TO_FULL_AVG] = BATT_TTF_AVG,
+ 	[POWER_SUPPLY_PROP_TIME_TO_EMPTY_AVG] = BATT_TTE_AVG,
+@@ -879,6 +880,7 @@
+ 	POWER_SUPPLY_PROP_CYCLE_COUNT,
+ 	POWER_SUPPLY_PROP_CHARGE_FULL_DESIGN,
+ 	POWER_SUPPLY_PROP_CHARGE_FULL,
++	POWER_SUPPLY_PROP_CHARGE_NOW,
+ 	POWER_SUPPLY_PROP_MODEL_NAME,
+ 	POWER_SUPPLY_PROP_TIME_TO_FULL_AVG,
+ 	POWER_SUPPLY_PROP_TIME_TO_EMPTY_AVG,
+@@ -911,6 +913,7 @@
+ 	POWER_SUPPLY_PROP_CYCLE_COUNT,
+ 	POWER_SUPPLY_PROP_CHARGE_FULL_DESIGN,
+ 	POWER_SUPPLY_PROP_CHARGE_FULL,
++	POWER_SUPPLY_PROP_CHARGE_NOW,
+ 	POWER_SUPPLY_PROP_MODEL_NAME,
+ 	POWER_SUPPLY_PROP_TIME_TO_FULL_AVG,
+ 	POWER_SUPPLY_PROP_TIME_TO_EMPTY_AVG,
+@@ -1443,7 +1446,10 @@
+ 			battmgr->info.technology = le32_to_cpu(resp->intval.value);
+ 			break;
+ 		case BATT_CHG_COUNTER:
+-			battmgr->info.charge_count = le32_to_cpu(resp->intval.value);
++			val = le32_to_cpu(resp->intval.value);
++			battmgr->info.charge_count = val;
++			/* the firmware reports the remaining charge here */
++			battmgr->status.capacity = val;
+ 			break;
+ 		case BATT_CYCLE_COUNT:
+ 			battmgr->info.cycle_count = le32_to_cpu(resp->intval.value);

@@ -1,0 +1,208 @@
+Subject: [PATCH] drm/msm: Allow lazy VM creation to fail
+
+In the next commit, we'll stop falling back to shared VM if private VM
+creation fails.
+
+This isn't expected to happen in practice, it would either require small
+memory allocations to fail, or missing support in arm-smmu-qcom for
+setting up per-process pgtable support (ie. missing patch during
+bringup).
+
+BACKPORT of mainline commit 00dfa76bdfc2 ("drm/msm: Allow lazy VM creation to fail").
+Part of Rob Clark's 2026-07-29 drm/msm context/VM hardening series
+(Message-ID 20260729155609.20190-*, patches 2..18), merged for 7.3.
+None of it is in 7.2.x, which is what kernel/SOURCE.pin points at.
+
+Dependency of 0523, and the reason 0523 is safe: once msm_context_vm() may
+return NULL, every caller has to check. Taking 0523 without this turns a
+translation-fault storm into a NULL deref in the submitqueue path.
+
+---
+
+diff --git a/drivers/gpu/drm/msm/adreno/adreno_gpu.c b/drivers/gpu/drm/msm/adreno/adreno_gpu.c
+--- a/drivers/gpu/drm/msm/adreno/adreno_gpu.c
++++ b/drivers/gpu/drm/msm/adreno/adreno_gpu.c
+@@ -359,7 +359,7 @@ int adreno_fault_handler(struct msm_gpu *gpu, unsigned long iova, int flags,
+ static bool
+ valid_per_process_vm(struct msm_gpu *gpu, struct drm_gpuvm *vm)
+ {
+-	return (vm != gpu->vm);
++	return vm && (vm != gpu->vm);
+ }
+ 
+ int adreno_get_param(struct msm_gpu *gpu, struct msm_context *ctx,
+diff --git a/drivers/gpu/drm/msm/msm_drv.c b/drivers/gpu/drm/msm/msm_drv.c
+--- a/drivers/gpu/drm/msm/msm_drv.c
++++ b/drivers/gpu/drm/msm/msm_drv.c
+@@ -432,10 +432,14 @@ static int msm_ioctl_gem_info_iova(struct drm_device *dev,
+ {
+ 	struct msm_drm_private *priv = dev->dev_private;
+ 	struct msm_context *ctx = file->driver_priv;
++	struct drm_gpuvm *vm = msm_context_vm(dev, ctx);
+ 
+ 	if (!priv->gpu)
+ 		return -EINVAL;
+ 
++	if (!vm)
++		return UERR(ENOMEM, dev, "no VM");
++
+ 	if (msm_context_is_vmbind(ctx))
+ 		return UERR(EINVAL, dev, "VM_BIND is enabled");
+ 
+@@ -446,7 +450,7 @@ static int msm_ioctl_gem_info_iova(struct drm_device *dev,
+ 	 * Don't pin the memory here - just get an address so that userspace can
+ 	 * be productive
+ 	 */
+-	return msm_gem_get_iova(obj, msm_context_vm(dev, ctx), iova);
++	return msm_gem_get_iova(obj, vm, iova);
+ }
+ 
+ static int msm_ioctl_gem_info_set_iova(struct drm_device *dev,
+@@ -460,6 +464,9 @@ static int msm_ioctl_gem_info_set_iova(struct drm_device *dev,
+ 	if (!priv->gpu)
+ 		return -EINVAL;
+ 
++	if (!vm)
++		return UERR(ENOMEM, dev, "no VM");
++
+ 	if (msm_context_is_vmbind(ctx))
+ 		return UERR(EINVAL, dev, "VM_BIND is enabled");
+ 
+diff --git a/drivers/gpu/drm/msm/msm_gem_submit.c b/drivers/gpu/drm/msm/msm_gem_submit.c
+--- a/drivers/gpu/drm/msm/msm_gem_submit.c
++++ b/drivers/gpu/drm/msm/msm_gem_submit.c
+@@ -30,7 +30,7 @@
+  */
+ 
+ static struct msm_gem_submit *submit_create(struct drm_device *dev,
+-		struct msm_gpu *gpu,
++		struct msm_gpu *gpu, struct drm_gpuvm *vm,
+ 		struct msm_gpu_submitqueue *queue, uint32_t nr_bos,
+ 		uint32_t nr_cmds, u64 drm_client_id)
+ {
+@@ -66,7 +66,7 @@ static struct msm_gem_submit *submit_create(struct drm_device *dev,
+ 
+ 	kref_init(&submit->ref);
+ 	submit->dev = dev;
+-	submit->vm = msm_context_vm(dev, queue->ctx);
++	submit->vm = vm;
+ 	submit->gpu = gpu;
+ 	submit->cmd = (void *)&submit->bos[nr_bos];
+ 	submit->queue = queue;
+@@ -554,6 +554,7 @@ int msm_ioctl_gem_submit(struct drm_device *dev, void *data,
+ 	struct msm_drm_private *priv = dev->dev_private;
+ 	struct drm_msm_gem_submit *args = data;
+ 	struct msm_context *ctx = file->driver_priv;
++	struct drm_gpuvm *vm = msm_context_vm(dev, ctx);
+ 	struct msm_gem_submit *submit = NULL;
+ 	struct msm_gpu *gpu = priv->gpu;
+ 	struct msm_gpu_submitqueue *queue;
+@@ -569,10 +570,13 @@ int msm_ioctl_gem_submit(struct drm_device *dev, void *data,
+ 	if (!gpu)
+ 		return -ENXIO;
+ 
++	if (!vm)
++		return UERR(ENOMEM, dev, "no VM");
++
+ 	if (args->pad)
+ 		return -EINVAL;
+ 
+-	if (to_msm_vm(ctx->vm)->unusable)
++	if (to_msm_vm(vm)->unusable)
+ 		return UERR(EPIPE, dev, "context is unusable");
+ 
+ 	/* for now, we just have 3d pipe.. eventually this would need to
+@@ -609,7 +613,7 @@ int msm_ioctl_gem_submit(struct drm_device *dev, void *data,
+ 		}
+ 	}
+ 
+-	submit = submit_create(dev, gpu, queue, args->nr_bos, args->nr_cmds,
++	submit = submit_create(dev, gpu, vm, queue, args->nr_bos, args->nr_cmds,
+ 			       file->client_id);
+ 	if (IS_ERR(submit)) {
+ 		ret = PTR_ERR(submit);
+diff --git a/drivers/gpu/drm/msm/msm_gem_vma.c b/drivers/gpu/drm/msm/msm_gem_vma.c
+--- a/drivers/gpu/drm/msm/msm_gem_vma.c
++++ b/drivers/gpu/drm/msm/msm_gem_vma.c
+@@ -957,7 +957,7 @@ msm_gem_vm_close(struct drm_gpuvm *gpuvm)
+ 
+ 
+ static struct msm_vm_bind_job *
+-vm_bind_job_create(struct drm_device *dev, struct drm_file *file,
++vm_bind_job_create(struct drm_device *dev, struct drm_file *file, struct drm_gpuvm *vm,
+ 		   struct msm_gpu_submitqueue *queue, uint32_t nr_ops)
+ {
+ 	struct msm_vm_bind_job *job;
+@@ -974,7 +974,7 @@ vm_bind_job_create(struct drm_device *dev, struct drm_file *file,
+ 		return ERR_PTR(ret);
+ 	}
+ 
+-	job->vm = msm_context_vm(dev, queue->ctx);
++	job->vm = vm;
+ 	job->queue = queue;
+ 	INIT_LIST_HEAD(&job->vm_ops);
+ 
+@@ -1433,6 +1433,7 @@ msm_ioctl_vm_bind(struct drm_device *dev, void *data, struct drm_file *file)
+ 	struct msm_drm_private *priv = dev->dev_private;
+ 	struct drm_msm_vm_bind *args = data;
+ 	struct msm_context *ctx = file->driver_priv;
++	struct drm_gpuvm *vm = msm_context_vm(dev, ctx);
+ 	struct msm_vm_bind_job *job = NULL;
+ 	struct msm_gpu *gpu = priv->gpu;
+ 	struct msm_gpu_submitqueue *queue;
+@@ -1447,11 +1448,14 @@ msm_ioctl_vm_bind(struct drm_device *dev, void *data, struct drm_file *file)
+ 	if (!gpu)
+ 		return -ENXIO;
+ 
++	if (!vm)
++		return UERR(ENOMEM, dev, "no VM");
++
+ 	/*
+ 	 * Maybe we could allow just UNMAP ops?  OTOH userspace should just
+ 	 * immediately close the device file and all will be torn down.
+ 	 */
+-	if (to_msm_vm(msm_context_vm(dev, ctx))->unusable)
++	if (to_msm_vm(vm)->unusable)
+ 		return UERR(EPIPE, dev, "context is unusable");
+ 
+ 	/*
+@@ -1482,7 +1486,7 @@ msm_ioctl_vm_bind(struct drm_device *dev, void *data, struct drm_file *file)
+ 		}
+ 	}
+ 
+-	job = vm_bind_job_create(dev, file, queue, args->nr_ops);
++	job = vm_bind_job_create(dev, file, vm, queue, args->nr_ops);
+ 	if (IS_ERR(job)) {
+ 		ret = PTR_ERR(job);
+ 		goto out_post_unlock;
+diff --git a/drivers/gpu/drm/msm/msm_submitqueue.c b/drivers/gpu/drm/msm/msm_submitqueue.c
+--- a/drivers/gpu/drm/msm/msm_submitqueue.c
++++ b/drivers/gpu/drm/msm/msm_submitqueue.c
+@@ -172,6 +172,7 @@ int msm_submitqueue_create(struct drm_device *drm, struct msm_context *ctx,
+ 	struct msm_drm_private *priv = drm->dev_private;
+ 	struct msm_gpu_submitqueue *queue;
+ 	enum drm_sched_priority sched_prio;
++	struct drm_gpuvm *vm = NULL;
+ 	unsigned ring_nr;
+ 	int ret;
+ 
+@@ -184,6 +185,11 @@ int msm_submitqueue_create(struct drm_device *drm, struct msm_context *ctx,
+ 	if (flags & MSM_SUBMITQUEUE_VM_BIND) {
+ 		unsigned sz;
+ 
++		vm = msm_context_vm(drm, ctx);
++
++		if (!vm)
++			return UERR(ENOMEM, drm, "no VM");
++
+ 		/* Not allowed for kernel managed VMs (ie. kernel allocs VA) */
+ 		if (!msm_context_is_vmbind(ctx))
+ 			return -EINVAL;
+@@ -215,7 +221,7 @@ int msm_submitqueue_create(struct drm_device *drm, struct msm_context *ctx,
+ 	queue->flags = flags;
+ 
+ 	if (flags & MSM_SUBMITQUEUE_VM_BIND) {
+-		struct drm_gpu_scheduler *sched = &to_msm_vm(msm_context_vm(drm, ctx))->sched;
++		struct drm_gpu_scheduler *sched = &to_msm_vm(vm)->sched;
+ 
+ 		queue->entity = &queue->_vm_bind_entity[0];

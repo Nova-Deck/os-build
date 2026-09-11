@@ -1,0 +1,46 @@
+Subject: [PATCH] drm/msm: Don't fallback to shared VM for VM_BIND
+
+If the user wants a userspace managed VM (EN_VM_BIND) don't silently
+fall back to shared VM.
+
+BACKPORT of mainline commit 3b35a5c528ba ("drm/msm: Don't fallback to shared VM for VM_BIND").
+Part of Rob Clark's 2026-07-29 drm/msm context/VM hardening series
+(Message-ID 20260729155609.20190-*, patches 2..18), merged for 7.3.
+None of it is in 7.2.x, which is what kernel/SOURCE.pin points at.
+
+The fix we are actually after. msm_gpu_create_private_vm() silently handed
+back the global kernel-managed VM when per-process pgtable creation failed,
+even for a userspace-managed (EN_VM_BIND) client. Turnip then does its own
+address management against a VM it does not own, and the GPU takes a storm
+of `type=TRANSLATION source=UCHE` faults -- mesa#14656, reported on A740,
+which is every qcs8550-* board we ship. With the fix the ioctl fails
+honestly, tu_try_enable_vm_bind() returns non-zero and Turnip drops to the
+legacy submit path instead.
+
+---
+
+diff --git a/drivers/gpu/drm/msm/msm_drv.c b/drivers/gpu/drm/msm/msm_drv.c
+--- a/drivers/gpu/drm/msm/msm_drv.c
++++ b/drivers/gpu/drm/msm/msm_drv.c
+@@ -244,7 +244,8 @@ struct drm_gpuvm *msm_context_vm(struct drm_device *dev, struct msm_context *ctx
+ 	if (!ctx->vm) {
+ 		vm = msm_gpu_create_private_vm(
+ 			priv->gpu, current, !ctx->userspace_managed_vm);
+-		smp_store_release(&ctx->vm, vm);
++		if (!IS_ERR_OR_NULL(vm))
++			smp_store_release(&ctx->vm, vm);
+ 	}
+ 
+ 	return ctx->vm;
+diff --git a/drivers/gpu/drm/msm/msm_gpu.c b/drivers/gpu/drm/msm/msm_gpu.c
+--- a/drivers/gpu/drm/msm/msm_gpu.c
++++ b/drivers/gpu/drm/msm/msm_gpu.c
+@@ -875,7 +875,7 @@ msm_gpu_create_private_vm(struct msm_gpu *gpu, struct task_struct *task,
+ 			to_msm_vm(vm)->pid = get_pid(task_pid(task));
+ 	}
+ 
+-	if (IS_ERR_OR_NULL(vm))
++	if (IS_ERR_OR_NULL(vm) && kernel_managed)
+ 		vm = drm_gpuvm_get(gpu->vm);
+ 
+ 	return vm;

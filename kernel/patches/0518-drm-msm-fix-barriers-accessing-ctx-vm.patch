@@ -1,0 +1,45 @@
+Subject: [PATCH] drm/msm: Fix barriers accessing ctx vm
+
+Don't rely on store ordering to protect us from caller seeing a
+partially initialized vm.
+
+BACKPORT of mainline commit ae88499d71ce ("drm/msm: Fix barriers accessing ctx vm").
+Part of Rob Clark's 2026-07-29 drm/msm context/VM hardening series
+(Message-ID 20260729155609.20190-*, patches 2..18), merged for 7.3.
+None of it is in 7.2.x, which is what kernel/SOURCE.pin points at.
+
+Dependency of 0520/0523: reworks msm_context_vm() to load/store ctx->vm
+with acquire/release instead of relying on store ordering. Taken first so
+the later two apply as upstream wrote them.
+
+---
+
+diff --git a/drivers/gpu/drm/msm/msm_drv.c b/drivers/gpu/drm/msm/msm_drv.c
+--- a/drivers/gpu/drm/msm/msm_drv.c
++++ b/drivers/gpu/drm/msm/msm_drv.c
+@@ -234,18 +234,19 @@ struct drm_gpuvm *msm_context_vm(struct drm_device *dev, struct msm_context *ctx
+ {
+ 	static DEFINE_MUTEX(init_lock);
+ 	struct msm_drm_private *priv = dev->dev_private;
++	struct drm_gpuvm *vm = smp_load_acquire(&ctx->vm);
+ 
+ 	/* Once ctx->vm is created it is valid for the lifetime of the context: */
+-	if (ctx->vm)
+-		return ctx->vm;
++	if (vm)
++		return vm;
++
++	guard(mutex)(&init_lock);
+ 
+-	mutex_lock(&init_lock);
+ 	if (!ctx->vm) {
+-		ctx->vm = msm_gpu_create_private_vm(
++		vm = msm_gpu_create_private_vm(
+ 			priv->gpu, current, !ctx->userspace_managed_vm);
+-
++		smp_store_release(&ctx->vm, vm);
+ 	}
+-	mutex_unlock(&init_lock);
+ 
+ 	return ctx->vm;
+ }

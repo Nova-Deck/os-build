@@ -31,13 +31,13 @@ git_commit: a300e35c0a4b4a38fb53742ea6e2a203c98ee523
 # blacks both SM8650 boards, and carrying patch 0525 is what makes it safe. See the DSI paragraph
 # under the patch bullet below. Re-run every gate, every time.
 #
-# 7.2.5 HW gate: PARTLY RUN (2 of 4) as of 2026-09-11, off a dev card built from this pin at
+# 7.2.5 HW gate: PARTLY RUN (3 of 4) as of 2026-09-11, off a dev card built from this pin at
 # 513cb8f. The gate is the SAME four boards 7.2.4 was validated on, but they are no longer
 # interchangeable — only the two SM8650 ones can exercise 0525 at all:
 #   Pocket ACE  qcs8550-ayaneo-pocketace  panel 0051 ayaneo,pocket-ace-panel   VIDEO mode    PASS
 #   Pocket S2   sm8650-ayaneo-ps2         panel 0066 ayaneo,wt0630-2k          VIDEO mode  <-0525 TODO
 #   Pocket FIT  sm8650-konkr-pf           panel 0067 ayaneo,ar14-144hz         VIDEO mode  <-0525 PASS
-#   Pocket Max  sm8250-mangmi-pocket-max  panel 0058 mangmi,pocket-max-panel   COMMAND mode        TODO
+#   Pocket Max  sm8250-mangmi-pocket-max  panel 0058 mangmi,pocket-max-panel   COMMAND mode  PASS
 # WHICH BOARD PROVES WHAT, read off the DSI host's compatible on the device and not from the board
 # name: `qcom,sm8650-dsi-ctrl` binds msm_dsi_6g_v2_9_host_ops (the runtime-reparenting ops, so 0525
 # is live), `qcom,sm8550-dsi-ctrl` and the sm8250 one bind the plain 6g ops (0525 cannot fire in
@@ -51,7 +51,22 @@ git_commit: a300e35c0a4b4a38fb53742ea6e2a203c98ee523
 #     i2c/geni errors. Three backlight round-trips through the sy7758 (an I2C device behind geni,
 #     /soc@0/geniqup@ac0000/i2c@a80000/sy7758@2e) produced zero kernel output — which tests the
 #     7.2.5 `i2c: qcom-geni` frequency-table change, NOT the DSI DCS path, since that backlight
-#     does not go through the DSI host. A DSI-backlight panel is still needed to exercise that.
+#     does not go through the DSI host.
+#   Pocket Max, 2026-09-11: panel up 1080x1920 COMMAND mode, session up with HDR/ITM flags, Steam
+#     up, no failed units, no SMMU faults. This is the board with the DSI-HOST backlight
+#     (`/sys/class/backlight/ae94000.dsi.0`, i.e. DCS 0x51 through the DSI transfer path), so four
+#     brightness round-trips through it exercised that path end to end: zero kernel output.
+#   BUT READ WHAT THAT TEST DID AND DID NOT TOUCH. With our 0005, xfer_prepare() SKIPS the
+#   link-clock cycle whenever the display is active (`xfer_owns_link_clks = !(power_on && enabled)`
+#   gates both link_clk_set_rate and link_clk_enable). So a DCS write to a live panel never reaches
+#   dsi_link_clk_set_rate_6g() at all, and therefore never reaches the rounding — wherever the
+#   rounding lives. For us the rounding runs at modeset/power_on time only. Two consequences:
+#     - the brightness test above proves the DCS transfer path is healthy, NOT that 0525's rounding
+#       is correct. Only a bring-up (i.e. any boot of a v2.9 board) tests that.
+#     - the upstream commit's BENEFIT is largely moot here. 6cd33b6f4155 exists to stop runtime
+#       transfers re-locking the PLL; 0005 already stops the re-cycle outright. Its BUG was very
+#       real, which is why we take the fix and not the revert — but nobody should expect a visible
+#       improvement from 0525, and nobody should drop 0005 expecting 0525 to cover for it.
 #   The NEGATIVE CONTROL WAS NOT RUN: no one booted 7.2.5 WITHOUT 0525 to watch Pocket FIT go
 #   black. The reasoning that it would (rounding against XO can only return ~19.2 MHz, which is
 #   then multiplied into the PHY bit-clock request) is sound but it is reasoning, not a measurement.

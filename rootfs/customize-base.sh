@@ -211,7 +211,25 @@ BOOTSTRAP_PKGS=(base)
 # BY DEFAULT for SD media — so without it the common path silently skips the check that stops a card
 # claiming 512G and storing 8G from eating a library. Overlay-built (packages/f3/), and trimmed to
 # f3probe alone so it costs one 60K binary and no parted; the PKGBUILD header has the reasoning.
-PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-tools mesa gamescope seatd sddm mangohud lsfg-vk fex-emu bluez bluez-utils networkmanager alsa-ucm-conf pipewire wireplumber pipewire-pulse pipewire-alsa rtkit unzip openal gtk2 ffmpeg e2fsprogs xorg-xwayland lsof noto-fonts noto-fonts-cjk noto-fonts-emoji python python-gobject scx-scheds rauc btrfs-progs rsync earlyoom zram-generator udisks2 f3)
+# upower: the battery service the Quick Access panel is built on, and NOT an optional convenience --
+# the client polls it DIRECTLY. Measured on hardware (Pocket S2, 2026-09-11, dbus-monitor on the
+# system bus): the `steam` process calls org.freedesktop.UPower.GetDisplayDevice and .EnumerateDevices
+# every 2 seconds, and every one of them comes back org.freedesktop.DBus.Error.ServiceUnknown because
+# nothing on the image owns that name. novadeck-powerd owns org.freedesktop.UPower.PowerProfiles,
+# which is the power-PROFILES interface -- it exposes /org/freedesktop/UPower/PowerProfiles and no
+# battery device objects at all -- so it does not answer this and never could. That mismatch is the
+# whole reason QAM read "?h ?m" while /sys/class/power_supply/qcom-battmgr-bat was reporting fine.
+# The /sys/class/power_supply/BAT%d/%s literal in steamclient.so is a DIFFERENT and unused path, not
+# the one GamepadUI takes: bind-mounting a shim that put BAT0 and BAT1 over sysfs, with every
+# attribute readable, changed nothing. That is how we know, and it is why no battery RENAME is
+# needed here -- upower enumerates by type, so the qcom-battmgr-bat name is fine as it is.
+# PAIRS WITH KERNEL PATCHES 0526/0527 and is useless without them: upower derives energy and the
+# time estimate from charge_full + charge_now, which were -ENODATA and absent respectively before
+# those two landed. Either one alone leaves the panel exactly as broken; they ship together.
+# D-Bus activated -- upower ships org.freedesktop.UPower.service, so Steam's own call starts it and
+# it needs no preset and no build-time .wants symlink. Resolves from the pinned snapshot's `extra`
+# (upower 1.90.10-1, 975K installed).
+PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-tools mesa gamescope seatd sddm mangohud lsfg-vk fex-emu bluez bluez-utils networkmanager alsa-ucm-conf pipewire wireplumber pipewire-pulse pipewire-alsa rtkit unzip openal gtk2 ffmpeg e2fsprogs xorg-xwayland lsof noto-fonts noto-fonts-cjk noto-fonts-emoji python python-gobject scx-scheds rauc btrfs-progs rsync earlyoom zram-generator udisks2 f3 upower)
 
 # Dev-only packages — installed ONLY under NOVADECK_DEV=1, NEVER in a release base.
 # On-device bring-up tools: evtest reads raw /dev/input events; usbutils provides lsusb.

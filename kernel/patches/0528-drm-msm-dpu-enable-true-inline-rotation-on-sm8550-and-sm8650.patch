@@ -1,0 +1,302 @@
+Subject: [PATCH] drm/msm/dpu: enable true inline rotation on SM8550 and SM8650
+
+The SSPP true inline rotator is present on both DPU 9.0 (SM8550/QCS8550) and
+DPU 10.0 (SM8650) as revision v2.0.1, but the catalog never declares it, so
+every VIG pipe on these SoCs reports DRM_MODE_ROTATE_0 plus the reflect bits
+and nothing else. A portrait-mounted panel driven by a landscape compositor
+therefore has to be rotated in a full-screen GPU composite pass on every single
+frame -- no direct scanout, no partial composition, no cursor plane -- which is
+the most expensive way to put a pixel on a 60 Hz handheld panel.
+
+Declare the rotator on the four VIG pipes of both catalogs and give it a
+format list. v2.0.1 rotates packed RGB as well as NV12/P010, so list the
+8888 and 2101010 variants alongside them; XRGB2101010 in particular is what
+a compositor asking for a 10-bit scanout surface will hand us.
+
+Three things had to be fixed before the path could work at all. None of them
+can ever have been exercised, because the only SoC that declared a rotator
+until now (SC7280) lists NV12 as its sole rotatable format and has no
+portrait panel in tree:
+
+  - The pre-rotation height check read the source WIDTH while its own debug
+    message printed a height (and printed src.y2, an absolute coordinate,
+    rather than the extent). rot_maxheight bounds the number of source lines
+    the rotator's line buffer has to hold, i.e. the height. As written the
+    check rejected every landscape source wider than 1088 -- which is every
+    realistic one.
+
+  - The pipe reservation in dpu_rm.c tested `features & DPU_SSPP_INLINE_ROTATION`.
+    That constant is an enum INDEX, not a mask, so the test was meaningless:
+    it would happily hand out a rotation request to a pipe with no rotator, and
+    reject one that had it, depending on unrelated feature bits. Use test_bit()
+    like every other reader of that field.
+
+  - DRM_MODE_ROTATE_90 is defined counter-clockwise; the DPU inline rotator
+    turns the source clockwise. The two differ by a half turn, so fold
+    REFLECT_X | REFLECT_Y into the reflect bits the hardware already applies.
+
+Finally, keep QSEED programmed when rotating even for a 1:1 RGB pipe. The
+rotator output is fed through the scaler, so the scaler cannot be left
+disabled just because the source and destination extents match.
+
+WHAT THIS DOES NOT COVER, and it is load-bearing for anyone reading a black
+panel: the plane's rotation property is a static capability, but
+dpu_plane_check_inline_rotation() is a per-frame test with two hard
+requirements that the property cannot express.
+
+  1. The framebuffer must be UBWC-compressed. A linear scanout buffer is
+     rejected, every frame.
+  2. The pre-rotation source height must be <= 1088 lines. A 1920x1080
+     landscape source fits. A 2560x1440 one does not, and never will.
+
+So a compositor that reads DRM_MODE_ROTATE_90 off the primary plane, stops
+rotating in its own composite step and commits a rotated plane will get
+-EINVAL on every flip on a 1440p panel, or on any panel if its buffers are
+linear. That is a black screen, not a slow one. The compositor-side escape
+hatch is to force composite rotation on those configurations.
+
+Authored by tiopex <tiopxyz@gmail.com> as two per-SoC patches. Adapted here
+into one, because novadeck builds a single Image for every board: the SM8550
+and SM8650 halves share all of their dpu_plane.c, dpu_rm.c and
+dpu_hw_catalog.c changes, so the shared hunks are carried once and the two
+rotation configs (identical -- both v2.0.1, both 1088 lines) are collapsed
+into one.
+
+NOT UPSTREAM as of the 7.2.5 tree this is pinned to: neither DPU 9.0 nor
+10.0 declares a rotator there, and both bugs above are present in it.
+
+HW-VALIDATED 2026-09-12 on three boards from one dev card, both catalog
+entries exercised:
+  Pocket ACE  qcs8550  DPU 9.0   1080x1620  PASS  rotation=8, 0 flip errors
+  Pocket FIT  sm8650   DPU 10.0  1080x1920  PASS  rotation=8, 0 flip errors
+  Pocket S2   sm8650   DPU 10.0  1440x2560  rejected at the 1088 cap, by design
+Orientation, colour and absence of tearing confirmed by eye on both passing
+boards. Note what the PASS actually proves about the rotation direction:
+gamescope asks for ROTATE_270, drm_rotation_simplify() rewrites that to
+ROTATE_90 | REFLECT_X | REFLECT_Y since only ROTATE_90 is advertised, and the
+XOR above cancels both reflects back to a bare ROT90. A correct image is
+therefore a direct test of the CCW/CW correction -- without it the panel would
+come up upside down.
+
+What it costs to NOT have this, measured on Pocket ACE with an idle Steam UI,
+interleaved A/B, 30 s windows, at matched present counts (878 vs 881 display
+IRQs):
+  scanout rotation (this patch)   gamescope GPU busy 0 ms/30 s   2.896 W
+  composite rotation (before)     gamescope GPU busy 2205 ms/30 s 3.098 W
+i.e. rotating in the GPU composite burns ~7.4% of the GPU continuously and
+~0.2 W, and the display controller does it for free. Two scanout runs agreed
+to within 7 mW, so the gap is ~29x the run-to-run spread. That is the IDLE
+figure; the composite pass is per presented frame, so a game should widen it.
+
+The compositor-side escape hatch for a panel over the cap is wired up in
+rootfs/overlay/etc/novadeck/session.conf, keyed on the panel's native width.
+
+--- a/drivers/gpu/drm/msm/disp/dpu1/catalog/dpu_9_0_sm8550.h
++++ b/drivers/gpu/drm/msm/disp/dpu1/catalog/dpu_9_0_sm8550.h
+@@ -58,29 +58,29 @@
+ 	{
+ 		.name = "sspp_0", .id = SSPP_VIG0,
+ 		.base = 0x4000, .len = 0x344,
+-		.features = VIG_SDM845_MASK_SDMA,
+-		.sblk = &dpu_vig_sblk_qseed3_3_2,
++		.features = VIG_SM8550_MASK_SDMA,
++		.sblk = &dpu_vig_sblk_qseed3_3_2_rot_v2,
+ 		.xin_id = 0,
+ 		.type = SSPP_TYPE_VIG,
+ 	}, {
+ 		.name = "sspp_1", .id = SSPP_VIG1,
+ 		.base = 0x6000, .len = 0x344,
+-		.features = VIG_SDM845_MASK_SDMA,
+-		.sblk = &dpu_vig_sblk_qseed3_3_2,
++		.features = VIG_SM8550_MASK_SDMA,
++		.sblk = &dpu_vig_sblk_qseed3_3_2_rot_v2,
+ 		.xin_id = 4,
+ 		.type = SSPP_TYPE_VIG,
+ 	}, {
+ 		.name = "sspp_2", .id = SSPP_VIG2,
+ 		.base = 0x8000, .len = 0x344,
+-		.features = VIG_SDM845_MASK_SDMA,
+-		.sblk = &dpu_vig_sblk_qseed3_3_2,
++		.features = VIG_SM8550_MASK_SDMA,
++		.sblk = &dpu_vig_sblk_qseed3_3_2_rot_v2,
+ 		.xin_id = 8,
+ 		.type = SSPP_TYPE_VIG,
+ 	}, {
+ 		.name = "sspp_3", .id = SSPP_VIG3,
+ 		.base = 0xa000, .len = 0x344,
+-		.features = VIG_SDM845_MASK_SDMA,
+-		.sblk = &dpu_vig_sblk_qseed3_3_2,
++		.features = VIG_SM8550_MASK_SDMA,
++		.sblk = &dpu_vig_sblk_qseed3_3_2_rot_v2,
+ 		.xin_id = 12,
+ 		.type = SSPP_TYPE_VIG,
+ 	}, {
+--- a/drivers/gpu/drm/msm/disp/dpu1/catalog/dpu_10_0_sm8650.h
++++ b/drivers/gpu/drm/msm/disp/dpu1/catalog/dpu_10_0_sm8650.h
+@@ -58,29 +58,29 @@
+ 	{
+ 		.name = "sspp_0", .id = SSPP_VIG0,
+ 		.base = 0x4000, .len = 0x344,
+-		.features = VIG_SDM845_MASK_SDMA,
+-		.sblk = &dpu_vig_sblk_qseed3_3_3,
++		.features = VIG_SM8550_MASK_SDMA,
++		.sblk = &dpu_vig_sblk_qseed3_3_3_rot_v2,
+ 		.xin_id = 0,
+ 		.type = SSPP_TYPE_VIG,
+ 	}, {
+ 		.name = "sspp_1", .id = SSPP_VIG1,
+ 		.base = 0x6000, .len = 0x344,
+-		.features = VIG_SDM845_MASK_SDMA,
+-		.sblk = &dpu_vig_sblk_qseed3_3_3,
++		.features = VIG_SM8550_MASK_SDMA,
++		.sblk = &dpu_vig_sblk_qseed3_3_3_rot_v2,
+ 		.xin_id = 4,
+ 		.type = SSPP_TYPE_VIG,
+ 	}, {
+ 		.name = "sspp_2", .id = SSPP_VIG2,
+ 		.base = 0x8000, .len = 0x344,
+-		.features = VIG_SDM845_MASK_SDMA,
+-		.sblk = &dpu_vig_sblk_qseed3_3_3,
++		.features = VIG_SM8550_MASK_SDMA,
++		.sblk = &dpu_vig_sblk_qseed3_3_3_rot_v2,
+ 		.xin_id = 8,
+ 		.type = SSPP_TYPE_VIG,
+ 	}, {
+ 		.name = "sspp_3", .id = SSPP_VIG3,
+ 		.base = 0xa000, .len = 0x344,
+-		.features = VIG_SDM845_MASK_SDMA,
+-		.sblk = &dpu_vig_sblk_qseed3_3_3,
++		.features = VIG_SM8550_MASK_SDMA,
++		.sblk = &dpu_vig_sblk_qseed3_3_3_rot_v2,
+ 		.xin_id = 12,
+ 		.type = SSPP_TYPE_VIG,
+ 	}, {
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_catalog.c
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_catalog.c
+@@ -59,6 +59,9 @@
+ #define VIG_SC7280_MASK_SDMA \
+ 	(VIG_SC7280_MASK | BIT(DPU_SSPP_SMART_DMA_V2))
+ 
++#define VIG_SM8550_MASK_SDMA \
++	(VIG_SDM845_MASK_SDMA | BIT(DPU_SSPP_INLINE_ROTATION))
++
+ #define DMA_SDM845_MASK_NO_SDMA \
+ 	(BIT(DPU_SSPP_QOS) | \
+ 	BIT(DPU_SSPP_TS_PREFILL) | BIT(DPU_SSPP_TS_PREFILL_REC1) |\
+@@ -190,6 +193,23 @@
+ 	/* TODO add formats after validation */
+ };
+ 
++static const u32 rotation_v201_formats[] = {
++	DRM_FORMAT_NV12,
++	DRM_FORMAT_P010,
++	DRM_FORMAT_ARGB8888,
++	DRM_FORMAT_ABGR8888,
++	DRM_FORMAT_RGBA8888,
++	DRM_FORMAT_BGRA8888,
++	DRM_FORMAT_XRGB8888,
++	DRM_FORMAT_XBGR8888,
++	DRM_FORMAT_RGBX8888,
++	DRM_FORMAT_BGRX8888,
++	DRM_FORMAT_ARGB2101010,
++	DRM_FORMAT_ABGR2101010,
++	DRM_FORMAT_XRGB2101010,
++	DRM_FORMAT_XBGR2101010,
++};
++
+ static const u32 wb2_formats_rgb_yuv[] = {
+ 	DRM_FORMAT_RGB565,
+ 	DRM_FORMAT_BGR565,
+@@ -309,6 +329,12 @@
+ 	.rot_format_list = rotation_v2_formats,
+ };
+ 
++static const struct dpu_rotation_cfg dpu_rot_sm8550_cfg_v201 = {
++	.rot_maxheight = 1088,
++	.rot_num_formats = ARRAY_SIZE(rotation_v201_formats),
++	.rot_format_list = rotation_v201_formats,
++};
++
+ static const struct dpu_sspp_sub_blks dpu_vig_sblk_qseed2 =
+ 				_VIG_SBLK_QSEED2();
+ 
+@@ -340,9 +366,17 @@
+ static const struct dpu_sspp_sub_blks dpu_vig_sblk_qseed3_3_2 =
+ 				_VIG_SBLK(SSPP_SCALER_VER(3, 2));
+ 
++static const struct dpu_sspp_sub_blks dpu_vig_sblk_qseed3_3_2_rot_v2 =
++			_VIG_SBLK_ROT(SSPP_SCALER_VER(3, 2),
++				      &dpu_rot_sm8550_cfg_v201);
++
+ static const struct dpu_sspp_sub_blks dpu_vig_sblk_qseed3_3_3 =
+ 				_VIG_SBLK(SSPP_SCALER_VER(3, 3));
+ 
++static const struct dpu_sspp_sub_blks dpu_vig_sblk_qseed3_3_3_rot_v2 =
++			_VIG_SBLK_ROT(SSPP_SCALER_VER(3, 3),
++				      &dpu_rot_sm8550_cfg_v201);
++
+ static const struct dpu_sspp_sub_blks dpu_vig_sblk_qseed3_3_4 =
+ 				_VIG_SBLK(SSPP_SCALER_VER(3, 4));
+ 
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_plane.c
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_plane.c
+@@ -475,8 +475,13 @@
+ 			scale_cfg->preload_y[i] = DPU_QSEED3_DEFAULT_PRELOAD_V;
+ 		}
+ 	}
++	/*
++	 * A 1:1 RGB pipe normally leaves the scaler off, but the inline rotator
++	 * feeds its output through QSEED, so the scaler has to stay programmed
++	 * (as a pass-through) whenever we rotate.
++	 */
+ 	if (!(MSM_FORMAT_IS_YUV(fmt)) && (src_h == dst_h)
+-		&& (src_w == dst_w))
++		&& (src_w == dst_w) && !inline_rotation)
+ 		return;
+ 
+ 	scale_cfg->dst_width = dst_w;
+@@ -705,9 +710,15 @@
+ 		return -EINVAL;
+ 	}
+ 
+-	if (drm_rect_width(&src) > sblk->rotation_cfg->rot_maxheight) {
++	/*
++	 * rot_maxheight caps the PRE-rotation source height, which is what the
++	 * rotator's line buffer has to hold. The original check read the source
++	 * width while its own message printed a height, and rejected every
++	 * landscape source on a portrait panel.
++	 */
++	if (drm_rect_height(&src) > sblk->rotation_cfg->rot_maxheight) {
+ 		DPU_DEBUG_PLANE(pdpu, "invalid height for inline rot:%d max:%d\n",
+-				src.y2, sblk->rotation_cfg->rot_maxheight);
++				drm_rect_height(&src), sblk->rotation_cfg->rot_maxheight);
+ 		return -EINVAL;
+ 	}
+ 
+@@ -759,6 +770,15 @@
+ 	pipe_cfg->rotation = drm_rotation_simplify(new_plane_state->rotation,
+ 						   supported_rotations);
+ 
++	/*
++	 * DRM_MODE_ROTATE_90 is counter-clockwise; the DPU inline rotator turns
++	 * the source clockwise. The difference is a 180 degree turn, which is
++	 * REFLECT_X | REFLECT_Y, so fold it into the reflect bits the hardware
++	 * already applies.
++	 */
++	if (pipe_cfg->rotation & DRM_MODE_ROTATE_90)
++		pipe_cfg->rotation ^= DRM_MODE_REFLECT_X | DRM_MODE_REFLECT_Y;
++
+ 	min_src_size = MSM_FORMAT_IS_YUV(fmt) ? 2 : 1;
+ 
+ 	if (MSM_FORMAT_IS_YUV(fmt) &&
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_rm.c
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_rm.c
+@@ -817,7 +817,7 @@
+ 		if (reqs->yuv && !hw_sspp->cap->sblk->csc_blk.len)
+ 			continue;
+ 
+-		if (reqs->rot90 && !(hw_sspp->cap->features & DPU_SSPP_INLINE_ROTATION))
++		if (reqs->rot90 && !test_bit(DPU_SSPP_INLINE_ROTATION, &hw_sspp->cap->features))
+ 			continue;
+ 
+ 		global_state->sspp_to_crtc_id[i] = crtc_id;

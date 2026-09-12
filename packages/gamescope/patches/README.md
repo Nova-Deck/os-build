@@ -9,6 +9,7 @@ root (the `gamescope/` checkout inside makepkg's `$srcdir`) by
 ## Expected here
 
 ```
+0001-drmbackend-rotated-output-max-height.patch
 0002-sanitize-nightmode-atom.patch
 0003-drmbackend-fake-output-mm.patch
 0004-fps-limit-atom-persist.patch
@@ -23,7 +24,35 @@ root (the `gamescope/` checkout inside makepkg's `$srcdir`) by
 0013-expose-client-sampleable-formats.patch
 ```
 
-`0001` — **GONE, and deliberately not replaced: it is UPSTREAM as of 3.16.28.** It rotated the
+`0001` — **REUSED 2026-09-12 for `--rotated-output-max-height`** (the number was freed when the
+original 0001 went upstream; that history is kept below). Adds an opt-in flag that clamps the
+LOGICAL output height when a panel is scanned out rotated, aspect-preserving with both axes even,
+and scales the CRTC rects back up to the real mode so the plane upscales for free. `SRC_W/H` stay
+at texture size. 90/270 only — 0/180 do not transpose, so the rotator limit does not apply.
+
+Why: the DPU inline rotator caps the PRE-ROTATION source at **1088 lines**, but the plane
+advertises `ROTATE_90` as a STATIC capability it cannot qualify per-mode. On Pocket S2 (1440 wide)
+gamescope therefore believes it can rotate at scanout, stops compositing the rotation, and every
+atomic commit is refused — a black panel. Rendering the session at 1920x1080 instead of 2560x1440
+puts every layer under the cap, so the board keeps scanout rotation instead of paying a GPU
+composite per present. HW-validated on Pocket S2 2026-09-12: idle UI and in-game both **0 ms**
+gamescope GPU (was 21% in game), **-834 mW**, the game→UI transition no longer wedges, touch still
+lands correctly (virtual-keyboard test), and the operator could not distinguish the upscaled UI
+from native. Cost: UI at 1080p upscaled to a 1440p panel, and games cap at 1080p.
+
+**Not yet tested: `drm_set_refresh()`.** The patch makes it look modes up by the panel's real size
+when the clamp is active (the clamped size matches no mode and would otherwise fall through to
+GENERATING a timing the panel cannot display). The S2 offers only 60 Hz, so a mode change could not
+be exercised there — close it on Pocket FIT, which offers 60/90/120/144, by passing
+`--rotated-output-max-height 720` to force the clamp on a board that does not need it.
+
+Set from `rootfs/overlay/etc/novadeck/session.conf` on panels over the cap. An unknown argument
+makes gamescope EXIT, so if this patch is ever dropped, that session.conf line must change back to
+`--force-composition-rotation` in the same commit.
+
+---
+
+The ORIGINAL `0001` — **GONE, and deliberately not replaced: it is UPSTREAM as of 3.16.28.** It rotated the
 portrait-native Pocket S2 panel in gamescope's **GPU composite** step (the msm DPU cannot
 `ROTATE_90` a LINEAR plane; root cause in `docs/archive/bringup-phase2.md` step 1e), and it was upstream PR
 [#2228](https://github.com/ValveSoftware/gamescope/pull/2228), merged verbatim as `38fb50fc`

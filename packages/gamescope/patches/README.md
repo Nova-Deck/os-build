@@ -40,11 +40,19 @@ gamescope GPU (was 21% in game), **-834 mW**, the game→UI transition no longer
 lands correctly (virtual-keyboard test), and the operator could not distinguish the upscaled UI
 from native. Cost: UI at 1080p upscaled to a 1440p panel, and games cap at 1080p.
 
-**Not yet tested: `drm_set_refresh()`.** The patch makes it look modes up by the panel's real size
-when the clamp is active (the clamped size matches no mode and would otherwise fall through to
-GENERATING a timing the panel cannot display). The S2 offers only 60 Hz, so a mode change could not
-be exercised there — close it on Pocket FIT, which offers 60/90/120/144, by passing
-`--rotated-output-max-height 720` to force the clamp on a board that does not need it.
+**`drm_set_refresh()` closed on Pocket FIT 2026-09-12**, from the card built off this tree. Forced
+the clamp on a board that does not need it (`--rotated-output-max-height 720`, logical output
+1920x1080 -> 1280x720) and drove mode changes with a game running: **three modesets, 144 -> 120 ->
+144 Hz**, each re-applying the clamp, each landing on a real rate from the panel's
+`{60, 90, 120, 144}`, panel lit throughout, plane still `1280x720 / rotation=8`, zero underruns and
+zero rotator rejections. That is the path that would have broken: 1280x720 matches no mode on this
+connector, so without the fix the first mode change would have generated a timing the panel cannot
+display. Not shown: 60 or 90 specifically — gamescope picks the rate by its own policy and ignored
+the requested values, so only the transitions it chose could be observed.
+
+**Regression check, same card, same board, stock config:** the gate (`native width > 1088`) does not
+fire on the FIT's 1080-wide panel, gamescope gets NO flag, the clamp log is empty, and planes stay
+`1920x1080 -> 1080x1920 rotation=8`. The patch is invisible on boards that do not need it.
 
 Set from `rootfs/overlay/etc/novadeck/session.conf` on panels over the cap. An unknown argument
 makes gamescope EXIT, so if this patch is ever dropped, that session.conf line must change back to

@@ -1,0 +1,932 @@
+From: Philippe Simons <simons.philippe@gmail.com>
+Subject: [PATCH] drm: colour manage direct scanout via the DPU's CTM
+
+Night mode, Peak Saturation, the SDR gain and the internal-display brightness
+scale all stopped reaching the panel the moment a frame took direct scanout.
+
+WHY IT BROKE. gamescope does colour management in its Vulkan composite and
+writes 0 to CTM, GAMMA_LUT and DEGAMMA_LUT on every path -- those writes exist
+to CLEAR someone else's colour management, not to use ours. That was safe only
+because we always composited: the sole colour-relevant gate in the composite
+decision is
+
+    bNeedsFullComposite |= g_uOutputRotation != 0; // can't rotate planes at scanout
+
+and our portrait panels always tripped it. DPU inline rotation removed that
+trip -- upstream sets g_uOutputRotation = 0 once the scanout plane can do the
+panel's orientation -- and nothing else in that block keys off the colour state.
+g_bColorSliderInUse is true only while a slider is being DRAGGED, and
+drm_prepare() does not fail when colour management is wanted but unsupported;
+it sets output_tf = DEFAULT and carries on. So the transform was silently
+dropped, with no fallback and no log line.
+
+CONFIRMED ON HARDWARE before writing any of this, on Pocket FIT (1080-wide,
+under the DPU rotator's 1088-line cap, so genuinely on the scanout path):
+GAMESCOPE_COLOR_NIGHT_MODE forced to maximum via the atom is completely
+invisible, and the amber appears the instant GAMESCOPE_COMPOSITE_FORCE=1 is
+set. That toggle is also the regression test.
+
+WHAT THIS DOES. Forcing a composite whenever the transform is non-identity was
+rejected: it hands back exactly the GPU load inline rotation was taken to
+remove (measured at 21% of the GPU and 656 mW in a game). Instead the transform
+is handed to the display controller, which already has the hardware for it --
+every SoC we ship has 4 DSPPs carrying both PCC and GC, so the kernel already
+exposes CTM and a 1024-entry GAMMA_LUT on the CRTC.
+
+THE CATCH, and it decides the whole shape of the patch: the DPU exposes NO
+degamma block (dpu_crtc.c calls drm_crtc_enable_color_mgmt() with a degamma
+size of 0), so its matrix multiplies values that are still in the panel's
+encoding. gamescope's pipeline works in linear light, and a general 3x3 does
+not commute with a non-linear encoding. A DIAGONAL does, exactly, because
+Gamma 2.2 is a pure power law:
+
+    ( a * e^2.2 )^(1/2.2)  ==  a^(1/2.2) * e
+
+So a per-channel multiply in linear light is a per-channel multiply in the
+encoding with the exponent moved, and nothing is approximated. That covers
+night mode (an HSV multiply, hence diagonal), the SDR input gain and the
+brightness scale -- the controls users actually reach for. Gamut mapping,
+tonemapping and the 3D look LUT are not diagonal and keep compositing.
+
+calcScanoutLinearScale() decides which case we are in. It deliberately takes
+the SAME argument list as calcColorTransform() and sits next to it, because the
+two have to agree about what the composite does and that is the only way to
+keep them agreeing as the pipeline changes. When it returns nullopt the frame
+composites, so the failure mode is "correct but costs GPU", never "wrong
+colours".
+
+IT DOES NOT REFUSE OVER THE GAMUT MAPPING, and that is a deliberate reversal of
+how this patch first worked. Refusing whenever the primaries matrix was
+non-identity sounds right and was measured WRONG on Pocket FIT: at gamescope's
+default sdrGamutWideness of 0.5 the SDR source colorimetry is generic-wide-gamut
+while the panel is not, so the matrix is never identity and EVERY frame
+composited -- one plane committed instead of two, with night mode merely off.
+That surrenders the whole thing inline rotation was taken to win, to preserve
+something that was never there: direct scanout NEVER applied the gamut mapping.
+Before any of this it wrote 0 to CTM, GAMMA_LUT and DEGAMMA_LUT and ran no
+Vulkan pass, i.e. it passed the source colorimetry straight through. So the
+question this function answers is not "is the composite a pure scale?" but
+"given that scanout passes the source through unchanged, as it always has, what
+scale does it still need?"
+
+The honest consequence: a scanned-out frame and a composited one differ by the
+gamut mapping. That difference is not new -- it was there for every frame the
+old code scanned out -- but it can now appear and disappear as frames switch
+paths. Operator-checked on Pocket FIT with night mode off: not visible. Carrying
+it in hardware is not an option anyway, since a real primaries matrix has
+negative off-diagonal terms and msm's CONVERT_S3_15() discards the sign bit.
+
+drm_supports_crtc_ctm() is a SEPARATE capability from drm_supports_color_mgmt().
+The latter tests AMD's per-PLANE properties and selects a whole pipeline
+(output_tf, blend_tf, per-plane shaper and 3D LUT blobs); it is hard-false on
+msm and must stay that way, since flipping it true would select the AMD plane
+path rather than enable this one. Nothing changes on AMD: there
+drm_scanout_is_color_managed() returns true immediately and this code is inert.
+
+WHY THE CTM IS SET EVEN WHEN IT IS THE IDENTITY. msm only reserves DSPPs for a
+CRTC whose state carries a CTM or a GAMMA_LUT, and only during a MODESET. If we
+left it null while the transform happened to be identity, the first touch of
+the night mode slider would need a modeset mid-flip -- and that commit would be
+REJECTED, because the kernel no longer forces allow_modeset on userspace's
+behalf (that hack is removed by the "only reassign resources when the encoder
+is reprogrammed" patch in our kernel's 0515, which this depends on). Keeping a
+CTM for the life of the mode means the DSPPs are already in the topology and a
+new matrix is an ordinary property write on an ordinary non-blocking flip.
+
+THIS PATCH REQUIRES THAT KERNEL PATCH. Without it, the first CTM makes
+dpu_crtc_atomic_check() re-reserve resources without the encoder being
+reprogrammed, cstate->mixers[].lm_ctl and phys->hw_ctl diverge, CTL_FLUSH is
+written with zero, and the display freezes with the pipe still fetching.
+
+THE INVARIANT THAT KEEPS IT HONEST: the CTM is non-identity ONLY for a frame
+nothing composited. The composite applies the same transform, so a CTM left
+standing across a composited frame would apply it TWICE -- night mode would
+visibly double-darken the moment the Steam overlay came up. drm_prepare() is
+reached from three places and each one now states which kind of frame it is
+submitting.
+
+That also rules out PARTIAL composition while the DPU carries a transform:
+partial composition scans out the base layer and composites the overlays onto a
+second one, and a CRTC matrix sits after blending, so it would catch the
+composited half twice. It is refused in two places on purpose -- clearing
+bWantsPartialComposite only stops us CHOOSING it, while a failed scanout
+attempt would otherwise fall into building one anyway.
+
+GAMMA_LUT is left cleared. A per-channel curve could carry a real transfer
+function, but nothing we ship needs one yet and the diagonal already lands
+exactly; that block is where it would go.
+
+Only the sign-magnitude packing and the encoded-scale conversion live in
+DRMColorPipeline.h, so both are unit tested without a display.
+---
+diff -ruN a/src/Backends/DRMBackend.cpp b/src/Backends/DRMBackend.cpp
+--- a/src/Backends/DRMBackend.cpp	2026-09-12 22:23:15.085741558 +0200
++++ b/src/Backends/DRMBackend.cpp	2026-09-13 10:58:36.391759178 +0200
+@@ -30,6 +30,7 @@
+ 
+ #include "backend.h"
+ #include "color_helpers.h"
++#include "DRMColorPipeline.h"
+ #include "DRMComposition.h"
+ #include "Utils/Defer.h"
+ #include "Utils/Parsers.h"
+@@ -138,6 +139,10 @@
+ 		std::shared_ptr<gamescope::BackendBlob> lut3d_id[ EOTF_Count ];
+ 		std::shared_ptr<gamescope::BackendBlob> shaperlut_id[ EOTF_Count ];
+ 		amdgpu_transfer_function output_tf = AMDGPU_TRANSFER_FUNCTION_DEFAULT;
++		// The CRTC CTM we drive so a scanned-out frame is still colour managed.
++		// Held here, rather than rebuilt at use, so the blob outlives the request
++		// that references it -- and so drm_rollback() restores it for free.
++		std::shared_ptr<gamescope::BackendBlob> ctm_id;
+ 	} current, pending;
+ 
+ 	// FBs in the atomic request, but not yet submitted to KMS
+@@ -576,6 +581,10 @@
+ 
+ bool drm_update_color_mgmt(struct drm_t *drm);
+ bool drm_supports_color_mgmt(struct drm_t *drm);
++bool drm_supports_crtc_ctm(struct drm_t *drm);
++static void drm_update_crtc_ctm(struct drm_t *drm, bool bDirectScanout);
++static bool drm_scanout_is_color_managed(struct drm_t *drm);
++static bool drm_scanout_ctm_is_active(struct drm_t *drm);
+ bool drm_set_connector( struct drm_t *drm, gamescope::CDRMConnector *conn );
+ 
+ struct drm_color_ctm2 {
+@@ -3254,8 +3263,12 @@
+ 			if ( drm->pCRTC->GetProperties().DEGAMMA_LUT )
+ 				drm->pCRTC->GetProperties().DEGAMMA_LUT->SetPendingValue( drm->req, 0, true );
+ 
++			// The CTM is NOT cleared with them. This is the modeset that has to
++			// establish it, because a modeset is the only time DSPPs are reserved --
++			// see drm_update_crtc_ctm(). When we are not driving it, it is still
++			// cleared, which is the inherited-state behaviour this block is for.
+ 			if ( drm->pCRTC->GetProperties().CTM )
+-				drm->pCRTC->GetProperties().CTM->SetPendingValue( drm->req, 0, true );
++				drm->pCRTC->GetProperties().CTM->SetPendingValue( drm->req, drm->pending.ctm_id ? drm->pending.ctm_id->GetBlobValue() : 0lu, true );
+ 
+ 			if ( drm->pCRTC->GetProperties().VRR_ENABLED )
+ 				drm->pCRTC->GetProperties().VRR_ENABLED->SetPendingValue( drm->req, bVRREnabled, true );
+@@ -3280,6 +3293,13 @@
+ 
+ 	if ( drm->pCRTC && !bSleep )
+ 	{
++		// Per-frame colour update. SetPendingValue() is a no-op when the blob has
++		// not changed, so in the steady state this costs nothing; when a slider
++		// moves it is a plain property write on an ordinary non-blocking flip,
++		// with no modeset, because the DSPPs are already in the topology.
++		if ( drm->pCRTC->GetProperties().CTM && drm->pending.ctm_id )
++			drm->pCRTC->GetProperties().CTM->SetPendingValue( drm->req, drm->pending.ctm_id->GetBlobValue(), bForceInRequest );
++
+ 		if ( drm->pCRTC->GetProperties().AMD_CRTC_REGAMMA_TF )
+ 		{
+ 			if ( !cv_drm_debug_disable_regamma_tf )
+@@ -3716,6 +3736,108 @@
+ 	return drm->pPrimaryPlane->GetProperties().AMD_PLANE_CTM.has_value() && drm->pPrimaryPlane->GetProperties().AMD_PLANE_BLEND_TF.has_value();
+ }
+ 
++// A SEPARATE capability from drm_supports_color_mgmt() above, on purpose.
++//
++// That one asks about AMD's per-PLANE properties and selects a whole pipeline --
++// output_tf, blend_tf, per-plane shaper and 3D LUT blobs. It is hard-false on msm
++// no matter what the DPU advertises, and it must STAY false: flipping it true
++// would select the AMD plane path rather than enable this one.
++//
++// This asks a much smaller question: does the CRTC have a CTM we can drive? That
++// is a strictly weaker capability -- one matrix, no per-plane anything, no
++// transfer functions -- so it gets its own name and its own branch.
++bool drm_supports_crtc_ctm(struct drm_t *drm)
++{
++	if ( g_bForceDisableColorMgmt )
++		return false;
++
++	if ( cv_drm_debug_disable_ctm )
++		return false;
++
++	if ( !drm->pCRTC )
++		return false;
++
++	return drm->pCRTC->GetProperties().CTM.has_value();
++}
++
++// Would a directly scanned-out frame carry the colour transform that compositing
++// would have applied?
++//
++// On the AMD plane path this is already answered by the machinery above, so we say
++// yes and change nothing there. Everywhere else the honest answer used to be "no,
++// and nobody checked" -- drm_prepare() does not fail when colour management is
++// wanted but unsupported, it just carries on -- which is exactly how night mode
++// came to be silently dropped the moment inline rotation made direct scanout
++// reachable. Now an unreproducible transform forces a composite instead.
++static bool drm_scanout_is_color_managed( struct drm_t *drm )
++{
++	if ( drm_supports_color_mgmt( drm ) )
++		return true;
++
++	// Something in the composite that no matrix can reproduce.
++	if ( !g_ScanoutLinearScale )
++		return false;
++
++	if ( drm_supports_crtc_ctm( drm ) )
++		return true;
++
++	// No hardware to put it in, so only a no-op transform can be scanned out.
++	return *g_ScanoutLinearScale == glm::vec3( 1.f );
++}
++
++// Refresh the CRTC CTM blob for the frame we are about to submit.
++//
++// bDirectScanout says whether this frame reaches the panel WITHOUT going through
++// vulkan_composite(). It decides everything, because the composite applies the very
++// same transform: if we put it in the CTM as well, the frame gets it TWICE -- night
++// mode would visibly double-darken the moment anything forced a composite. So the
++// invariant is simply
++//
++//     the CTM is non-identity ONLY for a frame that was not composited
++//
++// and the caller is responsible for not creating a frame that is half of each. That
++// is what the partial-composition guard in the composite decision is for: partial
++// composition scans out the base layer while compositing the overlays, and a
++// CRTC-level matrix sits after blending, so it would hit the composited half twice.
++//
++// ALWAYS produces a blob, even for the identity, and that is load-bearing rather
++// than lazy: msm only reserves DSPPs for a CRTC whose state carries a CTM or a
++// GAMMA_LUT, and it only reserves them during a MODESET. If we left the CTM null
++// while the transform happened to be the identity, the first time a user touched
++// the night mode slider we would need a modeset mid-flip to get a DSPP -- and since
++// the kernel stopped forcing allow_modeset on userspace's behalf, that commit would
++// simply be REJECTED. Keeping a CTM set for the life of the mode means the DSPPs are
++// already there and a new matrix is an ordinary property write.
++static void drm_update_crtc_ctm( struct drm_t *drm, bool bDirectScanout )
++{
++	if ( !drm_supports_crtc_ctm( drm ) )
++	{
++		drm->pending.ctm_id = nullptr;
++		return;
++	}
++
++	const glm::vec3 vLinearScale = bDirectScanout
++		? g_ScanoutLinearScale.value_or( glm::vec3( 1.f ) )
++		: glm::vec3( 1.f );
++
++	const glm::vec3 vEncodedScale = gamescope::DrmEncodedScaleFromLinearScale( vLinearScale );
++
++	struct drm_color_ctm ctm = {};
++	gamescope::DrmCtmFromDiagonal( vEncodedScale, ctm.matrix );
++
++	drm->pending.ctm_id = GetBackend()->CreateBackendBlob( ctm );
++}
++
++// Is there actually a transform for the DPU to carry? If not, partial composition
++// stays available, because an identity CTM cannot double-apply anything.
++static bool drm_scanout_ctm_is_active( struct drm_t *drm )
++{
++	if ( !drm_supports_crtc_ctm( drm ) )
++		return false;
++
++	return g_ScanoutLinearScale.has_value() && *g_ScanoutLinearScale != glm::vec3( 1.f );
++}
++
+ std::span<const uint32_t> drm_get_valid_refresh_rates( struct drm_t *drm )
+ {
+ 	if ( drm && drm->pConnector )
+@@ -3799,6 +3921,15 @@
+ 
+ 			bool bWantsPartialComposite = pFrameInfo->layers.count() >= 3 && !kDisablePartialComposition;
+ 
++			// Partial composition scans out the base layer while compositing the
++			// overlays onto a second one. A CRTC CTM sits AFTER blending, so it
++			// would apply to the composited half as well -- which already carries
++			// the transform from the Vulkan pass. Rather than try to split colour
++			// management across the two halves, give up partial composition while
++			// the DPU is actually carrying a transform. See drm_update_crtc_ctm().
++			if ( drm_scanout_ctm_is_active( &g_DRM ) )
++				bWantsPartialComposite = false;
++
+ 			static bool s_bWasFirstFrame = true;
+ 			bool bWasFirstFrame = s_bWasFirstFrame;
+ 			s_bWasFirstFrame = false;
+@@ -3849,12 +3980,23 @@
+ 			bNeedsFullComposite |= !!(g_uCompositeDebug & CompositeDebugFlag::Heatmap);
+ 			bNeedsFullComposite |= g_uOutputRotation != 0; // can't rotate planes at scanout
+ 
++			// ...and can't colour manage at scanout either, unless the display
++			// controller can be made to do it. Nothing above keys off the colour
++			// state, so before this line a scanned-out frame silently skipped night
++			// mode, the SDR gain and the brightness scale. That was harmless only
++			// while g_uOutputRotation pinned us to compositing anyway.
++			bNeedsFullComposite |= !drm_scanout_is_color_managed( &g_DRM );
++
+ 			bool bDoComposite = true;
+ 			if ( !bNeedsFullComposite && !bWantsPartialComposite )
+ 			{
+ 				// Save the pending mode so it can be restored after drm_rollback() and carried
+ 				// over to the composite path
+ 				std::shared_ptr<gamescope::BackendBlob> pPendingModeId = g_DRM.pending.mode_id;
++
++				// Nothing is composited on this path, so the DPU carries the transform.
++				drm_update_crtc_ctm( &g_DRM, true );
++
+ 				int ret = drm_prepare( &g_DRM, bAsync, pFrameInfo );
+ 				if ( ret == 0 )
+ 					bDoComposite = false;
+@@ -3882,6 +4024,15 @@
+ 			if ( kDisablePartialComposition )
+ 				bNeedsFullComposite = true;
+ 
++			// Same reason as the bWantsPartialComposite guard above, and it has to be
++			// repeated HERE rather than relied on there: clearing that flag only stops
++			// us CHOOSING partial composition. Reaching this point means the scanout
++			// attempt failed, and the else branch below would then build a partial
++			// composite anyway -- base layer on a plane, overlays composited -- which
++			// is exactly the split the CTM cannot serve.
++			if ( drm_scanout_ctm_is_active( &g_DRM ) )
++				bNeedsFullComposite = true;
++
+ 			FrameInfo_t compositeFrameInfo = *pFrameInfo;
+ 
+ 			if ( compositeFrameInfo.layers.count() == 1 )
+@@ -4039,6 +4190,10 @@
+ 				m_bWasPartialCompositing = true;
+ 			}
+ 
++			// vulkan_composite() has already applied the transform to these pixels, so
++			// the DPU must not apply it again.
++			drm_update_crtc_ctm( &g_DRM, false );
++
+ 			int ret = drm_prepare( &g_DRM, bAsync, &presentCompFrameInfo );
+ 
+ 			// Happens when we're VT-switched away
+@@ -4056,6 +4211,7 @@
+ 				xwm_log.errorf("Failed to prepare 1-layer flip (%s), trying again with previous mode if modeset needed", strerror( -ret ));
+ 
+ 				// Try once again to in case we need to fall back to another mode.
++				drm_update_crtc_ctm( &g_DRM, false );
+ 				ret = drm_prepare( &g_DRM, bAsync, &compositeFrameInfo );
+ 
+ 				// Happens when we're VT-switched away
+diff -ruN a/src/Backends/DRMColorPipeline.h b/src/Backends/DRMColorPipeline.h
+--- a/src/Backends/DRMColorPipeline.h	1970-01-01 01:00:00.000000000 +0100
++++ b/src/Backends/DRMColorPipeline.h	2026-09-13 11:14:59.999207807 +0200
+@@ -0,0 +1,80 @@
++#pragma once
++
++#include "../color_helpers.h"
++
++#include <cmath>
++#include <cstdint>
++#include <type_traits>
++
++namespace gamescope
++{
++    // Packing gamescope's colour transform into the display controller's own colour
++    // blocks, so that a directly scanned-out frame is still colour managed.
++    //
++    // WHAT THE HARDWARE OFFERS. The msm DPU exposes, per CRTC, a 3x3 matrix (the
++    // DSPP's PCC block, as the DRM CTM property) followed by a per-channel 1D curve
++    // (the GC block, as GAMMA_LUT). It exposes NO degamma block -- dpu_crtc.c calls
++    // drm_crtc_enable_color_mgmt() with a degamma size of 0 -- so the matrix
++    // multiplies values that are still in the panel's encoding.
++    //
++    // WHY A DIAGONAL IS THE EXACT CASE, and it is exact rather than approximate.
++    // gamescope's pipeline works in LINEAR light, and a general 3x3 does not commute
++    // with a non-linear encoding, so without a degamma block most of that pipeline
++    // cannot move into the DPU at all. A per-channel scale is the exception, because
++    // Gamma 2.2 is a pure power law:
++    //
++    //     ( a * e^2.2 )^(1/2.2)  ==  a^(1/2.2) * e
++    //
++    // A multiply by `a` in linear light is a multiply by a^(1/2.2) in the encoding.
++    // Nothing is approximated and no degamma is needed. calcScanoutLinearScale()
++    // decides when the transform really is such a scale; this is just the packing.
++    inline glm::vec3 DrmEncodedScaleFromLinearScale( const glm::vec3 &vLinearScale )
++    {
++        return glm::pow( glm::max( vLinearScale, glm::vec3( 0.f ) ), glm::vec3( 1.f / 2.2f ) );
++    }
++
++    // DRM's CTM is S31.32 SIGN-MAGNITUDE -- bit 63 is the sign, the rest is the
++    // magnitude -- NOT two's complement. See struct drm_color_ctm in drm_mode.h.
++    //
++    // Note for anyone extending this past a diagonal: msm THROWS THE SIGN AWAY. Its
++    // CONVERT_S3_15() masks bit 63 off and keeps the magnitude, so a negative
++    // coefficient is silently programmed positive. Every coefficient we emit is
++    // non-negative so that cannot bite us here -- but a real primaries matrix has
++    // negative terms, and would be quietly wrong on this hardware.
++    inline uint64_t DrmCtmFromFloat( float flValue )
++    {
++        const bool bNegative = std::signbit( flValue ) && flValue != 0.f;
++        const double dMagnitude = std::fabs( static_cast<double>( flValue ) );
++
++        // S31.32 holds 31 integer bits. Clamp before converting so a bad input
++        // saturates instead of wrapping into an unrelated colour.
++        constexpr double k_dMaxMagnitude = 2147483647.0;
++        const double dClamped = dMagnitude > k_dMaxMagnitude ? k_dMaxMagnitude : dMagnitude;
++
++        uint64_t uFixed = static_cast<uint64_t>( dClamped * 4294967296.0 + 0.5 );
++        uFixed &= ~( uint64_t( 1 ) << 63 );
++
++        return bNegative ? ( uFixed | ( uint64_t( 1 ) << 63 ) ) : uFixed;
++    }
++
++    // Fill a drm_color_ctm matrix (9 entries, row major) from a per-channel scale.
++    //
++    // TEMPLATED ON THE ELEMENT TYPE, and it has to be. drm_color_ctm::matrix is
++    // __u64, which on aarch64 is `unsigned long long` while uint64_t is
++    // `unsigned long` -- the same width but DISTINCT types, so a uint64_t(&)[9]
++    // parameter will not bind to it and the build fails on the device arch while
++    // compiling fine on x86_64. Take whatever 64-bit unsigned array we are handed.
++    template <typename T>
++    inline void DrmCtmFromDiagonal( const glm::vec3 &vScale, T ( &uOutMatrix )[9] )
++    {
++        static_assert( sizeof( T ) == 8, "drm_color_ctm entries are 64-bit" );
++        static_assert( std::is_unsigned_v<T>, "drm_color_ctm entries are unsigned" );
++
++        for ( int i = 0; i < 9; i++ )
++            uOutMatrix[i] = 0;
++
++        uOutMatrix[0] = DrmCtmFromFloat( vScale.r );
++        uOutMatrix[4] = DrmCtmFromFloat( vScale.g );
++        uOutMatrix[8] = DrmCtmFromFloat( vScale.b );
++    }
++}
+diff -ruN a/src/color_helpers.cpp b/src/color_helpers.cpp
+--- a/src/color_helpers.cpp	2026-09-12 22:23:10.475923044 +0200
++++ b/src/color_helpers.cpp	2026-09-13 13:48:44.565379503 +0200
+@@ -828,6 +828,101 @@
+     }
+ }
+ 
++// See the declaration in color_helpers.h. Mirrors the body of calcColorTransform()
++// above, step for step, asking of each step "is this the identity, or a per-channel
++// scale?" and giving up the moment one is neither.
++std::optional<glm::vec3> calcScanoutLinearScale(
++	const displaycolorimetry_t & source, EOTF sourceEOTF,
++	const displaycolorimetry_t & dest,  EOTF destEOTF,
++    const glm::vec2 & destVirtualWhite, EChromaticAdaptationMethod eMethod,
++    const colormapping_t & mapping, const nightmode_t & nightmode, const tonemapping_t & tonemapping,
++    const lut3d_t * pLook, float flGain )
++{
++    // Only a PURE POWER LAW lets a linear scale be re-expressed as a scale in the
++    // encoding, which is the whole trick (DRMColorPipeline.h). PQ is not one.
++    if ( sourceEOTF != EOTF_Gamma22 || destEOTF != EOTF_Gamma22 )
++        return std::nullopt;
++
++    // calcEOTFToLinear()/calcLinearToEOTF() multiply and divide by g22_luminance and
++    // CLAMP to [0,1] in between. At unity that is exactly x^2.2 and x^(1/2.2); at
++    // anything else there is a clamp in the middle that a scale cannot model.
++    if ( tonemapping.g22_luminance != 1.f )
++        return std::nullopt;
++
++    // Tonemapping and a look LUT are non-diagonal by construction.
++    if ( tonemapping.eOperator != ETonemapOperator_None )
++        return std::nullopt;
++
++    if ( pLook && !pLook->data.empty() )
++        return std::nullopt;
++
++    // NOTE the shaper needs no check. calcColorTransform() seeds the 3D LUT's edges
++    // with ApplyLut1D_Inverse_Linear( shaper ), so the pair cancels by construction
++    // -- "a matched pair", as the comment there puts it -- and only the 3D LUT body
++    // is an end-to-end transform.
++
++    // THE GAMUT MAPPING IS DELIBERATELY NOT CONSIDERED, and this is the subtle part.
++    //
++    // dest_from_source (a primaries matrix) and the saturation blend are both
++    // non-diagonal, so neither can go in the CTM. An earlier version of this refused
++    // whenever they were non-identity -- which is defensible in the abstract and was
++    // WRONG in practice: it meant refusing at gamescope's DEFAULT sdrGamutWideness of
++    // 0.5, where the SDR source colorimetry is generic-wide-gamut and the panel is
++    // not, so the matrix is never identity and EVERY frame composited. Measured on
++    // Pocket FIT: one plane committed instead of two, with night mode merely off.
++    //
++    // The reason that is the wrong trade is that direct scanout NEVER applied the
++    // gamut mapping. Before any of this existed, the scanout path wrote 0 to CTM,
++    // GAMMA_LUT and DEGAMMA_LUT and ran no Vulkan pass at all -- it was a straight
++    // passthrough of the source colorimetry. So compositing "to preserve" the gamut
++    // mapping preserves nothing that was ever there on that path; it only spends the
++    // GPU that inline rotation was taken to save.
++    //
++    // What this function therefore answers is NOT "is the composite a pure scale?"
++    // but the question the caller actually has: "given that scanout passes the
++    // source colorimetry through unchanged, as it always has, what per-channel scale
++    // does it still need?" Night mode, gain and brightness are that scale.
++    //
++    // CONSEQUENCE, and it must not be discovered by surprise later: a scanned-out
++    // frame and a composited one differ by the gamut mapping. That difference is not
++    // new -- it existed for every frame the old code scanned out -- but this does
++    // mean the difference can now appear and disappear as frames switch paths.
++    // Operator-checked on Pocket FIT with night mode off: no visible difference
++    // between the two paths.
++    //
++    // Doing it "properly" in hardware is not available: a real primaries matrix has
++    // NEGATIVE off-diagonal terms, and msm's CONVERT_S3_15() discards the sign bit,
++    // so such a matrix would be programmed as its absolute value. The DPU cannot
++    // carry this even approximately.
++    (void)mapping;
++    (void)source;
++    (void)dest;
++
++    // The virtual white point adaptation is a real matrix; we only handle its
++    // disabled case. Same condition calcColorTransform() uses to skip it.
++    if ( destVirtualWhite.x > 0.01f && destVirtualWhite.y > 0.01f )
++        return std::nullopt;
++
++    (void)eMethod;
++
++    glm::vec3 nightModeMultHSV( nightmode.hue, clamp01( nightmode.saturation * nightmode.amount ), 1.f );
++    glm::vec3 vMultLinear = glm::pow( hsv_to_rgb( nightModeMultHSV ), glm::vec3( 2.2f ) );
++    vMultLinear = vMultLinear * flGain;
++
++    // Staying within [0,1] keeps calcColorTransform()'s hue-preserving clip out of
++    // play: it only engages above g22_luminance + 1, and a scale of at most 1 on an
++    // at-most-1 source cannot reach it. So inside this range the composite really is
++    // a pure scale, with no branch we are failing to model. Amplification above 1
++    // would also only clip against panel peak, so refusing it costs nothing real.
++    for ( int i = 0; i < 3; i++ )
++    {
++        if ( !std::isfinite( vMultLinear[i] ) || vMultLinear[i] < 0.f || vMultLinear[i] > 1.f )
++            return std::nullopt;
++    }
++
++    return vMultLinear;
++}
++
+ bool BIsWideGamut( const displaycolorimetry_t & nativeDisplayOutput )
+ {
+     // Use red as a sentinal for a wide-gamut display
+diff -ruN a/src/color_helpers.h b/src/color_helpers.h
+--- a/src/color_helpers.h	2026-09-12 22:23:10.475923044 +0200
++++ b/src/color_helpers.h	2026-09-13 13:48:54.370379685 +0200
+@@ -5,6 +5,7 @@
+ #include <algorithm>
+ #include <cstdint>
+ #include <cmath>
++#include <optional>
+ #include <vector>
+ #include <memory>
+ 
+@@ -382,6 +383,34 @@
+ 	const colormapping_t & mapping, const nightmode_t & nightmode, const tonemapping_t & tonemapping,                   \
+ 	const lut3d_t * pLook, float flGain )
+ 
++// Given that direct scanout passes the SOURCE colorimetry through unchanged -- as it
++// always has, having never applied any colour management at all -- what per-channel
++// scale in LINEAR light does it still need to match what the user asked for?
++//
++// This exists so colour management can be handed to display hardware that offers
++// only a matrix, and no degamma block in front of it (the msm DPU's DSPP), which can
++// reproduce a diagonal exactly and nothing else. See DRMColorPipeline.h.
++//
++// Deliberately takes the SAME argument list as calcColorTransform() rather than a
++// digested summary: the two have to agree about what the composite does, and the
++// only way to keep that true as the pipeline changes is for them to be fed
++// identically and to sit next to each other.
++//
++// Returns nullopt when the transform needs something a scale cannot stand in for at
++// all -- tonemapping, a look LUT, a virtual white point, a non-power-law encoding,
++// amplification past unity -- in which case the caller MUST keep compositing.
++//
++// It does NOT return nullopt for the gamut mapping, even though that is non-diagonal.
++// Scanout never applied it, so refusing over it buys nothing and costs the GPU. The
++// long comment on the implementation explains why, and why the hardware cannot carry
++// it even approximately.
++std::optional<glm::vec3> calcScanoutLinearScale(
++	const displaycolorimetry_t & source, EOTF sourceEOTF,
++	const displaycolorimetry_t & dest,  EOTF destEOTF,
++	const glm::vec2 & destVirtualWhite, EChromaticAdaptationMethod eMethod,
++	const colormapping_t & mapping, const nightmode_t & nightmode, const tonemapping_t & tonemapping,
++	const lut3d_t * pLook, float flGain );
++
+ // Build colorimetry and a gamut mapping for the given SDR configuration
+ // Note: the output colorimetry will use the native display's white point
+ // Only the color gamut will change
+diff -ruN a/src/rendervulkan.hpp b/src/rendervulkan.hpp
+--- a/src/rendervulkan.hpp	2026-09-12 22:23:10.562741473 +0200
++++ b/src/rendervulkan.hpp	2026-09-13 10:54:59.865185469 +0200
+@@ -561,6 +561,10 @@
+ extern gamescope_color_mgmt_tracker_t g_ColorMgmt;
+ extern gamescope_color_mgmt_luts g_ColorMgmtLuts[ EOTF_Count ];
+ 
++// See the definition in steamcompmgr.cpp. nullopt = the colour transform cannot be
++// handed to display hardware, so the frame has to be composited.
++extern std::optional<glm::vec3> g_ScanoutLinearScale;
++
+ struct VulkanOutput_t
+ {
+ 	VkSurfaceKHR surface;
+diff -ruN a/src/steamcompmgr.cpp b/src/steamcompmgr.cpp
+--- a/src/steamcompmgr.cpp	2026-09-12 22:23:15.130741558 +0200
++++ b/src/steamcompmgr.cpp	2026-09-13 10:54:57.370185423 +0200
+@@ -141,6 +141,15 @@
+ 
+ gamescope_color_mgmt_tracker_t g_ColorMgmt{};
+ 
++// The colour transform, if any, that the display controller could apply on our
++// behalf so a directly scanned-out frame is still colour managed. Set by
++// update_color_mgmt(); read by the backend when it decides whether to scan out.
++//
++// nullopt means "the composite is doing something hardware cannot reproduce", and
++// the backend must composite. Threading: written and read on the steamcompmgr
++// thread only, exactly like g_ColorMgmtLuts beside it.
++std::optional<glm::vec3> g_ScanoutLinearScale = glm::vec3( 1.f );
++
+ static gamescope_color_mgmt_luts g_ColorMgmtLutsOverride[ EOTF_Count ];
+ std::atomic<std::shared_ptr<lut3d_t>> g_ColorMgmtLooks[EOTF_Count];
+ 
+@@ -323,11 +332,18 @@
+ create_color_mgmt_luts(
+ 	const gamescope_color_mgmt_t& newColorMgmt,
+ 	gamescope_color_mgmt_luts outColorMgmtLuts[ EOTF_Count ],
+-	bool bTraditionalHDROutput )
++	bool bTraditionalHDROutput,
++	std::optional<glm::vec3> *pOutScanoutLinearScale = nullptr )
+ {
+ 	const displaycolorimetry_t& displayColorimetry = newColorMgmt.displayColorimetry;
+ 	const displaycolorimetry_t& outputEncodingColorimetry = newColorMgmt.outputEncodingColorimetry;
+ 
++	// Nothing is scanout-expressible until proven otherwise -- in particular the
++	// LUT-override path below, where we are handed opaque tables and have no idea
++	// what transform they encode.
++	if ( pOutScanoutLinearScale )
++		*pOutScanoutLinearScale = std::nullopt;
++
+ 	for ( uint32_t nInputEOTF = 0; nInputEOTF < EOTF_Count; nInputEOTF++ )
+ 	{
+ 		if (!outColorMgmtLuts[nInputEOTF].vk_lut1d)
+@@ -433,6 +449,20 @@
+ 				newColorMgmt.outputVirtualWhite, newColorMgmt.chromaticAdaptationMode,
+ 				colorMapping, newColorMgmt.nightmode, tonemapping, pLook, flGain );
+ 
++			// Ask, with the IDENTICAL arguments, whether that transform happens to be
++			// a plain per-channel scale -- if it is, the display controller can apply
++			// it and the frame does not have to be composited to be colour managed.
++			// See calcScanoutLinearScale(). Only EOTF_Gamma22 is asked about because
++			// that is the only input EOTF that can reach the scanout path: an HDR
++			// layer on an SDR output already forces a composite below.
++			if ( pOutScanoutLinearScale && inputEOTF == EOTF_Gamma22 )
++			{
++				*pOutScanoutLinearScale = calcScanoutLinearScale( inputColorimetry, inputEOTF,
++					outputEncodingColorimetry, newColorMgmt.outputEncodingEOTF,
++					newColorMgmt.outputVirtualWhite, newColorMgmt.chromaticAdaptationMode,
++					colorMapping, newColorMgmt.nightmode, tonemapping, pLook, flGain );
++			}
++
+ 			// Create quantized output luts
+ 			for ( size_t i=0, end = g_tmpLut1d.dataR.size(); i<end; ++i )
+ 			{
+@@ -505,12 +535,17 @@
+ 
+ 	if (g_ColorMgmt.pending.enabled)
+ 	{
+-		create_color_mgmt_luts(g_ColorMgmt.pending, g_ColorMgmtLuts, bTraditionalHDROutput);
++		create_color_mgmt_luts(g_ColorMgmt.pending, g_ColorMgmtLuts, bTraditionalHDROutput, &g_ScanoutLinearScale);
+ 	}
+ 	else
+ 	{
+ 		for ( uint32_t i = 0; i < EOTF_Count; i++ )
+ 			g_ColorMgmtLuts[i].reset();
++
++		// Colour management off means the composite is a passthrough, so scanout
++		// needs no transform to match it -- which is an identity scale, NOT
++		// "inexpressible". Saying nullopt here would force a composite forever.
++		g_ScanoutLinearScale = glm::vec3( 1.f );
+ 	}
+ 
+ #ifdef COLOR_MGMT_MICROBENCH
+diff -ruN a/tests/meson.build b/tests/meson.build
+--- a/tests/meson.build	2026-09-12 22:23:15.154554970 +0200
++++ b/tests/meson.build	2026-09-13 10:56:32.350187190 +0200
+@@ -6,10 +6,12 @@
+ 	unittest_src += srcdir / src
+ endforeach
+ unittest_src += srcdir / 'edid.cpp'
++# calcScanoutLinearScale() lives here, and it is not part of gamescope_core_src.
++unittest_src += srcdir / 'color_helpers.cpp'
+ 
+ gamescope_tests = executable(
+ 	'gamescope_tests',
+-	unittest_src + ['test_client_format_policy.cpp', 'test_convar.cpp', 'test_display_lookup.cpp', 'test_drm_composition.cpp', 'test_edid.cpp', 'test_process.cpp', 'test_utils_parsers.cpp', 'test_utils_string.cpp'],
++	unittest_src + ['test_client_format_policy.cpp', 'test_convar.cpp', 'test_display_lookup.cpp', 'test_drm_color_pipeline.cpp', 'test_drm_composition.cpp', 'test_edid.cpp', 'test_process.cpp', 'test_utils_parsers.cpp', 'test_utils_string.cpp'],
+ 	include_directories: [srcdir, sol2_include],
+ 	dependencies: [catch2_dep, luajit_dep, cap_dep, displayinfo_dep, drm_dep, glm_dep, wlroots_dep],
+ 	cpp_args: gamescope_cpp_args,
+diff -ruN a/tests/test_drm_color_pipeline.cpp b/tests/test_drm_color_pipeline.cpp
+--- a/tests/test_drm_color_pipeline.cpp	1970-01-01 01:00:00.000000000 +0100
++++ b/tests/test_drm_color_pipeline.cpp	2026-09-13 13:49:00.204379794 +0200
+@@ -0,0 +1,217 @@
++#include <catch2/catch_test_macros.hpp>
++
++#include "Backends/DRMColorPipeline.h"
++#include "color_helpers.h"
++
++#include <cmath>
++
++using namespace gamescope;
++
++namespace
++{
++    // The claim the whole design rests on: for a PURE POWER LAW encoding, scaling in
++    // linear light and scaling in the encoding are the same operation, with the
++    // exponent moved. If this ever stops holding, the DPU path is wrong and the
++    // scanout frames are quietly mis-coloured, so assert it numerically rather than
++    // trusting the algebra in the comment.
++    float EncodeG22( float flLinear ) { return std::pow( flLinear, 1.f / 2.2f ); }
++    float DecodeG22( float flEncoded ) { return std::pow( flEncoded, 2.2f ); }
++
++    nightmode_t MakeNightMode( float flAmount, float flHue, float flSaturation )
++    {
++        nightmode_t nightmode{};
++        nightmode.amount = flAmount;
++        nightmode.hue = flHue;
++        nightmode.saturation = flSaturation;
++        return nightmode;
++    }
++
++    colormapping_t MakeSmoothRemap()
++    {
++        // What buildSDRColorimetry() hands back for a non-wide-gamut panel: a real
++        // blend, which must NOT by itself stop us scanning out.
++        colormapping_t mapping{};
++        mapping.blendEnableMinSat = 0.7f;
++        mapping.blendEnableMaxSat = 1.0f;
++        mapping.blendAmountMin = 0.0f;
++        mapping.blendAmountMax = 1.0f;
++        return mapping;
++    }
++
++    std::optional<glm::vec3> ScaleFor(
++        const displaycolorimetry_t &source,
++        const displaycolorimetry_t &dest,
++        const nightmode_t &nightmode,
++        float flGain = 1.f,
++        EOTF eEOTF = EOTF_Gamma22 )
++    {
++        tonemapping_t tonemapping{};
++        tonemapping.bUseShaper = true;
++        tonemapping.g22_luminance = 1.f;
++        tonemapping.eOperator = ETonemapOperator_None;
++
++        return calcScanoutLinearScale( source, eEOTF, dest, eEOTF,
++            glm::vec2( 0.f, 0.f ), k_EChromaticAdapatationMethod_Bradford,
++            MakeSmoothRemap(), nightmode, tonemapping, nullptr, flGain );
++    }
++}
++
++TEST_CASE("a linear scale is exactly an encoded scale under gamma 2.2", "[drm][color]")
++{
++    const glm::vec3 vLinearScale{ 0.9f, 0.72f, 0.35f };
++    const glm::vec3 vEncodedScale = DrmEncodedScaleFromLinearScale( vLinearScale );
++
++    for ( float flEncodedIn : { 0.05f, 0.25f, 0.5f, 0.75f, 1.0f } )
++    {
++        for ( int c = 0; c < 3; c++ )
++        {
++            // What the Vulkan composite does: decode, scale, re-encode.
++            const float flComposite = EncodeG22( vLinearScale[c] * DecodeG22( flEncodedIn ) );
++            // What the DPU does: scale the encoded value, no decode at all.
++            const float flScanout = vEncodedScale[c] * flEncodedIn;
++
++            REQUIRE( std::fabs( flComposite - flScanout ) < 1e-5f );
++        }
++    }
++}
++
++TEST_CASE("identity night mode on matching primaries is expressible", "[drm][color]")
++{
++    // Night mode off: amount 0 collapses the HSV multiply to white, so the scale is
++    // unity and scanout needs no correction at all.
++    auto oScale = ScaleFor( displaycolorimetry_709, displaycolorimetry_709, MakeNightMode( 0.f, 25.f / 360.f, 1.f ) );
++
++    REQUIRE( oScale.has_value() );
++    REQUIRE( std::fabs( oScale->r - 1.f ) < 1e-5f );
++    REQUIRE( std::fabs( oScale->g - 1.f ) < 1e-5f );
++    REQUIRE( std::fabs( oScale->b - 1.f ) < 1e-5f );
++}
++
++TEST_CASE("night mode on matching primaries is expressible and tints", "[drm][color]")
++{
++    auto oScale = ScaleFor( displaycolorimetry_709, displaycolorimetry_709, MakeNightMode( 1.f, 25.f / 360.f, 1.f ) );
++
++    REQUIRE( oScale.has_value() );
++    // Amber: red is left alone and blue is pulled down hard. The point of the
++    // assertion is the ORDERING -- if a repack ever inverted the channels this
++    // would catch it, where a "did we get a value" check would not.
++    REQUIRE( oScale->r > oScale->g );
++    REQUIRE( oScale->g > oScale->b );
++    REQUIRE( oScale->b < 0.5f );
++}
++
++TEST_CASE("a gamut mapping does not stop scanout", "[drm][color]")
++{
++    // REGRESSION, measured on hardware. Source and dest primaries genuinely differ
++    // here, which is gamescope's DEFAULT state (sdrGamutWideness 0.5 makes the SDR
++    // source generic-wide-gamut while the panel is not). Refusing over that meant
++    // EVERY frame composited -- one plane committed instead of two, with night mode
++    // merely off -- surrendering the whole point of scanning out.
++    //
++    // Scanout never applied the gamut mapping, so there is nothing to preserve by
++    // compositing; the scale it still needs is what matters.
++    auto oScale = ScaleFor( displaycolorimetry_2020, displaycolorimetry_709, MakeNightMode( 0.f, 25.f / 360.f, 1.f ) );
++
++    REQUIRE( oScale.has_value() );
++    // ...and with night mode off, that scale is unity, so the CTM stays identity and
++    // the frame scans out exactly as it did before any of this existed.
++    REQUIRE( std::fabs( oScale->r - 1.f ) < 1e-5f );
++    REQUIRE( std::fabs( oScale->g - 1.f ) < 1e-5f );
++    REQUIRE( std::fabs( oScale->b - 1.f ) < 1e-5f );
++}
++
++TEST_CASE("the saturation blend alone does not stop scanout", "[drm][color]")
++{
++    // MakeSmoothRemap() is a fully enabled blend. It is part of the gamut mapping
++    // that scanout does not do, so like the matrix it must not force a composite.
++    auto oScale = ScaleFor( displaycolorimetry_709, displaycolorimetry_709, MakeNightMode( 0.5f, 25.f / 360.f, 1.f ) );
++
++    REQUIRE( oScale.has_value() );
++}
++
++TEST_CASE("PQ is not expressible", "[drm][color]")
++{
++    // PQ is not a power law, so the exponent trick does not apply at all.
++    auto oScale = ScaleFor( displaycolorimetry_2020, displaycolorimetry_2020, MakeNightMode( 0.f, 25.f / 360.f, 1.f ), 1.f, EOTF_PQ );
++
++    REQUIRE_FALSE( oScale.has_value() );
++}
++
++TEST_CASE("tonemapping and look luts are not expressible", "[drm][color]")
++{
++    tonemapping_t tonemapping{};
++    tonemapping.bUseShaper = true;
++    tonemapping.g22_luminance = 1.f;
++    tonemapping.eOperator = ETonemapOperator_EETF2390_MaxChan;
++
++    auto oScale = calcScanoutLinearScale( displaycolorimetry_709, EOTF_Gamma22,
++        displaycolorimetry_709, EOTF_Gamma22,
++        glm::vec2( 0.f, 0.f ), k_EChromaticAdapatationMethod_Bradford,
++        MakeSmoothRemap(), MakeNightMode( 0.f, 25.f / 360.f, 1.f ), tonemapping, nullptr, 1.f );
++
++    REQUIRE_FALSE( oScale.has_value() );
++}
++
++TEST_CASE("a virtual white point is not expressible", "[drm][color]")
++{
++    tonemapping_t tonemapping{};
++    tonemapping.bUseShaper = true;
++    tonemapping.g22_luminance = 1.f;
++    tonemapping.eOperator = ETonemapOperator_None;
++
++    auto oScale = calcScanoutLinearScale( displaycolorimetry_709, EOTF_Gamma22,
++        displaycolorimetry_709, EOTF_Gamma22,
++        glm::vec2( 0.28f, 0.29f ), k_EChromaticAdapatationMethod_Bradford,
++        MakeSmoothRemap(), MakeNightMode( 0.f, 25.f / 360.f, 1.f ), tonemapping, nullptr, 1.f );
++
++    REQUIRE_FALSE( oScale.has_value() );
++}
++
++TEST_CASE("gain above unity is refused", "[drm][color]")
++{
++    // Above 1 the composite's hue-preserving clip can engage, and a plain scale
++    // stops being a faithful model of it.
++    auto oScale = ScaleFor( displaycolorimetry_709, displaycolorimetry_709, MakeNightMode( 0.f, 25.f / 360.f, 1.f ), 2.f );
++
++    REQUIRE_FALSE( oScale.has_value() );
++}
++
++TEST_CASE("CTM packing is S31.32 sign-magnitude", "[drm][color]")
++{
++    REQUIRE( DrmCtmFromFloat( 0.f ) == 0ull );
++    REQUIRE( DrmCtmFromFloat( 1.f ) == ( 1ull << 32 ) );
++    REQUIRE( DrmCtmFromFloat( 0.5f ) == ( 1ull << 31 ) );
++
++    // Sign lives in bit 63 and the magnitude is NOT two's complement.
++    REQUIRE( DrmCtmFromFloat( -1.f ) == ( ( 1ull << 63 ) | ( 1ull << 32 ) ) );
++
++    uint64_t uMatrix[9];
++    DrmCtmFromDiagonal( glm::vec3( 1.f, 0.5f, 0.f ), uMatrix );
++
++    REQUIRE( uMatrix[0] == ( 1ull << 32 ) );
++    REQUIRE( uMatrix[4] == ( 1ull << 31 ) );
++    REQUIRE( uMatrix[8] == 0ull );
++
++    // Everything off the diagonal must be exactly zero: msm drops the sign bit, so
++    // a stray non-zero term there would be programmed as a positive coefficient.
++    for ( int i : { 1, 2, 3, 5, 6, 7 } )
++        REQUIRE( uMatrix[i] == 0ull );
++}
++
++TEST_CASE("CTM packing accepts drm_color_ctm's own element type", "[drm][color]")
++{
++    // REGRESSION, and it only ever failed on the device. drm_color_ctm::matrix is
++    // __u64 = `unsigned long long`, while uint64_t on aarch64 is `unsigned long`.
++    // Same width, DIFFERENT type, so a uint64_t(&)[9] parameter binds fine on
++    // x86_64 and fails to compile on arm64 -- which is exactly how this shipped a
++    // broken build. Exercising both spellings here catches it on the host.
++    unsigned long long uLongLong[9];
++    unsigned long uLong[9];
++
++    DrmCtmFromDiagonal( glm::vec3( 1.f, 1.f, 1.f ), uLongLong );
++    DrmCtmFromDiagonal( glm::vec3( 1.f, 1.f, 1.f ), uLong );
++
++    REQUIRE( uLongLong[0] == ( 1ull << 32 ) );
++    REQUIRE( uLong[4] == ( 1ull << 32 ) );
++    REQUIRE( uLongLong[8] == ( 1ull << 32 ) );
++}

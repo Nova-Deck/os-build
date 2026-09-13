@@ -21,6 +21,14 @@
 # patches/README.md). 0002-0006 are ours, and 0007/0008 are third-party patches that
 # are not in any gamescope release.
 #
+# 0014 IS COUPLED TO THE KERNEL and the two must move together. It drives the DPU's CRTC CTM so a
+# directly scanned-out frame is still colour managed (night mode was silently dead on that path
+# once inline rotation made it reachable — HW-confirmed on Pocket FIT 2026-09-13). Setting a CTM
+# only works because kernel patch 0515 carries v3 7/8 of the SMMU series; without it the first CTM
+# re-reserves DPU resources without reprogramming the encoder, CTL_FLUSH is written with zero and
+# the display freezes. If 0515 is ever reverted to a set without 7/8, 0014 must come out in the
+# same commit.
+#
 # Fields:
 #   name           pkgname (must match the PKGBUILD); also the work/ build-dir + repo entry
 #   pkgbuild_local path (relative to this dir) to the checked-in PKGBUILD to build
@@ -35,4 +43,4 @@
 name: gamescope
 pkgbuild_local: PKGBUILD
 pkgrel_suffix: 1
-patches: 0001-drmbackend-rotated-output-max-height.patch 0002-sanitize-nightmode-atom.patch 0003-drmbackend-fake-output-mm.patch 0004-fps-limit-atom-persist.patch 0005-steamcontrolled-steam-focus-fallback.patch 0007-vendor-wayland-protocols-wrap.patch 0008-drm-synthesize-edid-for-edidless-internal-panels.patch 0009-drm-known-display-profiles-for-edidless-panels.patch 0010-drm-compose-gamma22-hdr-without-hw-color-management.patch 0011-wsi-filter-hdr-formats-by-underlying-support.patch 0012-color-scale-sdr-white-on-gamma22-hdr-output.patch 0013-expose-client-sampleable-formats.patch
+patches: 0001-drmbackend-rotated-output-max-height.patch 0002-sanitize-nightmode-atom.patch 0003-drmbackend-fake-output-mm.patch 0004-fps-limit-atom-persist.patch 0005-steamcontrolled-steam-focus-fallback.patch 0007-vendor-wayland-protocols-wrap.patch 0008-drm-synthesize-edid-for-edidless-internal-panels.patch 0009-drm-known-display-profiles-for-edidless-panels.patch 0010-drm-compose-gamma22-hdr-without-hw-color-management.patch 0011-wsi-filter-hdr-formats-by-underlying-support.patch 0012-color-scale-sdr-white-on-gamma22-hdr-output.patch 0013-expose-client-sampleable-formats.patch 0014-drm-color-manage-direct-scanout-via-the-dpu-ctm.patch

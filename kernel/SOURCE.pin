@@ -160,7 +160,17 @@ git_commit: a300e35c0a4b4a38fb53742ea6e2a203c98ee523
 # opmode 0x1, intr4_status 0x0, ctl0 done 1, both topology DSPPs carrying IGC + gamut, and the two
 # new CRTC properties sized exactly right (DEGAMMA_LUT 2048 B = 256x4xu16, DPU_3D_LUT 39312 B =
 # 17^3x4xu16). ZERO lutdma/reg_dma/CTL_FLUSH/underrun/SMMU-fault lines across 16 enable/disable
-# transitions, every one of which is a modeset. Pocket S2 (the other SM8650 board) is still ungated.
+# transitions, every one of which is a modeset.
+# POCKET S2 PASSED 2026-09-14, closing the gate bc4f7b0's message left open, and it is the board
+# that mattered most here: --rotated-output-max-height clamps its 1440x2560 panel to a 1080 render
+# that the DPU upscales, so a pre-rotation height of 1080 sits 8 lines under the inline rotator's
+# 1088 cap and anything that grew a layer would re-open the black-UI failure. It did not. In ALL
+# FOUR states (LUTs on/off x night mode, plus colour temperature and the restore) the board held
+# TWO live content planes BOTH at rotation=8 — inline rotation and the DPU upscale intact — with
+# ZERO "invalid height for inline rot" rejections in dmesg and zero in the session log. Engine v3,
+# opmode 0x1, intr4_status 0x0, zero display/LUTDMA errors after t=10s. Its one boot-time *ERROR*
+# (`dsi_get_phy: phy driver is not ready`, t=1.0s on ae96000.dsi) is ordinary deferred probe on the
+# secondary DSI and predates this work.
 # POCKET ACE (qcs8550, DPU 9.0) ALSO PASSED, same day — engine v2, i.e. the AUTHOR's own verified
 # configuration, so it re-gates their leg against our re-roll rather than testing new silicon:
 # `engine v20000 sb_off 0x400` exactly as sm8550_reg_dma declares, opmode 0x1, intr4_status 0x0,

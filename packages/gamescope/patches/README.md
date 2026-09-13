@@ -516,6 +516,14 @@ the CTM stays identity, and with the LUTs off falls back to `diag(1.0, 0.41667, 
 Sixteen enable/disable transitions — each one a modeset — with zero LUTDMA / `CTL_FLUSH` /
 underrun / SMMU-fault lines.
 
+**Pocket S2 (SM8650, engine v3) is the board that mattered**, because
+`--rotated-output-max-height` clamps its 1440x2560 panel to a 1080 render the DPU upscales, putting
+the pre-rotation height 8 lines under the inline rotator's 1088 cap — so anything that grew a layer
+would re-open the black-UI failure. It did not: in all four states (LUTs on/off under night mode,
+colour temperature, and the restore) it held **two live content planes both at `rotation=8`**,
+inline rotation and the DPU upscale intact, with **zero `invalid height for inline rot` rejections**
+in dmesg and zero in the session log. Same A/B answers as the other two boards.
+
 **Pocket ACE (qcs8550, engine v2) gives identical answers**, on all three states: LUTs on + night
 mode max = 2 planes / identity CTM / populated 3D LUT; LUTs off + night mode max = 2 planes /
 `diag(1.0, 0.41667, 0)` / cleared; LUTs on + colour temperature = 2 planes / identity / populated.

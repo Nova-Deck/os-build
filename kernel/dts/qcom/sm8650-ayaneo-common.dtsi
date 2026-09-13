@@ -1330,9 +1330,16 @@
 };
 
 &pmk8550_rtc {
-	qcom,uefi-rtc-info;
+	nvmem-cells = <&rtc_offset>;
+	nvmem-cell-names = "offset";
 	qcom,no-alarm; /* alarm owned by ADSP */
 	status = "okay";
+};
+
+&pmk8550_sdam_2 {
+	rtc_offset: rtc-offset@bc {
+		reg = <0xbc 0x4>;
+	};
 };
 
 &remoteproc_adsp {

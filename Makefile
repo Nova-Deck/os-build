@@ -435,11 +435,12 @@ verify-card: $(SDCARD) | $(BUILD_STAMP) ## Verify the built A/B card image (in c
 # nothing runs it until the overlay pipeline's retrieval job — hours of aarch64 compiles after the
 # wrong row was pushed. Hanging it off `test` is what puts it on every push and every PR: the ci
 # workflow runs `make test`, and it triggers on paths overlay.yml deliberately ignores, so a commit
-# touching ONLY rootfs/manifest.lock is still checked.
-verify-lock: ## Check the lock's novadeck rows against packages/ (host, seconds, no build)
+# touching ONLY rootfs/manifest.lock is still checked. It covers BOTH manifests — the installer
+# carries gamescope too, and its lock is the one that gets forgotten.
+verify-lock: ## Check both locks' novadeck rows against packages/ (host, seconds, no build)
 	bash packages/verify-lock-rows.sh
 
-test: verify-lock ## Run the offline bootctl/post-install/boot-disk/pairingd/quirks/power-led/suspend/stage-2/partition-table/unit/coredump/perf/fan-curve/decky/update/select-branch/publish/install/mkroot/steamos-manager/storage/graphics-provider/video-decode/proton-dxvk/proton-nice/guard suites (host, no build needed)
+test: verify-lock ## Run the offline bootctl/post-install/boot-disk/pairingd/quirks/power-led/suspend/stage-2/partition-table/unit/coredump/perf/fan-curve/decky/update/select-branch/publish/install/mkroot/verify-lock/steamos-manager/storage/graphics-provider/video-decode/proton-dxvk/proton-nice/guard suites (host, no build needed)
 	bash $(TESTS_DIR)/test-bootctl.sh
 	bash $(TESTS_DIR)/test-post-install.sh
 	bash $(TESTS_DIR)/test-boot-disk.sh
@@ -467,6 +468,7 @@ test: verify-lock ## Run the offline bootctl/post-install/boot-disk/pairingd/qui
 	bash $(TESTS_DIR)/test-install.sh
 	bash $(TESTS_DIR)/test-ui.sh
 	bash $(TESTS_DIR)/test-mkroot.sh
+	bash $(TESTS_DIR)/test-verify-lock.sh
 	bash $(TESTS_DIR)/test-mkimage.sh
 	bash $(TESTS_DIR)/test-graphics-provider.sh
 	bash $(TESTS_DIR)/test-video-decode.sh
@@ -735,7 +737,15 @@ relock: $(if $(OVERLAY_PINS),$(OVERLAY_STAMP)) ## Re-resolve from PKGS and regen
 # firmware) and reads them out of out/modroot, which the kernel build produces. Without this line
 # `make installer` builds the root FIRST and dies on a tree that has never built a kernel — which is
 # every CI runner, and was the first thing the 2026-08-25 smoke run hit.
-installer-root: $(KERNEL) $(if $(OVERLAY_PINS),$(OVERLAY_STAMP)) ## Bootstrap the installer root -> work/installer-base (host; docker+qemu)
+#
+# `verify-lock` IS FIRST ON PURPOSE. mkroot.sh's resolve refuses a novadeck package built from
+# sources installer/manifest.lock does not describe — correct, and the only thing standing between a
+# stale row and a published medium — but it makes that call from inside the root bootstrap, i.e.
+# after $(KERNEL). installer/v0.0.8 spent 56 minutes building 7.2.5 to reach it. verify-lock decides
+# the same question in a second from committed files, so ordering it ahead of the kernel turns that
+# into a fast failure. Prerequisites are built left to right, which holds for `make installer`; a
+# `make -j installer` would race the kernel against it and lose the head start, not the check.
+installer-root: verify-lock $(KERNEL) $(if $(OVERLAY_PINS),$(OVERLAY_STAMP)) ## Bootstrap the installer root -> work/installer-base (host; docker+qemu)
 	installer/mkroot.sh >/dev/null
 
 # The medium itself. Host-side mkroot.sh produces the tree; this compresses it and lays the two

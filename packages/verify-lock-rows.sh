@@ -1,5 +1,12 @@
 #!/usr/bin/env bash
-# novadeck lock rows — do rootfs/manifest.lock's `novadeck` rows still name the sources in packages/?
+# novadeck lock rows — do the manifests' `novadeck` rows still name the sources in packages/?
+#
+# BOTH LOCKS, because there are two and only one of them is in the obvious place. The installer
+# medium carries gamescope (installer/ui is a Wayland client and gamescope is its display server,
+# installer/pkgs.list:69), so a change under packages/gamescope invalidates rootfs/manifest.lock AND
+# installer/manifest.lock, and they have to move together. 3e76935 relocked one of them; the other
+# was caught by installer/mkroot.sh's own resolve — which runs AFTER the kernel, so installer/v0.0.8
+# spent 56 minutes building 7.2.5 to reach a verdict decidable here in a second from a bare clone.
 #
 #   packages/verify-lock-rows.sh
 #
@@ -44,13 +51,12 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 LOCK="$ROOT/rootfs/manifest.lock"
+INSTALLER_LOCK="$ROOT/installer/manifest.lock"
 
 log() { printf '[lock] %s\n' "$*" >&2; }
 die() { printf '[lock] %s\n' "$*" >&2; exit 1; }
 
 pin_field() { sed -n "s/^$2:[[:space:]]*//p" "$1" | head -1; }
-
-[ -f "$LOCK" ] || die "no lock: ${LOCK#"$ROOT"/}"
 
 # --- what the tree says right now ------------------------------------------------------------
 # Stable order (the glob), matching build-overlay.sh.
@@ -78,33 +84,42 @@ for pname in "${!HASHOF[@]}"; do VALID["${HASHOF[$pname]}"]=1; done
 # Report every problem rather than dying on the first: this failure arrives in groups by nature —
 # one source change moves every row of a split package — and seeing one row at a time is how
 # "you updated 1 of 3" reads as three unrelated bugs.
-stale=""        # hash no package produces any more
-rows=0
-while read -r name ver arch src sha; do
-  case "$name" in ''|'#'*) continue ;; esac
-  [ "$src" = novadeck ] || continue
-  rows=$((rows + 1))
-  file="$name-$ver-$arch.pkg.tar.zst"
-  if [ -z "${VALID["$sha"]:-}" ]; then
-    stale+="  $name ($file): $sha"$'\n'
-  fi
-done < "$LOCK"
-
-[ "$rows" -gt 0 ] || die "${LOCK#"$ROOT"/} has no novadeck rows — refusing to pass trivially"
-
 fail=0
 
-if [ -n "$stale" ]; then
-  echo "[lock] these novadeck rows carry a hash NO package in the tree produces:" >&2
-  printf '%s' "$stale" >&2
-  echo "  A row's hash is packages/inputhash.sh over its OWNING package's committed sources, and one" >&2
-  echo "  PKGBUILD can own several rows — a split package's rows all carry the pkgbase's hash and" >&2
-  echo "  must move together. Updating only the row whose name matches the package directory is the" >&2
-  echo "  mistake this check exists to catch (mesa emits five packages; the image installs three)." >&2
-  echo "  Adopt the source change deliberately:  make relock" >&2
-  fail=1
-fi
+check_lock() {
+  local lock="$1" relock="$2" rel="${1#"$ROOT"/}"
+  local stale="" rows=0 name ver arch src sha file
+
+  [ -f "$lock" ] || die "no lock: $rel"
+
+  while read -r name ver arch src sha; do
+    case "$name" in ''|'#'*) continue ;; esac
+    [ "$src" = novadeck ] || continue
+    rows=$((rows + 1))
+    file="$name-$ver-$arch.pkg.tar.zst"
+    if [ -z "${VALID["$sha"]:-}" ]; then
+      stale+="  $name ($file): $sha"$'\n'
+    fi
+  done < "$lock"
+
+  [ "$rows" -gt 0 ] || die "$rel has no novadeck rows — refusing to pass trivially"
+
+  if [ -n "$stale" ]; then
+    echo "[lock] $rel: these novadeck rows carry a hash NO package in the tree produces:" >&2
+    printf '%s' "$stale" >&2
+    echo "  A row's hash is packages/inputhash.sh over its OWNING package's committed sources, and one" >&2
+    echo "  PKGBUILD can own several rows — a split package's rows all carry the pkgbase's hash and" >&2
+    echo "  must move together. Updating only the row whose name matches the package directory is the" >&2
+    echo "  mistake this check exists to catch (mesa emits five packages; the image installs three)." >&2
+    echo "  Adopt the source change deliberately:  $relock" >&2
+    fail=1
+    return
+  fi
+
+  log "$rel: $rows novadeck row(s) carry a hash packages/ still produces"
+}
+
+check_lock "$LOCK" "make relock"
+check_lock "$INSTALLER_LOCK" "make relock-installer"
 
 [ "$fail" -eq 0 ] || exit 1
-
-log "$rows novadeck row(s) carry a hash packages/ still produces"

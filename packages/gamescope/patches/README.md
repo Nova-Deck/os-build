@@ -478,6 +478,69 @@ notch. Do not widen it toward the notch or narrow it toward the quantisation gap
 `tests/test_drm_color_pipeline.cpp` asserts the neutral value is expressible and the one-notch value
 is not, using the measured numbers.
 
+`0018` — **the whole SDR chain in the DPU's own LUTs, not just a diagonal.** Third-party
+(virtudude), carried with one addition of ours. `0014` exists because the DPU exposes no degamma
+block, which leaves only a per-channel diagonal expressible — so a colour temperature change, a
+gamut mapping or a look LUT each cost a full composite on every frame they are live. That limit is
+mainline's, not the hardware's: on DPU 9.0+ the colour LUT blocks sit behind a LUT bus with no
+memory-mapped write path, reachable only by the LUTDMA engine, which mainline does not drive.
+Kernel patches `0530`-`0532` port that engine and expose the DSPP inverse gamma as a 256-entry
+CRTC `DEGAMMA_LUT` and the 17³ gamut block as a `DPU_3D_LUT` blob. This patch drives them: the
+shader leaves its gamma 2.2 shaper and 3D LUT unbound and the DPU applies the same pair post-blend,
+on the scanout path *and* the composite path.
+
+**`0014` is not superseded — it is the fallback**, and the two are ordered rather than merged. Only
+a kernel with the LUTDMA engine offers `DPU_3D_LUT`, and the SM8250 boards have no such engine, so
+both can be present at once. When the output LUTs are applied: the CTM is held at the **identity**
+(`drm_update_crtc_ctm()` is given `false`, exactly as for a composited frame and for the same
+reason — the transform is already being applied elsewhere); `drm_scanout_is_color_managed()` returns
+true outright, skipping the expressibility test entirely; and `drm_scanout_ctm_is_active()` returns
+false, so partial composition stays available, because the post-blend LUTs correct both halves and
+there is no split to manage.
+
+**One hunk of the author's patch is deliberately not carried**, and the measurement that justifies
+it is worth keeping. It forced a full composite for every SDR layer whenever the output LUTs were
+not carrying the chain — correct in a tree without `0014`, redundant here, and strictly the more
+conservative of the two tests, so keeping both let it win everywhere and made `0014` unreachable.
+On Pocket FIT with `drm_output_luts 0` and night mode at maximum that read **one live content
+plane and an identity CTM** — the composite, not the diagonal — and on the SM8250 boards, which
+have no `DPU_3D_LUT` at all, it would have been the permanent state. Dropping it loses nothing:
+with the LUTs on both tests allow scanout, with an inexpressible transform both composite, and
+only the diagonal case differs.
+
+**HW PASS, Pocket FIT (SM8650, engine v3), 2026-09-13.** A non-neutral colour temperature — a
+Bradford white-point adaptation, non-diagonal, so it cost a full composite on *every frame it was
+live* — now scans out: **2 live content planes** with the adaptation in `DPU_3D_LUT` and the CTM at
+identity, against **1 plane** with the LUTs off. Night mode at maximum reprograms the 3D LUT while
+the CTM stays identity, and with the LUTs off falls back to `diag(1.0, 0.41667, 0)` on scanout.
+Sixteen enable/disable transitions — each one a modeset — with zero LUTDMA / `CTL_FLUSH` /
+underrun / SMMU-fault lines.
+
+**Pocket ACE (qcs8550, engine v2) gives identical answers**, on all three states: LUTs on + night
+mode max = 2 planes / identity CTM / populated 3D LUT; LUTs off + night mode max = 2 planes /
+`diag(1.0, 0.41667, 0)` / cleared; LUTs on + colour temperature = 2 planes / identity / populated.
+That board is the author's own verified engine revision, so it re-gates their leg against our
+re-roll rather than testing new silicon. Zero display or LUTDMA errors after boot — its 10
+arm-smmu faults in the first second are the pre-existing splash handoff, unchanged in count.
+
+**The two paths are not pixel-identical, by construction, and an operator can see it.** `0014`'s
+`calcScanoutLinearScale()` deliberately ignores the SDR gamut mapping, because direct scanout never
+applied it; the 3D LUT runs the full `calcColorTransform()` chain and does. At the default
+`sdrGamutWideness` of 0.5 that mapping is live, so toggling `drm_output_luts` under a fixed night
+mode gives *"subtle differences in some colours, nothing completely off"* — saturated content moves,
+neutrals do not. **Forcing `sdrGamutWideness` to 0 makes the two indistinguishable to the eye**,
+which is the measurement that identifies the cause; do that before chasing anything else here. It
+is a **fix, not a regression**: the composite path always applied the gamut mapping, so the LUTs
+make scanout and composite agree, where `0014` left them differing by exactly this and let the
+difference appear and disappear as frames switched paths.
+
+**Being post-blend has a real consequence**: a translucent overlay is corrected as the blended
+pixel, not per layer. Per-plane offload is the follow-up. Turning the LUTs on or off changes which
+display blocks the CRTC owns and therefore needs a **modeset** — the kernel asks for one, and the
+patch keeps them on across a composited frame rather than toggling. The runtime switch is the
+convar `drm_output_luts` (default on); set it explicitly (`gamescopectl drm_output_luts 0`), since
+a bare convar name *sets it false*.
+
 (A patch that once held the `0003` slot swapped `wl_output`'s `phys_width/phys_height` on the rotated
 path as a coherence fix, but HW showed it does NOT move SteamUI's auto-scale — the swap is
 diagonal-invariant and Steam keys off mm *magnitude*; the actual UI-scale fix is the panel-mm bump in

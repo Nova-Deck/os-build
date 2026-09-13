@@ -14,12 +14,33 @@
 #
 # WHAT REMAINS, AND WHY EACH ROW EARNS ITS PLACE:
 #
-#   KEY_BACK          The `...` button. The default sends it to keyboard KeyBack; it wants Steam's
-#                     quick-access panel. It emitted keyboard F1 until 2026-09-06, which is what
-#                     the deleted sm8250_retroid_mcu did too -- and when the AYN Thor Lite moved
-#                     onto upstream's ret1, whose equivalent row is gamepad QuickAccess, a press on
-#                     hardware opened QAM and settled which of the two is right. This board is the
-#                     other half of that divergence, closed.
+#   KEY_BACK          The `...` button -> Guide.
+#   BTN_MODE          The home button -> QuickAccess.
+#
+#                     THE TWO ARE SWAPPED against every other board we ship, deliberately. Do not
+#                     "fix" this back by matching upstream's ret1: the pairing is what this board
+#                     is meant to do, and reverting it is a silent behaviour change on hardware
+#                     nobody is looking at.
+#
+#                     Both rows are load-bearing, and each for a different reason. KEY_BACK's
+#                     default is keyboard KeyBack, which is not a Steam control at all. BTN_MODE's
+#                     default IS correct in isolation -- evdev.rs already translates it to Guide --
+#                     so on its own that row would be exactly the dead weight this header warns
+#                     about. It earns its place only as the other half of the swap: claim one
+#                     without the other and both buttons open the same panel.
+#
+#                     The swap is not symmetric underneath, which is worth knowing before
+#                     debugging it: on the `xbox-elite` target this config emits, QuickAccess is
+#                     not a button at all. src/input/target/xpad.rs::write_event intercepts it and
+#                     synthesises a timed Guide+South chord (Guide at 0 ms, South at 160 ms, Guide
+#                     released at 240 ms) -- the Steam QAM chord on an Xbox pad. Guide passes
+#                     through as itself. So the home button now produces a chord and the `...`
+#                     button a plain press, and a stopwatch on an evdev trace will show it.
+#
+#                     History, so the swap is not mistaken for the bug it replaced: KEY_BACK
+#                     emitted keyboard F1 until 2026-09-06, as the deleted sm8250_retroid_mcu did,
+#                     and was then pointed at QuickAccess to match ret1 when the AYN Thor Lite
+#                     moved onto it. That was right for Thor Lite. This board is not Thor Lite.
 #   ABS_HAT2X/Y       The triggers. Default capability for both is NotImplemented -- unclaimed,
 #                     they reach nothing at all.
 #   HAPPY1 / HAPPY2   The M1/M2 back buttons. The default table covers BTN_TRIGGER_HAPPY5..10 only,
@@ -48,14 +69,25 @@ name: MANGMI Pocket Max Gamepad
 id: sm8250_pocket_max_mcu
 
 mapping:
-  # The `...` button. Steam's quick-access panel, not the keyboard F1 this used to emit -- see the
-  # header. This is the only row in the file that does not simply fill a gap in the default table:
-  # KEY_BACK does translate by default, to keyboard KeyBack, which is not what the button is for.
-  - name: QuickAccess
+  # The `...` button -> Guide. Swapped with the home button below; see the header before changing
+  # either, and change both or neither.
+  - name: Guide
     source_events:
       - evdev:
           event_type: KEY
           event_code: KEY_BACK
+          value_type: button
+    target_event:
+      gamepad:
+        button: Guide
+
+  # The home button -> QuickAccess. The other half of the swap. Its default is Guide, so this row
+  # is only meaningful alongside the one above.
+  - name: QuickAccess
+    source_events:
+      - evdev:
+          event_type: KEY
+          event_code: BTN_MODE
           value_type: button
     target_event:
       gamepad:

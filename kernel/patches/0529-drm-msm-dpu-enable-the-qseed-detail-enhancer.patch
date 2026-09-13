@@ -99,13 +99,30 @@ not prove the register is valid there, only that writing it breaks nothing. If
 0x64 is reserved on 3.0 the write is simply inert, and the enhancer still runs
 without its blend weight.
 
-STILL OPEN, and it is the reason the patch is worth doubting at all: the CURVES.
-They are the hardware defaults, not a tuned choice, and whether they ring or
-over-sharpen on real upscaled content is an eyeball judgement nobody has made
-yet. Reproduce with the flag above and look for halos on text edges and noise
-amplification in flat gradients. If they are visible, tune sharpen_level1/2 and
-thr_quiet/thr_dieout, or gate DE to >= 0x3200 and take the question off the
-table for every 3.0 part.
+THE CURVES HAVE NOW BEEN LOOKED AT, and they are deliberately LEFT ALONE. Judged
+on Pocket Max at both 1.5x (max-height 720) and an exact 2x (max-height 540).
+The enhancer is unmistakably active: the image goes soft overall, as an upscale
+should, while high-contrast edges -- white on black -- stay sharp. That
+selectivity is the whole point of thr_quiet/thr_dieout, and the INTEGER scale is
+what makes it conclusive: a plain 2x resample softens everything uniformly and
+cannot leave one class of edge crisp, so the resampler is ruled out as the
+explanation. Operator verdict: not pretty, but nothing horrible. That is not
+enough to justify tuning a hardware default on one board's eyeballing, so the
+curve stays as shipped.
+
+READ THIS BEFORE CHANGING IT: Pocket Max was a TEST RIG for the above, not the
+case that matters. It never scales at its shipped settings -- the flag had to be
+forced. The board that scales in PRODUCTION is the wide SM8650 panel, which
+renders 1080p and lets the DPU upscale to 1440x2560 (~1.33x) as its normal
+configuration, on a QSEED 3.2 part. This patch has therefore been sharpening
+that board since it landed and nobody has evaluated it there. Judge it there
+before touching anything.
+
+If it does need to change, dropping de.enable while KEEPING dir_en is the
+cleanest option: the direction filter improves diagonal edges and carries no
+taste, while the enhancer is the part with the overshoot. Note a version gate
+does NOT help -- the only board that scales in production is 3.2, so gating to
+>= 0x3200 changes nothing where it matters.
 
 If that case ever turns up and misbehaves, the cheap fix is to move the DE gate to
 `>= 0x3200`. That excludes every 3.0 part and costs nothing on the boards the

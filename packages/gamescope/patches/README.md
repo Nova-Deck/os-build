@@ -159,6 +159,25 @@ in the same patch gets it right and is the control. This does not block anything
 mm still beats no EDID, and SteamUI's scale does not read it — but the fix belongs in the panel desc,
 not in this patch.
 
+**Two encoding bugs in `GenerateSimpleEdid()` were fixed 2026-09-13, and the first was silently
+costing three boards their display profile.** The detailed timing descriptor carries the sync
+offsets and widths in 10 bits horizontally but only **6 vertically**, and the generator *refused*
+any mode that exceeded that. `icna3512_modes[0]` — the **preferred** 120 Hz mode, so the one
+`find_mode()` hands the generator — has a 412-line vertical front porch, and the 60 Hz mode 2760.
+So on `ayaneo-pocket-evo`, `ayaneo-pocket-ds` and `ayn-odin-2-portal` the generator returned an
+empty vector, `ParseEDID()` bailed before ever reaching `LookupDisplay()`, and the panel got no
+profile, no wide-gamut primaries and no HDR block — indistinguishable from a board that never
+declared a peak. Those four fields are now clamped: the mode always comes from the kernel and the
+descriptor only describes it to EDID readers, so a front porch reported a few lines short is not
+worth an EDID. Second, byte 10 of the descriptor holds the vertical low nibbles and byte 11 the
+four pairs of high bits, and the two were written the other way round — harmless to the profile
+lookup, wrong for anything that decodes the timing. The existing tests missed both because none of
+them decoded a sync field; two new `[edid]` cases now do, one of them keyed on the real 412.
+
+The obvious symptom to check on hardware is a negative: `Generated synthetic EDID for EDID-less
+internal connector` should now appear in the session log on those three boards, and
+`Got known display: novadeck_internal_amoled` with it.
+
 **Its physical-size field overlaps `0003` — MEASURED, and `0003` stays.** The synthetic EDID carries
 the connector's mm (icna3520: 136x68, icna3512: 160x89, Pocket Max: 87x155), while `0003` overrides
 only what `wl_output` reports, so the two channels now carry different numbers. HW-checked on an AYN
@@ -373,6 +392,91 @@ that happens for an SDR title like Trine.
 This paragraph previously claimed no FEX/Proton title could reach native HDR. That was wrong: it
 generalised the system-FEX result to Proton, which is the opposite case. The two x86 paths have to
 be named separately every time, because the answer differs between them.
+
+`0015` — **make `BIsWideGamut()` inclusive at the threshold.** It uses the red primary as its
+sentinel and wants `r.y < 0.320f`. DCI-P3 red is exactly `(0.680, 0.320)` and that is precisely what
+`novadeck.internal-amoled.lua` declares for the whole DDIC family, so every one of our panels landed
+on the wrong side by a rounding-free tie and was classified **narrow**.
+
+**It does not make the slider dead — it points it at the wrong branch,** and the difference matters
+when reading the symptom. `buildSDRColorimetry()` has two, and both respond to the slider:
+
+| branch | SDR *source* colorimetry the slider sweeps | saturation remap |
+|---|---|---|
+| narrow (what we got) | panel native → **generic wide gamut** | full blend to unit cube from 70% sat |
+| wide (what we want) | **Rec.709** → panel native | none (`blendAmountMax = 0`) |
+
+So on a panel that genuinely has P3 to spend, the slider was declaring the content *wider than the
+display* and then spending itself compressing the excess back in, and the panel's own measured
+primaries were never an endpoint. At the shipped default of 0.5 that is the worst case: source =
+generic wide gamut plus the full smooth remap, where it should be halfway between 709 and the panel
+with no remap. One character, plus a `[color]` test that pins the boundary so a future re-roll
+cannot quietly reintroduce it. Note the test declares `BIsWideGamut()` itself: the function is not
+in `color_helpers.h`, and adding it there is a bigger change than this deserves.
+
+**Testing this on hardware needs a COMPOSITED frame.** `calcScanoutLinearScale()` (patch `0014`)
+deliberately ignores the gamut mapping and lets the frame scan out, so on the direct-scanout path
+the wideness slider has no effect *either way* and an A/B there shows nothing. Use a board that
+composites (Pocket Max) or force one with `GAMESCOPE_COMPOSITE_FORCE=1`.
+
+`0016` — **recover the virtual white point's `y` on arm64.** `GAMESCOPE_DISPLAY_VIRTUAL_WHITE` is the
+colour temperature slider's wire format and the arm64 Steam client packs it through **the same Xlib
+`format=32` LP64 fault documented on `0002`**: it hands `XChangeProperty` a `float[2] {x, y}` — 8
+bytes — and Xlib reads two 8-byte longs off it, transmitting the low half of each. Element 0 is `x`;
+element 1 is an out-of-bounds read of the client's stack.
+
+This one is worse than `0002`'s in a specific way. `calcColorTransform()` engages the chromatic
+adaptation on `destVirtualWhite.y > 0.01f`, so the overread is not merely ignored: a large positive
+stack value builds an adaptation to a **nonsense white point** and a small or negative one disables
+the slider outright, and `0002`'s investigation showed that element re-rolling per install rather
+than sitting at a constant. Both failures look like a panel problem from the outside.
+
+The pair is recoverable because Steam does not choose it freely — both coordinates come off the CIE
+daylight locus and the client's 6500 K `x` is D65's — so `x` alone fixes `y` to within 0.002 across
+the slider's range via the locus quadratic `-3x² + 2.87x - 0.275`. Element 1 is taken whenever it
+decodes as a plausible daylight `y` (0.20–0.45), which is what a **fixed** client would send, and
+derived otherwise. That makes the workaround self-disarming instead of something to remember to
+remove. `#if defined(__aarch64__)` — this is a defect in one client build, not in the property.
+
+Unlike `0002`'s hue, nothing here is destroyed beyond recovery: `x` alone determines the answer, so
+the slider genuinely works after this rather than merely stopping doing harm.
+
+**Knowing this costs a frame is part of the deal.** `calcScanoutLinearScale()` returns `nullopt`
+when a virtual white is set and is not the panel's own — a white-point adaptation is a real matrix
+and the DPU cannot carry it — so a colour temperature anywhere off neutral **forces a composite**
+and gives up direct scanout for as long as it is set. That is correct rather than regrettable; the
+alternative is applying it wrong. It also made this patch a regression until `0017` landed — see
+there, and read it before touching either.
+
+**Do NOT use the live plane count as the test signal for this** (an earlier draft of this file
+said to, and it is wrong). On a single-layer Steam UI, a composited frame and a directly scanned-out
+one BOTH present exactly one plane with `rotation=8`, because the composite output is itself scanned
+out rotated. The two are indistinguishable that way. The discriminator is the CRTC's **CTM**: with
+night mode on it reads a non-identity diagonal on the scanout path and snaps to identity the moment
+a frame composites. Plane count only separates the two when there are genuinely two layers to scan
+out, which is where the "2 planes" readings elsewhere in this project come from.
+
+`0017` — **a virtual white equal to the panel's own white keeps direct scanout.** `0014`'s
+expressibility test refuses whenever *any* virtual white point is set. Correct for an adaptation
+between two different white points; wrong for the one that ships, because the Steam client publishes
+the panel's own white whenever the colour temperature slider sits at neutral — where it sits out of
+the box — and adapting a white point to itself is the identity, which is a diagonal and therefore
+expressible. Without this, the default configuration composited **every frame** to apply a transform
+that does nothing.
+
+**It was latent in `0014` from the start and `0016` is what made it reachable**: before `0016` the
+arm64 client's `y` arrived as a zero overread, so the gate never fired. Any correctly-packing client
+would have tripped it too. Caught on Pocket ACE 2026-09-13 — night mode at 0.5/0.95 with the client's
+own virtual white left the CTM at identity, and clearing the virtual white *alone* brought back
+`diag(1.0, 0.72315, 0.52500)`, matching `hsv_to_rgb(25°, 0.475, 1.0) = (1.0, 0.72292, 0.525)` to 2e-4.
+
+**The tolerance is measured, and both bounds are pinned in a test.** An exact comparison does not
+work: on a board with no display profile the panel white is the synthetic EDID's 10-bit quantised
+D65, `0.3125000`, against the client's neutral `0.3127789` — a gap of **2.8e-4**. One notch of the
+slider moves x by **7.4e-3**, twenty-six times that. `0.001` sits 3.6× above the gap and 7.4× below a
+notch. Do not widen it toward the notch or narrow it toward the quantisation gap without re-measuring;
+`tests/test_drm_color_pipeline.cpp` asserts the neutral value is expressible and the one-notch value
+is not, using the measured numbers.
 
 (A patch that once held the `0003` slot swapped `wl_output`'s `phys_width/phys_height` on the rotated
 path as a coherence fix, but HW showed it does NOT move SteamUI's auto-scale — the swap is

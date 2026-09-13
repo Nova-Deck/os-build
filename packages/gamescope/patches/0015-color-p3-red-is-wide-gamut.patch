@@ -1,0 +1,109 @@
+From: virtudude <virtudude@protonmail.com>
+Subject: [PATCH] color: a DCI-P3 red counts as wide gamut
+
+BIsWideGamut() uses the red primary as its sentinel and takes a red y strictly
+below 0.320 as the sign of a wide-gamut panel. DCI-P3 red is exactly
+(0.680, 0.320), so a panel described with P3 primaries lands precisely on the
+threshold and is classified narrow.
+
+That is every one of our internal AMOLEDs: the display profile declares P3
+primaries for the whole DDIC family. The effect is not that the SDR gamut
+wideness slider goes dead -- both branches of buildSDRColorimetry() respond to
+it -- but that it drives the wrong one:
+
+  narrow branch (what we get)   source lerps PANEL NATIVE -> GENERIC WIDE GAMUT,
+                                with a full blend-to-unit-cube saturation remap
+  wide branch (what we want)    source lerps REC.709 -> PANEL NATIVE, no remap
+
+So on a panel that genuinely has P3 to spend, the slider declares the content
+WIDER than the display and then spends itself compressing the excess back in,
+and the panel's own measured primaries are never an endpoint at all. At the
+shipped default of 0.5 that is the worst of it: source = generic wide gamut plus
+the full smooth remap, where it should be halfway between 709 and the panel with
+no remap. Make the comparison inclusive, and pin the boundary with a test.
+
+The one-character fix is virtudude's. The two-branch reading above and the
+[color] test are ours.
+
+diff --git a/src/color_helpers.cpp b/src/color_helpers.cpp
+index 6459ef2..0aba314 100644
+--- a/src/color_helpers.cpp
++++ b/src/color_helpers.cpp
+@@ -925,8 +925,12 @@ std::optional<glm::vec3> calcScanoutLinearScale(
+ 
+ bool BIsWideGamut( const displaycolorimetry_t & nativeDisplayOutput )
+ {
+-    // Use red as a sentinal for a wide-gamut display
+-    return ( nativeDisplayOutput.primaries.r.x > 0.650f && nativeDisplayOutput.primaries.r.y < 0.320f );
++    // Use red as a sentinal for a wide-gamut display. The bound has to be inclusive:
++    // DCI-P3 red is exactly (0.680, 0.320), so every panel profiled with P3 primaries --
++    // which is how our internal AMOLEDs are described -- lands precisely on it and would
++    // otherwise be called narrow, leaving the SDR gamut wideness slider to clip instead of
++    // mapping between Rec.709 and the native gamut.
++    return ( nativeDisplayOutput.primaries.r.x > 0.650f && nativeDisplayOutput.primaries.r.y <= 0.320f );
+ }
+ 
+ void buildSDRColorimetry( displaycolorimetry_t * pColorimetry, colormapping_t *pMapping,
+diff --git a/tests/meson.build b/tests/meson.build
+index 1cd9177..10f04f6 100644
+--- a/tests/meson.build
++++ b/tests/meson.build
+@@ -11,7 +11,7 @@ unittest_src += srcdir / 'color_helpers.cpp'
+ 
+ gamescope_tests = executable(
+ 	'gamescope_tests',
+-	unittest_src + ['test_client_format_policy.cpp', 'test_convar.cpp', 'test_display_lookup.cpp', 'test_drm_color_pipeline.cpp', 'test_drm_composition.cpp', 'test_edid.cpp', 'test_process.cpp', 'test_utils_parsers.cpp', 'test_utils_string.cpp'],
++	unittest_src + ['test_client_format_policy.cpp', 'test_color_gamut.cpp', 'test_convar.cpp', 'test_display_lookup.cpp', 'test_drm_color_pipeline.cpp', 'test_drm_composition.cpp', 'test_edid.cpp', 'test_process.cpp', 'test_utils_parsers.cpp', 'test_utils_string.cpp'],
+ 	include_directories: [srcdir, sol2_include],
+ 	dependencies: [catch2_dep, luajit_dep, cap_dep, displayinfo_dep, drm_dep, glm_dep, wlroots_dep],
+ 	cpp_args: gamescope_cpp_args,
+@@ -19,6 +19,7 @@ gamescope_tests = executable(
+ 
+ reaper_test_helper = executable('reaper_test_helper', 'reaper_test_helper.cpp')
+ 
++test('color', gamescope_tests, args: ['[color]'])
+ test('convar', gamescope_tests, args: ['[convar]'])
+ test('display', gamescope_tests, args: ['[display]'])
+ test('drm', gamescope_tests, args: ['[drm]'])
+diff --git a/tests/test_color_gamut.cpp b/tests/test_color_gamut.cpp
+new file mode 100644
+index 0000000..06540c7
+--- /dev/null
++++ b/tests/test_color_gamut.cpp
+@@ -0,0 +1,36 @@
++#include <catch2/catch_test_macros.hpp>
++
++#include "color_helpers.h"
++
++// Defined in color_helpers.cpp, which the test binary already links; the header
++// does not declare it because buildSDRColorimetry() is its only other caller.
++bool BIsWideGamut( const displaycolorimetry_t & nativeDisplayOutput );
++
++namespace
++{
++    displaycolorimetry_t WithRed( float flRedX, float flRedY )
++    {
++        displaycolorimetry_t colorimetry = displaycolorimetry_709;
++        colorimetry.primaries.r = { flRedX, flRedY };
++        return colorimetry;
++    }
++}
++
++TEST_CASE("A DCI-P3 red counts as wide gamut", "[color]")
++{
++    // Exactly the P3 red our internal AMOLED profile declares. It sits on the
++    // threshold, so an exclusive comparison calls the panel narrow and the SDR
++    // gamut wideness slider only clips instead of mapping 709 to the native gamut.
++    CHECK( BIsWideGamut( WithRed( 0.680f, 0.320f ) ) );
++}
++
++TEST_CASE("Narrow and wide reds fall the right side of the gamut test", "[color]")
++{
++    CHECK_FALSE( BIsWideGamut( displaycolorimetry_709 ) );
++
++    // Rec.2020 red, comfortably past the threshold in both coordinates.
++    CHECK( BIsWideGamut( WithRed( 0.708f, 0.292f ) ) );
++
++    // A red y low enough on its own is not sufficient: the x still has to be wide.
++    CHECK_FALSE( BIsWideGamut( WithRed( 0.640f, 0.300f ) ) );
++}

@@ -7,11 +7,20 @@ baseline EDID from the connector preferred kernel mode (sRGB chromaticity,
 no HDR) and feed it through the existing parser. Physical EDIDs stay
 preferred and unchanged; the synthetic EDID is never committed to KMS.
 
+The detailed timing descriptor carries the sync offsets and widths in 10 bits
+horizontally and 6 vertically, which a DSI command-mode panel will exceed: the
+ICNA3512's preferred mode has a 412-line vertical front porch. Clamp those four
+fields rather than refuse the mode -- failing there returns no EDID at all, so
+the connector loses its display profile and falls back to sRGB, which is a far
+worse answer than a front porch an EDID reader will misread by a few lines.
+Byte 10 of the descriptor holds the vertical low nibbles and byte 11 the four
+pairs of high bits, not the other way round. Both are covered by tests.
+
 diff --git a/src/Backends/DRMBackend.cpp b/src/Backends/DRMBackend.cpp
-index a7ee5fda3a7cb974258f3a9427f20c75e4d2a386..fb0407672b797ff30631e33bf9811b2f1aa99b3e 100644
+index 458ad5e..3794510 100644
 --- a/src/Backends/DRMBackend.cpp
 +++ b/src/Backends/DRMBackend.cpp
-@@ -393,6 +393,7 @@ namespace gamescope
+@@ -404,6 +404,7 @@ namespace gamescope
  		const displaycolorimetry_t& GetDisplayColorimetry() const { return m_Mutable.DisplayColorimetry; }
  
  		std::span<const uint8_t> GetRawEDID() const override { return std::span<const uint8_t>{ m_Mutable.EdidData.begin(), m_Mutable.EdidData.end() }; }
@@ -19,7 +28,7 @@ index a7ee5fda3a7cb974258f3a9427f20c75e4d2a386..fb0407672b797ff30631e33bf9811b2f
  		bool HandleEdidChange()
  		{
  			bool bChanged = m_Mutable.bEdidChanged;
-@@ -514,7 +515,8 @@ namespace gamescope
+@@ -525,7 +526,8 @@ namespace gamescope
  			const char *pszMake = ""; // Not owned, no free. This is a pointer to pnp db or szMakePNP.
  			DRMModeGenerator fnDynamicModeGenerator;
  			std::vector<uint32_t> ValidDynamicRefreshRates{};
@@ -29,7 +38,7 @@ index a7ee5fda3a7cb974258f3a9427f20c75e4d2a386..fb0407672b797ff30631e33bf9811b2f
  			std::vector<BackendMode> BackendModes;
  			
  			displaycolorimetry_t DisplayColorimetry = displaycolorimetry_709;
-@@ -2267,20 +2269,54 @@ namespace gamescope
+@@ -2371,20 +2373,54 @@ namespace gamescope
  
  	void CDRMConnector::ParseEDID()
  	{
@@ -96,7 +105,7 @@ index a7ee5fda3a7cb974258f3a9427f20c75e4d2a386..fb0407672b797ff30631e33bf9811b2f
  		di_info *pInfo = di_info_parse_edid( m_Mutable.EdidData.data(), m_Mutable.EdidData.size() );
  		if ( !pInfo )
 diff --git a/src/edid.cpp b/src/edid.cpp
-index 6215829313a865d39e361c5d913747044237ef6f..4ecd80b18e8cb9d8bdd9cc0930a9708e77362636 100644
+index 6215829..7b8dec0 100644
 --- a/src/edid.cpp
 +++ b/src/edid.cpp
 @@ -4,8 +4,10 @@
@@ -110,7 +119,7 @@ index 6215829313a865d39e361c5d913747044237ef6f..4ecd80b18e8cb9d8bdd9cc0930a9708e
  #include <cstring>
  #include <cstdlib>
  
-@@ -355,4 +357,112 @@ namespace gamescope
+@@ -355,4 +357,118 @@ namespace gamescope
  
          return edid;
      }
@@ -135,16 +144,21 @@ index 6215829313a865d39e361c5d913747044237ef6f..4ecd80b18e8cb9d8bdd9cc0930a9708e
 +
 +        const uint32_t hblank = mode.htotal - mode.hdisplay;
 +        const uint32_t vblank = mode.vtotal - mode.vdisplay;
-+        const uint32_t hsyncOffset = mode.hsyncStart - mode.hdisplay;
-+        const uint32_t hsyncWidth = mode.hsyncEnd - mode.hsyncStart;
-+        const uint32_t vsyncOffset = mode.vsyncStart - mode.vdisplay;
-+        const uint32_t vsyncWidth = mode.vsyncEnd - mode.vsyncStart;
-+        if ( !hblank || hblank > 4095 || !vblank || vblank > 4095 ||
-+             hsyncOffset > 1023 || !hsyncWidth || hsyncWidth > 1023 ||
-+             vsyncOffset > 63 || !vsyncWidth || vsyncWidth > 63 )
-+        {
++        if ( !hblank || hblank > 4095 || !vblank || vblank > 4095 )
 +            return {};
-+        }
++
++        // The DTD carries the sync offsets and widths in 10 bits horizontally and only
++        // 6 vertically, and DSI command-mode panels routinely blow past that: the
++        // ICNA3512's preferred 120Hz mode has a 412-line vertical front porch, and its
++        // 60Hz mode 2760. Refusing to describe such a mode would cost the whole EDID --
++        // and with it the display profile and every piece of colorimetry that hangs off
++        // it -- to save a field nothing reads for anything that matters. The mode itself
++        // always comes from the kernel; these bytes only tell an EDID reader roughly how
++        // the line is spent. So clamp rather than fail.
++        const uint32_t hsyncOffset = std::min<uint32_t>( mode.hsyncStart - mode.hdisplay, 1023 );
++        const uint32_t hsyncWidth = std::clamp<uint32_t>( mode.hsyncEnd - mode.hsyncStart, 1, 1023 );
++        const uint32_t vsyncOffset = std::min<uint32_t>( mode.vsyncStart - mode.vdisplay, 63 );
++        const uint32_t vsyncWidth = std::clamp<uint32_t>( mode.vsyncEnd - mode.vsyncStart, 1, 63 );
 +
 +        const uint32_t pixelClock10KHz = ( mode.clockKHz + 5 ) / 10;
 +        if ( !pixelClock10KHz || pixelClock10KHz > UINT16_MAX )
@@ -164,11 +178,12 @@ index 6215829313a865d39e361c5d913747044237ef6f..4ecd80b18e8cb9d8bdd9cc0930a9708e
 +        dtd[7] = ( ( mode.vdisplay >> 8 ) << 4 ) | ( vblank >> 8 );
 +        dtd[8] = hsyncOffset & 0xff;
 +        dtd[9] = hsyncWidth & 0xff;
-+        dtd[10] = ( ( hsyncOffset >> 8 ) << 6 ) |
++        // Byte 10 holds the vertical low nibbles, byte 11 the four pairs of high bits.
++        dtd[10] = ( ( vsyncOffset & 0xf ) << 4 ) | ( vsyncWidth & 0xf );
++        dtd[11] = ( ( hsyncOffset >> 8 ) << 6 ) |
 +                  ( ( hsyncWidth >> 8 ) << 4 ) |
 +                  ( ( vsyncOffset >> 4 ) << 2 ) |
 +                    ( vsyncWidth >> 4 );
-+        dtd[11] = ( ( vsyncOffset & 0xf ) << 4 ) | ( vsyncWidth & 0xf );
 +        dtd[12] = widthMm & 0xff;
 +        dtd[13] = heightMm & 0xff;
 +        dtd[14] = ( ( widthMm >> 8 ) << 4 ) | ( heightMm >> 8 );
@@ -224,7 +239,7 @@ index 6215829313a865d39e361c5d913747044237ef6f..4ecd80b18e8cb9d8bdd9cc0930a9708e
 +    }
  }
 diff --git a/src/edid.h b/src/edid.h
-index d0ed88f460d516374efa71e95d6393623e08ff7c..0cc7e74acc428f7faf91ca15a769115b4ae0b46e 100644
+index d0ed88f..0cc7e74 100644
 --- a/src/edid.h
 +++ b/src/edid.h
 @@ -9,9 +9,27 @@ namespace gamescope
@@ -258,7 +273,7 @@ index d0ed88f460d516374efa71e95d6393623e08ff7c..0cc7e74acc428f7faf91ca15a769115b
 \ No newline at end of file
 +}
 diff --git a/tests/meson.build b/tests/meson.build
-index c74aef1baf50681066cece2fc73dd74c835f5608..214bebdb07b6d5f20a0e5c11144530c7150d7b22 100644
+index e2667ea..71693de 100644
 --- a/tests/meson.build
 +++ b/tests/meson.build
 @@ -5,18 +5,20 @@ unittest_src = []
@@ -266,7 +281,7 @@ index c74aef1baf50681066cece2fc73dd74c835f5608..214bebdb07b6d5f20a0e5c11144530c7
  	unittest_src += srcdir / src
  endforeach
 +unittest_src += srcdir / 'edid.cpp'
-
+ 
  gamescope_tests = executable(
  	'gamescope_tests',
 -	unittest_src + ['test_convar.cpp', 'test_process.cpp', 'test_utils_parsers.cpp', 'test_utils_string.cpp'],
@@ -276,9 +291,9 @@ index c74aef1baf50681066cece2fc73dd74c835f5608..214bebdb07b6d5f20a0e5c11144530c7
 +	dependencies: [catch2_dep, luajit_dep, cap_dep, displayinfo_dep, drm_dep, glm_dep, wlroots_dep],
  	cpp_args: gamescope_cpp_args,
  )
-
+ 
  reaper_test_helper = executable('reaper_test_helper', 'reaper_test_helper.cpp')
-
+ 
  test('convar', gamescope_tests, args: ['[convar]'])
 +test('edid', gamescope_tests, args: ['[edid]'])
  test('utils/parsers', gamescope_tests, args: ['[parsers]'])
@@ -286,10 +301,10 @@ index c74aef1baf50681066cece2fc73dd74c835f5608..214bebdb07b6d5f20a0e5c11144530c7
  test('utils/string', gamescope_tests, args: ['[string]'])
 diff --git a/tests/test_edid.cpp b/tests/test_edid.cpp
 new file mode 100644
-index 0000000000000000000000000000000000000000..144111ec13f840f5b527895eae2c7581cf235959
+index 0000000..23aff98
 --- /dev/null
 +++ b/tests/test_edid.cpp
-@@ -0,0 +1,136 @@
+@@ -0,0 +1,178 @@
 +#include <catch2/catch_test_macros.hpp>
 +
 +#include "edid.h"
@@ -420,9 +435,51 @@ index 0000000000000000000000000000000000000000..144111ec13f840f5b527895eae2c7581
 +    mode = k_Odin3Mode;
 +    mode.htotal = mode.hdisplay;
 +    REQUIRE( GenerateSimpleEdid( mode ).empty() );
++}
++
++TEST_CASE("Synthetic EDID clamps sync porches it cannot describe", "[edid]")
++{
++    // The ICNA3512's preferred 120Hz mode: a 412-line vertical front porch, far past
++    // the DTD's 6 bits. It must still produce a parseable EDID, or the boards carrying
++    // that panel lose their display profile entirely.
++    EdidModeInfo mode = k_Odin3Mode;
++    mode.vsyncStart = mode.vdisplay + 412;
++    mode.vsyncEnd = mode.vsyncStart + 1;
++    mode.vtotal = mode.vsyncEnd + 15;
++
++    std::vector<uint8_t> edid = GenerateSimpleEdid( mode );
++    REQUIRE( edid.size() == 256 );
++
++    const uint8_t *dtd = &edid[0x36];
++    const uint32_t vsyncOffset = ( ( dtd[10] >> 4 ) & 0xf ) | ( ( ( dtd[11] >> 2 ) & 0x3 ) << 4 );
++    CHECK( vsyncOffset == 63 );
++
++    di_info *info = di_info_parse_edid( edid.data(), edid.size() );
++    REQUIRE( info != nullptr );
++    di_info_destroy( info );
 +
 +    mode = k_Odin3Mode;
 +    mode.vsyncEnd = mode.vsyncStart + 64;
 +    mode.vtotal = mode.vsyncEnd + 1;
-+    REQUIRE( GenerateSimpleEdid( mode ).empty() );
++    edid = GenerateSimpleEdid( mode );
++    REQUIRE( edid.size() == 256 );
++    dtd = &edid[0x36];
++    CHECK( ( ( dtd[10] & 0xf ) | ( ( dtd[11] & 0x3 ) << 4 ) ) == 63 );
++}
++
++TEST_CASE("Synthetic EDID encodes sync timings in the correct DTD bytes", "[edid]")
++{
++    const std::vector<uint8_t> edid = GenerateSimpleEdid( k_Odin3Mode );
++    REQUIRE( edid.size() == 256 );
++
++    const uint8_t *dtd = &edid[0x36];
++    const uint32_t hsyncOffset = dtd[8] | ( ( dtd[11] >> 6 ) << 8 );
++    const uint32_t hsyncWidth  = dtd[9] | ( ( ( dtd[11] >> 4 ) & 0x3 ) << 8 );
++    const uint32_t vsyncOffset = ( ( dtd[10] >> 4 ) & 0xf ) | ( ( ( dtd[11] >> 2 ) & 0x3 ) << 4 );
++    const uint32_t vsyncWidth  = ( dtd[10] & 0xf ) | ( ( dtd[11] & 0x3 ) << 4 );
++
++    CHECK( hsyncOffset == k_Odin3Mode.hsyncStart - k_Odin3Mode.hdisplay );
++    CHECK( hsyncWidth  == k_Odin3Mode.hsyncEnd - k_Odin3Mode.hsyncStart );
++    CHECK( vsyncOffset == k_Odin3Mode.vsyncStart - k_Odin3Mode.vdisplay );
++    CHECK( vsyncWidth  == k_Odin3Mode.vsyncEnd - k_Odin3Mode.vsyncStart );
 +}

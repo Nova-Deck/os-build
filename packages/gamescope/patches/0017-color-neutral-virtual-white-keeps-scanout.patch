@@ -1,0 +1,133 @@
+From: Philippe Simons <simons.philippe@gmail.com>
+Subject: [PATCH] color: a virtual white equal to the panel white keeps scanout
+
+calcScanoutLinearScale() refuses whenever a virtual white point is set, on the
+grounds that a chromatic adaptation is a real matrix and the DPU cannot carry
+one. That is right for an adaptation between two DIFFERENT white points and
+wrong for the case that actually ships: the Steam client publishes the panel's
+own white whenever the colour temperature slider sits at neutral, which is where
+it sits out of the box, and adapting a white point to itself is the identity --
+a diagonal, and therefore expressible.
+
+So the default configuration composited every frame in order to apply a
+transform that does nothing, surrendering exactly what DPU inline rotation and
+0014 were built to keep.
+
+CAUGHT ON HARDWARE, Pocket ACE, and it only became reachable with 0016: before
+that the arm64 client's y arrived as a zero overread and the gate never fired,
+so this was latent in 0014 from the start and would equally have fired for any
+client that packs the property correctly. Night mode at 0.5/0.95 with the client's
+own virtual white left the CRTC's CTM at identity; clearing the virtual white
+alone brought back diag(1.0, 0.72315, 0.52500), which is hsv_to_rgb(25deg, 0.475,
+1.0) = (1.0, 0.72292, 0.525) to 2e-4.
+
+THE TOLERANCE IS MEASURED, NOT CHOSEN. The panel white and the client's neutral
+are not bit-identical -- on a board with no display profile the panel white is
+the synthetic EDID's 10-bit quantised D65, 0.3125000 against the client's
+0.3127789, a gap of 2.8e-4 -- so an exact comparison would not fire. One notch
+of the slider moves x by 7.4e-3, twenty-six times that gap. 0.001 sits 3.6x above
+the gap and 7.4x below a notch, so it can neither miss neutral nor swallow the
+slider's first step. Both bounds are pinned in a test using the measured values.
+
+A real adjustment still composites, and that remains correct rather than a
+compromise: an adaptation between different white points is not diagonal in the
+panel's RGB space and genuinely cannot go in the CTM.
+
+diff --git a/src/color_helpers.cpp b/src/color_helpers.cpp
+index 0aba314..bddf2b5 100644
+--- a/src/color_helpers.cpp
++++ b/src/color_helpers.cpp
+@@ -896,11 +896,32 @@ std::optional<glm::vec3> calcScanoutLinearScale(
+     // carry this even approximately.
+     (void)mapping;
+     (void)source;
+-    (void)dest;
+ 
+-    // The virtual white point adaptation is a real matrix; we only handle its
+-    // disabled case. Same condition calcColorTransform() uses to skip it.
+-    if ( destVirtualWhite.x > 0.01f && destVirtualWhite.y > 0.01f )
++    // The virtual white point adaptation is a real matrix, so we only handle the cases
++    // where it is not actually a transform. There are two, and the second one is the
++    // whole shipped default.
++    //
++    // The first is an UNSET white point -- the same condition calcColorTransform() uses
++    // to skip the adaptation entirely.
++    //
++    // The second is a white point equal to THE PANEL'S OWN, which is the identity
++    // adaptation, and the identity is a diagonal, so it is expressible. This is not an
++    // exotic case: the Steam client publishes the panel's white whenever the colour
++    // temperature slider sits at neutral, which is where it sits out of the box. Without
++    // this clause every frame of the default configuration composites in order to apply
++    // a transform that does nothing -- surrendering exactly what inline rotation and this
++    // function were built to keep. Measured on Pocket ACE, which is where it was caught:
++    // the client sends x = 0.3127789 against a synthetic-EDID panel white of 0.3125000,
++    // a gap of 2.8e-4, while ONE notch of the slider moves x by 7.4e-3. The tolerance
++    // below sits 3.6x above the gap and 7.4x below a notch, so it can neither miss
++    // neutral nor swallow a real adjustment.
++    constexpr float k_flVirtualWhiteNeutralEpsilon = 0.001f;
++    const bool bVirtualWhiteSet =
++        destVirtualWhite.x > 0.01f && destVirtualWhite.y > 0.01f;
++    const bool bVirtualWhiteIsPanelWhite =
++        std::fabs( destVirtualWhite.x - dest.white.x ) < k_flVirtualWhiteNeutralEpsilon &&
++        std::fabs( destVirtualWhite.y - dest.white.y ) < k_flVirtualWhiteNeutralEpsilon;
++    if ( bVirtualWhiteSet && !bVirtualWhiteIsPanelWhite )
+         return std::nullopt;
+ 
+     (void)eMethod;
+diff --git a/tests/test_drm_color_pipeline.cpp b/tests/test_drm_color_pipeline.cpp
+index bef6ff8..d63dedf 100644
+--- a/tests/test_drm_color_pipeline.cpp
++++ b/tests/test_drm_color_pipeline.cpp
+@@ -152,6 +152,52 @@ TEST_CASE("tonemapping and look luts are not expressible", "[drm][color]")
+     REQUIRE_FALSE( oScale.has_value() );
+ }
+ 
++TEST_CASE("a virtual white equal to the panel white is expressible", "[drm][color]")
++{
++    tonemapping_t tonemapping{};
++    tonemapping.bUseShaper = true;
++    tonemapping.g22_luminance = 1.f;
++    tonemapping.eOperator = ETonemapOperator_None;
++
++    // Adapting a white point to itself is the identity, and the identity is a
++    // diagonal. Refusing it would composite the entire default configuration.
++    auto oScale = calcScanoutLinearScale( displaycolorimetry_709, EOTF_Gamma22,
++        displaycolorimetry_709, EOTF_Gamma22,
++        displaycolorimetry_709.white, k_EChromaticAdapatationMethod_Bradford,
++        MakeSmoothRemap(), MakeNightMode( 0.f, 25.f / 360.f, 1.f ), tonemapping, nullptr, 1.f );
++
++    REQUIRE( oScale.has_value() );
++}
++
++TEST_CASE("the neutral slider is expressible and one notch off it is not", "[drm][color]")
++{
++    tonemapping_t tonemapping{};
++    tonemapping.bUseShaper = true;
++    tonemapping.g22_luminance = 1.f;
++    tonemapping.eOperator = ETonemapOperator_None;
++
++    // Measured on Pocket ACE. The panel white is the synthetic EDID's quantised D65,
++    // which is NOT bit-identical to what the client sends at neutral -- the gap is
++    // 2.8e-4 -- while one notch of the slider moves x by 7.4e-3. Both sides of the
++    // tolerance are pinned here so a future change cannot widen it into the slider's
++    // first step or narrow it below the quantisation gap.
++    displaycolorimetry_t panel = displaycolorimetry_709;
++    panel.white = glm::vec2( 0.3125000f, 0.3291020f );
++
++    const glm::vec2 vNeutral( 0.3127789f, 0.3291835f );
++    const glm::vec2 vOneNotch( 0.3053575f, 0.3216464f );
++
++    auto oNeutral = calcScanoutLinearScale( displaycolorimetry_709, EOTF_Gamma22,
++        panel, EOTF_Gamma22, vNeutral, k_EChromaticAdapatationMethod_Bradford,
++        MakeSmoothRemap(), MakeNightMode( 0.f, 25.f / 360.f, 1.f ), tonemapping, nullptr, 1.f );
++    REQUIRE( oNeutral.has_value() );
++
++    auto oOneNotch = calcScanoutLinearScale( displaycolorimetry_709, EOTF_Gamma22,
++        panel, EOTF_Gamma22, vOneNotch, k_EChromaticAdapatationMethod_Bradford,
++        MakeSmoothRemap(), MakeNightMode( 0.f, 25.f / 360.f, 1.f ), tonemapping, nullptr, 1.f );
++    REQUIRE_FALSE( oOneNotch.has_value() );
++}
++
+ TEST_CASE("a virtual white point is not expressible", "[drm][color]")
+ {
+     tonemapping_t tonemapping{};

@@ -1,0 +1,72 @@
+From: virtudude <virtudude@protonmail.com>
+Subject: [PATCH] steamcompmgr: recover the virtual white point's y on arm64
+
+GAMESCOPE_DISPLAY_VIRTUAL_WHITE is the colour temperature slider's wire format,
+and the arm64 Steam client packs it through the same Xlib format=32 LP64 fault
+already documented on GAMESCOPE_COLOR_NIGHT_MODE. The client hands
+XChangeProperty a float[2] {x, y} -- 8 bytes -- and Xlib reads two 8-byte longs
+off it and transmits the low half of each, so element 0 is x and element 1 is an
+out-of-bounds read of the client's stack rather than y.
+
+Nothing downstream can tell the difference. calcColorTransform() engages the
+chromatic adaptation on `y > 0.01`, so whichever way the overread falls the
+slider is wrong: a large positive stack value builds an adaptation to a nonsense
+white point, and a small or negative one disables the slider outright. The night
+mode atom showed the same element re-rolling per install rather than sitting at
+a constant, so neither outcome is stable enough to treat as the normal case.
+
+The pair is recoverable because Steam does not pick it freely -- both coordinates
+come off the CIE daylight locus, and the client's 6500K x is D65's -- so x alone
+fixes y to within 0.002 across the slider's range through the locus quadratic.
+Take element 1 whenever it decodes as a plausible daylight y, which is what a
+fixed client would send, and derive it otherwise. That makes the workaround
+self-disarming rather than something to remember to remove.
+
+Guarded to arm64: this is a defect in the arm64 Steam client's packing, not in
+the property, and the x86 client sends the pair correctly.
+
+The packing analysis and the daylight-locus recovery are virtudude's. The
+acceptance test for element 1 is ours and is deliberately wider than the
+original, which only treats a y at or below 0.01 as missing: that catches the
+half of the failure where the overread lands small or negative, and leaves the
+half where a large positive stack value builds an adaptation to a nonsense white
+point. Requiring a plausible daylight y covers both.
+
+diff --git a/src/steamcompmgr.cpp b/src/steamcompmgr.cpp
+index 8672ae7..e237630 100644
+--- a/src/steamcompmgr.cpp
++++ b/src/steamcompmgr.cpp
+@@ -6819,6 +6819,33 @@ handle_property_notify(xwayland_ctx_t *ctx, XPropertyEvent *ev)
+ 		{
+ 			g_ColorMgmt.pending.outputVirtualWhite.x = santitize_float( bit_cast<float>( user_vec[0] ) );
+ 			g_ColorMgmt.pending.outputVirtualWhite.y = santitize_float( bit_cast<float>( user_vec[1] ) );
++
++#if defined(__aarch64__)
++			// novadeck: the arm64 Steam client hits the same Xlib format=32 LP64 packing fault
++			// documented at length on GAMESCOPE_COLOR_NIGHT_MODE above. The client hands
++			// XChangeProperty a float[2] {x, y} -- 8 bytes -- and Xlib reads two 8-byte longs
++			// off it, transmitting the low half of each:
++			//     long[0] = {x, y}          -> low half = x
++			//     long[1] = past the buffer -> whatever the client's stack held
++			// So element 1 is NOT the white point's y, it is an out-of-bounds read. Left alone
++			// it is worse than useless: the adaptation below engages on y > 0.01, so a stack
++			// value that happens to be a large positive float builds a chromatic adaptation to
++			// a nonsense white point, and one that happens to be small or negative disables the
++			// colour temperature slider entirely. Either way the slider never does what the UI
++			// says it does.
++			//
++			// The pair is recoverable because Steam does not choose it freely: both coordinates
++			// come off the CIE daylight locus, and its 6500K x is D65's. So x alone determines
++			// y to within 0.002 across the slider's range via the locus quadratic. Take element
++			// 1 only when it decodes as a plausible daylight y -- which is what a client that
++			// has been fixed would send, making this self-disarming -- and otherwise derive it.
++			{
++				const float x = g_ColorMgmt.pending.outputVirtualWhite.x;
++				const float y = g_ColorMgmt.pending.outputVirtualWhite.y;
++				if ( x >= 0.25f && x <= 0.55f && !( y >= 0.20f && y <= 0.45f ) )
++					g_ColorMgmt.pending.outputVirtualWhite.y = -3.0f * x * x + 2.87f * x - 0.275f;
++			}
++#endif
+ 		}
+ 		else
+ 		{

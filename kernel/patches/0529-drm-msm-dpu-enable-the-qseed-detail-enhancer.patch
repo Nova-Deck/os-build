@@ -53,6 +53,64 @@ resolution reaching the plane without a compositor pass first.
 So: the plumbing is HW-clean, the sharpening is unproven. When a scaling case does
 appear, look for over-sharpening or ringing on upscaled content before trusting
 the curve; these are the hardware's default values, not a tuned choice.
+
+SM8250 NOW COVERED FOR THE NON-SCALING PATH, 2026-09-13, image 20260913T180307Z.
+The gate above used Pocket ACE, Pocket FIT and Pocket S2 -- every one of them
+SM8550 or SM8650 -- so nothing had exercised a 3.0 scaler. Pocket Max and AYN
+Thor Lite have now both booted this patch with their displays up and no
+regression. Both are QSEED 3.0 (dpu_vig_sblk_qseed3_3_0), so the DIR_FILTER_WEIGHT
+write past the 0x2004 gate -- which runs on EVERY atomic commit, scaling or not --
+is clean on 3.0 as well as on 3.2/3.3.
+
+THE 3.0 CUTOFF FOR DE_LPF_BLEND IS AN ASSERTION, NOT A CITATION -- read this
+before widening it. The `scaler_version >= 0x3000` gate says the register exists
+from QSEED revision 3.0, and no source available to this tree confirms that: the
+hardware documentation is not public, and the revision at which 0x64 becomes
+valid could equally be 3.2. The claim has been disputed elsewhere, on the grounds
+that a 3.0 scaler predates the register entirely. Nobody in either direction has
+produced a datasheet.
+
+What keeps that from being urgent is the placement: the write sits INSIDE
+`if (de.enable)`, and de.enable is only set by the src != dst branch below. So on
+a 3.0 part the contested register is untouched until something actually
+resamples. The exposure is exactly "a scaling plane on SM8250".
+
+THE SCALING CASE HAS NOW RUN ON A 3.0 SCALER -- POCKET MAX, 2026-09-13. At its
+shipped settings that board never scales: the compositor renders at the panel's
+own size and the live plane reads src-pos 1080x1920 against crtc-pos 1080x1920,
+so the branch below is false and 0x64 is never written. That is a property of
+the configuration, not of the hardware, and the compositor already carries the
+flag that changes it -- the one that clamps the logical output on a rotated
+panel and lets the plane upscale, used in production on the wide SM8650 panel.
+Pointing it at 720 lines on Pocket Max gives
+
+    logical output 1920x1080 -> 1280x720, plane upscales to the 1080x1920 mode
+    plane[59]  src-pos = 720x1280    crtc-pos = 1080x1920   <- scaling, 1.5x
+    plane[89]  src-pos = 1080x1920   crtc-pos = 1080x1920   <- 1:1, untouched
+
+so de.enable, dir_en and dir_weight are all set on a QSEED 3.0 part and 0x64 IS
+written. Result: dmesg clean -- no DPU errors, no underruns, no timeouts, no
+wedge -- with the display up and scanning out the scaled plane. The two planes
+above also show the src != dst gate discriminating correctly per-plane.
+
+So the "3.0 predates DE_LPF_BLEND" worry does not show up as a safety problem on
+3.0. Be precise about what that does and does not establish: a clean dmesg does
+not prove the register is valid there, only that writing it breaks nothing. If
+0x64 is reserved on 3.0 the write is simply inert, and the enhancer still runs
+without its blend weight.
+
+STILL OPEN, and it is the reason the patch is worth doubting at all: the CURVES.
+They are the hardware defaults, not a tuned choice, and whether they ring or
+over-sharpen on real upscaled content is an eyeball judgement nobody has made
+yet. Reproduce with the flag above and look for halos on text edges and noise
+amplification in flat gradients. If they are visible, tune sharpen_level1/2 and
+thr_quiet/thr_dieout, or gate DE to >= 0x3200 and take the question off the
+table for every 3.0 part.
+
+If that case ever turns up and misbehaves, the cheap fix is to move the DE gate to
+`>= 0x3200`. That excludes every 3.0 part and costs nothing on the boards the
+sharpening was wanted for, which are all 3.2 or later. Do not widen the gate below
+3.0 without a register map.
 --- a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_util.h
 +++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_util.h
 @@ -66,6 +66,7 @@

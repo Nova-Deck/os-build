@@ -219,9 +219,17 @@ grep -q 'run: make kernel' "$MKROOT" \
   && ok "and the guard names the command that fixes it" \
   || bad "nothing tells the operator to build the kernel first"
 # ...and the ordering that means a normal build never reaches that guard at all.
-grep -qE '^installer-root: \$\(KERNEL\)' "$ROOT/Makefile" \
+# Anchored on the PREREQUISITE, not on its position: verify-lock now sits ahead of it (below), and
+# pinning the column meant a correct reorder read as a missing dependency.
+grep -qE '^installer-root:.*\$\(KERNEL\)' "$ROOT/Makefile" \
   && ok "make builds the kernel before the installer root, since mkroot ships its modules" \
-  || bad "installer-root does not depend on \$(KERNEL) — a cold `make installer` dies in mkroot"
+  || bad "installer-root does not depend on \$(KERNEL) — a cold \`make installer\` dies in mkroot"
+# And the lock check ahead of the kernel: mkroot.sh's resolve rejects a novadeck package built from
+# sources installer/manifest.lock does not describe, but it does that from inside the bootstrap,
+# i.e. after $(KERNEL). installer/v0.0.8 spent 56 minutes building 7.2.5 to reach that verdict.
+grep -qE '^installer-root: verify-lock .*\$\(KERNEL\)' "$ROOT/Makefile" \
+  && ok "and verify-lock runs BEFORE the kernel, so a stale lock fails in seconds" \
+  || bad "verify-lock is not installer-root's first prerequisite — a stale lock costs a kernel build"
 
 CASE="the files mkroot.sh places"
 mapfile -t FLAT < <(sed -n '/^INSTALL_FILES=(/,/^)/p' "$MKROOT" | sed -e '1d' -e '$d' -e 's/#.*//' | tr ' ' '\n' | grep -v '^$')

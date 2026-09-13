@@ -133,6 +133,47 @@ git_commit: a300e35c0a4b4a38fb53742ea6e2a203c98ee523
 # commit with DRM_MODE_ATOMIC_ALLOW_MODESET itself. Anything that sets a CTM on a plain atomic
 # flip gets -EINVAL instead of the silent modeset the hack used to grant it.
 
+# LUTDMA ADDED 2026-09-13 — 0530/0531/0532, and they are the reason the count is now 93.
+# Third-party (the author's tree, against 7.2.3), carried here re-rolled onto 7.2.5. What it is:
+# on DPU 9.0 and later the colour LUT blocks sit behind a LUT bus with NO memory-mapped write path,
+# reachable only by the downstream sde LUTDMA engine — which is why mainline exposes only PCC and
+# GC on these SoCs, and why our CRTC shows CTM + GAMMA_LUT and no DEGAMMA_LUT. That is a driver
+# limit, not a hardware one. 0530 ports the engine (v2 for DPU 9.x, v3 for 10.x/12.x) and uses it
+# to drive the DSPP inverse gamma, exposed as a 256-entry CRTC DEGAMMA_LUT, and the 17^3 gamut
+# block, exposed as a DPU_3D_LUT blob; 0531 adds the optional "lutdma" reg entry to the binding and
+# 0532 fills it in for sm8550 (0xaeac000/0x800) and sm8650/sm8750 (0xaf80000/0x7000). Without the
+# reg entry the properties are simply not exposed, so the patch is inert on anything that lacks it.
+# That lifts the constraint gamescope's 0014 was built around — only a DIAGONAL is expressible with
+# no degamma — and lets the whole SDR chain scan out in hardware (gamescope 0018).
+#
+# THE RE-ROLL, precisely: 90 -> 93 .patch files, all applying to a pristine 7.2.5 CUMULATIVELY with
+# ZERO rejects and — worth noting against the fuzz-climb warning below — ZERO fuzz and ZERO offsets
+# on these three. Two hunks of the author's dpu_crtc.c did not apply and were DROPPED rather than
+# duplicated, because 0515 already carries the same two upstream changes: the ternary form of the
+# mixer's hw_dspp assignment, and dropping color_mgmt_changed from the condition that reassigns
+# resources. What remains at that site is only what is new — the DEGAMMA_LUT entry-count check and
+# the _dpu_crtc_check_cp_blocks() call. Everything else is the author's work unchanged.
+#
+# SM8650 VERIFIED 2026-09-13 on Pocket FIT, which was the point of taking it. The author verified
+# engine v2 on SM8550 (Odin 2 Portal) and v3 on SM8750 (Odin 3); SM8650 is DPU 10.0, also engine
+# v3, and its catalog entry was carried but never run. It works: `engine v30000 sb_off 0x800`,
+# opmode 0x1, intr4_status 0x0, ctl0 done 1, both topology DSPPs carrying IGC + gamut, and the two
+# new CRTC properties sized exactly right (DEGAMMA_LUT 2048 B = 256x4xu16, DPU_3D_LUT 39312 B =
+# 17^3x4xu16). ZERO lutdma/reg_dma/CTL_FLUSH/underrun/SMMU-fault lines across 16 enable/disable
+# transitions, every one of which is a modeset. Pocket S2 (the other SM8650 board) is still ungated.
+# POCKET ACE (qcs8550, DPU 9.0) ALSO PASSED, same day — engine v2, i.e. the AUTHOR's own verified
+# configuration, so it re-gates their leg against our re-roll rather than testing new silicon:
+# `engine v20000 sb_off 0x400` exactly as sm8550_reg_dma declares, opmode 0x1, intr4_status 0x0,
+# ctl0 done 1 with intr_status 0x200000 = BIT(21) = v2's CTL_0 done mask on every ctl row, because
+# v2 shares ONE status register where v3 has a per-CTL window. One DSPP for the single-mixer
+# 1080x1620 panel vs two on the FIT, identical buffer indices. Zero display/LUTDMA errors after
+# boot. Its 10 arm-smmu faults inside the first second are the PRE-EXISTING splash handoff noted
+# above, unchanged in count — do not read them as LUTDMA fallout.
+# No Kconfig symbol is added: the engine builds unconditionally into the msm driver (Makefile only),
+# so the 426-symbol sweep below is unaffected. A failed LUTDMA wait/setup skips that DSPP while the
+# commit still reports success, which the author bounds with a retry budget on the CRTC — that is
+# part of 0530, not an optional follow-up, and it is the failure mode to watch for on new silicon.
+#
 # Config validation (kernel/*.config) against THIS tree, RE-RUN 2026-09-11 for the 7.2.5 re-pin
 # (numbers below are 7.2.5's; the 7.2.4 run they replace found 426/0-missing and 80 patches/26 fuzz,
 # the 7.2.3 one 429/0-missing and 71 patches/26 fuzz, the 7.2.1 one 428/0-missing and 71 patches/26

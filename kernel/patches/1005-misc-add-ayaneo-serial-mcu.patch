@@ -471,7 +471,7 @@ diff -Naur a/drivers/misc/ayaneo-serial-mcu.c b/drivers/misc/ayaneo-serial-mcu.c
 +static void ayaneo_mcu_restart(struct ayaneo_mcu *mcu)
 +{
 +	mcu->attempt = 0;
-+	mod_delayed_work(system_wq, &mcu->config_work, 0);
++	mod_delayed_work(system_percpu_wq, &mcu->config_work, 0);
 +}
 +
 +static int ayaneo_mcu_pm_notify(struct notifier_block *nb, unsigned long action, void *data)

@@ -80,11 +80,19 @@ This is a FIX, not a regression: the composite path always applied the gamut
 mapping, so the LUTs make scanout and composite agree, where 0014 left them
 differing by exactly this and let the difference appear and disappear as frames
 switched paths.
+
+RE-ROLLED 2026-09-14: regenerated against a base without the 0008-0013 EDID/HDR series,
+which was retired when HDR was dropped (issue #93). Nothing here changed in intent -- the only
+difference is that hunks which used to carry HDR-introduced context (create_color_mgmt_luts's
+bTraditionalHDROutput parameter, the DrmHdrOutputRequiresVulkanComposition call site, and test-list
+entries for deleted tests) now sit on the pristine signatures instead. Generated with git diff, not
+hand-edited.
 ---
-diff -ruN a/src/Backends/DRMBackend.cpp b/src/Backends/DRMBackend.cpp
+diff --git a/src/Backends/DRMBackend.cpp b/src/Backends/DRMBackend.cpp
+index 051dcc7..9e8e200 100644
 --- a/src/Backends/DRMBackend.cpp
 +++ b/src/Backends/DRMBackend.cpp
-@@ -71,6 +71,7 @@
+@@ -70,6 +70,7 @@ gamescope::ConVar<bool> cv_drm_debug_disable_regamma_tf( "drm_debug_disable_rega
  gamescope::ConVar<bool> cv_drm_debug_disable_output_tf( "drm_debug_disable_output_tf", false, "Force default (identity) output TF, affects other logic. Not a property directly." );
  gamescope::ConVar<bool> cv_drm_debug_disable_blend_tf( "drm_debug_disable_blend_tf", false, "Blending chicken bit. (Forces BLEND_TF to DEFAULT, does not affect other logic)" );
  gamescope::ConVar<bool> cv_drm_debug_disable_ctm( "drm_debug_disable_ctm", false, "CTM chicken bit. (Forces CTM off, does not affect other logic)" );
@@ -92,7 +100,7 @@ diff -ruN a/src/Backends/DRMBackend.cpp b/src/Backends/DRMBackend.cpp
  gamescope::ConVar<bool> cv_drm_debug_disable_color_encoding( "drm_debug_disable_color_encoding", false, "YUV Color Encoding chicken bit. (Forces COLOR_ENCODING to DEFAULT, does not affect other logic)" );
  gamescope::ConVar<bool> cv_drm_debug_disable_color_range( "drm_debug_disable_color_range", false, "YUV Color Range chicken bit. (Forces COLOR_RANGE to DEFAULT, does not affect other logic)" );
  gamescope::ConVar<bool> cv_drm_debug_disable_explicit_sync( "drm_debug_disable_explicit_sync", false, "Force disable explicit sync on the DRM backend." );
-@@ -136,6 +137,10 @@
+@@ -135,6 +136,10 @@ struct drm_t {
  	struct drm_state_t {
  		std::shared_ptr<gamescope::BackendBlob> mode_id;
  		uint32_t color_mgmt_serial;
@@ -103,7 +111,7 @@ diff -ruN a/src/Backends/DRMBackend.cpp b/src/Backends/DRMBackend.cpp
  		std::shared_ptr<gamescope::BackendBlob> lut3d_id[ EOTF_Count ];
  		std::shared_ptr<gamescope::BackendBlob> shaperlut_id[ EOTF_Count ];
  		amdgpu_transfer_function output_tf = AMDGPU_TRANSFER_FUNCTION_DEFAULT;
-@@ -362,6 +367,7 @@
+@@ -361,6 +366,7 @@ namespace gamescope
  			std::optional<CDRMAtomicProperty> GAMMA_LUT;
  			std::optional<CDRMAtomicProperty> DEGAMMA_LUT;
  			std::optional<CDRMAtomicProperty> CTM;
@@ -111,7 +119,7 @@ diff -ruN a/src/Backends/DRMBackend.cpp b/src/Backends/DRMBackend.cpp
  			std::optional<CDRMAtomicProperty> VRR_ENABLED;
  			std::optional<CDRMAtomicProperty> OUT_FENCE_PTR;
  			std::optional<CDRMAtomicProperty> AMD_CRTC_REGAMMA_TF;
-@@ -583,8 +589,8 @@
+@@ -580,8 +586,8 @@ bool drm_update_color_mgmt(struct drm_t *drm);
  bool drm_supports_color_mgmt(struct drm_t *drm);
  bool drm_supports_crtc_ctm(struct drm_t *drm);
  static void drm_update_crtc_ctm(struct drm_t *drm, bool bDirectScanout);
@@ -122,7 +130,7 @@ diff -ruN a/src/Backends/DRMBackend.cpp b/src/Backends/DRMBackend.cpp
  bool drm_set_connector( struct drm_t *drm, gamescope::CDRMConnector *conn );
  
  struct drm_color_ctm2 {
-@@ -1555,6 +1561,9 @@
+@@ -1552,6 +1558,9 @@ void finish_drm(struct drm_t *drm)
  		if ( pCRTC->GetProperties().DEGAMMA_LUT )
  			pCRTC->GetProperties().DEGAMMA_LUT->SetPendingValue( req, 0, true );
  
@@ -132,7 +140,7 @@ diff -ruN a/src/Backends/DRMBackend.cpp b/src/Backends/DRMBackend.cpp
  		if ( pCRTC->GetProperties().CTM )
  			pCRTC->GetProperties().CTM->SetPendingValue( req, 0, true );
  
-@@ -2234,6 +2243,7 @@
+@@ -2231,6 +2240,7 @@ namespace gamescope
  			m_Props.GAMMA_LUT           = CDRMAtomicProperty::Instantiate( "GAMMA_LUT",           this, *rawProperties );
  			m_Props.DEGAMMA_LUT         = CDRMAtomicProperty::Instantiate( "DEGAMMA_LUT",         this, *rawProperties );
  			m_Props.CTM                 = CDRMAtomicProperty::Instantiate( "CTM",                 this, *rawProperties );
@@ -140,7 +148,7 @@ diff -ruN a/src/Backends/DRMBackend.cpp b/src/Backends/DRMBackend.cpp
  			m_Props.VRR_ENABLED         = CDRMAtomicProperty::Instantiate( "VRR_ENABLED",         this, *rawProperties );
  			m_Props.OUT_FENCE_PTR       = CDRMAtomicProperty::Instantiate( "OUT_FENCE_PTR",       this, *rawProperties );
  			m_Props.AMD_CRTC_REGAMMA_TF = CDRMAtomicProperty::Instantiate( "AMD_CRTC_REGAMMA_TF", this, *rawProperties );
-@@ -3129,6 +3139,29 @@
+@@ -3078,6 +3088,29 @@ int drm_prepare( struct drm_t *drm, bool async, const struct FrameInfo_t *frameI
  			drm->needs_modeset = true;
  	}
  
@@ -170,7 +178,7 @@ diff -ruN a/src/Backends/DRMBackend.cpp b/src/Backends/DRMBackend.cpp
  	drm->m_FbIdsInRequest.clear();
  
  	bool needs_modeset = drm->needs_modeset.exchange(false);
-@@ -3160,15 +3193,14 @@
+@@ -3109,15 +3142,14 @@ int drm_prepare( struct drm_t *drm, bool async, const struct FrameInfo_t *frameI
  
  	// We do internal refcounting with these events
  
@@ -188,7 +196,7 @@ diff -ruN a/src/Backends/DRMBackend.cpp b/src/Backends/DRMBackend.cpp
  	}
  
  	if ( !bSleep )
-@@ -3176,7 +3208,7 @@
+@@ -3125,7 +3157,7 @@ int drm_prepare( struct drm_t *drm, bool async, const struct FrameInfo_t *frameI
  		if ( drm->pCRTC != nullptr )
  			flags |= DRM_MODE_PAGE_FLIP_EVENT;
  
@@ -197,7 +205,7 @@ diff -ruN a/src/Backends/DRMBackend.cpp b/src/Backends/DRMBackend.cpp
  			flags |= DRM_MODE_PAGE_FLIP_ASYNC;
  	}
  
-@@ -3227,6 +3259,9 @@
+@@ -3176,6 +3208,9 @@ int drm_prepare( struct drm_t *drm, bool async, const struct FrameInfo_t *frameI
  			if ( pCRTC->GetProperties().DEGAMMA_LUT )
  				pCRTC->GetProperties().DEGAMMA_LUT->SetPendingValue( drm->req, 0, bForceInRequest );
  
@@ -207,7 +215,7 @@ diff -ruN a/src/Backends/DRMBackend.cpp b/src/Backends/DRMBackend.cpp
  			if ( pCRTC->GetProperties().CTM )
  				pCRTC->GetProperties().CTM->SetPendingValue( drm->req, 0, bForceInRequest );
  
-@@ -3260,7 +3295,7 @@
+@@ -3209,7 +3244,7 @@ int drm_prepare( struct drm_t *drm, bool async, const struct FrameInfo_t *frameI
  			if ( drm->pCRTC->GetProperties().GAMMA_LUT )
  				drm->pCRTC->GetProperties().GAMMA_LUT->SetPendingValue( drm->req, 0, true );
  
@@ -216,7 +224,7 @@ diff -ruN a/src/Backends/DRMBackend.cpp b/src/Backends/DRMBackend.cpp
  				drm->pCRTC->GetProperties().DEGAMMA_LUT->SetPendingValue( drm->req, 0, true );
  
  			// The CTM is NOT cleared with them. This is the modeset that has to
-@@ -3293,6 +3328,14 @@
+@@ -3242,6 +3277,14 @@ int drm_prepare( struct drm_t *drm, bool async, const struct FrameInfo_t *frameI
  
  	if ( drm->pCRTC && !bSleep )
  	{
@@ -231,15 +239,17 @@ diff -ruN a/src/Backends/DRMBackend.cpp b/src/Backends/DRMBackend.cpp
  		// Per-frame colour update. SetPendingValue() is a no-op when the blob has
  		// not changed, so in the steady state this costs nothing; when a slider
  		// moves it is a plain property write on an ordinary non-blocking flip,
-@@ -3437,13 +3480,60 @@
+@@ -3386,14 +3429,61 @@ gamescope::GamescopeScreenType drm_get_screen_type(struct drm_t *drm)
  	return drm->pConnector->GetScreenType();
  }
  
+-bool drm_update_color_mgmt(struct drm_t *drm)
 +// The DPU's post-blend DEGAMMA_LUT (256) and DPU_3D_LUT (17^3) take the
 +// gamma 2.2 shaper and 3D LUT the shader would apply; the shaper is
 +// interpolated down from its 4096 entries.
 +static bool drm_update_output_luts(struct drm_t *drm)
-+{
+ {
+-	if ( !drm_supports_color_mgmt( drm ) )
 +	static constexpr uint32_t k_nDegammaSize = 256;
 +	const gamescope_color_mgmt_luts &luts = g_ColorMgmtLuts[EOTF_Gamma22];
 +	std::array<uint16_t, k_nDegammaSize * 4> degamma;
@@ -248,7 +258,7 @@ diff -ruN a/src/Backends/DRMBackend.cpp b/src/Backends/DRMBackend.cpp
 +	{
 +		drm->pending.output_degamma = nullptr;
 +		drm->pending.output_lut3d = nullptr;
-+		return true;
+ 		return true;
 +	}
 +
 +	for ( uint32_t i = 0; i < k_nDegammaSize; i++ )
@@ -276,25 +286,24 @@ diff -ruN a/src/Backends/DRMBackend.cpp b/src/Backends/DRMBackend.cpp
 +	drm->pending.output_lut3d = std::move( pLut3D );
 +	return true;
 +}
-+
- bool drm_update_color_mgmt(struct drm_t *drm)
- {
--	if ( !drm_supports_color_mgmt( drm ) )
-+	if ( g_ColorMgmt.serial == drm->current.color_mgmt_serial )
+ 
++bool drm_update_color_mgmt(struct drm_t *drm)
++{
+ 	if ( g_ColorMgmt.serial == drm->current.color_mgmt_serial )
  		return true;
  
--	if ( g_ColorMgmt.serial == drm->current.color_mgmt_serial )
 +	if ( !drm_supports_color_mgmt( drm ) )
 +	{
 +		// A failed blob keeps the old serial so the next frame retries.
 +		if ( GetBackend()->SupportsOutputLUTs() && drm_update_output_luts( drm ) )
 +			drm->pending.color_mgmt_serial = g_ColorMgmt.serial;
- 		return true;
++		return true;
 +	}
- 
++
  	drm->pending.color_mgmt_serial = g_ColorMgmt.serial;
  
-@@ -3769,11 +3859,19 @@
+ 	for ( uint32_t i = 0; i < EOTF_Count; i++ )
+@@ -3718,11 +3808,19 @@ bool drm_supports_crtc_ctm(struct drm_t *drm)
  // wanted but unsupported, it just carries on -- which is exactly how night mode
  // came to be silently dropped the moment inline rotation made direct scanout
  // reachable. Now an unreproducible transform forces a composite instead.
@@ -315,7 +324,7 @@ diff -ruN a/src/Backends/DRMBackend.cpp b/src/Backends/DRMBackend.cpp
  	// Something in the composite that no matrix can reproduce.
  	if ( !g_ScanoutLinearScale )
  		return false;
-@@ -3830,11 +3928,17 @@
+@@ -3779,11 +3877,17 @@ static void drm_update_crtc_ctm( struct drm_t *drm, bool bDirectScanout )
  
  // Is there actually a transform for the DPU to carry? If not, partial composition
  // stays available, because an identity CTM cannot double-apply anything.
@@ -334,7 +343,7 @@ diff -ruN a/src/Backends/DRMBackend.cpp b/src/Backends/DRMBackend.cpp
  	return g_ScanoutLinearScale.has_value() && *g_ScanoutLinearScale != glm::vec3( 1.f );
  }
  
-@@ -3927,7 +4031,7 @@
+@@ -3876,7 +3980,7 @@ namespace gamescope
  			// the transform from the Vulkan pass. Rather than try to split colour
  			// management across the two halves, give up partial composition while
  			// the DPU is actually carrying a transform. See drm_update_crtc_ctm().
@@ -343,17 +352,7 @@ diff -ruN a/src/Backends/DRMBackend.cpp b/src/Backends/DRMBackend.cpp
  				bWantsPartialComposite = false;
  
  			static bool s_bWasFirstFrame = true;
-@@ -3969,7 +4073,8 @@
- 					bSupportsHardwareColorManagement,
- 					pFrameInfo->outputEncodingEOTF,
- 					static_cast<uint32_t>( pFrameInfo->layers.count() ),
--					pFrameInfo->layers.get( 0 ).colorspace == GAMESCOPE_APP_TEXTURE_COLORSPACE_HDR10_PQ );
-+					pFrameInfo->layers.get( 0 ).colorspace == GAMESCOPE_APP_TEXTURE_COLORSPACE_HDR10_PQ,
-+					pFrameInfo->outputLuts );
- 			}
- 			else
- 			{
-@@ -3979,13 +4084,12 @@
+@@ -3923,13 +4027,12 @@ namespace gamescope
  
  			bNeedsFullComposite |= !!(g_uCompositeDebug & CompositeDebugFlag::Heatmap);
  			bNeedsFullComposite |= g_uOutputRotation != 0; // can't rotate planes at scanout
@@ -368,7 +367,7 @@ diff -ruN a/src/Backends/DRMBackend.cpp b/src/Backends/DRMBackend.cpp
  
  			bool bDoComposite = true;
  			if ( !bNeedsFullComposite && !bWantsPartialComposite )
-@@ -3994,8 +4098,11 @@
+@@ -3938,8 +4041,11 @@ namespace gamescope
  				// over to the composite path
  				std::shared_ptr<gamescope::BackendBlob> pPendingModeId = g_DRM.pending.mode_id;
  
@@ -382,7 +381,7 @@ diff -ruN a/src/Backends/DRMBackend.cpp b/src/Backends/DRMBackend.cpp
  
  				int ret = drm_prepare( &g_DRM, bAsync, pFrameInfo );
  				if ( ret == 0 )
-@@ -4030,7 +4137,7 @@
+@@ -3974,7 +4080,7 @@ namespace gamescope
  			// attempt failed, and the else branch below would then build a partial
  			// composite anyway -- base layer on a plane, overlays composited -- which
  			// is exactly the split the CTM cannot serve.
@@ -391,7 +390,7 @@ diff -ruN a/src/Backends/DRMBackend.cpp b/src/Backends/DRMBackend.cpp
  				bNeedsFullComposite = true;
  
  			FrameInfo_t compositeFrameInfo = *pFrameInfo;
-@@ -4112,6 +4219,8 @@
+@@ -4056,6 +4162,8 @@ namespace gamescope
  			FrameInfo_t presentCompFrameInfo = {};
  			presentCompFrameInfo.allowVRR = pFrameInfo->allowVRR;
  			presentCompFrameInfo.outputEncodingEOTF = pFrameInfo->outputEncodingEOTF;
@@ -400,7 +399,7 @@ diff -ruN a/src/Backends/DRMBackend.cpp b/src/Backends/DRMBackend.cpp
  
  			if ( bNeedsFullComposite )
  			{
-@@ -4406,6 +4515,21 @@
+@@ -4350,6 +4458,21 @@ namespace gamescope
  			return drm_supports_color_mgmt( &g_DRM );
  		}
  
@@ -422,36 +421,11 @@ diff -ruN a/src/Backends/DRMBackend.cpp b/src/Backends/DRMBackend.cpp
  		int Commit( const FrameInfo_t *pFrameInfo )
  		{
  			drm_t *drm = &g_DRM;
-diff -ruN a/src/Backends/DRMComposition.h b/src/Backends/DRMComposition.h
---- a/src/Backends/DRMComposition.h
-+++ b/src/Backends/DRMComposition.h
-@@ -6,18 +6,16 @@
- 
- namespace gamescope
- {
--    // Without DRM hardware color management, direct scanout is only safe for
--    // one PQ layer targeting a PQ output. In particular, a Gamma 2.2 HDR panel
--    // needs the Vulkan color pipeline to map even a single PQ layer into the
--    // panel's native encoding.
-+    // Output LUT eligibility guarantees that every layer is SDR.
-     constexpr bool DrmHdrOutputRequiresVulkanComposition(
-         bool bOutputHDREnabled,
-         bool bSupportsHardwareColorManagement,
-         EOTF eOutputEncodingEOTF,
-         uint32_t uLayerCount,
--        bool bBaseLayerIsHDR10PQ )
-+        bool bBaseLayerIsHDR10PQ,
-+        bool bOutputLuts )
-     {
--        if ( !bOutputHDREnabled || bSupportsHardwareColorManagement )
-+        if ( !bOutputHDREnabled || bSupportsHardwareColorManagement || bOutputLuts )
-             return false;
- 
-         return eOutputEncodingEOTF != EOTF_PQ ||
-diff -ruN a/src/backend.h b/src/backend.h
+diff --git a/src/backend.h b/src/backend.h
+index 880aa97..06c1ca3 100644
 --- a/src/backend.h
 +++ b/src/backend.h
-@@ -342,6 +342,11 @@
+@@ -342,6 +342,11 @@ namespace gamescope
          virtual OwningRc<IBackendFb> ImportDmabufToBackend( wlr_dmabuf_attributes *pDmaBuf ) = 0;
  
          virtual bool UsesModifiers() const = 0;
@@ -463,10 +437,11 @@ diff -ruN a/src/backend.h b/src/backend.h
          virtual std::span<const uint64_t> GetSupportedModifiers( uint32_t uDrmFormat ) const = 0;
  		inline bool SupportsFormat( uint32_t uDrmFormat ) const
  		{
-diff -ruN a/src/rendervulkan.hpp b/src/rendervulkan.hpp
+diff --git a/src/rendervulkan.hpp b/src/rendervulkan.hpp
+index 3f5013a..be1808d 100644
 --- a/src/rendervulkan.hpp
 +++ b/src/rendervulkan.hpp
-@@ -292,6 +292,9 @@
+@@ -292,6 +292,9 @@ struct FrameInfo_t
  	bool allowVRR;
  	bool applyOutputColorMgmt; // drm only
  	EOTF outputEncodingEOTF;
@@ -476,10 +451,11 @@ diff -ruN a/src/rendervulkan.hpp b/src/rendervulkan.hpp
  
  	struct Layer_t
  	{
-diff -ruN a/src/steamcompmgr.cpp b/src/steamcompmgr.cpp
+diff --git a/src/steamcompmgr.cpp b/src/steamcompmgr.cpp
+index 32bf2d8..b370c9c 100644
 --- a/src/steamcompmgr.cpp
 +++ b/src/steamcompmgr.cpp
-@@ -2979,8 +2979,24 @@
+@@ -2960,8 +2960,24 @@ paint_all( global_focus_t *pFocus, bool async )
  		frameInfo.applyOutputColorMgmt = false;
  	}
  
@@ -504,7 +480,7 @@ diff -ruN a/src/steamcompmgr.cpp b/src/steamcompmgr.cpp
  		if ( g_ColorMgmtLuts[i].HasLuts() )
  		{
  			frameInfo.shaperLut[i] = g_ColorMgmtLuts[i].vk_lut1d;
-@@ -3084,6 +3100,17 @@
+@@ -3065,6 +3081,17 @@ paint_all( global_focus_t *pFocus, bool async )
  
  			frameInfo.outputEncodingEOTF = bHDRScreenshot ? EOTF_PQ : EOTF_Gamma22;
  
@@ -522,35 +498,3 @@ diff -ruN a/src/steamcompmgr.cpp b/src/steamcompmgr.cpp
  			uint32_t uCompositeDebugBackup = g_uCompositeDebug;
  
  			if ( oScreenshotInfo->eScreenshotType != GAMESCOPE_CONTROL_SCREENSHOT_TYPE_SCREEN_BUFFER )
-diff -ruN a/tests/test_drm_composition.cpp b/tests/test_drm_composition.cpp
---- a/tests/test_drm_composition.cpp
-+++ b/tests/test_drm_composition.cpp
-@@ -10,14 +10,22 @@
- {
-     // Regression: the old DRM path allowed this exact single-PQ-layer case to
-     // direct scan, bypassing the PQ-to-native-Gamma-2.2 Vulkan transform.
--    REQUIRE( DrmHdrOutputRequiresVulkanComposition( true, false, EOTF_Gamma22, 1, true ) );
-+    REQUIRE( DrmHdrOutputRequiresVulkanComposition( true, false, EOTF_Gamma22, 1, true, false ) );
- 
--    REQUIRE_FALSE( DrmHdrOutputRequiresVulkanComposition( true, true, EOTF_Gamma22, 1, true ) );
--    REQUIRE_FALSE( DrmHdrOutputRequiresVulkanComposition( true, false, EOTF_PQ, 1, true ) );
--    REQUIRE_FALSE( DrmHdrOutputRequiresVulkanComposition( false, false, EOTF_Gamma22, 1, true ) );
-+    REQUIRE_FALSE( DrmHdrOutputRequiresVulkanComposition( true, true, EOTF_Gamma22, 1, true, false ) );
-+    REQUIRE_FALSE( DrmHdrOutputRequiresVulkanComposition( true, false, EOTF_PQ, 1, true, false ) );
-+    REQUIRE_FALSE( DrmHdrOutputRequiresVulkanComposition( false, false, EOTF_Gamma22, 1, true, false ) );
- 
--    REQUIRE( DrmHdrOutputRequiresVulkanComposition( true, false, EOTF_PQ, 2, true ) );
--    REQUIRE( DrmHdrOutputRequiresVulkanComposition( true, false, EOTF_PQ, 1, false ) );
-+    REQUIRE( DrmHdrOutputRequiresVulkanComposition( true, false, EOTF_PQ, 2, true, false ) );
-+    REQUIRE( DrmHdrOutputRequiresVulkanComposition( true, false, EOTF_PQ, 1, false, false ) );
-+}
-+
-+TEST_CASE("SDR output LUTs allow scanout while HDR output is enabled", "[drm][hdr]")
-+{
-+    REQUIRE_FALSE( DrmHdrOutputRequiresVulkanComposition( true, false, EOTF_Gamma22, 1, false, true ) );
-+    REQUIRE_FALSE( DrmHdrOutputRequiresVulkanComposition( true, false, EOTF_Gamma22, 2, false, true ) );
-+    REQUIRE( DrmHdrOutputRequiresVulkanComposition( true, false, EOTF_Gamma22, 1, false, false ) );
-+    REQUIRE( DrmHdrOutputRequiresVulkanComposition( true, false, EOTF_Gamma22, 1, true, false ) );
- }
- 
- TEST_CASE("Gamma 2.2 HDR scales SDR white against panel peak", "[color][hdr]")

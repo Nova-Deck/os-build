@@ -26,6 +26,15 @@ The one-character fix is virtudude's. The two-branch reading above and the
 [color] test are ours.
 
 diff --git a/src/color_helpers.cpp b/src/color_helpers.cpp
+
+RE-ROLLED 2026-09-14: regenerated against a base without the 0008-0013 EDID/HDR series,
+which was retired when HDR was dropped (issue #93). Nothing here changed in intent -- the only
+difference is that hunks which used to carry HDR-introduced context (create_color_mgmt_luts's
+bTraditionalHDROutput parameter, the DrmHdrOutputRequiresVulkanComposition call site, and test-list
+entries for deleted tests) now sit on the pristine signatures instead. Generated with git diff, not
+hand-edited.
+---
+diff --git a/src/color_helpers.cpp b/src/color_helpers.cpp
 index 6459ef2..0aba314 100644
 --- a/src/color_helpers.cpp
 +++ b/src/color_helpers.cpp
@@ -45,26 +54,26 @@ index 6459ef2..0aba314 100644
  
  void buildSDRColorimetry( displaycolorimetry_t * pColorimetry, colormapping_t *pMapping,
 diff --git a/tests/meson.build b/tests/meson.build
-index 1cd9177..10f04f6 100644
+index 49be8d9..71098b3 100644
 --- a/tests/meson.build
 +++ b/tests/meson.build
-@@ -11,7 +11,7 @@ unittest_src += srcdir / 'color_helpers.cpp'
+@@ -10,7 +10,7 @@ unittest_src += srcdir / 'color_helpers.cpp'
  
  gamescope_tests = executable(
  	'gamescope_tests',
--	unittest_src + ['test_client_format_policy.cpp', 'test_convar.cpp', 'test_display_lookup.cpp', 'test_drm_color_pipeline.cpp', 'test_drm_composition.cpp', 'test_edid.cpp', 'test_process.cpp', 'test_utils_parsers.cpp', 'test_utils_string.cpp'],
-+	unittest_src + ['test_client_format_policy.cpp', 'test_color_gamut.cpp', 'test_convar.cpp', 'test_display_lookup.cpp', 'test_drm_color_pipeline.cpp', 'test_drm_composition.cpp', 'test_edid.cpp', 'test_process.cpp', 'test_utils_parsers.cpp', 'test_utils_string.cpp'],
+-	unittest_src + ['test_convar.cpp', 'test_drm_color_pipeline.cpp', 'test_process.cpp', 'test_utils_parsers.cpp', 'test_utils_string.cpp'],
++	unittest_src + ['test_color_gamut.cpp', 'test_convar.cpp', 'test_drm_color_pipeline.cpp', 'test_process.cpp', 'test_utils_parsers.cpp', 'test_utils_string.cpp'],
  	include_directories: [srcdir, sol2_include],
- 	dependencies: [catch2_dep, luajit_dep, cap_dep, displayinfo_dep, drm_dep, glm_dep, wlroots_dep],
+ 	dependencies: [catch2_dep, luajit_dep, cap_dep, drm_dep, glm_dep, wlroots_dep],
  	cpp_args: gamescope_cpp_args,
-@@ -19,6 +19,7 @@ gamescope_tests = executable(
+@@ -18,6 +18,7 @@ gamescope_tests = executable(
  
  reaper_test_helper = executable('reaper_test_helper', 'reaper_test_helper.cpp')
  
 +test('color', gamescope_tests, args: ['[color]'])
  test('convar', gamescope_tests, args: ['[convar]'])
- test('display', gamescope_tests, args: ['[display]'])
- test('drm', gamescope_tests, args: ['[drm]'])
+ test('utils/parsers', gamescope_tests, args: ['[parsers]'])
+ test('utils/process', gamescope_tests, args: ['[process]'], depends: [reaper_test_helper])
 diff --git a/tests/test_color_gamut.cpp b/tests/test_color_gamut.cpp
 new file mode 100644
 index 0000000..06540c7

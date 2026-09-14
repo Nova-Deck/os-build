@@ -1,0 +1,62 @@
+Subject: [PATCH] arm64: dts: qcom: sm8250: Fix PCIe wake GPIO polarity
+
+PCIe WAKE# is an active-low signal per the PCIe base spec, but sm8250.dtsi
+declares all three controllers' wake-gpios as GPIO_ACTIVE_HIGH.
+
+BACKPORT of patch 6/34 from Krishna Chaitanya Chundru's "arm64: dts: qcom:
+Move PCIe phy/GPIOs to root port nodes and fix wake-gpios polarity",
+2026-09-10, UNMERGED at the time of writing:
+https://lore.kernel.org/r/20260910-root_port-v1-0-90a252ddbbfa@oss.qualcomm.com
+
+WHY THIS ONE NEEDS A PATCH WHEN SM8550/SM8650 DID NOT. Those two SoCs keep
+wake-gpios in the BOARD files, so upstream's equivalent patches touch
+sm8550-hdk/mtp/qrd and sm8650-hdk/mtp/qrd etc. -- files we do not build. Our
+own board DTS carries them instead, and they were corrected directly. sm8250
+is the exception: its wake-gpios live in the SoC dtsi we take from the
+tarball, so inheriting the fix requires carrying it.
+
+Affects Pocket Max, AYN Thor Lite and the Retroid boards, all of which put
+their wifi@0 under &pcieport0 on pcie0. pcie1/pcie2 are changed too, to
+match upstream exactly rather than to fix anything we use.
+
+CAVEAT, same as the board-side change: the series is unmerged and its cover
+says "No Fixes tag is added as no functional issue has been observed", so
+the expected result is no visible change. WAKE is a suspend/resume signal --
+a wrong polarity hides until the device is suspended, so this wants a
+suspend/resume cycle on an SM8250 board, not just a boot.
+
+DROP THIS PATCH once the series lands in the pinned stable series -- grep
+sm8250.dtsi for `wake-gpios.*GPIO_ACTIVE_HIGH`, which must return nothing.
+
+---
+
+diff --git a/arch/arm64/boot/dts/qcom/sm8250.dtsi b/arch/arm64/boot/dts/qcom/sm8250.dtsi
+--- a/arch/arm64/boot/dts/qcom/sm8250.dtsi
++++ b/arch/arm64/boot/dts/qcom/sm8250.dtsi
+@@ -2202,7 +2202,7 @@
+ 			phy-names = "pciephy";
+ 
+ 			perst-gpios = <&tlmm 79 GPIO_ACTIVE_LOW>;
+-			wake-gpios = <&tlmm 81 GPIO_ACTIVE_HIGH>;
++			wake-gpios = <&tlmm 81 GPIO_ACTIVE_LOW>;
+ 
+ 			pinctrl-names = "default";
+ 			pinctrl-0 = <&pcie0_default_state>;
+@@ -2329,7 +2329,7 @@
+ 			phy-names = "pciephy";
+ 
+ 			perst-gpios = <&tlmm 82 GPIO_ACTIVE_LOW>;
+-			wake-gpios = <&tlmm 84 GPIO_ACTIVE_HIGH>;
++			wake-gpios = <&tlmm 84 GPIO_ACTIVE_LOW>;
+ 
+ 			pinctrl-names = "default";
+ 			pinctrl-0 = <&pcie1_default_state>;
+@@ -2456,7 +2456,7 @@
+ 			phy-names = "pciephy";
+ 
+ 			perst-gpios = <&tlmm 85 GPIO_ACTIVE_LOW>;
+-			wake-gpios = <&tlmm 87 GPIO_ACTIVE_HIGH>;
++			wake-gpios = <&tlmm 87 GPIO_ACTIVE_LOW>;
+ 
+ 			pinctrl-names = "default";
+ 			pinctrl-0 = <&pcie2_default_state>;

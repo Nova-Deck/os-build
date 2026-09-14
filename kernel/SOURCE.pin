@@ -364,6 +364,12 @@ git_commit: a300e35c0a4b4a38fb53742ea6e2a203c98ee523
 # flashing a card built from it, never swapping /boot/Image on an existing card.
 #
 # KNOWN BOOT NOISE, do not re-diagnose it as fallout from whatever you just changed:
+#   RESUME, all boards — `IRQ168: set affinity failed(-22)`. Known on these SoCs, appears on a
+#     suspend cycle that otherwise completes correctly. Not worth investigating.
+#   synaptics_dsx_i2c retry storm ("I2C retry 1..10", "I2C read over retry limit",
+#     "Failed to read interrupt status") — KNOWN ON THESE SoCs and NOT related to suspend/resume,
+#     despite showing up inside a suspend window in any log that spans one. Do not read it as
+#     suspend fallout; it is ongoing touchscreen-driver noise that happens to land there.
 #   Pocket ACE — a bounded burst of 10 arm-smmu context faults at ~0.77s, all cbfrsynra=0x1c00
 #     (the MDSS node, `iommus = <&apps_smmu 0x1c00 0x2>`), inside a 0.4 ms window, all of them
 #     BEFORE the panel rails come up at 0.854s. The bootloader continuous-splash handoff, i.e.

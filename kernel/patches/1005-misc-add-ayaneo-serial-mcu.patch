@@ -1,7 +1,7 @@
 diff -Naur a/drivers/misc/ayaneo-serial-mcu.c b/drivers/misc/ayaneo-serial-mcu.c
 --- a/drivers/misc/ayaneo-serial-mcu.c	1970-01-01 01:00:00.000000000 +0100
-+++ b/drivers/misc/ayaneo-serial-mcu.c	2026-09-01 18:47:48.957455057 +0200
-@@ -0,0 +1,603 @@
++++ b/drivers/misc/ayaneo-serial-mcu.c	2026-09-15 17:08:14.000000000 +0200
+@@ -0,0 +1,699 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * AYANEO handheld controller MCU, serial side.
@@ -30,6 +30,23 @@ diff -Naur a/drivers/misc/ayaneo-serial-mcu.c b/drivers/misc/ayaneo-serial-mcu.c
 + * something is there to hear us -- which a timer is not. Each attempt sends the commands and then
 + * waits briefly for any byte; silence means try again, up to a bounded number of attempts. The
 + * commands are idempotent, so a resend costs nothing but the bytes.
++ *
++ * BUT THE MCU LISTENING IS NOT THE SAME AS THE MCU BEING READY FOR BOTH COMMANDS, and that is the
++ * reason for the second, later write further down. The two commands are not the same kind of
++ * setting:
++ *
++ *   style   is consumed when the MCU BUILDS its USB personality, so a write before it enumerates
++ *           is exactly right, and it always takes;
++ *   layout  is a property of an ALREADY-BUILT personality, so the same early write is heard,
++ *           acked, and does nothing at all.
++ *
++ * Measured on a Pocket ACE: the MCU answers at 2.98s, its USB side does not appear until 5.04s,
++ * and it is not settled until 6.95s (it enumerates, fails once with -71, and re-enumerates). A
++ * layout write at 2.98s lands in that dead zone; the personality is then built carrying the MCU's
++ * default layout, and the face buttons come up swapped. It looks intermittent because a warm boot
++ * leaves the personality already up, which is the one condition under which the early write works.
++ * So the layout is sent twice: once with the style, where it is free, and once after the
++ * personality has had time to appear.
 + */
 +
 +#include <linux/completion.h>
@@ -66,6 +83,19 @@ diff -Naur a/drivers/misc/ayaneo-serial-mcu.c b/drivers/misc/ayaneo-serial-mcu.c
 +#define AYANEO_MCU_REPLY_TIMEOUT_MS	250
 +#define AYANEO_MCU_RETRY_MS		1000
 +#define AYANEO_MCU_MAX_ATTEMPTS		15
++
++/*
++ * How long after a successful configure to send the layout again, and this one IS a timer, with
++ * no readiness signal behind it -- because there is nothing to gate on. The MCU acks a command it
++ * ignored exactly as it acks one it obeyed, so the UART cannot say whether the personality is up;
++ * and on a warm boot the personality never re-enumerates at all, so a USB event would never come.
++ *
++ * The clock that matters starts when the style command lands, since that is what makes the MCU
++ * build the personality. Measured from there on a Pocket ACE: USB device at +2.1s, the pad at
++ * +3.5s, re-enumeration settled at +4.0s. Eight seconds is twice that, and being late costs
++ * nothing -- the write is idempotent and the buttons are only read by a human pressing them.
++ */
++#define AYANEO_MCU_LAYOUT_SETTLE_MS	8000
 +
 +/* Enough of the answer to identify it in the log; the driver does not parse it. */
 +#define AYANEO_MCU_RX_LEN		32
@@ -148,6 +178,7 @@ diff -Naur a/drivers/misc/ayaneo-serial-mcu.c b/drivers/misc/ayaneo-serial-mcu.c
 +	struct serdev_device *serdev;
 +	struct notifier_block pm_nb;
 +	struct delayed_work config_work;
++	struct delayed_work layout_work;
 +	struct completion reply;
 +	spinlock_t rx_lock;		/* guards rx and rx_len */
 +	u8 rx[AYANEO_MCU_RX_LEN];
@@ -236,13 +267,52 @@ diff -Naur a/drivers/misc/ayaneo-serial-mcu.c b/drivers/misc/ayaneo-serial-mcu.c
 +
 +	return 0;
 +}
++
++/* Throw away anything the MCU said before, so the next reply can be told apart from the last. */
++static void ayaneo_mcu_arm_reply(struct ayaneo_mcu *mcu)
++{
++	unsigned long flags;
++
++	spin_lock_irqsave(&mcu->rx_lock, flags);
++	mcu->rx_len = 0;
++	spin_unlock_irqrestore(&mcu->rx_lock, flags);
++	reinit_completion(&mcu->reply);
++}
++
++/*
++ * Wait for the MCU to say something and log it.
++ *
++ * The answer is NOT confirmation that the command took effect -- the MCU acks an ignored command
++ * and an invented one identically -- so nothing branches on what comes back. It is logged because
++ * dmesg is the only instrument that reaches this code: it all runs before userspace exists.
++ */
++static void ayaneo_mcu_report_reply(struct ayaneo_mcu *mcu, const char *what)
++{
++	struct device *dev = &mcu->serdev->dev;
++	u8 rx[AYANEO_MCU_RX_LEN];
++	unsigned long flags;
++	size_t rx_len;
++
++	if (!wait_for_completion_timeout(&mcu->reply,
++					 msecs_to_jiffies(AYANEO_MCU_REPLY_TIMEOUT_MS))) {
++		dev_info(dev, "%s: no answer\n", what);
++		return;
++	}
++
++	spin_lock_irqsave(&mcu->rx_lock, flags);
++	rx_len = min(mcu->rx_len, sizeof(rx));
++	memcpy(rx, mcu->rx, rx_len);
++	spin_unlock_irqrestore(&mcu->rx_lock, flags);
++
++	dev_info(dev, "%s: answered %*ph\n", what, (int)rx_len, rx);
++}
 +#ifdef CONFIG_AYANEO_SERIAL_MCU_DEBUG
 +
 +/*
 + * DEBUG SURFACE -- A LAB TOOL, KEPT SO IT CAN BE FOUND, NOT SO IT CAN BE SHIPPED.
 + *
 + * NOTHING WE BUILD SETS CONFIG_AYANEO_SERIAL_MCU_DEBUG. There is one kernel config
-+ * (kernel/kernel.config, merged by kernel/build.sh over every kernel/*.config), the same for dev
++ * (kernel/kernel.config, merged by build.sh over every fragment in kernel/), the same for dev
 + * and release images, and the symbol is deliberately absent from it. So THIS CODE IS NOT COMPILE
 + * TESTED: assume it has bit-rotted against the driver around it and expect to fix it up before it
 + * builds. That is the accepted price of keeping it here rather than in a commit nobody will think
@@ -298,37 +368,6 @@ diff -Naur a/drivers/misc/ayaneo-serial-mcu.c b/drivers/misc/ayaneo-serial-mcu.c
 +	}
 +
 +	return n;
-+}
-+
-+static void ayaneo_mcu_report_reply(struct ayaneo_mcu *mcu, const char *what)
-+{
-+	struct device *dev = &mcu->serdev->dev;
-+	u8 rx[AYANEO_MCU_RX_LEN];
-+	unsigned long flags;
-+	size_t rx_len;
-+
-+	if (!wait_for_completion_timeout(&mcu->reply,
-+					 msecs_to_jiffies(AYANEO_MCU_REPLY_TIMEOUT_MS))) {
-+		dev_info(dev, "%s: no answer\n", what);
-+		return;
-+	}
-+
-+	spin_lock_irqsave(&mcu->rx_lock, flags);
-+	rx_len = min(mcu->rx_len, sizeof(rx));
-+	memcpy(rx, mcu->rx, rx_len);
-+	spin_unlock_irqrestore(&mcu->rx_lock, flags);
-+
-+	dev_info(dev, "%s: answered %*ph\n", what, (int)rx_len, rx);
-+}
-+
-+static void ayaneo_mcu_arm_reply(struct ayaneo_mcu *mcu)
-+{
-+	unsigned long flags;
-+
-+	spin_lock_irqsave(&mcu->rx_lock, flags);
-+	mcu->rx_len = 0;
-+	spin_unlock_irqrestore(&mcu->rx_lock, flags);
-+	reinit_completion(&mcu->reply);
 +}
 +
 +static ssize_t command_store(struct device *dev, struct device_attribute *attr,
@@ -388,22 +427,62 @@ diff -Naur a/drivers/misc/ayaneo-serial-mcu.c b/drivers/misc/ayaneo-serial-mcu.c
 +};
 +#endif /* CONFIG_AYANEO_SERIAL_MCU_DEBUG */
 +
-+static int ayaneo_mcu_configure(struct ayaneo_mcu *mcu)
++/* Whether this board needs to be told anything about its face buttons at all. */
++static bool ayaneo_mcu_needs_layout(struct ayaneo_mcu *mcu)
++{
++	return mcu->board && mcu->board->japanese_labels;
++}
++
++static int ayaneo_mcu_send_layout(struct ayaneo_mcu *mcu)
 +{
 +	u8 layout[AYANEO_MCU_PAYLOAD_LEN];
++
++	memcpy(layout, ayaneo_mcu_cmd_layout, sizeof(layout));
++	layout[AYANEO_MCU_LAYOUT_BYTE] = mcu->board->layout_positional;
++
++	return ayaneo_mcu_send_command(mcu, layout);
++}
++
++static int ayaneo_mcu_configure(struct ayaneo_mcu *mcu)
++{
 +	int ret;
 +
 +	ret = ayaneo_mcu_send_command(mcu, ayaneo_mcu_cmd_xbox360);
 +	if (ret)
 +		return ret;
 +
-+	if (!mcu->board || !mcu->board->japanese_labels)
++	if (!ayaneo_mcu_needs_layout(mcu))
 +		return 0;
 +
-+	memcpy(layout, ayaneo_mcu_cmd_layout, sizeof(layout));
-+	layout[AYANEO_MCU_LAYOUT_BYTE] = mcu->board->layout_positional;
++	return ayaneo_mcu_send_layout(mcu);
++}
 +
-+	return ayaneo_mcu_send_command(mcu, layout);
++/*
++ * The layout again, this time against a personality that exists.
++ *
++ * The write in configure() above went out before the MCU had built its USB personality, so it was
++ * acked and discarded -- see the asymmetry at the top of this file. This is the one that actually
++ * decides which letter the bottom button reports on an ACE or a DMG; the earlier one is kept only
++ * because it is already correct on a warm boot, where nothing re-enumerates.
++ *
++ * Unconditional: there is no state to check. Re-sending a layout the MCU already has changes
++ * nothing, and the ack cannot tell the two cases apart anyway.
++ */
++static void ayaneo_mcu_layout_work(struct work_struct *work)
++{
++	struct ayaneo_mcu *mcu = container_of(to_delayed_work(work), struct ayaneo_mcu, layout_work);
++	struct device *dev = &mcu->serdev->dev;
++	int ret;
++
++	ayaneo_mcu_arm_reply(mcu);
++
++	ret = ayaneo_mcu_send_layout(mcu);
++	if (ret) {
++		dev_warn(dev, "could not re-send the face-button layout: %d\n", ret);
++		return;
++	}
++
++	ayaneo_mcu_report_reply(mcu, "face-button layout re-sent");
 +}
 +
 +/*
@@ -424,10 +503,7 @@ diff -Naur a/drivers/misc/ayaneo-serial-mcu.c b/drivers/misc/ayaneo-serial-mcu.c
 +
 +	mcu->attempt++;
 +
-+	spin_lock_irqsave(&mcu->rx_lock, flags);
-+	mcu->rx_len = 0;
-+	spin_unlock_irqrestore(&mcu->rx_lock, flags);
-+	reinit_completion(&mcu->reply);
++	ayaneo_mcu_arm_reply(mcu);
 +
 +	ret = ayaneo_mcu_configure(mcu);
 +	if (ret) {
@@ -455,9 +531,20 @@ diff -Naur a/drivers/misc/ayaneo-serial-mcu.c b/drivers/misc/ayaneo-serial-mcu.c
 +	spin_unlock_irqrestore(&mcu->rx_lock, flags);
 +
 +	dev_info(dev, "MCU configured on attempt %u (Xbox 360 mode%s); it answered %*ph\n",
-+		 mcu->attempt, (mcu->board && mcu->board->japanese_labels) ?
++		 mcu->attempt, ayaneo_mcu_needs_layout(mcu) ?
 +		 ", face buttons reported by position" : "",
 +		 (int)rx_len, rx);
++
++	/*
++	 * The mode switch is done, but the layout that went with it was spoken to an MCU that had
++	 * not built its USB personality yet. Say it again once it has.
++	 */
++	if (ayaneo_mcu_needs_layout(mcu)) {
++		dev_info(dev, "re-sending the face-button layout in %u ms, once the pad has enumerated\n",
++			 AYANEO_MCU_LAYOUT_SETTLE_MS);
++		mod_delayed_work(system_percpu_wq, &mcu->layout_work,
++				 msecs_to_jiffies(AYANEO_MCU_LAYOUT_SETTLE_MS));
++	}
 +}
 +
 +/*
@@ -470,6 +557,13 @@ diff -Naur a/drivers/misc/ayaneo-serial-mcu.c b/drivers/misc/ayaneo-serial-mcu.c
 + */
 +static void ayaneo_mcu_restart(struct ayaneo_mcu *mcu)
 +{
++	/*
++	 * Drop a pending layout re-send first: it belongs to the configure that is being replaced,
++	 * and the two works share the UART and the reply completion, so letting them overlap would
++	 * interleave two frame sequences on the wire.
++	 */
++	cancel_delayed_work_sync(&mcu->layout_work);
++
 +	mcu->attempt = 0;
 +	mod_delayed_work(system_percpu_wq, &mcu->config_work, 0);
 +}
@@ -497,6 +591,7 @@ diff -Naur a/drivers/misc/ayaneo-serial-mcu.c b/drivers/misc/ayaneo-serial-mcu.c
 +
 +	unregister_pm_notifier(&mcu->pm_nb);
 +	cancel_delayed_work_sync(&mcu->config_work);
++	cancel_delayed_work_sync(&mcu->layout_work);
 +}
 +
 +static int ayaneo_mcu_probe(struct serdev_device *serdev)
@@ -514,6 +609,7 @@ diff -Naur a/drivers/misc/ayaneo-serial-mcu.c b/drivers/misc/ayaneo-serial-mcu.c
 +	mcu->xbox360_mode = device_property_read_bool(dev, "ayaneo,xbox360-mode");
 +	mcu->board = device_get_match_data(dev);
 +	INIT_DELAYED_WORK(&mcu->config_work, ayaneo_mcu_config_work);
++	INIT_DELAYED_WORK(&mcu->layout_work, ayaneo_mcu_layout_work);
 +	init_completion(&mcu->reply);
 +	spin_lock_init(&mcu->rx_lock);
 +	serdev_device_set_drvdata(serdev, mcu);

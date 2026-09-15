@@ -374,7 +374,7 @@ git_commit: a300e35c0a4b4a38fb53742ea6e2a203c98ee523
 #     (the MDSS node, `iommus = <&apps_smmu 0x1c00 0x2>`), inside a 0.4 ms window, all of them
 #     BEFORE the panel rails come up at 0.854s. The bootloader continuous-splash handoff, i.e.
 #     what dpu-quiesce-boot-scanout.patch is for. Board-specific: Pocket FIT shows ZERO on the
-#     same kernel. STILL OPEN: whether it predates our own 0514/0518-0524. Nobody has checked.
+#     same kernel. STILL OPEN: whether it predates our own 0513/0518-0524. Nobody has checked.
 #
 # SMMU SERIES AT v3 since 2026-09-12, and STILL NOT HW-GATED — it is the oldest ungated thing on
 # this pin. 0515/0516/0517 used to carry patches 1-3 of Dmitry Baryshkov's v2 "drm/msm: fix SMMU

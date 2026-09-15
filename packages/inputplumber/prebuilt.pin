@@ -21,9 +21,9 @@
 # rootfs/overlay/etc/inputplumber/devices.d, because upstream now ships configs for boards we
 # also describe. See the note below.
 name: inputplumber
-version: 0.79.0
-url: https://github.com/ShadowBlip/InputPlumber/releases/download/v0.79.0/inputplumber-aarch64.tar.gz
-sha256: 123c858139d3b78e3f075158ce16b8fdc8067a10e31a93cb1e7f2aea816106bd
+version: 0.81.0
+url: https://github.com/ShadowBlip/InputPlumber/releases/download/v0.81.0/inputplumber-aarch64.tar.gz
+sha256: 5509a6f79bec95c240de34833639e3ba8a144752e3745e6eb978b38b8aa05a10
 strip: 1
 
 # 0.78.0 was the release where upstream started describing ARM handhelds at all: it added
@@ -31,15 +31,50 @@ strip: 1
 # own sm8650 description rather than suppress it. A Pocket FIT on 0.78.1 then confirmed upstream's
 # reading of that MCU on every point where the two disagreed.
 #
-# 0.79.0 continues it and covers most of the rest of our roster: 50-ayn_odin2.yaml (matching
+# 0.79.0 continued it and covered most of the rest of our roster: 50-ayn_odin2.yaml (matching
 # ayn,odin2 AND ayn,odin2portal), 50-ayn_odin2_mini.yaml, 50-ayn_thor.yaml, 50-konkr_pocket_fit.yaml
 # and _elite, and 50-retroid_pocket{5,6,_flip2,_mini,_nova}.yaml — plus the capability maps behind
 # them: ayn2, ayn3, konkr2, konkr3, ret1, ret2, rsinput1. Every one of our device configs that those
-# supersede is deleted with this bump, including our own copy of the Pocket FIT config, which shared
-# a FILE NAME with the one upstream now ships and so would have won the tie and hidden it.
+# superseded was deleted with that bump, including our own copy of the Pocket FIT config, which
+# shared a FILE NAME with the one upstream ships and so would have won the tie and hidden it.
+#
+# 0.80.0 TAKES THE AYANEO POCKET DS (upstream bc0fcd4), on the same DT compatible `ayaneo,pocketds`
+# and under the same file name ours had — so ours would have won the /etc tie and hidden it, again.
+# Ours is deleted with the 0.81.0 bump, and upstream's is NOT a copy of what we had:
+#
+#   * a hidraw row on 4001:0428 interface 0 — FORCE FEEDBACK, which our description had no row for
+#     at all, so rumble on this board was simply absent
+#   * `aya10` on the AYANEO-mode pad AND on the AYANEO DEVICE keyboard row, `aya11` on XInput mode,
+#     where ours used the generic `dinput_generic` + `aya9`. aya10 is a real board map: analog
+#     triggers off ABS_BRAKE/ABS_GAS, the right stick off ABS_Z/ABS_RZ, BTN_START->Guide,
+#     BTN6->Start, BTN5->QuickAccess, BTN7->QuickAccess2, and BTN2/BTN_MODE onto the second paddle
+#     pair. None of the DS's extra buttons reached Steam under our file.
+#
+# Two places upstream's DS deliberately differs from ours, and only one of them is a no-op:
+#
+#   * it drops `maximum_sources: 0`. That is NOT a cap being lifted — unset and any value < 1 both
+#     mean unlimited (src/input/manager.rs, the max_sources fallback), so 0 and absent are the same
+#     config. Nothing changes.
+#   * its XInput row carries NO phys_path, where ours pinned usb-0001:01:00.0-2/input0. Upstream's
+#     own Pocket S2 config still pins one; the DS one does not. So on a DS, a REAL external
+#     045e:028e pad now matches this 50- config before upstream's 60-xbox_360_gamepad.yaml and gets
+#     absorbed into the board's composite device. WATCH FOR THIS the first time a DS is on the
+#     bench with an external controller plugged in — and note it has never been exercised end to
+#     end anyway, because the DS still has no display (its backlight enable sits behind an on-bus
+#     tca6408 expander whose pin is unknown).
+#
+# Also new in 0.80.0/0.81.0 and free to us: 50-ayn_odin3.yaml (`ayn,odin3`), plus x86 boards we
+# don't build for. 50-konkr-fit.yaml is the one that LOOKS like a collision — it sorts before
+# 50-konkr_pocket_fit.yaml ('-' < '_') — but it matches on `dmi_data`, so it can never fire on an
+# ARM board and our Pocket FIT keeps upstream's devicetree config.
+#
+# Two upstream fixes in this range are worth knowing when triaging input on hardware: 50263d3
+# restores the release delay gamepad macros need, so on-release QuickAccess/Screenshot chords are
+# visible to Steam again, and cf93497 restores device-node permissions on unhide and re-triggers
+# the udev add.
 #
 # What upstream still does NOT describe, and what stays in our overlay:
-#   * the five SM8550 AYANEO Pocket boards — 50-ayaneo_pocket_{ace,dmg,ds,evo,s1}.yaml
+#   * four SM8550 AYANEO Pocket boards — 50-ayaneo_pocket_{ace,dmg,evo,s1}.yaml
 #   * the AYN Thor Lite — 50-ayn_thor_lite.yaml, upstream's Retroid description (its `ret1` map, the
 #     same driver, the same 2020:3001 MCU) behind a DT `model` match, because its `compatible`
 #     `ayn,thor-lite` is not what upstream's 50-ayn_thor.yaml keys on
@@ -47,6 +82,6 @@ strip: 1
 #     is an SPI MCU on a driver nothing else uses, so there is nothing upstream to adopt
 #
 # Binary links libiio.so.0 (IIO sensors/gyro) — pulled from the holo repo, not bundled.
-# Re-read on the 0.79.0 bump: still the only non-base NEEDED entry (libudev, libgcc_s, libm, libc
+# Re-read on the 0.81.0 bump: still the only non-base NEEDED entry (libudev, libgcc_s, libm, libc
 # are all base).
 deps: libiio

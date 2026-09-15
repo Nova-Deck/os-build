@@ -2,9 +2,17 @@
 #
 # AYANEO Pocket ACE (SM8550), described the way UPSTREAM describes the AYANEO Pocket S2.
 #
-# THIS FILE IS THE ANCHOR FOR THE WHOLE SM8550 AYANEO FAMILY. Its four siblings — pocket_dmg,
-# pocket_ds, pocket_evo, pocket_s1 — are this file with a different `matches` block and a different
-# `name`. The reasoning lives here.
+# THIS FILE IS THE ANCHOR FOR THE WHOLE SM8550 AYANEO FAMILY. Its three siblings — pocket_dmg,
+# pocket_evo, pocket_s1 — are this file with a different `matches` block and a different `name`.
+# The reasoning lives here.
+#
+# THERE WAS A FOURTH, pocket_ds, and upstream took it at 0.80.0 (devices/50-ayaneo_pocket_ds.yaml,
+# upstream bc0fcd4, same DT compatible and the same FILE NAME as ours). It is deleted on the 0.81.0
+# bump — but read it before copying this shape onto another board, because upstream's DS is NOT
+# this file with a different `matches`: it adds a hidraw row for force feedback and replaces
+# `dinput_generic` + `aya9` with the board-specific `aya10`/`aya11`. Whether that shape is right
+# for the rest of the family is a HARDWARE question nobody has asked yet; see
+# packages/inputplumber/prebuilt.pin for what the maps actually differ on.
 #
 # WHY THE FAMILY MOVED. These boards carry the SAME controller MCU as the SM8650 pair, exposed the
 # same way over USB. InputPlumber 0.78.0 began shipping its own description of exactly that

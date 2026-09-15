@@ -41,7 +41,7 @@ The game itself:
 | `cores` | cpulist or preset | pin the game's threads to these CPUs |
 | `singleCore` | bool | narrow `cores` to exactly one CPU — the fastest of those selected |
 | `env` | object | environment variables for the launch (`null` unsets one) — Proton titles only |
-| `wineTopology` | bool | set `false` to pin via `cores` without reshaping what Wine reports |
+| `wineTopology` | bool | set `false` to pin via `cores` without reshaping what Wine reports (suppresses both topology variables) |
 
 Overrides of a system-wide setting, per-game only (see below):
 
@@ -80,8 +80,13 @@ actually doing.
 `lavd` is `scx_lavd`; see [`packages/scx-scheds/source.pin`](../packages/scx-scheds/source.pin) for
 the measurements behind it and why the shipped default is still stock.
 
-`cores` also derives `WINE_CPU_TOPOLOGY` for Proton titles, so Wine reports the CPUs the game
-will actually get instead of the machine's full set.
+`cores` also derives the CPU topology for Proton titles, so Wine reports the CPUs the game will
+actually get instead of the machine's full set. It is exported under **both** `WINE_CPU_TOPOLOGY`
+and `PROTON_CPU_TOPOLOGY`: Proton keeps a table of titles it hands a fixed core count, and for
+those it overwrites `WINE_CPU_TOPOLOGY` with its own value unless `PROTON_CPU_TOPOLOGY` is set —
+so the Wine name alone is silently discarded on exactly the games most likely to be re-pinned by
+hand. The two are one setting here, in `env` too: name either and both are written, `null` on
+either unsets the pair, and naming both leaves them verbatim.
 
 `singleCore` narrows whatever `cores` selected down to **exactly one** CPU: the highest-capacity
 member, ties broken by the lowest CPU number. It is a modifier, not a preset, so the class still
@@ -142,7 +147,7 @@ Games launch three ways — Proton (compat tool), native x86 Linux via the syste
 - **Scheduling for the game tree** (`nice`, `cores`) needs no launch hook at all, and is
   enforced post-launch by `novadeck-powerd` on **every** path. Caveat: enforcement lands up to
   one tick (~3 s) after launch, so the first moments run untuned.
-- **Wine/Proton env** (`env`, `WINE_CPU_TOPOLOGY` from `cores`) must exist before exec, and
+- **Wine/Proton env** (`env`, the CPU topology from `cores`) must exist before exec, and
   `game-launch` is in the exec chain precisely for this path. Meaningless for non-Wine
   titles, so no coverage gap.
 

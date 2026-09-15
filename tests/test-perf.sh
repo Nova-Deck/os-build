@@ -429,22 +429,57 @@ spec = importlib.util.spec_from_loader(
 pw = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(pw)
 
-os.environ.pop("WINE_CPU_TOPOLOGY", None)
+# The topology is exported under BOTH names: Proton keeps a table of titles it hands a fixed
+# core count, and for those it overwrites WINE_CPU_TOPOLOGY with its own value unless
+# PROTON_CPU_TOPOLOGY is set. A lone Wine name is silently discarded on exactly those games.
+def clear_topology():
+    for key in pw.TOPOLOGY_KEYS:
+        os.environ.pop(key, None)
+
+
+def topology():
+    return tuple(os.environ.get(key) for key in pw.TOPOLOGY_KEYS)
+
+
+clear_topology()
 os.environ["TOMBSTONE_ME"] = "yes"
 pw.apply_env({"cores": "2,3", "env": {"DXVK_HUD": "fps", "TOMBSTONE_ME": None}})
-check("WINE_CPU_TOPOLOGY derived from cores", os.environ.get("WINE_CPU_TOPOLOGY"), "2:2,3")
+check("topology derived from cores, under both names", topology(), ("2:2,3", "2:2,3"))
 check("per-game env applied", os.environ.get("DXVK_HUD"), "fps")
 check("null env entry unsets", "TOMBSTONE_ME" in os.environ, False)
 
-os.environ.pop("WINE_CPU_TOPOLOGY", None)
+clear_topology()
 pw.apply_env({"cores": "2,3", "wineTopology": False})
-check("wineTopology false suppresses it", os.environ.get("WINE_CPU_TOPOLOGY"), None)
+check("wineTopology false suppresses both", topology(), (None, None))
 
+clear_topology()
 os.environ["WINE_CPU_TOPOLOGY"] = "user-set"
 pw.apply_env({"cores": "2,3"})
-check("explicit user topology wins", os.environ.get("WINE_CPU_TOPOLOGY"), "user-set")
+check("inherited Wine topology wins, and carries over", topology(), ("user-set", "user-set"))
 
-os.environ.pop("WINE_CPU_TOPOLOGY", None)
+clear_topology()
+os.environ["PROTON_CPU_TOPOLOGY"] = "user-set"
+pw.apply_env({"cores": "2,3"})
+check("inherited Proton topology wins, and carries over", topology(), ("user-set", "user-set"))
+
+clear_topology()
+pw.apply_env({"cores": "2,3", "env": {"WINE_CPU_TOPOLOGY": "1:2"}})
+check("a profile naming one name sets both", topology(), ("1:2", "1:2"))
+
+clear_topology()
+pw.apply_env({"cores": "2,3", "env": {"PROTON_CPU_TOPOLOGY": "1:2"}})
+check("...from either side", topology(), ("1:2", "1:2"))
+
+clear_topology()
+pw.apply_env({"cores": "2,3",
+              "env": {"WINE_CPU_TOPOLOGY": "1:2", "PROTON_CPU_TOPOLOGY": "1:3"}})
+check("a profile naming both is left verbatim", topology(), ("1:2", "1:3"))
+
+clear_topology()
+pw.apply_env({"cores": "2,3", "env": {"PROTON_CPU_TOPOLOGY": None}})
+check("a tombstone on one unsets the pair", topology(), (None, None))
+
+clear_topology()
 pw.apply_env({"cores": "bogus", "env": {"STILL": "applied"}})
 check("bad cores does not block env", os.environ.get("STILL"), "applied")
 

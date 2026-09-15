@@ -58,6 +58,9 @@ PROG = "game-launch"
 
 STALE_AFTER = 24 * 60 * 60  # generated configs are per-launch; reap yesterday's
 
+# One setting, two names — see apply_env.
+TOPOLOGY_KEYS = ("WINE_CPU_TOPOLOGY", "PROTON_CPU_TOPOLOGY")
+
 
 def appid():
     """Steam exports the running appid under one of three names, depending on the launch path."""
@@ -318,12 +321,18 @@ def write_config(settings, game_id, profiles):
 def apply_env(settings):
     """Per-game environment. Applied last and verbatim, so it can override anything above it.
 
-    WINE_CPU_TOPOLOGY is derived from the same `cores` key novadeck-powerd enforces as an
+    The CPU topology is derived from the same `cores` key novadeck-powerd enforces as an
     affinity pin, so Wine reports the CPUs the game will actually be given rather than the
     machine's full set. It lives here rather than in the daemon because env must exist before
     exec and this is Wine-only — the scheduling half of `cores` is applied post-launch by the
     daemon, on every launch path (see docs/per-game-perf.md). Set "wineTopology": false to pin
     without also reshaping what Wine reports.
+
+    It takes BOTH names. Proton carries a table of titles it gives a fixed core count to, and
+    for those it overwrites WINE_CPU_TOPOLOGY with its own value — unconditionally, unless
+    PROTON_CPU_TOPOLOGY is set, which it copies over WINE_CPU_TOPOLOGY instead. So exporting
+    only the Wine name is silently discarded on exactly the games someone is most likely to be
+    re-pinning by hand.
     """
     cores = None
     single = settings.get("singleCore") is True
@@ -332,13 +341,22 @@ def apply_env(settings):
             cores = novadeck_perf.resolve_cores(settings.get("cores"), single=single)
         except ValueError as exc:
             print(f"{PROG}: ignoring bad 'cores' ({exc})", file=sys.stderr)
-    if (cores and settings.get("wineTopology") is not False
-            and "WINE_CPU_TOPOLOGY" not in os.environ):
-        os.environ["WINE_CPU_TOPOLOGY"] = f"{len(cores)}:{','.join(map(str, cores))}"
+    if cores and settings.get("wineTopology") is not False:
+        # An inherited value still wins, under either name.
+        topology = os.environ.get("PROTON_CPU_TOPOLOGY", os.environ.get(
+            "WINE_CPU_TOPOLOGY", f"{len(cores)}:{','.join(map(str, cores))}"))
+        for key in TOPOLOGY_KEYS:
+            os.environ.setdefault(key, topology)
 
     extra = settings.get("env")
     if not isinstance(extra, dict):
         return
+    # The two topology names are one setting, so a profile that names only one gets both —
+    # otherwise Proton replaces a lone WINE_CPU_TOPOLOGY with its own. A null tombstone
+    # propagates the same way and unsets the pair.
+    named = [key for key in TOPOLOGY_KEYS if key in extra]
+    if len(named) == 1:
+        extra = {**extra, **dict.fromkeys(TOPOLOGY_KEYS, extra[named[0]])}
     for key, value in extra.items():
         try:
             if value is None:  # null is a tombstone: unset rather than set-to-empty

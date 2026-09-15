@@ -1,10 +1,11 @@
 # FEX patches
 
 `0001`/`0005` are **build fixes for aarch64 + clang**, not behaviour changes, and both are still
-required at FEX-2608 (`e869aa6`). Neither is upstream — re-verified absent from the FEX-2608 tree
-on 2026-08-06 (`FEXCore/Source/CMakeLists.txt` has no `set_source_files_properties` for
+required at FEX-2609 (`395b132`). Neither is upstream — re-verified absent from the FEX-2609 tree
+on 2026-09-15 (`FEXCore/Source/CMakeLists.txt` has no `set_source_files_properties` for
 `InterpreterFallbacks.cpp`; `ThunkLibs/include/common/Host.h` has no `signed char*` conversion).
-`0006` is our one **behaviour fix** (issue #49), an upstream candidate.
+`0006` is our one **behaviour fix** (issue #49), an upstream candidate, and also still required at
+FEX-2609 — `FileManagement.cpp` still spells the prefix `Is64BitMode() ? "lib64" : "lib"`.
 
 `0001`/`0005` are numbered to match the upstream patch series they came from (a Qualcomm-handheld
 distro's FEX package); the gaps are not missing files.
@@ -14,8 +15,9 @@ distro's FEX package); the gaps are not missing files.
 Compiles `InterpreterFallbacks.cpp` at `-O0 -fno-lto`. Without it clang hits an internal compiler
 error building FEXCore for aarch64. Named for LLVM 18, but the ICE was still reproducing on a
 clang-21 toolchain: the peer this came from bumped to FEX-2607, removed both patches, and had to
-add them straight back. FEX-2608 touches this file (it adds `SharedCodeBufferManager.cpp` to
-`SRCS`), but nowhere near the hunk — the patch still applies at its recorded offset.
+add them straight back. Every release so far touches this file (FEX-2608 added
+`SharedCodeBufferManager.cpp` to `SRCS`, FEX-2609 added `DiskCache.cpp` and `WorkQueueThread.cpp`),
+but nowhere near the hunk — the patch still applies at its recorded offset.
 
 The cost is real but contained — one translation unit of the *interpreter fallback* path drops to
 `-O0`. That path only runs for instructions the JIT declines to compile.

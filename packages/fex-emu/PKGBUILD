@@ -35,7 +35,7 @@
 # permanent, so an old pin never rots out from under us.
 
 pkgname=fex-emu
-pkgver=2608
+pkgver=2609
 pkgrel=1
 pkgdesc="Fast usermode x86 and x86-64 emulator for AArch64, with host/guest thunks"
 arch=('aarch64')
@@ -64,10 +64,10 @@ depends=('erofsfuse' 'squashfuse' 'fuse3' 'fmt' 'xxhash'
 makedepends=('git' 'cmake' 'ninja' 'clang' 'lld' 'llvm' 'python-setuptools'
              'catch2' 'libepoxy' 'zlib' 'openssl' 'libarchive' 'libxrandr')
 
-# The FEX-2608 tag. NOTE this is the COMMIT the tag points at, not the tag object's own sha —
-# `git ls-remote refs/tags/FEX-2608` prints the latter, which #commit= cannot resolve.
+# The FEX-2609 tag. NOTE this is the COMMIT the tag points at, not the tag object's own sha —
+# `git ls-remote refs/tags/FEX-2609` prints the latter, which #commit= cannot resolve.
 # Verify a bump with: git rev-parse FEX-<ver>^{commit}
-_commit=e869aa644a16e4332cdc15c1ea0b4d13d482385d
+_commit=395b132f346b1a45def246d10c52245edba1ef02
 
 # x86 sysroot inputs. Pinned to archive.archlinux.org (permanent URLs; the rolling mirrors
 # rotate old versions out). noextract: these are the sysroot payload, assembled by hand in
@@ -226,8 +226,29 @@ build() {
   # largely is atomics. That code is compiled C++, not JIT output — the JIT picks its emitted
   # instructions from RUNTIME host detection, so -march changes nothing on the guest hot path.
   # See "CPU baseline" in packages/README.md for the fleet floor and why i8mm is absent.
-  export CFLAGS+=" -mbranch-protection=none -O3 -march=armv8.2-a+fp16+dotprod"
-  export CXXFLAGS+=" -mbranch-protection=none -O3 -march=armv8.2-a+fp16+dotprod"
+  #
+  # It goes in BOTH places since FEX-2609. On arm64 FEX now always appends an -march of its own
+  # via target_compile_options (armv8-a+crc when TUNE_ARCH is left `generic`), and target flags
+  # land AFTER CMAKE_CXX_FLAGS, so on FEXCore/FEX/FEXGetConfig the last -march wins and clang
+  # takes its arch FEATURES from that one, not from ours.
+  #
+  # SCOPE, because the obvious reading is wrong: this does NOT lose LSE. -mcpu=cortex-a78 still
+  # reaches cc1 as `-target-cpu cortex-a78`, and LLVM derives LSE/dotprod/fp16 from the CPU model
+  # independently of -march, so atomic codegen is byte-identical either way (`ldaddal` emitted
+  # under generic TUNE_ARCH just as under ours — checked, not assumed). What the trailing
+  # armv8-a+crc actually drops is the DRIVER-side view: the -target-feature flags and the
+  # __ARM_FEATURE_* macros. FEX reads exactly one of those — atomic_bitset.h gates an `stclrl`
+  # fast path on __ARM_FEATURE_ATOMICS — and that path is dead upstream anyway
+  # (`constexpr static bool use_stclr {}` is false, with a TODO to verify or delete).
+  #
+  # So TUNE_ARCH buys no measurable codegen today. It is set because it is the knob upstream
+  # intends for this, it keeps the declared floor and the compiled floor the same thing, and it
+  # re-arms that stclr path for free if upstream ever flips use_stclr.
+  #
+  # FEX appends the `+crc` itself; do not spell it here.
+  local _march=armv8.2-a+fp16+dotprod
+  export CFLAGS+=" -mbranch-protection=none -O3 -march=${_march}"
+  export CXXFLAGS+=" -mbranch-protection=none -O3 -march=${_march}"
 
   # TUNE_CPU is a scheduling hint only (not an ISA floor), so a conservative core keeps the
   # build valid across the big.LITTLE cluster this ships on.
@@ -238,6 +259,7 @@ build() {
     -DCMAKE_INSTALL_PREFIX=/usr \
     -DCMAKE_C_COMPILER=clang \
     -DCMAKE_CXX_COMPILER=clang++ \
+    -DTUNE_ARCH="${_march}" \
     -DTUNE_CPU=cortex-a78 \
     -DENABLE_OFFLINE_TELEMETRY=OFF \
     -DBUILD_FEXCONFIG=FALSE \

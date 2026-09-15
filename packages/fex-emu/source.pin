@@ -3,7 +3,7 @@
 # There is nothing to fetch or patch: `fex-emu` exists neither in the holo core/extra aarch64
 # repos (checked against the pinned base's synced dbs) nor in the AUR. So, unlike gamescope or
 # mesa, this is not a holo recipe with our patches on top — it is our own recipe for upstream
-# FEX, pinned to the FEX-2608 tag.
+# FEX, pinned to the FEX-2609 tag.
 #
 # Why ship it: it registers x86/x86_64 with binfmt_misc so native x86 *Linux* ELF binaries run
 # on this arm64 device. This is NOT the path Windows games take — those use the bundled arm64
@@ -27,7 +27,7 @@
 #                  root (build-overlay.sh injects them after the first `cd` in prepare(), which is
 #                  `cd "$srcdir/FEX"` for exactly this reason), in the order listed.
 #
-# 0001/0005 are still REQUIRED at FEX-2608 with clang 21 on aarch64 — neither is upstream. A
+# 0001/0005 are still REQUIRED at FEX-2609 with clang 21 on aarch64 — neither is upstream. A
 # peer distro bumped to 2607, dropped both, and had to restore them. 0006 is our behaviour fix
 # for thunk overlays on Arch-layout guests (issue #49) — drop it once upstream takes it. See
 # patches/README.md.

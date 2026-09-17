@@ -1,0 +1,125 @@
+Subject: [PATCH] Revert "Revert "drm/msm: dsi: fix PLL init in bonded mode""
+
+This re-applies 93c97bc8d85d ("drm/msm: dsi: fix PLL init in bonded mode"),
+which linux 7.2.6 reverted as 5de981b7db1f (upstream 44784327815b).
+
+WHY WE NEED IT.  Pocket S2 is the only board we ship in DSI BONDED mode --
+`qcom,dual-dsi-mode` + `qcom,sync-dual-dsi` in sm8650-ayaneo-ps2.dts, one
+1440x2560 panel driven across two DSI links.  With the upstream revert in
+place, only the BOTTOM HALF of that panel draws: HW-observed on 7.2.6,
+2026-09-14.
+
+The mechanism is the PLL bias refcount the revert restores.  Two PHYs share
+one PLL in bonded mode, and the pre-fix code cannot account for that:
+
+  dsi_pll_enable_pll_bias()   early-returns when pll_enable_cnt is already
+                              non-zero, so the SECOND PHY never enables its
+                              bias
+  dsi_7nm_phy_enable()        force-assigns pll_enable_cnt = 1 rather than
+                              incrementing, discarding the first PHY's count
+
+93c97bc8d85d replaces both with a plain refcount, which is what makes the
+second link come up.
+
+WHY UPSTREAM REVERTED IT, AND WHY THAT DOES NOT APPLY HERE.  The revert was
+not a rethink of bonded mode; 93c97bc8d85d broke the NON-bonded case for
+Mohit Dsor (wrong clock divider -> wrong display mode), and the revert buys
+time -- its own message says it is "letting Neil to work on a better fix".
+So upstream currently has no state that is correct for a fleet carrying both
+kinds of panel, and has to pick one.  We pick the one we have MEASURED: every
+board we ship ran on 7.2.5, which HAS 93c97bc8d85d, and all four gated boards
+passed -- the three non-bonded ones (Pocket ACE, Pocket FIT, Pocket Max)
+included.  Whatever the non-bonded breakage is, it does not reach our panels,
+and the bonded breakage demonstrably does.
+
+DROP THIS PATCH once Neil Armstrong's proper fix lands in the pinned stable
+series -- check whether dsi_pll_enable_pll_bias() still early-returns on a
+non-zero pll_enable_cnt, and whether dsi_7nm_phy_enable() still assigns
+pll_enable_cnt = 1 instead of incrementing.  If either is gone, the rework
+has arrived and this patch must be re-evaluated rather than carried forward.
+
+---
+
+diff --git a/drivers/gpu/drm/msm/dsi/phy/dsi_phy.h b/drivers/gpu/drm/msm/dsi/phy/dsi_phy.h
+--- a/drivers/gpu/drm/msm/dsi/phy/dsi_phy.h
++++ b/drivers/gpu/drm/msm/dsi/phy/dsi_phy.h
+@@ -111,7 +111,6 @@
+ 	struct msm_dsi_dphy_timing timing;
+ 	const struct msm_dsi_phy_cfg *cfg;
+ 	void *tuning_cfg;
+-	void *pll_data;
+ 
+ 	enum msm_dsi_phy_usecase usecase;
+ 	bool regulator_ldo_mode;
+diff --git a/drivers/gpu/drm/msm/dsi/phy/dsi_phy_7nm.c b/drivers/gpu/drm/msm/dsi/phy/dsi_phy_7nm.c
+--- a/drivers/gpu/drm/msm/dsi/phy/dsi_phy_7nm.c
++++ b/drivers/gpu/drm/msm/dsi/phy/dsi_phy_7nm.c
+@@ -426,11 +426,8 @@
+ 	u32 data;
+ 
+ 	spin_lock_irqsave(&pll->pll_enable_lock, flags);
+-	if (pll->pll_enable_cnt++) {
+-		spin_unlock_irqrestore(&pll->pll_enable_lock, flags);
+-		WARN_ON(pll->pll_enable_cnt == INT_MAX);
+-		return;
+-	}
++	pll->pll_enable_cnt++;
++	WARN_ON(pll->pll_enable_cnt == INT_MAX);
+ 
+ 	data = readl(pll->phy->base + REG_DSI_7nm_PHY_CMN_CTRL_0);
+ 	data |= DSI_7nm_PHY_CMN_CTRL_0_PLL_SHUTDOWNB;
+@@ -876,7 +873,6 @@
+ 	spin_lock_init(&pll_7nm->pll_enable_lock);
+ 
+ 	pll_7nm->phy = phy;
+-	phy->pll_data = pll_7nm;
+ 
+ 	ret = pll_7nm_register(pll_7nm, phy->provided_clocks->hws);
+ 	if (ret) {
+@@ -965,10 +961,8 @@
+ 	u32 const delay_us = 5;
+ 	u32 const timeout_us = 1000;
+ 	struct msm_dsi_dphy_timing *timing = &phy->timing;
+-	struct dsi_pll_7nm *pll = phy->pll_data;
+ 	void __iomem *base = phy->base;
+ 	bool less_than_1500_mhz;
+-	unsigned long flags;
+ 	u32 vreg_ctrl_0, vreg_ctrl_1, lane_ctrl0;
+ 	u32 glbl_pemph_ctrl_0;
+ 	u32 glbl_str_swi_cal_sel_ctrl, glbl_hstx_str_ctrl_0;
+@@ -1090,13 +1084,10 @@
+ 		glbl_rescode_bot_ctrl = 0x3c;
+ 	}
+ 
+-	spin_lock_irqsave(&pll->pll_enable_lock, flags);
+-	pll->pll_enable_cnt = 1;
+ 	/* de-assert digital and pll power down */
+ 	data = DSI_7nm_PHY_CMN_CTRL_0_DIGTOP_PWRDN_B |
+ 	       DSI_7nm_PHY_CMN_CTRL_0_PLL_SHUTDOWNB;
+ 	writel(data, base + REG_DSI_7nm_PHY_CMN_CTRL_0);
+-	spin_unlock_irqrestore(&pll->pll_enable_lock, flags);
+ 
+ 	/* Assert PLL core reset */
+ 	writel(0x00, base + REG_DSI_7nm_PHY_CMN_PLL_CNTRL);
+@@ -1209,9 +1200,7 @@
+ 
+ static void dsi_7nm_phy_disable(struct msm_dsi_phy *phy)
+ {
+-	struct dsi_pll_7nm *pll = phy->pll_data;
+ 	void __iomem *base = phy->base;
+-	unsigned long flags;
+ 	u32 data;
+ 
+ 	DBG("");
+@@ -1238,11 +1227,8 @@
+ 	writel(data, base + REG_DSI_7nm_PHY_CMN_CTRL_0);
+ 	writel(0, base + REG_DSI_7nm_PHY_CMN_LANE_CTRL0);
+ 
+-	spin_lock_irqsave(&pll->pll_enable_lock, flags);
+-	pll->pll_enable_cnt = 0;
+ 	/* Turn off all PHY blocks */
+ 	writel(0x00, base + REG_DSI_7nm_PHY_CMN_CTRL_0);
+-	spin_unlock_irqrestore(&pll->pll_enable_lock, flags);
+ 
+ 	/* make sure phy is turned off */
+ 	wmb();

@@ -4,58 +4,64 @@
 # 2026-08-18 (7.2 — mainline, released 2026-08-16; NOT HW-validated yet, see the gate below);
 # re-pinned 2026-08-27 (7.2.1); re-pinned 2026-09-03 (7.2.3, issue #86); re-pinned 2026-09-08 (7.2.4);
 # re-pinned 2026-09-11 (7.2.5, issue #91 — needs patch 0525, see below).
-# 7.2.6 was EVALUATED AND SKIPPED on 2026-09-14 (issue #95, closed) — it breaks Wi-Fi on every
-# WCN7850 board. We stay on 7.2.5. Read the 7.2.6 section below BEFORE attempting 7.2.7.
-version:    7.2.5
-url:        https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.2.5.tar.xz
-sha256:     55ddf0df8325d9dad96fcff7bd93977d22e3f50af06527572af59b77c7632b78
-git_tag:    v7.2.5
-git_commit: a300e35c0a4b4a38fb53742ea6e2a203c98ee523
+# 7.2.6 was EVALUATED AND SKIPPED on 2026-09-14 (issue #95, closed) because it kills Wi-Fi on
+# every WCN7850 board. THIS BRANCH RE-PINS IT, 2026-09-17: that Wi-Fi break now has an upstream
+# root cause and an upstream fix, carried here as 0535. NOT HW-VALIDATED — this pin does not go
+# to main until a WCN7850 board boots with wlan0. Read the 7.2.6 section below before touching it.
+version:    7.2.6
+url:        https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.2.6.tar.xz
+sha256:     039aef84f2b0994aeda3f4fcfc3d02ec9d7a9bbb9020ea264c43f446c860f606
+git_tag:    v7.2.6
+git_commit: 500df175a7f9e6bc1a9c328590ca5150f84f9ff0
 
 # The sha256 above is the one kernel.org publishes in the SIGNED sha256sums.asc for v7.x, not a
 # hash of whatever the CDN happened to serve — re-checked 2026-09-14. The .asc itself verifies as
 # a GOOD signature from "Kernel.org checksum autosigner <autosigner@kernel.org>", fingerprint
 # B886 8C80 BA62 A1FF FAF5 FDA9 632D 3A06 589D A6B1. That key carries no trust path here, so the
-# load-bearing check is CONTINUITY: the SAME signed file still lists 7.2.4 as
+# load-bearing check is CONTINUITY: the SAME signed file still lists 7.2.5 as
+# 55ddf0df8325d9dad96fcff7bd93977d22e3f50af06527572af59b77c7632b78, 7.2.4 as
 # 01710ee01737dac492f1bae52becd057e08d20d11589089aa06accff415c28dd and 7.2.3 as
 # 8ba259e8e7b13ec6ef0941c8a39ad90b24bd4a4d6c0010ba6bafb794550ecd03, byte-for-byte the hashes this
-# pin carried and shipped before. (The same file lists 7.2.6 as
-# 039aef84f2b0994aeda3f4fcfc3d02ec9d7a9bbb9020ea264c43f446c860f606 — verified 2026-09-14 against
-# the downloaded tarball, so the skip below is a decision about CONTENT, not about provenance.)
-# (Note: keys.openpgp.org serves this key STRIPPED of its user IDs and gpg then refuses it as
-# "no public key"; keyserver.ubuntu.com serves it whole.)
-# git_commit is the DEREFERENCED tag (`git ls-remote 'v7.2.5^{}'`), matching how the
-# 7.1.5/7.1.6/7.2/7.2.1/7.2.3/7.2.4 lines were recorded; the annotated tag object is
-# 4c440ba64342e015be9eb06f1ea824eb6e81e562 and is NOT what belongs here.
-# (For 7.2.6, had we taken it: tag 500df175a7f9e6bc1a9c328590ca5150f84f9ff0, annotated object
-# c148318444bab91e4768a04aad6a18f8d974ecf7.)
+# pin carried and shipped before — so the file describing 7.2.6 is the same file that described
+# the releases we already trusted. The tarball on disk was re-hashed on 2026-09-17 and still
+# matches the value above; the skip this branch reverses was a decision about CONTENT, never
+# about provenance. (Note: keys.openpgp.org serves this key STRIPPED of its user IDs and gpg then
+# refuses it as "no public key"; keyserver.ubuntu.com serves it whole.)
+# git_commit is the DEREFERENCED tag (`git ls-remote 'v7.2.6^{}'`), matching how the
+# 7.1.5/7.1.6/7.2/7.2.1/7.2.3/7.2.4/7.2.5 lines were recorded; the annotated tag object is
+# c148318444bab91e4768a04aad6a18f8d974ecf7 and is NOT what belongs here.
+# (7.2.5, the pin this branch moves off: tag object 4c440ba64342e015be9eb06f1ea824eb6e81e562,
+# dereferenced commit a300e35c0a4b4a38fb53742ea6e2a203c98ee523.)
 #
 # 7.2 was MAINLINE with no point release; 7.2.1 was the first stable one. Precedent from
 # 7.1.3 -> 7.1.5 used to say a point release INSIDE a series is a pure pin edit. TWO RELEASES
-# RUNNING HAVE NOW FALSIFIED THAT, and the second one was not even takeable: 7.2.5 needed a new
-# patch (0525) to keep two boards' panels alive, and 7.2.6 broke Wi-Fi on every WCN7850 board and
-# was skipped. Treat 'in-series point release' as a prediction about EFFORT, never about RISK.
+# RUNNING HAVE NOW FALSIFIED THAT, and the second one was not even takeable on its own: 7.2.5
+# needed a new patch (0525) to keep two boards' panels alive, and 7.2.6 broke Wi-Fi on every
+# WCN7850 board and was skipped once before this branch re-took it with 0535.
+# Treat 'in-series point release' as a prediction about EFFORT, never about RISK.
 # Re-run every gate, every time — and note that neither of those two findings came from an
 # offline gate. Both came from hardware.
 #
-# ================= 7.2.6 — EVALUATED AND SKIPPED, 2026-09-14 (issue #95) =================
+# ============ 7.2.6 — SKIPPED 2026-09-14 (issue #95), RE-TAKEN 2026-09-17 ON THIS BRANCH ========
 #
-# WE DID NOT TAKE THIS RELEASE. Every offline gate passed and the kernel built clean; the HW gate
-# then found TWO regressions no offline gate could see. One we fixed. The other kills Wi-Fi on
-# every WCN7850 board and had no identifiable cause after eliminating five candidates, so the pin
-# went back to 7.2.5 — which is HW-validated on four boards — and #95 was closed. That is an
-# outcome the issue explicitly allows: "a point release we decide to skip stays skipped, and the
-# title dedupe will not re-file it."
+# THE FIRST ATTEMPT DID NOT SHIP. Every offline gate passed and the kernel built clean; the HW
+# gate then found TWO regressions no offline gate could see. One was fixed on the spot (0534,
+# bonded DSI). The other killed Wi-Fi on every WCN7850 board and had no identifiable cause after
+# five candidates were eliminated, so the pin went back to 7.2.5 and #95 was closed.
 #
-# THIS SECTION IS KEPT FOR THE NEXT BUMP, NOT AS HISTORY. Almost everything below is still true of
-# 7.2.7 and later, because the changes that caused it are IN the stable series now:
-#   - the bonded-DSI revert is still upstream, so 0534 WILL BE NEEDED AGAIN. The patch body is
-#     regenerable in two commands (see REGRESSION 1) and was HW-CONFIRMED to work.
-#   - the ath12k/WCN7850 Wi-Fi break is unexplained and therefore probably still there. TEST WI-FI
-#     ON A WCN7850 BOARD EARLY on the next bump, before investing in anything else.
-#   - 0511 and 0512 land upstream at 7.2.6, so they become deletions again the moment we move.
-#   - 0508's deletion is the one change from this attempt we KEPT: it was wrong on its own merits,
-#     independent of which kernel we pin. See below and issue #96 (closed).
+# WHAT CHANGED ON 2026-09-17: the Wi-Fi break is no longer unexplained. It is a PCIe BDF-to-SID
+# programming bug in pcie-qcom.c, triggered by 7.2.6's own conversion of the PCIe iommu-map
+# entries to their correct five-cell form, and upstream has fixed it. We carry that fix as 0535
+# and this branch re-pins 7.2.6 to put it in front of the hardware. Full derivation in
+# REGRESSION 2 below — read it before assuming anything about what this bump is now blocked on.
+#
+# THE STATE OF THE PATCH SET ON THIS BRANCH, all four changes APPLIED (they were queued before):
+#   - 0534 ADDED — the bonded-DSI re-revert, HW-CONFIRMED on Pocket S2 during the first attempt.
+#     Restored verbatim from that attempt, not regenerated. See REGRESSION 1.
+#   - 0535 ADDED — the upstream pcie-qcom BDF-to-SID fix. See REGRESSION 2.
+#   - 0511 and 0512 DELETED — both landed upstream at 7.2.6.
+#   - 0508 stays deleted; that was already true on main, and is true regardless of the pin.
+#     See below and issue #96 (closed).
 #
 # RUN THE INTERSECTION FIRST — and this release is why that is not a formality. 7.2.5 -> 7.2.6
 # changes 1764 files (7.2.4 -> 7.2.5 changed 462); our patches touch 173; the INTERSECTION IS
@@ -63,17 +69,17 @@ git_commit: a300e35c0a4b4a38fb53742ea6e2a203c98ee523
 # take the `+++ b/` paths out of https://cdn.kernel.org/pub/linux/kernel/v7.x/incr/patch-7.2.5-6.xz
 # and intersect with the `+++ b/` paths in kernel/patches/*.patch.
 #
-# WHAT A MOVE TO 7.2.6-OR-LATER OWES THE PATCH SET — three deletions and one addition. Only the
-# 0508 deletion was applied (it stands on its own merits); the rest are queued for whenever we do
-# move. The addition (0534) is not an offline finding — it came out of the HW gate, REGRESSION 1:
+# WHAT THE MOVE OWES THE PATCH SET — three deletions and two additions, ALL APPLIED ON THIS
+# BRANCH. Neither addition is an offline finding: 0534 came out of the HW gate (REGRESSION 1) and
+# 0535 came from the upstream thread that explains the HW gate's other failure (REGRESSION 2):
 #
-#   0511 -> DELETE ON THE NEXT MOVE (restored here, still load-bearing on 7.2.5).
+#   0511 -> DELETED (it was load-bearing on 7.2.5, so it comes back if this pin is reverted).
 #     "drm/msm: remove objects from evit list after pinning them" (Anna Maniscalco)
 #     landed in 7.2.6 verbatim, upstream's backport carrying the same "evit" typo in its subject.
 #     `patch` reported it as "Reversed (or previously applied)", and the pristine 7.2.6 tree has
 #     exactly one drm_gpuvm_bo_evict(vm_bo, false) in msm_gem_vm_bo_validate(). Pure deletion.
 #
-#   0512 -> DELETE ON THE NEXT MOVE (restored here, still load-bearing on 7.2.5).
+#   0512 -> DELETED (it was load-bearing on 7.2.5, so it comes back if this pin is reverted).
 #     7.2.6 backports all three of Konrad Dybcio's "Remove brownout risks from DPU"
 #     patches (54b17a858b8b dpu, e532b800728d dp, 00008e6f544c dsi), which is exactly what our
 #     0512 squashed. Our DPU early return, our DSI removal and three of our four DP removals are
@@ -183,6 +189,20 @@ git_commit: a300e35c0a4b4a38fb53742ea6e2a203c98ee523
 # kernel-build.sh's venus/iris comments and build a clip on-device with
 # `ffmpeg -f lavfi -i testsrc=size=1280x720:rate=30:duration=2 ...`; ffmpeg IS on the dev image.
 #
+# PATCH GATE RE-RUN 2026-09-17 for this branch, because the patch set is not the one the
+# 2026-09-14 gate saw — main gained 0012, the 0513 THP/shrinker v2 rework and 0531/0532 in the
+# meantime, and this branch adds 0534 and 0535 on top:
+#   - all 92 patches apply CUMULATIVELY in lexical order to a pristine 7.2.6 tree, ZERO rejects,
+#     0534 and 0535 both at zero fuzz.
+#   - the same run against a pristine 7.2.5 tree produces an IDENTICAL fuzz list and exactly one
+#     failure, 0534 — which is the expected shape: 7.2.5 already carries 93c97bc8d85d, so the
+#     re-revert is "previously applied" there. That single asymmetry is what makes 0534 a
+#     7.2.6-and-later patch rather than something to carry on both.
+#   - `patch --batch` WILL SILENTLY APPLY A REVERSED PATCH. Gating 0511 that way "passed" while
+#     actually REVERTING upstream's fix. Use -N (skip reversed, non-zero exit) when the question
+#     is whether a patch is still needed; build.sh's bare `patch` answers no to the prompt and
+#     fails, which is the behaviour you want in a build but not in a gate script.
+#
 # OFFLINE GATES, all re-run on 2026-09-14 against a pristine 7.2.6 extraction:
 #   - all 90 patches apply CUMULATIVELY in lexical order with ZERO rejects (93 before this bump;
 #     0508, 0511 and 0512 all deleted).
@@ -225,9 +245,13 @@ git_commit: a300e35c0a4b4a38fb53742ea6e2a203c98ee523
 #     946 -> 947; nothing in kernel.config changed, so that is an olddefconfig-resolved upstream
 #     default and not a decision of ours.
 #
-# HW GATE FOR 7.2.6 — RUN ON THREE BOARDS, AND IT IS WHAT KILLED THE BUMP. The roster and what each board
-# proves are unchanged; they are in STANDING FACTS immediately below, along with the
-# compatible-string reading that says which boards can exercise 0525 at all.
+# HW GATE FOR 7.2.6 — RUN ON THREE BOARDS ON 2026-09-14, AND IT IS WHAT KILLED THE FIRST ATTEMPT.
+# IT HAS NOT BEEN RE-RUN WITH 0535 IN. Nothing below is evidence about this branch; it is the
+# record of what failed and why. RE-RUN ORDER FOR THIS BRANCH: a WCN7850 board first (ACE or S2),
+# and check wlan0 before investing in the rest of the gate — that is the single question 0535
+# exists to answer. The roster and what each board proves are unchanged; they are in STANDING
+# FACTS immediately below, along with the compatible-string reading that says which boards can
+# exercise 0525 at all.
 #
 #   Pocket Max  sm8250  PASS 2026-09-14 (build 98f72ff / 20260914T155747Z). The iris gate — the
 #     mandatory new one this bump — is GREEN: the DT rework is live on the device
@@ -240,8 +264,9 @@ git_commit: a300e35c0a4b4a38fb53742ea6e2a203c98ee523
 #
 #   Pocket ACE  sm8550  FAIL — Wi-Fi.    Pocket S2  sm8650  FAIL — Wi-Fi AND display.
 #
-# REGRESSION 1 — DUAL-DSI, half the panel. DIAGNOSED AND FIXED, HW-CONFIRMED, patch since
-#   removed with the pin. RE-CREATE IT on the next move; it is two commands, below. 7.2.6 backports 5de981b7db1f
+# REGRESSION 1 — DUAL-DSI, half the panel. DIAGNOSED AND FIXED, HW-CONFIRMED. 0534 IS IN THE TREE
+#   ON THIS BRANCH, restored verbatim from the first attempt; the recipe below is for the NEXT
+#   bump, where the patch has to be regenerated against a new tarball. 7.2.6 backports 5de981b7db1f
 #   (upstream 44784327815b), a REVERT of 93c97bc8d85d "drm/msm: dsi: fix PLL init in bonded mode".
 #   Pocket S2 is the only bonded board we ship (`qcom,dual-dsi-mode` + `qcom,sync-dual-dsi`, one
 #   1440x2560 panel over two links) and only its BOTTOM HALF draws on 7.2.6. Two PHYs share one
@@ -264,12 +289,50 @@ git_commit: a300e35c0a4b4a38fb53742ea6e2a203c98ee523
 #   DROP IT INSTEAD if Neil Armstrong's rework has landed — the tell is that
 #   dsi_pll_enable_pll_bias() no longer early-returns on a non-zero pll_enable_cnt.
 #
-# REGRESSION 2 — ath12k / WCN7850 Wi-Fi DEAD. UNRESOLVED, AND IT IS WHY WE SKIPPED 7.2.6.
+# REGRESSION 2 — ath12k / WCN7850 Wi-Fi DEAD. ROOT-CAUSED 2026-09-17 AND FIXED BY 0535; the fix
+#   is NOT YET HW-CONFIRMED, and confirming it is the whole purpose of this branch.
 #   `failed to set mhi state: POWER_ON(2)` / `failed to start mhi: -110`, deterministic, on BOTH
-#   WCN7850 boards; no wlan0 at all. Pocket Max is unaffected because it is `pci17cb,1101` =
-#   ath11k, a different driver — which is exactly why Max passing is NOT evidence that Wi-Fi is
+#   WCN7850 boards; no wlan0 at all.
+#
+#   THE CAUSE IS qcom_pcie_config_sid_1_9_0() IN pcie-qcom.c — not ath12k, not MHI, not the PHY.
+#   It parses "iommu-map" as fixed four-word {rid, phandle, sid, len} entries, a layout that is
+#   only right for an IOMMU declaring `#iommu-cells = <1>`. apps_smmu declares <2>, so a correct
+#   entry is FIVE cells. 7.2.6 converts the PCIe iommu-map of every SoC we ship to that five-cell
+#   form — checked in the PRISTINE tarballs, sm8250/sm8550/sm8650, and none of our patches touch
+#   iommu-map or pcie-qcom.c — and all three bind cfg_1_9_0 (sm8650 through its
+#   "qcom,pcie-sm8550" fallback). The four-word stride then slips one cell per entry. For
+#   `<0 &apps_smmu 0x1400 0x0 0x1>, <0x100 &apps_smmu 0x1401 0x0 0x1>` the driver reads
+#   map[1] = {bdf 0x1, phandle 0x100, sid <the phandle value>, len 0x1401}, so BDF 0x100 — the
+#   WCN7850 on pcie0 and the Renesas uPD720201 on pcie1, on every board — is NEVER programmed into
+#   the BDF-to-SID table. Its DMA hashes to an unprogrammed slot, is tagged SID 0, and the SMMU
+#   faults. Upstream's own report shows the fault line to grep for:
+#   `arm-smmu ...: Unhandled context fault: fsr=0x402, iova=..., cbfrsynra=0x0, cb=1`.
+#   0535 carries the fix: stride = 3 + #iommu-cells, with a legacy fallback for the old four-cell
+#   DTs. See that patch for the upstream links and trailers (Tested-by Neil Armstrong on an
+#   SM8650-HDK, which is our SoC).
+#
+#   AND IT CORRECTS THE OLD NOTE HERE, which claimed 7.2.5 runs these devices with NO IOMMU
+#   mapping. It does not. of_check_bad_map() (drivers/of/base.c, present in both 7.2.5 and 7.2.6)
+#   tolerates the four-cell shape and treats it as 1-cell output, with a pr_warn_once "has 1-cell
+#   entries targeting 2-cell #iommu-cells". So the shipped pin is correctly translated, and the
+#   "we have never had DMA isolation" worry that note raised is unfounded. Grep a 7.2.5 boot log
+#   for that warn if you want it nailed down.
+#
+#   WHAT IS STILL OPEN, and it is the one thing that argues against this being the whole story:
+#   POCKET MAX SHOULD HAVE FAILED TOO. sm8250 got the same five-cell conversion, binds the same
+#   cfg_1_9_0, and its `pci17cb,1101` sits at BDF 0x100 like everything else — ath11k is a
+#   different driver but it is the same DMA path. Max was recorded PASS on 2026-09-14, but that
+#   narrative lists panel, gamescope, Steam and iris, and never says Wi-Fi. Either Wi-Fi was never
+#   exercised there, or something distinguishes sm8250 and this explanation is incomplete.
+#   CHEAPEST RESOLUTION, no rebuild: read the Max 7.2.6 journal for wlan0 and for cbfrsynra=0x0
+#   faults. Do that before spending a HW slot.
+#
+#   Pocket Max being `pci17cb,1101` = ath11k also means a Max pass is NOT evidence that Wi-Fi is
 #   healthy on this pin. Read the wifi node's compatible, not the board name.
-#   ELIMINATED BY INSPECTION, so do not re-walk these: the two bus/mhi/host changes (an EDL-only
+#
+#   THE ELIMINATIONS FROM THE FIRST ATTEMPT ALL STAND, and every one of them is consistent with
+#   the cause above — the fault was never in the drivers they cover. Do not re-walk them.
+#   ELIMINATED BY INSPECTION: the two bus/mhi/host changes (an EDL-only
 #   error path, and a read-back inside mhi_soc_reset(), which ath12k does not call on power-up —
 #   it uses its own ath12k_pci_sw_reset()); the QMP PCIe PHY `.pcs_lane1` addition (offsets_v5 is
 #   sm8550-only and sm8650 uses offsets_v6_20, yet BOTH fail, so the cause must be SoC-independent);
@@ -283,34 +346,18 @@ git_commit: a300e35c0a4b4a38fb53742ea6e2a203c98ee523
 #   being exactly the transition that times out (CONFIG_PCIEASPM=y, so the changed code is live).
 #   A card built with that ONE file reverted to 7.2.5 was booted on Pocket S2 2026-09-14: the
 #   panel came back (that was 0534) and Wi-Fi did NOT. So aspm.c is out too.
-#   THE BEST UNTESTED HYPOTHESIS, and the experiment that settles it — start here next time.
-#   The symptom is sharper than "PCIe is broken": on BOTH boards both endpoints enumerate, link
-#   up and bind, and MMIO/config/BAR access all work. What fails is COMPLETION —
-#   `xhci-pci-renesas: Error while assigning device slot ID: Command Aborted` and MHI timing out
-#   fetching firmware. The UART-attached gamepad MCU is unaffected. That is a device-side DMA (or
-#   MSI-completion) failure with the host side healthy.
-#   And 7.2.6 flips exactly that: apps_smmu declares `#iommu-cells = <2>`, of_map_id() requires
-#   `3 + cells` = FIVE cells per iommu-map entry, and 7.2.5 supplies FOUR. So ON THE PIN WE SHIP
-#   the PCIe iommu-map is MALFORMED, the parse fails, and these devices run with NO IOMMU mapping
-#   at all. 7.2.6's fleet-wide "Fix the PCIe iommu-map entries" (22 boards) makes it parse — i.e.
-#   flips our PCIe devices from bypass to TRANSLATED — and that is when DMA stops completing.
-#   AGAINST IT: 22 platforms got the same change, so a universal break would be a huge upstream
-#   regression. FOR IT: we define no iommu-map of our own, our PCIe DTS is not upstream-shaped,
-#   and nothing else in the delta explains both devices on both SoCs.
-#   THE EXPERIMENT, one build, one boot, single variable: apply ONLY the 4->5 cell rewrite to the
-#   pinned dtsi (sm8250 6 entries, sm8550 4, sm8650 4 — counts matching upstream; do NOT touch
-#   msi-map, whose #msi-cells is 1 so its 4-cell form is already right). Wi-Fi and gamepad dying
-#   identifies the cause; surviving exonerates it. Deliberately NOT run on 7.2.5 today: it would
-#   break a known-good pin to buy an answer we cannot act on while we are not moving. Run it on
-#   the NEXT bump, where the kernel is being built anyway and the answer is actionable.
-#   NOTE INDEPENDENT OF ALL THIS: running PCIe devices with no IOMMU mapping means the Wi-Fi chip
-#   and the USB3 controller have had NO DMA isolation on every pin we have shipped. That is worth
-#   fixing on its own merits, not only as a bump blocker.
+#   WHY THE SYMPTOM FITS, and it was always sharper than "PCIe is broken": on BOTH boards both
+#   endpoints enumerate, link up and bind, and MMIO/config/BAR access all work. What fails is
+#   COMPLETION — `xhci-pci-renesas: Error while assigning device slot ID: Command Aborted` and MHI
+#   timing out fetching firmware. The UART-attached gamepad MCU is unaffected. That is a
+#   device-side DMA failure with the host side healthy, which is exactly what an unprogrammed
+#   BDF-to-SID entry produces: host-initiated traffic never goes through the SMMU, so only the
+#   paths where the DEVICE writes to memory die.
 #
-#   NOTHING ELSE IS LEFT that inspection can reach. The next step, if anyone wants 7.2.6 specifically,
-#   is an area bisect — revert drivers/pci/ + drivers/phy/ + drivers/bus/mhi/ together, then
-#   split — at 2-4 build-and-boot cycles. We judged that not worth it against simply waiting for
-#   7.2.7, which is the decision recorded at the top of this section.
+#   WHAT THE HW GATE HAS TO SHOW for 0535 to count: wlan0 present and associating on a WCN7850
+#   board (ACE or S2, both were FAIL), the Renesas xHCI enumerating a device, and ZERO
+#   `cbfrsynra=0x0` context faults in the journal. A board-specific MDSS burst at cbfrsynra=0x1c00
+#   is a different, known thing — see KNOWN BOOT NOISE below.
 #
 # STILL OWED WHENEVER WE DO MOVE: 0525 on the two v2.9 boards (S2, FIT), and the SMMU-v3 (0515)
 # gate, which needs Pocket FIT specifically — it is the only DSC panel. Neither was reachable on

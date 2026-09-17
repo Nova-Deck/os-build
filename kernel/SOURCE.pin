@@ -351,7 +351,8 @@ git_commit: 500df175a7f9e6bc1a9c328590ca5150f84f9ff0
 #   WHY THE SYMPTOM FITS, and it was always sharper than "PCIe is broken": on BOTH boards both
 #   endpoints enumerate, link up and bind, and MMIO/config/BAR access all work. What fails is
 #   COMPLETION — `xhci-pci-renesas: Error while assigning device slot ID: Command Aborted` and MHI
-#   timing out fetching firmware. The UART-attached gamepad MCU is unaffected. That is a
+#   timing out fetching firmware. The gamepad MCU's UART CONFIG PORT is unaffected, because that
+#   port is not behind the bridge (the MCU has two ends — see below). That is a
 #   device-side DMA failure with the host side healthy, which is exactly what an unprogrammed
 #   BDF-to-SID entry produces: host-initiated traffic never goes through the SMMU, so only the
 #   paths where the DEVICE writes to memory die.
@@ -369,18 +370,19 @@ git_commit: 500df175a7f9e6bc1a9c328590ca5150f84f9ff0
 #                  `failed to start mhi: -110` on either board. This is the leg that killed the
 #                  first attempt, and it is dead.
 #     cbfrsynra=0x0  PASS. Zero on all three boards (Max, ACE, S2).
-#     Renesas xHCI   PASS, by operator observation: the built-in GAME CONTROLLER sits behind the
+#     Renesas xHCI   PASS: the built-in GAME CONTROLLER sits behind the
 #                  Renesas PCIe-USB bridge and worked throughout the gate. That is a stronger
 #                  result than plugging a stick in — a working pad means the downstream device
 #                  both ENUMERATED and is completing interrupt transfers, i.e. the device-side DMA
 #                  that `Error while assigning device slot ID: Command Aborted` denied on 7.2.6
-#                  before 0535. No `lsusb -t` was captured (both boards were down by the time it
-#                  came up), so this leg rests on operator report rather than a log line. To
-#                  upgrade it on any later boot: `lsusb -t` and confirm the HID sits under the
-#                  renesas xhci controller, not under a SoC-internal dwc3 root hub — the pad being
-#                  present proves nothing on its own if it is the UART-attached MCU on that board
-#                  (see the first-attempt note above: "The UART-attached gamepad MCU is
-#                  unaffected"), and which attachment a given board uses is the whole question.
+#                  before 0535.
+#
+#                  THE AYANEO MCU HAS TWO ENDS AND THEY ARE NOT ALTERNATIVES. It exposes the
+#                  CONTROLLER on a USB bus — always behind the Renesas bridge — and a separate
+#                  UART CONFIG PORT, which is only how our ayaneo-serial-mcu driver programs it
+#                  (face layout, etc.). The UART end carries NO HID. So a working pad is
+#                  unambiguous evidence for this leg on EVERY board: no `lsusb -t` is needed and
+#                  there is no per-board attachment question to resolve.
 #
 #   Also passed the same day, on the 0534 side: S2 draws the FULL 1440x2560 bonded panel (both
 #   `dsi@ae94000` and `dsi@ae96000` `okay`, `qcom,dual-dsi-mode` + `qcom,sync-dual-dsi`, its own

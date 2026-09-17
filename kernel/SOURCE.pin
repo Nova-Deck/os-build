@@ -7,8 +7,9 @@
 # 7.2.6 was EVALUATED AND SKIPPED on 2026-09-14 (issue #95, closed) because it kills Wi-Fi on
 # every WCN7850 board. RE-PINNED 2026-09-17 with 0535, the upstream fix for that break, and
 # HW-VALIDATED THE SAME DAY on three boards — Pocket ACE and Pocket S2 both associate on WCN7850,
-# and S2 draws its full bonded panel. The gate is NOT complete: the Renesas xHCI leg of 0535 is
-# UNTESTED, and 0525/SMMU-v3 are still owed. Read the 7.2.6 section below before touching it.
+# S2 draws its full bonded panel, and the gamepad behind the Renesas PCIe-USB bridge works. All
+# three legs of the 0535 gate pass. 0525 and SMMU-v3 are still owed, as they were before this
+# pin moved. Read the 7.2.6 section below before touching it.
 version:    7.2.6
 url:        https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.2.6.tar.xz
 sha256:     039aef84f2b0994aeda3f4fcfc3d02ec9d7a9bbb9020ea264c43f446c860f606
@@ -368,10 +369,18 @@ git_commit: 500df175a7f9e6bc1a9c328590ca5150f84f9ff0
 #                  `failed to start mhi: -110` on either board. This is the leg that killed the
 #                  first attempt, and it is dead.
 #     cbfrsynra=0x0  PASS. Zero on all three boards (Max, ACE, S2).
-#     Renesas xHCI   *** NOT TESTED ***. No USB device was plugged into any board during this
-#                  gate. It is the OTHER device-side-DMA symptom of the same unprogrammed SID, so
-#                  it is the leg most likely to still be broken if 0535 is incomplete. Cheap:
-#                  plug anything into the USB-A port and look for a `usb N-1: new ... device`.
+#     Renesas xHCI   PASS, by operator observation: the built-in GAME CONTROLLER sits behind the
+#                  Renesas PCIe-USB bridge and worked throughout the gate. That is a stronger
+#                  result than plugging a stick in — a working pad means the downstream device
+#                  both ENUMERATED and is completing interrupt transfers, i.e. the device-side DMA
+#                  that `Error while assigning device slot ID: Command Aborted` denied on 7.2.6
+#                  before 0535. No `lsusb -t` was captured (both boards were down by the time it
+#                  came up), so this leg rests on operator report rather than a log line. To
+#                  upgrade it on any later boot: `lsusb -t` and confirm the HID sits under the
+#                  renesas xhci controller, not under a SoC-internal dwc3 root hub — the pad being
+#                  present proves nothing on its own if it is the UART-attached MCU on that board
+#                  (see the first-attempt note above: "The UART-attached gamepad MCU is
+#                  unaffected"), and which attachment a given board uses is the whole question.
 #
 #   Also passed the same day, on the 0534 side: S2 draws the FULL 1440x2560 bonded panel (both
 #   `dsi@ae94000` and `dsi@ae96000` `okay`, `qcom,dual-dsi-mode` + `qcom,sync-dual-dsi`, its own

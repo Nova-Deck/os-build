@@ -14,12 +14,12 @@
 #                  prefers our build on later upgrades. Integer only (makepkg requires
 #                  pkgrel = integer[.integer]).
 #   patches        space-separated files under ./patches/, applied `patch -p1` in the mesa source
-#                  root (after the first `cd` in prepare()), in the order listed. EMPTY for now —
-#                  add SM875x / a8xx Adreno enablement patches here.
+#                  root (after the first `cd` in prepare()), in the order listed. See
+#                  ./patches/README.md for what each one is and when it can be dropped.
 #
 # Upstream source (informational; the URL + sha also live in the PKGBUILD):
-#   url:    https://archive.mesa3d.org/mesa-26.2.2.tar.xz
-#   sha256: eeb29ca7e56cfaa8e8a79538dcf834e3b18e501c31bef5145e959ea437cc4216
+#   url:    https://archive.mesa3d.org/mesa-26.2.3.tar.xz
+#   sha256: 1628058a8d2c0615975de5a15ab7bbb9638c50000b5bed9456ff423ea034a81f
 #
 # To bump mesa: edit pkgver (and the tarball sha256) in packages/mesa/PKGBUILD, update the
 # url/sha256 lines above, and re-roll any patches under ./patches/ against the new tag.

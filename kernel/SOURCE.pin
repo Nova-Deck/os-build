@@ -5,9 +5,10 @@
 # re-pinned 2026-08-27 (7.2.1); re-pinned 2026-09-03 (7.2.3, issue #86); re-pinned 2026-09-08 (7.2.4);
 # re-pinned 2026-09-11 (7.2.5, issue #91 — needs patch 0525, see below).
 # 7.2.6 was EVALUATED AND SKIPPED on 2026-09-14 (issue #95, closed) because it kills Wi-Fi on
-# every WCN7850 board. THIS BRANCH RE-PINS IT, 2026-09-17: that Wi-Fi break now has an upstream
-# root cause and an upstream fix, carried here as 0535. NOT HW-VALIDATED — this pin does not go
-# to main until a WCN7850 board boots with wlan0. Read the 7.2.6 section below before touching it.
+# every WCN7850 board. RE-PINNED 2026-09-17 with 0535, the upstream fix for that break, and
+# HW-VALIDATED THE SAME DAY on three boards — Pocket ACE and Pocket S2 both associate on WCN7850,
+# and S2 draws its full bonded panel. The gate is NOT complete: the Renesas xHCI leg of 0535 is
+# UNTESTED, and 0525/SMMU-v3 are still owed. Read the 7.2.6 section below before touching it.
 version:    7.2.6
 url:        https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.2.6.tar.xz
 sha256:     039aef84f2b0994aeda3f4fcfc3d02ec9d7a9bbb9020ea264c43f446c860f606
@@ -359,6 +360,24 @@ git_commit: 500df175a7f9e6bc1a9c328590ca5150f84f9ff0
 #   `cbfrsynra=0x0` context faults in the journal. A board-specific MDSS burst at cbfrsynra=0x1c00
 #   is a different, known thing — see KNOWN BOOT NOISE below.
 #
+#   RUN 2026-09-17, TWO OF THREE LEGS PASS:
+#     wlan0        PASS on BOTH WCN7850 boards. ACE and S2 each bring `ath12k_wifi7_pci`
+#                  (`0x17cb:0x1107`) to `mhi mhi0: Power on setup success` -> Mission mode, then
+#                  associate; ACE measured at EHT-MCS 6 / NSS 2 / 80 MHz, rx 648.5 Mbit/s, -56 dBm,
+#                  carrying an ssh session. Zero `failed to set mhi state: POWER_ON(2)`, zero
+#                  `failed to start mhi: -110` on either board. This is the leg that killed the
+#                  first attempt, and it is dead.
+#     cbfrsynra=0x0  PASS. Zero on all three boards (Max, ACE, S2).
+#     Renesas xHCI   *** NOT TESTED ***. No USB device was plugged into any board during this
+#                  gate. It is the OTHER device-side-DMA symptom of the same unprogrammed SID, so
+#                  it is the leg most likely to still be broken if 0535 is incomplete. Cheap:
+#                  plug anything into the USB-A port and look for a `usb N-1: new ... device`.
+#
+#   Also passed the same day, on the 0534 side: S2 draws the FULL 1440x2560 bonded panel (both
+#   `dsi@ae94000` and `dsi@ae96000` `okay`, `qcom,dual-dsi-mode` + `qcom,sync-dual-dsi`, its own
+#   DTB — so the mode was confirmed ENGAGED, not inferred from a panel that merely looked right),
+#   and the non-bonded case that upstream reverted 93c97bc8d85d FOR is clear on both Max and ACE.
+#
 # STILL OWED WHENEVER WE DO MOVE: 0525 on the two v2.9 boards (S2, FIT), and the SMMU-v3 (0515)
 # gate, which needs Pocket FIT specifically — it is the only DSC panel. Neither was reachable on
 # 7.2.6: S2 could not be judged on 0525 while half its panel was dark, and FIT was never booted.
@@ -421,7 +440,19 @@ git_commit: 500df175a7f9e6bc1a9c328590ca5150f84f9ff0
 #     (the MDSS node, `iommus = <&apps_smmu 0x1c00 0x2>`), inside a 0.4 ms window, all of them
 #     BEFORE the panel rails come up at 0.854s. The bootloader continuous-splash handoff, i.e.
 #     what dpu-quiesce-boot-scanout.patch is for. Board-specific: Pocket FIT shows ZERO on the
-#     same kernel. STILL OPEN: whether it predates our own 0513/0518-0524. Nobody has checked.
+#     same kernel, and so do Pocket Max and Pocket S2 (checked 2026-09-17).
+#     NOT INTRODUCED BY 7.2.6 — A/B'd 2026-09-17 with two cards differing only in the kernel
+#     commit: 7.2.5 (ce5ba00) and 7.2.6 (6c80318) produce the identical burst on the same ACE,
+#     same count, same fsr=0x402, same fsynr, same context bank.
+#     STILL OPEN, AND THAT A/B DID NOT TOUCH IT: whether it predates our own 0513/0518-0524. BOTH
+#     cards carry those patches, so the comparison could only ever answer the 7.2.6 question. The
+#     experiment that answers the real one is a build with 0513/0518-0524 dropped. Note also that
+#     dpu-quiesce-boot-scanout.patch IS applied on both (kernel/build.sh:56 globs the whole patch
+#     dir), so we already ship the patch aimed at this handoff and ACE faults anyway.
+#     WHY THIS ENTRY COST A CARD BUILD: on 2026-09-17 the burst was re-derived from scratch —
+#     count, timing, MDSS stream and all — by building and flashing a 7.2.5 card and swapping
+#     boards, because nobody grepped this file. `grep cbfrsynra kernel/SOURCE.pin` answers it in
+#     a second. When a boot line looks new, search the pin BEFORE building anything.
 #
 # SMMU SERIES AT v3 since 2026-09-12, and STILL NOT HW-GATED — it is the oldest ungated thing on
 # this pin. 0515/0516/0517 used to carry patches 1-3 of Dmitry Baryshkov's v2 "drm/msm: fix SMMU

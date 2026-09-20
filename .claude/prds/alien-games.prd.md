@@ -194,7 +194,7 @@ anyway.
 | # | Milestone | Outcome | How it is proven when it lands | Status | Plan |
 |---|---|---|---|---|---|
 | 1 | Store CLIs, native arm64 | legendary and gogdl are packaged and run on the device — no FEX, no x86 freeze | Package builds in the normal pipeline; each CLI runs on hardware and lists a library given a hand-supplied token — **done 2026-09-20**: 55 Epic titles listed, GOG authenticated and `gogdl info` returning build metadata | complete | [`alien-games.plan.md`](../plans/alien-games.plan.md) |
-| 2 | Account connection | A user connects Epic and GOG from the device with no browser on it; tokens persist and refresh | Hardware walkthrough with real accounts; token survives reboot and an expiry/refresh cycle; security review of credential-at-rest before it merges | pending | — |
+| 2 | Account connection | A user connects Epic and GOG from the device with **no browser we ship** — Steam's own CEF browser is already there and is scriptable; tokens persist and refresh | Hardware walkthrough with real accounts; token survives reboot and an expiry/refresh cycle; security review of credential-at-rest before it merges | in-progress | [`alien-games-account-connection.plan.md`](../plans/alien-games-account-connection.plan.md) |
 | 3 | Install and uninstall | An owned title downloads to a chosen location, resumes after an interruption, and uninstalls cleanly | Driven on hardware against a real account, including a deliberate mid-download network cut | pending | — |
 | 4 | Library entry writer | An entry is created and removed in Steam's shortcut store, correctly sequenced against Steam's lifecycle, keyed on **our** stable id via a launcher stub — never on Steam's appid | Driven directly on a dev card with Steam running; entry survives a Steam restart and a reboot | pending | — |
 | 5 | Artwork acquisition | An entry gets grid art, and degrades to something usable when the source is unreachable | Driven directly, including with the network cut | pending | — |
@@ -217,11 +217,16 @@ lands; no separate issues.
 
 ## Open Questions
 
-- [ ] **How does the auth code get from the browser to the device?** Three candidates: type it with
-      Steam's on-screen keyboard (works today, ~60 characters of pain); show a QR to open the login
-      URL on a phone and pair back; a one-shot local page the phone posts to. The last reintroduces
-      a small LAN surface — far smaller than a writable file share, but it is a surface. Undecided,
-      and it is the single biggest UX risk in the MVP.
+- [x] **How does the auth code get from the browser to the device?** **Answered 2026-09-20: it never
+      leaves the device.** `SteamClient.BrowserView.Create()` opens a URL in Steam's own CEF browser
+      and the resulting `BrowserViewPopup` emits `finished-request: (currentURL, previousURL)`, so a
+      Decky plugin can host the OAuth login and read the code straight out of the redirect. No
+      browser to ship, no flatpak, no LAN listener. *Still to verify on our arm64 client* — that is
+      milestone 2's gating spike.
+      The typing option this question originally listed is **dead**, and measurement killed it:
+      Epic's code is 32 hex characters, GOG's is **192** mixed-case with `-` and `_`. The "~60
+      characters of pain" estimate here was 3x low, and a single mis-key restarts a single-use
+      login. The phone-and-paste flow survives only as the fallback if the spike fails.
 - [ ] **Do we build a reduced client or fork unifideck?** Leaning build-reduced and reuse the
       design: two stores, no browser, no umu, our launch chain. A fork inherits seven stores, an
       Edge dependency and a maintenance treadmill. Decide before milestone 1 is planned.

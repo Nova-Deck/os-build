@@ -165,6 +165,61 @@ sed -n '/^prepare()/,/^}/p' "$GOGDL" | grep -q 'rmdir xdelta3' \
   && ok "gogdl: prepare() rmdirs the placeholder (fails loudly if it is ever non-empty)" \
   || bad "gogdl: prepare() should rmdir the empty placeholder, not force-remove it"
 
+# --- where credentials live -------------------------------------------------------------------
+# The location is a decision, not a default, and both wrong answers are reachable: each CLI's own
+# default follows the CALLER's home (root for the Decky backend, deck for the launch path), and
+# /root looks persistent enough to be tempting. Assert the declaration rather than trusting either.
+STORE_ENV="$ROOT/rootfs/overlay/usr/lib/novadeck/store-env"
+
+if [ ! -x "$STORE_ENV" ]; then
+  bad "store-env missing or not executable at usr/lib/novadeck/store-env"
+else
+  ok "store-env present and executable"
+
+  env_out="$(bash "$STORE_ENV" 2>/dev/null)"
+  for var in NOVADECK_STORE_HOME LEGENDARY_CONFIG_PATH NOVADECK_GOGDL_AUTH; do
+    printf '%s\n' "$env_out" | grep -q "^${var}=" \
+      && ok "store-env emits $var" \
+      || bad "store-env does not emit $var — a caller would fall back to the CLI's own default"
+  done
+
+  # Every emitted path under the deck user's home. /root is the specific wrong answer this
+  # guards: it persists (it is an offload bind from the same /home tree), so "it survives an OTA"
+  # is true there and still not a reason to put the user's store accounts in root's home.
+  strays=""
+  while IFS='=' read -r _ value; do
+    case "$value" in
+      /home/deck/*) ;;
+      '') ;;
+      *) strays="$strays $value" ;;
+    esac
+  done <<EOF
+$env_out
+EOF
+  if [ -n "$strays" ]; then
+    bad "store-env points outside /home/deck:$strays"
+  else
+    ok "every store-env path is under /home/deck (not /root, /etc or /var)"
+  fi
+
+  # --ensure has to create the parents 0700. gogdl does not create its own parent and its writer
+  # runs AFTER the code exchange, so a missing directory costs the user a single-use login.
+  tmphome="$(mktemp -d)"
+  if NOVADECK_STORE_USER="$(id -un)" NOVADECK_STORE_HOME="$tmphome/stores" \
+     bash "$STORE_ENV" --ensure >/dev/null 2>&1; then
+    modes="$(find "$tmphome/stores" -type d -printf '%m\n' 2>/dev/null | sort -u)"
+    [ "$modes" = "700" ] \
+      && ok "--ensure creates the tree 0700 (these are OAuth refresh tokens)" \
+      || bad "--ensure left directory modes '$modes', expected only 700"
+    [ -d "$tmphome/stores/gogdl" ] \
+      && ok "--ensure creates gogdl's parent, which gogdl itself will not" \
+      || bad "--ensure does not create gogdl's parent directory"
+  else
+    bad "store-env --ensure failed against a writable temp tree"
+  fi
+  rm -rf "$tmphome"
+fi
+
 # --- the suite is wired in -------------------------------------------------------------------
 grep -q 'test-store-cli.sh' "$ROOT/Makefile" \
   && ok "this suite is wired into make test (a suite nothing runs is documentation)" \

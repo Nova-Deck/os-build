@@ -1,0 +1,60 @@
+#!/bin/bash
+# novadeck store-env — the one place that says where store credentials live.
+#
+# Emits shell-quoted assignments on stdout, the same shape as device-env, so consumers eval it:
+#     eval "$(/usr/lib/novadeck/store-env)"
+#
+# With --ensure it also creates the tree, owned by the deck user, before printing.
+#
+# WHY THIS FILE EXISTS. legendary and gogdl each have their own idea of where credentials go, and
+# neither idea is ours:
+#
+#   legendary  defaults to $XDG_CONFIG_HOME or ~/.config/legendary, i.e. wherever the CALLER's home
+#              happens to be. The Decky plugin runs as root and the game-launch path runs as deck,
+#              so "the caller's home" is two different directories and the account would appear
+#              connected in the UI and absent at launch. LEGENDARY_CONFIG_PATH overrides it
+#              (legendary/lfs/lgndry.py).
+#   gogdl      has NO default at all: --auth-config-path is optional with an unset default, and its
+#              writer does open(None, "w") AFTER exchanging the authorization code. Calling it
+#              without the path spends the user's single-use login and throws the tokens away with
+#              a traceback. Observed on hardware 2026-09-20; it cost a real login round-trip.
+#
+# So every caller passes these, and gogdl's path is passed BEFORE its subcommand:
+#     gogdl --auth-config-path "$NOVADECK_GOGDL_AUTH" auth --code ...
+#
+# WHY /home/deck AND NOT /root. The plugin backend runs as root (Decky plugin.json flags), so /root
+# would "work" for it and fail everywhere else:
+#
+#   * these are the USER's store accounts, not the system's;
+#   * milestones 3/5/6 invoke these CLIs from the launch path, which runs as deck — credentials
+#     only root can read would work in the QAM and fail at launch, the same trap
+#     novadeck-framegen's conf.py already documents for lsfg-vk's config;
+#   * /root sits outside the user-data model: anything that resets or backs up user data reasons
+#     about /home/deck, so credentials in /root would survive a reset the user believed had cleared
+#     their accounts.
+#
+# /home is the shared partition, so this also persists across an A/B update by construction — but
+# persistence was never the reason for the location. (/root persists too: it is an offload bind
+# from the same /home tree. That is what makes it a tempting wrong answer.)
+#
+# ANYTHING WRITING HERE AS ROOT MUST RESTORE OWNERSHIP — write a temp file in the target directory,
+# chown it to the directory's uid/gid, then rename it atomically. A root-owned credential file
+# leaves the user with something their own tools cannot rewrite and the UI cannot repair.
+set -euo pipefail
+
+STORE_USER=${NOVADECK_STORE_USER:-deck}
+STORE_HOME=${NOVADECK_STORE_HOME:-/home/$STORE_USER/.local/share/novadeck/stores}
+
+LEGENDARY_CONFIG_PATH="$STORE_HOME/legendary"
+NOVADECK_GOGDL_AUTH="$STORE_HOME/gogdl/auth.json"
+
+if [[ ${1:-} == --ensure ]]; then
+    # 0700: these are OAuth refresh tokens. Group and other have no business here, and the CLIs
+    # do not create their parents — gogdl in particular will not.
+    install -d -m 0700 -o "$STORE_USER" -g "$STORE_USER" \
+            "$STORE_HOME" "$LEGENDARY_CONFIG_PATH" "$(dirname "$NOVADECK_GOGDL_AUTH")"
+fi
+
+printf 'NOVADECK_STORE_HOME=%q\n'   "$STORE_HOME"
+printf 'LEGENDARY_CONFIG_PATH=%q\n' "$LEGENDARY_CONFIG_PATH"
+printf 'NOVADECK_GOGDL_AUTH=%q\n'   "$NOVADECK_GOGDL_AUTH"

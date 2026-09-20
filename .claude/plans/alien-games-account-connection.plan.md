@@ -26,12 +26,15 @@ meant is *no browser we ship*. Steam's browser is not something we install, pack
 | Typing the code is not an option | Measured on hardware: Epic's `authorizationCode` is 32 hex chars, GOG's is **192** mixed-case with `-`/`_`. The PRD's "~60 characters of pain" estimate was 3x low, and one mis-key restarts a single-use login |
 | legendary's config location is redirectable | `LEGENDARY_CONFIG_PATH`, else `XDG_CONFIG_HOME` (`_reference/legendary/legendary/lfs/lgndry.py:29-31`) |
 | gogdl's is mandatory and has no default | `--auth-config-path` is `required=False` with no default; `__write_config` does `open(None, "w")` **after** the token exchange, so a missing path spends the user's code and discards the tokens (milestone 1's HW finding) |
-| `/root` is a real directory on the root filesystem | Restored from `out/images/rootfs.img`: not a symlink to `/var` or `/home`. The root is per-slot, so an OTA replaces it |
+| `/root` is **already persistent and shared** | `rootfs/lib-assemble-offload.sh:35` injects offload binds for `/opt /root /srv` plus `var/{log,tmp,cache/pacman,lib/*}` into `/home/.novadeck/offload`; `lib-slotwrite.sh:233` skips them on a slot write *because* they are shared. Confirmed on device: `/root` is `/dev/mmcblk0p8[/.novadeck/offload/root]`, and the milestone-1 tokens survived a reboot |
 
-**The consequence of that last row is the second design constraint:** the credentials I wrote by
-hand during milestone 1 live at `/root/.config/`, on the slot's own root filesystem. They would not
-survive an update. Tokens must live on the **shared `/home`**, which is the only partition that
-persists across an A/B switch.
+**A correction to an earlier draft of this plan.** It claimed `/root` was on the per-slot root
+filesystem and that an OTA would wipe the credentials, so Task 2 had to relocate them. That came
+from inspecting `out/images/rootfs.img`, where `/root` *is* a plain directory — true of the image
+and false at runtime, because the offload bind is mounted at boot. The root filesystem is genuinely
+`ro` (`/dev/mmcblk0p4 btrfs ro`), which is what made the writable `/root` look like a contradiction
+worth chasing. Credentials in `/root/.config/` already persist across reboots and OTAs. Task 2 is
+therefore about ownership, permissions and explicitness, not relocation.
 
 ## Design
 
@@ -89,12 +92,67 @@ and a security review, which is why it is the fallback rather than the plan.
 - **If it fails**: stop and re-plan around the phone-and-paste fallback before writing any of the
   rest. Do not build both.
 
-### Task 2: Persistent credential store
+#### Result, 2026-09-20 — PARTIAL: the browser works, the display does not
+
+Run over CDP against Steam's own remote-debugging port (`.cef-enable-remote-debugging`, which
+`novadeck-steam` already creates), so no plugin build was needed to answer it.
+
+**CONFIRMED — the capture half of the design holds:**
+
+- `SteamClient.BrowserView` is real on our arm64 client: `Create`, `CreatePopup`, `Destroy`,
+  `PostMessageToParent`. `SteamClient.Apps.AddShortcut` is also a function (milestone 4's interest).
+- A created view loads real pages and follows cross-domain redirects: `auth.gog.com` →
+  `login.gog.com`, with `start-request` and `finished-request` firing and carrying the URL.
+- The view appears in the CDP target list as a **fully live page**, having pulled in GOG's login
+  and its reCAPTCHA frames. The browser genuinely runs.
+- `EnableSteamInput()`, `SetBounds`, `SetVisible`, `SetFocus` all present and callable.
+
+**REFUTED:** `steam://openurl/…` via `SteamClient.URL.ExecuteSteamURL` throws `Unknown method` on
+this client. That candidate is gone.
+
+**NOT ACHIEVED — nothing reaches the screen.** Three shapes were tried and all three left the
+device showing only the ordinary Steam UI:
+
+| Attempt | `strCreateURL` | On screen |
+|---|---|---|
+| `Create({strInitialURL})` | — (offscreen view) | nothing |
+| `CreatePopup({strInitialURL})` + `window.open` | `…&requestid=5&parentpopup=0` | nothing |
+| `CreatePopup({…, parentPopupBrowserID: 2})` + `window.open` | `…&requestid=6&parentpopup=2` | nothing |
+
+The third is the interesting one: it produced the **same `parentpopup=2` shape as Steam's own
+visible `QuickAccess_uid2` and `MainMenu_uid2` views**, and still did not composite. So parentage
+was not the missing piece, and the conclusion is narrower than "it does not work": **a BrowserView
+created from outside SteamUI's own React tree has no host to render into.** Creating one over CDP
+was always going to be the cheapest test, and it has answered everything except the one thing that
+needs to live inside the UI.
+
+**Two smaller findings worth keeping:**
+
+- The second argument of `finished-request` is **not** `previousURL` as the typings say — it came
+  back as the page *title* (`"Login ● GOG.com"`). Read the code from the first argument; anything
+  built on the second works by accident.
+- `CreatePopup` ignores `strInitialURL`; the view sat on `about:blank` until an explicit `LoadURL`.
+
+**Next step — spike part 2, and it needs a plugin.** SteamUI exposes a `QuickAccessMenuBrowserView`
+component, which Decky itself locates and patches by name (`decky-loader/frontend/src/tabs-hook.tsx:44`).
+That is SteamUI rendering a browser view *inside the QAM panel* — which is exactly where our plugin's
+UI lives. The throwaway to build is a plugin that renders a login into the QAM through that
+component and attaches the same handlers. Framing restrictions do **not** apply: a BrowserView is a
+separate CEF browser composited by Steam, not an iframe, so the `X-Frame-Options` that would defeat
+an embedded iframe are irrelevant here.
+
+If part 2 fails too, fall back to phone-and-paste — but do not build both, and do not start Tasks
+2–7 until the display question is settled either way.
+
+### Task 2: Credential store — explicit, not relocated
 - **Action**: `rootfs/overlay/usr/lib/novadeck/store-env` defines and exports
-  `LEGENDARY_CONFIG_PATH` and the gogdl auth path under a novadeck directory on the **shared
-  `/home`**, creates them `0700`, and is sourced by everything that invokes either CLI. gogdl's
-  path is passed explicitly **before the subcommand** on every call, and its parent directory is
-  created first — gogdl does neither.
+  `LEGENDARY_CONFIG_PATH` and the gogdl auth path, creates them `0700`, and is sourced by
+  everything that invokes either CLI. The paths stay under `/root`, which the offload bind already
+  makes persistent and shared across slots — the point of naming them is that the plugin, the
+  launcher and any future caller agree on one location rather than inheriting three different
+  defaults. gogdl's path is passed explicitly **before the subcommand** on every call, and its
+  parent directory is created first — gogdl does neither, and a missing path costs the user their
+  single-use code.
 - **Mirror**: the existing `/usr/lib/novadeck/` helper scripts.
 - **Validate**: offline assertions that neither path is under `/root`, `/etc` or `/var`; on
   hardware, both CLIs write there and nothing appears in their default locations.
@@ -141,12 +199,13 @@ source dev.env && make sdcard                     # a card to walk through
 
 | Risk | Likelihood | Mitigation |
 |---|---|---|
-| `BrowserView` is absent, restricted, or does not fire `finished-request` on our arm64 client | Medium | Task 1 is a throwaway spike that gates the milestone; the phone-and-paste fallback is designed and stays unbuilt unless needed |
+| ~~`BrowserView` is absent or does not fire `finished-request`~~ | **Resolved** | It exists and fires; see Task 1's result |
+| **A BrowserView created outside SteamUI's React tree never reaches the screen** | **Observed** | The real risk, and it is now the live one. Spike part 2 tests the `QuickAccessMenuBrowserView` host from inside a plugin; phone-and-paste remains the fallback and stays unbuilt until part 2 answers |
 | The login page is unusable with a gamepad and the on-screen keyboard | Medium | Part of Task 1's acceptance, not a later discovery — if the form cannot be filled, the flow is dead regardless of the API |
 | Steam changes or removes the browser-view API in a client update | Low | It is how Steam renders its own store pages; but the plugin must degrade to a clear "cannot open sign-in" message rather than a blank view |
 | A failed credential write spends the user's single-use code | **Observed in milestone 1** | Create the directory and verify it is writable *before* opening the browser, not after the code arrives |
-| Tokens written somewhere per-slot and silently lost at the next OTA | Medium | Task 2 centralises the paths; the offline suite asserts they are on `/home`; the walkthrough OTAs in both directions |
-| `/root` was writable on the dev card although the root is meant to be read-only | **Unexplained** | Establish why before relying on any path default — if dev mounts rw and release does not, the milestone-1 hand-run would not reproduce on a release card |
+| Tokens written somewhere per-slot and silently lost at the next OTA | Low | `/root` is an offload bind from the shared `/home` tree, so the default locations already persist; Task 2 makes the paths explicit and the walkthrough still OTAs in both directions to prove it |
+| ~~`/root` was writable although the root is read-only~~ | **Explained** | The root *is* `ro`; `/root` is an offload bind from `/home`. Not a dev-only behaviour, so the milestone-1 hand-run reproduces on a release card |
 | Refresh tokens rotate and a stale copy locks the user out | Medium | Let each CLI own its own refresh; never cache a second copy |
 | The QAM surface implies more than exists (browse, install) | Medium | The tab says connected/not connected and nothing else until milestone 3 |
 

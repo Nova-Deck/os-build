@@ -33,8 +33,13 @@ filesystem and that an OTA would wipe the credentials, so Task 2 had to relocate
 from inspecting `out/images/rootfs.img`, where `/root` *is* a plain directory — true of the image
 and false at runtime, because the offload bind is mounted at boot. The root filesystem is genuinely
 `ro` (`/dev/mmcblk0p4 btrfs ro`), which is what made the writable `/root` look like a contradiction
-worth chasing. Credentials in `/root/.config/` already persist across reboots and OTAs. Task 2 is
-therefore about ownership, permissions and explicitness, not relocation.
+worth chasing.
+
+**That correction was then over-applied, and this is the second correction.** Having established
+that `/root` persists, an earlier draft concluded the credentials could stay there. Persistence was
+never the objection — ownership is. The credentials belong to the person using the device, the
+launch path that will read them runs as `deck`, and `/root` sits outside anything that resets or
+backs up user data. They go in `/home/deck`, owned by `deck`; see Task 2.
 
 ## Design
 
@@ -191,15 +196,33 @@ listener, and no security review for a listener that will not exist. Tasks 2–7
 Epic is the same shape with one difference that is not a copy-paste: its `authorizationCode`
 arrives in a JSON body rather than a query parameter, so Task 4 reads the *page*, not just the URL.
 
-### Task 2: Credential store — explicit, not relocated
+### Task 2: Credential store — in the user's home, owned by the user
 - **Action**: `rootfs/overlay/usr/lib/novadeck/store-env` defines and exports
-  `LEGENDARY_CONFIG_PATH` and the gogdl auth path, creates them `0700`, and is sourced by
-  everything that invokes either CLI. The paths stay under `/root`, which the offload bind already
-  makes persistent and shared across slots — the point of naming them is that the plugin, the
-  launcher and any future caller agree on one location rather than inheriting three different
-  defaults. gogdl's path is passed explicitly **before the subcommand** on every call, and its
-  parent directory is created first — gogdl does neither, and a missing path costs the user their
+  `LEGENDARY_CONFIG_PATH` and the gogdl auth path under **`/home/deck/.local/share/novadeck/stores/`**,
+  creates the tree `0700` **owned by `deck`**, and is sourced by everything that invokes either CLI.
+  gogdl's path is passed explicitly **before the subcommand** on every call, and its parent
+  directory is created first — gogdl does neither, and a missing path costs the user their
   single-use code.
+- **NOT `/root`.** An earlier draft of this plan said the paths could stay there because the offload
+  bind makes `/root` persistent. Persistence was never the objection:
+  - **These are the user's credentials, not the system's.** `/root` is the root account's home; the
+    account being authenticated is the person holding the device.
+  - **The plugin is not the only caller.** It runs as root (`plugin.json` `flags: ["root"]`), but
+    milestones 3, 5 and 6 invoke these CLIs from the launch path, which runs as `deck`. Credentials
+    only root can read would work in the plugin and fail everywhere else — the exact failure
+    `novadeck-framegen/conf.py:78-84` already documents for lsfg-vk's config: *"A root-owned
+    conf.toml would make lsfg-vk's own writes fail and the UI unable to fix it."*
+  - **`/root` is outside the user-data model.** Anything that resets or backs up user data will
+    reason about `/home/deck`; credentials hidden in `/root` would survive a reset that the user
+    expected to clear their accounts, which is a worse failure than losing them.
+  - `/root` was never a decision — it is where milestone 1's SSH session happened to run.
+- **Mirror**: `novadeck-framegen/py_modules/novadeck_framegen/conf.py:85-97` — write to a temp file
+  in the target directory, `os.chown` it to the directory's existing uid/gid, `os.replace` it in
+  atomically. The plugin runs as root, so every write into `/home/deck` must restore ownership or
+  it hands the user a file their own tools cannot rewrite.
+- **Validate**: offline assertions that the configured paths are under `/home/deck` and never
+  `/root`, `/etc` or `/var`; on hardware, `stat -c %U` on every credential file returns `deck`, and
+  nothing appears in either CLI's default location.
 - **Mirror**: the existing `/usr/lib/novadeck/` helper scripts.
 - **Validate**: offline assertions that neither path is under `/root`, `/etc` or `/var`; on
   hardware, both CLIs write there and nothing appears in their default locations.
@@ -253,7 +276,8 @@ source dev.env && make sdcard                     # a card to walk through
 | The login page is unusable with a gamepad and the on-screen keyboard | Medium | Part of Task 1's acceptance, not a later discovery — if the form cannot be filled, the flow is dead regardless of the API |
 | Steam changes or removes the browser-view API in a client update | Low | It is how Steam renders its own store pages; but the plugin must degrade to a clear "cannot open sign-in" message rather than a blank view |
 | A failed credential write spends the user's single-use code | **Observed in milestone 1** | Create the directory and verify it is writable *before* opening the browser, not after the code arrives |
-| Tokens written somewhere per-slot and silently lost at the next OTA | Low | `/root` is an offload bind from the shared `/home` tree, so the default locations already persist; Task 2 makes the paths explicit and the walkthrough still OTAs in both directions to prove it |
+| Tokens written somewhere per-slot and silently lost at the next OTA | Low | `/home/deck` is the shared user partition; the walkthrough still OTAs in both directions to prove it |
+| Credentials written as root into the user's home, so the launch path cannot read or replace them | Medium | The `os.chown`-to-owner write from `novadeck-framegen/conf.py:85-97`, plus a hardware check that `stat -c %U` returns `deck` on every credential file |
 | ~~`/root` was writable although the root is read-only~~ | **Explained** | The root *is* `ro`; `/root` is an offload bind from `/home`. Not a dev-only behaviour, so the milestone-1 hand-run reproduces on a release card |
 | Refresh tokens rotate and a stale copy locks the user out | Medium | Let each CLI own its own refresh; never cache a second copy |
 | The QAM surface implies more than exists (browse, install) | Medium | The tab says connected/not connected and nothing else until milestone 3 |
@@ -263,7 +287,7 @@ source dev.env && make sdcard                     # a card to walk through
 - [x] Task 1's spike answered on hardware, with the captured redirect URL recorded — and taken
       further than the gate asked: the captured code was exchanged for a live GOG token
 - [ ] Epic and GOG both connect from Game Mode, gamepad only, no SSH and no typed code
-- [ ] Credentials live on the shared `/home`; nothing is written under `/root` or `/etc`
+- [ ] Credentials live under `/home/deck`, owned by `deck`; nothing under `/root`, `/etc` or `/var`
 - [ ] Connection survives a reboot **and** an OTA in both directions
 - [ ] A forced token expiry refreshes rather than failing
 - [ ] Disconnect removes the credentials

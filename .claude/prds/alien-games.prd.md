@@ -193,7 +193,7 @@ anyway.
 
 | # | Milestone | Outcome | How it is proven when it lands | Status | Plan |
 |---|---|---|---|---|---|
-| 1 | Store CLIs, native arm64 | legendary and gogdl are packaged and run on the device — no FEX, no x86 freeze | Package builds in the normal pipeline; each CLI runs on hardware and lists a library given a hand-supplied token | in-progress | [`alien-games.plan.md`](../plans/alien-games.plan.md) |
+| 1 | Store CLIs, native arm64 | legendary and gogdl are packaged and run on the device — no FEX, no x86 freeze | Package builds in the normal pipeline; each CLI runs on hardware and lists a library given a hand-supplied token — **done 2026-09-20**: 55 Epic titles listed, GOG authenticated and `gogdl info` returning build metadata | complete | [`alien-games.plan.md`](../plans/alien-games.plan.md) |
 | 2 | Account connection | A user connects Epic and GOG from the device with no browser on it; tokens persist and refresh | Hardware walkthrough with real accounts; token survives reboot and an expiry/refresh cycle; security review of credential-at-rest before it merges | pending | — |
 | 3 | Install and uninstall | An owned title downloads to a chosen location, resumes after an interruption, and uninstalls cleanly | Driven on hardware against a real account, including a deliberate mid-download network cut | pending | — |
 | 4 | Library entry writer | An entry is created and removed in Steam's shortcut store, correctly sequenced against Steam's lifecycle, keyed on **our** stable id via a launcher stub — never on Steam's appid | Driven directly on a dev card with Steam running; entry survives a Steam restart and a reboot | pending | — |

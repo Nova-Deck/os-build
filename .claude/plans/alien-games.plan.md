@@ -159,12 +159,52 @@ source dev.env && make base                       # build the base with both pac
 | The HW gate needs real store credentials and someone pastes one into a commit | Medium | Token is hand-supplied at the prompt for the test and never written to the tree; the gate records only the output shape |
 | Two packages land that nothing calls, and go stale before milestone 7 | Medium | Accepted by the PRD's delivery constraint; the mitigation is keeping the gap between milestones small, not gating the code |
 
+## Hardware gate — result, 2026-09-20
+
+Run on a dev card built from `f2e8cda` (`NOVADECK_MODE=dev`, `NOVADECK_GIT=f2e8cda`), over SSH.
+
+| Check | Result |
+|---|---|
+| `legendary --version` / `gogdl --version` | 0.20.43 "Riding Shotgun (Heroic)" / 1.3.0 |
+| `import gogdl_xdelta3` | loads from `/usr/lib/python3.13/site-packages/gogdl_xdelta3.abi3.so` |
+| Interpreter | `aarch64`, Python 3.13.7 |
+| Epic: `legendary auth --code` → `legendary list` | account authenticated, **55 games / 64 app entries** with metadata |
+| GOG: `gogdl auth --code` → owned-games API → `gogdl info` | authenticated, **2 owned games**, `info 1207658855` returned real build metadata (build id, sizes, `dotNet472` dependency) |
+| FEX in our path | none — the device's `FEXServer` has PPID `/usr/bin/FEX …/PluginLoader`, i.e. Decky's x86_64 loader |
+
+The extension import is the check that mattered: a wrong-arch or wrong-ABI `.so` passes both the
+build and the offline suite and only fails at load.
+
+**Findings that change later milestones, not this one:**
+
+- **gogdl needs an explicit `--auth-config-path`, and it is not optional in practice.**
+  `gogdl/args.py:19` declares it `required=False` with **no default**, so `config_path` is `None`
+  and `__write_config` calls `open(None, "w")` (`gogdl/auth.py:37`). The token exchange at
+  `auth.py:125` happens *before* that write — so a call without the path spends the user's
+  single-use authorization code, fetches the tokens, and throws them away with a traceback. It
+  cost one login round-trip here. Whatever invokes gogdl in milestone 2 must always pass the path
+  **before the subcommand**, and must pre-create the parent directory: gogdl does not.
+- **Not all of an Epic library is installable by legendary.** Ubisoft-published titles list with a
+  note that they must be activated on a Ubisoft account and need Ubisoft Connect. Milestone 7's
+  surface has to say so rather than offering a Play button that cannot work; "the library" and
+  "what we can install" are different sets.
+- **Tokens at rest are now real, not theoretical.** The card holds Epic and GOG refresh tokens in
+  plaintext under `/root/.config/{legendary,gogdl}/`. That is the PRD's credential-at-rest risk
+  showing up on the first card that touches it, and it is milestone 2's security-review gate.
+- **legendary 0.21.1 is out**; we pin 0.20.43 deliberately (the version the reference plugin
+  ships). Not a defect — a bump decision for whenever something needs it.
+
+A locale warning on every legendary call over SSH (`Getting locale failed`) is **not** an image
+defect: `/etc/locale.conf` sets `LANG=en_US.UTF-8` and the gamescope session has it; sshd just does
+not inherit it. Re-running with `LANG` set makes it vanish, and the Decky backend will run inside
+the session.
+
 ## Acceptance
 
-- [ ] `packages/legendary/` and `packages/gogdl/` build in the normal pipeline, no FEX involved
-- [ ] `gogdl_xdelta3.abi3.so` is present in the built gogdl package
-- [ ] Both names are in `PKGS`; `make verify-lock` passes; only `rootfs/manifest.lock` moved
-- [ ] `tests/test-store-cli.sh` passes and is registered in `make test`
-- [ ] Rootfs size delta measured and recorded
-- [ ] **HW gate**: both CLIs run on a dev card and list a library from a hand-supplied token
-- [ ] Patterns mirrored from `packages/f3/` and `tests/test-decky.sh`, not reinvented
+- [x] `packages/legendary/` and `packages/gogdl/` build in the normal pipeline, no FEX involved
+- [x] `gogdl_xdelta3.abi3.so` is present in the built gogdl package
+- [x] Both names are in `PKGS`; `make verify-lock` passes; only `rootfs/manifest.lock` moved
+- [x] `tests/test-store-cli.sh` passes and is registered in `make test`
+- [x] Rootfs size delta measured and recorded — 17.4 MiB, 11.3 MiB of it `python-pycryptodomex`
+- [x] **HW gate**: both CLIs run on a dev card and list a library from a hand-supplied token
+- [x] Patterns mirrored from `packages/f3/` and `tests/test-decky.sh`, not reinvented

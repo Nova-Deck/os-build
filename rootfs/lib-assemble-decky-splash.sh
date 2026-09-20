@@ -26,7 +26,7 @@
 # dist/ is built by `make decky-plugin` (a $(ROOTFS) prerequisite); missing means a stale
 # invocation bypassed make — fail rather than assemble an image without its settings UI.
 # Keep this list in step with DECKY_PLUGINS in the Makefile and assertion 9 in guard-rootfs.sh.
-for plugin_name in novadeck-control novadeck-monitor novadeck-framegen; do
+for plugin_name in novadeck-control novadeck-monitor novadeck-framegen novadeck-stores; do
   plugin_src="$ROOT/apps/decky/$plugin_name"
   plugin_dest="$stage/usr/share/decky-plugins/$plugin_name"
   [ -s "$plugin_src/dist/index.js" ] || {

@@ -220,6 +220,24 @@ EOF
   rm -rf "$tmphome"
 fi
 
+# The plugin has to ASK store-env, not repeat its answer. A second copy of the paths would
+# drift the first time the location moves, and the symptom is the worst kind: an account that
+# reads as connected in the QAM and absent at launch, because the two callers looked in
+# different directories.
+STORES_PY="$ROOT/apps/decky/novadeck-stores/py_modules/novadeck_stores"
+if [ -d "$STORES_PY" ]; then
+  grep -q 'store-env' "$STORES_PY/paths.py" 2>/dev/null \
+    && ok "novadeck-stores resolves credential paths by running store-env" \
+    || bad "novadeck-stores does not reference store-env — it is repeating the paths"
+  hardcoded="$(grep -rn "/home/deck/\.local\|\.config/legendary\|gogdl/auth\.json" "$STORES_PY" \
+               | grep -v '^\S*paths\.py' | grep -v '#' || true)"
+  [ -z "$hardcoded" ] \
+    && ok "novadeck-stores hardcodes no credential path outside paths.py" \
+    || bad "novadeck-stores hardcodes credential paths: $hardcoded"
+else
+  bad "novadeck-stores py_modules missing — the QAM surface has no backend"
+fi
+
 # --- the suite is wired in -------------------------------------------------------------------
 grep -q 'test-store-cli.sh' "$ROOT/Makefile" \
   && ok "this suite is wired into make test (a suite nothing runs is documentation)" \

@@ -314,7 +314,7 @@ ASSEMBLE_SRC := $(shell find $(ROOTFS_DIR)/assemble-rootfs.sh $(ROOTFS_DIR)/lib-
 # $(DECKY_DISTS), so a backend-only edit must still bump that plugin's dist mtime (it costs one
 # ~10s no-change npm build) or the re-assembly would silently not happen — the same staleness
 # shape MODE_STAMP exists for.
-DECKY_PLUGINS := novadeck-control novadeck-monitor novadeck-framegen
+DECKY_PLUGINS := novadeck-control novadeck-monitor novadeck-framegen novadeck-stores
 DECKY_DISTS   := $(DECKY_PLUGINS:%=apps/decky/%/dist/index.js)
 decky_src      = $(shell find apps/decky/$(1)/src apps/decky/$(1)/py_modules apps/decky/$(1)/main.py \
                               apps/decky/$(1)/plugin.json apps/decky/$(1)/package.json \
@@ -924,7 +924,7 @@ apps/decky/$(1)/dist/index.js: $$(call decky_src,$(1))
 endef
 $(foreach plugin,$(DECKY_PLUGINS),$(eval $(call DECKY_RULE,$(plugin))))
 
-decky-plugin: $(DECKY_DISTS) ## Build the Decky plugin frontends: novadeck-control, novadeck-monitor, novadeck-framegen (host docker, node)
+decky-plugin: $(DECKY_DISTS) ## Build the Decky plugin frontends: novadeck-control, novadeck-monitor, novadeck-framegen, novadeck-stores (host docker, node)
 
 # ==============================================================================
 # Boot stage + bootable media (container)

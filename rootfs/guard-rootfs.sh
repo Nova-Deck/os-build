@@ -796,11 +796,11 @@ if [ ! -x "$STAGE/usr/share/decky-loader/PluginLoader" ]; then
 else
   echo "    ok  Decky loader present and executable"
 fi
-# Both first-party plugins, named individually rather than globbed: a glob over an EMPTY
+# Every first-party plugin, named individually rather than globbed: a glob over an EMPTY
 # plugins directory finds nothing and would pass silently, which is the exact failure this
 # assertion exists to catch. Keep in step with DECKY_PLUGINS (Makefile) and the decky-payload stage
 # (rootfs/lib-assemble-decky-splash.sh; it was 4c-3 in the undivided assembler).
-for decky_plugin in novadeck-control novadeck-monitor novadeck-framegen; do
+for decky_plugin in novadeck-control novadeck-monitor novadeck-framegen novadeck-stores; do
   if [ ! -s "$STAGE/usr/share/decky-plugins/$decky_plugin/dist/index.js" ]; then
     bad "$decky_plugin plugin dist missing — its QAM surface did not stage"
   else

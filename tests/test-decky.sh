@@ -25,6 +25,7 @@ PIN="$ROOT/packages/decky-loader/prebuilt.pin"
 PLUGIN="$ROOT/apps/decky/novadeck-control"
 MONITOR="$ROOT/apps/decky/novadeck-monitor"
 FRAMEGEN="$ROOT/apps/decky/novadeck-framegen"
+STORES="$ROOT/apps/decky/novadeck-stores"
 UNITDIR="$ROOT/rootfs/overlay/usr/lib/systemd/system"
 WANTSDIR="$ROOT/rootfs/overlay/etc/systemd/system/multi-user.target.wants"
 
@@ -230,9 +231,9 @@ esac
 # dropped and the QAM panel renders unstyled. Nothing catches it: what follows the truncation
 # parses as a valid expression, so tsc and rollup both stay green and the damage only appears
 # on device. Two backticks exactly -- the ones opening and closing the literal.
-# BOTH plugins carry their own stylesheet (the metric/meter rules left novadeck-control with the
-# Monitor tab), so both are exposed to this and both are checked.
-for styles_ts in "$PLUGIN/src/styles.ts" "$MONITOR/src/styles.ts"; do
+# EVERY plugin carries its own stylesheet (the metric/meter rules left novadeck-control with the
+# Monitor tab), so every one is exposed to this and every one is checked.
+for styles_ts in "$PLUGIN/src/styles.ts" "$MONITOR/src/styles.ts" "$FRAMEGEN/src/styles.ts" "$STORES/src/styles.ts"; do
   rel="${styles_ts#"$ROOT"/}"
   if [ -f "$styles_ts" ]; then
     ticks=$(tr -cd '`' <"$styles_ts" | wc -c)
@@ -481,6 +482,11 @@ if python3 -m py_compile "$FRAMEGEN/main.py" "$FRAMEGEN"/py_modules/novadeck_fra
 else
   bad "novadeck-framegen backend does not compile"
 fi
+if python3 -m py_compile "$STORES/main.py" "$STORES"/py_modules/novadeck_stores/*.py 2>/dev/null; then
+  ok "novadeck-stores backend compiles"
+else
+  bad "novadeck-stores backend does not compile"
+fi
 
 # COMPAT TOOLS MUST NOT REACH THE GAME PICKER. Proton, the Steam Linux Runtimes and Valve's FEX
 # compat tool install as ordinary apps with their own appmanifest, so they arrive in installed_games()
@@ -588,12 +594,13 @@ fi
 
 # The python block prints the same `  ok  `/`  FAIL` lines; fold them into THIS script's
 # counters so the summary line counts every check that was actually shown.
-pyout="$(python3 - "$PLUGIN" "$MONITOR" <<'PY'
+pyout="$(python3 - "$PLUGIN" "$MONITOR" "$STORES" <<'PY'
 import json, sys
-# Both plugins' py_modules on the path. The packages are distinct (novadeck_control,
-# novadeck_monitor), so there is nothing to shadow.
+# Every plugin's py_modules on the path. The packages are distinct (novadeck_control,
+# novadeck_monitor, novadeck_stores), so there is nothing to shadow.
 sys.path.insert(0, sys.argv[1] + "/py_modules")
 sys.path.insert(0, sys.argv[2] + "/py_modules")
+sys.path.insert(0, sys.argv[3] + "/py_modules")
 from novadeck_control import tweaks
 
 def ok(m): print(f"  ok   {m}")
@@ -646,13 +653,17 @@ ok("thunk namespace: absent base config degrades to an empty list")
 # the bundle's libcrypto and dies (HW-observed as "AvailableProfiles returned non-zero exit
 # status 1" in the Power tab). The backend must strip it — or restore PyInstaller's saved _ORIG.
 #
-# Checked in BOTH plugins. The two _clean_env implementations are independent copies (separate
-# processes, separate py_modules trees — see novadeck_monitor/powerd.py's header), which is
-# exactly why one can regress while the other stays correct.
+# Checked in EVERY plugin that spawns anything. The _clean_env implementations are independent
+# copies (separate processes, separate py_modules trees — see novadeck_monitor/powerd.py's
+# header), which is exactly why one can regress while the others stay correct. novadeck-stores
+# spawns /usr/lib/novadeck/store-env, an aarch64 shell script, so it has the same exposure with a
+# worse failure: the x86 bundle's LD_LIBRARY_PATH pointed at a native binary.
 import os
 from novadeck_control import power
 from novadeck_monitor import powerd
-for label, mod in (("novadeck-control", power), ("novadeck-monitor", powerd)):
+from novadeck_stores import paths as stores_paths
+for label, mod in (("novadeck-control", power), ("novadeck-monitor", powerd),
+                   ("novadeck-stores", stores_paths)):
     os.environ["LD_LIBRARY_PATH"] = "/tmp/_MEIfake"
     os.environ.pop("LD_LIBRARY_PATH_ORIG", None)
     if "LD_LIBRARY_PATH" in mod._clean_env():
@@ -911,6 +922,27 @@ done
 grep -q 'decky-loader/PluginLoader' "$ROOT/rootfs/guard-rootfs.sh" \
   && ok "guard-rootfs asserts the loader (assertion 9) — image completeness is checked at build" \
   || bad "guard-rootfs has no loader assertion: an incomplete image would ship undetected"
+# --- the three plugin lists have to stay in step ---------------------------------------------
+# Adding a plugin means naming it in THREE places: DECKY_PLUGINS (which builds its dist), the
+# staging loop (which puts it in the image) and guard assertion 9 (which refuses an image where
+# it did not stage). Miss the second and the guard catches it at build time; miss the THIRD and a
+# plugin can silently stop shipping, which is the failure assertion 9 exists to prevent — so the
+# lists are compared to each other here rather than trusted to a comment.
+mk_list=$(sed -n 's/^DECKY_PLUGINS[[:space:]]*:=[[:space:]]*//p' "$ROOT/Makefile" | tr ' ' '\n' | sort | tr '\n' ' ')
+stage_list=$(sed -n 's/^for plugin_name in \(.*\); do$/\1/p' "$ROOT/rootfs/lib-assemble-decky-splash.sh" | tr ' ' '\n' | sort | tr '\n' ' ')
+guard_list=$(sed -n 's/^for decky_plugin in \(.*\); do$/\1/p' "$ROOT/rootfs/guard-rootfs.sh" | tr ' ' '\n' | sort | tr '\n' ' ')
+[ -n "$mk_list" ] && [ "$mk_list" = "$stage_list" ] \
+  && ok "DECKY_PLUGINS and the staging loop name the same plugins" \
+  || bad "plugin lists differ — Makefile: [$mk_list] staging: [$stage_list]"
+[ -n "$mk_list" ] && [ "$mk_list" = "$guard_list" ] \
+  && ok "DECKY_PLUGINS and guard assertion 9 name the same plugins" \
+  || bad "plugin lists differ — Makefile: [$mk_list] guard: [$guard_list]"
+for declared in $mk_list; do
+  [ -f "$ROOT/apps/decky/$declared/plugin.json" ] \
+    && ok "$declared has a plugin.json in apps/decky" \
+    || bad "$declared is declared but apps/decky/$declared/plugin.json does not exist"
+done
+
 grep -q 'test-decky.sh' "$ROOT/Makefile" \
   && ok "this suite is wired into make test (a suite nothing runs is documentation)" \
   || bad "tests/test-decky.sh is not in the Makefile test target"

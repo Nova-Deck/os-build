@@ -232,6 +232,33 @@ arrives in a JSON body rather than a query parameter, so Task 4 reads the *page*
   and no way to connect yet. Staged, guarded and tested like the other three.
 - **Validate**: `make test` covers it; the tab renders on a dev card.
 
+#### Tasks 2 + 3 — hardware result, 2026-09-20
+
+One dev card (`NOVADECK_GIT=a9c8260`, mode `dev`) gated both.
+
+| Check | Result |
+|---|---|
+| `store-env` ships executable | `-rwxr-xr-x` at `/usr/lib/novadeck/store-env` |
+| It prints the three paths | all under `/home/deck/.local/share/novadeck/stores` |
+| `--ensure` resolves the **real** `deck` user | `deck:deck 700` on all three directories — the offline suite could only drive this through an override, since the host has no `deck` |
+| The plugin ships and loads | staged to `/usr/share/decky-plugins/novadeck-stores`, synced to homebrew, `Loaded NovaDeck Stores (v0.1.0)` |
+| The QAM panel renders | **Epic Games — Not connected / GOG — Not connected** |
+
+That last row is worth more than it looks. Reading "Not connected" rather than an error means the
+backend spawned `store-env` successfully **from inside the x86 PluginLoader running under FEX** —
+i.e. `_clean_env` really does keep PyInstaller's `LD_LIBRARY_PATH` off an aarch64 shell. That is
+the one environment where the bug could exist and the only place it could be proven.
+
+**Still open from Task 2, and structurally not closable yet:** that a *root-running plugin* writing
+into that tree restores `deck` ownership. `--ensure` proves the directories; the first credential
+file is not written until Task 4 gives it a caller, so `stat -c %U` on a real token file stays on
+the acceptance list.
+
+**Correction to an expectation, not a defect:** guard assertion 9 never ran — a dev build skips the
+sealed-root guard (`[DEV] skipping the sealed-root guard`). What actually fails a build with a
+missing plugin dist is the staging loop's own `[ -s dist/index.js ]` check, plus the new list-drift
+assertion in `make test`. The guard is a release-path backstop, not the first line of defence.
+
 ### Task 4 + 5: Epic and GOG connect flows
 - **Action**: The connect button opens the store's login in a browser view, captures the code on
   `finished-request`, destroys the view, and hands the code to the backend. Epic and GOG differ

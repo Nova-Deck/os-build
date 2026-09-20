@@ -922,6 +922,24 @@ done
 grep -q 'decky-loader/PluginLoader' "$ROOT/rootfs/guard-rootfs.sh" \
   && ok "guard-rootfs asserts the loader (assertion 9) — image completeness is checked at build" \
   || bad "guard-rootfs has no loader assertion: an incomplete image would ship undetected"
+# --- read-only panels need a focus target ----------------------------------------------------
+# The QAM is driven entirely by the gamepad and it SCROLLS BY MOVING FOCUS. A panel whose rows are
+# all read-only Fields has no focus targets at all, so nothing in it can be reached and anything
+# below the fold is unreachable. novadeck-monitor learned this and says so in its Content.tsx;
+# novadeck-stores then shipped the same defect to a dev card because nothing here was checking.
+# Plugins with interactive controls get focus for free from their sliders and dropdowns, which is
+# why this only asserts on the two panels that have none.
+for readonly_panel in "$MONITOR/src/Content.tsx" "$STORES/src/Content.tsx"; do
+  rel="${readonly_panel#"$ROOT"/}"
+  if [ -f "$readonly_panel" ]; then
+    grep -q 'focusable' "$readonly_panel" \
+      && ok "$rel marks rows focusable — the gamepad can reach and scroll the panel" \
+      || bad "$rel has no focusable row: a read-only panel with no focus target cannot be scrolled or reached"
+  else
+    bad "$rel missing"
+  fi
+done
+
 # --- the three plugin lists have to stay in step ---------------------------------------------
 # Adding a plugin means naming it in THREE places: DECKY_PLUGINS (which builds its dist), the
 # staging loop (which puts it in the image) and guard assertion 9 (which refuses an image where

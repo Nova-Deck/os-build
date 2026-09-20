@@ -9,6 +9,31 @@ const STORE_LABELS: Record<string, string> = {
   gog: "GOG",
 };
 
+// EVERY row here is `focusable`, and none of them is interactive. The QAM is driven entirely by
+// the gamepad and it scrolls by MOVING FOCUS, so a panel built only of read-only Fields has no
+// focus targets and nothing in it can be reached or scrolled — HW-observed on this panel before
+// the prop was added. novadeck-monitor hit the same wall and its Content.tsx says so; this panel
+// is the worse case it warns about, since it has no slider or dropdown anywhere to fall back on.
+function Row({ children, label }: { children: React.ReactNode; label?: string }) {
+  return (
+    <PanelSectionRow>
+      <Field label={label} focusable highlightOnFocus>
+        {children}
+      </Field>
+    </PanelSectionRow>
+  );
+}
+
+// The exception, and the line is "does this row ever change?". The footer below is static prose
+// that says the same thing every time the panel opens, so a focus stop on it is pure friction —
+// the stick lands on something that cannot be acted on and says nothing new. The transient rows
+// ("Checking…", an error) stay focusable because in those states they are the panel's ONLY
+// content: drop them and there is no focus target at all, which is the defect this whole
+// arrangement exists to avoid.
+function NoteRow({ children }: { children: React.ReactNode }) {
+  return <PanelSectionRow>{children}</PanelSectionRow>;
+}
+
 function StoreRow({ status }: { status: StoreStatus }) {
   const label = STORE_LABELS[status.store] ?? status.store;
   // The account name is shown when the CLI knows one and omitted when it does not, rather than
@@ -20,11 +45,9 @@ function StoreRow({ status }: { status: StoreStatus }) {
       : "Connected"
     : "Not connected";
   return (
-    <PanelSectionRow>
-      <Field label={label}>
-        <span className="novadeck-store-state">{state}</span>
-      </Field>
-    </PanelSectionRow>
+    <Row label={label}>
+      <span className="novadeck-store-state">{state}</span>
+    </Row>
   );
 }
 
@@ -49,23 +72,23 @@ export function Content() {
       <style>{styles}</style>
       <PanelSection title="Stores">
         {state === null ? (
-          <PanelSectionRow>
+          <Row>
             <span className="novadeck-store-note">Checking…</span>
-          </PanelSectionRow>
+          </Row>
         ) : "error" in state ? (
-          <PanelSectionRow>
+          <Row>
             <span className="novadeck-store-note">{state.error}</span>
-          </PanelSectionRow>
+          </Row>
         ) : (
           state.stores.map((s) => <StoreRow key={s.store} status={s} />)
         )}
-        <PanelSectionRow>
+        <NoteRow>
           {/* Says what the panel cannot do yet, because a surface that only reports looks broken
               otherwise — the user's next question is "so where is the sign-in button". */}
           <span className="novadeck-store-note">
             Signing in from the device arrives in a later update.
           </span>
-        </PanelSectionRow>
+        </NoteRow>
       </PanelSection>
     </div>
   );

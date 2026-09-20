@@ -221,8 +221,11 @@ lands; no separate issues.
       leaves the device.** `SteamClient.BrowserView.Create()` opens a URL in Steam's own CEF browser
       and the resulting `BrowserViewPopup` emits `finished-request: (currentURL, previousURL)`, so a
       Decky plugin can host the OAuth login and read the code straight out of the redirect. No
-      browser to ship, no flatpak, no LAN listener. *Still to verify on our arm64 client* — that is
-      milestone 2's gating spike.
+      browser to ship, no flatpak, no LAN listener. **Verified end to end on hardware the same day**:
+      `Navigation.NavigateToExternalWeb()` from a Decky plugin put GOG's login on screen in Game
+      Mode, a gamepad sign-in produced the redirect, and the captured 192-character code was
+      exchanged for a live GOG token. The browser must be created by SteamUI's own code — a view
+      created by an outside caller renders nowhere.
       The typing option this question originally listed is **dead**, and measurement killed it:
       Epic's code is 32 hex characters, GOG's is **192** mixed-case with `-` and `_`. The "~60
       characters of pain" estimate here was 3x low, and a single mis-key restarts a single-use

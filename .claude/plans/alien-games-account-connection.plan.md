@@ -51,9 +51,15 @@ therefore about ownership, permissions and explicitness, not relocation.
 
 Nothing is typed, nothing leaves the device, and there is no listener on the LAN.
 
-**Fallback, designed but not built:** if the spike fails, the phone-and-paste flow returns — QR to
-the login page, user pastes the code into a small page the device serves. It costs a LAN listener
-and a security review, which is why it is the fallback rather than the plan.
+~~**Fallback, designed but not built:** phone-and-paste — QR to the login page, user pastes the
+code into a small page the device serves.~~ **Struck 2026-09-20**: the spike proved the on-device
+flow end to end, so the LAN listener and its security review are not needed and will not be built.
+
+**Amended by the spike:** step 2 is not `BrowserView.Create` — it is
+`Navigation.NavigateToExternalWeb(url)` from inside the plugin, because a view created by an
+outside caller renders nowhere. Step 4 reads the redirect from Steam's CEF target list on
+`127.0.0.1:8080` rather than from a `finished-request` handler, since the browser belongs to
+SteamUI and we hold no handle on it.
 
 ## Patterns to Mirror
 
@@ -144,6 +150,47 @@ an embedded iframe are irrelevant here.
 If part 2 fails too, fall back to phone-and-paste — but do not build both, and do not start Tasks
 2–7 until the display question is settled either way.
 
+#### Result of part 2, 2026-09-20 — COMPLETE. Display, capture and exchange all proven
+
+A throwaway Decky plugin calling `Navigation.NavigateToExternalWeb(url)` (`@decky/ui`
+`modules/Router.d.ts:61`) **puts the GOG login on screen in Game Mode**. The user signed in with
+the gamepad; `SharedJSContext` navigated to `steamloopback.host/routes/externalweb`, which is
+SteamUI's own external-browser route hosting the page.
+
+That is why part 1 failed and this did not, and the distinction is the whole finding: **a browser
+view has to be created by SteamUI's own React code, not by an outside caller.** The API was never
+the problem — `Create`, `CreatePopup` and `parentPopupBrowserID` all worked and all rendered
+nothing, because nothing in the UI owned them. Called from inside a plugin, the same machinery
+renders.
+
+The redirect was then observed carrying the code:
+
+```
+embed.gog.com/on_login_success | https://embed.gog.com/on_login_success?origin=client&code=Md9hLkfppUeq…
+```
+
+and the captured code was handed straight to `gogdl --auth-config-path … auth --code`, which
+returned a full credential set (`access_token`, `refresh_token`, `user_id`, …), exit 0. **A
+192-character single-use code went from a gamepad login to a live GOG token with nothing typed and
+nothing carried off the device.**
+
+**Decision: the CEF debugging port is a fair dependency.** The redirect is read by polling Steam's
+CEF target list on `127.0.0.1:8080`, which exists because `novadeck-steam` writes
+`.cef-enable-remote-debugging`. That is a debugging facility, and depending on one in shipped code
+deserved a second look — but Decky's own frontend is *injected* over that same port, so every
+Decky plugin already depends on it absolutely. If the port is gone, our plugin is not running
+either. The dependency is therefore not new, and the user confirmed it stays.
+
+**Use the HTTP `/json` endpoint, not a websocket**, and this is not a style preference:
+`tests/test-decky.sh:100` records that Decky's CDP *websocket* can drop permanently when the tab
+goes stale mid-connect, which is what `novadeck-decky-watchdog.service` exists to recover. Polling
+a stateless HTTP endpoint adds no consumer to that fragile path; holding a second websocket would.
+
+**Consequences:** the phone-and-paste fallback is **struck, not deferred** — no QR, no LAN
+listener, and no security review for a listener that will not exist. Tasks 2–7 are unblocked.
+Epic is the same shape with one difference that is not a copy-paste: its `authorizationCode`
+arrives in a JSON body rather than a query parameter, so Task 4 reads the *page*, not just the URL.
+
 ### Task 2: Credential store — explicit, not relocated
 - **Action**: `rootfs/overlay/usr/lib/novadeck/store-env` defines and exports
   `LEGENDARY_CONFIG_PATH` and the gogdl auth path, creates them `0700`, and is sourced by
@@ -200,7 +247,9 @@ source dev.env && make sdcard                     # a card to walk through
 | Risk | Likelihood | Mitigation |
 |---|---|---|
 | ~~`BrowserView` is absent or does not fire `finished-request`~~ | **Resolved** | It exists and fires; see Task 1's result |
-| **A BrowserView created outside SteamUI's React tree never reaches the screen** | **Observed** | The real risk, and it is now the live one. Spike part 2 tests the `QuickAccessMenuBrowserView` host from inside a plugin; phone-and-paste remains the fallback and stays unbuilt until part 2 answers |
+| ~~A BrowserView created outside SteamUI's React tree never reaches the screen~~ | **Resolved** | True, and the answer is to let SteamUI create it: `Navigation.NavigateToExternalWeb()` from inside the plugin renders, and the full flow was proven to a live GOG token |
+| The redirect is read by polling Steam's CEF debug port rather than an event | Accepted | Decky is itself injected over that port, so the dependency is not new; poll the stateless HTTP `/json`, never a second websocket (`tests/test-decky.sh:100`) |
+| Epic's code is in a JSON body, not a query parameter | Medium | Task 4 reads page content, not just the URL — do not assume GOG's shape transfers |
 | The login page is unusable with a gamepad and the on-screen keyboard | Medium | Part of Task 1's acceptance, not a later discovery — if the form cannot be filled, the flow is dead regardless of the API |
 | Steam changes or removes the browser-view API in a client update | Low | It is how Steam renders its own store pages; but the plugin must degrade to a clear "cannot open sign-in" message rather than a blank view |
 | A failed credential write spends the user's single-use code | **Observed in milestone 1** | Create the directory and verify it is writable *before* opening the browser, not after the code arrives |
@@ -211,7 +260,8 @@ source dev.env && make sdcard                     # a card to walk through
 
 ## Acceptance
 
-- [ ] Task 1's spike answered on hardware, with the captured redirect URL recorded
+- [x] Task 1's spike answered on hardware, with the captured redirect URL recorded — and taken
+      further than the gate asked: the captured code was exchanged for a live GOG token
 - [ ] Epic and GOG both connect from Game Mode, gamepad only, no SSH and no typed code
 - [ ] Credentials live on the shared `/home`; nothing is written under `/root` or `/etc`
 - [ ] Connection survives a reboot **and** an OTA in both directions

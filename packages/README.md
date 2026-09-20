@@ -303,3 +303,15 @@ Current overlay:
   aardvark-dns behind netavark, no podman-docker split, and passt at the Frame's version. Lepton
   networks through pasta, so netavark is only installed because containers-common requires a
   `container-network-stack`.
+- `legendary/` — **local PKGBUILD** building legendary `0.20.43` (the Heroic fork) from its GitHub
+  tag. The Epic store CLI for alien-games milestone 1, absent from holo like `f3`. Pure Python, so
+  `arch=any` — upstream's x86_64 freeze is a convenience for Deck users and taking it would have
+  meant FEX for no reason. `depends` is derived from the package's actual imports, not from
+  `install_requires`; see the PKGBUILD header.
+- `gogdl/` — **local PKGBUILD** building gogdl `1.3.0` from its GitHub tag. The GOG CLI, same
+  milestone. **The one package here with two sources**: it compiles a mandatory C extension
+  (`gogdl_xdelta3`) against a vendored xdelta3 that upstream carries as a git SUBMODULE, and a
+  GitHub archive tarball ships that directory empty — so the xdelta tree is fetched separately at
+  the pinned submodule commit and moved into place in `prepare()`. `arch=aarch64` accordingly.
+  `tests/test-store-cli.sh` guards the shape; matching the pin to upstream's `.gitmodules` is a
+  human step at bump time, stated in `packages/gogdl/source.pin`.

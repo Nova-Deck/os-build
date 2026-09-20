@@ -1,0 +1,26 @@
+# legendary — built FROM SOURCE via a novadeck-owned PKGBUILD (packages/legendary/PKGBUILD), NOT
+# fetched from the holo monorepo: legendary is an AUR-only package, absent from holo core and extra
+# aarch64 (checked against build/snapshot.pin), so there is no repo row to resolve and no upstream
+# PKGBUILD to pull. Same "local PKGBUILD" form as packages/f3/source.pin.
+#
+# Why: the Epic half of alien-games milestone 1 (.claude/plans/alien-games.plan.md). legendary is
+# the CLI that authenticates against Epic, lists what an account owns and downloads it. Nothing in
+# the image calls it yet — this milestone lands inert on purpose.
+#
+# Version: 0.20.43, the Heroic fork's latest. See the PKGBUILD header for why the fork and not
+# derrod/legendary.
+#
+# It is pure Python, so arch=('any') and there is no FEX anywhere in this path — the x86_64
+# artifacts upstream publishes are a convenience for Deck users, not a constraint on us.
+#
+# Fields (see packages/README.md):
+#   name           pkgname (must match the PKGBUILD); also the work/ build-dir + repo entry
+#   pkgbuild_local path (relative to this dir) to the checked-in PKGBUILD to build
+#   pkgrel_suffix  numeric suffix appended to the PKGBUILD's pkgrel so pacman prefers our build
+#
+# To bump legendary: edit pkgver + sha256sums in packages/legendary/PKGBUILD, re-audit the runtime
+# imports (the depends list below the header is derived from them, not from install_requires — see
+# the PKGBUILD), and `make relock`.
+name: legendary
+pkgbuild_local: PKGBUILD
+pkgrel_suffix: 1

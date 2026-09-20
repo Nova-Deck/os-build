@@ -157,6 +157,16 @@ BOOTSTRAP_PKGS=(base)
 # python-gobject: PyGObject (the `gi` bindings) for novadeck-powerd + novadeck-steamos-manager, the
 # GLib/Gio D-Bus daemons behind SteamUI's Performance/GPU sliders and the fan curve. Without it both
 # services fail on import at boot.
+# legendary + gogdl: the Epic and GOG store CLIs, for alien-games milestone 1. NOTHING ON THE IMAGE
+# CALLS THEM YET and that is deliberate — the PRD lands each layer inert rather than behind a flag
+# nothing exercises (.claude/prds/alien-games.prd.md). They are here because the store path needs a
+# client that can authenticate, enumerate an account's library and download it, and neither exists
+# in the holo repos (checked: no legendary/gogdl row in core or extra aarch64 at the pinned
+# snapshot), so both are built from source into the [novadeck] overlay — packages/legendary,
+# packages/gogdl — and resolve here. NOT x86: legendary is pure Python and gogdl compiles its one C
+# extension for aarch64, so there is no FEX in this path, unlike the prebuilt freezes upstream
+# publishes for Deck users. They drag in the python-requests dependency closure, which is the first
+# new Python chain on this image since the trim — see the plan's size note.
 # scx-scheds: the sched_ext userspace schedulers (scx_lavd, scx_bpfland, scx_rusty). scx_lavd is the
 # gaming-oriented one — latency-critical tasks get priority, which is the point on a handheld. Needs
 # the kernel half (CONFIG_SCHED_CLASS_EXT + BTF, kernel/kernel.config). NOT in the holo repos, so it
@@ -300,7 +310,7 @@ BOOTSTRAP_PKGS=(base)
 # lookup fails that way — indistinguishable from a genuinely absent layer, which is the failure
 # packages/fossilize-stub-android exists to prevent. ~1.1 MB (jq + oniguruma).
 # Measured 2026-08-29 on a Pocket ACE, Lepton v2.8.9 (issue #58).
-PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-mesa-layers vulkan-tools novadeck-gpu-priority mesa gamescope seatd sddm mangohud lsfg-vk fex-emu bluez bluez-utils networkmanager alsa-ucm-conf pipewire wireplumber pipewire-pulse pipewire-alsa rtkit unzip openal gtk2 ffmpeg e2fsprogs xorg-xwayland lsof noto-fonts noto-fonts-cjk noto-fonts-emoji python python-gobject scx-scheds rauc btrfs-progs rsync earlyoom zram-generator udisks2 f3 upower libinput-tools podman crun passt fuse-overlayfs which inotify-tools jq)
+PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-mesa-layers vulkan-tools novadeck-gpu-priority mesa gamescope seatd sddm mangohud lsfg-vk fex-emu bluez bluez-utils networkmanager alsa-ucm-conf pipewire wireplumber pipewire-pulse pipewire-alsa rtkit unzip openal gtk2 ffmpeg e2fsprogs xorg-xwayland lsof noto-fonts noto-fonts-cjk noto-fonts-emoji python python-gobject legendary gogdl scx-scheds rauc btrfs-progs rsync earlyoom zram-generator udisks2 f3 upower libinput-tools podman crun passt fuse-overlayfs which inotify-tools jq)
 
 # Dev-only packages — installed ONLY under NOVADECK_DEV=1, NEVER in a release base.
 # On-device bring-up tools: evtest reads raw /dev/input events; usbutils provides lsusb.

@@ -1,0 +1,68 @@
+# gogdl — the GOG download/launch CLI (Heroic's), built native aarch64.
+#
+# WHY IT IS HERE: alien-games milestone 1, the GOG half. gogdl downloads and updates GOG titles and
+# reports a launch command for them. Sign-in is NOT its job — GOG's OAuth code exchange is a plain
+# HTTP call we make ourselves (see the PRD's evidence section), so gogdl only ever sees a token
+# somebody else obtained. Nothing calls it yet; the milestone is deliberately inert.
+#
+# WHY LOCAL AND NOT FETCHED: absent from holo core and extra aarch64 at the pinned snapshot, same
+# as legendary. See packages/f3/ for the precedent.
+#
+# WHY arch=aarch64 AND NOT any, WHICH IS THE WHOLE TRAP IN THIS PACKAGE:
+#
+#   gogdl is NOT pure Python. pyproject.toml declares [[tool.setuptools.ext-modules]] building
+#   `gogdl_xdelta3` from gogdl_xdelta3.c plus xdelta3/xdelta3/xdelta3.c, and the extension is
+#   MANDATORY, not optional — gogdl/dl/workers/task_executor.py imports it at module level, so a
+#   package without it does not degrade, it raises ImportError the first time a patch is applied.
+#
+#   That xdelta3 tree is a git SUBMODULE (jmacd/xdelta @ _xdelta_commit below). GitHub's archive
+#   tarball ships the submodule directory EMPTY — `heroic-gogdl-1.3.0/xdelta3/` exists with nothing
+#   in it. A single-source PKGBUILD therefore fails at compile with a missing xdelta3/xdelta3.h,
+#   every time. Hence two sources and the prepare() below, which drops the empty directory and puts
+#   the xdelta repo root in its place: gogdl_xdelta3.c includes <xdelta3/xdelta3.h> and pyproject
+#   sets include-dirs = ["xdelta3"], so the repo root has to BE `xdelta3/` — one level, not two.
+#
+#   py-limited-api is on (-DPy_LIMITED_API=0x03090000), so what lands is an abi3 .so: a Python
+#   minor bump in the image does not invalidate it. That is upstream's choice, not ours, but it is
+#   the reason this package does not need a rebuild every time `python` moves.
+#
+# WHERE depends COMES FROM: audited imports across gogdl/**.py — `requests` is the only third-party
+# module, plus the extension this package builds itself. No setuptools at runtime.
+#
+# NOT IN makedepends: gcc and the rest of base-devel, per Arch convention — makepkg assumes it.
+
+pkgname=gogdl
+pkgver=1.3.0
+pkgrel=1
+# jmacd/xdelta, the `xdelta3` submodule of heroic-gogdl at tag v1.3.0. Read it out of the tag's
+# .gitmodules on every bump; a stale value here compiles cleanly against the wrong xdelta3.
+_xdelta_commit=0525275fe4b553a10f38e455d30c60dc6ed9b45d
+pkgdesc='GOG downloading and launch module from Heroic Games Launcher (CLI)'
+arch=('aarch64')
+url='https://github.com/Heroic-Games-Launcher/heroic-gogdl'
+license=('GPL-3.0-only')
+depends=('python' 'python-requests')
+makedepends=('python-build' 'python-installer' 'python-setuptools' 'python-wheel')
+source=("${pkgname}-${pkgver}.tar.gz::${url}/archive/v${pkgver}.tar.gz"
+        "xdelta-${_xdelta_commit}.tar.gz::https://github.com/jmacd/xdelta/archive/${_xdelta_commit}.tar.gz")
+sha256sums=('360ab09bc4b5b69bff66a1ef23718be51d7db66f1ccf696859b2bfed3f655bb9'
+            '3f636e59b01e12fde61355e6f555467e873f4f00e3edc1aa65ae530eda3df554')
+
+prepare() {
+  cd "heroic-gogdl-${pkgver}"
+  # The submodule placeholder. rmdir rather than rm -rf on purpose: if a future tarball ever ships
+  # real content there, this fails loudly instead of silently discarding it.
+  rmdir xdelta3
+  mv "${srcdir}/xdelta-${_xdelta_commit}" xdelta3
+}
+
+build() {
+  cd "heroic-gogdl-${pkgver}"
+  python -m build --wheel --no-isolation
+}
+
+package() {
+  cd "heroic-gogdl-${pkgver}"
+  python -m installer --destdir="${pkgdir}" dist/*.whl
+  install -Dm644 LICENSE -t "${pkgdir}/usr/share/licenses/${pkgname}"
+}

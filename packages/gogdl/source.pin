@@ -1,0 +1,26 @@
+# gogdl — built FROM SOURCE via a novadeck-owned PKGBUILD (packages/gogdl/PKGBUILD), NOT fetched
+# from the holo monorepo: like legendary it is AUR-only, absent from holo core and extra aarch64
+# (checked against build/snapshot.pin). Same "local PKGBUILD" form as packages/f3/source.pin.
+#
+# Why: the GOG half of alien-games milestone 1 (.claude/plans/alien-games.plan.md). Nothing in the
+# image calls it yet — this milestone lands inert on purpose.
+#
+# Version: 1.3.0, upstream's latest tag.
+#
+# UNLIKE legendary, THIS ONE IS NOT ARCH-INDEPENDENT. gogdl builds a C extension (gogdl_xdelta3)
+# around a vendored xdelta3, so the package is aarch64 and the PKGBUILD carries TWO sources — the
+# xdelta3 tree is a git submodule and GitHub's archive tarball ships that directory EMPTY. The
+# PKGBUILD header has the detail; the offline suite (tests/test-store-cli.sh) asserts the second
+# source stays pinned to the commit upstream's .gitmodules names.
+#
+# Fields (see packages/README.md):
+#   name           pkgname (must match the PKGBUILD); also the work/ build-dir + repo entry
+#   pkgbuild_local path (relative to this dir) to the checked-in PKGBUILD to build
+#   pkgrel_suffix  numeric suffix appended to the PKGBUILD's pkgrel so pacman prefers our build
+#
+# To bump gogdl: edit pkgver + sha256sums in packages/gogdl/PKGBUILD, AND re-read the submodule
+# commit out of the new tag's .gitmodules — a version bump that leaves _xdelta_commit stale builds
+# green against the wrong xdelta3. Then `make relock`.
+name: gogdl
+pkgbuild_local: PKGBUILD
+pkgrel_suffix: 1

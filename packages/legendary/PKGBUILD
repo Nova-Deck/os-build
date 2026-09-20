@@ -1,0 +1,54 @@
+# legendary — the Epic Games Store CLI, built native aarch64.
+#
+# WHY IT IS HERE: alien-games milestone 1. NovaDeck can run a Steam library and nothing else; the
+# store half of that gap starts with a client that can authenticate against Epic, enumerate what an
+# account owns and download it. legendary is that client. Nothing calls it yet — the milestone is
+# deliberately inert (see .claude/prds/alien-games.prd.md, "unwired beats flagged off").
+#
+# WHY LOCAL AND NOT FETCHED: legendary is in no holo repo — core and extra aarch64 at the pinned
+# snapshot (build/snapshot.pin) carry neither it nor gogdl. It lives in the AUR. Same situation as
+# packages/f3/, and the same answer: a recipe we own and can explain.
+#
+# WHY THE HEROIC FORK AND NOT derrod/legendary: Heroic-Games-Launcher/legendary is the line the
+# ecosystem actually drives — Heroic and the Decky plugins in this space all ship it, it takes
+# fixes faster, and 0.20.43 is its current release. Upstream derrod/legendary remains the origin
+# and the two are API-compatible at the CLI; if the fork ever stalls, switching back is a url +
+# pkgver + sha256 change and nothing else.
+#
+# WHY arch=any: it is pure Python. Upstream publishes an x86_64 PyInstaller freeze because its
+# users are on Decks; that artifact is a packaging convenience, not a portability constraint, and
+# taking it would have meant running it under FEX for no reason. There is no FEX in this path.
+#
+# WHERE depends COMES FROM, and why it is shorter than install_requires. setup.py lists
+# `setuptools` and `wheel` as runtime requirements; neither is imported anywhere in the package
+# (audited across legendary/**.py: the only third-party imports are Cryptodome, filelock, requests,
+# requests_futures and urllib3). They are build-time leftovers, so they are makedepends here and
+# not depends — this image is size-trimmed and a dependency nothing imports is weight. urllib3 is
+# imported DIRECTLY rather than only through requests, so it is declared rather than inherited.
+# If a bump adds a dynamic import this list misses, the failure is a clean ModuleNotFoundError on
+# first run, and this paragraph is where to start.
+
+pkgname=legendary
+pkgver=0.20.43
+pkgrel=1
+pkgdesc='Free and open-source replacement for the Epic Games Launcher (CLI)'
+arch=('any')
+url='https://github.com/Heroic-Games-Launcher/legendary'
+license=('GPL-3.0-only')
+depends=('python' 'python-requests' 'python-requests-futures' 'python-urllib3'
+         'python-filelock' 'python-pycryptodomex')
+makedepends=('python-build' 'python-installer' 'python-setuptools' 'python-wheel')
+# Bare version tag — the fork tags `0.20.43`, not `v0.20.43`.
+source=("${pkgname}-${pkgver}.tar.gz::${url}/archive/${pkgver}.tar.gz")
+sha256sums=('e41348ad06b804a0123178926d23fbf8b6da0f9ef6c2b407db1f6455ea545111')
+
+build() {
+  cd "legendary-${pkgver}"
+  python -m build --wheel --no-isolation
+}
+
+package() {
+  cd "legendary-${pkgver}"
+  python -m installer --destdir="${pkgdir}" dist/*.whl
+  install -Dm644 LICENSE -t "${pkgdir}/usr/share/licenses/${pkgname}"
+}

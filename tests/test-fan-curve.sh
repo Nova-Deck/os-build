@@ -302,6 +302,18 @@ check("preferred==schedutil is not reported as a fallback",
 pd.try_write = real_try_write
 
 
+# Every governor the shipped profiles name must be one the kernel config asks for, or the
+# fallback above turns a profile into a silent duplicate of another.
+factory = configparser.ConfigParser()
+factory.read(os.path.join(root, "rootfs/overlay/usr/share/novadeck/power-profiles.conf"))
+named = {factory.get(s, "cpu_governor") for s in factory.sections()
+         if s.startswith("profile.") and factory.has_option(s, "cpu_governor")}
+kconfig = pathlib.Path(root, "kernel/kernel.config").read_text()
+missing = sorted(g for g in named
+                 if f"CONFIG_CPU_FREQ_GOV_{g.upper()}=y" not in kconfig
+                 and f"CONFIG_CPU_FREQ_DEFAULT_GOV_{g.upper()}=y" not in kconfig)
+check("every governor the profiles name is built =y", missing, [])
+
 for status, name in results:
     print(f"{status} {name}")
 sys.exit(1 if any(s.startswith("FAIL") for s, _ in results) else 0)

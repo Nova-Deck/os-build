@@ -43,7 +43,7 @@
 # 2026-09-01): there is no 045e:028e device on the bus, so the pad arrives on the dinput source and
 # the xinput source below binds nothing." That described the board as it behaved BEFORE the MCU had
 # a driver, and it was already stale when it was written: commit b4ddf2d added this file and
-# 1005-misc-add-ayaneo-serial-mcu.patch TOGETHER, and that driver's whole job is to switch the MCU
+# 0980-misc-add-ayaneo-serial-mcu.patch TOGETHER, and that driver's whole job is to switch the MCU
 # out of direct-input mode. The comment simply did not get updated to match its own commit.
 #
 # qcs8550-ayaneo-pocket-common.dtsi sets `ayaneo,xbox360-mode` on the `ayaneo,serial-mcu` node, so
@@ -78,7 +78,7 @@
 #     rotation map here. This board prints `B` on the BOTTOM button and the MCU reports by LABEL by
 #     default, so bottom arrives as BTN_EAST (measured 2026-08-22). The fix rides along with the
 #     mode switch: the ACE's `ayaneo,serial-mcu-japanese` compatible makes the driver ask the Xbox
-#     personality for POSITIONAL reporting, and 1005-misc-add-ayaneo-serial-mcu.patch records the
+#     personality for POSITIONAL reporting, and 0980-misc-add-ayaneo-serial-mcu.patch records the
 #     measurement — on a Pocket ACE 2026-09-01, WITH NO CAPABILITY MAP IN THE WAY, 0x0f leaves the
 #     bottom button reporting BTN_EAST and 0x1f makes it report BTN_SOUTH. A map that rotated those
 #     four rows on top of that would undo a correction that has already been applied.

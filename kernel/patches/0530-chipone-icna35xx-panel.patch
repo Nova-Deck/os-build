@@ -11,7 +11,7 @@ luminance ~ (DBV/4096)^2.2, measured on the AYN Odin 3 (ICNA3520) and Odin 2
 Portal (ICNA3512) modules, so raw DBV in sysfs compresses the useful range
 into the top of the scale and collapses the low end under nits-based
 brightness control. Writes are translated through the brightness levels
-helper (0074-drm-panel-add-brightness-levels-helper.patch) and the backlight
+helper (0480-drm-panel-add-brightness-levels-helper.patch) and the backlight
 declares BACKLIGHT_SCALE_LINEAR.
 
 The shared icna35xx table ends at 3413, the DBV ceiling the vendor Android

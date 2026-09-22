@@ -1,96 +1,106 @@
 #!/usr/bin/env python3
-"""Verify a patch renumbering preserves textual dependencies.
+"""Lint the patch stack's numbering and naming convention.
 
-The stack applies cumulatively, so two patches that touch a common file are
-order-coupled: swapping them makes the second land on context the first was
-meant to create. Everything else is free to move.
+build.sh applies patches in lexical order, so the numbering is load-bearing: it has to
+sort the way it reads, and each number has to sit in the band that says when it applies.
+This guards the convention from drifting back into the state it was renumbered out of
+(two naming styles, five unnumbered files applying last by accident of ASCII).
 
-Reads the mapping table out of RENUMBER.md and asserts, for every pair of
-patches sharing a file, that their relative order is unchanged.
+What this does NOT check is the dependency invariant -- that two patches touching a
+common file keep their relative order. That one is proved by the build: kernel/build.sh
+applies with --fuzz=0, so a wrong order fails hard instead of landing a hunk quietly in
+the wrong place.
 
 Usage: ./check-order.py          # exits non-zero on any violation
 """
-import collections
 import os
 import re
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ROW = re.compile(r"^\|\s*`(\d{4})`\s*\|[^|]*\|[^|]*\|\s*`([^`]+)`\s*\|\s*`([^`]+)`\s*\|")
+NAME = re.compile(r"^(\d{4})-[a-z0-9][a-z0-9-]*\.patch$")
+ALLOWED_NON_PATCH = {"README.md", "check-order.py"}
+
+# (low, high, band) -- inclusive, must match the table in README.md
+BANDS = [
+    (0, 99, "core"),
+    (100, 199, "clk"),
+    (200, 299, "gpu"),
+    (300, 399, "dpu"),
+    (400, 479, "dsi"),
+    (480, 499, "drmcore"),
+    (500, 599, "panel"),
+    (600, 699, "backlight/leds/pwm"),
+    (700, 799, "input"),
+    (800, 899, "audio"),
+    (900, 999, "power/misc"),
+    (1000, 1099, "net/usb/pci/crypto"),
+    (1100, 1199, "dts"),
+]
 
 
-def load_mapping():
-    """old filename -> (new number, new filename), parsed from RENUMBER.md."""
-    path = os.path.join(HERE, "RENUMBER.md")
-    mapping = {}
-    for line in open(path, encoding="utf-8"):
-        m = ROW.match(line)
-        if m:
-            num, old, new = m.groups()
-            mapping[old] = (int(num), new)
-    if not mapping:
-        sys.exit(f"no mapping rows found in {path}")
-    return mapping
-
-
-def touched(filename):
-    """Paths a patch writes to, normalising both +++ prefix conventions in use."""
-    paths = set()
-    with open(os.path.join(HERE, filename), errors="replace") as fh:
-        for line in fh:
-            if line.startswith("+++ "):
-                p = line[4:].split("\t")[0].strip()
-                p = re.sub(r"^b/", "", p)
-                p = re.sub(r"^linux/", "", p)
-                if p != "/dev/null":
-                    paths.add(p)
-    return paths
+def band_of(num):
+    for low, high, name in BANDS:
+        if low <= num <= high:
+            return name
+    return None
 
 
 def main():
-    on_disk = sorted(f for f in os.listdir(HERE) if f.endswith(".patch"))
-    mapping = load_mapping()
+    entries = sorted(os.listdir(HERE))
+    problems = []
 
-    missing = set(on_disk) - set(mapping)
-    extra = set(mapping) - set(on_disk)
-    if missing or extra:
-        for f in sorted(missing):
-            print(f"  unmapped patch on disk: {f}")
-        for f in sorted(extra):
-            print(f"  mapping row with no patch: {f}")
-        sys.exit("mapping does not match the directory")
+    strays = [e for e in entries
+              if not e.endswith(".patch") and e not in ALLOWED_NON_PATCH]
+    for s in strays:
+        problems.append(f"unexpected file in patches/: {s}")
 
-    dupes = [n for n, c in collections.Counter(
-        v[0] for v in mapping.values()).items() if c > 1]
-    if dupes:
-        sys.exit(f"duplicate new numbers: {sorted(dupes)}")
+    patches = [e for e in entries if e.endswith(".patch")]
+    if not patches:
+        sys.exit("no patches found")
 
-    old_index = {f: i for i, f in enumerate(on_disk)}
-    by_file = collections.defaultdict(list)
-    for f in on_disk:
-        for p in touched(f):
-            by_file[p].append(f)
-
-    violations, pairs, coedited = [], 0, 0
-    for path, files in by_file.items():
-        if len(files) < 2:
+    numbers = {}
+    for p in patches:
+        m = NAME.match(p)
+        if not m:
+            problems.append(
+                f"name does not match NNNN-lower-case-with-hyphens.patch: {p}")
             continue
-        coedited += 1
-        files.sort(key=lambda f: old_index[f])
-        for i, a in enumerate(files):
-            for b in files[i + 1:]:
-                pairs += 1
-                if mapping[a][0] > mapping[b][0]:
-                    violations.append((path, a, b))
+        num = int(m.group(1))
+        if band_of(num) is None:
+            problems.append(f"number {num:04d} falls outside every band: {p}")
+        numbers.setdefault(num, []).append(p)
 
-    print(f"patches: {len(on_disk)}   files touched: {len(by_file)}   "
-          f"co-edited files: {coedited}")
-    print(f"ordered pairs constrained: {pairs}")
-    print(f"VIOLATIONS: {len(violations)}")
-    for path, a, b in sorted(set(violations)):
-        print(f"  {path}\n    {mapping[a][0]:>4} {a}\n    {mapping[b][0]:>4} {b}"
-              "   <-- inverted")
-    return 1 if violations else 0
+    for num, files in sorted(numbers.items()):
+        if len(files) > 1:
+            problems.append(f"duplicate number {num:04d}: {', '.join(files)}")
+
+    # build.sh globs lexically; that must equal numeric order or the stack applies
+    # in an order nobody wrote down.
+    named = [p for p in patches if NAME.match(p)]
+    by_lex = sorted(named)
+    by_num = sorted(named, key=lambda p: int(NAME.match(p).group(1)))
+    if by_lex != by_num:
+        for lex, num in zip(by_lex, by_num):
+            if lex != num:
+                problems.append(
+                    f"lexical order diverges from numeric order at {lex} "
+                    f"(numeric expects {num})")
+                break
+
+    counts = {}
+    for num in numbers:
+        b = band_of(num)
+        if b:
+            counts[b] = counts.get(b, 0) + 1
+    print(f"patches: {len(patches)}")
+    for _, _, name in BANDS:
+        if counts.get(name):
+            print(f"  {counts[name]:>3}  {name}")
+    print(f"PROBLEMS: {len(problems)}")
+    for p in problems:
+        print(f"  {p}")
+    return 1 if problems else 0
 
 
 if __name__ == "__main__":

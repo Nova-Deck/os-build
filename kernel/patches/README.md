@@ -29,8 +29,9 @@ The number says **when a patch applies**, and it is keyed on subsystem.
 | `1100-1199` | dts | arm64 `.dtsi` fixes to upstream SoC files — last, after their drivers |
 
 Numbers are spaced by 10 (by 5 where a band is dense) so a new patch slots in without
-touching its neighbours. The `0230-0260` run is spaced by 5 deliberately: that is one
-upstream VM_BIND series, and the tight spacing is the signal that it moves as a unit.
+touching its neighbours. Consecutive backports from one upstream series are one patch file,
+not one per commit: the series moves and drops as a unit, and the header lists each upstream
+commit (`0230` carries twelve).
 
 **Device-keyed ranges were considered and rejected.** The patches do not partition by
 device: `drivers/gpu/drm/panel/Kconfig` is co-edited by all twelve panel patches,
@@ -67,7 +68,7 @@ Audited 2026-09-22 against v7.3-rc4 (merge status from git, review state from pa
 replies — lore was not reachable, so "never posted" means no patchwork hit). Re-audit on
 every bump: this table is a snapshot, the `Drop when` column is what to re-check.
 
-Totals: 12 `mainline`, 16 `posted`, 14 `novadeck`, 50 `community`. Half the stack will
+Totals: 6 `mainline`, 16 `posted`, 14 `novadeck`, 50 `community`. Half the stack will
 never land upstream, which is why provenance is a table and not a number band.
 
 | Patch | Origin | Source | Drop when |
@@ -79,13 +80,7 @@ never land upstream, which is why provenance is a table and not a number band.
 | `0130` | community | map220v via ROCKNIX `0122`. Never posted. The same change for x1e80100 is being reverted in 7.3 (hard resets) — high-risk to post. | never |
 | `0210` | community | map220v via ROCKNIX `0004`. Never posted; reuses `a750_ifpc_reglist` (unverified for A740). | when A740 IFPC lands upstream |
 | `0220` | posted | Rob Clark v2 `<20260912145922.24115-1-robin.clark@oss.qualcomm.com>` (+ `-2-`), latest, under review. | when merged |
-| `0230` | mainline | Rob Clark v7 `<20260729155609.20190-*>` → `ae88499d71ce` | v7.3 |
-| `0235` | mainline | same series → `ea69d489d3a6` | v7.3 |
-| `0240` | mainline | same series → `2c26f9e46d39` | v7.3 |
-| `0245` | mainline | same series → `517ca9a86a4a` | v7.3 |
-| `0250` | mainline | same series → `00dfa76bdfc2`. The series also has `a6d87a272b2c` "Validate lazy VM in GEM_NEW" (NULL `ctx->vm` after a failed lazy create), which we do not carry. | v7.3 |
-| `0255` | mainline | same series → `3b35a5c528ba` | v7.3 |
-| `0260` | mainline | same series → `1b8029394fb7` | v7.3 |
+| `0230` | mainline | Rob Clark v7 context/VM hardening `<20260729155609.20190-*>`, 12 of 17 squashed: 2–4, 9–17/18 (`ae88499d71ce` … `a6d87a272b2c`; list in the header). Not carried: 5–8, 18. | v7.3 |
 | `0310` | mainline | Saim Shujah `<20260828065440.140410-1-saimzst@gmail.com>` → `a5b5cc909931` (Cc: stable) | v7.3, or the 7.2.y that backports it |
 | `0330` | posted | Dmitry Baryshkov v3 `<20260912-fd-kms-fix-smmu-v3-0-a7ddc6fe2032@oss.qualcomm.com>` (we take 1, 2, 4–7 of 8), latest, no review yet. | when merged |
 | `0340` | community | tiopex, ROCKNIX `ec3d53baac` (generic part split into ROCKNIX `0013-drm-msm-dpu-fix-inline-rotation`). Never posted; the width/height check, `test_bit` and CW/CCW fixes are real mainline bugs. | when the generic fixes are sent and merged |
@@ -181,13 +176,7 @@ trees are byte-identical.
 | `0130-interconnect-qcom-sm8550-enable-qos-configuration.patch` | clk | `0122-interconnect__qcom__sm8550__Enable_QoS_configuration.patch` |
 | `0210-drm-msm-a6xx-enable-ifpc-on-adreno-740.patch` | gpu | `0004-drm-msm-a6xx-Enable-IFPC-on-Adreno-740.patch` |
 | `0220-drm-msm-thp-for-gem-buffers-and-shrinker-modparam-v2.patch` | gpu | `0513-drm-msm-thp-for-gem-buffers-and-shrinker-modparam-v2.patch` |
-| `0230-drm-msm-fix-barriers-accessing-ctx-vm.patch` | gpu | `0518-drm-msm-fix-barriers-accessing-ctx-vm.patch` |
-| `0235-drm-msm-rework-queuelock.patch` | gpu | `0519-drm-msm-rework-queuelock.patch` |
-| `0240-drm-msm-synchronize-vm-creation-on-ctxlock.patch` | gpu | `0520-drm-msm-synchronize-vm-creation-on-ctxlock.patch` |
-| `0245-drm-msm-add-helper-to-check-for-per-process-pgtables-vm.patch` | gpu | `0521-drm-msm-add-helper-to-check-for-per-process-pgtables-vm.patch` |
-| `0250-drm-msm-allow-lazy-vm-creation-to-fail.patch` | gpu | `0522-drm-msm-allow-lazy-vm-creation-to-fail.patch` |
-| `0255-drm-msm-dont-fallback-to-shared-vm-for-vm-bind.patch` | gpu | `0523-drm-msm-dont-fallback-to-shared-vm-for-vm-bind.patch` |
-| `0260-drm-msm-fix-per-process-pgtables-check.patch` | gpu | `0524-drm-msm-fix-per-process-pgtables-check.patch` |
+| `0230-drm-msm-context-vm-hardening.patch` (folded) | gpu | `0518` … `0524` (seven files, one per commit) |
 | `0310-drm-msm-dpu-clear-pending-peripheral-flush-state.patch` | dpu | `0509-drm-msm-dpu-clear-pending-peripheral-flush-state.patch` |
 | *(dropped — regresses IGT upstream)* | dpu | `0510-drm-msm-dpu-clear-pending-flush-state-before-physical-cleanup.patch` |
 | `0330-drm-msm-fix-smmu-fault-dumps.patch` | dpu | `0515-drm-msm-fix-smmu-fault-dumps.patch` |

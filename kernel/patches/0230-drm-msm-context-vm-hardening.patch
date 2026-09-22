@@ -1,0 +1,678 @@
+From: Rob Clark <robin.clark@oss.qualcomm.com>
+Subject: [PATCH] drm/msm: context/VM hardening — stop the shared-VM fallback for VM_BIND
+
+msm_gpu_create_private_vm() silently handed back the global kernel-managed VM
+when per-process pgtable creation failed, even for a userspace-managed
+(EN_VM_BIND) client. Turnip then does its own address management against a VM
+it does not own, and the GPU takes a storm of `type=TRANSLATION source=UCHE`
+faults -- mesa#14656, reported on A740, which is every qcs8550-* board we ship.
+With the series the ioctl fails honestly, tu_try_enable_vm_bind() returns
+non-zero and Turnip drops to the legacy submit path instead.
+
+BACKPORT of 12 mainline commits from Rob Clark's 2026-07-29 drm/msm
+context/VM hardening series (Message-ID 20260729155609.20190-*, patches
+2..18), merged for 7.3, squashed into one diff. None of it is in 7.2.x.
+In the order they apply here:
+
+   2/18 ae88499d71ce drm/msm: Fix barriers accessing ctx vm
+   3/18 ea69d489d3a6 drm/msm: Rework queuelock
+   4/18 2c26f9e46d39 drm/msm: Synchronize VM creation on ctxlock
+   9/18 517ca9a86a4a drm/msm: Add helper to check for per-process pgtables VM
+  15/18 00dfa76bdfc2 drm/msm: Allow lazy VM creation to fail
+  16/18 3b35a5c528ba drm/msm: Don't fallback to shared VM for VM_BIND
+  17/18 1b8029394fb7 drm/msm: Fix per-process-pgtables check
+  10/18 e6863b085606 drm/msm/gem: Fix dma_buf import error paths
+  11/18 4e67b8fc55c4 drm/msm/gem: Remove useless locking in GEM import
+  12/18 695d2b042af0 drm/msm/gem: Extract bookkeeping init helper
+  13/18 df68029e639b drm/msm/gem: Set resv before exposing obj
+  14/18 a6d87a272b2c drm/msm/gem: Validate lazy VM in GEM_NEW
+
+Why each is here:
+- 16/18 is the fix we are after; the rest make it safe.
+- 2/18 loads/stores ctx->vm with acquire/release instead of relying on
+  store ordering; 3/18 turns queuelock into the ctxlock rw_semaphore that
+  4/18 reuses to serialise MSM_PARAM_EN_VM_BIND against lazy VM creation
+  (two clients racing at startup, a game and steamwebhelper say).
+- 9/18 factors out valid_per_process_vm(), which 15/18 teaches to tolerate
+  a NULL vm. 15/18 is what makes 16/18 safe: once msm_context_vm() may
+  return NULL every caller must check, or a fault storm becomes a NULL
+  deref in the submitqueue path. 17/18 fixes the EN_VM_BIND capability
+  check that the removed fallback left dead.
+- 14/18 closes the one caller 15/18 misses: a _NO_SHARE GEM_NEW read
+  ctx->vm directly, NULL before the context has a VM. 10-13/18 are its
+  prerequisites, taken verbatim rather than adapting it to the 7.2 shape of
+  msm_gem_new(); 13/18 is also a fix in its own right (the resv was swapped
+  after the object was already visible on the LRU and object lists).
+
+Not carried: 5/18 (set_sysprof on ctxlock), 6-8/18 and 18/18 — none touch
+this path.
+
+Each commit was cherry-picked onto v7.2.7 + this stack with no conflict and
+matched its mainline +/- lines exactly. Upstream order is not kept (10-14
+come last); the order above is the one that was tested. Drops at 7.3.
+
+---
+
+diff --git a/drivers/gpu/drm/msm/adreno/a6xx_gmu.c b/drivers/gpu/drm/msm/adreno/a6xx_gmu.c
+index a2f6918c4f7f..f106e94ecc0a 100644
+--- a/drivers/gpu/drm/msm/adreno/a6xx_gmu.c
++++ b/drivers/gpu/drm/msm/adreno/a6xx_gmu.c
+@@ -1549,7 +1549,7 @@ static int a6xx_gmu_memory_alloc(struct a6xx_gmu *gmu, struct a6xx_gmu_bo *bo,
+ 		flags |= MSM_BO_MAP_PRIV;
+ 	}
+ 
+-	bo->obj = msm_gem_new(dev, size, flags);
++	bo->obj = msm_gem_new(dev, size, flags, NULL);
+ 	if (IS_ERR(bo->obj))
+ 		return PTR_ERR(bo->obj);
+ 
+diff --git a/drivers/gpu/drm/msm/adreno/adreno_gpu.c b/drivers/gpu/drm/msm/adreno/adreno_gpu.c
+index c62c45bb0ddb..3370cd44382f 100644
+--- a/drivers/gpu/drm/msm/adreno/adreno_gpu.c
++++ b/drivers/gpu/drm/msm/adreno/adreno_gpu.c
+@@ -356,6 +356,12 @@ int adreno_fault_handler(struct msm_gpu *gpu, unsigned long iova, int flags,
+ 	return 0;
+ }
+ 
++static bool
++valid_per_process_vm(struct msm_gpu *gpu, struct drm_gpuvm *vm)
++{
++	return vm && (vm != gpu->vm);
++}
++
+ int adreno_get_param(struct msm_gpu *gpu, struct msm_context *ctx,
+ 		     uint32_t param, uint64_t *value, uint32_t *len)
+ {
+@@ -414,12 +420,12 @@ int adreno_get_param(struct msm_gpu *gpu, struct msm_context *ctx,
+ 		*value = gpu->suspend_count;
+ 		return 0;
+ 	case MSM_PARAM_VA_START:
+-		if (vm == gpu->vm)
++		if (!valid_per_process_vm(gpu, vm))
+ 			return UERR(EINVAL, drm, "requires per-process pgtables");
+ 		*value = vm->mm_start;
+ 		return 0;
+ 	case MSM_PARAM_VA_SIZE:
+-		if (vm == gpu->vm)
++		if (!valid_per_process_vm(gpu, vm))
+ 			return UERR(EINVAL, drm, "requires per-process pgtables");
+ 		*value = vm->mm_range;
+ 		return 0;
+@@ -503,9 +509,11 @@ int adreno_set_param(struct msm_gpu *gpu, struct msm_context *ctx,
+ 		if (!perfmon_capable())
+ 			return UERR(EPERM, drm, "invalid permissions");
+ 		return msm_context_set_sysprof(ctx, gpu, value);
+-	case MSM_PARAM_EN_VM_BIND:
++	case MSM_PARAM_EN_VM_BIND: {
++		guard(rwsem_read)(&ctx->ctxlock);
++
+ 		/* We can only support VM_BIND with per-process pgtables: */
+-		if (ctx->vm == gpu->vm)
++		if (!gpu->funcs->create_private_vm)
+ 			return UERR(EINVAL, drm, "requires per-process pgtables");
+ 
+ 		/*
+@@ -518,6 +526,7 @@ int adreno_set_param(struct msm_gpu *gpu, struct msm_context *ctx,
+ 		ctx->userspace_managed_vm = value;
+ 
+ 		return 0;
++	}
+ 	default:
+ 		return UERR(EINVAL, drm, "%s: invalid param: %u", gpu->name, param);
+ 	}
+diff --git a/drivers/gpu/drm/msm/disp/mdp4/mdp4_kms.c b/drivers/gpu/drm/msm/disp/mdp4/mdp4_kms.c
+index 6ae49f94fea7..9b1d1982e683 100644
+--- a/drivers/gpu/drm/msm/disp/mdp4/mdp4_kms.c
++++ b/drivers/gpu/drm/msm/disp/mdp4/mdp4_kms.c
+@@ -463,7 +463,7 @@ static int mdp4_kms_init(struct drm_device *dev)
+ 		return ret;
+ 	}
+ 
+-	mdp4_kms->blank_cursor_bo = msm_gem_new(dev, SZ_16K, MSM_BO_WC | MSM_BO_SCANOUT);
++	mdp4_kms->blank_cursor_bo = msm_gem_new(dev, SZ_16K, MSM_BO_WC | MSM_BO_SCANOUT, NULL);
+ 	if (IS_ERR(mdp4_kms->blank_cursor_bo)) {
+ 		ret = PTR_ERR(mdp4_kms->blank_cursor_bo);
+ 		DRM_DEV_ERROR(dev->dev, "could not allocate blank-cursor bo: %d\n", ret);
+diff --git a/drivers/gpu/drm/msm/msm_drv.c b/drivers/gpu/drm/msm/msm_drv.c
+index b6ed336655a4..581903ccd5e6 100644
+--- a/drivers/gpu/drm/msm/msm_drv.c
++++ b/drivers/gpu/drm/msm/msm_drv.c
+@@ -246,20 +246,21 @@ static void load_gpu(struct drm_device *dev)
+  */
+ struct drm_gpuvm *msm_context_vm(struct drm_device *dev, struct msm_context *ctx)
+ {
+-	static DEFINE_MUTEX(init_lock);
+ 	struct msm_drm_private *priv = dev->dev_private;
++	struct drm_gpuvm *vm = smp_load_acquire(&ctx->vm);
+ 
+ 	/* Once ctx->vm is created it is valid for the lifetime of the context: */
+-	if (ctx->vm)
+-		return ctx->vm;
++	if (vm)
++		return vm;
++
++	guard(rwsem_write)(&ctx->ctxlock);
+ 
+-	mutex_lock(&init_lock);
+ 	if (!ctx->vm) {
+-		ctx->vm = msm_gpu_create_private_vm(
++		vm = msm_gpu_create_private_vm(
+ 			priv->gpu, current, !ctx->userspace_managed_vm);
+-
++		if (!IS_ERR_OR_NULL(vm))
++			smp_store_release(&ctx->vm, vm);
+ 	}
+-	mutex_unlock(&init_lock);
+ 
+ 	return ctx->vm;
+ }
+@@ -274,7 +275,7 @@ static int context_init(struct drm_device *dev, struct drm_file *file)
+ 		return -ENOMEM;
+ 
+ 	INIT_LIST_HEAD(&ctx->submitqueues);
+-	rwlock_init(&ctx->queuelock);
++	init_rwsem(&ctx->ctxlock);
+ 
+ 	kref_init(&ctx->ref);
+ 	msm_submitqueue_init(dev, ctx);
+@@ -446,10 +447,14 @@ static int msm_ioctl_gem_info_iova(struct drm_device *dev,
+ {
+ 	struct msm_drm_private *priv = dev->dev_private;
+ 	struct msm_context *ctx = file->driver_priv;
++	struct drm_gpuvm *vm = msm_context_vm(dev, ctx);
+ 
+ 	if (!priv->gpu)
+ 		return -EINVAL;
+ 
++	if (!vm)
++		return UERR(ENOMEM, dev, "no VM");
++
+ 	if (msm_context_is_vmbind(ctx))
+ 		return UERR(EINVAL, dev, "VM_BIND is enabled");
+ 
+@@ -460,7 +465,7 @@ static int msm_ioctl_gem_info_iova(struct drm_device *dev,
+ 	 * Don't pin the memory here - just get an address so that userspace can
+ 	 * be productive
+ 	 */
+-	return msm_gem_get_iova(obj, msm_context_vm(dev, ctx), iova);
++	return msm_gem_get_iova(obj, vm, iova);
+ }
+ 
+ static int msm_ioctl_gem_info_set_iova(struct drm_device *dev,
+@@ -474,6 +479,9 @@ static int msm_ioctl_gem_info_set_iova(struct drm_device *dev,
+ 	if (!priv->gpu)
+ 		return -EINVAL;
+ 
++	if (!vm)
++		return UERR(ENOMEM, dev, "no VM");
++
+ 	if (msm_context_is_vmbind(ctx))
+ 		return UERR(EINVAL, dev, "VM_BIND is enabled");
+ 
+diff --git a/drivers/gpu/drm/msm/msm_fb.c b/drivers/gpu/drm/msm/msm_fb.c
+index 9b681e144c07..ee17a47f31c4 100644
+--- a/drivers/gpu/drm/msm/msm_fb.c
++++ b/drivers/gpu/drm/msm/msm_fb.c
+@@ -267,11 +267,11 @@ msm_alloc_stolen_fb(struct drm_device *dev, int w, int h, int p, uint32_t format
+ 	/* allocate backing bo */
+ 	size = mode_cmd.pitches[0] * mode_cmd.height;
+ 	DBG("allocating %d bytes for fb %d", size, dev->primary->index);
+-	bo = msm_gem_new(dev, size, MSM_BO_SCANOUT | MSM_BO_WC | MSM_BO_STOLEN);
++	bo = msm_gem_new(dev, size, MSM_BO_SCANOUT | MSM_BO_WC | MSM_BO_STOLEN, NULL);
+ 	if (IS_ERR(bo)) {
+ 		dev_warn(dev->dev, "could not allocate stolen bo\n");
+ 		/* try regular bo: */
+-		bo = msm_gem_new(dev, size, MSM_BO_SCANOUT | MSM_BO_WC);
++		bo = msm_gem_new(dev, size, MSM_BO_SCANOUT | MSM_BO_WC, NULL);
+ 	}
+ 	if (IS_ERR(bo)) {
+ 		DRM_DEV_ERROR(dev->dev, "failed to allocate buffer object\n");
+diff --git a/drivers/gpu/drm/msm/msm_gem.c b/drivers/gpu/drm/msm/msm_gem.c
+index efd3d3c9a449..de4e60e28a71 100644
+--- a/drivers/gpu/drm/msm/msm_gem.c
++++ b/drivers/gpu/drm/msm/msm_gem.c
+@@ -1093,7 +1093,9 @@ static void msm_gem_free_object(struct drm_gem_object *obj)
+ 		 */
+ 		kvfree(msm_obj->pages);
+ 
+-		drm_prime_gem_destroy(obj, msm_obj->sgt);
++		/* In msm_gem_import() error path, sgt won't be set yet: */
++		if (msm_obj->sgt)
++			drm_prime_gem_destroy(obj, msm_obj->sgt);
+ 	} else {
+ 		msm_gem_vunmap(obj);
+ 		put_pages(obj);
+@@ -1134,10 +1136,21 @@ int msm_gem_new_handle(struct drm_device *dev, struct drm_file *file,
+ 		size_t size, uint32_t flags, uint32_t *handle,
+ 		char *name)
+ {
+-	struct drm_gem_object *obj;
++	struct drm_gem_object *obj, *r_obj = NULL;
+ 	int ret;
+ 
+-	obj = msm_gem_new(dev, size, flags);
++	if (flags & MSM_BO_NO_SHARE) {
++		struct msm_drm_private *priv = dev->dev_private;
++		struct msm_context *ctx = file->driver_priv;
++		struct drm_gpuvm *vm = msm_context_vm(dev, ctx);
++
++		if (!priv->gpu || !vm)
++			return UERR(EINVAL, dev, "not supported with shared VM");
++
++		r_obj = drm_gpuvm_resv_obj(vm);
++	}
++
++	obj = msm_gem_new(dev, size, flags, r_obj);
+ 
+ 	if (IS_ERR(obj))
+ 		return PTR_ERR(obj);
+@@ -1145,15 +1158,6 @@ int msm_gem_new_handle(struct drm_device *dev, struct drm_file *file,
+ 	if (name)
+ 		msm_gem_object_set_name(obj, "%s", name);
+ 
+-	if (flags & MSM_BO_NO_SHARE) {
+-		struct msm_context *ctx = file->driver_priv;
+-		struct drm_gem_object *r_obj = drm_gpuvm_resv_obj(ctx->vm);
+-
+-		drm_gem_object_get(r_obj);
+-
+-		obj->resv = r_obj->resv;
+-	}
+-
+ 	ret = drm_gem_handle_create(file, obj, handle);
+ 
+ 	/* drop reference from allocate - handle holds it now */
+@@ -1232,10 +1236,27 @@ static int msm_gem_new_impl(struct drm_device *dev, uint32_t flags,
+ 	return 0;
+ }
+ 
+-struct drm_gem_object *msm_gem_new(struct drm_device *dev, size_t size, uint32_t flags)
++static int msm_gem_init_bookkeeping(struct drm_gem_object *obj)
++{
++	struct msm_drm_private *priv = obj->dev->dev_private;
++
++	if (drm_gem_is_imported(obj)) {
++		drm_gem_lru_move_tail(&priv->lru.pinned, obj);
++	} else {
++		drm_gem_lru_move_tail(&priv->lru.unbacked, obj);
++	}
++
++	mutex_lock(&priv->obj_lock);
++	list_add_tail(&to_msm_bo(obj)->node, &priv->objects);
++	mutex_unlock(&priv->obj_lock);
++
++	return drm_gem_create_mmap_offset(obj);
++}
++
++struct drm_gem_object *
++msm_gem_new(struct drm_device *dev, size_t size, uint32_t flags,
++	    struct drm_gem_object *r_obj)
+ {
+-	struct msm_drm_private *priv = dev->dev_private;
+-	struct msm_gem_object *msm_obj;
+ 	struct drm_gem_object *obj = NULL;
+ 	int ret;
+ 
+@@ -1251,7 +1272,10 @@ struct drm_gem_object *msm_gem_new(struct drm_device *dev, size_t size, uint32_t
+ 	if (ret)
+ 		return ERR_PTR(ret);
+ 
+-	msm_obj = to_msm_bo(obj);
++	if (flags & MSM_BO_NO_SHARE) {
++		drm_gem_object_get(r_obj);
++		obj->resv = r_obj->resv;
++	}
+ 
+ 	ret = drm_gem_object_init(dev, obj, size);
+ 	if (ret)
+@@ -1264,13 +1288,7 @@ struct drm_gem_object *msm_gem_new(struct drm_device *dev, size_t size, uint32_t
+ 	 */
+ 	mapping_set_gfp_mask(obj->filp->f_mapping, GFP_HIGHUSER);
+ 
+-	drm_gem_lru_move_tail(&priv->lru.unbacked, obj);
+-
+-	mutex_lock(&priv->obj_lock);
+-	list_add_tail(&msm_obj->node, &priv->objects);
+-	mutex_unlock(&priv->obj_lock);
+-
+-	ret = drm_gem_create_mmap_offset(obj);
++	ret = msm_gem_init_bookkeeping(obj);
+ 	if (ret)
+ 		goto fail;
+ 
+@@ -1282,11 +1300,12 @@ struct drm_gem_object *msm_gem_new(struct drm_device *dev, size_t size, uint32_t
+ }
+ 
+ struct drm_gem_object *msm_gem_import(struct drm_device *dev,
+-		struct dma_buf *dmabuf, struct sg_table *sgt)
++				      struct dma_buf_attachment *attach,
++				      struct sg_table *sgt)
+ {
+-	struct msm_drm_private *priv = dev->dev_private;
+ 	struct msm_gem_object *msm_obj;
+ 	struct drm_gem_object *obj;
++	struct dma_buf *dmabuf = attach->dmabuf;
+ 	size_t size, npages;
+ 	int ret;
+ 
+@@ -1296,38 +1315,35 @@ struct drm_gem_object *msm_gem_import(struct drm_device *dev,
+ 	if (ret)
+ 		return ERR_PTR(ret);
+ 
++	/*
++	 * Set import_attach here in case we hit an error path that ends
++	 * up in drm_gem_object_put() -> msm_gem_free_object()
++	 */
++	obj->import_attach = attach;
++	obj->resv = dmabuf->resv;
+ 	drm_gem_private_object_init(dev, obj, size);
+ 
+ 	npages = size / PAGE_SIZE;
+ 
+ 	msm_obj = to_msm_bo(obj);
+-	msm_gem_lock(obj);
+-	msm_obj->sgt = sgt;
+ 	msm_obj->pages = kvmalloc_objs(struct page *, npages);
+ 	if (!msm_obj->pages) {
+-		msm_gem_unlock(obj);
+ 		ret = -ENOMEM;
+ 		goto fail;
+ 	}
+ 
+ 	ret = drm_prime_sg_to_page_array(sgt, msm_obj->pages, npages);
+ 	if (ret) {
+-		msm_gem_unlock(obj);
+ 		goto fail;
+ 	}
+ 
+-	msm_gem_unlock(obj);
+-
+-	drm_gem_lru_move_tail(&priv->lru.pinned, obj);
+-
+-	mutex_lock(&priv->obj_lock);
+-	list_add_tail(&msm_obj->node, &priv->objects);
+-	mutex_unlock(&priv->obj_lock);
+-
+-	ret = drm_gem_create_mmap_offset(obj);
++	ret = msm_gem_init_bookkeeping(obj);
+ 	if (ret)
+ 		goto fail;
+ 
++	/* Now that we are past potential failure points, set sgt: */
++	msm_obj->sgt = sgt;
++
+ 	return obj;
+ 
+ fail:
+@@ -1340,7 +1356,7 @@ void *msm_gem_kernel_new(struct drm_device *dev, size_t size, uint32_t flags,
+ 			 uint64_t *iova)
+ {
+ 	void *vaddr;
+-	struct drm_gem_object *obj = msm_gem_new(dev, size, flags);
++	struct drm_gem_object *obj = msm_gem_new(dev, size, flags, NULL);
+ 	int ret;
+ 
+ 	if (IS_ERR(obj))
+diff --git a/drivers/gpu/drm/msm/msm_gem.h b/drivers/gpu/drm/msm/msm_gem.h
+index 762e546d25ef..dff60cbc9d95 100644
+--- a/drivers/gpu/drm/msm/msm_gem.h
++++ b/drivers/gpu/drm/msm/msm_gem.h
+@@ -296,13 +296,14 @@ int msm_gem_cpu_fini(struct drm_gem_object *obj);
+ int msm_gem_new_handle(struct drm_device *dev, struct drm_file *file,
+ 		size_t size, uint32_t flags, uint32_t *handle, char *name);
+ struct drm_gem_object *msm_gem_new(struct drm_device *dev,
+-		size_t size, uint32_t flags);
++		size_t size, uint32_t flags, struct drm_gem_object *r_obj);
+ void *msm_gem_kernel_new(struct drm_device *dev, size_t size, uint32_t flags,
+ 			 struct drm_gpuvm *vm, struct drm_gem_object **bo,
+ 			 uint64_t *iova);
+ void msm_gem_kernel_put(struct drm_gem_object *bo, struct drm_gpuvm *vm);
+ struct drm_gem_object *msm_gem_import(struct drm_device *dev,
+-		struct dma_buf *dmabuf, struct sg_table *sgt);
++				      struct dma_buf_attachment *attach,
++				      struct sg_table *sgt);
+ __printf(2, 3)
+ void msm_gem_object_set_name(struct drm_gem_object *bo, const char *fmt, ...);
+ 
+diff --git a/drivers/gpu/drm/msm/msm_gem_prime.c b/drivers/gpu/drm/msm/msm_gem_prime.c
+index 036d34c674d9..beb7f22fd694 100644
+--- a/drivers/gpu/drm/msm/msm_gem_prime.c
++++ b/drivers/gpu/drm/msm/msm_gem_prime.c
+@@ -83,7 +83,7 @@ struct drm_gem_object *msm_gem_prime_import(struct drm_device *dev,
+ struct drm_gem_object *msm_gem_prime_import_sg_table(struct drm_device *dev,
+ 		struct dma_buf_attachment *attach, struct sg_table *sg)
+ {
+-	return msm_gem_import(dev, attach->dmabuf, sg);
++	return msm_gem_import(dev, attach, sg);
+ }
+ 
+ struct dma_buf *msm_gem_prime_export(struct drm_gem_object *obj, int flags)
+diff --git a/drivers/gpu/drm/msm/msm_gem_submit.c b/drivers/gpu/drm/msm/msm_gem_submit.c
+index 3c6bc90c3d48..ab33d499a0e8 100644
+--- a/drivers/gpu/drm/msm/msm_gem_submit.c
++++ b/drivers/gpu/drm/msm/msm_gem_submit.c
+@@ -30,7 +30,7 @@
+  */
+ 
+ static struct msm_gem_submit *submit_create(struct drm_device *dev,
+-		struct msm_gpu *gpu,
++		struct msm_gpu *gpu, struct drm_gpuvm *vm,
+ 		struct msm_gpu_submitqueue *queue, uint32_t nr_bos,
+ 		uint32_t nr_cmds, u64 drm_client_id)
+ {
+@@ -66,7 +66,7 @@ static struct msm_gem_submit *submit_create(struct drm_device *dev,
+ 
+ 	kref_init(&submit->ref);
+ 	submit->dev = dev;
+-	submit->vm = msm_context_vm(dev, queue->ctx);
++	submit->vm = vm;
+ 	submit->gpu = gpu;
+ 	submit->cmd = (void *)&submit->bos[nr_bos];
+ 	submit->queue = queue;
+@@ -554,6 +554,7 @@ int msm_ioctl_gem_submit(struct drm_device *dev, void *data,
+ 	struct msm_drm_private *priv = dev->dev_private;
+ 	struct drm_msm_gem_submit *args = data;
+ 	struct msm_context *ctx = file->driver_priv;
++	struct drm_gpuvm *vm = msm_context_vm(dev, ctx);
+ 	struct msm_gem_submit *submit = NULL;
+ 	struct msm_gpu *gpu = priv->gpu;
+ 	struct msm_gpu_submitqueue *queue;
+@@ -569,10 +570,13 @@ int msm_ioctl_gem_submit(struct drm_device *dev, void *data,
+ 	if (!gpu)
+ 		return -ENXIO;
+ 
++	if (!vm)
++		return UERR(ENOMEM, dev, "no VM");
++
+ 	if (args->pad)
+ 		return -EINVAL;
+ 
+-	if (to_msm_vm(ctx->vm)->unusable)
++	if (to_msm_vm(vm)->unusable)
+ 		return UERR(EPIPE, dev, "context is unusable");
+ 
+ 	/* for now, we just have 3d pipe.. eventually this would need to
+@@ -609,7 +613,7 @@ int msm_ioctl_gem_submit(struct drm_device *dev, void *data,
+ 		}
+ 	}
+ 
+-	submit = submit_create(dev, gpu, queue, args->nr_bos, args->nr_cmds,
++	submit = submit_create(dev, gpu, vm, queue, args->nr_bos, args->nr_cmds,
+ 			       file->client_id);
+ 	if (IS_ERR(submit)) {
+ 		ret = PTR_ERR(submit);
+diff --git a/drivers/gpu/drm/msm/msm_gem_vma.c b/drivers/gpu/drm/msm/msm_gem_vma.c
+index 7441d4a01d31..c11d021581e0 100644
+--- a/drivers/gpu/drm/msm/msm_gem_vma.c
++++ b/drivers/gpu/drm/msm/msm_gem_vma.c
+@@ -957,7 +957,7 @@ msm_gem_vm_close(struct drm_gpuvm *gpuvm)
+ 
+ 
+ static struct msm_vm_bind_job *
+-vm_bind_job_create(struct drm_device *dev, struct drm_file *file,
++vm_bind_job_create(struct drm_device *dev, struct drm_file *file, struct drm_gpuvm *vm,
+ 		   struct msm_gpu_submitqueue *queue, uint32_t nr_ops)
+ {
+ 	struct msm_vm_bind_job *job;
+@@ -974,7 +974,7 @@ vm_bind_job_create(struct drm_device *dev, struct drm_file *file,
+ 		return ERR_PTR(ret);
+ 	}
+ 
+-	job->vm = msm_context_vm(dev, queue->ctx);
++	job->vm = vm;
+ 	job->queue = queue;
+ 	INIT_LIST_HEAD(&job->vm_ops);
+ 
+@@ -1433,6 +1433,7 @@ msm_ioctl_vm_bind(struct drm_device *dev, void *data, struct drm_file *file)
+ 	struct msm_drm_private *priv = dev->dev_private;
+ 	struct drm_msm_vm_bind *args = data;
+ 	struct msm_context *ctx = file->driver_priv;
++	struct drm_gpuvm *vm = msm_context_vm(dev, ctx);
+ 	struct msm_vm_bind_job *job = NULL;
+ 	struct msm_gpu *gpu = priv->gpu;
+ 	struct msm_gpu_submitqueue *queue;
+@@ -1447,11 +1448,14 @@ msm_ioctl_vm_bind(struct drm_device *dev, void *data, struct drm_file *file)
+ 	if (!gpu)
+ 		return -ENXIO;
+ 
++	if (!vm)
++		return UERR(ENOMEM, dev, "no VM");
++
+ 	/*
+ 	 * Maybe we could allow just UNMAP ops?  OTOH userspace should just
+ 	 * immediately close the device file and all will be torn down.
+ 	 */
+-	if (to_msm_vm(msm_context_vm(dev, ctx))->unusable)
++	if (to_msm_vm(vm)->unusable)
+ 		return UERR(EPIPE, dev, "context is unusable");
+ 
+ 	/*
+@@ -1482,7 +1486,7 @@ msm_ioctl_vm_bind(struct drm_device *dev, void *data, struct drm_file *file)
+ 		}
+ 	}
+ 
+-	job = vm_bind_job_create(dev, file, queue, args->nr_ops);
++	job = vm_bind_job_create(dev, file, vm, queue, args->nr_ops);
+ 	if (IS_ERR(job)) {
+ 		ret = PTR_ERR(job);
+ 		goto out_post_unlock;
+diff --git a/drivers/gpu/drm/msm/msm_gpu.c b/drivers/gpu/drm/msm/msm_gpu.c
+index 03c057856065..0c2c35636251 100644
+--- a/drivers/gpu/drm/msm/msm_gpu.c
++++ b/drivers/gpu/drm/msm/msm_gpu.c
+@@ -879,7 +879,7 @@ msm_gpu_create_private_vm(struct msm_gpu *gpu, struct task_struct *task,
+ 			to_msm_vm(vm)->pid = get_pid(task_pid(task));
+ 	}
+ 
+-	if (IS_ERR_OR_NULL(vm))
++	if (IS_ERR_OR_NULL(vm) && kernel_managed)
+ 		vm = drm_gpuvm_get(gpu->vm);
+ 
+ 	return vm;
+diff --git a/drivers/gpu/drm/msm/msm_gpu.h b/drivers/gpu/drm/msm/msm_gpu.h
+index 6c83b8cbbb90..d27d54bdb7a7 100644
+--- a/drivers/gpu/drm/msm/msm_gpu.h
++++ b/drivers/gpu/drm/msm/msm_gpu.h
+@@ -392,8 +392,8 @@ msm_gpu_sysprof_no_ifpc(struct msm_gpu *gpu)
+  * struct msm_context - per-drm_file context
+  */
+ struct msm_context {
+-	/** @queuelock: synchronizes access to submitqueues list */
+-	rwlock_t queuelock;
++	/** @ctxlock: synchronizes access to submitqueues list, etc */
++	struct rw_semaphore ctxlock;
+ 	/** @submitqueues: list of &msm_gpu_submitqueue created by userspace */
+ 	struct list_head submitqueues;
+ 	/**
+diff --git a/drivers/gpu/drm/msm/msm_submitqueue.c b/drivers/gpu/drm/msm/msm_submitqueue.c
+index 1a5a77b28016..9a4c4e6425bf 100644
+--- a/drivers/gpu/drm/msm/msm_submitqueue.c
++++ b/drivers/gpu/drm/msm/msm_submitqueue.c
+@@ -93,18 +93,15 @@ struct msm_gpu_submitqueue *msm_submitqueue_get(struct msm_context *ctx,
+ 	if (!ctx)
+ 		return NULL;
+ 
+-	read_lock(&ctx->queuelock);
++	guard(rwsem_read)(&ctx->ctxlock);
+ 
+ 	list_for_each_entry(entry, &ctx->submitqueues, node) {
+ 		if (entry->id == id) {
+ 			kref_get(&entry->ref);
+-			read_unlock(&ctx->queuelock);
+-
+ 			return entry;
+ 		}
+ 	}
+ 
+-	read_unlock(&ctx->queuelock);
+ 	return NULL;
+ }
+ 
+@@ -175,6 +172,7 @@ int msm_submitqueue_create(struct drm_device *drm, struct msm_context *ctx,
+ 	struct msm_drm_private *priv = drm->dev_private;
+ 	struct msm_gpu_submitqueue *queue;
+ 	enum drm_sched_priority sched_prio;
++	struct drm_gpuvm *vm = NULL;
+ 	unsigned ring_nr;
+ 	int ret;
+ 
+@@ -187,6 +185,11 @@ int msm_submitqueue_create(struct drm_device *drm, struct msm_context *ctx,
+ 	if (flags & MSM_SUBMITQUEUE_VM_BIND) {
+ 		unsigned sz;
+ 
++		vm = msm_context_vm(drm, ctx);
++
++		if (!vm)
++			return UERR(ENOMEM, drm, "no VM");
++
+ 		/* Not allowed for kernel managed VMs (ie. kernel allocs VA) */
+ 		if (!msm_context_is_vmbind(ctx))
+ 			return -EINVAL;
+@@ -218,7 +221,7 @@ int msm_submitqueue_create(struct drm_device *drm, struct msm_context *ctx,
+ 	queue->flags = flags;
+ 
+ 	if (flags & MSM_SUBMITQUEUE_VM_BIND) {
+-		struct drm_gpu_scheduler *sched = &to_msm_vm(msm_context_vm(drm, ctx))->sched;
++		struct drm_gpu_scheduler *sched = &to_msm_vm(vm)->sched;
+ 
+ 		queue->entity = &queue->_vm_bind_entity[0];
+ 
+@@ -237,7 +240,7 @@ int msm_submitqueue_create(struct drm_device *drm, struct msm_context *ctx,
+ 		return ret;
+ 	}
+ 
+-	write_lock(&ctx->queuelock);
++	guard(rwsem_write)(&ctx->ctxlock);
+ 
+ 	queue->ctx = msm_context_get(ctx);
+ 	queue->id = ctx->queueid++;
+@@ -251,8 +254,6 @@ int msm_submitqueue_create(struct drm_device *drm, struct msm_context *ctx,
+ 
+ 	list_add_tail(&queue->node, &ctx->submitqueues);
+ 
+-	write_unlock(&ctx->queuelock);
+-
+ 	return 0;
+ }
+ 
+@@ -335,19 +336,16 @@ int msm_submitqueue_remove(struct msm_context *ctx, u32 id)
+ 	if (!id)
+ 		return -ENOENT;
+ 
+-	write_lock(&ctx->queuelock);
++	guard(rwsem_write)(&ctx->ctxlock);
+ 
+ 	list_for_each_entry(entry, &ctx->submitqueues, node) {
+ 		if (entry->id == id) {
+ 			list_del(&entry->node);
+-			write_unlock(&ctx->queuelock);
+-
+ 			msm_submitqueue_put(entry);
+ 			return 0;
+ 		}
+ 	}
+ 
+-	write_unlock(&ctx->queuelock);
+ 	return -ENOENT;
+ }
+ 

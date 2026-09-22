@@ -67,7 +67,7 @@ Audited 2026-09-22 against v7.3-rc4 (merge status from git, review state from pa
 replies — lore was not reachable, so "never posted" means no patchwork hit). Re-audit on
 every bump: this table is a snapshot, the `Drop when` column is what to re-check.
 
-Totals: 12 `mainline`, 17 `posted`, 14 `novadeck`, 50 `community`. Half the stack will
+Totals: 12 `mainline`, 16 `posted`, 14 `novadeck`, 50 `community`. Half the stack will
 never land upstream, which is why provenance is a table and not a number band.
 
 | Patch | Origin | Source | Drop when |
@@ -87,7 +87,6 @@ never land upstream, which is why provenance is a table and not a number band.
 | `0255` | mainline | same series → `3b35a5c528ba` | v7.3 |
 | `0260` | mainline | same series → `1b8029394fb7` | v7.3 |
 | `0310` | mainline | Saim Shujah `<20260828065440.140410-1-saimzst@gmail.com>` → `a5b5cc909931` (Cc: stable) | v7.3, or the 7.2.y that backports it |
-| `0320` | posted | Saim Shujah `<20260826182459.1506522-1-saimzst@gmail.com>`, v1 only. Dmitry Baryshkov (2026-09-14): breaks IGT `kms_plane_alpha_blend` / `kms_rotation_crc` 180° on sc7180. **Known upstream regression.** | when a v2 lands — re-evaluate carrying v1 |
 | `0330` | posted | Dmitry Baryshkov v3 `<20260912-fd-kms-fix-smmu-v3-0-a7ddc6fe2032@oss.qualcomm.com>` (we take 1, 2, 4–7 of 8), latest, no review yet. | when merged |
 | `0340` | community | tiopex, ROCKNIX `ec3d53baac` (generic part split into ROCKNIX `0013-drm-msm-dpu-fix-inline-rotation`). Never posted; the width/height check, `test_bit` and CW/CCW fixes are real mainline bugs. | when the generic fixes are sent and merged |
 | `0350` | community | tiopex, ROCKNIX `60bb58c1db`. Never posted. | never |
@@ -190,7 +189,7 @@ trees are byte-identical.
 | `0255-drm-msm-dont-fallback-to-shared-vm-for-vm-bind.patch` | gpu | `0523-drm-msm-dont-fallback-to-shared-vm-for-vm-bind.patch` |
 | `0260-drm-msm-fix-per-process-pgtables-check.patch` | gpu | `0524-drm-msm-fix-per-process-pgtables-check.patch` |
 | `0310-drm-msm-dpu-clear-pending-peripheral-flush-state.patch` | dpu | `0509-drm-msm-dpu-clear-pending-peripheral-flush-state.patch` |
-| `0320-drm-msm-dpu-clear-pending-flush-state-before-physical-cleanup.patch` | dpu | `0510-drm-msm-dpu-clear-pending-flush-state-before-physical-cleanup.patch` |
+| *(dropped — regresses IGT upstream)* | dpu | `0510-drm-msm-dpu-clear-pending-flush-state-before-physical-cleanup.patch` |
 | `0330-drm-msm-fix-smmu-fault-dumps.patch` | dpu | `0515-drm-msm-fix-smmu-fault-dumps.patch` |
 | `0340-drm-msm-dpu-enable-true-inline-rotation-on-sm8550-and-sm8650.patch` | dpu | `0528-drm-msm-dpu-enable-true-inline-rotation-on-sm8550-and-sm8650.patch` |
 | `0350-drm-msm-dpu-enable-the-qseed-detail-enhancer.patch` | dpu | `0529-drm-msm-dpu-enable-the-qseed-detail-enhancer.patch` |

@@ -15,7 +15,7 @@ luminance-linear can declare the identity curve. Upstreaming needs a
 binding schema for these properties on panel nodes (panel-common.yaml or
 similar).
 
-Carried for the Chipone ICNA35XX driver (0058_Chipone-ICNA35XX-panel.patch),
+Carried for the Chipone ICNA35XX driver (0530-chipone-icna35xx-panel.patch),
 its only caller so far. Applies later than it in lexical order, which is
 harmless -- the files do not overlap and nothing is compiled until every patch
 has been applied.

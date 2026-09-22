@@ -455,7 +455,7 @@ git_commit: f42acb3678424d1e08f6ed27c0d8ba8a125e14d6
 #   Pocket ACE — a bounded burst of 10 arm-smmu context faults at ~0.77s, all cbfrsynra=0x1c00
 #     (the MDSS node, `iommus = <&apps_smmu 0x1c00 0x2>`), inside a 0.4 ms window, all of them
 #     BEFORE the panel rails come up at 0.854s. The bootloader continuous-splash handoff, i.e.
-#     what dpu-quiesce-boot-scanout.patch is for. Board-specific: Pocket FIT shows ZERO on the
+#     what 0370-dpu-quiesce-boot-scanout.patch is for. Board-specific: Pocket FIT shows ZERO on the
 #     same kernel, and so do Pocket Max and Pocket S2 (checked 2026-09-17).
 #     NOT INTRODUCED BY 7.2.6 — A/B'd 2026-09-17 with two cards differing only in the kernel
 #     commit: 7.2.5 (ce5ba00) and 7.2.6 (6c80318) produce the identical burst on the same ACE,
@@ -463,7 +463,7 @@ git_commit: f42acb3678424d1e08f6ed27c0d8ba8a125e14d6
 #     STILL OPEN, AND THAT A/B DID NOT TOUCH IT: whether it predates our own 0513/0518-0524. BOTH
 #     cards carry those patches, so the comparison could only ever answer the 7.2.6 question. The
 #     experiment that answers the real one is a build with 0513/0518-0524 dropped. Note also that
-#     dpu-quiesce-boot-scanout.patch IS applied on both (kernel/build.sh:56 globs the whole patch
+#     0370-dpu-quiesce-boot-scanout.patch IS applied on both (kernel/build.sh:59 globs the whole patch
 #     dir), so we already ship the patch aimed at this handoff and ACE faults anyway.
 #     WHY THIS ENTRY COST A CARD BUILD: on 2026-09-17 the burst was re-derived from scratch —
 #     count, timing, MDSS stream and all — by building and flashing a 7.2.5 card and swapping
@@ -472,7 +472,7 @@ git_commit: f42acb3678424d1e08f6ed27c0d8ba8a125e14d6
 #
 # SMMU SERIES AT v3 since 2026-09-12, and STILL NOT HW-GATED — it is the oldest ungated thing on
 # this pin. 0515/0516/0517 used to carry patches 1-3 of Dmitry Baryshkov's v2 "drm/msm: fix SMMU
-# fault dumps"; they are now ONE file, 0515-drm-msm-fix-smmu-fault-dumps.patch, carrying v3
+# fault dumps"; they are now ONE file, 0330-drm-msm-fix-smmu-fault-dumps.patch, carrying v3
 # patches 1, 2, 4, 5, 6 and 7. The offline side is clean and has been re-run on every tree since,
 # 7.2.6 included: applies at zero fuzz, the v3 code asserted PRESENT in the patched tree
 # (msm_fb_unpin_work, msm_framebuffer_unpin, kzalloc_obj(*unpin), the DSC ternary, mutex_init
@@ -558,7 +558,7 @@ git_commit: f42acb3678424d1e08f6ed27c0d8ba8a125e14d6
 #     PATCHED tree. Recipe: strip `CONFIG_x=` and `# CONFIG_x is not set` to bare names, diff
 #     against every `config`/`menuconfig` name in the tree's Kconfig files. It must run against the
 #     PATCHED tree, not a pristine one — some symbols are defined by our own patches, e.g.
-#     AYANEO_SERIAL_MCU comes from 1005-misc-add-ayaneo-serial-mcu.patch. The count moves for OUR
+#     AYANEO_SERIAL_MCU comes from 0980-misc-add-ayaneo-serial-mcu.patch. The count moves for OUR
 #     reasons far more often than upstream's: every historical move so far was a fragment edit of
 #     ours, not a symbol upstream deleted.
 #     The one upstream casualty to date stays deleted and its note is still why — see

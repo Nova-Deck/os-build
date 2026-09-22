@@ -48,25 +48,30 @@ assumes 4K pages.** Standardized across all three SoCs.
 - ✅ Config symbols validated against that tree (see header of `kernel.config`).
 - ✅ Builds `Image` + all board dtbs and stages loadable modules to `out/modroot`
   for the rootfs assembler — the `=m` handheld-panel drivers (display) ride along.
-- ✅ The patch stack applies with **zero rejects and zero fuzz**. Fuzz is not cosmetic: a
-  hunk that lands on approximate context has drifted from what it was written against and
-  can silently attach to the wrong place on a later bump. Dry-run a bump with `--fuzz=0`,
-  cumulatively in lexical order — a per-patch run against a clean tree reports failures the
-  real sequential apply does not have, because the patches build on each other.
+- ✅ The patch stack applies with **zero rejects and zero fuzz**, and `build.sh` now
+  enforces it — it applies with `--fuzz=0` rather than patch(1)'s default of 2. Fuzz is not
+  cosmetic: a hunk that lands on approximate context has drifted from what it was written
+  against and can silently attach to the wrong place on a later bump or reorder.
+  When dry-running a bump, apply cumulatively in lexical order — a per-patch run against a
+  clean tree reports failures the real sequential apply does not have, because the patches
+  build on each other.
+- ✅ Patches are numbered by **subsystem**, in bands, so apply order reads off the name;
+  `kernel/patches/README.md` carries the band map, the convention lint, and the mapping
+  from the old ad-hoc numbering.
 - ✅ Boots on real hardware across all three SoC generations; display, input, and Turnip
   Vulkan validated (Phase 1 gate cleared) — see `docs/archive/bringup.md`.
 
 ### Per-board HW gate
 
 Each board proves something the others cannot, which is why a kernel bump is not validated
-by one of them. Recorded state as of the 7.2.7 bump (2026-09-22):
+by one of them. Recorded state as of the 7.2.7 bump and the patch renumbering (2026-09-22):
 
 | Board | SoC | LUTDMA | Rotation | Wi-Fi | Notes |
 |---|---|---|---|---|---|
 | AYANEO Pocket ACE | SM8550 | engine v2, dspp0 | DPU inline (`rotation=8`) | ath12k / WCN7850 | 10 boot SMMU faults are a PRE-EXISTING cohort, not a regression |
 | AYN Thor Lite | SM8250 | **none in hardware** | composite (no inline rotator) | ath11k | Dual touchscreen; second panel unbound is a known open issue |
-| KONKR Pocket FIT | SM8650 | engine v3, dspp0+dspp1 | DPU inline (`rotation=8`) | — | Its panel drawing at all is what proves patch 0525 |
-| AYANEO Pocket S2 | SM8650 | engine v3 | inline, 8 lines under the 1088 cap | — | Bonded panel (0534); the tightest gate — **not yet run on 7.2.7** |
+| KONKR Pocket FIT | SM8650 | engine v3, dspp0+dspp1 | DPU inline (`rotation=8`) | — | Its panel drawing at all is what proves patch 0430 |
+| AYANEO Pocket S2 | SM8650 | engine v3, dspp0+dspp1 | inline, 8 lines under the 1088 cap | — | Bonded panel (0440); the tightest gate — ✅ **7.2.7 + renumbered stack, 2026-09-22** |
 
 What to read, and the instrument traps:
 

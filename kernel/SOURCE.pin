@@ -10,30 +10,35 @@
 # S2 draws its full bonded panel, and the gamepad behind the Renesas PCIe-USB bridge works. All
 # three legs of the 0535 gate pass. 0525 and SMMU-v3 are still owed, as they were before this
 # pin moved. Read the 7.2.6 section below before touching it.
-version:    7.2.6
-url:        https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.2.6.tar.xz
-sha256:     039aef84f2b0994aeda3f4fcfc3d02ec9d7a9bbb9020ea264c43f446c860f606
-git_tag:    v7.2.6
-git_commit: 500df175a7f9e6bc1a9c328590ca5150f84f9ff0
+# RE-PINNED 2026-09-22 (7.2.7) and HW-VALIDATED THE SAME DAY on THREE boards across all three
+# SoC generations — Pocket ACE (SM8550), Thor Lite (SM8250) and Pocket FIT (SM8650). Zero
+# *ERROR* in dmesg on every one; colour management reprogrammed to byte-identical buffer
+# indices on both LUTDMA engine revisions; the FIT's panel drawing is what re-proves 0525.
+# POCKET S2 IS NOT COVERED — bonded panel plus eight lines of margin under the 1088-line
+# rotator cap, the tightest gate we have. It carries ZERO drm/msm and zero qcom commits, so
+# every gate recorded above stands exactly as it did on 7.2.6 — 0525 and SMMU-v3 still owed.
+version:    7.2.7
+url:        https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.2.7.tar.xz
+sha256:     4ac34c47db2540ffb2713943f8d891ff1702e0ba6934525a493b7d1cad43145a
+git_tag:    v7.2.7
+git_commit: f42acb3678424d1e08f6ed27c0d8ba8a125e14d6
 
 # The sha256 above is the one kernel.org publishes in the SIGNED sha256sums.asc for v7.x, not a
-# hash of whatever the CDN happened to serve — re-checked 2026-09-14. The .asc itself verifies as
+# hash of whatever the CDN happened to serve — re-checked 2026-09-22. The .asc itself verifies as
 # a GOOD signature from "Kernel.org checksum autosigner <autosigner@kernel.org>", fingerprint
 # B886 8C80 BA62 A1FF FAF5 FDA9 632D 3A06 589D A6B1. That key carries no trust path here, so the
-# load-bearing check is CONTINUITY: the SAME signed file still lists 7.2.5 as
-# 55ddf0df8325d9dad96fcff7bd93977d22e3f50af06527572af59b77c7632b78, 7.2.4 as
-# 01710ee01737dac492f1bae52becd057e08d20d11589089aa06accff415c28dd and 7.2.3 as
-# 8ba259e8e7b13ec6ef0941c8a39ad90b24bd4a4d6c0010ba6bafb794550ecd03, byte-for-byte the hashes this
-# pin carried and shipped before — so the file describing 7.2.6 is the same file that described
-# the releases we already trusted. The tarball on disk was re-hashed on 2026-09-17 and still
-# matches the value above; the skip this branch reverses was a decision about CONTENT, never
-# about provenance. (Note: keys.openpgp.org serves this key STRIPPED of its user IDs and gpg then
-# refuses it as "no public key"; keyserver.ubuntu.com serves it whole.)
-# git_commit is the DEREFERENCED tag (`git ls-remote 'v7.2.6^{}'`), matching how the
-# 7.1.5/7.1.6/7.2/7.2.1/7.2.3/7.2.4/7.2.5 lines were recorded; the annotated tag object is
-# c148318444bab91e4768a04aad6a18f8d974ecf7 and is NOT what belongs here.
-# (7.2.5, the pin this branch moves off: tag object 4c440ba64342e015be9eb06f1ea824eb6e81e562,
-# dereferenced commit a300e35c0a4b4a38fb53742ea6e2a203c98ee523.)
+# load-bearing check is CONTINUITY: the SAME signed file still lists 7.2.6 as
+# 039aef84f2b0994aeda3f4fcfc3d02ec9d7a9bbb9020ea264c43f446c860f606, 7.2.5 as
+# 55ddf0df8325d9dad96fcff7bd93977d22e3f50af06527572af59b77c7632b78 and 7.2.4 as
+# 01710ee01737dac492f1bae52becd057e08d20d11589089aa06accff415c28dd, byte-for-byte the hashes this
+# pin carried and shipped before — so the file describing the version above is the same file that
+# described the releases we already trusted. Roll this list forward on each bump rather than
+# growing it; three back is enough to be a chain. (Note: keys.openpgp.org serves this key STRIPPED
+# of its user IDs and gpg then refuses it as "no public key"; keyserver.ubuntu.com serves it whole.)
+# git_commit is the DEREFERENCED tag (`git ls-remote 'v<version>^{}'`), matching how every line
+# from 7.1.5 onward was recorded. The ANNOTATED TAG OBJECT is a different sha and is NOT what
+# belongs here — resolving the previous pin's tag and getting back the git_commit it already
+# records is the cheap way to prove you dereferenced rather than copied the wrong one.
 #
 # 7.2 was MAINLINE with no point release; 7.2.1 was the first stable one. Precedent from
 # 7.1.3 -> 7.1.5 used to say a point release INSIDE a series is a pure pin edit. TWO RELEASES

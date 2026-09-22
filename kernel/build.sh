@@ -53,9 +53,12 @@ tar -C "$WORK" -xf "$TARBALL"
 echo "[novadeck] source ready at $SRCDIR"
 
 # --- Apply out-of-tree patches in lexical order (rename files to reorder) ---
+# --fuzz=0 is load-bearing, not pedantry. A hunk that lands on approximate context has
+# drifted from what it was written against and can silently attach to the wrong place on a
+# later bump or reorder. Without it patch(1) defaults to fuzz 2 and that drift is invisible.
 for p in "$KDIR_REPO"/patches/*.patch; do
   echo "[novadeck] applying $(basename "$p")"
-  patch -p1 -d "$SRCDIR" --no-backup-if-mismatch <"$p" \
+  patch -p1 --fuzz=0 -d "$SRCDIR" --no-backup-if-mismatch <"$p" \
     || { echo "patch FAILED: $(basename "$p")" >&2; exit 1; }
 done
 

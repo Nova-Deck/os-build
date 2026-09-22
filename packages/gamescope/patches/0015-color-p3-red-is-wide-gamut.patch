@@ -54,15 +54,15 @@ index 6459ef2..0aba314 100644
  
  void buildSDRColorimetry( displaycolorimetry_t * pColorimetry, colormapping_t *pMapping,
 diff --git a/tests/meson.build b/tests/meson.build
-index 49be8d9..71098b3 100644
+index c54657d5..abd70558 100644
 --- a/tests/meson.build
 +++ b/tests/meson.build
 @@ -10,7 +10,7 @@ unittest_src += srcdir / 'color_helpers.cpp'
  
  gamescope_tests = executable(
  	'gamescope_tests',
--	unittest_src + ['test_convar.cpp', 'test_drm_color_pipeline.cpp', 'test_process.cpp', 'test_utils_parsers.cpp', 'test_utils_string.cpp'],
-+	unittest_src + ['test_color_gamut.cpp', 'test_convar.cpp', 'test_drm_color_pipeline.cpp', 'test_process.cpp', 'test_utils_parsers.cpp', 'test_utils_string.cpp'],
+-	unittest_src + ['test_convar.cpp', 'test_drm_color_pipeline.cpp', 'test_focus_placement.cpp', 'test_mangoapp_config.cpp', 'test_mangoapp_control.cpp', 'test_process.cpp', 'test_upscale.cpp', 'test_utils_parsers.cpp', 'test_utils_string.cpp', 'test_vrclient_detect.cpp'],
++	unittest_src + ['test_color_gamut.cpp', 'test_convar.cpp', 'test_drm_color_pipeline.cpp', 'test_focus_placement.cpp', 'test_mangoapp_config.cpp', 'test_mangoapp_control.cpp', 'test_process.cpp', 'test_upscale.cpp', 'test_utils_parsers.cpp', 'test_utils_string.cpp', 'test_vrclient_detect.cpp'],
  	include_directories: [srcdir, sol2_include],
  	dependencies: [catch2_dep, luajit_dep, cap_dep, drm_dep, glm_dep, wlroots_dep],
  	cpp_args: gamescope_cpp_args,
@@ -72,8 +72,8 @@ index 49be8d9..71098b3 100644
  
 +test('color', gamescope_tests, args: ['[color]'])
  test('convar', gamescope_tests, args: ['[convar]'])
- test('utils/parsers', gamescope_tests, args: ['[parsers]'])
- test('utils/process', gamescope_tests, args: ['[process]'], depends: [reaper_test_helper])
+ test('focus_placement', gamescope_tests, args: ['[focus_placement]'])
+ test('mangoapp_config', gamescope_tests, args: ['[mangoapp_config]'])
 diff --git a/tests/test_color_gamut.cpp b/tests/test_color_gamut.cpp
 new file mode 100644
 index 0000000..06540c7

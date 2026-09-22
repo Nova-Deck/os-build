@@ -14,7 +14,7 @@ is deliberately shallower than the consumers' own.
 {
   "global": { "gamescopeNice": 0 },
   "games": {
-    "858710": { "enabled": true, "gamescopeRr": true, "gamescopeCores": "big" }
+    "858710": { "enabled": true, "gamescopeNice": -5, "gamescopeCores": "big" }
   }
 }
 ```
@@ -30,7 +30,6 @@ Compositor (gamescope):
 | Key | Type | Effect |
 |-----|------|--------|
 | `gamescopeNice` | int −20…19 | niceness applied to every gamescope thread |
-| `gamescopeRr` | bool | promote gamescope's threads to `SCHED_RR` (realtime CPU class) |
 | `gamescopeCores` | cpulist or preset | pin gamescope's threads to these CPUs |
 
 The game itself:
@@ -132,9 +131,10 @@ Notes:
   novadeck itself changed are ever put back. Each such thread is restored to *its own* prior nice
   and cpu mask, recorded before the first overwrite, so a game that pins or deprioritises its own
   threads gets that tuning back rather than a flattened "nice 0, all CPUs".
-- `gamescopeRr` outranks every normal thread including the game's. It can help frame pacing when
-  the compositor is starved; it can also starve the game if something in gamescope spins. Treat it
-  as a per-title experiment, not a default.
+- Scheduling *policy* is not a tweak. gamescope decides its own with `--rt`, which it applies to
+  itself before its render threads exist so they inherit it. Nothing reproduces that from outside
+  once the compositor is up, so the tick adjusts nice and affinity only, and leaves any thread
+  that is not `SCHED_OTHER`/`SCHED_BATCH` alone.
 - Removing a tweak (or the whole file) is picked up on the next tick and the previous state is
   repaired — no reboot, no powerd restart.
 

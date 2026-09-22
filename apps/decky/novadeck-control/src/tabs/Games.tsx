@@ -232,13 +232,6 @@ export function Games({ config, setConfig }: { config: Config; setConfig: Dispat
           <SliderEdit label="Gamescope nice" value={settings.gamescopeNice} min={NICE_MIN} max={NICE_MAX} step={1}
             disabled={!gameEnabled} onChange={(v) => patch({ gamescopeNice: v })} />
         ) : null}
-        <ToggleRow
-          label="Realtime gamescope"
-          description="SCHED_RR for the compositor threads."
-          value={settings.gamescopeRr === true}
-          disabled={!gameEnabled}
-          onChange={(on) => patch({ gamescopeRr: on ? true : undefined })}
-        />
         <SelectEdit label="Gamescope cores" value={settings.gamescopeCores || ""} options={CORE_OPTIONS}
           disabled={!gameEnabled} onChange={(v) => patch({ gamescopeCores: v || undefined })} />
       </PanelSection>

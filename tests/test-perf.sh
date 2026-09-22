@@ -88,7 +88,7 @@ printf 'steam\n' > "$PROCNC/9000/comm"
 # --- tweaks: global + one enabled game, one entry missing "enabled" (must not apply)
 cat > "$TMP/tweaks.json" <<'EOF'
 {
-  "global": {"gamescopeNice": 5, "gamescopeRr": false},
+  "global": {"gamescopeNice": 5},
   "games": {
     "620": {"enabled": true, "gamescopeNice": -4, "gamescopeCores": "prime",
             "nice": -3, "cores": "big"},
@@ -195,7 +195,9 @@ np.TWEAKS_CONFIG = tmp / "tweaks.json"
 clean = np.sanitize_perf({"gamescopeNice": -99, "gamescopeRr": True,
                           "gamescopeCores": "prime", "enabled": True})
 check("nice clamped", clean.get("gamescopeNice"), -20)
-check("rr kept", clean.get("gamescopeRr"), True)
+# gamescopeRr is a RETIRED key: the tick no longer touches scheduling policy, so a
+# tweaks file left over from an image that had the toggle must drop it, not carry it.
+check("retired rr key dropped", "gamescopeRr" in clean, False)
 check("cores resolved", clean.get("gamescopeCores"), [7])
 check("stray keys dropped", "enabled" in clean, False)
 check("bad cores dropped", "gamescopeCores" in np.sanitize_perf({"gamescopeCores": "99"}), False)

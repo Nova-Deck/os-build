@@ -8,7 +8,7 @@ Owns three things:
   2. The game-tweaks read path: /etc/novadeck/game-tweaks.json, the SAME file
      and merge contract proton-wrapper uses for FEX profiles (global section,
      per-appid sections gated on "enabled": true). This module consumes the
-     perf keys: gamescopeNice, gamescopeRr, gamescopeCores — plus the two
+     perf keys: gamescopeNice, gamescopeCores — plus the two
      per-game-only overrides of a system-wide setting, scheduler and
      powerProfile, which it resolves for powerd to apply (see per_game_choice).
   3. The enforcement tick novadeck-powerd runs: find gamescope, find the
@@ -46,13 +46,6 @@ STEAM_COMMS = ("steam",)
 # launches (Proton / FEX — everything x86), SteamAppId also appears on native
 # launches, SteamGameId is the shortcut fallback.
 APPID_ENV_KEYS = ("STEAM_COMPAT_APP_ID", "SteamAppId", "SteamGameId")
-# The RR priority gamescope gives itself under --rt, which is the minimum (1 on
-# Linux) — see Process::SetRealtime() in gamescope's src/Utils/Process.cpp. The
-# number buys nothing against normal tasks: ANY SCHED_RR thread preempts every
-# SCHED_OTHER/SCHED_EXT one unconditionally, so 1 and 40 are identical for the
-# latency we actually want. It only decides who wins against other RT tasks, and
-# there the compositor has no business outranking anything, so ask for the floor.
-RR_PRIORITY = os.sched_get_priority_min(os.SCHED_RR)
 NICE_MIN, NICE_MAX = -20, 19
 
 
@@ -190,7 +183,7 @@ def clamp(value, low, high):
 
 
 def _is_int(value):
-    """bool is a subclass of int; `"gamescopeRr": true` must not read as a nice."""
+    """bool is a subclass of int; `"singleCore": true` must not read as a count."""
     return isinstance(value, int) and not isinstance(value, bool)
 
 
@@ -234,8 +227,6 @@ def sanitize_perf(settings):
             pass
     if _is_int(settings.get("gamescopeNice")):
         clean["gamescopeNice"] = clamp(settings["gamescopeNice"], NICE_MIN, NICE_MAX)
-    if isinstance(settings.get("gamescopeRr"), bool):
-        clean["gamescopeRr"] = settings["gamescopeRr"]
     if "gamescopeCores" in settings:
         try:
             cores = resolve_cores(settings.get("gamescopeCores"))
@@ -449,14 +440,19 @@ def _set_affinity(tid, mask):
 def apply_gamescope(values, index=None):
     """Idempotent per-tick enforcement of the gamescope thread policy.
 
-    RESET_ON_FORK covers RR/negative nice leaking into children but NOT
-    affinity, hence the explicit reset of gamescope's non-gamescope children
-    back to all CPUs whenever a restrictive mask is in force.
+    RESET_ON_FORK covers negative nice leaking into children but NOT affinity,
+    hence the explicit reset of gamescope's non-gamescope children back to all
+    CPUs whenever a restrictive mask is in force.
+
+    Scheduling POLICY is never touched. gamescope sets its own under --rt,
+    before its render threads exist so they inherit it; a per-tick promoter
+    cannot reproduce that from outside, and flipping a running compositor's
+    threads between SCHED_RR and SCHED_OTHER is a different, riskier thing.
+    Threads that are not SCHED_OTHER/SCHED_BATCH are left entirely alone.
 
     `index` is an optional comm_index() covering GAMESCOPE_COMMS; see scan_games.
     """
     nice = clamp(values.get("gamescopeNice", 0), NICE_MIN, NICE_MAX)
-    want_rr = bool(values.get("gamescopeRr"))
     cores = values.get("gamescopeCores") or None
     all_cpus = set(online_cpus())
     mask = set(cores) & all_cpus if cores else all_cpus
@@ -466,18 +462,6 @@ def apply_gamescope(values, index=None):
         for tid in process_tids(pid):
             policy = _policy(tid)
             try:
-                # the nice block must see the post-promotion policy, or RR +
-                # negative nice would promote then demote every tick
-                if want_rr and policy == os.SCHED_OTHER:
-                    os.sched_setscheduler(
-                        tid, os.SCHED_RR | os.SCHED_RESET_ON_FORK,
-                        os.sched_param(RR_PRIORITY))
-                    policy = os.SCHED_RR
-                elif not want_rr and policy == os.SCHED_RR:
-                    os.sched_setscheduler(
-                        tid, os.SCHED_OTHER | os.SCHED_RESET_ON_FORK,
-                        os.sched_param(0))
-                    policy = os.SCHED_OTHER
                 if policy in (os.SCHED_OTHER, os.SCHED_BATCH):
                     if nice < 0 and policy == os.SCHED_OTHER:
                         os.sched_setscheduler(

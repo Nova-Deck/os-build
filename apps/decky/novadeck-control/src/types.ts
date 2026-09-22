@@ -11,7 +11,6 @@ export interface GameTweaks {
   cores?: string;
   wineTopology?: boolean;
   gamescopeNice?: number;
-  gamescopeRr?: boolean;
   gamescopeCores?: string;
   /** Modifier on `cores`: narrow the selection to exactly ONE cpu (the fastest of those
    *  chosen, ties by lowest cpu number). Meaningful on its own, where it narrows all online

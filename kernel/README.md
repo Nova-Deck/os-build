@@ -64,14 +64,14 @@ assumes 4K pages.** Standardized across all three SoCs.
 ### Per-board HW gate
 
 Each board proves something the others cannot, which is why a kernel bump is not validated
-by one of them. Recorded state as of the 7.2.7 bump (2026-09-22):
+by one of them. Recorded state as of the 7.2.7 bump and the patch renumbering (2026-09-22):
 
 | Board | SoC | LUTDMA | Rotation | Wi-Fi | Notes |
 |---|---|---|---|---|---|
 | AYANEO Pocket ACE | SM8550 | engine v2, dspp0 | DPU inline (`rotation=8`) | ath12k / WCN7850 | 10 boot SMMU faults are a PRE-EXISTING cohort, not a regression |
 | AYN Thor Lite | SM8250 | **none in hardware** | composite (no inline rotator) | ath11k | Dual touchscreen; second panel unbound is a known open issue |
 | KONKR Pocket FIT | SM8650 | engine v3, dspp0+dspp1 | DPU inline (`rotation=8`) | — | Its panel drawing at all is what proves patch 0430 |
-| AYANEO Pocket S2 | SM8650 | engine v3 | inline, 8 lines under the 1088 cap | — | Bonded panel (0440); the tightest gate — **not yet run on 7.2.7** |
+| AYANEO Pocket S2 | SM8650 | engine v3, dspp0+dspp1 | inline, 8 lines under the 1088 cap | — | Bonded panel (0440); the tightest gate — ✅ **7.2.7 + renumbered stack, 2026-09-22** |
 
 What to read, and the instrument traps:
 

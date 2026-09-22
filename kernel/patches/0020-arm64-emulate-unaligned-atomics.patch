@@ -7,11 +7,24 @@ Subject: [PATCH] arch: arm64: Implement unaligned atomic
 
 Integration points ported to Linux 7.2.6, applied after 0504 (compat-input).
 
+novadeck fix, Load128: the 128-bit atomic load is an ldaxp/stlxp pair (the
+store-back is what makes it single-copy atomic), but only the ldaxp had an
+exception-table entry. When the page is readable but not writable at that
+instant -- copy-on-write, a clean page under dirty tracking, one just
+faulted back from zram -- the stlxp takes a permission fault with no fixup,
+and the kernel oopses ("Unable to handle kernel access to user memory
+outside uaccess routines", pc Load128+0x38, lr DoCAS64) instead of returning
+-EFAULT. Label the stlxp and give it an entry too, exactly as StoreCAS128
+already does: -EFAULT makes the fault handler resolve the write fault
+through do_translation_fault(..., WNR) and the instruction is retried.
+Hit on a Thor Lite (SM8250) under a FEX x86 game, 2026-09-23.
+
 ---
 diff --git a/arch/arm64/include/asm/exception.h b/arch/arm64/include/asm/exception.h
+index a2da3cb21c24..f6dd1b9afe69 100644
 --- a/arch/arm64/include/asm/exception.h
 +++ b/arch/arm64/include/asm/exception.h
-@@ -82,6 +82,7 @@
+@@ -82,6 +82,7 @@ void do_sp_pc_abort(unsigned long addr, unsigned long esr, struct pt_regs *regs)
  void bad_el0_sync(struct pt_regs *regs, int reason, unsigned long esr);
  void do_el0_cp15(unsigned long esr, struct pt_regs *regs);
  int do_compat_alignment_fixup(unsigned long addr, struct pt_regs *regs);
@@ -20,9 +33,10 @@ diff --git a/arch/arm64/include/asm/exception.h b/arch/arm64/include/asm/excepti
  void do_el0_svc_compat(struct pt_regs *regs);
  void do_el0_fpac(struct pt_regs *regs, unsigned long esr);
 diff --git a/arch/arm64/include/asm/processor.h b/arch/arm64/include/asm/processor.h
+index 6dfbcacd9ba0..5eb7ad45b17d 100644
 --- a/arch/arm64/include/asm/processor.h
 +++ b/arch/arm64/include/asm/processor.h
-@@ -445,5 +445,8 @@
+@@ -445,5 +445,8 @@ int set_tsc_mode(unsigned int val);
  #define GET_TSC_CTL(adr)        get_tsc_mode((adr))
  #define SET_TSC_CTL(val)        set_tsc_mode((val))
  
@@ -32,9 +46,10 @@ diff --git a/arch/arm64/include/asm/processor.h b/arch/arm64/include/asm/process
  #endif /* __ASSEMBLER__ */
  #endif /* __ASM_PROCESSOR_H */
 diff --git a/arch/arm64/include/asm/thread_info.h b/arch/arm64/include/asm/thread_info.h
+index 5d7fe3e153c8..5234694e64d9 100644
 --- a/arch/arm64/include/asm/thread_info.h
 +++ b/arch/arm64/include/asm/thread_info.h
-@@ -89,6 +89,10 @@
+@@ -89,6 +89,10 @@ void arch_setup_new_exec(void);
  #define TIF_TSC_SIGSEGV		30	/* SIGSEGV on counter-timer access */
  #define TIF_LAZY_MMU_PENDING	31	/* Ops pending for lazy mmu mode exit */
  
@@ -46,9 +61,10 @@ diff --git a/arch/arm64/include/asm/thread_info.h b/arch/arm64/include/asm/threa
  #define _TIF_NEED_RESCHED	(1 << TIF_NEED_RESCHED)
  #define _TIF_NEED_RESCHED_LAZY	(1 << TIF_NEED_RESCHED_LAZY)
 diff --git a/arch/arm64/kernel/Makefile b/arch/arm64/kernel/Makefile
+index d2690c3ec528..4b8e24ff66cb 100644
 --- a/arch/arm64/kernel/Makefile
 +++ b/arch/arm64/kernel/Makefile
-@@ -34,7 +34,7 @@
+@@ -34,7 +34,7 @@ obj-y			:= debug-monitors.o entry.o irq.o fpsimd.o		\
  			   cpufeature.o alternative.o cacheinfo.o		\
  			   smp.o smp_spin_table.o topology.o smccc-call.o	\
  			   syscall.o proton-pack.o idle.o patching.o pi/	\
@@ -58,9 +74,10 @@ diff --git a/arch/arm64/kernel/Makefile b/arch/arm64/kernel/Makefile
  obj-$(CONFIG_COMPAT)			+= sys32.o signal32.o			\
  					   sys_compat.o
 diff --git a/arch/arm64/kernel/process.c b/arch/arm64/kernel/process.c
+index 581f80e9b9b7..7a01b74afcf2 100644
 --- a/arch/arm64/kernel/process.c
 +++ b/arch/arm64/kernel/process.c
-@@ -1003,3 +1003,15 @@
+@@ -1003,3 +1003,15 @@ int set_tsc_mode(unsigned int val)
  
  	return do_set_tsc_mode(val);
  }
@@ -78,9 +95,10 @@ diff --git a/arch/arm64/kernel/process.c b/arch/arm64/kernel/process.c
 +}
 diff --git a/arch/arm64/kernel/unaligned_atomic.c b/arch/arm64/kernel/unaligned_atomic.c
 new file mode 100644
+index 000000000000..8a31e8b04764
 --- /dev/null
 +++ b/arch/arm64/kernel/unaligned_atomic.c
-@@ -0,0 +1,2056 @@
+@@ -0,0 +1,2057 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +
 +#include <linux/compiler.h>
@@ -212,10 +230,11 @@ new file mode 100644
 +
 +  uaccess_enable_privileged();
 +  asm volatile("1: ldaxp %[ResultLower], %[ResultUpper], [%[Addr]]\n"
-+               "   stlxp %w[Tmp], %[ResultLower], %[ResultUpper], [%[Addr]]\n"
++               "2: stlxp %w[Tmp], %[ResultLower], %[ResultUpper], [%[Addr]]\n"
 +               "   cbnz %w[Tmp], 1b\n"
-+               "2:\n"
-+               _ASM_EXTABLE_UACCESS_ERR(1b, 2b, %w[ret])
++               "3:\n"
++               _ASM_EXTABLE_UACCESS_ERR(1b, 3b, %w[ret])
++               _ASM_EXTABLE_UACCESS_ERR(2b, 3b, %w[ret])
 +               : [Tmp] "=&r"(Tmp), [ResultLower] "=&r"(Lower), [ResultUpper] "=&r"(Upper), [ret] "+r"(ret)
 +               : [Addr] "r"(Addr)
 +               : "memory");
@@ -2138,9 +2157,10 @@ new file mode 100644
 +  return 0;
 +}
 diff --git a/arch/arm64/mm/fault.c b/arch/arm64/mm/fault.c
+index 75c3e463df2e..2beedf7f3e02 100644
 --- a/arch/arm64/mm/fault.c
 +++ b/arch/arm64/mm/fault.c
-@@ -854,6 +854,15 @@
+@@ -858,6 +858,15 @@ static int do_alignment_fault(unsigned long far, unsigned long esr,
  	if (IS_ENABLED(CONFIG_COMPAT_ALIGNMENT_FIXUPS) &&
  	    compat_user_mode(regs))
  		return do_compat_alignment_fixup(far, regs);
@@ -2157,9 +2177,10 @@ diff --git a/arch/arm64/mm/fault.c b/arch/arm64/mm/fault.c
  	return 0;
  }
 diff --git a/include/uapi/linux/prctl.h b/include/uapi/linux/prctl.h
+index 55ca31b522fc..21171af687cf 100644
 --- a/include/uapi/linux/prctl.h
 +++ b/include/uapi/linux/prctl.h
-@@ -421,4 +421,9 @@
+@@ -421,4 +421,9 @@ struct prctl_mm_map {
  # define PR_SET_COMPAT_INPUT_DISABLE  0
  # define PR_SET_COMPAT_INPUT_ENABLE   1
  
@@ -2170,6 +2191,7 @@ diff --git a/include/uapi/linux/prctl.h b/include/uapi/linux/prctl.h
 +
  #endif /* _LINUX_PRCTL_H */
 diff --git a/kernel/sys.c b/kernel/sys.c
+index 925087131eb2..e30d23ac21e9 100644
 --- a/kernel/sys.c
 +++ b/kernel/sys.c
 @@ -158,7 +158,9 @@
@@ -2183,7 +2205,7 @@ diff --git a/kernel/sys.c b/kernel/sys.c
  /*
   * this is where the system-wide overflow UID and GID are defined, for
   * architectures that now have 32-bit UID/GID but didn't in the past
-@@ -2922,6 +2924,9 @@
+@@ -2922,6 +2924,9 @@ SYSCALL_DEFINE5(prctl, int, option, unsigned long, arg2, unsigned long, arg3,
  		else
  			return -EINVAL;
  		break;

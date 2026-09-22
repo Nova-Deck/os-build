@@ -152,7 +152,7 @@ never land upstream, which is why provenance is a table and not a number band.
 | `1030` | community | spycat88, ROCKNIX `0071`. A hack. | never |
 | `1040` | community | Kars Mulder's Linux-Pollrate-Patch via ROCKNIX `0506`. | never |
 | `1060` | posted | Manivannan Sadhasivam `<20260907143349.317495-1-mani@kernel.org>`, applied to the PCI tree as `626acf6efc69`. Not in v7.3-rc4 or 7.2.y, no Cc: stable — yet 7.2.6+ needs it. | when `626acf6efc69` reaches our pinned release |
-| `1080` | mainline | We carry Udit Tiwari v6 `<20260210061437.2293654-1-quic_utiwari@quicinc.com>`; v9 merged as `6f5569203bb6` (fixes ICC bookkeeping, drops `CONFIG_PM_CLK`). | v7.3; replace v6 with `6f5569203bb6` until then |
+| `1080` | mainline | Udit Tiwari, v9 as merged: `6f5569203bb6`, cherry-picked clean onto v7.2.7 (replaced v6 `<20260210061437.2293654-1-quic_utiwari@quicinc.com>`). | v7.3 |
 | `1105` | posted | Krishna Chaitanya Chundru root_port v2 15/15 `<20260917-root_port_v2-v2-15-6272b7caae9a@oss.qualcomm.com>`. 7.3 renames `pcieport0` → `pcie0_port0`. | when merged; rework at 7.3 either way |
 | `1110` | posted | Same series, 12/15 `<20260917-root_port_v2-v2-12-6272b7caae9a@oss.qualcomm.com>`. | when merged |
 | `1115` | community | ROCKNIX SM8250 `0005`. Never posted. | never |

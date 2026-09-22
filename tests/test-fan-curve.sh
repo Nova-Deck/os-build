@@ -234,6 +234,74 @@ check("and the daemon comes up on factory", power.fan_config["min_pwm"], 51)
 check("quarantine took the /etc layer with it",
       (etc / "power-profiles.conf").exists(), False)
 
+# ------------------------------------------------------------------- cpu governor ---
+# write_governor's fallback is the quietest failure in this daemon: it once left eco and
+# balanced on the SAME governor for a whole release, because the preferred one was missing
+# from scaling_available_governors and nothing said so. The rule under test is that the
+# preferred name is tried by WRITING it -- a governor built as a module is absent from that
+# list until the write itself autoloads it, so a list check would make it unreachable.
+
+def fake_policy(name, accepts, listed):
+    """A cpufreq policy dir whose scaling_governor only takes `accepts`, like the kernel's."""
+    policy = tmp / "cpufreq" / name
+    policy.mkdir(parents=True, exist_ok=True)
+    (policy / "scaling_governor").write_text("performance\n")
+    (policy / "scaling_available_governors").write_text(" ".join(listed) + "\n")
+    return policy
+
+real_try_write = pd.try_write
+def kernel_like(accepts):
+    def probe(path, value):
+        if value not in accepts:
+            return False           # EINVAL: the kernel has no such governor
+        return real_try_write(path, value)
+    return probe
+
+power_gov = fresh()
+
+# The shipping case: everything the profiles name is present.
+pd.try_write = kernel_like({"schedutil", "ondemand", "conservative", "performance"})
+policy = fake_policy("policy0", None, ["schedutil", "ondemand", "conservative", "performance"])
+check("preferred governor is written", power_gov.write_governor(policy, "conservative"),
+      "conservative")
+check("and it actually landed in sysfs", pd.read_text(policy / "scaling_governor"),
+      "conservative")
+
+# The trap: conservative is built =m, so it is NOT in scaling_available_governors -- but the
+# write still succeeds, because that write is what loads it. A list check fails this.
+pd.try_write = kernel_like({"schedutil", "ondemand", "conservative"})
+policy = fake_policy("policy1", None, ["schedutil", "ondemand"])
+check("an unlisted-but-loadable governor is still reached",
+      power_gov.write_governor(policy, "conservative"), "conservative")
+
+# Genuinely absent: fall back, and the fallback must be the documented order.
+pd.try_write = kernel_like({"ondemand", "performance"})
+policy = fake_policy("policy2", None, ["ondemand", "performance"])
+check("absent governor falls back past schedutil to ondemand",
+      power_gov.write_governor(policy, "conservative"), "ondemand")
+
+pd.try_write = kernel_like({"schedutil", "ondemand"})
+policy = fake_policy("policy3", None, ["schedutil", "ondemand"])
+check("schedutil is preferred over ondemand when falling back",
+      power_gov.write_governor(policy, "conservative"), "schedutil")
+
+# Nothing is settable: say so and leave the governor alone rather than reporting success.
+pd.try_write = kernel_like(set())
+policy = fake_policy("policy4", None, ["performance"])
+check("an unsettable governor reports failure", power_gov.write_governor(policy, "schedutil"),
+      None)
+check("and does not clobber what was there",
+      pd.read_text(policy / "scaling_governor"), "performance")
+
+# A preferred that IS the first fallback must not be retried as one.
+pd.try_write = kernel_like({"schedutil"})
+policy = fake_policy("policy5", None, ["schedutil"])
+check("preferred==schedutil is not reported as a fallback",
+      power_gov.write_governor(policy, "schedutil"), "schedutil")
+
+pd.try_write = real_try_write
+
+
 for status, name in results:
     print(f"{status} {name}")
 sys.exit(1 if any(s.startswith("FAIL") for s, _ in results) else 0)

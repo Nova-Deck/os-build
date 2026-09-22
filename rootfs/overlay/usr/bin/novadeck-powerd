@@ -237,6 +237,20 @@ def write_text(path, value):
         return False
 
 
+def try_write(path, value):
+    """A sysfs write whose failure is an ANSWER, not an incident — so it must not log.
+
+    write_text() narrates every OSError, which is right for a write we expect to land and
+    wrong for a probe: asking the kernel for a governor it does not have is how we find out
+    that it does not have it, and doing so once per policy would fill the journal with
+    errors describing normal operation."""
+    try:
+        Path(path).write_text(f"{value}\n")
+        return True
+    except OSError:
+        return False
+
+
 def restore_factory_config(reason):
     """Quarantine EVERY user layer so factory-only sections keep tracking /usr.
 
@@ -998,13 +1012,34 @@ class NovadeckPower:
         print(f"novadeck-powerd: fan curve reset to factory for {target}", file=sys.stderr)
 
     def write_governor(self, path, preferred):
-        available = read_text(path / "scaling_available_governors").split()
-        if preferred in available:
-            write_text(path / "scaling_governor", preferred)
-        elif "schedutil" in available:
-            write_text(path / "scaling_governor", "schedutil")
-        elif "ondemand" in available:
-            write_text(path / "scaling_governor", "ondemand")
+        """Set the profile's governor, falling back only once the kernel has refused it.
+
+        The preferred name is tried by WRITING it, not by looking it up in
+        scaling_available_governors first. That list holds the governors currently
+        REGISTERED, and a governor built as a module is not registered until something
+        asks for it -- the ask being this very write, which lands in
+        cpufreq_parse_governor() and request_module("cpufreq_%s"). Consulting the list
+        first is therefore how a =m governor becomes permanently unreachable: it is never
+        listed, so it is never written, so it never loads. (Our kernel builds all three =y
+        precisely so this cannot bite, but powerd also runs on images it did not ship with,
+        and the /etc config may name a governor the factory one never did.)
+
+        The fallback is logged. This same fallback once made eco and balanced identical at
+        the governor level for a whole release, silently, and the only reason it was ever
+        found was a hand check of scaling_available_governors on a device."""
+        target = path / "scaling_governor"
+        order = list(dict.fromkeys((preferred, "schedutil", "ondemand")))
+        for name in order:
+            if not try_write(target, name) or read_text(target) != name:
+                continue
+            if name != preferred:
+                print(f"novadeck-powerd: {path.name} governor '{preferred}' unavailable, "
+                      f"using '{name}' (have: "
+                      f"{read_text(path / 'scaling_available_governors')})", file=sys.stderr)
+            return name
+        print(f"novadeck-powerd: {path.name} governor unsettable, left at "
+              f"'{read_text(target)}'", file=sys.stderr)
+        return None
 
     def apply_profile(self):
         settings = self.profile_settings()

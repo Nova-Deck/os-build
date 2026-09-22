@@ -1,7 +1,7 @@
 Subject: [PATCH] input: joystick: add MANGMI Pocket Max SPI joypad
  
 diff --git a/drivers/input/joystick/Kconfig b/drivers/input/joystick/Kconfig
-index 7755e5b454d2..cae1087e2c7b 100644
+index 2a77296..838fb81 100644
 --- a/drivers/input/joystick/Kconfig
 +++ b/drivers/input/joystick/Kconfig
 @@ -166,6 +166,15 @@ config JOYSTICK_MAGELLAN
@@ -21,7 +21,7 @@ index 7755e5b454d2..cae1087e2c7b 100644
  	tristate "SpaceTec SpaceOrb/Avenger 6dof controllers"
  	select SERIO
 diff --git a/drivers/input/joystick/Makefile b/drivers/input/joystick/Makefile
-index 9976f596a920..07dd3a7331cf 100644
+index f848b82..91295f9 100644
 --- a/drivers/input/joystick/Makefile
 +++ b/drivers/input/joystick/Makefile
 @@ -23,6 +23,7 @@ obj-$(CONFIG_JOYSTICK_IFORCE)		+= iforce/
@@ -31,10 +31,10 @@ index 9976f596a920..07dd3a7331cf 100644
 +obj-$(CONFIG_JOYSTICK_MANGMI_POCKET_MAX)	+= mangmi-pocket-max.o
  obj-$(CONFIG_JOYSTICK_MAPLE)		+= maplecontrol.o
  obj-$(CONFIG_JOYSTICK_N64)		+= n64joy.o
- obj-$(CONFIG_JOYSTICK_PSXPAD_SPI)	+= psxpad-spi.o
+ obj-$(CONFIG_JOYSTICK_RETROID)		+= retroid.o
 diff --git a/drivers/input/joystick/mangmi-pocket-max.c b/drivers/input/joystick/mangmi-pocket-max.c
 new file mode 100644
-index 000000000000..82570eff2fbe
+index 0000000..c720c86
 --- /dev/null
 +++ b/drivers/input/joystick/mangmi-pocket-max.c
 @@ -0,0 +1,644 @@

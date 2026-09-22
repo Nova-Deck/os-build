@@ -11,12 +11,12 @@ Subject: [PATCH] gpu:drm:panel:add pocket fit panel
  create mode 100644 drivers/gpu/drm/panel/panel-ar14-144hz.c
 
 diff --git a/drivers/gpu/drm/panel/Kconfig b/drivers/gpu/drm/panel/Kconfig
-index 407c5f6a268b..6481e0100061 100644
+index 4b5df49..af33902 100644
 --- a/drivers/gpu/drm/panel/Kconfig
 +++ b/drivers/gpu/drm/panel/Kconfig
-@@ -17,6 +17,22 @@ config DRM_PANEL_ABT_Y030XX067A
- 	  Y030XX067A 320x480 3.0" panel as found in the YLM RG-280M, RG-300
- 	  and RG-99 handheld gaming consoles.
+@@ -47,6 +47,22 @@ config DRM_PANEL_AR11_5INCH
+          Say Y here if you want to enable support for Ayaneo Pocket DS
+          1024x768Panel.
  
 +config DRM_PANEL_AR14
 +	tristate "Ayaneo Pocket FIT panel driver"
@@ -38,12 +38,10 @@ index 407c5f6a268b..6481e0100061 100644
  	tristate "ARM Versatile panel driver"
  	depends on OF
 diff --git a/drivers/gpu/drm/panel/Makefile b/drivers/gpu/drm/panel/Makefile
-index 3615a761b44f..5ae127482f10 100644
+index 0d14596..7b2f24d 100644
 --- a/drivers/gpu/drm/panel/Makefile
 +++ b/drivers/gpu/drm/panel/Makefile
-@@ -1,8 +1,9 @@
- # SPDX-License-Identifier: GPL-2.0
- obj-$(CONFIG_DRM_PANEL_ABT_Y030XX067A) += panel-abt-y030xx067a.o
+@@ -3,6 +3,7 @@ obj-$(CONFIG_DRM_PANEL_ABT_Y030XX067A) += panel-abt-y030xx067a.o
  obj-$(CONFIG_DRM_PANEL_AR06_4INCH) += panel-ar06-4inch.o
  obj-$(CONFIG_DRM_PANEL_AR02_3INCH) += panel-ar02-3inch.o
  obj-$(CONFIG_DRM_PANEL_AR11_5INCH) += panel-ar11-5inch.o
@@ -53,7 +51,7 @@ index 3615a761b44f..5ae127482f10 100644
  obj-$(CONFIG_DRM_PANEL_AUO_A030JTN01) += panel-auo-a030jtn01.o
 diff --git a/drivers/gpu/drm/panel/panel-ar14-144hz.c b/drivers/gpu/drm/panel/panel-ar14-144hz.c
 new file mode 100644
-index 000000000000..5d59730eddb0
+index 0000000..5d59730
 --- /dev/null
 +++ b/drivers/gpu/drm/panel/panel-ar14-144hz.c
 @@ -0,0 +1,550 @@
@@ -607,6 +605,3 @@ index 000000000000..5d59730eddb0
 +MODULE_AUTHOR("ROCKNIX");
 +MODULE_DESCRIPTION("DRM driver for ar14 1080p 144hz video mode dsi panel");
 +MODULE_LICENSE("GPL");
--- 
-2.52.0
-

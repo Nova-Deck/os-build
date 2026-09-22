@@ -59,8 +59,23 @@ display or LUTDMA errors after boot; the 10 arm-smmu faults in the first second
 are the board's pre-existing continuous-splash handoff, not this.
 ---
 --- a/drivers/gpu/drm/msm/disp/dpu1/catalog/dpu_10_0_sm8650.h
+diff --git a/drivers/gpu/drm/msm/Makefile b/drivers/gpu/drm/msm/Makefile
+index d0c3a4c..45f4c2c 100644
+--- a/drivers/gpu/drm/msm/Makefile
++++ b/drivers/gpu/drm/msm/Makefile
+@@ -89,6 +89,7 @@ msm-display-$(CONFIG_DRM_MSM_DPU) += \
+ 	disp/dpu1/dpu_hw_sspp.o \
+ 	disp/dpu1/dpu_hw_sspp_v13.o \
+ 	disp/dpu1/dpu_hw_dspp.o \
++	disp/dpu1/dpu_hw_reg_dma.o \
+ 	disp/dpu1/dpu_hw_merge3d.o \
+ 	disp/dpu1/dpu_hw_top.o \
+ 	disp/dpu1/dpu_hw_util.o \
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/catalog/dpu_10_0_sm8650.h b/drivers/gpu/drm/msm/disp/dpu1/catalog/dpu_10_0_sm8650.h
+index 0f601f0..29c5482 100644
+--- a/drivers/gpu/drm/msm/disp/dpu1/catalog/dpu_10_0_sm8650.h
 +++ b/drivers/gpu/drm/msm/disp/dpu1/catalog/dpu_10_0_sm8650.h
-@@ -182,19 +182,19 @@
+@@ -182,19 +182,19 @@ static const struct dpu_dspp_cfg sm8650_dspp[] = {
  	{
  		.name = "dspp_0", .id = DSPP_0,
  		.base = 0x54000, .len = 0x1800,
@@ -84,7 +99,7 @@ are the board's pre-existing continuous-splash handoff, not this.
  	},
  };
  
-@@ -432,6 +432,7 @@
+@@ -432,6 +432,7 @@ const struct dpu_mdss_cfg dpu_sm8650_cfg = {
  	.mixer = sm8650_lm,
  	.dspp_count = ARRAY_SIZE(sm8650_dspp),
  	.dspp = sm8650_dspp,
@@ -92,9 +107,11 @@ are the board's pre-existing continuous-splash handoff, not this.
  	.pingpong_count = ARRAY_SIZE(sm8650_pp),
  	.pingpong = sm8650_pp,
  	.dsc_count = ARRAY_SIZE(sm8650_dsc),
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/catalog/dpu_12_0_sm8750.h b/drivers/gpu/drm/msm/disp/dpu1/catalog/dpu_12_0_sm8750.h
+index 3889eb8..ffe1151 100644
 --- a/drivers/gpu/drm/msm/disp/dpu1/catalog/dpu_12_0_sm8750.h
 +++ b/drivers/gpu/drm/msm/disp/dpu1/catalog/dpu_12_0_sm8750.h
-@@ -473,6 +473,7 @@
+@@ -473,6 +473,7 @@ const struct dpu_mdss_cfg dpu_sm8750_cfg = {
  	.mixer = sm8750_lm,
  	.dspp_count = ARRAY_SIZE(sm8750_dspp),
  	.dspp = sm8750_dspp,
@@ -102,9 +119,11 @@ are the board's pre-existing continuous-splash handoff, not this.
  	.pingpong_count = ARRAY_SIZE(sm8750_pp),
  	.pingpong = sm8750_pp,
  	.dsc_count = ARRAY_SIZE(sm8750_dsc),
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/catalog/dpu_9_0_sm8550.h b/drivers/gpu/drm/msm/disp/dpu1/catalog/dpu_9_0_sm8550.h
+index ee1ef7a..0ff8a63 100644
 --- a/drivers/gpu/drm/msm/disp/dpu1/catalog/dpu_9_0_sm8550.h
 +++ b/drivers/gpu/drm/msm/disp/dpu1/catalog/dpu_9_0_sm8550.h
-@@ -182,19 +182,19 @@
+@@ -182,19 +182,19 @@ static const struct dpu_dspp_cfg sm8550_dspp[] = {
  	{
  		.name = "dspp_0", .id = DSPP_0,
  		.base = 0x54000, .len = 0x1800,
@@ -128,7 +147,7 @@ are the board's pre-existing continuous-splash handoff, not this.
  	},
  };
  static const struct dpu_pingpong_cfg sm8550_pp[] = {
-@@ -389,6 +389,7 @@
+@@ -389,6 +389,7 @@ const struct dpu_mdss_cfg dpu_sm8550_cfg = {
  	.mixer = sm8550_lm,
  	.dspp_count = ARRAY_SIZE(sm8550_dspp),
  	.dspp = sm8550_dspp,
@@ -136,6 +155,8 @@ are the board's pre-existing continuous-splash handoff, not this.
  	.pingpong_count = ARRAY_SIZE(sm8550_pp),
  	.pingpong = sm8550_pp,
  	.dsc_count = ARRAY_SIZE(sm8550_dsc),
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.c
+index a3b1d2d..d8b3ed0 100644
 --- a/drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.c
 +++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.c
 @@ -44,6 +44,13 @@
@@ -152,7 +173,7 @@ are the board's pre-existing continuous-splash handoff, not this.
  static struct dpu_kms *_dpu_crtc_get_kms(struct drm_crtc *crtc)
  {
  	struct msm_drm_private *priv = crtc->dev->dev_private;
-@@ -844,6 +851,8 @@
+@@ -844,6 +851,8 @@ static void _dpu_crtc_get_gc_lut(struct drm_crtc_state *state,
  	gc_lut->flags = 0;
  }
  
@@ -161,7 +182,7 @@ are the board's pre-existing continuous-splash handoff, not this.
  static void _dpu_crtc_setup_cp_blocks(struct drm_crtc *crtc)
  {
  	struct drm_crtc_state *state = crtc->state;
-@@ -853,10 +862,14 @@
+@@ -853,10 +862,14 @@ static void _dpu_crtc_setup_cp_blocks(struct drm_crtc *crtc)
  	struct dpu_hw_gc_lut *gc_lut;
  	struct dpu_hw_ctl *ctl;
  	struct dpu_hw_dspp *dspp;
@@ -178,7 +199,7 @@ are the board's pre-existing continuous-splash handoff, not this.
  		return;
  
  	for (i = 0; i < cstate->num_mixers; i++) {
-@@ -884,18 +897,80 @@
+@@ -884,18 +897,80 @@ static void _dpu_crtc_setup_cp_blocks(struct drm_crtc *crtc)
  				dspp->ops.setup_gc(dspp, NULL);
  			} else {
  				gc_lut = kzalloc_obj(*gc_lut);
@@ -264,7 +285,7 @@ are the board's pre-existing continuous-splash handoff, not this.
  }
  
  static void dpu_crtc_atomic_begin(struct drm_crtc *crtc,
-@@ -1011,6 +1086,7 @@
+@@ -1011,6 +1086,7 @@ static void dpu_crtc_destroy_state(struct drm_crtc *crtc,
  	DRM_DEBUG_ATOMIC("crtc%d\n", crtc->base.id);
  
  	__drm_atomic_helper_crtc_destroy_state(state);
@@ -272,7 +293,7 @@ are the board's pre-existing continuous-splash handoff, not this.
  
  	kfree(cstate);
  }
-@@ -1169,10 +1245,46 @@
+@@ -1169,10 +1245,46 @@ static struct drm_crtc_state *dpu_crtc_duplicate_state(struct drm_crtc *crtc)
  
  	/* duplicate base helper */
  	__drm_atomic_helper_crtc_duplicate_state(crtc, &cstate->base);
@@ -319,7 +340,7 @@ are the board's pre-existing continuous-splash handoff, not this.
  static void dpu_crtc_atomic_print_state(struct drm_printer *p,
  					const struct drm_crtc_state *state)
  {
-@@ -1423,7 +1535,7 @@
+@@ -1423,7 +1535,7 @@ static struct msm_display_topology dpu_crtc_get_topology(
  	else
  		topology.num_lm = 1;
  
@@ -328,7 +349,7 @@ are the board's pre-existing continuous-splash handoff, not this.
  		topology.num_dspp = topology.num_lm;
  
  	return topology;
-@@ -1541,6 +1653,38 @@
+@@ -1541,6 +1653,38 @@ int dpu_crtc_check_mode_changed(struct drm_crtc_state *old_crtc_state,
  	    (!clone_mode_requested && clone_mode_enabled))
  		new_crtc_state->mode_changed = true;
  
@@ -367,7 +388,7 @@ are the board's pre-existing continuous-splash handoff, not this.
  	return 0;
  }
  
-@@ -1559,6 +1703,15 @@
+@@ -1559,6 +1703,15 @@ static int dpu_crtc_atomic_check(struct drm_crtc *crtc,
  
  	bool needs_dirtyfb = dpu_crtc_needs_dirtyfb(crtc_state);
  
@@ -383,7 +404,7 @@ are the board's pre-existing continuous-splash handoff, not this.
  	/* don't reallocate resources if only ACTIVE has beeen changed */
  	if (crtc_state->mode_changed || crtc_state->connectors_changed) {
  		rc = dpu_crtc_assign_resources(crtc, crtc_state);
-@@ -1566,6 +1719,12 @@
+@@ -1566,6 +1719,12 @@ static int dpu_crtc_atomic_check(struct drm_crtc *crtc,
  			return rc;
  	}
  
@@ -396,7 +417,7 @@ are the board's pre-existing continuous-splash handoff, not this.
  	if (crtc_state->planes_changed || crtc_state->zpos_changed) {
  		if (dpu_use_virtual_planes)
  			rc = dpu_crtc_reassign_planes(crtc, crtc_state);
-@@ -1870,6 +2029,8 @@
+@@ -1870,6 +2029,8 @@ static const struct drm_crtc_funcs dpu_crtc_funcs = {
  	.reset = dpu_crtc_reset,
  	.atomic_duplicate_state = dpu_crtc_duplicate_state,
  	.atomic_destroy_state = dpu_crtc_destroy_state,
@@ -405,7 +426,7 @@ are the board's pre-existing continuous-splash handoff, not this.
  	.atomic_print_state = dpu_crtc_atomic_print_state,
  	.late_register = dpu_crtc_late_register,
  	.verify_crc_source = dpu_crtc_verify_crc_source,
-@@ -1938,12 +2099,23 @@
+@@ -1938,12 +2099,23 @@ struct drm_crtc *dpu_crtc_init(struct drm_device *dev, struct drm_plane *plane,
  
  	if (dpu_kms->catalog->dspp_count) {
  		const struct dpu_dspp_cfg *dspp = &dpu_kms->catalog->dspp[0];
@@ -431,9 +452,11 @@ are the board's pre-existing continuous-splash handoff, not this.
  		}
  	}
  
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.h b/drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.h
+index 6eaba56..b5c916b 100644
 --- a/drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.h
 +++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.h
-@@ -156,6 +156,10 @@
+@@ -156,6 +156,10 @@ struct dpu_crtc_frame_event {
  struct dpu_crtc {
  	struct drm_crtc base;
  	char name[DPU_CRTC_NAME_SIZE];
@@ -444,7 +467,7 @@ are the board's pre-existing continuous-splash handoff, not this.
  
  	struct drm_pending_vblank_event *event;
  	u32 vsync_count;
-@@ -225,6 +229,16 @@
+@@ -225,6 +229,16 @@ struct dpu_crtc_state {
  
  	enum dpu_crtc_crc_source crc_source;
  	int crc_frame_skip_count;
@@ -461,9 +484,11 @@ are the board's pre-existing continuous-splash handoff, not this.
  };
  
  #define to_dpu_crtc_state(x) \
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_catalog.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_catalog.c
+index b2e92c2..5f9a4a3 100644
 --- a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_catalog.c
 +++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_catalog.c
-@@ -447,9 +447,37 @@
+@@ -459,9 +459,37 @@ static const struct dpu_dspp_sub_blks sdm845_dspp_sblk = {
  		.len = 0x40, .version = 0x10008},
  };
  
@@ -501,9 +526,11 @@ are the board's pre-existing continuous-splash handoff, not this.
  };
  
  /*************************************************************
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_catalog.h b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_catalog.h
+index f45faf8..cfd04c0 100644
 --- a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_catalog.h
 +++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_catalog.h
-@@ -82,6 +82,9 @@
+@@ -82,6 +82,9 @@ enum {
  enum {
  	DPU_DSPP_PCC = 0x1,
  	DPU_DSPP_GC,
@@ -513,7 +540,7 @@ are the board's pre-existing continuous-splash handoff, not this.
  	DPU_DSPP_MAX
  };
  
-@@ -335,6 +338,26 @@
+@@ -335,6 +338,26 @@ struct dpu_lm_sub_blks {
  struct dpu_dspp_sub_blks {
  	struct dpu_pp_blk pcc;
  	struct dpu_pp_blk gc;
@@ -540,7 +567,7 @@ are the board's pre-existing continuous-splash handoff, not this.
  };
  
  struct dpu_pingpong_sub_blks {
-@@ -752,6 +775,8 @@
+@@ -752,6 +775,8 @@ struct dpu_mdss_cfg {
  	u32 dspp_count;
  	const struct dpu_dspp_cfg *dspp;
  
@@ -549,9 +576,11 @@ are the board's pre-existing continuous-splash handoff, not this.
  	u32 cwb_count;
  	const struct dpu_cwb_cfg *cwb;
  
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_ctl.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_ctl.c
+index e8729fe..90ce9d3 100644
 --- a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_ctl.c
 +++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_ctl.c
-@@ -403,6 +403,15 @@
+@@ -403,6 +403,15 @@ static void dpu_hw_ctl_update_pending_flush_dspp_sub_blocks(
  	case DPU_DSPP_GC:
  		ctx->pending_dspp_flush_mask[dspp - DSPP_0] |= BIT(5);
  		break;
@@ -567,9 +596,11 @@ are the board's pre-existing continuous-splash handoff, not this.
  	default:
  		return;
  	}
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_dspp.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_dspp.c
+index 23dcbe1..b06da76 100644
 --- a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_dspp.c
 +++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_dspp.c
-@@ -115,6 +115,189 @@
+@@ -115,6 +115,189 @@ static void dpu_setup_dspp_gc(struct dpu_hw_dspp *ctx,
  	DPU_REG_WRITE(&ctx->hw, base, reg);
  }
  
@@ -759,6 +790,8 @@ are the board's pre-existing continuous-splash handoff, not this.
  /**
   * dpu_hw_dspp_init() - Initializes the DSPP hw driver object.
   * should be called once before accessing every DSPP.
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_dspp.h b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_dspp.h
+index b47b778..59cbb47 100644
 --- a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_dspp.h
 +++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_dspp.h
 @@ -5,6 +5,10 @@
@@ -772,7 +805,7 @@ are the board's pre-existing continuous-splash handoff, not this.
  struct dpu_hw_dspp;
  
  /**
-@@ -34,6 +38,9 @@
+@@ -34,6 +38,9 @@ struct dpu_hw_pcc_cfg {
  };
  
  #define DPU_GAMMA_LUT_SIZE 1024
@@ -782,7 +815,7 @@ are the board's pre-existing continuous-splash handoff, not this.
  #define PGC_TBL_LEN 512
  #define PGC_8B_ROUND BIT(0)
  
-@@ -72,6 +79,23 @@
+@@ -72,6 +79,23 @@ struct dpu_hw_dspp_ops {
  	 */
  	void (*setup_gc)(struct dpu_hw_dspp *ctx, struct dpu_hw_gc_lut *gc_lut);
  
@@ -806,7 +839,7 @@ are the board's pre-existing continuous-splash handoff, not this.
  };
  
  /**
-@@ -92,6 +116,11 @@
+@@ -92,6 +116,11 @@ struct dpu_hw_dspp {
  
  	/* Ops */
  	struct dpu_hw_dspp_ops ops;
@@ -818,7 +851,7 @@ are the board's pre-existing continuous-splash handoff, not this.
  };
  
  /**
-@@ -108,5 +137,10 @@
+@@ -108,5 +137,10 @@ struct dpu_hw_dspp *dpu_hw_dspp_init(struct drm_device *dev,
  				     const struct dpu_dspp_cfg *cfg,
  				     void __iomem *addr);
  
@@ -829,7 +862,10 @@ are the board's pre-existing continuous-splash handoff, not this.
 +
  #endif /*_DPU_HW_DSPP_H */
  
---- a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_reg_dma.c
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_reg_dma.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_reg_dma.c
+new file mode 100644
+index 0000000..6c104d0
+--- /dev/null
 +++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_reg_dma.c
 @@ -0,0 +1,388 @@
 +// SPDX-License-Identifier: GPL-2.0-only
@@ -1220,7 +1256,10 @@ are the board's pre-existing continuous-splash handoff, not this.
 +	for (i = CTL_0; i < CTL_MAX; i++)
 +		dpu_reg_dma_buf_free(dma, &dma->last_cmd[i]);
 +}
---- a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_reg_dma.h
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_reg_dma.h b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_reg_dma.h
+new file mode 100644
+index 0000000..d52d3e9
+--- /dev/null
 +++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_reg_dma.h
 @@ -0,0 +1,82 @@
 +/* SPDX-License-Identifier: GPL-2.0-only */
@@ -1305,17 +1344,19 @@ are the board's pre-existing continuous-splash handoff, not this.
 +int dpu_reg_dma_last_cmd_sb(struct dpu_reg_dma *dma, int ctl_idx);
 +
 +#endif /* _DPU_HW_REG_DMA_H */
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c
+index da3556e..bab5090 100644
 --- a/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c
 +++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c
-@@ -34,6 +34,7 @@
- #include "dpu_hw_intf.h"
+@@ -33,6 +33,7 @@
+ #include "dpu_formats.h"
  #include "dpu_hw_vbif.h"
  #include "dpu_kms.h"
 +#include "dpu_hw_dspp.h"
  #include "dpu_plane.h"
  #include "dpu_vbif.h"
  #include "dpu_writeback.h"
-@@ -98,6 +99,43 @@
+@@ -97,6 +98,43 @@ static int _dpu_danger_signal_status(struct seq_file *s,
  	return 0;
  }
  
@@ -1359,7 +1400,7 @@ are the board's pre-existing continuous-splash handoff, not this.
  static int dpu_debugfs_danger_stats_show(struct seq_file *s, void *v)
  {
  	return _dpu_danger_signal_status(s, true);
-@@ -307,6 +345,7 @@
+@@ -306,6 +344,7 @@ static int dpu_kms_debugfs_init(struct msm_kms *kms, struct drm_minor *minor)
  	debugfs_create_x32(DPU_DEBUGFS_HWMASKNAME, 0600, entry, p);
  
  	dpu_debugfs_danger_init(dpu_kms, entry);
@@ -1367,7 +1408,7 @@ are the board's pre-existing continuous-splash handoff, not this.
  	dpu_debugfs_vbif_init(dpu_kms, entry);
  	dpu_debugfs_core_irq_init(dpu_kms, entry);
  	dpu_debugfs_sspp_init(dpu_kms, entry);
-@@ -887,11 +926,27 @@
+@@ -886,11 +925,27 @@ static int _dpu_kms_drm_obj_init(struct dpu_kms *dpu_kms)
  	return 0;
  }
  
@@ -1395,9 +1436,9 @@ are the board's pre-existing continuous-splash handoff, not this.
  	_dpu_kms_mmu_destroy(dpu_kms);
  
  	dpu_kms->hw_vbif = NULL;
-@@ -1151,6 +1206,63 @@
- 	}
- }
+@@ -1135,6 +1190,63 @@ unsigned long dpu_kms_get_clk_rate(struct dpu_kms *dpu_kms, char *clock_name)
+ 
+ #define	DPU_PERF_DEFAULT_MAX_CORE_CLK_RATE	412500000
  
 +/* The LUTDMA engine sits in the MDSS register space outside "mdp"; the DT names it */
 +static int _dpu_kms_reg_dma_init(struct dpu_kms *dpu_kms)
@@ -1459,7 +1500,7 @@ are the board's pre-existing continuous-splash handoff, not this.
  static int dpu_kms_hw_init(struct msm_kms *kms)
  {
  	struct dpu_kms *dpu_kms;
-@@ -1235,6 +1347,11 @@
+@@ -1214,6 +1326,11 @@ static int dpu_kms_hw_init(struct msm_kms *kms)
  		goto err_pm_put;
  	}
  
@@ -1471,7 +1512,7 @@ are the board's pre-existing continuous-splash handoff, not this.
  	struct dpu_hw_vbif *hw;
  	const struct dpu_vbif_cfg *vbif = dpu_kms->catalog->vbif;
  
-@@ -1485,6 +1602,7 @@
+@@ -1464,6 +1581,7 @@ static int __maybe_unused dpu_runtime_resume(struct device *dev)
  	}
  
  	dpu_vbif_init_memtypes(dpu_kms);
@@ -1479,6 +1520,8 @@ are the board's pre-existing continuous-splash handoff, not this.
  
  	drm_for_each_encoder(encoder, ddev)
  		dpu_encoder_virt_runtime_resume(encoder);
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.h b/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.h
+index e39831a..5c73657 100644
 --- a/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.h
 +++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.h
 @@ -21,6 +21,7 @@
@@ -1489,7 +1532,7 @@ are the board's pre-existing continuous-splash handoff, not this.
  #include "dpu_rm.h"
  #include "dpu_core_perf.h"
  
-@@ -83,6 +84,7 @@
+@@ -83,6 +84,7 @@ struct dpu_kms {
  
  	struct dpu_hw_vbif *hw_vbif;
  	struct dpu_hw_mdp *hw_mdp;
@@ -1497,13 +1540,3 @@ are the board's pre-existing continuous-splash handoff, not this.
  
  	bool has_danger_ctrl;
  
---- a/drivers/gpu/drm/msm/Makefile
-+++ b/drivers/gpu/drm/msm/Makefile
-@@ -89,6 +89,7 @@
- 	disp/dpu1/dpu_hw_sspp.o \
- 	disp/dpu1/dpu_hw_sspp_v13.o \
- 	disp/dpu1/dpu_hw_dspp.o \
-+	disp/dpu1/dpu_hw_reg_dma.o \
- 	disp/dpu1/dpu_hw_merge3d.o \
- 	disp/dpu1/dpu_hw_top.o \
- 	disp/dpu1/dpu_hw_util.o \

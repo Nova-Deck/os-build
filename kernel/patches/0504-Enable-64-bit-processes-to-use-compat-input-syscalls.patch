@@ -20,7 +20,7 @@ Signed-off-by: Sergio Lopez <slp@redhat.com>
  5 files changed, 29 insertions(+), 4 deletions(-)
 
 diff --git a/drivers/input/input-compat.c b/drivers/input/input-compat.c
-index a5043193e..a3c0c7012 100644
+index a504319..a3c0c70 100644
 --- a/drivers/input/input-compat.c
 +++ b/drivers/input/input-compat.c
 @@ -15,7 +15,7 @@
@@ -51,7 +51,7 @@ index a5043193e..a3c0c7012 100644
  
  		if (size != sizeof(struct ff_effect_compat))
 diff --git a/drivers/input/input-compat.h b/drivers/input/input-compat.h
-index 99c87ceb9..e0e078306 100644
+index 99c87ce..e0e0783 100644
 --- a/drivers/input/input-compat.h
 +++ b/drivers/input/input-compat.h
 @@ -53,7 +53,7 @@ struct ff_effect_compat {
@@ -64,11 +64,11 @@ index 99c87ceb9..e0e078306 100644
  }
  
 diff --git a/include/linux/sched.h b/include/linux/sched.h
-index d41e7a8f9..2f53bcc74 100644
+index 9341d64..7158ad6 100644
 --- a/include/linux/sched.h
 +++ b/include/linux/sched.h
-@@ -1539,6 +1539,11 @@ struct task_struct {
- 	/* Cache for current->cgroups->memcg->objcg lookups: */
+@@ -1567,6 +1567,11 @@ struct task_struct {
+ 	/* Cache for current->cgroups->memcg->nodeinfo[nid]->objcg lookups: */
  	struct obj_cgroup		*objcg;
  #endif
 +	/*
@@ -80,7 +80,7 @@ index d41e7a8f9..2f53bcc74 100644
  #ifdef CONFIG_BLK_CGROUP
  	struct gendisk			*throttle_disk;
 diff --git a/include/uapi/linux/prctl.h b/include/uapi/linux/prctl.h
-index b6ec6f693..55ca31b52 100644
+index b6ec6f6..55ca31b 100644
 --- a/include/uapi/linux/prctl.h
 +++ b/include/uapi/linux/prctl.h
 @@ -416,4 +416,9 @@ struct prctl_mm_map {
@@ -94,7 +94,7 @@ index b6ec6f693..55ca31b52 100644
 +
  #endif /* _LINUX_PRCTL_H */
 diff --git a/kernel/sys.c b/kernel/sys.c
-index 62e842055..6b2c92de2 100644
+index 35b538b..9250871 100644
 --- a/kernel/sys.c
 +++ b/kernel/sys.c
 @@ -2907,6 +2907,21 @@ SYSCALL_DEFINE5(prctl, int, option, unsigned long, arg2, unsigned long, arg3,

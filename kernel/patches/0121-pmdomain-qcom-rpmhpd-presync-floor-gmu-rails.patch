@@ -12,6 +12,7 @@ what the GMU needs for its first ramp.
 
 ---
 diff --git a/drivers/pmdomain/qcom/rpmhpd.c b/drivers/pmdomain/qcom/rpmhpd.c
+index 63120e7..68daecc 100644
 --- a/drivers/pmdomain/qcom/rpmhpd.c
 +++ b/drivers/pmdomain/qcom/rpmhpd.c
 @@ -42,6 +42,7 @@
@@ -28,7 +29,7 @@ diff --git a/drivers/pmdomain/qcom/rpmhpd.c b/drivers/pmdomain/qcom/rpmhpd.c
  	bool            skip_retention_level;
 +	bool		presync_floor;
  };
-
+ 
  struct rpmhpd_desc {
 @@ -120,6 +122,8 @@ static struct rpmhpd gbx = {
  static struct rpmhpd gfx = {
@@ -37,19 +38,19 @@ diff --git a/drivers/pmdomain/qcom/rpmhpd.c b/drivers/pmdomain/qcom/rpmhpd.c
 +	.presync_floor = true,
 +	.skip_retention_level = true,
  };
-
- static struct rpmhpd lcx = {
-@@ -225,6 +229,8 @@ static struct rpmhpd qphy = {
+ 
+ static struct rpmhpd gfx1 = {
+@@ -235,6 +239,8 @@ static struct rpmhpd qphy = {
  static struct rpmhpd gmxc = {
  	.pd = { .name = "gmxc", },
  	.res_name = "gmxc.lvl",
 +	.presync_floor = true,
 +	.skip_retention_level = true,
  };
-
+ 
  /* Eliza RPMH powerdomains */
-@@ -936,6 +942,10 @@ static int rpmhpd_aggregate_corner(struct rpmhpd *pd, unsigned int corner)
-
+@@ -971,6 +977,10 @@ static int rpmhpd_aggregate_corner(struct rpmhpd *pd, unsigned int corner)
+ 
  	if (pd->state_synced) {
  		to_active_sleep(pd, corner, &this_active_corner, &this_sleep_corner);
 +	} else if (pd->presync_floor) {

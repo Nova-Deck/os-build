@@ -1,8 +1,8 @@
 diff --git a/drivers/gpu/drm/panel/Kconfig b/drivers/gpu/drm/panel/Kconfig
-index 1d99a9410b4e..456b1f643d80 100644
+index fd84cd1..89ad88e 100644
 --- a/drivers/gpu/drm/panel/Kconfig
 +++ b/drivers/gpu/drm/panel/Kconfig
-@@ -1215,6 +1215,15 @@ config DRM_PANEL_VISIONOX_VTDR6130
+@@ -1417,6 +1417,15 @@ config DRM_PANEL_VISIONOX_VTDR6130
  	  Say Y here if you want to enable support for Visionox
  	  VTDR6130 1080x2400 AMOLED DSI panel.
  
@@ -19,20 +19,20 @@ index 1d99a9410b4e..456b1f643d80 100644
  	tristate "Widechips WS2401 DPI panel driver"
  	depends on SPI && GPIOLIB
 diff --git a/drivers/gpu/drm/panel/Makefile b/drivers/gpu/drm/panel/Makefile
-index 2421cdcfe7d5..34ac0cc04245 100644
+index 21789dd..3f13b37 100644
 --- a/drivers/gpu/drm/panel/Makefile
 +++ b/drivers/gpu/drm/panel/Makefile
-@@ -119,6 +119,7 @@ obj-$(CONFIG_DRM_PANEL_VISIONOX_G2647FB105) += panel-visionox-g2647fb105.o
+@@ -136,6 +136,7 @@ obj-$(CONFIG_DRM_PANEL_VISIONOX_G2647FB105) += panel-visionox-g2647fb105.o
  obj-$(CONFIG_DRM_PANEL_VISIONOX_RM69299) += panel-visionox-rm69299.o
  obj-$(CONFIG_DRM_PANEL_VISIONOX_RM692E5) += panel-visionox-rm692e5.o
  obj-$(CONFIG_DRM_PANEL_VISIONOX_VTDR6130) += panel-visionox-vtdr6130.o
 +obj-$(CONFIG_DRM_PANEL_VISIONOX_VTDR6130_COG) += panel-visionox-vtdr6130-cog.o
  obj-$(CONFIG_DRM_PANEL_VISIONOX_R66451) += panel-visionox-r66451.o
  obj-$(CONFIG_DRM_PANEL_WIDECHIPS_WS2401) += panel-widechips-ws2401.o
- obj-$(CONFIG_DRM_PANEL_XINPENG_XPP055C272) += panel-xinpeng-xpp055c272.o
+ obj-$(CONFIG_DRM_PANEL_AYANEO_WT0600_2K) += panel-wt0600-2k.o
 diff --git a/drivers/gpu/drm/panel/panel-visionox-vtdr6130-cog.c b/drivers/gpu/drm/panel/panel-visionox-vtdr6130-cog.c
 new file mode 100644
-index 000000000000..010a19ea477c
+index 0000000..798f31f
 --- /dev/null
 +++ b/drivers/gpu/drm/panel/panel-visionox-vtdr6130-cog.c
 @@ -0,0 +1,499 @@

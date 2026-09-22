@@ -51,10 +51,10 @@ session stack reads actual_brightness.
  create mode 100644 drivers/gpu/drm/panel/panel-chipone-icna35xx.c
 
 diff --git a/drivers/gpu/drm/panel/Kconfig b/drivers/gpu/drm/panel/Kconfig
-index 3bcf710414dd..cc2b93322628 100644
+index 2ff01a2..bcdd18b 100644
 --- a/drivers/gpu/drm/panel/Kconfig
 +++ b/drivers/gpu/drm/panel/Kconfig
-@@ -115,6 +115,17 @@ config DRM_PANEL_BOE_XM91080G
+@@ -156,6 +156,17 @@ config DRM_PANEL_BOE_XM91080G
  	  Say Y if you want to enable support for panels based on the
  	  Xm-Plus XM91080G controller.
  
@@ -71,12 +71,12 @@ index 3bcf710414dd..cc2b93322628 100644
 +
  config DRM_PANEL_EBBG_FT8719
  	tristate "EBBG FT8719 panel driver"
- 	depends on OF
+ 	depends on GPIOLIB
 diff --git a/drivers/gpu/drm/panel/Makefile b/drivers/gpu/drm/panel/Makefile
-index 4b64459f88b5..339a5cb9f31b 100644
+index a5b1bb9..2da6262 100644
 --- a/drivers/gpu/drm/panel/Makefile
 +++ b/drivers/gpu/drm/panel/Makefile
-@@ -10,6 +10,7 @@ obj-$(CONFIG_DRM_PANEL_BOE_TH101MB31UIG002_28A) += panel-boe-th101mb31ig002-28a.
+@@ -13,6 +13,7 @@ obj-$(CONFIG_DRM_PANEL_BOE_TH101MB31UIG002_28A) += panel-boe-th101mb31ig002-28a.
  obj-$(CONFIG_DRM_PANEL_BOE_TV101WUM_LL2) += panel-boe-tv101wum-ll2.o
  obj-$(CONFIG_DRM_PANEL_BOE_TV101WUM_NL6) += panel-boe-tv101wum-nl6.o
  obj-$(CONFIG_DRM_PANEL_BOE_XM91080G) += panel-boe-xm91080g.o
@@ -86,7 +86,7 @@ index 4b64459f88b5..339a5cb9f31b 100644
  obj-$(CONFIG_DRM_PANEL_LVDS) += panel-lvds.o
 diff --git a/drivers/gpu/drm/panel/panel-chipone-icna35xx.c b/drivers/gpu/drm/panel/panel-chipone-icna35xx.c
 new file mode 100644
-index 000000000000..0f9c07ce2d9d
+index 0000000..0f9c07c
 --- /dev/null
 +++ b/drivers/gpu/drm/panel/panel-chipone-icna35xx.c
 @@ -0,0 +1,823 @@
@@ -914,6 +914,3 @@ index 000000000000..0f9c07ce2d9d
 +MODULE_DESCRIPTION("DRM driver for Chipone ICNA35XX based MIPI DSI panels");
 +MODULE_LICENSE("GPL");
 \ No newline at end of file
--- 
-2.34.1
-

@@ -32,7 +32,8 @@ Under `archlinux-deckard/archlinux/`, only some directory names are snapshots:
 | `main`, `dev`, `builds`, `pipeline`, `tmp` | moving CI aliases | never |
 | `mash-YYYYMMDD` | first revision of a snapshot, AND the alias that follows `.1`, `.2` … | yes — the lock is the real pin |
 | `mash-YYYYMMDD.N` | a frozen revision | yes, preferred |
-| `*.pvt`, `*-pvt` | unpublished meaning | refused |
+| `mash-YYYYMMDD.N.pvt` | frozen revision of a second publishing line; the unsuffixed alias follows the newest one (`mash-20260305` ≡ `.1.pvt`, `mash-20260202` ≡ `.2.pvt`, byte-identical dbs + rootfs, 2026-09-23) | refused — we pin the alias |
+| `mash-YYYYMMDD-pvt` | alias of that line (`mash-20251118-pvt` ≡ `.3.pvt`) | refused |
 
 `build/lib-pins.sh` enforces this table for every stage.
 

@@ -192,7 +192,7 @@ BUILDER="$(pins_builder_desc)"
 # these classes are pinned by genuinely different mechanisms:
 #   snapshot/prebuilt  the FILE — the exact bytes fetched and installed or placed.
 #   novadeck           the SOURCES — packages/inputhash.sh over that package's source.pin +
-#     patches + local PKGBUILD. These are built here and are not bit-reproducible, so an artifact
+#     patches + local PKGBUILD + build/builder.pin. These are built here and are not bit-reproducible, so an artifact
 #     hash would move on every rebuild from unchanged inputs. Rows sharing a hash come from one
 #     split PKGBUILD (mesa emits three).
 # There is no 'stripped' class here: the installer keeps its pacman and is never sealed.

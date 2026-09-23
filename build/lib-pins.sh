@@ -32,8 +32,8 @@ pin_line() { grep -vE '^[[:space:]]*(#|$)' "$1" | tail -1; }
 #     FILE and rootfs/fetchlock.sh verifies every one: a republish fails the build loudly, it cannot
 #     drift into an image. Prefer a .N revision whenever one exists.
 #   - `main`, `dev`, `builds`, `pipeline`, `tmp` are moving CI aliases; nothing pins them.
-#   - `.pvt` / `-pvt` revisions are refused: their meaning is unpublished, and we do not build
-#     from bytes whose provenance we cannot state.
+#   - `.pvt` / `-pvt` names are refused: they are a second publishing line whose newest revision
+#     the unsuffixed alias already points at (see build/snapshot.pin), so we pin the alias.
 pins_snapshot() {
   local f="$ROOT/build/snapshot.pin" s name
   [ -f "$f" ] || die "no snapshot pin: $f"

@@ -18,7 +18,7 @@
 #
 #   snapshot  installed from the pinned repo revision; hash = the .pkg.tar.zst we installed
 #   novadeck  built from source by packages/build-overlay.sh; hash = packages/inputhash.sh over
-#             the package's COMMITTED SOURCES (source.pin + patches + local PKGBUILD), NOT the
+#             the package's COMMITTED SOURCES (source.pin + patches + local PKGBUILD + builder pin), NOT the
 #             built artifact. Our overlay builds are not bit-reproducible, so an artifact hash
 #             here moved on every rebuild from identical inputs: it only ever verified on the
 #             machine that last ran `make relock`, said "you rebuilt" rather than "the inputs
@@ -219,7 +219,7 @@ builder="$(pins_builder_desc)"
   echo "# genuinely different mechanisms:"
   echo "#   snapshot/stripped/prebuilt  the FILE — the exact bytes fetched and installed."
   echo "#   novadeck                    the SOURCES — packages/inputhash.sh over that package's"
-  echo "#     source.pin + patches + local PKGBUILD. These are built here and are not"
+  echo "#     source.pin + patches + local PKGBUILD + build/builder.pin. These are built here and are not"
   echo "#     bit-reproducible, so an artifact hash would move on every rebuild from unchanged"
   echo "#     inputs. Rows sharing a hash come from one split PKGBUILD (mesa emits three)."
   echo "# 'stripped' rows are installed like 'snapshot' ones and then deleted from the release"

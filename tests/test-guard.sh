@@ -188,5 +188,43 @@ else
   bad "assertion 11 did not fail on a tree with no /etc/passwd -- it can pass vacuously: $out"
 fi
 
+# ---- assertion 8: the id pin, in the direction the name-lookup loop cannot see --------------------
+# A package that starts shipping `g foo -` gets a free id in the allocated band and passes a check
+# that only looks up names the pin already knows. systemd 259's `g empower -` was exactly that.
+guard8() { bash "$GUARD" "$1" 2>&1 | sed -n '/^  8\. system UID\/GID allocation$/,/^  9\. /p'; }
+idstage() {  # idstage <dir> <extra group line>
+  mkstage "$1"
+  install -d "$1/usr/lib/sysusers.d"
+  printf 'g adm 999 -\nu sddm 967 "SDDM" -\n' >"$1/usr/lib/sysusers.d/01-novadeck-enforce-ids.conf"
+  printf 'sddm:x:967:967::/:/bin/false\n' >>"$1/etc/passwd"
+  printf 'adm:x:999:\nsddm:x:967:\n%s' "$2" >>"$1/etc/group"
+}
+
+echo "assertion 8 refuses an allocated id the pin does not name"
+
+stage="$TMP/ids-clean"; idstage "$stage" ""
+out="$(guard8 "$stage")"
+if grep -q '2 pinned system ids match' <<<"$out"; then
+  ok "a tree whose allocated band is fully pinned passes"
+else
+  bad "a fully pinned tree did not pass assertion 8: $out"
+fi
+
+stage="$TMP/ids-unpinned"; idstage "$stage" $'empower:x:979:\n'
+out="$(guard8 "$stage")"
+if grep -q "'empower' was allocated 979" <<<"$out"; then
+  ok "an unpinned group in 900-999 fails (the systemd 259 empower case)"
+else
+  bad "an unpinned group allocated in the band passed assertion 8: $out"
+fi
+
+stage="$TMP/ids-fixed"; idstage "$stage" $'dbus:x:81:\n'
+out="$(guard8 "$stage")"
+if grep -q '2 pinned system ids match' <<<"$out"; then
+  ok "a package-fixed id below the band (dbus 81) is not asked to be pinned"
+else
+  bad "a package-fixed low id failed assertion 8: $out"
+fi
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [[ $FAIL -eq 0 ]]

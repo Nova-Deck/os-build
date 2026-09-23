@@ -706,6 +706,21 @@ else
     ids_checked=$((ids_checked + 1))
   done < <(grep -vE '^[[:space:]]*(#|$)' "$IDPIN")
 
+  # The other direction: every account sysusers ALLOCATED must be pinned. The loop above only checks
+  # names the pin already knows, so a package that starts shipping `u foo -` / `g foo -` gets a free
+  # id in the range and passes silently — and moves the next time the set changes. That is what
+  # systemd 259's `g empower -` did (and rtkit dropping its fixed 133): caught by the relock, not here.
+  # 900-999 is the band sysusers counts down through; fixed package ids (dbus 81, polkitd 102) sit below.
+  pinned_names=" $(grep -vE '^[[:space:]]*(#|$)' "$IDPIN" | awk '$1 ~ /^[ug]$/ { printf "%s ", $2 }')"
+  for which in passwd group; do
+    case "$which" in passwd) file="$PASSWD" ;; group) file="$GROUP" ;; esac
+    while IFS=: read -r name _pw id _rest; do
+      case "$pinned_names" in *" $name "*) continue ;; esac
+      ids_ok=0
+      bad "'$name' was allocated $id in /etc/$which by sysusers but the pin does not name it — pin it at the bottom of the range, or its id follows the package set"
+    done < <(awk -F: '$3 >= 900 && $3 < 1000' "$file")
+  done
+
   if [ "$ids_checked" = 0 ]; then
     ids_ok=0
     bad "the id pin declares no u/g entries — it is a comment, not a pin"

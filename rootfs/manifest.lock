@@ -197,6 +197,7 @@ libiio 0.26-5 aarch64 snapshot 0ec3a5a139bf525be5d617b5ce7e99dfe4f5edad9c4c2649c
 libimobiledevice 1.4.0-2 aarch64 snapshot 3faa17bd18581d90c6f31d7b74c9b8c8334216a9f0337d946e8851b1c179450b
 libimobiledevice-glue 1.3.2-1 aarch64 snapshot e2610b399d1350e59eb9b837472df2f30975d539e48372babff2976c2216be0c
 libinput 1.30.1-1 aarch64 snapshot 6d456f6196828f451b957ccd89736533ca5e5d5d9eca1f50a5dd8ed2c1a12b82
+libinput-tools 1.30.1-1.1 aarch64 novadeck 82eb0e74cdc57fd92c2872d41a7273efe78748653298e9d2ab974ee60bca1d0d
 libjpeg-turbo 3.1.3-1 aarch64 snapshot e0ac96efcf7bddefe7a46211744e8cc7382fbcfeaab32ea93e4b723e5f767cf4
 libjxl 0.11.2-2 aarch64 snapshot 0a59c987dfca19fddb7c7244163f30feff3e3178ad9dc815d4bf1ec4c509dbc1
 libksba 1.6.8-1 aarch64 snapshot f85c37ed33fa4132a4240ffa103b187c850dc056cebde744537d4ff95ac85050

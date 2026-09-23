@@ -1,0 +1,19 @@
+# libinput-tools — built FROM SOURCE via a novadeck-owned PKGBUILD (packages/libinput/PKGBUILD):
+# the snapshot's own libinput 1.30.1 recipe, reduced to the CLI with no debug GUI. See the PKGBUILD
+# header for why (Arch's split libinput-tools drags gtk4 + gstreamer in for one GUI tool) and for
+# every deviation.
+#
+# This is the "local PKGBUILD" form (like packages/rauc, packages/gtk2): build-overlay.sh uses the
+# checked-in recipe; makepkg clones the upstream tag the PKGBUILD names.
+#
+# To bump: follow the snapshot's libinput. The PKGBUILD's `libinput=$pkgver` dependency makes a
+# relock fail the moment they disagree, so a snapshot bump that moves libinput tells you.
+#
+# Fields:
+#   name           pkgname (must match the PKGBUILD); also the work/ build-dir + repo entry
+#   pkgbuild_local path (relative to this dir) to the checked-in PKGBUILD to build
+#   pkgrel_suffix  numeric suffix appended to the PKGBUILD's pkgrel (N -> N.<suffix>) so pacman
+#                  prefers our build on later upgrades. Integer only.
+name: libinput-tools
+pkgbuild_local: PKGBUILD
+pkgrel_suffix: 1

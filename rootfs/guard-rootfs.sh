@@ -643,6 +643,27 @@ if [ "$bootdisk_ok" = 1 ]; then
 fi
 
 # ------------------------------------------------------------------------------------------
+# 7b. The power-key path has the CLI it executes.
+#
+# novadeck-powerbuttond (key -> Steam) and novadeck-suspend (arming the wake) both run
+# `libinput debug-events`. Neither can fail loudly without it: the forwarder crash-loops under
+# Restart= and the key simply does nothing, and the suspend engine resumes at once rather than
+# sleep with no way to wake. The CLI is a package boundary that has already moved under us once —
+# Arch split it into libinput-tools at 1.30 (mash-20260305) and the first image off that snapshot
+# shipped with neither (HW, Pocket ACE, 2026-09-23).
+# ------------------------------------------------------------------------------------------
+echo "  7b. power-key path"
+pk_ok=1
+for f in usr/bin/libinput usr/lib/libinput/libinput-debug-events \
+         usr/bin/novadeck-powerbuttond usr/bin/novadeck-suspend; do
+  if [ ! -x "$STAGE/$f" ]; then
+    pk_ok=0
+    bad "/$f is missing or not executable — the power key cannot suspend or wake the device"
+  fi
+done
+[ "$pk_ok" = 1 ] && echo "    ok  libinput debug-events + powerbuttond + suspend engine present and executable"
+
+# ------------------------------------------------------------------------------------------
 # 8. The system UID/GID allocation matches the pin.
 #
 # /usr/lib/sysusers.d/01-novadeck-enforce-ids.conf declares an id for every name in the range

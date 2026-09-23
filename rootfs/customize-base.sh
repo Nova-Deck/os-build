@@ -116,6 +116,10 @@ BOOTSTRAP_PKGS=(base)
 # is UI-incomplete and updates itself). curl/tar/xz are already in the base.
 # openal: a HOST system lib the native arm64 Steam client links (libopenal.so.1); it IS in the holo
 # repo, so install it.
+# libinput-tools: the `libinput` CLI. novadeck-powerbuttond and novadeck-suspend read the power key
+# through `libinput debug-events`; without it the key does nothing and a sleep resumes at once.
+# Arch split the CLI out of `libinput` at 1.30 into a package that drags gtk4 in for its debug GUI,
+# so this one is OUR build without the GUI (packages/libinput/), installed from the overlay.
 # gtk2: steamui.so links libgtk-x11-2.0.so.0. holo has NO gtk2 (SteamOS itself ships none — verified
 # against the SteamOS 3.8.10 rootfs), so we BUILD it from source as a novadeck overlay package
 # (packages/gtk2/) and install it HERE from that overlay — the client resolves its UI libs against
@@ -228,7 +232,7 @@ BOOTSTRAP_PKGS=(base)
 # D-Bus activated -- upower ships org.freedesktop.UPower.service, so Steam's own call starts it and
 # it needs no preset and no build-time .wants symlink. Resolves from the pinned snapshot's `extra`
 # (upower 1.90.10-1, 975K installed).
-PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-tools mesa gamescope seatd sddm mangohud lsfg-vk fex-emu bluez bluez-utils networkmanager alsa-ucm-conf pipewire wireplumber pipewire-pulse pipewire-alsa rtkit unzip openal gtk2 ffmpeg e2fsprogs xorg-xwayland lsof noto-fonts noto-fonts-cjk noto-fonts-emoji python python-gobject scx-scheds rauc btrfs-progs rsync earlyoom zram-generator udisks2 f3 upower)
+PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-tools mesa gamescope seatd sddm mangohud lsfg-vk fex-emu bluez bluez-utils networkmanager alsa-ucm-conf pipewire wireplumber pipewire-pulse pipewire-alsa rtkit unzip openal gtk2 ffmpeg e2fsprogs xorg-xwayland lsof noto-fonts noto-fonts-cjk noto-fonts-emoji python python-gobject scx-scheds rauc btrfs-progs rsync earlyoom zram-generator udisks2 f3 upower libinput-tools)
 
 # Dev-only packages — installed ONLY under NOVADECK_DEV=1, NEVER in a release base.
 # On-device bring-up tools: evtest reads raw /dev/input events; usbutils provides lsusb.

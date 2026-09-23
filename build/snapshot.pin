@@ -35,4 +35,6 @@
 #   core.db            45288 bytes  2026-09-15  ETag 6aa963ee-b0e8
 #   system.rootfs.zst  331490479 bytes  2026-09-15  ETag 6aa96e54-13c224af
 # A different ETag on either means the alias moved to a .1: re-pin to that revision.
+# .github/workflows/upstream-watch.yml (deckard-base) reads the core.db ETag from the line above
+# and opens an issue when the served one differs — keep the `core.db … ETag <value>` shape.
 https://holo-packages.steamos.cloud/archlinux-deckard/archlinux/mash-20260305

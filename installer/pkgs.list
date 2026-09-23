@@ -87,7 +87,7 @@ vulkan-freedreno
 wayland
 gamescope
 seatd
-python           # installer/ui and its three model files; the wheel above is cp313, so this pins 3.13
+python           # installer/ui and its three model files; the wheel above is cp314, so this pins 3.14
 
 # ---- InputPlumber's runtime dependency -------------------------------------------------------------
 # InputPlumber itself is not a repo package: it is packages/inputplumber/prebuilt.pin, a sha256'd

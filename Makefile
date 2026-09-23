@@ -467,6 +467,7 @@ test: verify-lock ## Run the offline bootctl/post-install/boot-disk/pairingd/qui
 	bash $(TESTS_DIR)/test-install.sh
 	bash $(TESTS_DIR)/test-ui.sh
 	bash $(TESTS_DIR)/test-mkroot.sh
+	bash $(TESTS_DIR)/test-lib-pins.sh
 	bash $(TESTS_DIR)/test-verify-lock.sh
 	bash $(TESTS_DIR)/test-mkimage.sh
 	bash $(TESTS_DIR)/test-graphics-provider.sh
@@ -585,7 +586,7 @@ steam-seed-artifact: $(SEED_ARTIFACT) ## Pack work/steam-seed -> out/steam-seed/
 # costs ~4h emulated on a dev box, but on the native aarch64 runners CI uses it costs ~34 minutes
 # for the whole set, which is not worth a registry, a pin format and a bot with write access to
 # main. See .github/workflows/overlay.yml for the per-package measurements.
-$(OVERLAY_DB): build/base-devel.digest $(OVERLAY_PINS) $(OVERLAY_PATCHES) $(OVERLAY_PKGBUILDS)
+$(OVERLAY_DB): build/builder.pin build/snapshot.pin $(OVERLAY_PINS) $(OVERLAY_PATCHES) $(OVERLAY_PKGBUILDS)
 	packages/build-overlay.sh
 
 # Advance .overlay.stamp only when the overlay repo's CONTENT actually changed, and do it in THIS
@@ -608,9 +609,9 @@ $(OVERLAY_STAMP): $(OVERLAY_DB)
 # listed, the stamp short-circuits `make base` and editing that input is silently a no-op --
 # the script's own reuse check never gets to run, because make never invokes the script.
 #
-# build/base-devel.digest pins the arm64 image the bootstrap EXECUTES in (Phase 4c; it contributes
+# build/builder.pin pins the arm64 image the bootstrap EXECUTES in (Phase 4c; it contributes
 # no files to the root, but it is the pacman that lays them down). build/snapshot.pin selects the
-# package-repo revision every row is installed from.
+# package-repo revision every row is installed from. build/lib-pins.sh validates both.
 #
 # rootfs/manifest.lock is the strongest input: under the default LOCKED mode customize-base.sh
 # installs exactly the package FILES it declares (Phase 4a step 2), so editing the lock changes
@@ -633,7 +634,7 @@ $(OVERLAY_STAMP): $(OVERLAY_DB)
 # place. customize-base.sh records `dev:1` in its own reuse key for a dev bootstrap, so the built
 # tree states its own mode: assert that against the mode we asked for. This guards BOTH directions,
 # which nothing downstream does -- guard-rootfs.sh only ever runs on a release build.
-$(BASE_STAMP): build/base-devel.digest build/snapshot.pin $(ROOTFS_DIR)/manifest.lock $(ROOTFS_DIR)/fetchlock.sh \
+$(BASE_STAMP): build/builder.pin build/snapshot.pin build/lib-pins.sh $(ROOTFS_DIR)/manifest.lock $(ROOTFS_DIR)/fetchlock.sh \
                $(ROOTFS_DIR)/conf/pacman.conf $(ROOTFS_DIR)/conf/os-release $(ROOTFS_DIR)/customize-base.sh $(PREBUILT_PINS) \
                $(BASE_MODE_STAMP)
 	$(ROOTFS_DIR)/customize-base.sh

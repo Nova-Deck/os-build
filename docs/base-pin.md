@@ -1,75 +1,87 @@
 # Upstream base pinning
 
-novadeck layers on Valve/Collabora's official **aarch64 Arch Linux port**, not a
-from-scratch userspace rebuild. This document records *what* we pin and *how*.
+novadeck layers on Valve's official **Steam Frame ("deckard") aarch64 Arch Linux port** — the
+same Collabora-built "mash" lineage the public `holo-core-aarch64-preview` was a frozen mirror
+of — not on a from-scratch userspace rebuild. This document records *what* we pin and *how*.
 
 ## Source of truth
 
 | Item | Value |
 |---|---|
-| Reference repo | `https://gitlab.steamos.cloud/holo/holo-core-aarch64-preview` |
-| Binary pacman repo | `https://holo-packages.steamos.cloud/holo-core-aarch64-preview` |
-| Docker base | `registry.gitlab.steamos.cloud/holo/holo-core-aarch64-preview/base` |
-| Docker base-devel | `registry.gitlab.steamos.cloud/holo/holo-core-aarch64-preview/base-devel` |
-| Arch snapshot | `2025-11-18` — gitref `mash-squashed_2025-11-18.3` |
-| Snapshot ceil id | `a4790e7b6da0714e7ddd523658fa1a4486ce8f18` |
-| Snapshot floor id | `6eaea65976f149fda9380358ddefc146826b1e51` |
+| Binary pacman repo | `https://holo-packages.steamos.cloud/archlinux-deckard/archlinux/<snapshot>/$repo/os/$arch` |
+| Snapshot index | `https://holo-packages.steamos.cloud/archlinux-deckard/archlinux/` |
+| Pinned snapshot | [`build/snapshot.pin`](../build/snapshot.pin) |
+| Builder image | that snapshot's `system.rootfs.zst`, pinned by sha256 in [`build/builder.pin`](../build/builder.pin) |
+| Frame-specific layer (NOT consumed) | `https://holo-packages.steamos.cloud/archlinux-deckard-hotfixes/<branch>/` |
+| Frozen preview (previous base) | `https://holo-packages.steamos.cloud/holo-core-aarch64-preview/` |
 
-## Why pin
+`holo-packages.steamos.cloud` 302-redirects to `steamdeck-packages.steamos.cloud`; the host root
+returns 401, subpaths are browsable. Nothing is signed: no `.sig` on any `.db` or package, and the
+vendor's own `pacman.conf` sets `SigLevel = Optional`. The per-package sha256 in the locks is the
+pin that actually holds.
 
-The base is an explicit **technology preview** — "not intended for production… no
-stability, support, or compatibility guarantees." It can move or disappear. We therefore
-pin by **immutable digest**, not by tag, and plan to **mirror locally**.
+The preview's `mash-20251118.3` is byte-identical to this tree's `mash-20251118.3` (`core.db` and
+`extra.db` compared 2026-09-23) — moving the path changed no bytes.
 
-## What the base already provides (do NOT rebuild)
+## Snapshot naming
 
-`gamescope` (3.16.17), `mesa`, `rauc`, `casync`, `grub`, `linux-firmware`, `mkinitcpio`,
-`ostree`, `vulkan-tools`, `wine`, and ~3,586 package sources total.
+Under `archlinux-deckard/archlinux/`, only some directory names are snapshots:
 
-## What the base does NOT provide (novadeck's work)
+| Name | What it is | Pinnable |
+|---|---|---|
+| `main`, `dev`, `builds`, `pipeline`, `tmp` | moving CI aliases | never |
+| `mash-YYYYMMDD` | first revision of a snapshot, AND the alias that follows `.1`, `.2` … | yes — the lock is the real pin |
+| `mash-YYYYMMDD.N` | a frozen revision | yes, preferred |
+| `mash-YYYYMMDD.N.pvt` | frozen revision of a second publishing line; the unsuffixed alias follows the newest one (`mash-20260305` ≡ `.1.pvt`, `mash-20260202` ≡ `.2.pvt`, byte-identical dbs + rootfs, 2026-09-23) | refused — we pin the alias |
+| `mash-YYYYMMDD-pvt` | alias of that line (`mash-20251118-pvt` ≡ `.3.pvt`) | refused |
 
-`steam`, `proton`, `fex`/FEX-Emu, `box64`, the **device kernel** (`linux` — only
-`linux-firmware` ships), Qualcomm SoC firmware, the SteamOS `jupiter-*` layer, and any
-assembled bootable image.
+`build/lib-pins.sh` enforces this table for every stage.
 
-## What we pin, and why the image pin went away (Phase 4c)
+Each snapshot directory carries `core`, `extra`, their `-debug` twins, `extra-archive`, `multilib`,
+`sources/` (source tarballs), a `pacman.conf` + `pacman.mirrorlist` (only `[core]` and `[extra]`
+enabled — we match that in `rootfs/conf/pacman.conf`), and `system.rootfs.zst`.
 
-Two artifacts, pinned by different mechanisms and for different reasons:
+## What we pin, and why
 
 | Pin | File | What it selects |
 |---|---|---|
-| Package repo revision | [`build/snapshot.pin`](../build/snapshot.pin) | the repo **every file on the image is installed from** |
-| arm64 builder image | [`build/base-devel.digest`](../build/base-devel.digest) | the **execution environment** the build runs pacman/makepkg in |
+| Package repo snapshot | [`build/snapshot.pin`](../build/snapshot.pin) | the repo **every file on the image is installed from** |
+| arm64 builder | [`build/builder.pin`](../build/builder.pin) | the **execution environment** pacman/makepkg run in |
 
-There used to be a third, `base.digest`, pinning the `…/base` container image the root was
-`docker export`ed from. **Phase 4c deleted it.** The root is now bootstrapped —
-`pacman -r <empty-dir>` against the pinned snapshot (`rootfs/customize-base.sh`) — so no
-container image contributes files to what ships, and the one that remains is only where
-aarch64 binaries are *executed*. Docker is still required, and so is qemu binfmt: laying an
-aarch64 root down means running an aarch64 pacman and its install scriptlets.
+The builder is the pinned snapshot's own `system.rootfs.zst` (it ships `base-devel`). Its URL is
+never written down: it is always `<snapshot>/system.rootfs.zst`, so builder and packages cannot come
+from different snapshots. `build/lib-pins.sh` fetches it, checks the sha256, `docker import`s it,
+points its pacman at the pinned snapshot, asserts every installed package is in that snapshot at
+exactly the installed version, and tags the result `novadeck/builder:<sha256>`. The tag is keyed on
+the tarball because `docker import` stamps a creation time, so the image ID is not reproducible.
 
-The digest it held, for the record:
+Before 2026-09-23 the builder was `registry.gitlab.steamos.cloud/holo/holo-core-aarch64-preview/base-devel`,
+pinned by digest in `build/base-devel.digest`. Its own mirrorlist pointed at the preview's
+unsuffixed alias, and the overlay build ran `pacman -Sy` against it — so the overlay was never
+actually built against `build/snapshot.pin`. It only agreed by coincidence.
 
-```
-registry.gitlab.steamos.cloud/holo/holo-core-aarch64-preview/base@sha256:edd05b6cf82e4a7f8bab2fb8dd453c45fc44405d7e5a25e36fe229607a224e88
-```
+Phase 4c deleted a third pin, `base.digest` (the `…/base` image the root used to be
+`docker export`ed from). The root is bootstrapped with `pacman -r <empty-dir>` against the pinned
+snapshot (`rootfs/customize-base.sh`), so no container image contributes files to what ships.
 
-Reference any image **by digest**, never by tag — `build/base-devel.digest` follows the same rule,
-and `rootfs/customize-base.sh` refuses a ref that is not `…@sha256:<digest>`.
-
-### How to re-resolve / detect drift
-
-No `skopeo` locally; use the registry HTTP API token dance (works anonymously):
+## Bumping
 
 ```bash
-REG=https://registry.gitlab.steamos.cloud
-REPO=holo/holo-core-aarch64-preview/base
-tok=$(curl -s "https://gitlab.steamos.cloud/jwt/auth?service=container_registry&scope=repository:${REPO}:pull" \
-      | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
-curl -sI -H "Authorization: Bearer $tok" \
-  -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json' \
-  "$REG/v2/$REPO/manifests/aarch64-mash-20251118.1" | grep -i docker-content-digest
+B=https://holo-packages.steamos.cloud/archlinux-deckard/archlinux
+curl -sL $B/ | grep -o 'mash-[0-9.a-z-]*/' | sort -u                   # enumerate snapshots
+curl -sL $B/<snapshot>/pacman.conf $B/<snapshot>/pacman.mirrorlist      # repo set Valve enables
+curl -sIL $B/<snapshot>/core/os/aarch64/core.db | grep -iE 'etag|content-length|last-modified'
+curl -sL $B/<snapshot>/system.rootfs.zst | sha256sum                    # -> build/builder.pin
 ```
 
-> TODO(Phase 7): add a CI step that re-resolves the builder digest and fails if it drifts
-> from `build/base-devel.digest` without an explicit bump.
+Change `build/snapshot.pin` and `build/builder.pin` together, then `make relock` and
+`make relock-installer`, and review both lock diffs. A bump moves the toolchain the overlay builds
+with, so every `packages/*` rebuilds.
+
+## Where the PKGBUILDs are
+
+Valve's `frame-public/frame-developer-tools` (`pacman/deckard-pacman-src`) maps the base repos to
+`potato/mash/monorepo` and the hotfix layer to `deckard/deckardos/holo` on gitlab.steamos.cloud —
+both private. Each snapshot publishes its sources as tarballs under `sources/`. Overlay recipes we
+fetch from GitLab (`packages/*/source.pin`) still come from the public
+`holo/holo-core-aarch64-preview` repo at a pinned commit.

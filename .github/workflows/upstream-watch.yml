@@ -492,3 +492,85 @@ jobs:
           An rc we decide to skip is answered by closing this issue once; the title dedupe keeps it closed.
           EOF
           )"
+
+  # The base repo: Valve's archlinux-deckard snapshot tree (build/snapshot.pin). Two independent
+  # questions, because our pin can be an UNSUFFIXED name, and that name is an alias:
+  #   1. is there a snapshot with a NEWER date than the pinned one (in any form — mash-YYYYMMDD,
+  #      .N, .N.pvt)? That is a bump to consider.
+  #   2. has the pinned ALIAS itself moved? mash-YYYYMMDD follows its newest .N.pvt revision, so a
+  #      new revision republishes under our pinned name and every locked build starts failing
+  #      fetchlock's sha256 checks. The baseline is the core.db ETag recorded in snapshot.pin; a
+  #      pinned `.N` revision is frozen and skips this check.
+  deckard-base:
+    name: archlinux-deckard snapshot
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compare the snapshot index against build/snapshot.pin
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          url="$(grep -vE '^[[:space:]]*(#|$)' build/snapshot.pin | tail -1)"
+          name="${url##*/}"; base="${url%/*}"
+          pinned_date="$(printf '%s' "$name" | grep -oE '^mash-[0-9]{8}' | cut -c6- || true)"
+          [ -n "$pinned_date" ] || { echo "::error::build/snapshot.pin does not name a mash-YYYYMMDD snapshot: $url"; exit 1; }
+
+          listing="$(curl -fsSL --retry 3 "$base/")"
+          dirs="$(printf '%s' "$listing" | grep -oE 'mash-[0-9]{8}[0-9a-z.-]*/' | tr -d / | sort -u || true)"
+          [ -n "$dirs" ] || { echo "::error::no mash-* directories in $base/ — the index format changed"; exit 1; }
+          latest_date="$(printf '%s\n' "$dirs" | grep -oE '^mash-[0-9]{8}' | cut -c6- | sort -u | tail -1)"
+          echo "pinned=$name ($pinned_date) latest_date=$latest_date"
+
+          file_issue() {  # file_issue <title> <body>
+            if [ "$(gh issue list --state all --search "in:title \"$1\"" --json number --jq length)" -gt 0 ]; then
+              echo "issue already filed: $1"; return 0
+            fi
+            gh issue create --title "$1" --assignee "$ASSIGNEE" --label P2 --label area/build --body "$2"
+          }
+
+          if [ "$latest_date" \> "$pinned_date" ]; then
+            newest="$(printf '%s\n' "$dirs" | grep "^mash-$latest_date" | tr '\n' ' ')"
+            file_issue "upstream: archlinux-deckard mash-$latest_date published (pinned: $name)" "$(cat <<EOF
+          Valve published a newer archlinux-deckard snapshot: **mash-$latest_date** (we pin **$name**).
+          Directories for that date: \`$newest\`
+          Index: $base/
+
+          Bump drill — the mash-20260305 bump (2026-09-23) hit every item below at least once:
+          - [ ] prefer a frozen \`.N\` if one exists; \`.pvt\` names are refused by build/lib-pins.sh. An unsuffixed pin must record its core.db ETag in \`build/snapshot.pin\` — this watcher reads it
+          - [ ] diff the vendor \`pacman.conf\` / \`pacman.mirrorlist\` against the previous snapshot's (\`LocalFileSigLevel\` arrived this way)
+          - [ ] \`build/builder.pin\`: sha256 of \`<snapshot>/system.rootfs.zst\`, changed TOGETHER with snapshot.pin
+          - [ ] \`make overlay\` — the builder pin is in every overlay input hash, so ALL packages rebuild
+          - [ ] \`make relock\` + \`make relock-installer\`; review added/dropped names — a package SPLIT drops a binary silently (libinput -> libinput-tools took the power key down)
+          - [ ] \`packages/libinput\`: its \`libinput=\$pkgver\` dependency fails the resolve if the snapshot moved libinput — bump pkgver to match
+          - [ ] installer: \`installer/pygame-ce.pin\` is a cp3XX wheel — a Python bump invalidates it
+          - [ ] a RELEASE \`make sdcard\`: guard-rootfs.sh check 8 catches a new unpinned sysusers allocation (systemd 259's \`empower\`), and the assembler refuses trim.list globs that stopped matching
+          - [ ] HW: boot, SteamUI, power key suspend + wake, a Proton and a native x86 title, audio
+          EOF
+          )"
+          else
+            echo "no newer snapshot date"
+          fi
+
+          # Alias check: only for an unsuffixed pin, which is the one that can move.
+          if [ "$name" = "mash-$pinned_date" ]; then
+            want="$(sed -n 's/^#[[:space:]]*core\.db[[:space:]].*ETag[[:space:]]*\([^[:space:]]*\).*/\1/p' build/snapshot.pin | tail -1)"
+            [ -n "$want" ] || { echo "::error::build/snapshot.pin pins the alias $name but records no core.db ETag to watch it by"; exit 1; }
+            got="$(curl -fsSIL --retry 3 "$url/core/os/aarch64/core.db" | tr -d '\r' | sed -n 's/^[Ee][Tt][Aa][Gg]:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' | tail -1)"
+            [ -n "$got" ] || { echo "::error::no ETag on $url/core/os/aarch64/core.db"; exit 1; }
+            echo "alias core.db ETag: recorded=$want served=$got"
+            if [ "$got" != "$want" ]; then
+              revs="$(printf '%s\n' "$dirs" | grep "^$name" | tr '\n' ' ')"
+              file_issue "upstream: archlinux-deckard $name alias moved (core.db ETag $got, pinned $want)" "$(cat <<EOF
+          The pinned snapshot name **$name** is an alias, and it now serves a different core.db
+          (ETag \`$got\`, pinned \`$want\`). A new revision landed under it; locked builds will fail
+          fetchlock's per-package sha256 check until this is resolved.
+          Revisions for that date: \`$revs\`
+
+          - [ ] find the frozen revision the alias now matches (compare core.db/extra.db sha256 and the rootfs ETag against each \`.N\` / \`.N.pvt\`)
+          - [ ] follow the bump drill: \`build/builder.pin\` from the new system.rootfs.zst, \`make overlay\`, relock both, a release card, HW
+          - [ ] update the recorded ETag lines in \`build/snapshot.pin\`
+          EOF
+          )"
+            fi
+          fi

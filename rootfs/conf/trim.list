@@ -94,10 +94,9 @@ glob usr/share/locale/!(C|en|en_US)
 #
 # libgcc_s, libstdc++ and libatomic are NOT here: those are the ones that are linked, everywhere.
 # ------------------------------------------------------------------------------------------
-glob usr/lib/libgo.so.*
-# D: libgphobos is the standard library, libgdruntime the runtime under it. They go together.
-glob usr/lib/libgphobos.so.*
-glob usr/lib/libgdruntime.so.*
+# Since mash-20260305 gcc-libs is a metapackage over per-runtime packages (libgfortran, libasan, …)
+# and no longer pulls the Go and D runtimes (libgo, libgphobos, libgdruntime) at all; their rows
+# were dropped when they stopped matching anything.
 glob usr/lib/libgfortran.so.*
 # The sanitizer runtimes (-fsanitize=address/thread/leak/undefined). Development tooling: a
 # sanitized binary links them explicitly, and we ship none. `@(...)` is extglob for exactly one

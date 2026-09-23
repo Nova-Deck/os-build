@@ -4,8 +4,8 @@
 #   packages/inputhash.sh <package-dir>     # e.g. packages/mesa
 #
 # Prints a 64-char hex digest of the package's COMMITTED build inputs: its source.pin, the
-# patches the pin declares, and the local PKGBUILD if it has one. Nothing else — everything
-# makepkg fetches is downstream of these files (the pin carries pkgbuild_ref, a local PKGBUILD
+# patches the pin declares, the local PKGBUILD if it has one, and the builder pin (see below).
+# Everything makepkg fetches is downstream of these (the pin carries pkgbuild_ref, a local PKGBUILD
 # carries pkgver + the upstream source's own sha256sums), so hashing them pins the build.
 #
 # SIX CALLERS, ONE FORMULA, and they have to agree or the build breaks in confusing ways:
@@ -63,4 +63,14 @@ if [ -n "$local_pb" ]; then
   inputs+=("$DIR/$local_pb")
 fi
 
-sha256sum "${inputs[@]}" | cut -d' ' -f1 | sha256sum | cut -c1-64
+# The BUILDER is an input too, and the one the file list above cannot see: it is the compiler, the
+# libraries every makedepend resolves to, and the glibc/Python/Qt the artifact links against — all
+# taken from the pinned snapshot (build/builder.pin is that snapshot's system.rootfs.zst, and
+# build/lib-pins.sh asserts the two agree). Without it a snapshot bump left every stamp "up to date",
+# so the overlay stayed built against the OLD base while the lock claimed nothing had changed. The
+# pin's sha256 value, not the file, so a comment edit there rebuilds nothing.
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+. "$ROOT/build/lib-pins.sh"
+builder="$(pins_builder_sha)"
+
+{ sha256sum "${inputs[@]}" | cut -d' ' -f1; printf 'builder %s\n' "$builder"; } | sha256sum | cut -c1-64

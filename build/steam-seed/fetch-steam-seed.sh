@@ -34,7 +34,7 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 PIN="$ROOT/build/steam-seed/STEAM_SEED.pin"
 SEED_DIR="$ROOT/work/steam-seed"
 CDN="https://client-update.steamstatic.com"
-DEVEL_PIN="$ROOT/build/base-devel.digest"
+. "$ROOT/build/lib-pins.sh"
 # Emulated download + unpack of the full client tree is slow; generous ceiling (override via env).
 BOOTSTRAP_TIMEOUT="${STEAM_BOOTSTRAP_TIMEOUT:-1800}"
 
@@ -42,7 +42,6 @@ log() { echo "[fetch-steam-seed] $*" >&2; }
 pin_field() { sed -n "s/^$1:[[:space:]]*//p" "$PIN" | head -1; }
 
 [ -f "$PIN" ] || { log "missing pin: ${PIN#"$ROOT"/}"; exit 1; }
-[ -f "$DEVEL_PIN" ] || { log "no build-env pin: ${DEVEL_PIN#"$ROOT"/}"; exit 1; }
 for t in curl unzip tar xz grep docker; do
   command -v "$t" >/dev/null 2>&1 || { log "$t not found on build host"; exit 1; }
 done
@@ -87,14 +86,10 @@ fetch_out() {  # <url>
   curl -fsSL "${CURL_RETRY[@]}" "$1"
 }
 
-# base-devel image (arm64) is the throwaway container we run Steam's updater in under qemu — same
-# pinned image the overlay build uses. Its digest does NOT affect seed CONTENT (Steam pulls its own
-# libs), so it is deliberately not a Makefile content prereq.
-DEVEL_REF="$(grep -vE '^[[:space:]]*(#|$)' "$DEVEL_PIN" | tail -1)"
-case "$DEVEL_REF" in
-  *@sha256:*) ;;
-  *) log "refusing unpinned base-devel ref (need ...@sha256:<digest>): '$DEVEL_REF'"; exit 1 ;;
-esac
+# The builder image (arm64) is the throwaway container we run Steam's updater in under qemu — same
+# pinned image the overlay build uses. It does NOT affect seed CONTENT (Steam pulls its own libs),
+# so it is deliberately not a Makefile content prereq.
+DEVEL_REF="$(pins_builder_ref)"
 
 CHANNEL="$(pin_field channel)";                 : "${CHANNEL:?$PIN: missing channel}"
 RUNTIME_BASE="$(pin_field runtime_base)";       : "${RUNTIME_BASE:?$PIN: missing runtime_base}"
@@ -228,10 +223,7 @@ fi
 #    throwaway --platform linux/arm64 container. Steam runs as an unprivileged builder (mirrors the
 #    overlay's builder pattern) with the seed mounted at its $HOME/.local/share/Steam; it needs the
 #    network (CDN) and a display (Xvfb). We chown the tree back to the host build user afterward.
-if ! docker run --rm --platform linux/arm64 "$DEVEL_REF" /usr/bin/true >/dev/null 2>&1; then
-  log "registering arm64 binfmt (qemu) via tonistiigi/binfmt"
-  docker run --privileged --rm tonistiigi/binfmt --install arm64 >&2
-fi
+pins_builder_ensure >/dev/null
 
 log "running Steam updater under arm64 qemu to self-install the full tree (slow — emulated + download)"
 docker run --rm --platform linux/arm64 \

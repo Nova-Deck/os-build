@@ -72,7 +72,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CACHE="$ROOT/work/pacman-cache"
 OVERLAY_REPO="$ROOT/work/repo/aarch64"
-SNAPFILE="$ROOT/build/snapshot.pin"
+. "$ROOT/build/lib-pins.sh"
 
 OUT="${1:?usage: rootfs/fetchlock.sh <install-list-out> [lock]}"
 # The lock to materialize. Defaults to the shipped image's; installer/mkroot.sh passes
@@ -97,8 +97,7 @@ REPOS=(core extra)
 REPO_ARCH=aarch64
 
 [ -f "$LOCK" ] || { echo "no manifest: $LOCK (run \`$RELOCK\`)" >&2; exit 1; }
-[ -f "$SNAPFILE" ] || { echo "no snapshot pin: $SNAPFILE" >&2; exit 1; }
-SNAPSHOT="$(grep -vE '^[[:space:]]*(#|$)' "$SNAPFILE" | tail -1)"
+SNAPSHOT="$(pins_snapshot)"
 mkdir -p "$CACHE"
 
 # Overlay artifact -> "<input hash>\t<package dir>" of the source pin that produced it. The

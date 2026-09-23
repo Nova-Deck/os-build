@@ -38,8 +38,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # The EXECUTION environment, not the content source. The SAME pinned arm64 builder
 # rootfs/customize-base.sh and packages/build-overlay.sh use -- one builder for the whole tree, so
 # a bump cannot leave the two images laid down by different pacmans.
-PINFILE="$ROOT/build/base-devel.digest"
-SNAPFILE="$ROOT/build/snapshot.pin"
+. "$ROOT/build/lib-pins.sh"
 LOCKFILE="$ROOT/installer/manifest.lock"
 PACMANCONF="$ROOT/rootfs/conf/pacman.conf"
 OSRELEASE="$ROOT/installer/os-release"
@@ -109,18 +108,8 @@ for pin in "${PINS[@]}"; do
 done
 
 # ---- the pins that decide WHAT is laid down -------------------------------------------------------
-[ -f "$PINFILE" ] || die "no builder pin: $PINFILE"
-REF="$(grep -vE '^[[:space:]]*(#|$)' "$PINFILE" | tail -1)"
-case "$REF" in
-  *@sha256:*) ;;
-  *) die "refusing unpinned builder ref (need ...@sha256:<digest>): '$REF'" ;;
-esac
-[ -f "$SNAPFILE" ] || die "no snapshot pin: $SNAPFILE"
-SNAPSHOT="$(grep -vE '^[[:space:]]*(#|$)' "$SNAPFILE" | tail -1)"
-case "$SNAPSHOT" in
-  *mash-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].[0-9]*) ;;
-  *) die "refusing unpinned snapshot (need an explicit .N revision, not the alias): '$SNAPSHOT'" ;;
-esac
+REF="$(pins_builder_ref)"
+SNAPSHOT="$(pins_snapshot)"
 [ -f "$PACMANCONF" ] || die "no bootstrap pacman config: $PACMANCONF"
 [ -f "$OSRELEASE" ]  || die "no os-release declaration: $OSRELEASE"
 command -v docker >/dev/null 2>&1 || die "docker required for the root bootstrap"
@@ -492,12 +481,7 @@ else
   log "NOVADECK_RESOLVE=1 — re-resolving from ${PKGSLIST#"$ROOT"/}, this tree is for relock only"
 fi
 
-log "pulling pinned builder: $REF"
-docker pull "$REF" >&2
-if ! docker run --rm --platform linux/arm64 "$REF" /usr/bin/true >/dev/null 2>&1; then
-  log "registering arm64 binfmt (qemu) via tonistiigi/binfmt"
-  docker run --privileged --rm tonistiigi/binfmt --install arm64 >&2
-fi
+pins_builder_ensure >/dev/null
 
 # The target root must start EMPTY: this is a bootstrap, and reusing a partially populated tree
 # reintroduces exactly the "content of unknown origin" the from-packages model removes. Both the

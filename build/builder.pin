@@ -1,0 +1,19 @@
+# Pinned arm64 builder — the sha256 of the pinned snapshot's own system.rootfs.zst.
+#
+# The builder is the EXECUTION ENVIRONMENT every stage runs pacman/makepkg in under arm64 qemu
+# (rootfs/customize-base.sh, installer/mkroot.sh, packages/build-overlay.sh,
+# build/steam-seed/fetch-steam-seed.sh). It contributes no files to any image.
+#
+# There is no URL here on purpose: it is always $(build/snapshot.pin)/system.rootfs.zst, so the
+# builder is cut from the SAME snapshot the packages come from. build/lib-pins.sh fetches it,
+# verifies this sha256, `docker import`s it, points its pacman at the pinned snapshot and asserts
+# every installed package is in that snapshot at the installed version, then tags it
+# novadeck/builder:<this sha>. The tarball ships base-devel, so makepkg works as imported.
+#
+# Bumping build/snapshot.pin REQUIRES bumping this line to the new snapshot's tarball:
+#   curl -sL <snapshot>/system.rootfs.zst | sha256sum
+# A stale line fails the fetch loudly rather than building against the wrong snapshot.
+#
+# Replaces build/base-devel.digest (registry.gitlab.steamos.cloud/holo/holo-core-aarch64-preview/
+# base-devel), which pinned a preview image that was never tied to the snapshot pin at all.
+7e3fb88454e1ac633b7488abb72d3ca0cc7d2578a38146fdd7d58b50fcbd60bf

@@ -51,8 +51,7 @@ BASE="${1:-${INSTALLER_ROOTFS:-$ROOT/work/installer-base}}"
 LOCK="$ROOT/installer/manifest.lock"
 CACHE="$ROOT/work/pacman-cache"
 OVERLAY_REPO="$ROOT/work/repo/aarch64"
-SNAPFILE="$ROOT/build/snapshot.pin"
-PINFILE="$ROOT/build/base-devel.digest"
+. "$ROOT/build/lib-pins.sh"
 LOCALDB="$BASE/var/lib/pacman/local"
 MARKER="$BASE/usr/lib/novadeck/pkgs"
 PREBUILT_MARKER="$BASE/usr/lib/novadeck/prebuilt.manifest"
@@ -171,8 +170,8 @@ if [ -s "$PREBUILT_MARKER" ]; then
   done < "$PREBUILT_MARKER"
 fi
 
-SNAPSHOT="$(grep -vE '^[[:space:]]*(#|$)' "$SNAPFILE" | tail -1)"
-BUILDER="$(grep -vE '^[[:space:]]*(#|$)' "$PINFILE" | tail -1)"
+SNAPSHOT="$(pins_snapshot)"
+BUILDER="$(pins_builder_desc)"
 
 {
   cat <<EOF

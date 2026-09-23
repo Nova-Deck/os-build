@@ -22,7 +22,7 @@
 #
 # Host-side (drives docker, like customize-base.sh). Network required: the PKGBUILD comes from
 # the GitLab raw endpoint and makepkg clones the actual sources from public GitHub/freedesktop.
-# Reads build/base-devel.digest. Re-run is cheap to invoke but an emulated build itself is slow.
+# Reads build/builder.pin (via build/lib-pins.sh). Re-run is cheap to invoke but an emulated build itself is slow.
 #
 #   packages/build-overlay.sh [--only <name>]... [--no-index]
 #
@@ -66,7 +66,7 @@ GL="https://gitlab.steamos.cloud"
 REPO_DIR="$ROOT/work/repo/$ARCH"
 STAMPS="$REPO_DIR/.stamps"
 STAGE="$ROOT/work/overlay-build/$ARCH"
-DEVEL_PIN="$ROOT/build/base-devel.digest"
+. "$ROOT/build/lib-pins.sh"
 
 shopt -s nullglob
 PINS=("$ROOT"/packages/*/source.pin)
@@ -76,13 +76,7 @@ if [ ${#PINS[@]} -eq 0 ]; then
 fi
 
 command -v docker >/dev/null 2>&1 || { echo "docker required for overlay build" >&2; exit 1; }
-[ -f "$DEVEL_PIN" ] || { echo "no build-env pin: $DEVEL_PIN" >&2; exit 1; }
-# Pin = last non-comment, non-blank line: an image ref ending in @sha256:<digest>.
-DEVEL_REF="$(grep -vE '^[[:space:]]*(#|$)' "$DEVEL_PIN" | tail -1)"
-case "$DEVEL_REF" in
-  *@sha256:*) ;;
-  *) echo "refusing unpinned base-devel ref (need ...@sha256:<digest>): '$DEVEL_REF'" >&2; exit 1 ;;
-esac
+DEVEL_REF="$(pins_builder_ref)"
 
 pin_field() { sed -n "s/^$2:[[:space:]]*//p" "$1" | head -1; }
 
@@ -257,10 +251,7 @@ fi
 # root, so create an unprivileged builder with passwordless sudo (makepkg -s installs the
 # makedepends via pacman). --skipinteg skips checksum validation for our added patch sources;
 # the upstream gamescope is still pinned by the PKGBUILD's git #commit=<tag>.
-if ! docker run --rm --platform linux/arm64 "$DEVEL_REF" /usr/bin/true >/dev/null 2>&1; then
-  echo "[overlay] registering arm64 binfmt (qemu) via tonistiigi/binfmt" >&2
-  docker run --privileged --rm tonistiigi/binfmt --install arm64 >&2
-fi
+pins_builder_ensure >/dev/null
 
 # ONE FRESH CONTAINER PER PACKAGE. An earlier design built every package in a single shared
 # container (one `pacman -Sy`, then a loop over /stage/*/). That poisoned the LAST build, sddm:

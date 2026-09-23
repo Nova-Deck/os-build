@@ -10,7 +10,7 @@
 #
 # Docker is still here, and still needs qemu binfmt: an aarch64 root has to be laid down by an
 # aarch64 pacman running aarch64 install scriptlets, and a container is how we get an aarch64
-# userspace on an x86 host. It is the EXECUTION ENVIRONMENT (build/base-devel.digest, the same pin
+# userspace on an x86 host. It is the EXECUTION ENVIRONMENT (build/builder.pin, the same pin
 # packages/build-overlay.sh builds in) and no longer the CONTENT SOURCE. Consequences:
 #   - /.dockerenv is never created in the target root, so it cannot reach a device and make
 #     systemd-detect-virt report a container (which silently skips ~13 units).
@@ -64,8 +64,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # The EXECUTION environment, not the content source (see the header). Shared with
 # packages/build-overlay.sh: one pinned arm64 builder image, used by both stages.
-PINFILE="$ROOT/build/base-devel.digest"
-SNAPFILE="$ROOT/build/snapshot.pin"
+. "$ROOT/build/lib-pins.sh"
 LOCKFILE="$ROOT/rootfs/manifest.lock"
 PACMANCONF="$ROOT/rootfs/conf/pacman.conf"
 OSRELEASE="$ROOT/rootfs/conf/os-release"
@@ -334,13 +333,8 @@ if [ -f "$OVERLAY_DB" ]; then
 overlay:$(sha256sum "$OVERLAY_DB" | cut -d' ' -f1)"
 fi
 
-[ -f "$PINFILE" ] || { echo "no builder pin: $PINFILE" >&2; exit 1; }
-# Pin = last non-comment, non-blank line: an image ref ending in @sha256:<digest>.
-REF="$(grep -vE '^[[:space:]]*(#|$)' "$PINFILE" | tail -1)"
-case "$REF" in
-  *@sha256:*) ;;
-  *) echo "refusing unpinned builder ref (need ...@sha256:<digest>): '$REF'" >&2; exit 1 ;;
-esac
+# The builder (build/builder.pin, via build/lib-pins.sh): a tag keyed on its tarball's sha256.
+REF="$(pins_builder_ref)"
 # Fold the builder into the reuse key. It contributes no FILES to the root any more, but it is
 # the pacman that resolves and lays them down, so a bump still has to rebuild rather than be
 # silently satisfied by a tree the previous builder produced.
@@ -348,16 +342,9 @@ EXPECTED_PKGS="$EXPECTED_PKGS
 env:$REF"
 
 # Package-repo snapshot pin (build/snapshot.pin) — the repo every row of the root is installed from.
-# The vendor's mirrorlist points at the UNSUFFIXED snapshot path, which is an alias that tracks
-# the newest revision, so an inherited one would move under us. We write our own from this pin
-# (rootfs/conf/pacman.conf Includes it) and refuse the alias.
-[ -f "$SNAPFILE" ] || { echo "no snapshot pin: $SNAPFILE" >&2; exit 1; }
-SNAPSHOT="$(grep -vE '^[[:space:]]*(#|$)' "$SNAPFILE" | tail -1)"
-case "$SNAPSHOT" in
-  *mash-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].[0-9]*) ;;
-  *) echo "refusing unpinned snapshot (need an explicit .N revision, not the alias): '$SNAPSHOT'" >&2
-     exit 1 ;;
-esac
+# We write our own mirrorlist from it (rootfs/conf/pacman.conf Includes it) rather than inherit the
+# vendor's; lib-pins.sh refuses a moving alias.
+SNAPSHOT="$(pins_snapshot)"
 # Fold the revision into the reuse key: bumping the pin must rebuild the base even when the
 # package SET is unchanged, which is the whole point of pinning it.
 EXPECTED_PKGS="$EXPECTED_PKGS
@@ -413,14 +400,8 @@ if [ -z "${FORCE:-}" ] \
   echo "$DEST"; exit 0
 fi
 
-echo "[novadeck] pulling pinned builder: $REF" >&2
-docker pull "$REF" >&2
-
-# Ensure arm64 binfmt is registered so the builder's pacman runs under emulation.
-if ! docker run --rm --platform linux/arm64 "$REF" /usr/bin/true >/dev/null 2>&1; then
-  echo "[novadeck] registering arm64 binfmt (qemu) via tonistiigi/binfmt" >&2
-  docker run --privileged --rm tonistiigi/binfmt --install arm64 >&2
-fi
+# Import the builder if it is not already local (it also registers arm64 binfmt when needed).
+pins_builder_ensure >/dev/null
 
 # Fetch + verify every pinned prebuilt on the host (network here); staged into PREBUILT_DIR,
 # mounted read-only into the bootstrap container below so they land in the target root.

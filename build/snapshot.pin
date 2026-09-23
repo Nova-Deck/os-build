@@ -1,23 +1,28 @@
-# Pinned package-repo snapshot revision (Phase 4a step 0).
+# Pinned package-repo snapshot — Valve's official Steam Frame ("deckard") aarch64 Arch Linux port.
 #
-# The base IMAGE is pinned by digest in base.digest; this pins the pacman REPO the base is
-# then augmented from. They are separate pins because they are separate artifacts.
+# Every snapshot/stripped row of rootfs/manifest.lock and installer/manifest.lock is installed from
+# this repo, and build/builder.pin pins the SAME snapshot's system.rootfs.zst as the builder, so the
+# pacman laying a root down comes from the snapshot it lays down.
 #
-# WHY THIS FILE EXISTS — the base image ships a mirrorlist pointing at the UNSUFFIXED
-# snapshot path, and that path is an ALIAS that tracks the newest revision, not a frozen
-# snapshot. Measured 2026-07-26:
+# Tree: https://holo-packages.steamos.cloud/archlinux-deckard/archlinux/<snapshot>/<repo>/os/aarch64
+# Each snapshot publishes core, extra (+ -debug), extra-archive, multilib, sources/, its own
+# pacman.conf (only [core] and [extra], SigLevel = Optional — no detached signatures anywhere), and
+# system.rootfs.zst. We enable the same two repos (rootfs/conf/pacman.conf).
 #
-#   mash-20251118    384971555 bytes  2026-07-10  ETag 6a510539-16f23323   <- alias
-#   mash-20251118.2  384650724 bytes  2026-06-05  ETag 6a23593e-16ed4de4
-#   mash-20251118.3  384971555 bytes  2026-07-10  ETag 6a510539-16f23323
+# ALIASES — the directory names are not all frozen snapshots:
+#   main, dev, builds, pipeline, tmp   moving CI aliases. Never pinned.
+#   mash-YYYYMMDD                      the FIRST revision of a snapshot, and ALSO the alias that
+#                                      follows .1, .2 … once they land. Measured on the preview
+#                                      mirror 2026-07-26: mash-20251118 was byte-identical to .3.
+#   mash-YYYYMMDD.N                    a frozen revision. Prefer one whenever it exists.
+#   *.pvt / *-pvt                      meaning unpublished. Refused.
+# An unsuffixed pin is accepted because the per-package sha256 in the locks is the real pin:
+# rootfs/fetchlock.sh verifies every file, so a republish fails the build instead of drifting.
 #
-# The unsuffixed path is byte-identical to .3 and will follow .4 when it lands. So the repo
-# we build against was moving under us. It never bit us because all three revisions publish
-# an identical 4560-package set (byte-identical sorted name-version lists over core+extra)
-# — but equal versions do not prove equal package FILES, which is what rootfs/manifest.lock
-# records a per-package sha256 for.
+# Pin = last non-comment, non-blank line: a repo base URL. build/lib-pins.sh validates it (all
+# stages source it) and the stages append /$repo/os/$arch.
+# Bumping is deliberate: change this line AND build/builder.pin, `make relock`, review both locks.
 #
-# Pin = last non-comment, non-blank line: a repo base URL ending in an EXPLICIT .N revision.
-# rootfs/customize-base.sh appends /$repo/os/$arch and refuses an unsuffixed (alias) URL.
-# Bumping is deliberate: change this line, `make relock`, review the manifest diff.
-https://holo-packages.steamos.cloud/holo-core-aarch64-preview/mash-20251118.3
+# The previous pin, holo-core-aarch64-preview/mash-20251118.3, is a frozen public mirror of this
+# tree's mash-20251118.3: core.db and extra.db are byte-identical on both hosts (checked 2026-09-23).
+https://holo-packages.steamos.cloud/archlinux-deckard/archlinux/mash-20251118.3

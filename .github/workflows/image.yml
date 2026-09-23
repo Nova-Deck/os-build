@@ -240,6 +240,14 @@ jobs:
           key: pacman-cache-${{ hashFiles('build/snapshot.pin', 'rootfs/manifest.lock') }}
           restore-keys: pacman-cache-
 
+      # The arm64 builder's tarball (build/builder.pin): the snapshot's own system.rootfs.zst,
+      # ~330MB. build/lib-pins.sh re-verifies its sha256 before importing, so a hit is never
+      # trusted, only spared the download. No restore-keys: another pin's tarball is useless.
+      - uses: actions/cache@v6
+        with:
+          path: work/builder
+          key: builder-${{ hashFiles('build/builder.pin') }}
+
       # The x86 Turnip payload for the FEX guest, built natively in the mesa-x86 job above. The
       # rootfs assembly hard-requires it; landing it here means the mesa-x86 make stamp resolves
       # to a digest-check no-op instead of an emulated build.

@@ -45,7 +45,9 @@ on:
       - 'packages/*/PKGBUILD'
       - 'packages/build-overlay.sh'
       - 'packages/inputhash.sh'
-      - 'build/base-devel.digest'
+      - 'build/builder.pin'
+      - 'build/snapshot.pin'
+      - 'build/lib-pins.sh'
       - '.github/workflows/overlay.yml'
       # mesa-x86 (the FEX-guest Turnip payload) is not an overlay package, but it is a package
       # build this workflow proof-compiles the same way. Its other inputs — the mesa PKGBUILD,
@@ -148,7 +150,7 @@ jobs:
             changed="$(git diff --name-only "origin/$BASE_REF...HEAD")"
             # A change to the builder itself, the hash formula, or the container it builds in can
             # break any package, so it selects all of them.
-            if printf '%s\n' "$changed" | grep -qE '^(packages/build-overlay\.sh|packages/inputhash\.sh|build/base-devel\.digest)$'; then
+            if printf '%s\n' "$changed" | grep -qE '^(packages/build-overlay\.sh|packages/inputhash\.sh|build/builder\.pin|build/snapshot\.pin|build/lib-pins\.sh)$'; then
               sel="$(all)"
               why="the builder or its base image moved — building everything"
             else
@@ -196,6 +198,12 @@ jobs:
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v7
+
+      # Same builder-tarball cache as image.yml's build job; lib-pins.sh re-verifies the sha256.
+      - uses: actions/cache@v6
+        with:
+          path: work/builder
+          key: builder-${{ hashFiles('build/builder.pin') }}
 
       # --no-index because the repo db is rebuilt from scratch over EVERYTHING present, and this
       # job holds one package. Nothing consumes this build — it exists to go red.

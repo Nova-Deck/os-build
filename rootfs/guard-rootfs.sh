@@ -643,7 +643,7 @@ if [ "$bootdisk_ok" = 1 ]; then
 fi
 
 # ------------------------------------------------------------------------------------------
-# 7b. The power-key path has the CLI it executes.
+# 7c. The power-key path has the CLI it executes.
 #
 # novadeck-powerbuttond (key -> Steam) and novadeck-suspend (arming the wake) both run
 # `libinput debug-events`. Neither can fail loudly without it: the forwarder crash-loops under
@@ -652,7 +652,7 @@ fi
 # Arch split it into libinput-tools at 1.30 (mash-20260305) and the first image off that snapshot
 # shipped with neither (HW, Pocket ACE, 2026-09-23).
 # ------------------------------------------------------------------------------------------
-echo "  7b. power-key path"
+echo "  7c. power-key path"
 pk_ok=1
 for f in usr/bin/libinput usr/lib/libinput/libinput-debug-events \
          usr/bin/novadeck-powerbuttond usr/bin/novadeck-suspend; do

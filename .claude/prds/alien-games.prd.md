@@ -181,20 +181,23 @@ launches it through the existing Proton/FEX chain.
 <!-- Business outcomes, not engineering tasks. /plan turns each into a plan. -->
 <!-- Status: pending | in-progress | complete | deferred -->
 
-**Delivery constraint: every milestone is tested and merges to `main` on its own.** No long-running
-feature branch. A milestone does **not** have to be reachable or useful to a user when it lands —
-it may sit inert, unwired, or switched off until the last one connects it. What it must do is land
-green: its own behaviour proven by its own test, and `main` no worse for having it.
+**Delivery constraint: the milestones live on one long-running branch, `feat/store-clis`, and
+merge to `main` together, once the user-facing surface is worth shipping.** *Revised 2026-09-24.*
+The original plan was per-milestone merges with each layer landing inert, but the Decky plugin
+cannot land inert: every image stages every first-party plugin, so the milestone-2 panel reached
+users' Quick Access menu the moment it existed — a "Stores" tab with nothing useful behind it.
+Keeping it out of images would have meant hand-installing it on dev cards or a dev-only build
+switch; neither was worth it. The branch is rebased onto `main` from time to time instead.
 
-Preference when a milestone lands inert: **unwired beats flagged off.** Code nothing calls yet is
-plainly incomplete and its test drives it directly; a runtime flag guarding a half-built path is a
-branch in shipped code that nothing exercises in the off state, and it has to be removed later
-anyway.
+Each milestone is still tested and HW-gated on its own, on the branch — green means its own
+behaviour proven by its own test, and `make test` passing at the branch tip after every rebase.
+A rebase that moves the base snapshot owes a real relock (the 2026-09-24 rebase onto the
+archlinux-deckard base did: Python 3.13 → 3.14 rebuilt both CLIs).
 
 | # | Milestone | Outcome | How it is proven when it lands | Status | Plan |
 |---|---|---|---|---|---|
 | 1 | Store CLIs, native arm64 | legendary and gogdl are packaged and run on the device — no FEX, no x86 freeze | Package builds in the normal pipeline; each CLI runs on hardware and lists a library given a hand-supplied token — **done 2026-09-20**: 55 Epic titles listed, GOG authenticated and `gogdl info` returning build metadata | complete | [`alien-games.plan.md`](../plans/alien-games.plan.md) |
-| 2 | Account connection | A user connects Epic and GOG from the device with **no browser we ship** — Steam's own CEF browser is already there and is scriptable; tokens persist and refresh | Hardware walkthrough with real accounts; token survives reboot and an expiry/refresh cycle; security review of credential-at-rest before it merges | in-progress | [`alien-games-account-connection.plan.md`](../plans/alien-games-account-connection.plan.md) |
+| 2 | Account connection | A user connects Epic and GOG from the device with **no browser we ship** — Steam's own CEF browser is already there and is scriptable; tokens persist and refresh | Hardware walkthrough with real accounts; token survives reboot and an expiry/refresh cycle; security review of credential-at-rest before it is marked complete | in-progress | [`alien-games-account-connection.plan.md`](../plans/alien-games-account-connection.plan.md) |
 | 3 | Install and uninstall | An owned title downloads to a chosen location, resumes after an interruption, and uninstalls cleanly | Driven on hardware against a real account, including a deliberate mid-download network cut | pending | — |
 | 4 | Library entry writer | An entry is created and removed in Steam's shortcut store, correctly sequenced against Steam's lifecycle, keyed on **our** stable id via a launcher stub — never on Steam's appid | Driven directly on a dev card with Steam running; entry survives a Steam restart and a reboot | pending | — |
 | 5 | Artwork acquisition | An entry gets grid art, and degrades to something usable when the source is unreachable | Driven directly, including with the network cut | pending | — |
@@ -208,7 +211,7 @@ which is also how they stay testable without burning a real account. Milestone 7
 everything and is the only one that changes what a user can do. Milestone L reuses 4, 5 and 6
 unchanged; its cost is its own front half only.
 
-**Acceptance is per milestone.** Each row states how it is proven when it merges — that is the
+**Acceptance is per milestone.** Each row states how it is proven when it completes — that is the
 gate, not a review at the end. The restart / reboot / OTA durability check applies to the
 milestones that create persistent state (2, 3, 4) and again end-to-end at milestone 7.
 
@@ -260,7 +263,7 @@ lands; no separate issues.
 | Unofficial store clients break when a store changes its API or protocol, taking installs down with them | High | High | Pin versions and track upstream; a broken store must degrade to "cannot sync" with already-installed games still launching, never to a broken library |
 | Steam overwrites externally-written shortcuts on shutdown, silently losing a registration | High | High | Treat Steam's lifecycle as a hard constraint on when registration may happen; require the explicit restart, as the ecosystem does; make a lost registration visible rather than silent |
 | Unstable shortcut appids break the link between an entry and anything we record about it | High | Medium | Key durable state on our own id behind a launcher stub, never on Steam's appid, and prove ownership of an entry by its `Exe` target — Steam mangles `LaunchOptions`, so the token in it cannot be the proof. Milestone 4's gate |
-| OAuth refresh tokens at rest on the device are account credentials, and a stolen card is a stolen account | Medium | High | Security review is a merge gate on milestone 2, not an afterthought; encrypt at rest and scope what is stored |
+| OAuth refresh tokens at rest on the device are account credentials, and a stolen card is a stolen account | Medium | High | Security review is a completion gate on milestone 2, not an afterthought; encrypt at rest and scope what is stored |
 | Account action by a store against users of an unofficial client | Low | High | Take a position before shipping, and make the choice visible to the user at sign-in rather than implicit |
 | The auth code handoff is too clumsy and users bounce at the first screen | Medium | High | Prototype the handoff before milestone 2 is planned; it is the first thing every user meets |
 | Store downloads are tens of GB and storage runs out mid-install | Medium | Medium | Free-space check before starting; resumable downloads are a milestone 3 gate, not a later polish |

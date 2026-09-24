@@ -1,8 +1,18 @@
 """novadeck-stores — the Quick Access surface for game stores outside Steam.
 
-Milestone 2 of the alien-games PRD. RIGHT NOW IT ONLY REPORTS: the panel shows whether Epic and
-GOG are connected and offers no way to connect them. That is deliberate — the PRD lands each layer
-inert rather than behind a flag nothing exercises, and the sign-in flow is the next task.
+Milestone 2 of the alien-games PRD: the panel shows whether Epic and GOG are connected, and signs
+either one in from Game Mode with a gamepad. Nothing is typed and nothing leaves the device:
+
+  1. start_connect() makes sure the credential directories exist and are writable by the user,
+     snapshots Steam's browser targets, starts waiting in the background, and hands the frontend
+     the login URL.
+  2. The frontend opens it with NavigateToExternalWeb — Steam's own browser, created by SteamUI's
+     own code, which is the only way a browser view reaches the screen (the milestone-2 spike).
+  3. The background task watches Steam's CEF target list for the store's redirect, takes the code
+     from it (connect.py), and has the CLI exchange it, running as the user (cli.py).
+  4. It reads the credential file back and emits "connect_done"; the frontend closes the browser
+     and says how it went. The QAM panel is not mounted while the browser is showing, so the
+     listener lives in index.tsx, not in the panel.
 
 It is its own plugin rather than a novadeck-control tab because it owns credentials. novadeck-control
 is the settings surface and reads nothing secret; keeping the store tokens behind a separate backend
@@ -13,11 +23,26 @@ Status is read from the CLIs' own credential files rather than from any state of
 gogdl refresh and invalidate those, so they own the answer (see status.py).
 """
 import asyncio
+import subprocess
 
-from novadeck_stores import paths, status
+import decky
+
+from novadeck_stores import cdp, cli, connect, paths, status
+
+# Long enough to type an email and a password on the on-screen keyboard and clear a captcha;
+# short enough that a login the user walked away from does not poll for the rest of the session.
+LOGIN_TIMEOUT = 600
+
+
+def _store_status(store, p):
+    if store == "epic":
+        return status.epic_status(p["LEGENDARY_CONFIG_PATH"])
+    return status.gog_status(p["NOVADECK_GOGDL_AUTH"])
 
 
 class Plugin:
+    _pending = None
+
     async def get_status(self):
         return await asyncio.to_thread(self._status)
 
@@ -29,15 +54,57 @@ class Plugin:
             # rather than reporting both stores "not connected", which invites the user to fix it
             # by signing in again — the one action that cannot help.
             return {"error": f"cannot resolve credential paths: {type(exc).__name__}"}
-        return {
-            "stores": [
-                status.epic_status(p["LEGENDARY_CONFIG_PATH"]),
-                status.gog_status(p["NOVADECK_GOGDL_AUTH"]),
-            ]
-        }
+        return {"stores": [_store_status(s, p) for s in connect.STORES]}
+
+    async def start_connect(self, store):
+        """Prepare a sign-in and return {"url": ...} for the frontend to open, or {"error": ...}.
+
+        Everything that can fail without spending the user's code fails HERE, before the login
+        page is on screen: an unknown store, unresolvable paths, a directory the user cannot write.
+        """
+        if store not in connect.STORES:
+            return {"error": f"unknown store {store!r}"}
+        try:
+            p = await asyncio.to_thread(paths.store_paths, True)
+            writable = await asyncio.to_thread(cli.writable_by_user, p)
+        except (OSError, subprocess.SubprocessError) as exc:
+            return {"error": f"cannot prepare credential storage: {type(exc).__name__}"}
+        if not writable:
+            return {"error": "credential storage is not writable by the user"}
+        try:
+            before = connect.snapshot(await cdp.list_targets())
+        except OSError:
+            return {"error": "cannot reach Steam's browser"}
+
+        # One sign-in at a time. A second start replaces the first: the user backed out of the
+        # earlier page (the only way to get back to the panel), so nothing is waiting on it.
+        if self._pending and not self._pending.done():
+            self._pending.cancel()
+        self._pending = asyncio.create_task(self._connect_flow(store, p, before))
+        return {"url": connect.LOGIN_URLS[store]}
+
+    async def _connect_flow(self, store, p, before):
+        code = await connect.capture(store, cdp.list_targets, cdp.read_body, before, LOGIN_TIMEOUT)
+        if code is None:
+            decky.logger.info(f"{store}: sign-in not completed within {LOGIN_TIMEOUT}s")
+            # close=False: the user has long since left the login, and navigating Back now would
+            # pull them out of whatever they are doing instead.
+            await decky.emit("connect_done", store, False, False, "Sign-in timed out")
+            return
+        try:
+            rc = await asyncio.to_thread(cli.exchange, store, code, p)
+        except (OSError, subprocess.SubprocessError) as exc:
+            rc = type(exc).__name__
+        result = await asyncio.to_thread(_store_status, store, p)
+        decky.logger.info(f"{store}: exchange exited {rc}, connected={result['connected']}")
+        if result["connected"]:
+            await decky.emit("connect_done", store, True, True, "Connected")
+        else:
+            await decky.emit("connect_done", store, False, True, "Sign-in failed")
 
     async def _main(self):
         pass
 
     async def _unload(self):
-        pass
+        if self._pending and not self._pending.done():
+            self._pending.cancel()

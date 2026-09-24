@@ -177,7 +177,7 @@ else
   ok "store-env present and executable"
 
   env_out="$(bash "$STORE_ENV" 2>/dev/null)"
-  for var in NOVADECK_STORE_HOME LEGENDARY_CONFIG_PATH NOVADECK_GOGDL_AUTH; do
+  for var in NOVADECK_STORE_USER NOVADECK_STORE_HOME LEGENDARY_CONFIG_PATH NOVADECK_GOGDL_AUTH; do
     printf '%s\n' "$env_out" | grep -q "^${var}=" \
       && ok "store-env emits $var" \
       || bad "store-env does not emit $var — a caller would fall back to the CLI's own default"
@@ -187,7 +187,8 @@ else
   # guards: it persists (it is an offload bind from the same /home tree), so "it survives an OTA"
   # is true there and still not a reason to put the user's store accounts in root's home.
   strays=""
-  while IFS='=' read -r _ value; do
+  while IFS='=' read -r key value; do
+    [ "$key" = NOVADECK_STORE_USER ] && continue   # an account name, not a path
     case "$value" in
       /home/deck/*) ;;
       '') ;;
@@ -218,6 +219,18 @@ EOF
     bad "store-env --ensure failed against a writable temp tree"
   fi
   rm -rf "$tmphome"
+
+  # The plugin runs store-env as ROOT, and every path it creates is inside a home the user owns.
+  # A root `install -o` there follows a symlink the user (or any game) planted, and chowns its
+  # target — a local root primitive. It must create the tree AS the user instead.
+  if grep -Eq '^[^#]*install[^#]*[[:space:]]-o[[:space:]]' "$STORE_ENV"; then
+    bad "store-env runs install -o — as root that chowns whatever a planted symlink points at"
+  else
+    ok "store-env never has root chown into the user's home (no install -o)"
+  fi
+  grep -q 'runuser -u "\$STORE_USER"' "$STORE_ENV" \
+    && ok "store-env drops to the store user before creating the tree" \
+    || bad "store-env does not drop to the store user for --ensure"
 fi
 
 # The plugin has to ASK store-env, not repeat its answer. A second copy of the paths would
@@ -237,6 +250,147 @@ if [ -d "$STORES_PY" ]; then
 else
   bad "novadeck-stores py_modules missing — the QAM surface has no backend"
 fi
+
+[ "$(bash "$STORE_ENV" 2>/dev/null | sed -n 's/^NOVADECK_STORE_USER=//p')" = deck ] \
+  && ok "store-env declares deck as the account the CLIs run as" \
+  || bad "store-env does not declare NOVADECK_STORE_USER=deck — the CLIs would write as someone else"
+
+# --- sign-in: capturing the code and handing it to the CLI --------------------------------
+# The sign-in happens in Steam's browser, on hardware, with a real account — none of which this
+# suite has. What it CAN drive is every decision the backend makes about what it sees: which page
+# is a store's redirect, where the code is in it, that a leftover redirect from an earlier sign-in
+# is ignored (its code is spent, and grabbing it fails the exchange before the user has seen the
+# login), and that the CLI is run as the user with its stdout thrown away. Those are the parts
+# that fail silently; a wrong URL at least fails on screen.
+pyout="$(python3 - "$STORES_PY/.." <<'PY'
+import asyncio, subprocess, sys
+sys.path.insert(0, sys.argv[1])
+from novadeck_stores import cli, connect
+
+def ok(m): print(f"  ok   {m}")
+def bad(m): print(f"  FAIL {m}")
+
+GOG_DONE = "https://embed.gog.com/on_login_success?origin=client&code=GOGCODE"
+EPIC_DONE = "https://www.epicgames.com/id/api/redirect?clientId=x&responseType=code"
+
+# -- recognising the redirect --
+checks = [
+    (connect.is_redirect("gog", GOG_DONE), "GOG's on_login_success is its redirect"),
+    (not connect.is_redirect("gog", connect.GOG_LOGIN_URL),
+     "GOG's login page is NOT its redirect, though it names the redirect in its own query string"),
+    (connect.is_redirect("epic", EPIC_DONE), "Epic's /id/api/redirect is its redirect"),
+    (not connect.is_redirect("epic", "https://www.epicgames.com/id/login?redirectUrl=" + EPIC_DONE),
+     "Epic's login page is NOT its redirect, though it carries the redirect as a parameter"),
+    (not connect.is_redirect("gog", EPIC_DONE), "one store's redirect is not the other's"),
+    (not connect.is_redirect("gog", None), "a target with no url is not a redirect"),
+]
+for passed, label in checks:
+    (ok if passed else bad)(label)
+
+# -- extracting the code --
+(ok if connect.code_from_url(GOG_DONE) == "GOGCODE" else bad)("GOG: the code is read from the redirect's query")
+(ok if connect.code_from_url(GOG_DONE.replace("GOGCODE", "")) is None else bad)("GOG: an empty code= is no code")
+body = '{"warning":"x","redirectUrl":"https://localhost/launcher/authorized?code=EPICCODE","authorizationCode":"EPICCODE","sid":null}'
+(ok if connect.code_from_body(body) == "EPICCODE" else bad)("Epic: the code is read from the page's authorizationCode")
+(ok if connect.code_from_body('{"authorizationCode":null}') is None else bad)(
+    "Epic: the signed-out page's null is no code (it loads BEFORE the login form)")
+
+# -- the capture loop, driven with fake target lists --
+def run(store, polls, bodies=None, before=None, timeout=10):
+    """polls: one target list per poll (an Exception instance = that poll fails)."""
+    seq = iter(polls)
+    reads = []
+    async def list_targets():
+        item = next(seq, [])
+        if isinstance(item, Exception):
+            raise item
+        return item
+    async def read_body(t):
+        reads.append(t["id"])
+        return (bodies or {}).get(t["id"])
+    now = [0.0]
+    async def sleep(s): now[0] += s
+    code = asyncio.run(connect.capture(store, list_targets, read_body, before or {}, timeout,
+                                       interval=1.0, clock=lambda: now[0], sleep=sleep))
+    return code, reads
+
+stale = {"id": "A", "url": GOG_DONE.replace("GOGCODE", "SPENT")}
+fresh = {"id": "B", "url": GOG_DONE}
+code, _ = run("gog", [[stale], [stale, fresh]], before=connect.snapshot([stale]))
+(ok if code == "GOGCODE" else bad)(
+    f"GOG: a redirect left from an EARLIER sign-in is ignored, the new one captured (got {code!r})")
+
+same_target = {"id": "A", "url": GOG_DONE}   # the SAME target navigated to a new redirect
+code, _ = run("gog", [[same_target]], before=connect.snapshot([stale]))
+(ok if code == "GOGCODE" else bad)("GOG: a target that navigates to a NEW redirect counts, even with the same id")
+
+code, _ = run("gog", [OSError("refused"), [fresh]])
+(ok if code == "GOGCODE" else bad)("a refused poll (Steam's web helper restarting) is retried, not fatal")
+
+code, reads = run("gog", [[fresh]])
+(ok if not reads else bad)("GOG never reads a page body — its code is in the URL")
+
+epic = {"id": "E", "url": EPIC_DONE}
+code, reads = run("epic", [[epic], [epic]], bodies={"E": body})
+(ok if code == "EPICCODE" else bad)("Epic: the code is taken from the redirect page's body")
+code, _ = run("epic", [[epic]] * 5, bodies={"E": '{"authorizationCode":null}'}, timeout=3)
+(ok if code is None else bad)("Epic: a redirect page that never carries a code times out as None")
+
+code, _ = run("gog", [], timeout=3)
+(ok if code is None else bad)("a login nobody finishes ends at the timeout with no code")
+
+# -- the exchange --
+p = {"NOVADECK_STORE_USER": "deck", "LEGENDARY_CONFIG_PATH": "/h/legendary",
+     "NOVADECK_GOGDL_AUTH": "/h/gogdl/auth.json"}
+argv = cli.exchange_argv("gog", "C", p)
+(ok if argv[:3] == ["gogdl", "--auth-config-path", "/h/gogdl/auth.json"] and argv[3:] == ["auth", "--code", "C"] else bad)(
+    "gogdl gets --auth-config-path BEFORE the subcommand (without it the tokens are thrown away)")
+(ok if cli.exchange_argv("epic", "C", p) == ["legendary", "auth", "--code", "C"] else bad)(
+    "legendary is handed the code with --code")
+
+seen = {}
+real_run = subprocess.run
+def fake_run(argv, **kw):
+    seen.update(argv=argv, **kw)
+    return subprocess.CompletedProcess(argv, 0)
+subprocess.run = fake_run
+try:
+    cli.exchange("epic", "C", p)
+finally:
+    subprocess.run = real_run
+(ok if seen["argv"][:4] == ["runuser", "-u", "deck", "--"] else bad)(
+    "the CLI runs as the store user, so its credential files are the user's from creation")
+(ok if seen.get("stdout") is subprocess.DEVNULL else bad)(
+    "the CLI's stdout is discarded — gogdl prints the whole token set to it")
+(ok if seen["env"].get("LEGENDARY_CONFIG_PATH") == "/h/legendary" else bad)(
+    "legendary is pointed at the declared config path, not the caller's home")
+extra = set(seen["env"]) - {"PATH", "LANG", "LEGENDARY_CONFIG_PATH"}
+(ok if not extra else bad)(f"the CLI gets a minimal environment, not root's (extra: {sorted(extra)})")
+
+from novadeck_stores import cdp
+(ok if cdp.is_local_debugger("ws://127.0.0.1:8080/devtools/page/ABC") else bad)(
+    "the Epic page read accepts Steam's own debugger socket")
+for evil in ("ws://10.0.0.5:8080/devtools/page/A", "ws://127.0.0.1:9999/x",
+             "wss://127.0.0.1:8080/x", "ws://127.0.0.1:notaport/x", "http://127.0.0.1:8080/x"):
+    if cdp.is_local_debugger(evil):
+        bad(f"the Epic page read would connect to {evil} — whatever squats :8080 could aim root at any host")
+        break
+else:
+    ok("the Epic page read refuses any socket but loopback :8080 (a squatted port cannot aim root elsewhere)")
+PY
+)"
+pyrc=$?
+printf '%s\n' "$pyout"
+PASS=$((PASS + $(grep -c '^  ok ' <<<"$pyout" || true)))
+FAIL=$((FAIL + $(grep -c '^  FAIL' <<<"$pyout" || true)))
+[ "$pyrc" -eq 0 ] || bad "the sign-in checks crashed (exit $pyrc) — every check after the crash never ran"
+
+# The code is a credential for as long as it lives, and the Decky log is readable by anyone with
+# SSH on a dev card. No logger line in the backend may interpolate it.
+leaky="$(grep -n 'logger\.' "$ROOT/apps/decky/novadeck-stores/main.py" "$STORES_PY"/*.py | grep -E '\{code\b|%s.*code|\bcode\)' || true)"
+[ -z "$leaky" ] \
+  && ok "no backend log line interpolates the authorization code" \
+  || bad "a backend log line may print the authorization code: $leaky"
 
 # --- the suite is wired in -------------------------------------------------------------------
 grep -q 'test-store-cli.sh' "$ROOT/Makefile" \

@@ -32,7 +32,7 @@ def _clean_env():
 
 
 def store_paths(ensure=False):
-    """Return {NOVADECK_STORE_HOME, LEGENDARY_CONFIG_PATH, NOVADECK_GOGDL_AUTH}.
+    """Return {NOVADECK_STORE_USER, NOVADECK_STORE_HOME, LEGENDARY_CONFIG_PATH, NOVADECK_GOGDL_AUTH}.
 
     With ensure=True the tree is created first, owned by the deck user — gogdl will not create
     its own parent, and its writer runs AFTER the authorization code has been exchanged, so a

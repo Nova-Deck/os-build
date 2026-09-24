@@ -1,5 +1,11 @@
 export type StoreId = "epic" | "gog";
 
+// Shared by the panel rows and the sign-in toasts, which are raised from index.tsx.
+export const STORE_LABELS: Record<string, string> = {
+  epic: "Epic Games",
+  gog: "GOG",
+};
+
 export type StoreStatus = {
   store: StoreId;
   connected: boolean;
@@ -14,3 +20,6 @@ export type StoreStatus = {
 // union on a truthiness test against an optional property, so `state.error ? … : state.stores`
 // compiles with `state.stores` possibly undefined. Narrow on the key's presence instead.
 export type State = { stores: StoreStatus[] } | { error: string };
+
+// Same union-and-`in` shape as State, for the same narrowing reason.
+export type ConnectStart = { url: string } | { error: string };

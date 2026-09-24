@@ -266,6 +266,47 @@ assertion in `make test`. The guard is a release-path backstop, not the first li
   `_reference/unifideck/src/utils/authShortcutLaunch.ts` arrived at for the same reason.
 - **Validate**: a real account connects on hardware, per store, with a gamepad only.
 
+#### Tasks 4 + 5 — built 2026-09-24, NOT yet HW-gated
+
+The Action above predates the spike and is superseded by it: there is no view we create and no
+`finished-request` handler. What was built:
+
+| Step | Where | How |
+|---|---|---|
+| Prepare | `main.py start_connect` | `store-env --ensure`, then `runuser -u deck -- test -w` on both directories — every failure that would spend the code happens here, before the login is on screen |
+| Open | `Content.tsx signIn` | `CloseSideMenus()` then `NavigateToExternalWeb(url)` — the spike's proven path |
+| Capture | `connect.py capture` | Polls CEF `/json` once a second, up to 10 min. GOG: `code=` from the URL. Epic: one `Runtime.evaluate(document.body.innerText)` on the redirect page's **own** target (`cdp.py read_body`) — never SharedJSContext, so Decky's injection socket is untouched |
+| Exchange | `cli.py exchange` | The CLI runs **as `deck`** via `runuser`, so its files are `deck`-owned from creation — this closes Task 2's open ownership item by construction rather than by chown. stdout discarded (gogdl prints the tokens) |
+| Verdict | `main.py _connect_flow` | Read the credential file back — **neither CLI's exit status means anything**: `legendary auth` logs a failure and exits 0, `gogdl auth` prints `{"error": true}` and exits 0 |
+| Close | `index.tsx onConnectDone` | `connect_done` event → `NavigateBack()` (only if the redirect was captured, i.e. the page is still up) + a toast. The listener lives in `definePlugin`, because the QAM panel is unmounted while the browser shows |
+
+**A leftover redirect is ignored.** The target list is snapshotted before the login opens; a
+redirect page still carrying an earlier, already-spent code would otherwise be captured on the
+first poll and fail the exchange before the user saw anything. `tests/test-store-cli.sh` drives
+this, plus the redirect matching, code extraction and the `runuser`/stdout contract.
+
+**Epic's login URL is `legendary.gl/epiclogin`, not one we build.** legendary can replace its
+client id from its remote config (`egs.py update_egs_params`), and the code has to be issued to
+the client id legendary exchanges it with; upstream's own helper tracks that.
+
+**Security review, 2026-09-24.** One CRITICAL found and fixed: `store-env --ensure` ran
+`install -d -o deck` as root on paths inside `/home/deck`, and `install` follows symlinks — any
+process running as `deck` (a game) could plant a link and have root chown its target. Task 2
+introduced it; the sign-in flow made it reachable on every connect. The tree is now created *as*
+the user, and the suite asserts there is no `install -o`. Also hardened: the Epic page read only
+connects to a loopback `:8080` socket (a squatted port cannot aim root elsewhere), and the CLI
+gets `PATH`/`LANG`/`LEGENDARY_CONFIG_PATH` rather than root's environment.
+**Accepted:** the code sits in `/proc/<pid>/cmdline` while the CLI runs, readable by any `deck`
+process, which could race to replay it. Both CLIs accept it only on argv; the code is single-use
+and spent within the call. Anything that can read it can already read the stored tokens.
+
+**Still unproven, and only hardware can prove it:**
+- Epic end to end — its code has never been captured on this device; GOG's has (the spike).
+- `NavigateBack()` actually closes the external-web route and returns to where the user was.
+- The websocket to the Epic redirect target works from inside the x86 PluginLoader under FEX
+  (aiohttp is the loader's own; the offline suite has none and cannot import it).
+- `stat -c %U` on real token files returns `deck` (Task 2's acceptance item).
+
 ### Task 6: Status, refresh and disconnect
 - **Action**: The tab shows the connected account and refreshes tokens through each CLI's own
   refresh path. A disconnect action deletes the credentials and says so.

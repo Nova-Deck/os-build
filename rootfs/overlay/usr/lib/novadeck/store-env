@@ -4,7 +4,7 @@
 # Emits shell-quoted assignments on stdout, the same shape as device-env, so consumers eval it:
 #     eval "$(/usr/lib/novadeck/store-env)"
 #
-# With --ensure it also creates the tree, owned by the deck user, before printing.
+# With --ensure it also creates the tree, as the deck user, before printing.
 #
 # WHY THIS FILE EXISTS. legendary and gogdl each have their own idea of where credentials go, and
 # neither idea is ours:
@@ -37,9 +37,9 @@
 # persistence was never the reason for the location. (/root persists too: it is an offload bind
 # from the same /home tree. That is what makes it a tempting wrong answer.)
 #
-# ANYTHING WRITING HERE AS ROOT MUST RESTORE OWNERSHIP — write a temp file in the target directory,
-# chown it to the directory's uid/gid, then rename it atomically. A root-owned credential file
-# leaves the user with something their own tools cannot rewrite and the UI cannot repair.
+# NOTHING WRITES HERE AS ROOT. The CLIs are run as NOVADECK_STORE_USER (runuser), so they create
+# their own files with the right owner. A root-owned credential file would leave the user with
+# something their own tools cannot rewrite and the UI cannot repair.
 set -euo pipefail
 
 STORE_USER=${NOVADECK_STORE_USER:-deck}
@@ -51,10 +51,23 @@ NOVADECK_GOGDL_AUTH="$STORE_HOME/gogdl/auth.json"
 if [[ ${1:-} == --ensure ]]; then
     # 0700: these are OAuth refresh tokens. Group and other have no business here, and the CLIs
     # do not create their parents — gogdl in particular will not.
-    install -d -m 0700 -o "$STORE_USER" -g "$STORE_USER" \
+    #
+    # Created AS the store user, never by root with -o. Every one of these paths is inside a home
+    # the user owns, so anything running as the user — any game — can plant a symlink at one of
+    # them before the first sign-in. install follows symlinks when it sets owner and mode, so a
+    # root `install -d -o deck` would chown and chmod whatever the link points at: /etc/sudoers.d,
+    # a systemd drop-in directory, anything. As the user, the worst a planted link can do is
+    # point at something the user could already change.
+    as_user=()
+    [[ $EUID -eq 0 ]] && as_user=(runuser -u "$STORE_USER" --)
+    "${as_user[@]}" install -d -m 0700 \
             "$STORE_HOME" "$LEGENDARY_CONFIG_PATH" "$(dirname "$NOVADECK_GOGDL_AUTH")"
 fi
 
+# The account the CLIs run AS, declared here beside the paths it owns. The plugin backend is root
+# and drops to this user for every CLI call, so the files legendary and gogdl write are the user's
+# from the moment they exist — no chown pass after the fact, and nothing root-owned to repair.
+printf 'NOVADECK_STORE_USER=%q\n'   "$STORE_USER"
 printf 'NOVADECK_STORE_HOME=%q\n'   "$STORE_HOME"
 printf 'LEGENDARY_CONFIG_PATH=%q\n' "$LEGENDARY_CONFIG_PATH"
 printf 'NOVADECK_GOGDL_AUTH=%q\n'   "$NOVADECK_GOGDL_AUTH"

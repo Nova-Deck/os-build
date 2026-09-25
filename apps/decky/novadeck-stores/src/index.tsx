@@ -9,10 +9,16 @@ import { STORE_LABELS } from "./types";
 //
 // `close` says whether the login page is still showing. It is true once the redirect was
 // captured — the browser is sitting on the store's redirect page — and false on a timeout, when
-// the user left long ago and a Back would pull them out of whatever they are doing now.
+// the user left long ago and leaving now would pull them out of whatever they are doing.
+//
+// Home, not Back. The external-web route spends Back on the PAGE's history first, and a store
+// login is a chain of redirects, so on hardware a Back after Epic's redirect left the login on
+// screen. Navigating to a route leaves the browser outright, and ends every sign-in in one place.
+const HOME_ROUTE = "/library/home";
+
 function onConnectDone(store: string, connected: boolean, close: boolean, message: string) {
   if (close) {
-    Navigation.NavigateBack();
+    Navigation.Navigate(HOME_ROUTE);
   }
   toaster.toast({
     title: STORE_LABELS[store] ?? store,

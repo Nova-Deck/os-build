@@ -3,8 +3,15 @@
 The plugin backend is root (plugin.json flags), and every file these CLIs write lands in the
 user's home. Running them as root would create root-owned credentials that the launch path, which
 runs as the user, cannot refresh — the failure novadeck-framegen's conf.py documents for lsfg-vk.
-runuser makes the CLI the file's author, so ownership is right by construction rather than
-repaired by a chown pass afterwards.
+Running it as the user makes the CLI the file's author, so ownership is right by construction
+rather than repaired by a chown pass afterwards.
+
+HOST SYSTEMD STARTS THE CLI, NOT US. PluginLoader is an x86_64 bundle under FEX, and FEX resolves
+every path its children open against the x86 guest rootfs first. legendary and gogdl are not in
+the guest, so their scripts come from the host — but their `#!/usr/bin/python` IS in the guest,
+and that python has neither package (HW-observed: `ModuleNotFoundError: No module named
+'legendary'`, exit 1, for both stores). A transient unit is started by PID 1 on the host, natively,
+with none of our emulation, environment or file descriptors except the ones --pipe hands over.
 
 NEITHER CLI'S EXIT STATUS MEANS ANYTHING HERE. `legendary auth` logs a failed login and returns 0;
 `gogdl auth` prints {"error": true} and returns 0. Success is decided by reading the credential
@@ -20,10 +27,29 @@ import subprocess
 from novadeck_stores.paths import _clean_env
 
 EXCHANGE_TIMEOUT = 120
+CHECK_TIMEOUT = 10
 
 
-def _as_user(user, argv):
-    return ["runuser", "-u", user, "--"] + argv
+def _as_user(user, argv, max_sec, setenv=None):
+    """systemd-run invocation that runs argv as user on the host and returns its exit status.
+
+    --pipe connects the unit to OUR stdin/stdout/stderr. Without it the unit's output goes to the
+    journal, and gogdl prints the whole token set on stdout.
+    --description replaces the default, which is the command line: the journal's "Started ..."
+    line would otherwise carry the authorization code.
+    RuntimeMaxSec bounds the unit itself. Our subprocess timeout only kills systemd-run, and the
+    unit would carry on without it.
+    The unit's environment is systemd's for that user (HOME, USER, PATH) plus setenv; nothing of
+    ours is inherited.
+    """
+    opts = [
+        "systemd-run", "--quiet", "--collect", "--pipe", "--wait",
+        f"--description=novadeck-stores {argv[0]}",
+        f"--property=User={user}",
+        f"--property=RuntimeMaxSec={max_sec}",
+    ]
+    opts += [f"--setenv={k}={v}" for k, v in (setenv or {}).items()]
+    return opts + ["--"] + argv
 
 
 def exchange_argv(store, code, p):
@@ -39,22 +65,27 @@ def exchange_argv(store, code, p):
     raise ValueError(f"unknown store {store!r}")
 
 
-def _exchange_env(p):
-    """Only what the CLI needs, not root's whole environment. runuser supplies HOME, USER and
-    LOGNAME for the target user; LD_LIBRARY_PATH is dropped outright (see _clean_env)."""
-    inherited = _clean_env()
-    env = {k: inherited[k] for k in ("PATH", "LANG") if k in inherited}
-    env["LEGENDARY_CONFIG_PATH"] = p["LEGENDARY_CONFIG_PATH"]
+def _exchange_setenv(p):
+    """Only what the CLI needs on top of systemd's per-user environment, not root's."""
+    env = {"LEGENDARY_CONFIG_PATH": p["LEGENDARY_CONFIG_PATH"]}
+    lang = _clean_env().get("LANG")
+    if lang:
+        env["LANG"] = lang
     return env
 
 
 def exchange(store, code, p):
-    """Run the exchange as the store user. Returns the exit status, for the log only."""
-    env = _exchange_env(p)
+    """Run the exchange as the store user. Returns the exit status, for the log only.
+
+    systemd-run itself is resolved from the guest rootfs and runs under FEX, so it gets
+    _clean_env: the bundle's LD_LIBRARY_PATH breaks guest binaries (power.py's busctl finding).
+    """
+    argv = _as_user(p["NOVADECK_STORE_USER"], exchange_argv(store, code, p),
+                    EXCHANGE_TIMEOUT, _exchange_setenv(p))
     result = subprocess.run(
-        _as_user(p["NOVADECK_STORE_USER"], exchange_argv(store, code, p)),
+        argv,
         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        env=env, timeout=EXCHANGE_TIMEOUT,
+        env=_clean_env(), timeout=EXCHANGE_TIMEOUT + CHECK_TIMEOUT,
     )
     return result.returncode
 
@@ -69,8 +100,9 @@ def writable_by_user(p):
     gog_dir = p["NOVADECK_GOGDL_AUTH"].rsplit("/", 1)[0]
     for d in (p["LEGENDARY_CONFIG_PATH"], gog_dir):
         rc = subprocess.run(
-            _as_user(p["NOVADECK_STORE_USER"], ["test", "-w", d]),
+            _as_user(p["NOVADECK_STORE_USER"], ["test", "-w", d], CHECK_TIMEOUT),
             stdin=subprocess.DEVNULL, capture_output=True, env=_clean_env(),
+            timeout=CHECK_TIMEOUT * 2,
         ).returncode
         if rc != 0:
             return False

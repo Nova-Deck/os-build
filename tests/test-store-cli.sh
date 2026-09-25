@@ -355,17 +355,34 @@ def fake_run(argv, **kw):
     return subprocess.CompletedProcess(argv, 0)
 subprocess.run = fake_run
 try:
-    cli.exchange("epic", "C", p)
+    cli.exchange("epic", "SECRETCODE", p)
 finally:
     subprocess.run = real_run
-(ok if seen["argv"][:4] == ["runuser", "-u", "deck", "--"] else bad)(
+sd = seen["argv"]
+sep = sd.index("--") if "--" in sd else len(sd)
+opts, cmd = sd[:sep], sd[sep + 1:]
+setenv = dict(o.split("=", 1)[1].split("=", 1) for o in opts if o.startswith("--setenv="))
+(ok if sd[0] == "systemd-run" and cmd == ["legendary", "auth", "--code", "SECRETCODE"] else bad)(
+    "the CLI is started by host systemd — under FEX a direct child resolves #!/usr/bin/python to "
+    "the x86 guest's python, which has no legendary or gogdl (HW-observed: ModuleNotFoundError)")
+(ok if "--property=User=deck" in opts else bad)(
     "the CLI runs as the store user, so its credential files are the user's from creation")
+(ok if "--pipe" in opts and "--wait" in opts else bad)(
+    "the unit's output comes back to us (--pipe) and we wait for its exit (--wait) — without "
+    "--pipe systemd writes gogdl's token set to the journal")
 (ok if seen.get("stdout") is subprocess.DEVNULL else bad)(
     "the CLI's stdout is discarded — gogdl prints the whole token set to it")
-(ok if seen["env"].get("LEGENDARY_CONFIG_PATH") == "/h/legendary" else bad)(
+desc = [o for o in opts if o.startswith("--description=")]
+(ok if desc and not any("SECRETCODE" in o for o in opts) else bad)(
+    "the unit has its own description, so the journal's Started line does not carry the code")
+(ok if setenv.get("LEGENDARY_CONFIG_PATH") == "/h/legendary" else bad)(
     "legendary is pointed at the declared config path, not the caller's home")
-extra = set(seen["env"]) - {"PATH", "LANG", "LEGENDARY_CONFIG_PATH"}
+extra = set(setenv) - {"LANG", "LEGENDARY_CONFIG_PATH"}
 (ok if not extra else bad)(f"the CLI gets a minimal environment, not root's (extra: {sorted(extra)})")
+(ok if "LD_LIBRARY_PATH" not in seen["env"] else bad)(
+    "systemd-run itself does not inherit the PyInstaller bundle's LD_LIBRARY_PATH")
+(ok if any(o.startswith("--property=RuntimeMaxSec=") for o in opts) else bad)(
+    "the unit has its own deadline — killing systemd-run on our timeout would not stop it")
 
 from novadeck_stores import cdp
 (ok if cdp.is_local_debugger("ws://127.0.0.1:8080/devtools/page/ABC") else bad)(

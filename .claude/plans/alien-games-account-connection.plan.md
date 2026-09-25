@@ -273,17 +273,17 @@ The Action above predates the spike and is superseded by it: there is no view we
 
 | Step | Where | How |
 |---|---|---|
-| Prepare | `main.py start_connect` | `store-env --ensure`, then `runuser -u deck -- test -w` on both directories — every failure that would spend the code happens here, before the login is on screen |
+| Prepare | `main.py start_connect` | `store-env --ensure`, then `test -w` as `deck` (via `systemd-run`, see Exchange) on both directories — every failure that would spend the code happens here, before the login is on screen |
 | Open | `Content.tsx signIn` | `CloseSideMenus()` then `NavigateToExternalWeb(url)` — the spike's proven path |
 | Capture | `connect.py capture` | Polls CEF `/json` once a second, up to 10 min. GOG: `code=` from the URL. Epic: one `Runtime.evaluate(document.body.innerText)` on the redirect page's **own** target (`cdp.py read_body`) — never SharedJSContext, so Decky's injection socket is untouched |
-| Exchange | `cli.py exchange` | The CLI runs **as `deck`** via `runuser`, so its files are `deck`-owned from creation — this closes Task 2's open ownership item by construction rather than by chown. stdout discarded (gogdl prints the tokens) |
+| Exchange | `cli.py exchange` | The CLI runs **as `deck`** in a transient unit (`systemd-run -p User=deck --pipe --wait`), so its files are `deck`-owned from creation — this closes Task 2's open ownership item by construction rather than by chown. Host PID 1 starts it natively: under FEX a direct child resolves `#!/usr/bin/python` to the x86 guest's python, which has neither CLI. stdout discarded (gogdl prints the tokens); `--pipe` keeps it out of the journal and `--description` keeps the code out of the "Started" line |
 | Verdict | `main.py _connect_flow` | Read the credential file back — **neither CLI's exit status means anything**: `legendary auth` logs a failure and exits 0, `gogdl auth` prints `{"error": true}` and exits 0 |
-| Close | `index.tsx onConnectDone` | `connect_done` event → `NavigateBack()` (only if the redirect was captured, i.e. the page is still up) + a toast. The listener lives in `definePlugin`, because the QAM panel is unmounted while the browser shows |
+| Close | `index.tsx onConnectDone` | `connect_done` event → `Navigate("/library/home")` (only if the redirect was captured, i.e. the page is still up) + a toast. The listener lives in `definePlugin`, because the QAM panel is unmounted while the browser shows |
 
 **A leftover redirect is ignored.** The target list is snapshotted before the login opens; a
 redirect page still carrying an earlier, already-spent code would otherwise be captured on the
 first poll and fail the exchange before the user saw anything. `tests/test-store-cli.sh` drives
-this, plus the redirect matching, code extraction and the `runuser`/stdout contract.
+this, plus the redirect matching, code extraction and the `systemd-run`/stdout contract.
 
 **Epic's login URL is `legendary.gl/epiclogin`, not one we build.** legendary can replace its
 client id from its remote config (`egs.py update_egs_params`), and the code has to be issued to
@@ -300,12 +300,28 @@ gets `PATH`/`LANG`/`LEGENDARY_CONFIG_PATH` rather than root's environment.
 process, which could race to replay it. Both CLIs accept it only on argv; the code is single-use
 and spent within the call. Anything that can read it can already read the stored tokens.
 
-**Still unproven, and only hardware can prove it:**
-- Epic end to end — its code has never been captured on this device; GOG's has (the spike).
-- `NavigateBack()` actually closes the external-web route and returns to where the user was.
-- The websocket to the Epic redirect target works from inside the x86 PluginLoader under FEX
-  (aiohttp is the loader's own; the offline suite has none and cannot import it).
-- `stat -c %U` on real token files returns `deck` (Task 2's acceptance item).
+**Hardware, 2026-09-25 (Pocket ACE, dev card @ `5058059`):**
+- PROVEN: Epic's code is captured — the websocket to the redirect target works from inside the
+  x86 PluginLoader under FEX, and `connect_done` reaches the frontend listener.
+- FAILED, FIXED: `NavigateBack()` left the login on screen. The external-web route spends Back on
+  the page's own history, and the login is a redirect chain. Now `Navigate("/library/home")`,
+  checked live over CDP (`/externalweb` → `/library/home`). The hidden browser target outlives
+  the route (still listed in `/json`); the snapshot already ignores a leftover redirect.
+- FAILED, FIXED: both exchanges exited **1** with no credential file. stderr, captured once to a
+  root-only tmpfs file: `ModuleNotFoundError: No module named 'legendary'` — the CLI never
+  started. FEX resolves the children's paths against the x86 guest rootfs, whose python has
+  neither CLI (a native replay over SSH cannot see this, which is why it exited 0). Now run via
+  `systemd-run`; the exact argv was reproduced under FEX (`legendary --version` via guest bash).
+
+**Hardware, 2026-09-25, second card (Pocket ACE, dev card @ `6cec0ce` + the two fixes above):**
+- PASSED: GOG and Epic end to end — `gog: exchange exited 0, connected=True`,
+  `epic: exchange exited 0, connected=True`. `auth.json` and `user.json` hold the full token sets.
+- PASSED: for both stores the login page closed on its own and landed on the Home library.
+- PASSED: every file under `~deck/.local/share/novadeck/stores/` is owned by `deck` (Task 2's
+  acceptance item); no `/root/.config/legendary`. The boot's journal carries no token, no
+  `authorizationCode`, no `--code`: the units log only `Started novadeck-stores <cli>`.
+- For Task 7: both token files are mode `644` (the CLIs' own default). The `0700` directories
+  keep them private, but the files themselves are not.
 
 ### Task 6: Status, refresh and disconnect
 - **Action**: The tab shows the connected account and refreshes tokens through each CLI's own

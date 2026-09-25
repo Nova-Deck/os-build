@@ -87,7 +87,7 @@ class Plugin:
         code = await connect.capture(store, cdp.list_targets, cdp.read_body, before, LOGIN_TIMEOUT)
         if code is None:
             decky.logger.info(f"{store}: sign-in not completed within {LOGIN_TIMEOUT}s")
-            # close=False: the user has long since left the login, and navigating Back now would
+            # close=False: the user has long since left the login, and navigating Home now would
             # pull them out of whatever they are doing instead.
             await decky.emit("connect_done", store, False, False, "Sign-in timed out")
             return

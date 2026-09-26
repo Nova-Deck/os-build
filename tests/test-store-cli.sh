@@ -176,8 +176,9 @@ if [ ! -x "$STORE_ENV" ]; then
 else
   ok "store-env present and executable"
 
-  env_out="$(bash "$STORE_ENV" 2>/dev/null)"
-  for var in NOVADECK_STORE_USER NOVADECK_STORE_HOME LEGENDARY_CONFIG_PATH NOVADECK_GOGDL_AUTH; do
+  # The host has no deck user, so its uid is handed in; the lookup itself is checked below.
+  env_out="$(NOVADECK_STORE_UID=1000 bash "$STORE_ENV" 2>/dev/null)"
+  for var in NOVADECK_STORE_USER NOVADECK_STORE_UID NOVADECK_STORE_HOME LEGENDARY_CONFIG_PATH NOVADECK_GOGDL_AUTH; do
     printf '%s\n' "$env_out" | grep -q "^${var}=" \
       && ok "store-env emits $var" \
       || bad "store-env does not emit $var — a caller would fall back to the CLI's own default"
@@ -188,7 +189,7 @@ else
   # is true there and still not a reason to put the user's store accounts in root's home.
   strays=""
   while IFS='=' read -r key value; do
-    [ "$key" = NOVADECK_STORE_USER ] && continue   # an account name, not a path
+    case "$key" in NOVADECK_STORE_USER|NOVADECK_STORE_UID) continue ;; esac   # the account, not a path
     case "$value" in
       /home/deck/*) ;;
       '') ;;
@@ -219,6 +220,13 @@ EOF
     bad "store-env --ensure failed against a writable temp tree"
   fi
   rm -rf "$tmphome"
+
+  # The plugin reads a credential file as root only if the store user owns it, so the uid it
+  # compares against has to be the user's real one.
+  [ "$(NOVADECK_STORE_USER="$(id -un)" bash "$STORE_ENV" 2>/dev/null \
+       | sed -n 's/^NOVADECK_STORE_UID=//p')" = "$(id -u)" ] \
+    && ok "store-env resolves the store user's uid" \
+    || bad "store-env does not emit the store user's uid — root would read files it cannot vouch for"
 
   # The plugin runs store-env as ROOT, and every path it creates is inside a home the user owns.
   # A root `install -o` there follows a symlink the user (or any game) planted, and chowns its
@@ -251,7 +259,7 @@ else
   bad "novadeck-stores py_modules missing — the QAM surface has no backend"
 fi
 
-[ "$(bash "$STORE_ENV" 2>/dev/null | sed -n 's/^NOVADECK_STORE_USER=//p')" = deck ] \
+[ "$(NOVADECK_STORE_UID=1000 bash "$STORE_ENV" 2>/dev/null | sed -n 's/^NOVADECK_STORE_USER=//p')" = deck ] \
   && ok "store-env declares deck as the account the CLIs run as" \
   || bad "store-env does not declare NOVADECK_STORE_USER=deck — the CLIs would write as someone else"
 
@@ -367,6 +375,9 @@ setenv = dict(o.split("=", 1)[1].split("=", 1) for o in opts if o.startswith("--
     "the x86 guest's python, which has no legendary or gogdl (HW-observed: ModuleNotFoundError)")
 (ok if "--property=User=deck" in opts else bad)(
     "the CLI runs as the store user, so its credential files are the user's from creation")
+(ok if "--property=UMask=0077" in opts else bad)(
+    "the CLI runs under umask 077, so the token files are 0600 — both CLIs create them with a "
+    "bare open(..., 'w'), which would otherwise give 0644 (HW-observed)")
 (ok if "--pipe" in opts and "--wait" in opts else bad)(
     "the unit's output comes back to us (--pipe) and we wait for its exit (--wait) — without "
     "--pipe systemd writes gogdl's token set to the journal")
@@ -418,6 +429,7 @@ tmp = tempfile.mkdtemp()
 lgd = os.path.join(tmp, "legendary")
 os.mkdir(lgd)
 gog = os.path.join(tmp, "auth.json")
+UID = os.getuid()   # stands in for the store user: the files below are ours
 
 def write(path, data):
     with open(path, "w", encoding="utf-8") as f:
@@ -430,37 +442,62 @@ def iso(delta):   # legendary's format: naive UTC with a trailing Z
 ALLOWED = {"store", "connected", "account", "expired"}
 
 # -- Epic --
-s = status.epic_status(lgd)
+s = status.epic_status(lgd, UID)
 (ok if s == {"store": "epic", "connected": False} else bad)(f"Epic with no user.json is not connected ({s})")
 write(os.path.join(lgd, "user.json"), "")
-(ok if not status.epic_status(lgd)["connected"] else bad)("Epic with an empty user.json is not connected")
+(ok if not status.epic_status(lgd, UID)["connected"] else bad)("Epic with an empty user.json is not connected")
 write(os.path.join(lgd, "user.json"), {"displayName": "Loki", "access_token": "SECRET",
                                         "refresh_token": "SECRET", "expires_at": iso(3600)})
-s = status.epic_status(lgd)
+s = status.epic_status(lgd, UID)
 (ok if s["connected"] and s["account"] == "Loki" and s["expired"] is False else bad)(
     f"a live Epic session is connected, named, and not expired ({s})")
 (ok if set(s) <= ALLOWED and "SECRET" not in json.dumps(s) else bad)(
     "the panel is never handed a token, only connected/account/expired")
 write(os.path.join(lgd, "user.json"), {"displayName": "Loki", "expires_at": iso(-60)})
-(ok if status.epic_status(lgd)["expired"] is True else bad)(
+(ok if status.epic_status(lgd, UID)["expired"] is True else bad)(
     "an Epic session past expires_at reads as expired (a refresh that could not reach Epic leaves it so)")
 write(os.path.join(lgd, "user.json"), {"displayName": "Loki", "expires_at": "garbage"})
-s = status.epic_status(lgd)
+s = status.epic_status(lgd, UID)
 (ok if s["connected"] and s["expired"] is False else bad)(
     "an unparseable expires_at does not invent an expiry — legendary decides on its next login")
 
 # -- GOG --
-s = status.gog_status(gog)
+s = status.gog_status(gog, UID)
 (ok if s == {"store": "gog", "connected": False} else bad)(f"GOG with no auth.json is not connected ({s})")
 write(gog, {"46899977096215655": {"access_token": "SECRET", "refresh_token": "SECRET",
                                   "loginTime": time.time(), "expires_in": 3600}})
-s = status.gog_status(gog)
+s = status.gog_status(gog, UID)
 (ok if s["connected"] and s["expired"] is False else bad)(f"a live GOG token is connected and not expired ({s})")
 (ok if set(s) <= ALLOWED and "SECRET" not in json.dumps(s) else bad)(
     "the GOG status carries no token either")
 write(gog, {"46899977096215655": {"access_token": "SECRET", "loginTime": time.time() - 7200, "expires_in": 3600}})
-(ok if status.gog_status(gog)["expired"] is True else bad)(
+(ok if status.gog_status(gog, UID)["expired"] is True else bad)(
     "a GOG token past loginTime + expires_in reads as expired (gogdl's own test)")
+
+# -- root reads these files inside a tree the user owns --
+# Anything running as the user (a game) can swap the file, or any directory above it, for a
+# symlink. Root must read only a regular file the store user owns, and must not block on a FIFO.
+live = {"46899977096215655": {"access_token": "SECRET", "loginTime": time.time(), "expires_in": 3600}}
+elsewhere = os.path.join(tmp, "elsewhere.json")
+write(elsewhere, live)
+os.remove(gog)
+os.symlink(elsewhere, gog)
+(ok if not status.gog_status(gog, UID)["connected"] else bad)(
+    "a credential file swapped for a symlink is not followed")
+os.remove(gog)
+write(gog, live)
+(ok if not status.gog_status(gog, UID + 1)["connected"] else bad)(
+    "a credential file not owned by the store user is not read (a swapped parent directory "
+    "leads to someone else's file)")
+os.remove(gog)
+os.mkfifo(gog)
+import threading
+done = threading.Event()
+threading.Thread(target=lambda: (status.gog_status(gog, UID), done.set()), daemon=True).start()
+(ok if done.wait(2) else bad)(
+    "a FIFO in place of the credential file does not block root's read (it would hold the "
+    "store's lock forever)")
+os.remove(gog)
 
 # -- which CLI runs, as whom --
 p = {"NOVADECK_STORE_USER": "deck", "LEGENDARY_CONFIG_PATH": "/h/legendary",

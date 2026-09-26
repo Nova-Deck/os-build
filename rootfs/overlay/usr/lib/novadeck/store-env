@@ -37,12 +37,15 @@
 # persistence was never the reason for the location. (/root persists too: it is an offload bind
 # from the same /home tree. That is what makes it a tempting wrong answer.)
 #
-# NOTHING WRITES HERE AS ROOT. The CLIs are run as NOVADECK_STORE_USER (runuser), so they create
+# NOTHING WRITES HERE AS ROOT. The CLIs are run as NOVADECK_STORE_USER (systemd-run), so they create
 # their own files with the right owner. A root-owned credential file would leave the user with
 # something their own tools cannot rewrite and the UI cannot repair.
 set -euo pipefail
 
 STORE_USER=${NOVADECK_STORE_USER:-deck}
+# Resolved HERE, natively. The plugin checks the credential files' owner against it before root
+# reads them, and inside the plugin a passwd lookup goes through FEX's x86 guest rootfs.
+STORE_UID=${NOVADECK_STORE_UID:-$(id -u "$STORE_USER")}
 STORE_HOME=${NOVADECK_STORE_HOME:-/home/$STORE_USER/.local/share/novadeck/stores}
 
 LEGENDARY_CONFIG_PATH="$STORE_HOME/legendary"
@@ -68,6 +71,7 @@ fi
 # and drops to this user for every CLI call, so the files legendary and gogdl write are the user's
 # from the moment they exist — no chown pass after the fact, and nothing root-owned to repair.
 printf 'NOVADECK_STORE_USER=%q\n'   "$STORE_USER"
+printf 'NOVADECK_STORE_UID=%q\n'    "$STORE_UID"
 printf 'NOVADECK_STORE_HOME=%q\n'   "$STORE_HOME"
 printf 'LEGENDARY_CONFIG_PATH=%q\n' "$LEGENDARY_CONFIG_PATH"
 printf 'NOVADECK_GOGDL_AUTH=%q\n'   "$NOVADECK_GOGDL_AUTH"

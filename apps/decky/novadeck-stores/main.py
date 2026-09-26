@@ -36,9 +36,10 @@ LOGIN_TIMEOUT = 600
 
 
 def _store_status(store, p):
+    uid = int(p["NOVADECK_STORE_UID"])
     if store == "epic":
-        return status.epic_status(p["LEGENDARY_CONFIG_PATH"])
-    return status.gog_status(p["NOVADECK_GOGDL_AUTH"])
+        return status.epic_status(p["LEGENDARY_CONFIG_PATH"], uid)
+    return status.gog_status(p["NOVADECK_GOGDL_AUTH"], uid)
 
 
 # One CLI call per store at a time. gogdl rewrites its whole auth file after a refresh with no

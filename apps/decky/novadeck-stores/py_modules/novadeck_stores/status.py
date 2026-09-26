@@ -15,6 +15,7 @@ ran — then it says the refresh could not renew it (see main.py refresh).
 import datetime
 import json
 import os
+import stat
 import time
 
 # legendary keeps its session in user.json alongside its caches (assets.json, aliases.json);
@@ -22,9 +23,25 @@ import time
 LEGENDARY_SESSION = "user.json"
 
 
-def _readable_json(path):
+def _readable_json(path, owner_uid):
+    """The file's JSON, or None. Only a regular file owned by the store user is read.
+
+    ROOT READS THIS, inside a tree the user owns. Anything running as the user — a game — can
+    swap the file, or any directory above it, for a symlink. O_NOFOLLOW refuses a link in the
+    last component; the owner check refuses a swapped parent, which can only lead to a file
+    someone else owns (anything the user owns, the user could read already). O_NONBLOCK lets a
+    FIFO open without blocking, and the regular-file check then rejects it: a blocked read here
+    would hold the store's lock (main.py) for good.
+    """
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    except OSError:
+        return None
+    try:
+        with os.fdopen(fd, "r", encoding="utf-8") as f:
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode) or st.st_uid != owner_uid:
+                return None
             return json.load(f)
     except (OSError, ValueError):
         return None
@@ -43,12 +60,12 @@ def _epic_expired(expires_at):
     return expiry <= now
 
 
-def epic_status(legendary_config_path):
+def epic_status(legendary_config_path, owner_uid):
     """Connected when legendary's session file parses. An empty or truncated user.json is NOT
     connected — legendary would fail on the next call and the panel should already say so.
     legendary deletes the file itself when Epic rejects a refresh, so a revoked session reads as
     not connected with no help from us."""
-    data = _readable_json(os.path.join(legendary_config_path, LEGENDARY_SESSION))
+    data = _readable_json(os.path.join(legendary_config_path, LEGENDARY_SESSION), owner_uid)
     if not isinstance(data, dict) or not data:
         return {"store": "epic", "connected": False}
     return {
@@ -67,11 +84,11 @@ def _gog_expired(creds):
         return False
 
 
-def gog_status(gogdl_auth_path):
+def gog_status(gogdl_auth_path, owner_uid):
     """Connected when the auth file holds at least one client id with an access token. There is
     no account name: gogdl stores only a user id, and naming the account would take an API call
     with the token."""
-    data = _readable_json(gogdl_auth_path)
+    data = _readable_json(gogdl_auth_path, owner_uid)
     if not isinstance(data, dict):
         return {"store": "gog", "connected": False}
     for creds in data.values():

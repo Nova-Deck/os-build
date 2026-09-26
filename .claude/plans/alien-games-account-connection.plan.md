@@ -348,6 +348,39 @@ and spent within the call. Anything that can read it can already read the stored
 - **Validate**: full walkthrough — connect both stores, reboot, confirm still connected, OTA in
   both directions, confirm still connected.
 
+#### Credential-at-rest review, 2026-09-26 — two fixes, offline suite green, HW walkthrough owed
+
+**Posture, stated plainly:** the tokens sit in `/home/deck/.local/share/novadeck/stores/`, files
+`0600` and directories `0700`, owned by `deck`, on an **unencrypted** `/home`. They are as safe as
+Steam's own credentials on the same card: private from other accounts, readable by anything
+running as `deck` and by anyone holding the card. Disconnect removes them from the device, not
+the session from the store, and its modal already says so. No UI change: the panel claims nothing
+beyond this.
+
+| Finding | Verdict | Fix |
+|---|---|---|
+| Token files were `0644` (Tasks 4+5 HW note) | CONFIRMED | `--property=UMask=0077` on the CLI's unit. Both CLIs write with a bare `open(…, 'w')` (legendary `lfs/utils.py` `LockedJSONData`, gogdl `auth.py` `__write_config`), so the umask is the mode. **Only new writes**: a file already on a card keeps its mode until the CLI recreates it |
+| `status.py` read the credential files **as root**, by path, inside a tree `deck` owns | CONFIRMED (MEDIUM) | A game could swap the file or any parent for a symlink and have root parse any file, or plant a FIFO and block the read while `_run_cli` holds the store's lock, wedging that store. Now `O_NOFOLLOW \| O_NONBLOCK`, then `fstat`: regular file, owned by the store uid, or it is not read. The uid comes from `store-env` (`id -u`, native), not a passwd lookup inside the plugin, which would go through FEX's guest rootfs |
+| Every secret-bearing file is covered | NOT AN ISSUE | legendary: `user.json` only; `LEGENDARY_CONFIG_PATH` is honoured unconditionally, so nothing in `~/.config/legendary`. gogdl: its one auth file |
+| Tokens leaking to journal / logs / frontend | NOT AN ISSUE | `--description` replaces the argv default, stdout goes to `DEVNULL`, the logger gets rc/connected/expired only, and the panel is never handed a token |
+| Disconnect leaves a secret | NOT AN ISSUE | `legendary auth --delete` removes `user.json`; gogdl has no other token file |
+| `writable_by_user`, disconnect's `rm -f` | NOT AN ISSUE | Both run as `deck` |
+| Code on argv, CEF port, unencrypted `/home` | Accepted earlier | unchanged |
+
+**Hardware, 2026-09-26 (Pocket ACE, dev card from this tree):**
+- PASSED: both stores signed in from Game Mode, gamepad only, on a freshly flashed card; the panel
+  read Connected for both, which also proves the owner check accepts the real files (uid 1000 from
+  `store-env`).
+- PASSED: every file under `stores/` is `600 deck` (`auth.json`, `user.json`, legendary's
+  `config.ini` and `version.json`); no `/root/.config/legendary`.
+- PASSED: reboot, still connected (plugin status code run as root on the new boot).
+- PASSED, the Task 6 layout on a real card build: GOG forced expired and unrenewable (`loginTime`
+  0, a bogus `refresh_token`) → the panel's refresh left it `expired=True`, the row read Expired
+  with Sign in again above Disconnect, and signing in again wrote a fresh `600 deck` token.
+- **SKIPPED at the operator's call: the OTA in both directions.** `/home` is the shared partition
+  and the tokens live nowhere else, so an OTA should not touch them, but that is reasoning, not a
+  test.
+
 ## Validation
 
 ```bash
@@ -381,10 +414,11 @@ source dev.env && make sdcard                     # a card to walk through
 
 - [x] Task 1's spike answered on hardware, with the captured redirect URL recorded — and taken
       further than the gate asked: the captured code was exchanged for a live GOG token
-- [ ] Epic and GOG both connect from Game Mode, gamepad only, no SSH and no typed code
-- [ ] Credentials live under `/home/deck`, owned by `deck`; nothing under `/root`, `/etc` or `/var`
-- [ ] Connection survives a reboot **and** an OTA in both directions
-- [ ] A forced token expiry refreshes rather than failing
-- [ ] Disconnect removes the credentials
-- [ ] Security review of credential-at-rest completed before merge
-- [ ] `make test` green, including the new plugin's checks
+- [x] Epic and GOG both connect from Game Mode, gamepad only, no SSH and no typed code
+- [x] Credentials live under `/home/deck`, owned by `deck`; nothing under `/root`, `/etc` or `/var`
+- [ ] Connection survives a reboot **and** an OTA in both directions — reboot PASSED; the OTA was
+      skipped at the operator's call (Task 7)
+- [x] A forced token expiry refreshes rather than failing
+- [x] Disconnect removes the credentials
+- [x] Security review of credential-at-rest completed before merge
+- [x] `make test` green, including the new plugin's checks

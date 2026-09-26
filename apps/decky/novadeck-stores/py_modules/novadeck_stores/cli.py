@@ -38,6 +38,9 @@ def _as_user(user, argv, max_sec, setenv=None):
     journal, and gogdl prints the whole token set on stdout.
     --description replaces the default, which is the command line: the journal's "Started ..."
     line would otherwise carry the authorization code.
+    UMask=0077 makes the token files 0600. Both CLIs create them with a bare open(..., 'w'), so
+    the unit's umask is their mode: 0644 under the default (HW-observed). The 0700 directory keeps
+    them private either way; the files should not rely on it.
     RuntimeMaxSec bounds the unit itself. Our subprocess timeout only kills systemd-run, and the
     unit would carry on without it.
     The unit's environment is systemd's for that user (HOME, USER, PATH) plus setenv; nothing of
@@ -47,6 +50,7 @@ def _as_user(user, argv, max_sec, setenv=None):
         "systemd-run", "--quiet", "--collect", "--pipe", "--wait",
         f"--description=novadeck-stores {argv[0]}",
         f"--property=User={user}",
+        "--property=UMask=0077",
         f"--property=RuntimeMaxSec={max_sec}",
     ]
     opts += [f"--setenv={k}={v}" for k, v in (setenv or {}).items()]

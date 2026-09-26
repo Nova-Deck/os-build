@@ -1,7 +1,8 @@
 """novadeck-stores — the Quick Access surface for game stores outside Steam.
 
-Milestone 2 of the alien-games PRD: the panel shows whether Epic and GOG are connected, and signs
-either one in from Game Mode with a gamepad. Nothing is typed and nothing leaves the device:
+Milestone 2 of the alien-games PRD: the panel shows whether Epic and GOG are connected, renews a
+connected store's session each time it opens (refresh), removes one on request (disconnect), and
+signs either one in from Game Mode with a gamepad. Nothing is typed and nothing leaves the device:
 
   1. start_connect() makes sure the credential directories exist and are writable by the user,
      snapshots Steam's browser targets, starts waiting in the background, and hands the frontend
@@ -38,6 +39,12 @@ def _store_status(store, p):
     if store == "epic":
         return status.epic_status(p["LEGENDARY_CONFIG_PATH"])
     return status.gog_status(p["NOVADECK_GOGDL_AUTH"])
+
+
+# One CLI call per store at a time. gogdl rewrites its whole auth file after a refresh with no
+# lock of its own, so a refresh still in flight when the user disconnects would write the
+# credentials straight back. legendary has a file lock; this keeps the two stores' rules the same.
+_LOCKS = {store: asyncio.Lock() for store in connect.STORES}
 
 
 class Plugin:
@@ -91,16 +98,53 @@ class Plugin:
             # pull them out of whatever they are doing instead.
             await decky.emit("connect_done", store, False, False, "Sign-in timed out")
             return
-        try:
-            rc = await asyncio.to_thread(cli.exchange, store, code, p)
-        except (OSError, subprocess.SubprocessError) as exc:
-            rc = type(exc).__name__
-        result = await asyncio.to_thread(_store_status, store, p)
-        decky.logger.info(f"{store}: exchange exited {rc}, connected={result['connected']}")
+        result = await self._run_cli("exchange", store, p, cli.exchange, store, code, p)
         if result["connected"]:
             await decky.emit("connect_done", store, True, True, "Connected")
         else:
             await decky.emit("connect_done", store, False, True, "Sign-in failed")
+
+    async def _run_cli(self, action, store, p, fn, *args):
+        """Run one CLI call under the store's lock and return the status read back afterwards.
+        The exit status goes to the log only: neither CLI's means anything (cli.py)."""
+        async with _LOCKS[store]:
+            # Cancelling a task does not stop its thread: start_connect cancels a pending sign-in,
+            # and if that lands here the CLI runs on. So the lock is held until the CLI has
+            # really exited, and only then does the cancellation carry on up.
+            call = asyncio.ensure_future(asyncio.to_thread(fn, *args))
+            try:
+                rc = await asyncio.shield(call)
+            except asyncio.CancelledError:
+                await asyncio.wait({call})
+                raise
+            except (OSError, subprocess.SubprocessError) as exc:
+                rc = type(exc).__name__
+            result = await asyncio.to_thread(_store_status, store, p)
+        decky.logger.info(f"{store}: {action} exited {rc}, connected={result['connected']}, "
+                          f"expired={result.get('expired')}")
+        return result
+
+    async def refresh(self, store):
+        """Renew a connected store's session through its CLI and return the status after.
+
+        Asked by the panel on every open, for each connected store. Afterwards `expired` means
+        the CLI could not renew it: offline, or GOG refused (gogdl cannot tell those apart). A
+        session Epic refused is gone entirely, since legendary deletes it.
+        """
+        return await self._account_action("refresh", store, cli.refresh)
+
+    async def disconnect(self, store):
+        """Remove a store's credentials from this device and return the status after."""
+        return await self._account_action("disconnect", store, cli.disconnect)
+
+    async def _account_action(self, action, store, fn):
+        if store not in connect.STORES:
+            return {"error": f"unknown store {store!r}"}
+        try:
+            p = await asyncio.to_thread(paths.store_paths)
+        except (OSError, subprocess.SubprocessError) as exc:
+            return {"error": f"cannot resolve credential paths: {type(exc).__name__}"}
+        return await self._run_cli(action, store, p, fn, store, p)
 
     async def _main(self):
         pass

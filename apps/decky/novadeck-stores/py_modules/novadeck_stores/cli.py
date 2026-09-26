@@ -27,6 +27,7 @@ import subprocess
 from novadeck_stores.paths import _clean_env
 
 EXCHANGE_TIMEOUT = 120
+REFRESH_TIMEOUT = 60
 CHECK_TIMEOUT = 10
 
 
@@ -65,7 +66,35 @@ def exchange_argv(store, code, p):
     raise ValueError(f"unknown store {store!r}")
 
 
-def _exchange_setenv(p):
+def refresh_argv(store, p):
+    """The CLI invocation that renews a session through the CLI's own refresh path.
+
+    legendary: list-installed --check-updates is the lightest command that logs in. `status`
+    also fetches the whole game library. Login re-uses a session with 10+ minutes left and
+    refreshes otherwise; when Epic rejects the refresh, legendary deletes user.json itself.
+    gogdl: `auth` with no code renews an expired token and writes it back. On any failure it
+    leaves the file as it was, still expired, which is what status.py reads.
+    """
+    if store == "epic":
+        return ["legendary", "list-installed", "--check-updates"]
+    if store == "gog":
+        return ["gogdl", "--auth-config-path", p["NOVADECK_GOGDL_AUTH"], "auth"]
+    raise ValueError(f"unknown store {store!r}")
+
+
+def disconnect_argv(store, p):
+    """The invocation that removes a store's credentials from this device. Local only: neither
+    CLI can revoke the session with the store."""
+    if store == "epic":
+        return ["legendary", "auth", "--delete"]
+    if store == "gog":
+        # gogdl has no logout. Removed AS the user like every other write here: root unlinking
+        # a path inside the user's home would follow a directory the user swapped for a link.
+        return ["rm", "-f", "--", p["NOVADECK_GOGDL_AUTH"]]
+    raise ValueError(f"unknown store {store!r}")
+
+
+def _cli_setenv(p):
     """Only what the CLI needs on top of systemd's per-user environment, not root's."""
     env = {"LEGENDARY_CONFIG_PATH": p["LEGENDARY_CONFIG_PATH"]}
     lang = _clean_env().get("LANG")
@@ -74,20 +103,30 @@ def _exchange_setenv(p):
     return env
 
 
-def exchange(store, code, p):
-    """Run the exchange as the store user. Returns the exit status, for the log only.
+def _run(p, argv, max_sec):
+    """Run argv as the store user. Returns the exit status, for the log only.
 
     systemd-run itself is resolved from the guest rootfs and runs under FEX, so it gets
     _clean_env: the bundle's LD_LIBRARY_PATH breaks guest binaries (power.py's busctl finding).
     """
-    argv = _as_user(p["NOVADECK_STORE_USER"], exchange_argv(store, code, p),
-                    EXCHANGE_TIMEOUT, _exchange_setenv(p))
     result = subprocess.run(
-        argv,
+        _as_user(p["NOVADECK_STORE_USER"], argv, max_sec, _cli_setenv(p)),
         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        env=_clean_env(), timeout=EXCHANGE_TIMEOUT + CHECK_TIMEOUT,
+        env=_clean_env(), timeout=max_sec + CHECK_TIMEOUT,
     )
     return result.returncode
+
+
+def exchange(store, code, p):
+    return _run(p, exchange_argv(store, code, p), EXCHANGE_TIMEOUT)
+
+
+def refresh(store, p):
+    return _run(p, refresh_argv(store, p), REFRESH_TIMEOUT)
+
+
+def disconnect(store, p):
+    return _run(p, disconnect_argv(store, p), CHECK_TIMEOUT)
 
 
 def writable_by_user(p):

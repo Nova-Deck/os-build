@@ -10,6 +10,9 @@ export type StoreStatus = {
   store: StoreId;
   connected: boolean;
   account?: string | null;
+  // What the credential file says about its access token. Meaningful only after a refresh has
+  // run: then it means the refresh could not renew it (main.py refresh).
+  expired?: boolean;
 };
 
 // The backend answers with an error string instead of a store list when it cannot resolve the
@@ -23,3 +26,5 @@ export type State = { stores: StoreStatus[] } | { error: string };
 
 // Same union-and-`in` shape as State, for the same narrowing reason.
 export type ConnectStart = { url: string } | { error: string };
+
+export type AccountResult = StoreStatus | { error: string };

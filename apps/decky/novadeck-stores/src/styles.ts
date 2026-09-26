@@ -19,4 +19,11 @@ export const styles = `
         font-size: 12px;
         opacity: 0.7;
       }
+      /* An expired row's Sign in again + Disconnect, stacked: side by side they do not fit the
+         QAM's width. */
+      .novadeck-stores .novadeck-store-actions {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
 `;

@@ -329,6 +329,17 @@ and spent within the call. Anything that can read it can already read the stored
 - **Validate**: force expiry by editing `loginTime`/`expires_in`, confirm the next call refreshes
   rather than failing; disconnect leaves no token on disk.
 
+**Implementation, 2026-09-25 (offline suite green); hardware walkthrough passed 2026-09-26 on the Pocket ACE:**
+
+| Piece | Where | What |
+|---|---|---|
+| Status | `status.py` | Adds `expired`, from each CLI's own test: legendary's `expires_at`, gogdl's `loginTime + expires_in`. The panel still gets only store / connected / account / expired. GOG has no account name offline (gogdl stores a user id) |
+| Refresh | `cli.py refresh_argv` | Epic: `legendary list-installed --check-updates`, the lightest command that runs legendary's login (`status` also fetches the whole library). GOG: `gogdl … auth`, which renews an expired token and writes it back |
+| When | `Content.tsx` | Every panel open, for each connected store, in the background. The row shows the file's answer at once and "Checking the session…" until the CLI answers |
+| Verdict | `main.py refresh` | Read back from the file. Epic refused: legendary deletes `user.json`, so the row turns into Sign in. Offline, or GOG refused: the file stays expired, and the row reads Expired, "could not be renewed", with Sign in again (straight over the dead session, the exchange overwrites it) stacked above Disconnect in a `flow-children="column"` Focusable. gogdl cannot tell those two apart, so the text doesn't either |
+| Disconnect | `cli.py disconnect_argv` | Behind a confirm modal. Epic: `legendary auth --delete`. GOG: `rm -f` of `auth.json` as `deck` (gogdl has no logout). Local only: neither CLI can end the session with the store, and the modal says so |
+| Serialized | `main.py _LOCKS` | One CLI call per store at a time, the sign-in exchange included. gogdl rewrites its whole file with no lock, so a refresh in flight would otherwise put back credentials a disconnect had just removed |
+
 ### Task 7: Security review and the walkthrough
 - **Action**: Credential-at-rest review before merge, as the PRD requires. State the posture
   honestly rather than implying more than we do: `/home` is not encrypted, so the tokens are as

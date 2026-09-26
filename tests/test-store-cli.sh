@@ -402,6 +402,134 @@ PASS=$((PASS + $(grep -c '^  ok ' <<<"$pyout" || true)))
 FAIL=$((FAIL + $(grep -c '^  FAIL' <<<"$pyout" || true)))
 [ "$pyrc" -eq 0 ] || bad "the sign-in checks crashed (exit $pyrc) — every check after the crash never ran"
 
+# --- status, refresh and disconnect ----------------------------------------------------------
+# Status is read from the credential files; refresh and disconnect go through each CLI's own
+# path. What can be checked offline: what the panel is told for each shape of file, that it is
+# never told a secret, and which CLI invocation each action runs, as whom.
+pyout="$(python3 - "$STORES_PY/.." <<'PY'
+import datetime, json, os, subprocess, sys, tempfile, time
+sys.path.insert(0, sys.argv[1])
+from novadeck_stores import cli, status
+
+def ok(m): print(f"  ok   {m}")
+def bad(m): print(f"  FAIL {m}")
+
+tmp = tempfile.mkdtemp()
+lgd = os.path.join(tmp, "legendary")
+os.mkdir(lgd)
+gog = os.path.join(tmp, "auth.json")
+
+def write(path, data):
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(data if isinstance(data, str) else json.dumps(data))
+
+def iso(delta):   # legendary's format: naive UTC with a trailing Z
+    t = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None) + datetime.timedelta(seconds=delta)
+    return t.isoformat(timespec="milliseconds") + "Z"
+
+ALLOWED = {"store", "connected", "account", "expired"}
+
+# -- Epic --
+s = status.epic_status(lgd)
+(ok if s == {"store": "epic", "connected": False} else bad)(f"Epic with no user.json is not connected ({s})")
+write(os.path.join(lgd, "user.json"), "")
+(ok if not status.epic_status(lgd)["connected"] else bad)("Epic with an empty user.json is not connected")
+write(os.path.join(lgd, "user.json"), {"displayName": "Loki", "access_token": "SECRET",
+                                        "refresh_token": "SECRET", "expires_at": iso(3600)})
+s = status.epic_status(lgd)
+(ok if s["connected"] and s["account"] == "Loki" and s["expired"] is False else bad)(
+    f"a live Epic session is connected, named, and not expired ({s})")
+(ok if set(s) <= ALLOWED and "SECRET" not in json.dumps(s) else bad)(
+    "the panel is never handed a token, only connected/account/expired")
+write(os.path.join(lgd, "user.json"), {"displayName": "Loki", "expires_at": iso(-60)})
+(ok if status.epic_status(lgd)["expired"] is True else bad)(
+    "an Epic session past expires_at reads as expired (a refresh that could not reach Epic leaves it so)")
+write(os.path.join(lgd, "user.json"), {"displayName": "Loki", "expires_at": "garbage"})
+s = status.epic_status(lgd)
+(ok if s["connected"] and s["expired"] is False else bad)(
+    "an unparseable expires_at does not invent an expiry — legendary decides on its next login")
+
+# -- GOG --
+s = status.gog_status(gog)
+(ok if s == {"store": "gog", "connected": False} else bad)(f"GOG with no auth.json is not connected ({s})")
+write(gog, {"46899977096215655": {"access_token": "SECRET", "refresh_token": "SECRET",
+                                  "loginTime": time.time(), "expires_in": 3600}})
+s = status.gog_status(gog)
+(ok if s["connected"] and s["expired"] is False else bad)(f"a live GOG token is connected and not expired ({s})")
+(ok if set(s) <= ALLOWED and "SECRET" not in json.dumps(s) else bad)(
+    "the GOG status carries no token either")
+write(gog, {"46899977096215655": {"access_token": "SECRET", "loginTime": time.time() - 7200, "expires_in": 3600}})
+(ok if status.gog_status(gog)["expired"] is True else bad)(
+    "a GOG token past loginTime + expires_in reads as expired (gogdl's own test)")
+
+# -- which CLI runs, as whom --
+p = {"NOVADECK_STORE_USER": "deck", "LEGENDARY_CONFIG_PATH": "/h/legendary",
+     "NOVADECK_GOGDL_AUTH": "/h/gogdl/auth.json"}
+(ok if cli.refresh_argv("epic", p) == ["legendary", "list-installed", "--check-updates"] else bad)(
+    "Epic refreshes through legendary's own login, without fetching the whole library (status does)")
+(ok if cli.refresh_argv("gog", p) == ["gogdl", "--auth-config-path", "/h/gogdl/auth.json", "auth"] else bad)(
+    "GOG refreshes through gogdl auth, which renews an expired token and writes it back")
+(ok if cli.disconnect_argv("epic", p) == ["legendary", "auth", "--delete"] else bad)(
+    "Epic disconnects through legendary auth --delete")
+(ok if cli.disconnect_argv("gog", p) == ["rm", "-f", "--", "/h/gogdl/auth.json"] else bad)(
+    "GOG disconnects by removing its auth file (gogdl has no logout)")
+
+real_run = subprocess.run
+for action in ("refresh", "disconnect"):
+    for store in ("epic", "gog"):
+        seen = {}
+        def fake_run(argv, **kw):
+            seen.update(argv=argv, **kw)
+            return subprocess.CompletedProcess(argv, 0)
+        subprocess.run = fake_run
+        try:
+            getattr(cli, action)(store, p)
+        finally:
+            subprocess.run = real_run
+        sd = seen["argv"]
+        opts = sd[:sd.index("--")]
+        good = (sd[0] == "systemd-run" and "--property=User=deck" in opts and "--pipe" in opts
+                and seen.get("stdout") is subprocess.DEVNULL
+                and "--setenv=LEGENDARY_CONFIG_PATH=/h/legendary" in opts)
+        (ok if good else bad)(
+            f"{action} {store}: runs as deck through host systemd, stdout discarded, at the declared paths")
+
+# -- the per-store lock outlives a cancelled caller --
+# start_connect cancels a pending sign-in. If that lands during the exchange, the CLI keeps running
+# in its thread: the lock must stay held until it exits, or a second gogdl call can write auth.json
+# alongside it. main.py imports decky, which only exists inside the loader, so it is stubbed.
+import asyncio, threading, types
+sys.modules["decky"] = types.SimpleNamespace(logger=types.SimpleNamespace(info=lambda *a: None))
+sys.path.insert(0, os.path.join(sys.argv[1], ".."))
+import main
+
+async def cancelled_mid_cli():
+    release = threading.Event()
+    task = asyncio.create_task(main.Plugin()._run_cli(
+        "exchange", "gog", {}, lambda: release.wait(5), ))
+    await asyncio.sleep(0.05)              # the CLI "is running"
+    task.cancel()
+    await asyncio.sleep(0.05)
+    held = main._LOCKS["gog"].locked()     # cancelled, but the CLI has not exited
+    release.set()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    return held, main._LOCKS["gog"].locked()
+
+main._store_status = lambda store, p: {"store": store, "connected": False}
+held, after = asyncio.run(cancelled_mid_cli())
+(ok if held and not after else bad)(
+    f"a cancelled caller keeps the store's lock until its CLI exits, then frees it (held={held}, after={after})")
+PY
+)"
+pyrc=$?
+printf '%s\n' "$pyout"
+PASS=$((PASS + $(grep -c '^  ok ' <<<"$pyout" || true)))
+FAIL=$((FAIL + $(grep -c '^  FAIL' <<<"$pyout" || true)))
+[ "$pyrc" -eq 0 ] || bad "the status checks crashed (exit $pyrc) — every check after the crash never ran"
+
 # The code is a credential for as long as it lives, and the Decky log is readable by anyone with
 # SSH on a dev card. No logger line in the backend may interpolate it.
 leaky="$(grep -n 'logger\.' "$ROOT/apps/decky/novadeck-stores/main.py" "$STORES_PY"/*.py | grep -E '\{code\b|%s.*code|\bcode\)' || true)"

@@ -4,11 +4,18 @@ Connection is read from the credential each CLI writes, not from a state file of
 second record of "connected" would be one more thing to keep true: the CLI is what refreshes and
 invalidates these, so it owns the answer and we only look.
 
-Deliberately NOT parsed here: the tokens themselves. Answering "is there a credential" needs the
-file to exist and to be JSON; reading the account out of it is milestone 2's later task, and the
-less this module touches secrets the smaller the blast radius of a logging mistake.
+What leaves this module is connected / account / expired and nothing else. The files hold the
+tokens too, and the panel never needs them; the less this module hands on, the smaller the blast
+radius of a logging mistake.
+
+`expired` is what the file says about its own access token. It is NOT a verdict on the account:
+an expired access token is exactly what a refresh renews. It means something only AFTER a refresh
+ran — then it says the refresh could not renew it (see main.py refresh).
 """
+import datetime
 import json
+import os
+import time
 
 # legendary keeps its session in user.json alongside its caches (assets.json, aliases.json);
 # gogdl writes a single file whose keys are OAuth client ids.
@@ -23,23 +30,51 @@ def _readable_json(path):
         return None
 
 
+def _epic_expired(expires_at):
+    """legendary's own test (core.py _login): expires_at is naive UTC with a trailing Z. Anything
+    that does not parse is left to legendary to judge on its next login, not called expired."""
+    if not isinstance(expires_at, str):
+        return False
+    try:
+        expiry = datetime.datetime.fromisoformat(expires_at.rstrip("Z"))
+    except ValueError:
+        return False
+    now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+    return expiry <= now
+
+
 def epic_status(legendary_config_path):
     """Connected when legendary's session file parses. An empty or truncated user.json is NOT
-    connected — legendary would fail on the next call and the panel should already say so."""
-    import os
-
+    connected — legendary would fail on the next call and the panel should already say so.
+    legendary deletes the file itself when Epic rejects a refresh, so a revoked session reads as
+    not connected with no help from us."""
     data = _readable_json(os.path.join(legendary_config_path, LEGENDARY_SESSION))
     if not isinstance(data, dict) or not data:
         return {"store": "epic", "connected": False}
-    return {"store": "epic", "connected": True, "account": data.get("displayName") or None}
+    return {
+        "store": "epic",
+        "connected": True,
+        "account": data.get("displayName") or None,
+        "expired": _epic_expired(data.get("expires_at")),
+    }
+
+
+def _gog_expired(creds):
+    """gogdl's own test (auth.py is_credential_expired): loginTime + expires_in."""
+    try:
+        return time.time() >= float(creds["loginTime"]) + float(creds["expires_in"])
+    except (KeyError, TypeError, ValueError):
+        return False
 
 
 def gog_status(gogdl_auth_path):
-    """Connected when the auth file holds at least one client id with an access token."""
+    """Connected when the auth file holds at least one client id with an access token. There is
+    no account name: gogdl stores only a user id, and naming the account would take an API call
+    with the token."""
     data = _readable_json(gogdl_auth_path)
     if not isinstance(data, dict):
         return {"store": "gog", "connected": False}
     for creds in data.values():
         if isinstance(creds, dict) and creds.get("access_token"):
-            return {"store": "gog", "connected": True, "account": None}
+            return {"store": "gog", "connected": True, "account": None, "expired": _gog_expired(creds)}
     return {"store": "gog", "connected": False}

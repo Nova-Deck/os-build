@@ -197,8 +197,8 @@ archlinux-deckard base did: Python 3.13 → 3.14 rebuilt both CLIs).
 | # | Milestone | Outcome | How it is proven when it lands | Status | Plan |
 |---|---|---|---|---|---|
 | 1 | Store CLIs, native arm64 | legendary and gogdl are packaged and run on the device — no FEX, no x86 freeze | Package builds in the normal pipeline; each CLI runs on hardware and lists a library given a hand-supplied token — **done 2026-09-20**: 55 Epic titles listed, GOG authenticated and `gogdl info` returning build metadata | complete | [`alien-games.plan.md`](../plans/alien-games.plan.md) |
-| 2 | Account connection | A user connects Epic and GOG from the device with **no browser we ship** — Steam's own CEF browser is already there and is scriptable; tokens persist and refresh | Hardware walkthrough with real accounts; token survives reboot and an expiry/refresh cycle; security review of credential-at-rest before it is marked complete | in-progress | [`alien-games-account-connection.plan.md`](../plans/alien-games-account-connection.plan.md) |
-| 3 | Install and uninstall | An owned title downloads to a chosen location, resumes after an interruption, and uninstalls cleanly | Driven on hardware against a real account, including a deliberate mid-download network cut | pending | — |
+| 2 | Account connection | A user connects Epic and GOG from the device with **no browser we ship** — Steam's own CEF browser is already there and is scriptable; tokens persist and refresh | Hardware walkthrough with real accounts; token survives reboot and an expiry/refresh cycle; security review of credential-at-rest before it is marked complete — **done 2026-09-26** (`dae460c`): both stores, reboot, expiry/refresh, review with two fixes; the OTA-both-ways check was skipped | complete | [`alien-games-account-connection.plan.md`](../plans/alien-games-account-connection.plan.md) |
+| 3 | Install and uninstall | An owned title downloads to a chosen location, resumes after an interruption, and uninstalls cleanly | Driven on hardware against a real account, including a deliberate mid-download network cut | in-progress | [`alien-games-install.plan.md`](../plans/alien-games-install.plan.md) |
 | 4 | Library entry writer | An entry is created and removed in Steam's shortcut store, correctly sequenced against Steam's lifecycle, keyed on **our** stable id via a launcher stub — never on Steam's appid | Driven directly on a dev card with Steam running; entry survives a Steam restart and a reboot | pending | — |
 | 5 | Artwork acquisition | An entry gets grid art, and degrades to something usable when the source is unreachable | Driven directly, including with the network cut | pending | — |
 | 6 | Launch path | A downloaded Windows title starts through the existing Proton/FEX chain and a Linux-native one through system FEX, both fronted by `game-launch` | Invoked from a shell on hardware, one case per form, with `game-launch` confirmed in the chain | pending | — |
@@ -236,9 +236,10 @@ lands; no separate issues.
 - [ ] **Do we build a reduced client or fork unifideck?** Leaning build-reduced and reuse the
       design: two stores, no browser, no umu, our launch chain. A fork inherits seven stores, an
       Edge dependency and a maintenance treadmill. Decide before milestone 1 is planned.
-- [ ] **Where do games install, and who chooses?** Internal `/home`, SD card, or a user-picked path.
-      Interacts with the OTA layout and with how the shortcut's stored path survives a card moving
-      between slots or devices.
+- [x] **Where do games install, and who chooses?** **Answered 2026-09-26 (milestone 3 plan):**
+      `<volume>/Games/<store>/<game>`. The volumes are `/home/deck` plus every card udisks mounts
+      under `/run/media/deck/`, and the user picks a drive, never a path. The tree stays outside
+      Steam's own, and a card keeps its label-based path when it moves between devices.
 - [ ] **How do identity and tuning share one `LaunchOptions` field?** We need that field for
       `game-launch %command%`; the ecosystem pattern puts the durable id there too, and Steam is
       known to mangle it. Candidates: encode both, carry the id as arguments on the `Exe` stub

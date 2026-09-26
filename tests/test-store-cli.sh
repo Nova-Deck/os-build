@@ -178,7 +178,8 @@ else
 
   # The host has no deck user, so its uid is handed in; the lookup itself is checked below.
   env_out="$(NOVADECK_STORE_UID=1000 bash "$STORE_ENV" 2>/dev/null)"
-  for var in NOVADECK_STORE_USER NOVADECK_STORE_UID NOVADECK_STORE_HOME LEGENDARY_CONFIG_PATH NOVADECK_GOGDL_AUTH; do
+  for var in NOVADECK_STORE_USER NOVADECK_STORE_UID NOVADECK_STORE_HOME LEGENDARY_CONFIG_PATH \
+             NOVADECK_GOGDL_AUTH GOGDL_CONFIG_PATH NOVADECK_STORE_INSTALLS; do
     printf '%s\n' "$env_out" | grep -q "^${var}=" \
       && ok "store-env emits $var" \
       || bad "store-env does not emit $var — a caller would fall back to the CLI's own default"
@@ -349,7 +350,7 @@ code, _ = run("gog", [], timeout=3)
 
 # -- the exchange --
 p = {"NOVADECK_STORE_USER": "deck", "LEGENDARY_CONFIG_PATH": "/h/legendary",
-     "NOVADECK_GOGDL_AUTH": "/h/gogdl/auth.json"}
+     "NOVADECK_GOGDL_AUTH": "/h/gogdl/auth.json", "GOGDL_CONFIG_PATH": "/h/gogdl"}
 argv = cli.exchange_argv("gog", "C", p)
 (ok if argv[:3] == ["gogdl", "--auth-config-path", "/h/gogdl/auth.json"] and argv[3:] == ["auth", "--code", "C"] else bad)(
     "gogdl gets --auth-config-path BEFORE the subcommand (without it the tokens are thrown away)")
@@ -388,7 +389,10 @@ desc = [o for o in opts if o.startswith("--description=")]
     "the unit has its own description, so the journal's Started line does not carry the code")
 (ok if setenv.get("LEGENDARY_CONFIG_PATH") == "/h/legendary" else bad)(
     "legendary is pointed at the declared config path, not the caller's home")
-extra = set(setenv) - {"LANG", "LEGENDARY_CONFIG_PATH"}
+(ok if setenv.get("GOGDL_CONFIG_PATH") == "/h/gogdl" else bad)(
+    "gogdl is pointed at the declared config path — without it, its build manifests go to the "
+    "user's ~/.config/heroic_gogdl, outside the store tree")
+extra = set(setenv) - {"LANG", "LEGENDARY_CONFIG_PATH", "GOGDL_CONFIG_PATH"}
 (ok if not extra else bad)(f"the CLI gets a minimal environment, not root's (extra: {sorted(extra)})")
 (ok if "LD_LIBRARY_PATH" not in seen["env"] else bad)(
     "systemd-run itself does not inherit the PyInstaller bundle's LD_LIBRARY_PATH")
@@ -501,7 +505,7 @@ os.remove(gog)
 
 # -- which CLI runs, as whom --
 p = {"NOVADECK_STORE_USER": "deck", "LEGENDARY_CONFIG_PATH": "/h/legendary",
-     "NOVADECK_GOGDL_AUTH": "/h/gogdl/auth.json"}
+     "NOVADECK_GOGDL_AUTH": "/h/gogdl/auth.json", "GOGDL_CONFIG_PATH": "/h/gogdl"}
 (ok if cli.refresh_argv("epic", p) == ["legendary", "list-installed", "--check-updates"] else bad)(
     "Epic refreshes through legendary's own login, without fetching the whole library (status does)")
 (ok if cli.refresh_argv("gog", p) == ["gogdl", "--auth-config-path", "/h/gogdl/auth.json", "auth"] else bad)(

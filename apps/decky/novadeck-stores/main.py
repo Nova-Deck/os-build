@@ -28,7 +28,7 @@ import subprocess
 
 import decky
 
-from novadeck_stores import cdp, cli, connect, paths, status
+from novadeck_stores import cdp, cli, connect, installs, library, locations, paths, status
 
 # Long enough to type an email and a password on the on-screen keyboard and clear a captcha;
 # short enough that a login the user walked away from does not poll for the rest of the session.
@@ -46,6 +46,9 @@ def _store_status(store, p):
 # lock of its own, so a refresh still in flight when the user disconnects would write the
 # credentials straight back. legendary has a file lock; this keeps the two stores' rules the same.
 _LOCKS = {store: asyncio.Lock() for store in connect.STORES}
+# One install operation at a time: two starts would race for the one unit name, and an uninstall
+# must not interleave with a start writing the same record.
+_INSTALL_LOCK = asyncio.Lock()
 
 
 class Plugin:
@@ -146,6 +149,70 @@ class Plugin:
         except (OSError, subprocess.SubprocessError) as exc:
             return {"error": f"cannot resolve credential paths: {type(exc).__name__}"}
         return await self._run_cli(action, store, p, fn, store, p)
+
+    # --- milestone 3: owned titles, drives, install / stop / uninstall. Callable, not yet surfaced:
+    # the panel that uses these is milestone 7's. ---------------------------------------------
+
+    async def owned(self, store):
+        """{"titles": [{id, title, installable[, requires]}]} or {"error": ...}. Under the store's
+        lock: listing logs in, and a login can rewrite the token file."""
+        if store not in connect.STORES:
+            return {"error": f"unknown store {store!r}"}
+        try:
+            p = await asyncio.to_thread(paths.store_paths)
+        except (OSError, subprocess.SubprocessError) as exc:
+            return {"error": f"cannot resolve credential paths: {type(exc).__name__}"}
+        async with _LOCKS[store]:
+            return await asyncio.to_thread(library.owned, store, p)
+
+    async def drives(self):
+        """[{path, label, free}] — where a game can be installed."""
+        try:
+            p = await asyncio.to_thread(paths.store_paths)
+            return {"drives": await asyncio.to_thread(locations.user_volumes, p["NOVADECK_STORE_USER"])}
+        except (OSError, subprocess.SubprocessError) as exc:
+            return {"error": f"cannot list drives: {type(exc).__name__}"}
+
+    async def install(self, store, gid, title, drive):
+        """Start or resume an install; the download then runs on its own (installs.py)."""
+        return await self._install_action("install", store, installs.install, store, gid, title, drive)
+
+    async def install_status(self):
+        """Read-only (installs.install_status), so it takes no lock: polled for progress, it must
+        not wait behind an uninstall's rm."""
+        try:
+            p = await asyncio.to_thread(paths.store_paths)
+            return await asyncio.to_thread(installs.install_status, p)
+        except (OSError, subprocess.SubprocessError) as exc:
+            return {"error": f"status failed: {type(exc).__name__}"}
+
+    async def stop_install(self):
+        return await self._install_action("stop", None, lambda p: {"stopped": installs.stop() == 0})
+
+    async def uninstall(self, store, gid):
+        return await self._install_action("uninstall", store, installs.uninstall, store, gid)
+
+    async def _install_action(self, action, store, fn, *args):
+        """One install operation at a time, and under the store's lock where the call can log in
+        (the size lookup) or remove what a refresh would write back."""
+        if store is not None and store not in connect.STORES:
+            return {"error": f"unknown store {store!r}"}
+        try:
+            p = await asyncio.to_thread(paths.store_paths, action == "install")
+        except (OSError, subprocess.SubprocessError) as exc:
+            return {"error": f"cannot resolve credential paths: {type(exc).__name__}"}
+        async with _INSTALL_LOCK:
+            try:
+                if store is None:
+                    result = await asyncio.to_thread(fn, *args, p)
+                else:
+                    async with _LOCKS[store]:
+                        result = await asyncio.to_thread(fn, *args, p)
+            except (OSError, subprocess.SubprocessError) as exc:
+                result = {"error": f"{action} failed: {type(exc).__name__}"}
+        decky.logger.info(f"{action} {store or ''} {args[1] if len(args) > 1 else ''}: "
+                          f"{result.get('error') or 'ok'}")
+        return result
 
     async def _main(self):
         pass

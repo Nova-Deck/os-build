@@ -31,8 +31,12 @@ REFRESH_TIMEOUT = 60
 CHECK_TIMEOUT = 10
 
 
-def _as_user(user, argv, max_sec, setenv=None):
+def _as_user(user, argv, max_sec, setenv=None, *, umask="0077", unit=None, description=None,
+             props=()):
     """systemd-run invocation that runs argv as user on the host and returns its exit status.
+
+    With unit= it is DETACHED instead: a named unit that outlives us, no --pipe and no --wait,
+    for a download that takes hours (installs.py). max_sec=None sets no deadline.
 
     --pipe connects the unit to OUR stdin/stdout/stderr. Without it the unit's output goes to the
     journal, and gogdl prints the whole token set on stdout.
@@ -46,13 +50,16 @@ def _as_user(user, argv, max_sec, setenv=None):
     The unit's environment is systemd's for that user (HOME, USER, PATH) plus setenv; nothing of
     ours is inherited.
     """
-    opts = [
-        "systemd-run", "--quiet", "--collect", "--pipe", "--wait",
-        f"--description=novadeck-stores {argv[0]}",
+    opts = ["systemd-run", "--quiet", "--collect"]
+    opts += [f"--unit={unit}"] if unit else ["--pipe", "--wait"]
+    opts += [
+        f"--description={description or f'novadeck-stores {argv[0]}'}",
         f"--property=User={user}",
-        "--property=UMask=0077",
-        f"--property=RuntimeMaxSec={max_sec}",
+        f"--property=UMask={umask}",
     ]
+    if max_sec:
+        opts.append(f"--property=RuntimeMaxSec={max_sec}")
+    opts += [f"--property={prop}" for prop in props]
     opts += [f"--setenv={k}={v}" for k, v in (setenv or {}).items()]
     return opts + ["--"] + argv
 
@@ -100,7 +107,8 @@ def disconnect_argv(store, p):
 
 def _cli_setenv(p):
     """Only what the CLI needs on top of systemd's per-user environment, not root's."""
-    env = {"LEGENDARY_CONFIG_PATH": p["LEGENDARY_CONFIG_PATH"]}
+    env = {"LEGENDARY_CONFIG_PATH": p["LEGENDARY_CONFIG_PATH"],
+           "GOGDL_CONFIG_PATH": p["GOGDL_CONFIG_PATH"]}
     lang = _clean_env().get("LANG")
     if lang:
         env["LANG"] = lang
@@ -119,6 +127,42 @@ def _run(p, argv, max_sec):
         env=_clean_env(), timeout=max_sec + CHECK_TIMEOUT,
     )
     return result.returncode
+
+
+def capture(p, argv, max_sec):
+    """Run argv as the store user and return (exit status, stdout).
+
+    Only for output that is DATA — a game list. Never for a call that can print a token: that is
+    every auth and refresh call, which go through _run and have their stdout discarded.
+    """
+    result = subprocess.run(
+        _as_user(p["NOVADECK_STORE_USER"], argv, max_sec, _cli_setenv(p)),
+        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+        env=_clean_env(), timeout=max_sec + CHECK_TIMEOUT,
+    )
+    return result.returncode, result.stdout
+
+
+def start_detached(unit_argv):
+    """Start a detached unit built by _as_user(unit=...). systemd-run returns once it is started."""
+    return subprocess.run(
+        unit_argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL, env=_clean_env(), timeout=CHECK_TIMEOUT * 2,
+    ).returncode
+
+
+# Written into the target's directory and renamed over it, AS the user: the rename replaces a
+# planted symlink rather than following it, and nothing root-owned lands in the user's tree.
+_WRITE_FILE = 'umask 077; cat >"$0.tmp" && mv -f "$0.tmp" "$0"'
+
+
+def write_as_user(p, path, text):
+    """Replace path with text, as the store user. Returns the exit status."""
+    return subprocess.run(
+        _as_user(p["NOVADECK_STORE_USER"], ["sh", "-c", _WRITE_FILE, path], CHECK_TIMEOUT),
+        input=text, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True,
+        env=_clean_env(), timeout=CHECK_TIMEOUT * 2,
+    ).returncode
 
 
 def exchange(store, code, p):

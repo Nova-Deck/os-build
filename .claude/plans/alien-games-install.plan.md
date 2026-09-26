@@ -160,6 +160,27 @@ legendary does not record, has a path to resume into and to clean up.
 - **Validate**: the suite drives the guard with `""`, `.`, `..`, a symlink, a path in another
   store's root, and a path on a volume that is no longer mounted.
 
+#### Tasks 1–6 — built 2026-09-26, NOT yet HW-gated
+
+`tests/test-store-install.sh` (72 checks, in `make test`) covers each task. Code:
+`library.py`, `locations.py`, `installs.py`, `store-gog-owned`, `cli.py` (detached units,
+`capture`, `write_as_user`), and `main.py`'s `owned` / `drives` / `install` / `install_status` /
+`stop_install` / `uninstall`.
+
+**Deviation from Task 5:** status is **read-only**. It derives each state from the CLIs' artifacts
+on every call instead of writing completions back, so it takes no lock and a progress poll never
+waits behind an uninstall.
+
+**Security review, 2026-09-26: one HIGH and two MEDIUM, all fixed.**
+- **HIGH:** `legendary uninstall` deletes the path in *its own* `installed.json`, which any `deck`
+  process can edit and which the guard never saw. It now runs with `--keep-files`, dropping only
+  its record, and the files go through the guarded `rm`.
+- **MEDIUM:** a store root swapped for a symlink kept the path string valid and landed the delete
+  in another tree. The guard now requires `realpath(path) == path`.
+- **MEDIUM:** a status poll queued behind a 15-minute `rm`. Fixed by the read-only status above.
+- **LOW:** control characters are refused in ids and folder names, since a newline would forge a
+  `systemctl show` line. GOG ids are cast to `int` before they go into a URL.
+
 ### Task 7: Hardware gate
 - **Action**, on a dev card with both stores signed in, driving the backend over SSH:
   1. Install a small title per store to the card, and a second to the home volume.

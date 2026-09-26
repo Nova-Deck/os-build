@@ -1,0 +1,82 @@
+#!/usr/bin/python3
+"""novadeck store-gog-owned — the GOG titles an account owns, as JSON on stdout.
+
+    store-gog-owned <gogdl auth.json>
+
+gogdl has no command that lists a library: it asks GOG's owned-games API internally, only to
+answer "does this account own that id" (gogdl/api.py). This asks the same API, through gogdl's own
+session and auth manager, so a token past its expiry is renewed and written back exactly as
+`gogdl auth` would do it.
+
+RUN AS THE STORE USER, never as root. The novadeck-stores plugin starts it through systemd-run
+(cli.py). The token is read, used and renewed in this process, and what leaves it is ids, titles
+and whether each one is installable. Nothing on stdout is a credential, and nothing is logged.
+
+Exit status: 0 with a JSON list; 3 when there is no usable session (not signed in, or GOG refused
+the refresh); 1 on anything else. Nothing on stderr carries a token.
+"""
+import json
+import sys
+
+EMBED = "https://embed.gog.com"
+API = "https://api.gog.com"
+BATCH = 50  # the products endpoint's ids= limit
+
+
+def owned_titles(get):
+    """[{id, title, installable}] for every owned product that is a game, sorted by title.
+
+    get(url) returns the decoded JSON of a GET. DLC is dropped — it is not something to install on
+    its own. A game with no Windows build is listed but not installable: this milestone downloads
+    Windows builds only, and a missing game reads as a bug where a disabled one reads as a reason.
+    """
+    # int() first: the ids go into a URL, and GOG's product ids are integers.
+    owned = [str(int(i)) for i in get(f"{EMBED}/user/data/games").get("owned", [])]
+    titles = []
+    for start in range(0, len(owned), BATCH):
+        batch = owned[start:start + BATCH]
+        for product in get(f"{API}/products?ids={','.join(batch)}"):
+            if product.get("game_type", "game") != "game":
+                continue
+            compat = product.get("content_system_compatibility") or {}
+            titles.append({
+                "id": str(product["id"]),
+                "title": product.get("title") or str(product["id"]),
+                "installable": bool(compat.get("windows", True)),
+            })
+    return sorted(titles, key=lambda t: t["title"].casefold())
+
+
+def main(argv):
+    if len(argv) != 2:
+        print("usage: store-gog-owned <gogdl auth.json>", file=sys.stderr)
+        return 1
+    # gogdl is imported here, not at the top: the offline suite loads this file on a host that
+    # has no gogdl, to test owned_titles().
+    from gogdl.api import ApiHandler
+    from gogdl.auth import AuthorizationManager
+
+    auth = AuthorizationManager(argv[1])
+    if not auth.get_credentials():
+        print("store-gog-owned: no usable GOG session", file=sys.stderr)
+        return 3
+    session = ApiHandler(auth).session
+
+    def get(url):
+        response = session.get(url, timeout=30)
+        response.raise_for_status()
+        return response.json()
+
+    try:
+        titles = owned_titles(get)
+    except Exception as exc:
+        # The type only: a requests exception's text can carry the URL, never the token (it is
+        # a header), but there is no reason to print more than the suite needs to tell failures apart.
+        print(f"store-gog-owned: {type(exc).__name__}", file=sys.stderr)
+        return 1
+    json.dump(titles, sys.stdout)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

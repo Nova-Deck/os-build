@@ -50,6 +50,11 @@ STORE_HOME=${NOVADECK_STORE_HOME:-/home/$STORE_USER/.local/share/novadeck/stores
 
 LEGENDARY_CONFIG_PATH="$STORE_HOME/legendary"
 NOVADECK_GOGDL_AUTH="$STORE_HOME/gogdl/auth.json"
+# gogdl's second location: its build manifests go to $GOGDL_CONFIG_PATH/heroic_gogdl/manifests,
+# else to the caller's ~/.config (gogdl/constants.py). They are what says a GOG install finished.
+GOGDL_CONFIG_PATH="$STORE_HOME/gogdl"
+# Our record of installs. gogdl keeps none, and legendary does not record an unfinished one.
+NOVADECK_STORE_INSTALLS="$STORE_HOME/installs.json"
 
 if [[ ${1:-} == --ensure ]]; then
     # 0700: these are OAuth refresh tokens. Group and other have no business here, and the CLIs
@@ -75,3 +80,5 @@ printf 'NOVADECK_STORE_UID=%q\n'    "$STORE_UID"
 printf 'NOVADECK_STORE_HOME=%q\n'   "$STORE_HOME"
 printf 'LEGENDARY_CONFIG_PATH=%q\n' "$LEGENDARY_CONFIG_PATH"
 printf 'NOVADECK_GOGDL_AUTH=%q\n'   "$NOVADECK_GOGDL_AUTH"
+printf 'GOGDL_CONFIG_PATH=%q\n'     "$GOGDL_CONFIG_PATH"
+printf 'NOVADECK_STORE_INSTALLS=%q\n' "$NOVADECK_STORE_INSTALLS"

@@ -23,8 +23,8 @@ import time
 LEGENDARY_SESSION = "user.json"
 
 
-def _readable_json(path, owner_uid):
-    """The file's JSON, or None. Only a regular file owned by the store user is read.
+def open_user_file(path, owner_uid):
+    """An open binary file, or None. Only a regular file owned by the store user is opened.
 
     ROOT READS THIS, inside a tree the user owns. Anything running as the user — a game — can
     swap the file, or any directory above it, for a symlink. O_NOFOLLOW refuses a link in the
@@ -37,12 +37,26 @@ def _readable_json(path, owner_uid):
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
     except OSError:
         return None
+    f = os.fdopen(fd, "rb")
     try:
-        with os.fdopen(fd, "r", encoding="utf-8") as f:
-            st = os.fstat(fd)
-            if not stat.S_ISREG(st.st_mode) or st.st_uid != owner_uid:
-                return None
-            return json.load(f)
+        st = os.fstat(fd)
+    except OSError:
+        f.close()
+        return None
+    if not stat.S_ISREG(st.st_mode) or st.st_uid != owner_uid:
+        f.close()
+        return None
+    return f
+
+
+def read_user_json(path, owner_uid):
+    """The file's JSON, or None, read through open_user_file."""
+    f = open_user_file(path, owner_uid)
+    if f is None:
+        return None
+    try:
+        with f:
+            return json.loads(f.read().decode("utf-8"))
     except (OSError, ValueError):
         return None
 
@@ -65,7 +79,7 @@ def epic_status(legendary_config_path, owner_uid):
     connected — legendary would fail on the next call and the panel should already say so.
     legendary deletes the file itself when Epic rejects a refresh, so a revoked session reads as
     not connected with no help from us."""
-    data = _readable_json(os.path.join(legendary_config_path, LEGENDARY_SESSION), owner_uid)
+    data = read_user_json(os.path.join(legendary_config_path, LEGENDARY_SESSION), owner_uid)
     if not isinstance(data, dict) or not data:
         return {"store": "epic", "connected": False}
     return {
@@ -88,7 +102,7 @@ def gog_status(gogdl_auth_path, owner_uid):
     """Connected when the auth file holds at least one client id with an access token. There is
     no account name: gogdl stores only a user id, and naming the account would take an API call
     with the token."""
-    data = _readable_json(gogdl_auth_path, owner_uid)
+    data = read_user_json(gogdl_auth_path, owner_uid)
     if not isinstance(data, dict):
         return {"store": "gog", "connected": False}
     for creds in data.values():

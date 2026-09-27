@@ -9,15 +9,17 @@ page allocation/pinning.
 Signed-off-by: Rob Clark <robin.clark@oss.qualcomm.com>
 ---
 v2: Initialize THP earlier
+novadeck: hunk 1 context refreshed for 7.2.8, which fixes the MODULE_PARM_DESC
+name above it (separate_gpu_drm -> separate_gpu_kms). Regenerated, no code change.
  drivers/gpu/drm/msm/msm_drv.c | 24 ++++++++++++++++++++++++
  1 file changed, 24 insertions(+)
 
 diff --git a/drivers/gpu/drm/msm/msm_drv.c b/drivers/gpu/drm/msm/msm_drv.c
-index 73d99bde26f1..581903ccd5e6 100644
+index fa46ab3063e6..0cefbc476614 100644
 --- a/drivers/gpu/drm/msm/msm_drv.c
 +++ b/drivers/gpu/drm/msm/msm_drv.c
 @@ -58,9 +58,31 @@ static bool separate_gpu_kms;
- MODULE_PARM_DESC(separate_gpu_drm, "Use separate DRM device for the GPU (0=single DRM device for both GPU and display (default), 1=two DRM devices)");
+ MODULE_PARM_DESC(separate_gpu_kms, "Use separate DRM device for the GPU (0=single DRM device for both GPU and display (default), 1=two DRM devices)");
  module_param(separate_gpu_kms, bool, 0400);
  
 +#ifdef CONFIG_TRANSPARENT_HUGEPAGE

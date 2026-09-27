@@ -70,7 +70,7 @@ by one of them. Recorded state as of the 7.2.7 bump and the patch renumbering (2
 |---|---|---|---|---|---|
 | AYANEO Pocket ACE | SM8550 | engine v2, dspp0 | DPU inline (`rotation=8`) | ath12k / WCN7850 | 10 boot SMMU faults are a PRE-EXISTING cohort, not a regression |
 | AYN Thor Lite | SM8250 | **none in hardware** | composite (no inline rotator) | ath11k | Dual touchscreen; second panel unbound is a known open issue |
-| KONKR Pocket FIT | SM8650 | engine v3, dspp0+dspp1 | DPU inline (`rotation=8`) | — | Its panel drawing at all is what proves patch 0430 |
+| KONKR Pocket FIT | SM8650 | engine v3, dspp0+dspp1 | DPU inline (`rotation=8`) | — | Its panel drawing at all is what proves the DSI byte-clock fix (our 0430 until 7.2.8, stable's own since) |
 | AYANEO Pocket S2 | SM8650 | engine v3, dspp0+dspp1 | inline, 8 lines under the 1088 cap | — | Bonded panel (0440); the tightest gate — ✅ **7.2.7 + renumbered stack, 2026-09-22** |
 
 What to read, and the instrument traps:

@@ -17,20 +17,24 @@
 # POCKET S2 IS NOT COVERED — bonded panel plus eight lines of margin under the 1088-line
 # rotator cap, the tightest gate we have. It carries ZERO drm/msm and zero qcom commits, so
 # every gate recorded above stands exactly as it did on 7.2.6 — 0525 and SMMU-v3 still owed.
-version:    7.2.7
-url:        https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.2.7.tar.xz
-sha256:     4ac34c47db2540ffb2713943f8d891ff1702e0ba6934525a493b7d1cad43145a
-git_tag:    v7.2.7
-git_commit: f42acb3678424d1e08f6ed27c0d8ba8a125e14d6
+# RE-PINNED 2026-09-27 (7.2.8, issue #104). HW-VALIDATED ON ALL FOUR ROSTER BOARDS (ACE, FIT, S2, MAX) + SUSTAINED GPU LOAD ON MAX. Unlike 7.2.7 it carries
+# eleven drm/msm commits, two of which are OURS landing: the DSI byte-clock fix (0525 in the
+# notes below, renumbered 0430) and the DPU peripheral-flush fix (0310). Both are DELETED; the
+# code they carried is now upstream's, byte-for-byte. Read the 7.2.8 section below.
+version:    7.2.8
+url:        https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.2.8.tar.xz
+sha256:     12e8d5a973d1ad7c5a5c69882e4022b131ed715db7003fdcd760ddf8c3e51941
+git_tag:    v7.2.8
+git_commit: 9a66fdc0d7fd55f54235524a73435af99051e46f
 
 # The sha256 above is the one kernel.org publishes in the SIGNED sha256sums.asc for v7.x, not a
-# hash of whatever the CDN happened to serve — re-checked 2026-09-22. The .asc itself verifies as
+# hash of whatever the CDN happened to serve — re-checked 2026-09-27. The .asc itself verifies as
 # a GOOD signature from "Kernel.org checksum autosigner <autosigner@kernel.org>", fingerprint
 # B886 8C80 BA62 A1FF FAF5 FDA9 632D 3A06 589D A6B1. That key carries no trust path here, so the
-# load-bearing check is CONTINUITY: the SAME signed file still lists 7.2.6 as
-# 039aef84f2b0994aeda3f4fcfc3d02ec9d7a9bbb9020ea264c43f446c860f606, 7.2.5 as
-# 55ddf0df8325d9dad96fcff7bd93977d22e3f50af06527572af59b77c7632b78 and 7.2.4 as
-# 01710ee01737dac492f1bae52becd057e08d20d11589089aa06accff415c28dd, byte-for-byte the hashes this
+# load-bearing check is CONTINUITY: the SAME signed file still lists 7.2.7 as
+# 4ac34c47db2540ffb2713943f8d891ff1702e0ba6934525a493b7d1cad43145a, 7.2.6 as
+# 039aef84f2b0994aeda3f4fcfc3d02ec9d7a9bbb9020ea264c43f446c860f606 and 7.2.5 as
+# 55ddf0df8325d9dad96fcff7bd93977d22e3f50af06527572af59b77c7632b78, byte-for-byte the hashes this
 # pin carried and shipped before — so the file describing the version above is the same file that
 # described the releases we already trusted. Roll this list forward on each bump rather than
 # growing it; three back is enough to be a chain. (Note: keys.openpgp.org serves this key STRIPPED
@@ -48,6 +52,93 @@ git_commit: f42acb3678424d1e08f6ed27c0d8ba8a125e14d6
 # Treat 'in-series point release' as a prediction about EFFORT, never about RISK.
 # Re-run every gate, every time — and note that neither of those two findings came from an
 # offline gate. Both came from hardware.
+#
+# ============ 7.2.8 — PINNED 2026-09-27 (issue #104), HW GATE OWED ============
+#
+# 438 commits. NOT quiet for us: eleven drm/msm, and two of them are patches we carried.
+# Zero qcom clk/phy/interconnect/pinctrl/dts commits, zero ath12k.
+#
+# INTERSECTION: 7.2.8 touches 439 files, our patches 185, the intersection is EIGHT, all read:
+#   dpu1/dpu_hw_ctl.c    stable fd25668f96ff = OUR 0310 (peripheral flush mask). DELETED.
+#   dsi/dsi_host.c       stable c59e4a90780f = OUR 0430, the "0525" DSI byte-clock fix every
+#                        note below still calls by its old number. DELETED.
+#   msm_drv.c            MODULE_PARM_DESC(separate_gpu_drm -> separate_gpu_kms). That is the
+#                        first context line of 0220's hunk 1, so 0220 REJECTED at --fuzz=0.
+#                        Hunk regenerated from a patched 7.2.8 tree; no code change, noted
+#                        under the patch's `---`. 0230's msm_drv.c hunks are elsewhere.
+#   msm_gem.h, msm_gem_vma.c   the kfree_rcu() landing (see the 0508 EPILOGUE below). 0230
+#                        still applies at fuzz 0.
+#   adreno/adreno_gpu.c  pm_runtime_dont_use_autosuspend() in adreno_gpu_cleanup(); 0230 is
+#                        elsewhere in the file.
+#   input/input-compat.c memset(effect) in input_ff_effect_from_user(); our 0010 only widens who
+#                        may take the compat path.
+#   input/rmi4/rmi_driver.c  early return from suspend/resume when unbound; 0725 is elsewhere.
+# HOW THE TWO DELETIONS WERE PROVEN, since "Reversed (or previously applied)" and "5 out of 5
+# hunks ignored" is exactly the arithmetic the 0512 trap below says not to believe: each patch
+# was REVERSE-applied with --dry-run --fuzz=0 to a PRISTINE 7.2.8 tree, and every hunk of both
+# reversed cleanly. That is content equality, hunk by hunk, not a count.
+# CONSEQUENCE FOR THE GATES BELOW: wherever they say "0525 is live / proves 0525", read
+# "upstream's byte-clock fix". The code is identical, so which boards can prove it (the v2.9
+# DSI hosts: S2 and FIT) and which are negative controls (ACE, Max) is unchanged. What is new is
+# that we no longer own it: a regression in that path is now a stable report, not a patch edit.
+#
+# CONFIG SWEEP: 428 symbols named in kernel.config + trim-platforms.config, ZERO missing from
+# the patched tree. 7.2.8 adds one Kconfig symbol (RUSTC_HAS_APXF, x86) and removes none.
+# BUILD: green in the container — 84 patches at --fuzz=0 with zero fuzz and zero rejects,
+# Image + 21 dtbs + modules staged. After olddefconfig, ALL 428 requested values were asserted
+# against the final .config (not only build.sh's curated list): zero mismatches, and no `n`
+# directive came back `undef`.
+#
+# HW GATE, 4 of 4 roster boards, 2026-09-27 (dev card, build 20260927T085528Z):
+#   Pocket ACE (SM8550, sm8550-dsi-ctrl: a NEGATIVE CONTROL for the byte-clock fix) — PASS.
+#     Zero *ERROR*. 10 boot SMMU faults, all t=0.77s fsr=0x402 cb=8: the pre-existing cohort.
+#     2 content planes at rotation=8. LUTDMA v2 dspp0 igc 1584 / gamut 29532, byte-identical
+#     to 7.2.7. WCN7850 associated, EHT 2x2 720 Mbit/s, 0% loss, no ath12k/pwrseq errors.
+#     Gamepad behind the Renesas bridge enumerated. gamescope 5256/5256 presents, 0 in flight.
+#   Pocket FIT (SM8650, sm8650-dsi-ctrl: the v2.9 ops, so the byte-clock fix is LIVE) — PASS.
+#     Zero *ERROR*, zero SMMU faults, none of the regression's signature strings. DSI-1
+#     connected; the clock tree is parented to the PHY PLL and self-consistent: bit 737364843,
+#     byte 92170605 (= bit/8), byte_div 46085303, pclk 122894141. That is upstream's copy of the
+#     old 0525 doing its job. 2 content planes at rotation=8; LUTDMA v3 on dspp0+dspp1, igc
+#     1584 / gamut 29532, byte-identical to 7.2.7. WCN7850 associated, EHT 2x2, no
+#     ath12k/pwrseq errors. Gamepad enumerated. gamescope 2577/2577 presents.
+#   Pocket S2 (SM8650, bonded, the tightest gate) — PASS. DSI-1 connected at 1440x2560, both
+#     pclks 134626490 off dsi0's PLL (bit 807758935, byte 100969866 = bit/8; dsi1's own PLL at
+#     0 is correct when bonded). 2 content planes at rotation=8, so the 1088-line margin still
+#     holds. LUTDMA identical to FIT. WCN7850 associated, 0 SMMU faults, 1672/1672 presents.
+#     The one *ERROR*, `dsi_get_phy: phy driver is not ready` at 1.0s, is a probe deferral.
+#     First boot had NO sound card: the known SM8650 SoundWire wedge, issue #105 (`swrm_wait_for_frame_gen
+#     _enabled: link status not disconnected` on 6d30000), with no -110 this time. A reboot
+#     brought the card and speaker back. Not a 7.2.8 regression: 7.2.8 has no qcom soundwire or
+#     LPASS commits.
+#   `qcom-apm ... CMD timeout for [1001021] opcode` at ~10s shows on ACE, FIT and S2, each with
+#   working audio. It is noise; do not chase it as the no-sound cause.
+#   Pocket Max (SM8250, COMMAND-mode panel, sm8250-dsi-ctrl) — PASS. Zero *ERROR*, 0 SMMU
+#     faults. 1 LINEAR content plane at rotation=1 (correct: no inline rotator, so gamescope
+#     composite-rotates); LUTDMA `no engine`, inert by hardware. 2484/2484 presents. Sound card
+#     up, Wi-Fi associated, joypad + vibrator enumerated. iris H.264 decode through
+#     h264_v4l2m2m: 60/60 frames at 24x on 'Iris Decoder', so the SM8250 iris node is healthy.
+#     The one clk_core_disable + clk_core_unprepare WARNING pair at 1.05s is the documented
+#     PRE-EXISTING fallout of the boot-time `DSI PLL(0) lock failed` (1x each, as on 7.2).
+#   SUSTAINED GPU LOAD — PASS on Pocket Max (A650): Parking Garage Rally Circuit (Godot, x86
+#     under FEX) held the GPU at its 800 MHz max for a full 60s sample, 58 presents/s, 6 min
+#     up, GPU 44C, no fault/hang/recover/SMMU/OOM. (On FIT the same game idled the GPU at
+#     231 MHz, so that run does not count.)
+#     Its FIRST launch on Max died with `XIO: fatal IO error 62 (Timer expired) on X server
+#     ":1"` while gamescope and both Xwaylands stayed up with nothing in dmesg, and the relaunch
+#     ran clean. That is an X-client/FEX-side event with no kernel signature; it is not
+#     attributed to 7.2.8, and it is not cleared either — if it recurs, it is a per-game issue.
+#
+# WHAT ONLY HARDWARE CAN SETTLE, from commits OUTSIDE the intersection:
+#   - Wi-Fi: four `power: sequencing` fixes (pwrseq powers WCN7850 up) and ~30 mac80211/cfg80211
+#     fixes, one of them "don't free driver-owned scan requests" — the scan path 0507 patches.
+#     Association on a WCN7850 board is the leg.
+#   - Display: the byte-clock fix is upstream's copy now; S2 or FIT drawing its panel re-proves
+#     it. drm/sched "Fix virtual runtime race" and a dma-fence signalling-bit fix sit under
+#     every GPU submit, so a game under sustained load is worth more than a desktop this time.
+#   - arm64 percpu: three fixes (LSE on 8/16-bit types, this_cpu_and mask, this_cpu_write cast).
+#     Generic, but SM8250 is the board most likely to show a percpu miscompile.
+#   - btrfs: eight fixes; our rootfs and var are btrfs. Nothing specific to test beyond a boot.
 #
 # ============ 7.2.6 — SKIPPED 2026-09-14 (issue #95), RE-TAKEN 2026-09-17 ON THIS BRANCH ========
 #
@@ -150,6 +241,12 @@ git_commit: f42acb3678424d1e08f6ed27c0d8ba8a125e14d6
 #     carry from a list, look up the AUTHOR's other postings, not just the patch's own thread.
 #     A superseded patch's thread looks exactly like a patch awaiting review — one message, no
 #     replies, state `new`. The supersession lives in a DIFFERENT thread.
+#     EPILOGUE, 7.2.8: the maintainer merged v1 anyway. Rob Clark took the per-driver kfree_rcu()
+#     patch, same msgid as the old 0508 (mainline 01c8d1f385f7, stable 713abac5c04c in 7.2.8), so
+#     the UAF is now fixed in our tree by upstream. The deletion was still right — carrying it
+#     would now be a reversed-patch deletion at this bump — but "the author moved on" did not
+#     predict what the maintainer merged. Supersession by the AUTHOR is a reason not to carry a
+#     patch, never a forecast that it will not land.
 #
 # WHAT THE OTHER SIXTEEN INTERSECTING FILES TURNED OUT TO BE — read, and benign for us:
 #   drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.c    upstream swaps msm_dp_is_yuv_420_enabled() for

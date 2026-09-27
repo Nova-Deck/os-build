@@ -68,7 +68,8 @@ Audited 2026-09-22 against v7.3-rc4 (merge status from git, review state from pa
 replies — lore was not reachable, so "never posted" means no patchwork hit). Re-audit on
 every bump: this table is a snapshot, the `Drop when` column is what to re-check.
 
-Totals: 6 `mainline`, 16 `posted`, 14 `novadeck`, 50 `community`. Half the stack will
+Totals: 4 `mainline`, 16 `posted`, 14 `novadeck`, 50 `community`. (`0310` and `0430` were
+deleted at the 7.2.8 bump: stable backported both, byte-identical.) Half the stack will
 never land upstream, which is why provenance is a table and not a number band.
 
 | Patch | Origin | Source | Drop when |
@@ -81,7 +82,6 @@ never land upstream, which is why provenance is a table and not a number band.
 | `0210` | community | map220v via ROCKNIX `0004`. Never posted; reuses `a750_ifpc_reglist` (unverified for A740). | when A740 IFPC lands upstream |
 | `0220` | posted | Rob Clark v2 `<20260912145922.24115-1-robin.clark@oss.qualcomm.com>` (+ `-2-`), latest, under review. | when merged |
 | `0230` | mainline | Rob Clark v7 context/VM hardening `<20260729155609.20190-*>`, 12 of 17 squashed: 2–4, 9–17/18 (`ae88499d71ce` … `a6d87a272b2c`; list in the header). Not carried: 5–8, 18. | v7.3 |
-| `0310` | mainline | Saim Shujah `<20260828065440.140410-1-saimzst@gmail.com>` → `a5b5cc909931` (Cc: stable) | v7.3, or the 7.2.y that backports it |
 | `0330` | posted | Dmitry Baryshkov v3 `<20260912-fd-kms-fix-smmu-v3-0-a7ddc6fe2032@oss.qualcomm.com>` (we take 1, 2, 4–7 of 8), latest, no review yet. | when merged |
 | `0340` | community | tiopex, ROCKNIX `ec3d53baac` (generic part split into ROCKNIX `0013-drm-msm-dpu-fix-inline-rotation`). Never posted; the width/height check, `test_bit` and CW/CCW fixes are real mainline bugs. | when the generic fixes are sent and merged |
 | `0350` | community | tiopex, ROCKNIX `60bb58c1db`. Never posted. | never |
@@ -90,7 +90,6 @@ never land upstream, which is why provenance is a table and not a number band.
 | `0370` | community | sunshineinabox (ROCKNIX). Subject says v2, but no posting was found. | never |
 | `0410` | novadeck | From ROCKNIX SM8250 `0001`. Partial revert of mainline `2d51cfb77daa` (bpc×3 for video mode). | when no shipped panel needs it, or upstream fixes it |
 | `0420` | novadeck | v1 was ROCKNIX SM8250 `0016`; the xfer/modeset race fix is ours. Never posted. | when upstreamed |
-| `0430` | mainline | Dmitry Baryshkov `<20260903-fix-eliza-dsi-v1-1-3474a6c9f2e0@oss.qualcomm.com>` → `2028280686f4` | v7.3 |
 | `0440` | posted | Re-applies Neil Armstrong `93c97bc8d85d` (`<20251027-topic-sm8x50-fix-dsi-bonded-v1-1-…@linaro.org>`), reverted by `44784327815b` in 7.3-rc1 / 7.2.6 because it broke non-bonded panels. Neil's rework not posted. | when Neil's bonded-mode rework lands |
 | `0480` | community | armada `0059` (virtudude). Not submitted; needs a panel-common binding first. | never |
 | `0490` | posted | Jianfeng Liu v2 `<20250925040530.20731-1-liujianfeng1994@gmail.com>`. NAKed by Dmitry Baryshkov on design; he points to `b54a38af7138` (in 7.1, already in our tree) as the real fix. | now, if DP audio works without it on SM8550/SM8650 |

@@ -21,6 +21,7 @@ root (the `gamescope/` checkout inside makepkg's `$srcdir`) by
 0016-steamcompmgr-arm64-virtual-white.patch
 0017-color-neutral-virtual-white-keeps-scanout.patch
 0018-drm-sdr-color-management-through-the-dpu-output-luts.patch
+0019-rendervulkan-fragment-shader-composite.patch   (--composite-graphics, passed by default from etc/novadeck/session.conf)
 ```
 
 `0008`-`0013` are **retired** (see below). The numbering is kept as-is rather than compacted, so

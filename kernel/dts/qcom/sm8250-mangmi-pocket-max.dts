@@ -14,6 +14,7 @@
 #include "pm8150.dtsi"
 #include "pm8150b.dtsi"
 #include "pm8150l.dtsi"
+#include "sm8250-sde-rotator.dtsi"
 
 / {
 	model = "MANGMI Pocket Max";

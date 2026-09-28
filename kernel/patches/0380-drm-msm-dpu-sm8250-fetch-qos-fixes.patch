@@ -1,0 +1,190 @@
+From: sunshineinabox <aqemail@gmail.com>
+Subject: [PATCH] drm/msm/dpu: sm8250 fetch QoS fixes (linear danger LUT, scaled-fetch QoS and line width)
+
+Three catalog-level corrections for SM8250 (and SM6115, which shares the
+same QoS tables), taken from the vendor device trees:
+
+  - Linear danger LUT. danger_lut_tbl[LINEAR] was 0xf, so a linear fetch
+    only raised danger at the lowest four fill levels. The vendor value
+    is 0xff: danger is raised earlier, which gives the NoC more warning
+    before the line buffer runs dry. The macrotile and NRT entries are
+    unchanged.
+
+  - A separate QoS request curve for scaled compressed fetches. The
+    catalogs carried "TODO: macrotile-qseed is different from macrotile".
+    A QSEED-fed UBWC fetch drains a line before a plain fetch would need
+    it, so the vendor curve reaches the top request levels sooner
+    (0x0011223366777777 against 0x0011223344556677). It is picked only
+    for a MACROTILE pipe whose src and dst differ, and only when the
+    catalog fills the new table slot -- which only sm8250 and sm6115 do.
+
+  - A separate line width for scaled fetches. The scaler has its own line
+    buffer, so a scaled fetch can be limited differently from
+    max_linewidth. sm8250 and sm6115 set 2560; a scaled source wider than
+    that is split over two pipes, as an unscaled one wider than
+    max_linewidth already is. Zero means "same as max_linewidth", so every
+    other catalog is untouched.
+
+Every behavioural change is confined to the sm8250 and sm6115 catalogs.
+The only effect elsewhere is that the LUT tables sized by
+DPU_QOS_LUT_USAGE_MAX grow by one never-read slot.
+
+All three are exercised on our SM8250 boards since 0385: the offline
+rotator lets a rotated game layer scan out directly, and it is UBWC and
+DPU-scaled (a 1280x720 game on the 1080x1920 panel, 1.5x) -- the
+MACROTILE-and-scaled case the new curve and line width are for. HW-run on
+Pocket Max 2026-09-28 across 12 capture reps: 0 underruns, danger status
+0 on every SSPP.
+
+Authored by sunshineinabox <aqemail@gmail.com>, three separate patches
+squashed into one because they move as a unit. Never posted.
+---
+--- a/drivers/gpu/drm/msm/disp/dpu1/catalog/dpu_6_0_sm8250.h
++++ b/drivers/gpu/drm/msm/disp/dpu1/catalog/dpu_6_0_sm8250.h
+@@ -15,6 +15,7 @@
+ 	.has_idle_pc = true,
+ 	.has_3d_merge = true,
+ 	.max_linewidth = 4096,
++	.max_linewidth_scaling = 2560,
+ 	.pixel_ram_size = DEFAULT_PIXEL_RAM_SIZE,
+ };
+ 
+@@ -329,7 +330,7 @@
+ 	.min_llcc_ib = 0,
+ 	.min_dram_ib = 800000,
+ 	.min_prefill_lines = 35,
+-	.danger_lut_tbl = {0xf, 0xffff, 0x0},
++	.danger_lut_tbl = {0xff, 0xffff, 0x0},
+ 	.safe_lut_tbl = {0xfff0, 0xff00, 0xffff},
+ 	.qos_lut_tbl = {
+ 		{.nentry = ARRAY_SIZE(sc7180_qos_linear),
+@@ -341,7 +342,9 @@
+ 		{.nentry = ARRAY_SIZE(sc7180_qos_nrt),
+ 		.entries = sc7180_qos_nrt
+ 		},
+-		/* TODO: macrotile-qseed is different from macrotile */
++		{.nentry = ARRAY_SIZE(sc7180_qos_macrotile_qseed),
++		.entries = sc7180_qos_macrotile_qseed
++		},
+ 	},
+ 	.cdp_cfg = {
+ 		{.rd_enable = 1, .wr_enable = 1},
+--- a/drivers/gpu/drm/msm/disp/dpu1/catalog/dpu_6_3_sm6115.h
++++ b/drivers/gpu/drm/msm/disp/dpu1/catalog/dpu_6_3_sm6115.h
+@@ -13,6 +13,7 @@
+ 	.has_dim_layer = true,
+ 	.has_idle_pc = true,
+ 	.max_linewidth = 2160,
++	.max_linewidth_scaling = 2560,
+ 	.pixel_ram_size = DEFAULT_PIXEL_RAM_SIZE,
+ };
+ 
+@@ -113,7 +114,9 @@
+ 		{.nentry = ARRAY_SIZE(sc7180_qos_nrt),
+ 		.entries = sc7180_qos_nrt
+ 		},
+-		/* TODO: macrotile-qseed is different from macrotile */
++		{.nentry = ARRAY_SIZE(sc7180_qos_macrotile_qseed),
++		.entries = sc7180_qos_macrotile_qseed
++		},
+ 	},
+ 	.cdp_cfg = {
+ 		{.rd_enable = 1, .wr_enable = 1},
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_catalog.h
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_catalog.h
+@@ -232,6 +232,7 @@
+ 	DPU_QOS_LUT_USAGE_LINEAR,
+ 	DPU_QOS_LUT_USAGE_MACROTILE,
+ 	DPU_QOS_LUT_USAGE_NRT,
++	DPU_QOS_LUT_USAGE_MACROTILE_QSEED,
+ 	DPU_QOS_LUT_USAGE_MAX,
+ };
+ 
+@@ -277,6 +278,7 @@
+  * @has_idle_pc        indicate if idle power collapse feature is supported
+  * @has_3d_merge       indicate if 3D merge is supported
+  * @max_linewidth      max linewidth for sspp
++ * @max_linewidth_scaling  max linewidth for a scaled sspp fetch, 0 if same
+  * @pixel_ram_size     size of latency hiding and de-tiling buffer in bytes
+  * @max_hdeci_exp      max horizontal decimation supported (max is 2^value)
+  * @max_vdeci_exp      max vertical decimation supported (max is 2^value)
+@@ -290,6 +292,7 @@
+ 	bool has_3d_merge;
+ 	/* SSPP limits */
+ 	u32 max_linewidth;
++	u32 max_linewidth_scaling;
+ 	u32 pixel_ram_size;
+ 	u32 max_hdeci_exp;
+ 	u32 max_vdeci_exp;
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_catalog.c
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_catalog.c
+@@ -794,6 +794,10 @@
+ 	{.fl = 0, .lut = 0x0011223344556677},
+ };
+ 
++static const struct dpu_qos_lut_entry sc7180_qos_macrotile_qseed[] = {
++	{.fl = 0, .lut = 0x0011223366777777},
++};
++
+ static const struct dpu_qos_lut_entry kaanapali_qos_macrotile[] = {
+ 	{.fl = 0, .lut = 0x0011223344556666},
+ };
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_plane.c
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_plane.c
+@@ -256,7 +256,8 @@
+ {
+ 	struct dpu_plane *pdpu = to_dpu_plane(plane);
+ 	struct dpu_hw_qos_cfg cfg;
+-	u32 total_fl, lut_usage;
++	u32 total_fl, lut_usage, creq_usage;
++	bool scaling;
+ 
+ 	if (!pdpu->is_rt_pipe) {
+ 		lut_usage = DPU_QOS_LUT_USAGE_NRT;
+@@ -270,7 +271,14 @@
+ 	total_fl = _dpu_plane_calc_fill_level(plane, pipe, lut_usage, fmt,
+ 				drm_rect_width(&pipe_cfg->src_rect));
+ 
+-	cfg.creq_lut = _dpu_hw_get_qos_lut(&pdpu->catalog->perf->qos_lut_tbl[lut_usage], total_fl);
++	creq_usage = lut_usage;
++	scaling = drm_rect_width(&pipe_cfg->src_rect) != drm_rect_width(&pipe_cfg->dst_rect) ||
++		  drm_rect_height(&pipe_cfg->src_rect) != drm_rect_height(&pipe_cfg->dst_rect);
++	if (lut_usage == DPU_QOS_LUT_USAGE_MACROTILE && scaling &&
++	    pdpu->catalog->perf->qos_lut_tbl[DPU_QOS_LUT_USAGE_MACROTILE_QSEED].nentry)
++		creq_usage = DPU_QOS_LUT_USAGE_MACROTILE_QSEED;
++
++	cfg.creq_lut = _dpu_hw_get_qos_lut(&pdpu->catalog->perf->qos_lut_tbl[creq_usage], total_fl);
+ 	cfg.danger_lut = pdpu->catalog->perf->danger_lut_tbl[lut_usage];
+ 	cfg.safe_lut = pdpu->catalog->perf->safe_lut_tbl[lut_usage];
+ 
+@@ -933,6 +941,7 @@
+ 	struct dpu_sw_pipe_cfg *r_pipe_cfg;
+ 	const struct drm_display_mode *mode = &crtc_state->adjusted_mode;
+ 	uint32_t max_linewidth;
++	uint32_t pipe_linewidth;
+ 	u32 num_lm;
+ 	int stage_id, num_stages;
+ 
+@@ -1001,13 +1010,19 @@
+ 		DPU_DEBUG_PLANE(pdpu, "Got clip src:" DRM_RECT_FMT " dst: " DRM_RECT_FMT "\n",
+ 				DRM_RECT_ARG(&pipe_cfg->src_rect), DRM_RECT_ARG(&pipe_cfg->dst_rect));
+ 
++		pipe_linewidth = max_linewidth;
++		if (pdpu->catalog->caps->max_linewidth_scaling &&
++		    (drm_rect_width(&pipe_cfg->src_rect) != drm_rect_width(&pipe_cfg->dst_rect) ||
++		     drm_rect_height(&pipe_cfg->src_rect) != drm_rect_height(&pipe_cfg->dst_rect)))
++			pipe_linewidth = pdpu->catalog->caps->max_linewidth_scaling;
++
+ 		/* Split wide rect into 2 rect */
+-		if ((drm_rect_width(&pipe_cfg->src_rect) > max_linewidth) ||
++		if ((drm_rect_width(&pipe_cfg->src_rect) > pipe_linewidth) ||
+ 		     _dpu_plane_calc_clk(mode, pipe_cfg) > max_mdp_clk_rate) {
+ 
+-			if (drm_rect_width(&pipe_cfg->src_rect) > 2 * max_linewidth) {
++			if (drm_rect_width(&pipe_cfg->src_rect) > 2 * pipe_linewidth) {
+ 				DPU_DEBUG_PLANE(pdpu, "invalid src " DRM_RECT_FMT " line:%u\n",
+-						DRM_RECT_ARG(&pipe_cfg->src_rect), max_linewidth);
++						DRM_RECT_ARG(&pipe_cfg->src_rect), pipe_linewidth);
+ 				return -E2BIG;
+ 			}
+ 

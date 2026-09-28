@@ -68,7 +68,7 @@ Audited 2026-09-22 against v7.3-rc4 (merge status from git, review state from pa
 replies — lore was not reachable, so "never posted" means no patchwork hit). Re-audit on
 every bump: this table is a snapshot, the `Drop when` column is what to re-check.
 
-Totals: 4 `mainline`, 16 `posted`, 14 `novadeck`, 50 `community`. (`0310` and `0430` were
+Totals: 4 `mainline`, 16 `posted`, 14 `novadeck`, 52 `community`. (`0310` and `0430` were
 deleted at the 7.2.8 bump: stable backported both, byte-identical.) Half the stack will
 never land upstream, which is why provenance is a table and not a number band.
 
@@ -88,6 +88,8 @@ never land upstream, which is why provenance is a table and not a number band.
 | `0360` | community | armada `7e9147a` + `12366dc` (virtudude), a port of the downstream SDE reg-dma engine. Never posted. | never |
 | `0365` | community | armada `0069`. Never posted. | with `0360` |
 | `0370` | community | sunshineinabox (ROCKNIX). Subject says v2, but no posting was found. | never |
+| `0380` | community | sunshineinabox, ROCKNIX PR #3377 (`0012`, `0014`, `0015`, squashed). Vendor-DT catalog values, never posted. | never |
+| `0385` | community | sunshineinabox, ROCKNIX PR #3377 (SM8250 `0201` + `0202` as of `566a53ef`, squashed), plus our no-rotator guard for inline-rotation SoCs and the 0330 `msm_framebuffer_cleanup()` / 0230 `msm_gem_new()` signatures. Never posted. Enabled per board by `dts/qcom/sm8250-sde-rotator.dtsi`. | never |
 | `0410` | novadeck | From ROCKNIX SM8250 `0001`. Partial revert of mainline `2d51cfb77daa` (bpc×3 for video mode). | when no shipped panel needs it, or upstream fixes it |
 | `0420` | novadeck | v1 was ROCKNIX SM8250 `0016`; the xfer/modeset race fix is ours. Never posted. | when upstreamed |
 | `0440` | posted | Re-applies Neil Armstrong `93c97bc8d85d` (`<20251027-topic-sm8x50-fix-dsi-bonded-v1-1-…@linaro.org>`), reverted by `44784327815b` in 7.3-rc1 / 7.2.6 because it broke non-bonded panels. Neil's rework not posted. | when Neil's bonded-mode rework lands |

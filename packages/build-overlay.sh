@@ -287,8 +287,11 @@ for name in "${BUILD_NAMES[@]}"; do
       mkdir -p "/stage/$PKG/out"
       chown -R builder "/stage/$PKG" /repo
       echo "[overlay] makepkg in /stage/$PKG" >&2
+      # Git sources clone over HTTP/1.1: this image`s git 2.53 sends its protocol-v2 POST over
+      # HTTP/2 and GitHub answers 103 then 401 ("could not read Username") on every GitHub source.
       ( cd "/stage/$PKG" && sudo -u builder \
           env PKGDEST="/stage/$PKG/out" \
+              GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.version GIT_CONFIG_VALUE_0=HTTP/1.1 \
           makepkg -sf --noconfirm --nocheck --skipinteg --noprogressbar )
       cp "/stage/$PKG/out"/*.pkg.tar.zst /repo/
       chown -R "$HOSTUID:$HOSTGID" "/stage/$PKG" /repo

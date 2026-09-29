@@ -7,7 +7,7 @@
 # (kernel/dts/qcom/sm8250-mangmi-pocket-max.dts: `powerdown-gpios = <&tlmm 127 ...>`
 # on speaker@0,1 AND speaker@0,2). Every other wsa881x board here gives each amp its
 # own pin — Retroid Pocket uses 129 and 127. Sharing only works at all because
-# kernel/patches/0202 requests the GPIO with GPIOD_FLAGS_BIT_NONEXCLUSIVE, which
+# kernel/patches/0860 requests the GPIO with GPIOD_FLAGS_BIT_NONEXCLUSIVE, which
 # makes gpiolib hand each consumer a `gpiolib_shared` proxy chip over the one line.
 #
 # A shared line aggregates its consumers, so ONE amp left in runtime-suspend keeps

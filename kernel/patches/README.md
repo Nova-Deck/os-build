@@ -140,7 +140,7 @@ never land upstream, which is why provenance is a table and not a number band.
 | `0870` | community | ROCKNIX. Effectively reverts `89be3c15a58b`. | never |
 | `0880` | community | Teguh Sobirin, ROCKNIX `0012`. | never |
 | `0890` | community | Daniel Martin (Batocera), ROCKNIX `0300`. Never posted; generic, worth sending. | when upstreamed |
-| `0910` | community | ROCKNIX `0011`. Charger alternative posted: `qcom_smbx` SMB5 v4 `<20260820-submit-qcom-smbx-send-v1-v4-*@snyders.xyz>` (under review). | charger: when SMB5 lands; FG: never |
+| `0910` | community | ROCKNIX `0011`, with the charger-status fix from ROCKNIX PR #3396 (the SMB5 `BATTERY_CHARGER_STATUS_1` enum and the BAT_OV bit; ours had SMB2's). Charger alternative posted: `qcom_smbx` SMB5 v4 `<20260820-submit-qcom-smbx-send-v1-v4-*@snyders.xyz>` (under review). | charger: when SMB5 lands; FG: never |
 | `0920` | community | ROCKNIX `0063` (sunshineinabox). Never posted. | never |
 | `0930` | posted | Jan-Michael Brummer `<20260829054546.86210-2-jan.brummer@tabos.org>`. Konrad asked for `CHARGE_EMPTY` gating; v2 expected. | when merged |
 | `0940` | posted | Same series, `-3-`. | when merged |

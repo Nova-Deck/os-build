@@ -1,0 +1,130 @@
+#!/usr/bin/env python3
+# novadeck vpower — publish UPower's battery estimates as the /run/vpower files Steam reads.
+#
+# WHY. steamclient.so picks a battery backend at startup, and one of them reads five files under
+# /run/vpower: ac_status, battery_percent, battery_status, secs_until_battery_full and
+# secs_until_shutdown_request. That is the only backend that carries a time-to-FULL. Without it
+# Steam falls back to a generic query that only knows time-to-empty, so the Quick Access menu shows
+# no ETA while charging even though UPower has a valid TimeToFull.
+#
+# On a Steam Deck those files come from Valve's `vpower` daemon. We cannot ship it: it is x86_64
+# only, its source is not public, and it only looks at /sys/class/power_supply/BAT[0-9], a name
+# none of our battery drivers use. UPower already computes smoothed estimates for every board,
+# so this republishes those.
+#
+# Scope: metrics only. Valve's vpower also requests a shutdown at critical charge; this does not.
+#
+# Test seam: NOVADECK_VPOWER_DIR overrides the output directory, and tests/test-vpower.sh drives
+# vpower_values() and publish() from this file directly.
+import os
+import socket
+import sys
+import time
+from pathlib import Path
+
+VPOWER_DIR = Path(os.environ.get("NOVADECK_VPOWER_DIR", "/run/vpower"))
+POLL_SECS = 2  # Steam re-reads the files on the same cadence
+CALL_TIMEOUT_MS = 5000
+
+UPOWER = "org.freedesktop.UPower"
+UPOWER_PATH = "/org/freedesktop/UPower"
+DISPLAY_DEVICE = "/org/freedesktop/UPower/devices/DisplayDevice"
+DEVICE_IFACE = "org.freedesktop.UPower.Device"
+
+FILES = ("ac_status", "battery_percent", "battery_status",
+         "secs_until_battery_full", "secs_until_shutdown_request")
+
+# org.freedesktop.UPower.Device.State -> the battery_status words vpower writes. 5 and 6 are the
+# "pending" states (plugged in but held, e.g. at a charge limit): neither direction, so no ETA.
+STATUS = {1: "Charging", 2: "Discharging", 3: "Discharging", 4: "Full",
+          5: "Not charging", 6: "Not charging"}
+
+
+def vpower_values(device, on_battery):
+    """Map UPower DisplayDevice properties to vpower file contents; None when there is no battery."""
+    if not device.get("IsPresent", False):
+        return None
+    status = STATUS.get(int(device.get("State", 0)), "Unknown")
+    time_to_full = int(device.get("TimeToFull", 0))
+    time_to_empty = int(device.get("TimeToEmpty", 0))
+    # Plugged in yet still draining (a weak or 5V-only charger under load) is its own ac_status
+    # word, which Steam knows alongside the other two.
+    if on_battery:
+        ac_status = "Disconnected"
+    elif status == "Discharging":
+        ac_status = "Connected slow"
+    else:
+        ac_status = "Connected"
+    # UPower reports 0 for "no estimate"; vpower's "no estimate" is -1.
+    return {
+        "ac_status": ac_status,
+        "battery_percent": f"{float(device.get('Percentage', 0.0)):.2f}",
+        "battery_status": status,
+        "secs_until_battery_full":
+            str(time_to_full) if status == "Charging" and time_to_full > 0 else "-1",
+        "secs_until_shutdown_request":
+            str(time_to_empty) if status == "Discharging" and time_to_empty > 0 else "-1",
+    }
+
+
+def publish(directory, values):
+    """Write each file atomically, or remove them all when values is None."""
+    if values is None:
+        for name in FILES:
+            (directory / name).unlink(missing_ok=True)
+        return
+    for name, value in values.items():
+        temporary = directory / f".{name}.tmp"
+        temporary.write_text(f"{value}\n")
+        os.replace(temporary, directory / name)
+
+
+def sd_notify(message):
+    address = os.environ.get("NOTIFY_SOCKET")
+    if not address:
+        return
+    if address.startswith("@"):
+        address = "\0" + address[1:]
+    with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as sock:
+        sock.sendto(message.encode(), address)
+
+
+def query(bus):
+    from gi.repository import Gio, GLib
+
+    def get_all(path, iface):
+        reply = bus.call_sync(UPOWER, path, "org.freedesktop.DBus.Properties", "GetAll",
+                              GLib.Variant("(s)", (iface,)), GLib.VariantType("(a{sv})"),
+                              Gio.DBusCallFlags.NONE, CALL_TIMEOUT_MS, None)
+        return reply.unpack()[0]
+
+    device = get_all(DISPLAY_DEVICE, DEVICE_IFACE)
+    on_battery = get_all(UPOWER_PATH, UPOWER).get("OnBattery", False)
+    return vpower_values(device, on_battery)
+
+
+def main():
+    from gi.repository import Gio
+
+    bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+    last_error = None
+    ready = False
+    while True:
+        try:
+            publish(VPOWER_DIR, query(bus))
+            last_error = None
+        except Exception as error:  # a stale estimate is worse than none: withdraw the files
+            if str(error) != last_error:
+                print(f"vpower: UPower query failed, files withdrawn: {error}", file=sys.stderr)
+                last_error = str(error)
+            publish(VPOWER_DIR, None)
+        if not ready:
+            # READY after the first attempt either way: the session is ordered after us so Steam
+            # sees the files at startup, but a missing UPower must never hold the session back.
+            sd_notify("READY=1")
+            ready = True
+        time.sleep(POLL_SECS)
+
+
+if __name__ == "__main__":
+    main()

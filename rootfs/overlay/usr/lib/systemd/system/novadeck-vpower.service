@@ -1,0 +1,22 @@
+[Unit]
+Description=novadeck vpower (UPower battery estimates for Steam's /run/vpower)
+Documentation=file:///usr/lib/novadeck/vpower
+# Steam chooses its battery backend when the client starts, so the files have to exist before the
+# session does. Type=notify signals READY after the first publish attempt, success or not, and
+# TimeoutStartSec caps the wait, so a missing UPower delays the session by seconds, never blocks it.
+Before=sddm.service
+After=dbus.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=notify
+ExecStart=/usr/lib/novadeck/vpower
+TimeoutStartSec=10
+Restart=always
+RestartSec=2
+# systemd creates /run/vpower (0755 root) and removes it on stop, so a crash never leaves stale
+# estimates behind for Steam to read.
+RuntimeDirectory=vpower
+
+[Install]
+WantedBy=multi-user.target

@@ -31,7 +31,7 @@ are invoked directly there rather than through `make test-disk` — a failure na
   boards from `docs/internal-storage.md` as sparse GPTs for the two disk suites to share.
 - **The installer medium** — `test-install.sh`, `test-ui.sh`.
 - **Device behaviour** — `test-device-quirks.sh`, `test-pairingd.sh`, `test-perf.sh`,
-  `test-fan-curve.sh`, `test-steamos-manager.sh`, `test-decky.sh`.
+  `test-fan-curve.sh`, `test-steamos-manager.sh`, `test-decky.sh`, `test-vpower.sh`.
 - **Graphics and emulation** — `test-graphics-provider.sh`, `test-video-decode.sh`,
   `test-proton-dxvk.sh`, `test-proton-nice.sh`.
 - **Publishing** — `test-publish-bundle.sh`, `test-publish-card.sh`, `test-verify-signing.sh`.

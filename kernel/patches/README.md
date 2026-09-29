@@ -68,7 +68,7 @@ Audited 2026-09-22 against v7.3-rc4 (merge status from git, review state from pa
 replies — lore was not reachable, so "never posted" means no patchwork hit). Re-audit on
 every bump: this table is a snapshot, the `Drop when` column is what to re-check.
 
-Totals: 4 `mainline`, 16 `posted`, 14 `novadeck`, 52 `community`. (`0310` and `0430` were
+Totals: 4 `mainline`, 16 `posted`, 14 `novadeck`, 54 `community`. (`0310` and `0430` were
 deleted at the 7.2.8 bump: stable backported both, byte-identical.) Half the stack will
 never land upstream, which is why provenance is a table and not a number band.
 
@@ -85,6 +85,8 @@ never land upstream, which is why provenance is a table and not a number band.
 | `0330` | posted | Dmitry Baryshkov v3 `<20260912-fd-kms-fix-smmu-v3-0-a7ddc6fe2032@oss.qualcomm.com>` (we take 1, 2, 4–7 of 8), latest, no review yet. | when merged |
 | `0340` | community | tiopex, ROCKNIX `ec3d53baac` (generic part split into ROCKNIX `0013-drm-msm-dpu-fix-inline-rotation`). Never posted; the width/height check, `test_bit` and CW/CCW fixes are real mainline bugs. | when the generic fixes are sent and merged |
 | `0350` | community | tiopex, ROCKNIX `60bb58c1db`. Never posted. | never |
+| `0351` | community | sunshineinabox, ROCKNIX PR #3377 (SM8250 `0208`), hand-merged onto `0350` with `0350`'s values as the defaults; the PR's own set is in the header as a cmdline profile. Never posted. | never |
+| `0352` | community | sunshineinabox, ROCKNIX PR #3377 (SM8250 `0210`), rebased onto `0351`. Never posted. | never |
 | `0360` | community | armada `7e9147a` + `12366dc` (virtudude), a port of the downstream SDE reg-dma engine. Never posted. | never |
 | `0365` | community | armada `0069`. Never posted. | with `0360` |
 | `0370` | community | sunshineinabox (ROCKNIX). Subject says v2, but no posting was found. | never |

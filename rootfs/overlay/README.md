@@ -51,6 +51,13 @@ q6asm/ADM path rather than AudioReach, and the AYN Thor Lite additionally needs
 `usr/share/wireplumber/wireplumber.conf.d/51-ayn-thor-lite.conf` to pin its PCMs to S16LE — the ADM
 COPP is a bit-exact passthrough and UCM has no key for the sample format.
 
+DisplayPort audio on SM8250 is its own UCM verb, `ucm2/Qualcomm/sm8250/DisplayPort.conf`, never a
+device in HiFi: with no display attached the ADSP refuses the DP port, and one PCM that cannot open
+makes PipeWire reject the whole verb it sits in. The Retroid profile enables it; the Pocket Max
+profile has it commented out, because probing it undocked delays sound by ~16 s at every boot. The
+Pocket Max's `52-pocket-max-dp.conf` (S16LE, fixed periods, no mmap on `hw:PocketMax,3`) is dormant
+until that verb returns.
+
 **FEX (layer) — x86 emulation runtime config**
 `usr/share/fex-emu/Config.json` + the Proton FEX profiles + `usr/lib/novadeck/game-launch`. The
 binaries come from pacman; this tree is config only. Two independent x86 paths: Windows games use

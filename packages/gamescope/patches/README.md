@@ -24,6 +24,7 @@ root (the `gamescope/` checkout inside makepkg's `$srcdir`) by
 0019-rendervulkan-fragment-shader-composite.patch   (--composite-graphics, passed by default from etc/novadeck/session.conf)
 0020-libliftoff-treat-enodev-as-no-fit.patch        (patches the libliftoff SUBMODULE; only with 0021)
 0021-libliftoff-give-planes-the-layer-zpos.patch    (patches the libliftoff SUBMODULE)
+0023-xdg-titles-are-reported-to-steam.patch          (NOVADECK_ANDROID_APPID root property; ConVar touch_passthrough_xdg_titles)
 ```
 
 `0008`-`0013` are **retired** (see below). The numbering is kept as-is rather than compacted, so
@@ -107,8 +108,8 @@ a game — so a live client's choice can't be overridden. Full derivation in the
 `0006` — **diagnostic, kept in the tree but deliberately ABSENT from `source.pin`'s `patches:` line,
 so a stock build does not carry it.** It logs why each window is or is not a focus candidate, which
 one wins, and the winner's commit-queue state. This is the instrument that localized `0005` and then
-confirmed it on HW, which is why it is kept rather than deleted — the next focus mystery should not
-have to re-derive it.
+confirmed it on HW, and that caught the baselayer-appid reorder `0023` fixes, which is why it is kept
+rather than deleted — the next focus mystery should not have to re-derive it.
 
 To use it: add it back to `source.pin`, rebuild, and `export GAMESCOPE_DEBUG_FOCUS=1` in
 `/etc/novadeck/session.conf` (the only way to catch a defect at boot, before SSH is up), or
@@ -325,6 +326,26 @@ display blocks the CRTC owns and therefore needs a **modeset** — the kernel as
 patch keeps them on across a composited frame rather than toggling. The runtime switch is the
 convar `drm_output_luts` (default on); set it explicitly (`gamescopectl drm_output_luts 0`), since
 a bare convar name *sets it false*.
+
+`0022` — **RETIRED 2026-09-30, and the number stays unused.** It deferred a match on Steam's own
+window (`769`) in `pick_primary_focus_and_override()` so a native-Wayland title published later in
+`GAMESCOPECTRL_BASELAYER_APPID` could take focus. It **hid the Quick Access menu and the Steam
+overlay** while such a title ran (seen on HW) — both surface through Steam's own window, which is
+exactly what the deferral stopped from winning. Replaced by `0023`, which fixes the cause instead:
+Steam demoted the title only because it was never told the title had a window.
+
+`0023` — **why Steam demotes a native-Wayland title, fixed, plus what the shared Android container
+needs.** Three
+parts, all for native-Wayland (xdg-shell) windows, which upstream only handles for XWayland:
+(1) an xdg window with a resolved appID is reported in `GAMESCOPE_FOCUSABLE_APPS` /
+`GAMESCOPE_FOCUSABLE_WINDOWS`, so Steam stops demoting the title behind `769`; (2) an xdg window's
+appID falls back to an `app-steam-app<N>` match ANYWHERE in the client's cgroup path (upstream only
+accepts it as the last component, which a nested container cgroup is not), and a window from
+`novadeck-android.service` is flagged so its appID follows the `NOVADECK_ANDROID_APPID` root property
+that `novadeck-android` sets before bringing an app forward; (3) touch on such a window is
+Passthrough instead of Steam's click emulation, behind the ConVar `touch_passthrough_xdg_titles`
+(default on). Leaves `pick_primary_focus_and_override()` alone, so Steam's own window — the QAM and the
+overlay — still wins when Steam asks for it.
 
 (A patch that once held the `0003` slot swapped `wl_output`'s `phys_width/phys_height` on the rotated
 path as a coherence fix, but HW showed it does NOT move SteamUI's auto-scale — the swap is

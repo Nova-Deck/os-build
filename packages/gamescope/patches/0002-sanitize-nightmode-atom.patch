@@ -37,17 +37,31 @@ and guard both against non-finite values -- the only validation on this path is 
 size()==3 check, so garbage would otherwise reach the HSV math unchecked. Night mode
 becomes a reliable warm cast whose strength follows the tint slider and whose
 intensity follows the saturation slider. "Primary Hue" stays inert.
+
+SELF-DISARMING since 2026-09-29. Valve fixed the packing: beta client 1790545198
+sends a correct [amount, hue, saturation]. Swept on Pocket Max, every control at
+both ends: amount 0..1, hue 0..1/6 (0..60 deg, 25/360 by default), saturation
+0.5..1.0 (0.95 by default). The workaround above mis-decodes that wire -- it reads
+the 25/360 hue as saturation, and night mode at maximum tint left the panel
+visibly unchanged. Every card would have hit this with no rebuild the day stable
+takes the fix, since the client updates itself on the device.
+
+The hue and saturation ranges do not meet, so vec[1] alone tells the clients apart:
+below 1/3 is a fixed client and gets the stock decode, with the same finite/clamp
+guards, and its "Primary Hue" slider works for the first time. Anything else keeps
+the workaround. A broken client's vec[2] garbage is never consulted.
 ---
- src/steamcompmgr.cpp | 36 ++++++++++++++++++++++++++++++++++++
- 1 file changed, 36 insertions(+)
+ src/steamcompmgr.cpp | 43 +++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 43 insertions(+)
 
 diff --git a/src/steamcompmgr.cpp b/src/steamcompmgr.cpp
+index 18b799e0..05e961db 100644
 --- a/src/steamcompmgr.cpp
 +++ b/src/steamcompmgr.cpp
-@@ -6349,6 +6349,42 @@
+@@ -7520,6 +7520,49 @@ handle_property_notify(xwayland_ctx_t *ctx, XPropertyEvent *ev)
  		nightmode.hue = vec[1];
  		nightmode.saturation = vec[2];
-
+ 
 +		// novadeck: the arm64 Steam client packs this property wrong for Xlib's format=32
 +		// ABI. XChangeProperty(format=32) takes a long* on LP64 and transmits the low 32 bits
 +		// of each element. The client hands it a float[3] {amount, hue, saturation} -- 12
@@ -71,17 +85,24 @@ diff --git a/src/steamcompmgr.cpp b/src/steamcompmgr.cpp
 +		// both: the only validation on this path is the size()==3 check above, so a non-finite
 +		// value would otherwise reach the HSV math unchecked.
 +		//
-+		// WATCH: if the client fixes its packing the wire becomes a correct
-+		// [amount, hue, saturation] and this workaround starts mis-decoding -- reading the real
-+		// hue as saturation. There is no reliable runtime sniff (a correct vec[2] and random
-+		// heap bits are not distinguishable), so re-check this on Steam client updates.
++		// A FIXED client is told apart by vec[1] alone. The beta client 1790545198 packs the
++		// property correctly, and sweeping every control on it gave hue 0..1/6 (0..60 deg,
++		// 25/360 by default) in vec[1] and saturation 0.5..1.0 (0.95 by default) in vec[2].
++		// The broken client puts that same 0.5..1.0 saturation in vec[1]. The two ranges do not
++		// meet, so vec[1] below 1/3 is a fixed client and gets the stock decode -- its hue
++		// slider works for the first time -- and anything else keeps the workaround. The
++		// garbage in a broken client's vec[2] is never consulted. With no property at all vec
++		// is zero, which takes the fixed branch with amount 0: identity either way.
 +		{
-+			constexpr float kNightModeAmberHue = 25.0f / 360.0f;  // 25deg amber, matches the x86 client
++			constexpr float kNightModeAmberHue    = 25.0f / 360.0f;  // 25deg amber, matches the x86 client
++			constexpr float kNightModeFixedHueMax = 1.0f / 3.0f;     // between fixed hue <= 1/6 and broken saturation >= 0.5
++			const bool  bFixedClient = std::isfinite( vec[1] ) && vec[1] < kNightModeFixedHueMax;
 +			const float flAmount     = vec[0];
-+			const float flSaturation = vec[1];
++			const float flHue        = bFixedClient ? vec[1] : kNightModeAmberHue;
++			const float flSaturation = bFixedClient ? vec[2] : vec[1];
 +			nightmode.amount     = std::isfinite( flAmount )     ? std::clamp( flAmount,     0.0f, 1.0f ) : 0.0f;
 +			nightmode.saturation = std::isfinite( flSaturation ) ? std::clamp( flSaturation, 0.0f, 1.0f ) : 1.0f;
-+			nightmode.hue        = kNightModeAmberHue;
++			nightmode.hue        = std::clamp( flHue, 0.0f, 1.0f );
 +		}
 +
  		if ( set_color_nightmode( nightmode ) )

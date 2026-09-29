@@ -77,7 +77,13 @@ auto-engages compositor rotation when the primary plane can't rotate at scanout;
 actually present. The `0002`-`0006` numbering is kept as-is rather than renumbered, so old commit
 messages and memories still resolve.
 
-`0002` — sanitize the night-mode color atom.
+`0002` — sanitize the night-mode color atom. **Self-disarming since 2026-09-29.** The beta client
+`1790545198` packs the atom correctly (hue 0..1/6 in `vec[1]`, saturation 0.5..1.0 in `vec[2]`);
+stable `1788652215` is still broken, and its `vec[1]` is saturation, 0.5..1.0. So `vec[1] < 1/3`
+selects the stock decode. Retire the workaround branch only once stable's BINARIES are fixed: hash
+`steamrtarm64/steamclient.so` against a known-stable device. After a channel switch, don't trust the
+manifest version: under `-noverifyfiles`, going beta -> stable rewrites the manifest but leaves the
+beta binaries in place, and that fooled us once.
 
 `0003` — `GAMESCOPE_FAKE_OUTPUT_MM` env override for the reported output physical size (upstream
 contribution by tiopex). This is the lever that fixes SteamUI's auto-scale on our panel — *not* the

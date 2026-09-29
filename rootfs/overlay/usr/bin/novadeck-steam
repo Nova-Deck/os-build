@@ -9,8 +9,8 @@
 #
 # The WHOLE Big Picture shell is baked offline (release can't fetch — Steam owns OOBE Wi-Fi):
 # image/make-sdcard.sh pre-seeds the native client+runtime directly into the writable /home at image
-# build, and we launch with -noverifyfiles so the client runs exactly the baked bits without
-# attempting an (offline, doomed) self-update/repair.
+# build. The seed is a complete Steam self-install, so the client's startup verification passes
+# offline and it runs the baked bits until its own updater moves it on.
 set -eu
 
 STEAM_HOME="${STEAM_HOME:-/home/deck}"
@@ -204,10 +204,16 @@ export vk_xwayland_wait_ready=false            # don't block on buffers idling b
 # It is also EXONERATED for the welcome screen — a clean single-trial fresh login without it still
 # showed the tour — so it stays dropped on the copied-wholesale reasoning alone. Dropped 2026-08-19.
 #
-# -noverifyfiles: skip the client's startup file-verification pass. We bake a hand-assembled offline
-#   shell (pre-seeded into /home by make-sdcard.sh) that won't checksum-match Valve's manifests, and there's no network
-#   at first boot (Steam owns OOBE Wi-Fi) — so verification can only waste time re-hashing the baked
-#   tree or stall trying to re-fetch. This leaves the SELF-UPDATE path intact.
+# NO -noverifyfiles, deliberately (dropped 2026-09-29). It skipped the client's startup verification,
+#   which made sense for the old hand-assembled seed. The seed is now Steam's own self-install
+#   (build/steam-seed/fetch-steam-seed.sh), and it verifies clean: "Verifying file sizes only",
+#   zero BVerifyInstalledFiles lines, in about a second, needing no network. HW-checked on a dev
+#   card (online first boot) and on a release card (offline first boot, through OOBE).
+#
+#   With the flag the client could not apply a channel switch to an OLDER build: beta -> stable
+#   downloaded the stable packages and wrote the stable .installed, then left the beta binaries
+#   in place, because nothing checked the files. The device read "stable" and ran beta. The
+#   verification pass is what notices the mismatch and unpacks the downloaded package.
 # NO -noshaders, deliberately — and an earlier comment here called it a "pure CPU/battery saver,
 #   safe to keep", which is WRONG on recent Protons and is why this took two passes to fix.
 #   The flag disables Steam's shader pre-caching (background shader download + compile), but those
@@ -246,7 +252,7 @@ export vk_xwayland_wait_ready=false            # don't block on buffers idling b
 # self-updating client, so those three were removed. -noshaders was a separate question and is
 # also gone now, for the media reason above.
 # Word-splitting on the extra-args is intentional (sh).
-: "${NOVADECK_STEAM_ARGS:=-gamepadui -steamos3 -steamdeck -noverifyfiles}"
+: "${NOVADECK_STEAM_ARGS:=-gamepadui -steamos3 -steamdeck}"
 
 # CEF remote-debugging, ALWAYS on (2026-08-08, was NOVADECK_DEBUG-gated). Steam's Big Picture UI
 # is CEF; this sentinel makes the client open its DevTools port. It is the ONLY path Decky Loader

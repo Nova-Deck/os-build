@@ -68,7 +68,7 @@ Audited 2026-09-22 against v7.3-rc4 (merge status from git, review state from pa
 replies — lore was not reachable, so "never posted" means no patchwork hit). Re-audit on
 every bump: this table is a snapshot, the `Drop when` column is what to re-check.
 
-Totals: 4 `mainline`, 16 `posted`, 14 `novadeck`, 54 `community`. (`0310` and `0430` were
+Totals: 4 `mainline`, 15 `posted`, 14 `novadeck`, 55 `community`. (`0310` and `0430` were
 deleted at the 7.2.8 bump: stable backported both, byte-identical.) Half the stack will
 never land upstream, which is why provenance is a table and not a number band.
 
@@ -94,7 +94,7 @@ never land upstream, which is why provenance is a table and not a number band.
 | `0385` | community | sunshineinabox, ROCKNIX PR #3377 (SM8250 `0201` + `0202` as of `566a53ef`, squashed), plus our no-rotator guard for inline-rotation SoCs and the 0330 `msm_framebuffer_cleanup()` / 0230 `msm_gem_new()` signatures. Never posted. Enabled per board by `dts/qcom/sm8250-sde-rotator.dtsi`. | never |
 | `0410` | novadeck | From ROCKNIX SM8250 `0001`. Partial revert of mainline `2d51cfb77daa` (bpc×3 for video mode). | when no shipped panel needs it, or upstream fixes it |
 | `0420` | novadeck | v1 was ROCKNIX SM8250 `0016`; the xfer/modeset race fix is ours. Never posted. | when upstreamed |
-| `0440` | posted | Re-applies Neil Armstrong `93c97bc8d85d` (`<20251027-topic-sm8x50-fix-dsi-bonded-v1-1-…@linaro.org>`), reverted by `44784327815b` in 7.3-rc1 / 7.2.6 because it broke non-bonded panels. Neil's rework not posted. | when Neil's bonded-mode rework lands |
+| `0440` | community | armada `0048b` (virtudude). Never posted. Replaces our re-apply of Neil Armstrong `93c97bc8d85d`, reverted by `44784327815b` in 7.3-rc1 / 7.2.6 because it broke non-bonded panels; this keeps the revert and adds the missing slave-PHY mux write. Neil's rework not posted. | when Neil's bonded-mode rework lands |
 | `0480` | community | armada `0059` (virtudude). Not submitted; needs a panel-common binding first. | never |
 | `0490` | posted | Jianfeng Liu v2 `<20250925040530.20731-1-liujianfeng1994@gmail.com>`. NAKed by Dmitry Baryshkov on design; he points to `b54a38af7138` (in 7.1, already in our tree) as the real fix. | now, if DP audio works without it on SM8550/SM8650 |
 | `0505` | novadeck | Also ROCKNIX SM8550 `0051`. Driver-generator output, FIXME authorship. | never |

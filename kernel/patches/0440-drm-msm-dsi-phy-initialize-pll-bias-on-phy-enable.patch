@@ -1,0 +1,54 @@
+From: virtudude <virtudude@protonmail.com>
+Subject: [PATCH] drm/msm/dsi/phy: initialize PLL bias when enabling the PHY
+
+PHY enable establishes a PLL bias reference and sets the power bits, but
+leaves PLL_SYSTEM_MUXES uninitialized. Subsequent bias gets skip the
+register writes because the reference is already held, including the
+slave bias get during bonded PLL prepare.
+
+Initialize PLL_SYSTEM_MUXES while establishing the PHY reference and allow
+the bias to settle before continuing. The existing reference stays held
+across host power on, so temporary clock operations cannot power down the
+PLL and lose its register contents.
+
+Fixes: cb55f39bf7b1 ("drm/msm/dsi/phy: Fix reading zero as PLL rates when unprepared")
+Link: https://git.kernel.org/torvalds/c/cb55f39bf7b1e687b88dc9825c21a7d3454b5acb
+Link: https://www.mail-archive.com/dri-devel@lists.freedesktop.org/msg638716.html
+
+WHY WE NEED IT.  Pocket S2 is the only board we ship in DSI BONDED mode --
+`qcom,dual-dsi-mode` + `qcom,sync-dual-dsi` in sm8650-ayaneo-ps2.dts, one
+1440x2560 panel driven across two DSI links.  Linux 7.2.6 reverted
+93c97bc8d85d ("drm/msm: dsi: fix PLL init in bonded mode") as 5de981b7db1f
+(upstream 44784327815b), and with that revert only the BOTTOM HALF of the
+panel draws: HW-observed on 7.2.6, 2026-09-14.  The slave PHY never gets
+its mux written, because dsi_7nm_phy_enable() pre-sets pll_enable_cnt = 1
+and every later dsi_pll_enable_pll_bias() early-returns.
+
+WHY NOT RE-APPLY 93c97bc8d85d.  This slot used to carry that revert of the
+revert.  It fixes bonded mode by turning the bias into a plain refcount,
+but then a transient bias get/put (vco_recalc_rate, pll_save_state) can
+drop the count to zero, and dsi_pll_disable_pll_bias() clears
+PLL_SHUTDOWNB and the mux.  Without PLL_SHUTDOWNB most PLL registers read
+as zero, so CCF gets a zero divisor and non-bonded panels come up in the
+wrong mode -- the regression upstream reverted it for.  This patch keeps
+the reference phy_enable holds and only adds the one write it was missing.
+
+DROP THIS PATCH once Neil Armstrong's bonded-mode rework lands in the
+pinned stable series -- check whether dsi_7nm_phy_enable() still assigns
+pll_enable_cnt = 1 without writing PLL_SYSTEM_MUXES.  If that has changed,
+re-evaluate rather than carry it forward.
+
+---
+
+--- a/drivers/gpu/drm/msm/dsi/phy/dsi_phy_7nm.c
++++ b/drivers/gpu/drm/msm/dsi/phy/dsi_phy_7nm.c
+@@ -1096,7 +1096,9 @@
+ 	data = DSI_7nm_PHY_CMN_CTRL_0_DIGTOP_PWRDN_B |
+ 	       DSI_7nm_PHY_CMN_CTRL_0_PLL_SHUTDOWNB;
+ 	writel(data, base + REG_DSI_7nm_PHY_CMN_CTRL_0);
++	writel(0xc0, phy->pll_base + REG_DSI_7nm_PHY_PLL_SYSTEM_MUXES);
+ 	spin_unlock_irqrestore(&pll->pll_enable_lock, flags);
++	ndelay(250);
+ 
+ 	/* Assert PLL core reset */
+ 	writel(0x00, base + REG_DSI_7nm_PHY_CMN_PLL_CNTRL);

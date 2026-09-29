@@ -22,6 +22,8 @@ root (the `gamescope/` checkout inside makepkg's `$srcdir`) by
 0017-color-neutral-virtual-white-keeps-scanout.patch
 0018-drm-sdr-color-management-through-the-dpu-output-luts.patch
 0019-rendervulkan-fragment-shader-composite.patch   (--composite-graphics, passed by default from etc/novadeck/session.conf)
+0020-libliftoff-treat-enodev-as-no-fit.patch        (patches the libliftoff SUBMODULE; only with 0021)
+0021-libliftoff-give-planes-the-layer-zpos.patch    (patches the libliftoff SUBMODULE)
 ```
 
 `0008`-`0013` are **retired** (see below). The numbering is kept as-is rather than compacted, so
@@ -332,6 +334,18 @@ honouring panel mm for gamepad-UI scale entirely, and `GAMESCOPE_FAKE_OUTPUT_MM`
 that replaced it. **That `kernel/patches/0062` citation is stale** — renumbering moved 0062 onto the
 SY7758 backlight driver, which has nothing to do with panel size. It was dropped once the incremental overlay build made a gamescope-only
 recompile cheap, and the number was later reused by the `GAMESCOPE_FAKE_OUTPUT_MM` patch above.)
+
+`0020` + `0021` — **libliftoff plane stacking on msm** (sunshineinabox; ROCKNIX PR #3377 gamescope
+`0020` and `0022`, bodies unchanged). libliftoff never writes plane zpos, and our DPU gives one CRTC
+several PRIMARY planes, all at zpos 0, so hardware stacking falls back to plane object id. Stock
+liftoff got it right only by accident: its traversal order matched that id order, and nothing
+backtracked. `0021` writes the layer's zpos into any plane whose zpos is a mutable range. `0020` makes
+msm's `-ENODEV` (no free SSPP, from `dpu_plane_assign_resource_in_stage()`) a "no fit" rather than
+an abort, which means MORE backtracking, so **never carry `0020` without `0021`**. The symptom was
+MangoHud intermittently missing (it sat behind the game). It did not reproduce on Pocket ACE on
+2026-09-17, because there the allocation never backtracked. Both patch the
+**submodule**, so `../PKGBUILD`'s `prepare()` checks the submodules out BEFORE its `cd gamescope`,
+the line build-overlay.sh injects the patch step after.
 
 Drop the patch files here with those exact names (or rename and update `source.pin`'s
 `patches:` line). **Until a declared patch is present, `make overlay` / `make base` fail fast**

@@ -121,15 +121,18 @@ b2sums=('SKIP'
         'SKIP')
 
 prepare() {
+  # Submodules BEFORE the `cd` below: build-overlay.sh applies source.pin's patches right after
+  # the first `cd` in prepare(), and some of them patch a submodule (subprojects/libliftoff). The
+  # `cd` must still precede `meson subprojects download`, because 0007 patches a .wrap it reads.
+  for submodule in src/reshade subprojects/{libdisplay-info,libliftoff,openvr,vkroots,wlroots} thirdparty/SPIRV-Headers; do
+    git -C gamescope submodule init ${submodule}
+    git -C gamescope config submodule.${submodule}.url ../${submodule##*/}
+  done
+  git -C gamescope -c protocol.file.allow=always submodule update
+
   cd gamescope
 
   meson subprojects download
-
-  for submodule in src/reshade subprojects/{libdisplay-info,libliftoff,openvr,vkroots,wlroots} thirdparty/SPIRV-Headers; do
-    git submodule init ${submodule}
-    git config submodule.${submodule}.url ../${submodule##*/}
-  done
-  git -c protocol.file.allow=always submodule update
 }
 
 build() {

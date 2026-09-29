@@ -1,0 +1,14 @@
+[Unit]
+Description=Add the Google Play Store to the Steam library
+# Exits at once when Steam already has the shortcut. On a fresh install it waits (up to two hours)
+# for Steam to be signed in with its library up, then adds the shortcut and confirms it landed in
+# shortcuts.vdf.
+After=graphical-session.target
+ConditionUser=deck
+
+[Service]
+Type=exec
+ExecStart=/usr/bin/novadeck-android setup
+
+[Install]
+WantedBy=default.target

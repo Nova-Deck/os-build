@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# novadeck read-only root assembler — stages `first-boot-storage`, `fex-guest-payload` and
-# `android-guest-payload`.
+# novadeck read-only root assembler — stages `first-boot-storage`, `fex-guest-payload`,
+# `android-guest-payload` and `android-shared-payload`.
 #
 # SOURCED by rootfs/assemble-rootfs.sh, never executed. Split out of it for issue #43; the code
 # and its rationale are unchanged (tests/test-mkroot.sh reads the `# STAGE <name>` banners out of
@@ -436,6 +436,58 @@ fi
 # ownership only — but a read-only root whose files claim to belong to uid 1000 is a lie that
 # costs someone an afternoon later.
 chown -R 0:0 "$stage/$android_slot"
+
+# STAGE android-shared-payload — Google Play and the framework fix for the SHARED Android container
+# (/usr/bin/novadeck-android, novadeck-android.service). NOT the guestos slot above, which Lepton
+# bind-mounts into EVERY Android launch: these ride in only through NOVADECK_ANDROID_OVERLAY, which
+# only that one container sets, so Valve's own Android titles keep the stock image.
+#
+#   /usr/share/novadeck-android/sdk<N>/       packages/android-gapps (Play Store, Play services, the
+#                                             Services Framework, their permission/sysconfig files,
+#                                             a touch keyboard) + rootfs/android-shared (the Steam pad
+#                                             key layout). <N> is the guest SDK that set was built
+#                                             for; novadeck-android mounts it only into a guest of
+#                                             that SDK and says so otherwise.
+#   /usr/lib/novadeck/android-framework/      packages/lepton-framework: the tools novadeck-android
+#                                             builds the framework fix with, on the device, for
+#                                             whatever Lepton image Steam installed (smali/baksmali
+#                                             as dex for the guest's ART, and the three scripts).
+#
+# REQUIRED, like the payloads above: the Makefile orders both fetches before this runs, and a Play
+# Store title that opens onto a guest with no Play in it would be the quiet failure.
+shared_root="usr/share/novadeck-android"
+gapps_payload="$ROOT/work/android-gapps/out"
+gapps_sdk="$(sed -n 's/^sdk:[[:space:]]*//p' "$ROOT/packages/android-gapps/payload.pin" | head -1)"
+[[ "$gapps_sdk" =~ ^[0-9]+$ ]] \
+  || { echo "ERROR: packages/android-gapps/payload.pin has no numeric sdk:" >&2; exit 1; }
+for f in system/product/priv-app/Phonesky/Phonesky.apk \
+         system/product/priv-app/PrebuiltGmsCore/PrebuiltGmsCore.apk \
+         system/system_ext/priv-app/GoogleServicesFramework/GoogleServicesFramework.apk \
+         system/product/app/SimpleKeyboard/SimpleKeyboard.apk; do
+  [ -s "$gapps_payload/$f" ] \
+    || { echo "ERROR: android-gapps payload incomplete: missing $f (make android-gapps)" >&2; exit 1; }
+done
+echo "  staging Google Play for the shared Android container (/$shared_root/sdk$gapps_sdk)"
+mkdir -p "$stage/$shared_root/sdk$gapps_sdk"
+cp -a "$gapps_payload/system" "$stage/$shared_root/sdk$gapps_sdk/"
+cp -a "$ROOT/rootfs/android-shared/." "$stage/$shared_root/sdk$gapps_sdk/"
+fw_tools="usr/lib/novadeck/android-framework"
+for f in smali.dex.jar baksmali.dex.jar api; do
+  [ -s "$ROOT/work/lepton-framework/out/$f" ] \
+    || { echo "ERROR: lepton-framework payload incomplete: missing $f (make lepton-framework)" >&2; exit 1; }
+done
+echo "  staging the on-device framework-fix tools (/$fw_tools)"
+mkdir -p "$stage/$fw_tools"
+cp "$ROOT"/work/lepton-framework/out/{smali.dex.jar,baksmali.dex.jar,api} \
+   "$ROOT"/packages/lepton-framework/{restore-services.py,repack-jar.py,compile-odex.sh} "$stage/$fw_tools/"
+chown -R 0:0 "$stage/$fw_tools"
+chmod 0755 "$stage/$fw_tools"
+chmod 0644 "$stage/$fw_tools"/*
+# Lepton bind-mounts these files one by one into the guest, where the host uid means nothing; the
+# fetches ran as the build user.
+chown -R 0:0 "$stage/$shared_root"
+find "$stage/$shared_root" -type d -exec chmod 0755 {} +
+find "$stage/$shared_root" -type f -exec chmod 0644 {} +
 
 # Grow the home PARTITION to fill the device with systemd-repart (declarative, online — it issues
 # a BLKPG resize so it works while the disk is in use, and relocates the GPT backup header for us).

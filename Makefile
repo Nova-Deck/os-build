@@ -359,6 +359,19 @@ FOSSILIZE_STUB_SRC   := packages/fossilize-stub-android/build.sh \
                         packages/fossilize-stub-android/layer.c \
                         packages/fossilize-stub-android/layer.json
 
+# Google Play for the SHARED Android container (novadeck-android), and that container's framework
+# fix. Neither is a compile: both fetch pinned, sha256-verified artifacts on the host, so they need
+# no x86 runner and no CI job of their own -- the image build job runs them like any other stamp.
+# Kept out of the guestos slot on purpose: Valve's own Android titles never see them.
+ANDROID_GAPPS_STAMP := work/.android-gapps.stamp
+ANDROID_GAPPS_SRC   := packages/android-gapps/build.sh packages/android-gapps/payload.pin
+LEPTON_FW_STAMP     := work/.lepton-framework.stamp
+# The three scripts are staged straight from the package dir; listing them here is what makes an
+# edit to one reach the rootfs.
+LEPTON_FW_SRC       := packages/lepton-framework/build.sh packages/lepton-framework/framework.pin \
+                       packages/lepton-framework/restore-services.py packages/lepton-framework/repack-jar.py \
+                       packages/lepton-framework/compile-odex.sh
+
 # Kernel inputs: any change re-triggers the (full, from-scratch) kernel build. The unified
 # kernel globs every fragment/patch/dts, and bakes the firmware embed list.
 # There is no cmdline file to list: the common boot args live in boot/gen-grub-cfg.sh and land on
@@ -397,7 +410,7 @@ KERNEL_SRC_HASH := work/.kernel-src.hash
 # Phony orchestration targets
 # ==============================================================================
 .PHONY: help all image toolchain kernel fw-linux fw-qcom base overlay verify-lock \
-        rootfs relock mesa-x86 lsfg-vk-x86 mesa-android fossilize-stub-android installer installer-root relock-installer verify-image \
+        rootfs relock mesa-x86 lsfg-vk-x86 mesa-android fossilize-stub-android android-gapps lepton-framework installer installer-root relock-installer verify-image \
         initramfs splash steamcl grub sdcard verify-card test test-disk bundle sign-bundle publish-bundle \
         steam-seed-artifact deploy clean clean-base clean-overlay distclean
 
@@ -462,7 +475,7 @@ verify-card: $(SDCARD) | $(BUILD_STAMP) ## Verify the built A/B card image (in c
 verify-lock: ## Check both locks' novadeck rows against packages/ (host, seconds, no build)
 	bash packages/verify-lock-rows.sh
 
-test: verify-lock ## Run the offline bootctl/post-install/boot-disk/pairingd/quirks/power-led/vpower/suspend/stage-2/partition-table/unit/coredump/perf/fan-curve/decky/update/select-branch/publish/install/mkroot/verify-lock/steamos-manager/storage/graphics-provider/android-guestos/mesa-source/video-decode/proton-dxvk/proton-nice/guard suites (host, no build needed)
+test: verify-lock ## Run the offline bootctl/post-install/boot-disk/pairingd/quirks/power-led/vpower/suspend/stage-2/partition-table/unit/coredump/perf/fan-curve/decky/update/select-branch/publish/install/mkroot/verify-lock/steamos-manager/storage/graphics-provider/android-guestos/android-shared/mesa-source/video-decode/proton-dxvk/proton-nice/guard suites (host, no build needed)
 	bash $(TESTS_DIR)/test-bootctl.sh
 	bash $(TESTS_DIR)/test-post-install.sh
 	bash $(TESTS_DIR)/test-boot-disk.sh
@@ -495,6 +508,7 @@ test: verify-lock ## Run the offline bootctl/post-install/boot-disk/pairingd/qui
 	bash $(TESTS_DIR)/test-mkimage.sh
 	bash $(TESTS_DIR)/test-graphics-provider.sh
 	bash $(TESTS_DIR)/test-android-guestos.sh
+	bash $(TESTS_DIR)/test-android-shared.sh
 	bash $(TESTS_DIR)/test-mesa-source.sh
 	bash $(TESTS_DIR)/test-video-decode.sh
 	bash $(TESTS_DIR)/test-proton-dxvk.sh
@@ -828,7 +842,7 @@ $(VERSION_STAMP):
 # /usr/lib/novadeck/boot mirror the RAUC hook refreshes the ESP and the slot's efi partition FROM.
 # That is what makes "this root and the software that boots it came from one build" true by
 # construction. No cycle: the initramfs is built from work/base, never from the assembled root.
-$(ROOTFS): $(KERNEL) $(INITRAMFS) $(STEAMCL) $(GRUB) $(BASE_STAMP) $(FW_LINUX) $(FW_QCOM) $(STEAM_SEED) $(ASSEMBLE_SRC) $(DECKY_DISTS) $(MESA_X86_STAMP) $(LSFG_VK_STAMP) $(MESA_ANDROID_STAMP) $(FOSSILIZE_STUB_STAMP) $(MODE_STAMP) $(VERSION_STAMP) | $(BUILD_STAMP)
+$(ROOTFS): $(KERNEL) $(INITRAMFS) $(STEAMCL) $(GRUB) $(BASE_STAMP) $(FW_LINUX) $(FW_QCOM) $(STEAM_SEED) $(ASSEMBLE_SRC) $(DECKY_DISTS) $(MESA_X86_STAMP) $(LSFG_VK_STAMP) $(MESA_ANDROID_STAMP) $(FOSSILIZE_STUB_STAMP) $(ANDROID_GAPPS_STAMP) $(LEPTON_FW_STAMP) $(MODE_STAMP) $(VERSION_STAMP) | $(BUILD_STAMP)
 	$(DOCKER) $(DEV_ENV) $(ID_ENV) -e NOVADECK_DEBUG $(BUILD_IMG) \
 	  $(ROOTFS_DIR)/assemble-rootfs.sh /src/work/base
 
@@ -855,6 +869,18 @@ $(FOSSILIZE_STUB_STAMP): $(FOSSILIZE_STUB_SRC)
 	@mkdir -p $(@D) && touch $@
 
 fossilize-stub-android: $(FOSSILIZE_STUB_STAMP) ## Build the no-op fossilize vulkan layer Lepton requires (host docker, x86)
+
+$(ANDROID_GAPPS_STAMP): $(ANDROID_GAPPS_SRC)
+	packages/android-gapps/build.sh
+	@mkdir -p $(@D) && touch $@
+
+android-gapps: $(ANDROID_GAPPS_STAMP) ## Fetch the Google Play payload for the shared Android container (host)
+
+$(LEPTON_FW_STAMP): $(LEPTON_FW_SRC)
+	packages/lepton-framework/build.sh
+	@mkdir -p $(@D) && touch $@
+
+lepton-framework: $(LEPTON_FW_STAMP) ## Build the on-device framework-fix tools (smali as dex; host docker)
 
 # No container and no compile -- see packages/lsfg-vk-x86/payload.pin for why this one is a prebuilt.
 $(LSFG_VK_STAMP): $(LSFG_VK_SRC)
@@ -1009,7 +1035,7 @@ clean-base: ## Remove the (root-owned) bootstrapped root tree
 clean-overlay: ## Remove the built (arch-scoped) overlay pacman repo + build tree
 	rm -rf work/repo work/overlay-build
 
-# FIVE THINGS THIS DELIBERATELY DOES *NOT* REMOVE, all of which surprise people:
+# THE CACHES THIS DELIBERATELY DOES *NOT* REMOVE, all of which surprise people:
 #
 #   work/prebuilt      the pinned-download cache (customize-base.sh documents it as persistent).
 #   work/pacman-cache  the package cache.
@@ -1017,6 +1043,8 @@ clean-overlay: ## Remove the built (arch-scoped) overlay pacman repo + build tre
 #   work/mesa-x86      the FEX-guest Turnip payload (digest-checked by its own build.sh, same
 #                      content-addressed logic — a stale payload cannot be served).
 #   work/mesa-android  the Android-guest Mesa payload, same digest-check, same reasoning.
+#   work/android-gapps, work/lepton-framework  the shared Android's Play payload and the tools its
+#                      framework fix is built with: pinned downloads, verified by sha256 on every build.
 #
 # Together they are ~3.5G, i.e. essentially everything left under work/ after this target runs,
 # which is why "distclean left stuff behind" is a reasonable first reading. It is a CHOICE: every
@@ -1025,7 +1053,8 @@ clean-overlay: ## Remove the built (arch-scoped) overlay pacman repo + build tre
 # Nothing in the build reads them as INPUT to a decision; they only ever save a download. To drop
 # them anyway (moving machines, reclaiming disk, or proving a pin still resolves upstream):
 #
-#   rm -rf work/prebuilt work/pacman-cache work/mesa-x86 work/mesa-android work/fossilize-stub-android && make clean-overlay
+#   rm -rf work/prebuilt work/pacman-cache work/mesa-x86 work/mesa-android work/fossilize-stub-android \
+#          work/android-gapps work/lepton-framework && make clean-overlay
 #
 # work/repo is the newest member and the one with real history. It used to go via clean-overlay,
 # and because rootfs/manifest.lock then pinned the overlay's ARTIFACT bytes — which our

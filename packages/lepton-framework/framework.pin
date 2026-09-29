@@ -1,0 +1,30 @@
+# The shared Android container's framework fix: services.jar with the SystemServer services Lepton
+# comments out restored, plus everything compiled against it.
+#
+# WHY IT IS BUILT ON THE DEVICE. Restoring the services means editing Lepton's own services.jar,
+# which only exists inside the Lepton image Steam downloads, and the edited jar invalidates every
+# oat/vdex/art that embeds the old one's checksum -- those have to be rebuilt by the guest's own
+# dex2oat against its APEX boot image, i.e. inside a RUNNING Android. Steam updates Lepton on its own
+# schedule, so novadeck-android builds the fix itself on the first start with an image it has none
+# for, and keeps it in ~/.local/share/novadeck-android/framework/lepton-<ver>/.
+#
+# smali/baksmali are Java, and the device has no JVM -- but the guest has ART. This package turns
+# them into dex at build time (d8, on the host), and they run under the guest's dalvikvm64. Staged
+# with restore-services.py, repack-jar.py and compile-odex.sh into /usr/lib/novadeck/android-framework/
+# by rootfs/lib-assemble-storage.sh (STAGE android-shared-payload).
+#
+# What is restored, and why each one: restore-services.py.
+#
+# Host-side tools for the dex conversion (run in the pinned JRE container):
+jre_image: eclipse-temurin@sha256:34d6aaf0fa4ef553c470234ec23c32c7d5c0f370c2bd4b0bf8a16838052d85f0
+r8_url: https://dl.google.com/android/maven2/com/android/tools/r8/9.4.28/r8-9.4.28.jar
+r8_sha256: 51af0a9d41cc541d619064224aec628923bd779cbcc5a62cb914ea2d669c4063
+# What gets converted and shipped:
+smali_url: https://bitbucket.org/JesusFreke/smali/downloads/smali-2.5.2.jar
+smali_sha256: 9544299578b16f771d8aa8eaefe0d3718ca03478c16f3c356f2fcf1366bfb116
+baksmali_url: https://bitbucket.org/JesusFreke/smali/downloads/baksmali-2.5.2.jar
+baksmali_sha256: d3116248cce4f82ec5a31eb7f95ee75daff42ddf6eed0ab573973dc53fbad2e5
+# Android API level smali/baksmali target and the dex's --min-api. Must equal the guest's
+# ro.build.version.sdk; the restore targets the SDK-30 guest the Play payload (packages/android-gapps)
+# is built for, and novadeck-android builds the fix only for a guest of this SDK.
+api: 30

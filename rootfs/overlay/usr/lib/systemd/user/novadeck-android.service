@@ -1,0 +1,15 @@
+[Unit]
+Description=Shared Android (Lepton) for the Play Store and the apps installed from it
+# Started on demand by `novadeck-android store|run|install`, which first hands it gamescope's Wayland
+# socket through `systemctl --user set-environment NOVADECK_ANDROID_DISPLAY=...`; it has no display
+# of its own. Stopped 10 minutes after the last app closes (novadeck-android-idle).
+#
+# gamescope patch 0023 recognises this unit's NAME in the client's cgroup to attribute the Android
+# window to the NOVADECK_ANDROID_APPID root property -- renaming it breaks focus and touch.
+ConditionUser=deck
+
+[Service]
+ExecStart=/usr/bin/novadeck-android daemon
+# SIGTERM goes to novadeck-android alone, which has Lepton stop its container cleanly.
+KillMode=mixed
+TimeoutStopSec=30

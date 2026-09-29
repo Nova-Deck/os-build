@@ -283,9 +283,17 @@ because the LICENSE file alone would misrepresent them:
 | `boot/patches/grub/*` | derivatives of GRUB — **GPL-3.0-or-later** |
 | `packages/*/patches/*` | each carries the license of the project it patches |
 | `apps/novadeck-splash/src/stb_truetype.h` | stb_truetype v1.26, **public domain** (Sean Barrett), vendored verbatim |
+| `rootfs/overlay/usr/bin/novadeck-android`, `rootfs/overlay/usr/lib/novadeck/apk-info`, `packages/lepton-framework/*` | adapted from SteamOS-ARM-Handhelds' Android glue — **GPL-2.0** |
+| `rootfs/android-shared/system/usr/keylayout/*.kl` | Android's own key layout — **Apache-2.0** (AOSP) |
 
 `apps/novadeck-splash` is a from-scratch implementation whose design is derived from Armada's
 `armada-splash` (GPL-2.0-or-later); the commit that introduces it says what came from where.
+
+**Google Play ships in the image, not in this repo.** The shared Android container carries the Play
+Store, Play services and the Services Framework (MindTheGapps builds of Google's proprietary APKs),
+fetched and sha256-verified at image build by `packages/android-gapps`. None of it is committed
+here, but every image built from this tree redistributes it — anyone publishing images takes that
+on.
 
 ## Firmware
 

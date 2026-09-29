@@ -24,17 +24,6 @@ const SCHEDULER_OPTIONS = [
   { data: "lavd", label: "lavd" },
 ];
 
-// Profile IDS with their stock labels. Hardcoded for the same reason SCHEDULER_OPTIONS is:
-// powerd's AvailableProfiles enumerates LABELS only (an operator may rename them in
-// power-profiles.conf), while the tweaks file speaks ids — so there is nothing to derive this
-// from. "" is absent-from-the-file, i.e. "follow the Power tab's system-wide profile".
-const POWER_PROFILE_OPTIONS = [
-  { data: "", label: "(unchanged)" },
-  { data: "eco", label: "Eco" },
-  { data: "balanced", label: "Balanced" },
-  { data: "performance", label: "Performance" },
-];
-
 // Tri-state on purpose, and the third state is the default (issue #47). FEX applies ThunksDB
 // per library name across every config layer, ours last — so writing an entry PINS that thunk
 // over whatever the FEX running the game decided (for native x86 titles that is Valve's compat
@@ -235,27 +224,18 @@ export function Games({ config, setConfig }: { config: Config; setConfig: Dispat
         <SelectEdit label="Gamescope cores" value={settings.gamescopeCores || ""} options={CORE_OPTIONS}
           disabled={!gameEnabled} onChange={(v) => patch({ gamescopeCores: v || undefined })} />
       </PanelSection>
-      {/* Both of these override a SYSTEM-WIDE setting whose only home is the Power tab, so the
-          consumers read them per-game and ignore them in `global` — offering them on the global
-          target would be a control that writes a key nothing acts on. */}
+      {/* Overrides a SYSTEM-WIDE setting whose only home is the Power tab, so the consumer reads
+          it per-game and ignores it in `global` — offering it on the global target would be a
+          control that writes a key nothing acts on. There is no per-game power profile here:
+          Steam's own per-game performance settings own the profile and the GPU clock. */}
       {isGame ? (
-        <>
-          <PanelSection title="POWER PROFILE">
-            <div className="novadeck-field-note">
-              Overrides the system-wide profile while this game runs, then restores it. Brings the
-              whole profile — CPU and GPU limits and the fan curve.
-            </div>
-            <SelectEdit label="Profile" value={settings.powerProfile || ""} options={POWER_PROFILE_OPTIONS}
-              disabled={!gameEnabled} onChange={(v) => patch({ powerProfile: v || undefined })} />
-          </PanelSection>
-          <PanelSection title="CPU SCHEDULER">
-            <div className="novadeck-field-note">
-              Overrides the system-wide scheduler while this game runs, then restores it.
-            </div>
-            <SelectEdit label="Scheduler" value={settings.scheduler || ""} options={SCHEDULER_OPTIONS}
-              disabled={!gameEnabled} onChange={(v) => patch({ scheduler: v || undefined })} />
-          </PanelSection>
-        </>
+        <PanelSection title="CPU SCHEDULER">
+          <div className="novadeck-field-note">
+            Overrides the system-wide scheduler while this game runs, then restores it.
+          </div>
+          <SelectEdit label="Scheduler" value={settings.scheduler || ""} options={SCHEDULER_OPTIONS}
+            disabled={!gameEnabled} onChange={(v) => patch({ scheduler: v || undefined })} />
+        </PanelSection>
       ) : null}
       <PanelSection title="X86 EMULATION">
         <div className="novadeck-field-note">

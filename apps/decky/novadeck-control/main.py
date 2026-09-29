@@ -3,11 +3,8 @@ import asyncio
 from novadeck_control.power import (
     power_status,
     reset_fan_curve,
-    set_active_profile,
     set_cpu_scheduler,
     set_fan_curve,
-    set_gpu_level,
-    set_manual_gpu_clock,
 )
 from novadeck_control.steam import installed_games
 from novadeck_control.system import os_version
@@ -28,15 +25,6 @@ class Plugin:
 
     async def get_power_status(self):
         return await asyncio.to_thread(power_status)
-
-    async def set_active_profile(self, label):
-        return await asyncio.to_thread(set_active_profile, label)
-
-    async def set_gpu_level(self, level):
-        return await asyncio.to_thread(set_gpu_level, level)
-
-    async def set_manual_gpu_clock(self, mhz):
-        return await asyncio.to_thread(set_manual_gpu_clock, mhz)
 
     async def set_cpu_scheduler(self, scheduler):
         return await asyncio.to_thread(set_cpu_scheduler, scheduler)

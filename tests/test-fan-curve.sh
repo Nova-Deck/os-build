@@ -12,10 +12,9 @@
 # So this drives the REAL parse, resample, write and reset paths against fabricated config
 # trees and asserts on the answers.
 #
-# It also covers powerd's half of the per-game `powerProfile` override, because the curve is
-# scoped to the profile IN FORCE: the override moves which curve is read, written and reset, and
-# that is decision logic on the same config layers. novadeck_perf's half -- resolving the key
-# out of game-tweaks.json -- is in tests/test-perf.sh.
+# It also covers the curve following a profile switch, because the curve is scoped to the profile
+# IN FORCE: a switch (Steam's per-game one included) moves which curve is read, written and reset,
+# and that is decision logic on the same config layers.
 #
 # NOT covered here: pwm1 writes and the D-Bus surface itself -- those need gi, a bus and a
 # device. The property handlers are thin wrappers over the functions checked here.
@@ -82,7 +81,6 @@ def fresh():
     obj.apply_profile = lambda: None
     obj.load_config()
     obj.profile = obj.default_profile
-    obj.profile_override = None       # no game running -> active profile IS the choice
     return obj
 
 # ------------------------------------------------------------------ pure curve maths ---
@@ -181,28 +179,13 @@ power.reset_fan_curve(every=True)
 check("resetting everything removes the file", pd.FAN_CURVE_DROPIN.exists(), False)
 check("and the operator layer is still in charge", power.active_curve_name(), "operator")
 
-# ------------------------------------------------ per-game power profile override ---
-# The curve is scoped to the profile IN FORCE, so a `powerProfile` tweak has to move it. This is
-# the half of that feature that lives in powerd: novadeck_perf only resolves the key
-# (tests/test-perf.sh), and everything below is powerd deciding what to do with it.
+# ------------------------------------------------ the curve follows the profile ---
+# The curve is scoped to the profile in force. Steam switches that profile per game by writing
+# Profile at launch and exit (through the steamos-manager shim), so select_profile is the one
+# path every switch takes, and the curve and its editor have to follow it.
 power = fresh()
 power.fan_tick = lambda: None         # no fan hwmon on the host
 power.gpu = None                      # no GPU either: get_property() probes it for the freq list
-power.connection = None               # no bus: the override must not try to announce itself
-check("no override to start with", power.active_profile(), "balanced")
-
-power.apply_profile_tweak({"powerProfile": "performance"})
-check("override takes force", power.active_profile(), "performance")
-check("the user's choice is untouched", power.profile, "balanced")
-check("the curve follows the override", power.fan_curve_pwms(),
-      pd.resample_curve(power.active_curve("performance"), stops))
-
-# An edit made while the override holds belongs to the profile actually running.
-power.set_fan_curve([10, 20, 30, 40, 50])
-check("a curve edit lands on the overriding profile", sorted(pd.read_fan_dropin()),
-      ["performance"])
-
-# Choosing a profile during an override records the CHOICE and waits for the game to exit.
 # select_profile builds the D-Bus variants of its PropertiesChanged payload, and gi is imported
 # in main() -- not on the host. A stand-in that records (signature, value) is enough to assert
 # on what the payload says.
@@ -210,14 +193,20 @@ class GLibStub:
     Variant = staticmethod(lambda signature, value: (signature, value))
 pd.GLib = GLibStub
 
-changed = power.select_profile("eco")
-check("a choice made under an override is recorded", power.profile, "eco")
-check("...but does not take force", power.active_profile(), "performance")
-check("the payload announces the choice", changed["Profile"], ("s", "Eco"))
-check("...and what is really in force", changed["ActiveProfile"], ("s", "Performance"))
+changed = power.select_profile("performance")
+check("a profile switch takes force", power.profile, "performance")
+check("the curve follows the switch", power.fan_curve_pwms(),
+      pd.resample_curve(power.active_curve("performance"), stops))
+check("the payload announces the profile", changed["Profile"], ("s", "Performance"))
+# The editor re-reads FanCurve off this payload; without it a tab listening for signals would
+# keep showing the previous profile's curve.
+check("the payload re-announces the curve", "FanCurve" in changed, True)
+check("no ActiveProfile left in the payload", "ActiveProfile" in changed, False)
 
-power.apply_profile_tweak({})
-check("absence restores the choice", power.active_profile(), "eco")
+# An edit belongs to the profile running now, e.g. the one Steam picked for this game.
+power.set_fan_curve([10, 20, 30, 40, 50])
+check("a curve edit lands on the profile in force", sorted(pd.read_fan_dropin()),
+      ["performance"])
 power.reset_fan_curve(every=True)
 
 # ------------------------------------------------------------------ quarantine ---

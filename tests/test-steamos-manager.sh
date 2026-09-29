@@ -3,13 +3,18 @@
 #
 #   tests/test-steamos-manager.sh
 #
-# WHAT THE SHIM IS NOW. It carries no settings. PerformanceProfile1, GpuPerformanceLevel1 and
-# finally CpuScheduler1 all moved to the novadeck-control Decky plugin, which talks straight to
-# powerd; what is left is the two interfaces STEAMUI CALLS — SessionManagement1 and Manager2 —
-# which by definition cannot move to a plugin, because only the owner of this bus name can
-# answer them.
+# WHAT THE SHIM CARRIES. PerformanceProfile1 and GpuPerformanceLevel1, relayed to powerd: they
+# make SteamUI's own Performance panel the one surface for the power profile and the GPU clock,
+# globally and per game (HW-verified 2026-09-29). CpuScheduler1 stays unexported; the scheduler
+# lives in the novadeck-control Decky plugin. And the two interfaces STEAMUI CALLS —
+# SessionManagement1 and Manager2 — which only the owner of this bus name can answer.
 #
-# WHY IT STILL EXISTS AT ALL, and the failure this file now guards. SteamUI's power menu offers
+# THE RE-EMIT. SteamUI skips a write that matches its view of a property ("already in the
+# desired state"), so a change made anywhere else (powerd, a PPD client) has to reach it as a
+# PropertiesChanged under OUR names. The sharp case is A→B→A: a careless dedupe swallows the
+# third signal and silently brings back the dead-control bug for that property.
+#
+# THE DESKTOP SWITCH, the other failure this file guards. SteamUI's power menu offers
 # "Switch to Desktop" unconditionally: it does not consult ValidDesktopSessions and it does not
 # care whether this service is running. When the call fails it sits on a "Switching to Desktop…"
 # popup forever. That was HW-observed 2026-08-09 twice over — with the whole service masked, and
@@ -80,42 +85,124 @@ class FakeConnection:
         self.emitted.append((dest, path, iface, name, params))
 
 
+class FakePower:
+    """Stands in for PowerClient: a dict of powerd property values, recording every set."""
+    def __init__(self, **values):
+        self.values = {k: v for k, v in values.items()}
+        self.sets = []
+    def get(self, name):
+        return self.values[name]
+    def set(self, name, value):
+        self.sets.append((name, value.unpack()))
+        self.values[name] = value
+
+
 def manager():
-    """A manager with no __init__: the real one shells out to device-env."""
+    """A manager with no __init__: the real one shells out to device-env and dials powerd."""
     m = sm.NovadeckSteamOSManager.__new__(sm.NovadeckSteamOSManager)
     m.connection = FakeConnection()
     m.last_emitted = {}
     m.valid_desktop_sessions = ()
     m.device_id, m.device_name = "novadeck", "NovaDeck"
     m.default_login_mode, m.default_desktop_session = "game", ""
+    m.power = FakePower(
+        Profile=GLib.Variant("s", "Balanced"),
+        GpuPerformanceLevel=GLib.Variant("s", "auto"),
+        ManualGpuClock=GLib.Variant("u", 1000),
+    )
     return m
 
 
-# --- THE SETTINGS SURFACES STAY GONE -------------------------------------------------------
-#
-# Each moved to the Decky plugin for its own reason (see the shim's header). Re-exporting one
-# would resurrect a second live surface for a setting the plugin owns — and for the profile that
-# meant the client's property cache going silently stale, which is what this file was originally
-# written about.
-xml = manager().node_xml()
-for gone in ("PerformanceProfile1", "GpuPerformanceLevel1", "CpuScheduler1"):
-    if gone in xml:
-        bad(f"{gone} is exported again — the plugin owns that setting")
-    else:
-        ok(f"{gone} stays unexported")
-for const in ("IFACE_PROFILE", "IFACE_GPU", "IFACE_SCHED", "PROFILE_PROPS", "GPU_PROPS",
-              "SCHED_PROPS", "POWERD_TO_STEAM"):
-    if getattr(sm, const, None) is not None:
-        bad(f"{const} exists again — the settings machinery is creeping back")
-if not any(getattr(sm, c, None) is not None for c in ("IFACE_PROFILE", "IFACE_GPU", "IFACE_SCHED")):
-    ok("no settings-interface constants remain")
+def signals(m, iface):
+    """Every PropertiesChanged we emitted for `iface`, as a list of plain {prop: value} dicts."""
+    out = []
+    for _d, _p, _i, _n, params in m.connection.emitted:
+        emitted_iface, changed, _inv = params.unpack()
+        if emitted_iface == iface:
+            out.append(changed)
+    return out
 
-# No powerd client remains: with every settings interface gone there is nothing to read from it,
-# and a live subscription would be a bus connection kept open to serve nobody.
-if getattr(sm, "PowerClient", None) is None and not hasattr(sm.NovadeckSteamOSManager, "on_power_changed"):
-    ok("no powerd client and no re-emit path — the shim reads nothing")
+
+def powerd_signal(m, **changed):
+    """Deliver a powerd PropertiesChanged the way the bus subscription would."""
+    variants = {}
+    for name, value in changed.items():
+        variants[name] = GLib.Variant("u" if isinstance(value, int) else "s", value)
+    params = GLib.Variant("(sa{sv}as)", (sm.POWER_IFACE, variants, []))
+    m.on_power_changed(None, None, None, None, None, params)
+
+
+# --- WHAT IS EXPORTED -----------------------------------------------------------------------
+xml = manager().node_xml()
+for iface in ("PerformanceProfile1", "GpuPerformanceLevel1"):
+    if iface in xml:
+        ok(f"{iface} is exported — SteamUI's Performance panel owns that setting")
+    else:
+        bad(f"{iface} is not exported — the native QAM control disappears")
+# The scheduler has no SteamUI control on this device; it lives in the Decky plugin.
+if "CpuScheduler1" in xml:
+    bad("CpuScheduler1 is exported — a second live surface for the plugin's scheduler")
 else:
-    bad("a powerd client survived the settings move — dead weight holding a bus connection")
+    ok("CpuScheduler1 stays unexported")
+
+# The profile relays to powerd's plain choice. ActiveProfile no longer exists on powerd, and
+# mapping to anything but the choice would make Steam's per-game write land somewhere else.
+if sm.PROFILE_PROPS.get("PerformanceProfile") == "Profile":
+    ok("PerformanceProfile relays to powerd's Profile")
+else:
+    bad(f"PerformanceProfile relays to {sm.PROFILE_PROPS.get('PerformanceProfile')!r}, not Profile")
+
+# --- WRITES REACH POWERD AND ANNOUNCE WHAT IT APPLIED ---------------------------------------
+m = manager()
+m.set_property(sm.IFACE_PROFILE, "PerformanceProfile", GLib.Variant("s", "Eco"))
+if m.power.sets == [("Profile", "Eco")]:
+    ok("a PerformanceProfile write sets powerd's Profile")
+else:
+    bad(f"a PerformanceProfile write sent {m.power.sets}")
+if signals(m, sm.IFACE_PROFILE) == [{"PerformanceProfile": "Eco"}]:
+    ok("the write is announced once, under our name")
+else:
+    bad(f"the write announced {signals(m, sm.IFACE_PROFILE)}")
+# powerd's own signal for the same change comes back through the subscription: not twice.
+powerd_signal(m, Profile="Eco")
+if len(signals(m, sm.IFACE_PROFILE)) == 1:
+    ok("powerd's echo of our own write is not re-announced")
+else:
+    bad("our own write was announced twice")
+
+# The GPU clock announces what powerd APPLIED (the nearest real step), not what was asked.
+m = manager()
+m.power.set = lambda name, value: (m.power.sets.append((name, value.unpack())),
+                                   m.power.values.__setitem__(name, GLib.Variant("u", 550)))
+m.set_property(sm.IFACE_GPU, "ManualGpuClock", GLib.Variant("u", 520))
+if signals(m, sm.IFACE_GPU) == [{"ManualGpuClock": 550}]:
+    ok("a ManualGpuClock write announces the clock powerd snapped to")
+else:
+    bad(f"ManualGpuClock announced {signals(m, sm.IFACE_GPU)}")
+
+# --- CHANGES MADE ELSEWHERE REACH STEAMUI ---------------------------------------------------
+m = manager()
+powerd_signal(m, Profile="Performance")
+powerd_signal(m, Profile="Balanced")
+powerd_signal(m, Profile="Performance")
+if [s["PerformanceProfile"] for s in signals(m, sm.IFACE_PROFILE)] == ["Performance", "Balanced", "Performance"]:
+    ok("A→B→A from powerd emits all three — the return to A is not swallowed")
+else:
+    bad(f"A→B→A emitted {signals(m, sm.IFACE_PROFILE)}")
+
+m = manager()
+powerd_signal(m, GpuPerformanceLevel="manual", ManualGpuClock=680)
+if signals(m, sm.IFACE_GPU) == [{"GpuPerformanceLevel": "manual", "ManualGpuClock": 680}]:
+    ok("powerd GPU changes are re-announced on GpuPerformanceLevel1")
+else:
+    bad(f"GPU re-emit produced {signals(m, sm.IFACE_GPU)}")
+
+m = manager()
+powerd_signal(m, FanPwm=120, CpuScheduler="lavd")
+if not m.connection.emitted:
+    ok("powerd properties with no SteamOSManager equivalent are not announced")
+else:
+    bad(f"announced unrelated powerd properties: {m.connection.emitted}")
 
 # --- THE SWITCH MUST RESOLVE, NOT RAISE ----------------------------------------------------
 #

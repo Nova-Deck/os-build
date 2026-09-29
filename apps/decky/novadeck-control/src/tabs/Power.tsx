@@ -1,28 +1,18 @@
 import { ButtonItem, Field, PanelSection, PanelSectionRow } from "@decky/ui";
 import { useEffect, useRef } from "react";
 import type { Dispatch, SetStateAction } from "react";
-import {
-  getPowerStatus,
-  resetFanCurve,
-  setActiveProfile,
-  setCpuScheduler,
-  setFanCurve,
-  setGpuLevel,
-  setManualGpuClock,
-} from "../backend";
+import { getPowerStatus, resetFanCurve, setCpuScheduler, setFanCurve } from "../backend";
 import { SelectEdit, SliderEdit } from "../components/widgets";
-import { titleCase } from "../lib/util";
 import type { Config, PowerStatus } from "../types";
 
+// The power profile and the GPU clock are not here: Steam's own Performance panel owns both,
+// globally and per game. This tab carries what Steam has no control for.
 export function Power({ config, setConfig }: { config: Config; setConfig: Dispatch<SetStateAction<Config | null>> }) {
   const power = config.power;
-  // A slider drag is dozens of onChange events and each backend set is a busctl subprocess;
-  // trail the drag instead of racing it. The poll below skips while a set is pending so a
-  // just-dragged value is not snapped back by a stale read.
-  const clockTimer = useRef<number | null>(null);
-  const pendingClock = useRef<number | null>(null);
-  // Same treatment for the curve, and it needs it more: every set makes powerd rewrite its
-  // drop-in and re-read the whole three-layer config.
+  // A slider drag is dozens of onChange events, and every curve set makes powerd rewrite its
+  // drop-in and re-read the whole three-layer config — so trail the drag instead of racing it.
+  // The poll below skips while a set is pending so a just-dragged value is not snapped back by
+  // a stale read.
   const curveTimer = useRef<number | null>(null);
   const pendingCurve = useRef<number[] | null>(null);
 
@@ -30,15 +20,15 @@ export function Power({ config, setConfig }: { config: Config; setConfig: Dispat
     setConfig((current) => (current ? { ...current, power: next } : current));
   };
 
-  // The state can change under us (powerd, boot defaults, another session), so poll while the
-  // tab is mounted. Profile and level sets are deliberate single actions — no debounce.
+  // The state changes under us — Steam switches the profile at every game launch and exit when
+  // per-game settings are on, and the curve shown must follow — so poll while the tab is mounted.
   useEffect(() => {
     let cancelled = false;
     const refresh = async () => {
-      if (pendingClock.current !== null || pendingCurve.current !== null) return;
+      if (pendingCurve.current !== null) return;
       try {
         const next = await getPowerStatus();
-        if (!cancelled && pendingClock.current === null && pendingCurve.current === null) adopt(next);
+        if (!cancelled && pendingCurve.current === null) adopt(next);
       } catch (error) {
         // transient bus hiccups just skip a poll
       }
@@ -48,28 +38,9 @@ export function Power({ config, setConfig }: { config: Config; setConfig: Dispat
     return () => {
       cancelled = true;
       window.clearInterval(timer);
-      if (clockTimer.current !== null) window.clearTimeout(clockTimer.current);
       if (curveTimer.current !== null) window.clearTimeout(curveTimer.current);
     };
   }, []);
-
-  const selectProfile = async (label: string) => {
-    adopt({ ...power, profile: label });
-    try {
-      adopt(await setActiveProfile(label));
-    } catch (error) {
-      // the next poll restores the truth
-    }
-  };
-
-  const selectGpuLevel = async (level: string) => {
-    adopt({ ...power, gpuLevel: level });
-    try {
-      adopt(await setGpuLevel(level));
-    } catch (error) {
-      // the next poll restores the truth
-    }
-  };
 
   const selectScheduler = async (scheduler: string) => {
     adopt({ ...power, cpuScheduler: scheduler });
@@ -78,26 +49,6 @@ export function Power({ config, setConfig }: { config: Config; setConfig: Dispat
     } catch (error) {
       // the next poll restores the truth
     }
-  };
-
-  const dragClock = (mhz: number) => {
-    adopt({ ...power, manualGpuClock: mhz });
-    pendingClock.current = mhz;
-    if (clockTimer.current !== null) window.clearTimeout(clockTimer.current);
-    clockTimer.current = window.setTimeout(async () => {
-      const value = pendingClock.current;
-      clockTimer.current = null;
-      if (value === null) return;
-      try {
-        const next = await setManualGpuClock(value);
-        if (pendingClock.current === value) {
-          pendingClock.current = null;
-          adopt(next);
-        }
-      } catch (error) {
-        pendingClock.current = null;
-      }
-    }, 300);
   };
 
   const dragCurve = (index: number, pwm: number) => {
@@ -141,22 +92,16 @@ export function Power({ config, setConfig }: { config: Config; setConfig: Dispat
   // Defensive on purpose: the backend and frontend normally ship together, but on a dev card a
   // reboot's plugin re-seed can pair an older backend with a newer mirrored frontend for a
   // moment — a missing field must degrade to a hidden section, not take the whole tab down.
-  const gpuLevels = power.gpuLevels || [];
-  const hasGpu = gpuLevels.length > 0;
-  const clockKnown = (power.manualGpuClockMax || 0) > (power.manualGpuClockMin || 0);
-  // Same capability-by-enumeration rule as the GPU section: powerd serves ["none"] alone when
-  // the kernel has no sched_ext or the scx binary is missing, and a lone option is not a choice.
+  // Capability by enumeration: powerd serves ["none"] alone when the kernel has no sched_ext or
+  // the scx binary is missing, and a lone option is not a choice.
   const schedulers = power.cpuSchedulers || [];
   const hasSchedulerChoice = schedulers.length > 1;
   // powerd reports the loaded scheduler separately, so a per-game override is stated rather than
   // left as a dropdown that silently disagrees with the machine.
   const schedulerOverridden =
     !!power.activeCpuScheduler && power.activeCpuScheduler !== power.cpuScheduler;
-  // Same treatment for the profile: powerd reports the one in force separately, so a game's
-  // `powerProfile` tweak is stated here instead of silently contradicting the dropdown.
-  const profileOverridden = !!power.activeProfile && power.activeProfile !== power.profile;
-  // Same capability-by-enumeration rule again: no stops means a powerd that does not serve
-  // the curve, and a fan the daemon cannot see means nothing to edit.
+  // Same rule again: no stops means a powerd that does not serve the curve, and a fan the daemon
+  // cannot see means nothing to edit.
   const stops = power.fanCurveStops || [];
   const curve = power.fanCurve || [];
   const hasCurve = stops.length > 0 && curve.length === stops.length;
@@ -170,20 +115,11 @@ export function Power({ config, setConfig }: { config: Config; setConfig: Dispat
   const toPwm = (percent: number) => Math.round((percent * pwmMax) / 100);
   return (
     <>
-      <PanelSection title="POWER PROFILE">
-        {power.error ? <Field label={power.error} /> : null}
-        <SelectEdit
-          label="Active profile"
-          value={power.profile}
-          options={(power.profiles || []).map((label) => ({ data: label, label }))}
-          onChange={selectProfile}
-        />
-        <div className="novadeck-field-note">
-          {profileOverridden
-            ? `The running game overrides this — ${power.activeProfile} is in force until it exits.`
-            : "Applies immediately, directly to the power daemon."}
-        </div>
-      </PanelSection>
+      {power.error ? (
+        <PanelSection>
+          <Field label={power.error} />
+        </PanelSection>
+      ) : null}
       {hasSchedulerChoice ? (
         <PanelSection title="CPU SCHEDULER">
           <SelectEdit
@@ -204,34 +140,11 @@ export function Power({ config, setConfig }: { config: Config; setConfig: Dispat
           </div>
         </PanelSection>
       ) : null}
-      {hasGpu ? (
-        <PanelSection title="GPU CLOCK">
-          <SelectEdit
-            label="Frequency control"
-            value={power.gpuLevel}
-            options={gpuLevels.map((level) => ({ data: level, label: titleCase(level) }))}
-            onChange={selectGpuLevel}
-          />
-          {power.gpuLevel === "manual" && clockKnown ? (
-            <SliderEdit
-              label="GPU clock (MHz)"
-              value={power.manualGpuClock}
-              min={power.manualGpuClockMin}
-              max={power.manualGpuClockMax}
-              step={10}
-              onChange={dragClock}
-            />
-          ) : null}
-          <div className="novadeck-field-note">
-            Manual pins the GPU frequency; the active profile's limits no longer apply.
-          </div>
-        </PanelSection>
-      ) : null}
       {hasCurve ? (
         <PanelSection title="FAN CURVE">
           <div className="novadeck-field-note">
-            Fan speed at each temperature, for the {power.activeProfile} profile. Between
-            two points the speed ramps smoothly.
+            Fan speed at each temperature, for the <b>{power.profile}</b> profile — the one selected in
+            Steam's Performance panel. Between two points the speed ramps smoothly.
           </div>
           {stops.map((stop, index) => (
             <SliderEdit

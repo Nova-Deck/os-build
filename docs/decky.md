@@ -3,8 +3,9 @@
 Decky Loader is the plugin host that gives SteamUI features an in-UI surface (a Quick Access
 Menu tab). Every image ships it plus **two** first-party plugins:
 
-- **novadeck-control** — the settings surface: [per-game tweaks](per-game-perf.md), power
-  profile selection, GPU clock control, the fan curve. It writes.
+- **novadeck-control** — the settings surface: [per-game tweaks](per-game-perf.md), the CPU
+  scheduler, the fan curve. It writes. The power profile and the GPU clock are not here:
+  Steam's own Performance panel owns both.
 - **novadeck-monitor** — the live panel: load, clocks, governors, temperatures, fan. It only
   reads.
 
@@ -100,14 +101,18 @@ Two tabs; the backend runs as root inside the loader (`"flags": ["root"]`).
   contract as [per-game-perf.md](per-game-perf.md)). Scheduling keys apply within one powerd
   tick; exec-time keys (FEX profile, Wine topology) need a game relaunch. The sanitizer refuses
   appid `0` — Valve's "no app" sentinel can never grow a section.
-- **Power** — the system-wide profile plus GPU frequency control (auto/manual level, MHz slider bounded
-  by powerd's reported min/max), straight to powerd's `org.novadeck.Power1` on the system bus
-  (via `busctl`; the loader's bundled Python has no dbus module). The plugin is the ONLY UI
-  surface for these: the steamos-manager shim no longer exports `PerformanceProfile1` or
-  `GpuPerformanceLevel1` to SteamUI. Also carries the editable fan curve for the active
-  profile — one slider per fixed temperature stop, see [fan-curve.md](fan-curve.md). The
-  profile and scheduler rows state when a running game's per-game override is what is in force,
-  rather than leaving a dropdown that silently disagrees with the machine.
+- **Power** — the system-wide CPU scheduler and the editable fan curve (one slider per fixed
+  temperature stop, see [fan-curve.md](fan-curve.md)), straight to powerd's
+  `org.novadeck.Power1` on the system bus (via `busctl`; the loader's bundled Python has no dbus
+  module). The scheduler row states when a running game's per-game override is what is loaded,
+  rather than leaving a dropdown that silently disagrees with the machine. The curve is the one
+  for the profile in force, and follows it when Steam switches profile for a game.
+
+  The power profile and the GPU clock are deliberately NOT here. The steamos-manager shim
+  exports `PerformanceProfile1` and `GpuPerformanceLevel1`, so Steam's own Performance panel
+  sets both, globally and, with "Use per-game profile", per game (HW-verified 2026-09-29). Two
+  live surfaces for one setting fight, so the plugin gave its controls up.
+
 ## novadeck-monitor
 
 One panel, no tabs. Live load, clocks, governors, per-zone CPU/GPU temperatures, memory and
@@ -123,9 +128,9 @@ subprocess a second, not two. The plugin deliberately does **not** set `alwaysRe
 panel unmounts when the QAM closes and the poll stops with it. (As a tab of novadeck-control
 the same bound came for free, from only the active tab's content being mounted.)
 
-Its backend reads powerd through its own trimmed, **read-only** `powerd.py` — the nine
-properties the panel renders, no setters. Those live in novadeck-control, which owns the
-`org.novadeck.Power1` write surface. The `_clean_env`/`_busctl` pair is duplicated between the
+Its backend reads powerd through its own trimmed, **read-only** `powerd.py` — the eight
+properties the panel renders, no setters. Those live in novadeck-control (the scheduler and
+the fan curve) and in Steam's Performance panel (the profile and the GPU clock). The `_clean_env`/`_busctl` pair is duplicated between the
 two plugins on purpose: they are separate processes with separate `py_modules` trees, and a
 shared module staged in by the build would be invisible to the offline suite, which imports
 straight from the repo checkout. `tests/test-decky.sh` therefore asserts the PyInstaller

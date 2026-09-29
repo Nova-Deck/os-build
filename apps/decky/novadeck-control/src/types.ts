@@ -18,9 +18,6 @@ export interface GameTweaks {
   singleCore?: boolean;
   /** Per-game only — the system-wide scheduler is PowerStatus.cpuScheduler, not a tweak. */
   scheduler?: string;
-  /** Per-game only, same rule: the system-wide profile is PowerStatus.profile. A profile ID
-   *  ("eco"/"balanced"/"performance"), never the UI label. */
-  powerProfile?: string;
   fexProfile?: string;
   /** EXPLICIT overrides only — an entry pins that thunk at FEX's highest config priority,
    *  over Valve's per-title curation. "As shipped" is NO entry, never `false`. */
@@ -35,24 +32,16 @@ export interface Tweaks {
 }
 
 export interface PowerStatus {
-  /** UI labels, in profile order — the dropdown's options and what `profile` speaks. */
-  profiles: string[];
-  /** The system-wide choice. */
+  /** The profile in force, by UI label. Selected in Steam's own Performance panel (globally or
+   *  per game), never here — the fan curve below belongs to it. */
   profile: string;
-  /** What is in force now; differs from profile only under a per-game override. */
-  activeProfile: string;
-  gpuLevels: string[];
-  gpuLevel: string;
-  manualGpuClock: number;
-  manualGpuClockMin: number;
-  manualGpuClockMax: number;
   /** Empty or ["none"] alone on a device without sched_ext — hide the control then. */
   cpuSchedulers: string[];
   /** The system-wide choice. */
   cpuScheduler: string;
   /** What is loaded now; differs from cpuScheduler only under a per-game override. */
   activeCpuScheduler: string;
-  /** PWM per stop, for the ACTIVE profile. Same length as fanCurveStops. */
+  /** PWM per stop, for `profile`. Same length as fanCurveStops. */
   fanCurve: number[];
   /** The temperatures fanCurve is sampled at. Empty on a powerd too old to serve it. */
   fanCurveStops: number[];

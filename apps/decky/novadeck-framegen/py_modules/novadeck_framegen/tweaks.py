@@ -13,7 +13,7 @@ all, and a game with no tweak simply inherits the session default of off.
 
 WE ARE THE SECOND WRITER OF THIS FILE. novadeck-control owns it too, so every write here is a
 read-modify-write that touches only our two env keys and leaves the rest of the game's section --
-fexProfile, cores, nice, powerProfile, the user's own env -- exactly as found. The write is
+fexProfile, cores, nice, scheduler, the user's own env -- exactly as found. The write is
 atomic because novadeck-powerd reads this file on a 3s tick and proton-wrapper reads it at every
 exec, and neither may ever see it half-written.
 

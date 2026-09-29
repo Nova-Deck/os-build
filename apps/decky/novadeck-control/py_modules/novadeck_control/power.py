@@ -1,16 +1,14 @@
-"""Power profile access — straight to novadeck-powerd on the system bus.
+"""The Power tab's powerd access — straight to novadeck-powerd on the system bus.
 
-This is the point of the Power tab: profile changes go to powerd's own org.novadeck.Power1
-interface, the same code path every other setter lands in, with none of the SteamUI /
-steamos-manager property-cache machinery in between. powerd re-emits PropertiesChanged on
-every change, so the SteamUI Performance tab (whose shim listens for exactly that) stays in
-sync with what we set here.
+The tab carries the CPU scheduler and the fan curve, the two power settings Steam has no control
+for. The profile and the GPU clock are NOT here: Steam's own Performance panel owns both, through
+the steamos-manager shim, globally and per game. The tab only READS the profile, because the fan
+curve it edits belongs to whichever profile is in force.
 
 busctl, not a Python D-Bus binding: the plugin backend runs inside Decky's bundled Python,
 which ships no dbus module — and busctl is already on every image (systemd). The backend runs
 as root, so the system bus is reachable. org.novadeck.Power1's Profile property speaks the UI
-LABELS ("Eco", "Balanced", "Performance") — AvailableProfiles enumerates them, so nothing here
-hardcodes the set.
+LABELS ("Eco", "Balanced", "Performance").
 
 Subprocesses get a SANITIZED env. PluginLoader is a PyInstaller bundle, and PyInstaller exports
 LD_LIBRARY_PATH=<its extraction dir> to every child. busctl (resolved from the FEX guest rootfs
@@ -73,9 +71,7 @@ def _call(method):
 
 def _error_status(message):
     return {
-        "profiles": [], "profile": "", "activeProfile": "",
-        "gpuLevels": [], "gpuLevel": "",
-        "manualGpuClock": 0, "manualGpuClockMin": 0, "manualGpuClockMax": 0,
+        "profile": "",
         "cpuSchedulers": [], "cpuScheduler": "", "activeCpuScheduler": "",
         "fanCurve": [], "fanCurveStops": [], "fanCurveMinPwm": 0, "fanCurveMaxPwm": 0,
         "fanCurveCustom": False, "fanPwm": 0, "fanRpm": 0, "temperature": 0,
@@ -84,28 +80,15 @@ def _error_status(message):
 
 
 def power_status():
-    """Everything the Power tab shows, in one call; a dead powerd is a visible error string.
-
-    gpuLevels comes straight from AvailableGpuPerformanceLevels, which powerd serves as [] on a
-    device without a controllable GPU — the tab hides the section on an empty list, the same
-    capability-by-enumeration rule the SteamOS API uses.
-    """
+    """Everything the Power tab shows, in one call; a dead powerd is a visible error string."""
     try:
         props = _get_all()
         return {
-            "profiles": [str(p) for p in props.get("AvailableProfiles", [])],
+            # Read-only here: it names the profile whose fan curve the tab is editing.
             "profile": str(props.get("Profile", "")),
-            # What is actually in force. Differs from `profile` only while a running game's
-            # per-game `powerProfile` tweak overrides it — the tab says so rather than showing
-            # the dropdown disagreeing with the machine, same as the scheduler pair below.
-            "activeProfile": str(props.get("ActiveProfile", "")),
-            "gpuLevels": [str(l) for l in props.get("AvailableGpuPerformanceLevels", [])],
-            "gpuLevel": str(props.get("GpuPerformanceLevel", "")),
-            "manualGpuClock": int(props.get("ManualGpuClock", 0)),
-            "manualGpuClockMin": int(props.get("ManualGpuClockMin", 0)),
-            "manualGpuClockMax": int(props.get("ManualGpuClockMax", 0)),
-            # Same capability-by-enumeration rule: a kernel without sched_ext (or an image
-            # without the scx binary) serves ["none"] alone, and the tab hides the control.
+            # Capability-by-enumeration, the rule the SteamOS API uses: a kernel without
+            # sched_ext (or an image without the scx binary) serves ["none"] alone, and the tab
+            # hides the control.
             "cpuSchedulers": [str(s) for s in props.get("AvailableCpuSchedulers", [])],
             "cpuScheduler": str(props.get("CpuScheduler", "")),
             # What is actually loaded. Differs from cpuScheduler only while a running game's
@@ -113,8 +96,8 @@ def power_status():
             # the dropdown disagreeing with the machine.
             "activeCpuScheduler": str(props.get("ActiveCpuScheduler", "")),
             # The editable fan curve: PWM per FIXED temperature stop, scoped to the profile
-            # that is active right now. powerd re-emits it on a profile change, and it comes
-            # down this same GetAll, so the tab needs no extra round trip to follow along.
+            # in force right now — including one Steam switched to for a game. It comes down
+            # this same GetAll, so the tab's poll follows a profile change with no extra call.
             # An empty stops list means a powerd too old to serve it -- hide the section,
             # the same capability-by-enumeration rule the lists above use.
             "fanCurve": [int(v) for v in props.get("FanCurve", [])],
@@ -146,24 +129,6 @@ def _set_property(prop, signature, *values):
     )
 
 
-def set_active_profile(label):
-    """The SYSTEM-WIDE profile, by UI label. A running game's `powerProfile` tweak temporarily
-    overrides what is applied without changing this choice — see status()'s activeProfile."""
-    try:
-        _set_property("Profile", "s", label)
-    except (OSError, subprocess.SubprocessError) as exc:
-        return _error_status(f"set profile failed: {exc}")
-    return power_status()
-
-
-def set_gpu_level(level):
-    try:
-        _set_property("GpuPerformanceLevel", "s", level)
-    except (OSError, subprocess.SubprocessError) as exc:
-        return _error_status(f"set GPU level failed: {exc}")
-    return power_status()
-
-
 def set_cpu_scheduler(scheduler):
     """The SYSTEM-WIDE scheduler. This is the only place it lives — there is no
     `global.scheduler` in game-tweaks.json — so this and `novadeck-scheduler` write the
@@ -193,12 +158,4 @@ def reset_fan_curve(every=False):
         _call("ResetAllFanCurves" if every else "ResetFanCurve")
     except (OSError, subprocess.SubprocessError) as exc:
         return _error_status(f"reset fan curve failed: {exc}")
-    return power_status()
-
-
-def set_manual_gpu_clock(mhz):
-    try:
-        _set_property("ManualGpuClock", "u", int(mhz))
-    except (OSError, ValueError, subprocess.SubprocessError) as exc:
-        return _error_status(f"set GPU clock failed: {exc}")
     return power_status()

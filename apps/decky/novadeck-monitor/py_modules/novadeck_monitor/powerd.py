@@ -1,8 +1,8 @@
 """The powerd half of the Monitor's frame — READ ONLY, and deliberately a subset.
 
-novadeck-control owns the full org.novadeck.Power1 surface (every setter, the fan curve
-editor, the capability lists that populate its dropdowns). This plugin only ever displays,
-so it takes the nine properties the panel actually renders and nothing else. A monitor with
+novadeck-control owns the plugin side of the org.novadeck.Power1 write surface (the scheduler,
+the fan curve editor, the capability lists that populate its dropdowns). This plugin only ever
+displays, so it takes the eight properties the panel actually renders and nothing else. A monitor with
 setters in reach is a monitor one typo away from writing a profile.
 
 The duplication with novadeck-control's power.py is _clean_env + _busctl, ~25 lines, and it
@@ -91,7 +91,7 @@ async def _get_all():
 
 def _empty_snapshot(message):
     return {
-        "profile": "", "activeProfile": "",
+        "profile": "",
         "cpuScheduler": "", "activeCpuScheduler": "",
         "fanPwm": 0, "fanRpm": 0, "fanCurveMaxPwm": 0, "temperature": 0,
         "error": message,
@@ -99,7 +99,7 @@ def _empty_snapshot(message):
 
 
 async def power_snapshot():
-    """The nine properties the Monitor renders; a dead powerd is a visible error string.
+    """The eight properties the Monitor renders; a dead powerd is a visible error string.
 
     Same degrade-not-raise rule as telemetry.py: powerd going away must cost the fan and
     profile rows, never the whole panel.
@@ -107,11 +107,12 @@ async def power_snapshot():
     try:
         props = await _get_all()
         return {
-            # The system-wide choice, and what is in force now. They differ only while a
-            # running game's per-game tweak overrides one -- the panel says so rather than
-            # reporting a number that disagrees with the machine.
+            # The profile in force (Steam switches it per game through the shim, so there is
+            # no separate "active" value to show).
             "profile": str(props.get("Profile", "")),
-            "activeProfile": str(props.get("ActiveProfile", "")),
+            # The scheduler's system-wide choice, and what is loaded now. They differ only
+            # while a running game's per-game tweak overrides it -- the panel says so rather
+            # than reporting a value that disagrees with the machine.
             "cpuScheduler": str(props.get("CpuScheduler", "")),
             "activeCpuScheduler": str(props.get("ActiveCpuScheduler", "")),
             "fanPwm": int(props.get("FanPwm", 0)),

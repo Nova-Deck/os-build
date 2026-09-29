@@ -21,8 +21,9 @@ including Windows games, translated to ARM on the fly.
   an update fails to boot, the device rolls back to the version that worked.
 - **Suspend and resume**, per-device power profiles, brightness and volume keys, and the
   Quick Access menu — the handheld things you would miss immediately if they were missing.
-- **Tuning from inside the UI.** Every image ships Decky Loader and two first-party plugins:
-  **novadeck-control** (power profile, GPU clocks, an editable fan curve, and performance
+- **Tuning from inside the UI.** Steam's own Performance panel sets the power profile and the
+  GPU clock, globally or per game. Every image also ships Decky Loader and two first-party
+  plugins: **novadeck-control** (the CPU scheduler, an editable fan curve, and performance
   settings you can pin *per game* rather than globally) and **novadeck-monitor** (live load,
   clocks, temperatures and fan speed while a game runs).
 

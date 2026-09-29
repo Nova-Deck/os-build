@@ -1,11 +1,9 @@
 /** The read-only slice of powerd the panel renders. novadeck-control owns the full
  *  PowerStatus (capability lists, the fan curve, every setter); this is deliberately the
- *  nine properties the Monitor displays and nothing more — see py_modules/…/powerd.py. */
+ *  eight properties the Monitor displays and nothing more — see py_modules/…/powerd.py. */
 export interface PowerSnapshot {
-  /** The system-wide choice. */
+  /** The profile in force, by UI label. */
   profile: string;
-  /** What is in force now; differs from profile only under a per-game override. */
-  activeProfile: string;
   /** The system-wide choice. */
   cpuScheduler: string;
   /** What is loaded now; differs from cpuScheduler only under a per-game override. */

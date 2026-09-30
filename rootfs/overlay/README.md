@@ -72,6 +72,29 @@ package + guest rootfs (auto-registered with binfmt_misc). See `docs/FEX_README.
 SEED itself is build machinery, not rootfs content — it lives in `build/steam-seed/` and is pre-seeded
 into `/home` at image build time (`image/make-sdcard.sh`). See `docs/archive/bringup-phase3.md`.
 
+`usr/bin/steamvr` is the same shape one layer out: Valve's **Lepton** compat tool (Android titles,
+Steam app 3029110) asks `steamvr logpath` where to write, and with no answer its log path collapses
+to `/lepton-.log` on a read-only root and every diagnostic it has — including the automatic logcat
+dump on an early exit — is silently discarded. The stub answers `logpath` and fails every other
+verb, because this image has no VR runtime and must not claim one. Lepton's actual runtime is
+`podman`, which ships from the pinned snapshot (`PKGS` in `rootfs/customize-base.sh`); see issue #58.
+
+`usr/bin/novadeck-android` is the shared Android container that the Google Play Store and every app
+installed from it run in. Play does not fit Lepton's per-title launches, because everything it installs
+lives in one `/data`. So one persistent Lepton container runs as the user unit
+`usr/lib/systemd/user/novadeck-android.service`. The Play Store and each installed app are Steam
+shortcuts (`novadeck-android store` / `run <package>`) that start an activity inside it.
+`novadeck-android-setup.service` adds the Play Store shortcut at login. `usr/bin/novadeck-steam-url`
+hands `steam://` URLs to the running client (there is no `steamos-add-to-steam` here), and
+`usr/lib/novadeck/apk-info` reads an APK's package, label, launcher activity and icon without Android
+tools. The Play payload itself is not overlay content: `rootfs/lib-assemble-storage.sh` stages it to
+`/usr/share/novadeck-android` from `packages/android-gapps`. The framework fix (the SystemServer
+services Lepton strips, which the touch keyboard and Play apps need) cannot be staged: it is an edit
+of the exact Lepton image Steam installed. So `novadeck-android` builds it inside the running guest
+the first time it meets an image, with tools from `packages/lepton-framework` staged to
+`/usr/lib/novadeck/android-framework`, and keeps it in `~/.local/share/novadeck-android/framework/`.
+Everything it adds rides in only through that one container, so Valve's own Android titles are untouched.
+
 **System hygiene — identity, memory, and the `/var` shape**
 Four files that are not a subsystem but are load-bearing for the immutable A/B model, because on
 this image `/etc/passwd` and `/var` are *build products* rather than device state:

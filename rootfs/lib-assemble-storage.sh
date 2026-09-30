@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# novadeck read-only root assembler — stages `first-boot-storage` and `fex-guest-payload`.
+# novadeck read-only root assembler — stages `first-boot-storage`, `fex-guest-payload`,
+# `android-guest-payload` and `android-shared-payload`.
 #
 # SOURCED by rootfs/assemble-rootfs.sh, never executed. Split out of it for issue #43; the code
 # and its rationale are unchanged (tests/test-mkroot.sh reads the `# STAGE <name>` banners out of
@@ -272,6 +273,221 @@ if ! grep -q '/usr/share/guestos/fex-mesa' "$stage/etc/fstab" 2>/dev/null; then
     'overlay  /usr/share/guestos/fex-mesa  overlay  ro,nofail,lowerdir=/usr/share/novadeck/guestos-x86-mesa:/run/novadeck/guestos-lower,x-systemd.requires-mounts-for=/run/novadeck/guestos-lower,x-systemd.before=local-fs.target  0 0' \
     >>"$stage/etc/fstab"
 fi
+
+# STAGE android-guest-payload — the ANDROID guest's slot in the same /usr/share/guestos namespace,
+# for Valve's Lepton compat tool (Steam app 3029110).
+#
+# NOT a mount and deliberately not an fstab row, unlike fex-mesa above: there is no image to
+# mount here, because Lepton ships the Android rootfs itself (its images/rootfs, ~4200 files).
+# What this path is for is the DISTRO's contribution INTO that guest — liblepton/mounting.sh
+# walks it with `find . -type f` and bind-mounts every file at its matching absolute path in the
+# container, so a file at vendor/lib64/egl/libEGL_mesa.so here lands at
+# /vendor/lib64/egl/libEGL_mesa.so inside Android.
+#
+# The DIRECTORY must exist even when it has nothing in it. mounting.sh does `pushd "${OVERLAY}"`
+# under `set -e`, so an ABSENT directory kills the launch outright, before any container is built
+# — measured on a Pocket ACE 2026-08-22 (issue #58):
+#
+#     liblepton/mounting.sh: line 79: pushd: /usr/share/guestos/android: No such file or directory
+#
+# WHAT IT CARRIES: the Android/bionic Mesa build from packages/mesa-android — Turnip plus the
+# EGL/GLES trio and the gallium/gbm libraries around them. liblepton/properties.sh defaults the
+# guest to `ro.hardware.egl=mesa` + `ro.hardware.vulkan=freedreno` +
+# `mesa.loader.driver.override=zink`, which makes Android's loader open
+# /vendor/lib64/egl/libEGL_mesa.so and /vendor/lib64/hw/vulkan.freedreno.so by those exact
+# FILENAMES. Lepton's own image ships only the *_swiftshader.so trio, so with this slot empty
+# libEGL aborted — `couldn't find an OpenGL ES implementation` — taking surfaceflinger and the
+# composer HAL with it (issue #58, measured on a Pocket S2 2026-08-23). On `lepton start dev`
+# that was fatal and the guest never finished booting; a Steam launch reached `Boot complete!`
+# anyway because init restarts the crashed services, so there the abort cost rendering rather
+# than the boot. Either way it is why an Android title started and immediately went dark.
+#
+# Our aarch64 Turnip from packages/mesa is glibc-linked and could never load in a bionic process,
+# which is why this is its own NDK cross-build rather than a copy of the host driver — off the
+# same source pin and patch list, so the three drivers cannot drift. See packages/mesa-android.
+#
+# IT ALSO CARRIES ONE INIT SCRIPT, from rootfs/overlay rather than the mesa build:
+# vendor/etc/init/novadeck-gfx.rc, which takes the guest off Lepton's forced
+# `mesa.loader.driver.override=zink` and onto freedreno. Without it the driver loads and then
+# SurfaceFlinger aborts, killing the guest ~4s into boot. The file documents the measurement.
+#
+# NOT owed, though an earlier revision of this comment claimed otherwise: gralloc (Lepton already
+# ships gralloc.minigbm_msm.so and the matching mapper@4.0 impl) and adbd (it runs on its own and
+# listens on tcp:5555 once the kernel carries binder). /vendor/bin/restore_vulkan_layers.sh is
+# NOT owed either — that one was listed here in error: the guest already runs it, which is where
+# the benign `find: '/vendor/enabled_vulkan_layers/'` in the logcat comes from (mounting.sh
+# creates that directory only when a vulkan layer is enabled, and none is by default).
+#
+# `LEPTON_FORCE_SOFTWARE=true` still selects the shipped SwiftShader and bypasses everything
+# staged here — which is how the rest of the stack (binder, system_server, boot_completed, adbd,
+# the pasta forward) was confirmed healthy while this slot was empty, and remains the control to
+# fall back to when separating a driver fault from anything else.
+#
+# REQUIRED, not best-effort, for the same reason as the mesa-x86 payload above: the Makefile
+# orders the build so it always exists here, and a HALF-staged driver set is the exact quiet
+# failure this stage exists to prevent — Android's loader gives no useful diagnostic for a
+# missing library, and the abort takes the process that would have logged it.
+android_payload="$ROOT/work/mesa-android/out"
+android_slot="usr/share/guestos/android"
+echo "  staging Android guest Mesa payload (/$android_slot)"
+for f in vendor/lib64/hw/vulkan.freedreno.so \
+         vendor/lib64/egl/libEGL_mesa.so \
+         vendor/lib64/egl/libGLESv2_mesa.so \
+         vendor/lib64/egl/libGLESv1_CM_mesa.so \
+         vendor/lib64/libgallium_dri.so \
+         vendor/lib64/libgbm_mesa.so \
+         vendor/lib64/dri_gbm.so; do
+  [ -s "$android_payload/$f" ] || { echo "ERROR: mesa-android payload incomplete: missing $f (make mesa-android)" >&2; exit 1; }
+done
+# THE SLOT HAS TWO SOURCES, and they MERGE here. rootfs/overlay (injected far above, ~line 205)
+# already placed vendor/etc/init/novadeck-gfx.rc in this tree; `cp -a .../vendor` onto an existing
+# vendor/ merges into it rather than nesting. That ordering is load-bearing and invisible: reorder
+# these two stages, or switch this to an `rm -rf` + copy, and the .rc disappears from the image
+# with no error -- and the guest goes back to dying 4s into boot on zink. Hence the gate below.
+mkdir -p "$stage/$android_slot"
+cp -a "$android_payload/vendor" "$stage/$android_slot/"
+
+# The driver-selection init script must have survived the merge. It is the difference between a
+# guest that renders and one whose SurfaceFlinger aborts; see the file itself for the measurement.
+android_rc="$stage/$android_slot/vendor/etc/init/novadeck-gfx.rc"
+[ -s "$android_rc" ] || { echo "ERROR: ${android_rc#"$stage"} is missing -- rootfs/overlay's copy was clobbered by the payload merge, and the guest will die on zink" >&2; exit 1; }
+grep -q 'mesa.loader.driver.override msm' "$android_rc" \
+  || { echo "ERROR: ${android_rc#"$stage"} no longer sets the mesa driver override -- Lepton forces zink and the guest cannot create a DRI2 screen" >&2; exit 1; }
+# THE FOSSILIZE STUB LAYER, and the host-side manifest that makes it findable. Both are REQUIRED
+# for any Android title to launch at all — this is not a rendering nicety.
+#
+# Lepton enables the fossilize shader-cache layer on every launch with no guard and no opt-out
+# (liblepton/vulkan_layers.sh:181; the RPO and FDM layers immediately above it ARE env-gated), and
+# runs under `set -euo pipefail`. `find_vulkan_layer` looks only in the slot dir below, so an absent
+# layer is a fatal launch failure ~5s in, with nothing in the session log — Lepton logs to
+# ~/.local/share/lepton/logs/lepton-steamlaunch-<appid>.log. Measured on a Pocket ACE 2026-08-29,
+# Lepton v2.8.9 (issue #58). See packages/fossilize-stub-android for why a stub and not a port.
+fossilize_payload="$ROOT/work/fossilize-stub-android/out"
+fossilize_so="$fossilize_payload/vendor/vulkan_layers/libVkLayer_fossilize.so"
+[ -s "$fossilize_so" ] \
+  || { echo "ERROR: fossilize stub payload missing: ${fossilize_so#"$ROOT"/} (make fossilize-stub-android)" >&2; exit 1; }
+echo "  staging the fossilize stub vulkan layer (/$android_slot/vendor/vulkan_layers)"
+install -Dm0644 "$fossilize_so" "$stage/$android_slot/vendor/vulkan_layers/libVkLayer_fossilize.so"
+
+# THE MANIFEST IS THE OTHER HALF, and it is the half that is easy to forget: Lepton maps the .so's
+# basename to the layer ID it writes into the guest's settings with
+#   find /usr/share/vulkan -name '*.json' | xargs jq -r '… select(.library_path | endswith($NAME)) | .name'
+# and get_vulkan_layer_id requires EXACTLY ONE match — zero or two both return 1, the same fatal
+# path as a missing .so. (`jq` itself is in PKGS for exactly this; without it the pipeline is empty
+# and every lookup fails identically.)
+#
+# NOT in implicit_layer.d/ or explicit_layer.d/. Those are the directories the HOST's vulkan loader
+# scans, and this manifest points at an Android/bionic .so the host must never try to load. Lepton's
+# find is recursive over /usr/share/vulkan, so a sibling directory satisfies it while staying
+# invisible to the host loader. Changing this path to a *_layer.d/ name would make every host vulkan
+# app try to load a bionic library.
+install -Dm0644 "$ROOT/packages/fossilize-stub-android/layer.json" \
+                "$stage/usr/share/vulkan/novadeck-guest-layer.d/novadeck-fossilize-stub.json"
+
+# The manifest's library_path must name the file we just staged, or the ID lookup finds nothing and
+# the launch dies exactly as if the layer were absent. Two files, one path, drifting independently.
+grep -q '/usr/share/guestos/android/vendor/vulkan_layers/libVkLayer_fossilize.so' \
+     "$stage/usr/share/vulkan/novadeck-guest-layer.d/novadeck-fossilize-stub.json" \
+  || { echo "ERROR: the staged vulkan layer manifest does not point at the staged layer" >&2; exit 1; }
+
+# Take the freeform windowing feature away from the guest. Lepton's images/rootfs declares
+# android.software.freeform_window_management unconditionally, and NOTHING in the guest gates it on
+# persist.waydroid.multi_windows the way stock waydroid does. With the feature declared but
+# multi_windows unset, the two halves disagree: the composer runs single-window -- one wl_surface
+# carrying the whole Android display -- while Android still opens the title into a FREEFORM window.
+# The guest then presents a small floating window, title bar and all, sitting on the launcher
+# wallpaper. Measured on a Pocket ACE 2026-08-24: task mode=freeform, bounds 824x464 inside a
+# 2560x1440 display, with the launcher fullscreen behind it.
+#
+# There is no runtime lever. ActivityTaskManagerService ORs the PackageManager feature with
+# development_enable_freeform_windows_support, so clearing the setting is a no-op while the feature
+# is declared; and `am start --windowingMode 1` does not stick, because TaskLaunchParamsModifier
+# puts the task straight back into freeform (measured -- the relaunched task came back mode=freeform).
+# Removing the DECLARATION is the only thing that works, and Lepton's overlay is a per-file bind
+# mount that can replace a file but never delete one -- hence an empty <permissions/> shadowing
+# Valve's copy at the same path, rather than an absence.
+#
+# NOT gated on NOVADECK_DEV: this is a fix every image wants, not an instrument.
+install -Dm0644 "$ROOT/rootfs/guestos/android.software.freeform_window_management.xml" \
+                "$stage/$android_slot/system/etc/permissions/android.software.freeform_window_management.xml"
+
+# A SECOND init script, DEV CARDS ONLY: a logcat capture that writes inside the guest to /data,
+# whose overlay upperdir lives on the host and so outlives the container. Every host-side capture
+# of this guest has been an `adb logcat` racing Lepton's teardown, and the race is unwinnable --
+# each one ends exactly at app start, which is why "the title starts and immediately exits" is
+# still unmeasured (issue #58). See the file for the rest of the reasoning.
+#
+# It is staged from rootfs/guestos/ rather than rootfs/overlay/ SPECIFICALLY so that this gate can
+# exist. rootfs/overlay is copied into every image unconditionally, so a debugging instrument placed
+# there ships to users -- and this one writes continuously, to an SD card, for the life of every
+# Android title. tests/test-android-guestos.sh asserts the gate is still here.
+if [ "${NOVADECK_DEV:-}" = "1" ]; then
+  echo "  [TEST] staging the Android guest logcat capture (dev cards only)"
+  install -Dm0644 "$ROOT/rootfs/guestos/novadeck-logcat.rc" \
+                  "$stage/$android_slot/vendor/etc/init/novadeck-logcat.rc"
+  # 0755: the .rc runs it as `sh <script>`, but a capture instrument that silently does nothing
+  # because it lost its exec bit is the exact failure this whole slot keeps producing.
+  install -Dm0755 "$ROOT/rootfs/guestos/novadeck-logcat.sh" \
+                  "$stage/$android_slot/vendor/bin/novadeck-logcat.sh"
+fi
+
+# The payload is handed back to the build USER by its container (so the host can cache it), and
+# that uid means nothing inside the image. Modes are already 0644/0755 from `install`, so this is
+# ownership only — but a read-only root whose files claim to belong to uid 1000 is a lie that
+# costs someone an afternoon later.
+chown -R 0:0 "$stage/$android_slot"
+
+# STAGE android-shared-payload — Google Play and the framework fix for the SHARED Android container
+# (/usr/bin/novadeck-android, novadeck-android.service). NOT the guestos slot above, which Lepton
+# bind-mounts into EVERY Android launch: these ride in only through NOVADECK_ANDROID_OVERLAY, which
+# only that one container sets, so Valve's own Android titles keep the stock image.
+#
+#   /usr/share/novadeck-android/sdk<N>/       packages/android-gapps (Play Store, Play services, the
+#                                             Services Framework, their permission/sysconfig files,
+#                                             a touch keyboard) + rootfs/android-shared (the Steam pad
+#                                             key layout). <N> is the guest SDK that set was built
+#                                             for; novadeck-android mounts it only into a guest of
+#                                             that SDK and says so otherwise.
+#   /usr/lib/novadeck/android-framework/      packages/lepton-framework: the tools novadeck-android
+#                                             builds the framework fix with, on the device, for
+#                                             whatever Lepton image Steam installed (smali/baksmali
+#                                             as dex for the guest's ART, and the three scripts).
+#
+# REQUIRED, like the payloads above: the Makefile orders both fetches before this runs, and a Play
+# Store title that opens onto a guest with no Play in it would be the quiet failure.
+shared_root="usr/share/novadeck-android"
+gapps_payload="$ROOT/work/android-gapps/out"
+gapps_sdk="$(sed -n 's/^sdk:[[:space:]]*//p' "$ROOT/packages/android-gapps/payload.pin" | head -1)"
+[[ "$gapps_sdk" =~ ^[0-9]+$ ]] \
+  || { echo "ERROR: packages/android-gapps/payload.pin has no numeric sdk:" >&2; exit 1; }
+for f in system/product/priv-app/Phonesky/Phonesky.apk \
+         system/product/priv-app/PrebuiltGmsCore/PrebuiltGmsCore.apk \
+         system/system_ext/priv-app/GoogleServicesFramework/GoogleServicesFramework.apk \
+         system/product/app/SimpleKeyboard/SimpleKeyboard.apk; do
+  [ -s "$gapps_payload/$f" ] \
+    || { echo "ERROR: android-gapps payload incomplete: missing $f (make android-gapps)" >&2; exit 1; }
+done
+echo "  staging Google Play for the shared Android container (/$shared_root/sdk$gapps_sdk)"
+mkdir -p "$stage/$shared_root/sdk$gapps_sdk"
+cp -a "$gapps_payload/system" "$stage/$shared_root/sdk$gapps_sdk/"
+cp -a "$ROOT/rootfs/android-shared/." "$stage/$shared_root/sdk$gapps_sdk/"
+fw_tools="usr/lib/novadeck/android-framework"
+for f in smali.dex.jar baksmali.dex.jar api; do
+  [ -s "$ROOT/work/lepton-framework/out/$f" ] \
+    || { echo "ERROR: lepton-framework payload incomplete: missing $f (make lepton-framework)" >&2; exit 1; }
+done
+echo "  staging the on-device framework-fix tools (/$fw_tools)"
+mkdir -p "$stage/$fw_tools"
+cp "$ROOT"/work/lepton-framework/out/{smali.dex.jar,baksmali.dex.jar,api} \
+   "$ROOT"/packages/lepton-framework/{restore-services.py,repack-jar.py,compile-odex.sh} "$stage/$fw_tools/"
+chown -R 0:0 "$stage/$fw_tools"
+chmod 0755 "$stage/$fw_tools"
+chmod 0644 "$stage/$fw_tools"/*
+# Lepton bind-mounts these files one by one into the guest, where the host uid means nothing; the
+# fetches ran as the build user.
+chown -R 0:0 "$stage/$shared_root"
+find "$stage/$shared_root" -type d -exec chmod 0755 {} +
+find "$stage/$shared_root" -type f -exec chmod 0644 {} +
 
 # Grow the home PARTITION to fill the device with systemd-repart (declarative, online — it issues
 # a BLKPG resize so it works while the disk is in use, and relocates the GPT backup header for us).

@@ -232,7 +232,76 @@ BOOTSTRAP_PKGS=(base)
 # D-Bus activated -- upower ships org.freedesktop.UPower.service, so Steam's own call starts it and
 # it needs no preset and no build-time .wants symlink. Resolves from the pinned snapshot's `extra`
 # (upower 1.90.10-1, 975K installed).
-PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-tools mesa gamescope seatd sddm mangohud lsfg-vk fex-emu bluez bluez-utils networkmanager alsa-ucm-conf pipewire wireplumber pipewire-pulse pipewire-alsa rtkit unzip openal gtk2 ffmpeg e2fsprogs xorg-xwayland lsof noto-fonts noto-fonts-cjk noto-fonts-emoji python python-gobject scx-scheds rauc btrfs-progs rsync earlyoom zram-generator udisks2 f3 upower libinput-tools)
+# podman crun passt fuse-overlayfs: the rootless container runtime Valve's Lepton compat tool
+# (Steam app 3029110, Android titles) drives. Lepton resolves `podman` from PATH for every
+# container operation and vendors no copy of it, so with no runtime on the image the tool is
+# selected correctly by the client and then dies ~5s into every launch without building a
+# container at all (issue #58, measured on a Pocket ACE / SM8550). This is the FIRST container
+# runtime this image has ever carried — a gap, not a regression.
+#   podman        the thing Lepton actually calls (`podman run|start|wait|exec|stop|rm|ps|events|
+#                 inspect`, and an `env -i PATH=… $(which podman) exec` in liblepton.sh).
+#   crun          the OCI runtime. podman depends on the virtual `oci-runtime`, and crun is its
+#                 ONLY provider in the pinned snapshot (there is no runc). crun in turn hard-
+#                 depends on criu, so ~28 MB of checkpoint/restore machinery (criu, protobuf,
+#                 python-protobuf, libnet, nftables) arrives that Lepton never uses. Dropping it
+#                 would mean carrying a patched crun in the overlay; not worth a maintained
+#                 from-source package to save 28 MB of a 8.3 GB root.
+#   passt         pasta, the rootless network backend. NOT slirp4netns: liblepton/networking.sh
+#                 builds `-I eth0 --ipv4-only --no-ndp --no-dhcp --no-dhcpv6`, which are pasta
+#                 flags. It is also a hard dep of podman, so it would arrive regardless.
+#   fuse-overlayfs  rootless overlay storage driver. A podman OPTdepend, so it must be named
+#                 here or it does not ship. `overlay` and `fuse` are both in /proc/filesystems.
+# netavark + aardvark-dns (~15 MB) come in behind containers-common, which hard-depends on the
+# virtual `container-network-stack` that only netavark provides. Lepton uses pasta, so that pair
+# ships installed and unused; same argument as criu.
+# The rest of the rootless prerequisites were already satisfied and needed no CHANGE — newuidmap/
+# newgidmap (shadow), /etc/subuid + /etc/subgid for deck, user namespaces, overlay, fuse, and
+# podman's other hard deps (gpgme, sqlite, libseccomp, iptables) are all already there. Two of them
+# were satisfied only by ACCIDENT, though, and are now asserted where they are produced rather than
+# left to be discovered on a device: deck's subordinate id range is a `useradd` default nothing here
+# asks for (rootfs/guard-rootfs.sh, 8b) and CONFIG_USER_NS comes from the arm64 defconfig rather
+# than from any novadeck fragment (kernel/build.sh's symbol loop). Neither is DECLARED here; both
+# are now checked, because rootless podman is the first thing on this image that needs them.
+# which: `liblepton/liblepton.sh:356` runs `env -i PATH="…" $(which podman) exec …` to get a shell
+# inside the Android container. This image had no `which` at all — nothing else on it wants one,
+# since every other caller here resolves binaries by absolute path or through PATH directly — so
+# that substitution came out EMPTY and the line degraded to `env -i PATH=… exec …`, which fails as
+# `env: 'exec': No such file or directory`. Measured on a Pocket ACE 2026-08-22 (issue #58); it is
+# 72 KB from the pinned snapshot's `core`. Note this is the real GNU which, not a shell builtin:
+# `command -v` would do the same job, but the line is Valve's and is not ours to change.
+# inotify-tools: the same class of bug as `which`, and the one that was actually costing us the
+# Android titles. `liblepton/utils.sh:57` (wait_for_file) backgrounds `inotifywait` with BOTH streams
+# sent to /dev/null and then `wait`s on it. With no binary on PATH the subshell dies of
+# command-not-found instantly and silently, `wait` returns at once, and so EVERY wait_for_file in
+# Lepton returns IMMEDIATELY and UNCONDITIONALLY -- it degrades from "block until this file appears"
+# to "do nothing", with no error anywhere. Two things Lepton does with it, both load-bearing:
+#   start_container's "Waiting for boot..." is wait_for_container_file /data/lepton-onboot, so
+#   `Boot complete!` is printed a few ms after the container starts rather than when the guest has
+#   booted. install_app then runs against an adbd that is not listening yet -- which is `blocker 1`,
+#   the adb race we papered over with a connect retry wrapper instead of fixing here.
+#   wait_for_container waits on wait_for_file "$(onexit_path)" when is_app, i.e. on the STEAM path.
+#   It returns instantly, Lepton concludes the title exited, and teardown SIGKILLs the container
+#   ~2.2s after the app process starts -- measured twice, 2.30s and 2.22s, whatever the app is doing.
+#   (The exit MARKER then appears too: `pkill -P` kills the `podman wait` child but not its subshell,
+#   which carries on to `touch` the file. That is why compatdata/.../lepton-on-app-exit is created
+#   239ms BEFORE the game's `Start proc` line -- it is Lepton writing its own exit signal.)
+# The dev path is untouched because `is_app` is false for `lepton start dev`, so wait_for_container
+# takes its else branch and waits on `podman wait`, which works. That asymmetry is the whole reason
+# the same APK runs to its login screen under `lepton start dev` and dies under Steam, and it sent
+# this investigation through Unity, Vulkan, zink, gralloc and the app-data mounts first. Measured
+# 2026-08-24 on a Pocket S2 by instrumenting wait_for_container on the card (issue #58).
+# Closing this needs an Android title actually rendering on hardware — the issue is hw-gate.
+#
+# jq: the THIRD instance of the same class, and fatal on the Steam path exactly like the other two.
+# Lepton resolves a vulkan layer's ID by shelling out to it — `liblepton/vulkan_layers.sh:80`:
+#     find /usr/share/vulkan -name '*.json' -print0 | xargs -0 jq -r --arg LAYER_PATH … .name
+# maps a layer's .so basename to the ID it writes into the guest's settings, and
+# `get_vulkan_layer_id` REQUIRES exactly one candidate: zero matches is `ERROR: Unable to determine
+# Layer ID` + `return 1`, under `set -euo pipefail`. With no jq the pipeline is empty and every
+# lookup fails that way — indistinguishable from a genuinely absent layer, which is the failure
+# packages/fossilize-stub-android exists to prevent. ~1.1 MB (jq + oniguruma).
+# Measured 2026-08-29 on a Pocket ACE, Lepton v2.8.9 (issue #58).
+PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-tools mesa gamescope seatd sddm mangohud lsfg-vk fex-emu bluez bluez-utils networkmanager alsa-ucm-conf pipewire wireplumber pipewire-pulse pipewire-alsa rtkit unzip openal gtk2 ffmpeg e2fsprogs xorg-xwayland lsof noto-fonts noto-fonts-cjk noto-fonts-emoji python python-gobject scx-scheds rauc btrfs-progs rsync earlyoom zram-generator udisks2 f3 upower libinput-tools podman crun passt fuse-overlayfs which inotify-tools jq)
 
 # Dev-only packages — installed ONLY under NOVADECK_DEV=1, NEVER in a release base.
 # On-device bring-up tools: evtest reads raw /dev/input events; usbutils provides lsusb.
@@ -440,11 +509,13 @@ for pin in "${PREBUILT_PINS[@]}"; do
   url="$(pin_field "$pin" url)";  sha="$(pin_field "$pin" sha256)"
   kind="$(pin_field "$pin" kind)"; kind="${kind:-tar}"
   : "${name:?$pin: missing name}"; : "${url:?$pin: missing url}"; : "${sha:?$pin: missing sha256}"
-  # `.blob` for a raw file (copied verbatim), `.tar` for an archive (tar autodetects gz/xz/zst).
+  # `.blob` for a raw file (copied verbatim), `.tar` for an archive (tar autodetects gz/xz/zst),
+  # `.zip` for one GNU tar cannot read — staged pristine and unpacked container-side with bsdtar.
   case "$kind" in
     tar)  staged="$PREBUILT_DIR/$name.tar" ;;
+    zip)  staged="$PREBUILT_DIR/$name.zip" ;;
     file) staged="$PREBUILT_DIR/$name.blob" ;;
-    *)    echo "$pin: unknown kind '$kind' (want: tar|file)" >&2; exit 1 ;;
+    *)    echo "$pin: unknown kind '$kind' (want: tar|zip|file)" >&2; exit 1 ;;
   esac
   # Reuse a cached blob only if its sha already matches the pin (guards against a partial download
   # or a bumped url reusing the old file); otherwise (re)fetch and verify.
@@ -624,6 +695,7 @@ docker run --rm --platform linux/arm64 -v "$PREBUILT_DIR":/prebuilt:ro \
   #   kind=tar  -> extract with the pin'"'"'s strip-components into `dest` (default /). Archive roots
   #                differ, so strip is per-package (InputPlumber is rooted at inputplumber/usr ->
   #                strip 1 lands at /usr; Proton strips its versioned dir into a stable name).
+  #   kind=zip  -> as kind=tar, but unpacked with bsdtar because GNU tar cannot read a zip.
   #   kind=file -> copy verbatim to `dest`, which is the full destination FILE path (the FEX
   #                guest rootfs is a raw erofs image, not an archive).
   # `dest` is a path in the TARGET root, so every one is prefixed here -- an unprefixed dest
@@ -647,6 +719,19 @@ docker run --rm --platform linux/arm64 -v "$PREBUILT_DIR":/prebuilt:ro \
           # read-only system root legitimately belongs to a build account, so extract as root.
           tar -C "/target$p_dest" --no-same-owner --strip-components="${p_strip:-0}" \
               -xf "/prebuilt/$p_name.tar"
+          ;;
+        zip)
+          # Same contract as kind=tar, different reader: GNU tar cannot open a zip, and upstreams
+          # that publish only a zip (Google`s platform-tools) would otherwise need repacking on the
+          # host, which would mean the staged blob no longer being the bytes the pin`s sha covers.
+          # bsdtar reads zip natively and is always present here -- it ships in libarchive, which
+          # pacman itself depends on, so it cannot go missing while this container can install
+          # anything. It also honours the unix mode in the zip`s external attributes, which is what
+          # keeps adb/fastboot executable at rest (verified on r37.0.1: 0755 survives extraction).
+          command -v bsdtar >/dev/null || { echo "prebuilt $p_name: kind=zip needs bsdtar" >&2; exit 1; }
+          mkdir -p "/target$p_dest"
+          bsdtar -C "/target$p_dest" --no-same-owner --strip-components="${p_strip:-0}" \
+                 -xf "/prebuilt/$p_name.zip"
           ;;
         file)
           # mode comes from the pin (default 0644): the FEX rootfs is data, but decky-loader

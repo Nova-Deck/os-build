@@ -1,0 +1,232 @@
+From: hashtagbasit <53941105+hashtagbasit@users.noreply.github.com>
+Date: Tue, 29 Sep 2026 23:30:00 +0200
+Subject: [PATCH] steamcompmgr: report xdg-shell titles to Steam, give Android real touch
+
+Three changes for a native-Wayland title -- Lepton's Android guest is the one
+that matters here -- all of which upstream gets right only for XWayland:
+
+1. determine_and_apply_focus() builds GAMESCOPE_FOCUSABLE_APPS and
+   GAMESCOPE_FOCUSABLE_WINDOWS from XWayland windows only, so Steam is never
+   told an xdg title has a window. It keeps its own launch screen up and
+   republishes GAMESCOPECTRL_BASELAYER_APPID with itself (769) ahead of the
+   title. An xdg window with a resolved appID is now reported: the appID
+   joins FOCUSABLE_APPS, and [xdg serial, appID, pid] joins FOCUSABLE_WINDOWS
+   (xdg serials are small integers no X11 window id can collide with). This
+   replaces 0022, which worked around the demotion from the other side and
+   hid the Quick Access menu and the Steam overlay while an xdg title ran.
+
+2. The appID of an xdg window comes from GetAppIdFromPid() at surface
+   creation. A podman container is outside Steam's reaper tree, and
+   upstream's cgroup fallback accepts the launch scope only as the LAST
+   cgroup path component. A fallback now matches app-steam-app<N> anywhere
+   in /proc/<pid>/cgroup, and flags a window from novadeck-android.service
+   -- the one shared Android container, which has no launch scope -- whose
+   appID then follows a NOVADECK_ANDROID_APPID root property that
+   novadeck-android sets before it brings an app forward.
+
+3. Touch on such a window is Passthrough rather than Steam's click
+   emulation, so scrolling, swipes and pinch reach Android. Keyed on the
+   shared-Android flag, or on any xdg window whose appID resolved at
+   creation, behind the ConVar touch_passthrough_xdg_titles (default on).
+
+The three changes are hashtagbasit's, from a gamescope 3.16.30 tree, and apply
+unchanged to 3.16.29 plus this stack. Ours: the names (a window flag, a root
+property and a unit name in this project's namespace), and the touch keying in
+(3) -- theirs fires only for their shared-container window, which a per-title
+Steam launch never is, so any xdg window with a resolved appID qualifies here,
+behind the ConVar.
+
+Not compiled on its own: validated by the overlay build of the full stack.
+
+diff --git a/src/steamcompmgr.cpp b/src/steamcompmgr.cpp
+index 312647a..9f0cc73 100644
+--- a/src/steamcompmgr.cpp
++++ b/src/steamcompmgr.cpp
+@@ -5078,12 +5078,20 @@ const char *get_win_display_name(steamcompmgr_win_t *window)
+ }
+ 
+ 
++// Steam app id that currently owns the shared Android window. novadeck-android sets it on the
++// root window before it brings an app to the front, because every app in the shared container
++// draws through the SAME xdg window, which no launch scope can attribute.
++static uint32_t g_unSharedAndroidAppId = 0;
++
+ static std::vector< steamcompmgr_win_t* >
+ steamcompmgr_xdg_get_possible_focus_windows()
+ {
+ 	std::vector< steamcompmgr_win_t* > windows;
+ 	for ( auto &win : g_steamcompmgr_xdg_wins )
+ 	{
++		if ( win->bSharedAndroid )
++			win->appID = g_unSharedAndroidAppId;
++
+ 		// Always skip system tray icons and overlays
+ 		if ( win->isSysTrayIcon || win->isOverlay || win->isExternalOverlay )
+ 		{
+@@ -5239,7 +5247,23 @@ determine_and_apply_focus( global_focus_t *pFocus )
+ 	for ( steamcompmgr_win_t *focusable_window : vecPossibleFocusWindows )
+ 	{
+ 		if ( focusable_window->type != steamcompmgr_win_type_t::XWAYLAND )
++		{
++			// Report xdg-shell windows too (Lepton's Android guest is one). Upstream reports only
++			// XWayland windows, so Steam is never told a native-Wayland title has a window: it
++			// keeps its own launch screen up and demotes the title behind 769 in
++			// GAMESCOPECTRL_BASELAYER_APPID.
++			uint32_t unXdgAppID = focusable_window->appID;
++			if ( focusable_window->type == steamcompmgr_win_type_t::XDG && unXdgAppID != 0 )
++			{
++				if ( std::find( focusable_appids.begin(), focusable_appids.end(), unXdgAppID ) == focusable_appids.end() )
++					focusable_appids.push_back( unXdgAppID );
++				// xdg ids are small serials, which no X11 window id ever is.
++				focusable_windows.push_back( focusable_window->xdg().id );
++				focusable_windows.push_back( unXdgAppID );
++				focusable_windows.push_back( focusable_window->pid );
++			}
+ 			continue;
++		}
+ 
+ 		// Exclude windows that are useless (1x1), skip taskbar + pager or override redirect windows
+ 		// from the reported focusable windows to Steam.
+@@ -7075,6 +7099,11 @@ handle_property_notify(xwayland_ctx_t *ctx, XPropertyEvent *ev)
+ 		get_prop( ctx, ctx->root, ctx->atoms.gamescopeCtrlAppIDAtom, vecFocuscontrolAppIDs );
+ 		MakeFocusDirty();
+ 	}
++	if ( ev->atom == ctx->atoms.novadeckAndroidAppIDAtom )
++	{
++		g_unSharedAndroidAppId = get_prop( ctx, ctx->root, ctx->atoms.novadeckAndroidAppIDAtom, 0 );
++		MakeFocusDirty();
++	}
+ 	if (ev->atom == ctx->atoms.gamescopeCtrlWindowAtom )
+ 	{
+ 		ctx->focusControlWindow = get_prop( ctx, ctx->root, ctx->atoms.gamescopeCtrlWindowAtom, None );
+@@ -9118,6 +9147,7 @@ void init_xwayland_ctx(uint32_t serverId, gamescope_xwayland_server_t *xwayland_
+ 	ctx->atoms.gamescopeFocusedAppGfxAtom = XInternAtom( ctx->dpy, "GAMESCOPE_FOCUSED_APP_GFX", false );
+ 	ctx->atoms.gamescopeFocusedWindowAtom = XInternAtom( ctx->dpy, "GAMESCOPE_FOCUSED_WINDOW", false );
+ 	ctx->atoms.gamescopeCtrlAppIDAtom = XInternAtom(ctx->dpy, "GAMESCOPECTRL_BASELAYER_APPID", false);
++	ctx->atoms.novadeckAndroidAppIDAtom = XInternAtom(ctx->dpy, "NOVADECK_ANDROID_APPID", false);
+ 	ctx->atoms.gamescopeCtrlWindowAtom = XInternAtom(ctx->dpy, "GAMESCOPECTRL_BASELAYER_WINDOW", false);
+ 	ctx->atoms.WMChangeStateAtom = XInternAtom(ctx->dpy, "WM_CHANGE_STATE", false);
+ 	ctx->atoms.gamescopeInputCounterAtom = XInternAtom(ctx->dpy, "GAMESCOPE_INPUT_COUNTER", false);
+diff --git a/src/steamcompmgr_shared.hpp b/src/steamcompmgr_shared.hpp
+index 66022d7..d105ac2 100644
+--- a/src/steamcompmgr_shared.hpp
++++ b/src/steamcompmgr_shared.hpp
+@@ -115,6 +115,9 @@ struct steamcompmgr_win_t {
+ 	uint32_t inputFocusMode = 0;
+ 	uint32_t appID = 0;
+ 	uint32_t steamAppID = 0;
++	// The xdg window of the shared Android container (novadeck-android.service). Its appID
++	// follows the NOVADECK_ANDROID_APPID root property rather than the client's launch scope.
++	bool bSharedAndroid = false;
+ 	bool isOverlay = false;
+ 	bool isExternalOverlay = false;
+ 	// Set by per-connector mangoapp instances.
+diff --git a/src/wlserver.cpp b/src/wlserver.cpp
+index 9655dfd..9cfb8ca 100644
+--- a/src/wlserver.cpp
++++ b/src/wlserver.cpp
+@@ -77,8 +77,10 @@
+ #include "gpuvis_trace_utils.h"
+ 
+ #include <algorithm>
++#include <fstream>
+ #include <list>
+ #include <set>
++#include <string>
+ 
+ static LogScope wl_log("wlserver");
+ 
+@@ -1998,6 +2000,29 @@ void xdg_toplevel_new(struct wl_listener *listener, void *data)
+ {
+ }
+ 
++// Lepton's Android guest draws from a podman container, outside Steam's reaper tree, so
++// GetAppIdFromPid finds nothing. Upstream's cgroup lookup only accepts the launch scope as the
++// LAST path component; a container cgroup nested under app-steam-app<N>-<pid>.scope still names
++// it, so match it anywhere in the path. The shared novadeck-android.service window has no launch
++// scope at all -- it is flagged here and follows NOVADECK_ANDROID_APPID instead.
++static uint32_t get_container_appid( pid_t pid, steamcompmgr_win_t *window )
++{
++	char path[64];
++	snprintf( path, sizeof( path ), "/proc/%d/cgroup", pid );
++	std::ifstream cgroup( path );
++	std::string line;
++	while ( std::getline( cgroup, line ) )
++	{
++		size_t nPos = line.find( "app-steam-app" );
++		uint32_t unAppId = 0;
++		if ( nPos != std::string::npos && sscanf( line.c_str() + nPos, "app-steam-app%u", &unAppId ) == 1 && unAppId )
++			return unAppId;
++		if ( line.find( "novadeck-android.service" ) != std::string::npos )
++			window->bSharedAndroid = true;
++	}
++	return 0;
++}
++
+ wlserver_xdg_surface_info* waylandy_type_surface_new(struct wl_client *client, struct wlr_surface *surface)
+ {
+ 	wlserver_wl_surface_info *wlserver_surface = get_wl_surface_info(surface);
+@@ -2020,6 +2045,8 @@ wlserver_xdg_surface_info* waylandy_type_surface_new(struct wl_client *client, s
+ 		pid_t nPid = 0;
+ 		wl_client_get_credentials( client, &nPid, nullptr, nullptr );
+ 		window->appID = gamescope::Process::GetAppIdFromPid( nPid );
++		if ( !window->appID )
++			window->appID = get_container_appid( nPid, window.get() );
+ 	}
+ 	window->_window_types.emplace<steamcompmgr_xdg_win_t>();
+ 
+@@ -3228,6 +3255,24 @@ static void apply_touchscreen_orientation(GamescopePanelOrientation orientation,
+ 	*y = ty;
+ }
+ 
++// Android wants real touch -- scrolling, swipes, pinch -- not Steam's click emulation, which a
++// non-Steam title gets by default. Keyed on "an xdg window that belongs to a launch": the shared
++// Android window, or any xdg window whose appID resolved at creation. Operator knob:
++// touch_passthrough_xdg_titles.
++gamescope::ConVar<bool> cv_touch_passthrough_xdg_titles( "touch_passthrough_xdg_titles", true, "Give a native-Wayland (xdg-shell) Steam title real touch instead of Steam's click emulation." );
++
++static gamescope::TouchClickMode wlserver_touch_click_mode()
++{
++	if ( wlserver.mouse_focus_surface != NULL )
++	{
++		wlserver_wl_surface_info *info = get_wl_surface_info( wlserver.mouse_focus_surface );
++		steamcompmgr_win_t *win = ( info && info->xdg_surface ) ? info->xdg_surface->win : nullptr;
++		if ( win && ( win->bSharedAndroid || ( cv_touch_passthrough_xdg_titles && win->appID != 0 ) ) )
++			return gamescope::TouchClickModes::Passthrough;
++	}
++	return GetBackend()->GetTouchClickMode();
++}
++
+ void wlserver_touchmotion( double x, double y, int touch_id, uint32_t time, bool bAlwaysWarpCursor, gamescope::IBackendConnector* connector )
+ {
+ 	assert( wlserver_is_lock_held() );
+@@ -3258,7 +3303,7 @@ void wlserver_touchmotion( double x, double y, int touch_id, uint32_t time, bool
+ 		trackpad_dx = tx - wlserver.mouse_surface_cursorx;
+ 		trackpad_dy = ty - wlserver.mouse_surface_cursory;
+ 
+-		gamescope::TouchClickMode eMode = GetBackend()->GetTouchClickMode();
++		gamescope::TouchClickMode eMode = wlserver_touch_click_mode();
+ 
+ 		if ( eMode == gamescope::TouchClickModes::Passthrough )
+ 		{
+@@ -3309,7 +3354,7 @@ void wlserver_touchdown( double x, double y, int touch_id, uint32_t time, gamesc
+ 		tx *= focusedWindowScaleX;
+ 		ty *= focusedWindowScaleY;
+ 
+-		gamescope::TouchClickMode eMode = GetBackend()->GetTouchClickMode();
++		gamescope::TouchClickMode eMode = wlserver_touch_click_mode();
+ 
+ 		if ( eMode == gamescope::TouchClickModes::Passthrough )
+ 		{
+diff --git a/src/xwayland_ctx.hpp b/src/xwayland_ctx.hpp
+index 7b39ecb..33de3fe 100644
+--- a/src/xwayland_ctx.hpp
++++ b/src/xwayland_ctx.hpp
+@@ -152,6 +152,7 @@ struct xwayland_ctx_t final : public gamescope::IWaitable
+ 		Atom gamescopeFocusedAppAtom;
+ 		Atom gamescopeFocusedAppGfxAtom;
+ 		Atom gamescopeCtrlAppIDAtom;
++		Atom novadeckAndroidAppIDAtom;
+ 		Atom gamescopeCtrlWindowAtom;
+ 		Atom gamescopeInputCounterAtom;
+ 		Atom gamescopeScreenShotAtom;

@@ -1,0 +1,39 @@
+# Google Play for the shared Android container (novadeck-android): the Play Store, Play services,
+# the Services Framework and the privileged-permission / sysconfig files that let them run as
+# system apps, plus a touch keyboard. Staged into /usr/share/novadeck-android/sdk30/ by
+# rootfs/lib-assemble-storage.sh (STAGE android-shared-payload) -- NOT into the guestos slot, so
+# Valve's own Android titles keep the stock image.
+#
+# ANDROID 11 ONLY, hence `sdk: 30`. Lepton's SDK-30 guest is the one this set was measured against
+# upstream (MindTheGapps 11 is built for it). Lepton can also ship an Android 14 guest; novadeck-android
+# reads the installed guest's SDK and says so rather than mounting an Android 11 Play into it.
+#
+# Every artifact is verified: the two whole downloads by their own sha256, and the Play Store --
+# which is read out of the 430 MB MindTheGapps 14 zip with HTTP range requests, so the zip itself is
+# never whole on disk to hash -- by the sha256 of the extracted APK. MindTheGapps 11's Phonesky has no
+# arm64 libraries; 14's needs Android 10+, which the SDK-30 guest satisfies.
+#
+# These are Google's proprietary APKs and they ship inside the image. That was a deliberate choice
+# (2026-09-30), not an accident of the pipeline.
+sdk: 30
+
+mtg11_url: https://github.com/MindTheGapps/11.0.0-arm64/releases/download/MindTheGapps-11.0.0-arm64-20230922_081122/MindTheGapps-11.0.0-arm64-20230922_081122.zip
+mtg11_sha256: a34e054b952b8d5117e5c011b807ef25be1f02d71f0d1ce11db42e89da2962ce
+# Members taken from the MindTheGapps 11 zip. The zip path IS the guest path under the rootfs
+# overlay Lepton bind-mounts (system/... lands at /system/...).
+mtg11_member: system/product/priv-app/PrebuiltGmsCore/PrebuiltGmsCore.apk
+mtg11_member: system/system_ext/priv-app/GoogleServicesFramework/GoogleServicesFramework.apk
+mtg11_member: system/product/etc/permissions/privapp-permissions-google-p.xml
+mtg11_member: system/system_ext/etc/permissions/privapp-permissions-google-se.xml
+mtg11_member: system/product/etc/sysconfig/google.xml
+mtg11_member: system/product/etc/sysconfig/google_build.xml
+mtg11_member: system/product/etc/sysconfig/google-hiddenapi-package-whitelist.xml
+
+mtg14_url: https://github.com/MindTheGapps/14.0.0-arm64/releases/download/MindTheGapps-14.0.0-arm64-20250203_200051/MindTheGapps-14.0.0-arm64-20250203_200051.zip
+phonesky_member: system/product/priv-app/Phonesky/Phonesky.apk
+phonesky_sha256: a11f673c924a5900672793ec631408d0a8b0f50191cc22208da6bd5202e8bdf1
+
+# Lepton ships no keyboard. Simple Keyboard (F-Droid, Apache-2.0).
+keyboard_url: https://f-droid.org/repo/rkr.simplekeyboard.inputmethod_148.apk
+keyboard_sha256: b8affd986041afc9f47f59a3b5953b791a06401fb77682cff551ed4d68c32885
+keyboard_dest: system/product/app/SimpleKeyboard/SimpleKeyboard.apk

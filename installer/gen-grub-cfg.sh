@@ -76,7 +76,7 @@ DTS="$ROOT/kernel/dts/qcom"
 #                         whole reason the pair is split like this rather than using =overlay.
 #   systemd.firstboot=off  belt to the braces of the masked systemd-firstboot.service: this kills
 #                         PID1's own builtin locale/root-password query, which the mask does not.
-BOOT_CMDLINE="quiet loglevel=3 video=efifb:off console=tty0 cgroup.memory=nokmem,nosocket nosoftlockup panic=5"
+BOOT_CMDLINE="quiet loglevel=3 video=efifb:off console=tty0 cgroup.memory=nokmem,nosocket nosoftlockup panic=5 cpuidle.governor=teo"
 INSTALLER_CMDLINE="root=PARTUUID=$PARTUUID rootfstype=squashfs rootwait ro systemd.volatile=state systemd.firstboot=off"
 
 # --- board catalog, read from the SHARED file -------------------------------------------------------

@@ -107,7 +107,9 @@ ESP_MARKER="/SteamOS/conf/$SLOT.conf"
 # `*ERROR*` lines during DPU bring-up, and every one of them lands on top of the boot splash.
 # 3 keeps the genuinely fatal ones and drops the rest. Nothing is lost — the journal still has
 # them all, which is the only place anyone reads them on a board with no serial console.
-BOOT_CMDLINE="quiet loglevel=3 video=efifb:off console=tty0 cgroup.memory=nokmem,nosocket nosoftlockup panic=5"
+# cpuidle.governor=teo picks the TEO idle governor over menu, which would otherwise win on rating;
+# see the cpuidle block in kernel/kernel.config for why.
+BOOT_CMDLINE="quiet loglevel=3 video=efifb:off console=tty0 cgroup.memory=nokmem,nosocket nosoftlockup panic=5 cpuidle.governor=teo"
 
 # --- board catalog ------------------------------------------------------------------------------
 declare -a pids=() pnames=() pdtbs=() pbootargs=()

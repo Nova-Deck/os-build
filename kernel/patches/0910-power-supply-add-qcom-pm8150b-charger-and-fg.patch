@@ -1415,10 +1415,10 @@ index 0000000..41bbdb9
 +MODULE_LICENSE("GPL v2");
 diff --git a/drivers/power/supply/qcom_pm8150b_charger.c b/drivers/power/supply/qcom_pm8150b_charger.c
 new file mode 100644
-index 0000000..20af6b1
+index 0000000..24370d2
 --- /dev/null
 +++ b/drivers/power/supply/qcom_pm8150b_charger.c
-@@ -0,0 +1,940 @@
+@@ -0,0 +1,950 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * Copyright (c) 2024, Teguh Sobirin <teguh@sobir.in>.
@@ -2305,11 +2305,21 @@ index 0000000..20af6b1
 +		return dev_err_probe(chip->dev, rc,
 +				     "Failed to init status change work\n");
 +
-+	rc = (chip->batt_info->voltage_max_design_uv - 3487500) / 7500 + 1;
++	rc = clamp(chip->batt_info->voltage_max_design_uv, 3600000, 4450000);
++	rc = (rc - 3600000) / 10000;
 +	rc = regmap_update_bits(chip->regmap, chip->base + FLOAT_VOLTAGE_CFG,
 +				FLOAT_VOLTAGE_SETTING_MASK, rc);
 +	if (rc < 0)
 +		return dev_err_probe(chip->dev, rc, "Couldn't set vbat max\n");
++
++	rc = chip->batt_info->constant_charge_current_max_ua;
++	if (rc <= 0)
++		rc = min(chip->batt_info->charge_full_design_uah / 2, 3000000);
++	rc = regmap_update_bits(chip->regmap,
++				chip->base + FAST_CHARGE_CURRENT_CFG,
++				FAST_CHARGE_CURRENT_SETTING_MASK, rc / 50000);
++	if (rc < 0)
++		return dev_err_probe(chip->dev, rc, "Couldn't set charge current\n");
 +
 +	rc = smb5_init_irq(chip, &irq, "bat-ov", smb5_handle_batt_overvoltage);
 +	if (rc < 0)

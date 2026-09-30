@@ -9,10 +9,10 @@ Subject: [PATCH] DRMBackend: Add GAMESCOPE_FAKE_OUTPUT_MM env to set custom
  1 file changed, 28 insertions(+), 2 deletions(-)
 
 diff --git a/src/Backends/DRMBackend.cpp b/src/Backends/DRMBackend.cpp
-index 8d652f0..49a7eda 100644
+index 8c1c551c..ed7654ce 100644
 --- a/src/Backends/DRMBackend.cpp
 +++ b/src/Backends/DRMBackend.cpp
-@@ -1029,6 +1029,26 @@ static bool get_saved_mode(const char *description, saved_mode &mode_info)
+@@ -1077,6 +1077,26 @@ static bool get_saved_mode(const char *description, saved_mode &mode_info)
  	return false;
  }
  
@@ -36,23 +36,24 @@ index 8d652f0..49a7eda 100644
 +	*outH = h;
 +}
 +
- static GamescopeBroadcastRGBMode_t s_ExternalBroadcastRGBMode = GAMESCOPE_BROADCAST_RGB_MODE_AUTOMATIC;
+ /* Same identity extraction as CDRMConnector::ParseEDID. */
+ static void parse_edid_identity(const di_edid *pEdid, char (&szMakePNP)[4], char (&szModel)[16])
+ {
+@@ -1333,9 +1353,13 @@ static bool setup_best_connector(struct drm_t *drm, bool force, bool initial)
+ 		drm_unset_mode(drm, force);
+ 		s_HeadlessConnector.RebuildModes();
  
- static bool setup_best_connector(struct drm_t *drm, bool force, bool initial)
-@@ -1079,8 +1099,12 @@ static bool setup_best_connector(struct drm_t *drm, bool force, bool initial)
- 		drm_log.infof("cannot find any connected connector!");
- 		drm_unset_connector(drm);
- 		drm_unset_mode(drm);
 +		int physW = 0, physH = 0;
 +		get_wl_output_phys_mm( 0, 0, &physW, &physH );
+ 		// Steam keys saved modes by the description, so get_last_display_mode reads this name back.
  		const struct wlserver_output_info wlserver_output_info = {
- 			.description = "Virtual screen",
+ 			.description = k_pszVirtualScreenName,
 +			.phys_width = physW,
 +			.phys_height = physH,
  		};
  		wlserver_lock();
  		wlserver_set_output_info(&wlserver_output_info);
-@@ -1136,10 +1160,12 @@ static bool setup_best_connector(struct drm_t *drm, bool force, bool initial)
+@@ -1392,10 +1416,12 @@ static bool setup_best_connector(struct drm_t *drm, bool force, bool initial)
  	// Don't allow rollback of mode_id after connector change
  	drm->current.mode_id = drm->pending.mode_id;
  

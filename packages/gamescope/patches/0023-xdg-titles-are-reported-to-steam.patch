@@ -39,10 +39,10 @@ behind the ConVar.
 Not compiled on its own: validated by the overlay build of the full stack.
 
 diff --git a/src/steamcompmgr.cpp b/src/steamcompmgr.cpp
-index 312647a..9f0cc73 100644
+index ca4e5bf3..3eecbd13 100644
 --- a/src/steamcompmgr.cpp
 +++ b/src/steamcompmgr.cpp
-@@ -5078,12 +5078,20 @@ const char *get_win_display_name(steamcompmgr_win_t *window)
+@@ -5063,12 +5063,20 @@ const char *get_win_display_name(steamcompmgr_win_t *window)
  }
  
  
@@ -63,7 +63,7 @@ index 312647a..9f0cc73 100644
  		// Always skip system tray icons and overlays
  		if ( win->isSysTrayIcon || win->isOverlay || win->isExternalOverlay )
  		{
-@@ -5239,7 +5247,23 @@ determine_and_apply_focus( global_focus_t *pFocus )
+@@ -5224,7 +5232,23 @@ determine_and_apply_focus( global_focus_t *pFocus )
  	for ( steamcompmgr_win_t *focusable_window : vecPossibleFocusWindows )
  	{
  		if ( focusable_window->type != steamcompmgr_win_type_t::XWAYLAND )
@@ -87,7 +87,7 @@ index 312647a..9f0cc73 100644
  
  		// Exclude windows that are useless (1x1), skip taskbar + pager or override redirect windows
  		// from the reported focusable windows to Steam.
-@@ -7075,6 +7099,11 @@ handle_property_notify(xwayland_ctx_t *ctx, XPropertyEvent *ev)
+@@ -7060,6 +7084,11 @@ handle_property_notify(xwayland_ctx_t *ctx, XPropertyEvent *ev)
  		get_prop( ctx, ctx->root, ctx->atoms.gamescopeCtrlAppIDAtom, vecFocuscontrolAppIDs );
  		MakeFocusDirty();
  	}
@@ -99,7 +99,7 @@ index 312647a..9f0cc73 100644
  	if (ev->atom == ctx->atoms.gamescopeCtrlWindowAtom )
  	{
  		ctx->focusControlWindow = get_prop( ctx, ctx->root, ctx->atoms.gamescopeCtrlWindowAtom, None );
-@@ -9118,6 +9147,7 @@ void init_xwayland_ctx(uint32_t serverId, gamescope_xwayland_server_t *xwayland_
+@@ -9111,6 +9140,7 @@ void init_xwayland_ctx(uint32_t serverId, gamescope_xwayland_server_t *xwayland_
  	ctx->atoms.gamescopeFocusedAppGfxAtom = XInternAtom( ctx->dpy, "GAMESCOPE_FOCUSED_APP_GFX", false );
  	ctx->atoms.gamescopeFocusedWindowAtom = XInternAtom( ctx->dpy, "GAMESCOPE_FOCUSED_WINDOW", false );
  	ctx->atoms.gamescopeCtrlAppIDAtom = XInternAtom(ctx->dpy, "GAMESCOPECTRL_BASELAYER_APPID", false);
@@ -108,7 +108,7 @@ index 312647a..9f0cc73 100644
  	ctx->atoms.WMChangeStateAtom = XInternAtom(ctx->dpy, "WM_CHANGE_STATE", false);
  	ctx->atoms.gamescopeInputCounterAtom = XInternAtom(ctx->dpy, "GAMESCOPE_INPUT_COUNTER", false);
 diff --git a/src/steamcompmgr_shared.hpp b/src/steamcompmgr_shared.hpp
-index 66022d7..d105ac2 100644
+index c344d107..5771d19c 100644
 --- a/src/steamcompmgr_shared.hpp
 +++ b/src/steamcompmgr_shared.hpp
 @@ -115,6 +115,9 @@ struct steamcompmgr_win_t {
@@ -120,15 +120,15 @@ index 66022d7..d105ac2 100644
 +	bool bSharedAndroid = false;
  	bool isOverlay = false;
  	bool isExternalOverlay = false;
- 	// Set by per-connector mangoapp instances.
+ 	// mangoapp keeps the property but zeroes it while hidden.
 diff --git a/src/wlserver.cpp b/src/wlserver.cpp
-index 9655dfd..9cfb8ca 100644
+index 3d7d123c..bd1de2bc 100644
 --- a/src/wlserver.cpp
 +++ b/src/wlserver.cpp
-@@ -77,8 +77,10 @@
- #include "gpuvis_trace_utils.h"
+@@ -78,8 +78,10 @@
  
  #include <algorithm>
+ #include <cfloat>
 +#include <fstream>
  #include <list>
  #include <set>
@@ -136,7 +136,7 @@ index 9655dfd..9cfb8ca 100644
  
  static LogScope wl_log("wlserver");
  
-@@ -1998,6 +2000,29 @@ void xdg_toplevel_new(struct wl_listener *listener, void *data)
+@@ -1999,6 +2001,29 @@ void xdg_toplevel_new(struct wl_listener *listener, void *data)
  {
  }
  
@@ -166,7 +166,7 @@ index 9655dfd..9cfb8ca 100644
  wlserver_xdg_surface_info* waylandy_type_surface_new(struct wl_client *client, struct wlr_surface *surface)
  {
  	wlserver_wl_surface_info *wlserver_surface = get_wl_surface_info(surface);
-@@ -2020,6 +2045,8 @@ wlserver_xdg_surface_info* waylandy_type_surface_new(struct wl_client *client, s
+@@ -2021,6 +2046,8 @@ wlserver_xdg_surface_info* waylandy_type_surface_new(struct wl_client *client, s
  		pid_t nPid = 0;
  		wl_client_get_credentials( client, &nPid, nullptr, nullptr );
  		window->appID = gamescope::Process::GetAppIdFromPid( nPid );
@@ -175,7 +175,7 @@ index 9655dfd..9cfb8ca 100644
  	}
  	window->_window_types.emplace<steamcompmgr_xdg_win_t>();
  
-@@ -3228,6 +3255,24 @@ static void apply_touchscreen_orientation(GamescopePanelOrientation orientation,
+@@ -3229,6 +3256,24 @@ static void apply_touchscreen_orientation(GamescopePanelOrientation orientation,
  	*y = ty;
  }
  
@@ -200,7 +200,7 @@ index 9655dfd..9cfb8ca 100644
  void wlserver_touchmotion( double x, double y, int touch_id, uint32_t time, bool bAlwaysWarpCursor, gamescope::IBackendConnector* connector )
  {
  	assert( wlserver_is_lock_held() );
-@@ -3258,7 +3303,7 @@ void wlserver_touchmotion( double x, double y, int touch_id, uint32_t time, bool
+@@ -3259,7 +3304,7 @@ void wlserver_touchmotion( double x, double y, int touch_id, uint32_t time, bool
  		trackpad_dx = tx - wlserver.mouse_surface_cursorx;
  		trackpad_dy = ty - wlserver.mouse_surface_cursory;
  
@@ -209,7 +209,7 @@ index 9655dfd..9cfb8ca 100644
  
  		if ( eMode == gamescope::TouchClickModes::Passthrough )
  		{
-@@ -3309,7 +3354,7 @@ void wlserver_touchdown( double x, double y, int touch_id, uint32_t time, gamesc
+@@ -3310,7 +3355,7 @@ void wlserver_touchdown( double x, double y, int touch_id, uint32_t time, gamesc
  		tx *= focusedWindowScaleX;
  		ty *= focusedWindowScaleY;
  
@@ -219,7 +219,7 @@ index 9655dfd..9cfb8ca 100644
  		if ( eMode == gamescope::TouchClickModes::Passthrough )
  		{
 diff --git a/src/xwayland_ctx.hpp b/src/xwayland_ctx.hpp
-index 7b39ecb..33de3fe 100644
+index 7b39ecb3..33de3fe9 100644
 --- a/src/xwayland_ctx.hpp
 +++ b/src/xwayland_ctx.hpp
 @@ -152,6 +152,7 @@ struct xwayland_ctx_t final : public gamescope::IWaitable

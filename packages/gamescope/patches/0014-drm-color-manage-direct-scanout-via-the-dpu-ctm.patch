@@ -127,7 +127,7 @@ entries for deleted tests) now sit on the pristine signatures instead. Generated
 hand-edited.
 ---
 diff --git a/src/Backends/DRMBackend.cpp b/src/Backends/DRMBackend.cpp
-index 458ad5e..051dcc7 100644
+index ed7654ce..6c809efe 100644
 --- a/src/Backends/DRMBackend.cpp
 +++ b/src/Backends/DRMBackend.cpp
 @@ -30,6 +30,7 @@
@@ -138,7 +138,7 @@ index 458ad5e..051dcc7 100644
  #include "Utils/Defer.h"
  #include "Utils/Parsers.h"
  #include "Utils/String.h"
-@@ -137,6 +138,10 @@ struct drm_t {
+@@ -138,6 +139,10 @@ struct drm_t {
  		std::shared_ptr<gamescope::BackendBlob> lut3d_id[ EOTF_Count ];
  		std::shared_ptr<gamescope::BackendBlob> shaperlut_id[ EOTF_Count ];
  		amdgpu_transfer_function output_tf = AMDGPU_TRANSFER_FUNCTION_DEFAULT;
@@ -149,7 +149,7 @@ index 458ad5e..051dcc7 100644
  	} current, pending;
  
  	// FBs in the atomic request, but not yet submitted to KMS
-@@ -573,6 +578,10 @@ extern std::string g_reshade_effect;
+@@ -574,6 +579,10 @@ extern std::string g_reshade_effect;
  
  bool drm_update_color_mgmt(struct drm_t *drm);
  bool drm_supports_color_mgmt(struct drm_t *drm);
@@ -160,7 +160,7 @@ index 458ad5e..051dcc7 100644
  bool drm_set_connector( struct drm_t *drm, gamescope::CDRMConnector *conn );
  
  struct drm_color_ctm2 {
-@@ -3203,8 +3212,12 @@ int drm_prepare( struct drm_t *drm, bool async, const struct FrameInfo_t *frameI
+@@ -3450,8 +3459,12 @@ int drm_prepare( struct drm_t *drm, bool async, const struct FrameInfo_t *frameI
  			if ( drm->pCRTC->GetProperties().DEGAMMA_LUT )
  				drm->pCRTC->GetProperties().DEGAMMA_LUT->SetPendingValue( drm->req, 0, true );
  
@@ -174,7 +174,7 @@ index 458ad5e..051dcc7 100644
  
  			if ( drm->pCRTC->GetProperties().VRR_ENABLED )
  				drm->pCRTC->GetProperties().VRR_ENABLED->SetPendingValue( drm->req, bVRREnabled, true );
-@@ -3229,6 +3242,13 @@ int drm_prepare( struct drm_t *drm, bool async, const struct FrameInfo_t *frameI
+@@ -3476,6 +3489,13 @@ int drm_prepare( struct drm_t *drm, bool async, const struct FrameInfo_t *frameI
  
  	if ( drm->pCRTC && !bSleep )
  	{
@@ -188,7 +188,7 @@ index 458ad5e..051dcc7 100644
  		if ( drm->pCRTC->GetProperties().AMD_CRTC_REGAMMA_TF )
  		{
  			if ( !cv_drm_debug_disable_regamma_tf )
-@@ -3665,6 +3685,108 @@ bool drm_supports_color_mgmt(struct drm_t *drm)
+@@ -3932,6 +3952,108 @@ bool drm_supports_color_mgmt(struct drm_t *drm)
  	return drm->pPrimaryPlane->GetProperties().AMD_PLANE_CTM.has_value() && drm->pPrimaryPlane->GetProperties().AMD_PLANE_BLEND_TF.has_value();
  }
  
@@ -297,7 +297,7 @@ index 458ad5e..051dcc7 100644
  std::span<const uint32_t> drm_get_valid_refresh_rates( struct drm_t *drm )
  {
  	if ( drm && drm->pConnector )
-@@ -3748,6 +3870,15 @@ namespace gamescope
+@@ -4018,6 +4140,15 @@ namespace gamescope
  
  			bool bWantsPartialComposite = pFrameInfo->layers.count() >= 3 && !kDisablePartialComposition;
  
@@ -313,7 +313,7 @@ index 458ad5e..051dcc7 100644
  			static bool s_bWasFirstFrame = true;
  			bool bWasFirstFrame = s_bWasFirstFrame;
  			s_bWasFirstFrame = false;
-@@ -3793,12 +3924,23 @@ namespace gamescope
+@@ -4070,12 +4201,23 @@ namespace gamescope
  			bNeedsFullComposite |= !!(g_uCompositeDebug & CompositeDebugFlag::Heatmap);
  			bNeedsFullComposite |= g_uOutputRotation != 0; // can't rotate planes at scanout
  
@@ -337,7 +337,7 @@ index 458ad5e..051dcc7 100644
  				int ret = drm_prepare( &g_DRM, bAsync, pFrameInfo );
  				if ( ret == 0 )
  					bDoComposite = false;
-@@ -3826,6 +3968,15 @@ namespace gamescope
+@@ -4103,6 +4245,15 @@ namespace gamescope
  			if ( kDisablePartialComposition )
  				bNeedsFullComposite = true;
  
@@ -353,7 +353,7 @@ index 458ad5e..051dcc7 100644
  			FrameInfo_t compositeFrameInfo = *pFrameInfo;
  
  			if ( compositeFrameInfo.layers.count() == 1 )
-@@ -3983,6 +4134,10 @@ namespace gamescope
+@@ -4260,6 +4411,10 @@ namespace gamescope
  				m_bWasPartialCompositing = true;
  			}
  
@@ -364,7 +364,7 @@ index 458ad5e..051dcc7 100644
  			int ret = drm_prepare( &g_DRM, bAsync, &presentCompFrameInfo );
  
  			// Happens when we're VT-switched away
-@@ -4000,6 +4155,7 @@ namespace gamescope
+@@ -4277,6 +4432,7 @@ namespace gamescope
  				xwm_log.errorf("Failed to prepare 1-layer flip (%s), trying again with previous mode if modeset needed", strerror( -ret ));
  
  				// Try once again to in case we need to fall back to another mode.
@@ -374,7 +374,7 @@ index 458ad5e..051dcc7 100644
  				// Happens when we're VT-switched away
 diff --git a/src/Backends/DRMColorPipeline.h b/src/Backends/DRMColorPipeline.h
 new file mode 100644
-index 0000000..8b097d6
+index 00000000..8b097d6b
 --- /dev/null
 +++ b/src/Backends/DRMColorPipeline.h
 @@ -0,0 +1,80 @@
@@ -459,7 +459,7 @@ index 0000000..8b097d6
 +    }
 +}
 diff --git a/src/color_helpers.cpp b/src/color_helpers.cpp
-index 64430a5..6459ef2 100644
+index 64430a5f..6459ef2b 100644
 --- a/src/color_helpers.cpp
 +++ b/src/color_helpers.cpp
 @@ -828,6 +828,101 @@ void calcColorTransform( lut1d_t * pShaper, int nLutSize1d,
@@ -565,7 +565,7 @@ index 64430a5..6459ef2 100644
  {
      // Use red as a sentinal for a wide-gamut display
 diff --git a/src/color_helpers.h b/src/color_helpers.h
-index cefa74e..29dd0b1 100644
+index cefa74e4..29dd0b10 100644
 --- a/src/color_helpers.h
 +++ b/src/color_helpers.h
 @@ -5,6 +5,7 @@
@@ -612,10 +612,10 @@ index cefa74e..29dd0b1 100644
  // Note: the output colorimetry will use the native display's white point
  // Only the color gamut will change
 diff --git a/src/rendervulkan.hpp b/src/rendervulkan.hpp
-index b5937ae..3f5013a 100644
+index fa519db6..f461ca8f 100644
 --- a/src/rendervulkan.hpp
 +++ b/src/rendervulkan.hpp
-@@ -561,6 +561,10 @@ struct gamescope_color_mgmt_tracker_t
+@@ -576,6 +576,10 @@ struct gamescope_color_mgmt_tracker_t
  extern gamescope_color_mgmt_tracker_t g_ColorMgmt;
  extern gamescope_color_mgmt_luts g_ColorMgmtLuts[ EOTF_Count ];
  
@@ -627,10 +627,10 @@ index b5937ae..3f5013a 100644
  {
  	VkSurfaceKHR surface;
 diff --git a/src/steamcompmgr.cpp b/src/steamcompmgr.cpp
-index 974f8ae..b1ef5c2 100644
+index 4848bcd2..908a39c7 100644
 --- a/src/steamcompmgr.cpp
 +++ b/src/steamcompmgr.cpp
-@@ -140,6 +140,15 @@ std::atomic<uint64_t> g_FocusedVROverlayKeyboard;
+@@ -146,6 +146,15 @@ std::atomic<uint64_t> g_FocusedVROverlayKeyboard;
  
  gamescope_color_mgmt_tracker_t g_ColorMgmt{};
  
@@ -646,7 +646,7 @@ index 974f8ae..b1ef5c2 100644
  static gamescope_color_mgmt_luts g_ColorMgmtLutsOverride[ EOTF_Count ];
  std::atomic<std::shared_ptr<lut3d_t>> g_ColorMgmtLooks[EOTF_Count];
  
-@@ -319,11 +328,20 @@ static const gamescope_color_mgmt_t k_ScreenshotColorMgmtHDR =
+@@ -327,11 +336,20 @@ static const gamescope_color_mgmt_t k_ScreenshotColorMgmtHDR =
  // sudo cpupower frequency-set --governor performance
  
  static void
@@ -668,7 +668,7 @@ index 974f8ae..b1ef5c2 100644
  	for ( uint32_t nInputEOTF = 0; nInputEOTF < EOTF_Count; nInputEOTF++ )
  	{
  		if (!outColorMgmtLuts[nInputEOTF].vk_lut1d)
-@@ -422,6 +440,20 @@ create_color_mgmt_luts(const gamescope_color_mgmt_t& newColorMgmt, gamescope_col
+@@ -434,6 +452,20 @@ create_color_mgmt_luts(const gamescope_color_mgmt_t& newColorMgmt, gamescope_col
  				newColorMgmt.outputVirtualWhite, newColorMgmt.chromaticAdaptationMode,
  				colorMapping, newColorMgmt.nightmode, tonemapping, pLook, flGain );
  
@@ -689,7 +689,7 @@ index 974f8ae..b1ef5c2 100644
  			// Create quantized output luts
  			for ( size_t i=0, end = g_tmpLut1d.dataR.size(); i<end; ++i )
  			{
-@@ -485,12 +517,17 @@ update_color_mgmt()
+@@ -621,12 +653,17 @@ update_color_mgmt()
  
  	if (g_ColorMgmt.pending.enabled)
  	{
@@ -709,7 +709,7 @@ index 974f8ae..b1ef5c2 100644
  
  #ifdef COLOR_MGMT_MICROBENCH
 diff --git a/tests/meson.build b/tests/meson.build
-index 9f73a337..c54657d5 100644
+index 89fca19a..8920483a 100644
 --- a/tests/meson.build
 +++ b/tests/meson.build
 @@ -5,10 +5,12 @@ unittest_src = []
@@ -721,14 +721,14 @@ index 9f73a337..c54657d5 100644
  
  gamescope_tests = executable(
  	'gamescope_tests',
--	unittest_src + ['test_convar.cpp', 'test_focus_placement.cpp', 'test_mangoapp_config.cpp', 'test_mangoapp_control.cpp', 'test_process.cpp', 'test_upscale.cpp', 'test_utils_parsers.cpp', 'test_utils_string.cpp', 'test_vrclient_detect.cpp'],
-+	unittest_src + ['test_convar.cpp', 'test_drm_color_pipeline.cpp', 'test_focus_placement.cpp', 'test_mangoapp_config.cpp', 'test_mangoapp_control.cpp', 'test_process.cpp', 'test_upscale.cpp', 'test_utils_parsers.cpp', 'test_utils_string.cpp', 'test_vrclient_detect.cpp'],
+-	unittest_src + ['test_convar.cpp', 'test_focus_placement.cpp', 'test_mangoapp_config.cpp', 'test_mangoapp_control.cpp', 'test_mode_list.cpp', 'test_process.cpp', 'test_upscale.cpp', 'test_utils_parsers.cpp', 'test_utils_string.cpp', 'test_vrclient_detect.cpp'],
++	unittest_src + ['test_convar.cpp', 'test_drm_color_pipeline.cpp', 'test_focus_placement.cpp', 'test_mangoapp_config.cpp', 'test_mangoapp_control.cpp', 'test_mode_list.cpp', 'test_process.cpp', 'test_upscale.cpp', 'test_utils_parsers.cpp', 'test_utils_string.cpp', 'test_vrclient_detect.cpp'],
  	include_directories: [srcdir, sol2_include],
  	dependencies: [catch2_dep, luajit_dep, cap_dep, drm_dep, glm_dep, wlroots_dep],
  	cpp_args: gamescope_cpp_args,
 diff --git a/tests/test_drm_color_pipeline.cpp b/tests/test_drm_color_pipeline.cpp
 new file mode 100644
-index 0000000..bef6ff8
+index 00000000..bef6ff8e
 --- /dev/null
 +++ b/tests/test_drm_color_pipeline.cpp
 @@ -0,0 +1,217 @@

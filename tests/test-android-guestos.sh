@@ -322,22 +322,25 @@ grep -q 'MESA_ANDROID_SRC.*\\' "$MAKEFILE" && grep -qF 'packages/mesa/patches/*.
     || bad "MESA_ANDROID_SRC does not track packages/mesa/patches -- a patch change would not rebuild the Android driver"
 
 echo
-echo "the fossilize stub layer (Lepton enables it unconditionally)"
+echo "the fossilize layer (Lepton enables it unconditionally)"
 
-LAYER_JSON="$ROOT/packages/fossilize-stub-android/layer.json"
-LAYER_C="$ROOT/packages/fossilize-stub-android/layer.c"
+LAYER_JSON="$ROOT/packages/fossilize-android/layer.json"
+LAYER_PIN="$ROOT/packages/fossilize-android/builder.pin"
 SLOT_LAYER_PATH="/usr/share/guestos/android/vendor/vulkan_layers/libVkLayer_fossilize.so"
 
 # 18. The package exists and the assembler hard-requires its payload. Lepton calls
 #     enable_vulkan_layer for fossilize with NO env guard (unlike the RPO/FDM layers beside it) and
 #     runs under `set -e`, so an absent layer is a fatal launch failure for EVERY Android title --
 #     not a rendering degradation. A best-effort staging here would reintroduce exactly that.
-[[ -f $LAYER_C && -f $LAYER_JSON ]] \
-    && ok "packages/fossilize-stub-android ships the layer source and its manifest" \
-    || bad "the fossilize stub package is incomplete -- no Android title can launch without it"
+[[ -f $LAYER_PIN && -f $LAYER_JSON ]] \
+    && ok "packages/fossilize-android ships its source pin and its manifest" \
+    || bad "the fossilize package is incomplete -- no Android title can launch without it"
+[[ $(pin_field "$LAYER_PIN" fossilize_commit) =~ ^[0-9a-f]{40}$ ]] \
+    && ok "the upstream Fossilize source is pinned to a full commit sha" \
+    || bad "builder.pin has no full fossilize_commit -- the layer would build from whatever upstream is"
 
-grep -q 'fossilize stub payload missing' "$ASSEMBLE" \
-    && ok "the assembler hard-requires the stub payload (not best-effort)" \
+grep -q 'fossilize payload missing' "$ASSEMBLE" \
+    && ok "the assembler hard-requires the fossilize payload (not best-effort)" \
     || bad "the assembler does not hard-require the fossilize payload -- a missing layer would ship silently"
 
 # 19. The manifest is the OTHER half. get_vulkan_layer_id maps the .so basename to a layer ID via
@@ -348,6 +351,12 @@ grep -qF "$SLOT_LAYER_PATH" "$LAYER_JSON" \
     && ok "layer.json's library_path names the slot path the assembler stages to" \
     || bad "layer.json does not point at $SLOT_LAYER_PATH -- the layer ID lookup would find nothing"
 
+# The ID Lepton writes into the guest's gpu_debug_layers must be the name the .so itself reports
+# (dispatch.cpp: VK_LAYER_fossilize), or Android's loader enables nothing under that name.
+grep -q '"name": "VK_LAYER_fossilize"' "$LAYER_JSON" \
+    && ok "layer.json names the layer VK_LAYER_fossilize, the ID upstream Fossilize reports" \
+    || bad "layer.json's name is not VK_LAYER_fossilize -- the guest would be told to enable a layer the .so does not provide"
+
 grep -q 'the staged vulkan layer manifest does not point at the staged layer' "$ASSEMBLE" \
     && ok "the assembler re-checks that pairing at build time" \
     || bad "nothing verifies the manifest still matches the staged layer"
@@ -356,7 +365,7 @@ grep -q 'the staged vulkan layer manifest does not point at the staged layer' "$
 #     Android/bionic .so; if the host loader finds it, every host vulkan app tries to load a
 #     library it cannot possibly use. Lepton's find is recursive, so a sibling dir serves both.
 if grep -qE 'usr/share/vulkan/(implicit|explicit)_layer\.d/[^"]*fossilize' "$ASSEMBLE"; then
-    bad "the stub manifest is staged into a *_layer.d/ dir -- the HOST loader would try to load a bionic .so"
+    bad "the layer manifest is staged into a *_layer.d/ dir -- the HOST loader would try to load a bionic .so"
 else
     ok "the manifest avoids implicit_layer.d/explicit_layer.d (invisible to the host loader)"
 fi
@@ -368,7 +377,7 @@ grep -q 'usr/share/vulkan/novadeck-guest-layer.d' "$ASSEMBLE" \
 #     indistinguishable from a missing layer -- the same class of bug as `which` and inotify-tools.
 #
 #     RELEASE cards need it as much as dev ones, so PKGS is where it belongs. It is parked in
-#     DEV_PKGS only to let the fossilize-stub HW test build without a relock first (a PKGS entry
+#     DEV_PKGS only to let the fossilize HW test build without a relock first (a PKGS entry
 #     with no lock row fails the build outright: `unsatisfied: jq`). This check passes either way
 #     but SAYS which, so the release obligation cannot be forgotten silently -- a release card built
 #     while it sits in DEV_PKGS has no jq, and every Lepton launch dies.
@@ -383,10 +392,10 @@ fi
 
 # 22. The build must gate what it produces: a host-arch or glibc-linked .so cannot load in the
 #     bionic guest, and Android's loader reports nothing useful when it fails.
-CB="$ROOT/packages/fossilize-stub-android/container-build.sh"
-grep -q 'AArch64' "$CB" && grep -q 'links glibc' "$CB" \
-    && grep -q 'vkNegotiateLoaderLayerInterfaceVersion is not exported' "$CB" \
-    && ok "the build gates arch, libc and the exported loader entry point" \
+CB="$ROOT/packages/fossilize-android/container-build.sh"
+grep -q 'AArch64' "$CB" && grep -q 'NEEDs a library the bionic guest cannot provide' "$CB" \
+    && grep -q 'Android.s loader cannot bind the layer' "$CB" \
+    && ok "the build gates arch, NEEDED libraries and the exported loader entry points" \
     || bad "the container build does not gate the payload -- a wrong-arch or glibc layer could ship"
 
 echo

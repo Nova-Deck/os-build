@@ -212,11 +212,11 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
-  # The fossilize STUB layer Lepton's Android guest requires, built with the same x86-only NDK
+  # The fossilize layer Lepton's Android guest requires, built with the same x86-only NDK
   # as mesa-android and so for the same reason in its own x86 job. The pinned archlinux image
   # has no arm64 variant: run on the arm64 build runner it dies with `exec format error`.
-  fossilize-stub-android:
-    name: fossilize-stub-android payload
+  fossilize-android:
+    name: fossilize-android payload
     if: inputs.artifact != 'installer'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -224,28 +224,28 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/cache@v6
         with:
-          path: work/fossilize-stub-android
-          key: fossilize-stub-android-${{ hashFiles('packages/fossilize-stub-android/**') }}
-      - name: build the fossilize stub layer
-        run: make fossilize-stub-android
+          path: work/fossilize-android
+          key: fossilize-android-${{ hashFiles('packages/fossilize-android/**') }}
+      - name: build the fossilize layer
+        run: make fossilize-android
       - name: upload the payload
         uses: actions/upload-artifact@v7
         with:
-          name: fossilize-stub-android-payload
-          path: work/fossilize-stub-android
+          name: fossilize-android-payload
+          path: work/fossilize-android
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 3
 
   build:
     name: ${{ inputs.artifact }}
-    needs: [mesa-x86, lsfg-vk-x86, mesa-android, fossilize-stub-android]
+    needs: [mesa-x86, lsfg-vk-x86, mesa-android, fossilize-android]
     # A SKIPPED `needs` SKIPS THE DEPENDENT JOB, which is how an installer release would otherwise
     # produce nothing at all while reporting green -- and EVERY payload job skips for the installer,
     # so this guard carries the whole weight. `!cancelled()` rather than `always()` so a
     # cancelled run still stops, and `!= 'failure'` per job so a payload that genuinely broke still
     # blocks the artifacts that contain it, while a skipped one does not.
-    if: ${{ !cancelled() && needs.mesa-x86.result != 'failure' && needs.lsfg-vk-x86.result != 'failure' && needs.mesa-android.result != 'failure' && needs.fossilize-stub-android.result != 'failure' }}
+    if: ${{ !cancelled() && needs.mesa-x86.result != 'failure' && needs.lsfg-vk-x86.result != 'failure' && needs.mesa-android.result != 'failure' && needs.fossilize-android.result != 'failure' }}
     runs-on: ${{ vars.OVERLAY_RUNNER || 'ubuntu-24.04-arm' }}
     # THE ENVIRONMENT IS THE AUTHORIZATION BOUNDARY FOR SIGNING, and it has to be declared here
     # rather than by the caller: a reusable workflow's job cannot be attached to an environment from
@@ -338,13 +338,13 @@ jobs:
           name: mesa-android-payload
           path: work/mesa-android
 
-      # And the fossilize stub layer for the same guest.
-      - name: fetch the fossilize-stub-android payload
+      # And the fossilize layer for the same guest.
+      - name: fetch the fossilize-android payload
         if: inputs.artifact != 'installer'
         uses: actions/download-artifact@v8
         with:
-          name: fossilize-stub-android-payload
-          path: work/fossilize-stub-android
+          name: fossilize-android-payload
+          path: work/fossilize-android
 
       # ~34 minutes cold for the 8 from-source packages. The runner is fresh, so this is always
       # cold; there is no stamp cache to hit here the way there is on a dev box.

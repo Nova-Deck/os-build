@@ -1,11 +1,11 @@
 {
     "file_format_version": "1.2.0",
     "layer": {
-        "name": "VK_LAYER_novadeck_fossilize_stub",
+        "name": "VK_LAYER_fossilize",
         "type": "GLOBAL",
         "library_path": "/usr/share/guestos/android/vendor/vulkan_layers/libVkLayer_fossilize.so",
-        "api_version": "1.1.0",
+        "api_version": "1.4.303",
         "implementation_version": "1",
-        "description": "novadeck no-op stand-in for libVkLayer_fossilize.so (Android guest, see packages/fossilize-stub-android)"
+        "description": "Fossilize capture layer (Android guest, see packages/fossilize-android)"
     }
 }

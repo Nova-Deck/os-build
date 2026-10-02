@@ -39,7 +39,7 @@ pkgname=(
   vulkan-freedreno
   vulkan-mesa-layers
 )
-pkgver=26.2.3
+pkgver=26.2.4
 _pkgver=${pkgver/[a-z]/-&}
 pkgrel=1
 epoch=1
@@ -128,7 +128,7 @@ source=(
 # match is not automatically an attack — mesa can rotate release managers, and hence signing keys,
 # at a branch bump — but it is a stop-and-establish-trust-out-of-band, not a hash to paste in.
 sha256sums=(
-  '1628058a8d2c0615975de5a15ab7bbb9638c50000b5bed9456ff423ea034a81f'
+  'bce5f7fbebb934373b86c999a064d52fb5065878dc57f287f95346648ec832e9'
 )
 
 prepare() {

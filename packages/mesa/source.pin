@@ -18,8 +18,8 @@
 #                  ./patches/README.md for what each one is and when it can be dropped.
 #
 # Upstream source (informational; the URL + sha also live in the PKGBUILD):
-#   url:    https://archive.mesa3d.org/mesa-26.2.3.tar.xz
-#   sha256: 1628058a8d2c0615975de5a15ab7bbb9638c50000b5bed9456ff423ea034a81f
+#   url:    https://archive.mesa3d.org/mesa-26.2.4.tar.xz
+#   sha256: bce5f7fbebb934373b86c999a064d52fb5065878dc57f287f95346648ec832e9
 #
 # To bump mesa: edit pkgver (and the tarball sha256) in packages/mesa/PKGBUILD, update the
 # url/sha256 lines above, and re-roll any patches under ./patches/ against the new tag.

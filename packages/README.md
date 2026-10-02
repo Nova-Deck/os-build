@@ -179,7 +179,7 @@ packages/inputhash.sh packages/mesa         # what the tree says now
 ```
 
 `.stamps/<name>.files` is the other half, and the more load-bearing one: it maps a package directory
-to the several artifacts it emitted (`mesa` emits five), and both `genmanifest.sh` and `fetchlock.sh`
+to the several artifacts it emitted (`mesa` emits four), and both `genmanifest.sh` and `fetchlock.sh`
 hard-fail without it.
 
 **There is no shared artifact cache.** A GHCR store keyed by the same input hash existed until
@@ -208,8 +208,8 @@ only ever verified on the machine that last ran `make relock`. Consequences wort
 
 - Rebuilding a package changes nothing in the lock. Editing a patch or bumping a pin **does**, and
   `fetchlock` will say so by name and ask for `make relock`.
-- One split PKGBUILD legitimately gives several rows the same hash (`mesa` emits `mesa`,
-  `vulkan-freedreno`, `vulkan-mesa-device-select`). **All of them move together.** Hand-editing the
+- One split PKGBUILD legitimately gives several rows the same hash (`mesa` emits `mesa`
+  and `vulkan-freedreno`, both installed). **All of them move together.** Hand-editing the
   row whose name matches the package *directory* and stopping there is a real mistake that has
   happened (`ab3121b`, fixed in `5f15a19`): it looks correct on 7 of our 8 packages, because only
   `mesa` is split. `make verify-lock` catches it in a second and names the owning package;

@@ -102,12 +102,25 @@ EOF
 # libEGL_mesa.so each carry their own copy -- acceptable because libdrm is a thin ioctl wrapper
 # whose state is per-fd, and buffers cross to the guest's gralloc as fds and handles, never as
 # shared libdrm globals.
+#
+# -Dandroid-strict=false IS WHAT LETS ZINK RUN AT ALL. (The guest is held on freedreno for now by
+# rootfs/overlay's novadeck-gfx.rc, for a separate black-bar problem; this keeps zink one .rc away.)
+# The option defaults to true, and with it the
+# common Vulkan runtime hides every extension Android had not adopted by -Dplatform-sdk-version from
+# Turnip's lists (vk_physical_device.c, vk_device.c). The guest is API 30 and its loader caps the
+# instance at 1.3, so zink runs at Vulkan 1.3 -- where VK_KHR_maintenance5, a zink hard
+# requirement, is an extension, and that table admits it only from API 35. Zink then refuses the
+# screen, eglInitialize fails, and SurfaceFlinger aborts the guest ~4s into boot. Measured on a
+# Pocket FIT 2026-10-01 with diagnostic logging: 142 device extensions enumerated, maintenance5 not
+# among them, `VK_KHR_maintenance5 required! vk_version=1.3 device=1.4 loader=1.3`. The flag
+# touches nothing else in a Turnip build: freedreno has no ANDROID_STRICT code of its own.
 meson setup build-android \
   --cross-file /tmp/cross-android \
   --buildtype release \
   -Db_ndebug=true \
   -Dplatforms=android \
   -Dplatform-sdk-version="${ANDROID_API}" \
+  -Dandroid-strict=false \
   -Dandroid-stub=true \
   -Dandroid-libbacktrace=disabled \
   -Dgallium-drivers=freedreno,zink \

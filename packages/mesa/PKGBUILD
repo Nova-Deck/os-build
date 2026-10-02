@@ -1,12 +1,25 @@
 # novadeck mesa — built FROM SOURCE off the upstream release TARBALL (not a git clone, not the
 # holo binary repo). This tracks the stock Arch/holo mesa recipe AS CLOSELY AS POSSIBLE so the
 # freedreno driver is built exactly the way upstream builds it; the ONLY deliberate deviations are:
-#   * driver selection      — gallium-drivers / vulkan-drivers narrowed to `freedreno` (novadeck
-#                             only ever targets Qualcomm Adreno), which also drops every other
-#                             vulkan-*/opencl/docs split package and the NVK rust-crate machinery.
+#   * driver selection      — gallium-drivers narrowed to `freedreno,zink` and vulkan-drivers to
+#                             `freedreno` (novadeck only ever targets Qualcomm Adreno), which also
+#                             drops every other vulkan-*/opencl/docs split package and the NVK
+#                             rust-crate machinery. zink is GL-over-Turnip; it is only used when
+#                             MESA_LOADER_DRIVER_OVERRIDE=zink selects it (see session.conf).
 #   * gallium-rusticl=false — no OpenCL on a handheld; avoids dragging the Rust toolchain + a
 #                             per-release rust-crate table that would need regenerating each bump.
 #   * html-docs=disabled    — no Sphinx HTML docs in the image.
+#   * no device-select layer — upstream's vulkan-mesa-device-select split package is not built.
+#                             Every board has exactly one GPU, so it has nothing to select, and its
+#                             presence BREAKS x86 GL: zink requests VK_LAYER_MESA_device_select BY
+#                             NAME whenever the loader enumerates it (src/gallium/drivers/zink/
+#                             zink_instance.py, LAYERS). pressure-vessel hands an x86 game's loader
+#                             this host's aarch64 implicit-layer manifests, so the layer is listed
+#                             but its .so cannot load, and vkCreateInstance fails with
+#                             VK_ERROR_LAYER_NOT_PRESENT ("Requested layer ... failed to load!").
+#                             NODEVICE_SELECT=1 does not help: it gates implicit activation, not
+#                             enumeration. Other unloadable aarch64 layers are harmless because
+#                             nothing requests them by name.
 # Everything else (arch-meson invocation, --auto-features=enabled behaviour, the rest of the meson
 # options, the kept makedepends, and the package split for the components we DO build) mirrors
 # upstream. LLVM/clang stay ON, exactly as upstream ships mesa.
@@ -24,7 +37,6 @@ pkgbase=mesa
 pkgname=(
   mesa
   vulkan-freedreno
-  vulkan-mesa-device-select
   vulkan-mesa-layers
 )
 pkgver=26.2.3
@@ -132,9 +144,9 @@ prepare() {
 
 # llvm=disabled is a SIZE decision with no functional cost here, and it is worth spelling out
 # because "mesa without LLVM" usually means "no software rendering". Not in this build:
-# llvmpipe and softpipe are gallium drivers, and `gallium-drivers=freedreno` above never selects
+# llvmpipe and softpipe are gallium drivers, and `gallium-drivers=freedreno,zink` above never selects
 # them — there is no swrast driver on the image to lose (usr/lib/dri/ holds only the dril loader).
-# What DID link libLLVM was gallium's `draw` module, which freedreno does not use: it is for
+# What DID link libLLVM was gallium's `draw` module, which neither freedreno nor zink uses: it is for
 # drivers that do vertex processing on the CPU. So the meson default (llvm=auto, enabled because
 # llvm-config exists in the builder) was dragging a 151MB JIT onto a sealed read-only root to
 # serve nothing. rusticl is already off for the same family of reasons.
@@ -145,7 +157,7 @@ build() {
   local meson_options=(
     -D android-libbacktrace=disabled
     -D b_ndebug=true
-    -D gallium-drivers=freedreno              # novadeck: Adreno only (upstream builds every vendor)
+    -D gallium-drivers=freedreno,zink         # novadeck: Adreno only (upstream builds every vendor)
     -D gallium-extra-hud=true
     -D gallium-mediafoundation=disabled
     -D gallium-rusticl=false                  # novadeck: no OpenCL (avoids LLVM/Rust crate chain)
@@ -160,7 +172,7 @@ build() {
     -D valgrind=enabled
     -D video-codecs=all
     -D vulkan-drivers=freedreno               # novadeck: Turnip only
-    -D vulkan-layers=device-select,intel-nullhw,overlay,screenshot,vram-report-limit
+    -D vulkan-layers=intel-nullhw,overlay,screenshot,vram-report-limit   # novadeck: no device-select (see header)
   )
 
   # Build only minimal debug info to reduce size (matches upstream).
@@ -206,6 +218,8 @@ package_mesa() {
     # installing the 151MB package for a libgallium that no longer NEEDs it.
     lm_sensors
     spirv-tools
+    # zink dlopen()s libvulkan.so.1 rather than linking it, so readelf NEEDED will not show it.
+    vulkan-icd-loader
     wayland
     zlib
     zstd
@@ -242,9 +256,6 @@ package_mesa() {
     _pick vkfdreno $icddir/freedreno_icd.*.json
     _pick vkfdreno $libdir/libvulkan_freedreno.so
 
-    _pick vkdevice $libdir/libVkLayer_MESA_device_select.so
-    _pick vkdevice usr/share/vulkan/implicit_layer.d
-
     _pick vklayer $libdir/libVkLayer_*.so
     _pick vklayer usr/bin/mesa-*-control.py
     _pick vklayer usr/share/vulkan/explicit_layer.d
@@ -271,7 +282,6 @@ package_vulkan-freedreno() {
     spirv-tools
     systemd-libs
     vulkan-icd-loader
-    vulkan-mesa-device-select
     wayland
     xcb-util-keysyms
     zlib
@@ -281,20 +291,6 @@ package_vulkan-freedreno() {
   provides=(vulkan-driver)
 
   mv vkfdreno/* "$pkgdir"
-
-  install -Dm644 mesa-$_pkgver/docs/license.rst -t "$pkgdir/usr/share/licenses/$pkgname"
-}
-
-package_vulkan-mesa-device-select() {
-  pkgdesc="Mesa's Vulkan Device Select layer"
-  depends=(
-    glibc
-    libdrm
-    libxcb
-    wayland
-  )
-
-  mv vkdevice/* "$pkgdir"
 
   install -Dm644 mesa-$_pkgver/docs/license.rst -t "$pkgdir/usr/share/licenses/$pkgname"
 }

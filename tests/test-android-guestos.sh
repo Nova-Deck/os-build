@@ -106,18 +106,27 @@ grep -q 'mesa-android payload incomplete' "$ASSEMBLE" \
     || bad "assembler does not hard-require the mesa-android payload"
 
 echo
-echo "the driver-selection init script"
+echo "driver selection (GLES on freedreno)"
 
-# Lepton forces mesa.loader.driver.override=zink, which cannot create a DRI2 screen with our build:
-# SurfaceFlinger aborts and the guest dies ~4s in, surfacing as an APK install that fails with
-# "adb: device offline" -- nowhere near the cause. The .rc that overrides it back to freedreno is
-# the difference between a rendering guest and a dead one, and it arrives from rootfs/overlay rather
-# than the mesa build, so nothing in packages/ would notice if it vanished.
+# Turnip is built with -Dandroid-strict=false. With the default (true) the common Vulkan runtime
+# hides every extension Android had not adopted by API 30, VK_KHR_maintenance5 among them; zink
+# requires it at the guest loader's Vulkan 1.3, refuses the screen, and -- whenever the guest runs
+# on zink -- SurfaceFlinger aborts ~4s into boot, surfacing as an APK install that fails with
+# "adb: device offline". Kept even while the guest is on freedreno, so flipping back to zink is
+# only the .rc below.
+grep -q -- '-Dandroid-strict=false' "$CONTAINER_SH" \
+    && ok "Turnip is built with -Dandroid-strict=false (zink needs maintenance5 at Vulkan 1.3)" \
+    || bad "-Dandroid-strict=false is gone -- zink would lose VK_KHR_maintenance5 and kill the guest"
+
+# Lepton forces mesa.loader.driver.override=zink. Zink runs, but its frames flash black bars on our
+# host stack (with Valve's own guest Mesa too), so the .rc puts the guest on freedreno. It arrives
+# from rootfs/overlay rather than the mesa build, so nothing in packages/ would notice if it
+# vanished.
 RC="$ROOT/rootfs/overlay/$SLOT/vendor/etc/init/novadeck-gfx.rc"
 if [[ -s $RC ]]; then
     ok "rootfs/overlay ships vendor/etc/init/novadeck-gfx.rc"
 else
-    bad "no novadeck-gfx.rc in rootfs/overlay -- the guest would run on zink and die 4s into boot"
+    bad "no novadeck-gfx.rc in rootfs/overlay -- the guest would run on zink and flash black bars"
 fi
 grep -q 'setprop mesa.loader.driver.override msm' "$RC" 2>/dev/null \
     && ok "it overrides the mesa loader onto freedreno (msm)" \

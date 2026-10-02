@@ -2,8 +2,19 @@
 #
 # WHY. liblepton/properties.sh writes `mesa.loader.driver.override=zink` into the guest's props
 # whenever the mesa path is selected (i.e. unless LEPTON_FORCE_SOFTWARE=true), so GLES is meant to
-# be zink-over-Turnip. With our Mesa build that override cannot produce a DRI2 screen, and the
-# failure is fatal to the whole guest:
+# be zink-over-Turnip.
+#
+# ZINK NOW RUNS, BUT FLICKERS. Since packages/mesa-android builds Turnip with
+# -Dandroid-strict=false (and packages/fossilize-android replaced the stub layer), the guest boots
+# and renders on zink -- `RenderEngine: renderer : zink Vulkan 1.4(Turnip Adreno (TM) 750)`. But
+# black bars flash across the frame, mostly on the right, on the Android desktop and in-game.
+# Measured on a Pocket FIT 2026-10-01: gone with this override, and STILL THERE with Valve's own
+# Frame-image guest Mesa -- so it is not our Mesa build but how a zink frame reaches the panel on
+# our host stack (no implicit write fence on Turnip's buffers; Lepton's composer returns no release
+# fences). Until that is fixed, the guest stays on freedreno.
+#
+# HISTORY: before -Dandroid-strict=false, zink could not create a screen at all (it lost
+# VK_KHR_maintenance5), and the failure was fatal to the whole guest:
 #
 #     W MESA-EGL: DRI2: failed to create screen / Failed to open any DRM device
 #     W libEGL  : eglInitialize(...) failed (EGL_NOT_INITIALIZED)
@@ -33,8 +44,9 @@
 # SurfaceFlinger started, so which of the two landed was never attributed. `setprop` is idempotent;
 # shipping only one of them would be an untested configuration for no gain.
 #
-# REMOVE THIS when Lepton stops forcing zink, or when our mesa build can satisfy it -- at which
-# point tests/test-android-guestos.sh will need its matching check dropped too.
+# REMOVE THIS when zink frames reach the panel without the black bars (or Lepton stops forcing
+# zink) -- at which point tests/test-android-guestos.sh and rootfs/lib-assemble-storage.sh need
+# their matching checks dropped too.
 on early-init
     setprop mesa.loader.driver.override msm
 

@@ -23,8 +23,8 @@
 #             here moved on every rebuild from identical inputs: it only ever verified on the
 #             machine that last ran `make relock`, said "you rebuilt" rather than "the inputs
 #             changed", and failed every clean CI runner. This says the thing that holds across
-#             machines. Three artifacts can legitimately share one hash — mesa's PKGBUILD is a
-#             split build (mesa, vulkan-freedreno, vulkan-mesa-device-select), one source pin.
+#             machines. Several artifacts can legitimately share one hash — mesa's PKGBUILD is a
+#             split build (mesa, vulkan-freedreno), one source pin.
 #   prebuilt  not pacman packages at all: the tarballs/blobs in packages/*/prebuilt.pin,
 #             already sha256-pinned there. Carried so the lock covers the whole image.
 #   stripped  installed from the pinned repo like a `snapshot` row, then DELETED from the

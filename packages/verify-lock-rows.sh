@@ -110,7 +110,7 @@ check_lock() {
     echo "  A row's hash is packages/inputhash.sh over its OWNING package's committed sources, and one" >&2
     echo "  PKGBUILD can own several rows — a split package's rows all carry the pkgbase's hash and" >&2
     echo "  must move together. Updating only the row whose name matches the package directory is the" >&2
-    echo "  mistake this check exists to catch (mesa emits five packages; the image installs three)." >&2
+    echo "  mistake this check exists to catch (mesa emits four packages; the image installs two)." >&2
     echo "  Adopt the source change deliberately:  $relock" >&2
     fail=1
     return

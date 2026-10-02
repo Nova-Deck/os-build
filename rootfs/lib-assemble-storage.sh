@@ -308,8 +308,9 @@ fi
 #
 # IT ALSO CARRIES ONE INIT SCRIPT, from rootfs/overlay rather than the mesa build:
 # vendor/etc/init/novadeck-gfx.rc, which takes the guest off Lepton's forced
-# `mesa.loader.driver.override=zink` and onto freedreno. Without it the driver loads and then
-# SurfaceFlinger aborts, killing the guest ~4s into boot. The file documents the measurement.
+# `mesa.loader.driver.override=zink` and onto freedreno. Zink itself runs (Turnip is built with
+# -Dandroid-strict=false), but its frames flash black bars on our host stack -- with Valve's own
+# guest Mesa too. The file documents the measurement.
 #
 # NOT owed, though an earlier revision of this comment claimed otherwise: gralloc (Lepton already
 # ships gralloc.minigbm_msm.so and the matching mapper@4.0 impl) and adbd (it runs on its own and
@@ -343,16 +344,16 @@ done
 # already placed vendor/etc/init/novadeck-gfx.rc in this tree; `cp -a .../vendor` onto an existing
 # vendor/ merges into it rather than nesting. That ordering is load-bearing and invisible: reorder
 # these two stages, or switch this to an `rm -rf` + copy, and the .rc disappears from the image
-# with no error -- and the guest goes back to dying 4s into boot on zink. Hence the gate below.
+# with no error -- and the guest goes back to zink and its black bars. Hence the gate below.
 mkdir -p "$stage/$android_slot"
 cp -a "$android_payload/vendor" "$stage/$android_slot/"
 
-# The driver-selection init script must have survived the merge. It is the difference between a
-# guest that renders and one whose SurfaceFlinger aborts; see the file itself for the measurement.
+# The driver-selection init script must have survived the merge; see the file itself for the
+# measurement.
 android_rc="$stage/$android_slot/vendor/etc/init/novadeck-gfx.rc"
-[ -s "$android_rc" ] || { echo "ERROR: ${android_rc#"$stage"} is missing -- rootfs/overlay's copy was clobbered by the payload merge, and the guest will die on zink" >&2; exit 1; }
+[ -s "$android_rc" ] || { echo "ERROR: ${android_rc#"$stage"} is missing -- rootfs/overlay's copy was clobbered by the payload merge, and the guest will run on zink" >&2; exit 1; }
 grep -q 'mesa.loader.driver.override msm' "$android_rc" \
-  || { echo "ERROR: ${android_rc#"$stage"} no longer sets the mesa driver override -- Lepton forces zink and the guest cannot create a DRI2 screen" >&2; exit 1; }
+  || { echo "ERROR: ${android_rc#"$stage"} no longer sets the mesa driver override -- Lepton forces zink, whose frames flash black bars on our host stack" >&2; exit 1; }
 # THE FOSSILIZE LAYER, and the host-side manifest that makes it findable. Both are REQUIRED
 # for any Android title to launch at all — this is not a rendering nicety.
 #

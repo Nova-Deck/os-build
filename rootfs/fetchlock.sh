@@ -102,7 +102,7 @@ mkdir -p "$CACHE"
 
 # Overlay artifact -> "<input hash>\t<package dir>" of the source pin that produced it. The
 # mapping comes from the per-package artifact lists packages/build-overlay.sh writes, because one
-# PKGBUILD can emit several packages (mesa emits five, of which three are installed) and only the
+# PKGBUILD can emit several packages (mesa emits four, of which two are installed) and only the
 # builder knows which. The HASH is re-derived from the repo's own committed files, never read from
 # a stamp: a stamp is the builder's claim about itself, and the point of the check is to compare
 # the lock against the sources a reviewer can actually see.

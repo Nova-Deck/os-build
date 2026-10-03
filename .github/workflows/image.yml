@@ -42,12 +42,13 @@
 # THIS MODE IS NOT A THIRD RELEASE ARTIFACT. Nothing consumes a rootfs.img except the sign job in
 # the same run, which is why it carries no release metadata and why the card path never asks for it.
 #
-# THE OVERLAY IS COMPILED HERE, IN THIS RUN, from the sources in the commit being built. That is
-# ~34 minutes on a native aarch64 runner for the whole set (measured per package in
-# .github/workflows/overlay.yml) against this job's 350-minute budget. It used to be retrieved from a
-# GHCR store keyed by packages/inputhash.sh; the store was retired because it was sized against the
-# ~4h EMULATED dev-box cost and CI never paid that. Compiling in-run also removes the question of
-# whether the bytes in work/repo are the reviewed ones — nothing else ever writes them.
+# THE OVERLAY STARTS FROM main's CACHE AND REBUILDS WHAT MOVED. Cold, the whole set is 32-37
+# minutes on a native aarch64 runner — half this job. The build job restores work/repo/aarch64 from
+# the actions/cache entry overlay.yml's `warm` job saves on main, and build-overlay.sh's
+# per-package input-hash stamps (sources + builder pin, the formula the lock's `novadeck` rows
+# use) rebuild exactly the packages whose inputs differ — the dev box's incremental build, on CI.
+# Only main ever writes an entry a release can read (caches are ref-scoped; see the restore step).
+# This is not the GHCR store retired 2026-08-04: no registry, no secret, no pin, no bot.
 #
 # ============================================================================================
 # DISK: THERE IS ROOM, AND THIS IS THE MEASUREMENT SO NOBODY RE-ENGINEERS FOR A CONSTRAINT THAT IS
@@ -346,10 +347,44 @@ jobs:
           name: fossilize-android-payload
           path: work/fossilize-android
 
-      # ~34 minutes cold for the 8 from-source packages. The runner is fresh, so this is always
-      # cold; there is no stamp cache to hit here the way there is on a dev box.
+      # The overlay repo — built packages, db, and build-overlay.sh's per-package input-hash stamps
+      # under .stamps/ — restored from main's cache, so CI gets the same incremental build a dev box
+      # has always had. Cold, the set costs 32-37 minutes, half this job (runs 36821542543,
+      # 36821542656, 37076823558); warm it is a re-index.
+      #
+      # WHY THIS IS SAFE TO REUSE. A stamp is packages/inputhash.sh over the package's committed
+      # sources AND the builder pin, so build-overlay.sh rebuilds exactly the packages whose inputs
+      # moved and trusts the rest — the same rule the lock's `novadeck` rows are checked against.
+      # The key below only picks WHICH repo to start from: an exact hit is a full set built from
+      # these sources; a restore-keys fallback is the previous set, and the stamps sort it out.
+      #
+      # WHY ONLY main's. Caches are scoped by ref. A release runs on a TAG (card/v*, ota/v*,
+      # installer/v*), which can read main's caches but saves into its own scope, where the next
+      # tag can never see it. So main warms it (overlay.yml `warm`), tags and dispatches read it,
+      # and PR caches — fork PRs included — stay invisible to every release.
+      - name: restore the overlay repo
+        id: overlay-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: work/repo/aarch64
+          key: overlay-aarch64-${{ hashFiles('packages/*/source.pin', 'packages/*/patches/**', 'packages/*/PKGBUILD', 'build/builder.pin', 'build/snapshot.pin') }}
+          restore-keys: overlay-aarch64-
+
+      # The script directly, not `make overlay`: make gates it on the db's mtime against the
+      # checkout's, and a restored db is not a thing whose mtime should decide whether the
+      # input-hash check runs. On a full hit this is one re-index container. --prune-retired drops
+      # a package a fallback set carried that no source.pin names any more (see the script).
       - name: build the overlay packages
-        run: make overlay
+        run: packages/build-overlay.sh --prune-retired
+
+      # Saved HERE, not at job end, so a failure later in the card build does not throw the
+      # overlay away. Only on main (see above) and only when the exact key missed.
+      - name: save the overlay repo
+        if: steps.overlay-cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v6
+        with:
+          path: work/repo/aarch64
+          key: ${{ steps.overlay-cache.outputs.cache-primary-key }}
 
       - name: build the toolchain image
         run: make toolchain

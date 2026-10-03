@@ -24,7 +24,7 @@
 # the GitLab raw endpoint and makepkg clones the actual sources from public GitHub/freedesktop.
 # Reads build/builder.pin (via build/lib-pins.sh). Re-run is cheap to invoke but an emulated build itself is slow.
 #
-#   packages/build-overlay.sh [--only <name>]... [--no-index]
+#   packages/build-overlay.sh [--only <name>]... [--no-index] [--prune-retired]
 #
 # --only    build ONLY the named package(s), instead of every package whose inputs changed.
 #           Repeatable. This is what lets the CI compile pass fan out one package per job
@@ -34,17 +34,21 @@
 # --no-index  skip the closing repo-add. A single-package job holds only its own artifacts, and
 #           the index is rebuilt from scratch over EVERYTHING present — indexing there would
 #           produce a db describing a subset. Whoever assembles the full repo indexes it.
+# --prune-retired  purge artifacts + stamps of packages no packages/*/source.pin names any more.
+#           CI passes it over a cache-restored repo; see the purge loop below for why it is opt-in.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 ONLY=()
 DO_INDEX=1
+PRUNE_RETIRED=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --only) [ $# -ge 2 ] || { echo "--only needs a package name" >&2; exit 2; }; ONLY+=("$2"); shift 2 ;;
     --no-index) DO_INDEX=0; shift ;;
-    -h|--help) sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --prune-retired) PRUNE_RETIRED=1; shift ;;
+    -h|--help) sed -n '2,38p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown argument '$1' (try --help)" >&2; exit 2 ;;
   esac
 done
@@ -230,6 +234,29 @@ PY
   BUILD_NAMES+=("$name")
 done
 
+# --prune-retired: stamps for a package that no longer HAS a source.pin — an overlay retired back
+# to holo's build. Nothing above visits it, so its artifacts would stay in the repo and be
+# re-indexed forever, and since [novadeck] sits AHEAD of the holo repos (customize-base.sh), that
+# stale build would keep winning the install over the holo package it was retired in favour of.
+# image.yml restores this repo from a cache whose fallback key can be an older package set, so CI
+# passes this. Opt-in because on a dev box the stamps are shared by every BRANCH in the checkout:
+# a package missing from this branch is usually just another branch's, and purging it would cost a
+# rebuild on every branch hop. Purged entries force the re-index like a foreign-arch artifact.
+# HASH is filled for EVERY pin before the --only filter, so it is the full current set even then.
+retired=0
+[ "$PRUNE_RETIRED" -eq 1 ] && for st in "$STAMPS"/*.hash; do
+  name="$(basename "$st" .hash)"
+  [ -n "${HASH[$name]:-}" ] && continue
+  echo "[overlay] $name: no packages/*/source.pin names it any more — purging its artifacts" >&2
+  if [ -f "$STAMPS/$name.files" ]; then
+    while read -r old; do
+      [ -n "$old" ] && rm -f "$REPO_DIR/$old"
+    done < "$STAMPS/$name.files"
+  fi
+  rm -f "$STAMPS/$name.hash" "$STAMPS/$name.files"
+  retired=$((retired + 1))
+done
+
 # Foreign-arch artifacts left in this arch-scoped repo by an older build (see the index step at
 # the end of this file). They are not a package whose inputs changed, so nothing above selects
 # them for rebuild — but leaving them indexed is exactly the bug, so their presence alone has to
@@ -256,7 +283,7 @@ done
 # $(OVERLAY_STAMP)'s sha256sum fails, or customize-base.sh's "no usable overlay repo" check fires.
 # Falling through to the index step instead is both the fix and exactly what a freshly pulled repo
 # needs: one cheap container, no compiles.
-if [ ${#BUILD_NAMES[@]} -eq 0 ] && [ "$stale_foreign" -eq 0 ] \
+if [ ${#BUILD_NAMES[@]} -eq 0 ] && [ "$stale_foreign" -eq 0 ] && [ "$retired" -eq 0 ] \
    && [ -f "$REPO_DIR/novadeck.db.tar.zst" ]; then
   echo "[overlay] all overlay packages up-to-date — nothing to rebuild" >&2
   # Bump the db mtime so make sees $(OVERLAY_DB) as satisfied against the touched inputs and
@@ -281,7 +308,7 @@ pins_builder_ensure >/dev/null
 # Qt6 module resolution. Isolating each build removes that cross-contamination at the cost of a
 # per-package dep re-sync (the emulated compile dwarfs it anyway).
 if [ ${#BUILD_NAMES[@]} -eq 0 ]; then
-  echo "[overlay] no package changed — re-indexing only ($stale_foreign foreign-arch artifact(s) to drop)" >&2
+  echo "[overlay] no package changed — re-indexing only ($stale_foreign foreign-arch artifact(s) to drop, $retired retired package(s) purged)" >&2
 else
   echo "[overlay] building ${#BUILD_NAMES[@]} changed package(s) in isolated arm64 qemu containers (slow — emulated)" >&2
 fi

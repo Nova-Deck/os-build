@@ -5,24 +5,24 @@
 # thing that notices is a release build — 30 minutes in, hours after the change landed. So: build the
 # packages a pull request actually touched, and nothing else.
 #
-# IT PUBLISHES NOTHING, AND THAT IS THE DESIGN. This used to be a build-once-and-cache pipeline: it
-# pushed every package to GHCR keyed by packages/inputhash.sh, opened a bot PR carrying each
-# artifact's sha256 into packages/*/artifact.pin, and a release build verified those bytes. All of
-# that was sized against the DEV BOX cost of an overlay build — ~4h for the set under arm64
-# emulation, fex-emu alone ~2h — on the assumption CI would pay the same.
+# AND IT WARMS THE RELEASE CACHE ON main. A push to main runs `warm`: build-overlay.sh over the
+# whole set, starting from main's previous actions/cache entry, saved back under a key over every
+# overlay input. image.yml's build job restores that entry, so a release compiles only the packages
+# whose inputs moved — CI's copy of the per-package input-hash stamps a dev box keeps under
+# work/repo/<arch>/.stamps/. It has to be main that saves: a release runs on a TAG, and a cache a
+# tag run saves is scoped to that tag, invisible to the next one.
 #
-# IT DOES NOT. MEASURED on ubuntu-24.04-arm (run 30490159103), which is real aarch64 and never
-# registers qemu:
+# THIS IS NOT THE RETIRED ARTIFACT STORE. Until 2026-08-04 every package was pushed to GHCR keyed
+# by packages/inputhash.sh, a bot PR carried each artifact's sha256 into packages/*/artifact.pin,
+# and a release verified those bytes — ~1300 lines, two PATs, and a bot with write access to main,
+# retired because on native arm the whole set cost only ~34 minutes (run 30490159103):
 #
 #     gtk2 7m   sddm 5m   mesa 5m   fex-emu 5m   gamescope 4m   scx-scheds 4m   mangohud 3m   rauc 1m
 #
-# ~34 minutes for the WHOLE set, serially, against a release card build that already runs 33-41
-# minutes and has a 350-minute budget. The store was buying half an hour and charging ~1300 lines, two
-# PATs, and a bot with write access to main. It was retired 2026-08-04; a release build now compiles
-# the overlay in-run from the sources in the commit it is building (.github/workflows/image.yml), and
-# a dev keeps the per-package input-hash cache build-overlay.sh has always maintained under
-# work/repo/<arch>/.stamps/. If someone proposes reintroducing a cache, the numbers above are the
-# thing to re-measure first.
+# Re-measured 2026-10-03, that is now 32-37 minutes of a ~65-minute build job, i.e. half of every
+# card/OTA/installer run (runs 36821542543, 36821542656, 37076823558). The cache needs no registry,
+# no secret, no pin and no bot: the stamps decide what is fresh, exactly as they do locally, and
+# rootfs/fetchlock.sh still checks every `novadeck` lock row against the sources in the commit.
 #
 # WHY NATIVE ARM. The dev box compiles these under qemu; these runners are real aarch64, so
 # build-overlay.sh's own binfmt probe passes and it never registers qemu or asks for --privileged.
@@ -32,12 +32,31 @@
 # FORK PULL REQUESTS RUN THIS FINE. Nothing here needs a credential — no registry, no write token,
 # `contents: read` and no secrets at all — so a fork's read-only token is sufficient.
 #
-# NOT TRIGGERED BY A PUSH TO main, deliberately: a PR already built what it changed, and a
-# direct-to-main package edit is caught by the next release build. Use workflow_dispatch to force a
-# pass over a branch that never saw a PR.
+# THE PER-PACKAGE PROOF MATRIX DOES NOT RUN ON A PUSH TO main: a PR already built what it changed,
+# and `warm` compiles the full set there anyway (a direct-to-main package edit goes red in `warm`).
+# Use workflow_dispatch to force a proof pass over a branch that never saw a PR.
 name: overlay packages
 
 on:
+  # Same paths as pull_request; YAML anchors are not supported in workflow files, so keep the two
+  # lists identical by hand. A push to main runs only `warm` (and the x86 proof jobs, whose caches
+  # releases restore the same way) — the per-package matrix already ran on the PR.
+  push:
+    branches: [main]
+    paths:
+      - 'packages/*/source.pin'
+      - 'packages/*/patches/**'
+      - 'packages/*/PKGBUILD'
+      - 'packages/build-overlay.sh'
+      - 'packages/inputhash.sh'
+      - 'build/builder.pin'
+      - 'build/snapshot.pin'
+      - 'build/lib-pins.sh'
+      - '.github/workflows/overlay.yml'
+      - 'packages/mesa-x86/**'
+      - 'packages/lsfg-vk-x86/**'
+      - 'packages/fex-rootfs/prebuilt.pin'
+      - 'packages/mesa-android/**'
   pull_request:
     paths:
       - 'packages/*/source.pin'
@@ -67,11 +86,12 @@ on:
         required: false
         default: ''
 
-# A superseded push means the sources moved; there is no published state to corrupt, so cancelling
-# mid-flight only ever loses compute.
+# A superseded PR push means the sources moved; there is no published state to corrupt, so
+# cancelling mid-flight only ever loses compute. On main it would lose a half-warmed cache instead,
+# and the next run starts from the previous one regardless, so queue there rather than cancel.
 concurrency:
   group: overlay-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 permissions:
   contents: read
@@ -197,7 +217,9 @@ jobs:
   build:
     name: build ${{ matrix.pkg }}
     needs: plan
-    if: needs.plan.outputs.any == 'true'
+    # Not on a push to main: plan has no diff base there and would select everything, which `warm`
+    # builds anyway — in one job, into the cache releases actually read.
+    if: needs.plan.outputs.any == 'true' && github.event_name != 'push'
     runs-on: ${{ vars.OVERLAY_RUNNER || 'ubuntu-24.04-arm' }}
     # 90, not the 360 this carried while it was sized for emulated builds: the slowest package
     # measured 7 minutes natively (gtk2). A job approaching this limit means something regressed
@@ -224,6 +246,43 @@ jobs:
         env:
           PKG: ${{ matrix.pkg }}
         run: packages/build-overlay.sh --only "$PKG" --no-index
+
+  # The overlay repo image.yml's build job restores — built here on main, because a cache saved
+  # by a release's TAG run is scoped to that tag and no later run can read it (see the restore
+  # step in image.yml). Starts from the previous main set via restore-keys, so a push that moved
+  # one package rebuilds one package. A dispatch on main with no package list re-warms by hand.
+  warm:
+    name: warm the release overlay cache
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || inputs.packages == '')
+    runs-on: ${{ vars.OVERLAY_RUNNER || 'ubuntu-24.04-arm' }}
+    # The whole set cold is ~35 minutes; same headroom reasoning as `build`.
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/cache@v6
+        with:
+          path: work/builder
+          key: builder-${{ hashFiles('build/builder.pin') }}
+
+      # Key and path MUST stay identical to image.yml's "restore the overlay repo" step.
+      - name: restore the overlay repo
+        id: overlay-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: work/repo/aarch64
+          key: overlay-aarch64-${{ hashFiles('packages/*/source.pin', 'packages/*/patches/**', 'packages/*/PKGBUILD', 'build/builder.pin', 'build/snapshot.pin') }}
+          restore-keys: overlay-aarch64-
+
+      - name: build the overlay packages
+        run: packages/build-overlay.sh --prune-retired
+
+      - name: save the overlay repo
+        if: steps.overlay-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: work/repo/aarch64
+          key: ${{ steps.overlay-cache.outputs.cache-primary-key }}
 
   # The FEX-guest Turnip payload (packages/mesa-x86) — same proof-build idea as the matrix
   # above, but on a NATIVE x86_64 runner: it compiles x86 code in a pinned x86 Arch container,

@@ -1,0 +1,24 @@
+# Keep the wcd938x SoundWire RX/TX slaves out of runtime PM on SM8250.
+#
+# Not the same device as 70-novadeck-wsa881x-runtime-pm.rules: that one pins the
+# wsa881x speaker amps (0217:2010); this pins the wcd938x headphone/mic codec
+# (0217:010d, wcd938x-sdw.c's slave table).
+#
+# HW-confirmed fix on the MANGMI Pocket Max (SM8250), 2026-10-03. Without it,
+# plugging headphones in never moves playback off the speakers: the plug is not
+# reported at all. The wcd938x MBHC interrupts arrive as SoundWire slave
+# interrupts on the TX link (wcd938x-sdw.c wcd9380_interrupt_callback), and a
+# runtime-suspended slave does not deliver them, so the UCM's JackControl
+# "Headphone Jack" never moves.
+#
+# Verified A/B on one boot. With the rule: SW_HEADPHONE_INSERT 1/0 on the
+# "PocketMax Headset Jack" input, the CARD control `Headphone Jack` flips, and
+# playback follows. With power/control put back to `auto` (both slaves
+# `suspended`): no input event, no codec log line, the control stays off.
+# Check it with `amixer -c0 cget iface=CARD,name='Headphone Jack'` — the
+# control is on the CARD interface, so a bare name= does not find it.
+#
+# Scope. SM8550 boards carry the same wcd938x part ID, so the rule is gated on
+# the root DT compatible to SM8250 — the only SoC this has been seen on. Cost:
+# the codec's SoundWire slaves stay powered while idle.
+ACTION=="bind", SUBSYSTEM=="soundwire", KERNEL=="sdw:*:0217:010d:*", PROGRAM=="/usr/bin/grep -qa qcom,sm8250 /sys/firmware/devicetree/base/compatible", ATTR{power/control}="on"

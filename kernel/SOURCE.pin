@@ -21,20 +21,23 @@
 # eleven drm/msm commits, two of which are OURS landing: the DSI byte-clock fix (0525 in the
 # notes below, renumbered 0430) and the DPU peripheral-flush fix (0310). Both are DELETED; the
 # code they carried is now upstream's, byte-for-byte. Read the 7.2.8 section below.
-version:    7.2.8
-url:        https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.2.8.tar.xz
-sha256:     12e8d5a973d1ad7c5a5c69882e4022b131ed715db7003fdcd760ddf8c3e51941
-git_tag:    v7.2.8
-git_commit: 9a66fdc0d7fd55f54235524a73435af99051e46f
+# RE-PINNED 2026-10-03 (7.2.9, issue #108). Quiet for us: zero drm/msm, qcom clk/phy/iommu,
+# ath, mac80211 or soundwire commits. Read the 7.2.9 section below. HW-VALIDATED ON
+# POCKET ACE (SM8550) AND POCKET S2 (SM8650); NO SM8250 BOARD WAS BOOTED.
+version:    7.2.9
+url:        https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.2.9.tar.xz
+sha256:     b4c5dfbe51a364a6c7f03869200f88c8e1f77403539005f14b7fc6bc91b8d8ba
+git_tag:    v7.2.9
+git_commit: 5fce161649b4d779d1b76d9fcd52dc77779774b8
 
 # The sha256 above is the one kernel.org publishes in the SIGNED sha256sums.asc for v7.x, not a
-# hash of whatever the CDN happened to serve — re-checked 2026-09-27. The .asc itself verifies as
+# hash of whatever the CDN happened to serve — re-checked 2026-10-03. The .asc itself verifies as
 # a GOOD signature from "Kernel.org checksum autosigner <autosigner@kernel.org>", fingerprint
 # B886 8C80 BA62 A1FF FAF5 FDA9 632D 3A06 589D A6B1. That key carries no trust path here, so the
-# load-bearing check is CONTINUITY: the SAME signed file still lists 7.2.7 as
-# 4ac34c47db2540ffb2713943f8d891ff1702e0ba6934525a493b7d1cad43145a, 7.2.6 as
-# 039aef84f2b0994aeda3f4fcfc3d02ec9d7a9bbb9020ea264c43f446c860f606 and 7.2.5 as
-# 55ddf0df8325d9dad96fcff7bd93977d22e3f50af06527572af59b77c7632b78, byte-for-byte the hashes this
+# load-bearing check is CONTINUITY: the SAME signed file still lists 7.2.8 as
+# 12e8d5a973d1ad7c5a5c69882e4022b131ed715db7003fdcd760ddf8c3e51941, 7.2.7 as
+# 4ac34c47db2540ffb2713943f8d891ff1702e0ba6934525a493b7d1cad43145a and 7.2.6 as
+# 039aef84f2b0994aeda3f4fcfc3d02ec9d7a9bbb9020ea264c43f446c860f606, byte-for-byte the hashes this
 # pin carried and shipped before — so the file describing the version above is the same file that
 # described the releases we already trusted. Roll this list forward on each bump rather than
 # growing it; three back is enough to be a chain. (Note: keys.openpgp.org serves this key STRIPPED
@@ -52,6 +55,46 @@ git_commit: 9a66fdc0d7fd55f54235524a73435af99051e46f
 # Treat 'in-series point release' as a prediction about EFFORT, never about RISK.
 # Re-run every gate, every time — and note that neither of those two findings came from an
 # offline gate. Both came from hardware.
+#
+# ============ 7.2.9 — PINNED 2026-10-03 (issue #108), HW-VALIDATED ON ACE + S2 ============
+#
+# 458 commits, 471 files. Zero drm/msm, zero qcom clk/phy/interconnect/iommu, zero ath12k,
+# zero mac80211/cfg80211, zero soundwire/ASoC, zero btrfs. No Kconfig symbol added or removed.
+#
+# INTERSECTION: ONE file, include/linux/sched.h. Upstream renames struct sched_cache_stat at
+# ~2398; our 0010 adds a task_struct field at ~1567. Unrelated, and 0010 applies at fuzz 0.
+# PATCHES: 93 applied cumulatively at --fuzz=0, zero fuzz, zero rejects.
+# CONFIG SWEEP: 438 symbols named in kernel.config + trim-platforms.config, ZERO missing.
+# BUILD: green in the container, Image + 21 dtbs + modules staged. After olddefconfig, ALL 435
+# requested directives (379 values + 56 `is not set`) asserted against the final .config:
+# zero mismatches.
+#
+# WHAT ONLY HARDWARE CAN SETTLE, from commits OUTSIDE the intersection:
+#   - i2c-qcom-geni: a four-commit refactor (serial-engine setup isolated, resource init moved,
+#     SE_GENI_CLK_SEL clock index no longer hardcoded) plus a DMA-release fix on probe error.
+#     GENI I2C carries touch, the sgm3804 panel rails, sy7758 backlight, htr3212 RGB LEDs and
+#     the aw88166 amps, so it is the one leg here: panel up, touch and brightness working on
+#     one board per SoC.
+#   - arm64: cpu_errata now matches the target implementation CPU's own MIDR, and asm/io.h
+#     changed. A clean boot on each SoC generation covers both.
+#
+# HW GATE, 2026-10-03 (dev card, build 20261003T163741Z):
+#   Pocket ACE (SM8550) — PASS. Zero *ERROR*, zero WARNING, zero failed units. 10 boot SMMU
+#     faults, all t=0.76s fsr=0x402 cb=8: the pre-existing cohort. GENI I2C: all four clients
+#     bound on three controllers (nb7vpq904m, sy7758, sgm3804, synaptics_dsx); panel-avdd and
+#     panel-avee enabled at 5200000 uV, users=1 each; sy7758 backlight 3060/4080. 12 dsx
+#     retry/"Failed to read interrupt status" lines, the KNOWN BOOT NOISE listed below; touch
+#     responds (operator-confirmed). WCN7850 associated, EHT 2x2 720 Mbit/s. Gamepad behind the
+#     Renesas bridge enumerated. gamescope up on DSI-1.
+#   Pocket S2 (SM8650, bonded) — PASS. One *ERROR*, `dsi_get_phy: phy driver is not ready`, the
+#     probe deferral already recorded at 7.2.8. Zero WARNING, zero SMMU faults, zero failed
+#     units. GENI I2C: all five clients bound on four controllers (sy7758, sgm3804,
+#     wcd9395-usbss, gt911, nb7vpq904m); panel rails 5200000 uV users=1 each; backlight
+#     3060/4080. DSI-1 connected at 1440x2560, gamescope up on it. WCN7850 associated, EHT 2x2.
+#     Sound card present. `soundwire sdw-master-2-0: clock stop deprepare wait failed:-110` at
+#     18.6s, AFTER the card instantiated: not issue #105's instantiation -110, and 7.2.9 has no
+#     soundwire/LPASS commits. Not attributed to this bump. Speaker plays and touch responds
+#     (operator-confirmed).
 #
 # ============ 7.2.8 — PINNED 2026-09-27 (issue #104), HW GATE OWED ============
 #

@@ -1,0 +1,50 @@
+From: Philippe Simons <simons.philippe@gmail.com>
+Subject: [PATCH] drm/msm/a6xx: Raise the A750 autosuspend delay to 200 ms
+
+On A750 (SM8650), a runtime suspend that starts shortly after a resume
+spins for the full ADRENO_IDLE_TIMEOUT in a6xx_gmu_wait_for_idle() and
+then falls back to a6xx_gmu_force_off(). spin_until() busy-waits, so
+each such suspend burns one second of CPU in the pm workqueue.
+
+With the default 66 ms inactive_period, a bursty UI (a few short GPU
+wakeups per second) hits this on about every other suspend. In the
+slow case a7xx_gmu_gx_is_on() is never reached, i.e. the GMU never
+reports the IFPC power state: it is the GMU that does not idle, not
+GX that stays up. On a7xx the driver does not program the IFPC
+hysteresis, so the GMU firmware's own (gen70900, v4.2.20) is in play.
+
+Measured on an AYANEO Pocket S2 (SM8650), 7.2.9, idle UI, 60 s
+windows, GPU runtime suspends that took > 100 ms:
+
+  autosuspend_delay_ms   slow suspends   kworker CPU
+  66 (default)           8 of 16         18%
+  100                    9 of 19         -
+  200                    0 of 9          6%
+  500                    0 of 7          7%
+
+Every slow suspend began 70-85 ms after the preceding resume; every
+suspend after the GPU had been up for ~4 s completed in ~1 ms. The
+same image on an A740 (SM8550, IFPC enabled, GMU v4.1.9) completed
+52 of 52 suspends in <= 1.5 ms at 66 ms.
+
+Use 200 ms for A750, the smallest tested value with no slow suspend.
+A5xx entries already set a per-GPU 250 ms.
+
+Signed-off-by: Philippe Simons <simons.philippe@gmail.com>
+---
+novadeck: not posted. Workaround for the trigger, not the GMU root cause.
+ drivers/gpu/drm/msm/adreno/a6xx_catalog.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/gpu/drm/msm/adreno/a6xx_catalog.c b/drivers/gpu/drm/msm/adreno/a6xx_catalog.c
+--- a/drivers/gpu/drm/msm/adreno/a6xx_catalog.c
++++ b/drivers/gpu/drm/msm/adreno/a6xx_catalog.c
+@@ -1588,7 +1588,7 @@
+ 			[ADRENO_FW_GMU] = "gmu_gen70900.bin",
+ 		},
+ 		.gmem = 3 * SZ_1M,
+-		.inactive_period = DRM_MSM_INACTIVE_PERIOD,
++		.inactive_period = 200,
+ 		.quirks = ADRENO_QUIRK_HAS_CACHED_COHERENT |
+ 			  ADRENO_QUIRK_HAS_HW_APRIV |
+ 			  ADRENO_QUIRK_PREEMPTION |

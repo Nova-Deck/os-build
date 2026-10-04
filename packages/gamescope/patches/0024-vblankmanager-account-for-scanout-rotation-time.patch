@@ -1,0 +1,196 @@
+From: sunshineinabox <aqemail@gmail.com>
+Date: Sun, 27 Sep 2026 15:30:00 -0700
+Subject: [PATCH] vblankmanager: account for scanout rotation time
+
+When the display controller rotates the planes at scanout, give the vblank
+timer extra lead time so the commit lands further ahead of vblank. Set
+GAMESCOPE_SCANOUT_ROTATION_TIME_US to reserve that many microseconds on
+every rotated frame; the reserve grows by 250 us whenever a rotated flip
+misses its vblank and relaxes back to the floor on on-time flips. Off when
+the variable is unset.
+
+Adapted to 3.16.31: here the planes rotate every frame (composite and
+direct scanout alike) whenever the composite carries no output rotation,
+so "rotated" is simply g_bRotated && !g_uOutputRotation, and the VRR
+wakeup offset gets the same reserve.
+
+---
+diff --git a/src/Backends/DRMBackend.cpp b/src/Backends/DRMBackend.cpp
+index e0a17549..33644b47 100644
+--- a/src/Backends/DRMBackend.cpp
++++ b/src/Backends/DRMBackend.cpp
+@@ -572,6 +572,8 @@ extern bool g_bDebugLayers;
+ struct DRMPresentCtx
+ {
+ 	uint64_t ulPendingFlipCount = 0;
++	uint64_t ulTargetVBlank = 0;
++	bool bScanoutRotated = false;
+ };
+ 
+ extern gamescope::ConVar<bool> cv_composite_force;
+@@ -802,6 +804,8 @@ static void page_flip_handler(int fd, unsigned int frame, unsigned int sec, unsi
+ 
+ 	// This is the last vblank time
+ 	uint64_t vblanktime = sec * 1'000'000'000lu + usec * 1'000lu;
++	if ( pCtx->bScanoutRotated )
++		GetVBlankTimer().ReportScanoutRotatedFlip( vblanktime, pCtx->ulTargetVBlank );
+ 	GetVBlankTimer().MarkVBlank( vblanktime, true );
+ 
+ 	// TODO: get the fbids_queued instance from data if we ever have more than one in flight
+@@ -4336,6 +4340,10 @@ namespace gamescope
+ 			// Update to let the vblank manager know we are currently compositing.
+ 			GetVBlankTimer().UpdateWasCompositing( bDoComposite );
+ 
++			// With no output rotation in the composite, the planes rotate every frame at
++			// scanout -- the composite and directly scanned-out layers alike.
++			GetVBlankTimer().UpdateScanoutRotated( g_bRotated && !g_uOutputRotation );
++
+ 			if ( !bDoComposite )
+ 			{
+ 				// Scanout + Planes Path
+@@ -4783,6 +4791,8 @@ namespace gamescope
+ 			uint32_t uCurrentPresentCtx = m_uNextPresentCtx;
+ 			m_uNextPresentCtx = ( m_uNextPresentCtx + 1 ) % 3;
+ 			m_PresentCtxs[uCurrentPresentCtx].ulPendingFlipCount = g_DRM.pConnector->PresentationFeedback().m_uQueuedPresents;
++			m_PresentCtxs[uCurrentPresentCtx].ulTargetVBlank = g_SteamCompMgrVBlankTime.schedule.ulTargetVBlank;
++			m_PresentCtxs[uCurrentPresentCtx].bScanoutRotated = !( drm->flags & DRM_MODE_PAGE_FLIP_ASYNC ) && GetVBlankTimer().IsScanoutRotated();
+ 
+ 			drm_log.debugf("flip commit %" PRIu64, (uint64_t)g_DRM.pConnector->PresentationFeedback().m_uQueuedPresents);
+ 			gpuvis_trace_printf( "flip commit %" PRIu64, (uint64_t)g_DRM.pConnector->PresentationFeedback().m_uQueuedPresents );
+diff --git a/src/vblankmanager.cpp b/src/vblankmanager.cpp
+index 3eb99aca..343909bf 100644
+--- a/src/vblankmanager.cpp
++++ b/src/vblankmanager.cpp
+@@ -1,5 +1,6 @@
+ // Try to figure out when vblank is and notify steamcompmgr to render some time before it
+ 
++#include <cinttypes>
+ #include <cstdint>
+ #include <mutex>
+ #include <thread>
+@@ -10,6 +11,7 @@
+ 
+ #include <assert.h>
+ #include <fcntl.h>
++#include <stdlib.h>
+ #include <unistd.h>
+ 
+ #include "gpuvis_trace_utils.h"
+@@ -32,6 +34,13 @@ namespace gamescope
+ 		m_ulTargetVBlank = get_time_in_nanos();
+ 		m_ulLastVBlank = m_ulTargetVBlank;
+ 
++		if ( const char *pchRotationTime = getenv( "GAMESCOPE_SCANOUT_ROTATION_TIME_US" ) )
++		{
++			m_bScanoutRotationTuning = true;
++			m_ulScanoutRotationFloor = strtoull( pchRotationTime, nullptr, 10 ) * 1'000ul;
++			m_ulScanoutRotationTime = m_ulScanoutRotationFloor;
++		}
++
+ 		if ( !GetBackend()->NeedsFrameSync() )
+ 		{
+ 			// Majority of backends fall down this optimal
+@@ -176,6 +185,8 @@ namespace gamescope
+ 				m_ulRollingMaxDrawTime = ulNewRollingDrawTime;
+ 
+ 			ulOffset = ulNewRollingDrawTime + ulRedZone;
++			if ( m_bScanoutRotated )
++				ulOffset += m_ulScanoutRotationTime;
+ 
+ 			if ( vblank_debug && !bPreemptive )
+ 				VBlankDebugSpew( ulOffset, ulDrawTime, ulRedZone );
+@@ -191,6 +202,8 @@ namespace gamescope
+ 
+ 			uint64_t ulDrawTime, ulRedZone;
+ 			ulOffset = VRRWakeupOffset( &ulDrawTime, &ulRedZone );
++			if ( m_bScanoutRotated )
++				ulOffset += m_ulScanoutRotationTime;
+ 
+ 			if ( vblank_debug && !bPreemptive )
+ 				VBlankDebugSpew( ulOffset, ulDrawTime, ulRedZone );
+@@ -238,6 +251,37 @@ namespace gamescope
+ 		m_bCurrentlyCompositing = bCompositing;
+ 	}
+ 
++	void CVBlankTimer::UpdateScanoutRotated( bool bRotated )
++	{
++		m_bScanoutRotated = bRotated;
++	}
++
++	bool CVBlankTimer::IsScanoutRotated() const
++	{
++		return m_bScanoutRotated;
++	}
++
++	void CVBlankTimer::ReportScanoutRotatedFlip( uint64_t ulFlipTime, uint64_t ulTargetVBlank )
++	{
++		if ( !m_bScanoutRotationTuning || !ulTargetVBlank )
++			return;
++
++		const uint64_t ulInterval = mHzToRefreshCycle( GetRefresh() );
++		const bool bLate = ulFlipTime > ulTargetVBlank + ulInterval / 2;
++		uint64_t ulTime = m_ulScanoutRotationTime;
++
++		if ( bLate )
++		{
++			ulTime = std::min( ulTime + kScanoutRotationStep, ulInterval / 2 );
++			g_VBlankLog.infof( "Rotated flip missed its vblank, reserving %" PRIu64 "us.", ulTime / 1'000 );
++		}
++		else if ( ulTime > m_ulScanoutRotationFloor )
++		{
++			ulTime -= std::min( ulTime - m_ulScanoutRotationFloor, kScanoutRotationRelax );
++		}
++		m_ulScanoutRotationTime = ulTime;
++	}
++
+ 	void CVBlankTimer::UpdateLastDrawTime( uint64_t ulNanos )
+ 	{
+ 		m_ulLastDrawTime = ulNanos;
+diff --git a/src/vblankmanager.hpp b/src/vblankmanager.hpp
+index 41902c3d..333a7a3f 100644
+--- a/src/vblankmanager.hpp
++++ b/src/vblankmanager.hpp
+@@ -39,6 +39,10 @@ namespace gamescope
+ 
+         static constexpr uint64_t kVRRFlushingTime = 300'000;
+ 
++        // Scanout rotation reserve: grown on a late flip, relaxed on an on-time one.
++        static constexpr uint64_t kScanoutRotationStep = 250'000;
++        static constexpr uint64_t kScanoutRotationRelax = 250;
++
+         CVBlankTimer();
+         ~CVBlankTimer();
+ 
+@@ -55,6 +59,9 @@ namespace gamescope
+ 
+         bool WasCompositing() const;
+         void UpdateWasCompositing( bool bCompositing );
++        void UpdateScanoutRotated( bool bRotated );
++        bool IsScanoutRotated() const;
++        void ReportScanoutRotatedFlip( uint64_t ulFlipTime, uint64_t ulTargetVBlank );
+         void UpdateLastDrawTime( uint64_t ulNanos );
+ 
+         void WaitToBeArmed();
+@@ -94,6 +101,7 @@ namespace gamescope
+         // to push back to avoid clock feedback loops if so.
+         // This is fed-back from steamcompmgr.
+         std::atomic<bool> m_bCurrentlyCompositing = { false };
++        std::atomic<bool> m_bScanoutRotated = { false };
+         // This is the last time a 'draw' took from wake-up to page flip.
+         // 3ms by default to get the ball rolling.
+         // This is calculated by steamcompmgr/drm and fed-back to the vblank timer.
+@@ -129,6 +137,14 @@ namespace gamescope
+         // 2.4ms by default. (kDefaultVBlankDrawTimeMinCompositing)
+         uint64_t m_ulVBlankDrawTimeMinCompositing = kDefaultVBlankDrawTimeMinCompositing;
+ 
++        // Time between the commit and the flip when the plane rotates the frame, for display
++        // controllers that rotate with an offline rotator. Starts at, and relaxes down to,
++        // GAMESCOPE_SCANOUT_ROTATION_TIME_US, and grows when a rotated flip misses its vblank.
++        // Off when the variable is unset.
++        bool m_bScanoutRotationTuning = false;
++        uint64_t m_ulScanoutRotationFloor = 0;
++        std::atomic<uint64_t> m_ulScanoutRotationTime = { 0 };
++
+         // The rate of decay (as a percentage) of the rolling average -> current draw time
+         // 930 = 93%.
+         // 93% by default. (kDefaultVBlankRateOfDecayPercentage)

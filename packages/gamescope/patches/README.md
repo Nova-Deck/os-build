@@ -25,6 +25,7 @@ root (the `gamescope/` checkout inside makepkg's `$srcdir`) by
 0020-libliftoff-treat-enodev-as-no-fit.patch        (patches the libliftoff SUBMODULE; only with 0021)
 0021-libliftoff-give-planes-the-layer-zpos.patch    (patches the libliftoff SUBMODULE)
 0023-xdg-titles-are-reported-to-steam.patch          (NOVADECK_ANDROID_APPID root property; ConVar touch_passthrough_xdg_titles)
+0024-vblankmanager-account-for-scanout-rotation-time.patch   (GAMESCOPE_SCANOUT_ROTATION_TIME_US; set for the S2 in etc/novadeck/session.conf)
 ```
 
 `0008`-`0013` are **retired** (see below). The numbering is kept as-is rather than compacted, so
@@ -367,6 +368,18 @@ MangoHud intermittently missing (it sat behind the game). It did not reproduce o
 2026-09-17, because there the allocation never backtracked. Both patch the
 **submodule**, so `../PKGBUILD`'s `prepare()` checks the submodules out BEFORE its `cd gamescope`,
 the line build-overlay.sh injects the patch step after.
+
+`0024` — **commit lead time while the planes rotate** (sunshineinabox; ROCKNIX PR #3377 gamescope
+`0025`, adapted). With `GAMESCOPE_SCANOUT_ROTATION_TIME_US` set, the vblank timer reserves that many
+extra microseconds on every frame the planes rotate, growing the reserve by 250 us whenever a rotated
+flip misses its vblank and relaxing it back to the floor otherwise; unset, it changes nothing. Written
+for an offline rotator, where the copy between commit and flip made flips miss vblank. Adapted to
+3.16.31: the upstream test for "rotated" walks per-layer pre-rotation/blit state this tree does not
+have; here the planes rotate EVERY frame whenever the composite carries no output rotation, so it is
+just `g_bRotated && !g_uOutputRotation`, and the VRR wakeup offset gets the same reserve. **Carried
+for the S2 black-frame blink (TRIAL, 2026-10-04):** a DPU underrun follows every commit that lands
+under ~0.3 ms before vblank. Only the floor acts there, since those flips are not late, so the S2 gets a
+fixed 1 ms from `etc/novadeck/session.conf`.
 
 Drop the patch files here with those exact names (or rename and update `source.pin`'s
 `patches:` line). **Until a declared patch is present, `make overlay` / `make base` fail fast**

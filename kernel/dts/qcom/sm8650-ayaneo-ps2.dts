@@ -22,6 +22,12 @@
 		interrupt-parent = <&tlmm>;
 		interrupts = <162 IRQ_TYPE_EDGE_FALLING>;
 
+		/*
+		 * goodix resets the controller at probe only when it has both
+		 * lines; without irq-gpios it reads the cold-powered chip before
+		 * it has booted and takes the IRQ trigger from a garbage config.
+		 */
+		irq-gpios = <&tlmm 162 GPIO_ACTIVE_HIGH>;
 		reset-gpios = <&tlmm 161 GPIO_ACTIVE_HIGH>;
 		VDDIO-supply = <&vreg_l14b_3p2>;
 		AVDD28-supply = <&vreg_l14b_3p2>;

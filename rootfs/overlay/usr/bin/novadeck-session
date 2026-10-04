@@ -218,9 +218,32 @@ export NOVADECK_SHUTDOWN_SENTINEL="${NOVADECK_SENTINEL_DIR}/novadeck-shutdown-se
 rm -f "$NOVADECK_REBOOT_SENTINEL" "$NOVADECK_SHUTDOWN_SENTINEL" 2>/dev/null || true
 
 # Tear gamescope + the rundir down whenever this script exits (client returned, or a signal).
+#
+# WAIT for gamescope to actually exit, do not just signal it. SDDM's autologin starts the next
+# session the moment this script returns, and while the old gamescope lives it still holds
+# /dev/dri/card0: the new gamescope's logind TakeDevice then fails EBUSY ("Could not open KMS
+# device"), the handshake below times out, and SDDM does not relogin after that -- a Steam crash
+# left a permanently black screen (HW 2026-10-04, the old gamescope took ~0.7 s to go). Exited means
+# gone OR a zombie: its fds are closed either way, and a zombie child still answers `kill -0`.
+# Bounded, and no SIGKILL: gamescope can ignore SIGTERM outright (the shutdown wedge in project
+# memory), and hanging here would block the relogin just as surely. tests/test-session.sh runs this.
+: "${NOVADECK_GAMESCOPE_STOP_TIMEOUT:=10}"
 GS_PID=""
+gs_running() {
+  [ -e "/proc/$1" ] && ! grep -q '^State:[[:space:]]*Z' "/proc/$1/status" 2>/dev/null
+}
 cleanup() {
-  [ -n "$GS_PID" ] && kill "$GS_PID" 2>/dev/null || true
+  if [ -n "$GS_PID" ]; then
+    kill "$GS_PID" 2>/dev/null || true
+    ticks=$((NOVADECK_GAMESCOPE_STOP_TIMEOUT * 10))
+    while [ "$ticks" -gt 0 ] && gs_running "$GS_PID"; do
+      sleep 0.1
+      ticks=$((ticks - 1))
+    done
+    ! gs_running "$GS_PID" \
+      || echo "novadeck-session: gamescope ($GS_PID) still running ${NOVADECK_GAMESCOPE_STOP_TIMEOUT}s after SIGTERM -- exiting anyway" >&2
+    GS_PID=""
+  fi
   rm -rf "$GS_RUNDIR" 2>/dev/null || true
   # Withdraw the A/B readiness marker (see below). Removing it here is what makes its continued
   # existence mean "the SAME session is still up" rather than "a session started once".

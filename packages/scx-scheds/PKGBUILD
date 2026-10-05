@@ -22,11 +22,23 @@
 # vendors per-arch at scheds/vmlinux/arch/arm64/ — so the build does NOT need BTF from the host
 # kernel, only from the target kernel at runtime.
 #
-# To bump: edit pkgver + sha256sums, re-check services/scx.service and services/scx still exist
-# in the new tarball, and re-read the tarball's own kernel.config against kernel/kernel.config.
+# SOURCE: Valve's SteamOS scx tree, not an upstream release tarball. Upstream's newest tag
+# (v1.1.3) stalls lavd under game load, and its fix (6d31ddd8) is unreleased; Valve's
+# v1.1.3.linux.steamos.2 is upstream main as of 2026-09-16 plus one commit that vendors the crates,
+# so it carries that fix and ~30 later lavd commits. It is what the Steam Frame ships. Valve's
+# repo (gitlab.steamos.cloud/holo/scx) is SSH-only, so we take the published holo-main SOURCE
+# tarball: a PKGBUILD next to a bare clone of that repo. prepare() checks the tarball hash, checks
+# the tag still names the pinned commit, and exports the tree from it. The "1.1.3" in the version
+# is Valve's label only; this is NOT the 1.1.3 release.
+#
+# To bump: take the newest scx-scheds-*.src.tar.gz under
+# steamdeck-packages.steamos.cloud/archlinux-mirror/sources/holo-main/ and set pkgver,
+# sha256sums and _commit together (`git --git-dir=scx-scheds/scx rev-parse v<pkgver>^{commit}`).
+# Re-check services/scx.service and services/scx still exist, that services/scx still sets the
+# flags package() asserts, and re-read the tree's own kernel.config against kernel/kernel.config.
 
 pkgname=scx-scheds
-pkgver=1.1.3
+pkgver=1.1.3.linux.steamos.2
 pkgrel=1
 pkgdesc="sched_ext userspace schedulers (scx_lavd and fallbacks)"
 url="https://github.com/sched-ext/scx"
@@ -59,6 +71,7 @@ depends=(
   zlib          # libz.so.1, linked directly by all three binaries
 )
 makedepends=(
+  git           # exports the tree from the bare clone in Valve's source tarball
   rust          # provides cargo
   clang
   llvm
@@ -69,8 +82,11 @@ makedepends=(
   elfutils
   pkgconf
 )
-source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('4dd6dd77ce1cdb9213f14339b17b9ba284e76055f866f6aede53f2488d838979')
+source=("$pkgname-$pkgver-1.src.tar.gz::https://steamdeck-packages.steamos.cloud/archlinux-mirror/sources/holo-main/$pkgname-$pkgver-1.src.tar.gz")
+sha256sums=('dc96077dd20d811554b47c4dff1d64232e01e80b669bc1ce7757f72b39152f90')
+# The commit tag v$pkgver names inside that tarball's bare clone. A tag can be moved; a commit
+# cannot, so prepare() refuses to build if the two disagree.
+_commit=09f66735e5b52023a44001d019ca19204cb5760b
 
 # The schedulers to build and install. Kept in one place so the -p flags and the install loop
 # below cannot drift apart.
@@ -81,7 +97,18 @@ prepare() {
   # into other packages), so the sha256sums array above is never actually checked. Assert the
   # tarball hash ourselves — otherwise the pin is decorative and this build silently trusts
   # whatever GitHub served.
-  echo "${sha256sums[0]}  $srcdir/$pkgname-$pkgver.tar.gz" | sha256sum -c -
+  echo "${sha256sums[0]}  $srcdir/$pkgname-$pkgver-1.src.tar.gz" | sha256sum -c -
+
+  # makepkg extracted the tarball to scx-scheds/{PKGBUILD,scx}; scx is a bare clone. Export the
+  # tagged tree from it rather than building in a checkout, so nothing outside the tag leaks in.
+  local _repo="$srcdir/$pkgname/scx"
+  local _got
+  _got="$(git --git-dir="$_repo" rev-parse "v$pkgver^{commit}")"
+  [ "$_got" = "$_commit" ] ||
+    { echo "tag v$pkgver is $_got, pinned $_commit" >&2; return 1; }
+  rm -rf "$srcdir/scx-$pkgver"
+  mkdir -p "$srcdir/scx-$pkgver"
+  git --git-dir="$_repo" archive "$_commit" | tar -x -C "$srcdir/scx-$pkgver"
 
   cd "scx-$pkgver"
   # build-overlay.sh injects `patch -p1 < "$srcdir/<patch>"` for each source.pin `patches:` entry
@@ -92,8 +119,9 @@ prepare() {
   # so a future rustup-based builder cannot try to download a toolchain mid-build.
   rm -f rust-toolchain.toml
 
-  # Pre-fetch every crate now so build() can run --frozen: fetching is the one step that needs
-  # the network, and failing here gives a clearer error than failing deep in a compile.
+  # Pre-fetch every crate now so build() can run --frozen. Valve's tree vendors them (vendor/ +
+  # .cargo/config.toml source replacement), so this resolves offline and only proves Cargo.lock
+  # and vendor/ agree; it fails here, with a clearer error than deep in a compile.
   cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
 }
 
@@ -159,11 +187,16 @@ package() {
 
   install -Dm0644 services/scx.service "$pkgdir/usr/lib/systemd/system/scx.service"
 
-  # Upstream's services/scx defaults to scx_cosmos, which we do not build. Rewrite it to the
-  # scheduler we ship rather than shipping a config that names a missing binary. Left as a
-  # normal config file under /etc so it stays user-editable.
+  # Valve's services/scx already selects scx_lavd and sets the Steam Frame's flags,
+  # `--pinned-slice-us 500 --dd-max-wait-us 0`: a 0.5 ms slice for every task while a pinned task
+  # runs on a CPU (default 5 ms), and a task skips the queue onto a CPU's local DSQ only if that CPU
+  # is idle (default: if it would start within 350 us). Both are taken as Valve ships them;
+  # neither was measured here. `--dd-max-wait-us` does not exist in the v1.1.3 release, so these
+  # flags only work on this tree. Its first line lists schedulers we do not build, so it is
+  # rewritten to the ones we do. Left as a normal config file under /etc so it stays user-editable.
   #
-  # SCX_FLAGS='--autopower' is what couples the scheduler to the power profile: lavd then polls
+  # --autopower is OURS, prepended to Valve's flags (it does not conflict with them:
+  # can_autopower() only excludes the other power-mode flags). It couples the scheduler to the power profile: lavd then polls
   # PowerProfiles.ActiveProfile on the system bus once a second and switches its own
   # performance/balanced/powersave mode live, with no unit restart. novadeck-powerd answers that
   # name (we ship no power-profiles-daemon) — see the PPD_NAMES block in
@@ -171,12 +204,16 @@ package() {
   # Deliberately set HERE and not via a scx.service.d drop-in: upstream's ExecStart is
   # `${SCX_FLAGS_OVERRIDE:-$SCX_FLAGS}`, so a drop-in would silently outrank a user's own edit to
   # this file. Keeping it in the file means a user can see it and change it.
-  sed -e 's/^SCX_SCHEDULER=.*/SCX_SCHEDULER=scx_lavd/' \
-      -e 's|^# Set custom flags.*|# Flags for the scheduler above. --autopower makes scx_lavd follow the active power profile\n# (novadeck-powerd answers PowerProfiles on the system bus); drop it to pin one mode by hand.|' \
-      -e "s/^#SCX_FLAGS=.*/SCX_FLAGS='--autopower'/" \
+  #
+  # The assertion pins Valve's exact flags: if a later tree changes them, the build stops so the
+  # change is read rather than inherited.
+  sed -e "s/^# List of scx_schedulers:.*/# Schedulers in this package: ${_scheds[*]}/" \
+      -e 's/^SCX_SCHEDULER=.*/SCX_SCHEDULER=scx_lavd/' \
+      -e 's|^# Set custom flags.*|# Flags for the scheduler above. --autopower makes scx_lavd follow the active power profile\n# (novadeck-powerd answers PowerProfiles on the system bus); drop it to pin one mode by hand.\n# --pinned-slice-us / --dd-max-wait-us are the Steam Frame'"'"'s settings, as Valve ships them.|' \
+      -e "s/^SCX_FLAGS='\\(.*\\)'\$/SCX_FLAGS='--autopower \\1'/" \
       services/scx > "$srcdir/scx.default"
-  grep -q "^SCX_FLAGS='--autopower'$" "$srcdir/scx.default" ||
-    { echo "scx defaults file did not gain SCX_FLAGS; upstream services/scx changed shape" >&2; return 1; }
+  grep -q "^SCX_FLAGS='--autopower --pinned-slice-us 500 --dd-max-wait-us 0'$" "$srcdir/scx.default" ||
+    { echo "scx defaults file does not carry the expected SCX_FLAGS; Valve's services/scx changed" >&2; return 1; }
   install -Dm0644 "$srcdir/scx.default" "$pkgdir/etc/default/scx"
 
   install -Dm0644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"

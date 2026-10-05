@@ -398,14 +398,14 @@ jobs:
           regression here is INVISIBLE to anyone who never turns it on. That cuts both ways: it is a
           low-risk bump to take, and a bad one can sit unnoticed. Drill:
 
-          - [ ] \`packages/scx-scheds/PKGBUILD\`: pkgver + sha256sums together. \`prepare()\` re-asserts that hash itself, because build-overlay.sh runs makepkg with \`--skipinteg\` and the sha256sums array is otherwise never checked
-          - [ ] \`services/scx.service\` and \`services/scx\` still exist at those paths (\`package()\` installs both), and \`services/scx\` still carries the three lines package()'s sed rewrites: \`SCX_SCHEDULER=\`, the \`# Set custom flags\` comment, \`#SCX_FLAGS=\`. The \`SCX_FLAGS='--autopower'\` grep assertion is what fails the build if upstream reshapes that file
+          - [ ] we build from Valve's SteamOS scx tree, not upstream releases (see the PKGBUILD header): first check whether a newer \`scx-scheds-*.src.tar.gz\` under steamdeck-packages.steamos.cloud/archlinux-mirror/sources/holo-main/ already carries this release, and prefer that. Either way pkgver + sha256sums (+ \`_commit\` for Valve's tree) move together; \`prepare()\` re-asserts the hash itself, because build-overlay.sh runs makepkg with \`--skipinteg\`
+          - [ ] \`services/scx.service\` and \`services/scx\` still exist at those paths (\`package()\` installs both). \`package()\` prepends \`--autopower\` to the \`SCX_FLAGS=\` line in \`services/scx\` and asserts the exact result (\`--autopower --pinned-slice-us 500 --dd-max-wait-us 0\`, the Steam Frame's flags); a source that sets different flags, or none, fails the build until that is decided
           - [ ] re-read the tarball's own \`kernel.config\` against \`kernel/kernel.config\` — it is upstream's authoritative CONFIG_* list and it does change between releases. Before adding a symbol, check whether it is promptless and already resolves \`=y\` from defconfig
           - [ ] read the release notes for scx_lavd changes GATED ON KERNEL VERSION. 1.1.3 dropped ops.cpu_acquire/release for \`tp_btf/sched_switch\` on kernels >= 6.19; a kernel-gated attach can need a CONFIG the upstream kernel.config lists but our fragment never named, and upstream's file does not have to change for our exposure to
           - [ ] \`rust/scx_cargo/src/bpf_builder.rs\` still calls \`.rustfmt("disable_rustfmt")\`. The qemu shim in \`build()\` exists ONLY to answer that sentinel — if upstream renames it the shim stops matching, which must fail loudly rather than silently reformat
           - [ ] \`scheds/rust/scx_{lavd,bpfland,rusty}\` still exist and \`Cargo.lock\` is still checked in (build() runs \`--frozen\`)
           - [ ] \`make overlay\` then \`make relock\`; read the \`rootfs/manifest.lock\` diff rather than refreshing it blind
-          - [ ] HW pass with the scheduler actually SELECTED (\`novadeck-scheduler lavd\`) and a real gameplay leg — the shipped flags are \`--autopower\`, so also confirm lavd still follows the active power profile off novadeck-powerd's PowerProfiles name
+          - [ ] HW pass with the scheduler actually SELECTED (\`novadeck-scheduler lavd\`) and a real gameplay leg — the shipped flags include \`--autopower\`, so also confirm lavd still follows the active power profile off novadeck-powerd's PowerProfiles name
           EOF
           )"
 

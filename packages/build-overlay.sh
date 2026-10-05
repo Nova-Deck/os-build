@@ -293,8 +293,8 @@ if [ ${#BUILD_NAMES[@]} -eq 0 ] && [ "$stale_foreign" -eq 0 ] && [ "$retired" -e
   exit 0
 fi
 
-# Build inside the pinned base-devel image under arm64 emulation. makepkg refuses to run as
-# root, so create an unprivileged builder with passwordless sudo (makepkg -s installs the
+# Build inside the pinned base-devel image: under arm64 qemu emulation on an x86 dev box, natively on
+# an aarch64 host (the CI runners). makepkg refuses to run as root, so create an unprivileged builder with passwordless sudo (makepkg -s installs the
 # makedepends via pacman). --skipinteg skips checksum validation for our added patch sources;
 # the upstream gamescope is still pinned by the PKGBUILD's git #commit=<tag>.
 pins_builder_ensure >/dev/null
@@ -310,7 +310,11 @@ pins_builder_ensure >/dev/null
 if [ ${#BUILD_NAMES[@]} -eq 0 ]; then
   echo "[overlay] no package changed — re-indexing only ($stale_foreign foreign-arch artifact(s) to drop, $retired retired package(s) purged)" >&2
 else
-  echo "[overlay] building ${#BUILD_NAMES[@]} changed package(s) in isolated arm64 qemu containers (slow — emulated)" >&2
+  case "$(uname -m)" in
+    aarch64|arm64) how="native arm64" ;;
+    *)             how="arm64 qemu — emulated, slow" ;;
+  esac
+  echo "[overlay] building ${#BUILD_NAMES[@]} changed package(s) in isolated containers ($how)" >&2
 fi
 for name in "${BUILD_NAMES[@]}"; do
   echo "[overlay] === build $name (isolated container) ===" >&2

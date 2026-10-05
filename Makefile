@@ -510,6 +510,7 @@ test: verify-lock ## Run the offline bootctl/post-install/boot-disk/pairingd/qui
 	bash $(TESTS_DIR)/test-graphics-provider.sh
 	bash $(TESTS_DIR)/test-android-guestos.sh
 	bash $(TESTS_DIR)/test-android-shared.sh
+	bash $(TESTS_DIR)/test-android-titles.sh
 	bash $(TESTS_DIR)/test-mesa-source.sh
 	bash $(TESTS_DIR)/test-video-decode.sh
 	bash $(TESTS_DIR)/test-proton-dxvk.sh

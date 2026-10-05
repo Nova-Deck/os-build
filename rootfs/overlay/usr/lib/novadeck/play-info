@@ -1,0 +1,272 @@
+#!/usr/bin/env python3
+"""play-info PACKAGE DIR
+
+Fetches the Google Play listing of PACKAGE and writes its artwork into DIR, for Steam's library:
+
+  grid.<ext>     920x430   library capsule (landscape)        from the feature graphic
+  hero.<ext>     1920x620  library page banner                from the feature graphic
+  portrait.jpg   600x900   library capsule (portrait)         composed: the Play icon over the
+                                                              feature graphic, blurred
+  icon.<ext>     256x256   shortcut icon                      from the Play icon
+
+Every image is sized and cropped by Play's own image server (the =wN-hN-c URL suffix); <ext> is
+whatever the server really returned (checked by magic bytes, never trusted from the URL). Steam's
+SetCustomArtworkForApp takes PNG and JPEG only, so those are all that is asked for (Accept) and
+all that is kept: a WebP the server sends anyway is dropped, as if it could not be fetched. Only
+the files that could be fetched exist. The listing's text is not kept: Steam has nowhere to show
+it for a shortcut.
+
+The portrait capsule is the one image Play has no source for -- a crop of the landscape feature
+graphic, or a screenshot, reads as a fragment on the library card -- so it is composed with
+ffmpeg (in the base for the Steam client): the icon, rounded, centred on the feature graphic
+blurred and darkened (on the icon itself, blurred, when there is no feature graphic).
+
+Exit 0: a listing was found (whatever art it had is written).  3: Play has no listing (final).
+Exit 1: nothing could be fetched (offline, throttled, not a listing page) -- try again later.
+
+WHERE THE DATA IS. The listing page carries its data in AF_initDataCallback script blobs; the one
+keyed 'ds:5' holds the app, and inside it the positions below -- the same ones
+google-play-scraper (facundoolano) reads, kept in one table so a Play change is one edit. An
+image node there is [type, [w, h], null, [null, null, url]] with type 1 screenshot, 2 feature
+graphic, 4 icon, which is also the fallback when a position moved: the first node of the right
+type anywhere in the app blob. The og: meta tags are the last resort (icon, title).
+"""
+import html
+import json
+import os
+import re
+import subprocess
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+
+UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
+      "Chrome/124.0.0.0 Safari/537.36")
+STORE = os.environ.get("NOVADECK_PLAY_STORE_URL", "https://play.google.com/store/apps/details")
+TIMEOUT = 30
+
+# Positions inside ds:5[1][2] (the app blob).
+APP = (1, 2)
+PATHS = {
+    "title": (0, 0),   # only to tell a listing from a page that is not one
+    "icon": (95, 0, 3, 2),
+    "feature": (96, 0, 3, 2),
+}
+IMG_FEATURE, IMG_ICON = 2, 4
+
+# What Steam wants, and which Play image gives it. "c" crops to exactly w x h around the centre.
+OUTPUTS = (
+    ("grid", "feature", "w920-h430-c"),
+    ("hero", "feature", "w1920-h620-c"),
+    ("icon", "icon", "w256-h256-c"),
+)
+
+# The composed portrait capsule: its background (cropped to the capsule by Play), the icon laid on
+# it, and how far above the centre the icon sits and how round its corners are.
+PORTRAIT_W, PORTRAIT_H = 600, 900
+PORTRAIT_ICON, PORTRAIT_ICON_LIFT, PORTRAIT_ICON_RADIUS = 384, 40, 72
+
+
+def path(obj, *keys):
+    for k in keys:
+        try:
+            obj = obj[k]
+        except (IndexError, KeyError, TypeError):
+            return None
+    return obj
+
+
+def fetch(url, accept="*/*"):
+    req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": accept,
+                                               "Accept-Language": "en-US,en;q=0.8"})
+    with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+        return r.read()
+
+
+def listing_html(pkg):
+    """The page, or None when Play has no listing for pkg."""
+    # A listing can be missing for one storefront and present for another; gl= narrows it.
+    for query in ({"id": pkg, "hl": "en", "gl": "us"}, {"id": pkg, "hl": "en"}):
+        try:
+            return fetch(STORE + "?" + urllib.parse.urlencode(query)).decode("utf-8", "replace")
+        except urllib.error.HTTPError as e:
+            if e.code != 404:
+                raise
+    return None
+
+
+def script_data(page, key="ds:5"):
+    m = re.search(r"AF_initDataCallback\(\{key: '" + re.escape(key) + r"'.*?data:(.*?), sideChannel: \{\}\}\);</script",
+                  page, re.S)
+    if not m:
+        return None
+    try:
+        return json.loads(m.group(1))
+    except ValueError:
+        return None
+
+
+def image_nodes(obj, out=None):
+    """Every [type, [w, h], null, [null, null, url]] node under obj, in document order."""
+    if out is None:
+        out = []
+    if isinstance(obj, list):
+        url = path(obj, 3, 2)
+        if (len(obj) >= 4 and isinstance(obj[0], int) and isinstance(url, str)
+                and url.startswith(("https://", "http://"))):
+            dims = obj[1] if isinstance(obj[1], list) and len(obj[1]) == 2 else [None, None]
+            out.append({"type": obj[0], "w": dims[0], "h": dims[1], "url": url})
+        for item in obj:
+            image_nodes(item, out)
+    elif isinstance(obj, dict):
+        for item in obj.values():
+            image_nodes(item, out)
+    return out
+
+
+def text(markup):
+    if not isinstance(markup, str):
+        return ""
+    s = re.sub(r"(?i)<br\s*/?>", "\n", markup)
+    s = re.sub(r"<[^>]+>", "", s)
+    return html.unescape(s).strip()
+
+
+def meta_tag(page, prop):
+    for tag in re.findall(r"<meta\b[^>]*>", page):
+        if re.search(r'(?:property|name)="' + re.escape(prop) + '"', tag):
+            m = re.search(r'content="([^"]*)"', tag)
+            if m:
+                return html.unescape(m.group(1))
+    return None
+
+
+def base_url(url):
+    """A Play image URL without its size suffix, so one can be added."""
+    return url.split("=", 1)[0]
+
+
+def parse(page):
+    app = path(script_data(page), *APP)
+    nodes = image_nodes(app) if app is not None else []
+    first = lambda t: next((n for n in nodes if n["type"] == t), None)
+
+    icon = path(app, *PATHS["icon"]) or (first(IMG_ICON) or {}).get("url")
+    feature = path(app, *PATHS["feature"]) or (first(IMG_FEATURE) or {}).get("url")
+
+    title = path(app, *PATHS["title"])
+    if not isinstance(title, str) or not title:
+        m = re.search(r"<h1[^>]*>(.*?)</h1>", page, re.S)
+        title = text(m.group(1)) if m else None
+        if not title:
+            og = meta_tag(page, "og:title")
+            title = re.sub(r"\s+-\s+(Apps|Android Apps) on Google Play$", "", og) if og else None
+    if not icon:
+        og = meta_tag(page, "og:image")
+        icon = og if og and og.startswith(("https://", "http://")) else None
+
+    return {
+        "found": bool(title or icon),
+        "icon": base_url(icon) if icon else None,
+        "feature": base_url(feature) if feature else None,
+    }
+
+
+def image_ext(data):
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "png"
+    if data[:3] == b"\xff\xd8\xff":
+        return "jpg"
+    return None
+
+
+def write_images(images, outdir):
+    for name, source, size in OUTPUTS:
+        url = images.get(source)
+        if not url:
+            continue
+        try:
+            data = fetch(url + "=" + size, accept="image/png,image/jpeg")
+        except (urllib.error.URLError, OSError):
+            continue
+        ext = image_ext(data)
+        if not ext:
+            continue
+        for old in os.listdir(outdir):
+            if old.rsplit(".", 1)[0] == name:
+                os.unlink(os.path.join(outdir, old))
+        with open(os.path.join(outdir, f"{name}.{ext}"), "wb") as f:
+            f.write(data)
+    compose_portrait(images, outdir)
+
+
+def compose_portrait(images, outdir):
+    """portrait.jpg in outdir, or False (no icon, a fetch failed, ffmpeg failed): Steam then
+    shows its own capsule for the shortcut."""
+    icon, back = images.get("icon"), images.get("feature") or images.get("icon")
+    if not icon:
+        return False
+    w, h, n, r = PORTRAIT_W, PORTRAIT_H, PORTRAIT_ICON, PORTRAIT_ICON_RADIUS
+    sources = {"back": f"{back}=w{w}-h{h}-c", "front": f"{icon}=w{n}-h{n}-c"}
+    tmp = {k: os.path.join(outdir, f".portrait-{k}") for k in sources}
+    out = os.path.join(outdir, "portrait.jpg")
+    # Rounded corners: outside the inner rectangle, keep only what is within r of its corner.
+    dx, dy = f"abs(X-W/2+0.5)-(W/2-{r})", f"abs(Y-H/2+0.5)-(H/2-{r})"
+    mask = f"if(gt({dx},0)*gt({dy},0),lte(hypot({dx},{dy}),{r}),1)"
+    graph = (f"[0]scale={w}:{h},boxblur=24:2,eq=brightness=-0.18:saturation=1.1[bg];"
+             f"[1]scale={n}:{n},format=rgba,"
+             f"geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='alpha(X,Y)*{mask}'[ic];"
+             f"[bg][ic]overlay=(W-w)/2:(H-h)/2-{PORTRAIT_ICON_LIFT},format=yuvj444p")
+    try:
+        for k, url in sources.items():
+            data = fetch(url, accept="image/png,image/jpeg")
+            if not image_ext(data):
+                return False
+            with open(tmp[k], "wb") as f:
+                f.write(data)
+        rc = subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", tmp["back"], "-i", tmp["front"],
+                             "-filter_complex", graph, "-frames:v", "1", "-q:v", "2", "-f", "mjpeg",
+                             out + ".tmp"], stdin=subprocess.DEVNULL).returncode
+        if rc != 0:
+            print(f"play-info: ffmpeg could not compose the portrait capsule (exit {rc})", file=sys.stderr)
+            return False
+        os.replace(out + ".tmp", out)
+        return True
+    except (urllib.error.URLError, OSError) as e:
+        print(f"play-info: no portrait capsule: {e}", file=sys.stderr)
+        return False
+    finally:
+        for f in list(tmp.values()) + [out + ".tmp"]:
+            if os.path.exists(f):
+                os.unlink(f)
+
+
+def main():
+    if len(sys.argv) != 3:
+        print(__doc__.split("\n", 1)[0], file=sys.stderr)
+        return 2
+    pkg, outdir = sys.argv[1], sys.argv[2]
+    if not re.fullmatch(r"[A-Za-z0-9_.]+", pkg):
+        print(f"play-info: bad package name: {pkg}", file=sys.stderr)
+        return 2
+    os.makedirs(outdir, exist_ok=True)
+    try:
+        page = listing_html(pkg)
+    except (urllib.error.URLError, OSError) as e:
+        print(f"play-info: {pkg}: cannot reach Play: {e}", file=sys.stderr)
+        return 1
+
+    if page is None:
+        return 3
+    images = parse(page)
+    if not images.pop("found"):
+        # A page that is not a listing (consent wall, error page): nothing to keep, try later.
+        print(f"play-info: {pkg}: the page carried no listing", file=sys.stderr)
+        return 1
+    write_images(images, outdir)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

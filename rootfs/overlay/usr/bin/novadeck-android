@@ -6,6 +6,7 @@
 #   novadeck-android install FILE...  sideload .apk / .apkm / .xapk / .apks (split bundles too)
 #   novadeck-android list             installed apps that have a Steam title
 #   novadeck-android remove PACKAGE   uninstall (the Steam title has to be deleted by hand)
+#   novadeck-android enrich [PACKAGE] refetch a title's Play artwork and reapply it (all: every title)
 #   novadeck-android stop             shut Android down
 #
 # ONE SHARED ANDROID. A normal Steam launch of an Android title gets a fresh Lepton container whose
@@ -29,6 +30,17 @@
 #                                         build, generated from the installed Lepton at start.
 # plus the host's /dev/input (gamepads -- Lepton's guest has no evdev of its own) and the identity
 # Lepton writes into its runtime props.
+#
+# THE TITLES IN THE LIBRARY. Steam gives a non-Steam shortcut a name, an exe and the APK icon,
+# and nothing else: no capsule, no banner, and it lands loose among the Steam games. So each title
+# is also put into the "Google Play" collection and given library art from its Play listing
+# (sync_meta, on the same 15 s tick that adds titles). Both are done through the RUNNING client --
+# the collection and the custom art are Steam's own UI state, applied live over the CEF debugger
+# Decky already uses (/usr/lib/novadeck/steam-title) -- and the listing comes from
+# /usr/lib/novadeck/play-info. The art is kept under ~/.local/share/novadeck-android/meta/
+# <package>/ (the listing's text is not: Steam has nowhere to show it for a shortcut), and what
+# was applied to which app id is recorded there, so a title is enriched once and again only when
+# Steam has re-added it under a new id.
 set -euo pipefail
 
 LEPTON_APPID=3029110
@@ -41,6 +53,10 @@ RUNDIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 READY="${RUNDIR}/novadeck-android.ready"
 DESKTOP_DIR="${HOME}/.local/share/applications"
 APK_INFO=/usr/lib/novadeck/apk-info
+PLAY_INFO=/usr/lib/novadeck/play-info
+STEAM_TITLE=/usr/lib/novadeck/steam-title
+META_DIR="${SYS}/meta"
+COLLECTION="Google Play"   # the library collection every title goes into
 OVERLAY_ROOT=/usr/share/novadeck-android
 FW_TOOLS=/usr/lib/novadeck/android-framework
 FW_DIR="${SYS}/framework"
@@ -470,8 +486,64 @@ sync_titles() {
   for f in "${DESKTOP_DIR}"/novadeck-android-*.desktop; do
     [[ -f "$f" ]] || continue
     pkg="${f##*/novadeck-android-}"; pkg="${pkg%.desktop}"
-    grep -qx "$pkg" <<<"$pkgs" || rm -f "$f"
+    grep -qx "$pkg" <<<"$pkgs" || rm -rf "$f" "${META_DIR}/${pkg}"
   done
+}
+
+# --- library metadata -------------------------------------------------------------------------
+# A title's Play art lives in META_DIR/<pkg>/ (see play-info for the files). Three records sit
+# beside it: .fetched (empty) once Play has answered -- with art, or with no listing, which is
+# final -- .failed ("<tries> <epoch>") while it cannot be asked, and .applied ("appid=N [art=1]")
+# once the collection and art are in Steam for that app id.
+
+# Fetch PKG's listing. 0: it is on disk (or Play has none, which is final); 1: try again later.
+# Tries back off 1, 2, 4 ... 64 min apart, so an offline device does not keep knocking on Play.
+# FETCHED is set when Play was actually asked, so a tick asks for at most one title.
+FETCHED=0
+fetch_meta() {
+  local pkg="$1" dir="${META_DIR}/$1" n=0 last=0 now rc=0
+  [[ -f "${dir}/.fetched" ]] && return 0
+  now="$(date +%s)"
+  if read -r n last 2>/dev/null <"${dir}/.failed"; then
+    ((n <= 6)) || n=6
+    ((now - last >= 60 * (1 << n))) || return 1
+  fi
+  mkdir -p "$dir"
+  FETCHED=1
+  python3 "$PLAY_INFO" "$pkg" "$dir" || rc=$?
+  case "$rc" in
+    0|3) rm -f "${dir}/.failed"; : >"${dir}/.fetched"; return 0 ;;
+    *) echo "$((n + 1)) $now" >"${dir}/.failed"; return 1 ;;
+  esac
+}
+
+# Put PKG's title into the collection and give it whatever art its listing has, once per Steam
+# app id. Before Play has answered the collection alone goes in; the art follows with it.
+# 1: Steam has no shortcut for it yet, or its UI is not reachable -- the next tick tries again.
+apply_meta() {
+  local pkg="$1" dir="${META_DIR}/$1" appid want have="" icon
+  appid="$(python3 "$STEAM_TITLE" appid "$pkg" 2>/dev/null)" || return 1
+  want="appid=${appid}"
+  [[ -f "${dir}/.fetched" ]] && want+=" art=1"
+  have="$(cat "${dir}/.applied" 2>/dev/null || true)"
+  [[ "$have" == "$want" ]] && return 0
+  mkdir -p "$dir"
+  icon="$(compgen -G "${dir}/icon.*" | head -n1 || true)"
+  python3 "$STEAM_TITLE" apply "$appid" --collection "$COLLECTION" --art "$dir" \
+    ${icon:+--icon "$icon"} >/dev/null || return 1
+  echo "$want" >"${dir}/.applied"
+  say "${pkg}: in the \"${COLLECTION}\" collection${icon:+, with its Play artwork}"
+}
+
+sync_meta() {
+  local pkg
+  [[ -f "${SYS}/titles" ]] || return 0
+  FETCHED=0
+  while read -r pkg; do
+    [[ -n "$pkg" ]] || continue
+    ((FETCHED)) || fetch_meta "$pkg" || true
+    apply_meta "$pkg" || true
+  done <"${SYS}/titles"
 }
 
 # Link the current pads into Android's /dev/input. EventHub watches that directory for
@@ -562,11 +634,12 @@ cmd_daemon() {
   fi
   display_instance "$GAMESCOPE_WAYLAND_DISPLAY" >"$READY"
 
-  # Pads every 3 s; titles for apps installed from inside Android (the Play Store) every 15 s.
+  # Pads every 3 s; titles for apps installed from inside Android (the Play Store), and their
+  # collection and artwork, every 15 s.
   for ((i = 0; ; i++)); do
     kill -0 "$LEPTON_PID" 2>/dev/null || break
     sync_pads || true
-    ((i % 5)) || sync_titles || true
+    ((i % 5)) || { sync_titles || true; sync_meta || true; }
     sleep 3 &
     wait $! || true
   done
@@ -705,6 +778,11 @@ cmd_setup() {
     if steam_add "$desktop" com.android.vending; then
       grep -qx com.android.vending "${SYS}/titles" 2>/dev/null \
         || echo com.android.vending >>"${SYS}/titles"
+      # The store has no listing of its own on Play: say so, so nothing ever asks. It still goes
+      # into the collection, now if Steam's UI is already up, else on the daemon's next tick.
+      mkdir -p "${META_DIR}/com.android.vending"
+      : >"${META_DIR}/com.android.vending/.fetched"
+      apply_meta com.android.vending || true
       return 0
     fi
     sleep 20
@@ -731,9 +809,31 @@ cmd_remove() {
   [[ "$pkg" =~ ^[A-Za-z0-9_.]+$ ]] || die "bad package name: $pkg"
   ensure_android
   asx "pm uninstall $pkg" | grep -q Success || die "${pkg} is not installed"
-  rm -f "${DESKTOP_DIR}/novadeck-android-${pkg}.desktop" "${SYS}/icons/${pkg}.png"
+  rm -rf "${DESKTOP_DIR}/novadeck-android-${pkg}.desktop" "${SYS}/icons/${pkg}.png" "${META_DIR}/${pkg}"
   sed -i "/^${pkg//./\\.}\$/d" "${SYS}/titles" 2>/dev/null || true
   say "removed ${pkg} -- delete its title from the Steam library by hand"
+}
+
+# Fetch PACKAGE's listing again (all titles when given none) and apply it: for a title that was
+# added before this existed, a listing Play has since gained, or art the user wants back.
+cmd_enrich() {
+  local pkg pkgs
+  if [[ -z "${1:-}" || "$1" == all ]]; then
+    pkgs="$(cat "${SYS}/titles" 2>/dev/null || true)"
+    [[ -n "$pkgs" ]] || die "no Android titles yet"
+  else
+    [[ "$1" =~ ^[A-Za-z0-9_.]+$ ]] || die "bad package name: $1"
+    grep -qx "$1" "${SYS}/titles" 2>/dev/null || die "$1 has no Steam title (novadeck-android list)"
+    pkgs="$1"
+  fi
+  for pkg in $pkgs; do
+    if [[ "$pkg" != com.android.vending ]]; then
+      rm -rf "${META_DIR}/${pkg}"
+      fetch_meta "$pkg" || say "${pkg}: no listing fetched (see above); the title keeps its icon"
+    fi
+    rm -f "${META_DIR}/${pkg}/.applied"
+    apply_meta "$pkg" || say "${pkg}: not applied -- Steam must be running with the title in its library"
+  done
 }
 
 case "${1:-}" in
@@ -742,10 +842,11 @@ case "${1:-}" in
   store) cmd_run com.android.vending ;;
   list) cmd_list ;;
   remove) [[ -n "${2:-}" ]] || die "usage: novadeck-android remove PACKAGE"; cmd_remove "$2" ;;
+  enrich) cmd_enrich "${2:-}" ;;
   stop) systemctl --user stop "$UNIT" ;;
   daemon) cmd_daemon ;;
   idle-stop) cmd_idle_stop ;;
   setup) cmd_setup ;;
   framework-steps) framework_steps "$2" "$3" ;;  # internal: build_framework's worker
-  *) sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+  *) sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac

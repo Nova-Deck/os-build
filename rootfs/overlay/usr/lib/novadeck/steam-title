@@ -1,0 +1,323 @@
+#!/usr/bin/env python3
+"""steam-title -- a non-Steam shortcut of novadeck-android, as the RUNNING Steam client sees it.
+
+  steam-title appid PACKAGE
+      Print the shortcut's app id (the one Steam picked when the title was added; it is in
+      shortcuts.vdf and nowhere else). Exit 1 when there is no such shortcut.
+
+  steam-title apply APPID [--collection NAME] [--art DIR] [--icon FILE]
+      Put the title into the library collection NAME (created if missing), set its custom
+      artwork from DIR (grid/hero/portrait.<png|jpg>, what play-info writes), and its
+      shortcut icon from FILE. Prints one line per thing done. Exit 1 when Steam's UI cannot be reached
+      (not running, still starting: try again later), 2 when Steam has no such app.
+
+HOW. Steam's library -- its collections, and the custom art it saves under
+userdata/<id>/config/grid -- is owned by the client's own JavaScript, and that is the only
+writer that takes effect at once: shortcuts.vdf and the grid files are re-read at start-up,
+and the collections live in Steam's cloud-synced storage with no file to edit at all. So this
+does what a Decky plugin does, from outside: it evaluates a script in the client's shared JS
+context over CEF's remote debugger, which novadeck-steam keeps on at 127.0.0.1:8080 for Decky
+(see decky-inject-watchdog). The websocket client below is the ~60 lines of RFC 6455 that takes,
+so nothing is added to the rootfs. The calls are the ones Decky plugins use for exactly this
+(SteamGridDB, NonSteamLaunchers, unifideck): collectionStore for the collection and
+SteamClient.Apps.SetCustomArtworkForApp for the art.
+"""
+import base64
+import glob
+import json
+import os
+import socket
+import struct
+import sys
+import urllib.request
+
+STEAM = os.environ.get("NOVADECK_STEAM_ROOT", os.path.expanduser("~/.local/share/Steam"))
+CEF = os.environ.get("NOVADECK_STEAM_CEF", "127.0.0.1:8080")
+TIMEOUT = 60
+
+# SteamClient.Apps.SetCustomArtworkForApp asset types, by play-info's file names -- the values
+# of the client's own enum (library.js): 0 is the PORTRAIT capsule (library_capsule, saved as
+# <appid>p.<ext>) and 3 the wide one (the header, <appid>.<ext>). There is no icon type to use
+# here: 4 lands in the wide slot over the grid, so the icon goes through SetShortcutIcon alone.
+ASSET = {"portrait": 0, "hero": 1, "logo": 2, "grid": 3}
+
+
+# --- shortcuts.vdf ----------------------------------------------------------------------------
+
+def _cstring(data, i):
+    end = data.index(b"\0", i)
+    return data[i:end].decode("utf-8", "replace"), end + 1
+
+
+def _vdf(data, i=0):
+    out = {}
+    while i < len(data):
+        t = data[i]
+        i += 1
+        if t == 8:
+            return out, i
+        key, i = _cstring(data, i)
+        if t == 0:
+            out[key], i = _vdf(data, i)
+        elif t == 1:
+            out[key], i = _cstring(data, i)
+        elif t == 2:
+            out[key] = struct.unpack_from("<I", data, i)[0]
+            i += 4
+        else:
+            raise ValueError(f"binary VDF type {t}")
+    return out, i
+
+
+def shortcut_appid(pkg):
+    """Our shortcut for pkg: exe is novadeck-android and the launch options name the package
+    (Steam quotes both; the .desktop path is kept as a second witness, see steam_has)."""
+    for f in sorted(glob.glob(os.path.join(STEAM, "userdata", "*", "config", "shortcuts.vdf"))):
+        try:
+            root, _ = _vdf(open(f, "rb").read())
+        except (OSError, ValueError):
+            continue
+        for s in (root.get("shortcuts") or {}).values():
+            if not isinstance(s, dict):
+                continue
+            exe = str(s.get("Exe", "")).strip('"')
+            opts = str(s.get("LaunchOptions", ""))
+            desktop = str(s.get("ShortcutPath", ""))
+            if (exe.endswith("/novadeck-android") or exe == "novadeck-android") and (
+                    f'"run" "{pkg}"' in opts or f"run {pkg}" == opts.strip()
+                    or desktop.endswith(f"novadeck-android-{pkg}.desktop")):
+                appid = s.get("appid")
+                if isinstance(appid, int) and appid:
+                    return appid
+    return None
+
+
+# --- CEF remote debugging ---------------------------------------------------------------------
+
+class WebSocket:
+    def __init__(self, url):
+        host, _, rest = url.split("/", 2)[2].partition("/")
+        h, _, p = host.partition(":")
+        self.sock = socket.create_connection((h, int(p or 80)), timeout=TIMEOUT)
+        key = base64.b64encode(os.urandom(16)).decode()
+        self.sock.sendall((f"GET /{rest} HTTP/1.1\r\nHost: {host}\r\nUpgrade: websocket\r\n"
+                           f"Connection: Upgrade\r\nSec-WebSocket-Key: {key}\r\n"
+                           f"Sec-WebSocket-Version: 13\r\n\r\n").encode())
+        head = b""
+        while b"\r\n\r\n" not in head:
+            chunk = self.sock.recv(4096)
+            if not chunk:
+                raise ConnectionError("CEF closed the connection during the websocket handshake")
+            head += chunk
+        if b" 101 " not in head.split(b"\r\n", 1)[0]:
+            raise ConnectionError("CEF refused the websocket: " + head.split(b"\r\n", 1)[0].decode(errors="replace"))
+        self.buf = head.split(b"\r\n\r\n", 1)[1]
+
+    def _read(self, n):
+        while len(self.buf) < n:
+            chunk = self.sock.recv(65536)
+            if not chunk:
+                raise ConnectionError("CEF closed the websocket")
+            self.buf += chunk
+        out, self.buf = self.buf[:n], self.buf[n:]
+        return out
+
+    def send(self, text):
+        data = text.encode()
+        head = bytearray([0x81])
+        n = len(data)
+        if n < 126:
+            head.append(0x80 | n)
+        elif n < 65536:
+            head.append(0x80 | 126)
+            head += struct.pack(">H", n)
+        else:
+            head.append(0x80 | 127)
+            head += struct.pack(">Q", n)
+        mask = os.urandom(4)
+        head += mask
+        self.sock.sendall(bytes(head) + bytes(b ^ mask[i % 4] for i, b in enumerate(data)))
+
+    def recv(self):
+        """One complete text message (fragments joined; pings answered; close raised)."""
+        message = b""
+        while True:
+            b0, b1 = self._read(2)
+            op, n = b0 & 0x0F, b1 & 0x7F
+            if n == 126:
+                n = struct.unpack(">H", self._read(2))[0]
+            elif n == 127:
+                n = struct.unpack(">Q", self._read(8))[0]
+            mask = self._read(4) if b1 & 0x80 else None
+            payload = self._read(n)
+            if mask:
+                payload = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
+            if op == 0x8:
+                raise ConnectionError("CEF closed the websocket")
+            if op == 0x9:
+                self.sock.sendall(bytes([0x8A, 0x80]) + b"\0\0\0\0" + payload)
+                continue
+            if op in (0x1, 0x0):
+                message += payload
+                if b0 & 0x80:
+                    return message.decode("utf-8", "replace")
+
+    def close(self):
+        try:
+            self.sock.close()
+        except OSError:
+            pass
+
+
+def shared_js_context():
+    with urllib.request.urlopen(f"http://{CEF}/json", timeout=5) as r:
+        targets = json.load(r)
+    for t in targets:
+        if t.get("title") == "SharedJSContext" and t.get("webSocketDebuggerUrl"):
+            return t["webSocketDebuggerUrl"]
+    raise ConnectionError("Steam's SharedJSContext is not up yet")
+
+
+def evaluate(expression):
+    """Run expression in Steam's shared JS context; return its (awaited) value."""
+    ws = WebSocket(shared_js_context())
+    try:
+        ws.send(json.dumps({"id": 1, "method": "Runtime.evaluate",
+                            "params": {"expression": expression, "awaitPromise": True,
+                                       "returnByValue": True}}))
+        while True:
+            msg = json.loads(ws.recv())
+            if msg.get("id") == 1:
+                break
+    finally:
+        ws.close()
+    if "error" in msg:
+        raise RuntimeError(f"CDP: {msg['error'].get('message')}")
+    result = msg.get("result", {})
+    if "exceptionDetails" in result:
+        ex = result["exceptionDetails"]
+        text = (ex.get("exception") or {}).get("description") or ex.get("text")
+        raise RuntimeError(f"Steam JS: {text}")
+    return result.get("result", {}).get("value")
+
+
+# What Steam's own UI runs. Everything that can be absent is guarded, and each outcome is
+# reported, because the only way to know a library call worked is to look at the library.
+APPLY_JS = r"""
+(async () => {
+  const appid = %(appid)d, name = %(collection)s, art = %(art)s, iconPath = %(icon)s;
+  const out = {};
+  let ov = null;
+  for (let i = 0; i < 20 && !ov; i++) {
+    ov = appStore.GetAppOverviewByAppID(appid);
+    if (!ov) await new Promise(r => setTimeout(r, 500));
+  }
+  if (!ov) return {error: "no app " + appid};
+  if (name) {
+    let col = collectionStore.userCollections.find(c => c.displayName === name);
+    if (!col) {
+      col = collectionStore.NewUnsavedCollection(name, undefined, []);
+      await col.Save();
+      out.collectionCreated = true;
+    }
+    const has = col.apps && typeof col.apps.has === "function" && col.apps.has(appid);
+    if (has) {
+      out.collection = "present";
+    } else {
+      col.AsDragDropCollection().AddApps([ov]);
+      await col.Save();
+      out.collection = "added";
+    }
+  }
+  out.art = [];
+  for (const [type, ext, data] of art) {
+    await SteamClient.Apps.SetCustomArtworkForApp(appid, data, ext, type);
+    out.art.push(type);
+  }
+  if (iconPath && SteamClient.Apps.SetShortcutIcon) {
+    SteamClient.Apps.SetShortcutIcon(appid, iconPath);
+    out.icon = true;
+  }
+  return out;
+})()
+"""
+
+
+def image_ext(data):
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "png"
+    if data[:3] == b"\xff\xd8\xff":
+        return "jpg"
+    return None
+
+
+def art_entries(art_dir):
+    entries = []
+    for name, asset in ASSET.items():
+        for f in sorted(glob.glob(os.path.join(art_dir, name + ".*"))):
+            data = open(f, "rb").read()
+            ext = image_ext(data)
+            if ext:
+                entries.append([asset, ext, base64.b64encode(data).decode()])
+                break
+    return entries
+
+
+def cmd_apply(argv):
+    appid = int(argv[0])
+    collection = art_dir = icon = None
+    i = 1
+    while i < len(argv):
+        if argv[i] == "--collection":
+            collection = argv[i + 1]
+        elif argv[i] == "--art":
+            art_dir = argv[i + 1]
+        elif argv[i] == "--icon":
+            icon = argv[i + 1]
+        else:
+            raise SystemExit(f"steam-title: unknown option {argv[i]}")
+        i += 2
+    art = art_entries(art_dir) if art_dir and os.path.isdir(art_dir) else []
+    if icon and not os.path.isfile(icon):
+        icon = None
+    js = APPLY_JS % {"appid": appid, "collection": json.dumps(collection), "art": json.dumps(art),
+                     "icon": json.dumps(icon)}
+    try:
+        result = evaluate(js)
+    except (OSError, ConnectionError, ValueError) as e:
+        print(f"steam-title: Steam's UI is not reachable: {e}", file=sys.stderr)
+        return 1
+    if not isinstance(result, dict):
+        print(f"steam-title: unexpected reply from Steam: {result!r}", file=sys.stderr)
+        return 1
+    if result.get("error"):
+        print(f"steam-title: {result['error']}", file=sys.stderr)
+        return 2
+    if result.get("collection"):
+        print(f"collection {result['collection']}")
+    for t in result.get("art", []):
+        print(f"art {t}")
+    if result.get("icon"):
+        print("icon set")
+    return 0
+
+
+def main(argv):
+    if len(argv) >= 2 and argv[0] == "appid":
+        appid = shortcut_appid(argv[1])
+        if appid is None:
+            return 1
+        print(appid)
+        return 0
+    if len(argv) >= 2 and argv[0] == "apply":
+        try:
+            return cmd_apply(argv[1:])
+        except RuntimeError as e:
+            print(f"steam-title: {e}", file=sys.stderr)
+            return 1
+    print(__doc__.strip().split("\n\n")[0], file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

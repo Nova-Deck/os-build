@@ -345,7 +345,9 @@ accepts it as the last component, which a nested container cgroup is not), and a
 `novadeck-android.service` is flagged so its appID follows the `NOVADECK_ANDROID_APPID` root property
 that `novadeck-android` sets before bringing an app forward; (3) touch on such a window is
 Passthrough instead of Steam's click emulation, behind the ConVar `touch_passthrough_xdg_titles`
-(default on). Leaves `pick_primary_focus_and_override()` alone, so Steam's own window — the QAM and the
+(default on). Steam's `Disabled` touch mode still wins, and the mode is decided at touch-down and
+kept until the touch lifts, so a focus change mid-gesture cannot split one touch between `wl_touch`
+and click emulation. Leaves `pick_primary_focus_and_override()` alone, so Steam's own window — the QAM and the
 overlay — still wins when Steam asks for it.
 
 (A patch that once held the `0003` slot swapped `wl_output`'s `phys_width/phys_height` on the rotated

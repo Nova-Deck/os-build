@@ -28,6 +28,9 @@ that matters here -- all of which upstream gets right only for XWayland:
    emulation, so scrolling, swipes and pinch reach Android. Keyed on the
    shared-Android flag, or on any xdg window whose appID resolved at
    creation, behind the ConVar touch_passthrough_xdg_titles (default on).
+   Steam's Disabled mode still wins. The mode is decided when a touch goes
+   down and kept until it lifts, so a focus change mid-gesture does not
+   split one touch between wl_touch and click emulation.
 
 The three changes are hashtagbasit's, from a gamescope 3.16.30 tree, and apply
 unchanged to 3.16.29 plus this stack. Ours: the names (a window flag, a root
@@ -39,7 +42,7 @@ behind the ConVar.
 Not compiled on its own: validated by the overlay build of the full stack.
 
 diff --git a/src/steamcompmgr.cpp b/src/steamcompmgr.cpp
-index ca4e5bf3..3eecbd13 100644
+index ca4e5bf..3eecbd1 100644
 --- a/src/steamcompmgr.cpp
 +++ b/src/steamcompmgr.cpp
 @@ -5063,12 +5063,20 @@ const char *get_win_display_name(steamcompmgr_win_t *window)
@@ -108,7 +111,7 @@ index ca4e5bf3..3eecbd13 100644
  	ctx->atoms.WMChangeStateAtom = XInternAtom(ctx->dpy, "WM_CHANGE_STATE", false);
  	ctx->atoms.gamescopeInputCounterAtom = XInternAtom(ctx->dpy, "GAMESCOPE_INPUT_COUNTER", false);
 diff --git a/src/steamcompmgr_shared.hpp b/src/steamcompmgr_shared.hpp
-index c344d107..5771d19c 100644
+index c344d10..5771d19 100644
 --- a/src/steamcompmgr_shared.hpp
 +++ b/src/steamcompmgr_shared.hpp
 @@ -115,6 +115,9 @@ struct steamcompmgr_win_t {
@@ -122,7 +125,7 @@ index c344d107..5771d19c 100644
  	bool isExternalOverlay = false;
  	// mangoapp keeps the property but zeroes it while hidden.
 diff --git a/src/wlserver.cpp b/src/wlserver.cpp
-index 3d7d123c..bd1de2bc 100644
+index 3d7d123..644099e 100644
 --- a/src/wlserver.cpp
 +++ b/src/wlserver.cpp
 @@ -78,8 +78,10 @@
@@ -175,51 +178,61 @@ index 3d7d123c..bd1de2bc 100644
  	}
  	window->_window_types.emplace<steamcompmgr_xdg_win_t>();
  
-@@ -3229,6 +3256,24 @@ static void apply_touchscreen_orientation(GamescopePanelOrientation orientation,
+@@ -3229,6 +3256,34 @@ static void apply_touchscreen_orientation(GamescopePanelOrientation orientation,
  	*y = ty;
  }
  
 +// Android wants real touch -- scrolling, swipes, pinch -- not Steam's click emulation, which a
 +// non-Steam title gets by default. Keyed on "an xdg window that belongs to a launch": the shared
 +// Android window, or any xdg window whose appID resolved at creation. Operator knob:
-+// touch_passthrough_xdg_titles.
++// touch_passthrough_xdg_titles. Steam's "Disabled" still wins. Decided when a touch goes down and
++// kept until it lifts (touch_down_ids holds the passthrough ones), so a focus change mid-gesture
++// does not split one touch between wl_touch and click emulation.
 +gamescope::ConVar<bool> cv_touch_passthrough_xdg_titles( "touch_passthrough_xdg_titles", true, "Give a native-Wayland (xdg-shell) Steam title real touch instead of Steam's click emulation." );
 +
-+static gamescope::TouchClickMode wlserver_touch_click_mode()
++static gamescope::TouchClickMode wlserver_touchdown_click_mode()
 +{
-+	if ( wlserver.mouse_focus_surface != NULL )
-+	{
-+		wlserver_wl_surface_info *info = get_wl_surface_info( wlserver.mouse_focus_surface );
-+		steamcompmgr_win_t *win = ( info && info->xdg_surface ) ? info->xdg_surface->win : nullptr;
-+		if ( win && ( win->bSharedAndroid || ( cv_touch_passthrough_xdg_titles && win->appID != 0 ) ) )
-+			return gamescope::TouchClickModes::Passthrough;
-+	}
++	gamescope::TouchClickMode eMode = GetBackend()->GetTouchClickMode();
++	if ( eMode == gamescope::TouchClickModes::Disabled || wlserver.mouse_focus_surface == NULL )
++		return eMode;
++	wlserver_wl_surface_info *info = get_wl_surface_info( wlserver.mouse_focus_surface );
++	steamcompmgr_win_t *win = ( info && info->xdg_surface ) ? info->xdg_surface->win : nullptr;
++	if ( win && ( win->bSharedAndroid || ( cv_touch_passthrough_xdg_titles && win->appID != 0 ) ) )
++		return gamescope::TouchClickModes::Passthrough;
++	return eMode;
++}
++
++// A touch that went down as passthrough stays passthrough; any other keeps Steam's mode.
++static gamescope::TouchClickMode wlserver_touchmotion_click_mode( int touch_id )
++{
++	if ( wlserver.touch_down_ids.count( touch_id ) > 0 )
++		return gamescope::TouchClickModes::Passthrough;
 +	return GetBackend()->GetTouchClickMode();
 +}
 +
  void wlserver_touchmotion( double x, double y, int touch_id, uint32_t time, bool bAlwaysWarpCursor, gamescope::IBackendConnector* connector )
  {
  	assert( wlserver_is_lock_held() );
-@@ -3259,7 +3304,7 @@ void wlserver_touchmotion( double x, double y, int touch_id, uint32_t time, bool
+@@ -3259,7 +3314,7 @@ void wlserver_touchmotion( double x, double y, int touch_id, uint32_t time, bool
  		trackpad_dx = tx - wlserver.mouse_surface_cursorx;
  		trackpad_dy = ty - wlserver.mouse_surface_cursory;
  
 -		gamescope::TouchClickMode eMode = GetBackend()->GetTouchClickMode();
-+		gamescope::TouchClickMode eMode = wlserver_touch_click_mode();
++		gamescope::TouchClickMode eMode = wlserver_touchmotion_click_mode( touch_id );
  
  		if ( eMode == gamescope::TouchClickModes::Passthrough )
  		{
-@@ -3310,7 +3355,7 @@ void wlserver_touchdown( double x, double y, int touch_id, uint32_t time, gamesc
+@@ -3310,7 +3365,7 @@ void wlserver_touchdown( double x, double y, int touch_id, uint32_t time, gamesc
  		tx *= focusedWindowScaleX;
  		ty *= focusedWindowScaleY;
  
 -		gamescope::TouchClickMode eMode = GetBackend()->GetTouchClickMode();
-+		gamescope::TouchClickMode eMode = wlserver_touch_click_mode();
++		gamescope::TouchClickMode eMode = wlserver_touchdown_click_mode();
  
  		if ( eMode == gamescope::TouchClickModes::Passthrough )
  		{
 diff --git a/src/xwayland_ctx.hpp b/src/xwayland_ctx.hpp
-index 7b39ecb3..33de3fe9 100644
+index 7b39ecb..33de3fe 100644
 --- a/src/xwayland_ctx.hpp
 +++ b/src/xwayland_ctx.hpp
 @@ -152,6 +152,7 @@ struct xwayland_ctx_t final : public gamescope::IWaitable

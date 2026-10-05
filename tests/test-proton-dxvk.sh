@@ -13,8 +13,8 @@
 #     build that broke it.
 #
 # So the substitution is exercised here against fixtures instead of being trusted to a build log.
-# The fixture in case 1 is the real assignment from our pinned build (cachyos-11.0-20260703-slr,
-# proton line 1543), copied verbatim.
+# The fixture in case 1 is the real assignment from our pinned build (cachyos-11.0-20261005-slr,
+# proton line 1597), copied verbatim.
 #
 # WHAT THIS CANNOT SHOW. Only that the edit lands correctly. Whether it HELPS is a hardware
 # question — the probe fails open when it enumerates no GPU, and proton runs inside SLR4 where the

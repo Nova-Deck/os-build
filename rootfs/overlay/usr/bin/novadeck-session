@@ -54,6 +54,13 @@ if [ -n "${NOVADECK_GAMESCOPE_FAKE_OUTPUT_MM:-}" ]; then
   export GAMESCOPE_FAKE_OUTPUT_MM="$NOVADECK_GAMESCOPE_FAKE_OUTPUT_MM"
 fi
 
+# Extra commit lead before vblank while the planes rotate, for a board that declares one (device-env;
+# today the Pocket S2 and S 2K, against late-commit underruns). Consumed by our gamescope patch
+# packages/gamescope/patches/0024; an unknown env var is ignored, so this is harmless without it.
+if [ -n "${NOVADECK_SCANOUT_ROTATION_TIME_US:-}" ]; then
+  export GAMESCOPE_SCANOUT_ROTATION_TIME_US="$NOVADECK_SCANOUT_ROTATION_TIME_US"
+fi
+
 # Force the real DRM/KMS backend: a stray WAYLAND_DISPLAY/DISPLAY makes gamescope try to nest under
 # a (non-existent) parent compositor and fail with "Failed to connect to wayland socket".
 unset WAYLAND_DISPLAY DISPLAY

@@ -93,6 +93,38 @@ out="$(/bin/sh -c '
 [ "$out" = "twice-ok" ] && ok "a second call is a clean no-op" || bad "second call misbehaved: '${out:-<nothing>}'"
 
 # =================================================================================================
+# gamescope patch 0024 commits further ahead of vblank while the planes rotate, at a latency cost.
+# The evidence (a DPU underrun after every late commit, a one-frame black blink) is the Pocket S2's;
+# the Pocket S 2K shares its panel and takes it on that evidence. A per-BOARD fact in each device
+# conf -- not keyed on a panel class, so a new wide-panel board does not inherit it silently.
+CASE="scanout rotation lead time"
+CONF="$ROOT/rootfs/overlay/etc/novadeck/session.conf"
+DEVENV="$ROOT/rootfs/overlay/usr/lib/novadeck/device-env"
+DEVDIR="$ROOT/rootfs/overlay/usr/lib/novadeck/devices"
+devenv_var() {  # devenv_var <dt model> <var>
+  NOVADECK_MODEL="$1" NOVADECK_DEVICE_DIR="$DEVDIR" bash "$DEVENV" | sed -n "s/^$2=//p"
+}
+for model in 'AYANEO Pocket S2' 'AYANEO Pocket S 2K'; do
+  got="$(devenv_var "$model" NOVADECK_SCANOUT_ROTATION_TIME_US)"
+  [ "$got" = 1000 ] && ok "$model reserves 1000 us" || bad "$model: NOVADECK_SCANOUT_ROTATION_TIME_US='${got}', want 1000"
+done
+others=""
+while read -r model; do
+  case "$model" in 'AYANEO Pocket S2'|'AYANEO Pocket S 2K') continue ;; esac
+  got="$(devenv_var "$model" NOVADECK_SCANOUT_ROTATION_TIME_US)"
+  [ -n "$got" ] && [ "$got" != "''" ] && others+="$model=$got "
+done < <(sed -n 's/^ *"\([^"]*\)")[[:space:]]*profile=.*/\1/p' "$DEVENV")
+[ -z "$others" ] && ok "no other board pays the extra latency" || bad "set on boards without the evidence: $others"
+grep -q 'export GAMESCOPE_SCANOUT_ROTATION_TIME_US="\$NOVADECK_SCANOUT_ROTATION_TIME_US"' "$SESSION" \
+  && ok "novadeck-session hands it to gamescope as GAMESCOPE_SCANOUT_ROTATION_TIME_US" \
+  || bad "novadeck-session does not export GAMESCOPE_SCANOUT_ROTATION_TIME_US from device-env"
+if sed 's,#.*,,' "$CONF" | grep -q GAMESCOPE_SCANOUT_ROTATION_TIME_US; then
+  bad "session.conf sets GAMESCOPE_SCANOUT_ROTATION_TIME_US -- it is a per-board fact, keep it in the device conf"
+else
+  ok "session.conf does not set it for a whole class of boards"
+fi
+
+# =================================================================================================
 echo
 echo "test-session: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

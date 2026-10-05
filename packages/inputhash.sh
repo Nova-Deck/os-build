@@ -39,6 +39,9 @@
 # Filenames still count, just indirectly: the patch list and the PKGBUILD name are fields IN
 # source.pin, which is itself hashed, so renaming a patch moves the digest.
 set -euo pipefail
+# The digest must not depend on the machine: glob order follows LC_COLLATE, and under en_US.UTF-8
+# `pipewire.install` sorts before `pipewire-pulse.install` while CI's C locale has it the other way.
+export LC_ALL=C
 
 DIR="${1:?usage: packages/inputhash.sh <package-dir>}"
 PIN="$DIR/source.pin"
@@ -61,6 +64,11 @@ local_pb="$(pin_field "$PIN" pkgbuild_local)"
 if [ -n "$local_pb" ]; then
   [ -f "$DIR/$local_pb" ] || { echo "$name: missing local PKGBUILD $DIR/$local_pb (declared in $PIN)" >&2; exit 1; }
   inputs+=("$DIR/$local_pb")
+  # A local recipe's install scriptlets ship beside it (build-overlay.sh stages them). Glob order is
+  # sorted, so stable; a package without any adds nothing and keeps its digest.
+  for f in "$DIR"/*.install; do
+    [ -f "$f" ] && inputs+=("$f")
+  done
 fi
 
 # The BUILDER is an input too, and the one the file list above cannot see: it is the compiler, the

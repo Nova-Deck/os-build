@@ -1,0 +1,29 @@
+# pipewire 1.6.1 — built FROM SOURCE via a novadeck-owned copy of Arch's 1:1.6.1-1 recipe
+# (packages/pipewire/PKGBUILD, plus its two install scriptlets), replacing the pinned snapshot's
+# 1:1.6.0-1 on the image and in the installer.
+#
+# Why: 1.6.0 orphans systemd's pipewire-0-manager socket. Its socket-activation helper,
+# listen_fd(), unset LISTEN_FDS on its first call, and module-protocol-native calls it once per
+# socket: pipewire-0 takes systemd's fd, then pipewire-0-manager finds no LISTEN_FDS, unlinks
+# systemd's socket path and binds its own. systemd's socket stays open in pipewire, never polled.
+# pipewire.service is Type=simple, so WirePlumber starts ~1 ms after it, and on some boots connects
+# before the rebind — into a socket nobody will ever accept from. WirePlumber then sits idle, is
+# never a PipeWire client, and the device has no sound (only "Dummy Output") until it is restarted.
+# Measured: 2 of 16 boots on a MANGMI Pocket Max reboot loop (2026-10-05). Fixed upstream in 1.6.1
+# (5cd734e8c, upstream issue #5140), which is in the 1.6.1 tag.
+#
+# Drop this overlay when the pinned holo snapshot ships pipewire >= 1.6.1 itself.
+#
+# Deviations from Arch's recipe, none of which touch the six packages' contents:
+#   - pkgname= cut to the six the image installs (pipewire, libpipewire, alsa-card-profiles,
+#     pipewire-audio, pipewire-alsa, pipewire-pulse; the installer has only libpipewire), and the
+#     other package_*() functions removed. package_pipewire() still moves every other split's files
+#     out, so ours match Arch's.
+#   - arch=(aarch64).
+#   - prepare() no longer cherry-picks 5cd734e8c: the 1.6.1 tag already contains it.
+# docs stay enabled although pipewire-docs is not built: meson needs doxygen for the man pages too.
+#
+# Fields: see packages/gamescope/source.pin.
+name: pipewire
+pkgbuild_local: PKGBUILD
+pkgrel_suffix: 1

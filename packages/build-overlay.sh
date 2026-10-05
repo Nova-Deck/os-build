@@ -171,6 +171,11 @@ for pin in "${PINS[@]}"; do
     # source the PKGBUILD names (e.g. a release tarball) just the same.
     echo "[overlay] $name: local PKGBUILD ${local_pb}" >&2
     cp "$pdir/$local_pb" "$bd/PKGBUILD"
+    # Its install scriptlets (PKGBUILD install=), which makepkg reads from beside the PKGBUILD.
+    # Hashed by inputhash.sh.
+    for f in "$pdir"/*.install; do
+      [ -f "$f" ] && cp "$f" "$bd/"
+    done
   else
     : "${repo:?$pin: missing pkgbuild_repo}"
     : "${path:?$pin: missing pkgbuild_path}"; : "${ref:?$pin: missing pkgbuild_ref}"

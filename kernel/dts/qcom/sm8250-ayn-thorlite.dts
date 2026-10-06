@@ -61,6 +61,22 @@
 		};
 	};
 
+	/* GPIO and pin config from the stock Android devicetree. KEY_F24 is what
+	   InputPlumber's ayn2 map turns into QuickAccess2, as on the AYN Thor. */
+	gpio-keys-ayn {
+		compatible = "gpio-keys";
+		pinctrl-names = "default";
+		pinctrl-0 = <&key_ayn_n>;
+
+		key-ayn {
+			label = "AYN Key";
+			gpios = <&tlmm 92 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_F24>;
+			debounce-interval = <15>;
+			linux,can-disable;
+		};
+	};
+
 	gpio-keys-lid {
 		compatible = "gpio-keys";
 		pinctrl-names = "default";
@@ -1483,6 +1499,16 @@
 };
 
 &tlmm {
+	/* Stock Android sets input-enable, which the TLMM binding does not allow;
+	   output-disable is its equivalent here. */
+	key_ayn_n: key-ayn-n-state {
+		pins = "gpio92";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-disable;
+		output-disable;
+	};
+
 	hall_sensor_default: hall-sensor-default-state {
 		pins = "gpio123";
 		function = "gpio";

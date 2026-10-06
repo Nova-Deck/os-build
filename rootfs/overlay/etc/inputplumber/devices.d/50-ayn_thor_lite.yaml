@@ -13,10 +13,10 @@
 # and the AYN Thor Lite share a brand and nothing else about their input hardware: the Thor is
 # SM8550 and its pad is `gamepad,rsinput` in qcs8550-ayn-common.dtsi, enumerating as
 # "AYN Odin2 Gamepad" on rsinput-gamepad/input0, with a separate `gpio-keys-ayn` node carrying
-# the AYN key on KEY_F24. This board is SM8250, has no such node and no KEY_F24 anywhere in its
-# devicetree — only volume up/down and the hall lid switch — and its pad is the Retroid MCU.
-# Upstream's AYN Thor source rows would therefore bind NOTHING here, and the composite device
-# would never form. The capability maps disagree for the same underlying reason: the rsinput
+# the AYN key on KEY_F24. This board is SM8250 and its pad is the Retroid MCU, so upstream's
+# rsinput pad row would bind NOTHING here. It does have the same AYN key: the devicetree declares
+# `gpio-keys-ayn` on KEY_F24 too (TLMM GPIO 92, from the stock Android devicetree), and the second
+# source below takes it with upstream's own Thor row, ayn2 map included. The capability maps disagree for the same underlying reason: the rsinput
 # driver puts the triggers on ABS_Z/ABS_RZ, which the default translation already understands,
 # so `ayn2` has no trigger rows at all; the Retroid driver puts them on ABS_HAT2X/ABS_HAT2Y,
 # which MUST be claimed, and `ret1` is the map that claims them.
@@ -80,6 +80,17 @@ source_devices:
           phys_path: retroid-pocket-gamepad/input0
           vendor_id: "2020"
           product_id: "3001"
+          handler: event*
+
+    # The AYN key, KEY_F24 -> QuickAccess2, copied from upstream's 50-ayn_thor.yaml. The name is
+    # the devicetree node's. The phys_path is NOT node-specific: gpio_keys.c hard-codes
+    # "gpio-keys/input0" for every instance, so the name is what tells this source apart from
+    # the volume and lid gpio-keys devices.
+    - group: gamepad
+      capability_map_id: ayn2
+      evdev:
+          name: gpio-keys-ayn
+          phys_path: gpio-keys/input0
           handler: event*
 
 target_devices:

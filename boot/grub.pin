@@ -1,7 +1,10 @@
 # novadeck GRUB source pin — Phase 5
 # GNU GRUB 2.14, the upstream RELEASE tarball. The TARBALL + its sha256 is the canonical pin.
+# Fetched from the kernel.org GNU mirror, not ftp.gnu.org: the sha256 is what pins the content, so
+# the host only has to be reachable, and ftp.gnu.org (and its ftpmirror redirector) have been
+# observed unreachable from CI for the length of a release run.
 version:    2.14
-url:        https://ftp.gnu.org/gnu/grub/grub-2.14.tar.xz
+url:        https://mirrors.kernel.org/gnu/grub/grub-2.14.tar.xz
 sha256:     bc8d3c73535b8838d8c8e2654d73edc4e6ae8c8acdb45d5df5dc9a1547446d43
 git_tag:    grub-2.14
 

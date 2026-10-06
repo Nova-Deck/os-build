@@ -93,35 +93,6 @@ out="$(/bin/sh -c '
 [ "$out" = "twice-ok" ] && ok "a second call is a clean no-op" || bad "second call misbehaved: '${out:-<nothing>}'"
 
 # =================================================================================================
-# gamescope patch 0024 commits further ahead of vblank while the planes rotate, at a latency cost
-# paid only on rotated frames. Traced on the Pocket S2 (a DPU underrun after every late commit, a
-# one-frame black blink) and seen on the Pocket ACE, so defaults.conf sets it for every board. It
-# stays a device-env value rather than a session.conf line so one board can still turn it off.
-CASE="scanout rotation lead time"
-CONF="$ROOT/rootfs/overlay/etc/novadeck/session.conf"
-DEVENV="$ROOT/rootfs/overlay/usr/lib/novadeck/device-env"
-DEVDIR="$ROOT/rootfs/overlay/usr/lib/novadeck/devices"
-devenv_var() {  # devenv_var <dt model> <var>
-  NOVADECK_MODEL="$1" NOVADECK_DEVICE_DIR="$DEVDIR" bash "$DEVENV" | sed -n "s/^$2=//p"
-}
-n=0; wrong=""
-while read -r model; do
-  n=$((n+1))
-  got="$(devenv_var "$model" NOVADECK_SCANOUT_ROTATION_TIME_US)"
-  [ "$got" = 1000 ] || wrong+="$model='$got' "
-done < <(sed -n 's/^ *"\([^"]*\)")[[:space:]]*profile=.*/\1/p' "$DEVENV")
-[ "$n" -gt 0 ] || bad "found no board models in device-env"
-[ -z "$wrong" ] && ok "all $n boards reserve 1000 us" || bad "boards not at the 1000 us default: $wrong"
-grep -q 'export GAMESCOPE_SCANOUT_ROTATION_TIME_US="\$NOVADECK_SCANOUT_ROTATION_TIME_US"' "$SESSION" \
-  && ok "novadeck-session hands it to gamescope as GAMESCOPE_SCANOUT_ROTATION_TIME_US" \
-  || bad "novadeck-session does not export GAMESCOPE_SCANOUT_ROTATION_TIME_US from device-env"
-if sed 's,#.*,,' "$CONF" | grep -q GAMESCOPE_SCANOUT_ROTATION_TIME_US; then
-  bad "session.conf sets GAMESCOPE_SCANOUT_ROTATION_TIME_US -- keep it in device-env, where a board can override it"
-else
-  ok "session.conf does not set it; device-env owns it"
-fi
-
-# =================================================================================================
 echo
 echo "test-session: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

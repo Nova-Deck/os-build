@@ -10,7 +10,8 @@ and a compositor that commits close to vblank hits it every few minutes.
 Measured on Pocket S2 (SM8650, bonded dual-DSI video mode, 1440x2560@60,
 vtotal 2585, 14 programmable fetch lines, so fetch starts on line 2571),
 with a tracepoint that reads INTF_LINE_COUNT around each flush write
-(0396). Busy Steam UI, about 6500 kickoffs per 2 minutes:
+(a debug patch, 0396, dropped once issue #110 closed). Busy Steam UI,
+about 6500 kickoffs per 2 minutes:
 
   - Stock: 10 underruns in 2 minutes. Every one followed a kickoff whose
     master flush landed on 2569-2571. With the slave about two lines

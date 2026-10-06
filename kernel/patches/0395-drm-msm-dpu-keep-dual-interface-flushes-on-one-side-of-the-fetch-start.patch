@@ -1,0 +1,167 @@
+From: Philippe Simons <simons.philippe@gmail.com>
+Subject: [PATCH] drm/msm/dpu: keep dual-interface flushes on one side of the fetch start
+
+When a video-mode panel is driven by two interfaces, the kickoff writes
+each interface's CTL flush separately, about two scan lines apart. If
+those writes straddle the line where programmable fetch starts, the next
+frame underruns. On a handheld that is a single whole-screen black frame,
+and a compositor that commits close to vblank hits it every few minutes.
+
+Measured on Pocket S2 (SM8650, bonded dual-DSI video mode, 1440x2560@60,
+vtotal 2585, 14 programmable fetch lines, so fetch starts on line 2571),
+with a tracepoint that reads INTF_LINE_COUNT around each flush write
+(0396). Busy Steam UI, about 6500 kickoffs per 2 minutes:
+
+  - Stock: 10 underruns in 2 minutes. Every one followed a kickoff whose
+    master flush landed on 2569-2571. With the slave about two lines
+    later, the pair spans line 2571. Master flushes on 2560-2568 (61) and
+    on 2575+ (11) were all clean.
+  - A first version of this patch waited per interface. It kept every
+    flush off 2569-2575 and still gave 10 underruns in 2 minutes: the
+    master flushed on 2566-2568, the slave then waited and flushed on
+    2575-2576, 50-70 us later. Every underrun was such a straddling pair,
+    and every pair with both flushes on one side was clean.
+
+Inline rotation, scaling and QSEED LUT loading are not involved. The rate
+per late flush is the same with planes rotated and scaled at scanout, with
+the LUTs off, and with one plain unrotated 1440x2560 plane composited on
+the GPU. Clock and bandwidth are not involved either: the rate did not
+change with the core clock and the bandwidth vote pinned at maximum.
+
+So remember the line where programmable fetch starts. Once per kickoff,
+before any flush, on the master, if the timing engine is within 6 lines
+before it (enough for all the flush writes, measured at up to 20 us) or 3
+lines after it, spin until it is past. That is at most 9 lines (58 us at
+this mode) on about 1% of frames, under enc_spinlock, where the flushes
+already run.
+
+Single-interface panels do not need it, and get the same wait anyway, which
+is harmless there. On Pocket ACE (QCS8550, single DSI, vtotal 1645, 17
+fetch lines, so fetch starts on line 1628) with the wait switched off,
+about 33 of 17285 flushes landed within two lines of the fetch start, 6 of
+them exactly on it, and none underran. A lone flush on that line is safe.
+Only a pair that straddles it is not.
+
+Downstream has no equivalent; its active-region wait (MSM_ENC_ACTIVE_REGION)
+is used only for recovery.
+
+NOT UPSTREAM.
+
+---
+diff -ruN a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.c
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.c	2026-10-06 12:25:36.084069669 +0200
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.c	2026-10-06 12:25:36.093101322 +0200
+@@ -1794,6 +1794,13 @@
+ 	/* update pending counts and trigger kickoff ctl flush atomically */
+ 	spin_lock_irqsave(&dpu_enc->enc_spinlock, lock_flags);
+ 
++	/*
++	 * Wait once, on the master, so that the flushes of every interface
++	 * land on the same side of the programmable fetch start.
++	 */
++	if (dpu_enc->cur_master && dpu_enc->cur_master->ops.wait_flush_window)
++		dpu_enc->cur_master->ops.wait_flush_window(dpu_enc->cur_master);
++
+ 	/* don't perform flush/start operations for slave encoders */
+ 	for (i = 0; i < dpu_enc->num_phys_encs; i++) {
+ 		struct dpu_encoder_phys *phys = dpu_enc->phys_encs[i];
+diff -ruN a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys.h b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys.h
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys.h	2026-10-06 12:25:36.085000510 +0200
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys.h	2026-10-06 12:25:36.093138050 +0200
+@@ -90,6 +90,8 @@
+  *                              on idle power collapse prepare
+  * @restore:			Restore all the encoder configs.
+  * @get_line_count:		Obtain current vertical line count
++ * @wait_flush_window:		Delay the kickoff's CTL flushes so that they do
++ *				not straddle the programmable fetch start
+  */
+ 
+ struct dpu_encoder_phys_ops {
+@@ -118,6 +120,7 @@
+ 	void (*cleanup_wb_job)(struct dpu_encoder_phys *phys_enc,
+ 			struct drm_writeback_job *job);
+ 	bool (*is_valid_for_commit)(struct dpu_encoder_phys *phys_enc);
++	void (*wait_flush_window)(struct dpu_encoder_phys *phys_enc);
+ };
+ 
+ /**
+@@ -172,6 +175,8 @@
+  * @pending_kickoff_wq:		Wait queue for blocking until kickoff completes
+  * @irq:			IRQ indices
+  * @has_intf_te:		Interface TE configuration support
++ * @fetch_start_line:	INTF line count at which programmable fetch starts,
++ *			0 when it is disabled (video mode only)
+  */
+ struct dpu_encoder_phys {
+ 	struct drm_encoder *parent;
+@@ -198,6 +203,7 @@
+ 	wait_queue_head_t pending_kickoff_wq;
+ 	unsigned int irq[INTR_IDX_MAX];
+ 	bool has_intf_te;
++	u32 fetch_start_line;
+ };
+ 
+ static inline int dpu_encoder_phys_inc_pending(struct dpu_encoder_phys *phys)
+diff -ruN a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys_vid.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys_vid.c
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys_vid.c	2026-10-06 12:25:36.085056716 +0200
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys_vid.c	2026-10-06 12:25:36.093147869 +0200
+@@ -249,6 +249,8 @@
+ 		"vfp_fetch_lines %u vfp_fetch_start_vsync_counter %u\n",
+ 		vfp_fetch_lines, vfp_fetch_start_vsync_counter);
+ 
++	phys_enc->fetch_start_line = vfp_fetch_lines ? vert_total - vfp_fetch_lines : 0;
++
+ 	spin_lock_irqsave(phys_enc->enc_spinlock, lock_flags);
+ 	phys_enc->hw_intf->ops.setup_prg_fetch(phys_enc->hw_intf, &f);
+ 	spin_unlock_irqrestore(phys_enc->enc_spinlock, lock_flags);
+@@ -736,6 +738,42 @@
+ 	return s.frame_count;
+ }
+ 
++/*
++ * When a panel is driven by two interfaces, each one's CTL flush is written
++ * separately, about two lines apart. If those writes straddle the line where
++ * programmable fetch starts, the next frame underruns: a whole-screen black
++ * frame on a video-mode panel. Called once per kickoff on the master, before
++ * any flush: if the timing engine is close enough to that line for the
++ * flushes to straddle it, wait until it is past. FETCH_GUARD_BEFORE has to
++ * cover the time all the flush writes take. The wait is at most
++ * FETCH_GUARD_BEFORE + FETCH_GUARD_AFTER lines, and FETCH_GUARD_MAX_US bounds
++ * it if the line counter stops.
++ */
++#define FETCH_GUARD_BEFORE	6
++#define FETCH_GUARD_AFTER	3
++#define FETCH_GUARD_MAX_US	200
++
++static void dpu_encoder_phys_vid_wait_flush_window(
++		struct dpu_encoder_phys *phys_enc)
++{
++	u32 start = phys_enc->fetch_start_line;
++	ktime_t deadline;
++	u32 line;
++
++	if (!start || !phys_enc->hw_intf || !phys_enc->hw_intf->ops.get_line_count)
++		return;
++
++	deadline = ktime_add_us(ktime_get(), FETCH_GUARD_MAX_US);
++	for (;;) {
++		line = phys_enc->hw_intf->ops.get_line_count(phys_enc->hw_intf);
++		if (line + FETCH_GUARD_BEFORE < start || line > start + FETCH_GUARD_AFTER)
++			return;
++		if (ktime_after(ktime_get(), deadline))
++			return;
++		cpu_relax();
++	}
++}
++
+ static void dpu_encoder_phys_vid_init_ops(struct dpu_encoder_phys_ops *ops)
+ {
+ 	ops->is_master = dpu_encoder_phys_vid_is_master;
+@@ -752,6 +790,7 @@
+ 	ops->needs_single_flush = dpu_encoder_phys_vid_needs_single_flush;
+ 	ops->get_line_count = dpu_encoder_phys_vid_get_line_count;
+ 	ops->get_frame_count = dpu_encoder_phys_vid_get_frame_count;
++	ops->wait_flush_window = dpu_encoder_phys_vid_wait_flush_window;
+ }
+ 
+ /**

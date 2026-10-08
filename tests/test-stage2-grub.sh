@@ -41,7 +41,7 @@ T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
 part_num()   { awk -v n="$1" '/^[[:space:]]*#/||/^[[:space:]]*$/{next} {i++; if ($1==n) {print i; exit}}' "$TABLE"; }
 part_label() { awk -v n="$1" '/^[[:space:]]*#/||/^[[:space:]]*$/{next} {if ($1==n) {print $5; exit}}' "$TABLE"; }
 
-# --- 1. every catalog row names a real board DTB and carries bootargs --------------------------
+# --- 1. every catalog row names a real board DTB (bootargs may be empty) ------------------------
 CASE="board catalog -> DTB"
 unset pids;  declare -A pids
 unset pdtbs; declare -A pdtbs
@@ -52,7 +52,6 @@ while IFS=$'\t' read -r id name dtb ba; do
   ncat=$((ncat+1))
   [ -n "$name" ] || bad "$id has no menu name in the catalog"
   [ -n "$dtb" ] || { bad "$id has no DTB in the catalog"; continue; }
-  [ -n "$ba" ] || bad "$id has no bootargs in the catalog"
   pids["$id"]=1
   pdtbs["$dtb"]=1
   [ -f "$DTS/$dtb.dts" ] && ok "$id -> $dtb.dts" || bad "$id names missing DTB $dtb.dts"

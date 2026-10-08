@@ -66,6 +66,7 @@ FROM signing AS full
 RUN apt-get update && apt-get install -y --no-install-recommends \
       build-essential \
       gcc-aarch64-linux-gnu \
+      ccache \
       bc bison flex \
       dwarves \
       libssl-dev libelf-dev \

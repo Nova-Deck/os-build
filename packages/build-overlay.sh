@@ -87,6 +87,19 @@ pin_field() { sed -n "s/^$2:[[:space:]]*//p" "$1" | head -1; }
 # Persist the repo + per-package stamps across runs (incremental); only re-stage what we rebuild.
 mkdir -p "$STAGE" "$REPO_DIR" "$STAMPS"
 
+# Compiler cache shared by every package build, the Arch way: the ccache package plus `ccache`
+# in makepkg.conf's BUILDENV, which makes makepkg put /usr/lib/ccache/bin first on PATH so
+# meson/cmake/autotools pick the wrappers up as cc/c++. Rust packages see no benefit (cargo does
+# not go through cc for its own crates). Host-side and per-arch, beside the repo it feeds, so it
+# outlives the throwaway containers; srcdir is /stage/<pkg>/src on every run, so paths line up.
+# Not an input of inputhash.sh: the cache only decides how fast an object is produced, never
+# what it is. NOVADECK_CCACHE=0 builds without it. OFF by default on CI (CI=true): a runner's
+# cache dies with it, and carrying one in actions/cache would crowd the repo quota (see Makefile).
+CCACHE_HOST="${NOVADECK_CCACHE_DIR:-$ROOT/work/ccache/overlay-$ARCH}"
+if [ -n "${CI:-}" ]; then USE_CCACHE="${NOVADECK_CCACHE:-0}"; else USE_CCACHE="${NOVADECK_CCACHE:-1}"; fi
+CCACHE_MOUNT=()
+[ "$USE_CCACHE" = 0 ] || { mkdir -p "$CCACHE_HOST"; CCACHE_MOUNT=(-v "$CCACHE_HOST":/ccache); }
+
 # --- decide which packages need a (re)build ------------------------------------------------
 # A package is up-to-date when its stored input hash matches AND every artifact it last produced
 # is still present in the repo. Otherwise it is staged (PKGBUILD fetched/patched) and queued.
@@ -324,13 +337,23 @@ fi
 for name in "${BUILD_NAMES[@]}"; do
   echo "[overlay] === build $name (isolated container) ===" >&2
   docker run --rm --platform linux/arm64 \
-    -e HOSTUID="$(id -u)" -e HOSTGID="$(id -g)" -e PKG="$name" \
-    -v "$STAGE":/stage -v "$REPO_DIR":/repo "$DEVEL_REF" \
+    -e HOSTUID="$(id -u)" -e HOSTGID="$(id -g)" -e PKG="$name" -e USE_CCACHE="$USE_CCACHE" \
+    -v "$STAGE":/stage -v "$REPO_DIR":/repo "${CCACHE_MOUNT[@]}" "$DEVEL_REF" \
     bash -euo pipefail -c '
       useradd -m builder 2>/dev/null || true
       printf "builder ALL=(ALL) NOPASSWD: ALL\n" > /etc/sudoers.d/builder
       chmod 0440 /etc/sudoers.d/builder
       pacman -Sy --noconfirm
+      ccache_env=()
+      if [ "$USE_CCACHE" != 0 ]; then
+        pacman -S --needed --noconfirm ccache
+        sed -i "s/^\(BUILDENV=.*\)!ccache/\1ccache/" /etc/makepkg.conf
+        grep -q "^BUILDENV=.* ccache" /etc/makepkg.conf \
+          || { echo "[overlay] could not enable ccache in makepkg.conf BUILDENV" >&2; exit 1; }
+        chown -R builder /ccache
+        ccache_env=(CCACHE_DIR=/ccache CCACHE_MAXSIZE=20G)
+        sudo -u builder env "${ccache_env[@]}" ccache --zero-stats >/dev/null
+      fi
       # PKGDEST separates what makepkg PRODUCED from what it merely DOWNLOADED. Without it the
       # copy below is a glob over the build directory, which also matches source packages a
       # PKGBUILD fetches: packages/fex-emu assembles an Arch x86 sysroot in prepare() from pinned
@@ -345,11 +368,15 @@ for name in "${BUILD_NAMES[@]}"; do
       # Git sources clone over HTTP/1.1: this image`s git 2.53 sends its protocol-v2 POST over
       # HTTP/2 and GitHub answers 103 then 401 ("could not read Username") on every GitHub source.
       ( cd "/stage/$PKG" && sudo -u builder \
-          env PKGDEST="/stage/$PKG/out" \
+          env PKGDEST="/stage/$PKG/out" "${ccache_env[@]}" \
               GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.version GIT_CONFIG_VALUE_0=HTTP/1.1 \
           makepkg -sf --noconfirm --nocheck --skipinteg --noprogressbar )
       cp "/stage/$PKG/out"/*.pkg.tar.zst /repo/
       chown -R "$HOSTUID:$HOSTGID" "/stage/$PKG" /repo
+      if [ "$USE_CCACHE" != 0 ]; then
+        sudo -u builder env "${ccache_env[@]}" ccache --show-stats >&2
+        chown -R "$HOSTUID:$HOSTGID" /ccache
+      fi
     ' >&2
 
   # Record this package's artifacts and purge any it produced last time but no longer does

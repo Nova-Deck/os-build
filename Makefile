@@ -404,6 +404,13 @@ KERNEL_SRC := kernel/SOURCE.pin kernel/embed.list kernel/build.sh \
 # counts as a change. Paths are repo-relative, so the digest does not follow the checkout dir.
 KERNEL_SRC_HASH := work/.kernel-src.hash
 
+# ccache (kernel/build.sh) is a dev-box speedup only, OFF on CI (GitHub sets CI=true). A CI cache
+# only helps if it is carried across runs in actions/cache, where it would creep toward its
+# max_size and push the overlay repo + pacman caches out of the 10 GB repo quota — and losing the
+# overlay cache costs a full emulated rebuild, far more than ccache saves on the kernel.
+# The container does not see the host's CI, so the decision is made here and passed in.
+NOVADECK_CCACHE ?= $(if $(CI),0,1)
+
 .DEFAULT_GOAL := help
 
 # ==============================================================================
@@ -412,7 +419,7 @@ KERNEL_SRC_HASH := work/.kernel-src.hash
 .PHONY: help all image toolchain kernel fw-linux fw-qcom base overlay verify-lock \
         rootfs relock mesa-x86 lsfg-vk-x86 mesa-android fossilize-android android-gapps lepton-framework installer installer-root relock-installer verify-image \
         initramfs splash steamcl grub sdcard verify-card test test-disk bundle sign-bundle publish-bundle \
-        steam-seed-artifact deploy clean clean-base clean-overlay distclean
+        steam-seed-artifact deploy clean clean-base clean-overlay clean-ccache distclean
 
 # An always-out-of-date prerequisite, for rules that must re-evaluate their own inputs every run
 # rather than trust a prerequisite's mtime. Only $(KERNEL_SRC_HASH) uses it; see the note there.
@@ -727,7 +734,7 @@ $(KERNEL_SRC_HASH): FORCE
 	 [ "$$(cat $@ 2>/dev/null)" = "$$new" ] || printf '%s\n' "$$new" > $@
 
 $(KERNEL): $(KERNEL_SRC_HASH) $(FW_LINUX) $(FW_QCOM) | $(BUILD_STAMP)
-	$(DOCKER) $(if $(BASE_CONFIG),-e BASE_CONFIG=/src/$(BASE_CONFIG)) \
+	$(DOCKER) $(if $(BASE_CONFIG),-e BASE_CONFIG=/src/$(BASE_CONFIG)) -e NOVADECK_CCACHE=$(NOVADECK_CCACHE) \
 	  $(BUILD_IMG) kernel/build.sh
 
 # Regenerate rootfs/manifest.lock (Phase 4a). Deliberately NOT a dependency of the image build:
@@ -1037,11 +1044,18 @@ clean-base: ## Remove the (root-owned) bootstrapped root tree
 clean-overlay: ## Remove the built (arch-scoped) overlay pacman repo + build tree
 	rm -rf work/repo work/overlay-build
 
+# work/ccache holds the compiler caches (kernel/build.sh, packages/build-overlay.sh). The kernel
+# one is root-owned (its build runs as root in the build image), so like clean-base this removes
+# it from inside a throwaway container. Only ever costs speed: the next build is a cold one.
+clean-ccache: ## Remove the kernel + overlay compiler caches (work/ccache)
+	docker run --rm -v $(CURDIR)/work:/wb busybox rm -rf /wb/ccache
+
 # THE CACHES THIS DELIBERATELY DOES *NOT* REMOVE, all of which surprise people:
 #
 #   work/prebuilt      the pinned-download cache (customize-base.sh documents it as persistent).
 #   work/pacman-cache  the package cache.
 #   work/repo          the built overlay packages (NOT clean-overlay — this target no longer runs it).
+#   work/ccache        the kernel + overlay compiler caches (`make clean-ccache`).
 #   work/mesa-x86      the FEX-guest Turnip payload (digest-checked by its own build.sh, same
 #                      content-addressed logic — a stale payload cannot be served).
 #   work/mesa-android  the Android-guest Mesa payload, same digest-check, same reasoning.

@@ -120,6 +120,24 @@ if [ -n "${CROSS_COMPILE:-}" ]; then
   echo "[novadeck] cross-compiling with ${CROSS_COMPILE}gcc"
 fi
 CC=(${CROSS_COMPILE:+CROSS_COMPILE=$CROSS_COMPILE})
+
+# ccache, the way the kernel docs and the Arch wiki do it: CC on the make command line, so every
+# step that probes the compiler (olddefconfig's cc-option checks included) sees the same CC.
+# The source tree is re-extracted every run, so without it every build is a full from-scratch
+# compile; with it, only the objects whose preprocessed input changed are rebuilt. A config edit
+# that changes include/generated/autoconf.h still misses on everything (every file includes it);
+# a comment-only fragment edit, a patch, a dts or a build.sh change mostly hits.
+# The cache sits under work/ (bind-mounted, so it outlives the container), at the same /src path
+# every run — the kernel build passes absolute paths, so a moving tree would miss.
+# NOVADECK_CCACHE=0 opts out (e.g. to time a cold build).
+if [ "${NOVADECK_CCACHE:-1}" != 0 ] && command -v ccache >/dev/null 2>&1; then
+  export CCACHE_DIR="${CCACHE_DIR:-$ROOT/work/ccache/kernel}"
+  export CCACHE_MAXSIZE="${CCACHE_MAXSIZE:-8G}"
+  mkdir -p "$CCACHE_DIR"
+  CC+=("CC=ccache ${CROSS_COMPILE:-}gcc" "HOSTCC=ccache gcc")
+  ccache --zero-stats >/dev/null
+  echo "[novadeck] ccache: ${CCACHE_DIR#"$ROOT"/} (max $CCACHE_MAXSIZE)"
+fi
 ( cd "$SRCDIR"
   if [ -n "$BASE_CONFIG" ]; then
     # Verbatim full config: copy it in and let olddefconfig resolve any symbols that
@@ -346,6 +364,7 @@ CC=(${CROSS_COMPILE:+CROSS_COMPILE=$CROSS_COMPILE})
 
   make ARCH=arm64 "${CC[@]}" -j"$(nproc)" Image dtbs modules
 )
+[ -z "${CCACHE_DIR:-}" ] || ccache --show-stats
 
 # --- Stage artifacts for image assembly ---
 OUT="$ROOT/out"; mkdir -p "$OUT/dtbs"

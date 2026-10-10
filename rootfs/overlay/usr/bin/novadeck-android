@@ -125,6 +125,15 @@ patch("liblepton/mounting.sh",
       '    if [[ -d "${STEAM_COMPAT_DATA_PATH:-}" && -n "$(get_app_id)" ]]; then\n'
       '        PERSISTENT_DATA_PATH=')
 
+# Lepton 3.0.5 clears the /data overlay on every exit (remove_prefix), past LEPTON_NO_CLEANUP. For
+# the shared Android that is the Google sign-in and every installed app.
+patch("liblepton/liblepton.sh",
+      '    local DATA_DIR="$(data_mount_path $@)"\n'
+      '    if [[ -d "${DATA_DIR}" ]]; then\n',
+      '    # novadeck-android: the shared Android keeps its /data\n'
+      '    local DATA_DIR="$(data_mount_path $@)"\n'
+      '    if [[ -d "${DATA_DIR}" && -z "${NOVADECK_ANDROID_OVERLAY:-}" ]]; then\n')
+
 # Gamepads. Lepton binds no /dev/input at all -- its guest reads touch/keyboard/pointer from the
 # hwcomposer's Wayland pipes and nothing else. The host's live /dev/input goes in read-only and
 # sync_pads links the current pads into the guest's own /dev/input. The whole directory rather than
@@ -137,26 +146,36 @@ patch("liblepton/mounting.sh",
       '    fi\n\n'
       '    # By default, we do not allow writes to msg\n')
 
+# Keep the container in this service's cgroup, as Lepton did before 3.0.5: gamescope patch 0023
+# finds the Android window's owner by "novadeck-android.service" in its client's cgroup, and a
+# libpod scope hides it, so the window is never shown.
+patch("liblepton/mounting.sh",
+      '    # namespaces\n'
+      '    podman_cmdline --pid=private --ipc=private --uts=private\n',
+      '    # novadeck-android: stay in the service cgroup\n'
+      '    if [[ -n "${NOVADECK_ANDROID_OVERLAY:-}" ]]; then\n'
+      '        podman_cmdline --cgroups=disabled\n'
+      '    fi\n\n'
+      '    # namespaces\n'
+      '    podman_cmdline --pid=private --ipc=private --uts=private\n')
+
 # The extra rootfs overlays, walked the same way as Lepton's own guestos slot.
 patch("liblepton/mounting.sh",
-      '    for OVERLAY in ${LEPTON_OVERLAY} ${GUESTOS_OVERLAY}; do\n',
+      '    for OVERLAY in "${LEPTON_OVERLAY}" "${GUESTOS_OVERLAY}"; do\n',
       '    # novadeck-android: extra overlays\n'
-      '    for OVERLAY in ${LEPTON_OVERLAY} ${GUESTOS_OVERLAY} ${NOVADECK_ANDROID_OVERLAY:-}; do\n')
+      '    for OVERLAY in "${LEPTON_OVERLAY}" "${GUESTOS_OVERLAY}" ${NOVADECK_ANDROID_OVERLAY:-}; do\n')
 
-# Lepton writes brand/model/manufacturer into its runtime props on every start. Match the identity
-# in the generated build.props, or Google sees a Pixel 5 fingerprint on a "Valve Lepton" and
-# refuses the device again.
+# Lepton writes model/manufacturer into its runtime props on every start. Match the identity in the
+# generated build.props, or Google sees a Pixel 5 fingerprint on a "Valve Lepton" and refuses the
+# device again.
 patch("liblepton/properties.sh",
-      '    props_echo "ro.product.brand=Steam Frame"\n'
       '    props_echo "ro.product.model=Lepton"\n'
       '    props_echo "ro.product.manufacturer=Valve"\n',
       '    # novadeck-android: certified identity\n'
       '    if [[ -n "${NOVADECK_ANDROID_PROPS:-}" ]]; then\n'
-      '        props_echo "ro.product.brand=google"\n'
       '        props_echo "ro.product.model=Pixel 5"\n'
       '        props_echo "ro.product.manufacturer=Google"\n'
       '    else\n'
-      '    props_echo "ro.product.brand=Steam Frame"\n'
       '    props_echo "ro.product.model=Lepton"\n'
       '    props_echo "ro.product.manufacturer=Valve"\n'
       '    fi\n')
@@ -169,8 +188,11 @@ EOF
 # Generated from the installed Lepton so they follow its updates; bump PROPS_REV when a value changes.
 # ro.build.type stays Lepton's userdebug: with "user" the vendor interface check fails and "Android
 # System: there's an internal problem with your device" appears on every start.
-PROPS_REV=1
+PROPS_REV=2
 PROPS_FP=google/redfin/redfin:11/RQ3A.211001.001/7641976:user/release-keys
+# Lepton sets no density, so the display HAL falls back to 180 dpi and Android's UI is a fraction of
+# its size on a 6" 1080p panel. 320 gives a phone layout (540 dp wide).
+LCD_DENSITY=320
 props_overlay() {
   local ver="$1" src="${LEPTON_DIR}/images/rootfs" out f
   out="${SYS}/props-${ver}"
@@ -195,6 +217,9 @@ props_overlay() {
     done
     if [[ -f "$out/system/build.prop" ]] && ! grep -q '^ro\.build\.fingerprint=' "$out/system/build.prop"; then
       echo "ro.build.fingerprint=${PROPS_FP}" >>"$out/system/build.prop"
+    fi
+    if [[ -f "$out/vendor/build.prop" ]]; then
+      echo "ro.sf.lcd_density=${LCD_DENSITY}" >>"$out/vendor/build.prop"
     fi
     echo "$PROPS_REV" >"$out/.rev"
   fi
@@ -602,7 +627,9 @@ cmd_daemon() {
   export LEPTON_NO_CLEANUP=true
   export GAMESCOPE_WAYLAND_DISPLAY="${NOVADECK_ANDROID_DISPLAY:?started without a display -- use novadeck-android store/run}"
   local i ver
-  trap 'rm -f "$READY"; kill -TERM "$LEPTON_PID" 2>/dev/null; wait "$LEPTON_PID"; exit 0' TERM INT
+  # Under errexit a failing kill (Lepton already gone) or wait (Lepton's own status, 143 once TERMed)
+  # would end the trap before exit 0, and the unit would stop as failed.
+  trap 'rm -f "$READY"; kill -TERM "$LEPTON_PID" 2>/dev/null || true; wait "$LEPTON_PID" || true; exit 0' TERM INT
 
   start_android
   # A Lepton image this device has no framework fix for: build it in the stock guest that just

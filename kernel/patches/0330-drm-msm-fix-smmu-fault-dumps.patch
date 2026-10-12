@@ -2,7 +2,7 @@ Subject: [PATCH] drm/msm: fix SMMU fault dumps
 
 In several cases drm/msm can cause an SMMU fault on modesetting, because the
 display controller is still scanning out the BO being unmapped.  This carries
-the five patches of that series which apply to us, in upstream order:
+the eight patches of that series which apply to us, in upstream order:
 
  1. drm/msm: serialise framebuffer pin state
 
@@ -28,8 +28,8 @@ the five patches of that series which apply to us, in upstream order:
 
     Both callbacks may sleep, so a mutex will do.  drm_framebuffer_init()
     adds the framebuffer to the object idr, from where userspace can reach it
-    before msm_framebuffer_init() returns, so the private state is initialised
-    before that call rather than after.
+    before msm_framebuffer_init() returns, so take the private state out of
+    its way and initialise it first.
 
     Fixes: 8ac37c88f991 ("drm/msm: Refcount framebuffer pins")
 
@@ -39,9 +39,18 @@ the five patches of that series which apply to us, in upstream order:
     straight out of the pin loop on error, leaking the count, the
     msm_gem_vma_get() reference and any planes already pinned.
     drm_atomic_helper_prepare_planes() does not call cleanup_fb() for the
-    plane whose prepare_fb() failed, so nothing ever drops it.  With the count
-    stuck, every later prepare of that framebuffer reports success while
-    iova[] is still zero, and DPU scans out from a NULL base address.
+    plane whose prepare_fb() failed, so nothing ever drops it.
+
+    Since commit 8ac37c88f991 ("drm/msm: Refcount framebuffer pins") a
+    prepare which finds the count already non-zero returns early, assuming
+    iova[] is populated.  With the count stuck, every later prepare of that
+    framebuffer reports success while iova[] is still zero, and DPU scans out
+    from a NULL base address:
+
+      arm-smmu 15000000.iommu: Unhandled context fault: fsr=0x402,
+          iova=0x00000100, fsynr=0x3e0023, cbfrsynra=0x1c00, cb=11
+
+    Unwind properly on failure instead.
 
     Fixes: 8ac37c88f991 ("drm/msm: Refcount framebuffer pins")
 
@@ -51,48 +60,102 @@ the five patches of that series which apply to us, in upstream order:
     drm_atomic_helper_cleanup_planes() runs.  msm_atomic_commit_tail() waits
     only for ->wait_flush() before that, which for video mode waits for
     CTL_FLUSH to read back zero, ie. for the new configuration to be latched;
-    the frame in flight with the old one is still being fetched.  Since commit
-    111fdd2198e6 ("drm/msm: drm_gpuvm conversion") the unpin also detaches the
-    vma, so the display is left reading unmapped memory:
+    the frame in flight with the old one is still being fetched.  Since
+    commit 111fdd2198e6 ("drm/msm: drm_gpuvm conversion") the unpin also
+    detaches the vma, so the display is left reading unmapped memory:
 
       arm-smmu 15000000.iommu: Unhandled context fault: fsr=0x402,
           iova=0x007eb100, fsynr=0x3f0023, cbfrsynra=0xc20, cb=27
 
-    Hand the retired framebuffer to the crtc and drop the pin and the vma
-    reference from a drm_vblank_work, as i915 does for its cursor
-    framebuffers.  The pin count is dropped by the deferred work rather than
-    by ->cleanup_fb(), so a framebuffer scanned out by several crtcs stays
-    pinned until the last of them has passed a vblank.  Deferring here also
-    covers the async plane update path, which has no commit tail at all.
+    Hand the retired framebuffer to the crtc instead and drop the pin and the
+    vma reference from a drm_vblank_work, as i915 does for its cursor
+    framebuffers.  The work holds a reference on the framebuffer, and
+    drm_vblank_work_schedule() holds a vblank reference until it runs.
 
-    An inactive crtc is not fetching and has no vblank to defer to, so that is
-    keyed off the crtc state and released directly.  A crtc being switched off
-    stops fetching as well and no further vblank arrives to run the pending
-    works, so they are kept on a per-crtc list and released there by hand.
+    The pin count is dropped by the deferred work rather than by
+    ->cleanup_fb(), so a framebuffer scanned out by several crtcs stays pinned
+    until the last of them has passed a vblank, not until the last one has
+    retired it.  Deferring here also covers the async plane update path, which
+    has no commit tail at all: drm_atomic_helper_async_commit() programs the
+    hardware and drm_atomic_helper_unprepare_planes() releases the old
+    framebuffer straight away.
+
+    A crtc which is being switched off stops fetching, and its interface has
+    already been disabled by the time the helpers get to its planes, so no
+    further vblank arrives to run the pending works: keep them on a list per
+    crtc and release them by hand from msm_crtc_vblank_off().  A framebuffer
+    retired once that has happened is released directly.  Whether the vblank
+    is off is tracked next to the list rather than read from crtc->state,
+    which a following commit may already have swapped in, and a work is added
+    to the list and scheduled under the same lock, so that
+    msm_crtc_vblank_off() cannot free it in between.
 
     Fixes: 111fdd2198e6 ("drm/msm: drm_gpuvm conversion")
 
- 4. drm/msm/dpu: clear the DSPP pointer when no DSPP is assigned
+ 4. drm/msm/dpu: clear the CWB blocks left by a previous reservation
+
+    dpu_encoder_virt_atomic_mode_set() only writes the first num_cwb entries
+    of dpu_enc->hw_cwb[], and not at all when the encoder is not the
+    writeback of a clone, so a modeset which drops the clone, or reserves
+    fewer CWB blocks, keeps the pointers from the previous reservation.
+    dpu_encoder_helper_phys_setup_cwb() then walks every non-NULL entry: it
+    programs a CWB mux the crtc no longer owns, and looks its pingpong up past
+    the pingpongs actually assigned, in the uninitialised part of rt_pp_list[].
+
+    Store NULL for the entries which have no CWB block, as is done for the
+    pingpongs.
+
+    Fixes: 5008375443ed ("drm/msm/dpu: Reserve resources for CWB")
+
+ 5. drm/msm/dpu: clear the CDM block left by a previous reservation
+
+    dpu_encoder_virt_atomic_mode_set() only updates cur_master->hw_cdm for a
+    writeback with a job or for DP, so a modeset of a writeback without a job
+    keeps the CDM of the previous reservation, which the crtc may no longer
+    own.  dpu_encoder_helper_phys_cleanup() later unbinds that CDM from its
+    pingpong and flushes it, changing a block which may by then belong to
+    another display.
+
+    Store NULL when no CDM is assigned.
+
+    Fixes: 8b45a26f2ba9 ("drm/msm/dpu: reserve cdm blocks for writeback in case of YUV output")
+
+ 6. drm/msm/dpu: clear the DSPP pointer when no DSPP is assigned
 
     dpu_crtc_assign_resources() only stores mixers[i].hw_dspp when the new
     topology has a DSPP for that mixer, and dpu_crtc_duplicate_state() copies
     the state with kmemdup(), so a crtc which once used a DSPP keeps a pointer
-    to it across reservations which no longer own that block.
+    to it for the rest of its life -- across reservations which no longer own
+    that block.
+
+    Assign NULL when there is no DSPP for the mixer.
 
     Fixes: 4259ff7ae509 ("drm/msm/dpu: add support for pcc color block in dpu driver")
 
- 5. drm/msm/dpu: clear the DSC blocks left by a previous reservation
+ 7. drm/msm/dpu: clear the DSC blocks left by a previous reservation
 
-    dpu_encoder_virt_atomic_mode_set() fills dpu_enc->hw_dsc[] with the blocks
-    of the new reservation, but only the first num_dsc entries, and the array
-    is never cleared.  dpu_encoder_use_dsc_merge() counts the non-NULL entries
-    of the whole array, so a leftover pointer makes it report DSC merge for a
-    topology which has none, and dpu_encoder_prep_dsc() then programs
-    DSC_MODE_MULTIPLEX into the only DSC block really in use.
+    dpu_encoder_virt_atomic_mode_set() fills dpu_enc->hw_dsc[] with the DSC
+    blocks of the new reservation, but only the first num_dsc entries.  The
+    array is never cleared, so an encoder which once drove two DSC blocks
+    keeps pointing at the second one after it has been given a topology with
+    a single DSC.
+
+    dpu_encoder_use_dsc_merge() counts the non-NULL entries of the whole
+    array and compares them against the number of interfaces, so the leftover
+    pointer makes it report DSC merge for a topology which has none, and
+    dpu_encoder_prep_dsc() then programs DSC_MODE_MULTIPLEX into the only DSC
+    block that is really used.
+
+    Assign NULL when the new reservation has no block for the slot.
 
     Fixes: 58dca9810749 ("drm/msm/disp/dpu1: Add support for DSC in encoder")
 
- 6. drm/msm/dpu: only reassign resources when the encoder is reprogrammed
+ 8. drm/msm/dpu: only reassign resources when the encoder is reprogrammed
+
+    Running kms_plane@pixel-format-source-clamping causes SMMU faults
+    (fsr=0x402, iova=0x0001fb00): it sets a CTM, after which the display stops
+    updating, so the test times out waiting for a CRC and the pipe is still
+    fetching the framebuffers released when the runner kills it.
 
     dpu_crtc_atomic_check() reassigns resources whenever color_mgmt_changed is
     set, but crtc_set_mode() only calls ->atomic_mode_set() for mode_changed or
@@ -100,48 +163,67 @@ the five patches of that series which apply to us, in upstream order:
     can get a different CTL: cstate->mixers[].lm_ctl points at the new one
     while phys->hw_ctl still points at the old, so the flush mask is
     accumulated on one and triggered on the other.  CTL_FLUSH is written with
-    zero and the pipe is not reprogrammed again until the next modeset -- the
-    display stops updating while the pipe keeps fetching, which is where the
-    SMMU faults come from.  Reassign only when the encoder is reprogrammed,
-    ask for a modeset in dpu_crtc_check_mode_changed() when colour management
-    is being ENABLED (that is when DSPPs join the topology), and drop the
-    msm_atomic_check() hack that forced a modeset both ways, ignored
-    GAMMA_LUT, and overrode allow_modeset behind userspace's back.
+    zero, so the pipe is not reprogrammed again until the next modeset.
+
+    Reassign only when the encoder is reprogrammed too.  Enabling colour
+    management still needs a modeset, as that is when DSPPs join the topology,
+    so ask for one in dpu_crtc_check_mode_changed() and only there.  Drop the
+    msm_atomic_check() hack, which forced a modeset both ways, ignored
+    GAMMA_LUT and overrode allow_modeset behind userspace's back.
 
     Fixes: 39a750ff5fc9 ("drm/msm/dpu: Add DSPP GC driver to provide GAMMA_LUT DRM property")
 
-BACKPORT from linux-arm-msm, "[PATCH v3 0/8] drm/msm: fix SMMU fault dumps",
-Dmitry Baryshkov, 2026-09-12:
-https://lore.kernel.org/linux-arm-msm/20260912-fd-kms-fix-smmu-v3-0-a7ddc6fe2032@oss.qualcomm.com/
+
+BACKPORT from linux-arm-msm, "[PATCH v4 00/10] drm/msm: fix SMMU fault dumps",
+Dmitry Baryshkov, 2026-10-03:
+https://lore.kernel.org/linux-arm-msm/20261003-fd-kms-fix-smmu-v4-0-2a44d4d8ac77@oss.qualcomm.com/
 (`b4 am <msgid>` fetches the series: lore's t.mbox.gz endpoint is NOT gated,
 only the HTML is. See kernel/SOURCE.pin.)
 
-This REPLACES what we carried as 0515/0516/0517, which were v2 patches 1-3 of
-6. Of the eight in v3 we take 1, 2, 4, 5, 6 and 7, and skip:
-  3/8  unwind msm_drm_kms_init() on failure -- error path only, and v3's 4/8
-       no longer touches the kms init/uninit path, so it is not a dependency.
-  8/8  drm/ci xfail bookkeeping for SC7180.
+This REPLACES the v3 we carried (1, 2, 4-7 of 8), itself the replacement for
+0515/0516/0517 (v2 1-3 of 6). Of the ten in v4 we take 1-3 and 5-9, and skip:
+  4/10   flush the MDP5 interface before starting the timing engine -- MDP5
+         only (db820c); every SoC we ship has a DPU.
+  10/10  drm/ci xfail bookkeeping for SC7180.
+v4 says it now DEPENDS on a separate series, "drm/msm: KMS destroy fixes"
+<20261003-msm-kms-destroy-fixes-v1-*>, which is where v3's 3/8 (unwind
+msm_drm_kms_init() on failure) went. We did not carry v3's 3/8 either: those
+are init/teardown error-path fixes, and the eight here apply on top of our
+stack at fuzz 0 and build without them.
 
-7/8 WAS SKIPPED ON 2026-09-12 AND THAT DECISION IS NOW REVERSED -- read this
-before ever dropping it again. The skip reasoning was: it gates on CRTC colour
-management, gamescope 3.16.28 writes 0 to CTM, GAMMA_LUT and DEGAMMA_LUT on
-every path and does colour in its own Vulkan composite instead, so
-crtc_state->ctm is never non-NULL for us and both the hack it deletes and the
-modeset it adds are dead code. That was correct at the time and is now
-obsolete: DPU inline rotation (0528/0529) means gamescope takes DIRECT SCANOUT,
-where its Vulkan composite -- and therefore ALL of its colour management --
-never runs. CONFIRMED ON HARDWARE 2026-09-13 on Pocket FIT: night mode forced
-to maximum via the GAMESCOPE_COLOR_NIGHT_MODE atom is completely invisible, and
-the amber appears the instant GAMESCOPE_COMPOSITE_FORCE=1 is set. The fix is to
-drive the DPU's DSPP CTM + GAMMA_LUT from gamescope and keep scanout, so
-crtc_state->ctm becomes non-NULL in normal operation -- which is exactly the
-configuration 7/8 fixes, and whose upstream reproducer
-(kms_plane@pixel-format-source-clamping) is a CTM test. Without 7/8 the first
+WHAT CHANGED FROM THE v3 WE CARRIED:
+  - 1: the pin lock is taken with guard() instead of unwinding through labels
+    (Rob). Same semantics.
+  - 3: a RACE FIX, not a cleanup. v3 scheduled the retired framebuffer's
+    vblank work and added it to the crtc's pending list separately, so
+    msm_crtc_vblank_off() could free it in between; v4 does both under one
+    lock. v3 also decided "vblank is off" from crtc->state, which a following
+    commit may already have swapped; v4 tracks it next to the list.
+  - 4, 5 (CWB, CDM) are NEW: the same bug class as the DSPP and DSC fixes,
+    pointers from a previous reservation surviving into one which no longer
+    owns those blocks.
+
+7/8 OF v3 (NOW 9/10) WAS SKIPPED ON 2026-09-12 AND THAT DECISION WAS
+REVERSED -- read this before ever dropping it again. The skip reasoning was:
+it gates on CRTC colour management, gamescope 3.16.28 writes 0 to CTM,
+GAMMA_LUT and DEGAMMA_LUT on every path and does colour in its own Vulkan
+composite instead, so crtc_state->ctm is never non-NULL for us and both the
+hack it deletes and the modeset it adds are dead code. That was correct at the
+time and is now obsolete: DPU inline rotation (0340) means gamescope takes
+DIRECT SCANOUT, where its Vulkan composite -- and therefore ALL of its colour
+management -- never runs. CONFIRMED ON HARDWARE 2026-09-13 on Pocket FIT: night
+mode forced to maximum via the GAMESCOPE_COLOR_NIGHT_MODE atom is completely
+invisible, and the amber appears the instant GAMESCOPE_COMPOSITE_FORCE=1 is
+set. The fix is to drive the DPU's DSPP CTM + GAMMA_LUT from gamescope and keep
+scanout, so crtc_state->ctm becomes non-NULL in normal operation -- which is
+exactly the configuration 9/10 fixes, and whose upstream reproducer
+(kms_plane@pixel-format-source-clamping) is a CTM test. Without 9/10 the first
 CTM would re-reserve resources without reprogramming the encoder, CTL_FLUSH
 would be written with zero, and the display would freeze with the pipe still
-fetching. 5/8 (our 4 below) stops being theoretical for the same reason.
+fetching. 6 below (the DSPP pointer) stops being theoretical for the same
+reason.
 
-WHY WE CARE, per patch:
+WHY WE CARE, per patch (numbered as in the list above):
   1  The race needs commit N+1's ->prepare_fb() to overlap commit N's
      ->cleanup_fb() on the same buffer, which is gamescope's steady state:
      nonblocking atomic commits over a double-buffered flip.
@@ -149,19 +231,22 @@ WHY WE CARE, per patch:
      the count sticks, so from then on every prepare of that framebuffer
      reports success while iova[] is still zero. Permanent, not transient.
   3  The reason we took the series at all. Every panel driver we ship except
-     the two ICNA35XX-family ones (0058, 0104) sets MIPI_DSI_MODE_VIDEO --
-     0051, 0052, 0054, 0056, 0057, 0059, 0066, 0067, 0068, 0105 -- so this is
-     the configuration nearly the whole fleet runs in. Same failure class as
+     the two ICNA35XX-family ones sets MIPI_DSI_MODE_VIDEO, so this is the
+     configuration nearly the whole fleet runs in. Same failure class as
      0370-dpu-quiesce-boot-scanout.patch, which covers the boot handover; this
-     covers the runtime teardowns.
-  4  Two lines. It could not fire while nothing requested a DSPP, which was
+     covers the runtime teardowns. The v4 lock fix matters on every display
+     disable, i.e. every suspend.
+  4  CWB is concurrent writeback, which nothing here requests. NULL-safety,
+     taken because it is cheap and the series moves as a unit.
+  5  CDM is reserved for YUV writeback and DP. Same reasoning as 4.
+  6  Two lines. It could not fire while nothing requested a DSPP, which was
      true until we decided to drive the DPU's colour blocks; once gamescope
      sets a CTM, topologies really do gain and lose DSPPs and this becomes a
-     live fix rather than NULL-safety. See the 7/8 reversal note above.
-  5  Pocket FIT's panel (0067) is DSC-only with slice_width 540 on a 1080-wide
-     panel, ie. slice_count 2, so its encoder really does drive two DSC
-     blocks. Cheap insurance against a false DSC-merge after a topology change.
-  6  The prerequisite for doing colour management in the DPU at all. Note what
+     live fix rather than NULL-safety. See the 9/10 note above.
+  7  Pocket FIT's panel is DSC-only with slice_width 540 on a 1080-wide panel,
+     ie. slice_count 2, so its encoder really does drive two DSC blocks.
+     Cheap insurance against a false DSC-merge after a topology change.
+  8  The prerequisite for doing colour management in the DPU at all. Note what
      it means for userspace: enabling colour management now REQUIRES a commit
      with DRM_MODE_ATOMIC_ALLOW_MODESET, because the kernel no longer forces
      allow_modeset on our behalf. gamescope's per-frame flips are nonblocking
@@ -169,176 +254,16 @@ WHY WE CARE, per patch:
      modeset time -- keeping DSPPs in the topology for the life of the mode --
      and then update the CTM blob per frame, which needs no further modeset.
 
-WHAT CHANGED FROM THE v2 WE CARRIED, beyond the three new DPU patches. v2's 1/6
-initialised the framebuffer mutex AFTER drm_framebuffer_init() had already
-published the fb in the object idr; v3 initialises it first. v2's 3/6 (our
-0517) is REWRITTEN in v3, from a per-crtc drm_flip_work committed from a vblank
-work into a per-framebuffer drm_vblank_work, and three of its defects go with
-it: the pin count was dropped in ->cleanup_fb() rather than by the deferred
-work, so re-preparing the same framebuffer before the work ran let the old
-cycle's unpin land on the new pin; the async plane update path was not covered
-at all; and drm_vblank_work_schedule() was tested for `< 0` when its contract
-is 1 = scheduled, 0 = already-scheduled-or-cancelled, negative = error
-(drivers/gpu/drm/drm_vblank_work.c), so the inmodeset case read as a
-successful defer. v3 also drops the kms init/uninit hookup entirely.
-
-kzalloc_obj(), used by 4/8, is present in the pinned 7.2.5
-(include/linux/slab.h) -- no shim needed.
+Generated, not hand-written: `git am` of v4 1-3 + 5-9 onto v7.2.10 + every
+patch below 0330, then `git diff` base..top.
 
 Still not reviewed or merged upstream. Upstream marks every patch here
 Assisted-by: LLM.
 
 ---
 
-diff --git a/drivers/gpu/drm/msm/msm_fb.c b/drivers/gpu/drm/msm/msm_fb.c
-index 60c108d35d2a..77415302e6d8 100644
---- a/drivers/gpu/drm/msm/msm_fb.c
-+++ b/drivers/gpu/drm/msm/msm_fb.c
-@@ -22,9 +22,12 @@ struct msm_framebuffer {
- 	/* Count of # of attached planes which need dirtyfb: */
- 	refcount_t dirtyfb;
- 
-+	/* Protects the pin state below: */
-+	struct mutex lock;
-+
- 	/* Framebuffer per-plane address, if pinned, else zero: */
- 	uint64_t iova[DRM_FORMAT_MAX_PLANES];
--	atomic_t prepare_count;
-+	unsigned int prepare_count;
- };
- #define to_msm_framebuffer(x) container_of(x, struct msm_framebuffer, base)
- 
-@@ -45,9 +48,17 @@ static int msm_framebuffer_dirtyfb(struct drm_framebuffer *fb,
- 					 clips, num_clips);
- }
- 
-+static void msm_framebuffer_destroy(struct drm_framebuffer *fb)
-+{
-+	struct msm_framebuffer *msm_fb = to_msm_framebuffer(fb);
-+
-+	mutex_destroy(&msm_fb->lock);
-+	drm_gem_fb_destroy(fb);
-+}
-+
- static const struct drm_framebuffer_funcs msm_framebuffer_funcs = {
- 	.create_handle = drm_gem_fb_create_handle,
--	.destroy = drm_gem_fb_destroy,
-+	.destroy = msm_framebuffer_destroy,
- 	.dirty = msm_framebuffer_dirtyfb,
- };
- 
-@@ -76,13 +87,15 @@ int msm_framebuffer_prepare(struct drm_framebuffer *fb, bool needs_dirtyfb)
- 	struct msm_drm_private *priv = fb->dev->dev_private;
- 	struct drm_gpuvm *vm = priv->kms->vm;
- 	struct msm_framebuffer *msm_fb = to_msm_framebuffer(fb);
--	int ret, i, n = fb->format->num_planes;
-+	int ret = 0, i, n = fb->format->num_planes;
- 
- 	if (needs_dirtyfb)
- 		refcount_inc(&msm_fb->dirtyfb);
- 
--	if (atomic_inc_return(&msm_fb->prepare_count) > 1)
--		return 0;
-+	mutex_lock(&msm_fb->lock);
-+
-+	if (msm_fb->prepare_count++)
-+		goto out;
- 
- 	for (i = 0; i < n; i++) {
- 		msm_gem_vma_get(fb->obj[i]);
-@@ -90,10 +103,13 @@ int msm_framebuffer_prepare(struct drm_framebuffer *fb, bool needs_dirtyfb)
- 		drm_dbg_state(fb->dev, "FB[%u]: iova[%d]: %08llx (%d)\n",
- 			      fb->base.id, i, msm_fb->iova[i], ret);
- 		if (ret)
--			return ret;
-+			break;
- 	}
- 
--	return 0;
-+out:
-+	mutex_unlock(&msm_fb->lock);
-+
-+	return ret;
- }
- 
- void msm_framebuffer_cleanup(struct drm_framebuffer *fb, bool needed_dirtyfb)
-@@ -106,8 +122,10 @@ void msm_framebuffer_cleanup(struct drm_framebuffer *fb, bool needed_dirtyfb)
- 	if (needed_dirtyfb)
- 		refcount_dec(&msm_fb->dirtyfb);
- 
--	if (atomic_dec_return(&msm_fb->prepare_count))
--		return;
-+	mutex_lock(&msm_fb->lock);
-+
-+	if (--msm_fb->prepare_count)
-+		goto out;
- 
- 	memset(msm_fb->iova, 0, sizeof(msm_fb->iova));
- 
-@@ -115,6 +133,9 @@ void msm_framebuffer_cleanup(struct drm_framebuffer *fb, bool needed_dirtyfb)
- 		msm_gem_unpin_iova(fb->obj[i], vm);
- 		msm_gem_vma_put(fb->obj[i]);
- 	}
-+
-+out:
-+	mutex_unlock(&msm_fb->lock);
- }
- 
- uint32_t msm_framebuffer_iova(struct drm_framebuffer *fb, int plane)
-@@ -199,14 +220,15 @@ msm_framebuffer_init(struct drm_device *dev, const struct drm_format_info *info,
- 
- 	drm_helper_mode_fill_fb_struct(dev, fb, info, mode_cmd);
- 
-+	refcount_set(&msm_fb->dirtyfb, 1);
-+	mutex_init(&msm_fb->lock);
-+
- 	ret = drm_framebuffer_init(dev, fb, &msm_framebuffer_funcs);
- 	if (ret) {
- 		DRM_DEV_ERROR(dev->dev, "framebuffer init failed: %d\n", ret);
- 		goto fail;
- 	}
- 
--	refcount_set(&msm_fb->dirtyfb, 1);
--
- 	drm_dbg_state(dev, "create: FB ID: %d (%p)\n", fb->base.id, fb);
- 
- 	return fb;
-diff --git a/drivers/gpu/drm/msm/msm_fb.c b/drivers/gpu/drm/msm/msm_fb.c
-index 77415302e6d8..552ca5cf0745 100644
---- a/drivers/gpu/drm/msm/msm_fb.c
-+++ b/drivers/gpu/drm/msm/msm_fb.c
-@@ -102,13 +102,28 @@ int msm_framebuffer_prepare(struct drm_framebuffer *fb, bool needs_dirtyfb)
- 		ret = msm_gem_get_and_pin_iova(fb->obj[i], vm, &msm_fb->iova[i]);
- 		drm_dbg_state(fb->dev, "FB[%u]: iova[%d]: %08llx (%d)\n",
- 			      fb->base.id, i, msm_fb->iova[i], ret);
--		if (ret)
-+		if (ret) {
-+			msm_gem_vma_put(fb->obj[i]);
- 			break;
-+		}
-+	}
-+
-+	if (ret) {
-+		while (i--) {
-+			msm_gem_unpin_iova(fb->obj[i], vm);
-+			msm_gem_vma_put(fb->obj[i]);
-+		}
-+
-+		memset(msm_fb->iova, 0, sizeof(msm_fb->iova));
-+		msm_fb->prepare_count--;
- 	}
- 
- out:
- 	mutex_unlock(&msm_fb->lock);
- 
-+	if (ret && needs_dirtyfb)
-+		refcount_dec(&msm_fb->dirtyfb);
-+
- 	return ret;
- }
- 
 diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.c
-index 42d0a529b4d5..bf593020e8e4 100644
+index 42d0a529b..b1aea5769 100644
 --- a/drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.c
 +++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.c
 @@ -1213,7 +1213,7 @@ static void dpu_crtc_disable(struct drm_crtc *crtc,
@@ -350,325 +275,15 @@ index 42d0a529b4d5..bf593020e8e4 100644
  
  	drm_for_each_encoder_mask(encoder, crtc->dev,
  				  old_crtc_state->encoder_mask) {
-diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys_wb.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys_wb.c
-index 22433bfbea1e..5db33e49c345 100644
---- a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys_wb.c
-+++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys_wb.c
-@@ -615,7 +615,7 @@ static void dpu_encoder_phys_wb_cleanup_wb_job(struct dpu_encoder_phys *phys_enc
- 	if (!job->fb)
- 		return;
+@@ -1301,7 +1301,7 @@ static void dpu_crtc_enable(struct drm_crtc *crtc,
+ 	}
  
--	msm_framebuffer_cleanup(job->fb, false);
-+	msm_framebuffer_cleanup(job->fb, NULL, false);
- 	wb_enc->wb_job = NULL;
- 	wb_enc->wb_conn = NULL;
- }
-diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_plane.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_plane.c
-index 7b92082d35a6..0e986b533bf0 100644
---- a/drivers/gpu/drm/msm/disp/dpu1/dpu_plane.c
-+++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_plane.c
-@@ -684,7 +684,8 @@ static void dpu_plane_cleanup_fb(struct drm_plane *plane,
- 
- 	DPU_DEBUG_PLANE(pdpu, "FB[%u]\n", old_state->fb->base.id);
- 
--	msm_framebuffer_cleanup(old_state->fb, old_pstate->needs_dirtyfb);
-+	msm_framebuffer_cleanup(old_state->fb, old_state->crtc,
-+				old_pstate->needs_dirtyfb);
+ 	/* Enable/restore vblank irq handling */
+-	drm_crtc_vblank_on(crtc);
++	msm_crtc_vblank_on(crtc);
  }
  
- static int dpu_plane_check_inline_rotation(struct dpu_plane *pdpu,
-diff --git a/drivers/gpu/drm/msm/disp/mdp4/mdp4_crtc.c b/drivers/gpu/drm/msm/disp/mdp4/mdp4_crtc.c
-index 57dfce58450b..195ee6b4a0c6 100644
---- a/drivers/gpu/drm/msm/disp/mdp4/mdp4_crtc.c
-+++ b/drivers/gpu/drm/msm/disp/mdp4/mdp4_crtc.c
-@@ -267,7 +267,7 @@ static void mdp4_crtc_atomic_disable(struct drm_crtc *crtc,
- 		return;
- 
- 	/* Disable/save vblank irq handling before power is disabled */
--	drm_crtc_vblank_off(crtc);
-+	msm_crtc_vblank_off(crtc);
- 
- 	mdp_irq_unregister(&mdp4_kms->base, &mdp4_crtc->err);
- 	mdp4_disable(mdp4_kms);
-diff --git a/drivers/gpu/drm/msm/disp/mdp4/mdp4_plane.c b/drivers/gpu/drm/msm/disp/mdp4/mdp4_plane.c
-index 9459f70ce0ba..5f669a02d798 100644
---- a/drivers/gpu/drm/msm/disp/mdp4/mdp4_plane.c
-+++ b/drivers/gpu/drm/msm/disp/mdp4/mdp4_plane.c
-@@ -97,7 +97,7 @@ static void mdp4_plane_cleanup_fb(struct drm_plane *plane,
- 		return;
- 
- 	DBG("%s: cleanup: FB[%u]", mdp4_plane->name, fb->base.id);
--	msm_framebuffer_cleanup(fb, false);
-+	msm_framebuffer_cleanup(fb, old_state->crtc, false);
- }
- 
- 
-diff --git a/drivers/gpu/drm/msm/disp/mdp5/mdp5_crtc.c b/drivers/gpu/drm/msm/disp/mdp5/mdp5_crtc.c
-index 4c4a897fc1ee..547f6fdb83d5 100644
---- a/drivers/gpu/drm/msm/disp/mdp5/mdp5_crtc.c
-+++ b/drivers/gpu/drm/msm/disp/mdp5/mdp5_crtc.c
-@@ -499,7 +499,7 @@ static void mdp5_crtc_atomic_disable(struct drm_crtc *crtc,
- 		return;
- 
- 	/* Disable/save vblank irq handling before power is disabled */
--	drm_crtc_vblank_off(crtc);
-+	msm_crtc_vblank_off(crtc);
- 
- 	if (mdp5_cstate->cmd_mode)
- 		mdp_irq_unregister(&mdp5_kms->base, &mdp5_crtc->pp_done);
-diff --git a/drivers/gpu/drm/msm/disp/mdp5/mdp5_plane.c b/drivers/gpu/drm/msm/disp/mdp5/mdp5_plane.c
-index 841f444a8d68..dacb387d9bb6 100644
---- a/drivers/gpu/drm/msm/disp/mdp5/mdp5_plane.c
-+++ b/drivers/gpu/drm/msm/disp/mdp5/mdp5_plane.c
-@@ -155,7 +155,7 @@ static void mdp5_plane_cleanup_fb(struct drm_plane *plane,
- 		return;
- 
- 	DBG("%s: cleanup: FB[%u]", plane->name, fb->base.id);
--	msm_framebuffer_cleanup(fb, needed_dirtyfb);
-+	msm_framebuffer_cleanup(fb, old_state->crtc, needed_dirtyfb);
- }
- 
- static int mdp5_plane_atomic_check_with_state(struct drm_crtc_state *crtc_state,
-diff --git a/drivers/gpu/drm/msm/msm_drv.h b/drivers/gpu/drm/msm/msm_drv.h
-index eb4bbae8557b..dc279a99e257 100644
---- a/drivers/gpu/drm/msm/msm_drv.h
-+++ b/drivers/gpu/drm/msm/msm_drv.h
-@@ -254,7 +254,9 @@ int msm_gem_prime_pin(struct drm_gem_object *obj);
- void msm_gem_prime_unpin(struct drm_gem_object *obj);
- 
- int msm_framebuffer_prepare(struct drm_framebuffer *fb, bool needs_dirtyfb);
--void msm_framebuffer_cleanup(struct drm_framebuffer *fb, bool needed_dirtyfb);
-+void msm_framebuffer_cleanup(struct drm_framebuffer *fb, struct drm_crtc *crtc,
-+			     bool needed_dirtyfb);
-+void msm_framebuffer_unpin(struct drm_framebuffer *fb);
- uint32_t msm_framebuffer_iova(struct drm_framebuffer *fb, int plane);
- struct drm_gem_object *msm_framebuffer_bo(struct drm_framebuffer *fb, int plane);
- const struct msm_format *msm_framebuffer_format(struct drm_framebuffer *fb);
-diff --git a/drivers/gpu/drm/msm/msm_fb.c b/drivers/gpu/drm/msm/msm_fb.c
-index 552ca5cf0745..5ae8ce3bc370 100644
---- a/drivers/gpu/drm/msm/msm_fb.c
-+++ b/drivers/gpu/drm/msm/msm_fb.c
-@@ -127,16 +127,13 @@ int msm_framebuffer_prepare(struct drm_framebuffer *fb, bool needs_dirtyfb)
- 	return ret;
- }
- 
--void msm_framebuffer_cleanup(struct drm_framebuffer *fb, bool needed_dirtyfb)
-+void msm_framebuffer_unpin(struct drm_framebuffer *fb)
- {
- 	struct msm_drm_private *priv = fb->dev->dev_private;
- 	struct drm_gpuvm *vm = priv->kms->vm;
- 	struct msm_framebuffer *msm_fb = to_msm_framebuffer(fb);
- 	int i, n = fb->format->num_planes;
- 
--	if (needed_dirtyfb)
--		refcount_dec(&msm_fb->dirtyfb);
--
- 	mutex_lock(&msm_fb->lock);
- 
- 	if (--msm_fb->prepare_count)
-@@ -153,6 +150,20 @@ void msm_framebuffer_cleanup(struct drm_framebuffer *fb, bool needed_dirtyfb)
- 	mutex_unlock(&msm_fb->lock);
- }
- 
-+void msm_framebuffer_cleanup(struct drm_framebuffer *fb, struct drm_crtc *crtc,
-+			     bool needed_dirtyfb)
-+{
-+	struct msm_framebuffer *msm_fb = to_msm_framebuffer(fb);
-+
-+	if (needed_dirtyfb)
-+		refcount_dec(&msm_fb->dirtyfb);
-+
-+	if (crtc && msm_crtc_queue_fb_unpin(crtc, fb))
-+		return;
-+
-+	msm_framebuffer_unpin(fb);
-+}
-+
- uint32_t msm_framebuffer_iova(struct drm_framebuffer *fb, int plane)
- {
- 	struct msm_framebuffer *msm_fb = to_msm_framebuffer(fb);
-diff --git a/drivers/gpu/drm/msm/msm_kms.c b/drivers/gpu/drm/msm/msm_kms.c
-index f3e39c3907a9..4582ba040f6f 100644
---- a/drivers/gpu/drm/msm/msm_kms.c
-+++ b/drivers/gpu/drm/msm/msm_kms.c
-@@ -11,8 +11,10 @@
- #include <uapi/linux/sched/types.h>
- 
- #include <drm/drm_drv.h>
-+#include <drm/drm_framebuffer.h>
- #include <drm/drm_mode_config.h>
- #include <drm/drm_vblank.h>
-+#include <drm/drm_vblank_work.h>
- #include <drm/clients/drm_client_setup.h>
- 
- #include "disp/msm_disp_snapshot.h"
-@@ -165,6 +167,119 @@ void msm_crtc_disable_vblank(struct drm_crtc *crtc)
- 	vblank_ctrl_queue_work(priv, crtc, false);
- }
- 
-+struct msm_fb_unpin_work {
-+	struct drm_vblank_work base;
-+	struct list_head node;
-+	struct msm_kms_fb_unpin *pending;
-+	struct drm_framebuffer *fb;
-+};
-+
-+static void msm_kms_fb_unpin_release(struct msm_fb_unpin_work *unpin)
-+{
-+	msm_framebuffer_unpin(unpin->fb);
-+	drm_framebuffer_put(unpin->fb);
-+	kfree(unpin);
-+}
-+
-+static void msm_kms_fb_unpin_work(struct kthread_work *work)
-+{
-+	struct msm_fb_unpin_work *unpin =
-+		container_of(to_drm_vblank_work(work), struct msm_fb_unpin_work,
-+			     base);
-+	struct msm_kms_fb_unpin *pending = unpin->pending;
-+
-+	spin_lock(&pending->lock);
-+	if (list_empty(&unpin->node)) {
-+		spin_unlock(&pending->lock);
-+		return;
-+	}
-+	list_del_init(&unpin->node);
-+	spin_unlock(&pending->lock);
-+
-+	msm_kms_fb_unpin_release(unpin);
-+}
-+
-+void msm_crtc_vblank_off(struct drm_crtc *crtc)
-+{
-+	struct msm_drm_private *priv = crtc->dev->dev_private;
-+	struct msm_kms *kms = priv->kms;
-+	unsigned int idx = drm_crtc_index(crtc);
-+	struct msm_kms_fb_unpin *pending;
-+	struct msm_fb_unpin_work *unpin;
-+
-+	if (!kms || idx >= ARRAY_SIZE(kms->fb_unpin))
-+		goto out;
-+
-+	pending = &kms->fb_unpin[idx];
-+
-+	/*
-+	 * The crtc stops fetching here, and with it the vblanks the pending
-+	 * works are waiting for, so release the framebuffers directly.
-+	 */
-+	for (;;) {
-+		spin_lock(&pending->lock);
-+		unpin = list_first_entry_or_null(&pending->fbs, typeof(*unpin),
-+						 node);
-+		if (unpin)
-+			list_del_init(&unpin->node);
-+		spin_unlock(&pending->lock);
-+
-+		if (!unpin)
-+			break;
-+
-+		drm_vblank_work_cancel_sync(&unpin->base);
-+		msm_kms_fb_unpin_release(unpin);
-+	}
-+
-+out:
-+	drm_crtc_vblank_off(crtc);
-+}
-+
-+bool msm_crtc_queue_fb_unpin(struct drm_crtc *crtc, struct drm_framebuffer *fb)
-+{
-+	struct msm_drm_private *priv = crtc->dev->dev_private;
-+	struct msm_kms *kms = priv->kms;
-+	unsigned int idx = drm_crtc_index(crtc);
-+	struct msm_kms_fb_unpin *pending;
-+	struct msm_fb_unpin_work *unpin;
-+
-+	if (!kms || idx >= ARRAY_SIZE(kms->fb_unpin))
-+		return false;
-+
-+	if (!crtc->state->active)
-+		return false;
-+
-+	pending = &kms->fb_unpin[idx];
-+
-+	unpin = kzalloc_obj(*unpin);
-+	if (!unpin)
-+		return false;
-+
-+	unpin->fb = fb;
-+	unpin->pending = pending;
-+	drm_framebuffer_get(fb);
-+
-+	drm_vblank_work_init(&unpin->base, crtc, msm_kms_fb_unpin_work);
-+
-+	spin_lock(&pending->lock);
-+	list_add_tail(&unpin->node, &pending->fbs);
-+	spin_unlock(&pending->lock);
-+
-+	if (drm_vblank_work_schedule(&unpin->base,
-+				     drm_crtc_vblank_count(crtc) + 1, true) != 1) {
-+		spin_lock(&pending->lock);
-+		list_del_init(&unpin->node);
-+		spin_unlock(&pending->lock);
-+
-+		drm_framebuffer_put(fb);
-+		kfree(unpin);
-+
-+		return false;
-+	}
-+
-+	return true;
-+}
-+
- static int msm_kms_fault_handler(void *arg, unsigned long iova, int flags, void *data)
- {
- 	struct msm_kms *kms = arg;
-diff --git a/drivers/gpu/drm/msm/msm_kms.h b/drivers/gpu/drm/msm/msm_kms.h
-index f25b31e502d2..6f305b4409ea 100644
---- a/drivers/gpu/drm/msm/msm_kms.h
-+++ b/drivers/gpu/drm/msm/msm_kms.h
-@@ -135,6 +135,12 @@ struct msm_drm_thread {
- 	struct kthread_worker *worker;
- };
- 
-+struct msm_kms_fb_unpin {
-+	/* protects the list of framebuffers waiting for a vblank: */
-+	spinlock_t lock;
-+	struct list_head fbs;
-+};
-+
- struct msm_kms {
- 	const struct msm_kms_funcs *funcs;
- 	struct drm_device *dev;
-@@ -170,8 +176,13 @@ struct msm_kms {
- 
- 	struct workqueue_struct *wq;
- 	struct msm_drm_thread event_thread[MAX_CRTCS];
-+
-+	struct msm_kms_fb_unpin fb_unpin[MAX_CRTCS];
- };
- 
-+bool msm_crtc_queue_fb_unpin(struct drm_crtc *crtc, struct drm_framebuffer *fb);
-+void msm_crtc_vblank_off(struct drm_crtc *crtc);
-+
- static inline int msm_kms_init(struct msm_kms *kms,
- 		const struct msm_kms_funcs *funcs)
- {
-@@ -180,6 +191,11 @@ static inline int msm_kms_init(struct msm_kms *kms,
- 	for (i = 0; i < ARRAY_SIZE(kms->commit_lock); i++)
- 		mutex_init(&kms->commit_lock[i]);
- 
-+	for (i = 0; i < ARRAY_SIZE(kms->fb_unpin); i++) {
-+		spin_lock_init(&kms->fb_unpin[i].lock);
-+		INIT_LIST_HEAD(&kms->fb_unpin[i].fbs);
-+	}
-+
- 	kms->funcs = funcs;
- 
- 	kms->wq = alloc_ordered_workqueue("msm", 0);
-diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.c
-index bf593020e8e4..5dc0c9aeaa5d 100644
---- a/drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.c
-+++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.c
+ static bool dpu_crtc_needs_dirtyfb(struct drm_crtc_state *cstate)
 @@ -1480,8 +1480,8 @@ static int dpu_crtc_assign_resources(struct drm_crtc *crtc,
  
  		cstate->mixers[i].hw_lm = to_dpu_hw_mixer(hw_lm[i]);
@@ -680,28 +295,6 @@ index bf593020e8e4..5dc0c9aeaa5d 100644
  	}
  
  	cstate->num_mixers = num_lm;
-diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.c
-index 1f20695f81e3..50c49259a23e 100644
---- a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.c
-+++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.c
-@@ -1222,9 +1222,10 @@ static void dpu_encoder_virt_atomic_mode_set(struct drm_encoder *drm_enc,
- 	num_dsc = dpu_rm_get_assigned_resources(&dpu_kms->rm, global_state,
- 						drm_enc->crtc, DPU_HW_BLK_DSC,
- 						hw_dsc, ARRAY_SIZE(hw_dsc));
--	for (i = 0; i < num_dsc; i++) {
--		dpu_enc->hw_dsc[i] = to_dpu_hw_dsc(hw_dsc[i]);
--		dsc_mask |= BIT(dpu_enc->hw_dsc[i]->idx - DSC_0);
-+	for (i = 0; i < MAX_CHANNELS_PER_ENC; i++) {
-+		dpu_enc->hw_dsc[i] = i < num_dsc ? to_dpu_hw_dsc(hw_dsc[i]) : NULL;
-+		if (dpu_enc->hw_dsc[i])
-+			dsc_mask |= BIT(dpu_enc->hw_dsc[i]->idx - DSC_0);
- 	}
- 
- 	dpu_enc->dsc_mask = dsc_mask;
-diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.c
-index 5dc0c9aeaa5d..a3b1d2d7669a 100644
---- a/drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.c
-+++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.c
 @@ -1496,6 +1496,26 @@ static int dpu_crtc_assign_resources(struct drm_crtc *crtc,
   *
   * Check if the changes in the object properties demand full mode set.
@@ -751,8 +344,161 @@ index 5dc0c9aeaa5d..a3b1d2d7669a 100644
  		rc = dpu_crtc_assign_resources(crtc, crtc_state);
  		if (rc < 0)
  			return rc;
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.c
+index 1f20695f8..c9ea303a4 100644
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.c
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.c
+@@ -1160,6 +1160,7 @@ static void dpu_encoder_virt_atomic_mode_set(struct drm_encoder *drm_enc,
+ 	struct dpu_hw_blk *hw_ctl[MAX_CHANNELS_PER_ENC];
+ 	struct dpu_hw_blk *hw_dsc[MAX_CHANNELS_PER_ENC];
+ 	struct dpu_hw_blk *hw_cwb[MAX_CHANNELS_PER_ENC];
++	struct dpu_hw_blk *hw_cdm = NULL;
+ 	int num_ctl, num_pp, num_dsc, num_pp_per_intf;
+ 	int num_cwb = 0;
+ 	bool is_cwb_encoder;
+@@ -1205,9 +1206,10 @@ static void dpu_encoder_virt_atomic_mode_set(struct drm_encoder *drm_enc,
+ 						       ARRAY_SIZE(hw_pp));
+ 	}
+ 
+-	for (i = 0; i < num_cwb; i++) {
+-		dpu_enc->hw_cwb[i] = to_dpu_hw_cwb(hw_cwb[i]);
+-		cwb_mask |= BIT(dpu_enc->hw_cwb[i]->idx - CWB_0);
++	for (i = 0; i < MAX_CWB_PER_ENC; i++) {
++		dpu_enc->hw_cwb[i] = i < num_cwb ? to_dpu_hw_cwb(hw_cwb[i]) : NULL;
++		if (dpu_enc->hw_cwb[i])
++			cwb_mask |= BIT(dpu_enc->hw_cwb[i]->idx - CWB_0);
+ 	}
+ 
+ 	dpu_enc->cwb_mask = cwb_mask;
+@@ -1222,22 +1224,21 @@ static void dpu_encoder_virt_atomic_mode_set(struct drm_encoder *drm_enc,
+ 	num_dsc = dpu_rm_get_assigned_resources(&dpu_kms->rm, global_state,
+ 						drm_enc->crtc, DPU_HW_BLK_DSC,
+ 						hw_dsc, ARRAY_SIZE(hw_dsc));
+-	for (i = 0; i < num_dsc; i++) {
+-		dpu_enc->hw_dsc[i] = to_dpu_hw_dsc(hw_dsc[i]);
+-		dsc_mask |= BIT(dpu_enc->hw_dsc[i]->idx - DSC_0);
++	for (i = 0; i < MAX_CHANNELS_PER_ENC; i++) {
++		dpu_enc->hw_dsc[i] = i < num_dsc ? to_dpu_hw_dsc(hw_dsc[i]) : NULL;
++		if (dpu_enc->hw_dsc[i])
++			dsc_mask |= BIT(dpu_enc->hw_dsc[i]->idx - DSC_0);
+ 	}
+ 
+ 	dpu_enc->dsc_mask = dsc_mask;
+ 
+ 	if ((dpu_enc->disp_info.intf_type == INTF_WB && conn_state->writeback_job) ||
+-	    dpu_enc->disp_info.intf_type == INTF_DP) {
+-		struct dpu_hw_blk *hw_cdm = NULL;
+-
++	    dpu_enc->disp_info.intf_type == INTF_DP)
+ 		dpu_rm_get_assigned_resources(&dpu_kms->rm, global_state,
+ 					      drm_enc->crtc, DPU_HW_BLK_CDM,
+ 					      &hw_cdm, 1);
+-		dpu_enc->cur_master->hw_cdm = hw_cdm ? to_dpu_hw_cdm(hw_cdm) : NULL;
+-	}
++
++	dpu_enc->cur_master->hw_cdm = hw_cdm ? to_dpu_hw_cdm(hw_cdm) : NULL;
+ 
+ 	/*
+ 	 * There may be 4 PP and 2 INTF for quad pipe case, so INTF is not
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys_wb.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys_wb.c
+index 22433bfbe..5db33e49c 100644
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys_wb.c
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys_wb.c
+@@ -615,7 +615,7 @@ static void dpu_encoder_phys_wb_cleanup_wb_job(struct dpu_encoder_phys *phys_enc
+ 	if (!job->fb)
+ 		return;
+ 
+-	msm_framebuffer_cleanup(job->fb, false);
++	msm_framebuffer_cleanup(job->fb, NULL, false);
+ 	wb_enc->wb_job = NULL;
+ 	wb_enc->wb_conn = NULL;
+ }
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_plane.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_plane.c
+index 7b92082d3..0e986b533 100644
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_plane.c
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_plane.c
+@@ -684,7 +684,8 @@ static void dpu_plane_cleanup_fb(struct drm_plane *plane,
+ 
+ 	DPU_DEBUG_PLANE(pdpu, "FB[%u]\n", old_state->fb->base.id);
+ 
+-	msm_framebuffer_cleanup(old_state->fb, old_pstate->needs_dirtyfb);
++	msm_framebuffer_cleanup(old_state->fb, old_state->crtc,
++				old_pstate->needs_dirtyfb);
+ }
+ 
+ static int dpu_plane_check_inline_rotation(struct dpu_plane *pdpu,
+diff --git a/drivers/gpu/drm/msm/disp/mdp4/mdp4_crtc.c b/drivers/gpu/drm/msm/disp/mdp4/mdp4_crtc.c
+index 57dfce584..2d73ac3d8 100644
+--- a/drivers/gpu/drm/msm/disp/mdp4/mdp4_crtc.c
++++ b/drivers/gpu/drm/msm/disp/mdp4/mdp4_crtc.c
+@@ -267,7 +267,7 @@ static void mdp4_crtc_atomic_disable(struct drm_crtc *crtc,
+ 		return;
+ 
+ 	/* Disable/save vblank irq handling before power is disabled */
+-	drm_crtc_vblank_off(crtc);
++	msm_crtc_vblank_off(crtc);
+ 
+ 	mdp_irq_unregister(&mdp4_kms->base, &mdp4_crtc->err);
+ 	mdp4_disable(mdp4_kms);
+@@ -297,7 +297,7 @@ static void mdp4_crtc_atomic_enable(struct drm_crtc *crtc,
+ 	mdp4_enable(mdp4_kms);
+ 
+ 	/* Restore vblank irq handling after power is enabled */
+-	drm_crtc_vblank_on(crtc);
++	msm_crtc_vblank_on(crtc);
+ 
+ 	mdp_irq_register(&mdp4_kms->base, &mdp4_crtc->err);
+ 
+diff --git a/drivers/gpu/drm/msm/disp/mdp4/mdp4_plane.c b/drivers/gpu/drm/msm/disp/mdp4/mdp4_plane.c
+index 9459f70ce..5f669a02d 100644
+--- a/drivers/gpu/drm/msm/disp/mdp4/mdp4_plane.c
++++ b/drivers/gpu/drm/msm/disp/mdp4/mdp4_plane.c
+@@ -97,7 +97,7 @@ static void mdp4_plane_cleanup_fb(struct drm_plane *plane,
+ 		return;
+ 
+ 	DBG("%s: cleanup: FB[%u]", mdp4_plane->name, fb->base.id);
+-	msm_framebuffer_cleanup(fb, false);
++	msm_framebuffer_cleanup(fb, old_state->crtc, false);
+ }
+ 
+ 
+diff --git a/drivers/gpu/drm/msm/disp/mdp5/mdp5_crtc.c b/drivers/gpu/drm/msm/disp/mdp5/mdp5_crtc.c
+index 4c4a897fc..e9e559276 100644
+--- a/drivers/gpu/drm/msm/disp/mdp5/mdp5_crtc.c
++++ b/drivers/gpu/drm/msm/disp/mdp5/mdp5_crtc.c
+@@ -499,7 +499,7 @@ static void mdp5_crtc_atomic_disable(struct drm_crtc *crtc,
+ 		return;
+ 
+ 	/* Disable/save vblank irq handling before power is disabled */
+-	drm_crtc_vblank_off(crtc);
++	msm_crtc_vblank_off(crtc);
+ 
+ 	if (mdp5_cstate->cmd_mode)
+ 		mdp_irq_unregister(&mdp5_kms->base, &mdp5_crtc->pp_done);
+@@ -527,7 +527,7 @@ static void mdp5_crtc_vblank_on(struct drm_crtc *crtc)
+ 	count = intf->mode == MDP5_INTF_DSI_MODE_COMMAND ? 0 : 0xffffffff;
+ 	drm_crtc_set_max_vblank_count(crtc, count);
+ 
+-	drm_crtc_vblank_on(crtc);
++	msm_crtc_vblank_on(crtc);
+ }
+ 
+ static void mdp5_crtc_atomic_enable(struct drm_crtc *crtc,
+diff --git a/drivers/gpu/drm/msm/disp/mdp5/mdp5_plane.c b/drivers/gpu/drm/msm/disp/mdp5/mdp5_plane.c
+index 841f444a8..dacb387d9 100644
+--- a/drivers/gpu/drm/msm/disp/mdp5/mdp5_plane.c
++++ b/drivers/gpu/drm/msm/disp/mdp5/mdp5_plane.c
+@@ -155,7 +155,7 @@ static void mdp5_plane_cleanup_fb(struct drm_plane *plane,
+ 		return;
+ 
+ 	DBG("%s: cleanup: FB[%u]", plane->name, fb->base.id);
+-	msm_framebuffer_cleanup(fb, needed_dirtyfb);
++	msm_framebuffer_cleanup(fb, old_state->crtc, needed_dirtyfb);
+ }
+ 
+ static int mdp5_plane_atomic_check_with_state(struct drm_crtc_state *crtc_state,
 diff --git a/drivers/gpu/drm/msm/msm_atomic.c b/drivers/gpu/drm/msm/msm_atomic.c
-index a8babf1dbe0d..7b480981becc 100644
+index a8babf1db..7b480981b 100644
 --- a/drivers/gpu/drm/msm/msm_atomic.c
 +++ b/drivers/gpu/drm/msm/msm_atomic.c
 @@ -185,22 +185,7 @@ int msm_atomic_check(struct drm_device *dev, struct drm_atomic_commit *state)
@@ -779,3 +525,371 @@ index a8babf1dbe0d..7b480981becc 100644
  
  	if (kms && kms->funcs && kms->funcs->check_mode_changed)
  		ret = kms->funcs->check_mode_changed(kms, state);
+diff --git a/drivers/gpu/drm/msm/msm_drv.h b/drivers/gpu/drm/msm/msm_drv.h
+index 3d5679be4..b1893261e 100644
+--- a/drivers/gpu/drm/msm/msm_drv.h
++++ b/drivers/gpu/drm/msm/msm_drv.h
+@@ -254,7 +254,9 @@ int msm_gem_prime_pin(struct drm_gem_object *obj);
+ void msm_gem_prime_unpin(struct drm_gem_object *obj);
+ 
+ int msm_framebuffer_prepare(struct drm_framebuffer *fb, bool needs_dirtyfb);
+-void msm_framebuffer_cleanup(struct drm_framebuffer *fb, bool needed_dirtyfb);
++void msm_framebuffer_cleanup(struct drm_framebuffer *fb, struct drm_crtc *crtc,
++			     bool needed_dirtyfb);
++void msm_framebuffer_unpin(struct drm_framebuffer *fb);
+ uint32_t msm_framebuffer_iova(struct drm_framebuffer *fb, int plane);
+ struct drm_gem_object *msm_framebuffer_bo(struct drm_framebuffer *fb, int plane);
+ const struct msm_format *msm_framebuffer_format(struct drm_framebuffer *fb);
+diff --git a/drivers/gpu/drm/msm/msm_fb.c b/drivers/gpu/drm/msm/msm_fb.c
+index ee17a47f3..dc5847521 100644
+--- a/drivers/gpu/drm/msm/msm_fb.c
++++ b/drivers/gpu/drm/msm/msm_fb.c
+@@ -23,9 +23,12 @@ struct msm_framebuffer {
+ 	/* Count of # of attached planes which need dirtyfb: */
+ 	refcount_t dirtyfb;
+ 
++	/* Protects the pin state below: */
++	struct mutex lock;
++
+ 	/* Framebuffer per-plane address, if pinned, else zero: */
+ 	uint64_t iova[DRM_FORMAT_MAX_PLANES];
+-	atomic_t prepare_count;
++	unsigned int prepare_count;
+ };
+ #define to_msm_framebuffer(x) container_of(x, struct msm_framebuffer, base)
+ 
+@@ -50,9 +53,17 @@ static int msm_framebuffer_dirtyfb(struct drm_framebuffer *fb,
+ 					 clips, num_clips);
+ }
+ 
++static void msm_framebuffer_destroy(struct drm_framebuffer *fb)
++{
++	struct msm_framebuffer *msm_fb = to_msm_framebuffer(fb);
++
++	mutex_destroy(&msm_fb->lock);
++	drm_gem_fb_destroy(fb);
++}
++
+ static const struct drm_framebuffer_funcs msm_framebuffer_funcs = {
+ 	.create_handle = drm_gem_fb_create_handle,
+-	.destroy = drm_gem_fb_destroy,
++	.destroy = msm_framebuffer_destroy,
+ 	.dirty = msm_framebuffer_dirtyfb,
+ };
+ 
+@@ -74,6 +85,18 @@ void msm_framebuffer_describe(struct drm_framebuffer *fb, struct seq_file *m)
+ }
+ #endif
+ 
++static void msm_framebuffer_unpin_planes(struct drm_framebuffer *fb, int n)
++{
++	struct msm_drm_private *priv = fb->dev->dev_private;
++	struct drm_gpuvm *vm = priv->kms->vm;
++	int i;
++
++	for (i = 0; i < n; i++) {
++		msm_gem_unpin_iova(fb->obj[i], vm);
++		msm_gem_vma_put(fb->obj[i]);
++	}
++}
++
+ /* prepare/pin all the fb's bo's for scanout.
+  */
+ int msm_framebuffer_prepare(struct drm_framebuffer *fb, bool needs_dirtyfb)
+@@ -86,7 +109,9 @@ int msm_framebuffer_prepare(struct drm_framebuffer *fb, bool needs_dirtyfb)
+ 	if (needs_dirtyfb)
+ 		refcount_inc(&msm_fb->dirtyfb);
+ 
+-	if (atomic_inc_return(&msm_fb->prepare_count) > 1)
++	guard(mutex)(&msm_fb->lock);
++
++	if (msm_fb->prepare_count++)
+ 		return 0;
+ 
+ 	for (i = 0; i < n; i++) {
+@@ -94,32 +119,47 @@ int msm_framebuffer_prepare(struct drm_framebuffer *fb, bool needs_dirtyfb)
+ 		ret = msm_gem_get_and_pin_iova(fb->obj[i], vm, &msm_fb->iova[i]);
+ 		drm_dbg_state(fb->dev, "FB[%u]: iova[%d]: %08llx (%d)\n",
+ 			      fb->base.id, i, msm_fb->iova[i], ret);
+-		if (ret)
++		if (ret) {
++			msm_gem_vma_put(fb->obj[i]);
++			msm_framebuffer_unpin_planes(fb, i);
++			memset(msm_fb->iova, 0, sizeof(msm_fb->iova));
++			msm_fb->prepare_count--;
++
++			if (needs_dirtyfb)
++				refcount_dec(&msm_fb->dirtyfb);
++
+ 			return ret;
++		}
+ 	}
+ 
+ 	return 0;
+ }
+ 
+-void msm_framebuffer_cleanup(struct drm_framebuffer *fb, bool needed_dirtyfb)
++void msm_framebuffer_unpin(struct drm_framebuffer *fb)
+ {
+-	struct msm_drm_private *priv = fb->dev->dev_private;
+-	struct drm_gpuvm *vm = priv->kms->vm;
+ 	struct msm_framebuffer *msm_fb = to_msm_framebuffer(fb);
+-	int i, n = fb->format->num_planes;
+ 
+-	if (needed_dirtyfb)
+-		refcount_dec(&msm_fb->dirtyfb);
++	guard(mutex)(&msm_fb->lock);
+ 
+-	if (atomic_dec_return(&msm_fb->prepare_count))
++	if (--msm_fb->prepare_count)
+ 		return;
+ 
+ 	memset(msm_fb->iova, 0, sizeof(msm_fb->iova));
++	msm_framebuffer_unpin_planes(fb, fb->format->num_planes);
++}
+ 
+-	for (i = 0; i < n; i++) {
+-		msm_gem_unpin_iova(fb->obj[i], vm);
+-		msm_gem_vma_put(fb->obj[i]);
+-	}
++void msm_framebuffer_cleanup(struct drm_framebuffer *fb, struct drm_crtc *crtc,
++			     bool needed_dirtyfb)
++{
++	struct msm_framebuffer *msm_fb = to_msm_framebuffer(fb);
++
++	if (needed_dirtyfb)
++		refcount_dec(&msm_fb->dirtyfb);
++
++	if (crtc && msm_crtc_queue_fb_unpin(crtc, fb))
++		return;
++
++	msm_framebuffer_unpin(fb);
+ }
+ 
+ uint32_t msm_framebuffer_iova(struct drm_framebuffer *fb, int plane)
+@@ -233,14 +273,15 @@ static struct drm_framebuffer *msm_framebuffer_init(struct drm_device *dev,
+ 
+ 	drm_helper_mode_fill_fb_struct(dev, fb, info, mode_cmd);
+ 
++	refcount_set(&msm_fb->dirtyfb, 1);
++	mutex_init(&msm_fb->lock);
++
+ 	ret = drm_framebuffer_init(dev, fb, &msm_framebuffer_funcs);
+ 	if (ret) {
+ 		DRM_DEV_ERROR(dev->dev, "framebuffer init failed: %d\n", ret);
+ 		goto fail;
+ 	}
+ 
+-	refcount_set(&msm_fb->dirtyfb, 1);
+-
+ 	drm_dbg_state(dev, "create: FB ID: %d (%p)\n", fb->base.id, fb);
+ 
+ 	return fb;
+diff --git a/drivers/gpu/drm/msm/msm_kms.c b/drivers/gpu/drm/msm/msm_kms.c
+index e5d0ea629..034a26837 100644
+--- a/drivers/gpu/drm/msm/msm_kms.c
++++ b/drivers/gpu/drm/msm/msm_kms.c
+@@ -11,8 +11,10 @@
+ #include <uapi/linux/sched/types.h>
+ 
+ #include <drm/drm_drv.h>
++#include <drm/drm_framebuffer.h>
+ #include <drm/drm_mode_config.h>
+ #include <drm/drm_vblank.h>
++#include <drm/drm_vblank_work.h>
+ #include <drm/clients/drm_client_setup.h>
+ 
+ #include "disp/msm_disp_snapshot.h"
+@@ -165,6 +167,146 @@ void msm_crtc_disable_vblank(struct drm_crtc *crtc)
+ 	vblank_ctrl_queue_work(priv, crtc, false);
+ }
+ 
++struct msm_fb_unpin_work {
++	struct drm_vblank_work base;
++	struct list_head node;
++	struct msm_kms_fb_unpin *pending;
++	struct drm_framebuffer *fb;
++};
++
++static void msm_kms_fb_unpin_release(struct msm_fb_unpin_work *unpin)
++{
++	msm_framebuffer_unpin(unpin->fb);
++	drm_framebuffer_put(unpin->fb);
++	kfree(unpin);
++}
++
++static void msm_kms_fb_unpin_work(struct kthread_work *work)
++{
++	struct msm_fb_unpin_work *unpin =
++		container_of(to_drm_vblank_work(work), struct msm_fb_unpin_work,
++			     base);
++	struct msm_kms_fb_unpin *pending = unpin->pending;
++
++	scoped_guard(spinlock, &pending->lock) {
++		if (list_empty(&unpin->node))
++			return;
++		list_del_init(&unpin->node);
++	}
++
++	msm_kms_fb_unpin_release(unpin);
++}
++
++void msm_crtc_vblank_on(struct drm_crtc *crtc)
++{
++	struct msm_drm_private *priv = crtc->dev->dev_private;
++	struct msm_kms *kms = priv->kms;
++	unsigned int idx = drm_crtc_index(crtc);
++
++	drm_crtc_vblank_on(crtc);
++
++	if (!kms || idx >= ARRAY_SIZE(kms->fb_unpin))
++		return;
++
++	scoped_guard(spinlock, &kms->fb_unpin[idx].lock)
++		kms->fb_unpin[idx].vblank_off = false;
++}
++
++/*
++ * The crtc stops fetching here, and with it the vblanks the pending works are
++ * waiting for, so release the framebuffers directly.
++ */
++static void msm_kms_fb_unpin_release_all(struct msm_kms_fb_unpin *pending)
++{
++	struct msm_fb_unpin_work *unpin;
++
++	scoped_guard(spinlock, &pending->lock)
++		pending->vblank_off = true;
++
++	for (;;) {
++		scoped_guard(spinlock, &pending->lock) {
++			unpin = list_first_entry_or_null(&pending->fbs,
++							 typeof(*unpin), node);
++			if (unpin)
++				list_del_init(&unpin->node);
++		}
++
++		if (!unpin)
++			break;
++
++		drm_vblank_work_cancel_sync(&unpin->base);
++		msm_kms_fb_unpin_release(unpin);
++	}
++}
++
++void msm_crtc_vblank_off(struct drm_crtc *crtc)
++{
++	struct msm_drm_private *priv = crtc->dev->dev_private;
++	struct msm_kms *kms = priv->kms;
++	unsigned int idx = drm_crtc_index(crtc);
++
++	if (kms && idx < ARRAY_SIZE(kms->fb_unpin))
++		msm_kms_fb_unpin_release_all(&kms->fb_unpin[idx]);
++
++	drm_crtc_vblank_off(crtc);
++}
++
++/*
++ * Publish and schedule the work in one go under the lock, as
++ * msm_crtc_vblank_off() frees whatever it finds on the list.
++ */
++static bool msm_kms_fb_unpin_schedule(struct msm_kms_fb_unpin *pending,
++				      struct msm_fb_unpin_work *unpin,
++				      struct drm_crtc *crtc)
++{
++	guard(spinlock)(&pending->lock);
++
++	if (pending->vblank_off)
++		return false;
++
++	list_add_tail(&unpin->node, &pending->fbs);
++
++	if (drm_vblank_work_schedule(&unpin->base,
++				     drm_crtc_vblank_count(crtc) + 1, true) == 1)
++		return true;
++
++	list_del_init(&unpin->node);
++
++	return false;
++}
++
++bool msm_crtc_queue_fb_unpin(struct drm_crtc *crtc, struct drm_framebuffer *fb)
++{
++	struct msm_drm_private *priv = crtc->dev->dev_private;
++	struct msm_kms *kms = priv->kms;
++	unsigned int idx = drm_crtc_index(crtc);
++	struct msm_kms_fb_unpin *pending;
++	struct msm_fb_unpin_work *unpin;
++
++	if (!kms || idx >= ARRAY_SIZE(kms->fb_unpin))
++		return false;
++
++	pending = &kms->fb_unpin[idx];
++
++	unpin = kzalloc_obj(*unpin);
++	if (!unpin)
++		return false;
++
++	unpin->fb = fb;
++	unpin->pending = pending;
++	drm_framebuffer_get(fb);
++
++	drm_vblank_work_init(&unpin->base, crtc, msm_kms_fb_unpin_work);
++
++	if (msm_kms_fb_unpin_schedule(pending, unpin, crtc))
++		return true;
++
++	drm_framebuffer_put(fb);
++	kfree(unpin);
++
++	return false;
++}
++
+ static int msm_kms_fault_handler(void *arg, unsigned long iova, int flags, void *data)
+ {
+ 	struct msm_kms *kms = arg;
+diff --git a/drivers/gpu/drm/msm/msm_kms.h b/drivers/gpu/drm/msm/msm_kms.h
+index f25b31e50..72d1b6e1b 100644
+--- a/drivers/gpu/drm/msm/msm_kms.h
++++ b/drivers/gpu/drm/msm/msm_kms.h
+@@ -135,6 +135,13 @@ struct msm_drm_thread {
+ 	struct kthread_worker *worker;
+ };
+ 
++struct msm_kms_fb_unpin {
++	/* protects the list of framebuffers waiting for a vblank: */
++	spinlock_t lock;
++	struct list_head fbs;
++	bool vblank_off;
++};
++
+ struct msm_kms {
+ 	const struct msm_kms_funcs *funcs;
+ 	struct drm_device *dev;
+@@ -170,8 +177,14 @@ struct msm_kms {
+ 
+ 	struct workqueue_struct *wq;
+ 	struct msm_drm_thread event_thread[MAX_CRTCS];
++
++	struct msm_kms_fb_unpin fb_unpin[MAX_CRTCS];
+ };
+ 
++bool msm_crtc_queue_fb_unpin(struct drm_crtc *crtc, struct drm_framebuffer *fb);
++void msm_crtc_vblank_on(struct drm_crtc *crtc);
++void msm_crtc_vblank_off(struct drm_crtc *crtc);
++
+ static inline int msm_kms_init(struct msm_kms *kms,
+ 		const struct msm_kms_funcs *funcs)
+ {
+@@ -180,6 +193,12 @@ static inline int msm_kms_init(struct msm_kms *kms,
+ 	for (i = 0; i < ARRAY_SIZE(kms->commit_lock); i++)
+ 		mutex_init(&kms->commit_lock[i]);
+ 
++	for (i = 0; i < ARRAY_SIZE(kms->fb_unpin); i++) {
++		spin_lock_init(&kms->fb_unpin[i].lock);
++		INIT_LIST_HEAD(&kms->fb_unpin[i].fbs);
++		kms->fb_unpin[i].vblank_off = true;
++	}
++
+ 	kms->funcs = funcs;
+ 
+ 	kms->wq = alloc_ordered_workqueue("msm", 0);

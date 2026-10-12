@@ -1,0 +1,306 @@
+From git@z Thu Jan  1 00:00:00 1970
+Subject: [PATCH v5 3/42] dt-bindings: clock: qcom: gcc-sm8250: Add CX power
+ domain
+From: Abel Vesa <abel.vesa@oss.qualcomm.com>
+Date: Thu, 24 Sep 2026 13:39:19 +0300
+Message-Id: <20260924-qcom-tie-cx-to-gcc-v5-3-38732033e5b5@oss.qualcomm.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+The GDSCs provided by the SM8250 GCC are supplied by the RPMh CX power
+domain. Model that parent domain in the GCC binding so the provider can
+describe the dependency in devicetree.
+
+Add a single CX power-domain entry to the binding and make it required.
+Without this dependency, GCC GDSC consumers cannot vote for CX and RPMh may
+undervolt it.
+
+Reviewed-by: Krzysztof Kozlowski <krzysztof.kozlowski@oss.qualcomm.com>
+Signed-off-by: Abel Vesa <abel.vesa@oss.qualcomm.com>
+---
+ Documentation/devicetree/bindings/clock/qcom,gcc-sm8250.yaml | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/Documentation/devicetree/bindings/clock/qcom,gcc-sm8250.yaml b/Documentation/devicetree/bindings/clock/qcom,gcc-sm8250.yaml
+index f4cd5a509c60..5f9aae728245 100644
+--- a/Documentation/devicetree/bindings/clock/qcom,gcc-sm8250.yaml
++++ b/Documentation/devicetree/bindings/clock/qcom,gcc-sm8250.yaml
+@@ -32,10 +32,15 @@ properties:
+       - const: bi_tcxo_ao
+       - const: sleep_clk
+ 
++  power-domains:
++    items:
++      - description: CX power domain
++
+ required:
+   - compatible
+   - clocks
+   - clock-names
++  - power-domains
+   - '#power-domain-cells'
+ 
+ allOf:
+@@ -46,6 +51,7 @@ unevaluatedProperties: false
+ examples:
+   - |
+     #include <dt-bindings/clock/qcom,rpmh.h>
++    #include <dt-bindings/power/qcom,rpmhpd.h>
+     clock-controller@100000 {
+       compatible = "qcom,gcc-sm8250";
+       reg = <0x00100000 0x1f0000>;
+@@ -53,6 +59,7 @@ examples:
+                <&rpmhcc RPMH_CXO_CLK_A>,
+                <&sleep_clk>;
+       clock-names = "bi_tcxo", "bi_tcxo_ao", "sleep_clk";
++      power-domains = <&rpmhpd RPMHPD_CX>;
+       #clock-cells = <1>;
+       #reset-cells = <1>;
+       #power-domain-cells = <1>;
+
+-- 
+2.54.0
+
+From git@z Thu Jan  1 00:00:00 1970
+Subject: [PATCH v5 7/42] dt-bindings: clock: qcom: sm8550-gcc: Add CX power
+ domain
+From: Abel Vesa <abel.vesa@oss.qualcomm.com>
+Date: Thu, 24 Sep 2026 13:39:23 +0300
+Message-Id: <20260924-qcom-tie-cx-to-gcc-v5-7-38732033e5b5@oss.qualcomm.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+The GDSCs provided by the SM8550 GCC are supplied by the RPMh CX power
+domain. Model that parent domain in the GCC binding so the provider can
+describe the dependency in devicetree.
+
+Add a single CX power-domain entry to the binding and make it required.
+Without this dependency, GCC GDSC consumers cannot vote for CX and RPMh may
+undervolt it.
+
+Reviewed-by: Krzysztof Kozlowski <krzysztof.kozlowski@oss.qualcomm.com>
+Signed-off-by: Abel Vesa <abel.vesa@oss.qualcomm.com>
+---
+ Documentation/devicetree/bindings/clock/qcom,sm8550-gcc.yaml | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/Documentation/devicetree/bindings/clock/qcom,sm8550-gcc.yaml b/Documentation/devicetree/bindings/clock/qcom,sm8550-gcc.yaml
+index c4e9b9bb63f5..f9423aff5dea 100644
+--- a/Documentation/devicetree/bindings/clock/qcom,sm8550-gcc.yaml
++++ b/Documentation/devicetree/bindings/clock/qcom,sm8550-gcc.yaml
+@@ -31,9 +31,14 @@ properties:
+       - description: UFS Phy Tx symbol 0 clock source
+       - description: USB3 Phy wrapper pipe clock source
+ 
++  power-domains:
++    items:
++      - description: CX power domain
++
+ required:
+   - compatible
+   - clocks
++  - power-domains
+   - '#power-domain-cells'
+ 
+ allOf:
+@@ -44,6 +49,7 @@ unevaluatedProperties: false
+ examples:
+   - |
+     #include <dt-bindings/clock/qcom,rpmh.h>
++    #include <dt-bindings/power/qcom,rpmhpd.h>
+     clock-controller@100000 {
+       compatible = "qcom,sm8550-gcc";
+       reg = <0x00100000 0x001f4200>;
+@@ -55,6 +61,7 @@ examples:
+                <&ufs_mem_phy 1>,
+                <&ufs_mem_phy 2>,
+                <&usb_1_qmpphy>;
++      power-domains = <&rpmhpd RPMHPD_CX>;
+       #clock-cells = <1>;
+       #reset-cells = <1>;
+       #power-domain-cells = <1>;
+
+-- 
+2.54.0
+
+From git@z Thu Jan  1 00:00:00 1970
+Subject: [PATCH v5 8/42] dt-bindings: clock: qcom: sm8650-gcc: Add CX power
+ domain
+From: Abel Vesa <abel.vesa@oss.qualcomm.com>
+Date: Thu, 24 Sep 2026 13:39:24 +0300
+Message-Id: <20260924-qcom-tie-cx-to-gcc-v5-8-38732033e5b5@oss.qualcomm.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+The GDSCs provided by the SM8650 GCC are supplied by the RPMh CX power
+domain. Model that parent domain in the GCC binding so the provider can
+describe the dependency in devicetree.
+
+Add a single CX power-domain entry to the binding and make it required.
+Without this dependency, GCC GDSC consumers cannot vote for CX and RPMh may
+undervolt it.
+
+Reviewed-by: Krzysztof Kozlowski <krzysztof.kozlowski@oss.qualcomm.com>
+Signed-off-by: Abel Vesa <abel.vesa@oss.qualcomm.com>
+---
+ Documentation/devicetree/bindings/clock/qcom,sm8650-gcc.yaml | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/Documentation/devicetree/bindings/clock/qcom,sm8650-gcc.yaml b/Documentation/devicetree/bindings/clock/qcom,sm8650-gcc.yaml
+index c7143e2abc80..543105b277d5 100644
+--- a/Documentation/devicetree/bindings/clock/qcom,sm8650-gcc.yaml
++++ b/Documentation/devicetree/bindings/clock/qcom,sm8650-gcc.yaml
+@@ -32,9 +32,14 @@ properties:
+       - description: UFS Phy Tx symbol 0 clock source
+       - description: USB3 Phy wrapper pipe clock source
+ 
++  power-domains:
++    items:
++      - description: CX power domain
++
+ required:
+   - compatible
+   - clocks
++  - power-domains
+   - '#power-domain-cells'
+ 
+ allOf:
+@@ -45,6 +50,7 @@ unevaluatedProperties: false
+ examples:
+   - |
+     #include <dt-bindings/clock/qcom,rpmh.h>
++    #include <dt-bindings/power/qcom,rpmhpd.h>
+     clock-controller@100000 {
+       compatible = "qcom,sm8650-gcc";
+       reg = <0x00100000 0x001f4200>;
+@@ -58,6 +64,7 @@ examples:
+                <&ufs_mem_phy 1>,
+                <&ufs_mem_phy 2>,
+                <&usb_1_qmpphy>;
++      power-domains = <&rpmhpd RPMHPD_CX>;
+       #clock-cells = <1>;
+       #reset-cells = <1>;
+       #power-domain-cells = <1>;
+
+-- 
+2.54.0
+
+From git@z Thu Jan  1 00:00:00 1970
+Subject: [PATCH v5 36/42] arm64: dts: qcom: sm8250: Add GCC CX power domain
+From: Abel Vesa <abel.vesa@oss.qualcomm.com>
+Date: Thu, 24 Sep 2026 13:39:52 +0300
+Message-Id: <20260924-qcom-tie-cx-to-gcc-v5-36-38732033e5b5@oss.qualcomm.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+The GCC GDSCs on SM8250 are backed by the RPMh CX power domain. Without
+describing that parent domain, consumers of GCC-provided GDSCs can enable
+their local domain without causing the required CX vote to be held.
+
+Add the CX power-domain reference to the GCC node so votes from GCC GDSC
+consumers can propagate to RPMh CX.
+
+Reviewed-by: Konrad Dybcio <konrad.dybcio@oss.qualcomm.com>
+Signed-off-by: Abel Vesa <abel.vesa@oss.qualcomm.com>
+---
+ arch/arm64/boot/dts/qcom/sm8250.dtsi | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm8250.dtsi b/arch/arm64/boot/dts/qcom/sm8250.dtsi
+index 8483a1bc56f4..a90e4f30d39a 100644
+--- a/arch/arm64/boot/dts/qcom/sm8250.dtsi
++++ b/arch/arm64/boot/dts/qcom/sm8250.dtsi
+@@ -970,6 +970,7 @@ gcc: clock-controller@100000 {
+ 			clocks = <&rpmhcc RPMH_CXO_CLK>,
+ 				 <&rpmhcc RPMH_CXO_CLK_A>,
+ 				 <&sleep_clk>;
++			power-domains = <&rpmhpd RPMHPD_CX>;
+ 		};
+ 
+ 		ipcc: mailbox@408000 {
+
+-- 
+2.54.0
+
+From git@z Thu Jan  1 00:00:00 1970
+Subject: [PATCH v5 39/42] arm64: dts: qcom: sm8550: Add GCC CX power domain
+From: Abel Vesa <abel.vesa@oss.qualcomm.com>
+Date: Thu, 24 Sep 2026 13:39:55 +0300
+Message-Id: <20260924-qcom-tie-cx-to-gcc-v5-39-38732033e5b5@oss.qualcomm.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+The GCC GDSCs on SM8550 are backed by the RPMh CX power domain. Without
+describing that parent domain, consumers of GCC-provided GDSCs can enable
+their local domain without causing the required CX vote to be held.
+
+Add the CX power-domain reference to the GCC node so votes from GCC GDSC
+consumers can propagate to RPMh CX.
+
+Reviewed-by: Konrad Dybcio <konrad.dybcio@oss.qualcomm.com>
+Signed-off-by: Abel Vesa <abel.vesa@oss.qualcomm.com>
+---
+ arch/arm64/boot/dts/qcom/sm8550.dtsi | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm8550.dtsi b/arch/arm64/boot/dts/qcom/sm8550.dtsi
+index 23604436add3..9e60836f4064 100644
+--- a/arch/arm64/boot/dts/qcom/sm8550.dtsi
++++ b/arch/arm64/boot/dts/qcom/sm8550.dtsi
+@@ -1194,6 +1194,7 @@ gcc: clock-controller@100000 {
+ 				 <&ufs_mem_phy 1>,
+ 				 <&ufs_mem_phy 2>,
+ 				 <&usb_dp_qmpphy QMP_USB43DP_USB3_PIPE_CLK>;
++			power-domains = <&rpmhpd RPMHPD_CX>;
+ 		};
+ 
+ 		ipcc: mailbox@408000 {
+
+-- 
+2.54.0
+
+From git@z Thu Jan  1 00:00:00 1970
+Subject: [PATCH v5 40/42] arm64: dts: qcom: sm8650: Add GCC CX power domain
+From: Abel Vesa <abel.vesa@oss.qualcomm.com>
+Date: Thu, 24 Sep 2026 13:39:56 +0300
+Message-Id: <20260924-qcom-tie-cx-to-gcc-v5-40-38732033e5b5@oss.qualcomm.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+The GCC GDSCs on SM8650 are backed by the RPMh CX power domain. Without
+describing that parent domain, consumers of GCC-provided GDSCs can enable
+their local domain without causing the required CX vote to be held.
+
+Add the CX power-domain reference to the GCC node so votes from GCC GDSC
+consumers can propagate to RPMh CX.
+
+Reviewed-by: Konrad Dybcio <konrad.dybcio@oss.qualcomm.com>
+Signed-off-by: Abel Vesa <abel.vesa@oss.qualcomm.com>
+Reviewed-by: Abel Vesa <abel.vesa@oss.qualcomm.com>
+---
+ arch/arm64/boot/dts/qcom/sm8650.dtsi | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm8650.dtsi b/arch/arm64/boot/dts/qcom/sm8650.dtsi
+index 99509305f970..9cf38a7e0b94 100644
+--- a/arch/arm64/boot/dts/qcom/sm8650.dtsi
++++ b/arch/arm64/boot/dts/qcom/sm8650.dtsi
+@@ -2018,6 +2018,8 @@ gcc: clock-controller@100000 {
+ 				 <&ufs_mem_phy 2>,
+ 				 <&usb_dp_qmpphy QMP_USB43DP_USB3_PIPE_CLK>;
+ 
++			power-domains = <&rpmhpd RPMHPD_CX>;
++
+ 			#clock-cells = <1>;
+ 			#reset-cells = <1>;
+ 			#power-domain-cells = <1>;
+
+-- 
+2.54.0
+

@@ -24,20 +24,23 @@
 # RE-PINNED 2026-10-03 (7.2.9, issue #108). Quiet for us: zero drm/msm, qcom clk/phy/iommu,
 # ath, mac80211 or soundwire commits. Read the 7.2.9 section below. HW-VALIDATED ON
 # POCKET ACE (SM8550) AND POCKET S2 (SM8650); NO SM8250 BOARD WAS BOOTED.
-version:    7.2.9
-url:        https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.2.9.tar.xz
-sha256:     b4c5dfbe51a364a6c7f03869200f88c8e1f77403539005f14b7fc6bc91b8d8ba
-git_tag:    v7.2.9
-git_commit: 5fce161649b4d779d1b76d9fcd52dc77779774b8
+# RE-PINNED 2026-10-12 (7.2.10, issue #112). Nothing of ours landed, no patch moved; eleven
+# mac80211 files and a qcom geni-se ICC fix are the legs. Read the 7.2.10 section below.
+# HW GATE OWED.
+version:    7.2.10
+url:        https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.2.10.tar.xz
+sha256:     2feaa70453e91f541be6a5c9078d8168e081af45a3d9718054850538cff2ebf3
+git_tag:    v7.2.10
+git_commit: 7b20d05fd38de8e0be168956f6fd241d750c7d69
 
 # The sha256 above is the one kernel.org publishes in the SIGNED sha256sums.asc for v7.x, not a
-# hash of whatever the CDN happened to serve — re-checked 2026-10-03. The .asc itself verifies as
+# hash of whatever the CDN happened to serve — re-checked 2026-10-12. The .asc itself verifies as
 # a GOOD signature from "Kernel.org checksum autosigner <autosigner@kernel.org>", fingerprint
 # B886 8C80 BA62 A1FF FAF5 FDA9 632D 3A06 589D A6B1. That key carries no trust path here, so the
-# load-bearing check is CONTINUITY: the SAME signed file still lists 7.2.8 as
-# 12e8d5a973d1ad7c5a5c69882e4022b131ed715db7003fdcd760ddf8c3e51941, 7.2.7 as
-# 4ac34c47db2540ffb2713943f8d891ff1702e0ba6934525a493b7d1cad43145a and 7.2.6 as
-# 039aef84f2b0994aeda3f4fcfc3d02ec9d7a9bbb9020ea264c43f446c860f606, byte-for-byte the hashes this
+# load-bearing check is CONTINUITY: the SAME signed file still lists 7.2.9 as
+# b4c5dfbe51a364a6c7f03869200f88c8e1f77403539005f14b7fc6bc91b8d8ba, 7.2.8 as
+# 12e8d5a973d1ad7c5a5c69882e4022b131ed715db7003fdcd760ddf8c3e51941 and 7.2.7 as
+# 4ac34c47db2540ffb2713943f8d891ff1702e0ba6934525a493b7d1cad43145a, byte-for-byte the hashes this
 # pin carried and shipped before — so the file describing the version above is the same file that
 # described the releases we already trusted. Roll this list forward on each bump rather than
 # growing it; three back is enough to be a chain. (Note: keys.openpgp.org serves this key STRIPPED
@@ -55,6 +58,46 @@ git_commit: 5fce161649b4d779d1b76d9fcd52dc77779774b8
 # Treat 'in-series point release' as a prediction about EFFORT, never about RISK.
 # Re-run every gate, every time — and note that neither of those two findings came from an
 # offline gate. Both came from hardware.
+#
+# ============ 7.2.10 — PINNED 2026-10-12 (issue #112), HW GATE OWED ============
+#
+# 426 commits, 412 files. Zero drm/msm, zero qcom clk/phy/interconnect/iommu/dts, zero ath12k,
+# zero soundwire, zero btrfs. Three Kconfig symbols added (ARM64_ERRATUM_3821522 and its
+# ARM64_WORKAROUND_BROKEN_AMU_CONSTCNT, Cortex-A725 only, so on no SoC we ship; and
+# CC_OPT_INLINE_MEMSET, a compiler-flag string); none removed.
+#
+# INTERSECTION: ONE file, include/linux/sched.h, as in 7.2.9. Upstream adds a sched_cache_grp
+# field and helper prototypes in the CONFIG_SCHED_CACHE block at ~1421; our 0010 adds
+# task_struct.compat_input at ~1567. It lands one line lower, at fuzz 0, and `compat_input` is
+# present in the patched tree.
+# PATCHES: all 101 applied cumulatively at --fuzz=0, zero fuzz, zero rejects.
+# DROP CHECK: nothing of ours landed. Every patch was REVERSE-applied with --dry-run --fuzz=0 to
+# a PRISTINE 7.2.10 tree: no patch reverses, and no FILE of any patch reverses either, so there is
+# no partial landing to trim. The three patches with a written drop condition all still apply:
+# 0930's `battmgr->unit = QCOM_BATTMGR_UNIT_mAh` is absent from qcom_battmgr_probe(); 1135's
+# sm8250.dtsi still has three `wake-gpios ... GPIO_ACTIVE_HIGH`; and 0440's dsi_7nm_phy_enable()
+# still sets pll_enable_cnt = 1 with no PLL_SYSTEM_MUXES write (no dsi file moved). The five
+# `mainline` rows in patches/README.md all wait for 7.3.
+# CONFIG SWEEP: 438 symbols named in kernel.config + trim-platforms.config, ZERO missing.
+# BUILD: green in the container, Image + 21 dtbs + modules staged. After olddefconfig, ALL 435
+# requested directives (379 values + 56 `is not set`) asserted against the final .config:
+# zero mismatches. Strip TRAILING whitespace as well as the inline `# comment` before comparing,
+# or the padded lines (panels, backlights, joysticks) all read as 29 false mismatches.
+#
+# WHAT ONLY HARDWARE CAN SETTLE, from commits OUTSIDE the intersection:
+#   - Wi-Fi: 16 mac80211 + 2 cfg80211 fixes (BA-session teardown, chanctx reservation, PS
+#     delivery drain at station teardown, TX-status rate validation). The 7.2.6 precedent is
+#     why this is the first leg: WCN7850 association on ACE or S2. ath11k gets one line
+#     (num_stations reset on start), so an SM8250 ath11k board covers that.
+#   - soc: qcom: geni-se corrects the QUP core interconnect vote constants. Under every GENI
+#     I2C/UART client: touch, sgm3804 panel rails, sy7758 backlight, aw88166 amps.
+#   - ASoC: lpass-wsa-macro rewrites the interpolator volume after enabling clocks: the speaker
+#     path. Speaker playback on one board per SoC.
+#   - arm64: the erratum 2645198 break-before-make flush range is fixed. That is Cortex-A715, so
+#     SM8550 (ACE) is the board that exercises it.
+#   - usb: ucsi glink use-after-free on remove, and a shorter 120 ms resume hold for SuperSpeed
+#     root hubs, so one suspend/resume with the gamepad behind the Renesas bridge.
+#   - 7.2.9 booted NO SM8250 board. One is owed here.
 #
 # ============ 7.2.9 — PINNED 2026-10-03 (issue #108), HW-VALIDATED ON ACE + S2 ============
 #

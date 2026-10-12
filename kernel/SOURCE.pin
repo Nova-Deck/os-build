@@ -26,7 +26,8 @@
 # POCKET ACE (SM8550) AND POCKET S2 (SM8650); NO SM8250 BOARD WAS BOOTED.
 # RE-PINNED 2026-10-12 (7.2.10, issue #112). Nothing of ours landed, no patch moved; eleven
 # mac80211 files and a qcom geni-se ICC fix are the legs. Read the 7.2.10 section below.
-# HW GATE OWED.
+# HW-VALIDATED 2026-10-12 ON ONE BOARD PER SoC — POCKET ACE (SM8550), POCKET S2 (SM8650) AND
+# POCKET MAX (SM8250) — with 0330 v4, 1150 (Abel Vesa CX v5) and 0140 on the same card.
 version:    7.2.10
 url:        https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.2.10.tar.xz
 sha256:     2feaa70453e91f541be6a5c9078d8168e081af45a3d9718054850538cff2ebf3
@@ -59,7 +60,7 @@ git_commit: 7b20d05fd38de8e0be168956f6fd241d750c7d69
 # Re-run every gate, every time — and note that neither of those two findings came from an
 # offline gate. Both came from hardware.
 #
-# ============ 7.2.10 — PINNED 2026-10-12 (issue #112), HW GATE OWED ============
+# ============ 7.2.10 — PINNED 2026-10-12 (issue #112), HW-VALIDATED ON ACE + S2 + MAX ============
 #
 # 426 commits, 412 files. Zero drm/msm, zero qcom clk/phy/interconnect/iommu/dts, zero ath12k,
 # zero soundwire, zero btrfs. Three Kconfig symbols added (ARM64_ERRATUM_3821522 and its
@@ -98,6 +99,46 @@ git_commit: 7b20d05fd38de8e0be168956f6fd241d750c7d69
 #   - usb: ucsi glink use-after-free on remove, and a shorter 120 ms resume hold for SuperSpeed
 #     root hubs, so one suspend/resume with the gamepad behind the Renesas bridge.
 #   - 7.2.9 booted NO SM8250 board. One is owed here.
+#
+# HW GATE, 2026-10-12 (dev card, build 20261012T103205Z, git 7b8954a: 7.2.10 + 0330 v4 + Abel
+# Vesa's CX v5 as 1150 + 0140):
+#   Pocket ACE (SM8550) — PASS. Zero *ERROR*, zero WARNING, zero failed units. 10 boot SMMU
+#     faults, all t=0.76s fsr=0x402 cb=8: the pre-existing cohort (read them from `journalctl -k`
+#     once a panel blank has run: the dsx noise below wraps the dmesg ring). WCN7850 associated,
+#     EHT 2x2 tx 720 / rx 960 Mbit/s, zero ath12k errors. GENI I2C: all four clients bound
+#     (nb7vpq904m, sy7758, sgm3804, synaptics_dsx); panel rails 5200000 uV users=1 each;
+#     backlight 3060/4080. Speaker, touch and gamepad work (operator-confirmed).
+#     1150 + 0140: 100000.clock-controller is a consumer of the `cx` genpd, runtime `active`/`auto`,
+#     before and after two freeze cycles (CPUs 1-7 offlined and back).
+#     0330 v4: THE SUSPEND PATH DOES NOT EXERCISE IT — novadeck-suspend cannot reach gamescope
+#     (issue #113) and falls back to bl_power, so the crtc stays enabled. Exercised by hand
+#     instead: three `gamescopectl drm_sleep_internal_screen 1/0` cycles, connector disabled ->
+#     enabled each time, zero *ERROR*, WARNING or SMMU fault. While blanked, synaptics_dsx logs
+#     I2C retry 1..10 / "Failed to read interrupt status" (~46 lines/s), stopping on unblank;
+#     touch works after.
+#   Pocket S2 (SM8650, bonded) — PASS. One *ERROR*, `dsi_get_phy: phy driver is not ready`, the
+#     probe deferral recorded since 7.2.8. Zero WARNING, zero SMMU faults, zero failed units.
+#     WCN7850 associated, EHT 2x2 720/720 Mbit/s, zero ath12k errors. GENI I2C: all five clients
+#     bound (sy7758, sgm3804, wcd9395-usbss, gt911, nb7vpq904m); panel rails 5200000 uV users=1;
+#     backlight 3060/4080; DSI-1 at 1440x2560. Sound card present; `qcom-apm ... CMD timeout` and
+#     `soundwire sdw-master-2-0: clock stop deprepare wait failed:-110` after the card are the same
+#     two lines as on 7.2.9. 1150 + 0140: GCC on `cx`, runtime `active` before and after a freeze
+#     cycle (CPUs offlined at 224s, back at 267s). 0330 v4: three manual KMS blank cycles on the
+#     bonded panel, disabled -> enabled each time, ZERO new kernel lines (gt911 stays quiet while
+#     blanked, unlike the ACE's synaptics_dsx). Both panel halves drawing after the blanks and the
+#     resume; speaker, touch and gamepad work after resume (operator-confirmed). One boot-time
+#     `usb 1-1: device not accepting address 2, error -71` at 4.7s; the gamepad enumerates and
+#     works regardless.
+#   Pocket Max (SM8250, COMMAND-mode panel) — PASS. Zero *ERROR*, zero SMMU faults, zero failed
+#     units. The two WARNINGs are the documented clk_core_disable + clk_core_unprepare pair after
+#     the boot-time `DSI PLL(0) lock failed`, 1x each, as on 7.2.8. 1150 is NEW here: GCC is a
+#     consumer of `cx` (on) — runtime PM reads `unsupported`, correct, since v5 has no sm8250 driver
+#     half and 0140 does not touch it. Wi-Fi (ath11k, the num_stations fix): associated at legacy
+#     rates right after boot, then HE 2x2 648/648 Mbit/s under load, 0% loss, zero tx retries or
+#     failures — rate control ramping, not a fault. 0330 v4 on the command-mode panel: three
+#     manual KMS blank cycles, disabled -> enabled each time, zero new kernel lines. Freeze cycle
+#     clean (CPUs offlined at 238s, back at 265s), `cx` still on after. Panel, speaker, touch,
+#     gamepad and rumble work after the blanks and the resume (operator-confirmed).
 #
 # ============ 7.2.9 — PINNED 2026-10-03 (issue #108), HW-VALIDATED ON ACE + S2 ============
 #

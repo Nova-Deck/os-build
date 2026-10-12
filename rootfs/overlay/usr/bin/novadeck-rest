@@ -35,8 +35,8 @@ CONF=/etc/novadeck/rest.conf
 : "${NOVADECK_REST_GPU_GOVERNOR:=powersave}"   # GPU devfreq governor on enter (restored on leave)
 : "${NOVADECK_REST_SCREEN:=internal}"   # gamescope target: drm_sleep_<internal|external>_screen
 : "${NOVADECK_REST_SKIP:=}"             # space-separated ops to skip: panel cpu rfkill governor gpugov led
-: "${XDG_RUNTIME_DIR:=/run/user/0}"     # where gamescope's wayland socket lives (session runs as root)
-export XDG_RUNTIME_DIR
+# No XDG_RUNTIME_DIR default: gamescope runs as `deck`, not root, and gs_resolve_display exports the
+# /run/user/<uid> it finds the live socket in (#113).
 
 STATE_DIR=/run/novadeck/rest.d
 

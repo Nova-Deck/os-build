@@ -482,7 +482,7 @@ verify-card: $(SDCARD) | $(BUILD_STAMP) ## Verify the built A/B card image (in c
 verify-lock: ## Check both locks' novadeck rows against packages/ (host, seconds, no build)
 	bash packages/verify-lock-rows.sh
 
-test: verify-lock ## Run the offline bootctl/post-install/boot-disk/pairingd/power-led/vpower/suspend/session/stage-2/partition-table/unit/coredump/perf/fan-curve/decky/update/select-branch/publish/install/mkroot/verify-lock/steamos-manager/storage/graphics-provider/android-guestos/android-shared/mesa-source/video-decode/proton-dxvk/proton-nice/guard suites (host, no build needed)
+test: verify-lock ## Run the offline bootctl/post-install/boot-disk/pairingd/power-led/vpower/suspend/gamescope-display/session/stage-2/partition-table/unit/coredump/perf/fan-curve/decky/update/select-branch/publish/install/mkroot/verify-lock/steamos-manager/storage/graphics-provider/android-guestos/android-shared/mesa-source/video-decode/proton-dxvk/proton-nice/guard suites (host, no build needed)
 	bash $(TESTS_DIR)/test-bootctl.sh
 	bash $(TESTS_DIR)/test-post-install.sh
 	bash $(TESTS_DIR)/test-boot-disk.sh
@@ -490,6 +490,7 @@ test: verify-lock ## Run the offline bootctl/post-install/boot-disk/pairingd/pow
 	bash $(TESTS_DIR)/test-power-led.sh
 	bash $(TESTS_DIR)/test-vpower.sh
 	bash $(TESTS_DIR)/test-suspend.sh
+	bash $(TESTS_DIR)/test-gamescope-display.sh
 	bash $(TESTS_DIR)/test-session.sh
 	bash $(TESTS_DIR)/test-stage2-grub.sh
 	bash $(TESTS_DIR)/test-partition-table.sh

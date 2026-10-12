@@ -39,8 +39,8 @@ CONF=/etc/novadeck/rest.conf
 : "${NOVADECK_SUSPEND_SKIP:=}"          # power ops to skip: cpu rfkill governor gpugov led (e.g. "rfkill" over SSH)
 : "${NOVADECK_WAKE_KEY:=KEY_POWER}"
 : "${NOVADECK_WAKE_DEBOUNCE_MS:=1000}"  # ignore a KEY_POWER within this of arming the wait (press bounce)
-: "${XDG_RUNTIME_DIR:=/run/user/0}"
-export XDG_RUNTIME_DIR
+# No XDG_RUNTIME_DIR default here: this runs as root, the session as `deck`, and gs_resolve_display
+# exports the runtime dir it finds the live socket in (#113).
 
 STATE=/run/novadeck/suspended
 FIFO=/run/novadeck/wake.fifo
@@ -50,8 +50,9 @@ LOG=/var/log/novadeck-suspend.log
 log() { echo "$(date '+%F %T') novadeck-suspend: $*" >> "$LOG" 2>/dev/null; }
 
 # Resolve the LIVE gamescope control socket (not a blind gamescope-0 default) — see the helper header
-# for the stale-socket DPMS bug. panel() only runs while gamescope is un-frozen (blank before freeze,
-# unblank after thaw), so its /proc/<pid>/environ is readable. Fallback no-op if the overlay lib is absent.
+# for the stale-socket DPMS bug and for #113 (which /run/user/<uid>/ it lives in). panel() only runs
+# while gamescope is un-frozen (blank before freeze, unblank after thaw). Fallback no-op if the overlay
+# lib is absent.
 GS_LIB=/usr/lib/novadeck/gamescope-display.sh
 if [ -r "$GS_LIB" ]; then . "$GS_LIB"; else gs_resolve_display() { :; }; fi
 

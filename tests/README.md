@@ -32,7 +32,7 @@ are invoked directly there rather than through `make test-disk` — a failure na
 - **The installer medium** — `test-install.sh`, `test-ui.sh`.
 - **Device behaviour** — `test-pairingd.sh`, `test-perf.sh`,
   `test-fan-curve.sh`, `test-steamos-manager.sh`, `test-decky.sh`, `test-vpower.sh`,
-  `test-suspend.sh`, `test-session.sh`, `test-android-guestos.sh`, `test-android-shared.sh`,
+  `test-suspend.sh`, `test-gamescope-display.sh`, `test-session.sh`, `test-android-guestos.sh`, `test-android-shared.sh`,
   `test-android-titles.sh`.
 - **Graphics and emulation** — `test-graphics-provider.sh`, `test-video-decode.sh`,
   `test-proton-dxvk.sh`, `test-proton-nice.sh`.

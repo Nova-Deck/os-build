@@ -1,0 +1,70 @@
+From git@z Thu Jan  1 00:00:00 1970
+Subject: [PATCH v5 24/42] clk: qcom: gcc-sm8550: Tie the CX power domain to
+ controller
+From: Abel Vesa <abel.vesa@oss.qualcomm.com>
+Date: Thu, 24 Sep 2026 13:39:40 +0300
+Message-Id: <20260924-qcom-tie-cx-to-gcc-v5-24-38732033e5b5@oss.qualcomm.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+Enable runtime PM for the controller, allowing CX to be powered down
+once all GCC consumers have released their clocks and GDSCs.
+
+Reviewed-by: Konrad Dybcio <konrad.dybcio@oss.qualcomm.com>
+Signed-off-by: Abel Vesa <abel.vesa@oss.qualcomm.com>
+---
+ drivers/clk/qcom/gcc-sm8550.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/drivers/clk/qcom/gcc-sm8550.c b/drivers/clk/qcom/gcc-sm8550.c
+index d83a7bb5356b..fcaa4cd82b71 100644
+--- a/drivers/clk/qcom/gcc-sm8550.c
++++ b/drivers/clk/qcom/gcc-sm8550.c
+@@ -3327,6 +3327,7 @@ static const struct qcom_cc_desc gcc_sm8550_desc = {
+ 	.num_resets = ARRAY_SIZE(gcc_sm8550_resets),
+ 	.gdscs = gcc_sm8550_gdscs,
+ 	.num_gdscs = ARRAY_SIZE(gcc_sm8550_gdscs),
++	.use_rpm = true,
+ };
+ 
+ static const struct of_device_id gcc_sm8550_match_table[] = {
+
+-- 
+2.54.0
+
+From git@z Thu Jan  1 00:00:00 1970
+Subject: [PATCH v5 25/42] clk: qcom: gcc-sm8650: Tie the CX power domain to
+ controller
+From: Abel Vesa <abel.vesa@oss.qualcomm.com>
+Date: Thu, 24 Sep 2026 13:39:41 +0300
+Message-Id: <20260924-qcom-tie-cx-to-gcc-v5-25-38732033e5b5@oss.qualcomm.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+Enable runtime PM for the controller, allowing CX to be powered down
+once all GCC consumers have released their clocks and GDSCs.
+
+Reviewed-by: Konrad Dybcio <konrad.dybcio@oss.qualcomm.com>
+Signed-off-by: Abel Vesa <abel.vesa@oss.qualcomm.com>
+---
+ drivers/clk/qcom/gcc-sm8650.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/drivers/clk/qcom/gcc-sm8650.c b/drivers/clk/qcom/gcc-sm8650.c
+index 9fa362f0c447..88d0a9e51045 100644
+--- a/drivers/clk/qcom/gcc-sm8650.c
++++ b/drivers/clk/qcom/gcc-sm8650.c
+@@ -3785,6 +3785,7 @@ static const struct qcom_cc_desc gcc_sm8650_desc = {
+ 	.num_resets = ARRAY_SIZE(gcc_sm8650_resets),
+ 	.gdscs = gcc_sm8650_gdscs,
+ 	.num_gdscs = ARRAY_SIZE(gcc_sm8650_gdscs),
++	.use_rpm = true,
+ };
+ 
+ static const struct of_device_id gcc_sm8650_match_table[] = {
+
+-- 
+2.54.0
+

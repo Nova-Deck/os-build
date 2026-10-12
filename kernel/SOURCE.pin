@@ -70,7 +70,7 @@ git_commit: 7b20d05fd38de8e0be168956f6fd241d750c7d69
 # field and helper prototypes in the CONFIG_SCHED_CACHE block at ~1421; our 0010 adds
 # task_struct.compat_input at ~1567. It lands one line lower, at fuzz 0, and `compat_input` is
 # present in the patched tree.
-# PATCHES: all 101 applied cumulatively at --fuzz=0, zero fuzz, zero rejects.
+# PATCHES: all 99 applied cumulatively at --fuzz=0, zero fuzz, zero rejects.
 # DROP CHECK: nothing of ours landed. Every patch was REVERSE-applied with --dry-run --fuzz=0 to
 # a PRISTINE 7.2.10 tree: no patch reverses, and no FILE of any patch reverses either, so there is
 # no partial landing to trim. The three patches with a written drop condition all still apply:

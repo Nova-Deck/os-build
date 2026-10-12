@@ -185,11 +185,32 @@ This REPLACES the v3 we carried (1, 2, 4-7 of 8), itself the replacement for
   4/10   flush the MDP5 interface before starting the timing engine -- MDP5
          only (db820c); every SoC we ship has a DPU.
   10/10  drm/ci xfail bookkeeping for SC7180.
-v4 says it now DEPENDS on a separate series, "drm/msm: KMS destroy fixes"
-<20261003-msm-kms-destroy-fixes-v1-*>, which is where v3's 3/8 (unwind
-msm_drm_kms_init() on failure) went. We did not carry v3's 3/8 either: those
-are init/teardown error-path fixes, and the eight here apply on top of our
-stack at fuzz 0 and build without them.
+v4 names a prerequisite (b4 `prerequisite-change-id`), "drm/msm: fix the
+error handling of the KMS init" v1, 11 patches,
+<20261003-msm-kms-destroy-fixes-v1-0-e062b7dae77f@oss.qualcomm.com>, which is
+where v3's 3/8 (unwind msm_drm_kms_init() on failure) went. NOT CARRIED, and
+this was checked by reading it on 2026-10-12, not assumed:
+  - What it is: KMS init switches to "each init step undoes its own failure,
+    ->destroy() only sees a fully initialised KMS", converted driver by driver
+    behind a temporary flag, with hw_init() folded into kms_init(). Every
+    behavioural change is on a FAILED bind; most of the diff is MDP4/MDP5.
+  - No dependency of ours on it. It shares msm_kms.c/.h and msm_atomic.c with
+    v4, but v4's only addition to msm_kms_init() is the per-crtc unpin
+    lists, initialised before the first step that can fail, with nothing
+    allocated that a failed init would have to free. The lists only fill once
+    a modeset has run; a crtc being disabled (including at unbind, through
+    the atomic shutdown) releases them in msm_crtc_vblank_off(). The stacking
+    is because v3 carried these fixes, not because v4 uses them.
+  - Its failure paths do not run on our boots: the 7.2.9 HW gate saw zero
+    WARNINGs on ACE and S2, and S2's one probe deferral (dsi_get_phy) is in
+    the DSI probe, ahead of kms_init.
+  - It is not ready: the Sashiko review raised two High findings, unanswered
+    as of 2026-10-12 with no v2: 04/11 calls ->destroy() before
+    msm_disp_snapshot_destroy(), so a queued snapshot dereferences a freed
+    catalog, and 09/11 leaves dpu_kms->hw_vbif dangling for a bind retry
+    (use-after-free from dpu_runtime_resume()). The second is a regression on
+    exactly the deferred-bind path a handheld can hit.
+  Re-check it when it reaches v2 or msm-next.
 
 WHAT CHANGED FROM THE v3 WE CARRIED:
   - 1: the pin lock is taken with guard() instead of unwinding through labels

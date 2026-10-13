@@ -1,0 +1,38 @@
+From: gennro <gennro2004@gmail.com>
+Subject: [PATCH] drm/msm/a6xx: drop the boot bus vote once the GMU votes bandwidth
+
+On GPUs whose GMU votes DDR bandwidth itself (a740 and later, info->bcms),
+a6xx_gmu_resume() first sets the GPU OPP from the kernel through
+a6xx_gmu_set_initial_bw(), "a reasonable value for boot". The GMU starts at
+the highest perf index, so on SM8550 that is the 680 MHz OPP's 16.5 GB/s.
+a6xx_gmu_set_freq() then hands bandwidth to the GMU over HFI and skips
+dev_pm_opp_set_opp() whenever bw_index is set, so nothing removes the
+kernel's vote until the GMU is stopped. While the GPU stays powered, DDR
+is held at its top frequency (4224 MHz), whatever the GPU's own load and
+the GMU's vote: on the Odin 2 Portal idling in a launcher, DDR spent all
+its time at 4224 MHz with the GPU at 220 MHz.
+
+Remove the kernel's bus vote when the GMU takes it over, as
+a6xx_gmu_stop() does ("Remove the bus vote"). The GPU OPP carries no
+clock on GMU platforms, so a NULL OPP only drops the interconnect vote.
+---
+diff --git a/drivers/gpu/drm/msm/adreno/a6xx_gmu.c b/drivers/gpu/drm/msm/adreno/a6xx_gmu.c
+index 276556267..61cb3b936 100644
+--- a/drivers/gpu/drm/msm/adreno/a6xx_gmu.c
++++ b/drivers/gpu/drm/msm/adreno/a6xx_gmu.c
+@@ -226,9 +226,12 @@ void a6xx_gmu_set_freq(struct msm_gpu *gpu, struct dev_pm_opp *opp,
+ 
+ 	if (!gmu->legacy) {
+ 		a6xx_hfi_set_freq(gmu, perf_index, bw_index);
+-		/* With Bandwidth voting, we now vote for all resources, so skip OPP set */
+-		if (!bw_index)
+-			dev_pm_opp_set_opp(&gpu->pdev->dev, opp);
++		/*
++		 * With Bandwidth voting the GMU votes for all resources: remove the bus
++		 * quota a6xx_gmu_set_initial_bw() set for boot, or it holds DDR at the
++		 * boot frequency's bandwidth for as long as the GPU stays powered
++		 */
++		dev_pm_opp_set_opp(&gpu->pdev->dev, bw_index ? NULL : opp);
+ 		return;
+ 	}
+ 

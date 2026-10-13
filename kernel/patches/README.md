@@ -70,7 +70,7 @@ replies — lore was not reachable, so "never posted" means no patchwork hit). `
 trees (msm-next, qcom `clk-for-7.4` / `arm64-for-7.4`, pci `next`). Re-audit on
 every bump: this table is a snapshot, the `Drop when` column is what to re-check.
 
-Totals: 5 `mainline`, 16 `posted`, 21 `novadeck`, 67 `community`. (`0310` and `0430` were
+Totals: 5 `mainline`, 16 `posted`, 21 `novadeck`, 68 `community`. (`0310` and `0430` were
 deleted at the 7.2.8 bump: stable backported both, byte-identical.) Half the stack will
 never land upstream, which is why provenance is a table and not a number band.
 
@@ -89,6 +89,7 @@ never land upstream, which is why provenance is a table and not a number band.
 | `0250` | community | gennro, kettlelinux `1350` via armada `0620` (PR #662). Not posted. Masks `a6xx_hfi_irq()`'s clear to CM3_FAULT, as kgsl does; the root cause of the A740 `GPU_SET` OOB timeout wedge. | when mainline stops the HFI handler clearing polled bits |
 | `0255` | community | gennro, kettlelinux `1351` via armada `0621` (PR #662). Not posted. Bounds the `fault_coredump_done` wait (2 s) that deadlocks against `recover_worker`. | when mainline bounds that wait |
 | `0260` | community | armada `0622` (PR #662). Not posted. Masks `GMU2HOST_INTR_MASK` before the GMU boots, so resume replies do not raise the HFI irq. | with `0250`, or when mainline programs the mask before `a6xx_hfi_start()` |
+| `0265` | community | gennro, Kettle Linux `1180`, body byte-identical. On GMU-bandwidth-voting GPUs (A740, A750) the boot bus vote set at resume was never dropped, holding DDR at the boot OPP's bandwidth while the GPU stays powered (measured on the Pocket FIT: GPU `ebi` peak 8.17 GB/s whenever active). | when mainline drops the boot vote |
 | `0330` | posted | Dmitry Baryshkov v4 `<20261003-fd-kms-fix-smmu-v4-0-2a44d4d8ac77@oss.qualcomm.com>` (we take 1–3, 5–9 of 10; skip MDP5-only 4 and drm/ci 10), latest. Replaced v3 on 2026-10-12: 3/10 now queues and schedules a retired framebuffer under one lock so vblank-off cannot free it in between; 5/6 add CWB/CDM reservation clears. v4 names a prerequisite, "KMS destroy fixes" `<20261003-msm-kms-destroy-fixes-v1-*>` (init/teardown error paths), which we do not carry. Not in msm-next. | when merged |
 | `0340` | community | tiopex, ROCKNIX `ec3d53baac` (generic part split into ROCKNIX `0013-drm-msm-dpu-fix-inline-rotation`). Never posted; the width/height check, `test_bit` and CW/CCW fixes are real mainline bugs. | when the generic fixes are sent and merged |
 | `0350` | community | tiopex, ROCKNIX `60bb58c1db`. Never posted. | never |

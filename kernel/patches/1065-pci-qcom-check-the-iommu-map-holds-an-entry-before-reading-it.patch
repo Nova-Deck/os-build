@@ -1,0 +1,27 @@
+From: gennro <gennro2004@gmail.com>
+Subject: [PATCH] PCI: qcom: check the iommu-map holds an entry before reading it
+
+qcom_pcie_config_sid_1_9_0() (40-kettle/1060) reads the first entry's
+phandle and SID (cells 1 and 2) before checking that the property holds
+a whole entry, so a short iommu-map read past its end. Reject one with
+fewer than 4 cells, the smallest entry.
+---
+diff --git a/drivers/pci/controller/dwc/pcie-qcom.c b/drivers/pci/controller/dwc/pcie-qcom.c
+index 0ad66c62c..89796e9dd 100644
+--- a/drivers/pci/controller/dwc/pcie-qcom.c
++++ b/drivers/pci/controller/dwc/pcie-qcom.c
+@@ -1132,11 +1132,12 @@ static int qcom_pcie_config_sid_1_9_0(struct qcom_pcie *pcie)
+ 	if (!map || !size)
+ 		return 0;
+ 
+-	if (size % sizeof(*map)) {
++	nr_cells = size / sizeof(*map);
++	/* At least one entry: rid-base, phandle, a 1-cell SID, length */
++	if (size % sizeof(*map) || nr_cells < 4) {
+ 		dev_err(dev, "Malformed iommu-map property\n");
+ 		return -EINVAL;
+ 	}
+-	nr_cells = size / sizeof(*map);
+ 
+ 	/*
+ 	 * Each iommu-map entry is: rid-base (1 cell), phandle (1 cell),

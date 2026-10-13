@@ -25,7 +25,7 @@ The number says **when a patch applies**, and it is keyed on subsystem.
 | `0700-0799` | input | touch `0700s`, joystick `0740s`, haptics + force-feedback `0770s` |
 | `0800-0899` | audio | ASoC, qdsp6, codecs |
 | `0900-0999` | power / misc | power-supply `0900s`, hwmon + misc devices `0970s` |
-| `1000-1099` | net / usb / pci / crypto | |
+| `1000-1099` | net / usb / pci / storage / crypto | |
 | `1100-1199` | dts | arm64 `.dtsi` fixes to upstream SoC files — last, after their drivers |
 
 Numbers are spaced by 10 (by 5 where a band is dense) so a new patch slots in without
@@ -70,7 +70,7 @@ replies — lore was not reachable, so "never posted" means no patchwork hit). `
 trees (msm-next, qcom `clk-for-7.4` / `arm64-for-7.4`, pci `next`). Re-audit on
 every bump: this table is a snapshot, the `Drop when` column is what to re-check.
 
-Totals: 5 `mainline`, 16 `posted`, 20 `novadeck`, 61 `community`. (`0310` and `0430` were
+Totals: 5 `mainline`, 16 `posted`, 21 `novadeck`, 67 `community`. (`0310` and `0430` were
 deleted at the 7.2.8 bump: stable backported both, byte-identical.) Half the stack will
 never land upstream, which is why provenance is a table and not a number band.
 
@@ -111,8 +111,8 @@ never land upstream, which is why provenance is a table and not a number band.
 | `0515` | community | ROCKNIX. Superseded by mainline `4c0fe6422f3a` (st7703, `ayaneo,pocket-ds-lower-panel`). | v7.3 — change the DT compatible |
 | `0520` | posted | Xilin Wu "AYN Odin 2 support" v1 04/10 `<20240424-ayn-odin2-initial-v1-4-e0aa05c991fd@gmail.com>`. v2 never sent. | never, unless mainline `panel-synaptics-tddi` can take TD4328 |
 | `0525` | community | Teguh Sobirin via ROCKNIX `0056`. Never posted. | never |
-| `0530` | community | Teguh Sobirin via ROCKNIX `0057`, plus our levels/linear scale. Mainline has its own `f747473a838e` (same file, per-board compatibles, no Mangmi/EVO); fix pending: Aaron Kling "Fix picture parameter set". | **v7.3 hard conflict** — rebase as a delta on the mainline driver |
-| `0535` | community | Teguh Sobirin via ROCKNIX. Mainline 7.2 has a different driver, `panel-chipwealth-ch13726a` (`3ee01b8647b5`), Thor only, same `.name` as ours. | when the Retroid variants are added to the mainline driver |
+| `0530` | community | Teguh Sobirin via ROCKNIX `0057`, plus our levels/linear scale, plus gennro's no-backlight-DSI-while-off fix (Kettle Linux `1386`, adapted to our levels map; drops `.get_brightness`). Mainline has its own `f747473a838e` (same file, per-board compatibles, no Mangmi/EVO); fix pending: Aaron Kling "Fix picture parameter set". | **v7.3 hard conflict** — rebase as a delta on the mainline driver |
+| `0535` | community | Teguh Sobirin via ROCKNIX, plus the 120 ms sleep-out wait (Kettle Linux `21-sm8250/0058`). Mainline 7.2 has a different driver, `panel-chipwealth-ch13726a` (`3ee01b8647b5`), Thor only, same `.name` as ours. | when the Retroid variants are added to the mainline driver |
 | `0540` | community | KancyJoe via ROCKNIX SM8650 `0062`. Superseded by mainline `1190fc8d7b8a` (`panel-renesas-r63419`, same compatibles). | v7.3 — DT supplies become `vsp`/`vsn`; width is 78 mm there, 79 here |
 | `0545` | novadeck | Also ROCKNIX SM8650 `0063`. Never posted. | never |
 | `0550` | community | ROCKNIX. Never posted; possibly an R63419 variant (unverified). | never |
@@ -122,7 +122,7 @@ never land upstream, which is why provenance is a table and not a number band.
 | `0620` | mainline | Neil Armstrong v5 `<20260529-topic-sm8650-ayaneo-pocket-s2-sy7758-v5-1-03aacd49747c@linaro.org>` → `110d67699a43` (same driver file) | v7.3 |
 | `0650` | community | Teguh Sobirin via ROCKNIX `0033`. Never posted. | never |
 | `0660` | community | ROCKNIX SM8250 `0061`. Never posted; clean enough to send with a binding hunk. | when upstreamed |
-| `0680` | posted | BigfootACA, in Xilin Wu's Odin 2 v1 02/10 `<20240424-ayn-odin2-initial-v1-2-e0aa05c991fd@gmail.com>`. v2 never sent. **Missing ROCKNIX fix `4609c5017f`** (`set_bit()` on a `u8[3]`: alignment fault + overflow). | never |
+| `0680` | posted | BigfootACA, in Xilin Wu's Odin 2 v1 02/10 `<20240424-ayn-odin2-initial-v1-2-e0aa05c991fd@gmail.com>`. v2 never sent. ROCKNIX fix `4609c5017f` folded in (`set_bit()` on a `u8[3]`: alignment fault + overflow, #74). | never |
 | `0705` | novadeck | Also ROCKNIX `0015`. Aaron Kling posted an equivalent (patchwork 14518751); Dmitry Torokhov pushed back. | never |
 | `0710` | community | Teguh Sobirin via ROCKNIX `0053`. The DT property was rejected by Conor Dooley (series 1133142) — the fix belongs in an I2C adapter quirk. | never |
 | `0715` | community | ROCKNIX (Pocket S 1K/2K). Never posted. | never |
@@ -142,13 +142,17 @@ never land upstream, which is why provenance is a table and not a number band.
 | `0790` | community | ROCKNIX `1003`. | with `0780` |
 | `0791` | novadeck | Written here for `0745`, after Kettle Linux `1100` (armada `0515`) and `1380`; resyncs a byte on a bad checksum instead of skipping the claimed frame length. Never posted. | with `0745` |
 | `0795` | community | gh123man, ROCKNIX PR #3116. | with `0780` |
+| `0796` | community | gennro, Kettle Linux `1200` (ported from armada `1004`, virtudude), body byte-identical. A zero-amplitude update erases the effect at once instead of braking 5 s later. | with `0780` |
 | `0800` | mainline | Kumar Anurag v1 `<20260616151252.3599089-2-kumar.singh@oss.qualcomm.com>` → `d858770e86e7` (v7.3-rc1). No `Fixes:`/stable tag, so 7.2.y will not get it. Also in ROCKNIX PR #3396. | v7.3 |
 | `0805` | novadeck | Written here, after the downstream DP codec's startup cable check (msm-4.19 techpack/audio `msm_ext_disp_audio_codec_rx_dai_startup`). Adds the `dp_audio_startup` msm_dp never implemented, so on SM8250 only (`qcom,sm8250-dp`) an unplugged DP open fails before q6afe starts port 0x6020 (a 3 s no-reply timeout there). Never posted. | when upstream msm_dp refuses an unplugged DP audio open itself |
 | `0810` | community | KancyJoe via ROCKNIX SM8650 `0007`. Superseded by mainline `62dc2554d36d` (WSA2 channel map + `ayaneo,pocket-s2-sndcard`); will not apply on 7.3. | v7.3 — S2 moves to the new compatible; FIT needs its own card entry |
 | `0820` | novadeck | Also ROCKNIX SM8550 `0036`. Superseded by mainline `088c4404b3d7` + `cc8495c1d45a` (MI2S clock control). | v7.3 — clocks move to `dai@PRIMARY_MI2S_RX` (`mclk`/`bclk`) |
 | `0830` | novadeck | Teguh Sobirin's AYN series; its firmware-name part went upstream as `fc1fbafc18a0` (v7.1). Remainder never posted. | never |
 | `0840` | community | Luke Johnson, ROCKNIX `0200`. Never posted; generic, worth sending. | when upstreamed |
+| `0845` | community | seilent, Kettle Linux `1230`, body byte-identical. Never posted; generic, worth sending. | when upstreamed |
+| `0846` | novadeck | The `0845` fix for `wcd939x`, whose ramp error has the same shape (and a right ramp that inherits the left value). Never posted; generic, worth sending. | when upstreamed |
 | `0850` | novadeck | Also ROCKNIX `0612`. Related RFC: Jorijn van der Graaf `<20260705033830.305907-1-jorijnvdgraaf@catcrafts.net>`; Srinivas reproduced the missing clock but no fix yet. | when upstream fixes MI2S clocking before graph start |
+| `0855` | community | Kettle Linux `1240` (written for the KONKR Pocket FIT), body byte-identical. Never posted. Preventive: no stale-jack report on record here. | when upstreamed |
 | `0860` | community | ROCKNIX SM8250 `0062`. Mainline removed this flag (`d01fbee5c0d3`) in favour of `GPIO_SHARED`. | if a HW test without it passes |
 | `0870` | community | ROCKNIX. Effectively reverts `89be3c15a58b`. | never |
 | `0880` | community | Teguh Sobirin, ROCKNIX `0012`. | never |
@@ -166,6 +170,9 @@ never land upstream, which is why provenance is a table and not a number band.
 | `1040` | community | Kars Mulder's Linux-Pollrate-Patch via ROCKNIX `0506`. | never |
 | `1050` | community | Jacob Cook, ROCKNIX `5e52df2b9fba` (SM8250 `0018`, merged with PR #3382), written from the vendor smb5 `smblib_set_prop_pr_swap_in_progress` sequence. Never posted. | when mainline `qcom_pmic_typec_port` handles PR swap termination |
 | `1060` | posted | Manivannan Sadhasivam `<20260907143349.317495-1-mani@kernel.org>`, applied to the PCI tree as `626acf6efc69`, in pci `next` (not `for-linus`), so v7.4-rc1. Not in v7.3-rc7 or 7.2.y, no Cc: stable — yet 7.2.6+ needs it. | when we pin ≥ v7.4 |
+| `1065` | community | gennro, Kettle Linux `1390`, body byte-identical: `1060` read the first iommu-map entry before checking the property holds one. | with `1060` (check the applied `626acf6efc69` has the bound) |
+| `1070` | community | gennro, Kettle Linux `1160`, body byte-identical: the lane clocks were enabled twice per runtime resume (hibern8 setup + resume) and disabled once, so the UFS clocks never gate. | when mainline guards `ufs_qcom_enable_lane_clks()` |
+| `1075` | community | jaewun, Kettle Linux `20-sm8550/0207`, body byte-identical: `ufs_qcom_host_reset()` left the IRQ disabled on its error exits. | when upstreamed |
 | `1080` | mainline | Udit Tiwari, v9 as merged: `6f5569203bb6`, cherry-picked clean onto v7.2.7 (replaced v6 `<20260210061437.2293654-1-quic_utiwari@quicinc.com>`). | v7.3 |
 | `1105` | posted | Krishna Chaitanya Chundru root_port v2 15/15 `<20260917-root_port_v2-v2-15-6272b7caae9a@oss.qualcomm.com>`, applied to qcom `arm64-for-7.4` as `bbc442a64823`. 7.3 renames `pcieport0` → `pcie0_port0`. | v7.4; rework at 7.3 either way |
 | `1110` | posted | Same series, 12/15 `<20260917-root_port_v2-v2-12-6272b7caae9a@oss.qualcomm.com>`, applied to qcom `arm64-for-7.4` as `c51818ded215`. | v7.4 |

@@ -1,0 +1,24 @@
+From: Philippe Simons <simons.philippe@gmail.com>
+Subject: [PATCH] ASoC: wcd939x: treat a failed zdet ramp as floating impedance
+
+wcd939x_mbhc_get_result_params() leaves *zdet untouched on a ramp error.
+The caller starts zdet at 0 and reuses the same variable for the right
+channel, so a failed left ramp reads as 0 ohm and a failed right ramp
+inherits the left channel's value. Either way the headphone can be
+classified as mono. Report a floating impedance instead, as the ramp's
+own "no load" result does.
+
+The same fix as for wcd938x (0845).
+---
+diff --git a/sound/soc/codecs/wcd939x.c b/sound/soc/codecs/wcd939x.c
+index 010d12466..8dbd47fca 100644
+--- a/sound/soc/codecs/wcd939x.c
++++ b/sound/soc/codecs/wcd939x.c
+@@ -2068,6 +2068,7 @@ static void wcd939x_mbhc_get_result_params(struct snd_soc_component *component,
+ 		dev_dbg(component->dev,
+ 			"%s: Impedance detect ramp error, c1=%d, x1=0x%x\n",
+ 			__func__, c1, x1);
++		*zdet = WCD939X_ZDET_FLOATING_IMPEDANCE;
+ 		goto ramp_down;
+ 	}
+ 

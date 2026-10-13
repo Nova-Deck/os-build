@@ -77,7 +77,9 @@ TESTS_DIR  := tests
 # it — so create the directory at parse time, which no target can route around. Only the
 # top-level directory is host-owned; the root-owned trees INSIDE it (work/base, work/kernel) are
 # by design, and clean-base/distclean already remove those from inside a container.
-$(shell mkdir -p work)
+# work/ccache is the same trap one level down: kernel/build.sh (root) creates work/ccache/kernel,
+# and a root-made parent then fails packages/build-overlay.sh's host mkdir of overlay-<arch>.
+$(shell mkdir -p work/ccache)
 
 # --- where each stage runs ----------------------------------------------------
 # Container: repo bind-mounted at /src. INBUILD is the plain run; DOCKER lets a

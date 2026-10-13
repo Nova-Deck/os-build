@@ -1,0 +1,173 @@
+From: Philippe Simons <simons.philippe@gmail.com>
+Subject: [PATCH] Input: rsinput: reassemble UART frames, set the ops before opening
+
+rsinput_rx() took each serdev callback as exactly one frame, checksummed
+the whole callback and dropped it on a mismatch. serdev makes no framing
+guarantee: a callback may hold part of a frame or several, and after the
+port opens reception can start mid-frame. Split or back-to-back frames
+were dropped as "Checksum mismatch", and a pad could stay dead until a
+callback happened to align with a frame boundary.
+
+Buffer the received bytes, resync on the A5 D3 5A 3D header, and hand on
+each complete frame whose length fits the buffer and whose checksum
+checks out; on a bad header, length or checksum, resync a byte later so
+a header pattern inside a payload cannot swallow the next real frame.
+An incomplete tail is kept for the next callback.
+
+The probe opened the port before setting the client ops, and serdev
+dereferences serdev->ops for any byte received (serdev.h,
+serdev_controller_receive_buf), so a byte from the MCU during probe
+oopsed. Set the drvdata and ops first and open the port last, once the
+input device is registered; close it again if the baud rate fails.
+Rumble queued before the port opens is harmless: ttyport_write_buf()
+returns 0 on an inactive port.
+---
+diff --git a/drivers/input/joystick/rsinput.c b/drivers/input/joystick/rsinput.c
+index f6995a523..7caa46c6d 100644
+--- a/drivers/input/joystick/rsinput.c
++++ b/drivers/input/joystick/rsinput.c
+@@ -137,6 +137,7 @@ struct rsinput_driver {
+     bool invert_rx;
+     bool invert_ry;
+     uint8_t rx_buf[1024];
++    size_t rx_len;
+     uint8_t sequence_number;
+ };
+ 
+@@ -367,39 +368,72 @@ static void rsinput_process_data(struct rsinput_driver *drv, const uint8_t *data
+     }
+ }
+ 
++/*
++ * serdev makes no framing guarantee: a callback may hold part of a frame or
++ * several frames, and after the port opens reception can start mid-frame.
++ * Buffer the bytes and hand on each complete frame whose header, length and
++ * checksum check out; on a bad one, resync a byte later.
++ */
+ static size_t rsinput_rx(struct serdev_device *serdev, const u8 *data, size_t count) {
+     struct rsinput_driver *drv = serdev_device_get_drvdata(serdev);
+-    uint8_t received_checksum, computed_checksum;
++    size_t consumed = 0, avail, frame_length;
++    uint16_t payload_length;
++    const uint8_t *frame;
+ 
+-    if (!drv || !data || count == 0) {
+-        dev_warn_ratelimited(&serdev->dev, "Invalid RX data\n");
+-        goto error;
+-    }
++    if (!drv || !data || count == 0)
++        return count;
+ 
+     if (count > sizeof(drv->rx_buf)) {
+-        dev_warn_ratelimited(&serdev->dev, "RX buffer overflow\n");
+-        goto error;
++        dev_warn_ratelimited(&serdev->dev, "RX burst too long: %zu\n", count);
++        drv->rx_len = 0;
++        return count;
+     }
+ 
+-    memcpy(drv->rx_buf, data, count);
++    if (drv->rx_len + count > sizeof(drv->rx_buf))
++        drv->rx_len = 0;
+ 
+-    if (count < MCU_PKT_SIZE_MIN) {
+-        dev_warn_ratelimited(&serdev->dev, "Frame too short for checksum validation\n");
+-        goto error;
+-    }
++    memcpy(drv->rx_buf + drv->rx_len, data, count);
++    drv->rx_len += count;
++    avail = drv->rx_len;
++
++    while (avail >= MCU_PKT_SIZE_MIN) {
++        frame = drv->rx_buf + consumed;
++
++        if (frame[0] != FRAME_HEAD_1 || frame[1] != FRAME_HEAD_2 ||
++            frame[2] != FRAME_HEAD_3 || frame[3] != FRAME_HEAD_4) {
++            consumed++;
++            avail--;
++            continue;
++        }
++
++        payload_length = frame[FRAME_POS_LEN_L] | (frame[FRAME_POS_LEN_H] << 8);
++        frame_length = MCU_PKT_SIZE_MIN + payload_length;
++        if (frame_length > sizeof(drv->rx_buf)) {
++            consumed++;
++            avail--;
++            continue;
++        }
+ 
+-    received_checksum = drv->rx_buf[count - 1];
++        if (avail < frame_length)
++            break;
+ 
+-    computed_checksum = compute_checksum(drv->rx_buf, count);
++        if (compute_checksum(frame, frame_length) != frame[frame_length - 1]) {
++            dev_warn_ratelimited(&serdev->dev, "Checksum mismatch\n");
++            consumed++;
++            avail--;
++            continue;
++        }
+ 
+-    if (computed_checksum != received_checksum) {
+-        dev_warn_ratelimited(&serdev->dev, "Checksum mismatch\n");
+-        goto error;
++        rsinput_process_data(drv, frame, frame_length);
++        consumed += frame_length;
++        avail -= frame_length;
+     }
+ 
+-    rsinput_process_data(drv, drv->rx_buf, count);
++    if (consumed) {
++        memmove(drv->rx_buf, drv->rx_buf + consumed, avail);
++        drv->rx_len = avail;
++    }
+ 
+-error:
+     return count;
+ }
+ 
+@@ -525,21 +559,9 @@ static int rsinput_probe(struct serdev_device *serdev) {
+         dev_warn(&serdev->dev, "Unable to get reset gpio: %d\n", error);
+     }
+ 
+-    error = serdev_device_open(serdev);
+-    if (error)
+-        return dev_err_probe(&serdev->dev, error, "Unable to open UART device\n");
+-
+     drv->serdev = serdev;
+     drv->sequence_number = 0;
+ 
+-    serdev_device_set_drvdata(serdev, drv);
+-
+-    error = serdev_device_set_baudrate(serdev, 115200);
+-    if (error < 0)
+-        return dev_err_probe(&serdev->dev, error, "Failed to set up host baud rate\n");
+-
+-    serdev_device_set_flow_control(serdev, false);
+-
+     drv->input = devm_input_allocate_device(&serdev->dev);
+     if (!drv->input)
+         return -ENOMEM;
+@@ -601,8 +623,22 @@ static int rsinput_probe(struct serdev_device *serdev) {
+     if (error)
+         return error;
+ 
++    /* Set up before opening: the MCU may already be sending. */
++    serdev_device_set_drvdata(serdev, drv);
+     serdev_device_set_client_ops(serdev, &rsinput_rx_ops);
+ 
++    error = serdev_device_open(serdev);
++    if (error)
++        return dev_err_probe(&serdev->dev, error, "Unable to open UART device\n");
++
++    error = serdev_device_set_baudrate(serdev, 115200);
++    if (error < 0) {
++        serdev_device_close(serdev);
++        return dev_err_probe(&serdev->dev, error, "Failed to set up host baud rate\n");
++    }
++
++    serdev_device_set_flow_control(serdev, false);
++
+     error = rsinput_init_commands(drv);
+     if (error < 0) {
+         serdev_device_close(serdev);

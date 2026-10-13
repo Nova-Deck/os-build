@@ -19,9 +19,19 @@ already does: -EFAULT makes the fault handler resolve the write fault
 through do_translation_fault(..., WNR) and the instruction is retried.
 Hit on a Thor Lite (SM8250) under a FEX x86 game, 2026-09-23.
 
+novadeck fix, backpatch cache maintenance: after rewriting the faulting
+instruction pair in the process's code, the handler made it visible with
+flush_icache_range() -- kernel-address maintenance with no fault handling.
+Had another thread unmapped that code in between, the kernel oopsed. Use
+caches_clean_inval_user_pou() behind access_ok(), as the compat cacheflush
+syscall does, which returns -EFAULT instead, then kick_all_cpus_sync() as
+flush_icache_range() did. The emulation is complete either way; an
+unpatched pair only traps again. Also ratelimit the "Unhandled JIT SIGBUS
+Atomic mem op" warning, which a process can trigger at will.
+
 ---
 diff --git a/arch/arm64/include/asm/exception.h b/arch/arm64/include/asm/exception.h
-index a2da3cb21c24..f6dd1b9afe69 100644
+index a2da3cb21..f6dd1b9af 100644
 --- a/arch/arm64/include/asm/exception.h
 +++ b/arch/arm64/include/asm/exception.h
 @@ -82,6 +82,7 @@ void do_sp_pc_abort(unsigned long addr, unsigned long esr, struct pt_regs *regs)
@@ -33,7 +43,7 @@ index a2da3cb21c24..f6dd1b9afe69 100644
  void do_el0_svc_compat(struct pt_regs *regs);
  void do_el0_fpac(struct pt_regs *regs, unsigned long esr);
 diff --git a/arch/arm64/include/asm/processor.h b/arch/arm64/include/asm/processor.h
-index 6dfbcacd9ba0..5eb7ad45b17d 100644
+index 6dfbcacd9..5eb7ad45b 100644
 --- a/arch/arm64/include/asm/processor.h
 +++ b/arch/arm64/include/asm/processor.h
 @@ -445,5 +445,8 @@ int set_tsc_mode(unsigned int val);
@@ -46,7 +56,7 @@ index 6dfbcacd9ba0..5eb7ad45b17d 100644
  #endif /* __ASSEMBLER__ */
  #endif /* __ASM_PROCESSOR_H */
 diff --git a/arch/arm64/include/asm/thread_info.h b/arch/arm64/include/asm/thread_info.h
-index 5d7fe3e153c8..5234694e64d9 100644
+index 5d7fe3e15..5234694e6 100644
 --- a/arch/arm64/include/asm/thread_info.h
 +++ b/arch/arm64/include/asm/thread_info.h
 @@ -89,6 +89,10 @@ void arch_setup_new_exec(void);
@@ -61,7 +71,7 @@ index 5d7fe3e153c8..5234694e64d9 100644
  #define _TIF_NEED_RESCHED	(1 << TIF_NEED_RESCHED)
  #define _TIF_NEED_RESCHED_LAZY	(1 << TIF_NEED_RESCHED_LAZY)
 diff --git a/arch/arm64/kernel/Makefile b/arch/arm64/kernel/Makefile
-index d2690c3ec528..4b8e24ff66cb 100644
+index d2690c3ec..4b8e24ff6 100644
 --- a/arch/arm64/kernel/Makefile
 +++ b/arch/arm64/kernel/Makefile
 @@ -34,7 +34,7 @@ obj-y			:= debug-monitors.o entry.o irq.o fpsimd.o		\
@@ -74,7 +84,7 @@ index d2690c3ec528..4b8e24ff66cb 100644
  obj-$(CONFIG_COMPAT)			+= sys32.o signal32.o			\
  					   sys_compat.o
 diff --git a/arch/arm64/kernel/process.c b/arch/arm64/kernel/process.c
-index 581f80e9b9b7..7a01b74afcf2 100644
+index 581f80e9b..7a01b74af 100644
 --- a/arch/arm64/kernel/process.c
 +++ b/arch/arm64/kernel/process.c
 @@ -1003,3 +1003,15 @@ int set_tsc_mode(unsigned int val)
@@ -95,10 +105,10 @@ index 581f80e9b9b7..7a01b74afcf2 100644
 +}
 diff --git a/arch/arm64/kernel/unaligned_atomic.c b/arch/arm64/kernel/unaligned_atomic.c
 new file mode 100644
-index 000000000000..8a31e8b04764
+index 000000000..53d59e45c
 --- /dev/null
 +++ b/arch/arm64/kernel/unaligned_atomic.c
-@@ -0,0 +1,2057 @@
+@@ -0,0 +1,2071 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +
 +#include <linux/compiler.h>
@@ -1914,7 +1924,7 @@ index 000000000000..8a31e8b04764
 +    case ATOMIC_EOR_OP: DesiredFunction = CASEORDesired16; break;
 +    case ATOMIC_SET_OP: DesiredFunction = CASORDesired16; break;
 +    case ATOMIC_SWAP_OP: DesiredFunction = CASSWAPDesired16; break;
-+    default: pr_warn("Unhandled JIT SIGBUS Atomic mem op 0x%02x\n", Op); return (struct fault_info) {.error = -ENOSYS};
++    default: pr_warn_ratelimited("Unhandled JIT SIGBUS Atomic mem op 0x%02x\n", Op); return (struct fault_info) {.error = -ENOSYS};
 +    }
 +
 +    u16 Res = 0;
@@ -1935,7 +1945,7 @@ index 000000000000..8a31e8b04764
 +    case ATOMIC_EOR_OP: DesiredFunction = CASEORDesired32; break;
 +    case ATOMIC_SET_OP: DesiredFunction = CASORDesired32; break;
 +    case ATOMIC_SWAP_OP: DesiredFunction = CASSWAPDesired32; break;
-+    default: pr_warn("Unhandled JIT SIGBUS Atomic mem op 0x%02x\n", Op); return (struct fault_info) {.error = -ENOSYS};
++    default: pr_warn_ratelimited("Unhandled JIT SIGBUS Atomic mem op 0x%02x\n", Op); return (struct fault_info) {.error = -ENOSYS};
 +    }
 +
 +    u32 Res = 0;
@@ -1957,7 +1967,7 @@ index 000000000000..8a31e8b04764
 +    case ATOMIC_EOR_OP: DesiredFunction = CASEORDesired64; break;
 +    case ATOMIC_SET_OP: DesiredFunction = CASORDesired64; break;
 +    case ATOMIC_SWAP_OP: DesiredFunction = CASSWAPDesired64; break;
-+    default: pr_warn("Unhandled JIT SIGBUS Atomic mem op 0x%02x\n", Op); return (struct fault_info) {.error = -ENOSYS};
++    default: pr_warn_ratelimited("Unhandled JIT SIGBUS Atomic mem op 0x%02x\n", Op); return (struct fault_info) {.error = -ENOSYS};
 +    }
 +
 +    u64 Res = 0;
@@ -2046,6 +2056,20 @@ index 000000000000..8a31e8b04764
 +}
 +
 +
++/*
++ * Make a backpatched instruction pair visible to instruction fetch. The pair
++ * is in user memory that another thread may unmap at any time, so use the
++ * user-address maintenance, which fails with -EFAULT instead of oopsing; the
++ * emulation is done either way and an unpatched pair only traps again.
++ */
++static void SyncPatchedCode(u64 Addr) {
++  if (!access_ok((void __user*)Addr, 8) ||
++      caches_clean_inval_user_pou(Addr, Addr + 8))
++    return;
++
++  kick_all_cpus_sync();
++}
++
 +int do_unaligned_atomic_fixup(struct pt_regs* regs, u64* fault_addr) {
 +  u32* PC = (u32*)regs->pc;
 +  u64* GPRs = (u64*)regs->regs;
@@ -2073,7 +2097,7 @@ index 000000000000..8a31e8b04764
 +        LDR |= AddrReg << 5;
 +        LDR |= DataReg;
 +        StoreRelease32(LDR, PatchAddr);
-+        flush_icache_range(PatchAddr, PatchAddr + 8);
++        SyncPatchedCode(PatchAddr);
 +      }
 +    }
 +    fi = HandleAtomicLoad(Instr, GPRs, 0);
@@ -2089,7 +2113,7 @@ index 000000000000..8a31e8b04764
 +        STR |= AddrReg << 5;
 +        STR |= DataReg;
 +        StoreRelease32(STR, PatchAddr + 4);
-+        flush_icache_range(PatchAddr, PatchAddr + 8);
++        SyncPatchedCode(PatchAddr);
 +      }
 +    }
 +    fi = HandleAtomicStore(Instr, GPRs, 0);
@@ -2106,7 +2130,7 @@ index 000000000000..8a31e8b04764
 +        LDUR |= DataReg;
 +        LDUR |= Instr & (0b111111111 << 12);
 +        StoreRelease32(LDUR, PatchAddr);
-+        flush_icache_range(PatchAddr, PatchAddr + 8);
++        SyncPatchedCode(PatchAddr);
 +      }
 +    }
 +    // Extract the 9-bit offset from the instruction
@@ -2125,7 +2149,7 @@ index 000000000000..8a31e8b04764
 +        STUR |= DataReg;
 +        STUR |= Instr & (0b111111111 << 12);
 +        StoreRelease32(STUR, PatchAddr + 4);
-+        flush_icache_range(PatchAddr, PatchAddr + 8);
++        SyncPatchedCode(PatchAddr);
 +      }
 +    }
 +    // Extract the 9-bit offset from the instruction
@@ -2157,7 +2181,7 @@ index 000000000000..8a31e8b04764
 +  return 0;
 +}
 diff --git a/arch/arm64/mm/fault.c b/arch/arm64/mm/fault.c
-index 75c3e463df2e..2beedf7f3e02 100644
+index 75c3e463d..2beedf7f3 100644
 --- a/arch/arm64/mm/fault.c
 +++ b/arch/arm64/mm/fault.c
 @@ -858,6 +858,15 @@ static int do_alignment_fault(unsigned long far, unsigned long esr,
@@ -2177,7 +2201,7 @@ index 75c3e463df2e..2beedf7f3e02 100644
  	return 0;
  }
 diff --git a/include/uapi/linux/prctl.h b/include/uapi/linux/prctl.h
-index 55ca31b522fc..21171af687cf 100644
+index 55ca31b52..21171af68 100644
 --- a/include/uapi/linux/prctl.h
 +++ b/include/uapi/linux/prctl.h
 @@ -421,4 +421,9 @@ struct prctl_mm_map {
@@ -2191,7 +2215,7 @@ index 55ca31b522fc..21171af687cf 100644
 +
  #endif /* _LINUX_PRCTL_H */
 diff --git a/kernel/sys.c b/kernel/sys.c
-index 925087131eb2..e30d23ac21e9 100644
+index 925087131..e30d23ac2 100644
 --- a/kernel/sys.c
 +++ b/kernel/sys.c
 @@ -158,7 +158,9 @@

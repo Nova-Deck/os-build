@@ -70,14 +70,14 @@ replies — lore was not reachable, so "never posted" means no patchwork hit). `
 trees (msm-next, qcom `clk-for-7.4` / `arm64-for-7.4`, pci `next`). Re-audit on
 every bump: this table is a snapshot, the `Drop when` column is what to re-check.
 
-Totals: 5 `mainline`, 16 `posted`, 19 `novadeck`, 60 `community`. (`0310` and `0430` were
+Totals: 5 `mainline`, 16 `posted`, 20 `novadeck`, 61 `community`. (`0310` and `0430` were
 deleted at the 7.2.8 bump: stable backported both, byte-identical.) Half the stack will
 never land upstream, which is why provenance is a table and not a number band.
 
 | Patch | Origin | Source | Drop when |
 |---|---|---|---|
 | `0010` | community | Sergio Lopez, Asahi downstream (muvm/FEX); same as ROCKNIX `0504`. Never posted. | never — downstream prctl ABI |
-| `0020` | community | Billy Laws, FEX downstream handler. A cut-down RFC (André Almeida, v2 `<20251117160841.334224-2-andrealmeid@igalia.com>`) was opposed by Will Deacon: arm64 will not carry x86 unaligned-atomic emulation. We fixed a missing exception-table entry on `Load128`'s `stlxp` (kernel oops on SM8250, which lacks LSE2 and traps every unaligned atomic). | never |
+| `0020` | community | Billy Laws, FEX downstream handler. A cut-down RFC (André Almeida, v2 `<20251117160841.334224-2-andrealmeid@igalia.com>`) was opposed by Will Deacon: arm64 will not carry x86 unaligned-atomic emulation. We fixed a missing exception-table entry on `Load128`'s `stlxp` (kernel oops on SM8250, which lacks LSE2 and traps every unaligned atomic), and made backpatch cache maintenance fault-safe (`caches_clean_inval_user_pou()` instead of `flush_icache_range()` on user code; from Kettle Linux `1389`). | never |
 | `0110` | posted | Lucid Ole hunk = Esteban Urrutia "SM8450 QoL (dispcc)" v3 3/3 `<20260713-sm8450-qol-dispcc-v3-0-56fd05822270@proton.me>`, re-applied to qcom `clk-for-7.4` as `eb34e2804ce4` (2026-09-23; the earlier `2295d6a84179` never reached mainline), no Cc: stable. The sm8550 mdp-ops hunk is our retarget of v3 1/3 and was never sent — Dmitry asked for exactly this on other dispcc controllers. | guard: when `eb34e2804ce4` reaches our pin (v7.4); mdp ops: when sent and merged |
 | `0120` | community | ROCKNIX `ef264a238d` (sunshineinabox). Never posted. | never |
 | `0130` | community | map220v via ROCKNIX `0122`. Never posted. The same change for x1e80100 is being reverted in 7.3 (hard resets) — high-risk to post. | never |
@@ -100,7 +100,8 @@ never land upstream, which is why provenance is a table and not a number band.
 | `0380` | community | sunshineinabox, ROCKNIX PR #3377 (`0012`, `0014`, `0015`, squashed). Vendor-DT catalog values, never posted. | never |
 | `0385` | community | sunshineinabox, ROCKNIX PR #3377 (SM8250 `0201` + `0202` as of `566a53ef`, squashed), plus our no-rotator guard for inline-rotation SoCs and the 0330 `msm_framebuffer_cleanup()` / 0230 `msm_gem_new()` signatures. Never posted. Enabled per board by `dts/qcom/sm8250-sde-rotator.dtsi`. | never |
 | `0390` | community | armada `0078` (PR #629). Never posted. Command-mode only: the INTF TE path read the video timing engine's line counter, which does not run there; it now reads the tear-check counter, as the pingpong TE path already did. Video-mode panels are untouched. | when mainline fixes the INTF-TE scanout position |
-| `0395` | novadeck | Issue #110: on a dual-interface video-mode panel, per-interface CTL flushes that straddle the programmable fetch start underrun the next frame (black blink). One wait per kickoff, on the master, keeps them on one side. Never posted; generic, worth sending once HW-proven. | when mainline guards the kickoff against the fetch start || `0410` | novadeck | From ROCKNIX SM8250 `0001`. Partial revert of mainline `2d51cfb77daa` (bpc×3 for video mode). | when no shipped panel needs it, or upstream fixes it |
+| `0395` | novadeck | Issue #110: on a dual-interface video-mode panel, per-interface CTL flushes that straddle the programmable fetch start underrun the next frame (black blink). One wait per kickoff, on the master, keeps them on one side. Never posted; generic, worth sending once HW-proven. | when mainline guards the kickoff against the fetch start |
+| `0410` | novadeck | From ROCKNIX SM8250 `0001`. Partial revert of mainline `2d51cfb77daa` (bpc×3 for video mode). | when no shipped panel needs it, or upstream fixes it |
 | `0420` | novadeck | v1 was ROCKNIX SM8250 `0016`; the xfer/modeset race fix is ours. Never posted. | when upstreamed |
 | `0440` | community | armada `0048b` (virtudude). Never posted. Replaces our re-apply of Neil Armstrong `93c97bc8d85d`, reverted by `44784327815b` in 7.3-rc1 / 7.2.6 because it broke non-bonded panels; this keeps the revert and adds the missing slave-PHY mux write. Neil's rework not posted. | when Neil's bonded-mode rework lands |
 | `0480` | community | armada `0059` (virtudude). Not submitted; needs a panel-common binding first. | never |
@@ -135,9 +136,11 @@ never land upstream, which is why provenance is a table and not a number band.
 | `0755` | community | ROCKNIX SM8250 `0060` (sunshineinabox). ROCKNIX has since added Air Y Pro support. | never |
 | `0770` | posted | Caleb Connolly v7 `<20221015172915.1436236-3-caleb@connolly.tech>`, stalled since 2022. Fenglin Wu's PMIH driver (v7, 2026-08-28) uses the same file and the generic `qcom,spmi-haptics` compatible. | when David Heidelberg's pmi8998 haptics lands |
 | `0775` | community | spycat88, ROCKNIX SM8250 `0013`. | never |
+| `0776` | community | gennro, Kettle Linux `1380`, byte-identical body. Never posted. Fixes `0750`'s RX stack overflow and frame loss, and its ops-after-open oops. | with `0750` |
 | `0780` | community | CAF/CLO downstream `qcom-hv-haptics` via ROCKNIX `1000`. | never |
 | `0785` | community | ROCKNIX `1002`. | with `0780` |
 | `0790` | community | ROCKNIX `1003`. | with `0780` |
+| `0791` | novadeck | Written here for `0745`, after Kettle Linux `1100` (armada `0515`) and `1380`; resyncs a byte on a bad checksum instead of skipping the claimed frame length. Never posted. | with `0745` |
 | `0795` | community | gh123man, ROCKNIX PR #3116. | with `0780` |
 | `0800` | mainline | Kumar Anurag v1 `<20260616151252.3599089-2-kumar.singh@oss.qualcomm.com>` → `d858770e86e7` (v7.3-rc1). No `Fixes:`/stable tag, so 7.2.y will not get it. Also in ROCKNIX PR #3396. | v7.3 |
 | `0805` | novadeck | Written here, after the downstream DP codec's startup cable check (msm-4.19 techpack/audio `msm_ext_disp_audio_codec_rx_dai_startup`). Adds the `dp_audio_startup` msm_dp never implemented, so on SM8250 only (`qcom,sm8250-dp`) an unplugged DP open fails before q6afe starts port 0x6020 (a 3 s no-reply timeout there). Never posted. | when upstream msm_dp refuses an unplugged DP audio open itself |

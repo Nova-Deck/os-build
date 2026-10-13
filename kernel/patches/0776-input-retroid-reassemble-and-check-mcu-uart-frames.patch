@@ -1,0 +1,225 @@
+From: gennro <gennro2004@gmail.com>
+Subject: [PATCH] Input: retroid: reassemble and check the MCU's UART frames
+
+gamepad_mcu_uart_rx_bytes() took each serdev callback as one frame and
+copied the frame's own 16-bit data length into a 64-byte stack buffer
+without checking it against the buffer or the bytes received: a
+corrupted or misaligned length overflowed the stack. It also checked
+neither the header nor that the callback held exactly one frame, and
+serdev makes no framing guarantee, so frames split over two callbacks
+or sent back to back failed the checksum and were dropped.
+
+Buffer the received bytes as rsinput does and hand on each complete
+frame whose header (A5 D3 5A 3D, the one the driver sends), data length
+(at most 64) and checksum check out; resync a byte later on a bad one.
+
+Set the client ops before opening the port (they were set only after
+the input device was registered, and serdev dereferences them for any
+byte received before), check input_ff_create_memless(), and unregister
+the rumble_enable platform device on probe failure and unbind.
+---
+diff --git a/drivers/input/joystick/retroid.c b/drivers/input/joystick/retroid.c
+index 375e7d421..148655ec5 100644
+--- a/drivers/input/joystick/retroid.c
++++ b/drivers/input/joystick/retroid.c
+@@ -25,6 +25,9 @@
+ 
+ #define DRIVER_NAME "retroid-pocket-gamepad"
+ #define MAX_DATA_LEN 64
++/* header (4), frame number, command, length (2), data, checksum */
++#define FRAME_MIN_LEN 9
++#define RX_BUF_LEN 512
+ #define INT_SIGN(X) ((X > 0) - (X < 0))
+ 
+ #define gamepad_serdev_write_seq(serdev, seq...)                      \
+@@ -62,8 +65,12 @@ struct gamepad_device {
+ 	struct gpio_desc *reset_gpio;
+ 	struct input_dev *dev_input;
+ 	struct platform_device *platform_dev;
++	u8 rx_buf[RX_BUF_LEN];
++	size_t rx_len;
+ };
+ 
++static const u8 frame_header[] = { 0xA5, 0xD3, 0x5A, 0x3D };
++
+ static bool rumble_enable = true;
+ module_param(rumble_enable, bool, 0660);
+ 
+@@ -296,37 +303,83 @@ static void gamepad_data_handler(struct serdev_device *serdev,
+ 	}
+ }
+ 
++static void gamepad_handle_frame(struct serdev_device *serdev,
++				 const u8 *frame, size_t data_len)
++{
++	struct gamepad_data recv_data_buffer = {};
++
++	memcpy(recv_data_buffer.header, frame, 4);
++	recv_data_buffer.frame_number = frame[4];
++	recv_data_buffer.command = frame[5];
++	recv_data_buffer.data_len = data_len;
++	memcpy(recv_data_buffer.data, frame + 8, data_len);
++
++	gamepad_data_handler(serdev, &recv_data_buffer);
++}
++
++/*
++ * serdev makes no framing guarantee: a callback may hold part of a frame or
++ * several frames. Buffer the bytes and hand on each complete frame whose
++ * header, length and checksum check out; on a bad one, resync a byte later.
++ */
+ static size_t gamepad_mcu_uart_rx_bytes(struct serdev_device *serdev,
+ 					const u8 *data, size_t count)
+ {
+-	struct device *dev = &serdev->dev;
+-	struct gamepad_data recv_data_buffer;
+-	u8 checksum;
++	struct gamepad_device *dev = serdev_device_get_drvdata(serdev);
++	size_t consumed = 0, avail, data_len, frame_len;
++	const u8 *frame;
+ 
+-	if (!data || count < 7) {
+-		dev_warn_ratelimited(dev, "invalid packet");
++	if (!dev || !data || !count)
+ 		return count;
+-	}
+ 
+-	checksum = gamepad_data_checksum(data, count);
+-	if (checksum != *(data + count - 1)) {
+-		//dev_warn_ratelimited(dev, "packet checksum failed");
++	if (count > sizeof(dev->rx_buf)) {
++		dev_warn_ratelimited(&serdev->dev, "RX burst too long: %zu\n", count);
++		dev->rx_len = 0;
+ 		return count;
+ 	}
+ 
+-	memcpy(recv_data_buffer.header, data, 4);
+-	recv_data_buffer.frame_number = *(data + 4);
+-	recv_data_buffer.command = *(data + 5);
+-	recv_data_buffer.data_len = *(data + 6) | (*(data + 7) << 8);
+-
+-	if (recv_data_buffer.data_len) {
+-		memset(&recv_data_buffer.data[0], 0,
+-		       sizeof(recv_data_buffer.data));
+-		memcpy(&recv_data_buffer.data[0], data + 8,
+-		       recv_data_buffer.data_len);
++	if (dev->rx_len + count > sizeof(dev->rx_buf))
++		dev->rx_len = 0;
++
++	memcpy(dev->rx_buf + dev->rx_len, data, count);
++	dev->rx_len += count;
++	avail = dev->rx_len;
++
++	while (avail >= FRAME_MIN_LEN) {
++		frame = dev->rx_buf + consumed;
++
++		if (memcmp(frame, frame_header, sizeof(frame_header))) {
++			consumed++;
++			avail--;
++			continue;
++		}
++
++		data_len = frame[6] | (frame[7] << 8);
++		if (data_len > MAX_DATA_LEN) {
++			consumed++;
++			avail--;
++			continue;
++		}
++
++		frame_len = FRAME_MIN_LEN + data_len;
++		if (avail < frame_len)
++			break;
++
++		if (gamepad_data_checksum(frame, frame_len) != frame[frame_len - 1]) {
++			consumed++;
++			avail--;
++			continue;
++		}
++
++		gamepad_handle_frame(serdev, frame, data_len);
++		consumed += frame_len;
++		avail -= frame_len;
+ 	}
+ 
+-	gamepad_data_handler(serdev, &recv_data_buffer);
++	if (consumed) {
++		memmove(dev->rx_buf, dev->rx_buf + consumed, avail);
++		dev->rx_len = avail;
++	}
+ 
+ 	return count;
+ }
+@@ -368,6 +421,14 @@ static ssize_t rumble_enable_store(struct device *dev, struct device_attribute *
+ 
+ static DEVICE_ATTR_RW(rumble_enable);
+ 
++static void gamepad_unregister_platform_dev(void *data)
++{
++	struct platform_device *pdev = data;
++
++	device_remove_file(&pdev->dev, &dev_attr_rumble_enable);
++	platform_device_unregister(pdev);
++}
++
+ static int gamepad_mcu_uart_probe(struct serdev_device *serdev)
+ {
+ 	struct device *dev = &serdev->dev;
+@@ -419,19 +480,8 @@ static int gamepad_mcu_uart_probe(struct serdev_device *serdev)
+ 
+ 	msleep(100);
+ 
+-	ret = devm_serdev_device_open(dev, serdev);
+-	if (ret)
+-		return dev_err_probe(dev, ret, "Unable to open UART device\n");
+ 	gamepad_dev->dev = dev;
+ 
+-	serdev_device_set_drvdata(serdev, gamepad_dev);
+-
+-	ret = serdev_device_set_baudrate(serdev, 115200);
+-	if (ret < 0)
+-		return dev_err_probe(dev, ret, "Failed to set up host baud rate\n");
+-
+-	serdev_device_set_flow_control(serdev, false);
+-
+ 	gamepad_dev->dev_input = devm_input_allocate_device(dev);
+ 	if (!gamepad_dev->dev_input)
+ 		return dev_err_probe(dev, -ENOMEM, "Not enough memory for input device\n");
+@@ -489,7 +539,9 @@ static int gamepad_mcu_uart_probe(struct serdev_device *serdev)
+ 		input_set_abs_params(gamepad_dev->dev_input, ABS_HAT2Y, 0, trigger_right_max - trigger_right_antideadzone, 0, 30);
+ 
+ 		input_set_capability(gamepad_dev->dev_input, EV_FF, FF_RUMBLE);
+-		input_ff_create_memless(gamepad_dev->dev_input, NULL, retroid_rumble_play);
++		ret = input_ff_create_memless(gamepad_dev->dev_input, NULL, retroid_rumble_play);
++		if (ret)
++			return dev_err_probe(dev, ret, "Could not set up force feedback\n");
+ 
+ 	ret = input_register_device(gamepad_dev->dev_input);
+ 	if (ret)
+@@ -503,10 +555,27 @@ static int gamepad_mcu_uart_probe(struct serdev_device *serdev)
+ 		ret = device_create_file(&gamepad_dev->platform_dev->dev, &dev_attr_rumble_enable);
+ 		if (ret)
+ 			dev_warn(dev, "Failed to create rumble_enable sysfs on platform device: %d\n", ret);
++
++		ret = devm_add_action_or_reset(dev, gamepad_unregister_platform_dev,
++					       gamepad_dev->platform_dev);
++		if (ret)
++			return ret;
+ 	}
+ 
++	/* Set up before opening: the MCU may already be sending. */
++	serdev_device_set_drvdata(serdev, gamepad_dev);
+ 	serdev_device_set_client_ops(serdev, &gamepad_mcu_uart_client_ops);
+ 
++	ret = devm_serdev_device_open(dev, serdev);
++	if (ret)
++		return dev_err_probe(dev, ret, "Unable to open UART device\n");
++
++	ret = serdev_device_set_baudrate(serdev, 115200);
++	if (ret < 0)
++		return dev_err_probe(dev, ret, "Failed to set up host baud rate\n");
++
++	serdev_device_set_flow_control(serdev, false);
++
+ 	gamepad_send_init_sequence(serdev);
+ 
+ 	return 0;

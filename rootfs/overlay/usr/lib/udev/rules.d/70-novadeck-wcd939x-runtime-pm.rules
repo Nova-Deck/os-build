@@ -1,0 +1,16 @@
+# Keep the wcd939x SoundWire RX/TX slaves out of runtime PM on SM8650.
+#
+# The SM8650 sibling of 70-novadeck-wcd938x-runtime-pm.rules: same failure,
+# different codec (0217:010e, wcd939x-sdw.c's slave table).
+#
+# HW-confirmed on the KONKR Pocket FIT, 2026-10-14. Both slaves autosuspend
+# 3 s after boot; from then on plugging headphones in raises no interrupt at
+# all (/proc/interrupts "mbhc sw intr" stays put, the TX master's
+# swr_wake_irq never fires), so the CARD control `Headphone Jack` never
+# moves and the UCM never offers the headphones. With both slaves held
+# active, every plug and unplug is seen and `Headphone Jack` flips.
+#
+# Scope. The wcd939x is the SM8650 boards' headset codec; gated on the root
+# DT compatible like its wcd938x sibling. Cost: the codec's SoundWire slaves
+# stay powered while idle.
+ACTION=="bind", SUBSYSTEM=="soundwire", KERNEL=="sdw:*:0217:010e:*", PROGRAM=="/usr/bin/grep -qa qcom,sm8650 /sys/firmware/devicetree/base/compatible", ATTR{power/control}="on"

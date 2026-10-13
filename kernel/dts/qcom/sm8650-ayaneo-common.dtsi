@@ -69,6 +69,15 @@
 		qcom,mbhc-buttons-vthreshold-microvolt = <75000 150000 237000 500000 500000 500000 500000 500000>;
 		qcom,mbhc-headset-vthreshold-microvolt = <1700000>;
 		qcom,mbhc-headphone-vthreshold-microvolt = <50000>;
+		/*
+		 * The 3.5 mm jack's switches are normally-closed: stock sets
+		 * qcom,msm-mbhc-hphl-swh = <0> and qcom,msm-mbhc-gnd-swh = <0> on
+		 * both the Pocket FIT and the Pocket S2. Without these, mainline
+		 * programs normally-open, the boot-time mechanical interrupt reads
+		 * an empty jack as inserted, and no plug or unplug is ever seen.
+		 */
+		qcom,hphl-jack-type-normally-closed;
+		qcom,ground-jack-type-normally-closed;
 		qcom,rx-device = <&wcd_rx>;
 		qcom,tx-device = <&wcd_tx>;
 

@@ -70,7 +70,7 @@ replies — lore was not reachable, so "never posted" means no patchwork hit). `
 trees (msm-next, qcom `clk-for-7.4` / `arm64-for-7.4`, pci `next`). Re-audit on
 every bump: this table is a snapshot, the `Drop when` column is what to re-check.
 
-Totals: 5 `mainline`, 16 `posted`, 21 `novadeck`, 68 `community`. (`0310` and `0430` were
+Totals: 5 `mainline`, 16 `posted`, 22 `novadeck`, 68 `community`. (`0310` and `0430` were
 deleted at the 7.2.8 bump: stable backported both, byte-identical.) Half the stack will
 never land upstream, which is why provenance is a table and not a number band.
 
@@ -152,6 +152,7 @@ never land upstream, which is why provenance is a table and not a number band.
 | `0840` | community | Luke Johnson, ROCKNIX `0200`. Never posted; generic, worth sending. | when upstreamed |
 | `0845` | community | seilent, Kettle Linux `1230`, body byte-identical. Never posted; generic, worth sending. | when upstreamed |
 | `0846` | novadeck | The `0845` fix for `wcd939x`, whose ramp error has the same shape (and a right ramp that inherits the left value). Never posted; generic, worth sending. | when upstreamed |
+| `0847` | novadeck | The `wcd939x` HPH and ADC volume dB scales were wrong (`line_gain` 0 dB + 0.07 dB steps, i.e. 1.4 dB over 21 steps); declared as `wcd938x` does: -30..0 dB in 1.5 dB steps, ADC 0..30 dB. Never posted; generic, worth sending. | when upstreamed |
 | `0850` | novadeck | Also ROCKNIX `0612`. Related RFC: Jorijn van der Graaf `<20260705033830.305907-1-jorijnvdgraaf@catcrafts.net>`; Srinivas reproduced the missing clock but no fix yet. | when upstream fixes MI2S clocking before graph start |
 | `0855` | community | Kettle Linux `1240` (written for the KONKR Pocket FIT), body byte-identical. Never posted. Preventive: no stale-jack report on record here. | when upstreamed |
 | `0860` | community | ROCKNIX SM8250 `0062`. Mainline removed this flag (`d01fbee5c0d3`) in favour of `GPIO_SHARED`. | if a HW test without it passes |

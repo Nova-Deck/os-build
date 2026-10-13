@@ -1,0 +1,32 @@
+From: Philippe Simons <simons.philippe@gmail.com>
+Subject: [PATCH] ASoC: codecs: wcd939x: fix the HPH and ADC volume dB scales
+
+line_gain was declared DECLARE_TLV_DB_SCALE(line_gain, 0, 7, 1): 0 dB at
+the bottom in 0.07 dB steps, so "HPHL/HPHR Volume" advertised 1.4 dB over
+its 21 steps. The headphone PA gain is -30 dB to 0 dB in 1.5 dB steps, as
+wcd938x declares for the same block (20 steps x 1.5 dB = the 30 dB range
+here). A volume control that claims 1.4 dB makes userspace (PipeWire)
+leave it parked and attenuate in software, then the real 30 dB analog
+range lands abruptly at the top of the slider: very loud, then clipping.
+
+analog_gain ("ADC1..4 Volume") has the same mistake, 0.25 dB steps; the
+ADC gain is 0..30 dB over 20 steps, as wcd938x declares it.
+
+Measured on the KONKR Pocket FIT: stepping HPHL/HPHR Volume 0 -> 10 -> 20
+with PipeWire's volume fixed changes the loudness audibly at each step.
+---
+diff --git a/sound/soc/codecs/wcd939x.c b/sound/soc/codecs/wcd939x.c
+index 8dbd47fca..533998063 100644
+--- a/sound/soc/codecs/wcd939x.c
++++ b/sound/soc/codecs/wcd939x.c
+@@ -216,8 +216,8 @@ static const char * const wcd939x_supplies[] = {
+ };
+ 
+ static const SNDRV_CTL_TLVD_DECLARE_DB_MINMAX(ear_pa_gain, 600, -1800);
+-static const DECLARE_TLV_DB_SCALE(line_gain, 0, 7, 1);
+-static const DECLARE_TLV_DB_SCALE(analog_gain, 0, 25, 1);
++static const DECLARE_TLV_DB_SCALE(line_gain, -3000, 150, 0);
++static const SNDRV_CTL_TLVD_DECLARE_DB_MINMAX(analog_gain, 0, 3000);
+ 
+ static const struct wcd_mbhc_field wcd_mbhc_fields[WCD_MBHC_REG_FUNC_MAX] = {
+ 	WCD_MBHC_FIELD(WCD_MBHC_L_DET_EN, WCD939X_ANA_MBHC_MECH, 0x80),

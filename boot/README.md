@@ -15,7 +15,8 @@ itself, so it is a menu on first boot and a saved answer afterwards.
 
 | File | Purpose |
 |---|---|
-| `steamos-efi.pin` | Pinned source for stage 1: the arm64 fork of Valve's `steamos-efi`. |
+| `steamos-efi.pin` | Pinned source for stage 1: Valve's own `steamos-efi` source package (holo-main), a tag inside its bare clone. |
+| `patches/steamos-efi/` | Our arm64 port on it: chainloader PE machine + `grubaa64.efi` paths, the cross-build `configure.ac`/`Makefile.am` fixes, the removable-media name, an `ftruncate` check. Applied lexically. |
 | `steamcl.sh` | Cross-build it → `out/boot/{steamcl.efi, holo-bootconf, steamcl-version, fonts/default.pf2}`. `holo-bootconf` ships on-device as `/usr/bin/steamos-bootconf`. |
 | `grub.pin` | Pinned source for stage 2: the **GNU GRUB 2.14 release tarball** from ftp.gnu.org. |
 | `patches/grub/` | Our delta on it: framebuffer rotation, the `novadeck` boot-attempts module, and the `Makefile.core.def` stanza that builds it. Applied lexically, like `kernel/patches/`. |

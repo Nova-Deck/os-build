@@ -940,7 +940,7 @@ $(SPLASH_ASSET): $(IMAGE_DIR)/mksplash.sh $(IMAGE_DIR)/png2nds1.py $(IMAGE_DIR)/
 
 # Stage-1 steamcl + the steamos-bootconf binary the OS side installs (boot/steamcl.sh, pinned
 # source). Independent of the kernel: it is bootloader software, not a payload.
-$(STEAMCL): boot/steamcl.sh boot/steamos-efi.pin | $(BUILD_STAMP)
+$(STEAMCL): boot/steamcl.sh boot/steamos-efi.pin $(wildcard boot/patches/steamos-efi/*.patch) | $(BUILD_STAMP)
 	$(INBUILD) boot/steamcl.sh
 
 # Stage-2 GRUB + the two per-slot grub.cfg files + grubenv. The patch set and the board catalog are

@@ -105,8 +105,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # steamos-efi ships no configure, so it needs the autotools; it links against gnu-efi for arm64
 # and generates its console font at build time through fontconfig + grub-mkfont. Ubuntu's
 # gnu-efi:arm64 installs to plain /usr/lib (crt0-efi-aarch64.o, elf_aarch64_efi.lds,
-# /usr/lib/pkgconfig/gnu-efi.pc) rather than a multiarch dir — the fork's efi_cpu AC_SUBST maps
-# target_cpu arm64 -> aarch64 to find it.
+# /usr/lib/pkgconfig/gnu-efi.pc) rather than a multiarch dir — patch 0002's efi_cpu AC_SUBST maps
+# target_cpu arm64 -> aarch64 to find it. git: Valve's steamos-efi source tarball is a BARE CLONE,
+# so boot/steamcl.sh clones it and checks out the pinned tag.
 #
 # GRUB is built from the GNU 2.14 RELEASE tarball, which vendors gnulib — so there is no
 # ./bootstrap and no gnulib checkout to pin. It does still need ./autogen.sh, because our patch
@@ -126,6 +127,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # installer extract what this container packs.
 RUN dpkg --add-architecture arm64 && apt-get update && apt-get install -y --no-install-recommends \
       zstd \
+      git \
       gnu-efi:arm64 \
       libc6-dev-arm64-cross \
       autoconf automake libtool pkg-config gettext \

@@ -1,0 +1,52 @@
+From 99f5aa9ce7530f76692b3f65227d12434200a362 Mon Sep 17 00:00:00 2001
+From: Philippe Simons <simons.philippe@gmail.com>
+Date: Sat, 1 Aug 2026 12:46:44 +0200
+Subject: [PATCH 1/4] chainloader: support arm64 stage-2 bootloader
+ chainloading
+
+The stage-2 PE machine type and the grub/systemd-boot/removable loader
+paths are x86_64-specific. Select the aa64 variants on aarch64, keeping
+the x86_64 defaults otherwise.
+---
+ chainloader/bootload.c | 6 +++++-
+ chainloader/util.h     | 6 ++++++
+ 2 files changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/chainloader/bootload.c b/chainloader/bootload.c
+index 1e81b17..0279f8e 100644
+--- a/chainloader/bootload.c
++++ b/chainloader/bootload.c
+@@ -48,8 +48,12 @@
+ // this converts micro-seconds to event timeout in 10ns
+ #define EFI_TIMER_PERIOD_MICROSECONDS(s) (s * 10)
+ 
+-// this is x86_64 specific
++// machine type of the stage-2 bootloader (PE) we chainload
++#ifdef __aarch64__
++#define EFI_STUB_ARCH 0xaa64
++#else
+ #define EFI_STUB_ARCH 0x8664
++#endif
+ 
+ static MENU_REASON display_menu = MENU_REASON_NONE;
+ static BOOLEAN verbose_boot = FALSE;
+diff --git a/chainloader/util.h b/chainloader/util.h
+index 0e831f2..de533c6 100644
+--- a/chainloader/util.h
++++ b/chainloader/util.h
+@@ -58,9 +58,15 @@
+ #define NEWCONFPATH  L"\\SteamOS\\conf"
+ #define EFIDIR       L"\\EFI"
+ 
++#ifdef __aarch64__
++#define GRUBLDR     EFIDIR L"\\steamos\\grubaa64.efi"
++#define SYSTEMDLDR  EFIDIR L"\\SYSTEMD\\SYSTEMD-BOOTAA64.EFI"
++#define DEFAULTLDR  EFIDIR L"\\Boot\\bootaa64.efi"
++#else
+ #define GRUBLDR     EFIDIR L"\\steamos\\grubx64.efi"
+ #define SYSTEMDLDR  EFIDIR L"\\SYSTEMD\\SYSTEMD-BOOTX64.EFI"
+ #define DEFAULTLDR  EFIDIR L"\\Boot\\bootx64.efi"
++#endif
+ #define STEAMOSLDR  GRUBLDR
+ #define CHAINLDR    EFIDIR L"\\Shell\\steamcl.efi"
+ 

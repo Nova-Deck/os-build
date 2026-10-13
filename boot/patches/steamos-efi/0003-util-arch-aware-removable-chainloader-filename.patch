@@ -1,0 +1,51 @@
+From 0242cb59d59c103339d5ba1433df614616157245 Mon Sep 17 00:00:00 2001
+From: Philippe Simons <simons.philippe@gmail.com>
+Date: Sat, 1 Aug 2026 12:46:44 +0200
+Subject: [PATCH 3/4] util: arch-aware removable chainloader filename
+
+Install the removable-media copy as bootaa64.efi on aarch64 (the file
+ABL chainloads), bootx64.efi elsewhere.
+---
+ util/steamcl-install.in | 14 ++++++++++----
+ 1 file changed, 10 insertions(+), 4 deletions(-)
+
+diff --git a/util/steamcl-install.in b/util/steamcl-install.in
+index 3832722..d95e0ac 100755
+--- a/util/steamcl-install.in
++++ b/util/steamcl-install.in
+@@ -55,6 +55,12 @@ manifest_version=
+ checksum=
+ installpath=EFI/$distrib
+ 
++# removable media path of the chainloader, per-architecture
++case "$(uname -m)" in
++    aarch64|arm64) removable_boot=bootaa64.efi ;;
++    *)             removable_boot=bootx64.efi  ;;
++esac
++
+ flags= # comma separated list of flags
+ force_extra_removable=0
+ force_removable_efiboot=0
+@@ -88,8 +94,8 @@ entry if needed.
+ 
+ --force-extra-removable
+ 
+-    Also install the chainloader at the removable media path (for x86_64 arch:
+-    efi/boot/bootx64.efi).
++    Also install the chainloader at the removable media path (EFI fallback position,
++    e.g. efi/boot/bootaa64.efi on aarch64, efi/boot/bootx64.efi on x86_64).
+ 
+ --force-removable-efiboot
+ 
+@@ -404,9 +410,9 @@ update_esp ()
+     # install the chainloader in the EFI fallback (RC) position in case we boot without an explicit efiboot entry
+     # FUTURE: We should skip this step if $espbootloader exists but doesn't look like it's one of ours
+     espbootdir=${esp}/efi/boot
+-    echo "Installing bootloader to ${espbootdir}/bootx64.efi"
++    echo "Installing bootloader to ${espbootdir}/${removable_boot}"
+     mkdir -p ${espbootdir}/fonts
+-    cp -av ${bin} ${espbootdir}/bootx64.efi ||:
++    cp -av ${bin} ${espbootdir}/${removable_boot} ||:
+     cp -av ${fnt} ${espbootdir}/fonts/default.pf2 ||:
+ 
+     return 0

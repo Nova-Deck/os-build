@@ -1,17 +1,27 @@
-# novadeck steamos-efi source pin — Phase 5
-# Nova-Deck/steamos-efi fork of evlaV/steamos-efi, master (aarch64 patched + CI).
-# The TARBALL + its sha256 is the canonical pin.
-version:    1.1.0
-url:        https://github.com/Nova-Deck/steamos-efi/archive/12795a85ce037170a712709a7c44c068c895bad9.tar.gz
-sha256:     ea2d4a92336a0e7e1738690fd90f2cfc189cfcfe223b137dcef29d5c10ac5a17
-git_commit: 12795a85ce037170a712709a7c44c068c895bad9
-
-# Fork carries the arm64 port (committed on top of upstream master):
-#   chainloader/bootload.c       EFI_STUB_ARCH 0xaa64 on __aarch64__
-#   chainloader/util.h           \EFI\steamos\grubaa64.efi / bootaa64.efi paths
-#   util/steamcl-install.in      removable-media bootaa64.efi from uname -m
-#   configure.ac                 efi_cpu AC_SUBST (arm64->aarch64), TARGET_LD, AS_CASE comma
-#   Makefile.am                  steamcl_elf_LINK = $(TARGET_LD)
-#   bootconf/config-extra.c      ftruncate return check
-# plus .github/workflows/build.yml (arm64 cross-build CI). Validated 2026-08-01:
-# steamcl.efi = PE32+ ARM64; holo-bootconf = aarch64 statically linked.
+# novadeck steamos-efi source pin — Valve's stage-1 chainloader (steamcl) + holo-bootconf.
+#
+# Source: Valve's own published source package for holo-main's steamos-efi. It is a makepkg
+# source tarball, so it holds a BARE CLONE of gitlab.steamos.cloud/holo/steamos-efi (that GitLab
+# needs a login; this tarball is the public route). boot/steamcl.sh verifies the sha256, clones the
+# bare repo, checks out `tag`, asserts it resolves to `git_commit`, then applies
+# boot/patches/steamos-efi/ in order with `patch -p1`.
+# The TARBALL + its sha256 is the canonical pin; the tag/commit pair says which revision inside it.
+#
+# Valve builds this for x86_64 only. The patches carry the arm64 port:
+#   0001 chainloader/bootload.c, util.h  EFI_STUB_ARCH 0xaa64; \EFI\steamos\grubaa64.efi paths
+#   0002 configure.ac, Makefile.am       efi_cpu (arm64 -> aarch64) for gnu-efi/objcopy, TARGET_LD
+#                                        so a CROSS link uses the aarch64 ld, the AS_CASE comma
+#   0003 util/steamcl-install.in         removable-media bootaa64.efi from uname -m
+#   0004 bootconf/config-extra.c         ftruncate return check
+#
+# Bumping: pick the newest steamos-efi-<ver>-<rel>.src.tar.gz under the URL's directory, take its
+# sha256, set tag/git_commit from the clone, re-run boot/steamcl.sh (a patch that stops applying
+# fails the build). The release string baked into steamcl.efi is derived from version+git_commit,
+# so a bump changes the binary, and every device's next OTA rewrites the ESP's bootaa64.efi
+# (lib-slotwrite.sh refresh_esp_stage1 — the one boot write with no A/B copy behind it). Bump
+# deliberately, and HW-boot a card before tagging.
+version:    20260824.1
+url:        https://steamdeck-packages.steamos.cloud/archlinux-mirror/sources/holo-main/steamos-efi-20260824.1-3.src.tar.gz
+sha256:     dcfa1ae84ada58413c482bb56bfbcd1429aa0148dfec7a1172635e3b2f1aef18
+tag:        jupiter-20260824.1
+git_commit: e710ed09598c661774f70557f8dbb0753b953eb2

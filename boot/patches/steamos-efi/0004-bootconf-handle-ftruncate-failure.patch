@@ -1,0 +1,25 @@
+From f4b18c20d90c8a7786bf011391a8176c748150e6 Mon Sep 17 00:00:00 2001
+From: Philippe Simons <simons.philippe@gmail.com>
+Date: Sat, 1 Aug 2026 12:46:44 +0200
+Subject: [PATCH 4/4] bootconf: handle ftruncate failure
+
+Newer glibc declares ftruncate warn_unused_result; treat a failure the
+same as the surrounding write path instead of ignoring it.
+---
+ bootconf/config-extra.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/bootconf/config-extra.c b/bootconf/config-extra.c
+index 355a3a9..74fdfd4 100644
+--- a/bootconf/config-extra.c
++++ b/bootconf/config-extra.c
+@@ -272,7 +272,8 @@ size_t write_config (DIR *dir, const char *ident, const cfg_entry *cfg)
+ 
+     if( fd >= 0 )
+     {
+-        ftruncate( fd, written );
++        if( ftruncate( fd, written ) != 0 )
++            goto fail;
+         new_conf =
+           mmap( NULL, written, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0 );
+ 

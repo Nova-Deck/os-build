@@ -23,7 +23,9 @@ mkdir -p "$OUT" "$WORK"
 PIN="$ROOT/boot/steamos-efi.pin"
 [ -f "$PIN" ] || { echo "missing pin: $PIN" >&2; exit 1; }
 pin() { sed -n "s/^$1:[[:space:]]*//p" "$PIN" | head -1; }
-SEVER="$(pin version)"; SEURL="$(pin url)"; SESHA="$(pin sha256)"; SECOMMIT="$(pin git_commit)"
+SEVER="$(pin version)"; SEURL="$(pin url)"; SESHA="$(pin sha256)"; SETAG="$(pin tag)"
+SECOMMIT="$(pin git_commit)"
+PATCHES="$ROOT/boot/patches/steamos-efi"
 TARBALL="$WORK/steamos-efi-${SEVER}.tar.gz"
 
 # --with-release-version is baked into steamcl.efi and reported by `steamcl-version`, so it decides
@@ -36,10 +38,27 @@ RELEASE="${RELEASE_VERSION:-novadeck-${SEVER}-${SECOMMIT:0:12}}"
 [ -f "$TARBALL" ] || curl -fSL -o "$TARBALL" "$SEURL"
 echo "${SESHA}  ${TARBALL}" | sha256sum -c - || { echo "sha256 mismatch — refusing to build" >&2; exit 1; }
 
+# Valve's source tarball holds a bare clone (steamos-efi/steamos-efi), not a source tree: clone it,
+# check out the pinned tag, and refuse a tag that resolves anywhere but the pinned commit.
 SRCDIR="$WORK/src"
-rm -rf "$SRCDIR"
-mkdir -p "$SRCDIR"
-tar -C "$SRCDIR" --strip-components=1 -xf "$TARBALL"
+UNPACK="$WORK/unpack"
+rm -rf "$SRCDIR" "$UNPACK"
+mkdir -p "$UNPACK"
+tar -C "$UNPACK" -xf "$TARBALL"
+git clone -q "$UNPACK/steamos-efi/steamos-efi" "$SRCDIR"
+git -C "$SRCDIR" -c advice.detachedHead=false checkout -q "$SETAG"
+got="$(git -C "$SRCDIR" rev-parse HEAD)"
+[ "$got" = "$SECOMMIT" ] || { echo "tag $SETAG is $got, pin says $SECOMMIT — refusing to build" >&2; exit 1; }
+rm -rf "$UNPACK"
+
+# The arm64 port. Fatal on any failure: a half-patched tree still builds an x86-only chainloader.
+patches=("$PATCHES"/*.patch)
+[ ${#patches[@]} -gt 0 ] || { echo "no patches in ${PATCHES#"$ROOT"/} — refusing to build" >&2; exit 1; }
+for p in "${patches[@]}"; do
+  echo "[steamcl] patch $(basename "$p")"
+  patch -p1 -d "$SRCDIR" --no-backup-if-mismatch <"$p" \
+    || { echo "patch FAILED: $(basename "$p")" >&2; exit 1; }
+done
 
 echo "[steamcl] building steamos-efi $SEVER ($RELEASE)"
 cd "$SRCDIR"

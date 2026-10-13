@@ -4,7 +4,7 @@
 # bundle on kernel >= 6.19, which is every kernel we ship. Our PKGBUILD IS that holo recipe with
 # the version bumped to 1.15.2; see the header comment there for the two mechanical deviations.
 #
-# This is the "local PKGBUILD" form (like packages/gtk2, packages/mesa): build-overlay.sh sees
+# This is the "local PKGBUILD" form (like packages/mesa, packages/f3): build-overlay.sh sees
 # `pkgbuild_local` and uses the checked-in recipe instead of curl'ing one from GitLab. makepkg
 # still downloads the upstream release tarball the PKGBUILD names.
 #

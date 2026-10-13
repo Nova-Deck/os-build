@@ -120,12 +120,9 @@ BOOTSTRAP_PKGS=(base)
 # through `libinput debug-events`; without it the key does nothing and a sleep resumes at once.
 # Arch split the CLI out of `libinput` at 1.30 into a package that drags gtk4 in for its debug GUI,
 # so this one is OUR build without the GUI (packages/libinput/), installed from the overlay.
-# gtk2: steamui.so links libgtk-x11-2.0.so.0. holo has NO gtk2 (SteamOS itself ships none — verified
-# against the SteamOS 3.8.10 rootfs), so we BUILD it from source as a novadeck overlay package
-# (packages/gtk2/) and install it HERE from that overlay — the client resolves its UI libs against
-# the host base, NOT from inside Steam's bundled SR3 runtime via pressure-vessel as earlier planned.
-# gtk2's own deps (gdk-pixbuf2, pango, cairo, …) come along via pacman. (No distro gtk2 package
-# exists in holo, so we build from source rather than pulling one.) See packages/gtk2/.
+# gtk2: steamui.so links libgtk-x11-2.0.so.0. It is in the snapshot's extra repo (stock Arch
+# recipe), so the client resolves its UI libs against the host base, NOT from inside Steam's bundled
+# SR3 runtime via pressure-vessel. gtk2's own deps (gdk-pixbuf2, pango, cairo, …) come along.
 # ffmpeg: the native arm64 Steam client links libav*/libsw* (libavcodec, libavformat, libswscale,
 # libswresample) for in-client media/video (store trailers, intro/animated UI). It IS in the holo
 # repo, so install it.
@@ -551,7 +548,7 @@ if [ "${NOVADECK_DEV:-}" = "1" ]; then
 fi
 
 # The from-source overlay repo is REQUIRED, not optional. PKGS names packages that exist in no
-# holo repo at all (gtk2, mangohud, sddm, fex-emu, scx-scheds), so a bootstrap without it cannot
+# holo repo at all (mangohud, sddm, fex-emu, scx-scheds), so a bootstrap without it cannot
 # resolve, and a locked build cannot install the /novarepo paths the lock names. Refuse here,
 # on the host, rather than 20 emulated minutes in — and refuse for BOTH modes, since the
 # pre-4c "mount it only if it happens to exist" made a missing overlay look like a lock problem.

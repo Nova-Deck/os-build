@@ -3,7 +3,7 @@
 # header for why (Arch's split libinput-tools drags gtk4 + gstreamer in for one GUI tool) and for
 # every deviation.
 #
-# This is the "local PKGBUILD" form (like packages/rauc, packages/gtk2): build-overlay.sh uses the
+# This is the "local PKGBUILD" form (like packages/rauc, packages/mesa): build-overlay.sh uses the
 # checked-in recipe; makepkg clones the upstream tag the PKGBUILD names.
 #
 # To bump: follow the snapshot's libinput. The PKGBUILD's `libinput=$pkgver` dependency makes a

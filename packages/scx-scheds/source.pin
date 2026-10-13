@@ -78,7 +78,7 @@
 # scx-scheds — built FROM SOURCE via a novadeck-owned PKGBUILD (packages/scx-scheds/PKGBUILD),
 # NOT Valve's own recipe: SteamOS's scx-scheds PKGBUILD (in the same holo-main source tarball)
 # clones gitlab.steamos.cloud over SSH, which an anonymous builder cannot do, and builds only
-# scx_lavd. This is the "local PKGBUILD" form, like packages/mesa and packages/gtk2; makepkg
+# scx_lavd. This is the "local PKGBUILD" form, like packages/mesa and packages/rauc; makepkg
 # still downloads the source tarball named in the PKGBUILD (Valve's published holo-main one).
 #
 # Why: sched_ext lets the CPU scheduler be implemented as a BPF program loaded from userspace.

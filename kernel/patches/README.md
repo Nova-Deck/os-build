@@ -113,6 +113,8 @@ never land upstream, which is why provenance is a table and not a number band.
 | `0520` | posted | Xilin Wu "AYN Odin 2 support" v1 04/10 `<20240424-ayn-odin2-initial-v1-4-e0aa05c991fd@gmail.com>`. v2 never sent. | never, unless mainline `panel-synaptics-tddi` can take TD4328 |
 | `0525` | community | Teguh Sobirin via ROCKNIX `0056`. Never posted. | never |
 | `0530` | community | Teguh Sobirin via ROCKNIX `0057`, plus our levels/linear scale, plus gennro's no-backlight-DSI-while-off fix (Kettle Linux `1386`, adapted to our levels map; drops `.get_brightness`). Mainline has its own `f747473a838e` (same file, per-board compatibles, no Mangmi/EVO); fix pending: Aaron Kling "Fix picture parameter set". | **v7.3 hard conflict** — rebase as a delta on the mainline driver |
+| `0531` | community | gennro, Kettle Linux `1330`, body byte-identical: the Odin 2 Portal's ICNA3512 60/120 Hz setup bytes made exactly what AYN's Android DT sends. | never |
+| `0532` | community | gennro, Kettle Linux `1340`, body byte-identical: 50, 145 and 165 Hz modes on the Portal (register 0x48 values measured from TE-driven vblanks). | never |
 | `0535` | community | Teguh Sobirin via ROCKNIX, plus the 120 ms sleep-out wait (Kettle Linux `21-sm8250/0058`). Mainline 7.2 has a different driver, `panel-chipwealth-ch13726a` (`3ee01b8647b5`), Thor only, same `.name` as ours. | when the Retroid variants are added to the mainline driver |
 | `0540` | community | KancyJoe via ROCKNIX SM8650 `0062`. Superseded by mainline `1190fc8d7b8a` (`panel-renesas-r63419`, same compatibles). | v7.3 — DT supplies become `vsp`/`vsn`; width is 78 mm there, 79 here |
 | `0545` | novadeck | Also ROCKNIX SM8650 `0063`. Never posted. | never |
@@ -162,12 +164,14 @@ never land upstream, which is why provenance is a table and not a number band.
 | `0893` | novadeck | Written here for issue #94: `q6core_is_adsp_ready()` reported "ready" on any non-answer; only `ADSP_EUNSUPPORTED` means that now, and it polls every 50 ms as downstream does. Never posted. | with `0895` |
 | `0895` | novadeck | Written here for issue #94, after the downstream `q6core_is_avs_up()` gate and `afe_callback()` vote handling. Needs `0893`. Never posted. | when upstream gates q6afe on DSP readiness |
 | `0910` | community | ROCKNIX `0011`, with the charger-status fix from ROCKNIX PR #3396 (the SMB5 `BATTERY_CHARGER_STATUS_1` enum and the BAT_OV bit; ours had SMB2's) and the pm8150b float-voltage scale plus the charge current from ROCKNIX PR #3382 (xenocideend). Charger alternative posted: `qcom_smbx` SMB5 v4 `<20260820-submit-qcom-smbx-send-v1-v4-*@snyders.xyz>` (under review). | charger: when SMB5 lands; FG: never |
+| `0915` | community | gennro, Kettle Linux `21-sm8250/0116`, body byte-identical: the PM8150B fuel gauge (`0910`) reports `charge_now` (capacity x design) and `charge_full` (design), so time-remaining from charge / current is no longer 0. | with `0910` |
 | `0920` | community | ROCKNIX `0063` (sunshineinabox). Never posted. | never |
 | `0930` | posted | Jan-Michael Brummer `<20260829054546.86210-2-jan.brummer@tabos.org>`. Konrad asked for `CHARGE_EMPTY` gating; v2 expected. | when merged |
 | `0940` | posted | Same series, `-3-`. | when merged |
 | `0970` | community | ROCKNIX `0500`. A hack. | never |
 | `0980` | novadeck | Never posted. | never |
 | `1010` | community | Edouard Durand. Never posted; the bug is still in v7.3-rc4. | when sent and merged |
+| `1015` | posted | Runyu Xiao, "[PATCH v4 ath-current] wifi: ath12k: convert scan timeout to wiphy delayed work", via Kettle Linux `1280`, body byte-identical: stop (wiphy mutex held) synchronously cancelled a scan-timeout worker that waits for the same mutex — a deadlock. | when it lands in 7.2.y |
 | `1030` | community | spycat88, ROCKNIX `0071`. A hack. | never |
 | `1040` | community | Kars Mulder's Linux-Pollrate-Patch via ROCKNIX `0506`. | never |
 | `1050` | community | Jacob Cook, ROCKNIX `5e52df2b9fba` (SM8250 `0018`, merged with PR #3382), written from the vendor smb5 `smblib_set_prop_pr_swap_in_progress` sequence. Never posted. | when mainline `qcom_pmic_typec_port` handles PR swap termination |
@@ -176,6 +180,12 @@ never land upstream, which is why provenance is a table and not a number band.
 | `1070` | community | gennro, Kettle Linux `1160`, body byte-identical: the lane clocks were enabled twice per runtime resume (hibern8 setup + resume) and disabled once, so the UFS clocks never gate. | when mainline guards `ufs_qcom_enable_lane_clks()` |
 | `1075` | community | jaewun, Kettle Linux `20-sm8550/0207`, body byte-identical: `ufs_qcom_host_reset()` left the IRQ disabled on its error exits. | when upstreamed |
 | `1080` | mainline | Udit Tiwari, v9 as merged: `6f5569203bb6`, cherry-picked clean onto v7.2.7 (replaced v6 `<20260210061437.2293654-1-quic_utiwari@quicinc.com>`). | v7.3 |
+| `1081` | community | jaewun, Kettle Linux `20-sm8550/1007`, body byte-identical: `ufs_qcom_clk_scale_notify()` dropped a hibern8-exit failure and returned 0, bypassing the clock-scaling rollback. | when upstreamed |
+| `1082` | community | jaewun, Kettle Linux `20-sm8550/1008`, body byte-identical: HW auto-hibern8 and SW clk-gating hibern8 both park the link; the redundant SW enter on an already-parked link can time out and mark it broken. Keeps the SW path. | when upstreamed |
+| `1083` | community | jaewun, Kettle Linux `20-sm8550/1010`, body byte-identical: on `no_phy_retention` hosts (SM8550/SM8650) keep the M-PHY powered while the link is only parked in HIBERN8. | when upstreamed |
+| `1084` | community | jaewun, Kettle Linux `20-sm8550/1015`, body byte-identical: RX LineCfg on for link startup, off right after, as downstream does. | when upstreamed |
+| `1085` | community | gennro, Kettle Linux `1385`, body byte-identical: fixes `1083`'s PHY power count when the link state differs between clocks-off and clocks-on. | with `1083` |
+| `1086` | community | gh123man, Kettle Linux `1401`, body byte-identical: recover a failed clock-gating hibern8 enter inline instead of leaving the link unusable. Kettle's `1400` (clock-gating hold across system PM) is NOT taken: we never enter system suspend. | when upstreamed |
 | `1105` | posted | Krishna Chaitanya Chundru root_port v2 15/15 `<20260917-root_port_v2-v2-15-6272b7caae9a@oss.qualcomm.com>`, applied to qcom `arm64-for-7.4` as `bbc442a64823`. 7.3 renames `pcieport0` → `pcie0_port0`. | v7.4; rework at 7.3 either way |
 | `1110` | posted | Same series, 12/15 `<20260917-root_port_v2-v2-12-6272b7caae9a@oss.qualcomm.com>`, applied to qcom `arm64-for-7.4` as `c51818ded215`. | v7.4 |
 | `1115` | community | ROCKNIX SM8250 `0005`. Never posted. | never |

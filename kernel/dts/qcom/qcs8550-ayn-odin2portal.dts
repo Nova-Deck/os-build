@@ -292,3 +292,44 @@
 	firmware-name = "qcom/sm8550/ayn/odin2portal/aw883xx_acf.bin";
 };
 
+&tlmm {
+	paddle_keys_default: paddle-keys-default-state {
+		pins = "gpio57", "gpio58";
+		function = "gpio";
+		bias-pull-up;
+		drive-strength = <2>;
+	};
+};
+
+/*
+ * The back buttons, M1 (left) and M2 (right), are wired as on the Odin 2:
+ * active-low SoC TLMM GPIOs, M1 on gpio57 and M2 on gpio58.
+ *
+ * THE NODE NAME IS LOAD-BEARING, as on the Odin 2. InputPlumber's
+ * 50-ayn_odin2.yaml also matches ayn,odin2portal and lists a source device
+ * `name: gpio-keys-paddles`, routed through its rsinput1 capability map
+ * (BTN_Z -> LeftPaddle1, BTN_C -> RightPaddle1). gpio-keys names the input
+ * device after the node when it has no `label`, so the node stays unlabelled.
+ */
+/ {
+	gpio-keys-paddles {
+		compatible = "gpio-keys";
+		pinctrl-names = "default";
+		pinctrl-0 = <&paddle_keys_default>;
+
+		key-paddle-m1 {
+			label = "Back Paddle M1";
+			linux,code = <BTN_Z>;
+			gpios = <&tlmm 57 GPIO_ACTIVE_LOW>;
+			debounce-interval = <15>;
+		};
+
+		key-paddle-m2 {
+			label = "Back Paddle M2";
+			linux,code = <BTN_C>;
+			gpios = <&tlmm 58 GPIO_ACTIVE_LOW>;
+			debounce-interval = <15>;
+		};
+	};
+};
+

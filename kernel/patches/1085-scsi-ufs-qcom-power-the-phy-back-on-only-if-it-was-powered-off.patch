@@ -1,0 +1,51 @@
+From: gennro <gennro2004@gmail.com>
+Subject: [PATCH] scsi: ufs: qcom: power the PHY back on only if it was powered off
+
+20-sm8550/1010 skips phy_power_off() when the clocks go off with the
+link in HIBERN8, and skips phy_power_on() when they come back with the
+link in HIBERN8, deciding each time from the link state of the moment.
+When the link state differs between the two (the clocks gated with the
+link off and turned on again with it in HIBERN8, or the reverse), the
+PHY's power count goes unbalanced: it stays off with the controller
+running, or is left a reference it never drops. Remember whether the
+way down kept it powered and power it on on the way up only if not.
+---
+--- a/drivers/ufs/host/ufs-qcom.c
++++ b/drivers/ufs/host/ufs-qcom.c
+@@ -1513,7 +1513,9 @@ static int ufs_qcom_setup_clocks(struct ufs_hba *hba, bool on,
+ 				ufs_qcom_dev_ref_clk_ctrl(host, false);
+ 			}
+ 
+-			if (!keep_phy) {
++			if (keep_phy) {
++				host->phy_kept_on = true;
++			} else {
+ 				err = phy_power_off(phy);
+ 				if (err) {
+ 					dev_err(hba->dev, "phy power off failed, ret=%d\n", err);
+@@ -1524,7 +1526,13 @@ static int ufs_qcom_setup_clocks(struct ufs_hba *hba, bool on,
+ 		break;
+ 	case POST_CHANGE:
+ 		if (on) {
+-			if (!keep_phy) {
++			/*
++			 * Power on only what the way down powered off: the link
++			 * state may have changed in between.
++			 */
++			if (host->phy_kept_on) {
++				host->phy_kept_on = false;
++			} else {
+ 				err = phy_power_on(phy);
+ 				if (err) {
+ 					dev_err(hba->dev, "phy power on failed, ret = %d\n", err);
+--- a/drivers/ufs/host/ufs-qcom.h
++++ b/drivers/ufs/host/ufs-qcom.h
+@@ -333,6 +333,8 @@ struct ufs_qcom_host {
+ 	struct clk_bulk_data *clks;
+ 	u32 num_clks;
+ 	bool is_lane_clks_enabled;
++	/* setup_clocks(off) left the PHY powered (link parked in HIBERN8) */
++	bool phy_kept_on;
+ 
+ 	struct icc_path *icc_ddr;
+ 	struct icc_path *icc_cpu;

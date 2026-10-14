@@ -1,0 +1,107 @@
+From: gennro <gennro2004@gmail.com>
+Subject: [PATCH] drm/panel: icna35xx: 50, 145 and 165Hz modes on the Portal
+
+The Odin 2 Portal's ICNA3512 is set to 60 or 120Hz by AYN's Android DT,
+which writes register 0x48 last in each rate's setup (0x00 for 60Hz,
+0x30 for 120Hz). Upstream's driver (panel-chipone-icna35xx) runs the
+same panel at 165Hz with 0x48 0x20 alone. Trying the other values on a
+Portal, with the panel's real rate measured from its TE-driven vblanks:
+
+  with the 120Hz setup: 0x10 101.5Hz, 0x30 119.8Hz
+  with the 60Hz setup:  0x00 59.9Hz, 0x10 50.7Hz, 0x30 145.5Hz
+  0x20 167Hz with either setup or neither
+
+Add 50, 145 and 165Hz modes: each writes its 0x48 value after the
+matching Android setup (165Hz writes upstream's 0x48 0x20 alone). The
+50/145Hz modes keep the 60/120Hz modes' pixel clock with the frame
+stretched to the rate, and 165Hz takes upstream's timings. 120Hz stays
+the preferred mode. All three looked right on a Portal (no flicker,
+colour or brightness shift).
+
+No 100Hz mode: 0x10 after the 120Hz setup measured 101.5Hz once, but
+switched to live from gamescope the panel's TE ran at 50Hz, from any
+other rate.
+---
+--- a/drivers/gpu/drm/panel/panel-chipone-icna35xx.c
++++ b/drivers/gpu/drm/panel/panel-chipone-icna35xx.c
+@@ -115,9 +115,20 @@
+     mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0x9F, 0x0F);
+     mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0xCE, 0x22);
+ 
+-	/* The refresh rate setup from AYN's Android DT (dtbo, timing@0/@1) */
++	/*
++	 * The refresh rate setup from AYN's Android DT (dtbo, timing@0/@1: 60 and 120Hz), whose
++	 * 0x48 picks the rate; the other values measured on a Portal from the panel's TE:
++	 *   with the 120Hz setup: 0x10 101.5Hz, 0x30 119.8Hz (0x10: 50Hz when switched to live,
++	 *   so no 100Hz mode)
++	 *   with the 60Hz setup:  0x00 59.9Hz, 0x10 50.7Hz, 0x30 145.5Hz
++	 *   0x20 167Hz with either or neither (upstream's 165Hz, panel-chipone-icna35xx)
++	 * 120Hz is what AYN sells the panel at; the others are ours.
++	 */
+ 	mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0x9F, 0x01);
+-	if (cur_vrefresh == 120) {
++	if (cur_vrefresh == 165) {
++		mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0x48, 0x20);
++	}
++	else if (cur_vrefresh == 120) {
+ 		mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0xB3, 
+                 0x00, 0xE0, 0xA0, 0x10, 0xC8, 0x00, 0x02, 0x83, 
+                 0x00, 0x10, 0x14, 0x00, 0x00, 0xC3, 0x00, 0x10, 
+@@ -148,6 +159,10 @@
+                 0x01, 0x01, 0x01, 0x01, 0x04, 0x09, 0x2C);
+         mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0x48, 0x30);
+         mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0x48, 0x00);
++		if (cur_vrefresh == 50)
++			mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0x48, 0x10);
++		else if (cur_vrefresh == 145)
++			mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0x48, 0x30);
+ 	}
+ 
+ 	drm_dsc_pps_payload_pack(&pps, &pinfo->desc->dsc);
+@@ -237,6 +252,46 @@
+ 		.vsync_start = 1920 + 2760,
+ 		.vsync_end = 1920 + 2760 + 1,
+ 		.vtotal = 1920 + 2760 + 1 + 15,
++	},
++	/*
++	 * Ours, from the rate select in icna3512_init_sequence(): the 60/120Hz modes' pixel clock
++	 * with the frame stretched to the rate, and upstream's 165Hz timings
++	 */
++	{
++		/* 50Hz */
++		.clock = (1080 + 156 + 1 + 23) * (1920 + 3699 + 1 + 15) * 50 / 1000,
++		.hdisplay = 1080,
++		.hsync_start = 1080 + 156,
++		.hsync_end = 1080 + 156 + 1,
++		.htotal = 1080 + 156 + 1 + 23,
++		.vdisplay = 1920,
++		.vsync_start = 1920 + 3699,
++		.vsync_end = 1920 + 3699 + 1,
++		.vtotal = 1920 + 3699 + 1 + 15,
++	},
++	{
++		/* 145Hz */
++		.clock = (1080 + 156 + 1 + 23) * (1920 + 7 + 1 + 15) * 145 / 1000,
++		.hdisplay = 1080,
++		.hsync_start = 1080 + 156,
++		.hsync_end = 1080 + 156 + 1,
++		.htotal = 1080 + 156 + 1 + 23,
++		.vdisplay = 1920,
++		.vsync_start = 1920 + 7,
++		.vsync_end = 1920 + 7 + 1,
++		.vtotal = 1920 + 7 + 1 + 15,
++	},
++	{
++		/* 165Hz: upstream's timings (panel-chipone-icna35xx) */
++		.clock = (1080 + 98 + 1 + 23) * (1920 + 20 + 1 + 15) * 165 / 1000,
++		.hdisplay = 1080,
++		.hsync_start = 1080 + 98,
++		.hsync_end = 1080 + 98 + 1,
++		.htotal = 1080 + 98 + 1 + 23,
++		.vdisplay = 1920,
++		.vsync_start = 1920 + 20,
++		.vsync_end = 1920 + 20 + 1,
++		.vtotal = 1920 + 20 + 1 + 15,
+ 	}
+ };
+ 

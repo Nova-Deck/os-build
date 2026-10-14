@@ -1,0 +1,70 @@
+From: gennro <gennro2004@gmail.com>
+Subject: [PATCH] drm/panel: icna35xx: use the Portal's Android refresh rate setup
+
+The ICNA3512 init sequence differs from AYN's own panel setup in the
+Odin 2 Portal's Android DT (dtbo, qcom,mdss_dsi_icna3512_dsc_cmd,
+timing@0 for 60Hz and timing@1 for 120Hz) in a few bytes:
+
+  60Hz:  B3 byte 5 is 0xFF (was 0xC8); CB has 0x09 before its last
+         byte (was missing); 0x48 is written 0x30, then 0x00 (was 0x00)
+  120Hz: B3 byte 23 is 0xB9 (was 0x9C); D9 ends with seven zero bytes
+         (was 0x11, 0xFF); 0x48 is written 0x00, then 0x30 (was 0x30)
+  both:  0x48 0x00 right after the FD unlock, as Android sends it
+
+Send exactly Android's commands. The order of PPS and display on is
+kept: Android turns the display on before the rate setup, we keep it
+last, so no frame shows before the panel is configured.
+---
+--- a/drivers/gpu/drm/panel/panel-chipone-icna35xx.c
++++ b/drivers/gpu/drm/panel/panel-chipone-icna35xx.c
+@@ -103,6 +103,7 @@
+ 
+     mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0x9C, 0xA5, 0xA5);
+     mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0xFD, 0x5A, 0x5A);
++	mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0x48, 0x00);
+ 
+ 	mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0x53, 0xE0);
+     mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0x35, 0x00);
+@@ -114,12 +115,13 @@
+     mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0x9F, 0x0F);
+     mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0xCE, 0x22);
+ 
++	/* The refresh rate setup from AYN's Android DT (dtbo, timing@0/@1) */
+ 	mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0x9F, 0x01);
+ 	if (cur_vrefresh == 120) {
+ 		mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0xB3, 
+                 0x00, 0xE0, 0xA0, 0x10, 0xC8, 0x00, 0x02, 0x83, 
+                 0x00, 0x10, 0x14, 0x00, 0x00, 0xC3, 0x00, 0x10, 
+-                0x14, 0x00, 0x00, 0xE0, 0x10, 0x10, 0x9C, 0x00, 
++                0x14, 0x00, 0x00, 0xE0, 0x10, 0x10, 0xB9, 0x00,
+                 0x00, 0xE0, 0xA0, 0x10, 0xC8, 0x22, 0x18, 0x18, 
+                 0x18, 0x18, 0x18);
+         mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0x9F, 0x07);
+@@ -127,14 +129,15 @@
+                 0x04, 0x0C, 0x08, 0x0C, 0x04, 0x00, 0xC4);
+         mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0xD9,
+                 0x88, 0x40, 0x40, 0x88, 0x40, 0x40, 0x00, 0xEB,
+-                0x11, 0xFF);
++                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00);
+         mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0xCE,
+                 0x01, 0x01, 0x01, 0x01, 0x04, 0x09, 0x2C);
++        mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0x48, 0x00);
+         mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0x48, 0x30);
+ 	}
+ 	else {
+         mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0xB3, 
+-                0x00, 0xE0, 0xA0, 0x10, 0xC8, 0x00);
++                0x00, 0xE0, 0xA0, 0x10, 0xFF, 0x00);
+         mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0x9F, 0x07);
+         mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0xB2,
+                 0x04, 0x18, 0x08, 0x0C, 0x02, 0x00, 0xC4);
+@@ -142,7 +145,8 @@
+                 0x88, 0x4A, 0x4A, 0x88, 0x4A, 0x4A, 0x00, 0xEB, 
+                 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00);
+         mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0xCB,
+-                0x01, 0x01, 0x01, 0x01, 0x04, 0x2C);
++                0x01, 0x01, 0x01, 0x01, 0x04, 0x09, 0x2C);
++        mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0x48, 0x30);
+         mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0x48, 0x00);
+ 	}
+ 

@@ -1,0 +1,37 @@
+From: gennro <gennro2004@gmail.com>
+Subject: [PATCH] power: supply: qcom_fg: report charge_now and charge_full
+
+The PM8150B fuel gauge reports capacity (%) and current_now but neither
+charge_now nor energy_now, so userspace that works out the time left
+from charge / current (MangoHud, UPower) shows 0. Report charge_now as
+capacity x charge_full_design and charge_full as the design capacity
+(the gauge doesn't learn the battery's real capacity).
+---
+--- a/drivers/power/supply/qcom_fg.c
++++ b/drivers/power/supply/qcom_fg.c
+@@ -861,6 +861,8 @@
+ 	POWER_SUPPLY_PROP_VOLTAGE_MIN_DESIGN,
+ 	POWER_SUPPLY_PROP_VOLTAGE_MAX_DESIGN,
+ 	POWER_SUPPLY_PROP_CHARGE_FULL_DESIGN,
++	POWER_SUPPLY_PROP_CHARGE_FULL,
++	POWER_SUPPLY_PROP_CHARGE_NOW,
+ 	POWER_SUPPLY_PROP_PRESENT,
+ 	POWER_SUPPLY_PROP_TEMP,
+ 	POWER_SUPPLY_PROP_TEMP_MIN,
+@@ -935,6 +937,16 @@
+ 	case POWER_SUPPLY_PROP_CHARGE_FULL_DESIGN:
+ 		val->intval = chip->batt_info->charge_full_design_uah;
+ 		break;
++	case POWER_SUPPLY_PROP_CHARGE_FULL:
++		/* The gauge doesn't learn capacity: report the design value */
++		val->intval = chip->batt_info->charge_full_design_uah;
++		break;
++	case POWER_SUPPLY_PROP_CHARGE_NOW:
++		ret = chip->ops->get_capacity(chip, &temp);
++		if (ret)
++			break;
++		val->intval = chip->batt_info->charge_full_design_uah / 100 * temp;
++		break;
+ 	case POWER_SUPPLY_PROP_PRESENT:
+ 		val->intval = 1;
+ 		break;

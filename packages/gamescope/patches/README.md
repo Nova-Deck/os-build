@@ -26,6 +26,7 @@ root (the `gamescope/` checkout inside makepkg's `$srcdir`) by
 0021-libliftoff-give-planes-the-layer-zpos.patch    (patches the libliftoff SUBMODULE)
 0023-xdg-titles-are-reported-to-steam.patch          (NOVADECK_ANDROID_APPID root property; ConVar touch_passthrough_xdg_titles)
 0025-steamcompmgr-elapsed-time-fps-limiter.patch     (ConVar limiter_use_elapsed_time, default on)
+0026-drm-offer-an-edid-less-internal-panels-native-modes-as-refresh-rates.patch
 ```
 
 `0008`-`0013` are **retired** (see below). The numbering is kept as-is rather than compacted, so
@@ -388,6 +389,21 @@ slack, the same scheme upstream already uses for VRR. ConVar `limiter_use_elapse
 on) restores the divisor gate live when set to 0. Taken together with `kernel/patches/0390`
 (real vblank timestamps on command-mode panels): that one fixed the cap running fast, this one the
 stutter when a game cannot hold it.
+
+`0026` — **an EDID-less internal panel's native modes become its refresh rates** (gennro, Kettle
+Linux `0019`, body unchanged). gamescope fills the dynamic refresh rates of an internal panel that
+no display script describes from the connector's modes at the preferred size — but that fallback
+sits in `ParseEDID()` after the EDID is parsed, and a DSI panel has no EDID, so it never ran. With
+the list empty, Steam's refresh-rate slider only capped fps and the panel never left its top mode.
+Measured on the Pocket FIT before the patch (modes 144/120/90/60, slider at 60): CRTC still
+1080x1920@144, `GAMESCOPE_DYNAMIC_REFRESH` = `GAMESCOPE_DISPLAY_REFRESH_RATE_FEEDBACK` = 144, and a
+60 fps-capped game ran at a solid 48 fps (each frame waiting three 144 Hz vblanks). After it, the
+slider switches the CRTC (HW-checked on the FIT, 2026-10-14). Kettle's opt-in knobs on top of it
+(`ui_refresh_hz`, generated lower rates, `refresh_hz`, `auto_refresh_max_hz`) are not taken.
+`ui_refresh_hz` was tried and dropped: it did run the Steam UI at 60 Hz, but Steam's Quick Access
+slider kept showing its own stored request (144), so the screen said one rate while the panel ran
+another. With no game open, gamescope ignores Steam's request anyway
+(`GAMESCOPE_DISPLAY_DYNAMIC_REFRESH_BASED_ON_GAME_PRESENCE`) and runs the panel's highest mode.
 
 Drop the patch files here with those exact names (or rename and update `source.pin`'s
 `patches:` line). **Until a declared patch is present, `make overlay` / `make base` fail fast**

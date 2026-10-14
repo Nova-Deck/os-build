@@ -1,0 +1,17 @@
+# Lazy IOMMU invalidation (DMA-FQ) for the WCN7850 Wi-Fi (ath12k, PCI 17cb:1107).
+#
+# Every IOMMU group defaults to strict (DMA): each RX buffer unmap waits for an
+# SMMU TLB sync with interrupts off. DMA-FQ batches those into one flush per
+# 256 unmaps per CPU, or every 10 ms.
+#
+# HW-measured on the KONKR Pocket FIT, 2026-10-14 (5 GHz 80 MHz EHT, 2 GB RX
+# x3 each): softirq time per GB received 6.4-6.8 s -> 4.9-5.0 s, softirq+irq
+# ~7.9 s -> ~6.5 s; throughput unchanged (~590 Mbit/s, link-bound). No SMMU
+# faults.
+#
+# Trade-off: until the flush the device can still reach just-unmapped pages,
+# so an ath12k write-after-unmap bug corrupts memory silently instead of
+# raising an SMMU fault. Strict -> DMA-FQ switches live; going back needs a
+# driver unbind or a reboot without this rule. Matches only the WCN7850, so
+# the SM8250 boards' Wi-Fi is untouched.
+ACTION=="add", SUBSYSTEM=="pci", ATTR{vendor}=="0x17cb", ATTR{device}=="0x1107", ATTR{iommu_group/type}="DMA-FQ"

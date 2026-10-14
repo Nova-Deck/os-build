@@ -1,0 +1,79 @@
+From: Kettle Linux <noreply@kettlelinux>
+Subject: [PATCH] arm64: dts: qcom: sm8250: vote DDR bandwidth for the GPU
+
+Mainline gives the A650 no interconnect path, and its GMU bandwidth
+table is a single "off" entry (a650_build_bw_table: "TODO: bus
+scaling"), so the GPU never asks for DDR bandwidth: memory clocks follow
+only the CPU and LLCC bandwidth monitors, which lag a GPU-bound game
+(qnm_gpu reads 0/0 in interconnect_summary while the GPU is pinned at
+587 MHz).
+
+Add the gfx-mem path and per-OPP peak votes matching the stock Android
+bus table. These are the bandwidth half of ROCKNIX's SM8250
+9998-gpu-tuning, without its overclock ladder and ACD levels. The vote
+is dropped when the GPU runtime-suspends (a6xx_gmu_stop sets a NULL
+OPP), so idle power is unaffected.
+
+---
+--- a/arch/arm64/boot/dts/qcom/sm8250.dtsi
++++ b/arch/arm64/boot/dts/qcom/sm8250.dtsi
+@@ -2956,6 +2956,9 @@
+ 
+ 			iommus = <&adreno_smmu 0 0x401>;
+ 
++			interconnects = <&gem_noc MASTER_GRAPHICS_3D 0 &mc_virt SLAVE_EBI_CH0 0>;
++			interconnect-names = "gfx-mem";
++
+ 			operating-points-v2 = <&gpu_opp_table>;
+ 
+ 			qcom,gmu = <&gmu>;
+@@ -2977,42 +2980,49 @@
+ 					opp-hz = /bits/ 64 <670000000>;
+ 					opp-level = <RPMH_REGULATOR_LEVEL_NOM_L1>;
+ 					opp-supported-hw = <0xa>;
++					opp-peak-kBps = <8171875>;
+ 				};
+ 
+ 				opp-587000000 {
+ 					opp-hz = /bits/ 64 <587000000>;
+ 					opp-level = <RPMH_REGULATOR_LEVEL_NOM>;
+ 					opp-supported-hw = <0xb>;
++					opp-peak-kBps = <8171875>;
+ 				};
+ 
+ 				opp-525000000 {
+ 					opp-hz = /bits/ 64 <525000000>;
+ 					opp-level = <RPMH_REGULATOR_LEVEL_SVS_L2>;
+ 					opp-supported-hw = <0xf>;
++					opp-peak-kBps = <6074218>;
+ 				};
+ 
+ 				opp-490000000 {
+ 					opp-hz = /bits/ 64 <490000000>;
+ 					opp-level = <RPMH_REGULATOR_LEVEL_SVS_L1>;
+ 					opp-supported-hw = <0xf>;
++					opp-peak-kBps = <6074218>;
+ 				};
+ 
+ 				opp-441600000 {
+ 					opp-hz = /bits/ 64 <441600000>;
+ 					opp-level = <RPMH_REGULATOR_LEVEL_SVS_L0>;
+ 					opp-supported-hw = <0xf>;
++					opp-peak-kBps = <6074218>;
+ 				};
+ 
+ 				opp-400000000 {
+ 					opp-hz = /bits/ 64 <400000000>;
+ 					opp-level = <RPMH_REGULATOR_LEVEL_SVS>;
+ 					opp-supported-hw = <0xf>;
++					opp-peak-kBps = <3972656>;
+ 				};
+ 
+ 				opp-305000000 {
+ 					opp-hz = /bits/ 64 <305000000>;
+ 					opp-level = <RPMH_REGULATOR_LEVEL_LOW_SVS>;
+ 					opp-supported-hw = <0xf>;
++					opp-peak-kBps = <1761718>;
+ 				};
+ 			};
+ 		};

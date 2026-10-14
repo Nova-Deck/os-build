@@ -1,0 +1,279 @@
+Subject: [PATCH] add the game priority Vulkan layer
+
+The layer source, its implicit-layer manifest and its licence, carried as new
+files: this package has no upstream tarball, so the overlay build applies this
+patch into an empty source directory.
+---
+diff --git a/game_priority.c b/game_priority.c
+new file mode 100644
+index 0000000..006abfc
+--- /dev/null
++++ b/game_priority.c
+@@ -0,0 +1,210 @@
++/* VK_LAYER_NOVADECK_game_priority: a game's queues run at LOW global priority, so the Steam UI,
++ * Xwayland and mangoapp preempt the game's GPU work instead of waiting behind it.
++ * Enabled by NOVADECK_GAME_LOWPRIO=1, which novadeck-steam writes into Steam's games-only
++ * environment ($XDG_RUNTIME_DIR/steam/env/gfx.txt, read by steam-launch-wrapper).
++ *
++ * On drm/msm with preemption (A7xx: 4 rings), turnip maps LOW to ring 3 and MEDIUM to ring 2;
++ * gamescope (REALTIME) has ring 0. On a single-ring GPU (A650) LOW and MEDIUM are the same level
++ * and this does nothing; there the kernel's within-ring order decides. A queue the game asks a
++ * priority for itself is left alone, and if the driver refuses LOW the game's own request is
++ * created unchanged. */
++#include <pthread.h>
++#include <stdlib.h>
++#include <string.h>
++#include <vulkan/vk_layer.h>
++#include <vulkan/vulkan.h>
++
++#define EXPORT __attribute__((visibility("default")))
++
++struct inst {
++  VkInstance instance;
++  PFN_vkGetInstanceProcAddr gipa;
++  PFN_vkEnumerateDeviceExtensionProperties enum_exts;
++  struct inst *next;
++};
++
++struct dev {
++  void *key; /* the loader's dispatch table pointer */
++  PFN_vkGetDeviceProcAddr gdpa;
++  struct dev *next;
++};
++
++static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
++static struct inst *insts;
++static struct dev *devs;
++
++static void *key_of(const void *handle) { return *(void *const *)handle; }
++
++static struct inst *find_inst(void *key) {
++  pthread_mutex_lock(&lock);
++  struct inst *i = insts;
++  while (i && key_of(i->instance) != key) i = i->next;
++  pthread_mutex_unlock(&lock);
++  return i;
++}
++
++static struct dev *find_dev(void *key) {
++  pthread_mutex_lock(&lock);
++  struct dev *d = devs;
++  while (d && d->key != key) d = d->next;
++  pthread_mutex_unlock(&lock);
++  return d;
++}
++
++static const void *find_chain(const void *pnext, VkStructureType type, VkLayerFunction func) {
++  for (const VkBaseInStructure *s = pnext; s; s = s->pNext)
++    if (s->sType == type && ((const VkLayerInstanceCreateInfo *)s)->function == func) return s;
++  return NULL;
++}
++
++static VKAPI_ATTR VkResult VKAPI_CALL CreateInstance(const VkInstanceCreateInfo *info,
++                                                     const VkAllocationCallbacks *alloc,
++                                                     VkInstance *instance) {
++  VkLayerInstanceCreateInfo *chain = (VkLayerInstanceCreateInfo *)find_chain(
++      info->pNext, VK_STRUCTURE_TYPE_LOADER_INSTANCE_CREATE_INFO, VK_LAYER_LINK_INFO);
++  if (!chain) return VK_ERROR_INITIALIZATION_FAILED;
++  PFN_vkGetInstanceProcAddr gipa = chain->u.pLayerInfo->pfnNextGetInstanceProcAddr;
++  chain->u.pLayerInfo = chain->u.pLayerInfo->pNext;
++  PFN_vkCreateInstance create = (PFN_vkCreateInstance)gipa(VK_NULL_HANDLE, "vkCreateInstance");
++  VkResult r = create(info, alloc, instance);
++  if (r != VK_SUCCESS) return r;
++  struct inst *i = calloc(1, sizeof(*i));
++  if (!i) return VK_SUCCESS; /* pass-through without the layer's work */
++  i->instance = *instance;
++  i->gipa = gipa;
++  i->enum_exts = (PFN_vkEnumerateDeviceExtensionProperties)gipa(*instance, "vkEnumerateDeviceExtensionProperties");
++  pthread_mutex_lock(&lock);
++  i->next = insts;
++  insts = i;
++  pthread_mutex_unlock(&lock);
++  return VK_SUCCESS;
++}
++
++static VKAPI_ATTR void VKAPI_CALL DestroyInstance(VkInstance instance, const VkAllocationCallbacks *alloc) {
++  void *key = key_of(instance);
++  pthread_mutex_lock(&lock);
++  struct inst **p = &insts, *i = NULL;
++  while (*p && key_of((*p)->instance) != key) p = &(*p)->next;
++  if (*p) { i = *p; *p = i->next; }
++  pthread_mutex_unlock(&lock);
++  if (!i) return;
++  PFN_vkDestroyInstance destroy = (PFN_vkDestroyInstance)i->gipa(instance, "vkDestroyInstance");
++  free(i);
++  destroy(instance, alloc);
++}
++
++static int has_ext(struct inst *i, VkPhysicalDevice gpu, const char *name) {
++  uint32_t n = 0;
++  if (!i->enum_exts || i->enum_exts(gpu, NULL, &n, NULL) != VK_SUCCESS || !n) return 0;
++  VkExtensionProperties *e = calloc(n, sizeof(*e));
++  int found = 0;
++  if (e && i->enum_exts(gpu, NULL, &n, e) == VK_SUCCESS)
++    for (uint32_t k = 0; k < n && !found; k++) found = !strcmp(e[k].extensionName, name);
++  free(e);
++  return found;
++}
++
++static VKAPI_ATTR VkResult VKAPI_CALL CreateDevice(VkPhysicalDevice gpu, const VkDeviceCreateInfo *info,
++                                                   const VkAllocationCallbacks *alloc, VkDevice *device) {
++  VkLayerDeviceCreateInfo *chain = (VkLayerDeviceCreateInfo *)find_chain(
++      info->pNext, VK_STRUCTURE_TYPE_LOADER_DEVICE_CREATE_INFO, VK_LAYER_LINK_INFO);
++  struct inst *i = find_inst(key_of(gpu));
++  if (!chain || !i) return VK_ERROR_INITIALIZATION_FAILED;
++  PFN_vkGetInstanceProcAddr gipa = chain->u.pLayerInfo->pfnNextGetInstanceProcAddr;
++  PFN_vkGetDeviceProcAddr gdpa = chain->u.pLayerInfo->pfnNextGetDeviceProcAddr;
++  chain->u.pLayerInfo = chain->u.pLayerInfo->pNext;
++  VkLayerDeviceLink *link = chain->u.pLayerInfo; /* the layers below advance it as they go */
++  PFN_vkCreateDevice create = (PFN_vkCreateDevice)gipa(i->instance, "vkCreateDevice");
++
++  /* LOW for every queue the game didn't give a priority, with the extension enabled */
++  const char *ext = has_ext(i, gpu, VK_KHR_GLOBAL_PRIORITY_EXTENSION_NAME) ? VK_KHR_GLOBAL_PRIORITY_EXTENSION_NAME
++                    : has_ext(i, gpu, VK_EXT_GLOBAL_PRIORITY_EXTENSION_NAME) ? VK_EXT_GLOBAL_PRIORITY_EXTENSION_NAME
++                                                                              : NULL;
++  uint32_t nq = info->queueCreateInfoCount, ne = info->enabledExtensionCount;
++  VkDeviceQueueCreateInfo *qs = ext ? calloc(nq ? nq : 1, sizeof(*qs)) : NULL;
++  VkDeviceQueueGlobalPriorityCreateInfoKHR *prios = ext ? calloc(nq ? nq : 1, sizeof(*prios)) : NULL;
++  const char **exts = ext ? calloc(ne + 1, sizeof(*exts)) : NULL;
++  VkResult r = VK_ERROR_INITIALIZATION_FAILED;
++  if (qs && prios && exts) {
++    int changed = 0;
++    for (uint32_t k = 0; k < nq; k++) {
++      qs[k] = info->pQueueCreateInfos[k];
++      int own = 0;
++      for (const VkBaseInStructure *s = qs[k].pNext; s; s = s->pNext)
++        own |= s->sType == VK_STRUCTURE_TYPE_DEVICE_QUEUE_GLOBAL_PRIORITY_CREATE_INFO_KHR;
++      if (own) continue;
++      prios[k] = (VkDeviceQueueGlobalPriorityCreateInfoKHR){
++          .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_GLOBAL_PRIORITY_CREATE_INFO_KHR,
++          .pNext = qs[k].pNext,
++          .globalPriority = VK_QUEUE_GLOBAL_PRIORITY_LOW_KHR,
++      };
++      qs[k].pNext = &prios[k];
++      changed = 1;
++    }
++    int enabled = 0;
++    for (uint32_t k = 0; k < ne; k++) {
++      exts[k] = info->ppEnabledExtensionNames[k];
++      enabled |= !strcmp(exts[k], VK_KHR_GLOBAL_PRIORITY_EXTENSION_NAME) ||
++                 !strcmp(exts[k], VK_EXT_GLOBAL_PRIORITY_EXTENSION_NAME);
++    }
++    if (!enabled) exts[ne++] = ext;
++    if (changed) {
++      VkDeviceCreateInfo low = *info;
++      low.pQueueCreateInfos = qs;
++      low.ppEnabledExtensionNames = exts;
++      low.enabledExtensionCount = ne;
++      r = create(gpu, &low, alloc, device);
++    }
++  }
++  free(qs);
++  free(prios);
++  free(exts);
++  /* nothing to change, or the driver refused: the game's own request, unchanged */
++  if (r != VK_SUCCESS) {
++    chain->u.pLayerInfo = link;
++    r = create(gpu, info, alloc, device);
++  }
++  if (r != VK_SUCCESS) return r;
++
++  struct dev *d = calloc(1, sizeof(*d));
++  if (!d) return VK_SUCCESS;
++  d->key = key_of(*device);
++  d->gdpa = gdpa;
++  pthread_mutex_lock(&lock);
++  d->next = devs;
++  devs = d;
++  pthread_mutex_unlock(&lock);
++  return VK_SUCCESS;
++}
++
++static VKAPI_ATTR void VKAPI_CALL DestroyDevice(VkDevice device, const VkAllocationCallbacks *alloc) {
++  void *key = key_of(device);
++  pthread_mutex_lock(&lock);
++  struct dev **p = &devs, *d = NULL;
++  while (*p && (*p)->key != key) p = &(*p)->next;
++  if (*p) { d = *p; *p = d->next; }
++  pthread_mutex_unlock(&lock);
++  if (!d) return;
++  PFN_vkDestroyDevice destroy = (PFN_vkDestroyDevice)d->gdpa(device, "vkDestroyDevice");
++  free(d);
++  destroy(device, alloc);
++}
++
++EXPORT VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vkGetDeviceProcAddr(VkDevice device, const char *name) {
++  if (!strcmp(name, "vkGetDeviceProcAddr")) return (PFN_vkVoidFunction)vkGetDeviceProcAddr;
++  if (!strcmp(name, "vkDestroyDevice")) return (PFN_vkVoidFunction)DestroyDevice;
++  struct dev *d = find_dev(key_of(device));
++  return d ? d->gdpa(device, name) : NULL;
++}
++
++EXPORT VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vkGetInstanceProcAddr(VkInstance instance, const char *name) {
++  if (!strcmp(name, "vkGetInstanceProcAddr")) return (PFN_vkVoidFunction)vkGetInstanceProcAddr;
++  if (!strcmp(name, "vkCreateInstance")) return (PFN_vkVoidFunction)CreateInstance;
++  if (!strcmp(name, "vkDestroyInstance")) return (PFN_vkVoidFunction)DestroyInstance;
++  if (!strcmp(name, "vkCreateDevice")) return (PFN_vkVoidFunction)CreateDevice;
++  if (!strcmp(name, "vkGetDeviceProcAddr")) return (PFN_vkVoidFunction)vkGetDeviceProcAddr;
++  if (!strcmp(name, "vkDestroyDevice")) return (PFN_vkVoidFunction)DestroyDevice;
++  if (!instance) return NULL;
++  struct inst *i = find_inst(key_of(instance));
++  return i ? i->gipa(instance, name) : NULL;
++}
+diff --git a/VkLayer_novadeck_game_priority.json b/VkLayer_novadeck_game_priority.json
+new file mode 100644
+index 0000000..1e6041f
+--- /dev/null
++++ b/VkLayer_novadeck_game_priority.json
+@@ -0,0 +1,17 @@
++{
++  "file_format_version": "1.1.0",
++  "layer": {
++    "name": "VK_LAYER_NOVADECK_game_priority",
++    "description": "Games' GPU queues at low priority, below the Steam UI",
++    "implementation_version": "1",
++    "library_path": "/usr/lib/libVkLayer_novadeck_game_priority.so",
++    "type": "GLOBAL",
++    "api_version": "1.4.309",
++    "enable_environment": {
++      "NOVADECK_GAME_LOWPRIO": "1"
++    },
++    "disable_environment": {
++      "DISABLE_NOVADECK_GAME_LOWPRIO": "1"
++    }
++  }
++}
+diff --git a/LICENSE b/LICENSE
+new file mode 100644
+index 0000000..b2d0333
+--- /dev/null
++++ b/LICENSE
+@@ -0,0 +1,28 @@
++BSD 3-Clause License
++
++Copyright (c) 2026, Kettle Linux contributors
++
++Redistribution and use in source and binary forms, with or without
++modification, are permitted provided that the following conditions are met:
++
++1. Redistributions of source code must retain the above copyright notice, this
++   list of conditions and the following disclaimer.
++
++2. Redistributions in binary form must reproduce the above copyright notice,
++   this list of conditions and the following disclaimer in the documentation
++   and/or other materials provided with the distribution.
++
++3. Neither the name of the copyright holder nor the names of its
++   contributors may be used to endorse or promote products derived from
++   this software without specific prior written permission.
++
++THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
++AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
++DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
++FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
++DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
++SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
++CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
++OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.

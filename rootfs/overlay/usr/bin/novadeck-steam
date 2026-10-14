@@ -182,6 +182,30 @@ fi
 export SDL_VIDEO_MINIMIZE_ON_FOCUS_LOSS=0      # keep the shell up when it loses focus
 export vk_xwayland_wait_ready=false            # don't block on buffers idling before present to gamescope
 
+# GAMES run at LOW GPU priority (packages/novadeck-gpu-priority), so the Steam UI, Xwayland and
+# mangoapp preempt them instead of waiting behind their frames. The flag goes into the file Steam's
+# steam-launch-wrapper loads into each GAME's environment ($XDG_RUNTIME_DIR/steam/env/gfx.txt;
+# strings in linuxarm64/steam-launch-wrapper: load_environment, apply_gfx_environment), never into
+# Steam's own, which is the point: the UI must stay at MEDIUM. $XDG_RUNTIME_DIR is a tmpfs, so this
+# is rewritten every session. The wrapper also reads ~/.config/steam/env/gfx.txt, which is yours:
+# put DISABLE_NOVADECK_GAME_LOWPRIO=1 there to turn it off everywhere, or use that as a launch
+# option for one title.
+#
+# TU_AUTOTUNE_FLAGS=preempt_optimize, on the A7xx boards only (SM8550 A740, SM8650 A750): Turnip's
+# autotuner picks smaller tiles so a game's work reaches a preemption point sooner, which is how
+# soon the UI gets the GPU once the layer above has put it on a higher ring. Valve sets the same in
+# its own games' environment for the Steam Frame. Not on the A650 (SM8250): one ring, no
+# preemption, so smaller tiles would only cost efficiency. Unmeasured here.
+if [ -n "${XDG_RUNTIME_DIR:-}" ]; then
+  mkdir -p "${XDG_RUNTIME_DIR}/steam/env"
+  {
+    echo NOVADECK_GAME_LOWPRIO=1
+    case "${NOVADECK_SOC_CLASS:-}" in
+      SM8550|SM8650) echo TU_AUTOTUNE_FLAGS=preempt_optimize ;;
+    esac
+  } >"${XDG_RUNTIME_DIR}/steam/env/gfx.txt"
+fi
+
 # -steamdeck/-steamos3: Deck handheld behaviour. -gamepadui: Big Picture as the shell.
 #
 # NOT -deckard, and this is not a preference. -deckard asserts Steam Frame device identity, which

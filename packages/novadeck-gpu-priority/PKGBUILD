@@ -1,0 +1,52 @@
+# novadeck-gpu-priority — games run at LOW GPU priority, below the Steam UI.
+#
+# WHY. The Steam UI, Xwayland and mangoapp submit at MEDIUM; so does a game, and on drm/msm the
+# same priority means the same ring, where the UI's frames wait behind every frame the game has
+# queued — Quick Access stutters in game. Measured on an SM8550 handheld over Skyrim (60 Hz, 60 fps
+# limit): Quick Access 16-49 fps, p95 33-49 ms without this; a steady 60, p95 17 ms with it.
+# Raising the UI instead (TU_DEBUG=hiprio) also reached 60 fps but froze the menus twice in
+# 15 minutes, so the game goes down rather than the UI up.
+#
+# HOW. VK_LAYER_NOVADECK_game_priority chains vkCreateDevice and adds
+# VkDeviceQueueGlobalPriorityCreateInfoKHR(LOW) to every queue the game did not give a priority
+# itself, enabling VK_KHR/EXT_global_priority. Turnip turns LOW into msm level 11 = ring 3 on the
+# A7xx (SM8550 A740, SM8650 A750: four preemptible rings), MEDIUM into level 8 = ring 2, so the
+# UI preempts the game. On the single-ring A650 (SM8250) LOW and MEDIUM are the same level and
+# the layer changes nothing; the kernel's within-ring order (kernel/patches/0270) is what keeps
+# the UI ahead there. If the driver refuses LOW, the game's own request is created unchanged.
+#
+# SCOPE. The manifest's enable_environment gates it on NOVADECK_GAME_LOWPRIO=1, which
+# usr/bin/novadeck-steam writes into $XDG_RUNTIME_DIR/steam/env/gfx.txt — the file Steam's
+# steam-launch-wrapper loads into each GAME's environment, never Steam's own. Proton ARM64 and
+# native arm64 games use the aarch64 Vulkan loader, so this one layer covers them; an x86 loader
+# under FEX cannot load the aarch64 library and skips the implicit layer. Off per title with the
+# launch option `DISABLE_NOVADECK_GAME_LOWPRIO=1 %command%`.
+pkgname=novadeck-gpu-priority
+pkgver=1.0
+pkgrel=1
+pkgdesc='Vulkan layer: games run at low GPU priority, below the Steam UI'
+arch=('aarch64')
+license=('BSD-3-Clause')
+depends=('glibc' 'vulkan-icd-loader')
+makedepends=('vulkan-headers')
+source=()
+
+prepare() {
+  # Empty on purpose: build-overlay.sh applies patches/0001 right after this cd, and that patch
+  # is the source.
+  mkdir -p "${pkgname}"
+  cd "${pkgname}"
+}
+
+build() {
+  cd "${pkgname}"
+  cc ${CFLAGS} ${LDFLAGS} -shared -fPIC -fvisibility=hidden \
+    -o libVkLayer_novadeck_game_priority.so game_priority.c -lpthread
+}
+
+package() {
+  cd "${pkgname}"
+  install -Dm755 libVkLayer_novadeck_game_priority.so -t "${pkgdir}/usr/lib"
+  install -Dm644 VkLayer_novadeck_game_priority.json -t "${pkgdir}/usr/share/vulkan/implicit_layer.d"
+  install -Dm644 LICENSE -t "${pkgdir}/usr/share/licenses/${pkgname}"
+}

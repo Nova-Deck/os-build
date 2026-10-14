@@ -1,0 +1,12 @@
+# novadeck-gpu-priority — an implicit Vulkan layer that runs a game's queues at LOW global
+# priority, so the Steam UI, Xwayland and mangoapp preempt the game's GPU work instead of queueing
+# behind its frames. The source is ours to carry (no upstream tarball): patches/0001 adds it as new
+# files into the empty directory the PKGBUILD's prepare() makes, which is how a repo-owned source
+# rides this pipeline and gets hashed by packages/inputhash.sh like any other patch.
+#
+# Enabled per game by NOVADECK_GAME_LOWPRIO=1, which usr/bin/novadeck-steam writes into Steam's
+# games-only environment file. See the PKGBUILD and the patch header for the mechanism.
+name: novadeck-gpu-priority
+pkgbuild_local: PKGBUILD
+pkgrel_suffix: 1
+patches: 0001-add-the-game-priority-layer.patch

@@ -391,3 +391,14 @@
 &spk_amp_r {
 	firmware-name = "qcom/sm8550/retroidpocket/rp6/aw883xx_acf.bin";
 };
+
+/*
+ * Rumble: the body motor is an LRA, and stock Android drives it as one at
+ * 1300 mV (Retroid's RP6 and Nova device tree; the Nova includes this file).
+ * The Odin 2 setup it inherits (ERM, 5000 mV) feeds it plain DC with
+ * auto-resonance off, so a rumble was a single click or barely felt.
+ */
+&pm8550b_hv_haptics {
+	/delete-property/ qcom,use-erm;
+	qcom,vmax-mv = <1300>;
+};

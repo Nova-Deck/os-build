@@ -117,3 +117,20 @@ this image `/etc/passwd` and `/var` are *build products* rather than device stat
 - `usr/lib/systemd/zram-generator.conf` — the image's only swap device, `ram/2` compressed in RAM.
   **Coupled to the kernel:** it needs `CONFIG_ZRAM` + the zstd backend, which `kernel/build.sh`
   asserts, because without them there is no `zram0`, no swap, and no error.
+
+**Game-time quiet — keeping background work off a game's CPUs**
+- `usr/lib/novadeck/cpu-affinity.conf` + `usr/lib/systemd/system-generators/novadeck-cpu-affinity`
+  — `CPUAffinity` by CLASS, resolved per device at every boot from `cpu_capacity`, so a new SoC
+  layout needs no edit. `interactive` (the services a game talks to: InputPlumber, Decky's
+  `plugin_loader`, `novadeck-steamos-manager`, `novadeck-powerbuttond`) = every CPU outside the
+  prime cluster; `background` (`novadeck-powerd`, `-vpower`, `-pairingd`, `-decky-watchdog`,
+  `-power-led`) = the little cluster. Today: SM8250 0-6 / 0-3, SM8550 0-6 / 0-2, SM8650 0-6 / 0-1.
+  Both always contain cpu0, the one CPU the suspend engine never offlines; uniform cores get no
+  drop-in at all. The generator writes `/run/systemd/generator/<unit>.d/50-novadeck-cpus.conf`
+  (`systemctl cat <unit>` shows it). Affinity is inherited by a service's whole process tree,
+  which is why Decky is not `background`: its plugins start installs and downloads.
+  `tests/test-cpu-affinity.sh` drives it against fabricated topologies.
+- `etc/systemd/system/{shadow,archlinux-keyring-wkd-sync,man-db}.timer -> /dev/null` — Arch
+  maintenance timers with nothing to do on an image OS (users and groups are pinned at build time,
+  release images carry no pacman keyring, man-db is not installed), which can otherwise fire in
+  the middle of a game. `man-db.timer` is masked ahead of time, in case a dependency pulls man-db in.

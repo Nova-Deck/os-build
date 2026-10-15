@@ -71,7 +71,7 @@ replies — lore was not reachable, so "never posted" means no patchwork hit). `
 trees (msm-next, qcom `clk-for-7.4` / `arm64-for-7.4`, pci `next`). Re-audit on
 every bump: this table is a snapshot, the `Drop when` column is what to re-check.
 
-Totals: 5 `mainline`, 16 `posted`, 22 `novadeck`, 71 `community`. (`0310` and `0430` were
+Totals: 5 `mainline`, 16 `posted`, 23 `novadeck`, 71 `community`. (`0310` and `0430` were
 deleted at the 7.2.8 bump: stable backported both, byte-identical.) Half the stack will
 never land upstream, which is why provenance is a table and not a number band.
 
@@ -175,6 +175,7 @@ never land upstream, which is why provenance is a table and not a number band.
 | `0980` | novadeck | Never posted. | never |
 | `1010` | community | Edouard Durand. Never posted; the bug is still in v7.3-rc4. | when sent and merged |
 | `1015` | posted | Runyu Xiao, "[PATCH v4 ath-current] wifi: ath12k: convert scan timeout to wiphy delayed work", via Kettle Linux `1280`, body byte-identical: stop (wiphy mutex held) synchronously cancelled a scan-timeout worker that waits for the same mutex — a deadlock. | when it lands in 7.2.y |
+| `1020` | novadeck | Written here, mirroring ath11k's `device_get_mac_address()`: the WCN7850 has no OTP address, so the firmware's is random per boot and Steam-saved networks stop matching. Consumes the `local-mac-address` stage-2 GRUB writes (`boot/patches/grub/0005`). Never posted; generic, worth sending. | when upstreamed |
 | `1030` | community | spycat88, ROCKNIX `0071`. A hack. | never |
 | `1040` | community | Kars Mulder's Linux-Pollrate-Patch via ROCKNIX `0506`. | never |
 | `1050` | community | Jacob Cook, ROCKNIX `5e52df2b9fba` (SM8250 `0018`, merged with PR #3382), written from the vendor smb5 `smblib_set_prop_pr_swap_in_progress` sequence. Never posted. | when mainline `qcom_pmic_typec_port` handles PR swap termination |

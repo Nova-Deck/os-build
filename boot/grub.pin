@@ -19,6 +19,9 @@ git_tag:    grub-2.14
 #   0001  grub-core/video/fb/*, include/grub/  framebuffer rotation (`set rotation=90|180|270`)
 #   0002  grub-core/commands/efi/novadeck.c    the boot-attempts counter module
 #   0003  grub-core/Makefile.core.def          GRUB's module manifest -- the stanza that builds it
+#   0004  grub-core/loader/efi/fdt.c           a fixup hook on the devicetree handed to Linux
+#   0005  grub-core/commands/efi/novadeck_radiomac.c  per-unit radio addresses from the SoC serial
+#   0006  grub-core/Makefile.core.def          the stanza that builds 0005
 #
 # 0001 is a three-commit series by kbader94 <kyle.bader94@gmail.com> (2024-06-17), carried
 # verbatim: it rewrites the fb dirty-region tracking to be 2D, adds a `rotation` enum to

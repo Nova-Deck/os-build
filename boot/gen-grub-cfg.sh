@@ -301,6 +301,22 @@ else
   sleep 10
 fi
 
+# --- stable radio addresses ----------------------------------------------------------------------
+# The Wi-Fi firmware makes up a new permanent MAC every boot (no OTP address on these radios), and
+# Steam pins every network it saves to that MAC, so saved networks stop matching after a reboot.
+# This reads the SoC serial from the firmware and arms a fixup that writes local-mac-address /
+# local-bd-address, derived from it, into whichever devicetree the chosen entry loads. It applies at
+# `linux` boot time, so one call here covers every entry below.
+#
+# A failure costs only the stable address, never the boot; the else arm holds the reason on screen.
+insmod novadeck_radiomac
+if novadeck_radiomac; then
+  true
+else
+  echo "novadeck: no stable Wi-Fi/Bluetooth address this boot — saved networks may ask again"
+  sleep 10
+fi
+
 EOF
 
 for i in "${!pids[@]}"; do

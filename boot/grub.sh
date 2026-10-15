@@ -61,6 +61,8 @@ echo "[grub] autogen.sh (regenerating the module tables for the novadeck stanza)
 ( cd "$SRCDIR" && ./autogen.sh )
 grep -q novadeck "$SRCDIR/grub-core/Makefile.in" \
   || { echo "autogen.sh did not pick up the novadeck module — is patch 0003 applied?" >&2; exit 1; }
+grep -q novadeck_radiomac "$SRCDIR/grub-core/Makefile.in" \
+  || { echo "autogen.sh did not pick up the novadeck_radiomac module — is patch 0006 applied?" >&2; exit 1; }
 
 BUILDDIR="$WORK/build"
 rm -rf "$BUILDDIR"; mkdir -p "$BUILDDIR"
@@ -103,12 +105,15 @@ make -j"$(nproc)" AWK=gawk
 #                           without it here the generated config's probe calls are "unknown
 #                           command" and every boot silently takes the PARTLABEL fallback.
 #   novadeck                novadeck_bootattempts, called once per boot by the generated grub.cfg
+#   novadeck_radiomac       stable per-unit Wi-Fi/Bluetooth addresses in the devicetree (0004-0006)
 MODULES="boot linux part_gpt fat btrfs loadenv search search_fs_file \
 search_fs_uuid search_label chain reboot halt sleep test true echo read \
-configfile regexp probe normal minicmd gfxterm efi_gop font all_video novadeck"
+configfile regexp probe normal minicmd gfxterm efi_gop font all_video novadeck \
+novadeck_radiomac"
 
 echo "[grub] grub-mkimage"
 test -f grub-core/novadeck.mod || { echo "novadeck.mod was not built — is patch 0003 applied?" >&2; exit 1; }
+test -f grub-core/novadeck_radiomac.mod || { echo "novadeck_radiomac.mod was not built — is patch 0006 applied?" >&2; exit 1; }
 ./grub-mkimage -d grub-core -O arm64-efi -p /EFI/steamos $MODULES \
   -o "$OUT/grubaa64.efi"
 

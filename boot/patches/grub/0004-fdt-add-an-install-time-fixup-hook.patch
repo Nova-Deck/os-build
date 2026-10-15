@@ -1,0 +1,78 @@
+Add an install-time fixup hook to the EFI device-tree loader.
+
+grub_fdt_install() is the last point where the tree Linux will receive
+exists in GRUB's memory: the `linux` loader calls it right before starting
+the kernel's EFI stub, which takes the tree from the configuration table it
+installs. This adds grub_fdt_set_fixup(), so one module can edit that tree
+in place first. novadeck_radiomac (0005) uses it to write per-unit radio
+addresses.
+
+The fixup always runs on the padded copy grub_fdt_load() makes, never on the
+raw `devicetree` blob, which is exactly the size of the .dtb file and has no
+room for a new property. When `linux` already made that copy (it does
+whenever there is an initrd, to add the initrd range under /chosen), the
+fixup runs on it. Otherwise install makes one first.
+
+A failing fixup is printed and the boot continues: whatever it edits is less
+important than booting. No fixup registered means no behaviour change.
+
+diff --git a/grub-core/loader/efi/fdt.c b/grub-core/loader/efi/fdt.c
+index e510b34..675b627 100644
+--- a/grub-core/loader/efi/fdt.c
++++ b/grub-core/loader/efi/fdt.c
+@@ -32,6 +32,7 @@
+ 
+ static void *loaded_fdt;
+ static void *fdt;
++static grub_fdt_fixup_t fdt_fixup;
+ 
+ #define FDT_ADDR_CELLS_STRING "#address-cells"
+ #define FDT_SIZE_CELLS_STRING "#size-cells"
+@@ -102,6 +103,16 @@ grub_fdt_install (void)
+   if (fdt == NULL && loaded_fdt == NULL)
+     return GRUB_ERR_NONE;
+ 
++  if (fdt_fixup)
++    {
++      /* loaded_fdt is exactly the size of the .dtb file, with no room to add
++	 a property, so a fixup always works on the padded copy. */
++      if (fdt == NULL && grub_fdt_load (GRUB_EFI_LINUX_FDT_EXTRA_SPACE) == NULL)
++	return grub_error (GRUB_ERR_OUT_OF_MEMORY, "failed to copy FDT for fixup");
++      if (fdt_fixup (fdt) != GRUB_ERR_NONE)
++	grub_print_error ();
++    }
++
+   b = grub_efi_system_table->boot_services;
+   status = b->install_configuration_table (&fdt_guid, fdt ? fdt : loaded_fdt);
+   if (status != GRUB_EFI_SUCCESS)
+@@ -112,6 +123,12 @@ grub_fdt_install (void)
+   return GRUB_ERR_NONE;
+ }
+ 
++void
++grub_fdt_set_fixup (grub_fdt_fixup_t fixup)
++{
++  fdt_fixup = fixup;
++}
++
+ void
+ grub_fdt_unload (void) {
+   if (!fdt) {
+diff --git a/include/grub/efi/fdtload.h b/include/grub/efi/fdtload.h
+index 713c942..721f0bd 100644
+--- a/include/grub/efi/fdtload.h
++++ b/include/grub/efi/fdtload.h
+@@ -29,4 +29,13 @@ grub_fdt_unload (void);
+ grub_err_t
+ grub_fdt_install (void);
+ 
++/* Called by grub_fdt_install() on the tree it is about to hand the kernel,
++   so a module can edit it in place. The tree has at least
++   GRUB_EFI_LINUX_FDT_EXTRA_SPACE bytes of slack. A failure is printed and
++   the boot goes on with the tree as the fixup left it. One fixup at a time;
++   NULL removes it. */
++typedef grub_err_t (*grub_fdt_fixup_t) (void *fdt);
++void
++grub_fdt_set_fixup (grub_fdt_fixup_t fixup);
++
+ #endif

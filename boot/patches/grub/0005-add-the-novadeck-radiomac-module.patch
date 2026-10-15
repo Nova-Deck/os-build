@@ -1,0 +1,308 @@
+Add the novadeck_radiomac module.
+
+One command, novadeck_radiomac, which reads the SoC serial number from
+Qualcomm's EFI_CHIPINFO_PROTOCOL and arms the 0004 fixup to write
+
+    local-mac-address = 02:00:<serial>   on the Wi-Fi node
+    local-bd-address  = 02:01:<serial>   on the Bluetooth node
+
+into the device tree handed to Linux.
+
+The WCN7850 (SM8550/SM8650) and QCA6390 (SM8250) have no address in OTP, so
+the Wi-Fi firmware makes up a new permanent address every boot. Steam writes
+that address into every network profile it saves (`mac-address=`), so after a
+reboot NetworkManager no longer matches the profile to the radio and Steam asks
+for the password again. Measured on a Pocket ACE: permaddr 00:03:7f:12:52:b7,
+then 00:03:7f:12:7e:1b after one reboot.
+
+ath11k and btqca already read these properties; ath12k does with
+kernel/patches 1020. The radio nodes are found by compatible string, so no board
+is special-cased. The file header carries the rest of the rationale.
+
+diff --git a/grub-core/commands/efi/novadeck_radiomac.c b/grub-core/commands/efi/novadeck_radiomac.c
+new file mode 100644
+index 0000000..f462856
+--- /dev/null
++++ b/grub-core/commands/efi/novadeck_radiomac.c
+@@ -0,0 +1,281 @@
++/*
++ *  novadeck_radiomac.mod  --  give the Wi-Fi and Bluetooth radios a stable,
++ *  per-unit address in the device tree handed to Linux.
++ *
++ *  Copyright © 2026 the novadeck authors
++ *
++ *  This file is NOT part of GRUB, but is distributed under the same terms.
++ *
++ *  novadeck_radiomac.mod is free software: you can redistribute it and/or
++ *  modify it under the terms of the GNU General Public License as published
++ *  by the Free Software Foundation, either version 3 of the License, or
++ *  (at your option) any later version.
++ *
++ *  novadeck_radiomac.mod is distributed in the hope that it will be useful,
++ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
++ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ *  GNU General Public License for more details.
++ *
++ *  You should have received a copy of the GNU General Public License
++ *  along with novadeck_radiomac.mod.  If not, see
++ *  <http://www.gnu.org/licenses/>.
++ *
++ *  ---------------------------------------------------------------------------
++ *
++ *  One command:
++ *
++ *      novadeck_radiomac
++ *
++ *  It reads the SoC serial number from the Qualcomm firmware and arms a
++ *  device-tree fixup that, when `linux` boots, writes
++ *
++ *      local-mac-address = 02:00:<serial, big-endian>   on the Wi-Fi node
++ *      local-bd-address  = 02:01:<serial, big-endian>   on the Bluetooth node
++ *
++ *  (local-bd-address is stored little-endian, as its binding requires.)
++ *
++ *  WHY. The WCN7850 (ath12k) and QCA6390 (ath11k) on these boards have no
++ *  address programmed in OTP, and nothing on the device provisions one, so
++ *  the Wi-Fi firmware reports a fresh 00:03:7f:xx:xx:xx on every boot. That
++ *  is the PERMANENT address, the one NetworkManager matches a profile's
++ *  `mac-address=` against, and Steam writes that key into every network it
++ *  saves. After a reboot the profile no longer matches the radio, NM will not
++ *  use it, and Steam asks for the password again.
++ *
++ *  WHY HERE. `local-mac-address` and `local-bd-address` are the kernel's
++ *  generic way to give a device its address, and ath11k and btqca already
++ *  honour them (ath12k does with our kernel patch). The value has to differ
++ *  per unit, but one .dtb serves every unit of a board, so it can only be
++ *  filled in at boot, and stage 2 is the last code that runs before Linux
++ *  and can still edit the tree.
++ *
++ *  WHERE THE SERIAL COMES FROM. Qualcomm's UEFI exposes EFI_CHIPINFO_PROTOCOL.
++ *  Its GetSerialNumber() is what the vendor's own boot loader (ABL) uses for
++ *  the board serial, and it is the same 32-bit chip serial Linux reports in
++ *  /sys/devices/soc0/serial_number. 32 bits plus a 2-byte prefix is exactly
++ *  one 6-byte address, so every unit gets its own address with no hashing
++ *  and no collisions. 0x02 in the first octet marks it locally administered
++ *  and unicast; it is not anyone's vendor prefix.
++ *
++ *  FAILURE. If the protocol is missing or the serial cannot be read, the
++ *  command fails and says so, no fixup is armed, and the radios come up
++ *  exactly as they would without this module. A missing radio node at boot
++ *  is reported the same way. Nothing here can stop the kernel from booting.
++ */
++
++#include <grub/types.h>
++#include <grub/misc.h>
++#include <grub/err.h>
++#include <grub/dl.h>
++#include <grub/command.h>
++#include <grub/fdt.h>
++#include <grub/efi/api.h>
++#include <grub/efi/efi.h>
++#include <grub/efi/fdtload.h>
++
++GRUB_MOD_LICENSE ("GPLv3+");
++
++#define ADDR_LEN 6
++
++/* First two octets of each address. 0x02 = locally administered, unicast.
++   The second octet keeps the two radios apart. */
++#define WIFI_PREFIX 0x00
++#define BT_PREFIX   0x01
++
++/* ==========================================================================
++   EFI_CHIPINFO_PROTOCOL, from Qualcomm's QcomModulePkg (Protocol/EFIChipInfo.h
++   for the layout, QcomModulePkg.dec for the GUID ABL is built against). Only
++   the members up to GetSerialNumber are spelled out; the table has not
++   changed in front of it across the revisions we have seen (1 through 7).
++   ========================================================================== */
++
++#define QCOM_CHIPINFO_PROTOCOL_GUID \
++  { 0xb0760469, 0x970c, 0x487a, \
++    { 0xa4, 0xb5, 0x28, 0xdb, 0x7b, 0x45, 0xce, 0xf1 } }
++
++typedef struct qcom_chipinfo_protocol qcom_chipinfo_protocol_t;
++
++struct qcom_chipinfo_protocol
++{
++  grub_uint64_t revision;
++  void *get_chip_version;
++  void *get_raw_chip_version;
++  void *get_chip_id;
++  void *get_raw_chip_id;
++  void *get_chip_id_string;
++  void *get_chip_family;
++  void *get_modem_support;
++  void *get_processor_name_string;
++  grub_efi_status_t (__grub_efi_api *get_serial_number)
++    (qcom_chipinfo_protocol_t *this, grub_uint32_t *serial);
++};
++
++/* compatible strings of the radios on the boards we ship. */
++static const char *const wifi_compatibles[] = {
++  "pci17cb,1107",		/* WCN7850, SM8550 / SM8650 */
++  "pci17cb,1101",		/* QCA6390, SM8250 */
++  NULL
++};
++
++static const char *const bt_compatibles[] = {
++  "qcom,wcn7850-bt",
++  "qcom,qca6390-bt",
++  NULL
++};
++
++static grub_uint8_t wifi_addr[ADDR_LEN];
++static grub_uint8_t bt_addr[ADDR_LEN];	/* already little-endian */
++
++/* Does the node's `compatible` string list contain any of `wanted`? */
++static int
++node_is (const void *fdt, int node, const char *const *wanted)
++{
++  const char *list, *s;
++  grub_uint32_t len;
++  int i;
++
++  list = grub_fdt_get_prop (fdt, node, "compatible", &len);
++  if (list == NULL)
++    return 0;
++
++  for (s = list; s < list + len; s += grub_strlen (s) + 1)
++    for (i = 0; wanted[i] != NULL; i++)
++      if (grub_strcmp (s, wanted[i]) == 0)
++	return 1;
++  return 0;
++}
++
++/* Depth-first search for the first node at or below `node` matching
++   `wanted`. Returns its offset, or -1. */
++static int
++find_node (const void *fdt, int node, const char *const *wanted)
++{
++  int child, hit;
++
++  if (node_is (fdt, node, wanted))
++    return node;
++
++  for (child = grub_fdt_first_node (fdt, node); child >= 0;
++       child = grub_fdt_next_node (fdt, child))
++    {
++      hit = find_node (fdt, child, wanted);
++      if (hit >= 0)
++	return hit;
++    }
++  return -1;
++}
++
++/* Set `prop` on the radio matching `wanted`. Looked up afresh on every call:
++   setting a property can move every node after it, so an offset found before
++   an earlier set_prop is stale. */
++static grub_err_t
++set_radio_addr (void *fdt, const char *what, const char *const *wanted,
++		const char *prop, const grub_uint8_t *addr)
++{
++  int node;
++
++  node = find_node (fdt, 0, wanted);
++  if (node < 0)
++    return grub_error (GRUB_ERR_FILE_NOT_FOUND,
++		       "novadeck_radiomac: no %s node in the device tree", what);
++
++  if (grub_fdt_set_prop (fdt, node, prop, addr, ADDR_LEN) != 0)
++    return grub_error (GRUB_ERR_OUT_OF_MEMORY,
++		       "novadeck_radiomac: could not set %s on the %s node",
++		       prop, what);
++
++  grub_dprintf ("novadeck", "%s %s = %02x:%02x:%02x:%02x:%02x:%02x\n",
++		what, prop, addr[0], addr[1], addr[2], addr[3], addr[4],
++		addr[5]);
++  return GRUB_ERR_NONE;
++}
++
++/* Both radios are attempted even if the first fails, so one missing node
++   costs only that radio its address. */
++static grub_err_t
++radiomac_fixup (void *fdt)
++{
++  grub_err_t wifi, bt;
++
++  wifi = set_radio_addr (fdt, "Wi-Fi", wifi_compatibles,
++			 "local-mac-address", wifi_addr);
++  if (wifi != GRUB_ERR_NONE)
++    grub_print_error ();
++
++  bt = set_radio_addr (fdt, "Bluetooth", bt_compatibles,
++		       "local-bd-address", bt_addr);
++  if (bt != GRUB_ERR_NONE)
++    grub_print_error ();
++
++  return GRUB_ERR_NONE;
++}
++
++static grub_err_t
++read_serial (grub_uint32_t *serial)
++{
++  grub_guid_t guid = QCOM_CHIPINFO_PROTOCOL_GUID;
++  qcom_chipinfo_protocol_t *chipinfo;
++  grub_efi_status_t status;
++
++  chipinfo = grub_efi_locate_protocol (&guid, NULL);
++  if (chipinfo == NULL)
++    return grub_error (GRUB_ERR_BAD_DEVICE,
++		       "novadeck_radiomac: firmware has no EFI_CHIPINFO_PROTOCOL");
++
++  status = chipinfo->get_serial_number (chipinfo, serial);
++  if (status != GRUB_EFI_SUCCESS)
++    return grub_error (GRUB_ERR_IO,
++		       "novadeck_radiomac: GetSerialNumber failed (0x%lx)",
++		       (unsigned long) status);
++
++  if (*serial == 0)
++    return grub_error (GRUB_ERR_BAD_DEVICE,
++		       "novadeck_radiomac: firmware reports serial number 0");
++  return GRUB_ERR_NONE;
++}
++
++static grub_err_t
++grub_cmd_radiomac (grub_command_t cmd __attribute__ ((unused)),
++		   int argc __attribute__ ((unused)),
++		   char *argv[] __attribute__ ((unused)))
++{
++  grub_uint32_t serial;
++  int i;
++
++  grub_fdt_set_fixup (NULL);
++
++  if (read_serial (&serial) != GRUB_ERR_NONE)
++    return grub_errno;
++
++  wifi_addr[0] = 0x02;
++  wifi_addr[1] = WIFI_PREFIX;
++  bt_addr[ADDR_LEN - 1] = 0x02;
++  bt_addr[ADDR_LEN - 2] = BT_PREFIX;
++  for (i = 0; i < 4; i++)
++    {
++      grub_uint8_t b = (serial >> (24 - 8 * i)) & 0xff;
++
++      wifi_addr[2 + i] = b;
++      bt_addr[ADDR_LEN - 3 - i] = b;
++    }
++
++  grub_dprintf ("novadeck", "SoC serial %u (0x%08x)\n", serial, serial);
++  grub_fdt_set_fixup (radiomac_fixup);
++  return GRUB_ERR_NONE;
++}
++
++static grub_command_t cmd_radiomac;
++
++GRUB_MOD_INIT (novadeck_radiomac)
++{
++  cmd_radiomac =
++    grub_register_command ("novadeck_radiomac", grub_cmd_radiomac, 0,
++			   "Give the Wi-Fi and Bluetooth radios a stable "
++			   "per-unit address in the device tree.");
++}
++
++GRUB_MOD_FINI (novadeck_radiomac)
++{
++  grub_fdt_set_fixup (NULL);
++  grub_unregister_command (cmd_radiomac);
++}

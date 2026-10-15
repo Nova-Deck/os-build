@@ -1,0 +1,38 @@
+From: Philippe Simons <simons.philippe@gmail.com>
+Subject: [PATCH] wifi: ath12k: read the MAC address from the device tree
+
+ath12k takes its MAC address only from the firmware's WMI ready event. A
+WCN7850 with nothing programmed in OTP reports a random address there,
+a different one on every boot, so the permanent address of the interface
+changes across reboots, and anything that matches on it (NetworkManager
+profiles with a `mac-address`, for one) stops matching.
+
+ath11k already lets the platform supply the address through the standard
+`local-mac-address` / `mac-address` properties, via
+device_get_mac_address(). Do the same here, with the same precedence: a
+per-pdev address from the firmware wins, then the device property, then
+the firmware's base address.
+
+diff --git a/drivers/net/wireless/ath/ath12k/mac.c b/drivers/net/wireless/ath/ath12k/mac.c
+index d2ba450..fc075eb 100644
+--- a/drivers/net/wireless/ath/ath12k/mac.c
++++ b/drivers/net/wireless/ath/ath12k/mac.c
+@@ -14810,12 +14810,17 @@ static int ath12k_mac_hw_register(struct ath12k_hw *ah)
+ 
+ 	for_each_ar(ah, ar, i) {
+ 		u32 ht_cap_info = 0;
++		u8 dt_mac_addr[ETH_ALEN] = {};
+ 
+ 		pdev = ar->pdev;
+ 		if (ar->ab->pdevs_macaddr_valid) {
+ 			ether_addr_copy(ar->mac_addr, pdev->mac_addr);
+ 		} else {
+-			ether_addr_copy(ar->mac_addr, ar->ab->mac_addr);
++			device_get_mac_address(ar->ab->dev, dt_mac_addr);
++			if (is_zero_ether_addr(dt_mac_addr))
++				ether_addr_copy(ar->mac_addr, ar->ab->mac_addr);
++			else
++				ether_addr_copy(ar->mac_addr, dt_mac_addr);
+ 			ar->mac_addr[4] += ar->pdev_idx;
+ 		}
+ 

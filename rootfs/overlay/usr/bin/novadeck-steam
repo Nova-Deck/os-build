@@ -196,6 +196,33 @@ export vk_xwayland_wait_ready=false            # don't block on buffers idling b
 # soon the UI gets the GPU once the layer above has put it on a higher ring. Valve sets the same in
 # its own games' environment for the Steam Frame. Not on the A650 (SM8250): one ring, no
 # preemption, so smaller tiles would only cost efficiency. Unmeasured here.
+#
+# VRAM report limit, as Valve sets it for the Frame's games: mesa's vram-report-limit layer
+# (implicit, gated on ENABLE_MESA_VRAM_REPORT_LIMIT; host + FEX guest builds) reports a 4096 MiB
+# heap to games, which 32-bit games and engines that size their budgets from VRAM cope with, where
+# Turnip's own heap is 15/16 of RAM (drirc.d/01-novadeck-turnip.conf). The layer applies to ONE
+# exact vendorID:deviceID, and Valve's names the Frame's A750 only, so ours is derived here: Turnip
+# reports the kernel's chip id, which comes from the GPU node's compatible string, either hex
+# ("qcom,adreno-43050a01") or the older core/major/minor.patch form ("qcom,adreno-650.2" ->
+# 0x06050002). No Adreno node, no limit lines: the layer then stays off.
+gpu_device_id() {
+  for f in /proc/device-tree/soc@0/gpu@*/compatible /proc/device-tree/soc/gpu@*/compatible; do
+    [ -r "$f" ] || continue
+    for c in $(tr '\0' ' ' <"$f"); do
+      v=${c#qcom,adreno-}
+      [ "$v" != "$c" ] || continue
+      case "$v" in
+        [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f])
+          echo "0x5143:0x$v"; return 0 ;;
+        [0-9][0-9][0-9].[0-9]|[0-9][0-9][0-9].[0-9][0-9])
+          n=${v%.*}; p=${v#*.}
+          printf '0x5143:0x%02x%02x%02x%02x\n' "${n%??}" "$(echo "$n" | cut -c2)" "${n#??}" "$p"
+          return 0 ;;
+      esac
+    done
+  done
+  return 1
+}
 if [ -n "${XDG_RUNTIME_DIR:-}" ]; then
   mkdir -p "${XDG_RUNTIME_DIR}/steam/env"
   {
@@ -203,6 +230,11 @@ if [ -n "${XDG_RUNTIME_DIR:-}" ]; then
     case "${NOVADECK_SOC_CLASS:-}" in
       SM8550|SM8650) echo TU_AUTOTUNE_FLAGS=preempt_optimize ;;
     esac
+    if gpu_id=$(gpu_device_id); then
+      echo ENABLE_MESA_VRAM_REPORT_LIMIT=1
+      echo VK_VRAM_REPORT_LIMIT_HEAP_SIZE=4096
+      echo "VK_VRAM_REPORT_LIMIT_DEVICE_ID=$gpu_id"
+    fi
   } >"${XDG_RUNTIME_DIR}/steam/env/gfx.txt"
 fi
 

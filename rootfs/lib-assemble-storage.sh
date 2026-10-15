@@ -169,11 +169,23 @@ echo "  staging FEX guest x86 Turnip payload (/$payload_dest)"
 for f in usr/lib/libvulkan_freedreno.so usr/lib32/libvulkan_freedreno.so \
          usr/share/vulkan/icd.d/freedreno_icd.x86_64.json \
          usr/share/vulkan/icd.d/freedreno_icd.i686.json \
-         usr/lib/libxcb-keysyms.so.1 usr/lib32/libxcb-keysyms.so.1; do
+         usr/lib/libxcb-keysyms.so.1 usr/lib32/libxcb-keysyms.so.1 \
+         usr/lib/libVkLayer_MESA_vram_report_limit.so usr/lib/libVkLayer_MESA_vram_report_limit.i686.so \
+         usr/share/vulkan/implicit_layer.d/VkLayer_MESA_vram_report_limit.json \
+         usr/share/vulkan/implicit_layer.d/VkLayer_MESA_vram_report_limit.i686.json; do
   [ -s "$payload/$f" ] || { echo "ERROR: mesa-x86 payload incomplete: missing $f (make mesa-x86)" >&2; exit 1; }
 done
 mkdir -p "$stage/$payload_dest"
 cp -a "$payload/usr" "$stage/$payload_dest/"
+# The vram-report-limit manifests must keep a manifest-relative library_path, for the same
+# silent-drop reason as the lsfg-vk manifests below.
+for m in "$stage/$payload_dest"/usr/share/vulkan/implicit_layer.d/VkLayer_MESA_vram_report_limit*.json; do
+  grep -q '"library_path": "\.\./\.\./\.\./lib/' "$m" \
+    || { echo "ERROR: ${m#"$stage"} lost its manifest-relative library_path" >&2; exit 1; }
+done
+# Our turnip drirc (heap_memory_percent) for the x86 Turnip too: it reads the guest's drirc.d.
+install -Dm0644 "$ROOT/rootfs/overlay/usr/share/drirc.d/01-novadeck-turnip.conf" \
+  "$stage/$payload_dest/usr/share/drirc.d/01-novadeck-turnip.conf"
 
 # The lsfg-vk frame-generation Vulkan layer (make lsfg-vk), into the SAME payload so it rides the
 # same overlay and the same NEEDED gate below. REQUIRED for the same reason the Turnip is: half a

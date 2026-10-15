@@ -70,6 +70,7 @@ common=(
   --buildtype release --prefix /usr
   -Db_ndebug=true
   -Dgallium-drivers= -Dvulkan-drivers=freedreno -Dfreedreno-kmds=msm
+  -Dvulkan-layers=vram-report-limit
   -Dplatforms=x11,wayland -Dglx=disabled -Degl=disabled -Dgbm=disabled
   -Dopengl=false -Dllvm=disabled -Dallow-fallback-for=libdrm
 )
@@ -102,6 +103,34 @@ for icd in "$OUT"/usr/share/vulkan/icd.d/freedreno_icd.*.json; do
     || { echo "ERROR: mesa-x86: $icd still carries an absolute library_path (mesa changed its ICD format?)" >&2; exit 1; }
 done
 
+# The vram-report-limit layer, both arches, as IMPLICIT layers gated on ENABLE_MESA_VRAM_REPORT_LIMIT
+# (the host mesa recipe does the same; novadeck-steam turns it on in the games' gfx.txt). Shaped
+# like the lsfg-vk payload layer: both .so files in usr/lib under distinct names, one manifest
+# each, library_path relative to the manifest -- an absolute path resolves against the container's
+# /usr under the compat tool's /run/gfx republish and the loader drops the layer silently. Each
+# arch's loader reads both manifests and skips the one whose ELF class does not match.
+vram=src/vulkan/vram-report-limit-layer
+install -Dm0644 "build-x86_64/$vram/libVkLayer_MESA_vram_report_limit.so" \
+  "$OUT/usr/lib/libVkLayer_MESA_vram_report_limit.so"
+install -Dm0644 "build-i686/$vram/libVkLayer_MESA_vram_report_limit.so" \
+  "$OUT/usr/lib/libVkLayer_MESA_vram_report_limit.i686.so"
+python3 - "build-x86_64/$vram/VkLayer_MESA_vram_report_limit.json" \
+          "$OUT/usr/share/vulkan/implicit_layer.d" <<'EOF'
+import json, os, sys
+src, dst = sys.argv[1], sys.argv[2]
+with open(src) as f:
+    m = json.load(f)
+m["layer"]["enable_environment"] = {"ENABLE_MESA_VRAM_REPORT_LIMIT": "1"}
+m["layer"]["disable_environment"] = {"DISABLE_MESA_VRAM_REPORT_LIMIT": "1"}
+os.makedirs(dst, exist_ok=True)
+for name, lib in (("VkLayer_MESA_vram_report_limit.json", "libVkLayer_MESA_vram_report_limit.so"),
+                  ("VkLayer_MESA_vram_report_limit.i686.json", "libVkLayer_MESA_vram_report_limit.i686.so")):
+    m["layer"]["library_path"] = "../../../lib/" + lib
+    with open(os.path.join(dst, name), "w") as f:
+        json.dump(m, f, indent=3)
+        f.write("\n")
+EOF
+
 # The guest rootfs ships no xcb-keysyms (verified against the 2026-08-11 image), but a Turnip
 # built here links it (mesa's x11 WSI). An ICD with an unresolvable NEEDED is dropped SILENTLY
 # by pressure-vessel's dlopen inspection, so the dep rides along for both arches.
@@ -112,7 +141,9 @@ install -Dm0644 /usr/lib32/libxcb-keysyms.so.1 "$OUT/usr/lib32/libxcb-keysyms.so
 # Gate: container glibc == rootfs glibc (the snapshot pin above), so a symbol-version ceiling
 # above the container's own glibc could never load in the guest.
 glibc_max="$(ldd --version | sed -n '1s/.* //p')"
-for so in "$OUT/usr/lib/libvulkan_freedreno.so" "$OUT/usr/lib32/libvulkan_freedreno.so"; do
+for so in "$OUT/usr/lib/libvulkan_freedreno.so" "$OUT/usr/lib32/libvulkan_freedreno.so" \
+          "$OUT/usr/lib/libVkLayer_MESA_vram_report_limit.so" \
+          "$OUT/usr/lib/libVkLayer_MESA_vram_report_limit.i686.so"; do
   ceiling="$(readelf --dyn-syms -W "$so" | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -uV | tail -1)"
   if [ "$(printf '%s\n%s\n' "$ceiling" "$glibc_max" | sort -V | tail -1)" != "$glibc_max" ]; then
     echo "ERROR: $so references GLIBC_$ceiling, newer than the rootfs glibc $glibc_max" >&2

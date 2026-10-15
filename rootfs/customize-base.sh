@@ -27,6 +27,7 @@
 #   openssh          SSH server (dropbear isn't in the pinned holo repo)
 #   wireless-regdb   regulatory database — REQUIRED for 5 GHz (else channels are no-TX)
 #   mesa + vulkan-freedreno (Turnip) + vulkan-tools   GPU / Vulkan
+#   vulkan-mesa-layers  for the vram-report-limit implicit layer games' gfx.txt turns on (4 GB heap)
 # Runtime deps of precompiled packages (e.g. libiio for InputPlumber) are NOT hardcoded here —
 # each packages/<name>/prebuilt.pin declares its own `deps:`, aggregated into the install list.
 # The result lands in work/base/ — the directory rootfs/assemble-rootfs.sh consumes.
@@ -299,7 +300,7 @@ BOOTSTRAP_PKGS=(base)
 # lookup fails that way — indistinguishable from a genuinely absent layer, which is the failure
 # packages/fossilize-stub-android exists to prevent. ~1.1 MB (jq + oniguruma).
 # Measured 2026-08-29 on a Pocket ACE, Lepton v2.8.9 (issue #58).
-PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-tools novadeck-gpu-priority mesa gamescope seatd sddm mangohud lsfg-vk fex-emu bluez bluez-utils networkmanager alsa-ucm-conf pipewire wireplumber pipewire-pulse pipewire-alsa rtkit unzip openal gtk2 ffmpeg e2fsprogs xorg-xwayland lsof noto-fonts noto-fonts-cjk noto-fonts-emoji python python-gobject scx-scheds rauc btrfs-progs rsync earlyoom zram-generator udisks2 f3 upower libinput-tools podman crun passt fuse-overlayfs which inotify-tools jq)
+PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-mesa-layers vulkan-tools novadeck-gpu-priority mesa gamescope seatd sddm mangohud lsfg-vk fex-emu bluez bluez-utils networkmanager alsa-ucm-conf pipewire wireplumber pipewire-pulse pipewire-alsa rtkit unzip openal gtk2 ffmpeg e2fsprogs xorg-xwayland lsof noto-fonts noto-fonts-cjk noto-fonts-emoji python python-gobject scx-scheds rauc btrfs-progs rsync earlyoom zram-generator udisks2 f3 upower libinput-tools podman crun passt fuse-overlayfs which inotify-tools jq)
 
 # Dev-only packages — installed ONLY under NOVADECK_DEV=1, NEVER in a release base.
 # On-device bring-up tools: evtest reads raw /dev/input events; usbutils provides lsusb.

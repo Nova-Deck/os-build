@@ -11,6 +11,7 @@
 #   work/mesa-x86/out/usr/lib32/libvulkan_freedreno.so          i686 Turnip
 #   work/mesa-x86/out/usr/share/vulkan/icd.d/freedreno_icd.{x86_64,i686}.json
 #   work/mesa-x86/out/usr/lib{,32}/libxcb-keysyms.so.1          see container-build.sh
+#   work/mesa-x86/out/usr/lib/libVkLayer_MESA_vram_report_limit{,.i686}.so  + their implicit manifests
 #
 # SELF-CACHING, like customize-base.sh: work/mesa-x86/.inputs.sha256 records the digest of the
 # committed inputs; a matching marker with all artifacts present is a no-op. That marker check is
@@ -64,6 +65,10 @@ ARTIFACTS=(
   usr/share/vulkan/icd.d/freedreno_icd.i686.json
   usr/lib/libxcb-keysyms.so.1
   usr/lib32/libxcb-keysyms.so.1
+  usr/lib/libVkLayer_MESA_vram_report_limit.so
+  usr/lib/libVkLayer_MESA_vram_report_limit.i686.so
+  usr/share/vulkan/implicit_layer.d/VkLayer_MESA_vram_report_limit.json
+  usr/share/vulkan/implicit_layer.d/VkLayer_MESA_vram_report_limit.i686.json
 )
 complete() {
   local f

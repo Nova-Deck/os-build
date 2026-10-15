@@ -70,7 +70,7 @@ replies — lore was not reachable, so "never posted" means no patchwork hit). `
 trees (msm-next, qcom `clk-for-7.4` / `arm64-for-7.4`, pci `next`). Re-audit on
 every bump: this table is a snapshot, the `Drop when` column is what to re-check.
 
-Totals: 5 `mainline`, 16 `posted`, 22 `novadeck`, 68 `community`. (`0310` and `0430` were
+Totals: 5 `mainline`, 16 `posted`, 22 `novadeck`, 69 `community`. (`0310` and `0430` were
 deleted at the 7.2.8 bump: stable backported both, byte-identical.) Half the stack will
 never land upstream, which is why provenance is a table and not a number band.
 
@@ -93,6 +93,7 @@ never land upstream, which is why provenance is a table and not a number band.
 | `0270` | community | virtudude, via Kettle Linux `1210`, body byte-identical. `msm_gpu_convert_priority()` inverts the within-ring order (userspace 2 → `DRM_SCHED_PRIORITY_KERNEL`, 0 → `NORMAL`), so on one ring a Turnip queue (a game) outranks freedreno GL (Xwayland, the Steam UI) and can starve it. Matters most on the single-ring A650, where the game-priority layer cannot move games to another ring. | when upstreamed |
 | `0330` | posted | Dmitry Baryshkov v4 `<20261003-fd-kms-fix-smmu-v4-0-2a44d4d8ac77@oss.qualcomm.com>` (we take 1–3, 5–9 of 10; skip MDP5-only 4 and drm/ci 10), latest. Replaced v3 on 2026-10-12: 3/10 now queues and schedules a retired framebuffer under one lock so vblank-off cannot free it in between; 5/6 add CWB/CDM reservation clears. v4 names a prerequisite, "KMS destroy fixes" `<20261003-msm-kms-destroy-fixes-v1-*>` (init/teardown error paths), which we do not carry. Not in msm-next. | when merged |
 | `0340` | community | tiopex, ROCKNIX `ec3d53baac` (generic part split into ROCKNIX `0013-drm-msm-dpu-fix-inline-rotation`). Never posted; the width/height check, `test_bit` and CW/CCW fixes are real mainline bugs. | when the generic fixes are sent and merged |
+| `0341` | community | enij90 (armada-tb321fu `ee94cd65` `0818`), taken via ROCKNIX PR #3508 (`0018`); header renumbered to our `0340`. Never posted. Measured by writeback on SM8650; only affects pipes that rotate inline. | with `0340`, or when mainline programs a rotation-aware QSEED4 preload |
 | `0350` | community | tiopex, ROCKNIX `60bb58c1db`. Never posted. | never |
 | `0351` | community | sunshineinabox, ROCKNIX PR #3377 (SM8250 `0208`), hand-merged onto `0350` with `0350`'s values as the defaults; the PR's own set is in the header as a cmdline profile. Never posted. | never |
 | `0352` | community | sunshineinabox, ROCKNIX PR #3377 (SM8250 `0210`), rebased onto `0351`. Never posted. | never |

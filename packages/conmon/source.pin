@@ -1,0 +1,5 @@
+# conmon — local PKGBUILD (Arch's 1:2.2.1-1 recipe, unchanged). Part of the Lepton container stack
+# built here: yajl criu crun conmon passt netavark containers-common podman.
+name: conmon
+pkgbuild_local: PKGBUILD
+pkgrel_suffix: 1

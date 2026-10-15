@@ -1,0 +1,5 @@
+# netavark — local PKGBUILD (Arch's 1.17.2-1 recipe minus aardvark-dns; see its header). Part of the
+# Lepton container stack built here: yajl criu crun conmon passt netavark containers-common podman.
+name: netavark
+pkgbuild_local: PKGBUILD
+pkgrel_suffix: 1

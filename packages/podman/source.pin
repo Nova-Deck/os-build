@@ -1,0 +1,6 @@
+# podman — local PKGBUILD (Arch's 5.8.0-1 recipe minus podman-docker; see its header for why the
+# whole Lepton container stack is built here). The set: yajl criu crun conmon passt netavark
+# containers-common podman.
+name: podman
+pkgbuild_local: PKGBUILD
+pkgrel_suffix: 1

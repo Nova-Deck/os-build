@@ -1,0 +1,10 @@
+# yajl — local PKGBUILD (Arch's 2.1.0-7 recipe, the one with the CMake 4 patch; see its header).
+# Part of the Lepton container stack built here: yajl criu crun conmon passt netavark
+# containers-common podman.
+#
+# local_sources: files the recipe's source=() names, staged beside it. The recipe applies these
+# patches itself, so they are NOT `patches:` (build-overlay.sh would apply them a second time).
+name: yajl
+pkgbuild_local: PKGBUILD
+pkgrel_suffix: 1
+local_sources: yajl-2.1.0-CVE-2017-16516.patch yajl-2.1.0-CVE-2022-24795.patch yajl-2.1.0-memory_leak.patch yajl-0009-Allow-cmake-4.0.patch

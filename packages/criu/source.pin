@@ -1,0 +1,5 @@
+# criu — local PKGBUILD (Arch's 4.2-3 recipe, unchanged). Part of the Lepton container stack built
+# here: yajl criu crun conmon passt netavark containers-common podman.
+name: criu
+pkgbuild_local: PKGBUILD
+pkgrel_suffix: 1

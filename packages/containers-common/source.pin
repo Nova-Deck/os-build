@@ -1,0 +1,11 @@
+# containers-common — local PKGBUILD (Arch's 1:0.67.0-1 recipe, unchanged). Part of the Lepton
+# container stack built here: yajl criu crun conmon passt netavark containers-common podman.
+#
+# local_sources: files the recipe's source=() names, staged beside it; the recipe applies its own
+# patches, so they are NOT `patches:`.
+# needs: its global depends=('container-network-stack>1') is netavark, which makepkg -s installs.
+name: containers-common
+pkgbuild_local: PKGBUILD
+pkgrel_suffix: 1
+local_sources: mounts.conf tmpfiles.conf containers-common-0.48.0-init_path.patch containers-common-0.66.1-containers.conf-firewall-defaults.patch
+needs: netavark

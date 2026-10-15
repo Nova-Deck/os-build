@@ -1,0 +1,10 @@
+# crun — local PKGBUILD (Arch's 1.26-3 recipe minus krun/libkrun; see its header).
+# One of the Lepton container stack packages built here since mash-20260401 dropped them from the
+# public snapshot: yajl criu crun conmon passt netavark containers-common podman.
+#
+# needs: overlay packages installed into the build container first (packages/build-overlay.sh) —
+# criu and yajl are makedepends the snapshot no longer carries.
+name: crun
+pkgbuild_local: PKGBUILD
+pkgrel_suffix: 1
+needs: yajl criu

@@ -31,16 +31,16 @@ run() {  # run <file> <line> <function>
 accepts() { local out; out="$(run snapshot.pin "$1" pins_snapshot)" && [ "$out" = "$1" ]; }
 
 CASE=snapshot
-for s in mash-20251118.3 mash-20260305 mash-20240705.2; do
-  accepts "$BASE/$s" && ok "accepts $s" || bad "refused a real snapshot: $s"
+for s in mash-20251118.3 mash-20240705.2 mash-20260401.1.pvt mash-20260305.2.pvt; do
+  accepts "$BASE/$s" && ok "accepts $s" || bad "refused a frozen revision: $s"
 done
-for s in main dev builds pipeline tmp mash-20260305.1.pvt mash-20251118-pvt mash-20251118.3.pvt \
-         mash-2026030 mash-20260305. mash-20260305/; do
+for s in main dev builds pipeline tmp mash-20260305 mash-20260401 mash-20251118-pvt mash-20260305.pvt \
+         mash-20260305.1.pvt. mash-2026030 mash-20260305. mash-20260305/; do
   accepts "$BASE/$s" && bad "accepted $s" || ok "refuses $s"
 done
 accepts "https://holo-packages.steamos.cloud/holo-core-aarch64-preview/mash-20251118.3" \
   && bad "accepted the frozen preview mirror" || ok "refuses the preview mirror"
-accepts "https://example.com/archlinux-deckard/archlinux/mash-20260305" \
+accepts "https://example.com/archlinux-deckard/archlinux/mash-20260401.1.pvt" \
   && bad "accepted a foreign host" || ok "refuses a foreign host"
 
 CASE=builder
@@ -54,8 +54,8 @@ done
   && ok "ref is keyed on the tarball sha" || bad "ref is not novadeck/builder:<sha>"
 
 # The builder URL is derived, never written: the description must name the snapshot's tarball.
-printf '%s\n' "$BASE/mash-20260305" > "$TMP/build/snapshot.pin"
-[ "$(run builder.pin "$sha" pins_builder_desc)" = "$BASE/mash-20260305/system.rootfs.zst sha256:$sha" ] \
+printf '%s\n' "$BASE/mash-20260401.1.pvt" > "$TMP/build/snapshot.pin"
+[ "$(run builder.pin "$sha" pins_builder_desc)" = "$BASE/mash-20260401.1.pvt/system.rootfs.zst sha256:$sha" ] \
   && ok "builder is derived from the snapshot pin" || bad "builder description does not follow the snapshot"
 
 CASE=repo

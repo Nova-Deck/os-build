@@ -1,0 +1,93 @@
+# criu — checkpoint/restore, a hard dependency of crun (the Steam Frame's crun depends on it too).
+# Part of the Lepton container stack built here (packages/podman/PKGBUILD). Recipe UNCHANGED from
+# archlinux-deckard/archlinux/mash-20260305/sources/packages/criu-4.2-3.src.tar.gz
+# (sha256 b63b74591a81e1e81d1af3a956640840885b8fdefdf7c7f8ee2fe7c0afd4e4df).
+#
+# Maintainer: George Rawlinson <grawlinson@archlinux.org>
+# Maintainer: Carl Smedstad <carsme@archlinux.org>
+# Contributor: Pavel Borzenkov <pavel@voidptr.ru>
+# Contributor: aksr <aksr at t-com dot me>
+
+pkgname=criu
+pkgver=4.2
+pkgrel=3
+pkgdesc='Utilities to checkpoint and restore processes in userspace'
+arch=('x86_64' 'aarch64')
+url='https://criu.org'
+license=(
+  'GPL-2.0-only'
+  'LGPL-2.1-only'
+)
+depends=(
+  'glibc'
+  'gnutls'
+  'libbpf'
+  'libbsd'
+  'libdrm'
+  'libgcc'
+  'libnet'
+  'libnl'
+  'nftables'
+  'protobuf-c'
+  'python'
+  'python-protobuf'
+  'util-linux-libs'
+)
+makedepends=(
+  'asciidoc'
+  'git'
+  'python-build'
+  'python-installer'
+  'python-setuptools'
+  'python-wheel'
+  'xmlto'
+)
+# Can't run tests (only unit tests) due to privilege escalation required.
+# https://github.com/checkpoint-restore/criu/issues/434
+# checkdepends=(
+#   'libaio'
+#   'python-yaml'
+# )
+provides=(
+  'libcompel.so'
+  'libcriu.so'
+)
+options=('!lto')
+source=("git+https://github.com/checkpoint-restore/criu#tag=v$pkgver")
+sha512sums=('23836d7a8103e8aa647716c48505ba023bfe1aebd625678986c0543634e3269f5c500cb9eb33eb006d94d78ded619a6ca4e9241b02ed120a3774371fd6e0176a')
+b2sums=('b13f87a8f2978d1d7be94e39b3b5a02155fbf11473dae57ab1512fb49a0f683c00c09d840b8f817e585a5ae0603dfae5572e2247940e8c7371e106b0fec10999')
+
+prepare() {
+  # Fix -Werror=discarded-qualifiers build failure in tty.c
+  git -C $pkgname cherry-pick -n 90300748effc1cf0fe56e35d3d1cc2ddfedab246
+}
+
+build() {
+  cd "$pkgname"
+  # shellcheck disable=SC2001
+  export CFLAGS=$(echo "$CFLAGS" | sed 's/-Wp,-D_FORTIFY_SOURCE=[0-9]//g')
+  make criu crit amdgpu_plugin docs
+  python -m build --wheel --no-isolation crit
+  python -m build --wheel --no-isolation --skip-dependency-check lib
+}
+
+check() {
+  cd "$pkgname"
+  make unittest
+  # make test
+}
+
+package() {
+  cd "$pkgname"
+  make \
+    DESTDIR="$pkgdir" \
+    PREFIX=/usr \
+    SBINDIR=/usr/bin \
+    LIBDIR=/usr/lib \
+    LIBEXECDIR=/usr/lib \
+    install
+  python -m installer --destdir="$pkgdir" crit/dist/*.whl
+  python -m installer --destdir="$pkgdir" lib/dist/*.whl
+  # Remove empty directory to silence namcap warning.
+  rm -vr "$pkgdir/usr/include/compel/common/asm"
+}

@@ -16,4 +16,4 @@
 #
 # Replaces build/base-devel.digest (registry.gitlab.steamos.cloud/holo/holo-core-aarch64-preview/
 # base-devel), which pinned a preview image that was never tied to the snapshot pin at all.
-11ee37589d207c31a244f3599b779e9e3ae1f4b51c6c01d45c20b95975c16eca
+cd3b3b9de4157677c70d514595bca2bc33b71072723761ad4d1f48821c6d6bdb

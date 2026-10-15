@@ -30,12 +30,14 @@ Under `archlinux-deckard/archlinux/`, only some directory names are snapshots:
 | Name | What it is | Pinnable |
 |---|---|---|
 | `main`, `dev`, `builds`, `pipeline`, `tmp` | moving CI aliases | never |
-| `mash-YYYYMMDD` | first revision of a snapshot, AND the alias that follows `.1`, `.2` … | yes — the lock is the real pin |
-| `mash-YYYYMMDD.N` | a frozen revision | yes, preferred |
-| `mash-YYYYMMDD.N.pvt` | frozen revision of a second publishing line; the unsuffixed alias follows the newest one (`mash-20260305` ≡ `.1.pvt`, `mash-20260202` ≡ `.2.pvt`, byte-identical dbs + rootfs, 2026-09-23) | refused — we pin the alias |
+| `mash-YYYYMMDD` | alias that follows the newest revision of that date (`mash-20260305` moved `.1.pvt` → `.2.pvt` on 2026-10-13) | refused — it moves under the pin |
+| `mash-YYYYMMDD.N` | a frozen revision | yes |
+| `mash-YYYYMMDD.N.pvt` | frozen revision of a second publishing line | yes |
 | `mash-YYYYMMDD-pvt` | alias of that line (`mash-20251118-pvt` ≡ `.3.pvt`) | refused |
 
-`build/lib-pins.sh` enforces this table for every stage.
+`build/lib-pins.sh` enforces this table for every stage. A date can exist only as its alias for a
+while (`mash-20260401` had no frozen name, yet its dbs and rootfs were byte-identical to
+`mash-20260401.1.pvt`): pin the frozen name that matches it, never the alias.
 
 Each snapshot directory carries `core`, `extra`, their `-debug` twins, `extra-archive`, `multilib`,
 `sources/` (source tarballs), a `pacman.conf` + `pacman.mirrorlist` (only `[core]` and `[extra]`
@@ -77,6 +79,11 @@ curl -sL $B/<snapshot>/system.rootfs.zst | sha256sum                    # -> bui
 Change `build/snapshot.pin` and `build/builder.pin` together, then `make relock` and
 `make relock-installer`, and review both lock diffs. A bump moves the toolchain the overlay builds
 with, so every `packages/*` rebuilds.
+
+Diff the locked package NAMES as well as the versions. A snapshot can drop packages the image
+installs: `mash-20260401` dropped the whole podman stack Lepton runs on (podman, crun, conmon,
+passt, netavark, containers-common, criu, yajl), so those are now overlay builds from the recipes
+the previous snapshot published under `sources/`.
 
 ## Where the PKGBUILDs are
 

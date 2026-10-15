@@ -238,19 +238,20 @@ BOOTSTRAP_PKGS=(base)
 #   podman        the thing Lepton actually calls (`podman run|start|wait|exec|stop|rm|ps|events|
 #                 inspect`, and an `env -i PATH=… $(which podman) exec` in liblepton.sh).
 #   crun          the OCI runtime. podman depends on the virtual `oci-runtime`, and crun is its
-#                 ONLY provider in the pinned snapshot (there is no runc). crun in turn hard-
-#                 depends on criu, so ~28 MB of checkpoint/restore machinery (criu, protobuf,
-#                 python-protobuf, libnet, nftables) arrives that Lepton never uses. Dropping it
-#                 would mean carrying a patched crun in the overlay; not worth a maintained
-#                 from-source package to save 28 MB of a 8.3 GB root.
+#                 only provider we carry (there is no runc). crun in turn hard-depends on criu,
+#                 so ~28 MB of checkpoint/restore machinery (criu, protobuf, python-protobuf,
+#                 libnet, nftables) arrives that Lepton never uses — the Steam Frame's crun
+#                 depends on criu too, so we keep it.
+# The whole stack (podman crun conmon passt netavark containers-common criu yajl) is an OVERLAY
+# build since mash-20260401 dropped it from the public snapshot; packages/podman/PKGBUILD says why.
 #   passt         pasta, the rootless network backend. NOT slirp4netns: liblepton/networking.sh
 #                 builds `-I eth0 --ipv4-only --no-ndp --no-dhcp --no-dhcpv6`, which are pasta
 #                 flags. It is also a hard dep of podman, so it would arrive regardless.
 #   fuse-overlayfs  rootless overlay storage driver. A podman OPTdepend, so it must be named
 #                 here or it does not ship. `overlay` and `fuse` are both in /proc/filesystems.
-# netavark + aardvark-dns (~15 MB) come in behind containers-common, which hard-depends on the
-# virtual `container-network-stack` that only netavark provides. Lepton uses pasta, so that pair
-# ships installed and unused; same argument as criu.
+# netavark comes in behind containers-common, which hard-depends on the virtual
+# `container-network-stack` that only netavark provides. Lepton uses pasta, so it ships installed and
+# unused; same argument as criu. Our netavark drops Arch's aardvark-dns dependency, as the Frame's does.
 # The rest of the rootless prerequisites were already satisfied and needed no CHANGE — newuidmap/
 # newgidmap (shadow), /etc/subuid + /etc/subgid for deck, user namespaces, overlay, fuse, and
 # podman's other hard deps (gpgme, sqlite, libseccomp, iptables) are all already there. Two of them

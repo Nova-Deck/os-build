@@ -1,0 +1,31 @@
+# conmon — podman's per-container monitor. Part of the Lepton container stack built here
+# (packages/podman/PKGBUILD). Recipe UNCHANGED from
+# archlinux-deckard/archlinux/mash-20260305/sources/packages/conmon-1:2.2.1-1.src.tar.gz
+# (sha256 205edea41f2a31df74d764f82aa5780adb37858c68a790b84d154fe5a7266ded).
+#
+# Maintainer: Bartłomiej Piotrowski <bpiotrowski@archlinux.org>
+# Maintainer: Morten Linderud <foxboron@archlinux.org>
+
+pkgname=conmon
+pkgver=2.2.1
+pkgrel=1
+epoch=1
+pkgdesc='OCI container runtime monitor'
+arch=(x86_64 aarch64)
+url='https://github.com/containers/conmon'
+license=(APACHE)
+depends=(glibc glib2 systemd)
+makedepends=(git)
+source=(
+  "git+https://github.com/containers/conmon#commit=v${pkgver}"
+)
+b2sums=('eeb41e92494d2464af1bc47c4c7fda14256336e0ad16ef7c708e302b2b8fbd0537b7584fbf451970d6cdf380b9b1461058c72b36cc058ecfc107626a962cf98b')
+
+build() {
+  cd conmon
+  make PREFIX=/usr LIBEXECDIR=/usr/lib DESTDIR="$pkgdir"
+}
+
+package() {
+  install -Dm755 conmon/bin/conmon "$pkgdir/usr/bin/conmon"
+}

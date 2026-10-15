@@ -25,15 +25,13 @@ fi
 # Pin = last non-comment, non-blank line of a pin file.
 pin_line() { grep -vE '^[[:space:]]*(#|$)' "$1" | tail -1; }
 
-# The validated snapshot URL. Accepts a named `mash-YYYYMMDD` snapshot under the official
-# archlinux-deckard tree, with or without a `.N` revision:
-#   - The unsuffixed name IS an alias — it is the first revision, and it will follow .1, .2 … when
-#     they land. That is safe to pin only because rootfs/manifest.lock records a sha256 per package
-#     FILE and rootfs/fetchlock.sh verifies every one: a republish fails the build loudly, it cannot
-#     drift into an image. Prefer a .N revision whenever one exists.
+# The validated snapshot URL. Accepts only a FROZEN revision under the official archlinux-deckard
+# tree: `mash-YYYYMMDD.N` or `mash-YYYYMMDD.N.pvt`.
+#   - The unsuffixed `mash-YYYYMMDD` is refused: it is an alias that follows the newest revision
+#     of its date, so a pin on it moves under us (mash-20260305 went .1.pvt -> .2.pvt on
+#     2026-10-13). Pin the revision it currently matches instead.
 #   - `main`, `dev`, `builds`, `pipeline`, `tmp` are moving CI aliases; nothing pins them.
-#   - `.pvt` / `-pvt` names are refused: they are a second publishing line whose newest revision
-#     the unsuffixed alias already points at (see build/snapshot.pin), so we pin the alias.
+#   - `-pvt` (dash) is not a form the tree publishes.
 pins_snapshot() {
   local f="$ROOT/build/snapshot.pin" s name
   [ -f "$f" ] || die "no snapshot pin: $f"
@@ -43,8 +41,8 @@ pins_snapshot() {
     *) die "snapshot pin is not under the official archlinux-deckard tree: '$s'" ;;
   esac
   name="${s##*/}"
-  [[ "$name" =~ ^mash-[0-9]{8}(\.[0-9]+)?$ ]] \
-    || die "refusing snapshot '$name' (need mash-YYYYMMDD[.N]; no moving alias, no .pvt): '$s'"
+  [[ "$name" =~ ^mash-[0-9]{8}\.[0-9]+(\.pvt)?$ ]] \
+    || die "refusing snapshot '$name' (need a frozen mash-YYYYMMDD.N[.pvt]; no moving alias): '$s'"
   printf '%s\n' "$s"
 }
 

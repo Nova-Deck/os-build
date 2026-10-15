@@ -367,7 +367,7 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: work/repo/aarch64
-          key: overlay-aarch64-${{ hashFiles('packages/*/source.pin', 'packages/*/patches/**', 'packages/*/PKGBUILD', 'build/builder.pin', 'build/snapshot.pin') }}
+          key: overlay-aarch64-${{ hashFiles('packages/*/source.pin', 'packages/*/patches/**', 'packages/*/PKGBUILD', 'packages/*/*.patch', 'packages/*/*.conf', 'build/builder.pin', 'build/snapshot.pin') }}
           restore-keys: overlay-aarch64-
 
       # The script directly, not `make overlay`: make gates it on the db's mtime against the

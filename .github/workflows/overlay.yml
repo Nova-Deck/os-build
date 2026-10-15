@@ -47,6 +47,8 @@ on:
       - 'packages/*/source.pin'
       - 'packages/*/patches/**'
       - 'packages/*/PKGBUILD'
+      - 'packages/*/*.patch'
+      - 'packages/*/*.conf'
       - 'packages/build-overlay.sh'
       - 'packages/inputhash.sh'
       - 'build/builder.pin'
@@ -62,6 +64,9 @@ on:
       - 'packages/*/source.pin'
       - 'packages/*/patches/**'
       - 'packages/*/PKGBUILD'
+      # `local_sources:` beside a local PKGBUILD (packages/yajl, packages/containers-common).
+      - 'packages/*/*.patch'
+      - 'packages/*/*.conf'
       - 'packages/build-overlay.sh'
       - 'packages/inputhash.sh'
       - 'build/builder.pin'
@@ -271,7 +276,7 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: work/repo/aarch64
-          key: overlay-aarch64-${{ hashFiles('packages/*/source.pin', 'packages/*/patches/**', 'packages/*/PKGBUILD', 'build/builder.pin', 'build/snapshot.pin') }}
+          key: overlay-aarch64-${{ hashFiles('packages/*/source.pin', 'packages/*/patches/**', 'packages/*/PKGBUILD', 'packages/*/*.patch', 'packages/*/*.conf', 'build/builder.pin', 'build/snapshot.pin') }}
           restore-keys: overlay-aarch64-
 
       - name: build the overlay packages

@@ -1,0 +1,13 @@
+diff --git i/common/pkg/config/containers.conf w/common/pkg/config/containers.conf
+index 1c9fe54c37..fd6baec2eb 100644
+--- i/common/pkg/config/containers.conf
++++ w/common/pkg/config/containers.conf
+@@ -387,7 +387,7 @@ default_sysctls = [
+ # drivers are "iptables", "nftables", "none" (no firewall rules will be created) and "firewalld" (firewalld is
+ # experimental at the moment and not recommend outside of testing).
+ #
+-#firewall_driver = ""
++firewall_driver = "nftables"
+ 
+ 
+ # The name of the default network as seen in `podman network ls`. This option only effects the network assignment when

@@ -233,6 +233,9 @@ OVERLAY_PATCHES := $(wildcard packages/*/patches/*.patch)
 # Checked-in local PKGBUILDs (pkgbuild_local in a source.pin, e.g. packages/mesa/PKGBUILD) are
 # build inputs too — track them so editing a recipe (deps, meson options) rebuilds that package.
 OVERLAY_PKGBUILDS := $(wildcard packages/*/PKGBUILD)
+# `local_sources:` files a local PKGBUILD's source=() names, staged beside it (configs, the recipe's
+# own patches — packages/yajl, packages/containers-common).
+OVERLAY_LOCALSRC := $(wildcard packages/*/*.patch packages/*/*.conf)
 # Overlay packages are ARCH-scoped (a rebuilt aarch64 gamescope serves every aarch64 device),
 # so the repo is shared at work/repo/<arch>/.
 OVERLAY_ARCH    ?= aarch64
@@ -636,7 +639,7 @@ steam-seed-artifact: $(SEED_ARTIFACT) ## Pack work/steam-seed -> out/steam-seed/
 # costs ~4h emulated on a dev box, but on the native aarch64 runners CI uses it costs ~34 minutes
 # for the whole set, which is not worth a registry, a pin format and a bot with write access to
 # main. See .github/workflows/overlay.yml for the per-package measurements.
-$(OVERLAY_DB): build/builder.pin build/snapshot.pin $(OVERLAY_PINS) $(OVERLAY_PATCHES) $(OVERLAY_PKGBUILDS)
+$(OVERLAY_DB): build/builder.pin build/snapshot.pin $(OVERLAY_PINS) $(OVERLAY_PATCHES) $(OVERLAY_PKGBUILDS) $(OVERLAY_LOCALSRC)
 	packages/build-overlay.sh
 
 # Advance .overlay.stamp only when the overlay repo's CONTENT actually changed, and do it in THIS

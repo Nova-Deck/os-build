@@ -192,7 +192,8 @@ is the cheap version.
 ### How these packages are pinned — `inputhash.sh`
 
 `packages/inputhash.sh <package-dir>` prints a digest of a package's **committed inputs**: its
-`source.pin`, the patches that pin declares, and `pkgbuild_local` if it has one. Three readers share
+`source.pin`, the patches that pin declares, `pkgbuild_local` if it has one, and its
+`local_sources:` files. Three readers share
 that one formula, and they have to agree byte for byte:
 
 | reader | what it does with it |
@@ -237,6 +238,47 @@ Everything else is identical: `build-overlay.sh` bumps `pkgrel`, injects the `pa
 first `cd` in `prepare()`, and `makepkg`s it under arm64 qemu. The PKGBUILD still downloads its own
 upstream source (e.g. a release tarball), so this stays "from-source", just with a recipe we own.
 
+### Recipe-owned files — `local_sources`
+
+A recipe's own `source=()` often names local files next to it (a config, or patches that its
+`prepare()` applies itself). List them so they are staged beside the PKGBUILD:
+
+```
+name: yajl
+pkgbuild_local: PKGBUILD
+pkgrel_suffix: 1
+local_sources: yajl-2.1.0-CVE-2017-16516.patch yajl-0009-Allow-cmake-4.0.patch
+```
+
+These are NOT `patches:`. `patches:` are novadeck patches that `build-overlay.sh` injects into
+`prepare()`; a recipe file listed there would be applied twice. `inputhash.sh` hashes
+`local_sources:` in the declared order and fails if one is missing, so editing one moves the lock
+row like any other input.
+
+### Build-time dependencies on other overlay packages — `needs`
+
+`makepkg -s` resolves dependencies from the snapshot, which has no overlay packages in it. When a
+recipe depends (at build time, or through a global `depends=`) on something only the overlay
+builds, name it:
+
+```
+name: crun
+pkgbuild_local: PKGBUILD
+pkgrel_suffix: 1
+needs: yajl criu
+```
+
+`build-overlay.sh` then:
+- builds the overlay in dependency order (a topological sort of every pin's `needs:`, stable
+  otherwise, and it refuses a cycle or a name that no `source.pin` declares);
+- `pacman -U`s the artifacts of the whole `needs:` closure into the build container before
+  `makepkg` runs;
+- adds that closure to `--only <name>`, because a fresh tree has nothing to install.
+
+Only list what the build needs. A runtime-only dependency belongs in the PKGBUILD's `depends=` and
+is resolved by the image's own install (podman needs nothing here, although it depends on crun at
+runtime).
+
 Current overlay:
 - `gamescope/` — **local PKGBUILD** building gamescope `3.16.28` (newer-Turnip/ROCKNIX parity)
   with our remaining patches under `packages/gamescope/patches/`. The composite-rotation patch for
@@ -254,3 +296,10 @@ Current overlay:
   redesigned — the *only* reason we build it is that 1.14 cannot install a dm-verity bundle on a
   kernel `>= 6.19` (upstream fixed it first in `v1.15.1`) and we ship 7.1.x. No novadeck patches.
   Unlike the entries above it outranks holo's build by `pkgver`, not just by repo order.
+- **The Lepton container stack**: `yajl/`, `criu/`, `crun/`, `conmon/`, `passt/`, `netavark/`,
+  `containers-common/`, `podman/`, all **local PKGBUILDs**. `mash-20260401` stopped shipping all of
+  them, so they are built here from the recipes the previous snapshot published under `sources/`
+  (each header names its tarball), slimmed toward what the Frame ships: no libkrun in crun, no
+  aardvark-dns behind netavark, no podman-docker split, and passt at the Frame's version. Lepton
+  networks through pasta, so netavark is only installed because containers-common requires a
+  `container-network-stack`.

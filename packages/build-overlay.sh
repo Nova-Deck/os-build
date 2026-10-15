@@ -87,6 +87,67 @@ pin_field() { sed -n "s/^$2:[[:space:]]*//p" "$1" | head -1; }
 # Persist the repo + per-package stamps across runs (incremental); only re-stage what we rebuild.
 mkdir -p "$STAGE" "$REPO_DIR" "$STAMPS"
 
+# --- overlay packages that build against OTHER overlay packages ----------------------------------
+# `needs: <name>...` in a source.pin names overlay packages that must be INSTALLED before this one
+# builds — makedepends (or global depends, which makepkg -s installs too) that the snapshot does not
+# carry. crun links criu + yajl, and none of the three is in the snapshot since mash-20260401.
+# Three consequences, all here:
+#   ORDER    PINS is re-sorted so every package comes after what it needs (stable: otherwise
+#            alphabetical, as before).
+#   --only   a selection pulls in its needs, transitively — a CI job that builds crun alone has no
+#            criu to install otherwise. An up-to-date need is still skipped by its stamp.
+#   INSTALL  the build container `pacman -U`s the needed artifacts (named by their stamps' .files)
+#            after its -Sy, so makepkg -s finds them satisfied. No repo db is involved: the index is
+#            rebuilt only at the end, and a --no-index job never has one.
+declare -A PIN_OF NEEDS_OF
+for pin in "${PINS[@]}"; do
+  n="$(pin_field "$pin" name)"; : "${n:?$pin: missing name}"
+  PIN_OF["$n"]="$pin"
+  NEEDS_OF["$n"]="$(pin_field "$pin" needs)"
+done
+for n in "${!NEEDS_OF[@]}"; do
+  for d in ${NEEDS_OF[$n]}; do
+    [ -n "${PIN_OF[$d]:-}" ] || { echo "[overlay] $n: needs '$d', which no packages/*/source.pin names" >&2; exit 1; }
+  done
+done
+
+# Depth-first topological order; a cycle is an error, not a hang.
+declare -A VISIT=()
+ORDERED=()
+visit() {
+  local n="$1" d
+  case "${VISIT[$n]:-}" in
+    done) return 0 ;;
+    active) echo "[overlay] dependency cycle through '$n' (source.pin needs:)" >&2; exit 1 ;;
+  esac
+  VISIT["$n"]=active
+  for d in ${NEEDS_OF[$n]}; do visit "$d"; done
+  VISIT["$n"]=done
+  ORDERED+=("${PIN_OF[$n]}")
+}
+for pin in "${PINS[@]}"; do visit "$(pin_field "$pin" name)"; done
+PINS=("${ORDERED[@]}")
+
+# Transitive needs of one package, deps first.
+needs_closure() {
+  local n="$1" d
+  for d in ${NEEDS_OF[$n]}; do
+    needs_closure "$d"
+    printf '%s\n' "$d"
+  done
+}
+
+if [ ${#ONLY[@]} -gt 0 ]; then
+  for n in "${ONLY[@]}"; do
+    [ -n "${PIN_OF[$n]:-}" ] || { echo "[overlay] --only $n: no packages/*/source.pin names it" >&2; exit 1; }
+  done
+  for n in "${ONLY[@]}"; do
+    for d in $(needs_closure "$n"); do
+      selected "$d" || { echo "[overlay] --only $n: also selecting '$d' (needs:)" >&2; ONLY+=("$d"); }
+    done
+  done
+fi
+
 # Compiler cache shared by every package build, the Arch way: the ccache package plus `ccache`
 # in makepkg.conf's BUILDENV, which makes makepkg put /usr/lib/ccache/bin first on PATH so
 # meson/cmake/autotools pick the wrappers up as cc/c++. Rust packages see no benefit (cargo does
@@ -188,6 +249,11 @@ for pin in "${PINS[@]}"; do
     # Hashed by inputhash.sh.
     for f in "$pdir"/*.install; do
       [ -f "$f" ] && cp "$f" "$bd/"
+    done
+    # `local_sources:` — files the recipe's own source=() names (configs, its own patches), staged
+    # beside it. Unlike `patches:` nothing applies them; the recipe does. Hashed by inputhash.sh.
+    for f in $(pin_field "$pin" local_sources); do
+      cp "$pdir/$f" "$bd/$f"
     done
   else
     : "${repo:?$pin: missing pkgbuild_repo}"
@@ -336,14 +402,30 @@ else
 fi
 for name in "${BUILD_NAMES[@]}"; do
   echo "[overlay] === build $name (isolated container) ===" >&2
+  # The artifacts of everything it needs (see needs: above). Built earlier in this loop or still
+  # fresh from a previous run; either way the stamp names them.
+  need_files=()
+  for d in $(needs_closure "$name"); do
+    [ -f "$STAMPS/$d.files" ] || { echo "[overlay] $name needs $d, which has no build in this tree" >&2; exit 1; }
+    while read -r f; do
+      [ -n "$f" ] && need_files+=("$f")
+    done < "$STAMPS/$d.files"
+  done
+  [ ${#need_files[@]} -eq 0 ] || echo "[overlay] $name: installing needed overlay artifacts: ${need_files[*]}" >&2
   docker run --rm --platform linux/arm64 \
     -e HOSTUID="$(id -u)" -e HOSTGID="$(id -g)" -e PKG="$name" -e USE_CCACHE="$USE_CCACHE" \
+    -e NEED_FILES="${need_files[*]}" \
     -v "$STAGE":/stage -v "$REPO_DIR":/repo "${CCACHE_MOUNT[@]}" "$DEVEL_REF" \
     bash -euo pipefail -c '
       useradd -m builder 2>/dev/null || true
       printf "builder ALL=(ALL) NOPASSWD: ALL\n" > /etc/sudoers.d/builder
       chmod 0440 /etc/sudoers.d/builder
       pacman -Sy --noconfirm
+      if [ -n "$NEED_FILES" ]; then
+        need_paths=()
+        for f in $NEED_FILES; do need_paths+=("/repo/$f"); done
+        pacman -U --noconfirm --needed "${need_paths[@]}"
+      fi
       ccache_env=()
       if [ "$USE_CCACHE" != 0 ]; then
         pacman -S --needed --noconfirm ccache

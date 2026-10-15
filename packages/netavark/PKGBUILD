@@ -1,0 +1,66 @@
+# netavark — podman's network stack; containers-common requires a `container-network-stack`, and
+# this is its only provider. Part of the Lepton container stack built here (packages/podman/PKGBUILD).
+#
+# Recipe source: archlinux-deckard/archlinux/mash-20260305/sources/packages/netavark-1.17.2-1.src.tar.gz
+# (sha256 02591713551813732aac9b30d198bf9fcd8fe8e0a20e84cbc30d08c38cf62192), Arch's recipe.
+#
+# Deviation: no aardvark-dns dependency. It is netavark's DNS server for named container networks;
+# Lepton runs rootless on pasta and never creates one, and the Steam Frame ships netavark without
+# aardvark-dns (_reference image 20260925).
+#
+# Maintainer: David Runge <dvzrv@archlinux.org>
+# Maintainer: Morten Linderud <foxboron@archlinux.org>
+
+pkgname=netavark
+pkgver=1.17.2
+pkgrel=1
+pkgdesc="Container network stack"
+arch=(x86_64 aarch64)
+url="https://github.com/containers/netavark"
+license=(Apache-2.0)
+depends=(
+  gcc-libs
+  glibc
+  nftables
+)
+makedepends=(
+  cargo
+  git
+  go-md2man
+  protobuf
+)
+provides=(container-network-stack=2)
+source=(git+$url#tag=v$pkgver)
+sha512sums=('041718d34fb124aaa1c7ec0278e3f645e4f8e156c16f5d7003458999d72d7af4f481278dd03345cbba5ce3745caf24f6e1f1d1ffcf08fbaccccf4a7955face03')
+b2sums=('b61dfdfb4afa8725ef05c216710602ee97a78d6d93667b7d2ed3fa00025e97e5b820af1edd4f46dde26494ab7f347f74f4782e80dd3cd6315c630617fea49f94')
+
+prepare() {
+  cd $pkgname
+  cargo fetch --locked --target "$(rustc --print host-tuple)"
+
+  # Adjust unit .in files manually, as we are not using the Makefile.
+  local in_file
+  for in_file in contrib/systemd/system/*.in; do
+    sed "s|@@NETAVARK@@|/usr/lib/podman/netavark|" "$in_file" > "${in_file%.in}"
+  done
+}
+
+build() {
+  cd $pkgname
+  make -C docs
+  cargo build --frozen --release
+}
+
+check() {
+  cd $pkgname
+  cargo test --frozen
+}
+
+package() {
+  cd $pkgname
+  install -vDm 755 target/release/$pkgname -t "$pkgdir/usr/lib/podman/"
+  install -vDm 644 docs/*.1 -t "$pkgdir/usr/share/man/man1/"
+  install -vDm 644 docs/*.7 -t "$pkgdir/usr/share/man/man7/"
+  install -vDm 644 contrib/systemd/system/*.{service,socket} -t "$pkgdir/usr/lib/systemd/system/"
+  install -vDm 644 README.md -t "$pkgdir/usr/share/doc/$pkgname/"
+}

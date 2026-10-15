@@ -493,14 +493,12 @@ jobs:
           EOF
           )"
 
-  # The base repo: Valve's archlinux-deckard snapshot tree (build/snapshot.pin). Two independent
-  # questions, because our pin can be an UNSUFFIXED name, and that name is an alias:
-  #   1. is there a snapshot with a NEWER date than the pinned one (in any form — mash-YYYYMMDD,
-  #      .N, .N.pvt)? That is a bump to consider.
-  #   2. has the pinned ALIAS itself moved? mash-YYYYMMDD follows its newest .N.pvt revision, so a
-  #      new revision republishes under our pinned name and every locked build starts failing
-  #      fetchlock's sha256 checks. The baseline is the core.db ETag recorded in snapshot.pin; a
-  #      pinned `.N` revision is frozen and skips this check.
+  # The base repo: Valve's archlinux-deckard snapshot tree (build/snapshot.pin). The pin is always a
+  # FROZEN revision (mash-YYYYMMDD.N[.pvt]; build/lib-pins.sh refuses the moving alias), so two
+  # questions, both about something newer than the pin:
+  #   1. is there a snapshot with a NEWER date (in any form — mash-YYYYMMDD, .N, .N.pvt)?
+  #   2. is there a newer REVISION of the pinned date (pinned .1.pvt, .2.pvt published)? Valve
+  #      republishes a date with fixes — mash-20260305 went .1.pvt -> .2.pvt.
   deckard-base:
     name: archlinux-deckard snapshot
     runs-on: ubuntu-latest
@@ -537,7 +535,8 @@ jobs:
           Index: $base/
 
           Bump drill — the mash-20260305 bump (2026-09-23) hit every item below at least once:
-          - [ ] prefer a frozen \`.N\` if one exists; \`.pvt\` names are refused by build/lib-pins.sh. An unsuffixed pin must record its core.db ETag in \`build/snapshot.pin\` — this watcher reads it
+          - [ ] pin a FROZEN revision (\`.N\` or \`.N.pvt\`); build/lib-pins.sh refuses the bare \`mash-YYYYMMDD\` alias
+          - [ ] diff the locked package NAMES against the new snapshot: a package can leave the public tree while the Frame still ships it from Valve's private layer (mash-20260401 dropped podman — now built in packages/)
           - [ ] diff the vendor \`pacman.conf\` / \`pacman.mirrorlist\` against the previous snapshot's (\`LocalFileSigLevel\` arrived this way)
           - [ ] \`build/builder.pin\`: sha256 of \`<snapshot>/system.rootfs.zst\`, changed TOGETHER with snapshot.pin
           - [ ] \`make overlay\` — the builder pin is in every overlay input hash, so ALL packages rebuild
@@ -552,25 +551,19 @@ jobs:
             echo "no newer snapshot date"
           fi
 
-          # Alias check: only for an unsuffixed pin, which is the one that can move.
-          if [ "$name" = "mash-$pinned_date" ]; then
-            want="$(sed -n 's/^#[[:space:]]*core\.db[[:space:]].*ETag[[:space:]]*\([^[:space:]]*\).*/\1/p' build/snapshot.pin | tail -1)"
-            [ -n "$want" ] || { echo "::error::build/snapshot.pin pins the alias $name but records no core.db ETag to watch it by"; exit 1; }
-            got="$(curl -fsSIL --retry 3 "$url/core/os/aarch64/core.db" | tr -d '\r' | sed -n 's/^[Ee][Tt][Aa][Gg]:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' | tail -1)"
-            [ -n "$got" ] || { echo "::error::no ETag on $url/core/os/aarch64/core.db"; exit 1; }
-            echo "alias core.db ETag: recorded=$want served=$got"
-            if [ "$got" != "$want" ]; then
-              revs="$(printf '%s\n' "$dirs" | grep "^$name" | tr '\n' ' ')"
-              file_issue "upstream: archlinux-deckard $name alias moved (core.db ETag $got, pinned $want)" "$(cat <<EOF
-          The pinned snapshot name **$name** is an alias, and it now serves a different core.db
-          (ETag \`$got\`, pinned \`$want\`). A new revision landed under it; locked builds will fail
-          fetchlock's per-package sha256 check until this is resolved.
+          # Newer revision of the pinned date, on either publishing line (.N or .N.pvt).
+          pinned_rev="$(printf '%s' "$name" | sed -n 's/^mash-[0-9]\{8\}\.\([0-9]\{1,\}\).*/\1/p')"
+          [ -n "$pinned_rev" ] || { echo "::error::build/snapshot.pin is not a frozen mash-YYYYMMDD.N[.pvt] revision: $name"; exit 1; }
+          latest_rev="$(printf '%s\n' "$dirs" | sed -n "s/^mash-$pinned_date\.\([0-9]\{1,\}\)\(\.pvt\)\{0,1\}\$/\1/p" | sort -n | tail -1)"
+          echo "pinned revision=$pinned_rev latest revision of that date=${latest_rev:-none}"
+          if [ -n "$latest_rev" ] && [ "$latest_rev" -gt "$pinned_rev" ]; then
+            revs="$(printf '%s\n' "$dirs" | grep "^mash-$pinned_date\." | tr '\n' ' ')"
+            file_issue "upstream: archlinux-deckard mash-$pinned_date.$latest_rev published (pinned: $name)" "$(cat <<EOF
+          Valve republished the pinned date: revision **.$latest_rev** of mash-$pinned_date (we pin **$name**).
           Revisions for that date: \`$revs\`
 
-          - [ ] find the frozen revision the alias now matches (compare core.db/extra.db sha256 and the rootfs ETag against each \`.N\` / \`.N.pvt\`)
-          - [ ] follow the bump drill: \`build/builder.pin\` from the new system.rootfs.zst, \`make overlay\`, relock both, a release card, HW
-          - [ ] update the recorded ETag lines in \`build/snapshot.pin\`
+          - [ ] diff its core.db/extra.db against the pinned revision — a respin usually carries fixes
+          - [ ] follow the bump drill: \`build/snapshot.pin\` + \`build/builder.pin\`, \`make overlay\`, relock both, a release card, HW
           EOF
           )"
-            fi
           fi

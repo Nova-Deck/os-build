@@ -1,0 +1,94 @@
+# podman — the container engine Valve's Lepton compat tool (Steam app 3029110, Android titles)
+# resolves from PATH. rootfs/customize-base.sh says why each piece is on the image.
+#
+# WHY THE STACK IS BUILT HERE: mash-20260401 dropped podman, crun, conmon, passt, netavark,
+# aardvark-dns, containers-common, criu and yajl from the public archlinux-deckard tree. The Steam
+# Frame still installs them (_reference image 20260925: podman 5.5.2, crun 1.14.4, … built by
+# Valve's CI into its PRIVATE holo layer), so this is the public mash no longer mirroring Arch's
+# copies, not Valve retiring podman. The recipes are the ones mash-20260305 shipped, slimmed toward
+# what the Frame installs: no aardvark-dns, no krun, no podman-docker; passt at the Frame's snapshot.
+#
+# Recipe source: archlinux-deckard/archlinux/mash-20260305/sources/packages/podman-5.8.0-1.src.tar.gz
+# (sha256 a120739fa4be0723ddd49a257219fae3ea60db71e659936061668a8bc87e7e7c), Arch's recipe.
+#
+# Deviations: the podman-docker split (and its docs build) is gone. Runtime depends stay in
+# package_podman() on purpose: makepkg -s installs only the GLOBAL arrays, so conmon, crun, passt and
+# containers-common (overlay packages too) are not needed to BUILD this, and source.pin has no needs:.
+#
+# Maintainer: Morten Linderud <foxboron@archlinux.org>
+# Maintainer: David Runge <dvzrv@archlinux.org>
+# Contributor: Bartłomiej Piotrowski <bpiotrowski@archlinux.org>
+
+pkgbase=podman
+pkgname=(podman)
+pkgver=5.8.0
+pkgrel=1
+pkgdesc='Tool and library for running OCI-based containers in pods'
+arch=(x86_64 aarch64)
+url='https://github.com/containers/podman'
+license=(Apache-2.0)
+makedepends=(
+  apparmor
+  btrfs-progs
+  catatonit
+  git
+  go
+  go-md2man
+  gpgme
+  libseccomp
+  man-db
+  shadow
+  sqlite
+  systemd
+)
+# https://github.com/containers/podman/issues/13297
+options=(!lto)
+source=(
+  "git+$url?signed#tag=v$pkgver"
+)
+# See the release-keys repository
+# https://github.com/containers/release-keys
+validpgpkeys=(
+  B7DBDCA456F7335E91F1C25CD3624C551D0515C4  # Matthew Heon <mheon@redhat.com>
+  7CE1E6F8C90CB53E7E4D8F2D502E08DB0BBF8EEE  # Ashley Cui <acui@redhat.com>
+  9E33DD8704CC03E2DEB84D9A1C1EDD7CC7C3A0DD  # Lokesh Mandvekar <lsm5@redhat.com>
+)
+sha512sums=('f4d3bbce139931e4c55e59e9298fdfdfe6240a91b92ae0d4ad90ea9673c4e1991f6b111acc5fe4107832a0ed0b1ad34468f7a7783e990819770ee33c0c69e2f0')
+b2sums=('394927146d2733f31a12814231719b5cd8a6c8883958412345cba65024364bf0dbe01d03771edf675250ffcc980bc787f2acf0efc9b2a3a46f31bae1d373376d')
+
+build() {
+  export CGO_CPPFLAGS="${CPPFLAGS}"
+  export CGO_CFLAGS="${CFLAGS}"
+  export CGO_CXXFLAGS="${CXXFLAGS}"
+  export CGO_LDFLAGS="${LDFLAGS}"
+  export GOFLAGS="-buildmode=pie"
+  export GOPATH="${srcdir}"
+
+  make EXTRA_LDFLAGS='-compressdwarf=false -linkmode=external' PREFIX=/usr -C $pkgbase
+}
+
+package_podman() {
+  depends=(
+    catatonit
+    conmon
+    containers-common
+    oci-runtime
+    gcc-libs
+    glibc
+    iptables
+    gpgme libgpgme.so
+    libseccomp libseccomp.so
+    passt
+    shadow
+    sqlite
+  )
+  optdepends=(
+    'apparmor: for AppArmor support'
+    'btrfs-progs: support btrfs backend devices'
+    'fuse-overlayfs: for deprecated storage driver in rootless environment'
+    'slirp4netns: for alternative rootless network support'
+    'podman-compose: for docker-compose compatibility'
+  )
+
+  make install install.completions DESTDIR="$pkgdir" PREFIX=/usr LIBEXECDIR=/usr/lib -C $pkgbase
+}

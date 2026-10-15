@@ -6,8 +6,8 @@
 # carries partition and filesystem tools that no device ever gets, and a single lock covering both
 # would stop meaning "this is what is on the device". See this generator's header.
 #
-# repo snapshot: https://holo-packages.steamos.cloud/archlinux-deckard/archlinux/mash-20260305
-# built in:      https://holo-packages.steamos.cloud/archlinux-deckard/archlinux/mash-20260305/system.rootfs.zst sha256:11ee37589d207c31a244f3599b779e9e3ae1f4b51c6c01d45c20b95975c16eca   (execution environment only — contributes no files)
+# repo snapshot: https://holo-packages.steamos.cloud/archlinux-deckard/archlinux/mash-20260401.1.pvt
+# built in:      https://holo-packages.steamos.cloud/archlinux-deckard/archlinux/mash-20260401.1.pvt/system.rootfs.zst sha256:cd3b3b9de4157677c70d514595bca2bc33b71072723761ad4d1f48821c6d6bdb   (execution environment only — contributes no files)
 #
 # name version arch source sha256   (source: snapshot|novadeck|prebuilt)
 # Every row carries a real hash: the root is bootstrapped from packages, so there is no content on
@@ -20,42 +20,42 @@
 #     split PKGBUILD (mesa emits three).
 # There is no 'stripped' class here: the installer keeps its pacman and is never sealed.
 acl 2.3.2-1.2 aarch64 snapshot 57dd0cf474187d1584f2894b1da10449c42cbf24228aceae8eefc253c70029a0
-aom 3.13.1-2 aarch64 snapshot 13d50fb3e29bad6fc74cd63153c9701678535d72eaeddbd4bd69310b3526ba53
-archlinux-keyring 20260301-1 any snapshot c1ca93d60de34f5a0882d940a6daf606127949061c2562407abdfeae09eaf868
+aom 3.13.2-1 aarch64 snapshot d4cebc64eac8c7b53858e2b1dbafd1ec71b9a106ebdfdbd38f5f4de63abdc3ce
+archlinux-keyring 20260323-1 any snapshot 78fbfc4032ec163d7ffd7cd5b3b009cc4651fd97a55ecfc29ea0a769210069bc
 attr 2.5.2-1.2 aarch64 snapshot 128ba6da6d6d17392c9c7894f3fe8af994d64e70235714b1a96d55f4d9f0d932
-audit 4.1.3-1 aarch64 snapshot edcec40e77f15375650cde4caf1e6e0579bc86075d8619b2288d7fa2c8e66199
+audit 4.1.4-2 aarch64 snapshot 5c7f8209c5271a42660f34dcd27304f63fb387b789954a0abfcc25a76bace09f
 avahi 1:0.9rc3-1 aarch64 snapshot 599cbe0eb72ba984f842ec7fce6d998cd96020632c052bec6638e96e301ee068
 base 3-3 any snapshot 0cb90ddbf3de917419ea77978576965812f5496588cefc2d9592204d15552156
 bash 5.3.9-1 aarch64 snapshot 5b0947500df2459dd535b3035f84f2ed57b7123191f840636cc4ff544c24e862
 binutils 2.46-1 aarch64 snapshot 8e2a9ec36b5c4b83625992677de0dd9d26941ebbf0ef0a58a1b1a2eb6f7d5460
 brotli 1.2.0-1 aarch64 snapshot f97a489112a09abd9d0fdacbf47a3b26dc50e683a4f7dd97f3cf121d64edee9d
-btrfs-progs 6.19-1 aarch64 snapshot e22a096a6bed59ebe78e3781bae45d7d127ce9cbf48364f7446d47b1500cec86
+btrfs-progs 6.19.1-1 aarch64 snapshot 1a142c41102dffb1124d1b8901991b86972d9a62083145881400fa13de928bcf
 bzip2 1.0.8-6 aarch64 snapshot d3811e3340bc406f40f4c59d9ea815e46091ba362226f8aa6ce0ee3eaa63ea6c
 ca-certificates 20240618-1 any snapshot 982005bd5ecc998c05f561b57bb58b4457407779727e3c3d59e926d34a8b0712
-ca-certificates-mozilla 3.121-1 aarch64 snapshot da50977801821533eca5e80101b4222a823b2d50753c09ce6b3313a689619a94
+ca-certificates-mozilla 3.122-1 aarch64 snapshot 7fa4f8a043729b6c881999325cf7f58968afa80fa705c79019e7ba10893aeded
 ca-certificates-utils 20240618-1 any snapshot aabd5b2b7030716ccdd465d607e734e851fe4a01adf8293a3968fe22eb89ce9b
 cairo 1.18.4-1 aarch64 snapshot d3d64a92e050a35877154ae55391221b999f300fc8fecda5ff012c4bc8ab5a7e
 coreutils 9.10-1 aarch64 snapshot f4f625e286ca7643f6939c75b53fce72a65dc66cc403b6a4ab9da4007a97a23f
 cryptsetup 2.8.4-1 aarch64 snapshot a1bdde68340129f09d503f8095b6e7b286ccaa7c79cf43ffe997b6ad8c1bd6ad
-curl 8.18.0-3 aarch64 snapshot 15d24226fc26da81cc201a5b47434f2f0a3168a45a52dbf9c1927efa363e9c4f
+curl 8.19.0-1 aarch64 snapshot f57eb352709328fd9b6308cd184a9a9bb9ce7cc04175b02975d755f4f17850bf
 dav1d 1.5.3-1 aarch64 snapshot 9fe86441acda03fc1c1b454354c23029c4d24cf5c45281e0d065e0d62eafcf62
 dbus 1.16.2-1 aarch64 snapshot 99a094819e93c6f22e10ea8eed4daf2fcfefcf7d1535859ad923cf2d3d1b4ef1
 dbus-broker 37-3 aarch64 snapshot b11e71e7ee72717336b415d5affaf91cd3accd95845ab941b8840fd02dfa9ea0
 dbus-broker-units 37-3 aarch64 snapshot 7e432ffde73ef74ce86e7eb1fe5d97e0cda93b3d9f8d4e02c322bc79cf62129b
 dbus-units 37-3 aarch64 snapshot 4d9a5f303a739d6d7a2239108de588083bf1a7d0746e0acf561f5f0e6d7fbf83
 default-cursors 3-1 any snapshot ae52028372c3b2f66547baab41f1614b25472489d927b1a50b596bb8df7c056e
-device-mapper 2.03.38-1 aarch64 snapshot 99add5d135e98f0f9ecb36202f8fdb0827dbf480510a7dccab078e84c2bc2750
+device-mapper 2.03.39-1 aarch64 snapshot b7091ced4c5347f2cca26ab526147a6e34d8435fef25a1cb8c2a63302e1c8a99
 dosfstools 4.2-5 aarch64 snapshot 385092d21ec0830909157ea4669f135cd95d509208160ef5313e5516b35c86ff
 duktape 2.7.0-7 aarch64 snapshot 24807fc3fa8d08db6ae5b8fd262ffcbb957a2380ed6113e5f30dccd5e1ff1935
-e2fsprogs 1.47.3-2 aarch64 snapshot 1a40a434f4009190552620e4e8f410b158d195107e4bc103fde9ae0c4cb07bf3
-expat 2.7.4-1 aarch64 snapshot 7fefcfdd609ca51e8e9b7c408304d43ecba929dd047559f51114fba08ba53b4d
-file 5.47-1 aarch64 snapshot 00c0df1ddd357825216e1d13a91f274ed483f1505f74fecc8af624ad4e839e2f
+e2fsprogs 1.47.4-1 aarch64 snapshot 3b00f47b84219d26d3425e9c433b80d290d85afe0be948e95dcaf87cb7e65c4b
+expat 2.7.5-1 aarch64 snapshot fea01dcf083be5cc05ffea6e56bb0097053fe050e773f9dcd0e1725b4db1ccb0
+file 5.47-2 aarch64 snapshot b84e648877b461d706384aa55618afb2ba7c8b53cab0750e87f0bd4b4e4af4f4
 filesystem 2025.10.12-1 any snapshot 6b6c3fee7432204840d3b6afc9bc1a68c28f591a47fb220071715c40cca956df
 findutils 4.10.0-3 aarch64 snapshot 3e131af3daed6a31324c31861686c7bb2ebc29bc39e3d3f7dc35e80c64fc8109
 fontconfig 2:2.17.1-1 aarch64 snapshot 10c55d9d0abca7ea40d778b34cb2fce5f39974042f4f6681c4c541fa24dc771f
-freetype2 2.14.2-1 aarch64 snapshot 436dbf39d0839c9ccd637822bdb3c54667f2bacf1a79bae0e9a8401603ffcdaa
+freetype2 2.14.3-1 aarch64 snapshot 9778ce707e2bb2163ce2fbf5b339a55673a6a7940a0f63843fbc9310a0a23528
 fribidi 1.0.16-2 aarch64 snapshot 111a98b837dc6b5d9008b4c3a19bc5baffbcb1096625d758aeb1d51a6e507e3d
-gamescope 3.16.31-1.1 aarch64 novadeck 824e71a0a0be8e08b9fe1fcadb09e695de7ca50f3b45d8fdb6f60cda150baef8
+gamescope 3.16.31-1.1 aarch64 novadeck d7385f4c8a608b4b13ba166dbc13bdff18f3d89d07ec5246ec8fe1b30f45369c
 gawk 5.4.0-1 aarch64 snapshot 379dcf5aeb42ea4b59e457692c6c91a2d974484539f122467e75a683f98b6821
 gcc-libs 15.2.1+r604+g0b99615a8aef-1 aarch64 snapshot 5d388c5810ed8e58197352a2141f17e79f81d0073ebfaa0ce3de0e72bb006db6
 gdbm 1.26-2 aarch64 snapshot 942d709434f29db679927ac2dcddc3f3ebb9009764bdd4fc307b2b1ac1131d81
@@ -72,11 +72,11 @@ gptfdisk 1.0.10-2 aarch64 snapshot 089b0e85c42ec462fe14f8bc956350ec5f7bc61d73d2d
 graphite 1:1.3.14-6 aarch64 snapshot c4aa3d60382bc73b3b345386b8c0a6619bd4f25c10ea61a673cf0c616133f585
 grep 3.12-2.2 aarch64 snapshot 0915f2004376a6600d9d07ca1cdb7982fa012636b813eaa79f3d40e74ab6b448
 gzip 1.14-2.2 aarch64 snapshot e3d1fccd7eab31ab853ebf90d6ae467cfc05f4d6e5c15bc985ed8dfc2c1d2994
-harfbuzz 12.3.2-1 aarch64 snapshot b19721bd86f3bc98fd39a0bba58819362c57b4a316a9e56283ede0ea6ad6708c
+harfbuzz 13.2.1-1 aarch64 snapshot 5e16466309d5e1a00aaac7d8fe8d40f240a0919f6bab99a8fb482298fd2a14b6
 hidapi 0.15.0-1 aarch64 snapshot 39a25ef6e2602c6835ae971dbaec5e16340ebc61bac419f3badebac6f232f479
-hwdata 0.404-1 any snapshot 2126bf1c7844aa5c0ba8b63b03a0941cccc96589c34a0aad7b3a557c54d8f853
-iana-etc 20260225-2 any snapshot 648ea40853136b321fa11611e4a82a6f25ee4b9c6fe9c32658ad2d89add8a420
-icu 78.2-2 aarch64 snapshot e792b99a520c5bda8db5bb21ed3381caf1dc5b4d35fec48356a016db8725767c
+hwdata 0.405-1 any snapshot 84d12ee2230e815682fe98f82b7feb933823c2cc3159adf692c0eeaf1fb2ad71
+iana-etc 20260306-1 any snapshot 7dc4b849648685d2bcca2959277cd04cea6a942ca1054570aebf5a761ff82460
+icu 78.3-1 aarch64 snapshot 8cb9a3c595ab6eeada587cfc4cc6e3e4fcba359341be7236debceaf431679296
 inputplumber 0.81.0 any prebuilt 5509a6f79bec95c240de34833639e3ba8a144752e3745e6eb978b38b8aa05a10
 iproute2 6.19.0-2 aarch64 snapshot 46eab4b6e21632051385a231cd117ce696af014c3b99a3a1967dd397a663523e
 iptables 1:1.8.11-2 aarch64 snapshot 35171376ec63b9f78427d7465da4f7f7d7adc51970233580161a57d97962c476
@@ -91,23 +91,23 @@ keyutils 1.6.3-3 aarch64 snapshot b1e24c67ed87819860a9eafe9d4c5b2169eb815f0a9497
 kmod 34.2-1 aarch64 snapshot f06940f11879f78162ab85023871c1989facb55eb5d5c6bebde83519c8c672e8
 krb5 1.21.3-2 aarch64 snapshot 6544ef73ff4c5b4ff6e2ffb954229d42738adba2daa8edded23f484320572ba4
 lcms2 2.18-1 aarch64 snapshot 5864dffd931de57e0a0675628a549d5e4c705abb5ab9742304ba0b612f0b2e66
-leancrypto 1.6.0-1 aarch64 snapshot 7e0ec447b60b8f533837906eff92c245afff807179d80ecc464906db995afa2d
+leancrypto 1.7.1-1 aarch64 snapshot 0741dfe085f70d1b185f3473c4997aefa0985d4bd9a9a081aa77b221ad200703
 libaio 0.3.113-3 aarch64 snapshot 6426df849e5f47205a876984e60f2edb8ad5f9630489bdd4fc317536c3ecff1f
-libarchive 3.8.5-1 aarch64 snapshot 91f347e2932c488113e1c639401052778c62454a5802000e393b510eede29ed1
+libarchive 3.8.6-1 aarch64 snapshot 7ebc62b98c042e4d715a35ff8908cca0c534eee0a8ba9351e3014eb792fec60d
 libasan 15.2.1+r604+g0b99615a8aef-1 aarch64 snapshot 38d05e5559c8f6af4087c84be99817e5553ff9149c8cc3da30d2ec236e1ec4ce
 libassuan 3.0.0-1 aarch64 snapshot bd2345c492a80c4e1b84998c3911da454a177cfd7bbb5a352ebcb27f5ea83528
 libatomic 15.2.1+r604+g0b99615a8aef-1 aarch64 snapshot 0defca98519e83061ac4077499e39cbd61c1b03a6aa32e18d3a4370b3ad9be58
-libavif 1.3.0-5 aarch64 snapshot b5588c3fce954ff416888a197a5a6ebacd04e5cf3ab57a96d8cdaa977558570b
+libavif 1.4.1-1 aarch64 snapshot d3dc630c7d0649309f9ddeb53fd2854e2dadefcd161ad6689f3d5e8bb5a28330
 libbpf 1.6.2-1 aarch64 snapshot f13ecaa0892c6477aef2be27ddc564cd50430e59f0221e4e8d4720e54be27445
 libcap 2.77-1 aarch64 snapshot 18ff910f9c42ec0a2f5b6212b7858355d187990540996a943fd472804d12fc4f
-libcap-ng 0.9-1 aarch64 snapshot ff02d695e6aa4d96c96da6ada156ff3e4ed259abfce3b81978a29a216f8b7454
+libcap-ng 0.9.2-1 aarch64 snapshot 62307e740fadaae9f9c9fc23d59a91180bc98462e583892ec26c2202bd8a178e
 libdaemon 0.14-6 aarch64 snapshot 2b87acae2cfa1ee3bc1f54304ff88bbbf860dc3c0a5a17d7a6cb721593187fc7
 libdatrie 0.2.14-1 aarch64 snapshot 9fd43f430c658410e7936360e54fc2d4ea7091d98e41066c22dc1bfe1de750eb
 libdecor 0.2.5-1 aarch64 snapshot 4c8ec0a49902346de675387f0d06d909813b0a95bcb3f2d4f2216993624ae5a4
 libdeflate 1.25-1 aarch64 snapshot feba44451c736f1af93b7132df659a129ce03774c13370bdb16ce29b441474f7
 libdisplay-info 0.3.0-1 aarch64 snapshot 621bd400597419fe2ff764ec4b223d8ae3b9fc9b69461efb5ecbf43795213c91
 libdrm 2.4.131-1 aarch64 snapshot e5bf0c470a0479a8788a3b67a778f46f3f606f813afca7788949b1de57fc1d54
-libedit 20250104_3.1-1 aarch64 snapshot 5570f44f0ab7649f78d59bfbb41a13e3796e85cfe351597d1ec042cbf168742b
+libedit 20251016_3.1-1 aarch64 snapshot d9040a30cd12339b7ff25366701ededf61b003c84eff4d95d7c1b24f1482edb6
 libei 1.5.0-1 aarch64 snapshot e327b252ec7f484dadc6cc98500d429283e21bf8ad537053e2f75ca5fd81fc34
 libelf 0.194-2 aarch64 snapshot d983084b558f82e7a5125cc0c07c5bde9fad177f32f84ffaa7350b11663571aa
 libepoxy 1.5.10-3 aarch64 snapshot e31b35835f495a2cfbc3ffeb001793a56e2cca3b8e2051d00654fb0376916461
@@ -125,10 +125,10 @@ libgudev 238-3 aarch64 snapshot 97bb9ff56b0f600c7083a57ea6579491c1a9d612a48ffb92
 libice 1.1.2-1 aarch64 snapshot 022758604c9357e31116fe22841cf05b1984d1b3e1baaa57b0a56fc1ce46568c
 libidn2 2.3.8-1 aarch64 snapshot 4da80bd4dfafff46d8716be4e0e13c70cfc42bd06bb30753e091b044e34c3013
 libiio 0.26-5 aarch64 snapshot 0ec3a5a139bf525be5d617b5ce7e99dfe4f5edad9c4c2649c6608766d266b36c
-libinput 1.30.1-1 aarch64 snapshot 6d456f6196828f451b957ccd89736533ca5e5d5d9eca1f50a5dd8ed2c1a12b82
+libinput 1.31.0-1 aarch64 snapshot a7061d52b7999efd07d394977c561fa961850b856fd66f9b7a3edc38055d60a8
 libjpeg-turbo 3.1.3-1 aarch64 snapshot e0ac96efcf7bddefe7a46211744e8cc7382fbcfeaab32ea93e4b723e5f767cf4
 libksba 1.6.8-1 aarch64 snapshot f85c37ed33fa4132a4240ffa103b187c850dc056cebde744537d4ff95ac85050
-libldap 2.6.12-1 aarch64 snapshot ee0fdfaf3cfc773eaa95a0758b1ce395ed3b219d4448cd5c97412e41da063d23
+libldap 2.6.13-1 aarch64 snapshot b03fc774054581a42ca7e9255d07191d6d0e18c129ebe231444de9214b9ebeb6
 liblsan 15.2.1+r604+g0b99615a8aef-1 aarch64 snapshot d027a9ecedf9adeaf2e87e655701ba828ba03680423e3bd37fac357acbb175db
 libmakepkg-dropins 20-1 any snapshot 768a4cc48f63d7a8eb4adcc3c69d9d69e2375c970d688d00c7201b4e7f4faa19
 libmm-glib 1.24.2-1 aarch64 snapshot bac0146ca1e2f60deccabcc9f81dded0dfe249874a23900a8e53bdfbf179ff55
@@ -138,19 +138,19 @@ libnetfilter_conntrack 1.0.9-2 aarch64 snapshot 708988b0ec002283b30d7e948f87c421
 libnewt 0.52.25-2 aarch64 snapshot 9f20d82e61de162650482d1f5c1d8e6785ff8d1ff960846aa3bd445498148c20
 libnfnetlink 1.0.2-2 aarch64 snapshot eb2836eb830b2a587e293ce89548ba822c14c92cd385ee70666c346e2146c3a4
 libnftnl 1.3.1-1 aarch64 snapshot 9e526984c7bae7fd4673d98c6bd60ab9f79c2b3558edb8b8892ed70fca21f96a
-libnghttp2 1.68.0-1 aarch64 snapshot e3b3f8f92e4c8e1048204ac8b96528c332300f024827dcd44b48eb0add2d68c5
+libnghttp2 1.68.1-1 aarch64 snapshot 40b7a24bf0e0c9eeac2b2ade70ab6792dee49cd1d907cb6321838abc6c641289
 libnghttp3 1.15.0-1 aarch64 snapshot bcce22b365126e794261619061eac8a09471c09f5c24ade223488e87d127b022
-libngtcp2 1.21.0-1 aarch64 snapshot 971caaaf8759c04ca4062ab9dabf72c4320458c0ad891e881df07fb41b7dba3a
+libngtcp2 1.22.0-1 aarch64 snapshot 52dfb3b6c195a3cb68d8822e08680948660a03616ca3d17232c0d080b096f765
 libnl 3.12.0-1 aarch64 snapshot 4bc4a91da3c597adc4ed4629d8ab4f5abc405c4bd7b3998894b7171bee6fa9f7
 libnm 1.56.0-1 aarch64 snapshot 8a03e036f1cb3595324dad9028e75589e6ae27701b3d9e6f39d28ca707f0c9c5
 libnsl 2.0.1-1 aarch64 snapshot b25e52fda0d05348e5f7655825bfe9476b47e37b4fbd92f6e0badec8fcf31888
 libobjc 15.2.1+r604+g0b99615a8aef-1 aarch64 snapshot 05418d7d681955eb66befbf74fb55161414ba7e87022672f96d3ee901ff3d5e7
 libp11-kit 0.26.2-1 aarch64 snapshot c41c9febe687f3236f9d7411e45a9fcbc10825d8cc93f4a241315698f656dc73
 libpcap 1.10.6-1 aarch64 snapshot 2259ac87c360873786cecee5740770c81ed47ba7dac1478581a5c0dd295a437e
-libpciaccess 0.18.1-2 aarch64 snapshot 6457a51dda866961a083bac166646205edf31a621f7f83b8a096d1a7825b388c
+libpciaccess 0.19-1 aarch64 snapshot c8116b90b61eee9b88a8d26ba0df7ececb5f6c8f7d30cd34b72e78336aec795c
 libpgm 5.3.128-3.2 aarch64 snapshot 68589e1342b6fd3fce294ac6f29645988556e0be37b4da39d5e4dc2adfe1d45c
-libpipewire 1:1.6.1-1.1 aarch64 novadeck 2ce4de90fc1e9f2a28c438f43a333627c5167112615466fc81b101bd73177e2e
-libpng 1.6.55-1 aarch64 snapshot 237fdce7e7726b6f9ff3395457e8949770a6cdde04cb48915c82edae38594055
+libpipewire 1:1.6.1-1.1 aarch64 novadeck 4aa59e00864dea265374e61f00ae27e2c1431d49b6f9594e71a2f6827e913165
+libpng 1.6.56-1 aarch64 snapshot 88e05a122f32fd7971bcee7d9d56093109357fc7c48849c83a5bc25201ad66af
 libpsl 0.21.5-2 aarch64 snapshot 196b48fdd464d5a9fa3e6e6a8092193447b5f0ce8d59ed238d6b66a8b90fb656
 libquadmath 15.2.1+r604+g0b99615a8aef-1 aarch64 snapshot 380dd6e4e149c7dc8f31d18e2f907383346e22fa3f6e970a1d8265a7ee43e087
 libsasl 2.1.28-5.2 aarch64 snapshot 4261db0a05f370beec55bcb5e253ffac3dbfb81fa85e00746f775c8a46ceffbf
@@ -202,24 +202,24 @@ libxxf86vm 1.1.7-1 aarch64 snapshot d8cc451de29d4d0739a57e819dad995f1beac602b5ac
 libyuv r2426+464c51a03-1 aarch64 snapshot 262963ade7421af529f30aa8e86d1698b493245fcbd9361617ff8c1672d65511
 licenses 20240728-1 any snapshot 47e9f4ad914da21f6326cc4eb84a788043523191f80d8e661b936b25d7fa1879
 linux-api-headers 6.19-1 aarch64 snapshot 4ccdbc34178cbc11faf9a93f06a7f70d13bf24f29e5311271a59c74b7db8ce0d
-lmdb 0.9.34-1 aarch64 snapshot 93feac90acbd67a19c5e934fae32470418fcacffe7c843a6750aaff26025a280
+lmdb 0.9.35-1 aarch64 snapshot 2677fe6cc90b893185b0e9db27e4a47deeb19320993a231446abb4cd2550b4c0
 lm_sensors 1:3.6.2-1.2 aarch64 snapshot 0227689b3ff48c3f9bf51eca86334c9dd1cf408efc60fa0867681cb177fa5a85
-lua 5.4.8-2 aarch64 snapshot 42ef5c113a05f1dba2e0a0a317a54048966049f1c550f63ad14b41fac7bb34f0
-luajit 2.1.1767980792+707c12b-2 aarch64 snapshot 0e9ffa8a65e38ebc232cb1c0b9a9f9ca6764be5a8669607c81558a9506e35120
+lua54 5.4.8-6 aarch64 snapshot 19cb0e9e28371e138d2f59782ed040800c98fd70c1ec6e5a77ecb4b8c2453953
+luajit 2.1.1774896198+18b087c-1 aarch64 snapshot 15aee2ec52f21bf174a37082445818335ff3abd41896ae2909f6193277437d51
 lz4 1:1.10.0-2 aarch64 snapshot af5d44c36259e2257ba033b623ef6104dcc2a552271264b6b433ddaf8422f3ee
 lzo 2.10-5 aarch64 snapshot ff11d9a5060ae28fbece3faad126724314232747cc09b836157f02ee09d3869a
-mesa 1:26.2.4-1.1 aarch64 novadeck ad4041606f697833ea023fecf251ea491e9e7febd0988df0e90c03c8baf17426
+mesa 1:26.2.4-1.1 aarch64 novadeck 75fb6035c9f2d02d588d8e86568959fef8729740c4ca27452710243d73c2721b
 mobile-broadband-provider-info 20251101-1 any snapshot 1b0146d8b72f6ffc3edcccd5709d8de42798c4827a5fccd994c389584d60c56c
-mpdecimal 4.0.1-1 aarch64 snapshot eff733ac090d3010d32720a43a8c5a51085bff934a80d6ebc58f6fbdfa6f1cb6
+mpdecimal 4.0.1-3 aarch64 snapshot 93a0e16603858a8d78c4ab3a924ff2ccd9554cd2019c1f65d411c5276334cb86
 mpfr 4.2.2-1 aarch64 snapshot 25f827431b1a13a6f524d76e62c0b0bdc5c1bf6ffd3d849cf73b5f840172ac2f
 mtdev 1.1.7-1 aarch64 snapshot ddc6848de75a95048baacb5a27f06980dc1f8384f41bd5346d0dd048ee8ebd86
 mtools 1:4.0.49-1 aarch64 snapshot 1dde2158e72277060b0a7722d223985200cc377a8dc1e1d7b8adcfbc474d0aa4
-ncurses 6.6-1 aarch64 snapshot 720abd9c7cac95a6158ffb95370a0207d56bc8ce9a489df85fdf99519a30288d
+ncurses 6.6-2 aarch64 snapshot 2fe037384c433ce0c80c1b6e272844ccd4850ddc7d091e060c72eec7315d756a
 nettle 3.10.2-1 aarch64 snapshot 5cb3df998f01ea7ff5fed07631c2fe4e17ce3b805e09a1137a5dd9dca2e82acd
 networkmanager 1.56.0-1 aarch64 snapshot 832283a4cbc90af83531f94c963262e35f4328876a54e603b63bc4c0d21e87fb
 npth 1.8-1 aarch64 snapshot 33c3ce47a23ab2db17bedfb58cf5a8a4a88328875425f63331893f609bfc784f
 nspr 4.38.2-1 aarch64 snapshot 8f1ad44d9f9caf9dddf1c54de56ce9c0398770068df57f688c692729a1702b14
-nss 3.121-1 aarch64 snapshot 664cd6fbfc95f209e59250f211444bef1f9e1520e9bc573f62b383cd28fd9118
+nss 3.122-1 aarch64 snapshot fab6286683727495360612fd4f9ed21d4a4860f115fdb3d043c958e864fd33cf
 openssh 10.2p1-2 aarch64 snapshot b96ab7c370317b95543420e34b544317272d48560d0a559d83de8dc501073713
 openssl 3.6.1-1 aarch64 snapshot 4c1ace142f95606d0bd1e0a391f81a7c906fd5b6d0785720d84503460cb0f762
 p11-kit 0.26.2-1 aarch64 snapshot d24d1ca04632100a7c91f9c28819f91a84f0cbbfb2f97a86d2795a914f2d9e17
@@ -227,7 +227,7 @@ pacman 7.1.0.r9.g54d9411-1.1 aarch64 snapshot c01e7431f2d2b0693b1ba59fd2464144d2
 pacman-mirrorlist 20260213-1 any snapshot db35111db8dfb3939ab21cd5332e2d946d2d07a26db7c521688889c7e9bd20e2
 pam 1.7.2-2 aarch64 snapshot 94cc8603e0866512488a3327954c1b6f6b20272b6cee3ffc1d9d8c21c12289d4
 pambase 20250719-1 any snapshot 30c95795caf0c17f98897f96e96a03c6999f2682c160c13a0d6e82d768938c22
-pango 1:1.57.0-2 aarch64 snapshot 2c747bc0f8e09206376d2af888e044a036a6370d6f2d06de33066f887da54e99
+pango 1:1.57.1-1 aarch64 snapshot 7da1a46955d8885a5d4b81c1008c9de4a5a5469b66078c03f3cf9a790fe41a70
 parted 3.6-2 aarch64 snapshot 64b6728b4e62058653d7142d0c9eac84dbeaa572b32eb777a367543983c28540
 pciutils 3.14.0-1 aarch64 snapshot 84008b6de6145c5da676e0b05259025c79a6f7deccd1a2b0584ce4c8e6082a8f
 pcre2 10.47-1 aarch64 snapshot c5584a9df4ed6c5fba7744d479a691b3dcde5b920e50c3ea4e1a4429d4e8413b
@@ -241,7 +241,7 @@ procps-ng 4.0.6-1 aarch64 snapshot 4ab791f203e8788ad8ec17c274c73676568412e5099f5
 psmisc 23.7-1.2 aarch64 snapshot 92ee5919c0d4b72e600f6751c34ece117b058b463f657787ea2f1efb968c7162
 pygame-ce 2.5.8 any prebuilt bb91d0bb0b5e2a4da61910d752769d4580cacffb4b7338cee57c932351c67e7b
 python 3.14.3-1 aarch64 snapshot 4d38a62cf03a61c5f9c12c7950cb358db2b69231111f97653184bb45a3f9f4c3
-rauc 1.15.2-1.1 aarch64 novadeck cf788cca9fe86f8f8c02c6028a33b65bac74af366c291960438d14fa9431cdd7
+rauc 1.15.2-1.1 aarch64 novadeck 2412cf177cae4d93d3a52a2f4c2b7e630097267da4900c1d947c25bfb0babe7b
 rav1e 0.8.1-2 aarch64 snapshot 23c38edb528a8a0622190d7a6c97151bd3cc9bc1fdf1bf80a36b7d42748599f3
 readline 8.3.003-1 aarch64 snapshot 234d34bfa158e7355f805469b5c21ca92de35dd8b130eb647841f39ef4b62ff5
 sdl2-compat 2.32.64-1 aarch64 snapshot 7c29c5f71c089d181dc3cc871617a7fa3efe9779d0d2ac15b8981fed96b7e250
@@ -251,17 +251,17 @@ sed 4.9-3 aarch64 snapshot a26361ef76878c9d599d2d5df8dd25c4cd331a915f2992512e689
 shadow 4.18.0-1 aarch64 snapshot 14d1768924550f181fbd14113cabe19e2395d6eb8db98dbec0f4eaad3ecfe424
 slang 2.3.3-4 aarch64 snapshot efa9b7759db82e6ece8cccabfbc22cfda4faa5a9e07ae2cbf812ccb8a37db8a9
 spirv-tools 1:1.4.341.0-2 aarch64 snapshot 74ae10c42bcd2c89bf0dff7e97985bb15cdd3a26011110b386404f5884873e85
-sqlite 3.51.2-1 aarch64 snapshot ddda1a6ef821d592fb735eee330402ad10a7796a3f72d12ced0f721dd2212842
-svt-av1 4.0.1-1 aarch64 snapshot e8b237a7dc295ac782a80bb87b722fa028200287a2cf14fcc8133b25e866934a
-systemd 259.3-1 aarch64 snapshot 8ab0f9e9189f138a352fb8a9c78b0c4f0b0ea148daf2cbecd757c281ea4d5f82
-systemd-libs 259.3-1 aarch64 snapshot 08cdcf6af442a7852551586a38198ad248a30d4bfaa61fabca758cc9458c7d28
-systemd-sysvcompat 259.3-1 aarch64 snapshot efc54f59499e1e81566970c33c15961b10238b5f6cb8a99f069cd4ae77e2c721
+sqlite 3.52.0-1 aarch64 snapshot 21b7d14df7110d9fe1d16324b50c0e3ce1364fd467d2bf68d67efa01ef6492dd
+svt-av1 4.1.0-1 aarch64 snapshot 0e22160e591e41f7f89b92c3dda23446a0d9542d03c83c4d9e9b4b7d32c8f8d4
+systemd 260.1-1 aarch64 snapshot d958871f37264ed67fe6e1ff185ddc35a015cff2518f7a0fba0d9dd234f0e0dc
+systemd-libs 260.1-1 aarch64 snapshot 5f953bc6fec69ae67a4495f9da3f28d64aad74927664d3cd34557de29a881df9
+systemd-sysvcompat 260.1-1 aarch64 snapshot 3c1509ba221b2732de1ed3623dc7701eaa8761f11dfc4cb8fce02be0a93fa241
 tar 1.35-2 aarch64 snapshot 6df1df2209e1b9830293607fb22b3e1236c74dee0e550677baec0683a87f6f0d
 tpm2-tss 4.1.3-1 aarch64 snapshot 851d67bd6cb1a86dd405119872b19c543c4d8a982932c3df2c24ad3325899fdb
 tzdata 2026a-1 aarch64 snapshot dc068920217dc3326374815c97dcda62e4562d8c872dc5be59aee2edde58cc56
 util-linux 2.41.3-2 aarch64 snapshot 7921aac47c646a94e768e2147609e05aadad669c2189d7e4266b568e0942f51d
 util-linux-libs 2.41.3-2 aarch64 snapshot 333b91fe2670ea194fb375c26529fca443e80800e0c8229c7627d34f0135eaca
-vulkan-freedreno 1:26.2.4-1.1 aarch64 novadeck ad4041606f697833ea023fecf251ea491e9e7febd0988df0e90c03c8baf17426
+vulkan-freedreno 1:26.2.4-1.1 aarch64 novadeck 75fb6035c9f2d02d588d8e86568959fef8729740c4ca27452710243d73c2721b
 vulkan-icd-loader 1.4.341.0-1 aarch64 snapshot 8ac7dce6088c7846ad03dd37ca2b8529752d4588488c3ec5a686d7ba24faa493
 wayland 1.24.0-1 aarch64 snapshot a7869a1679eeb0d8a02e690bf13939a5f103cb354e7f46dca3f5395b14c8f940
 wireless-regdb 2026.02.04-1 any snapshot 9ad1ab59ce30598db160c673729427b3da753deccf09f779babca2190e59f65d
@@ -274,10 +274,10 @@ xkeyboard-config 2.47-1 any snapshot 2a18c48877c01880759b32ca8a9fb2746c259634ecb
 xorg-fonts-encodings 1.1.0-1 any snapshot 2999e3fe140bc7b0d3b31b48f0ebcabfe6371087024eaf1c8f591785846318b3
 xorgproto 2025.1-1 any snapshot fae26e457170620dd69f377eb834e210c3cabbef98e711a4611b08f379280bf0
 xorg-server-common 21.1.21-1 aarch64 snapshot 7563770f053c62f700efb71d41fb82f3b4372d5a783917ef2cf8244217a65d0a
-xorg-setxkbmap 1.3.4-2 aarch64 snapshot fb60ee97e6b9c5668efad62f8e3acb58a09592b7332e8b0d70a928483bc418e7
+xorg-setxkbmap 1.3.5-1 aarch64 snapshot 3a9199977bf63db0054d2519c4bc7015dc4c849941f729740187f4c1f80c363b
 xorg-xkbcomp 1.5.0-1 aarch64 snapshot a9b7f3d98b21edf4713f4f89ec2ee58d05da7216cf607aa78537076241fd3231
 xorg-xwayland 24.1.9-1 aarch64 snapshot bfb9cfd9681bb23f4fcc615636b3e19b4c3850978cd7068d7cc81cdbbf851e33
-xz 5.8.2-1 aarch64 snapshot 4f71d017538e8dfca27a53451b04b5a7cf947e2d47a3565d27a15427247cd7a9
+xz 5.8.3-1 aarch64 snapshot 28ba57077779306efe84c17e7123dd0b9a5d328d549dd5cf72907f5d5d922c92
 zeromq 4.3.5-3 aarch64 snapshot 2fa6ded8f72a4ac1cc1b97f466b055904f8d17070e45e746747bfef462456c6d
-zlib 1:1.3.2-2 aarch64 snapshot 6ce15ed44b55be9b011202132bd5a4fff0c93fcc3160e658b741f25ca1a49833
+zlib 1:1.3.2-3 aarch64 snapshot fb64343f464458c6bf0453b1cf06d20af89dc554f3e6e63fbfb4b7200ce2d518
 zstd 1.5.7-3 aarch64 snapshot 8b9459b58cd34839b528d818052aeb7d4b5cba539ca11db4307f8b6844201504

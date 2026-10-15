@@ -1,0 +1,5 @@
+# passt — local PKGBUILD (Arch's recipe at the Steam Frame's passt snapshot; see its header). Part of
+# the Lepton container stack built here: yajl criu crun conmon passt netavark containers-common podman.
+name: passt
+pkgbuild_local: PKGBUILD
+pkgrel_suffix: 1

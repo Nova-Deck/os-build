@@ -69,6 +69,11 @@ if [ -n "$local_pb" ]; then
   for f in "$DIR"/*.install; do
     [ -f "$f" ] && inputs+=("$f")
   done
+  # Files the recipe's source=() names, staged beside it (pin field `local_sources:`). Declared order.
+  for f in $(pin_field "$PIN" local_sources); do
+    [ -f "$DIR/$f" ] || { echo "$name: missing local source $DIR/$f (declared in $PIN)" >&2; exit 1; }
+    inputs+=("$DIR/$f")
+  done
 fi
 
 # The BUILDER is an input too, and the one the file list above cannot see: it is the compiler, the

@@ -288,9 +288,9 @@ fi
 # Asserts a PAIR, because either half alone is a defect:
 #
 #   - /etc/machine-id must be ABSENT. systemd's first-boot detection keys on it, so a populated one
-#     means preset-all never runs (the 60-novadeck-*.preset files silently do nothing) and
-#     gen-mac.sh's seed chain never falls through to the per-unit SoC serial, giving every unit
-#     flashed from the image the same Wi-Fi MAC. This was true of a shipped image and nothing
+#     means preset-all never runs (the 60-novadeck-*.preset files silently do nothing) and every
+#     unit flashed from the image shares one machine-id (found when the since-retired Wi-Fi MAC
+#     generator, seeded from it, gave every unit the same MAC). This was true of a shipped image and nothing
 #     caught it: the 4c bootstrap generates one (systemd's scriptlet, mode 0444), while two
 #     comments asserted it would not exist. Exactly the "declaration nobody checks" failure this
 #     script exists for — the reason it is checked here and not trusted from assemble-rootfs.sh.
@@ -418,14 +418,12 @@ fi
 # var-seed.tar.zst is the /var a freshly installed slot starts from. The OTA path has no use for it
 # — it rsyncs the running /var — so nothing but an install would ever notice it missing, and what
 # an install would do instead is boot a slot whose /var is empty: no machine-id, no overlay upper,
-# no /etc. Listed, not just stat'd, because the two things that must NOT be in it are absences, and
-# an absence is what a `-s` check cannot see:
+# no /etc. Listed, not just stat'd, because the thing that must NOT be in it is an absence, and an
+# absence is what a `-s` check cannot see:
 #
 #   lib/novadeck/slot     per-slot, written by seed_var after unpacking. Baked in, it would be a
 #                         second answer to "which slot is this" — and that file exists precisely to
 #                         be the INDEPENDENT witness against the initramfs's own claim.
-#   lib/novadeck/mac-wifi write-once and outranks the derivation, so a seeded copy would hand every
-#                         installed device the same Wi-Fi MAC. Two on one network is the symptom.
 seed="$STAGE/usr/lib/novadeck/var-seed.tar.zst"
 if [ ! -s "$seed" ]; then
   bad "/usr/lib/novadeck/var-seed.tar.zst is missing — an internal install has no /var to seed a fresh slot with, and there is no running system to copy one from"
@@ -433,7 +431,7 @@ elif ! seed_list=$(tar -tf "$seed" 2>/dev/null); then
   bad "/usr/lib/novadeck/var-seed.tar.zst is not readable as a tar archive — is zstd in the build container?"
 else
   seed_bad=0
-  for f in ./lib/novadeck/slot ./lib/novadeck/mac-wifi; do
+  for f in ./lib/novadeck/slot; do
     if printf '%s\n' "$seed_list" | grep -qx -- "$f"; then
       seed_bad=1
       bad "var-seed.tar.zst carries $f — it is per-device/per-slot state and must be written after unpacking, not baked in"

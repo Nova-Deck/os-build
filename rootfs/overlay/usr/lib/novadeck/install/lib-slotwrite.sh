@@ -266,17 +266,6 @@ seed_var() {  # <dev> <slot> <mnt> <source>
   # deliberately after the copy that would otherwise clobber it.
   printf '%s\n' "$SLOT" >"$mnt/lib/novadeck/slot"
 
-  # THE SECOND THING THE COPY MUST NOT KEEP: /var/lib/novadeck/mac-wifi, the write-once record of
-  # this device's derived Wi-Fi MAC. Deleted so the target re-derives it from the machine-id that
-  # the copy above just carried over (gen-mac.sh: sha256(machine-id)).
-  #
-  # On a healthy device this is a no-op in effect -- same machine-id in, same MAC out, so the
-  # address is stable across the update, which is the requirement. It matters for the devices where
-  # it is NOT a no-op: a unit flashed before the MAC-collision fix has a COLLIDING address persisted
-  # here, and because the file is write-once and outranks the derivation, that unit keeps the bad
-  # MAC forever.
-  rm -f "$mnt/lib/novadeck/mac-wifi"
-
   # Put the caller's handler back exactly as it was -- `trap - EXIT` only when there was nothing.
   umount "$mnt"
   if [ -n "$prev_cmd" ]; then trap "$prev_cmd" EXIT; else trap - EXIT; fi

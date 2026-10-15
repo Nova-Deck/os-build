@@ -392,11 +392,10 @@ if command -v zstd >/dev/null 2>&1; then
   printf 'ssh-ed25519\n' >"$V/lib/overlays/etc/upper/ssh_host_ed25519_key"
   chmod 0600 "$V/lib/overlays/etc/upper/ssh_host_ed25519_key"
   printf 'a\n'          >"$V/lib/novadeck/slot"
-  printf 'de:ad\n'      >"$V/lib/novadeck/mac-wifi"
 
   seed="$T/var-seed.tar.zst"
   tar --numeric-owner --xattrs --acls --zstd \
-      --exclude=./lib/novadeck/slot --exclude=./lib/novadeck/mac-wifi \
+      --exclude=./lib/novadeck/slot \
       -cf "$seed" -C "$V" . 2>/dev/null
   M="$T/seedmnt"; mkdir -p "$M"
   tar -p --numeric-owner --xattrs --acls -xf "$seed" -C "$M" 2>/dev/null
@@ -411,15 +410,12 @@ if command -v zstd >/dev/null 2>&1; then
     && ok "/var/tmp keeps its sticky bit (1777)" \
     || bad "/var/tmp came back $(stat -c %a "$M/tmp") -- any user could delete another's files there"
   [ -f "$M/lib/overlays/etc/upper/machine-id" ] \
-    && ok "the machine-id rides across (the derived Wi-Fi MAC depends on it)" \
+    && ok "the machine-id rides across (the device keeps its identity)" \
     || bad "machine-id did not survive the seed"
-  # The two exclusions, which are what stop every installed device sharing an identity.
+  # The exclusion, which is what stops every installed device sharing a slot witness.
   [ ! -e "$M/lib/novadeck/slot" ] \
     && ok "no baked-in slot witness (seed_var writes it after unpacking)" \
     || bad "the seed carried lib/novadeck/slot"
-  [ ! -e "$M/lib/novadeck/mac-wifi" ] \
-    && ok "no baked-in mac-wifi (else every install shares one Wi-Fi MAC)" \
-    || bad "the seed carried lib/novadeck/mac-wifi"
 else
   skip "zstd is not installed -- the /var seed round-trip did not run"
 fi

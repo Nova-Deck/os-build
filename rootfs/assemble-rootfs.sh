@@ -284,25 +284,17 @@ fi
 # The image is supposed to ship without one so systemd treats the first boot as a first boot:
 # ConditionFirstBoot=yes, a per-device id generated, preset-all run. That was stated in two places
 # and enforced in none, and the built tree had one — measured 2026-07-28 on rootfs.img: a real
-# 33-byte id, identical on every unit ever flashed from that image. Two silent consequences:
+# 33-byte id, identical on every unit ever flashed from that image. The silent consequences:
 #
-#   - rootfs/overlay/usr/lib/novadeck/gen-mac.sh seeds the Wi-Fi MAC from /etc/machine-id, falling back
-#     to /sys/devices/soc0/serial_number and then to random. The SoC serial IS per-unit, so the
-#     fallback would already give every device a distinct MAC — a populated machine-id is exactly
-#     what stops line 27 ever falling through to it. The bug is not that the chain is wrong; it is
-#     that a baked seed always wins and makes the whole chain unreachable.
+#   - every unit shares one machine-id. It was found because the (since retired) Wi-Fi MAC
+#     generator seeded from it and handed every unit the same MAC.
 #   - a populated machine-id means systemd does NOT treat the first boot as first, so preset-all
 #     never runs and the 60-novadeck-*.preset files do nothing. Service enablement only survived
 #     because the explicit multi-user.target.wants symlinks ship too; anything preset-only was off.
-#     This half CANNOT be fixed in gen-mac.sh — systemd's first-boot detection keys on this file.
+#     This half CANNOT be fixed in a seed chain — systemd's first-boot detection keys on this file.
 #
 # Not release-only, unlike the seal above: this is a correctness fix, and a test image wants a
 # per-unit MAC and working presets just as much. Guard assertion 6 checks it on release trees.
-#
-# DOES NOT FIX AN ALREADY-FLASHED DEVICE. gen-mac.sh persists the derived address write-once to
-# /var/lib/novadeck/mac-wifi and prefers it forever after, so a device that already booted keeps
-# the colliding MAC until that file is removed or its /var is reformatted. Worth knowing for the
-# RAUC /var migration hook too: copying /var across slots copies the bad address with it.
 #
 # SAFETY, and why this is not a one-liner: removing it makes ConditionFirstBoot=yes true again,
 # which re-arms systemd-firstboot.service — which on this device prompts for locale and a root
@@ -434,7 +426,7 @@ fi
 # ~13 MiB of /var, so a few MiB compressed: negligible against a 7 G slot.
 install -d -m0755 "$stage/usr/lib/novadeck"
 tar --numeric-owner --xattrs --acls --zstd \
-    --exclude=./lib/novadeck/slot --exclude=./lib/novadeck/mac-wifi \
+    --exclude=./lib/novadeck/slot \
     -cf "$stage/usr/lib/novadeck/var-seed.tar.zst" -C "$varstage" . \
   || { echo "cannot pack the installer's /var seed" >&2; exit 1; }
 chmod 0444 "$stage/usr/lib/novadeck/var-seed.tar.zst"

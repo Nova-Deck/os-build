@@ -28,20 +28,22 @@
 # mac80211 files and a qcom geni-se ICC fix are the legs. Read the 7.2.10 section below.
 # HW-VALIDATED 2026-10-12 ON ONE BOARD PER SoC — POCKET ACE (SM8550), POCKET S2 (SM8650) AND
 # POCKET MAX (SM8250) — with 0330 v4, 1150 (Abel Vesa CX v5) and 0140 on the same card.
-version:    7.2.10
-url:        https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.2.10.tar.xz
-sha256:     2feaa70453e91f541be6a5c9078d8168e081af45a3d9718054850538cff2ebf3
-git_tag:    v7.2.10
-git_commit: 7b20d05fd38de8e0be168956f6fd241d750c7d69
+# RE-PINNED 2026-10-15 (7.2.11, issue #117). Nothing of ours landed, no patch needed a change;
+# ath12k, UFS core and btrfs are the legs. Read the 7.2.11 section below. HW GATE OWED.
+version:    7.2.11
+url:        https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.2.11.tar.xz
+sha256:     fd0fc479f983a8c05313f13e9c36330fe6651cf725396748c40d5cd93fa1e6a4
+git_tag:    v7.2.11
+git_commit: a2de78ee6ed8bf8cd99d177c74865a6e8c3cb6ea
 
 # The sha256 above is the one kernel.org publishes in the SIGNED sha256sums.asc for v7.x, not a
-# hash of whatever the CDN happened to serve — re-checked 2026-10-12. The .asc itself verifies as
+# hash of whatever the CDN happened to serve — re-checked 2026-10-15. The .asc itself verifies as
 # a GOOD signature from "Kernel.org checksum autosigner <autosigner@kernel.org>", fingerprint
 # B886 8C80 BA62 A1FF FAF5 FDA9 632D 3A06 589D A6B1. That key carries no trust path here, so the
-# load-bearing check is CONTINUITY: the SAME signed file still lists 7.2.9 as
-# b4c5dfbe51a364a6c7f03869200f88c8e1f77403539005f14b7fc6bc91b8d8ba, 7.2.8 as
-# 12e8d5a973d1ad7c5a5c69882e4022b131ed715db7003fdcd760ddf8c3e51941 and 7.2.7 as
-# 4ac34c47db2540ffb2713943f8d891ff1702e0ba6934525a493b7d1cad43145a, byte-for-byte the hashes this
+# load-bearing check is CONTINUITY: the SAME signed file still lists 7.2.10 as
+# 2feaa70453e91f541be6a5c9078d8168e081af45a3d9718054850538cff2ebf3, 7.2.9 as
+# b4c5dfbe51a364a6c7f03869200f88c8e1f77403539005f14b7fc6bc91b8d8ba and 7.2.8 as
+# 12e8d5a973d1ad7c5a5c69882e4022b131ed715db7003fdcd760ddf8c3e51941, byte-for-byte the hashes this
 # pin carried and shipped before — so the file describing the version above is the same file that
 # described the releases we already trusted. Roll this list forward on each bump rather than
 # growing it; three back is enough to be a chain. (Note: keys.openpgp.org serves this key STRIPPED
@@ -59,6 +61,48 @@ git_commit: 7b20d05fd38de8e0be168956f6fd241d750c7d69
 # Treat 'in-series point release' as a prediction about EFFORT, never about RISK.
 # Re-run every gate, every time — and note that neither of those two findings came from an
 # offline gate. Both came from hardware.
+#
+# ============ 7.2.11 — PINNED 2026-10-15 (issue #117), HW GATE OWED ============
+#
+# 285 commits, 285 files. Zero drm/msm, zero qcom clk/phy/interconnect/iommu/dts for any SoC we
+# ship (the four qcom clk commits are kaanapali/glymur/eliza), zero soundwire. No Kconfig symbol
+# added or removed.
+#
+# INTERSECTION: FOUR files, all read.
+#   arch/arm64/kernel/Makefile     upstream adds `KCOV_INSTRUMENT_irq.o := n` above the obj list;
+#                                  our 0020 lands 3 lines lower, fuzz 0.
+#   ath12k/core.c + core.h         upstream REVERTS "wifi: ath12k: add panic handler" (the handler
+#                                  did a PCI sw-reset from atomic panic context). Our 1015 touches
+#                                  the scan-timeout work, not the notifier; core.h lands 1 line
+#                                  higher, fuzz 0. 1015 has NOT landed: core.h has no scan-timeout
+#                                  wiphy work.
+#   drivers/ufs/core/ufshcd.c      two upstream fixes: a clock-gating hold across probe (released
+#                                  by async scan or out_release) and the MCQ CQ sweep decoupled from
+#                                  the request iterator. Neither is in ufshcd_gate_work(), which is
+#                                  all 1086 touches; 1086's three hunks land at the same offsets as
+#                                  on 7.2.10.
+# PATCHES: all 126 applied cumulatively at --fuzz=0, zero fuzz, zero rejects. Diffed against the
+# same run on 7.2.10, the ONLY two lines that moved are the 0020 and 1015 offsets above.
+# DROP CHECK: nothing of ours landed. Every patch was REVERSE-applied with --dry-run --fuzz=0 to
+# a PRISTINE 7.2.11 tree, file by file: no file of any patch reverses. The written drop
+# conditions all say keep: 0930's `battmgr->unit = QCOM_BATTMGR_UNIT_mAh` is absent; 1135's
+# sm8250.dtsi still has three `wake-gpios ... GPIO_ACTIVE_HIGH`; 0440's dsi_7nm_phy_enable() still
+# sets pll_enable_cnt = 1 with no PLL_SYSTEM_MUXES write.
+# CONFIG SWEEP: 442 symbols named in kernel.config + trim-platforms.config, ZERO missing.
+# BUILD: green in the container, Image + 21 dtbs + modules staged. After olddefconfig, ALL 439
+# requested directives (383 values + 56 `is not set`) asserted against the final .config:
+# zero mismatches.
+#
+# WHAT ONLY HARDWARE CAN SETTLE, from commits OUTSIDE (or beside) our patches:
+#   - Wi-Fi: the ath12k panic-handler revert changes core init/deinit on WCN7850, and mac80211
+#     gains multicast AQL accounting. WCN7850 association on ACE or S2.
+#   - UFS: the probe-time clock-gating hold and the MCQ CQ sweep rewrite, on a UFS board (S2/FIT
+#     boot from UFS internally; a dev card boots from SD, so this needs an internal install or
+#     at least the UFS probe clean in dmesg), next to our 1086.
+#   - btrfs: five fixes, one a leaf corruption on xattr replace when two names collide in one
+#     dir item. Our slot roots are btrfs; a normal boot + Steam session is the leg.
+#   - HID: hid-steam teardown/registration rework. Only binds a Valve controller; plug one in if
+#     one is to hand, otherwise nothing of ours uses it.
 #
 # ============ 7.2.10 — PINNED 2026-10-12 (issue #112), HW-VALIDATED ON ACE + S2 + MAX ============
 #

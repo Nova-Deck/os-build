@@ -1606,6 +1606,7 @@
 &ufs_mem_phy {
 	vdda-phy-supply = <&vreg_l1d_0p88>;
 	vdda-pll-supply = <&vreg_l3e_1p2>;
+	vdda-qref-supply = <&vreg_l1e_0p88>;
 
 	status = "okay";
 };

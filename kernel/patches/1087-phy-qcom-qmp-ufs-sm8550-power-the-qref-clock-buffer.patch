@@ -1,0 +1,48 @@
+From: gennro <gennro2004@gmail.com>
+Subject: [PATCH] phy: qcom: qmp-ufs: sm8550: power the QREF clock buffer
+
+On SM8550 the UFS PHY's reference clock passes through a QREF buffer
+(gated by TCSR_UFS_CLKREF_EN) that runs from LDO L1E. Downstream kalama
+DTs give the PHY a vdda-qref supply with a 30 mA load; mainline has no
+such supply, so L1E stays on only through its other users (DSI PHY,
+PCIe PHY, eUSB2 PHY), and only the DSI PHY declares a load. With the
+screen off the DSI PHY is disabled, the aggregate load on L1E is zero
+and the regulator core drops it to LPM.
+
+The UFS link is off in system suspend (spm_lvl 5), so a resume powers
+the PHY up and recalibrates it while the screen is still off. With the
+QREF buffer on an LPM LDO the SerDes PLL sometimes never locks:
+
+  qcom-qmp-ufs-phy 1d80000.phy: phy initialization timed-out
+  ufshcd-qcom 1d84000.ufshc: Failed to calibrate PHY: -110
+  ufshcd-qcom 1d84000.ufshc: Enabling the controller failed
+  ufshcd-qcom 1d84000.ufshc: ufshcd_host_reset_and_restore: Host init failed -5
+  ufs_device_wlun 0:0:0:49488: ufshcd_wl_resume failed: -5
+
+after which every I/O fails until a reboot (seen on the Odin 2 Portal
+and the Thor). Add the vdda-qref supply with the downstream load, so
+L1E is in HPM whenever the PHY is powered.
+
+Kettle: untested on hardware when taken.
+
+[ Kettle Linux kernel/patches/40-kettle/1402, body byte-identical ]
+---
+--- a/drivers/phy/qualcomm/phy-qcom-qmp-ufs.c
++++ b/drivers/phy/qualcomm/phy-qcom-qmp-ufs.c
+@@ -1299,9 +1299,16 @@
+ 	{ .supply = "vdda-pll", .init_load_uA = 18340 },
+ };
+ 
++/*
++ * vdda-qref powers the QREF block that buffers the reference clock from
++ * TCSR_UFS_CLKREF_EN into the PHY. Without a load of its own the LDO falls
++ * to LPM whenever its other users declare none (DSI PHY off with the screen
++ * off), and on a resume from system suspend the SerDes PLL then never locks.
++ */
+ static const struct regulator_bulk_data sm8550_ufsphy_vreg_l[] = {
+ 	{ .supply = "vdda-phy", .init_load_uA = 188000 },
+ 	{ .supply = "vdda-pll", .init_load_uA = 18300 },
++	{ .supply = "vdda-qref", .init_load_uA = 30000 },
+ };
+ 
+ static const struct regulator_bulk_data sm8650_ufsphy_vreg_l[] = {

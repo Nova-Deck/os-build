@@ -25,7 +25,8 @@ The number says **when a patch applies**, and it is keyed on subsystem.
 | `0700-0799` | input | touch `0700s`, joystick `0740s`, haptics + force-feedback `0770s` |
 | `0800-0899` | audio | ASoC, qdsp6, codecs |
 | `0900-0999` | power / misc | power-supply `0900s`, hwmon + misc devices `0970s` |
-| `1000-1099` | net / usb / pci / storage / crypto | |
+| `1000-1089` | net / usb / pci / storage / crypto | |
+| `1090-1099` | media | V4L2 / iris video decode |
 | `1100-1199` | dts | arm64 `.dtsi` fixes to upstream SoC files — last, after their drivers |
 
 Numbers are spaced by 10 (by 5 where a band is dense) so a new patch slots in without
@@ -70,7 +71,7 @@ replies — lore was not reachable, so "never posted" means no patchwork hit). `
 trees (msm-next, qcom `clk-for-7.4` / `arm64-for-7.4`, pci `next`). Re-audit on
 every bump: this table is a snapshot, the `Drop when` column is what to re-check.
 
-Totals: 5 `mainline`, 16 `posted`, 22 `novadeck`, 69 `community`. (`0310` and `0430` were
+Totals: 5 `mainline`, 16 `posted`, 22 `novadeck`, 71 `community`. (`0310` and `0430` were
 deleted at the 7.2.8 bump: stable backported both, byte-identical.) Half the stack will
 never land upstream, which is why provenance is a table and not a number band.
 
@@ -188,6 +189,8 @@ never land upstream, which is why provenance is a table and not a number band.
 | `1084` | community | jaewun, Kettle Linux `20-sm8550/1015`, body byte-identical: RX LineCfg on for link startup, off right after, as downstream does. | when upstreamed |
 | `1085` | community | gennro, Kettle Linux `1385`, body byte-identical: fixes `1083`'s PHY power count when the link state differs between clocks-off and clocks-on. | with `1083` |
 | `1086` | community | gh123man, Kettle Linux `1401`, body byte-identical: recover a failed clock-gating hibern8 enter inline instead of leaving the link unusable. Kettle's `1400` (clock-gating hold across system PM) is NOT taken: we never enter system suspend. | when upstreamed |
+| `1090` | community | Diogo Trindade, armada `1030` (PR #718), body identical. Iris gen2 (SM8550/SM8650): send the POC type the firmware reported instead of 0, so a decoder restart after a source change does not raise it again (Steam Remote Play stayed green). Never posted. | when upstreamed |
+| `1095` | community | Diogo Trindade, armada `1031` (PR #718), body identical. Drops `TIER_AV1`'s setter, which overwrote the HEVC tier on every codec; `iris_hfi_gen2_set_tier()` already sends the AV1 tier. Never posted. | when upstreamed |
 | `1105` | posted | Krishna Chaitanya Chundru root_port v2 15/15 `<20260917-root_port_v2-v2-15-6272b7caae9a@oss.qualcomm.com>`, applied to qcom `arm64-for-7.4` as `bbc442a64823`. 7.3 renames `pcieport0` → `pcie0_port0`. | v7.4; rework at 7.3 either way |
 | `1110` | posted | Same series, 12/15 `<20260917-root_port_v2-v2-12-6272b7caae9a@oss.qualcomm.com>`, applied to qcom `arm64-for-7.4` as `c51818ded215`. | v7.4 |
 | `1115` | community | ROCKNIX SM8250 `0005`. Never posted. | never |

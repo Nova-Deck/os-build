@@ -34,7 +34,8 @@ BANDS = [
     (700, 799, "input"),
     (800, 899, "audio"),
     (900, 999, "power/misc"),
-    (1000, 1099, "net/usb/pci/crypto"),
+    (1000, 1089, "net/usb/pci/crypto"),
+    (1090, 1099, "media"),
     (1100, 1199, "dts"),
 ]
 

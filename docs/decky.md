@@ -81,7 +81,7 @@ The loader must live on `/home` (it self-updates; user-installed plugins land be
 
 | Situation | Action |
 |---|---|
-| Fresh flash (empty homebrew) | full seed: loader, `loader.json` (prerelease branch), baked plugins |
+| Fresh flash (empty homebrew) | full seed: loader and baked plugins (no `loader.json`) |
 | Image bundle changed, install untouched | re-seed the loader — **including a rollback**; the pin is authoritative |
 | Operator self-updated Decky | hands off the loader entirely |
 | Every boot | baked plugins force-replaced by name; user-installed plugins untouched |
@@ -89,9 +89,12 @@ The loader must live on `/home` (it self-updates; user-installed plugins land be
 "Untouched vs self-updated" is decided by a sha marker (`services/.novadeck-seeded`), not a
 version compare — a version compare cannot express a deliberate pin rollback.
 
-`loader.json` is written once (first seed) to pin new installs to Decky's **prerelease** branch,
-where upstream lands its Steam-on-ARM fixes; after that the file is loader-owned state and the
-user's branch choice sticks.
+No `loader.json` is seeded, so the pin alone decides the update branch. Left unset, the loader
+derives it from the version it runs: a `-pre` build tracks branch 1, anything else branch 0
+(stable). Branch 1 is not "prereleases only" but "the newest release of either kind", so it never
+meant earlier ARM fixes. The sync used to seed `{"branch": 1}` on that misreading, and 477acb4
+removed it. The loader writes its derived branch to `loader.json` itself; from then on the file is
+loader-owned state, and a branch the user picks in Decky's settings sticks.
 
 ## novadeck-control
 

@@ -11,8 +11,7 @@ as root, so the system bus is reachable. org.novadeck.Power1's Profile property 
 LABELS ("Eco", "Balanced", "Performance").
 
 Subprocesses get a SANITIZED env. PluginLoader is a PyInstaller bundle, and PyInstaller exports
-LD_LIBRARY_PATH=<its extraction dir> to every child. busctl (resolved from the FEX guest rootfs
-here) then loads the bundle's libcrypto.so.3 instead of the rootfs's own and dies on a symbol
+LD_LIBRARY_PATH=<its extraction dir> to every child. busctl then loads the bundle's libcrypto.so.3 instead of the rootfs's own and dies on a symbol
 mismatch (HW-observed: "version OPENSSL_3.4.0 not found ... libsystemd-shared" -> exit 1, which
 the Power tab surfaced as "AvailableProfiles returned non-zero exit status 1"). Stripping the
 variable — restoring the _ORIG value PyInstaller saves, when there is one — is the documented

@@ -99,8 +99,9 @@ fi
 #   [44.877] Unmounted /run/novadeck/guestos-lower.        <- and it SUCCEEDS
 #   [44.941] session-1.scope: Deactivated successfully.    <- the holder, 185ms too late
 #
-# The busy is Decky's PluginLoader: it is an x86 binary run under system FEX, so its guest libs
-# are mapped out of the merged tree and it holds the overlay until the session scope dies. The
+# The busy was Decky's PluginLoader, back when it ran as an x86 binary under system FEX: its guest
+# libs were mapped out of the merged tree and it held the overlay until the session scope died.
+# The loader is native now, but any x86 process alive at shutdown does the same. The
 # real damage is the line after it -- a FAILED stop job is still a COMPLETED job, so the ordering
 # between the two mounts is satisfied and systemd pulls the erofs lower out from under a live
 # overlay. The superblock survives (the overlay pins it), so this has cost us nothing visible

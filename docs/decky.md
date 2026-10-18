@@ -17,7 +17,7 @@ screen rather than by which tab of a bigger plugin happens to be selected.
 ## How the pieces fit
 
 ```
-packages/decky-loader/prebuilt.pin       sha256-pinned upstream PluginLoader (x86_64)
+packages/decky-loader/prebuilt.pin       sha256-pinned upstream PluginLoader (aarch64)
         │ customize-base places it
         v
 /usr/share/decky-loader/PluginLoader     read-only master copy
@@ -32,9 +32,9 @@ SteamUI                                  injected via the CEF debugger port (the
                                          novadeck-steam always touches)
 ```
 
-- The loader is x86_64 (upstream ships no aarch64 build) and runs under the system FEX binfmt.
-  Its FEX knobs live in `rootfs/overlay/usr/share/fex-emu/AppConfig/PluginLoader.json` — keyed by
-  binary name, TSO fully on, Multiblock off, UI thunks enabled.
+- The loader is upstream's native aarch64 build (`PluginLoader-arm64`, published since v3.3.0).
+  Until then it was the x86_64 build under the system FEX binfmt, so everything a plugin backend
+  spawned looked up paths in the x86 guest rootfs first. Native, a plugin's children see the host.
 - There is no runtime existence-gating: the loader ships in every image, so image completeness
   is asserted at build time (guard-rootfs assertion 9 — loader executable, **both** plugin dists
   staged, watchdog executable) and a genuinely broken image fails its units loudly on device.
@@ -68,7 +68,7 @@ that losing it is silent and permanent: unit active, plugin loaded, empty QAM, n
 the journal, and no recovery short of a manual restart.
 
 `novadeck-decky-watchdog.service` restores the invariant from outside, since the loader is
-upstream's pinned x86_64 binary and not ours to patch. Every 15s: if CEF is listening and no
+upstream's pinned binary and not ours to patch. Every 15s: if CEF is listening and no
 process in `plugin_loader.service`'s cgroup holds a connection to it, restart the loader. Two
 consecutive ticks are required (Decky's own reconnect polls every 5s, so that is six missed
 attempts), a stopped loader is left stopped, and repeated failed recoveries back off 30s → 900s,
@@ -166,10 +166,11 @@ it (its restart is logged to the journal with the reason).
 
 `tests/test-decky.sh` (in `make test`) covers the pin, units, sync decisions, the sanitizer, and
 the watchdog's decision loop (driven against fake `ss`/`systemctl`); guard-rootfs assertion 9
-covers image completeness. None of it can prove PluginLoader executes under our FEX build, nor
-that injection works against our Steam client — both were HW-validated 2026-08-08 (erofs guest
-mount + clean start + frontend injection in the journal), and both remain worth a glance after a
-loader or Steam-channel bump.
+covers image completeness. None of it can prove PluginLoader executes on our image, nor that
+injection works against our Steam client. Both were HW-validated 2026-08-08 on the x86_64 loader
+under FEX (clean start + frontend injection in the journal); the native aarch64 loader (v3.3.0)
+still needs that same check on hardware, and both remain worth a glance after a loader or
+Steam-channel bump.
 
 The watchdog's own two branches were HW-validated 2026-08-18 by running the script by hand on a
 dev card (healthy → no restart; probe pointed at a listening port the loader is not connected to

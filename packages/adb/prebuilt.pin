@@ -10,9 +10,8 @@
 # databases (4560 packages) — there is no `android-tools`, `adb` or `fastboot` provider in the
 # holo aarch64 repo at all.
 #
-# x86_64 ON PURPOSE, and this is the second instance of that call on this image, not a new one:
-# Google publishes platform-tools for LINUX only as x86_64, and it runs under the system FEX
-# binfmt (packages/fex-emu) exactly as packages/decky-loader's PluginLoader does. HW-proven on
+# x86_64 ON PURPOSE: Google publishes platform-tools for LINUX only as x86_64, and it runs under
+# the system FEX binfmt (packages/fex-emu) like any x86 Linux binary. HW-proven on
 # 2026-08-22 before being pinned: `adb version` in 1.09s, the fork-server daemonizes correctly and
 # holds a TCP listener, and it needs nothing from the guest rootfs beyond glibc and libgcc_s. It
 # touches no GPU and no USB in this role — Lepton talks to the guest over TCP on localhost — so

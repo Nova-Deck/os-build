@@ -59,7 +59,7 @@ dbus-broker 37-3 aarch64 snapshot b11e71e7ee72717336b415d5affaf91cd3accd95845ab9
 dbus-broker-units 37-3 aarch64 snapshot 7e432ffde73ef74ce86e7eb1fe5d97e0cda93b3d9f8d4e02c322bc79cf62129b
 dbus-units 37-3 aarch64 snapshot 4d9a5f303a739d6d7a2239108de588083bf1a7d0746e0acf561f5f0e6d7fbf83
 dconf 0.49.0-1 aarch64 snapshot 2a1ab3161420deb4abd5dcfbd4ebba62211fd4923ed407359535b4a750868d3a
-decky-loader v3.2.10 - prebuilt c2cf316a53e1c1d318c6dda8821c827e5db275922987f9097956d7a1576e8258
+decky-loader v3.3.0 - prebuilt 8ef5dcf36cbbbb6e97201a6baed5d79c4cc44ec27789fc9af1c5b6ae8f0b25b6
 default-cursors 3-1 any snapshot ae52028372c3b2f66547baab41f1614b25472489d927b1a50b596bb8df7c056e
 desktop-file-utils 0.28-1 aarch64 snapshot ba2a87da6581763019780c9bdaa47ba0b7e24dee3e186f973e76d2041fb5a237
 device-mapper 2.03.39-1 aarch64 snapshot b7091ced4c5347f2cca26ab526147a6e34d8435fef25a1cb8c2a63302e1c8a99

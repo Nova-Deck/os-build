@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Offline checks for the Decky stack: the loader pin, the homebrew seed/sync, the units that run
-# it, the FEX AppConfig, the CEF sentinel, and both first-party plugin backends.
+# it, the CEF sentinel, and both first-party plugin backends.
 #
 #   tests/test-decky.sh
 #
@@ -11,8 +11,8 @@
 # name the culprit. Every check here is a decision the scripts make on paths and file content,
 # which is exactly what a fabricated tree can exercise on the host: no root, no device, no bus.
 #
-# The one thing this deliberately CANNOT prove: PluginLoader (x86_64) actually running under our
-# FEX build, and Decky actually injecting into our Steam client. Those are the two HW gates.
+# The one thing this deliberately CANNOT prove: PluginLoader actually running on our image, and
+# Decky actually injecting into our Steam client. Those are the two HW gates.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -27,7 +27,6 @@ MONITOR="$ROOT/apps/decky/novadeck-monitor"
 FRAMEGEN="$ROOT/apps/decky/novadeck-framegen"
 UNITDIR="$ROOT/rootfs/overlay/usr/lib/systemd/system"
 WANTSDIR="$ROOT/rootfs/overlay/etc/systemd/system/multi-user.target.wants"
-APPCONF="$ROOT/rootfs/overlay/usr/share/fex-emu/AppConfig/PluginLoader.json"
 
 PASS=0; FAIL=0; SKIP=0
 ok()  { PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }
@@ -214,17 +213,17 @@ SH
   rm -rf "$WD_TMP"
 fi
 
-# --- the FEX AppConfig ---------------------------------------------------------------------
-if python3 -c "import json,sys; json.load(open('$APPCONF'))" 2>/dev/null; then
-  ok "AppConfig/PluginLoader.json parses — a broken file silently reverts FEX to defaults"
-  python3 - "$APPCONF" <<'PY' && ok "AppConfig keeps TSO on + Multiblock off (the conservative-correctness pair)" || bad "AppConfig lost TSOEnabled=1/Multiblock=0"
-import json, sys
-c = json.load(open(sys.argv[1]))["Config"]
-sys.exit(0 if c.get("TSOEnabled") == "1" and c.get("Multiblock") == "0" else 1)
-PY
-else
-  bad "AppConfig/PluginLoader.json missing or invalid JSON"
-fi
+# --- the loader is the native asset --------------------------------------------------------
+# Upstream's x86_64 asset sits beside ours under the same tag, one suffix shorter. A bump that
+# copies the wrong URL still builds and still boots: binfmt runs it under FEX, and plugin
+# children quietly go back to resolving paths through the x86 guest rootfs.
+case "$(pin_field "$PIN" url)" in
+  */PluginLoader-arm64) ok "pin url is the native PluginLoader-arm64 asset, not the x86_64 one" ;;
+  *) bad "pin url is not PluginLoader-arm64 — the x86_64 asset would run under FEX" ;;
+esac
+[ ! -e "$ROOT/rootfs/overlay/usr/share/fex-emu/AppConfig/PluginLoader.json" ] \
+  && ok "no FEX AppConfig for PluginLoader — the loader does not run under FEX" \
+  || bad "AppConfig/PluginLoader.json is back, for a loader that no longer runs under FEX"
 
 # --- the stylesheet is one template literal --------------------------------------------------
 # A backtick anywhere inside src/styles.ts ENDS the string early, so every rule after it is

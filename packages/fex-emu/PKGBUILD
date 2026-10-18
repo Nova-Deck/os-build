@@ -35,7 +35,7 @@
 # permanent, so an old pin never rots out from under us.
 
 pkgname=fex-emu
-pkgver=2609
+pkgver=2610
 pkgrel=1
 pkgdesc="Fast usermode x86 and x86-64 emulator for AArch64, with host/guest thunks"
 arch=('aarch64')
@@ -64,10 +64,10 @@ depends=('erofsfuse' 'squashfuse' 'fuse3' 'fmt' 'xxhash'
 makedepends=('git' 'cmake' 'ninja' 'clang' 'lld' 'llvm' 'python-setuptools'
              'catch2' 'libepoxy' 'zlib' 'openssl' 'libarchive' 'libxrandr')
 
-# The FEX-2609 tag. NOTE this is the COMMIT the tag points at, not the tag object's own sha —
-# `git ls-remote refs/tags/FEX-2609` prints the latter, which #commit= cannot resolve.
+# The FEX-2610 tag. NOTE this is the COMMIT the tag points at, not the tag object's own sha —
+# `git ls-remote refs/tags/FEX-2610` prints the latter, which #commit= cannot resolve.
 # Verify a bump with: git rev-parse FEX-<ver>^{commit}
-_commit=395b132f346b1a45def246d10c52245edba1ef02
+_commit=14c92681f4d62cf84d901460e0358de09c8847a7
 
 # x86 sysroot inputs. Pinned to archive.archlinux.org (permanent URLs; the rolling mirrors
 # rotate old versions out). noextract: these are the sysroot payload, assembled by hand in

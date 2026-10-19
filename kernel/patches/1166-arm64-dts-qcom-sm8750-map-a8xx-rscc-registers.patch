@@ -1,0 +1,21 @@
+arm64: dts: qcom: sm8750: map the A8xx RSCC registers
+
+The A8xx driver addresses RSCC through the GPU mapping at offset 0x50000.
+Expand the SM8750 GPU register range from the 0x60000 our 1165 GPU nodes
+carry to the 0x6c000 upstream A8xx devicetrees use, so recovery does not
+access beyond the mapping.
+
+From armada 0038a, regenerated against the 1165 node (its base still had
+0x40000).
+
+--- a/arch/arm64/boot/dts/qcom/sm8750.dtsi
++++ b/arch/arm64/boot/dts/qcom/sm8750.dtsi
+@@ -3521,7 +3521,7 @@
+ 
+ 		gpu: gpu@3d00000 {
+ 			compatible = "qcom,adreno-44050000", "qcom,adreno";
+-			reg = <0x0 0x03d00000 0x0 0x60000>,
++			reg = <0x0 0x03d00000 0x0 0x6c000>,
+ 			      <0x0 0x03d9e000 0x0 0x2000>,
+ 			      <0x0 0x03d61000 0x0 0x800>;
+ 			reg-names = "kgsl_3d0_reg_memory",

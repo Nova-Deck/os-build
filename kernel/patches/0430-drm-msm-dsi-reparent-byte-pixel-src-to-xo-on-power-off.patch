@@ -1,0 +1,49 @@
+drm/msm/dsi: reparent the byte/pixel clock sources back on power off
+
+The byte/pixel RCGs are reparented to the DSI PHY PLL at link-clock
+enable; nothing moves them back when the link powers off, so the RCG
+keeps sourcing a PLL that the PHY then powers down. Record the original
+(XO) parent the first time the link comes up and restore it in
+msm_dsi_host_power_off() before the link clocks are disabled. Needed for
+the SM8750 dispcc, which stalls its RCG update ("rcg didn't update")
+when the selected source is dead.
+
+From ROCKNIX SM8750 0048 (Teguh Sobirin), rebased onto 7.2.11 (one
+context line in the struct drifted: byte_intf_clk_rate became
+byte_intf_clk_div_2 upstream).
+
+--- a/drivers/gpu/drm/msm/dsi/dsi_host.c
++++ b/drivers/gpu/drm/msm/dsi/dsi_host.c
+@@ -127,6 +127,8 @@
+ 	struct clk *pixel_src_clk;
+ 	struct clk *dsi_pll_byte_clk;
+ 	struct clk *dsi_pll_pixel_clk;
++	struct clk *byte_src_parent;
++	struct clk *pixel_src_parent;
+ 
+ 	unsigned long byte_clk_rate;
+ 	bool byte_intf_clk_div_2;
+@@ -442,6 +444,11 @@
+ 	struct device *dev = &msm_host->pdev->dev;
+ 	int ret;
+ 
++	if (!msm_host->byte_src_parent)
++		msm_host->byte_src_parent = clk_get_parent(msm_host->byte_src_clk);
++	if (!msm_host->pixel_src_parent)
++		msm_host->pixel_src_parent = clk_get_parent(msm_host->pixel_src_clk);
++
+ 	/*
+ 	 * DSI PHY PLLs have to be enabled to allow reparenting to them, so
+ 	 * cannot use assigned-clock-parents.
+@@ -2629,6 +2636,11 @@
+ 
+ 	pinctrl_pm_select_sleep_state(&msm_host->pdev->dev);
+ 
++	if (msm_host->byte_src_parent)
++		clk_set_parent(msm_host->byte_src_clk, msm_host->byte_src_parent);
++	if (msm_host->pixel_src_parent)
++		clk_set_parent(msm_host->pixel_src_clk, msm_host->pixel_src_parent);
++
+ 	cfg_hnd->ops->link_clk_disable(msm_host);
+ 	pm_runtime_put(&msm_host->pdev->dev);
+ 

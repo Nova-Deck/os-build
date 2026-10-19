@@ -1,0 +1,63 @@
+drm/msm/dpu: enable inline rotation on the sm8750 catalog
+
+The four SM8750 VIG pipes get the inline-rotation feature bit and a
+scaler-3.4 sub-block wired to the shared v2.01 rotation config (same
+1088-line cap and format list as sm8550/sm8650 — 0340 carries the core).
+Reuses the shared VIG_SM8550_MASK_SDMA and dpu_rot_sm8550_cfg_v201
+rather than minting sm8750-named duplicates, following the armada merge
+of the per-SoC ROCKNIX patches; content equivalent to ROCKNIX SM8750
+0068 (whose SM8750-named mask and rot cfg are byte-identical copies).
+
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_catalog.c
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_catalog.c
+@@ -390,6 +390,10 @@
+ static const struct dpu_sspp_sub_blks dpu_vig_sblk_qseed3_3_4 =
+ 				_VIG_SBLK(SSPP_SCALER_VER(3, 4));
+ 
++static const struct dpu_sspp_sub_blks dpu_vig_sblk_qseed3_3_4_rot_v2 =
++			_VIG_SBLK_ROT(SSPP_SCALER_VER(3, 4),
++				      &dpu_rot_sm8550_cfg_v201);
++
+ static const struct dpu_sspp_sub_blks dpu_vig_sblk_qseed3_3_5 =
+ 				_VIG_SBLK_REC0_REC1(SSPP_SCALER_VER(3, 5));
+ 
+--- a/drivers/gpu/drm/msm/disp/dpu1/catalog/dpu_12_0_sm8750.h
++++ b/drivers/gpu/drm/msm/disp/dpu1/catalog/dpu_12_0_sm8750.h
+@@ -59,29 +59,29 @@
+ 	{
+ 		.name = "sspp_0", .id = SSPP_VIG0,
+ 		.base = 0x4000, .len = 0x344,
+-		.features = VIG_SDM845_MASK_SDMA,
+-		.sblk = &dpu_vig_sblk_qseed3_3_4,
++		.features = VIG_SM8550_MASK_SDMA,
++		.sblk = &dpu_vig_sblk_qseed3_3_4_rot_v2,
+ 		.xin_id = 0,
+ 		.type = SSPP_TYPE_VIG,
+ 	}, {
+ 		.name = "sspp_1", .id = SSPP_VIG1,
+ 		.base = 0x6000, .len = 0x344,
+-		.features = VIG_SDM845_MASK_SDMA,
+-		.sblk = &dpu_vig_sblk_qseed3_3_4,
++		.features = VIG_SM8550_MASK_SDMA,
++		.sblk = &dpu_vig_sblk_qseed3_3_4_rot_v2,
+ 		.xin_id = 4,
+ 		.type = SSPP_TYPE_VIG,
+ 	}, {
+ 		.name = "sspp_2", .id = SSPP_VIG2,
+ 		.base = 0x8000, .len = 0x344,
+-		.features = VIG_SDM845_MASK_SDMA,
+-		.sblk = &dpu_vig_sblk_qseed3_3_4,
++		.features = VIG_SM8550_MASK_SDMA,
++		.sblk = &dpu_vig_sblk_qseed3_3_4_rot_v2,
+ 		.xin_id = 8,
+ 		.type = SSPP_TYPE_VIG,
+ 	}, {
+ 		.name = "sspp_3", .id = SSPP_VIG3,
+ 		.base = 0xa000, .len = 0x344,
+-		.features = VIG_SDM845_MASK_SDMA,
+-		.sblk = &dpu_vig_sblk_qseed3_3_4,
++		.features = VIG_SM8550_MASK_SDMA,
++		.sblk = &dpu_vig_sblk_qseed3_3_4_rot_v2,
+ 		.xin_id = 12,
+ 		.type = SSPP_TYPE_VIG,
+ 	}, {

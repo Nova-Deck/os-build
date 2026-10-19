@@ -212,7 +212,7 @@ params on the Odin 3 boards.map row instead), the hv-haptics HAP530/V5 driver ge
 | `1030` | community | spycat88, ROCKNIX `0071`. A hack. | never |
 | `1040` | community | Kars Mulder's Linux-Pollrate-Patch via ROCKNIX `0506`. | never |
 | `1042` | community | Anze, ROCKNIX SM8750 `0509`: restore the pre-`0c8ee850572` ucsi behaviour — clear the USB role when the partner advertises no USB data — on ports without the USB4_IMPLIES_USB quirk (our pmic_glink UCSI ports on every SoC). Peer motivation is a suspend hard-hang we cannot hit; the stale role on charger-only partners is wrong regardless. | when the upstream regression is fixed |
-| `1044` | community | ROCKNIX SM8750 `0509` (soc): pmic_glink_altmode defers until the typec mux/switch is ready instead of running without it. | when upstreamed |
+| `1044` | community | armada `0509` (was the ungated ROCKNIX SM8750 `0509` (soc), 2026-10-19): pmic_glink_altmode defers until the typec mux/switch is ready — gated to SM8750, whose wcd_usbss supplier registers late. Ungated it black-screens every board whose DT declares no mode-switch (the AYANEO SM8550 family): the permanent defer blocks the DP aux bridges and the msm DRM aggregate never binds. | when upstreamed |
 | `1050` | community | Jacob Cook, ROCKNIX `5e52df2b9fba` (SM8250 `0018`, merged with PR #3382), written from the vendor smb5 `smblib_set_prop_pr_swap_in_progress` sequence. Never posted. | when mainline `qcom_pmic_typec_port` handles PR swap termination |
 | `1052` | community | ROCKNIX SM8750 `0043`: power-sequencing qcom-wcn entry for WCN7860. | when WCN7860 lands upstream |
 | `1053` | community | ROCKNIX SM8750 `0042`: PCI pwrctrl-pwrseq match for WCN7860. | with `1052` |

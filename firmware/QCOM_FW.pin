@@ -11,7 +11,13 @@
 #
 # Fetch + verify with:  firmware/fetch-qcom-fw.sh
 repo:   https://github.com/Nova-Deck/qcom-firmwares
-commit: dbf238bd885d5858543b9588fbee9d0645a25d4f
+# fece049 is the tip of that repo's `sm8750` BRANCH (adds the AYN Odin 3 + KONKR Pocket
+# FIT Elite sets: per-device adsp/cdsp + .jsn + battmgr + amp ACF, WCN7860 ath12k + qca
+# gngbt* BT, both DP-audio tplg). A commit SHA is content-addressed so the branch/merge
+# state doesn't matter to the fetch — but the branch must be MERGED (not rebased: that
+# would orphan this commit) after SM8750 HW validation. Everything previously pinned at
+# dbf238bd is contained unchanged (sha256sums rows verified identical).
+commit: fece049ed938cd3a889e128c7fbc1ecd88700147
 
 # --- SM8250: OPEN, with one exception, and one still-open gap ----------------------------
 # The six SM8250 boards need almost nothing from this repo. Their GPU microcode, zap shader,

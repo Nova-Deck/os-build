@@ -24,7 +24,7 @@ new file mode 100644
 index 0000000..f462856
 --- /dev/null
 +++ b/grub-core/commands/efi/novadeck_radiomac.c
-@@ -0,0 +1,281 @@
+@@ -0,0 +1,283 @@
 +/*
 + *  novadeck_radiomac.mod  --  give the Wi-Fi and Bluetooth radios a stable,
 + *  per-unit address in the device tree handed to Linux.
@@ -140,12 +140,14 @@ index 0000000..f462856
 +/* compatible strings of the radios on the boards we ship. */
 +static const char *const wifi_compatibles[] = {
 +  "pci17cb,1107",		/* WCN7850, SM8550 / SM8650 */
++  "pci17cb,110e",		/* WCN7860, SM8750 */
 +  "pci17cb,1101",		/* QCA6390, SM8250 */
 +  NULL
 +};
 +
 +static const char *const bt_compatibles[] = {
 +  "qcom,wcn7850-bt",
++  "qcom,wcn7860-bt",
 +  "qcom,qca6390-bt",
 +  NULL
 +};

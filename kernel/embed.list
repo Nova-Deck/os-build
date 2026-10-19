@@ -5,6 +5,22 @@
 # CONFIG_EXTRA_FIRMWARE from this list. Add a SoC/board by appending its early-boot blobs
 # here — no edit to build.sh. Comments (#) and blank lines ignored.
 
+# --- sm8750: Adreno 830 GPU microcode + zap shader (open, linux-firmware) — shared by
+# both SM8750 boards (AYN Odin 3, KONKR Pocket FIT Elite); embedded for the usual reason:
+# DRM_MSM is =y and the panel is the only console, so the GPU inits before the root mounts.
+qcom/gen80000_aqe.fw
+qcom/gen80000_sqe.fw
+qcom/gen80000_gmu.bin
+qcom/sm8750/gen80000_zap.mbn
+
+# --- sm8750: AudioReach (q6apm) topology, per board card model (device) — the DP-audio
+# generation (DISPLAY_PORT_RX_0 graph), pairing with the dp-dai-link in both board DTS.
+# adsp/cdsp are NOT here: QCOM_Q6V5_PAS is =m and the per-device signed images load from
+# the mounted root (qcom-firmwares), same as sm8550/sm8650. The amp ACF blobs
+# (aw883xx/aw88261) also load from the root: the i2c codecs probe after it mounts.
+qcom/sm8750/SM8750-AYN-tplg.bin
+qcom/sm8750/SM8750-KONKR-tplg.bin
+
 # --- sm8650: Adreno 750 GPU microcode (open, linux-firmware) ---
 qcom/gen70900_aqe.fw
 qcom/gen70900_sqe.fw

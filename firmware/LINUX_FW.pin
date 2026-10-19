@@ -42,6 +42,18 @@ qcom/a740_sqe.fw           qcom/a740_sqe.fw         96fee336424b139100fc60b5b45a
 qcom/gmu_gen70200.bin      qcom/gmu_gen70200.bin    1a2a419c39046d3141fc5fed5aa7f971de2db40cc7a1d89693c3e26fad64dd98
 qcom/sm8550/a740_zap.mbn   qcom/sm8550/a740_zap.mbn 386bbdc25ae94a9398e33e7580eecfdcef6c472682a1e3123e1374bcffe7cde3
 
+# Adreno gen80000 (A830 / SM8750 — AYN Odin 3, KONKR Pocket FIT Elite) GPU microcode +
+# zap shader — embedded in the kernel Image like the other SoCs' GPU sets. The zap is OPEN
+# under qcom/sm8750/ and shared by both boards (their DTS zap-shader firmware-name points
+# here); it is byte-identical to the copy armada ships, while ROCKNIX's extra-firmware
+# still carries a stale pre-upstream zap that their own build never embeds. NOTE: unlike
+# WCN7850 below, the SM8750 boards' WCN7860 Wi-Fi/BT blobs are NOT upstream yet — those
+# live in qcom-firmwares (ath12k/WCN7860/, qca/gngbt*).
+qcom/gen80000_aqe.fw       qcom/gen80000_aqe.fw     67562ad5baae3a133c92a6e48a9d1b1a9a867fe2f85b49324e244e963f3b89c5
+qcom/gen80000_sqe.fw       qcom/gen80000_sqe.fw     30ee3301534f95799d4afaf73864f3c369baa5a5dea8481e7f0cb8cc941f396c
+qcom/gen80000_gmu.bin      qcom/gen80000_gmu.bin    1ad8175e6cd01ea76c64d20b83600038c52dd29844b48d57b11b769b038863a5
+qcom/sm8750/gen80000_zap.mbn  qcom/sm8750/gen80000_zap.mbn  0e3ae03f7dd3170621e7b231802639535410bbc2a1c3ba0829c15ab4cf3996cf
+
 # WCN7850 Wi-Fi/BT (qca): Bluetooth firmware + NVM variants (board ID selects the .bNN)
 qca/hmtbtfw20.tlv          qca/hmtbtfw20.tlv        f1c00f4640a5c4e5dc36a2574d3d1d0afcfd1ab58a84f217dce4b1bb73cba981
 qca/hmtnv20.bin            qca/hmtnv20.bin          c26b340bbc8b617304610c774627ac4879194705eea7a7c7b13e3593903befd9
@@ -64,6 +76,10 @@ qcom/vpu/vpu33_p4_s7.mbn   qcom/vpu/vpu33_p4.mbn    7b829fc1c8ce7cca836d10e898b9
 # vpu30_p4_s6.mbn: that is a different signing, requested by a different platform desc
 # (iris_vpu30_p4_s6_gen2_desc), and it is not what sm8550_data asks for.
 qcom/vpu/vpu30_p4_s7.mbn   qcom/vpu/vpu30_p4.mbn    98d40a86af3b300bb55faa694bf130f4d4de8d4b5c5ba74e03214f5037368ae0
+# gen35 (SM8750): iris sm8750_data -> "qcom/vpu/vpu35_p4.mbn"; WHENCE: Link:
+# qcom/vpu/vpu35_p4.mbn -> vpu35_p4_s7.mbn. Both SM8750 boards enable &iris (the AYN
+# common DTSI carries the node), same one-decoder situation as the SoCs above.
+qcom/vpu/vpu35_p4_s7.mbn   qcom/vpu/vpu35_p4.mbn    26c92bd0e62a131e487431cf63a1b50fee83d8f7094f04df4dfbc523881ce0fc
 
 # ---------------------------------------------------------------------------------------
 # SM8250 (Snapdragon 865) — Retroid Pocket 5 / Flip2 / Mini / Mini V2, AYN Thor Lite,

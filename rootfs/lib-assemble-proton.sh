@@ -171,12 +171,15 @@ if [ -d "$PROTON_CACHY_TOOL" ]; then
   BAKED_PROTON=1
 fi
 
-# GE (GloriousEggroll). `version` file format: "<epoch> GE-Proton<major>-<minor>", e.g. "GE-Proton11-1".
+# GE (GloriousEggroll). The display version comes from compatibilitytool.vdf's internal name
+# ("GE-Proton<major>-<minor>-aarch64", the dated build string rewrite_proton_tool replaces),
+# NOT the `version` file: GE-Proton11-10 shipped its aarch64 tarball with a pre-tag git-describe
+# string there ("GE-Proton11-9-25-g8f2047471"), while the vdf name matched the release.
 PROTON_GE_TOOL="$COMPAT_DIR/proton-ge-arm64"   # dir == stable internal id
 if [ -d "$PROTON_GE_TOOL" ]; then
-  [ -f "$PROTON_GE_TOOL/version" ] || { echo "ERROR: GE Proton tool has no version file at $PROTON_GE_TOOL/version" >&2; exit 1; }
-  GEVER="$(sed -n 's/.*\(GE-Proton[0-9][0-9.-]*[0-9]\).*/\1/p' "$PROTON_GE_TOOL/version")"
-  [ -n "$GEVER" ] || { echo "ERROR: could not parse GE Proton version from $(cat "$PROTON_GE_TOOL/version")" >&2; exit 1; }
+  [ -f "$PROTON_GE_TOOL/compatibilitytool.vdf" ] || { echo "ERROR: GE Proton tool has no compatibilitytool.vdf at $PROTON_GE_TOOL" >&2; exit 1; }
+  GEVER="$(sed -n 's/^[[:space:]]*"\(GE-Proton[0-9][0-9.-]*[0-9]\)\(-aarch64\)\{0,1\}".*/\1/p' "$PROTON_GE_TOOL/compatibilitytool.vdf" | head -n1)"
+  [ -n "$GEVER" ] || { echo "ERROR: could not parse GE Proton version from $PROTON_GE_TOOL/compatibilitytool.vdf" >&2; exit 1; }
   rewrite_proton_tool "$PROTON_GE_TOOL" "proton-ge-arm64" "${GEVER} (GloriousEggroll, arm64)"
   BAKED_PROTON=1
 fi

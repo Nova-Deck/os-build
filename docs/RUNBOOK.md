@@ -8,16 +8,17 @@ is, [GitHub issues](https://github.com/Nova-Deck/os-build/issues) for the open i
 Every `make` invocation below runs from the repo root. A dev build needs its environment sourced
 **before every one of them** (`set -a; . ./dev.env; set +a`) — see the README's Building section.
 
-## Prerequisite: the device already runs the ROCKNIX ABL
+## Prerequisite: the device already runs OpenABL
 
-**novadeck ships no bootloader.** A card boots because the device is already running the custom
-ABL from [ROCKNIX](https://github.com/ROCKNIX/abl) — an Android bootloader replacement that can
-chainload a UEFI payload off an ESP. On a stock Android ABL a novadeck card does nothing, and
-nothing on the card can change that: writing the image is not the first step, flashing that ABL
-is. We consume it and cannot build it — it ships as a signed, per-device ELF.
+**novadeck ships no bootloader.** A card boots because the device is already running
+[OpenABL](https://github.com/OpenHandheldCollective/OpenABL) — an Android bootloader replacement
+(the community continuation of the ROCKNIX ABL) that can chainload a UEFI payload off an ESP. On a
+stock Android ABL a novadeck card does nothing, and nothing on the card can change that: writing
+the image is not the first step, flashing that ABL is. We consume it and cannot build it — it
+ships as a signed, per-SoC ELF (`abl_signed-<SoC>.elf` on the OpenABL releases page).
 
-Install it by ROCKNIX's own procedure — their `update.sh` writes the signed
-`abl_signed-<HW_DEVICE>.elf` to both `abl_a` and `abl_b`, and it needs an unlocked bootloader.
+Install it by the upstream procedure — write the signed ELF to both the `abl_a` and `abl_b`
+partitions (ROCKNIX's `updateabl` script does exactly this), which needs an unlocked bootloader.
 That process is theirs to own and keep current; it is not reproduced here.
 
 Two properties of it govern everything below:
@@ -341,9 +342,9 @@ inserting a card and rebooting changes nothing, which reads exactly like a dead 
 machine. Select force external in ABL and the card boots normally. This is the recovery path for
 an interrupted or broken internal install, and it is the only one short of EDL.
 
-Since the ABL itself comes from ROCKNIX, a device that already had ROCKNIX installed to internal
+Since ROCKNIX runs the same ABL, a device that already had ROCKNIX installed to internal
 is the most likely version of this, and it is not a novadeck fault to debug — it is the
-[boot-order rule](#prerequisite-the-device-already-runs-the-rocknix-abl) working as designed.
+[boot-order rule](#prerequisite-the-device-already-runs-openabl) working as designed.
 
 Nothing on the SD-card-only path is affected: with no internal ESP present, ABL falls through to
 the card unaided and no option needs setting.

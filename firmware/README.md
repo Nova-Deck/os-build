@@ -15,8 +15,8 @@ Two firmware sources:
   vendor image and republished to the [Nova-Deck/qcom-firmwares](https://github.com/Nova-Deck/qcom-firmwares)
   repo. Fetched + verified by `fetch-qcom-fw.sh` (pinned in `QCOM_FW.pin`).
 
-Which class a given blob falls in is **per-SoC, not fixed**. SM8550/SM8650 boards each need
-their own vendor-signed `adsp`/`cdsp`; every SM8250 board is served by the generic open pair
+Which class a given blob falls in is **per-SoC, not fixed**. SM8550/SM8650/SM8750 boards each
+need their own vendor-signed `adsp`/`cdsp`; every SM8250 board is served by the generic open pair
 in `linux-firmware`. Two SM8250 blobs are missing from both sources and are documented as
 open gaps at the bottom of `QCOM_FW.pin`.
 

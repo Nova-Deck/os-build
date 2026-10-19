@@ -134,11 +134,12 @@ jobs:
           VERSION: ${{ needs.prep.outputs.version }}
           # A SEPARATE PREFIX FROM THE CARDS, so the two retentions cannot prune each other.
           NOVADECK_R2_KIND: installer
-          # TWO, not the card's one, and not more. A medium now carries the Steam tree, so it is
-          # ~2 GiB rather than ~650 MiB: two of them plus one 5.08 GiB card is ~9 GiB against a
-          # 10 GB free tier, which is as much back catalogue as that tier affords. An older medium
-          # stays a working recovery tool — it needs nothing from the server but the OS bundle.
-          NOVADECK_CARD_KEEP: '2'
+          # ONE, like the card. A medium carries the Steam tree, so it is ~2 GiB: keeping only the
+          # current one plus one 5.08 GiB card is ~7 GiB against a 10 GB free tier, leaving real
+          # headroom instead of running at its edge. No back catalogue is lost in any way that
+          # matters — an already-downloaded older medium stays a working recovery tool, since it
+          # needs nothing from the server but the OS bundle.
+          NOVADECK_CARD_KEEP: '1'
         run: ota/publish-card.sh "$VERSION" upload/installer.img.gz meta
 
   release:

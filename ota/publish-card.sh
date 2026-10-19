@@ -44,8 +44,8 @@ KEEP="${NOVADECK_CARD_KEEP:-1}"
 # release-installer.yml publishes. Both are the same act — a file a person downloads and writes to a
 # card — so they are one publisher rather than a second copy of the upload, the retention and the
 # public-readability check. The retention knob above applies to whichever prefix this names, and its
-# caller sets it: a medium is ~2.1 GB against the card's 5.08 GiB, so two of each is about all a
-# 10 GB free tier holds.
+# caller sets it: both kinds keep one — a ~2.1 GB medium plus a 5.08 GiB card is ~7 GiB against a
+# 10 GB free tier.
 #
 # THE PRUNE IS SCOPED TO THIS PREFIX, which is the part to be careful with — it is an `rclone purge`,
 # and a KIND that leaked between callers would delete the other artifact's back catalogue.

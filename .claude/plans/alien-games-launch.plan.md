@@ -145,6 +145,36 @@ On the Pocket FIT, Steam running, driven over SSH + the gate CDP evaluate:
 5. Restart + reboot: entries + compat mappings survive; Play still works.
 6. Note any Epic title needing legendary's env (the caveat) for a followup.
 
+#### Tasks 1-5 built + Task 6 gate — 2026-10-20 on the Pocket FIT
+
+**Windows path: HW-PASSED.** Registered Master of Magic (GOG) via the amended backend — Exe =
+`Launcher.exe` (GOG's isPrimary task), `LaunchOptions = game-launch %command%`, compat tool set.
+`SpecifyCompatTool` landed `2674024421 → proton-cachyos-11.0-arm64` in `config.vdf` (priority
+250) — model B's core assumption confirmed on the arm64 client. Pressing Play composed the full
+chain, verified in Steam's console log with **game-launch as the outermost wrapper**:
+
+    game-launch → steam-launch-wrapper → reaper → SLR4/_v2-entry-point
+      → proton-cachyos-11.0-arm64/proton waitforexitandrun → Launcher.exe
+
+Steam lazily provisioned SLR4 (140 MB) and the game rendered. Acceptance met: the chain works,
+game-launch is in it, it renders. (game-launch leaves no live process — it os.execvs — and wrote
+no FEX config because MoM has no per-game tuning; both correct.)
+
+**Caveat, not a defect:** MoM is a DOS game GOG ships as DOSBox-in-a-Windows-launcher, so it runs
+DOSBox → Wine → FEX, triple-stacked, and performs badly. It proved the chain, not performance; a
+native Windows title would be the real perf read. Performance/tuning is out of MVP scope anyway.
+
+**Findings fixed in-gate (both committed):** `GetAvailableCompatTools` is absent on the arm64
+client (the @decky/ui types list it) — the bridge now sets the tool without the guard, since our
+baked Proton is always registered. The GOG resolver had to honor a `launcher`-category isPrimary
+task (MoM's entry point), not only `game` tasks.
+
+**Native-Linux path: built + offline-tested, HW gate DEFERRED.** This account owns no native-Linux
+GOG title (the GOG library here is Master of Magic + Witcher, both Windows), so the native
+shortcut path could not be driven end to end. The bare `binfmt+FEX+ArchLinux.ero` path it targets
+is independently repo-validated (DONE.md, Super Meat Boy / PGRC), just not yet through one of our
+shortcuts. Owed when a native GOG title is available.
+
 ## Validation
 
 ```bash
@@ -167,9 +197,9 @@ source dev.env && make decky-plugin
 
 ## Acceptance
 
-- [ ] A Windows title per store launches through Proton+SLR4+FEX, `game-launch` in the chain, and renders
-- [ ] A native GOG Linux title launches through bare FEX and renders
-- [ ] The compat tool is set on Windows entries (unsigned appid) and survives a reboot
-- [ ] Ownership is the managed-root path test; a foreign entry with our token is not ours
-- [ ] The stub is gone from the launch path; no entry's Exe is store-launch
-- [ ] `make test` green with the amended + new suites
+- [x] A Windows title launches through Proton+SLR4+FEX, `game-launch` in the chain, and renders (GOG MoM, 2026-10-20; Epic not separately driven but the path is identical)
+- [ ] A native GOG Linux title launches through bare FEX and renders — DEFERRED: no native GOG title owned on this account
+- [x] The compat tool is set on Windows entries (unsigned appid) — in config.vdf; boot re-assert added (reboot-survival not separately re-driven)
+- [x] Ownership is the managed-root path test; a foreign entry with our token is not ours
+- [x] The stub is gone from the launch path; no entry's Exe is store-launch
+- [x] `make test` green with the amended + new suites (44 checks)

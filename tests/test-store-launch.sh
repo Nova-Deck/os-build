@@ -76,6 +76,18 @@ t = launch.resolve_target("gog", "123", p, rec)
 (ok if t and t["exe"] == str(gog_dir / "bin/witcher.exe") and t["platform"] == "windows" else bad)(
     f"GOG Windows resolves the PRIMARY game playTask ({t})")
 
+# A title whose primary is a `launcher` chooser (Master of Magic's real shape) — match GOG's signal.
+mom = tmp / "Games" / "GOG" / "MoM"
+mom.mkdir(parents=True)
+(mom / "goggame-456.info").write_text(json.dumps({"playTasks": [
+    {"category": "launcher", "path": "Launcher.exe", "isPrimary": True},
+    {"category": "game", "path": "DOSBOX/DOSBox.exe"},
+    {"category": "document", "path": "manual.pdf"},
+]}))
+t = launch.resolve_target("gog", "456", p, {"path": str(mom), "platform": "windows"})
+(ok if t and t["exe"] == str(mom / "Launcher.exe") else bad)(
+    f"a launcher-category isPrimary task is the entry point, not a game task ({t})")
+
 # -- GOG native Linux: the install-root start.sh, no compat tool --
 rec_linux = {"path": str(gog_dir), "platform": "linux"}
 t = launch.resolve_target("gog", "123", p, rec_linux)

@@ -60,10 +60,14 @@ def _gog_primary_exe(install, gid, uid):
     tasks = info.get("playTasks") if isinstance(info, dict) else None
     if not isinstance(tasks, list):
         return None
-    games = [t for t in tasks if isinstance(t, dict) and t.get("category") == "game"
-             and isinstance(t.get("path"), str)]
-    primary = next((t for t in games if t.get("isPrimary")), None) or (games[0] if games else None)
-    return primary["path"] if primary else None
+    # GOG marks exactly one task isPrimary — the entry point, which may be a `launcher` chooser
+    # (Master of Magic) or a `game` task directly. Match that signal (as Heroic does), falling
+    # back to the first runnable task. `document`/`tool` tasks are never launched.
+    candidates = [t for t in tasks if isinstance(t, dict) and t.get("category") in ("game", "launcher")
+                  and isinstance(t.get("path"), str)]
+    chosen = next((t for t in candidates if t.get("isPrimary")), None) or (
+        candidates[0] if candidates else None)
+    return chosen["path"] if chosen else None
 
 
 def _gog_target(gid, p, record):

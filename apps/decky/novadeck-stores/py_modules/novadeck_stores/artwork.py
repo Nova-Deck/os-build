@@ -35,8 +35,9 @@ _EPIC_PRIORITY = {
     "hero": ("DieselGameBox", "DieselGameBoxWide", "OfferImageWide"),
     "logo": ("DieselGameBoxLogo", "ProductLogo"),
 }
-# GOG GamesDB field per kind.
-_GOG_FIELD = {"capsule": "vertical_cover", "hero": "background", "logo": "logo"}
+# GOG GamesDB field per kind, with the extension its url_format expands to.
+_GOG_FIELD = {"capsule": ("vertical_cover", "jpg"), "hero": ("background", "jpg"),
+              "logo": ("logo", "png")}
 
 
 def _https(url):
@@ -72,15 +73,14 @@ def epic_urls(gid, p):
     return out
 
 
-def _gamesdb_url(entry):
-    """A GamesDB image object -> a concrete https url. The API gives a url_format with a list of
-    formatters; the first is the full-size asset."""
+def _gamesdb_url(entry, ext):
+    """A GamesDB image object -> a concrete https url. The API gives a `url_format` carrying two
+    placeholders: `{formatter}` (a size variant — empty is the full-size asset) and `{ext}`."""
     if not isinstance(entry, dict):
         return None
     fmt = entry.get("url_format")
-    formatters = entry.get("formatters")
-    if isinstance(fmt, str) and isinstance(formatters, list) and formatters:
-        return _https(fmt.replace("{formatter}", str(formatters[0])))
+    if isinstance(fmt, str):
+        return _https(fmt.replace("{formatter}", "").replace("{ext}", ext))
     # Older shape: a plain url.
     return _https(entry.get("url"))
 
@@ -101,8 +101,8 @@ def gog_urls(gid, fetch_json=_default_fetch_json):
     if not isinstance(game, dict):
         return {}
     out = {}
-    for kind, field in _GOG_FIELD.items():
-        url = _gamesdb_url(game.get(field))
+    for kind, (field, ext) in _GOG_FIELD.items():
+        url = _gamesdb_url(game.get(field), ext)
         if url:
             out[kind] = url
     return out

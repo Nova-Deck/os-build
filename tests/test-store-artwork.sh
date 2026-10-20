@@ -64,9 +64,9 @@ urls = artwork.epic_urls("Alba", p)
 
 # -- GOG: one unauthenticated GamesDB GET, injected --
 gamesdb = {"game": {
-    "vertical_cover": {"url_format": "https://gog/{formatter}.jpg", "formatters": ["ggvertical"]},
-    "background": {"url_format": "https://gog/{formatter}.jpg", "formatters": ["bg"]},
-    "logo": {"url_format": "https://gog/{formatter}.png", "formatters": ["lg"]},
+    "vertical_cover": {"url_format": "https://gog/cover{formatter}.{ext}"},
+    "background": {"url_format": "https://gog/bg{formatter}.{ext}"},
+    "logo": {"url_format": "https://gog/lg{formatter}.{ext}"},
 }}
 seen = {}
 def fake_json(url):
@@ -75,8 +75,9 @@ def fake_json(url):
 gurls = artwork.gog_urls("1207658924", fetch_json=fake_json)
 (ok if "gamesdb.gog.com/platforms/gog/external_releases/1207658924" in seen.get("url", "") else bad)(
     f"GOG art comes from the GamesDB endpoint by product id ({seen.get('url')})")
-(ok if gurls.get("capsule", "").startswith("https://gog/") and gurls.get("hero") and gurls.get("logo") else bad)(
-    f"GOG yields capsule/hero/logo from vertical_cover/background/logo ({gurls})")
+(ok if gurls.get("capsule") == "https://gog/cover.jpg" and gurls.get("hero") == "https://gog/bg.jpg"
+    and gurls.get("logo") == "https://gog/lg.png" else bad)(
+    f"GOG expands url_format (formatter empty = full size, ext per kind) ({gurls})")
 
 # -- download: https-only, size-capped, magic-byte validated --
 class FakeResp:

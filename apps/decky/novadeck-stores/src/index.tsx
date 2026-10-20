@@ -1,6 +1,7 @@
 import { addEventListener, definePlugin, removeEventListener, toaster } from "@decky/api";
 import { Navigation } from "@decky/ui";
 import { Content } from "./Content";
+import { executeShortcutOp, ShortcutOp } from "./lib/shortcutBridge";
 import { STORE_LABELS } from "./types";
 
 // The end of a sign-in, emitted by the backend's background task (main.py _connect_flow).
@@ -26,8 +27,16 @@ function onConnectDone(store: string, connected: boolean, close: boolean, messag
   });
 }
 
+// Library-entry operations the backend asks Steam for (main.py register/deregister_entry).
+// Registered HERE for the same reason connect_done is: the backend can ask while the panel is
+// unmounted, and milestone 4 has no panel at all — the gate drives the backend directly.
+function onShortcutOp(op: ShortcutOp) {
+  void executeShortcutOp(op);
+}
+
 export default definePlugin(() => {
   addEventListener("connect_done", onConnectDone);
+  addEventListener("shortcut_op", onShortcutOp);
   return {
     name: "NovaDeck Stores",
     content: <Content />,
@@ -53,6 +62,7 @@ export default definePlugin(() => {
     ),
     onDismount() {
       removeEventListener("connect_done", onConnectDone);
+      removeEventListener("shortcut_op", onShortcutOp);
     },
     // NO alwaysRender: this panel holds no pending edits and nothing to keep warm. It re-reads on
     // every open by design, because a token can expire while it is closed — and that re-read is

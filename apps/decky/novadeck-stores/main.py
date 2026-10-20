@@ -24,11 +24,12 @@ Status is read from the CLIs' own credential files rather than from any state of
 gogdl refresh and invalidate those, so they own the answer (see status.py).
 """
 import asyncio
+import itertools
 import subprocess
 
 import decky
 
-from novadeck_stores import cdp, cli, connect, installs, library, locations, paths, status
+from novadeck_stores import cdp, cli, connect, installs, library, locations, paths, shortcuts, status
 
 # Long enough to type an email and a password on the on-screen keyboard and clear a captcha;
 # short enough that a login the user walked away from does not poll for the rest of the session.
@@ -49,6 +50,13 @@ _LOCKS = {store: asyncio.Lock() for store in connect.STORES}
 # One install operation at a time: two starts would race for the one unit name, and an uninstall
 # must not interleave with a start writing the same record.
 _INSTALL_LOCK = asyncio.Lock()
+# One library-entry operation at a time, for the same reason: two registers would race the
+# registry read-modify-write, and the frontend round-trip must pair one result with one request.
+_SHORTCUT_LOCK = asyncio.Lock()
+# How long Steam gets to answer an AddShortcut/RemoveShortcut before the operation is an error.
+# Generous: the frontend executes synchronously once it hears the event, but the event bus itself
+# can lag behind a busy SteamUI.
+SHORTCUT_TIMEOUT = 30
 
 
 class Plugin:
@@ -213,6 +221,117 @@ class Plugin:
         decky.logger.info(f"{action} {store or ''} {args[1] if len(args) > 1 else ''}: "
                           f"{result.get('error') or 'ok'}")
         return result
+
+    # -- milestone 4: library entries, callable but not yet surfaced --
+
+    _shortcut_pending = {}
+    _shortcut_seq = itertools.count(1)
+
+    async def _shortcut_roundtrip(self, payload):
+        """Emit one operation to the frontend bridge and wait for its shortcut_result. The req id
+        pairs them; a SteamUI that never answers is an error here, never a hang."""
+        req = payload["req"]
+        fut = asyncio.get_running_loop().create_future()
+        self._shortcut_pending[req] = fut
+        try:
+            await decky.emit("shortcut_op", payload)
+            return await asyncio.wait_for(fut, SHORTCUT_TIMEOUT)
+        except asyncio.TimeoutError:
+            return {"error": "Steam did not answer the shortcut operation"}
+        finally:
+            self._shortcut_pending.pop(req, None)
+
+    async def shortcut_result(self, req, appid=None, error=None):
+        """Called back by the frontend bridge (shortcutBridge.ts) with one operation's outcome."""
+        fut = self._shortcut_pending.get(req)
+        if fut is not None and not fut.done():
+            fut.set_result({"error": error} if error else {"appid": appid})
+
+    async def register_entry(self, store, gid, title=None):
+        """Create the Steam library entry for a game. {"registered": True, "appid": N, "path":
+        install path or ""} or {"error": ...}. The title comes from the install record when one
+        exists; a not-installed game needs it passed (the caller just listed the library)."""
+        if store not in connect.STORES:
+            return {"error": f"unknown store {store!r}"}
+        try:
+            p = await asyncio.to_thread(paths.store_paths)
+        except (OSError, subprocess.SubprocessError) as exc:
+            return {"error": f"cannot resolve credential paths: {type(exc).__name__}"}
+        async with _SHORTCUT_LOCK:
+            record = (await asyncio.to_thread(installs.read_records, p)).get(f"{store}:{gid}", {})
+            title = title or record.get("title")
+            if not title:
+                return {"error": "no title known for this game — pass one"}
+            install_path = record.get("path") or ""
+            registry = await asyncio.to_thread(shortcuts.read_registry, p)
+            refused = shortcuts.check_register(registry, store, gid)
+            if refused:
+                return {"error": refused}
+            try:
+                payload = shortcuts.add_payload(next(self._shortcut_seq), store, gid, title, install_path)
+            except ValueError as exc:
+                return {"error": str(exc)}
+            result = await self._shortcut_roundtrip(payload)
+            if "error" in result:
+                decky.logger.info(f"register {store}:{gid}: {result['error']}")
+                return result
+            registry[f"{store}:{gid}"] = {"appid": int(result["appid"]), "title": title}
+            if not await asyncio.to_thread(shortcuts.write_registry, p, registry):
+                # The entry exists but nothing durable records it — say so rather than claim
+                # success; entry_status will show it as an orphan until a retry re-registers it.
+                return {"error": "entry created but the registry could not be written"}
+            decky.logger.info(f"register {store}:{gid}: appid {result['appid']}")
+            return {"registered": True, "appid": int(result["appid"]), "path": install_path}
+
+    async def deregister_entry(self, store, gid):
+        """Remove the entry and its registry row. {"deregistered": True} or {"error": ...}."""
+        if store not in connect.STORES:
+            return {"error": f"unknown store {store!r}"}
+        try:
+            p = await asyncio.to_thread(paths.store_paths)
+        except (OSError, subprocess.SubprocessError) as exc:
+            return {"error": f"cannot resolve credential paths: {type(exc).__name__}"}
+        async with _SHORTCUT_LOCK:
+            registry = await asyncio.to_thread(shortcuts.read_registry, p)
+            row = registry.get(f"{store}:{gid}")
+            if not isinstance(row, dict) or "appid" not in row:
+                decky.logger.info(f"deregister {store}:{gid}: not in the registry")
+                return {"error": "not registered"}
+            result = await self._shortcut_roundtrip(
+                shortcuts.remove_payload(next(self._shortcut_seq), row["appid"]))
+            if "error" in result:
+                decky.logger.info(f"deregister {store}:{gid}: {result['error']}")
+                return result
+            registry.pop(f"{store}:{gid}")
+            if not await asyncio.to_thread(shortcuts.write_registry, p, registry):
+                return {"error": "entry removed but the registry could not be written"}
+            decky.logger.info(f"deregister {store}:{gid}: removed appid {row['appid']}")
+            return {"deregistered": True}
+
+    async def entry_status(self):
+        """Registry joined against what Steam's own file holds — READ-ONLY, like install_status.
+        An unreadable file reports as such; it is never 'no entries'."""
+        try:
+            p = await asyncio.to_thread(paths.store_paths)
+            return await asyncio.to_thread(self._entry_status, p)
+        except (OSError, subprocess.SubprocessError) as exc:
+            return {"error": f"status failed: {type(exc).__name__}"}
+
+    def _entry_status(self, p):
+        registry = shortcuts.read_registry(p)
+        reports = []
+        for path in shortcuts.vdf_paths(p):
+            f = status.open_user_file(path, int(p["NOVADECK_STORE_UID"]))
+            if f is None:
+                reports.append({"file": path, "error": "not readable as the store user's file"})
+                continue
+            with f:
+                raw = f.read()
+            try:
+                reports.append({"file": path, **shortcuts.orphan_report(raw, registry)})
+            except ValueError as exc:
+                reports.append({"file": path, "error": f"unreadable: {exc}"})
+        return {"registry": registry, "files": reports}
 
     async def _main(self):
         pass

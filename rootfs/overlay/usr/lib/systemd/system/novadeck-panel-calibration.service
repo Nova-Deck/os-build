@@ -1,0 +1,25 @@
+# Re-applies this unit's persisted panel frame-length trim at boot (and nothing else: there is
+# deliberately NO boot-time calibration — measuring and stepping the DDIC is operator-triggered,
+# from the Novadeck Control plugin's Panel tab).
+#
+# The values are per-UNIT, keyed by SoC serial in /var/lib/novadeck/panel-calibration.json, so a
+# card moved between two boards of the same model applies nothing on the one that never
+# calibrated (see novadeck_panel.py). One write per boot suffices: the panel driver keeps the
+# trim in panel_info and replays it on every later init, including resume (kernel patch 0533).
+#
+# Ordering: the panel driver is built in, so the mipi-dsi device exists long before services
+# run; the only real dependency is /var for the state file, hence local-fs.target. The Condition
+# pair keeps the unit a no-op (not a failure) on boards without calibration knobs and on units
+# that never calibrated.
+[Unit]
+Description=novadeck apply persisted panel frame-length calibration
+After=local-fs.target
+ConditionPathExists=/var/lib/novadeck/panel-calibration.json
+ConditionPathExistsGlob=/sys/bus/mipi-dsi/devices/*/frame_len_120
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/novadeck/panel-calibration apply
+
+[Install]
+WantedBy=multi-user.target

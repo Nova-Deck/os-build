@@ -15,7 +15,8 @@ export type ShortcutOp =
       req: number;
       appid: number;
       images: { assetType: number; base64: string; imageType: "jpg" | "png" }[];
-    };
+    }
+  | { op: "compat"; req: number; appid: number; tool: string };
 
 export async function executeShortcutOp(op: ShortcutOp): Promise<void> {
   try {
@@ -23,7 +24,19 @@ export async function executeShortcutOp(op: ShortcutOp): Promise<void> {
     if (!apps?.AddShortcut || !apps?.RemoveShortcut) {
       throw new Error("SteamClient.Apps unavailable");
     }
-    if (op.op === "artwork") {
+    if (op.op === "compat") {
+      if (!apps?.SpecifyCompatTool || !apps?.GetAvailableCompatTools) {
+        throw new Error("compat-tool API unavailable");
+      }
+      // Verify the tool is installed before setting it — Steam provisions our Proton lazily, and
+      // mapping an absent tool silently drops. CompatToolMapping is keyed by the UNSIGNED appid.
+      const tools: { strToolName: string }[] = await apps.GetAvailableCompatTools(op.appid >>> 0);
+      if (!tools?.some((t) => t.strToolName === op.tool)) {
+        throw new Error(`compat tool ${op.tool} not installed yet`);
+      }
+      apps.SpecifyCompatTool(op.appid >>> 0, op.tool);
+      await call("shortcut_result", op.req, null, null);
+    } else if (op.op === "artwork") {
       if (!apps?.SetCustomArtworkForApp) throw new Error("SetCustomArtworkForApp unavailable");
       // One call per kind. Steam writes its own grid dir, so these persist the way the entry
       // does (milestone 4) — the gate confirms it. A kind that could not be sourced is simply

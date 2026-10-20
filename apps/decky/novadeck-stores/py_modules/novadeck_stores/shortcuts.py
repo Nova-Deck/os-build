@@ -7,77 +7,64 @@ Steam persists its own file and the ecosystem's restart-and-rewrite pathology �
 foreign-entry merges and backups unifideck carries for its direct writes — has nothing to attach
 to. This module decides WHAT the frontend writes and verifies WHAT landed.
 
-Two rules carried over from unifideck's scars, not its code:
+Two rules, the first amended by milestone 6:
 
-  - OWNERSHIP IS THE Exe BASENAME, nothing else. Foreign tools copy tags and LaunchOptions
-    verbatim (their incident UD-006 deleted users' own games by trusting tags), so is_ours() is
-    the one test every destructive act must pass, and a foreign entry carrying our token is
-    excluded from matching rather than adopted.
+  - OWNERSHIP IS THE EXE PATH UNDER A MANAGED GAME ROOT. Milestone 6 made the shortcut's Exe the
+    game binary (so Steam composes Proton/SLR itself), so the old Exe-basename==stub proof is
+    gone; an entry is ours iff its Exe resolves under a <volume>/Games/<store> root we install to
+    (launch.under_managed_root). Foreign tools install under their own trees. Tags and the token
+    are NEVER ownership — foreign tools copy both (unifideck incident UD-006).
 
   - STEAM'S APPID IS ACCEPTED, NEVER A DURABLE KEY. AddShortcut returns it and it lands in the
-    registry (shortcuts.json beside installs.json, written as the store user), because shortcut
-    appids churn on every re-add. The durable key is our token, `<store>:<game_id>`.
+    registry (shortcuts.json beside installs.json), because shortcut appids churn on re-add. The
+    durable key is our token `<store>:<game_id>`; the registry maps token → {appid, exe,
+    platform}, and the file is joined back to the registry BY APPID.
 
 The binary-VDF reader is copied from novadeck_control/steam.py (plugins deliberately cannot
-import each other); it reads the three value types the file actually uses and RAISES on anything
-else — an unreadable file must never report as an empty one, which is also why our_entries() has
-no try/except.
+import each other); it RAISES on anything it cannot parse — an unreadable file must never report
+as an empty one, which is why our_entries() has no try/except.
 """
 import glob
 import json
 import os
 import re
 
-from novadeck_stores import cli, status
+from novadeck_stores import cli, launch, status
 
-STUB = "/usr/lib/novadeck/store-launch"
-_STUB_BASENAME = os.path.basename(STUB)
-# One grammar, two enforcers: the stub refuses argv outside it, entry_fields refuses to emit it.
-# tests/test-store-shortcuts.sh drives the shipped stub with this module's output to pin the pair.
+# The gid grammar — still enforced so a bad id never becomes a registry key or a path component.
 TOKEN = re.compile(r"^(epic|gog):[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
-def entry_fields(store, gid, title, install_path):
-    """The exact fields an entry is created with. Raises ValueError on a token the stub would
-    refuse — a shortcut that can never launch must fail here, where the id came from, not on
-    the device's first Play."""
-    token = f"{store}:{gid}"
-    if not TOKEN.fullmatch(token):
-        raise ValueError(f"token would not survive the stub: {token!r}")
+def entry_fields(store, gid, title, resolved):
+    """The exact fields an entry is created with, from a resolved launch target
+    ({exe, startdir, platform}). Raises ValueError on an id that could not be a safe token/path."""
+    if not TOKEN.fullmatch(f"{store}:{gid}"):
+        raise ValueError(f"unsafe game id for a shortcut: {store}:{gid}")
+    if not resolved.get("exe"):
+        raise ValueError("no executable resolved for this game")
     return {
         "AppName": title,
-        # Quoted like Steam's own UI writes them; the path is on the read-only root, identical
-        # on both A/B slots, so it survives every OTA.
-        "Exe": f'"{STUB}"',
-        "StartDir": f'"{install_path}"' if install_path else '""',
-        "LaunchOptions": token,
+        # The game binary itself (model B): Steam runs it through the compat tool we set, so SLR4
+        # + Proton + FEX are Steam's to compose. Quoted like Steam's own UI writes Exe paths.
+        "Exe": f'"{resolved["exe"]}"',
+        "StartDir": f'"{resolved.get("startdir") or os.path.dirname(resolved["exe"])}"',
+        # Per-game FEX tuning by the same door a Steam game uses; the token is NOT here — identity
+        # lives in the registry, joined by appid.
+        "LaunchOptions": launch.LAUNCH_OPTIONS,
     }
 
 
-def is_ours(entry):
-    """THE ownership test. Exe basename only; quoted and lowercase-key forms included because
-    both occur in real files. See the module docstring for why nothing else counts."""
+def is_ours(entry, roots):
+    """THE ownership test (milestone 6): the entry's Exe resolves under a managed game root.
+    `roots` is launch.managed_roots(p). Quoted and lowercase-key forms both occur in real files."""
     exe = entry.get("Exe") if isinstance(entry.get("Exe"), str) else entry.get("exe", "")
-    if not isinstance(exe, str):
-        return False
-    return os.path.basename(exe.strip().strip('"')) == _STUB_BASENAME
+    return launch.under_managed_root(exe, roots)
 
 
-def entry_token(entry):
-    """The durable id an entry carries, or None. The token is identity, never ownership: callers
-    must gate on is_ours() first, so a foreign entry carrying our token is never matched."""
-    options = entry.get("LaunchOptions")
-    if not isinstance(options, str):
-        return None
-    first = options.split(maxsplit=1)[0] if options.split() else ""
-    return first if TOKEN.fullmatch(first) else None
-
-
-def add_payload(req, store, gid, title, install_path):
-    """The exact event payload the frontend bridge executes for an add. Built THROUGH
-    entry_fields so an id that would not survive the stub raises here; the API takes unquoted
-    paths (Steam quotes its own file), so the quotes come back off."""
-    fields = entry_fields(store, gid, title, install_path)
+def add_payload(req, store, gid, title, resolved):
+    """The event payload the frontend bridge executes for an add. The API takes UNQUOTED paths
+    (Steam quotes its own file), so the quotes come back off."""
+    fields = entry_fields(store, gid, title, resolved)
     return {"op": "add", "req": req, "name": fields["AppName"],
             "exe": fields["Exe"].strip('"'), "dir": fields["StartDir"].strip('"'),
             "options": fields["LaunchOptions"]}
@@ -87,10 +74,14 @@ def remove_payload(req, appid):
     return {"op": "remove", "req": req, "appid": int(appid)}
 
 
+def compat_payload(req, appid, tool):
+    """Set a compat tool on a shortcut (Windows → our Proton). Steam keys CompatToolMapping by the
+    UNSIGNED appid; the frontend bridge does the >>> 0 and verifies the tool is installed first."""
+    return {"op": "compat", "req": req, "appid": int(appid), "tool": tool}
+
+
 def check_register(registry, store, gid):
-    """The refusal, or None. One entry per token: a registered id must be deregistered first,
-    and a stale registry row (entry lost to Steam) is deregister's business to clear, visible in
-    entry_status — silently re-adding over it would mint a second appid for the same game."""
+    """The refusal, or None. One entry per token: a registered id must be deregistered first."""
     if f"{store}:{gid}" in registry:
         return "already registered"
     return None
@@ -110,10 +101,8 @@ def write_registry(p, rows):
 
 
 def vdf_paths(p):
-    """Every shortcuts.vdf Steam keeps for the store user — their home is asked from passwd, not
-    hardcoded (the suite bans /home/deck literals outside paths.py). One deck user on this image,
-    but the glob tolerates more (novadeck_control/steam.py reads the same way); sorted so a
-    report is stable."""
+    """Every shortcuts.vdf Steam keeps for the store user — home from passwd, not hardcoded (the
+    suite bans /home/deck literals outside paths.py). The glob tolerates several users; sorted."""
     home = os.path.expanduser(f"~{p['NOVADECK_STORE_USER']}")
     return sorted(glob.glob(os.path.join(
         home, ".local", "share", "Steam", "userdata", "*", "config", "shortcuts.vdf")))
@@ -149,37 +138,34 @@ def _read_binary_vdf_object(data, offset=0):
     raise ValueError("binary VDF object never closed")
 
 
-def our_entries(vdf_bytes):
-    """Every entry in the given shortcuts.vdf bytes whose Exe is ours. Raises on bytes that do
-    not parse — the caller must treat that as 'unknown', never as 'none'."""
+def our_entries(vdf_bytes, roots):
+    """Every entry in the given shortcuts.vdf bytes whose Exe is under a managed root. Raises on
+    bytes that do not parse — the caller must treat that as 'unknown', never as 'none'."""
     root, _ = _read_binary_vdf_object(vdf_bytes)
     shortcuts_obj = root.get("shortcuts", {})
     if not isinstance(shortcuts_obj, dict):
         raise ValueError("no shortcuts object in the file")
-    found = []
-    for key, entry in shortcuts_obj.items():
-        if isinstance(entry, dict) and is_ours(entry):
-            found.append({"key": key, "appid": entry.get("appid"),
-                          "AppName": entry.get("AppName"), "token": entry_token(entry)})
-    return found
+    return [{"key": key, "appid": entry.get("appid"), "AppName": entry.get("AppName")}
+            for key, entry in shortcuts_obj.items()
+            if isinstance(entry, dict) and is_ours(entry, roots)]
 
 
-def orphan_report(vdf_bytes, registry):
-    """Join the file against the registry. REPORT ONLY — nothing here, and nothing driven from
-    here, deletes on its own judgment (milestone 4's contract).
+def orphan_report(vdf_bytes, registry, roots):
+    """Join the file against the registry BY APPID. REPORT ONLY — nothing here deletes.
 
-      healthy                 ours, token known to the registry
-      orphan_no_token         ours, but no (valid) token to identify it by
-      registry_without_entry  a registry row with no owned entry carrying its token
+      healthy                 ours (by path) and its appid is in the registry
+      orphan_unregistered     ours (by path) but no registry row claims its appid
+      registry_without_entry  a registry row whose appid has no owned entry in the file
     """
-    entries = our_entries(vdf_bytes)
-    healthy = [e for e in entries if e["token"] in registry]
-    seen = {e["token"] for e in entries if e["token"]}
+    entries = our_entries(vdf_bytes, roots)
+    appid_to_token = {row["appid"]: token for token, row in registry.items()
+                      if isinstance(row, dict) and "appid" in row}
+    entry_appids = {e["appid"] for e in entries}
     return {
-        "healthy": healthy,
-        "orphan_no_token": [e for e in entries if not e["token"]],
+        "healthy": [{**e, "token": appid_to_token[e["appid"]]}
+                    for e in entries if e["appid"] in appid_to_token],
+        "orphan_unregistered": [e for e in entries if e["appid"] not in appid_to_token],
         "registry_without_entry": [
-            {"token": token, **({"appid": row["appid"]} if isinstance(row, dict) and "appid" in row else {})}
-            for token, row in registry.items() if token not in seen
-        ],
+            {"token": token, "appid": row["appid"]} for token, row in registry.items()
+            if isinstance(row, dict) and "appid" in row and row["appid"] not in entry_appids],
     }

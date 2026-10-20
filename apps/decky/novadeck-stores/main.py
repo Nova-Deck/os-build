@@ -31,8 +31,8 @@ import decky
 
 import base64
 
-from novadeck_stores import (artwork, cdp, cli, connect, installs, library, locations, paths,
-                             shortcuts, status)
+from novadeck_stores import (artwork, cdp, cli, connect, installs, launch, library, locations,
+                             paths, shortcuts, status)
 
 # Long enough to type an email and a password on the on-screen keyboard and clear a captcha;
 # short enough that a login the user walked away from does not poll for the rest of the session.
@@ -251,9 +251,9 @@ class Plugin:
             fut.set_result({"error": error} if error else {"appid": appid})
 
     async def register_entry(self, store, gid, title=None):
-        """Create the Steam library entry for a game. {"registered": True, "appid": N, "path":
-        install path or ""} or {"error": ...}. The title comes from the install record when one
-        exists; a not-installed game needs it passed (the caller just listed the library)."""
+        """Create the Steam library entry for an INSTALLED game: Exe = the resolved game binary,
+        and for a Windows title a compat tool is set so Steam composes SLR4+Proton (milestone 6).
+        {"registered": True, "appid": N, "path": ..., "platform": ...} or {"error": ...}."""
         if store not in connect.STORES:
             return {"error": f"unknown store {store!r}"}
         try:
@@ -265,26 +265,59 @@ class Plugin:
             title = title or record.get("title")
             if not title:
                 return {"error": "no title known for this game — pass one"}
-            install_path = record.get("path") or ""
+            resolved = await asyncio.to_thread(launch.resolve_target, store, gid, p, record)
+            if resolved is None:
+                return {"error": "the game is not installed, or the store names no executable"}
             registry = await asyncio.to_thread(shortcuts.read_registry, p)
             refused = shortcuts.check_register(registry, store, gid)
             if refused:
                 return {"error": refused}
             try:
-                payload = shortcuts.add_payload(next(self._shortcut_seq), store, gid, title, install_path)
+                payload = shortcuts.add_payload(next(self._shortcut_seq), store, gid, title, resolved)
             except ValueError as exc:
                 return {"error": str(exc)}
             result = await self._shortcut_roundtrip(payload)
             if "error" in result:
                 decky.logger.info(f"register {store}:{gid}: {result['error']}")
                 return result
-            registry[f"{store}:{gid}"] = {"appid": int(result["appid"]), "title": title}
+            appid = int(result["appid"])
+            # Windows → set our Proton so Steam composes the runtime. A compat failure does NOT
+            # unwind the entry (it still exists and can launch once the tool is set on retry/boot),
+            # but it is surfaced so the caller knows the runtime is not yet wired.
+            warning = None
+            tool = launch.compat_tool(resolved["platform"])
+            if tool:
+                compat = await self._shortcut_roundtrip(
+                    shortcuts.compat_payload(next(self._shortcut_seq), appid, tool))
+                if "error" in compat:
+                    warning = f"compat tool not set: {compat['error']}"
+                    decky.logger.info(f"register {store}:{gid}: {warning}")
+            registry[f"{store}:{gid}"] = {"appid": appid, "title": title,
+                                          "exe": resolved["exe"], "platform": resolved["platform"]}
             if not await asyncio.to_thread(shortcuts.write_registry, p, registry):
-                # The entry exists but nothing durable records it — say so rather than claim
-                # success; entry_status will show it as an orphan until a retry re-registers it.
                 return {"error": "entry created but the registry could not be written"}
-            decky.logger.info(f"register {store}:{gid}: appid {result['appid']}")
-            return {"registered": True, "appid": int(result["appid"]), "path": install_path}
+            decky.logger.info(f"register {store}:{gid}: appid {appid} ({resolved['platform']})")
+            out = {"registered": True, "appid": appid, "path": resolved["startdir"],
+                   "platform": resolved["platform"]}
+            return {**out, "warning": warning} if warning else out
+
+    async def reassert_compat(self, p=None):
+        """Re-set the compat tool on every Windows entry. SpecifyCompatTool is in-memory until
+        Steam flushes config.vdf, so a set made late in a session can be lost on a crash; this
+        runs best-effort at plugin boot. Fire-and-forget: a frontend not yet listening must not
+        block load."""
+        try:
+            p = p or await asyncio.to_thread(paths.store_paths)
+            registry = await asyncio.to_thread(shortcuts.read_registry, p)
+        except (OSError, subprocess.SubprocessError):
+            return
+        for row in registry.values():
+            if not isinstance(row, dict) or "appid" not in row:
+                continue
+            tool = launch.compat_tool(row.get("platform", "windows"))
+            if tool:
+                asyncio.create_task(self._shortcut_roundtrip(
+                    shortcuts.compat_payload(next(self._shortcut_seq), row["appid"], tool)))
 
     async def deregister_entry(self, store, gid):
         """Remove the entry and its registry row. {"deregistered": True} or {"error": ...}."""
@@ -352,6 +385,7 @@ class Plugin:
 
     def _entry_status(self, p):
         registry = shortcuts.read_registry(p)
+        roots = launch.managed_roots(p)
         reports = []
         for path in shortcuts.vdf_paths(p):
             f = status.open_user_file(path, int(p["NOVADECK_STORE_UID"]))
@@ -361,13 +395,17 @@ class Plugin:
             with f:
                 raw = f.read()
             try:
-                reports.append({"file": path, **shortcuts.orphan_report(raw, registry)})
+                reports.append({"file": path, **shortcuts.orphan_report(raw, registry, roots)})
             except ValueError as exc:
                 reports.append({"file": path, "error": f"unreadable: {exc}"})
         return {"registry": registry, "files": reports}
 
     async def _main(self):
-        pass
+        # Compat mappings are in-memory until Steam flushes config.vdf; re-assert ours at boot.
+        try:
+            await self.reassert_compat()
+        except Exception as exc:  # noqa: BLE001 - boot best-effort, never fail load
+            decky.logger.info(f"reassert_compat at boot: {type(exc).__name__}")
 
     async def _unload(self):
         if self._pending and not self._pending.done():

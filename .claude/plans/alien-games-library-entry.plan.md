@@ -1,5 +1,11 @@
 # Plan: Alien games — library entry writer
 
+> **Amended by milestone 6** (`alien-games-launch.plan.md`, 2026-10-20): model B makes the
+> shortcut's Exe the game binary (so Steam composes SLR4+Proton), which retires the `store-launch`
+> stub from the launch path and moves ownership from the Exe basename to a managed-install-root
+> path test. The entry-writer mechanism (through Steam's API, registry as identity) stands; only
+> the Exe value and the ownership proof change.
+
 **Source PRD**: `.claude/prds/alien-games.prd.md`
 **Selected Milestone**: 4 — Library entry writer
 **Complexity**: Medium (was Large before the write-mechanism finding below)

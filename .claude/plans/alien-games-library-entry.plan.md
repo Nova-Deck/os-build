@@ -143,6 +143,38 @@ milestone; nothing deletes on its own judgment.
   6. The sweep: registry deck-owned `0600`-dir semantics like the store home, no stray writes to
      `userdata` beyond what Steam itself did.
 
+#### Task 6 — ran 2026-10-20 on the Pocket FIT
+
+Driven over SSH: the backend/registry via drive.py, the five SteamClient calls via a gate-only
+one-shot CDP evaluate into SharedJSContext (`/root/cdp-eval.py`, a hand-rolled RFC6455 client —
+the device python has no aiohttp/websockets; never shipped). Not yet deployed through the panel;
+that is milestone 7.
+
+**The central question is answered: an API-created entry survives both a Steam restart and a
+reboot with its appid unchanged.** `AddShortcut` returned appid 2480450041; it was still that
+appid and token (`epic:HandPlaced`) after a session-tree-kill restart AND after a full reboot,
+read back from Steam's own shortcuts.vdf by our reader. Because Steam owns the file, its
+shutdown-rewrite preserves rather than clobbers — the pathology unifideck guards against does not
+reach us.
+
+**Deregister is clean on both sides.** `RemoveShortcut(appid)` live → gone from appStore
+immediately (`GetAppOverviewByAppID` → null) and the file's orphan report all-empty; the registry
+row dropped. Sweep: `shortcuts.json` is `0600 deck:deck`, the stub log deck-owned, no non-deck
+file in the store home.
+
+**Two findings, neither blocking:**
+- **Steam re-quotes the stored `Exe`** (`"/usr/lib/novadeck/store-launch"`) but keeps `StartDir`
+  unquoted. `is_ours` already strips quotes, so ownership holds; the entry is well-formed. Worth
+  knowing for milestone 7's panel code.
+- **`RunGame` driven headlessly over CDP did not fire the stub** — no focused UI / reaper launch
+  path when driven purely over SSH. The stub itself is proven: run directly as `deck` it logs the
+  attempt and exits 64. The real Play path is milestone 7's on-device walkthrough; `AddShortcut`
+  itself working on the arm64 client (the parity risk) is the part the gate needed, and it does.
+
+**Not run:** the "installed milestone-3 title" half of step 1 — those installs were removed at
+the milestone-3 gate, and a hand-placed directory exercises the identical path. The install-record
+title/StartDir branch is covered by the offline suite instead.
+
 ## Validation
 
 ```bash
@@ -164,9 +196,10 @@ source dev.env && make decky-plugin     # the bridge compiles into dist/
 
 ## Acceptance
 
-- [ ] An entry is created and removed through Steam's own API, no direct shortcuts.vdf write
-- [ ] Ownership of every destructive act is proven by the Exe basename
-- [ ] The entry survives a Steam restart and a reboot with its appid, verified in the file
-- [ ] Our registry, not Steam's appid, is the durable key; churn on re-add is absorbed
-- [ ] Play before milestone 6 fails loudly in the stub's log, exit 64
-- [ ] `make test` green with the new suite
+- [x] An entry is created and removed through Steam's own API, no direct shortcuts.vdf write
+- [x] Ownership of every destructive act is proven by the Exe basename
+- [x] The entry survives a Steam restart and a reboot with its appid, verified in the file (2026-10-20)
+- [x] Our registry, not Steam's appid, is the durable key; churn on re-add is absorbed
+- [x] Play before milestone 6 fails loudly in the stub's log, exit 64 — stub proven directly;
+      the RunGame path itself is milestone 7's on-device walkthrough (see Task 6)
+- [x] `make test` green with the new suite (43 checks)

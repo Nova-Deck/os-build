@@ -9,8 +9,11 @@
 #
 # THE MATCH IS ON DEVICETREE `model`, not `compatible`. `mangmi,pocket-max` collides with nothing
 # upstream ships today, so either attribute would work; `model` is the one nothing upstream reads,
-# which keeps this board's claim independent of what upstream adds next. 50-ayn_thor_lite.yaml
-# matches the same way, and its header carries the fuller argument.
+# which keeps this board's claim independent of what upstream adds next. (The compatible-glob risk
+# being avoided: libudev truncates the sysfs `compatible` attribute at the first NUL, so an
+# upstream glob on a shorter vendor prefix could one day read-match this board's first compatible
+# string; `model` is immune. Our Thor Lite config matched this way too, until upstream 0.82.0
+# shipped its own 50-ayn_thor_lite.yaml and ours was deleted in its favor.)
 #
 # The file name is upstream's convention on purpose -- both config directories are LOADED and
 # sorted by FILE NAME across the two, first match wins, and a name TIE is the only case where

@@ -1578,6 +1578,7 @@
 
 	gamepad: gamepad {
 		compatible = "gamepad,rsinput";
+		rumble-haptics;
 
 		gamepad-name = "AYN Odin2 Gamepad";
 		gamepad-bus = <0x0003>;

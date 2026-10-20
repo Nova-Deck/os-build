@@ -82,8 +82,9 @@ audited against 7.2.11 — NOT taken because already upstream at this pin: ROCKN
 regulator, the vpu35/gen80000 firmware (LINUX_FW.pin); NOT taken by policy: the whole
 suspend-to-RAM set (ROCKNIX `0504`/`0508`/`0603`, armada's S2R layer, SoCCP), the stick-ring
 RGB half of konkr_sysbtn, rsinput `1300` global-default recalibration (per-board module
-params on the Odin 3 boards.map row instead), the hv-haptics HAP530/V5 driver generation
-(deferred to its own issue — it would swap the rumble stack under every shipping board).
+params on the Odin 3 boards.map row instead). The hv-haptics HAP530/V5 driver generation
+was deferred at first (it swaps the rumble stack under every shipping board) and then
+taken for issue #122 — see the `0780`–`0796` rows.
 
 | Patch | Origin | Source | Drop when |
 |---|---|---|---|
@@ -162,12 +163,13 @@ params on the Odin 3 boards.map row instead), the hv-haptics HAP530/V5 driver ge
 | `0770` | posted | Caleb Connolly v7 `<20221015172915.1436236-3-caleb@connolly.tech>`, stalled since 2022. Fenglin Wu's PMIH driver (v7, 2026-08-28) uses the same file and the generic `qcom,spmi-haptics` compatible. | when David Heidelberg's pmi8998 haptics lands |
 | `0775` | community | spycat88, ROCKNIX SM8250 `0013`. | never |
 | `0776` | community | gennro, Kettle Linux `1380`, byte-identical body. Never posted. Fixes `0750`'s RX stack overflow and frame loss, and its ops-after-open oops. | with `0750` |
-| `0780` | community | CAF/CLO downstream `qcom-hv-haptics` via ROCKNIX `1000`. | never |
-| `0785` | community | ROCKNIX `1002`. | with `0780` |
-| `0790` | community | ROCKNIX `1003`. | with `0780` |
+| `0780` | community | CAF/CLO downstream `qcom-hv-haptics`, HAP530/HAP_CFG_V5 generation, via ROCKNIX SM8750 `1000` (issue #122; replaced the HAP525-only generation from ROCKNIX SM8550 `1000`, which rejected the Odin 3's PMIH0108 block at probe). Kconfig hunk regenerated against this tree. | never |
+| `0781` | community | armada `1001-input-qcom-haptics-update-assign-str`: Linux 7.1's one-argument `__assign_str()` in the driver's tracepoint header. | with `0780` |
+| `0785` | community | ROCKNIX SM8750 `1001` via armada (one context-line resync against their `1000`), the V5 rebase of the old SM8550 `1002` sine support. | with `0780` |
+| `0790` | community | Gianni Spadoni's rsinput FF bridge as rebased by armada (`1002-input-rsinput-sm8750-ff`), byte-identical: gated on the `rumble-haptics` DT property (set in `qcs8550-ayn-common.dtsi` + `cq8725s-ayn-common.dtsi`) so a combined kernel does not hand FF to rsinput boards without the Qualcomm haptics block. ROCKNIX's own SM8750 `1002` has a malformed final hunk — do not take it. | with `0780` |
 | `0791` | novadeck | Written here for `0745`, after Kettle Linux `1100` (armada `0515`) and `1380`; resyncs a byte on a bad checksum instead of skipping the claimed frame length. Never posted. | with `0745` |
-| `0795` | community | gh123man, ROCKNIX PR #3116. | with `0780` |
-| `0796` | community | gennro, Kettle Linux `1200` (ported from armada `1004`, virtudude), body byte-identical. A zero-amplitude update erases the effect at once instead of braking 5 s later. | with `0780` |
+| `0795` | community | armada `1003`, rsinput struct + suspend hunks regenerated: fixes the reproduced "scheduling while atomic" hard-lock on rumble stop (issue #128; ROCKNIX still carries the bug). Bridge is mutex-serialized process context; rsinput playback defers to a work item. The original's rsinput dev-PM suspend hunk is dropped — our rsinput has no PM ops and sleep is a userspace cgroup freeze. Supersedes gh123man's deferral (ROCKNIX PR #3116) this slot used to carry. | with `0780` |
+| `0796` | community | armada `1004` (virtudude), byte-identical. A zero-amplitude update erases the effect at once instead of braking 5 s later; balances the V5 driver's transient runtime-PM reference on in-place gain updates. | with `0780` |
 | `0800` | mainline | Kumar Anurag v1 `<20260616151252.3599089-2-kumar.singh@oss.qualcomm.com>` → `d858770e86e7` (v7.3-rc1). No `Fixes:`/stable tag, so 7.2.y will not get it. Also in ROCKNIX PR #3396. | v7.3 |
 | `0805` | novadeck | Written here, after the downstream DP codec's startup cable check (msm-4.19 techpack/audio `msm_ext_disp_audio_codec_rx_dai_startup`). Adds the `dp_audio_startup` msm_dp never implemented, so on SM8250 only (`qcom,sm8250-dp`) an unplugged DP open fails before q6afe starts port 0x6020 (a 3 s no-reply timeout there). Never posted. | when upstream msm_dp refuses an unplugged DP audio open itself |
 | `0810` | community | KancyJoe via ROCKNIX SM8650 `0007`. Superseded by mainline `62dc2554d36d` (WSA2 channel map + `ayaneo,pocket-s2-sndcard`); will not apply on 7.3. | v7.3 — S2 moves to the new compatible; FIT needs its own card entry |
@@ -313,10 +315,10 @@ trees are byte-identical.
 | `0755-input-add-driver-for-mangmi-pocket-max-spi-joypad.patch` | joystick | `0037_input--Add-driver-for-MANGMI-Pocket-Max-SPI-joypad.patch` |
 | `0770-input-add-driver-for-qcom-spmi-haptics.patch` | haptics | `0038_input--Add-driver-for-qcom-spmi-haptics.patch` |
 | `0775-input-retroid-gamepad-add-force-feedback.patch` | haptics | `0039_input--retroid-gamepad-add-force-feedback.patch` |
-| `0780-add-qcom-haptics-driver.patch` | haptics | `1000-add-qcom-haptics-driver.patch` |
+| `0780-input-add-qcom-hv-haptics-hap530-v5-driver.patch` | haptics | `1000-add-qcom-haptics-driver.patch` |
 | `0785-haptics-driver-support-periodic-sine-and-fixes.patch` | haptics | `1002-haptics-driver-support-periodic-sine-and-fixes.patch` |
-| `0790-rsinput-add-ff.patch` | haptics | `1003-rsinput-add-ff.patch` |
-| `0795-input-qcom-haptics-defer-rsinput-playback.patch` | haptics | `1004-input-qcom-haptics-defer-rsinput-playback.patch` |
+| `0790-input-rsinput-add-scoped-haptics-ff-bridge.patch` | haptics | `1003-rsinput-add-ff.patch` |
+| `0795-input-haptics-fix-rumble-bridge-atomic-sleep.patch` | haptics | `1004-input-qcom-haptics-defer-rsinput-playback.patch` |
 | `0810-audioreach-add-dedicated-wsa2-support.patch` | audio | `0007-audioreach-Add-dedicated-WSA2-support.patch` |
 | `0820-asoc-qcom-sc8280xp-add-support-for-primary-i2s.patch` | audio | `0036_ASoC--qcom--sc8280xp-Add-support-for-Primary-I2S.patch` |
 | `0830-asoc-codecs-aw88166-ayn-odin2-specific-modifications.patch` | audio | `0047_ASoC--codecs--aw88166--AYN-Odin2-Specific-modifica.patch` |

@@ -197,6 +197,48 @@ waits behind an uninstall.
   ourselves before gogdl gives up, or accept a re-verify pass. Decide on the measurement, not
   before it.
 
+#### Task 7 — ran 2026-10-20 on the Pocket FIT, home volume only
+
+Driven over SSH against the live modules (`installs.*` / `library.*`), from the branch rebased
+onto main that day. Epic: Breathedge (7.7 GB). GOG: The Witcher: Enhanced Edition (15 GB). The
+cut was a self-reverting transient unit (`rfkill block wlan; sleep 75; rfkill unblock wlan`) —
+it drops the driving SSH session either way; the observation happens after reconnect.
+
+**The measurement: a 75 s network cut is fatal to NEITHER CLI.**
+- legendary's workers retry unthrottled on `NameResolutionError` and ride it out; the download
+  recovered on its own.
+- gogdl: the unit stayed active, `.gogdl-resume` was KEPT, and the download recovered alone
+  ~30 s after wlan returned. The fatal path never triggered, so nothing extra is designed around
+  it. **Bound of the measurement:** 75 s sits inside the per-worker retry budget; a multi-minute
+  outage was not measured and may still reach the fatal path that deletes the resume file.
+
+**Every other step passed as designed:**
+1. Stop mid-download → `interrupted`, resume file kept; resume continued, not restarted.
+2. Reboot mid-download → unit gone, record `installing`, status derived `interrupted`; the
+   resume logged `Attempting to continue the download` with the remaining-bytes total shrunk —
+   that line is the resume proof (the percent counter restarts per run; cosmetic).
+3. Both titles completed; verdicts artifact-backed. gogdl writes its manifest at
+   `$GOGDL_CONFIG_PATH/heroic_gogdl/manifests/<id>` — it nests `heroic_gogdl/` under the env
+   var, and `completed()` reads exactly that path.
+4. Uninstall left nothing: trees, gogdl manifest, records, and legendary's `installed.json` all
+   empty afterwards.
+5. Sweeps after each step: `deck`-owned, `644`/`755`, nothing in `~deck/.config/heroic_gogdl`,
+   no signed-URL query tokens in the install log, resume files removed on success. The record
+   saying `installing` until uninstall is the read-only-status deviation working as designed.
+
+**Open from the gate:**
+- The card-volume half of step 1 did not run — no card was inserted. Volumes are re-read per
+  call, so it can run whenever one is.
+- legendary's unthrottled retry wrote a 316 MB `install.log` during the 75 s cut. The log
+  truncates per run (`>"$0"`), so it is bounded — a milestone-7 concern (the progress parser
+  reads that file's tail; disk churn during long cuts).
+- `library.owned("epic")` returned ZERO `installable: False` titles, but AC Syndicate
+  (Ubisoft-activated) is in the list — milestone 1 expected it flagged. Re-check what
+  legendary's list carries against what `epic_titles()` reads.
+
+The live GOG products API matches what `store-gog-owned` assumes (both real titles listed with
+correct ids); that open verification from milestone 1 is closed.
+
 ## Validation
 
 ```bash
@@ -220,10 +262,11 @@ source dev.env && make sdcard         # the card the gate runs on
 
 ## Acceptance
 
-- [ ] Both stores list the real account's owned titles
-- [ ] A title per store installs to a chosen volume, `deck`-owned, `644`/`755`
-- [ ] A stop, a network cut and a reboot each resume rather than restart — or the gate states
-      exactly which does not, and why
-- [ ] Uninstall leaves no game files, no gogdl manifest and no record
-- [ ] The path guard refuses every case in Task 6
-- [ ] `make test` green
+- [x] Both stores list the real account's owned titles (55 Epic / 2 GOG, 2026-10-20)
+- [x] A title per store installs to a chosen volume, `deck`-owned, `644`/`755` — home volume
+      only; the card leg is still owed (no card inserted at the gate)
+- [x] A stop, a network cut and a reboot each resume rather than restart — measured 2026-10-20;
+      the 75 s cut is fatal to neither CLI (see Task 7's bound)
+- [x] Uninstall leaves no game files, no gogdl manifest and no record
+- [x] The path guard refuses every case in Task 6 (offline suite, in `make test`)
+- [x] `make test` green (post-rebase, 2026-10-20)

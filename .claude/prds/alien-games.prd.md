@@ -198,8 +198,8 @@ archlinux-deckard base did: Python 3.13 → 3.14 rebuilt both CLIs).
 |---|---|---|---|---|---|
 | 1 | Store CLIs, native arm64 | legendary and gogdl are packaged and run on the device — no FEX, no x86 freeze | Package builds in the normal pipeline; each CLI runs on hardware and lists a library given a hand-supplied token — **done 2026-09-20**: 55 Epic titles listed, GOG authenticated and `gogdl info` returning build metadata | complete | [`alien-games.plan.md`](../plans/alien-games.plan.md) |
 | 2 | Account connection | A user connects Epic and GOG from the device with **no browser we ship** — Steam's own CEF browser is already there and is scriptable; tokens persist and refresh | Hardware walkthrough with real accounts; token survives reboot and an expiry/refresh cycle; security review of credential-at-rest before it is marked complete — **done 2026-09-26** (`dae460c`): both stores, reboot, expiry/refresh, review with two fixes; the OTA-both-ways check was skipped | complete | [`alien-games-account-connection.plan.md`](../plans/alien-games-account-connection.plan.md) |
-| 3 | Install and uninstall | An owned title downloads to a chosen location, resumes after an interruption, and uninstalls cleanly | Driven on hardware against a real account, including a deliberate mid-download network cut | in-progress | [`alien-games-install.plan.md`](../plans/alien-games-install.plan.md) |
-| 4 | Library entry writer | An entry is created and removed in Steam's shortcut store, correctly sequenced against Steam's lifecycle, keyed on **our** stable id via a launcher stub — never on Steam's appid | Driven directly on a dev card with Steam running; entry survives a Steam restart and a reboot | pending | — |
+| 3 | Install and uninstall | An owned title downloads to a chosen location, resumes after an interruption, and uninstalls cleanly | Driven on hardware against a real account, including a deliberate mid-download network cut — **done 2026-10-20** on the Pocket FIT: stop, a 75 s network cut and a reboot all resume (fatal to neither CLI); uninstall leaves nothing. The card-volume leg is parked: the dev card occupies the slot, so it waits on an internal install | complete | [`alien-games-install.plan.md`](../plans/alien-games-install.plan.md) |
+| 4 | Library entry writer | An entry is created and removed in Steam's shortcut store, correctly sequenced against Steam's lifecycle, keyed on **our** stable id via a launcher stub — never on Steam's appid | Driven directly on a dev card with Steam running; entry survives a Steam restart and a reboot | pending | [`alien-games-library-entry.plan.md`](../plans/alien-games-library-entry.plan.md) |
 | 5 | Artwork acquisition | An entry gets grid art, and degrades to something usable when the source is unreachable | Driven directly, including with the network cut | pending | — |
 | 6 | Launch path | A downloaded Windows title starts through the existing Proton/FEX chain and a Linux-native one through system FEX, both fronted by `game-launch` | Invoked from a shell on hardware, one case per form, with `game-launch` confirmed in the chain | pending | — |
 | 7 | Quick Access Menu surface | The layers are wired together and reachable: connect, browse, install, play | Full walkthrough on hardware, both stores, plus restart / reboot / OTA | pending | — |
@@ -240,11 +240,13 @@ lands; no separate issues.
       `<volume>/Games/<store>/<game>`. The volumes are `/home/deck` plus every card udisks mounts
       under `/run/media/deck/`, and the user picks a drive, never a path. The tree stays outside
       Steam's own, and a card keeps its label-based path when it moves between devices.
-- [ ] **How do identity and tuning share one `LaunchOptions` field?** We need that field for
-      `game-launch %command%`; the ecosystem pattern puts the durable id there too, and Steam is
-      known to mangle it. Candidates: encode both, carry the id as arguments on the `Exe` stub
-      instead, or resolve identity from the stub's own path. Decide at milestone 4, since the
-      writer's ownership test depends on the answer.
+- [x] **How do identity and tuning share one `LaunchOptions` field?** **Answered 2026-10-20
+      (milestone 4 plan): they stop sharing it.** The field carries only the identity token
+      (`<store>:<game_id>` as argv[1], user params kept around it); tuning happens *inside* the
+      stub we own, so `game-launch %command%` never enters an alien entry's options. Ownership of
+      an entry is proven by the `Exe` basename alone — unifideck's incident UD-006 (foreign tools
+      copy tags and LaunchOptions) rules the token out as proof, and a mangled token is recovered
+      from our own registry, never trusted.
 - [ ] **What happens to per-game tuning when a shortcut's appid churns?** We own registration, so we
       can rewrite the tweak entry on re-add — or re-key tuning on our own id and teach powerd to
       resolve it. Needs a decision before tuning comes back into scope.

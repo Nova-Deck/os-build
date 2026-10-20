@@ -227,8 +227,9 @@ it drops the driving SSH session either way; the observation happens after recon
    saying `installing` until uninstall is the read-only-status deviation working as designed.
 
 **Open from the gate:**
-- The card-volume half of step 1 did not run — no card was inserted. Volumes are re-read per
-  call, so it can run whenever one is.
+- The card-volume half of step 1 did not run, and cannot yet: the dev card occupies the only
+  slot, so a second volume needs the OS installed internally first ([[internal-install]] work).
+  Volumes are re-read per call, so the leg runs unchanged once a card can be inserted.
 - legendary's unthrottled retry wrote a 316 MB `install.log` during the 75 s cut. The log
   truncates per run (`>"$0"`), so it is bounded — a milestone-7 concern (the progress parser
   reads that file's tail; disk churn during long cuts).

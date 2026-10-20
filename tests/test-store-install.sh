@@ -89,6 +89,9 @@ lgd = json.dumps([
     {"app_name": "Fir", "app_title": "Fir Game", "metadata": {"customAttributes": {}}},
     {"app_name": "Ubi", "app_title": "Ubi Game",
      "metadata": {"customAttributes": {"ThirdPartyManagedApp": {"value": "Ubisoft Connect"}}}},
+    {"app_name": "Alba", "app_title": "Alba Game",
+     "metadata": {"customAttributes": {"ThirdPartyManagedProvider": {"value": "UbisoftConnect"},
+                                       "partnerLinkType": {"value": "ubisoft"}}}},
     {"app_name": "Bare", "app_title": "No metadata", "metadata": None},
 ])
 t = library.epic_titles(lgd)
@@ -98,6 +101,9 @@ by = {x["id"]: x for x in t}
 (ok if by["Ubi"]["installable"] is False and by["Ubi"].get("requires") == "Ubisoft Connect" else bad)(
     "a third-party-managed Epic title is listed as needing its launcher, not installable "
     "(milestone 1's Ubisoft finding)")
+(ok if by["Alba"]["installable"] is True and by["Alba"].get("requires") == "ubisoft" else bad)(
+    "a partner-linked Epic title installs but says what it needs to run "
+    f"(AC Syndicate's shape, measured on HW 2026-10-20: {by.get('Alba')})")
 (ok if by["Bare"]["installable"] is True else bad)("an Epic title with no metadata does not crash the list")
 (ok if library.epic_titles("not json") is None and library.epic_titles('{"a": 1}') is None else bad)(
     "unparseable legendary output is no answer, not an empty library")

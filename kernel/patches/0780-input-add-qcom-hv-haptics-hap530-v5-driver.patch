@@ -9,7 +9,10 @@ and ADSP SSR notifier hooks, and exports the visense state for the codec
 side.
 
 [Modified: the Kconfig hunk is regenerated against this tree and the
-dependency list is tab-indented; the driver body is unchanged.]
+dependency list is tab-indented. The haptics_enable_play boost-status
+debug read logged at dev_err on every play and stop, two journal lines
+per rumble event; demoted to dev_dbg. The driver body is otherwise
+unchanged.]
 
 ---
 diff --git a/drivers/input/misc/Kconfig b/drivers/input/misc/Kconfig
@@ -51,7 +54,7 @@ index bbaa419e9..b7a84a98f 100644
  obj-$(CONFIG_INPUT_PWM_VIBRA)		+= pwm-vibra.o
 diff --git a/drivers/input/misc/qcom-hv-haptics.c b/drivers/input/misc/qcom-hv-haptics.c
 new file mode 100644
-index 000000000..729be26ac
+index 000000000..a6e50d50e
 --- /dev/null
 +++ b/drivers/input/misc/qcom-hv-haptics.c
 @@ -0,0 +1,6736 @@
@@ -2176,7 +2179,7 @@ index 000000000..729be26ac
 +	}
 +
 +	haptics_read(chip, chip->hbst_addr_base, 0x09, &val, 1);
-+	dev_err(chip->dev, "haptics_enable_play, 0xf209=0x%x\n", val);
++	dev_dbg(chip->dev, "haptics_enable_play, 0xf209=0x%x\n", val);
 +
 +	if (!en)
 +		haptics_wait_brake_complete(chip);

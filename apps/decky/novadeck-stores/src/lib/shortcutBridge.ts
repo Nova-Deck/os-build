@@ -9,7 +9,13 @@ import { call } from "@decky/api";
 
 export type ShortcutOp =
   | { op: "add"; req: number; name: string; exe: string; dir: string; options: string }
-  | { op: "remove"; req: number; appid: number };
+  | { op: "remove"; req: number; appid: number }
+  | {
+      op: "artwork";
+      req: number;
+      appid: number;
+      images: { assetType: number; base64: string; imageType: "jpg" | "png" }[];
+    };
 
 export async function executeShortcutOp(op: ShortcutOp): Promise<void> {
   try {
@@ -17,7 +23,16 @@ export async function executeShortcutOp(op: ShortcutOp): Promise<void> {
     if (!apps?.AddShortcut || !apps?.RemoveShortcut) {
       throw new Error("SteamClient.Apps unavailable");
     }
-    if (op.op === "add") {
+    if (op.op === "artwork") {
+      if (!apps?.SetCustomArtworkForApp) throw new Error("SetCustomArtworkForApp unavailable");
+      // One call per kind. Steam writes its own grid dir, so these persist the way the entry
+      // does (milestone 4) — the gate confirms it. A kind that could not be sourced is simply
+      // absent from images; nothing here blocks the entry it decorates.
+      for (const img of op.images) {
+        await apps.SetCustomArtworkForApp(op.appid, img.base64, img.imageType, img.assetType);
+      }
+      await call("shortcut_result", op.req, null, null);
+    } else if (op.op === "add") {
       const appid: number = await apps.AddShortcut(op.name, op.exe, op.dir, op.options);
       if (!appid) throw new Error("AddShortcut returned no appid");
       // AddShortcut's trailing arguments are not trusted across client versions (the arm64

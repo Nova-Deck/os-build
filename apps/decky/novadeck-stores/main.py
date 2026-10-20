@@ -29,7 +29,10 @@ import subprocess
 
 import decky
 
-from novadeck_stores import cdp, cli, connect, installs, library, locations, paths, shortcuts, status
+import base64
+
+from novadeck_stores import (artwork, cdp, cli, connect, installs, library, locations, paths,
+                             shortcuts, status)
 
 # Long enough to type an email and a password on the on-screen keyboard and clear a captcha;
 # short enough that a login the user walked away from does not poll for the rest of the session.
@@ -307,6 +310,36 @@ class Plugin:
                 return {"error": "entry removed but the registry could not be written"}
             decky.logger.info(f"deregister {store}:{gid}: removed appid {row['appid']}")
             return {"deregistered": True}
+
+    async def apply_artwork(self, store, gid, appid):
+        """Set grid art on a registered entry from the store's own metadata. NON-BLOCKING by
+        contract: {"applied": [kinds]} always, even when nothing could be fetched — a failure
+        here must never unwind a good registration or raise into the caller. Idempotent: re-runs
+        re-set the same slots."""
+        try:
+            p = await asyncio.to_thread(paths.store_paths)
+            urls = await asyncio.to_thread(artwork.store_urls, store, gid, p)
+            images = []
+            for kind, url in urls.items():
+                got = await asyncio.to_thread(artwork.fetch_image, url)
+                if got is None:
+                    continue
+                data, image_type = got
+                images.append({"kind": kind, "assetType": artwork.KIND_ASSET[kind],
+                               "base64": base64.b64encode(data).decode(), "imageType": image_type})
+            if not images:
+                return {"applied": []}
+            payload = {"op": "artwork", "req": next(self._shortcut_seq), "appid": int(appid),
+                       "images": images}
+            result = await self._shortcut_roundtrip(payload)
+            if "error" in result:
+                decky.logger.info(f"artwork {store}:{gid}: {result['error']}")
+                # Still not an error to the caller: the entry stands with its name tile.
+                return {"applied": [], "warning": result["error"]}
+            return {"applied": [img["kind"] for img in images]}
+        except (OSError, subprocess.SubprocessError) as exc:
+            decky.logger.info(f"artwork {store}:{gid}: {type(exc).__name__}")
+            return {"applied": []}
 
     async def entry_status(self):
         """Registry joined against what Steam's own file holds — READ-ONLY, like install_status.

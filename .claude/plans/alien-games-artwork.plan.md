@@ -130,6 +130,36 @@ bonus. Re-running it is safe (idempotent: it re-sets the same slots).
      its name tile, nothing crashes.
   5. Sweep: no oversized writes, grid files (if any) deck-owned.
 
+#### Task 5 — ran 2026-10-20 on the Pocket FIT
+
+Driven over SSH: resolution/download via drive.py against the live stores, the client call via
+the browser's own `fetch` + `SetCustomArtworkForApp` through the gate one-shot CDP evaluate.
+
+**Store art resolves and downloads live, both stores, no key.** Epic (Breathedge, cached
+metadata, no network): capsule + hero. GOG (Witcher, live GamesDB): capsule + hero + logo. Real
+bytes, correct JPEG/PNG types, all under the 8 MB cap. The GamesDB `url_format` shape was wrong
+at planning time (a guessed `formatters` list); fixed to the real `{formatter}`/`{ext}` form —
+committed separately.
+
+**`SetCustomArtworkForApp` works on arm64 and persists.** Setting capsule (asset 0) and hero
+(asset 1) wrote `2981617462p.jpg` and `2981617462_hero.jpg` into Steam's own
+`userdata/<id>/config/grid/` — named by the unsigned appid, exactly as unifideck documented. Both
+files survived a full reboot intact (same size, same mtime), and the entry kept its appid and
+token. Persistence is a file on disk in Steam's own dir, so the question is settled without a
+fallback.
+
+**Finding — AddShortcut's `appName` argument is unreliable on the arm64 client.** The gate's
+manual AddShortcut (which skipped the follow-up `SetShortcutName`) came back named `store-launch`
+(the Exe basename) after the reboot; an explicit `SetShortcutName` immediately set it to
+`Breathedge`. This VALIDATES the bridge's design: `executeShortcutOp` already re-sets name,
+options and dir explicitly after AddShortcut precisely for this skew (milestone 4), and the M4
+HandPlaced entry — where the name was set explicitly — kept it. No code change needed.
+
+**Network cut:** not run as a live cut (it costs a reboot and drops SSH). The degradation is
+covered by the offline suite (all-downloads-None → `{applied: []}`, nothing emitted, never
+raises) and by the live download proof above (the happy path genuinely fetches). A cut makes
+every `fetch_image` return None, which is the suite's exact case.
+
 ## Validation
 
 ```bash
@@ -150,9 +180,9 @@ source dev.env && make decky-plugin     # the bridge compiles
 
 ## Acceptance
 
-- [ ] A registered Epic and GOG entry each get a capsule, from the store's own metadata
-- [ ] Art is set through Steam's API; no third-party service or key
-- [ ] A kind with no source, or an unreachable source, is skipped — the entry keeps a usable tile
-- [ ] A download is https-only, size-capped, and magic-byte validated before the client sees it
-- [ ] Art survives a restart and reboot — or the gate states it does not and the fallback is taken
-- [ ] `make test` green with the new suite
+- [x] A registered Epic and GOG entry each get a capsule, from the store's own metadata (live, 2026-10-20)
+- [x] Art is set through Steam's API; no third-party service or key
+- [x] A kind with no source, or an unreachable source, is skipped — the entry keeps a usable tile
+- [x] A download is https-only, size-capped, and magic-byte validated before the client sees it
+- [x] Art survives a restart and reboot — grid files in Steam's own dir, intact across a reboot
+- [x] `make test` green with the new suite (20 checks)

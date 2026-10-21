@@ -125,7 +125,9 @@ class Plugin:
         if result["connected"]:
             await decky.emit("connect_done", store, True, True, "Connected")
             # Library-first: a fresh account's games appear as tiles without a second action.
-            asyncio.create_task(self.sync_library(store))
+            # Held and logged: nobody awaits this task, so without both an exception (or the
+            # task being collected) vanishes without a line — HW 2026-10-21 left no trace at all.
+            self._sync_task = asyncio.create_task(self._sync_logged(store))
         else:
             await decky.emit("connect_done", store, False, True, "Sign-in failed")
 
@@ -269,6 +271,9 @@ class Plugin:
             await decky.emit("shortcut_op", payload)
             return await asyncio.wait_for(fut, SHORTCUT_TIMEOUT)
         except asyncio.TimeoutError:
+            # The frontend bridge never replied: its listener is gone (Decky dropped it) or
+            # SteamUI is wedged. Logged here, once, for every caller.
+            decky.logger.info(f"shortcut_op {payload.get('op')} req {req}: no answer in {SHORTCUT_TIMEOUT}s")
             return {"error": NO_ANSWER}
         finally:
             self._shortcut_pending.pop(req, None)
@@ -446,6 +451,7 @@ class Plugin:
         async with _LOCKS[store]:
             owned = await asyncio.to_thread(library.owned, store, p)
         if "error" in owned:
+            decky.logger.info(f"sync {store}: {owned['error']}")
             return owned
         added = []
         async with _SHORTCUT_LOCK:
@@ -498,6 +504,16 @@ class Plugin:
         tiles = sum(1 for k in registry if k.startswith(f"{store}:"))
         out = {"added": len(added), "tiles": tiles}
         return {**out, "warning": "; ".join(warnings)} if warnings else out
+
+    _sync_task = None
+
+    async def _sync_logged(self, store):
+        try:
+            result = await self.sync_library(store)
+        except Exception as exc:  # noqa: BLE001 - a background task: logged or lost
+            decky.logger.info(f"sync {store} after sign-in raised {type(exc).__name__}: {exc}")
+            return
+        decky.logger.info(f"sync {store} after sign-in: {result}")
 
     async def _artwork_pass(self, store, tiles):
         """Art for freshly added tiles, one at a time with a pause between: a 55-title library is

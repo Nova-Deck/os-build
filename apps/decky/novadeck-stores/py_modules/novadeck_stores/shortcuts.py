@@ -7,13 +7,16 @@ Steam persists its own file and the ecosystem's restart-and-rewrite pathology �
 foreign-entry merges and backups unifideck carries for its direct writes — has nothing to attach
 to. This module decides WHAT the frontend writes and verifies WHAT landed.
 
-Two rules, the first amended by milestone 6:
+Two rules, the first amended by milestones 6 and 7:
 
-  - OWNERSHIP IS THE EXE PATH UNDER A MANAGED GAME ROOT. Milestone 6 made the shortcut's Exe the
-    game binary (so Steam composes Proton/SLR itself), so the old Exe-basename==stub proof is
-    gone; an entry is ours iff its Exe resolves under a <volume>/Games/<store> root we install to
-    (launch.under_managed_root). Foreign tools install under their own trees. Tags and the token
-    are NEVER ownership — foreign tools copy both (unifideck incident UD-006).
+  - OWNERSHIP IS REGISTRY MEMBERSHIP. An entry is ours iff its appid is in our registry: we
+    created every entry we will ever touch, and recorded it the moment Steam handed back the
+    appid. Milestone 7 registers the whole owned library — not-installed tiles whose Exe is the
+    install stub as well as installed model-B entries whose Exe is the game — so neither earlier
+    proxy (the stub's basename in milestone 4, the managed-root path in milestone 6) covers both
+    shapes. The managed-root test survives only as the orphan report's secondary signal: an entry
+    under our game roots that no registry row claims. Tags and the token are NEVER ownership —
+    foreign tools copy both (unifideck incident UD-006).
 
   - STEAM'S APPID IS ACCEPTED, NEVER A DURABLE KEY. AddShortcut returns it and it lands in the
     registry (shortcuts.json beside installs.json), because shortcut appids churn on re-add. The
@@ -54,9 +57,26 @@ def entry_fields(store, gid, title, resolved):
     }
 
 
-def is_ours(entry, roots):
-    """THE ownership test (milestone 6): the entry's Exe resolves under a managed game root.
-    `roots` is launch.managed_roots(p). Quoted and lowercase-key forms both occur in real files."""
+def _u32(appid):
+    """Shortcut appids compared as Steam's file stores them: unsigned 32-bit. A signed int from
+    the live API and the unsigned one in shortcuts.vdf name the same entry."""
+    return appid & 0xFFFFFFFF if isinstance(appid, int) and not isinstance(appid, bool) else None
+
+
+def registry_appids(registry):
+    """The set of (unsigned) appids our registry claims."""
+    return {_u32(row["appid"]) for row in registry.values()
+            if isinstance(row, dict) and _u32(row.get("appid")) is not None}
+
+
+def is_ours(entry, appids):
+    """THE ownership test (milestone 7): the entry's appid is one our registry recorded. `appids`
+    is registry_appids(registry). Exe, tags and options play no part."""
+    appid = _u32(entry.get("appid"))
+    return appid is not None and appid in appids
+
+
+def _under_roots(entry, roots):
     exe = entry.get("Exe") if isinstance(entry.get("Exe"), str) else entry.get("exe", "")
     return launch.under_managed_root(exe, roots)
 
@@ -138,34 +158,48 @@ def _read_binary_vdf_object(data, offset=0):
     raise ValueError("binary VDF object never closed")
 
 
-def our_entries(vdf_bytes, roots):
-    """Every entry in the given shortcuts.vdf bytes whose Exe is under a managed root. Raises on
-    bytes that do not parse — the caller must treat that as 'unknown', never as 'none'."""
+def _file_entries(vdf_bytes):
+    """Every entry dict in the given shortcuts.vdf bytes. Raises on bytes that do not parse — the
+    caller must treat that as 'unknown', never as 'none'."""
     root, _ = _read_binary_vdf_object(vdf_bytes)
     shortcuts_obj = root.get("shortcuts", {})
     if not isinstance(shortcuts_obj, dict):
         raise ValueError("no shortcuts object in the file")
-    return [{"key": key, "appid": entry.get("appid"), "AppName": entry.get("AppName")}
-            for key, entry in shortcuts_obj.items()
-            if isinstance(entry, dict) and is_ours(entry, roots)]
+    return [(key, entry) for key, entry in shortcuts_obj.items() if isinstance(entry, dict)]
+
+
+def _summary(key, entry):
+    return {"key": key, "appid": entry.get("appid"), "AppName": entry.get("AppName")}
+
+
+def our_entries(vdf_bytes, registry):
+    """Every entry in the file whose appid the registry claims. Raises on unparseable bytes."""
+    appids = registry_appids(registry)
+    return [_summary(key, entry) for key, entry in _file_entries(vdf_bytes)
+            if is_ours(entry, appids)]
 
 
 def orphan_report(vdf_bytes, registry, roots):
     """Join the file against the registry BY APPID. REPORT ONLY — nothing here deletes.
 
-      healthy                 ours (by path) and its appid is in the registry
-      orphan_unregistered     ours (by path) but no registry row claims its appid
-      registry_without_entry  a registry row whose appid has no owned entry in the file
+      healthy                 its appid is in the registry (ours)
+      orphan_unregistered     Exe under a managed game root, but no registry row claims its
+                              appid — the secondary signal: something we probably made and lost
+                              track of, which we still never touch
+      registry_without_entry  a registry row whose appid has no entry in the file
     """
-    entries = our_entries(vdf_bytes, roots)
-    appid_to_token = {row["appid"]: token for token, row in registry.items()
-                      if isinstance(row, dict) and "appid" in row}
-    entry_appids = {e["appid"] for e in entries}
+    entries = _file_entries(vdf_bytes)
+    appid_to_token = {_u32(row["appid"]): token for token, row in registry.items()
+                      if isinstance(row, dict) and _u32(row.get("appid")) is not None}
+    file_appids = {_u32(entry.get("appid")) for _, entry in entries}
     return {
-        "healthy": [{**e, "token": appid_to_token[e["appid"]]}
-                    for e in entries if e["appid"] in appid_to_token],
-        "orphan_unregistered": [e for e in entries if e["appid"] not in appid_to_token],
+        "healthy": [{**_summary(key, entry), "token": appid_to_token[_u32(entry.get("appid"))]}
+                    for key, entry in entries if _u32(entry.get("appid")) in appid_to_token],
+        "orphan_unregistered": [_summary(key, entry) for key, entry in entries
+                                if _u32(entry.get("appid")) not in appid_to_token
+                                and _under_roots(entry, roots)],
         "registry_without_entry": [
             {"token": token, "appid": row["appid"]} for token, row in registry.items()
-            if isinstance(row, dict) and "appid" in row and row["appid"] not in entry_appids],
+            if isinstance(row, dict) and _u32(row.get("appid")) is not None
+            and _u32(row["appid"]) not in file_appids],
     }

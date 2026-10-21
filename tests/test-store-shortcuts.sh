@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # Offline checks for alien-games milestone 4 (library entry writer), AMENDED by milestone 6
-# (.claude/plans/alien-games-launch.plan.md): the shortcut's Exe is now the game binary, not the
-# retired store-launch stub, and ownership is the managed-install-root path test.
+# (.claude/plans/alien-games-launch.plan.md: the installed entry's Exe is the game binary) and
+# milestone 7 (.claude/plans/alien-games-panel.plan.md: ownership is registry membership, since
+# not-installed stub tiles and installed games are both ours).
 #
 #   tests/test-store-shortcuts.sh
 #
 # WHY THIS FILE EXISTS. The expensive failures are destructive ones against Steam's state:
 # deleting an entry that is not ours. Checkable offline: the exact entry fields (game Exe,
-# game-launch %command% options), the managed-root ownership rule, the registry, and the
+# game-launch %command% options), the registry-membership ownership rule, the registry, and the
 # appid-join report. Fixture bytes stand in for shortcuts.vdf.
 #
 # WHAT IT CANNOT PROVE: AddShortcut/SpecifyCompatTool behaviour on the real client, or that an
@@ -66,15 +67,23 @@ try:
 except ValueError:
     ok("entry_fields refuses a target that resolved no executable")
 
-# -- ownership: Exe under a managed <volume>/Games/<store> root --
+# -- ownership (milestone 7): the entry's appid is in our registry, nothing else --
 vols = [{"path": str(tmp), "label": "Internal", "free": 1}]
 roots = launch.managed_roots({"NOVADECK_STORE_USER": "x"}, vols=vols)
-(ok if shortcuts.is_ours({"Exe": f'"{epic_exe}"'}, roots) else bad)("a game under our Games root is ours")
-(ok if shortcuts.is_ours({"exe": epic_exe}, roots) else bad)("lowercase 'exe' key counts")
-(ok if not shortcuts.is_ours({"Exe": '"/usr/bin/retroarch"', "LaunchOptions": "epic:x"}, roots) else bad)(
-    "a FOREIGN binary carrying our token is NOT ours — the token is never ownership")
-(ok if not shortcuts.is_ours({"tags": {"0": "novadeck"}}, roots) else bad)(
-    "a missing Exe is not ours, whatever the tags claim")
+claimed = shortcuts.registry_appids({"epic:Breathedge": {"appid": 2981617462},
+                                     "gog:shelf": {"appid": -2000000000},  # recorded in signed form
+                                     "junk": "not a row", "noappid": {"title": "x"}})
+(ok if shortcuts.is_ours({"appid": 2981617462, "Exe": '"/usr/lib/novadeck/store-launch"'}, claimed) else bad)(
+    "a registered appid is ours whatever its Exe — a not-installed stub tile included")
+(ok if shortcuts.is_ours({"appid": 2294967296}, claimed) else bad)(
+    "a signed registry appid and the unsigned file form name the same entry")
+(ok if not shortcuts.is_ours({"appid": 999, "Exe": f'"{epic_exe}"'}, claimed) else bad)(
+    "an entry under OUR game root but not in the registry is NOT ours — the path is no longer ownership")
+(ok if not shortcuts.is_ours({"appid": 777, "Exe": '"/usr/bin/retroarch"', "LaunchOptions": "epic:Breathedge",
+                              "tags": {"0": "novadeck"}}, claimed) else bad)(
+    "a FOREIGN entry carrying our token and tag is NOT ours")
+(ok if not shortcuts.is_ours({"Exe": f'"{epic_exe}"'}, claimed) and not shortcuts.is_ours({"appid": True}, {1}) else bad)(
+    "an entry with no (integer) appid is never ours")
 
 # -- registry round-trips through write_as_user --
 reg = tmp / "shortcuts.json"
@@ -111,20 +120,23 @@ fixture = bvdf({"shortcuts": {
           "LaunchOptions": "/usr/lib/novadeck/game-launch %command%"},
     "1": {"appid": 555, "AppName": "Owned but unregistered", "Exe": f'"{gog_exe}"', "LaunchOptions": ""},
     "2": {"appid": 999, "AppName": "Foreign", "Exe": '"/usr/bin/retroarch"', "LaunchOptions": "epic:Breathedge"},
+    "3": {"appid": 1234567, "AppName": "Shelf tile", "Exe": '"/usr/lib/novadeck/store-launch"',
+          "LaunchOptions": "gog:shelf"},
 }})
-registry = {"epic:Breathedge": {"appid": 2981617462}, "gog:gone": {"appid": 42424242}}
-entries = shortcuts.our_entries(fixture, roots)
-(ok if sorted(x["appid"] for x in entries) == [555, 2981617462] else bad)(
-    f"our_entries finds exactly the two under managed roots, not the foreign one ({[x['appid'] for x in entries]})")
+registry = {"epic:Breathedge": {"appid": 2981617462}, "gog:shelf": {"appid": 1234567},
+            "gog:gone": {"appid": 42424242}}
+entries = shortcuts.our_entries(fixture, registry)
+(ok if sorted(x["appid"] for x in entries) == [1234567, 2981617462] else bad)(
+    f"our_entries finds exactly the registered two — the installed game AND the stub tile ({[x['appid'] for x in entries]})")
 rep = shortcuts.orphan_report(fixture, registry, roots)
-(ok if [x["token"] for x in rep["healthy"]] == ["epic:Breathedge"] else bad)(
-    f"an owned entry whose appid is in the registry is healthy ({rep['healthy']})")
+(ok if sorted(x["token"] for x in rep["healthy"]) == ["epic:Breathedge", "gog:shelf"] else bad)(
+    f"every entry whose appid is in the registry is healthy, whatever its Exe ({rep['healthy']})")
 (ok if [x["appid"] for x in rep["orphan_unregistered"]] == [555] else bad)(
-    f"owned by path but appid not in the registry = orphan_unregistered ({rep['orphan_unregistered']})")
+    f"under a managed root but not in the registry = orphan_unregistered; the foreign one is not ({rep['orphan_unregistered']})")
 (ok if [x["token"] for x in rep["registry_without_entry"]] == ["gog:gone"] else bad)(
-    "a registry row whose appid has no owned entry is reported — the foreign entry's token is NOT matched")
+    "a registry row whose appid has no entry is reported — the foreign entry's token is NOT matched")
 try:
-    shortcuts.our_entries(fixture[:-5], roots)
+    shortcuts.our_entries(fixture[:-5], registry)
     bad("truncated vdf bytes must raise, never read as empty")
 except ValueError:
     ok("truncated vdf bytes raise — unreadable is never 'no entries'")

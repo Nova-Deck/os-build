@@ -10,8 +10,8 @@ the exact mechanism a Steam title uses.
 
 So this module's whole job is: resolve the installed game's executable + platform, say which
 compat tool (if any) a platform wants, and decide whether an entry's Exe lies under a game root
-we manage — the ownership proof that replaces milestone 4's Exe-basename now that the Exe is the
-game itself.
+we manage — since milestone 7 only the orphan report's secondary signal; ownership is registry
+membership (shortcuts.py).
 """
 import json
 import os
@@ -98,8 +98,8 @@ def resolve_target(store, gid, p, record):
 
 def managed_roots(p, vols=None):
     """The realpath of every <volume>/Games/<store> root across the user's volumes. An entry whose
-    Exe resolves under one of these is one we installed — the ownership proof under model B, since
-    the Exe is now the game, not our stub. Foreign tools install under their own trees."""
+    Exe resolves under one of these is probably one we installed — the orphan report uses it to
+    flag an entry no registry row claims. Foreign tools install under their own trees."""
     vols = vols if vols is not None else locations.user_volumes(p["NOVADECK_STORE_USER"])
     roots = set()
     for vol in vols:

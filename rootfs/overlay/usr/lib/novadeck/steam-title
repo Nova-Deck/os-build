@@ -214,7 +214,21 @@ APPLY_JS = r"""
   }
   if (!ov) return {error: "no app " + appid};
   if (name) {
-    let col = collectionStore.userCollections.find(c => c.displayName === name);
+    // NEVER collectionStore.userCollections: read while the store is still hydrating (this runs
+    // seconds after Steam starts) its MobX getter throws "reading 'values'", MobX keeps that
+    // error, and every later read rethrows it -- the whole library renders Decky's error page
+    // until Steam restarts (HW, Pocket FIT 2026-10-21). Wait for the store the way unifideck's
+    // collection-manager does, then look the collection up by tag: "not hydrated yet" must not
+    // read as "absent", or a second collection of the same name is created.
+    let ready = false;
+    for (let i = 0; i < 40 && !ready; i++) {
+      const games = collectionStore.GetCollection("type-games");
+      ready = !!(games && Array.isArray(games.allApps));
+      if (!ready) await new Promise(r => setTimeout(r, 500));
+    }
+    if (!ready) return {error: "collections not loaded yet"};
+    const id = collectionStore.GetCollectionIDByUserTag(name);
+    let col = typeof id === "string" ? collectionStore.GetCollection(id) : null;
     if (!col) {
       col = collectionStore.NewUnsavedCollection(name, undefined, []);
       await col.Save();

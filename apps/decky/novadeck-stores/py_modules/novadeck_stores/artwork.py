@@ -12,8 +12,10 @@ Every path here is best-effort: a kind with no source, a non-https url, an unrea
 body that is not an image all resolve to "no art for this kind", never to an exception reaching
 apply_artwork. The entry keeps its name tile; art is the bonus.
 """
+import http.client
 import json
 import os
+import urllib.parse
 import urllib.request
 
 from novadeck_stores import status
@@ -122,11 +124,17 @@ def fetch_image(url, opener=urllib.request.urlopen):
     or PNG signature before anything is handed back for the client."""
     if not _https(url):
         return None
+    # Store CDNs hand out raw paths: Epic's keyImages carry spaces ("...Portrait Store
+    # Banner-1200x1600-....jpg", HW 2026-10-21), which http.client refuses outright. Encode what
+    # is not already a URL character; existing %-escapes are kept, never double-encoded.
+    url = urllib.parse.quote(url, safe=":/?#[]@!$&'()*+,;=%~")
     try:
         with opener(url, timeout=TIMEOUT) as resp:
             # One byte past the cap so a body AT the cap is kept and a larger one is refused.
             data = resp.read(MAX_BYTES + 1)
-    except (OSError, ValueError):
+    # HTTPException too: InvalidURL and a malformed response are neither OSError nor ValueError,
+    # and one escaping here ended the whole background art pass at the first such tile.
+    except (OSError, ValueError, http.client.HTTPException):
         return None
     if not isinstance(data, bytes) or len(data) > MAX_BYTES:
         return None

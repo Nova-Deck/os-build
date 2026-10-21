@@ -519,7 +519,12 @@ class Plugin:
         """Art for freshly added tiles, one at a time with a pause between: a 55-title library is
         165 downloads, and the sync that started this must not flood the network or SteamUI."""
         for gid, appid in tiles:
-            await self.apply_artwork(store, gid, appid)
+            # One tile's failure must not end the pass for every tile after it (HW 2026-10-21:
+            # an InvalidURL at GTA V left the rest of a 55-tile library without art).
+            try:
+                await self.apply_artwork(store, gid, appid)
+            except Exception as exc:  # noqa: BLE001 - art is best-effort, per tile
+                decky.logger.info(f"artwork {store}:{gid}: {type(exc).__name__}: {exc}")
             await asyncio.sleep(ARTWORK_PACE)
 
     # -- milestone 7: a not-installed tile's Play becomes an install --

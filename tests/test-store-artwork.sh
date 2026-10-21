@@ -109,6 +109,21 @@ def opener_for(data, url="https://cdn/x"):
     "a file:// url is refused — no scheme but https")
 big = artwork.fetch_image("https://cdn/big.jpg", opener=opener_for(b"\xff\xd8\xff" + b"\x00" * (9 * 1024 * 1024)))
 (ok if big is None else bad)("a body past the size cap is refused, not buffered whole")
+
+# HW 2026-10-21: an Epic keyImage path with spaces. It must be fetched (encoded), and an opener
+# that raises http.client's own errors must resolve to None, never escape.
+seen = []
+def recording(req, timeout=0):
+    seen.append(req); return FakeResp(JPEG, req)
+got = artwork.fetch_image("https://cdn1.epicgames.com/x/item/GTAV Portrait Store Banner-1200x1600-ab.jpg?w=1%2C2",
+                          opener=recording)
+(ok if got and seen == ["https://cdn1.epicgames.com/x/item/GTAV%20Portrait%20Store%20Banner-1200x1600-ab.jpg?w=1%2C2"] else bad)(
+    f"a path with spaces is percent-encoded, existing escapes kept ({seen})")
+import http.client
+def raising(req, timeout=0):
+    raise http.client.InvalidURL("URL can't contain control characters")
+(ok if artwork.fetch_image("https://cdn/a b.jpg", opener=raising) is None else bad)(
+    "http.client's own errors (InvalidURL) resolve to None instead of escaping")
 PY
 
 echo "== the backend contract"

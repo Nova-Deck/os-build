@@ -5,7 +5,81 @@
 **Complexity**: Large (it is the capstone, and it adjusts the milestone-4/6 ownership model again)
 **Depends on**: milestones 1–6 (all built; 1–5 + M6-Windows HW-gated).
 
-## Summary
+## REVISION 2 (2026-10-21) — the surface moves INTO Steam's pages; supersedes the surface below
+
+**Why.** The first HW walkthrough (Pocket FIT, DOOM 64) proved the BACKEND end to end — sync →
+55 tiles, tile press → install, swap → model-B entry, Proton launch, artwork — but the user judged
+the SURFACE unintuitive: games sit in a collection, not a tab, and "Install" is pressing Play on a
+tile that silently starts a download, with progress only in the QAM. Re-reading
+`_reference/unifideck` showed the original plan cited unifideck's FALLBACK, not its design:
+
+| unifideck (primary path) | where | what revision 1 built instead |
+|---|---|---|
+| Store **library tabs** spliced into `/library` (routerHook patch, `afterPatch` down to the memoised tabs owner, intercept its `useMemo`); collections only when TabMaster blocks the injection, and opt-in because Steam Cloud syncs them account-wide | `src/lib/steam-bridge/library-patch.ts`, `collection-manager.ts` | always-on `[NovaDeck]` collections |
+| The **game page's Play row replaced** for its own shortcuts: Install + size + storage picker / progress + pause/cancel / Play | `src/views/AppDetailsPatch.tsx` (`/library/app/:appid` renderFunc `afterPatch`, anchored on `appDetailsClasses.InnerContainer` / `playSectionClasses.Container`, gate appid > 2e9), `src/components/play/*` | Play on a stub tile = install, toast, QAM progress |
+
+**Revised surface.**
+- **Game page (the install surface).** For a registry-owned entry only (registry membership, the
+  task-1 rule — never unifideck's appid>2e9 alone): not installed → **Install** + download size +
+  drive; downloading → progress + Stop; paused → Resume / Remove; installed → Steam's own native
+  Play (the model-B entry, untouched) + an Uninstall action. The stub stays as the FALLBACK when the
+  patch cannot apply (a Steam update moved an anchor): pressing Play still installs.
+- **Library tabs (the browse surface).** `Epic` / `GOG` tabs (owned games, installed or not) in
+  `/library`. Collections become OPT-IN (a QAM toggle), default OFF — which also settles the
+  Steam-Cloud question left open above.
+- **QAM panel** unchanged in role: accounts, Sync, install drive, a downloads overview.
+- **Backend unchanged**: registry, sync, request spool, swap, drive rules, artwork carry over. New
+  calls only: install size per game (cached, `legendary info` / `gogdl info` already parsed by
+  `installs.parse_info`), and a per-appid state read for the page.
+
+**Biggest risk: React-tree patches on the arm64 client.** Both surfaces depend on SteamUI internals
+(class-name anchors, route tree shapes, a React `useMemo` intercept for tabs). They break on client
+updates, and our arm64 client already skews from x86 (no GetAvailableCompatTools, mis-packed atoms).
+So **R0 is a probe, before any build**: on the Pocket FIT, read-only except a no-op router patch
+that is removed again —
+- `appDetailsClasses.InnerContainer`, `playSectionClasses.Container` resolve, and those classes are
+  present in the DOM of a NovaDeck game's page;
+- `/library/app/:appid` route tree carries a `renderFunc` (the AppDetailsPatch hook point);
+- `/library` route tree reaches a component whose tabs array is reachable the way library-patch.ts
+  walks it;
+- the decky routerHook can add+remove a patch cleanly on this client.
+Each anchor that fails changes the shape of R1/R2 (e.g. game page works, tabs do not → tabs via
+TabMaster-style collections only); the plan is re-cut on the probe result, not built around hope.
+
+**R0 RESULT (2026-10-22, Pocket FIT, client build 1791918634, Decky v3.3.0) — both surfaces are
+feasible; the game page must use unifideck's FALLBACK anchor.** Driven over CDP with
+observation-only router patches (every wrapper returns the original result; the useMemo intercept
+passes fn/deps through), added and removed again (`routerState._routePatches` empty after);
+library home rendered normally throughout. Scripts: session scratchpad `probe_static.js`,
+`probe_routes.js` (diagnostic, not shipped).
+
+| Check | Result |
+|---|---|
+| `playSectionClasses` / `appDetailsClasses` / `appDetailsHeaderClasses` resolve via the @decky/ui webpack lookup | all found (2614 modules) |
+| `/library/app/:appid` route tree has a `renderFunc` | yes (function) |
+| `appDetailsClasses.InnerContainer` in a NovaDeck game page's DOM (DOOM 64) | yes (1) |
+| `playSectionClasses.Container` in that DOM — unifideck's PRIMARY insertion anchor | **NO (0)**; the play bar's own classes are present (`PlayBarLabel`, `PlayBarDetailLabel`, `MenuButton`, `ControllerConfigButton`, …) |
+| Fallback anchors `appDetailsHeaderClasses.TopCapsule`, `appDetailsClasses.Header` | both present (1 each) → insert after the header, as unifideck's `findPlaySectionInsertIndex` already falls back to |
+| `/library` chain: route child fn → level-1 fn → level-2 memo with `.type.type` fn → React dispatcher reachable | all yes |
+| tabs `useMemo` result | tuple; ids `SteamOSCompatible, AllGames, Installed, Favorites, Collections, DesktopApps, Soundtracks` |
+| `AllGames` template carries `Library_FilteredByHeader`; collections app filter (`Matches`) in deps | both yes |
+
+Consequences for R1: anchor on the header (TopCapsule/Header), not on play `Container`; the
+native Play row is identified by the play-bar classes above (to hide it on not-installed games).
+Note these are DOM-level checks of what unifideck matches on React props (`className`) — R1's
+first build step confirms the same classes appear on the React children of `InnerContainer`.
+
+**Revised tasks.**
+- R0 probe — DONE, result above.
+- R1 game-page patch: Install / progress / Resume / Uninstall for registry-owned entries; stub kept
+  as fallback; install size call; the downloads poll shared with the QAM.
+- R2 library tabs: Epic / GOG (+ installed filter) via the /library patch; TabMaster detection
+  falls back to collections.
+- R3 collections → opt-in toggle (default OFF); existing `[NovaDeck]` collections deleted once on
+  switching off (unifideck's cleaned-marker pattern, so devices do not fight over cloud state).
+- R4 HW walkthrough (the old task 6, on the revised surface) on a freshly built card.
+
+## Summary (revision 1 — the SURFACE parts are superseded by revision 2 above)
 
 The browse surface is the **Steam library**, not the Quick Access panel. Every owned title appears
 as a Steam tile — installed or not — grouped in `[NovaDeck] Epic` / `[NovaDeck] GOG` collections

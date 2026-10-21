@@ -1,0 +1,125 @@
+#!/usr/bin/env python3
+"""The Exe behind a NOT-INSTALLED alien-game tile — it asks for the install, and never launches.
+
+    store-launch <store>:<game_id> [params...]
+
+Milestone 7 registers every owned game as a Steam tile. Pressing Play on one that is not installed
+runs this; it hands the backend an install request and exits. Once the install completes the
+backend rewrites the tile into the milestone-6 model-B entry (Exe = the game, Steam composes
+Proton/SLR), so a launch never passes through here. HARD RULE: this file installs and exits. A
+stub that reconstructs a launch is the design milestone 6 rejected; it must not grow back.
+
+WHY A REQUEST FILE. Steam runs this as the user; the install is a root-started system unit the
+plugin backend owns (installs.py: one fixed unit name, its records, its free-space check). So this
+does not install anything itself. It creates <store home>/requests/<token>.install — the FILENAME
+is the whole message, the file is empty, so there is nothing for root to parse — and waits for the
+backend to take it. The backend re-validates the token against its own registry before acting:
+anything this can ask for, the user could already ask for from the Quick Access panel.
+
+NOT TAKEN IN TIME = THE PLUGIN IS NOT RUNNING. The request is withdrawn (a request left behind
+would start a download whenever the plugin next came up, long after the user stopped waiting) and
+the refusal is logged and printed: pressing Play must never turn into silence.
+
+argv[1] IS THE IDENTITY CONTRACT: the tile's LaunchOptions is exactly the token, whose grammar is
+pinned against shortcuts.TOKEN by the offline suite. An argv that fails it is refused without
+touching any file. Steam's LD_LIBRARY_PATH / LD_PRELOAD are scrubbed before store-env runs.
+"""
+import datetime
+import os
+import re
+import shlex
+import subprocess
+import sys
+import time
+
+STORE_ENV = os.environ.get("NOVADECK_STORE_ENV", "/usr/lib/novadeck/store-env")
+TOKEN = re.compile(r"^(epic|gog):[A-Za-z0-9][A-Za-z0-9._-]*$")
+PROG = "store-launch"
+LOG_NAME = "store-launch.log"
+REQUEST_DIR = "requests"
+REQUEST_SUFFIX = ".install"
+# The backend polls once a second; this covers a busy SteamUI and a slow first poll, and is still
+# short enough that a dead plugin is reported while the user is looking at the tile.
+TAKE_TIMEOUT = float(os.environ.get("NOVADECK_STORE_TAKE_TIMEOUT", "10"))
+EXIT_TAKEN = 0
+EXIT_NOT_TAKEN = 69  # EX_UNAVAILABLE: the service that does the work is not there
+
+
+def scrubbed_env():
+    env = dict(os.environ)
+    env.pop("LD_PRELOAD", None)
+    env.pop("LD_LIBRARY_PATH", None)
+    return env
+
+
+def store_home():
+    out = subprocess.run([STORE_ENV], capture_output=True, text=True, check=True,
+                         env=scrubbed_env(), timeout=10).stdout
+    for line in out.splitlines():
+        key, _, raw = line.partition("=")
+        if key == "NOVADECK_STORE_HOME" and raw:
+            parts = shlex.split(raw)
+            if parts:
+                return parts[0]
+    raise ValueError("store-env named no NOVADECK_STORE_HOME")
+
+
+def log(home, message):
+    stamp = datetime.datetime.now().isoformat(timespec="seconds")
+    print(f"{PROG}: {message}", file=sys.stderr)
+    if home is None:
+        return
+    try:
+        with open(os.path.join(home, LOG_NAME), "a", encoding="utf-8") as f:
+            f.write(f"{stamp} {message}\n")
+    except OSError as exc:
+        print(f"{PROG}: could not log ({exc})", file=sys.stderr)
+
+
+def request(home, token):
+    """Place the request atomically (a half-written name is never visible) and wait for the
+    backend to take it. True if taken."""
+    spool = os.path.join(home, REQUEST_DIR)
+    os.makedirs(spool, mode=0o700, exist_ok=True)
+    final = os.path.join(spool, token + REQUEST_SUFFIX)
+    tmp = os.path.join(spool, f".{os.getpid()}.tmp")
+    with open(tmp, "w", encoding="utf-8"):
+        pass
+    os.replace(tmp, final)
+    deadline = time.monotonic() + TAKE_TIMEOUT
+    while time.monotonic() < deadline:
+        if not os.path.lexists(final):
+            return True
+        time.sleep(0.2)
+    try:
+        os.unlink(final)
+    except FileNotFoundError:
+        return True  # taken in the last instant
+    return False
+
+
+def main():
+    token = sys.argv[1] if len(sys.argv) > 1 else ""
+    if not TOKEN.fullmatch(token):
+        print(f"usage: {PROG} <epic|gog>:<game_id> [params...]   (got {token!r})", file=sys.stderr)
+        raise SystemExit(2)
+    try:
+        home = store_home()
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        log(None, f"{token} — install not requested: cannot resolve the store home ({exc})")
+        raise SystemExit(EXIT_NOT_TAKEN)
+    try:
+        taken = request(home, token)
+    except OSError as exc:
+        log(home, f"{token} — install not requested: {exc}")
+        raise SystemExit(EXIT_NOT_TAKEN)
+    if not taken:
+        log(home, f"{token} — install not requested: the NovaDeck Stores plugin did not answer "
+                  f"within {TAKE_TIMEOUT:g}s")
+        raise SystemExit(EXIT_NOT_TAKEN)
+    log(home, f"{token} — install requested")
+    raise SystemExit(EXIT_TAKEN)
+
+
+if __name__ == "__main__":
+    main()

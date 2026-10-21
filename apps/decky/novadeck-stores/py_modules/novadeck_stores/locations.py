@@ -37,6 +37,12 @@ def user_volumes(user):
     return volumes(f"/home/{user}", f"/run/media/{user}")
 
 
+def default_volume(vols, preferred=None):
+    """Where a tile press installs, since it has no drive picker: the preferred drive if it is
+    mounted now, else the home (always first in `vols`)."""
+    return next((v for v in vols if v["path"] == preferred), vols[0] if vols else None)
+
+
 def game_root(volume, store):
     if store not in STORE_DIRS:
         raise ValueError(f"unknown store {store!r}")

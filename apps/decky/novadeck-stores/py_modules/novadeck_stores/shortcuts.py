@@ -57,6 +57,34 @@ def entry_fields(store, gid, title, resolved):
     }
 
 
+# The not-installed tile's Exe (milestone 7): it requests the install and exits, never launches.
+STUB = "/usr/lib/novadeck/store-launch"
+
+
+def shelf_fields(store, gid, title):
+    """The fields a NOT-INSTALLED tile is created with: Exe = the install stub, LaunchOptions =
+    exactly the token (the stub's argv[1] contract). No compat tool — the stub is native, and
+    nothing launched through it needs Proton or SLR."""
+    token = f"{store}:{gid}"
+    if not TOKEN.fullmatch(token):
+        raise ValueError(f"unsafe game id for a shortcut: {token}")
+    return {"AppName": title, "Exe": f'"{STUB}"', "StartDir": f'"{os.path.dirname(STUB)}"',
+            "LaunchOptions": token}
+
+
+def shelf_payload(req, store, gid, title):
+    fields = shelf_fields(store, gid, title)
+    return {"op": "add", "req": req, "name": fields["AppName"],
+            "exe": fields["Exe"].strip('"'), "dir": fields["StartDir"].strip('"'),
+            "options": fields["LaunchOptions"]}
+
+
+def is_shelf(row):
+    """A registry row for a tile that is not installed yet. Rows written before milestone 7 have
+    no state and are installed entries."""
+    return isinstance(row, dict) and row.get("state") == "shelf"
+
+
 def _u32(appid):
     """Shortcut appids compared as Steam's file stores them: unsigned 32-bit. A signed int from
     the live API and the unsigned one in shortcuts.vdf name the same entry."""

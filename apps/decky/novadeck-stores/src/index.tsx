@@ -34,9 +34,22 @@ function onShortcutOp(op: ShortcutOp) {
   void executeShortcutOp(op);
 }
 
+// The outcome of pressing Play on a not-installed tile (main.py take_install_requests). The stub
+// Steam ran has already exited and Steam shows nothing for a shortcut, so without this toast the
+// press would look like it did nothing.
+type InstallEvent = { store: string; id: string; title: string; ok: boolean; message: string };
+
+function onInstallEvent(ev: InstallEvent) {
+  toaster.toast({
+    title: ev.title,
+    body: ev.ok ? ev.message : `Not installed: ${ev.message}`,
+  });
+}
+
 export default definePlugin(() => {
   addEventListener("connect_done", onConnectDone);
   addEventListener("shortcut_op", onShortcutOp);
+  addEventListener("install_event", onInstallEvent);
   return {
     name: "NovaDeck Stores",
     content: <Content />,
@@ -63,6 +76,7 @@ export default definePlugin(() => {
     onDismount() {
       removeEventListener("connect_done", onConnectDone);
       removeEventListener("shortcut_op", onShortcutOp);
+      removeEventListener("install_event", onInstallEvent);
     },
     // NO alwaysRender: this panel holds no pending edits and nothing to keep warm. It re-reads on
     // every open by design, because a token can expire while it is closed — and that re-read is

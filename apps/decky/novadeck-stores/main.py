@@ -31,8 +31,8 @@ import decky
 
 import base64
 
-from novadeck_stores import (artwork, cdp, cli, connect, installs, launch, library, locations,
-                             paths, shortcuts, status)
+from novadeck_stores import (artwork, cdp, cli, connect, install_requests, installs, launch,
+                             library, locations, paths, shortcuts, status)
 
 # Long enough to type an email and a password on the on-screen keyboard and clear a captcha;
 # short enough that a login the user walked away from does not poll for the rest of the session.
@@ -60,6 +60,9 @@ _SHORTCUT_LOCK = asyncio.Lock()
 # Generous: the frontend executes synchronously once it hears the event, but the event bus itself
 # can lag behind a busy SteamUI.
 SHORTCUT_TIMEOUT = 30
+# How often the tile stub's install requests are looked for. The stub waits 10 s for its request
+# to be taken (store-launch TAKE_TIMEOUT), so this must stay well under that.
+REQUEST_POLL = 1.0
 
 
 class Plugin:
@@ -400,12 +403,51 @@ class Plugin:
                 reports.append({"file": path, "error": f"unreadable: {exc}"})
         return {"registry": registry, "files": reports}
 
+    # -- milestone 7: a not-installed tile's Play becomes an install --
+
+    async def take_install_requests(self, p):
+        """Act on every request the tile stub left. Each outcome is emitted as an install_event
+        (a toast), because the stub has already exited and Steam shows nothing for a shortcut."""
+        tokens = await asyncio.to_thread(install_requests.take, p)
+        for token in tokens:
+            store, gid = token.split(":", 1)
+            row = (await asyncio.to_thread(shortcuts.read_registry, p)).get(token)
+            if not shortcuts.is_shelf(row):
+                # A stale or forged request: not a tile we made, or one already installed.
+                decky.logger.info(f"install request {token}: not a not-installed tile, ignored")
+                continue
+            vol = locations.default_volume(
+                await asyncio.to_thread(locations.user_volumes, p["NOVADECK_STORE_USER"]))
+            if vol is None:
+                result = {"error": "no drive available"}
+            else:
+                result = await self.install(store, gid, row["title"], vol["path"])
+            ok = bool(result.get("started"))
+            await decky.emit("install_event", {
+                "store": store, "id": gid, "title": row["title"], "ok": ok,
+                "message": f"Installing to {vol['label']}" if ok else result.get("error", "failed")})
+
+    async def _request_loop(self):
+        # Paths resolved once (store-env is a process spawn) and retried only until they resolve;
+        # the spool is a directory listing per poll, nothing more.
+        p = None
+        while True:
+            try:
+                p = p or await asyncio.to_thread(paths.store_paths)
+                await self.take_install_requests(p)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - one bad pass must not end the watch
+                decky.logger.info(f"install requests: {type(exc).__name__}")
+            await asyncio.sleep(REQUEST_POLL)
+
     async def _main(self):
         # Compat mappings are in-memory until Steam flushes config.vdf; re-assert ours at boot.
         try:
             await self.reassert_compat()
         except Exception as exc:  # noqa: BLE001 - boot best-effort, never fail load
             decky.logger.info(f"reassert_compat at boot: {type(exc).__name__}")
+        await self._request_loop()
 
     async def _unload(self):
         if self._pending and not self._pending.done():

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Offline checks for alien-games milestone 7 task 3 (.claude/plans/alien-games-panel.plan.md):
+# Offline checks for alien-games milestone 7 tasks 3-4 (.claude/plans/alien-games-panel.plan.md):
 # library sync — every installable owned title becomes a not-installed tile, grouped in the
-# [NovaDeck] collections.
+# [NovaDeck] collections — and the transition that turns a finished install into the model-B
+# entry (and an uninstall back into a shelf tile).
 #
 #   tests/test-store-library.sh
 #
@@ -149,6 +150,144 @@ main.library.owned = lambda store, pp: {"error": "cannot list the library (exit 
 res = asyncio.run(run("epic"))
 (ok if res == {"error": "cannot list the library (exit 1)"} else bad)(f"a library that cannot be listed is an error, never 'no games' ({res})")
 (ok if asyncio.run(plugin.sync_library("steam")).get("error") else bad)("an unknown store is refused")
+PY
+
+echo "== the install transition"
+pysuite "transition" <<'PY'
+import asyncio, json, os, pathlib, sys, tempfile, types
+sys.path.insert(0, sys.argv[1])
+
+def ok(m): print(f"  ok   {m}")
+def bad(m): print(f"  FAIL {m}")
+
+emitted = []
+next_appid = iter(range(4000000000, 4000001000))
+refuse = set()   # ops the fake SteamUI refuses
+async def fake_emit(event, payload):
+    emitted.append((event, payload))
+    if event != "shortcut_op":
+        return
+    err = "Steam said no" if payload["op"] in refuse else None
+    appid = next(next_appid) if payload["op"] == "add" and not err else None
+    asyncio.get_running_loop().create_task(plugin.shortcut_result(payload["req"], appid, err))
+sys.modules["decky"] = types.SimpleNamespace(
+    logger=types.SimpleNamespace(info=lambda *a: None), emit=fake_emit)
+sys.path.insert(0, os.path.join(sys.argv[1], ".."))
+import main
+from novadeck_stores import shortcuts
+
+plugin = main.Plugin()
+tmp = pathlib.Path(tempfile.mkdtemp(prefix="store-library."))
+p = {"NOVADECK_STORE_HOME": str(tmp), "NOVADECK_STORE_UID": str(os.getuid()), "NOVADECK_STORE_USER": "deck"}
+main.paths.store_paths = lambda ensure=False: p
+shortcuts.cli.write_as_user = lambda pp, path, text: (pathlib.Path(path).write_text(text), 0)[1]
+async def no_art(self, store, gid, appid): return {"applied": []}
+main.Plugin.apply_artwork = no_art
+reg_path = tmp / "shortcuts.json"
+def reg(): return json.loads(reg_path.read_text())
+def ops(): return [pl["op"] for e, pl in emitted if e == "shortcut_op"]
+def events(): return [pl for e, pl in emitted if e == "install_event"]
+
+records = {}
+status_calls = []
+main.installs.read_records = lambda pp: records
+def fake_status(pp):
+    status_calls.append(1)
+    return {"installs": [{"store": k.split(":")[0], "id": k.split(":")[1], "state": v} for k, v in state.items()]}
+state = {}
+main.installs.install_status = fake_status
+main.launch.resolve_target = lambda store, gid, pp, rec: {
+    "exe": f"/g/{gid}/game.exe", "startdir": f"/g/{gid}", "platform": "windows"}
+
+# Idle: a shelf tile with no install record costs no systemctl call.
+reg_path.write_text(json.dumps({"epic:A": {"appid": 100, "title": "Alpha", "state": "shelf"}}))
+asyncio.run(plugin.finish_installs(p))
+(ok if not status_calls and not emitted else bad)("an idle poll (no tile installing) spawns nothing")
+
+# Still downloading: nothing happens.
+records["epic:A"] = {"store": "epic", "id": "A", "path": "/g/A"}
+state["epic:A"] = "downloading"
+asyncio.run(plugin.finish_installs(p))
+(ok if not ops() else bad)(f"a tile still downloading is left alone ({ops()})")
+
+# Done: add the model-B entry FIRST, compat, then remove the shelf tile, then collections.
+state["epic:A"] = "installed"
+asyncio.run(plugin.finish_installs(p))
+seq = ops()
+(ok if seq[:3] == ["add", "compat", "remove"] and seq[3:] == ["collection", "collection"] else bad)(
+    f"add the game entry, set Proton, THEN remove the shelf tile, then the collections ({seq})")
+add = next(pl for e, pl in emitted if e == "shortcut_op" and pl["op"] == "add")
+(ok if add["exe"] == "/g/A/game.exe" and add["options"] == "/usr/lib/novadeck/game-launch %command%" else bad)(
+    f"the new entry is the milestone-6 model-B entry ({add['exe']}, {add['options']})")
+rem = next(pl for e, pl in emitted if e == "shortcut_op" and pl["op"] == "remove")
+(ok if rem["appid"] == 100 else bad)(f"the removed appid is the old shelf tile ({rem})")
+row = reg()["epic:A"]
+(ok if row == {"title": "Alpha", "exe": "/g/A/game.exe", "platform": "windows", "appid": 4000000000} else bad)(
+    f"the row is now an installed entry with the new appid, nothing retired ({row})")
+(ok if [e["message"] for e in events()] == ["Ready to play"] else bad)(f"the user is told it is ready ({events()})")
+cols = [pl for e, pl in emitted if e == "shortcut_op" and pl["op"] == "collection"]
+(ok if cols[1]["remove"] == [4000000000] and cols[1]["add"] == [] else bad)(
+    f"the entry leaves [NovaDeck] Not Installed ({cols[1]})")
+
+# Not shelf any more: a further poll does nothing.
+emitted.clear()
+asyncio.run(plugin.finish_installs(p))
+(ok if not emitted else bad)("an installed entry is never transitioned twice")
+
+# A remove Steam refuses keeps the old appid as retired — still ours, retried later.
+emitted.clear()
+reg_path.write_text(json.dumps({"epic:B": {"appid": 200, "title": "Beta", "state": "shelf"}}))
+records["epic:B"] = {"store": "epic", "id": "B", "path": "/g/B"}; state["epic:B"] = "installed"
+refuse.add("remove")
+asyncio.run(plugin.finish_installs(p))
+row = reg()["epic:B"]
+(ok if row.get("retired") == [200] and row["appid"] != 200 else bad)(f"an unconfirmed removal is kept as retired ({row})")
+(ok if 200 in shortcuts.registry_appids(reg()) else bad)("a retired appid is still ours by registry membership")
+refuse.clear()
+emitted.clear()
+main.library.owned = lambda store, pp: {"titles": []}
+asyncio.run(plugin.sync_library("epic"))
+removes = [pl["appid"] for e, pl in emitted if e == "shortcut_op" and pl["op"] == "remove"]
+(ok if removes == [200] and "retired" not in reg()["epic:B"] else bad)(
+    f"the next sync retries the retired removal and clears it once Steam confirms ({removes}, {reg()['epic:B']})")
+
+# An add Steam refuses: the shelf tile stays, the user is told ONCE across retries.
+emitted.clear()
+reg_path.write_text(json.dumps({"epic:C": {"appid": 300, "title": "Gamma", "state": "shelf"}}))
+records["epic:C"] = {"store": "epic", "id": "C", "path": "/g/C"}; state["epic:C"] = "installed"
+refuse.add("add")
+asyncio.run(plugin.finish_installs(p)); asyncio.run(plugin.finish_installs(p))
+(ok if reg()["epic:C"]["appid"] == 300 and shortcuts.is_shelf(reg()["epic:C"]) else bad)(
+    "a refused add leaves the shelf tile in place — never neither")
+(ok if len(events()) == 1 and not events()[0]["ok"] else bad)(f"the failure is told once, not every poll ({events()})")
+(ok if "remove" not in ops() else bad)("nothing is removed when the add failed")
+refuse.clear()
+
+# Installed but the store names no executable: told once, no entry churn.
+emitted.clear()
+reg_path.write_text(json.dumps({"epic:D": {"appid": 400, "title": "Delta", "state": "shelf"}}))
+records["epic:D"] = {"store": "epic", "id": "D", "path": "/g/D"}; state["epic:D"] = "installed"
+main.launch.resolve_target = lambda *a: None
+asyncio.run(plugin.finish_installs(p)); asyncio.run(plugin.finish_installs(p))
+(ok if not ops() and len(events()) == 1 and "no executable" in events()[0]["message"] else bad)(
+    f"an unresolvable install is told once and touches no entry ({ops()}, {events()})")
+
+# Uninstall returns an installed entry to the shelf.
+emitted.clear()
+reg_path.write_text(json.dumps({"gog:E": {"appid": 500, "title": "Echo", "exe": "/g/E/e.exe", "platform": "windows"}}))
+async def fake_action(self, action, store, fn, *args): return {"uninstalled": True}
+main.Plugin._install_action = fake_action
+res = asyncio.run(plugin.uninstall("gog", "E"))
+row = reg()["gog:E"]
+add = next(pl for e, pl in emitted if e == "shortcut_op" and pl["op"] == "add")
+(ok if res == {"uninstalled": True} and shortcuts.is_shelf(row) and add["exe"] == "/usr/lib/novadeck/store-launch" else bad)(
+    f"an uninstalled game goes back on the shelf as a stub tile ({res}, {row})")
+(ok if "compat" not in ops() and "remove" in ops() else bad)(f"no compat tool on the shelf tile; the game entry is removed ({ops()})")
+
+# Boot re-assert never puts Proton on a shelf tile.
+emitted.clear()
+asyncio.run(plugin.reassert_compat(p)); asyncio.run(asyncio.sleep(0))
+(ok if "compat" not in ops() else bad)("reassert_compat skips shelf tiles — the stub never runs through Proton")
 PY
 
 echo "== the bridge"

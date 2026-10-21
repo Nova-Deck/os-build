@@ -65,6 +65,8 @@ SHORTCUT_TIMEOUT = 30
 REQUEST_POLL = 1.0
 # Seconds between one tile's artwork and the next in the background pass after a sync.
 ARTWORK_PACE = 1.0
+# Finished installs are checked every FINISH_EVERY request polls (~10 s).
+FINISH_EVERY = 10
 
 
 class Plugin:
@@ -208,7 +210,21 @@ class Plugin:
         return await self._install_action("stop", None, lambda p: {"stopped": installs.stop() == 0})
 
     async def uninstall(self, store, gid):
-        return await self._install_action("uninstall", store, installs.uninstall, store, gid)
+        """Remove the game's files; an installed tile then goes back on the shelf (milestone 7),
+        so the game stays in the library, installable again with one press."""
+        result = await self._install_action("uninstall", store, installs.uninstall, store, gid)
+        if result.get("uninstalled"):
+            p = await asyncio.to_thread(paths.store_paths)
+            async with _SHORTCUT_LOCK:
+                row = (await asyncio.to_thread(shortcuts.read_registry, p)).get(f"{store}:{gid}")
+                if isinstance(row, dict) and "appid" in row and not shortcuts.is_shelf(row):
+                    swapped = await self._swap_entry(
+                        p, store, gid,
+                        shortcuts.shelf_payload(next(self._shortcut_seq), store, gid, row["title"]),
+                        {"title": row["title"], "state": "shelf"}, None)
+                    if "error" in swapped:
+                        return {**result, "warning": f"tile not returned to the shelf: {swapped['error']}"}
+        return result
 
     async def _install_action(self, action, store, fn, *args):
         """One install operation at a time, and under the store's lock where the call can log in
@@ -319,7 +335,9 @@ class Plugin:
         except (OSError, subprocess.SubprocessError):
             return
         for row in registry.values():
-            if not isinstance(row, dict) or "appid" not in row:
+            # A shelf tile's Exe is the native install stub: a compat tool there would run the
+            # stub through Proton.
+            if not isinstance(row, dict) or "appid" not in row or shortcuts.is_shelf(row):
                 continue
             tool = launch.compat_tool(row.get("platform", "windows"))
             if tool:
@@ -439,6 +457,15 @@ class Plugin:
                 if not await asyncio.to_thread(shortcuts.write_registry, p, registry):
                     return {"error": "a tile was created but the registry could not be written"}
                 added.append((t["id"], int(result["appid"])))
+            # Entries replaced at an install transition whose removal Steam did not confirm.
+            for token, row in registry.items():
+                if not (token.startswith(f"{store}:") and isinstance(row, dict) and row.get("retired")):
+                    continue
+                still = [a for a in row["retired"] if "error" in await self._shortcut_roundtrip(
+                    shortcuts.remove_payload(next(self._shortcut_seq), a))]
+                registry[token] = {k: v for k, v in row.items() if k != "retired"} | (
+                    {"retired": still} if still else {})
+                await asyncio.to_thread(shortcuts.write_registry, p, registry)
             warnings = []
             for op in library_sync.collection_ops(store, registry):
                 result = await self._shortcut_roundtrip(
@@ -472,6 +499,13 @@ class Plugin:
                 # A stale or forged request: not a tile we made, or one already installed.
                 decky.logger.info(f"install request {token}: not a not-installed tile, ignored")
                 continue
+            unit = await asyncio.to_thread(installs.unit_state)
+            if unit.get("Description", "").removeprefix("novadeck-stores install ") == token \
+                    and unit["ActiveState"] in ("active", "activating", "reloading"):
+                # A second press on a tile that is already downloading.
+                await decky.emit("install_event", {"store": store, "id": gid, "title": row["title"],
+                                                   "ok": True, "message": "Already installing"})
+                continue
             vol = locations.default_volume(
                 await asyncio.to_thread(locations.user_volumes, p["NOVADECK_STORE_USER"]))
             if vol is None:
@@ -483,18 +517,110 @@ class Plugin:
                 "store": store, "id": gid, "title": row["title"], "ok": ok,
                 "message": f"Installing to {vol['label']}" if ok else result.get("error", "failed")})
 
+    # -- milestone 7: a finished install turns its shelf tile into the model-B entry --
+
+    async def _swap_entry(self, p, store, gid, payload, new_row, tool):
+        """Replace a token's entry with a new one. ADD FIRST: if Steam refuses the new entry the
+        old tile is still there, never neither. The old appid is kept on the new row as `retired`
+        until Steam confirms its removal, so a failed remove leaves an appid we still own and
+        retry, not an orphan. Caller holds _SHORTCUT_LOCK. {"appid": N} or {"error": ...}."""
+        token = f"{store}:{gid}"
+        registry = await asyncio.to_thread(shortcuts.read_registry, p)
+        old = registry.get(token)
+        result = await self._shortcut_roundtrip(payload)
+        if "error" in result:
+            return result
+        appid = int(result["appid"])
+        if tool:
+            compat = await self._shortcut_roundtrip(
+                shortcuts.compat_payload(next(self._shortcut_seq), appid, tool))
+            if "error" in compat:
+                decky.logger.info(f"swap {token}: compat tool not set: {compat['error']}")
+        retired = (list(old.get("retired", [])) + [old["appid"]]
+                   if isinstance(old, dict) and "appid" in old else [])
+        registry[token] = {**new_row, "appid": appid, "retired": retired}
+        if not await asyncio.to_thread(shortcuts.write_registry, p, registry):
+            return {"error": "the new entry was created but the registry could not be written"}
+        still = []
+        for old_appid in retired:
+            gone = await self._shortcut_roundtrip(
+                shortcuts.remove_payload(next(self._shortcut_seq), old_appid))
+            if "error" in gone:
+                still.append(old_appid)
+        registry[token] = {**new_row, "appid": appid, **({"retired": still} if still else {})}
+        await asyncio.to_thread(shortcuts.write_registry, p, registry)
+        for op in library_sync.collection_ops(store, registry):
+            await self._shortcut_roundtrip(library_sync.collection_payload(next(self._shortcut_seq), op))
+        # Art is keyed by appid in Steam's grid dir, so the new entry needs its own.
+        asyncio.create_task(self.apply_artwork(store, gid, appid))
+        decky.logger.info(f"swap {token}: appid {appid}, retired {retired}, still held {still}")
+        return {"appid": appid}
+
+    async def finish_installs(self, p):
+        """Every shelf tile whose install the CLI has now recorded as done becomes the model-B
+        entry (Exe = the game, compat tool for Windows) and the user is told it is ready."""
+        registry = await asyncio.to_thread(shortcuts.read_registry, p)
+        records = await asyncio.to_thread(installs.read_records, p)
+        waiting = [t for t, row in registry.items() if shortcuts.is_shelf(row) and t in records]
+        if not waiting:
+            return  # nothing installing into a tile: no systemctl spawn on an idle poll
+        done = {f"{i['store']}:{i['id']}" for i in
+                (await asyncio.to_thread(installs.install_status, p)).get("installs", [])
+                if i.get("state") == "installed"}
+        for token in waiting:
+            if token not in done or token in self._unresolvable:
+                continue
+            store, gid = token.split(":", 1)
+            title = registry[token]["title"]
+            resolved = await asyncio.to_thread(launch.resolve_target, store, gid, p, records[token])
+            if resolved is None:
+                # Said once, not every poll: the store's metadata names no executable.
+                self._unresolvable.add(token)
+                await decky.emit("install_event", {"store": store, "id": gid, "title": title,
+                                                   "ok": False, "message": "installed, but the store names no executable to launch"})
+                continue
+            async with _SHORTCUT_LOCK:
+                try:
+                    payload = shortcuts.add_payload(next(self._shortcut_seq), store, gid, title, resolved)
+                except ValueError as exc:
+                    self._unresolvable.add(token)
+                    decky.logger.info(f"finish {token}: {exc}")
+                    continue
+                result = await self._swap_entry(
+                    p, store, gid, payload,
+                    {"title": title, "exe": resolved["exe"], "platform": resolved["platform"]},
+                    launch.compat_tool(resolved["platform"]))
+            if "error" in result:
+                # Retried on the next beat; told once, not every ten seconds.
+                if token not in self._finish_reported:
+                    self._finish_reported.add(token)
+                    await decky.emit("install_event", {"store": store, "id": gid, "title": title,
+                                                       "ok": False, "message": result["error"]})
+                continue
+            self._finish_reported.discard(token)
+            await decky.emit("install_event", {"store": store, "id": gid, "title": title,
+                                               "ok": True, "message": "Ready to play"})
+
+    _unresolvable = set()
+    _finish_reported = set()
+
     async def _request_loop(self):
         # Paths resolved once (store-env is a process spawn) and retried only until they resolve;
-        # the spool is a directory listing per poll, nothing more.
+        # the spool is a directory listing per poll, nothing more. Finished installs are looked
+        # for on a slower beat: completion is not something the user is staring at a tile for.
         p = None
+        tick = 0
         while True:
             try:
                 p = p or await asyncio.to_thread(paths.store_paths)
                 await self.take_install_requests(p)
+                if tick % FINISH_EVERY == 0:
+                    await self.finish_installs(p)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001 - one bad pass must not end the watch
-                decky.logger.info(f"install requests: {type(exc).__name__}")
+                decky.logger.info(f"install watch: {type(exc).__name__}")
+            tick += 1
             await asyncio.sleep(REQUEST_POLL)
 
     async def _main(self):

@@ -183,6 +183,8 @@ p = {"NOVADECK_STORE_HOME": str(tmp), "NOVADECK_STORE_UID": str(os.getuid()), "N
 main.install_requests.take = lambda pp: ["gog:shelf", "epic:installed", "gog:unknown"]
 main.locations.user_volumes = lambda user: [{"path": "/home/deck", "label": "Internal", "free": 1},
                                             {"path": "/run/media/deck/SD", "label": "SD", "free": 9}]
+unit = {"ActiveState": "inactive"}
+main.installs.unit_state = lambda: dict(unit)
 calls = []
 async def fake_install(self, store, gid, title, drive):
     calls.append((store, gid, title, drive))
@@ -205,6 +207,14 @@ asyncio.run(main.Plugin().take_install_requests(p))
 ev = [pl for e, pl in emitted if e == "install_event"]
 (ok if len(ev) == 1 and not ev[0]["ok"] and ev[0]["message"] == "another game is installing" else bad)(
     f"a refused install is still reported, with the reason ({ev})")
+
+emitted.clear(); calls.clear()
+unit.update(ActiveState="active", Description="novadeck-stores install gog:shelf")
+main.Plugin.install = fake_install
+asyncio.run(main.Plugin().take_install_requests(p))
+ev = [pl for e, pl in emitted if e == "install_event"]
+(ok if not calls and len(ev) == 1 and ev[0]["message"] == "Already installing" else bad)(
+    f"a second press on a tile already downloading says so and starts nothing ({calls}, {ev})")
 
 from novadeck_stores import locations
 vols = [{"path": "/a", "label": "Internal"}, {"path": "/b", "label": "SD"}]

@@ -92,9 +92,16 @@ def _u32(appid):
 
 
 def registry_appids(registry):
-    """The set of (unsigned) appids our registry claims."""
-    return {_u32(row["appid"]) for row in registry.values()
-            if isinstance(row, dict) and _u32(row.get("appid")) is not None}
+    """The set of (unsigned) appids our registry claims — each row's live appid AND any `retired`
+    ones: an entry replaced at the install transition whose removal Steam has not yet confirmed
+    is still ours to retry."""
+    out = set()
+    for row in registry.values():
+        if not isinstance(row, dict):
+            continue
+        retired = row.get("retired") if isinstance(row.get("retired"), list) else []
+        out |= {a for a in (_u32(x) for x in [row.get("appid"), *retired]) if a is not None}
+    return out
 
 
 def is_ours(entry, appids):
@@ -217,8 +224,13 @@ def orphan_report(vdf_bytes, registry, roots):
       registry_without_entry  a registry row whose appid has no entry in the file
     """
     entries = _file_entries(vdf_bytes)
-    appid_to_token = {_u32(row["appid"]): token for token, row in registry.items()
-                      if isinstance(row, dict) and _u32(row.get("appid")) is not None}
+    appid_to_token = {}
+    for token, row in registry.items():
+        if isinstance(row, dict):
+            retired = row.get("retired") if isinstance(row.get("retired"), list) else []
+            appid_to_token.update({_u32(a): token for a in retired if _u32(a) is not None})
+    appid_to_token.update({_u32(row["appid"]): token for token, row in registry.items()
+                           if isinstance(row, dict) and _u32(row.get("appid")) is not None})
     file_appids = {_u32(entry.get("appid")) for _, entry in entries}
     return {
         "healthy": [{**_summary(key, entry), "token": appid_to_token[_u32(entry.get("appid"))]}

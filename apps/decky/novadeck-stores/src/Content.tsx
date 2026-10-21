@@ -11,6 +11,7 @@ import {
 } from "@decky/ui";
 import { useEffect, useState } from "react";
 import { disconnectStore, getStatus, refreshStore, startConnect } from "./backend";
+import { LibrarySections } from "./Library";
 import { styles } from "./styles";
 import { STORE_LABELS, type State, type StoreId, type StoreStatus } from "./types";
 
@@ -269,6 +270,9 @@ export function Content() {
           </span>
         </NoteRow>
       </PanelSection>
+      {state !== null && !("error" in state) ? (
+        <LibrarySections connected={state.stores.filter((s) => s.connected).map((s) => s.store)} />
+      ) : null}
     </div>
   );
 }

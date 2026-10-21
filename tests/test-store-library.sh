@@ -290,6 +290,60 @@ asyncio.run(plugin.reassert_compat(p)); asyncio.run(asyncio.sleep(0))
 (ok if "compat" not in ops() else bad)("reassert_compat skips shelf tiles — the stub never runs through Proton")
 PY
 
+echo "== the slim panel's backend"
+pysuite "panel" <<'PY'
+import asyncio, json, os, pathlib, sys, tempfile, types
+sys.path.insert(0, sys.argv[1])
+
+def ok(m): print(f"  ok   {m}")
+def bad(m): print(f"  FAIL {m}")
+
+async def fake_emit(*a): pass
+sys.modules["decky"] = types.SimpleNamespace(logger=types.SimpleNamespace(info=lambda *a: None), emit=fake_emit)
+sys.path.insert(0, os.path.join(sys.argv[1], ".."))
+import main
+from novadeck_stores import settings
+
+tmp = pathlib.Path(tempfile.mkdtemp(prefix="store-library."))
+p = {"NOVADECK_STORE_HOME": str(tmp), "NOVADECK_STORE_UID": str(os.getuid()), "NOVADECK_STORE_USER": "deck"}
+main.paths.store_paths = lambda ensure=False: p
+settings.cli.write_as_user = lambda pp, path, text: (pathlib.Path(path).write_text(text), 0)[1]
+(tmp / "shortcuts.json").write_text(json.dumps({"epic:A": {"appid": 1, "title": "A", "state": "shelf"},
+                                                "gog:B": {"appid": 2, "title": "B", "exe": "/g/b"}}))
+main.installs.install_status = lambda pp: {"installs": [
+    {"store": "epic", "id": "A", "title": "A", "state": "downloading", "percent": 12.5},
+    {"store": "gog", "id": "B", "title": "B", "state": "installed"},
+    {"store": "gog", "id": "Z", "title": "Z", "state": "interrupted"}]}
+vols = [{"path": "/home/deck", "label": "Internal", "free": 1}, {"path": "/run/media/deck/SD", "label": "SD", "free": 2}]
+main.locations.user_volumes = lambda user: vols
+
+s = asyncio.run(main.Plugin().library_state())
+(ok if [i["tile"] for i in s["installs"]] == ["shelf", "installed", None] else bad)(
+    f"each activity row says what its tile is ({[i['tile'] for i in s['installs']]})")
+(ok if s["install_drive"] == "/home/deck" and len(s["drives"]) == 2 else bad)(
+    f"with no preference the install drive reads as Internal ({s['install_drive']})")
+r = asyncio.run(main.Plugin().set_install_drive("/run/media/deck/GONE"))
+(ok if "error" in r and not (tmp / "settings.json").exists() else bad)(f"an unmounted drive is refused, nothing saved ({r})")
+r = asyncio.run(main.Plugin().set_install_drive("/run/media/deck/SD"))
+s = asyncio.run(main.Plugin().library_state())
+(ok if r == {"install_drive": "/run/media/deck/SD"} and s["install_drive"] == "/run/media/deck/SD" else bad)(
+    f"a mounted drive is saved and read back ({r}, {s['install_drive']})")
+vols.pop()
+s = asyncio.run(main.Plugin().library_state())
+(ok if s["install_drive"] == "/home/deck" else bad)("a preferred card that is gone reads as Internal, not as a dead choice")
+(tmp / "settings.json").write_text("not json")
+(ok if settings.install_drive(p) is None else bad)("an unreadable settings file is no preference, never an error")
+PY
+
+echo "== the panel"
+SRC="$ROOT/apps/decky/novadeck-stores/src"
+grep -q '<LibrarySections' "$SRC/Content.tsx" \
+  && ok "the panel mounts the library + activity sections" \
+  || bad "Content.tsx does not mount LibrarySections"
+! grep -qE "call<[^>]*>\(\s*[\"']owned[\"']" "$SRC"/*.ts "$SRC"/*.tsx \
+  && ok "the panel never lists owned games — it is not a browser (the library is)" \
+  || bad "the panel calls 'owned': milestone 7 keeps game browsing in the Steam library"
+
 echo "== the bridge"
 BRIDGE="$ROOT/apps/decky/novadeck-stores/src/lib/shortcutBridge.ts"
 grep -q 'op: "collection"' "$BRIDGE" \

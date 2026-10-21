@@ -26,4 +26,18 @@ export const styles = `
         flex-direction: column;
         gap: 8px;
       }
+      /* Download progress under an Activity row. Thin, so a row with a download still reads as
+         a row and not as a progress widget. */
+      .novadeck-stores .novadeck-store-bar {
+        height: 4px;
+        margin-top: 6px;
+        border-radius: 2px;
+        background: rgba(255, 255, 255, 0.15);
+        overflow: hidden;
+      }
+      .novadeck-stores .novadeck-store-bar-fill {
+        height: 100%;
+        background: #1a9fff;
+        transition: width 0.5s linear;
+      }
 `;

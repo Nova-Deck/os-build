@@ -32,7 +32,7 @@ import decky
 import base64
 
 from novadeck_stores import (artwork, cdp, cli, connect, install_requests, installs, launch,
-                             library, library_sync, locations, paths, shortcuts, status)
+                             library, library_sync, locations, paths, settings, shortcuts, status)
 
 # Long enough to type an email and a password on the on-screen keyboard and clear a captcha;
 # short enough that a login the user walked away from does not poll for the rest of the session.
@@ -491,31 +491,80 @@ class Plugin:
     async def take_install_requests(self, p):
         """Act on every request the tile stub left. Each outcome is emitted as an install_event
         (a toast), because the stub has already exited and Steam shows nothing for a shortcut."""
-        tokens = await asyncio.to_thread(install_requests.take, p)
-        for token in tokens:
-            store, gid = token.split(":", 1)
-            row = (await asyncio.to_thread(shortcuts.read_registry, p)).get(token)
-            if not shortcuts.is_shelf(row):
-                # A stale or forged request: not a tile we made, or one already installed.
-                decky.logger.info(f"install request {token}: not a not-installed tile, ignored")
-                continue
-            unit = await asyncio.to_thread(installs.unit_state)
-            if unit.get("Description", "").removeprefix("novadeck-stores install ") == token \
-                    and unit["ActiveState"] in ("active", "activating", "reloading"):
-                # A second press on a tile that is already downloading.
-                await decky.emit("install_event", {"store": store, "id": gid, "title": row["title"],
-                                                   "ok": True, "message": "Already installing"})
-                continue
-            vol = locations.default_volume(
-                await asyncio.to_thread(locations.user_volumes, p["NOVADECK_STORE_USER"]))
-            if vol is None:
-                result = {"error": "no drive available"}
-            else:
-                result = await self.install(store, gid, row["title"], vol["path"])
-            ok = bool(result.get("started"))
-            await decky.emit("install_event", {
-                "store": store, "id": gid, "title": row["title"], "ok": ok,
-                "message": f"Installing to {vol['label']}" if ok else result.get("error", "failed")})
+        for token in await asyncio.to_thread(install_requests.take, p):
+            event = await self._install_tile(p, token)
+            if event is not None:
+                await decky.emit("install_event", event)
+
+    async def install_tile(self, store, gid):
+        """The panel's Resume: exactly what pressing the tile does. Returns the install_event."""
+        try:
+            p = await asyncio.to_thread(paths.store_paths)
+        except (OSError, subprocess.SubprocessError) as exc:
+            return {"ok": False, "message": f"cannot resolve credential paths: {type(exc).__name__}"}
+        event = await self._install_tile(p, f"{store}:{gid}")
+        return event or {"ok": False, "message": "not a NovaDeck tile waiting to install"}
+
+    async def _install_tile(self, p, token):
+        """Start (or resume) the install behind one shelf tile. The event to show, or None for a
+        request that names no shelf tile of ours (stale or forged — logged, never acted on)."""
+        if not shortcuts.TOKEN.fullmatch(token):
+            return None
+        store, gid = token.split(":", 1)
+        row = (await asyncio.to_thread(shortcuts.read_registry, p)).get(token)
+        if not shortcuts.is_shelf(row):
+            decky.logger.info(f"install request {token}: not a not-installed tile, ignored")
+            return None
+        event = {"store": store, "id": gid, "title": row["title"]}
+        unit = await asyncio.to_thread(installs.unit_state)
+        if unit.get("Description", "").removeprefix("novadeck-stores install ") == token \
+                and unit["ActiveState"] in ("active", "activating", "reloading"):
+            # A second press on a tile that is already downloading.
+            return {**event, "ok": True, "message": "Already installing"}
+        record = (await asyncio.to_thread(installs.read_records, p)).get(token, {})
+        vols = await asyncio.to_thread(locations.user_volumes, p["NOVADECK_STORE_USER"])
+        vol = locations.install_volume(vols, store, record.get("path"),
+                                       await asyncio.to_thread(settings.install_drive, p))
+        if vol is None:
+            return {**event, "ok": False, "message": "the drive it was installing to is not available"
+                    if record.get("path") else "no drive available"}
+        result = await self.install(store, gid, row["title"], vol["path"])
+        if result.get("started"):
+            return {**event, "ok": True, "message": f"Installing to {vol['label']}"}
+        return {**event, "ok": False, "message": result.get("error", "failed")}
+
+    async def library_state(self):
+        """Everything the slim panel shows below the accounts, in one call so its poll is one
+        round trip: the install activity, the registry's installed games, the drives and the
+        preferred one. Read-only, no lock (like install_status)."""
+        try:
+            p = await asyncio.to_thread(paths.store_paths)
+            status_ = await asyncio.to_thread(installs.install_status, p)
+            registry = await asyncio.to_thread(shortcuts.read_registry, p)
+            drives = await asyncio.to_thread(locations.user_volumes, p["NOVADECK_STORE_USER"])
+            drive = await asyncio.to_thread(settings.install_drive, p)
+        except (OSError, subprocess.SubprocessError) as exc:
+            return {"error": f"status failed: {type(exc).__name__}"}
+        if "error" in status_:
+            return status_
+        tiles = {t: ("shelf" if shortcuts.is_shelf(r) else "installed")
+                 for t, r in registry.items() if isinstance(r, dict)}
+        installs_ = [{**i, "tile": tiles.get(f"{i['store']}:{i['id']}")} for i in status_["installs"]]
+        return {"installs": installs_, "drives": drives,
+                "install_drive": locations.default_volume(drives, drive)["path"] if drives else None}
+
+    async def set_install_drive(self, drive):
+        """Remember where a tile press installs. Only a drive that is mounted now is accepted."""
+        try:
+            p = await asyncio.to_thread(paths.store_paths)
+            vols = await asyncio.to_thread(locations.user_volumes, p["NOVADECK_STORE_USER"])
+            if not any(v["path"] == drive for v in vols):
+                return {"error": "that drive is not available"}
+            if not await asyncio.to_thread(settings.set_install_drive, p, drive):
+                return {"error": "the setting could not be saved"}
+        except (OSError, subprocess.SubprocessError) as exc:
+            return {"error": f"cannot save the setting: {type(exc).__name__}"}
+        return {"install_drive": drive}
 
     # -- milestone 7: a finished install turns its shelf tile into the model-B entry --
 

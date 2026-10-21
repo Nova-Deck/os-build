@@ -28,3 +28,25 @@ export type State = { stores: StoreStatus[] } | { error: string };
 export type ConnectStart = { url: string } | { error: string };
 
 export type AccountResult = StoreStatus | { error: string };
+
+// One install record as main.py library_state reports it. `state` is derived from the CLI's own
+// artifacts on every read (installs.install_status); `tile` says what the library shows for it.
+export type InstallItem = {
+  store: StoreId;
+  id: string;
+  title: string;
+  state: "downloading" | "installed" | "interrupted";
+  percent?: number;
+  tile?: "shelf" | "installed" | null;
+};
+
+export type Drive = { path: string; label: string; free: number };
+
+export type LibraryState =
+  | { installs: InstallItem[]; drives: Drive[]; install_drive: string | null }
+  | { error: string };
+
+export type SyncResult = { added: number; tiles: number; warning?: string } | { error: string };
+
+// What install_tile answers: the same event a tile press toasts.
+export type InstallEvent = { ok: boolean; message: string };

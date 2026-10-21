@@ -43,6 +43,17 @@ def default_volume(vols, preferred=None):
     return next((v for v in vols if v["path"] == preferred), vols[0] if vols else None)
 
 
+def install_volume(vols, store, record_path=None, preferred=None):
+    """The drive an install goes to: the one a partial download already sits on, so a resume
+    continues it rather than starting over elsewhere; else the default drive. A partial on a
+    card that is not inserted gives None — starting over on another drive would silently abandon
+    it."""
+    if record_path:
+        parent = os.path.dirname(record_path)
+        return next((v for v in vols if game_root(v["path"], store) == parent), None)
+    return default_volume(vols, preferred)
+
+
 def game_root(volume, store):
     if store not in STORE_DIRS:
         raise ValueError(f"unknown store {store!r}")

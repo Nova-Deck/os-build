@@ -176,7 +176,8 @@ sys.path.insert(0, os.path.join(sys.argv[1], ".."))
 import main
 
 tmp = pathlib.Path(tempfile.mkdtemp(prefix="store-requests."))
-p = {"NOVADECK_STORE_HOME": str(tmp), "NOVADECK_STORE_UID": str(os.getuid()), "NOVADECK_STORE_USER": "deck"}
+p = {"NOVADECK_STORE_HOME": str(tmp), "NOVADECK_STORE_UID": str(os.getuid()), "NOVADECK_STORE_USER": "deck",
+     "NOVADECK_STORE_INSTALLS": str(tmp / "installs.json")}
 (tmp / "shortcuts.json").write_text(json.dumps({
     "gog:shelf": {"appid": 1, "title": "Shelf Game", "state": "shelf"},
     "epic:installed": {"appid": 2, "title": "Installed", "exe": "/g/x.exe", "platform": "windows"}}))
@@ -215,6 +216,38 @@ asyncio.run(main.Plugin().take_install_requests(p))
 ev = [pl for e, pl in emitted if e == "install_event"]
 (ok if not calls and len(ev) == 1 and ev[0]["message"] == "Already installing" else bad)(
     f"a second press on a tile already downloading says so and starts nothing ({calls}, {ev})")
+unit.update(ActiveState="inactive", Description="")
+
+# The drive preference (settings.json, the user's file) steers a fresh install.
+calls.clear()
+(tmp / "settings.json").write_text(json.dumps({"install_drive": "/run/media/deck/SD"}))
+asyncio.run(main.Plugin().take_install_requests(p))
+(ok if calls and calls[0][3] == "/run/media/deck/SD" else bad)(f"a fresh install goes to the preferred drive ({calls})")
+
+# A partial download continues where it is, whatever the preference says.
+calls.clear()
+(tmp / "installs.json").write_text(json.dumps({"gog:shelf": {
+    "store": "gog", "id": "shelf", "title": "Shelf Game", "path": "/home/deck/Games/GOG/Shelf", "state": "installing"}}))
+asyncio.run(main.Plugin().take_install_requests(p))
+(ok if calls and calls[0][3] == "/home/deck" else bad)(f"a resume stays on the drive the partial is on ({calls})")
+
+# ...and when that drive is gone, nothing starts elsewhere.
+calls.clear(); emitted.clear()
+(tmp / "installs.json").write_text(json.dumps({"gog:shelf": {
+    "store": "gog", "id": "shelf", "title": "Shelf Game", "path": "/run/media/deck/OLD/Games/GOG/Shelf"}}))
+asyncio.run(main.Plugin().take_install_requests(p))
+ev = [pl for e, pl in emitted if e == "install_event"]
+(ok if not calls and ev and "not available" in ev[0]["message"] else bad)(
+    f"a partial on a missing card is not silently restarted on another drive ({calls}, {ev})")
+
+# The panel's Resume is the same path as a tile press.
+main.paths.store_paths = lambda ensure=False: p
+calls.clear()
+(tmp / "installs.json").write_text("{}")
+res = asyncio.run(main.Plugin().install_tile("gog", "shelf"))
+(ok if calls and res["ok"] else bad)(f"install_tile starts the shelf tile's install ({res})")
+res = asyncio.run(main.Plugin().install_tile("epic", "installed"))
+(ok if not res["ok"] and len(calls) == 1 else bad)(f"install_tile refuses a game that is not a shelf tile ({res})")
 
 from novadeck_stores import locations
 vols = [{"path": "/a", "label": "Internal"}, {"path": "/b", "label": "SD"}]

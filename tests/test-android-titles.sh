@@ -405,7 +405,11 @@ p = msg["params"]; e = p["expression"]
 assert msg["method"] == "Runtime.evaluate" and p["awaitPromise"] and p["returnByValue"]
 assert "const appid = 2902312254," in e
 assert '"Google Play"' in e
-assert "collectionStore.userCollections" in e and "NewUnsavedCollection" in e and "AsDragDropCollection().AddApps" in e
+assert "GetCollectionIDByUserTag(name)" in e and "NewUnsavedCollection" in e and "AsDragDropCollection().AddApps" in e
+# Reading the getter at all can poison Steam's library until a restart (HW 2026-10-21); only the
+# comment explaining why may name it.
+assert "collectionStore.userCollections." not in e.replace("NEVER collectionStore.userCollections:", ""), "userCollections is read"
+assert 'GetCollection("type-games")' in e, "no wait for the collection store to hydrate"
 assert "SteamClient.Apps.SetCustomArtworkForApp(appid, data, ext, type)" in e
 assert "appStore.GetAppOverviewByAppID(appid)" in e
 m = re.search(r"art = (\[.*?\]), iconPath = (\".*?\");", e, re.S)

@@ -1,4 +1,4 @@
-// The five SteamClient calls behind alien-game library entries, and nothing else.
+// The SteamClient calls behind alien-game library entries, plus the [NovaDeck] collections.
 //
 // All DECISIONS (templates, ownership, the registry, refusals) live in the backend
 // (novadeck_stores/shortcuts.py). This file exists because SteamClient is reachable only from
@@ -16,10 +16,71 @@ export type ShortcutOp =
       appid: number;
       images: { assetType: number; base64: string; imageType: "jpg" | "png" }[];
     }
-  | { op: "compat"; req: number; appid: number; tool: string };
+  | { op: "compat"; req: number; appid: number; tool: string }
+  | { op: "collection"; req: number; name: string; add: number[]; remove: number[] };
+
+// Steam's collection store and app store, the two globals the library's collections live in. Only
+// the members used here are typed; the shapes match what unifideck's collection-manager drives.
+type AppOverview = { appid: number };
+type Collection = {
+  AsDragDropCollection: () => {
+    AddApps: (overviews: AppOverview[]) => void;
+    RemoveApps: (overviews: AppOverview[]) => void;
+  };
+  Save: () => Promise<void>;
+};
+type CollectionStore = {
+  GetCollectionIDByUserTag: (tag: string) => string | null;
+  GetCollection: (id: string) => Collection | undefined;
+  NewUnsavedCollection: (tag: string, filter: unknown, overviews: AppOverview[]) => Collection | undefined;
+};
+type AppStore = { GetAppOverviewByAppID: (appid: number) => AppOverview | null };
+
+// A shortcut added a moment ago may not have an overview yet; the collection can only take one
+// that does. Bounded, so a missing app is an error and not a hang.
+const OVERVIEW_WAIT_MS = 5000;
+
+async function overviewsFor(appStore: AppStore, appids: number[]): Promise<AppOverview[]> {
+  const deadline = Date.now() + OVERVIEW_WAIT_MS;
+  for (;;) {
+    const found = appids.map((id) => appStore.GetAppOverviewByAppID(id >>> 0));
+    if (found.every(Boolean) || Date.now() > deadline) {
+      const missing = appids.filter((_, i) => !found[i]);
+      if (missing.length) throw new Error(`no app overview for ${missing.join(",")}`);
+      return found as AppOverview[];
+    }
+    await new Promise((r) => setTimeout(r, 250));
+  }
+}
+
+async function applyCollection(name: string, add: number[], remove: number[]): Promise<void> {
+  const w = window as unknown as { collectionStore?: CollectionStore; appStore?: AppStore };
+  const cs = w.collectionStore;
+  const appStore = w.appStore;
+  if (!cs?.GetCollectionIDByUserTag || !cs?.NewUnsavedCollection || !appStore?.GetAppOverviewByAppID) {
+    throw new Error("collectionStore/appStore unavailable");
+  }
+  const id = cs.GetCollectionIDByUserTag(name);
+  let c = typeof id === "string" ? cs.GetCollection(id) : undefined;
+  if (!c) {
+    if (add.length === 0) return; // never create an empty collection just to remove from it
+    c = cs.NewUnsavedCollection(name, undefined, []);
+    if (!c) throw new Error(`could not create collection ${name}`);
+  }
+  // Removals first, and only for apps that still exist: a deregistered shortcut is already gone.
+  const leaving = remove.map((a) => appStore.GetAppOverviewByAppID(a >>> 0)).filter(Boolean) as AppOverview[];
+  if (leaving.length) c.AsDragDropCollection().RemoveApps(leaving);
+  if (add.length) c.AsDragDropCollection().AddApps(await overviewsFor(appStore, add));
+  await c.Save();
+}
 
 export async function executeShortcutOp(op: ShortcutOp): Promise<void> {
   try {
+    if (op.op === "collection") {
+      await applyCollection(op.name, op.add, op.remove);
+      await call("shortcut_result", op.req, null, null);
+      return;
+    }
     const apps = (window as any).SteamClient?.Apps;
     if (!apps?.AddShortcut || !apps?.RemoveShortcut) {
       throw new Error("SteamClient.Apps unavailable");

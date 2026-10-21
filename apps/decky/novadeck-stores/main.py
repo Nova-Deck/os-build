@@ -32,7 +32,7 @@ import decky
 import base64
 
 from novadeck_stores import (artwork, cdp, cli, connect, install_requests, installs, launch,
-                             library, locations, paths, shortcuts, status)
+                             library, library_sync, locations, paths, shortcuts, status)
 
 # Long enough to type an email and a password on the on-screen keyboard and clear a captcha;
 # short enough that a login the user walked away from does not poll for the rest of the session.
@@ -63,6 +63,8 @@ SHORTCUT_TIMEOUT = 30
 # How often the tile stub's install requests are looked for. The stub waits 10 s for its request
 # to be taken (store-launch TAKE_TIMEOUT), so this must stay well under that.
 REQUEST_POLL = 1.0
+# Seconds between one tile's artwork and the next in the background pass after a sync.
+ARTWORK_PACE = 1.0
 
 
 class Plugin:
@@ -119,6 +121,8 @@ class Plugin:
         result = await self._run_cli("exchange", store, p, cli.exchange, store, code, p)
         if result["connected"]:
             await decky.emit("connect_done", store, True, True, "Connected")
+            # Library-first: a fresh account's games appear as tiles without a second action.
+            asyncio.create_task(self.sync_library(store))
         else:
             await decky.emit("connect_done", store, False, True, "Sign-in failed")
 
@@ -402,6 +406,58 @@ class Plugin:
             except ValueError as exc:
                 reports.append({"file": path, "error": f"unreadable: {exc}"})
         return {"registry": registry, "files": reports}
+
+    # -- milestone 7: the whole owned library as Steam tiles --
+
+    async def sync_library(self, store):
+        """Give every installable owned title a tile and re-assert the [NovaDeck] collections.
+        {"added": N, "tiles": total} or {"error": ...}. Idempotent; artwork for new tiles follows
+        in the background and never holds the sync up."""
+        if store not in connect.STORES:
+            return {"error": f"unknown store {store!r}"}
+        try:
+            p = await asyncio.to_thread(paths.store_paths)
+        except (OSError, subprocess.SubprocessError) as exc:
+            return {"error": f"cannot resolve credential paths: {type(exc).__name__}"}
+        async with _LOCKS[store]:
+            owned = await asyncio.to_thread(library.owned, store, p)
+        if "error" in owned:
+            return owned
+        added = []
+        async with _SHORTCUT_LOCK:
+            registry = await asyncio.to_thread(shortcuts.read_registry, p)
+            for t in library_sync.to_shelve(store, owned["titles"], registry):
+                result = await self._shortcut_roundtrip(
+                    shortcuts.shelf_payload(next(self._shortcut_seq), store, t["id"], t["title"]))
+                if "error" in result:
+                    decky.logger.info(f"sync {store}:{t['id']}: {result['error']}")
+                    continue
+                registry[f"{store}:{t['id']}"] = {"appid": int(result["appid"]), "title": t["title"],
+                                                  "state": "shelf"}
+                # Written after EVERY add: a tile whose appid we never recorded is one we can
+                # never touch again, and the next sync would add it twice.
+                if not await asyncio.to_thread(shortcuts.write_registry, p, registry):
+                    return {"error": "a tile was created but the registry could not be written"}
+                added.append((t["id"], int(result["appid"])))
+            warnings = []
+            for op in library_sync.collection_ops(store, registry):
+                result = await self._shortcut_roundtrip(
+                    library_sync.collection_payload(next(self._shortcut_seq), op))
+                if "error" in result:
+                    warnings.append(f"{op['name']}: {result['error']}")
+        decky.logger.info(f"sync {store}: {len(added)} added, {warnings or 'collections ok'}")
+        if added:
+            asyncio.create_task(self._artwork_pass(store, added))
+        tiles = sum(1 for k in registry if k.startswith(f"{store}:"))
+        out = {"added": len(added), "tiles": tiles}
+        return {**out, "warning": "; ".join(warnings)} if warnings else out
+
+    async def _artwork_pass(self, store, tiles):
+        """Art for freshly added tiles, one at a time with a pause between: a 55-title library is
+        165 downloads, and the sync that started this must not flood the network or SteamUI."""
+        for gid, appid in tiles:
+            await self.apply_artwork(store, gid, appid)
+            await asyncio.sleep(ARTWORK_PACE)
 
     # -- milestone 7: a not-installed tile's Play becomes an install --
 

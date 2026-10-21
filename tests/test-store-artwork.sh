@@ -124,6 +124,26 @@ def raising(req, timeout=0):
     raise http.client.InvalidURL("URL can't contain control characters")
 (ok if artwork.fetch_image("https://cdn/a b.jpg", opener=raising) is None else bad)(
     "http.client's own errors (InvalidURL) resolve to None instead of escaping")
+logged = []
+artwork.fetch_image("https://cdn/a.jpg", opener=raising, log=logged.append)
+(ok if logged and "InvalidURL" in logged[0] else bad)(f"a failed fetch says why when given a logger ({logged})")
+
+# HW 2026-10-21: Decky's bundled OpenSSL does not find the system trust store. The context names
+# the system bundle explicitly — and verification stays on.
+import ssl
+tmpd = tempfile.mkdtemp()
+ctx = artwork.tls_context(bundles=(os.path.join(tmpd, "absent.crt"),))
+(ok if ctx.verify_mode == ssl.CERT_REQUIRED and ctx.check_hostname else bad)(
+    "the TLS context verifies certificates and hostnames, with or without a bundle file")
+sysb = next((b for b in artwork.CA_BUNDLES if os.path.isfile(b)), None)
+if sysb:
+    ctx = artwork.tls_context()
+    (ok if ctx.cert_store_stats()["x509_ca"] > 0 else bad)(f"the system CA bundle is loaded ({sysb})")
+else:
+    print("  skip no system CA bundle on this host")
+src = open(artwork.__file__).read()
+(ok if src.count("context=tls_context()") == 2 else bad)(
+    "both https paths (image fetch and GOG GamesDB) use the explicit trust store")
 PY
 
 echo "== the backend contract"

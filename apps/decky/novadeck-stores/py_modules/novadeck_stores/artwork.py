@@ -15,6 +15,7 @@ apply_artwork. The entry keeps its name tile; art is the bonus.
 import http.client
 import json
 import os
+import ssl
 import urllib.parse
 import urllib.request
 
@@ -89,7 +90,7 @@ def _gamesdb_url(entry, ext):
 
 def _default_fetch_json(url):
     req = urllib.request.Request(url, headers={"User-Agent": "novadeck"})
-    with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+    with urllib.request.urlopen(req, timeout=TIMEOUT, context=tls_context()) as resp:
         return json.loads(resp.read(MAX_BYTES).decode("utf-8", "replace"))
 
 
@@ -118,7 +119,24 @@ def store_urls(store, gid, p):
     return {}
 
 
-def fetch_image(url, opener=urllib.request.urlopen):
+# The system CA bundle, named explicitly. The plugin runs in Decky's PyInstaller bundle, whose own
+# OpenSSL does not look in the system's trust store: every https fetch failed there with
+# CERTIFICATE_VERIFY_FAILED ("unable to get local issuer certificate", HW 2026-10-21) while the
+# same code passed under the system python. Verification stays ON — this only says where the
+# roots are.
+CA_BUNDLES = ("/etc/ssl/certs/ca-certificates.crt", "/etc/ssl/cert.pem")
+
+
+def tls_context(bundles=CA_BUNDLES):
+    cafile = next((b for b in bundles if os.path.isfile(b)), None)
+    return ssl.create_default_context(cafile=cafile)
+
+
+def _open(url, timeout):
+    return urllib.request.urlopen(url, timeout=timeout, context=tls_context())
+
+
+def fetch_image(url, opener=_open, log=None):
     """(bytes, 'jpg'|'png') or None. The bytes are untrusted: https only, read incrementally to a
     hard cap so a hostile length cannot exhaust memory, and the leading bytes must be a real JPEG
     or PNG signature before anything is handed back for the client."""
@@ -134,7 +152,11 @@ def fetch_image(url, opener=urllib.request.urlopen):
             data = resp.read(MAX_BYTES + 1)
     # HTTPException too: InvalidURL and a malformed response are neither OSError nor ValueError,
     # and one escaping here ended the whole background art pass at the first such tile.
-    except (OSError, ValueError, http.client.HTTPException):
+    except (OSError, ValueError, http.client.HTTPException) as exc:
+        # Still None — art never blocks — but say why: a TLS or network fault inside Decky's
+        # bundled Python looks exactly like "no art" otherwise.
+        if log:
+            log(f"artwork fetch failed: {type(exc).__name__}: {exc}")
         return None
     if not isinstance(data, bytes) or len(data) > MAX_BYTES:
         return None

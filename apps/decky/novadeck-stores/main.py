@@ -390,7 +390,7 @@ class Plugin:
             urls = await asyncio.to_thread(artwork.store_urls, store, gid, p)
             images = []
             for kind, url in urls.items():
-                got = await asyncio.to_thread(artwork.fetch_image, url)
+                got = await asyncio.to_thread(artwork.fetch_image, url, log=decky.logger.info)
                 if got is None:
                     continue
                 data, image_type = got

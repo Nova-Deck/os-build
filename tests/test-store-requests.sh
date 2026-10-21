@@ -240,6 +240,22 @@ ev = [pl for e, pl in emitted if e == "install_event"]
 (ok if not calls and ev and "not available" in ev[0]["message"] else bad)(
     f"a partial on a missing card is not silently restarted on another drive ({calls}, {ev})")
 
+# One request that blows up neither drops the rest of the batch nor goes unsaid.
+calls.clear(); emitted.clear()
+(tmp / "installs.json").write_text("{}")
+real_tile = main.Plugin._install_tile
+async def flaky(self, pp, token):
+    if token == "epic:boom":
+        raise OSError("disk")
+    return await real_tile(self, pp, token)
+main.Plugin._install_tile = flaky
+main.install_requests.take = lambda pp: ["epic:boom", "gog:shelf"]
+asyncio.run(main.Plugin().take_install_requests(p))
+main.Plugin._install_tile = real_tile
+ev = [pl for e, pl in emitted if e == "install_event"]
+(ok if len(calls) == 1 and [x["ok"] for x in ev] == [False, True] else bad)(
+    f"a failing request is reported and the next one still installs ({calls}, {ev})")
+
 # The panel's Resume is the same path as a tile press.
 main.paths.store_paths = lambda ensure=False: p
 calls.clear()

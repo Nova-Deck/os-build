@@ -40,14 +40,21 @@ type AppStore = { GetAppOverviewByAppID: (appid: number) => AppOverview | null }
 // that does. Bounded, so a missing app is an error and not a hang.
 const OVERVIEW_WAIT_MS = 5000;
 
-async function overviewsFor(appStore: AppStore, appids: number[]): Promise<AppOverview[]> {
+// The overviews that exist, and the appids that never got one. A missing one (a tile the user
+// deleted in Steam) must not keep the healthy tiles out of the collection, so it is reported, not
+// thrown.
+async function overviewsFor(
+  appStore: AppStore,
+  appids: number[],
+): Promise<{ found: AppOverview[]; missing: number[] }> {
   const deadline = Date.now() + OVERVIEW_WAIT_MS;
   for (;;) {
     const found = appids.map((id) => appStore.GetAppOverviewByAppID(id >>> 0));
     if (found.every(Boolean) || Date.now() > deadline) {
-      const missing = appids.filter((_, i) => !found[i]);
-      if (missing.length) throw new Error(`no app overview for ${missing.join(",")}`);
-      return found as AppOverview[];
+      return {
+        found: found.filter(Boolean) as AppOverview[],
+        missing: appids.filter((_, i) => !found[i]),
+      };
     }
     await new Promise((r) => setTimeout(r, 250));
   }
@@ -70,8 +77,10 @@ async function applyCollection(name: string, add: number[], remove: number[]): P
   // Removals first, and only for apps that still exist: a deregistered shortcut is already gone.
   const leaving = remove.map((a) => appStore.GetAppOverviewByAppID(a >>> 0)).filter(Boolean) as AppOverview[];
   if (leaving.length) c.AsDragDropCollection().RemoveApps(leaving);
-  if (add.length) c.AsDragDropCollection().AddApps(await overviewsFor(appStore, add));
+  const { found, missing } = add.length ? await overviewsFor(appStore, add) : { found: [], missing: [] };
+  if (found.length) c.AsDragDropCollection().AddApps(found);
   await c.Save();
+  if (missing.length) throw new Error(`no app overview for ${missing.join(",")} (the rest were added)`);
 }
 
 export async function executeShortcutOp(op: ShortcutOp): Promise<void> {

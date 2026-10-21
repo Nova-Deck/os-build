@@ -284,6 +284,63 @@ add = next(pl for e, pl in emitted if e == "shortcut_op" and pl["op"] == "add")
     f"an uninstalled game goes back on the shelf as a stub tile ({res}, {row})")
 (ok if "compat" not in ops() and "remove" in ops() else bad)(f"no compat tool on the shelf tile; the game entry is removed ({ops()})")
 
+# Review fixes (2026-10-21).
+# A registry that cannot be written after an add: the just-made entry is removed again.
+emitted.clear()
+reg_path.write_text(json.dumps({"epic:F": {"appid": 600, "title": "Fox", "state": "shelf"}}))
+records["epic:F"] = {"store": "epic", "id": "F", "path": "/g/F"}; state["epic:F"] = "installed"
+main.launch.resolve_target = lambda store, gid, pp, rec: {"exe": f"/g/{gid}/g.exe", "startdir": f"/g/{gid}", "platform": "windows"}
+real_write = shortcuts.cli.write_as_user
+shortcuts.cli.write_as_user = lambda pp, path, text: 1
+asyncio.run(plugin.finish_installs(p))
+shortcuts.cli.write_as_user = real_write
+new = next(pl["appid"] for e, pl in emitted if e == "shortcut_op" and pl["op"] == "remove")
+added = [pl for e, pl in emitted if e == "shortcut_op" and pl["op"] == "add"]
+(ok if len(added) == 1 and new >= 4000000000 and reg()["epic:F"]["appid"] == 600 else bad)(
+    f"an unrecordable new entry is removed again; the shelf row is untouched ({new}, {reg()['epic:F']})")
+
+# The state is re-checked under the lock: an uninstall that landed while finish waited wins.
+emitted.clear()
+reg_path.write_text(json.dumps({"epic:G": {"appid": 700, "title": "Golf", "state": "shelf"}}))
+records.clear(); records["epic:G"] = {"store": "epic", "id": "G", "path": "/g/G"}; state.clear(); state["epic:G"] = "installed"
+real_resolve = main.launch.resolve_target
+def resolve_then_uninstall(store, gid, pp, rec):
+    records.clear()  # the uninstall deletes the record while finish is between snapshot and lock
+    return real_resolve(store, gid, pp, rec)
+main.launch.resolve_target = resolve_then_uninstall
+asyncio.run(plugin.finish_installs(p))
+main.launch.resolve_target = real_resolve
+(ok if not ops() and shortcuts.is_shelf(reg()["epic:G"]) else bad)(
+    f"a game uninstalled while finish waited is not resurrected ({ops()})")
+
+# A failed swap back to the shelf after an uninstall is marked and retried by the next sync.
+emitted.clear()
+reg_path.write_text(json.dumps({"gog:H": {"appid": 800, "title": "Hotel", "exe": "/g/H/h.exe", "platform": "windows"}}))
+refuse.add("add")
+res = asyncio.run(plugin.uninstall("gog", "H"))
+refuse.clear()
+(ok if "warning" in res and reg()["gog:H"].get("state") == "pending_shelf" else bad)(
+    f"a failed swap back leaves the row pending_shelf, not 'installed' ({res}, {reg()['gog:H']})")
+main.library.owned = lambda store, pp: {"titles": []}
+asyncio.run(plugin.sync_library("gog"))
+(ok if shortcuts.is_shelf(reg()["gog:H"]) and reg()["gog:H"]["appid"] != 800 else bad)(
+    f"the next sync finishes the swap back to the shelf ({reg()['gog:H']})")
+
+# A SteamUI that does not answer ends the sync at the first timeout instead of N x 30 s.
+emitted.clear()
+async def no_answer(self, payload): return {"error": main.NO_ANSWER}
+real_rt = main.Plugin._shortcut_roundtrip
+main.Plugin._shortcut_roundtrip = no_answer
+main.library.owned = lambda store, pp: {"titles": [{"id": f"N{i}", "title": f"N{i}", "installable": True} for i in range(5)]}
+calls = []
+async def counting(self, payload):
+    calls.append(payload["op"]); return {"error": main.NO_ANSWER}
+main.Plugin._shortcut_roundtrip = counting
+res = asyncio.run(plugin.sync_library("epic"))
+main.Plugin._shortcut_roundtrip = real_rt
+(ok if res == {"error": main.NO_ANSWER} and calls == ["add"] else bad)(
+    f"the sync stops at the first unanswered op ({res}, {calls})")
+
 # Boot re-assert never puts Proton on a shelf tile.
 emitted.clear()
 asyncio.run(plugin.reassert_compat(p)); asyncio.run(asyncio.sleep(0))

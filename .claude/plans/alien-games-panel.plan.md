@@ -121,6 +121,25 @@ presses a tile and sees nothing — the exact crappy UX we are escaping. Mitigat
 | Library clutter in "all games" | Medium | The `[NovaDeck]` collections are the containment; consider hiding not-installed from "all games" if Steam allows |
 | The install-only stub drifts toward launching | — | Hard rule: the stub installs and exits; launching is only ever the model-B entry |
 
+## Build state (2026-10-21) — tasks 1–5 BUILT, offline-green; task 6 (HW walkthrough) owed
+
+| Task | Commit | What landed / decided while building |
+|---|---|---|
+| 1 ownership | d045869 | `is_ours` = appid ∈ registry, compared **unsigned** both sides (live API may hand back a signed int). Managed-root survives only as `orphan_unregistered`. |
+| 2 stub | b70821d | Stub runs as deck, install unit is root's → **request spool**: stub creates `<store home>/requests/<token>.install` (filename is the message), waits 10 s for the backend to unlink it, else withdraws + logs + exit 69. Backend polls 1 s, opens the spool O_NOFOLLOW (user-owned dir), unlinks relative to the dirfd, acts only on a registry **shelf** row. No drive picker on a press → default drive (pref in `settings.json`, else Internal). |
+| 3 sync | 1e13ecf | `sync_library` after every sign-in + on demand. Registry written after EVERY add. ThirdPartyManagedApp titles get no tile. Collections re-asserted in full each sync: `[NovaDeck] Epic`/`GOG` + **`[NovaDeck] Not Installed`** (this replaces the plan's "Not Installed" tag — modern Steam tags ARE user collections). Bridge `collection` op waits ≤5 s for a fresh shortcut's overview. Art: paced background pass. |
+| 4 transition | a0f17d5 | **remove+re-add, not SetShortcutExe** (in-place persistence still unverified). ADD FIRST, then remove; old appid rides as `retired` until Steam confirms (retried on the next sync; still ours by membership). Uninstall swaps back to a shelf tile. Fixed: `reassert_compat` would have put Proton on every shelf tile. |
+| 5 panel | f522281 | Library (Sync, Install-to dropdown when >1 drive) + Activity (download % + Stop; paused → Resume/Remove; installed → Uninstall). Resume == a tile press; a partial resumes on the drive it is on, never restarted elsewhere. |
+
+**Open for the user:** Steam user collections live in one blob Steam Cloud syncs account-wide
+(unifideck's collection-manager.ts documents this and made collections opt-in), so the
+`[NovaDeck]` collections will appear — empty — on the user's other Steam devices.
+
+**Task 6 gate checklist additions** (beyond the walkthrough above): collectionStore AddApps/Save
+persist on arm64; a shelf tile's Play runs the stub with argv[1] = token; the install_event toast
+shows with the QAM closed; the swap's RemoveShortcut on the shelf appid; `SetShortcutExe` is
+still unprobed — only worth probing if appid churn proves visible.
+
 ## Acceptance
 
 - [ ] Connecting a store makes its owned games appear as Steam tiles in a `[NovaDeck]` collection

@@ -56,16 +56,7 @@ got = ls.to_shelve("epic", titles, registry)
 (ok if ls.to_shelve("epic", titles, {f"epic:{t['id']}": {} for t in got} | registry) == [] else bad)(
     "a second sync adds nothing — re-sync is idempotent")
 
-reg = {"epic:A": {"appid": 1, "state": "shelf"}, "epic:B": {"appid": 2, "exe": "/g/b.exe"},
-       "gog:C": {"appid": 3, "state": "shelf"}, "epic:junk": "x"}
-ops = ls.collection_ops("epic", reg)
-(ok if ops[0] == {"name": "[NovaDeck] Epic", "add": [1, 2], "remove": []} else bad)(
-    f"the store collection holds every registered appid of the store ({ops[0]})")
-(ok if ops[1] == {"name": "[NovaDeck] Not Installed", "add": [1], "remove": [2]} else bad)(
-    f"Not Installed holds the store's shelf tiles and drops its installed entries ({ops[1]})")
-(ok if 3 not in ops[0]["add"] + ops[1]["add"] + ops[1]["remove"] else bad)(
-    "the other store's rows are left alone")
-(ok if ls.collection_ops("gog", reg)[0]["name"] == "[NovaDeck] GOG" else bad)("GOG's collection is [NovaDeck] GOG")
+(ok if not hasattr(ls, "collection_ops") else bad)("nothing builds collections — the library tabs list the games")
 PY
 
 echo "== the backend sync"
@@ -128,16 +119,14 @@ adds = [pl for e, pl in emitted if e == "shortcut_op" and pl["op"] == "add"]
 (ok if all(a["exe"] == "/usr/lib/novadeck/store-launch" and a["options"] == f"epic:{a['name'][0]}" for a in adds) else bad)(
     f"tiles run the stub with their token ({[(a['exe'], a['options']) for a in adds]})")
 (ok if len(writes) == 2 else bad)(f"the registry is written after EVERY add, not once at the end ({len(writes)} writes)")
-cols = [pl for e, pl in emitted if e == "shortcut_op" and pl["op"] == "collection"]
-(ok if [c["name"] for c in cols] == ["[NovaDeck] Epic", "[NovaDeck] Not Installed"] and len(cols[0]["add"]) == 2 else bad)(
-    f"the collections are asserted after the adds ({[(c['name'], c['add']) for c in cols]})")
+(ok if [pl["op"] for e, pl in emitted if e == "shortcut_op"] == ["add", "add"] else bad)(
+    f"a sync only adds tiles — no collection is written ({[pl['op'] for e, pl in emitted if e == 'shortcut_op']})")
 (ok if sorted(g for g, _ in art) == ["A", "B"] else bad)(f"new tiles get artwork in the background ({art})")
 
 emitted.clear(); art.clear()
 res = asyncio.run(run("epic"))
 adds = [pl for e, pl in emitted if e == "shortcut_op" and pl["op"] == "add"]
 (ok if res["added"] == 0 and not adds and not art else bad)(f"a re-sync adds nothing and fetches no art ({res})")
-(ok if any(pl["op"] == "collection" for e, pl in emitted) else bad)("a re-sync still re-asserts the collections")
 
 emitted.clear()
 owned["titles"].append({"id": "C", "title": "Gamma", "installable": True})
@@ -217,8 +206,8 @@ asyncio.run(plugin.finish_installs(p))
 state["epic:A"] = "installed"
 asyncio.run(plugin.finish_installs(p))
 seq = ops()
-(ok if seq == ["edit", "compat", "collection", "collection"] else bad)(
-    f"edit the tile in place, set Proton, then the collections — nothing added or removed ({seq})")
+(ok if seq == ["edit", "compat"] else bad)(
+    f"edit the tile in place and set Proton — nothing added, removed or collected ({seq})")
 edit = next(pl for e, pl in emitted if e == "shortcut_op" and pl["op"] == "edit")
 (ok if edit["appid"] == 100 and edit["exe"] == '"/g/A/game.exe"'
     and edit["options"] == "/usr/lib/novadeck/game-launch %command%" else bad)(
@@ -232,9 +221,6 @@ row = reg()["epic:A"]
 (ok if row == {"title": "Alpha", "exe": "/g/A/game.exe", "platform": "windows", "appid": 100} else bad)(
     f"the row is now an installed entry with the SAME appid ({row})")
 (ok if [e["message"] for e in events()] == ["Ready to play"] else bad)(f"the user is told it is ready ({events()})")
-cols = [pl for e, pl in emitted if e == "shortcut_op" and pl["op"] == "collection"]
-(ok if cols[1]["remove"] == [100] and cols[1]["add"] == [] else bad)(
-    f"the entry leaves [NovaDeck] Not Installed ({cols[1]})")
 
 # Not shelf any more: a further poll does nothing.
 emitted.clear()
@@ -480,12 +466,9 @@ grep -q '<LibrarySections' "$SRC/Content.tsx" \
 
 echo "== the bridge"
 BRIDGE="$ROOT/apps/decky/novadeck-stores/src/lib/shortcutBridge.ts"
-grep -q 'op: "collection"' "$BRIDGE" \
-  && ok "the bridge executes collection ops" \
-  || bad "shortcutBridge.ts has no collection op"
-grep -q 'if (add.length === 0) return' "$BRIDGE" \
-  && ok "the bridge never creates an empty collection just to remove from it" \
-  || bad "the bridge may create an empty [NovaDeck] collection"
+! grep -q 'collectionStore' "$BRIDGE" \
+  && ok "the bridge never touches Steam's collections" \
+  || bad "shortcutBridge.ts still uses collectionStore"
 
 grep -q 'test-store-library.sh' "$ROOT/Makefile" \
   && ok "this suite is wired into make test (a suite nothing runs is documentation)" \

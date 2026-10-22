@@ -450,9 +450,9 @@ class Plugin:
     # -- milestone 7: the whole owned library as Steam tiles --
 
     async def sync_library(self, store):
-        """Give every installable owned title a tile and re-assert the [NovaDeck] collections.
-        {"added": N, "tiles": total} or {"error": ...}. Idempotent; artwork for new tiles follows
-        in the background and never holds the sync up."""
+        """Give every installable owned title a tile; the Epic / GOG library tabs list them
+        (library_tabs). {"added": N, "tiles": total} or {"error": ...}. Idempotent; artwork for
+        new tiles follows in the background and never holds the sync up."""
         if store not in connect.STORES:
             return {"error": f"unknown store {store!r}"}
         try:
@@ -503,18 +503,11 @@ class Plugin:
                 registry[token] = {k: v for k, v in row.items() if k != "retired"} | (
                     {"retired": still} if still else {})
                 await asyncio.to_thread(shortcuts.write_registry, p, registry)
-            warnings = []
-            for op in library_sync.collection_ops(store, registry):
-                result = await self._shortcut_roundtrip(
-                    library_sync.collection_payload(next(self._shortcut_seq), op))
-                if "error" in result:
-                    warnings.append(f"{op['name']}: {result['error']}")
-        decky.logger.info(f"sync {store}: {len(added)} added, {warnings or 'collections ok'}")
+        decky.logger.info(f"sync {store}: {len(added)} added")
         if added:
             asyncio.create_task(self._artwork_pass(store, added))
         tiles = sum(1 for k in registry if k.startswith(f"{store}:"))
-        out = {"added": len(added), "tiles": tiles}
-        return {**out, "warning": "; ".join(warnings)} if warnings else out
+        return {"added": len(added), "tiles": tiles}
 
     _sync_task = None
 
@@ -717,7 +710,7 @@ class Plugin:
         """Turn a token's entry into another kind IN PLACE: a finished install's shelf tile into
         the model-B entry, an uninstalled game back into a shelf tile. `payload` is what an add
         of the new kind would carry; it is applied to the EXISTING appid (shortcuts.edit_payload),
-        so the appid — and Steam's play time, last played, art, collections and any open game
+        so the appid — and Steam's play time, last played, art and any open game
         page with it — survives. Remove + re-add lost all of those (HW 2026-10-22).
 
         The compat tool is set for a Windows game and CLEARED otherwise (tool None → ""): a shelf
@@ -749,8 +742,6 @@ class Plugin:
             # The entry is already the new kind; the registry still says the old one, and the
             # pass that called this re-runs the (idempotent) edit next time.
             return {"error": "the registry could not be written"}
-        for op in library_sync.collection_ops(store, registry):
-            await self._shortcut_roundtrip(library_sync.collection_payload(next(self._shortcut_seq), op))
         decky.logger.info(f"edit {token}: appid {appid} is now {new_row.get('state') or 'installed'}")
         return {"appid": appid}
 

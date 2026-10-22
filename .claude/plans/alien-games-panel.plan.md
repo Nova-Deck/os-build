@@ -111,8 +111,10 @@ first build step confirms the same classes appear on the React children of `Inne
   that fails is an error → pending_shelf). DOOM 64 kept appid 2274030331 through uninstall →
   install → play → uninstall; last played survived. The art copy (f0d056e) was removed as dead.
   Legacy `retired` appids from earlier builds are still removed by the next sync.
-- R3 collections → opt-in toggle (default OFF); existing `[NovaDeck]` collections deleted once on
-  switching off (unifideck's cleaned-marker pattern, so devices do not fight over cloud state).
+- ~~R3 collections → opt-in toggle~~ **DECIDED 2026-10-22: collections DROPPED entirely, no
+  toggle and no cleanup code** (7e1c436). The tabs browse; Steam's Non-Steam tab lists every
+  shortcut regardless (so even with TabMaster the games stay reachable); no released build ever
+  created collections, so nothing needs deleting. The Pocket FIT's two were deleted by hand.
 - R4 HW walkthrough (the old task 6, on the revised surface) on a freshly built card.
 
 ## Summary (revision 1 — the SURFACE parts are superseded by revision 2 above)

@@ -121,6 +121,15 @@ first build step confirms the same classes appear on the React children of `Inne
   store: sign in → sync → store tab → game page Install → Play → Uninstall → Installed tab.
   Still deferred past R4: the native-Linux launch gate (no native GOG title owned) and the
   card-volume install leg ([[internal-install-phase6-plan]]).
+  **R4 PASSED 2026-10-22** on the Pocket FIT, card built from 2774d40 (+ the tcp_mtu_probing
+  drop-in set live). Epic: sign-in → sync 55 → Epic tab → DOOM 64 Install → in-place edit →
+  Play (first-launch SLR4 download) → Installed 1 → Uninstall (Proton unmapped) → Installed 0.
+  GOG: sign-in → sync (failed once on the network, the Sync button recovered it) → GOG tab 2 →
+  Master of Magic Install → stall diagnosed as a path-MTU blackhole (1492) → Stop / Resume →
+  in-place edit + Proton mapped → Play → Installed 1 → Uninstall → Installed 0. No code errors in
+  the plugin log; every failure was the network. Follow-ups: a CLI failure should carry its last
+  stderr line (the GOG list and legendary info both hid theirs behind an exit code); a sync that
+  fails right after sign-in is not retried on its own.
 
 ## Summary (revision 1 — the SURFACE parts are superseded by revision 2 above)
 

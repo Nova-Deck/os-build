@@ -621,6 +621,18 @@ class Plugin:
         return {"installs": installs_, "drives": drives,
                 "install_drive": locations.default_volume(drives, drive)["path"] if drives else None}
 
+    # -- milestone 7 revision 2: the Epic / GOG library tabs (LibraryTabs.tsx) --
+
+    async def library_tabs(self):
+        """{store: [appid]} each store tab lists (library_sync.tab_members). Read-only, no lock:
+        the frontend re-reads it after every library-entry operation."""
+        try:
+            p = await asyncio.to_thread(paths.store_paths)
+            registry = await asyncio.to_thread(shortcuts.read_registry, p)
+        except (OSError, subprocess.SubprocessError) as exc:
+            return {"error": f"cannot read the library: {type(exc).__name__}"}
+        return library_sync.tab_members(registry)
+
     # -- milestone 7 revision 2: Steam's own game page carries the Play row (game_page.py) --
 
     async def game_state(self, appid, token=None):

@@ -95,6 +95,17 @@ first build step confirms the same classes appear on the React children of `Inne
   repeatedly on this device (art, legendary info 2.6 s → ~15 s, SLR4 download "No connection").
 - R2 library tabs: Epic / GOG (+ installed filter) via the /library patch; TabMaster detection
   falls back to collections.
+  **BUILT + first HW look 2026-10-22**: the Epic tab (56) sits after Installed, Steam's own grid
+  with its Filter / Sort By footer; sorting works (Steam groups by play time / last played).
+  Membership is `library_tabs` (registry). Steam's own Installed tab counts no shortcuts (0).
+- **In-place swap PROBED 2026-10-22 — it works on arm64.** A throwaway shortcut edited in place
+  (`SetShortcutExe` / `SetShortcutStartDir` / `SetShortcutLaunchOptions` + `SpecifyCompatTool`)
+  kept its appid, Steam rewrote shortcuts.vdf within the second, the compat mapping reached
+  config.vdf, and all of it survived a Steam session restart (read back via appDetailsStore).
+  So the install transition can EDIT the entry instead of remove + re-add: the appid — and with it
+  play time, last played, art, the open page, collection membership — survives install and
+  uninstall. The HW-found costs of remove + re-add (play history reset to "Never" on every swap;
+  the page sent home; art re-applied) are what this removes.
 - R3 collections → opt-in toggle (default OFF); existing `[NovaDeck]` collections deleted once on
   switching off (unifideck's cleaned-marker pattern, so devices do not fight over cloud state).
 - R4 HW walkthrough (the old task 6, on the revised surface) on a freshly built card.

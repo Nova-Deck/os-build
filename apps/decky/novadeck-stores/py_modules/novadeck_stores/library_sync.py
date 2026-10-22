@@ -54,6 +54,21 @@ def collection_ops(store, registry):
     ]
 
 
+def tab_members(registry):
+    """{store: [unsigned appid]} — what each store's library tab shows (revision 2, R2): every
+    registered entry of that store, installed or not, by its LIVE appid. The same registry rule as
+    the game page, so a tab can never list a shortcut that is not ours. Retired appids are not
+    members: those entries are on their way out of the library."""
+    out = {store: [] for store in locations.STORE_DIRS}
+    for token, row in registry.items():
+        if not shortcuts.TOKEN.fullmatch(token) or not isinstance(row, dict):
+            continue
+        appid = shortcuts._u32(row.get("appid"))
+        if appid is not None:
+            out[token.split(":", 1)[0]].append(appid)
+    return out
+
+
 def collection_payload(req, op):
     return {"op": "collection", "req": req, "name": op["name"],
             "add": [int(a) for a in op["add"]], "remove": [int(a) for a in op["remove"]]}

@@ -2,6 +2,7 @@ import { addEventListener, call, definePlugin, removeEventListener, toaster } fr
 import { Navigation } from "@decky/ui";
 import { Content } from "./Content";
 import { applyGamePagePatch } from "./GamePage";
+import { applyLibraryTabsPatch, refreshLibraryTabs, scheduleLibraryTabsRefresh } from "./LibraryTabs";
 import { executeShortcutOp, ShortcutOp } from "./lib/shortcutBridge";
 import { STORE_LABELS } from "./types";
 
@@ -32,7 +33,8 @@ function onConnectDone(store: string, connected: boolean, close: boolean, messag
 // Registered HERE for the same reason connect_done is: the backend can ask while the panel is
 // unmounted, and milestone 4 has no panel at all — the gate drives the backend directly.
 function onShortcutOp(op: ShortcutOp) {
-  void executeShortcutOp(op);
+  // Every add, remove and swap changes what the Epic / GOG tabs list (LibraryTabs.tsx).
+  void executeShortcutOp(op).then(scheduleLibraryTabsRefresh);
 }
 
 // The outcome of pressing Play on a not-installed tile (main.py take_install_requests). The stub
@@ -56,6 +58,9 @@ export default definePlugin(() => {
   void call("frontend_ready");
   // Revision 2: Install / progress / Uninstall on Steam's own game page (GamePage.tsx).
   const removeGamePagePatch = applyGamePagePatch();
+  // R2: Epic / GOG tabs in Steam's library.
+  const removeLibraryTabsPatch = applyLibraryTabsPatch();
+  void refreshLibraryTabs();
   return {
     name: "NovaDeck Stores",
     content: <Content />,
@@ -84,6 +89,7 @@ export default definePlugin(() => {
       removeEventListener("shortcut_op", onShortcutOp);
       removeEventListener("install_event", onInstallEvent);
       removeGamePagePatch();
+      removeLibraryTabsPatch();
     },
     // NO alwaysRender: this panel holds no pending edits and nothing to keep warm. It re-reads on
     // every open by design, because a token can expire while it is closed — and that re-read is

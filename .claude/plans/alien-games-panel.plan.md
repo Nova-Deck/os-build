@@ -73,6 +73,16 @@ first build step confirms the same classes appear on the React children of `Inne
 - R0 probe — DONE, result above.
 - R1 game-page patch: Install / progress / Resume / Uninstall for registry-owned entries; stub kept
   as fallback; install size call; the downloads poll shared with the QAM.
+  **BUILT 2026-10-22, offline-green, NOT yet on HW** (`src/GamePage.tsx`, `game_page.py`,
+  `main.py game_state`/`install_size`, `tests/test-store-gamepage.sh`). Decisions: the row is
+  spliced after the header for every shortcut page (top-bit pre-filter) but renders, and hides
+  Steam's Play, only once the backend's registry says the appid is ours and not installed; the
+  hide targets `basicAppDetailsSectionStylerClasses.PlaySection` (+ desktop `Container`) under a
+  per-appid marker. A swap (install done / uninstall) gives the entry a new appid: the page follows
+  through the token from its earlier poll, with a history PUSH (Steam's router has no replace) — so
+  Back passes the dead page once. Installed games keep native Play plus an Uninstall row above it.
+  **HW must confirm**: the PlaySection class actually hides the native row under InnerContainer;
+  initial gamepad focus lands on Install; the row's position/padding reads right; the push-follow.
 - R2 library tabs: Epic / GOG (+ installed filter) via the /library patch; TabMaster detection
   falls back to collections.
 - R3 collections → opt-in toggle (default OFF); existing `[NovaDeck]` collections deleted once on

@@ -31,8 +31,9 @@ import decky
 
 import base64
 
-from novadeck_stores import (artwork, cdp, cli, connect, install_requests, installs, launch,
-                             library, library_sync, locations, paths, settings, shortcuts, status)
+from novadeck_stores import (artwork, cdp, cli, connect, game_page, install_requests, installs,
+                             launch, library, library_sync, locations, paths, settings, shortcuts,
+                             status)
 
 # Long enough to type an email and a password on the on-screen keyboard and clear a captcha;
 # short enough that a login the user walked away from does not poll for the rest of the session.
@@ -601,6 +602,62 @@ class Plugin:
         installs_ = [{**i, "tile": tiles.get(f"{i['store']}:{i['id']}")} for i in status_["installs"]]
         return {"installs": installs_, "drives": drives,
                 "install_drive": locations.default_volume(drives, drive)["path"] if drives else None}
+
+    # -- milestone 7 revision 2: Steam's own game page carries the Play row (game_page.py) --
+
+    async def game_state(self, appid, token=None):
+        """What the game page shows for one appid; {"ours": False} for any entry not in the
+        registry. Read-only, no lock: polled while the page is open, like library_state. A page
+        that is not ours costs one registry read — no systemctl, since every shortcut's page asks."""
+        try:
+            p = await asyncio.to_thread(paths.store_paths)
+            registry = await asyncio.to_thread(shortcuts.read_registry, p)
+            found, row = game_page.find(registry, appid, token)
+            if found is None:
+                return {"ours": False}
+            status_ = await asyncio.to_thread(installs.install_status, p)
+            if "error" in status_:
+                return status_
+            state = game_page.page_state(found, row, status_["installs"])
+            if state["state"] == "install":
+                # Where a press would install it: the same choice _install_tile makes.
+                vols = await asyncio.to_thread(locations.user_volumes, p["NOVADECK_STORE_USER"])
+                vol = locations.install_volume(vols, state["store"], None,
+                                               await asyncio.to_thread(settings.install_drive, p))
+                if vol is not None:
+                    state["drive"] = {"label": vol["label"], "free": vol["free"]}
+        except (OSError, subprocess.SubprocessError) as exc:
+            return {"error": f"status failed: {type(exc).__name__}"}
+        except (KeyError, TypeError, ValueError) as exc:
+            # A malformed installs.json record (hand-edited, or an older shape) raises inside
+            # install_status on every poll; the page says so in words, not as a raw exception.
+            decky.logger.info(f"game_state {appid}: {type(exc).__name__}: {exc}")
+            return {"error": "the install records are unreadable"}
+        return state
+
+    _sizes = {}
+
+    async def install_size(self, store, gid):
+        """{"disk_size": bytes} the store says an install needs, or {"error": ...}. Cached for the
+        session: a size does not change between visits, and each lookup is the CLI logging in
+        over the network. A failure is not cached, so the next visit asks again."""
+        token = f"{store}:{gid}"
+        if not shortcuts.TOKEN.fullmatch(token):
+            return {"error": "unknown game"}
+        if token in self._sizes:
+            return self._sizes[token]
+        try:
+            p = await asyncio.to_thread(paths.store_paths)
+            async with _LOCKS[store]:
+                rc, out = await asyncio.to_thread(
+                    cli.capture, p, installs.info_argv(store, gid, p), installs.INFO_TIMEOUT)
+        except (OSError, subprocess.SubprocessError) as exc:
+            return {"error": f"size lookup failed: {type(exc).__name__}"}
+        info = installs.parse_info(store, gid, out) if rc == 0 else None
+        if info is None:
+            return {"error": "the store did not say"}
+        self._sizes[token] = {"disk_size": info["disk_size"]}
+        return self._sizes[token]
 
     async def set_install_drive(self, drive):
         """Remember where a tile press installs. Only a drive that is mounted now is accepted."""

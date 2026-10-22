@@ -50,3 +50,25 @@ export type SyncResult = { added: number; tiles: number; warning?: string } | { 
 
 // What install_tile answers: the same event a tile press toasts.
 export type InstallEvent = { ok: boolean; message: string };
+
+// What main.py game_state answers for one game page (novadeck_stores/game_page.py has the states).
+// `appid` is the entry's LIVE appid: it differs from the page's own once an install finished or an
+// uninstall ran, since both replace the entry — the page then moves to the new one.
+export type OurPage = {
+  ours: true;
+  token: string;
+  store: StoreId;
+  id: string;
+  title: string;
+  appid: number;
+  state: "install" | "downloading" | "paused" | "finishing" | "installed" | "stale";
+  percent?: number;
+  // The game holding the one install slot, when it is another one.
+  busy?: string;
+  // Where Install would put it (state "install" only).
+  drive?: { label: string; free: number };
+};
+
+export type PageState = OurPage | { ours: false } | { error: string };
+
+export type InstallSize = { disk_size: number } | { error: string };

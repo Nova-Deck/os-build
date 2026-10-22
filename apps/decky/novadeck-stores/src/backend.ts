@@ -3,7 +3,9 @@ import type {
   AccountResult,
   ConnectStart,
   InstallEvent,
+  InstallSize,
   LibraryState,
+  PageState,
   State,
   StoreId,
   SyncResult,
@@ -33,3 +35,10 @@ export const installTile = (store: StoreId, id: string) =>
 export const stopInstall = () => call<[], { stopped: boolean } | { error: string }>("stop_install");
 export const uninstallGame = (store: StoreId, id: string) =>
   call<[StoreId, string], { uninstalled: boolean; warning?: string } | { error: string }>("uninstall", store, id);
+
+// Revision 2, the game page. game_state is polled while a shortcut's page is open; `token` is the
+// one an earlier answer gave, so a page whose entry was replaced still finds it.
+export const getGameState = (appid: number, token?: string) =>
+  call<[number, string | null], PageState>("game_state", appid, token ?? null);
+export const getInstallSize = (store: StoreId, id: string) =>
+  call<[StoreId, string], InstallSize>("install_size", store, id);

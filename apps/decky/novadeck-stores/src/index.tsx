@@ -1,6 +1,7 @@
 import { addEventListener, definePlugin, removeEventListener, toaster } from "@decky/api";
 import { Navigation } from "@decky/ui";
 import { Content } from "./Content";
+import { applyGamePagePatch } from "./GamePage";
 import { executeShortcutOp, ShortcutOp } from "./lib/shortcutBridge";
 import { STORE_LABELS } from "./types";
 
@@ -50,6 +51,8 @@ export default definePlugin(() => {
   addEventListener("connect_done", onConnectDone);
   addEventListener("shortcut_op", onShortcutOp);
   addEventListener("install_event", onInstallEvent);
+  // Revision 2: Install / progress / Uninstall on Steam's own game page (GamePage.tsx).
+  const removeGamePagePatch = applyGamePagePatch();
   return {
     name: "NovaDeck Stores",
     content: <Content />,
@@ -77,6 +80,7 @@ export default definePlugin(() => {
       removeEventListener("connect_done", onConnectDone);
       removeEventListener("shortcut_op", onShortcutOp);
       removeEventListener("install_event", onInstallEvent);
+      removeGamePagePatch();
     },
     // NO alwaysRender: this panel holds no pending edits and nothing to keep warm. It re-reads on
     // every open by design, because a token can expire while it is closed — and that re-read is

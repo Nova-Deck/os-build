@@ -207,7 +207,7 @@ export function LibrarySections({ connected }: { connected: StoreId[] }) {
           <Field
             description={
               <span className="novadeck-store-note">
-                Your games are in the Steam library under [NovaDeck] Epic and [NovaDeck] GOG. Press one to install it.
+                Your games are in the Steam library under [NovaDeck] Epic and [NovaDeck] GOG. Open one and press Install.
               </span>
             }
             childrenLayout="below"

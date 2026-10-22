@@ -212,28 +212,28 @@ state["epic:A"] = "downloading"
 asyncio.run(plugin.finish_installs(p))
 (ok if not ops() else bad)(f"a tile still downloading is left alone ({ops()})")
 
-# Done: add the model-B entry FIRST, compat, then remove the shelf tile, then collections.
+# Done: the shelf tile is EDITED into the model-B entry, Proton set, then the collections. Same
+# appid throughout — play time, art and an open page survive (HW 2026-10-22).
 state["epic:A"] = "installed"
 asyncio.run(plugin.finish_installs(p))
 seq = ops()
-(ok if seq[:3] == ["add", "compat", "remove"] and seq[3:] == ["collection", "collection"] else bad)(
-    f"add the game entry, set Proton, THEN remove the shelf tile, then the collections ({seq})")
-add = next(pl for e, pl in emitted if e == "shortcut_op" and pl["op"] == "add")
-(ok if add["exe"] == "/g/A/game.exe" and add["options"] == "/usr/lib/novadeck/game-launch %command%" else bad)(
-    f"the new entry is the milestone-6 model-B entry ({add['exe']}, {add['options']})")
-rem = next(pl for e, pl in emitted if e == "shortcut_op" and pl["op"] == "remove")
-(ok if rem["appid"] == 100 else bad)(f"the removed appid is the old shelf tile ({rem})")
-(ok if rem.get("moved_to") == 4000000000 else bad)(
-    f"the removal names its replacement, so an open page is moved before Steam sends it home ({rem})")
+(ok if seq == ["edit", "compat", "collection", "collection"] else bad)(
+    f"edit the tile in place, set Proton, then the collections — nothing added or removed ({seq})")
+edit = next(pl for e, pl in emitted if e == "shortcut_op" and pl["op"] == "edit")
+(ok if edit["appid"] == 100 and edit["exe"] == '"/g/A/game.exe"'
+    and edit["options"] == "/usr/lib/novadeck/game-launch %command%" else bad)(
+    f"the edit turns appid 100 into the milestone-6 model-B entry, Exe quoted as AddShortcut stores it ({edit})")
+compat = next(pl for e, pl in emitted if e == "shortcut_op" and pl["op"] == "compat")
+(ok if compat["appid"] == 100 and compat["tool"] == "proton-cachyos-11.0-arm64" else bad)(
+    f"Proton is set on the same appid ({compat})")
 asyncio.run(asyncio.sleep(0))
-(ok if ("A", 4000000000, 100) in art_calls else bad)(
-    f"the new entry's art is the old entry's, copied rather than downloaded again ({art_calls})")
+(ok if not art_calls else bad)(f"no art pass: the appid kept its art ({art_calls})")
 row = reg()["epic:A"]
-(ok if row == {"title": "Alpha", "exe": "/g/A/game.exe", "platform": "windows", "appid": 4000000000} else bad)(
-    f"the row is now an installed entry with the new appid, nothing retired ({row})")
+(ok if row == {"title": "Alpha", "exe": "/g/A/game.exe", "platform": "windows", "appid": 100} else bad)(
+    f"the row is now an installed entry with the SAME appid ({row})")
 (ok if [e["message"] for e in events()] == ["Ready to play"] else bad)(f"the user is told it is ready ({events()})")
 cols = [pl for e, pl in emitted if e == "shortcut_op" and pl["op"] == "collection"]
-(ok if cols[1]["remove"] == [4000000000] and cols[1]["add"] == [] else bad)(
+(ok if cols[1]["remove"] == [100] and cols[1]["add"] == [] else bad)(
     f"the entry leaves [NovaDeck] Not Installed ({cols[1]})")
 
 # Not shelf any more: a further poll does nothing.
@@ -241,16 +241,15 @@ emitted.clear()
 asyncio.run(plugin.finish_installs(p))
 (ok if not emitted else bad)("an installed entry is never transitioned twice")
 
-# A remove Steam refuses keeps the old appid as retired — still ours, retried later.
+# Appids retired by the remove + re-add swaps of earlier builds: still ours, kept across an edit,
+# and removed by the next sync.
 emitted.clear()
-reg_path.write_text(json.dumps({"epic:B": {"appid": 200, "title": "Beta", "state": "shelf"}}))
+reg_path.write_text(json.dumps({"epic:B": {"appid": 210, "title": "Beta", "state": "shelf", "retired": [200]}}))
 records["epic:B"] = {"store": "epic", "id": "B", "path": "/g/B"}; state["epic:B"] = "installed"
-refuse.add("remove")
 asyncio.run(plugin.finish_installs(p))
 row = reg()["epic:B"]
-(ok if row.get("retired") == [200] and row["appid"] != 200 else bad)(f"an unconfirmed removal is kept as retired ({row})")
+(ok if row.get("retired") == [200] and row["appid"] == 210 else bad)(f"an edit keeps a legacy retired appid ({row})")
 (ok if 200 in shortcuts.registry_appids(reg()) else bad)("a retired appid is still ours by registry membership")
-refuse.clear()
 emitted.clear()
 main.library.owned = lambda store, pp: {"titles": []}
 asyncio.run(plugin.sync_library("epic"))
@@ -258,16 +257,16 @@ removes = [pl["appid"] for e, pl in emitted if e == "shortcut_op" and pl["op"] =
 (ok if removes == [200] and "retired" not in reg()["epic:B"] else bad)(
     f"the next sync retries the retired removal and clears it once Steam confirms ({removes}, {reg()['epic:B']})")
 
-# An add Steam refuses: the shelf tile stays, the user is told ONCE across retries.
+# An edit Steam refuses: the shelf tile stays a shelf tile, the user is told ONCE across retries.
 emitted.clear()
 reg_path.write_text(json.dumps({"epic:C": {"appid": 300, "title": "Gamma", "state": "shelf"}}))
 records["epic:C"] = {"store": "epic", "id": "C", "path": "/g/C"}; state["epic:C"] = "installed"
-refuse.add("add")
+refuse.add("edit")
 asyncio.run(plugin.finish_installs(p)); asyncio.run(plugin.finish_installs(p))
 (ok if reg()["epic:C"]["appid"] == 300 and shortcuts.is_shelf(reg()["epic:C"]) else bad)(
-    "a refused add leaves the shelf tile in place — never neither")
+    "a refused edit leaves the shelf row as it was")
 (ok if len(events()) == 1 and not events()[0]["ok"] else bad)(f"the failure is told once, not every poll ({events()})")
-(ok if "remove" not in ops() else bad)("nothing is removed when the add failed")
+(ok if not {"add", "remove", "compat"} & set(ops()) else bad)(f"nothing else is touched when the edit failed ({ops()})")
 refuse.clear()
 
 # Installed but the store names no executable: told once, no entry churn.
@@ -286,13 +285,26 @@ async def fake_action(self, action, store, fn, *args): return {"uninstalled": Tr
 main.Plugin._install_action = fake_action
 res = asyncio.run(plugin.uninstall("gog", "E"))
 row = reg()["gog:E"]
-add = next(pl for e, pl in emitted if e == "shortcut_op" and pl["op"] == "add")
-(ok if res == {"uninstalled": True} and shortcuts.is_shelf(row) and add["exe"] == "/usr/lib/novadeck/store-launch" else bad)(
-    f"an uninstalled game goes back on the shelf as a stub tile ({res}, {row})")
-(ok if "compat" not in ops() and "remove" in ops() else bad)(f"no compat tool on the shelf tile; the game entry is removed ({ops()})")
+edit = next(pl for e, pl in emitted if e == "shortcut_op" and pl["op"] == "edit")
+(ok if res == {"uninstalled": True} and shortcuts.is_shelf(row) and row["appid"] == 500
+    and edit["appid"] == 500 and edit["exe"] == '"/usr/lib/novadeck/store-launch"' and edit["options"] == "gog:E" else bad)(
+    f"an uninstalled game's entry is edited back into a stub tile, same appid ({res}, {row}, {edit})")
+compat = [pl for e, pl in emitted if e == "shortcut_op" and pl["op"] == "compat"]
+(ok if compat and compat[0]["appid"] == 500 and compat[0]["tool"] == "" and not {"add", "remove"} & set(ops()) else bad)(
+    f"Proton is CLEARED off the stub tile (tool ''), nothing added or removed ({compat}, {ops()})")
+
+# Proton that will not come off is an error: the stub must never run through it.
+emitted.clear()
+reg_path.write_text(json.dumps({"gog:E2": {"appid": 550, "title": "Echo2", "exe": "/g/E2/e.exe", "platform": "windows"}}))
+refuse.add("compat")
+res = asyncio.run(plugin.uninstall("gog", "E2"))
+refuse.clear()
+(ok if "warning" in res and reg()["gog:E2"].get("state") == "pending_shelf" else bad)(
+    f"a compat tool that would not clear leaves the row pending_shelf, retried by the next sync ({res}, {reg()['gog:E2']})")
 
 # Review fixes (2026-10-21).
-# A registry that cannot be written after an add: the just-made entry is removed again.
+# A registry that cannot be written after an edit: the row still says shelf, the user is told,
+# and the next pass edits again (idempotent) — nothing is added or removed to "undo" it.
 emitted.clear()
 reg_path.write_text(json.dumps({"epic:F": {"appid": 600, "title": "Fox", "state": "shelf"}}))
 records["epic:F"] = {"store": "epic", "id": "F", "path": "/g/F"}; state["epic:F"] = "installed"
@@ -301,10 +313,13 @@ real_write = shortcuts.cli.write_as_user
 shortcuts.cli.write_as_user = lambda pp, path, text: 1
 asyncio.run(plugin.finish_installs(p))
 shortcuts.cli.write_as_user = real_write
-new = next(pl["appid"] for e, pl in emitted if e == "shortcut_op" and pl["op"] == "remove")
-added = [pl for e, pl in emitted if e == "shortcut_op" and pl["op"] == "add"]
-(ok if len(added) == 1 and new >= 4000000000 and reg()["epic:F"]["appid"] == 600 else bad)(
-    f"an unrecordable new entry is removed again; the shelf row is untouched ({new}, {reg()['epic:F']})")
+(ok if shortcuts.is_shelf(reg()["epic:F"]) and reg()["epic:F"]["appid"] == 600
+    and not {"add", "remove"} & set(ops()) and events() and not events()[0]["ok"] else bad)(
+    f"an unrecordable edit leaves the shelf row, says so, and touches no other entry ({ops()}, {events()})")
+emitted.clear()
+asyncio.run(plugin.finish_installs(p))
+(ok if reg()["epic:F"]["appid"] == 600 and not shortcuts.is_shelf(reg()["epic:F"]) else bad)(
+    f"the next pass edits again and records it ({reg()['epic:F']})")
 
 # The state is re-checked under the lock: an uninstall that landed while finish waited wins.
 emitted.clear()
@@ -323,15 +338,15 @@ main.launch.resolve_target = real_resolve
 # A failed swap back to the shelf after an uninstall is marked and retried by the next sync.
 emitted.clear()
 reg_path.write_text(json.dumps({"gog:H": {"appid": 800, "title": "Hotel", "exe": "/g/H/h.exe", "platform": "windows"}}))
-refuse.add("add")
+refuse.add("edit")
 res = asyncio.run(plugin.uninstall("gog", "H"))
 refuse.clear()
 (ok if "warning" in res and reg()["gog:H"].get("state") == "pending_shelf" else bad)(
-    f"a failed swap back leaves the row pending_shelf, not 'installed' ({res}, {reg()['gog:H']})")
+    f"a failed edit back leaves the row pending_shelf, not 'installed' ({res}, {reg()['gog:H']})")
 main.library.owned = lambda store, pp: {"titles": []}
 asyncio.run(plugin.sync_library("gog"))
-(ok if shortcuts.is_shelf(reg()["gog:H"]) and reg()["gog:H"]["appid"] != 800 else bad)(
-    f"the next sync finishes the swap back to the shelf ({reg()['gog:H']})")
+(ok if shortcuts.is_shelf(reg()["gog:H"]) and reg()["gog:H"]["appid"] == 800 else bad)(
+    f"the next sync finishes the edit back to the shelf, same appid ({reg()['gog:H']})")
 
 # A SteamUI that does not answer ends the sync at the first timeout instead of N x 30 s.
 emitted.clear()

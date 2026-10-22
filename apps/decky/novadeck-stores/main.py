@@ -26,7 +26,6 @@ gogdl refresh and invalidate those, so they own the answer (see status.py).
 import asyncio
 import functools
 import itertools
-import os
 import subprocess
 
 import decky
@@ -228,7 +227,7 @@ class Plugin:
             async with _SHORTCUT_LOCK:
                 row = (await asyncio.to_thread(shortcuts.read_registry, p)).get(f"{store}:{gid}")
                 if isinstance(row, dict) and "appid" in row and not shortcuts.is_shelf(row):
-                    swapped = await self._swap_entry(
+                    swapped = await self._edit_entry(
                         p, store, gid,
                         shortcuts.shelf_payload(next(self._shortcut_seq), store, gid, row["title"]),
                         {"title": row["title"], "state": "shelf"}, None)
@@ -390,27 +389,20 @@ class Plugin:
             decky.logger.info(f"deregister {store}:{gid}: removed appid {row['appid']}")
             return {"deregistered": True}
 
-    async def apply_artwork(self, store, gid, appid, reuse_from=None):
+    async def apply_artwork(self, store, gid, appid):
         """Set grid art on a registered entry from the store's own metadata. NON-BLOCKING by
         contract: {"applied": [kinds]} always, even when nothing could be fetched — a failure
         here must never unwind a good registration or raise into the caller. Idempotent: re-runs
-        re-set the same slots. `reuse_from` is the appid this entry replaced: whatever art Steam
-        holds for it is copied, and only the kinds it lacks are downloaded."""
+        re-set the same slots. Only a NEW entry needs it: the install transitions edit in place,
+        and the art stays with the appid."""
         try:
             p = await asyncio.to_thread(paths.store_paths)
+            urls = await asyncio.to_thread(artwork.store_urls, store, gid, p)
             got_by_kind = {}
-            if reuse_from is not None:
-                dirs = [os.path.join(os.path.dirname(v), "grid") for v in shortcuts.vdf_paths(p)]
-                got_by_kind = await asyncio.to_thread(
-                    artwork.grid_images, dirs, int(reuse_from) & 0xFFFFFFFF, int(p["NOVADECK_STORE_UID"]))
-            if set(artwork.KIND_ASSET) - set(got_by_kind):
-                # GOG's lookup is itself a network call: made only when something is missing.
-                urls = await asyncio.to_thread(artwork.store_urls, store, gid, p)
-                for kind, url in urls.items():
-                    if kind not in got_by_kind:
-                        got = await asyncio.to_thread(artwork.fetch_image, url, log=decky.logger.info)
-                        if got is not None:
-                            got_by_kind[kind] = got
+            for kind, url in urls.items():
+                got = await asyncio.to_thread(artwork.fetch_image, url, log=decky.logger.info)
+                if got is not None:
+                    got_by_kind[kind] = got
             images = []
             for kind, (data, image_type) in got_by_kind.items():
                 images.append({"kind": kind, "assetType": artwork.KIND_ASSET[kind],
@@ -497,7 +489,7 @@ class Plugin:
                 if token.startswith(f"{store}:") and isinstance(row, dict) \
                         and row.get("state") == "pending_shelf":
                     gid = token.split(":", 1)[1]
-                    await self._swap_entry(
+                    await self._edit_entry(
                         p, store, gid,
                         shortcuts.shelf_payload(next(self._shortcut_seq), store, gid, row["title"]),
                         {"title": row["title"], "state": "shelf"}, None)
@@ -721,44 +713,45 @@ class Plugin:
                           f"{undo.get('error') or 'ok'}")
         return False
 
-    async def _swap_entry(self, p, store, gid, payload, new_row, tool):
-        """Replace a token's entry with a new one. ADD FIRST: if Steam refuses the new entry the
-        old tile is still there, never neither. The old appid is kept on the new row as `retired`
-        until Steam confirms its removal, so a failed remove leaves an appid we still own and
-        retry, not an orphan. Caller holds _SHORTCUT_LOCK. {"appid": N} or {"error": ...}."""
+    async def _edit_entry(self, p, store, gid, payload, new_row, tool):
+        """Turn a token's entry into another kind IN PLACE: a finished install's shelf tile into
+        the model-B entry, an uninstalled game back into a shelf tile. `payload` is what an add
+        of the new kind would carry; it is applied to the EXISTING appid (shortcuts.edit_payload),
+        so the appid — and Steam's play time, last played, art, collections and any open game
+        page with it — survives. Remove + re-add lost all of those (HW 2026-10-22).
+
+        The compat tool is set for a Windows game and CLEARED otherwise (tool None → ""): a shelf
+        stub or a native game run through Proton launches nothing. A tool that would not clear is
+        an error, so an uninstall marks the row pending_shelf and the next sync edits again; a
+        tool that would not SET is logged only, since frontend_ready re-asserts Windows tools.
+        Caller holds _SHORTCUT_LOCK. {"appid": N} or {"error": ...}."""
         token = f"{store}:{gid}"
         registry = await asyncio.to_thread(shortcuts.read_registry, p)
         old = registry.get(token)
-        result = await self._shortcut_roundtrip(payload)
+        appid = shortcuts._u32(old.get("appid")) if isinstance(old, dict) else None
+        if appid is None:
+            return {"error": "no library entry to change"}
+        result = await self._shortcut_roundtrip(
+            shortcuts.edit_payload(next(self._shortcut_seq), appid, payload))
         if "error" in result:
             return result
-        appid = int(result["appid"])
-        if tool:
-            compat = await self._shortcut_roundtrip(
-                shortcuts.compat_payload(next(self._shortcut_seq), appid, tool))
-            if "error" in compat:
-                decky.logger.info(f"swap {token}: compat tool not set: {compat['error']}")
-        retired = (list(old.get("retired", [])) + [old["appid"]]
-                   if isinstance(old, dict) and "appid" in old else [])
-        retired = [a for a in retired if a != appid]  # never retire the entry just made
-        registry[token] = {**new_row, "appid": appid, "retired": retired}
-        if not await self._record_or_undo(p, registry, appid):
+        compat = await self._shortcut_roundtrip(
+            shortcuts.compat_payload(next(self._shortcut_seq), appid, tool or ""))
+        if "error" in compat:
+            decky.logger.info(f"edit {token}: compat tool not {'set' if tool else 'cleared'}: {compat['error']}")
+            if not tool:
+                return {"error": f"Proton could not be taken off the entry: {compat['error']}"}
+        # Appids retired by the remove + re-add swaps of earlier builds stay recorded until the
+        # next sync confirms their removal.
+        registry[token] = {**new_row, "appid": appid,
+                           **({"retired": old["retired"]} if old.get("retired") else {})}
+        if not await asyncio.to_thread(shortcuts.write_registry, p, registry):
+            # The entry is already the new kind; the registry still says the old one, and the
+            # pass that called this re-runs the (idempotent) edit next time.
             return {"error": "the registry could not be written"}
-        still = []
-        for old_appid in retired:
-            gone = await self._shortcut_roundtrip(
-                shortcuts.remove_payload(next(self._shortcut_seq), old_appid, moved_to=appid))
-            if "error" in gone:
-                still.append(old_appid)
-        registry[token] = {**new_row, "appid": appid, **({"retired": still} if still else {})}
-        await asyncio.to_thread(shortcuts.write_registry, p, registry)
         for op in library_sync.collection_ops(store, registry):
             await self._shortcut_roundtrip(library_sync.collection_payload(next(self._shortcut_seq), op))
-        # Art is keyed by appid in Steam's grid dir, so the new entry needs its own: the old
-        # entry's, copied, with only what it lacked downloaded.
-        old_appid = old["appid"] if isinstance(old, dict) and "appid" in old else None
-        asyncio.create_task(self.apply_artwork(store, gid, appid, reuse_from=old_appid))
-        decky.logger.info(f"swap {token}: appid {appid}, retired {retired}, still held {still}")
+        decky.logger.info(f"edit {token}: appid {appid} is now {new_row.get('state') or 'installed'}")
         return {"appid": appid}
 
     async def finish_installs(self, p):
@@ -796,7 +789,7 @@ class Plugin:
                     self._unresolvable.add(token)
                     decky.logger.info(f"finish {token}: {exc}")
                     continue
-                result = await self._swap_entry(
+                result = await self._edit_entry(
                     p, store, gid, payload,
                     {"title": title, "exe": resolved["exe"], "platform": resolved["platform"]},
                     launch.compat_tool(resolved["platform"]))

@@ -169,37 +169,3 @@ def _image(data):
         if data.startswith(magic):
             return data, kind
     return None
-
-
-# The file names Steam's SetCustomArtworkForApp writes into userdata/<id>/config/grid/, keyed by
-# the UNSIGNED appid (milestone 5, HW-gated).
-GRID_SUFFIX = {"capsule": "p", "hero": "_hero", "logo": "_logo"}
-
-
-def grid_images(grid_dirs, appid, owner_uid):
-    """{kind: (bytes, ext)} of the art Steam already holds for `appid`.
-
-    An install transition replaces an entry, and Steam keys art by appid, so the new entry starts
-    bare. Its art is the old entry's, still on disk after the removal (HW 2026-10-22) — read back
-    here rather than downloaded again: every download is a chance to fail, and one that did left
-    a freshly installed game without its hero. Read owner-checked (the grid dir is the user's)
-    and held to the same signature and cap as a download.
-    """
-    out = {}
-    for kind, suffix in GRID_SUFFIX.items():
-        for d in grid_dirs:
-            for ext in ("jpg", "png"):
-                f = status.open_user_file(os.path.join(d, f"{appid}{suffix}.{ext}"), owner_uid)
-                if f is None:
-                    continue
-                try:
-                    with f:
-                        got = _image(f.read(MAX_BYTES + 1))
-                except OSError:
-                    got = None
-                if got:
-                    out[kind] = got
-                    break
-            if kind in out:
-                break
-    return out

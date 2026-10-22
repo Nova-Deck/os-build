@@ -133,9 +133,23 @@ def remove_payload(req, appid, moved_to=None):
             **({"moved_to": int(moved_to)} if moved_to is not None else {})}
 
 
+def edit_payload(req, appid, payload):
+    """Change an existing entry IN PLACE into what `payload` (an add_payload or shelf_payload)
+    would create. The install transitions use this, not remove + re-add: the appid survives, and
+    with it Steam's play time, last played, art, collections and an open game page. Probed on the
+    arm64 client 2026-10-22: SetShortcutExe & co. keep the appid, reach shortcuts.vdf within the
+    second, and survive a Steam restart."""
+    # Exe QUOTED: AddShortcut re-quotes the Exe it stores (milestone 4), SetShortcutExe stores
+    # exactly what it is given (the probe), and a GOG install folder has spaces in it. StartDir
+    # stays unquoted, as AddShortcut leaves it.
+    return {"op": "edit", "req": req, "appid": int(appid), "name": payload["name"],
+            "exe": f'"{payload["exe"]}"', "dir": payload["dir"], "options": payload["options"]}
+
+
 def compat_payload(req, appid, tool):
-    """Set a compat tool on a shortcut (Windows → our Proton). Steam keys CompatToolMapping by the
-    UNSIGNED appid; the frontend bridge does the >>> 0 and verifies the tool is installed first."""
+    """Set a compat tool on a shortcut (Windows → our Proton), or clear it with tool "" (Steam logs
+    "Unmapping AppID", HW 2026-10-22). Steam keys CompatToolMapping by the UNSIGNED appid; the
+    frontend bridge does the >>> 0."""
     return {"op": "compat", "req": req, "appid": int(appid), "tool": tool}
 
 

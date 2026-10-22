@@ -106,6 +106,11 @@ first build step confirms the same classes appear on the React children of `Inne
   play time, last played, art, the open page, collection membership — survives install and
   uninstall. The HW-found costs of remove + re-add (play history reset to "Never" on every swap;
   the page sent home; art re-applied) are what this removes.
+  **SWITCHED + HW-PASSED 2026-10-22**: `_edit_entry` replaces `_swap_entry` (bridge op `edit`;
+  compat SET for Windows, CLEARED with tool "" otherwise — Steam logs "Unmapping AppID"; a clear
+  that fails is an error → pending_shelf). DOOM 64 kept appid 2274030331 through uninstall →
+  install → play → uninstall; last played survived. The art copy (f0d056e) was removed as dead.
+  Legacy `retired` appids from earlier builds are still removed by the next sync.
 - R3 collections → opt-in toggle (default OFF); existing `[NovaDeck]` collections deleted once on
   switching off (unifideck's cleaned-marker pattern, so devices do not fight over cloud state).
 - R4 HW walkthrough (the old task 6, on the revised surface) on a freshly built card.

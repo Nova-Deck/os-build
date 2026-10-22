@@ -11,6 +11,7 @@ import { Navigation } from "@decky/ui";
 export type ShortcutOp =
   | { op: "add"; req: number; name: string; exe: string; dir: string; options: string }
   | { op: "remove"; req: number; appid: number; moved_to?: number }
+  | { op: "edit"; req: number; appid: number; name: string; exe: string; dir: string; options: string }
   | {
       op: "artwork";
       req: number;
@@ -137,6 +138,17 @@ export async function executeShortcutOp(op: ShortcutOp): Promise<void> {
         await apps.SetCustomArtworkForApp(op.appid, img.base64, img.imageType, img.assetType);
       }
       await call("shortcut_result", op.req, null, null);
+    } else if (op.op === "edit") {
+      // The install transitions change an entry IN PLACE so its appid — play time, last played,
+      // art, an open game page — survives (main.py _edit_entry). Probed on the arm64 client: these
+      // keep the appid, reach shortcuts.vdf and survive a Steam restart.
+      if (!apps?.SetShortcutExe || !apps?.SetShortcutStartDir) throw new Error("SetShortcutExe unavailable");
+      const appid = op.appid >>> 0;
+      apps.SetShortcutName(appid, op.name);
+      apps.SetShortcutExe(appid, op.exe);
+      apps.SetShortcutStartDir(appid, op.dir);
+      apps.SetShortcutLaunchOptions(appid, op.options);
+      await call("shortcut_result", op.req, appid, null);
     } else if (op.op === "add") {
       const appid: number = await apps.AddShortcut(op.name, op.exe, op.dir, op.options);
       if (!appid) throw new Error("AddShortcut returned no appid");

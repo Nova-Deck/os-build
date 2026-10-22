@@ -250,8 +250,9 @@ function PlayRow({ appid }: { appid: number }) {
           setErr(null);
           if (s.ours) {
             token.current = s.token;
-            // A finished install or an uninstall replaced the entry: this page's appid is gone
-            // from the library, so move to the one that is there now. A push, not a replace
+            // The entry's live appid is not this page's. The install transitions now edit in
+            // place and keep the appid, so this is only an entry an earlier build REPLACED
+            // (remove + re-add): move to the one that is there now. A push, not a replace
             // (Steam's router offers none), so Back passes the dead page once. Polling goes on,
             // so if the move never lands this row still shows the live entry's state.
             // Only once Steam has the new entry's overview: a page opened before that is sent

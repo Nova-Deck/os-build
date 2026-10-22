@@ -36,12 +36,13 @@ type SteamTab = {
 
 // The members each tab shows, re-read from the backend after every library-entry operation
 // (index.tsx). `version` is folded into the tabs useMemo's deps, so a change re-renders the list.
-let members: Record<StoreId, number[]> = { epic: [], gog: [] };
+type Members = Record<StoreId | "installed", number[]>;
+let members: Members = { epic: [], gog: [], installed: [] };
 let version = 0;
 const listeners = new Set<() => void>();
 
 export async function refreshLibraryTabs(): Promise<void> {
-  const r = await call<[], Record<StoreId, number[]> | { error: string }>("library_tabs");
+  const r = await call<[], Members | { error: string }>("library_tabs");
   if ("error" in r) {
     console.error("novadeck-stores: library tabs not refreshed:", r.error);
     return;
@@ -79,11 +80,14 @@ function getReactHooks(): Hooks | null {
   return null;
 }
 
+function overviews(appids: number[]): Overview[] {
+  const store = (window as any).appStore;
+  return appids.map((a) => store?.GetAppOverviewByAppID?.(a) as Overview | null).filter(Boolean) as Overview[];
+}
+
 // A collection-shaped object for Steam's grid. Every member Steam calls must be safe to call: a
 // throw here escapes into the library's error boundary and takes the WHOLE library down.
-function collectionFor(id: string, title: string, appids: number[]) {
-  const store = (window as any).appStore;
-  const apps = appids.map((a) => store?.GetAppOverviewByAppID?.(a) as Overview | null).filter(Boolean) as Overview[];
+function collectionFor(id: string, title: string, apps: Overview[]) {
   return {
     AsDeletableCollection: () => null,
     AsDragDropCollection: () => null,
@@ -146,30 +150,55 @@ function spliceTabs(result: unknown, deps: unknown[]): unknown {
   const [eSortBy, setSortBy, showSortingContextMenu] = deps;
   const appFilter = deps.find((d) => typeof (d as AppFilter | null)?.Matches === "function") as AppFilter | undefined;
 
-  const ours: SteamTab[] = [];
-  for (const t of TABS) {
-    const collection = collectionFor(t.id, t.title, members[t.store] ?? []);
-    // A store with nothing in the library (not connected, never synced) gets no tab.
-    if (collection.allApps.length === 0) continue;
+  // One tab on Steam's grid. `footer` is the template's: Steam's tab renderer expects its button
+  // hints and menu callbacks, and an empty one makes the tab a skipped no-op in the strip.
+  const gridTab = (base: SteamTab, collection: ReturnType<typeof collectionFor>): SteamTab => {
     const grid = createElement(Grid, { collection, eSortBy, setSortBy, showSortingContextMenu });
-    ours.push({
-      id: t.id,
-      title: t.title,
-      // Steam's tab renderer expects the template's footer (button hints, menu callbacks); an
-      // empty one makes the tab a skipped no-op in the strip.
-      footer: { ...(template.footer ?? {}) },
-      content: TabContext ? createElement(TabContext.Provider, { value: { label: t.title } }, grid) : grid,
+    return {
+      ...base,
+      footer: { ...(base.footer ?? template.footer ?? {}) },
+      content: TabContext ? createElement(TabContext.Provider, { value: { label: base.title } }, grid) : grid,
       renderTabAddon: () =>
         createElement(
           "span",
           { className: gamepadTabbedPageClasses?.TabCount ?? "" },
           collection.GetAppCountWithToolsFilter(appFilter),
         ),
-    });
+    };
+  };
+
+  const ours: SteamTab[] = [];
+  for (const t of TABS) {
+    const collection = collectionFor(t.id, t.title, overviews(members[t.store] ?? []));
+    // A store with nothing in the library (not connected, never synced) gets no tab.
+    if (collection.allApps.length === 0) continue;
+    ours.push(gridTab({ id: t.id, title: t.title, content: template.content }, collection));
   }
-  if (ours.length === 0) return result;
+
+  // Steam's own Installed tab, with our installed games in it too. Steam leaves every shortcut
+  // out (by app type): to Steam a not-installed stub tile looks as installed as a game, so only
+  // our registry can say which of ours are (library_tabs "installed"). Same id, title and footer,
+  // so Steam's per-tab sort and filter state still apply; its own apps are read from the grid it
+  // built, never from a collection we look up.
+  let withInstalled = tabs;
+  const installed = overviews(members.installed ?? []);
   const at = tabs.findIndex((t) => t.id === AFTER_TAB);
-  const merged = at < 0 ? [...tabs, ...ours] : [...tabs.slice(0, at + 1), ...ours, ...tabs.slice(at + 1)];
+  if (installed.length && at >= 0) {
+    const steamCollection = findInReactTree(tabs[at].content, (e: any) => Array.isArray(e?.props?.collection?.allApps))
+      ?.props?.collection;
+    if (steamCollection) {
+      const mine = new Set(installed.map((a) => a.appid));
+      const steamApps = (steamCollection.allApps as Overview[]).filter((a) => !mine.has(a.appid));
+      const collection = collectionFor(steamCollection.id, steamCollection.displayName, [...steamApps, ...installed]);
+      withInstalled = [...tabs.slice(0, at), gridTab(tabs[at], collection), ...tabs.slice(at + 1)];
+    } else {
+      bail("Steam's Installed tab has no collection to add to", null);
+    }
+  }
+
+  if (ours.length === 0 && withInstalled === tabs) return result;
+  const merged =
+    at < 0 ? [...withInstalled, ...ours] : [...withInstalled.slice(0, at + 1), ...ours, ...withInstalled.slice(at + 1)];
   return isTuple ? [merged, ...result.slice(1)] : merged;
 }
 

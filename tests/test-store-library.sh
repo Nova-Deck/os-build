@@ -421,7 +421,10 @@ m = ls.tab_members(reg)
     f"a store's tab lists its entries, installed or not, by unsigned live appid ({m['epic']})")
 (ok if 3000000009 not in m["epic"] else bad)("a retired appid is not in a tab — that entry is on its way out")
 (ok if m["gog"] == [3000000002] else bad)(f"a row with no appid and a malformed token are left out ({m['gog']})")
-(ok if ls.tab_members({}) == {"epic": [], "gog": []} else bad)("an empty registry is two empty tabs, never a missing key")
+(ok if m["installed"] == [3000000001] else bad)(
+    f"Steam's Installed tab gains only the installed games — not shelf tiles, not a pending_shelf whose files are gone ({m['installed']})")
+(ok if ls.tab_members({}) == {"epic": [], "gog": [], "installed": []} else bad)(
+    "an empty registry is empty tabs, never a missing key")
 
 async def fake_emit(*a): pass
 sys.modules["decky"] = types.SimpleNamespace(logger=types.SimpleNamespace(info=lambda *a: None), emit=fake_emit)
@@ -432,7 +435,7 @@ p = {"NOVADECK_STORE_HOME": str(tmp), "NOVADECK_STORE_UID": str(os.getuid()), "N
 main.paths.store_paths = lambda ensure=False: p
 (tmp / "shortcuts.json").write_text(json.dumps({"epic:A": {"appid": 7, "state": "shelf"}}))
 r = asyncio.run(main.Plugin().library_tabs())
-(ok if r == {"epic": [7], "gog": []} else bad)(f"library_tabs serves the registry's members ({r})")
+(ok if r == {"epic": [7], "gog": [], "installed": []} else bad)(f"library_tabs serves the registry's members ({r})")
 def broken(ensure=False): raise OSError("gone")
 main.paths.store_paths = broken
 r = asyncio.run(main.Plugin().library_tabs())
@@ -441,7 +444,7 @@ PY
 
 SRC="$ROOT/apps/decky/novadeck-stores/src"
 TABS="$SRC/LibraryTabs.tsx"
-grep -q 'call<\[\], Record<StoreId, number\[\]> | { error: string }>("library_tabs")' "$TABS" \
+grep -q 'call<\[\], Members | { error: string }>("library_tabs")' "$TABS" \
   && ! grep -q 'type-games' "$TABS" \
   && ok "tab membership is the backend's registry, never a filter over Steam's games collection" \
   || bad "LibraryTabs.tsx does not take its members from library_tabs alone"

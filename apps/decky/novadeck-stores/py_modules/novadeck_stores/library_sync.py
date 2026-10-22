@@ -31,17 +31,24 @@ def to_shelve(store, titles, registry):
 
 
 def tab_members(registry):
-    """{store: [unsigned appid]} — what each store's library tab shows (revision 2, R2): every
-    registered entry of that store, installed or not, by its LIVE appid. The same registry rule as
-    the game page, so a tab can never list a shortcut that is not ours. Retired appids are not
-    members: those entries are on their way out of the library."""
-    out = {store: [] for store in locations.STORE_DIRS}
+    """{store: [unsigned appid], "installed": [unsigned appid]} — what the library tabs show
+    (revision 2, R2). Each store's tab: every registered entry of that store, installed or not, by
+    its LIVE appid. "installed": the entries that are installed games, which Steam's own Installed
+    tab adds to its list — Steam leaves every shortcut out of it, since to Steam a not-installed
+    stub tile looks just as installed as a game. The same registry rule as the game page, so no
+    tab can list a shortcut that is not ours. Retired appids are not members: those entries are
+    on their way out of the library."""
+    out = {store: [] for store in locations.STORE_DIRS} | {"installed": []}
     for token, row in registry.items():
         if not shortcuts.TOKEN.fullmatch(token) or not isinstance(row, dict):
             continue
         appid = shortcuts._u32(row.get("appid"))
-        if appid is not None:
-            out[token.split(":", 1)[0]].append(appid)
+        if appid is None:
+            continue
+        out[token.split(":", 1)[0]].append(appid)
+        # A pending_shelf row's game files are gone; only the entry is waiting to be edited back.
+        if not shortcuts.is_shelf(row) and row.get("state") != "pending_shelf":
+            out["installed"].append(appid)
     return out
 
 

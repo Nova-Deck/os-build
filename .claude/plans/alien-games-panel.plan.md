@@ -115,7 +115,12 @@ first build step confirms the same classes appear on the React children of `Inne
   toggle and no cleanup code** (7e1c436). The tabs browse; Steam's Non-Steam tab lists every
   shortcut regardless (so even with TabMaster the games stay reachable); no released build ever
   created collections, so nothing needs deleting. The Pocket FIT's two were deleted by hand.
-- R4 HW walkthrough (the old task 6, on the revised surface) on a freshly built card.
+- R4 HW walkthrough (the old task 6, on the revised surface) on a freshly built card. **Scope
+  (decided 2026-10-22): BOTH stores** — everything in revision 2 was HW-tested on Epic only, and
+  GOG runs different code (gogdl, GamesDB art, the launcher-task resolver, the GOG tab). Per
+  store: sign in → sync → store tab → game page Install → Play → Uninstall → Installed tab.
+  Still deferred past R4: the native-Linux launch gate (no native GOG title owned) and the
+  card-volume install leg ([[internal-install-phase6-plan]]).
 
 ## Summary (revision 1 — the SURFACE parts are superseded by revision 2 above)
 

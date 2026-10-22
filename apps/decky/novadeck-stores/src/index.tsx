@@ -1,4 +1,4 @@
-import { addEventListener, definePlugin, removeEventListener, toaster } from "@decky/api";
+import { addEventListener, call, definePlugin, removeEventListener, toaster } from "@decky/api";
 import { Navigation } from "@decky/ui";
 import { Content } from "./Content";
 import { applyGamePagePatch } from "./GamePage";
@@ -51,6 +51,9 @@ export default definePlugin(() => {
   addEventListener("connect_done", onConnectDone);
   addEventListener("shortcut_op", onShortcutOp);
   addEventListener("install_event", onInstallEvent);
+  // Now that shortcut_op has a listener, the backend may ask Steam for things: it re-asserts the
+  // compat tools here, not at its own boot, when nothing would have answered (main.py).
+  void call("frontend_ready");
   // Revision 2: Install / progress / Uninstall on Steam's own game page (GamePage.tsx).
   const removeGamePagePatch = applyGamePagePatch();
   return {

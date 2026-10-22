@@ -88,9 +88,11 @@ first build step confirms the same classes appear on the React children of `Inne
   the meta column; a press re-ran `legendary info` (now reuses the page's cached info); focus fell
   to <body> after a press; **Steam sends an open page home when its app is removed, AND when it is
   opened for an app with no overview yet** — so the bridge waits for the replacement's overview,
-  moves the page, THEN removes (`remove_payload(moved_to=)`). OPEN: a swap re-downloads art
-  (hero lost to a TLS timeout); the boot-time compat re-assert times out when Decky starts before
-  SteamUI; TLS handshakes time out repeatedly on this device (art, legendary, SLR4 download).
+  moves the page, THEN removes (`remove_payload(moved_to=)`). Then, also HW-verified: a swap
+  copies the old entry's art from Steam's grid dir (no download); the compat re-assert runs on
+  `frontend_ready` instead of backend boot ("compat re-asserted on 1 entries", no timeout); a press
+  during the page's size lookup reuses it, and says "Starting…". OPEN: TLS handshakes time out
+  repeatedly on this device (art, legendary info 2.6 s → ~15 s, SLR4 download "No connection").
 - R2 library tabs: Epic / GOG (+ installed filter) via the /library patch; TabMaster detection
   falls back to collections.
 - R3 collections → opt-in toggle (default OFF); existing `[NovaDeck]` collections deleted once on

@@ -26,6 +26,7 @@ gogdl refresh and invalidate those, so they own the answer (see status.py).
 import asyncio
 import functools
 import itertools
+import os
 import subprocess
 
 import decky
@@ -200,6 +201,9 @@ class Plugin:
 
     async def install(self, store, gid, title, drive):
         """Start or resume an install; the download then runs on its own (installs.py)."""
+        # Through install_size, so a lookup the page already has running is waited for and its
+        # answer reused. A failed lookup leaves info None and install() asks once more itself.
+        await self.install_size(store, gid)
         fn = functools.partial(installs.install, info=self._info.get(f"{store}:{gid}"))
         return await self._install_action("install", store, fn, store, gid, title, drive)
 
@@ -341,13 +345,14 @@ class Plugin:
     async def reassert_compat(self, p=None):
         """Re-set the compat tool on every Windows entry. SpecifyCompatTool is in-memory until
         Steam flushes config.vdf, so a set made late in a session can be lost on a crash; this
-        runs best-effort at plugin boot. Fire-and-forget: a frontend not yet listening must not
-        block load."""
+        runs best-effort whenever the frontend comes up (frontend_ready). Fire-and-forget: the
+        caller never waits on Steam's answers."""
         try:
             p = p or await asyncio.to_thread(paths.store_paths)
             registry = await asyncio.to_thread(shortcuts.read_registry, p)
         except (OSError, subprocess.SubprocessError):
-            return
+            return 0
+        sent = 0
         for row in registry.values():
             # A shelf tile's Exe is the native install stub: a compat tool there would run the
             # stub through Proton.
@@ -355,8 +360,10 @@ class Plugin:
                 continue
             tool = launch.compat_tool(row.get("platform", "windows"))
             if tool:
+                sent += 1
                 asyncio.create_task(self._shortcut_roundtrip(
                     shortcuts.compat_payload(next(self._shortcut_seq), row["appid"], tool)))
+        return sent
 
     async def deregister_entry(self, store, gid):
         """Remove the entry and its registry row. {"deregistered": True} or {"error": ...}."""
@@ -383,20 +390,29 @@ class Plugin:
             decky.logger.info(f"deregister {store}:{gid}: removed appid {row['appid']}")
             return {"deregistered": True}
 
-    async def apply_artwork(self, store, gid, appid):
+    async def apply_artwork(self, store, gid, appid, reuse_from=None):
         """Set grid art on a registered entry from the store's own metadata. NON-BLOCKING by
         contract: {"applied": [kinds]} always, even when nothing could be fetched — a failure
         here must never unwind a good registration or raise into the caller. Idempotent: re-runs
-        re-set the same slots."""
+        re-set the same slots. `reuse_from` is the appid this entry replaced: whatever art Steam
+        holds for it is copied, and only the kinds it lacks are downloaded."""
         try:
             p = await asyncio.to_thread(paths.store_paths)
-            urls = await asyncio.to_thread(artwork.store_urls, store, gid, p)
+            got_by_kind = {}
+            if reuse_from is not None:
+                dirs = [os.path.join(os.path.dirname(v), "grid") for v in shortcuts.vdf_paths(p)]
+                got_by_kind = await asyncio.to_thread(
+                    artwork.grid_images, dirs, int(reuse_from) & 0xFFFFFFFF, int(p["NOVADECK_STORE_UID"]))
+            if set(artwork.KIND_ASSET) - set(got_by_kind):
+                # GOG's lookup is itself a network call: made only when something is missing.
+                urls = await asyncio.to_thread(artwork.store_urls, store, gid, p)
+                for kind, url in urls.items():
+                    if kind not in got_by_kind:
+                        got = await asyncio.to_thread(artwork.fetch_image, url, log=decky.logger.info)
+                        if got is not None:
+                            got_by_kind[kind] = got
             images = []
-            for kind, url in urls.items():
-                got = await asyncio.to_thread(artwork.fetch_image, url, log=decky.logger.info)
-                if got is None:
-                    continue
-                data, image_type = got
+            for kind, (data, image_type) in got_by_kind.items():
                 images.append({"kind": kind, "assetType": artwork.KIND_ASSET[kind],
                                "base64": base64.b64encode(data).decode(), "imageType": image_type})
             if not images:
@@ -652,6 +668,11 @@ class Plugin:
         try:
             p = await asyncio.to_thread(paths.store_paths)
             async with _LOCKS[store]:
+                # Asked again under the lock: a press that came in while the page's own lookup
+                # ran waited right here for it, and must take its answer, not log in a second
+                # time (HW 2026-10-22: two back-to-back lookups of ~15 s each on a slow network).
+                if token in self._info:
+                    return {"disk_size": self._info[token]["disk_size"]}
                 rc, out = await asyncio.to_thread(
                     cli.capture, p, installs.info_argv(store, gid, p), installs.INFO_TIMEOUT)
         except (OSError, subprocess.SubprocessError) as exc:
@@ -721,8 +742,10 @@ class Plugin:
         await asyncio.to_thread(shortcuts.write_registry, p, registry)
         for op in library_sync.collection_ops(store, registry):
             await self._shortcut_roundtrip(library_sync.collection_payload(next(self._shortcut_seq), op))
-        # Art is keyed by appid in Steam's grid dir, so the new entry needs its own.
-        asyncio.create_task(self.apply_artwork(store, gid, appid))
+        # Art is keyed by appid in Steam's grid dir, so the new entry needs its own: the old
+        # entry's, copied, with only what it lacked downloaded.
+        old_appid = old["appid"] if isinstance(old, dict) and "appid" in old else None
+        asyncio.create_task(self.apply_artwork(store, gid, appid, reuse_from=old_appid))
         decky.logger.info(f"swap {token}: appid {appid}, retired {retired}, still held {still}")
         return {"appid": appid}
 
@@ -807,12 +830,22 @@ class Plugin:
             tick += 1
             await asyncio.sleep(REQUEST_POLL)
 
-    async def _main(self):
-        # Compat mappings are in-memory until Steam flushes config.vdf; re-assert ours at boot.
+    async def frontend_ready(self):
+        """Called by the frontend once its shortcut_op listener is registered (index.tsx).
+        Compat mappings are in-memory until Steam flushes config.vdf, so ours are re-asserted
+        here — NOT at backend boot: after a Decky restart the backend is up well before SteamUI
+        has loaded the frontend, and a re-assert sent then waited out SHORTCUT_TIMEOUT with no
+        listener and was lost (HW 2026-10-22). Every SteamUI reload reloads the frontend, so
+        this also runs after the Steam restarts that are what lose an unflushed mapping."""
         try:
-            await self.reassert_compat()
-        except Exception as exc:  # noqa: BLE001 - boot best-effort, never fail load
-            decky.logger.info(f"reassert_compat at boot: {type(exc).__name__}")
+            # Logged with its count: "nothing timed out" alone cannot tell a re-assert that ran
+            # from one that never did.
+            decky.logger.info(f"frontend ready: compat re-asserted on {await self.reassert_compat()} entries")
+        except Exception as exc:  # noqa: BLE001 - best-effort, never fail the caller
+            decky.logger.info(f"reassert_compat: {type(exc).__name__}")
+        return True
+
+    async def _main(self):
         await self._request_loop()
 
     async def _unload(self):

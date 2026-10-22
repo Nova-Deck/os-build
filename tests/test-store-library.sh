@@ -104,7 +104,7 @@ def direct_write(pp, path, text):
     writes.append(path); pathlib.Path(path).write_text(text); return 0
 shortcuts.cli.write_as_user = direct_write
 art = []
-async def fake_art(self, store, gid, appid):
+async def fake_art(self, store, gid, appid, reuse_from=None):
     art.append((gid, appid)); return {"applied": []}
 main.Plugin.apply_artwork = fake_art
 main.ARTWORK_PACE = 0
@@ -181,7 +181,9 @@ tmp = pathlib.Path(tempfile.mkdtemp(prefix="store-library."))
 p = {"NOVADECK_STORE_HOME": str(tmp), "NOVADECK_STORE_UID": str(os.getuid()), "NOVADECK_STORE_USER": "deck"}
 main.paths.store_paths = lambda ensure=False: p
 shortcuts.cli.write_as_user = lambda pp, path, text: (pathlib.Path(path).write_text(text), 0)[1]
-async def no_art(self, store, gid, appid): return {"applied": []}
+art_calls = []
+async def no_art(self, store, gid, appid, reuse_from=None):
+    art_calls.append((gid, appid, reuse_from)); return {"applied": []}
 main.Plugin.apply_artwork = no_art
 reg_path = tmp / "shortcuts.json"
 def reg(): return json.loads(reg_path.read_text())
@@ -221,6 +223,11 @@ add = next(pl for e, pl in emitted if e == "shortcut_op" and pl["op"] == "add")
     f"the new entry is the milestone-6 model-B entry ({add['exe']}, {add['options']})")
 rem = next(pl for e, pl in emitted if e == "shortcut_op" and pl["op"] == "remove")
 (ok if rem["appid"] == 100 else bad)(f"the removed appid is the old shelf tile ({rem})")
+(ok if rem.get("moved_to") == 4000000000 else bad)(
+    f"the removal names its replacement, so an open page is moved before Steam sends it home ({rem})")
+asyncio.run(asyncio.sleep(0))
+(ok if ("A", 4000000000, 100) in art_calls else bad)(
+    f"the new entry's art is the old entry's, copied rather than downloaded again ({art_calls})")
 row = reg()["epic:A"]
 (ok if row == {"title": "Alpha", "exe": "/g/A/game.exe", "platform": "windows", "appid": 4000000000} else bad)(
     f"the row is now an installed entry with the new appid, nothing retired ({row})")

@@ -200,9 +200,58 @@ main.artwork.store_urls = lambda store, gid, pp: {}
 res = asyncio.run(plugin.apply_artwork("gog", "x", 1))
 (ok if res == {"applied": []} else bad)("a game the store has no art for is not an error")
 
+# An install transition: the replaced entry's art is in Steam's grid dir already (HW 2026-10-22,
+# where a re-download lost the hero to a TLS timeout). Copied; only the missing kind downloads.
+grid = tmp / "ud" / "1" / "config" / "grid"
+grid.mkdir(parents=True)
+main.shortcuts.vdf_paths = lambda pp: [str(grid.parent / "shortcuts.vdf")]
+(grid / "100p.jpg").write_bytes(JPEG[0])
+(grid / "100_hero.jpg").write_bytes(JPEG[0])
+(grid / "100_logo.png").write_bytes(b"<html>not an image</html>")
+fetched = []
+def fetch(url, **kw):
+    fetched.append(url); return (b"\x89PNG\r\n\x1a\n" + b"\x00" * 8, "png")
+main.artwork.fetch_image = fetch
+main.artwork.store_urls = lambda store, gid, pp: {"capsule": "https://cdn/c.jpg", "hero": "https://cdn/h.jpg",
+                                                  "logo": "https://cdn/l.png"}
+emitted.clear()
+res = asyncio.run(plugin.apply_artwork("epic", "Alba", 200, reuse_from=100))
+(ok if sorted(res["applied"]) == ["capsule", "hero", "logo"] and fetched == ["https://cdn/l.png"] else bad)(
+    f"a swap copies the old entry's capsule and hero, downloads only the logo it lacked ({res}, {fetched})")
+(ok if emitted[-1][1]["appid"] == 200 else bad)("the copied art is set on the NEW appid")
+(grid / "100_logo.png").unlink()
+(grid / "100_logo.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 8)
+fetched.clear()
+calls = []
+main.artwork.store_urls = lambda store, gid, pp: calls.append(1) or {}
+res = asyncio.run(plugin.apply_artwork("gog", "x", 200, reuse_from=-4294967196))
+(ok if len(res["applied"]) == 3 and not fetched and not calls else bad)(
+    f"with every kind on disk nothing touches the network, not even GOG's lookup; a signed appid reads the same files ({res}, {calls})")
+os.symlink(grid / "100p.jpg", grid / "300p.jpg")
+(ok if "capsule" not in artwork.grid_images([str(grid)], 300, os.getuid()) else bad)(
+    "a symlinked grid file is never read (root reads inside the user's tree)")
+(ok if artwork.grid_images([str(grid)], 100, os.getuid() + 1) == {} else bad)(
+    "a grid file not owned by the store user is never read")
+
+# Compat re-assert waits for the frontend's listener (HW 2026-10-22: sent at backend boot after a
+# Decky restart, nothing answered for 30 s and the re-assert was lost).
+import inspect
+reasserted = []
+async def fake_reassert(self, p=None): reasserted.append(1)
+main.Plugin.reassert_compat = fake_reassert
+(ok if "reassert_compat" not in inspect.getsource(main.Plugin._main) else bad)(
+    "the backend does not re-assert compat at its own boot, before anything listens")
+(ok if asyncio.run(plugin.frontend_ready()) is True and reasserted == [1] else bad)(
+    "frontend_ready re-asserts the compat tools")
+
 (ok if asyncio.iscoroutinefunction(main.Plugin.apply_artwork) else bad)(
     "apply_artwork is exposed on the backend") if False else None
 PY
+
+INDEX="$ROOT/apps/decky/novadeck-stores/src/index.tsx"
+awk '/addEventListener\("shortcut_op"/{l=1} l && /call\("frontend_ready"\)/{f=1} END{exit !f}' "$INDEX" \
+  && ok "the frontend calls frontend_ready only after its shortcut_op listener is registered" \
+  || bad "index.tsx does not call frontend_ready after registering shortcut_op"
 
 grep -q 'test-store-artwork.sh' "$ROOT/Makefile" \
   && ok "this suite is wired into make test (a suite nothing runs is documentation)" \

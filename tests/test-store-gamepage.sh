@@ -174,8 +174,26 @@ main.installs.install = fake_install
 asyncio.run(plugin.install("epic", "A", "A", "/home/deck"))
 (ok if seen.get("info") == {"disk_size": 1234, "folder": "A"} else bad)(
     f"install() is handed the page's cached store info ({seen.get('info')})")
+main.cli.capture = lambda pp, argv, timeout: (1, "")
 asyncio.run(plugin.install("epic", "Uncached", "U", "/home/deck"))
-(ok if seen.get("info") is None else bad)("with nothing cached, install() asks the store itself")
+(ok if seen.get("info") is None else bad)("with no answer from the store, install() is left to ask the store itself")
+
+# A press while the page's own lookup is still running waits for it (HW 2026-10-22: two
+# back-to-back ~15 s logins on a slow network).
+import time
+lookups = []
+def slow_capture(pp, argv, timeout):
+    lookups.append(1); time.sleep(0.3)
+    return (0, json.dumps({"manifest": {"disk_size": 77}}))
+main.cli.capture = slow_capture
+async def race():
+    page = asyncio.create_task(plugin.install_size("epic", "Slow"))
+    await asyncio.sleep(0.05)
+    await plugin.install("epic", "Slow", "S", "/home/deck")
+    await page
+asyncio.run(race())
+(ok if len(lookups) == 1 and seen.get("info") == {"disk_size": 77, "folder": "Slow"} else bad)(
+    f"a press during the page's lookup reuses it — one login, not two ({len(lookups)} lookups)")
 
 from novadeck_stores import shortcuts
 (ok if shortcuts.remove_payload(1, 5, moved_to=-7)["moved_to"] == -7 and "moved_to" not in shortcuts.remove_payload(1, 5)

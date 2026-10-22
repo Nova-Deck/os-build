@@ -381,7 +381,9 @@ function RowBody({ page, size, busy, run }: BodyProps) {
             disabled={busy || !!page.busy || !drive || tooBig}
             onClick={() => run(() => installTile(page.store, page.id))}
           >
-            Install
+            {/* A start asks the store for the game first, which can take many seconds on a slow
+                network: say so, rather than a grey button that looks like it ignored the press. */}
+            {busy ? "Starting…" : "Install"}
           </DialogButton>
           <Meta lines={[`${store} · ${needs}`, tooBig ? `Not enough space on ${where}` : `To ${where}`, waiting]} />
         </>
@@ -414,7 +416,7 @@ function RowBody({ page, size, busy, run }: BodyProps) {
             disabled={busy || !!page.busy}
             onClick={() => run(() => installTile(page.store, page.id))}
           >
-            Resume
+            {busy ? "Starting…" : "Resume"}
           </DialogButton>
           <DialogButton className="novadeck-play-secondary" disabled={busy} onClick={remove}>
             Remove

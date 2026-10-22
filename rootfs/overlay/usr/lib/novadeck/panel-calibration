@@ -1,0 +1,37 @@
+#!/usr/bin/python3
+"""CLI over novadeck_panel — JSON on stdout, errors as {"error": ...} with exit 1.
+
+  panel-calibration status            measured rate + knobs + persisted values (~0.5s)
+  panel-calibration status --quick    the same without the vblank measurement
+  panel-calibration calibrate         trim the currently-scanning rate, persist, stay applied
+  panel-calibration apply             boot-time re-apply of this unit's persisted values
+
+Consumers: novadeck-panel-calibration.service (apply) and the Novadeck Control Decky plugin's
+Panel tab (status/calibrate — the plugin backend runs as root, so the sysfs writes work).
+"""
+
+import json
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+import novadeck_panel  # noqa: E402
+
+
+def main(argv):
+    command = argv[1] if len(argv) > 1 else "status"
+    try:
+        if command == "status":
+            return novadeck_panel.status(measure="--quick" not in argv)
+        if command == "calibrate":
+            return novadeck_panel.calibrate()
+        if command == "apply":
+            return {"applied": novadeck_panel.apply_saved()}
+        raise RuntimeError("unknown command: %s" % command)
+    except (novadeck_panel.NoDisplay, RuntimeError, OSError) as e:
+        print(json.dumps({"error": str(e)}))
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    print(json.dumps(main(sys.argv)))

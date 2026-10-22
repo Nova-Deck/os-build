@@ -1,5 +1,6 @@
 import asyncio
 
+from novadeck_control.panel import panel_calibrate, panel_status
 from novadeck_control.power import (
     power_status,
     reset_fan_curve,
@@ -34,6 +35,13 @@ class Plugin:
 
     async def reset_fan_curve(self, every=False):
         return await asyncio.to_thread(reset_fan_curve, every)
+
+    async def get_panel_status(self):
+        return await asyncio.to_thread(panel_status)
+
+    # Blocks for up to CALIBRATE_TIMEOUT; to_thread keeps Decky's loop live while it runs.
+    async def calibrate_panel(self):
+        return await asyncio.to_thread(panel_calibrate)
 
     @staticmethod
     def _build_config():

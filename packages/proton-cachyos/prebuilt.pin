@@ -41,9 +41,9 @@
 # stay pinned to the same tool name. Re-verify the toolmanifest rewrite in assemble-rootfs.sh
 # still matches (it fails loudly if upstream changes the commandline format).
 name: proton-cachyos
-version: 11.0-20261014-slr
-url: https://github.com/CachyOS/proton-cachyos/releases/download/cachyos-11.0-20261014-slr/proton-cachyos-11.0-20261014-slr-arm64.tar.xz
-sha256: 7d8b0acd3eddd7057782a634f0a3eba44773075c0d757beafe136bcecf541e10
+version: 11.0-20261015-slr
+url: https://github.com/CachyOS/proton-cachyos/releases/download/cachyos-11.0-20261015-slr/proton-cachyos-11.0-20261015-slr-arm64.tar.xz
+sha256: c2849f62026a494bf6a43a36b35a63b3b796d480d141eea125d117b40f0f4107
 kind: tar
 strip: 1
 dest: /usr/share/steam/compatibilitytools.d/proton-cachyos-11.0-arm64

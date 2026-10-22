@@ -78,6 +78,34 @@ export interface Config {
   game?: GameRef | null;
 }
 
+export interface PanelStatus {
+  /** True when the panel driver exposes frame_len_* trim knobs — gates the Calibrate button.
+   *  The measured rate itself is served on every board (it only needs /dev/dri vblanks). */
+  supported: boolean;
+  serial: string;
+  /** The calibratable nominal rates, e.g. [60, 120]. Empty when unsupported. */
+  rates: number[];
+  /** Live knob values by rate ("120" -> 76). */
+  current: Record<string, number>;
+  /** Persisted per-THIS-unit values by rate — what the boot re-apply writes. */
+  saved: Record<string, number>;
+  /** The real scanout rate from vblank timestamps, null when it could not be measured. */
+  measuredHz: number | null;
+  /** Which nominal rate measuredHz is attributed to, null when none is close enough. */
+  nominalHz: number | null;
+  measureError?: string;
+  error?: string;
+}
+
+export interface PanelCalibrateResult {
+  rate?: number;
+  value?: number;
+  startValue?: number;
+  startHz?: number;
+  endHz?: number;
+  error?: string;
+}
+
 export interface DropdownChoice {
   data: any;
   label: string;

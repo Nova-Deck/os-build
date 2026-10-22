@@ -21,9 +21,9 @@
 # rootfs/overlay/etc/inputplumber/devices.d, because upstream now ships configs for boards we
 # also describe. See the note below.
 name: inputplumber
-version: 0.81.0
-url: https://github.com/ShadowBlip/InputPlumber/releases/download/v0.81.0/inputplumber-aarch64.tar.gz
-sha256: 5509a6f79bec95c240de34833639e3ba8a144752e3745e6eb978b38b8aa05a10
+version: 0.82.0
+url: https://github.com/ShadowBlip/InputPlumber/releases/download/v0.82.0/inputplumber-aarch64.tar.gz
+sha256: 2695fc677f2ec1945a642e530029105d78be7d3058f412f31e83c37be5c9eeea
 strip: 1
 
 # 0.78.0 was the release where upstream started describing ARM handhelds at all: it added
@@ -68,6 +68,13 @@ strip: 1
 # 50-konkr_pocket_fit.yaml ('-' < '_') — but it matches on `dmi_data`, so it can never fire on an
 # ARM board and our Pocket FIT keeps upstream's devicetree config.
 #
+# 0.82.0 TAKES THE AYN THOR LITE (new upstream 50-ayn_thor_lite.yaml), the same file name ours
+# carried — ours would have won the /etc tie and hidden it, so ours is deleted with this bump.
+# Compared before deleting: same ret1 pad row (2020:3001 Retroid MCU), same ayn2 gpio-keys-ayn
+# row, same xbox-elite target. Upstream keys on `compatible: ayn,thor-lite` where ours used
+# `model` — an exact value match on the first compatible string, so it fires the same way — and
+# drops the `phys_path` pin on the gpio-keys row, which the unique node name covers anyway.
+#
 # Two upstream fixes in this range are worth knowing when triaging input on hardware: 50263d3
 # restores the release delay gamepad macros need, so on-release QuickAccess/Screenshot chords are
 # visible to Steam again, and cf93497 restores device-node permissions on unhide and re-triggers
@@ -75,13 +82,9 @@ strip: 1
 #
 # What upstream still does NOT describe, and what stays in our overlay:
 #   * four SM8550 AYANEO Pocket boards — 50-ayaneo_pocket_{ace,dmg,evo,s1}.yaml
-#   * the AYN Thor Lite — 50-ayn_thor_lite.yaml, upstream's Retroid description (its `ret1` map, the
-#     same driver, the same 2020:3001 MCU) behind a DT `model` match, because its `compatible`
-#     `ayn,thor-lite` is not what upstream's 50-ayn_thor.yaml keys on
 #   * the MANGMI Pocket Max — 50-mangmi_pocket_max.yaml plus our sm8250_pocket_max_mcu map; its pad
 #     is an SPI MCU on a driver nothing else uses, so there is nothing upstream to adopt
 #
-# Binary links libiio.so.0 (IIO sensors/gyro) — pulled from the holo repo, not bundled.
-# Re-read on the 0.81.0 bump: still the only non-base NEEDED entry (libudev, libgcc_s, libm, libc
-# are all base).
-deps: libiio
+# 0.82.0 dropped the libiio linkage (upstream 966be34, the IIO driver refactor) — NEEDED re-read
+# on this bump is base-only (libudev, libgcc_s, libm, libc), so the former `deps: libiio` line is
+# gone. If a bump brings a non-base NEEDED entry back, restore a deps line for it.

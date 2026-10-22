@@ -6,10 +6,11 @@
 // goes back through the shortcut_result callable. Entries written through Steam's own API are
 // persisted by Steam itself — nothing of ours ever writes shortcuts.vdf.
 import { call } from "@decky/api";
+import { Navigation } from "@decky/ui";
 
 export type ShortcutOp =
   | { op: "add"; req: number; name: string; exe: string; dir: string; options: string }
-  | { op: "remove"; req: number; appid: number }
+  | { op: "remove"; req: number; appid: number; moved_to?: number }
   | {
       op: "artwork";
       req: number;
@@ -83,6 +84,30 @@ async function applyCollection(name: string, add: number[], remove: number[]): P
   if (missing.length) throw new Error(`no app overview for ${missing.join(",")} (the rest were added)`);
 }
 
+// How long a page move gets to land before the old entry is removed regardless.
+const ROUTE_WAIT_MS = 2000;
+
+// An install transition replaces an entry; if its game page is open, move it to the replacement
+// FIRST. Steam sends an open page whose app was removed to the library home (HW 2026-10-22: the
+// user was kicked out the moment DOOM 64 finished), and the page cannot follow on its own — it is
+// gone before its next poll. The replacement's OVERVIEW must exist before the move: a page opened
+// for an app Steam has no overview of yet is itself sent home within 100 ms, and a just-added
+// shortcut has none for a moment (measured on HW the same day). Bounded throughout: a move that
+// never lands still lets the removal go ahead.
+async function followReplacement(oldAppid: number, newAppid: number): Promise<void> {
+  const onPage = (appid: number) => window.location.pathname.endsWith(`/library/app/${appid}`);
+  if (!onPage(oldAppid)) return;
+  const appStore = (window as unknown as { appStore?: AppStore }).appStore;
+  if (!appStore?.GetAppOverviewByAppID) return;
+  const { missing } = await overviewsFor(appStore, [newAppid]);
+  if (missing.length) return;
+  Navigation.Navigate(`/library/app/${newAppid}`);
+  const deadline = Date.now() + ROUTE_WAIT_MS;
+  while (!onPage(newAppid) && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 50));
+  }
+}
+
 export async function executeShortcutOp(op: ShortcutOp): Promise<void> {
   try {
     if (op.op === "collection") {
@@ -124,6 +149,7 @@ export async function executeShortcutOp(op: ShortcutOp): Promise<void> {
       if (op.dir) apps.SetShortcutStartDir(appid, op.dir);
       await call("shortcut_result", op.req, appid, null);
     } else {
+      if (op.moved_to !== undefined) await followReplacement(op.appid >>> 0, op.moved_to >>> 0);
       // Unsigned, the form live SteamClient calls take (unifideck's removals do the same).
       apps.RemoveShortcut(op.appid >>> 0);
       await call("shortcut_result", op.req, null, null);

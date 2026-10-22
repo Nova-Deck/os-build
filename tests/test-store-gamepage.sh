@@ -163,7 +163,23 @@ r = asyncio.run(plugin.install_size("gog", "G"))
 (ok if r == {"disk_size": 109} else bad)(f"a GOG size is the common depots plus the largest language ({r})")
 main.cli.capture = lambda pp, argv, timeout: (1, "")
 r = asyncio.run(plugin.install_size("gog", "B"))
-(ok if "error" in r and "gog:B" not in plugin._sizes else bad)(f"a failed lookup is an error and is NOT cached ({r})")
+(ok if "error" in r and "gog:B" not in plugin._info else bad)(f"a failed lookup is an error and is NOT cached ({r})")
+
+# The press reuses what the page already asked: no second login that can flake (HW 2026-10-22).
+seen = {}
+def fake_install(store, gid, title, drive, pp, vols=None, info=None):
+    seen["info"] = info
+    return {"started": True, "path": "/x"}
+main.installs.install = fake_install
+asyncio.run(plugin.install("epic", "A", "A", "/home/deck"))
+(ok if seen.get("info") == {"disk_size": 1234, "folder": "A"} else bad)(
+    f"install() is handed the page's cached store info ({seen.get('info')})")
+asyncio.run(plugin.install("epic", "Uncached", "U", "/home/deck"))
+(ok if seen.get("info") is None else bad)("with nothing cached, install() asks the store itself")
+
+from novadeck_stores import shortcuts
+(ok if shortcuts.remove_payload(1, 5, moved_to=-7)["moved_to"] == -7 and "moved_to" not in shortcuts.remove_payload(1, 5)
+ else bad)("a removal names its replacement only when there is one")
 r = asyncio.run(plugin.install_size("epic", "../x"))
 (ok if "error" in r else bad)(f"a malformed id is refused before any CLI runs ({r})")
 PY
@@ -183,6 +199,11 @@ grep -q 'appDetailsHeaderClasses' "$SRC/GamePage.tsx" \
 [ -f "$SRC/GamePage.tsx" ] && ! grep -q '2_000_000_000\|2000000000' "$SRC/GamePage.tsx" \
   && ok "ownership is the backend's registry answer, never unifideck's appid threshold" \
   || bad "GamePage.tsx gates on an appid threshold (unifideck's rule, not ours)"
+
+BRIDGE="$SRC/lib/shortcutBridge.ts"
+grep -B2 'apps.RemoveShortcut(op.appid' "$BRIDGE" | grep -q 'followReplacement' \
+  && ok "the bridge moves an open page to the replacement BEFORE removing (Steam sends it home otherwise)" \
+  || bad "shortcutBridge.ts removes an entry without first moving its open page"
 
 grep -q 'test-store-gamepage.sh' "$ROOT/Makefile" \
   && ok "this suite is wired into make test (a suite nothing runs is documentation)" \

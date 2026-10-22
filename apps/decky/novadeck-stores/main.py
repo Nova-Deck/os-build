@@ -24,6 +24,7 @@ Status is read from the CLIs' own credential files rather than from any state of
 gogdl refresh and invalidate those, so they own the answer (see status.py).
 """
 import asyncio
+import functools
 import itertools
 import subprocess
 
@@ -199,7 +200,8 @@ class Plugin:
 
     async def install(self, store, gid, title, drive):
         """Start or resume an install; the download then runs on its own (installs.py)."""
-        return await self._install_action("install", store, installs.install, store, gid, title, drive)
+        fn = functools.partial(installs.install, info=self._info.get(f"{store}:{gid}"))
+        return await self._install_action("install", store, fn, store, gid, title, drive)
 
     async def install_status(self):
         """Read-only (installs.install_status), so it takes no lock: polled for progress, it must
@@ -489,7 +491,7 @@ class Plugin:
                 if not (token.startswith(f"{store}:") and isinstance(row, dict) and row.get("retired")):
                     continue
                 still = [a for a in row["retired"] if "error" in await self._shortcut_roundtrip(
-                    shortcuts.remove_payload(next(self._shortcut_seq), a))]
+                    shortcuts.remove_payload(next(self._shortcut_seq), a, moved_to=row.get("appid")))]
                 registry[token] = {k: v for k, v in row.items() if k != "retired"} | (
                     {"retired": still} if still else {})
                 await asyncio.to_thread(shortcuts.write_registry, p, registry)
@@ -635,17 +637,18 @@ class Plugin:
             return {"error": "the install records are unreadable"}
         return state
 
-    _sizes = {}
+    # parse_info() per token: the size the page shows, and the folder install() needs.
+    _info = {}
 
     async def install_size(self, store, gid):
         """{"disk_size": bytes} the store says an install needs, or {"error": ...}. Cached for the
-        session: a size does not change between visits, and each lookup is the CLI logging in
-        over the network. A failure is not cached, so the next visit asks again."""
+        session, and handed to install() so the press does not ask again: each lookup is the CLI
+        logging in over the network. A failure is not cached, so the next visit asks again."""
         token = f"{store}:{gid}"
         if not shortcuts.TOKEN.fullmatch(token):
             return {"error": "unknown game"}
-        if token in self._sizes:
-            return self._sizes[token]
+        if token in self._info:
+            return {"disk_size": self._info[token]["disk_size"]}
         try:
             p = await asyncio.to_thread(paths.store_paths)
             async with _LOCKS[store]:
@@ -656,8 +659,8 @@ class Plugin:
         info = installs.parse_info(store, gid, out) if rc == 0 else None
         if info is None:
             return {"error": "the store did not say"}
-        self._sizes[token] = {"disk_size": info["disk_size"]}
-        return self._sizes[token]
+        self._info[token] = info
+        return {"disk_size": info["disk_size"]}
 
     async def set_install_drive(self, drive):
         """Remember where a tile press installs. Only a drive that is mounted now is accepted."""
@@ -711,7 +714,7 @@ class Plugin:
         still = []
         for old_appid in retired:
             gone = await self._shortcut_roundtrip(
-                shortcuts.remove_payload(next(self._shortcut_seq), old_appid))
+                shortcuts.remove_payload(next(self._shortcut_seq), old_appid, moved_to=appid))
             if "error" in gone:
                 still.append(old_appid)
         registry[token] = {**new_row, "appid": appid, **({"retired": still} if still else {})}

@@ -125,8 +125,12 @@ def add_payload(req, store, gid, title, resolved):
             "options": fields["LaunchOptions"]}
 
 
-def remove_payload(req, appid):
-    return {"op": "remove", "req": req, "appid": int(appid)}
+def remove_payload(req, appid, moved_to=None):
+    """`moved_to` names the entry that replaces this one (an install transition). Steam sends an
+    open page of a removed app to the library home, so the bridge moves that page to the
+    replacement BEFORE removing — the page cannot follow on its own (HW 2026-10-22)."""
+    return {"op": "remove", "req": req, "appid": int(appid),
+            **({"moved_to": int(moved_to)} if moved_to is not None else {})}
 
 
 def compat_payload(req, appid, tool):

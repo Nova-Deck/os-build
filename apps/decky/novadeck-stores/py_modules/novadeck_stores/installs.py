@@ -271,8 +271,12 @@ def uninstall(store, gid, p, vols=None):
     return {"uninstalled": True}
 
 
-def install(store, gid, title, volume_path, p, vols=None):
-    """Start (or resume) an install. {"started": True, "path": ...} or {"error": ...}."""
+def install(store, gid, title, volume_path, p, vols=None, info=None):
+    """Start (or resume) an install. {"started": True, "path": ...} or {"error": ...}.
+
+    `info` is a parse_info() result the caller already has (the game page asked for the size);
+    without it the store is asked here. Every ask is the CLI logging in over the network, and a
+    second one that flakes fails a press that needed none (HW 2026-10-22)."""
     if store not in locations.STORE_DIRS or not safe_component(gid):
         return {"error": "unknown game"}
     vols = vols if vols is not None else locations.user_volumes(p["NOVADECK_STORE_USER"])
@@ -282,8 +286,9 @@ def install(store, gid, title, volume_path, p, vols=None):
     if busy():
         return {"error": "another game is installing"}
 
-    rc, out = cli.capture(p, info_argv(store, gid, p), INFO_TIMEOUT)
-    info = parse_info(store, gid, out) if rc == 0 else None
+    if info is None:
+        rc, out = cli.capture(p, info_argv(store, gid, p), INFO_TIMEOUT)
+        info = parse_info(store, gid, out) if rc == 0 else None
     if info is None:
         return {"error": "cannot read the game's size from the store"}
     if not safe_component(info["folder"]):

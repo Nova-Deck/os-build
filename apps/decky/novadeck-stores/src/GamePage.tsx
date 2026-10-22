@@ -134,13 +134,16 @@ const rowCss = `
     gap: 16px;
     padding: 16px 2.8vw;
   }
+  /* width: auto beats DialogButton's own width: 100% — without it the button takes the whole
+     row and squeezes the text beside it to a column one letter wide (HW, 2026-10-22). */
   .novadeck-play-row .novadeck-play-primary {
+    width: auto !important;
     min-width: 200px;
     height: 48px;
     flex: 0 0 auto;
   }
   .novadeck-play-row .novadeck-play-secondary {
-    width: auto;
+    width: auto !important;
     height: 48px;
     flex: 0 0 auto;
   }
@@ -149,6 +152,7 @@ const rowCss = `
     flex-direction: column;
     gap: 4px;
     font-size: 14px;
+    flex: 1 1 auto;
     min-width: 0;
   }
   .novadeck-play-row .novadeck-play-note {
@@ -250,7 +254,10 @@ function PlayRow({ appid }: { appid: number }) {
             // from the library, so move to the one that is there now. A push, not a replace
             // (Steam's router offers none), so Back passes the dead page once. Polling goes on,
             // so if the move never lands this row still shows the live entry's state.
-            if (s.appid !== appid && movedTo.current !== s.appid) {
+            // Only once Steam has the new entry's overview: a page opened before that is sent
+            // straight home (HW 2026-10-22). Until then the next poll tries again.
+            const ready = !!(window as any).appStore?.GetAppOverviewByAppID?.(s.appid);
+            if (s.appid !== appid && movedTo.current !== s.appid && ready) {
               movedTo.current = s.appid;
               Navigation.Navigate(`/library/app/${s.appid}`);
             }
@@ -314,6 +321,13 @@ function PlayRow({ appid }: { appid: number }) {
     } finally {
       setBusy(false);
       setTick((t) => t + 1);
+      // The pressed button disabled itself while busy, which drops focus to the document: with
+      // nothing focused the gamepad drives nothing until the stick is moved (HW 2026-10-22).
+      // Restored only when focus is still nowhere, never taken back from where the user went.
+      window.setTimeout(() => {
+        const lost = document.activeElement === null || document.activeElement === document.body;
+        if (lost) ref.current?.querySelector<HTMLElement>("button:not([disabled])")?.focus();
+      }, 0);
     }
   };
 

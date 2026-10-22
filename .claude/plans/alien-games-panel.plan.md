@@ -81,8 +81,16 @@ first build step confirms the same classes appear on the React children of `Inne
   per-appid marker. A swap (install done / uninstall) gives the entry a new appid: the page follows
   through the token from its earlier poll, with a history PUSH (Steam's router has no replace) — so
   Back passes the dead page once. Installed games keep native Play plus an Uninstall row above it.
-  **HW must confirm**: the PlaySection class actually hides the native row under InnerContainer;
-  initial gamepad focus lands on Install; the row's position/padding reads right; the push-follow.
+  **HW-PASSED 2026-10-22 on the Pocket FIT, fresh dev card** (DOOM 64, Epic): PlaySection hide
+  works under InnerContainer; Install takes focus; install → swap → Proton launch → uninstall all
+  keep the user on the game's page; a Steam game's page and a non-NovaDeck shortcut's page are
+  untouched (marker only, no row, no hide rule). Fixed on HW: DialogButton's width:100% squeezed
+  the meta column; a press re-ran `legendary info` (now reuses the page's cached info); focus fell
+  to <body> after a press; **Steam sends an open page home when its app is removed, AND when it is
+  opened for an app with no overview yet** — so the bridge waits for the replacement's overview,
+  moves the page, THEN removes (`remove_payload(moved_to=)`). OPEN: a swap re-downloads art
+  (hero lost to a TLS timeout); the boot-time compat re-assert times out when Decky starts before
+  SteamUI; TLS handshakes time out repeatedly on this device (art, legendary, SLR4 download).
 - R2 library tabs: Epic / GOG (+ installed filter) via the /library patch; TabMaster detection
   falls back to collections.
 - R3 collections → opt-in toggle (default OFF); existing `[NovaDeck]` collections deleted once on

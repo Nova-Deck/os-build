@@ -93,6 +93,12 @@ lgd = json.dumps([
      "metadata": {"customAttributes": {"ThirdPartyManagedProvider": {"value": "UbisoftConnect"},
                                        "partnerLinkType": {"value": "ubisoft"}}}},
     {"app_name": "Bare", "app_title": "No metadata", "metadata": None},
+    # Death Stranding's extras bundle, as legendary lists it on the Pocket FIT (2026-10-22): no
+    # mainGameItem, so legendary does not hide it as DLC; only the category says what it is.
+    {"app_name": "5bf67f31", "app_title": "Death Stranding Content",
+     "metadata": {"customAttributes": {},
+                  "categories": [{"path": "public"}, {"path": "digitalextras"}, {"path": "games"},
+                                 {"path": "applications"}]}},
 ])
 t = library.epic_titles(lgd)
 by = {x["id"]: x for x in t}
@@ -105,6 +111,8 @@ by = {x["id"]: x for x in t}
     "a partner-linked Epic title installs but says what it needs to run "
     f"(AC Syndicate's shape, measured on HW 2026-10-20: {by.get('Alba')})")
 (ok if by["Bare"]["installable"] is True else bad)("an Epic title with no metadata does not crash the list")
+(ok if by["5bf67f31"]["installable"] is False and "requires" not in by["5bf67f31"] else bad)(
+    f"Epic's digital-extras bundle (soundtrack, artbook) is owned but gets no tile — it is not a game ({by.get('5bf67f31')})")
 (ok if library.epic_titles("not json") is None and library.epic_titles('{"a": 1}') is None else bad)(
     "unparseable legendary output is no answer, not an empty library")
 

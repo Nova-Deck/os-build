@@ -42,11 +42,17 @@ def epic_titles(text):
         return None
     titles = []
     for game in games:
-        attrs = (game.get("metadata") or {}).get("customAttributes") or {}
+        meta = game.get("metadata") or {}
+        attrs = meta.get("customAttributes") or {}
         third_party = (attrs.get("ThirdPartyManagedApp") or {}).get("value")
         partner_link = (attrs.get("partnerLinkType") or {}).get("value")
+        # Epic's "digital extras" bundle (a soundtrack, an artbook) is its own owned item with no
+        # mainGameItem, so legendary does not hide it as DLC — only this category says it is not
+        # a game. It downloads, but nothing in it launches (Death Stranding Content, HW 2026-10-22).
+        extras = any(isinstance(c, dict) and c.get("path") == "digitalextras"
+                     for c in meta.get("categories") or [])
         title = {"id": game["app_name"], "title": game.get("app_title") or game["app_name"],
-                 "installable": not third_party}
+                 "installable": not third_party and not extras}
         if third_party or partner_link:
             title["requires"] = third_party or partner_link
         titles.append(title)

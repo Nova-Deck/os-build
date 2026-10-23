@@ -27,6 +27,7 @@ root (the `gamescope/` checkout inside makepkg's `$srcdir`) by
 0023-xdg-titles-are-reported-to-steam.patch          (NOVADECK_ANDROID_APPID root property; ConVar touch_passthrough_xdg_titles)
 0025-steamcompmgr-elapsed-time-fps-limiter.patch     (ConVar limiter_use_elapsed_time, default on)
 0026-drm-offer-an-edid-less-internal-panels-native-modes-as-refresh-rates.patch
+0027-steamcompmgr-refresh-only-request-takes-the-exact-mode.patch
 ```
 
 `0008`-`0013` are **retired** (see below). The numbering is kept as-is rather than compacted, so
@@ -404,6 +405,15 @@ slider switches the CRTC (HW-checked on the FIT, 2026-10-14). Kettle's opt-in kn
 slider kept showing its own stored request (144), so the screen said one rate while the panel ran
 another. With no game open, gamescope ignores Steam's request anyway
 (`GAMESCOPE_DISPLAY_DYNAMIC_REFRESH_BASED_ON_GAME_PRESENCE`) and runs the panel's highest mode.
+
+`0027` — **a refresh-only request switches to that exact mode** (ours). With the frame limiter
+off, Steam's refresh slider sends `set_app_target_refresh_cycle( N, ONLY_CHANGE_REFRESH_RATE )`,
+and stock gamescope runs it through the cap's refresh-doubling search: the HIGHEST valid rate N
+divides. On a 60/120 panel a 60 Hz pick therefore ran at 120 and the panel never left its top mode
+(HW, Odin 3, 2026-10-23: `set display refresh rate: 60` / `refresh cycle: 60 - 0x7`, CRTC still
+120); the Pocket Max went 144 → 120 on "60". `0027` takes the exact rate when the panel offers it,
+and only for refresh-only requests — caps keep the doubling, which is what holds a 30 fps game at
+the panel's top rate for latency.
 
 Drop the patch files here with those exact names (or rename and update `source.pin`'s
 `patches:` line). **Until a declared patch is present, `make overlay` / `make base` fail fast**

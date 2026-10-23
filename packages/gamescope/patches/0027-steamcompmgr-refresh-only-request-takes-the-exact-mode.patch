@@ -1,0 +1,44 @@
+From 004548907e59b732da3fe9a025f2160e6802927c Mon Sep 17 00:00:00 2001
+From: Philippe Simons <simons.philippe@gmail.com>
+Date: Fri, 23 Oct 2026 18:55:32 +0200
+Subject: [PATCH] steamcompmgr: a refresh-only request switches to that exact
+ mode
+
+Steam's refresh rate slider, with the frame limiter off, sends
+set_app_target_refresh_cycle with ONLY_CHANGE_REFRESH_RATE: a refresh
+rate to run at and no fps cap. It goes through the same search as a cap,
+which picks the highest valid rate the request divides, so on a panel
+offering 60 and 120 Hz a 60 Hz pick runs at 120 and the panel never
+leaves its top mode.
+
+Doubling is right for a cap: a game limited to 30 fps runs with less
+latency at 120 Hz than at 60. A refresh-only request has no cap for a
+higher mode to serve, so take the exact rate when the panel has it, and
+keep the doubling for caps and for rates the panel does not offer.
+---
+ src/steamcompmgr.cpp | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/src/steamcompmgr.cpp b/src/steamcompmgr.cpp
+index ffc1d0df..fbc225c5 100644
+--- a/src/steamcompmgr.cpp
++++ b/src/steamcompmgr.cpp
+@@ -1287,6 +1287,15 @@ static void _update_app_target_refresh_cycle()
+ 	{
+ 		auto rates = GetBackend()->GetCurrentConnector()->GetValidDynamicRefreshRates();
+ 
++		// A refresh-only request is a refresh rate the user picked, not a frame cap: there is
++		// no limiter for a higher mode to save latency for, so take the exact mode when the
++		// panel has it. Doubling would turn 60 into 120 on a 60/120 panel and never leave it.
++		if ( !g_nCombinedAppRefreshCycleChangeFPS[ type ] && gamescope::Algorithm::Contains( rates, uint32_t( target_fps ) ) )
++		{
++			g_nDynamicRefreshRate[ type ] = target_fps;
++			return;
++		}
++
+ 		// Find highest mode to do refresh doubling with.
+ 		for ( auto rate = rates.rbegin(); rate != rates.rend(); rate++ )
+ 		{
+-- 
+2.55.0
+

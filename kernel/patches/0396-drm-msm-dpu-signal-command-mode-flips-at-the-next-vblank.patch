@@ -1,0 +1,165 @@
+From: Philippe Simons <simons.philippe@gmail.com>
+Subject: [PATCH] drm/msm/dpu: signal command mode flips at the next vblank
+
+A command mode frame is transferred to the panel as soon as it is kicked
+off, between two TEs. The transfer outruns the panel's scan, so the panel
+shows the frame from the first TE after the transfer started, even when
+the transfer ends after that TE. The page flip event went out from the
+commit worker once the transfer was done, so it carried the vblank
+timestamp of the TE before the frame was even sent.
+
+gamescope schedules its next wakeup from that timestamp, one refresh too
+early, and then finds the wakeup already behind it: every frame a limiter
+held across one refresh landed on the third (Pocket Max: 60 fps @ 120 Hz
+ran 40, 72 @ 144 Hz ran 48). Traced with the dpu/drm tracepoints: flush
+739.13 ms, pp_tx_done 741.40, event 741.54 stamped 734.58, next TE 742.88.
+
+Arm the event from the CTL start interrupt, for the next vblank, the one
+the frame goes on screen at, as a video mode panel reports it. Arming it
+once the transfer is done instead would report a frame kicked just before
+a TE one refresh late (90 fps @ 90 Hz ran 45). The commit worker still
+arms it if the interrupt did not, and sends it right away without a
+vblank reference, as before.
+
+---
+diff -ruN a/drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.c
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.c	2026-10-23 22:57:32.455301456 +0200
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.c	2026-10-23 23:45:19.005283537 +0200
+@@ -768,13 +768,75 @@
+  * dpu_crtc_complete_commit - callback signalling completion of current commit
+  * @crtc: Pointer to drm crtc object
+  */
++static bool _dpu_crtc_is_cmd_mode(struct drm_crtc *crtc)
++{
++	struct drm_encoder *encoder;
++
++	drm_for_each_encoder_mask(encoder, crtc->dev, crtc->state->encoder_mask)
++		if (dpu_encoder_get_intf_mode(encoder) == INTF_MODE_CMD)
++			return true;
++
++	return false;
++}
++
++/*
++ * A command mode frame is transferred to the panel as soon as it is kicked off, between two TEs.
++ * The transfer outruns the panel's scan, so the panel shows the frame from the first TE after the
++ * transfer STARTED, even when it ends after that TE. Sending the flip event when the transfer is
++ * done stamps it with the TE before the frame was sent, one refresh early, and a compositor that
++ * schedules from the event timestamp misses the next vblank. The event is armed from the CTL start
++ * interrupt instead, for the next vblank, which is when the frame goes on screen, as on a video
++ * mode panel. The commit worker arms it if that interrupt did not, once the transfer is done.
++ */
++static bool _dpu_crtc_arm_flip(struct drm_crtc *crtc)
++{
++	struct dpu_crtc *dpu_crtc = to_dpu_crtc(crtc);
++	struct drm_device *dev = crtc->dev;
++	unsigned long flags;
++	bool armed = false;
++
++	if (drm_crtc_vblank_get(crtc))
++		return false;
++
++	spin_lock_irqsave(&dev->event_lock, flags);
++	if (dpu_crtc->event) {
++		DRM_DEBUG_VBL("%s: arm event: %p\n", dpu_crtc->name, dpu_crtc->event);
++		trace_dpu_crtc_complete_flip(DRMID(crtc));
++		drm_crtc_arm_vblank_event(crtc, dpu_crtc->event);
++		dpu_crtc->event = NULL;
++		armed = true;
++	}
++	spin_unlock_irqrestore(&dev->event_lock, flags);
++
++	/* the armed event drops its reference once it is sent */
++	if (!armed)
++		drm_crtc_vblank_put(crtc);
++
++	return true;
++}
++
+ void dpu_crtc_complete_commit(struct drm_crtc *crtc)
+ {
+ 	trace_dpu_crtc_complete_commit(DRMID(crtc));
+ 	dpu_core_perf_crtc_update(crtc, 0);
++
++	if (_dpu_crtc_is_cmd_mode(crtc) && _dpu_crtc_arm_flip(crtc))
++		return;
++
+ 	_dpu_crtc_complete_flip(crtc);
+ }
+ 
++/**
++ * dpu_crtc_arm_flip - arm the pending page flip event for the next vblank
++ * @crtc: Pointer to drm crtc object
++ *
++ * Called from the command mode CTL start interrupt, once the frame's transfer has started.
++ */
++void dpu_crtc_arm_flip(struct drm_crtc *crtc)
++{
++	_dpu_crtc_arm_flip(crtc);
++}
++
+ static int _dpu_crtc_check_and_setup_lm_bounds(struct drm_crtc *crtc,
+ 		struct drm_crtc_state *state)
+ {
+diff -ruN a/drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.h b/drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.h
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.h	2026-10-23 22:57:32.455731452 +0200
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.h	2026-10-23 23:45:21.242283455 +0200
+@@ -264,6 +264,8 @@
+ 
+ void dpu_crtc_complete_commit(struct drm_crtc *crtc);
+ 
++void dpu_crtc_arm_flip(struct drm_crtc *crtc);
++
+ struct drm_crtc *dpu_crtc_init(struct drm_device *dev, struct drm_plane *plane,
+ 			       struct drm_plane *cursor);
+ 
+diff -ruN a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.c
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.c	2026-10-23 22:57:32.456195191 +0200
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.c	2026-10-23 23:45:27.557283224 +0200
+@@ -1484,6 +1484,21 @@
+ }
+ 
+ /**
++ * dpu_encoder_arm_flip - arm the crtc's pending page flip event for the next vblank
++ * @drm_enc:    Pointer to drm encoder structure
++ */
++void dpu_encoder_arm_flip(struct drm_encoder *drm_enc)
++{
++	struct dpu_encoder_virt *dpu_enc = to_dpu_encoder_virt(drm_enc);
++	unsigned long lock_flags;
++
++	spin_lock_irqsave(&dpu_enc->enc_spinlock, lock_flags);
++	if (dpu_enc->crtc)
++		dpu_crtc_arm_flip(dpu_enc->crtc);
++	spin_unlock_irqrestore(&dpu_enc->enc_spinlock, lock_flags);
++}
++
++/**
+  * dpu_encoder_underrun_callback - Notify virtual encoder of underrun IRQ reception
+  * @drm_enc:    Pointer to drm encoder structure
+  * @phy_enc:	Pointer to physical encoder
+diff -ruN a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys_cmd.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys_cmd.c
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys_cmd.c	2026-10-23 22:57:32.467343859 +0200
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys_cmd.c	2026-10-23 23:45:30.390283120 +0200
+@@ -134,6 +134,9 @@
+ 
+ 	atomic_add_unless(&phys_enc->pending_ctlstart_cnt, -1, 0);
+ 
++	/* the transfer started: the panel shows this frame from the next TE */
++	dpu_encoder_arm_flip(phys_enc->parent);
++
+ 	/* Signal any waiting ctl start interrupt */
+ 	wake_up_all(&phys_enc->pending_kickoff_wq);
+ 	DPU_ATRACE_END("ctl_start_irq");
+diff -ruN a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys.h b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys.h
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys.h	2026-10-23 22:57:41.957948237 +0200
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys.h	2026-10-23 23:45:23.855283360 +0200
+@@ -349,6 +349,8 @@
+ void dpu_encoder_vblank_callback(struct drm_encoder *drm_enc,
+ 				 struct dpu_encoder_phys *phy_enc);
+ 
++void dpu_encoder_arm_flip(struct drm_encoder *drm_enc);
++
+ void dpu_encoder_underrun_callback(struct drm_encoder *drm_enc,
+ 				   struct dpu_encoder_phys *phy_enc);
+ 

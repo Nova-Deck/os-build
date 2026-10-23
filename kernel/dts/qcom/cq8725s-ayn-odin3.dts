@@ -350,3 +350,33 @@
 		};
 	};
 };
+
+/*
+ * Power LED: PM8550 LPG channels 1-3 (as in the stock Android devicetree)
+ * drive the RGB LED; channel 4 stays the fan PWM. Declared as on the
+ * other boards (qcs8550-ayn-common), so novadeck-power-led lights it.
+ */
+&pm8550_pwm {
+	power_led {
+		color = <LED_COLOR_ID_RGB>;
+		label = "power-led";
+
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		red@1 {
+			reg = <1>;
+			color = <LED_COLOR_ID_RED>;
+		};
+
+		green@2 {
+			reg = <2>;
+			color = <LED_COLOR_ID_GREEN>;
+		};
+
+		blue@3 {
+			reg = <3>;
+			color = <LED_COLOR_ID_BLUE>;
+		};
+	};
+};

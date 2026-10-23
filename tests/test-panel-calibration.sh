@@ -224,6 +224,13 @@ CLI="$LIB_DIR/panel-calibration"
 out=$("$CLI" status --quick) && echo "$out" | python3 -c 'import json,sys; s=json.load(sys.stdin); assert s["supported"] is True' && ok || fail "CLI status --quick"
 out=$("$CLI" bogus 2>/dev/null); [[ $? -eq 1 && $out == *'"error"'* ]] && ok || fail "CLI unknown command errors"
 
+# ---------- the boot re-apply unit is enabled without waiting for preset-all ----------
+# The preset only fires on a first boot. A unit that arrives by OTA never gets one (the /etc
+# overlay upper carries over), so without the shipped symlink it stays disabled and every reboot
+# comes back uncalibrated (HW, Odin 3 internal install, 2026-10-23).
+[[ -L $ROOT/rootfs/overlay/etc/systemd/system/multi-user.target.wants/novadeck-panel-calibration.service ]] \
+  && ok || fail "novadeck-panel-calibration.service has no multi-user.target.wants symlink: enablement rides on first-boot presets alone"
+
 echo
 echo "panel-calibration: $PASS passed, $FAIL failed"
 [[ $FAIL -eq 0 ]]

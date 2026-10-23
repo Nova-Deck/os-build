@@ -92,6 +92,28 @@ out="$(/bin/sh -c '
 ' sh "$W/cleanup.sh" "$W" 2>&1)"
 [ "$out" = "twice-ok" ] && ok "a second call is a clean no-op" || bad "second call misbehaved: '${out:-<nothing>}'"
 
+CASE="no-r-by-default"
+# gamescope keeps -r as g_nNestedRefresh, which overrides the scanning mode's rate in its limiter
+# and vblank pacing. The session used to pass the panel's first declared rate: on a 60,120 panel
+# scanning at 120, "60 fps (120Hz)" then ran 120 fps (HW, Odin 3, 2026-10-23). The GS_ARGS block
+# is extracted from the shipped script and run, as cleanup() is above.
+sed -n '/^GS_ARGS="--backend drm/,/^fi$/p' "$SESSION" > "$W/gsargs.sh"
+gsargs() { env -i "$@" /bin/sh -c '. "$1"; printf "%s" "$GS_ARGS"' sh "$W/gsargs.sh"; }
+out="$(gsargs NOVADECK_GAMESCOPE_W=1920 NOVADECK_GAMESCOPE_H=1080 NOVADECK_PANEL_REFRESH_RATES=60,120)"
+case " $out " in
+  *" -r "*) bad "the default command line passes -r: '$out'" ;;
+  *"--backend drm -W 1920 -H 1080"*) ok "the default command line carries no -r" ;;
+  *) bad "could not read GS_ARGS from the shipped script: '${out:-<nothing>}'" ;;
+esac
+out="$(gsargs NOVADECK_GAMESCOPE_W=1920 NOVADECK_GAMESCOPE_H=1080 NOVADECK_GAMESCOPE_REFRESH=120)"
+case " $out " in
+  *" -r 120 "*) ok "NOVADECK_GAMESCOPE_REFRESH still reaches gamescope as an operator override" ;;
+  *) bad "the override was dropped: '${out:-<nothing>}'" ;;
+esac
+grep -qE '^[[:space:]]*(: "\$\{)?NOVADECK_GAMESCOPE_REFRESH[:=]' "$SESSION" \
+  && bad "the script assigns NOVADECK_GAMESCOPE_REFRESH itself, so the override is a default again" \
+  || ok "nothing in the script defaults NOVADECK_GAMESCOPE_REFRESH"
+
 # =================================================================================================
 echo
 echo "test-session: $PASS passed, $FAIL failed"

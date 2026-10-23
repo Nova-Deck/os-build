@@ -96,11 +96,10 @@ else
     GS_W=1920
     GS_H=1080
 fi
-_rr=${NOVADECK_PANEL_REFRESH_RATES:-}
-GS_R=${_rr%%,*}
-[ -n "$GS_R" ] || GS_R=60
-
-set -- --backend drm -W "$GS_W" -H "$GS_H" -r "$GS_R"
+# No -r: gamescope keeps it as a refresh that overrides the real mode's in all its pacing, so
+# passing the panel's first declared rate paced a 120 Hz preferred mode at 60. Same rule as
+# /usr/bin/novadeck-session; the connector's preferred mode is the right one here.
+set -- --backend drm -W "$GS_W" -H "$GS_H"
 if [ -n "${NOVADECK_PRIMARY_CONNECTOR:-}" ]; then
     set -- "$@" --prefer-output "$NOVADECK_PRIMARY_CONNECTOR"
 fi

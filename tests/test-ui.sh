@@ -1488,9 +1488,11 @@ printf '%s' "$cmd" | grep -q -- '--backend drm' \
 printf '%s' "$cmd" | grep -q -- '-W 1620 -H 1080' \
   && ok "the portrait panel is swapped to a landscape logical canvas (1080x1620 -> 1620x1080)" \
   || bad "the logical output was not swapped: $cmd"
-printf '%s' "$cmd" | grep -q -- '-r 60' \
-  && ok "and the refresh is the panel's first declared rate, not the whole list" \
-  || bad "the refresh rate is wrong: $cmd"
+# gamescope keeps -r as a refresh that overrides the scanning mode's in its limiter and vblank
+# pacing, so -r <first declared rate> paced a 120 Hz preferred mode at 60 (HW, Odin 3, 2026-10-23).
+printf '%s' "$cmd" | grep -qE -- '(^| )-r ' \
+  && bad "it passes -r, which pins gamescope's pacing to that rate whatever the panel scans: $cmd" \
+  || ok "and no -r: gamescope boots the preferred mode and paces against the real one"
 printf '%s' "$cmd" | grep -q -- '--prefer-output DSI-1' \
   && ok "pinned to the board's own connector" \
   || bad "the connector is not pinned: $cmd"

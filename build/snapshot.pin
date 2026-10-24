@@ -29,4 +29,4 @@
 # The public mash is NOT everything the Steam Frame ships: Valve layers a private holo repo on top.
 # mash-20260401 dropped Arch's podman stack while the Frame still installs Valve-CI builds of it, so
 # a package leaving this tree is not Valve retiring it — packages/ now builds that stack itself.
-https://holo-packages.steamos.cloud/archlinux-deckard/archlinux/mash-20260401.1.pvt
+https://holo-packages.steamos.cloud/archlinux-deckard/archlinux/mash-20260501.1.pvt

@@ -29,6 +29,10 @@
 # a CONSTANT in this file instead of repo state, which is the exception the header above no longer
 # has to carve out. If a client bump ever breaks the Windows path again, the pin's comment block
 # holds the diagnostic (check `appmanifest_4185400.acf`, not sniper 1628350) and the revert.
+#
+# The `steam-client-api` job below is not that watcher back. It does not compare the channel to a
+# baseline at all: devices follow live steamdeck_stable on their own, so every build Valve ships
+# is one our users run. It asks whether THAT build still carries what novadeck-stores reaches for.
 name: upstream-watch
 
 on:
@@ -567,3 +571,67 @@ jobs:
           EOF
           )"
           fi
+
+  steam-client-api:
+    name: Steam client vs novadeck-stores
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the live client's steamui against the plugin's token list
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # The channel is the seed pin's, read the way fetch-steam-seed.sh reads it: the client a
+          # card is baked with is the client whose updates it then follows.
+          channel="$(sed -n 's/^channel:[[:space:]]*//p' build/steam-seed/STEAM_SEED.pin | head -1)"
+          [ -n "$channel" ] || { echo "::error::build/steam-seed/STEAM_SEED.pin has no channel: field"; exit 1; }
+          cdn=https://client-update.steamstatic.com
+          manifest="$(curl -fsSL --retry 3 "$cdn/steam_client_${channel}_linuxarm64")"
+          version="$(printf '%s' "$manifest" | grep -oE '"version"[[:space:]]*"[0-9]+"' | grep -oE '[0-9]+' | head -1 || true)"
+          [ -n "$version" ] || { echo "::error::no build id in the $channel manifest"; exit 1; }
+
+          # The JS bundle is one package, the same file on every platform. Its block names the file
+          # and a sha256 of it; take both from the first lines after the package name.
+          block="$(printf '%s\n' "$manifest" | grep -A6 -E '^[[:space:]]*"steamui_websrc_all"[[:space:]]*$' || true)"
+          file="$(printf '%s\n' "$block" | sed -n 's/^[[:space:]]*"file"[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+          sha="$(printf '%s\n' "$block" | sed -n 's/^[[:space:]]*"sha2"[[:space:]]*"\([0-9a-f]*\)".*/\1/p' | head -1)"
+          [ -n "$file" ] && [ -n "$sha" ] || { echo "::error::no steamui_websrc_all file/sha2 in the $channel manifest"; exit 1; }
+          echo "channel=$channel version=$version file=$file"
+
+          work="$RUNNER_TEMP/steamui"; mkdir -p "$work/x"
+          curl -fsSL --retry 3 -o "$work/ui.zip" "$cdn/$file"
+          echo "$sha  $work/ui.zip" | sha256sum -c -
+          unzip -q "$work/ui.zip" -d "$work/x"
+
+          # rc 1 = something is missing (file the issue), 2 = nothing to look at (go red).
+          rc=0
+          out="$(python3 -I apps/decky/novadeck-stores/steam-api/check.py \
+            apps/decky/novadeck-stores/steam-api/tokens "$work/x")" || rc=$?
+          printf '%s\n' "$out"
+          [ "$rc" -le 1 ] || { echo "::error::check.py could not read the bundle (rc $rc)"; exit 1; }
+          [ "$rc" -eq 1 ] || { echo "every checked token is present in $version"; exit 0; }
+
+          # Only the build id in the title: one issue per client build, closed once it is answered.
+          title="upstream: Steam client $version breaks a novadeck-stores dependency"
+          if [ "$(gh issue list --state all --search "in:title \"$title\"" --json number --jq length)" -gt 0 ]; then
+            echo "issue already filed: $title"; exit 0
+          fi
+          missing="$(printf '%s\n' "$out" | grep '^MISSING' || true)"
+          gh issue create --title "$title" --assignee "$ASSIGNEE" \
+            --label P1 --label area/steam --body "$(cat <<EOF
+          Steam client **$version** on \`$channel\` no longer carries something novadeck-stores
+          uses. Devices take this build on their own, so this is live breakage, not a bump to plan.
+
+          \`\`\`
+          $missing
+          \`\`\`
+
+          The list is \`apps/decky/novadeck-stores/steam-api/tokens\`; each kind is explained at its top.
+
+          - [ ] confirm on a device running $version. Lost library anchors log \`novadeck-stores: library tabs not added: <reason>\` in the CEF console; a lost game-page anchor logs NOTHING, the page just keeps Steam's own Play row; a missing SteamClient call fails its library operation with "<name> unavailable"
+          - [ ] find the replacement in the new bundle (\`$cdn/$file\`) and fix \`src/\`
+          - [ ] update the token list in the same commit; \`tests/test-store-steam-api.sh\` fails until the two agree
+          - [ ] check the UNCHECKED lines by hand while you are on the device: those the bundle cannot show
+          EOF
+          )"

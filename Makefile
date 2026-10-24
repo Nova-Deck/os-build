@@ -537,6 +537,7 @@ test: verify-lock ## Run the offline bootctl/post-install/boot-disk/pairingd/pow
 	bash $(TESTS_DIR)/test-store-library.sh
 	bash $(TESTS_DIR)/test-store-artwork.sh
 	bash $(TESTS_DIR)/test-store-gamepage.sh
+	bash $(TESTS_DIR)/test-store-steam-api.sh
 	bash $(TESTS_DIR)/test-sysctl.sh
 	bash $(TESTS_DIR)/test-guard.sh
 

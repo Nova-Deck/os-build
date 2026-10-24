@@ -1,0 +1,55 @@
+# Every piece of the Steam client this plugin reaches past @decky/ui's components for, one per
+# line, in a form check.py can look for in Valve's steamui bundle (steamui_websrc_all.zip — the
+# same file on arm64 and x86). Read by:
+#   * .github/workflows/upstream-watch.yml `steam-client-api`, against each live steamdeck_stable
+#     build, which a device takes without any release of ours;
+#   * tests/test-store-steam-api.sh, which keeps this list and src/ in step BOTH ways: a new
+#     SteamClient call missing here fails the suite, and so does a line nothing uses any more.
+#
+# Kinds:
+#   api     <method>              SteamClient.Apps.<method> — the bundle's own UI calls it
+#   native  <name>                bound by the native client and never named in the bundle, so no
+#                                 static check exists; reported UNCHECKED, and only a device can
+#                                 say. SpecifyCompatTool is here: Valve's UI sets compat tools over
+#                                 the CompatManager protobuf service, not through SteamClient.Apps
+#   binding <name>                window.<name>, bound by the native client: UNCHECKED, like native
+#   global  <name>                window.<name>, assigned by the bundle
+#   decky   <name>                a window global the Decky loader provides, not Steam
+#   store   <method>              a method the bundle defines (the appStore global's class)
+#   marker  <string>              a string the plugin finds Steam's code by (Function.toString)
+#   oneof   <string>...           at least one present: the plugin handles each shape
+#   class   <export> <finder> <key>
+#                                 @decky/ui's <export> is the CSS module with a <finder> key; the
+#                                 plugin reads <key> from it. Finder keys are @decky/ui's
+#                                 (dist/utils/static-classes.js) at the version below — the suite
+#                                 fails when package.json moves off it, so a bump re-reads them.
+#
+# Not covered: the shape of the React trees the route patches walk (GamePage.tsx, LibraryTabs.tsx
+# — they log once and bail when an anchor moves), and argument order. Those need a device.
+
+decky-ui 4.11.6
+
+api     AddShortcut
+api     RemoveShortcut
+api     SetShortcutName
+api     SetShortcutExe
+api     SetShortcutStartDir
+api     SetShortcutLaunchOptions
+api     SetCustomArtworkForApp
+native  SpecifyCompatTool
+binding SteamClient
+
+global  appStore
+store   GetAppOverviewByAppID
+decky   DeckyPluginLoader
+decky   SP_REACT
+
+marker  Library_FilteredByHeader
+oneof   __SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED __CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE
+
+class   appDetailsClasses                   HeaderLoaded        Header
+class   appDetailsClasses                   HeaderLoaded        InnerContainer
+class   appDetailsHeaderClasses             TopCapsule          TopCapsule
+class   basicAppDetailsSectionStylerClasses AppDetailsRoot      PlaySection
+class   playSectionClasses                  PlayBarDetailLabel  Container
+class   gamepadTabbedPageClasses            GamepadTabbedPage   TabCount

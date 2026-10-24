@@ -139,6 +139,43 @@ main.library.owned = lambda store, pp: {"error": "cannot list the library (exit 
 res = asyncio.run(run("epic"))
 (ok if res == {"error": "cannot list the library (exit 1)"} else bad)(f"a library that cannot be listed is an error, never 'no games' ({res})")
 (ok if asyncio.run(plugin.sync_library("steam")).get("error") else bad)("an unknown store is refused")
+
+# The sync after a sign-in (#133): retried, and toasted only once it has given up.
+main.SYNC_RETRY_DELAYS = (0, 0)
+calls = []
+def flaky(fails):
+    def owned_(store, pp):
+        calls.append(store)
+        if len(calls) <= fails:
+            return {"error": "cannot list the library (exit 1)"}
+        return {"titles": [{"id": "G1", "title": "Gog One", "installable": True}]}
+    return owned_
+def failed_toasts():
+    return [pl for e, pl in emitted if e == "sync_failed"]
+
+emitted.clear(); calls.clear()
+main.library.owned = flaky(1)
+asyncio.run(plugin._sync_logged("gog"))
+reg = json.loads((tmp / "shortcuts.json").read_text())
+(ok if len(calls) == 2 and "gog:G1" in reg else bad)(
+    f"a sync that fails once after sign-in is retried and ends with tiles ({len(calls)} tries)")
+(ok if not failed_toasts() else bad)(f"a sync that recovered says nothing ({failed_toasts()})")
+
+emitted.clear(); calls.clear()
+main.library.owned = flaky(99)
+asyncio.run(plugin._sync_logged("epic"))
+(ok if len(calls) == 1 + len(main.SYNC_RETRY_DELAYS) else bad)(
+    f"a sync that keeps failing gives up after {1 + len(main.SYNC_RETRY_DELAYS)} tries ({len(calls)})")
+(ok if failed_toasts() == [{"store": "epic", "message": "cannot list the library (exit 1)"}] else bad)(
+    f"giving up is one toast naming the store and the reason ({failed_toasts()})")
+
+emitted.clear(); calls.clear()
+def raising(store, pp):
+    calls.append(store); raise OSError("boom")
+main.library.owned = raising
+asyncio.run(plugin._sync_logged("epic"))
+(ok if len(calls) == 3 and failed_toasts() == [{"store": "epic", "message": "OSError"}] else bad)(
+    f"a sync that raises is retried the same way, never lost ({len(calls)} tries, {failed_toasts()})")
 PY
 
 echo "== the install transition"

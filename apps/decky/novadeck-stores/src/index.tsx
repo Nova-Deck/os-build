@@ -49,10 +49,22 @@ function onInstallEvent(ev: InstallEvent) {
   });
 }
 
+// The library sync after a sign-in failed on every retry (main.py _sync_logged). Without this a
+// connected store with no tiles reads as "this store has no games".
+type SyncFailed = { store: string; message: string };
+
+function onSyncFailed(ev: SyncFailed) {
+  toaster.toast({
+    title: STORE_LABELS[ev.store] ?? ev.store,
+    body: `Library sync failed: ${ev.message}. Press Sync library in NovaDeck Stores to retry.`,
+  });
+}
+
 export default definePlugin(() => {
   addEventListener("connect_done", onConnectDone);
   addEventListener("shortcut_op", onShortcutOp);
   addEventListener("install_event", onInstallEvent);
+  addEventListener("sync_failed", onSyncFailed);
   // Now that shortcut_op has a listener, the backend may ask Steam for things: it re-asserts the
   // compat tools here, not at its own boot, when nothing would have answered (main.py).
   void call("frontend_ready");
@@ -88,6 +100,7 @@ export default definePlugin(() => {
       removeEventListener("connect_done", onConnectDone);
       removeEventListener("shortcut_op", onShortcutOp);
       removeEventListener("install_event", onInstallEvent);
+      removeEventListener("sync_failed", onSyncFailed);
       removeGamePagePatch();
       removeLibraryTabsPatch();
     },

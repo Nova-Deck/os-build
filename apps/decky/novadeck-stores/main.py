@@ -70,6 +70,8 @@ REQUEST_POLL = 1.0
 ARTWORK_PACE = 1.0
 # Finished installs are checked every FINISH_EVERY request polls (~10 s).
 FINISH_EVERY = 10
+# Seconds before each retry of a failed post-sign-in sync: three tries over two minutes.
+SYNC_RETRY_DELAYS = (30, 90)
 
 
 class Plugin:
@@ -512,12 +514,21 @@ class Plugin:
     _sync_task = None
 
     async def _sync_logged(self, store):
-        try:
-            result = await self.sync_library(store)
-        except Exception as exc:  # noqa: BLE001 - a background task: logged or lost
-            decky.logger.info(f"sync {store} after sign-in raised {type(exc).__name__}: {exc}")
-            return
-        decky.logger.info(f"sync {store} after sign-in: {result}")
+        """The sync after a sign-in, retried: a transient failure here (HW 2026-10-22: GOG's
+        listing exited 1 thirty seconds after sign-in) otherwise leaves a connected store with no
+        tiles and nothing saying why. A sync is idempotent, so a retry is safe; one that keeps
+        failing is toasted, pointing at the panel's Sync library."""
+        for delay in (0, *SYNC_RETRY_DELAYS):
+            await asyncio.sleep(delay)
+            try:
+                result = await self.sync_library(store)
+            except Exception as exc:  # noqa: BLE001 - a background task: logged or lost
+                decky.logger.info(f"sync {store} after sign-in raised {type(exc).__name__}: {exc}")
+                result = {"error": type(exc).__name__}
+            decky.logger.info(f"sync {store} after sign-in: {result}")
+            if "error" not in result:
+                return
+        await decky.emit("sync_failed", {"store": store, "message": result["error"]})
 
     async def _artwork_pass(self, store, tiles):
         """Art for freshly added tiles, one at a time with a pause between: a 55-title library is

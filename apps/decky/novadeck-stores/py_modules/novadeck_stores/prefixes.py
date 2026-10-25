@@ -12,6 +12,9 @@ registry recorded when Steam created the entry — under the store user's Steam 
 against what it must be before any rm: exactly <steam>/steamapps/compatdata/<appid>, a real
 directory, no link anywhere along the path. The same discipline as installs.deletable, for the
 same reason: the rm runs as the user, so this check is what keeps it to one folder.
+
+The entry's shader cache sits beside it under the same appid and the same guard, but it holds
+nothing of the user's, so every uninstall drops it unasked.
 """
 import os
 import stat
@@ -29,19 +32,19 @@ def steam_root(p):
     return os.path.join(os.path.expanduser(f"~{p['NOVADECK_STORE_USER']}"), ".local", "share", "Steam")
 
 
-def compat_dir(steam, appid):
-    """<steam>/steamapps/compatdata/<appid>, or None unless appid is a positive int. A bool is an
+def compat_dir(steam, appid, kind="compatdata"):
+    """<steam>/steamapps/<kind>/<appid>, or None unless appid is a positive int. A bool is an
     int in Python and `True` would name prefix 1; a string could carry a path."""
     if isinstance(appid, bool) or not isinstance(appid, int) or appid <= 0:
         return None
-    return os.path.join(steam, "steamapps", "compatdata", str(appid))
+    return os.path.join(steam, "steamapps", kind, str(appid))
 
 
-def deletable(path, steam):
+def deletable(path, steam, kind="compatdata"):
     """path if drop() may rm -rf it, else None: exactly one numeric folder directly inside
-    <steam>/steamapps/compatdata, reached through no symlink, and a real directory."""
+    <steam>/steamapps/<kind>, reached through no symlink, and a real directory."""
     parent, name = os.path.split(path)
-    if not name.isdigit() or parent != os.path.join(steam, "steamapps", "compatdata"):
+    if not name.isdigit() or parent != os.path.join(steam, "steamapps", kind):
         return None
     if os.path.realpath(path) != path:
         return None
@@ -82,4 +85,24 @@ def drop(p, appid, steam=None):
     cli._run(p, ["rm", "-rf", "--one-file-system", "--", path], DROP_TIMEOUT)
     if os.path.lexists(path):
         return {"error": "the Proton prefix could not be removed"}
+    return {"dropped": True}
+
+
+def drop_shader_cache(p, appid, steam=None):
+    """Remove the entry's shader cache, steamapps/shadercache/<appid>: DXVK, Fossilize and Mesa
+    caches, rebuilt on the next run and nothing the user keeps. Steam deletes it with a Steam
+    game but never for a non-Steam entry, and it is no part of the prefix (HW 2026-10-25: 8.8 MB
+    left by Phoenix Point), so every uninstall takes it. {"dropped": bool} or {"error": ...}: a
+    cache that is not there is no error, the game may never have run."""
+    steam = steam if steam is not None else steam_root(p)
+    path = compat_dir(steam, appid, "shadercache")
+    if path is None:
+        return {"error": "the entry has no usable appid"}
+    if deletable(path, steam, "shadercache") is None:
+        if not os.path.lexists(path):
+            return {"dropped": False}
+        return {"error": "the shader cache is not a plain directory"}
+    cli._run(p, ["rm", "-rf", "--one-file-system", "--", path], DROP_TIMEOUT)
+    if os.path.lexists(path):
+        return {"error": "the shader cache could not be removed"}
     return {"dropped": True}

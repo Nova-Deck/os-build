@@ -260,6 +260,12 @@ class Plugin:
                     result = {**result, "prefix_dropped": "error" not in gone}
                     if "error" in gone:
                         result["warning"] = f"Proton prefix not removed: {gone['error']}"
+                if isinstance(row, dict) and "appid" in row:
+                    try:
+                        cache = await asyncio.to_thread(prefixes.drop_shader_cache, p, shortcuts._u32(row["appid"]))
+                    except (OSError, subprocess.SubprocessError) as exc:
+                        cache = {"error": f"{type(exc).__name__}"}
+                    decky.logger.info(f"uninstall {store}:{gid}: shader cache {cache.get('error') or ('dropped' if cache['dropped'] else 'absent')}")
                 if isinstance(row, dict) and "appid" in row and not shortcuts.is_shelf(row):
                     swapped = await self._edit_entry(
                         p, store, gid,

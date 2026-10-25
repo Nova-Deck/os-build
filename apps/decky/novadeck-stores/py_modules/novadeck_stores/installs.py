@@ -161,6 +161,29 @@ def completed(store, gid, p):
     return True
 
 
+def epic_manifests(gid, p):
+    """legendary's saved manifests of one game. It names them <app>_<platform>_<version>.manifest
+    (or <app>_<version>) and saves one when a download is PREPARED, so an interrupted install has
+    one too. `legendary uninstall` deletes none, and `legendary cleanup` also wipes every other
+    game's .resume, so we take exactly these (HW 2026-10-25: 2.3 MB left by Phoenix Point). The
+    name is only a prefix: a file a longer app name legendary knows also claims (an `Iris_DLC`
+    beside `Iris`) is that game's, and stays."""
+    lgd = p["LEGENDARY_CONFIG_PATH"]
+    try:
+        files = os.listdir(os.path.join(lgd, "manifests"))
+    except OSError:
+        return []
+    try:
+        known = {f[:-len(".json")] for f in os.listdir(os.path.join(lgd, "metadata")) if f.endswith(".json")}
+    except OSError:
+        known = set()
+    done = status.read_user_json(os.path.join(lgd, "installed.json"), int(p["NOVADECK_STORE_UID"]))
+    known |= set(done) if isinstance(done, dict) else set()
+    longer = [f"{n}_" for n in known if n != gid and n.startswith(f"{gid}_")]
+    return [os.path.join(lgd, "manifests", f) for f in sorted(files)
+            if f.startswith(f"{gid}_") and f.endswith(".manifest") and not any(f.startswith(n) for n in longer)]
+
+
 def install_status(p):
     """{"installs": [{store, id, title, path, state[, percent]}]}.
 
@@ -258,10 +281,10 @@ def uninstall(store, gid, p, vols=None):
             return {"error": "the game's folder is not a plain directory"}
         cli._run(p, ["rm", "-rf", "--one-file-system", "--", path], DELETE_TIMEOUT)
     if store == "epic":
-        leftover = os.path.join(p["LEGENDARY_CONFIG_PATH"], "tmp", f"{gid}.resume")
+        leftovers = [os.path.join(p["LEGENDARY_CONFIG_PATH"], "tmp", f"{gid}.resume"), *epic_manifests(gid, p)]
     else:
-        leftover = os.path.join(p["GOGDL_CONFIG_PATH"], "heroic_gogdl", "manifests", gid)
-    cli._run(p, ["rm", "-f", "--", leftover], cli.CHECK_TIMEOUT)
+        leftovers = [os.path.join(p["GOGDL_CONFIG_PATH"], "heroic_gogdl", "manifests", gid)]
+    cli._run(p, ["rm", "-f", "--", *leftovers], cli.CHECK_TIMEOUT)
     if os.path.lexists(path):
         return {"error": "the game's folder could not be removed"}
 

@@ -494,6 +494,16 @@ json.dump({"Fir": {}}, open(os.path.join(S, "legendary", "installed.json"), "w")
 open(os.path.join(S, "gogdl", "heroic_gogdl", "manifests", "1"), "w").write("{}")
 os.makedirs(os.path.join(epic_root, "Half"))
 open(os.path.join(S, "legendary", "tmp", "Half.resume"), "w").write("x")
+# legendary's manifests: one per game it prepared, named <app>_<platform>_<version>. Fir_DLC is
+# another app whose name starts with Fir_; Oak is a game left installed.
+lgd_manifests = os.path.join(S, "legendary", "manifests")
+os.makedirs(lgd_manifests)
+os.makedirs(os.path.join(S, "legendary", "metadata"))
+for app in ("Fir", "Fir_DLC", "Half", "Oak"):
+    open(os.path.join(S, "legendary", "metadata", f"{app}.json"), "w").write("{}")
+for name in ("Fir_Windows_1.30.manifest", "Fir_1.0.manifest", "Fir_DLC_Windows_2.manifest",
+             "Half_Windows_7.manifest", "Oak_Windows_3.manifest"):
+    open(os.path.join(lgd_manifests, name), "w").write("x")
 
 ran = []
 unit = {"ActiveState": "inactive"}
@@ -539,11 +549,16 @@ lgd = [c for c, o in ran if c[:3] == ["legendary", "uninstall", "Fir"]]
     and any(c[:2] == ["rm", "-rf"] and c[-1] == os.path.join(epic_root, "Fir") for c, o in ran) else bad)(
     "a finished Epic game: legendary only drops its record (--keep-files) — it would delete the path in ITS "
     "installed.json, which the guard never saw — and the guarded rm removes the files")
+left = sorted(os.listdir(lgd_manifests))
+(ok if left == ["Fir_DLC_Windows_2.manifest", "Half_Windows_7.manifest", "Oak_Windows_3.manifest"] else bad)(
+    f"and legendary's manifests of that game, every version and platform, but not Fir_DLC's ({left})")
 
 res = run(installs.uninstall, "epic", "Half", p, vols)
 (ok if res.get("uninstalled") and not os.path.exists(os.path.join(epic_root, "Half"))
     and not os.path.exists(os.path.join(S, "legendary", "tmp", "Half.resume")) else bad)(
     "an interrupted Epic install, which legendary never recorded, is removed with its resume file")
+(ok if sorted(os.listdir(lgd_manifests)) == ["Fir_DLC_Windows_2.manifest", "Oak_Windows_3.manifest"] else bad)(
+    "and the manifest legendary saved before its download began")
 
 res = run(installs.uninstall, "gog", "bad", p, vols)
 recs = json.load(open(p["NOVADECK_STORE_INSTALLS"]))
@@ -641,6 +656,25 @@ res = run(prefixes.drop, p, 3561440862, steam)
 (ok if any(c[:2] == ["rm", "-rf"] and "--one-file-system" in c and c[-1] == good for c, o in ran)
     and all("--property=User=deck" in o for c, o in ran) else bad)(
     f"the rm runs as deck, stays on one filesystem, and names exactly that path ({ran})")
+
+# -- the shader cache: the same appid and guard, under shadercache, and taken on every uninstall --
+shaders = os.path.join(steam, "steamapps", "shadercache")
+cache = os.path.join(shaders, "4089089214")
+os.makedirs(os.path.join(cache, "fozpipelinesv6"))
+os.symlink(os.path.join(tmp, "elsewhere"), os.path.join(shaders, "4000000000"))
+os.makedirs(os.path.join(compat, "4089089214"))
+(ok if prefixes.deletable(os.path.join(compat, "4089089214"), steam, "shadercache") is None
+    and prefixes.deletable(cache, steam) is None else bad)(
+    "a guard for one kind never passes a folder of the other")
+res = run(prefixes.drop_shader_cache, p, 4000000000, steam)
+(ok if "error" in res and os.path.isdir(os.path.join(tmp, "elsewhere")) and not ran else bad)(
+    f"a symlinked shader cache is refused: nothing runs, the target survives ({res})")
+res = run(prefixes.drop_shader_cache, p, 1, steam)
+(ok if res == {"dropped": False} and not ran else bad)(f"a game that never ran has no cache, and that is no error ({res})")
+res = run(prefixes.drop_shader_cache, p, 4089089214, steam)
+(ok if res == {"dropped": True} and not os.path.lexists(cache) and os.path.isdir(os.path.join(compat, "4089089214"))
+    and any(c[:2] == ["rm", "-rf"] and c[-1] == cache for c, o in ran) and all("--property=User=deck" in o for c, o in ran)
+    else bad)(f"drop_shader_cache removes exactly the cache, as deck, and leaves the prefix ({res})")
 PY
 
 echo "== the backend contract"

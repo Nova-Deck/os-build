@@ -26,8 +26,7 @@
 # 3.16.25 introduced one of each.
 #
 # Dry-run the patches CUMULATIVELY, in source.pin order, not one at a time against a clean tree:
-# several of them build on each other (0017 edits a test file 0014 creates, and 0015/0017/0018 all
-# touch files 0014 has already moved), so a per-patch dry-run reports failures that the real
+# several of them build on each other (0017/0018 both touch files 0014 has already moved), so a per-patch dry-run reports failures that the real
 # sequential apply does not have. What that check is worth: for 3.16.29 it was the difference
 # between "4 patches fail, 8 hunks rejected in DRMBackend.cpp" and the truth, which was two
 # one-line context collisions in tests/meson.build.
@@ -39,7 +38,7 @@
 # Contributor: PedroHLC <root@pedrohlc.com>
 
 pkgname=gamescope
-pkgver=3.16.31
+pkgver=3.17.0
 pkgrel=1
 pkgdesc='SteamOS session compositing window manager'
 arch=(x86_64 aarch64)

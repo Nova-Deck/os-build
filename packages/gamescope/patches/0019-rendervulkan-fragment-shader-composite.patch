@@ -35,7 +35,7 @@ dynamicRendering and nullDescriptor are already enabled by 3.16.29.
 Off unless the flag or the env var is set.
 ---
 diff --git a/src/main.cpp b/src/main.cpp
-index 96537ac0..03afac39 100644
+index fd902085..9011e16e 100644
 --- a/src/main.cpp
 +++ b/src/main.cpp
 @@ -137,6 +137,7 @@ const struct option *gamescope_options = (struct option[]){
@@ -94,11 +94,11 @@ index 6d199356..dc9d0596 100644
  extern bool g_bFullscreen;
  
 diff --git a/src/meson.build b/src/meson.build
-index 79a9550b..f00dc75b 100644
+index 498bca64..ab843589 100644
 --- a/src/meson.build
 +++ b/src/meson.build
-@@ -71,6 +71,11 @@ shader_src = [
-   'shaders/cs_nis_fp16.comp',
+@@ -73,6 +73,11 @@ shader_src = [
+   'shaders/cs_nis_hdr_linear_fp16.comp',
    'shaders/cs_rgb_to_nv12.comp',
    'shaders/cs_sgsr.comp',
 +  'shaders/fs_composite_blit.frag',
@@ -110,11 +110,11 @@ index 79a9550b..f00dc75b 100644
  
  spirv_shaders = glsl_generator.process(shader_src)
 diff --git a/src/rendervulkan.cpp b/src/rendervulkan.cpp
-index 54e4efc3..840e1548 100644
+index 77134f29..1549df9b 100644
 --- a/src/rendervulkan.cpp
 +++ b/src/rendervulkan.cpp
-@@ -50,6 +50,11 @@
- #include "cs_nis_fp16.h"
+@@ -52,6 +52,11 @@
+ #include "cs_nis_hdr_linear_fp16.h"
  #include "cs_rgb_to_nv12.h"
  #include "cs_sgsr.h"
 +#include "fs_composite_blit.h"
@@ -125,7 +125,7 @@ index 54e4efc3..840e1548 100644
  
  #define A_CPU
  #include "shaders/ffx_a.h"
-@@ -800,7 +805,7 @@ bool CVulkanDevice::createLayouts()
+@@ -804,7 +809,7 @@ bool CVulkanDevice::createLayouts()
  			.binding = 0,
  			.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
  			.descriptorCount = 1,
@@ -134,7 +134,7 @@ index 54e4efc3..840e1548 100644
  		},
  		VkDescriptorSetLayoutBinding {
  			.binding = 1,
-@@ -818,26 +823,26 @@ bool CVulkanDevice::createLayouts()
+@@ -822,26 +827,26 @@ bool CVulkanDevice::createLayouts()
  			.binding = 3,
  			.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
  			.descriptorCount = VKR_SAMPLER_SLOTS,
@@ -165,7 +165,7 @@ index 54e4efc3..840e1548 100644
  		},
  	};
  
-@@ -1003,6 +1008,30 @@ bool CVulkanDevice::createShaders()
+@@ -1009,6 +1014,30 @@ bool CVulkanDevice::createShaders()
  		}
  	}
  
@@ -196,7 +196,7 @@ index 54e4efc3..840e1548 100644
  	return true;
  }
  
-@@ -1201,6 +1230,198 @@ VkPipeline CVulkanDevice::compilePipeline(uint32_t layerCount, uint32_t ycbcrMas
+@@ -1207,6 +1236,198 @@ VkPipeline CVulkanDevice::compilePipeline(uint32_t layerCount, uint32_t ycbcrMas
  	return result;
  }
  
@@ -395,7 +395,7 @@ index 54e4efc3..840e1548 100644
  void CVulkanDevice::compileAllPipelines(std::stop_token st)
  {
  	pthread_setname_np( pthread_self(), "gamescope-shdr" );
-@@ -1695,6 +1916,11 @@ void CVulkanCmdBuffer::bindPipeline(VkPipeline pipeline)
+@@ -1708,6 +1929,11 @@ void CVulkanCmdBuffer::bindPipeline(VkPipeline pipeline)
  	m_device->vk.CmdBindPipeline(m_cmdBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
  }
  
@@ -407,7 +407,7 @@ index 54e4efc3..840e1548 100644
  void CVulkanCmdBuffer::dispatch(uint32_t x, uint32_t y, uint32_t z)
  {
  	for (auto src : m_boundTextures)
-@@ -1706,6 +1932,71 @@ void CVulkanCmdBuffer::dispatch(uint32_t x, uint32_t y, uint32_t z)
+@@ -1719,6 +1945,71 @@ void CVulkanCmdBuffer::dispatch(uint32_t x, uint32_t y, uint32_t z)
  	prepareDestImage(m_target);
  	insertBarrier();
  
@@ -479,7 +479,7 @@ index 54e4efc3..840e1548 100644
  	VkDescriptorSet descriptorSet = m_device->descriptorSet( this );
  
  	std::array<VkWriteDescriptorSet, 7> writeDescriptorSets;
-@@ -1826,27 +2117,27 @@ void CVulkanCmdBuffer::dispatch(uint32_t x, uint32_t y, uint32_t z)
+@@ -1839,27 +2130,27 @@ void CVulkanCmdBuffer::dispatch(uint32_t x, uint32_t y, uint32_t z)
  		lut3DDescriptor[i].imageView = m_lut3D[i] ? m_lut3D[i]->srgbView() : VK_NULL_HANDLE;
  	}
  
@@ -522,7 +522,7 @@ index 54e4efc3..840e1548 100644
  }
  
  void CVulkanCmdBuffer::copyImage(gamescope::Rc<CVulkanTexture> src, gamescope::Rc<CVulkanTexture> dst)
-@@ -3343,9 +3634,23 @@ bool vulkan_remake_swapchain( void )
+@@ -3430,9 +3721,23 @@ bool vulkan_remake_swapchain( void )
  
  static bool vulkan_make_output_images( VulkanOutput_t *pOutput )
  {
@@ -547,7 +547,7 @@ index 54e4efc3..840e1548 100644
  	outputImageflags.bTransferSrc = true; // for screenshots
  	outputImageflags.bSampled = true; // for pipewire blits
  	outputImageflags.bOutputImage = true;
-@@ -3827,12 +4132,15 @@ struct BlitPushData_t
+@@ -3929,12 +4234,15 @@ struct BlitPushData_t
      float u_itmTargetNits; // unset
  
  	uint32_t u_rotation;
@@ -564,7 +564,7 @@ index 54e4efc3..840e1548 100644
  
  		for (int i = 0; i < frameInfo->layers.count(); i++) {
  			const FrameInfo_t::Layer_t *layer = &frameInfo->layers.get( i );
-@@ -3880,6 +4188,8 @@ struct BlitPushData_t
+@@ -3982,6 +4290,8 @@ struct BlitPushData_t
          u_shaderFilter = (uint32_t)GamescopeUpscaleFilter::LINEAR;
  		u_alphaMode = 0;
  		u_rotation = 0;
@@ -573,7 +573,7 @@ index 54e4efc3..840e1548 100644
  		ctm[0] = glm::mat3x4
  		{
  			1, 0, 0, 0,
-@@ -3978,12 +4288,15 @@ struct RcasPushData_t
+@@ -4095,12 +4405,15 @@ struct RcasPushData_t
      float u_itmTargetNits; // unset
  
  	uint32_t u_rotation;
@@ -590,7 +590,7 @@ index 54e4efc3..840e1548 100644
  		u_layer0Offset.x = uint32_t(int32_t(frameInfo->layers.get( 0 ).offset.x));
  		u_layer0Offset.y = uint32_t(int32_t(frameInfo->layers.get( 0 ).offset.y));
  		u_borderMask = frameInfo->borderMask() >> 1u;
-@@ -4355,6 +4668,9 @@ std::optional<uint64_t> vulkan_composite( struct FrameInfo_t *frameInfo, gamesco
+@@ -4473,6 +4786,9 @@ std::optional<uint64_t> vulkan_composite( struct FrameInfo_t *frameInfo, gamesco
  	// Overrides (screenshots, upscale cache) are logical-sized, so never rotated.
  	const uint32_t uOutputRotation = pOutputOverride ? 0u : g_uOutputRotation;
  
@@ -600,7 +600,7 @@ index 54e4efc3..840e1548 100644
  	// The pre-emptive upscale is the only caller that brings its own command buffer.
  	const bool bPreemptiveUpscale = pOutputOverride != nullptr && pInCommandBuffer != nullptr;
  	auto cmdBuffer = pInCommandBuffer ? std::move( pInCommandBuffer ) : g_device.commandBuffer();
-@@ -4392,16 +4708,33 @@ std::optional<uint64_t> vulkan_composite( struct FrameInfo_t *frameInfo, gamesco
+@@ -4514,16 +4830,33 @@ std::optional<uint64_t> vulkan_composite( struct FrameInfo_t *frameInfo, gamesco
  		if ( oTimingSlot )
  			CompositeTimingMid( cmdBuffer.get(), *oTimingSlot );
  
@@ -643,7 +643,7 @@ index 54e4efc3..840e1548 100644
  	}
  	else if ( frameInfo->useNISLayer0 )
  	{
-@@ -4439,14 +4772,27 @@ std::optional<uint64_t> vulkan_composite( struct FrameInfo_t *frameInfo, gamesco
+@@ -4565,14 +4898,27 @@ std::optional<uint64_t> vulkan_composite( struct FrameInfo_t *frameInfo, gamesco
  		nisFrameInfo.layers.get( 0 ).scale.x = 1.0f;
  		nisFrameInfo.layers.get( 0 ).scale.y = 1.0f;
  
@@ -677,7 +677,7 @@ index 54e4efc3..840e1548 100644
  	}
  	else if ( frameInfo->blurLayer0 )
  	{
-@@ -4468,7 +4814,7 @@ std::optional<uint64_t> vulkan_composite( struct FrameInfo_t *frameInfo, gamesco
+@@ -4594,7 +4940,7 @@ std::optional<uint64_t> vulkan_composite( struct FrameInfo_t *frameInfo, gamesco
  			cmdBuffer->setSamplerUnnormalized(i, true);
  			cmdBuffer->setSamplerNearest(i, false);
  		}
@@ -686,7 +686,7 @@ index 54e4efc3..840e1548 100644
  
  		int pixelsPerGroup = 8;
  
-@@ -4476,27 +4822,57 @@ std::optional<uint64_t> vulkan_composite( struct FrameInfo_t *frameInfo, gamesco
+@@ -4602,27 +4948,57 @@ std::optional<uint64_t> vulkan_composite( struct FrameInfo_t *frameInfo, gamesco
  
  		bool useSrgbView = frameInfo->layers.get( 0 ).colorspace == GAMESCOPE_APP_TEXTURE_COLORSPACE_LINEAR;
  
@@ -761,10 +761,10 @@ index 54e4efc3..840e1548 100644
  
  	if ( pPipewireTexture != nullptr )
 diff --git a/src/rendervulkan.hpp b/src/rendervulkan.hpp
-index 4307f237..8694addd 100644
+index a802dc93..cbeb3530 100644
 --- a/src/rendervulkan.hpp
 +++ b/src/rendervulkan.hpp
-@@ -629,6 +629,16 @@ enum ShaderType {
+@@ -636,6 +636,16 @@ enum ShaderType {
  	SHADER_TYPE_COUNT
  };
  
@@ -781,7 +781,7 @@ index 4307f237..8694addd 100644
  extern VulkanOutput_t g_output;
  
  struct SamplerState
-@@ -688,6 +698,34 @@ struct PipelineInfo_t
+@@ -695,6 +705,34 @@ struct PipelineInfo_t
  	}
  };
  
@@ -816,7 +816,7 @@ index 4307f237..8694addd 100644
  
  static inline uint32_t hash_combine(uint32_t old_hash, uint32_t new_hash) {
      return old_hash ^ (new_hash + 0x9e3779b9 + (old_hash << 6) + (old_hash >> 2));
-@@ -711,6 +749,23 @@ namespace std
+@@ -718,6 +756,23 @@ namespace std
  			return hash;
  		}
  	};
@@ -840,7 +840,7 @@ index 4307f237..8694addd 100644
  }
  
  static inline uint32_t div_roundup(uint32_t x, uint32_t y)
-@@ -756,6 +811,8 @@ static inline uint32_t div_roundup(uint32_t x, uint32_t y)
+@@ -763,6 +818,8 @@ static inline uint32_t div_roundup(uint32_t x, uint32_t y)
  	VK_FUNC(CmdPipelineBarrier) \
  	VK_FUNC(CmdPushConstants) \
  	VK_FUNC(CmdResetQueryPool) \
@@ -849,7 +849,7 @@ index 4307f237..8694addd 100644
  	VK_FUNC(CmdWriteTimestamp) \
  	VK_FUNC(CreateBuffer) \
  	VK_FUNC(CreateCommandPool) \
-@@ -841,6 +898,7 @@ public:
+@@ -848,6 +905,7 @@ public:
  
  	VkSampler sampler(SamplerState key);
  	VkPipeline pipeline(ShaderType type, uint32_t layerCount = 1, uint32_t ycbcrMask = 0, uint32_t blur_layers = 0, uint32_t colorspace_mask = 0, uint32_t output_eotf = EOTF_Gamma22, bool itm_enable = false);
@@ -857,7 +857,7 @@ index 4307f237..8694addd 100644
  	int32_t findMemoryType( VkMemoryPropertyFlags properties, uint32_t requiredTypeBits );
  	std::unique_ptr<CVulkanCmdBuffer> commandBuffer();
  	uint64_t submit( std::unique_ptr<CVulkanCmdBuffer> cmdBuf);
-@@ -912,6 +970,7 @@ protected:
+@@ -919,6 +977,7 @@ protected:
  	bool createShaders();
  	bool createScratchResources();
  	VkPipeline compilePipeline(uint32_t layerCount, uint32_t ycbcrMask, ShaderType type, uint32_t blur_layer_count, uint32_t composite_debug, uint32_t colorspace_mask, uint32_t output_eotf, bool itm_enable);
@@ -865,7 +865,7 @@ index 4307f237..8694addd 100644
  	void compileAllPipelines(std::stop_token st);
  
  	VkDevice m_device = nullptr;
-@@ -944,7 +1003,10 @@ protected:
+@@ -952,7 +1011,10 @@ protected:
  
  	std::unordered_map< SamplerState, VkSampler > m_samplerCache;
  	std::array<VkShaderModule, SHADER_TYPE_COUNT> m_shaderModules;
@@ -876,7 +876,7 @@ index 4307f237..8694addd 100644
  	std::mutex m_pipelineMutex;
  
  	static constexpr uint32_t k_uMaxConcurrentSubmits = 8;
-@@ -1012,11 +1074,14 @@ public:
+@@ -1020,13 +1082,16 @@ public:
  	template<class PushData, class... Args>
  	void uploadConstants(Args&&... args);
  	void bindPipeline(VkPipeline pipeline);
@@ -884,7 +884,9 @@ index 4307f237..8694addd 100644
  	void dispatch(uint32_t x, uint32_t y = 1, uint32_t z = 1);
 +	void draw();
  	void copyImage(gamescope::Rc<CVulkanTexture> src, gamescope::Rc<CVulkanTexture> dst);
+ 	void copyImageRegions(gamescope::Rc<CVulkanTexture> src, gamescope::Rc<CVulkanTexture> dst, std::span<const VkImageCopy> regions);
  	void copyBufferToImage(VkBuffer buffer, VkDeviceSize offset, uint32_t stride, gamescope::Rc<CVulkanTexture> dst);
+ 	void clearImage(gamescope::Rc<CVulkanTexture> dst, const VkClearColorValue &color);
  
  
 +	VkDescriptorSet updateDescriptorSet( bool bStorageTarget );
@@ -903,7 +905,7 @@ index f81096b9..514b8c80 100644
  };
  
 diff --git a/src/shaders/composite.h b/src/shaders/composite.h
-index a62324e4..f537bf0f 100644
+index 7f3645e4..ff916926 100644
 --- a/src/shaders/composite.h
 +++ b/src/shaders/composite.h
 @@ -3,6 +3,7 @@
@@ -946,10 +948,10 @@ index a62324e4..f537bf0f 100644
  }
 +#endif
  
- // Takes in a scRGB/Linear encoded value and applies color management
- // based on the input colorspace.
+ // Takes a value already in the shaper LUT's encoding.
+ vec3 apply_layer_luts(vec3 color, uint plane_eotf) {
 diff --git a/src/shaders/cs_composite_rcas.comp b/src/shaders/cs_composite_rcas.comp
-index 3caefb14..84c39917 100644
+index 0a554327..06ef00b6 100644
 --- a/src/shaders/cs_composite_rcas.comp
 +++ b/src/shaders/cs_composite_rcas.comp
 @@ -31,6 +31,7 @@ uniform layers_t {
@@ -961,7 +963,7 @@ index 3caefb14..84c39917 100644
  
  #include "composite.h"
 diff --git a/src/shaders/descriptor_set.h b/src/shaders/descriptor_set.h
-index f2b8527c..68bd5e7c 100644
+index 77aacdf9..5ebd80e8 100644
 --- a/src/shaders/descriptor_set.h
 +++ b/src/shaders/descriptor_set.h
 @@ -44,10 +44,12 @@ uint get_layer_colorspace(uint layerIdx) {
@@ -969,10 +971,10 @@ index f2b8527c..68bd5e7c 100644
  }
  
 +#ifndef GAMESCOPE_FRAGMENT_PATH
- layout(binding = 1, rgba8) writeonly uniform image2D dst;
+ layout(binding = 1) writeonly uniform image2D dst;
  // alias
- layout(binding = 1, rgba8) writeonly uniform image2D dst_luma;
- layout(binding = 2, rgba8) writeonly uniform image2D dst_chroma;
+ layout(binding = 1) writeonly uniform image2D dst_luma;
+ layout(binding = 2) writeonly uniform image2D dst_chroma;
 +#endif
  
  layout(binding = 3) uniform sampler2D s_samplers[VKR_SAMPLER_SLOTS];

@@ -17,7 +17,6 @@ root (the `gamescope/` checkout inside makepkg's `$srcdir`) by
 0006-focus-candidate-instrumentation.patch   (present but NOT in source.pin — diagnostic, see below)
 0007-vendor-wayland-protocols-wrap.patch
 0014-drm-color-manage-direct-scanout-via-the-dpu-ctm.patch
-0015-color-p3-red-is-wide-gamut.patch
 0016-steamcompmgr-arm64-virtual-white.patch
 0017-color-neutral-virtual-white-keeps-scanout.patch
 0018-drm-sdr-color-management-through-the-dpu-output-luts.patch
@@ -25,7 +24,6 @@ root (the `gamescope/` checkout inside makepkg's `$srcdir`) by
 0020-libliftoff-treat-enodev-as-no-fit.patch        (patches the libliftoff SUBMODULE; only with 0021)
 0021-libliftoff-give-planes-the-layer-zpos.patch    (patches the libliftoff SUBMODULE)
 0023-xdg-titles-are-reported-to-steam.patch          (NOVADECK_ANDROID_APPID root property; ConVar touch_passthrough_xdg_titles)
-0025-steamcompmgr-elapsed-time-fps-limiter.patch     (ConVar limiter_use_elapsed_time, default on)
 0026-drm-offer-an-edid-less-internal-panels-native-modes-as-refresh-rates.patch
 0027-steamcompmgr-refresh-only-request-takes-the-exact-mode.patch
 ```
@@ -172,33 +170,17 @@ pristine signatures. Regenerated with `git diff` against a clean 3.16.28 checkou
 — see the per-patch RE-ROLLED notes in their headers. `0018`'s test additions went with the series
 because every one of them tested `DrmHdrOutputRequiresVulkanComposition` itself.
 
-`0015` — **make `BIsWideGamut()` inclusive at the threshold.** It uses the red primary as its
-sentinel and wants `r.y < 0.320f`. DCI-P3 red is exactly `(0.680, 0.320)`, which is what the
-(now-retired) `novadeck.internal-amoled.lua` display profile declared for the whole DDIC family, so
-every one of our panels landed on the wrong side by a rounding-free tie and was classified
-**narrow**. The profile is gone with `0008`-`0013`, but the off-by-a-tie is a general fix worth
-keeping: any panel whose red sits exactly on the threshold hits it.
-
-**It does not make the slider dead — it points it at the wrong branch,** and the difference matters
-when reading the symptom. `buildSDRColorimetry()` has two, and both respond to the slider:
-
-| branch | SDR *source* colorimetry the slider sweeps | saturation remap |
-|---|---|---|
-| narrow (what we got) | panel native → **generic wide gamut** | full blend to unit cube from 70% sat |
-| wide (what we want) | **Rec.709** → panel native | none (`blendAmountMax = 0`) |
-
-So on a panel that genuinely has P3 to spend, the slider was declaring the content *wider than the
-display* and then spending itself compressing the excess back in, and the panel's own measured
-primaries were never an endpoint. At the shipped default of 0.5 that is the worst case: source =
-generic wide gamut plus the full smooth remap, where it should be halfway between 709 and the panel
-with no remap. One character, plus a `[color]` test that pins the boundary so a future re-roll
-cannot quietly reintroduce it. Note the test declares `BIsWideGamut()` itself: the function is not
-in `color_helpers.h`, and adding it there is a bigger change than this deserves.
-
-**Testing this on hardware needs a COMPOSITED frame.** `calcScanoutLinearScale()` (patch `0014`)
-deliberately ignores the gamut mapping and lets the frame scan out, so on the direct-scanout path
-the wideness slider has no effect *either way* and an A/B there shows nothing. Use a board that
-composites (Pocket Max) or force one with `GAMESCOPE_COMPOSITE_FORCE=1`.
+`0015` — **RETIRED 2026-10-26 with the 3.17.0 bump, and the number stays unused.** It made
+`BIsWideGamut()` inclusive (`r.y <= 0.320f`, upstream still has `<`), because DCI-P3 red is exactly
+`(0.680, 0.320)` and the retired `novadeck.internal-amoled.lua` profile declared it for every panel,
+classifying them **narrow**. Nothing reaches that tie any more: an EDID-less DSI connector keeps
+`displaycolorimetry_709` (red `(0.640, 0.330)`, narrow either way), we ship no gamescope display
+scripts, and an EDID stores chromaticity in 10 bits, so a P3 red reads `0.3203` or `0.3193`, never
+exactly `0.320`. Only a display script declaring P3 red exactly would hit it; revive the one
+character with such a script. If you do: the narrow branch of `buildSDRColorimetry()` sweeps panel
+native → generic wide gamut with a saturation remap, the wide branch Rec.709 → panel native with
+none, and an A/B needs a COMPOSITED frame (Pocket Max, or `GAMESCOPE_COMPOSITE_FORCE=1`), since
+`0014` scans out without the gamut mapping.
 
 `0016` — **recover the virtual white point's `y` on arm64.** `GAMESCOPE_DISPLAY_VIRTUAL_WHITE` is the
 colour temperature slider's wire format and the arm64 Steam client packs it through **the same Xlib
@@ -251,13 +233,13 @@ would have tripped it too. Caught on Pocket ACE 2026-09-13 — night mode at 0.5
 own virtual white left the CTM at identity, and clearing the virtual white *alone* brought back
 `diag(1.0, 0.72315, 0.52500)`, matching `hsv_to_rgb(25°, 0.475, 1.0) = (1.0, 0.72292, 0.525)` to 2e-4.
 
-**The tolerance is measured, and both bounds are pinned in a test.** An exact comparison does not
+**The tolerance is measured.** An exact comparison does not
 work: on a board with no display profile the panel white is the synthetic EDID's 10-bit quantised
 D65, `0.3125000`, against the client's neutral `0.3127789` — a gap of **2.8e-4**. One notch of the
 slider moves x by **7.4e-3**, twenty-six times that. `0.001` sits 3.6× above the gap and 7.4× below a
-notch. Do not widen it toward the notch or narrow it toward the quantisation gap without re-measuring;
-`tests/test_drm_color_pipeline.cpp` asserts the neutral value is expressible and the one-notch value
-is not, using the measured numbers.
+notch. Do not widen it toward the notch or narrow it toward the quantisation gap without re-measuring.
+A test asserting both bounds with the measured numbers was dropped with the rest of the series'
+`tests/` hunks on 2026-10-25, so these numbers are the only record.
 
 `0018` — **the whole SDR chain in the DPU's own LUTs, not just a diagonal.** Third-party
 (virtudude), carried with one addition of ours. `0014` exists because the DPU exposes no degamma
@@ -380,16 +362,17 @@ two DSI interfaces' CTL flushes straddling the DPU's programmable fetch start (i
 `kernel/patches/0395`. The lead cost ~1.25 ms of latency on every board, and on SM8250 its reserve
 ratcheted up on the offline rotator's late flips and took games from 60 to 40 fps.
 
-`0025` — **the fixed-refresh frame limiter releases by elapsed time, not by vblank count**
-(virtudude, body unchanged). With a frame cap below the refresh rate and no VRR — every board we
-ship, DSI has no VRR — stock gamescope sends frame callbacks only on every Nth vblank
-(`vblank_idx % (refresh / cap)`). A frame that misses its vblank by any amount then waits a whole
-extra period, so a game that cannot quite hold its cap alternates short and double-length frames.
-`0025` gates on `last_commit_first_latch_time` + the limited period with half a refresh period of
-slack, the same scheme upstream already uses for VRR. ConVar `limiter_use_elapsed_time` (default
-on) restores the divisor gate live when set to 0. Taken together with `kernel/patches/0390`
-(real vblank timestamps on command-mode panels): that one fixed the cap running fast, this one the
-stutter when a game cannot hold it.
+`0025` — **RETIRED 2026-10-25 with the 3.17.0 bump, and the number stays unused.** It released
+limited frames on fixed-refresh panels by elapsed time (`last_commit_first_latch_time` + the
+limited period, half a refresh period of slack; ConVar `limiter_use_elapsed_time`) instead of
+stock gamescope's `vblank_idx % (refresh / cap)` divisor gate (virtudude, body unchanged). 3.17.0
+rewrote that exact branch in 62707e1e: the gate now opens when the display vblank count crosses a
+limiter boundary, so a stalled or repeated pass no longer shifts the limiter's phase against the
+display. That is not the same fix: upstream still releases only on boundary vblanks, so a frame
+that misses one waits for the next, which is the short/double-length alternation 0025 targeted.
+0025 was never A/B-measured on HW either; whether the stutter survives on stock 3.17.0 is the
+thing to check before reviving it. `kernel/patches/0390` (real vblank timestamps on command-mode
+panels) is independent and stays.
 
 `0026` — **an EDID-less internal panel's native modes become its refresh rates** (gennro, Kettle
 Linux `0019`, body unchanged). gamescope fills the dynamic refresh rates of an internal panel that

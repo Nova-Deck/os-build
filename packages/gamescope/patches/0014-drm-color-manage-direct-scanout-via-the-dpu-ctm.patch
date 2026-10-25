@@ -125,9 +125,14 @@ difference is that hunks which used to carry HDR-introduced context (create_colo
 bTraditionalHDROutput parameter, the DrmHdrOutputRequiresVulkanComposition call site, and test-list
 entries for deleted tests) now sit on the pristine signatures instead. Generated with git diff, not
 hand-edited.
+
+TESTS DROPPED 2026-10-25 (gamescope 3.17.0): tests/test_drm_color_pipeline.cpp and its entry in
+tests/meson.build are gone. The PKGBUILD builds with -Denable_tests=false, so they never compiled
+in our build, and the one-line test list collided on every bump. DRMColorPipeline.h stays split
+out; "unit tested" above describes the dropped test.
 ---
 diff --git a/src/Backends/DRMBackend.cpp b/src/Backends/DRMBackend.cpp
-index ed7654ce..6c809efe 100644
+index 03f26c80..cd6749b5 100644
 --- a/src/Backends/DRMBackend.cpp
 +++ b/src/Backends/DRMBackend.cpp
 @@ -30,6 +30,7 @@
@@ -138,7 +143,7 @@ index ed7654ce..6c809efe 100644
  #include "Utils/Defer.h"
  #include "Utils/Parsers.h"
  #include "Utils/String.h"
-@@ -138,6 +139,10 @@ struct drm_t {
+@@ -137,6 +138,10 @@ struct drm_t {
  		std::shared_ptr<gamescope::BackendBlob> lut3d_id[ EOTF_Count ];
  		std::shared_ptr<gamescope::BackendBlob> shaperlut_id[ EOTF_Count ];
  		amdgpu_transfer_function output_tf = AMDGPU_TRANSFER_FUNCTION_DEFAULT;
@@ -149,7 +154,7 @@ index ed7654ce..6c809efe 100644
  	} current, pending;
  
  	// FBs in the atomic request, but not yet submitted to KMS
-@@ -574,6 +579,10 @@ extern std::string g_reshade_effect;
+@@ -573,6 +578,10 @@ extern std::string g_reshade_effect;
  
  bool drm_update_color_mgmt(struct drm_t *drm);
  bool drm_supports_color_mgmt(struct drm_t *drm);
@@ -160,7 +165,7 @@ index ed7654ce..6c809efe 100644
  bool drm_set_connector( struct drm_t *drm, gamescope::CDRMConnector *conn );
  
  struct drm_color_ctm2 {
-@@ -3450,8 +3459,12 @@ int drm_prepare( struct drm_t *drm, bool async, const struct FrameInfo_t *frameI
+@@ -3439,8 +3448,12 @@ int drm_prepare( struct drm_t *drm, bool async, const struct FrameInfo_t *frameI
  			if ( drm->pCRTC->GetProperties().DEGAMMA_LUT )
  				drm->pCRTC->GetProperties().DEGAMMA_LUT->SetPendingValue( drm->req, 0, true );
  
@@ -174,7 +179,7 @@ index ed7654ce..6c809efe 100644
  
  			if ( drm->pCRTC->GetProperties().VRR_ENABLED )
  				drm->pCRTC->GetProperties().VRR_ENABLED->SetPendingValue( drm->req, bVRREnabled, true );
-@@ -3476,6 +3489,13 @@ int drm_prepare( struct drm_t *drm, bool async, const struct FrameInfo_t *frameI
+@@ -3465,6 +3478,13 @@ int drm_prepare( struct drm_t *drm, bool async, const struct FrameInfo_t *frameI
  
  	if ( drm->pCRTC && !bSleep )
  	{
@@ -188,7 +193,7 @@ index ed7654ce..6c809efe 100644
  		if ( drm->pCRTC->GetProperties().AMD_CRTC_REGAMMA_TF )
  		{
  			if ( !cv_drm_debug_disable_regamma_tf )
-@@ -3932,6 +3952,108 @@ bool drm_supports_color_mgmt(struct drm_t *drm)
+@@ -3921,6 +3941,108 @@ bool drm_supports_color_mgmt(struct drm_t *drm)
  	return drm->pPrimaryPlane->GetProperties().AMD_PLANE_CTM.has_value() && drm->pPrimaryPlane->GetProperties().AMD_PLANE_BLEND_TF.has_value();
  }
  
@@ -297,7 +302,7 @@ index ed7654ce..6c809efe 100644
  std::span<const uint32_t> drm_get_valid_refresh_rates( struct drm_t *drm )
  {
  	if ( drm && drm->pConnector )
-@@ -4018,6 +4140,15 @@ namespace gamescope
+@@ -4007,6 +4129,15 @@ namespace gamescope
  
  			bool bWantsPartialComposite = pFrameInfo->layers.count() >= 3 && !kDisablePartialComposition;
  
@@ -313,7 +318,7 @@ index ed7654ce..6c809efe 100644
  			static bool s_bWasFirstFrame = true;
  			bool bWasFirstFrame = s_bWasFirstFrame;
  			s_bWasFirstFrame = false;
-@@ -4070,12 +4201,23 @@ namespace gamescope
+@@ -4059,12 +4190,23 @@ namespace gamescope
  			bNeedsFullComposite |= !!(g_uCompositeDebug & CompositeDebugFlag::Heatmap);
  			bNeedsFullComposite |= g_uOutputRotation != 0; // can't rotate planes at scanout
  
@@ -337,7 +342,7 @@ index ed7654ce..6c809efe 100644
  				int ret = drm_prepare( &g_DRM, bAsync, pFrameInfo );
  				if ( ret == 0 )
  					bDoComposite = false;
-@@ -4103,6 +4245,15 @@ namespace gamescope
+@@ -4092,6 +4234,15 @@ namespace gamescope
  			if ( kDisablePartialComposition )
  				bNeedsFullComposite = true;
  
@@ -353,7 +358,7 @@ index ed7654ce..6c809efe 100644
  			FrameInfo_t compositeFrameInfo = *pFrameInfo;
  
  			if ( compositeFrameInfo.layers.count() == 1 )
-@@ -4260,6 +4411,10 @@ namespace gamescope
+@@ -4256,6 +4407,10 @@ namespace gamescope
  				m_bWasPartialCompositing = true;
  			}
  
@@ -364,7 +369,7 @@ index ed7654ce..6c809efe 100644
  			int ret = drm_prepare( &g_DRM, bAsync, &presentCompFrameInfo );
  
  			// Happens when we're VT-switched away
-@@ -4277,6 +4432,7 @@ namespace gamescope
+@@ -4273,6 +4428,7 @@ namespace gamescope
  				xwm_log.errorf("Failed to prepare 1-layer flip (%s), trying again with previous mode if modeset needed", strerror( -ret ));
  
  				// Try once again to in case we need to fall back to another mode.
@@ -459,10 +464,10 @@ index 00000000..8b097d6b
 +    }
 +}
 diff --git a/src/color_helpers.cpp b/src/color_helpers.cpp
-index 64430a5f..6459ef2b 100644
+index f59c2190..404c6386 100644
 --- a/src/color_helpers.cpp
 +++ b/src/color_helpers.cpp
-@@ -828,6 +828,101 @@ void calcColorTransform( lut1d_t * pShaper, int nLutSize1d,
+@@ -837,6 +837,101 @@ void calcColorTransform( lut1d_t * pShaper, int nLutSize1d,
      }
  }
  
@@ -565,7 +570,7 @@ index 64430a5f..6459ef2b 100644
  {
      // Use red as a sentinal for a wide-gamut display
 diff --git a/src/color_helpers.h b/src/color_helpers.h
-index cefa74e4..29dd0b10 100644
+index e3c421ff..650d0c22 100644
 --- a/src/color_helpers.h
 +++ b/src/color_helpers.h
 @@ -5,6 +5,7 @@
@@ -576,7 +581,7 @@ index cefa74e4..29dd0b10 100644
  #include <vector>
  #include <memory>
  
-@@ -382,6 +383,34 @@ void calcColorTransform( lut1d_t * pShaper, int nLutSize1d,
+@@ -386,6 +387,34 @@ void calcColorTransform( lut1d_t * pShaper, int nLutSize1d,
  	const colormapping_t & mapping, const nightmode_t & nightmode, const tonemapping_t & tonemapping,                   \
  	const lut3d_t * pLook, float flGain )
  
@@ -612,10 +617,10 @@ index cefa74e4..29dd0b10 100644
  // Note: the output colorimetry will use the native display's white point
  // Only the color gamut will change
 diff --git a/src/rendervulkan.hpp b/src/rendervulkan.hpp
-index fa519db6..f461ca8f 100644
+index 3566b3fe..a8859b79 100644
 --- a/src/rendervulkan.hpp
 +++ b/src/rendervulkan.hpp
-@@ -576,6 +576,10 @@ struct gamescope_color_mgmt_tracker_t
+@@ -582,6 +582,10 @@ struct gamescope_color_mgmt_tracker_t
  extern gamescope_color_mgmt_tracker_t g_ColorMgmt;
  extern gamescope_color_mgmt_luts g_ColorMgmtLuts[ EOTF_Count ];
  
@@ -627,10 +632,10 @@ index fa519db6..f461ca8f 100644
  {
  	VkSurfaceKHR surface;
 diff --git a/src/steamcompmgr.cpp b/src/steamcompmgr.cpp
-index 4848bcd2..908a39c7 100644
+index 8be74ec0..b66d7737 100644
 --- a/src/steamcompmgr.cpp
 +++ b/src/steamcompmgr.cpp
-@@ -146,6 +146,15 @@ std::atomic<uint64_t> g_FocusedVROverlayKeyboard;
+@@ -149,6 +149,15 @@ std::atomic<uint64_t> g_FocusedVROverlayKeyboard;
  
  gamescope_color_mgmt_tracker_t g_ColorMgmt{};
  
@@ -646,7 +651,7 @@ index 4848bcd2..908a39c7 100644
  static gamescope_color_mgmt_luts g_ColorMgmtLutsOverride[ EOTF_Count ];
  std::atomic<std::shared_ptr<lut3d_t>> g_ColorMgmtLooks[EOTF_Count];
  
-@@ -327,11 +336,20 @@ static const gamescope_color_mgmt_t k_ScreenshotColorMgmtHDR =
+@@ -332,11 +341,20 @@ static const gamescope_color_mgmt_t k_ScreenshotColorMgmtHDR =
  // sudo cpupower frequency-set --governor performance
  
  static void
@@ -668,7 +673,7 @@ index 4848bcd2..908a39c7 100644
  	for ( uint32_t nInputEOTF = 0; nInputEOTF < EOTF_Count; nInputEOTF++ )
  	{
  		if (!outColorMgmtLuts[nInputEOTF].vk_lut1d)
-@@ -434,6 +452,20 @@ create_color_mgmt_luts(const gamescope_color_mgmt_t& newColorMgmt, gamescope_col
+@@ -440,6 +458,20 @@ create_color_mgmt_luts(const gamescope_color_mgmt_t& newColorMgmt, gamescope_col
  				newColorMgmt.outputVirtualWhite, newColorMgmt.chromaticAdaptationMode,
  				colorMapping, newColorMgmt.nightmode, tonemapping, pLook, flGain );
  
@@ -689,7 +694,7 @@ index 4848bcd2..908a39c7 100644
  			// Create quantized output luts
  			for ( size_t i=0, end = g_tmpLut1d.dataR.size(); i<end; ++i )
  			{
-@@ -621,12 +653,17 @@ update_color_mgmt()
+@@ -627,12 +659,17 @@ update_color_mgmt()
  
  	if (g_ColorMgmt.pending.enabled)
  	{
@@ -708,244 +713,3 @@ index 4848bcd2..908a39c7 100644
  	}
  
  #ifdef COLOR_MGMT_MICROBENCH
-diff --git a/tests/meson.build b/tests/meson.build
-index 89fca19a..8920483a 100644
---- a/tests/meson.build
-+++ b/tests/meson.build
-@@ -5,10 +5,12 @@ unittest_src = []
- foreach src : gamescope_core_src + ['Script/Script.cpp', 'convar_script.cpp']
- 	unittest_src += srcdir / src
- endforeach
-+# calcScanoutLinearScale() lives here, and it is not part of gamescope_core_src.
-+unittest_src += srcdir / 'color_helpers.cpp'
- 
- gamescope_tests = executable(
- 	'gamescope_tests',
--	unittest_src + ['test_convar.cpp', 'test_focus_placement.cpp', 'test_mangoapp_config.cpp', 'test_mangoapp_control.cpp', 'test_mode_list.cpp', 'test_process.cpp', 'test_upscale.cpp', 'test_utils_parsers.cpp', 'test_utils_string.cpp', 'test_vrclient_detect.cpp'],
-+	unittest_src + ['test_convar.cpp', 'test_drm_color_pipeline.cpp', 'test_focus_placement.cpp', 'test_mangoapp_config.cpp', 'test_mangoapp_control.cpp', 'test_mode_list.cpp', 'test_process.cpp', 'test_upscale.cpp', 'test_utils_parsers.cpp', 'test_utils_string.cpp', 'test_vrclient_detect.cpp'],
- 	include_directories: [srcdir, sol2_include],
- 	dependencies: [catch2_dep, luajit_dep, cap_dep, drm_dep, glm_dep, wlroots_dep],
- 	cpp_args: gamescope_cpp_args,
-diff --git a/tests/test_drm_color_pipeline.cpp b/tests/test_drm_color_pipeline.cpp
-new file mode 100644
-index 00000000..bef6ff8e
---- /dev/null
-+++ b/tests/test_drm_color_pipeline.cpp
-@@ -0,0 +1,217 @@
-+#include <catch2/catch_test_macros.hpp>
-+
-+#include "Backends/DRMColorPipeline.h"
-+#include "color_helpers.h"
-+
-+#include <cmath>
-+
-+using namespace gamescope;
-+
-+namespace
-+{
-+    // The claim the whole design rests on: for a PURE POWER LAW encoding, scaling in
-+    // linear light and scaling in the encoding are the same operation, with the
-+    // exponent moved. If this ever stops holding, the DPU path is wrong and the
-+    // scanout frames are quietly mis-coloured, so assert it numerically rather than
-+    // trusting the algebra in the comment.
-+    float EncodeG22( float flLinear ) { return std::pow( flLinear, 1.f / 2.2f ); }
-+    float DecodeG22( float flEncoded ) { return std::pow( flEncoded, 2.2f ); }
-+
-+    nightmode_t MakeNightMode( float flAmount, float flHue, float flSaturation )
-+    {
-+        nightmode_t nightmode{};
-+        nightmode.amount = flAmount;
-+        nightmode.hue = flHue;
-+        nightmode.saturation = flSaturation;
-+        return nightmode;
-+    }
-+
-+    colormapping_t MakeSmoothRemap()
-+    {
-+        // What buildSDRColorimetry() hands back for a non-wide-gamut panel: a real
-+        // blend, which must NOT by itself stop us scanning out.
-+        colormapping_t mapping{};
-+        mapping.blendEnableMinSat = 0.7f;
-+        mapping.blendEnableMaxSat = 1.0f;
-+        mapping.blendAmountMin = 0.0f;
-+        mapping.blendAmountMax = 1.0f;
-+        return mapping;
-+    }
-+
-+    std::optional<glm::vec3> ScaleFor(
-+        const displaycolorimetry_t &source,
-+        const displaycolorimetry_t &dest,
-+        const nightmode_t &nightmode,
-+        float flGain = 1.f,
-+        EOTF eEOTF = EOTF_Gamma22 )
-+    {
-+        tonemapping_t tonemapping{};
-+        tonemapping.bUseShaper = true;
-+        tonemapping.g22_luminance = 1.f;
-+        tonemapping.eOperator = ETonemapOperator_None;
-+
-+        return calcScanoutLinearScale( source, eEOTF, dest, eEOTF,
-+            glm::vec2( 0.f, 0.f ), k_EChromaticAdapatationMethod_Bradford,
-+            MakeSmoothRemap(), nightmode, tonemapping, nullptr, flGain );
-+    }
-+}
-+
-+TEST_CASE("a linear scale is exactly an encoded scale under gamma 2.2", "[drm][color]")
-+{
-+    const glm::vec3 vLinearScale{ 0.9f, 0.72f, 0.35f };
-+    const glm::vec3 vEncodedScale = DrmEncodedScaleFromLinearScale( vLinearScale );
-+
-+    for ( float flEncodedIn : { 0.05f, 0.25f, 0.5f, 0.75f, 1.0f } )
-+    {
-+        for ( int c = 0; c < 3; c++ )
-+        {
-+            // What the Vulkan composite does: decode, scale, re-encode.
-+            const float flComposite = EncodeG22( vLinearScale[c] * DecodeG22( flEncodedIn ) );
-+            // What the DPU does: scale the encoded value, no decode at all.
-+            const float flScanout = vEncodedScale[c] * flEncodedIn;
-+
-+            REQUIRE( std::fabs( flComposite - flScanout ) < 1e-5f );
-+        }
-+    }
-+}
-+
-+TEST_CASE("identity night mode on matching primaries is expressible", "[drm][color]")
-+{
-+    // Night mode off: amount 0 collapses the HSV multiply to white, so the scale is
-+    // unity and scanout needs no correction at all.
-+    auto oScale = ScaleFor( displaycolorimetry_709, displaycolorimetry_709, MakeNightMode( 0.f, 25.f / 360.f, 1.f ) );
-+
-+    REQUIRE( oScale.has_value() );
-+    REQUIRE( std::fabs( oScale->r - 1.f ) < 1e-5f );
-+    REQUIRE( std::fabs( oScale->g - 1.f ) < 1e-5f );
-+    REQUIRE( std::fabs( oScale->b - 1.f ) < 1e-5f );
-+}
-+
-+TEST_CASE("night mode on matching primaries is expressible and tints", "[drm][color]")
-+{
-+    auto oScale = ScaleFor( displaycolorimetry_709, displaycolorimetry_709, MakeNightMode( 1.f, 25.f / 360.f, 1.f ) );
-+
-+    REQUIRE( oScale.has_value() );
-+    // Amber: red is left alone and blue is pulled down hard. The point of the
-+    // assertion is the ORDERING -- if a repack ever inverted the channels this
-+    // would catch it, where a "did we get a value" check would not.
-+    REQUIRE( oScale->r > oScale->g );
-+    REQUIRE( oScale->g > oScale->b );
-+    REQUIRE( oScale->b < 0.5f );
-+}
-+
-+TEST_CASE("a gamut mapping does not stop scanout", "[drm][color]")
-+{
-+    // REGRESSION, measured on hardware. Source and dest primaries genuinely differ
-+    // here, which is gamescope's DEFAULT state (sdrGamutWideness 0.5 makes the SDR
-+    // source generic-wide-gamut while the panel is not). Refusing over that meant
-+    // EVERY frame composited -- one plane committed instead of two, with night mode
-+    // merely off -- surrendering the whole point of scanning out.
-+    //
-+    // Scanout never applied the gamut mapping, so there is nothing to preserve by
-+    // compositing; the scale it still needs is what matters.
-+    auto oScale = ScaleFor( displaycolorimetry_2020, displaycolorimetry_709, MakeNightMode( 0.f, 25.f / 360.f, 1.f ) );
-+
-+    REQUIRE( oScale.has_value() );
-+    // ...and with night mode off, that scale is unity, so the CTM stays identity and
-+    // the frame scans out exactly as it did before any of this existed.
-+    REQUIRE( std::fabs( oScale->r - 1.f ) < 1e-5f );
-+    REQUIRE( std::fabs( oScale->g - 1.f ) < 1e-5f );
-+    REQUIRE( std::fabs( oScale->b - 1.f ) < 1e-5f );
-+}
-+
-+TEST_CASE("the saturation blend alone does not stop scanout", "[drm][color]")
-+{
-+    // MakeSmoothRemap() is a fully enabled blend. It is part of the gamut mapping
-+    // that scanout does not do, so like the matrix it must not force a composite.
-+    auto oScale = ScaleFor( displaycolorimetry_709, displaycolorimetry_709, MakeNightMode( 0.5f, 25.f / 360.f, 1.f ) );
-+
-+    REQUIRE( oScale.has_value() );
-+}
-+
-+TEST_CASE("PQ is not expressible", "[drm][color]")
-+{
-+    // PQ is not a power law, so the exponent trick does not apply at all.
-+    auto oScale = ScaleFor( displaycolorimetry_2020, displaycolorimetry_2020, MakeNightMode( 0.f, 25.f / 360.f, 1.f ), 1.f, EOTF_PQ );
-+
-+    REQUIRE_FALSE( oScale.has_value() );
-+}
-+
-+TEST_CASE("tonemapping and look luts are not expressible", "[drm][color]")
-+{
-+    tonemapping_t tonemapping{};
-+    tonemapping.bUseShaper = true;
-+    tonemapping.g22_luminance = 1.f;
-+    tonemapping.eOperator = ETonemapOperator_EETF2390_MaxChan;
-+
-+    auto oScale = calcScanoutLinearScale( displaycolorimetry_709, EOTF_Gamma22,
-+        displaycolorimetry_709, EOTF_Gamma22,
-+        glm::vec2( 0.f, 0.f ), k_EChromaticAdapatationMethod_Bradford,
-+        MakeSmoothRemap(), MakeNightMode( 0.f, 25.f / 360.f, 1.f ), tonemapping, nullptr, 1.f );
-+
-+    REQUIRE_FALSE( oScale.has_value() );
-+}
-+
-+TEST_CASE("a virtual white point is not expressible", "[drm][color]")
-+{
-+    tonemapping_t tonemapping{};
-+    tonemapping.bUseShaper = true;
-+    tonemapping.g22_luminance = 1.f;
-+    tonemapping.eOperator = ETonemapOperator_None;
-+
-+    auto oScale = calcScanoutLinearScale( displaycolorimetry_709, EOTF_Gamma22,
-+        displaycolorimetry_709, EOTF_Gamma22,
-+        glm::vec2( 0.28f, 0.29f ), k_EChromaticAdapatationMethod_Bradford,
-+        MakeSmoothRemap(), MakeNightMode( 0.f, 25.f / 360.f, 1.f ), tonemapping, nullptr, 1.f );
-+
-+    REQUIRE_FALSE( oScale.has_value() );
-+}
-+
-+TEST_CASE("gain above unity is refused", "[drm][color]")
-+{
-+    // Above 1 the composite's hue-preserving clip can engage, and a plain scale
-+    // stops being a faithful model of it.
-+    auto oScale = ScaleFor( displaycolorimetry_709, displaycolorimetry_709, MakeNightMode( 0.f, 25.f / 360.f, 1.f ), 2.f );
-+
-+    REQUIRE_FALSE( oScale.has_value() );
-+}
-+
-+TEST_CASE("CTM packing is S31.32 sign-magnitude", "[drm][color]")
-+{
-+    REQUIRE( DrmCtmFromFloat( 0.f ) == 0ull );
-+    REQUIRE( DrmCtmFromFloat( 1.f ) == ( 1ull << 32 ) );
-+    REQUIRE( DrmCtmFromFloat( 0.5f ) == ( 1ull << 31 ) );
-+
-+    // Sign lives in bit 63 and the magnitude is NOT two's complement.
-+    REQUIRE( DrmCtmFromFloat( -1.f ) == ( ( 1ull << 63 ) | ( 1ull << 32 ) ) );
-+
-+    uint64_t uMatrix[9];
-+    DrmCtmFromDiagonal( glm::vec3( 1.f, 0.5f, 0.f ), uMatrix );
-+
-+    REQUIRE( uMatrix[0] == ( 1ull << 32 ) );
-+    REQUIRE( uMatrix[4] == ( 1ull << 31 ) );
-+    REQUIRE( uMatrix[8] == 0ull );
-+
-+    // Everything off the diagonal must be exactly zero: msm drops the sign bit, so
-+    // a stray non-zero term there would be programmed as a positive coefficient.
-+    for ( int i : { 1, 2, 3, 5, 6, 7 } )
-+        REQUIRE( uMatrix[i] == 0ull );
-+}
-+
-+TEST_CASE("CTM packing accepts drm_color_ctm's own element type", "[drm][color]")
-+{
-+    // REGRESSION, and it only ever failed on the device. drm_color_ctm::matrix is
-+    // __u64 = `unsigned long long`, while uint64_t on aarch64 is `unsigned long`.
-+    // Same width, DIFFERENT type, so a uint64_t(&)[9] parameter binds fine on
-+    // x86_64 and fails to compile on arm64 -- which is exactly how this shipped a
-+    // broken build. Exercising both spellings here catches it on the host.
-+    unsigned long long uLongLong[9];
-+    unsigned long uLong[9];
-+
-+    DrmCtmFromDiagonal( glm::vec3( 1.f, 1.f, 1.f ), uLongLong );
-+    DrmCtmFromDiagonal( glm::vec3( 1.f, 1.f, 1.f ), uLong );
-+
-+    REQUIRE( uLongLong[0] == ( 1ull << 32 ) );
-+    REQUIRE( uLong[4] == ( 1ull << 32 ) );
-+    REQUIRE( uLongLong[8] == ( 1ull << 32 ) );
-+}

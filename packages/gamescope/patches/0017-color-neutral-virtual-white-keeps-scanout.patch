@@ -33,6 +33,11 @@ A real adjustment still composites, and that remains correct rather than a
 compromise: an adaptation between different white points is not diagonal in the
 panel's RGB space and genuinely cannot go in the CTM.
 
+TESTS DROPPED 2026-10-25 (gamescope 3.17.0): the two cases this added to
+tests/test_drm_color_pipeline.cpp went with that file (see 0014). The PKGBUILD
+builds with -Denable_tests=false, so they never compiled in our build. The
+measured bounds above are the record; nothing re-checks them now.
+
 diff --git a/src/color_helpers.cpp b/src/color_helpers.cpp
 index 0aba314..bddf2b5 100644
 --- a/src/color_helpers.cpp
@@ -74,60 +79,3 @@ index 0aba314..bddf2b5 100644
          return std::nullopt;
  
      (void)eMethod;
-diff --git a/tests/test_drm_color_pipeline.cpp b/tests/test_drm_color_pipeline.cpp
-index bef6ff8..d63dedf 100644
---- a/tests/test_drm_color_pipeline.cpp
-+++ b/tests/test_drm_color_pipeline.cpp
-@@ -152,6 +152,52 @@ TEST_CASE("tonemapping and look luts are not expressible", "[drm][color]")
-     REQUIRE_FALSE( oScale.has_value() );
- }
- 
-+TEST_CASE("a virtual white equal to the panel white is expressible", "[drm][color]")
-+{
-+    tonemapping_t tonemapping{};
-+    tonemapping.bUseShaper = true;
-+    tonemapping.g22_luminance = 1.f;
-+    tonemapping.eOperator = ETonemapOperator_None;
-+
-+    // Adapting a white point to itself is the identity, and the identity is a
-+    // diagonal. Refusing it would composite the entire default configuration.
-+    auto oScale = calcScanoutLinearScale( displaycolorimetry_709, EOTF_Gamma22,
-+        displaycolorimetry_709, EOTF_Gamma22,
-+        displaycolorimetry_709.white, k_EChromaticAdapatationMethod_Bradford,
-+        MakeSmoothRemap(), MakeNightMode( 0.f, 25.f / 360.f, 1.f ), tonemapping, nullptr, 1.f );
-+
-+    REQUIRE( oScale.has_value() );
-+}
-+
-+TEST_CASE("the neutral slider is expressible and one notch off it is not", "[drm][color]")
-+{
-+    tonemapping_t tonemapping{};
-+    tonemapping.bUseShaper = true;
-+    tonemapping.g22_luminance = 1.f;
-+    tonemapping.eOperator = ETonemapOperator_None;
-+
-+    // Measured on Pocket ACE. The panel white is the synthetic EDID's quantised D65,
-+    // which is NOT bit-identical to what the client sends at neutral -- the gap is
-+    // 2.8e-4 -- while one notch of the slider moves x by 7.4e-3. Both sides of the
-+    // tolerance are pinned here so a future change cannot widen it into the slider's
-+    // first step or narrow it below the quantisation gap.
-+    displaycolorimetry_t panel = displaycolorimetry_709;
-+    panel.white = glm::vec2( 0.3125000f, 0.3291020f );
-+
-+    const glm::vec2 vNeutral( 0.3127789f, 0.3291835f );
-+    const glm::vec2 vOneNotch( 0.3053575f, 0.3216464f );
-+
-+    auto oNeutral = calcScanoutLinearScale( displaycolorimetry_709, EOTF_Gamma22,
-+        panel, EOTF_Gamma22, vNeutral, k_EChromaticAdapatationMethod_Bradford,
-+        MakeSmoothRemap(), MakeNightMode( 0.f, 25.f / 360.f, 1.f ), tonemapping, nullptr, 1.f );
-+    REQUIRE( oNeutral.has_value() );
-+
-+    auto oOneNotch = calcScanoutLinearScale( displaycolorimetry_709, EOTF_Gamma22,
-+        panel, EOTF_Gamma22, vOneNotch, k_EChromaticAdapatationMethod_Bradford,
-+        MakeSmoothRemap(), MakeNightMode( 0.f, 25.f / 360.f, 1.f ), tonemapping, nullptr, 1.f );
-+    REQUIRE_FALSE( oOneNotch.has_value() );
-+}
-+
- TEST_CASE("a virtual white point is not expressible", "[drm][color]")
- {
-     tonemapping_t tonemapping{};

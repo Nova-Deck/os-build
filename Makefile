@@ -487,7 +487,7 @@ verify-card: $(SDCARD) | $(BUILD_STAMP) ## Verify the built A/B card image (in c
 verify-lock: ## Check both locks' novadeck rows against packages/ (host, seconds, no build)
 	bash packages/verify-lock-rows.sh
 
-test: verify-lock ## Run the offline bootctl/post-install/boot-disk/pairingd/power-led/vpower/suspend/gamescope-display/session/stage-2/partition-table/unit/coredump/perf/cpu-affinity/fan-curve/decky/update/select-branch/publish/install/mkroot/verify-lock/steamos-manager/storage/graphics-provider/android-guestos/android-shared/mesa-source/video-decode/proton-dxvk/proton-nice/store-cli/store-install/store-shortcuts/store-launch/store-requests/store-library/store-artwork/store-gamepage/sysctl/guard suites (host, no build needed)
+test: verify-lock ## Run the offline bootctl/post-install/boot-disk/pairingd/power-led/vpower/suspend/gamescope-display/session/stage-2/partition-table/unit/coredump/perf/cpu-affinity/fan-curve/power-gpu/decky/update/select-branch/publish/install/mkroot/verify-lock/steamos-manager/storage/graphics-provider/android-guestos/android-shared/mesa-source/video-decode/proton-dxvk/proton-nice/store-cli/store-install/store-shortcuts/store-launch/store-requests/store-library/store-artwork/store-gamepage/sysctl/guard suites (host, no build needed)
 	bash $(TESTS_DIR)/test-bootctl.sh
 	bash $(TESTS_DIR)/test-post-install.sh
 	bash $(TESTS_DIR)/test-boot-disk.sh
@@ -504,6 +504,7 @@ test: verify-lock ## Run the offline bootctl/post-install/boot-disk/pairingd/pow
 	bash $(TESTS_DIR)/test-perf.sh
 	bash $(TESTS_DIR)/test-cpu-affinity.sh
 	bash $(TESTS_DIR)/test-fan-curve.sh
+	bash $(TESTS_DIR)/test-power-gpu.sh
 	bash $(TESTS_DIR)/test-cpu-scheduler.sh
 	bash $(TESTS_DIR)/test-panel-calibration.sh
 	bash $(TESTS_DIR)/test-decky.sh

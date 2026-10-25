@@ -478,6 +478,7 @@ class NovadeckPower:
         self.profile_config = {}
         self.profile_labels = {}
         self.underclock_config = {}
+        self.gpu_stock_config = {}
         self.fan_curves = {}
         self.fan_config = {}
         self.suspend_config = {}
@@ -595,6 +596,16 @@ class NovadeckPower:
                     pass
             if caps:
                 underclock_config.setdefault(device_class, {})[level] = caps
+        # [gpu.<class>] stock_max_mhz: the factory GPU ceiling the auto-profile ratios are
+        # taken of. See gpu_stock_max().
+        gpu_stock_config = {}
+        for section in parser.sections():
+            parts = section.split(".")
+            if len(parts) != 2 or parts[0] != "gpu":
+                continue
+            mhz = parser.get(section, "stock_max_mhz", fallback="").strip()
+            if mhz.isdigit() and int(mhz) > 0:
+                gpu_stock_config[parts[1]] = int(mhz)
         for section in parser.sections():
             if not section.startswith("fan_curve."):
                 continue
@@ -679,7 +690,8 @@ class NovadeckPower:
             "fan_low_pwm": fan_low_pwm,
             "fan_safe_pwm": fan_safe_pwm,
         }
-        return default_profile, underclock_config, fan_curves, profile_config, fan_config, suspend_config
+        return (default_profile, underclock_config, gpu_stock_config, fan_curves, profile_config,
+                fan_config, suspend_config)
 
     def load_config(self):
         try:
@@ -690,6 +702,7 @@ class NovadeckPower:
         (
             self.default_profile,
             self.underclock_config,
+            self.gpu_stock_config,
             self.fan_curves,
             self.profile_config,
             self.fan_config,
@@ -1047,15 +1060,30 @@ class NovadeckPower:
             caps[f"policy{policy_id}"] = self.choose_at_most(freqs, target)
         return caps
 
+    def gpu_stock_max(self, freqs):
+        # The auto profiles' gpu_max/gpu_min are ratios of the FACTORY ceiling, not of the top
+        # OPP: on SM8250 the kernel ladder runs past stock (650-750 MHz over the A650's 587),
+        # and without this anchor every profile climbed with it -- eco landed ON stock instead
+        # of below it. The steps above stock belong to the manual clock (set_gpu_manual_clock),
+        # whose range stays the whole ladder. The +999_999 lets a truncated MHz (441 for the
+        # 441.6 MHz OPP) still select its own step rather than the one below.
+        stock_mhz = self.gpu_stock_config.get(self.cpu_device_class())
+        if not stock_mhz:
+            return freqs[-1]
+        return self.choose_at_most(freqs, stock_mhz * 1_000_000 + 999_999)
+
+    def gpu_auto_targets(self, freqs, settings):
+        stock = self.gpu_stock_max(freqs)
+        max_freq = self.choose_at_most(freqs, int(stock * settings["gpu_max"]))
+        min_target = int(stock * settings["gpu_min"])
+        min_freq = self.choose_at_least(freqs, min_target) if min_target else freqs[0]
+        return (min(min_freq, max_freq), max_freq)
+
     def resolved_gpu_auto_limits(self):
         freqs = self.gpu_freqs()
         if not freqs:
             return (0, 0)
-        settings = self.profile_settings()
-        max_freq = self.choose_at_most(freqs, int(freqs[-1] * settings["gpu_max"]))
-        min_target = int(freqs[-1] * settings["gpu_min"])
-        min_freq = self.choose_at_least(freqs, min_target) if min_target else freqs[0]
-        return (min(min_freq, max_freq), max_freq)
+        return self.gpu_auto_targets(freqs, self.profile_settings())
 
     def suspend(self):
         if self.suspend_save:
@@ -1126,13 +1154,11 @@ class NovadeckPower:
         if not freqs:
             return
         settings = settings or self.profile_settings()
+        min_freq, max_freq = self.gpu_auto_targets(freqs, settings)
         write_text(self.gpu / "governor", "simple_ondemand")
-        max_freq = self.choose_at_most(freqs, int(freqs[-1] * settings["gpu_max"]))
-        min_target = int(freqs[-1] * settings["gpu_min"])
-        min_freq = self.choose_at_least(freqs, min_target) if min_target else freqs[0]
         write_text(self.gpu / "min_freq", freqs[0])
         write_text(self.gpu / "max_freq", max_freq)
-        write_text(self.gpu / "min_freq", min(min_freq, max_freq))
+        write_text(self.gpu / "min_freq", min_freq)
 
     def set_gpu_manual_clock(self, mhz):
         freqs = self.gpu_freqs()

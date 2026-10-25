@@ -10,13 +10,13 @@ import {
   uninstallGame,
 } from "./backend";
 import { STORE_LABELS, type Drive, type InstallItem, type LibraryState, type StoreId } from "./types";
-import { confirmUninstall } from "./UninstallDialog";
 
 // The rest of the panel below the accounts: what is installing, and the library's two controls.
 // NOT a game browser — every owned game is already a tile in the Steam library (milestone 7 is
 // library-first), and browsing in a side strip is the UX this milestone exists to avoid. What
 // lives here is what the library cannot show for a shortcut: download progress, a stop and a
-// resume, and an uninstall (Steam's own Uninstall does not exist for a non-Steam entry).
+// resume. Uninstall is NOT here — the QAM is open while a game runs, and a row offering to
+// delete the running game is a trap. It lives on the game's own page (GamePage.tsx).
 
 // Polled while the panel is open. A download moves about a percent every few seconds on Wi-Fi;
 // faster than this only redraws the same number.
@@ -127,22 +127,15 @@ function ActivityRow({ item, onChanged }: RowProps) {
     );
   }
 
-  const uninstall = () =>
-    confirmUninstall(item.store, item.id, item.title, "its tile", (dropPrefix) =>
-      run(() => uninstallGame(item.store, item.id, dropPrefix)),
-    );
+  // No Uninstall here: the QAM is open while a game runs, and this row would offer to delete the
+  // game being played. Uninstall lives on the game's own page (GamePage.tsx), which Steam does
+  // not show for the running title.
   return (
     <PanelSectionRow>
       <Field
         label={item.title}
         description={<span className="novadeck-store-note">{`${store} · installed`}</span>}
-        childrenLayout="below"
-        childrenContainerWidth="max"
-      >
-        <DialogButton disabled={busy} onClick={uninstall}>
-          Uninstall
-        </DialogButton>
-      </Field>
+      />
     </PanelSectionRow>
   );
 }

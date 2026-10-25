@@ -15,8 +15,9 @@ import { STORE_LABELS, type Drive, type InstallItem, type LibraryState, type Sto
 // NOT a game browser — every owned game is already a tile in the Steam library (milestone 7 is
 // library-first), and browsing in a side strip is the UX this milestone exists to avoid. What
 // lives here is what the library cannot show for a shortcut: download progress, a stop and a
-// resume. Uninstall is NOT here — the QAM is open while a game runs, and a row offering to
-// delete the running game is a trap. It lives on the game's own page (GamePage.tsx).
+// resume. Installed games get no row — the tile shows them, and Uninstall is NOT here: the QAM
+// is open while a game runs, and a row offering to delete the running game is a trap. It lives
+// on the game's own page (GamePage.tsx).
 
 // Polled while the panel is open. A download moves about a percent every few seconds on Wi-Fi;
 // faster than this only redraws the same number.
@@ -127,21 +128,16 @@ function ActivityRow({ item, onChanged }: RowProps) {
     );
   }
 
-  // No Uninstall here: the QAM is open while a game runs, and this row would offer to delete the
-  // game being played. Uninstall lives on the game's own page (GamePage.tsx), which Steam does
-  // not show for the running title.
-  return (
-    <PanelSectionRow>
-      <Field
-        label={item.title}
-        description={<span className="novadeck-store-note">{`${store} · installed`}</span>}
-      />
-    </PanelSectionRow>
-  );
+  // An installed game has no row here: the library tile and its page already show it, and the one
+  // thing a row could add — Uninstall — must not sit on the surface that is open while the game
+  // runs. It is filtered out before this point; this is the type's exhaustiveness.
+  return null;
 }
 
-// Downloads first (the reason anyone opens this), then what is paused, then what is installed.
-const ORDER: Record<InstallItem["state"], number> = { downloading: 0, interrupted: 1, installed: 2 };
+// What the activity list shows: downloads first (the reason anyone opens this), then what is
+// paused. Installed games are the library's to show.
+const ORDER: Record<Exclude<InstallItem["state"], "installed">, number> = { downloading: 0, interrupted: 1 };
+const isActivity = (item: InstallItem): item is InstallItem & { state: keyof typeof ORDER } => item.state in ORDER;
 
 export function LibrarySections({ connected }: { connected: StoreId[] }) {
   const [state, setState] = useState<LibraryState | null>(null);
@@ -192,7 +188,8 @@ export function LibrarySections({ connected }: { connected: StoreId[] }) {
     refresh();
   };
 
-  const items = state && !("error" in state) ? [...state.installs].sort((a, b) => ORDER[a.state] - ORDER[b.state]) : [];
+  const items =
+    state && !("error" in state) ? state.installs.filter(isActivity).sort((a, b) => ORDER[a.state] - ORDER[b.state]) : [];
 
   return (
     <>

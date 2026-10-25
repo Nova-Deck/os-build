@@ -6,6 +6,7 @@ import type {
   InstallSize,
   LibraryState,
   PageState,
+  PrefixStatus,
   State,
   StoreId,
   SyncResult,
@@ -33,8 +34,17 @@ export const setInstallDrive = (drive: string) =>
 export const installTile = (store: StoreId, id: string) =>
   call<[StoreId, string], InstallEvent>("install_tile", store, id);
 export const stopInstall = () => call<[], { stopped: boolean } | { error: string }>("stop_install");
-export const uninstallGame = (store: StoreId, id: string) =>
-  call<[StoreId, string], { uninstalled: boolean; warning?: string } | { error: string }>("uninstall", store, id);
+// Issue #136: the entry's Proton prefix (saves, settings) is kept unless asked otherwise; the
+// dialog asks prefix_status first so it can say what is there.
+export const uninstallGame = (store: StoreId, id: string, dropPrefix = false) =>
+  call<[StoreId, string, boolean], { uninstalled: boolean; prefix_dropped?: boolean; warning?: string } | { error: string }>(
+    "uninstall",
+    store,
+    id,
+    dropPrefix,
+  );
+export const getPrefixStatus = (store: StoreId, id: string) =>
+  call<[StoreId, string], PrefixStatus>("prefix_status", store, id);
 
 // Revision 2, the game page. game_state is polled while a shortcut's page is open; `token` is the
 // one an earlier answer gave, so a page whose entry was replaced still finds it.

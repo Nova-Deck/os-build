@@ -560,6 +560,89 @@ res = run(installs.uninstall, "gog", "away", p, vols)
 (ok if "error" in run(installs.uninstall, "gog", "nope", p, vols) else bad)("an unknown game is refused")
 PY
 
+echo "== the Proton prefix an uninstall leaves behind (issue #136)"
+pysuite "prefix" <<'PY'
+import os, subprocess, sys, tempfile
+sys.path.insert(0, sys.argv[1])
+from novadeck_stores import prefixes
+
+def ok(m): print(f"  ok   {m}")
+def bad(m): print(f"  FAIL {m}")
+
+tmp = tempfile.mkdtemp()
+steam = os.path.join(tmp, "Steam")
+compat = os.path.join(steam, "steamapps", "compatdata")
+good = os.path.join(compat, "3561440862")
+os.makedirs(os.path.join(good, "pfx"))
+open(os.path.join(good, "pfx", "system.reg"), "w").write("x" * 4096)
+os.makedirs(os.path.join(tmp, "elsewhere"))
+os.symlink(os.path.join(tmp, "elsewhere"), os.path.join(compat, "4000000000"))
+# A Steam root swapped for a link: the string is right, the delete would land elsewhere.
+linked = os.path.join(tmp, "Steam2")
+os.makedirs(os.path.join(tmp, "victim", "steamapps", "compatdata", "7"))
+os.symlink(os.path.join(tmp, "victim"), linked)
+p = {"NOVADECK_STORE_USER": "deck", "NOVADECK_STORE_UID": str(os.getuid()),
+     "LEGENDARY_CONFIG_PATH": os.path.join(tmp, "legendary"), "GOGDL_CONFIG_PATH": os.path.join(tmp, "gogdl")}
+
+# -- the guard: exactly <steam>/steamapps/compatdata/<appid>, a real directory, no link anywhere --
+(ok if prefixes.deletable(good, steam) == good else bad)("the guard accepts exactly <steam>/steamapps/compatdata/<appid>")
+cases = {
+    "compatdata itself": compat,
+    "steamapps": os.path.dirname(compat),
+    "the Steam root": steam,
+    "a symlinked prefix": os.path.join(compat, "4000000000"),
+    "a missing prefix": os.path.join(compat, "1"),
+    "pfx inside the prefix": os.path.join(good, "pfx"),
+    "a non-numeric name": os.path.join(compat, "x"),
+    "a trailing slash": good + "/",
+    "a path through a symlinked Steam root": os.path.join(linked, "steamapps", "compatdata", "7"),
+}
+refused = [n for n, path in cases.items() if prefixes.deletable(path, steam) is None]
+(ok if len(refused) == len(cases) else bad)(
+    f"and refuses every unsafe path ({len(refused)}/{len(cases)}; let through: {sorted(set(cases) - set(refused))})")
+(ok if prefixes.compat_dir(steam, 3561440862) == good and prefixes.compat_dir(steam, "3561440862") is None
+    and prefixes.compat_dir(steam, -1) is None and prefixes.compat_dir(steam, True) is None else bad)(
+    "the path is built from a positive int appid only — a string or a bool is not an appid")
+
+# -- status and drop run as the user; the fixture runs du/rm for real, minus systemd-run --
+ran = []
+real_run = subprocess.run
+def fake_run(argv, **kw):
+    cmd = argv[argv.index("--") + 1:] if "--" in argv else argv
+    opts = argv[:argv.index("--")] if "--" in argv else []
+    ran.append((cmd, opts))
+    if cmd[0] in ("du", "rm"):
+        return real_run(cmd, **{k: v for k, v in kw.items() if k in ("stdin", "stdout", "stderr", "text")})
+    return subprocess.CompletedProcess(argv, 0)
+def run(fn, *a):
+    ran.clear()
+    subprocess.run = fake_run
+    try:
+        return fn(*a)
+    finally:
+        subprocess.run = real_run
+
+st = run(prefixes.status, p, 3561440862, steam)
+(ok if st.get("exists") is True and st.get("bytes", 0) >= 4096 else bad)(f"an existing prefix reports its size ({st})")
+(ok if ran and ran[0][0][0] == "du" and all("--property=User=deck" in o for c, o in ran) else bad)(
+    f"the size is read by du, as deck ({ran})")
+st = run(prefixes.status, p, 1, steam)
+(ok if st == {"exists": False, "bytes": 0} and not ran else bad)(f"a missing prefix is reported without running anything ({st})")
+st = run(prefixes.status, p, 4000000000, steam)
+(ok if st == {"exists": False, "bytes": 0} and not ran else bad)(f"a link where the prefix should be counts as no prefix ({st})")
+
+res = run(prefixes.drop, p, 4000000000, steam)
+(ok if "error" in res and os.path.lexists(os.path.join(compat, "4000000000")) and os.path.isdir(os.path.join(tmp, "elsewhere"))
+    and not ran else bad)(f"a symlinked prefix is refused: nothing runs, the target survives ({res})")
+res = run(prefixes.drop, p, 1, steam)
+(ok if "error" in res and not ran else bad)(f"a prefix that is not there is an error, not a silent success ({res})")
+res = run(prefixes.drop, p, 3561440862, steam)
+(ok if res == {"dropped": True} and not os.path.lexists(good) else bad)(f"drop removes the prefix ({res})")
+(ok if any(c[:2] == ["rm", "-rf"] and "--one-file-system" in c and c[-1] == good for c, o in ran)
+    and all("--property=User=deck" in o for c, o in ran) else bad)(
+    f"the rm runs as deck, stays on one filesystem, and names exactly that path ({ran})")
+PY
+
 echo "== the backend contract"
 pysuite "backend" <<'PY'
 import asyncio, os, sys, types
@@ -571,7 +654,7 @@ import main
 def ok(m): print(f"  ok   {m}")
 def bad(m): print(f"  FAIL {m}")
 
-methods = ["owned", "drives", "install", "install_status", "stop_install", "uninstall"]
+methods = ["owned", "drives", "install", "install_status", "stop_install", "uninstall", "prefix_status"]
 missing = [m for m in methods if not asyncio.iscoroutinefunction(getattr(main.Plugin, m, None))]
 (ok if not missing else bad)(f"the backend exposes what milestone 7's panel will call (missing: {missing})")
 plugin = main.Plugin()

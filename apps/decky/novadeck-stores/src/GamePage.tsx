@@ -16,6 +16,7 @@ import {
 import { Component, useEffect, useRef, useState } from "react";
 import { getGameState, getInstallSize, installTile, stopInstall, uninstallGame } from "./backend";
 import { STORE_LABELS, type OurPage, type PageState } from "./types";
+import { confirmUninstall } from "./UninstallDialog";
 
 // Milestone 7 revision 2, R1: the install surface is Steam's OWN game page. For one of our
 // not-installed entries the page's Play row is replaced by Install / progress + Stop / Resume +
@@ -433,11 +434,8 @@ function RowBody({ page, size, busy, run }: BodyProps) {
       );
     case "installed": {
       const uninstall = () =>
-        confirm(
-          `Uninstall ${page.title}?`,
-          "The game's files are deleted. It stays in your library and installs again from this page.",
-          "Uninstall",
-          () => run(() => uninstallGame(page.store, page.id)),
+        confirmUninstall(page.store, page.id, page.title, "this page", (dropPrefix) =>
+          run(() => uninstallGame(page.store, page.id, dropPrefix)),
         );
       return (
         <>

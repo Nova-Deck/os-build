@@ -392,6 +392,32 @@ refuse.clear()
 (ok if "warning" in res and reg()["gog:E2"].get("state") == "pending_shelf" else bad)(
     f"a compat tool that would not clear leaves the row pending_shelf, retried by the next sync ({res}, {reg()['gog:E2']})")
 
+# Issue #136: the entry's Proton prefix goes only when asked, and its going is a separate fact.
+row_e3 = {"appid": 560, "title": "Echo3", "exe": "/g/E3/e.exe", "platform": "windows"}
+dropped = []
+real_drop, real_status = main.prefixes.drop, main.prefixes.status
+main.prefixes.drop = lambda pp, appid, steam=None: (dropped.append(appid), {"dropped": True})[1]
+emitted.clear()
+reg_path.write_text(json.dumps({"gog:E3": row_e3}))
+res = asyncio.run(plugin.uninstall("gog", "E3"))
+(ok if res == {"uninstalled": True} and not dropped and shortcuts.is_shelf(reg()["gog:E3"]) else bad)(
+    f"without the flag the prefix is left alone ({res}, {dropped})")
+reg_path.write_text(json.dumps({"gog:E3": row_e3}))
+res = asyncio.run(plugin.uninstall("gog", "E3", True))
+(ok if res.get("uninstalled") and res.get("prefix_dropped") is True and dropped == [560] and shortcuts.is_shelf(reg()["gog:E3"]) else bad)(
+    f"with the flag the prefix of THAT appid is dropped and the tile still goes back to the shelf ({res}, {dropped})")
+main.prefixes.drop = lambda pp, appid, steam=None: {"error": "busy"}
+reg_path.write_text(json.dumps({"gog:E3": row_e3}))
+res = asyncio.run(plugin.uninstall("gog", "E3", True))
+(ok if res.get("uninstalled") and res.get("prefix_dropped") is False and "busy" in res.get("warning", "")
+    and shortcuts.is_shelf(reg()["gog:E3"]) else bad)(
+    f"a prefix that would not go is a warning on an otherwise complete uninstall ({res})")
+main.prefixes.status = lambda pp, appid, steam=None: {"exists": True, "bytes": 7, "appid": appid}
+(ok if asyncio.run(plugin.prefix_status("gog", "E3")) == {"exists": True, "bytes": 7, "appid": 560} else bad)(
+    "prefix_status answers for the registered entry's appid")
+(ok if "error" in asyncio.run(plugin.prefix_status("gog", "nope")) else bad)("and refuses an entry the registry does not hold")
+main.prefixes.drop, main.prefixes.status = real_drop, real_status
+
 # Review fixes (2026-10-21).
 # A registry that cannot be written after an edit: the row still says shelf, the user is told,
 # and the next pass edits again (idempotent) — nothing is added or removed to "undo" it.

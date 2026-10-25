@@ -10,6 +10,7 @@ import {
   uninstallGame,
 } from "./backend";
 import { STORE_LABELS, type Drive, type InstallItem, type LibraryState, type StoreId } from "./types";
+import { confirmUninstall } from "./UninstallDialog";
 
 // The rest of the panel below the accounts: what is installing, and the library's two controls.
 // NOT a game browser — every owned game is already a tile in the Steam library (milestone 7 is
@@ -127,11 +128,8 @@ function ActivityRow({ item, onChanged }: RowProps) {
   }
 
   const uninstall = () =>
-    confirm(
-      `Uninstall ${item.title}?`,
-      "The game's files are deleted. It stays in your library and installs again from its tile.",
-      "Uninstall",
-      () => run(() => uninstallGame(item.store, item.id)),
+    confirmUninstall(item.store, item.id, item.title, "its tile", (dropPrefix) =>
+      run(() => uninstallGame(item.store, item.id, dropPrefix)),
     );
   return (
     <PanelSectionRow>

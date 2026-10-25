@@ -33,8 +33,8 @@ import decky
 import base64
 
 from novadeck_stores import (artwork, cdp, cli, connect, game_page, install_requests, installs,
-                             launch, library, library_sync, locations, paths, settings, shortcuts,
-                             status)
+                             launch, library, library_sync, locations, paths, prefixes, settings,
+                             shortcuts, status)
 
 # Long enough to type an email and a password on the on-screen keyboard and clear a captcha;
 # short enough that a login the user walked away from does not poll for the rest of the session.
@@ -220,14 +220,46 @@ class Plugin:
     async def stop_install(self):
         return await self._install_action("stop", None, lambda p: {"stopped": installs.stop() == 0})
 
-    async def uninstall(self, store, gid):
+    async def prefix_status(self, store, gid):
+        """Whether the entry's Proton prefix exists and how big it is, for the Uninstall dialog
+        (issue #136). {"exists", "bytes", "appid"} or {"error": ...}."""
+        if store not in connect.STORES:
+            return {"error": f"unknown store {store!r}"}
+        try:
+            p = await asyncio.to_thread(paths.store_paths)
+        except (OSError, subprocess.SubprocessError) as exc:
+            return {"error": f"cannot resolve credential paths: {type(exc).__name__}"}
+        row = (await asyncio.to_thread(shortcuts.read_registry, p)).get(f"{store}:{gid}")
+        appid = shortcuts._u32(row.get("appid")) if isinstance(row, dict) else None
+        if appid is None:
+            return {"error": "not in the library"}
+        try:
+            found = await asyncio.to_thread(prefixes.status, p, appid)
+        except (OSError, subprocess.SubprocessError) as exc:
+            return {"error": f"cannot read the Proton prefix: {type(exc).__name__}"}
+        return {**found, "appid": appid}
+
+    async def uninstall(self, store, gid, drop_prefix=False):
         """Remove the game's files; an installed tile then goes back on the shelf (milestone 7),
-        so the game stays in the library, installable again with one press."""
+        so the game stays in the library, installable again with one press.
+
+        `drop_prefix` also removes the entry's Proton prefix — saves and settings — which is
+        otherwise kept, as Steam keeps it (issue #136). Its outcome is reported on its own
+        (`prefix_dropped`, with a warning when it failed): the files are gone either way."""
         result = await self._install_action("uninstall", store, installs.uninstall, store, gid)
         if result.get("uninstalled"):
             p = await asyncio.to_thread(paths.store_paths)
             async with _SHORTCUT_LOCK:
                 row = (await asyncio.to_thread(shortcuts.read_registry, p)).get(f"{store}:{gid}")
+                if drop_prefix and isinstance(row, dict) and "appid" in row:
+                    try:
+                        gone = await asyncio.to_thread(prefixes.drop, p, shortcuts._u32(row["appid"]))
+                    except (OSError, subprocess.SubprocessError) as exc:
+                        gone = {"error": f"{type(exc).__name__}"}
+                    decky.logger.info(f"uninstall {store}:{gid}: prefix {gone.get('error') or 'dropped'}")
+                    result = {**result, "prefix_dropped": "error" not in gone}
+                    if "error" in gone:
+                        result["warning"] = f"Proton prefix not removed: {gone['error']}"
                 if isinstance(row, dict) and "appid" in row and not shortcuts.is_shelf(row):
                     swapped = await self._edit_entry(
                         p, store, gid,

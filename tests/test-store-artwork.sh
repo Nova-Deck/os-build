@@ -180,6 +180,8 @@ main.artwork.fetch_image = lambda url, **kw: JPEG
 res = asyncio.run(plugin.apply_artwork("epic", "Alba", 2480450041))
 (ok if sorted(res.get("applied", [])) == ["capsule", "hero"] else bad)(
     f"both resolvable kinds are applied ({res})")
+(ok if res.get("offered") == ["capsule", "hero"] else bad)(
+    f"the result also says which kinds the store offered ({res})")
 event, payload = emitted[-1]
 (ok if event == "shortcut_op" and payload["op"] == "artwork" and payload["appid"] == 2480450041 else bad)(
     f"the artwork op carries the appid ({payload.get('op')}, {payload.get('appid')})")
@@ -192,13 +194,21 @@ imgs = {i["assetType"]: i for i in payload["images"]}
 emitted.clear()
 main.artwork.fetch_image = lambda url, **kw: None
 res = asyncio.run(plugin.apply_artwork("epic", "Alba", 2480450041))
-(ok if res == {"applied": []} and not emitted else bad)(
+(ok if res == {"applied": [], "offered": ["capsule", "hero"]} and not emitted else bad)(
     f"a network cut applies nothing and emits nothing — the name tile stands ({res}, emitted={len(emitted)})")
+
+# One download of two fails (HW Pocket ACE 2026-10-25: the capsule's TLS handshake timed out,
+# the hero's did not): what took is applied, and the result says the capsule was offered.
+emitted.clear()
+main.artwork.fetch_image = lambda url, **kw: JPEG if url.endswith("h.jpg") else None
+res = asyncio.run(plugin.apply_artwork("epic", "Alba", 2480450041))
+(ok if res == {"applied": ["hero"], "offered": ["capsule", "hero"]} else bad)(
+    f"a partial fetch applies what took and names what was offered ({res})")
 
 # No urls at all (store had none): same floor.
 main.artwork.store_urls = lambda store, gid, pp: {}
 res = asyncio.run(plugin.apply_artwork("gog", "x", 1))
-(ok if res == {"applied": []} else bad)("a game the store has no art for is not an error")
+(ok if res == {"applied": [], "offered": []} else bad)("a game the store has no art for is not an error")
 
 # Compat re-assert waits for the frontend's listener (HW 2026-10-22: sent at backend boot after a
 # Decky restart, nothing answered for 30 s and the re-assert was lost).

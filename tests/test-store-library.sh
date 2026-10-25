@@ -58,8 +58,8 @@ got = ls.to_shelve("epic", titles, registry)
 
 # Which tiles a sync asks art for: every entry of the store with no `art` on its row.
 reg_art = {"epic:New": {"appid": 1, "title": "New", "state": "shelf"},
-           "epic:Done": {"appid": 2, "title": "Done", "state": "shelf", "art": ["capsule", "hero"]},
-           "epic:Failed": {"appid": 3, "title": "Failed", "art": []},
+           "epic:Done": {"appid": 2, "title": "Done", "state": "shelf", "art_ok": ["capsule", "hero"]},
+           "epic:Failed": {"appid": 3, "title": "Failed", "art_ok": []},
            "epic:Inst": {"appid": 4, "title": "Inst", "exe": "/g/i", "platform": "windows"},
            "gog:G": {"appid": 5, "title": "G"},
            "epic:Junk": {"title": "no appid"}}
@@ -107,9 +107,11 @@ def direct_write(pp, path, text):
     writes.append(path); pathlib.Path(path).write_text(text); return 0
 shortcuts.cli.write_as_user = direct_write
 art = []
-art_takes = True
+art_takes = True   # True: every offered kind takes; False: none; "partial": the hero only
 async def fake_art(self, store, gid, appid, reuse_from=None):
-    art.append((gid, appid)); return {"applied": ["capsule", "hero"] if art_takes else []}
+    art.append((gid, appid))
+    applied = {True: ["capsule", "hero"], False: [], "partial": ["hero"]}[art_takes]
+    return {"applied": applied, "offered": ["capsule", "hero"]}
 main.Plugin.apply_artwork = fake_art
 main.ARTWORK_PACE = 0
 
@@ -132,7 +134,7 @@ reg = json.loads((tmp / "shortcuts.json").read_text())
 (ok if res == {"added": 2, "tiles": 2} else bad)(f"two installable titles become two tiles ({res})")
 (ok if all(r["state"] == "shelf" for r in reg.values()) and set(reg) == {"epic:A", "epic:B"} else bad)(
     f"each tile is a shelf row with the appid Steam returned ({reg})")
-(ok if all(r.get("art") == ["capsule", "hero"] for r in reg.values()) else bad)(
+(ok if all(r.get("art_ok") == ["capsule", "hero"] for r in reg.values()) else bad)(
     f"art that took is recorded on the row, by kind ({reg})")
 adds = [pl for e, pl in emitted if e == "shortcut_op" and pl["op"] == "add"]
 (ok if all(a["exe"] == "/usr/lib/novadeck/store-launch" and a["options"] == f"epic:{a['name'][0]}" for a in adds) else bad)(
@@ -151,7 +153,7 @@ adds = [pl for e, pl in emitted if e == "shortcut_op" and pl["op"] == "add"]
 # the next sync -- and only that tile. Then a fetch that fails again leaves it wanting still.
 reg_path = tmp / "shortcuts.json"
 reg = json.loads(reg_path.read_text())
-reg["epic:A"].pop("art")
+reg["epic:A"].pop("art_ok")
 reg_path.write_text(json.dumps(reg))
 art.clear(); art_takes = False
 res = asyncio.run(run("epic"))
@@ -159,11 +161,16 @@ res = asyncio.run(run("epic"))
     f"a re-sync refetches art for the one tile without it ({res}, {art})")
 (ok if res.get("warning") == "fetching artwork for 1 game in the background" else bad)(
     f"the toast says art for an existing tile is being fetched ({res})")
-(ok if "art" not in json.loads(reg_path.read_text())["epic:A"] else bad)(
+(ok if "art_ok" not in json.loads(reg_path.read_text())["epic:A"] else bad)(
     "a fetch that took nothing records nothing, so the tile stays wanting")
+# A fetch that took the hero but lost the capsule is a blank tile: not recorded either.
+art.clear(); art_takes = "partial"
+asyncio.run(run("epic"))
+(ok if [g for g, _ in art] == ["A"] and "art_ok" not in json.loads(reg_path.read_text())["epic:A"] else bad)(
+    f"a partial fetch records nothing, so the tile stays wanting ({art})")
 art.clear(); art_takes = True
 asyncio.run(run("epic"))
-(ok if [g for g, _ in art] == ["A"] and json.loads(reg_path.read_text())["epic:A"].get("art") == ["capsule", "hero"] else bad)(
+(ok if [g for g, _ in art] == ["A"] and json.loads(reg_path.read_text())["epic:A"].get("art_ok") == ["capsule", "hero"] else bad)(
     f"the next sync tries again and records the art once it takes ({art})")
 art.clear()
 res = asyncio.run(run("epic"))
@@ -172,7 +179,7 @@ res = asyncio.run(run("epic"))
 
 # Two syncs back to back do not queue the same tiles twice: one pass per store at a time.
 reg = json.loads(reg_path.read_text())
-reg["epic:A"].pop("art"); reg["epic:B"].pop("art")
+reg["epic:A"].pop("art_ok"); reg["epic:B"].pop("art_ok")
 reg_path.write_text(json.dumps(reg))
 art.clear(); main.ARTWORK_PACE = 0.05
 async def twice():
@@ -421,7 +428,7 @@ main.launch.resolve_target = real_resolve
 # A failed swap back to the shelf after an uninstall is marked and retried by the next sync.
 emitted.clear()
 reg_path.write_text(json.dumps({"gog:H": {"appid": 800, "title": "Hotel", "exe": "/g/H/h.exe", "platform": "windows",
-                                          "art": ["capsule"]}}))
+                                          "art_ok": ["capsule"]}}))
 refuse.add("edit")
 res = asyncio.run(plugin.uninstall("gog", "H"))
 refuse.clear()
@@ -432,7 +439,7 @@ art_calls.clear()
 asyncio.run(plugin.sync_library("gog"))
 (ok if shortcuts.is_shelf(reg()["gog:H"]) and reg()["gog:H"]["appid"] == 800 else bad)(
     f"the next sync finishes the edit back to the shelf, same appid ({reg()['gog:H']})")
-(ok if reg()["gog:H"].get("art") == ["capsule"] and not art_calls else bad)(
+(ok if reg()["gog:H"].get("art_ok") == ["capsule"] and not art_calls else bad)(
     f"the edit in place keeps the art record, so the sync does not fetch it again ({reg()['gog:H']}, {art_calls})")
 
 # A SteamUI that does not answer ends the sync at the first timeout instead of N x 30 s.

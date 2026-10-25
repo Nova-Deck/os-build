@@ -393,13 +393,17 @@ class Plugin:
 
     async def apply_artwork(self, store, gid, appid):
         """Set grid art on a registered entry from the store's own metadata. NON-BLOCKING by
-        contract: {"applied": [kinds]} always, even when nothing could be fetched — a failure
-        here must never unwind a good registration or raise into the caller. Idempotent: re-runs
-        re-set the same slots. Only a NEW entry needs it: the install transitions edit in place,
-        and the art stays with the appid."""
+        contract: {"applied": [kinds], "offered": [kinds]} always, even when nothing could be
+        fetched — a failure here must never unwind a good registration or raise into the caller.
+        `offered` is every kind the store had a url for; `applied` the ones the client took. The
+        two differ when a download failed, and that difference is what the artwork pass retries
+        on. Idempotent: re-runs re-set the same slots. The install transitions edit in place, so
+        the art stays with the appid."""
+        offered = []
         try:
             p = await asyncio.to_thread(paths.store_paths)
             urls = await asyncio.to_thread(artwork.store_urls, store, gid, p)
+            offered = sorted(urls)
             got_by_kind = {}
             for kind, url in urls.items():
                 got = await asyncio.to_thread(artwork.fetch_image, url, log=decky.logger.info)
@@ -410,18 +414,18 @@ class Plugin:
                 images.append({"kind": kind, "assetType": artwork.KIND_ASSET[kind],
                                "base64": base64.b64encode(data).decode(), "imageType": image_type})
             if not images:
-                return {"applied": []}
+                return {"applied": [], "offered": offered}
             payload = {"op": "artwork", "req": next(self._shortcut_seq), "appid": int(appid),
                        "images": images}
             result = await self._shortcut_roundtrip(payload)
             if "error" in result:
                 decky.logger.info(f"artwork {store}:{gid}: {result['error']}")
                 # Still not an error to the caller: the entry stands with its name tile.
-                return {"applied": [], "warning": result["error"]}
-            return {"applied": [img["kind"] for img in images]}
+                return {"applied": [], "offered": offered, "warning": result["error"]}
+            return {"applied": [img["kind"] for img in images], "offered": offered}
         except (OSError, subprocess.SubprocessError) as exc:
             decky.logger.info(f"artwork {store}:{gid}: {type(exc).__name__}")
-            return {"applied": []}
+            return {"applied": [], "offered": offered}
 
     async def entry_status(self):
         """Registry joined against what Steam's own file holds — READ-ONLY, like install_status.
@@ -563,8 +567,15 @@ class Plugin:
             # an InvalidURL at GTA V left the rest of a 55-tile library without art).
             try:
                 result = await self.apply_artwork(store, gid, appid)
-                if result.get("applied"):
-                    await self._record_art(p, store, gid, appid, result["applied"])
+                applied, offered = set(result.get("applied", [])), set(result.get("offered", []))
+                # Recorded only when EVERY kind the store offered took. A hero that landed while
+                # the capsule timed out is a blank tile with a backdrop (HW Pocket ACE 2026-10-25:
+                # 5 of 55), and a record of "hero" would have called that done for good.
+                if applied and applied == offered:
+                    await self._record_art(p, store, gid, appid, sorted(applied))
+                elif applied:
+                    decky.logger.info(f"artwork {store}:{gid}: {sorted(offered - applied)} not "
+                                      "fetched, the tile is retried by the next sync")
             except Exception as exc:  # noqa: BLE001 - art is best-effort, per tile
                 decky.logger.info(f"artwork {store}:{gid}: {type(exc).__name__}: {exc}")
             await asyncio.sleep(ARTWORK_PACE)
@@ -579,7 +590,7 @@ class Plugin:
             row = registry.get(token)
             if not isinstance(row, dict) or shortcuts._u32(row.get("appid")) != appid:
                 return
-            registry[token] = {**row, "art": list(kinds)}
+            registry[token] = {**row, "art_ok": list(kinds)}
             if not await asyncio.to_thread(shortcuts.write_registry, p, registry):
                 decky.logger.info(f"artwork {token}: applied, but the registry could not record it")
 
@@ -792,7 +803,7 @@ class Plugin:
         # or the next sync fetches it all again.
         registry[token] = {**new_row, "appid": appid,
                            **({"retired": old["retired"]} if old.get("retired") else {}),
-                           **({"art": old["art"]} if old.get("art") else {})}
+                           **({"art_ok": old["art_ok"]} if old.get("art_ok") else {})}
         if not await asyncio.to_thread(shortcuts.write_registry, p, registry):
             # The entry is already the new kind; the registry still says the old one, and the
             # pass that called this re-runs the (idempotent) edit next time.

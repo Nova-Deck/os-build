@@ -30,6 +30,23 @@ def to_shelve(store, titles, registry):
     return out
 
 
+def wanting_art(store, registry):
+    """[(gid, appid)] for every entry of the store with no art recorded, in registry order. A row
+    gets `art` (the kinds applied) only once SetCustomArtworkForApp took at least one image, so a
+    tile whose fetch failed -- a CDN timeout, a SteamUI that was not listening yet -- is asked
+    for again by the next sync instead of keeping its name tile for good. Both stores' sources
+    are cheap to re-ask (Epic: legendary's local cache; GOG: one unauthenticated GET per tile),
+    but only tiles WITHOUT art are, so a settled library costs a sync nothing."""
+    out = []
+    for token, row in registry.items():
+        if not token.startswith(f"{store}:") or not isinstance(row, dict) or row.get("art"):
+            continue
+        appid = shortcuts._u32(row.get("appid"))
+        if appid is not None:
+            out.append((token.split(":", 1)[1], appid))
+    return out
+
+
 def tab_members(registry):
     """{store: [unsigned appid], "installed": [unsigned appid]} — what the library tabs show
     (revision 2, R2). Each store's tab: every registered entry of that store, installed or not, by

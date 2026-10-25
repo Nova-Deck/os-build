@@ -454,7 +454,8 @@ class Plugin:
     async def sync_library(self, store):
         """Give every installable owned title a tile; the Epic / GOG library tabs list them
         (library_tabs). {"added": N, "tiles": total} or {"error": ...}. Idempotent; artwork for
-        new tiles follows in the background and never holds the sync up."""
+        every tile still without it -- the new ones, and any whose earlier fetch failed
+        (library_sync.wanting_art) -- follows in the background and never holds the sync up."""
         if store not in connect.STORES:
             return {"error": f"unknown store {store!r}"}
         try:
@@ -505,13 +506,18 @@ class Plugin:
                 registry[token] = {k: v for k, v in row.items() if k != "retired"} | (
                     {"retired": still} if still else {})
                 await asyncio.to_thread(shortcuts.write_registry, p, registry)
-        decky.logger.info(f"sync {store}: {len(added)} added")
-        if added:
-            asyncio.create_task(self._artwork_pass(store, added))
+        wanting = library_sync.wanting_art(store, registry)
+        decky.logger.info(f"sync {store}: {len(added)} added, {len(wanting)} without art")
+        # One pass per store at a time: a second sync while the first pass is still walking the
+        # library would queue the same tiles again, 165 downloads twice over.
+        running = self._art_tasks.get(store)
+        if wanting and (running is None or running.done()):
+            self._art_tasks[store] = asyncio.create_task(self._artwork_pass(store, wanting))
         tiles = sum(1 for k in registry if k.startswith(f"{store}:"))
         return {"added": len(added), "tiles": tiles}
 
     _sync_task = None
+    _art_tasks = {}
 
     async def _sync_logged(self, store):
         """The sync after a sign-in, retried: a transient failure here (HW 2026-10-22: GOG's
@@ -531,16 +537,35 @@ class Plugin:
         await decky.emit("sync_failed", {"store": store, "message": result["error"]})
 
     async def _artwork_pass(self, store, tiles):
-        """Art for freshly added tiles, one at a time with a pause between: a 55-title library is
-        165 downloads, and the sync that started this must not flood the network or SteamUI."""
+        """Art for the tiles that have none, one at a time with a pause between: a 55-title
+        library is 165 downloads, and the sync that started this must not flood the network or
+        SteamUI. A tile whose art took is marked in the registry (its row's `art`), which is
+        what keeps the next sync from asking for it again."""
+        p = await asyncio.to_thread(paths.store_paths)
         for gid, appid in tiles:
             # One tile's failure must not end the pass for every tile after it (HW 2026-10-21:
             # an InvalidURL at GTA V left the rest of a 55-tile library without art).
             try:
-                await self.apply_artwork(store, gid, appid)
+                result = await self.apply_artwork(store, gid, appid)
+                if result.get("applied"):
+                    await self._record_art(p, store, gid, appid, result["applied"])
             except Exception as exc:  # noqa: BLE001 - art is best-effort, per tile
                 decky.logger.info(f"artwork {store}:{gid}: {type(exc).__name__}: {exc}")
             await asyncio.sleep(ARTWORK_PACE)
+
+    async def _record_art(self, p, store, gid, appid, kinds):
+        """Note on the entry's row which kinds of art the client took. Checked against the row's
+        LIVE appid: the pass runs unlocked and a deregister + re-add in between would otherwise
+        mark a tile this art never reached. A write that fails only means one more fetch."""
+        token = f"{store}:{gid}"
+        async with _SHORTCUT_LOCK:
+            registry = await asyncio.to_thread(shortcuts.read_registry, p)
+            row = registry.get(token)
+            if not isinstance(row, dict) or shortcuts._u32(row.get("appid")) != appid:
+                return
+            registry[token] = {**row, "art": list(kinds)}
+            if not await asyncio.to_thread(shortcuts.write_registry, p, registry):
+                decky.logger.info(f"artwork {token}: applied, but the registry could not record it")
 
     # -- milestone 7: a not-installed tile's Play becomes an install --
 
@@ -746,9 +771,12 @@ class Plugin:
             if not tool:
                 return {"error": f"Proton could not be taken off the entry: {compat['error']}"}
         # Appids retired by the remove + re-add swaps of earlier builds stay recorded until the
-        # next sync confirms their removal.
+        # next sync confirms their removal. The art record rides along too: the art itself stays
+        # with the appid (that is the point of editing in place), so the row must keep saying so
+        # or the next sync fetches it all again.
         registry[token] = {**new_row, "appid": appid,
-                           **({"retired": old["retired"]} if old.get("retired") else {})}
+                           **({"retired": old["retired"]} if old.get("retired") else {}),
+                           **({"art": old["art"]} if old.get("art") else {})}
         if not await asyncio.to_thread(shortcuts.write_registry, p, registry):
             # The entry is already the new kind; the registry still says the old one, and the
             # pass that called this re-runs the (idempotent) edit next time.

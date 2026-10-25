@@ -507,7 +507,6 @@ class Plugin:
                     {"retired": still} if still else {})
                 await asyncio.to_thread(shortcuts.write_registry, p, registry)
         wanting = library_sync.wanting_art(store, registry)
-        decky.logger.info(f"sync {store}: {len(added)} added, {len(wanting)} without art")
         # One pass per store at a time: a second sync while the first pass is still walking the
         # library would queue the same tiles again, 165 downloads twice over.
         running = self._art_tasks.get(store)
@@ -517,12 +516,19 @@ class Plugin:
         # the tiles this sync added stays as silent as it always was.
         warning = None
         if wanting and running is not None and not running.done():
+            pass_note = "pass still running"
             warning = "artwork still being fetched from the last sync"
         elif wanting:
+            pass_note = "pass started"
             self._art_tasks[store] = asyncio.create_task(self._artwork_pass(store, wanting))
             if len(wanting) > len(added):
                 n = len(wanting)
                 warning = f"fetching artwork for {n} game{'s' if n != 1 else ''} in the background"
+        else:
+            pass_note = "no pass"
+        # The log says which branch the pass took: a toast is gone in seconds, and the one
+        # question asked afterwards (HW 2026-10-25) was exactly this.
+        decky.logger.info(f"sync {store}: {len(added)} added, {len(wanting)} without art, {pass_note}")
         tiles = sum(1 for k in registry if k.startswith(f"{store}:"))
         return {"added": len(added), "tiles": tiles, **({"warning": warning} if warning else {})}
 

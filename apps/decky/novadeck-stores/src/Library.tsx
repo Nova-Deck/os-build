@@ -183,7 +183,10 @@ export function LibrarySections({ connected }: { connected: StoreId[] }) {
           continue;
         }
         const added = res.added ? `${res.added} new` : "nothing new";
-        toaster.toast({ title, body: `${res.tiles} games in the library, ${added}${res.warning ? ` (${res.warning})` : ""}` });
+        toaster.toast({ title, body: `${res.tiles} games in the library, ${added}` });
+        // Its own toast, never appended: Steam clips a long body, and appended in parentheses
+        // the artwork note was the part that got clipped (HW Pocket ACE 2026-10-25).
+        if (res.warning) toaster.toast({ title, body: res.warning });
       }
     } catch (e) {
       toaster.toast({ title: "Library", body: String(e) });

@@ -27,7 +27,11 @@ KIND_ASSET = {"capsule": 0, "hero": 1, "logo": 2}
 
 # A download is untrusted input from a store CDN. See fetch_image.
 MAX_BYTES = 8 * 1024 * 1024
-TIMEOUT = 20
+# Per socket operation (connect, TLS handshake, each read), not per download. A healthy fetch of
+# a 580 KB capsule takes 0.2 s end to end (HW Pocket ACE 2026-10-25); the stalls seen there were
+# handshakes that never completed, and at 20 s each one cost a tile a minute. A stall is not
+# worth waiting for: the tile is simply asked for again by the next sync.
+TIMEOUT = 5
 _MAGIC = ((b"\xff\xd8\xff", "jpg"), (b"\x89PNG\r\n\x1a\n", "png"))
 
 GAMESDB_URL = "https://gamesdb.gog.com/platforms/gog/external_releases/{id}"

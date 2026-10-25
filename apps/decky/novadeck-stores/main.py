@@ -511,10 +511,20 @@ class Plugin:
         # One pass per store at a time: a second sync while the first pass is still walking the
         # library would queue the same tiles again, 165 downloads twice over.
         running = self._art_tasks.get(store)
-        if wanting and (running is None or running.done()):
+        # The toast says what the sync knows about art it did not wait for: a pass it could not
+        # start because the last one is still running, and a pass over tiles that were already
+        # there (every row of a pre-`art` registry on the first sync after an update). Art for
+        # the tiles this sync added stays as silent as it always was.
+        warning = None
+        if wanting and running is not None and not running.done():
+            warning = "artwork still being fetched from the last sync"
+        elif wanting:
             self._art_tasks[store] = asyncio.create_task(self._artwork_pass(store, wanting))
+            if len(wanting) > len(added):
+                n = len(wanting)
+                warning = f"fetching artwork for {n} game{'s' if n != 1 else ''} in the background"
         tiles = sum(1 for k in registry if k.startswith(f"{store}:"))
-        return {"added": len(added), "tiles": tiles}
+        return {"added": len(added), "tiles": tiles, **({"warning": warning} if warning else {})}
 
     _sync_task = None
     _art_tasks = {}

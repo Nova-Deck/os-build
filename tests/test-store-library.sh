@@ -157,6 +157,8 @@ art.clear(); art_takes = False
 res = asyncio.run(run("epic"))
 (ok if res["added"] == 0 and [g for g, _ in art] == ["A"] else bad)(
     f"a re-sync refetches art for the one tile without it ({res}, {art})")
+(ok if res.get("warning") == "fetching artwork for 1 game in the background" else bad)(
+    f"the toast says art for an existing tile is being fetched ({res})")
 (ok if "art" not in json.loads(reg_path.read_text())["epic:A"] else bad)(
     "a fetch that took nothing records nothing, so the tile stays wanting")
 art.clear(); art_takes = True
@@ -164,8 +166,9 @@ asyncio.run(run("epic"))
 (ok if [g for g, _ in art] == ["A"] and json.loads(reg_path.read_text())["epic:A"].get("art") == ["capsule", "hero"] else bad)(
     f"the next sync tries again and records the art once it takes ({art})")
 art.clear()
-asyncio.run(run("epic"))
+res = asyncio.run(run("epic"))
 (ok if not art else bad)(f"a settled library fetches nothing on sync ({art})")
+(ok if "warning" not in res else bad)(f"and its toast carries no art warning ({res})")
 
 # Two syncs back to back do not queue the same tiles twice: one pass per store at a time.
 reg = json.loads(reg_path.read_text())
@@ -173,12 +176,17 @@ reg["epic:A"].pop("art"); reg["epic:B"].pop("art")
 reg_path.write_text(json.dumps(reg))
 art.clear(); main.ARTWORK_PACE = 0.05
 async def twice():
-    await plugin.sync_library("epic")
-    await plugin.sync_library("epic")
+    first = await plugin.sync_library("epic")
+    second = await plugin.sync_library("epic")
     await asyncio.sleep(0.3)
-asyncio.run(twice())
+    return first, second
+first, second = asyncio.run(twice())
 main.ARTWORK_PACE = 0
 (ok if sorted(g for g, _ in art) == ["A", "B"] else bad)(f"a sync during a running art pass does not start a second one ({art})")
+(ok if first.get("warning") == "fetching artwork for 2 games in the background" else bad)(
+    f"the first sync's toast counts the tiles it is fetching for ({first})")
+(ok if second.get("warning") == "artwork still being fetched from the last sync" else bad)(
+    f"the second sync's toast says the pass is still running ({second})")
 
 emitted.clear()
 owned["titles"].append({"id": "C", "title": "Gamma", "installable": True})

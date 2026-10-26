@@ -1,13 +1,19 @@
 #!/usr/bin/python3
 """CLI over novadeck_panel — JSON on stdout, errors as {"error": ...} with exit 1.
 
-  panel-calibration status            measured rate + knobs + persisted values (~0.5s)
+  panel-calibration status            measured rate + knobs + saved/default values (~0.5s)
   panel-calibration status --quick    the same without the vblank measurement
-  panel-calibration calibrate         trim the currently-scanning rate, persist, stay applied
-  panel-calibration apply             boot-time re-apply of this unit's persisted values
+  panel-calibration calibrate         trim the currently-scanning rate, live, UNSAVED
+  panel-calibration step RATE faster|slower
+                                      move RATE's knob one value, live, and measure
+  panel-calibration set RATE VALUE    write RATE's knob, live
+  panel-calibration save RATE         persist RATE's live value for this unit
+  panel-calibration revert RATE       back to this unit's saved value, or the driver default
+  panel-calibration apply             boot-time: record the driver defaults, apply saved values
 
-Consumers: novadeck-panel-calibration.service (apply) and the Novadeck Control Decky plugin's
-Panel tab (status/calibrate — the plugin backend runs as root, so the sysfs writes work).
+Consumers: novadeck-panel-calibration.service (apply), the Novadeck Control Decky plugin's
+Panel tab (status/calibrate/set/save/revert — the plugin backend runs as root, so the sysfs
+writes work), and an operator over SSH (step).
 """
 
 import json
@@ -18,6 +24,12 @@ sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 import novadeck_panel  # noqa: E402
 
 
+def _rate(argv, index):
+    if len(argv) <= index or not argv[index].isdigit():
+        raise RuntimeError("usage: %s" % __doc__.strip().splitlines()[0])
+    return int(argv[index])
+
+
 def main(argv):
     command = argv[1] if len(argv) > 1 else "status"
     try:
@@ -25,6 +37,17 @@ def main(argv):
             return novadeck_panel.status(measure="--quick" not in argv)
         if command == "calibrate":
             return novadeck_panel.calibrate()
+        if command == "step":
+            direction = argv[3] if len(argv) > 3 else ""
+            if direction not in ("faster", "slower"):
+                raise RuntimeError("step takes RATE faster|slower")
+            return novadeck_panel.step(_rate(argv, 2), direction)
+        if command == "set":
+            return novadeck_panel.set_value(_rate(argv, 2), _rate(argv, 3))
+        if command == "save":
+            return novadeck_panel.save(_rate(argv, 2))
+        if command == "revert":
+            return novadeck_panel.revert(_rate(argv, 2))
         if command == "apply":
             return {"applied": novadeck_panel.apply_saved()}
         raise RuntimeError("unknown command: %s" % command)

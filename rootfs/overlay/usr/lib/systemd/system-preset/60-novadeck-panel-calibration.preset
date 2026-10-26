@@ -1,4 +1,3 @@
 # Boot-time re-apply of the per-unit panel frame-length calibration. Gated by its own
-# Condition lines to boards with frame_len_* knobs AND a persisted calibration, so enabling it
-# everywhere is free.
+# Condition line to boards with frame_len_* knobs, so enabling it everywhere is free.
 enable novadeck-panel-calibration.service

@@ -1,8 +1,8 @@
 """The Panel tab's panel-calibration access — subprocess over /usr/lib/novadeck/panel-calibration.
 
 A subprocess, not an import: the tool lives on the rootfs and owns its own python (Decky bundles
-its own interpreter, whose sys.path must not leak in), and the calibrate verb blocks for up to a
-minute — asyncio.to_thread in main.py keeps that off Decky's loop either way. The backend runs
+its own interpreter, whose sys.path must not leak in), and the calibrate verb blocks for up to
+~3 s of vblank measurements — asyncio.to_thread in main.py keeps that off Decky's loop either way. The backend runs
 as root, so the tool's sysfs writes work without any daemon in between.
 
 The env is sanitized for the same reason power.py documents at length: PyInstaller exports
@@ -16,8 +16,8 @@ from .power import _clean_env
 
 TOOL = "/usr/lib/novadeck/panel-calibration"
 STATUS_TIMEOUT = 15
-# calibrate's own internal deadline is 60s plus settle sleeps; give it headroom, never less.
-CALIBRATE_TIMEOUT = 120
+# calibrate measures at most 2 + 2 + 8 quarter-second samples; give it generous headroom.
+CALIBRATE_TIMEOUT = 60
 
 
 def _run(*args, timeout):
@@ -44,3 +44,15 @@ def panel_status():
 
 def panel_calibrate():
     return _run("calibrate", timeout=CALIBRATE_TIMEOUT)
+
+
+def panel_set(rate, value):
+    return _run("set", str(int(rate)), str(int(value)), timeout=STATUS_TIMEOUT)
+
+
+def panel_save(rate):
+    return _run("save", str(int(rate)), timeout=STATUS_TIMEOUT)
+
+
+def panel_revert(rate):
+    return _run("revert", str(int(rate)), timeout=STATUS_TIMEOUT)

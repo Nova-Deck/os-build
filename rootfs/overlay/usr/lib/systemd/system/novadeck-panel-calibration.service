@@ -1,20 +1,24 @@
-# Re-applies this unit's persisted panel frame-length trim at boot (and nothing else: there is
-# deliberately NO boot-time calibration — measuring and stepping the DDIC is operator-triggered,
-# from the Novadeck Control plugin's Panel tab).
+# Records the panel's driver-default frame lengths and re-applies this unit's persisted trim at
+# boot (and nothing else: there is deliberately NO boot-time calibration — measuring and stepping
+# the DDIC is operator-triggered, from the Novadeck Control plugin's Panel tab).
 #
 # The values are per-UNIT, keyed by SoC serial in /var/lib/novadeck/panel-calibration.json, so a
 # card moved between two boards of the same model applies nothing on the one that never
 # calibrated (see novadeck_panel.py). One write per boot suffices: the panel driver keeps the
 # trim in panel_info and replays it on every later init, including resume (kernel patch 0533).
 #
+# It runs on every boot of a knobbed board, calibrated or not: the defaults it records in /run
+# before any write are what the Panel tab's reset and "saving the default clears the entry"
+# compare against.
+#
 # Ordering: the panel driver is built in, so the mipi-dsi device exists long before services
-# run; the only real dependency is /var for the state file, hence local-fs.target. The Condition
-# pair keeps the unit a no-op (not a failure) on boards without calibration knobs and on units
-# that never calibrated.
+# run; /var holds the state file, hence local-fs.target. Before the display manager so the
+# defaults are read before anything else writes a knob. The Condition keeps the unit a no-op
+# (not a failure) on boards without calibration knobs.
 [Unit]
 Description=novadeck apply persisted panel frame-length calibration
 After=local-fs.target
-ConditionPathExists=/var/lib/novadeck/panel-calibration.json
+Before=display-manager.service
 ConditionPathExistsGlob=/sys/bus/mipi-dsi/devices/*/frame_len_120
 
 [Service]

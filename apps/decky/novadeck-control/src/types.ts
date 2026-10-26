@@ -89,6 +89,8 @@ export interface PanelStatus {
   current: Record<string, number>;
   /** Persisted per-THIS-unit values by rate — what the boot re-apply writes. */
   saved: Record<string, number>;
+  /** The driver defaults by rate, recorded at boot before any saved value was applied. */
+  defaults: Record<string, number>;
   /** The real scanout rate from vblank timestamps, null when it could not be measured. */
   measuredHz: number | null;
   /** Which nominal rate measuredHz is attributed to, null when none is close enough. */
@@ -103,6 +105,19 @@ export interface PanelCalibrateResult {
   startValue?: number;
   startHz?: number;
   endHz?: number;
+  error?: string;
+}
+
+export interface PanelValueResult {
+  rate?: number;
+  value?: number;
+  error?: string;
+}
+
+export interface PanelSaveResult {
+  rate?: number;
+  /** The persisted value, null when it equals the driver default (the entry is cleared). */
+  saved?: number | null;
   error?: string;
 }
 

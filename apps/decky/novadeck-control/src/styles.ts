@@ -62,6 +62,11 @@ export const styles = `
       }
       /* The metric/meter rules that used to live here left with the Monitor tab -- they are
          now novadeck-monitor's styles.ts, rescoped to that plugin's own root class. */
+      .novadeck-control-tabs .novadeck-panel-actions {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
       .novadeck-control-tabs .novadeck-version-row {
         padding: 4px 16px 0;
         font-size: 11px;

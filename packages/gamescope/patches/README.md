@@ -26,6 +26,8 @@ root (the `gamescope/` checkout inside makepkg's `$srcdir`) by
 0023-xdg-titles-are-reported-to-steam.patch          (NOVADECK_ANDROID_APPID root property; ConVar touch_passthrough_xdg_titles)
 0026-drm-offer-an-edid-less-internal-panels-native-modes-as-refresh-rates.patch
 0027-steamcompmgr-refresh-only-request-takes-the-exact-mode.patch
+0036-steamcompmgr-elapsed-time-fps-limiter.patch    (ConVar limiter_use_elapsed_time, default OFF)
+0037-steamcompmgr-convar-to-drop-the-blank-overlay-plane.patch    (ConVar paint_blank_overlay_plane; cleared on SM8250 from etc/novadeck/session.conf)
 ```
 
 `0008`-`0013` are **retired** (see below). The numbering is kept as-is rather than compacted, so
@@ -397,6 +399,35 @@ divides. On a 60/120 panel a 60 Hz pick therefore ran at 120 and the panel never
 120); the Pocket Max went 144 → 120 on "60". `0027` takes the exact rate when the panel offers it,
 and only for refresh-only requests — caps keep the doubling, which is what holds a 30 fps game at
 the panel's top rate for latency.
+
+`0036` — **the retired `0025`'s elapsed-time limiter, back** (virtudude, rebased onto 62707e1e's
+boundary-crossing gate; the gate body is unchanged). ConVar `limiter_use_elapsed_time`, default
+**on**; `0` restores stock 3.17.0's gate live. 62707e1e did not make it redundant: on 3.17.0 a
+frame that misses its boundary vblank is still shown one vblank late. A/B'd live, 2026-10-26:
+- Pocket Max, PGRC loaded to ~67 fps uncapped (GPU 305 MHz, big cores ~1.2 GHz), 144 Hz cap 72:
+  stock left 15-53% of commits at 20.8 ms (3 vblanks); `0036` held 99% at 13.9 ms.
+- Pocket FIT, PGRC light (~140 uncapped), 72 @144, 60 @120, 30 @120: `0036` indistinguishable
+  from stock (98.7-99.4% on cadence, no extra early frames), so releasing up to half a refresh
+  early does not make a light game alternate short/long frames.
+
+`0028`-`0035` are skipped: those numbers are taken on the unmerged `sm8250-prerotation-ab` branch.
+
+`0037` — **ConVar `paint_blank_overlay_plane` drops the blank overlay plane** (ours; the A/B
+branch's `0028` pre-rotate patch by sunshineinabox gated the same layer on AMD colour management
+instead). Default on = stock behaviour; `etc/novadeck/session.conf` clears it on SM8250 only, via
+gamescope's `gamescope_<convar>` environment override. Stock gamescope, on the DRM backend, pushes
+a full-screen transparent layer whenever the Steam overlay is hidden, so an overlay plane stays lit
+and turning the overlay on does not stutter (upstream fe3dbc6b). That is a second plane on every
+commit, and on SM8250 every plane goes through the offline rotator in series (~2.9 ms each): two
+no longer fit a 120 Hz refresh. The other SoCs rotate inline at scanout and keep the stock layer. Measured on the Pocket Max (3.17.0, PGRC native, uncapped, 120 Hz, MangoHud off,
+2026-10-26): two rotated planes, the second a static AR24 buffer, 60 commits/s, game 65 fps; the
+same session with the layer off (`paint_steam_overlay_plane 0`, which also hides the real
+overlay, so not a fix) ran one plane, 120 commits/s, game 122 fps.
+HW-checked on the same Max with the AMD-gated first version of `0037` (same effect on msm as the
+ConVar cleared): one plane, 120 commits/s, game ~120; opening the Quick
+Access menu puts the real overlay on its own plane (two planes, 60 commits/s while it is open).
+The cost the blank layer existed to hide does show on msm too: a small stutter as the overlay
+starts to open. Accepted (operator, 2026-10-26) as the price of not halving every game.
 
 Drop the patch files here with those exact names (or rename and update `source.pin`'s
 `patches:` line). **Until a declared patch is present, `make overlay` / `make base` fail fast**

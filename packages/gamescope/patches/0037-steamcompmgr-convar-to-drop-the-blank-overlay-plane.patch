@@ -1,0 +1,43 @@
+From: Philippe Simons <simons.philippe@gmail.com>
+Date: Mon, 26 Oct 2026 18:40:00 +0100
+Subject: [PATCH] steamcompmgr: a ConVar to drop the blank overlay plane
+
+On a session backend, gamescope pushes a blank full-screen layer while
+the Steam overlay is hidden, so an overlay plane stays on and opening
+the overlay does not stutter. Where every plane costs scanout time, that
+layer is a plane on every frame for nothing.
+
+paint_blank_overlay_plane (default on, the stock behaviour) leaves it
+out when cleared. The Steam overlay itself still paints when shown.
+
+---
+diff --git a/src/steamcompmgr.cpp b/src/steamcompmgr.cpp
+index 6ad6fde2..3afd415a 100644
+--- a/src/steamcompmgr.cpp
++++ b/src/steamcompmgr.cpp
+@@ -3140,6 +3140,7 @@ static void ForwardVROverlayTargets()
+ gamescope::ConVar<bool> cv_paint_primary_plane{ "paint_primary_plane", true };
+ gamescope::ConVar<bool> cv_paint_override_redirect_plane{ "paint_override_redirect_plane", true };
+ gamescope::ConVar<bool> cv_paint_steam_overlay_plane{ "paint_steam_overlay_plane", true };
++gamescope::ConVar<bool> cv_paint_blank_overlay_plane{ "paint_blank_overlay_plane", true, "Keep an overlay plane on with a blank layer while the Steam overlay is hidden, so opening it does not stutter. Costs a plane on every frame." };
+ gamescope::ConVar<bool> cv_paint_external_overlay_plane{ "paint_external_overlay_plane", true };
+ gamescope::ConVar<bool> cv_paint_cursor_plane{ "paint_cursor_plane", true };
+ gamescope::ConVar<bool> cv_paint_mura_plane{ "paint_mura_plane", true };
+@@ -3320,7 +3321,7 @@ paint_all( global_focus_t *pFocus, bool async, bool bRepeatFrame )
+ 		nReservedLayers++;
+ 	if ( cv_paint_steam_overlay_plane &&
+ 		 ( ( overlay && overlay->opacity ) ||
+-		   ( !GetBackend()->UsesVulkanSwapchain() && GetBackend()->IsSessionBased() ) ) )
++		   ( !GetBackend()->UsesVulkanSwapchain() && GetBackend()->IsSessionBased() && cv_paint_blank_overlay_plane ) ) )
+ 		nReservedLayers++;
+ 	if ( notification && notification->opacity )
+ 		nReservedLayers++;
+@@ -3378,7 +3379,7 @@ paint_all( global_focus_t *pFocus, bool async, bool bRepeatFrame )
+ 			if ( overlay == pFocus->inputFocusWindow && pFocus == GetCurrentMouseFocus() )
+ 				update_touch_scaling( &frameInfo );
+ 		}
+-		else if ( !GetBackend()->UsesVulkanSwapchain() && GetBackend()->IsSessionBased() )
++		else if ( !GetBackend()->UsesVulkanSwapchain() && GetBackend()->IsSessionBased() && cv_paint_blank_overlay_plane )
+ 		{
+ 			auto tex = vulkan_get_hacky_blank_texture();
+ 			if ( tex != nullptr && frameInfo.layers.count() < k_nMaxLayers )

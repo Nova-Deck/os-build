@@ -114,6 +114,21 @@ grep -qE '^[[:space:]]*(: "\$\{)?NOVADECK_GAMESCOPE_REFRESH[:=]' "$SESSION" \
   && bad "the script assigns NOVADECK_GAMESCOPE_REFRESH itself, so the override is a default again" \
   || ok "nothing in the script defaults NOVADECK_GAMESCOPE_REFRESH"
 
+CASE="blank-overlay-plane-off-on-sm8250-only"
+# gamescope's blank overlay layer is a second rotated plane on every frame, and SM8250's offline
+# rotator turns planes in series: it halved PGRC to 60 @120 Hz (HW, Pocket Max, 2026-10-26). The
+# shipped session.conf clears the ConVar (patches/0037) on SM8250 and leaves every other SoC stock.
+CONF="$ROOT/rootfs/overlay/etc/novadeck/session.conf"
+blank() { env -i "$@" /bin/sh -c 'set -eu; . "$1"; printf "%s" "${gamescope_paint_blank_overlay_plane-unset}"' sh "$CONF"; }
+out="$(blank NOVADECK_SOC_CLASS=SM8250)"
+[ "$out" = "false" ] && ok "SM8250 exports gamescope_paint_blank_overlay_plane=false" \
+  || bad "SM8250 got '${out:-<nothing>}', expected false"
+for soc in SM8550 SM8650 SM8750 ""; do
+  out="$(blank NOVADECK_SOC_CLASS=$soc)"
+  [ "$out" = "unset" ] && ok "${soc:-no SoC class} keeps the stock blank overlay plane" \
+    || bad "${soc:-no SoC class} got '${out:-<nothing>}', expected the ConVar left unset"
+done
+
 # =================================================================================================
 echo
 echo "test-session: $PASS passed, $FAIL failed"

@@ -1,0 +1,366 @@
+From: Armada <noreply@armada.local>
+Subject: [PATCH] drm/panel: icna35xx: serialise frame-length writes and calibrate the ICNA3512
+
+The frame_len_120/frame_len_60 stores send a page select, the B3 and a
+page restore while the panel is streaming. A backlight update or a
+disable could land its DSI command between them, and a value stored
+while the init sequence ran could reach only the cache.
+
+One mutex now covers the backlight write, the frame-length show and
+store, disable, and the whole init sequence, with an active flag set
+when the init succeeds and cleared at disable: a value stored before
+the init's write is written by it, one stored after is written live.
+A failed B3 write still restores the command page and puts the old
+value back in the cache; a failed page restore after a good B3 only
+warns, since the panel runs the new value.
+
+The frame-length controls become per panel model: each description
+names its writer, its value ranges and the command page its init
+sequence leaves selected. The ICNA3520 keeps its encoding and ranges.
+The ICNA3512 (Odin 2 Portal) gets the knobs too: its 120 Hz frame
+length is byte 23 of the long B3 on page 9F 01, its 60 Hz one byte 5
+of the short B3, defaulting to the Android values the init already
+sends (0xB9, 0xFF). The 50 and 145 Hz modes run on the 60 Hz setup and
+keep Android's 0xFF; 165 Hz writes no B3. Only a mode at the knob's own
+rate is reprogrammed live.
+
+The ICNA3512 ranges and the lock are from Armada's 0518a/0518b; the
+lock held across the init (in place of their enabled flag plus a
+pending write from enable()) and the 50/145/165 Hz handling are ours,
+for our 0531/0532 Portal setup.
+---
+  drivers/gpu/drm/panel/panel-chipone-icna35xx.c | 168 +++++++++++++++++++++----
+  1 file changed, 141 insertions(+), 27 deletions(-)
+
+diff --git a/drivers/gpu/drm/panel/panel-chipone-icna35xx.c b/drivers/gpu/drm/panel/panel-chipone-icna35xx.c
+index f117084..d2f365e 100644
+--- a/drivers/gpu/drm/panel/panel-chipone-icna35xx.c
++++ b/drivers/gpu/drm/panel/panel-chipone-icna35xx.c
+@@ -9,6 +9,7 @@
+ #include <linux/delay.h>
+ #include <linux/gpio/consumer.h>
+ #include <linux/module.h>
++#include <linux/mutex.h>
+ #include <linux/of.h>
+ #include <linux/of_graph.h>
+ #include <linux/regulator/consumer.h>
+@@ -34,11 +35,32 @@ struct panel_info {
+ 	struct regulator_bulk_data *supplies;
+ 	struct drm_panel_bl_levels bl_levels;
+ 
++	/*
++	 * Serialises the DSI commands sent outside the atomic commit (backlight,
++	 * frame length) against the init sequence and disable: a page select
++	 * and the B3 behind it must not be split by another command.
++	 */
++	struct mutex lock;
++	/* Initialised and not yet disabled; under lock. */
++	bool active;
++
+ 	int vrefresh;
+ 	u16 frame_len_120;
+ 	u16 frame_len_60;
+ };
+ 
++struct panel_info;
++
++/* How a panel model encodes its DDIC frame length, which sets its TE rate. */
++struct icna35xx_frame_len {
++	void (*write)(struct mipi_dsi_multi_context *dsi_ctx,
++		      struct panel_info *pinfo);
++	u16 min_120, max_120;
++	u16 min_60, max_60;
++	/* Command page the init sequence leaves selected. */
++	u8 page;
++};
++
+ struct panel_desc {
+ 	unsigned int width_mm;
+ 	unsigned int height_mm;
+@@ -58,6 +80,7 @@ struct panel_desc {
+ 
+ 	struct drm_dsc_config dsc;
+ 
++	const struct icna35xx_frame_len *frame_len;
+ 	u16 frame_len_120;
+ 	u16 frame_len_60;
+ };
+@@ -97,6 +120,37 @@ static int icna35xx_get_current_mode(struct panel_info *pinfo)
+ 	return 0;
+ }
+ 
++/*
++ * The 120Hz frame length is byte 23 of the long B3 (Android's 0xB9), the
++ * 60Hz one byte 5 of the short B3 (Android's 0xFF). 50 and 145Hz run on the
++ * 60Hz setup and keep Android's 0xFF: the knob is the 60Hz mode's.
++ */
++static void icna3512_set_frame_len(struct mipi_dsi_multi_context *dsi_ctx,
++				   struct panel_info *pinfo)
++{
++	u8 payload_120[] = {
++		0xB3,
++		0x00, 0xE0, 0xA0, 0x10, 0xC8, 0x00, 0x02, 0x83,
++		0x00, 0x10, 0x14, 0x00, 0x00, 0xC3, 0x00, 0x10,
++		0x14, 0x00, 0x00, 0xE0, 0x10, 0x10, pinfo->frame_len_120,
++		0x00, 0x00, 0xE0, 0xA0, 0x10, 0xC8, 0x22, 0x18,
++		0x18, 0x18, 0x18, 0x18,
++	};
++	u8 payload_60[] = {
++		0xB3,
++		0x00, 0xE0, 0xA0, 0x10,
++		pinfo->vrefresh == 60 ? pinfo->frame_len_60 : 0xFF, 0x00,
++	};
++
++	mipi_dsi_generic_write_seq_multi(dsi_ctx, 0x9F, 0x01);
++	if (pinfo->vrefresh == 120)
++		mipi_dsi_generic_write_multi(dsi_ctx, payload_120,
++					     sizeof(payload_120));
++	else
++		mipi_dsi_generic_write_multi(dsi_ctx, payload_60,
++					     sizeof(payload_60));
++}
++
+ static int icna3512_init_sequence(struct panel_info *pinfo)
+ {
+ 	struct mipi_dsi_multi_context dsi_ctx = { .dsi = pinfo->dsi };
+@@ -130,17 +184,13 @@ static int icna3512_init_sequence(struct panel_info *pinfo)
+ 	 *   0x20 167Hz with either or neither (upstream's 165Hz, panel-chipone-icna35xx)
+ 	 * 120Hz is what AYN sells the panel at; the others are ours.
+ 	 */
+-	mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0x9F, 0x01);
++	pinfo->vrefresh = cur_vrefresh;
+ 	if (cur_vrefresh == 165) {
++		mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0x9F, 0x01);
+ 		mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0x48, 0x20);
+ 	}
+ 	else if (cur_vrefresh == 120) {
+-		mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0xB3, 
+-                0x00, 0xE0, 0xA0, 0x10, 0xC8, 0x00, 0x02, 0x83, 
+-                0x00, 0x10, 0x14, 0x00, 0x00, 0xC3, 0x00, 0x10, 
+-                0x14, 0x00, 0x00, 0xE0, 0x10, 0x10, 0xB9, 0x00,
+-                0x00, 0xE0, 0xA0, 0x10, 0xC8, 0x22, 0x18, 0x18, 
+-                0x18, 0x18, 0x18);
++		icna3512_set_frame_len(&dsi_ctx, pinfo);
+         mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0x9F, 0x07);
+ 		mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0xB5,
+                 0x04, 0x0C, 0x08, 0x0C, 0x04, 0x00, 0xC4);
+@@ -153,8 +203,7 @@ static int icna3512_init_sequence(struct panel_info *pinfo)
+         mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0x48, 0x30);
+ 	}
+ 	else {
+-        mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0xB3, 
+-                0x00, 0xE0, 0xA0, 0x10, 0xFF, 0x00);
++		icna3512_set_frame_len(&dsi_ctx, pinfo);
+         mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0x9F, 0x07);
+         mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0xB2,
+                 0x04, 0x18, 0x08, 0x0C, 0x02, 0x00, 0xC4);
+@@ -209,6 +258,22 @@ static void icna3520_set_frame_len(struct mipi_dsi_multi_context *dsi_ctx,
+ 	}
+ }
+ 
++static const struct icna35xx_frame_len icna3512_frame_len = {
++	.write = icna3512_set_frame_len,
++	/* 128-200 measured as 122.1-118.4 Hz on an Odin 2 Portal. */
++	.min_120 = 0x80, .max_120 = 0xC8,
++	/* 128-255 measured as 61.2-59.6 Hz on an Odin 2 Portal. */
++	.min_60 = 0x80, .max_60 = 0xFF,
++	.page = 0x07,
++};
++
++static const struct icna35xx_frame_len icna3520_frame_len = {
++	.write = icna3520_set_frame_len,
++	.min_120 = 0x10, .max_120 = 0x80,
++	.min_60 = 0x770, .max_60 = 0x838,
++	.page = 0x0D,
++};
++
+ static int icna3520_init_sequence(struct panel_info *pinfo)
+ {
+ 	struct mipi_dsi_multi_context dsi_ctx = { .dsi = pinfo->dsi };
+@@ -526,6 +591,9 @@ static struct panel_desc icna3512_desc = {
+ 	.format = MIPI_DSI_FMT_RGB888,
+ 	.mode_flags = MIPI_DSI_MODE_NO_EOT_PACKET | MIPI_DSI_CLOCK_NON_CONTINUOUS | MIPI_DSI_MODE_LPM,
+ 	.init_sequence = icna3512_init_sequence,
++	.frame_len = &icna3512_frame_len,
++	.frame_len_120 = 0xB9,
++	.frame_len_60 = 0xFF,
+ 	.bl_levels = icna35xx_bl_levels,
+ 	.num_bl_levels = ARRAY_SIZE(icna35xx_bl_levels),
+ 	.bl_num_interp = 32,
+@@ -551,6 +619,7 @@ static struct panel_desc icna3520_desc = {
+ 	.format = MIPI_DSI_FMT_RGB888,
+ 	.mode_flags =  MIPI_DSI_MODE_NO_EOT_PACKET | MIPI_DSI_CLOCK_NON_CONTINUOUS | MIPI_DSI_MODE_LPM,
+ 	.init_sequence = icna3520_init_sequence,
++	.frame_len = &icna3520_frame_len,
+ 	.frame_len_120 = 0x4C,
+ 	.frame_len_60 = 0x7D6,
+ 	.bl_levels = icna35xx_bl_levels,
+@@ -671,7 +740,14 @@ static int icna35xx_prepare(struct drm_panel *panel)
+ 
+ 	icna35xx_reset(pinfo);
+ 
+-	ret = pinfo->desc->init_sequence(pinfo);
++	/*
++	 * Held across the whole sequence: a frame length stored meanwhile is
++	 * either written by it or, once active, written live.
++	 */
++	scoped_guard(mutex, &pinfo->lock) {
++		ret = pinfo->desc->init_sequence(pinfo);
++		pinfo->active = ret >= 0;
++	}
+ 	if (ret < 0) {
+ 		/* As unprepare: hold it in reset before cutting its supplies. */
+ 		gpiod_set_value_cansleep(pinfo->reset_gpio, 1);
+@@ -688,6 +764,9 @@ static int icna35xx_disable(struct drm_panel *panel)
+ 	struct panel_info *pinfo = to_panel_info(panel);
+ 	struct mipi_dsi_multi_context dsi_ctx = { .dsi = pinfo->dsi };
+ 
++	scoped_guard(mutex, &pinfo->lock)
++		pinfo->active = false;
++
+ 	pinfo->dsi->mode_flags &= ~MIPI_DSI_MODE_LPM;
+ 
+ 	mipi_dsi_dcs_set_display_off_multi(&dsi_ctx);
+@@ -776,8 +855,10 @@ static int icna35xx_bl_update_status(struct backlight_device *bl)
+ 						 backlight_get_brightness(bl));
+ 	int ret;
+ 
++	guard(mutex)(&pinfo->lock);
++
+ 	/* Powered off: drm_panel_enable() sends the brightness once it is up. */
+-	if (!pinfo->panel.prepared)
++	if (!pinfo->active)
+ 		return 0;
+ 
+ 	dsi->mode_flags &= ~MIPI_DSI_MODE_LPM;
+@@ -813,13 +894,34 @@ static struct backlight_device *icna35xx_create_backlight(struct mipi_dsi_device
+ 					      &icna35xx_bl_ops, &props);
+ }
+ 
+-static ssize_t icna3520_frame_len_store(struct device *dev, u16 *frame_len,
++/* Called with pinfo->lock held while the panel is active. */
++static int icna35xx_write_frame_len(struct panel_info *pinfo)
++{
++	struct mipi_dsi_multi_context dsi_ctx = { .dsi = pinfo->dsi };
++	u8 page[] = { 0x9F, pinfo->desc->frame_len->page };
++	int ret;
++
++	pinfo->dsi->mode_flags &= ~MIPI_DSI_MODE_LPM;
++	pinfo->desc->frame_len->write(&dsi_ctx, pinfo);
++	ret = dsi_ctx.accum_err;
++	/* Restore the command page even if the B3 write failed. */
++	dsi_ctx.accum_err = 0;
++	mipi_dsi_generic_write_multi(&dsi_ctx, page, sizeof(page));
++	pinfo->dsi->mode_flags |= MIPI_DSI_MODE_LPM;
++	/* The panel runs the new value either way, so the cache keeps it. */
++	if (dsi_ctx.accum_err)
++		dev_warn(&pinfo->dsi->dev, "failed to restore the command page: %d\n",
++			 dsi_ctx.accum_err);
++
++	return ret;
++}
++
++static ssize_t icna35xx_frame_len_store(struct device *dev, u16 *frame_len,
+ 					int vrefresh, u16 min, u16 max,
+ 					const char *buf, size_t count)
+ {
+ 	struct panel_info *pinfo = dev_get_drvdata(dev);
+-	struct mipi_dsi_multi_context dsi_ctx = { .dsi = pinfo->dsi };
+-	u16 val;
++	u16 val, old;
+ 	int ret;
+ 
+ 	ret = kstrtou16(buf, 0, &val);
+@@ -829,18 +931,20 @@ static ssize_t icna3520_frame_len_store(struct device *dev, u16 *frame_len,
+ 	if (val < min || val > max)
+ 		return -EINVAL;
+ 
++	guard(mutex)(&pinfo->lock);
++
++	old = *frame_len;
+ 	*frame_len = val;
+ 
+-	if (!pinfo->panel.prepared || pinfo->vrefresh != vrefresh)
++	/* Inactive or on another rate: the next init writes the cached value. */
++	if (!pinfo->active || pinfo->vrefresh != vrefresh)
+ 		return count;
+ 
+-	pinfo->dsi->mode_flags &= ~MIPI_DSI_MODE_LPM;
+-	icna3520_set_frame_len(&dsi_ctx, pinfo);
+-	mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0x9F, 0x0D);
+-	pinfo->dsi->mode_flags |= MIPI_DSI_MODE_LPM;
+-
+-	if (dsi_ctx.accum_err)
+-		return dsi_ctx.accum_err;
++	ret = icna35xx_write_frame_len(pinfo);
++	if (ret) {
++		*frame_len = old;
++		return ret;
++	}
+ 
+ 	return count;
+ }
+@@ -850,6 +954,8 @@ static ssize_t frame_len_120_show(struct device *dev,
+ {
+ 	struct panel_info *pinfo = dev_get_drvdata(dev);
+ 
++	guard(mutex)(&pinfo->lock);
++
+ 	return sysfs_emit(buf, "%u\n", pinfo->frame_len_120);
+ }
+ 
+@@ -858,9 +964,10 @@ static ssize_t frame_len_120_store(struct device *dev,
+ 				   const char *buf, size_t count)
+ {
+ 	struct panel_info *pinfo = dev_get_drvdata(dev);
++	const struct icna35xx_frame_len *fl = pinfo->desc->frame_len;
+ 
+-	return icna3520_frame_len_store(dev, &pinfo->frame_len_120, 120,
+-					0x10, 0x80, buf, count);
++	return icna35xx_frame_len_store(dev, &pinfo->frame_len_120, 120,
++					fl->min_120, fl->max_120, buf, count);
+ }
+ static DEVICE_ATTR_RW(frame_len_120);
+ 
+@@ -869,6 +976,8 @@ static ssize_t frame_len_60_show(struct device *dev,
+ {
+ 	struct panel_info *pinfo = dev_get_drvdata(dev);
+ 
++	guard(mutex)(&pinfo->lock);
++
+ 	return sysfs_emit(buf, "%u\n", pinfo->frame_len_60);
+ }
+ 
+@@ -877,9 +986,10 @@ static ssize_t frame_len_60_store(struct device *dev,
+ 				  const char *buf, size_t count)
+ {
+ 	struct panel_info *pinfo = dev_get_drvdata(dev);
++	const struct icna35xx_frame_len *fl = pinfo->desc->frame_len;
+ 
+-	return icna3520_frame_len_store(dev, &pinfo->frame_len_60, 60,
+-					0x770, 0x838, buf, count);
++	return icna35xx_frame_len_store(dev, &pinfo->frame_len_60, 60,
++					fl->min_60, fl->max_60, buf, count);
+ }
+ static DEVICE_ATTR_RW(frame_len_60);
+ 
+@@ -904,6 +1014,10 @@ static int icna35xx_probe(struct mipi_dsi_device *dsi)
+ 	if (IS_ERR(pinfo))
+ 		return PTR_ERR(pinfo);
+ 
++	ret = devm_mutex_init(dev, &pinfo->lock);
++	if (ret)
++		return ret;
++
+ 	ret = devm_regulator_bulk_get_const(dev, ARRAY_SIZE(panel_supplies),
+ 	panel_supplies, &pinfo->supplies);
+ 	if (ret < 0){
+@@ -921,7 +1035,7 @@ static int icna35xx_probe(struct mipi_dsi_device *dsi)
+ 	pinfo->dsi = dsi;
+ 	mipi_dsi_set_drvdata(dsi, pinfo);
+ 
+-	if (pinfo->desc->frame_len_120) {
++	if (pinfo->desc->frame_len) {
+ 		pinfo->frame_len_120 = pinfo->desc->frame_len_120;
+ 		pinfo->frame_len_60 = pinfo->desc->frame_len_60;
+ 

@@ -410,7 +410,8 @@ frame that misses its boundary vblank is still shown one vblank late. A/B'd live
   from stock (98.7-99.4% on cadence, no extra early frames), so releasing up to half a refresh
   early does not make a light game alternate short/long frames.
 
-`0028`-`0035` are skipped: those numbers are taken on the unmerged `sm8250-prerotation-ab` branch.
+`0028`-`0035` are skipped: those numbers were used by the SM8250 rotation A/B branch
+(`sm8250-prerotation-ab`, deleted unmerged 2026-10-26), and older commit messages cite them.
 
 `0037` — **ConVar `paint_blank_overlay_plane` drops the blank overlay plane** (ours; the A/B
 branch's `0028` pre-rotate patch by sunshineinabox gated the same layer on AMD colour management

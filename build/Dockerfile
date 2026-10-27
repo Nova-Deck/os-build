@@ -30,8 +30,8 @@ ENV DEBIAN_FRONTEND=noninteractive
 # rauc is the ONE apt package here pinned to an exact version, and it is deliberate. Everything
 # else in the lists below (compilers, mkfs tools, curl) only has to work — a newer one produces the
 # same artifact. rauc does not: it WRITES the update bundle, and the device's rauc has to be able
-# to install what it wrote. That pairing is already load-bearing (packages/rauc builds the DEVICE
-# side at 1.15.2 precisely because 1.14 cannot install a dm-verity bundle on kernel >= 6.19), so
+# to install what it wrote. That pairing is already load-bearing (the DEVICE side, the snapshot's
+# rauc, must be >= 1.15.1 because 1.14 cannot install a dm-verity bundle on kernel >= 6.19), so
 # letting the bundle WRITER float means the two halves of the update path can drift apart with no
 # signal until a device refuses a bundle — and this device has no serial console to ask why.
 #

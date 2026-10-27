@@ -134,6 +134,6 @@ stays SteamOS-native (RAUC / Btrfs).
 ## The standing caveat
 
 CI green is not evidence about the device. The self-test runs the **build container's** rauc
-against the shipped config; the device runs its own (`packages/rauc`). A 1.14-on-device /
+against the shipped config; the device runs its own (the pinned snapshot's). A 1.14-on-device /
 1.15-in-container skew is exactly how the dm-verity install bug reached hardware. Only an on-device
 `rauc install` is evidence about the device.

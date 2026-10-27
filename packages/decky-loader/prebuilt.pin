@@ -30,9 +30,9 @@
 # version + url together, and recompute sha256 from the downloaded asset (upstream publishes no
 # checksum sidecar).
 name: decky-loader
-version: v3.3.0
-url: https://github.com/SteamDeckHomebrew/decky-loader/releases/download/v3.3.0/PluginLoader-arm64
-sha256: 8ef5dcf36cbbbb6e97201a6baed5d79c4cc44ec27789fc9af1c5b6ae8f0b25b6
+version: v3.3.1
+url: https://github.com/SteamDeckHomebrew/decky-loader/releases/download/v3.3.1/PluginLoader-arm64
+sha256: 6320bcf990aacc1c7a8aff67e17c98ece66601d1a7cc3d21d4259c7273adb2bb
 kind: file
 dest: /usr/share/decky-loader/PluginLoader
 mode: 0755

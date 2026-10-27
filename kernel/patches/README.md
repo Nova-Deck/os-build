@@ -189,7 +189,7 @@ taken for issue #122 — see the `0780`–`0796` rows.
 | `0856` | community | ROCKNIX SM8750 `0072`: lpass-rx-macro HPH PCM mode. First of the HPH PCM HiFi trio (`0856`-`0858`); benefits every wcd939x board, not just SM8750. | when upstreamed |
 | `0857` | community | ROCKNIX SM8750 `0073`: wcd939x HPH PCM HiFi mode. | with `0856` |
 | `0858` | community | ROCKNIX SM8750 `0074`: soundwire qcom PCM data-port format enable. | with `0856` |
-| `0860` | community | ROCKNIX SM8250 `0062`. Mainline removed this flag (`d01fbee5c0d3`) in favour of `GPIO_SHARED`. | if a HW test without it passes |
+| `0865` | posted | Marek Szyprowski v1 `<20261022090923.769464-1-m.szyprowski@samsung.com>`, applied to broonie `sound for-7.4` as `c80f86ed857e`; no Cc: stable. Requests the shared powerdown line asserted so the `GPIO_SHARED` proxy's default is powerdown and any one powered amp holds it de-asserted — the Pocket Max deadlock (both amps on TLMM 127). Upstream's 4th hunk dropped: its `regcache_sync()` error path is not in 7.2. Replaced ROCKNIX `0860` (`GPIOD_FLAGS_BIT_NONEXCLUSIVE`), inert since `ARCH_QCOM` selects `HAVE_SHARED_GPIOS` and gpiolib proxies the line itself; mainline dropped that flag too (`d01fbee5c0d3`). | v7.4 |
 | `0870` | community | ROCKNIX. Effectively reverts `89be3c15a58b`. | never |
 | `0880` | community | Teguh Sobirin, ROCKNIX `0012`. | never |
 | `0890` | community | Daniel Martin (Batocera), ROCKNIX `0300`. Never posted; generic, worth sending. | when upstreamed |

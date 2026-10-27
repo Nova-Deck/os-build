@@ -46,7 +46,7 @@ diff --git a/drivers/input/joystick/mcu_joystick.c b/drivers/input/joystick/mcu_
 new file mode 100644
 --- /dev/null
 +++ b/drivers/input/joystick/mcu_joystick.c
-@@ -0,0 +1,822 @@
+@@ -0,0 +1,829 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * AYANEO SPI MCU gamepad driver (KONKR Pocket FIT Elite / AYN AYANEO SM8750 family)
@@ -855,6 +855,12 @@ new file mode 100644
 +};
 +MODULE_DEVICE_TABLE(of, mcu_joystick_of_match);
 +
++static const struct spi_device_id mcu_joystick_spi_ids[] = {
++	{ "joystick" },
++	{ }
++};
++MODULE_DEVICE_TABLE(spi, mcu_joystick_spi_ids);
++
 +static struct spi_driver mcu_joystick_driver = {
 +	.driver = {
 +		.name = "mcu-joystick",
@@ -862,6 +868,7 @@ new file mode 100644
 +		.pm = pm_sleep_ptr(&mcu_joystick_pm_ops),
 +		.dev_groups = mcu_groups,
 +	},
++	.id_table = mcu_joystick_spi_ids,
 +	.probe = mcu_joystick_probe,
 +	.remove = mcu_joystick_remove,
 +};

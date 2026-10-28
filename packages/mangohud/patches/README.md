@@ -15,7 +15,16 @@ novadeck patches applied on top of the local mangohud PKGBUILD source (MangoHud 
 0004-Qualcomm-battery-power-now.patch
 0005-RAM-name.patch
 0006-SM8750-Battery.patch
+0007-mangoapp-throttle-overlay-to-one-render-per-game-frame.patch
 ```
+
+`0007` is an upstream MangoHud fix (`2c1dc5283c04`, on master, not in any tag yet), taken
+verbatim. 0.8.4 lost mangoapp's per-frame wait, so after the first frame the overlay renders on
+every loop iteration; gamescope does not frame-pace external overlays, so it spins flat-out,
+pushing the game past its fps cap and burning GPU power. The fix re-adds a bounded wait (100 ms,
+so keybinds stay live when frames stop). Drop it on the bump to the first tag that contains it.
+
+## The Qualcomm set (`0001`–`0006`)
 
 These are an upstream Qualcomm / SM85xx patch set, each taken at a pinned upstream revision.
 Stock MangoHud only knows how to read desktop GPUs (amdgpu/i915/nvidia) and generic

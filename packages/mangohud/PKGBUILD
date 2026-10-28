@@ -7,9 +7,10 @@
 #   * -Dmangohudctl=true   → the mangohudctl control client (SteamUI toggles the overlay level)
 #   * -Duse_system_spdlog  → link holo's spdlog/fmt instead of a bundled wrap copy
 #   * -Dwith_xnvctrl=disabled → NVIDIA XNVCtrl is x86-desktop-only; this is an Adreno part
-# The 6 patches (packages/mangohud/patches/, applied by build-overlay.sh after `cd MangoHud`) teach
-# GPU_fdinfo / BatteryStats / the HUD to read a Qualcomm SoC (kgsl/devfreq GPU clock, `battery`
-# power-supply, RAM label) — without them the overlay shows no/garbage GPU+battery data on Adreno.
+# The patches (packages/mangohud/patches/, applied by build-overlay.sh after `cd MangoHud`):
+# 0001-0006 teach GPU_fdinfo / BatteryStats / the HUD to read a Qualcomm SoC (kgsl/devfreq GPU
+# clock, `battery` power-supply, RAM label) — without them the overlay shows no/garbage GPU+battery
+# data on Adreno. 0007 is an upstream mangoapp fix not yet in a release.
 # See packages/mangohud/source.pin for the "why", packages/mangohud/patches/README.md for provenance.
 #
 # To bump: change pkgver, re-verify the patches apply against the new tag, re-roll any that fail.

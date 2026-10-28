@@ -21,7 +21,7 @@
 # build/runtime deps resolve in the holo `core`/`extra` repos (dbus fmt glfw spdlog vulkan-* libx11
 # libxkbcommon wayland appstream glslang libxrandr nlohmann-json python-mako ...).
 #
-# The 6 patches teach MangoHud to read a Qualcomm SoC's stats — WITHOUT them the overlay shows no /
+# Patches 0001-0006 teach MangoHud to read a Qualcomm SoC's stats — WITHOUT them the overlay shows no /
 # garbage GPU/battery/RAM data on an Adreno part. They are an upstream Qualcomm/SM85xx patch set
 # (see packages/mangohud/patches/README.md for what each one does). We take ALL
 # of them, including the SM8750 battery patch: SM8650 (Adreno 750) shares the Adreno devfreq/kgsl +
@@ -37,9 +37,9 @@
 #   patches        space-separated files under ./patches/, applied `patch -p1` in the MangoHud
 #                  source root (after `cd MangoHud` in prepare()), in the order listed.
 #
-# To bump mangohud: edit pkgver in packages/mangohud/PKGBUILD, re-verify the 6 patches apply against
+# To bump mangohud: edit pkgver in packages/mangohud/PKGBUILD, re-verify the patches apply against
 # the new tag (patch -p1 --dry-run on a shallow clone), and re-roll any patch whose hunk fails.
 name: mangohud
 pkgbuild_local: PKGBUILD
 pkgrel_suffix: 1
-patches: 0001-Qualcomm-GPU-support.patch 0002-GPU-monitoring.patch 0003-Battery-name.patch 0004-Qualcomm-battery-power-now.patch 0005-RAM-name.patch 0006-SM8750-Battery.patch
+patches: 0001-Qualcomm-GPU-support.patch 0002-GPU-monitoring.patch 0003-Battery-name.patch 0004-Qualcomm-battery-power-now.patch 0005-RAM-name.patch 0006-SM8750-Battery.patch 0007-mangoapp-throttle-overlay-to-one-render-per-game-frame.patch

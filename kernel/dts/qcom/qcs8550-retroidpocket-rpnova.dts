@@ -12,15 +12,34 @@
 	compatible = "retroidpocket,rpnova", "qcom,qcs8550", "qcom,sm8550";
 };
 
+/* The panel sets its own brightness over DCS; the RP6's PWM backlight is not wired. */
+&backlight {
+	status = "disabled";
+};
+
+/* The panel's 2.8V rail is enabled from GPIO 143 here, not the RP6's 142. */
+&vdd_disp_2v8 {
+	gpio = <&tlmm 143 GPIO_ACTIVE_HIGH>;
+};
+
 /*
- * 4.5" 1280x960 (4:3) panel on an Ilitek IL97680A, wired NATIVE LANDSCAPE — unlike
- * the RP6's portrait VTDR6130, so the inherited rotation = <270> must go or the
- * compositor would rotate an already-landscape scanout.
+ * 4.5" 1280x960 (4:3) command-mode panel on an Ilitek IL97680A, wired NATIVE
+ * LANDSCAPE — unlike the RP6's portrait VTDR6130, so the inherited rotation = <270>
+ * must go or the compositor would rotate an already-landscape scanout.
  */
 &mdss_dsi0 {
 	panel@0 {
-		compatible = "il97680a,rpnova";
-		/delete-property/ rotation;
+		compatible = "retroidpocket,rpnova-panel";
+		/delete-property/ backlight;
+		/delete-property/ avdd-supply;
+
+		vdd-supply = <&vreg_l11b_1p2>;
+		vddio-supply = <&vreg_l12b_1p8>;
+		vci-supply = <&vreg_l13b_3p0>;
+		vdd18-supply = <&vdd_disp_1v8>;
+		vdd28-supply = <&vdd_disp_2v8>;
+
+		rotation = <0>;
 	};
 };
 

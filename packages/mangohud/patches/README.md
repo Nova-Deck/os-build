@@ -16,6 +16,8 @@ novadeck patches applied on top of the local mangohud PKGBUILD source (MangoHud 
 0005-RAM-name.patch
 0006-SM8750-Battery.patch
 0007-mangoapp-throttle-overlay-to-one-render-per-game-frame.patch
+0008-gpu_fdinfo-skip-unreadable-fdinfo.patch
+0009-mangoapp-show-the-panels-measured-refresh-rate.patch
 ```
 
 `0007` is an upstream MangoHud fix (`2c1dc5283c04`, on master, not in any tag yet), taken
@@ -23,6 +25,20 @@ verbatim. 0.8.4 lost mangoapp's per-frame wait, so after the first frame the ove
 every loop iteration; gamescope does not frame-pace external overlays, so it spins flat-out,
 pushing the game past its fps cap and burning GPU power. The fix re-adds a bounded wait (100 ms,
 so keybinds stay live when frames stop). Drop it on the bump to the first tag that contains it.
+
+`0008` stops a GPU-stats scan from crashing mangoapp. `GPU_fdinfo::find_fd()` walks
+`/proc/<pid>/fdinfo` with the throwing `directory_iterator`; a game that exits mid-scan, or a
+non-dumpable process, throws `filesystem_error` that nothing catches. The `error_code` overloads
+make that pid report nothing until the next rescan. Upstream rewrote `gpu_fdinfo` after 0.8.4, so
+there is no upstream fix to wait for; drop it on the bump that takes the rewrite.
+
+`0009` is upstream `400abfcf81c6`, backported: Display Hz shows the rate the panel actually scans
+out, which gamescope 3.17.0 sends as `scanoutRefreshmHz`, with one decimal, falling back to the
+mode's rate. Under VRR, and on a panel running below nominal, the mode rate is not what the panel
+does. The backport adds the message fields upstream's `22f24cb7` put in front of it (laid out as
+gamescope sends them), and corrects 0.8.4's size check for `msgrcv` not counting `msg_type` —
+copied verbatim, the check never passes for gamescope's 91-byte payload. Drop it on the bump to the
+first tag that contains `400abfcf`.
 
 ## The Qualcomm set (`0001`–`0006`)
 

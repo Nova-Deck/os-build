@@ -1,0 +1,165 @@
+From: Teguh Sobirin <teguh@sobir.in>
+Date: Tue, 8 Sep 2026 22:37:32 +0000
+Subject: [PATCH] wifi: ath12k: survive a failed firmware-crash recovery
+
+Three fixes from one series, squashed. Each closes a NULL or
+use-after-free dereference on the firmware-crash recovery path:
+
+5c301a42fc1d wifi: ath12k: stop touching srngs after the HAL is torn down
+  Mark the rings dead in ath12k_hal_srng_deinit() and check it in the CE
+  send and cleanup paths, so a late transmit or cleanup after a failed
+  recovery does not dereference freed shadow pointers.
+
+ecda60ed15f6 wifi: ath12k: tolerate a missing hwmon device on thermal cleanup
+  A recovery that fails before the thermal devices are re-registered
+  leaves the cleanup to run again on the next crash, where
+  hwmon_device_unregister() would dereference the NULL left behind.
+
+1877d7230554 wifi: ath12k: guard the link peer table against concurrent teardown
+  ath12k_dp_cleanup() destroys the peer rhashtable on a firmware crash
+  while lookups reachable from userspace can still run, giving a NULL
+  dereference in ath12k_dp_link_peer_find_by_addr(). Clear the pointer
+  under dp_lock before the sleeping destroy, and make lookup, insert and
+  remove tolerate its absence.
+
+Source: https://github.com/RetroidPocket/linux (the three commits above)
+Signed-off-by: Teguh Sobirin <teguh@sobir.in>
+---
+diff --git a/drivers/net/wireless/ath/ath12k/ce.c b/drivers/net/wireless/ath/ath12k/ce.c
+index 67bbc6d8d..c46c12571 100644
+--- a/drivers/net/wireless/ath/ath12k/ce.c
++++ b/drivers/net/wireless/ath/ath12k/ce.c
+@@ -8,6 +8,19 @@
+ #include "debug.h"
+ #include "hif.h"
+ 
++/* false once ath12k_hal_srng_deinit() has freed the shadow pointers */
++static bool ath12k_ce_pipe_srng_alive(struct ath12k_base *ab,
++				      struct ath12k_ce_pipe *pipe)
++{
++	struct ath12k_ce_ring *ring;
++
++	ring = pipe->src_ring ? pipe->src_ring : pipe->dest_ring;
++	if (!ring)
++		return false;
++
++	return ab->hal.srng_list[ring->hal_ring_id].initialized;
++}
++
+ static int ath12k_ce_rx_buf_enqueue_pipe(struct ath12k_ce_pipe *pipe,
+ 					 struct sk_buff *skb, dma_addr_t paddr)
+ {
+@@ -434,6 +447,10 @@ int ath12k_ce_send(struct ath12k_base *ab, struct sk_buff *skb, u8 pipe_id,
+ 	u8 byte_swap_data = 0;
+ 	int num_used;
+ 
++	/* a late transmit after the HAL is torn down would oops */
++	if (!ath12k_ce_pipe_srng_alive(ab, pipe))
++		return -ESHUTDOWN;
++
+ 	/* Check if some entries could be regained by handling tx completion if
+ 	 * the CE has interrupts disabled and the used entries is more than the
+ 	 * defined usage threshold.
+@@ -532,6 +549,10 @@ void ath12k_ce_cleanup_pipes(struct ath12k_base *ab)
+ 
+ 	for (pipe_num = 0; pipe_num < ab->hw_params->ce_count; pipe_num++) {
+ 		pipe = &ab->ce.ce_pipe[pipe_num];
++
++		if (!ath12k_ce_pipe_srng_alive(ab, pipe))
++			continue;
++
+ 		ath12k_ce_rx_pipe_cleanup(pipe);
+ 
+ 		/* Cleanup any src CE's which have interrupts disabled */
+diff --git a/drivers/net/wireless/ath/ath12k/dp_peer.c b/drivers/net/wireless/ath/ath12k/dp_peer.c
+index bb5341b42..4158e23cc 100644
+--- a/drivers/net/wireless/ath/ath12k/dp_peer.c
++++ b/drivers/net/wireless/ath/ath12k/dp_peer.c
+@@ -62,6 +62,10 @@ ath12k_dp_link_peer_find_by_addr(struct ath12k_dp *dp, const u8 *addr)
+ {
+ 	lockdep_assert_held(&dp->dp_lock);
+ 
++	/* torn down by ath12k_dp_cleanup() on a crash */
++	if (!dp->rhead_peer_addr)
++		return NULL;
++
+ 	return rhashtable_lookup_fast(dp->rhead_peer_addr, addr,
+ 				      dp->rhash_peer_addr_param);
+ }
+@@ -274,14 +278,21 @@ int ath12k_dp_link_peer_rhash_tbl_init(struct ath12k_dp *dp)
+ 
+ void ath12k_dp_link_peer_rhash_tbl_destroy(struct ath12k_dp *dp)
+ {
++	struct rhashtable *tbl;
++
+ 	guard(mutex)(&dp->link_peer_rhash_tbl_lock);
+ 
+-	if (!dp->rhead_peer_addr)
++	/* clear under dp_lock; rhashtable_destroy() sleeps */
++	scoped_guard(spinlock_bh, &dp->dp_lock) {
++		tbl = dp->rhead_peer_addr;
++		dp->rhead_peer_addr = NULL;
++	}
++
++	if (!tbl)
+ 		return;
+ 
+-	rhashtable_destroy(dp->rhead_peer_addr);
+-	kfree(dp->rhead_peer_addr);
+-	dp->rhead_peer_addr = NULL;
++	rhashtable_destroy(tbl);
++	kfree(tbl);
+ }
+ 
+ static int ath12k_dp_link_peer_rhash_insert(struct ath12k_dp *dp,
+@@ -291,6 +302,9 @@ static int ath12k_dp_link_peer_rhash_insert(struct ath12k_dp *dp,
+ 
+ 	lockdep_assert_held(&dp->dp_lock);
+ 
++	if (!dp->rhead_peer_addr)
++		return -ENOENT;
++
+ 	tmp = rhashtable_lookup_get_insert_fast(dp->rhead_peer_addr, &peer->rhash_addr,
+ 						dp->rhash_peer_addr_param);
+ 	if (!tmp)
+@@ -308,6 +322,9 @@ static int ath12k_dp_link_peer_rhash_remove(struct ath12k_dp *dp,
+ 
+ 	lockdep_assert_held(&dp->dp_lock);
+ 
++	if (!dp->rhead_peer_addr)
++		return 0;
++
+ 	ret = rhashtable_remove_fast(dp->rhead_peer_addr, &peer->rhash_addr,
+ 				     dp->rhash_peer_addr_param);
+ 	if (ret && ret != -ENOENT)
+diff --git a/drivers/net/wireless/ath/ath12k/hal.c b/drivers/net/wireless/ath/ath12k/hal.c
+index f03817b2f..c2f91219e 100644
+--- a/drivers/net/wireless/ath/ath12k/hal.c
++++ b/drivers/net/wireless/ath/ath12k/hal.c
+@@ -764,6 +764,11 @@ int ath12k_hal_srng_init(struct ath12k_base *ab)
+ void ath12k_hal_srng_deinit(struct ath12k_base *ab)
+ {
+ 	struct ath12k_hal *hal = &ab->hal;
++	int i;
++
++	/* Mark the rings dead before freeing what their shadow pointers reference. */
++	for (i = 0; i < HAL_SRNG_RING_ID_MAX; i++)
++		hal->srng_list[i].initialized = 0;
+ 
+ 	ath12k_hal_unregister_srng_lock_keys(hal);
+ 	ath12k_hal_free_cont_rdp(hal);
+diff --git a/drivers/net/wireless/ath/ath12k/thermal.c b/drivers/net/wireless/ath/ath12k/thermal.c
+index 97fc49c40..aff1e4584 100644
+--- a/drivers/net/wireless/ath/ath12k/thermal.c
++++ b/drivers/net/wireless/ath/ath12k/thermal.c
+@@ -260,6 +260,10 @@ static void ath12k_thermal_cleanup_radio(struct ath12k_base *ab, int i)
+ 	if (!ar)
+ 		return;
+ 
++	/* a failed recovery leaves this NULL for the next crash */
++	if (!ar->thermal.hwmon_dev)
++		return;
++
+ 	hwmon_device_unregister(ar->thermal.hwmon_dev);
+ 	ar->thermal.hwmon_dev = NULL;
+ 

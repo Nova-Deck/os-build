@@ -1,0 +1,42 @@
+From: Armada <armada@armada.dev>
+Subject: [PATCH] Input: rsinput: take a UART batch only as far as it fits
+
+rsinput_rx() dropped any serdev callback larger than its 1024-byte
+buffer, and dropped the buffered partial frame whenever the new bytes
+would not fit beside it, yet returned count both times, telling serdev
+every byte had been consumed. A large batch, or a partial frame meeting
+a big one, lost reports.
+
+Accept only the space left and return that. The parser drains complete
+frames and keeps the incomplete tail, and the tty layer passes the
+unconsumed bytes back straight away. The parser always leaves rx_len
+below the buffer size, so each call takes at least one byte.
+
+Adapted to our 0791 reassembly: the change is the same, the context
+(and the warning it removes) is ours.
+---
+diff --git a/drivers/input/joystick/rsinput.c b/drivers/input/joystick/rsinput.c
+index 44e50e680..41452f3bd 100644
+--- a/drivers/input/joystick/rsinput.c
++++ b/drivers/input/joystick/rsinput.c
+@@ -386,14 +386,12 @@ static size_t rsinput_rx(struct serdev_device *serdev, const u8 *data, size_t co
+     if (!drv || !data || count == 0)
+         return count;
+ 
+-    if (count > sizeof(drv->rx_buf)) {
+-        dev_warn_ratelimited(&serdev->dev, "RX burst too long: %zu\n", count);
+-        drv->rx_len = 0;
+-        return count;
+-    }
+-
+-    if (drv->rx_len + count > sizeof(drv->rx_buf))
+-        drv->rx_len = 0;
++    /*
++     * Take only what fits and report that; serdev hands back the rest
++     * once the frames below have drained the buffer. The parser always
++     * leaves rx_len below the buffer size, so at least a byte fits.
++     */
++    count = min(count, sizeof(drv->rx_buf) - drv->rx_len);
+ 
+     memcpy(drv->rx_buf + drv->rx_len, data, count);
+     drv->rx_len += count;

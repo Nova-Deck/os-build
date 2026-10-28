@@ -71,7 +71,7 @@ replies — lore was not reachable, so "never posted" means no patchwork hit). `
 trees (msm-next, qcom `clk-for-7.4` / `arm64-for-7.4`, pci `next`). Re-audit on
 every bump: this table is a snapshot, the `Drop when` column is what to re-check.
 
-Totals: 5 `mainline`, 17 `posted`, 23 `novadeck`, 106 `community`. (`0310` and `0430` were
+Totals: 5 `mainline`, 18 `posted`, 23 `novadeck`, 108 `community`. (`0310` and `0430` were
 deleted at the 7.2.8 bump: stable backported both, byte-identical; the `0430` slot is reused
 by the SM8750 DSI reparent-on-power-off patch, a different change.) Half the stack will
 never land upstream, which is why provenance is a table and not a number band.
@@ -104,6 +104,7 @@ taken for issue #122 — see the `0780`–`0796` rows.
 | `0260` | community | armada `0622` (PR #662). Not posted. Masks `GMU2HOST_INTR_MASK` before the GMU boots, so resume replies do not raise the HFI irq. | with `0250`, or when mainline programs the mask before `a6xx_hfi_start()` |
 | `0265` | community | gennro, Kettle Linux `1180`, body byte-identical. On GMU-bandwidth-voting GPUs (A740, A750) the boot bus vote set at resume was never dropped, holding DDR at the boot OPP's bandwidth while the GPU stays powered (measured on the Pocket FIT: GPU `ebi` peak 8.17 GB/s whenever active). | when mainline drops the boot vote |
 | `0270` | community | virtudude, via Kettle Linux `1210`, body byte-identical. `msm_gpu_convert_priority()` inverts the within-ring order (userspace 2 → `DRM_SCHED_PRIORITY_KERNEL`, 0 → `NORMAL`), so on one ring a Turnip queue (a game) outranks freedreno GL (Xwayland, the Steam UI) and can starve it. Matters most on the single-ring A650, where the game-priority layer cannot move games to another ring. | when upstreamed |
+| `0275` | posted | Rob Clark `<20260912150915.28700-1-robin.clark@oss.qualcomm.com>`, Reviewed-by Konrad Dybcio + Akhil P Oommen; no "applied" reply on the thread as of 2026-10-28. GMU firmware init timeout 10 ms → 100 ms (kgsl's value): init occasionally runs past 10 ms, and "GMU firmware initialization timed out" wedges the GPU from there. Every SoC we ship. | when it reaches our pin |
 | `0280` | community | ROCKNIX SM8750 `0049`: the A830 (A8xx gen80000) catalog entry. Upstream A8xx support exists; this catalog row does not (as of the pin). | when the A830 catalog lands upstream |
 | `0330` | posted | Dmitry Baryshkov v4 `<20261003-fd-kms-fix-smmu-v4-0-2a44d4d8ac77@oss.qualcomm.com>` (we take 1–3, 5–9 of 10; skip MDP5-only 4 and drm/ci 10), latest. Replaced v3 on 2026-10-12: 3/10 now queues and schedules a retired framebuffer under one lock so vblank-off cannot free it in between; 5/6 add CWB/CDM reservation clears. v4 names a prerequisite, "KMS destroy fixes" `<20261003-msm-kms-destroy-fixes-v1-*>` (init/teardown error paths), which we do not carry. Not in msm-next. | when merged |
 | `0340` | community | tiopex, ROCKNIX `ec3d53baac` (generic part split into ROCKNIX `0013-drm-msm-dpu-fix-inline-rotation`). Never posted; the width/height check, `test_bit` and CW/CCW fixes are real mainline bugs. | when the generic fixes are sent and merged |
@@ -171,6 +172,7 @@ taken for issue #122 — see the `0780`–`0796` rows.
 | `0785` | community | ROCKNIX SM8750 `1001`, the V5 rebase of the old SM8550 `1002` sine support; body regenerated here against `0780` (same hunks, git-diff format). | with `0780` |
 | `0790` | community | Gianni Spadoni's rsinput FF bridge as rebased by armada (`1002-input-rsinput-sm8750-ff`), byte-identical: gated on the `rumble-haptics` DT property (set in `qcs8550-ayn-common.dtsi` + `cq8725s-ayn-common.dtsi`) so a combined kernel does not hand FF to rsinput boards without the Qualcomm haptics block. ROCKNIX's own SM8750 `1002` has a malformed final hunk — do not take it. | with `0780` |
 | `0791` | novadeck | Written here for `0745`, after Kettle Linux `1100` (armada `0515`) and `1380`; resyncs a byte on a bad checksum instead of skipping the claimed frame length. Never posted. | with `0745` |
+| `0792` | community | armada `0515a` (PR #801), regenerated on `0791`: take a serdev batch only as far as the buffer has room and return that count, instead of dropping an oversized batch (or the buffered partial frame) while reporting it consumed. Never posted. | with `0745` |
 | `0795` | community | armada `1003`, rsinput struct + suspend hunks regenerated: fixes the reproduced "scheduling while atomic" hard-lock on rumble stop (issue #128; ROCKNIX still carries the bug). Bridge is mutex-serialized process context; rsinput playback defers to a work item. The original's rsinput dev-PM suspend hunk is dropped — our rsinput has no PM ops and sleep is a userspace cgroup freeze. Supersedes gh123man's deferral (ROCKNIX PR #3116) this slot used to carry. | with `0780` |
 | `0796` | community | armada `1004` (virtudude), byte-identical. A zero-amplitude update erases the effect at once instead of braking 5 s later; balances the V5 driver's transient runtime-PM reference on in-place gain updates. | with `0780` |
 | `0800` | mainline | Kumar Anurag v1 `<20260616151252.3599089-2-kumar.singh@oss.qualcomm.com>` → `d858770e86e7` (v7.3-rc1). No `Fixes:`/stable tag, so 7.2.y will not get it. Also in ROCKNIX PR #3396. | v7.3 |
@@ -214,6 +216,7 @@ taken for issue #122 — see the `0780`–`0796` rows.
 | `1021` | community | armada `1021`: ath12k single-pdev frequency-range fix, under our `1010`/`1015` scan stack. | when upstreamed |
 | `1022` | community | armada `1022`: split WCN7860 scans by firmware-reported ranges. | with `1002` |
 | `1023` | community | armada `1023`: protect TX during associated-range scans. | when upstreamed |
+| `1025` | community | Teguh Sobirin, RetroidPocket/linux `5c301a42fc1d` + `ecda60ed15f6` + `1877d7230554`, squashed, via armada `1154`–`1156` (PR #801), bodies identical. NULL/use-after-free guards on the firmware-crash recovery path (srngs after HAL teardown, thermal hwmon cleanup, link-peer table). Not on linux-wireless patchwork. | when upstreamed |
 | `1030` | community | spycat88, ROCKNIX `0071`. A hack. | never |
 | `1040` | community | Kars Mulder's Linux-Pollrate-Patch via ROCKNIX `0506`. | never |
 | `1042` | community | Anze, ROCKNIX SM8750 `0509`: restore the pre-`0c8ee850572` ucsi behaviour — clear the USB role when the partner advertises no USB data — on ports without the USB4_IMPLIES_USB quirk (our pmic_glink UCSI ports on every SoC). Peer motivation is a suspend hard-hang we cannot hit; the stale role on charger-only partners is wrong regardless. | when the upstream regression is fixed |

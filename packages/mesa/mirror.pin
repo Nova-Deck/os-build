@@ -29,4 +29,4 @@
 # it). fetch-source.sh then behaves exactly as the builds did before a mirror existed -- upstream
 # or a clear failure -- rather than pretending to have a fallback. Getting the value WRONG costs a
 # 404 on the fallback path only; it can never produce a wrong build.
-sha512: 08c7d7ea426ddfb0f7bc51b06e18c363a4d31cf1a8b203828bb455eda0189e41d2215eb9f627585ed11e0d0f231a6a8c9f0c7176238760cd76b62e20c35ccd6a
+sha512: 0959679a8e9560a36d63bfc67357c73fde6fd98b00c29859ab30b31454b9ef8c8def38c7e180b168fd39080681042559dfc4a4252dfb289930a9776e0243c2dc

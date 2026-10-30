@@ -13,10 +13,10 @@ init path untouched.
 Signed-off-by: ROCKNIX <dev@rocknix.org>
 ---
 diff --git a/drivers/gpu/drm/panel/Kconfig b/drivers/gpu/drm/panel/Kconfig
-index 3bea8d9..0b97fe6 100644
+index 767c319..9e57c38 100644
 --- a/drivers/gpu/drm/panel/Kconfig
 +++ b/drivers/gpu/drm/panel/Kconfig
-@@ -1381,6 +1381,18 @@ config DRM_PANEL_AYANEO_WT0600_2K
+@@ -1495,6 +1495,18 @@ config DRM_PANEL_AYANEO_WT0600_2K
  
  	  To compile this driver as a module, choose M here.
  
@@ -36,10 +36,10 @@ index 3bea8d9..0b97fe6 100644
  	tristate "Xinpeng XPP055C272 panel driver"
  	depends on OF
 diff --git a/drivers/gpu/drm/panel/Makefile b/drivers/gpu/drm/panel/Makefile
-index 3670d6b..7809502 100644
+index 9472a29..a9da1cc 100644
 --- a/drivers/gpu/drm/panel/Makefile
 +++ b/drivers/gpu/drm/panel/Makefile
-@@ -136,4 +136,5 @@ obj-$(CONFIG_DRM_PANEL_VISIONOX_VTDR6130_COG) += panel-visionox-vtdr6130-cog.o
+@@ -144,4 +144,5 @@ obj-$(CONFIG_DRM_PANEL_VISIONOX_VTDR6130) += panel-visionox-vtdr6130.o
  obj-$(CONFIG_DRM_PANEL_VISIONOX_R66451) += panel-visionox-r66451.o
  obj-$(CONFIG_DRM_PANEL_WIDECHIPS_WS2401) += panel-widechips-ws2401.o
  obj-$(CONFIG_DRM_PANEL_AYANEO_WT0600_2K) += panel-wt0600-2k.o
@@ -47,10 +47,10 @@ index 3670d6b..7809502 100644
  obj-$(CONFIG_DRM_PANEL_XINPENG_XPP055C272) += panel-xinpeng-xpp055c272.o
 diff --git a/drivers/gpu/drm/panel/panel-wt0600-1k.c b/drivers/gpu/drm/panel/panel-wt0600-1k.c
 new file mode 100644
-index 0000000..fbf3446
+index 0000000..36ddd62
 --- /dev/null
 +++ b/drivers/gpu/drm/panel/panel-wt0600-1k.c
-@@ -0,0 +1,275 @@
+@@ -0,0 +1,276 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * DRM driver for wt0600 1080p single-DSI video mode panel
@@ -73,6 +73,7 @@ index 0000000..fbf3446
 +#include <drm/drm_connector.h>
 +#include <drm/drm_mipi_dsi.h>
 +#include <drm/drm_modes.h>
++#include <drm/drm_of.h>
 +#include <drm/drm_panel.h>
 +#include <drm/drm_probe_helper.h>
 +
@@ -266,7 +267,7 @@ index 0000000..fbf3446
 +				     "Failed to get reset gpio\n");
 +
 +	/* Get panel orientation */
-+	ret = of_drm_get_panel_orientation(dev->of_node, &ctx->orientation);
++	ret = drm_of_get_panel_orientation(dev->of_node, &ctx->orientation);
 +	if (ret < 0 && ret != -ENODEV)
 +		return dev_err_probe(dev, ret,
 +				     "Failed to get panel orientation\n");
@@ -326,5 +327,3 @@ index 0000000..fbf3446
 +MODULE_AUTHOR("ROCKNIX <dev@rocknix.org>");
 +MODULE_DESCRIPTION("DRM driver for wt0600 1080p single-dsi video mode panel");
 +MODULE_LICENSE("GPL");
--- 
-2.53.0

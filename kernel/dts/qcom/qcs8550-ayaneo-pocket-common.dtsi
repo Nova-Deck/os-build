@@ -1269,7 +1269,7 @@
 	status = "okay";
 };
 
-&pcieport0 {
+&pcie0_port0 {
 	wake-gpios = <&tlmm 96 GPIO_ACTIVE_LOW>;
 	reset-gpios = <&tlmm 94 GPIO_ACTIVE_LOW>;
 
@@ -1397,6 +1397,11 @@
 
 		max-speed = <3200000>;
 	};
+};
+
+/* ipa_fw_mem is deleted above; 7.3 points the (disabled) IPA node at it. */
+&ipa {
+	/delete-property/ memory-region;
 };
 
 &iris {

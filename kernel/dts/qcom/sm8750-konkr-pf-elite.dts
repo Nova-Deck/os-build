@@ -831,6 +831,21 @@
  * (backlight) never appear → panel-ar14 defers on 'avdd' → no display
  * (`ae94000.dsi.0 panel-ar14-144hz: Failed to get supply 'avdd'`). The
  * Odin 3 enables &qupv3_2 too. */
+/*
+ * The speaker amps are BCLK-slaved on SECONDARY MI2S. sc8280xp_snd_hw_params() sets and
+ * enables this clock (sm8750 card data: patch 0820).
+ */
+&q6apmbedai {
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	dai@12 {
+		reg = <SECONDARY_MI2S_RX>;
+		clocks = <&q6prmcc LPASS_CLK_ID_SEC_MI2S_IBIT LPASS_CLK_ATTRIBUTE_COUPLE_NO>;
+		clock-names = "bclk";
+	};
+};
+
 &qupv3_2 {
 	status = "okay";
 
@@ -1467,15 +1482,11 @@
 		 * PAL_DEVICE_OUT_SPEAKER to back_end "MI2S-LPAIF-RX-SECONDARY", and
 		 * the playing-state pad dump shows TLMM 121-124 muxed i2s1 while the
 		 * amps play. A SEC "pll lock fail" here means no MI2S IBIT is enabled
-		 * (patch 0060).
+		 * (the dai@12 bclk under &q6apmbedai, enabled by patch 0820).
 		 * NB the vendor aw-rx-port-id 0x1006 "QUAT" is the amp driver's own
 		 * protection-path bookkeeping, not the PAL route; QUAT intf 3 is
 		 * DSP-rejected; PRIMARY streams but to TLMM i2s0 pads 126-129 that
 		 * stock leaves unmuxed = connected to nothing. */
-		clocks = <&q6prmcc LPASS_CLK_ID_SEC_MI2S_IBIT LPASS_CLK_ATTRIBUTE_COUPLE_NO>;
-		clock-names = "i2s_clk";
-		assigned-clocks = <&q6prmcc LPASS_CLK_ID_SEC_MI2S_IBIT LPASS_CLK_ATTRIBUTE_COUPLE_NO>;
-		assigned-clock-rates = <1536000>;
 		model = "SM8750-KONKR";
 		audio-routing = "IN1_HPHL", "HPHL_OUT",
 				"IN2_HPHR", "HPHR_OUT",

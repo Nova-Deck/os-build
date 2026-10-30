@@ -218,12 +218,6 @@
 		pinctrl-0 = <&lpi_i2s3_active>;
 		pinctrl-names = "default";
 
-		clocks = <&q6prmcc LPASS_CLK_ID_SEN_MI2S_IBIT LPASS_CLK_ATTRIBUTE_COUPLE_NO>;
-		clock-names = "i2s_clk";
-
-		assigned-clocks = <&q6prmcc LPASS_CLK_ID_SEN_MI2S_IBIT LPASS_CLK_ATTRIBUTE_COUPLE_NO>;
-		assigned-clock-rates = <1536000>;
-
 		model = "AYN-Odin2";
 		audio-routing =
 				"IN1_HPHL", "HPHL_OUT",
@@ -884,6 +878,11 @@
 	};
 };
 
+/* ipa_fw_mem is deleted above; 7.3 points the (disabled) IPA node at it. */
+&ipa {
+	/delete-property/ memory-region;
+};
+
 &iris {
 	status = "okay";
 };
@@ -973,7 +972,7 @@
 	status = "okay";
 };
 
-&pcieport0 {
+&pcie0_port0 {
 	wake-gpios = <&tlmm 96 GPIO_ACTIVE_LOW>;
 	reset-gpios = <&tlmm 94 GPIO_ACTIVE_LOW>;
 
@@ -1312,6 +1311,21 @@
 	linux,code = <KEY_VOLUMEDOWN>;
 
 	status = "okay";
+};
+
+/*
+ * The speaker amps are BCLK-slaved on the "Primary MI2S Playback" link, which lands on the
+ * SENARY MI2S pads (lpi_i2s3). sc8280xp_snd_hw_params() sets and enables this clock.
+ */
+&q6apmbedai {
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	dai@10 {
+		reg = <PRIMARY_MI2S_RX>;
+		clocks = <&q6prmcc LPASS_CLK_ID_SEN_MI2S_IBIT LPASS_CLK_ATTRIBUTE_COUPLE_NO>;
+		clock-names = "bclk";
+	};
 };
 
 &qupv3_id_0 {

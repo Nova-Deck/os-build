@@ -1,10 +1,8 @@
-diff -rupbN linux.orig/drivers/power/supply/Kconfig linux/drivers/power/supply/Kconfig
---- linux.orig/drivers/power/supply/Kconfig	2025-09-29 12:48:19.609606572 +0000
 diff --git a/drivers/power/supply/Kconfig b/drivers/power/supply/Kconfig
-index f0ede1c..33e5d47 100644
+index b89ef40..09cc109 100644
 --- a/drivers/power/supply/Kconfig
 +++ b/drivers/power/supply/Kconfig
-@@ -1165,6 +1165,23 @@ config CHARGER_QCOM_SMB2
+@@ -1181,6 +1181,23 @@ config CHARGER_QCOM_SMB2
  	  adds support for the SMB2 switch mode battery charger found
  	  in PMI8998 and related PMICs.
  
@@ -29,10 +27,10 @@ index f0ede1c..33e5d47 100644
  	tristate "Mitsumi MM8013 fuel gauge driver"
  	depends on I2C
 diff --git a/drivers/power/supply/Makefile b/drivers/power/supply/Makefile
-index 31fe4a1..92376e5 100644
+index f3c0d10..96aa33b 100644
 --- a/drivers/power/supply/Makefile
 +++ b/drivers/power/supply/Makefile
-@@ -130,6 +130,8 @@ obj-$(CONFIG_CHARGER_SURFACE)	+= surface_charger.o
+@@ -132,6 +132,8 @@ obj-$(CONFIG_CHARGER_SURFACE)	+= surface_charger.o
  obj-$(CONFIG_BATTERY_CHARGER_SURFACE_RT) += surface-rt-ec.o
  obj-$(CONFIG_BATTERY_UG3105)	+= ug3105_battery.o
  obj-$(CONFIG_CHARGER_QCOM_SMB2)	+= qcom_smbx.o
@@ -1415,10 +1413,10 @@ index 0000000..41bbdb9
 +MODULE_LICENSE("GPL v2");
 diff --git a/drivers/power/supply/qcom_pm8150b_charger.c b/drivers/power/supply/qcom_pm8150b_charger.c
 new file mode 100644
-index 0000000..24370d2
+index 0000000..ba5300f
 --- /dev/null
 +++ b/drivers/power/supply/qcom_pm8150b_charger.c
-@@ -0,0 +1,950 @@
+@@ -0,0 +1,951 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * Copyright (c) 2024, Teguh Sobirin <teguh@sobir.in>.
@@ -2369,3 +2367,4 @@ index 0000000..24370d2
 +MODULE_AUTHOR("Caleb Connolly <caleb.connolly@linaro.org>");
 +MODULE_DESCRIPTION("Qualcomm SMB5 Charger Driver");
 +MODULE_LICENSE("GPL");
++MODULE_IMPORT_NS("IIO_CONSUMER");

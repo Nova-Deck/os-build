@@ -1,8 +1,8 @@
 diff --git a/drivers/gpu/drm/panel/Kconfig b/drivers/gpu/drm/panel/Kconfig
-index fd84cd1..89ad88e 100644
+index 9e57c38..3903345 100644
 --- a/drivers/gpu/drm/panel/Kconfig
 +++ b/drivers/gpu/drm/panel/Kconfig
-@@ -1417,6 +1417,15 @@ config DRM_PANEL_VISIONOX_VTDR6130
+@@ -1473,6 +1473,15 @@ config DRM_PANEL_VISIONOX_VTDR6130
  	  Say Y here if you want to enable support for Visionox
  	  VTDR6130 1080x2400 AMOLED DSI panel.
  
@@ -19,10 +19,10 @@ index fd84cd1..89ad88e 100644
  	tristate "Widechips WS2401 DPI panel driver"
  	depends on SPI && GPIOLIB
 diff --git a/drivers/gpu/drm/panel/Makefile b/drivers/gpu/drm/panel/Makefile
-index 21789dd..3f13b37 100644
+index a9da1cc..5fa1c84 100644
 --- a/drivers/gpu/drm/panel/Makefile
 +++ b/drivers/gpu/drm/panel/Makefile
-@@ -136,6 +136,7 @@ obj-$(CONFIG_DRM_PANEL_VISIONOX_G2647FB105) += panel-visionox-g2647fb105.o
+@@ -141,6 +141,7 @@ obj-$(CONFIG_DRM_PANEL_VISIONOX_G2647FB105) += panel-visionox-g2647fb105.o
  obj-$(CONFIG_DRM_PANEL_VISIONOX_RM69299) += panel-visionox-rm69299.o
  obj-$(CONFIG_DRM_PANEL_VISIONOX_RM692E5) += panel-visionox-rm692e5.o
  obj-$(CONFIG_DRM_PANEL_VISIONOX_VTDR6130) += panel-visionox-vtdr6130.o
@@ -32,10 +32,10 @@ index 21789dd..3f13b37 100644
  obj-$(CONFIG_DRM_PANEL_AYANEO_WT0600_2K) += panel-wt0600-2k.o
 diff --git a/drivers/gpu/drm/panel/panel-visionox-vtdr6130-cog.c b/drivers/gpu/drm/panel/panel-visionox-vtdr6130-cog.c
 new file mode 100644
-index 0000000..798f31f
+index 0000000..891a273
 --- /dev/null
 +++ b/drivers/gpu/drm/panel/panel-visionox-vtdr6130-cog.c
-@@ -0,0 +1,499 @@
+@@ -0,0 +1,500 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * Visionox VTDR6130 COG Driver IC panels driver
@@ -59,6 +59,7 @@ index 0000000..798f31f
 +#include <drm/drm_crtc.h>
 +#include <drm/drm_mipi_dsi.h>
 +#include <drm/drm_modes.h>
++#include <drm/drm_of.h>
 +#include <drm/drm_panel.h>
 +
 +struct panel_info {
@@ -486,7 +487,7 @@ index 0000000..798f31f
 +
 +	pinfo->dsi = dsi;
 +	mipi_dsi_set_drvdata(dsi, pinfo);
-+	ret = of_drm_get_panel_orientation(dev->of_node, &pinfo->orientation);
++	ret = drm_of_get_panel_orientation(dev->of_node, &pinfo->orientation);
 +	if (ret < 0) {
 +		dev_err(dev, "%pOF: failed to get orientation %d\n", dev->of_node, ret);
 +		return ret;

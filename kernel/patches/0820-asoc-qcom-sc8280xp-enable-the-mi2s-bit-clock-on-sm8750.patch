@@ -1,0 +1,35 @@
+From: Philippe Simons <simons.philippe@gmail.com>
+Subject: [PATCH] ASoC: qcom: sc8280xp: enable the MI2S bit clock on SM8750
+
+The AYN Odin 3 and the KONKR Pocket FIT Elite drive BCLK-slaved speaker
+amps (aw88261) from SECONDARY MI2S. Without BCLK leaving the SoC the amps
+report "check pll lock fail, cannot start". The sm8450/sm8550/sm8650 card
+data already set mi2s_bclk_enable, which makes sc8280xp_snd_hw_params()
+program and enable the per-DAI "bclk" clock from the q6apm DAI node; the
+sm8750 data does not. Set it.
+
+The clock only exists where a board declares it (dai@... clocks/
+clock-names = "bclk" under q6apmbedai), so boards without one are
+unaffected: q6i2s_set_sysclk() is a no-op on a NULL clock. codec_dai_fmt is
+deliberately left unset, as before.
+
+Replaces our former 0820 (card-level "i2s_clk", PRIMARY only) and 0825
+(the same widened to every MI2S BE): upstream 7.3 carries the per-DAI
+MI2S clock control (088c4404b3d7, cc8495c1d45a) those patches stood in for.
+---
+ sound/soc/qcom/sc8280xp.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/sound/soc/qcom/sc8280xp.c b/sound/soc/qcom/sc8280xp.c
+index 4d48e10..d5859fb 100644
+--- a/sound/soc/qcom/sc8280xp.c
++++ b/sound/soc/qcom/sc8280xp.c
+@@ -556,6 +556,8 @@ static const struct qcom_snd_soc_common sm8750_priv_data = {
+ 	.dapm_widgets = sc8280xp_dapm_widgets,
+ 	.num_dapm_widgets = ARRAY_SIZE(sc8280xp_dapm_widgets),
+ 	.wcd_jack = true,
++	/* I2S connected to BCLK-slaved speaker amps */
++	.mi2s_bclk_enable = true,
+ };
+ 
+ static const struct of_device_id snd_sc8280xp_dt_match[] = {

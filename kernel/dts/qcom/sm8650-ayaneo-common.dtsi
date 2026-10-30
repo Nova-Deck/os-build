@@ -267,8 +267,16 @@
 		pinctrl-names = "default";
 	};
 
+	/*
+	 * Both boards' speakers sit on WSA2 only. The ayaneo,pocket-s2-sndcard card maps the
+	 * stereo stream onto the WSA2 channels (mainline 62dc2554d36d) and pairs with the
+	 * WSA-typed topology linux-firmware ships for this board. The Pocket FIT shares the
+	 * S2's audio path, so both boards are the same card and model, and load the same
+	 * topology (qcom/ayaneo-ps2/SM8650-APS2-tplg.bin) and UCM profile.
+	 */
 	sound_card: sound {
-		compatible = "qcom,sm8650-sndcard", "qcom,sm8450-sndcard";
+		compatible = "ayaneo,pocket-s2-sndcard";
+		model = "SM8650-APS2";
 		audio-routing = "SpkrLeft IN", "WSA_SPK1 OUT",
 				"SpkrRight IN", "WSA_SPK2 OUT",
 				"IN1_HPHL", "HPHL_OUT",
@@ -927,6 +935,11 @@
 
 		status = "okay";
 	};
+};
+
+/* ipa_fw_mem is deleted above; 7.3 points the (disabled) IPA node at it. */
+&ipa {
+	/delete-property/ memory-region;
 };
 
 &iris {

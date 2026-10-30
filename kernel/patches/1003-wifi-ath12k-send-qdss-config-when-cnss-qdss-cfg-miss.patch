@@ -19,7 +19,7 @@ Signed-off-by: Gianni Spadoni <me@gio.blue>
  3 files changed, 225 insertions(+)
 
 diff --git a/drivers/net/wireless/ath/ath12k/hw.h b/drivers/net/wireless/ath/ath12k/hw.h
-index 8d2fa0bfb..278215c30 100644
+index 011bb22..35a9241 100644
 --- a/drivers/net/wireless/ath/ath12k/hw.h
 +++ b/drivers/net/wireless/ath/ath12k/hw.h
 @@ -96,6 +96,7 @@ struct ieee80211_rx_status;
@@ -31,10 +31,10 @@ index 8d2fa0bfb..278215c30 100644
  #define ATH12K_REGDB_FILE_NAME		"regdb.bin"
  
 diff --git a/drivers/net/wireless/ath/ath12k/qmi.c b/drivers/net/wireless/ath/ath12k/qmi.c
-index fd762b5d7..49a65a44b 100644
+index 280e50a..8c7c193 100644
 --- a/drivers/net/wireless/ath/ath12k/qmi.c
 +++ b/drivers/net/wireless/ath/ath12k/qmi.c
-@@ -1582,6 +1582,113 @@ static const struct qmi_elem_info qmi_wlanfw_bdf_download_resp_msg_v01_ei[] = {
+@@ -1619,6 +1619,113 @@ static const struct qmi_elem_info qmi_wlanfw_bdf_download_resp_msg_v01_ei[] = {
  	},
  };
  
@@ -148,7 +148,7 @@ index fd762b5d7..49a65a44b 100644
  static const struct qmi_elem_info qmi_wlanfw_m3_info_req_msg_v01_ei[] = {
  	{
  		.data_type	= QMI_UNSIGNED_8_BYTE,
-@@ -3403,6 +3510,94 @@ int ath12k_qmi_wlanfw_aux_uc_info_send(struct ath12k_base *ab)
+@@ -3430,6 +3537,94 @@ int ath12k_qmi_wlanfw_aux_uc_info_send(struct ath12k_base *ab)
  	return ret;
  }
  
@@ -241,9 +241,9 @@ index fd762b5d7..49a65a44b 100644
 +}
 +
  static int ath12k_qmi_wlanfw_mode_send(struct ath12k_base *ab,
- 				       u32 mode)
+ 				       enum ath12k_qmi_firmware_mode mode)
  {
-@@ -3808,6 +4003,14 @@ int ath12k_qmi_event_load_bdf(struct ath12k_qmi *qmi)
+@@ -3835,6 +4030,14 @@ int ath12k_qmi_event_load_bdf(struct ath12k_qmi *qmi)
  		}
  	}
  
@@ -259,10 +259,10 @@ index fd762b5d7..49a65a44b 100644
  }
  
 diff --git a/drivers/net/wireless/ath/ath12k/qmi.h b/drivers/net/wireless/ath/ath12k/qmi.h
-index 2a63e214e..6cb557746 100644
+index 6da10f3..614e4fe 100644
 --- a/drivers/net/wireless/ath/ath12k/qmi.h
 +++ b/drivers/net/wireless/ath/ath12k/qmi.h
-@@ -528,6 +528,27 @@ struct qmi_wlanfw_bdf_download_resp_msg_v01 {
+@@ -514,6 +514,27 @@ struct qmi_wlanfw_bdf_download_resp_msg_v01 {
  	struct qmi_response_type_v01 resp;
  };
  
@@ -288,5 +288,5 @@ index 2a63e214e..6cb557746 100644
 +};
 +
  #define QMI_WLANFW_M3_INFO_REQ_MSG_V01_MAX_MSG_LEN	18
- #define QMI_WLANFW_M3_INFO_RESP_MSG_V01_MAX_MSG_LEN	7
- #define QMI_WLANFW_M3_INFO_RESP_V01		0x003C
+ #define QMI_WLANFW_M3_INFO_REQ_V01		0x003C
+ 

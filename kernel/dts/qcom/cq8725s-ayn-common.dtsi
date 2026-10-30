@@ -123,12 +123,6 @@
 		pinctrl-0 = <&i2s1_default>;
 		pinctrl-names = "default";
 
-		clocks = <&q6prmcc LPASS_CLK_ID_SEC_MI2S_IBIT LPASS_CLK_ATTRIBUTE_COUPLE_NO>;
-		clock-names = "i2s_clk";
-
-		assigned-clocks = <&q6prmcc LPASS_CLK_ID_SEC_MI2S_IBIT LPASS_CLK_ATTRIBUTE_COUPLE_NO>;
-		assigned-clock-rates = <1536000>;
-
 		model = "SM8750-AYN";
 		audio-routing = 
 				"IN1_HPHL", "HPHL_OUT",
@@ -1258,6 +1252,21 @@
 
 	vdd18-supply = <&vreg_l15b_1p8>;
 	vdd3-supply = <&vreg_l5b_3p1>;
+};
+
+/*
+ * The speaker amps are BCLK-slaved on SECONDARY MI2S. sc8280xp_snd_hw_params() sets and
+ * enables this clock (sm8750 card data: patch 0820).
+ */
+&q6apmbedai {
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	dai@12 {
+		reg = <SECONDARY_MI2S_RX>;
+		clocks = <&q6prmcc LPASS_CLK_ID_SEC_MI2S_IBIT LPASS_CLK_ATTRIBUTE_COUPLE_NO>;
+		clock-names = "bclk";
+	};
 };
 
 &qupv3_1 {

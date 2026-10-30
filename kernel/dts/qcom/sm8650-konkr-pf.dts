@@ -64,10 +64,6 @@
 			"qcom/sm8650/konkr/pf/cdsp_dtb.mbn";
 };
 
-&sound_card {
-	model = "SM8650-KPF";
-};
-
 /*
  * Touchscreen: ChipOne ICNL9922C TDDI controller.
  *

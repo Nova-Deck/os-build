@@ -13,9 +13,11 @@ From ROCKNIX SM8750 0518 (Jacob Cook), rebased onto our 0530-0532 icna35xx
 driver: the live-reprogram guard uses panel.prepared (their tree has a
 local enabled flag ours dropped with .get_brightness).
 
+diff --git a/drivers/gpu/drm/panel/panel-chipone-icna35xx.c b/drivers/gpu/drm/panel/panel-chipone-icna35xx.c
+index 2216e94..11150fc 100644
 --- a/drivers/gpu/drm/panel/panel-chipone-icna35xx.c
 +++ b/drivers/gpu/drm/panel/panel-chipone-icna35xx.c
-@@ -33,6 +33,10 @@
+@@ -34,6 +34,10 @@ struct panel_info {
  	struct gpio_desc *reset_gpio;
  	struct regulator_bulk_data *supplies;
  	struct drm_panel_bl_levels bl_levels;
@@ -26,7 +28,7 @@ local enabled flag ours dropped with .get_brightness).
  };
  
  struct panel_desc {
-@@ -53,6 +57,9 @@
+@@ -54,6 +58,9 @@ struct panel_desc {
  	unsigned int bl_num_interp;
  
  	struct drm_dsc_config dsc;
@@ -36,7 +38,7 @@ local enabled flag ours dropped with .get_brightness).
  };
  
  static const struct regulator_bulk_data panel_supplies[] = {
-@@ -174,6 +181,34 @@
+@@ -175,6 +182,34 @@ static int icna3512_init_sequence(struct panel_info *pinfo)
  	return dsi_ctx.accum_err;
  }
  
@@ -71,7 +73,7 @@ local enabled flag ours dropped with .get_brightness).
  static int icna3520_init_sequence(struct panel_info *pinfo)
  {
  	struct mipi_dsi_multi_context dsi_ctx = { .dsi = pinfo->dsi };
-@@ -194,19 +229,8 @@
+@@ -195,19 +230,8 @@ static int icna3520_init_sequence(struct panel_info *pinfo)
  
  	mipi_dsi_msleep(&dsi_ctx, 120);
  
@@ -93,7 +95,7 @@ local enabled flag ours dropped with .get_brightness).
  
  	mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0x9F, 0x01);
  	mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0xB2, 0x00);
-@@ -527,6 +551,8 @@
+@@ -528,6 +552,8 @@ static struct panel_desc icna3520_desc = {
  	.format = MIPI_DSI_FMT_RGB888,
  	.mode_flags =  MIPI_DSI_MODE_NO_EOT_PACKET | MIPI_DSI_CLOCK_NON_CONTINUOUS | MIPI_DSI_MODE_LPM,
  	.init_sequence = icna3520_init_sequence,
@@ -102,7 +104,7 @@ local enabled flag ours dropped with .get_brightness).
  	.bl_levels = icna35xx_bl_levels,
  	.num_bl_levels = ARRAY_SIZE(icna35xx_bl_levels),
  	.bl_num_interp = 32,
-@@ -787,6 +813,86 @@
+@@ -788,6 +814,86 @@ static struct backlight_device *icna35xx_create_backlight(struct mipi_dsi_device
  					      &icna35xx_bl_ops, &props);
  }
  
@@ -189,7 +191,7 @@ local enabled flag ours dropped with .get_brightness).
  static int icna35xx_probe(struct mipi_dsi_device *dsi)
  {
  	struct device *dev = &dsi->dev;
-@@ -814,6 +920,16 @@
+@@ -815,6 +921,16 @@ static int icna35xx_probe(struct mipi_dsi_device *dsi)
  
  	pinfo->dsi = dsi;
  	mipi_dsi_set_drvdata(dsi, pinfo);
@@ -203,6 +205,6 @@ local enabled flag ours dropped with .get_brightness).
 +			return ret;
 +	}
 +
- 	ret = of_drm_get_panel_orientation(dev->of_node, &pinfo->orientation);
+ 	ret = drm_of_get_panel_orientation(dev->of_node, &pinfo->orientation);
  	if (ret < 0) {
  		dev_err(dev, "%pOF: failed to get orientation %d\n", dev->of_node, ret);

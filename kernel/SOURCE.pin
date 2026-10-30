@@ -136,6 +136,12 @@ git_commit: 79a907609d53d5cd645b42c11550d295d43abf99
 # races the secure world for the engine and is slower than the CPU. Unsettable, so DELETED from
 # kernel.config (the config gate caught it as the one y-requested, n-resolved line). Nothing we
 # run needs it; the ARMv8 CE ciphers do the work. (1080, its runtime-PM patch, went upstream too.)
+# The driver going does NOT take the DT node with it: every SoC's `crypto` node is enabled and lists
+# interconnects, so with no driver to bind it fw_devlink holds the interconnect providers' sync_state
+# forever ("sync_state() pending due to 1dfa000.crypto") and every NoC node stays at INT_MAX —
+# saturated BCM votes on all four SoCs. On the Odin 3 that broke every panel off->on (the DSI
+# command DMA's read never returned). `&crypto { status = "disabled"; }` in every board's common
+# dtsi (8 files, all 23 dtbs checked). Keep the driver and the node in step if QCE ever returns.
 # BUILD: green in the container, Image + 23 dtbs + modules (7.3.1) staged. After olddefconfig,
 # ALL 449 requested directives (393 values + 56 `is not set`) asserted against the final
 # .config: zero mismatches once QCE was dropped.
@@ -148,6 +154,16 @@ git_commit: 79a907609d53d5cd645b42c11550d295d43abf99
 #     (dai@12 bclk + 0820). A "pll lock fail" from the aw88xxx amps = no BCLK.
 #   - GPU bring-up on every SoC (0120 floor without the retention flag; 0230 now upstream's).
 #   - SM8250 pm8150b charging (0910 behind the IIO namespace).
+#
+# HW GATE so far, 2026-10-30/31 (dev cards). PASS: Pocket ACE (panel, speakers), Pocket FIT and
+# Pocket S2 (speakers, after the APS2 UCM fix), Thor Lite (speakers), Pocket Max (icna35xx panel,
+# speakers), Odin 3 (icna35xx panel, SEC MI2S speakers, A830 rendering). The Odin 3 panel died on
+# every off->on and power-off hung until the crypto node was disabled (above); with it: 4/4 clean
+# session teardowns, 5/5 DPMS cycles, sleep/wake and long-press shutdown by hand. 7.2.11 had no
+# such failure only because QCE was built in. That card also carried a command-mode CTL-cleanup
+# patch, since dropped as not needed: the Odin 3 off->on re-run WITHOUT it is owed. Still owed:
+# Odin 2 / Thor / FIT Elite speakers,
+# Portal panel, S2/FIT headphones + DP audio, GPU on SM8550/SM8650/SM8250, SM8250 charging.
 #
 # ============ 7.2.11 — PINNED 2026-10-15 (issue #117), HW GATE OWED ============
 #

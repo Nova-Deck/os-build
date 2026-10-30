@@ -1,7 +1,8 @@
-diff -rupbN linux.orig/drivers/gpu/drm/panel/Kconfig linux/drivers/gpu/drm/panel/Kconfig
---- linux.orig/drivers/gpu/drm/panel/Kconfig	2025-08-29 00:02:39.288684887 +0000
-+++ linux/drivers/gpu/drm/panel/Kconfig	2025-08-29 19:45:04.120111724 +0000
-@@ -37,6 +37,16 @@ config DRM_PANEL_AR02_3INCH
+diff --git a/drivers/gpu/drm/panel/Kconfig b/drivers/gpu/drm/panel/Kconfig
+index 087f5a1..5d59356 100644
+--- a/drivers/gpu/drm/panel/Kconfig
++++ b/drivers/gpu/drm/panel/Kconfig
+@@ -47,6 +47,16 @@ config DRM_PANEL_AR02_3INCH
  	  Say Y here if you want to enable support for Ayaneo Pocket DMG
  	  1080x1240 60hz Panel.
  
@@ -18,21 +19,24 @@ diff -rupbN linux.orig/drivers/gpu/drm/panel/Kconfig linux/drivers/gpu/drm/panel
  config DRM_PANEL_ARM_VERSATILE
  	tristate "ARM Versatile panel driver"
  	depends on OF
-diff -rupbN linux.orig/drivers/gpu/drm/panel/Makefile linux/drivers/gpu/drm/panel/Makefile
---- linux.orig/drivers/gpu/drm/panel/Makefile	2025-08-29 00:02:39.288684887 +0000
-+++ linux/drivers/gpu/drm/panel/Makefile	2025-08-29 19:45:39.516633171 +0000
-@@ -2,6 +2,7 @@
- obj-$(CONFIG_DRM_PANEL_ABT_Y030XX067A) += panel-abt-y030xx067a.o
+diff --git a/drivers/gpu/drm/panel/Makefile b/drivers/gpu/drm/panel/Makefile
+index f90777e..6e8b9bf 100644
+--- a/drivers/gpu/drm/panel/Makefile
++++ b/drivers/gpu/drm/panel/Makefile
+@@ -3,6 +3,7 @@ obj-$(CONFIG_DRM_PANEL_ABT_Y030XX067A) += panel-abt-y030xx067a.o
+ obj-$(CONFIG_DRM_PANEL_ANBERNIC_TD4310) += panel-anbernic-td4310.o
  obj-$(CONFIG_DRM_PANEL_AR06_4INCH) += panel-ar06-4inch.o
  obj-$(CONFIG_DRM_PANEL_AR02_3INCH) += panel-ar02-3inch.o
 +obj-$(CONFIG_DRM_PANEL_AR11_5INCH) += panel-ar11-5inch.o
  obj-$(CONFIG_DRM_PANEL_ARM_VERSATILE) += panel-arm-versatile.o
  obj-$(CONFIG_DRM_PANEL_ASUS_Z00T_TM5P5_NT35596) += panel-asus-z00t-tm5p5-n35596.o
  obj-$(CONFIG_DRM_PANEL_AUO_A030JTN01) += panel-auo-a030jtn01.o
-diff -rupbN linux.orig/drivers/gpu/drm/panel/panel-ar11-5inch.c linux/drivers/gpu/drm/panel/panel-ar11-5inch.c
---- linux.orig/drivers/gpu/drm/panel/panel-ar11-5inch.c	1970-01-01 00:00:00.000000000 +0000
-+++ linux/drivers/gpu/drm/panel/panel-ar11-5inch.c	2025-08-29 21:48:05.618147842 +0000
-@@ -0,0 +1,306 @@
+diff --git a/drivers/gpu/drm/panel/panel-ar11-5inch.c b/drivers/gpu/drm/panel/panel-ar11-5inch.c
+new file mode 100644
+index 0000000..cbf3533
+--- /dev/null
++++ b/drivers/gpu/drm/panel/panel-ar11-5inch.c
+@@ -0,0 +1,307 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +// Copyright (c) 2025 FIXME
 +// Generated with linux-mdss-dsi-panel-driver-generator from vendor device tree:
@@ -46,6 +50,7 @@ diff -rupbN linux.orig/drivers/gpu/drm/panel/panel-ar11-5inch.c linux/drivers/gp
 +
 +#include <drm/drm_mipi_dsi.h>
 +#include <drm/drm_modes.h>
++#include <drm/drm_of.h>
 +#include <drm/drm_panel.h>
 +#include <drm/drm_probe_helper.h>
 +
@@ -285,7 +290,7 @@ diff -rupbN linux.orig/drivers/gpu/drm/panel/panel-ar11-5inch.c linux/drivers/gp
 +			  MIPI_DSI_CLOCK_NON_CONTINUOUS;
 +
 +	/* Orientation */
-+	ret = of_drm_get_panel_orientation(dev->of_node, &ctx->orientation);
++	ret = drm_of_get_panel_orientation(dev->of_node, &ctx->orientation);
 +	if (ret < 0) {
 +		dev_err(dev, "failed to get orientation %d\n", ret);
 +		return ret;

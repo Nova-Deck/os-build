@@ -22,9 +22,11 @@ No 100Hz mode: 0x10 after the 120Hz setup measured 101.5Hz once, but
 switched to live from gamescope the panel's TE ran at 50Hz, from any
 other rate.
 ---
+diff --git a/drivers/gpu/drm/panel/panel-chipone-icna35xx.c b/drivers/gpu/drm/panel/panel-chipone-icna35xx.c
+index 6209853..dddeed9 100644
 --- a/drivers/gpu/drm/panel/panel-chipone-icna35xx.c
 +++ b/drivers/gpu/drm/panel/panel-chipone-icna35xx.c
-@@ -115,9 +115,20 @@
+@@ -114,9 +114,20 @@ static int icna3512_init_sequence(struct panel_info *pinfo)
      mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0x9F, 0x0F);
      mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0xCE, 0x22);
  
@@ -47,7 +49,7 @@ other rate.
  		mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0xB3, 
                  0x00, 0xE0, 0xA0, 0x10, 0xC8, 0x00, 0x02, 0x83, 
                  0x00, 0x10, 0x14, 0x00, 0x00, 0xC3, 0x00, 0x10, 
-@@ -148,6 +159,10 @@
+@@ -147,6 +158,10 @@ static int icna3512_init_sequence(struct panel_info *pinfo)
                  0x01, 0x01, 0x01, 0x01, 0x04, 0x09, 0x2C);
          mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0x48, 0x30);
          mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0x48, 0x00);
@@ -58,7 +60,7 @@ other rate.
  	}
  
  	drm_dsc_pps_payload_pack(&pps, &pinfo->desc->dsc);
-@@ -237,6 +252,46 @@
+@@ -346,6 +361,46 @@ static const struct drm_display_mode icna3512_modes[] = {
  		.vsync_start = 1920 + 2760,
  		.vsync_end = 1920 + 2760 + 1,
  		.vtotal = 1920 + 2760 + 1 + 15,

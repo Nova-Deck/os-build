@@ -16,10 +16,11 @@ so all of it would be dead code here. The tx_inhibited plumbing went with
 the notifier; tx_lock stays, it orders the enable frame against the
 key-config exchanges.
 
-diff -Naur a/drivers/input/misc/Kconfig b/drivers/input/misc/Kconfig
---- a/drivers/input/misc/Kconfig	2026-10-19 12:34:39.504049049 +0200
-+++ b/drivers/input/misc/Kconfig	2026-10-19 12:33:23.052025786 +0200
-@@ -1016,4 +1016,15 @@
+diff --git a/drivers/input/misc/Kconfig b/drivers/input/misc/Kconfig
+index 169768e..111cb6e 100644
+--- a/drivers/input/misc/Kconfig
++++ b/drivers/input/misc/Kconfig
+@@ -1023,4 +1023,15 @@ config INPUT_STPMIC1_ONKEY
  	  To compile this driver as a module, choose M here: the
  	  module will be called stpmic1_onkey.
  
@@ -35,9 +36,23 @@ diff -Naur a/drivers/input/misc/Kconfig b/drivers/input/misc/Kconfig
 +	  module will be called konkr_sysbtn.
 +
  endif
-diff -Naur a/drivers/input/misc/konkr_sysbtn.c b/drivers/input/misc/konkr_sysbtn.c
---- a/drivers/input/misc/konkr_sysbtn.c	1970-01-01 01:00:00.000000000 +0100
-+++ b/drivers/input/misc/konkr_sysbtn.c	2026-10-19 12:33:23.052052767 +0200
+diff --git a/drivers/input/misc/Makefile b/drivers/input/misc/Makefile
+index 1339619..8960460 100644
+--- a/drivers/input/misc/Makefile
++++ b/drivers/input/misc/Makefile
+@@ -52,6 +52,7 @@ obj-$(CONFIG_INPUT_IQS626A)		+= iqs626a.o
+ obj-$(CONFIG_INPUT_IQS7222)		+= iqs7222.o
+ obj-$(CONFIG_INPUT_ISA1200_HAPTIC)	+= isa1200.o
+ obj-$(CONFIG_INPUT_KEYSPAN_REMOTE)	+= keyspan_remote.o
++obj-$(CONFIG_INPUT_KONKR_SYSBTN)	+= konkr_sysbtn.o
+ obj-$(CONFIG_INPUT_KXTJ9)		+= kxtj9.o
+ obj-$(CONFIG_INPUT_M68K_BEEP)		+= m68kspkr.o
+ obj-$(CONFIG_INPUT_MAX7360_ROTARY)	+= max7360-rotary.o
+diff --git a/drivers/input/misc/konkr_sysbtn.c b/drivers/input/misc/konkr_sysbtn.c
+new file mode 100644
+index 0000000..70378d0
+--- /dev/null
++++ b/drivers/input/misc/konkr_sysbtn.c
 @@ -0,0 +1,355 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
@@ -394,14 +409,3 @@ diff -Naur a/drivers/input/misc/konkr_sysbtn.c b/drivers/input/misc/konkr_sysbtn
 +
 +MODULE_DESCRIPTION("KONKR Pocket FIT Elite MCU system buttons");
 +MODULE_LICENSE("GPL");
-diff -Naur a/drivers/input/misc/Makefile b/drivers/input/misc/Makefile
---- a/drivers/input/misc/Makefile	2026-10-19 12:34:39.504077483 +0200
-+++ b/drivers/input/misc/Makefile	2026-10-19 12:33:23.052045173 +0200
-@@ -51,6 +51,7 @@
- obj-$(CONFIG_INPUT_IQS626A)		+= iqs626a.o
- obj-$(CONFIG_INPUT_IQS7222)		+= iqs7222.o
- obj-$(CONFIG_INPUT_KEYSPAN_REMOTE)	+= keyspan_remote.o
-+obj-$(CONFIG_INPUT_KONKR_SYSBTN)	+= konkr_sysbtn.o
- obj-$(CONFIG_INPUT_KXTJ9)		+= kxtj9.o
- obj-$(CONFIG_INPUT_M68K_BEEP)		+= m68kspkr.o
- obj-$(CONFIG_INPUT_MAX7360_ROTARY)	+= max7360-rotary.o

@@ -102,7 +102,7 @@ BOOTSTRAP_PKGS=(base)
 # stack split). bluez/networkmanager being added busts the install-set reuse marker — intended.
 # Audio (SteamOS layer C): PipeWire stack + ALSA UCM2 base. alsa-ucm-conf supplies the
 # /codecs/{wcd939x,qcom-lpass,wsa884x} + /lib snippets that the device UCM2 profiles
-# (audio/ overlay, cards SM8650-APS2/SM8650-KPF) Include; pipewire-pulse/-alsa give the
+# (audio/ overlay, e.g. card SM8650-APS2) Include; pipewire-pulse/-alsa give the
 # PA/ALSA shims so games + BlueZ (A2DP/HFP) route through PipeWire, wireplumber is the
 # session manager. (pipewire-jack omitted — not needed for game/BT audio.)
 # rtkit: REQUIRED for PipeWire to get realtime priority at all. pipewire.conf asks module-rt for

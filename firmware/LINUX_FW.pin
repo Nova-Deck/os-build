@@ -33,6 +33,12 @@ qcom/gmu_gen70900.bin      qcom/gmu_gen70900.bin    9685f62c42543befcaee68d25355
 # A750 zap shader — now OPEN in linux-firmware (qcom/sm8650/), replacing the vendor-image
 # blob previously carried in qcom-firmwares. Shared across all SM8650 boards; embedded.
 qcom/sm8650/gen70900_zap.mbn  qcom/sm8650/gen70900_zap.mbn  04aced0ce55bea7c0c231e275e2d02c385085a7376606638596b2be8599adba1
+# Pocket S2 + Pocket FIT AudioReach topology, one file for both boards. The kernel requests
+# qcom/<card driver_name>/<card model>-tplg.bin, and both boards are the ayaneo,pocket-s2-sndcard
+# card ("ayaneo-ps2") with model SM8650-APS2, so it is installed under that name. Its WSA codec-DMA
+# endpoint is HW_IF_TYPE 2 (WSA), which the card's WSA2 channel map expects; the qcom-firmwares
+# copy it replaces said 7 (WSA2) and only worked behind our dropped 0810.
+qcom/sm8650/ayaneo/ps2/SM8650-APS2-tplg.bin  qcom/ayaneo-ps2/SM8650-APS2-tplg.bin  66e01a76c413928c4e0934a6e3d993c948c4594db693b8dc0c490882e847b81b
 
 # Adreno gen70200 (A740 / SM8550) GPU firmware — also embedded in the kernel Image.
 # NOTE: unlike the A750, the A740 zap shader is OPEN and shipped by linux-firmware under

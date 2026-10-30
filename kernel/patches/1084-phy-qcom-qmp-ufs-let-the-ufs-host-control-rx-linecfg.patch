@@ -16,16 +16,20 @@ Signed-off-by: jaewun <jaewun@users.noreply.github.com>
 [pocknix: 7.2 grew its own POST_CHANGE case (auto-hibern8 HW clk ctrl);
  the LineCfg disable now joins it.]
 
+diff --git a/drivers/phy/qualcomm/phy-qcom-qmp-ufs.c b/drivers/phy/qualcomm/phy-qcom-qmp-ufs.c
+index d4aca22..af4cb29 100644
 --- a/drivers/phy/qualcomm/phy-qcom-qmp-ufs.c
 +++ b/drivers/phy/qualcomm/phy-qcom-qmp-ufs.c
-@@ -14,5 +14,6 @@
+@@ -14,6 +14,7 @@
+ #include <linux/of.h>
  #include <linux/of_address.h>
  #include <linux/phy/phy.h>
 +#include <linux/phy/phy-qcom-qmp-ufs.h>
  #include <linux/platform_device.h>
  #include <linux/regulator/consumer.h>
  #include <linux/reset.h>
-@@ -40,12 +41,16 @@
+@@ -42,6 +43,9 @@
+ 
  #define NUM_OVERLAY				2
  
 +/* QPHY LINECFG_DISABLE bit */
@@ -34,7 +38,7 @@ Signed-off-by: jaewun <jaewun@users.noreply.github.com>
  /* set of registers with offsets different per-PHY */
  enum qphy_reg_layout {
  	/* PCS registers */
- 	QPHY_SW_RESET,
+@@ -49,6 +53,7 @@ enum qphy_reg_layout {
  	QPHY_START_CTRL,
  	QPHY_PCS_READY_STATUS,
  	QPHY_PCS_POWER_DOWN_CONTROL,
@@ -42,7 +46,7 @@ Signed-off-by: jaewun <jaewun@users.noreply.github.com>
  	/* Keep last to ensure regs_layout arrays are properly initialized */
  	QPHY_LAYOUT_SIZE
  };
-@@ -66,6 +71,7 @@ static const unsigned int ufsphy_v4_regs_layout[QPHY_LAYOUT_SIZE] = {
+@@ -70,6 +75,7 @@ static const unsigned int ufsphy_v4_regs_layout[QPHY_LAYOUT_SIZE] = {
  	[QPHY_PCS_READY_STATUS]		= QPHY_V4_PCS_UFS_READY_STATUS,
  	[QPHY_SW_RESET]			= QPHY_V4_PCS_UFS_SW_RESET,
  	[QPHY_PCS_POWER_DOWN_CONTROL]	= QPHY_V4_PCS_UFS_POWER_DOWN_CONTROL,
@@ -50,15 +54,15 @@ Signed-off-by: jaewun <jaewun@users.noreply.github.com>
  };
  
  static const unsigned int ufsphy_v5_regs_layout[QPHY_LAYOUT_SIZE] = {
-@@ -81,6 +87,7 @@ static const unsigned int ufsphy_v6_regs_layout[QPHY_LAYOUT_SIZE] = {
+@@ -84,6 +90,7 @@ static const unsigned int ufsphy_v6_regs_layout[QPHY_LAYOUT_SIZE] = {
  	[QPHY_PCS_READY_STATUS]		= QPHY_V6_PCS_UFS_READY_STATUS,
  	[QPHY_SW_RESET]			= QPHY_V6_PCS_UFS_SW_RESET,
  	[QPHY_PCS_POWER_DOWN_CONTROL]	= QPHY_V6_PCS_UFS_POWER_DOWN_CONTROL,
 +	[QPHY_LINECFG_DISABLE]		= QPHY_V6_PCS_UFS_LINECFG_DISABLE,
  };
  
- static const struct qmp_phy_init_tbl milos_ufsphy_serdes[] = {
-@@ -1920,6 +1927,39 @@ static void qmp_ufs_init(struct qmp_ufs *qmp)
+ static const unsigned int ufsphy_v7_regs_layout[QPHY_LAYOUT_SIZE] = {
+@@ -2058,6 +2065,39 @@ static void qmp_ufs_init_registers(struct qmp_ufs *qmp, const struct qmp_phy_cfg
  		qmp_ufs_init_all(qmp, &cfg->tbls_hs_b);
  }
  
@@ -98,6 +102,48 @@ Signed-off-by: jaewun <jaewun@users.noreply.github.com>
  static int qmp_ufs_power_on(struct phy *phy)
  {
  	struct qmp_ufs *qmp = phy_get_drvdata(phy);
+diff --git a/drivers/ufs/host/ufs-qcom.c b/drivers/ufs/host/ufs-qcom.c
+index b0d8eb5..98123eb 100644
+--- a/drivers/ufs/host/ufs-qcom.c
++++ b/drivers/ufs/host/ufs-qcom.c
+@@ -13,6 +13,7 @@
+ #include <linux/module.h>
+ #include <linux/of.h>
+ #include <linux/phy/phy.h>
++#include <linux/phy/phy-qcom-qmp-ufs.h>
+ #include <linux/platform_device.h>
+ #include <linux/pm_domain.h>
+ #include <linux/reset-controller.h>
+@@ -735,9 +736,15 @@ static int ufs_qcom_link_startup_notify(struct ufs_hba *hba,
+ {
+ 	struct ufs_qcom_host *host = ufshcd_get_variant(hba);
+ 	int err = 0;
++	int linecfg_err;
+ 
+ 	switch (status) {
+ 	case PRE_CHANGE:
++		linecfg_err = qcom_qmp_ufs_ctrl_rx_linecfg(host->generic_phy, true);
++		if (linecfg_err && linecfg_err != -EOPNOTSUPP)
++			dev_warn(hba->dev, "failed to enable RX LineCfg: %d\n",
++				 linecfg_err);
++
+ 		if (ufs_qcom_cfg_timers(hba, false, ULONG_MAX)) {
+ 			dev_err(hba->dev, "%s: ufs_qcom_cfg_timers() failed\n",
+ 				__func__);
+@@ -767,6 +774,10 @@ static int ufs_qcom_link_startup_notify(struct ufs_hba *hba,
+ 		break;
+ 	case POST_CHANGE:
+ 		ufs_qcom_link_startup_post_change(hba);
++		linecfg_err = qcom_qmp_ufs_ctrl_rx_linecfg(host->generic_phy, false);
++		if (linecfg_err && linecfg_err != -EOPNOTSUPP)
++			dev_warn(hba->dev, "failed to disable RX LineCfg: %d\n",
++				 linecfg_err);
+ 		break;
+ 	default:
+ 		break;
+diff --git a/include/linux/phy/phy-qcom-qmp-ufs.h b/include/linux/phy/phy-qcom-qmp-ufs.h
+new file mode 100644
+index 0000000..b756300
 --- /dev/null
 +++ b/include/linux/phy/phy-qcom-qmp-ufs.h
 @@ -0,0 +1,20 @@
@@ -121,41 +167,3 @@ Signed-off-by: jaewun <jaewun@users.noreply.github.com>
 +#endif
 +
 +#endif
---- a/drivers/ufs/host/ufs-qcom.c
-+++ b/drivers/ufs/host/ufs-qcom.c
-@@ -13,6 +13,7 @@
- #include <linux/module.h>
- #include <linux/of.h>
- #include <linux/phy/phy.h>
-+#include <linux/phy/phy-qcom-qmp-ufs.h>
- #include <linux/platform_device.h>
- #include <linux/pm_domain.h>
- #include <linux/reset-controller.h>
-@@ -715,9 +716,16 @@ static int ufs_qcom_link_startup_notify(struct ufs_hba *hba,
- 					enum ufs_notify_change_status status)
- {
-+	struct ufs_qcom_host *host = ufshcd_get_variant(hba);
- 	int err = 0;
-+	int linecfg_err;
- 
- 	switch (status) {
- 	case PRE_CHANGE:
-+		linecfg_err = qcom_qmp_ufs_ctrl_rx_linecfg(host->generic_phy, true);
-+		if (linecfg_err && linecfg_err != -EOPNOTSUPP)
-+			dev_warn(hba->dev, "failed to enable RX LineCfg: %d\n",
-+				 linecfg_err);
-+
- 		if (ufs_qcom_cfg_timers(hba, false, ULONG_MAX)) {
- 			dev_err(hba->dev, "%s: ufs_qcom_cfg_timers() failed\n",
- 				__func__);
-@@ -745,6 +753,10 @@ static int ufs_qcom_link_startup_notify(struct ufs_hba *hba,
- 		break;
- 	case POST_CHANGE:
- 		ufs_qcom_link_startup_post_change(hba);
-+		linecfg_err = qcom_qmp_ufs_ctrl_rx_linecfg(host->generic_phy, false);
-+		if (linecfg_err && linecfg_err != -EOPNOTSUPP)
-+			dev_warn(hba->dev, "failed to disable RX LineCfg: %d\n",
-+				 linecfg_err);
- 		break;
- 	default:
- 		break;

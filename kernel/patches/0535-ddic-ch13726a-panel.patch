@@ -12,17 +12,17 @@ Kettle Linux 21-sm8250/0058.
 ---
  drivers/gpu/drm/panel/Kconfig               |  11 +
  drivers/gpu/drm/panel/Makefile              |   1 +
- drivers/gpu/drm/panel/panel-ddic-ch13726a.c | 327 ++++++++++++++++++++++++++++
- 3 files changed, 339 insertions(+)
+ drivers/gpu/drm/panel/panel-ddic-ch13726a.c | 328 ++++++++++++++++++++
+ 3 files changed, 340 insertions(+)
  create mode 100644 drivers/gpu/drm/panel/panel-ddic-ch13726a.c
 
 diff --git a/drivers/gpu/drm/panel/Kconfig b/drivers/gpu/drm/panel/Kconfig
-index bcdd18b9b..9142d0cf9 100644
+index 0228fb1..01c3088 100644
 --- a/drivers/gpu/drm/panel/Kconfig
 +++ b/drivers/gpu/drm/panel/Kconfig
-@@ -167,6 +167,17 @@ config DRM_PANEL_CHIPONE_ICNA35XX
- 	  around the Chipone ICNA3512 and ICNA3520 display controllers,
- 	  such as some Tianma panels used in AYN Odin2 Portal and Thor.
+@@ -177,6 +177,17 @@ config DRM_PANEL_BOE_XM91080G
+ 	  Say Y if you want to enable support for panels based on the
+ 	  Xm-Plus XM91080G controller.
  
 +config DRM_PANEL_DDIC_CH13726A
 +	tristate "DDIC CH13726A-based DSI panel"
@@ -39,10 +39,10 @@ index bcdd18b9b..9142d0cf9 100644
  	tristate "EBBG FT8719 panel driver"
  	depends on GPIOLIB
 diff --git a/drivers/gpu/drm/panel/Makefile b/drivers/gpu/drm/panel/Makefile
-index 2da626232..2cc084686 100644
+index 491109b..3039551 100644
 --- a/drivers/gpu/drm/panel/Makefile
 +++ b/drivers/gpu/drm/panel/Makefile
-@@ -15,6 +15,7 @@ obj-$(CONFIG_DRM_PANEL_BOE_TV101WUM_NL6) += panel-boe-tv101wum-nl6.o
+@@ -16,6 +16,7 @@ obj-$(CONFIG_DRM_PANEL_BOE_TV101WUM_NL6) += panel-boe-tv101wum-nl6.o
  obj-$(CONFIG_DRM_PANEL_BOE_XM91080G) += panel-boe-xm91080g.o
  obj-$(CONFIG_DRM_PANEL_CHIPONE_ICNA35XX) += panel-chipone-icna35xx.o
  obj-$(CONFIG_DRM_PANEL_CHIPWEALTH_CH13726A) += panel-chipwealth-ch13726a.o
@@ -52,10 +52,10 @@ index 2da626232..2cc084686 100644
  obj-$(CONFIG_DRM_PANEL_SIMPLE) += panel-simple.o
 diff --git a/drivers/gpu/drm/panel/panel-ddic-ch13726a.c b/drivers/gpu/drm/panel/panel-ddic-ch13726a.c
 new file mode 100644
-index 000000000..692f2bcd6
+index 0000000..993dd21
 --- /dev/null
 +++ b/drivers/gpu/drm/panel/panel-ddic-ch13726a.c
-@@ -0,0 +1,327 @@
+@@ -0,0 +1,328 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * DDIC CH13726A MIPI-DSI panel driver
@@ -71,6 +71,7 @@ index 000000000..692f2bcd6
 +
 +#include <drm/drm_mipi_dsi.h>
 +#include <drm/drm_modes.h>
++#include <drm/drm_of.h>
 +#include <drm/drm_panel.h>
 +
 +#include <video/mipi_display.h>
@@ -317,7 +318,7 @@ index 000000000..692f2bcd6
 +		return dev_err_probe(dev, PTR_ERR(ctx->reset_gpio),
 +				     "Failed to get reset-gpios\n");
 +
-+	ret = of_drm_get_panel_orientation(dev->of_node, &ctx->orientation);
++	ret = drm_of_get_panel_orientation(dev->of_node, &ctx->orientation);
 +	if (ret < 0) {
 +		dev_err(dev, "%pOF: failed to get orientation %d\n", dev->of_node, ret);
 +		return ret;

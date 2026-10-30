@@ -15,9 +15,11 @@ Send exactly Android's commands. The order of PPS and display on is
 kept: Android turns the display on before the rate setup, we keep it
 last, so no frame shows before the panel is configured.
 ---
+diff --git a/drivers/gpu/drm/panel/panel-chipone-icna35xx.c b/drivers/gpu/drm/panel/panel-chipone-icna35xx.c
+index db0adb5..6209853 100644
 --- a/drivers/gpu/drm/panel/panel-chipone-icna35xx.c
 +++ b/drivers/gpu/drm/panel/panel-chipone-icna35xx.c
-@@ -103,6 +103,7 @@
+@@ -102,6 +102,7 @@ static int icna3512_init_sequence(struct panel_info *pinfo)
  
      mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0x9C, 0xA5, 0xA5);
      mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0xFD, 0x5A, 0x5A);
@@ -25,7 +27,7 @@ last, so no frame shows before the panel is configured.
  
  	mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0x53, 0xE0);
      mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0x35, 0x00);
-@@ -114,12 +115,13 @@
+@@ -113,12 +114,13 @@ static int icna3512_init_sequence(struct panel_info *pinfo)
      mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0x9F, 0x0F);
      mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0xCE, 0x22);
  
@@ -40,7 +42,7 @@ last, so no frame shows before the panel is configured.
                  0x00, 0xE0, 0xA0, 0x10, 0xC8, 0x22, 0x18, 0x18, 
                  0x18, 0x18, 0x18);
          mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0x9F, 0x07);
-@@ -127,14 +129,15 @@
+@@ -126,14 +128,15 @@ static int icna3512_init_sequence(struct panel_info *pinfo)
                  0x04, 0x0C, 0x08, 0x0C, 0x04, 0x00, 0xC4);
          mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0xD9,
                  0x88, 0x40, 0x40, 0x88, 0x40, 0x40, 0x00, 0xEB,
@@ -58,7 +60,7 @@ last, so no frame shows before the panel is configured.
          mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0x9F, 0x07);
          mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0xB2,
                  0x04, 0x18, 0x08, 0x0C, 0x02, 0x00, 0xC4);
-@@ -142,7 +145,8 @@
+@@ -141,7 +144,8 @@ static int icna3512_init_sequence(struct panel_info *pinfo)
                  0x88, 0x4A, 0x4A, 0x88, 0x4A, 0x4A, 0x00, 0xEB, 
                  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00);
          mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0xCB,

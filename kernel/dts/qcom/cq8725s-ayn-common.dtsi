@@ -123,12 +123,6 @@
 		pinctrl-0 = <&i2s1_default>;
 		pinctrl-names = "default";
 
-		clocks = <&q6prmcc LPASS_CLK_ID_SEC_MI2S_IBIT LPASS_CLK_ATTRIBUTE_COUPLE_NO>;
-		clock-names = "i2s_clk";
-
-		assigned-clocks = <&q6prmcc LPASS_CLK_ID_SEC_MI2S_IBIT LPASS_CLK_ATTRIBUTE_COUPLE_NO>;
-		assigned-clock-rates = <1536000>;
-
 		model = "SM8750-AYN";
 		audio-routing = 
 				"IN1_HPHL", "HPHL_OUT",
@@ -846,6 +840,15 @@
 	};
 };
 
+/*
+ * No QCE driver: 7.3 makes CRYPTO_DEV_QCE depend on BROKEN. Left enabled, the node is a
+ * consumer that never binds, so the interconnect providers never reach sync_state and every
+ * NoC node stays voted at INT_MAX.
+ */
+&crypto {
+	status = "disabled";
+};
+
 &gpi_dma1 {
 	status = "okay";
 };
@@ -1258,6 +1261,21 @@
 
 	vdd18-supply = <&vreg_l15b_1p8>;
 	vdd3-supply = <&vreg_l5b_3p1>;
+};
+
+/*
+ * The speaker amps are BCLK-slaved on SECONDARY MI2S. sc8280xp_snd_hw_params() sets and
+ * enables this clock (sm8750 card data: patch 0820).
+ */
+&q6apmbedai {
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	dai@12 {
+		reg = <SECONDARY_MI2S_RX>;
+		clocks = <&q6prmcc LPASS_CLK_ID_SEC_MI2S_IBIT LPASS_CLK_ATTRIBUTE_COUPLE_NO>;
+		clock-names = "bclk";
+	};
 };
 
 &qupv3_1 {

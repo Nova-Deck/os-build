@@ -29,9 +29,8 @@ qcom/gmu_gen70900.bin
 # --- sm8650: GPU zap shader (open, linux-firmware) — shared across all boards ---
 qcom/sm8650/gen70900_zap.mbn
 
-# --- sm8650: AudioReach (q6apm) topology, per board card model (device) ---
-qcom/sm8650/SM8650-APS2-tplg.bin
-qcom/sm8650/SM8650-KPF-tplg.bin
+# --- sm8650: AudioReach (q6apm) topology — Pocket S2 and Pocket FIT share one card + model ---
+qcom/ayaneo-ps2/SM8650-APS2-tplg.bin
 
 # --- sm8550: Adreno 740 GPU microcode + zap shader (open, linux-firmware) ---
 # All three ship in linux-firmware (a740_zap under the qcom/sm8550/ subdir); embedded so

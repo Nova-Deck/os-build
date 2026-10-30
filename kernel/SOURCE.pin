@@ -30,20 +30,24 @@
 # POCKET MAX (SM8250) — with 0330 v4, 1150 (Abel Vesa CX v5) and 0140 on the same card.
 # RE-PINNED 2026-10-15 (7.2.11, issue #117). Nothing of ours landed, no patch needed a change;
 # ath12k, UFS core and btrfs are the legs. Read the 7.2.11 section below. HW GATE OWED.
-version:    7.2.11
-url:        https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.2.11.tar.xz
-sha256:     fd0fc479f983a8c05313f13e9c36330fe6651cf725396748c40d5cd93fa1e6a4
-git_tag:    v7.2.11
-git_commit: a2de78ee6ed8bf8cd99d177c74865a6e8c3cb6ea
+# 7.2.12-7.2.14 were not taken: we waited for 7.3.1 (issue #124).
+# RE-PINNED 2026-10-30 (7.3.1) — A NEW SERIES, not a point release. Seven patches deleted as
+# upstream, the S2/FIT/MI2S audio moved onto mainline's mechanisms (0810/0825 gone, 0820
+# rewritten), 162 left. Read the 7.3.1 section below. HW GATE OWED.
+version:    7.3.1
+url:        https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.3.1.tar.xz
+sha256:     fa595aad93734f829c963c2a90ef7c3673224fd7fdae7b49406e397cde2de231
+git_tag:    v7.3.1
+git_commit: 79a907609d53d5cd645b42c11550d295d43abf99
 
 # The sha256 above is the one kernel.org publishes in the SIGNED sha256sums.asc for v7.x, not a
-# hash of whatever the CDN happened to serve — re-checked 2026-10-15. The .asc itself verifies as
+# hash of whatever the CDN happened to serve — re-checked 2026-10-30. The .asc itself verifies as
 # a GOOD signature from "Kernel.org checksum autosigner <autosigner@kernel.org>", fingerprint
 # B886 8C80 BA62 A1FF FAF5 FDA9 632D 3A06 589D A6B1. That key carries no trust path here, so the
-# load-bearing check is CONTINUITY: the SAME signed file still lists 7.2.10 as
-# 2feaa70453e91f541be6a5c9078d8168e081af45a3d9718054850538cff2ebf3, 7.2.9 as
-# b4c5dfbe51a364a6c7f03869200f88c8e1f77403539005f14b7fc6bc91b8d8ba and 7.2.8 as
-# 12e8d5a973d1ad7c5a5c69882e4022b131ed715db7003fdcd760ddf8c3e51941, byte-for-byte the hashes this
+# load-bearing check is CONTINUITY: the SAME signed file still lists 7.2.11 as
+# fd0fc479f983a8c05313f13e9c36330fe6651cf725396748c40d5cd93fa1e6a4, 7.2.10 as
+# 2feaa70453e91f541be6a5c9078d8168e081af45a3d9718054850538cff2ebf3 and 7.2.9 as
+# b4c5dfbe51a364a6c7f03869200f88c8e1f77403539005f14b7fc6bc91b8d8ba, byte-for-byte the hashes this
 # pin carried and shipped before — so the file describing the version above is the same file that
 # described the releases we already trusted. Roll this list forward on each bump rather than
 # growing it; three back is enough to be a chain. (Note: keys.openpgp.org serves this key STRIPPED
@@ -61,6 +65,105 @@ git_commit: a2de78ee6ed8bf8cd99d177c74865a6e8c3cb6ea
 # Treat 'in-series point release' as a prediction about EFFORT, never about RISK.
 # Re-run every gate, every time — and note that neither of those two findings came from an
 # offline gate. Both came from hardware.
+#
+# ============ 7.3.1 — PINNED 2026-10-30 (follows issue #124), HW GATE OWED ============
+#
+# A full merge window: 12512 files between v7.2.11 and v7.3.1. The fuzz-0 dry run against a
+# pristine 7.3.1 failed 29 of 171 patches, so the stack was REBASED rather than re-fuzzed: a
+# scratch git repo with v7.2.11 committed, v7.3.1 committed on top, and one commit per patch on
+# 7.2.11, then `git rebase --onto v7.3.1 v7.2.11`. Every conflict was a real 3-way merge and every
+# regenerated body is `git diff` of the rebased commit. The new stack (162) applies cumulatively
+# at --fuzz=0 to a pristine tarball extraction and the result is byte-identical to that rebase.
+#
+# DELETED, upstream in 7.3 (each reverses at --fuzz=0 on a PRISTINE 7.3.1 tree, every hunk):
+#   0230 drm/msm context/VM hardening (12 commits). 41 of 42 hunks reverse; the 42nd is
+#        msm_alloc_stolen_fb(), which 7.3 moved into msm_fbdev.c with the NULL arg already in.
+#   0275 GMU firmware init timeout 10 -> 100 ms.
+#   0620 sy7758 backlight.   0800 DP audio prepare on unplug.   1080 qce runtime PM + ICC.
+#   1155 sm8650 misc enhancements.   1170 sm8750 uart15.
+#
+# Net: 171 -> 162 (7 deleted as upstream, 0810/0820/0825 deleted, one new 0820).
+#
+# REBASED — the ones whose CONTENT changed, not just context:
+#   0120 7.3 dropped `skip_retention_level` and now skips RETENTION for every rpmhpd in
+#        rpmhpd_update_level_mapping(). The flag is gone from gfx_gmu/gmxc_sm8750; presync_floor
+#        still clamps to enable_corner, which is now never retention by construction.
+#   0530 7.3 merged Teguh Sobirin's own ICNA35XX driver (4 compatibles, one 165 Hz mode, no
+#        levels table). 0530 is now upstream -> our fork, .c only; the Kconfig entry and Makefile
+#        line are upstream's (Kconfig byte-identical). The file 0530 produces is byte-identical
+#        to the 7.2.11 stack's, so 0531-0534 apply unchanged on what they were written against.
+#   1105 7.3 already labels pcie1_port0; that line of ours dropped out.
+#   1145 sm8750 vbif grew 0x2008 -> 0x3000 upstream; kept upstream's size + our lutdma reg.
+#   Everything else rebased on context only (panel/power-supply Kconfig+Makefile neighbours:
+#   ANBERNIC_TD4310, BQ25630), its +/- lines identical to the 7.2.11 stack's.
+#
+# 7.3 API BREAKS THE BUILD FOUND (none visible to a fuzz-0 apply):
+#   - of_drm_get_panel_orientation() is drm_of_get_panel_orientation() in <drm/drm_of.h>, same
+#     signature. Renamed in the 11 panel drivers we add (0505-0560), folded into each one's patch.
+#   - IIO consumer symbols are in the IIO_CONSUMER namespace: 0910's qcom_pm8150b_charger
+#     gained MODULE_IMPORT_NS("IIO_CONSUMER"). It is the only driver of ours using the API.
+#   - sm8550.dtsi renamed pcieport0 -> pcie0_port0 (sm8250/8650/8750 keep pcieport0); the two
+#     qcs8550 board dtsi follow.
+#   - sm8550 and sm8650 IPA now carry memory-region = <&ipa_fw_mem>, a region our three
+#     qcs8550/sm8650 board dtsi delete: they drop the property, as upstream boards do.
+#
+# AUDIO MOVED ONTO MAINLINE'S OWN MECHANISMS (0810, 0820, 0825 deleted; a new 0820):
+#   - Pocket S2 + Pocket FIT: 0810 (rewrite lpaif 7->2 and mask the WSA2 channels) is replaced
+#     by mainline's ayaneo,pocket-s2-sndcard (62dc2554d36d), which maps the stream onto the WSA2
+#     channels. Both boards are now that card with model SM8650-APS2 (set once, in
+#     sm8650-ayaneo-common.dtsi), so both load qcom/ayaneo-ps2/SM8650-APS2-tplg.bin — the
+#     topology linux-firmware ships as qcom/sm8650/ayaneo/ps2/, installed under the name the
+#     kernel requests (qcom/<driver_name>/<model>-tplg.bin) by firmware/LINUX_FW.pin. Its WSA
+#     endpoint is HW_IF_TYPE 2; the qcom-firmwares copy it replaces said 7 (WSA2), which the
+#     ADSP only accepted through 0810's rewrite. UCM: conf.d/sm8650 -> conf.d/ayaneo-ps2 (the
+#     card driver name), the identical KPF profile dropped. The FIT's card id becomes SM8650APS2.
+#   - Odin 2 family, Odin 3, FIT Elite: 0820/0825's card-level "i2s_clk" is replaced by
+#     mainline's per-DAI MI2S clocks (088c4404b3d7, cc8495c1d45a): a dai@10 (PRIMARY_MI2S_RX,
+#     SEN IBIT) / dai@12 (SECONDARY_MI2S_RX, SEC IBIT) bclk under &q6apmbedai, set and enabled in
+#     sc8280xp_snd_hw_params(). sm8550 card data already enables it; the new 0820 does the same
+#     for sm8750. The BE is fixed at 48 kHz/2ch/S16, so the computed bclk is 1536000, the rate
+#     the old assigned-clock-rates pinned.
+#
+# CHECKED, not changed: 7.3 adds panel-chipwealth-ch13726a.c (ayntec,thor-panel-bottom) with the
+# SAME driver .name as our 0535 ("panel-ch13726a-amoled"). Harmless while
+# DRM_PANEL_CHIPWEALTH_CH13726A stays off — it is off in our fragment and in defconfig. Turn it on
+# and the second driver_register() fails. No new duplicate DT node or label in sm8250/8550/8650/
+# 8750.dtsi; no new duplicate Adreno chip id.
+# INTERSECTION: 74 files we patch also moved upstream; the content-changed ones are above.
+# CONFIG SWEEP: CRYPTO_DEV_QCOM_RNG is gone — 7.3 moved qcom-rng.c to drivers/char/hw_random as
+# HW_RANDOM_QCOM. Renamed in kernel.config. Every other symbol resolves.
+# CRYPTO_DEV_QCE now `depends on (BROKEN && ARCH_QCOM) || COMPILE_TEST`: upstream says the driver
+# races the secure world for the engine and is slower than the CPU. Unsettable, so DELETED from
+# kernel.config (the config gate caught it as the one y-requested, n-resolved line). Nothing we
+# run needs it; the ARMv8 CE ciphers do the work. (1080, its runtime-PM patch, went upstream too.)
+# The driver going does NOT take the DT node with it: every SoC's `crypto` node is enabled and lists
+# interconnects, so with no driver to bind it fw_devlink holds the interconnect providers' sync_state
+# forever ("sync_state() pending due to 1dfa000.crypto") and every NoC node stays at INT_MAX —
+# saturated BCM votes on all four SoCs. On the Odin 3 that broke every panel off->on (the DSI
+# command DMA's read never returned). `&crypto { status = "disabled"; }` in every board's common
+# dtsi (8 files, all 23 dtbs checked). Keep the driver and the node in step if QCE ever returns.
+# BUILD: green in the container, Image + 23 dtbs + modules (7.3.1) staged. After olddefconfig,
+# ALL 449 requested directives (393 values + 56 `is not set`) asserted against the final
+# .config: zero mismatches once QCE was dropped.
+#
+# WHAT ONLY HARDWARE CAN SETTLE: everything — it is a new series. Specifically ours:
+#   - Odin 3 / Portal / Pocket Max panels (0530-0534 on the upstream driver's Kconfig), and
+#     every panel of ours reading its rotation through the renamed orientation helper.
+#   - Speakers, every board whose path moved: Pocket S2 and Pocket FIT (new card + upstream
+#     topology), Odin 2 / Thor / Odin 2 Mini / Portal (dai@10 bclk), Odin 3 and FIT Elite
+#     (dai@12 bclk + 0820). A "pll lock fail" from the aw88xxx amps = no BCLK.
+#   - GPU bring-up on every SoC (0120 floor without the retention flag; 0230 now upstream's).
+#   - SM8250 pm8150b charging (0910 behind the IIO namespace).
+#
+# HW GATE so far, 2026-10-30/31 (dev cards). PASS: Pocket ACE (panel, speakers), Pocket FIT and
+# Pocket S2 (speakers, after the APS2 UCM fix), Thor Lite (speakers), Pocket Max (icna35xx panel,
+# speakers), Odin 3 (icna35xx panel, SEC MI2S speakers, A830 rendering). The Odin 3 panel died on
+# every off->on and power-off hung until the crypto node was disabled (above); with it: 4/4 clean
+# session teardowns, 5/5 DPMS cycles, sleep/wake and long-press shutdown by hand. 7.2.11 had no
+# such failure only because QCE was built in. That card also carried a command-mode CTL-cleanup
+# patch, since dropped as not needed: the Odin 3 off->on re-run WITHOUT it is owed. Still owed:
+# Odin 2 / Thor / FIT Elite speakers,
+# Portal panel, S2/FIT headphones + DP audio, GPU on SM8550/SM8650/SM8250, SM8250 charging.
 #
 # ============ 7.2.11 — PINNED 2026-10-15 (issue #117), HW GATE OWED ============
 #

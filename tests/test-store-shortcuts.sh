@@ -50,6 +50,12 @@ e = shortcuts.entry_fields("epic", "Breathedge", "Breathedge", resolved)
 (ok if e["Exe"] == f'"{epic_exe}"' else bad)(f"Exe is the quoted GAME binary, not a stub ({e['Exe']})")
 (ok if e["LaunchOptions"] == "/usr/lib/novadeck/game-launch %command%" else bad)(
     f"LaunchOptions is game-launch %command% — tuning by the Steam-game door ({e['LaunchOptions']})")
+e_pfx = shortcuts.entry_fields("epic", "Catnip", "Borderlands 3",
+                               {**resolved, "env": "STORE=egs UMU_ID=umu-397540"})
+(ok if e_pfx["LaunchOptions"] == "STORE=egs UMU_ID=umu-397540 /usr/lib/novadeck/game-launch %command%" else bad)(
+    f"protonfixes ids prefix the options, ahead of game-launch so Proton inherits them ({e_pfx['LaunchOptions']})")
+(ok if "/usr/lib/novadeck/game-launch" in e_pfx["LaunchOptions"] else bad)(
+    "and the options still contain the wrapper, so novadeck-control's wrapLaunchOptions leaves them alone")
 (ok if "Breathedge" in e["StartDir"] else bad)("StartDir is the quoted install dir")
 (ok if e["AppName"] == "Breathedge" else bad)("AppName is the store title")
 for store, gid in (("steam", "x"), ("epic", ""), ("epic", "a/b"), ("epic", "..")):

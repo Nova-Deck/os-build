@@ -52,8 +52,9 @@ def entry_fields(store, gid, title, resolved):
         "Exe": f'"{resolved["exe"]}"',
         "StartDir": f'"{resolved.get("startdir") or os.path.dirname(resolved["exe"])}"',
         # Per-game FEX tuning by the same door a Steam game uses; the token is NOT here — identity
-        # lives in the registry, joined by appid.
-        "LaunchOptions": launch.LAUNCH_OPTIONS,
+        # lives in the registry, joined by appid. A Windows title the umu database knows is
+        # prefixed with its protonfixes ids (launch.protonfix_env), which Proton reads.
+        "LaunchOptions": " ".join(filter(None, [resolved.get("env"), launch.LAUNCH_OPTIONS])),
     }
 
 

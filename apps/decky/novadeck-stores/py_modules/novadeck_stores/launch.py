@@ -13,8 +13,10 @@ compat tool (if any) a platform wants, and decide whether an entry's Exe lies un
 we manage — since milestone 7 only the orphan report's secondary signal; ownership is registry
 membership (shortcuts.py).
 """
+import csv
 import json
 import os
+import re
 
 from novadeck_stores import locations, status
 
@@ -26,6 +28,37 @@ WINDOWS_COMPAT_TOOL = "proton-cachyos-11.0-arm64"
 # %command% host-side to the whole chain it composed, and game-launch tunes then execs it.
 LAUNCH_WRAPPER = "/usr/lib/novadeck/game-launch"
 LAUNCH_OPTIONS = f"{LAUNCH_WRAPPER} %command%"
+
+# The baked Proton ships umu-protonfixes, which keys a non-Steam title's fixes on UMU_ID + STORE.
+# Without them it falls back to SteamGameId — a shortcut's random appid — and looks it up in the
+# Steam fix set, so no store fix ever applies. The umu database it ships maps (store, the store's
+# own game id) to the UMU_ID; reading THAT copy keeps the ids in step with the fixes on a bump.
+PROTONFIX_DB = (f"/usr/share/steam/compatibilitytools.d/{WINDOWS_COMPAT_TOOL}"
+                "/protonfixes/umu-database.csv")
+# Our store name → the database's STORE column (also protonfixes' gamefixes-<store> directory).
+PROTONFIX_STORE = {"epic": "egs", "gog": "gog"}
+# Both values land in LaunchOptions, which Steam hands to a shell: anything else is refused.
+_UMU_ID = re.compile(r"^umu-[A-Za-z0-9]+$")
+
+
+def protonfix_env(store, gid, db=PROTONFIX_DB):
+    """`STORE=<s> UMU_ID=<id>` for a title the umu database knows, else "". The codename column is
+    the GOG product id, or legendary's app_name for Epic — the gid we already key on. A title with
+    no row gets nothing: with STORE alone protonfixes still keys on the shortcut appid."""
+    umu_store = PROTONFIX_STORE.get(store)
+    if umu_store is None:
+        return ""
+    try:
+        with open(db, newline="", encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                if row.get("STORE") == umu_store and row.get("CODENAME") == gid:
+                    umu_id = (row.get("UMU_ID") or "").strip()
+                    return f"STORE={umu_store} UMU_ID={umu_id}" if _UMU_ID.fullmatch(umu_id) else ""
+    except OSError:
+        # No database means no fixes — exactly the behaviour before this existed, and a launch
+        # must never fail over it.
+        return ""
+    return ""
 
 
 def compat_tool(platform):
@@ -90,10 +123,15 @@ def resolve_target(store, gid, p, record):
     """{exe, startdir, platform} for an installed game, or None when it cannot be resolved (not
     installed, or the store's own metadata does not name an executable)."""
     if store == "epic":
-        return _epic_target(gid, p)
-    if store == "gog":
-        return _gog_target(gid, p, record)
-    return None
+        target = _epic_target(gid, p)
+    elif store == "gog":
+        target = _gog_target(gid, p, record)
+    else:
+        return None
+    # Only a Windows title runs through Proton, so only it can use protonfixes' ids.
+    if target and target["platform"] == "windows":
+        target["env"] = protonfix_env(store, gid)
+    return target
 
 
 def managed_roots(p, vols=None):

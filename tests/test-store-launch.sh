@@ -117,5 +117,41 @@ os.symlink("/usr/bin/sh", evil)
 PY
 
 echo
+echo "== protonfixes ids (UMU_ID + STORE) from the umu database"
+pysuite "protonfix" <<'PY'
+import pathlib, sys, tempfile
+sys.path.insert(0, sys.argv[1])
+
+def ok(m): print(f"  ok   {m}")
+def bad(m): print(f"  FAIL {m}")
+
+from novadeck_stores import launch
+
+db = pathlib.Path(tempfile.mkdtemp(prefix="store-pfx.")) / "umu-database.csv"
+db.write_text(
+    "TITLE,STORE,CODENAME,UMU_ID,COMMON ACRONYM (Optional),NOTE (Optional),EXE_STRINGS (Optional)\n"
+    "Age of Wonders,gog,1207658883,umu-61500,aow,,\n"
+    "Age of Wonders,humble,ageofwonders,umu-61500,aow,,\n"
+    "Borderlands 3,egs,Catnip,umu-397540,bl3,,\n"
+    'Evil,gog,666,"umu-1; rm -rf ~",,,\n')
+
+(ok if launch.protonfix_env("gog", "1207658883", db) == "STORE=gog UMU_ID=umu-61500" else bad)(
+    "a GOG title is matched by its product id")
+(ok if launch.protonfix_env("epic", "Catnip", db) == "STORE=egs UMU_ID=umu-397540" else bad)(
+    "an Epic title is matched by legendary's app_name, under the database's `egs` store")
+(ok if launch.protonfix_env("gog", "Catnip", db) == "" else bad)(
+    "a codename only matches within its own store")
+(ok if launch.protonfix_env("gog", "999", db) == "" else bad)(
+    "a title the database does not know gets no ids — STORE alone would still key on the appid")
+(ok if launch.protonfix_env("gog", "666", db) == "" else bad)(
+    "a UMU_ID that is not umu-<alnum> is refused — LaunchOptions go through a shell")
+(ok if launch.protonfix_env("gog", "1207658883", db.parent / "absent.csv") == "" else bad)(
+    "no database means no ids, never a failed launch")
+(ok if launch.PROTONFIX_DB.startswith(
+    f"/usr/share/steam/compatibilitytools.d/{launch.WINDOWS_COMPAT_TOOL}/") else bad)(
+    "the database read is the one shipped inside the Proton the titles run on")
+PY
+
+echo
 echo "test-store-launch.sh: $PASS passed, $FAIL failed, $SKIP skipped"
 [ "$FAIL" -eq 0 ]

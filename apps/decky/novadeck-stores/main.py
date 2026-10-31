@@ -32,7 +32,7 @@ import decky
 
 import base64
 
-from novadeck_stores import (artwork, cdp, cli, connect, game_page, install_requests, installs,
+from novadeck_stores import (artwork, cdp, cli, connect, first_run, game_page, install_requests, installs,
                              launch, library, library_sync, locations, paths, prefixes, settings,
                              shortcuts, status)
 
@@ -943,6 +943,16 @@ class Plugin:
             decky.logger.info(f"frontend ready: compat re-asserted on {await self.reassert_compat()} entries")
         except Exception as exc:  # noqa: BLE001 - best-effort, never fail the caller
             decky.logger.info(f"reassert_compat: {type(exc).__name__}")
+        try:
+            # Titles installed before first-run steps existed, and a steps file a failed
+            # registry-side sync left stale, are brought current here.
+            p = await asyncio.to_thread(paths.store_paths)
+            async with _SHORTCUT_LOCK:
+                registry = await asyncio.to_thread(shortcuts.read_registry, p)
+                current = await asyncio.to_thread(first_run.sync, p, registry)
+            decky.logger.info(f"frontend ready: first-run steps {'current' if current else 'NOT written'}")
+        except Exception as exc:  # noqa: BLE001 - best-effort, never fail the caller
+            decky.logger.info(f"first_run sync: {type(exc).__name__}: {exc}")
         return True
 
     async def _main(self):

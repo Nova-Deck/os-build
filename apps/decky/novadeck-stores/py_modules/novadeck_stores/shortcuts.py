@@ -32,7 +32,7 @@ import json
 import os
 import re
 
-from novadeck_stores import cli, launch, status
+from novadeck_stores import cli, first_run, launch, status
 
 # The gid grammar — still enforced so a bad id never becomes a registry key or a path component.
 TOKEN = re.compile(r"^(epic|gog):[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -171,7 +171,16 @@ def read_registry(p):
 
 
 def write_registry(p, rows):
-    return cli.write_as_user(p, registry_path(p), json.dumps(rows, indent=1)) == 0
+    ok = cli.write_as_user(p, registry_path(p), json.dumps(rows, indent=1)) == 0
+    if ok:
+        # Every change to which appid is which game passes here, so the first-run steps keyed
+        # by appid follow it. Best effort: the registry is what was asked for, and a stale
+        # steps file only means a support installer waits for the next registry write.
+        try:
+            first_run.sync(p, rows)
+        except Exception:  # noqa: BLE001 - must not turn a written registry into a failure
+            pass
+    return ok
 
 
 def vdf_paths(p):

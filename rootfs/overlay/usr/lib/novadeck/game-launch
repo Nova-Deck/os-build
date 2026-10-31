@@ -49,6 +49,10 @@ try:
     import novadeck_perf
 except ImportError:  # per-game tuning must never be what stops a launch
     novadeck_perf = None
+try:
+    import novadeck_firstrun
+except ImportError:  # same contract: a missing helper costs the setup step, not the game
+    novadeck_firstrun = None
 
 BASE_CONFIG = pathlib.Path("/usr/share/fex-emu/Config.json")
 PROFILES = pathlib.Path("/usr/share/novadeck/fex-profiles.json")
@@ -373,6 +377,14 @@ def main():
     if len(sys.argv) < 2:
         raise SystemExit(f"usage: {PROG} COMMAND [ARGS...]   ({PROG} %command% from launch options)")
     command = sys.argv[1]
+
+    # Before any tuning lands in our environment: a store title's one-time setup steps run
+    # through this same chain, with the FEX settings their installers need, not the game's.
+    if novadeck_firstrun is not None:
+        try:
+            novadeck_firstrun.run(sys.argv[1:], appid())
+        except Exception as exc:  # noqa: BLE001 - a setup step must never block the launch
+            print(f"{PROG}: first-run steps skipped ({exc})", file=sys.stderr)
 
     settings = {}
     try:

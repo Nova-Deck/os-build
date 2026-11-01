@@ -165,6 +165,17 @@ git_commit: 79a907609d53d5cd645b42c11550d295d43abf99
 # Odin 2 / Thor / FIT Elite speakers,
 # Portal panel, S2/FIT headphones + DP audio, GPU on SM8550/SM8650/SM8250, SM8250 charging.
 #
+# ADDED 2026-11-02: SM8750's share of Abel Vesa's CX v5, 9/42 + 41/42 into 1150 and 26/42 into
+# 0140 (both renamed +8750), in series order. The SM8750 bring-up missed them; 7.3.1 carries none
+# of the series. Our 8250/8550/8650 patches checked byte-identical to v5, none of theirs missing.
+# 0140 and 0150 share gcc-sm8750.c (desc vs PCIe GDSC flags), both apply at fuzz 0.
+# HW GATE 2026-11-02, Odin 3 (dev card) — PASS: 100000.clock-controller is a consumer of `cx`
+# (on, perf 256) and runtime-PM `active`/`auto`, before and after a freeze cycle (CPUs 1-7
+# offlined and back at 160s); zero *ERROR*/WARNING, zero failed units; WCN7850 on PCIe
+# re-associated after, EHT 2x2 576/648 Mbit/s, 0% loss. `sync_state() pending due to 3d37000.gmu`
+# for gcc, gpucc and gxclkctl is NOT from this: the GMU node lists GCC_GPU_GEMNOC_GFX_CLK in
+# pristine 7.3.1 and nothing ever binds a driver to it. FIT Elite still owed.
+#
 # ============ 7.2.11 — PINNED 2026-10-15 (issue #117), HW GATE OWED ============
 #
 # 285 commits, 285 files. Zero drm/msm, zero qcom clk/phy/interconnect/iommu/dts for any SoC we

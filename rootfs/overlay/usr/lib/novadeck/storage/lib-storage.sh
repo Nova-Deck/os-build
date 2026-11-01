@@ -148,11 +148,16 @@ storage_is_mounted() { # <disk kernel name>
 }
 
 # Every mountpoint currently served by the disk, deepest first so nested mounts unwind cleanly.
+# `findmnt -r` writes whitespace and backslashes in TARGET as \xHH — that is what keeps the two
+# columns splittable — so each path is decoded with %b before anyone can hand it to umount. The
+# mountpoint is named after the card's LABEL; an undecoded "Odin3\x20Ext" names no directory, and
+# the formatter refused every card with a space in its label. %b cannot misread a literal backslash
+# in a path: findmnt has already turned it into \x5c.
 storage_mountpoints_of() { # <disk kernel name>
     local disk="$1" target src
     while read -r target src; do
         case "$src" in /dev/*) : ;; *) continue ;; esac
-        [ "$(storage_disk_of "${src%%[*}")" = "$disk" ] && printf '%s\n' "$target"
+        [ "$(storage_disk_of "${src%%[*}")" = "$disk" ] && printf '%b\n' "$target"
     done < <(findmnt -rn -o TARGET,SOURCE 2>/dev/null) | sort -r
 }
 

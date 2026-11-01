@@ -254,6 +254,23 @@ mounted_says() { # <stub findmnt output> -> MOUNTED|CLEAR
   || bad "an empty mount table did not answer CLEAR"
 
 # =================================================================================================
+CASE="mountpoints-are-decoded"
+# `findmnt -r` escapes whitespace and backslashes in TARGET as \xHH. automount names the mountpoint
+# after the filesystem LABEL, so a card labelled "Odin3 Ext" is mounted at a path findmnt prints as
+# `Odin3\x20Ext`. Handed to umount raw, that path does not exist, the unmount fails, and the
+# formatter refuses — every card with a space in its label was unformattable from Steam (2026-11-02).
+out="$(NOVADECK_BOOTINFO=/nonexistent bash -c '
+  set -euo pipefail
+  . '"$LIB"'
+  findmnt() { printf "%s\n" "/run/media/deck/Odin3\\x20Ext /dev/mmcblk0p1" "/run/media/deck/a\\x5cb /dev/mmcblk0p2" "/ /dev/sda22"; }
+  storage_disk_of() { printf "%s\n" "${1##*/}" | sed -e "s/p[0-9]*$//"; }
+  storage_mountpoints_of mmcblk0' 2>/dev/null | LC_ALL=C sort)"
+expected="$(printf '%s\n' '/run/media/deck/a\b' '/run/media/deck/Odin3 Ext' | LC_ALL=C sort)"
+[ "$out" = "$expected" ] \
+  && ok "findmnt's \\x20 / \\x5c escapes are decoded before the path reaches umount" \
+  || bad "storage_mountpoints_of returned '$out' — an escaped path cannot be unmounted"
+
+# =================================================================================================
 CASE="format-unmounts-before-it-wipes"
 # The refusal was replaced by an unmount, because a card is ALWAYS mounted by our own automount by
 # the time anyone asks to format it — "refuse if mounted" was unreachable in practice and left

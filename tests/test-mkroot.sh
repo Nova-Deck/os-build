@@ -525,6 +525,7 @@ declare -A STAGE_EXPECTED=(
   [offload-mounts]="the writable paths a read-only root needs"
   [dev-wifi-ssh]="DEV-ONLY Wi-Fi credentials + root authorized_keys"
   [dev-ota-channel]="DEV-ONLY OTA channel pin"
+  [dev-usb-gadget]="DEV-ONLY USB Ethernet gadget (NCM) + its networkd DHCP server"
   [decky-payload]="Decky loader + the first-party plugin dists"
   [boot-splash]="the splash drawer + its asset, in the sealed root"
   [debug-capture]="DEBUG-ONLY journald log capture"

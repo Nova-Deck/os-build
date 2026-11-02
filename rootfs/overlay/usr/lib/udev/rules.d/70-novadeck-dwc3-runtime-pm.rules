@@ -1,4 +1,4 @@
-# Let the SM8550/SM8650 Type-C USB controller (dwc3-qcom) runtime-suspend.
+# Let the SM8550/SM8650/SM8750 Type-C USB controller (dwc3-qcom) runtime-suspend.
 #
 # The driver leaves runtime PM "on", so with nothing plugged in the
 # controller stays active in device role for good and holds an xm_usb3_0
@@ -11,7 +11,11 @@
 # display's DDR vote dominates). On the AYANEO Pocket ACE (SM8550), same
 # vote, idle battery V x I 3x30 s each: 2653 mW -> 2592 mW (~60 mW, 2.3%).
 #
+# SM8750 (Odin 3, Pocket FIT Elite) binds the same flattened dwc3-qcom
+# driver, whose core forbids runtime PM the same way, and carries the same
+# usb-ddr interconnect. Not yet HW-checked there.
+#
 # Scope. Only the Type-C port's controller; the built-in pad on SM8650 hangs
 # off a PCIe xHCI and is not touched. A device in use keeps the controller
 # active, so this adds no per-input latency.
-ACTION=="add|bind", SUBSYSTEM=="platform", DRIVER=="dwc3-qcom", ENV{OF_COMPATIBLE_0}=="qcom,sm8550-dwc3|qcom,sm8650-dwc3", ATTR{power/control}="auto"
+ACTION=="add|bind", SUBSYSTEM=="platform", DRIVER=="dwc3-qcom", ENV{OF_COMPATIBLE_0}=="qcom,sm8550-dwc3|qcom,sm8650-dwc3|qcom,sm8750-dwc3", ATTR{power/control}="auto"

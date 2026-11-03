@@ -72,7 +72,7 @@ trees (msm-next, qcom `clk-for-7.4` / `arm64-for-7.4`, pci `next`). Re-audit on
 every bump: this table is a snapshot, the `Drop when` column is what to re-check.
 
 Totals (7.3.1 bump, 2026-10-30): 0 `mainline`, 18 `posted`, 24 `novadeck`, 120 `community` = 162.
-Since then (2026-11-03, iris Remote Play `1091`–`1094`): 19 `posted`, 123 `community` = 166.
+Since then (2026-11-03, iris Remote Play `1091`–`1094`, ath12k DTIM revert `1026`): 19 `posted`, 25 `novadeck`, 123 `community` = 167.
 The 7.3 bump deleted every `mainline` row (`0230 0620 0800 1080 1155`), the two `posted` ones
 that landed (`0275 1170`), and `0810`/`0825` with the old `0820`, whose jobs mainline's
 `ayaneo,pocket-s2-sndcard` and per-DAI MI2S clocks now do; `0820` is reused for the sm8750
@@ -216,6 +216,7 @@ taken for issue #122 — see the `0780`–`0796` rows.
 | `1022` | community | armada `1022`: split WCN7860 scans by firmware-reported ranges. | with `1002` |
 | `1023` | community | armada `1023`: protect TX during associated-range scans. | when upstreamed |
 | `1025` | community | Teguh Sobirin, RetroidPocket/linux `5c301a42fc1d` + `ecda60ed15f6` + `1877d7230554`, squashed, via armada `1154`–`1156` (PR #801), bodies identical. NULL/use-after-free guards on the firmware-crash recovery path (srngs after HAL teardown, thermal hwmon cleanup, link-peer table). Not on linux-wireless patchwork. | when upstreamed |
+| `1026` | novadeck | `git revert` of `af50baccaa5f` (7.3): station vdevs back on the listen interval instead of DTIM "stick" mode. That commit was tested on WCN7850 with upstream HMT firmware; the WCN7860 runs vendor GNG firmware and `1002` sets `supports_sta_ps`, so with power save on every connection got the new policy. Suspected cause of the Odin 3 7.3.1 Wi-Fi wedge: beacon loss, re-association with no DHCP, `failed to flush transmit queue`, recovery only by reboot (6 of 20 boots on 7.3.1, 0 of 44 on 7.2.11). A test, not a fix yet. | when the wedge is shown to survive it (drop), or traced to the firmware |
 | `1030` | community | spycat88, ROCKNIX `0071`. A hack. | never |
 | `1040` | community | Kars Mulder's Linux-Pollrate-Patch via ROCKNIX `0506`. | never |
 | `1042` | community | Anze, ROCKNIX SM8750 `0509`: restore the pre-`0c8ee850572` ucsi behaviour — clear the USB role when the partner advertises no USB data — on ports without the USB4_IMPLIES_USB quirk (our pmic_glink UCSI ports on every SoC). Peer motivation is a suspend hard-hang we cannot hit; the stale role on charger-only partners is wrong regardless. | when the upstream regression is fixed |

@@ -1,0 +1,71 @@
+From 1e2f8a69c43b8f82c14702939a6ab57603e704c3 Mon Sep 17 00:00:00 2001
+From: Philippe Simons <simons.philippe@gmail.com>
+Date: Tue, 3 Nov 2026 11:39:31 +0100
+Subject: [PATCH] Revert "wifi: ath12k: Set DTIM policy to stick mode for
+ station interface"
+
+This reverts commit af50baccaa5f, new in 7.3.
+
+The commit makes every station vdev on a target with supports_sta_ps
+follow the AP's DTIM ("stick" mode) instead of the listen interval. It
+was tested on WCN7850 with upstream WLAN.HMT firmware. The WCN7860 runs
+vendor WLAN.GNG.1.0-04065 firmware, and its hw definition sets
+supports_sta_ps, so with power save on (NetworkManager's default) every
+connection gets the new policy.
+
+On the AYN Odin 3 (SM8750, WCN7860), 7.3.1 brought a Wi-Fi wedge that
+7.2.11 never showed: CTRL-EVENT-BEACON-LOSS on 6 of 20 boots against 0
+of 44, then repeated disconnects where association succeeds but DHCP
+never completes, "failed to flush transmit queue, data pkts pending 1",
+and no recovery short of a reboot. This is the one 7.2.11..7.3.1 ath12k
+change that reaches the station's beacon handling on this chip.
+
+Carried to test that hypothesis; drop it if the wedge survives.
+---
+ drivers/net/wireless/ath/ath12k/mac.c | 11 -----------
+ drivers/net/wireless/ath/ath12k/wmi.h |  7 -------
+ 2 files changed, 18 deletions(-)
+
+diff --git a/drivers/net/wireless/ath/ath12k/mac.c b/drivers/net/wireless/ath/ath12k/mac.c
+index 99bf5cf79d10..b0bc0dace242 100644
+--- a/drivers/net/wireless/ath/ath12k/mac.c
++++ b/drivers/net/wireless/ath/ath12k/mac.c
+@@ -4047,17 +4047,6 @@ static void ath12k_bss_assoc(struct ath12k *ar,
+ 		ath12k_warn(ar->ab, "failed to set vdev %i OBSS PD parameters: %d\n",
+ 			    arvif->vdev_id, ret);
+ 
+-	if (ar->ab->hw_params->supports_sta_ps &&
+-	    ahvif->vdev_type == WMI_VDEV_TYPE_STA &&
+-	    ahvif->vdev_subtype == WMI_VDEV_SUBTYPE_NONE) {
+-		ret = ath12k_wmi_vdev_set_param_cmd(ar, arvif->vdev_id,
+-						    WMI_VDEV_PARAM_DTIM_POLICY,
+-						    WMI_DTIM_POLICY_STICK);
+-		if (ret)
+-			ath12k_warn(ar->ab, "failed to set vdev %d stick DTIM policy: %d\n",
+-				    arvif->vdev_id, ret);
+-	}
+-
+ 	if (test_bit(WMI_TLV_SERVICE_11D_OFFLOAD, ar->ab->wmi_ab.svc_map) &&
+ 	    ahvif->vdev_type == WMI_VDEV_TYPE_STA &&
+ 	    ahvif->vdev_subtype == WMI_VDEV_SUBTYPE_NONE)
+diff --git a/drivers/net/wireless/ath/ath12k/wmi.h b/drivers/net/wireless/ath/ath12k/wmi.h
+index b508aa759bd8..83103fdefafc 100644
+--- a/drivers/net/wireless/ath/ath12k/wmi.h
++++ b/drivers/net/wireless/ath/ath12k/wmi.h
+@@ -2331,13 +2331,6 @@ enum wmi_slot_time {
+ 	WMI_VDEV_SLOT_TIME_SHORT = 2,
+ };
+ 
+-enum wmi_dtim_policy {
+-	WMI_DTIM_POLICY_IGNORE = 1,
+-	WMI_DTIM_POLICY_NORMAL = 2,
+-	WMI_DTIM_POLICY_STICK  = 3,
+-	WMI_DTIM_POLICY_AUTO   = 4,
+-};
+-
+ enum wmi_preamble {
+ 	WMI_VDEV_PREAMBLE_LONG = 1,
+ 	WMI_VDEV_PREAMBLE_SHORT = 2,
+-- 
+2.55.0
+

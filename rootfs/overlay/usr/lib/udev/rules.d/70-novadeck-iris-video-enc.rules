@@ -1,0 +1,9 @@
+# Give the iris encoder the name Valve's arm64 Steam looks for, as on the Steam Frame. Steam's
+# Remote Play host (Remote Play Together included) and its game recording open /dev/video-enc0 and
+# no other path. Without it they encode in software (libx264). Steam's log names the encoder it
+# picked: "Capture method set to Desktop PipeWire NV12 + V4L2 HEVC" vs "... + libx264".
+#
+# The decoder deliberately gets NO /dev/video-dec0. Remote Play's client finds the decoder by its
+# /dev/video* node on its own. The name would only switch on CEF's V4L2 decode in Steam's UI, which
+# is slower than CPU decode on iris (docs/video-decode.md).
+SUBSYSTEM=="video4linux", ATTR{name}=="qcom-iris-encoder", SYMLINK+="video-enc0"

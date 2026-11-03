@@ -1,0 +1,23 @@
+From: Philippe Simons <simons.philippe@gmail.com>
+Subject: [PATCH] ASoC: codecs: wcd939x: fix the ADC volume dB scale
+
+analog_gain ("ADC1..4 Volume") was declared in 0.25 dB steps, so the
+controls advertised 5 dB over their 20 steps. The ADC gain is 0..30 dB
+over 20 steps, as wcd938x declares it for the same block.
+---
+ sound/soc/codecs/wcd939x.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/sound/soc/codecs/wcd939x.c b/sound/soc/codecs/wcd939x.c
+index c9f9240..fd862c4 100644
+--- a/sound/soc/codecs/wcd939x.c
++++ b/sound/soc/codecs/wcd939x.c
+@@ -218,7 +218,7 @@ static const char * const wcd939x_supplies[] = {
+ 
+ static const SNDRV_CTL_TLVD_DECLARE_DB_MINMAX(ear_pa_gain, 600, -1800);
+ static const DECLARE_TLV_DB_SCALE(line_gain, 0, 7, 1);
+-static const DECLARE_TLV_DB_SCALE(analog_gain, 0, 25, 1);
++static const SNDRV_CTL_TLVD_DECLARE_DB_MINMAX(analog_gain, 0, 3000);
+ 
+ static const struct wcd_mbhc_field wcd_mbhc_fields[WCD_MBHC_REG_FUNC_MAX] = {
+ 	WCD_MBHC_FIELD(WCD_MBHC_L_DET_EN, WCD939X_ANA_MBHC_MECH, 0x80),

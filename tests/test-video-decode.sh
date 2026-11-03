@@ -48,12 +48,24 @@ fi
 
 # 2. Any other rule that hands CEF a ChromeOS decoder name does the same damage, so match on the
 #    symlink target rather than on our old filename.
-stray=$(grep -rlE 'SYMLINK\+="video-(dec|enc)' "$ROOT/rootfs/overlay/usr/lib/udev/rules.d" 2>/dev/null || true)
+stray=$(grep -rlE 'SYMLINK\+="video-dec' "$ROOT/rootfs/overlay/usr/lib/udev/rules.d" 2>/dev/null || true)
 if [[ -n $stray ]]; then
-    bad "a udev rule still creates a ChromeOS video-dec/enc name: $stray"
+    bad "a udev rule still creates a ChromeOS video-dec name: $stray"
 else
     ok "no udev rule creates a ChromeOS-style decoder name"
 fi
+
+# 2b. /dev/video-enc0 IS shipped, on purpose: it is the name Steam's Remote Play host and game
+#     recording open for hardware encode. It must name the ENCODER only. A video-enc rule that
+#     matched the decoder node would not turn on CEF decode, but it would hand Steam a device
+#     that cannot encode.
+for f in $(grep -rlE 'SYMLINK\+="video-enc' "$ROOT/rootfs/overlay/usr/lib/udev/rules.d" 2>/dev/null); do
+    if grep -E 'SYMLINK\+="video-enc' "$f" | grep -qv 'ATTR{name}=="qcom-iris-encoder"'; then
+        bad "$(basename "$f") creates a video-enc name for something other than qcom-iris-encoder"
+    else
+        ok "$(basename "$f") names only the iris encoder video-enc0"
+    fi
+done
 
 # 3. -cef-enable-vaapi is a NO-OP, measured by diffing the webhelper argv with and without it: the
 #    sole difference is adding VaapiVideoDecodeLinuxGL to --enable-features, and this libcef has no

@@ -15,8 +15,10 @@ panel's range cannot reach the window, the closest value still at or above nomin
 value that is 2 mod 4: an Odin 3 grayed at 46, 50, 54 and 58 while every neighbour, and 44 at
 120.2 Hz, stayed clean. A calibrator stepping in 4s from a multiple of 4 never meets one. Nothing
 can measure gray, so `GRAY_VALUES` in `novadeck_panel.py` lists them per panel compatible and
-rate, and calibrate and `step` skip them. The 60 Hz default (2006) is 2 mod 4 and clean, so
-the rule is the 120 Hz knob's only.
+rate, and calibrate and `step` skip them. The 60 Hz knob has its own rule: every value whose
+low hex digit is 2 (0x7D2, 0x7E2, ...). That one is reported for the ICNA3520, not yet
+confirmed on our units. The 60 Hz default (2006, 0x7D6) is 2 mod 4 and clean, so the 120 Hz
+rule does not carry over.
 
 ## Pieces
 

@@ -14,7 +14,8 @@ exact floor-division failure this exists to fix. Where no usable value lands in 
 usable value with the lowest rate still at or above nominal wins.
 
 SOME VALUES GRAY THE PICTURE, and not by rate: on the ICNA3520's 120 Hz knob it is every value
-that is 2 mod 4 (GRAY_VALUES). Nothing here can measure gray, so calibrate and step skip them.
+that is 2 mod 4, and on its 60 Hz knob every value ending in hex 2 (GRAY_VALUES). Nothing here
+can measure gray, so calibrate and step skip them.
 
 THE MODEL. 1/rate is linear in the frame length (the frame is a fixed number of lines plus the
 knob). calibrate() measures the current value, probes one value PROBE_STEP away, solves the line
@@ -142,10 +143,13 @@ def panel_knobs():
 # Frame-length values that gray the picture, by the panel's first DT compatible and the knob's
 # rate. ICNA3520 at 120 Hz: every value that is 2 mod 4 (HW, Odin 3: 46, 50, 54 and 58 gray,
 # every neighbour clean, 44 at 120.2 Hz clean). It is not a rate threshold. A calibrator stepping
-# in 4s from a multiple of 4 never meets one, which is why the old loop never grayed. The 60 Hz
-# default, 2006, is 2 mod 4 and clean, so the rule is the 120 Hz knob's only.
+# in 4s from a multiple of 4 never meets one, which is why the old loop never grayed.
+# ICNA3520 at 60 Hz: every value whose low hex digit is 2 (0x7D2, 0x7E2, ...). That rule is
+# reported for this panel but not yet confirmed on our units. The 60 Hz default, 2006 (0x7D6), is
+# 2 mod 4 and clean, so the 120 Hz rule does not carry over.
 GRAY_VALUES = {
     ("chipone,icna3520", 120): lambda value: value % 4 == 2,
+    ("chipone,icna3520", 60): lambda value: value & 0xF == 0x2,
 }
 
 

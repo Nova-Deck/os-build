@@ -165,10 +165,17 @@ open(knob, "w").write("47")
 assert np.step(120, "faster", rate_fn=odin3(knob))["value"] == 45
 assert np.step(120, "slower", rate_fn=odin3(knob))["value"] == 47
 knob60 = np.panel_knobs()[1][60]
-assert np.usable_fn(knob60)(2006)                       # the 60 Hz knob has no gray rule
+usable60 = np.usable_fn(knob60)
+assert usable60(2006)                                   # 0x7D6: 2 mod 4, clean at 60 Hz
+assert not usable60(0x7D2) and not usable60(0x7E2)      # low hex digit 2 grays at 60 Hz
+assert usable60(0x7D1) and usable60(0x7D3)
+open(knob60, "w").write(str(0x7D3))
+slope60 = 1 / 60.9 / 2006 * 0.5
+rate60 = panel(knob60, 1 / 60.9 - 2006 * slope60, slope60)
+assert np.step(60, "faster", rate_fn=rate60)["value"] == 0x7D1   # 0x7D2 skipped
 print("ok")
 '
-[[ $(run_py) == ok ]] && ok || fail "ICNA3520 120 Hz skips the gray values"
+[[ $(run_py) == ok ]] && ok || fail "ICNA3520 120 Hz and 60 Hz skip the gray values"
 rm -rf "$SYS/ae94000.dsi.0/of_node"
 
 # ---------- 60 Hz, from ABOVE nominal ----------

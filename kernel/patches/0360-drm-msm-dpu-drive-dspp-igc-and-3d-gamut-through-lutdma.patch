@@ -28,8 +28,13 @@ are dropped on runtime resume, when the power domain has reset the status.
 Verified on the AYN Odin 2 Portal (SM8550, engine v2) and Odin 3 (SM8750,
 engine v3): transfers complete, the IGC and gamut registers read back
 what the DMA wrote, and gamescope's shaper and 3D LUT scan out directly
-with no DPU errors. SM8750's GC v2 is also a LUT bus block and is not
-wired up.
+with no DPU errors.
+
+Rebased onto 0343 (Rob Clark, "drm/msm/dpu: Fix GAMMA LUT for sm8750
+related DPUs"), which gives the SM8750 DSPP its register GC block; the
+SM8750 sub-block here now carries PCC + GC + IGC + gamut. The author's
+note that SM8750's GC is a LUT bus block and not wired up is superseded
+by that upstream patch.
 
 Carried from the author's tree against 7.2.3; re-rolled onto 7.2.5 here. Two
 hunks in dpu_crtc_atomic_check() did not apply because our patch 0515 already
@@ -60,7 +65,7 @@ are the board's pre-existing continuous-splash handoff, not this.
 ---
 --- a/drivers/gpu/drm/msm/disp/dpu1/catalog/dpu_10_0_sm8650.h
 diff --git a/drivers/gpu/drm/msm/Makefile b/drivers/gpu/drm/msm/Makefile
-index d0c3a4c..45f4c2c 100644
+index 0b8f2cafed19..97dbb56e41f3 100644
 --- a/drivers/gpu/drm/msm/Makefile
 +++ b/drivers/gpu/drm/msm/Makefile
 @@ -89,6 +89,7 @@ msm-display-$(CONFIG_DRM_MSM_DPU) += \
@@ -72,7 +77,7 @@ index d0c3a4c..45f4c2c 100644
  	disp/dpu1/dpu_hw_top.o \
  	disp/dpu1/dpu_hw_util.o \
 diff --git a/drivers/gpu/drm/msm/disp/dpu1/catalog/dpu_10_0_sm8650.h b/drivers/gpu/drm/msm/disp/dpu1/catalog/dpu_10_0_sm8650.h
-index 0f601f0..29c5482 100644
+index 0f601f08fdfe..29c548283a87 100644
 --- a/drivers/gpu/drm/msm/disp/dpu1/catalog/dpu_10_0_sm8650.h
 +++ b/drivers/gpu/drm/msm/disp/dpu1/catalog/dpu_10_0_sm8650.h
 @@ -182,19 +182,19 @@ static const struct dpu_dspp_cfg sm8650_dspp[] = {
@@ -108,7 +113,7 @@ index 0f601f0..29c5482 100644
  	.pingpong = sm8650_pp,
  	.dsc_count = ARRAY_SIZE(sm8650_dsc),
 diff --git a/drivers/gpu/drm/msm/disp/dpu1/catalog/dpu_12_0_sm8750.h b/drivers/gpu/drm/msm/disp/dpu1/catalog/dpu_12_0_sm8750.h
-index 3889eb8..ffe1151 100644
+index c7d31db3ec2e..065ec5c27584 100644
 --- a/drivers/gpu/drm/msm/disp/dpu1/catalog/dpu_12_0_sm8750.h
 +++ b/drivers/gpu/drm/msm/disp/dpu1/catalog/dpu_12_0_sm8750.h
 @@ -473,6 +473,7 @@ const struct dpu_mdss_cfg dpu_sm8750_cfg = {
@@ -120,7 +125,7 @@ index 3889eb8..ffe1151 100644
  	.pingpong = sm8750_pp,
  	.dsc_count = ARRAY_SIZE(sm8750_dsc),
 diff --git a/drivers/gpu/drm/msm/disp/dpu1/catalog/dpu_9_0_sm8550.h b/drivers/gpu/drm/msm/disp/dpu1/catalog/dpu_9_0_sm8550.h
-index ee1ef7a..0ff8a63 100644
+index ee1ef7a0da21..0ff8a63d896f 100644
 --- a/drivers/gpu/drm/msm/disp/dpu1/catalog/dpu_9_0_sm8550.h
 +++ b/drivers/gpu/drm/msm/disp/dpu1/catalog/dpu_9_0_sm8550.h
 @@ -182,19 +182,19 @@ static const struct dpu_dspp_cfg sm8550_dspp[] = {
@@ -156,7 +161,7 @@ index ee1ef7a..0ff8a63 100644
  	.pingpong = sm8550_pp,
  	.dsc_count = ARRAY_SIZE(sm8550_dsc),
 diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.c
-index a3b1d2d..d8b3ed0 100644
+index b1aea5769777..7077d90ba013 100644
 --- a/drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.c
 +++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.c
 @@ -44,6 +44,13 @@
@@ -453,7 +458,7 @@ index a3b1d2d..d8b3ed0 100644
  	}
  
 diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.h b/drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.h
-index 6eaba56..b5c916b 100644
+index 6eaba5696e8e..b5c916b2043b 100644
 --- a/drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.h
 +++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.h
 @@ -156,6 +156,10 @@ struct dpu_crtc_frame_event {
@@ -485,10 +490,10 @@ index 6eaba56..b5c916b 100644
  
  #define to_dpu_crtc_state(x) \
 diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_catalog.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_catalog.c
-index b2e92c2..5f9a4a3 100644
+index 668a9ce3cfd5..7afe49d5d2b3 100644
 --- a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_catalog.c
 +++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_catalog.c
-@@ -459,9 +459,37 @@ static const struct dpu_dspp_sub_blks sdm845_dspp_sblk = {
+@@ -463,11 +463,38 @@ static const struct dpu_dspp_sub_blks sdm845_dspp_sblk = {
  		.len = 0x40, .version = 0x10008},
  };
  
@@ -515,10 +520,11 @@ index b2e92c2..5f9a4a3 100644
 +	.version = 0x30000,
 +};
 +
-+/* GC v2 on this DSPP is a LUT bus block too and is not wired up yet */
  static const struct dpu_dspp_sub_blks sm8750_dspp_sblk = {
  	.pcc = {.name = "pcc", .base = 0x1700,
  		.len = 0x90, .version = 0x60000},
+ 	.gc = {.name = "gc", .base = 0x17c0,
+ 		.len = 0x40, .version = 0x10008},
 +	.igc = {.name = "igc", .base = 0x1260,
 +		.len = 0x1c, .version = 0x50000},
 +	.gamut = {.name = "gamut", .base = 0x1000,
@@ -527,7 +533,7 @@ index b2e92c2..5f9a4a3 100644
  
  /*************************************************************
 diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_catalog.h b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_catalog.h
-index f45faf8..cfd04c0 100644
+index f45faf87333e..cfd04c05f933 100644
 --- a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_catalog.h
 +++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_catalog.h
 @@ -82,6 +82,9 @@ enum {
@@ -577,7 +583,7 @@ index f45faf8..cfd04c0 100644
  	const struct dpu_cwb_cfg *cwb;
  
 diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_ctl.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_ctl.c
-index e8729fe..90ce9d3 100644
+index e8729fe1cfef..90ce9d35854d 100644
 --- a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_ctl.c
 +++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_ctl.c
 @@ -403,6 +403,15 @@ static void dpu_hw_ctl_update_pending_flush_dspp_sub_blocks(
@@ -597,7 +603,7 @@ index e8729fe..90ce9d3 100644
  		return;
  	}
 diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_dspp.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_dspp.c
-index 23dcbe1..b06da76 100644
+index 23dcbe1ce1b8..b06da762e749 100644
 --- a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_dspp.c
 +++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_dspp.c
 @@ -115,6 +115,189 @@ static void dpu_setup_dspp_gc(struct dpu_hw_dspp *ctx,
@@ -791,7 +797,7 @@ index 23dcbe1..b06da76 100644
   * dpu_hw_dspp_init() - Initializes the DSPP hw driver object.
   * should be called once before accessing every DSPP.
 diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_dspp.h b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_dspp.h
-index b47b778..59cbb47 100644
+index b47b7788064b..59cbb47315e4 100644
 --- a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_dspp.h
 +++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_dspp.h
 @@ -5,6 +5,10 @@
@@ -864,7 +870,7 @@ index b47b778..59cbb47 100644
  
 diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_reg_dma.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_reg_dma.c
 new file mode 100644
-index 0000000..6c104d0
+index 000000000000..6c104d0ef631
 --- /dev/null
 +++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_reg_dma.c
 @@ -0,0 +1,388 @@
@@ -1258,7 +1264,7 @@ index 0000000..6c104d0
 +}
 diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_reg_dma.h b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_reg_dma.h
 new file mode 100644
-index 0000000..d52d3e9
+index 000000000000..d52d3e968f25
 --- /dev/null
 +++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_reg_dma.h
 @@ -0,0 +1,82 @@
@@ -1345,7 +1351,7 @@ index 0000000..d52d3e9
 +
 +#endif /* _DPU_HW_REG_DMA_H */
 diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c
-index da3556e..bab5090 100644
+index da3556eb6ecc..bab5090fc1d5 100644
 --- a/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c
 +++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c
 @@ -33,6 +33,7 @@
@@ -1521,7 +1527,7 @@ index da3556e..bab5090 100644
  	drm_for_each_encoder(encoder, ddev)
  		dpu_encoder_virt_runtime_resume(encoder);
 diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.h b/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.h
-index e39831a..5c73657 100644
+index e39831a397b1..5c7365717a62 100644
 --- a/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.h
 +++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.h
 @@ -21,6 +21,7 @@

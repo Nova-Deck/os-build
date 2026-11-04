@@ -1,6 +1,9 @@
-# Use BFQ (fairer interactive latency under game+shader load) with a deep 4MB
-# read-ahead on the SD/eMMC boot device. Kernel builds CONFIG_IOSCHED_BFQ=y.
+# Use mq-deadline with a deep 4MB read-ahead on the SD/eMMC boot device. A
+# handheld runs one game and the Steam UI, so BFQ's fairness between many
+# processes buys little, while under it a small journal commit can take over a
+# second on an SD card. Steam writes game recordings from its capture threads,
+# so a commit that slow stalls the recording and leaves a clip Steam can't play.
 # NOTE: scoped to mmcblk (the SD card novadeck boots from today). A future
 # install-to-UFS target enumerates as scsi/sd*, not mmcblk, so it won't match
 # this rule — revisit when the UFS install path lands.
-ACTION=="add|change", KERNEL=="mmcblk[0-9]", ATTR{queue/scheduler}="bfq", ATTR{queue/read_ahead_kb}="4096"
+ACTION=="add|change", KERNEL=="mmcblk[0-9]", ATTR{queue/scheduler}="mq-deadline", ATTR{queue/read_ahead_kb}="4096"

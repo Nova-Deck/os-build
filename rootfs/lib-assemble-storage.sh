@@ -47,7 +47,9 @@ if ! grep -q '/dev/novadeck/novadeck-home' "$stage/etc/fstab" 2>/dev/null; then
     '# novadeck-grow-home.service grows BOTH the partition (systemd-repart) and the ext4 (resize2fs)' \
     '# before this mounts. x-systemd.growfs stays only as a belt-and-suspenders fallback (a no-op' \
     '# once grow-home has already sized the fs to the partition).' \
-    '/dev/novadeck/novadeck-home  /home  ext4  defaults,nofail,x-systemd.growfs  0 2' \
+    '# lazytime: a timestamp update must not make write() wait on a journal commit. Steam writes' \
+    '# game recordings from its capture threads, so such a wait stalls the recording.' \
+    '/dev/novadeck/novadeck-home  /home  ext4  defaults,lazytime,nofail,x-systemd.growfs  0 2' \
     >>"$stage/etc/fstab"
 fi
 

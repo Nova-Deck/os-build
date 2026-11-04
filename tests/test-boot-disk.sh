@@ -192,6 +192,9 @@ grep -q "'/dev/novadeck/NOVADECK-ESP  /esp" "$ASSEMBLE" \
 grep -q "'/dev/novadeck/novadeck-home  /home" "$ASSEMBLE" \
   && ok "fstab mounts /home from the scoped link" \
   || bad "the /home fstab row does not name /dev/novadeck/novadeck-home"
+grep -Eq "novadeck-home  /home  ext4  [^ ]*lazytime" "$ASSEMBLE" \
+  && ok "/home mounts lazytime, so a write's timestamp update stays out of the journal" \
+  || bad "/home lost lazytime — Steam's recording threads wait on journal commits again"
 grep -q '^HOME_DEV=/dev/novadeck/novadeck-home$' "$ASSEMBLE" \
   && ok "grow-home resolves home through the scoped link before it reparts the parent disk" \
   || bad "grow-home still resolves home by label — it can repart the other disk"

@@ -1,0 +1,49 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Philippe Simons <simons.philippe@gmail.com>
+Date: Wed, 4 Nov 2026 22:00:00 +0100
+Subject: [PATCH] media: iris: encode at the frame rate set on the OUTPUT queue
+
+The stateful encoder interface says VIDIOC_S_PARM on the OUTPUT queue
+also sets the coded frame interval on the CAPTURE queue, and that a
+client may then change the CAPTURE one if the two differ. iris keeps the
+OUTPUT value in operating_rate only, while the firmware's rate control
+is given frame_rate, which stays at DEFAULT_FPS for a client that sets
+just OUTPUT. Such a client encoding 60 fps gets about twice the bitrate
+it asked for.
+
+Set frame_rate from the OUTPUT queue as well. A later VIDIOC_S_PARM on
+CAPTURE still overrides it.
+---
+diff --git a/drivers/media/platform/qcom/iris/iris_venc.c b/drivers/media/platform/qcom/iris/iris_venc.c
+--- a/drivers/media/platform/qcom/iris/iris_venc.c
++++ b/drivers/media/platform/qcom/iris/iris_venc.c
+@@ -414,10 +414,12 @@
+ 		goto reset_rate;
+ 	}
+ 
+-	if (is_frame_rate)
++	if (is_frame_rate) {
+ 		inst->frame_rate = fps;
+-	else
++	} else {
+ 		inst->operating_rate = fps;
++		inst->frame_rate = fps;
++	}
+ 
+ 	if ((s_parm->type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE && vb2_is_streaming(src_q)) ||
+ 	    (s_parm->type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE && vb2_is_streaming(dst_q))) {
+@@ -433,10 +435,12 @@
+ 
+ reset_rate:
+ 	if (ret) {
+-		if (is_frame_rate)
++		if (is_frame_rate) {
+ 			inst->frame_rate = default_rate;
+-		else
++		} else {
+ 			inst->operating_rate = default_rate;
++			inst->frame_rate = default_rate;
++		}
+ 	}
+ 
+ 	return ret;

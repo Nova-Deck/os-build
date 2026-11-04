@@ -1,0 +1,46 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Philippe Simons <simons.philippe@gmail.com>
+Date: Wed, 4 Nov 2026 21:30:00 +0100
+Subject: [PATCH] media: iris: report the frame type of gen2 encoded buffers
+
+iris_hfi_gen2_subscribe_property() returns early for an encoder, so the
+firmware is never asked for HFI_PROP_PICTURE_TYPE on the bitstream port.
+iris_hfi_gen2_get_driver_buffer_flags() then finds no picture type, and
+every encoded buffer reaches userspace with neither
+V4L2_BUF_FLAG_KEYFRAME nor V4L2_BUF_FLAG_PFRAME set. Gen1 has no such
+gap, as its picture type comes in the buffer packet itself.
+
+Subscribe to it on the encoder's bitstream port, as the decoder does on
+its raw port.
+---
+diff --git a/drivers/media/platform/qcom/iris/iris_hfi_gen2_command.c b/drivers/media/platform/qcom/iris/iris_hfi_gen2_command.c
+--- a/drivers/media/platform/qcom/iris/iris_hfi_gen2_command.c
++++ b/drivers/media/platform/qcom/iris/iris_hfi_gen2_command.c
+@@ -1050,6 +1050,10 @@
+ 	return 0;
+ }
+ 
++static const u32 iris_hfi_gen2_venc_output_prop[] = {
++	HFI_PROP_PICTURE_TYPE,
++};
++
+ static int iris_hfi_gen2_subscribe_property(struct iris_inst *inst, u32 plane)
+ {
+ 	struct iris_core *core = inst->core;
+@@ -1059,10 +1063,13 @@
+ 
+ 	payload[0] = HFI_MODE_PROPERTY;
+ 
+-	if (inst->domain == ENCODER)
+-		return 0;
++	if (inst->domain == ENCODER) {
++		if (V4L2_TYPE_IS_OUTPUT(plane))
++			return 0;
+ 
+-	if (V4L2_TYPE_IS_OUTPUT(plane)) {
++		subcribe_prop = iris_hfi_gen2_venc_output_prop;
++		subscribe_prop_size = ARRAY_SIZE(iris_hfi_gen2_venc_output_prop);
++	} else if (V4L2_TYPE_IS_OUTPUT(plane)) {
+ 		subscribe_prop_size = core->iris_firmware_data->dec_input_prop_size;
+ 		subcribe_prop = core->iris_firmware_data->dec_input_prop;
+ 	} else {

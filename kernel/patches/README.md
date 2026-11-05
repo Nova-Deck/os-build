@@ -74,6 +74,7 @@ every bump: this table is a snapshot, the `Drop when` column is what to re-check
 Totals (7.3.1 bump, 2026-10-30): 0 `mainline`, 18 `posted`, 24 `novadeck`, 120 `community` = 162.
 Since then (2026-11-03, iris Remote Play `1091`–`1094`, ath12k DTIM revert `1026`, andrebraga SM8750 backports, Pocket S2/FIT headphone cap `0825`, wcd939x HPH volume controls `0849`, iris gen2 encoder frame type `1096`, iris encoder frame rate `1097`): 32 `posted`, 27 `novadeck`, 121 `community` = 180.
 Then (2026-11-05, andrebraga `Kernel_7.3` @ `16b48205d6` triage: `0285 0397 0859 0897 0950 1007 1027 1028 1099 1171`): 2 `mainline`, 39 `posted`, 27 `novadeck`, 122 `community` = 190.
+Then (2026-11-05, gen1 encoder rate control `1098`): 2 `mainline`, 39 `posted`, 28 `novadeck`, 122 `community` = 191.
 The 7.3 bump deleted every `mainline` row (`0230 0620 0800 1080 1155`), the two `posted` ones
 that landed (`0275 1170`), and `0810`/`0825` with the old `0820`, whose jobs mainline's
 `ayaneo,pocket-s2-sndcard` and per-DAI MI2S clocks now do; `0820` is reused for the sm8750
@@ -264,6 +265,7 @@ taken for issue #122 — see the `0780`–`0796` rows.
 | `1095` | community | Diogo Trindade, armada `1031` (PR #718), body identical. Drops `TIER_AV1`'s setter, which overwrote the HEVC tier on every codec; `iris_hfi_gen2_set_tier()` already sends the AV1 tier. Never posted. | when upstreamed |
 | `1096` | novadeck | Subscribes the gen2 encoder to `HFI_PROP_PICTURE_TYPE` on its bitstream port, so encoded buffers carry `KEYFRAME`/`PFRAME`. Without it they carry neither. Never posted. | when upstreamed |
 | `1097` | novadeck | `VIDIOC_S_PARM` on the encoder's OUTPUT queue also sets `frame_rate`, as `dev-encoder.rst` requires. Without it the firmware's rate control stays at 30 fps. Both HFI generations. Never posted. | when upstreamed |
+| `1098` | novadeck | Sends `HFI_PROPERTY_PARAM_VENC_DISABLE_RC_TIMESTAMP` = 1 on gen1, the counterpart of gen2's `TIME_DELTA_BASED_RC` = 0. iris hands the firmware nanosecond timestamps, so timestamp-based rate control overshoots the target. Never posted. | when upstreamed, or iris sends microseconds |
 | `1099` | posted | Vishnu Reddy 1/2 `<20261007-fix-disable-irq-safely-v1-1-45746f9a92de@oss.qualcomm.com>`, Cc stable, body byte-identical, via andrebraga ROCKNIX SM8750 `Kernel_7.3` `2050`. `disable_irq()` under `core->lock` deadlocks against the threaded handler; this returns to `disable_irq_nosync()` as on 7.2. 2/2 is NOT taken: it reworks `core->lock` across six files and a question from the 2026-11-02 review is unanswered. | with 2/2 when merged |
 | `1105` | posted | Krishna Chaitanya Chundru root_port v2 15/15 `<20260917-root_port_v2-v2-15-6272b7caae9a@oss.qualcomm.com>`, applied to qcom `arm64-for-7.4` as `bbc442a64823`. 7.3 renames `pcieport0` → `pcie0_port0`. | v7.4; rework at 7.3 either way |
 | `1110` | posted | Same series, 12/15 `<20260917-root_port_v2-v2-12-6272b7caae9a@oss.qualcomm.com>`, applied to qcom `arm64-for-7.4` as `c51818ded215`. | v7.4 |

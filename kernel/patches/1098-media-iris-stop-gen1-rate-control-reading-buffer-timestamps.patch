@@ -1,0 +1,85 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Philippe Simons <simons.philippe@gmail.com>
+Date: Thu, 5 Nov 2026 17:00:00 +0100
+Subject: [PATCH] media: iris: stop gen1 rate control reading buffer timestamps
+
+SM8250 overshoots its target by a wide margin: Steam asks for 12 Mbit/s
+and gameplay comes out at 20-73 Mbit/s, tracking the content. gen2 holds
+the target.
+
+By default the gen1 firmware works out the time between frames from the
+buffer timestamps, which it expects in microseconds. iris passes the
+vb2 timestamp through in nanoseconds, so frames look 1000 times further
+apart than they are and rate control has a far larger budget per frame
+than the target allows. The same value comes back on the capture buffer,
+so userspace sees correct timestamps.
+
+gen2 avoids this by turning off time-delta-based rate control. Do the
+same on gen1 with HFI_PROPERTY_PARAM_VENC_DISABLE_RC_TIMESTAMP, which
+makes the firmware derive the delta from the input frame rate. The
+property has the opposite sense to the gen2 one, hence value 1. The
+vendor driver sends it on every session.
+
+Signed-off-by: Philippe Simons <simons.philippe@gmail.com>
+---
+diff --git a/drivers/media/platform/qcom/iris/iris_ctrls.c b/drivers/media/platform/qcom/iris/iris_ctrls.c
+index abe8e032d..073378eae 100644
+--- a/drivers/media/platform/qcom/iris/iris_ctrls.c
++++ b/drivers/media/platform/qcom/iris/iris_ctrls.c
+@@ -1558,7 +1558,7 @@ int iris_set_time_delta_based_rc(struct iris_inst *inst, enum platform_inst_fw_c
+ 	u32 value = inst->fw_caps[cap_id].value;
+ 
+ 	/*
+-	 * Disable time-delta-based rate control (value = 0).
++	 * Disable time-delta-based rate control (value = 0 on gen2, 1 on gen1).
+ 	 * This overrides the firmware's default (enabled), ensuring the
+ 	 * firmware uses the configured bitrate target rather than calculating
+ 	 * bitrate from frame timing.
+diff --git a/drivers/media/platform/qcom/iris/iris_hfi_gen1.c b/drivers/media/platform/qcom/iris/iris_hfi_gen1.c
+index 4f2ab19b4..b11a31edc 100644
+--- a/drivers/media/platform/qcom/iris/iris_hfi_gen1.c
++++ b/drivers/media/platform/qcom/iris/iris_hfi_gen1.c
+@@ -149,6 +149,17 @@ static const struct platform_inst_fw_cap inst_fw_cap_sm8250_enc[] = {
+ 		.flags = CAP_FLAG_OUTPUT_PORT | CAP_FLAG_MENU,
+ 		.set = iris_set_bitrate_mode_gen1,
+ 	},
++	{
++		/* The gen1 property disables, so 1 here is 0 on gen2. */
++		.cap_id = TIME_DELTA_BASED_RC,
++		.min = 0,
++		.max = 1,
++		.step_or_mask = 1,
++		.value = 1,
++		.hfi_id = HFI_PROPERTY_PARAM_VENC_DISABLE_RC_TIMESTAMP,
++		.flags = CAP_FLAG_OUTPUT_PORT,
++		.set = iris_set_time_delta_based_rc,
++	},
+ 	{
+ 		.cap_id = FRAME_SKIP_MODE,
+ 		.min = V4L2_MPEG_VIDEO_FRAME_SKIP_MODE_DISABLED,
+diff --git a/drivers/media/platform/qcom/iris/iris_hfi_gen1_command.c b/drivers/media/platform/qcom/iris/iris_hfi_gen1_command.c
+index 867e00724..2e249c5d8 100644
+--- a/drivers/media/platform/qcom/iris/iris_hfi_gen1_command.c
++++ b/drivers/media/platform/qcom/iris/iris_hfi_gen1_command.c
+@@ -602,7 +602,8 @@ iris_hfi_gen1_packet_session_set_property(struct hfi_session_set_property_pkt *p
+ 		packet->shdr.hdr.size += sizeof(*pl);
+ 		break;
+ 	}
+-	case HFI_PROPERTY_CONFIG_VENC_SYNC_FRAME_SEQUENCE_HEADER: {
++	case HFI_PROPERTY_CONFIG_VENC_SYNC_FRAME_SEQUENCE_HEADER:
++	case HFI_PROPERTY_PARAM_VENC_DISABLE_RC_TIMESTAMP: {
+ 		struct hfi_enable *en = prop_data;
+ 		u32 *in = pdata;
+ 
+diff --git a/drivers/media/platform/qcom/iris/iris_hfi_gen1_defines.h b/drivers/media/platform/qcom/iris/iris_hfi_gen1_defines.h
+index 275f3fea3..fb3b3f1f2 100644
+--- a/drivers/media/platform/qcom/iris/iris_hfi_gen1_defines.h
++++ b/drivers/media/platform/qcom/iris/iris_hfi_gen1_defines.h
+@@ -155,6 +155,7 @@
+ #define HFI_PROPERTY_PARAM_VENC_LTRMODE				0x200501c
+ #define HFI_PROPERTY_PARAM_VENC_MAX_NUM_B_FRAMES		0x2005020
+ #define HFI_PROPERTY_PARAM_VENC_HIER_P_MAX_NUM_ENH_LAYER	0x2005026
++#define HFI_PROPERTY_PARAM_VENC_DISABLE_RC_TIMESTAMP		0x2005027
+ #define HFI_PROPERTY_CONFIG_VENC_TARGET_BITRATE			0x2006001
+ #define HFI_PROPERTY_CONFIG_VENC_INTRA_PERIOD			0x2006003
+ #define HFI_PROPERTY_CONFIG_VENC_REQUEST_SYNC_FRAME		0x2006004

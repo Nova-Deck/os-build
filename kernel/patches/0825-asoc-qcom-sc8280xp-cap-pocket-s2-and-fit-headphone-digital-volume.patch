@@ -3,8 +3,8 @@ Subject: [PATCH] ASoC: qcom: sc8280xp: cap Pocket S2 and FIT headphone digital v
 
 The Pocket S2 and KONKR Pocket FIT headphone volume is the RX digital
 volume. The control spans -84..+40 dB, so exposing it as the playback
-volume would map 100% of the slider to +40 dB. Limit it to 59 (-25 dB):
-above that the output crackles.
+volume would map 100% of the slider to +40 dB. Limit it to 84 (0 dB),
+so the top of the slider is unity gain.
 ---
  sound/soc/qcom/sc8280xp.c | 13 +++++++++++++
  1 file changed, 13 insertions(+)
@@ -22,12 +22,12 @@ index d5859fb..b6bf2b9 100644
 +		/*
 +		 * Pocket S2 and Pocket FIT headphones are driven from the RX
 +		 * digital volume. Its range runs up to +40 dB, so cap it at
-+		 * -25 dB, above which the output crackles.
++		 * 0 dB: the top of the slider is unity gain.
 +		 */
 +		if (of_machine_is_compatible("ayaneo,pocket-s2") ||
 +		    of_machine_is_compatible("konkr,pocket-fit")) {
-+			snd_soc_limit_volume(card, "RX_RX0 Digital Volume", 59);
-+			snd_soc_limit_volume(card, "RX_RX1 Digital Volume", 59);
++			snd_soc_limit_volume(card, "RX_RX0 Digital Volume", 84);
++			snd_soc_limit_volume(card, "RX_RX1 Digital Volume", 84);
 +		}
 +		break;
  	case DISPLAY_PORT_RX_0:

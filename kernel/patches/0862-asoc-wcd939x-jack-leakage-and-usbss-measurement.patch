@@ -1,0 +1,1018 @@
+From: mrdidit <26687854+mrdidit@users.noreply.github.com>
+Subject: [PATCH] ASoC: wcd939x: jack leakage control and USBSS measurement
+
+Jack leakage lifecycle, a USBSS provider for impedance measurement on an
+independent jack, PCM PA settling delays, MBHC worker drain and USBSS
+protection across codec reset.
+
+Squashed from:
+  0081j: ASoC: wcd939x: restore jack leakage pull-up lifecycle
+  0081k: ASoC: wcd939x: separate jack leakage from optional switch routing
+  0081l: ASoC: wcd939x: coordinate USBSS jack impedance measurement
+  0081m: ASoC: wcd939x: preserve PCM headphone amplifier settling time
+  0081n: ASoC: wcd-mbhc: drain jack work before releasing state
+  0081o: dt-bindings: sound: wcd939x: describe USBSS jack measurement
+  0081p: ASoC: wcd939x: coordinate codec reset with USBSS protection
+  0081q: dt-bindings: sound: wcd939x: describe USBSS reset coordination
+---
+diff --git a/Documentation/devicetree/bindings/sound/qcom,wcd939x.yaml b/Documentation/devicetree/bindings/sound/qcom,wcd939x.yaml
+index 85283f944..0dea3f56c 100644
+--- a/Documentation/devicetree/bindings/sound/qcom,wcd939x.yaml
++++ b/Documentation/devicetree/bindings/sound/qcom,wcd939x.yaml
+@@ -21,6 +21,15 @@ description: |
+ allOf:
+   - $ref: dai-common.yaml#
+   - $ref: qcom,wcd93xx-common.yaml#
++  - if:
++      required:
++        - qcom,usbss-measurement
++    then:
++      properties:
++        port: false
++        mode-switch: false
++        orientation-switch: false
++        qcom,usbss: false
+ 
+ properties:
+   compatible:
+@@ -48,6 +57,15 @@ properties:
+   vdd-px-supply:
+     description: A reference to the 1.2V PX supply
+ 
++  qcom,usbss-measurement:
++    $ref: /schemas/types.yaml#/definitions/phandle
++    description: |
++      USBSS provider for codec reset protection, impedance measurement and
++      linearizer calibration on an independent headphone jack. Protection
++      settings must be coordinated with this provider before driving codec
++      reset. This does not enable USB-C analog audio routing and cannot be
++      combined with the codec's Type-C audio graph.
++
+ required:
+   - compatible
+ 
+diff --git a/drivers/usb/typec/mux/wcd939x-usbss.c b/drivers/usb/typec/mux/wcd939x-usbss.c
+index 195a8983c..ee238846c 100644
+--- a/drivers/usb/typec/mux/wcd939x-usbss.c
++++ b/drivers/usb/typec/mux/wcd939x-usbss.c
+@@ -9,14 +9,21 @@
+ #include <linux/kernel.h>
+ #include <linux/module.h>
+ #include <linux/mutex.h>
++#include <linux/of.h>
++#include <linux/slab.h>
+ #include <linux/regmap.h>
+ #include <linux/bitfield.h>
+ #include <linux/gpio/consumer.h>
+ #include <linux/usb/typec_dp.h>
+ #include <linux/usb/typec_mux.h>
++#include <linux/usb/wcd939x-usbss.h>
+ 
+ #define WCD_USBSS_PMP_OUT1			0x2
+ 
++#define WCD_USBSS_DP_EN			0x1e
++#define WCD_USBSS_DN_EN			0x21
++#define WCD_USBSS_DP_DN_EN_P_THRESH_SEL		GENMASK(3, 1)
++
+ #define WCD_USBSS_DP_DN_MISC1			0x20
+ 
+ #define WCD_USBSS_DP_DN_MISC1_DP_PCOMP_2X_DYN_BST_ON_EN			BIT(3)
+@@ -46,6 +53,9 @@
+ 
+ #define WCD_USBSS_MG2_MISC_PCOMP_2X_DYN_BST_ON_EN			BIT(5)
+ 
++#define WCD_USBSS_EXT_LIN_EN			0x3d
++#define WCD_USBSS_EXT_SW_CTRL_1			0x43
++
+ #define WCD_USBSS_DISP_AUXP_THRESH		0x80
+ 
+ #define WCD_USBSS_DISP_AUXP_THRESH_DISP_AUXP_OVPON_CM			GENMASK(7, 5)
+@@ -96,6 +106,8 @@
+ 
+ #define WCD_USBSS_FUNCTION_ENABLE		0x413
+ 
++#define WCD_USBSS_FUNCTION_ENABLE_RDAC_CAL_SELECT		BIT(2)
++
+ #define WCD_USBSS_FUNCTION_ENABLE_SOURCE_SELECT				GENMASK(1, 0)
+ 
+ #define WCD_USBSS_FUNCTION_ENABLE_SOURCE_SELECT_MANUAL		1
+@@ -123,6 +135,15 @@
+ #define WCD_USBSS_RATIO_SPKR_REXT_L_MSB		0x462
+ #define WCD_USBSS_RATIO_SPKR_REXT_R_LSB		0x463
+ #define WCD_USBSS_RATIO_SPKR_REXT_R_MSB		0x464
++#define WCD_USBSS_AUDIO_TAP_L_LSB		0x465
++#define WCD_USBSS_AUDIO_TAP_L_MSB		0x466
++#define WCD_USBSS_AUDIO_TAP_R_LSB		0x467
++#define WCD_USBSS_AUDIO_TAP_R_MSB		0x468
++#define WCD_USBSS_GROUND_TAP_L_LSB	0x469
++#define WCD_USBSS_GROUND_TAP_L_MSB	0x46a
++#define WCD_USBSS_GROUND_TAP_R_LSB	0x46b
++#define WCD_USBSS_GROUND_TAP_R_MSB	0x46c
++
+ #define WCD_USBSS_AUD_COEF_L_K0_0		0x475
+ #define WCD_USBSS_AUD_COEF_L_K0_1		0x476
+ #define WCD_USBSS_AUD_COEF_L_K0_2		0x477
+@@ -199,6 +220,36 @@ struct wcd939x_usbss {
+ 	unsigned int svid;
+ };
+ 
++static struct i2c_driver wcd939x_usbss_driver;
++
++static const unsigned int wcd939x_usbss_reset_regs[] = {
++	WCD_USBSS_DP_EN,
++	WCD_USBSS_DN_EN,
++};
++
++struct wcd939x_usbss_reset {
++	struct wcd939x_usbss *usbss;
++	unsigned int saved[ARRAY_SIZE(wcd939x_usbss_reset_regs)];
++	int error;
++	bool completed;
++};
++
++static const struct {
++	unsigned int reg;
++	unsigned int value;
++} wcd939x_usbss_measurement_regs[] = {
++	{ WCD_USBSS_EXT_LIN_EN, 0x00 },
++	{ WCD_USBSS_EXT_SW_CTRL_1, 0x00 },
++	{ WCD_USBSS_MG1_BIAS, 0x0e },
++	{ WCD_USBSS_MG2_BIAS, 0x0e },
++};
++
++struct wcd939x_usbss_measurement {
++	struct wcd939x_usbss *usbss;
++	unsigned int saved[ARRAY_SIZE(wcd939x_usbss_measurement_regs)];
++	int error;
++};
++
+ static const struct regmap_range_cfg wcd939x_usbss_ranges[] = {
+ 	{
+ 		.range_min = 0,
+@@ -721,6 +772,7 @@ static int wcd939x_usbss_probe(struct i2c_client *client)
+ 	}
+ 
+ 	i2c_set_clientdata(client, usbss);
++	dev_dbg(dev, "USBSS provider ready\n");
+ 
+ 	return 0;
+ 
+@@ -782,6 +834,305 @@ int wcd939x_usbss_audio_config(struct device *dev, bool enable)
+ }
+ EXPORT_SYMBOL_GPL(wcd939x_usbss_audio_config);
+ 
++static void wcd939x_usbss_put_device(void *data)
++{
++	put_device(data);
++}
++
++struct wcd939x_usbss *devm_wcd939x_usbss_get(struct device *consumer,
++					     const char *property)
++{
++	struct wcd939x_usbss *usbss;
++	struct device_node *node;
++	struct i2c_client *client;
++	struct device *supplier;
++	int ret;
++
++	if (!of_property_present(consumer->of_node, property))
++		return NULL;
++
++	node = of_parse_phandle(consumer->of_node, property, 0);
++	if (!node)
++		return ERR_PTR(-EINVAL);
++
++	client = of_find_i2c_device_by_node(node);
++	of_node_put(node);
++	if (!client)
++		return ERR_PTR(-EPROBE_DEFER);
++
++	supplier = &client->dev;
++	if (!device_trylock(supplier)) {
++		ret = -EPROBE_DEFER;
++		goto put_device;
++	}
++
++	if (!device_is_bound(supplier) ||
++	    supplier->links.status != DL_DEV_DRIVER_BOUND) {
++		ret = -EPROBE_DEFER;
++		goto unlock;
++	}
++
++	if (supplier->driver != &wcd939x_usbss_driver.driver) {
++		ret = -ENODEV;
++		goto unlock;
++	}
++
++	if (!device_link_add(consumer, supplier, DL_FLAG_AUTOREMOVE_CONSUMER)) {
++		ret = -EINVAL;
++		goto unlock;
++	}
++
++	usbss = i2c_get_clientdata(client);
++	device_unlock(supplier);
++
++	ret = devm_add_action_or_reset(consumer, wcd939x_usbss_put_device, supplier);
++	if (ret)
++		return ERR_PTR(ret);
++
++	return usbss;
++
++unlock:
++	device_unlock(supplier);
++put_device:
++	put_device(supplier);
++	return ERR_PTR(ret);
++}
++EXPORT_SYMBOL_GPL(devm_wcd939x_usbss_get);
++
++static int wcd939x_usbss_reset_restore(struct wcd939x_usbss_reset *reset)
++{
++	struct wcd939x_usbss *usbss = reset->usbss;
++	int error = 0, ret;
++	unsigned int i;
++
++	lockdep_assert_held(&usbss->lock);
++	for (i = 0; i < ARRAY_SIZE(wcd939x_usbss_reset_regs); i++) {
++		ret = regmap_update_bits(usbss->regmap, wcd939x_usbss_reset_regs[i],
++					 WCD_USBSS_DP_DN_EN_P_THRESH_SEL, reset->saved[i]);
++		if (ret) {
++			dev_err(&usbss->client->dev, "Reset protection restore %#x failed: %d\n",
++				wcd939x_usbss_reset_regs[i], ret);
++			if (!error)
++				error = ret;
++		}
++	}
++
++	return error;
++}
++
++struct wcd939x_usbss_reset *wcd939x_usbss_reset_begin(struct wcd939x_usbss *usbss)
++{
++	struct wcd939x_usbss_reset *reset;
++	unsigned int i;
++	int ret;
++
++	reset = kzalloc_obj(*reset);
++	if (!reset)
++		return ERR_PTR(-ENOMEM);
++
++	reset->usbss = usbss;
++	mutex_lock(&usbss->lock);
++	for (i = 0; i < ARRAY_SIZE(wcd939x_usbss_reset_regs); i++) {
++		ret = regmap_read(usbss->regmap, wcd939x_usbss_reset_regs[i],
++				  &reset->saved[i]);
++		if (ret)
++			goto unlock;
++	}
++
++	for (i = 0; i < ARRAY_SIZE(wcd939x_usbss_reset_regs); i++) {
++		ret = regmap_update_bits(usbss->regmap, wcd939x_usbss_reset_regs[i],
++					 WCD_USBSS_DP_DN_EN_P_THRESH_SEL,
++					 FIELD_PREP(WCD_USBSS_DP_DN_EN_P_THRESH_SEL, 4));
++		if (ret) {
++			/* A failed transfer may still have changed either field. */
++			wcd939x_usbss_reset_restore(reset);
++			goto unlock;
++		}
++	}
++
++	dev_dbg(&usbss->client->dev,
++		"Reset protection prepared: DP/DN mask=0x0e value=0x08\n");
++	return reset;
++
++unlock:
++	mutex_unlock(&usbss->lock);
++	kfree(reset);
++	return ERR_PTR(ret);
++}
++EXPORT_SYMBOL_GPL(wcd939x_usbss_reset_begin);
++
++int wcd939x_usbss_reset_complete(struct wcd939x_usbss_reset *reset)
++{
++	struct wcd939x_usbss *usbss = reset->usbss;
++	unsigned int i;
++	int ret;
++
++	lockdep_assert_held(&usbss->lock);
++	for (i = 0; i < ARRAY_SIZE(wcd939x_usbss_reset_regs); i++) {
++		ret = regmap_update_bits(usbss->regmap, wcd939x_usbss_reset_regs[i],
++					 WCD_USBSS_DP_DN_EN_P_THRESH_SEL,
++					 FIELD_PREP(WCD_USBSS_DP_DN_EN_P_THRESH_SEL, 6));
++		if (ret) {
++			reset->error = ret;
++			return ret;
++		}
++	}
++	reset->completed = true;
++	dev_dbg(&usbss->client->dev,
++		"Reset protection completed: DP/DN mask=0x0e value=0x0c\n");
++
++	return 0;
++}
++EXPORT_SYMBOL_GPL(wcd939x_usbss_reset_complete);
++
++int wcd939x_usbss_reset_end(struct wcd939x_usbss_reset *reset)
++{
++	struct wcd939x_usbss *usbss = reset->usbss;
++	int error = reset->error;
++	int ret;
++
++	lockdep_assert_held(&usbss->lock);
++	if (!reset->completed) {
++		ret = wcd939x_usbss_reset_restore(reset);
++		if (!error)
++			error = ret;
++	}
++	mutex_unlock(&usbss->lock);
++	kfree(reset);
++
++	return error;
++}
++EXPORT_SYMBOL_GPL(wcd939x_usbss_reset_end);
++
++int wcd939x_usbss_init_measurement(struct wcd939x_usbss *usbss)
++{
++	int ret;
++
++	mutex_lock(&usbss->lock);
++	ret = regmap_update_bits(usbss->regmap, WCD_USBSS_FUNCTION_ENABLE,
++				 WCD_USBSS_FUNCTION_ENABLE_RDAC_CAL_SELECT,
++				 WCD_USBSS_FUNCTION_ENABLE_RDAC_CAL_SELECT);
++	if (!ret)
++		dev_dbg(&usbss->client->dev, "USBSS RDAC calibration selection initialized\n");
++	mutex_unlock(&usbss->lock);
++
++	return ret;
++}
++EXPORT_SYMBOL_GPL(wcd939x_usbss_init_measurement);
++
++static int wcd939x_usbss_measurement_restore(struct wcd939x_usbss_measurement *measurement)
++{
++	struct wcd939x_usbss *usbss = measurement->usbss;
++	int error = 0, ret;
++	unsigned int i;
++
++	for (i = 0; i < ARRAY_SIZE(wcd939x_usbss_measurement_regs); i++) {
++		ret = regmap_write(usbss->regmap, wcd939x_usbss_measurement_regs[i].reg,
++				   measurement->saved[i]);
++		if (ret) {
++			dev_err(&usbss->client->dev, "Measurement restore %#x failed: %d\n",
++				wcd939x_usbss_measurement_regs[i].reg, ret);
++			if (!error)
++				error = ret;
++		}
++	}
++
++	return error;
++}
++
++struct wcd939x_usbss_measurement *
++wcd939x_usbss_measurement_begin(struct wcd939x_usbss *usbss)
++{
++	struct wcd939x_usbss_measurement *measurement;
++	unsigned int i;
++	int ret;
++
++	measurement = kzalloc_obj(*measurement);
++	if (!measurement)
++		return ERR_PTR(-ENOMEM);
++
++	measurement->usbss = usbss;
++	mutex_lock(&usbss->lock);
++
++	for (i = 0; i < ARRAY_SIZE(wcd939x_usbss_measurement_regs); i++) {
++		ret = regmap_read(usbss->regmap, wcd939x_usbss_measurement_regs[i].reg,
++				  &measurement->saved[i]);
++		if (ret)
++			goto unlock;
++	}
++
++	for (i = 0; i < ARRAY_SIZE(wcd939x_usbss_measurement_regs); i++) {
++		ret = regmap_write(usbss->regmap, wcd939x_usbss_measurement_regs[i].reg,
++				   wcd939x_usbss_measurement_regs[i].value);
++		if (ret) {
++			/* A failed transfer may still have changed the register. */
++			wcd939x_usbss_measurement_restore(measurement);
++			goto unlock;
++		}
++	}
++
++	return measurement;
++
++unlock:
++	mutex_unlock(&usbss->lock);
++	kfree(measurement);
++	return ERR_PTR(ret);
++}
++EXPORT_SYMBOL_GPL(wcd939x_usbss_measurement_begin);
++
++int wcd939x_usbss_measurement_set_taps(struct wcd939x_usbss_measurement *measurement)
++{
++	static const struct {
++		unsigned int reg;
++		unsigned int mask;
++		unsigned int value;
++	} taps[] = {
++		{ WCD_USBSS_AUDIO_TAP_L_LSB, 0xff, 0xe8 },
++		{ WCD_USBSS_AUDIO_TAP_L_MSB, 0x03, 0x00 },
++		{ WCD_USBSS_AUDIO_TAP_R_LSB, 0xff, 0xe8 },
++		{ WCD_USBSS_AUDIO_TAP_R_MSB, 0x03, 0x00 },
++		{ WCD_USBSS_GROUND_TAP_L_LSB, 0xff, 0xe8 },
++		{ WCD_USBSS_GROUND_TAP_L_MSB, 0x03, 0x00 },
++		{ WCD_USBSS_GROUND_TAP_R_LSB, 0xff, 0xe8 },
++		{ WCD_USBSS_GROUND_TAP_R_MSB, 0x03, 0x00 },
++	};
++	struct wcd939x_usbss *usbss = measurement->usbss;
++	unsigned int i;
++	int ret;
++
++	lockdep_assert_held(&usbss->lock);
++	for (i = 0; i < ARRAY_SIZE(taps); i++) {
++		ret = regmap_update_bits(usbss->regmap, taps[i].reg,
++					 taps[i].mask, taps[i].value);
++		if (ret) {
++			dev_err(&usbss->client->dev, "Measurement tap %#x failed: %d\n",
++				taps[i].reg, ret);
++			if (!measurement->error)
++				measurement->error = ret;
++		}
++	}
++
++	return measurement->error;
++}
++EXPORT_SYMBOL_GPL(wcd939x_usbss_measurement_set_taps);
++
++int wcd939x_usbss_measurement_end(struct wcd939x_usbss_measurement *measurement)
++{
++	struct wcd939x_usbss *usbss = measurement->usbss;
++	int error = measurement->error;
++	int ret;
++
++	lockdep_assert_held(&usbss->lock);
++	ret = wcd939x_usbss_measurement_restore(measurement);
++	if (!error)
++		error = ret;
++	mutex_unlock(&usbss->lock);
++	kfree(measurement);
++
++	return error;
++}
++EXPORT_SYMBOL_GPL(wcd939x_usbss_measurement_end);
++
+ static const struct i2c_device_id wcd939x_usbss_table[] = {
+ 	{ .name = "wcd9390-usbss" },
+ 	{ }
+diff --git a/include/linux/usb/wcd939x-usbss.h b/include/linux/usb/wcd939x-usbss.h
+new file mode 100644
+index 000000000..d7fd22fe3
+--- /dev/null
++++ b/include/linux/usb/wcd939x-usbss.h
+@@ -0,0 +1,81 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef __LINUX_USB_WCD939X_USBSS_H
++#define __LINUX_USB_WCD939X_USBSS_H
++
++#include <linux/err.h>
++#include <linux/kconfig.h>
++#include <linux/property.h>
++
++struct device;
++struct wcd939x_usbss;
++struct wcd939x_usbss_reset;
++struct wcd939x_usbss_measurement;
++
++/* Probe-only lookup; a configured provider must remain bound to the consumer. */
++#if IS_REACHABLE(CONFIG_TYPEC_MUX_WCD939X_USBSS)
++int wcd939x_usbss_audio_config(struct device *dev, bool enable);
++struct wcd939x_usbss *devm_wcd939x_usbss_get(struct device *consumer,
++					     const char *property);
++int wcd939x_usbss_init_measurement(struct wcd939x_usbss *usbss);
++/* Begin/end retain the mode mutex and must execute in the same task. */
++struct wcd939x_usbss_reset *wcd939x_usbss_reset_begin(struct wcd939x_usbss *usbss);
++/* Complete after reset release settles, retaining the token and mode mutex. */
++int wcd939x_usbss_reset_complete(struct wcd939x_usbss_reset *reset);
++/* On failure, reassert codec reset before end restores both saved fields. */
++int wcd939x_usbss_reset_end(struct wcd939x_usbss_reset *reset);
++struct wcd939x_usbss_measurement *
++wcd939x_usbss_measurement_begin(struct wcd939x_usbss *usbss);
++int wcd939x_usbss_measurement_set_taps(struct wcd939x_usbss_measurement *measurement);
++int wcd939x_usbss_measurement_end(struct wcd939x_usbss_measurement *measurement);
++#else
++static inline int wcd939x_usbss_audio_config(struct device *dev, bool enable)
++{
++	return -ENODEV;
++}
++
++static inline struct wcd939x_usbss *
++devm_wcd939x_usbss_get(struct device *consumer, const char *property)
++{
++	return device_property_present(consumer, property) ? ERR_PTR(-ENODEV) : NULL;
++}
++
++static inline int wcd939x_usbss_init_measurement(struct wcd939x_usbss *usbss)
++{
++	return -ENODEV;
++}
++
++static inline struct wcd939x_usbss_reset *
++wcd939x_usbss_reset_begin(struct wcd939x_usbss *usbss)
++{
++	return ERR_PTR(-ENODEV);
++}
++
++static inline int wcd939x_usbss_reset_complete(struct wcd939x_usbss_reset *reset)
++{
++	return -ENODEV;
++}
++
++static inline int wcd939x_usbss_reset_end(struct wcd939x_usbss_reset *reset)
++{
++	return -ENODEV;
++}
++
++static inline struct wcd939x_usbss_measurement *
++wcd939x_usbss_measurement_begin(struct wcd939x_usbss *usbss)
++{
++	return ERR_PTR(-ENODEV);
++}
++
++static inline int
++wcd939x_usbss_measurement_set_taps(struct wcd939x_usbss_measurement *measurement)
++{
++	return -ENODEV;
++}
++
++static inline int
++wcd939x_usbss_measurement_end(struct wcd939x_usbss_measurement *measurement)
++{
++	return -ENODEV;
++}
++#endif
++#endif
+diff --git a/sound/soc/codecs/wcd-mbhc-v2.c b/sound/soc/codecs/wcd-mbhc-v2.c
+index 0a2447d2a..5fd5d83f4 100644
+--- a/sound/soc/codecs/wcd-mbhc-v2.c
++++ b/sound/soc/codecs/wcd-mbhc-v2.c
+@@ -359,6 +359,9 @@ static void wcd_mbhc_report_plug_insertion(struct wcd_mbhc *mbhc,
+ 
+ 
+ 	is_pa_on = wcd_mbhc_read_field(mbhc, WCD_MBHC_HPH_PA_EN);
++	dev_dbg(mbhc->component->dev,
++		"Jack insertion: type=%#x pa_on=%d impedance_detect=%d linein_th=%u\n",
++		jack_type, is_pa_on, mbhc->impedance_detect, mbhc->cfg->linein_th);
+ 
+ 	if (!is_pa_on) {
+ 		wcd_mbhc_compute_impedance(mbhc);
+@@ -515,7 +518,8 @@ static void mbhc_plug_detect_fn(struct work_struct *work)
+ 	struct wcd_mbhc *mbhc = container_of(work, struct wcd_mbhc, mbhc_plug_detect_work);
+ 	struct snd_soc_component *component = mbhc->component;
+ 	enum snd_jack_types jack_type;
+-	bool detection_type;
++	bool detection_type, restore_leakage = false;
++	int ret;
+ 
+ 	mutex_lock(&mbhc->lock);
+ 
+@@ -535,25 +539,21 @@ static void mbhc_plug_detect_fn(struct work_struct *work)
+ 	if (detection_type) {
+ 		if (mbhc->current_plug != MBHC_PLUG_TYPE_NONE)
+ 			goto exit;
+-		/*
+-		 * Route the external analog switch (if any) into audio mode so
+-		 * an integrated jack presents a real HPHL/HPHR load to plug
+-		 * detection instead of floating (which reads as a gnd/mic swap).
+-		 */
+-		if (mbhc->mbhc_cb->mbhc_ext_switch_ctrl)
++		ret = 0;
++		if (mbhc->mbhc_cb->zdet_leakage_ctrl)
++			ret = mbhc->mbhc_cb->zdet_leakage_ctrl(component, false);
++		if (!ret && mbhc->mbhc_cb->mbhc_ext_switch_ctrl)
+ 			mbhc->mbhc_cb->mbhc_ext_switch_ctrl(component, true);
+ 		/* Make sure MASTER_BIAS_CTL is enabled */
+ 		mbhc->mbhc_cb->mbhc_bias(component, true);
+ 		mbhc->is_btn_press = false;
+ 		wcd_mbhc_adc_detect_plug_type(mbhc);
+ 	} else {
+-		/* Jack removed: take the external analog switch out of audio. */
+-		if (mbhc->mbhc_cb->mbhc_ext_switch_ctrl)
+-			mbhc->mbhc_cb->mbhc_ext_switch_ctrl(component, false);
+ 		/* Disable HW FSM */
+ 		wcd_mbhc_write_field(mbhc, WCD_MBHC_FSM_EN, 0);
+ 		wcd_mbhc_write_field(mbhc, WCD_MBHC_BTN_ISRC_CTL, 0);
+ 		mbhc->extn_cable_hph_rem = false;
++		restore_leakage = mbhc->current_plug != MBHC_PLUG_TYPE_NONE;
+ 
+ 		if (mbhc->current_plug == MBHC_PLUG_TYPE_NONE)
+ 			goto report_removed;
+@@ -604,6 +604,10 @@ static void mbhc_plug_detect_fn(struct work_struct *work)
+ 	}
+ 
+ exit:
++	if (!detection_type && mbhc->mbhc_cb->mbhc_ext_switch_ctrl)
++		mbhc->mbhc_cb->mbhc_ext_switch_ctrl(component, false);
++	if (restore_leakage && mbhc->mbhc_cb->zdet_leakage_ctrl)
++		mbhc->mbhc_cb->zdet_leakage_ctrl(component, true);
+ 	mbhc->in_swch_irq_handler = false;
+ 	mutex_unlock(&mbhc->lock);
+ }
+@@ -1649,10 +1653,12 @@ void wcd_mbhc_deinit(struct wcd_mbhc *mbhc)
+ 	free_irq(mbhc->intr_ids->mbhc_btn_press_intr, mbhc);
+ 	free_irq(mbhc->intr_ids->mbhc_sw_intr, mbhc);
+ 
++	/* Plug detection can queue correction work. */
++	cancel_work_sync(&mbhc->mbhc_plug_detect_work);
+ 	mutex_lock(&mbhc->lock);
+ 	wcd_cancel_hs_detect_plug(mbhc,	&mbhc->correct_plug_swch);
+-	cancel_work_sync(&mbhc->mbhc_plug_detect_work);
+ 	mutex_unlock(&mbhc->lock);
++	wcd_cancel_btn_work(mbhc);
+ 
+ 	kfree(mbhc);
+ }
+diff --git a/sound/soc/codecs/wcd-mbhc-v2.h b/sound/soc/codecs/wcd-mbhc-v2.h
+index f85b3d010..81539f6aa 100644
+--- a/sound/soc/codecs/wcd-mbhc-v2.h
++++ b/sound/soc/codecs/wcd-mbhc-v2.h
+@@ -272,6 +272,7 @@ struct wcd_mbhc_cb {
+ 	 * wired through such a switch.
+ 	 */
+ 	void (*mbhc_ext_switch_ctrl)(struct snd_soc_component *component, bool enable);
++	int (*zdet_leakage_ctrl)(struct snd_soc_component *component, bool disable);
+ };
+ 
+ #if IS_ENABLED(CONFIG_SND_SOC_WCD_MBHC)
+diff --git a/sound/soc/codecs/wcd939x.c b/sound/soc/codecs/wcd939x.c
+index 49d3a4c7e..86d52d7b6 100644
+--- a/sound/soc/codecs/wcd939x.c
++++ b/sound/soc/codecs/wcd939x.c
+@@ -28,6 +28,7 @@
+ #include <linux/regulator/consumer.h>
+ #include <linux/usb/typec_mux.h>
+ #include <linux/usb/typec_altmode.h>
++#include <linux/usb/wcd939x-usbss.h>
+ 
+ #include "wcd-clsh-v2.h"
+ #include "wcd-common.h"
+@@ -194,6 +195,7 @@ struct wcd939x_priv {
+ #endif /* CONFIG_TYPEC */
+ 	/* external analog switch (WCD939x USBSS) for an integrated jack */
+ 	struct device *usbss_dev;
++	struct wcd939x_usbss *usbss_measurement;
+ 	/* mbhc module */
+ 	struct wcd_mbhc *wcd_mbhc;
+ 	struct wcd_mbhc_config mbhc_cfg;
+@@ -369,6 +371,8 @@ static int wcd939x_set_swr_clk_rate(struct snd_soc_component *component, int rat
+ 
+ static int wcd939x_io_init(struct snd_soc_component *component)
+ {
++	struct wcd939x_priv *wcd939x = snd_soc_component_get_drvdata(component);
++
+ 	snd_soc_component_write_field(component, WCD939X_ANA_BIAS,
+ 				      WCD939X_BIAS_ANALOG_BIAS_EN, true);
+ 	snd_soc_component_write_field(component, WCD939X_ANA_BIAS,
+@@ -420,7 +424,9 @@ static int wcd939x_io_init(struct snd_soc_component *component)
+ 				WCD939X_CFG0_AUTO_DISABLE_DSD |
+ 				WCD939X_CFG0_AUTO_DISABLE_ANC);
+ 
+-	return 0;
++	/* Keep the jack leakage pull-up disabled until insertion. */
++	return regmap_write_bits(wcd939x->regmap, WCD939X_MBHC_ZDET_BIAS_CTL,
++				 BIT(7), BIT(7));
+ }
+ 
+ static int wcd939x_sdw_connect_port(const struct wcd_sdw_ch_info *ch_info,
+@@ -847,13 +853,9 @@ static int wcd939x_codec_enable_hphr_pa(struct snd_soc_dapm_widget *w,
+ 						      WCD939X_PDM_WD_CTL1_PDM_WD_EN, 3);
+ 		break;
+ 	case SND_SOC_DAPM_POST_PMU:
+-		/*
+-		 * 7ms sleep is required if compander is enabled as per
+-		 * HW requirement. If compander is disabled, then
+-		 * 20ms delay is required.
+-		 */
++		/* Only the legacy PDM compander permits the shorter PA settling time. */
+ 		if (test_bit(HPH_PA_DELAY, &wcd939x->status_mask)) {
+-			if (!wcd939x->comp2_enable)
++			if (wcd939x->hph_pcm_enabled || !wcd939x->comp2_enable)
+ 				usleep_range(20000, 20100);
+ 			else
+ 				usleep_range(7000, 7100);
+@@ -882,12 +884,7 @@ static int wcd939x_codec_enable_hphr_pa(struct snd_soc_dapm_widget *w,
+ 	case SND_SOC_DAPM_PRE_PMD:
+ 		if (!wcd939x->hph_pcm_enabled)
+ 			disable_irq_nosync(wcd939x->hphr_pdm_wd_int);
+-		/*
+-		 * 7ms sleep is required if compander is enabled as per
+-		 * HW requirement. If compander is disabled, then
+-		 * 20ms delay is required.
+-		 */
+-		if (!wcd939x->comp2_enable)
++		if (wcd939x->hph_pcm_enabled || !wcd939x->comp2_enable)
+ 			usleep_range(20000, 20100);
+ 		else
+ 			usleep_range(7000, 7100);
+@@ -900,13 +897,8 @@ static int wcd939x_codec_enable_hphr_pa(struct snd_soc_dapm_widget *w,
+ 		set_bit(HPH_PA_DELAY, &wcd939x->status_mask);
+ 		break;
+ 	case SND_SOC_DAPM_POST_PMD:
+-		/*
+-		 * 7ms sleep is required if compander is enabled as per
+-		 * HW requirement. If compander is disabled, then
+-		 * 20ms delay is required.
+-		 */
+ 		if (test_bit(HPH_PA_DELAY, &wcd939x->status_mask)) {
+-			if (!wcd939x->comp2_enable)
++			if (wcd939x->hph_pcm_enabled || !wcd939x->comp2_enable)
+ 				usleep_range(20000, 20100);
+ 			else
+ 				usleep_range(7000, 7100);
+@@ -983,13 +975,9 @@ static int wcd939x_codec_enable_hphl_pa(struct snd_soc_dapm_widget *w,
+ 						      WCD939X_PDM_WD_CTL0_PDM_WD_EN, 3);
+ 		break;
+ 	case SND_SOC_DAPM_POST_PMU:
+-		/*
+-		 * 7ms sleep is required if compander is enabled as per
+-		 * HW requirement. If compander is disabled, then
+-		 * 20ms delay is required.
+-		 */
++		/* Only the legacy PDM compander permits the shorter PA settling time. */
+ 		if (test_bit(HPH_PA_DELAY, &wcd939x->status_mask)) {
+-			if (!wcd939x->comp1_enable)
++			if (wcd939x->hph_pcm_enabled || !wcd939x->comp1_enable)
+ 				usleep_range(20000, 20100);
+ 			else
+ 				usleep_range(7000, 7100);
+@@ -1016,12 +1004,7 @@ static int wcd939x_codec_enable_hphl_pa(struct snd_soc_dapm_widget *w,
+ 	case SND_SOC_DAPM_PRE_PMD:
+ 		if (!wcd939x->hph_pcm_enabled)
+ 			disable_irq_nosync(wcd939x->hphl_pdm_wd_int);
+-		/*
+-		 * 7ms sleep is required if compander is enabled as per
+-		 * HW requirement. If compander is disabled, then
+-		 * 20ms delay is required.
+-		 */
+-		if (!wcd939x->comp1_enable)
++		if (wcd939x->hph_pcm_enabled || !wcd939x->comp1_enable)
+ 			usleep_range(20000, 20100);
+ 		else
+ 			usleep_range(7000, 7100);
+@@ -1033,13 +1016,8 @@ static int wcd939x_codec_enable_hphl_pa(struct snd_soc_dapm_widget *w,
+ 		set_bit(HPH_PA_DELAY, &wcd939x->status_mask);
+ 		break;
+ 	case SND_SOC_DAPM_POST_PMD:
+-		/*
+-		 * 7ms sleep is required if compander is enabled as per
+-		 * HW requirement. If compander is disabled, then
+-		 * 20ms delay is required.
+-		 */
+ 		if (test_bit(HPH_PA_DELAY, &wcd939x->status_mask)) {
+-			if (!wcd939x->comp1_enable)
++			if (wcd939x->hph_pcm_enabled || !wcd939x->comp1_enable)
+ 				usleep_range(21000, 21100);
+ 			else
+ 				usleep_range(7000, 7100);
+@@ -2456,8 +2434,10 @@ static void wcd939x_wcd_mbhc_calc_impedance(struct snd_soc_component *component,
+ 					    u32 *zl, uint32_t *zr)
+ {
+ 	struct wcd939x_priv *wcd939x = dev_get_drvdata(component->dev);
++	struct wcd939x_usbss_measurement *measurement = NULL;
+ 	unsigned int reg0, reg1, reg2, reg3, reg4;
+ 	int z_mono, z_diff1, z_diff2, ret;
++	int measurement_error = 0;
+ 	bool is_fsm_disable = false;
+ 	s32 z1l, z1r, z1ls;
+ 
+@@ -2471,6 +2451,16 @@ static void wcd939x_wcd_mbhc_calc_impedance(struct snd_soc_component *component,
+ 		}
+ 	}
+ 
++	if (wcd939x->usbss_measurement) {
++		measurement = wcd939x_usbss_measurement_begin(wcd939x->usbss_measurement);
++		if (IS_ERR(measurement)) {
++			measurement_error = PTR_ERR(measurement);
++			dev_err(component->dev, "USBSS measurement setup failed: %d\n",
++				measurement_error);
++			goto supplies_off;
++		}
++	}
++
+ 	reg0 = snd_soc_component_read(component, WCD939X_ANA_MBHC_BTN5);
+ 	reg1 = snd_soc_component_read(component, WCD939X_ANA_MBHC_BTN6);
+ 	reg2 = snd_soc_component_read(component, WCD939X_ANA_MBHC_BTN7);
+@@ -2576,6 +2566,13 @@ static void wcd939x_wcd_mbhc_calc_impedance(struct snd_soc_component *component,
+ 	}
+ 
+ zdet_complete:
++	if (measurement) {
++		measurement_error = wcd939x_usbss_measurement_set_taps(measurement);
++		if (measurement_error)
++			dev_err(component->dev, "USBSS measurement taps failed: %d\n",
++				measurement_error);
++	}
++
+ 	/* Enable surge protection again after impedance detection */
+ 	snd_soc_component_write_field(component, WCD939X_HPH_SURGE_EN,
+ 				      WCD939X_EN_EN_SURGE_PROTECTION_HPHR, true);
+@@ -2602,6 +2599,15 @@ static void wcd939x_wcd_mbhc_calc_impedance(struct snd_soc_component *component,
+ 		snd_soc_component_write_field(component, WCD939X_ANA_MBHC_ELECT,
+ 					      WCD939X_MBHC_ELECT_FSM_EN, true);
+ 
++	if (measurement) {
++		ret = wcd939x_usbss_measurement_end(measurement);
++		if (ret) {
++			dev_err(component->dev, "USBSS measurement completion failed: %d\n", ret);
++			if (!measurement_error)
++				measurement_error = ret;
++		}
++	}
++
+ supplies_off:
+ 	if (wcd939x->zdet_v2) {
+ 		ret = wcd939x_zdet_supplies_disable(wcd939x);
+@@ -2611,6 +2617,10 @@ static void wcd939x_wcd_mbhc_calc_impedance(struct snd_soc_component *component,
+ 			wcd_mbhc_set_hph_type(wcd939x->wcd_mbhc, WCD_MBHC_HPH_NONE);
+ 		}
+ 	}
++	if (measurement_error) {
++		*zl = *zr = 0;
++		wcd_mbhc_set_hph_type(wcd939x->wcd_mbhc, WCD_MBHC_HPH_NONE);
++	}
+ }
+ 
+ static void wcd939x_mbhc_gnd_det_ctrl(struct snd_soc_component *component,
+@@ -2722,27 +2732,40 @@ static void wcd939x_mbhc_moisture_polling_ctrl(struct snd_soc_component *compone
+ 				      enable);
+ }
+ 
+-/* Provided by the WCD939x USBSS analog-switch driver (built-in). */
+-int wcd939x_usbss_audio_config(struct device *dev, bool enable);
++static int wcd939x_mbhc_zdet_leakage_ctrl(struct snd_soc_component *component,
++					bool disable)
++{
++	struct wcd939x_priv *wcd939x = snd_soc_component_get_drvdata(component);
++	int ret;
++
++	ret = regmap_write_bits(wcd939x->regmap, WCD939X_MBHC_ZDET_BIAS_CTL,
++				BIT(7), disable ? BIT(7) : 0);
++	if (ret)
++		dev_err(component->dev, "Failed to %s jack leakage pull-up: %d\n",
++			disable ? "disable" : "enable", ret);
++
++	return ret;
++}
+ 
+-/*
+- * Route the WCD939x USBSS into/out of audio-accessory mode when the MBHC
+- * detects an integrated 3.5mm jack via the mechanical path.  Without it the
+- * jack's HPHL/HPHR lines float through the switch and MBHC reports a gnd/mic
+- * swap.  No-op on boards without a USBSS (usbss_dev == NULL).
+- */
+ static void wcd939x_mbhc_ext_switch_ctrl(struct snd_soc_component *component,
+ 					 bool enable)
+ {
+ 	struct wcd939x_priv *wcd939x = snd_soc_component_get_drvdata(component);
++	int ret;
++
++	if (!wcd939x->usbss_dev)
++		return;
+ 
+-	if (wcd939x->usbss_dev)
+-		wcd939x_usbss_audio_config(wcd939x->usbss_dev, enable);
++	ret = wcd939x_usbss_audio_config(wcd939x->usbss_dev, enable);
++	if (ret)
++		dev_err(component->dev, "Failed to %s jack audio switch: %d\n",
++			enable ? "enable" : "disable", ret);
+ }
+ 
+ static const struct wcd_mbhc_cb mbhc_cb = {
+ 	.clk_setup = wcd939x_mbhc_clk_setup,
+ 	.mbhc_ext_switch_ctrl = wcd939x_mbhc_ext_switch_ctrl,
++	.zdet_leakage_ctrl = wcd939x_mbhc_zdet_leakage_ctrl,
+ 	.mbhc_bias = wcd939x_mbhc_mbhc_bias_control,
+ 	.set_btn_thr = wcd939x_mbhc_program_btn_thr,
+ 	.micbias_enable_status = wcd939x_mbhc_micb_en_status,
+@@ -3388,7 +3411,12 @@ static int wcd939x_soc_codec_probe(struct snd_soc_component *component)
+ 		return PTR_ERR(wcd939x->clsh_info);
+ 	}
+ 
+-	wcd939x_io_init(component);
++	ret = wcd939x_io_init(component);
++	if (ret) {
++		dev_err(dev, "Failed to initialize jack leakage control: %d\n", ret);
++		pm_runtime_put(dev);
++		goto err_free_clsh_ctrl;
++	}
+ 
+ 	/* Set all interrupts as edge triggered */
+ 	for (i = 0; i < wcd939x_regmap_irq_chip.num_regs; i++)
+@@ -3587,12 +3615,16 @@ static bool wcd939x_swap_gnd_mic(struct snd_soc_component *component)
+ static int wcd939x_populate_dt_data(struct wcd939x_priv *wcd939x, struct device *dev)
+ {
+ 	struct wcd_mbhc_config *cfg = &wcd939x->mbhc_cfg;
++	enum gpiod_flags reset_flags = GPIOD_OUT_LOW;
+ #if IS_ENABLED(CONFIG_TYPEC)
+ 	struct device_node *np;
+ #endif /* CONFIG_TYPEC */
+ 	int ret;
+ 
+-	wcd939x->reset_gpio = devm_gpiod_get(dev, "reset", GPIOD_OUT_LOW);
++	/* The USBSS provider must prepare protection before driving reset. */
++	if (device_property_present(dev, "qcom,usbss-measurement"))
++		reset_flags = GPIOD_ASIS;
++	wcd939x->reset_gpio = devm_gpiod_get(dev, "reset", reset_flags);
+ 	if (IS_ERR(wcd939x->reset_gpio))
+ 		return dev_err_probe(dev, PTR_ERR(wcd939x->reset_gpio),
+ 				     "Failed to get reset gpio\n");
+@@ -3650,8 +3682,53 @@ static int wcd939x_populate_dt_data(struct wcd939x_priv *wcd939x, struct device
+ 	return 0;
+ }
+ 
++static int wcd939x_reset_with_usbss(struct wcd939x_priv *wcd939x)
++{
++	struct device *dev = wcd939x->common.dev;
++	struct wcd939x_usbss_reset *reset;
++	int ret, cleanup;
++
++	reset = wcd939x_usbss_reset_begin(wcd939x->usbss_measurement);
++	if (IS_ERR(reset))
++		return PTR_ERR(reset);
++
++	dev_dbg(dev, "USBSS protection prepared for codec reset\n");
++	ret = gpiod_direction_output(wcd939x->reset_gpio, 1);
++	if (ret)
++		goto abort;
++	usleep_range(80, 85);
++	dev_dbg(dev, "Codec reset asserted; 80-85 us wait completed\n");
++
++	ret = gpiod_direction_output(wcd939x->reset_gpio, 0);
++	if (ret)
++		goto abort;
++	usleep_range(80, 85);
++	dev_dbg(dev, "Codec reset released; 80-85 us wait completed\n");
++
++	ret = wcd939x_usbss_reset_complete(reset);
++	if (ret)
++		goto abort;
++
++	ret = wcd939x_usbss_reset_end(reset);
++	if (!ret)
++		dev_dbg(dev, "Codec reset and USBSS protection completed\n");
++	return ret;
++
++abort:
++	cleanup = gpiod_direction_output(wcd939x->reset_gpio, 1);
++	if (cleanup)
++		dev_err(dev, "Failed to hold codec in reset: %d\n", cleanup);
++	cleanup = wcd939x_usbss_reset_end(reset);
++	if (cleanup)
++		dev_err(dev, "USBSS reset transaction failed: %d\n", cleanup);
++	return ret;
++}
++
+ static int wcd939x_reset(struct wcd939x_priv *wcd939x)
+ {
++	if (wcd939x->usbss_measurement)
++		return wcd939x_reset_with_usbss(wcd939x);
++
+ 	gpiod_set_value(wcd939x->reset_gpio, 1);
+ 	/* 20us sleep required after pulling the reset gpio to LOW */
+ 	usleep_range(20, 30);
+@@ -3978,11 +4055,28 @@ static int wcd939x_probe(struct platform_device *pdev)
+ 	if (ret)
+ 		return ret;
+ 
++	if (device_property_present(dev, "qcom,usbss-measurement") &&
++	    (wcd939x->typec_analog_mux || device_property_present(dev, "qcom,usbss")))
++		return dev_err_probe(dev, -EINVAL,
++				     "USBSS measurement requires an independent headphone jack\n");
++
++	wcd939x->usbss_measurement = devm_wcd939x_usbss_get(dev, "qcom,usbss-measurement");
++	if (IS_ERR(wcd939x->usbss_measurement))
++		return dev_err_probe(dev, PTR_ERR(wcd939x->usbss_measurement),
++				     "failed to acquire USBSS measurement provider\n");
++	if (wcd939x->usbss_measurement) {
++		ret = wcd939x_usbss_init_measurement(wcd939x->usbss_measurement);
++		if (ret)
++			return dev_err_probe(dev, ret, "USBSS measurement initialization failed\n");
++	}
++
+ 	ret = wcd939x_add_slave_components(wcd939x, dev, &match);
+ 	if (ret)
+ 		return ret;
+ 
+-	wcd939x_reset(wcd939x);
++	ret = wcd939x_reset(wcd939x);
++	if (ret)
++		return dev_err_probe(dev, ret, "Codec reset failed\n");
+ 
+ 	ret = component_master_add_with_match(dev, &wcd939x_comp_ops, match);
+ 	if (ret)
+@@ -3994,6 +4088,7 @@ static int wcd939x_probe(struct platform_device *pdev)
+ 	pm_runtime_set_active(dev);
+ 	pm_runtime_enable(dev);
+ 	pm_runtime_idle(dev);
++	dev_dbg(dev, "Codec platform probe completed\n");
+ 
+ 	return 0;
+ }

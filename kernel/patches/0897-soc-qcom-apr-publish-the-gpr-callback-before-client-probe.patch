@@ -1,0 +1,106 @@
+From: Mohit Sharma <mohit.sharma@oss.qualcomm.com>
+Subject: [PATCH] soc: qcom: apr: publish the GPR callback before client probe
+
+Both patches of "Fix GPR callback registration race during probe", in upstream
+order:
+
+ 1/2 ASoC: qcom: q6apm: Guard callbacks until probe data is ready
+     <20261022144130.2443667-2-mohit.sharma@oss.qualcomm.com>
+ 2/2 soc: qcom: apr: Publish GPR callback before client probe
+     <20261022144130.2443667-3-mohit.sharma@oss.qualcomm.com>
+
+A GPR service driver can issue synchronous commands from its probe path, but
+the bus only installed the service callback after probe returned. A response
+arriving in between found a NULL callback and was dropped, and the client timed
+out:
+
+  qcom-apm ... CMD timeout for [1001021] opcode
+
+The second patch installs the callback before probe, clears it again if probe
+fails, and leaves APR clients as they were. That lets a callback run before the
+client has published its data, so the first patch makes q6apm publish its
+driver data last, and q6apm and q6prm ignore packets until it is there. q6apm
+and q6prm are the only GPR clients. The two only make sense together.
+
+Fixes: ec1471a898cc ("soc: qcom: apr: Add GPR support")
+Cc: stable@vger.kernel.org
+Co-developed-by: Ajay Kumar Nandam <ajay.nandam@oss.qualcomm.com>
+Signed-off-by: Ajay Kumar Nandam <ajay.nandam@oss.qualcomm.com>
+Signed-off-by: Mohit Sharma <mohit.sharma@oss.qualcomm.com>
+---
+diff --git a/drivers/soc/qcom/apr.c b/drivers/soc/qcom/apr.c
+index ea7f83916..829e5c8fd 100644
+--- a/drivers/soc/qcom/apr.c
++++ b/drivers/soc/qcom/apr.c
+@@ -365,13 +365,24 @@ static int apr_device_probe(struct device *dev)
+ {
+ 	struct apr_device *adev = to_apr_device(dev);
+ 	struct apr_driver *adrv = to_apr_driver(dev->driver);
++	struct packet_router *apr = dev_get_drvdata(dev->parent);
+ 	int ret;
+ 
++	if (apr->type == PR_TYPE_GPR)
++		adev->svc.callback = adrv->gpr_callback;
++
+ 	ret = adrv->probe(adev);
+-	if (!ret)
++	if (ret) {
++		if (apr->type == PR_TYPE_GPR)
++			adev->svc.callback = NULL;
++
++		return ret;
++	}
++
++	if (apr->type != PR_TYPE_GPR)
+ 		adev->svc.callback = adrv->gpr_callback;
+ 
+-	return ret;
++	return 0;
+ }
+ 
+ static void apr_device_remove(struct device *dev)
+diff --git a/sound/soc/qcom/qdsp6/q6apm.c b/sound/soc/qcom/qdsp6/q6apm.c
+index f167b9dae..c541c7998 100644
+--- a/sound/soc/qcom/qdsp6/q6apm.c
++++ b/sound/soc/qcom/qdsp6/q6apm.c
+@@ -866,8 +866,6 @@ static int apm_probe(gpr_device_t *gdev)
+ 	if (!apm)
+ 		return -ENOMEM;
+ 
+-	dev_set_drvdata(dev, apm);
+-
+ 	mutex_init(&apm->lock);
+ 	apm->dev = dev;
+ 	apm->gdev = gdev;
+@@ -881,6 +879,7 @@ static int apm_probe(gpr_device_t *gdev)
+ 
+ 	idr_init(&apm->modules_idr);
+ 
++	dev_set_drvdata(dev, apm);
+ 	g_apm = apm;
+ 
+ 	q6apm_get_apm_state(apm);
+@@ -924,6 +923,9 @@ static int apm_callback(const struct gpr_resp_pkt *data, void *priv, int op)
+ 	const struct gpr_hdr *hdr = &data->hdr;
+ 	int graph_id, is_pos_buf;
+ 
++	if (!apm)
++		return 0;
++
+ 	result = data->payload;
+ 
+ 	switch (hdr->opcode) {
+diff --git a/sound/soc/qcom/qdsp6/q6prm.c b/sound/soc/qcom/qdsp6/q6prm.c
+index 1f3ce4cc0..bcc73127d 100644
+--- a/sound/soc/qcom/qdsp6/q6prm.c
++++ b/sound/soc/qcom/qdsp6/q6prm.c
+@@ -192,6 +192,9 @@ static int prm_callback(const struct gpr_resp_pkt *data, void *priv, int op)
+ 	const struct gpr_ibasic_rsp_result_t *result;
+ 	const struct gpr_hdr *hdr = &data->hdr;
+ 
++	if (!prm)
++		return 0;
++
+ 	switch (hdr->opcode) {
+ 	case PRM_CMD_RSP_REQUEST_HW_RSC:
+ 	case PRM_CMD_RSP_RELEASE_HW_RSC:

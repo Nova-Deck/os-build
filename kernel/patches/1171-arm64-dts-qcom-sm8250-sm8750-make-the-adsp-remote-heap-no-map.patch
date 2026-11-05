@@ -1,0 +1,51 @@
+From: Jianping Li <jianping.li@oss.qualcomm.com>
+Subject: [PATCH] arm64: dts: qcom: sm8250, sm8750: make the ADSP remote heap no-map
+
+The two patches of "arm64: dts: qcom: Make ADSP remote heaps no-map" that reach
+our SoCs, in upstream order:
+
+ 3/4 arm64: dts: qcom: sm8250: Make the ADSP remote heap no-map
+     <20261015071511.977-4-jianping.li@oss.qualcomm.com>
+ 4/4 arm64: dts: qcom: sm8750: Make the ADSP remote heap no-map
+     <20261015071511.977-5-jianping.li@oss.qualcomm.com>
+
+The ADSP remote heap is declared as a reusable shared DMA pool. FastRPC assigns
+the entire region to the DSP during probe without allocating the pages from
+CMA, so movable HLOS allocations can land on pages HLOS no longer has access
+to, and the kernel then takes synchronous external aborts on them.
+
+Replace reusable with no-map to keep the region reserved for the DSP and out of
+the kernel's standard memory mapping.
+
+Fixes: 531ce288b6dd4 ("arm64: dts: qcom: sm8250: Add memory-region for audio PD")
+Fixes: 0bcf9ca23a873 ("arm64: dts: qcom: sm8750: add memory node for adsp fastrpc")
+Signed-off-by: Jianping Li <jianping.li@oss.qualcomm.com>
+Reviewed-by: Konrad Dybcio <konrad.dybcio@oss.qualcomm.com>
+Reviewed-by: Ekansh Gupta <ekansh.gupta@oss.qualcomm.com>
+---
+diff --git a/arch/arm64/boot/dts/qcom/sm8250.dtsi b/arch/arm64/boot/dts/qcom/sm8250.dtsi
+index ccb940275..3f32c5082 100644
+--- a/arch/arm64/boot/dts/qcom/sm8250.dtsi
++++ b/arch/arm64/boot/dts/qcom/sm8250.dtsi
+@@ -868,7 +868,7 @@ cdsp_secure_heap: memory@8bf00000 {
+ 		adsp_rpc_remote_heap_mem: adsp-rpc-remote-heap {
+ 			compatible = "shared-dma-pool";
+ 			alloc-ranges = <0x0 0x80000000 0x0 0x80000000>;
+-			reusable;
++			no-map;
+ 			alignment = <0x0 0x400000>;
+ 			size = <0x0 0x800000>;
+ 		};
+diff --git a/arch/arm64/boot/dts/qcom/sm8750.dtsi b/arch/arm64/boot/dts/qcom/sm8750.dtsi
+index c203f7ce8..e3acfa4f5 100644
+--- a/arch/arm64/boot/dts/qcom/sm8750.dtsi
++++ b/arch/arm64/boot/dts/qcom/sm8750.dtsi
+@@ -570,7 +570,7 @@ adsp_rpc_remote_heap_mem: adsp-rpc-remote-heap {
+ 			alloc-ranges = <0x0 0x00000000 0x0 0xffffffff>;
+ 			alignment = <0x0 0x400000>;
+ 			size = <0x0 0xc00000>;
+-			reusable;
++			no-map;
+ 		};
+ 	};
+ 

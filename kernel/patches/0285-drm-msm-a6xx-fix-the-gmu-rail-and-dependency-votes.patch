@@ -1,0 +1,230 @@
+From: Akhil P Oommen <akhilpo@oss.qualcomm.com>
+Subject: [PATCH] drm/msm/a6xx: fix the GMU rail and dependency votes
+
+Four commits of the Hawi GPU series
+<20260923-hawi-gpu-v1-*-0c3c79a1a470@oss.qualcomm.com>, in v7.4-rc1, in
+upstream order:
+
+ 128a0edde507 drm/msm/a6xx: Fix secondary rail vote in ARC votes
+ eab0aff8965e drm/msm/a6xx: Fix RPMH dependency votes
+ b5269bf0e1ad drm/msm/a6xx: Factor out RPMh arc-vote helpers
+ 86f80884fb7f drm/msm/a6xx: Clamp MX dependency vote
+
+The first matches the secondary rail against the selected primary voltage
+rather than the requested level, which could under-vote the dependent rail.
+It reaches every GMU GPU, and votes only go up.
+
+The second resolves the GPU frequencies against the GPU's OPP table. The GMU
+device has no such entries, so every level came back 0 and the dependency
+votes all took the lowest MX corner. Only A8xx sends those votes to the GMU.
+
+The second does not stand alone: the vote table is built on every GMU GPU,
+and with real levels a GPU corner above the highest MX corner fails GMU init
+with -EINVAL. The last commit clamps to the highest MX corner instead, and the
+third carries the helper it does that in.
+
+020b8eaa1db8 (BX rail support, 5/6 of the series) sits between those two and
+is not taken: it is keyed on a "gbx.lvl" resource for a later platform. The
+clamp is the same one word without it.
+
+Signed-off-by: Akhil P Oommen <akhilpo@oss.qualcomm.com>
+---
+diff --git a/drivers/gpu/drm/msm/adreno/a6xx_gmu.c b/drivers/gpu/drm/msm/adreno/a6xx_gmu.c
+index b777628e7..a5188cc74 100644
+--- a/drivers/gpu/drm/msm/adreno/a6xx_gmu.c
++++ b/drivers/gpu/drm/msm/adreno/a6xx_gmu.c
+@@ -1723,70 +1723,85 @@ static unsigned int a6xx_gmu_get_arc_level(struct device *dev,
+ 	return val;
+ }
+ 
++static const u16 *a6xx_gmu_rpmh_read_arc(const char *id, size_t *count)
++{
++	const u16 *vals;
++
++	vals = cmd_db_read_aux_data(id, count);
++	if (IS_ERR(vals))
++		return vals;
++
++	*count >>= 1;
++	/* Exclude the trailing zero paddings if there are any */
++	while (*count && !vals[*count - 1])
++		(*count)--;
++
++	if (!*count)
++		return ERR_PTR(-EINVAL);
++
++	return vals;
++}
++
++/*
++ * Find the first index in an arc level array whose level is greater than or
++ * equal to the target. If no level is high enough, either clamp to the
++ * highest available level (@clamp) or fail, dumping the list.
++ */
++static int a6xx_gmu_rpmh_arc_index(struct device *dev, const u16 *arc,
++				   size_t arc_count, unsigned int level, bool clamp)
++{
++	int j;
++
++	for (j = 0; j < arc_count; j++) {
++		if (arc[j] >= level)
++			return j;
++	}
++
++	if (clamp)
++		return arc_count - 1;
++
++	DRM_DEV_ERROR(dev, "Level %u not found in the RPMh list\n", level);
++	DRM_DEV_ERROR(dev, "Available levels:\n");
++	for (j = 0; j < arc_count; j++)
++		DRM_DEV_ERROR(dev, "  %u\n", arc[j]);
++
++	return -EINVAL;
++}
++
+ static int a6xx_gmu_rpmh_arc_votes_init(struct device *dev, u32 *votes,
+ 		unsigned long *freqs, int freqs_count,
+ 		const char *pri_id, const char *sec_id)
+ {
+-	int i, j;
++	int i;
+ 	const u16 *pri, *sec;
+ 	size_t pri_count, sec_count;
+ 
+-	pri = cmd_db_read_aux_data(pri_id, &pri_count);
++	pri = a6xx_gmu_rpmh_read_arc(pri_id, &pri_count);
+ 	if (IS_ERR(pri))
+ 		return PTR_ERR(pri);
+-	/*
+-	 * The data comes back as an array of unsigned shorts so adjust the
+-	 * count accordingly
+-	 */
+-	pri_count >>= 1;
+-	if (!pri_count)
+-		return -EINVAL;
+ 
+-	sec = cmd_db_read_aux_data(sec_id, &sec_count);
++	sec = a6xx_gmu_rpmh_read_arc(sec_id, &sec_count);
+ 	if (IS_ERR(sec))
+ 		return PTR_ERR(sec);
+ 
+-	sec_count >>= 1;
+-	if (!sec_count)
+-		return -EINVAL;
+-
+ 	/* Construct a vote for each frequency */
+ 	for (i = 0; i < freqs_count; i++) {
+-		u8 pindex = 0, sindex = 0;
+ 		unsigned int level = a6xx_gmu_get_arc_level(dev, freqs[i]);
++		int pindex, sindex;
+ 
+-		/* Get the primary index that matches the arc level */
+-		for (j = 0; j < pri_count; j++) {
+-			if (pri[j] >= level) {
+-				pindex = j;
+-				break;
+-			}
+-		}
+-
+-		if (j == pri_count) {
+-			DRM_DEV_ERROR(dev,
+-				      "Level %u not found in the RPMh list\n",
+-				      level);
+-			DRM_DEV_ERROR(dev, "Available levels:\n");
+-			for (j = 0; j < pri_count; j++)
+-				DRM_DEV_ERROR(dev, "  %u\n", pri[j]);
+-
+-			return -EINVAL;
+-		}
++		pindex = a6xx_gmu_rpmh_arc_index(dev, pri, pri_count, level, false);
++		if (pindex < 0)
++			return pindex;
+ 
+ 		/*
+-		 * Look for a level in in the secondary list that matches. If
+-		 * nothing fits, use the maximum non zero vote
++		 * Look for a matching level in the secondary list; if nothing
++		 * fits, clamp to the highest available vote. The secondary rail
++		 * depends on the primary rail, so match it against the selected
++		 * primary voltage (which is >= the requested level), not the
++		 * requested level itself.
+ 		 */
+-
+-		for (j = 0; j < sec_count; j++) {
+-			if (sec[j] >= level) {
+-				sindex = j;
+-				break;
+-			} else if (sec[j]) {
+-				sindex = j;
+-			}
+-		}
++		sindex = a6xx_gmu_rpmh_arc_index(dev, sec, sec_count,
++						 pri[pindex], true);
+ 
+ 		/* Construct the vote */
+ 		votes[i] = ((pri[pindex] & 0xffff) << 16) |
+@@ -1802,16 +1817,9 @@ static int a6xx_gmu_rpmh_dep_votes_init(struct device *dev, u32 *votes,
+ 	const u16 *mx;
+ 	size_t count;
+ 
+-	mx = cmd_db_read_aux_data("mx.lvl", &count);
++	mx = a6xx_gmu_rpmh_read_arc("mx.lvl", &count);
+ 	if (IS_ERR(mx))
+ 		return PTR_ERR(mx);
+-	/*
+-	 * The data comes back as an array of unsigned shorts so adjust the
+-	 * count accordingly
+-	 */
+-	count >>= 1;
+-	if (!count)
+-		return -EINVAL;
+ 
+ 	/* Fix the vote for zero frequency */
+ 	votes[0] = 0xffffffff;
+@@ -1819,26 +1827,10 @@ static int a6xx_gmu_rpmh_dep_votes_init(struct device *dev, u32 *votes,
+ 	/* Construct a vote for rest of the corners */
+ 	for (int i = 1; i < freqs_count; i++) {
+ 		unsigned int level = a6xx_gmu_get_arc_level(dev, freqs[i]);
+-		u8 j, index = 0;
+-
+-		/* Get the primary index that matches the arc level */
+-		for (j = 0; j < count; j++) {
+-			if (mx[j] >= level) {
+-				index = j;
+-				break;
+-			}
+-		}
+-
+-		if (j == count) {
+-			DRM_DEV_ERROR(dev,
+-				      "Mx Level %u not found in the RPMh list\n",
+-				      level);
+-			DRM_DEV_ERROR(dev, "Available levels:\n");
+-			for (j = 0; j < count; j++)
+-				DRM_DEV_ERROR(dev, "  %u\n", mx[j]);
++		int index = a6xx_gmu_rpmh_arc_index(dev, mx, count, level, true);
+ 
+-			return -EINVAL;
+-		}
++		if (index < 0)
++			return index;
+ 
+ 		/* Construct the vote */
+ 		votes[i] = (0x3fff << 14) | (index << 8) | (0xff);
+@@ -1876,13 +1868,13 @@ static int a6xx_gmu_rpmh_votes_init(struct a6xx_gmu *gmu)
+ 	ret = a6xx_gmu_rpmh_arc_votes_init(&gpu->pdev->dev, gmu->gx_arc_votes,
+ 		gmu->gpu_freqs, gmu->nr_gpu_freqs, "gfx.lvl", sec_id);
+ 
++	ret |= a6xx_gmu_rpmh_dep_votes_init(&gpu->pdev->dev, gmu->dep_arc_votes,
++		gmu->gpu_freqs, gmu->nr_gpu_freqs);
++
+ 	/* Build the CX votes */
+ 	ret |= a6xx_gmu_rpmh_arc_votes_init(gmu->dev, gmu->cx_arc_votes,
+ 		gmu->gmu_freqs, gmu->nr_gmu_freqs, "cx.lvl", "mx.lvl");
+ 
+-	ret |= a6xx_gmu_rpmh_dep_votes_init(gmu->dev, gmu->dep_arc_votes,
+-		gmu->gpu_freqs, gmu->nr_gpu_freqs);
+-
+ 	/* Build the interconnect votes */
+ 	if (info->bcms && gmu->nr_gpu_bws > 1)
+ 		ret |= a6xx_gmu_rpmh_bw_votes_init(adreno_gpu, info, gmu);

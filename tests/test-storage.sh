@@ -300,7 +300,14 @@ CASE="the-mounter-does-not-announce-to-the-client"
 # CODE LINES ONLY. The comment that replaced it explains what was removed and names the URL to do
 # so, and a whole-file grep matches that prose — the fourth time in this suite that a comment has
 # failed a correct file. Strip comments before asserting about code.
-code() { sed 's,#.*,,' "$1"; }
+# code <file>: the file without comments, for `code X | grep -q`. Under pipefail that pipe is the
+# SIGPIPE trap above: grep -q exits on its first match, the sed still writing gets EPIPE, and the
+# check fails exactly when the string IS there (CI, 2026-11-07, "--force does not disable
+# validation"). So the broken pipe is not a failure; an unreadable file still is.
+code() {
+  [ -r "$1" ] || { echo "code: cannot read $1" >&2; return 2; }
+  sed 's,#.*,,' "$1" 2>/dev/null || true
+}
 code "$AUTO" | grep -q 'addlibraryfolder' \
   && bad "the mounter announces to the client again — that creates a library on every inserted card" \
   || ok "no steam://addlibraryfolder: mounting a card does not make it a library"

@@ -21,9 +21,9 @@
 # rootfs/overlay/etc/inputplumber/devices.d, because upstream now ships configs for boards we
 # also describe. See the note below.
 name: inputplumber
-version: 0.82.0
-url: https://github.com/ShadowBlip/InputPlumber/releases/download/v0.82.0/inputplumber-aarch64.tar.gz
-sha256: 2695fc677f2ec1945a642e530029105d78be7d3058f412f31e83c37be5c9eeea
+version: 0.84.0
+url: https://github.com/ShadowBlip/InputPlumber/releases/download/v0.84.0/inputplumber-aarch64.tar.gz
+sha256: c1ef0534f9ec488cc7abe2bc5fe6b16bd575f8ed9549372c8c7472341785bc19
 strip: 1
 
 # 0.78.0 was the release where upstream started describing ARM handhelds at all: it added
@@ -79,6 +79,10 @@ strip: 1
 # restores the release delay gamepad macros need, so on-release QuickAccess/Screenshot chords are
 # visible to Steam again, and cf93497 restores device-node permissions on unhide and re-triggers
 # the udev add.
+#
+# 0.83.0-0.84.0 describe none of our remaining boards. The one new ARM config, 50-ayn_odin.yaml,
+# sorts BEFORE 50-ayn_odin2/50-ayn_odin3 ('.' < '2'), so it would take those boards if it matched
+# loosely — it does not: exact `compatible` ayn,odin-m0 / ayn,odin-m2 (the SDM845 Odin), no glob.
 #
 # What upstream still does NOT describe, and what stays in our overlay:
 #   * four SM8550 AYANEO Pocket boards — 50-ayaneo_pocket_{ace,dmg,evo,s1}.yaml

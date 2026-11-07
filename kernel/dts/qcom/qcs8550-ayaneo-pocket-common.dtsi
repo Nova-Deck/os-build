@@ -1160,17 +1160,34 @@
 	860000000 RPMH_REGULATOR_LEVEL_TURBO_L1
 	1000000000 RPMH_REGULATOR_LEVEL_TURBO_L2
 */
+/* Every AYANEO "SM8550" is a G3x Gen 2 with the A32. Its DDR vote per level is the
+   vendor gpu-pwrlevel bus-freq, an index into the vendor qcom,bus-table-ddr:
+   1 2136718, 3 6074218, 6 10687500, 7 12449218, 8 14398437, 9 16500000 kBps.
+   sm8550.dtsi's 550/615/680 MHz votes are tuned for the phone A740, where 680 MHz
+   is the top level; the A32 votes those levels lower. */
+	opp-550000000 {
+		opp-peak-kBps = <6074218>; // Level 3
+	};
+
+	opp-615000000 {
+		opp-peak-kBps = <10687500>; // Level 6
+	};
+
+	opp-680000000 {
+		opp-peak-kBps = <12449218>; // Level 7
+	};
+
 	opp-719000000 {
 		opp-hz = /bits/ 64 <719000000>;
 		opp-level = <RPMH_REGULATOR_LEVEL_SVS_L2>;
-		opp-peak-kBps = <10687500>; // Level 7
+		opp-peak-kBps = <12449218>; // Level 7
 		qcom,opp-acd-level = <0x882e5ffd>;
 	};
 
 	opp-746000000 {
 		opp-hz = /bits/ 64 <746000000>;
 		opp-level = <RPMH_REGULATOR_LEVEL_NOM>;
-		opp-peak-kBps = <10687500>; // Level 7
+		opp-peak-kBps = <12449218>; // Level 7
 		qcom,opp-acd-level = <0x882e5ffd>;
 	};
 

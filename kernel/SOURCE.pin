@@ -34,20 +34,24 @@
 # RE-PINNED 2026-10-30 (7.3.1) — A NEW SERIES, not a point release. Seven patches deleted as
 # upstream, the S2/FIT/MI2S audio moved onto mainline's mechanisms (0810/0825 gone, 0820
 # rewritten), 162 left. Read the 7.3.1 section below. HW GATE OWED.
-version:    7.3.1
-url:        https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.3.1.tar.xz
-sha256:     fa595aad93734f829c963c2a90ef7c3673224fd7fdae7b49406e397cde2de231
-git_tag:    v7.3.1
-git_commit: 79a907609d53d5cd645b42c11550d295d43abf99
+# RE-PINNED 2026-11-07 (7.3.3), 7.3.2 skipped as a pin but its 548 commits are what this takes:
+# 7.3.3 itself is three Xen fixes. Nothing of ours landed, no patch changed; drm/msm's vm_bo
+# UAF beside 0220 and an ath12k RXDMA ring resize are the legs. Read the 7.3.3 section below.
+# HW GATE OWED.
+version:    7.3.3
+url:        https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.3.3.tar.xz
+sha256:     79c66dde66cd96877fcde8f7d36aec946b1f423d2b97b5a7b1751b75c764f3d1
+git_tag:    v7.3.3
+git_commit: d50d994bffa3c7c6db2d8bc4c5f0c55e3f46b0cd
 
 # The sha256 above is the one kernel.org publishes in the SIGNED sha256sums.asc for v7.x, not a
-# hash of whatever the CDN happened to serve — re-checked 2026-10-30. The .asc itself verifies as
+# hash of whatever the CDN happened to serve — re-checked 2026-11-07. The .asc itself verifies as
 # a GOOD signature from "Kernel.org checksum autosigner <autosigner@kernel.org>", fingerprint
 # B886 8C80 BA62 A1FF FAF5 FDA9 632D 3A06 589D A6B1. That key carries no trust path here, so the
-# load-bearing check is CONTINUITY: the SAME signed file still lists 7.2.11 as
-# fd0fc479f983a8c05313f13e9c36330fe6651cf725396748c40d5cd93fa1e6a4, 7.2.10 as
-# 2feaa70453e91f541be6a5c9078d8168e081af45a3d9718054850538cff2ebf3 and 7.2.9 as
-# b4c5dfbe51a364a6c7f03869200f88c8e1f77403539005f14b7fc6bc91b8d8ba, byte-for-byte the hashes this
+# load-bearing check is CONTINUITY: the SAME signed file still lists 7.3.1 as
+# fa595aad93734f829c963c2a90ef7c3673224fd7fdae7b49406e397cde2de231, 7.2.11 as
+# fd0fc479f983a8c05313f13e9c36330fe6651cf725396748c40d5cd93fa1e6a4 and 7.2.10 as
+# 2feaa70453e91f541be6a5c9078d8168e081af45a3d9718054850538cff2ebf3, byte-for-byte the hashes this
 # pin carried and shipped before — so the file describing the version above is the same file that
 # described the releases we already trusted. Roll this list forward on each bump rather than
 # growing it; three back is enough to be a chain. (Note: keys.openpgp.org serves this key STRIPPED
@@ -65,6 +69,54 @@ git_commit: 79a907609d53d5cd645b42c11550d295d43abf99
 # Treat 'in-series point release' as a prediction about EFFORT, never about RISK.
 # Re-run every gate, every time — and note that neither of those two findings came from an
 # offline gate. Both came from hardware.
+#
+# ============ 7.3.3 — PINNED 2026-11-07, HW GATE OWED ============
+#
+# 7.3.2 was never pinned (no issue was filed; 7.3.3 followed it within days), so this is
+# 7.3.1 -> 7.3.3: 548 commits in 7.3.2, and 7.3.3 itself is three Xen back-end fixes
+# (XSA-526/527/528) on code we do not build. No Kconfig file changed in either release.
+# Zero qcom clk/phy/interconnect/pinctrl/dts, zero DPU/DSI/adreno, zero soundwire/ASoC-qcom,
+# zero fastrpc/GPR/iris/BT-QCA, so no Cc-stable patch of ours (0397, 0897, 1007, 1099, 1171)
+# landed in a reworded form either — and 1171's warning still waits: the fastrpc heap change
+# is NOT in 7.3.2.
+#
+# INTERSECTION: FOUR files (incr patch-7.3.1-2 + patch-7.3.2-3, `+++`/`---` paths), all read.
+#   drm/msm/msm_gem_shrinker.c  stable a1fe31028ad6 "Fix vm_bo use-after-free in with_vm_locks()":
+#                         the unlock loop becomes drm_gem_for_each_gpuvm_bo_safe(). 0220 (THP +
+#                         shrinker modparam) is elsewhere in the file and applies at the same
+#                         offset.
+#   ath12k/core.c, core.h, mac.c  a 9-commit series turning the DP ring-size macros into inline
+#                         helpers off ab->profile_param->dp_params (struct moved core.h -> dp.h),
+#                         then raising rxdma_buf_ring_size 4096 -> 8192 for the DEFAULT memory
+#                         profile (~9-10 MiB more RAM, for RX throughput). 1015/1020/1022/1023/
+#                         1028 only moved offsets. Removed macros (ATH12K_NUM_POOL_TX_DESC,
+#                         ATH12K_RX_DESC_COUNT, DP_RXDMA_BUF_RING_SIZE, DP_TX_COMP_RING_SIZE, ...)
+#                         checked: no patch of ours references any of them.
+# No dts file we copy over (kernel/dts/qcom/) or include moved upstream.
+# PATCHES: all 195 applied cumulatively at --fuzz=0, zero fuzz, zero rejects, same file list.
+# Diffed against the same run on 7.3.1, the only lines that moved are hunk offsets in those
+# five ath12k patches.
+# DROP CHECK: every patch REVERSE-applied with --dry-run --fuzz=0 to a PRISTINE 7.3.3 tree,
+# file by file: nothing reverses (nor on 7.3.1).
+# CONFIG SWEEP: 463 symbols named in kernel.config + trim-platforms.config, ZERO missing.
+# BUILD: green in the container, Image (`Linux version 7.3.3`) + 23 dtbs + modules (7.3.3)
+# staged. After olddefconfig, ALL 460 requested directives (401 values + 59 `is not set`)
+# asserted against the final .config: zero mismatches. The final .config is IDENTICAL to
+# 7.3.1's, comment lines aside.
+#
+# WHAT ONLY HARDWARE CAN SETTLE, from commits OUTSIDE (or beside) our patches:
+#   - GPU under memory pressure: the with_vm_locks() UAF is on the shrinker path, next to 0220.
+#     A long game session that reaches reclaim, on any SoC; mm also takes three khugepaged
+#     use-after-put fixes (anonymous THP).
+#   - Wi-Fi: WCN7850 (ACE / S2 / FIT) association plus an RX-heavy transfer, and that the
+#     ring doubling costs no more than its ~10 MiB. The Odin 3's WCN7860 runs the same DP code.
+#   - spmi: of_node reference fix under every PMIC on all four SoCs; a clean boot covers it.
+#   - sched_ext: a local-reenq UAF on an inactive CPU — scx_lavd ON through a freeze cycle
+#     (CPUs offlined) is the leg, since it is a user toggle and OFF by default.
+#   - ALSA control: UAF in snd_ctl_elem_add() on card disconnect — DP audio plug/unplug.
+#   - Not ours: the qcom-wled fixes (pm8150l's wled stays disabled on every board we ship),
+#     arm-smmu-v3 shutdown (our SoCs use arm-smmu v2), HID, s390, net/sched, xen.
+#   Everything still owed from the 7.3.1 gate below stays owed.
 #
 # ============ 7.3.1 — PINNED 2026-10-30 (follows issue #124), HW GATE OWED ============
 #

@@ -1,0 +1,51 @@
+From e09de762e448ebaf3c136694538821747f3eec6b Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Andr=C3=A9=20Braga?= <code@andrebraga.com>
+Date: Wed, 4 Nov 2026 17:05:00 +0000
+Subject: [PATCH] wifi: ath12k: report a scan cut short by a firmware crash as
+ aborted
+
+When the firmware crashes during a scan, recovery halts the radio and
+finishes the scan through ath12k_core_halt(). A scan in the RUNNING
+state is then reported to mac80211 as completed, not aborted, although
+the firmware never finished it and is gone.
+
+Userspace takes the partial results as final and acts on them at once:
+on a WCN7860 iwd tried to connect to two BSSes from a cut-off scan, and
+both attempts failed with -ESHUTDOWN before the hardware restart was
+requested, about a second later.
+
+Mark a running scan as aborting before finishing it from the halt path,
+so the completion carries aborted = true and userspace rescans after
+the restart.
+
+Tested-on: WCN7860 hw2.0 PCI WLAN.GNG.1.0-04065-QCAGNGSWPL_V1.0_V2.0_SILICONZ-1
+---
+novadeck: context regenerated on top of 1015, which turned the scan.timeout
+cancel below into wiphy_delayed_work_cancel(). Composes with 1022: a scan in
+STARTING is already reported aborted by the vdev clean work, and a range-split
+scan in RUNNING becomes ABORTING here as it would in ath12k_mac_scan_finish().
+
+ drivers/net/wireless/ath/ath12k/core.c | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/net/wireless/ath/ath12k/core.c b/drivers/net/wireless/ath/ath12k/core.c
+index bb8f4c8e0..4f37464f5 100644
+--- a/drivers/net/wireless/ath/ath12k/core.c
++++ b/drivers/net/wireless/ath/ath12k/core.c
+@@ -1444,7 +1444,12 @@ void ath12k_core_halt(struct ath12k *ar)
+ 	ar->num_created_vdevs = 0;
+ 	ar->allocated_vdev_map = 0;
+ 
+-	ath12k_mac_scan_finish(ar);
++	/* The firmware is gone, so a scan it was running never completed. */
++	spin_lock_bh(&ar->data_lock);
++	if (ar->scan.state == ATH12K_SCAN_RUNNING)
++		ar->scan.state = ATH12K_SCAN_ABORTING;
++	__ath12k_mac_scan_finish(ar);
++	spin_unlock_bh(&ar->data_lock);
+ 	ath12k_mac_peer_cleanup_all(ar);
+ 	wiphy_delayed_work_cancel(ath12k_ar_to_hw(ar)->wiphy, &ar->scan.timeout);
+ 	cancel_work_sync(&ar->regd_update_work);
+-- 
+2.56.0
+

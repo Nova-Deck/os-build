@@ -105,7 +105,7 @@ jobs:
           - [ ] \`git_tag\` + \`git_commit\`: the **dereferenced** tag (\`git ls-remote ... 'v$latest^{}'\`), not the annotated tag object
           - [ ] re-apply \`kernel/patches/\` **cumulatively, in lexical order, to one tree** — the way build.sh does. Dry-running each patch against a pristine tree reports false failures, because several of them patch files an earlier patch creates
           - [ ] fuzz budget: build.sh passes no \`-F0\`, so patch accepts fuzz=2 silently. A hunk that starts fuzzing is a hunk to read, not to wave through
-          - [ ] config: every \`CONFIG_*\` named in \`kernel.config\` + \`trim-platforms.config\` must still exist in the patched tree, then merge for real in \`build/Dockerfile\` and assert each requested symbol kept its requested value
+          - [ ] config: every \`CONFIG_*\` named in \`kernel/*.config\` must still exist in the patched tree, then merge for real in \`build/Dockerfile\` and assert each requested symbol kept its requested value; build.sh asserts each trim took effect, and its unshipped-qcom note names new Qualcomm SoC drivers to add to \`kernel/trim-qcom-socs.config\`
           - [ ] HW pass before this becomes the shipped kernel
 
           Closing this issue is a legitimate answer — a point release we decide to skip stays

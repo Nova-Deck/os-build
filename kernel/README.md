@@ -17,17 +17,20 @@ that reason — nothing reads it.
 |---|---|
 | `*.config` | Kconfig fragment(s), all merged onto an arm64 base defconfig (union across SoCs) |
 | `kernel.config` | The **additive** fragment: everything novadeck turns on |
-| `trim-platforms.config` | The **subtractive** fragment: non-Qualcomm platform gates turned off |
+| `trim-platforms.config` | **Subtractive**: non-Qualcomm platform gates turned off |
+| `trim-qcom-socs.config` | **Subtractive**: drivers for Qualcomm SoCs no board here has |
+| `trim-unused.config` | **Subtractive**: subsystems and other vendors' IP no handheld has (KVM, ACPI, SATA/SAS, raw flash, TV tuners) |
 | `patches/` | Out-of-tree patches applied before build (lexical order) |
 | `dts/qcom/` | Device trees injected into the kernel source before build; boards are **discovered** from the top-level `.dts` files |
 | `embed.list` | `/lib/firmware`-relative paths baked into the Image (`CONFIG_EXTRA_FIRMWARE`), the union of every SoC's early-boot blobs |
 | `build.sh` | Fetch pinned source → patch → inject DTs → merge configs → build `Image` + all dtbs + modules; stage to `out/` |
 
 ## Key decision: cut platform gates, not drivers
-The base `defconfig` is deliberately "boots every arm64 board", so it enabled all 48 top-level
-platform gates in `arch/arm64/Kconfig.platforms`. `trim-platforms.config` negates 47 of them
-(everything but `ARCH_QCOM`); vendor drivers depend on those gates, so kconfig's dependency
-closure removes ~1591 symbols from 49 directives — `Image` −19%, `out/modroot` −35%.
+The base `defconfig` is deliberately "boots every arm64 board", so it enables every top-level
+platform gate in `arch/arm64/Kconfig.platforms`. `trim-platforms.config` negates all of them
+but `ARCH_QCOM` (42 directives; `ARCH_BCM`, `ARCH_NXP` and `ARCH_MICROCHIP` are menus over
+several families); vendor drivers depend on those gates, so kconfig's dependency closure removes
+~1600 symbols — `Image` −19%, `out/modroot` −35%.
 
 Two rules when editing it:
 - **Never expand it into a per-driver list.** At gate level the file maintains itself: a vendor
@@ -36,6 +39,18 @@ Two rules when editing it:
   `is not set$`, so `# CONFIG_ARCH_TEGRA is not set  # Tegra` is silently just a comment — no
   warning, and the drivers ship anyway. Descriptions go on their own line. `build.sh` asserts
   the fragment took effect precisely because this failure is otherwise invisible.
+
+## Key decision: Qualcomm SoCs we do not ship are cut per driver
+Every Qualcomm SoC sits behind the one `ARCH_QCOM` gate, so `trim-qcom-socs.config` has to name
+drivers: each is one whose compatibles appear in none of the DTBs `build.sh` ships. A kernel bump
+that adds a SoC to `defconfig` builds its drivers again, so `build.sh` names any clock, pinctrl or
+interconnect driver no shipped DTB can bind (the `unshipped-qcom` note). A board on a new SoC
+deletes that SoC's lines.
+
+Cutting a gate can take a symbol nobody named: one that only arrived through a `select` from
+something now off. `CPU_IDLE` and `PSTORE` came only through ACPI's, and the WCD938x codec only
+through the SC7280 machine driver's; all three are asked for by name in `kernel.config` now.
+After changing a trim fragment, diff the old and new `.config` for drivers a shipped board binds.
 
 ## Key decision: 4K pages
 `CONFIG_ARM64_4K_PAGES=y` is set deliberately — **FEX-Emu / x86 game compat (Phase 3)

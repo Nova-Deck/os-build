@@ -899,10 +899,11 @@ git_commit: d50d994bffa3c7c6db2d8bc4c5f0c55e3f46b0cd
 #     experiment that answers the real one is a build with 0513/0518-0524 dropped. Note also that
 #     0370-dpu-quiesce-boot-scanout.patch IS applied on both (kernel/build.sh:59 globs the whole patch
 #     dir), so we already ship the patch aimed at this handoff and ACE faults anyway.
-#     LIKELY FIX TAKEN 2026-11-09, HW GATE OWED: 0190 (upstream v1) gives SM8550 MDSS an identity
-#     domain at boot. The faults come from the empty translating domain attached when the device
-#     is added, which is BEFORE 0370 runs, so 0370 could never reach them. 0195 does the same for
-#     SM8650. Gate: a 7.3.3 ACE boot shows 0 cbfrsynra=0x1c00 faults, where it showed 10.
+#     FIXED 2026-11-09 by 0190 (upstream v1), which gives SM8550 MDSS an identity domain at boot.
+#     The faults come from the empty translating domain attached when the device is added, which
+#     is BEFORE 0370 runs, so 0370 could never reach them. 0195 does the same for SM8650.
+#     ACE GATE PASSED 2026-11-09 (7.3.3 dev card from 7a1720b, 1 boot): 0 cbfrsynra=0x1c00 faults,
+#     where it showed 10; 0 SMMU faults of any kind; the ae00000 iommu group's type is "identity".
 #     WHY THIS ENTRY COST A CARD BUILD: on 2026-09-17 the burst was re-derived from scratch —
 #     count, timing, MDSS stream and all — by building and flashing a 7.2.5 card and swapping
 #     boards, because nobody grepped this file. `grep cbfrsynra kernel/SOURCE.pin` answers it in

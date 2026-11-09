@@ -77,6 +77,7 @@ Then (2026-11-05, andrebraga `Kernel_7.3` @ `16b48205d6` triage: `0285 0397 0859
 Then (2026-11-05, gen1 encoder rate control `1098`): 2 `mainline`, 39 `posted`, 28 `novadeck`, 122 `community` = 191.
 Then (2026-11-05, Pocket S2/FIT headphone PCM route `0860`–`0863`): 2 `mainline`, 39 `posted`, 28 `novadeck`, 126 `community` = 195.
 Then (2026-11-07, andrebraga `Kernel_7.3` @ `1c1c374bdc` ports `1024 1029 1170`, then bandwidth/frequency scaling `0160 0165 0170 0175 0286 0288 0289 1180 1182 1184` for an A/B): 2 `mainline`, 40 `posted`, 28 `novadeck`, 138 `community` = 208.
+Then (2026-11-09, sm8550 CPU7 3.36 GHz OPP `1155`): 2 `mainline`, 41 `posted`, 28 `novadeck`, 138 `community` = 209.
 The 7.3 bump deleted every `mainline` row (`0230 0620 0800 1080 1155`), the two `posted` ones
 that landed (`0275 1170`), and `0810`/`0825` with the old `0820`, whose jobs mainline's
 `ayaneo,pocket-s2-sndcard` and per-DAI MI2S clocks now do; `0820` is reused for the sm8750
@@ -293,6 +294,7 @@ taken for issue #122 — see the `0780`–`0796` rows.
 | `1140` | posted | Konrad Dybcio RFC v1 `<20250728-topic-gpucc_power_plumbing-v1-0-09c2480fe3e6@oss.qualcomm.com>` (modified). Ulf asked for a rebase in 2025-08; never resent. | never, unless Konrad resends |
 | `1145` | community | armada `0070` (virtudude). | with `0360` |
 | `1150` | posted | Abel Vesa "clk: qcom: Tie CX power domains to GCCs" v5 `<20260924-qcom-tie-cx-to-gcc-v5-*-38732033e5b5@oss.qualcomm.com>`, the six patches for our SoCs: bindings 3/7/8 (`clk-for-7.4`, sm8250 `98e936c9d46a`) and DTS 36/39/40 (`arm64-for-7.4`: sm8250 `389a0144c511`, sm8550 `df50f5c5690a`, sm8650 `108a8d51fba8`). Replaced Neil Armstrong's v1 (sm8450/8550/8650, abandoned after v2) on 2026-10-12, which also ADDS sm8250. The gcc driver halves 24/25 (`.use_rpm`, sm8550/sm8650 only — v5 has none for sm8250) are `0140`, in the clk band. | v7.4 |
+| `1155` | posted | Nizat Mikayilli, "arm64: dts: qcom: sm8550: Add missing CPU7 3.36GHz OPP" v1 `<20261104-sm8550-prime-3p36ghz-v1-1-c72630265379@dxdmail.cc>`, body byte-identical (b4), applied to qcom `arm64-for-7.5` as `2fd7a169faf3`; Fixes: but no Cc stable. The cpufreq-hw LUT offers 3.36 GHz on CPU7 with no matching OPP, so the step was dropped (`cpu cpu7: Voltage update failed freq=3360000`, seen on the Pocket ACE). Konrad: a superset OPP table is fine, the LUT decides what is reachable. | v7.5, or 7.3.y if stable picks it |
 | `1160` | community | ROCKNIX SM8750 `0033`: sm8750.dtsi gpucc + gxclkctl (kaanapali) clock-controller nodes. | when upstream adds the nodes |
 | `1165` | posted | Jie Zhang, "arm64: dts: qcom: sm8750: Add GPU and GMU nodes" (pakala-gpu v1 3/4), via andrebraga ROCKNIX SM8750 `Kernel_7.3` `0035`. Replaced 2026-11-03 ROCKNIX `0038` and armada's RSCC widening (old `1166`): the upstream node maps 0x6d000, which already covers RSCC at 0x50000, and the GMU no longer overlaps gxclkctl. GPU node re-placed in address order before gxclkctl. | v7.4 |
 | `1167` | posted | Gaurav Kohli, "arm64: dts: qcom: sm8750: Add GPU cooling" (pakala-gpu v1 4/4), via andrebraga ROCKNIX SM8750 `Kernel_7.3` `0036`. | v7.4 |

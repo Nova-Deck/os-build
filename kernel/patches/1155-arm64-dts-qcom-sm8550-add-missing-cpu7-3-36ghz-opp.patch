@@ -1,0 +1,48 @@
+From git@z Thu Jan  1 00:00:00 1970
+Subject: [PATCH] arm64: dts: qcom: sm8550: Add missing CPU7 3.36GHz OPP
+From: Nizat Mikayilli <nacht@dxdmail.cc>
+Date: Wed, 04 Nov 2026 20:41:49 +0100
+Message-Id: <20261104-sm8550-prime-3p36ghz-v1-1-c72630265379@dxdmail.cc>
+MIME-Version: 1.0
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+The cpufreq LUT on the Samsung Galaxy Tab S9 Wi-Fi has a 3.36GHz boost
+entry for CPU7 without a matching OPP, so the frequency is dropped:
+
+cpu cpu7: Voltage update failed freq=3360000
+cpu cpu7: failed to update OPP for freq=3360000
+
+Fixes: 3f5dcc05cd33 ("arm64: dts: qcom: sm8550: add cpu OPP table with DDR, LLCC & L3 bandwidths")
+Signed-off-by: Nizat Mikayilli <nacht@dxdmail.cc>
+Reviewed-by: Konrad Dybcio <konrad.dybcio@oss.qualcomm.com>
+Link: https://patch.msgid.link/20261104-sm8550-prime-3p36ghz-v1-1-c72630265379@dxdmail.cc
+---
+ arch/arm64/boot/dts/qcom/sm8550.dtsi | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm8550.dtsi b/arch/arm64/boot/dts/qcom/sm8550.dtsi
+index 03f6d40edea7..ed6e34ac8d56 100644
+--- a/arch/arm64/boot/dts/qcom/sm8550.dtsi
++++ b/arch/arm64/boot/dts/qcom/sm8550.dtsi
+@@ -752,6 +752,11 @@ opp-3187200000 {
+ 			opp-hz = /bits/ 64 <3187200000>;
+ 			opp-peak-kBps = <(933000 * 16) (3686000 * 4) (1689600 * 32)>;
+ 		};
++
++		opp-3360000000 {
++			opp-hz = /bits/ 64 <3360000000>;
++			opp-peak-kBps = <(933000 * 16) (3686000 * 4) (1689600 * 32)>;
++		};
+ 	};
+ 
+ 	pmu-a510 {
+
+---
+base-commit: f5672a3dff0291d6a45eb0c258b9d2baeb4dc577
+change-id: 20261104-sm8550-prime-3p36ghz-77ece710cc0d
+
+Best regards,
+-- 
+Nizat Mikayilli <nacht@dxdmail.cc>
+

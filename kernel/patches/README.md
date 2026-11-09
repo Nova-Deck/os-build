@@ -15,7 +15,7 @@ The number says **when a patch applies**, and it is keyed on subsystem.
 | Range | Band | Contents |
 |---|---|---|
 | `0000-0099` | core | arch/arm64, syscall ABI, prctl — the FEX-adjacent core changes |
-| `0100-0199` | clk | clk, pmdomain, interconnect |
+| `0100-0199` | clk | clk, pmdomain, interconnect, iommu |
 | `0200-0299` | gpu | drm/msm GPU: adreno, GEM, VM_BIND, shrinker |
 | `0300-0399` | dpu | drm/msm DPU: planes, flush, rotation, LUTDMA (+ its binding) |
 | `0400-0479` | dsi | drm/msm DSI: host, PHY, byte clock |
@@ -79,6 +79,7 @@ Then (2026-11-05, Pocket S2/FIT headphone PCM route `0860`–`0863`): 2 `mainlin
 Then (2026-11-07, andrebraga `Kernel_7.3` @ `1c1c374bdc` ports `1024 1029 1170`, then bandwidth/frequency scaling `0160 0165 0170 0175 0286 0288 0289 1180 1182 1184` for an A/B): 2 `mainline`, 40 `posted`, 28 `novadeck`, 138 `community` = 208.
 Then (2026-11-09, sm8550 CPU7 3.36 GHz OPP `1155`): 2 `mainline`, 41 `posted`, 28 `novadeck`, 138 `community` = 209.
 Then (2026-11-09, sm8250 active-only CPU interconnect tags `1137`): 2 `mainline`, 42 `posted`, 28 `novadeck`, 138 `community` = 210.
+Then (2026-11-09, SM8550/SM8650 MDSS identity domain at boot `0190`/`0195`): 2 `mainline`, 43 `posted`, 29 `novadeck`, 138 `community` = 212.
 The 7.3 bump deleted every `mainline` row (`0230 0620 0800 1080 1155`), the two `posted` ones
 that landed (`0275 1170`), and `0810`/`0825` with the old `0820`, whose jobs mainline's
 `ayaneo,pocket-s2-sndcard` and per-DAI MI2S clocks now do; `0820` is reused for the sm8750
@@ -110,6 +111,8 @@ taken for issue #122 — see the `0780`–`0796` rows.
 | `0165` | community | André Braga, andrebraga ROCKNIX SM8750 `Kernel_7.3` `0526` @ `1c1c374bdc`, not posted, body identical. icc-bwmon votes the measured CPU traffic as peak only, which aggregates as a max and never adds to the GPU's traffic; it now also votes it as average, as downstream bwmon does. Affects every SoC with bwmon (SM8550, SM8650, SM8750). Runtime switch: `icc_bwmon.vote_avg`. HW A/B owed. | when upstreamed, or dropped on a failed A/B |
 | `0170` | community | André Braga, andrebraga ROCKNIX SM8750 `Kernel_7.3` `0517` + its binding `0516` @ `1c1c374bdc`, not posted; MAINTAINERS hunk dropped. Perf PMU for the SM8750 LLCC's per-CPU read-miss counters (downstream llcc-pmu-ver2), the miss source for `0175`. | when upstreamed, or with `0175` |
 | `0175` | community | André Braga, andrebraga ROCKNIX SM8750 `Kernel_7.3` `0523` + its binding `0522` @ `1c1c374bdc`, not posted; MAINTAINERS hunk dropped. CPU memory latency voter: while a CPU misses often per instruction it votes the LLCC/DDR frequency its DT table maps the CPU frequency to (downstream memlat runs in the kernel on SM8750). Binds only from the `1180` DT nodes. Runtime switch: the driver's sysfs `enable`. HW A/B owed. | when upstreamed, or dropped on a failed A/B |
+| `0190` | posted | Nizat Mikayilli, "iommu/arm-smmu-qcom: Add SM8550 MDSS compatible" v1 `<20261107-b4-smmu-sm8550-v1-1-777d0a41170b@dxdmail.cc>`, body byte-identical (b4); no replies as of 2026-11-09. Gives SM8550 MDSS an identity domain at boot, so the bootloader splash still scanning out at kernel entry does not fault on an empty translating domain before `0370` stops it. Aimed at the Pocket ACE's 10 boot-time `cbfrsynra=0x1c00` context faults (`kernel/SOURCE.pin`, KNOWN BOOT NOISE). HW gate: that count goes to 0. | when merged |
+| `0195` | novadeck | `0190` for `qcom,sm8650-mdss`: same splash handoff on the SM8650 boards (ayaneo-common's `cont_splash_region`, chainloaded EFI). Taken while the Pocket FIT reboots now and then during kernel boot, with no trace of why; not shown to be the cause. Never posted. | with `0190`, or when posted and merged |
 | `0210` | community | map220v via ROCKNIX `0004`. Never posted; reuses `a750_ifpc_reglist` (unverified for A740). | when A740 IFPC lands upstream |
 | `0220` | posted | Rob Clark v2 `<20260912145922.24115-1-robin.clark@oss.qualcomm.com>` (+ `-2-`), applied to msm-next 2026-09-27 as `bbe4401e118c` (THP) + `8eeca96ad138` (shrinker modparam), code identical to ours. Patchwork still says `new`. | v7.4 |
 | `0240` | novadeck | Written here, from GPU runtime-PM traces on the Pocket S2. Works around the trigger (suspend soon after resume); why the A750 GMU never reaches IFPC is not known. Never posted; no prior report found on linux-arm-msm, patchwork or drm/msm issues. | when upstream fixes the A750 GMU idle wait, or sets its own A750 `inactive_period` |

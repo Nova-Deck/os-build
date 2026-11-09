@@ -79,7 +79,7 @@ their own triggers, because a flashable card and a field update are wanted at di
 | workflow | trigger | secrets | ships to |
 |---|---|---|---|
 | `release-sdcard.yml` | `card/v*` tag, or manual | `R2_*` (push-only, public bucket) | Cloudflare R2 + a GitHub Release carrying checksums/provenance |
-| `release-bundle.yml` | `ota/v*` tag, or manual | none *yet* (unsigned smoke test; see below) | workflow artifact; the Oracle Cloud OTA host is not wired up yet |
+| `release-bundle.yml` | `ota/v*` tag, or manual | `RAUC_CERT_PEM`, `RAUC_KEY_PEM`, `OTA_SSH_KEY`, all in the `release-signing` environment (tag only) | the Oracle Cloud OTA host (`ota/publish-bundle.sh`, as `otapub`) + a workflow artifact; a manual run is a dev-signed smoke test and publishes nothing |
 
 **The tag namespaces are separate on purpose.** A bundle ships far more often than a card, so each
 gets its own namespace rather than sharing a bare `v*`. That also fixes a real inversion: while
@@ -104,27 +104,31 @@ claim that survives crossing a machine. A release image's overlay is either comp
 that publishes it or restored from a `main` run that compiled it from the same sources (stamp =
 source hash + builder pin). Either way the source pins are its provenance. See `packages/README.md`.
 
+## Bundle signing and publishing
+
+An `ota/v*` tag runs `release-bundle.yml` as `prep` → `build` → `release`. `build` assembles the
+rootfs with no key and no environment, so it never waits on a reviewer. `release` signs the bundle
+(`make sign-bundle PKIDIR=$RUNNER_TEMP/pki`) and publishes it to the update server behind **one**
+deployment gate, the protected `release-signing` environment: approving it means "this tag ships".
+The signed bundle is uploaded as a workflow artifact before the publish step, so a failed publish
+can be finished from a workstation with `make publish-bundle`. A manual dispatch names no
+environment, signs with an ephemeral dev cert every device rejects, and skips publishing.
+
+- **The secrets are environment-scoped**, never repo-wide, where any workflow on any branch could
+  read them. Keys are written to `$RUNNER_TEMP`, never the workspace — the repo tree gets uploaded
+  as artifacts and cached.
+- **The run ends published or red.** An empty `OTA_SSH_KEY` fails the job before anything is
+  signed, and `ota/publish-bundle.sh` checks the bundle against the device keyring and refuses a
+  DEV-image payload before it moves a byte.
+- **The CA key never reaches a runner.** That is what the two-level PKI is for: if the release key
+  leaks, mint a new cert offline under the same CA, commit it, update the secret — no device is
+  affected. See `ota/gen-signing-ca.sh`. The publishing key logs in as `otapub`, an unprivileged
+  account confined to the docroot (`ota/setup-ci-user.sh`).
+- Still worth considering: signing via an HSM/KMS the runner reaches by OIDC, so the key never
+  exists as a file. A key that can push arbitrary code to devices with no serial console is a
+  large thing to keep in a CI secret store.
+
 ## Not here yet, and why
-
-**Bundle signing.** `release-bundle.yml` builds, but with an ephemeral dev cert — it proves the
-bundle assembles and the verity hashes compute, while producing something every device will
-reject. The remaining decision is whether the release private key belongs in GitHub at
-all; `image.yml` already accepts `RAUC_CERT_PEM` / `RAUC_KEY_PEM` and signs when both are present,
-warning loudly when they are not. The shape is settled by the PKI:
-
-- **one secret**, the release signing key, scoped to a protected *environment* (not the repo, where
-  any workflow on any branch can read it). Write it to `$RUNNER_TEMP`, never the workspace — the
-  repo tree gets uploaded as artifacts and cached.
-- `PKIDIR=$RUNNER_TEMP/pki make bundle` mounts it read-only at `/pki` and points `RAUC_CERT` /
-  `RAUC_KEY` at it. Copy the committed `ota/rauc/release.cert.pem` in alongside the key.
-- `verify-signing.sh` then asserts the key matches the committed cert *as public-key digests*, so a
-  stale or truncated secret fails there instead of producing bundles no device accepts.
-- **the CA key never reaches a runner.** That is what the two-level PKI is for: if the release key
-  leaks, mint a new cert offline under the same CA, commit it, update the one secret — no device is
-  affected. See `ota/gen-signing-ca.sh`.
-- worth considering before real releases: signing off-CI, or via an HSM/KMS the runner reaches by
-  OIDC, so the key never exists as a file. A key that can push arbitrary code to devices with no
-  serial console is a large thing to keep in a CI secret store.
 
 **cosign-signed artifacts and published update manifests** — the original Phase 7 scope, CI
 patterns borrowed from ublue-os/image-template, for the single unified image (SM8550 / SM8650 /

@@ -311,12 +311,12 @@ from, so a device that has been forgotten will say so.
 
 Only once that passes: tag `card/vX.Y.Z`, then `ota/vX.Y.Z`.
 
-**`ota/vX.Y.Z` now publishes by itself.** Since 2026-08-04 `release-bundle.yml`'s `publish` job is
-live, so the tag builds the bundle, signs it with the release cert and pushes it to `stable/` —
-`make publish-bundle` from the workstation is the fallback, not the route. The tag asks for **two
-approvals**, not one: `build` waits for a reviewer to reach the signing key and `publish` waits
-again to reach the publishing key. That is deliberate — signing produces an artifact that still goes
-nowhere; publishing is the step that puts bytes in front of the fleet.
+**`ota/vX.Y.Z` now publishes by itself.** Since 2026-08-04 the tag builds the bundle, signs it with the release cert and pushes it to
+`stable/` (or `beta/` for a pre-release suffix) — `make publish-bundle` from the workstation is the
+fallback, not the route. The tag asks for **one approval**: `release-bundle.yml`'s `release` job
+signs and publishes behind a single `release-signing` deployment gate, and approving it means "this
+tag ships". The build before it needs no key and runs without waiting. If the publish step fails,
+the signed bundle is still kept as the run's `novadeck-bundle` artifact for `make publish-bundle`.
 
 A publish now ends in exactly one of two states, **published** or **red**. Before that date a
 missing credential was a `::notice::` and a skipped step, so `ota/v0.2.1` was cut, built, signed and

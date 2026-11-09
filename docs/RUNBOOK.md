@@ -215,8 +215,8 @@ invisible to the build container unless `PKIDIR` mounts it.
 
 There is a second target, `make sign-bundle`, which wraps an **existing** `out/images/rootfs.img`
 instead of building one — same signing, no `$(ROOTFS)` prerequisite. CI uses it to split the release
-into build → sign → publish so the image build does not queue behind someone approving the signing
-environment; locally it is what you want when the image came from somewhere else (a CI artifact, or
+into build → release (sign + publish) so the image build does not queue behind someone approving the
+signing environment; locally it is what you want when the image came from somewhere else (a CI artifact, or
 another machine) and rebuilding it would defeat the point. It fails rather than building a
 replacement if the image is not there. Use plain `make bundle` on a dev box: the prerequisite is the
 feature, keeping the bundle honest about the tree it came from.

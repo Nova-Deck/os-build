@@ -30,7 +30,7 @@
 #
 # `artifact: rootfs` IS THE SAME MOVE, APPLIED TO SIGNING (2026-08-11). It stops at that shared
 # boundary and uploads the bare image plus its identity sidecar, signing nothing. release-bundle.yml
-# then wraps it in a separate, environment-gated `sign` job. The reason is identical to the R2 one
+# then wraps it in a separate, environment-gated `release` job. The reason is identical to the R2 one
 # above: the signing key sat in a protected environment, so the ENTIRE build queued behind a human
 # — an approval granted before a 30-minute build rather than after it, blocking on a reviewer to do
 # work that needs no key at all. Two consecutive upstream outages during ota/v0.2.4 made the cost
@@ -39,7 +39,7 @@
 # The cost is one extra artifact round trip of ~4 GiB (6 G apparent, sparse), against up to half an
 # hour of human latency. It buys back nothing if approvals are instant — they are not.
 #
-# THIS MODE IS NOT A THIRD RELEASE ARTIFACT. Nothing consumes a rootfs.img except the sign job in
+# THIS MODE IS NOT A THIRD RELEASE ARTIFACT. Nothing consumes a rootfs.img except the release job in
 # the same run, which is why it carries no release metadata and why the card path never asks for it.
 #
 # THE OVERLAY STARTS FROM main's CACHE AND REBUILDS WHAT MOVED. Cold, the whole set is 32-37
@@ -400,7 +400,7 @@ jobs:
           set -euo pipefail
           # `rootfs` STOPS BEFORE SIGNING, and that is its entire reason to exist: it is the half of
           # a bundle build that needs no key, so it can run with no environment and therefore
-          # without waiting for a reviewer. release-bundle.yml's `sign` job picks the image up from
+          # without waiting for a reviewer. release-bundle.yml's `release` job picks the image up from
           # the artifact below and wraps it. Nothing else calls this mode.
           if [ "$ARTIFACT" = rootfs ]; then
             make rootfs
@@ -490,7 +490,7 @@ jobs:
 
       # BOTH FILES, and the sidecar is not optional garnish. genbundle.sh reads the version out of
       # rootfs.release rather than out of its own environment, precisely so a bundle cannot claim an
-      # identity its payload does not carry — ship the image without it and the sign job fails at
+      # identity its payload does not carry — ship the image without it and the release job fails at
       # "no identity sidecar", which is the correct outcome but a confusing place to learn it.
       #
       # --sparse=always because rootfs.img is 6 G apparent over ~4 G of real blocks; a plain cp
@@ -509,7 +509,7 @@ jobs:
       # NOT ON THE ROOTFS PATH. The sums here are what a consumer checks against the thing they
       # fetched, and nobody fetches a rootfs.img — it is an intermediate that exists for exactly one
       # downstream job. Hashing it would produce a sha256sums.txt naming a file that never ships,
-      # sitting next to the one that does. release-bundle.yml's `sign` job runs card-meta.sh over
+      # sitting next to the one that does. release-bundle.yml's `release` job runs card-meta.sh over
       # the SIGNED bundle instead, which is the artifact with an audience.
       - name: stage release metadata
         if: inputs.artifact != 'rootfs'

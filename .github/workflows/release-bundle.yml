@@ -43,13 +43,13 @@
 # Oracle Cloud instance devices fetch their OTAs from. That is a different host with different
 # credentials from the card bucket, and deliberately so — a card is downloaded by a person with a
 # browser, a bundle is fetched by a device with a keyring. The transport is ota/publish-bundle.sh
-# and the `publish` job below calls it.
+# and the `release` job below calls it.
 #
-# THAT JOB IS LIVE as of 2026-08-04, on a tag only, and it still fails closed twice over:
+# PUBLISHING IS LIVE as of 2026-08-04, on a tag only, and it still fails closed twice over:
 #
 #   1. publish-bundle.sh verifies the bundle against the CA in every device's keyring BEFORE it
-#      moves a byte. A dispatch can only produce dev-cert bundles, so the job does not run at all on
-#      one — it would exist solely to reject its own artifact.
+#      moves a byte. A dispatch can only produce dev-cert bundles, so the publish steps do not run
+#      at all on one — they would exist solely to reject their own artifact.
 #   2. It refuses a bundle whose payload was built as a DEV image, which a signature check cannot
 #      distinguish from a shippable one (see publish-bundle.sh's second gate).
 #
@@ -60,9 +60,9 @@
 # "published" and "red".
 #
 # The publishing principal is `otapub` on the update server — its own unprivileged account, created
-# by ota/setup-ci-user.sh, holding no sudo and writing nothing outside the docroot. The `publish`
-# job's own header covers the key; setup-ci-user.sh's covers why it is an account rather than a
-# forced command.
+# by ota/setup-ci-user.sh, holding no sudo and writing nothing outside the docroot. The `release`
+# job's credentials step covers the key; setup-ci-user.sh's header covers why it is an account
+# rather than a forced command.
 name: release bundle
 
 # TAG NAMESPACE: `ota/v*`. Bundles and cards ship on independent cadences — an update goes out far
@@ -148,19 +148,14 @@ jobs:
           echo "::notice::version '${v:-<dev>}' publishes to the '$channel' channel"
 
   # ============================================================================================
-  # build -> sign -> publish. THE BUILD HOLDS NO KEY AND NAMES NO ENVIRONMENT, so it starts the
-  # moment the tag lands instead of queueing behind a reviewer.
+  # build -> release (sign + publish). THE BUILD HOLDS NO KEY AND NAMES NO ENVIRONMENT, so it
+  # starts the moment the tag lands instead of queueing behind a reviewer.
   # ============================================================================================
-  # This job used to BE the signing job: it took `artifact: bundle` and the protected environment,
-  # which meant the whole 30-minute image build sat in `waiting` until someone clicked approve. The
-  # approval bought nothing during those 30 minutes — assembling a rootfs needs no release key — and
-  # it cost the obvious thing: on 2026-08-11 two consecutive upstream outages (a kernel.org 503, then
-  # github.com unreachable for 134 s mid-clone) each burned an approval and produced no bundle.
-  #
-  # Splitting moves the gate to where the key is actually used. The approval count is UNCHANGED at
-  # two — `sign` and `publish` — because the gate moved rather than multiplied. What changed is that
-  # a reviewer now approves a build that has already succeeded, which is the same correction made to
-  # the card path when its R2 upload moved out of the build job (see image.yml's header).
+  # Assembling a rootfs needs no release key, so gating the build would only park a 30-minute job
+  # in `waiting` — and burn an approval every time an upstream outage (kernel.org, github.com
+  # mid-clone) kills it. The gate sits on `release`, where the keys are actually used, so a reviewer
+  # approves a build that has already succeeded — the same shape as the card path, whose R2 upload
+  # lives outside its build job (see image.yml's header).
   #
   # `secrets: inherit` stays, and stays safe for the same reason as before: the signing secrets are
   # ENVIRONMENT-scoped, and this job names no environment, so it inherits nothing that matters. It is
@@ -175,12 +170,18 @@ jobs:
       version: ${{ needs.prep.outputs.version }}
       environment: ''
 
-  # SIGNED ON A TAG, unsigned on a dispatch, and the difference is still the environment rather than
-  # an `if:` on a signing step. A tag push is the deliberate act — someone decided this commit ships
-  # — and it is the only path that names the protected environment, so it is the only path where the
-  # release key is reachable and the only one that waits for a reviewer. A bare workflow_dispatch
-  # stays what it was: a smoke test that proves the bundle assembles, signed with an ephemeral dev
-  # cert, rejected by every device.
+  # SIGNED AND PUBLISHED ON A TAG, dev-signed and kept on a dispatch, and the difference is the
+  # environment rather than an `if:` on the signing step. A tag push is the deliberate act — someone
+  # decided this commit ships — and it is the only path that names the protected environment, so it
+  # is the only path where the release key and OTA_SSH_KEY are reachable and the only one that waits
+  # for a reviewer. A bare workflow_dispatch is a smoke test: it proves the bundle assembles, signs
+  # it with an ephemeral dev cert every device rejects, and skips the publish steps.
+  #
+  # ONE JOB, ONE APPROVAL. Signing and publishing share a single deployment gate: approving it
+  # means "this tag ships". Both keys live in the same environment, so a second gate on the same
+  # environment would only ask the same reviewer the same question twice. The signed bundle is
+  # still uploaded as an artifact BEFORE the publish step, so a publish that fails on the server
+  # side leaves a signed bundle to hand to `make publish-bundle` from a workstation.
   #
   # WHY THIS SIGNS A FRESH BUNDLE RATHER THAN RE-SIGNING ONE. `rauc resign` exists and works on our
   # `format=verity` bundles (it truncates the old signature and regenerates — _reference/rauc/src/
@@ -190,9 +191,11 @@ jobs:
   # manifest.raucm.in's `mode` field exists to keep distinguishable. Wrapping the rootfs here instead
   # means a tagged payload is signed exactly once, by the real key, and no other signature over those
   # bytes ever exists.
-  sign:
-    # Not `prep`: this job deliberately consumes no version string. See the fetch step below.
-    needs: build
+  release:
+    # `prep` for the CHANNEL only, which the publish step reads. A job cannot reference the outputs
+    # of one it does not declare a need on, and the reference would resolve to the EMPTY STRING
+    # rather than failing. Nothing here reads prep's VERSION, deliberately — see the fetch step.
+    needs: [prep, build]
     # aarch64, because genbundle.sh runs rauc inside the novadeck-build container and that image is
     # built for the target arch. Same expression as image.yml's build job so the two cannot drift
     # onto different runner pools.
@@ -201,6 +204,48 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
+
+      # FIRST, before anything is signed: a tag whose publishing key is unreachable cannot ship, and
+      # finding that out after the signing step would waste the approval on a bundle that goes nowhere.
+      #
+      # DO NOT PUT THE INSTANCE ADMIN KEY HERE. The key used to publish from a workstation logs in
+      # as `ubuntu`, who has PASSWORDLESS SUDO on the update server — handing CI that key hands CI
+      # root on the host every device fetches from, which is a far larger grant than "may write one
+      # directory". Which key that is, and where it lives, is deliberately not written down in a
+      # public CI file; it is an operator fact, not a build input.
+      #
+      # WHAT IS ACTUALLY IN THE SECRET, as of 2026-08-04: an ed25519 private key whose public half is
+      # committed at ota/ci-publish.pub and installed by ota/setup-ci-user.sh as the sole
+      # authorized_keys entry — prefixed `restrict` — of `otapub`, a system account on the update
+      # server with no sudo, no group but its own, and write access to nothing outside the docroot.
+      # Proven at install time: no pty, no port forwarding (local OR remote), `sudo -n true` fails,
+      # /etc is read-only to it. A forced command was considered and rejected; setup-ci-user.sh's
+      # header says why (publish-bundle.sh is not an rsync wrapper — it also runs mkdir, df, mv,
+      # chmod, sha256sum and a `bash -s` prune, and a wrapper covering those becomes a second,
+      # unversioned copy of the publish protocol).
+      #
+      # ROTATION is cheap and needs no device involvement: ssh-keygen a new pair, replace
+      # ota/ci-publish.pub, re-run setup-ci-user.sh (it REWRITES authorized_keys rather than
+      # appending, so the old key stops working), and re-set this secret. Same shape as the signing
+      # key, where the answer to a leak is a new release cert from the offline root.
+      #
+      # OTA_SSH_KEY is scoped to the protected environment, so it reads as the EMPTY STRING in any
+      # job that does not declare that environment — not an error, not a warning. The job stops on
+      # an empty secret rather than silently no-opping: a publish that quietly does nothing means the
+      # tag looks shipped and the fleet never sees it.
+      - name: check for publishing credentials
+        if: github.ref_type == 'tag'
+        env:
+          KEY: ${{ secrets.OTA_SSH_KEY }}
+        run: |
+          if [ -z "${KEY:-}" ]; then
+            echo "::error::OTA_SSH_KEY is empty — nothing was signed or published, and this tag is NOT shipped."
+            echo "::error::The secret lives in the '${{ vars.SIGNING_ENVIRONMENT || 'release-signing' }}'"
+            echo "::error::environment. An environment-scoped secret reads as empty in any job that"
+            echo "::error::does not declare that environment — check the job's environment: line"
+            echo "::error::before assuming the secret itself is missing."
+            exit 1
+          fi
 
       # Straight into out/images/, where genbundle.sh looks. No NOVADECK_VERSION here and none
       # wanted: the bundle's identity comes out of the rootfs.release sidecar that travelled with the
@@ -263,7 +308,8 @@ jobs:
           path: meta/
           if-no-files-found: error
 
-      # Same artifact name the publish job already downloads, so nothing below had to change.
+      # Before publishing, not after: if the server side fails, the signed bundle is already here for
+      # `make publish-bundle` from a workstation, and nothing needs re-signing.
       - name: upload the image artifact
         uses: actions/upload-artifact@v7
         with:
@@ -272,90 +318,13 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  # The upload half. See the header: this is deliberately inert until the release key reaches a
-  # protected environment, and it is written rather than commented out so that decision is a matter
-  # of adding secrets, not of writing a job under time pressure on release day.
-  publish:
-    # `prep` alongside `sign` because the publish step below reads needs.prep.outputs.channel —
-    # a job cannot reference the outputs of one it does not declare a need on, and the reference
-    # would resolve to the EMPTY STRING rather than failing. publish-bundle.sh falls back to
-    # `stable` on an empty channel, so the symptom of forgetting this would be beta tags shipping
-    # to every device in the field.
-    needs: [prep, sign]
-    # Only a tag can have produced a signed bundle, and only a signed bundle can be published. On a
-    # dispatch this job would exist solely to fail its own keyring gate, so it does not run at all —
-    # a skipped job that is always skipped teaches people to ignore skipped jobs.
-    if: github.ref_type == 'tag'
-    runs-on: ubuntu-latest
-    # THE SAME PROTECTED ENVIRONMENT AS THE SIGNING JOB, and declaring it here is not optional
-    # bookkeeping: OTA_SSH_KEY is scoped to this environment, and a job that does not name it sees
-    # `secrets.OTA_SSH_KEY` as the EMPTY STRING. Not an error, not a warning — the creds step below
-    # then reports "not set" and the run goes green having published nothing, which is exactly the
-    # failure this job was written to make impossible. If a publish ever skips with the secret
-    # visibly present in repo settings, this line is the first thing to check.
-    #
-    # The cost is a SECOND approval per release: `sign` waits for a reviewer to reach the signing
-    # key, and `publish` waits again to reach the publishing key. That is the right shape rather than
-    # an accident of reusing one environment — signing produces an artifact that still goes nowhere,
-    # while this job is the one that puts bytes in front of the fleet.
-    #
-    # DO NOT COLLAPSE THE TWO into one job to save the extra artifact round trip the build/sign split
-    # costs. That trade was considered when the split was made and rejected: it would buy back a few
-    # minutes of upload by turning "may this be signed" and "may this reach the fleet" into a single
-    # click, which is the one distinction here worth paying for.
-    environment: ${{ vars.SIGNING_ENVIRONMENT || 'release-signing' }}
-    steps:
-      - uses: actions/checkout@v7
-
-      # DO NOT PUT THE INSTANCE ADMIN KEY HERE. The key used to publish from a workstation logs in
-      # as `ubuntu`, who has PASSWORDLESS SUDO on the update server — handing CI that key hands CI
-      # root on the host every device fetches from, which is a far larger grant than "may write one
-      # directory". Which key that is, and where it lives, is deliberately not written down in a
-      # public CI file; it is an operator fact, not a build input.
+      # Only a tag can have produced a signed bundle, and only a signed bundle can be published. On a
+      # dispatch this step would exist solely to fail its own keyring gate, so it does not run.
       #
-      # WHAT IS ACTUALLY IN THE SECRET, as of 2026-08-04: an ed25519 private key whose public half is
-      # committed at ota/ci-publish.pub and installed by ota/setup-ci-user.sh as the sole
-      # authorized_keys entry — prefixed `restrict` — of `otapub`, a system account on the update
-      # server with no sudo, no group but its own, and write access to nothing outside the docroot.
-      # Proven at install time: no pty, no port forwarding (local OR remote), `sudo -n true` fails,
-      # /etc is read-only to it. A forced command was considered and rejected; setup-ci-user.sh's
-      # header says why (publish-bundle.sh is not an rsync wrapper — it also runs mkdir, df, mv,
-      # chmod, sha256sum and a `bash -s` prune, and a wrapper covering those becomes a second,
-      # unversioned copy of the publish protocol).
-      #
-      # ROTATION is cheap and needs no device involvement: ssh-keygen a new pair, replace
-      # ota/ci-publish.pub, re-run setup-ci-user.sh (it REWRITES authorized_keys rather than
-      # appending, so the old key stops working), and re-set this secret. Same shape as the signing
-      # key, where the answer to a leak is a new release cert from the offline root.
-      #
-      # The signing half above does not have this problem either. There is no equivalent for shell
-      # access, which is why the account, not the key, is what bounds the damage here.
-      #
-      # The job stops without the secret rather than silently no-opping: a publish that quietly does
-      # nothing means the tag looks shipped and the fleet never sees it.
-      - name: check for publishing credentials
-        id: creds
-        env:
-          KEY: ${{ secrets.OTA_SSH_KEY }}
-        run: |
-          if [ -z "${KEY:-}" ]; then
-            echo "::error::OTA_SSH_KEY is empty — nothing was published, and this tag is NOT shipped."
-            echo "::error::The secret lives in the '${{ vars.SIGNING_ENVIRONMENT || 'release-signing' }}'"
-            echo "::error::environment. An environment-scoped secret reads as empty in any job that"
-            echo "::error::does not declare that environment — check the job's environment: line"
-            echo "::error::before assuming the secret itself is missing."
-            exit 1
-          fi
-
-      - name: fetch the bundle
-        uses: actions/download-artifact@v8
-        with:
-          name: novadeck-bundle
-          path: out/images
-
-      # $RUNNER_TEMP, never the workspace, for the reason image.yml already keeps the RAUC key
-      # there: anything left in the repo tree gets swept into artifacts and caches.
+      # $RUNNER_TEMP, never the workspace, for the same reason as the signing key above: anything left
+      # in the repo tree gets swept into artifacts and caches.
       - name: publish to the update server
+        if: github.ref_type == 'tag'
         env:
           OTA_SSH_KEY: ${{ secrets.OTA_SSH_KEY }}
           NOVADECK_OTA_HOST: ${{ vars.OTA_HOST || 'updates.novadeck.cloud-ip.cc' }}
@@ -381,10 +350,9 @@ jobs:
           chmod 600 "$key"
           trap 'shred -u "$key" 2>/dev/null || rm -f "$key"' EXIT
           bundle="$(ls out/images/novadeck-*.raucb)"
-          # Build the toolchain image so publish-bundle.sh's keyring gate runs against the PINNED
-          # rauc (build/Dockerfile, RAUC_VERSION) rather than whatever the runner's archive holds.
-          # Not a detail: ubuntu-latest ships a rauc old enough to predate verity bundle support, so
-          # `apt-get install rauc` here would give a gate that fails on every bundle we produce —
-          # indistinguishable, from the log, from a genuinely bad signature.
-          docker build -t novadeck-build -f build/Dockerfile build
+          # publish-bundle.sh's keyring gate runs rauc inside novadeck-build — the image `make
+          # toolchain` built above — so it checks against the PINNED rauc (build/Dockerfile,
+          # RAUC_VERSION), the same one that signed the bundle. Never `apt-get install rauc` here:
+          # Ubuntu's predates verity bundle support, so the gate would fail on every bundle we
+          # produce — indistinguishable, from the log, from a genuinely bad signature.
           NOVADECK_OTA_SSH_KEY="$key" ota/publish-bundle.sh "$bundle"

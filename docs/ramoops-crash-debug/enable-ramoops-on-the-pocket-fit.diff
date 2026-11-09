@@ -1,0 +1,157 @@
+diff --git a/kernel/dts/qcom/sm8650-konkr-pf.dts b/kernel/dts/qcom/sm8650-konkr-pf.dts
+index f30f0a1..ab5c1ae 100644
+--- a/kernel/dts/qcom/sm8650-konkr-pf.dts
++++ b/kernel/dts/qcom/sm8650-konkr-pf.dts
+@@ -64,6 +64,29 @@
+ 			"qcom/sm8650/konkr/pf/cdsp_dtb.mbn";
+ };
+ 
++/*
++ * ramoops, to catch the resets during kernel boot that Linux never sees (panic=0 still resets).
++ * With CONFIG_PSTORE_CONSOLE the console is copied here as it prints, so the next boot reads
++ * it back from /sys/fs/pstore/console-ramoops-0. It only works if the RAM keeps its contents
++ * through that reset.
++ * 0xf3400000 is plain RAM on SM8650 (the S2's EFI map), outside every carve-out, and below
++ * trust-ui-vm. That keeps it well under the top of the 4 GB range, where top-down firmware
++ * allocations land first.
++ * The RAM keeps the region across a reset but with scattered bit flips: about one character in
++ * ten. With ecc-size 16 (8 bytes repaired per 128-byte block) the zone headers were often
++ * beyond repair, so the zone was dropped. 64 repairs 32 bytes per block and per header.
++ */
++&reserved_memory {
++	ramoops@f3400000 {
++		compatible = "ramoops";
++		reg = <0 0xf3400000 0 0x200000>;
++		console-size = <0x100000>;
++		record-size = <0x20000>;
++		ecc-size = <64>;
++		no-map;
++	};
++};
++
+ /*
+  * Touchscreen: ChipOne ICNL9922C TDDI controller.
+  *
+diff --git a/kernel/kernel.config b/kernel/kernel.config
+index c1c3a57..898d122 100644
+--- a/kernel/kernel.config
++++ b/kernel/kernel.config
+@@ -696,6 +696,12 @@ CONFIG_SND_USB_AUDIO=m
+ # --- pstore: keeps the last kernel log across a reboot where a backend is present ---
+ # defconfig had PSTORE only through ACPI APEI's select (ACPI is off, trim-unused.config).
+ CONFIG_PSTORE=y
++# RAM backend, built in so it records from early boot. CONSOLE copies the live console into the
++# region all the time, not only on a panic. That is what survives a reset Linux never sees (a
++# watchdog bite, a hypervisor reset): /sys/fs/pstore/console-ramoops-0 on the next boot.
++# It does nothing on a board whose DT has no "ramoops" reserved-memory node.
++CONFIG_PSTORE_RAM=y
++CONFIG_PSTORE_CONSOLE=y
+ 
+ # === Built-in platform-driver parity (auto-generated 2026-06-19, BASE_CONFIG diff) ===
+ # novadeck has NO initramfs, so any =m platform driver never loads at early boot.
+diff --git a/kernel/patches/0985-pstore-ram-keep-the-console-zone-when-its-header-is-lost.patch b/kernel/patches/0985-pstore-ram-keep-the-console-zone-when-its-header-is-lost.patch
+new file mode 100644
+index 0000000..9c87848
+--- /dev/null
++++ b/kernel/patches/0985-pstore-ram-keep-the-console-zone-when-its-header-is-lost.patch
+@@ -0,0 +1,100 @@
++From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
++From: Philippe Simons <simons.philippe@gmail.com>
++Date: Mon, 9 Nov 2026 17:13:23 +0100
++Subject: [PATCH] pstore/ram: keep the console zone when its header is lost
++
++On a board whose RAM loses bits across a warm reset (the KONKR Pocket FIT,
++SM8650), the ramoops zone headers are often beyond what the ECC can repair,
++even at ecc-size 64. ramoops then drops the zone, so the console of a boot
++that reset is lost exactly when it is wanted.
++
++The console zone is written front to back from offset 0 and is reset at every
++boot, so its data area reads as a log without the header's start and size.
++When the header is gone, keep the whole data area as the old console instead
++of dropping it. And zero the console (data and per-block parity) before this
++boot writes to it: an all-zero block is a valid RS codeword, and decayed RAM
++goes 1 -> 0, so the zeros survive and the next boot sees where the log ends.
++
++Debug aid for the FIT boot resets; not for upstream.
++
++Signed-off-by: Philippe Simons <simons.philippe@gmail.com>
++---
++ fs/pstore/ram_core.c | 42 +++++++++++++++++++++++++++++++++++++++++-
++ 1 file changed, 41 insertions(+), 1 deletion(-)
++
++diff --git a/fs/pstore/ram_core.c b/fs/pstore/ram_core.c
++index b4ec800..bc5e0b4 100644
++--- a/fs/pstore/ram_core.c
+++++ b/fs/pstore/ram_core.c
++@@ -523,6 +523,39 @@ static int persistent_ram_buffer_map(phys_addr_t start, phys_addr_t size,
++ 	return 0;
++ }
++ 
+++static bool persistent_ram_is_console(struct persistent_ram_zone *prz)
+++{
+++	return prz->label && !strcmp(prz->label, "ramoops:console");
+++}
+++
+++/*
+++ * The console is written front to back from offset 0 and is zeroed at every boot, so its data
+++ * area reads as a log even when the header (start, size) did not survive. Keep it raw rather
+++ * than drop it: on a board whose RAM loses bits across a reset, the header is often beyond
+++ * what the ECC can repair while most of the text can still be read.
+++ */
+++static void persistent_ram_salvage_console(struct persistent_ram_zone *prz)
+++{
+++	pr_info("%s: header lost, keeping the raw zone (%zu bytes)\n",
+++		prz->label, prz->buffer_size);
+++	atomic_set(&prz->buffer->start, 0);
+++	atomic_set(&prz->buffer->size, prz->buffer_size);
+++	persistent_ram_save_old(prz);
+++}
+++
+++/*
+++ * Zero the console's data and its per-block parity before this boot writes to it. An all-zero
+++ * block is a valid RS codeword, so the ECC stays consistent, and RAM that loses charge decays
+++ * 1 -> 0, so the zeros survive a reset: the next boot can see where this log ends.
+++ */
+++static void persistent_ram_clear_console(struct persistent_ram_zone *prz)
+++{
+++	size_t len = prz->par_header ?
+++		(u8 *)prz->par_header - prz->buffer->data : prz->buffer_size;
+++
+++	memset_io(prz->buffer->data, 0, len);
+++}
+++
++ static int persistent_ram_post_init(struct persistent_ram_zone *prz, u32 sig,
++ 				    struct persistent_ram_ecc_info *ecc_info)
++ {
++@@ -547,6 +580,8 @@ static int persistent_ram_post_init(struct persistent_ram_zone *prz, u32 sig,
++ 		    buffer_start(prz) > buffer_size(prz)) {
++ 			pr_info("found existing invalid buffer, size %zu, start %zu\n",
++ 				buffer_size(prz), buffer_start(prz));
+++			if (persistent_ram_is_console(prz))
+++				persistent_ram_salvage_console(prz);
++ 			zap = true;
++ 		} else {
++ 			pr_debug("found existing buffer, size %zu, start %zu\n",
++@@ -556,13 +591,18 @@ static int persistent_ram_post_init(struct persistent_ram_zone *prz, u32 sig,
++ 	} else {
++ 		pr_debug("no valid data in buffer (sig = 0x%08x)\n",
++ 			 prz->buffer->sig);
+++		if (persistent_ram_is_console(prz))
+++			persistent_ram_salvage_console(prz);
++ 		prz->buffer->sig = sig;
++ 		zap = true;
++ 	}
++ 
++ 	/* Reset missing, invalid, or single-use memory area. */
++-	if (zap)
+++	if (zap) {
+++		if (persistent_ram_is_console(prz))
+++			persistent_ram_clear_console(prz);
++ 		persistent_ram_zap(prz);
+++	}
++ 
++ 	return 0;
++ }
++-- 
++2.55.0
++

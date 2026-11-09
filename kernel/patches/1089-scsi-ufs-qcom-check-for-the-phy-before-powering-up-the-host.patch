@@ -1,0 +1,59 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Philippe Simons <simons.philippe@gmail.com>
+Date: Mon, 9 Nov 2026 22:19:53 +0100
+Subject: [PATCH] scsi: ufs: qcom: check for the PHY before powering up the
+ host
+
+The QMP UFS PHY takes its reset from the UFS host (resets = <&ufs_mem_hc 0>),
+and the host takes the PHY (phys = <&ufs_mem_phy>). fw_devlink sees the cycle
+and demotes the host->PHY link to sync-state-only, so the host can probe
+before the PHY has bound.
+
+When it does, ufshcd_pltfrm_init() first powers up the host: regulators,
+clocks (including the GPLL4-sourced UFS clocks), all on. Only then does
+ufs_qcom_init() reach devm_phy_get(), get -EPROBE_DEFER, and the whole lot is
+switched back off, about 24 ms later.
+
+On the KONKR Pocket FIT (SM8650) this happens on every boot, at the same time
+as the async sdhci_msm probe of SDC2, the controller the board booted from.
+In about half the boots the board then resets silently: a pstore console
+catches both probes in flight as the last thing printed. With ufs-qcom kept
+from probing (initcall_blacklist), 8 of 8 reboots came up clean; before that,
+4 of 6 reset.
+
+Check for the PHY at the top of probe and defer there, before anything is
+powered up.
+---
+ drivers/ufs/host/ufs-qcom.c | 16 ++++++++++++++++
+ 1 file changed, 16 insertions(+)
+
+diff --git a/drivers/ufs/host/ufs-qcom.c b/drivers/ufs/host/ufs-qcom.c
+index f1fa6b2..0ab6b9d 100644
+--- a/drivers/ufs/host/ufs-qcom.c
++++ b/drivers/ufs/host/ufs-qcom.c
+@@ -3041,6 +3041,22 @@ static int ufs_qcom_probe(struct platform_device *pdev)
+ 	else
+ 		vops = &ufs_hba_qcom_vops;
+ 
++	/*
++	 * The PHY takes its reset from this controller, so fw_devlink sees a
++	 * cycle and does not hold this probe back until the PHY has bound.
++	 * Check for the PHY before ufshcd_pltfrm_init(): that powers up the
++	 * host's regulators and clocks, and a probe that then defers in
++	 * ufs_qcom_init() turns them back off, while blocks the bootloader
++	 * left running may share those clock sources.
++	 */
++	if (!has_acpi_companion(dev)) {
++		struct phy *phy = phy_get(dev, "ufsphy");
++
++		if (IS_ERR(phy))
++			return dev_err_probe(dev, PTR_ERR(phy), "Failed to get PHY\n");
++		phy_put(dev, phy);
++	}
++
+ 	/* Perform generic probe */
+ 	err = ufshcd_pltfrm_init(pdev, vops);
+ 	if (err)
+-- 
+2.55.0
+

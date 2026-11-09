@@ -78,6 +78,7 @@ Then (2026-11-05, gen1 encoder rate control `1098`): 2 `mainline`, 39 `posted`, 
 Then (2026-11-05, Pocket S2/FIT headphone PCM route `0860`–`0863`): 2 `mainline`, 39 `posted`, 28 `novadeck`, 126 `community` = 195.
 Then (2026-11-07, andrebraga `Kernel_7.3` @ `1c1c374bdc` ports `1024 1029 1170`, then bandwidth/frequency scaling `0160 0165 0170 0175 0286 0288 0289 1180 1182 1184` for an A/B): 2 `mainline`, 40 `posted`, 28 `novadeck`, 138 `community` = 208.
 Then (2026-11-09, sm8550 CPU7 3.36 GHz OPP `1155`): 2 `mainline`, 41 `posted`, 28 `novadeck`, 138 `community` = 209.
+Then (2026-11-09, sm8250 active-only CPU interconnect tags `1137`): 2 `mainline`, 42 `posted`, 28 `novadeck`, 138 `community` = 210.
 The 7.3 bump deleted every `mainline` row (`0230 0620 0800 1080 1155`), the two `posted` ones
 that landed (`0275 1170`), and `0810`/`0825` with the old `0820`, whose jobs mainline's
 `ayaneo,pocket-s2-sndcard` and per-DAI MI2S clocks now do; `0820` is reused for the sm8750
@@ -291,6 +292,7 @@ taken for issue #122 — see the `0780`–`0796` rows.
 | `1125` | community | ROCKNIX SM8250 `0004`; nodes for the out-of-tree `0770`/`0910` drivers. | with `0770`/`0910` |
 | `1130` | community | spycat88, ROCKNIX `0102`. Upstream wants `rtc_offset` in board DTS, not the PMIC dtsi. | never |
 | `1135` | posted | Krishna Chaitanya Chundru "Fix wake-gpios polarity" v2 06/18 `<20260917-root_port-v2-6-0d627d0856d5@oss.qualcomm.com>`, applied to qcom `arm64-for-7.4` as `adf55ad00669`; no Fixes:/Cc: stable, so 7.3.y will not get it. | v7.4 |
+| `1137` | posted | Konrad Dybcio "Straighten out CPU votes" 7/7 `<20261020-topic-icc_defines_ao-v1-7-cae8d22649ac@oss.qualcomm.com>`, body byte-identical (b4), reviewed by Abel Vesa, applied to qcom `arm64-for-7.5` as `dd68b2a63e89`. Tags the CPU→DDR path of all eight sm8250 CPUs `QCOM_ICC_TAG_ACTIVE_ONLY`, so the cpufreq bandwidth vote drops when the CPU subsystem power-collapses. 1/7–6/7 are other SoCs, not taken. Fixes: but no Cc stable. | v7.5, or 7.3.y if stable picks it |
 | `1140` | posted | Konrad Dybcio RFC v1 `<20250728-topic-gpucc_power_plumbing-v1-0-09c2480fe3e6@oss.qualcomm.com>` (modified). Ulf asked for a rebase in 2025-08; never resent. | never, unless Konrad resends |
 | `1145` | community | armada `0070` (virtudude). | with `0360` |
 | `1150` | posted | Abel Vesa "clk: qcom: Tie CX power domains to GCCs" v5 `<20260924-qcom-tie-cx-to-gcc-v5-*-38732033e5b5@oss.qualcomm.com>`, the six patches for our SoCs: bindings 3/7/8 (`clk-for-7.4`, sm8250 `98e936c9d46a`) and DTS 36/39/40 (`arm64-for-7.4`: sm8250 `389a0144c511`, sm8550 `df50f5c5690a`, sm8650 `108a8d51fba8`). Replaced Neil Armstrong's v1 (sm8450/8550/8650, abandoned after v2) on 2026-10-12, which also ADDS sm8250. The gcc driver halves 24/25 (`.use_rpm`, sm8550/sm8650 only — v5 has none for sm8250) are `0140`, in the clk band. | v7.4 |

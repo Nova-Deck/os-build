@@ -901,7 +901,9 @@ git_commit: d50d994bffa3c7c6db2d8bc4c5f0c55e3f46b0cd
 #     dir), so we already ship the patch aimed at this handoff and ACE faults anyway.
 #     FIXED 2026-11-09 by 0190 (upstream v1), which gives SM8550 MDSS an identity domain at boot.
 #     The faults come from the empty translating domain attached when the device is added, which
-#     is BEFORE 0370 runs, so 0370 could never reach them. 0195 does the same for SM8650.
+#     is BEFORE 0370 runs, so 0370 could never reach them. 0195 does the same for SM8650; on the
+#     FIT its group is "identity" too, but the FIT still reset during kernel boot with it in, so
+#     it does not explain the FIT reboots.
 #     ACE GATE PASSED 2026-11-09 (7.3.3 dev card from 7a1720b, 1 boot): 0 cbfrsynra=0x1c00 faults,
 #     where it showed 10; 0 SMMU faults of any kind; the ae00000 iommu group's type is "identity".
 #     WHY THIS ENTRY COST A CARD BUILD: on 2026-09-17 the burst was re-derived from scratch —

@@ -1,0 +1,140 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Philippe Simons <simons.philippe@gmail.com>
+Date: Tue, 10 Nov 2026 17:30:00 +0100
+Subject: [PATCH] scsi: ufs: core: debug: hold power across a deferred probe
+
+DEBUG ONLY, never ships. Replaces 1089 for one test card.
+
+Without 1089 the ufs-qcom probe on the Pocket FIT switches on the device
+supplies (VCC, VCCQ) and the host clocks, defers on the missing PHY, and
+switches them all off again 24 ms later. That resets the board in about half
+the boots. Two things go off in that teardown, and this patch tells them apart.
+
+ufshcd_core.defer_hold= on the kernel command line:
+  0  stock teardown (the control: should reset about 1 boot in 2)
+  1  keep the device supplies on, at full load
+  2  keep the host clocks on
+  3  keep both
+
+The GDSC is not a candidate: platform_probe() powers the domain on and off
+around every probe attempt, 1089 included, and 1089 passed.
+---
+ drivers/ufs/core/ufshcd.c | 97 +++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 97 insertions(+)
+
+--- a/drivers/ufs/core/ufshcd.c	2026-11-10 17:25:14.342438205 +0100
++++ b/drivers/ufs/core/ufshcd.c	2026-11-10 17:25:31.959140484 +0100
+@@ -10052,6 +10052,101 @@
+ 	return err;
+ }
+ 
++/*
++ * Debug aid for the Pocket FIT boot resets, not for upstream. When the variant
++ * defers the probe, ufshcd_hba_init() switches the device supplies and the
++ * host clocks back off right after switching them on. defer_hold keeps one or
++ * both on through that teardown, to tell which of the two resets the board:
++ *   bit 0: the device supplies (VCC, VCCQ, VCCQ2), enabled and at full load
++ *   bit 1: the host clocks
++ * Each is held by a second reference that is never dropped, so the rail or
++ * clock stays on through every later deferral too.
++ */
++static unsigned int defer_hold;
++module_param(defer_hold, uint, 0444);
++MODULE_PARM_DESC(defer_hold,
++		 "Debug: on a deferred probe, keep on bit 0 the device supplies, bit 1 the host clocks");
++
++#define UFSHCD_DEFER_HOLD_VREG	BIT(0)
++#define UFSHCD_DEFER_HOLD_CLKS	BIT(1)
++
++static void ufshcd_defer_hold_vreg(struct device *dev, struct ufs_vreg *vreg)
++{
++	struct regulator *reg;
++	int ret;
++
++	if (!vreg || !vreg->enabled)
++		return;
++
++	reg = regulator_get(dev, vreg->name);
++	if (IS_ERR(reg)) {
++		dev_warn(dev, "defer_hold: cannot get %s: %ld\n",
++			 vreg->name, PTR_ERR(reg));
++		return;
++	}
++
++	if (vreg->max_uA)
++		regulator_set_load(reg, vreg->max_uA);
++
++	ret = regulator_enable(reg);
++	if (ret) {
++		dev_warn(dev, "defer_hold: cannot enable %s: %d\n",
++			 vreg->name, ret);
++		regulator_put(reg);
++		return;
++	}
++
++	dev_info(dev, "defer_hold: holding %s on\n", vreg->name);
++}
++
++static void ufshcd_defer_hold_clks(struct ufs_hba *hba)
++{
++	struct ufs_clk_info *clki;
++	struct clk *clk;
++	int ret;
++
++	list_for_each_entry(clki, &hba->clk_list_head, list) {
++		if (!clki->enabled)
++			continue;
++
++		clk = clk_get(hba->dev, clki->name);
++		if (IS_ERR(clk)) {
++			dev_warn(hba->dev, "defer_hold: cannot get %s: %ld\n",
++				 clki->name, PTR_ERR(clk));
++			continue;
++		}
++
++		ret = clk_prepare_enable(clk);
++		if (ret) {
++			dev_warn(hba->dev, "defer_hold: cannot enable %s: %d\n",
++				 clki->name, ret);
++			clk_put(clk);
++			continue;
++		}
++
++		dev_info(hba->dev, "defer_hold: holding %s on\n", clki->name);
++	}
++}
++
++static void ufshcd_defer_hold(struct ufs_hba *hba)
++{
++	struct ufs_vreg_info *info = &hba->vreg_info;
++	static bool held;
++
++	if (held || !defer_hold)
++		return;
++	held = true;
++
++	if (defer_hold & UFSHCD_DEFER_HOLD_VREG) {
++		ufshcd_defer_hold_vreg(hba->dev, info->vcc);
++		ufshcd_defer_hold_vreg(hba->dev, info->vccq);
++		ufshcd_defer_hold_vreg(hba->dev, info->vccq2);
++	}
++
++	if (defer_hold & UFSHCD_DEFER_HOLD_CLKS)
++		ufshcd_defer_hold_clks(hba);
++}
++
+ static int ufshcd_hba_init(struct ufs_hba *hba)
+ {
+ 	int err;
+@@ -10101,6 +10196,8 @@
+ 	goto out;
+ 
+ out_disable_vreg:
++	if (err == -EPROBE_DEFER)
++		ufshcd_defer_hold(hba);
+ 	ufshcd_setup_vreg(hba, false);
+ out_disable_clks:
+ 	ufshcd_setup_clocks(hba, false);
+-- 
+2.55.0
+

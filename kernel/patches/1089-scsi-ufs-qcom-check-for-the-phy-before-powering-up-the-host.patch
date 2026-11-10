@@ -9,39 +9,45 @@ and the host takes the PHY (phys = <&ufs_mem_phy>). fw_devlink sees the cycle
 and demotes the host->PHY link to sync-state-only, so the host can probe
 before the PHY has bound.
 
-When it does, ufshcd_pltfrm_init() first powers up the host: regulators,
-clocks (including the GPLL4-sourced UFS clocks), all on. Only then does
-ufs_qcom_init() reach devm_phy_get(), get -EPROBE_DEFER, and the whole lot is
-switched back off, about 24 ms later.
+When it does, ufshcd_pltfrm_init() first powers up the host: the clocks, then
+the device supplies (VCC, VCCQ). Only then does ufs_qcom_init() reach
+devm_phy_get(), get -EPROBE_DEFER, and the whole lot is switched back off,
+about 24 ms later.
 
-On the KONKR Pocket FIT (SM8650) this happens on every boot, at the same time
-as the async sdhci_msm probe of SDC2, the controller the board booted from.
-In about half the boots the board then resets silently: a pstore console
-catches both probes in flight as the last thing printed. With ufs-qcom kept
-from probing (initcall_blacklist), 8 of 8 reboots came up clean; before that,
-4 of 6 reset.
+On the KONKR Pocket FIT (SM8650) this happens on every boot, alongside the
+async sdhci_msm probe of SDC2, the controller the board booted from. In a
+third to a half of the boots the board then resets silently: a pstore console
+ends at the deferral. With ufs-qcom kept from probing (initcall_blacklist),
+8 of 8 reboots came up clean; before that, 4 of 6 reset.
+
+The supply cut is what resets it. The bootloader leaves
+the UFS device running, and VCC drops under it. With the teardown changed
+to keep one side on:
+
+  stock teardown                     3 resets in 8 reboots
+  device supplies kept on            0 resets in 24 reboots
+  host clocks kept on                1 reset in 19 reboots
 
 Check for the PHY at the top of probe and defer there, before anything is
 powered up.
 ---
- drivers/ufs/host/ufs-qcom.c | 16 ++++++++++++++++
- 1 file changed, 16 insertions(+)
+ drivers/ufs/host/ufs-qcom.c | 15 +++++++++++++++
+ 1 file changed, 15 insertions(+)
 
 diff --git a/drivers/ufs/host/ufs-qcom.c b/drivers/ufs/host/ufs-qcom.c
 index f1fa6b2..0ab6b9d 100644
 --- a/drivers/ufs/host/ufs-qcom.c
 +++ b/drivers/ufs/host/ufs-qcom.c
-@@ -3041,6 +3041,22 @@ static int ufs_qcom_probe(struct platform_device *pdev)
+@@ -3041,6 +3041,21 @@ static int ufs_qcom_probe(struct platform_device *pdev)
  	else
  		vops = &ufs_hba_qcom_vops;
  
 +	/*
 +	 * The PHY takes its reset from this controller, so fw_devlink sees a
 +	 * cycle and does not hold this probe back until the PHY has bound.
-+	 * Check for the PHY before ufshcd_pltfrm_init(): that powers up the
-+	 * host's regulators and clocks, and a probe that then defers in
-+	 * ufs_qcom_init() turns them back off, while blocks the bootloader
-+	 * left running may share those clock sources.
++	 * Check for the PHY before ufshcd_pltfrm_init(): that enables the device
++	 * supplies, and a probe that then defers in ufs_qcom_init() disables
++	 * them again, cutting VCC under a device the bootloader left running.
 +	 */
 +	if (!has_acpi_companion(dev)) {
 +		struct phy *phy = phy_get(dev, "ufsphy");

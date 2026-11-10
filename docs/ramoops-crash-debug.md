@@ -23,6 +23,8 @@ session.
 | [`ramoops-crash-debug/enable-ramoops-on-the-pocket-fit.diff`](ramoops-crash-debug/enable-ramoops-on-the-pocket-fit.diff) | `git apply`-able. It adds `CONFIG_PSTORE_RAM=y` and `CONFIG_PSTORE_CONSOLE=y` to `kernel/kernel.config`, the `ramoops` reserved-memory node to `sm8650-konkr-pf.dts`, and the pstore salvage patch as `kernel/patches/0985-…`. |
 | [`ramoops-crash-debug/reboot-loop.sh`](ramoops-crash-debug/reboot-loop.sh) | Reboots the device until a reset is caught, without burning the slot, and saves each previous boot's console. |
 | [`ramoops-crash-debug/decode-ramoops.py`](ramoops-crash-debug/decode-ramoops.py) | Reads a bit-decayed console by matching each line against a clean dmesg. It is only needed when the ECC could not repair the text. |
+| [`ramoops-crash-debug/count-resets.py`](ramoops-crash-debug/count-resets.py) | Counts the resets in a run from the gaps between journal boots. This is the count to trust (§4). |
+| [`ramoops-crash-debug/ufs-defer-hold.patch`](ramoops-crash-debug/ufs-defer-hold.patch) | The 2026-11-10 FIT A/B: `ufshcd_core.defer_hold=` keeps the UFS supplies or clocks on through a deferred probe. Kept as the example of an A/B switched from the boot line (§5). |
 
 ## 1. Build a card with the RAM console
 
@@ -80,7 +82,25 @@ Each iteration saves `iterNNN.console`, the previous boot's console. The loop th
 device's copy, because systemd-pstore archives nothing when pstore is empty, and a leftover file
 would pass for a new capture.
 
-## 4. Read the capture
+**The loop's verdict is not the count.** It stops when it reads `boot-attempts` ≥ 2, but it reads
+the value when SSH first answers. mark-good clears it about 30 s after gamescope is up. If SSH answers
+late, for example while Steam checks files on a slow card, mark-good has already run and the loop
+reads 0 after a reset. A large uptime at first contact does not mean a reset either: it is the same
+late SSH. Count resets with `count-resets.py` (§4).
+
+## 4. Count the resets and read the capture
+
+```sh
+ssh root@<ip> journalctl --list-boots -o json | python3 -I docs/ramoops-crash-debug/count-resets.py --since <first boot of the run>
+```
+
+A reset during kernel boot leaves no boot in the journal. It shows up as a longer gap between one
+boot's last entry and the next boot's first. That gap covers only shutdown, firmware, GRUB and early
+kernel, so nothing in the session can stretch it. On the FIT a clean reboot is 18–22 s and each
+reset adds about 10 s. Don't count with `A.conf` `boot-count`: mark-good bumps it, so it counts
+confirmed boots only and never moves on a reset.
+
+Then read the console of each reset:
 
 ```sh
 tr -c '[:print:]\n' '.' < iterNNN.console | grep -v '^ECC' | tail -70
@@ -108,10 +128,15 @@ grep -E 'initcall.*<driver>' /proc/kallsyms     # __initcall__kmod_<obj>__<n>_<l
 
 This works only for built-in (`=y`) drivers. Then loop for N clean reboots with `MAX_ITER=N`:
 - **Pick N from the reset rate.** At a 50% rate, 8 clean reboots in a row has a 0.4% chance by luck.
-- **Count resets by `A.conf` `boot-count`**, against the number of reboots, not by `boot-attempts`.
-  mark-good zeroes `boot-attempts`, and an SSH session can hang through a shutdown, which makes one
-  iteration look slow.
+- **Count resets with `count-resets.py`** (§4), never with the loop's verdict or `boot-count`.
 - **Then build the fix and run the same loop on it.**
+
+**To tell which part of a suspect resets the board,** put the variants in one debug patch behind a
+`module_param` and pick one per run from the boot line, so a single card covers every arm. Run the
+stock behaviour as the control first, on the same card. For a built-in driver the prefix is the
+object name (`ufshcd_core.`, not `ufshcd.`). Log a line when the variant takes effect and check it
+on every arm. `ufs-defer-hold.patch` is the worked example. Size each arm for its rate: 8 clean
+reboots looked conclusive for both of its arms, and 16 more showed one of them was luck.
 
 ## 6. Clean up
 
@@ -136,3 +161,22 @@ The FIT reset in about half its boots, with `panic=0`. Both captures ended in th
 The PHY takes its reset from the host, so fw_devlink demotes the link and doesn't order the two.
 `initcall_blacklist=ufs_qcom_pltform_init` gave 8/8 clean reboots. Fixed by
 `kernel/patches/1089` (check for the PHY before powering up), which also gave 8/8.
+
+**2026-11-10: which half of the teardown resets the board.** The trigger came from a peer distro,
+which found that removing the UFS host with the device still active, cutting VCC under it, resets the
+FIT. The deferred probe does the same thing at boot. A card without 1089 and with
+`ufs-defer-hold.patch` ran three arms, counted with `count-resets.py`:
+
+| `defer_hold` | Kept on through the teardown | Reboots | Resets |
+|---|---|---|---|
+| 0 | nothing (stock) | 8 | 3 |
+| 1 | device supplies: VCC (L17B), VCCQ (L1C) | 24 | 0 |
+| 2 | the 8 host clocks | 19 | 1 |
+
+The arm 2 reset's console ends at the deferral, right after the clock holds, so the clocks running did
+not stop it. The supply cut is the trigger: the bootloader leaves the UFS device running and VCC drops
+under it. 1089 avoids it by deferring before anything is powered up. Any other deferral later in
+`ufs_qcom_init()` would still cut the supplies.
+
+The GDSC was never a candidate. `platform_probe()` powers the domain up and down around every probe
+attempt, 1089's early deferral included, and 1089 passed.

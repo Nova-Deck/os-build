@@ -906,7 +906,8 @@ git_commit: d50d994bffa3c7c6db2d8bc4c5f0c55e3f46b0cd
 #     it does not explain the FIT reboots. Those were FIXED 2026-11-09 by 1089: the UFS host
 #     probed before its PHY, powered up for 24 ms and powered down again while SDC2 (the boot
 #     card) was probing. FIT GATE PASSED (761c7c6 dev card): 8/8 reboots clean with the fix,
-#     where 4 of 6 boots had reset before.
+#     where 4 of 6 boots had reset before. The cut of the UFS device supplies (VCC L17B, VCCQ
+#     L1C) is what resets it, not the clocks (2026-11-10 A/B, docs/ramoops-crash-debug.md).
 #     ACE GATE PASSED 2026-11-09 (7.3.3 dev card from 7a1720b, 1 boot): 0 cbfrsynra=0x1c00 faults,
 #     where it showed 10; 0 SMMU faults of any kind; the ae00000 iommu group's type is "identity".
 #     WHY THIS ENTRY COST A CARD BUILD: on 2026-09-17 the burst was re-derived from scratch —

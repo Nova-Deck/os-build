@@ -1722,9 +1722,3 @@
 			"qcom/sm8750/konkr/pfe/adsp_dtb.mbn";
 	status = "okay";
 };
-
-&remoteproc_cdsp {
-	firmware-name = "qcom/sm8750/konkr/pfe/cdsp.mbn",
-			"qcom/sm8750/konkr/pfe/cdsp_dtb.mbn";
-	status = "okay";
-};

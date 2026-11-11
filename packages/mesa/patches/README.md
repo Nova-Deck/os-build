@@ -1,6 +1,6 @@
 # mesa patches
 
-novadeck patches applied on top of the upstream mesa release source (currently `26.2.6`), in
+novadeck patches applied on top of the upstream mesa release source (currently `26.3.0`), in
 the order listed by `patches:` in [`../source.pin`](../source.pin). Each is applied with
 `patch -p1` from the mesa source root (the `mesa-<version>/` tree inside makepkg's `$srcdir`)
 by [`packages/build-overlay.sh`](../../build-overlay.sh), inserted right after the first `cd`
@@ -8,15 +8,21 @@ in the PKGBUILD's `prepare()`.
 
 ## Present
 
-```
-0001-add-a830-chip-id.patch                                          # SM8750 / a830 enablement
-```
-
-- **0001** (a830-specific) — register the Adreno 830 (a8xx) `chip_id`s in
-  `src/freedreno/common/freedreno_devices.py` so freedreno/Turnip recognise the SM8750 GPU (adds
-  the msm `0xffff4405…` and KGSL `0x4405…` variants).
+None. mesa builds from the unmodified release tarball.
 
 ## Dropped
+
+- **0001-add-a830-chip-id.patch** — dropped at the 26.3.0 bump. It registered extra Adreno 830
+  (SM8750) `chip_id`s in `src/freedreno/common/freedreno_devices.py`: the msm `0xffff44050001`
+  and the KGSL `0x44050000`. 26.3.0 registers `0xffff44050001` itself, which matches the
+  `0x44050001` our kernel's a830 entry reports (kernel patch `0280`), so the patch no longer
+  applied. The KGSL id it would still add is dead here: we run the msm DRM driver, never KGSL.
+  Visible change: upstream names that entry `Adreno (TM) 830v1`, so the renderer string on SM8750
+  is now `830v1` rather than `830`.
+
+  **HW check owed:** Turnip and freedreno must still recognise the GPU on an SM8750 board
+  (`vulkaninfo` shows `DRIVER_ID_MESA_TURNIP`, `glxinfo -B` names freedreno). If they do not, the
+  kernel is reporting a chip_id upstream does not list; restore the patch from git history.
 
 - **0002-freedreno-ir3-vulkan-disable-bindless-ubo-const-lowering.patch** — dropped 2026-08-19
   (this file's history has the full write-up). It was a ROCKNIX-origin workaround (added there

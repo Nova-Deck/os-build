@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the x86_64 + i686 Turnip payload for the FEX guest rootfs (see builder.pin for why).
+# Build the x86_64 + i686 Turnip + GL payload for the FEX guest rootfs (see builder.pin for why).
 #
 #   packages/mesa-x86/build.sh          # host side: cache check + docker run
 #
@@ -12,6 +12,9 @@
 #   work/mesa-x86/out/usr/share/vulkan/icd.d/freedreno_icd.{x86_64,i686}.json
 #   work/mesa-x86/out/usr/lib{,32}/libxcb-keysyms.so.1          see container-build.sh
 #   work/mesa-x86/out/usr/lib/libVkLayer_MESA_vram_report_limit{,.i686}.so  + their implicit manifests
+#   work/mesa-x86/out/usr/lib{,32}/{libGLX_mesa,libEGL_mesa,libgbm,libgallium-*}.so*, dri/, gbm/
+#                                                               freedreno (+zink) GL, both arches
+#   work/mesa-x86/out/usr/share/{glvnd/egl_vendor.d/50_mesa.json,drirc.d/00-mesa-defaults.conf}
 #
 # SELF-CACHING, like customize-base.sh: work/mesa-x86/.inputs.sha256 records the digest of the
 # committed inputs; a matching marker with all artifacts present is a no-op. That marker check is
@@ -69,6 +72,11 @@ ARTIFACTS=(
   usr/lib/libVkLayer_MESA_vram_report_limit.i686.so
   usr/share/vulkan/implicit_layer.d/VkLayer_MESA_vram_report_limit.json
   usr/share/vulkan/implicit_layer.d/VkLayer_MESA_vram_report_limit.i686.json
+  usr/lib/libGLX_mesa.so.0 usr/lib/libEGL_mesa.so.0 usr/lib/libgbm.so.1
+  usr/lib/dri/msm_dri.so usr/lib/dri/zink_dri.so usr/lib/gbm/dri_gbm.so
+  usr/lib32/libGLX_mesa.so.0 usr/lib32/libEGL_mesa.so.0 usr/lib32/libgbm.so.1
+  usr/lib32/dri/msm_dri.so usr/lib32/dri/zink_dri.so usr/lib32/gbm/dri_gbm.so
+  usr/share/glvnd/egl_vendor.d/50_mesa.json
 )
 complete() {
   local f

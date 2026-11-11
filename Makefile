@@ -322,7 +322,7 @@ decky_src      = $(shell find apps/decky/$(1)/src apps/decky/$(1)/py_modules app
                               apps/decky/$(1)/tsconfig.json -type f 2>/dev/null)
 NODE_IMG := docker.io/library/node:22-slim@sha256:d649c27dae7ba0137b3cef5dd75baa422c08dc3d9e3fc0c23dfb172dc3cc6436
 
-# x86_64 + i686 Turnip payload for the FEX guest rootfs (packages/mesa-x86/) — built from the
+# x86_64 + i686 Turnip + GL payload for the FEX guest rootfs (packages/mesa-x86/) — built from the
 # SAME source pin + patch list as the host mesa, in a pinned x86 Arch container (native on an
 # x86_64 dev box; CI runs it as its own native x86_64 job and hands the payload to the arm64
 # image job as an artifact — the recipe's build.sh self-caches on an input digest, so the arm64
@@ -880,7 +880,7 @@ $(MESA_X86_STAMP): $(MESA_X86_SRC)
 	packages/mesa-x86/build.sh
 	@mkdir -p $(@D) && touch $@
 
-mesa-x86: $(MESA_X86_STAMP) ## Build the x86 Turnip payload for the FEX guest (host docker, x86)
+mesa-x86: $(MESA_X86_STAMP) ## Build the x86 Turnip + GL payload for the FEX guest (host docker, x86)
 
 # Same shape as mesa-x86 above and for the same reason (an x86-only vendor toolchain, here
 # Google's NDK); the target is aarch64/bionic rather than x86/glibc.
@@ -1075,7 +1075,7 @@ clean-ccache: ## Remove the kernel + overlay compiler caches (work/ccache)
 #   work/pacman-cache  the package cache.
 #   work/repo          the built overlay packages (NOT clean-overlay — this target no longer runs it).
 #   work/ccache        the kernel + overlay compiler caches (`make clean-ccache`).
-#   work/mesa-x86      the FEX-guest Turnip payload (digest-checked by its own build.sh, same
+#   work/mesa-x86      the FEX-guest Turnip + GL payload (digest-checked by its own build.sh, same
 #                      content-addressed logic — a stale payload cannot be served).
 #   work/mesa-android  the Android-guest Mesa payload, same digest-check, same reasoning.
 #   work/android-gapps, work/lepton-framework  the shared Android's Play payload and the tools its

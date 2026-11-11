@@ -1,4 +1,9 @@
-# mesa-x86 — x86_64 + i686 Turnip for the FEX guest rootfs, built in a pinned x86 Arch container.
+# mesa-x86 — x86_64 + i686 Turnip AND freedreno/zink GL for the FEX guest rootfs, built in a pinned
+# x86 Arch container.
+#
+# GL joined on 2026-11-11: the guest's own GL is Arch's x86 mesa of the snapshot date, and on the
+# A830 its freedreno rejected the chip id, so every x86 GL title fell back to zink. Shipping GL from
+# our source pin keeps x86 GL on the same freedreno, with the same GPU table, as the host.
 #
 # WHY THIS EXISTS. The pinned FEX guest (packages/fex-rootfs/prebuilt.pin) already ships a Turnip
 # for both x86 arches, but it is whatever mesa git snapshot the FEX rootfs pipeline happened to

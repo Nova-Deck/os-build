@@ -82,6 +82,7 @@ Then (2026-11-09, sm8250 active-only CPU interconnect tags `1137`): 2 `mainline`
 Then (2026-11-09, SM8550/SM8650 MDSS identity domain at boot `0190`/`0195`): 2 `mainline`, 43 `posted`, 29 `novadeck`, 138 `community` = 212.
 Then (2026-11-09, ufs-qcom checks for its PHY before powering up, the Pocket FIT reset `1089`): 2 `mainline`, 43 `posted`, 30 `novadeck`, 138 `community` = 213.
 Then (2026-11-10, DPU returns `-EINVAL` when no SSPP is free `0386`): 2 `mainline`, 43 `posted`, 30 `novadeck`, 139 `community` = 214.
+Then (2026-11-11, drop `1065`, `0270` replaced by the posted fix, assorted-fixes-oct `0268` `0275`, SM8250 q6asm playback stall `0881` + revert `0882`): 2 `mainline`, 46 `posted`, 32 `novadeck`, 137 `community` = 217.
 The 7.3 bump deleted every `mainline` row (`0230 0620 0800 1080 1155`), the two `posted` ones
 that landed (`0275 1170`), and `0810`/`0825` with the old `0820`, whose jobs mainline's
 `ayaneo,pocket-s2-sndcard` and per-DAI MI2S clocks now do; `0820` is reused for the sm8750
@@ -228,6 +229,8 @@ taken for issue #122 — see the `0780`–`0796` rows.
 | `0865` | posted | Marek Szyprowski v1 `<20261022090923.769464-1-m.szyprowski@samsung.com>`, applied to broonie `sound for-7.4` as `c80f86ed857e`; no Cc: stable. Requests the shared powerdown line asserted so the `GPIO_SHARED` proxy's default is powerdown and any one powered amp holds it de-asserted — the Pocket Max deadlock (both amps on TLMM 127). Upstream's 4th hunk dropped: its `regcache_sync()` error path is not in 7.2. Replaced ROCKNIX `0860` (`GPIOD_FLAGS_BIT_NONEXCLUSIVE`), inert since `ARCH_QCOM` selects `HAVE_SHARED_GPIOS` and gpiolib proxies the line itself; mainline dropped that flag too (`d01fbee5c0d3`). | v7.4 |
 | `0870` | community | ROCKNIX. Effectively reverts `89be3c15a58b`. | never |
 | `0880` | community | Teguh Sobirin, ROCKNIX `0012`. | never |
+| `0881` | novadeck | Written here 2026-11-11: stable 7.3.4's `222d04cf55bc` (q6asm-dai position wraps to 0) lets SM8250 playback underrun, and the recovery never plays again because prepare keeps the old `queue_ptr` and port `hw_ptr`. The q6asm twin of the q6apm reset `0337b8129cf6`. Never posted. | when upstream resets the q6asm queue at prepare |
+| `0882` | novadeck | Revert of stable 7.3.4's `222d04cf55bc` (stable `833cfd0e4a7b`). q6asm returns buffers on copy, so with the exact position every SM8250 stream underruns ~150 ms after each idle wake (an audible ~25 ms gap, traced on the Pocket Max); the one-frame-short position kept that hidden through 7.3.3. Never posted. | when the q6asm position follows what the DSP has rendered |
 | `0890` | community | Daniel Martin (Batocera), ROCKNIX `0300`. Never posted; generic, worth sending. | when upstreamed |
 | `0893` | novadeck | Written here for issue #94: `q6core_is_adsp_ready()` reported "ready" on any non-answer; only `ADSP_EUNSUPPORTED` means that now, and it polls every 50 ms as downstream does. Never posted. | with `0895` |
 | `0895` | novadeck | Written here for issue #94, after the downstream `q6core_is_avs_up()` gate and `afe_callback()` vote handling. Needs `0893`. Never posted. | when upstream gates q6afe on DSP readiness |

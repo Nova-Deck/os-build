@@ -1,0 +1,59 @@
+From: Philippe Simons <simons.philippe@gmail.com>
+Subject: [PATCH] ASoC: qcom: q6asm-dai: restart the period queue at prepare
+
+Since commit 222d04cf55bc ("ASoC: qcom: q6asm-dai: wrap the position of
+a full ring to 0") a playback stream on SM8250 underruns: the DSP
+returns each buffer as soon as it has copied it, so the position
+reaches appl_ptr whenever the application has written up to a period
+boundary. Before that commit the position stayed one frame short and
+the underrun was never seen.
+
+The recovery from it never plays again. ALSA stops the stream, the
+application prepares it and starts it, and ALSA restarts appl_ptr from
+0, but q6asm_dai_ack() keeps counting from the queue_ptr of the
+previous run. appl_ptr - queue_ptr is negative, no period is queued
+again, the DSP returns nothing and the stream stays RUNNING, silent,
+for good. The hw pointer of the port is stale as well: it keeps the
+token of the last buffer of the previous run, so the position reported
+after prepare is that of the previous run, not 0.
+
+Seen on a Mangmi Pocket Max with PipeWire: Steam's boot sound plays,
+then every later sound is a single period followed by silence.
+
+Clear queue_ptr in q6asm_dai_prepare() and reset the hw pointer where
+q6asm_map_memory_regions() sets up the ring again, as commit
+0337b8129cf6 ("ASoC: qcom: q6apm: reset the hw pointer with the
+fragment queue") does for q6apm.
+
+Fixes: 222d04cf55bc ("ASoC: qcom: q6asm-dai: wrap the position of a full ring to 0")
+Signed-off-by: Philippe Simons <simons.philippe@gmail.com>
+---
+ sound/soc/qcom/qdsp6/q6asm-dai.c | 2 ++
+ sound/soc/qcom/qdsp6/q6asm.c     | 1 +
+ 2 files changed, 3 insertions(+)
+
+diff --git a/sound/soc/qcom/qdsp6/q6asm-dai.c b/sound/soc/qcom/qdsp6/q6asm-dai.c
+index 21eb758..ca582eb 100644
+--- a/sound/soc/qcom/qdsp6/q6asm-dai.c
++++ b/sound/soc/qcom/qdsp6/q6asm-dai.c
+@@ -222,6 +222,8 @@ static int q6asm_dai_prepare(struct snd_soc_component *component,
+ 	}
+ 
+ 	prtd->pcm_count = snd_pcm_lib_period_bytes(substream);
++	/* ALSA restarts the ring from 0, so does the queue of periods */
++	prtd->queue_ptr = 0;
+ 	/* rate and channels are sent to audio driver */
+ 	if (prtd->state == Q6ASM_STREAM_RUNNING) {
+ 		/* clear the previous setup if any  */
+diff --git a/sound/soc/qcom/qdsp6/q6asm.c b/sound/soc/qcom/qdsp6/q6asm.c
+index de0bd8f..594dc5c 100644
+--- a/sound/soc/qcom/qdsp6/q6asm.c
++++ b/sound/soc/qcom/qdsp6/q6asm.c
+@@ -525,6 +525,7 @@ int q6asm_map_memory_regions(unsigned int dir, struct audio_client *ac,
+ 		}
+ 	}
+ 	ac->port[dir].num_periods = periods;
++	atomic_set(&ac->port[dir].hw_ptr, 0);
+ 
+ 	spin_unlock_irqrestore(&ac->lock, flags);
+ 

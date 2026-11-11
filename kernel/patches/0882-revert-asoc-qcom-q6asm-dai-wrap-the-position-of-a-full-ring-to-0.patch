@@ -1,0 +1,43 @@
+From: Philippe Simons <simons.philippe@gmail.com>
+Subject: [PATCH] Revert "ASoC: qcom: q6asm-dai: wrap the position of a full ring to 0"
+
+This reverts commit 222d04cf55bc (stable 833cfd0e4a7b in 7.3.4).
+
+The q6asm DSP returns a playback buffer as soon as it has copied it,
+not once it has played it. Right after a start it takes every queued
+period at once, so the position reaches appl_ptr before the
+application has built up any lead, and with the position no longer
+one frame short ALSA calls that an underrun. On a Mangmi Pocket Max
+(SM8250, PipeWire) every stream underruns ~150 ms after it starts,
+each time the sink wakes from idle: stop, prepare, start, ~25 ms of
+silence. Without the queue reset at prepare, the recovery never plays
+again at all.
+
+The one-frame-short position kept that underrun hidden through 7.3.3.
+Go back to it until the position comes from what the DSP has
+rendered rather than from the buffers it has returned.
+
+Signed-off-by: Philippe Simons <simons.philippe@gmail.com>
+---
+ sound/soc/qcom/qdsp6/q6asm-dai.c | 7 ++++---
+ 1 file changed, 4 insertions(+), 3 deletions(-)
+
+diff --git a/sound/soc/qcom/qdsp6/q6asm-dai.c b/sound/soc/qcom/qdsp6/q6asm-dai.c
+index ca582eb..ebf6bb1 100644
+--- a/sound/soc/qcom/qdsp6/q6asm-dai.c
++++ b/sound/soc/qcom/qdsp6/q6asm-dai.c
+@@ -487,10 +487,11 @@ static snd_pcm_uframes_t q6asm_dai_pointer(struct snd_soc_component *component,
+ 	struct q6asm_dai_rtd *prtd = runtime->private_data;
+ 	snd_pcm_uframes_t ptr;
+ 
+-	/* a full lap of period buffers is the start of the ring again */
+-	ptr = q6asm_get_hw_pointer(prtd->audio_client, substream->stream) % runtime->periods;
++	ptr = q6asm_get_hw_pointer(prtd->audio_client, substream->stream) * runtime->period_size;
++	if (ptr)
++		return ptr - 1;
+ 
+-	return ptr * runtime->period_size;
++	return 0;
+ }
+ 
+ static int q6asm_dai_hw_params(struct snd_soc_component *component,

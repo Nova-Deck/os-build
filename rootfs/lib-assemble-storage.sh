@@ -163,19 +163,25 @@ for arch in ("x86_64-linux-gnu", "i386-linux-gnu"):
         sys.exit(f"the guest manifest does not declare {arch}")
 ' || { echo "ERROR: FEX guest graphics-provider manifest check failed (see above)" >&2; exit 1; }
 
-# The x86 Turnip payload (make mesa-x86). REQUIRED, not best-effort: the Makefile orders the
-# build so it always exists here, and a partial payload shadowing half the driver pair is the
-# exact quiet failure this stage exists to prevent.
+# The x86 mesa payload (make mesa-x86): Turnip plus the freedreno/zink GL stack. REQUIRED, not
+# best-effort: the Makefile orders the build so it always exists here, and a partial payload
+# shadowing half the driver pair (or half a GL stack whose pieces link each other's version) is
+# the exact quiet failure this stage exists to prevent.
 payload="$ROOT/work/mesa-x86/out"
 payload_dest="usr/share/novadeck/guestos-x86-mesa"
-echo "  staging FEX guest x86 Turnip payload (/$payload_dest)"
+echo "  staging FEX guest x86 mesa payload: Turnip + GL (/$payload_dest)"
 for f in usr/lib/libvulkan_freedreno.so usr/lib32/libvulkan_freedreno.so \
          usr/share/vulkan/icd.d/freedreno_icd.x86_64.json \
          usr/share/vulkan/icd.d/freedreno_icd.i686.json \
          usr/lib/libxcb-keysyms.so.1 usr/lib32/libxcb-keysyms.so.1 \
          usr/lib/libVkLayer_MESA_vram_report_limit.so usr/lib/libVkLayer_MESA_vram_report_limit.i686.so \
          usr/share/vulkan/implicit_layer.d/VkLayer_MESA_vram_report_limit.json \
-         usr/share/vulkan/implicit_layer.d/VkLayer_MESA_vram_report_limit.i686.json; do
+         usr/share/vulkan/implicit_layer.d/VkLayer_MESA_vram_report_limit.i686.json \
+         usr/lib/libGLX_mesa.so.0 usr/lib/libEGL_mesa.so.0 usr/lib/libgbm.so.1 \
+         usr/lib/dri/msm_dri.so usr/lib/gbm/dri_gbm.so \
+         usr/lib32/libGLX_mesa.so.0 usr/lib32/libEGL_mesa.so.0 usr/lib32/libgbm.so.1 \
+         usr/lib32/dri/msm_dri.so usr/lib32/gbm/dri_gbm.so \
+         usr/share/glvnd/egl_vendor.d/50_mesa.json; do
   [ -s "$payload/$f" ] || { echo "ERROR: mesa-x86 payload incomplete: missing $f (make mesa-x86)" >&2; exit 1; }
 done
 mkdir -p "$stage/$payload_dest"
@@ -249,7 +255,10 @@ for libdir in usr/lib usr/lib32; do
   # cannot find libc, the query is broken and every answer below is worthless.
   guest_has "$libdir" libc.so.6 \
     || { echo "ERROR: cannot read /$libdir/libc.so.6 out of the pinned FEX guest -- the guest image or dump.erofs is unusable, and no dependency verdict below can be trusted" >&2; exit 1; }
-  for so in "$stage/$payload_dest/$libdir"/*.so*; do
+  # dri/ and gbm/ too: since the payload carries GL, msm_dri.so and dri_gbm.so are what the guest
+  # loaders actually dlopen, and their libgallium NEEDED is the dep most likely to go astray.
+  for so in "$stage/$payload_dest/$libdir"/*.so* "$stage/$payload_dest/$libdir"/dri/*.so \
+            "$stage/$payload_dest/$libdir"/gbm/*.so; do
     [ -e "$so" ] || continue   # a libdir with no .so at all must not match the glob literally
     # THE LIBDIR TO COMPARE AGAINST IS CHOSEN BY ELF CLASS, NOT BY DIRECTORY, and that is not
     # pedantry: since lsfg-vk, usr/lib holds a 32-bit ELF on purpose. Upstream's Vulkan layer

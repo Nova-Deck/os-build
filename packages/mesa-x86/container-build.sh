@@ -24,9 +24,11 @@ pacman -S --noconfirm --needed \
   meson ninja python-mako python-yaml python-packaging python-ply \
   bison flex cmake glslang \
   libdrm libxcb libx11 libxshmfence libxrandr xcb-util-keysyms wayland wayland-protocols \
+  libglvnd libxext libxfixes libxxf86vm expat zstd zlib \
   lib32-glibc lib32-gcc-libs lib32-libdrm lib32-libxcb lib32-libx11 \
   lib32-libxshmfence lib32-libxrandr lib32-xcb-util-keysyms \
-  lib32-wayland lib32-zlib lib32-expat lib32-zstd
+  lib32-wayland lib32-zlib lib32-expat lib32-zstd \
+  lib32-libglvnd lib32-libxext lib32-libxfixes lib32-libxxf86vm
 
 # The mesa source is whatever the HOST mesa builds, fetched through the one helper every mesa
 # build shares: it reads the URL + sha256 out of packages/mesa/PKGBUILD, tries upstream, falls
@@ -63,23 +65,33 @@ cpu = 'i686'
 endian = 'little'
 EOF
 
-# Turnip only, loaders off: the guest rootfs already ships its GL/EGL/loader stack; the payload
-# replaces exactly the driver the ICDs point at. -march=x86-64 baseline like the rootfs
-# userspace — FEX emulates AVX in slower 128-bit halves, so a wider baseline would pessimize.
+# Turnip AND the GL stack. The guest image's own GL is Arch's x86 mesa of the snapshot date, which
+# trails ours and so can reject a GPU our host mesa knows: on the A830 its freedreno refused the
+# chip id (`fd_pipe_new2: unsupported GPU id 0x0 / chip id 0xe844050001`) and every x86 GL title
+# fell back to zink. So the payload carries freedreno GL from the host mesa's own source pin, with
+# zink beside it as the host build has it. GL ships as a whole stack, not just a driver: the
+# guest's libGLX_mesa / libEGL_mesa / libgbm link the libgallium of THEIR version, so a lone
+# libgallium-<ours> would never load. -Dglvnd: the guest's libGL/libEGL are glvnd dispatchers that
+# pick up the *_mesa vendor libraries by name. -march=x86-64 baseline like the rootfs userspace --
+# FEX emulates AVX in slower 128-bit halves, so a wider baseline would pessimize.
 common=(
   --buildtype release --prefix /usr
   -Db_ndebug=true
-  -Dgallium-drivers= -Dvulkan-drivers=freedreno -Dfreedreno-kmds=msm
+  -Dgallium-drivers=freedreno,zink -Dvulkan-drivers=freedreno -Dfreedreno-kmds=msm
   -Dvulkan-layers=vram-report-limit
-  -Dplatforms=x11,wayland -Dglx=disabled -Degl=disabled -Dgbm=disabled
-  -Dopengl=false -Dllvm=disabled -Dallow-fallback-for=libdrm
+  -Dplatforms=x11,wayland -Dglx=dri -Degl=enabled -Dgbm=enabled -Dglvnd=enabled
+  -Dopengl=true -Dgles1=disabled -Dgles2=enabled
+  -Dgallium-va=disabled -Dgallium-rusticl=false -Dvideo-codecs=
+  -Dllvm=disabled -Dallow-fallback-for=libdrm
 )
 CFLAGS='-march=x86-64' CXXFLAGS='-march=x86-64' \
   meson setup build-x86_64 --libdir lib "${common[@]}"
 ninja -C build-x86_64
+DESTDIR=/tmp/dest-x86_64 meson install -C build-x86_64 --no-rebuild
 CFLAGS='-march=x86-64' CXXFLAGS='-march=x86-64' \
   meson setup build-i686 --libdir lib32 --cross-file /tmp/cross32 "${common[@]}"
 ninja -C build-i686
+DESTDIR=/tmp/dest-i686 meson install -C build-i686 --no-rebuild
 
 install -Dm0644 build-x86_64/src/freedreno/vulkan/libvulkan_freedreno.so    "$OUT/usr/lib/libvulkan_freedreno.so"
 install -Dm0644 build-x86_64/src/freedreno/vulkan/freedreno_icd.x86_64.json "$OUT/usr/share/vulkan/icd.d/freedreno_icd.x86_64.json"
@@ -131,6 +143,34 @@ for name, lib in (("VkLayer_MESA_vram_report_limit.json", "libVkLayer_MESA_vram_
         f.write("\n")
 EOF
 
+# The GL runtime, both arches, taken whole from `meson install` so symlink chains and the dri/
+# hardlinks to libdril_dri.so survive (cp -a keeps both). The overlay lays these over the guest's
+# files of the same names; the guest's other dri/*.so stay hardlinks of ITS libdril and keep
+# loading ITS libgallium, which is harmless because nothing here is a vendor the board can bind.
+# Headers, pkg-config files and the static/dev symlinks are left out: nothing builds in the guest.
+for arch in x86_64:lib i686:lib32; do
+  dest=/tmp/dest-${arch%%:*} libdir=${arch##*:}
+  mkdir -p "$OUT/usr/$libdir"
+  cp -a "$dest/usr/$libdir"/libGLX_mesa.so.0* "$dest/usr/$libdir"/libEGL_mesa.so.0* \
+        "$dest/usr/$libdir"/libgbm.so.1* "$dest/usr/$libdir"/libgallium-*.so \
+        "$dest/usr/$libdir"/dri "$dest/usr/$libdir"/gbm "$OUT/usr/$libdir/"
+done
+install -Dm0644 /tmp/dest-x86_64/usr/share/glvnd/egl_vendor.d/50_mesa.json \
+  "$OUT/usr/share/glvnd/egl_vendor.d/50_mesa.json"
+install -Dm0644 /tmp/dest-x86_64/usr/share/drirc.d/00-mesa-defaults.conf \
+  "$OUT/usr/share/drirc.d/00-mesa-defaults.conf"
+
+# Gate: the GL stack must be able to drive the GPU this whole payload exists for. A libgallium
+# without the msm loader entry, or without our chip table, renders through zink again -- which is
+# the silent outcome this build replaced, and indistinguishable from success at build time.
+for libdir in lib lib32; do
+  [ -e "$OUT/usr/$libdir/dri/msm_dri.so" ] \
+    || { echo "ERROR: mesa-x86: no $libdir/dri/msm_dri.so (freedreno GL not built?)" >&2; exit 1; }
+  gallium="$(ls "$OUT/usr/$libdir"/libgallium-*.so)"
+  grep -q -a 'Adreno (TM) 830v1' "$gallium" \
+    || { echo "ERROR: mesa-x86: $gallium carries no A830 entry" >&2; exit 1; }
+done
+
 # The guest rootfs ships no xcb-keysyms (verified against the 2026-08-11 image), but a Turnip
 # built here links it (mesa's x11 WSI). An ICD with an unresolvable NEEDED is dropped SILENTLY
 # by pressure-vessel's dlopen inspection, so the dep rides along for both arches.
@@ -141,9 +181,7 @@ install -Dm0644 /usr/lib32/libxcb-keysyms.so.1 "$OUT/usr/lib32/libxcb-keysyms.so
 # Gate: container glibc == rootfs glibc (the snapshot pin above), so a symbol-version ceiling
 # above the container's own glibc could never load in the guest.
 glibc_max="$(ldd --version | sed -n '1s/.* //p')"
-for so in "$OUT/usr/lib/libvulkan_freedreno.so" "$OUT/usr/lib32/libvulkan_freedreno.so" \
-          "$OUT/usr/lib/libVkLayer_MESA_vram_report_limit.so" \
-          "$OUT/usr/lib/libVkLayer_MESA_vram_report_limit.i686.so"; do
+for so in $(find "$OUT" -name '*.so*' -type f); do
   ceiling="$(readelf --dyn-syms -W "$so" | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -uV | tail -1)"
   if [ "$(printf '%s\n%s\n' "$ceiling" "$glibc_max" | sort -V | tail -1)" != "$glibc_max" ]; then
     echo "ERROR: $so references GLIBC_$ceiling, newer than the rootfs glibc $glibc_max" >&2

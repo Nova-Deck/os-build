@@ -26,7 +26,7 @@
 #   ndk_version   Google NDK release; ndk_sha256 covers the zip the container fetches.
 #   image         the pinned x86 Arch container the build runs in (host tools only; the NDK
 #                 supplies the entire target toolchain, so nothing from the image reaches the .so).
-#   snapshot      pacman snapshot for that image's host tools. Carried for reproducibility only.
+#   snapshot      Arch Archive date the image's host tools are installed from (never the live repos).
 fossilize_repo: https://github.com/ValveSoftware/Fossilize.git
 fossilize_commit: 556da9ff7d7616704dda515756219ab1dab693ec
 android_api: 30

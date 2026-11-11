@@ -20,7 +20,13 @@ set -euo pipefail
 # mask a failure.
 trap 'chown -R "${HOST_UID}:${HOST_GID}" /out 2>/dev/null || true' EXIT
 
-pacman -Sy --noconfirm --needed curl unzip git cmake ninja >/dev/null
+# Host build tools only; the NDK supplies the target toolchain. They still come from the pinned
+# snapshot, never the live repos: a bare `pacman -Sy` against live Arch is a partial upgrade of a
+# months-old image, and it stops resolving the moment Arch bumps a soname the base packages link
+# (OpenSSL 4 broke it: "installing openssl (4.1.0-1) breaks dependency 'libcrypto.so=3-64'").
+echo "Server=https://archive.archlinux.org/repos/${SNAPSHOT}/\$repo/os/\$arch" >/etc/pacman.d/mirrorlist
+pacman -Syyuu --noconfirm >/dev/null
+pacman -S --noconfirm --needed curl unzip git cmake ninja >/dev/null
 
 cd /tmp
 NDK_ZIP="android-ndk-${NDK_VERSION}-linux.zip"

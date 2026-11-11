@@ -111,7 +111,7 @@ git_commit: 7595a62d45ee1a2297eafa5f2ef5d0a45142d84d
 #   qcom_battmgr.c (0930, 0940, 0945)  charger supplies are notified of online changes.
 #   pmic_glink_altmode.c (1044)  device access from the worker during suspend.
 #   ucsi/ucsi.c (1042)    skip the CAM query when the partner has no alt modes.
-#   pcie-qcom.c (1060, 1065, 1067)  only bridge nodes are checked for PERST# GPIOs.
+#   pcie-qcom.c (1060, 1067)  only bridge nodes are checked for PERST# GPIOs.
 #   ath12k/wmi.c          MAC/PHY capability count validated before saving.
 #   arm64 process.c + mm/fault.c (0010, 0020), kernel/sys.c (0010)  GCS released on a failed fork,
 #                         EFI runtime faults treated as kernel faults, compat times() rounding.

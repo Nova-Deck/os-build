@@ -16,14 +16,14 @@
 #   patches        space-separated files under ./patches/, applied `patch -p1` in the mesa source
 #                  root (after the first `cd` in prepare()), in the order listed. See
 #                  ./patches/README.md for what each one is and when it can be dropped.
+#                  Absent while we carry none (packages/mesa-x86 reads the same field).
 #
 # Upstream source (informational; the URL + sha also live in the PKGBUILD):
-#   url:    https://archive.mesa3d.org/mesa-26.2.6.tar.xz
-#   sha256: b9436b3e1a8be76fbd4823dc884f90596ab7c6ac5e1867a305e66ffccfb31a92
+#   url:    https://archive.mesa3d.org/mesa-26.3.0.tar.xz
+#   sha256: 91d729aa68bb89e4ec857841300bbe922bcb3e52b1f97566ca83930d3b28343a
 #
 # To bump mesa: edit pkgver (and the tarball sha256) in packages/mesa/PKGBUILD, update the
 # url/sha256 lines above, and re-roll any patches under ./patches/ against the new tag.
 name: mesa
 pkgbuild_local: PKGBUILD
 pkgrel_suffix: 1
-patches: 0001-add-a830-chip-id.patch

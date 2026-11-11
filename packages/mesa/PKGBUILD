@@ -43,7 +43,7 @@ pkgname=(
   vulkan-freedreno
   vulkan-mesa-layers
 )
-pkgver=26.2.6
+pkgver=26.3.0
 _pkgver=${pkgver/[a-z]/-&}
 pkgrel=1
 epoch=1
@@ -122,17 +122,23 @@ source=(
 # tarball whose signature verified. Do not believe a bump request claiming a `.sha256sum` sidecar
 # exists; check it yourself.
 #
-# EVERY BUMP, verify the .sig and check the issuer fingerprint against:
+# EVERY BUMP, verify the .sig and check the issuer fingerprint against the key that signed the
+# release pinned here. Comparing the signer against that reference is the load-bearing step: an
+# unknown-trust "good signature" on its own only proves the tarball matches whatever key came with
+# it. The keys so far, by release branch:
 #
-#   Eric Engestrom, 5755 1DE1 5B96 8F63 41C2 48F6 8D8E 31AF C324 28A6
+#   26.3.x  Dylan Baker,    71C4 B756 20BC 7570 8B4B DB25 4C95 FAAB 3EB0 73EC
+#   ≤26.2.x Eric Engestrom, 5755 1DE1 5B96 8F63 41C2 48F6 8D8E 31AF C324 28A6
 #
-# which has signed every mesa release this image has shipped and validated on hardware. Comparing
-# the signer against that reference is the load-bearing step: an unknown-trust "good signature" on
-# its own only proves the tarball matches whatever key came with it. A fingerprint that does NOT
-# match is not automatically an attack — mesa can rotate release managers, and hence signing keys,
-# at a branch bump — but it is a stop-and-establish-trust-out-of-band, not a hash to paste in.
+# Mesa rotates release managers, and so signing keys, PER BRANCH, so a point release should match
+# the line above and a branch bump may not. A new signer is a stop-and-establish-trust, never a hash
+# to paste in. The chain that works: the new fingerprint must already be listed in
+# docs/release-maintainers-keys.asc INSIDE the currently pinned tarball, whose own signature and
+# hash were checked. The copies in that file can be EXPIRED (Baker's lapsed in 2020, so gpg reports
+# EXPKEYSIG); refresh that exact fingerprint from a keyserver, in a throwaway GNUPGHOME, and verify
+# again before trusting the result.
 sha256sums=(
-  'b9436b3e1a8be76fbd4823dc884f90596ab7c6ac5e1867a305e66ffccfb31a92'
+  '91d729aa68bb89e4ec857841300bbe922bcb3e52b1f97566ca83930d3b28343a'
 )
 
 prepare() {
@@ -144,6 +150,11 @@ prepare() {
   # Include package release in the GL version string (matches upstream; helps clients invalidate
   # GPU shader caches across rebuilds).
   echo "$_pkgver-novadeck$epoch.$pkgrel" >VERSION
+
+  # Fetch wayland-protocols for the subproject fallback that build() forces (see there). mesa
+  # ships the .wrap itself; arch-meson runs --wrap-mode=nodownload, so it has to be on disk before
+  # configure. meson checks the tarball against the wrap's source_hash.
+  meson subprojects download wayland-protocols
 }
 
 # llvm=disabled is a SIZE decision with no functional cost here, and it is worth spelling out
@@ -161,6 +172,7 @@ build() {
   local meson_options=(
     -D android-libbacktrace=disabled
     -D b_ndebug=true
+    -D force_fallback_for=wayland-protocols   # novadeck: the snapshot's copy is below mesa's floor
     -D gallium-drivers=freedreno,zink         # novadeck: Adreno only (upstream builds every vendor)
     -D gallium-extra-hud=true
     -D gallium-mediafoundation=disabled
@@ -178,6 +190,15 @@ build() {
     -D vulkan-drivers=freedreno               # novadeck: Turnip only
     -D vulkan-layers=intel-nullhw,overlay,screenshot,vram-report-limit   # novadeck: no device-select (see header)
   )
+
+  # force_fallback_for=wayland-protocols: mesa's meson.build requires wayland-protocols >= 1.49 and
+  # the pinned snapshot ships an older one, so configure fails against the system copy. The
+  # subproject is mesa's own subprojects/wayland-protocols.wrap. This is safe to vendor because
+  # wayland-protocols is DATA (protocol XML plus a .pc), read at build time to generate glue code;
+  # nothing links against it. It must scan cleanly with the snapshot's wayland-scanner: newer
+  # protocols mark interfaces `frozen=`, which wayland's DTD only accepts from 1.25.0 on. Drop this
+  # flag when the snapshot's wayland-protocols meets mesa's floor.
+  # package_mesa installs with --skip-subprojects so the vendored XML never lands in the package.
 
   # Build only minimal debug info to reduce size (matches upstream).
   CFLAGS+=" -g1"
@@ -248,7 +269,7 @@ package_mesa() {
     'mesa-vdpau<1:24.2.7-1'
   )
 
-  meson install -C build --destdir "$pkgdir" --no-rebuild
+  meson install -C build --destdir "$pkgdir" --no-rebuild --skip-subprojects wayland-protocols
 
   (
     local libdir=usr/lib icddir=usr/share/vulkan/icd.d

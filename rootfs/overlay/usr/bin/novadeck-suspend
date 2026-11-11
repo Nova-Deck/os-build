@@ -240,19 +240,17 @@ do_resume() {
 case "${1:-sleep}" in
   sleep|suspend)
     [ -e "$STATE" ] && exit 0
-    # If the unit is stopped/killed mid-sleep (e.g. `systemctl stop systemd-suspend.service` as a
-    # force-wake), always release the grab and resume so nothing is stranded frozen.
+    # If the engine is signalled mid-sleep, release the grab and resume so nothing is stranded
+    # frozen. The service then finishes and logind ends the suspend. To force a wake from a shell:
+    #   systemctl kill --kill-whom=main -s TERM systemd-suspend.service
+    # NOT `systemctl stop`: systemd refuses it as a destructive transaction while suspend.target's
+    # start job is queued, which is the entire sleep.
     trap 'wake_cleanup; do_resume; exit 0' INT TERM
     do_suspend
     wait_for_wake
     do_resume
     trap - INT TERM
     ;;
-  resume)
-    # Manual/override resume: stop the blocked engine (its trap releases the grab + resumes), then
-    # resume here too (idempotent) in case the engine already exited.
-    systemctl stop systemd-suspend.service 2>/dev/null || true
-    do_resume ;;
   status)  if [ -e "$STATE" ]; then echo suspended; else echo awake; fi ;;
-  *) echo "usage: novadeck-suspend {sleep|resume|status}" >&2; exit 2 ;;
+  *) echo "usage: novadeck-suspend {sleep|status}" >&2; exit 2 ;;
 esac

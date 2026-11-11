@@ -38,20 +38,24 @@
 # 7.3.3 itself is three Xen fixes. Nothing of ours landed, no patch changed; drm/msm's vm_bo
 # UAF beside 0220 and an ath12k RXDMA ring resize are the legs. Read the 7.3.3 section below.
 # HW GATE OWED.
-version:    7.3.3
-url:        https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.3.3.tar.xz
-sha256:     79c66dde66cd96877fcde8f7d36aec946b1f423d2b97b5a7b1751b75c764f3d1
-git_tag:    v7.3.3
-git_commit: d50d994bffa3c7c6db2d8bc4c5f0c55e3f46b0cd
+# RE-PINNED 2026-11-11 (7.3.4, 1254 commits). Nothing of ours landed, no patch changed. Stable took
+# fastrpc's probe-time ADSP heap assign WITHOUT its dts half, so 1171 is now LOAD-BEARING on
+# SM8250 and SM8750. UFS core error handling, the q6apm/q6asm ring position and iris power-off
+# ordering are the legs. Read the 7.3.4 section below. HW GATE OWED.
+version:    7.3.4
+url:        https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.3.4.tar.xz
+sha256:     b11b6df8295e8e991ff040b71aaa4994a8b55caa23b6b092907f195b5840fd1f
+git_tag:    v7.3.4
+git_commit: 7595a62d45ee1a2297eafa5f2ef5d0a45142d84d
 
 # The sha256 above is the one kernel.org publishes in the SIGNED sha256sums.asc for v7.x, not a
-# hash of whatever the CDN happened to serve — re-checked 2026-11-07. The .asc itself verifies as
+# hash of whatever the CDN happened to serve — re-checked 2026-11-11. The .asc itself verifies as
 # a GOOD signature from "Kernel.org checksum autosigner <autosigner@kernel.org>", fingerprint
 # B886 8C80 BA62 A1FF FAF5 FDA9 632D 3A06 589D A6B1. That key carries no trust path here, so the
-# load-bearing check is CONTINUITY: the SAME signed file still lists 7.3.1 as
-# fa595aad93734f829c963c2a90ef7c3673224fd7fdae7b49406e397cde2de231, 7.2.11 as
-# fd0fc479f983a8c05313f13e9c36330fe6651cf725396748c40d5cd93fa1e6a4 and 7.2.10 as
-# 2feaa70453e91f541be6a5c9078d8168e081af45a3d9718054850538cff2ebf3, byte-for-byte the hashes this
+# load-bearing check is CONTINUITY: the SAME signed file still lists 7.3.3 as
+# 79c66dde66cd96877fcde8f7d36aec946b1f423d2b97b5a7b1751b75c764f3d1, 7.3.1 as
+# fa595aad93734f829c963c2a90ef7c3673224fd7fdae7b49406e397cde2de231 and 7.2.11 as
+# fd0fc479f983a8c05313f13e9c36330fe6651cf725396748c40d5cd93fa1e6a4, byte-for-byte the hashes this
 # pin carried and shipped before — so the file describing the version above is the same file that
 # described the releases we already trusted. Roll this list forward on each bump rather than
 # growing it; three back is enough to be a chain. (Note: keys.openpgp.org serves this key STRIPPED
@@ -69,6 +73,83 @@ git_commit: d50d994bffa3c7c6db2d8bc4c5f0c55e3f46b0cd
 # Treat 'in-series point release' as a prediction about EFFORT, never about RISK.
 # Re-run every gate, every time — and note that neither of those two findings came from an
 # offline gate. Both came from hardware.
+#
+# ============ 7.3.4 — PINNED 2026-11-11, HW GATE OWED ============
+#
+# 7.3.3 -> 7.3.4: 1254 commits, 1109 files. Zero qcom dts/dtsi we include moved (only ipq9574,
+# shikra and sdm845 boards), zero dt-bindings headers, zero adreno or DPU commits. The only
+# drm/msm change we build is a DSI fix (the other three are HDMI). Kconfig moved only in places
+# we do not touch (arm64 `select HAVE_EXIT_THREAD`, a loongson cpufreq dep, ftrace `select TRACING`).
+#
+# THE ONE THAT CHANGES A PATCH'S STATUS: stable took "misc: fastrpc: Allocate entire reserved
+# memory for Audio PD in probe" (827cf4797be4, upstream 9e47ad9c562e, Cc stable) but NOT the two
+# "Make ADSP remote heaps no-map" dts patches it was posted with (qcom arm64-fixes-for-7.4). The
+# driver now assigns the WHOLE ADSP remote heap to the DSP at rpmsg probe whenever the region is
+# declared and the node has qcom,vmids, as ours on SM8250 and SM8750 do. Those pages must not be
+# CMA-reusable, and 1171 is what makes them no-map. It is no longer just a fix we carry early: it
+# is load-bearing until v7.4, see its README row. The same commit removes
+# ADSP_MMAP_REMOTE_HEAP_ADDR and the userspace alloc/free path. SM8550/SM8650 declare no ADSP
+# remote heap. We ship no fastrpc userspace, so the new "no region, no static Audio PD process"
+# check never fires.
+#
+# INTERSECTION: 18 files (`git diff --name-only v7.3.3 v7.3.4` against every `+++` path in the
+# stack). The upstream commits on each were read:
+#   ufs/core/ufshcd.c (1086)  8 commits: ufshcd_abort()/eh_timed_out()/clear_lu_cmds() double
+#                         release and completion fixes, a clock-scaling vs device-command deadlock
+#                         fix, stale UIC result byte cleared before peer DME retries. 1086 (recover
+#                         a failed clock-gating hibern8 enter) sits in the same driver and applies
+#                         unchanged.
+#   qdsp6/q6apm.c (0897), q6apm-dai.c, q6asm-dai.c (0880), q6afe.c (0895)  the position of a full
+#                         ring wraps to 0 (q6apm-dai + q6asm-dai), the hw pointer resets with the
+#                         fragment queue, three DSP-buffer unmap fixes, and a q6afe clk-vote
+#                         response type fix. audioreach module cfg blob size fix beside them.
+#   iris_vpu_common.c (1092, 1099), iris_vdec.c, iris_vidc.c  the HW power domain now drops AFTER
+#                         the three clocks (Cc stable), AHB bridge reset before HW mode, frame
+#                         interval enumeration and bus_info fixes. Also iris + venus iova
+#                         allocation from the restrict region.
+#   dsi/dsi_host.c (0410, 0420, 0430)  a VM leak in dsi_tx_buf_alloc_6g().
+#   qcom_battmgr.c (0930, 0940, 0945)  charger supplies are notified of online changes.
+#   pmic_glink_altmode.c (1044)  device access from the worker during suspend.
+#   ucsi/ucsi.c (1042)    skip the CAM query when the partner has no alt modes.
+#   pcie-qcom.c (1060, 1065, 1067)  only bridge nodes are checked for PERST# GPIOs.
+#   ath12k/wmi.c          MAC/PHY capability count validated before saving.
+#   arm64 process.c + mm/fault.c (0010, 0020), kernel/sys.c (0010)  GCS released on a failed fork,
+#                         EFI runtime faults treated as kernel faults, compat times() rounding.
+#   kernel-parameters.txt, pci-imx6.c  not ours in substance.
+# Outside the intersection but on our hardware: lpass-wsa-macro writes the v2.5 Compander1
+# CTL3/CTL7 addresses on v2.5+ silicon (the v2.1 addresses took -EIO bus errors). That is the
+# speaker path of every SM8550/SM8650/SM8750 board with WSA speakers. geni-se gets 4 firmware-load
+# fixes (QUP serial engines), plus ath11k dp_srng leak and fastrpc map_attach double-free fixes.
+# PATCHES: all 214 applied cumulatively at --fuzz=0, zero fuzz, zero rejects. Diffed against the
+# same run on 7.3.3, only hunk offsets moved (0010 0020 0897 0930 0940 0945 1067 1092 1094).
+# DROP CHECK: every patch REVERSE-applied with --dry-run --fuzz=0 to a PRISTINE 7.3.4 tree, file
+# by file: 492 (patch, file) pairs checked, nothing reverses. Positive control: the same check on
+# the PATCHED tree reverses. No Cc-stable patch of ours (0397 0897 1007 1015 1060 1099) landed
+# reworded either.
+# CONFIG SWEEP: every CONFIG_ symbol named in kernel.config + trim-platforms.config exists in the
+# patched 7.3.4 Kconfig, ZERO missing (the comment placeholders CONFIG_x/CONFIG_ARCH_x excluded).
+# BUILD: green in the container, Image (`Linux version 7.3.4`) + 23 dtbs + modules (7.3.4)
+# staged. After olddefconfig, ALL 793 directives across the four fragments (397 values + 396
+# `is not set`) asserted against the final .config: zero mismatches. Against 7.3.3's, the only
+# new line is CONFIG_HAVE_EXIT_THREAD=y (arm64 now selects it). Compare with a 7.3.3 .config from
+# the COMMITTED fragments: work/'s copy was built with the ramoops debug diff and shows PSTORE
+# lines that are not ours.
+#
+# WHAT ONLY HARDWARE CAN SETTLE:
+#   - Audio: playback through a long session on both DSP stacks. q6apm on SM8550/SM8650/SM8750
+#     (Pocket ACE/S2/FIT, Odin 3) and q6asm on SM8250 (Pocket Max, Thor Lite): the full-ring
+#     position wrap and hw-pointer reset change what ALSA sees at a period boundary, so listen
+#     for a stutter or loop and check PipeWire xruns. SM8250 also needs the ADSP/fastrpc probe
+#     to come up clean with 1171 under the new probe-time assign, with no SError at boot.
+#   - Speakers on a WSA board (ACE/S2/FIT): no `ASoC error (-5)` for 0x5cc/0x5dc in dmesg, and
+#     the speaker mode switch still sounds right.
+#   - UFS: boards booting internal UFS (FIT first, given 1089) through suspend/resume and the
+#     clock-gating hibern8 path that 1086 recovers.
+#   - Video: Steam Remote Play decode on SM8250 gen1 iris (1092/1094/1099) through a
+#     stream restart, since power-off ordering moved under 1099's revert.
+#   - USB-C: DP alt mode plug/unplug and a dock without alt modes (1042, 1044), charging
+#     indicator in the QAM (battmgr notify).
+#   Everything still owed from the 7.3.3 and 7.3.1 gates below stays owed.
 #
 # ============ 7.3.3 — PINNED 2026-11-07, HW GATE OWED ============
 #

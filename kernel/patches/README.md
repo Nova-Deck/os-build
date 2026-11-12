@@ -83,6 +83,7 @@ Then (2026-11-09, SM8550/SM8650 MDSS identity domain at boot `0190`/`0195`): 2 `
 Then (2026-11-09, ufs-qcom checks for its PHY before powering up, the Pocket FIT reset `1089`): 2 `mainline`, 43 `posted`, 30 `novadeck`, 138 `community` = 213.
 Then (2026-11-10, DPU returns `-EINVAL` when no SSPP is free `0386`): 2 `mainline`, 43 `posted`, 30 `novadeck`, 139 `community` = 214.
 Then (2026-11-11, drop `1065`, `0270` replaced by the posted fix, assorted-fixes-oct `0268` `0275`, SM8250 q6asm playback stall `0881` + revert `0882`): 2 `mainline`, 46 `posted`, 32 `novadeck`, 137 `community` = 217.
+Then (2026-11-12, sm8750 SDHC gets the 19.2 MHz TCXO `1186`): 2 `mainline`, 46 `posted`, 32 `novadeck`, 138 `community` = 218.
 The 7.3 bump deleted every `mainline` row (`0230 0620 0800 1080 1155`), the two `posted` ones
 that landed (`0275 1170`), and `0810`/`0825` with the old `0820`, whose jobs mainline's
 `ayaneo,pocket-s2-sndcard` and per-DAI MI2S clocks now do; `0820` is reused for the sm8750
@@ -320,6 +321,7 @@ taken for issue #122 — see the `0780`–`0796` rows.
 | `1180` | community | André Braga, andrebraga ROCKNIX SM8750 `Kernel_7.3` `0524` @ `1c1c374bdc`, not posted, body identical. sm8750 LLCC PMU and memlat nodes, monitors and tables from the Odin 3 vendor DT and post_boot tunables. Feeds `0170`/`0175`. | with `0175` |
 | `1182` | community | Aaron Kling, "arm64: dts: qcom: sm8750: add cpu OPP table with DDR and LLCC bandwidths" v1 `<20260605-sm8750-ddr-bw-scaling-v1-1-f39f918c95a7@gmail.com>`, as reworked in andrebraga ROCKNIX SM8750 `Kernel_7.3` `2289` @ `1c1c374bdc` (LLCC on CPU→LLCC, DDR on LLCC→EBI, per the vendor qcom,dcvs nodes; levels from the Odin 3 memlat tables; cpu6 4204800/4320000 kHz turbo OPPs added). Not droppable on the v1 landing as-is. Feeds `0160`. | when an equivalent lands, or dropped on a failed A/B |
 | `1184` | community | André Braga, andrebraga ROCKNIX SM8750 `Kernel_7.3` `2292` @ `1c1c374bdc`, not posted, body identical. sm8750 GPU OPP bandwidth ranges from the Odin 3 vendor gpu-pwrlevels bus-min/bus-max. Feeds `0286`. | with `0286` |
+| `1186` | community | sunshineinabox, retroforge os-build `1186` @ `aa07a04`, never posted, body identical. sm8750.dtsi gave the SDHC `RPMH_CXO_CLK` (38.4 MHz) as `xo`, but sdhci-msm sizes the DLL's FLL field as card clock × 4 / xo and assumes the 19.2 MHz TCXO (sm8550/sm8650 use `bi_tcxo_div2`), so SDR104 tuning swept two bit periods. HW-measured on the Odin 3 (SDR104, 202 MHz, same card): before, 14/16 good phases with failures at 6 and 14 (8 apart), phase 11 picked; after, one failing window 13–14, phase 8 picked; sequential read unchanged (~94.7 MB/s). Also fixes SD hotplug after a boot with an empty slot on the Odin 3: before, 3/3 inserts died on `-110` reading the SD ext reg (the first data read after tuning); after, 8/8 inserts over 2 empty-slot boots, on the same card. | when upstreamed |
 
 ## Mapping from the old numbering
 

@@ -1,0 +1,30 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: sunshineinabox <aqemail@gmail.com>
+Date: Tue, 10 Nov 2026 00:55:00 -0800
+Subject: [PATCH] arm64: dts: qcom: sm8750: feed the SDHC the 19.2 MHz TCXO
+
+sdhci-msm programs the DLL's FLL frequency field (DLL_CONFIG_2[17:10]) as
+card clock * 4 / rate of the "xo" clock, and expects that clock to be the
+19.2 MHz TCXO, as on SM8550 and SM8650 and as the vendor kernel hardcodes.
+On SM8750 the SDHC was given RPMH_CXO_CLK, which runs at 38.4 MHz, so the
+field was programmed at half its value: 22 instead of 43 for SDR104.
+The 16 tuning phases then spanned two bit periods instead of one.
+
+Feed the SDHC the 19.2 MHz bi_tcxo_div2 like the other blocks here do.
+---
+ arch/arm64/boot/dts/qcom/sm8750.dtsi | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm8750.dtsi b/arch/arm64/boot/dts/qcom/sm8750.dtsi
+index 6f2114c..5c25c2a 100644
+--- a/arch/arm64/boot/dts/qcom/sm8750.dtsi
++++ b/arch/arm64/boot/dts/qcom/sm8750.dtsi
+@@ -3045,7 +3045,7 @@
+ 
+ 			clocks = <&gcc GCC_SDCC2_AHB_CLK>,
+ 				 <&gcc GCC_SDCC2_APPS_CLK>,
+-				 <&rpmhcc RPMH_CXO_CLK>;
++				 <&bi_tcxo_div2>;
+ 			clock-names = "iface",
+ 				      "core",
+ 				      "xo";

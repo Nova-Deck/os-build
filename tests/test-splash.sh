@@ -374,5 +374,76 @@ else
     bad "empty 'novadeck-splash:' lines -- note() is splitting one message into several writes"
 fi
 
+# ---------------------------------------------------------------------------------------------
+# The dirfd fix above only holds if the drawer OPENS its inputs before the pivot. The initramfs
+# started it in the background and pivoted without waiting, and on a fast boot the pivot won: every
+# open failed, the drawer painted black, never saw the takeover request, and kept DRM master for
+# the whole session (HW, Air Y Pro, 2026-11-12). init now waits for the drawer's own announcement
+# before switch_root, and kills a drawer that never makes it. This drives that function, lifted
+# from the shipped init, against the real drawer and against stand-ins for the failure modes.
+echo
+echo "init waits for the drawer before switch_root:"
+
+INIT="$ROOT/image/initramfs/init"
+sed -n '/^splash_wait_loaded() {$/,/^}$/p' "$INIT" >"$TMP/wait.sh"
+if [[ -s "$TMP/wait.sh" ]]; then
+    ok "splash_wait_loaded is defined in init"
+else
+    bad "no splash_wait_loaded() in $INIT"
+fi
+# The ordering is the whole fix: the wait must be the last thing before the pivot.
+if [[ "$(grep -v '^[[:space:]]*#' "$INIT" | grep -B1 '^exec switch_root' | head -1)" == "splash_wait_loaded" ]]; then
+    ok "init calls splash_wait_loaded immediately before exec switch_root"
+else
+    bad "splash_wait_loaded is not the line before exec switch_root in init"
+fi
+grep -q '^  SPLASH_PID=\$!$' "$INIT" \
+    && ok "splash_start records the drawer's pid" \
+    || bad "splash_start does not record SPLASH_PID=\$!"
+
+# wait_for <pid> <takeover path> <deadline ticks>: runs the lifted function; prints elapsed ms.
+wait_for() {
+    SPLASH_PID=$1 SPLASH_TAKEOVER=$2 SPLASH_LOAD_DEADLINE_TICKS=$3 bash -c '
+        warn() { printf "WARN %s\n" "$*" >&2; }
+        . "$1"; s=$(date +%s%N); splash_wait_loaded; echo $(( ($(date +%s%N) - s) / 1000000 ))' \
+        sh "$TMP/wait.sh"
+}
+
+# 1. The real drawer announces, and the wait returns as soon as it does, leaving it running.
+WRUN="$TMP/wait-run"; mkdir -p "$WRUN"; printf 'Starting NovaDeck\n' >"$WRUN/status"
+"$BIN" --backend null --width 640 --height 480 --image "$ASSET" --font "$FONT" \
+       --status "$WRUN/status" --takeover "$WRUN/takeover" >"$TMP/wait-null.log" 2>&1 &
+drawer=$!
+ms=$(wait_for "$drawer" "$WRUN/takeover" 60 2>"$TMP/wait1.err")
+if kill -0 "$drawer" 2>/dev/null && [[ ! -s "$TMP/wait1.err" ]] && (( ms < 3000 )); then
+    ok "a drawer that announces releases the wait (${ms} ms) and keeps running"
+else
+    bad "real drawer: alive=$(kill -0 "$drawer" 2>/dev/null && echo y || echo n) waited=${ms}ms warn='$(cat "$TMP/wait1.err")'"
+fi
+kill "$drawer" 2>/dev/null; wait "$drawer" 2>/dev/null
+
+# 2. A drawer that never announces (its opens failed) is killed at the deadline, loudly.
+sleep 30 & stuck=$!
+ms=$(wait_for "$stuck" "$TMP/never/takeover" 4 2>"$TMP/wait2.err")
+sleep 0.2
+if ! kill -0 "$stuck" 2>/dev/null && grep -q 'did not announce' "$TMP/wait2.err"; then
+    ok "a drawer that never announces is killed at the deadline (${ms} ms) with a warning"
+else
+    bad "stuck drawer: alive=$(kill -0 "$stuck" 2>/dev/null && echo y || echo n) warn='$(cat "$TMP/wait2.err")'"
+    kill "$stuck" 2>/dev/null
+fi
+wait "$stuck" 2>/dev/null
+
+# 3. A drawer that already exited (fbdev with no card, a crash) does not cost the full deadline.
+true & gone=$!; wait "$gone" 2>/dev/null
+ms=$(wait_for "$gone" "$TMP/never/takeover" 60 2>"$TMP/wait3.err")
+(( ms < 1000 )) && [[ ! -s "$TMP/wait3.err" ]] \
+    && ok "an exited drawer releases the wait at once (${ms} ms)" \
+    || bad "exited drawer: waited ${ms} ms, warn='$(cat "$TMP/wait3.err")'"
+
+# 4. No splash at all (novadeck.splash=0, or no binary): nothing to wait for.
+ms=$(wait_for "" "$TMP/never/takeover" 60 2>/dev/null)
+(( ms < 500 )) && ok "no drawer, no wait (${ms} ms)" || bad "waited ${ms} ms with no drawer"
+
 printf '\n%s: %d passed, %d failed\n' "$(basename "$0")" "$PASS" "$FAIL"
 [[ $FAIL -eq 0 ]]

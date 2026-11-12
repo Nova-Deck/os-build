@@ -104,7 +104,8 @@ done
 # The drawer keeps running across switch_root. There is no systemd in this initramfs to kill it
 # and no unit to exempt: it is simply a background process whose binary and libraries the kernel
 # frees when the initramfs is dropped, which is harmless because it is statically linked and has
-# already read everything it needs into memory (see apps/novadeck-splash/src/novadeck-splash.c).
+# read everything it needs into memory by then -- which splash_wait_loaded below ENFORCES; being
+# started first does not guarantee it (see apps/novadeck-splash/src/novadeck-splash.c).
 # Its status and takeover files live on /run, which switch_root moves into the new root, so both
 # paths stay valid on the far side of the pivot.
 #
@@ -143,10 +144,41 @@ splash_start() {
       --image /usr/share/novadeck/splash/logo.nds1 \
       --font /usr/share/novadeck/splash/font.ttf \
       --status /run/novadeck/splash/status \
-      --takeover /run/novadeck/splash/takeover \
+      --takeover "$SPLASH_TAKEOVER" \
       >/dev/kmsg 2>&1 &
+  SPLASH_PID=$!
 }
+SPLASH_PID=''
+SPLASH_TAKEOVER=/run/novadeck/splash/takeover
 splash_start
+
+# The drawer has to finish its path-based opens (card, font, logo, the dirfds on the run
+# directory) BEFORE switch_root empties the initramfs out from under it. Starting it in the
+# background is not enough: on a fast boot the pivot won the race, every one of those opens failed,
+# and the drawer -- holding DRM master, painting black, with no dirfd to see a takeover request --
+# kept the display for the whole session while gamescope's every commit was refused (HW, MANGMI
+# Air Y Pro, 2026-11-12: 0 presents, `drmModeAtomicCommit: Permission denied`).
+#
+# Its own "loaded" signal already exists: it writes its pid into the takeover file only after all
+# of those opens and its first frame. So wait for that, just before the pivot, which keeps the
+# whole root mount overlapped with the drawer's start-up. A drawer that has not announced itself
+# by the deadline is killed: one that cannot hold up its end of the handshake must never be left
+# owning the display.
+SPLASH_LOAD_DEADLINE_TICKS=60   # x 50ms = 3s; a normal start-up announces in well under 1s
+splash_wait_loaded() {
+  [ -n "$SPLASH_PID" ] || return 0
+  _i=0
+  while [ "$_i" -lt "$SPLASH_LOAD_DEADLINE_TICKS" ]; do
+    _tk=''
+    read -r _tk 2>/dev/null <"$SPLASH_TAKEOVER" || :   # 2> first: it must silence the < too
+    [ "$_tk" = "$SPLASH_PID" ] && return 0
+    # It exited on its own (fbdev with no card, a crash): there is nothing left to wait for.
+    kill -0 "$SPLASH_PID" 2>/dev/null || return 0
+    sleep 0.05; _i=$((_i + 1))
+  done
+  warn "splash pid $SPLASH_PID did not announce itself within 3s; killing it so it cannot hold the display"
+  kill -TERM "$SPLASH_PID" 2>/dev/null || :
+}
 # novadeck.efi= wins when both are present. It comes from the generated grub.cfg, which knows
 # which slot it is and therefore which partition to name; steamos.efi= is SteamOS's form, appended
 # by the bootloader from the partition it was chainloaded from. They should always agree, and when they do not it is
@@ -272,4 +304,5 @@ mkdir -p /run/novadeck
 
 [ "$overlay_ok" -eq 1 ] || warn "DEGRADED: handing off to systemd on a writable, un-overlaid root"
 [ "$efi_ok" -eq 1 ] || warn "DEGRADED: /efi is not mounted — updates and boot confirmation will fail"
+splash_wait_loaded
 exec switch_root "$SYSROOT" /usr/lib/systemd/systemd

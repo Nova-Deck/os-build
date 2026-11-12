@@ -121,6 +121,28 @@ while IFS=$'\t' read -r id name dtb bootargs; do
 done < "$BOARDS"
 [ "${#pids[@]}" -gt 0 ] || { echo "no board rows in ${BOARDS#"$ROOT"/}" >&2; exit 1; }
 
+# --- per-board GRUB rotation --------------------------------------------------------------------
+# 270 is the default, and the right value is NOT derivable from the DTS: the panel node's
+# `rotation = <N>` counts something different. The Odin 3 (DTS 90) and the Pocket Max (DTS 270)
+# both paint upside down at 270 and want 90, so the table below is per board and filled from what
+# each one shows on HW, never from its DTS. A landscape-native panel wants 0. Keyed on the DTB
+# name; only the odd ones out produce a line, keyed on the SAVED entry (the console block below
+# says why a fresh card cannot be helped).
+board_grub_rotation() {  # <dtb basename> -> GRUB rotation for a non-default board, or "" for 270
+  case "$1" in
+    sm8250-mangmi-air-y-pro)  echo 0 ;;    # 1280x960 landscape-native, no DTS rotation
+    cq8725s-ayn-odin3)        echo 90 ;;   # HW: upside down at 270 (DTS panel rotation 90)
+    sm8250-mangmi-pocket-max) echo 90 ;;   # HW: upside down at 270 (DTS panel rotation 270)
+    *)                        echo "" ;;
+  esac
+}
+ROT_OVERRIDES=""
+for i in "${!pids[@]}"; do
+  r="$(board_grub_rotation "${pdtbs[$i]}")"
+  [ -n "$r" ] || continue
+  ROT_OVERRIDES+="if [ \"\${saved_entry}\" = \"${pids[$i]}\" ]; then set rotation=$r; fi"$'\n'
+done
+
 emit_entry() {  # <id> <name> <dtb> <board bootargs>
   local eid=$1 ename=$2 edtb=$3 ebootargs=$4
   cat <<EOF
@@ -271,12 +293,16 @@ fi
 # rotation MUST be set before terminal_output brings gfxterm up. Patch 0001 reads it exactly once,
 # in grub_video_fb_create_render_target_from_pointer, when the video driver builds the framebuffer
 # render target — setting it after that point is a silent no-op. 270 is the panel's mounting on
-# every board in the catalog: the display is portrait-native and the device is held landscape, so
-# an unrotated menu paints sideways.
+# every portrait-native board in the catalog: the display is portrait and the device is held
+# landscape, so an unrotated menu paints sideways.
 #
 # The colours are read by the normal module each time it paints the menu, so their placement does
 # not matter the way rotation's does; they are here to keep the whole console block in one place.
 set rotation=270
+# A landscape-native panel wants no rotation at all (board_grub_rotation above). Only a board that
+# has been chosen once can be honoured here: on a fresh card nothing says which board this is, so
+# the first menu paints sideways on it; every boot after the choice is right.
+$ROT_OVERRIDES
 set menu_color_normal=cyan/blue
 set menu_color_highlight=white/blue
 

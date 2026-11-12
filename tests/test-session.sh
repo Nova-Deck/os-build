@@ -128,6 +128,35 @@ for soc in SM8550 SM8650 SM8750 ""; do
   [ "$out" = "unset" ] && ok "${soc:-no SoC class} keeps the stock blank overlay plane" \
     || bad "${soc:-no SoC class} got '${out:-<nothing>}', expected the ConVar left unset"
 done
+# A landscape-native SM8250 panel (Air Y Pro) rotates nothing, so no plane reaches the rotator.
+out="$(blank NOVADECK_SOC_CLASS=SM8250 NOVADECK_PANEL_ORIENTATION=landscape)"
+[ "$out" = "unset" ] && ok "a landscape-native SM8250 panel keeps the stock blank overlay plane" \
+  || bad "landscape SM8250 got '${out:-<nothing>}', expected the ConVar left unset"
+
+CASE="rotator-cap-skips-landscape-native-panels"
+# The 1088-line inline-rotator cap only bites a panel that is rotated at scanout. A 1280-wide
+# landscape-native panel is never rotated, so it must not get the clamp.
+extra() { env -i "$@" /bin/sh -c 'set -eu; . "$1"; printf "%s" "$NOVADECK_GAMESCOPE_EXTRA"' sh "$CONF"; }
+case " $(extra NOVADECK_PANEL_NATIVE_WIDTH=1440) " in
+  *" --rotated-output-max-height 1080 "*) ok "a 1440-wide portrait panel is clamped under the rotator cap" ;;
+  *) bad "a 1440-wide portrait panel lost the rotator-cap clamp" ;;
+esac
+case " $(extra NOVADECK_PANEL_NATIVE_WIDTH=1280 NOVADECK_PANEL_ORIENTATION=landscape) " in
+  *"--rotated-output-max-height"*) bad "a landscape-native 1280x960 panel got the rotator-cap clamp" ;;
+  *) ok "a landscape-native 1280x960 panel is not clamped" ;;
+esac
+
+CASE="landscape-native-panel-is-not-swapped"
+# The logical canvas is the native mode swapped to landscape for a portrait panel, and the native
+# mode itself for a landscape-native one.
+sed -n '/^if \[ -z "\${NOVADECK_GAMESCOPE_W:-}" \]/,/^fi$/p' "$SESSION" > "$W/canvas.sh"
+canvas() { env -i "$@" /bin/sh -c '. "$1"; printf "%sx%s" "$NOVADECK_GAMESCOPE_W" "$NOVADECK_GAMESCOPE_H"' sh "$W/canvas.sh"; }
+out="$(canvas NOVADECK_PANEL_NATIVE_WIDTH=1080 NOVADECK_PANEL_NATIVE_HEIGHT=1920)"
+[ "$out" = "1920x1080" ] && ok "a portrait 1080x1920 panel renders a 1920x1080 canvas" \
+  || bad "portrait 1080x1920 gave '${out:-<nothing>}', expected 1920x1080"
+out="$(canvas NOVADECK_PANEL_NATIVE_WIDTH=1280 NOVADECK_PANEL_NATIVE_HEIGHT=960 NOVADECK_PANEL_ORIENTATION=landscape)"
+[ "$out" = "1280x960" ] && ok "a landscape-native 1280x960 panel renders a 1280x960 canvas" \
+  || bad "landscape 1280x960 gave '${out:-<nothing>}', expected 1280x960"
 
 # =================================================================================================
 echo

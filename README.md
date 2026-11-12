@@ -58,6 +58,7 @@ novadeck runs from the card and does not touch your Android install.
 | Retroid Pocket Nova | SM8550 | `retroid-pocket-nova` | yes (120 Hz mode selection open) |
 | AYN Thor Lite | SM8250 | `ayn-thor-lite` | yes |
 | MANGMI Pocket Max | SM8250 | `mangmi-pocket-max` | yes |
+| MANGMI Air Y Pro | SM8250 | `mangmi-air-y-pro` | — |
 | Retroid Pocket 5 | SM8250 | `retroid-pocket-5` | yes (user report) |
 | Retroid Pocket Flip2 | SM8250 | `retroid-pocket-flip2` | yes (user report) |
 | AYANEO Pocket DMG | SM8550 | `ayaneo-pocket-dmg` | — |

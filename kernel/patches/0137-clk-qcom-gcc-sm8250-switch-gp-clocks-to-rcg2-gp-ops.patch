@@ -1,0 +1,60 @@
+From: Philippe Simons <simons.philippe@gmail.com>
+Subject: [PATCH] clk: qcom: gcc-sm8250: switch GP clocks to clk_rcg2_gp_ops
+
+The GP1-3 RCGs only reach the rates in their frequency table, the slowest
+of which is 19.2 MHz, so a clk-pwm on top of them cannot produce a
+kHz-range PWM. clk_rcg2_gp_ops computes M/N and the pre-divider for an
+arbitrary rate from the current parent instead: from the 19.2 MHz TCXO
+the GP clocks reach down to ~4.9 kHz.
+
+The same change as Xilin Wu's sc7280 "clk: qcom: gcc-sc7280: switch GP
+clocks to clk_rcg2_gp_ops" (<20260406-gcc-gpclk-sc7280-2b412227c5fa@radxa.com>),
+applied to gcc-sm8250. The MANGMI Air Y Pro
+drives its rumble motor from GCC_GP1 on TLMM gpio136 through clk-pwm.
+
+novadeck: not posted.
+
+---
+diff --git a/drivers/clk/qcom/gcc-sm8250.c b/drivers/clk/qcom/gcc-sm8250.c
+index 1c59d70e0..3074acdbf 100644
+--- a/drivers/clk/qcom/gcc-sm8250.c
++++ b/drivers/clk/qcom/gcc-sm8250.c
+@@ -206,11 +206,6 @@ static struct clk_rcg2 gcc_cpuss_ahb_clk_src = {
+ };
+ 
+ static const struct freq_tbl ftbl_gcc_gp1_clk_src[] = {
+-	F(19200000, P_BI_TCXO, 1, 0, 0),
+-	F(25000000, P_GPLL0_OUT_EVEN, 12, 0, 0),
+-	F(50000000, P_GPLL0_OUT_EVEN, 6, 0, 0),
+-	F(100000000, P_GPLL0_OUT_MAIN, 6, 0, 0),
+-	F(200000000, P_GPLL0_OUT_MAIN, 3, 0, 0),
+ 	{ }
+ };
+ 
+@@ -224,7 +219,7 @@ static struct clk_rcg2 gcc_gp1_clk_src = {
+ 		.name = "gcc_gp1_clk_src",
+ 		.parent_data = gcc_parent_data_1,
+ 		.num_parents = ARRAY_SIZE(gcc_parent_data_1),
+-		.ops = &clk_rcg2_ops,
++		.ops = &clk_rcg2_gp_ops,
+ 	},
+ };
+ 
+@@ -238,7 +233,7 @@ static struct clk_rcg2 gcc_gp2_clk_src = {
+ 		.name = "gcc_gp2_clk_src",
+ 		.parent_data = gcc_parent_data_1,
+ 		.num_parents = ARRAY_SIZE(gcc_parent_data_1),
+-		.ops = &clk_rcg2_ops,
++		.ops = &clk_rcg2_gp_ops,
+ 	},
+ };
+ 
+@@ -252,7 +247,7 @@ static struct clk_rcg2 gcc_gp3_clk_src = {
+ 		.name = "gcc_gp3_clk_src",
+ 		.parent_data = gcc_parent_data_1,
+ 		.num_parents = ARRAY_SIZE(gcc_parent_data_1),
+-		.ops = &clk_rcg2_ops,
++		.ops = &clk_rcg2_gp_ops,
+ 	},
+ };
+ 

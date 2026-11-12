@@ -50,13 +50,28 @@
 		pinctrl-0 = <&fan_pwm_active>;
 	};
 
+	/*
+	 * NOT the Pocket Max's pwm-vibrator on pm8150l LPG 3 / PMIC gpio6: the stock DT enables both
+	 * that node and a clock-driven one, and on this board the motor is the second -- GCC_GP1
+	 * muxed onto TLMM gpio136 (stock's qcom,gpio_clk_vibrator). HW, 2026-11-12: LPG 3 at 100%
+	 * duty with vibrator_en on did not move the motor; gpio136 driven high with vibrator_en on
+	 * did. The clock becomes a PWM through clk-pwm, which needs the GP clocks on
+	 * clk_rcg2_gp_ops (kernel/patches/0137) to go below 19.2 MHz. The 100 us (10 kHz) period is
+	 * the clock-driven MANGMI Air X's, not read from this board's stock firmware.
+	 */
+	vibrator_pwm: pwm {
+		compatible = "clk-pwm";
+		#pwm-cells = <2>;
+		clocks = <&gcc GCC_GP1_CLK>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&vibrator_clk_default>;
+	};
+
 	vibrator {
 		compatible = "pwm-vibrator";
-		pwms = <&pm8150l_lpg 3 40000>;
+		pwms = <&vibrator_pwm 0 100000>;
 		pwm-names = "enable";
 		vcc-supply = <&vreg_vibrator_en>;
-		pinctrl-names = "default";
-		pinctrl-0 = <&vibrator_pwm_active>;
 	};
 
 	gpio-keys {
@@ -933,16 +948,6 @@
 		qcom,drive-strength = <3>;
 		drive-push-pull;
 	};
-
-	vibrator_pwm_active: vibrator-pwm-active-state {
-		pins = "gpio6";
-		function = "func1";
-		bias-disable;
-		power-source = <0>;
-		output-low;
-		qcom,drive-strength = <3>;
-		drive-push-pull;
-	};
 };
 
 &pm8150l_lcdb {
@@ -1224,6 +1229,13 @@
 			drive-strength = <2>;
 			bias-disable;
 		};
+	};
+
+	vibrator_clk_default: vibrator-clk-default-state {
+		pins = "gpio136";
+		function = "gcc_gp1";
+		drive-strength = <8>;
+		bias-disable;
 	};
 
 	rocker_key_pins: rocker-key-pins-state {

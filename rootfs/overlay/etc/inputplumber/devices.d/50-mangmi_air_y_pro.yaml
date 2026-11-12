@@ -7,7 +7,8 @@
 # (capability_maps.d/sm8250-air_y_pro_mcu.yaml, id sm8250_air_y_pro_mcu). The conventions below
 # (model match, file name, xbox-elite target, no keyboard target) are argued in
 # 50-mangmi_pocket_max.yaml; the model match is also what keeps the two MANGMI configs, which both
-# list the generic pwm-vibrator source, from each claiming the other board's motor.
+# list the generic pwm-vibrator source, from each claiming the other board's motor. (Same evdev
+# name, different hardware: this board's pwm-vibrator runs on a clock-backed PWM, see the .dts.)
 version: 1
 kind: CompositeDevice
 name: MANGMI Air Y Pro

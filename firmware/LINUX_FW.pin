@@ -25,6 +25,11 @@
 # so the next bump does not read "no sha changed" as evidence the fetch silently no-op'd.
 commit: 2135b2f7714a3a514c989b9728f51f36144cab6f
 base:   https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain
+# Fallback host, fetched as <mirror>/<commit>/<src>. GitLab is where linux-firmware is
+# developed, so it carries every commit git.kernel.org does; the per-row sha256 still decides,
+# so the mirror can only ever supply the same bytes. A bump must keep both hosts serving the
+# new commit (GitLab mirrors kernel.org within minutes; check before pinning a fresh tag).
+mirror: https://gitlab.com/kernel-firmware/linux-firmware/-/raw
 
 # Adreno gen70900 (A750 / SM8650) GPU firmware — also embedded in the kernel Image (CONFIG_EXTRA_FIRMWARE)
 qcom/gen70900_aqe.fw       qcom/gen70900_aqe.fw     25237c161d727b8ea92b4beb837a31651b44ea78bfc34d95672af8f346a45825

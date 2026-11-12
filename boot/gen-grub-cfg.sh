@@ -122,16 +122,18 @@ done < "$BOARDS"
 [ "${#pids[@]}" -gt 0 ] || { echo "no board rows in ${BOARDS#"$ROOT"/}" >&2; exit 1; }
 
 # --- per-board GRUB rotation --------------------------------------------------------------------
-# 270 is right for every portrait-native panel in the catalog, and it is NOT derivable from the
-# DTS: the panel node's `rotation = <N>` is 90 on some of those boards and 270 on others while all
-# of them want GRUB's 270, because the two count different things. The odd one out is a
-# landscape-native panel, which has nothing to rotate. Keyed on the DTB name; only the odd ones out
-# produce a line, keyed on the SAVED entry (the console block below says why a fresh card cannot
-# be helped).
+# 270 is the default, and the right value is NOT derivable from the DTS: the panel node's
+# `rotation = <N>` counts something different. The Odin 3 (DTS 90) and the Pocket Max (DTS 270)
+# both paint upside down at 270 and want 90, so the table below is per board and filled from what
+# each one shows on HW, never from its DTS. A landscape-native panel wants 0. Keyed on the DTB
+# name; only the odd ones out produce a line, keyed on the SAVED entry (the console block below
+# says why a fresh card cannot be helped).
 board_grub_rotation() {  # <dtb basename> -> GRUB rotation for a non-default board, or "" for 270
   case "$1" in
-    sm8250-mangmi-air-y-pro) echo 0 ;;   # 1280x960 landscape-native, no DTS rotation
-    *)                       echo "" ;;
+    sm8250-mangmi-air-y-pro)  echo 0 ;;    # 1280x960 landscape-native, no DTS rotation
+    cq8725s-ayn-odin3)        echo 90 ;;   # HW: upside down at 270 (DTS panel rotation 90)
+    sm8250-mangmi-pocket-max) echo 90 ;;   # HW: upside down at 270 (DTS panel rotation 270)
+    *)                        echo "" ;;
   esac
 }
 ROT_OVERRIDES=""

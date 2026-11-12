@@ -366,14 +366,16 @@ for slot in A B; do
   [ -n "$ln_rot" ] && [ -n "$ln_term" ] && [ "$ln_rot" -lt "$ln_term" ] \
     && ok "grub-$lc.cfg sets rotation before terminal_output gfxterm" \
     || bad "grub-$lc.cfg sets rotation after the terminal is up, where it is a no-op"
-  # Per-board overrides: the landscape-native Air Y Pro gets `set rotation=0` keyed on its saved
-  # entry, between the default and terminal_output (boot/gen-grub-cfg.sh board_grub_rotation);
-  # every other board gets none.
+  # Per-board overrides: the landscape-native Air Y Pro gets `set rotation=0`, the Odin 3 and the
+  # Pocket Max `set rotation=90`, each keyed on its saved entry, between the default and
+  # terminal_output (boot/gen-grub-cfg.sh board_grub_rotation); every other board gets none.
   while IFS=$'\t' read -r id name dtb ba; do
     [ -n "$id" ] && [[ $id != \#* ]] && [ -n "$dtb" ] || continue
     case "$dtb" in   # mirror of boot/gen-grub-cfg.sh board_grub_rotation
-      sm8250-mangmi-air-y-pro) want=0 ;;
-      *)                       want="" ;;
+      sm8250-mangmi-air-y-pro)  want=0 ;;
+      cq8725s-ayn-odin3)        want=90 ;;
+      sm8250-mangmi-pocket-max) want=90 ;;
+      *)                        want="" ;;
     esac
     ln_any=$(grep -n "^if \[ \"\${saved_entry}\" = \"$id\" \]; then set rotation=" "$cfg" | cut -d: -f1)
     if [ -n "$want" ]; then

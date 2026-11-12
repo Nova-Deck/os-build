@@ -1,6 +1,6 @@
 # novadeck SM8250 MCU gamepads — classify them as joysticks.
 #
-# Both boards' pads are MCU parts on a serdev/SPI bus rather than USB HID, so udev's
+# These boards' pads are MCU parts on a serdev/SPI bus rather than USB HID, so udev's
 # input_id builtin has no bus-level hint to work from and never sets ID_INPUT_JOYSTICK.
 # Without that, the evdev node is not tagged as a game controller: InputPlumber skips
 # it, SDL does not enumerate it, and the device boots to a Steam UI nothing can drive.
@@ -15,3 +15,4 @@
 # have fired here anyway.
 SUBSYSTEM=="input", ATTRS{name}=="Retroid Pocket Gamepad", GROUP="input", MODE="0660", ENV{ID_INPUT_JOYSTICK}="1"
 SUBSYSTEM=="input", ATTRS{name}=="MANGMI Pocket Max Joypad", GROUP="input", MODE="0660", ENV{ID_INPUT_JOYSTICK}="1"
+SUBSYSTEM=="input", ATTRS{name}=="MANGMI Air Y Pro Joypad", GROUP="input", MODE="0660", ENV{ID_INPUT_JOYSTICK}="1"

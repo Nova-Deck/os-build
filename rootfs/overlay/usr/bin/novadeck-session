@@ -29,8 +29,15 @@ CONF=/etc/novadeck/session.conf
 # to a generic landscape 1920x1080.
 if [ -z "${NOVADECK_GAMESCOPE_W:-}" ] || [ -z "${NOVADECK_GAMESCOPE_H:-}" ]; then
   if [ -n "${NOVADECK_PANEL_NATIVE_WIDTH:-}" ] && [ -n "${NOVADECK_PANEL_NATIVE_HEIGHT:-}" ]; then
-    NOVADECK_GAMESCOPE_W=$NOVADECK_PANEL_NATIVE_HEIGHT   # swap portrait native -> landscape logical
-    NOVADECK_GAMESCOPE_H=$NOVADECK_PANEL_NATIVE_WIDTH
+    if [ "${NOVADECK_PANEL_ORIENTATION:-portrait}" = landscape ]; then
+      # A landscape-native panel (MANGMI Air Y Pro): the native mode IS the logical canvas, and
+      # with no connector orientation to honour gamescope rotates nothing.
+      NOVADECK_GAMESCOPE_W=$NOVADECK_PANEL_NATIVE_WIDTH
+      NOVADECK_GAMESCOPE_H=$NOVADECK_PANEL_NATIVE_HEIGHT
+    else
+      NOVADECK_GAMESCOPE_W=$NOVADECK_PANEL_NATIVE_HEIGHT   # swap portrait native -> landscape logical
+      NOVADECK_GAMESCOPE_H=$NOVADECK_PANEL_NATIVE_WIDTH
+    fi
   else
     NOVADECK_GAMESCOPE_W=1920; NOVADECK_GAMESCOPE_H=1080
   fi

@@ -1,0 +1,40 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/ShadowBlip/InputPlumber/main/rootfs/usr/share/inputplumber/schema/composite_device_v1.json
+#
+# MANGMI Air Y Pro (sm8250-mangmi-air-y-pro.dts). The same SPI MCU joypad family as the Pocket
+# Max, on the same driver -- `mangmi,air-y-pro-joypad`, kernel/patches/0755 -- with four ADC
+# channels and digital L2/R2 instead of six channels and analog triggers, and no M1/M2 back
+# buttons. Nothing upstream describes it, so the capability map is ours
+# (capability_maps.d/sm8250-air_y_pro_mcu.yaml, id sm8250_air_y_pro_mcu). The conventions below
+# (model match, file name, xbox-elite target, no keyboard target) are argued in
+# 50-mangmi_pocket_max.yaml; the model match is also what keeps the two MANGMI configs, which both
+# list the generic pwm-vibrator source, from each claiming the other board's motor.
+version: 1
+kind: CompositeDevice
+name: MANGMI Air Y Pro
+
+maximum_sources: 0
+
+options:
+    auto_manage: true
+
+matches:
+    - udev:
+          sys_path: /sys/firmware/devicetree/base
+          attributes:
+              - name: model
+                value: MANGMI Air Y Pro
+
+source_devices:
+    - group: gamepad
+      capability_map_id: sm8250_air_y_pro_mcu
+      evdev:
+          name: MANGMI Air Y Pro Joypad
+          phys_path: mangmi-air-y-pro/input0
+          handler: event*
+    - group: gamepad
+      evdev:
+          name: pwm-vibrator
+          handler: event*
+
+target_devices:
+    - xbox-elite

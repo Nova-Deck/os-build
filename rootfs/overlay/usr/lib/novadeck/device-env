@@ -9,9 +9,10 @@
 # novadeck-powerd reads NOVADECK_SOC_CLASS (underclock-table key); novadeck-session
 # reads the panel/output block. Hardware truth still lives in the DTS — this only
 # re-exports the subset userspace needs plus knobs with no DTS home (fake-output-mm,
-# suspend mode). Panel orientation, rotation-shader and gamepad-quirk are
+# suspend mode). The rotation itself, rotation-shader and gamepad-quirk are
 # deliberately NOT carried: novadeck uses upstream composite rotation (auto-engaged
-# off the connector) and a fixed InputPlumber config.
+# off the connector) and a fixed InputPlumber config. NOVADECK_PANEL_ORIENTATION only
+# says whether the native mode needs swapping into the landscape logical canvas.
 set -euo pipefail
 
 device_dir=${NOVADECK_DEVICE_DIR:-/usr/lib/novadeck/devices}
@@ -38,6 +39,7 @@ case "$model" in
     "AYN Thor Lite")             profile=ayn-thor-lite ;;
     "KONKR Pocket FIT")          profile=konkr-pocket-fit ;;
     "KONKR Pocket FIT Elite")    profile=konkr-pocket-fit-elite ;;
+    "MANGMI Air Y Pro")          profile=mangmi-air-y-pro ;;
     "MANGMI Pocket Max")         profile=mangmi-pocket-max ;;
     "Retroid Pocket 5")          profile=retroid-pocket-5 ;;
     "Retroid Pocket 6")          profile=retroid-pocket-6 ;;
@@ -60,6 +62,7 @@ vars=(
     NOVADECK_SUSPEND_MODE
     NOVADECK_PRIMARY_CONNECTOR
     NOVADECK_PANEL_TYPE
+    NOVADECK_PANEL_ORIENTATION
     NOVADECK_PANEL_NATIVE_WIDTH
     NOVADECK_PANEL_NATIVE_HEIGHT
     NOVADECK_PANEL_REFRESH_RATES

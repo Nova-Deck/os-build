@@ -84,6 +84,7 @@ Then (2026-11-09, ufs-qcom checks for its PHY before powering up, the Pocket FIT
 Then (2026-11-10, DPU returns `-EINVAL` when no SSPP is free `0386`): 2 `mainline`, 43 `posted`, 30 `novadeck`, 139 `community` = 214.
 Then (2026-11-11, drop `1065`, `0270` replaced by the posted fix, assorted-fixes-oct `0268` `0275`, SM8250 q6asm playback stall `0881` + revert `0882`): 2 `mainline`, 46 `posted`, 32 `novadeck`, 137 `community` = 217.
 Then (2026-11-12, sm8750 SDHC gets the 19.2 MHz TCXO `1186`): 2 `mainline`, 46 `posted`, 32 `novadeck`, 138 `community` = 218.
+Then (2026-11-12, MANGMI Air Y Pro: panel `0580`, CST66xx touch `0736`, LCDB regulator `0960` + its node `1132`, and `0755` refreshed to the driver revision that knows the board): 2 `mainline`, 46 `posted`, 32 `novadeck`, 142 `community` = 222.
 The 7.3 bump deleted every `mainline` row (`0230 0620 0800 1080 1155`), the two `posted` ones
 that landed (`0275 1170`), and `0810`/`0825` with the old `0820`, whose jobs mainline's
 `ayaneo,pocket-s2-sndcard` and per-DAI MI2S clocks now do; `0820` is reused for the sm8750
@@ -176,6 +177,7 @@ taken for issue #122 — see the `0780`–`0796` rows.
 | `0550` | community | ROCKNIX. Never posted; possibly an R63419 variant (unverified). | never |
 | `0555` | community | Teguh Sobirin via ROCKNIX `0104`. Aaron Kling posted a different version (`<20260814-rp6-panel-v1-4-111c1aeccf0f@gmail.com>`, `retroidpocket,rp6-panel`); v2 owed after Neil's review. | when Aaron's series lands — switch compatible |
 | `0560` | community | Teguh Sobirin, RetroidPocket/linux `9bfe85be2179` (binding) + `32d07e207d8c` (driver), squashed; command-mode Nova and Duo-bottom panels. Replaced the ROCKNIX `0105` video-mode driver. Needs `0392`. Never posted. | never |
+| `0580` | community | Philippe Simons, ROCKNIX SM8250 `0064`, driver body unchanged: the MANGMI Air Y Pro's landscape 1280x960 video-mode panel. Kconfig/Makefile hunks re-rolled alphabetically onto this tree. Never posted. | never |
 | `0610` | community | Teguh Sobirin via ROCKNIX `0058`. Never posted. | never |
 | `0630` | community | ROCKNIX SM8750 `0056`. The AW99706 driver itself is upstream in 7.2.11 and ROCKNIX's `0055` fixes are already in; this one (enable HWEN before the chip-id read) is not. | when upstreamed |
 | `0635` | community | ROCKNIX SM8750 `0057`: the KONKR Pocket FIT Elite's cfg7 wiring for AW99706. | never |
@@ -189,10 +191,11 @@ taken for issue #122 — see the `0780`–`0796` rows.
 | `0725` | novadeck | Also ROCKNIX `0032`. A hack. | never |
 | `0730` | novadeck | Port of the SynapticsHostSW `synaptics_dsx` vendor driver. | never |
 | `0735` | novadeck | Kconfig for `0730`. | with `0730` |
+| `0736` | community | danyi's runtime-only Hynitron CST66xx driver (AYANEO Pocket S Mini), with Philippe Simons's `iovcc` supply added for the MANGMI Air Y Pro; ROCKNIX SM8250 `0065`. A different driver from the Odin2 Mini's mainline CSTXXX. Never posted. | never |
 | `0738` | community | Chipone vendor driver via kevinkreiser/chipone_tddi → ROCKNIX. ROCKNIX SM8750 has a ~380-line clean-room replacement (`0061-input-touchscreen-add-chipone-tddi`). | never |
 | `0745` | novadeck | Driver by Teguh Sobirin; ROCKNIX SM8550 `0031`. Never posted. | never |
 | `0750` | community | ROCKNIX SM8250 `0008` (Molly Sophia, BigfootACA, Teguh Sobirin). Never posted. | never |
-| `0755` | community | ROCKNIX SM8250 `0060` (sunshineinabox). ROCKNIX has since added Air Y Pro support. | never |
+| `0755` | community | ROCKNIX SM8250 `0060` (sunshineinabox) at its 2026-10 state: the Pocket Max driver plus its Air Y Pro variant (four ADC channels, digital L2/R2, Nintendo-labelled face buttons), selected by compatible. Makefile hunk re-rolled around `0750`. | never |
 | `0760` | community | ROCKNIX SM8750 `0058`: clean-room reimplementation of the stock `tc_mcu_joystick.ko` — the AYANEO-family SPI register-map MCU gamepad (regs 0x8080-0x8088, ASCII "AYANEO" magic) on the KONKR Pocket FIT Elite. Protocol unrelated to the Mangmi SPI joypad (`0755`), reuse investigated and rejected 2026-10-19. | never |
 | `0765` | community | ROCKNIX SM8750 `0069`, STRIPPED of its RGB-LED half (multicolor LED, `effect` sysfs, LED PM notifier + `tx_inhibited`): novadeck has no stick-ring LED surface and no kernel sleep. Buttons + key-remap sysfs only. Armada `0069a` (same driver also binds the SM8650 Pocket FIT MCU, whose Menu/Equals/K + LC/RC may be dead on our KPF today) is NOT taken — pending the KPF hardware check; it also carries a `gamepad_mode` attr because it displaces `0980` on that board. | never |
 | `0770` | posted | Caleb Connolly v7 `<20221015172915.1436236-3-caleb@connolly.tech>`, stalled since 2022. Fenglin Wu's PMIH driver (v7, 2026-08-28) uses the same file and the generic `qcom,spmi-haptics` compatible. | when David Heidelberg's pmi8998 haptics lands |
@@ -243,6 +246,7 @@ taken for issue #122 — see the `0780`–`0796` rows.
 | `0940` | posted | Same series, `-3-`. | when merged |
 | `0945` | posted | Xu Qianhui, "power: supply: qcom_battmgr: do not report power_now on SM8750" `<20261027132949.242685-1-xiaqinghuan@mail.ustc.edu.cn>`, via andrebraga ROCKNIX SM8750 `Kernel_7.3` `0086`: SM8750 gets its own variant + battery descriptor without POWER_NOW (the QBG firmware publishes its max-load value there). Probe hunk regenerated around our `0930`. The peer's companion battery RENAME (`0503`) is deliberately NOT taken. | when merged |
 | `0950` | mainline | Georgi Djakov `<20260928132823.1426513-1-djakov@kernel.org>`, `51c262cf2aa9` in v7.4-rc1, no stable tag, body byte-identical, via andrebraga ROCKNIX SM8750 `Kernel_7.3` `2216`. `temp_map` was indexed as a row when it points at the whole map: out-of-bounds read at every PMIC temp-alarm probe. | v7.4 |
+| `0960` | community | Philippe Simons, ROCKNIX SM8250 `0066`: a regulator driver for the PM8150L LCDB panel bias (one switch for AVDD + AVEE), ported from downstream qpnp-lcdb. The MANGMI Air Y Pro's panel `lab-supply`. Dmitry Baryshkov's own LCDB driver (`be8c264748`, a different implementation) and binding are in linux-next with the same `qcom,pm8150l-lcdb` compatible, so this and `1132` must follow that binding or go at the bump that carries it. | when Baryshkov's driver lands |
 | `0970` | community | ROCKNIX `0500`. A hack. | never |
 | `0980` | novadeck | Never posted. | never |
 | `0990` | community | ROCKNIX SM8750 `0026` + `0027` squashed (Teguh Sobirin): the CQ8725S SoC-ID (SM8750 gaming SKU, AYN Odin 3) in dt-bindings + socinfo. | when the ID lands upstream |
@@ -303,6 +307,7 @@ taken for issue #122 — see the `0780`–`0796` rows.
 | `1120` | community | Our A650 overclock ladder, in the shape of Kettle Linux `21-sm8250/0111` (from ROCKNIX `9998-gpu-tuning`): 650/670 `NOM_L1`, 700 `TURBO`, 725/750 `TURBO_L1`, each with the 587 MHz DDR vote of `1117`. Replaced ROCKNIX `9998-gpu-opp-table`, which ran 650-800 MHz all at `NOM_L1`; 800 dropped. Unlike Kettle, the steps stay reachable by the governor. | never |
 | `1125` | community | ROCKNIX SM8250 `0004`; nodes for the out-of-tree `0770`/`0910` drivers. | with `0770`/`0910` |
 | `1130` | community | spycat88, ROCKNIX `0102`. Upstream wants `rtc_offset` in board DTS, not the PMIC dtsi. | never |
+| `1132` | community | Philippe Simons, ROCKNIX SM8250 `0067`: the PM8150L LCDB node (0xec00), disabled by default, for `0960`. | with `0960` |
 | `1135` | posted | Krishna Chaitanya Chundru "Fix wake-gpios polarity" v2 06/18 `<20260917-root_port-v2-6-0d627d0856d5@oss.qualcomm.com>`, applied to qcom `arm64-for-7.4` as `adf55ad00669`; no Fixes:/Cc: stable, so 7.3.y will not get it. | v7.4 |
 | `1137` | posted | Konrad Dybcio "Straighten out CPU votes" 7/7 `<20261020-topic-icc_defines_ao-v1-7-cae8d22649ac@oss.qualcomm.com>`, body byte-identical (b4), reviewed by Abel Vesa, applied to qcom `arm64-for-7.5` as `dd68b2a63e89`. Tags the CPU→DDR path of all eight sm8250 CPUs `QCOM_ICC_TAG_ACTIVE_ONLY`, so the cpufreq bandwidth vote drops when the CPU subsystem power-collapses. 1/7–6/7 are other SoCs, not taken. Fixes: but no Cc stable. | v7.5, or 7.3.y if stable picks it |
 | `1140` | posted | Konrad Dybcio RFC v1 `<20250728-topic-gpucc_power_plumbing-v1-0-09c2480fe3e6@oss.qualcomm.com>` (modified). Ulf asked for a rebase in 2025-08; never resent. | never, unless Konrad resends |

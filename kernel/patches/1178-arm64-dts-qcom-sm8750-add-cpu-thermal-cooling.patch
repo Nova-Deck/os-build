@@ -1,4 +1,4 @@
-From: KONKR Pocket FIT Elite port
+From: Patrick Hennig <patrick.hennig@fastmail.com>
 Subject: [PATCH] arm64: dts: qcom: sm8750: add CPU thermal cooling
 
 The per-core thermal zones only had a 120C hot and 125C critical trip,

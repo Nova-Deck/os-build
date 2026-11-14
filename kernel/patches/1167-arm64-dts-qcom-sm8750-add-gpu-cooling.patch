@@ -14,15 +14,24 @@ Signed-off-by: Akhil P Oommen <akhilpo@oss.qualcomm.com>
 Reviewed-by: Dmitry Baryshkov <dmitry.baryshkov@oss.qualcomm.com>
 Reviewed-by: Konrad Dybcio <konrad.dybcio@oss.qualcomm.com>
 Link: https://lore.kernel.org/r/20260809-pakala-gpu-v1-4-207ad1fac1c7@oss.qualcomm.com
+[novadeck: adds polling-delay-passive = <10> to the eight gpuss zones, as
+sm8550 and sm8650 have. Without it a zone is only re-evaluated when the
+sensor crosses another trip, so step_wise stops after the first cooling
+step.]
 ---
- arch/arm64/boot/dts/qcom/sm8750.dtsi | 104 +++++++++++++++++++++++++++--------
- 1 file changed, 80 insertions(+), 24 deletions(-)
+ arch/arm64/boot/dts/qcom/sm8750.dtsi | 120 ++++++++++++++++++++++++++++-------
+ 1 file changed, 96 insertions(+), 24 deletions(-)
 
 diff --git a/arch/arm64/boot/dts/qcom/sm8750.dtsi b/arch/arm64/boot/dts/qcom/sm8750.dtsi
-index 6ddc8d3fdada..1a960ff855d7 100644
+index 616884684..30ac15eb6 100644
 --- a/arch/arm64/boot/dts/qcom/sm8750.dtsi
 +++ b/arch/arm64/boot/dts/qcom/sm8750.dtsi
-@@ -6946,10 +6946,10 @@ gpuss0-thermal {
+@@ -6947,13 +6947,15 @@ aoss2-critical {
+ 		};
+ 
+ 		gpuss0-thermal {
++			polling-delay-passive = <10>;
++
  			thermal-sensors = <&tsens2 1>;
  
  			trips {
@@ -36,7 +45,7 @@ index 6ddc8d3fdada..1a960ff855d7 100644
  				};
  
  				gpuss0-critical {
-@@ -6958,16 +6958,23 @@ gpuss0-critical {
+@@ -6962,16 +6964,25 @@ gpuss0-critical {
  					type = "critical";
  				};
  			};
@@ -50,6 +59,8 @@ index 6ddc8d3fdada..1a960ff855d7 100644
  		};
  
  		gpuss1-thermal {
++			polling-delay-passive = <10>;
++
  			thermal-sensors = <&tsens2 2>;
  
  			trips {
@@ -63,7 +74,7 @@ index 6ddc8d3fdada..1a960ff855d7 100644
  				};
  
  				gpuss1-critical {
-@@ -6976,16 +6983,23 @@ gpuss1-critical {
+@@ -6980,16 +6991,25 @@ gpuss1-critical {
  					type = "critical";
  				};
  			};
@@ -77,6 +88,8 @@ index 6ddc8d3fdada..1a960ff855d7 100644
  		};
  
  		gpuss2-thermal {
++			polling-delay-passive = <10>;
++
  			thermal-sensors = <&tsens2 3>;
  
  			trips {
@@ -90,7 +103,7 @@ index 6ddc8d3fdada..1a960ff855d7 100644
  				};
  
  				gpuss2-critical {
-@@ -6994,16 +7008,23 @@ gpuss2-critical {
+@@ -6998,16 +7018,25 @@ gpuss2-critical {
  					type = "critical";
  				};
  			};
@@ -104,6 +117,8 @@ index 6ddc8d3fdada..1a960ff855d7 100644
  		};
  
  		gpuss3-thermal {
++			polling-delay-passive = <10>;
++
  			thermal-sensors = <&tsens2 4>;
  
  			trips {
@@ -117,7 +132,7 @@ index 6ddc8d3fdada..1a960ff855d7 100644
  				};
  
  				gpuss3-critical {
-@@ -7012,16 +7033,23 @@ gpuss3-critical {
+@@ -7016,16 +7045,25 @@ gpuss3-critical {
  					type = "critical";
  				};
  			};
@@ -131,6 +146,8 @@ index 6ddc8d3fdada..1a960ff855d7 100644
  		};
  
  		gpuss4-thermal {
++			polling-delay-passive = <10>;
++
  			thermal-sensors = <&tsens2 5>;
  
  			trips {
@@ -144,7 +161,7 @@ index 6ddc8d3fdada..1a960ff855d7 100644
  				};
  
  				gpuss4-critical {
-@@ -7030,16 +7058,23 @@ gpuss4-critical {
+@@ -7034,16 +7072,25 @@ gpuss4-critical {
  					type = "critical";
  				};
  			};
@@ -158,6 +175,8 @@ index 6ddc8d3fdada..1a960ff855d7 100644
  		};
  
  		gpuss5-thermal {
++			polling-delay-passive = <10>;
++
  			thermal-sensors = <&tsens2 6>;
  
  			trips {
@@ -171,7 +190,7 @@ index 6ddc8d3fdada..1a960ff855d7 100644
  				};
  
  				gpuss5-critical {
-@@ -7048,16 +7083,23 @@ gpuss5-critical {
+@@ -7052,16 +7099,25 @@ gpuss5-critical {
  					type = "critical";
  				};
  			};
@@ -185,6 +204,8 @@ index 6ddc8d3fdada..1a960ff855d7 100644
  		};
  
  		gpuss6-thermal {
++			polling-delay-passive = <10>;
++
  			thermal-sensors = <&tsens2 7>;
  
  			trips {
@@ -198,7 +219,7 @@ index 6ddc8d3fdada..1a960ff855d7 100644
  				};
  
  				gpuss6-critical {
-@@ -7066,16 +7108,23 @@ gpuss6-critical {
+@@ -7070,16 +7126,25 @@ gpuss6-critical {
  					type = "critical";
  				};
  			};
@@ -212,6 +233,8 @@ index 6ddc8d3fdada..1a960ff855d7 100644
  		};
  
  		gpuss7-thermal {
++			polling-delay-passive = <10>;
++
  			thermal-sensors = <&tsens2 8>;
  
  			trips {
@@ -225,7 +248,7 @@ index 6ddc8d3fdada..1a960ff855d7 100644
  				};
  
  				gpuss7-critical {
-@@ -7084,6 +7133,13 @@ gpuss7-critical {
+@@ -7088,6 +7153,13 @@ gpuss7-critical {
  					type = "critical";
  				};
  			};

@@ -43,7 +43,7 @@ if nits > 0 then
             supported = true,
             -- Gamma 2.2, not PQ: these DSI panels take no HDR signalling, so gamescope encodes to
             -- the panel's native transfer function. On a DPU with per-plane colour pipelines
-            -- (kernel 0399) each scanned-out layer gets that mapping in its own plane LUTs.
+            -- (kernel 0394, 0398 on SM8250) each scanned-out layer gets that mapping in its own plane LUTs.
             eotf = gamescope.eotf.gamma22,
             max_content_light_level = nits,
             -- Same value as MaxCLL, matching how this DDIC family is profiled upstream. A vendor

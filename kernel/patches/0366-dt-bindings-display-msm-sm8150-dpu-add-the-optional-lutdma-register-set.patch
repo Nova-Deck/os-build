@@ -1,0 +1,49 @@
+From: Philippe Simons <simons.philippe@gmail.com>
+Subject: [PATCH] dt-bindings: display/msm: sm8150-dpu: add the optional LUTDMA register set and lut clock
+
+SM8250's DPU carries a LUTDMA engine (version 1.2, 0x214 bytes at
+0x0aeac000) that loads the VIG pipes' IGC and 3D LUTs, clocked by
+DISP_CC_MDSS_MDP_LUT_CLK. Allow both as optional trailing entries, as the
+SM8550-and-later bindings already do.
+---
+diff --git a/Documentation/devicetree/bindings/display/msm/qcom,sm8150-dpu.yaml b/Documentation/devicetree/bindings/display/msm/qcom,sm8150-dpu.yaml
+index a88d22f30..066cd85f9 100644
+--- a/Documentation/devicetree/bindings/display/msm/qcom,sm8150-dpu.yaml
++++ b/Documentation/devicetree/bindings/display/msm/qcom,sm8150-dpu.yaml
+@@ -18,28 +18,36 @@ properties:
+       - qcom,sm8250-dpu
+ 
+   reg:
++    minItems: 2
+     items:
+       - description: Address offset and size for mdp register set
+       - description: Address offset and size for vbif register set
++      - description: Address offset and size for the LUTDMA register set
+ 
+   reg-names:
++    minItems: 2
+     items:
+       - const: mdp
+       - const: vbif
++      - const: lutdma
+ 
+   clocks:
++    minItems: 4
+     items:
+       - description: Display ahb clock
+       - description: Display hf axi clock
+       - description: Display core clock
+       - description: Display vsync clock
++      - description: Display lut clock
+ 
+   clock-names:
++    minItems: 4
+     items:
+       - const: iface
+       - const: bus
+       - const: core
+       - const: vsync
++      - const: lut
+ 
+ unevaluatedProperties: false
+ 

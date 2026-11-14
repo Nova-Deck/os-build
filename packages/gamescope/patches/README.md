@@ -35,7 +35,7 @@ root (the `gamescope/` checkout inside makepkg's `$srcdir`) by
 0042-color-scale-sdr-white-on-gamma22-hdr-output.patch
 0043-color-fall-back-to-app-hdr-metadata-for-tonemapping.patch
 0044-drm-output-luts-carry-sdr-on-hdr-output.patch
-0045-drm-per-plane-color-management-through-msm-plane-color-pipelines.patch    (ConVar drm_plane_luts, default on; needs kernel 0399)
+0045-drm-per-plane-color-management-through-msm-plane-color-pipelines.patch    (ConVar drm_plane_luts, default on; needs kernel 0394, or 0398 on SM8250)
 ```
 
 `0008`-`0013` are **retired** (see below). The numbering is kept as-is rather than compacted, so
@@ -153,7 +153,7 @@ sources.** That is expected on a dev card and is exactly why it must come back o
 `make relock`, before any commit or release build.
 
 **HDR came back 2026-11-14 as `0038`-`0045`, WITHOUT any of the flags below.** What changed is
-the kernel: `0399` gives the DPU per-plane colour pipelines, so HDR no longer needs a composite
+the kernel: `0394` (`0398` on SM8250) gives the DPU per-plane colour pipelines, so HDR no longer needs a composite
 (`0045`). `--hdr-itm-enable` is still inert in 3.17.0 and is still never passed; the session passes
 gamescope no HDR flag at all, and Steam owns the HDR state at runtime. The history below is why.
 

@@ -161,7 +161,8 @@ else
     ok "novadeck-steam leaves the HDR toggle to the session"
 fi
 
-# A peak on a board without per-plane colour pipelines (kernel 0399) composites every HDR frame,
+# A peak on a board without per-plane colour pipelines (kernel 0394; SM8250's 0398 is not yet
+# HW-settled, so it stays off the list) composites every HDR frame,
 # which costs it direct scanout. Completeness check, not a runtime gate.
 for conf in "$DEVICES"/*.conf; do
     nits=$(sed -n 's/^NOVADECK_PANEL_HDR_NITS=//p' "$conf" | tail -1)

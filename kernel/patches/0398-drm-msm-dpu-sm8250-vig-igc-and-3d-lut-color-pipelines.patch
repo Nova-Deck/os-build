@@ -1,0 +1,487 @@
+From: Philippe Simons <simons.philippe@gmail.com>
+Subject: [PATCH] drm/msm/dpu: SM8250 VIG IGC and 3D LUT colour pipelines
+
+Extend the plane colour pipeline (1D LUT -> 3D LUT) to SM8250. Its VIG
+pipes carry IGC v6 and gamut v6.0, loaded only through LUTDMA, which on
+DPU 6.0 is engine v1.2 (downstream sde: reg_dmav1_setup_vig_igcv6 and
+reg_dmav1_setup_vig_gamutv5, read off the stock Pocket Max DT:
+qcom,sde-vig-igc/gamut <0x1d00 0x60000>, qcom,sde-reg-dma-version 0x10002).
+
+- Engine v1.2: the v2 register layout (decode select, queue 0 at
+  0x14 + 0x10 * CTL, intr status/clear, the CTL 0xd4 software trigger and
+  the queue 0 done bits are identical, init_v12 changes no offset) without
+  the sideband queue and without the LUT bus, and with the v1 error clear
+  mask. The window is 0x214 bytes. Sideband kick-offs are refused.
+- REG_BLK_WRITE_MULTIPLE (BIT(30) | BIT(28)), a block write that walks a
+  window of registers and wraps, for engines without a LUT bus.
+- Gamut v6.0 is written through its registers: per table, TABLE_SEL
+  (BIT(12 + table), BIT(11) for the second bank), then {lower, upper}
+  pairs through a decrementing two-register block write from LOWER (0xc).
+  The 17^3 nodes rotate through the four 1229-entry tables, red fastest.
+- The IGC is the same block as on SM8550 and is unchanged.
+- An SM8250-only VIG sub-block with the LUTDMA window at 0x200; the shared
+  dpu_vig_sblk_qseed3_3_0 is left alone.
+- The offline rotator reserves its own pipe and set no LUT requirement --
+  nor initialised its requirements -- so a rotated plane with a colour
+  pipeline could land on a DMA pipe and skip its transform. It now gets
+  the plane's LUT requirement.
+
+The gamut data format is not in downstream, which copies a userspace
+table through; it was measured on the Pocket Max through gamescope's
+3D LUT override: 10 bits per component, LSB aligned, the upper port
+carrying red and the lower port blue in bits 9:0 and green in 25:16.
+Solid colours settled the ports, an identity table the node order, and
+gradients the width -- a 12-bit value wraps in the 10-bit field, which a
+full-scale colour cannot show.
+---
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/catalog/dpu_6_0_sm8250.h b/drivers/gpu/drm/msm/disp/dpu1/catalog/dpu_6_0_sm8250.h
+index 2f4a57b77..c838aac58 100644
+--- a/drivers/gpu/drm/msm/disp/dpu1/catalog/dpu_6_0_sm8250.h
++++ b/drivers/gpu/drm/msm/disp/dpu1/catalog/dpu_6_0_sm8250.h
+@@ -69,7 +69,7 @@ static const struct dpu_sspp_cfg sm8250_sspp[] = {
+ 		.name = "sspp_0", .id = SSPP_VIG0,
+ 		.base = 0x4000, .len = 0x1f8,
+ 		.features = VIG_SDM845_MASK_SDMA,
+-		.sblk = &dpu_vig_sblk_qseed3_3_0,
++		.sblk = &dpu_vig_sblk_qseed3_3_0_sm8250,
+ 		.xin_id = 0,
+ 		.type = SSPP_TYPE_VIG,
+ 		.clk_ctrl = DPU_CLK_CTRL_VIG0,
+@@ -77,7 +77,7 @@ static const struct dpu_sspp_cfg sm8250_sspp[] = {
+ 		.name = "sspp_1", .id = SSPP_VIG1,
+ 		.base = 0x6000, .len = 0x1f8,
+ 		.features = VIG_SDM845_MASK_SDMA,
+-		.sblk = &dpu_vig_sblk_qseed3_3_0,
++		.sblk = &dpu_vig_sblk_qseed3_3_0_sm8250,
+ 		.xin_id = 4,
+ 		.type = SSPP_TYPE_VIG,
+ 		.clk_ctrl = DPU_CLK_CTRL_VIG1,
+@@ -85,7 +85,7 @@ static const struct dpu_sspp_cfg sm8250_sspp[] = {
+ 		.name = "sspp_2", .id = SSPP_VIG2,
+ 		.base = 0x8000, .len = 0x1f8,
+ 		.features = VIG_SDM845_MASK_SDMA,
+-		.sblk = &dpu_vig_sblk_qseed3_3_0,
++		.sblk = &dpu_vig_sblk_qseed3_3_0_sm8250,
+ 		.xin_id = 8,
+ 		.type = SSPP_TYPE_VIG,
+ 		.clk_ctrl = DPU_CLK_CTRL_VIG2,
+@@ -93,7 +93,7 @@ static const struct dpu_sspp_cfg sm8250_sspp[] = {
+ 		.name = "sspp_3", .id = SSPP_VIG3,
+ 		.base = 0xa000, .len = 0x1f8,
+ 		.features = VIG_SDM845_MASK_SDMA,
+-		.sblk = &dpu_vig_sblk_qseed3_3_0,
++		.sblk = &dpu_vig_sblk_qseed3_3_0_sm8250,
+ 		.xin_id = 12,
+ 		.type = SSPP_TYPE_VIG,
+ 		.clk_ctrl = DPU_CLK_CTRL_VIG3,
+@@ -372,6 +372,7 @@ const struct dpu_mdss_cfg dpu_sm8250_cfg = {
+ 	.mixer = sm8250_lm,
+ 	.dspp_count = ARRAY_SIZE(sm8250_dspp),
+ 	.dspp = sm8250_dspp,
++	.reg_dma = &sm8250_reg_dma,
+ 	.dsc_count = ARRAY_SIZE(sm8250_dsc),
+ 	.dsc = sm8250_dsc,
+ 	.pingpong_count = ARRAY_SIZE(sm8250_pp),
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_catalog.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_catalog.c
+index 26d03f2a7..0cfd295e4 100644
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_catalog.c
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_catalog.c
+@@ -371,6 +371,19 @@ static const struct dpu_sspp_sub_blks dpu_vig_sblk_qseed3_2_4 =
+ static const struct dpu_sspp_sub_blks dpu_vig_sblk_qseed3_3_0 =
+ 				_VIG_SBLK(SSPP_SCALER_VER(3, 0));
+ 
++/* SM8250: the VIG IGC/gamut sit behind a LUTDMA window 0x200 into the pipe */
++static const struct dpu_sspp_sub_blks dpu_vig_sblk_qseed3_3_0_sm8250 = {
++	.scaler_blk = {.name = "scaler",
++		.version = SSPP_SCALER_VER(3, 0),
++		.base = 0xa00, .len = 0xa0,},
++	.csc_blk = {.name = "csc",
++		.base = 0x1a00, .len = 0x100,},
++	.lut_top_off = 0x200,
++	.format_list = plane_formats_yuv,
++	.num_formats = ARRAY_SIZE(plane_formats_yuv),
++	.rotation_cfg = NULL,
++};
++
+ static const struct dpu_sspp_sub_blks dpu_vig_sblk_qseed3_3_0_rot_v2 =
+ 			_VIG_SBLK_ROT(SSPP_SCALER_VER(3, 0),
+ 				      &dpu_rot_sc7280_cfg_v2, 0);
+@@ -479,6 +492,13 @@ static const struct dpu_dspp_sub_blks sm8550_dspp_sblk = {
+ 		.len = 0x1c, .version = 0x40003},
+ };
+ 
++/* v1.2: queue 0 only, no sideband queue and no LUT bus */
++static const struct dpu_reg_dma_cfg sm8250_reg_dma = {
++	.base = 0xac000, .len = 0x214,
++	.db_off = 0x0, .sb_off = 0x0,
++	.version = 0x10002,
++};
++
+ static const struct dpu_reg_dma_cfg sm8550_reg_dma = {
+ 	.base = 0xac000, .len = 0x800,
+ 	.db_off = 0x0, .sb_off = 0x400,
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_reg_dma.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_reg_dma.c
+index 982722e91..603617689 100644
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_reg_dma.c
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_reg_dma.c
+@@ -12,6 +12,9 @@
+ 
+ /* Command words: opcode in the high bits of the first dword */
+ #define SINGLE_REG_WRITE_OPCODE		BIT(28)
++#define BLK_REG_WRITE_OPCODE		(BIT(30) | BIT(28))
++#define BLK_WRITE_DECREMENT		BIT(31)
++#define BLK_WRITE_WRAP_MAX		0xf
+ #define LUTBUS_WRITE_OPCODE		(BIT(30) | BIT(29))
+ #define NO_OP_OPCODE			0
+ #define MAX_RELATIVE_OFF		(BIT(21) - 1)
+@@ -28,6 +31,8 @@
+ #define CTL_REG_DMA_TRIGGER		0xd4
+ #define REG_DMA_ERROR_CLEAR_MASK	(BIT(0) | BIT(1) | BIT(2) | BIT(16) | \
+ 					 BIT(17) | BIT(18) | BIT(19))
++#define REG_DMA_V1_ERROR_CLEAR_MASK	(BIT(0) | BIT(1) | BIT(2) | BIT(16) | \
++					 BIT(17) | BIT(18))
+ 
+ #define ADDR_ALIGN			BIT(8)
+ #define GUARD_BYTES			(ADDR_ALIGN - 1)
+@@ -39,6 +44,10 @@
+  * register write to the engine, so its address is part of the layout.
+  */
+ struct dpu_reg_dma_layout {
++	/* v1.x has neither: one queue per CTL, written register by register */
++	bool sideband;
++	bool lutbus;
++	u32 error_clear_mask;
+ 	u32 decode_sel;
+ 	u32 intr4_status;
+ 	u32 intr4_clear;
+@@ -67,7 +76,31 @@ static u32 v2_intr_clear(int ctl_idx) { return 0x1a0; }
+ static u32 v2_done(int ctl_idx) { return v2_done_mask[ctl_idx]; }
+ static u32 v2_db_done(int ctl_idx) { return v2_db_done_mask[ctl_idx]; }
+ 
++/*
++ * v1.1/v1.2 (DPU 6.x, SM8250) is the v2 register layout without the
++ * sideband queue or the LUT bus: queue 0 at the same offsets, the same
++ * software trigger in the CTL, the same done bits, and a 0x214-byte window
++ * that ends before v2's sideband registers.
++ */
++static const struct dpu_reg_dma_layout dpu_reg_dma_v1 = {
++	.sideband = false,
++	.lutbus = false,
++	.error_clear_mask = REG_DMA_V1_ERROR_CLEAR_MASK,
++	.decode_sel = 0x180ac114,
++	.intr4_status = 0x170,
++	.intr4_clear = 0x1b0,
++	.queue0 = v2_queue0,
++	.queue1 = v2_queue1,
++	.intr_status = v2_intr_status,
++	.intr_clear = v2_intr_clear,
++	.done_mask = v2_done,
++	.db_done_mask = v2_db_done,
++};
++
+ static const struct dpu_reg_dma_layout dpu_reg_dma_v2 = {
++	.sideband = true,
++	.lutbus = true,
++	.error_clear_mask = REG_DMA_ERROR_CLEAR_MASK,
+ 	.decode_sel = 0x180ac114,
+ 	.intr4_status = 0x170,
+ 	.intr4_clear = 0x1b0,
+@@ -91,6 +124,9 @@ static u32 v3_done(int ctl_idx) { return BIT(4); }
+ static u32 v3_db_done(int ctl_idx) { return BIT(3); }
+ 
+ static const struct dpu_reg_dma_layout dpu_reg_dma_v3 = {
++	.sideband = true,
++	.lutbus = true,
++	.error_clear_mask = REG_DMA_ERROR_CLEAR_MASK,
+ 	.decode_sel = 0x18180114,
+ 	.intr4_status = 0x170,
+ 	.intr4_clear = 0x1b0,
+@@ -237,14 +273,50 @@ void *dpu_reg_dma_lut_reserve(struct dpu_reg_dma_buf *buf, u32 block_sel, u32 tr
+ 	return &loc[2];
+ }
+ 
+-/* the v3 layout maps one window per CTL and the catalog length bounds them */
++/*
++ * A REG_BLK_WRITE_MULTIPLE of ndw dwords: the address walks a window of
++ * wrap registers from blk_offset, down or up, and wraps. Returns the
++ * payload area for the caller to fill, or NULL when it does not fit.
++ */
++__le32 *dpu_reg_dma_blk_write_multiple(struct dpu_reg_dma_buf *buf, u32 blk_offset, u32 wrap,
++				       bool decrement, u32 ndw)
++{
++	__le32 *loc;
++
++	if (!ndw || ndw > MAX_DWORDS_SZ || wrap < 2 || wrap > BLK_WRITE_WRAP_MAX)
++		return NULL;
++
++	loc = buf_reserve(buf, (2 + ndw) * sizeof(u32));
++	if (!loc)
++		return NULL;
++	loc[0] = cpu_to_le32(BLK_REG_WRITE_OPCODE | (blk_offset & MAX_RELATIVE_OFF));
++	loc[1] = cpu_to_le32((decrement ? BLK_WRITE_DECREMENT : 0) | wrap << 16 | ndw);
++	return &loc[2];
++}
++
++/* v1.x engines have no LUT bus: their LUT blocks take register writes */
++bool dpu_reg_dma_has_lutbus(struct dpu_reg_dma *dma)
++{
++	return dma->layout->lutbus;
++}
++
++/*
++ * The double-buffered queue's registers must fit the catalog window; so must
++ * the sideband queue's where there is one. The v3 layout maps one window per
++ * CTL and the catalog length bounds them.
++ */
+ bool dpu_reg_dma_ctl_valid(struct dpu_reg_dma *dma, int ctl_idx)
+ {
+ 	const struct dpu_reg_dma_layout *l = dma->layout;
++	u32 db_len = dma->cfg->len - dma->cfg->db_off;
+ 	u32 sb_len = dma->cfg->len - dma->cfg->sb_off;
+ 
+ 	if (ctl_idx < CTL_0 || ctl_idx >= CTL_MAX)
+ 		return false;
++	if (!l->sideband)
++		return l->queue0(ctl_idx) + 2 * sizeof(u32) <= db_len &&
++		       l->intr_status(ctl_idx) + sizeof(u32) <= db_len &&
++		       l->intr_clear(ctl_idx) + sizeof(u32) <= db_len;
+ 	return l->queue1(ctl_idx) + 2 * sizeof(u32) <= sb_len &&
+ 	       l->intr_status(ctl_idx) + sizeof(u32) <= sb_len &&
+ 	       l->intr_clear(ctl_idx) + sizeof(u32) <= sb_len;
+@@ -259,6 +331,8 @@ static int kick_off(struct dpu_reg_dma *dma, int ctl_idx, struct dpu_reg_dma_buf
+ 
+ 	if (!dpu_reg_dma_ctl_valid(dma, ctl_idx) || !buf->iova || !buf->index)
+ 		return -EINVAL;
++	if (!db && !l->sideband)
++		return -EOPNOTSUPP;
+ 	queue = db ? l->queue0(ctl_idx) : l->queue1(ctl_idx);
+ 
+ 	/* the command buffer is write-combined; publish it before the engine reads it */
+@@ -272,7 +346,7 @@ static int kick_off(struct dpu_reg_dma *dma, int ctl_idx, struct dpu_reg_dma_buf
+ 	status = DPU_REG_READ(win, l->intr4_status);
+ 	if (status) {
+ 		DRM_ERROR_RATELIMITED("LUTDMA error status %#x\n", status);
+-		DPU_REG_WRITE(win, l->intr4_clear, REG_DMA_ERROR_CLEAR_MASK);
++		DPU_REG_WRITE(win, l->intr4_clear, l->error_clear_mask);
+ 	}
+ 
+ 	DPU_REG_WRITE(win, queue, lower_32_bits(buf->iova));
+@@ -399,6 +473,9 @@ struct dpu_reg_dma *dpu_reg_dma_init(struct drm_device *dev, struct drm_gpuvm *v
+ 		return ERR_PTR(-ENOMEM);
+ 
+ 	switch (cfg->version) {
++	case DPU_REG_DMA_VER_1_2:
++		dma->layout = &dpu_reg_dma_v1;
++		break;
+ 	case DPU_REG_DMA_VER_2_0:
+ 		dma->layout = &dpu_reg_dma_v2;
+ 		break;
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_reg_dma.h b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_reg_dma.h
+index 0e0725810..824f6c890 100644
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_reg_dma.h
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_reg_dma.h
+@@ -34,6 +34,7 @@ struct drm_gem_object;
+ #define DPU_REG_DMA_SEL_VIG(n)		BIT(n)
+ #define DPU_REG_DMA_SEL_DSPP(n)		BIT(17 + (n))
+ 
++#define DPU_REG_DMA_VER_1_2		0x10002
+ #define DPU_REG_DMA_VER_2_0		0x20000
+ #define DPU_REG_DMA_VER_3_0		0x30000
+ 
+@@ -81,6 +82,10 @@ int dpu_reg_dma_single_write(struct dpu_reg_dma_buf *buf, u32 blk_offset, u32 va
+ void *dpu_reg_dma_lut_reserve(struct dpu_reg_dma_buf *buf, u32 block_sel, u32 trans_size,
+ 			      u32 len);
+ 
++__le32 *dpu_reg_dma_blk_write_multiple(struct dpu_reg_dma_buf *buf, u32 blk_offset, u32 wrap,
++				       bool decrement, u32 ndw);
++bool dpu_reg_dma_has_lutbus(struct dpu_reg_dma *dma);
++
+ bool dpu_reg_dma_ctl_valid(struct dpu_reg_dma *dma, int ctl_idx);
+ int dpu_reg_dma_kick_off_sb(struct dpu_reg_dma *dma, int ctl_idx, struct dpu_reg_dma_buf *buf);
+ int dpu_reg_dma_last_cmd_sb(struct dpu_reg_dma *dma, int ctl_idx);
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_sspp.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_sspp.c
+index 854e39c41..1de2a3dd3 100644
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_sspp.c
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_sspp.c
+@@ -759,8 +759,9 @@ struct dpu_hw_sspp *dpu_hw_sspp_init(struct drm_device *dev,
+ }
+ 
+ /*
+- * VIG IGC v6 and gamut v6.1 (SM8550, SM8650, SM8750), loaded through the
+- * LUTDMA double-buffered queue, which addresses the pipe from lut_top_off.
++ * VIG IGC v6 and gamut v6.1 (SM8550, SM8650, SM8750) or v6.0 (SM8250),
++ * loaded through the LUTDMA double-buffered queue, which addresses the pipe
++ * from lut_top_off.
+  * The shared opmode register holds the gamut mode and enable in bits 4:0
+  * and the IGC enable and bank in bits 9:8. Each block has two banks: the
+  * idle one is written and the opmode, latched by the pipe's flush,
+@@ -784,6 +785,80 @@ struct dpu_hw_sspp *dpu_hw_sspp_init(struct drm_device *dev,
+ #define LUT_BUF_SIZE		(LUT_GAMUT_LEN + 5 * sizeof(u32) + \
+ 				 (3 * (LUT_IGC_WORDS + 2) + 4) * LUT_OP_SIZE)
+ 
++/*
++ * Gamut v6.0 (SM8250) has no LUT bus: per table, select it and its bank
++ * (TABLE_SEL), then stream {lower, upper} pairs through the colour data
++ * ports with a two-register decrementing block write, as downstream sde's
++ * reg_dmav1_setup_vig_gamutv5() does.
++ */
++#define LUT_GAMUT_TBL_SEL	0x4
++#define LUT_GAMUT_UPPER		0x8
++#define LUT_GAMUT_LOWER		0xc
++#define LUT_GAMUT_TBL0_SEL	BIT(12)
++#define LUT_GAMUT_SEL_TABLE_B	BIT(11)
++#define LUT_GAMUT_REGS_DWORDS	(LUT_GAMUT_TBL_NUM * (LUT_OP_SIZE / sizeof(u32) + 2 + \
++				 2 * LUT_GAMUT_TBL_LEN))
++#define LUT_BUF_SIZE_REGS	(LUT_GAMUT_REGS_DWORDS * sizeof(u32) + 5 * sizeof(u32) + \
++				 (3 * (LUT_IGC_WORDS + 2) + 4) * LUT_OP_SIZE)
++
++/*
++ * The data format is not in downstream, which copies a userspace table
++ * through. Measured on the Pocket Max (solid-colour and identity tables,
++ * then gradients): 10 bits per component, LSB aligned; the upper port (c0)
++ * carries red, the lower port blue in bits 9:0 and green in bits 25:16. A
++ * 12-bit value wraps in the 10-bit field, which full-scale colours cannot
++ * show but every gradient does.
++ */
++#define LUT_GAMUT_BITS		10
++
++static u32 gamut_component(u32 v)
++{
++	return drm_color_lut32_extract(v, LUT_GAMUT_BITS);
++}
++
++static int queue_gamut_regs(struct dpu_hw_sspp *ctx, u32 blk, const struct drm_color_lut32 *lut,
++			    bool table_b)
++{
++	struct dpu_reg_dma_buf *buf = &ctx->lut_buf;
++	int t, k, ret;
++
++	for (t = 0; t < LUT_GAMUT_TBL_NUM; t++) {
++		__le32 *data;
++
++		ret = dpu_reg_dma_single_write(buf, blk + LUT_GAMUT_TBL_SEL,
++					       (LUT_GAMUT_TBL0_SEL << t) |
++					       (table_b ? LUT_GAMUT_SEL_TABLE_B : 0));
++		if (ret)
++			return ret;
++
++		/* lower then upper per entry: start at lower, step down, wrap after two */
++		data = dpu_reg_dma_blk_write_multiple(buf, blk + LUT_GAMUT_LOWER, 2, true,
++						      2 * LUT_GAMUT_TBL_LEN);
++		if (!data)
++			return -ENOSPC;
++
++		/*
++		 * The 17^3 nodes, red fastest, rotate through the four tables:
++		 * node n is entry n / 4 of table n % 4, i.e. table (r + g + b) % 4,
++		 * which puts the four corners of every interpolation tetrahedron
++		 * in four different tables. Measured with an identity table.
++		 */
++		for (k = 0; k < LUT_GAMUT_TBL_LEN; k++) {
++			int n = k * LUT_GAMUT_TBL_NUM + t;
++			u32 upper = 0, lower = 0;
++
++			if (n < LUT_GAMUT_NODES) {
++				upper = gamut_component(lut[n].red);
++				lower = gamut_component(lut[n].green) << 16 |
++					gamut_component(lut[n].blue);
++			}
++			data[2 * k] = cpu_to_le32(lower);
++			data[2 * k + 1] = cpu_to_le32(upper);
++		}
++	}
++	return 0;
++}
++
+ static u32 igc_val(const struct drm_color_lut32 *lut, int i, int chan)
+ {
+ 	u32 v = chan == 0 ? lut[i].red : chan == 1 ? lut[i].green : lut[i].blue;
+@@ -855,7 +930,9 @@ int dpu_hw_sspp_setup_luts(struct dpu_hw_sspp *ctx, struct drm_property_blob *ig
+ 	if (!ret && lut3d) {
+ 		bool table_b = (ctx->lut_opmode & LUT_GAMUT_MASK) == LUT_GAMUT_EN;
+ 
+-		ret = queue_gamut(ctx, lut3d->data, table_b);
++		ret = dpu_reg_dma_has_lutbus(ctx->reg_dma) ?
++			queue_gamut(ctx, lut3d->data, table_b) :
++			queue_gamut_regs(ctx, blk, lut3d->data, table_b);
+ 		opmode |= LUT_GAMUT_EN | (table_b ? LUT_GAMUT_MODE_17B : 0);
+ 	}
+ 
+@@ -896,7 +973,8 @@ int dpu_hw_sspp_set_reg_dma(struct dpu_hw_sspp *ctx, struct dpu_reg_dma *reg_dma
+ 	if (!ctx->cap->sblk->lut_top_off)
+ 		return 0;
+ 
+-	ret = dpu_reg_dma_buf_alloc(reg_dma, &ctx->lut_buf, LUT_BUF_SIZE);
++	ret = dpu_reg_dma_buf_alloc(reg_dma, &ctx->lut_buf,
++				    dpu_reg_dma_has_lutbus(reg_dma) ? LUT_BUF_SIZE : LUT_BUF_SIZE_REGS);
+ 	if (ret)
+ 		return ret;
+ 	ctx->reg_dma = reg_dma;
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_plane.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_plane.c
+index c557454ea..7e0dedb0e 100644
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_plane.c
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_plane.c
+@@ -1552,9 +1552,12 @@ static int dpu_plane_virtual_assign_resources(struct drm_crtc *crtc,
+ 	if (!plane_state->fb)
+ 		return -EINVAL;
+ 
++	/* the offline rotator reserves its own pipe, which needs the LUT blocks too */
++	reqs.luts = dpu_plane_get_luts(state, plane_state, &igc, &lut3d);
++
+ 	pstate->needs_rotate = false;
+ 	ret = dpu_plane_rot_check(plane, plane_state, crtc_state, global_state,
+-				  crtc, dpu_kms->catalog);
++				  crtc, dpu_kms->catalog, reqs.luts);
+ 	if (ret)
+ 		return ret < 0 ? ret : 0;
+ 
+@@ -1568,7 +1571,6 @@ static int dpu_plane_virtual_assign_resources(struct drm_crtc *crtc,
+ 		(plane_state->src_h >> 16 != plane_state->crtc_h);
+ 
+ 	reqs.rot90 = drm_rotation_90_or_270(plane_state->rotation);
+-	reqs.luts = dpu_plane_get_luts(state, plane_state, &igc, &lut3d);
+ 
+ 
+ 	unscaled_de = dpu_de && dpu_de_unscaled && !reqs.scale && !reqs.yuv &&
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_plane_rot.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_plane_rot.c
+index 03bcb914b..369e68749 100644
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_plane_rot.c
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_plane_rot.c
+@@ -209,11 +209,12 @@ int dpu_plane_rot_check(struct drm_plane *plane,
+ 			const struct drm_crtc_state *crtc_state,
+ 			struct dpu_global_state *global_state,
+ 			struct drm_crtc *crtc,
+-			const struct dpu_mdss_cfg *catalog)
++			const struct dpu_mdss_cfg *catalog,
++			bool luts)
+ {
+ 	struct dpu_kms *dpu_kms = dpu_plane_rot_kms(plane);
+ 	struct dpu_plane_state *pstate = to_dpu_plane_state(plane_state);
+-	struct dpu_rm_sspp_requirements reqs;
++	struct dpu_rm_sspp_requirements reqs = {};
+ 	int ret;
+ 
+ 	/*
+@@ -232,6 +233,8 @@ int dpu_plane_rot_check(struct drm_plane *plane,
+ 	reqs.scale = (plane_state->fb->height != drm_rect_width(&plane_state->dst)) ||
+ 		     (plane_state->fb->width != drm_rect_height(&plane_state->dst));
+ 	reqs.rot90 = false;
++	/* a plane with a colour pipeline needs a VIG that carries the LUT blocks */
++	reqs.luts = luts;
+ 	pstate->pipe[0].sspp = dpu_rm_reserve_sspp(&dpu_kms->rm, global_state,
+ 						   crtc, &reqs);
+ 	if (!pstate->pipe[0].sspp)
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_plane_rot.h b/drivers/gpu/drm/msm/disp/dpu1/dpu_plane_rot.h
+index e570c73ca..e210ea044 100644
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_plane_rot.h
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_plane_rot.h
+@@ -28,7 +28,8 @@ int dpu_plane_rot_check(struct drm_plane *plane,
+ 			const struct drm_crtc_state *crtc_state,
+ 			struct dpu_global_state *global_state,
+ 			struct drm_crtc *crtc,
+-			const struct dpu_mdss_cfg *catalog);
++			const struct dpu_mdss_cfg *catalog,
++			bool luts);
+ 
+ int dpu_plane_rot_prepare(struct drm_plane *plane, struct dpu_plane_rot *rot,
+ 			  struct drm_plane_state *new_state);

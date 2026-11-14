@@ -1,0 +1,8 @@
+# novadeck: enable the weekly fstrim.timer. util-linux ships it, but the stock 99-default.preset
+# is "disable *", so it never ran: /home (ext4, mounted without `discard`) was never trimmed, and an
+# SD card or UFS whose controller is never told which blocks are free gets slower with every
+# Steam install, update and uninstall. The btrfs root slots already discard on their own (async).
+# fstrim.service trims every mounted filesystem that supports it, so this covers an SD card and an
+# internal install alike. As with the other presets, a build-time timers.target.wants symlink ships
+# alongside, because an image whose machine-id is already set never runs preset-all.
+enable fstrim.timer

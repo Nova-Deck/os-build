@@ -39,6 +39,29 @@ skip() { SKIP=$((SKIP+1)); printf '  skip %s\n' "$1"; }
 
 [ -d "${UNITDIRS[0]}" ] || { echo "no unit dir: ${UNITDIRS[0]}" >&2; exit 1; }
 
+# --- every preset `enable` ships its .wants symlink --------------------------------------------
+# A preset only acts in preset-all, which systemd runs on a first boot only. A device that takes
+# an OTA never gets another first boot, so a unit enabled by a preset alone stays off on every
+# updated install while working on a freshly flashed card. novadeck-panel-calibration shipped that
+# way (v0.9.3). The build-time symlink in the read-only /etc is what an updated slot sees, so each
+# `enable` line must have one. Runs before the systemd-analyze gate: it needs only the tree.
+OVL="$ROOT/rootfs/overlay"
+np=0
+for p in "$OVL"/usr/lib/systemd/system-preset/*.preset; do
+  [ -e "$p" ] || continue
+  while read -r verb unit _; do
+    [ "$verb" = enable ] || continue
+    np=$((np+1))
+    links=("$OVL"/etc/systemd/system/*.wants/"$unit")
+    if [ -L "${links[0]}" ]; then
+      ok "$unit: preset + ${links[0]#"$OVL"/}"
+    else
+      bad "$unit: enabled by $(basename "$p") but no etc/systemd/system/*.wants/$unit symlink -- off after an OTA"
+    fi
+  done < "$p"
+done
+[ "$np" -gt 0 ] || bad "no preset enable lines found under $OVL/usr/lib/systemd/system-preset"
+
 if ! command -v systemd-analyze >/dev/null 2>&1; then
   skip "systemd-analyze not installed -- unit syntax unverified"
   printf '\n%s: %d passed, %d failed, %d skipped\n' "$(basename "$0")" "$PASS" "$FAIL" "$SKIP"

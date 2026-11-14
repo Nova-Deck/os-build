@@ -114,6 +114,11 @@ this image `/etc/passwd` and `/var` are *build products* rather than device stat
   (RAM spans 8–16 GB across supported SKUs, so percentages mean different headroom per unit),
   reports off (the default is one journal line per second, onto an SD card), and the session spine
   protected. Enabled by `60-novadeck-earlyoom.preset` + a `multi-user.target.wants` symlink.
+- `usr/lib/systemd/system-preset/60-novadeck-fstrim.preset` + `etc/systemd/system/timers.target.wants/fstrim.timer`
+  — the weekly trim of every mounted filesystem that supports it. Without it `/home` (ext4, no
+  `discard` mount option) is never trimmed, and the card or UFS slows down as Steam installs and
+  removes games. The btrfs root slots discard on their own. It runs from the same root slot on an
+  SD card and on an internal install.
 - `usr/lib/systemd/zram-generator.conf` — the image's only swap device, `ram/2` compressed in RAM.
   **Coupled to the kernel:** it needs `CONFIG_ZRAM` + the zstd backend, which `kernel/build.sh`
   asserts, because without them there is no `zram0`, no swap, and no error.

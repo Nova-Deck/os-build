@@ -171,11 +171,22 @@ build() {
     -Denable_zenity=false \
     -Dpipewire=enabled
   meson compile -C build
+
+  # The AutoHDR colour provider (patches 0047/0048): its own shared object, which gamescope
+  # dlopen()s, so a missing or incompatible provider leaves the native path. Built here rather
+  # than as a separate package because it only ever ships with this gamescope. Flags follow its
+  # upstream CMake build: C++20, fast math as in gamescope, one exported symbol, soname 2.
+  ${CXX:-c++} ${CXXFLAGS} -std=c++20 -fPIC -ffast-math \
+    -fvisibility=hidden -fvisibility-inlines-hidden \
+    -DGAMESCOPE_COLOR_PROVIDER_BUILDING_LIBRARY -Igamescope/src \
+    -shared -Wl,-soname,libnovadeck-autohdr.so.2 ${LDFLAGS} \
+    -o build/libnovadeck-autohdr.so.2 gamescope/src/autohdr/novadeck-autohdr.cpp
 }
 
 package() {
   DESTDIR="${pkgdir}" meson install -C build \
     --skip-subprojects
+  install -Dm 755 build/libnovadeck-autohdr.so.2 -t "${pkgdir}"/usr/lib/
   install -Dm 644 gamescope/LICENSE -t "${pkgdir}"/usr/share/licenses/gamescope/
 }
 

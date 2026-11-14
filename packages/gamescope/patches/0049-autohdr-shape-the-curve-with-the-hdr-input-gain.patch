@@ -1,0 +1,74 @@
+From: Philippe Simons <simons.philippe@gmail.com>
+Subject: [PATCH] autohdr: shape the curve with the HDR input gain instead of clipping
+
+With a Steam HDR input gain above 1 the AutoHDR game plane flattened
+every SDR input above (1/gain)^(1/2.2) to one output level. On a Pocket
+Max (800-nit panel, gain 2.25) everything from ~0.69 SDR input up came
+out at ~427 nits, so a sunlit sky became one flat area and a menu that
+marks its selection by brightness lost it.
+
+The provider handed the gain back in its plan, and gamescope applies the
+plan's gain in two places: after map_color in the 3D LUT, and in the
+shaper LUT, which never sees map_color. The shaper clamps at the output
+peak, so gain x SDR-linear saturated it at input 0.69 and every brighter
+input read the top 3D LUT node. Even without that, gain x the expanded
+result would clip everything from ~0.85 input up at the panel peak.
+
+The plan now carries a gain of 1, so the shaper is the identity, and
+map_color applies the gain itself: the expansion aims at target / gain,
+so SDR white still lands on the target and, compared with gain 1, a
+higher gain lifts the mid-tones. At gain 1 the mapping is unchanged.
+The gain is held to [1/64, 64], since gamescope takes any non-negative
+atom value and an extreme one drives the curve to 0/0 (a NaN LUT, a
+black game). A gain of 0 is treated as 1.
+
+Pocket Max, SDR input to nits at 800 nits target, 100 nits SDR, gain
+2.25. Mid-tones come out darker than before, because the old gain also
+pushed them up while it clipped everything above:
+
+  input       0.25  0.5  0.7  0.85  1.0
+  before        31  181  427   427  427
+  after         19   98  223   405  800
+  gain 1        14   81  197   378  800
+---
+ src/autohdr/novadeck-autohdr.cpp | 18 ++++++++++++++++--
+ 1 file changed, 16 insertions(+), 2 deletions(-)
+
+diff --git a/src/autohdr/novadeck-autohdr.cpp b/src/autohdr/novadeck-autohdr.cpp
+index f894cf04..8ca15904 100644
+--- a/src/autohdr/novadeck-autohdr.cpp
++++ b/src/autohdr/novadeck-autohdr.cpp
+@@ -50,9 +50,13 @@ gamescope_color_rgb map_color(gamescope_color_rgb color, const void *data)
+     if (!(maximum > 0.0f && transform->target_nits > 0.0f))
+         return {0.0f, 0.0f, 0.0f};
+ 
++    // The HDR input gain shapes the curve rather than scaling its result: the
++    // expansion aims at target / gain, so SDR white still lands on the target and
++    // a higher gain lifts the mid-tones without clipping the highlights.
++    const float curve_nits = transform->target_nits / transform->input_gain;
+     // One RGB gain preserves the SDR channel ratios.
+     const float mapped = inverse_tone_map(maximum / transform->target_nits,
+-        transform->sdr_nits, transform->target_nits) * transform->target_nits;
++        transform->sdr_nits, curve_nits) * transform->target_nits;
+     const float gain = std::min(mapped, transform->target_nits) / maximum;
+     return {color.r * gain, color.g * gain, color.b * gain};
+ }
+@@ -83,7 +87,17 @@ gamescope_color_plan configure(void *instance, const gamescope_color_config *con
+ {
+     auto &state = *static_cast<Instance *>(instance);
+     state.color = *config;
+-    return {config->input_gain, config->target_nits, map_color, &state.color};
++    // gamescope also applies the plan's gain in its shaper LUT, which never sees
++    // map_color: a gain above 1 clamps the shaper below SDR white, and every
++    // brighter input then reads the same 3D LUT node. map_color takes the gain.
++    // gamescope passes any non-negative atom value. Outside this range target /
++    // gain drives inverse_tone_map to 0/0 or inf/inf, and a NaN LUT is black.
++    constexpr float min_gain = 1.0f / 64.0f;
++    constexpr float max_gain = 64.0f;
++    if (!(state.color.input_gain > 0.0f))
++        state.color.input_gain = 1.0f;
++    state.color.input_gain = std::clamp(state.color.input_gain, min_gain, max_gain);
++    return {1.0f, config->target_nits, map_color, &state.color};
+ }
+ 
+ gamescope_color_present_result present(void *instance,

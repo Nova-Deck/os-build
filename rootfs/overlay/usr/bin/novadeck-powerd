@@ -93,6 +93,17 @@ SCX_BINARY = Path("/usr/bin/scx_lavd")
 SCX_SYSFS = Path("/sys/kernel/sched_ext")
 SCX_TIMEOUT = 15
 
+# The per-game `autoHdr` tweak drives gamescope's auto_hdr ConVar over gamescopectl. The session
+# runs as deck, so the control socket is under /run/user/<uid>; the shared resolver finds the live
+# one (and exports XDG_RUNTIME_DIR + GAMESCOPE_WAYLAND_DISPLAY), exactly as novadeck-rest does.
+GAMESCOPE_DISPLAY_LIB = os.environ.get(
+    "NOVADECK_GAMESCOPE_DISPLAY_LIB", "/usr/lib/novadeck/gamescope-display.sh")
+GAMESCOPECTL_TIMEOUT = 5
+# Ticks (3 s each) to wait after a failed set before trying again.
+AUTO_HDR_RETRY_TICKS = 10
+# auto_hdr_gamescope before powerd has seen any compositor (None means "seen one, it went away").
+_UNSEEN = object()
+
 # Resolving a D-Bus sender to a pid costs a round trip to the bus daemon. It only ever happens on
 # an actual profile change (a human action), so the cost is irrelevant -- but the timeout must stay
 # short, because a wedged bus must not turn a profile set into a hang.
@@ -310,6 +321,12 @@ def shell_env():
     return env
 
 
+def panel_hdr_nits(env):
+    """The board's declared HDR peak from device-env; 0 (SDR) when absent or malformed."""
+    value = env.get("NOVADECK_PANEL_HDR_NITS", "")
+    return int(value) if value.isdigit() else 0
+
+
 def ints_from_file(path):
     return sorted(int(v) for v in read_text(path).split() if v.isdigit())
 
@@ -500,6 +517,19 @@ class NovadeckPower:
         # One-tick debounce latch for a per-game `scheduler` tweak going absent; see
         # apply_scheduler_tweak(). Only ever True between two consecutive ticks.
         self.scheduler_drop_seen = False
+        # Per-game AutoHDR (game-tweaks.json `autoHdr`), only on a board that declares an HDR
+        # panel — the same fact novadeck-session gates gamescope's HDR on. The system-wide value
+        # is what gamescope was launched with (session.conf's gamescope_auto_hdr), read back from
+        # its environ per compositor, so a restarted session re-baselines itself. auto_hdr_applied
+        # is what we last left the ConVar at; see apply_auto_hdr_tweak().
+        self.hdr_panel = panel_hdr_nits(self.env) > 0
+        self.auto_hdr_gamescope = _UNSEEN
+        self.auto_hdr_baseline = False
+        self.auto_hdr_applied = None
+        self.auto_hdr_override = None
+        self.auto_hdr_drop_seen = False
+        self.auto_hdr_retry_ticks = 0
+        self.auto_hdr_failing = False
         self.smoothed_temp = 0.0
         self.last_pwm = 0
         self.suspended = False
@@ -1279,6 +1309,7 @@ class NovadeckPower:
                     })
                 values = self.perf.tick()
                 self.apply_scheduler_tweak(values)
+                self.apply_auto_hdr_tweak(values, self.perf.gamescope_pid)
         except Exception as exc:
             print(f"novadeck-powerd: perf tick failed: {exc}", file=sys.stderr)
         return True
@@ -1313,6 +1344,78 @@ class NovadeckPower:
         # Deliberately not a PropertiesChanged on CpuScheduler: the property is the user's choice
         # and it has not changed. ActiveCpuScheduler is where the override is observable.
         self.apply_scheduler(target)
+
+    def apply_auto_hdr_tweak(self, values, gamescope_pid):
+        """Honour the running game's `autoHdr` tweak by setting gamescope's auto_hdr ConVar, and
+        put back the value gamescope was launched with when the game exits. The ConVar is read
+        on every frame, so this needs no relaunch of the game or the session.
+
+        Only a CHANGE costs a gamescopectl spawn. If gamescope's value is changed behind our back
+        (a manual gamescopectl), we do not notice until our own target next changes."""
+        if not self.hdr_panel:
+            return
+        if gamescope_pid is None:
+            self.auto_hdr_gamescope = None
+            return
+        if gamescope_pid != self.auto_hdr_gamescope:
+            self.auto_hdr_baseline = novadeck_perf.environ_convar_bool(gamescope_pid, "auto_hdr")
+            # A compositor that started while we were watching is at its launch value, whatever
+            # we set on the one before it. The first compositor this powerd sees is unknown: a
+            # previous powerd may have left an override on it (stopped mid-game, no restore), so
+            # the first decision is always written.
+            self.auto_hdr_applied = None if self.auto_hdr_gamescope is _UNSEEN else self.auto_hdr_baseline
+            self.auto_hdr_gamescope = gamescope_pid
+            self.auto_hdr_retry_ticks = 0
+        want = values.get("autoHdr")
+        # The same one-tick debounce as the scheduler tweak, for the same reason: a single tick
+        # where the /proc walk finds no game would otherwise flip HDR off and on under the game.
+        if want is None and self.auto_hdr_override is not None and not self.auto_hdr_drop_seen:
+            self.auto_hdr_drop_seen = True
+            return
+        self.auto_hdr_drop_seen = False
+        self.auto_hdr_override = want
+        target = self.auto_hdr_baseline if want is None else want
+        if target == self.auto_hdr_applied:
+            return
+        # A failed set is retried, but not every tick: each attempt can block this loop (the fan
+        # shares it) for the socket scan plus up to GAMESCOPECTL_TIMEOUT.
+        if self.auto_hdr_retry_ticks > 0:
+            self.auto_hdr_retry_ticks -= 1
+            return
+        reason = "game override" if want is not None else "session value"
+        error = self.set_gamescope_convar("auto_hdr", "1" if target else "0")
+        if error is None:
+            self.auto_hdr_applied = target
+            self.auto_hdr_failing = False
+            print(f"novadeck-powerd: auto_hdr {int(target)} ({reason})", file=sys.stderr)
+            return
+        # Logged once per failing streak, not on every retry.
+        if not self.auto_hdr_failing:
+            print(f"novadeck-powerd: auto_hdr {int(target)} ({reason}) failed, retrying every "
+                  f"{AUTO_HDR_RETRY_TICKS * 3}s: {error}", file=sys.stderr)
+        self.auto_hdr_failing = True
+        self.auto_hdr_retry_ticks = AUTO_HDR_RETRY_TICKS
+
+    def set_gamescope_convar(self, name, value):
+        """Set a gamescope ConVar through gamescopectl on the live control socket. Returns None
+        on success, else a one-line reason."""
+        script = '. "$1" && gs_resolve_display && exec gamescopectl "$2" "$3"'
+        try:
+            proc = subprocess.run(
+                ["sh", "-c", script, "sh", GAMESCOPE_DISPLAY_LIB, name, value],
+                check=False,
+                text=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                timeout=GAMESCOPECTL_TIMEOUT,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return str(exc)
+        if proc.returncode != 0:
+            # The resolver fails silently (exit 1, no stderr) when no live socket exists.
+            lines = proc.stderr.strip().splitlines()
+            return lines[-1] if lines else f"no live gamescope socket or exit {proc.returncode}"
+        return None
 
     def fan_safe(self):
         if not self.fan_pwm:

@@ -507,6 +507,7 @@ test: verify-lock ## Run the offline bootctl/post-install/boot-disk/pairingd/pow
 	bash $(TESTS_DIR)/test-fan-curve.sh
 	bash $(TESTS_DIR)/test-power-gpu.sh
 	bash $(TESTS_DIR)/test-cpu-scheduler.sh
+	bash $(TESTS_DIR)/test-auto-hdr.sh
 	bash $(TESTS_DIR)/test-panel-calibration.sh
 	bash $(TESTS_DIR)/test-decky.sh
 	bash $(TESTS_DIR)/test-splash.sh

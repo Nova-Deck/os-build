@@ -35,6 +35,15 @@ const THUNK_OPTIONS = [
   { data: "off", label: "Force off" },
 ];
 
+// "" is absent-from-the-file: the game follows what the session started gamescope with
+// (session.conf's gamescope_auto_hdr, off by default). "off" is spelled out for the same reason
+// as the scheduler's "none": a session that turns AutoHDR on for everything can exempt one title.
+const AUTO_HDR_OPTIONS = [
+  { data: "", label: "(unchanged)" },
+  { data: "on", label: "On" },
+  { data: "off", label: "Off" },
+];
+
 const NICE_MIN = -20;
 const NICE_MAX = 19;
 
@@ -235,6 +244,25 @@ export function Games({ config, setConfig }: { config: Config; setConfig: Dispat
           </div>
           <SelectEdit label="Scheduler" value={settings.scheduler || ""} options={SCHEDULER_OPTIONS}
             disabled={!gameEnabled} onChange={(v) => patch({ scheduler: v || undefined })} />
+        </PanelSection>
+      ) : null}
+      {/* Per-game only, like the scheduler: the system-wide value is gamescope's launch value,
+          and only on a board with an HDR panel — elsewhere powerd ignores the key, so the
+          control would write a setting nothing acts on. */}
+      {isGame && config.hdrPanel ? (
+        <PanelSection title="HDR">
+          <div className="novadeck-field-note">
+            AutoHDR expands this game's SDR picture to HDR while it runs, then restores the
+            session's setting. Games that output HDR themselves are left alone. Applied within a
+            few seconds — no relaunch needed.
+          </div>
+          <SelectEdit
+            label="AutoHDR"
+            value={settings.autoHdr === undefined ? "" : settings.autoHdr ? "on" : "off"}
+            options={AUTO_HDR_OPTIONS}
+            disabled={!gameEnabled}
+            onChange={(v) => patch({ autoHdr: v === "" ? undefined : v === "on" })}
+          />
         </PanelSection>
       ) : null}
       <PanelSection title="X86 EMULATION">

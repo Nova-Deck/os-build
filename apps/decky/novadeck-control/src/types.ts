@@ -19,6 +19,9 @@ export interface GameTweaks {
   /** Per-game only — the system-wide scheduler is PowerStatus.cpuScheduler, not a tweak. */
   scheduler?: string;
   fexProfile?: string;
+  /** Per-game only. true/false force gamescope's AutoHDR on/off while this game runs; absent
+   *  follows what the session started gamescope with. Acted on only on an HDR panel. */
+  autoHdr?: boolean;
   /** EXPLICIT overrides only — an entry pins that thunk at FEX's highest config priority,
    *  over Valve's per-title curation. "As shipped" is NO entry, never `false`. */
   thunks?: Record<string, boolean>;
@@ -74,6 +77,8 @@ export interface Config {
   fexThunks: string[];
   power: PowerStatus;
   osVersion: string;
+  /** The board declares an HDR panel (device-env NOVADECK_PANEL_HDR_NITS > 0) — gates AutoHDR. */
+  hdrPanel?: boolean;
   installedGames?: InstalledGame[];
   game?: GameRef | null;
 }

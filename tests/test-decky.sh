@@ -466,6 +466,19 @@ grep -q 'as shipped' "$PLUGIN/src/tabs/Games.tsx" \
   && ok "thunk control is tri-state — 'as shipped' is a distinct default state, not a checkbox" \
   || bad "no 'as shipped' state in the thunk control: a plain checkbox would write a value for every thunk and seize Valve's per-title curation"
 
+# --- the AutoHDR control -------------------------------------------------------------------
+# powerd ignores `autoHdr` on a board without an HDR panel (tests/test-auto-hdr.sh), so the tab
+# may only offer it where the backend reports one — from device-env, the session's own HDR gate.
+grep -q '"hdrPanel": hdr_panel()' "$PLUGIN/main.py" \
+  && ok "_build_config serves hdrPanel from device-env" \
+  || bad "main.py does not serve hdrPanel — the AutoHDR control cannot be gated on the panel"
+grep -q 'NOVADECK_PANEL_HDR_NITS' "$PLUGIN/py_modules/novadeck_control/system.py" \
+  && ok "hdr_panel reads the board's declared HDR peak" \
+  || bad "hdr_panel does not read NOVADECK_PANEL_HDR_NITS — a second HDR fact that can disagree with the session"
+grep -q 'isGame && config.hdrPanel' "$PLUGIN/src/tabs/Games.tsx" \
+  && ok "AutoHDR control is per-game and HDR-panel only" \
+  || bad "AutoHDR control is not gated on isGame && hdrPanel — it would write a key nothing acts on"
+
 # --- the plugin backend --------------------------------------------------------------------
 if python3 -m py_compile "$PLUGIN/main.py" "$PLUGIN"/py_modules/novadeck_control/*.py 2>/dev/null; then
   ok "novadeck-control backend compiles (the loader would swallow a SyntaxError into a blank tab)"

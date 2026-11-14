@@ -37,6 +37,9 @@ root (the `gamescope/` checkout inside makepkg's `$srcdir`) by
 0044-drm-output-luts-carry-sdr-on-hdr-output.patch
 0045-drm-per-plane-color-management-through-msm-plane-color-pipelines.patch    (ConVar drm_plane_luts, default on; needs kernel 0394, or 0398 on SM8250)
 0046-color-clamp-the-bt2390-eetf-input-to-the-source-range.patch
+0047-gamescope-add-hooks-for-an-optional-external-color-provider.patch    (ConVar auto_hdr; env gamescope_auto_hdr=1)
+0048-autohdr-the-autohdr-colour-provider.patch    (built by ../PKGBUILD into libnovadeck-autohdr.so.2)
+0049-autohdr-shape-the-curve-with-the-hdr-input-gain.patch
 ```
 
 `0008`-`0013` are **retired** (see below). The numbering is kept as-is rather than compacted, so
@@ -475,6 +478,14 @@ whose DPU has plane LUTs may declare one (`tests/test-display-profile.sh` enforc
   extrapolated the rolloff spline into NaN, which zeroed the top of the PQ shaper and, through its
   inverse, the whole 3D LUT: every HDR10 frame black on the Pocket Max (800-nit panel). `0043` made
   it reachable by engaging the EETF from an app's own metadata. Found with `tools/hdr-test`.
+- `0047`/`0048` are AutoHDR, ported from armada PR #843 (by Raxcoms): `0047` is the host bridge,
+  which dlopen()s a colour provider and gives the converted game layer its own LUT pair; `0048`
+  is the provider source, unchanged from the PR. Off by default.
+- `0049` (ours) keeps the HDR input gain out of the provider's plan. gamescope applies the plan
+  gain in the shaper LUT as well, and the shaper never sees the provider map, so a gain above 1
+  clamped it below SDR white: on the Pocket Max (Steam gain 2.25) everything above ~0.69 SDR input
+  came out flat at ~427 nits (#148). The provider now uses the gain to shape the curve (the expansion
+  aims at target / gain), so SDR white still lands on the panel target. At gain 1 nothing changes.
 
 Drop the patch files here with those exact names (or rename and update `source.pin`'s
 `patches:` line). **Until a declared patch is present, `make overlay` / `make base` fail fast**

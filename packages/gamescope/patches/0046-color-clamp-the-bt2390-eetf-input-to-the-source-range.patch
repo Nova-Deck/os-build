@@ -1,0 +1,35 @@
+From: Philippe Simons <simons.philippe@gmail.com>
+Subject: [PATCH] color: clamp the BT.2390 EETF input to the source range
+
+BT.2390 defines the normalised input E1 on [0, 1]; a signal brighter
+than the source (mastering) peak clips to it. eetf_2390_t::apply_pq()
+did not clamp, so for E1 > 1 the Hermite rolloff spline extrapolated as
+a cubic, and far enough out pq_to_nits() took a power of a negative
+number and returned NaN.
+
+0043 made this reachable: it engages the EETF from an application's own
+HDR metadata, and content does exceed its declared MaxCLL. On a Pocket
+Max (800-nit panel, 1000-nit source) a 10000-nit input reached PQ 4.56,
+the NaN quantised to 0 at the top of the PQ shaper, the shaper stopped
+being monotonic, and the 3D LUT built against its inverse came out all
+zero: every HDR10 frame was black. On a 650-nit panel the same inputs
+stayed finite but amplified (2000 nits in, 850 out) before the panel
+clip hid it.
+---
+diff --git a/src/color_helpers.h b/src/color_helpers.h
+index 650d0c22..b9b16b3a 100644
+--- a/src/color_helpers.h
++++ b/src/color_helpers.h
+@@ -139,8 +139,10 @@ struct eetf_2390_t
+ 	// Raw PQ transfer function
+ 	inline float apply_pq( float valuePQ ) const
+ 	{
+-		// normalize PQ based on the mastering (source) display (E1)
+-		float e1 = ( valuePQ - m_sourceBlackPQ ) * m_invSourcePQScale;
++		// normalize PQ based on the mastering (source) display (E1). BT.2390 defines E1 on
++		// [0, 1]: a signal past the source range clips to it. Unclamped, the rolloff spline
++		// extrapolates as a cubic, and far enough out pq_to_nits() turns it into NaN.
++		float e1 = std::clamp( ( valuePQ - m_sourceBlackPQ ) * m_invSourcePQScale, 0.f, 1.f );
+ 
+ 		// Apply high end rolloff
+ 		float e2 = e1 < m_ks ? e1 : _eetf_2390_spline( e1, m_ks, m_maxLumPQ );

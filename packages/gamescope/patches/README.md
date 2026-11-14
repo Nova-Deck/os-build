@@ -36,6 +36,7 @@ root (the `gamescope/` checkout inside makepkg's `$srcdir`) by
 0043-color-fall-back-to-app-hdr-metadata-for-tonemapping.patch
 0044-drm-output-luts-carry-sdr-on-hdr-output.patch
 0045-drm-per-plane-color-management-through-msm-plane-color-pipelines.patch    (ConVar drm_plane_luts, default on; needs kernel 0394, or 0398 on SM8250)
+0046-color-clamp-the-bt2390-eetf-input-to-the-source-range.patch
 ```
 
 `0008`-`0013` are **retired** (see below). The numbering is kept as-is rather than compacted, so
@@ -469,7 +470,11 @@ whose DPU has plane LUTs may declare one (`tests/test-display-profile.sh` enforc
   the resume fix by Raxcoms (`a9de00f`): the colorop DATA/BYPASS are re-sent on every selection.
   Every virtual plane gets the pipeline and the kernel then reserves a LUT-capable VIG, so no layer
   can land on a DMA pipe without its transform; the cost is that a frame needing more VIGs than the
-  SoC has composites. SM8250 has no plane pipeline yet (kona's gamut loads by register writes).
+  SoC has composites. SM8250 gets its pipelines from kernel `0398`.
+- `0046` (ours) clamps the BT.2390 EETF input to [0, 1]. Unclamped, a signal above the source peak
+  extrapolated the rolloff spline into NaN, which zeroed the top of the PQ shaper and, through its
+  inverse, the whole 3D LUT: every HDR10 frame black on the Pocket Max (800-nit panel). `0043` made
+  it reachable by engaging the EETF from an app's own metadata. Found with `tools/hdr-test`.
 
 Drop the patch files here with those exact names (or rename and update `source.pin`'s
 `patches:` line). **Until a declared patch is present, `make overlay` / `make base` fail fast**

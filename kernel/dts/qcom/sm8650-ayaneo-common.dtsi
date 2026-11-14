@@ -1254,6 +1254,11 @@
 	no-mmc;
 	/* sdhci-caps-mask = <0x3 0x0>; */
 
+	/* stock: level shifter, no external FB clock, so HS caps at 37.5 MHz */
+	max-sd-hs-hz = <37500000>;
+	/* stock pineapple dll-hsr-list */
+	qcom,dll-config = <0x0007442c>;
+
 	pinctrl-0 = <&sdc2_default>, <&sdc2_card_det_n>;
 	pinctrl-1 = <&sdc2_sleep>, <&sdc2_card_det_n>;
 	pinctrl-names = "default", "sleep";

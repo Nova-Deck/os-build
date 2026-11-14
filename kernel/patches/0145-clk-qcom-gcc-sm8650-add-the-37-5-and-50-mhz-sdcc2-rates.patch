@@ -1,0 +1,23 @@
+From: sunshineinabox <aqemail@gmail.com>
+Subject: [PATCH] clk: qcom: gcc-sm8650: add the 37.5 and 50 MHz SDCC2 rates
+
+The SDCC2 apps RCG uses floor ops and lists only 400 kHz, 25, 100 and
+202 MHz, so an SD card in High Speed or SDR25 (50 MHz) runs at 25 MHz,
+and so does the 37.5 MHz that max-sd-hs-hz asks for on boards with an
+SD level shifter. Add GPLL0_OUT_EVEN / 8 and / 6, as gcc-sm8550 and
+gcc-sm8750 have and the vendor gcc-pineapple does.
+---
+ drivers/clk/qcom/gcc-sm8650.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+--- a/drivers/clk/qcom/gcc-sm8650.c
++++ b/drivers/clk/qcom/gcc-sm8650.c
+@@ -1240,6 +1240,8 @@
+ static const struct freq_tbl ftbl_gcc_sdcc2_apps_clk_src[] = {
+ 	F(400000, P_BI_TCXO, 12, 1, 4),
+ 	F(25000000, P_GCC_GPLL0_OUT_EVEN, 12, 0, 0),
++	F(37500000, P_GCC_GPLL0_OUT_EVEN, 8, 0, 0),
++	F(50000000, P_GCC_GPLL0_OUT_EVEN, 6, 0, 0),
+ 	F(100000000, P_GCC_GPLL0_OUT_EVEN, 3, 0, 0),
+ 	F(202000000, P_GCC_GPLL9_OUT_MAIN, 4, 0, 0),
+ 	{ }

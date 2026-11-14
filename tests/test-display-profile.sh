@@ -37,10 +37,11 @@ check() { [[ $2 == "$3" ]] && ok "$1" || bad "$1 (want '$3', got '$2')"; }
 LUA=""
 for c in lua5.4 lua5.3 lua luajit; do command -v "$c" >/dev/null 2>&1 && { LUA=$c; break; }; done
 if [[ -z $LUA ]]; then
+    # Only the profile's own logic needs the interpreter: the session/client/conf checks further
+    # down still run, so a host without Lua cannot turn the whole suite green by skipping it.
     printf '  SKIP no lua interpreter on PATH — cannot exercise the profile\n'
-    printf '\n%d passed, %d failed, 1 skipped\n' "$PASS" "$FAIL"
-    exit 0
-fi
+    SKIP=$((SKIP + 1))
+else
 
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 
@@ -111,6 +112,66 @@ check "trailing junk in peak -> no profile" "$(run 650x  DSI-1 | head -1)" "NOPR
 # HDR off entirely for one that did.
 out=$(run 650 ''); mapfile -t L <<<"$out"
 check "auto-pick board still matches its panel" "${L[4]}" "6000"
+
+fi # LUA
+
+# --- the rest of the HDR chain: session, client, device confs --------------------------------------
+# The profile is only reached if the session hands it its inputs, and HDR must never come back as a
+# forced composite. These need no interpreter, so they run even where Lua is missing above. The
+# connector export is checked too: without it the profile's dual-screen guard silently turns off.
+SESSION="$ROOT/rootfs/overlay/usr/bin/novadeck-session"
+STEAMSH="$ROOT/rootfs/overlay/usr/bin/novadeck-steam"
+DEVENV="$ROOT/rootfs/overlay/usr/lib/novadeck/device-env"
+DEVICES="$ROOT/rootfs/overlay/usr/lib/novadeck/devices"
+
+# --hdr-itm-enable performs no tone mapping in gamescope 3.17.0 and only forces a full composite on
+# every frame; --hdr-enabled would force HDR output on at startup instead of leaving it to Steam.
+if grep -v '^[[:space:]]*#' "$SESSION" | grep -qE -- '--hdr-'; then
+    bad "novadeck-session passes gamescope no --hdr-* flag"
+else
+    ok "novadeck-session passes gamescope no --hdr-* flag"
+fi
+
+# Run the session's HDR block as it ships, extracted by its first and last lines.
+block=$(sed -n '/^: "\${NOVADECK_PANEL_HDR_NITS:=0}"/,/^fi$/p' "$SESSION")
+if [[ -z $block ]]; then
+    bad "novadeck-session's HDR block was found"
+else
+    hdr_env() { # $1=nits -> prints the exported device id (or NONE) and whether the peak is exported
+        # The device-env facts are eval'd, not exported, in the real session: set them as plain
+        # shell variables so only the block's own exports can reach the environment.
+        env -i /bin/sh -c "NOVADECK_DEVICE_ID=ayn-odin-3 NOVADECK_PRIMARY_CONNECTOR=DSI-1
+            ${1:+NOVADECK_PANEL_HDR_NITS=$1}
+            $block"'
+            printf "%s %s %s %s\n" "$(env | sed -n "s/^GAMESCOPE_INTERNAL_DEVICE_ID=//p" | grep . || echo NONE)" "$(env | grep -c "^NOVADECK_PANEL_HDR_NITS=")" "$(env | sed -n "s/^NOVADECK_PRIMARY_CONNECTOR=//p" | grep . || echo NONE)" "$(env | sed -n "s/^STEAM_GAMESCOPE_HDR_SUPPORTED=//p" | grep . || echo NONE)"'
+    }
+    check "an HDR board exports the device id, peak, connector and Steam toggle" "$(hdr_env 650)" "ayn-odin-3 1 DSI-1 1"
+    check "an SDR board exports none of them"                      "$(hdr_env 0)"   "NONE 0 NONE NONE"
+    check "a board declaring nothing exports none of them"         "$(hdr_env '')"  "NONE 0 NONE NONE"
+fi
+
+grep -qxE '[[:space:]]*NOVADECK_PANEL_HDR_NITS' "$DEVENV" \
+    && ok "device-env publishes NOVADECK_PANEL_HDR_NITS" \
+    || bad "device-env publishes NOVADECK_PANEL_HDR_NITS"
+# novadeck-steam re-reads the device registry, so a gate there would reset a session.conf peak to
+# the board's default and hide the toggle the session just turned on.
+if grep -v '^[[:space:]]*#' "$STEAMSH" | grep -qE 'STEAM_GAMESCOPE_HDR_SUPPORTED|NOVADECK_PANEL_HDR_NITS'; then
+    bad "novadeck-steam leaves the HDR toggle to the session"
+else
+    ok "novadeck-steam leaves the HDR toggle to the session"
+fi
+
+# A peak on a board without per-plane colour pipelines (kernel 0399) composites every HDR frame,
+# which costs it direct scanout. Completeness check, not a runtime gate.
+for conf in "$DEVICES"/*.conf; do
+    nits=$(sed -n 's/^NOVADECK_PANEL_HDR_NITS=//p' "$conf" | tail -1)
+    [[ -n $nits && $nits != 0 ]] || continue
+    soc=$(sed -n 's/^NOVADECK_SOC_CLASS=//p' "$conf" | tail -1)
+    case $soc in
+        SM8550|SM8650|SM8750) ok "$(basename "$conf") declares a peak on $soc, which has plane LUTs" ;;
+        *) bad "$(basename "$conf") declares a peak on '$soc', which has no plane LUTs" ;;
+    esac
+done
 
 printf '\n%d passed, %d failed, %d skipped\n' "$PASS" "$FAIL" "$SKIP"
 [[ $FAIL -eq 0 ]]

@@ -146,12 +146,15 @@ export STEAM_ALLOW_DRIVE_UNMOUNT=1
 # also no KEY_MUTE on that board at all.
 export STEAM_ENABLE_VOLUME_HANDLER=1
 #
+# STEAM_GAMESCOPE_HDR_SUPPORTED is exported by novadeck-session's HDR block, not here: this script
+# re-reads the device registry above, which would reset a panel peak set in session.conf to the
+# board's default and hide the toggle on a board the operator turned HDR on for.
+#
 # DELIBERATELY NOT SET (gamescope/ChimeraOS set some of these; each would advertise a control this
 # board cannot honour, or collides with something of ours):
 #   STEAM_GAMESCOPE_TEARING_SUPPORTED / _HAS_TEARING_SUPPORT — gamescope gates them on
 #     SupportsTearing(), which is FALSE here (msm exposes no DRM_CAP_ATOMIC_ASYNC_PAGE_FLIP).
 #   STEAM_GAMESCOPE_VRR_SUPPORTED — no VRR on this DSI panel.
-#   STEAM_GAMESCOPE_HDR_SUPPORTED — no HDR on any board; the compositor never runs an HDR output.
 #   STEAM_GAMESCOPE_COLOR_MANAGED / _VIRTUAL_WHITE — belongs to the night-mode/colour work.
 #   STEAM_USE_DYNAMIC_VRS — RADV-only.
 #   STEAM_ENABLE_DYNAMIC_BACKLIGHT — adaptive brightness needs an ambient-light sensor. Almost none of

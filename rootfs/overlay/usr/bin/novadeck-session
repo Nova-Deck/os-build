@@ -63,6 +63,29 @@ if [ -n "${NOVADECK_GAMESCOPE_FAKE_OUTPUT_MM:-}" ]; then
   export GAMESCOPE_FAKE_OUTPUT_MM="$NOVADECK_GAMESCOPE_FAKE_OUTPUT_MM"
 fi
 
+# HDR capability, gated on the board declaring a panel peak (NOVADECK_PANEL_HDR_NITS, 0 = SDR).
+# Our panels carry no EDID, so gamescope synthesizes one (packages/gamescope/patches/0038) and
+# GAMESCOPE_INTERNAL_DEVICE_ID is how it gets matched to the display profile that supplies the
+# colorimetry and HDR peak (0039 + /usr/share/gamescope/scripts/10-novadeck/). The profile reads
+# the peak and the primary connector from the environment, so both stay single facts in the
+# device conf; the connector keeps the profile off the second panel of a dual-screen board.
+#
+# This passes gamescope NO HDR flag. Steam owns the HDR state at runtime, so the output stays SDR
+# until the user turns HDR on. --hdr-itm-enable in particular must never come back: it performs no
+# tone mapping at all and only forces a full composite on every frame.
+: "${NOVADECK_PANEL_HDR_NITS:=0}"
+if [ "$NOVADECK_PANEL_HDR_NITS" -gt 0 ] 2>/dev/null; then
+  export GAMESCOPE_INTERNAL_DEVICE_ID="${NOVADECK_DEVICE_ID:-}"
+  export NOVADECK_PANEL_HDR_NITS NOVADECK_PRIMARY_CONNECTOR
+  # Optional; empty lets the profile use half the peak.
+  if [ -n "${NOVADECK_PANEL_HDR_FALL:-}" ]; then
+    export NOVADECK_PANEL_HDR_FALL
+  fi
+  # The client's HDR toggle, from the same fact and the same place, so the two cannot disagree:
+  # novadeck-steam re-reads the device registry, which would drop a peak set in session.conf.
+  export STEAM_GAMESCOPE_HDR_SUPPORTED=1
+fi
+
 # Force the real DRM/KMS backend: a stray WAYLAND_DISPLAY/DISPLAY makes gamescope try to nest under
 # a (non-existent) parent compositor and fail with "Failed to connect to wayland socket".
 unset WAYLAND_DISPLAY DISPLAY

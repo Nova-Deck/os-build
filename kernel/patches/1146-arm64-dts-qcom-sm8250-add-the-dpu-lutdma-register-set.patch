@@ -1,0 +1,33 @@
+From: Philippe Simons <simons.philippe@gmail.com>
+Subject: [PATCH] arm64: dts: qcom: sm8250: add the DPU LUTDMA register set and lut clock
+
+The DPU's LUTDMA engine (0x214 bytes at 0x0aeac000, from the vendor DT's
+regdma_phys) loads the VIG pipes' IGC and 3D LUTs. Describe it, and add
+DISP_CC_MDSS_MDP_LUT_CLK, which downstream enables for it, so the bulk
+clock enable covers the engine.
+---
+diff --git a/arch/arm64/boot/dts/qcom/sm8250.dtsi b/arch/arm64/boot/dts/qcom/sm8250.dtsi
+index 585c891a1..953a0209f 100644
+--- a/arch/arm64/boot/dts/qcom/sm8250.dtsi
++++ b/arch/arm64/boot/dts/qcom/sm8250.dtsi
+@@ -4787,14 +4787,16 @@ mdss: display-subsystem@ae00000 {
+ 			mdss_mdp: display-controller@ae01000 {
+ 				compatible = "qcom,sm8250-dpu";
+ 				reg = <0 0x0ae01000 0 0x8f000>,
+-				      <0 0x0aeb0000 0 0x3000>;
+-				reg-names = "mdp", "vbif";
++				      <0 0x0aeb0000 0 0x3000>,
++				      <0 0x0aeac000 0 0x214>;
++				reg-names = "mdp", "vbif", "lutdma";
+ 
+ 				clocks = <&dispcc DISP_CC_MDSS_AHB_CLK>,
+ 					 <&gcc GCC_DISP_HF_AXI_CLK>,
+ 					 <&dispcc DISP_CC_MDSS_MDP_CLK>,
+-					 <&dispcc DISP_CC_MDSS_VSYNC_CLK>;
+-				clock-names = "iface", "bus", "core", "vsync";
++					 <&dispcc DISP_CC_MDSS_VSYNC_CLK>,
++					 <&dispcc DISP_CC_MDSS_MDP_LUT_CLK>;
++				clock-names = "iface", "bus", "core", "vsync", "lut";
+ 
+ 				assigned-clocks = <&dispcc DISP_CC_MDSS_VSYNC_CLK>;
+ 				assigned-clock-rates = <19200000>;

@@ -496,6 +496,7 @@ test: verify-lock ## Run the offline bootctl/post-install/boot-disk/pairingd/pow
 	bash $(TESTS_DIR)/test-vpower.sh
 	bash $(TESTS_DIR)/test-suspend.sh
 	bash $(TESTS_DIR)/test-gamescope-display.sh
+	bash $(TESTS_DIR)/test-display-profile.sh
 	bash $(TESTS_DIR)/test-session.sh
 	bash $(TESTS_DIR)/test-stage2-grub.sh
 	bash $(TESTS_DIR)/test-partition-table.sh

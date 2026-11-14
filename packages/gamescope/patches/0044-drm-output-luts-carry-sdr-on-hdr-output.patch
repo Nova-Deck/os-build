@@ -1,0 +1,88 @@
+From: virtudude <virtudude@protonmail.com>
+Subject: [PATCH] drm: SDR color management through the DPU output LUTs
+
+Without per-plane color management gamescope only applies its color
+pipeline in the composite shader, so a directly scanned-out layer loses
+night mode and the color sliders. The msm DPU's post-blend CRTC
+DEGAMMA_LUT (256) and 17^3 DPU_3D_LUT are the same shape as the shader's
+shaper and 3D LUT, so an SDR gamma 2.2 output can carry that chain in
+hardware. Enabling them changes which display blocks the CRTC owns, so
+that transition needs a modeset; being post-blend, a translucent overlay
+is corrected as the blended pixel. Per-plane offload is the follow-up.
+
+TAKEN IN PART: only the HDR half of this patch. Its SDR output-LUT half is novadeck 0018, which dropped these hunks when HDR was retired (2026-09-14). Its 'SDR colour work goes through the shader' rule is NOT taken: novadeck 0014's drm_scanout_is_color_managed() already decides that for scanout.
+---
+diff --git a/src/Backends/DRMBackend.cpp b/src/Backends/DRMBackend.cpp
+index fb9b8a4c..00b505b4 100644
+--- a/src/Backends/DRMBackend.cpp
++++ b/src/Backends/DRMBackend.cpp
+@@ -4343,7 +4343,8 @@ namespace gamescope
+ 					bSupportsHardwareColorManagement,
+ 					pFrameInfo->outputEncodingEOTF,
+ 					pFrameInfo->layers.count(),
+-					pFrameInfo->layers.get( 0 ).colorspace == GAMESCOPE_APP_TEXTURE_COLORSPACE_HDR10_PQ );
++					pFrameInfo->layers.get( 0 ).colorspace == GAMESCOPE_APP_TEXTURE_COLORSPACE_HDR10_PQ,
++					pFrameInfo->outputLuts );
+ 				if ( !bSupportsHardwareColorManagement )
+ 				{
+ 					// Scanout can't apply the LUT-baked backlight dim here.
+diff --git a/src/Backends/DRMComposition.h b/src/Backends/DRMComposition.h
+index 1210f78c..84d7cd9c 100644
+--- a/src/Backends/DRMComposition.h
++++ b/src/Backends/DRMComposition.h
+@@ -6,18 +6,16 @@
+ 
+ namespace gamescope
+ {
+-    // Without DRM hardware color management, direct scanout is only safe for
+-    // one PQ layer targeting a PQ output. In particular, a Gamma 2.2 HDR panel
+-    // needs the Vulkan color pipeline to map even a single PQ layer into the
+-    // panel's native encoding.
++    // Output LUT eligibility guarantees that every layer is SDR.
+     constexpr bool DrmHdrOutputRequiresVulkanComposition(
+         bool bOutputHDREnabled,
+         bool bSupportsHardwareColorManagement,
+         EOTF eOutputEncodingEOTF,
+         uint32_t uLayerCount,
+-        bool bBaseLayerIsHDR10PQ )
++        bool bBaseLayerIsHDR10PQ,
++        bool bOutputLuts )
+     {
+-        if ( !bOutputHDREnabled || bSupportsHardwareColorManagement )
++        if ( !bOutputHDREnabled || bSupportsHardwareColorManagement || bOutputLuts )
+             return false;
+ 
+         return eOutputEncodingEOTF != EOTF_PQ ||
+diff --git a/tests/test_drm_composition.cpp b/tests/test_drm_composition.cpp
+index a08d192a..71da8503 100644
+--- a/tests/test_drm_composition.cpp
++++ b/tests/test_drm_composition.cpp
+@@ -13,14 +13,22 @@ TEST_CASE("Gamma 2.2 HDR cannot direct scan without hardware color management",
+ {
+     // Regression: the old DRM path allowed this exact single-PQ-layer case to
+     // direct scan, bypassing the PQ-to-native-Gamma-2.2 Vulkan transform.
+-    REQUIRE( DrmHdrOutputRequiresVulkanComposition( true, false, EOTF_Gamma22, 1, true ) );
++    REQUIRE( DrmHdrOutputRequiresVulkanComposition( true, false, EOTF_Gamma22, 1, true, false ) );
+ 
+-    REQUIRE_FALSE( DrmHdrOutputRequiresVulkanComposition( true, true, EOTF_Gamma22, 1, true ) );
+-    REQUIRE_FALSE( DrmHdrOutputRequiresVulkanComposition( true, false, EOTF_PQ, 1, true ) );
+-    REQUIRE_FALSE( DrmHdrOutputRequiresVulkanComposition( false, false, EOTF_Gamma22, 1, true ) );
++    REQUIRE_FALSE( DrmHdrOutputRequiresVulkanComposition( true, true, EOTF_Gamma22, 1, true, false ) );
++    REQUIRE_FALSE( DrmHdrOutputRequiresVulkanComposition( true, false, EOTF_PQ, 1, true, false ) );
++    REQUIRE_FALSE( DrmHdrOutputRequiresVulkanComposition( false, false, EOTF_Gamma22, 1, true, false ) );
+ 
+-    REQUIRE( DrmHdrOutputRequiresVulkanComposition( true, false, EOTF_PQ, 2, true ) );
+-    REQUIRE( DrmHdrOutputRequiresVulkanComposition( true, false, EOTF_PQ, 1, false ) );
++    REQUIRE( DrmHdrOutputRequiresVulkanComposition( true, false, EOTF_PQ, 2, true, false ) );
++    REQUIRE( DrmHdrOutputRequiresVulkanComposition( true, false, EOTF_PQ, 1, false, false ) );
++}
++
++TEST_CASE("SDR output LUTs allow scanout while HDR output is enabled", "[drm][hdr]")
++{
++    REQUIRE_FALSE( DrmHdrOutputRequiresVulkanComposition( true, false, EOTF_Gamma22, 1, false, true ) );
++    REQUIRE_FALSE( DrmHdrOutputRequiresVulkanComposition( true, false, EOTF_Gamma22, 2, false, true ) );
++    REQUIRE( DrmHdrOutputRequiresVulkanComposition( true, false, EOTF_Gamma22, 1, false, false ) );
++    REQUIRE( DrmHdrOutputRequiresVulkanComposition( true, false, EOTF_Gamma22, 1, true, false ) );
+ }
+ 
+ TEST_CASE("Gamma 2.2 HDR scales SDR white against panel peak", "[color][hdr]")

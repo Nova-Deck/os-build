@@ -28,6 +28,14 @@ root (the `gamescope/` checkout inside makepkg's `$srcdir`) by
 0027-steamcompmgr-refresh-only-request-takes-the-exact-mode.patch
 0036-steamcompmgr-elapsed-time-fps-limiter.patch    (ConVar limiter_use_elapsed_time, default OFF)
 0037-steamcompmgr-convar-to-drop-the-blank-overlay-plane.patch    (ConVar paint_blank_overlay_plane; cleared on SM8250 from etc/novadeck/session.conf)
+0038-drm-synthesize-an-edid-for-edid-less-internal-panels.patch
+0039-drm-known-display-profiles-for-edid-less-panels.patch    (GAMESCOPE_INTERNAL_DEVICE_ID, from novadeck-session)
+0040-drm-compose-gamma22-hdr-without-hardware-color-management.patch
+0041-wsi-filter-hdr-formats-by-underlying-support.patch
+0042-color-scale-sdr-white-on-gamma22-hdr-output.patch
+0043-color-fall-back-to-app-hdr-metadata-for-tonemapping.patch
+0044-drm-output-luts-carry-sdr-on-hdr-output.patch
+0045-drm-per-plane-color-management-through-msm-plane-color-pipelines.patch    (ConVar drm_plane_luts, default on; needs kernel 0399)
 ```
 
 `0008`-`0013` are **retired** (see below). The numbering is kept as-is rather than compacted, so
@@ -143,6 +151,11 @@ to let us drop `0001` needs `0007`.
 **While it is in `source.pin`, `fetchlock.sh` reports the gamescope row as built from UNADOPTED
 sources.** That is expected on a dev card and is exactly why it must come back out, with a
 `make relock`, before any commit or release build.
+
+**HDR came back 2026-11-14 as `0038`-`0045`, WITHOUT any of the flags below.** What changed is
+the kernel: `0399` gives the DPU per-plane colour pipelines, so HDR no longer needs a composite
+(`0045`). `--hdr-itm-enable` is still inert in 3.17.0 and is still never passed; the session passes
+gamescope no HDR flag at all, and Steam owns the HDR state at runtime. The history below is why.
 
 `0008`-`0013` — **RETIRED 2026-09-14 when HDR was dropped (issue #93).** The EDID-synthesis +
 HDR series (third-party, by virtudude and enjihn) is gone from the tree and from `source.pin`, along
@@ -429,6 +442,34 @@ ConVar cleared): one plane, 120 commits/s, game ~120; opening the Quick
 Access menu puts the real overlay on its own plane (two planes, 60 commits/s while it is open).
 The cost the blank layer existed to hide does show on msm too: a small stutter as the overlay
 starts to open. Accepted (operator, 2026-10-26) as the price of not halving every game.
+
+`0038`-`0045` — **HDR with direct scanout, 2026-11-14.** Third-party (virtudude, enjihn), from
+armada's gamescope stack, numbered here in the order they apply. Regenerated with `git diff` against
+a 3.17.0 tree carrying our stack, never hand-edited. Shared across them: they need the device conf's
+`NOVADECK_PANEL_HDR_NITS` (session + `10-novadeck/novadeck.internal-amoled.lua`), and only boards
+whose DPU has plane LUTs may declare one (`tests/test-display-profile.sh` enforces it).
+
+- `0038` synthesizes an SDR sRGB EDID for an EDID-less internal panel from its preferred mode.
+  Re-rolled onto `0026`: when no EDID can be synthesized either, the panel still gets its native
+  modes as refresh rates. The EDID's mm is the panel driver's and is inert for SteamUI scale;
+  `0003` stays the scale lever.
+- `0039` gives Lua `matches()` the connector, device id, `internal` and `has_edid`, so a profile
+  can claim an EDID-less panel.
+- `0040` moves the HDR-output composite decision into a testable helper.
+- `0041` advertises a synthetic HDR surface format only if the underlying surface supports it.
+- `0042` scales SDR white on a gamma-2.2 HDR output only while the focused app wants HDR. Re-rolled
+  onto `0014`: `create_color_mgmt_luts()` takes `bScaleSDRWhite` ahead of `0014`'s out-parameter.
+- `0043` derives the PQ tone-map source range from the app's HDR metadata when the atoms are absent.
+- `0044` is the HDR half of the output-LUT patch whose SDR half is `0018`: an all-SDR frame on an
+  HDR output still scans out through the output LUTs. Its "SDR work goes through the shader" rule
+  is NOT taken; `0014`'s `drm_scanout_is_color_managed()` decides that.
+- `0045` puts each scanned-out layer's own EOTF tables in its plane's IGC + 3D LUT, so an HDR10 game
+  with SDR overlays scans out. With plane LUTs active the output LUTs are off and **`0014`'s CRTC
+  CTM is held at the identity** (`bLutsCarryChain`), or the frame gets the transform twice. Carries
+  the resume fix by Raxcoms (`a9de00f`): the colorop DATA/BYPASS are re-sent on every selection.
+  Every virtual plane gets the pipeline and the kernel then reserves a LUT-capable VIG, so no layer
+  can land on a DMA pipe without its transform; the cost is that a frame needing more VIGs than the
+  SoC has composites. SM8250 has no plane pipeline yet (kona's gamut loads by register writes).
 
 Drop the patch files here with those exact names (or rename and update `source.pin`'s
 `patches:` line). **Until a declared patch is present, `make overlay` / `make base` fail fast**

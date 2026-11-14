@@ -1,5 +1,12 @@
-"""Small read-only system facts for the plugin header."""
+"""Small read-only system facts for the plugin: the header's version, the board's HDR panel."""
+import subprocess
 from pathlib import Path
+
+from .power import _clean_env
+
+# The per-board registry the session and powerd read too, so "has an HDR panel" is one fact.
+DEVICE_ENV = "/usr/lib/novadeck/device-env"
+DEVICE_ENV_TIMEOUT = 5
 
 # Written by rootfs/assemble-rootfs.sh. KEY=VALUE lines, NOT a bare version string — reading
 # the file whole put the entire build stamp in the plugin's header (HW-observed 2026-08-09).
@@ -34,3 +41,28 @@ def os_version():
     if version:
         return version
     return _keyvals(OS_RELEASE_PATH).get("VERSION_ID", "unknown")
+
+
+def hdr_panel():
+    """True when the board declares an HDR panel peak (NOVADECK_PANEL_HDR_NITS > 0).
+
+    The same gate novadeck-session applies before it exposes HDR to Steam, and powerd before it
+    honours an `autoHdr` tweak, so the AutoHDR control appears exactly where it can act.
+    """
+    try:
+        out = subprocess.run(
+            [DEVICE_ENV],
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=DEVICE_ENV_TIMEOUT,
+            env=_clean_env(),
+        ).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    for line in out.splitlines():
+        key, sep, value = line.partition("=")
+        if sep and key == "NOVADECK_PANEL_HDR_NITS":
+            return value.isdigit() and int(value) > 0
+    return False

@@ -234,6 +234,32 @@ check("lavd accepted", np.scheduler_for({"games": {"1": {"enabled": True, "sched
 # powerd imports this as its D-Bus enum, so the two domains cannot drift.
 check("scheduler domain", list(np.SCHEDULERS), ["none", "lavd"])
 
+# autoHdr: per-game only, like scheduler, and a JSON bool only — `1 in (True, False)` is true in
+# Python, so a number would otherwise reach powerd as a non-bool.
+hdr_tweaks = {
+    "global": {"autoHdr": True},
+    "games": {
+        "620": {"enabled": True, "autoHdr": False},
+        "630": {"enabled": True, "autoHdr": True},
+        "700": {"enabled": True, "autoHdr": 1},
+        "710": {"enabled": True, "autoHdr": "on"},
+        "800": {"enabled": False, "autoHdr": True},
+        "900": {"enabled": True},
+    },
+}
+check("autoHdr: global ignored", np.auto_hdr_for(hdr_tweaks, None), None)
+check("autoHdr: global not inherited by a game", np.auto_hdr_for(hdr_tweaks, "900"), None)
+check("autoHdr: per-game off is explicit", np.auto_hdr_for(hdr_tweaks, "620"), False)
+check("autoHdr: per-game on", np.auto_hdr_for(hdr_tweaks, "630"), True)
+check("autoHdr: a number is not a bool", np.auto_hdr_for(hdr_tweaks, "700"), None)
+check("autoHdr: a string is not a bool", np.auto_hdr_for(hdr_tweaks, "710"), None)
+check("autoHdr: disabled game ignored", np.auto_hdr_for(hdr_tweaks, "800"), None)
+check("autoHdr not a sanitize_perf key", "autoHdr" in np.sanitize_perf({"autoHdr": True}), False)
+# gamescope's own Parse<bool> (convar.h): a leading number is its truth, else only "true".
+for text, want in (("1", True), ("0", False), ("2", True), ("true", True), ("True", False),
+                   ("yes", False), ("", False), ("1x", True), ("0x", False)):
+    check(f"convar bool {text!r}", np.parse_convar_bool(text), want)
+
 # powerProfile is GONE: Steam's per-game performance settings own the profile now. A key left in
 # an older tweaks file must stay inert, never a sanitize_perf key and never carried by the tick
 # (asserted on the tick below).

@@ -9,8 +9,8 @@ Owns three things:
      and merge contract proton-wrapper uses for FEX profiles (global section,
      per-appid sections gated on "enabled": true). This module consumes the
      perf keys: gamescopeNice, gamescopeCores — plus the per-game-only
-     override of a system-wide setting, scheduler, which it resolves for
-     powerd to apply (see per_game_choice). There is no per-game power profile
+     overrides of system-wide settings, scheduler and autoHdr, which it
+     resolves for powerd to apply (see per_game_choice). There is no per-game power profile
      here: Steam's own per-game performance settings own that, through the
      steamos-manager shim.
   3. The enforcement tick novadeck-powerd runs: find gamescope, find the
@@ -261,6 +261,46 @@ def scheduler_for(tweaks, appid):
     """The per-game CPU scheduler, against powerd's persisted CpuScheduler.
     "none" forces stock for one title on a device whose choice is lavd."""
     return per_game_choice(tweaks, appid, "scheduler", SCHEDULERS)
+
+
+def auto_hdr_for(tweaks, appid):
+    """The per-game AutoHDR switch, against what gamescope was started with
+    (session.conf's gamescope_auto_hdr). False forces it off for one title on a
+    session that turns it on for everything.
+
+    A JSON bool only: `1 in (True, False)` is true in Python, so the domain test
+    alone would let a number through and hand powerd a non-bool."""
+    value = per_game_choice(tweaks, appid, "autoHdr", (True, False))
+    return value if isinstance(value, bool) else None
+
+
+def parse_convar_bool(text):
+    """A bool ConVar value the way gamescope parses it (convar.h Parse<bool>): a
+    leading unsigned number is its truth, otherwise only "true" is true."""
+    digits = ""
+    for char in text:
+        if not char.isdigit():
+            break
+        digits += char
+    if digits:
+        return int(digits) != 0
+    return text == "true"
+
+
+def environ_convar_bool(pid, name):
+    """gamescope's exec-time value of ConVar `name`, from the gamescope_<name>
+    variable in /proc/<pid>/environ. gamescope reads ConVars from that variable
+    once at startup, so this is the value it was launched with. Absent or
+    unreadable is False, the shipped default of every ConVar we read here."""
+    try:
+        raw = (PROC_ROOT / str(pid) / "environ").read_bytes()
+    except OSError:
+        return False
+    prefix = f"gamescope_{name}=".encode()
+    for entry in raw.split(b"\0"):
+        if entry.startswith(prefix):
+            return parse_convar_bool(entry[len(prefix):].decode("utf-8", "replace"))
+    return False
 
 
 # -------------------------------------------------------------- /proc walk ---
@@ -612,12 +652,17 @@ class Enforcer:
         # baseline: what each process looked like before we first touched it —
         # the reference for threads spawned while a tweak is in force (_remember)
         self.game_state = {"affinity": {}, "nice": {}, "baseline": {}}
+        # The compositor found by the last tick, None when there is none. powerd
+        # reads it to drive gamescope's ConVars without a second /proc walk.
+        self.gamescope_pid = None
 
     def tick(self):
         tweaks = load_tweaks()
         # ONE /proc walk for both consumers: scan_games wants steam,
         # apply_gamescope wants gamescope, and the walk is the tick's dominant cost.
         index = comm_index(STEAM_COMMS + GAMESCOPE_COMMS)
+        compositors = pids_by_comm(GAMESCOPE_COMMS, index)
+        self.gamescope_pid = compositors[0] if compositors else None
         appid, pids = scan_games(self.appid_cache, index)
         values = sanitize_perf(settings_for(tweaks, appid))
         apply_gamescope(values, index)
@@ -628,4 +673,8 @@ class Enforcer:
         scheduler = scheduler_for(tweaks, appid)
         if scheduler is not None:
             values["scheduler"] = scheduler
+        # Same shape, and powerd applies it too: gamescopectl, not a thread policy.
+        auto_hdr = auto_hdr_for(tweaks, appid)
+        if auto_hdr is not None:
+            values["autoHdr"] = auto_hdr
         return values

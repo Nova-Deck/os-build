@@ -14,7 +14,7 @@ from novadeck_control.power import (
     set_fan_curve,
 )
 from novadeck_control.steam import installed_games
-from novadeck_control.system import os_version
+from novadeck_control.system import hdr_panel, os_version
 from novadeck_control.tweaks import load_base_thunks, load_fex_profiles, load_tweaks, save_tweaks
 
 
@@ -66,4 +66,5 @@ class Plugin:
             "fexThunks": load_base_thunks(),
             "power": power_status(),
             "osVersion": os_version(),
+            "hdrPanel": hdr_panel(),
         }

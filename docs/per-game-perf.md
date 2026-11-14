@@ -47,6 +47,20 @@ Override of a system-wide setting, per-game only (see below):
 | Key | Type | Effect |
 |-----|------|--------|
 | `scheduler` | `"none"` or `"lavd"` | CPU scheduler to run while this game is running |
+| `autoHdr` | bool | gamescope's AutoHDR on (`true`) or off (`false`) while this game is running |
+
+### `autoHdr` is per-game only too
+
+Its system-wide home is the value gamescope is launched with: `export gamescope_auto_hdr=1` in
+`/etc/novadeck/session.conf` turns AutoHDR on for every game (off as shipped). `novadeck-powerd`
+reads that launch value back from the compositor's environment, sets the `auto_hdr` ConVar over
+`gamescopectl` when a game with the key starts, and puts the launch value back when it exits. The
+ConVar is read every frame, so neither the game nor the session restarts. `false` exempts one
+title on a session that turns AutoHDR on everywhere.
+
+It only acts on a board that declares an HDR panel (`NOVADECK_PANEL_HDR_NITS` > 0 in the device
+conf), the same gate the session applies before it offers HDR to Steam. The plugin shows the
+control only there. A game that outputs HDR itself is left alone by AutoHDR either way.
 
 ### `scheduler` is per-game only
 

@@ -77,6 +77,10 @@ fi
 if [ "$NOVADECK_PANEL_HDR_NITS" -gt 0 ] 2>/dev/null; then
   export GAMESCOPE_INTERNAL_DEVICE_ID="${NOVADECK_DEVICE_ID:-}"
   export NOVADECK_PANEL_HDR_NITS NOVADECK_PRIMARY_CONNECTOR
+  # Optional; empty lets the profile use half the peak.
+  if [ -n "${NOVADECK_PANEL_HDR_FALL:-}" ]; then
+    export NOVADECK_PANEL_HDR_FALL
+  fi
   # The client's HDR toggle, from the same fact and the same place, so the two cannot disagree:
   # novadeck-steam re-reads the device registry, which would drop a peak set in session.conf.
   export STEAM_GAMESCOPE_HDR_SUPPORTED=1

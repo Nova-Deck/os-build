@@ -76,8 +76,8 @@ ayn-thor-lite,1,1,DSI-1
 ,1,0,DSI-1
 EOF
 
-run() { # $1=nits $2=primary -> prints NITS/... then one verdict per case line
-    NOVADECK_PANEL_HDR_NITS="$1" NOVADECK_PRIMARY_CONNECTOR="$2" \
+run() { # $1=nits $2=primary [$3=fall] -> prints NITS/... then one verdict per case line
+    NOVADECK_PANEL_HDR_NITS="$1" NOVADECK_PRIMARY_CONNECTOR="$2" NOVADECK_PANEL_HDR_FALL="${3:-}" \
         "$LUA" "$TMP/drive.lua" "$PROFILE" "$cases" 2>&1
 }
 
@@ -85,7 +85,7 @@ run() { # $1=nits $2=primary -> prints NITS/... then one verdict per case line
 out=$(run 650 DSI-1)
 mapfile -t L <<<"$out"
 check "peak comes from the environment, not the file"   "${L[0]}" "NITS 650"
-check "frame-average tracks the same peak"              "${L[1]}" "FALL 650"
+check "frame-average defaults to half the peak"         "${L[1]}" "FALL 325"
 check "profile claims HDR support"                      "${L[2]}" "SUPPORTED true"
 check "transfer function is gamma 2.2, not PQ"          "${L[3]}" "EOTF gamma22"
 check "primary panel matches"                           "${L[4]}" "6000"
@@ -97,6 +97,14 @@ check "a board that named no device id does not match"  "${L[8]}" "-1"
 # --- the peak is per-board, and really is read per-run -------------------------------------------
 out=$(run 800 DSI-1); mapfile -t L <<<"$out"
 check "a different board's peak is picked up unchanged" "${L[0]}" "NITS 800"
+
+# --- the frame average: explicit, defaulted, or refused when it exceeds the peak -----------------
+out=$(run 650 DSI-1 650); mapfile -t L <<<"$out"
+check "an explicit frame average is used as given"      "${L[1]}" "FALL 650"
+out=$(run 780 DSI-1 900); mapfile -t L <<<"$out"
+check "a frame average above the peak falls back to half" "${L[1]}" "FALL 390"
+out=$(run 670 DSI-1 abc); mapfile -t L <<<"$out"
+check "an unparseable frame average falls back to half" "${L[1]}" "FALL 335"
 
 # --- SDR boards, and junk, must register NO profile at all ---------------------------------------
 # A profile with a fabricated peak is worse than no profile: HDR would engage against a made-up
@@ -161,17 +169,21 @@ else
     ok "novadeck-steam leaves the HDR toggle to the session"
 fi
 
-# A peak on a board without per-plane colour pipelines (kernel 0394; SM8250's 0398 is not yet
-# HW-settled, so it stays off the list) composites every HDR frame,
-# which costs it direct scanout. Completeness check, not a runtime gate.
+# A peak on a board without per-plane colour pipelines (kernel 0394 for SM8550/SM8650/SM8750,
+# 0398 for SM8250) composites every HDR frame, which costs it direct scanout. Completeness check,
+# not a runtime gate.
 for conf in "$DEVICES"/*.conf; do
     nits=$(sed -n 's/^NOVADECK_PANEL_HDR_NITS=//p' "$conf" | tail -1)
     [[ -n $nits && $nits != 0 ]] || continue
     soc=$(sed -n 's/^NOVADECK_SOC_CLASS=//p' "$conf" | tail -1)
     case $soc in
-        SM8550|SM8650|SM8750) ok "$(basename "$conf") declares a peak on $soc, which has plane LUTs" ;;
+        SM8250|SM8550|SM8650|SM8750) ok "$(basename "$conf") declares a peak on $soc, which has plane LUTs" ;;
         *) bad "$(basename "$conf") declares a peak on '$soc', which has no plane LUTs" ;;
     esac
+    fall=$(sed -n 's/^NOVADECK_PANEL_HDR_FALL=//p' "$conf" | tail -1)
+    if [[ -n $fall ]] && ! (( fall > 0 && fall <= nits )); then
+        bad "$(basename "$conf") declares a frame average ($fall) outside (0, peak $nits]"
+    fi
 done
 
 printf '\n%d passed, %d failed, %d skipped\n' "$PASS" "$FAIL" "$SKIP"

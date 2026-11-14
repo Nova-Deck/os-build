@@ -18,6 +18,13 @@
 
 local nits = tonumber(os.getenv("NOVADECK_PANEL_HDR_NITS") or "") or 0
 local primary = os.getenv("NOVADECK_PRIMARY_CONNECTOR") or ""
+-- Full-frame average: the device conf's NOVADECK_PANEL_HDR_FALL, else half the peak. An OLED dims
+-- large bright areas, so the small-window peak is not a full-frame figure; armada profiles most of
+-- these panels at half. A value above the peak is nonsense and falls back the same way.
+local fall = tonumber(os.getenv("NOVADECK_PANEL_HDR_FALL") or "") or 0
+if fall <= 0 or fall > nits then
+    fall = math.floor(nits / 2 + 0.5)
+end
 
 -- Registering an hdr block with a bogus peak would be worse than registering nothing, so a board
 -- that reaches this file without a usable peak gets no profile and stays SDR. From the session this
@@ -46,10 +53,9 @@ if nits > 0 then
             -- (kernel 0394, 0398 on SM8250) each scanned-out layer gets that mapping in its own plane LUTs.
             eotf = gamescope.eotf.gamma22,
             max_content_light_level = nits,
-            -- Same value as MaxCLL, matching how this DDIC family is profiled upstream. A vendor
-            -- "peak" is usually a small-window figure, so a full-frame average is very likely
-            -- optimistic. Symptom: the panel visibly dims on large bright areas.
-            max_frame_average_luminance = nits,
+            -- See `fall` above. Symptom of a figure that is too high: the panel visibly dims on
+            -- large bright areas.
+            max_frame_average_luminance = fall,
             min_content_light_level = 0.002,
         },
         matches = function(display)

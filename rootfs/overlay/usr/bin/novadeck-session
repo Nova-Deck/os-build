@@ -205,13 +205,19 @@ GS_ARGS="$GS_ARGS --steam --xwayland-count 2 -R $GS_STARTUP -T $GS_STATS"
 #                          for the Level selector); mangoapp re-reads it on reload_config. Seeded
 #                          `no_display` so the overlay starts hidden (gamescope seeds it the same way
 #                          when it is the creator) — otherwise the HUD flashes up during OOBE.
-#   GAMESCOPE_LIMITER_FILE — the QuickAccess frame-rate cap: gamescope writes the limiter flag, the
-#                          gamescope WSI layer inside the GAME process reads it. The game inherits its
-#                          env from Steam, so without this export neither end of that pair is wired.
+#   GAMESCOPE_LIMITER_FILE — the QuickAccess frame-rate cap: gamescope writes the limiter flag, and
+#                          the GAME process reads it (the gamescope WSI layer for Vulkan, mesa's DRI3
+#                          loader for GL, patch 0005). The game inherits its env from Steam, so without
+#                          this export neither end of that pair is wired. It lives in /tmp, NOT in
+#                          GS_RUNDIR: games run inside pressure-vessel, which shares the host /tmp but
+#                          only a few named sockets of $XDG_RUNTIME_DIR (bus, pipewire, pulse). Under
+#                          GS_RUNDIR the reader's open() fails and the cap never reaches the game —
+#                          measured 2026-11-15, HL2 under a 30 fps cap kept rendering 100 fps.
+#                          gamescope-session-plus uses /tmp for the same reason.
 export MANGOHUD_CONFIGFILE="${GS_RUNDIR}/mangoapp.conf"
 echo "no_display" >"$MANGOHUD_CONFIGFILE"
-export GAMESCOPE_LIMITER_FILE="${GS_RUNDIR}/limiter"
-: >"$GAMESCOPE_LIMITER_FILE"
+GAMESCOPE_LIMITER_FILE="$(mktemp /tmp/gamescope-limiter.XXXXXXXX)"
+export GAMESCOPE_LIMITER_FILE
 
 # --mangoapp: gamescope spawns the `mangoapp` overlay as an in-session window (SpawnProcessInWatchdog),
 # inheriting GAMESCOPE_STATS + MANGOHUD_CONFIGFILE from this shell. SteamUI's Quick-Access
@@ -280,6 +286,7 @@ cleanup() {
     GS_PID=""
   fi
   rm -rf "$GS_RUNDIR" 2>/dev/null || true
+  rm -f "$GAMESCOPE_LIMITER_FILE" 2>/dev/null || true
   # Withdraw the A/B readiness marker (see below). Removing it here is what makes its continued
   # existence mean "the SAME session is still up" rather than "a session started once".
   rm -f /run/novadeck/session/ready 2>/dev/null || true

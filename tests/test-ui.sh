@@ -1505,6 +1505,22 @@ printf '%s' "$cmd" | grep -q -- "-- $UI" \
 printf '%s' "$cmd" | grep -q -- '--use-rotation-shader' \
   && bad "it passes --use-rotation-shader, which our patched gamescope no longer has" \
   || ok "no --use-rotation-shader -- rotation is auto-engaged from the connector"
+printf '%s' "$cmd" | grep -q -- '--rotated-output-max-height' \
+  && bad "a board under the rotator cap was clamped: $cmd" \
+  || ok "no clamp on a panel under the 1088-line rotator cap"
+
+CASE="session: a panel over the rotator cap is clamped, as the Steam session is"
+# The UI fills the whole output, so on a 1440-wide portrait panel every rotated flip is rejected by
+# the DPU's 1088-line inline rotator and the panel stays black. The clamp comes from the SHIPPED
+# device-env, by model string, so the installer and session.conf cannot disagree on which boards.
+printf '#!/bin/sh\nNOVADECK_DEVICE_DIR=%s NOVADECK_MODEL="AYANEO Pocket S2" exec %s\n' \
+  "$ROOT/rootfs/overlay/usr/lib/novadeck/devices" "$ROOT/rootfs/overlay/usr/lib/novadeck/device-env" \
+  >"$T/bin/device-env-s2"
+chmod +x "$T/bin/device-env-s2"
+cmd="$(DEVENV="$T/bin/device-env-s2" session)"
+printf '%s' "$cmd" | grep -q -- '-W 2560 -H 1440 --rotated-output-max-height 1080' \
+  && ok "the Pocket S2 keeps its 2560x1440 output, rendered 1080 tall for the rotator" \
+  || bad "no --rotated-output-max-height 1080 on the Pocket S2: $cmd"
 
 CASE="session: an unknown board still gets a screen"
 printf '#!/bin/sh\nexit 0\n' >"$T/bin/device-env-empty"; chmod +x "$T/bin/device-env-empty"

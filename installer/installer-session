@@ -100,6 +100,15 @@ fi
 # passing the panel's first declared rate paced a 120 Hz preferred mode at 60. Same rule as
 # /usr/bin/novadeck-session; the connector's preferred mode is the right one here.
 set -- --backend drm -W "$GS_W" -H "$GS_H"
+# The DPU inline rotator's 1088-line cap, from device-env -- the same fact /etc/novadeck/session.conf
+# turns into the same flag for the Steam session. The UI fills the whole output, so on a portrait
+# panel wider than 1088 (Pocket S2 and S2K, both 1440) every rotated flip is rejected and the panel
+# stays black; clamped, the plane rotates and scales it back up at scanout.
+# !! --rotated-output-max-height EXISTS ONLY IN OUR PATCHED GAMESCOPE !! (patches/0001); an unknown
+# flag makes gamescope exit, so drop the patch and this line goes with it, as session.conf's does.
+if [ -n "${NOVADECK_ROTATED_OUTPUT_MAX_HEIGHT:-}" ]; then
+    set -- "$@" --rotated-output-max-height "$NOVADECK_ROTATED_OUTPUT_MAX_HEIGHT"
+fi
 if [ -n "${NOVADECK_PRIMARY_CONNECTOR:-}" ]; then
     set -- "$@" --prefer-output "$NOVADECK_PRIMARY_CONNECTOR"
 fi

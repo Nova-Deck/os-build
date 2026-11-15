@@ -134,16 +134,39 @@ out="$(blank NOVADECK_SOC_CLASS=SM8250 NOVADECK_PANEL_ORIENTATION=landscape)"
   || bad "landscape SM8250 got '${out:-<nothing>}', expected the ConVar left unset"
 
 CASE="rotator-cap-skips-landscape-native-panels"
-# The 1088-line inline-rotator cap only bites a panel that is rotated at scanout. A 1280-wide
-# landscape-native panel is never rotated, so it must not get the clamp.
+# The 1088-line inline-rotator cap only bites a panel that is rotated at scanout. device-env derives
+# the clamp (the installer's gamescope reads the same fact); session.conf turns it into the flag.
+# Every board is run through the SHIPPED device-env by its devicetree model string.
+DEVENV="$ROOT/rootfs/overlay/usr/lib/novadeck/device-env"
+DEVICES="$ROOT/rootfs/overlay/usr/lib/novadeck/devices"
+clamp() { NOVADECK_DEVICE_DIR="$DEVICES" NOVADECK_MODEL="$1" "$DEVENV" | sed -n 's/^NOVADECK_ROTATED_OUTPUT_MAX_HEIGHT=//p'; }
+for model in "AYANEO Pocket S2" "AYANEO Pocket S 2K"; do
+  out="$(clamp "$model")"
+  [ "$out" = 1080 ] && ok "$model (portrait, over 1088 wide) is clamped to 1080" \
+    || bad "$model got '${out:-<nothing>}', expected 1080 -- its panel is black at scanout"
+done
+for model in "AYANEO Pocket ACE" "KONKR Pocket FIT" "MANGMI Air Y Pro" "Retroid Pocket Nova" "no such board"; do
+  out="$(clamp "$model")"
+  [ "$out" = "''" ] && ok "$model is not clamped" \
+    || bad "$model got '${out:-<nothing>}', expected no clamp"
+done
+# A native mode wider than tall IS landscape; a conf that only says so in a comment gets swapped
+# into a portrait canvas and clamped as if rotated (the Retroid Pocket Nova did, until 2026-11-15).
+for conf in "$DEVICES"/*.conf; do
+  w=$(sed -n 's/^NOVADECK_PANEL_NATIVE_WIDTH=//p' "$conf"); h=$(sed -n 's/^NOVADECK_PANEL_NATIVE_HEIGHT=//p' "$conf")
+  [ -n "$w" ] && [ -n "$h" ] && [ "$w" -gt "$h" ] || continue
+  grep -qx 'NOVADECK_PANEL_ORIENTATION=landscape' "$conf" \
+    && ok "$(basename "$conf") (${w}x${h}) declares itself landscape" \
+    || bad "$(basename "$conf") is ${w}x${h} but does not set NOVADECK_PANEL_ORIENTATION=landscape"
+done
 extra() { env -i "$@" /bin/sh -c 'set -eu; . "$1"; printf "%s" "$NOVADECK_GAMESCOPE_EXTRA"' sh "$CONF"; }
-case " $(extra NOVADECK_PANEL_NATIVE_WIDTH=1440) " in
-  *" --rotated-output-max-height 1080 "*) ok "a 1440-wide portrait panel is clamped under the rotator cap" ;;
-  *) bad "a 1440-wide portrait panel lost the rotator-cap clamp" ;;
+case " $(extra NOVADECK_ROTATED_OUTPUT_MAX_HEIGHT=1080) " in
+  *" --rotated-output-max-height 1080 "*) ok "session.conf passes device-env's clamp to gamescope" ;;
+  *) bad "session.conf dropped device-env's clamp" ;;
 esac
-case " $(extra NOVADECK_PANEL_NATIVE_WIDTH=1280 NOVADECK_PANEL_ORIENTATION=landscape) " in
-  *"--rotated-output-max-height"*) bad "a landscape-native 1280x960 panel got the rotator-cap clamp" ;;
-  *) ok "a landscape-native 1280x960 panel is not clamped" ;;
+case " $(extra NOVADECK_ROTATED_OUTPUT_MAX_HEIGHT=) " in
+  *"--rotated-output-max-height"*) bad "session.conf clamped a board device-env did not" ;;
+  *) ok "no clamp from device-env, none in the session" ;;
 esac
 
 CASE="landscape-native-panel-is-not-swapped"

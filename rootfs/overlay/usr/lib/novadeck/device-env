@@ -55,6 +55,32 @@ if [[ -n "$profile" && -r "$device_dir/$profile.conf" ]]; then
     source "$device_dir/$profile.conf"
 fi
 
+# The DPU SSPP inline rotator (SM8550/SM8650, kernel 0528/0529) caps the PRE-ROTATION source at
+# 1088 lines. gamescope's logical canvas is a portrait panel's native mode swapped to landscape, so
+# that source height is the panel's native WIDTH. The plane advertises ROTATE_90 unconditionally (a
+# static capability the driver cannot qualify per-mode), so on a panel over the cap gamescope stops
+# rotating in its own composite and every flip is then rejected -- "invalid height for inline
+# rot:1440 max:1088" -- with nothing ever scanned out: a BLACK SCREEN, not a slow one.
+#
+# HW-measured 2026-09-12, all three boards on one card:
+#     Pocket ACE  1080x1620  native width 1080  -> scanout rotation, 0 flip errors
+#     Pocket FIT  1080x1920  native width 1080  -> scanout rotation, 0 flip errors
+#     Pocket S2   1440x2560  native width 1440  -> over the cap
+# The cap is on the PER-PIPE source, so a plane split in two would halve it; the split needs
+# >138 Hz on the S2's timing (514 MHz max MDP core clock / (1440 x 2585)), and it runs at 60.
+# If that panel ever gains a high-refresh mode, re-measure before assuming this still applies.
+# 1088 is real hardware, not a stale constant: raising it to 1448 blue-screened the S2 (2026-09-12).
+#
+# A board over the cap renders its output at most this tall, and the same plane scales it back up
+# to the panel at scanout. Every gamescope this image starts on the panel needs it -- the Steam
+# session (session.conf) AND the installer's (installer-session), whose UI fills the whole output.
+# One rule here so the two cannot drift: they did, and the installer went black on the S2.
+# A landscape-native panel (the Air Y Pro's 1280x960) is never rotated, however wide it is.
+NOVADECK_ROTATED_OUTPUT_MAX_HEIGHT=
+if [[ "${NOVADECK_PANEL_ORIENTATION:-portrait}" != landscape && "${NOVADECK_PANEL_NATIVE_WIDTH:-0}" -gt 1088 ]]; then
+    NOVADECK_ROTATED_OUTPUT_MAX_HEIGHT=1080
+fi
+
 vars=(
     NOVADECK_DEVICE_ID
     NOVADECK_DEVICE_NAME
@@ -69,6 +95,7 @@ vars=(
     NOVADECK_PANEL_HDR_NITS
     NOVADECK_PANEL_HDR_FALL
     NOVADECK_GAMESCOPE_FAKE_OUTPUT_MM
+    NOVADECK_ROTATED_OUTPUT_MAX_HEIGHT
 )
 
 for var in "${vars[@]}"; do

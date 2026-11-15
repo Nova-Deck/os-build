@@ -32,6 +32,20 @@ in the PKGBUILD's `prepare()`.
   original commit says every 8th draw did NOT prevent the hang, so any such change needs the same
   HL2 A/B (`dmesg | grep -c hangcheck`).
 
+- **0005-dri3-gamescope-limiter-swap-interval-override.patch** — Samuel Pitoiset, SteamOS mesa
+  (`STEAMOS:` patch, steamos-mesa commit `18b3910ac08ebf58e7f43ff1bcf864bee4a077ab`), never
+  upstream; taken from armada PR #895 (`0018`, merged 2026-11-14), which refreshed its offsets for
+  26.3.0, body identical. While gamescope's frame limiter is on, X11 GL windows (DRI3) swap with
+  interval 1, so the QuickAccess frame-rate cap paces a GL game that turned vsync off. With the
+  limiter off, the game's own swap interval applies. It reads the uint32 flag gamescope writes to
+  `GAMESCOPE_LIMITER_FILE` (exported by `novadeck-session`, written by steamcompmgr whenever a
+  target fps is set) — the same file the gamescope WSI layer reads for Vulkan. All GPUs. Matters
+  most for the x86 build: native Linux GL games run under FEX. The android build has no X11, so
+  the code is not compiled there.
+
+  **HW check owed:** a GL game with vsync off in its own settings (Half-Life 2) and the QuickAccess
+  cap at 30 must hold 30; without the patch it runs uncapped.
+
 ## Dropped
 
 - **0001-add-a830-chip-id.patch** — dropped at the 26.3.0 bump. It registered extra Adreno 830

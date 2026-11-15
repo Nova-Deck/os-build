@@ -1539,6 +1539,19 @@ for model in "MANGMI Air Y Pro" "Retroid Pocket Nova"; do
     || ok "and $model gets no rotator clamp"
 done
 
+CASE="the UI opens no audio device"
+# pygame.init() opens audio too, and with no sound server in this session SDL's audio path can block
+# before the first frame. The view brings up display, font and joystick only.
+grep -qE '^[^#]*pygame\.init\(\)' "$ROOT/installer/uiview.py" \
+  && bad "uiview.py calls pygame.init(), which opens the audio device too" \
+  || ok "uiview.py does not call pygame.init()"
+grep -qE '^[^#]*pygame\.joystick\.init\(\)' "$ROOT/installer/uiview.py" \
+  && ok "and brings up the joystick subsystem uipad counts pads through" \
+  || bad "uiview.py no longer initialises pygame.joystick, which uipad needs"
+grep -q 'mixer' "$ROOT/installer/uiview.py" "$ROOT/installer/uipad.py" "$ROOT/installer/ui" \
+  && bad "the UI uses pygame.mixer" \
+  || ok "nothing in the UI uses the mixer"
+
 CASE="session: an unknown board still gets a screen"
 printf '#!/bin/sh\nexit 0\n' >"$T/bin/device-env-empty"; chmod +x "$T/bin/device-env-empty"
 cmd="$(DEVENV="$T/bin/device-env-empty" session)"

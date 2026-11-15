@@ -57,11 +57,19 @@ class _Font:
 class _FontModule:
     Font = _Font
 
+    @staticmethod
+    def init():
+        pass
+
 
 class _DisplayModule:
     """The one surface everything draws onto, so a test can read back what landed where."""
 
     surface = None
+
+    @staticmethod
+    def init():
+        pass
 
     @classmethod
     def set_mode(cls, _size, _flags=0):
@@ -92,9 +100,16 @@ class _DrawModule:
 # The test sets this before constructing the view.
 SCREEN = (1920, 1080)
 
+class _JoystickModule:
+    @staticmethod
+    def init():
+        pass
+
+
 font = _FontModule
 display = _DisplayModule
 draw = _DrawModule
+joystick = _JoystickModule
 
 
 def init():

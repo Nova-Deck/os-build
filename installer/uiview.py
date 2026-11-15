@@ -32,7 +32,15 @@ class PygameView:
         import pygame                                            # lazy: see this file's header
 
         self.pygame = pygame
-        pygame.init()
+        # Only what the UI uses, never pygame.init(): that opens the AUDIO device as well, in a
+        # session with no sound server (root, no logind session), where SDL's ALSA->PipeWire path
+        # can block the main thread before the first frame: a black panel. Our medium ships no
+        # alsa-lib, so that hang is not known to reach us -- but a tool that draws screens has no
+        # business opening a sound card. uipad opens the controllers
+        # and counts pads through pygame.joystick, so that subsystem is up before it runs.
+        pygame.display.init()
+        pygame.font.init()
+        pygame.joystick.init()
         pygame.display.set_caption("NovaDeck installer")
         self.surface = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
         self.w, self.h = self.surface.get_size()

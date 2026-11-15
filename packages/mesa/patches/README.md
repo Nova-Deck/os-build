@@ -8,7 +8,29 @@ in the PKGBUILD's `prepare()`.
 
 ## Present
 
-None. mesa builds from the unmodified release tarball.
+- **0003-freedreno-a8xx-wait-for-zpass-sample-counts.patch** — FeralAI, armada PR #894 `0016`
+  (merged 2026-11-14), never posted upstream, body identical. On A830 the GPU can hang at high
+  clocks when it moves on after a ZPASS_DONE end event before the sample count write has landed.
+  Turnip already waits there (`emit_counter_barrier()` after the occlusion-query end event in
+  `tu_query_pool.cc`); freedreno had the same helper but used it only for pipeline-statistics
+  queries. This calls it after every ZPASS_DONE end event: occlusion pause and resume, and the
+  autotune end event. A8xx only. No switch: it mirrors Turnip and costs one WFI per query end.
+
+- **0004-freedreno-a8xx-rb-done-ts-after-each-draw.patch** — FeralAI, armada PR #894 `0017`
+  (merged 2026-11-14), never posted upstream, body identical. On A830, freedreno GMEM rendering
+  can hang the GPU during bursts of small blended draws (reported: Doom 2016 and Half-Life 2 under
+  GL). An RB_DONE_TS event with a memory write after every draw prevents it. Empirical: no root
+  cause. A8xx only. Applies to all three mesa builds (host, x86, android), since they share this
+  list.
+
+  A/B'd 2026-11-14 on an Odin 3 with `0003` applied, in one build that carried a runtime switch
+  for the event. Half-Life 2 (GL, under FEX) with the event off: `hangcheck detected gpu lockup`
+  from `hl2_linux` twice in about 3½ minutes, each recovered by a GPU reset (a stall plus the lost
+  in-flight work, every ~30 s). With the event on: no lockup. The event costs frame rate, measured
+  but not quantified here; the switch was dropped and the event is unconditional. To revisit the
+  cost, the candidates are emitting it less often or only after blended draws in GMEM passes. The
+  original commit says every 8th draw did NOT prevent the hang, so any such change needs the same
+  HL2 A/B (`dmesg | grep -c hangcheck`).
 
 ## Dropped
 

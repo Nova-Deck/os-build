@@ -27,3 +27,4 @@
 name: mesa
 pkgbuild_local: PKGBUILD
 pkgrel_suffix: 1
+patches: 0003-freedreno-a8xx-wait-for-zpass-sample-counts.patch 0004-freedreno-a8xx-rb-done-ts-after-each-draw.patch

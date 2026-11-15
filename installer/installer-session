@@ -88,10 +88,17 @@ else
 fi
 
 if [ -n "${NOVADECK_PANEL_NATIVE_WIDTH:-}" ] && [ -n "${NOVADECK_PANEL_NATIVE_HEIGHT:-}" ]; then
-    # Swap portrait native -> landscape logical. The composite-rotation patch keeps gamescope's
-    # logical output landscape and rotates only the final scanout store.
-    GS_W=$NOVADECK_PANEL_NATIVE_HEIGHT
-    GS_H=$NOVADECK_PANEL_NATIVE_WIDTH
+    if [ "${NOVADECK_PANEL_ORIENTATION:-portrait}" = landscape ]; then
+        # A landscape-native panel (Air Y Pro, Retroid Pocket Nova): the native mode IS the logical
+        # canvas, exactly as novadeck-session treats it. Swapping it gave them a 960x1280 UI.
+        GS_W=$NOVADECK_PANEL_NATIVE_WIDTH
+        GS_H=$NOVADECK_PANEL_NATIVE_HEIGHT
+    else
+        # Swap portrait native -> landscape logical. The composite-rotation patch keeps gamescope's
+        # logical output landscape and rotates only the final scanout store.
+        GS_W=$NOVADECK_PANEL_NATIVE_HEIGHT
+        GS_H=$NOVADECK_PANEL_NATIVE_WIDTH
+    fi
 else
     GS_W=1920
     GS_H=1080

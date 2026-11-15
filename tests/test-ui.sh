@@ -1522,6 +1522,23 @@ printf '%s' "$cmd" | grep -q -- '-W 2560 -H 1440 --rotated-output-max-height 108
   && ok "the Pocket S2 keeps its 2560x1440 output, rendered 1080 tall for the rotator" \
   || bad "no --rotated-output-max-height 1080 on the Pocket S2: $cmd"
 
+CASE="session: a landscape-native panel is not swapped, as the Steam session's is not"
+# NOVADECK_PANEL_ORIENTATION=landscape means the native mode already IS the logical canvas. Swapping
+# it anyway gave the Air Y Pro and the Retroid Pocket Nova (both 1280x960) a 960x1280 portrait UI.
+for model in "MANGMI Air Y Pro" "Retroid Pocket Nova"; do
+  printf '#!/bin/sh\nNOVADECK_DEVICE_DIR=%s NOVADECK_MODEL="%s" exec %s\n' \
+    "$ROOT/rootfs/overlay/usr/lib/novadeck/devices" "$model" "$ROOT/rootfs/overlay/usr/lib/novadeck/device-env" \
+    >"$T/bin/device-env-landscape"
+  chmod +x "$T/bin/device-env-landscape"
+  cmd="$(DEVENV="$T/bin/device-env-landscape" session)"
+  printf '%s' "$cmd" | grep -q -- '-W 1280 -H 960 ' \
+    && ok "$model renders its 1280x960 native mode as is" \
+    || bad "$model was not given -W 1280 -H 960: $cmd"
+  printf '%s' "$cmd" | grep -q -- '--rotated-output-max-height' \
+    && bad "$model, never rotated, got the rotator clamp: $cmd" \
+    || ok "and $model gets no rotator clamp"
+done
+
 CASE="session: an unknown board still gets a screen"
 printf '#!/bin/sh\nexit 0\n' >"$T/bin/device-env-empty"; chmod +x "$T/bin/device-env-empty"
 cmd="$(DEVENV="$T/bin/device-env-empty" session)"

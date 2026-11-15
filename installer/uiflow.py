@@ -394,16 +394,21 @@ class NetworkScreen:
 
     def __init__(self, facts):
         self.facts = facts
-        self.result = None      # ("join",) | ("retry",) | ("continue",) | ("quit",)
+        self.result = None      # ("join",) | ("retry",) | ("continue",) | ("poweroff",) | ("quit",)
 
     def state(self):
         return self.facts.get("STATE", "netcfg-failed")
 
     def handle(self, token):
-        if token in (TOKEN_BACK, TOKEN_QUIT):
+        if token == TOKEN_BACK:
             # SELECT is labelled Cancel while a join is being offered and Power off once something
-            # has failed. The result has to say which, or the button lies about what it does.
-            self.result = ("quit",) if self.state() == "need-join" else ("poweroff",)
+            # has failed, and both power off. Cancel used to quit the UI, which stops the unit
+            # CLEANLY: OnFailure= never fires, the getty was already Conflicts=-stopped, and the
+            # device sits powered on with nothing on the panel (HW, Pocket S2, 2026-11-15). The
+            # prompt's own text is "Cancel, power off, and edit novadeck/wifi.conf".
+            self.result = ("poweroff",)
+        elif token == TOKEN_QUIT:
+            self.result = ("quit",)     # the window went away: gamescope is dying, nobody pressed
         elif token == "S":
             st = self.state()
             if st in self.NO_RETRY:
@@ -468,7 +473,7 @@ class PreflightScreen:
         self.facts = facts
         self.gib = gib
         self.plan = plan_carve(facts["disk"], gib)
-        self.result = None      # ("start", gib) | ("quit",)
+        self.result = None      # ("start", gib) | ("recheck",) | ("poweroff",) | ("quit",)
 
     def _replan(self, gib):
         if gib < UD_GIB_MIN:
@@ -498,7 +503,11 @@ class PreflightScreen:
                 # alone -- and keep the size the operator chose, which is why this is a result the
                 # loop acts on rather than a fresh screen built here.
                 self.result = ("recheck",)
-        elif token in (TOKEN_BACK, TOKEN_QUIT):
+        elif token == TOKEN_BACK:
+            # Cancel powers off, for the reason NetworkScreen.handle gives: quitting leaves a
+            # powered-on device with a blank panel and no way out but the power key.
+            self.result = ("poweroff",)
+        elif token == TOKEN_QUIT:
             self.result = ("quit",)
 
     def ready(self):

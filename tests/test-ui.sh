@@ -491,14 +491,17 @@ CASE="§5: the button that says Power off powers off"
 # A screen that says "Power off" and merely exits is worse than one that says nothing: the UI dies,
 # gamescope dies with it, and the device sits at a black panel having promised otherwise. That is
 # what it did until 2026-08-22.
-powercheck() {  # <state-or-rc> -- prints the result tuple the screen produces for SELECT / S
-  WHICH="$1" python3 -c '
+powercheck() {  # <state-or-rc> [token] -- prints the result tuple the screen produces for SELECT / S
+  WHICH="$1" TOK="${2:-BACK}" python3 -c '
 import json, os, sys
 sys.path.insert(0, os.path.join(os.environ["ROOT"], "installer"))
 import uiflow
 w = os.environ["WHICH"]
 if w.startswith("net:"):
-    s = uiflow.NetworkScreen({"STATE": w[4:], "SSID": "x"}); s.handle("BACK")
+    s = uiflow.NetworkScreen({"STATE": w[4:], "SSID": "x"}); s.handle(os.environ["TOK"])
+elif w == "preflight":
+    uiflow.plan_carve = lambda disk, gib: {"NOVADECK_GIB": "1", "REPLACES_OURS": "no", "destroy": []}
+    s = uiflow.PreflightScreen({"disk": "/dev/x", "bundle": "b", "seed": "s"}); s.handle(os.environ["TOK"])
 else:
     class R: tail = []
     s = uiflow.ProgressScreen(R()); s.finish(int(w)); s.handle("S")
@@ -542,9 +545,21 @@ printf '%s' "$labels" | grep -q Continue \
 [ "$(powercheck net:no-conf)" = '["poweroff"]' ] \
   && ok "and a network failure's SELECT, labelled Power off, does too" \
   || bad "the network failure screen's Power off button does not power off"
-[ "$(powercheck net:need-join)" = '["quit"]' ] \
-  && ok "while the join prompt's SELECT is Cancel, and only cancels" \
-  || bad "cancelling a join offer powered the device off"
+# CANCEL POWERS OFF TOO. It used to quit the UI, which took gamescope with it and stopped the unit
+# CLEANLY -- so OnFailure= never fired, the getty had been Conflicts=-stopped, and the device sat
+# powered on with nothing on the panel (HW, Pocket S2, 2026-11-15: Cancel on the pre-flight screen).
+# Nothing can be done from that state but hold the power key. The join prompt's own text says
+# "Cancel, power off, and edit novadeck/wifi.conf".
+[ "$(powercheck net:need-join)" = '["poweroff"]' ] \
+  && ok "the join prompt's Cancel powers off, as its text says to" \
+  || bad "the join prompt's Cancel does not power off: $(powercheck net:need-join)"
+[ "$(powercheck preflight)" = '["poweroff"]' ] \
+  && ok "the pre-flight screen's Cancel powers off" \
+  || bad "the pre-flight screen's Cancel does not power off: $(powercheck preflight)"
+# QUIT is the window going away, not a press: gamescope is dying and nobody asked for a power-off.
+[ "$(powercheck preflight QUIT)" = '["quit"]' ] && [ "$(powercheck net:need-join QUIT)" = '["quit"]' ] \
+  && ok "while the window going away only quits" \
+  || bad "a vanished window powers the device off: $(powercheck preflight QUIT) $(powercheck net:need-join QUIT)"
 # The guard that keeps this suite from halting the machine it runs on.
 grep -q 'isinstance(source, ScriptedInput)' "$UI" \
   && ok "a scripted run refuses to power off, rather than trusting every case to set the seam" \

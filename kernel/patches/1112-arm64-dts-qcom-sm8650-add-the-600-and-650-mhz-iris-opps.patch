@@ -1,0 +1,53 @@
+From: Gabe Rowe <gaber@valvesoftware.com>
+Subject: [PATCH] arm64: dts: qcom: sm8650: add the 600 and 650 MHz iris OPPs
+
+Add two iris core OPPs above the 533 MHz top of the SM8650 table, 600 and
+650 MHz, both on the TURBO_L1 corner of MXC and MMCX, and the 1.8 and
+1.95 GHz video_cc_mvs0_clk_src rates that feed them. iris picks its core
+clock from the OPP table by load, so the new steps only engage when a
+session needs more than 533 MHz.
+
+Squashed from the Steam Frame (SM8650) kernel, bodies identical:
+  298a38874fa0 media: iris: add 600MHz OPP
+  c4e54b0d6701 media: iris: add 650MHz opp
+---
+ arch/arm64/boot/dts/qcom/sm8650.dtsi | 12 ++++++++++++
+ drivers/clk/qcom/videocc-sm8550.c    |  2 ++
+ 2 files changed, 14 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm8650.dtsi b/arch/arm64/boot/dts/qcom/sm8650.dtsi
+index ed6ebbe47..ba19eaf47 100644
+--- a/arch/arm64/boot/dts/qcom/sm8650.dtsi
++++ b/arch/arm64/boot/dts/qcom/sm8650.dtsi
+@@ -5329,6 +5329,18 @@ opp-533333334 {
+ 					required-opps = <&rpmhpd_opp_svs_l1>,
+ 							<&rpmhpd_opp_turbo>;
+ 				};
++
++				opp-600000000 {
++					opp-hz = /bits/ 64 <600000000>;
++					required-opps = <&rpmhpd_opp_turbo_l1>,
++							<&rpmhpd_opp_turbo_l1>;
++				};
++
++				opp-650000000 {
++					opp-hz = /bits/ 64 <650000000>;
++					required-opps = <&rpmhpd_opp_turbo_l1>,
++							<&rpmhpd_opp_turbo_l1>;
++				};
+ 			};
+ 		};
+ 
+diff --git a/drivers/clk/qcom/videocc-sm8550.c b/drivers/clk/qcom/videocc-sm8550.c
+index c2f11489a..5d041d6db 100644
+--- a/drivers/clk/qcom/videocc-sm8550.c
++++ b/drivers/clk/qcom/videocc-sm8550.c
+@@ -141,6 +141,8 @@ static const struct freq_tbl ftbl_video_cc_mvs0_clk_src_sm8650[] = {
+ 	F(1305000000, P_VIDEO_CC_PLL0_OUT_MAIN, 1, 0, 0),
+ 	F(1440000000, P_VIDEO_CC_PLL0_OUT_MAIN, 1, 0, 0),
+ 	F(1600000000, P_VIDEO_CC_PLL0_OUT_MAIN, 1, 0, 0),
++	F(1800000000, P_VIDEO_CC_PLL0_OUT_MAIN, 1, 0, 0),
++	F(1950000000, P_VIDEO_CC_PLL0_OUT_MAIN, 1, 0, 0),
+ 	{ }
+ };
+ 

@@ -4,7 +4,7 @@
 **Reference clone**: `_reference/deckard-linux` (mainline `v7.2` at depth 1 + `origin/sm8650-7.2` @ `e5fd17767590`,
 1282 non-merge commits, `https://github.com/evlaV/deckard-linux-no-oopsies`)
 **Our base**: 7.3.4 + the stack in `kernel/patches/`; the patched build tree is `work/kernel/linux-7.3.4`
-**Status**: triaged 2026-11-16, nothing ported yet. Phase 1 next.
+**Status**: Phase 1 patches `1100`–`1103` made 2026-11-16: stack applies, iris module builds `W=1` clean. Full kernel build + HW gate next.
 
 Update this file as work lands: tick the checklist, fill the result cells, and add a line to the
 decision log for anything decided. If Valve's branch moves, re-fetch and triage only `e5fd17767590..`.
@@ -35,15 +35,21 @@ stack must apply with `--fuzz=0`, and the kernel and DTBs must build, before any
 
 | slot | content | source | applies to 7.3.4 |
 |---|---|---|---|
-| `1100` | `60415b4a4` core lock around the instance-list scan (UAF at STREAMON); `e286f5725` fail boot on invalid uc_region; `20d42f6ba` cancel sys-error work on remove | upstream (Baryshkov, Hungyu Lin) | clean |
-| `1101` | `1b6de77b4` CAPTURE stride/size on S_FMT(OUTPUT); `e36a8c68e` EOS only at the end of a drain; `bac0a5707` let a resolution change drain before CAPTURE STREAMOFF | Christian Cortner, posted `20261028034335.26075-*`, Cc stable | `bac0a5707`'s `iris_instance.h` hunk must be redone over `1094` |
-| `1102` | `c0290ecaa` reject START/STOP after session failure (NULL deref); `0203f1508` return buffers QUEUED when start_streaming will fail (vb2 WARN); `e4bad43d6` publish min capture buffers whenever the count changes | Gabe Rowe (Valve), never posted | clean; `e4bad43d6` needs `1b6de77b4` |
+| `1100` | `e286f5725` fail boot on invalid uc_region; `60415b4a4` core lock around the instance-list scan (UAF at STREAMON) | upstream, Baryshkov series (bod `f301102c17f2`, `428e6f95e685`) | clean |
+| `1101` | `20d42f6ba` cancel sys-error work on remove | upstream, Hungyu Lin (bod `452480931648`) | clean |
+| `1102` | `1b6de77b4` CAPTURE stride/size on S_FMT(OUTPUT); `e36a8c68e` EOS only at the end of a drain; `bac0a5707` let a resolution change drain before CAPTURE STREAMOFF | Christian Cortner, posted `20261028034335.26075-*`, Cc stable | `bac0a5707`'s `iris_instance.h` placed by hand over `1094` |
+| `1103` | `c0290ecaa` reject START/STOP after session failure (NULL deref); `e4bad43d6` publish min capture buffers whenever the count changes; `0203f1508` return buffers QUEUED when start_streaming will fail (vb2 WARN) | Gabe Rowe (Valve), never posted | `e4bad43d6`'s helper hunk placed by hand (Valve dropped `IRIS_FMT_*`); needs `1102` |
+
+Upstream fixes are split by series (`1100` and `1101`), per the squash-only-a-series rule. The plan's
+original three slots became four.
 
 `5b2e4b230` (Cortner `-2`) is the same code as our `1093`. Optionally swap `1093` for the posted version
 for provenance. It is not a code change.
 
 **Gate**:
-- [ ] stack applies `--fuzz=0`, kernel builds
+- [x] stack applies `--fuzz=0` (238/238 on a fresh tarball; iris files byte-identical to the compiled tree)
+- [x] iris module builds with `W=1` in `novadeck-build`: 32 objects, 0 warnings, modpost clean
+- [ ] full kernel + DTBs build (`make kernel`), dev card
 - [ ] gen2 (Pocket S2 or FIT): Remote Play stream starts, survives a host resolution change mid-stream, no client restart loop, `dmesg | grep -i iris` clean
 - [ ] gen1 (Pocket Max): same, plus confirm `1094`'s gen1 deferral still behaves
 - [ ] ffmpeg `-c:v h264_v4l2m2m` / `hevc_v4l2m2m` on a clip with a mid-stream resolution change: decodes past the change, ends with EOS
@@ -146,3 +152,4 @@ Result: _not run_
 
 - 2026-11-16: triaged by subsystem (GPU/display, video, everything else) against `work/kernel/linux-7.3.4`. Work goes on this branch and is tracked here, not as issues.
 - 2026-11-16: verified by hand that ath12k's PS handling lives only in the link callback (Phase 4 finding).
+- 2026-11-16: Phase 1 split into four slots (`1100`–`1103`), one per upstream series plus Valve's own. Two hunks were placed by hand: `bac0a5707`'s `iris_instance.h` (context from `1094`) and `e4bad43d6`'s helper (context from Valve's `IRIS_FMT_*` removal). Kept `1093` rather than swapping it for Cortner's posted `-2`: same code, no gain worth a churn.

@@ -1,0 +1,309 @@
+From: Christian Cortner <ccortner@gmail.com>
+Subject: [PATCH] media: iris: CAPTURE size on S_FMT(OUTPUT), EOS only at end of drain, drain a resolution change before CAPTURE STREAMOFF
+
+Three decoder fixes from one posted series (patches 3-5,
+<20261028034335.26075-3-ccortner@gmail.com> .. -5-), carried as one:
+
+1. Update the CAPTURE stride and size on S_FMT(OUTPUT). S_FMT on the
+   OUTPUT queue updated the CAPTURE width and height but left
+   bytesperline and sizeimage stale, so REQBUFS(CAPTURE) allocated
+   buffers that buf_prepare then rejected with -EINVAL (seen at
+   640x360). Hits clients that do not S_FMT(CAPTURE) again. Cc stable.
+2. Signal V4L2_EVENT_EOS only at the end of a drain. EOS was queued, and
+   the m2m context marked stopped, on every LAST buffer, the PSC_LAST of
+   a source change included: a mid-stream resolution change emitted a
+   spurious EOS (ffmpeg stops there), and the real end of stream none.
+   Now gated on IRIS_INST_SUB_DRAIN_LAST. Cc stable.
+3. Let a resolution change drain before stopping CAPTURE. ffmpeg's
+   h264_v4l2m2m stops CAPTURE ~10 us after it dequeues a source change.
+   If the stop reaches the firmware before the PSC_LAST buffer, that
+   buffer still arrives, iris_inst_sub_state_change_drc_last() rejects
+   it, and the instance goes to IRIS_INST_ERROR: no more buffers come
+   back. iris_vb2_stop_streaming() now waits up to 500 ms for a pending
+   source change to drain, and warns when it does not. On gen1 DRC_LAST
+   is set when the event arrives, so the wait does not block there.
+
+Fixes: 84e17adae3e3 ("media: iris: add support for dynamic resolution change")
+
+Patch 2 of the series is the same change as our 1093. Taken from the
+Steam Frame kernel's sm8650-7.2 branch (1b6de77b4, e36a8c68e, bac0a5707).
+Bodies identical except iris_instance.h in (3): its include and the
+drc_wq field are placed against this tree's context (1094's fields).
+---
+ .../media/platform/qcom/iris/iris_buffer.c    | 26 +++++---
+ .../media/platform/qcom/iris/iris_buffer.h    |  1 +
+ .../media/platform/qcom/iris/iris_instance.h  |  3 +
+ drivers/media/platform/qcom/iris/iris_state.c |  8 ++-
+ drivers/media/platform/qcom/iris/iris_vb2.c   | 26 ++++++--
+ drivers/media/platform/qcom/iris/iris_vdec.c  | 61 ++++++++++---------
+ drivers/media/platform/qcom/iris/iris_vidc.c  |  1 +
+ 7 files changed, 85 insertions(+), 41 deletions(-)
+
+diff --git a/drivers/media/platform/qcom/iris/iris_buffer.c b/drivers/media/platform/qcom/iris/iris_buffer.c
+index fbe076769..c8823bb2e 100644
+--- a/drivers/media/platform/qcom/iris/iris_buffer.c
++++ b/drivers/media/platform/qcom/iris/iris_buffer.c
+@@ -870,9 +870,26 @@ static void iris_get_ts_metadata(struct iris_inst *inst, u64 timestamp_ns,
+ 	vbuf->timecode = inst->tss[inst->metadata_idx].tc;
+ }
+ 
+-int iris_vb2_buffer_done(struct iris_inst *inst, struct iris_buffer *buf)
++/*
++ * Queue V4L2_EVENT_EOS and mark the m2m context stopped, once, when a LAST
++ * capture buffer ends a drain. The LAST buffer of a source change does not
++ * end the stream.
++ */
++void iris_vb2_signal_eos(struct iris_inst *inst)
+ {
++	static const struct v4l2_event eos = { .type = V4L2_EVENT_EOS };
+ 	struct v4l2_m2m_ctx *m2m_ctx = inst->m2m_ctx;
++
++	if (!(inst->sub_state & IRIS_INST_SUB_DRAIN_LAST) ||
++	    v4l2_m2m_has_stopped(m2m_ctx))
++		return;
++
++	v4l2_event_queue_fh(&inst->fh, &eos);
++	v4l2_m2m_mark_stopped(m2m_ctx);
++}
++
++int iris_vb2_buffer_done(struct iris_inst *inst, struct iris_buffer *buf)
++{
+ 	struct vb2_v4l2_buffer *vbuf;
+ 	struct vb2_buffer *vb2;
+ 	u32 type, state;
+@@ -913,12 +930,7 @@ int iris_vb2_buffer_done(struct iris_inst *inst, struct iris_buffer *buf)
+ 	}
+ 
+ 	if (vbuf->flags & V4L2_BUF_FLAG_LAST) {
+-		if (!v4l2_m2m_has_stopped(m2m_ctx)) {
+-			const struct v4l2_event ev = { .type = V4L2_EVENT_EOS };
+-
+-			v4l2_event_queue_fh(&inst->fh, &ev);
+-			v4l2_m2m_mark_stopped(m2m_ctx);
+-		}
++		iris_vb2_signal_eos(inst);
+ 		inst->last_buffer_dequeued = true;
+ 	}
+ 
+diff --git a/drivers/media/platform/qcom/iris/iris_buffer.h b/drivers/media/platform/qcom/iris/iris_buffer.h
+index 27d10eb8a..d9eb2cdbf 100644
+--- a/drivers/media/platform/qcom/iris/iris_buffer.h
++++ b/drivers/media/platform/qcom/iris/iris_buffer.h
+@@ -121,6 +121,7 @@ int iris_release_input_internal_buffers(struct iris_inst *inst);
+ int iris_queue_buffer(struct iris_inst *inst, struct iris_buffer *buf);
+ int iris_queue_deferred_buffers(struct iris_inst *inst, enum iris_buffer_type buf_type);
+ int iris_vb2_buffer_done(struct iris_inst *inst, struct iris_buffer *buf);
++void iris_vb2_signal_eos(struct iris_inst *inst);
+ void iris_vb2_queue_error(struct iris_inst *inst);
+ 
+ #endif
+diff --git a/drivers/media/platform/qcom/iris/iris_instance.h b/drivers/media/platform/qcom/iris/iris_instance.h
+index 9c759abca..9dfbaff36 100644
+--- a/drivers/media/platform/qcom/iris/iris_instance.h
++++ b/drivers/media/platform/qcom/iris/iris_instance.h
+@@ -6,6 +6,7 @@
+ #ifndef __IRIS_INSTANCE_H__
+ #define __IRIS_INSTANCE_H__
+ 
++#include <linux/wait.h>
+ #include <linux/workqueue.h>
+ #include <media/v4l2-ctrls.h>
+ 
+@@ -68,6 +69,7 @@ enum iris_fmt_type_cap {
+  * @metadata_idx: index for metadata buffer
+  * @codec: codec type
+  * @last_buffer_dequeued: a flag to indicate that last buffer is sent by driver
++ * @drc_wq: woken when IRIS_INST_SUB_DRC_LAST is set
+  * @seq_seen: firmware has reported the sequence since input streaming started
+  * @capture_deferred: capture is streaming but not yet set up in firmware
+  * @deferred_capture_work: sets up a deferred capture once the sequence is known
+@@ -118,6 +120,7 @@ struct iris_inst {
+ 	u32				metadata_idx;
+ 	u32				codec;
+ 	bool				last_buffer_dequeued;
++	wait_queue_head_t		drc_wq;
+ 	bool				seq_seen;
+ 	bool				capture_deferred;
+ 	struct work_struct		deferred_capture_work;
+diff --git a/drivers/media/platform/qcom/iris/iris_state.c b/drivers/media/platform/qcom/iris/iris_state.c
+index 5552725c6..dd8e0093b 100644
+--- a/drivers/media/platform/qcom/iris/iris_state.c
++++ b/drivers/media/platform/qcom/iris/iris_state.c
+@@ -209,6 +209,7 @@ int iris_inst_sub_state_change_drain_last(struct iris_inst *inst)
+ int iris_inst_sub_state_change_drc_last(struct iris_inst *inst)
+ {
+ 	enum iris_inst_sub_state set_sub_state;
++	int ret;
+ 
+ 	if (inst->sub_state & IRIS_INST_SUB_DRC_LAST)
+ 		return -EINVAL;
+@@ -222,7 +223,12 @@ int iris_inst_sub_state_change_drc_last(struct iris_inst *inst)
+ 
+ 	set_sub_state = IRIS_INST_SUB_DRC_LAST | IRIS_INST_SUB_OUTPUT_PAUSE;
+ 
+-	return iris_inst_change_sub_state(inst, 0, set_sub_state);
++	ret = iris_inst_change_sub_state(inst, 0, set_sub_state);
++	/* a CAPTURE STREAMOFF may be waiting, see iris_vb2_stop_streaming() */
++	if (!ret)
++		wake_up_all(&inst->drc_wq);
++
++	return ret;
+ }
+ 
+ int iris_inst_sub_state_change_pause(struct iris_inst *inst, u32 plane)
+diff --git a/drivers/media/platform/qcom/iris/iris_vb2.c b/drivers/media/platform/qcom/iris/iris_vb2.c
+index 48d34ccbd..ed6213fc4 100644
+--- a/drivers/media/platform/qcom/iris/iris_vb2.c
++++ b/drivers/media/platform/qcom/iris/iris_vb2.c
+@@ -228,6 +228,15 @@ int iris_vb2_start_streaming(struct vb2_queue *q, unsigned int count)
+ 	return ret;
+ }
+ 
++/* a source change whose drain the firmware has not completed yet */
++static bool iris_drc_draining(struct iris_inst *inst)
++{
++	enum iris_inst_sub_state sub_state = READ_ONCE(inst->sub_state);
++
++	return sub_state & IRIS_INST_SUB_DRC &&
++	       !(sub_state & IRIS_INST_SUB_DRC_LAST);
++}
++
+ void iris_vb2_stop_streaming(struct vb2_queue *q)
+ {
+ 	struct iris_inst *inst;
+@@ -246,6 +255,17 @@ void iris_vb2_stop_streaming(struct vb2_queue *q)
+ 	if (V4L2_TYPE_IS_CAPTURE(q->type) && inst->state == IRIS_INST_INIT)
+ 		return;
+ 
++	/*
++	 * Stopping CAPTURE before the firmware has drained a pending
++	 * resolution change leaves the change incomplete, and decoding stalls
++	 * after the next STREAMON. Wait up to 500 ms for the drain.
++	 */
++	if (V4L2_TYPE_IS_CAPTURE(q->type) &&
++	    !wait_event_timeout(inst->drc_wq, !iris_drc_draining(inst),
++				msecs_to_jiffies(500)))
++		dev_warn(inst->core->dev,
++			 "resolution change drain timed out, stopping CAPTURE\n");
++
+ 	mutex_lock(&inst->lock);
+ 
+ 	if (!V4L2_TYPE_IS_OUTPUT(q->type) &&
+@@ -301,7 +321,6 @@ int iris_vb2_buf_out_validate(struct vb2_buffer *vb)
+ 
+ void iris_vb2_buf_queue(struct vb2_buffer *vb2)
+ {
+-	static const struct v4l2_event eos = { .type = V4L2_EVENT_EOS };
+ 	struct vb2_v4l2_buffer *vbuf = to_vb2_v4l2_buffer(vb2);
+ 	struct v4l2_m2m_ctx *m2m_ctx;
+ 	struct iris_inst *inst;
+@@ -335,10 +354,7 @@ void iris_vb2_buf_queue(struct vb2_buffer *vb2)
+ 			vbuf->field = V4L2_FIELD_NONE;
+ 			vb2_set_plane_payload(vb2, 0, 0);
+ 			v4l2_m2m_buf_done(vbuf, VB2_BUF_STATE_DONE);
+-			if (!v4l2_m2m_has_stopped(m2m_ctx)) {
+-				v4l2_event_queue_fh(&inst->fh, &eos);
+-				v4l2_m2m_mark_stopped(m2m_ctx);
+-			}
++			iris_vb2_signal_eos(inst);
+ 			inst->last_buffer_dequeued = true;
+ 			goto exit;
+ 		}
+diff --git a/drivers/media/platform/qcom/iris/iris_vdec.c b/drivers/media/platform/qcom/iris/iris_vdec.c
+index a1d426a29..64a239cc2 100644
+--- a/drivers/media/platform/qcom/iris/iris_vdec.c
++++ b/drivers/media/platform/qcom/iris/iris_vdec.c
+@@ -221,6 +221,35 @@ int iris_vdec_try_fmt(struct iris_inst *inst, struct v4l2_format *f)
+ 	return 0;
+ }
+ 
++static void iris_vdec_set_capture_size(struct iris_inst *inst, u32 width,
++				       u32 height)
++{
++	struct v4l2_pix_format_mplane *pix_mp = &inst->fmt_dst->fmt.pix_mp;
++	struct iris_buffers *bufs = &inst->buffers[BUF_OUTPUT];
++
++	switch (pix_mp->pixelformat) {
++	case V4L2_PIX_FMT_P010:
++		pix_mp->width = ALIGN(width, 128);
++		pix_mp->height = ALIGN(height, 32);
++		pix_mp->plane_fmt[0].bytesperline = ALIGN(width * 2, 256);
++		break;
++	case V4L2_PIX_FMT_QC10C:
++		pix_mp->width = roundup(width, 192);
++		pix_mp->height = ALIGN(height, 16);
++		pix_mp->plane_fmt[0].bytesperline = ALIGN(width * 4 / 3, 256);
++		break;
++	case V4L2_PIX_FMT_NV12:
++	case V4L2_PIX_FMT_QC08C:
++		pix_mp->width = ALIGN(width, 128);
++		pix_mp->height = ALIGN(height, 32);
++		pix_mp->plane_fmt[0].bytesperline = ALIGN(width, 128);
++		break;
++	}
++	pix_mp->plane_fmt[0].sizeimage = iris_get_buffer_size(inst, BUF_OUTPUT);
++	bufs->min_count = iris_vpu_buf_count(inst, BUF_OUTPUT);
++	bufs->size = pix_mp->plane_fmt[0].sizeimage;
++}
++
+ int iris_vdec_s_fmt(struct iris_inst *inst, struct v4l2_format *f)
+ {
+ 	struct v4l2_format *fmt, *output_fmt;
+@@ -272,10 +301,8 @@ int iris_vdec_s_fmt(struct iris_inst *inst, struct v4l2_format *f)
+ 		output_fmt->fmt.pix_mp.quantization = f->fmt.pix_mp.quantization;
+ 
+ 		/* Update capture format based on new ip w/h */
+-		output_fmt->fmt.pix_mp.width = ALIGN(f->fmt.pix_mp.width, 128);
+-		output_fmt->fmt.pix_mp.height = ALIGN(f->fmt.pix_mp.height, 32);
+-		inst->buffers[BUF_OUTPUT].min_count = iris_vpu_buf_count(inst, BUF_OUTPUT);
+-		inst->buffers[BUF_OUTPUT].size = iris_get_buffer_size(inst, BUF_OUTPUT);
++		iris_vdec_set_capture_size(inst, f->fmt.pix_mp.width,
++					   f->fmt.pix_mp.height);
+ 
+ 		inst->crop.left = 0;
+ 		inst->crop.top = 0;
+@@ -290,30 +317,8 @@ int iris_vdec_s_fmt(struct iris_inst *inst, struct v4l2_format *f)
+ 		fmt->type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
+ 		fmt->fmt.pix_mp.pixelformat = f->fmt.pix_mp.pixelformat;
+ 		fmt->fmt.pix_mp.num_planes = 1;
+-		switch (f->fmt.pix_mp.pixelformat) {
+-		case V4L2_PIX_FMT_P010:
+-			fmt->fmt.pix_mp.width = ALIGN(f->fmt.pix_mp.width, 128);
+-			fmt->fmt.pix_mp.height = ALIGN(f->fmt.pix_mp.height, 32);
+-			fmt->fmt.pix_mp.plane_fmt[0].bytesperline =
+-				ALIGN(f->fmt.pix_mp.width * 2, 256);
+-			break;
+-		case V4L2_PIX_FMT_QC10C:
+-			fmt->fmt.pix_mp.width = roundup(f->fmt.pix_mp.width, 192);
+-			fmt->fmt.pix_mp.height = ALIGN(f->fmt.pix_mp.height, 16);
+-			fmt->fmt.pix_mp.plane_fmt[0].bytesperline =
+-				ALIGN(f->fmt.pix_mp.width * 4 / 3, 256);
+-			break;
+-		case V4L2_PIX_FMT_NV12:
+-		case V4L2_PIX_FMT_QC08C:
+-			fmt->fmt.pix_mp.width = ALIGN(f->fmt.pix_mp.width, 128);
+-			fmt->fmt.pix_mp.height = ALIGN(f->fmt.pix_mp.height, 32);
+-			fmt->fmt.pix_mp.plane_fmt[0].bytesperline =
+-				ALIGN(f->fmt.pix_mp.width, 128);
+-			break;
+-		}
+-		fmt->fmt.pix_mp.plane_fmt[0].sizeimage = iris_get_buffer_size(inst, BUF_OUTPUT);
+-		inst->buffers[BUF_OUTPUT].min_count = iris_vpu_buf_count(inst, BUF_OUTPUT);
+-		inst->buffers[BUF_OUTPUT].size = fmt->fmt.pix_mp.plane_fmt[0].sizeimage;
++		iris_vdec_set_capture_size(inst, f->fmt.pix_mp.width,
++					   f->fmt.pix_mp.height);
+ 
+ 		inst->crop.top = 0;
+ 		inst->crop.left = 0;
+diff --git a/drivers/media/platform/qcom/iris/iris_vidc.c b/drivers/media/platform/qcom/iris/iris_vidc.c
+index cd0742acd..ba6dc378e 100644
+--- a/drivers/media/platform/qcom/iris/iris_vidc.c
++++ b/drivers/media/platform/qcom/iris/iris_vidc.c
+@@ -182,6 +182,7 @@ int iris_open(struct file *filp)
+ 	INIT_LIST_HEAD(&inst->buffers[BUF_PARTIAL].list);
+ 	init_completion(&inst->completion);
+ 	init_completion(&inst->flush_completion);
++	init_waitqueue_head(&inst->drc_wq);
+ 
+ 	iris_v4l2_fh_init(inst, filp);
+ 

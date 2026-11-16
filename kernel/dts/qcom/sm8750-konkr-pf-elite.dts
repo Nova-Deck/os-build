@@ -789,7 +789,7 @@
 	vdda-supply = <&vreg_l3g_1p2>;		/* DSI ctrl analog */
 	status = "okay";
 
-	panel@0 {
+	display_panel: panel@0 {
 		compatible = "ayaneo,ar14-144hz";	/* panel-ar14-144hz, patch 0055: 1080x1920, 144/120/90/60 Hz, DSC 8bpp v1.1 */
 		reg = <0>;
 
@@ -958,6 +958,8 @@
 		chipone,rst-gpio = <&tlmm 161 GPIO_ACTIVE_HIGH>;
 		chipone,x-res = <1080>;
 		chipone,y-res = <1920>;
+		/* Runs off the panel rails: the driver sleeps and re-inits with the panel. */
+		panel = <&display_panel>;
 		pinctrl-names = "default", "sleep";
 		pinctrl-0 = <&ts_int_default>;
 		pinctrl-1 = <&ts_int_sleep>;

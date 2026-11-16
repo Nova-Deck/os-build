@@ -1,0 +1,185 @@
+From: Philippe Simons <simons.philippe@gmail.com>
+Subject: [PATCH] Input: chipone-tddi: follow the panel's power state
+
+The ICNL9922C is the touch half of a TDDI display driver IC and has no
+supplies of its own: it runs off the panel rails. The driver only stops
+and restarts it across system suspend (its display-notifier paths are
+vendor APIs that mainline does not have), so a panel power cycle that is
+not a system suspend, such as a KMS blank, goes unnoticed. The controller
+comes back reset while the driver still treats it as configured, and it
+streams reports the driver decodes as phantom touches: about 290 IRQ/s
+with nothing touching, on a KONKR Pocket FIT after a blank and unblank.
+Rebinding the driver stopped it (0 IRQ/s).
+
+Register as a DRM panel follower when the node has a "panel" phandle:
+put the controller to sleep in panel_unpreparing, while the panel is
+still powered, and queue the driver's existing reset-and-reinit resume
+work in panel_prepared. The legacy PM callbacks step aside for a
+follower, as i2c-hid's do, so a system suspend cannot run the sequence
+twice. The follower is removed first in remove(), before anything its
+callbacks touch is freed.
+---
+ drivers/input/touchscreen/Kconfig             |  1 +
+ .../input/touchscreen/chipone_tddi/cts_core.h |  6 ++
+ .../touchscreen/chipone_tddi/cts_driver.c     | 78 ++++++++++++++++++-
+ 3 files changed, 81 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/input/touchscreen/Kconfig b/drivers/input/touchscreen/Kconfig
+index 403971a06..38c463c12 100644
+--- a/drivers/input/touchscreen/Kconfig
++++ b/drivers/input/touchscreen/Kconfig
+@@ -215,6 +215,7 @@ config TOUCHSCREEN_CHIPONE_ICN8505
+ config TOUCHSCREEN_CHIPONE_TDDI
+ 	tristate "ChipOne ICNL9922C TDDI touchscreen controller"
+ 	depends on I2C
++	depends on DRM || !DRM
+ 	help
+ 	  Say Y here if you have a ChipOne ICNL9922C TDDI based I2C
+ 	  touchscreen, as found on some Snapdragon 8 Gen 3 handhelds
+diff --git a/drivers/input/touchscreen/chipone_tddi/cts_core.h b/drivers/input/touchscreen/chipone_tddi/cts_core.h
+index e6fe88e06..606145c2c 100644
+--- a/drivers/input/touchscreen/chipone_tddi/cts_core.h
++++ b/drivers/input/touchscreen/chipone_tddi/cts_core.h
+@@ -3,6 +3,8 @@
+ 
+ #include "cts_config.h"
+ 
++#include <drm/drm_panel.h>
++
+ #ifdef CHIPONE_SENSOR_EN
+ #include <linux/mmi_wake_lock.h>
+ #include <linux/sensors.h>
+@@ -425,6 +427,10 @@ struct chipone_ts_data {
+     struct workqueue_struct *workqueue;
+     struct delayed_work fw_upgrade_work;
+     struct work_struct ts_resume_work;
++    /* The controller is powered by the panel rails: follow the panel. */
++    struct drm_panel_follower panel_follower;
++    bool is_panel_follower;
++    bool panel_suspended;
+ #ifdef CONFIG_CTS_CHARGER_DETECT
+     void *charger_detect_data;
+ #endif
+diff --git a/drivers/input/touchscreen/chipone_tddi/cts_driver.c b/drivers/input/touchscreen/chipone_tddi/cts_driver.c
+index 4b56393fc..bc4208c86 100644
+--- a/drivers/input/touchscreen/chipone_tddi/cts_driver.c
++++ b/drivers/input/touchscreen/chipone_tddi/cts_driver.c
+@@ -121,6 +121,48 @@ static void cts_resume_work_func(struct work_struct *work)
+     cts_resume(cts_data);
+ }
+ 
++/*
++ * The TDDI controller is the touch half of the display driver IC and runs off
++ * the panel rails, so it loses power whenever the panel is unprepared, not only
++ * across system suspend. Without these callbacks a panel power cycle leaves the
++ * driver talking to a freshly reset controller that floods the IRQ line with
++ * reports it decodes as phantom touches.
++ */
++static int cts_panel_unpreparing(struct drm_panel_follower *follower)
++{
++    struct chipone_ts_data *cts_data =
++        container_of(follower, struct chipone_ts_data, panel_follower);
++
++    if (cts_data->panel_suspended)
++        return 0;
++
++    /* The panel is still powered here: put the controller to sleep cleanly. */
++    cancel_work_sync(&cts_data->ts_resume_work);
++    cts_suspend(cts_data);
++    cts_data->panel_suspended = true;
++    return 0;
++}
++
++static int cts_panel_prepared(struct drm_panel_follower *follower)
++{
++    struct chipone_ts_data *cts_data =
++        container_of(follower, struct chipone_ts_data, panel_follower);
++
++    /* Already running, e.g. the panel's first prepare after probe. */
++    if (!cts_data->panel_suspended)
++        return 0;
++
++    cts_data->panel_suspended = false;
++    /* Reset and re-init off the modeset path, as the vendor notifiers do. */
++    queue_work(cts_data->workqueue, &cts_data->ts_resume_work);
++    return 0;
++}
++
++static const struct drm_panel_follower_funcs cts_panel_follower_funcs = {
++    .panel_prepared = cts_panel_prepared,
++    .panel_unpreparing = cts_panel_unpreparing,
++};
++
+ #ifdef CFG_MTK_PANEL_NOTIFIER
+ static int disp_notifier_callback(struct notifier_block *nb,
+ 				unsigned long value, void *v)
+@@ -819,6 +861,20 @@ static int cts_driver_probe(struct spi_device *client)
+         goto err_deinit_oem;
+     }
+ 
++    /* Before the follower: its callbacks queue and cancel this work. */
++    INIT_WORK(&cts_data->ts_resume_work, cts_resume_work_func);
++
++    if (drm_is_panel_follower(&client->dev)) {
++        cts_data->panel_follower.funcs = &cts_panel_follower_funcs;
++        ret = drm_panel_add_follower(&client->dev, &cts_data->panel_follower);
++        if (ret) {
++            if (ret != -EPROBE_DEFER)
++                cts_err("Add panel follower failed %d", ret);
++            goto err_deinit_oem;
++        }
++        cts_data->is_panel_follower = true;
++    }
++
+ #ifdef CFG_CTS_HEARTBEAT_MECHANISM
+     INIT_DELAYED_WORK(&cts_data->heart_work, cts_heartbeat_mechanism_work);
+ #endif
+@@ -828,8 +884,6 @@ static int cts_driver_probe(struct spi_device *client)
+     queue_delayed_work(cts_data->workqueue, &cts_data->fw_upgrade_work,
+         msecs_to_jiffies(15 * 1000));
+ 
+-    INIT_WORK(&cts_data->ts_resume_work, cts_resume_work_func);
+-
+ #ifdef CHIPONE_SENSOR_EN
+ 	mutex_init(&cts_data->state_mutex);
+ 	if (!initialized_sensor) {
+@@ -935,6 +989,11 @@ static void cts_driver_remove(struct spi_device *client)
+     cts_data = (struct chipone_ts_data *)spi_get_drvdata(client);
+ #endif
+     if (cts_data) {
++        /* First, so no panel callback runs against what is freed below. */
++        if (cts_data->is_panel_follower)
++            drm_panel_remove_follower(&cts_data->panel_follower);
++        cancel_work_sync(&cts_data->ts_resume_work);
++
+         ret = cts_stop_device(&cts_data->cts_dev);
+         if (ret)
+             cts_warn("Stop device failed %d", ret);
+@@ -1002,14 +1061,25 @@ static void cts_driver_remove(struct spi_device *client)
+ #ifdef CONFIG_CTS_PM_LEGACY
+ static int cts_i2c_driver_suspend(struct device *dev, pm_message_t state)
+ {
++    struct chipone_ts_data *cts_data = dev_get_drvdata(dev);
++
++    /* A panel follower suspends and resumes with the panel instead. */
++    if (cts_data->is_panel_follower)
++        return 0;
++
+     cts_info("Suspend by legacy power management");
+-    return cts_suspend(dev_get_drvdata(dev));
++    return cts_suspend(cts_data);
+ }
+ 
+ static int cts_i2c_driver_resume(struct device *dev)
+ {
++    struct chipone_ts_data *cts_data = dev_get_drvdata(dev);
++
++    if (cts_data->is_panel_follower)
++        return 0;
++
+     cts_info("Resume by legacy power management");
+-    return cts_resume(dev_get_drvdata(dev));
++    return cts_resume(cts_data);
+ }
+ #endif /* CONFIG_CTS_PM_LEGACY */
+ 

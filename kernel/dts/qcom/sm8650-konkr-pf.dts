@@ -17,7 +17,7 @@
 	status = "okay";
 	vdda-supply = <&vreg_l3i_1p2>;
 
-	panel@0 {
+	display_panel: panel@0 {
 		status = "okay";
 		compatible = "ayaneo,ar14-144hz";
 		reg = <0>;
@@ -90,6 +90,9 @@
 		chipone,rst-gpio = <&tlmm 161 GPIO_ACTIVE_HIGH>;
 		chipone,x-res = <1080>;
 		chipone,y-res = <1920>;
+
+		/* Runs off the panel rails: the driver sleeps and re-inits with the panel. */
+		panel = <&display_panel>;
 
 		pinctrl-names = "default";
 		pinctrl-0 = <&ts_irq_default>, <&ts_reset_default>;

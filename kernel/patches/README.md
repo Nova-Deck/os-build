@@ -88,6 +88,7 @@ Then (2026-11-12, MANGMI Air Y Pro: panel `0580`, CST66xx touch `0736`, LCDB reg
 Then (2026-11-12, Air Y Pro rumble on GCC_GP1 through clk-pwm: rcg2 duty-cycle fix `0135`, gcc-sm8250 GP ops `0137`): 2 `mainline`, 47 `posted`, 33 `novadeck`, 142 `community` = 224.
 Then (2026-11-14, HDR with direct scanout: 10-bit planes `0393`, per-plane IGC + 3D LUT colour pipelines `0394`, colorop state duplication `0485`; first added as `0398`/`0399` and moved down the same day so the SM8250 extension could follow them): 2 `mainline`, 48 `posted`, 33 `novadeck`, 144 `community` = 227.
 Then (2026-11-14, the same pipelines on SM8250: driver `0398`, binding `0366`, DT `1146`): 2 `mainline`, 48 `posted`, 36 `novadeck`, 144 `community` = 230.
+Then (2026-11-16, chipone TDDI follows the panel's power state `0739`; recounted from the table, which the running line had drifted from by two): 3 `mainline`, 48 `posted`, 37 `novadeck`, 145 `community` = 233.
 The 7.3 bump deleted every `mainline` row (`0230 0620 0800 1080 1155`), the two `posted` ones
 that landed (`0275 1170`), and `0810`/`0825` with the old `0820`, whose jobs mainline's
 `ayaneo,pocket-s2-sndcard` and per-DAI MI2S clocks now do; `0820` is reused for the sm8750
@@ -205,6 +206,7 @@ taken for issue #122 — see the `0780`–`0796` rows.
 | `0735` | novadeck | Kconfig for `0730`. | with `0730` |
 | `0736` | community | danyi's runtime-only Hynitron CST66xx driver (AYANEO Pocket S Mini), with Philippe Simons's `iovcc` supply added for the MANGMI Air Y Pro; ROCKNIX SM8250 `0065`. A different driver from the Odin2 Mini's mainline CSTXXX. Never posted. | never |
 | `0738` | community | Chipone vendor driver via kevinkreiser/chipone_tddi → ROCKNIX. ROCKNIX SM8750 has a ~380-line clean-room replacement (`0061-input-touchscreen-add-chipone-tddi`). | never |
+| `0739` | novadeck | Written here 2026-11-16. The TDDI controller runs off the panel rails, but `0738` only stops and restarts it across system suspend (its display-notifier paths are vendor APIs mainline lacks), so novadeck's sleep, a KMS blank with no s2idle, power-cycled it unnoticed: ~290 IRQ/s of phantom touches stealing gamepad focus on the Pocket FIT after wake, 0 after a driver rebind. Registers as a DRM panel follower (sleep in `panel_unpreparing`, the driver's own reset-and-reinit work in `panel_prepared`), legacy PM steps aside like i2c-hid's. Needs the touch node's `panel` phandle (Pocket FIT, Pocket FIT Elite). Goes with `0738`. | with `0738` |
 | `0745` | novadeck | Driver by Teguh Sobirin; ROCKNIX SM8550 `0031`. Never posted. | never |
 | `0750` | community | ROCKNIX SM8250 `0008` (Molly Sophia, BigfootACA, Teguh Sobirin). Never posted. | never |
 | `0755` | community | ROCKNIX SM8250 `0060` (sunshineinabox) at its 2026-10 state: the Pocket Max driver plus its Air Y Pro variant (four ADC channels, digital L2/R2, Nintendo-labelled face buttons), selected by compatible. Makefile hunk re-rolled around `0750`. | never |

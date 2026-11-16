@@ -1283,6 +1283,12 @@
 	 * enabled. */
 	qcom,pcm-ports-mask = <0x200>;
 
+	/* The class-H port's sample interval (64) does not divide the 50x16
+	 * frame, so master and codec only line up on a stream synchronization
+	 * point; without one, about half the headphone streams start out of
+	 * phase and play fuzzy. 6 frames is the period Android uses. */
+	qcom,ssp-period = <6>;
+
 	wcd_rx: codec@0,4 {
 		compatible = "sdw20217010e00";
 		reg = <0 4>;

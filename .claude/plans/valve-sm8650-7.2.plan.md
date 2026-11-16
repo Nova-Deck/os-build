@@ -158,6 +158,18 @@ the issue is resolved". The report (Ross Brown, ath12k list 2025-10-14, NCM865 =
 re-enable on lore through 2026-11-16. Valve carries both halves: `6b7e0769b` (= `af50baccaa5f`, STICK) and `e7d3595a7`.
 Our image ships no NetworkManager `wifi.powersave` setting, so with `1034` PS would go live on every boot (NM default 3).
 
+Odin 3 field data (internal install journal, read 2026-11-16, 105 boots; grouped by kernel build time vs `5ebe437`):
+
+| kernel | boots | hours | boots ≥ 1 h | boots with BEACON-LOSS |
+|---|---|---|---|---|
+| 7.2.11 | 45 | 39.4 | 7 | 0 |
+| 7.3.1 without `1026` | 22 | 7.3 | 1 | 6 (all on 11-02, in three clusters: 00:28–01:01, 07:18–07:27, 23:13) |
+| 7.3.1/7.3.3/7.3.4 with `1026` | 38 | 9.2 | 1 | 0 |
+
+Same AP and channel on both sides of `1026` (NETGEAR77-5G, 5220 MHz). The same pre-`1026` build then ran 10 more boots
+clean (11-02 15:43 to 11-04). Read: consistent with `1026` helping, but weak: one bad day of reboot clusters, and
+only 9.2 h of mostly short boots after it. Against the code, STICK should be inert with PS off.
+
 1. [ ] Read the beacon-loss counts from the dev cards that carry `1026` (CTRL-EVENT-BEACON-LOSS per `_BOOT_ID`) and decide: keep or drop `1026`.
 2. [ ] `1034` = `e7d3595a7` (Gabe Rowe / Neil Armstrong) with its bare `printk` turned back into `ath12k_dbg`.
 3. [ ] A/B with PS really on: throughput (the upstream revert's symptom); idle battery drain over a fixed time; ping latency/jitter; a Remote Play session (latency-sensitive); beacon loss over days, now with STICK live if `1026` is dropped.

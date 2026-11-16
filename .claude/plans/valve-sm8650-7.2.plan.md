@@ -4,7 +4,7 @@
 **Reference clone**: `_reference/deckard-linux` (mainline `v7.2` at depth 1 + `origin/sm8650-7.2` @ `e5fd17767590`,
 1282 non-merge commits, `https://github.com/evlaV/deckard-linux-no-oopsies`)
 **Our base**: 7.3.4 + the stack in `kernel/patches/`; the patched build tree is `work/kernel/linux-7.3.4`
-**Status**: Phase 1 (`1100`–`1103`) HW gate PASSED 2026-11-16 on dev card `20261116T142807Z` (Pocket FIT + Pocket Max). That card came from a throwaway merge with the audio branch (`test/valve-p1+audio` 98e9164, local only). Phase 2 (`1031`–`1033`, `5ba2475`) A/B done on the FIT; the "day of use" check and the 1033 6 GHz A/B are open. Phase 3 (`0271`) HW gate PASSED 2026-11-16 on card `20261116T180915Z` (FIT + Pocket Max). Phase 4 CLOSED 2026-11-16 with no patch (keep `1026`, `e7d3595a7` parked).
+**Status**: Phase 1 (`1100`–`1103`) HW gate PASSED 2026-11-16 on dev card `20261116T142807Z` (Pocket FIT + Pocket Max). That card came from a throwaway merge with the audio branch (`test/valve-p1+audio` 98e9164, local only). Phase 2 (`1031`–`1033`, `5ba2475`) A/B done on the FIT; the "day of use" check and the 1033 6 GHz A/B are open. Phase 3 (`0271`) HW gate PASSED 2026-11-16 on card `20261116T180915Z` (FIT + Pocket Max). Phase 4 CLOSED 2026-11-16 with no patch (keep `1026`, `e7d3595a7` parked). **MERGED to main 2026-11-16 (`e7a8f99`), unpushed.** Still open: the Phase 2 "day of use" check and the `1033` 6 GHz A/B.
 
 Update this file as work lands: tick the checklist, fill the result cells, and add a line to the
 decision log for anything decided. If Valve's branch moves, re-fetch and triage only `e5fd17767590..`.

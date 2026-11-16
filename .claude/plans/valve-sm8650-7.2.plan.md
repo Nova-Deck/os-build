@@ -151,9 +151,16 @@ PS through `ieee80211_vif_cfg_change_notify()`. So NetworkManager's power-save s
 firmware. The DTIM STICK policy that `1026` reverts is set in `ath12k_bss_assoc` regardless, but it should
 only matter while the station sleeps. That weakens `1026`'s premise.
 
+Upstream history (read 2026-11-16): this exact fix was merged as `4b66d18918f8` ("Fix missing station power save
+configuration", Sep 2025) and REVERTED as `a7716c9d922d` (Oct 2025, also in 6.17 stable), "temporarily ... until
+the issue is resolved". The report (Ross Brown, ath12k list 2025-10-14, NCM865 = WCN7850, kernel 6.16.11): speedtest
+35.88 down / 64.41 up Mbit/s at 90 ms ping, against 551.98 / 605.40 at 8.7 ms for an AX210 on the same AP. No
+re-enable on lore through 2026-11-16. Valve carries both halves: `6b7e0769b` (= `af50baccaa5f`, STICK) and `e7d3595a7`.
+Our image ships no NetworkManager `wifi.powersave` setting, so with `1034` PS would go live on every boot (NM default 3).
+
 1. [ ] Read the beacon-loss counts from the dev cards that carry `1026` (CTRL-EVENT-BEACON-LOSS per `_BOOT_ID`) and decide: keep or drop `1026`.
 2. [ ] `1034` = `e7d3595a7` (Gabe Rowe / Neil Armstrong) with its bare `printk` turned back into `ath12k_dbg`.
-3. [ ] A/B with PS really on: idle battery drain over a fixed time; ping latency/jitter; a Remote Play session (latency-sensitive); beacon loss over days, now with STICK live if `1026` is dropped.
+3. [ ] A/B with PS really on: throughput (the upstream revert's symptom); idle battery drain over a fixed time; ping latency/jitter; a Remote Play session (latency-sensitive); beacon loss over days, now with STICK live if `1026` is dropped.
 
 Result: _not run_
 

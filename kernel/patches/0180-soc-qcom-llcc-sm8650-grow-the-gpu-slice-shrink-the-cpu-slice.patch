@@ -1,0 +1,43 @@
+From: Gabe Rowe <gaber@valvesoftware.com>
+Subject: [PATCH] llcc-qcom: gpu LLC priority/size increased, decrease cpuss
+ max capacity
+
+SM8650 slice table: LLCC_GPU max_cap 3096 -> 4096 KiB and priority
+1 -> 2; LLCC_CPUSS max_cap 5120 -> 1024 KiB. Both slices keep
+bonus_ways = 0xffffff and are not fixed_size, so each can still borrow
+free ways past its cap.
+
+Taken from the Steam Frame kernel's sm8650-7.2 branch (2fb051b4e); the
+original carries no message beyond its subject and no sign-off. Carried
+as an A/B TEST: on the current table the FIT's GPU already reads at
+~400 GB/s up to 8 MiB (past its 3 MiB cap), and the CPU shows no clear
+system-cache step between L3 and DRAM. Drop it unless the A/B shows a
+gain.
+---
+ drivers/soc/qcom/llcc-qcom.c | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/soc/qcom/llcc-qcom.c b/drivers/soc/qcom/llcc-qcom.c
+index 733999867..e90db5079 100644
+--- a/drivers/soc/qcom/llcc-qcom.c
++++ b/drivers/soc/qcom/llcc-qcom.c
+@@ -3394,7 +3394,7 @@ static const struct llcc_slice_config sm8650_data[] = {
+ 	{
+ 		.usecase_id = LLCC_CPUSS,
+ 		.slice_id = 1,
+-		.max_cap = 5120,
++		.max_cap = 1024,
+ 		.priority = 1,
+ 		.bonus_ways = 0xffffff,
+ 		.cache_mode = 0,
+@@ -3450,8 +3450,8 @@ static const struct llcc_slice_config sm8650_data[] = {
+ 	}, {
+ 		.usecase_id = LLCC_GPU,
+ 		.slice_id = 9,
+-		.max_cap = 3096,
+-		.priority = 1,
++		.max_cap = 4096,
++		.priority = 2,
+ 		.bonus_ways = 0xffffff,
+ 		.cache_mode = 0,
+ 		.write_scid_en = true,

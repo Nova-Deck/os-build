@@ -92,10 +92,23 @@ Findings while making them:
 **Gate**:
 - [x] builds, applies: 241/241 at `--fuzz=0` on a fresh tarball; `make W=1 drivers/net/wireless/ath/ath12k/` in
   `novadeck-build`, 41 objects, 0 warnings
-- [ ] the WMI event/IRQ rate at idle is lower. Sample the ath12k lines of `/proc/interrupts` over 60 s idle, on the
+- [x] the WMI event/IRQ rate at idle is lower (`ce2` −34 %, see below). Sample the ath12k lines of `/proc/interrupts` over 60 s idle, on the
   SAME ath12k device (Odin 2 / FIT / S2 / Odin 3). **Take the BEFORE leg first**, on card `20261116T142807Z`,
   which has no `1032`.
-- [ ] `9f9eb662a`: zero "Timeout while waiting for regulatory update" per boot (count it on the before card too)
+- [x] `9f9eb662a`: zero "Timeout while waiting for regulatory update" per boot: 0 before, 0 after (null, the trigger never fired)
+
+BEFORE leg (2026-11-16, Pocket FIT, card `20261116T142807Z`, idle, screen on, 5 GHz ch 44 80 MHz). The ath12k MSI deltas
+summed over CPUs, three 60 s samples starting at 116/176/236 s uptime. `ce2` is the target→host WMI pipe, where DIAG
+events arrive:
+`ce2` 904 / 942 / 913 (≈15/s), `ce3` 20 / 20 / 20, `ce0`/`ce1`/`ce5`/`mhi` 0, DP rings ≈ 120–185 in total.
+Reg-update timeouts this boot: 0.
+AFTER leg (card `20261116T173202Z`, built from `95618eb`, this branch only; same FIT, network, channel and procedure,
+samples starting at 122/182/242 s): `ce2` **602 / 602 / 602** (exactly 10/s), `ce3` 20 / 20 / 20, DP rings ≈ 240–390
+in total. Reg-update timeouts 0, ath12k warnings 0.
+Verdict for `1032`'s DIAG part: WMI events at idle drop by a third, from ≈15.3/s to 10.0/s. What is left is perfectly
+periodic, so the variable ≈300–340/min removed was the DIAG stream. The DP rings carry LAN traffic, which differs
+between the two runs; this A/B doesn't attribute it. The reg-timeout check is null on both cards: the trigger
+(a dropped reg reply) never fired, so that shows no harm, not a fix.
 - [ ] `1033`: 6 GHz throughput/RSSI A/B, but only if a 6 GHz AP is available. Otherwise hold `1033` back
 - [ ] no new `ath12k` warnings over a day of use
 

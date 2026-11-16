@@ -4,7 +4,7 @@
 **Reference clone**: `_reference/deckard-linux` (mainline `v7.2` at depth 1 + `origin/sm8650-7.2` @ `e5fd17767590`,
 1282 non-merge commits, `https://github.com/evlaV/deckard-linux-no-oopsies`)
 **Our base**: 7.3.4 + the stack in `kernel/patches/`; the patched build tree is `work/kernel/linux-7.3.4`
-**Status**: Phase 1 patches `1100`–`1103` made 2026-11-16: stack applies, iris module builds `W=1` clean. Dev card `20261116T142807Z` built from a throwaway merge with the audio branch (`test/valve-p1+audio` 98e9164, local only). HW gate next.
+**Status**: Phase 1 (`1100`–`1103`) HW gate PASSED 2026-11-16 on dev card `20261116T142807Z` (Pocket FIT + Pocket Max). That card came from a throwaway merge with the audio branch (`test/valve-p1+audio` 98e9164, local only). Phase 2 next.
 
 Update this file as work lands: tick the checklist, fill the result cells, and add a line to the
 decision log for anything decided. If Valve's branch moves, re-fetch and triage only `e5fd17767590..`.
@@ -50,8 +50,8 @@ for provenance. It is not a code change.
 - [x] stack applies `--fuzz=0` (238/238 on a fresh tarball; iris files byte-identical to the compiled tree)
 - [x] iris module builds with `W=1` in `novadeck-build`: 32 objects, 0 warnings, modpost clean
 - [x] full kernel + DTBs build, dev card: `20261116T142807Z`, from local `test/valve-p1+audio` (this branch + `audio/headphone-class-h`), all 241 patches applied
-- [ ] gen2 (Pocket S2 or FIT): Remote Play stream starts, survives a host resolution change mid-stream, no client restart loop, `dmesg | grep -i iris` clean
-- [ ] gen1 (Pocket Max): same, plus confirm `1094`'s gen1 deferral still behaves
+- [x] gen2 (Pocket S2 or FIT): Remote Play stream starts, survives a host resolution change mid-stream, no client restart loop, `dmesg | grep -i iris` clean. Pocket FIT 2026-11-16, user: "resolution change worked"; no iris kernel lines in that boot (`bcbb589d`)
+- [x] gen1 (Pocket Max): same, plus confirm `1094`'s gen1 deferral still behaves. 2026-11-16, user: "remote play resolution change worked"; no iris kernel lines in that boot (`6ec7501f`)
 - [x] ffmpeg `-c:v h264_v4l2m2m` / `hevc_v4l2m2m` on a clip with a mid-stream resolution change: decodes past the change, ends with EOS
 
 Result (ffmpeg leg, 2026-11-16, Pocket FIT, card `20261116T142807Z`, ffmpeg n8.1.1): the clip goes 720p → 1080p → 720p,
@@ -60,8 +60,12 @@ Result (ffmpeg leg, 2026-11-16, Pocket FIT, card `20261116T142807Z`, ffmpeg n8.1
 the last 15 before 1080p→720p on every run, and 0–8 before 720p→1080p. That is ffmpeg's: `v4l2_handle_event()` →
 `ff_v4l2_m2m_codec_reinit()` STREAMOFFs capture on SOURCE_CHANGE without draining up to LAST. ffmpeg also deadlocks
 in that reinit unless a `format` filter copies frames out. Neither is an iris finding.
-No pre-Phase-1 baseline was taken, so this does not show `1102` changed anything. Remote Play (the client
-that matters) is still owed on gen2 and gen1.
+No pre-Phase-1 baseline was taken, so this does not show `1102` changed anything.
+
+Result (Remote Play, 2026-11-16, same card moved between devices): a host resolution change mid-stream worked
+on the Pocket FIT (gen2) and the Pocket Max (gen1), by the user's report. Neither boot logged an iris line.
+The Steam streaming client leaves no decoder trace on the device: `streaming_log.txt` holds only the
+host-side capture stub written at each Steam start. **Phase 1 HW gate: PASSED.**
 
 ## Phase 2: ath12k fixes (WCN7850/7860: SM8550, SM8650, SM8750 boards)
 

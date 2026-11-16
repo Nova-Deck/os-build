@@ -52,9 +52,16 @@ for provenance. It is not a code change.
 - [x] full kernel + DTBs build, dev card: `20261116T142807Z`, from local `test/valve-p1+audio` (this branch + `audio/headphone-class-h`), all 241 patches applied
 - [ ] gen2 (Pocket S2 or FIT): Remote Play stream starts, survives a host resolution change mid-stream, no client restart loop, `dmesg | grep -i iris` clean
 - [ ] gen1 (Pocket Max): same, plus confirm `1094`'s gen1 deferral still behaves
-- [ ] ffmpeg `-c:v h264_v4l2m2m` / `hevc_v4l2m2m` on a clip with a mid-stream resolution change: decodes past the change, ends with EOS
+- [x] ffmpeg `-c:v h264_v4l2m2m` / `hevc_v4l2m2m` on a clip with a mid-stream resolution change: decodes past the change, ends with EOS
 
-Result: _not run_
+Result (ffmpeg leg, 2026-11-16, Pocket FIT, card `20261116T142807Z`, ffmpeg n8.1.1): the clip goes 720p → 1080p → 720p,
+60 unique frames per segment. H.264 and HEVC, 3 runs each, all pass: both changes decoded, a clean exit, and no new
+`dmesg` lines. Every frame output matches a software decode bit for bit, in order. Some frames are lost at each change:
+the last 15 before 1080p→720p on every run, and 0–8 before 720p→1080p. That is ffmpeg's: `v4l2_handle_event()` →
+`ff_v4l2_m2m_codec_reinit()` STREAMOFFs capture on SOURCE_CHANGE without draining up to LAST. ffmpeg also deadlocks
+in that reinit unless a `format` filter copies frames out. Neither is an iris finding.
+No pre-Phase-1 baseline was taken, so this does not show `1102` changed anything. Remote Play (the client
+that matters) is still owed on gen2 and gen1.
 
 ## Phase 2: ath12k fixes (WCN7850/7860: SM8550, SM8650, SM8750 boards)
 

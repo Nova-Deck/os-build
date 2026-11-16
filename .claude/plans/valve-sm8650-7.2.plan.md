@@ -4,7 +4,7 @@
 **Reference clone**: `_reference/deckard-linux` (mainline `v7.2` at depth 1 + `origin/sm8650-7.2` @ `e5fd17767590`,
 1282 non-merge commits, `https://github.com/evlaV/deckard-linux-no-oopsies`)
 **Our base**: 7.3.4 + the stack in `kernel/patches/`; the patched build tree is `work/kernel/linux-7.3.4`
-**Status**: Phase 1 (`1100`–`1103`) HW gate PASSED 2026-11-16 on dev card `20261116T142807Z` (Pocket FIT + Pocket Max). That card came from a throwaway merge with the audio branch (`test/valve-p1+audio` 98e9164, local only). Phase 2 next.
+**Status**: Phase 1 (`1100`–`1103`) HW gate PASSED 2026-11-16 on dev card `20261116T142807Z` (Pocket FIT + Pocket Max). That card came from a throwaway merge with the audio branch (`test/valve-p1+audio` 98e9164, local only). Phase 2 patches `1031`–`1033` committed `5ba2475` (applies, builds `W=1` clean); its HW before-leg is owed on the current card.
 
 Update this file as work lands: tick the checklist, fill the result cells, and add a line to the
 decision log for anything decided. If Valve's branch moves, re-fetch and triage only `e5fd17767590..`.
@@ -77,10 +77,25 @@ host-side capture stub written at each Steam start. **Phase 1 HW gate: PASSED.**
 
 `1033` is separate because it changes 6 GHz transmit power.
 
+Made 2026-11-16 (`5ba2475`): all five cherry-pick clean onto the stack below `1031`. Bodies identical. Valve's commits carry
+no Signed-off-by, so the patches have none either.
+
+Findings while making them:
+- `1031` is **inert here**. `ath12k_core_resume()` runs only from the PM resume path, and our suspend is a cgroup freeze
+  that never enters s2idle (memory: suspend). Carried for correctness, like `0826`. The original gate
+  ("after suspend/wake `iw reg get` …") cannot fire, so it is dropped.
+- `1032`'s DIAG part is a real change for us: `CONFIG_ATH12K_TRACING` is off, so `ath12k_wmi_diag_event()` hands every
+  DIAG event to a no-op tracepoint. With the patch the firmware is no longer asked for the stream.
+- `1033`: ath11k reads the same `psd_power_info` word with `BIT(0)`. ath12k's EIRP mask is wider (`0xffff0000`
+  against `0xff0000`), so the layouts may really differ. Hold it back unless a 6 GHz A/B is run.
+
 **Gate**:
-- [ ] builds, applies
-- [ ] after suspend/wake, `iw reg get` shows our country, not `00`, and reconnect time is shorter than before (measure both)
-- [ ] the WMI event/IRQ rate at idle is lower (before/after `/proc/interrupts` sample over 60 s)
+- [x] builds, applies: 241/241 at `--fuzz=0` on a fresh tarball; `make W=1 drivers/net/wireless/ath/ath12k/` in
+  `novadeck-build`, 41 objects, 0 warnings
+- [ ] the WMI event/IRQ rate at idle is lower. Sample the ath12k lines of `/proc/interrupts` over 60 s idle, on the
+  SAME ath12k device (Odin 2 / FIT / S2 / Odin 3). **Take the BEFORE leg first**, on card `20261116T142807Z`,
+  which has no `1032`.
+- [ ] `9f9eb662a`: zero "Timeout while waiting for regulatory update" per boot (count it on the before card too)
 - [ ] `1033`: 6 GHz throughput/RSSI A/B, but only if a 6 GHz AP is available. Otherwise hold `1033` back
 - [ ] no new `ath12k` warnings over a day of use
 

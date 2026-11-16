@@ -205,7 +205,6 @@ Result: CLOSED 2026-11-16 with no new patch.
 | bcm-voter AMC vote cache (final diff of `49f668d05`…`01720d1ea`, minus the MM0 keepalive) | fewer identical RPMh writes | unmeasured |
 | `7ab3f57ab`, `a1190a326` | cpufreq-hw: unvote offline CPUs; suspend frequency | low |
 | `8cf0e2426`/`54fccc4a9`, `83c45678b` | UFS retries / PHY poll 100 ms; blk-mq NULL tags on CPU offline | only on `phy initialization timed-out` |
-| `2fb051b4e` | SM8650 LLCC: GPU slice 4 MB prio 2, CPUSS 1 MB | tuning; needs a benchmark |
 | `d0fd1a758`, `14503d7d3` | schedutil uclamp-rise rate limit; sched_ext set_cpus_allowed rq | only with clamped RT threads / scx_lavd on |
 | config | `HZ=1000` (ours 250), `SCSI_UFS_HWMON`, `QCOM_SPMI_ADC5_GEN3` | separate decision |
 
@@ -224,6 +223,11 @@ Result: CLOSED 2026-11-16 with no new patch.
   - display/GPU: CAC, CWB, quad-pipe, LPAC, panels, timing hacks, SMMU bypass, zap/SCM hacks
   - other hardware: camss/ICP/CVP, hexagon-baremetal, max34417, mpq3367, fpga, pm8550b charger, typec rework
   - firmware and boot: iris no-TZ firmware loading, Valve's own audio stack, EL2/QHEE hacks
+- `2fb051b4e` SM8650 LLCC (GPU slice 4 MiB prio 2, CPUSS 1 MiB): A/B'd 2026-11-16 on the FIT with llccbench
+  (pointer chase + streaming reads, CPU and GPU, alone and against the other side streaming 16 MiB; carried as `0180`
+  in `83aa8a5`, reverted). GPU: within 2 % at every size. CPU latency rose in the 8-14 MiB band: prime 10 MiB +25 %,
+  mid 8 MiB +49 %; with the GPU streaming, prime 12 MiB +76 % (72 -> 127 ns), mid 10 MiB +113 % (51 -> 110 ns).
+  The CPU does use its slice; the GPU already borrows ways past its 3 MiB cap (~400 GB/s up to 8 MiB).
 - Debug only: iris debugfs/logging, gpuvis tracing, gemstat/perf nodes.
 - Upstream for 7.4 anyway: the AR50LT iris enablement series, `9d3ff5d10` (IB = AB voting change on every SoC).
 
@@ -236,3 +240,4 @@ Result: CLOSED 2026-11-16 with no new patch.
 - 2026-11-16: Phase 1 split into four slots (`1100`–`1103`), one per upstream series plus Valve's own. Two hunks were placed by hand: `bac0a5707`'s `iris_instance.h` (context from `1094`) and `e4bad43d6`'s helper (context from Valve's `IRIS_FMT_*` removal). Kept `1093` rather than swapping it for Cortner's posted `-2`: same code, no gain worth a churn.
 - 2026-11-16: Phase 4 closed by the user: keep `1026`, park `e7d3595a7` (upstream reverted the same fix for a 10x throughput loss). Odin 3 field data in the Phase 4 section.
 - 2026-11-16: devfreq upthreshold A/B stopped by the user after the scroll scene: no power difference between 40/50/90; nothing taken.
+- 2026-11-16: `2fb051b4e` (LLCC split) A/B on the FIT: no GPU gain, CPU latency loss at 8-14 MiB; reverted, moved to Do not take.

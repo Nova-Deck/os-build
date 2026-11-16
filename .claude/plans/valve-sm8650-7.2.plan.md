@@ -4,7 +4,7 @@
 **Reference clone**: `_reference/deckard-linux` (mainline `v7.2` at depth 1 + `origin/sm8650-7.2` @ `e5fd17767590`,
 1282 non-merge commits, `https://github.com/evlaV/deckard-linux-no-oopsies`)
 **Our base**: 7.3.4 + the stack in `kernel/patches/`; the patched build tree is `work/kernel/linux-7.3.4`
-**Status**: Phase 1 patches `1100`–`1103` made 2026-11-16: stack applies, iris module builds `W=1` clean. Full kernel build + HW gate next.
+**Status**: Phase 1 patches `1100`–`1103` made 2026-11-16: stack applies, iris module builds `W=1` clean. Dev card `20261116T142807Z` built from a throwaway merge with the audio branch (`test/valve-p1+audio` 98e9164, local only). HW gate next.
 
 Update this file as work lands: tick the checklist, fill the result cells, and add a line to the
 decision log for anything decided. If Valve's branch moves, re-fetch and triage only `e5fd17767590..`.
@@ -49,7 +49,7 @@ for provenance. It is not a code change.
 **Gate**:
 - [x] stack applies `--fuzz=0` (238/238 on a fresh tarball; iris files byte-identical to the compiled tree)
 - [x] iris module builds with `W=1` in `novadeck-build`: 32 objects, 0 warnings, modpost clean
-- [ ] full kernel + DTBs build (`make kernel`), dev card
+- [x] full kernel + DTBs build, dev card: `20261116T142807Z`, from local `test/valve-p1+audio` (this branch + `audio/headphone-class-h`), all 241 patches applied
 - [ ] gen2 (Pocket S2 or FIT): Remote Play stream starts, survives a host resolution change mid-stream, no client restart loop, `dmesg | grep -i iris` clean
 - [ ] gen1 (Pocket Max): same, plus confirm `1094`'s gen1 deferral still behaves
 - [ ] ffmpeg `-c:v h264_v4l2m2m` / `hevc_v4l2m2m` on a clip with a mid-stream resolution change: decodes past the change, ends with EOS

@@ -7,7 +7,7 @@
 # would stop meaning "this is what is on the device". See this generator's header.
 #
 # repo snapshot: https://holo-packages.steamos.cloud/archlinux-deckard/archlinux/mash-20260528.1.pvt
-# built in:      https://holo-packages.steamos.cloud/archlinux-deckard/archlinux/mash-20260528.1.pvt/system.rootfs.zst sha256:c126eed15f527ce83239bca528aaa072fd4f254136d3b0dde24cc145ede2ad53   (execution environment only — contributes no files)
+# built in:      https://holo-packages.steamos.cloud/archlinux-deckard/archlinux/mash-20260528.1.pvt/system.rootfs.zst sha256:9499e0178c21995e6b2a88b8f48d0c43857de1553102023653c2d710571283ab   (execution environment only — contributes no files)
 #
 # name version arch source sha256   (source: snapshot|novadeck|prebuilt)
 # Every row carries a real hash: the root is bootstrapped from packages, so there is no content on
@@ -55,7 +55,7 @@ findutils 4.10.0-3 aarch64 snapshot 3e131af3daed6a31324c31861686c7bb2ebc29bc39e3
 fontconfig 2:2.17.1-1 aarch64 snapshot 10c55d9d0abca7ea40d778b34cb2fce5f39974042f4f6681c4c541fa24dc771f
 freetype2 2.14.3-1 aarch64 snapshot 9778ce707e2bb2163ce2fbf5b339a55673a6a7940a0f63843fbc9310a0a23528
 fribidi 1.0.16-2 aarch64 snapshot 111a98b837dc6b5d9008b4c3a19bc5baffbcb1096625d758aeb1d51a6e507e3d
-gamescope 3.17.0-1.1 aarch64 novadeck 9a4af316c04fdd2903f6544e515359328cb223aa77451ea7bd7920f17fb58ed5
+gamescope 3.17.0-1.1 aarch64 novadeck 57d534dda50b4d867f02ba7b2317f41a51a63cda5d93eb452e83fdf832c7675b
 gawk 5.4.0-1 aarch64 snapshot 379dcf5aeb42ea4b59e457692c6c91a2d974484539f122467e75a683f98b6821
 gcc-libs 16.1.1+r12+g301eb08fa2c5-1 aarch64 snapshot 03b2d6f672808522613a233de0cce7291f3be21543ef303c6d7634fdbd6417ea
 gdbm 1.26-2 aarch64 snapshot 942d709434f29db679927ac2dcddc3f3ebb9009764bdd4fc307b2b1ac1131d81
@@ -208,7 +208,7 @@ lua54 5.4.8-6 aarch64 snapshot 19cb0e9e28371e138d2f59782ed040800c98fd70c1ec6e5a7
 luajit 2.1.1774896198+18b087c-1 aarch64 snapshot 15aee2ec52f21bf174a37082445818335ff3abd41896ae2909f6193277437d51
 lz4 1:1.10.0-2 aarch64 snapshot af5d44c36259e2257ba033b623ef6104dcc2a552271264b6b433ddaf8422f3ee
 lzo 2.10-5 aarch64 snapshot ff11d9a5060ae28fbece3faad126724314232747cc09b836157f02ee09d3869a
-mesa 1:26.3.0-1.1 aarch64 novadeck 15f71b4d0edfe5e649286be1de8cf71649c8264101565329c7e125adc20044e7
+mesa 1:26.3.0-1.1 aarch64 novadeck 4834d4ba5a6af085c2866cf42a2893fad41571c650619118a4e5fc6159207fbc
 mobile-broadband-provider-info 20251101-1 any snapshot 1b0146d8b72f6ffc3edcccd5709d8de42798c4827a5fccd994c389584d60c56c
 mpdecimal 4.0.1-3 aarch64 snapshot 93a0e16603858a8d78c4ab3a924ff2ccd9554cd2019c1f65d411c5276334cb86
 mpfr 4.2.2-1 aarch64 snapshot 25f827431b1a13a6f524d76e62c0b0bdc5c1bf6ffd3d849cf73b5f840172ac2f
@@ -262,7 +262,7 @@ tpm2-tss 4.1.3-1 aarch64 snapshot 851d67bd6cb1a86dd405119872b19c543c4d8a982932c3
 tzdata 2026b-1 aarch64 snapshot 49d76cef7294fe0676722a7a7ebcfd3a3640be75af2226335b3b9d13a1d617cd
 util-linux 2.42.1-1 aarch64 snapshot af9be1205dfe5ea24819d172a53c9ea491d8b02e6222eae3c27b72e2f9ab4676
 util-linux-libs 2.42.1-1 aarch64 snapshot f33a6925c5d2ed70689cd5fe75dacf0cd47449e790576aee05e896eff9570ec6
-vulkan-freedreno 1:26.3.0-1.1 aarch64 novadeck 15f71b4d0edfe5e649286be1de8cf71649c8264101565329c7e125adc20044e7
+vulkan-freedreno 1:26.3.0-1.1 aarch64 novadeck 4834d4ba5a6af085c2866cf42a2893fad41571c650619118a4e5fc6159207fbc
 vulkan-icd-loader 1.4.350.0-1 aarch64 snapshot 90fb0013d8b8b3f19fc945431925ac49aaad0399a1d12ce2c23eb3ed5d09f2a7
 wayland 1.25.0-1 aarch64 snapshot ea612c6392dd9e4c1498b5cfebf28b4508029b9c54a0e47e4c5bd1e1e9e79e0f
 wireless-regdb 2026.03.18-1 any snapshot ac16e38723a1e24394373826908d824b33743b4102d1a84d54a6f07aa1820fb9

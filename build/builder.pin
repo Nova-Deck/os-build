@@ -14,6 +14,12 @@
 #   curl -sL <snapshot>/system.rootfs.zst | sha256sum
 # A stale line fails the fetch loudly rather than building against the wrong snapshot.
 #
+# A FROZEN revision's tarball can still be republished in place: its packages stay put, the
+# tarball's bytes do not (a regenerated pacman trustdb is enough). Only a cold fetch notices, since
+# CI restores the builder from a cache keyed on this line. Re-hash, and diff the old and new
+# tarballs' package lists before bumping. Every overlay input hash folds this line in
+# (packages/inputhash.sh), so a bump rebuilds every overlay package and moves both locks.
+#
 # Replaces build/base-devel.digest (registry.gitlab.steamos.cloud/holo/holo-core-aarch64-preview/
 # base-devel), which pinned a preview image that was never tied to the snapshot pin at all.
-c126eed15f527ce83239bca528aaa072fd4f254136d3b0dde24cc145ede2ad53
+9499e0178c21995e6b2a88b8f48d0c43857de1553102023653c2d710571283ab

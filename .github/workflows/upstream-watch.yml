@@ -572,6 +572,95 @@ jobs:
           )"
           fi
 
+  # The pinned snapshot ITSELF, re-checked byte for byte. deckard-base above only asks whether
+  # something NEWER exists; this asks whether the revision we pin still serves what we pinned.
+  # "Frozen" is a naming convention, not a guarantee: on 2026-11-06 Valve republished
+  # mash-20260528.1.pvt's system.rootfs.zst in place (a regenerated pacman trustdb) and
+  # regenerated its repo dbs the same day, and nothing noticed for ten days, because every
+  # consumer is cached. lib-pins.sh skips the fetch when the builder image exists, CI restores the
+  # tarball from a cache keyed on build/builder.pin, and rootfs/fetchlock.sh only meets a moved
+  # package on a cold pacman cache. Drift therefore surfaced as a broken build whenever a cache
+  # happened to expire. This job does the cold fetch every day so drift surfaces as an issue first.
+  deckard-drift:
+    name: archlinux-deckard pinned snapshot drift
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Re-verify the builder tarball and every snapshot lock row against the served snapshot
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          snap="$(grep -vE '^[[:space:]]*(#|$)' build/snapshot.pin | tail -1)"
+          name="${snap##*/}"
+          pinned="$(grep -vE '^[[:space:]]*(#|$)' build/builder.pin | tail -1)"
+          printf '%s' "$pinned" | grep -qxE '[0-9a-f]{64}' \
+            || { echo "::error::build/builder.pin's last line is not a sha256: $pinned"; exit 1; }
+
+          # 1. The builder tarball, streamed straight into sha256sum: ~390 MB, never stored. Under
+          # pipefail a failed or truncated download fails the substitution instead of hashing a
+          # partial stream into a bogus "drift" finding.
+          served="$(curl -fsSL --retry 3 "$snap/system.rootfs.zst" | sha256sum | cut -d' ' -f1)" \
+            || { echo "::error::could not fetch $snap/system.rootfs.zst"; exit 1; }
+          echo "builder: pinned=$pinned served=$served"
+          findings=""
+          [ "$served" = "$pinned" ] \
+            || findings+="BUILDER $name/system.rootfs.zst: pin=$pinned served=$served"$'\n'
+
+          # 2. Every snapshot/stripped row of BOTH locks against the sync dbs. The repo list is
+          # the snapshot's own pacman.conf, the same set the builder resolves from, so a repo
+          # Valve enables later is covered without editing this job.
+          repos="$(curl -fsSL --retry 3 "$snap/pacman.conf" | sed -n 's/^\[\(.*\)\][[:space:]]*$/\1/p' | grep -vx options || true)"
+          [ -n "$repos" ] || { echo "::error::no repositories in $snap/pacman.conf"; exit 1; }
+          work="$RUNNER_TEMP/drift"; mkdir -p "$work"
+          dbargs=()
+          for repo in $repos; do
+            curl -fsSL --retry 3 -o "$work/$repo.db" "$snap/$repo/os/aarch64/$repo.db" \
+              || { echo "::error::could not fetch the $repo db"; exit 1; }
+            dbargs+=(--db "$work/$repo.db")
+          done
+          # rc 1 = drift (file the issue), 2 = nothing to compare (go red). Same contract as
+          # steam-api/check.py; tests/test-snapshot-drift.sh holds the checker to it.
+          rc=0
+          out="$(python3 -I build/snapshot-drift.py "${dbargs[@]}" \
+            rootfs/manifest.lock installer/manifest.lock)" || rc=$?
+          [ "$rc" -le 1 ] || { echo "::error::snapshot-drift.py could not read its inputs (rc $rc)"; exit 1; }
+          [ "$rc" -eq 0 ] || findings+="$out"$'\n'
+
+          if [ -z "$findings" ]; then
+            echo "$name still serves exactly what the repo pins"
+            exit 0
+          fi
+          printf '%s' "$findings"
+
+          # The title carries a digest of the findings: the same drift is filed once, and a
+          # FURTHER move after that issue is closed gets an issue of its own.
+          digest="$(printf '%s' "$findings" | sha256sum | cut -c1-12)"
+          title="upstream: archlinux-deckard $name drifted under the pin ($digest)"
+          if [ "$(gh issue list --state all --search "in:title \"$title\"" --json number --jq length)" -gt 0 ]; then
+            echo "issue already filed: $title"; exit 0
+          fi
+          gh issue create --title "$title" --assignee "$ASSIGNEE" \
+            --label P1 --label area/build --body "$(cat <<EOF
+          The pinned snapshot **$name** no longer serves what the repo pins. Its name did not
+          change, so no other watcher sees this. Warm caches hide it until they expire, and then a
+          build breaks for no visible reason.
+
+          \`\`\`
+          ${findings%$'\n'}
+          \`\`\`
+
+          **BUILDER** (\`build/builder.pin\`): the tarball was republished in place.
+          - [ ] diff the old and new tarballs' installed package lists (\`var/lib/pacman/local/\`). If they are identical, as with the trustdb-only republish of 2026-11-06 (702f812), just re-pin
+          - [ ] re-pin \`build/builder.pin\`. It feeds every overlay input hash (packages/inputhash.sh), so \`make overlay\` rebuilds every package and BOTH locks move: \`make relock\` + \`make relock-installer\`
+          - [ ] confirm a COLD fetch on CI: the cache is keyed on hashFiles('build/builder.pin'), so the re-pin forces one
+
+          **SHA256 / VERSION / GONE** (lock rows): a package file changed under a frozen name. rootfs/fetchlock.sh verifies these bytes, so every cold-cache release build now fails.
+          - [ ] read what changed before relocking. A same-version re-hash is a rebuild, so diff its \`.PKGINFO\` and file list against the cached copy. A version change or a GONE row means the revision was re-mashed and is not a frozen snapshot anymore
+          - [ ] decide: relock against the served revision (\`make relock\` + \`make relock-installer\`, review the diff, release card + HW), or move \`build/snapshot.pin\` to a revision that is still intact
+          EOF
+          )"
+
   steam-client-api:
     name: Steam client vs novadeck-stores
     runs-on: ubuntu-latest

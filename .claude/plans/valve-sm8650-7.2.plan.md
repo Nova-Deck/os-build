@@ -4,7 +4,7 @@
 **Reference clone**: `_reference/deckard-linux` (mainline `v7.2` at depth 1 + `origin/sm8650-7.2` @ `e5fd17767590`,
 1282 non-merge commits, `https://github.com/evlaV/deckard-linux-no-oopsies`)
 **Our base**: 7.3.4 + the stack in `kernel/patches/`; the patched build tree is `work/kernel/linux-7.3.4`
-**Status**: Phase 1 (`1100`–`1103`) HW gate PASSED 2026-11-16 on dev card `20261116T142807Z` (Pocket FIT + Pocket Max). That card came from a throwaway merge with the audio branch (`test/valve-p1+audio` 98e9164, local only). Phase 2 patches `1031`–`1033` committed `5ba2475` (applies, builds `W=1` clean); its HW before-leg is owed on the current card.
+**Status**: Phase 1 (`1100`–`1103`) HW gate PASSED 2026-11-16 on dev card `20261116T142807Z` (Pocket FIT + Pocket Max). That card came from a throwaway merge with the audio branch (`test/valve-p1+audio` 98e9164, local only). Phase 2 (`1031`–`1033`, `5ba2475`) A/B done on the FIT; the "day of use" check and the 1033 6 GHz A/B are open. Phase 3 (`0271`) HW gate PASSED 2026-11-16 on card `20261116T180915Z` (FIT + Pocket Max). Phase 4 not started.
 
 Update this file as work lands: tick the checklist, fill the result cells, and add a line to the
 decision log for anything decided. If Valve's branch moves, re-fetch and triage only `e5fd17767590..`.
@@ -128,10 +128,20 @@ client that breaks the documented uapi.
 
 **Gate**:
 - [x] builds: 242/242 at `--fuzz=0`; `make W=1 drivers/gpu/drm/msm/`, 135 objects, 0 warnings
-- [ ] a Turnip (Vulkan) title and a freedreno GL title run on SM8250 + SM8650, with no submit errors in dmesg
+- [x] a Turnip (Vulkan) title and a freedreno GL title run on SM8250 + SM8650, with no submit errors in dmesg
   (`grep "submit_bo table not allowed"` must be empty)
 
-Result: _not run_
+Result: PASSED 2026-11-16 on dev card `20261116T180915Z` (`2b70f6d`, this branch only, no audio set). Title: Parking
+Garage Rally Circuit (native x86_64 under FEX), once on Vulkan and once with `--rendering-driver opengl3`.
+
+| SoC | GPU | Vulkan (Turnip, VM_BIND) | GL (freedreno) | `submit_bo table not allowed` | msm errors |
+|---|---|---|---|---|---|
+| SM8650 (Pocket FIT) | A750 | `libvulkan_freedreno.so`, ~7.5 s GPU time | `libgallium-26.3.0`, ~1 s and climbing | 0 | none |
+| SM8250 (Pocket Max) | A650 | `libvulkan_freedreno.so`, ~5 s GPU time | `libgallium-26.3.0`, ~1.8 s and climbing | 0 | none |
+
+VM_BIND checked on both with `vulkaninfo` (`sparseBinding = true`), so the Vulkan submits went through the new check.
+GPU time read from the game's drm fdinfo (`drm-engine-gpu`). The only boot WARNs were the Pocket Max's DSI
+`PLL(0) lock failed` + `dsi0_phy_pll_out_dsiclk already disabled` at 0.39 s, which predate this branch.
 
 ## Phase 4: Wi-Fi power save (ordered: needs the `1026` verdict first)
 

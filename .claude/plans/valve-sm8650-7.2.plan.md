@@ -4,7 +4,7 @@
 **Reference clone**: `_reference/deckard-linux` (mainline `v7.2` at depth 1 + `origin/sm8650-7.2` @ `e5fd17767590`,
 1282 non-merge commits, `https://github.com/evlaV/deckard-linux-no-oopsies`)
 **Our base**: 7.3.4 + the stack in `kernel/patches/`; the patched build tree is `work/kernel/linux-7.3.4`
-**Status**: Phase 1 (`1100`–`1103`) HW gate PASSED 2026-11-16 on dev card `20261116T142807Z` (Pocket FIT + Pocket Max). That card came from a throwaway merge with the audio branch (`test/valve-p1+audio` 98e9164, local only). Phase 2 (`1031`–`1033`, `5ba2475`) A/B done on the FIT; the "day of use" check and the 1033 6 GHz A/B are open. Phase 3 (`0271`) HW gate PASSED 2026-11-16 on card `20261116T180915Z` (FIT + Pocket Max). Phase 4 not started.
+**Status**: Phase 1 (`1100`–`1103`) HW gate PASSED 2026-11-16 on dev card `20261116T142807Z` (Pocket FIT + Pocket Max). That card came from a throwaway merge with the audio branch (`test/valve-p1+audio` 98e9164, local only). Phase 2 (`1031`–`1033`, `5ba2475`) A/B done on the FIT; the "day of use" check and the 1033 6 GHz A/B are open. Phase 3 (`0271`) HW gate PASSED 2026-11-16 on card `20261116T180915Z` (FIT + Pocket Max). Phase 4 CLOSED 2026-11-16 with no patch (keep `1026`, `e7d3595a7` parked).
 
 Update this file as work lands: tick the checklist, fill the result cells, and add a line to the
 decision log for anything decided. If Valve's branch moves, re-fetch and triage only `e5fd17767590..`.
@@ -143,7 +143,7 @@ VM_BIND checked on both with `vulkaninfo` (`sparseBinding = true`), so the Vulka
 GPU time read from the game's drm fdinfo (`drm-engine-gpu`). The only boot WARNs were the Pocket Max's DSI
 `PLL(0) lock failed` + `dsi0_phy_pll_out_dsiclk already disabled` at 0.39 s, which predate this branch.
 
-## Phase 4: Wi-Fi power save (ordered: needs the `1026` verdict first)
+## Phase 4: Wi-Fi power save (CLOSED 2026-11-16: no patch; keep `1026`, park `e7d3595a7`)
 
 Finding: in 7.3.4 `ath12k_mac_op_vif_cfg_changed()` handles only SSID + ASSOC. The `BSS_CHANGED_PS` →
 `ath12k_mac_vif_setup_ps()` block sits in the per-link `ath12k_mac_bss_info_changed()`, but mac80211 sends
@@ -170,11 +170,16 @@ Same AP and channel on both sides of `1026` (NETGEAR77-5G, 5220 MHz). The same p
 clean (11-02 15:43 to 11-04). Read: consistent with `1026` helping, but weak: one bad day of reboot clusters, and
 only 9.2 h of mostly short boots after it. Against the code, STICK should be inert with PS off.
 
-1. [ ] Read the beacon-loss counts from the dev cards that carry `1026` (CTRL-EVENT-BEACON-LOSS per `_BOOT_ID`) and decide: keep or drop `1026`.
-2. [ ] `1034` = `e7d3595a7` (Gabe Rowe / Neil Armstrong) with its bare `printk` turned back into `ath12k_dbg`.
-3. [ ] A/B with PS really on: throughput (the upstream revert's symptom); idle battery drain over a fixed time; ping latency/jitter; a Remote Play session (latency-sensitive); beacon loss over days, now with STICK live if `1026` is dropped.
+1. [x] Read the beacon-loss counts from the dev cards that carry `1026` (CTRL-EVENT-BEACON-LOSS per `_BOOT_ID`) and decide: keep or drop `1026`. KEEP (see Result).
+2. [-] NOT TAKEN (moved to the backlog): `1034` = `e7d3595a7` (Gabe Rowe / Neil Armstrong) with its bare `printk` turned back into `ath12k_dbg`.
+3. [-] Moot without `1034`. A/B with PS really on: throughput (the upstream revert's symptom); idle battery drain over a fixed time; ping latency/jitter; a Remote Play session (latency-sensitive); beacon loss over days, now with STICK live if `1026` is dropped.
 
-Result: _not run_
+Result: CLOSED 2026-11-16 with no new patch.
+- `1026` stays. It only removes a setting that is inert while the firmware keeps PS off, so it costs nothing; the
+  2026-11-02 bad day (the user confirms the three clusters were one episode, rebooted through) and about two weeks
+  clean since fit it, but do not prove it. The 7.3 wedge stays OPEN: on a recurrence, note the time and read that boot.
+- `e7d3595a7` parked in the backlog: upstream merged the same fix and reverted it for a 10x throughput loss, and our
+  image would turn PS on everywhere.
 
 ---
 
@@ -191,6 +196,7 @@ Result: _not run_
 | `e433c7710`+`a4969c246` | seamless refresh switch (vtotal-only change, no modeset) | built on Valve's timing-hack stack; re-implement for icna35xx 60/120 |
 | 1c2d10015 series | per-ring preemption-aware hangcheck | tangled with LPAC; only on false or missed hangchecks |
 | `d36695feb`, `3a6df24af` | GMU wait sleeps instead of spinning; IFPC perf-counter workaround | low value |
+| `e7d3595a7` | ath12k: apply `BSS_CHANGED_PS` from `vif_cfg_changed` (station power save actually reaches the firmware) | = upstream `4b66d18918f8`, reverted upstream (`a7716c9d922d`) for a 10x throughput loss on WCN7850; take only with an A/B on our WCN7860 vendor firmware showing no throughput or latency loss, plus an idle battery gain |
 | `5fec1140b`, `0474b709c`, `14c854215` | ath12k thermal-read deadlock; replayed country hint; mac80211 STA bandwidth limit before chanctx (oops on 320 MHz APs) | rare paths |
 | `1dbd90a10` series | ath12k per-vdev / 6 GHz TPC rework | large, `1dbd90a10` fails 2/19 hunks |
 | `676feb49b`, `53eb0fc17`, `5c6283567`, `d2025651a` | wcd938x/939x port read-back; headphone pop (PA into `mute_stream`) | read-back is cosmetic; 939x versions conflict with `0860`–`0863`; only on pop reports |
@@ -228,3 +234,4 @@ Result: _not run_
 - 2026-11-16: triaged by subsystem (GPU/display, video, everything else) against `work/kernel/linux-7.3.4`. Work goes on this branch and is tracked here, not as issues.
 - 2026-11-16: verified by hand that ath12k's PS handling lives only in the link callback (Phase 4 finding).
 - 2026-11-16: Phase 1 split into four slots (`1100`–`1103`), one per upstream series plus Valve's own. Two hunks were placed by hand: `bac0a5707`'s `iris_instance.h` (context from `1094`) and `e4bad43d6`'s helper (context from Valve's `IRIS_FMT_*` removal). Kept `1093` rather than swapping it for Cortner's posted `-2`: same code, no gain worth a churn.
+- 2026-11-16: Phase 4 closed by the user: keep `1026`, park `e7d3595a7` (upstream reverted the same fix for a 10x throughput loss). Odin 3 field data in the Phase 4 section.

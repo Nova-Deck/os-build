@@ -120,9 +120,16 @@ Result: _not run_
 |---|---|---|---|
 | `0271` | `2a4a03976` reject a `submit_bo` table on VM_BIND contexts (`Fixes: 2e6a8a1fe2b2`, Cc stable) | Matthew Brost | one-line rebase: Valve's hunk carries an LPAC context line |
 
+Made 2026-11-16 (`75b01ce`). Not found posted (one search). Checked against Mesa 26.3.0 before taking it:
+`MSM_PARAM_EN_VM_BIND` is set only by Turnip (`tu_knl_drm_msm.cc:52`). Turnip calls `tu_bo_add_to_bo_list()` only
+`if (!has_vm_bind)` (line 607) and `tu_bo_list_del()` only on the non-VM_BIND branches (898–903), so `nr_bos` stays 0.
+freedreno GL (`msm_ringbuffer_sp.c`) always sends a table but never enables VM_BIND. The rejection can only hit a
+client that breaks the documented uapi.
+
 **Gate**:
-- [ ] builds
+- [x] builds: 242/242 at `--fuzz=0`; `make W=1 drivers/gpu/drm/msm/`, 135 objects, 0 warnings
 - [ ] a Turnip (Vulkan) title and a freedreno GL title run on SM8250 + SM8650, with no submit errors in dmesg
+  (`grep "submit_bo table not allowed"` must be empty)
 
 Result: _not run_
 

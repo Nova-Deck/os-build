@@ -1,0 +1,229 @@
+From: Gabe Rowe <gaber@valvesoftware.com>
+Subject: [PATCH] media: iris: harden the decoder error paths, publish the capture buffer minimum
+
+Three Steam Frame kernel fixes, carried as one:
+
+1. Reject START and STOP commands after a session failure. After
+   iris_kill_session() (a failed STREAMOFF) the gen2 session packet is
+   freed and NULLed, but a later V4L2_DEC_CMD_STOP still passed
+   iris_allow_cmd() and session_drain then dereferenced the NULL packet.
+   iris_allow_cmd() now refuses both in IRIS_INST_ERROR.
+2. Publish the minimum CAPTURE buffer count whenever it changes.
+   V4L2_CID_MIN_BUFFERS_FOR_CAPTURE and the capture queue's
+   min_reqbufs_allocation were only updated from the source-change
+   event, so after S_FMT userspace was told 4 where the driver needs 9
+   (VP9) or 11 (AV1). One helper now publishes the count, from both S_FMT
+   paths and the gen1/gen2 source-change handlers. S_FMT(OUTPUT) resets
+   fw_min_count so a new stream on the same handle does not inherit the
+   previous stream's firmware count, and a count above the control
+   maximum warns instead of clamping silently.
+3. Return buffers as QUEUED when start_streaming will fail. In ERROR
+   state buf_queue completed buffers with VB2_BUF_STATE_ERROR before
+   start_streaming() failed, which trips vb2's WARN on that path. They
+   now stay on the m2m queue and start_streaming() returns them QUEUED.
+   While streaming, an errored buffer is also taken off the m2m ready
+   list before it completes, instead of staying listed once completed.
+   Valve ran it on SM8650 against ffmpeg/GStreamer fluster vectors.
+
+Squashed from the Steam Frame kernel's sm8650-7.2 branch, never posted:
+  c0290ecaa media: iris: reject START and STOP commands after session failure
+  e4bad43d6 media: iris: publish min capture buffers whenever the count changes
+  0203f1508 media: iris: return buffers as queued when start_streaming will fail
+Bodies identical except (2)'s new helper in iris_vdec.c, placed after
+iris_vdec_inst_init() against this tree's context (Valve's tree has
+dropped the IRIS_FMT_* format indices).
+---
+ .../qcom/iris/iris_hfi_gen1_response.c        |  9 +------
+ .../qcom/iris/iris_hfi_gen2_response.c        |  9 +------
+ drivers/media/platform/qcom/iris/iris_state.c |  4 +++
+ drivers/media/platform/qcom/iris/iris_vb2.c   | 22 +++++++++++++++-
+ drivers/media/platform/qcom/iris/iris_vdec.c  | 26 +++++++++++++++++++
+ drivers/media/platform/qcom/iris/iris_vdec.h  |  1 +
+ 6 files changed, 54 insertions(+), 17 deletions(-)
+
+diff --git a/drivers/media/platform/qcom/iris/iris_hfi_gen1_response.c b/drivers/media/platform/qcom/iris/iris_hfi_gen1_response.c
+index bfd7495bf..4d8e50423 100644
+--- a/drivers/media/platform/qcom/iris/iris_hfi_gen1_response.c
++++ b/drivers/media/platform/qcom/iris/iris_hfi_gen1_response.c
+@@ -32,8 +32,6 @@ static void iris_hfi_gen1_read_changed_params(struct iris_inst *inst,
+ 	struct hfi_bit_depth *pixel_depth;
+ 	struct hfi_pic_struct *pic_struct;
+ 	struct hfi_framesize *frame_sz;
+-	struct vb2_queue *dst_q;
+-	struct v4l2_ctrl *ctrl;
+ 	u32 full_range, ptype;
+ 
+ 	do {
+@@ -158,12 +156,7 @@ static void iris_hfi_gen1_read_changed_params(struct iris_inst *inst,
+ 	inst->fw_min_count = event.buf_count;
+ 	inst->buffers[BUF_OUTPUT].min_count = iris_vpu_buf_count(inst, BUF_OUTPUT);
+ 	inst->buffers[BUF_OUTPUT].size = pixmp_op->plane_fmt[0].sizeimage;
+-	ctrl = v4l2_ctrl_find(&inst->ctrl_handler, V4L2_CID_MIN_BUFFERS_FOR_CAPTURE);
+-	if (ctrl)
+-		v4l2_ctrl_s_ctrl(ctrl, inst->buffers[BUF_OUTPUT].min_count);
+-
+-	dst_q = v4l2_m2m_get_dst_vq(inst->m2m_ctx);
+-	dst_q->min_reqbufs_allocation = inst->buffers[BUF_OUTPUT].min_count;
++	iris_vdec_update_min_capture_bufs(inst);
+ 
+ 	if (event.bit_depth || !event.pic_struct) {
+ 		dev_err(core->dev, "unsupported content, bit depth: %x, pic_struct = %x\n",
+diff --git a/drivers/media/platform/qcom/iris/iris_hfi_gen2_response.c b/drivers/media/platform/qcom/iris/iris_hfi_gen2_response.c
+index a80f41f7b..26fe1b48d 100644
+--- a/drivers/media/platform/qcom/iris/iris_hfi_gen2_response.c
++++ b/drivers/media/platform/qcom/iris/iris_hfi_gen2_response.c
+@@ -532,8 +532,6 @@ static void iris_hfi_gen2_read_input_subcr_params(struct iris_inst *inst)
+ 	u32 video_signal_type_present_flag;
+ 	struct iris_core *core = inst->core;
+ 	u32 full_range, width, height;
+-	struct vb2_queue *dst_q;
+-	struct v4l2_ctrl *ctrl;
+ 
+ 	subsc_params = inst_hfi_gen2->src_subcr_params;
+ 	width = (subsc_params.bitstream_resolution &
+@@ -656,12 +654,7 @@ static void iris_hfi_gen2_read_input_subcr_params(struct iris_inst *inst)
+ 	inst->fw_min_count = subsc_params.fw_min_count;
+ 	inst->buffers[BUF_OUTPUT].min_count = iris_vpu_buf_count(inst, BUF_OUTPUT);
+ 	inst->buffers[BUF_OUTPUT].size = pixmp_op->plane_fmt[0].sizeimage;
+-	ctrl = v4l2_ctrl_find(&inst->ctrl_handler, V4L2_CID_MIN_BUFFERS_FOR_CAPTURE);
+-	if (ctrl)
+-		v4l2_ctrl_s_ctrl(ctrl, inst->buffers[BUF_OUTPUT].min_count);
+-
+-	dst_q = v4l2_m2m_get_dst_vq(inst->m2m_ctx);
+-	dst_q->min_reqbufs_allocation = inst->buffers[BUF_OUTPUT].min_count;
++	iris_vdec_update_min_capture_bufs(inst);
+ }
+ 
+ static int iris_hfi_gen2_handle_src_change(struct iris_inst *inst,
+diff --git a/drivers/media/platform/qcom/iris/iris_state.c b/drivers/media/platform/qcom/iris/iris_state.c
+index dd8e0093b..311167c40 100644
+--- a/drivers/media/platform/qcom/iris/iris_state.c
++++ b/drivers/media/platform/qcom/iris/iris_state.c
+@@ -269,6 +269,10 @@ bool iris_allow_cmd(struct iris_inst *inst, u32 cmd)
+ 	struct vb2_queue *src_q = v4l2_m2m_get_src_vq(inst->m2m_ctx);
+ 	struct vb2_queue *dst_q = v4l2_m2m_get_dst_vq(inst->m2m_ctx);
+ 
++	/* Failed-session cleanup may already have freed the HFI command buffer. */
++	if (inst->state == IRIS_INST_ERROR)
++		return false;
++
+ 	if (cmd == V4L2_DEC_CMD_START || cmd == V4L2_ENC_CMD_START) {
+ 		if (vb2_is_streaming(src_q) || vb2_is_streaming(dst_q))
+ 			if (iris_drc_pending(inst) || iris_drain_pending(inst))
+diff --git a/drivers/media/platform/qcom/iris/iris_vb2.c b/drivers/media/platform/qcom/iris/iris_vb2.c
+index ed6213fc4..7e340302b 100644
+--- a/drivers/media/platform/qcom/iris/iris_vb2.c
++++ b/drivers/media/platform/qcom/iris/iris_vb2.c
+@@ -324,6 +324,7 @@ void iris_vb2_buf_queue(struct vb2_buffer *vb2)
+ 	struct vb2_v4l2_buffer *vbuf = to_vb2_v4l2_buffer(vb2);
+ 	struct v4l2_m2m_ctx *m2m_ctx;
+ 	struct iris_inst *inst;
++	bool in_m2m = false;
+ 	int ret = 0;
+ 
+ 	inst = vb2_get_drv_priv(vb2->vb2_queue);
+@@ -361,6 +362,7 @@ void iris_vb2_buf_queue(struct vb2_buffer *vb2)
+ 	}
+ 
+ 	v4l2_m2m_buf_queue(m2m_ctx, vbuf);
++	in_m2m = true;
+ 
+ 	if (inst->domain == DECODER)
+ 		ret = iris_vdec_qbuf(inst, vbuf);
+@@ -370,7 +372,25 @@ void iris_vb2_buf_queue(struct vb2_buffer *vb2)
+ exit:
+ 	if (ret) {
+ 		iris_inst_change_state(inst, IRIS_INST_ERROR);
+-		v4l2_m2m_buf_done(vbuf, VB2_BUF_STATE_ERROR);
++		if (!vb2_start_streaming_called(vb2->vb2_queue)) {
++			/*
++			 * vb2 hands queued buffers to the driver just before
++			 * calling start_streaming(). Completing them here would
++			 * put them on the done list, which vb2 forbids when
++			 * start_streaming() fails. Keep the buffer on the m2m
++			 * queue instead; start_streaming() sees the error state
++			 * and returns every buffer as VB2_BUF_STATE_QUEUED.
++			 */
++			if (!in_m2m)
++				v4l2_m2m_buf_queue(inst->m2m_ctx, vbuf);
++		} else {
++			if (in_m2m)
++				v4l2_m2m_buf_remove_by_buf(V4L2_TYPE_IS_OUTPUT(vb2->type) ?
++							   &inst->m2m_ctx->out_q_ctx :
++							   &inst->m2m_ctx->cap_q_ctx,
++							   vbuf);
++			v4l2_m2m_buf_done(vbuf, VB2_BUF_STATE_ERROR);
++		}
+ 	}
+ 	mutex_unlock(&inst->lock);
+ }
+diff --git a/drivers/media/platform/qcom/iris/iris_vdec.c b/drivers/media/platform/qcom/iris/iris_vdec.c
+index 64a239cc2..a2b1edfe5 100644
+--- a/drivers/media/platform/qcom/iris/iris_vdec.c
++++ b/drivers/media/platform/qcom/iris/iris_vdec.c
+@@ -89,6 +89,28 @@ int iris_vdec_inst_init(struct iris_inst *inst)
+ 	return iris_ctrls_init(inst);
+ }
+ 
++/*
++ * Publish the driver's current minimum CAPTURE buffer count to userspace:
++ * both V4L2_CID_MIN_BUFFERS_FOR_CAPTURE and the queue's minimum allocation.
++ * Call whenever inst->buffers[BUF_OUTPUT].min_count is recalculated.
++ */
++void iris_vdec_update_min_capture_bufs(struct iris_inst *inst)
++{
++	u32 count = inst->buffers[BUF_OUTPUT].min_count;
++	struct v4l2_ctrl *ctrl;
++
++	ctrl = v4l2_ctrl_find(&inst->ctrl_handler, V4L2_CID_MIN_BUFFERS_FOR_CAPTURE);
++	if (ctrl) {
++		if (count > ctrl->maximum)
++			dev_warn_ratelimited(inst->core->dev,
++					     "min capture buffers %u exceeds control maximum %lld\n",
++					     count, ctrl->maximum);
++		v4l2_ctrl_s_ctrl(ctrl, count);
++	}
++
++	v4l2_m2m_get_dst_vq(inst->m2m_ctx)->min_reqbufs_allocation = count;
++}
++
+ static const u32 iris_vdec_formats_cap[] = {
+ 	[IRIS_FMT_NV12] = V4L2_PIX_FMT_NV12,
+ 	[IRIS_FMT_QC08C] = V4L2_PIX_FMT_QC08C,
+@@ -280,6 +302,8 @@ int iris_vdec_s_fmt(struct iris_inst *inst, struct v4l2_format *f)
+ 		fmt->type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
+ 		fmt->fmt.pix_mp.pixelformat = f->fmt.pix_mp.pixelformat;
+ 		inst->codec = fmt->fmt.pix_mp.pixelformat;
++		/* The source queue is idle: any firmware count is from an old stream. */
++		inst->fw_min_count = 0;
+ 		codec_align = inst->codec == V4L2_PIX_FMT_HEVC ? 32 : 16;
+ 		fmt->fmt.pix_mp.width = ALIGN(f->fmt.pix_mp.width, codec_align);
+ 		fmt->fmt.pix_mp.height = ALIGN(f->fmt.pix_mp.height, codec_align);
+@@ -303,6 +327,7 @@ int iris_vdec_s_fmt(struct iris_inst *inst, struct v4l2_format *f)
+ 		/* Update capture format based on new ip w/h */
+ 		iris_vdec_set_capture_size(inst, f->fmt.pix_mp.width,
+ 					   f->fmt.pix_mp.height);
++		iris_vdec_update_min_capture_bufs(inst);
+ 
+ 		inst->crop.left = 0;
+ 		inst->crop.top = 0;
+@@ -319,6 +344,7 @@ int iris_vdec_s_fmt(struct iris_inst *inst, struct v4l2_format *f)
+ 		fmt->fmt.pix_mp.num_planes = 1;
+ 		iris_vdec_set_capture_size(inst, f->fmt.pix_mp.width,
+ 					   f->fmt.pix_mp.height);
++		iris_vdec_update_min_capture_bufs(inst);
+ 
+ 		inst->crop.top = 0;
+ 		inst->crop.left = 0;
+diff --git a/drivers/media/platform/qcom/iris/iris_vdec.h b/drivers/media/platform/qcom/iris/iris_vdec.h
+index 5123d2a34..4b903da58 100644
+--- a/drivers/media/platform/qcom/iris/iris_vdec.h
++++ b/drivers/media/platform/qcom/iris/iris_vdec.h
+@@ -15,6 +15,7 @@ int iris_vdec_s_fmt(struct iris_inst *inst, struct v4l2_format *f);
+ int iris_vdec_validate_format(struct iris_inst *inst, u32 pixelformat);
+ int iris_vdec_subscribe_event(struct iris_inst *inst, const struct v4l2_event_subscription *sub);
+ void iris_vdec_src_change(struct iris_inst *inst);
++void iris_vdec_update_min_capture_bufs(struct iris_inst *inst);
+ int iris_vdec_streamon_input(struct iris_inst *inst);
+ int iris_vdec_streamon_output(struct iris_inst *inst);
+ int iris_vdec_qbuf(struct iris_inst *inst, struct vb2_v4l2_buffer *vbuf);

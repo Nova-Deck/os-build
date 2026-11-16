@@ -1,0 +1,26 @@
+From: Aaron N <aaronna@valvesoftware.com>
+Subject: [PATCH] wifi: ath12k: fix PSD flag bit
+
+The reg-rule PSD-enable flag was read from the wrong bit so 6 GHz
+channels were never marked PSD and the TPC ran in EIRP mode.
+
+Taken from the Steam Frame kernel's sm8650-7.2 branch (1460e32c9),
+body identical. ath11k reads the same psd_power_info word with
+REG_RULE_PSD_INFO as BIT(0).
+---
+ drivers/net/wireless/ath/ath12k/wmi.h | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/net/wireless/ath/ath12k/wmi.h b/drivers/net/wireless/ath/ath12k/wmi.h
+index 83103fdef..160f40368 100644
+--- a/drivers/net/wireless/ath/ath12k/wmi.h
++++ b/drivers/net/wireless/ath/ath12k/wmi.h
+@@ -3225,7 +3225,7 @@ struct ath12k_wmi_rx_reorder_queue_remove_arg {
+ #define REG_RULE_MAX_BW				0x0000ffff
+ #define REG_RULE_REG_PWR			0x00ff0000
+ #define REG_RULE_ANT_GAIN			0xff000000
+-#define REG_RULE_PSD_INFO			BIT(2)
++#define REG_RULE_PSD_INFO			BIT(0)
+ #define REG_RULE_PSD_EIRP			0xffff0000
+ 
+ #define WMI_VDEV_PARAM_TXBF_SU_TX_BFEE BIT(0)

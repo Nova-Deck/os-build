@@ -188,7 +188,7 @@ Result: CLOSED 2026-11-16 with no new patch.
 | sha | what | why not now |
 |---|---|---|
 | `f0dcb8d3d`+`8fee13ca9` (+`ecc8ac966`, `74286cb87`) | iris: suppress a no-op source change and restart the firmware in place; could remove Steam's frame-0 decoder restart | ~190 lines, Valve-only, unposted; needs Phase 1 first; `f0dcb8d3d` alone does not build (squash with `8fee13ca9`); `ecc8ac966` overlaps `1094` |
-| `00b93c80c`+`e01f24c3b`+`8ffc0b632` | devfreq: skip IDLE with IFPC, upthreshold 40 (A740/A750/A830) | needs an A/B; makes `0268` moot on those GPUs |
+| `00b93c80c`+`e01f24c3b`+`8ffc0b632` | devfreq: skip IDLE with IFPC, upthreshold 40 (A740/A750/A830) | needs an A/B; makes `0268` moot on those GPUs. Upstream dropped both (Akhil withdrew skip-IDLE; a tester reported stutter at 90). Partial A/B 2026-11-16 on the Odin 3 (A830), threshold via debugfs: idle = no difference possible (160 MHz, 0.1 % busy); Steam library scroll, 2 passes each: 40 ≈ 705 MHz, 50 ≈ 580, 90 ≈ 420, power the same within noise (4.4–4.9 W), time at FMAX ~17 % at every threshold. No power case for 90; game frame-time leg not run (user stopped it) |
 | `960261446`+`901fcbb19`+`a60133f0a` | gpuvm two-pass extobj locking + `RESV_PROTECTED` | ~630 lines, posted not merged; pays off only under eviction |
 | `f1b75cd8f`+`30616ecbb` | mm opportunistic-compaction hint, msm shrinker honours it | core vmscan; only if we see GPU working sets evicted (we carry THP for GEM, `0220`) |
 | `84acfefd9` | a6xx BCL (battery current limit) | ~10 lines, gated per catalog; brownout safety vs. throttling on battery |
@@ -235,3 +235,4 @@ Result: CLOSED 2026-11-16 with no new patch.
 - 2026-11-16: verified by hand that ath12k's PS handling lives only in the link callback (Phase 4 finding).
 - 2026-11-16: Phase 1 split into four slots (`1100`–`1103`), one per upstream series plus Valve's own. Two hunks were placed by hand: `bac0a5707`'s `iris_instance.h` (context from `1094`) and `e4bad43d6`'s helper (context from Valve's `IRIS_FMT_*` removal). Kept `1093` rather than swapping it for Cortner's posted `-2`: same code, no gain worth a churn.
 - 2026-11-16: Phase 4 closed by the user: keep `1026`, park `e7d3595a7` (upstream reverted the same fix for a 10x throughput loss). Odin 3 field data in the Phase 4 section.
+- 2026-11-16: devfreq upthreshold A/B stopped by the user after the scroll scene: no power difference between 40/50/90; nothing taken.

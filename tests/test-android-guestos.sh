@@ -408,6 +408,58 @@ grep -q 'AArch64' "$CB" && grep -q 'NEEDs a library the bionic guest cannot prov
     || bad "the container build does not gate the payload -- a wrong-arch or glibc layer could ship"
 
 echo
+echo "adb wrapper (the path Lepton hardcodes)"
+
+# 23-25. Driven against a stub. Google's adb is x86_64 and runs under system FEX, and the FIRST FEX
+#     process for a user starts a FEXServer that keeps that process's stdout/stderr and never
+#     closes them; the adb server it spawns keeps FEXServer alive. So if the wrapper reads connect's
+#     output through a pipe, it never sees EOF and hangs forever (HW, Pocket FIT, 2026-11-17: the
+#     wrapper parked in anon_pipe_read, FEXServer fd 1/2 = its pipe). The stub's background child
+#     is that FEXServer.
+ADB_WRAPPER="$ROOT/rootfs/overlay/usr/lib/android-sdk/platform-tools/adb"
+ADB_TMP="$(mktemp -d)"
+cat >"$ADB_TMP/adb" <<'STUB'
+#!/bin/bash
+# Fails the first $FAILS connects (counted in $ADB_TMP/n), then connects and leaves a child
+# holding stdout/stderr open, as FEXServer does. Any other verb prints its argv and exits 7.
+case " $* " in
+  *" connect "*)
+    n=$(( $(cat "$ADB_TMP/n" 2>/dev/null || echo 0) + 1 )); echo "$n" >"$ADB_TMP/n"
+    if [ "$n" -le "${FAILS:-0}" ]; then echo "failed to connect to localhost:5555"; exit 0; fi
+    sleep 30 & echo $! >>"$ADB_TMP/holders"
+    echo "connected to localhost:5555" ;;
+  *) echo "passthrough: $*"; exit 7 ;;
+esac
+STUB
+chmod +x "$ADB_TMP/adb"
+run_wrapper() {  # run_wrapper <fails> <args...> -> stdout+stderr in $ADB_TMP/out, rc in $wrapper_rc
+    local fails=$1; shift
+    rm -f "$ADB_TMP/n"
+    ADB_TMP="$ADB_TMP" FAILS="$fails" NOVADECK_ADB_REAL="$ADB_TMP/adb" NOVADECK_ADB_LOG="$ADB_TMP/log" \
+        NOVADECK_ADB_CONNECT_TIMEOUT=10 NOVADECK_ADB_CONNECT_INTERVAL=0.1 \
+        timeout 8 bash "$ADB_WRAPPER" "$@" >"$ADB_TMP/out" 2>&1
+    wrapper_rc=$?
+}
+
+run_wrapper 0 -P 5099 connect localhost:5555
+[ "$wrapper_rc" -eq 0 ] && grep -q '^connected to localhost:5555$' "$ADB_TMP/out" \
+    && ok "connect returns while a child of adb still holds its stdout (the FEXServer hang)" \
+    || bad "connect did not return (rc=$wrapper_rc, 124 = hung) when adb's child kept stdout open -- the FEXServer hang"
+
+run_wrapper 2 -P 5099 connect localhost:5555
+[ "$wrapper_rc" -eq 0 ] && [ "$(cat "$ADB_TMP/n")" = 3 ] && grep -q '^connected to' "$ADB_TMP/out" \
+    && ok "connect is retried until adb reports a connection" \
+    || bad "connect retry broken (rc=$wrapper_rc, attempts=$(cat "$ADB_TMP/n" 2>/dev/null))"
+
+run_wrapper 0 -P 5099 -s localhost:5555 install -g app.apk
+[ "$wrapper_rc" -eq 7 ] && grep -q '^passthrough: -P 5099 -s localhost:5555 install -g app.apk$' "$ADB_TMP/out" \
+    && ok "every other verb is handed to adb untouched, exit status included" \
+    || bad "a non-connect verb was altered (rc=$wrapper_rc)"
+
+xargs -r kill <"$ADB_TMP/holders" 2>/dev/null
+rm -rf "$ADB_TMP"
+
+echo
 echo "kernel support"
 
 # 18. The guest is a rootless podman container; binder is what Android's whole IPC layer runs on

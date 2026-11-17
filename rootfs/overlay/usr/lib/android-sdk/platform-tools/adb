@@ -41,7 +41,9 @@
 # something other than a race is wrong and the failure should surface immediately.
 set -u
 
-REAL="/usr/lib/android-sdk/platform-tools-upstream/adb"
+# NOVADECK_ADB_REAL exists for tests/test-android-guestos.sh ONLY (it drives this wrapper against a
+# stub); on a device it is never set.
+REAL="${NOVADECK_ADB_REAL:-/usr/lib/android-sdk/platform-tools-upstream/adb}"
 CONNECT_TIMEOUT="${NOVADECK_ADB_CONNECT_TIMEOUT:-45}"
 RETRY_INTERVAL="${NOVADECK_ADB_CONNECT_INTERVAL:-0.5}"
 
@@ -76,14 +78,28 @@ fi
 
 # `adb connect` exits 0 even when it failed ("failed to connect to ..."), so the OUTPUT is the only
 # reliable signal. "already connected" counts as success.
+#
+# CONNECT'S OUTPUT GOES THROUGH A FILE, NEVER A PIPE. Google's adb is x86_64 and runs under system
+# FEX. The first FEX process for a user starts a FEXServer that keeps that process's stdout/stderr
+# open and never closes them, and the adb server `connect` spawns is a FEX client that keeps
+# FEXServer alive. Captured with "$(…)", that pipe never reaches EOF and the wrapper hangs FOREVER
+# (HW, Pocket FIT, 2026-11-17: wrapper parked in anon_pipe_read, FEXServer fd 1/2 = its pipe).
+# Lepton's own `kill-server` usually leaves a FEXServer that the connect reuses, but it exits 1s
+# after its last client, so that is a race, not a guarantee. A file has no EOF to wait for.
+# No temp file means no retry: hand over to adb as-is rather than fail the launch.
+out_file="$(mktemp "${XDG_RUNTIME_DIR:-/tmp}/novadeck-adb-connect.XXXXXX" 2>/dev/null)" \
+    || { log "mktemp failed, connecting without retry: $*"; exec "$REAL" "$@"; }
+trap 'rm -f "$out_file"' EXIT
+
 start=$(date +%s)
 deadline=$(( start + CONNECT_TIMEOUT ))
 attempt=0
 log "connect requested: $*"
 while :; do
     attempt=$((attempt + 1))
-    out="$("$REAL" "$@" 2>&1)"
+    "$REAL" "$@" >"$out_file" 2>&1
     rc=$?
+    out="$(<"$out_file")"
 
     case "$out" in
         *"connected to"*)

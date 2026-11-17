@@ -4,9 +4,9 @@ aarch64 defaults `char` to unsigned, so template specializations for
 `char*` don't satisfy C++ overload resolution when callers pass
 `signed char*`. Add explicit conversions to bridge.
 
-Required whenever BUILD_THUNKS=ON; not upstream as of FEX-2610.
+Required whenever BUILD_THUNKS=ON; not upstream as of FEX-2611.1.
 Hunk offsets are rebased onto FEX commit a04b0241 and still apply to the
-pinned FEX-2610 tree (14c9268).
+pinned FEX-2611.1 tree (4f9c1f1).
 
 --- a/ThunkLibs/include/common/Host.h
 +++ b/ThunkLibs/include/common/Host.h

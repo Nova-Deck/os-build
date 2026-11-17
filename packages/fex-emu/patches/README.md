@@ -1,11 +1,11 @@
 # FEX patches
 
 `0001`/`0005` are **build fixes for aarch64 + clang**, not behaviour changes, and both are still
-required at FEX-2610 (`14c9268`). Neither is upstream — re-verified absent from the FEX-2610 tree
-on 2026-10-18 (`FEXCore/Source/CMakeLists.txt` has no `set_source_files_properties` for
+required at FEX-2611.1 (`4f9c1f1`). Neither is upstream — re-verified absent from the FEX-2611.1
+tree on 2026-11-17 (`FEXCore/Source/CMakeLists.txt` has no `set_source_files_properties` for
 `InterpreterFallbacks.cpp`; `ThunkLibs/include/common/Host.h` has no `signed char*` conversion).
 `0006` is our one **behaviour fix** (issue #49), an upstream candidate, and also still required at
-FEX-2610 — `FileManagement.cpp` still spells the prefix `Is64BitMode() ? "lib64" : "lib"`.
+FEX-2611.1 — `FileManagement.cpp` still spells the prefix `Is64BitMode() ? "lib64" : "lib"`.
 
 `0001`/`0005` are numbered to match the upstream patch series they came from (a Qualcomm-handheld
 distro's FEX package); the gaps are not missing files.

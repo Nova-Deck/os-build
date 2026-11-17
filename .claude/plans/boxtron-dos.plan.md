@@ -214,6 +214,45 @@ per step; merge only after phase 3's gate.
    (Within one session: `reassert_compat` may still reset the tool on the next boot until
    phase 2.)
 
+   **RESULT, Pocket FIT, dev card 20261117T123847Z (4c233ff), 2026-11-17: PASSED except touch.**
+
+   **Launch chain**
+   - Steam honours Boxtron's v1 manifest. The argv is `pw-audio-namespace → reaper SteamLaunch
+     AppId=… -- /usr/share/boxtron/run-dosbox --wait-before-run <exe>`.
+   - Under Boxtron, Steam sets `STEAM_COMPAT_APP_ID=0`. game-launch's `appid()` skips 0 and falls
+     through to `SteamAppId`, which is what keys the row. Keep that order.
+   - The swap fired. Native aarch64 `/usr/bin/dosbox` ran in the variant's `DOSBOX` dir, with no
+     FEX or wine in the tree, at ~79% of one core.
+
+   **Play**
+   - Fast, with Sound Blaster 16 + OPL3 sound through PipeWire. There is no soundfont, so
+     Boxtron switches MIDI off; MoM doesn't need it.
+   - Quitting the game exits DOSBox back to Steam.
+   - A hand-written `choice` ran the Community Patch build. Its backslash `-conf` args are
+     handled by Boxtron.
+   - Proton CachyOS still runs GOG's launcher. Saves are shared, since both mount the build
+     dir as C: (a Boxtron save loaded under Proton).
+   - Steam also runs its `d3ddriverquery64.exe` probe through Boxtron. Boxtron rejects it and
+     logs "zenity is missing": harmless, no dialog, no delay.
+
+   **Mouse: right stick bound as a Steam Input mouse WORKS. TOUCH DOES NOT.**
+   - gamescope's touch → pointer path was verified correct by logging `XQueryPointer` on the
+     game's X display: corner taps land at 17,37 / 1902,59 / ~60,1040 and centre at 904,565,
+     each with a button 1 press.
+   - With `mouse_capture = onclick` (Staging's default; GOG's `autolock` is unknown to
+     Staging), the first tap captures the mouse and later touches carry no relative motion.
+   - With `seamless` (Staging's documented touch mode) the cursor sits at the bottom-right.
+     MoM keeps its own cursor from relative motion, and Staging's help says seamless "does not
+     work correctly with all the games".
+   - gamescope's `Trackpad` touch mode (`STEAM_TOUCH_CLICK_MODE=6`) gives deltas from
+     gamescope's own pointer, not the game's cursor, so the axes go wrong.
+   - Not a Boxtron defect. It needs a touch → relative translation that follows the game's
+     cursor. Not packaged: `seamless` does not help MoM.
+
+   **Boxtron quirk:** a missing overlay dir (`..\cloud_saves`) becomes `mount C "None" -t
+   overlay`. It is harmless, since the first mount already gives C:. Patch it in
+   `packages/boxtron/` if it ever matters.
+
 ### Phase 2 — the store plugin keeps out of the way
 7. **Device probe:** reading an entry's current compat tool.
 8. **`reassert_compat` only fills an empty mapping** (TDD).

@@ -260,6 +260,14 @@ per step; merge only after phase 3's gate.
    args).
 10. **HW gate:** reboot → MoM still on Boxtron; a Proton-GE pick survives too.
 
+    **RESULT, Pocket FIT, dev card 20261117T134943Z (afe7971), 2026-11-17: PASSED.**
+    - MoM was reinstalled, set to Boxtron and rebooted. Both frontend-ready runs logged
+      `compat re-asserted on 0 entries`; before the fix that count was 1.
+    - `config.vdf` still maps the appid to `boxtron` (priority 250), and Properties shows
+      Boxtron.
+    - Play still goes straight into DOSBox, and the dos-targets row was rebuilt for the new appid.
+    - The Proton-GE case is covered offline only: MoM was the only installed title.
+
 ### Phase 3 — the variant picker (last)
 11. **Device probe:** launch interception (game-action start + cancel-and-relaunch, or a
     pre-launch hook).

@@ -669,8 +669,8 @@ ok("thunk namespace: absent base config degrades to an empty list")
 # Checked in EVERY plugin that spawns anything. The _clean_env implementations are independent
 # copies (separate processes, separate py_modules trees — see novadeck_monitor/powerd.py's
 # header), which is exactly why one can regress while the others stay correct. novadeck-stores
-# spawns /usr/lib/novadeck/store-env, an aarch64 shell script, so it has the same exposure with a
-# worse failure: the x86 bundle's LD_LIBRARY_PATH pointed at a native binary.
+# spawns /usr/lib/novadeck/store-env, a host shell script, so it has the same exposure -- and a
+# worse one on a loader still x86 under FEX, where the bundle's LD_LIBRARY_PATH is the wrong arch.
 import os
 from novadeck_control import power
 from novadeck_monitor import powerd

@@ -6,12 +6,15 @@ runs as the user, cannot refresh — the failure novadeck-framegen's conf.py doc
 Running it as the user makes the CLI the file's author, so ownership is right by construction
 rather than repaired by a chown pass afterwards.
 
-HOST SYSTEMD STARTS THE CLI, NOT US. PluginLoader is an x86_64 bundle under FEX, and FEX resolves
-every path its children open against the x86 guest rootfs first. legendary and gogdl are not in
-the guest, so their scripts come from the host — but their `#!/usr/bin/python` IS in the guest,
-and that python has neither package (HW-observed: `ModuleNotFoundError: No module named
-'legendary'`, exit 1, for both stores). A transient unit is started by PID 1 on the host, natively,
-with none of our emulation, environment or file descriptors except the ones --pipe hands over.
+HOST SYSTEMD STARTS THE CLI, NOT US. A transient unit is started by PID 1 on the host, natively,
+with none of the loader's environment or file descriptors except the ones --pipe hands over, and
+whatever arch the loader itself runs as. That last part is why this began: the loader used to be
+the x86_64 build under FEX, which resolves every path its children open against the x86 guest
+rootfs first, so legendary's and gogdl's `#!/usr/bin/python` ran the guest's python, which has
+neither package (HW-observed: `ModuleNotFoundError: No module named 'legendary'`, exit 1, for both
+stores). The image ships the native arm64 loader now, but a loader self-updated on an older install
+can still be x86, and the clean environment and detached-unit mode (installs.py) are reasons of
+their own.
 
 NEITHER CLI'S EXIT STATUS MEANS ANYTHING HERE. `legendary auth` logs a failed login and returns 0;
 `gogdl auth` prints {"error": true} and returns 0. Success is decided by reading the credential

@@ -16,9 +16,10 @@ STORE_ENV = os.environ.get("NOVADECK_STORE_ENV", "/usr/lib/novadeck/store-env")
 
 
 def _clean_env():
-    """Decky's PluginLoader is an x86_64 PyInstaller bundle running under FEX, and it exports an
-    LD_LIBRARY_PATH pointing at its OWN bundled libraries. store-env is an aarch64 shell script,
-    so inheriting that would point a native binary at x86 libs. Restoring PyInstaller's saved
+    """Decky's PluginLoader is a PyInstaller bundle, and it exports an LD_LIBRARY_PATH pointing at
+    its OWN bundled libraries. store-env is a host shell script, so inheriting that would load
+    the bundle's libraries into host tools instead of the system's (on a loader still x86 under
+    FEX, libraries of the wrong arch outright). Restoring PyInstaller's saved
     _ORIG value is the documented pattern, and novadeck-control's power.py does the same for
     busctl; tests/test-decky.sh asserts on it for every plugin that spawns anything.
     """

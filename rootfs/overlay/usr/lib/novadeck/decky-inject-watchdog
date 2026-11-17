@@ -23,8 +23,8 @@
 # A race Decky sometimes wins is still worth a mechanism, because losing it is silent and
 # permanent: no recovery short of a manual restart, and nothing in the journal to say why.
 #
-# We cannot fix it where it breaks: the loader is upstream's pinned x86_64 PyInstaller build that
-# we run under FEX, not something this image compiles. So the invariant gets restored from the
+# We cannot fix it where it breaks: the loader is upstream's pinned PyInstaller build
+# (PluginLoader-arm64), not something this image compiles. So the invariant gets restored from the
 # outside instead — while CEF is listening, the loader must hold a connection to it, or the
 # loader gets restarted.
 set -euo pipefail

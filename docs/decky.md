@@ -171,8 +171,9 @@ it (its restart is logged to the journal with the reason).
 the watchdog's decision loop (driven against fake `ss`/`systemctl`); guard-rootfs assertion 9
 covers image completeness. None of it can prove PluginLoader executes on our image, nor that
 injection works against our Steam client. Both were HW-validated 2026-08-08 on the x86_64 loader
-under FEX (clean start + frontend injection in the journal); the native aarch64 loader (v3.3.0)
-still needs that same check on hardware, and both remain worth a glance after a loader or
+under FEX (clean start + frontend injection in the journal), and again on the native aarch64
+loader (v3.3.0, Pocket ACE, 1099f35: loader active, frontend injected, CEF connection held, all
+three plugins loaded). Both remain worth a glance after a loader or
 Steam-channel bump.
 
 The watchdog's own two branches were HW-validated 2026-08-18 by running the script by hand on a

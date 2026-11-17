@@ -32,8 +32,8 @@ import decky
 
 import base64
 
-from novadeck_stores import (artwork, cdp, cli, connect, first_run, game_page, install_requests, installs,
-                             launch, library, library_sync, locations, paths, prefixes, settings,
+from novadeck_stores import (artwork, cdp, cli, connect, dos_targets, first_run, game_page, install_requests,
+                             installs, launch, library, library_sync, locations, paths, prefixes, settings,
                              shortcuts, status)
 
 # Long enough to type an email and a password on the on-screen keyboard and clear a captcha;
@@ -953,6 +953,15 @@ class Plugin:
             decky.logger.info(f"frontend ready: first-run steps {'current' if current else 'NOT written'}")
         except Exception as exc:  # noqa: BLE001 - best-effort, never fail the caller
             decky.logger.info(f"first_run sync: {type(exc).__name__}: {exc}")
+        try:
+            # Same reasoning for the DOSBox targets: a title installed before they existed (Master
+            # of Magic) gets its row here, with no change to its entry.
+            async with _SHORTCUT_LOCK:
+                registry = await asyncio.to_thread(shortcuts.read_registry, p)
+                current = await asyncio.to_thread(dos_targets.sync, p, registry)
+            decky.logger.info(f"frontend ready: DOSBox targets {'current' if current else 'NOT written'}")
+        except Exception as exc:  # noqa: BLE001 - best-effort, never fail the caller
+            decky.logger.info(f"dos_targets sync: {type(exc).__name__}: {exc}")
         return True
 
     async def _main(self):

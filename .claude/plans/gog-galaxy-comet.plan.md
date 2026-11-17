@@ -201,6 +201,11 @@ installed), or on the Pocket FIT for the dummy-service title. One commit per ste
    the pressure-vessel container reaches host `127.0.0.1:9977`, either by reading
    pressure-vessel's network handling or by a 2-minute HW check with `nc -l 9977` and the game.
    Record both in this plan.
+   - **`--username`, read 2026-11-17:** Comet uses it only as the display name it returns to the
+     game in the AUTH_INFO response (`communication_service.rs:238`, `content.set_user_name`). Any
+     value works, but a game showing names (leaderboards, multiplayer) shows this one, so the real
+     GOG username from `userData.json` stays in the plan.
+   - **Container loopback:** HW check pending.
 2. **`packages/comet`**: `prebuilt.pin` + install layout; add to `customize-base.sh`; `make
    relock`; `make verify-lock`.
 3. **GOG identity** (TDD): `user.json` fetch on login and refresh. Tests: written on login,

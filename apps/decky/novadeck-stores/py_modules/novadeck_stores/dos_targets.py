@@ -19,22 +19,20 @@ A variant is {label, exe, args, cwd}:
 Hidden tasks are skipped: GOG lists the launcher's own child processes that way, with no
 arguments.
 
-GOG's metadata is messier than its schema (all of this is on a real install, see the suite):
-paths mix `/` and `\\` and get the case wrong (`DOSBOX\\dosbox.exe` for DOSBox.exe), and a
-workingDir can name a directory that does not exist where it says. So every path component is
-matched case-insensitively, and a workingDir that does not resolve — or is empty, or `.` — falls
-back to the exe's own directory, which is where GOG's relative `-conf "..\\x.conf"` arguments are
-written from (Master of Magic's root task proves the fallback is needed; nothing yet shows a `.`
-that means the install root instead).
+GOG's paths are matched case-insensitively with any separators (gog_paths.py says why), and a
+workingDir that does not resolve — or is empty, or `.` — falls back to the exe's own directory,
+which is where GOG's relative `-conf "..\\x.conf"` arguments are written from (Master of Magic's
+root task proves the fallback is needed; nothing yet shows a `.` that means the install root
+instead).
 
-ROOT reads this tree, which the store user owns: info files go through status.open_user_file,
-`..` components are refused, and no symlinked component is followed.
+ROOT reads this tree, which the store user owns: info files go through status.open_user_file, and
+gog_paths refuses `..` and symlinked components.
 """
 import json
 import os
-import stat
 
 from novadeck_stores import cli, installs, status
+from novadeck_stores.gog_paths import resolve, split_windows_args  # noqa: F401 - re-exported
 
 FILENAME = "dos-targets.json"
 DOSBOX_EXE = "dosbox.exe"
@@ -42,98 +40,6 @@ DOSBOX_EXE = "dosbox.exe"
 
 def path(p):
     return os.path.join(p["NOVADECK_STORE_HOME"], FILENAME)
-
-
-def split_windows_args(line):
-    """Split a Windows command line the way CommandLineToArgvW does: whitespace separates, double
-    quotes group, `""` inside quotes is a literal quote, and backslashes are literal EXCEPT before
-    a quote (2n of them → n plus a toggling quote; 2n+1 → n plus a literal quote). GOG's
-    `..\\x.conf` must keep its backslash."""
-    if not line:
-        return []
-    args, cur, in_token, quoted, i = [], [], False, False, 0
-    while i < len(line):
-        c = line[i]
-        if c == "\\":
-            n = 0
-            while i < len(line) and line[i] == "\\":
-                n += 1
-                i += 1
-            if i < len(line) and line[i] == '"':
-                cur.append("\\" * (n // 2))
-                if n % 2:
-                    cur.append('"')
-                    i += 1
-            else:
-                cur.append("\\" * n)
-            in_token = True
-            continue
-        if c == '"' and quoted and line[i + 1:i + 2] == '"':
-            cur.append('"')  # `""` inside quotes: a literal quote, still quoted
-            in_token = True
-            i += 2
-            continue
-        if c == '"':
-            quoted = not quoted
-            in_token = True
-        elif c in " \t" and not quoted:
-            if in_token:
-                args.append("".join(cur))
-                cur, in_token = [], False
-        else:
-            cur.append(c)
-            in_token = True
-        i += 1
-    if in_token:
-        args.append("".join(cur))
-    return args
-
-
-def _parts(rel):
-    """A GOG relative path's components, or None when one of them climbs (`..`) or holds a NUL
-    (which the os calls below reject with ValueError, not OSError)."""
-    if "\0" in rel:
-        return None
-    parts = [x for x in rel.replace("\\", "/").split("/") if x not in ("", ".")]
-    return None if any(x == ".." for x in parts) else parts
-
-
-def _child(directory, name):
-    """The entry of `directory` named `name`, matched exactly first, then case-insensitively when
-    exactly one entry matches. None for a missing, ambiguous or symlinked entry."""
-    exact = os.path.join(directory, name)
-    try:
-        if not stat.S_ISLNK(os.lstat(exact).st_mode):
-            return exact
-        return None
-    except OSError:
-        pass
-    try:
-        with os.scandir(directory) as it:
-            hits = [e for e in it if e.name.casefold() == name.casefold()]
-    except OSError:
-        return None
-    if len(hits) != 1 or hits[0].is_symlink():
-        return None
-    return hits[0].path
-
-
-def resolve(base, rel, want_dir=False):
-    """`rel` (a GOG path, any separators, any case) under `base`, or None. The result is a regular
-    file — or a directory with want_dir — reached through no symlink and no `..`."""
-    parts = _parts(rel) if isinstance(rel, str) else None
-    if not parts:
-        return None
-    cur = base
-    for name in parts:
-        cur = _child(cur, name)
-        if cur is None:
-            return None
-    try:
-        mode = os.lstat(cur).st_mode
-    except OSError:
-        return None
-    return cur if (stat.S_ISDIR(mode) if want_dir else stat.S_ISREG(mode)) else None
 
 
 def _read_info(info_path, uid):

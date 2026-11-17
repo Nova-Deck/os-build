@@ -18,7 +18,7 @@ import json
 import os
 import re
 
-from novadeck_stores import locations, status
+from novadeck_stores import gog_paths, locations, status
 
 # The internal compat_tools name of our baked arm64 Proton (rootfs/lib-assemble-proton.sh rewrites
 # it to this stable name). Windows titles are mapped to it; native titles get no tool.
@@ -80,14 +80,14 @@ def _epic_target(gid, p):
             "platform": "windows"}
 
 
-def _gog_primary_exe(install, gid, uid):
-    """The primary executable goggame-<id>.info names, relative to the install dir, or None."""
+def _gog_primary_task(install, gid, uid):
+    """The primary playTask goggame-<id>.info names (a dict with a str `path`), or None."""
     f = status.open_user_file(os.path.join(install, f"goggame-{gid}.info"), uid)
     if f is None:
         return None
     try:
         with f:
-            info = json.loads(f.read().decode("utf-8", "replace"))
+            info = json.loads(f.read().decode("utf-8-sig", "replace"))
     except (OSError, ValueError):
         return None
     tasks = info.get("playTasks") if isinstance(info, dict) else None
@@ -100,23 +100,37 @@ def _gog_primary_exe(install, gid, uid):
                   and isinstance(t.get("path"), str)]
     chosen = next((t for t in candidates if t.get("isPrimary")), None) or (
         candidates[0] if candidates else None)
-    return chosen["path"] if chosen else None
+    return chosen
 
 
 def _gog_target(gid, p, record):
     """Resolve an installed GOG game. The install path and platform come from OUR install record
     (installs.json); a native-Linux build launches its install-root start.sh, a Windows build the
-    primary task from goggame-<id>.info."""
+    primary task from goggame-<id>.info — its exe, its `arguments` and its `workingDir`.
+
+    The arguments and workingDir matter (boxtron-dos phase 2): a GOG DOS title whose primary task
+    is `DOSBox.exe -conf "..\\x.conf"` otherwise starts DOSBox with no config at all, under Proton
+    too, and its relative paths resolve from the wrong directory. GOG's paths are messy
+    (gog_paths.py): the exe is matched case-insensitively when it is on disk, a workingDir that
+    does not resolve falls back to the exe's directory, and no workingDir keeps the install root."""
     install = record.get("path")
     if not install:
         return None
     platform = record.get("platform", "windows")
     if platform == "linux":
         return {"exe": os.path.join(install, "start.sh"), "startdir": install, "platform": "linux"}
-    rel = _gog_primary_exe(install, gid, int(p["NOVADECK_STORE_UID"]))
-    if rel is None:
+    task = _gog_primary_task(install, gid, int(p["NOVADECK_STORE_UID"]))
+    if task is None:
         return None
-    return {"exe": os.path.join(install, rel), "startdir": install, "platform": "windows"}
+    exe = gog_paths.resolve(install, task["path"]) or gog_paths.join(install, task["path"])
+    if exe is None:
+        return None
+    wd = task.get("workingDir")
+    startdir = ((gog_paths.resolve(install, wd, want_dir=True) or os.path.dirname(exe))
+                if isinstance(wd, str) and wd else install)
+    args = task.get("arguments")
+    return {"exe": exe, "startdir": startdir, "platform": "windows",
+            "args": gog_paths.shell_safe(gog_paths.split_windows_args(args if isinstance(args, str) else ""))}
 
 
 def resolve_target(store, gid, p, record):

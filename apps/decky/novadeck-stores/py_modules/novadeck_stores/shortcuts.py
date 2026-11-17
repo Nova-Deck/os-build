@@ -31,6 +31,7 @@ import glob
 import json
 import os
 import re
+import shlex
 
 from novadeck_stores import cli, dos_targets, first_run, launch, status
 
@@ -53,8 +54,12 @@ def entry_fields(store, gid, title, resolved):
         "StartDir": f'"{resolved.get("startdir") or os.path.dirname(resolved["exe"])}"',
         # Per-game FEX tuning by the same door a Steam game uses; the token is NOT here — identity
         # lives in the registry, joined by appid. A Windows title the umu database knows is
-        # prefixed with its protonfixes ids (launch.protonfix_env), which Proton reads.
-        "LaunchOptions": " ".join(filter(None, [resolved.get("env"), launch.LAUNCH_OPTIONS])),
+        # prefixed with its protonfixes ids (launch.protonfix_env), which Proton reads. The store's
+        # own arguments for the exe (a GOG task's `arguments`) follow %command%, each shell-quoted:
+        # Steam runs LaunchOptions through a shell.
+        "LaunchOptions": " ".join(filter(None, [
+            resolved.get("env"), launch.LAUNCH_OPTIONS,
+            *(shlex.quote(a) for a in resolved.get("args") or [])])),
     }
 
 

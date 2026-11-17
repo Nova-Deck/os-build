@@ -1,0 +1,57 @@
+# dosbox-staging — native arm64 DOSBox, the emulator Boxtron hands GOG DOS games to.
+#
+# WHY IT IS HERE: GOG ships DOS games as Windows DOSBox. Under Proton that runs DOSBox -> Wine ->
+# FEX, and DOSBox's dynamic core writes fresh x86 code that FEX must re-translate, so Master of
+# Magic crawls on the Pocket FIT. A native DOSBox removes FEX and Wine from the chain entirely; on
+# aarch64 its CMakeLists selects the DYNREC recompiler by itself (CMakeLists.txt:300-307).
+# Plan: .claude/plans/boxtron-dos.plan.md.
+#
+# WHY LOCAL AND NOT FETCHED: absent from holo core and extra aarch64 at the pinned snapshot, as
+# are three of its dependencies — packages/iir1, packages/munt and packages/asio, built here first
+# (source.pin `needs:`).
+#
+# The recipe is the AUR's (dosbox-staging 1:0.83.0-1) bumped to the 0.83.1 tag, with its depends
+# corrected against 0.83.1's own CMakeLists rather than copied:
+#   - sdl2_net and libslirp DROPPED: 0.83.1 looks up neither (CMakeLists.txt:459-470), and
+#     sdl2_net is not in the snapshot.
+#   - asio moved to makedepends: header-only, so nothing of it is needed at runtime.
+# A TAG, not upstream main: main has moved to SDL3 + SDL3_image, and the snapshot has no
+# SDL3_image.
+#
+# OPT_TESTS=OFF drops the GTest dependency (upstream's own packaging advice, docs/build-linux.md).
+# The default -march is deliberate: one aarch64 build serves every board, down to SM8250's A55
+# (packages/README.md, "CPU baseline").
+#
+# The resources move in package() is load-bearing: upstream installs them to
+# /usr/share/dosbox-staging/resources/, but its search path (src/misc/support.cpp:300-335) wants
+# the resource directories DIRECTLY under <datadir>/dosbox-staging/. The AUR recipe does the same.
+
+pkgname=dosbox-staging
+pkgver=0.83.1
+pkgrel=1
+epoch=1
+pkgdesc='DOS/x86 emulator focusing on ease of use, based on DOSBox'
+arch=('aarch64')
+url='https://github.com/dosbox-staging/dosbox-staging'
+license=('GPL-2.0-or-later')
+depends=('sdl2-compat' 'sdl2_image' 'opusfile' 'alsa-lib' 'libpng' 'iir1' 'speexdsp'
+         'fluidsynth' 'munt' 'zlib-ng' 'libglvnd' 'hicolor-icon-theme')
+makedepends=('cmake' 'ninja' 'asio')
+provides=('dosbox')
+conflicts=('dosbox')
+source=("${pkgname}-${pkgver}.tar.gz::${url}/archive/refs/tags/v${pkgver}.tar.gz")
+sha256sums=('14c3703369e56125a425aea8ebb1a425823df58f9769f3e48b1b8ebbf2c6cf09')
+
+build() {
+  cmake --preset release-linux -S "${pkgname}-${pkgver}" -B build \
+    -W no-dev \
+    -D CMAKE_INSTALL_PREFIX=/usr \
+    -D OPT_TESTS=OFF
+  cmake --build build
+}
+
+package() {
+  DESTDIR="${pkgdir}" cmake --install build
+  mv "${pkgdir}/usr/share/dosbox-staging/resources"/* "${pkgdir}/usr/share/dosbox-staging/"
+  rmdir "${pkgdir}/usr/share/dosbox-staging/resources"
+}

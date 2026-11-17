@@ -87,6 +87,57 @@ mom.mkdir(parents=True)
 t = launch.resolve_target("gog", "456", p, {"path": str(mom), "platform": "windows"})
 (ok if t and t["exe"] == str(mom / "Launcher.exe") else bad)(
     f"a launcher-category isPrimary task is the entry point, not a game task ({t})")
+(ok if t and t.get("args") == [] and t["startdir"] == str(mom) else bad)(
+    f"a primary task with no arguments/workingDir keeps the install root as StartDir and no args ({t})")
+
+# -- GOG task arguments + workingDir (boxtron-dos phase 2): a DOSBox-primary title, GOG's real shape.
+# Without its arguments DOSBox starts with no config, under Proton too; without workingDir its
+# relative `-conf "..\x.conf"` resolves outside the install.
+doom = tmp / "Games" / "GOG" / "Doom"
+(doom / "DOSBOX").mkdir(parents=True)
+(doom / "DOSBOX" / "DOSBox.exe").write_bytes(b"MZ")
+(doom / "goggame-789.info").write_text(json.dumps({"playTasks": [
+    {"arguments": "-conf \"..\\dosbox_doom.conf\" -noconsole -c \"exit\"", "category": "game",
+     "isPrimary": True, "name": "DOOM", "path": "DOSBOX\\dosbox.exe", "workingDir": "DOSBOX"}]}))
+t = launch.resolve_target("gog", "789", p, {"path": str(doom), "platform": "windows"})
+(ok if t and t["exe"] == str(doom / "DOSBOX" / "DOSBox.exe") else bad)(
+    f"a backslash, wrong-case primary path resolves to the file on disk ({t and t['exe']})")
+(ok if t and t.get("args") == ["-conf", "..\\dosbox_doom.conf", "-noconsole", "-c", "exit"] else bad)(
+    f"the primary task's arguments are carried, Windows-split ({t and t.get('args')})")
+(ok if t and t["startdir"] == str(doom / "DOSBOX") else bad)(
+    f"workingDir becomes StartDir ({t and t['startdir']})")
+
+odd = tmp / "Games" / "GOG" / "Odd"
+(odd / "bin").mkdir(parents=True)
+(odd / "goggame-790.info").write_text(json.dumps({"playTasks": [
+    {"arguments": "-x", "category": "game", "isPrimary": True, "path": "bin\\game.exe", "workingDir": "nowhere"}]}))
+t = launch.resolve_target("gog", "790", p, {"path": str(odd), "platform": "windows"})
+(ok if t and t["exe"] == str(odd / "bin" / "game.exe") else bad)(
+    f"a path that is not on disk still has its separators normalised ({t and t['exe']})")
+(ok if t and t["startdir"] == str(odd / "bin") else bad)(
+    f"a workingDir that does not resolve falls back to the exe's dir ({t and t['startdir']})")
+
+ctl = tmp / "Games" / "GOG" / "Ctl"
+ctl.mkdir(parents=True)
+(ctl / "goggame-791.info").write_text(json.dumps({"playTasks": [
+    {"arguments": "-a\nrm -rf ~", "category": "game", "isPrimary": True, "path": "g.exe"}]}))
+t = launch.resolve_target("gog", "791", p, {"path": str(ctl), "platform": "windows"})
+(ok if t and t.get("args") == [] else bad)(
+    f"arguments carrying a control character are dropped, not passed to a shell ({t and t.get('args')})")
+
+# -- the shortcut: arguments after %command%, each shell-quoted --
+import shlex
+from novadeck_stores import shortcuts
+f = shortcuts.entry_fields("gog", "789", "DOOM", {
+    "exe": "/g/DOOM/DOSBOX/DOSBox.exe", "startdir": "/g/DOOM/DOSBOX", "platform": "windows",
+    "env": "STORE=gog UMU_ID=umu-1", "args": ["-conf", "..\\dosbox doom.conf", "-c", "exit; reboot"]})
+opts = f["LaunchOptions"]
+(ok if shlex.split(opts) == ["STORE=gog", "UMU_ID=umu-1", "/usr/lib/novadeck/game-launch", "%command%",
+                             "-conf", "..\\dosbox doom.conf", "-c", "exit; reboot"] else bad)(
+    f"LaunchOptions = env, game-launch %command%, then the args shell-quoted ({opts})")
+f = shortcuts.entry_fields("gog", "123", "W", {"exe": "/g/w.exe", "startdir": "/g", "platform": "windows", "env": ""})
+(ok if f["LaunchOptions"] == "/usr/lib/novadeck/game-launch %command%" else bad)(
+    f"no args → LaunchOptions unchanged ({f['LaunchOptions']})")
 
 # -- GOG native Linux: the install-root start.sh, no compat tool --
 rec_linux = {"path": str(gog_dir), "platform": "linux"}

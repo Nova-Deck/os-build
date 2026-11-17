@@ -1,0 +1,9 @@
+# boxtron — local PKGBUILD (upstream master b3eb8c1; the AUR builds the 2020 v0.5.4 tag). The
+# user-selectable compat tool that runs GOG DOS games on packages/dosbox-staging
+# (.claude/plans/boxtron-dos.plan.md). See the PKGBUILD header.
+#
+# needs: makepkg -s installs depends too, and dosbox-staging is not in the snapshot.
+name: boxtron
+pkgbuild_local: PKGBUILD
+pkgrel_suffix: 1
+needs: dosbox-staging

@@ -238,6 +238,29 @@ asyncio.run(asyncio.sleep(0))  # let the fire-and-forget tasks run
 compat_ops = [pl for ev, pl in emitted if pl["op"] == "compat"]
 (ok if all(pl["tool"] == "proton-cachyos-11.0-arm64" for pl in compat_ops) and len(compat_ops) == 1 else bad)(
     f"boot re-assert sets the compat tool on each Windows row ({len(compat_ops)} ops)")
+
+# ...but only where config.vdf has NO mapping: a tool already there is the user's pick (Boxtron,
+# Proton-GE) or our own set, flushed — either way not ours to overwrite (boxtron-dos phase 2).
+def mapping(appid, name):
+    (tmp / "config.vdf").write_text(
+        f'"InstallConfigStore"\n{{\n\t"CompatToolMapping"\n\t{{\n\t\t"{appid}"\n\t\t{{\n'
+        f'\t\t\t"name"\t\t"{name}"\n\t\t}}\n\t}}\n}}\n')
+def reassert_ops():
+    emitted.clear()
+    asyncio.run(plugin.reassert_compat(p))
+    asyncio.run(asyncio.sleep(0))
+    return [pl for ev, pl in emitted if pl["op"] == "compat"]
+main.compat_map.config_vdf_path = lambda pp: str(tmp / "config.vdf")
+mapping(2981617462, "boxtron")
+(ok if reassert_ops() == [] else bad)("an entry the user mapped to another tool is left alone")
+mapping(2981617462, "proton-cachyos-11.0-arm64")
+(ok if reassert_ops() == [] else bad)("an entry already on our Proton is not re-sent")
+mapping(1234, "boxtron")
+(ok if len(reassert_ops()) == 1 else bad)("a mapping for a DIFFERENT appid does not protect this one")
+mapping(2981617462, "")
+(ok if len(reassert_ops()) == 1 else bad)("an empty tool name counts as unmapped")
+(tmp / "config.vdf").write_text('"broken"\n{\n')
+(ok if len(reassert_ops()) == 1 else bad)("an unreadable config.vdf falls back to re-asserting, as before")
 PY
 
 grep -q 'test-store-shortcuts.sh' "$ROOT/Makefile" \

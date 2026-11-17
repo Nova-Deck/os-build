@@ -1,0 +1,32 @@
+# asio — standalone (non-Boost) Asio headers. A BUILD-ONLY dependency of dosbox-staging.
+#
+# WHY IT IS HERE: dosbox-staging's IPX and serial-port networking code includes <asio.hpp>
+# directly (src/hardware/network/ipx.cpp, src/hardware/serialport/misc_util.h); its CMakeLists has
+# no lookup for it, so the headers must be on the system include path. The pinned snapshot carries
+# no asio (checked against build/snapshot.pin).
+#
+# WHY NOT ARCH'S RECIPE AS-IS: Arch's asio 1.38.2-1 builds from git with autoreconf + configure +
+# `make check`, which drags boost in as a makedepend purely to run the test suite. What it installs
+# is the include/ tree plus a pkg-config file, and Asio is header-only. So: the same tag, as a
+# release tarball, with the headers copied in and nothing compiled. The .pc file is skipped because
+# nothing here reads it.
+#
+# Nothing of this reaches the image: dosbox-staging lists it in makedepends, and /usr/include is
+# trimmed anyway.
+
+pkgname=asio
+pkgver=1.38.2
+pkgrel=1
+pkgdesc='Cross-platform C++ library for asynchronous network I/O (standalone headers)'
+arch=('any')
+url='https://think-async.com/Asio/'
+license=('BSL-1.0')
+source=("${pkgname}-${pkgver}.tar.gz::https://github.com/chriskohlhoff/asio/archive/refs/tags/asio-${pkgver//./-}.tar.gz")
+sha256sums=('9f2648fa483e58a6bf848d970ee0ea650ca19ed7769dfa520ed4f7b8d27af1db')
+
+package() {
+  cd "asio-asio-${pkgver//./-}"
+  install -d "${pkgdir}/usr/include"
+  cp -r include/asio include/asio.hpp "${pkgdir}/usr/include/"
+  install -Dm644 COPYING LICENSE_1_0.txt -t "${pkgdir}/usr/share/licenses/${pkgname}"
+}

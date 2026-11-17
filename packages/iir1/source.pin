@@ -1,0 +1,5 @@
+# iir1 — local PKGBUILD (the AUR's 1.10.0-1 recipe). A dependency of packages/dosbox-staging, absent
+# from holo core and extra aarch64 at the pinned snapshot. See the PKGBUILD header.
+name: iir1
+pkgbuild_local: PKGBUILD
+pkgrel_suffix: 1

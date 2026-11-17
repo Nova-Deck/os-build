@@ -32,9 +32,9 @@ import decky
 
 import base64
 
-from novadeck_stores import (artwork, cdp, cli, connect, first_run, game_page, install_requests, installs,
-                             launch, library, library_sync, locations, paths, prefixes, settings,
-                             shortcuts, status)
+from novadeck_stores import (artwork, cdp, cli, compat_map, connect, dos_targets, first_run, game_page,
+                             install_requests, installs, launch, library, library_sync, locations, paths,
+                             prefixes, settings, shortcuts, status)
 
 # Long enough to type an email and a password on the on-screen keyboard and clear a captcha;
 # short enough that a login the user walked away from does not poll for the rest of the session.
@@ -382,20 +382,28 @@ class Plugin:
             return {**out, "warning": warning} if warning else out
 
     async def reassert_compat(self, p=None):
-        """Re-set the compat tool on every Windows entry. SpecifyCompatTool is in-memory until
-        Steam flushes config.vdf, so a set made late in a session can be lost on a crash; this
-        runs best-effort whenever the frontend comes up (frontend_ready). Fire-and-forget: the
-        caller never waits on Steam's answers."""
+        """Re-set the compat tool on every Windows entry that has NONE mapped. SpecifyCompatTool is
+        in-memory until Steam flushes config.vdf, so a set made late in a session can be lost on a
+        crash; this runs best-effort whenever the frontend comes up (frontend_ready). An entry
+        config.vdf already maps keeps its tool — the user may have picked Boxtron or Proton-GE.
+        Fire-and-forget: the caller never waits on Steam's answers."""
         try:
             p = p or await asyncio.to_thread(paths.store_paths)
             registry = await asyncio.to_thread(shortcuts.read_registry, p)
         except (OSError, subprocess.SubprocessError):
             return 0
+        # Only entries Steam has NO tool for: a mapping on disk is the user's pick (Boxtron,
+        # Proton-GE) or ours, already flushed. None — config.vdf unreadable — means nothing is
+        # known mapped, so every entry is re-asserted, exactly as before (compat_map).
+        mapped = await asyncio.to_thread(
+            compat_map.mapped_appids, compat_map.config_vdf_path(p), int(p["NOVADECK_STORE_UID"]))
         sent = 0
         for row in registry.values():
             # A shelf tile's Exe is the native install stub: a compat tool there would run the
             # stub through Proton.
             if not isinstance(row, dict) or "appid" not in row or shortcuts.is_shelf(row):
+                continue
+            if mapped is not None and int(row["appid"]) & 0xFFFFFFFF in mapped:
                 continue
             tool = launch.compat_tool(row.get("platform", "windows"))
             if tool:
@@ -649,6 +657,66 @@ class Plugin:
                          "message": f"could not start: {type(exc).__name__}"}
             if event is not None:
                 await decky.emit("install_event", event)
+
+    # -- boxtron-dos phase 3: which DOSBox version, asked by the launch itself --
+
+    async def take_dos_picks(self, p):
+        """Take every version question game-launch left (novadeck_dostarget.ask) and put it in
+        front of the user as a dos_pick event. A one-version title is answered at once rather
+        than left waiting; an appid with no row is not answered at all (the launch's own timeout
+        runs its default)."""
+        for appid in await asyncio.to_thread(install_requests.take_dos_picks, p):
+            versions = await asyncio.to_thread(dos_targets.versions, p, appid)
+            labels = (versions or {}).get("labels") or []
+            if len(labels) == 1:
+                await asyncio.to_thread(dos_targets.answer, p, appid, labels[0])
+                continue
+            if len(labels) < 2:
+                decky.logger.info(f"dos pick {appid}: no DOSBox versions recorded")
+                continue
+            registry = await asyncio.to_thread(shortcuts.read_registry, p)
+            title = next((row.get("title") for row in registry.values()
+                          if isinstance(row, dict) and row.get("appid") is not None
+                          and int(row["appid"]) & 0xFFFFFFFF == int(appid)), None)
+            await decky.emit("dos_pick", {"appid": int(appid), "title": title or "This game", "labels": labels})
+
+    async def dos_pick_answer(self, appid, label, remember):
+        """The dialog's answer: a label (and, with remember, saved as the game's choice) or None
+        for Cancel, which the launch takes as 'do not launch'."""
+        try:
+            p = await asyncio.to_thread(paths.store_paths)
+            key = str(int(appid) & 0xFFFFFFFF)
+            versions = await asyncio.to_thread(dos_targets.versions, p, key)
+            if label is not None and label not in (versions or {}).get("labels", []):
+                return {"error": f"unknown version {label!r}"}
+            if label is not None and remember:
+                async with _SHORTCUT_LOCK:
+                    saved = await asyncio.to_thread(dos_targets.set_choice, p, key, label)
+                if "error" in saved:
+                    decky.logger.info(f"dos pick {key}: {saved['error']}")
+            if not await asyncio.to_thread(dos_targets.answer, p, key, label):
+                return {"error": "the answer could not be written"}
+            return {"ok": True}
+        except (OSError, subprocess.SubprocessError, ValueError, TypeError) as exc:
+            return {"error": f"{type(exc).__name__}"}
+
+    async def dos_versions(self, appid):
+        """The game page's "DOSBox version" row: {labels, choice} (no labels → no row)."""
+        try:
+            p = await asyncio.to_thread(paths.store_paths)
+            versions = await asyncio.to_thread(dos_targets.versions, p, str(int(appid) & 0xFFFFFFFF))
+        except (OSError, subprocess.SubprocessError, ValueError, TypeError):
+            versions = None
+        return versions or {"labels": [], "choice": None}
+
+    async def set_dos_choice(self, appid, label):
+        """Remember a version for the game, or None for 'Ask every time'."""
+        try:
+            p = await asyncio.to_thread(paths.store_paths)
+            async with _SHORTCUT_LOCK:
+                return await asyncio.to_thread(dos_targets.set_choice, p, str(int(appid) & 0xFFFFFFFF), label)
+        except (OSError, subprocess.SubprocessError, ValueError, TypeError) as exc:
+            return {"error": f"{type(exc).__name__}"}
 
     async def install_tile(self, store, gid):
         """The panel's Resume: exactly what pressing the tile does. Returns the install_event."""
@@ -918,6 +986,9 @@ class Plugin:
         while True:
             try:
                 p = p or await asyncio.to_thread(paths.store_paths)
+                # First: a launch is blocked on it, and must hear back within its 10 s. It never
+                # waits on _SHORTCUT_LOCK; an install request can.
+                await self.take_dos_picks(p)
                 await self.take_install_requests(p)
                 # Its own task: a swap can wait a long time on _SHORTCUT_LOCK (a sync talking to
                 # a slow SteamUI), and a tile press must still be taken within the stub's 10 s.
@@ -953,6 +1024,15 @@ class Plugin:
             decky.logger.info(f"frontend ready: first-run steps {'current' if current else 'NOT written'}")
         except Exception as exc:  # noqa: BLE001 - best-effort, never fail the caller
             decky.logger.info(f"first_run sync: {type(exc).__name__}: {exc}")
+        try:
+            # Same reasoning for the DOSBox targets: a title installed before they existed (Master
+            # of Magic) gets its row here, with no change to its entry.
+            async with _SHORTCUT_LOCK:
+                registry = await asyncio.to_thread(shortcuts.read_registry, p)
+                current = await asyncio.to_thread(dos_targets.sync, p, registry)
+            decky.logger.info(f"frontend ready: DOSBox targets {'current' if current else 'NOT written'}")
+        except Exception as exc:  # noqa: BLE001 - best-effort, never fail the caller
+            decky.logger.info(f"dos_targets sync: {type(exc).__name__}: {exc}")
         return True
 
     async def _main(self):

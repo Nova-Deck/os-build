@@ -2,6 +2,7 @@ import { call } from "@decky/api";
 import type {
   AccountResult,
   ConnectStart,
+  DosVersions,
   InstallEvent,
   InstallSize,
   LibraryState,
@@ -52,3 +53,12 @@ export const getGameState = (appid: number, token?: string) =>
   call<[number, string | null], PageState>("game_state", appid, token ?? null);
 export const getInstallSize = (store: StoreId, id: string) =>
   call<[StoreId, string], InstallSize>("install_size", store, id);
+
+// boxtron-dos phase 3: which DOSBox version of a GOG title runs under Boxtron (DosVersionDialog).
+// A null label answers the launch's question with Cancel (do not launch) / sets "Ask every time".
+export const answerDosPick = (appid: number, label: string | null, remember: boolean) =>
+  call<[number, string | null, boolean], { ok: true } | { error: string }>("dos_pick_answer", appid, label, remember);
+export const getDosVersions = (appid: number) =>
+  call<[number], DosVersions>("dos_versions", appid);
+export const setDosChoice = (appid: number, label: string | null) =>
+  call<[number, string | null], { choice: string | null } | { error: string }>("set_dos_choice", appid, label);

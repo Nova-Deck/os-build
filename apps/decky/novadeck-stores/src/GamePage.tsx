@@ -14,8 +14,9 @@ import {
   showModal,
 } from "@decky/ui";
 import { Component, useEffect, useRef, useState } from "react";
-import { getGameState, getInstallSize, installTile, stopInstall, uninstallGame } from "./backend";
-import { STORE_LABELS, type OurPage, type PageState } from "./types";
+import { getDosVersions, getGameState, getInstallSize, installTile, stopInstall, uninstallGame } from "./backend";
+import { showDosVersionSetting } from "./DosVersionDialog";
+import { STORE_LABELS, type DosVersions, type OurPage, type PageState } from "./types";
 import { confirmUninstall } from "./UninstallDialog";
 
 // Milestone 7 revision 2, R1: the install surface is Steam's OWN game page. For one of our
@@ -43,6 +44,19 @@ type Node = { key?: unknown; props?: { className?: unknown; children?: unknown; 
 type PatchedFn = ((...args: unknown[]) => unknown) & { __novadeckPatched?: boolean };
 
 const pageMarker = (appid: number) => `novadeck-page-${appid}`;
+
+// The internal compat_tools name packages/boxtron installs (its PKGBUILD asserts it), and the
+// live tool Steam has mapped for an app — the page's own details, which Steam keeps loaded and
+// current while the page is open. Empty when unknown: no button, never a wrong one.
+const BOXTRON_TOOL = "boxtron";
+function compatToolOf(appid: number): string {
+  try {
+    const details: any = (window as any).appDetailsStore?.GetAppDetails?.(appid);
+    return String(details?.strCompatToolName || "");
+  } catch (error) {
+    return "";
+  }
+}
 
 function classOf(node: unknown): string {
   const cn = (node as Node | null)?.props?.className;
@@ -305,6 +319,45 @@ function PlayRow({ appid }: { appid: number }) {
     };
   }, [sizeKey, wantsSize]);
 
+  // boxtron-dos phase 3: an installed GOG DOS title with several DOSBox versions gets a "DOSBox
+  // version" button — but only while its compat tool IS Boxtron. Under Proton the choice does
+  // nothing (GOG's own launcher asks), so offering it there was a setting with no effect. The
+  // versions are read once per install state (and after a change).
+  //
+  // The tool is SUBSCRIBED to, not polled: appDetailsStore's copy is only refreshed while some
+  // page holds a details subscription, so a poll of it kept the old tool after a switch in
+  // Properties -> Compatibility until another game page was opened (HW 2026-11-17, Pocket FIT).
+  // RegisterForAppDetails pushes the change itself.
+  const installed = page !== null && page.state === "installed";
+  const [dos, setDos] = useState<DosVersions | null>(null);
+  const [onBoxtron, setOnBoxtron] = useState(() => compatToolOf(appid) === BOXTRON_TOOL);
+  useEffect(() => {
+    if (!installed) return;
+    setOnBoxtron(compatToolOf(appid) === BOXTRON_TOOL);
+    let sub: { unregister?: () => void } | undefined;
+    try {
+      sub = (window as any).SteamClient?.Apps?.RegisterForAppDetails?.(appid, (details: any) =>
+        setOnBoxtron(String(details?.strCompatToolName || "") === BOXTRON_TOOL),
+      );
+    } catch (error) {
+      sub = undefined;
+    }
+    return () => sub?.unregister?.();
+  }, [appid, installed]);
+  useEffect(() => {
+    if (!installed) {
+      setDos(null);
+      return;
+    }
+    let live = true;
+    getDosVersions(appid)
+      .then((v) => live && setDos(v))
+      .catch(() => live && setDos(null));
+    return () => {
+      live = false;
+    };
+  }, [appid, installed, tick]);
+
   const hidesPlay = page !== null && page.state !== "installed";
   useFocusOnMount(ref, hidesPlay);
 
@@ -336,7 +389,14 @@ function PlayRow({ appid }: { appid: number }) {
   return (
     <Focusable ref={ref} className="novadeck-play-row" flow-children="row">
       <style>{rowCss + (hidesPlay ? hideNativePlay(appid) : "")}</style>
-      <RowBody page={page} size={size} busy={busy} run={run} />
+      <RowBody
+        page={page}
+        size={size}
+        busy={busy}
+        run={run}
+        dos={onBoxtron ? dos : null}
+        refresh={() => setTick((t) => t + 1)}
+      />
       {err ? <span className="novadeck-play-note">{`Could not refresh: ${err}`}</span> : null}
     </Focusable>
   );
@@ -347,6 +407,8 @@ type BodyProps = {
   size: number | null | undefined;
   busy: boolean;
   run: (fn: () => Promise<Outcome>) => void;
+  dos: DosVersions | null;
+  refresh: () => void;
 };
 
 function Meta({ lines }: { lines: (string | null | undefined)[] }) {
@@ -361,7 +423,7 @@ function Meta({ lines }: { lines: (string | null | undefined)[] }) {
   );
 }
 
-function RowBody({ page, size, busy, run }: BodyProps) {
+function RowBody({ page, size, busy, run, dos, refresh }: BodyProps) {
   const store = STORE_LABELS[page.store] ?? page.store;
   const waiting = page.busy ? `Waiting: ${page.busy} is installing` : null;
   const needs = size ? `Needs ${gb(size)}` : size === null ? "Size unknown" : "Checking size…";
@@ -437,12 +499,29 @@ function RowBody({ page, size, busy, run }: BodyProps) {
         confirmUninstall(page.store, page.id, page.title, "this page", (dropPrefix) =>
           run(() => uninstallGame(page.store, page.id, dropPrefix)),
         );
+      const versions = dos && dos.labels.length > 1 ? dos : null;
+      const chooseVersion = () =>
+        versions &&
+        showDosVersionSetting(page.appid, page.title, versions.labels, versions.choice, (message) => {
+          toaster.toast({ title: page.title, body: message });
+          refresh();
+        });
       return (
         <>
           <DialogButton className="novadeck-play-secondary" disabled={busy} onClick={uninstall}>
             Uninstall
           </DialogButton>
-          <Meta lines={[`${store} · installed with NovaDeck`]} />
+          {versions && (
+            <DialogButton className="novadeck-play-secondary" disabled={busy} onClick={chooseVersion}>
+              DOSBox version
+            </DialogButton>
+          )}
+          <Meta
+            lines={[
+              `${store} · installed with NovaDeck`,
+              versions ? `Boxtron runs: ${versions.choice ?? "ask every time"}` : null,
+            ]}
+          />
         </>
       );
     }

@@ -1,0 +1,67 @@
+# boxtron — a Steam compatibility tool that runs a game's DOSBox command line on native DOSBox.
+#
+# WHY IT IS HERE: GOG DOS games under Proton run DOSBox -> Wine -> FEX. With Boxtron selected in a
+# game's Properties -> Compatibility, Steam hands the launch to Boxtron instead, which rewrites the
+# game's own .conf files for Linux (Windows paths, case-insensitive lookups) and runs
+# packages/dosbox-staging natively. Plan: .claude/plans/boxtron-dos.plan.md.
+#
+# IT IS AN OPT-IN, NEVER A DEFAULT: Proton CachyOS stays the compat tool every alien-store game is
+# mapped to. Boxtron only appears in Steam's list next to our two Protons.
+#
+# WHY A COMMIT AND NOT THE v0.5.4 TAG the AUR builds: Boxtron is unmaintained and 0.5.4 (2020) is
+# its last release. master (b3eb8c1, 2023-04) is 26 commits on: lint, typing and spelling, plus
+# two behaviour fixes for .bat launchers (`::` comments; an assert turned into a logged error).
+#
+# NOT COMPILED: pure Python, so arch=any. What this recipe does is `make install` (upstream's
+# PACKAGING.md), which renders boxtron.vdf from its template and puts it in
+# /usr/share/steam/compatibilitytools.d/ with install_path pointing at /usr/share/boxtron.
+#
+# THE TWO EDITS, both asserted so an upstream change fails here instead of shipping silently:
+#   1. preconfig.py's CHECKSUM is replaced with the sha256 of the preconfig.tar THIS build made.
+#      The tarball's bytes depend on the tar version that packs it (the AUR patches in tar 1.35's
+#      hash for the same reason); a stale value only disables per-Steam-appid MIDI presets, but it
+#      logs an error on every launch.
+#   2. After install, the vdf must name the tool `boxtron` with install_path /usr/share/boxtron.
+#      Steam pins every game to that internal name, and game-launch recognises a Boxtron launch by
+#      /usr/share/boxtron/run-dosbox — a rename would unpin games AND break the target swap.
+#
+# depends: dosbox-staging (provides dosbox) and inotify-tools are what run-dosbox calls; libx11 and
+# libxinerama are what xlib.py CDLL()s, unguarded, to pick the fullscreen screen for the default
+# `fullscreenmode = screen 0` (settings.py:130-142) — declared, not left to arrive transitively. NOT
+# timidity++ (the AUR's) — absent from the snapshot; Boxtron's MIDI setup only starts a synth when
+# MIDI is on AND a soundfont is found, and otherwise turns MIDI off by itself (run-dosbox:41-62).
+
+pkgname=boxtron
+_commit=b3eb8c18ec11562ec69675736b4df3fcb04a28a6
+pkgver=0.5.4.r26.gb3eb8c1
+pkgrel=1
+pkgdesc='Compatibility tool to run DOS games on Steam through native Linux DOSBox'
+arch=('any')
+url='https://github.com/dreamer/boxtron'
+license=('GPL-2.0-or-later')
+depends=('python' 'dosbox-staging' 'inotify-tools' 'libx11' 'libxinerama')
+source=("${pkgname}-${_commit}.tar.gz::${url}/archive/${_commit}.tar.gz")
+sha256sums=('879b851d44831b17a75a53543e7ece9f896008bc5a776e0cd5ac373515c9d2d9')
+
+build() {
+  cd "${pkgname}-${_commit}"
+  make preconfig.tar
+  local sum
+  sum="$(sha256sum preconfig.tar | cut -d' ' -f1)"
+  sed -i -E "s/^CHECKSUM = '[0-9a-f]{64}'$/CHECKSUM = '${sum}'/" preconfig.py
+  grep -qx "CHECKSUM = '${sum}'" preconfig.py \
+    || { echo "preconfig.py: CHECKSUM line not found — upstream changed shape" >&2; return 1; }
+}
+
+package() {
+  cd "${pkgname}-${_commit}"
+  make DESTDIR="${pkgdir}" prefix=/usr install
+
+  local vdf="${pkgdir}/usr/share/steam/compatibilitytools.d/boxtron.vdf"
+  grep -qE '^[[:space:]]*"boxtron"' "${vdf}" \
+    || { echo "${vdf}: internal tool name is not 'boxtron'" >&2; return 1; }
+  grep -qE '"install_path"[[:space:]]+"/usr/share/boxtron"' "${vdf}" \
+    || { echo "${vdf}: install_path is not /usr/share/boxtron" >&2; return 1; }
+  [ -x "${pkgdir}/usr/share/boxtron/run-dosbox" ] \
+    || { echo "run-dosbox is not at /usr/share/boxtron/run-dosbox" >&2; return 1; }
+}

@@ -53,6 +53,10 @@ try:
     import novadeck_firstrun
 except ImportError:  # same contract: a missing helper costs the setup step, not the game
     novadeck_firstrun = None
+try:
+    import novadeck_dostarget
+except ImportError:  # same contract: a missing helper costs the Boxtron swap, not the game
+    novadeck_dostarget = None
 
 BASE_CONFIG = pathlib.Path("/usr/share/fex-emu/Config.json")
 PROFILES = pathlib.Path("/usr/share/novadeck/fex-profiles.json")
@@ -408,8 +412,22 @@ def main():
     except Exception as exc:  # noqa: BLE001 - same contract as the FEX block above
         print(f"{PROG}: per-game env skipped ({exc})", file=sys.stderr)
 
+    # Last, so it cannot disturb the steps or the tuning above: when the user picked Boxtron for a
+    # store title that runs through a launcher, run the title's DOSBox command line instead
+    # (novadeck_dostarget). Every other launch comes back unchanged. If the move into the game's
+    # directory fails, the original argv runs — DOSBox's relative -conf paths need that directory.
+    argv = sys.argv[1:]
+    if novadeck_dostarget is not None:
+        try:
+            swapped, cwd = novadeck_dostarget.swap(argv, appid())
+            if cwd is not None:
+                os.chdir(cwd)
+            argv = swapped
+        except Exception as exc:  # noqa: BLE001 - the swap must never block the launch
+            print(f"{PROG}: DOSBox target swap skipped ({exc})", file=sys.stderr)
+
     try:
-        os.execv(command, [command, *sys.argv[2:]])
+        os.execv(argv[0], argv)
     except OSError as exc:
         raise SystemExit(f"{PROG}: cannot exec {command}: {exc}")
 

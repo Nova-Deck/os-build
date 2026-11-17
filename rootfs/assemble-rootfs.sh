@@ -128,6 +128,17 @@ else
   echo "  (no linux-firmware at ${LFW#"$ROOT"/} — run firmware/fetch-linux-fw.sh; GPU/BT/VPU firmware will be missing)"
 fi
 
+# STAGE firmware-compress — store each blob as <name>.zst. When the plain name is missing, the
+# kernel loads <name>.zst and decompresses it (CONFIG_FW_LOADER_COMPRESS_ZSTD, kernel/kernel.config).
+# Whole-file zstd beats btrfs's own zstd, which compresses each 128 KiB extent on its own.
+# The kernel rejects a frame with no content size; zstd writes one when compressing a regular file.
+# Only full reads decompress: request_partial_firmware_into_buf() never looks for .zst, and no
+# driver we ship uses it. Left plain: dotfile bookkeeping and *.txt notices (read by people, not the kernel).
+if [ -d "$stage/lib/firmware" ]; then
+  find "$stage/lib/firmware" -type f ! -name '.*' ! -name '*.txt' ! -name '*.zst' -print0 \
+    | xargs -0 -r -n1 -P "$(nproc)" zstd -q -19 --rm
+fi
+
 # STAGE release-marker — so the running system can identify the slot's provenance.
 #
 # This is the file rootfs/conf/os-release designates for per-build identity ("NO PER-BUILD FIELDS ... the

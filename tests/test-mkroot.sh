@@ -513,6 +513,7 @@ declare -A STAGE_EXPECTED=(
   [boot-mountpoints]="/esp + /efi"
   [firmware-device]="device-proprietary firmware under /lib/firmware"
   [firmware-open]="linux-firmware blobs (Adreno, WCN7850, Iris)"
+  [firmware-compress]="the same blobs, stored as .zst (a size win only; mkroot.sh's plain copy loads the same)"
   [release-marker]="the marker that identifies the slot's provenance"
   [os-release-fields]="the same identity in the fields other software reads"
   [overlay-payload]="the RELEASE overlay (SteamOS layers B/C/D)"

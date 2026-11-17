@@ -167,6 +167,12 @@ BOOTSTRAP_PKGS=(base)
 # extension for aarch64, so there is no FEX in this path, unlike the prebuilt freezes upstream
 # publishes for Deck users. They drag in the python-requests dependency closure, which is the first
 # new Python chain on this image since the trim — see the plan's size note.
+# boxtron: a Steam compat tool the user can pick per game (Properties -> Compatibility, beside our
+# two Protons) to run a GOG DOS game on NATIVE arm64 DOSBox instead of DOSBox -> Wine -> FEX. Never
+# mapped by default — Proton CachyOS stays every alien-store game's tool. It pulls dosbox-staging,
+# and through it iir1 + munt; none of the four is in the holo repos, so all are built into the
+# [novadeck] overlay (packages/boxtron, packages/dosbox-staging, ...). Plan:
+# .claude/plans/boxtron-dos.plan.md.
 # scx-scheds: the sched_ext userspace schedulers (scx_lavd, scx_bpfland, scx_rusty). scx_lavd is the
 # gaming-oriented one — latency-critical tasks get priority, which is the point on a handheld. Needs
 # the kernel half (CONFIG_SCHED_CLASS_EXT + BTF, kernel/kernel.config). NOT in the holo repos, so it
@@ -310,7 +316,7 @@ BOOTSTRAP_PKGS=(base)
 # lookup fails that way — indistinguishable from a genuinely absent layer, which is the failure
 # packages/fossilize-stub-android exists to prevent. ~1.1 MB (jq + oniguruma).
 # Measured 2026-08-29 on a Pocket ACE, Lepton v2.8.9 (issue #58).
-PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-mesa-layers vulkan-tools novadeck-gpu-priority mesa gamescope seatd sddm mangohud lsfg-vk fex-emu bluez bluez-utils networkmanager alsa-ucm-conf pipewire wireplumber pipewire-pulse pipewire-alsa rtkit unzip openal gtk2 ffmpeg e2fsprogs xorg-xwayland lsof noto-fonts noto-fonts-cjk noto-fonts-emoji python python-gobject legendary gogdl scx-scheds rauc btrfs-progs rsync earlyoom zram-generator udisks2 f3 upower libinput-tools podman crun passt fuse-overlayfs which inotify-tools jq)
+PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-mesa-layers vulkan-tools novadeck-gpu-priority mesa gamescope seatd sddm mangohud lsfg-vk fex-emu bluez bluez-utils networkmanager alsa-ucm-conf pipewire wireplumber pipewire-pulse pipewire-alsa rtkit unzip openal gtk2 ffmpeg e2fsprogs xorg-xwayland lsof noto-fonts noto-fonts-cjk noto-fonts-emoji python python-gobject legendary gogdl boxtron scx-scheds rauc btrfs-progs rsync earlyoom zram-generator udisks2 f3 upower libinput-tools podman crun passt fuse-overlayfs which inotify-tools jq)
 
 # Dev-only packages — installed ONLY under NOVADECK_DEV=1, NEVER in a release base.
 # On-device bring-up tools: evtest reads raw /dev/input events; usbutils provides lsusb.

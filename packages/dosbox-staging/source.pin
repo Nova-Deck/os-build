@@ -1,0 +1,9 @@
+# dosbox-staging — local PKGBUILD (the AUR's recipe at the 0.83.1 tag). The native DOSBox that
+# Boxtron runs GOG DOS games on (.claude/plans/boxtron-dos.plan.md). See the PKGBUILD header.
+#
+# needs: overlay packages installed into the build container first (packages/build-overlay.sh).
+# iir1 and munt are link-time AND runtime dependencies; asio is header-only, build-time only.
+name: dosbox-staging
+pkgbuild_local: PKGBUILD
+pkgrel_suffix: 1
+needs: iir1 munt asio

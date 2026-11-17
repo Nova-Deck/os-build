@@ -1,0 +1,5 @@
+# asio — local PKGBUILD (Arch's 1.38.2 tag, headers only; see the PKGBUILD header for why not
+# Arch's configure-based recipe). A build-only dependency of packages/dosbox-staging.
+name: asio
+pkgbuild_local: PKGBUILD
+pkgrel_suffix: 1

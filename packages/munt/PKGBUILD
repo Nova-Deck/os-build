@@ -1,0 +1,46 @@
+# munt — libmt32emu, the Roland MT-32 / CM-32L emulation library. A build and runtime dependency
+# of dosbox-staging.
+#
+# WHY IT IS HERE: dosbox-staging 0.83.1's CMakeLists calls `find_package(MT32Emu REQUIRED)`
+# UNCONDITIONALLY — OPT_MT32EMU=OFF only drops the feature, not the lookup — and the pinned snapshot
+# carries no munt (checked against build/snapshot.pin). AUR-only upstream.
+#
+# WHY ONLY THE LIBRARY, when the AUR's munt is a split package of four (munt, munt-qt,
+# munt-daemon, munt-smf2wav): the other three are a Qt GUI, an ALSA MIDI daemon and a MIDI-to-WAV
+# converter. dosbox-staging links the library and nothing else, and the Qt GUI alone would pull
+# qt6-multimedia + portaudio into the build. So both tool options are OFF and the daemon is not
+# built. The tag, the source checksum (the AUR's b2sum matches this tarball) and the shared-library
+# build are the AUR's.
+#
+# MT-32 emulation needs the user's own ROM dumps (dosbox-staging looks under XDG data dirs); none
+# ship here. Without them a game simply falls back to its other music devices.
+
+pkgname=munt
+pkgver=2.8.2
+_tag="libmt32emu_${pkgver//./_}"
+pkgrel=1
+pkgdesc='Software synthesizer emulating pre-GM MIDI devices such as the Roland MT-32 (library)'
+arch=('aarch64')
+url='https://munt.sourceforge.net'
+license=('GPL-2.0 OR LGPL-2.1')
+depends=('gcc-libs')
+makedepends=('cmake')
+source=("${pkgname}-${pkgver}.tar.gz::https://github.com/munt/munt/archive/refs/tags/${_tag}.tar.gz")
+sha256sums=('d4778cf89b054ba7ab410ffcb02ecf1629fa32b5b60838addec99eb93804fdcb')
+
+build() {
+  cmake -S "munt-${_tag}" -B build \
+    -DCMAKE_BUILD_TYPE=None \
+    -DCMAKE_INSTALL_PREFIX=/usr \
+    -DBUILD_SHARED_LIBS=ON \
+    -Dmunt_WITH_MT32EMU_QT=OFF \
+    -Dmunt_WITH_MT32EMU_SMF2WAV=OFF \
+    -Wno-dev
+  cmake --build build
+}
+
+package() {
+  DESTDIR="${pkgdir}" cmake --install build
+  install -Dm644 "munt-${_tag}/mt32emu/COPYING.txt" "munt-${_tag}/mt32emu/COPYING.LESSER.txt" \
+    -t "${pkgdir}/usr/share/licenses/${pkgname}"
+}

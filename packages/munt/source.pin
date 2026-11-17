@@ -1,0 +1,6 @@
+# munt — local PKGBUILD (the AUR's 2.8.2-1 recipe, reduced to the library). A dependency of
+# packages/dosbox-staging, absent from holo core and extra aarch64 at the pinned snapshot. See the
+# PKGBUILD header for why only libmt32emu is built.
+name: munt
+pkgbuild_local: PKGBUILD
+pkgrel_suffix: 1

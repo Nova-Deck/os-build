@@ -392,6 +392,13 @@ grep -q 'make fw-qcom' "$MKROOT" && grep -q 'make fw-linux' "$MKROOT" \
 grep -q 'rm -f /target/usr/lib/firmware/sha256sums.txt' "$MKROOT" \
   && ok "the staging bookkeeping files are removed from the image" \
   || bad "sha256sums.txt/.fetched.stamp would ship inside /usr/lib/firmware"
+# Stored as .zst on both, which the kernel's FW_LOADER_COMPRESS_ZSTD loads by the plain name.
+# Whole-file zstd is ~32 MiB smaller than the squashfs's own 128 KiB zstd blocks.
+for f in "$MKROOT" "$ROOT/rootfs/assemble-rootfs.sh"; do
+  grep -qE 'find [^ ]*/firmware.* -print0' "$f" && grep -qE 'xargs -0 .*zstd -q -19 --rm' "$f" \
+    && ok "${f#"$ROOT"/} stores the firmware zstd-compressed" \
+    || bad "${f#"$ROOT"/} ships the firmware uncompressed"
+done
 grep -q 'kernel/embed.list' "$MKROOT" \
   && ok "it records why the GPU worked without any of this (those blobs are in the kernel)" \
   || bad "the embed.list relationship is undocumented — the next reader repeats the diagnosis"
@@ -513,7 +520,7 @@ declare -A STAGE_EXPECTED=(
   [boot-mountpoints]="/esp + /efi"
   [firmware-device]="device-proprietary firmware under /lib/firmware"
   [firmware-open]="linux-firmware blobs (Adreno, WCN7850, Iris)"
-  [firmware-compress]="the same blobs, stored as .zst (a size win only; mkroot.sh's plain copy loads the same)"
+  [firmware-compress]="the same blobs, stored as .zst (mkroot.sh does the same)"
   [release-marker]="the marker that identifies the slot's provenance"
   [os-release-fields]="the same identity in the fields other software reads"
   [overlay-payload]="the RELEASE overlay (SteamOS layers B/C/D)"

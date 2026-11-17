@@ -626,6 +626,11 @@ docker run --rm --platform linux/arm64 \
     cp -a "$src/." /target/usr/lib/firmware/
   done
   rm -f /target/usr/lib/firmware/sha256sums.txt /target/usr/lib/firmware/.fetched.stamp
+  # Stored as .zst, the same as the card (see the firmware-compress stage in rootfs/assemble-rootfs.sh
+  # for why the kernel loads them). The squashfs compresses each 128 KiB block on its own, so
+  # whole-file zstd still comes out smaller. Notices and dotfiles stay plain.
+  find /target/usr/lib/firmware -type f ! -name ".*" ! -name "*.txt" ! -name "*.zst" -print0 \
+    | xargs -0 -r -n1 -P "$(nproc)" zstd -q -19 --rm
   chmod -R u=rwX,go=rX /target/usr/lib/firmware
   echo "[novadeck] firmware: $(find /target/usr/lib/firmware -type f | wc -l) files, $(du -sh /target/usr/lib/firmware | cut -f1)" >&2
 

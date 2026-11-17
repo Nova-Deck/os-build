@@ -269,10 +269,37 @@ per step; merge only after phase 3's gate.
     - The Proton-GE case is covered offline only: MoM was the only installed title.
 
 ### Phase 3 — the variant picker (last)
-11. **Device probe:** launch interception (game-action start + cancel-and-relaunch, or a
-    pre-launch hook).
-12. **Picker modal** with *Remember my choice*, the one-shot pick in `game-launch`, and the
-    game-page "DOSBox version" setting.
+
+**Design decided 2026-11-17: the LAUNCH asks; Steam's launch is never intercepted.**
+Cancel-and-relaunch through `RegisterForGameActionStart` / `CancelGameAction` / `RunGame` races
+process spawn and re-triggers itself. `game-launch` is already in the chain and can wait, so it
+asks over the spool the tile stub already uses (`store-launch` → `install_requests.py`):
+
+- **`game-launch`** (novadeck_dostarget). Only on a Boxtron launch of a row with ≥2 variants and
+  no remembered `choice`:
+  - it creates `<store home>/requests/<appid>.dospick`; the filename is the whole message;
+  - if the request is not taken in 10 s, the plugin is down: withdraw it and run the first
+    variant;
+  - once taken, it waits up to 120 s for `requests/<appid>.dosanswer`, which holds a label or
+    nothing (cancel);
+  - a label runs that variant; cancel exits 0 without exec (like dismissing Steam's own
+    launch-option dialog); a timeout runs the first variant.
+- **The backend** takes `.dospick` requests in the loop that takes `.install` ones:
+  - same owner and no-follow checks, and the appid must have a dos-targets row;
+  - it emits `dos_pick` {appid, title, labels};
+  - `dos_pick_answer(appid, label | null, remember)` writes the answer file as the user, and with
+    `remember` also sets the row's `choice`.
+- **The frontend:** a modal titled "Which version?", one button per label plus Cancel, and a
+  *Remember my choice* toggle (off by default). The game page's installed row gets a "DOSBox
+  version" button, shown only with ≥2 variants, that opens the same list plus *Ask every time*
+  (clears `choice`).
+
+11. **Device probe:** a Decky modal is visible and controller-navigable while a launch is pending
+    (game-launch blocked before exec). Checked at the HW gate.
+12. **The picker:**
+    - spool request and answer in `game-launch`;
+    - backend take, emit and answer;
+    - the modal, and the game-page "DOSBox version" setting.
 13. **HW gate:** first Play → the picker shows both versions; *remember* → the next Play skips it;
     game page → *Ask every time* brings it back.
 14. **Docs**: the alien-games launch doc and the per-game compatibility doc.

@@ -302,6 +302,18 @@ asks over the spool the tile stub already uses (`store-launch` → `install_requ
     - the modal, and the game-page "DOSBox version" setting.
 13. **HW gate:** first Play → the picker shows both versions; *remember* → the next Play skips it;
     game page → *Ask every time* brings it back.
+
+    **RESULT, Pocket FIT, dev card 20261117T142217Z (be385b2), 2026-11-17: PASSED.** The session
+    log has the whole sequence:
+    1. Asked → Official Release picked with Remember.
+    2. The next Play ran it with no question.
+    3. Game page → Ask every time.
+    4. Asked → Community Patch picked with Remember. It runs from its own `DOSBOX` dir and
+       config: VGA mode 13h, SB16 + OPL3.
+    5. Ask every time again, then Cancel: `version pick cancelled, not launching`, no dosbox.
+
+    Step 11's question is answered: the Decky modal shows and is controller-usable while
+    game-launch waits. The request spool was empty after every run.
 14. **Docs**: the alien-games launch doc and the per-game compatibility doc.
 
 ## Risks / open questions

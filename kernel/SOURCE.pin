@@ -42,20 +42,24 @@
 # fastrpc's probe-time ADSP heap assign WITHOUT its dts half, so 1171 is now LOAD-BEARING on
 # SM8250 and SM8750. UFS core error handling, the q6apm/q6asm ring position and iris power-off
 # ordering are the legs. Read the 7.3.4 section below. HW GATE OWED.
-version:    7.3.4
-url:        https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.3.4.tar.xz
-sha256:     b11b6df8295e8e991ff040b71aaa4994a8b55caa23b6b092907f195b5840fd1f
-git_tag:    v7.3.4
-git_commit: 7595a62d45ee1a2297eafa5f2ef5d0a45142d84d
+# RE-PINNED 2026-11-17 (7.3.5, 515 commits, issue #151). Half of ours landed: stable took 0897's
+# q6apm/q6prm guards (1/2) but not its apr.c half (2/2), so 0897 was cut down to apr.c. PCIe
+# outbound DMA bypass on every DWC host is the leg. Read the 7.3.5 section below. HW-PASSED on
+# Pocket FIT (covers S2 + ACE) and Pocket Max the same day.
+version:    7.3.5
+url:        https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.3.5.tar.xz
+sha256:     8f293f83d54f0b7b9be56863ebc5e4ea79d73e530b4ae55c572be97ef39f0990
+git_tag:    v7.3.5
+git_commit: 988117cc1bb17338c586a4e21ade88b5397eac33
 
 # The sha256 above is the one kernel.org publishes in the SIGNED sha256sums.asc for v7.x, not a
-# hash of whatever the CDN happened to serve — re-checked 2026-11-11. The .asc itself verifies as
+# hash of whatever the CDN happened to serve — re-checked 2026-11-17. The .asc itself verifies as
 # a GOOD signature from "Kernel.org checksum autosigner <autosigner@kernel.org>", fingerprint
 # B886 8C80 BA62 A1FF FAF5 FDA9 632D 3A06 589D A6B1. That key carries no trust path here, so the
-# load-bearing check is CONTINUITY: the SAME signed file still lists 7.3.3 as
-# 79c66dde66cd96877fcde8f7d36aec946b1f423d2b97b5a7b1751b75c764f3d1, 7.3.1 as
-# fa595aad93734f829c963c2a90ef7c3673224fd7fdae7b49406e397cde2de231 and 7.2.11 as
-# fd0fc479f983a8c05313f13e9c36330fe6651cf725396748c40d5cd93fa1e6a4, byte-for-byte the hashes this
+# load-bearing check is CONTINUITY: the SAME signed file still lists 7.3.4 as
+# b11b6df8295e8e991ff040b71aaa4994a8b55caa23b6b092907f195b5840fd1f, 7.3.3 as
+# 79c66dde66cd96877fcde8f7d36aec946b1f423d2b97b5a7b1751b75c764f3d1 and 7.3.1 as
+# fa595aad93734f829c963c2a90ef7c3673224fd7fdae7b49406e397cde2de231, byte-for-byte the hashes this
 # pin carried and shipped before — so the file describing the version above is the same file that
 # described the releases we already trusted. Roll this list forward on each bump rather than
 # growing it; three back is enough to be a chain. (Note: keys.openpgp.org serves this key STRIPPED
@@ -73,6 +77,90 @@ git_commit: 7595a62d45ee1a2297eafa5f2ef5d0a45142d84d
 # Treat 'in-series point release' as a prediction about EFFORT, never about RISK.
 # Re-run every gate, every time — and note that neither of those two findings came from an
 # offline gate. Both came from hardware.
+#
+# ============ 7.3.5 — PINNED 2026-11-17, HW-PASSED FIT + MAX (issue #151) ============
+#
+# 7.3.4 -> 7.3.5: 515 commits, 466 files. Zero qcom dts/dtsi, zero dt-bindings we use, zero
+# drm/msm, adreno, DPU, DSI, clk/qcom, interconnect, pinctrl, iris, ath11k/ath12k or UFS. The only
+# Kconfig change is lib/crypto: the SHA1/256/512 ARCH defaults on MIPS Octeon gain
+# CPU_BIG_ENDIAN. Most of the volume is mm (THP, mremap, shmem, khugepaged, ksm, gup), amdgpu,
+# i915 and overlayfs.
+#
+# THE ONE THAT CHANGES A PATCH: stable took 0897's 1/2, "ASoC: qcom: q6apm: Guard callbacks until
+# probe data is ready" (91b5278622fd, upstream ef7062864c05 via ASoC), byte-identical, but NOT
+# 2/2 "soc: qcom: apr: Publish GPR callback before client probe", which goes through the qcom SoC
+# tree. 0897 is now the apr.c hunk alone, its diff block carried over unchanged. With it on top
+# of the stable 1/2, the patched tree has the same code as the 7.3.4 build had.
+#
+# INTERSECTION: 4 files (`+++` paths of patch-7.3.4-5 against every `+++` path in the stack),
+# all read:
+#   qdsp6/q6apm.c, qdsp6/q6prm.c (0897)  the 1/2 above.
+#   bluetooth/btqca.c     WCN3950 NVM baud-rate offset. We ship no WCN3950.
+#   dwc/pcie-designware.h  PCIE_ATU_DMA_BYPASS define, used by the .c change below.
+# Outside the intersection but on our hardware:
+#   - PCI: dwc sets DMA_BYPASS in outbound iATU CTRL2 on every DWC core >= 4.60A, which is every
+#     Qualcomm PCIe host we drive: WCN7850 / QCA6390 Wi-Fi and the S2's Renesas USB bridge.
+#   - dmaengine: qcom: bam_dma takes the IRQ trigger from DT instead of forcing HIGH, and frees
+#     the IRQ before the clock on its error path. Every BAM node we build (cryptobam on SM8250,
+#     SM8550, SM8650, SM8750) already says IRQ_TYPE_LEVEL_HIGH, so nothing changes for us.
+#   - arm64: cpu_do_suspend saves TPIDR2_EL0 when SME is present (NR_CTX_REGS 14 -> 15).
+#   - mac80211 sets IEEE80211_TX_CTL_AMPDU again for operational aggregation sessions.
+#   - overlayfs (our /etc overlay): index lookup by decoded origin, plus casefold fixes.
+#   - mm/cma: cma_release() refuses to free pages still in use, and warns.
+#   - drm core: drm_crtc fence get_driver_name() race and unbind lifetime, drm/sched priority
+#     run-queue fixes; btrfs subvolume-delete-by-ID and nodatasum chattr fixes; fat truncate lock.
+# PATCHES: all 245 applied cumulatively at --fuzz=0, zero fuzz, zero rejects, no .orig files.
+# Diffed against the same run on 7.3.4, only hunk offsets moved, apart from 0897 itself.
+# DROP CHECK: every (patch, file) pair REVERSE-applied with --dry-run --fuzz=0 to a PRISTINE
+# 7.3.5 tree: 401 pairs checked (76 created files skipped), nothing reverses. Positive control:
+# the PRE-CUT 0897 on the same tree reverses its q6apm.c and q6prm.c blocks and not apr.c.
+# CONFIG SWEEP: every CONFIG_ symbol named in the four fragments exists in the patched 7.3.5
+# Kconfig, ZERO missing (the comment placeholders CONFIG_x/CONFIG_ARCH_x excluded).
+# BUILD: green in the container, Image (`Linux version 7.3.5`) + 24 dtbs + modules (7.3.5)
+# staged; the three trim fragments confirmed (42 + 267 + 74), no unshipped-qcom note. After
+# olddefconfig, ALL 797 directives across the four fragments (401 values + 396 `is not set`)
+# asserted against the final .config: zero mismatches. The final .config is IDENTICAL to 7.3.4's
+# apart from the header.
+#
+# WHAT ONLY HARDWARE CAN SETTLE:
+#   - PCIe: Wi-Fi association plus an RX/TX-heavy transfer on WCN7850 (ACE/S2/FIT) and on the
+#     SM8250 boards, and the S2's gamepad behind the Renesas PCIe-USB bridge, with the
+#     outbound iATU now in DMA bypass.
+#   - Audio probe: q6apm on SM8550/SM8650/SM8750 gives sound on first use. The single
+#     `CMD timeout for [1001021]` at ~10 s is NOT a criterion: it predates 0897, which was already
+#     shown not to remove it (Odin 3, 2026-11-05, 9.7-11.2 s). A timeout in that window is the old
+#     stall; a second one, or a later one, is not.
+#   - CPU suspend context grew a slot. Our suspend is a cgroup freeze and never enters kernel
+#     system suspend, so the path that runs cpu_do_suspend is DEEP CPUIDLE (cpu-sleep-N-0, PSCI
+#     power collapse). A booted board with nonzero cpu-sleep usage on every cluster covers it.
+#   Everything still owed from the 7.3.4, 7.3.3 and 7.3.1 gates below stays owed.
+#
+# HW RESULTS SO FAR:
+#   POCKET FIT (SM8650), dev card build 20261117T162406Z, booted from SD, 2026-11-17: audio
+#   works and the gamepad works, as reported by the operator. The gamepad sits behind the USB
+#   bridge on PCIe 1c08000 (Gen2 x1), so that is the DMA-bypass leg on the second host.
+#   WCN7850 on 1c00000 (Gen2 x2) associated at 80 MHz EHT, NSS 2. Over SSH, 400 MiB each way ran
+#   at 318 Mbit/s to the device and 267 Mbit/s from it, with no ath12k, AER or PCIe errors after
+#   it. Zero *ERROR* in dmesg, zero `ASoC error (-5)`, no UFS errors. One
+#   `CMD timeout for [1001021]` at 10.2 s, the old stall. Taint 4 (CPU out of spec) comes from
+#   the boot-time SYS_ID_AA64MMFR1_EL1 variation across the clusters. Deep cpuidle at 3 min of
+#   uptime: cpu-sleep-0-0 x432 (cpu0), cpu-sleep-1-0 x360 (cpu4), cpu-sleep-2-0 x255 (cpu7), so
+#   cpu_do_suspend's new TPIDR2 slot ran on all three clusters; suspend_stats success=0.
+#   POCKET S2: covered by the FIT. Same board, different panel, so the USB bridge behind PCIe
+#   and the WSA speaker path are the same hardware, and neither showed a fault on the FIT.
+#   POCKET ACE (SM8550): covered by the FIT too. Same WCN7850/ath12k (untouched by 7.3.5), and the
+#   SM8650 PCIe nodes are `"qcom,pcie-sm8650", "qcom,pcie-sm8550"`, so the same pcie-qcom config
+#   (cfg_1_9_0) drives both hosts. The FIT ran both of its links with DMA bypass set.
+#   POCKET MAX (SM8250), same card, 2026-11-17: audio works (operator). QCA6390/ath11k on
+#   1c00000 (Gen2 x1, AER enabled) associated at 80 MHz HE, NSS 2; 400 MiB each way over SSH at
+#   435 Mbit/s to the device and 323 Mbit/s from it, no ath11k, AER or PCIe errors after it, so
+#   the DMA-bypass leg passes on the older DWC generation too. Zero *ERROR*, panel connected,
+#   deep cpuidle entered on all clusters. Taint 512 (W) is the two KNOWN probe-time WARNs
+#   (`dsi0_phy_pll_out_dsiclk already disabled` / `unprepared` right after
+#   `DSI PLL(0) lock failed`, identical on every clean Max boot). The other error lines are known
+#   baseline too: no slpi.mbn, CDSP `failed to authenticate image`, one BT
+#   `Frame reassembly failed (-84)` at firmware download.
+#   EVERY 7.3.5-SPECIFIC LEG IS NOW COVERED. What the 7.3.4/7.3.3/7.3.1 sections still owe stays owed.
 #
 # ============ 7.3.4 — PINNED 2026-11-11, HW GATE OWED ============
 #

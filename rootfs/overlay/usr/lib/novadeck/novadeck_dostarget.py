@@ -12,7 +12,16 @@ when Boxtron's entry point is in the argv Steam built AND the launch's exe is ex
 launcher, the launcher and everything after it are replaced with the chosen variant's exe and
 arguments, and the launch moves into the variant's directory. Boxtron itself is stock.
 
-Which variant: the row's remembered `choice`, else the first (the build GOG's root info lists).
+Which variant: the row's remembered `choice`; else, when there are several, the one the user picks
+NOW; else the first (the build GOG's root info lists).
+
+THE PICK IS ASKED BY THE LAUNCH, never by intercepting Steam's (cancel-and-relaunch races the
+process spawn). ask() uses the spool the tile stub uses: it creates
+`<store home>/requests/<appid>.dospick` — the filename is the whole message — and the plugin
+backend takes it, shows its "Which version?" dialog and writes `<appid>.dosanswer` back: a
+label, or nothing for Cancel. Not taken within TAKE_TIMEOUT means the plugin is not running: the
+request is withdrawn and the first variant runs. Cancel means do not launch at all, as when Steam's
+own launch-option dialog is dismissed; game-launch then exits 0 without exec.
 
 Arguments after the launcher are DROPPED with it: they were addressed to the launcher, and the
 variant carries GOG's full DOSBox command line. That holds when the recorded launcher is itself
@@ -26,10 +35,22 @@ exe has gone. Like the rest of game-launch, this must never be what stops a game
 import json
 import os
 import sys
+import time
 
 BOXTRON_ENTRY = "/usr/share/boxtron/run-dosbox"
 TARGETS_FILE = "dos-targets.json"
 PROG = "game-launch"
+
+REQUEST_DIR = "requests"
+PICK_SUFFIX = ".dospick"
+ANSWER_SUFFIX = ".dosanswer"
+# Same take window as the tile stub (store-launch): the backend polls once a second. The answer
+# window is the user reading a dialog; past it the launch goes on with the first variant rather
+# than hanging a Play forever behind a dialog nobody is looking at.
+TAKE_TIMEOUT = 10.0
+ANSWER_TIMEOUT = 120.0
+POLL = 0.2
+CANCEL = object()
 
 
 def log(message):
@@ -56,11 +77,55 @@ def _valid(variant):
     return variant
 
 
-def _pick(entry):
+def _wait(predicate, timeout, poll):
+    end = time.monotonic() + timeout
+    while not predicate():
+        if time.monotonic() >= end:
+            return False
+        time.sleep(poll)
+    return True
+
+
+def ask(home, appid, take_timeout=TAKE_TIMEOUT, answer_timeout=ANSWER_TIMEOUT, poll=POLL):
+    """The label the user picked, CANCEL, or None when nobody answered (plugin down, or the
+    dialog ignored past answer_timeout). Never raises: a failed ask is an unanswered one."""
+    spool = home / REQUEST_DIR
+    request = spool / f"{appid}{PICK_SUFFIX}"
+    answer = spool / f"{appid}{ANSWER_SUFFIX}"
+    try:
+        spool.mkdir(exist_ok=True)
+        answer.unlink(missing_ok=True)  # a stale answer from an earlier launch is not this one's
+        os.close(os.open(request, os.O_CREAT | os.O_WRONLY | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600))
+    except OSError as exc:
+        log(f"could not ask which version ({exc}); running the first")
+        return None
+    log("asking which version to run")
+    if not _wait(lambda: not request.exists(), take_timeout, poll):
+        request.unlink(missing_ok=True)
+        log("the NovaDeck Stores plugin did not take the question; running the first version")
+        return None
+    if not _wait(answer.exists, answer_timeout, poll):
+        log("no version picked in time; running the first")
+        return None
+    try:
+        text = answer.read_text(encoding="utf-8").strip()
+        answer.unlink(missing_ok=True)
+    except OSError:
+        return None
+    return text if text else CANCEL
+
+
+def _pick(entry, appid, home):
+    """The variant to run, CANCEL, or None when the row has no usable variant."""
     variants = entry.get("variants")
     if not isinstance(variants, list) or not variants:
         return None
+    labels = [v.get("label") for v in variants if isinstance(v, dict)]
     choice = entry.get("choice")
+    if choice not in labels and len(variants) > 1:
+        choice = ask(home, appid)
+        if choice is CANCEL:
+            return CANCEL
     chosen = next((v for v in variants if isinstance(v, dict) and v.get("label") == choice), None)
     return _valid(chosen or variants[0])
 
@@ -75,7 +140,8 @@ def _read_table(home):
 
 def swap(argv, appid, home=None):
     """(argv, cwd): the argv to exec and the directory to run it in. Unchanged (argv, None) unless
-    this is a Boxtron launch of a title with a recorded DOSBox target."""
+    this is a Boxtron launch of a title with a recorded DOSBox target. (None, None) when the user
+    cancelled the version pick: do not launch."""
     unchanged = (argv, None)
     entry_at = _entry_index(argv)
     if entry_at is None or not appid:
@@ -92,7 +158,10 @@ def swap(argv, appid, home=None):
     exe_at = next((j for j in range(entry_at + 1, len(argv)) if argv[j] == entry["launcher_exe"]), None)
     if exe_at is None:
         return unchanged
-    variant = _pick(entry)
+    variant = _pick(entry, appid, home)
+    if variant is CANCEL:
+        log(f"{entry.get('token')}: version pick cancelled, not launching")
+        return None, None
     if variant is None:
         log(f"{entry.get('token')}: no usable DOSBox variant, launching as Steam built it")
         return unchanged

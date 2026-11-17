@@ -76,3 +76,7 @@ export type InstallSize = { disk_size: number } | { error: string };
 // What main.py prefix_status answers: whether the entry's Proton prefix is on disk and its size
 // (issue #136). `appid` is the entry it was read for.
 export type PrefixStatus = { exists: boolean; bytes: number; appid: number } | { error: string };
+
+// main.py dos_versions: the DOSBox versions of a GOG DOS title Boxtron can run, and the one
+// remembered (null: ask at launch). No labels → the title has no row and no setting.
+export type DosVersions = { labels: string[]; choice: string | null };

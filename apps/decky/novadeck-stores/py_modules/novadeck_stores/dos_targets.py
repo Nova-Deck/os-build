@@ -31,7 +31,7 @@ gog_paths refuses `..` and symlinked components.
 import json
 import os
 
-from novadeck_stores import cli, installs, status
+from novadeck_stores import cli, install_requests, installs, status
 from novadeck_stores.gog_paths import resolve, split_windows_args  # noqa: F401 - re-exported
 
 FILENAME = "dos-targets.json"
@@ -179,3 +179,52 @@ def sync(p, registry):
     if current == wanted or (current is None and not wanted):
         return True
     return cli.write_as_user(p, path(p), json.dumps(wanted, indent=1)) == 0
+
+
+# -- the version picker (phase 3): game-launch asks over the request spool, the user answers --
+
+ANSWER_SUFFIX = ".dosanswer"
+
+
+def read(p):
+    """The whole table, or {} when there is none or it is unreadable."""
+    data = status.read_user_json(path(p), int(p["NOVADECK_STORE_UID"]))
+    return data if isinstance(data, dict) else {}
+
+
+def _labels(row):
+    variants = row.get("variants") if isinstance(row, dict) else None
+    return [v.get("label") for v in variants if isinstance(v, dict)] if isinstance(variants, list) else []
+
+
+def versions(p, appid):
+    """{labels, choice} for one entry, or None when it has no row."""
+    row = read(p).get(str(appid))
+    if not isinstance(row, dict):
+        return None
+    choice = row.get("choice")
+    return {"labels": _labels(row), "choice": choice if isinstance(choice, str) else None}
+
+
+def set_choice(p, appid, label):
+    """Remember `label` for the entry, or forget it with None ('Ask every time'). {choice} or
+    {error}. The caller holds the plugin's shortcut lock: a registry write re-syncs this file."""
+    table = read(p)
+    row = table.get(str(appid))
+    if not isinstance(row, dict):
+        return {"error": "no DOSBox versions recorded for this game"}
+    if label is not None and label not in _labels(row):
+        return {"error": f"unknown version {label!r}"}
+    updated = {**table, str(appid): {**row, "choice": label}}
+    if cli.write_as_user(p, path(p), json.dumps(updated, indent=1)) != 0:
+        return {"error": "could not save the choice"}
+    return {"choice": label}
+
+
+def answer(p, appid, label):
+    """Hand the waiting launch its answer: the label, or an empty file for Cancel. True when
+    written. `appid` must be digits — it names a file in the user's spool."""
+    if not isinstance(appid, str) or not install_requests.APPID.fullmatch(appid):
+        return False
+    target = os.path.join(install_requests.spool_path(p), f"{appid}{ANSWER_SUFFIX}")
+    return cli.write_as_user(p, target, label or "") == 0

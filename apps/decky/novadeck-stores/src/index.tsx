@@ -1,6 +1,7 @@
 import { addEventListener, call, definePlugin, removeEventListener, toaster } from "@decky/api";
 import { Navigation } from "@decky/ui";
 import { Content } from "./Content";
+import { showDosPick } from "./DosVersionDialog";
 import { applyGamePagePatch } from "./GamePage";
 import { applyLibraryTabsPatch, refreshLibraryTabs, scheduleLibraryTabsRefresh } from "./LibraryTabs";
 import { executeShortcutOp, ShortcutOp } from "./lib/shortcutBridge";
@@ -53,6 +54,15 @@ function onInstallEvent(ev: InstallEvent) {
 // connected store with no tiles reads as "this store has no games".
 type SyncFailed = { store: string; message: string };
 
+// boxtron-dos phase 3: a launch under Boxtron of a GOG title with several DOSBox versions and none
+// remembered is waiting on this question (game-launch, novadeck_dostarget.ask). Registered here,
+// not on the game page, because the page need not be open — Play can come from anywhere.
+type DosPick = { appid: number; title: string; labels: string[] };
+
+function onDosPick(ev: DosPick) {
+  showDosPick(ev.appid, ev.title, ev.labels);
+}
+
 function onSyncFailed(ev: SyncFailed) {
   toaster.toast({
     title: STORE_LABELS[ev.store] ?? ev.store,
@@ -65,6 +75,7 @@ export default definePlugin(() => {
   addEventListener("shortcut_op", onShortcutOp);
   addEventListener("install_event", onInstallEvent);
   addEventListener("sync_failed", onSyncFailed);
+  addEventListener("dos_pick", onDosPick);
   // Now that shortcut_op has a listener, the backend may ask Steam for things: it re-asserts the
   // compat tools here, not at its own boot, when nothing would have answered (main.py).
   void call("frontend_ready");
@@ -101,6 +112,7 @@ export default definePlugin(() => {
       removeEventListener("shortcut_op", onShortcutOp);
       removeEventListener("install_event", onInstallEvent);
       removeEventListener("sync_failed", onSyncFailed);
+      removeEventListener("dos_pick", onDosPick);
       removeGamePagePatch();
       removeLibraryTabsPatch();
     },

@@ -54,6 +54,15 @@ BOX = "/usr/share/boxtron/run-dosbox"
 chain = ["/home/deck/.local/share/Steam/ubuntu12_32/reaper", "SteamLaunch", f"AppId={APPID}", "--",
          BOX, "--wait-before-run", LAUNCHER]
 
+# The cases below are about WHICH variant runs; asking the user is its own section further down.
+# Until then the ask finds no plugin answering, which is what a real ask does with nobody there.
+real_ask = ds.ask
+asked = []
+def no_answer(home_, appid_):
+    asked.append(appid_)
+    return None
+ds.ask = no_answer
+
 print("== the swap")
 write({APPID: ROW})
 argv, cwd = ds.swap(chain, APPID, home)
@@ -101,11 +110,87 @@ write([1, 2])
 check(ds.swap(chain, APPID, home) == (chain, None), "a targets file that is not a table is untouched")
 check(chain[-1] == LAUNCHER, "swap never mutates the argv it was given")
 
+print("== asking which version (phase 3): only when there is a real choice to make")
+write({APPID: ROW})
+asked.clear()
+ds.swap(chain, APPID, home)
+check(asked == [APPID], "two variants and no remembered choice → the launch asks")
+asked.clear()
+write({APPID: {**ROW, "choice": "Master of Magic Community Patch"}})
+ds.swap(chain, APPID, home)
+check(asked == [], "a remembered choice is used without asking")
+write({APPID: {**ROW, "variants": ROW["variants"][:1]}})
+ds.swap(chain, APPID, home)
+check(asked == [], "a single variant is used without asking")
+write({APPID: ROW})
+ds.swap(proton, APPID, home)
+check(asked == [], "a Proton launch never asks")
+
+ds.ask = lambda home_, appid_: "Master of Magic Community Patch"
+argv, cwd = ds.swap(chain, APPID, home)
+check(argv[6] == str(CP / "DOSBox.exe") and cwd == str(CP), "the answered variant runs")
+ds.ask = lambda home_, appid_: ds.CANCEL
+check(ds.swap(chain, APPID, home) == (None, None), "a cancelled pick means: do not launch")
+ds.ask = lambda home_, appid_: "Caster of Magic"
+argv, _ = ds.swap(chain, APPID, home)
+check(argv[6] == str(OFF / "DOSBox.exe"), "an answer naming no variant falls back to the first")
+
+print("== the ask itself, over the request spool")
+import threading, time
+ds.ask = real_ask
+spool = home / ds.REQUEST_DIR
+req = spool / f"{APPID}{ds.PICK_SUFFIX}"
+ans = spool / f"{APPID}{ds.ANSWER_SUFFIX}"
+fast = dict(take_timeout=0.6, answer_timeout=0.6, poll=0.02)
+
+def backend(answer, take=True, delay=0.05):
+    """Play the plugin: take the request (unlink it), then answer — or not."""
+    def run():
+        end = time.time() + 2
+        while not req.exists() and time.time() < end:
+            time.sleep(0.01)
+        time.sleep(delay)
+        if take and req.exists():
+            req.unlink()
+            if answer is not None:
+                ans.write_text(answer)
+    t = threading.Thread(target=run)
+    t.start()
+    return t
+
+t = backend("Master of Magic Community Patch")
+got = ds.ask(home, APPID, **fast)
+t.join()
+check(got == "Master of Magic Community Patch", f"taken and answered → the label ({got!r})")
+check(not ans.exists() and not req.exists(), "the answer is consumed and no request is left behind")
+
+t = backend("")
+got = ds.ask(home, APPID, **fast)
+t.join()
+check(got is ds.CANCEL, f"an empty answer is a cancel ({got!r})")
+
+got = ds.ask(home, APPID, **fast)
+check(got is None and not req.exists(), "not taken in time → None, and the request is WITHDRAWN (plugin down)")
+
+t = backend(None)
+got = ds.ask(home, APPID, **fast)
+t.join()
+check(got is None, "taken but never answered → None (the caller runs the first variant)")
+
+spool.mkdir(exist_ok=True)
+ans.write_text("Master of Magic Official Release")
+t = backend("Master of Magic Community Patch")
+got = ds.ask(home, APPID, **fast)
+t.join()
+check(got == "Master of Magic Community Patch", "a stale answer from an earlier launch is never mistaken for this one")
+
 print("== game-launch wiring")
 main = (pathlib.Path(sys.argv[1]) / "game-launch").read_text()
 check("novadeck_dostarget" in main, "game-launch imports the swap")
 i_first, i_swap, i_exec = main.find("novadeck_firstrun.run("), main.find("novadeck_dostarget.swap("), main.find("os.execv(")
 check(-1 < i_first < i_swap < i_exec, "the swap runs after the first-run steps and before exec")
+check("swapped is None" in main and "sys.exit(0)" in main[i_swap:i_exec],
+      "a cancelled pick ends game-launch quietly (exit 0) before exec")
 PY
 )"
 rc=$?

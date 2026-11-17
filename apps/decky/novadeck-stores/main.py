@@ -658,6 +658,66 @@ class Plugin:
             if event is not None:
                 await decky.emit("install_event", event)
 
+    # -- boxtron-dos phase 3: which DOSBox version, asked by the launch itself --
+
+    async def take_dos_picks(self, p):
+        """Take every version question game-launch left (novadeck_dostarget.ask) and put it in
+        front of the user as a dos_pick event. A one-version title is answered at once rather
+        than left waiting; an appid with no row is not answered at all (the launch's own timeout
+        runs its default)."""
+        for appid in await asyncio.to_thread(install_requests.take_dos_picks, p):
+            versions = await asyncio.to_thread(dos_targets.versions, p, appid)
+            labels = (versions or {}).get("labels") or []
+            if len(labels) == 1:
+                await asyncio.to_thread(dos_targets.answer, p, appid, labels[0])
+                continue
+            if len(labels) < 2:
+                decky.logger.info(f"dos pick {appid}: no DOSBox versions recorded")
+                continue
+            registry = await asyncio.to_thread(shortcuts.read_registry, p)
+            title = next((row.get("title") for row in registry.values()
+                          if isinstance(row, dict) and row.get("appid") is not None
+                          and int(row["appid"]) & 0xFFFFFFFF == int(appid)), None)
+            await decky.emit("dos_pick", {"appid": int(appid), "title": title or "This game", "labels": labels})
+
+    async def dos_pick_answer(self, appid, label, remember):
+        """The dialog's answer: a label (and, with remember, saved as the game's choice) or None
+        for Cancel, which the launch takes as 'do not launch'."""
+        try:
+            p = await asyncio.to_thread(paths.store_paths)
+            key = str(int(appid) & 0xFFFFFFFF)
+            versions = await asyncio.to_thread(dos_targets.versions, p, key)
+            if label is not None and label not in (versions or {}).get("labels", []):
+                return {"error": f"unknown version {label!r}"}
+            if label is not None and remember:
+                async with _SHORTCUT_LOCK:
+                    saved = await asyncio.to_thread(dos_targets.set_choice, p, key, label)
+                if "error" in saved:
+                    decky.logger.info(f"dos pick {key}: {saved['error']}")
+            if not await asyncio.to_thread(dos_targets.answer, p, key, label):
+                return {"error": "the answer could not be written"}
+            return {"ok": True}
+        except (OSError, subprocess.SubprocessError, ValueError, TypeError) as exc:
+            return {"error": f"{type(exc).__name__}"}
+
+    async def dos_versions(self, appid):
+        """The game page's "DOSBox version" row: {labels, choice} (no labels → no row)."""
+        try:
+            p = await asyncio.to_thread(paths.store_paths)
+            versions = await asyncio.to_thread(dos_targets.versions, p, str(int(appid) & 0xFFFFFFFF))
+        except (OSError, subprocess.SubprocessError, ValueError, TypeError):
+            versions = None
+        return versions or {"labels": [], "choice": None}
+
+    async def set_dos_choice(self, appid, label):
+        """Remember a version for the game, or None for 'Ask every time'."""
+        try:
+            p = await asyncio.to_thread(paths.store_paths)
+            async with _SHORTCUT_LOCK:
+                return await asyncio.to_thread(dos_targets.set_choice, p, str(int(appid) & 0xFFFFFFFF), label)
+        except (OSError, subprocess.SubprocessError, ValueError, TypeError) as exc:
+            return {"error": f"{type(exc).__name__}"}
+
     async def install_tile(self, store, gid):
         """The panel's Resume: exactly what pressing the tile does. Returns the install_event."""
         try:
@@ -926,6 +986,9 @@ class Plugin:
         while True:
             try:
                 p = p or await asyncio.to_thread(paths.store_paths)
+                # First: a launch is blocked on it, and must hear back within its 10 s. It never
+                # waits on _SHORTCUT_LOCK; an install request can.
+                await self.take_dos_picks(p)
                 await self.take_install_requests(p)
                 # Its own task: a swap can wait a long time on _SHORTCUT_LOCK (a sync talking to
                 # a slow SteamUI), and a tile press must still be taken within the stub's 10 s.

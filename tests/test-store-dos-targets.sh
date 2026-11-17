@@ -227,6 +227,43 @@ try:
     check(odd[key]["choice"] is None, "a non-string choice is dropped, no raise")
 except Exception as exc:
     bad(f"a non-string choice raised {type(exc).__name__}")
+
+# ---------------------------------------------------------------------------------------------
+print("== the version picker's backend (phase 3)")
+home = tmp / "store-home"
+(home / "requests").mkdir(parents=True)
+p = {"NOVADECK_STORE_HOME": str(home), "NOVADECK_STORE_UID": str(uid), "NOVADECK_STORE_USER": "deck"}
+writes = []
+def direct_write(pp, path, text):
+    writes.append(path)
+    pathlib.Path(path).write_text(text)
+    return 0
+dos_targets.cli.write_as_user = direct_write
+(home / dos_targets.FILENAME).write_text(json.dumps(built))
+
+check(dos_targets.versions(p, key) == {"labels": ["Master of Magic Official Release", "Master of Magic Community Patch"],
+                                       "choice": None}, "versions lists the labels and the remembered choice")
+check(dos_targets.versions(p, "999") is None, "an appid with no row has no versions")
+
+r = dos_targets.set_choice(p, key, "Master of Magic Community Patch")
+saved = json.loads((home / dos_targets.FILENAME).read_text())
+check(r == {"choice": "Master of Magic Community Patch"} and saved[key]["choice"] == "Master of Magic Community Patch",
+      f"set_choice remembers a label ({r})")
+check(saved[key]["variants"] == built[key]["variants"], "and leaves the rest of the row as it was")
+r = dos_targets.set_choice(p, key, None)
+check(r == {"choice": None} and json.loads((home / dos_targets.FILENAME).read_text())[key]["choice"] is None,
+      "set_choice(None) is 'Ask every time'")
+r = dos_targets.set_choice(p, key, "Caster of Magic")
+check("error" in r and json.loads((home / dos_targets.FILENAME).read_text())[key]["choice"] is None,
+      f"a label the row does not have is refused, nothing written ({r})")
+check("error" in dos_targets.set_choice(p, "999", None), "set_choice on an appid with no row is refused")
+
+check(dos_targets.answer(p, key, "Master of Magic Community Patch") is True
+      and (home / "requests" / f"{key}.dosanswer").read_text() == "Master of Magic Community Patch",
+      "answer writes the label where game-launch waits for it")
+check(dos_targets.answer(p, key, None) is True and (home / "requests" / f"{key}.dosanswer").read_text() == "",
+      "a cancel is an EMPTY answer")
+check(dos_targets.answer(p, "12/../x", "x") is False, "an appid that is not digits is never a path")
 PY
 )"
 rc=$?
@@ -234,6 +271,104 @@ printf '%s\n' "$out"
 PASS=$((PASS + $(grep -c '^  ok ' <<<"$out" || true)))
 FAIL=$((FAIL + $(grep -c '^  FAIL' <<<"$out" || true)))
 [ "$rc" -eq 0 ] || { echo "  FAIL the dos-targets checks crashed (exit $rc)"; FAIL=$((FAIL + 1)); }
+
+out="$(python3 - "$STORES_PY" <<'PY'
+import asyncio, json, os, pathlib, sys, tempfile, types
+sys.path.insert(0, sys.argv[1])
+
+def ok(m): print(f"  ok   {m}")
+def bad(m): print(f"  FAIL {m}")
+def check(cond, m): (ok if cond else bad)(m)
+
+print("== the backend: take a version question, emit it, answer it")
+emitted = []
+async def fake_emit(event, payload):
+    emitted.append((event, payload))
+sys.modules["decky"] = types.SimpleNamespace(logger=types.SimpleNamespace(info=lambda *a: None), emit=fake_emit)
+sys.path.insert(0, os.path.join(sys.argv[1], ".."))
+import main
+from novadeck_stores import dos_targets, install_requests
+
+tmp = pathlib.Path(tempfile.mkdtemp(prefix="dos-pick."))
+uid = os.getuid()
+p = {"NOVADECK_STORE_HOME": str(tmp), "NOVADECK_STORE_UID": str(uid), "NOVADECK_STORE_USER": "deck"}
+main.paths.store_paths = lambda ensure=False: p
+def direct_write(pp, path, text):
+    pathlib.Path(path).write_text(text); return 0
+dos_targets.cli.write_as_user = direct_write
+(tmp / "requests").mkdir()
+V = lambda label: {"label": label, "exe": "/x/DOSBox.exe", "args": [], "cwd": "/x"}
+(tmp / dos_targets.FILENAME).write_text(json.dumps({
+    "111": {"token": "gog:1", "launcher_exe": "/x/Launcher.exe", "choice": None, "variants": [V("Official"), V("Patch")]},
+    "222": {"token": "gog:2", "launcher_exe": "/y/DOSBox.exe", "choice": None, "variants": [V("Only")]}}))
+(tmp / "shortcuts.json").write_text(json.dumps({"gog:1": {"appid": 111, "title": "Master of Magic"},
+                                                 "gog:2": {"appid": 222, "title": "DOOM"}}))
+plugin = main.Plugin()
+
+(tmp / "requests" / "111.dospick").write_text("")
+(tmp / "requests" / "gog:x.install").write_text("")
+asyncio.run(plugin.take_dos_picks(p))
+picks = [pl for ev, pl in emitted if ev == "dos_pick"]
+check(picks == [{"appid": 111, "title": "Master of Magic", "labels": ["Official", "Patch"]}],
+      f"a question for a multi-version title is emitted with its title and labels ({picks})")
+check(not (tmp / "requests" / "111.dospick").exists(), "taking it unlinks it — the launch's signal that it was seen")
+check((tmp / "requests" / "gog:x.install").exists(), "an install request is not taken by the version picker")
+
+emitted.clear()
+(tmp / "requests" / "222.dospick").write_text("")
+(tmp / "requests" / "333.dospick").write_text("")
+asyncio.run(plugin.take_dos_picks(p))
+check(not [e for e in emitted if e[0] == "dos_pick"], "nothing to ask for a one-version title or an unknown appid")
+check((tmp / "requests" / "222.dosanswer").read_text() == "Only",
+      "a one-version title is answered at once with its only version, never left waiting")
+check(not (tmp / "requests" / "333.dosanswer").exists(), "an appid with no row is not answered — the launch times out to its default")
+
+r = asyncio.run(plugin.dos_pick_answer(111, "Patch", False))
+check(r == {"ok": True} and (tmp / "requests" / "111.dosanswer").read_text() == "Patch",
+      f"an answer reaches the launch ({r})")
+check(json.loads((tmp / dos_targets.FILENAME).read_text())["111"]["choice"] is None, "without Remember, nothing is remembered")
+r = asyncio.run(plugin.dos_pick_answer(111, "Official", True))
+check(json.loads((tmp / dos_targets.FILENAME).read_text())["111"]["choice"] == "Official"
+      and (tmp / "requests" / "111.dosanswer").read_text() == "Official", "with Remember, the choice is saved too")
+r = asyncio.run(plugin.dos_pick_answer(111, None, True))
+check(r == {"ok": True} and (tmp / "requests" / "111.dosanswer").read_text() == ""
+      and json.loads((tmp / dos_targets.FILENAME).read_text())["111"]["choice"] == "Official",
+      "a cancel answers empty and never touches the remembered choice")
+r = asyncio.run(plugin.dos_pick_answer(111, "Nope", False))
+check("error" in r, f"a label the title does not have is refused ({r})")
+
+check(asyncio.run(plugin.dos_versions(111)) == {"labels": ["Official", "Patch"], "choice": "Official"},
+      "the game page reads the versions and the remembered choice")
+check(asyncio.run(plugin.dos_versions(999)) == {"labels": [], "choice": None}, "no row → no versions")
+r = asyncio.run(plugin.set_dos_choice(111, None))
+check(r == {"choice": None} and json.loads((tmp / dos_targets.FILENAME).read_text())["111"]["choice"] is None,
+      f"the game page's 'Ask every time' clears it ({r})")
+
+src = (pathlib.Path(sys.argv[1]).parent / "main.py").read_text()
+loop = src[src.index("async def _request_loop"):]
+check("take_dos_picks(p)" in loop[:2500], "the request loop takes version questions on every beat")
+check(loop.index("take_dos_picks(p)") < loop.index("take_install_requests(p)"),
+      "...BEFORE install requests, which can wait on the shortcut lock past the launch's 10 s")
+
+print("== the frontend is wired to the same names")
+fe = pathlib.Path(sys.argv[1]).parent / "src"
+index, backend_ts, dialog, page = ((fe / n).read_text() for n in ("index.tsx", "backend.ts", "DosVersionDialog.tsx", "GamePage.tsx"))
+check('addEventListener("dos_pick", onDosPick)' in index and 'removeEventListener("dos_pick", onDosPick)' in index,
+      "index.tsx listens for dos_pick, and stops on dismount")
+for name in ("dos_pick_answer", "dos_versions", "set_dos_choice"):
+    check(f'"{name}"' in backend_ts and f"async def {name}(" in src, f"backend.ts calls {name}, which main.py defines")
+check("onCancel={() => send(null)}" in dialog and "send(null)}>Cancel" in dialog,
+      "B / Cancel answers null — the launch does not start")
+check("answered.current" in dialog, "one answer per question: closing after a pick sends no second (cancel) answer")
+check("DOSBox version" in page and "dos.labels.length > 1" in page,
+      "the game page offers DOSBox version only when there is more than one")
+PY
+)"
+rc=$?
+printf '%s\n' "$out"
+PASS=$((PASS + $(grep -c '^  ok ' <<<"$out" || true)))
+FAIL=$((FAIL + $(grep -c '^  FAIL' <<<"$out" || true)))
+[ "$rc" -eq 0 ] || { echo "  FAIL the dos-pick backend checks crashed (exit $rc)"; FAIL=$((FAIL + 1)); }
 
 echo
 echo "dos-targets: $PASS passed, $FAIL failed"

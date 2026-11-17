@@ -416,10 +416,15 @@ def main():
     # store title that runs through a launcher, run the title's DOSBox command line instead
     # (novadeck_dostarget). Every other launch comes back unchanged. If the move into the game's
     # directory fails, the original argv runs — DOSBox's relative -conf paths need that directory.
+    # A title with several DOSBox versions and none remembered asks which to run first; the user
+    # may cancel that dialog, which means do not launch — exit quietly, as a dismissed Steam
+    # launch-option dialog does.
     argv = sys.argv[1:]
     if novadeck_dostarget is not None:
         try:
             swapped, cwd = novadeck_dostarget.swap(argv, appid())
+            if swapped is None:
+                sys.exit(0)
             if cwd is not None:
                 os.chdir(cwd)
             argv = swapped

@@ -32,9 +32,9 @@ import decky
 
 import base64
 
-from novadeck_stores import (artwork, cdp, cli, connect, dos_targets, first_run, game_page, install_requests,
-                             installs, launch, library, library_sync, locations, paths, prefixes, settings,
-                             shortcuts, status)
+from novadeck_stores import (artwork, cdp, cli, compat_map, connect, dos_targets, first_run, game_page,
+                             install_requests, installs, launch, library, library_sync, locations, paths,
+                             prefixes, settings, shortcuts, status)
 
 # Long enough to type an email and a password on the on-screen keyboard and clear a captcha;
 # short enough that a login the user walked away from does not poll for the rest of the session.
@@ -382,20 +382,28 @@ class Plugin:
             return {**out, "warning": warning} if warning else out
 
     async def reassert_compat(self, p=None):
-        """Re-set the compat tool on every Windows entry. SpecifyCompatTool is in-memory until
-        Steam flushes config.vdf, so a set made late in a session can be lost on a crash; this
-        runs best-effort whenever the frontend comes up (frontend_ready). Fire-and-forget: the
-        caller never waits on Steam's answers."""
+        """Re-set the compat tool on every Windows entry that has NONE mapped. SpecifyCompatTool is
+        in-memory until Steam flushes config.vdf, so a set made late in a session can be lost on a
+        crash; this runs best-effort whenever the frontend comes up (frontend_ready). An entry
+        config.vdf already maps keeps its tool — the user may have picked Boxtron or Proton-GE.
+        Fire-and-forget: the caller never waits on Steam's answers."""
         try:
             p = p or await asyncio.to_thread(paths.store_paths)
             registry = await asyncio.to_thread(shortcuts.read_registry, p)
         except (OSError, subprocess.SubprocessError):
             return 0
+        # Only entries Steam has NO tool for: a mapping on disk is the user's pick (Boxtron,
+        # Proton-GE) or ours, already flushed. None — config.vdf unreadable — means nothing is
+        # known mapped, so every entry is re-asserted, exactly as before (compat_map).
+        mapped = await asyncio.to_thread(
+            compat_map.mapped_appids, compat_map.config_vdf_path(p), int(p["NOVADECK_STORE_UID"]))
         sent = 0
         for row in registry.values():
             # A shelf tile's Exe is the native install stub: a compat tool there would run the
             # stub through Proton.
             if not isinstance(row, dict) or "appid" not in row or shortcuts.is_shelf(row):
+                continue
+            if mapped is not None and int(row["appid"]) & 0xFFFFFFFF in mapped:
                 continue
             tool = launch.compat_tool(row.get("platform", "windows"))
             if tool:

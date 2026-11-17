@@ -322,16 +322,27 @@ function PlayRow({ appid }: { appid: number }) {
   // boxtron-dos phase 3: an installed GOG DOS title with several DOSBox versions gets a "DOSBox
   // version" button — but only while its compat tool IS Boxtron. Under Proton the choice does
   // nothing (GOG's own launcher asks), so offering it there was a setting with no effect. The
-  // versions are read once per install state (and after a change); the tool on every poll, so a
-  // switch in Properties -> Compatibility shows or hides the button within a beat.
+  // versions are read once per install state (and after a change).
+  //
+  // The tool is SUBSCRIBED to, not polled: appDetailsStore's copy is only refreshed while some
+  // page holds a details subscription, so a poll of it kept the old tool after a switch in
+  // Properties -> Compatibility until another game page was opened (HW 2026-11-17, Pocket FIT).
+  // RegisterForAppDetails pushes the change itself.
   const installed = page !== null && page.state === "installed";
   const [dos, setDos] = useState<DosVersions | null>(null);
   const [onBoxtron, setOnBoxtron] = useState(() => compatToolOf(appid) === BOXTRON_TOOL);
   useEffect(() => {
     if (!installed) return;
-    const id = window.setInterval(() => setOnBoxtron(compatToolOf(appid) === BOXTRON_TOOL), POLL_MS);
     setOnBoxtron(compatToolOf(appid) === BOXTRON_TOOL);
-    return () => window.clearInterval(id);
+    let sub: { unregister?: () => void } | undefined;
+    try {
+      sub = (window as any).SteamClient?.Apps?.RegisterForAppDetails?.(appid, (details: any) =>
+        setOnBoxtron(String(details?.strCompatToolName || "") === BOXTRON_TOOL),
+      );
+    } catch (error) {
+      sub = undefined;
+    }
+    return () => sub?.unregister?.();
   }, [appid, installed]);
   useEffect(() => {
     if (!installed) {

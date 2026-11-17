@@ -364,6 +364,8 @@ check("DOSBox version" in page and "dos.labels.length > 1" in page,
       "the game page offers DOSBox version only when there is more than one")
 check("dos={onBoxtron ? dos : null}" in page and "strCompatToolName" in page,
       "...and only while the game's live compat tool is Boxtron (under Proton the choice does nothing)")
+check("RegisterForAppDetails" in page and "sub?.unregister?.()" in page,
+      "the tool is subscribed to (a cached poll went stale on HW) and the subscription is released")
 pkgbuild = (pathlib.Path(sys.argv[1]).parents[3] / "packages" / "boxtron" / "PKGBUILD").read_text()
 check('BOXTRON_TOOL = "boxtron"' in page and '"boxtron"' in pkgbuild,
       "the tool name the page compares against is the one packages/boxtron asserts")

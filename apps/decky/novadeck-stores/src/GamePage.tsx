@@ -45,6 +45,19 @@ type PatchedFn = ((...args: unknown[]) => unknown) & { __novadeckPatched?: boole
 
 const pageMarker = (appid: number) => `novadeck-page-${appid}`;
 
+// The internal compat_tools name packages/boxtron installs (its PKGBUILD asserts it), and the
+// live tool Steam has mapped for an app — the page's own details, which Steam keeps loaded and
+// current while the page is open. Empty when unknown: no button, never a wrong one.
+const BOXTRON_TOOL = "boxtron";
+function compatToolOf(appid: number): string {
+  try {
+    const details: any = (window as any).appDetailsStore?.GetAppDetails?.(appid);
+    return String(details?.strCompatToolName || "");
+  } catch (error) {
+    return "";
+  }
+}
+
 function classOf(node: unknown): string {
   const cn = (node as Node | null)?.props?.className;
   return typeof cn === "string" ? cn : "";
@@ -307,9 +320,19 @@ function PlayRow({ appid }: { appid: number }) {
   }, [sizeKey, wantsSize]);
 
   // boxtron-dos phase 3: an installed GOG DOS title with several DOSBox versions gets a "DOSBox
-  // version" button. Read once per install state (and after a change), not on every poll.
+  // version" button — but only while its compat tool IS Boxtron. Under Proton the choice does
+  // nothing (GOG's own launcher asks), so offering it there was a setting with no effect. The
+  // versions are read once per install state (and after a change); the tool on every poll, so a
+  // switch in Properties -> Compatibility shows or hides the button within a beat.
   const installed = page !== null && page.state === "installed";
   const [dos, setDos] = useState<DosVersions | null>(null);
+  const [onBoxtron, setOnBoxtron] = useState(() => compatToolOf(appid) === BOXTRON_TOOL);
+  useEffect(() => {
+    if (!installed) return;
+    const id = window.setInterval(() => setOnBoxtron(compatToolOf(appid) === BOXTRON_TOOL), POLL_MS);
+    setOnBoxtron(compatToolOf(appid) === BOXTRON_TOOL);
+    return () => window.clearInterval(id);
+  }, [appid, installed]);
   useEffect(() => {
     if (!installed) {
       setDos(null);
@@ -355,7 +378,14 @@ function PlayRow({ appid }: { appid: number }) {
   return (
     <Focusable ref={ref} className="novadeck-play-row" flow-children="row">
       <style>{rowCss + (hidesPlay ? hideNativePlay(appid) : "")}</style>
-      <RowBody page={page} size={size} busy={busy} run={run} dos={dos} refresh={() => setTick((t) => t + 1)} />
+      <RowBody
+        page={page}
+        size={size}
+        busy={busy}
+        run={run}
+        dos={onBoxtron ? dos : null}
+        refresh={() => setTick((t) => t + 1)}
+      />
       {err ? <span className="novadeck-play-note">{`Could not refresh: ${err}`}</span> : null}
     </Focusable>
   );

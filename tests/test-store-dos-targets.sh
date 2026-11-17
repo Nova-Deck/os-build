@@ -362,6 +362,11 @@ check("onCancel={() => send(null)}" in dialog and "send(null)}>Cancel" in dialog
 check("answered.current" in dialog, "one answer per question: closing after a pick sends no second (cancel) answer")
 check("DOSBox version" in page and "dos.labels.length > 1" in page,
       "the game page offers DOSBox version only when there is more than one")
+check("dos={onBoxtron ? dos : null}" in page and "strCompatToolName" in page,
+      "...and only while the game's live compat tool is Boxtron (under Proton the choice does nothing)")
+pkgbuild = (pathlib.Path(sys.argv[1]).parents[3] / "packages" / "boxtron" / "PKGBUILD").read_text()
+check('BOXTRON_TOOL = "boxtron"' in page and '"boxtron"' in pkgbuild,
+      "the tool name the page compares against is the one packages/boxtron asserts")
 PY
 )"
 rc=$?

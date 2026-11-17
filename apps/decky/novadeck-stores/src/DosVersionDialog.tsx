@@ -20,8 +20,8 @@ import { answerDosPick, setDosChoice } from "./backend";
 //     version button answers it; Cancel or B answers "do not launch", like dismissing Steam's own
 //     launch-option dialog. "Remember my choice" (off by default) saves it, and the next Play
 //     goes straight in.
-//   * FROM THE GAME PAGE ("DOSBox version", GamePage.tsx): the same list plus "Ask every time",
-//     which forgets the remembered choice.
+//   * FROM THE GAME PAGE ("DOSBox version", GamePage.tsx, shown only while the game's compat tool
+//     is Boxtron): the same list plus "Ask every time", which forgets the remembered choice.
 
 type PickProps = {
   appid: number;
@@ -94,7 +94,7 @@ function DosVersionSettingModal({ appid, title, labels, choice, onSaved, closeMo
       <DialogHeader>DOSBox version</DialogHeader>
       <DialogBody>
         <DialogBodyText>
-          {`Which version of ${title} Boxtron runs. Under Proton, GOG's own launcher still asks.`}
+          {`Which version of ${title} Boxtron runs.`}
         </DialogBodyText>
         <Focusable style={{ display: "flex", flexDirection: "column", gap: "8px", marginTop: "12px" }}>
           {[ASK, ...labels].map((label) => (

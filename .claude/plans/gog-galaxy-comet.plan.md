@@ -268,9 +268,9 @@ installed), or on the Pocket FIT for the dummy-service title. One commit per ste
      unwind). The unit was gone and nothing held 9977 afterwards.
    **Phase 4 is not needed for this case.** Untested: the first ever launch of a game while
    offline, with no `gameplay.db` yet.
-   Still owed: `First shield` was unlocked offline into the local DB only. The next online
-   launch should upload it (the online run logged `Uploading new achievements` right after the
-   client connected). Check that it then shows on the GOG profile.
+   `First shield`, unlocked offline, uploaded on the next online launch (21:36:56 start,
+   `Uploaded achievements` 21:37:15, before any new unlock), and it shows on the GOG profile.
+   **Phase 1 HW gate: PASSED.**
 
 ### Phase 2 — dummy Galaxy service (only with a title that needs it)
 
@@ -324,11 +324,10 @@ phase 1 shows the game runs offline anyway.
   startup under FEX takes seconds. A game that connects before Comet listens has not been seen;
   add a wait only if one is. On HW: Comet listened 0.4 s after the unit started, and Another
   World connected 52 s later (fresh prefix).
-- **Comet's data dir is outside the store home.** `$XDG_DATA_HOME` is not set for the unit, so
-  `~/.local/share/comet/` gets `gameplay/` (84K) and `redist/peer/` (102 MB, four msvc builds of
-  the GalaxyPeer component, fetched on the first start). Decide: point XDG_DATA_HOME into the
-  store home so GOG logout/cleanup covers it, or leave it. Also check whether a second launch
-  fetches it again.
+- **Comet's data dir stays at `~/.local/share/comet/`** (decided 2026-11-18: not moved into
+  the store home). It holds `gameplay/` (the local achievement DB, which is what lets a game run
+  offline) and `redist/peer/` (102 MB, four msvc builds of the GalaxyPeer component, fetched on
+  the first start). The later launches did not log a second download.
 - **The exec'd chain pid lives as long as the game**: assumed (steam-launch-wrapper and the
   reaper wait for their children). If a chain parent exits early, Comet stops mid-game.
   Confirmed on HW for Another World: the unit stayed up the whole game and ended with Steam's

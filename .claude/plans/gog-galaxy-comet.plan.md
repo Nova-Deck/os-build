@@ -332,6 +332,14 @@ installed), or on the Pocket FIT for the dummy-service title. One commit per ste
    (10 checks, network stubbed) runs from `build()`, because the overlay build passes
    `--nocheck`; it fails on unpatched 1.3.0. Upstream PR: not opened yet (the user's call).
    Upstream main (1.4.0) changed `saves.py` only by lint since 1.3.0, so the patch ports as is.
+   **On HW 2026-11-18** (Pocket Max, package installed by hand on the dev card): Another World's
+   remote-config gives one location, `saves` = `<?DOCUMENTS?>/Another World`, which is
+   `pfx/drive_c/users/steamuser/Documents/Another World` (`progression.dat`,
+   `AnotherWorldUserDef.xml`). `save-sync … --name saves --ts 0 --dry-run` as the store user:
+   rc 0, `action: upload`, local 2 files, cloud 0 files (nothing was ever uploaded), and the save
+   dir unchanged. gogdl DID rewrite `auth.json` (it adds the game's client id as a key, still
+   deck 0600), as any gogdl call that fetches a game's credentials does. So the pre-launch dry
+   run and Comet both touch `auth.json`, and their order matters (Risks: token rotation).
 2. **remote-config fetch + `cloud` in `galaxy.json`** (TDD): enabled/disabled/no locations →
    `__default`; cache per `clientId`; the toggle persists per token.
 3. **`save_paths`** (TDD): every `<?VAR?>` token and `%VAR%`, case, a location that resolves

@@ -321,6 +321,17 @@ installed), or on the Pocket FIT for the dummy-service title. One commit per ste
 
 1. **Classification**: decide gogdl `--dry-run` patch vs own classifier (design §6). If patch:
    `packages/gogdl` patch + relock + upstream PR.
+   **Decided 2026-11-18: the patch.** Done: `packages/gogdl/patches/0001-save-sync-add-dry-run.patch`
+   (gogdl 1.3.0-2.1). `save-sync … --dry-run` writes one JSON object on stdout and changes
+   nothing, not even a missing local dir:
+   `{"action": "upload|download|conflict|none", "local": {"files": N, "newest": ts|null},
+   "cloud": {"files": N, "newest": ts|null}, "updated_local": [...], "updated_cloud": [...],
+   "not_existing_locally": [...], "not_existing_remotely": [...]}`.
+   The action is gogdl's own, including its empty-side rules; `--skip-*`/`--force-*` are not
+   applied. `newest` is a Unix timestamp, for the picker's dates. `packages/gogdl/check-dry-run.py`
+   (10 checks, network stubbed) runs from `build()`, because the overlay build passes
+   `--nocheck`; it fails on unpatched 1.3.0. Upstream PR: not opened yet (the user's call).
+   Upstream main (1.4.0) changed `saves.py` only by lint since 1.3.0, so the patch ports as is.
 2. **remote-config fetch + `cloud` in `galaxy.json`** (TDD): enabled/disabled/no locations →
    `__default`; cache per `clientId`; the toggle persists per token.
 3. **`save_paths`** (TDD): every `<?VAR?>` token and `%VAR%`, case, a location that resolves

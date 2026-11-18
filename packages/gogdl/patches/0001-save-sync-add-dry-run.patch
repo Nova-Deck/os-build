@@ -1,0 +1,122 @@
+From 8898d02bbc2f154bbf0a1fe1ff8f76a16011aa22 Mon Sep 17 00:00:00 2001
+From: Philippe Simons <simons.philippe@gmail.com>
+Date: Wed, 18 Nov 2026 23:33:39 +0100
+Subject: [PATCH] save-sync: add --dry-run
+
+Print what a sync would do as one JSON object on stdout and change
+nothing: no upload, download or delete, and no creation of a missing
+local directory. The action is the classification sync() acts on,
+including its empty-side rules; --skip-* and --force-* are not applied,
+so a launcher can show a conflict to the user before choosing one.
+The report names each side's file count and newest update time, and
+the files in each category.
+---
+ gogdl/args.py  |  6 ++++++
+ gogdl/saves.py | 56 +++++++++++++++++++++++++++++++++++++++++++++++---
+ 2 files changed, 59 insertions(+), 3 deletions(-)
+
+diff --git a/gogdl/args.py b/gogdl/args.py
+index f02678b..9513215 100755
+--- a/gogdl/args.py
++++ b/gogdl/args.py
+@@ -194,6 +194,12 @@ def init_parser():
+         action="store_const",
+         const="forcedownload",
+     )
++    save_parser.add_argument(
++        "--dry-run",
++        dest="dry_run",
++        action="store_true",
++        help="Print what a sync would do as JSON on stdout, and change nothing",
++    )
+ 
+     save_parser.add_argument(
+         "--os",
+diff --git a/gogdl/saves.py b/gogdl/saves.py
+index 869317e..a5241b8 100644
+--- a/gogdl/saves.py
++++ b/gogdl/saves.py
+@@ -6,6 +6,7 @@ import urllib.parse
+ import hashlib
+ import datetime
+ import gzip
++import json
+ from enum import Enum
+ 
+ import gogdl.dl.dl_utils as dl_utils
+@@ -95,9 +96,12 @@ class CloudStorageManager:
+         self.unknown_args = unknown_args
+ 
+         if not os.path.exists(self.sync_path):
+-            self.logger.warning("Provided path doesn't exist, creating")
+-            os.makedirs(self.sync_path, exist_ok=True)
+-        dir_list = self.create_directory_map(self.sync_path)
++            if arguments.dry_run:
++                self.logger.info("Provided path doesn't exist, a sync would create it")
++            else:
++                self.logger.warning("Provided path doesn't exist, creating")
++                os.makedirs(self.sync_path, exist_ok=True)
++        dir_list = self.create_directory_map(self.sync_path) if os.path.exists(self.sync_path) else []
+         if len(dir_list) == 0:
+             self.logger.info("No files in directory")
+ 
+@@ -115,6 +119,10 @@ class CloudStorageManager:
+         cloud_files = self.get_cloud_files_list()
+         downloadable_cloud = [f for f in cloud_files if f.md5 != "aadd86936a80ee8a369579c3926f1b3c"]
+ 
++        if arguments.dry_run:
++            self.report_plan(local_files, cloud_files, downloadable_cloud, float(arguments.timestamp))
++            return
++
+         if len(local_files) > 0 and len(cloud_files) == 0:
+             action = SyncAction.UPLOAD
+             self.logger.info("No files in cloud, uploading")
+@@ -183,6 +191,48 @@ class CloudStorageManager:
+         sys.stdout.flush()
+         self.logger.info("Done")
+ 
++    def report_plan(self, local_files, cloud_files, downloadable_cloud, timestamp):
++        """--dry-run: write what sync() would do as one JSON object on stdout, and change nothing.
++
++        "action" is the classification sync() acts on, including its empty-side rules (an empty
++        cloud uploads, an empty local dir downloads); --skip-* and --force-* are not applied, so
++        a caller can decide between them. "newest" is the latest update time of a side as a Unix
++        timestamp, or null when it has no files.
++        """
++        if len(local_files) > 0 and len(cloud_files) == 0:
++            action = SyncAction.UPLOAD
++            updated_local, updated_cloud = local_files, []
++            not_locally, not_remotely = [], []
++        elif len(local_files) == 0 and len(cloud_files) > 0:
++            action = SyncAction.DOWNLOAD
++            updated_local, updated_cloud = [], downloadable_cloud
++            not_locally, not_remotely = [], []
++        else:
++            classifier = SyncClassifier.classify(local_files, cloud_files, timestamp)
++            action = classifier.get_action()
++            updated_local, updated_cloud = classifier.updated_local, classifier.updated_cloud
++            not_locally = classifier.not_existing_locally
++            not_remotely = classifier.not_existing_remotely
++
++        def paths(files):
++            return sorted(f.relative_path for f in files)
++
++        def newest(files):
++            stamps = [f.update_ts for f in files if f.update_ts is not None]
++            return max(stamps) if stamps else None
++
++        report = {
++            "action": action.name.lower(),
++            "local": {"files": len(local_files), "newest": newest(local_files)},
++            "cloud": {"files": len(downloadable_cloud), "newest": newest(downloadable_cloud)},
++            "updated_local": paths(updated_local),
++            "updated_cloud": paths(updated_cloud),
++            "not_existing_locally": paths(not_locally),
++            "not_existing_remotely": paths(not_remotely),
++        }
++        sys.stdout.write(json.dumps(report))
++        sys.stdout.flush()
++
+     def clear(self, arguments, unknown_args):
+         self.sync_path = os.path.normpath(arguments.path.strip('"'))
+         self.sync_path = self.sync_path.replace("\\", os.sep)

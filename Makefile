@@ -540,6 +540,7 @@ test: verify-lock ## Run the offline bootctl/post-install/boot-disk/pairingd/pow
 	bash $(TESTS_DIR)/test-store-dos-targets.sh
 	bash $(TESTS_DIR)/test-store-dos-swap.sh
 	bash $(TESTS_DIR)/test-store-galaxy.sh
+	bash $(TESTS_DIR)/test-store-savepaths.sh
 	bash $(TESTS_DIR)/test-store-compat-map.sh
 	bash $(TESTS_DIR)/test-store-requests.sh
 	bash $(TESTS_DIR)/test-store-library.sh

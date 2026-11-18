@@ -147,13 +147,21 @@ This puts the after-exit work in a process that does not depend on Decky or the 
 upload missed because the device died mid-game is caught by the next pre-launch sync, since local
 is then newer than the stored timestamp.
 
-### 5. Save paths (`py_modules/novadeck_stores/save_paths.py`, mirrored into the launch helper)
+### 5. Save paths (`/usr/lib/novadeck/novadeck_savepaths.py`, launch side only)
 
 A pure function: location string + install dir + prefix → host path. `<?INSTALL?>` is the
 install dir. The others map to `pfx/drive_c/users/steamuser/{AppData/Local, AppData/LocalLow,
 AppData/Roaming, Documents, Saved Games}`. `%VAR%` gets the same table. Heroic shells out to
 `winepath` inside the prefix; a Proton prefix's layout is fixed, so a table is testable offline
 and needs no Wine run.
+
+Only the launch side resolves (changed 2026-11-18 from "plugin module, mirrored into the launch
+helper"): the pre-launch and post-exit syncs run in `game-launch`, where
+`STEAM_COMPAT_DATA_PATH` names the prefix exactly, and the plugin only carries the raw location
+strings (step 2). One copy, no mirror. It refuses, with a reason for the game page: unknown
+tokens or variables, the macOS-only `<?APPLICATION_SUPPORT?>`, unanchored paths, other drive
+letters, and `..` that leaves `drive_c` or the install folder (a download deletes what the cloud
+lacks). Existing levels are matched case-insensitively, as Wine would.
 
 ### 6. Sync policy and the conflict picker
 
@@ -344,6 +352,8 @@ installed), or on the Pocket FIT for the dummy-service title. One commit per ste
    `__default`; cache per `clientId`; the toggle persists per token.
 3. **`save_paths`** (TDD): every `<?VAR?>` token and `%VAR%`, case, a location that resolves
    outside the prefix or install is refused.
+   **Done** (`novadeck_savepaths.py`, `tests/test-store-savepaths.sh`, 23 checks; Another World's
+   real `<?DOCUMENTS?>/Another World` is one of them).
 4. **Pre-launch sync + backups** (TDD, gogdl stubbed): each row of design §6. Backup rotation.
    Timeout → launch proceeds. Prefix missing (first launch): see step 5.
 5. **First launch with no prefix**: decide by test on HW whether writing into

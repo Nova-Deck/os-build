@@ -212,8 +212,7 @@ How it lands here:
 - **A first-run step** for every installed Windows GOG entry with the Galaxy SDK, after its
   support installers. The entry id gains `:galaxy-service`, so a prefix that already ran its
   support installers runs the set again with the service step in it.
-- Whether `proton run <host .bat>` works the way `wine <.bat>` does (Comet's README runs it that
-  way through Heroic) is unverified until the HW gate.
+- `proton run <host .bat>` works the way `wine <.bat>` does (HW 2026-11-18, phase 2 gate).
 
 ## Steps
 
@@ -306,6 +305,17 @@ installed), or on the Pocket FIT for the dummy-service title. One commit per ste
    - the prefix's `system.reg` holds `Services\GalaxyCommunication` (its `ImagePath` the
      redists path) and `GalaxyClient\paths` `client`;
    - Another World still runs, and Comet still logs its client and an unlock.
+   **PASSED 2026-11-18** (dev card BUILD_ID 20261118T213514Z, fresh card):
+   - the plugin staged both files in `<store home>/galaxy-service/`, and `first-run.json` named
+     the staged `.bat` under id `gog:1207658845:56925654866982961:galaxy-service`;
+   - `proton run <host .bat>` works: the session log has `galaxy-service.bat -> 0`, and the
+     prefix marker records result 0;
+   - `system.reg` has `Services\GalaxyCommunication` with `ImagePath` the redists path and
+     `Start` 3 (demand), plus `Wow6432Node\GOG.com\GalaxyClient\paths` `client`; the stub is at
+     `drive_c/ProgramData/GOG.com/Galaxy/redists/`;
+   - Comet identified the client, and `AW_ACH_WARRIOR` and `AW_ACH_ESCAPE_WATER` unlocked and
+     uploaded.
+   Not shown: that a game which needs the service now runs (we own none of the four).
 
 ### Phase 3 — cloud saves
 

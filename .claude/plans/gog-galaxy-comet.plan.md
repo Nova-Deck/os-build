@@ -380,6 +380,23 @@ installed), or on the Pocket FIT for the dummy-service title. One commit per ste
    to the table, refuses symlink escapes; on HW every folder came from the real registry.
 4. **Pre-launch sync + backups** (TDD, gogdl stubbed): each row of design §6. Backup rotation.
    Timeout → launch proceeds. Prefix missing (first launch): see step 5.
+   **Done** (`/usr/lib/novadeck/novadeck_savesync.py`, `tests/test-store-savesync.sh`, 35
+   checks). `game-launch` calls `pre_launch(appid)` after the DOS swap and BEFORE
+   `novadeck_gogsession.start` (gogdl may rewrite auth.json; Comet reads it once), for ANY GOG
+   game with cloud on, Galaxy SDK or not. Per location: dry run, then none/upload → nothing,
+   download → backup + `--skip-upload`, conflict → `choose(appid, name, verdict)` ("cloud" →
+   backup + `--force-download`, "local" → `--force-upload`, None → keep local; step 6 plugs the
+   picker in). Stored timestamp = the printed one, per `token:location`, in
+   `$GOGDL_CONFIG_PATH/save-timestamps.json`. A failed backup stops that download. `CALL_TIMEOUT`
+   30 s per gogdl call, `BUDGET` 90 s for the whole sync; every failure is skipped and logged
+   (`game-launch: saves: …`). `NOVADECK_SAVES_SYNCED` stops a second game-launch in the chain.
+   No prefix yet → skipped with a log line (step 5).
+   **The galaxy.json row step 2 must write** (step 4 reads it; nothing writes it yet):
+   `{token, gid, clientId, comet, install, cloud: {enabled, locations: [{name, location}]}}`,
+   `install` the install folder (`<?INSTALL?>`), `enabled` the per-game toggle (default on).
+   **Consequence for step 7:** the post-exit upload needs a watcher for every cloud-enabled game,
+   not only Galaxy-SDK ones, so the `novadeck-comet` unit's watcher must also run (without Comet)
+   for a game with `comet: false` and cloud on.
 5. **First launch with no prefix**: decide by test on HW whether writing into
    `pfx/drive_c/users/steamuser/…` before Proton creates the prefix survives Proton's prefix
    setup. If it does not, the download runs as a first-run step (Proton creates the prefix for

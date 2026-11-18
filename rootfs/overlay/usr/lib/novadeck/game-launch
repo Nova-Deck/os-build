@@ -61,6 +61,10 @@ try:
     import novadeck_gogsession
 except ImportError:  # same contract: a missing helper costs Comet, not the game
     novadeck_gogsession = None
+try:
+    import novadeck_savesync
+except ImportError:  # same contract: a missing helper costs the cloud-save sync, not the game
+    novadeck_savesync = None
 
 BASE_CONFIG = pathlib.Path("/usr/share/fex-emu/Config.json")
 PROFILES = pathlib.Path("/usr/share/novadeck/fex-profiles.json")
@@ -434,6 +438,15 @@ def main():
             argv = swapped
         except Exception as exc:  # noqa: BLE001 - the swap must never block the launch
             print(f"{PROG}: DOSBox target swap skipped ({exc})", file=sys.stderr)
+
+    # A GOG game with cloud saves on gets the cloud's newer saves before it reads them
+    # (novadeck_savesync). After the swap, so a cancelled launch syncs nothing; before Comet,
+    # because gogdl may rewrite auth.json and Comet reads it once at start. Bounded in time.
+    if novadeck_savesync is not None:
+        try:
+            novadeck_savesync.pre_launch(appid())
+        except Exception as exc:  # noqa: BLE001 - a save sync must never block the launch
+            print(f"{PROG}: cloud saves not synced ({exc})", file=sys.stderr)
 
     # A GOG Galaxy-SDK game signs in through 127.0.0.1:9977, and without Comet answering there
     # some die (novadeck_gogsession). After the swap, so a cancelled launch starts no Comet; just

@@ -442,6 +442,48 @@ finally:
 (ok if st["epic:Run"]["state"] == "interrupted" else bad)(
     "an install whose unit is gone (stopped, failed, or a reboot) reads interrupted — resume is the same call")
 
+# -- mark_installed: the record follows the CLI's artifact (HW 2026-11-18: "installing" forever) --
+def mark(keys, write_rc=0):
+    calls = []
+    def run(argv, **kw):
+        calls.append(argv)
+        if argv[0] == "systemctl":
+            return fake_run(argv, **kw)
+        written.append(json.loads(kw["input"]))
+        return subprocess.CompletedProcess(argv, write_rc)
+    subprocess.run = run
+    try:
+        return installs.mark_installed(p, keys), calls
+    finally:
+        subprocess.run = real_run
+
+written.clear()
+unit.update(ActiveState="active", Description="novadeck-stores install gog:8")
+got, calls = mark(["epic:Run", "epic:Done", "gog:7", "gog:8", "epic:Old", "gog:nope"])
+(ok if got == ["epic:Done"] else bad)(
+    "marks only a record whose CLI artifact says done, not already installed, and not the one the "
+    f"unit is downloading now (a re-download over a finished game) ({got})")
+new = written[-1] if written else {}
+(ok if new.get("epic:Done", {}).get("state") == "installed"
+    and {k: v for k, v in new.items() if k != "epic:Done"} == {k: v for k, v in records.items() if k != "epic:Done"}
+    else bad)(f"one write: that record gains state installed, every other record is untouched ({new})")
+unit["ActiveState"] = "inactive"
+written.clear()
+got, calls = mark(["gog:8"])
+(ok if got == ["gog:8"] and written and written[-1]["gog:8"]["state"] == "installed" else bad)(
+    f"once the unit is gone, the finished GOG record is marked ({got})")
+written.clear()
+got, calls = mark(["gog:7", "epic:Old"])
+(ok if got == [] and not calls else bad)(
+    f"nothing to mark: no systemctl spawn and no write ({got}, {calls})")
+got, calls = mark(["epic:Done"], write_rc=1)
+(ok if got == [] else bad)(f"a write that fails marks nothing, so the next pass tries again ({got})")
+records_bad = {"x": {"store": "gog", "id": "../../etc", "state": "installing"}}
+json.dump(records_bad, open(p["NOVADECK_STORE_INSTALLS"], "w"))
+got, calls = mark(["x"])
+(ok if got == [] and not calls else bad)(f"a record with an unusable id is never looked up ({got})")
+json.dump(records, open(p["NOVADECK_STORE_INSTALLS"], "w"))
+
 # -- stop --
 seen = []
 def stop_run(argv, **kw):

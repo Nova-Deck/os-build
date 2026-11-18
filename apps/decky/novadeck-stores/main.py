@@ -923,8 +923,27 @@ class Plugin:
         registry = await asyncio.to_thread(shortcuts.read_registry, p)
         records = await asyncio.to_thread(installs.read_records, p)
         waiting = [t for t, row in registry.items() if shortcuts.is_shelf(row) and t in records]
-        if not waiting:
-            return  # nothing installing into a tile: no systemctl spawn on an idle poll
+        # Nothing installing into a tile: no systemctl spawn on an idle poll.
+        if waiting:
+            await self._swap_finished(p, registry, records, waiting)
+        await self._settle_records(p, registry, records)
+
+    async def _settle_records(self, p, registry, records):
+        """An entry that is an installed game (no longer a shelf tile) gets "installed" in its
+        install record too. A tile swapped this pass is settled on the next one: the registry
+        snapshot still shows it on the shelf."""
+        unsettled = [t for t, row in registry.items()
+                     if t in records and isinstance(row, dict) and not shortcuts.is_shelf(row)
+                     and records[t].get("state") != "installed"]
+        if not unsettled:
+            return
+        # The install lock, as install() and uninstall() rewrite the same file under it.
+        async with _INSTALL_LOCK:
+            marked = await asyncio.to_thread(installs.mark_installed, p, unsettled)
+        if marked:
+            decky.logger.info(f"install records marked installed: {', '.join(marked)}")
+
+    async def _swap_finished(self, p, registry, records, waiting):
         done = {f"{i['store']}:{i['id']}" for i in
                 (await asyncio.to_thread(installs.install_status, p)).get("installs", [])
                 if i.get("state") == "installed"}

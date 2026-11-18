@@ -241,10 +241,18 @@ installed), or on the Pocket FIT for the dummy-service title. One commit per ste
 6. **HW gate** (Pocket Max, Another World):
    - the game passes the 11 s mark and the first achievement unlock;
    - that achievement shows on the GOG profile;
-   - `systemctl --user status novadeck-comet-*` is gone within `COMET_IDLE_WAIT` + a few seconds of exit;
+   - `systemctl --user status novadeck-comet` is up mid-game and gone shortly after exit;
    - Steam shows the game stopped when it stops;
    - a non-Galaxy GOG game starts no Comet;
    - **offline launch**: what happens (expected: the same crash; this decides whether phase 4 is needed).
+   **First four PASSED 2026-11-18** (dev card BUILD_ID 20261118T165200Z, fresh card, Proton CachyOS
+   11.0). From the journal:
+   - unit started 21:03:36.75, Comet listening at 21:03:37.17;
+   - the game identified as clientId 49843177965810898 (the `galaxy.json` value) at 21:04:28;
+   - `AW_ACH_SURVIVOR` unlocked and uploaded at 21:06:35-48, and it shows on the GOG profile;
+   - game socket closed 21:07:37.85, unit ended 21:07:38.32 (SIGINT path, no "killed");
+   - Steam's `Game process removed` for ProcID 4249 (the watched pid) came in the same second.
+   Still owed: the non-Galaxy game and the offline launch.
 
 ### Phase 2 — dummy Galaxy service (only with a title that needs it)
 
@@ -296,11 +304,17 @@ phase 1 shows the game runs offline anyway.
 - **No readiness wait for Comet.** It makes no network call between reading credentials and
   binding 9977 (`main.rs:109-306`; the peer-library fetch is a spawned task), and Proton's
   startup under FEX takes seconds. A game that connects before Comet listens has not been seen;
-  add a wait only if one is.
+  add a wait only if one is. On HW: Comet listened 0.4 s after the unit started, and Another
+  World connected 52 s later (fresh prefix).
+- **Comet's data dir is outside the store home.** `$XDG_DATA_HOME` is not set for the unit, so
+  `~/.local/share/comet/` gets `gameplay/` (84K) and `redist/peer/` (102 MB, four msvc builds of
+  the GalaxyPeer component, fetched on the first start). Decide: point XDG_DATA_HOME into the
+  store home so GOG logout/cleanup covers it, or leave it. Also check whether a second launch
+  fetches it again.
 - **The exec'd chain pid lives as long as the game**: assumed (steam-launch-wrapper and the
-  reaper wait for their children). If a chain parent exits early, Comet stops mid-game. The step
-  6 gate's "Steam shows the game stopped when it stops" plus a mid-game `systemctl --user status
-  novadeck-comet` checks it.
+  reaper wait for their children). If a chain parent exits early, Comet stops mid-game.
+  Confirmed on HW for Another World: the unit stayed up the whole game and ended with Steam's
+  `Game process removed` for the same pid.
 - **gogdl's client-secret lookup for v1-only games** (`builds?generation=2`): unverified. A game
   where it fails gets no cloud sync, and the game page should say why (no silent drop).
 - **Token rotation**: gogdl may rotate the refresh token when it refreshes. Comet reads

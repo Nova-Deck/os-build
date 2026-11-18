@@ -20,7 +20,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LIB="$ROOT/rootfs/overlay/usr/lib/novadeck"
 
 out="$(python3 - "$LIB" <<'PY'
-import json, os, pathlib, subprocess, sys, tempfile
+import json, os, pathlib, subprocess, sys, tempfile, threading, time
 sys.path.insert(0, sys.argv[1])
 
 def ok(m): print(f"  ok   {m}")
@@ -183,15 +183,15 @@ check(not g.real() and res[0]["did"] == "kept-local" and stamps() == {}
       f"no answer (no picker yet, a timeout, Decky absent): keep local, sync nothing ({res})")
 asked = []
 def answer(value):
-    def choose(appid, name, verdict):
-        asked.append((appid, name, verdict["local"]["newest"], verdict["cloud"]["newest"]))
+    def choose(appid, index, name, verdict):
+        asked.append((appid, index, name, verdict["local"]["newest"], verdict["cloud"]["newest"]))
         return value
     return choose
 n = len(backups())
 g = Gogdl({SP: conflict})
 res = run(g, choose=answer("cloud"), clock=lambda: 1795070000.0)
-check(asked and asked[-1] == ("77", "saves", 1795040000.0, 1795050000.0),
-      f"the chooser is asked with the appid, the location and both sides' dates ({asked})")
+check(asked and asked[-1] == ("77", 0, "saves", 1795040000.0, 1795050000.0),
+      f"the chooser is asked with the appid, the location's index and name, and both sides' dates ({asked})")
 check(len(g.real()) == 1 and "--force-download" in g.real()[0] and res[0]["did"] == "downloaded"
       and len(backups()) == n + 1,
       f"answer cloud: back up, then --force-download ({res}, {backups()})")
@@ -272,6 +272,69 @@ g = Gogdl({SP: plan("none"), str(other): plan("none")})
 res = run(g, clock=lambda: next(ticks, ss.BUDGET + 9))
 check(res[-1]["did"] == "skipped" and "budget" in res[-1].get("reason", ""),
       f"past the time budget the rest is skipped, so an offline launch waits at most that long ({res})")
+fake_now = [0.0]
+def slow_user(appid, index, name, verdict):
+    fake_now[0] += ss.BUDGET * 2  # the user reads the question for a long time
+    return None
+g = Gogdl({SP: conflict, str(other): plan("none")})
+galaxy({"enabled": True, "locations": [{"name": "saves", "location": "<?DOCUMENTS?>/Another World"},
+                                        {"name": "other", "location": "<?DOCUMENTS?>/Other"}]})
+res = run(g, choose=slow_user, clock=lambda: fake_now[0])
+check([r["did"] for r in res] == ["kept-local", "nothing"],
+      f"time spent waiting on the USER is not budget: the next location still syncs ({res})")
+
+print("== the question, over the request spool (the launch's half)")
+spool = home / ss.REQUEST_DIR
+def plugin_side(answer_text, take=True, delay=0.3):
+    """Stand in for the plugin: take the question, then write the answer."""
+    def go():
+        deadline = time.time() + 5
+        while time.time() < deadline and not list(spool.glob("*.savepick")):
+            time.sleep(0.02)
+        names = [q.name for q in spool.glob("*.savepick")]
+        seen.extend(names)
+        if not take:
+            return
+        for q in spool.glob("*.savepick"):
+            q.unlink()
+        time.sleep(delay)
+        if answer_text is not None:
+            appid, index = names[0].split(".")[:2]
+            (spool / f"{appid}.{index}{ss.ANSWER_SUFFIX}").write_text(answer_text)
+    t = threading.Thread(target=go)
+    t.start()
+    return t
+verdict = plan("conflict", local={"files": 1, "newest": 1795040000.9}, cloud={"files": 2, "newest": 1795050000.2})
+for text, want in (("cloud", "cloud"), ("local", "local"), ("", None), ("garbage", None)):
+    seen = []
+    t = plugin_side(text)
+    got = ss.ask(home, "77", 1, verdict, take_timeout=3, answer_timeout=3, poll=0.02)
+    t.join()
+    check(got == want, f"the answer {text!r} reads as {want!r}")
+check(seen == ["77.1.1795040000.1795050000.savepick"],
+      f"the question's NAME carries appid, location index and both dates, digits only ({seen})")
+check(not list(spool.glob("*.saveanswer")), "the answer is consumed")
+seen = []
+(spool / f"77.1{ss.ANSWER_SUFFIX}").write_text("cloud")  # a stale answer from an earlier launch
+t = plugin_side(None)
+got = ss.ask(home, "77", 1, verdict, take_timeout=3, answer_timeout=0.3, poll=0.02)
+t.join()
+check(got is None, "a stale answer from an earlier launch is never this launch's answer")
+seen = []
+t = plugin_side(None, take=False)
+got = ss.ask(home, "77", 1, verdict, take_timeout=0.3, answer_timeout=3, poll=0.02)
+t.join()
+check(got is None and not list(spool.glob("*.savepick")),
+      "a question nobody takes (Decky not running) is withdrawn, and reads as no answer")
+ss_ask, asked_with = ss.ask, []
+ss.ask = lambda h, a, i, v, **kw: (asked_with.append((str(h), a, i)), "local")[1]
+aw()
+g = Gogdl({SP: conflict})
+os.environ.pop(ss.STARTED_ENV, None)
+res = ss.pre_launch("77", paths=paths, prefix=str(prefix), run=g)
+ss.ask = ss_ask
+check(asked_with == [(str(home), "77", 0)] and res[0]["did"] == "uploaded",
+      f"by default a conflict ASKS over the spool (store home, appid, location index) ({asked_with}, {res})")
 
 print("== once per launch")
 aw()

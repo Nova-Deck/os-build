@@ -58,6 +58,11 @@ export const getInstallSize = (store: StoreId, id: string) =>
 // A null label answers the launch's question with Cancel (do not launch) / sets "Ask every time".
 export const answerDosPick = (appid: number, label: string | null, remember: boolean) =>
   call<[number, string | null, boolean], { ok: true } | { error: string }>("dos_pick_answer", appid, label, remember);
+// gog-comet phase 3: which saves to keep when a GOG game's changed here AND in the cloud
+// (SavePickDialog). null is "Decide later": nothing is synced, the launch goes on.
+export type SaveChoice = "cloud" | "local" | null;
+export const answerSavePick = (appid: number, index: number, choice: SaveChoice) =>
+  call<[number, number, SaveChoice], { ok: true } | { error: string }>("save_pick_answer", appid, index, choice);
 export const getDosVersions = (appid: number) =>
   call<[number], DosVersions>("dos_versions", appid);
 export const setDosChoice = (appid: number, label: string | null) =>

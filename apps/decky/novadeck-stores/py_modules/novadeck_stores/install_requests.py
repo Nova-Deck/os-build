@@ -1,10 +1,12 @@
 """Requests the user side leaves in <store home>/requests/ for the plugin backend to take.
 
-Two kinds share the spool, told apart by suffix:
+Three kinds share the spool, told apart by suffix:
   - `<store>:<id>.install` — the not-installed tile stub (/usr/lib/novadeck/store-launch), run as
     the user when a shelf tile's Play is pressed;
   - `<appid>.dospick` — game-launch asking which DOSBox version of a GOG title to run under
-    Boxtron (novadeck_dostarget.py; dos_targets.py answers).
+    Boxtron (novadeck_dostarget.py; dos_targets.py answers);
+  - `<appid>.<index>.<local>.<cloud>.savepick` — game-launch asking which saves to keep when a
+    GOG game's changed both here and in the cloud (novadeck_savesync.py; save_picks.py answers).
 The FILENAME is the whole message — root never reads the file — and taking a request means
 unlinking it, which is what the waiting side watches for.
 
@@ -25,6 +27,9 @@ REQUEST_DIR = "requests"
 SUFFIX = ".install"
 PICK_SUFFIX = ".dospick"
 APPID = re.compile(r"^[0-9]{1,10}$")
+SAVE_PICK_SUFFIX = ".savepick"
+# appid . location index . local newest . cloud newest (Unix seconds), all digits.
+SAVE_PICK = re.compile(r"^([0-9]{1,10})\.([0-9]{1,3})\.([0-9]{1,12})\.([0-9]{1,12})$")
 
 
 def spool_path(p):
@@ -39,6 +44,11 @@ def take(p):
 def take_dos_picks(p):
     """Unlink every pending DOSBox version question and return the appids (str), oldest first."""
     return take_matching(p, PICK_SUFFIX, APPID.fullmatch)
+
+
+def take_save_picks(p):
+    """Unlink every pending which-saves question and return the tokens, oldest first."""
+    return take_matching(p, SAVE_PICK_SUFFIX, SAVE_PICK.fullmatch)
 
 
 def take_matching(p, suffix, valid):

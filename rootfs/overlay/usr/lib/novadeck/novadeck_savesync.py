@@ -10,10 +10,18 @@ location (.claude/plans/gog-galaxy-comet.plan.md design §6):
   none / upload   nothing now: a local change is uploaded after the game exits (step 7).
   download        only the cloud changed (or the local folder is empty): back the local folder
                   up, then `save-sync --skip-upload`.
-  conflict        both changed. `choose(appid, name, verdict)` answers "cloud" (back up, then
-                  --force-download), "local" (--force-upload) or None: keep local and sync
-                  nothing. The picker that asks the user is step 6; until then, and on its
-                  timeout, the answer is None.
+  conflict        both changed: the user is asked (ask(), below). "cloud" backs up, then
+                  --force-download; "local" is --force-upload; no answer (Decide later, B, a
+                  timeout, Decky not running) keeps local and syncs nothing.
+
+THE QUESTION goes over the request spool the DOS version picker uses (novadeck_dostarget): ask()
+creates `<store home>/requests/<appid>.<location index>.<local newest>.<cloud newest>.savepick`,
+digits only, because the plugin (root) never reads a file the user owns; the FILENAME is the
+whole message. The plugin takes it, looks the location's name up in its own galaxy.json, shows
+"Which saves?" with both dates, and writes `<appid>.<location index>.saveanswer` back: `cloud`,
+`local`, or empty. Not taken within TAKE_TIMEOUT means the plugin is not running. Time spent
+waiting on the USER does not count against BUDGET, so a slow answer never costs the game's
+other locations their sync.
 
 The timestamp stored per `token:location` is EXACTLY what a real sync prints. GOG dates a cloud
 file by its upload time, and gogdl prints its timestamp after that, so any earlier value would
@@ -56,11 +64,64 @@ BUDGET = 90         # the whole pre-launch sync; an offline device waits at most
 STARTED_ENV = "NOVADECK_SAVES_SYNCED"
 # The game's own loader environment, which gogdl (a host Python program) must not inherit.
 DROPPED_ENV = ("LD_PRELOAD", "LD_LIBRARY_PATH")
+REQUEST_DIR = "requests"
+PICK_SUFFIX = ".savepick"
+ANSWER_SUFFIX = ".saveanswer"
+CHOICES = ("cloud", "local")
+TAKE_TIMEOUT = 10.0      # the plugin takes a request within a beat or two; else it is not running
+ANSWER_TIMEOUT = 120.0   # then the user has this long; past it, nothing is synced
+POLL = 0.2
+ASK = object()           # pre_launch's default chooser: ask the user (tests pass their own)
 PROG = "game-launch"
 
 
 def log(message):
     print(f"{PROG}: saves: {message}", file=sys.stderr, flush=True)
+
+
+def _wait(predicate, timeout, poll):
+    end = time.monotonic() + timeout
+    while not predicate():
+        if time.monotonic() >= end:
+            return False
+        time.sleep(poll)
+    return True
+
+
+def _stamp(side):
+    newest = side.get("newest") if isinstance(side, dict) else None
+    return int(newest) if isinstance(newest, (int, float)) and newest > 0 else 0
+
+
+def ask(home, appid, index, verdict, take_timeout=TAKE_TIMEOUT, answer_timeout=ANSWER_TIMEOUT,
+        poll=POLL):
+    """"cloud", "local", or None when nobody answered (plugin down, Decide later, timeout).
+    Never raises: a failed ask is an unanswered one."""
+    spool = pathlib.Path(home) / REQUEST_DIR
+    name = f"{appid}.{index}.{_stamp(verdict.get('local'))}.{_stamp(verdict.get('cloud'))}"
+    request = spool / f"{name}{PICK_SUFFIX}"
+    answer = spool / f"{appid}.{index}{ANSWER_SUFFIX}"
+    try:
+        spool.mkdir(mode=0o700, exist_ok=True)
+        answer.unlink(missing_ok=True)  # a stale answer from an earlier launch is not this one's
+        os.close(os.open(request, os.O_CREAT | os.O_WRONLY | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600))
+    except OSError as exc:
+        log(f"could not ask which saves to keep ({exc}); keeping local")
+        return None
+    log("asking which saves to keep")
+    if not _wait(lambda: not request.exists(), take_timeout, poll):
+        request.unlink(missing_ok=True)
+        log("the NovaDeck Stores plugin did not take the question; keeping local")
+        return None
+    if not _wait(answer.exists, answer_timeout, poll):
+        log("no answer in time; keeping local")
+        return None
+    try:
+        text = answer.read_text(encoding="utf-8").strip()
+        answer.unlink(missing_ok=True)
+    except OSError:
+        return None
+    return text if text in CHOICES else None
 
 
 def _read_json(path):
@@ -101,6 +162,7 @@ class Session:
     def __init__(self, appid, row, paths, prefix, run, choose, clock):
         self.appid, self.row, self.prefix = str(appid), row, prefix
         self.run, self.choose, self.clock = run, choose, clock
+        self.waited = 0.0  # seconds spent waiting on the user, which the budget does not count
         self.home = pathlib.Path(paths["NOVADECK_STORE_HOME"])
         self.auth = paths["NOVADECK_GOGDL_AUTH"]
         self.stamp_file = pathlib.Path(paths["GOGDL_CONFIG_PATH"]) / TIMESTAMPS
@@ -168,7 +230,17 @@ def _download(s, key, name, path, ts, flag):
     return _real_sync(s, key, name, path, ts, flag, "downloaded")
 
 
-def sync_location(s, location):
+def _choose(s, index, name, verdict):
+    if s.choose is None:
+        return None
+    started = s.clock()
+    try:
+        return s.choose(s.appid, index, name, verdict)
+    finally:
+        s.waited += s.clock() - started
+
+
+def sync_location(s, index, location):
     """One location's pre-launch outcome: {name, action?, did, reason?}."""
     name = location.get("name") if isinstance(location, dict) else None
     if not isinstance(name, str) or not name:
@@ -192,7 +264,7 @@ def sync_location(s, location):
     if action == "download":
         return {**head, **_download(s, key, name, path, ts, "--skip-upload")}
     if action == "conflict":
-        answer = s.choose(s.appid, name, verdict) if s.choose else None
+        answer = _choose(s, index, name, verdict)
         if answer == "cloud":
             return {**head, **_download(s, key, name, path, ts, "--force-download")}
         if answer == "local":
@@ -201,9 +273,10 @@ def sync_location(s, location):
     return {**head, "did": "nothing"}
 
 
-def pre_launch(appid, paths=None, prefix=None, run=subprocess.run, choose=None, clock=time.time):
+def pre_launch(appid, paths=None, prefix=None, run=subprocess.run, choose=ASK, clock=time.time):
     """Sync this launch's cloud saves down, if any. Returns one outcome per location ([] when there
-    is nothing to do)."""
+    is nothing to do). `choose` answers a conflict; by default the user is asked (ask()), None
+    never asks."""
     if not appid or os.environ.get(STARTED_ENV):
         return []
     paths = store_env() if paths is None else paths
@@ -218,15 +291,17 @@ def pre_launch(appid, paths=None, prefix=None, run=subprocess.run, choose=None, 
         log(f"{row['token']}: not a Proton launch (no STEAM_COMPAT_DATA_PATH); saves not synced")
         return []
     os.environ[STARTED_ENV] = str(appid)
+    if choose is ASK:
+        choose = lambda a, i, n, v: ask(home, a, i, v)  # noqa: E731 - resolved at call time
     s = Session(appid, row, paths, prefix, run, choose, clock)
     deadline = clock() + BUDGET
     outcomes = []
-    for location in row["cloud"]["locations"]:
-        if clock() > deadline:
+    for index, location in enumerate(row["cloud"]["locations"]):
+        if clock() - s.waited > deadline:
             name = location.get("name") if isinstance(location, dict) else None
             outcomes.append({"name": str(name), "did": "skipped", "reason": f"past the {BUDGET}s budget"})
             continue
-        outcome = sync_location(s, location)
+        outcome = sync_location(s, index, location)
         outcomes.append(outcome)
         log(f"{outcome['name']}: {outcome.get('action', '-')} -> {outcome['did']}"
             + (f" ({outcome['reason']})" if outcome.get("reason") else ""))

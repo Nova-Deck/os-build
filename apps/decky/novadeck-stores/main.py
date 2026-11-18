@@ -34,7 +34,7 @@ import base64
 
 from novadeck_stores import (artwork, cdp, cli, compat_map, connect, dos_targets, first_run, game_page,
                              install_requests, installs, launch, library, library_sync, locations, paths,
-                             prefixes, settings, shortcuts, status)
+                             prefixes, save_picks, settings, shortcuts, status)
 
 # Long enough to type an email and a password on the on-screen keyboard and clear a captcha;
 # short enough that a login the user walked away from does not poll for the rest of the session.
@@ -680,6 +680,34 @@ class Plugin:
                           and int(row["appid"]) & 0xFFFFFFFF == int(appid)), None)
             await decky.emit("dos_pick", {"appid": int(appid), "title": title or "This game", "labels": labels})
 
+    # -- gog-comet phase 3: which saves to keep, asked by the launch itself --
+
+    async def take_save_picks(self, p):
+        """Take every which-saves question game-launch left (novadeck_savesync.ask) and put it in
+        front of the user as a save_pick event. A question naming no location of ours is not
+        answered: the launch times out and keeps local, as it does with Decky down."""
+        questions = await asyncio.to_thread(install_requests.take_save_picks, p)
+        if not questions:
+            return
+        registry = await asyncio.to_thread(shortcuts.read_registry, p)
+        for token in questions:
+            event = await asyncio.to_thread(save_picks.describe, p, token, registry)
+            if event is None:
+                decky.logger.info(f"save pick {token}: no such cloud-save location")
+                continue
+            await decky.emit("save_pick", event)
+
+    async def save_pick_answer(self, appid, index, choice):
+        """The dialog's answer: "cloud", "local", or None (Decide later / B: nothing is synced)."""
+        try:
+            p = await asyncio.to_thread(paths.store_paths)
+            key = str(int(appid) & 0xFFFFFFFF)
+            if not await asyncio.to_thread(save_picks.answer, p, key, index, choice):
+                return {"error": "the answer could not be written"}
+            return {"ok": True}
+        except (OSError, subprocess.SubprocessError, ValueError, TypeError) as exc:
+            return {"error": f"{type(exc).__name__}"}
+
     async def dos_pick_answer(self, appid, label, remember):
         """The dialog's answer: a label (and, with remember, saved as the game's choice) or None
         for Cancel, which the launch takes as 'do not launch'."""
@@ -1008,6 +1036,7 @@ class Plugin:
                 # First: a launch is blocked on it, and must hear back within its 10 s. It never
                 # waits on _SHORTCUT_LOCK; an install request can.
                 await self.take_dos_picks(p)
+                await self.take_save_picks(p)
                 await self.take_install_requests(p)
                 # Its own task: a swap can wait a long time on _SHORTCUT_LOCK (a sync talking to
                 # a slow SteamUI), and a tile press must still be taken within the stub's 10 s.

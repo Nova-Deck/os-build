@@ -428,6 +428,29 @@ installed), or on the Pocket FIT for the dummy-service title. One commit per ste
    differ.
 6. **Conflict picker**: `.savepick` / `.saveanswer` spool + modal (mirror the DOS picker),
    including the dates. TDD for the backend half.
+   **Done, offline (2026-11-19; HW test owed, next session).**
+   - Launch half, `novadeck_savesync.ask()` (savesync suite now 46 checks): the question is
+     `requests/<appid>.<location index>.<local newest>.<cloud newest>.savepick`, digits only,
+     because root never reads the user's file; the answer `<appid>.<index>.saveanswer` holds
+     `cloud`, `local` or nothing. `TAKE_TIMEOUT` 10 s (the plugin not running), `ANSWER_TIMEOUT`
+     120 s; a stale answer is removed before asking. Time spent waiting on the user does NOT
+     count against `BUDGET`, so a slow answer never costs the other locations their sync.
+   - Plugin half, `save_picks.py` + `install_requests.take_save_picks` + `main.take_save_picks` /
+     `save_pick_answer`, taken in the request loop before install requests
+     (`tests/test-store-savepick.sh`, 29 checks): the title from the registry, the location's
+     name from galaxy.json; a question naming no location of ours is not answered (the launch
+     times out, keeps local).
+   - Frontend, `SavePickDialog.tsx` ("Which saves?"): *Cloud saves, from <date>* (this device's
+     are backed up, then replaced), *This device's saves, from <date>* (the cloud's are
+     replaced), *Decide later* or B (nothing synced, asked again next time). `make decky-plugin`
+     builds clean.
+   - **HW test to run:** Another World on a card with all of phase 3, its saves changed on both
+     sides since the stored timestamp (or none stored: its first sync, which is a conflict). The
+     dialog shows with both dates; each of the three answers does what it says; the backup exists
+     after *Cloud saves*.
+   - Not done, worth deciding: *This device's saves* overwrites the cloud with no copy of what it
+     replaces. A cloud backup (download into the backup dir first) would make both answers
+     undoable.
 7. **Post-exit upload** in the watcher; timestamp stored.
 8. **Game page toggle**: *Cloud saves: on/off*, plus the last sync time.
 9. **HW gate** (Another World, or any cloud-enabled GOG title):

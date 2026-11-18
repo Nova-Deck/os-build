@@ -239,7 +239,7 @@ installed), or on the Pocket FIT for the dummy-service title. One commit per ste
    **Done** (`test-store-launch.sh`, 27 checks; the watcher is exercised with real processes).
    The step 6 HW gate's unit check is `systemctl --user status novadeck-comet`.
 6. **HW gate** (Pocket Max, Another World):
-   - the game passes the 11 s mark and the first achievement unlock;
+   - the game passes the first achievement unlock (where it died; not a fixed time);
    - that achievement shows on the GOG profile;
    - `systemctl --user status novadeck-comet` is up mid-game and gone shortly after exit;
    - Steam shows the game stopped when it stops;
@@ -255,7 +255,22 @@ installed), or on the Pocket FIT for the dummy-service title. One commit per ste
    **Non-Galaxy check PASSED** with A New Beginning: Final Cut (no `galaxy*.dll`; its row has
    `comet: false`). While `anb.exe` ran: no unit, no `comet` process, nothing on 9977, no
    `game-launch: comet:` line in the session log, and no Comet line in the journal.
-   Still owed: the offline launch.
+   **Offline launch: no crash** (Wi-Fi off 21:32:10, game 21:32:19-21:34:23):
+   - Comet's token fetch failed (`There was an error getting the access token`), and Comet
+     still served the game from its local `gameplay.db` (created by the earlier online run);
+   - the game called a NEW unlock, `AW_ACH_1ST_SHIELD`, and kept running. That is the call
+     that used to crash, so offline works once Comet has run online for that game;
+   - Comet panicked on the way out (`notification_pusher.rs:70`, `Unable to get notification
+     pusher connection`). That is upstream: offline, the pusher task is still retrying when
+     the SIGINT shutdown cancels it, and it `expect`s a connection. It fires on the
+     cancellation, so it shows the watcher's SIGINT arrived 0.4 s after the game's socket
+     closed. A panic in a spawned task does not end the process (release profile keeps
+     unwind). The unit was gone and nothing held 9977 afterwards.
+   **Phase 4 is not needed for this case.** Untested: the first ever launch of a game while
+   offline, with no `gameplay.db` yet.
+   Still owed: `First shield` was unlocked offline into the local DB only. The next online
+   launch should upload it (the online run logged `Uploading new achievements` right after the
+   client connected). Check that it then shows on the GOG profile.
 
 ### Phase 2 — dummy Galaxy service (only with a title that needs it)
 

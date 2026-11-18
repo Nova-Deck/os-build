@@ -57,6 +57,10 @@ try:
     import novadeck_dostarget
 except ImportError:  # same contract: a missing helper costs the Boxtron swap, not the game
     novadeck_dostarget = None
+try:
+    import novadeck_gogsession
+except ImportError:  # same contract: a missing helper costs Comet, not the game
+    novadeck_gogsession = None
 
 BASE_CONFIG = pathlib.Path("/usr/share/fex-emu/Config.json")
 PROFILES = pathlib.Path("/usr/share/novadeck/fex-profiles.json")
@@ -430,6 +434,15 @@ def main():
             argv = swapped
         except Exception as exc:  # noqa: BLE001 - the swap must never block the launch
             print(f"{PROG}: DOSBox target swap skipped ({exc})", file=sys.stderr)
+
+    # A GOG Galaxy-SDK game signs in through 127.0.0.1:9977, and without Comet answering there
+    # some die (novadeck_gogsession). After the swap, so a cancelled launch starts no Comet; just
+    # before exec, because the watcher it starts follows THIS pid, which exec makes the chain.
+    if novadeck_gogsession is not None:
+        try:
+            novadeck_gogsession.start(appid())
+        except Exception as exc:  # noqa: BLE001 - Comet must never block the launch
+            print(f"{PROG}: Comet not started ({exc})", file=sys.stderr)
 
     try:
         os.execv(argv[0], argv)

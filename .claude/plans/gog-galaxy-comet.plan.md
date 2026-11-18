@@ -127,18 +127,21 @@ Built in `write_registry` like `dos-targets.json`: appid → `{token, gid, clien
 
 ### 4. Launch-time session (`/usr/lib/novadeck/novadeck_gogsession.py`, called from `game-launch`)
 
-It runs after first-run and before the DOS swap, fails soft, and does three things before
-`game-launch` execs:
+It runs after the DOS swap (so a cancelled launch starts no Comet) and right before exec. It
+fails soft, and does two things:
 1. **Pre-launch save sync** (phase 3), blocking with a bounded timeout.
-2. **Start Comet** as a transient **systemd user unit** (`systemd-run --user
-   --unit=novadeck-comet-<appid> -p KillSignal=SIGINT -p TimeoutStopSec=…`), with `--username
-   <u> --quit`. It is out of the game's process tree, so Steam's reaper does not wait on it and
-   the game shows as stopped when the game stops.
-3. **Start a watcher** in the same unit (or a sibling unit). It takes the `game-launch` pid and
-   start time and opens a pidfd on it. After exec that pid **is** the launch chain, and it lives
-   until the game exits. When the pidfd fires, the watcher (a) runs the post-exit upload
-   (phase 3), (b) stops the Comet unit with SIGINT, so a game that never connected does not
-   leave Comet running and a connected one gets its final sync.
+2. **One transient systemd user unit, `novadeck-comet`** (`systemd-run --user --collect -p
+   KillSignal=SIGINT -p TimeoutStopSec=30`). The name is fixed because port 9977 is one per
+   device; a unit left from an earlier launch is stopped first. The unit runs the helper's
+   `watch` mode, which takes the `game-launch` pid and start time and opens a pidfd on it.
+   After exec that pid **is** the launch chain, and it lives until the game exits. The watcher
+   runs Comet (`--from-heroic --username <u>`, **no `--quit`**) as its child. When the pidfd
+   fires, it (a) runs the post-exit upload (phase 3), (b) sends Comet SIGINT for its final
+   sync and kills it after 15 s. The watcher owns Comet's lifetime, so `--quit`'s "never exits
+   if no client connected" cannot happen. The unit is outside the game's process tree, so
+   Steam's reaper does not wait on it.
+   `NOVADECK_COMET_STARTED` in the launch's env stops a second `game-launch` in the same chain
+   (launch options + the in-tool shim) from restarting it.
 
 This puts the after-exit work in a process that does not depend on Decky or the frontend. An
 upload missed because the device died mid-game is caught by the next pre-launch sync, since local
@@ -232,7 +235,9 @@ installed), or on the Pocket FIT for the dummy-service title. One commit per ste
    - the symlinked auth dir is created;
    - watcher stops the unit when a stand-in pid exits;
    - every failure is soft (launch still execs);
-   - ordering: after first-run, before the DOS swap.
+   - ordering: after the DOS swap, right before exec.
+   **Done** (`test-store-launch.sh`, 27 checks; the watcher is exercised with real processes).
+   The step 6 HW gate's unit check is `systemctl --user status novadeck-comet`.
 6. **HW gate** (Pocket Max, Another World):
    - the game passes the 11 s mark and the first achievement unlock;
    - that achievement shows on the GOG profile;
@@ -288,6 +293,14 @@ phase 1 shows the game runs offline anyway.
 
 - **Container loopback to 9977**: resolved from source (phase 1 step 1). pressure-vessel shares
   the host network namespace.
+- **No readiness wait for Comet.** It makes no network call between reading credentials and
+  binding 9977 (`main.rs:109-306`; the peer-library fetch is a spawned task), and Proton's
+  startup under FEX takes seconds. A game that connects before Comet listens has not been seen;
+  add a wait only if one is.
+- **The exec'd chain pid lives as long as the game**: assumed (steam-launch-wrapper and the
+  reaper wait for their children). If a chain parent exits early, Comet stops mid-game. The step
+  6 gate's "Steam shows the game stopped when it stops" plus a mid-game `systemctl --user status
+  novadeck-comet` checks it.
 - **gogdl's client-secret lookup for v1-only games** (`builds?generation=2`): unverified. A game
   where it fails gets no cloud sync, and the game page should say why (no silent drop).
 - **Token rotation**: gogdl may rotate the refresh token when it refreshes. Comet reads

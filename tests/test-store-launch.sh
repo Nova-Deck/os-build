@@ -363,5 +363,195 @@ FAIL=$((FAIL + $(grep -c '^  FAIL' <<<"$FR_OUT" || true)))
 grep -q 'game-launch runs the steps BEFORE' <<<"$FR_OUT" || bad "the novadeck_firstrun checks crashed before the end"
 
 echo
+echo "== Comet around a Galaxy game's launch (novadeck_gogsession.py)"
+GS_OUT="$(python3 - "$ROOT/rootfs/overlay/usr/lib/novadeck" <<'PY'
+import json, os, pathlib, signal, subprocess, sys, tempfile, time
+sys.path.insert(0, sys.argv[1])
+
+def ok(m): print(f"  ok   {m}")
+def bad(m): print(f"  FAIL {m}")
+def check(c, m): (ok if c else bad)(m)
+
+import novadeck_gogsession as gs
+logged = []
+gs.log = logged.append
+
+tmp = pathlib.Path(tempfile.mkdtemp(prefix="gogsession."))
+home = tmp / "stores"; (home / "gogdl").mkdir(parents=True)
+auth = home / "gogdl" / "auth.json"
+auth.write_text(json.dumps({"46899977096215655": {"access_token": "SECRET-ACCESS", "refresh_token": "SECRET-REFRESH"}}))
+user = home / "gogdl" / "user.json"
+paths = {"NOVADECK_STORE_HOME": str(home), "NOVADECK_GOGDL_AUTH": str(auth), "NOVADECK_GOG_USER": str(user)}
+(home / "galaxy.json").write_text(json.dumps({
+    "111": {"token": "gog:1207660413", "gid": "1207660413", "clientId": "49843177965810898", "comet": True},
+    "222": {"token": "gog:1", "gid": "1", "clientId": None, "comet": False}}))
+
+calls = []
+def fake_run(argv, **kw):
+    calls.append(argv)
+    return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+def started():
+    return [c for c in calls if c[0] == "systemd-run"]
+
+os.environ.pop(gs.STARTED_ENV, None)
+check(gs.start(None, paths, fake_run) is None and not calls, "no appid → nothing runs")
+check(gs.start("333", paths, fake_run) is None and not calls, "an appid with no galaxy.json row → nothing runs")
+check(gs.start("222", paths, fake_run) is None and not calls, "a GOG game without the Galaxy SDK starts no Comet")
+check(gs.start("111", paths, fake_run) is None and not started(),
+      "no recorded GOG username → Comet is not started")
+check(any("username" in m for m in logged), "...and the log says why")
+
+user.write_text(json.dumps({"username": "Loki"}))
+argv = gs.start("111", paths, fake_run)
+sr = started()
+check(argv is not None and len(sr) == 1, f"a Galaxy game with a username starts one unit ({len(sr)})")
+sr = sr[0] if sr else []
+opts = sr[:sr.index("--")] if "--" in sr else sr
+check("--user" in opts and f"--unit={gs.UNIT}" in opts and "--collect" in opts,
+      "a transient USER unit, collected when it ends — out of the game's process tree")
+check("KillSignal=SIGINT" in opts, "the unit is stopped with SIGINT: the only signal Comet does its final sync on")
+cfg = home / "comet" / "config"
+check(f"--setenv=XDG_CONFIG_PATH={cfg}" in opts and f"--setenv=XDG_CONFIG_HOME={cfg}" in opts,
+      "Comet's config root is the private dir, under both names (it reads XDG_CONFIG_PATH, sic)")
+cmd = sr[sr.index("--") + 1:] if "--" in sr else []
+check(cmd[:3] == [gs.PYTHON, gs.SELF, "watch"] and cmd[3] == str(os.getpid()) and cmd[4] == str(gs.start_time(os.getpid())),
+      f"the unit runs the watcher on THIS pid (the chain after exec) and its start time ({cmd[:5]})")
+comet = cmd[cmd.index("--") + 1:] if cmd.count("--") else []
+check(comet == [gs.COMET, "--from-heroic", "--username=Loki"],
+      f"Comet reads the tokens from the auth file, with the recorded username as ONE token ({comet})")
+check("--quit" not in comet, "no --quit: the watcher owns Comet's lifetime (--quit never exits if no client connected)")
+check(not any("SECRET" in a for c in calls for a in c), "no token appears in any argv (/proc/<pid>/cmdline is world-readable)")
+link = cfg / "heroic" / "gog_store" / "auth.json"
+check(link.is_symlink() and os.readlink(link) == str(auth), "the auth file reaches Comet through a symlink, never a copy")
+def stop_then_start(seq):
+    return (len(seq) == 2 and seq[0] == ["systemctl", "--user", "stop", f"{gs.UNIT}.service"]
+            and seq[1][0] == "systemd-run")
+check(stop_then_start(calls),
+      "a Comet left from an earlier launch is stopped first: the unit name and port 9977 are both one-per-device")
+check(os.environ.get(gs.STARTED_ENV) == "111", "the launch is marked, for whatever game-launch runs inside it")
+
+n = len(calls)
+check(gs.start("111", paths, fake_run) is None and len(calls) == n,
+      "a second game-launch in the same chain (launch options + the in-tool shim) starts nothing")
+os.environ.pop(gs.STARTED_ENV)
+
+link.unlink(); link.write_text("stale")
+calls.clear()
+gs.start("111", paths, fake_run)
+check(link.is_symlink() and os.readlink(link) == str(auth), "a stale file where the link goes is replaced by the link")
+check(stop_then_start(calls), "every start is stop-then-start, not only the first")
+os.environ.pop(gs.STARTED_ENV)
+
+real_start_time = gs.start_time
+gs.start_time = lambda pid: None
+calls.clear()
+check(gs.start("111", paths, fake_run) is None and not calls and gs.STARTED_ENV not in os.environ,
+      "an unreadable own start time starts nothing (the watcher could not check the pid)")
+gs.start_time = real_start_time
+
+def failing_run(argv, **kw):
+    return subprocess.CompletedProcess(argv, 1, stdout="", stderr="Unit novadeck-comet.service already exists")
+check(gs.start("111", paths, failing_run) is None and gs.STARTED_ENV not in os.environ,
+      "systemd-run failing → no Comet, no marker, no raise")
+def raising_run(argv, **kw):
+    raise OSError("no systemd-run")
+check(gs.start("111", paths, raising_run) is None, "systemd-run missing → no Comet, no raise")
+
+# -- the watcher: a stand-in game, a stand-in Comet that records how it was stopped --
+rec = tmp / "comet.log"
+fake_comet = tmp / "comet"
+fake_comet.write_text("#!/usr/bin/env python3\nimport signal,sys,time\n"
+                      f"rec=open({str(rec)!r},'a')\n"
+                      "def h(s,f):\n    rec.write('SIGINT\\n'); rec.flush(); sys.exit(0)\n"
+                      "signal.signal(signal.SIGINT,h)\nrec.write('up\\n'); rec.flush()\n"
+                      "while True: time.sleep(0.1)\n")
+fake_comet.chmod(0o755)
+game = subprocess.Popen(["sleep", "30"])
+w = subprocess.Popen([sys.executable, gs.__file__, "watch", str(game.pid), str(gs.start_time(game.pid)),
+                      "--", str(fake_comet)], stderr=subprocess.DEVNULL)
+deadline = time.time() + 5
+while time.time() < deadline and not (rec.exists() and "up" in rec.read_text()):
+    time.sleep(0.05)
+check(rec.exists() and "up" in rec.read_text(), "the watcher starts Comet while the game runs")
+check(w.poll() is None, "...and keeps waiting while the game runs")
+game.terminate(); game.wait()
+try:
+    rc = w.wait(timeout=10)
+except subprocess.TimeoutExpired:
+    w.kill(); rc = None
+check(rc == 0 and "SIGINT" in rec.read_text(), f"when the game exits, Comet gets SIGINT and the watcher ends ({rc})")
+
+rec.unlink()
+game = subprocess.Popen(["sleep", "30"])
+w = subprocess.run([sys.executable, gs.__file__, "watch", str(game.pid), "1", "--", str(fake_comet)],
+                   stderr=subprocess.DEVNULL, timeout=10)
+game.terminate(); game.wait()
+check(w.returncode == 0 and not rec.exists(),
+      "a pid whose start time does not match (the launch already gone, pid reused) starts no Comet")
+
+def run_watch(game_pid, comet_argv, grace, stop_with=None):
+    """watch() in a child python with a short grace; returns (rc, stderr)."""
+    code = (f"import sys; sys.path.insert(0, {sys.argv[1]!r}); import novadeck_gogsession as gs; "
+            f"sys.exit(gs.watch({game_pid}, gs.start_time({game_pid}), {comet_argv!r}, grace={grace}))")
+    w = subprocess.Popen([sys.executable, "-c", code], stderr=subprocess.PIPE, text=True)
+    return w
+
+# Comet dying while the game runs: logged, and the watcher still waits for the game.
+quitter = tmp / "quitter"
+quitter.write_text("#!/bin/sh\nexit 7\n"); quitter.chmod(0o755)
+game = subprocess.Popen(["sleep", "30"])
+w = run_watch(game.pid, [str(quitter)], 1)
+time.sleep(1.0)
+check(w.poll() is None, "a Comet that exits early does not end the watch: the game is still running")
+game.terminate(); game.wait()
+_, err = w.communicate(timeout=10)
+check(w.returncode == 0 and "Comet exited while the game runs (status 7)" in err,
+      f"...and its early exit is logged with its status ({err.strip()[-90:]!r})")
+
+# A Comet that ignores SIGINT is killed once the grace runs out.
+stubborn = tmp / "stubborn"
+stubborn.write_text("#!/usr/bin/env python3\nimport signal,time\nsignal.signal(signal.SIGINT, signal.SIG_IGN)\n"
+                    "while True: time.sleep(0.1)\n"); stubborn.chmod(0o755)
+game = subprocess.Popen(["sleep", "30"])
+w = run_watch(game.pid, [str(stubborn)], 1)
+time.sleep(1.0)
+game.terminate(); game.wait()
+t0 = time.time()
+_, err = w.communicate(timeout=10)
+check(w.returncode == 0 and "killed" in err and time.time() - t0 < 5,
+      f"a Comet that ignores SIGINT is killed after the grace ({time.time() - t0:.1f}s)")
+
+# The unit being stopped (SIGINT, its KillSignal) or a plain SIGTERM: Comet still gets SIGINT.
+for sig in (signal.SIGINT, signal.SIGTERM):
+    rec.unlink(missing_ok=True)
+    game = subprocess.Popen(["sleep", "30"])
+    w = run_watch(game.pid, [str(fake_comet)], 5)
+    deadline = time.time() + 5
+    while time.time() < deadline and not (rec.exists() and "up" in rec.read_text()):
+        time.sleep(0.05)
+    w.send_signal(sig)
+    _, err = w.communicate(timeout=10)
+    game.terminate(); game.wait()
+    check(w.returncode == 0 and "SIGINT" in rec.read_text(),
+          f"{signal.Signals(sig).name} to the watcher stops Comet with SIGINT, exit 0 ({w.returncode})")
+
+src = pathlib.Path(sys.argv[1], "game-launch").read_text()
+main = src[src.index("def main"):]
+check("import novadeck_gogsession" in src and "novadeck_gogsession = None" in src,
+      "game-launch imports the helper softly: a missing helper costs Comet, not the game")
+check(main.index("novadeck_dostarget.swap") < main.index("novadeck_gogsession.start") < main.index("os.execv"),
+      "Comet starts after the DOSBox swap (a cancelled launch starts none) and right before exec")
+blk = main[main.index("if novadeck_gogsession is not None"):main.index("os.execv")]
+check("novadeck_gogsession.start" in blk and "except Exception" in blk.split("novadeck_gogsession.start", 1)[1],
+      "a failing Comet start never blocks the launch (its own handler, after the call)")
+print("  -- gogsession checks finished")
+PY
+)"
+printf '%s\n' "$GS_OUT"
+PASS=$((PASS + $(grep -c '^  ok ' <<<"$GS_OUT" || true)))
+FAIL=$((FAIL + $(grep -c '^  FAIL' <<<"$GS_OUT" || true)))
+grep -q 'gogsession checks finished' <<<"$GS_OUT" || bad "the novadeck_gogsession checks crashed before the end"
+
+echo
 echo "test-store-launch.sh: $PASS passed, $FAIL failed, $SKIP skipped"
 [ "$FAIL" -eq 0 ]

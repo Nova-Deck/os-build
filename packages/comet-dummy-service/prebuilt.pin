@@ -1,0 +1,25 @@
+# comet-dummy-service — the GalaxyCommunication.exe stub from Comet's release.
+#
+# Some Galaxy SDK versions start a `GalaxyCommunication` Windows service through the SCM when no
+# Galaxy client is running, and fail without one. Comet's stub is a do-nothing service binary
+# (dummy-service/communication.c in imLinguin/comet) that answers the SCM. It is an x86_64 PE, so
+# it runs in the game's prefix like the game does.
+#
+# Not run from here: a first-run step runs inside the game's SLR container, where this /usr is
+# not /usr. The novadeck-stores plugin copies the stub and our own .bat
+# (rootfs/overlay/usr/lib/novadeck/galaxy-service.bat) into the store home, and the step runs the
+# copy. See .claude/plans/gog-galaxy-comet.plan.md design §7.
+#
+# The zip also holds upstream's install-dummy-service.bat and update-permissions.exe. Neither is
+# used: our .bat does upstream's copy and `sc create` plus Heroic's GalaxyClient key, and the
+# permissions tool widens a service DACL that Wine does not enforce (Heroic skips it too).
+#
+# Same release as packages/comet; bump the two together.
+#
+# Fields: see packages/inputplumber/prebuilt.pin and packages/README.md.
+name: comet-dummy-service
+version: 0.4.1
+url: https://github.com/imLinguin/comet/releases/download/v0.4.1/dummy-service.zip
+sha256: e89e837fb33d11e4757fe4ff46255ea35d95e1ed32750ef804a28bee8ef7de53
+kind: zip
+dest: /usr/share/comet-dummy-service

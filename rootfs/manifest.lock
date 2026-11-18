@@ -47,6 +47,7 @@ ca-certificates-utils 20240618-1 any snapshot aabd5b2b7030716ccdd465d607e734e851
 cairo 1.18.4-1 aarch64 snapshot d3d64a92e050a35877154ae55391221b999f300fc8fecda5ff012c4bc8ab5a7e
 catatonit 0.2.1-2 aarch64 snapshot f62395c8c98f7cffc353e52cf3b3769c9ae07c52e4f6f87cb4f75bd96ba21774
 comet 0.4.1 - prebuilt 33c52a7f4747e4e3340b1de955683679e33d01ba1a4fd2f9d79d7eb4dc229fc8
+comet-dummy-service 0.4.1 - prebuilt e89e837fb33d11e4757fe4ff46255ea35d95e1ed32750ef804a28bee8ef7de53
 conmon 1:2.2.1-1.1 aarch64 novadeck 3189bbe25c5e862f32fe15c3bf3ff8c7c6478ddbbf7450adea399d17dc7ff1b0
 containers-common 1:0.67.0-1.1 any novadeck 12f26f916473714db73856e40f21dc64c7b08e1ba7ee9356ed6cb450bea52274
 coreutils 9.11-1 aarch64 snapshot d5d36b4c82833f6d2f546df40dfc13b51607333ad3116d83c4b059b6d5678e87

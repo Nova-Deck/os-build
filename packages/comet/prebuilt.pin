@@ -16,7 +16,7 @@
 # Re-read `readelf -d` and `readelf -V` on a bump.
 #
 # The release's dummy-service.zip (an x86_64 GalaxyCommunication.exe some SDK versions require as
-# a Windows service) is NOT pinned here. It lands with the first title that needs it (plan phase 2).
+# a Windows service) is its own pin, packages/comet-dummy-service. Bump the two together.
 #
 # mode: the binary is executed directly; kind:file installs 0644 by default.
 #

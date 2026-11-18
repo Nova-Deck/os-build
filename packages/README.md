@@ -45,7 +45,9 @@ Current pins: `inputplumber/` (InputPlumber input daemon; `deps: libiio`),
 `fex-rootfs/` (the FEX x86 guest rootfs image; `kind: file`),
 `proton-cachyos/` and `proton-ge/` (two baked arm64 Proton compat tools — CachyOS and
 GloriousEggroll GE — the user picks either per game in Steam; both `kind: tar`, `deps: python`),
-`comet/` (GOG Galaxy client emulation for Galaxy-SDK games; `kind: file`, `mode: 0755`).
+`comet/` (GOG Galaxy client emulation for Galaxy-SDK games; `kind: file`, `mode: 0755`),
+`comet-dummy-service/` (the `GalaxyCommunication.exe` service stub from the same Comet release;
+`kind: zip`).
 
 ## What CI does with these packages
 

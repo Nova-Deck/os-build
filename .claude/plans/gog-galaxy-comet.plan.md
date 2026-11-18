@@ -252,7 +252,10 @@ installed), or on the Pocket FIT for the dummy-service title. One commit per ste
    - `AW_ACH_SURVIVOR` unlocked and uploaded at 21:06:35-48, and it shows on the GOG profile;
    - game socket closed 21:07:37.85, unit ended 21:07:38.32 (SIGINT path, no "killed");
    - Steam's `Game process removed` for ProcID 4249 (the watched pid) came in the same second.
-   Still owed: the non-Galaxy game and the offline launch.
+   **Non-Galaxy check PASSED** with A New Beginning: Final Cut (no `galaxy*.dll`; its row has
+   `comet: false`). While `anb.exe` ran: no unit, no `comet` process, nothing on 9977, no
+   `game-launch: comet:` line in the session log, and no Comet line in the journal.
+   Still owed: the offline launch.
 
 ### Phase 2 — dummy Galaxy service (only with a title that needs it)
 

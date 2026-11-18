@@ -1,0 +1,30 @@
+# Comet — GOG Galaxy client emulation, precompiled aarch64 binary pin.
+#
+# Comet (imLinguin/comet, Apache-2.0) serves the Galaxy client's local service on 127.0.0.1:9977.
+# GOG games built on the Galaxy SDK sign in through that service; with nothing listening, the
+# sign-in never completes, and a game that then reads its stats object without checking (Another
+# World 20th Anniversary, at its first achievement unlock) dies. Comet completes the sign-in and
+# syncs achievements, stats, leaderboards and play time to GOG. It does NOT do cloud saves; those
+# are `gogdl save-sync` (packages/gogdl). Started per launch by game-launch; see
+# .claude/plans/gog-galaxy-comet.plan.md.
+#
+# Upstream's release CI builds this asset (comet-aarch64-unknown-linux-gnu); a source build here
+# would need rustc >= 1.85 (edition 2024), the proto/ submodule, and aws-lc-sys + ring + sqlite C
+# builds under qemu, for the same bytes. Switch to a source.pin only if we ever carry a patch.
+#
+# NEEDED is base-only (libc, libm, libgcc_s, ld-linux), highest symbol GLIBC_2.38, so no deps line.
+# Re-read `readelf -d` and `readelf -V` on a bump.
+#
+# The release's dummy-service.zip (an x86_64 GalaxyCommunication.exe some SDK versions require as
+# a Windows service) is NOT pinned here. It lands with the first title that needs it (plan phase 2).
+#
+# mode: the binary is executed directly; kind:file installs 0644 by default.
+#
+# Fields: see packages/inputplumber/prebuilt.pin and packages/README.md.
+name: comet
+version: 0.4.1
+url: https://github.com/imLinguin/comet/releases/download/v0.4.1/comet-aarch64-unknown-linux-gnu
+sha256: 33c52a7f4747e4e3340b1de955683679e33d01ba1a4fd2f9d79d7eb4dc229fc8
+kind: file
+dest: /usr/bin/comet
+mode: 0755

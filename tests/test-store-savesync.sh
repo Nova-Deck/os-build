@@ -114,9 +114,21 @@ check(run(g) == [] and not g.calls, "a row with no cloud data: nothing")
 aw()
 check(run(g, appid="999") == [] and not g.calls, "an appid with no row: nothing")
 check(ss.pre_launch(None, paths=paths, prefix=str(prefix), run=g) == [] and not g.calls, "no appid: nothing")
-check(ss.pre_launch("77", paths=paths, prefix=str(tmp / "nope" / "pfx"), run=g) == [] and not g.calls
-      and any("prefix" in m for m in logs),
-      f"no prefix yet (a first launch, plan step 5): nothing, and it says why ({logs})")
+os.environ.pop("STEAM_COMPAT_DATA_PATH", None)
+logs.clear()
+check(ss.pre_launch("77", paths=paths, run=g) == [] and not g.calls and any("Proton" in m for m in logs),
+      f"a launch with no Proton prefix at all (no STEAM_COMPAT_DATA_PATH): nothing, and it says why ({logs})")
+os.environ.pop(ss.STARTED_ENV, None)
+fresh = tmp / "compatdata" / "88"
+os.environ["STEAM_COMPAT_DATA_PATH"] = str(fresh)
+g = Gogdl({str(fresh / "pfx" / "drive_c" / "users" / "steamuser" / "Documents" / "Another World"):
+           plan("download", local={"files": 0, "newest": None})})
+res = ss.pre_launch("77", paths=paths, run=g)
+check(res and res[0]["did"] == "downloaded" and len(g.real()) == 1,
+      "a FIRST launch (the prefix not created yet) still downloads: files written before Proton "
+      f"creates the prefix survive its setup (HW 2026-11-19, plan step 5) ({res})")
+os.environ.pop("STEAM_COMPAT_DATA_PATH", None)
+(home / "gogdl" / ss.TIMESTAMPS).unlink()  # the checks below start from a game never synced
 
 print("== the dry run")
 local({"progression.dat": "local"})

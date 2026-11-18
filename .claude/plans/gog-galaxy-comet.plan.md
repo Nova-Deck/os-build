@@ -414,6 +414,18 @@ installed), or on the Pocket FIT for the dummy-service title. One commit per ste
    `pfx/drive_c/users/steamuser/…` before Proton creates the prefix survives Proton's prefix
    setup. If it does not, the download runs as a first-run step (Proton creates the prefix for
    the step) instead of before the chain.
+   **It survives (HW 2026-11-19, Pocket Max, Proton CachyOS 11.0-100).** A New Beginning freshly
+   installed (appid 3663234478, no compatdata): markers written as deck in
+   `pfx/drive_c/users/steamuser/Documents/novadeck-step5/` and in the `__default` location under
+   `AppData/Local/GOG.com/...` before its first launch were intact after it, and Proton built a
+   complete prefix around them ("Upgrading prefix from None to CachyOS-11.0-100";
+   `creation_sync_guard`, `user.reg`, the user folders, its own `My Documents` link). Matches
+   Valve's `copy_pfx()`, which only adds missing files. So no first-run step: `pre_launch` now
+   syncs a first launch too (it needs only `STEAM_COMPAT_DATA_PATH`; the resolver uses the table
+   when `user.reg` is absent), which brings a new device's saves down before the game first
+   starts. Markers removed afterwards. Only CachyOS was launched; GE's shipped `copy_pfx` has the
+   same "only if missing" guards and no removal (read on the device), so it is not expected to
+   differ.
 6. **Conflict picker**: `.savepick` / `.saveanswer` spool + modal (mirror the DOS picker),
    including the dates. TDD for the backend half.
 7. **Post-exit upload** in the watcher; timestamp stored.

@@ -24,8 +24,10 @@ A download overwrites saves, so it never runs without a backup of the folder it 
 backup that fails stops that download.
 
 Before Comet: gogdl may rewrite auth.json when it fetches the game's credentials, and Comet reads
-it once at start. A prefix that does not exist yet (a first launch) is skipped: whether files
-written before Proton creates it survive is plan step 5.
+it once at start. A prefix that does not exist yet (a first launch) is synced too: the resolver
+uses the layout Proton is about to create, and files written there before Proton creates the
+prefix survive its setup (HW 2026-11-19, plan step 5: Proton's copy_pfx only adds files that are
+missing). That is what brings a new device's saves down before the game first starts.
 
 Like the rest of game-launch, nothing here may stop the game. Every gogdl call has a timeout, the
 whole sync a BUDGET, and every failure is logged and skipped.
@@ -212,8 +214,8 @@ def pre_launch(appid, paths=None, prefix=None, run=subprocess.run, choose=None, 
     if prefix is None:
         compat = os.environ.get("STEAM_COMPAT_DATA_PATH")
         prefix = os.path.join(compat, "pfx") if compat else None
-    if not prefix or not os.path.isdir(os.path.join(prefix, "drive_c")):
-        log(f"{row['token']}: no prefix yet (first launch); cloud saves not synced before it")
+    if not prefix:
+        log(f"{row['token']}: not a Proton launch (no STEAM_COMPAT_DATA_PATH); saves not synced")
         return []
     os.environ[STARTED_ENV] = str(appid)
     s = Session(appid, row, paths, prefix, run, choose, clock)

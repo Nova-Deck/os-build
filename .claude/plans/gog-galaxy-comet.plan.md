@@ -205,7 +205,14 @@ installed), or on the Pocket FIT for the dummy-service title. One commit per ste
      game in the AUTH_INFO response (`communication_service.rs:238`, `content.set_user_name`). Any
      value works, but a game showing names (leaderboards, multiplayer) shows this one, so the real
      GOG username from `userData.json` stays in the plan.
-   - **Container loopback:** HW check pending.
+   - **Container loopback, read 2026-11-18** (steam-runtime-tools d14f4cf): the game's bwrap
+     shares the host network namespace, so `127.0.0.1:9977` inside is the host's.
+     `pv_wrap_share_sockets` sets `FLATPAK_CONTEXT_SHARED_NETWORK` (`wrap-setup.c:124`). The
+     only unconditional `--unshare-net` is in `regenerate_ld_cache`, the ldconfig helper
+     (`flatpak-run.c:3009`). The conditional one in `flatpak_run_add_environment_args`
+     (`:428`) is reachable only from `flatpak_run_app`, which is under `#if 0` (`:3207-4114`).
+     The step 6 HW gate confirms it on the device: the game passing the 11 s mark needs the
+     connection.
 2. **`packages/comet`**: `prebuilt.pin` + install layout; add to `customize-base.sh`; `make
    relock`; `make verify-lock`.
 3. **GOG identity** (TDD): `user.json` fetch on login and refresh. Tests: written on login,
@@ -275,8 +282,8 @@ phase 1 shows the game runs offline anyway.
 
 ## Risks / open questions
 
-- **Container loopback to 9977**: pressure-vessel is expected to share the host network
-  namespace. Phase 1 step 1 verifies it.
+- **Container loopback to 9977**: resolved from source (phase 1 step 1). pressure-vessel shares
+  the host network namespace.
 - **gogdl's client-secret lookup for v1-only games** (`builds?generation=2`): unverified. A game
   where it fails gets no cloud sync, and the game page should say why (no silent drop).
 - **Token rotation**: gogdl may rotate the refresh token when it refreshes. Comet reads

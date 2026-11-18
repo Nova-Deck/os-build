@@ -15,6 +15,9 @@ for every installed GOG Windows entry, keyed like first-run.json and dos-targets
 
 ROOT walks this tree, which the store user owns, so the walk does not follow symlinks, and the
 info file goes through dos_targets.read_info (status.open_user_file).
+
+It also owns the dummy GalaxyCommunication service some SDK versions need: the staged files and
+the first-run step that registers it (first_run.py adds the step to every Galaxy game).
 """
 import json
 import os
@@ -25,6 +28,17 @@ from novadeck_stores import cli, dos_targets, installs, status
 
 FILENAME = "galaxy.json"
 SDK_DLLS = frozenset({"galaxy.dll", "galaxy64.dll"})
+
+# The dummy GalaxyCommunication service (plan design §7), a first-run step of every Galaxy game.
+# Staged name → shipped file. The step runs inside the game's runtime container, which shares
+# /home but not this /usr, so the files are copied into the store home and the step runs the copy.
+SERVICE_DIR = "galaxy-service"
+SERVICE_BAT = "galaxy-service.bat"
+SERVICE_FILES = {
+    "GalaxyCommunication.exe": "/usr/share/comet-dummy-service/GalaxyCommunication.exe",  # pinned
+    SERVICE_BAT: "/usr/lib/novadeck/galaxy-service.bat",  # ours (rootfs/overlay)
+}
+STAGE_TIMEOUT = 30
 
 
 def path(p):
@@ -73,6 +87,42 @@ def sync(p, registry):
     if current == wanted or (current is None and not wanted):
         return True
     return cli.write_as_user(p, path(p), json.dumps(wanted, indent=1)) == 0
+
+
+def service_dir(p):
+    return os.path.join(p["NOVADECK_STORE_HOME"], SERVICE_DIR)
+
+
+def service_step(p):
+    """The first-run step that registers the service: the staged .bat, run in its own dir."""
+    return {"argv": [os.path.join(service_dir(p), SERVICE_BAT)], "cwd": service_dir(p)}
+
+
+def _same(src, staged, uid):
+    """Does the staged copy (the store user's file) hold exactly the shipped bytes?"""
+    f = status.open_user_file(staged, uid)
+    if f is None:
+        return False
+    try:
+        with f, open(src, "rb") as s:
+            return f.read() == s.read()
+    except OSError:
+        return False
+
+
+def stage_service(p):
+    """Copy the shipped service files into the store home, as the store user, where a staged copy
+    is missing or differs (an OTA can ship a new stub). True when every staged copy is current."""
+    uid = int(p["NOVADECK_STORE_UID"])
+    for name, src in SERVICE_FILES.items():
+        staged = os.path.join(service_dir(p), name)
+        if _same(src, staged, uid):
+            continue
+        if not os.path.isfile(src):
+            return False
+        if cli._run(p, ["install", "-D", "-m", "0644", src, staged], STAGE_TIMEOUT) != 0:
+            return False
+    return True
 
 
 def read(p):

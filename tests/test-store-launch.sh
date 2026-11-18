@@ -280,6 +280,49 @@ table = first_run.build(p, registry, records)
     f"only the installed Windows GOG entry with a step is in the table, under its unsigned appid ({list(table)})")
 (ok if table and next(iter(table.values()))["id"] == "gog:1207658924:58076094395251196" else bad)(
     "and its id names the build, so an update's new support installer runs again")
+
+# The dummy GalaxyCommunication service (plan phase 2): every Galaxy-SDK game gets its step.
+svc = first_run.galaxy.service_step(p)
+gx = install("555", "setup_555.exe")
+pathlib.Path(gx, "Galaxy64.dll").write_bytes(b"MZ")
+(manifests / "555").write_text(json.dumps({"version": 2, "buildId": "77",
+    "products": [{"productId": "555", "temp_executable": "setup_555.exe"}]}))
+bare = install("666")
+pathlib.Path(bare, "bin").mkdir()
+pathlib.Path(bare, "bin", "Galaxy.dll").write_bytes(b"MZ")
+registry = {"gog:555": {"appid": 55, "platform": "windows"}, "gog:666": {"appid": 66, "platform": "windows"},
+            "gog:222": {"appid": 6, "platform": "windows"}}
+records = {"gog:555": {"path": gx}, "gog:666": {"path": bare}, "gog:222": {"path": m}}
+table = first_run.build(p, registry, records)
+e55, e66 = table.get("55", {}), table.get("66", {})
+(ok if [s["argv"][0] for s in e55.get("steps", [])] == [f"{gx}/gog-support/555/setup_555.exe", svc["argv"][0]] else bad)(
+    f"a Galaxy game runs its support installer, THEN the service step ({e55.get('steps')})")
+(ok if e55.get("id") == "gog:555:77:galaxy-service" else bad)(
+    f"its id gains :galaxy-service, so a prefix that ran the installer alone runs the set again ({e55.get('id')})")
+(ok if e66.get("steps") == [svc] and e66.get("id") == "gog:666:None:galaxy-service" else bad)(
+    f"a Galaxy game with no support installer gets the service step alone ({e66})")
+(ok if "6" not in table else bad)("a game without the SDK gets no service step")
+plain = first_run.build(p, registry, records, service=False)
+(ok if plain.get("55", {}).get("id") == "gog:555:77" and svc not in plain.get("55", {}).get("steps", [])
+     and "66" not in plain else bad)(f"service=False builds the table without it ({plain})")
+
+# sync(): the files are staged before a table naming them is written.
+first_run.installs.read_records = lambda pp: records
+written = []
+first_run.cli.write_as_user = lambda pp, path, text: (written.append(json.loads(text)), 0)[1]
+staged = []
+first_run.galaxy.stage_service = lambda pp: (staged.append(1), True)[1]
+first_run.sync(p, registry)
+(ok if staged and written and written[-1].get("66", {}).get("steps") == [svc] else bad)(
+    "sync stages the service files, then writes the table with the step")
+first_run.galaxy.stage_service = lambda pp: False
+first_run.sync(p, registry)
+(ok if written and "66" not in written[-1] and written[-1].get("55", {}).get("id") == "gog:555:77" else bad)(
+    f"files that could not be staged: the table goes WITHOUT the step, never naming a missing .bat ({written[-1] if written else None})")
+staged.clear()
+first_run.galaxy.stage_service = lambda pp: (staged.append(1), True)[1]
+first_run.sync(p, {"gog:222": registry["gog:222"]})
+(ok if not staged else bad)("a table with no Galaxy game stages nothing")
 PY
 
 echo
@@ -330,6 +373,15 @@ c = calls()
     "the outcome is recorded in the prefix, creating the compat dir when Proton has not yet")
 (ok if fr.run(launch, "123", home) is None and len(calls()) == 1 else bad)("a recorded id is done: the next launch runs nothing")
 (ok if "FEX_X87REDUCEDPRECISION" not in os.environ else bad)("the step's env never leaks into the game's")
+
+# The Galaxy service step's shape (galaxy.service_step): a staged .bat, its dir as cwd, no env.
+svc_step = {"argv": [str(home / "galaxy-service" / "galaxy-service.bat")], "cwd": str(home)}
+table({"id": "gog:1:b1:galaxy-service", "steps": [step, svc_step]})
+fr.run(launch, "123", home)
+c = calls()
+(ok if len(c) == 3 and c[2]["argv"] == ["waitforexitandrun", svc_step["argv"][0]] and c[2]["x87"] is None else bad)(
+    f"the service id reruns the set, and its .bat step runs through the chain with no env of its own ({c[1:]})")
+log.write_text(log.read_text().splitlines()[0] + "\n")  # the checks below count from the first run
 
 table({"id": "gog:1:b2", "steps": [step]})
 os.environ["FAKE_RC"] = "3"

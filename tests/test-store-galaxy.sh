@@ -11,7 +11,11 @@
 # `comet` says whether the install ships the SDK DLL; `clientId` is the Galaxy client id from the
 # game's goggame-<gid>.info (cloud saves key on it in phase 3).
 #
-# WHAT IT CANNOT PROVE: that Comet answers the game. That is the phase 1 hardware gate.
+# It also checks the copy of the dummy GalaxyCommunication service files into the store home
+# (phase 2), which the first-run step that registers the service runs from.
+#
+# WHAT IT CANNOT PROVE: that Comet answers the game, or that Proton runs the staged .bat. Those
+# are the phase 1 and phase 2 hardware gates.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -136,6 +140,46 @@ try:
     check(shortcuts.write_registry(p, registry) is True, "a failing galaxy.sync never fails the registry write")
 finally:
     galaxy.sync = real_sync
+
+# ---------------------------------------------------------------------------------------------
+print("== the dummy service: staged into the store home (plan design §7)")
+shipped = tmp / "shipped"
+shipped.mkdir()
+(shipped / "GalaxyCommunication.exe").write_bytes(b"MZ stub v1")
+(shipped / "galaxy-service.bat").write_bytes(b"@echo off\r\n")
+galaxy.SERVICE_FILES = {"GalaxyCommunication.exe": str(shipped / "GalaxyCommunication.exe"),
+                        "galaxy-service.bat": str(shipped / "galaxy-service.bat")}
+runs = []
+run_rc = [0]
+def fake_run(pp, argv, max_sec):
+    runs.append(argv)
+    if run_rc[0] == 0 and argv[:4] == ["install", "-D", "-m", "0644"]:
+        pathlib.Path(argv[5]).parent.mkdir(parents=True, exist_ok=True)
+        pathlib.Path(argv[5]).write_bytes(pathlib.Path(argv[4]).read_bytes())
+    return run_rc[0]
+galaxy.cli._run = fake_run
+staged = home / "galaxy-service"
+check(galaxy.stage_service(p) is True, "staging reports the copies current")
+check((staged / "GalaxyCommunication.exe").read_bytes() == b"MZ stub v1"
+      and (staged / "galaxy-service.bat").read_bytes() == b"@echo off\r\n",
+      "both files land in <store home>/galaxy-service, byte for byte")
+check(all(a[:4] == ["install", "-D", "-m", "0644"] for a in runs) and len(runs) == 2,
+      f"each copy is one `install -D -m 0644`, run as the store user ({runs})")
+runs.clear()
+check(galaxy.stage_service(p) is True and not runs, "copies that match are not copied again")
+(shipped / "GalaxyCommunication.exe").write_bytes(b"MZ stub v2")
+check(galaxy.stage_service(p) is True and len(runs) == 1
+      and (staged / "GalaxyCommunication.exe").read_bytes() == b"MZ stub v2",
+      f"a shipped file that changed (an OTA) is copied again, and only that one ({runs})")
+(shipped / "GalaxyCommunication.exe").write_bytes(b"MZ stub v3")
+run_rc[0] = 1
+check(galaxy.stage_service(p) is False, "a copy that fails is reported, so no step names it")
+run_rc[0] = 0
+(shipped / "GalaxyCommunication.exe").unlink()
+check(galaxy.stage_service(p) is False, "a shipped file that is missing is reported")
+step = galaxy.service_step(p)
+check(step == {"argv": [str(staged / "galaxy-service.bat")], "cwd": str(staged)},
+      f"the step runs the STAGED .bat from its own dir, which %~dp0 finds the stub in ({step})")
 PY
 )"
 rc=$?

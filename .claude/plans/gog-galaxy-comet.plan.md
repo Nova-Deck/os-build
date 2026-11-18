@@ -222,7 +222,9 @@ installed), or on the Pocket FIT for the dummy-service title. One commit per ste
    step 5, where the launch reads it.
 4. **`galaxy.py` sidecar** (TDD, `tests/test-store-galaxy.sh`): SDK detection (case, nested dir,
    absent); `clientId` from `goggame-<id>.info`; rows follow registry appids across churn;
-   `write_registry` regenerates it.
+   `write_registry` regenerates it. **Done.** Rows are `{token, gid, clientId, comet}` for every
+   installed GOG Windows entry; `cloud` joins them in phase 3 step 2. The walk does not follow
+   symlinks (root walks a user-owned tree).
 5. **`novadeck_gogsession.py` Comet start + watcher** (TDD, extends `test-store-launch.sh`):
    - no row → no-op;
    - row with `comet` → the `systemd-run` argv (stubbed) carries SIGINT and the XDG env, and no

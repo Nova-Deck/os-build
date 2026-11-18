@@ -33,7 +33,7 @@ import os
 import re
 import shlex
 
-from novadeck_stores import cli, dos_targets, first_run, launch, status
+from novadeck_stores import cli, dos_targets, first_run, galaxy, launch, status
 
 # The gid grammar — still enforced so a bad id never becomes a registry key or a path component.
 TOKEN = re.compile(r"^(epic|gog):[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -188,6 +188,11 @@ def write_registry(p, rows):
         # The DOSBox targets game-launch swaps in under Boxtron are keyed by appid the same way.
         try:
             dos_targets.sync(p, rows)
+        except Exception:  # noqa: BLE001 - same contract as first_run above
+            pass
+        # Which games game-launch starts Comet for (galaxy.py), keyed by appid the same way.
+        try:
+            galaxy.sync(p, rows)
         except Exception:  # noqa: BLE001 - same contract as first_run above
             pass
     return ok

@@ -42,7 +42,7 @@ def path(p):
     return os.path.join(p["NOVADECK_STORE_HOME"], FILENAME)
 
 
-def _read_info(info_path, uid):
+def read_info(info_path, uid):
     f = status.open_user_file(info_path, uid)
     if f is None:
         return None
@@ -106,7 +106,7 @@ def gog_variants(install, gid, uid):
     """Every DOSBox command line a GOG install offers, root build first. [] for a game that is not
     DOSBox-based, or anything unreadable — never a raise."""
     found = []
-    root = _read_info(os.path.join(install, f"goggame-{gid}.info"), uid)
+    root = read_info(os.path.join(install, f"goggame-{gid}.info"), uid)
     for task in _dosbox_tasks(root or {}):
         v = _variant(install, task, None)
         if v:
@@ -114,7 +114,7 @@ def gog_variants(install, gid, uid):
     nested = []
     for directory in _nested_dirs(install):
         for info_path in _nested_infos(directory):
-            tasks = _dosbox_tasks(_read_info(info_path, uid) or {})
+            tasks = _dosbox_tasks(read_info(info_path, uid) or {})
             v = _variant(directory, tasks[0], os.path.basename(directory)) if tasks else None
             if v:
                 nested.append(v)

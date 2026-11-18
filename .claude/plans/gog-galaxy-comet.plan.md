@@ -186,13 +186,34 @@ The patch is preferred: one implementation of the rules, not two.
 
 ### 7. Dummy Galaxy service (phase 2)
 
-These are first-run steps for games where Comet is on, run through the existing Proton chain:
-- copy `GalaxyCommunication.exe` to `C:\ProgramData\GOG.com\Galaxy\redists\`;
-- `sc create GalaxyCommunication binpath=…`;
-- `reg add HKLM\SOFTWARE\WOW6432Node\GOG.com\GalaxyClient\paths /v client /d "C:\Program Files\GOG Galaxy"`.
+Some Galaxy SDK versions wake a `GalaxyCommunication` Windows service through the SCM and fail
+without it (Comet's list: Cuphead, DOOM 3 BFG, Homeworld DoK, KCD). We own none of them.
+**Decided 2026-11-18: ship it anyway, for every Galaxy-SDK game** (`comet: true`). This is what
+others do (checked 2026-11-18):
+- **Heroic** (`launcher.ts:899-947`) does this for EVERY GOG game before each launch, unless
+  Comet support is turned off. It copies the stub to
+  `C:\ProgramData\GOG.com\Galaxy\redists\GalaxyCommunication.exe` and runs `sc create` once per
+  prefix, then `reg add HKLM\SOFTWARE\WOW6432Node\GOG.com\GalaxyClient\paths /v client /d
+  "C:\Program Files\GOG Galaxy"` every launch. Failures are logged; the launch goes on.
+- **unifideck** (`fixes/galaxy_stub.py`, 2e9981d2) only copies the stub into every GOG prefix:
+  no `sc create`, no key.
+- Upstream's `install-dummy-service.bat` also runs `update-permissions.exe`, which widens the
+  service's DACL. Heroic skips it (Wine does not enforce service DACLs), and so do we.
 
-This is Heroic's sequence (`launcher.ts:895-943`). It lands only when a title that needs it is
-tested, not speculatively.
+How it lands here:
+- **Pin** `dummy-service.zip` from the same Comet release, `kind: zip`.
+- **One `.bat` of ours** does the three actions: copy the stub, `sc create GalaxyCommunication
+  binpath= …` unless `sc query` finds it, `reg add`. Wine's `sc` takes `binpath=X` and
+  `binpath= X` alike (`programs/sc/sc.c` `parse_string_param`).
+- **Staged into the store home.** A first-run step runs inside the game's SLR container, where
+  the host's `/usr` is not `/usr`. The support installers work because they sit under `/home`. So
+  the plugin copies the stub and the `.bat` to `$STORE_HOME/galaxy-service/` as the store user
+  whenever it writes `first-run.json`, and the step runs the staged `.bat`.
+- **A first-run step** for every installed Windows GOG entry with the Galaxy SDK, after its
+  support installers. The entry id gains `:galaxy-service`, so a prefix that already ran its
+  support installers runs the set again with the service step in it.
+- Whether `proton run <host .bat>` works the way `wine <.bat>` does (Comet's README runs it that
+  way through Heroic) is unverified until the HW gate.
 
 ## Steps
 
@@ -272,11 +293,19 @@ installed), or on the Pocket FIT for the dummy-service title. One commit per ste
    `Uploaded achievements` 21:37:15, before any new unlock), and it shows on the GOG profile.
    **Phase 1 HW gate: PASSED.**
 
-### Phase 2 — dummy Galaxy service (only with a title that needs it)
+### Phase 2 — dummy Galaxy service (for every Galaxy-SDK game, design §7)
 
-1. First-run steps from design §7 (TDD in `test-store-launch.sh` / first-run suite).
-2. **HW gate** on one of Comet's listed titles we own (Cuphead, DOOM 3 BFG, Homeworld DoK, KCD).
-   If none is owned, the phase stays parked with this note.
+1. **Pin** `packages/comet-dummy-service/prebuilt.pin` (`kind: zip`) + relock; the lock diff is
+   that one row.
+2. **The `.bat`, the staging and the step** (TDD in `test-store-galaxy.sh` and the first-run
+   checks in `test-store-launch.sh`): a Galaxy game gets the step and the `:galaxy-service` id; a
+   non-Galaxy game does not; staging copies only when the staged file differs; a failed stage
+   writes no step that would run a missing `.bat`.
+3. **HW gate** (we own none of the four listed titles, so Another World stands in):
+   - the step's result is 0 in the prefix's `novadeck-first-run.json`;
+   - the prefix's `system.reg` holds `Services\GalaxyCommunication` (its `ImagePath` the
+     redists path) and `GalaxyClient\paths` `client`;
+   - Another World still runs, and Comet still logs its client and an unlock.
 
 ### Phase 3 — cloud saves
 

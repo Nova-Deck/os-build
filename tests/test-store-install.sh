@@ -83,6 +83,37 @@ mac = [t for t in titles if t["id"] == "3"]
 (ok if [t["title"] for t in titles] == sorted(t["title"] for t in titles) else bad)(
     "titles come back sorted by name")
 
+# -- the GOG account name, kept for Comet's --username (the name a Galaxy game shows) --
+import os, tempfile
+udir = tempfile.mkdtemp()
+upath = os.path.join(udir, "user.json")
+ucalls = []
+def user_get(url):
+    ucalls.append(url)
+    return {"username": "Loki", "galaxyUserId": "4711", "email": "never@stored"}
+(ok if helper.record_user(user_get, upath) is True else bad)("record_user reports a written name")
+(ok if ucalls == ["https://embed.gog.com/userData.json"] else bad)(
+    f"the name comes from embed.gog.com/userData.json ({ucalls})")
+stored = json.load(open(upath))
+(ok if stored == {"username": "Loki"} else bad)(
+    f"user.json holds the username and nothing else from the account ({stored})")
+(ok if os.listdir(udir) == ["user.json"] else bad)(
+    f"the write leaves no temp file behind ({os.listdir(udir)})")
+
+def renamed_get(url):
+    return {"username": "Loki2"}
+helper.record_user(renamed_get, upath)
+(ok if json.load(open(upath)) == {"username": "Loki2"} else bad)("a later listing refreshes the name")
+
+def failing_get(url):
+    raise OSError("offline")
+(ok if helper.record_user(failing_get, upath) is False else bad)("a failed fetch reports False")
+(ok if json.load(open(upath)) == {"username": "Loki2"} else bad)("a failed fetch keeps the stored name")
+for answer in ({}, {"username": ""}, {"username": None}, ["not", "a", "dict"]):
+    helper.record_user(lambda url, a=answer: a, upath)
+(ok if json.load(open(upath)) == {"username": "Loki2"} else bad)(
+    "an answer with no usable username keeps the stored name")
+
 # -- Epic: legendary list --json --
 from novadeck_stores import cli, library
 lgd = json.dumps([
@@ -118,10 +149,12 @@ by = {x["id"]: x for x in t}
 
 # -- which argv lists each store, as whom, and that stdout is read --
 p = {"NOVADECK_STORE_USER": "deck", "LEGENDARY_CONFIG_PATH": "/h/legendary",
-     "NOVADECK_GOGDL_AUTH": "/h/gogdl/auth.json", "GOGDL_CONFIG_PATH": "/h/gogdl"}
+     "NOVADECK_GOGDL_AUTH": "/h/gogdl/auth.json", "GOGDL_CONFIG_PATH": "/h/gogdl",
+     "NOVADECK_GOG_USER": "/h/gogdl/user.json"}
 (ok if library.list_argv("epic", p) == ["legendary", "list", "--json"] else bad)("Epic lists with legendary list --json")
-(ok if library.list_argv("gog", p) == ["/usr/lib/novadeck/store-gog-owned", "/h/gogdl/auth.json"] else bad)(
-    "GOG lists through the helper, handed the declared auth path")
+(ok if library.list_argv("gog", p) == ["/usr/lib/novadeck/store-gog-owned", "/h/gogdl/auth.json",
+                                       "/h/gogdl/user.json"] else bad)(
+    "GOG lists through the helper, handed the declared auth and user paths")
 
 seen = {}
 real_run = subprocess.run

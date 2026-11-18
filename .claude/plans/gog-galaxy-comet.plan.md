@@ -103,10 +103,11 @@ nothing. If we ever patch Comet, switch to a source build then.
 
 ### 2. GOG identity in the plugin (`connect.py`, `store-env`)
 
-After login, and on each library refresh, fetch `embed.gog.com/userData.json` with the access
-token and store `{username, galaxyUserId}` in `$STORE_HOME/gogdl/user.json`. Comet needs
-`--username`. Step 1 of phase 1 checks what Comet uses it for; if any non-empty value works, we
-pass the stored one anyway and the fetch stays.
+`store-gog-owned` (run as the store user after every sign-in and library sync) fetches
+`embed.gog.com/userData.json` through gogdl's session and writes `{username}` to
+`NOVADECK_GOG_USER` (`$STORE_HOME/gogdl/user.json`, declared in `store-env`). Root never holds
+the token. `galaxyUserId` is not stored: nothing uses it. A failed fetch keeps the stored name and
+never fails the listing.
 
 Credentials reach Comet without touching argv: `/proc/<pid>/cmdline` is world-readable. A
 private dir `$STORE_HOME/comet/config/heroic/gog_store/auth.json` is a **symlink** to
@@ -216,8 +217,9 @@ installed), or on the Pocket FIT for the dummy-service title. One commit per ste
 2. **`packages/comet`**: `prebuilt.pin` + install layout; add to `customize-base.sh`; `make
    relock`; `make verify-lock`.
 3. **GOG identity** (TDD): `user.json` fetch on login and refresh. Tests: written on login,
-   refreshed on refresh, a failed fetch keeps the old file, no username → Comet is not started
-   (logged, launch proceeds).
+   refreshed on refresh, a failed fetch keeps the old file. **Done** (`test-store-install.sh`,
+   `test-store-cli.sh`). "No username → Comet is not started (logged, launch proceeds)" moves to
+   step 5, where the launch reads it.
 4. **`galaxy.py` sidecar** (TDD, `tests/test-store-galaxy.sh`): SDK detection (case, nested dir,
    absent); `clientId` from `goggame-<id>.info`; rows follow registry appids across churn;
    `write_registry` regenerates it.

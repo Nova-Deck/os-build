@@ -179,7 +179,7 @@ else
   # The host has no deck user, so its uid is handed in; the lookup itself is checked below.
   env_out="$(NOVADECK_STORE_UID=1000 bash "$STORE_ENV" 2>/dev/null)"
   for var in NOVADECK_STORE_USER NOVADECK_STORE_UID NOVADECK_STORE_HOME LEGENDARY_CONFIG_PATH \
-             NOVADECK_GOGDL_AUTH GOGDL_CONFIG_PATH NOVADECK_STORE_INSTALLS; do
+             NOVADECK_GOGDL_AUTH GOGDL_CONFIG_PATH NOVADECK_STORE_INSTALLS NOVADECK_GOG_USER; do
     printf '%s\n' "$env_out" | grep -q "^${var}=" \
       && ok "store-env emits $var" \
       || bad "store-env does not emit $var — a caller would fall back to the CLI's own default"

@@ -149,11 +149,20 @@ is then newer than the stored timestamp.
 
 ### 5. Save paths (`/usr/lib/novadeck/novadeck_savepaths.py`, launch side only)
 
-A pure function: location string + install dir + prefix → host path. `<?INSTALL?>` is the
-install dir. The others map to `pfx/drive_c/users/steamuser/{AppData/Local, AppData/LocalLow,
-AppData/Roaming, Documents, Saved Games}`. `%VAR%` gets the same table. Heroic shells out to
-`winepath` inside the prefix; a Proton prefix's layout is fixed, so a table is testable offline
-and needs no Wine run.
+Location string + install dir + prefix → host path. `<?INSTALL?>` is the install dir. Heroic
+shells out to `winepath` inside the prefix; that would start Proton under FEX before every sync.
+So the answer comes from the data Wine itself reads, the prefix's `user.reg` (decided
+2026-11-18, after "every Proton prefix has the same layout" turned out to be an assumption):
+- tokens from `User Shell Folders` (Personal, Local AppData, AppData, and the Saved Games and
+  LocalLow known-folder ids), which an installer or winecfg may redirect;
+- `%USERPROFILE%`, `%APPDATA%`, `%LOCALAPPDATA%` from `Volatile Environment` (Wine rewrites it on
+  every start), so the user name is the prefix's own.
+The table (`drive_c/users/steamuser/{Documents, Saved Games, AppData/Local, AppData/LocalLow,
+AppData/Roaming}`) is only the fallback for a prefix not created yet. Both shipped Protons carry
+Valve's `migrate_user_paths()`, which moves XP-era names to these, and Another World's prefix
+matched the table value for value. `%ProgramData%`/`%PUBLIC%` stay table-only (system.reg).
+Containment is checked on the REAL path as well as lexically: winecfg can link Documents to the
+Linux home, where a download would delete the user's own files.
 
 Only the launch side resolves (changed 2026-11-18 from "plugin module, mirrored into the launch
 helper"): the pre-launch and post-exit syncs run in `game-launch`, where
@@ -352,8 +361,9 @@ installed), or on the Pocket FIT for the dummy-service title. One commit per ste
    `__default`; cache per `clientId`; the toggle persists per token.
 3. **`save_paths`** (TDD): every `<?VAR?>` token and `%VAR%`, case, a location that resolves
    outside the prefix or install is refused.
-   **Done** (`novadeck_savepaths.py`, `tests/test-store-savepaths.sh`, 23 checks; Another World's
-   real `<?DOCUMENTS?>/Another World` is one of them).
+   **Done** (`novadeck_savepaths.py`, `tests/test-store-savepaths.sh`, 31 checks; Another World's
+   real `<?DOCUMENTS?>/Another World` is one of them). Reads the prefix's `user.reg`, falls back
+   to the table, refuses symlink escapes; on HW every folder came from the real registry.
 4. **Pre-launch sync + backups** (TDD, gogdl stubbed): each row of design §6. Backup rotation.
    Timeout → launch proceeds. Prefix missing (first launch): see step 5.
 5. **First launch with no prefix**: decide by test on HW whether writing into

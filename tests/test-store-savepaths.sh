@@ -88,6 +88,55 @@ resolves("<?DOCUMENTS?>/NEW GAME", user / "Documents" / "NEW GAME", "a folder th
 (user / "Documents" / "Another World" / "Saves").mkdir()
 resolves("<?documents?>/ANOTHER WORLD/saves", user / "Documents" / "Another World" / "Saves",
          "tokens match in any case, and every existing level is matched")
+check(not (prefix / "user.reg").exists(),
+      "every check above ran with NO user.reg: a prefix Proton has not created yet uses the table")
+
+print("== the prefix's own registry (user.reg), what Wine itself reads")
+# The shape of a real Proton user.reg (Another World's prefix, HW 2026-11-18), with redirects.
+(prefix / "user.reg").write_text(
+    'WINE REGISTRY Version 2\n'
+    ';; All keys relative to REGISTRY\\\\User\\\\S-1-5-21-0-0-0-1000\n'
+    '\n'
+    '[Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Explorer\\\\Shell Folders] 1795040178\n'
+    '"Personal"="C:\\\\wrong\\\\place"\n'
+    '\n'
+    '[Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Explorer\\\\User Shell Folders] 1795040178\n'
+    '#time=1dd77aa6eec94d2\n'
+    '"AppData"=str(2):"%USERPROFILE%\\\\AppData\\\\Roaming"\n'
+    '"Local AppData"=str(2):"%USERPROFILE%\\\\AppData\\\\Local"\n'
+    '"Personal"="C:\\\\users\\\\gamer\\\\My Docs \\x00e9"\n'
+    '"{4C5C32FF-BB9D-43B0-B5B4-2D72E54EAAA4}"=str(2):"%USERPROFILE%\\\\Saved Games"\n'
+    '"{A520A1A4-1780-4FF6-BD18-167343C5AF16}"=str(2):"Z:\\\\home\\\\deck\\\\LocalLow"\n'
+    '\n'
+    '[Volatile Environment] 1795040175\n'
+    '"APPDATA"="C:\\\\users\\\\gamer\\\\AppData\\\\Roaming"\n'
+    '"LOCALAPPDATA"="C:\\\\users\\\\gamer\\\\AppData\\\\Local"\n'
+    '"USERPROFILE"="C:\\\\users\\\\gamer"\n')
+gamer = prefix / "drive_c" / "users" / "gamer"
+resolves("<?DOCUMENTS?>/Another World", gamer / "My Docs \u00e9" / "Another World",
+         "a redirected Documents follows the registry, its \\x escape decoded")
+resolves("<?SAVED_GAMES?>/Game", gamer / "Saved Games" / "Game",
+         "%USERPROFILE% inside a folder value is the prefix's own user, not an assumed steamuser")
+resolves("%LocalAppData%/Game", gamer / "AppData" / "Local" / "Game", "%LOCALAPPDATA% is Wine's own value")
+refused("<?APPLICATION_DATA_LOCAL_LOW?>/Game", "Z:",
+        "a folder the registry points at another drive (Z: is the Linux root) is refused")
+
+print("== symlinks: containment is checked on the real path")
+p2 = tmp / "compatdata" / "456" / "pfx"
+u2 = p2 / "drive_c" / "users" / "steamuser"
+u2.mkdir(parents=True)
+home_docs = tmp / "home" / "Documents"
+(home_docs / "Another World").mkdir(parents=True)
+(u2 / "Documents").symlink_to(home_docs)  # winecfg's "link to the Linux home folders"
+(u2 / "AppData" / "Roaming").mkdir(parents=True)
+(u2 / "Application Data").symlink_to("./AppData/Roaming")  # what Proton itself creates
+for loc, m in (("<?DOCUMENTS?>/Another World", "a save folder under a Documents linked to the Linux home"),
+               ("<?DOCUMENTS?>", "that Documents itself")):
+    path, reason = sp.resolve(loc, str(install), str(p2))
+    check(path is None and reason and "outside" in reason, f"{m} is refused: a download deletes there ({reason})")
+path, reason = sp.resolve("%USERPROFILE%/Application Data/Game", str(install), str(p2))
+check(path == str(u2 / "Application Data" / "Game") and reason is None,
+      f"a symlink that stays inside the prefix (Proton's own) is fine ({path}, {reason})")
 PY
 )"
 rc=$?

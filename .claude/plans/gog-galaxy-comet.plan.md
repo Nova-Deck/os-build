@@ -365,6 +365,12 @@ installed), or on the Pocket FIT for the dummy-service title. One commit per ste
    the sync prints: an earlier one (say, taken before the call) would read the just-uploaded
    files as changed in the cloud. That timestamp is not stored anywhere yet; step 4 starts this
    game from `--ts 0` or from this value.
+   **After a short play session** (user, same day): dry run at that timestamp → `upload`, both
+   files in `updated_local`, `updated_cloud` empty. `progression.dat` was written mid-game (same
+   46 bytes, new mtime) and `AnotherWorldUserDef.xml` at quit. So this game rewrites its
+   settings file EVERY session: any session counts as a local change, and two devices that both
+   played since the last sync always show a conflict, even if only one made progress. The
+   picker's dates (each side's `newest`) are what tell the user which is which.
 2. **remote-config fetch + `cloud` in `galaxy.json`** (TDD): enabled/disabled/no locations →
    `__default`; cache per `clientId`; the toggle persists per token.
 3. **`save_paths`** (TDD): every `<?VAR?>` token and `%VAR%`, case, a location that resolves

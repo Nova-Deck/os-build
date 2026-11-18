@@ -5,13 +5,17 @@ ship no client, so without Comet answering there the sign-in never completes, an
 20th Anniversary dies at its first achievement unlock. game-launch starts Comet around a launch,
 and a launch knows only its appid, so this module writes `<store home>/galaxy.json`:
 
-    unsigned appid → {token, gid, clientId, comet}
+    unsigned appid → {token, gid, clientId, comet, install, cloud}
 
 for every installed GOG Windows entry, keyed like first-run.json and dos-targets.json.
   - `comet`: the install ships the SDK DLL (Galaxy.dll / Galaxy64.dll, any case, anywhere in
     the tree). This selects games, it does not guard: a game without the SDK never calls 9977,
     so starting Comet for it would only cost a process.
   - `clientId`: the Galaxy client id from goggame-<gid>.info, or None. Cloud saves key on it.
+  - `install`: the install folder (`<?INSTALL?>` in a save location).
+  - `cloud`: {supported, enabled, locations} from GOG's config (cloud_config.py), `enabled` also
+    needing the user's per-game switch; None while there is none. The launch side's pre-launch
+    sync reads it (/usr/lib/novadeck/novadeck_savesync.py).
 
 ROOT walks this tree, which the store user owns, so the walk does not follow symlinks, and the
 info file goes through dos_targets.read_info (status.open_user_file).
@@ -24,7 +28,7 @@ import os
 
 # dos_targets as a MODULE, not `from ... import read_info`: dos_targets → install_requests →
 # shortcuts → galaxy is an import cycle, and a name import fails on the half-initialised module.
-from novadeck_stores import cli, dos_targets, installs, status
+from novadeck_stores import cli, cloud_config, dos_targets, installs, status
 
 FILENAME = "galaxy.json"
 SDK_DLLS = frozenset({"galaxy.dll", "galaxy64.dll"})
@@ -75,7 +79,22 @@ def build(registry, records, uid):
         install = rec["path"]
         out[str(row["appid"] & 0xFFFFFFFF)] = {
             "token": token, "gid": gid, "clientId": client_id(install, gid, uid),
-            "comet": has_galaxy_sdk(install)}
+            "comet": has_galaxy_sdk(install), "install": install}
+    return out
+
+
+def attach_cloud(rows, configs, toggles):
+    """New rows, each with `cloud`: {supported, enabled, locations} from GOG's config for its
+    clientId, `enabled` also needing the user's switch (absent = on); None while there is no config
+    (no clientId, offline, not fetched yet), which the launch side skips."""
+    out = {}
+    for appid, row in rows.items():
+        config = configs.get(row.get("clientId"))
+        cloud = None if config is None else {
+            "supported": config["supported"],
+            "enabled": config["supported"] and toggles.get(row["token"], True),
+            "locations": config["locations"] if config["supported"] else []}
+        out[appid] = {**row, "cloud": cloud}
     return out
 
 
@@ -83,7 +102,9 @@ def sync(p, registry):
     """Rewrite galaxy.json from the registry when it changed. True when the file is current."""
     uid = int(p["NOVADECK_STORE_UID"])
     current = status.read_user_json(path(p), uid)
-    wanted = build(registry, installs.read_records(p), uid)
+    rows = build(registry, installs.read_records(p), uid)
+    configs = cloud_config.configs(p, [r["clientId"] for r in rows.values()])
+    wanted = attach_cloud(rows, configs, cloud_config.toggles(p))
     if current == wanted or (current is None and not wanted):
         return True
     return cli.write_as_user(p, path(p), json.dumps(wanted, indent=1)) == 0

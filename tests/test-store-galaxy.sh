@@ -90,9 +90,10 @@ key = str(-123456 & 0xFFFFFFFF)
 check(sorted(built) == sorted([key, "222"]),
       f"every installed GOG Windows entry gets a row, keyed by UNSIGNED appid ({sorted(built)})")
 check(built.get(key) == {"token": "gog:1207660413", "gid": "1207660413",
-                         "clientId": "49843177965810898", "comet": True},
-      f"a Galaxy game's row: token, gid, clientId, comet ({built.get(key)})")
-check(built.get("222") == {"token": "gog:1", "gid": "1", "clientId": None, "comet": False},
+                         "clientId": "49843177965810898", "comet": True, "install": str(unity)},
+      f"a Galaxy game's row: token, gid, clientId, comet, install ({built.get(key)})")
+check(built.get("222") == {"token": "gog:1", "gid": "1", "clientId": None, "comet": False,
+                           "install": str(plain)},
       f"a game without the SDK is recorded with comet False ({built.get('222')})")
 
 churned = {**registry, "gog:1207660413": {**registry["gog:1207660413"], "appid": 777}}
@@ -100,21 +101,100 @@ check("777" in galaxy.build(churned, records, uid) and key not in galaxy.build(c
       "the row follows the registry's appid when the shortcut is re-created")
 
 # ---------------------------------------------------------------------------------------------
-print("== sync")
+print("== GOG's cloud-save config (remote-config), per clientId")
+from novadeck_stores import cloud_config as cc
+AW_CONFIG = {"content": {"Windows": {"cloudStorage": {"enabled": True, "locations": [
+    {"name": "saves", "location": "<?DOCUMENTS?>/Another World"}]}}}}  # the real answer, HW 2026-11-18
+check(cc.parse(AW_CONFIG, "4984") == {"supported": True, "locations": [
+          {"name": "saves", "location": "<?DOCUMENTS?>/Another World"}]},
+      "Another World's real config: supported, one location")
+check(cc.parse({"content": {"Windows": {"cloudStorage": {"enabled": True, "locations": []}}}}, "4984")
+      == {"supported": True, "locations": [{"name": "__default",
+          "location": "%LocalAppData%/GOG.com/Galaxy/Applications/4984/Storage/Shared/Files"}]},
+      "supported with no location: Heroic's __default under the client's Galaxy storage")
+check(cc.parse({"content": {"Windows": {"cloudStorage": {"enabled": False, "locations": []}}}}, "4984")
+      == {"supported": False, "locations": []}, "GOG says no cloud saves: unsupported")
+check(cc.parse({"content": {"MacOS": {}}}, "4984") == {"supported": False, "locations": []},
+      "no Windows section: unsupported")
+check(cc.parse({"content": {"Windows": {"cloudStorage": {"enabled": True, "locations": [
+          {"name": 5, "location": "x"}, {"name": "ok", "location": "<?INSTALL?>/s"}]}}}}, "4984")
+      == {"supported": True, "locations": [{"name": "ok", "location": "<?INSTALL?>/s"}]},
+      "a malformed location is dropped, the rest kept")
+check(cc.parse("<html>", "4984") is None and cc.parse({"nope": 1}, "4984") is None,
+      "an answer that is not GOG's shape is no answer (retried later), not 'unsupported'")
+
 home = tmp / "store-home"
 home.mkdir()
-inst = home / "installs.json"
-inst.write_text(json.dumps(records))
-p = {"NOVADECK_STORE_HOME": str(home), "NOVADECK_STORE_UID": str(uid), "NOVADECK_STORE_USER": "deck",
-     "NOVADECK_STORE_INSTALLS": str(inst)}
 writes = []
 def direct_write(pp, path, text):
     writes.append(path)
     pathlib.Path(path).write_text(text)
     return 0
 galaxy.cli.write_as_user = direct_write
+cc.cli.write_as_user = direct_write
+pc = {"NOVADECK_STORE_HOME": str(home), "NOVADECK_STORE_UID": str(uid), "NOVADECK_STORE_USER": "deck"}
+fetched = []
+answers = {"4984": AW_CONFIG}
+def fake_fetch(url):
+    fetched.append(url)
+    cid = url.split("/clients/")[1].split("?")[0]
+    if cid not in answers:
+        raise OSError("offline")
+    return answers[cid]
+now = [1795100000.0]
+cfg = cc.configs(pc, ["4984"], fetch=fake_fetch, clock=lambda: now[0])
+check(fetched == ["https://remote-config.gog.com/components/galaxy_client/clients/4984?component_version=2.0.45"],
+      f"fetched from Heroic's endpoint ({fetched})")
+check(cfg == {"4984": cc.parse(AW_CONFIG, "4984")}, "and returned parsed")
+check(json.loads((home / cc.CACHE).read_text())["4984"]["fetched"] == now[0], "and cached, with its fetch time")
+fetched.clear()
+check(cc.configs(pc, ["4984"], fetch=fake_fetch, clock=lambda: now[0] + 3600) == cfg and not fetched,
+      "a fresh cache entry is used without asking GOG again")
+cfg = cc.configs(pc, ["777"], fetch=fake_fetch, clock=lambda: now[0])
+check(cfg == {} and len(fetched) == 1, "a failed fetch (offline): no config, nothing cached")
+check(cc.configs(pc, ["777"], fetch=fake_fetch, clock=lambda: now[0] + 60) == {} and len(fetched) == 1,
+      "and it is not retried within RETRY_AFTER, so an offline library sync is not slowed per game")
+cc.configs(pc, ["777"], fetch=fake_fetch, clock=lambda: now[0] + cc.RETRY_AFTER + 1)
+check(len(fetched) == 2, "after RETRY_AFTER it is tried again")
+fetched.clear()
+answers.clear()
+stale = now[0] + cc.MAX_AGE + 1
+check(cc.configs(pc, ["4984"], fetch=fake_fetch, clock=lambda: stale) == {"4984": cc.parse(AW_CONFIG, "4984")}
+      and len(fetched) == 1, "a stale entry is refetched, and kept when the refetch fails")
+check(cc.configs(pc, ["../x", ""], fetch=fake_fetch, clock=lambda: stale) == {} and len(fetched) == 1,
+      "a clientId that is not all digits never reaches a URL")
+
+check(cc.toggles(pc) == {}, "no toggle file: every game on (the user's default, 2026-11-17)")
+(home / cc.TOGGLES).write_text(json.dumps({"gog:1207660413": False, "gog:x": "no"}))
+check(cc.toggles(pc) == {"gog:1207660413": False}, "a token switched off is off; a non-boolean is ignored")
+(home / cc.TOGGLES).unlink()
+
+rows = {key: dict(built[key]), "222": dict(built["222"])}
+rows[key]["clientId"] = "4984"
+with_cloud = galaxy.attach_cloud(rows, {"4984": cc.parse(AW_CONFIG, "4984")}, {})
+check(with_cloud[key]["cloud"] == {"supported": True, "enabled": True, "locations": [
+          {"name": "saves", "location": "<?DOCUMENTS?>/Another World"}]},
+      f"a game GOG syncs: cloud supported and enabled, with its locations ({with_cloud[key].get('cloud')})")
+check(with_cloud["222"]["cloud"] is None, "no clientId or no config yet: cloud None (step 4 skips it)")
+off = galaxy.attach_cloud(rows, {"4984": cc.parse(AW_CONFIG, "4984")}, {"gog:1207660413": False})
+check(off[key]["cloud"]["supported"] is True and off[key]["cloud"]["enabled"] is False,
+      "switched off by the user: still supported, not enabled")
+check("cloud" not in rows[key], "attach_cloud returns new rows; the built ones are untouched")
+
+print("== sync")
+inst = home / "installs.json"
+inst.write_text(json.dumps(records))
+p = {**pc, "NOVADECK_STORE_INSTALLS": str(inst)}
+(unity / "goggame-1207660413.info").write_text(json.dumps({"clientId": "4984", "gameId": "1207660413"}))
+answers["4984"] = AW_CONFIG
+(home / cc.CACHE).unlink()
+cc._failed.clear()  # the checks above left a failure stamped in the future of the real clock
+galaxy.cloud_config.fetch_json = fake_fetch
+built = galaxy.attach_cloud(galaxy.build(registry, records, uid),
+                            {"4984": cc.parse(AW_CONFIG, "4984")}, {})
 check(galaxy.sync(p, registry) is True, "sync reports the file current")
-check(json.loads((home / galaxy.FILENAME).read_text()) == built, "sync writes the built table to galaxy.json")
+check(json.loads((home / galaxy.FILENAME).read_text()) == built,
+      "sync writes the built table WITH each game's cloud config to galaxy.json")
 n = len(writes)
 galaxy.sync(p, registry)
 check(len(writes) == n, "an unchanged table is not rewritten")

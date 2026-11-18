@@ -373,6 +373,19 @@ installed), or on the Pocket FIT for the dummy-service title. One commit per ste
    picker's dates (each side's `newest`) are what tell the user which is which.
 2. **remote-config fetch + `cloud` in `galaxy.json`** (TDD): enabled/disabled/no locations →
    `__default`; cache per `clientId`; the toggle persists per token.
+   **Done** (`py_modules/novadeck_stores/cloud_config.py`; `galaxy.py` `install` + `attach_cloud`;
+   `tests/test-store-galaxy.sh` now 49 checks). Rows are
+   `{token, gid, clientId, comet, install, cloud: {supported, enabled, locations} | None}`.
+   Heroic's endpoint and shape; cache `<store home>/gog-cloud-config.json` per clientId, refetched
+   after `MAX_AGE` 7 days and kept if that fails; a failed fetch caches nothing and is not retried
+   for `RETRY_AFTER` 10 min (this process), so an offline sync does not wait per game; 5 s
+   timeout, TLS through `artwork.tls_context` (the named CA bundle). The user's switch is
+   `<store home>/cloud-saves.json` (token → bool, absent = on); step 8 writes it. Every caller
+   of `write_registry` (which runs `galaxy.sync`) is under `asyncio.to_thread`.
+   **First sync of a game whose saves already exist on both sides:** with no stored timestamp
+   (`--ts 0`) every file on both sides counts as changed, so it is a conflict and the user is
+   asked (kept local until step 6). That is right (nothing says which side is newer), and a
+   fresh install (empty local) downloads instead.
 3. **`save_paths`** (TDD): every `<?VAR?>` token and `%VAR%`, case, a location that resolves
    outside the prefix or install is refused.
    **Done** (`novadeck_savepaths.py`, `tests/test-store-savepaths.sh`, 31 checks; Another World's

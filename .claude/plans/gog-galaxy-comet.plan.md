@@ -357,6 +357,14 @@ installed), or on the Pocket FIT for the dummy-service title. One commit per ste
    dir unchanged. gogdl DID rewrite `auth.json` (it adds the game's client id as a key, still
    deck 0600), as any gogdl call that fetches a game's credentials does. So the pre-launch dry
    run and Comet both touch `auth.json`, and their order matters (Risks: token rotation).
+   **First real upload, 2026-11-18, at the user's request** (Another World, `--ts 0
+   --skip-download`, the game not running): rc 0, "No files in cloud, uploading", stdout the new
+   timestamp `1795042568.98`. A dry run at that timestamp then says `none`, 2 files each side.
+   The cloud's `newest` is the UPLOAD time (`1795042568.69`), not the files' mtimes
+   (`1795040912`), and the printed timestamp comes after it. So step 4 must store exactly what
+   the sync prints: an earlier one (say, taken before the call) would read the just-uploaded
+   files as changed in the cloud. That timestamp is not stored anywhere yet; step 4 starts this
+   game from `--ts 0` or from this value.
 2. **remote-config fetch + `cloud` in `galaxy.json`** (TDD): enabled/disabled/no locations →
    `__default`; cache per `clientId`; the toggle persists per token.
 3. **`save_paths`** (TDD): every `<?VAR?>` token and `%VAR%`, case, a location that resolves

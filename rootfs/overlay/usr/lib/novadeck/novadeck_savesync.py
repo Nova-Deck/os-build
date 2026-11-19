@@ -61,6 +61,7 @@ import fcntl
 import json
 import os
 import pathlib
+import re
 import shutil
 import signal
 import subprocess
@@ -81,6 +82,13 @@ BACKUPS = "save-backups"             # in the store home
 SAVE_BACKUPS_KEPT = 5
 CALL_TIMEOUT = 30   # one gogdl call: a credential fetch, a listing, a few save files
 BUDGET = 90         # the whole pre-launch sync; an offline device waits at most about this
+MAX_REASON = 200   # a reason is one line on the game page
+OFFLINE = "GOG could not be reached (no network?)"
+# What requests/urllib3 put in a traceback when there is no route to GOG.
+NETWORK_MARKERS = ("ConnectionError", "NameResolutionError", "Temporary failure in name resolution",
+                   "Max retries exceeded", "Network is unreachable", "ConnectTimeout", "ReadTimeout")
+LOG_LINE = re.compile(r"^\[\w+\] (DEBUG|INFO|WARNING):")  # gogdl's own logger, not the failure
+QUERY = re.compile(r"\?[^\s'\")]*")                        # a URL's query string
 LOCK_FILE = ".savesync.lock"  # in the store home
 LOCK_WAIT = BUDGET            # a launch waits this long for an upload still in flight
 # The upload after exit, at most: the lock wait, the budget, and one location's two calls started
@@ -186,6 +194,20 @@ def _locked(home, timeout, poll=POLL):
         os.close(fd)
 
 
+def failure(stderr):
+    """Why a gogdl call failed, from its stderr, in words the game page can show; "" when it
+    said nothing. gogdl lets a network error escape as a traceback (requests' ConnectionError on
+    its first call), which reads as OFFLINE. Anything else is its last line that is not one of its
+    own log lines, with every URL's query string cut (gogdl's token refresh carries the client
+    secret and the refresh token there) and cut to MAX_REASON."""
+    text = stderr or ""
+    if any(marker in text for marker in NETWORK_MARKERS):
+        return OFFLINE
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    last = next((line for line in reversed(lines) if not LOG_LINE.match(line)), "")
+    return QUERY.sub("", last)[:MAX_REASON]
+
+
 def cloud_row(home, appid):
     """This appid's galaxy.json row when its cloud sync is on and names locations, else None."""
     table = read_json(pathlib.Path(home) / GALAXY_FILE)
@@ -244,17 +266,21 @@ class Session:
             log(f"the sync status for the game page was not written ({exc})")
 
     def gogdl(self, path, name, ts, *flags):
-        """(exit status, stdout) of one save-sync call, or (None, why) when it could not run."""
+        """(exit status, stdout, why it failed) of one save-sync call; (None, why, why) when it
+        could not run. `why` is "" on success, else words the game page can show (failure())."""
         argv = [GOGDL, "--auth-config-path", self.auth, "save-sync", path, self.row["gid"],
                 "--os", "windows", "--name", name, "--ts", ts, *flags]
         try:
             done = self.run(argv, capture_output=True, text=True, timeout=CALL_TIMEOUT,
                             env=self.env, check=False)
         except subprocess.TimeoutExpired:
-            return None, f"gogdl timed out after {CALL_TIMEOUT}s"
+            why = f"gogdl timed out after {CALL_TIMEOUT}s"
+            return None, why, why
         except OSError as exc:
-            return None, f"gogdl did not run ({exc.strerror})"
-        return done.returncode, (done.stdout or "").strip()
+            why = f"gogdl did not run ({exc.strerror})"
+            return None, why, why
+        why = "" if done.returncode == 0 else failure(done.stderr)
+        return done.returncode, (done.stdout or "").strip(), why
 
     def backup(self, name, path):
         """Copy the location's folder aside before a download replaces it. True when done or when
@@ -279,9 +305,11 @@ class Session:
 
 
 def _real_sync(s, key, name, path, ts, flag, did):
-    rc, out = s.gogdl(path, name, ts, flag)
+    rc, out, why = s.gogdl(path, name, ts, flag)
+    if rc is None or why == OFFLINE:
+        return {"did": "failed", "reason": why}
     if rc != 0:
-        return {"did": "failed", "reason": f"save-sync {flag} exited {rc}: {out}"[:200]}
+        return {"did": "failed", "reason": f"save-sync {flag} exited {rc}{f': {why}' if why else ''}"[:MAX_REASON]}
     try:
         stamp = out.splitlines()[-1].strip()
         float(stamp)
@@ -320,15 +348,20 @@ def _classify(s, location):
         return {"name": name, "did": "skipped", "reason": reason}, None
     key = f"{s.row['token']}:{name}"
     ts = s.stamps().get(key, "0")
-    rc, out = s.gogdl(path, name, ts, "--dry-run")
+    rc, out, why = s.gogdl(path, name, ts, "--dry-run")
     try:
         verdict = json.loads(out) if rc == 0 else None
         action = verdict["action"] if isinstance(verdict, dict) else None
     except (ValueError, KeyError, TypeError):
         action = None
     if action is None:
-        why = out if rc is None else f"dry run exited {rc}" if rc else "dry run printed no verdict"
-        return {"name": name, "did": "skipped", "reason": why}, None
+        if rc is None or why == OFFLINE:
+            reason = why
+        elif rc:
+            reason = f"dry run exited {rc}{f': {why}' if why else ''}"[:MAX_REASON]
+        else:
+            reason = "dry run printed no verdict"
+        return {"name": name, "did": "skipped", "reason": reason}, None
     return None, (name, path, key, ts, verdict)
 
 

@@ -67,9 +67,9 @@ def plan(action, **kw):
 
 class Gogdl:
     """Stands in for subprocess.run(gogdl ...). verdicts: location path -> dry-run JSON."""
-    def __init__(self, verdicts=None, rc=0, real_rc=0, raise_on=None, stamp="1795060000.5"):
+    def __init__(self, verdicts=None, rc=0, real_rc=0, raise_on=None, stamp="1795060000.5", stderr=""):
         self.calls, self.verdicts, self.rc, self.real_rc = [], verdicts or {}, rc, real_rc
-        self.raise_on, self.stamp, self.envs = raise_on, stamp, []
+        self.raise_on, self.stamp, self.envs, self.stderr = raise_on, stamp, [], stderr
     def __call__(self, argv, **kw):
         self.calls.append(argv)
         self.envs.append(kw.get("env") or {})
@@ -79,11 +79,11 @@ class Gogdl:
         if "--dry-run" in argv:
             v = self.verdicts.get(path)
             out = v if isinstance(v, str) else json.dumps(v)
-            return subprocess.CompletedProcess(argv, self.rc, stdout=out, stderr="")
+            return subprocess.CompletedProcess(argv, self.rc, stdout=out, stderr=self.stderr)
         if self.real_rc == 0 and ("--skip-upload" in argv or "--force-download" in argv):
             pathlib.Path(path).mkdir(parents=True, exist_ok=True)
             (pathlib.Path(path) / "progression.dat").write_text("from the cloud")
-        return subprocess.CompletedProcess(argv, self.real_rc, stdout=self.stamp, stderr="")
+        return subprocess.CompletedProcess(argv, self.real_rc, stdout=self.stamp, stderr=self.stderr)
     def real(self):
         return [c for c in self.calls if "--dry-run" not in c]
 
@@ -484,6 +484,43 @@ for sig in (signal.SIGTERM, signal.SIGINT):
     _, err = w.communicate(timeout=10)
     check(w.returncode == 0 and marker.exists() and marker.read_text() == "77 /pfx",
           f"{signal.Signals(sig).name} (a logout stopping the unit) waits for the upload to end ({w.returncode}, {err[-80:]!r})")
+
+print("== why gogdl failed, in words the page can show")
+OFFLINE = (
+    "[SAVES] INFO: Local files: 2\n"
+    "Traceback (most recent call last):\n"
+    "  File \"/usr/lib/python3.14/site-packages/gogdl/saves.py\", line 244, in get_auth_ids\n"
+    "requests.exceptions.ConnectionError: HTTPSConnectionPool(host='content-system.gog.com', port=443): "
+    "Max retries exceeded with url: /products/1207658845/os/windows/builds?generation=2 (Caused by "
+    "NameResolutionError(\"Failed to resolve 'content-system.gog.com' ([Errno -3] Temporary failure in "
+    "name resolution)\"))\n")
+aw()
+local({"progression.dat": "offline"})
+res = run(Gogdl({SP: plan("download")}, rc=1, stderr=OFFLINE))
+check(res[0]["did"] == "skipped" and res[0]["reason"] == "GOG could not be reached (no network?)",
+      f"offline before a launch: the reason says GOG could not be reached, not 'exited 1' ({res})")
+res = after(Gogdl({SP: plan("upload")}, rc=1, stderr=OFFLINE))
+check(res[0]["did"] == "skipped" and res[0]["reason"] == "GOG could not be reached (no network?)",
+      f"...and after an exit ({res})")
+res = after(Gogdl({SP: plan("upload")}, real_rc=1, stderr=OFFLINE))
+check(res[0]["did"] == "failed" and "could not be reached" in res[0]["reason"],
+      f"the network going away between the dry run and the upload: the same words ({res})")
+LEAK = ("[SAVES] INFO: Uploading files\n"
+        "ValueError: bad answer from https://auth.gog.com/token?client_id=1&client_secret=SEKRIT"
+        "&refresh_token=TOKEN123 (status 500)\n"
+        "[SAVES] INFO: Done\n")
+res = after(Gogdl({SP: plan("upload")}, real_rc=2, stderr=LEAK))
+reason = res[0].get("reason", "")
+check(res[0]["did"] == "failed" and "bad answer from https://auth.gog.com/token" in reason
+      and "exited 2" in reason,
+      f"another failure: its last meaningful stderr line (not a trailing INFO log line) ({reason!r})")
+check("SEKRIT" not in reason and "TOKEN123" not in reason and "client_secret" not in reason,
+      "...with every URL's query string cut: gogdl puts the client secret and refresh token there")
+res = after(Gogdl({SP: plan("upload")}, real_rc=2, stderr="E" * 900))
+check(len(res[0].get("reason", "")) <= 200, "...and cut to length")
+res = after(Gogdl({SP: plan("upload")}, rc=1, stderr=""))
+check(res[0]["reason"] == "dry run exited 1", f"no stderr at all: the exit status, as before ({res})")
+aw()
 
 print("== what the last sync did, kept for the game page (save-status.json)")
 def last():

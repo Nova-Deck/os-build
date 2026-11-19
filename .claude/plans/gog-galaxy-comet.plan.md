@@ -497,6 +497,8 @@ installed), or on the Pocket FIT for the dummy-service title. One commit per ste
    - Not handled, by design: a launcher stub that forks the game and exits early ends the watch
      early; the upload then sees a dry run mid-game, and only a clean `upload` verdict acts, so the
      next exit or launch reconciles.
+   - **HW-PASSED 2026-11-19 with step 8** (evidence there, step 8 checks 2-6). Not yet run: a
+     non-Galaxy cloud game (the session unit without Comet).
    - **HW to run:** Another World: play, quit → `journalctl --user -u 'novadeck-gog-upload-*'`
      shows `after exit: saves: upload -> uploaded`, the stamp moves, a `--dry-run` reads `none`;
      the session unit is gone within seconds of the exit; quit + immediate Play waits for the
@@ -519,6 +521,26 @@ installed), or on the Pocket FIT for the dummy-service title. One commit per ste
    - Frontend: a *Cloud saves: On/Off* button beside Uninstall on an installed game (a press
      flips it; reversible, so no confirm), and Meta lines. The row re-reads every 10 s while
      shown, so the upload after an exit shows without reopening the page.
+   - **HW-PASSED 2026-11-19 together with step 7** (Pocket Max, dev card 20261119T085539Z from
+     9f74a21, fresh card, Another World appid 2361001888, Proton CachyOS 11.0):
+     1. after install, before any launch: the page showed *Cloud saves: On* and "on, not synced
+        yet"; galaxy.json `enabled: true`, no toggle/stamp/status file.
+     2. first launch: `saves: download -> downloaded`; session unit `(Comet, upload after exit)`.
+     3. play, save, quit: the session unit ended 09:17:53 (Comet's final sync), then
+        `novadeck-gog-upload-3802` ran 4.3 s: `after exit: saves: upload -> uploaded`; stamp and
+        `save-status.json` (`phase: exit`) written; a `--dry-run` with the stamp read `none`.
+     4. quit + immediate Play could not be done by hand (the upload is ~4 s), so the lock was held
+        from SSH (`flock .savesync.lock`, 30 s, 09:20:16.1-09:20:46.1) and Play pressed inside it:
+        the game started late, no dialog, `saves: none -> nothing`; Comet came up 09:20:48.1, i.e.
+        the pre-launch sync ran only after the release. On exit Comet's final sync (09:21:07.2)
+        preceded the upload unit (09:21:07.2-09:21:11.2).
+     5. switch Off: `cloud-saves.json` `{token: false}` and galaxy.json `enabled: false` at once;
+        the launch logged no `saves:` line and the unit `(Comet, no upload)`; no upload unit after
+        exit; stamp unchanged while the session rewrote the local saves.
+     6. switch On again: `saves: upload -> nothing` at launch (the off session's change read as
+        local-only: no download over it, no question), `after exit: upload -> uploaded`, stamp
+        moved, `--dry-run` `none`: the off session's saves reached the cloud too.
+     Not yet seen on HW: a failure reason on the page (needs an offline exit; step 9's offline row).
    - **HW to run (with step 7):** the row shows "on, last synced <time>" for Another World; Off
      → a launch and an exit sync nothing (no `game-launch: saves:` line, no upload unit), and
      galaxy.json shows `enabled: false` at once; On again → syncs; a failure (e.g. offline exit)

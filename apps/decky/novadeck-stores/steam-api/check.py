@@ -33,7 +33,9 @@ def check(kind: str, args: list[str], code: str) -> str | None:
         found = re.search(r"SteamClient\.Apps\??\.%s\b" % re.escape(args[0]), code)
         return None if found else "no SteamClient.Apps call in the bundle"
     if kind == "global":
-        return None if re.search(r"window\.%s\b" % re.escape(args[0]), code) else "never assigned on window"
+        # self is window in the UI's page; webpack assigns its chunk array through self.
+        found = re.search(r"\b(?:window|self)\.%s\b" % re.escape(args[0]), code)
+        return None if found else "never assigned on window"
     if kind == "store":
         found = re.search(r"\b%s\([\w$,\s]*\)\{" % re.escape(args[0]), code)
         return None if found else "no method of that name is defined"

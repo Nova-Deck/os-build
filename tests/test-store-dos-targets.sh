@@ -362,13 +362,19 @@ check("onCancel={() => send(null)}" in dialog and "send(null)}>Cancel" in dialog
 check("answered.current" in dialog, "one answer per question: closing after a pick sends no second (cancel) answer")
 check("DOSBox version" in page and "dos.labels.length > 1" in page,
       "the game page offers DOSBox version only when there is more than one")
-check("dos={onBoxtron ? dos : null}" in page and "strCompatToolName" in page,
+# Both game pages gate on useOnBoxtron(), which lives in lib/pageHooks.ts since the native page.
+hooks = (fe / "lib" / "pageHooks.ts").read_text()
+gear = (fe / "native" / "gearMenu.tsx").read_text()
+check("dos={onBoxtron ? dos : null}" in page and "useOnBoxtron(appid, installed)" in page
+      and "strCompatToolName" in hooks,
       "...and only while the game's live compat tool is Boxtron (under Proton the choice does nothing)")
-check("RegisterForAppDetails" in page and "sub?.unregister?.()" in page,
+check("latestOnBoxtron.get(page.appid) && dos && dos.labels.length > 1" in gear,
+      "the native page's gear menu offers DOSBox version under the same two conditions")
+check("RegisterForAppDetails" in hooks and "sub?.unregister?.()" in hooks,
       "the tool is subscribed to (a cached poll went stale on HW) and the subscription is released")
 pkgbuild = (pathlib.Path(sys.argv[1]).parents[3] / "packages" / "boxtron" / "PKGBUILD").read_text()
-check('BOXTRON_TOOL = "boxtron"' in page and '"boxtron"' in pkgbuild,
-      "the tool name the page compares against is the one packages/boxtron asserts")
+check('BOXTRON_TOOL = "boxtron"' in hooks and '"boxtron"' in pkgbuild,
+      "the tool name the pages compare against is the one packages/boxtron asserts")
 PY
 )"
 rc=$?

@@ -13,7 +13,7 @@
 #                                 say. SpecifyCompatTool is here: Valve's UI sets compat tools over
 #                                 the CompatManager protobuf service, not through SteamClient.Apps
 #   binding <name>                window.<name>, bound by the native client: UNCHECKED, like native
-#   global  <name>                window.<name>, assigned by the bundle
+#   global  <name>                window.<name>, assigned by the bundle (as window.<name> or self.<name>)
 #   decky   <name>                a window global the Decky loader provides, not Steam
 #   store   <method>              a method the bundle defines (the appStore global's class)
 #   marker  <string>              a string the plugin finds Steam's code by (Function.toString)
@@ -41,6 +41,7 @@ binding SteamClient
 
 global  appStore
 global  appDetailsStore
+global  webpackChunksteamui
 store   GetAppOverviewByAppID
 decky   DeckyPluginLoader
 decky   SP_REACT

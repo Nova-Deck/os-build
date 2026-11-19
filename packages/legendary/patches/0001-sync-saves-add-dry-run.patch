@@ -1,4 +1,4 @@
-From a341f638fad21bb83f396e67966f10ae557fa06e Mon Sep 17 00:00:00 2001
+From 269407125ef98cf3eda63f54cddcd852f1e82f5f Mon Sep 17 00:00:00 2001
 From: Philippe Simons <simons.philippe@gmail.com>
 Date: Thu, 19 Nov 2026 15:35:08 +0100
 Subject: [PATCH] sync-saves: add --dry-run
@@ -13,15 +13,21 @@ launcher can show a conflict to the user before choosing one. The line
 also carries the save path checked, each side's newest time and the
 last sync (Unix timestamps or null), and the cloud manifest a download
 would take. A game without cloud saves reports "unsupported"; a
-computed save path that still holds variables reports "no_save_path".
+computed save path that still holds variables, or that cannot be
+computed, reports "no_save_path".
+
+A path with an unresolved variable stays relative to the working
+directory, and case_insensitive_path_search() then lists that
+directory, which raises PermissionError from an unreadable one (a user
+in /root). The dry run catches that instead of crashing.
 
 The update notice is suppressed, as for --json, so stdout stays JSON.
 ---
- legendary/cli.py | 39 +++++++++++++++++++++++++++++++++++++++
- 1 file changed, 39 insertions(+)
+ legendary/cli.py | 47 +++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 47 insertions(+)
 
 diff --git a/legendary/cli.py b/legendary/cli.py
-index 62a31f3..877ccda 100644
+index 62a31f3..2bd03ce 100644
 --- a/legendary/cli.py
 +++ b/legendary/cli.py
 @@ -477,6 +477,12 @@ class LegendaryCLI:
@@ -37,7 +43,7 @@ index 62a31f3..877ccda 100644
                  continue
  
              logger.info(f'Checking "{igame.title}" ({igame.app_name})')
-@@ -601,6 +607,34 @@ class LegendaryCLI:
+@@ -601,6 +607,42 @@ class LegendaryCLI:
                  igame.save_timestamp = time.time()
                  self.core.lgd.set_installed_game(igame.app_name, igame)
  
@@ -49,7 +55,8 @@ index 62a31f3..877ccda 100644
 +        "status" is the SaveGameStatus a real sync acts on, from the same check; --skip-* and
 +        --force-* are not applied, so a caller can choose between them after seeing a conflict.
 +        The save path is --save-path, else the stored one, else the computed one; "no_save_path"
-+        when the computed one still holds variables. Times are Unix timestamps, or null.
++        when the computed one still holds variables or cannot be computed. Times are Unix
++        timestamps, or null.
 +        """
 +        report = dict(app_name=igame.app_name, status='no_save_path', save_path=None,
 +                      local_newest=None, cloud_newest=None,
@@ -57,9 +64,16 @@ index 62a31f3..877ccda 100644
 +                      last_sync=igame.save_timestamp)
 +        save_path = args.save_path if args.app_name and args.save_path else igame.save_path
 +        if not save_path:
-+            computed = self.core.get_save_path(igame.app_name, platform=igame.platform)
-+            logger.info(f'Computed save path: "{computed}"')
-+            if '%' not in computed and '{' not in computed:
++            try:
++                computed = self.core.get_save_path(igame.app_name, platform=igame.platform)
++            except OSError as e:
++                # An unresolved variable leaves the path relative to the working directory, and
++                # the case-insensitive search then lists that directory, which may be unreadable.
++                logger.warning(f'Unable to compute save path: {e!r}')
++                computed = ''
++            else:
++                logger.info(f'Computed save path: "{computed}"')
++            if computed and '%' not in computed and '{' not in computed:
 +                save_path = computed
 +
 +        if save_path:
@@ -72,7 +86,7 @@ index 62a31f3..877ccda 100644
      def launch_game(self, args, extra):
          app_name = self._resolve_aliases(args.app_name)
          addon_app_name = None
-@@ -3088,6 +3122,9 @@ def main():
+@@ -3088,6 +3130,9 @@ def main():
                                     help='Disable save game file filtering')
      sync_saves_parser.add_argument('--accept-path', dest='accept_path', action='store_true',
                                     help=argparse.SUPPRESS)
@@ -82,7 +96,7 @@ index 62a31f3..877ccda 100644
  
      clean_saves_parser.add_argument('--delete-incomplete', dest='delete_incomplete', action='store_true',
                                      help='Delete incomplete save files')
-@@ -3311,6 +3348,8 @@ def main():
+@@ -3311,6 +3356,8 @@ def main():
          disable_update_message = args.tsv
      if not disable_update_message and hasattr(args, 'csv'):
          disable_update_message = args.csv

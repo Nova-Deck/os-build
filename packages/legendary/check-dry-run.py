@@ -192,6 +192,20 @@ r = one(dry_run("Game"))
 check(r.get("status") == "no_save_path" and r.get("save_path") is None,
       f"{{AppData}} with no prefix: no_save_path, nothing checked ({r})")
 
+# The same from a working directory the user cannot list: legendary leaves the unresolved path
+# relative, realpath() anchors it at the cwd, and its case-insensitive search lists the cwd. As deck
+# from /root that raised PermissionError (HW 2026-11-19); a dry run must still answer.
+locked = tempfile.mkdtemp()
+os.chmod(locked, 0o311)
+cwd = os.getcwd()
+os.chdir(locked)
+try:
+    r = one(dry_run("Game"))
+finally:
+    os.chdir(cwd)
+    os.chmod(locked, 0o755)
+check(r.get("status") == "no_save_path", f"an unlistable cwd: no_save_path, not a crash ({r})")
+
 # A game without cloud saves says so instead of printing nothing.
 seed({"NoCloud": (None, None, None)})
 r = one(dry_run("NoCloud"))

@@ -131,7 +131,9 @@ It runs after the DOS swap (so a cancelled launch starts no Comet) and right bef
 fails soft, and does two things:
 1. **Pre-launch save sync** (phase 3), blocking with a bounded timeout.
 2. **One transient systemd user unit, `novadeck-comet`** (`systemd-run --user --collect -p
-   KillSignal=SIGINT -p TimeoutStopSec=30`). The name is fixed because port 9977 is one per
+   KillSignal=SIGINT -p TimeoutStopSec=30`; renamed **`novadeck-gog-session`** in phase 3 step 7,
+   which also runs it for cloud-only games and adds `KillMode=mixed` and a longer stop timeout;
+   phase 1's HW notes below keep the old name). The name is fixed because port 9977 is one per
    device; a unit left from an earlier launch is stopped first. The unit runs the helper's
    `watch` mode, which takes the `game-launch` pid and start time and opens a pidfd on it.
    After exec that pid **is** the launch chain, and it lives until the game exits. The watcher
@@ -463,6 +465,42 @@ installed), or on the Pocket FIT for the dummy-service title. One commit per ste
      copy of what it replaces. A backup nobody can restore is useless, and restoring one would
      need its own dialog; the local backup before *Cloud saves* stays.
 7. **Post-exit upload** in the watcher; timestamp stored.
+   **Done, offline (2026-11-19; HW owed).** `novadeck_savesync.post_exit(appid, prefix)`: the same
+   `--dry-run` as pre-launch, and only an `upload` verdict acts (`--skip-download`, the printed
+   stamp stored). A conflict is left for the next launch to ask (`next-launch`), a cloud change for
+   the next launch's backed-up download, so nothing is ever downloaded after exit (and gogdl's
+   "empty side downloads despite the skip flag" cannot fire there). The toggle is read at exit.
+   - **Watcher**: the unit (now `novadeck-gog-session`) starts for a Galaxy game OR a cloud-enabled
+     game with a prefix; Comet runs only for the former (and one that fails to start is logged,
+     the watch goes on). Argv `watch PID START APPID PREFIX|- -- [COMET]`. After the pidfd fires:
+     SIGINT to Comet FIRST (its final sync before gogdl can refresh the token it read once), THEN
+     the upload is handed to **its own unit**, `novadeck-gog-upload-<watcher pid>`, running
+     `novadeck_savesync.py post-exit APPID PREFIX`. A stop while the game runs uploads nothing
+     (the game is being torn down mid-write; the next exit uploads). From the moment Comet is
+     being stopped, stops are ignored. `KillMode=mixed` on both units: a stop signals the main
+     process only, never Comet twice nor a gogdl upload in flight.
+   - **Why a separate upload unit** (code review, 2026-11-19): with the upload inside the Comet
+     unit, a relaunch's `systemctl stop` (needed: one name, one port 9977) would wait out a whole
+     upload before the next game started, and a stop timeout too short for lock wait + upload would
+     SIGKILL gogdl mid-upload. Now the Comet unit's stop is Comet's grace only (30 s, as in phase
+     1), and the upload unit's `TimeoutStopSec` is `POST_EXIT_LIMIT` (lock wait + BUDGET + 2
+     calls = 240 s) + 15, so a logout never kills one.
+   - **One sync at a time**: pre-launch and post-exit both hold `.savesync.lock` (flock, store
+     home). Quit + Play at once would otherwise run the new dry run against half an upload and
+     ask a false conflict. A launch waits up to `LOCK_WAIT` (= BUDGET), then starts unsynced. Only
+     "held" is waited on; a lock that errors is logged and the sync skipped at once.
+   - `store_env`/`read_json` moved to `novadeck_storeenv.py`: the session now imports the sync, and
+     the sync used to import `store_env` from the session.
+   - Tests: savesync 76 checks (+30), launch 126 (+28 in the gogsession block: cloud-only unit,
+     Comet-then-upload order, stops during and after the game, a Comet that cannot start, the
+     upload unit's argv and timeouts, a failing hand-off).
+   - Not handled, by design: a launcher stub that forks the game and exits early ends the watch
+     early; the upload then sees a dry run mid-game, and only a clean `upload` verdict acts, so the
+     next exit or launch reconciles.
+   - **HW to run:** Another World: play, quit → `journalctl --user -u 'novadeck-gog-upload-*'`
+     shows `after exit: saves: upload -> uploaded`, the stamp moves, a `--dry-run` reads `none`;
+     the session unit is gone within seconds of the exit; quit + immediate Play waits for the
+     upload. A non-Galaxy cloud game too (the session unit without Comet).
 8. **Game page toggle**: *Cloud saves: on/off*, plus the last sync time.
 9. **HW gate** (Another World, or any cloud-enabled GOG title):
    - play, save, exit → the save is in the cloud (`gogdl save-sync` from the host lists it);

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Offline checks for the pre-launch GOG cloud-save sync (.claude/plans/gog-galaxy-comet.plan.md,
-# phase 3 step 4; design §6).
+# Offline checks for the GOG cloud-save sync, before launch and after exit
+# (.claude/plans/gog-galaxy-comet.plan.md, phase 3 steps 4 and 7; design §6).
 #
 #   tests/test-store-savesync.sh
 #
@@ -20,7 +20,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LIB="$ROOT/rootfs/overlay/usr/lib/novadeck"
 
 out="$(python3 - "$LIB" <<'PY'
-import json, os, pathlib, subprocess, sys, tempfile, threading, time
+import json, os, pathlib, signal, subprocess, sys, tempfile, threading, time
 sys.path.insert(0, sys.argv[1])
 
 def ok(m): print(f"  ok   {m}")
@@ -335,6 +335,155 @@ res = ss.pre_launch("77", paths=paths, prefix=str(prefix), run=g)
 ss.ask = ss_ask
 check(asked_with == [(str(home), "77", 0)] and res[0]["did"] == "uploaded",
       f"by default a conflict ASKS over the spool (store home, appid, location index) ({asked_with}, {res})")
+
+print("== after the game exits: upload what changed on this device (post_exit, step 7)")
+KEY = f"{TOKEN}:saves"
+def after(gogdl, where=str(prefix), appid="77", clock=None):
+    logs.clear()
+    kw = {"paths": paths, "run": gogdl}
+    if clock is not None:
+        kw["clock"] = clock
+    return ss.post_exit(appid, where, **kw)
+aw()
+(home / "gogdl" / ss.TIMESTAMPS).unlink(missing_ok=True)
+for f in spool.glob("*"):
+    f.unlink()
+local({"progression.dat": "played"})
+g = Gogdl({SP: plan("upload", updated_local=["progression.dat"])})
+res = after(g)
+real = g.real()
+check(g.calls and "--dry-run" in g.calls[0] and g.calls[0][g.calls[0].index("--ts") + 1] == "0",
+      "it asks gogdl first (--dry-run, the stored timestamp): one set of rules for both ends of a launch")
+check(len(real) == 1 and "--skip-download" in real[0]
+      and res == [{"name": "saves", "action": "upload", "did": "uploaded"}],
+      f"only this device changed: one real sync, --skip-download ({res})")
+check(stamps() == {KEY: "1795060000.5"}, f"the timestamp the upload printed is stored ({stamps()})")
+check((save_dir / "progression.dat").read_text() == "played", "the local save is untouched")
+check(any("upload -> uploaded" in m for m in logs), f"the outcome is logged ({logs})")
+g = Gogdl({SP: plan("upload")})
+after(g)
+check(g.calls[0][g.calls[0].index("--ts") + 1] == "1795060000.5", "and the next sync starts from it")
+for action, extra, why in (
+        ("conflict", {}, "both changed (Decide later, or the cloud changed mid-game): nothing, "
+                         "the next launch asks"),
+        ("download", {}, "only the cloud changed: nothing now, the next launch downloads it, after a backup"),
+        ("download", {"local": {"files": 0, "newest": None}},
+         "a local folder left empty: nothing (gogdl downloads into an empty side despite --skip-download)"),
+        ("none", {}, "nothing changed: nothing")):
+    before = stamps()
+    g = Gogdl({SP: plan(action, **extra)})
+    res = after(g)
+    check(not g.real() and res and res[0]["did"] in ("nothing", "next-launch") and stamps() == before
+          and not list(spool.glob("*.savepick")),
+          f"{why} — never a download after exit, never a question ({res})")
+check(after(Gogdl({SP: conflict}))[0]["did"] == "next-launch", "a conflict reads as left for the next launch")
+aw(enabled=False)
+g = Gogdl({SP: plan("upload")})
+check(after(g) == [] and not g.calls,
+      "cloud sync turned off (read at exit, so a toggle flipped mid-game counts): gogdl is never called")
+aw()
+g = Gogdl({SP: plan("upload")})
+check(after(g, where=None) == [] and not g.calls, "no prefix (not a Proton launch): nothing")
+check(after(g, appid=None) == [] and not g.calls, "no appid: nothing")
+os.environ[ss.STARTED_ENV] = "77"
+g = Gogdl({SP: plan("upload")})
+check(after(g)[0]["did"] == "uploaded",
+      "the once-per-launch marker of the PRE-launch sync does not stop the upload after exit")
+os.environ.pop(ss.STARTED_ENV, None)
+before = stamps()
+res = after(Gogdl({SP: plan("upload")}, rc=1))
+check(res[0]["did"] == "skipped" and stamps() == before, f"a dry run that fails (offline): skipped ({res})")
+res = after(Gogdl({SP: plan("upload")}, raise_on="--dry-run"))
+check(res[0]["did"] == "skipped", f"a dry run that times out: skipped, no raise ({res})")
+res = after(Gogdl({SP: plan("upload")}, real_rc=2))
+check(res[0]["did"] == "failed" and stamps() == before,
+      f"an upload that fails stores no timestamp, so the next exit tries again ({res})")
+galaxy({"enabled": True, "locations": [{"name": "saves", "location": "<?DOCUMENTS?>/Another World"},
+                                        {"name": "other", "location": "<?DOCUMENTS?>/Other"}]})
+ticks = iter([0.0, 0.0, ss.BUDGET + 1, ss.BUDGET + 2, ss.BUDGET + 3])
+res = after(Gogdl({SP: plan("none"), str(other): plan("upload")}),
+            clock=lambda: next(ticks, ss.BUDGET + 9))
+check(res[-1]["did"] == "skipped" and "budget" in res[-1].get("reason", ""),
+      f"past the time budget the rest is skipped: an exit offline ends in bounded time ({res})")
+check(ss.POST_EXIT_LIMIT >= ss.LOCK_WAIT + ss.BUDGET + 2 * ss.CALL_TIMEOUT,
+      "POST_EXIT_LIMIT bounds the whole upload: the lock wait, the budget, and one location's two calls "
+      "started just before it ran out")
+aw()
+
+print("== one sync at a time: the upload after exit and the next launch's sync never overlap")
+import fcntl
+lockf = home / ss.LOCK_FILE
+def hold():
+    f = open(lockf, "a")
+    fcntl.flock(f, fcntl.LOCK_EX)
+    return f
+def free():
+    with open(lockf, "a") as f:
+        try:
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except OSError:
+            return False
+h = hold()
+g = Gogdl({SP: plan("download")})
+os.environ.pop(ss.STARTED_ENV, None)
+logs.clear()
+t0 = time.monotonic()
+res = ss.pre_launch("77", paths=paths, prefix=str(prefix), run=g, choose=None, lock_wait=0.3)
+check(res == [] and not g.calls and time.monotonic() - t0 < 2 and any("still" in m for m in logs),
+      f"a launch that cannot get the lock in time syncs nothing, says why, and starts the game ({logs})")
+g = Gogdl({SP: plan("upload")})
+res = ss.post_exit("77", str(prefix), paths=paths, run=g, lock_wait=0.3)
+check(res == [] and not g.calls, "an upload that cannot get the lock does nothing (the next exit retries)")
+threading.Timer(0.3, h.close).start()
+g = Gogdl({SP: plan("none")})
+os.environ.pop(ss.STARTED_ENV, None)
+t0 = time.monotonic()
+res = ss.pre_launch("77", paths=paths, prefix=str(prefix), run=g, choose=None, lock_wait=5)
+check(res and res[0]["did"] == "nothing" and time.monotonic() - t0 >= 0.25,
+      f"a launch right after an exit WAITS for that upload, then syncs ({res})")
+check(free(), "the lock is released when the sync ends: the game, exec'd after it, never holds it")
+ss.post_exit("77", str(prefix), paths=paths, run=Gogdl({SP: plan("upload")}))
+check(free(), "and when the upload ends")
+nolock = tmp / "elsewhere"
+(nolock / "gogdl").mkdir(parents=True)
+(nolock / "galaxy.json").write_text(json.dumps({"5": {"token": "x", "gid": "5"}}))
+os.environ.pop(ss.STARTED_ENV, None)
+ss.pre_launch("5", paths={**paths, "NOVADECK_STORE_HOME": str(nolock)}, prefix=str(prefix), run=g)
+check(not (nolock / ss.LOCK_FILE).exists(), "a launch with nothing to sync never touches the lock")
+real_flock = fcntl.flock
+def broken_flock(fd, op):
+    raise OSError(37, "No locks available")  # ENOLCK: an error, not a holder
+ss.fcntl.flock = broken_flock
+g = Gogdl({SP: plan("none")})
+os.environ.pop(ss.STARTED_ENV, None)
+logs.clear()
+t0 = time.monotonic()
+res = ss.pre_launch("77", paths=paths, prefix=str(prefix), run=g, choose=None, lock_wait=5)
+ss.fcntl.flock = real_flock
+check(res == [] and time.monotonic() - t0 < 1 and any("lock" in m for m in logs),
+      f"a lock that ERRORS (not one held) is not waited on: the launch goes ahead at once, unsynced, logged ({logs})")
+
+print("== the upload unit's entry point (novadeck_savesync.py post-exit APPID PREFIX)")
+SS = str(pathlib.Path(sys.argv[1]) / "novadeck_savesync.py")
+w = subprocess.run([sys.executable, SS, "post-exit", "77"], capture_output=True, text=True, timeout=30)
+check(w.returncode == 1 and "usage" in w.stderr, "a command line without the prefix is refused")
+marker = tmp / "upload.done"
+code = (f"import sys, time; sys.path.insert(0, {sys.argv[1]!r}); import novadeck_savesync as ss\n"
+        "def slow(appid, prefix):\n"
+        "    time.sleep(1.0)\n"
+        f"    open({str(marker)!r}, 'w').write(appid + ' ' + prefix)\n"
+        "    return []\n"
+        "ss.post_exit = slow\n"
+        "sys.exit(ss.main(['x', 'post-exit', '77', '/pfx']))\n")
+for sig in (signal.SIGTERM, signal.SIGINT):
+    marker.unlink(missing_ok=True)
+    w = subprocess.Popen([sys.executable, "-c", code], stderr=subprocess.PIPE, text=True)
+    time.sleep(0.5)
+    w.send_signal(sig)
+    _, err = w.communicate(timeout=10)
+    check(w.returncode == 0 and marker.exists() and marker.read_text() == "77 /pfx",
+          f"{signal.Signals(sig).name} (a logout stopping the unit) waits for the upload to end ({w.returncode}, {err[-80:]!r})")
 
 print("== once per launch")
 aw()

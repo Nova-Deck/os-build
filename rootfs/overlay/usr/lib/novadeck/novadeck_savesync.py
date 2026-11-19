@@ -1,6 +1,8 @@
-"""Pre-launch GOG cloud-save sync: bring the cloud's saves down before the game reads them.
+"""GOG cloud-save sync: the cloud's saves down before a game reads them, this device's up after.
 
-    pre_launch(appid)   called by game-launch, after the DOS swap and before Comet starts
+    pre_launch(appid)           called by game-launch, after the DOS swap and before Comet starts
+    post_exit(appid, prefix)    once the game has exited: `novadeck_savesync.py post-exit APPID
+                                PREFIX`, the unit the novadeck_gogsession watcher hands it to
 
 For a GOG game with cloud saves on, each save location (galaxy.json's `cloud.locations`, written
 by the novadeck-stores plugin) is resolved inside the game's Proton prefix (novadeck_savepaths)
@@ -37,20 +39,37 @@ uses the layout Proton is about to create, and files written there before Proton
 prefix survive its setup (HW 2026-11-19, plan step 5: Proton's copy_pfx only adds files that are
 missing). That is what brings a new device's saves down before the game first starts.
 
+AFTER EXIT (post_exit): the same dry run, and only an "upload" verdict (this device changed, the
+cloud did not) is acted on, with `save-sync --skip-download`; its printed timestamp is stored. A
+conflict is left for the next launch to ask about, which is what Decide later promises; a cloud
+change waits for the next launch's download, which backs up first. So nothing is ever downloaded
+after exit, and gogdl's "an empty side is downloaded into whatever the skip flags say" never runs
+there. It runs in a unit of its own (novadeck-gog-upload-<pid>), outside the game's process tree,
+and outside the Comet unit a relaunch stops: stopping that never waits on an upload, nor cuts one
+short. (A relaunch's own pre-launch sync does wait for it, through the lock below.)
+
+ONE SYNC AT A TIME: both ends hold LOCK_FILE (flock, in the store home) for their whole run. Quit
+and press Play at once, and the new launch's dry run would otherwise race the upload still in
+flight, and read half an upload as a cloud change. The launch waits up to LOCK_WAIT, then starts
+the game unsynced. The lock fd is close-on-exec and closed before return: the game never holds it.
+
 Like the rest of game-launch, nothing here may stop the game. Every gogdl call has a timeout, the
 whole sync a BUDGET, and every failure is logged and skipped.
 """
+import contextlib
+import fcntl
 import json
 import os
 import pathlib
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
 import time
 
 import novadeck_savepaths
-from novadeck_gogsession import store_env
+from novadeck_storeenv import read_json, store_env
 
 GOGDL = "/usr/bin/gogdl"
 GALAXY_FILE = "galaxy.json"
@@ -59,6 +78,12 @@ BACKUPS = "save-backups"             # in the store home
 SAVE_BACKUPS_KEPT = 5
 CALL_TIMEOUT = 30   # one gogdl call: a credential fetch, a listing, a few save files
 BUDGET = 90         # the whole pre-launch sync; an offline device waits at most about this
+LOCK_FILE = ".savesync.lock"  # in the store home
+LOCK_WAIT = BUDGET            # a launch waits this long for an upload still in flight
+# The upload after exit, at most: the lock wait, the budget, and one location's two calls started
+# just before it ran out. Its unit's stop timeout is sized from it.
+POST_EXIT_LIMIT = LOCK_WAIT + BUDGET + 2 * CALL_TIMEOUT
+SELF = os.path.abspath(__file__)
 # Set once this launch has synced, so a second game-launch in the same chain (launch options AND
 # the in-tool shim of a baked Proton) does not sync again.
 STARTED_ENV = "NOVADECK_SAVES_SYNCED"
@@ -124,16 +149,43 @@ def ask(home, appid, index, verdict, take_timeout=TAKE_TIMEOUT, answer_timeout=A
     return text if text in CHOICES else None
 
 
-def _read_json(path):
+def _acquire(fd, timeout, poll):
+    """True once the lock is ours; False when it stayed held past timeout, or cannot be taken at
+    all (an error is not a holder, so it is not waited on)."""
+    end = time.monotonic() + timeout
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except BlockingIOError:  # EWOULDBLOCK: another sync holds it
+            if time.monotonic() >= end:
+                return False
+            time.sleep(poll)
+        except OSError as exc:
+            log(f"the sync lock could not be taken ({exc})")
+            return False
+
+
+@contextlib.contextmanager
+def _locked(home, timeout, poll=POLL):
+    """Hold the store home's sync lock while the block runs; yields False when it could not be had
+    within timeout. Closing the fd releases it."""
     try:
-        return json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
+        fd = os.open(pathlib.Path(home) / LOCK_FILE,
+                     os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    except OSError as exc:
+        log(f"the sync lock could not be opened ({exc})")
+        yield False
+        return
+    try:
+        yield _acquire(fd, timeout, poll)
+    finally:
+        os.close(fd)
 
 
 def cloud_row(home, appid):
     """This appid's galaxy.json row when its cloud sync is on and names locations, else None."""
-    table = _read_json(pathlib.Path(home) / GALAXY_FILE)
+    table = read_json(pathlib.Path(home) / GALAXY_FILE)
     row = table.get(str(appid)) if isinstance(table, dict) else None
     cloud = row.get("cloud") if isinstance(row, dict) else None
     if not (isinstance(cloud, dict) and cloud.get("enabled") is True
@@ -170,7 +222,7 @@ class Session:
         self.env["GOGDL_CONFIG_PATH"] = paths["GOGDL_CONFIG_PATH"]
 
     def stamps(self):
-        data = _read_json(self.stamp_file)
+        data = read_json(self.stamp_file)
         return data if isinstance(data, dict) else {}
 
     def store_stamp(self, key, value):
@@ -240,15 +292,17 @@ def _choose(s, index, name, verdict):
         s.waited += s.clock() - started
 
 
-def sync_location(s, index, location):
-    """One location's pre-launch outcome: {name, action?, did, reason?}."""
+def _classify(s, location):
+    """Resolve one location and ask gogdl what a sync would do (both ends of a launch use this).
+    Returns (outcome, None) when the location is skipped, else (None, (name, path, key, ts,
+    verdict))."""
     name = location.get("name") if isinstance(location, dict) else None
     if not isinstance(name, str) or not name:
-        return {"name": str(name), "did": "skipped", "reason": "a location with no name"}
+        return {"name": str(name), "did": "skipped", "reason": "a location with no name"}, None
     path, reason = novadeck_savepaths.resolve(location.get("location"), s.row.get("install") or "",
                                               s.prefix)
     if path is None:
-        return {"name": name, "did": "skipped", "reason": reason}
+        return {"name": name, "did": "skipped", "reason": reason}, None
     key = f"{s.row['token']}:{name}"
     ts = s.stamps().get(key, "0")
     rc, out = s.gogdl(path, name, ts, "--dry-run")
@@ -259,7 +313,17 @@ def sync_location(s, index, location):
         action = None
     if action is None:
         why = out if rc is None else f"dry run exited {rc}" if rc else "dry run printed no verdict"
-        return {"name": name, "did": "skipped", "reason": why}
+        return {"name": name, "did": "skipped", "reason": why}, None
+    return None, (name, path, key, ts, verdict)
+
+
+def sync_location(s, index, location):
+    """One location's pre-launch outcome: {name, action?, did, reason?}."""
+    skipped, found = _classify(s, location)
+    if skipped is not None:
+        return skipped
+    name, path, key, ts, verdict = found
+    action = verdict["action"]
     head = {"name": name, "action": action}
     if action == "download":
         return {**head, **_download(s, key, name, path, ts, "--skip-upload")}
@@ -273,7 +337,38 @@ def sync_location(s, index, location):
     return {**head, "did": "nothing"}
 
 
-def pre_launch(appid, paths=None, prefix=None, run=subprocess.run, choose=ASK, clock=time.time):
+def upload_location(s, index, location):
+    """One location's after-exit outcome: only "upload" (this device alone changed) syncs."""
+    skipped, found = _classify(s, location)
+    if skipped is not None:
+        return skipped
+    name, path, key, ts, verdict = found
+    head = {"name": name, "action": verdict["action"]}
+    if verdict["action"] == "upload":
+        return {**head, **_real_sync(s, key, name, path, ts, "--skip-download", "uploaded")}
+    if verdict["action"] == "conflict":
+        return {**head, "did": "next-launch"}
+    return {**head, "did": "nothing"}
+
+
+def _each_location(s, step, label):
+    """step() over the row's locations within BUDGET (time waiting on the user not counted)."""
+    deadline = s.clock() + BUDGET
+    outcomes = []
+    for index, location in enumerate(s.row["cloud"]["locations"]):
+        if s.clock() - s.waited > deadline:
+            name = location.get("name") if isinstance(location, dict) else None
+            outcomes.append({"name": str(name), "did": "skipped", "reason": f"past the {BUDGET}s budget"})
+            continue
+        outcome = step(s, index, location)
+        outcomes.append(outcome)
+        log(f"{label}{outcome['name']}: {outcome.get('action', '-')} -> {outcome['did']}"
+            + (f" ({outcome['reason']})" if outcome.get("reason") else ""))
+    return outcomes
+
+
+def pre_launch(appid, paths=None, prefix=None, run=subprocess.run, choose=ASK, clock=time.time,
+               lock_wait=LOCK_WAIT):
     """Sync this launch's cloud saves down, if any. Returns one outcome per location ([] when there
     is nothing to do). `choose` answers a conflict; by default the user is asked (ask()), None
     never asks."""
@@ -294,15 +389,45 @@ def pre_launch(appid, paths=None, prefix=None, run=subprocess.run, choose=ASK, c
     if choose is ASK:
         choose = lambda a, i, n, v: ask(home, a, i, v)  # noqa: E731 - resolved at call time
     s = Session(appid, row, paths, prefix, run, choose, clock)
-    deadline = clock() + BUDGET
-    outcomes = []
-    for index, location in enumerate(row["cloud"]["locations"]):
-        if clock() - s.waited > deadline:
-            name = location.get("name") if isinstance(location, dict) else None
-            outcomes.append({"name": str(name), "did": "skipped", "reason": f"past the {BUDGET}s budget"})
-            continue
-        outcome = sync_location(s, index, location)
-        outcomes.append(outcome)
-        log(f"{outcome['name']}: {outcome.get('action', '-')} -> {outcome['did']}"
-            + (f" ({outcome['reason']})" if outcome.get("reason") else ""))
-    return outcomes
+    with _locked(home, lock_wait) as held:
+        if not held:
+            log(f"{row['token']}: an upload from the last exit is still running; saves not synced")
+            return []
+        return _each_location(s, sync_location, "")
+
+
+def post_exit(appid, prefix, paths=None, run=subprocess.run, clock=time.time, lock_wait=LOCK_WAIT):
+    """Upload what changed on this device since the last sync, once the game has exited. Returns
+    one outcome per location ([] when there is nothing to do). The cloud toggle is read now, so
+    one turned off mid-game is respected."""
+    if not appid or not prefix:
+        return []
+    paths = store_env() if paths is None else paths
+    home = paths.get("NOVADECK_STORE_HOME")
+    row = cloud_row(home, appid) if home else None
+    if row is None:
+        return []
+    s = Session(appid, row, paths, prefix, run, None, clock)
+    with _locked(home, lock_wait) as held:
+        if not held:
+            log(f"after exit: {row['token']}: the sync lock was not had within {lock_wait}s; "
+                "nothing uploaded (the next exit tries again)")
+            return []
+        return _each_location(s, upload_location, "after exit: ")
+
+
+def main(argv):
+    """The upload unit's process: novadeck_savesync.py post-exit APPID PREFIX."""
+    if len(argv) != 4 or argv[1] != "post-exit":
+        print("usage: novadeck_savesync.py post-exit APPID PREFIX", file=sys.stderr)
+        return 1
+    # A stop (a logout) waits for the upload: one cut short leaves the cloud half-written. The
+    # unit's KillMode=mixed spares gogdl, and its TimeoutStopSec bounds the wait.
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    post_exit(argv[2], argv[3])
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

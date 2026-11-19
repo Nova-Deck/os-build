@@ -250,7 +250,23 @@ exists, the next exit uploads it (`local_newer`: nothing at launch, then `--skip
 
 7. First sync of a game with saves on both sides → asked; each answer does what it says.
 8. Play, quit → uploaded; dry run says `same_age`.
+   **PASS 2026-11-19 (Pocket Max, DOOM 64, after the frontend_ready hot patch).** At launch:
+   `saves: upload -> nothing`. The watcher started `novadeck-gog-session.service` with no Comet. After
+   exit (16:12:01): `saves: upload -> uploaded`, in `novadeck-gog-upload-4652` (6.8 s). The status
+   record is `phase: exit, did: uploaded`. installed.json now holds our `save_path` and
+   `save_timestamp` 1795104721.44. `legendary list-saves` shows `2026.11.19-16.05.17.manifest`, named
+   after the save's own mtime, not the upload time. A dry run then says `same_age`. No backup was
+   taken (nothing was downloaded).
 9. Fresh prefix (or a second device) → the cloud's saves come down before the first start.
+   **PASS 2026-11-19 (Guacamelee! STCE, `{UserDir}/GuacameleeSTCE_EGS/`, appid 2577189476, freshly
+   installed, cloud saves from 2026-10-29 and 2026-11-01).** The first launch said
+   `saves: download -> downloaded`, and the user confirmed their saves were in the game. The download
+   ran BEFORE Proton created the prefix: `pfx/`, `users/steamuser` and `Documents/GuacameleeSTCE_EGS`
+   all have the same birth time, 16:14:57.556, and Proton's own `Documents/Music`, `Pictures` etc.
+   came at 16:15:00, beside our folder, which it kept. legendary's `save_path` is our resolved one.
+   No backup was taken (the local side was empty). The game rewrote `SAVE.DAT` 36 s in, so a dry
+   run now says `local_newer`: the upload is due at exit. Not exercised: the LocalLow spelling
+   (Documents is canonical already); a LocalLow game such as Moving Out covers it.
 10. Offline launch → the game starts, and the page says Epic could not be reached.
 
 ### Bookkeeping

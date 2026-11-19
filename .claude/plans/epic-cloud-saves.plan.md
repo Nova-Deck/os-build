@@ -284,6 +284,18 @@ exists, the next exit uploads it (`local_newer`: nothing at launch, then `--skip
    `2026.11.19-16.17.37` beside the two old ones, and a dry run says `same_age`. Not exercised: the LocalLow spelling
    (Documents is canonical already); a LocalLow game such as Moving Out covers it.
 10. Offline launch → the game starts, and the page says Epic could not be reached.
+    **PASS 2026-11-19 (Pocket Max, Guacamelee, Wi-Fi off).** Launch:
+    `saves: - -> skipped (Epic could not be reached (no network?))`; the game started. After exit,
+    the same skip, in 2.2 s. The game page row was `on`, last synced 16:21:15, with the note
+    "saves: not synced after the last exit: Epic could not be reached (no network?)". The offline
+    session's save stayed put; back online, a dry run says `local_newer`, so the next exit uploads
+    it.
+
+**Phase 3 summary (2026-11-19).** Gates 7 (Decide later + Cloud saves, on a faked conflict), 8, 9
+and 10 pass on the Pocket Max. That was on the OTA of 1d50cf2 plus the frontend_ready hot patch
+(b1aad1c), which the first HW run made necessary. Not run on HW: "This device's saves"
+(`--force-upload`; offline suite only), the LocalLow spelling on a fresh prefix (needs a LocalLow
+game: Moving Out, Neon Abyss), and the case-sensitive filter suspicion (needs a Fallout).
 
 ### Bookkeeping
 

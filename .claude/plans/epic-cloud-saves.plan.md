@@ -344,9 +344,28 @@ Moving Out passed LocalLow on a fresh prefix), and the case-sensitive filter sus
     would make a cloud download delete the game's data. So a legendary 0002 must strip BOTH
     download lists and match case-insensitively together, with a check-dry-run case for exactly
     this.
-  Still unknown: the real case of Epic Fallout's save files (needs an install; Fallout 1 is the
-  smallest). Separately ours: report legendary's "No save files matching…" as "nothing uploaded",
-  not "uploaded".
+  **CONFIRMED ON HW 2026-11-19 (Fallout 1, appid 2918600411, `{InstallDir}/`, `*.sav, *.dat` minus
+  `critter.dat, master.dat`).** The Epic build has four language folders, each with uppercase
+  `MASTER.DAT` and `CRITTER.DAT` (2.2 GB install), and runs `Fallout 1 English/falloutwHR.exe` (the
+  high-res patch). The user's save landed as `Fallout 1 English/DATA/SAVEGAME/SLOT01/SAVE.DAT`,
+  `V13ENT.SAV` and `AUTOMAP.SAV`, all uppercase. After exit: `saves: upload -> uploaded`, the status
+  record says `uploaded`, and legendary stored a `save_timestamp`, yet `legendary list-saves` shows
+  NOTHING for Fallout. The dry run still says `local_newer` (no cloud save means `local_newer`,
+  always), so every exit "uploads" nothing and reports success. The game page would say "on, last
+  synced …". Also seen: a dry run right after install already said `local_newer`, because
+  legendary dates the local side by the newest file in the whole folder, unfiltered.
+  **Our own bug, found from the install:** `selects()` ignores the exclude list and matches in any
+  case, so a backup of this install would copy all eight `MASTER.DAT`/`CRITTER.DAT` (about 2 GB),
+  with five copies kept. It has not fired: a backup only precedes a download, and Fallout has no
+  cloud save.
+  **Fix, before merge:**
+  (a) legendary patch 0002: `_filename_matches` case-insensitive, and the download's lists
+  stripped like the upload's, so the upload, the download and Epic's Windows client select the same
+  files. Its check must prove `MASTER.DAT` is never deleted and `SAVE.DAT` is uploaded;
+  (b) our backup applies the exclude list too, with the same rule, which is now exactly what the
+  patched legendary deletes;
+  (c) an upload where legendary packed nothing ("No save files matching…" / "No files to upload")
+  is recorded as nothing uploaded, not as "uploaded".
 - **CALL_TIMEOUT (30 s) per transfer**, shared with GOG. A large Epic save (Cities: Skylines) over
   slow Wi-Fi could be cut off mid-download, after legendary has already deleted the local files.
   The backup holds them, and the next launch downloads again (an empty local side reads

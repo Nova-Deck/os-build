@@ -256,6 +256,7 @@ class Session:
         self.status_file = pathlib.Path(paths["GOGDL_CONFIG_PATH"]) / STATUS
         self.env = {k: v for k, v in os.environ.items() if k not in DROPPED_ENV}
         self.env["GOGDL_CONFIG_PATH"] = paths["GOGDL_CONFIG_PATH"]
+        self.stderr = ""  # the last call's, for what an exit status alone does not say
         self.epic = row.get("store") == "epic"
         self.epic_id = None
         if self.epic:
@@ -292,6 +293,7 @@ class Session:
         except OSError as exc:
             why = f"{tool} did not run ({exc.strerror})"
             return None, why, why
+        self.stderr = done.stderr or ""
         why = "" if done.returncode == 0 else failure(done.stderr, offline)
         return done.returncode, (done.stdout or "").strip(), why
 
@@ -305,29 +307,30 @@ class Session:
         return self.call(argv, "legendary", novadeck_epicsaves.OFFLINE)
 
     @staticmethod
-    def _has_files(src, include):
-        """Is there a file to keep? Empty folders are not: a backup of nothing would rotate a real
-        one out of the SAVE_BACKUPS_KEPT."""
+    def _has_files(src, include, exclude):
+        """Is there a file to keep? Empty folders are not, nor files the filters leave out: a backup
+        of nothing would rotate a real one out of the SAVE_BACKUPS_KEPT."""
         if not src.is_dir():
             return False
         for folder, _dirs, names in os.walk(src):
             rel = pathlib.Path(folder).relative_to(src).as_posix()
-            if any(novadeck_epicsaves.selects(n if rel == "." else f"{rel}/{n}", include) for n in names):
+            if any(novadeck_epicsaves.selects(n if rel == "." else f"{rel}/{n}", include, exclude)
+                   for n in names):
                 return True
         return False
 
-    def backup(self, name, path, include=None):
+    def backup(self, name, path, include=None, exclude=None):
         """Copy the location's folder aside before a download replaces it: all of it, or with an
-        include list only the files it selects (novadeck_epicsaves.selects). True when done or when
-        there is nothing to keep."""
+        Epic game's filters only the files they select (novadeck_epicsaves.selects). True when done
+        or when there is nothing to keep."""
         src = pathlib.Path(path)
-        if not self._has_files(src, include):
+        if not self._has_files(src, include, exclude):
             return True
 
         def unselected(folder, names):
             rel = pathlib.Path(folder).relative_to(src).as_posix()
             return [n for n in names if not os.path.isdir(os.path.join(folder, n))
-                    and not novadeck_epicsaves.selects(n if rel == "." else f"{rel}/{n}", include)]
+                    and not novadeck_epicsaves.selects(n if rel == "." else f"{rel}/{n}", include, exclude)]
         root = self.home / BACKUPS / self.row["token"] / name
         base = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(self.clock()))
         dest, n = root / base, 1
@@ -335,7 +338,7 @@ class Session:
             dest, n = root / f"{base}-{n}", n + 1
         try:
             root.mkdir(parents=True, exist_ok=True)
-            shutil.copytree(src, dest, symlinks=True, ignore=unselected if include else None)
+            shutil.copytree(src, dest, symlinks=True, ignore=unselected if include or exclude else None)
         except OSError as exc:
             log(f"{name}: backup failed ({exc}); not downloading over the local save")
             return False
@@ -368,11 +371,14 @@ def _epic_sync(s, path, flag, did):
         return {"did": "failed", "reason": why}
     if rc != 0:
         return {"did": "failed", "reason": f"sync-saves {flag} exited {rc}{f': {why}' if why else ''}"[:MAX_REASON]}
+    if did == "uploaded" and novadeck_epicsaves.NOTHING_PACKED in s.stderr:
+        return {"did": "skipped",
+                "reason": "legendary found no file the game's save filters select; nothing uploaded"}
     return {"did": did}
 
 
 def _download(s, key, name, path, ts, flag):
-    if not s.backup(name, path, s.row["cloud"].get("include")):
+    if not s.backup(name, path, s.row["cloud"].get("include"), s.row["cloud"].get("exclude")):
         return {"did": "failed", "reason": "the local folder could not be backed up"}
     return _real_sync(s, key, name, path, ts, flag, "downloaded")
 

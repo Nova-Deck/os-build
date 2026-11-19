@@ -196,7 +196,7 @@ check(res and res[0]["did"] == "downloaded" and len(backups()) == n,
       "an empty local folder downloads with nothing to back up")
 local({"slot1.dsg": "mine"})
 real_backup = ss.Session.backup
-ss.Session.backup = lambda self, name, path, include=None: False
+ss.Session.backup = lambda self, name, path, include=None, exclude=None: False
 try:
     leg = Legendary({SP: verdict("remote_newer")})
     res = run(leg)
@@ -258,22 +258,33 @@ res = run(leg)
 check(res and res[0]["did"] == "skipped" and "install" in res[0]["reason"] and not leg.calls,
       f"the whole install folder with no include list is refused: a download would delete the game ({res})")
 
-print("== a folder narrowed by filters (Fallout: the whole install, *.sav and *.dat)")
+print("== a folder narrowed by filters (Fallout's Epic install, HW 2026-11-19)")
+# The whole install, *.sav and *.dat minus critter.dat and master.dat. Four language folders each
+# carry an uppercase MASTER.DAT and CRITTER.DAT (2.2 GB in all); the save is uppercase too.
 epic_row(location="{InstallDir}/", include=["*.sav", "*.dat"], exclude=["critter.dat", "master.dat"])
-(install / "FALLOUT.EXE").write_text("the game")
-(install / "master.dat").write_text("game data")
-local({"DATA/SAVEGAME/SLOT01/SAVE.DAT": "slot", "DATA/SAVEGAME/SLOT01/AGRUN.SAV": "sav"}, where=install)
+game = {f"Fallout 1 {lang}/{name}": "game data" for lang in ("English", "French", "German", "Spanish")
+        for name in ("MASTER.DAT", "CRITTER.DAT")}
+game["Fallout 1 English/falloutwHR.exe"] = "the game"
+local(game, where=install)
+SLOT = "Fallout 1 English/DATA/SAVEGAME/SLOT01"
+local({f"{SLOT}/SAVE.DAT": "slot", f"{SLOT}/V13ENT.SAV": "map", f"{SLOT}/AUTOMAP.SAV": "automap"},
+      where=install)
 IP = str(install)
 leg = Legendary({IP: verdict("remote_newer", path=IP)})
 res = run(leg)
 kept = sorted(p.relative_to(b).as_posix() for b in backups()[-1:] for p in b.rglob("*") if p.is_file())
 check(res and res[0]["did"] == "downloaded", f"the include list makes the install folder syncable ({res})")
-check("FALLOUT.EXE" not in kept and "DATA/SAVEGAME/SLOT01/AGRUN.SAV" in kept
-      and "DATA/SAVEGAME/SLOT01/SAVE.DAT" in kept,
-      f"the backup holds what the filters select, not the whole game ({kept})")
-check("master.dat" in kept,
-      "an excluded file that matches the include list is backed up anyway: legendary's download "
-      "reads the filters unstripped, so what it deletes is not exactly what the list says")
+check(kept == sorted([f"{SLOT}/AUTOMAP.SAV", f"{SLOT}/SAVE.DAT", f"{SLOT}/V13ENT.SAV"]),
+      f"the backup holds exactly the saves, uppercase ones too: what legendary (patch 0002) deletes ({kept})")
+check(not any(k.endswith(("MASTER.DAT", "CRITTER.DAT", ".exe")) for k in kept),
+      "...never the game's data: the exclude list applies, in any case (about 2 GB per backup otherwise)")
+n = len(backups())
+local(game, where=install)  # the stub's download deleted everything under the folder; the game is back
+for f in [*install.rglob("*.SAV"), install / SLOT / "SAVE.DAT"]:
+    f.unlink(missing_ok=True)
+res = run(Legendary({IP: verdict("remote_newer", path=IP)}))
+check(res and res[0]["did"] == "downloaded" and len(backups()) == n,
+      "with no save left, only game data the filters exclude: nothing to back up, no empty backup")
 
 print("== after the game exits")
 epic_row()
@@ -284,6 +295,20 @@ check(res == [{"name": "saves", "action": "upload", "did": "uploaded"}]
       and leg.real() == [[es.LEGENDARY, "-y", "sync-saves", GID, "--save-path", SP, "--skip-download"]],
       f"local_newer: --skip-download uploads ({res}, {leg.real()})")
 check(status() and status()["phase"] == "exit", "the exit run is recorded too")
+NOTHING = ("[Core] INFO: Packing savegame for \"Fallout\", input folder: /g\n"
+           "[SGH] WARNING: No save files matching the specified filters have been found.\n"
+           "[Core] INFO: No files to upload. If you believe this is incorrect run command with \"--disable-filters\"\n")
+leg = Legendary({SP: verdict("local_newer")}, stderr=NOTHING)
+res = after(leg)
+check(res and res[0]["did"] == "skipped" and "nothing uploaded" in res[0]["reason"] and leg.real(),
+      f"an upload where legendary packed nothing is NOT 'uploaded' (Fallout, HW 2026-11-19) ({res})")
+check(status() and status()["outcomes"][0]["did"] == "skipped",
+      "...and the game page's record says so")
+local({"slot1.dsg": "mine"})
+leg = Legendary({SP: verdict("conflict")}, stderr=NOTHING)
+res = run(leg, choose=answer("local"))
+check(res and res[0]["did"] == "skipped" and "nothing uploaded" in res[0]["reason"],
+      f"the same for 'This device's saves' (--force-upload) ({res})")
 for st, did in (("conflict", "next-launch"), ("remote_newer", "nothing"), ("same_age", "nothing")):
     leg = Legendary({SP: verdict(st)})
     res = after(leg)

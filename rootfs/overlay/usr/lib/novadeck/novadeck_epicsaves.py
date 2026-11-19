@@ -5,7 +5,8 @@
     dry_run_argv / sync_argv          the legendary calls
     verdict(stdout, gid)              the dry run's answer, in the GOG sync's vocabulary
     whole_install(path, install, include)   a folder a download must never run in
-    selects(relpath, include)         is this file one the game's filters select (for the backup)
+    selects(relpath, include, exclude)   is this file one the game's filters select (the backup)
+    NOTHING_PACKED                    what legendary says when an upload found no file to send
 
 THE ROW. The plugin writes epic-cloud.json (py_modules/novadeck_stores/epic_cloud.py) with ONE
 folder per game. row() hands the shared sync a GOG-shaped row: `cloud.locations` holding that folder
@@ -17,13 +18,18 @@ policy serves both (.claude/plans/epic-cloud-saves.plan.md design §3). `unsuppo
 `no_save_path` are reasons, not actions: the location is skipped and the game page says why.
 
 THE BACKUP before a download. legendary's download DELETES the local save files before it fetches
-the cloud's (core.py download_saves), so a backup is what makes it recoverable. When the game has
-an include list, its folder may be the whole install (Fallout: `{InstallDir}/`, `*.sav, *.dat`), so
-only what the list selects is copied. The exclude list is NOT applied to the backup: legendary's
-download reads both lists without stripping the spaces after the commas, so what it actually
-deletes is not exactly what the lists say, and copying a superset is the safe side. With no
-include list, legendary's download deletes everything in the folder not excluded. When that folder
-is the whole install folder, the download would delete the game, so whole_install() refuses it.
+the cloud's (core.py download_saves), so a backup is what makes it recoverable. A game's folder may
+be the whole install (Fallout: `{InstallDir}/`, `*.sav, *.dat` minus `critter.dat, master.dat`, with
+an uppercase MASTER.DAT and CRITTER.DAT in each of four language folders), so the backup copies
+what the game's filters select, include AND exclude, in any case. That is exactly what our
+legendary deletes and uploads (patch 0002, packages/legendary): stock legendary matched
+case-sensitively and read the download's lists unstripped. With no include list, a download deletes
+everything in the folder not excluded. When that folder is the whole install folder, the download
+would delete the game, so whole_install() refuses it.
+
+AN UPLOAD THAT SENT NOTHING. When the filters select no file, legendary logs "No files to upload"
+and still exits 0, and stores a sync time. That is not an upload (Fallout before patch 0002, HW
+2026-11-19), so the sync records it as skipped, with NOTHING_PACKED's reason.
 """
 import fnmatch
 import json
@@ -38,6 +44,7 @@ OFFLINE = "Epic could not be reached (no network?)"
 # legendary's SaveGameStatus (lowercased by the dry run) -> the GOG sync's action.
 ACTIONS = {"local_newer": "upload", "remote_newer": "download", "conflict": "conflict",
            "same_age": "none", "no_save": "none"}
+NOTHING_PACKED = "No files to upload"  # legendary core.py upload_save, logged on stderr
 REASONS = {"unsupported": "legendary says the game has no cloud saves (unsupported)",
            "no_save_path": "legendary could not work out the save folder (no_save_path)"}
 
@@ -112,18 +119,22 @@ def whole_install(path, install, include):
     return os.path.realpath(path) == os.path.realpath(install)
 
 
-def selects(relpath, include):
-    """Does the include list select this file (a /-separated path relative to the save folder)?
-    legendary's own matching (utils/savegame_helper.py _filename_matches): a pattern ending in /
-    is a folder prefix, a plain pattern a suffix, and both may use fnmatch wildcards. Unlike
-    legendary's, in ANY CASE: legendary's fnmatch is case-sensitive on Linux, where `*.dat` misses
-    Fallout's SAVE.DAT, and the backup must hold at least everything a download might delete."""
-    if not include:
-        return True
-    rel = relpath.casefold()
-    for pattern in (p.casefold() for p in include):
+def _matches(rel, patterns):
+    """legendary's _filename_matches as patched (0002): a pattern ending in / is a folder prefix, a
+    plain pattern a suffix, and both may use fnmatch wildcards, all in any case."""
+    rel = rel.casefold()
+    for pattern in (p.casefold() for p in patterns):
         if pattern.endswith("/") and rel.startswith(pattern):
             return True
         if rel.endswith(pattern) or fnmatch.fnmatchcase(rel, pattern):
             return True
     return False
+
+
+def selects(relpath, include, exclude=None):
+    """Do the game's filters select this file (a /-separated path relative to the save folder)?
+    Selected by the include list (all files without one) and not excluded: what legendary's upload
+    sends and its download deletes. No lists at all (GOG) selects everything."""
+    if include and not _matches(relpath, include):
+        return False
+    return not (exclude and _matches(relpath, exclude))

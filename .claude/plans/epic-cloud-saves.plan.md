@@ -366,6 +366,23 @@ Moving Out passed LocalLow on a fresh prefix), and the case-sensitive filter sus
   patched legendary deletes;
   (c) an upload where legendary packed nothing ("No save files matching…" / "No files to upload")
   is recorded as nothing uploaded, not as "uploaded".
+  **All three done 2026-11-19.**
+  (a) `packages/legendary/patches/0002-sync-saves-match-save-filters-in-any-case.patch`
+  (legendary 0.20.43-3.1): `_filename_matches` casefolds; `parse_filter_list()` (strip, drop empty
+  items) serves both the upload and the download. That fixed a THIRD bug: in `"LocalData/,"` the
+  trailing empty item was a suffix of every file, so the upload excluded everything.
+  `check-save-filters.py` runs legendary's real `upload_save` and `download_saves` (network
+  stubbed; the manifest fetch fails, so what remains is what the clean-up kept) against Fallout's
+  real Epic layout, with both Fallouts' filter strings. It checks: every save packed and cleaned,
+  in any case; no MASTER.DAT or CRITTER.DAT ever; the empty item dropped. It fails on 0001 alone,
+  and a mutant that fixes the case but leaves the download's exclude list unstripped deletes all
+  four MASTER.DAT and fails it. Both checks pass in the aarch64 container.
+  (b) `novadeck_epicsaves.selects(rel, include, exclude)` applies the same rule as the patched
+  legendary, and the backup passes both lists. On Fallout's layout the backup is exactly
+  SAVE.DAT, V13ENT.SAV and AUTOMAP.SAV. A folder holding only excluded game data takes no backup.
+  (c) after a real Epic upload, legendary's "No files to upload" on stderr turns `uploaded` into
+  `skipped`, with the reason "legendary found no file the game's save filters select; nothing
+  uploaded", also for "This device's saves". `tests/test-store-epicsync.sh`: 45 checks.
 - **CALL_TIMEOUT (30 s) per transfer**, shared with GOG. A large Epic save (Cities: Skylines) over
   slow Wi-Fi could be cut off mid-download, after legendary has already deleted the local files.
   The backup holds them, and the next launch downloads again (an empty local side reads

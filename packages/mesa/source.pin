@@ -19,8 +19,8 @@
 #                  Absent while we carry none (packages/mesa-x86 reads the same field).
 #
 # Upstream source (informational; the URL + sha also live in the PKGBUILD):
-#   url:    https://archive.mesa3d.org/mesa-26.3.0.tar.xz
-#   sha256: 91d729aa68bb89e4ec857841300bbe922bcb3e52b1f97566ca83930d3b28343a
+#   url:    https://archive.mesa3d.org/mesa-26.3.1.tar.xz
+#   sha256: 4e4e438eac7b840a9383988cbb7c08dad8041da544b9319fc26d319fa7348961
 #
 # To bump mesa: edit pkgver (and the tarball sha256) in packages/mesa/PKGBUILD, update the
 # url/sha256 lines above, and re-roll any patches under ./patches/ against the new tag.

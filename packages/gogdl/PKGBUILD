@@ -48,7 +48,7 @@ source=("${pkgname}-${pkgver}.tar.gz::${url}/archive/v${pkgver}.tar.gz"
         'check-dry-run.py')
 sha256sums=('360ab09bc4b5b69bff66a1ef23718be51d7db66f1ccf696859b2bfed3f655bb9'
             '3f636e59b01e12fde61355e6f555467e873f4f00e3edc1aa65ae530eda3df554'
-            '15169af9e8f5de10d14858f79575329cdc514d202b5bf559bd0a6b07842d79b0')
+            '6ab5184693c1bd85e36700bc345441e4d3ae317c06a80124509c4707b416bf35')
 
 prepare() {
   cd "heroic-gogdl-${pkgver}"

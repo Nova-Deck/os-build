@@ -65,10 +65,12 @@ def local(files, where=SAVES):
         (where / name).parent.mkdir(parents=True, exist_ok=True)
         (where / name).write_text(text)
 
-def verdict(status, local_newest=1795040000.0, cloud_newest=1795050000.0, path=SP, app=GID):
+SYNCED = 1795000000.0
+def verdict(status, local_newest=1795040000.0, cloud_newest=1795050000.0, path=SP, app=GID,
+            last_sync=SYNCED):
     return {"app_name": app, "status": status, "save_path": path, "local_newest": local_newest,
             "cloud_newest": cloud_newest, "cloud_manifest": "2026.11.19-10.00.00.manifest",
-            "last_sync": 1795000000.0}
+            "last_sync": last_sync}
 
 class Legendary:
     """Stands in for subprocess.run(legendary ...). verdicts: --save-path -> dry-run JSON (or str)."""
@@ -234,6 +236,68 @@ leg = Legendary({SP: verdict("conflict")})
 res = run(leg, choose=answer("local"))
 check(res and res[0]["did"] == "uploaded" and leg.real() and leg.real()[0][-1] == "--force-upload",
       f"'local': --force-upload ({res})")
+
+print("== the first sync on this device: saves on both sides are a question (HW 2026-11-19)")
+# legendary looks for a conflict only once it has synced the game here (last_sync); before that it
+# compares dates. Guacamelee on the Pocket Max: local saves from before cloud sync, a newer cloud
+# save, remote_newer, and the local saves were replaced at the first launch, unasked.
+v = es.verdict(json.dumps(verdict("remote_newer", last_sync=None)), GID)[0]
+check(v and v["last_sync"] is None and v["action"] == "download",
+      f"verdict() carries legendary's last_sync; the rule is first_sync()'s, not verdict()'s ({v})")
+v = es.verdict(json.dumps(verdict("remote_newer")), GID)[0]
+check(v and v["last_sync"] == SYNCED, f"a synced game's last_sync is legendary's save_timestamp ({v})")
+for f in SAVES.rglob("*"):
+    if f.is_file():
+        f.unlink()
+local({"slot1.dsg": "never synced"})
+for st in ("remote_newer", "local_newer"):
+    asked.clear()
+    leg = Legendary({SP: verdict(st, last_sync=None)})
+    res = run(leg, choose=answer(None))
+    check(res == [{"name": "saves", "action": "conflict", "did": "kept-local"}] and not leg.real()
+          and len(asked) == 1 and asked[0][3]["local"]["newest"] and asked[0][3]["cloud"]["newest"],
+          f"{st} with no last sync and saves on both sides: asked, with both dates ({res})")
+    check((SAVES / "slot1.dsg").read_text() == "never synced", f"...and unanswered, the local save stays ({st})")
+n = len(backups())
+leg = Legendary({SP: verdict("remote_newer", last_sync=None)})
+res = run(leg, choose=answer("cloud"))
+check(res and res[0]["did"] == "downloaded" and len(backups()) == n + 1
+      and leg.real() and leg.real()[0][-1] == "--force-download"
+      and (backups()[-1] / "slot1.dsg").read_text() == "never synced",
+      f"'cloud' on a first sync: back up, then --force-download ({res})")
+local({"slot1.dsg": "never synced"})
+leg = Legendary({SP: verdict("remote_newer", last_sync=None)})
+res = run(leg, choose=answer("local"))
+check(res and res[0]["did"] == "uploaded" and leg.real() and leg.real()[0][-1] == "--force-upload",
+      f"'local' on a first sync: --force-upload ({res})")
+leg = Legendary({SP: verdict("local_newer", last_sync=None)})
+res = after(leg)
+check(res and res[0]["did"] == "next-launch" and not leg.real(),
+      f"after exit, never synced: no upload over a cloud save this device never saw (Decide later holds) ({res})")
+leg = Legendary({SP: verdict("local_newer", cloud_newest=None, last_sync=None)})
+res = after(leg)
+check(res and res[0]["did"] == "uploaded",
+      f"never synced and nothing in the cloud: the first exit uploads, as before ({res})")
+for f in SAVES.rglob("*"):
+    if f.is_file():
+        f.unlink()
+asked.clear()
+leg = Legendary({SP: verdict("remote_newer", local_newest=None, last_sync=None)})
+res = run(leg, choose=answer(None))
+check(res and res[0]["did"] == "downloaded" and not asked,
+      f"never synced and an empty local folder (a new device): downloaded, nothing asked ({res})")
+for f in SAVES.rglob("*"):  # the stub's download above wrote the cloud's slot1.dsg
+    if f.is_file():
+        f.unlink()
+local({"desktop.ini": "x"})
+epic_row(include=["*.dsg"])
+asked.clear()
+leg = Legendary({SP: verdict("remote_newer", last_sync=None)})
+res = run(leg, choose=answer(None))
+check(res and res[0]["did"] == "downloaded" and not asked,
+      f"never synced, the folder holds only files the filters leave out: downloaded, nothing asked ({res})")
+(SAVES / "desktop.ini").unlink(missing_ok=True)  # the stub's download deletes it; real legendary keeps it
+epic_row()
 
 print("== where the folder is")
 epic_row(location="{AppData}/../LocalLow/Snapshot Games Inc/Phoenix Point/EGS/{EpicID}/")

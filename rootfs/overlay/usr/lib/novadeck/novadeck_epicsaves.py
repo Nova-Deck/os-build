@@ -4,6 +4,7 @@
     account_id(config path)           legendary's account id, for {EpicID}
     dry_run_argv / sync_argv          the legendary calls
     verdict(stdout, gid)              the dry run's answer, in the GOG sync's vocabulary
+    first_sync(verdict, has_local)    a never-synced game with saves on both sides: a conflict
     whole_install(path, install, include)   a folder a download must never run in
     selects(relpath, include, exclude)   is this file one the game's filters select (the backup)
     NOTHING_PACKED                    what legendary says when an upload found no file to send
@@ -16,6 +17,14 @@ THE VERDICT comes from `legendary sync-saves --dry-run` (our patch 0001, package
 JSON line with legendary's own SaveGameStatus. ACTIONS maps it to the GOG sync's actions, so one
 policy serves both (.claude/plans/epic-cloud-saves.plan.md design §3). `unsupported` and
 `no_save_path` are reasons, not actions: the location is skipped and the game page says why.
+
+THE FIRST SYNC ON A DEVICE is a question when both sides hold saves (first_sync). legendary only
+looks for a conflict once it has synced the game here (installed.json's save_timestamp, the dry
+run's `last_sync`); before that it compares the two sides' dates, and a real sync would replace the
+older side without a word. A device whose saves predate cloud sync, or another device's, is two
+histories, not an update: Guacamelee's local saves were replaced by the newer cloud save at the
+first launch (HW 2026-11-19). GOG needs no such rule: with no stored timestamp gogdl's dry run
+gets `--ts 0`, so every file on both sides reads as changed, and that is a conflict.
 
 THE BACKUP before a download. legendary's download DELETES the local save files before it fetches
 the cloud's (core.py download_saves), so a backup is what makes it recoverable. A game's folder may
@@ -45,6 +54,9 @@ OFFLINE = "Epic could not be reached (no network?)"
 ACTIONS = {"local_newer": "upload", "remote_newer": "download", "conflict": "conflict",
            "same_age": "none", "no_save": "none"}
 NOTHING_PACKED = "No files to upload"  # legendary core.py upload_save, logged on stderr
+# What legendary answers when it has never synced a game here and both sides hold saves: it can only
+# compare dates, and either answer would overwrite one side unasked.
+FIRST_SYNC_STATUSES = ("remote_newer", "local_newer")
 REASONS = {"unsupported": "legendary says the game has no cloud saves (unsupported)",
            "no_save_path": "legendary could not work out the save folder (no_save_path)"}
 
@@ -93,7 +105,8 @@ def _newest(value):
 def verdict(stdout, gid):
     """(verdict, None) for an actionable status, (None, reason) for one that says why not, or
     (None, None) when stdout holds no line for this game. A verdict is {action, status, local:
-    {newest}, cloud: {newest}}, the shape novadeck_savesync acts on and ask() reads."""
+    {newest}, cloud: {newest}, last_sync}, the shape novadeck_savesync acts on and ask() reads;
+    last_sync is legendary's save_timestamp, None when it has never synced the game here."""
     for line in reversed((stdout or "").splitlines()):
         try:
             data = json.loads(line)
@@ -108,8 +121,20 @@ def verdict(stdout, gid):
             return None, None
         return {"action": ACTIONS[status], "status": status,
                 "local": {"newest": _newest(data.get("local_newest"))},
-                "cloud": {"newest": _newest(data.get("cloud_newest"))}}, None
+                "cloud": {"newest": _newest(data.get("cloud_newest"))},
+                "last_sync": _newest(data.get("last_sync"))}, None
     return None, None
+
+
+def first_sync(verdict, has_local):
+    """The verdict to act on: a conflict instead of legendary's date comparison when it has never
+    synced the game here and both sides hold saves. `has_local` is whether the folder holds a file
+    the game's filters select; legendary dates the local side by the newest file in the WHOLE
+    folder, so a folder holding only game data (Fallout's install) still downloads unasked."""
+    if (verdict["status"] in FIRST_SYNC_STATUSES and verdict.get("last_sync") is None and has_local
+            and verdict["local"]["newest"] and verdict["cloud"]["newest"]):
+        return {**verdict, "action": "conflict"}
+    return verdict
 
 
 def whole_install(path, install, include):

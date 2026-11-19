@@ -313,6 +313,26 @@ and 10 pass on the Pocket Max. That was on the OTA of 1d50cf2 plus the frontend_
 (`--force-upload`; offline suite only), the lowercase `locallow` respelling (needs Phoenix Point;
 Moving Out passed LocalLow on a fresh prefix), and the case-sensitive filter suspicion (needs a Fallout).
 
+**Found after v0.10.9 shipped (2026-11-19, Pocket Max internal install): the first sync on a device
+that already had saves replaced them unasked.** Guacamelee had local saves from before cloud sync
+(SAVE.DAT, 31 Oct), and the cloud had a newer one. legendary looks for a conflict only once it has
+synced the game on this device (installed.json `save_timestamp`); with none, it compares dates and
+said `remote_newer`, so the launch backed up and downloaded with no question. The gates above never
+met this case: DOOM 64 and Moving Out started from an empty local folder (a download is right
+there), and gate 7's conflict was staged with a stored sync time. The backup held the saves, and
+they were restored by hand (copied with fresh mtimes, so the next launch reads `local_newer` rather
+than downloading over them again).
+**Fixed:** `novadeck_epicsaves.first_sync` turns `remote_newer`/`local_newer` into a conflict when the
+dry run's `last_sync` is null, both sides have a date, and the local folder holds a file the game's
+filters select. An empty folder (a new device) still downloads unasked, and so does one holding
+only excluded files (Fallout's game data). After exit the same rule gives `next-launch`, so a
+never-synced device never uploads over a cloud save it hasn't seen. GOG needed no change: with no
+stored timestamp the sync passes gogdl `--ts 0`, every file on both sides reads as changed, and
+that is a conflict. gogdl's check-dry-run.py now pins this at build time, so a gogdl bump that
+changes it fails the build. `tests/test-store-epicsync.sh`: 57 checks; a mutant with the rule
+off fails 7 of them with Guacamelee's exact outcome. HW owed: DOOM 64 on the same device (local
+saves from 10 Nov, none synced; the cloud has the card's 19 Nov saves) must ask.
+
 ### Bookkeeping
 
 - A GitHub issue tracks the work, linking this plan.

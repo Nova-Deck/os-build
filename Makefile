@@ -234,8 +234,11 @@ OVERLAY_PATCHES := $(wildcard packages/*/patches/*.patch)
 # build inputs too — track them so editing a recipe (deps, meson options) rebuilds that package.
 OVERLAY_PKGBUILDS := $(wildcard packages/*/PKGBUILD)
 # `local_sources:` files a local PKGBUILD's source=() names, staged beside it (configs, the recipe's
-# own patches — packages/yajl, packages/containers-common).
-OVERLAY_LOCALSRC := $(wildcard packages/*/*.patch packages/*/*.conf)
+# own patches — packages/yajl, packages/containers-common; build-time checks — packages/gogdl,
+# packages/legendary). Read from each pin's `local_sources:` line exactly as inputhash.sh's pin_field
+# reads it, never globbed by extension: a `*.patch *.conf` glob missed gogdl's check-dry-run.py, so
+# editing it moved the input hash while `make overlay` said "Nothing to be done".
+OVERLAY_LOCALSRC := $(foreach pin,$(OVERLAY_PINS),$(addprefix $(dir $(pin)),$(shell sed -n 's/^local_sources:[[:space:]]*//p' $(pin) | head -1)))
 # Overlay packages are ARCH-scoped (a rebuilt aarch64 gamescope serves every aarch64 device),
 # so the repo is shared at work/repo/<arch>/.
 OVERLAY_ARCH    ?= aarch64

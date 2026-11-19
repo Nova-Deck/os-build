@@ -448,7 +448,9 @@ def _epic_classify(s, name, location):
         else:
             reason = "dry run printed no verdict"
         return {"name": name, "did": "skipped", "reason": reason}, None
-    return None, (name, path, None, None, verdict)
+    cloud = s.row["cloud"]
+    has_local = s._has_files(pathlib.Path(path), cloud.get("include"), cloud.get("exclude"))
+    return None, (name, path, None, None, novadeck_epicsaves.first_sync(verdict, has_local))
 
 
 def sync_location(s, index, location):

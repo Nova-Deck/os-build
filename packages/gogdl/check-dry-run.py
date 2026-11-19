@@ -85,6 +85,19 @@ r = dry_run(d, [("slot1.sav", "x", iso(OLD)), ("sub/slot2.sav", "y", iso(NEW))],
 check(r["action"] == "conflict" and r["updated_cloud"] == ["sub/slot2.sav"],
       f"both sides changed: conflict, the classification a real sync only logs ({r})")
 
+# A device that never synced the game: novadeck_savesync passes --ts 0 when it has no stored
+# timestamp. Saves on both sides must then be a conflict (the "Which saves?" question), never a
+# date comparison that replaces one side unasked; legendary does compare dates there, which is
+# why novadeck_epicsaves.first_sync exists (Guacamelee, HW 2026-11-19). Even a local side OLDER
+# than the cloud's must ask: it may be this device's own, never-uploaded history.
+older = local_dir({"slot1.sav": OLD})
+r = dry_run(older, [("slot1.sav", "x", iso(NEW))], 0)
+check(r["action"] == "conflict",
+      f"never synced (--ts 0), saves on both sides, cloud newer: conflict, not a download ({r})")
+r = dry_run(d, [("slot1.sav", "x", iso(OLD))], 0)
+check(r["action"] == "conflict",
+      f"never synced (--ts 0), saves on both sides, local newer: conflict, not an upload ({r})")
+
 r = dry_run(d, [("slot1.sav", "x", iso(OLD))], NEW + 1)
 check(r["action"] == "none" and r["not_existing_remotely"] == ["sub/slot2.sav"],
       f"nothing newer than the timestamp: none, with the file a download would delete ({r})")

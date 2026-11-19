@@ -383,6 +383,13 @@ Moving Out passed LocalLow on a fresh prefix), and the case-sensitive filter sus
   (c) after a real Epic upload, legendary's "No files to upload" on stderr turns `uploaded` into
   `skipped`, with the reason "legendary found no file the game's save filters select; nothing
   uploaded", also for "This device's saves". `tests/test-store-epicsync.sh`: 45 checks.
+  **HW PASS 2026-11-19 (Pocket Max, hot patch: `pacman -U` legendary 0.20.43-3.1, plus
+  novadeck_epicsaves.py and novadeck_savesync.py).** Fallout launched and quit with the 16:41 save
+  still on disk. Launch: `upload -> nothing`. Exit: `upload -> uploaded`, and `list-saves` now shows
+  `2026.11.19-16.42.09.manifest`. Fetched and read, it holds exactly `AUTOMAP.SAV` (2217),
+  `SAVE.DAT` (38275) and `V13ENT.SAV` (177224), the sizes on disk, and no MASTER.DAT or
+  CRITTER.DAT. A dry run then says `same_age`. The manifest is named after the install's newest file
+  (16:42:09), not the save (16:41:52): legendary dates the local side unfiltered.
 - **CALL_TIMEOUT (30 s) per transfer**, shared with GOG. A large Epic save (Cities: Skylines) over
   slow Wi-Fi could be cut off mid-download, after legendary has already deleted the local files.
   The backup holds them, and the next launch downloads again (an empty local side reads

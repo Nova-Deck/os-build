@@ -1,6 +1,14 @@
-"""Where a GOG game's cloud-save location is on the host, inside its Proton prefix.
+"""Where a GOG or Epic game's cloud-save location is on the host, inside its Proton prefix.
 
     resolve(location, install, prefix) -> (host path, None) | (None, reason)
+    resolve_epic(location, install, prefix, epic_id) -> the same, for an Epic CloudSaveFolder
+
+EPIC writes `{AppData}/../LocalLow/Studio/Game/{EpicID}/` (legendary core.py get_save_path).
+resolve_epic() rewrites each variable as the GOG token or Windows variable for the same folder
+(EPIC_VARIABLES) and continues as resolve() does, so the registry, the refusals and the
+containment below apply unchanged. legendary's "legacy AppData" rewrite is not needed: both
+shipped Protons move the XP-era names (see the TABLE below). legendary's own resolver is not
+used: it realpath()s the result with no containment check (.claude/plans/epic-cloud-saves.plan.md).
 
 GOG's remote-config names each save location with its own tokens (`<?DOCUMENTS?>/Another World`)
 or Windows variables (`%LocalAppData%/...`, Heroic's default when a game names none). Heroic
@@ -30,8 +38,10 @@ REFUSED, with a reason the game page can show (a location is never dropped silen
 
 CASE. Wine is case-insensitive and the game may have created `Another World` where GOG says
 `another world`. Each level that already exists is matched in any case, so the sync uses the
-game's own folder instead of creating a second one; a level that does not exist yet keeps GOG's
-spelling.
+game's own folder instead of creating a second one. A level that does not exist yet keeps the
+store's spelling, except a profile folder (AppData, Documents, Saved Games, Local, LocalLow,
+Roaming), which takes Windows': a first-launch download into `locallow` would otherwise sit beside
+the `LocalLow` Proton's prefix setup adds, and the game would read the empty one.
 """
 import os
 import re
@@ -63,10 +73,25 @@ VARIABLES = {
     "PROGRAMDATA": "C:/ProgramData",
     "PUBLIC": "C:/users/Public",
 }
+# Epic's CloudSaveFolder variables (legendary core.py get_save_path), each as the GOG token or
+# Windows variable for the same folder, so both stores share one expansion, registry and
+# containment. {AppData} is LOCAL AppData, as in the Epic launcher. {EpicID} is the account id.
+EPIC_VARIABLES = {
+    "INSTALLDIR": "<?INSTALL?>",
+    "APPDATA": "<?APPLICATION_DATA_LOCAL?>",
+    "USERDIR": "<?DOCUMENTS?>",
+    "USERSAVEDGAMES": "<?SAVED_GAMES?>",
+    "USERPROFILE": "%USERPROFILE%",
+}
+# Windows' spelling of the profile folders, for a level that does not exist yet (_match_case).
+USER_FOLDERS = {n.casefold(): n for n in ("AppData", "Documents", "Saved Games")}
+APPDATA_FOLDERS = {n.casefold(): n for n in ("Local", "LocalLow", "Roaming")}
 REG_FOLDERS = "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders"
 REG_ENVIRONMENT = "Volatile Environment"
 _TOKEN = re.compile(r"<\?(\w+)\?>")
 _VARIABLE = re.compile(r"%(\w+)%")
+_EPIC_VARIABLE = re.compile(r"\{(\w+)\}")
+_EPIC_ID = re.compile(r"[0-9A-Za-z]+")
 _DRIVE = re.compile(r"^([A-Za-z]):(.*)$")
 # A Wine .reg value line: "name"="data" (REG_SZ) or "name"=str(2):"data" (REG_EXPAND_SZ).
 _REG_VALUE = re.compile(r'^"((?:[^"\\]|\\.)*)"=(?:str\(2\):)?"((?:[^"\\]|\\.)*)"$')
@@ -137,6 +162,27 @@ def _expand_variables(location, variables):
     return _VARIABLE.sub(variable, location)
 
 
+def _expand_epic(location, epic_id):
+    """An Epic CloudSaveFolder in the GOG/Windows form resolve() expands. legendary leaves a
+    `%VAR%` unresolved and refuses the path, so a `%` or `<?` here is refused too."""
+    if "%" in location:
+        raise Refused("a Windows %VARIABLE% is not Epic location syntax")
+    if "<?" in location:
+        raise Refused("a GOG <?TOKEN?> is not Epic location syntax")
+
+    def variable(m):
+        name = m.group(1).upper()
+        if name == "EPICID":
+            # One plain path component: it is joined into a folder a download deletes in.
+            if not isinstance(epic_id, str) or not _EPIC_ID.fullmatch(epic_id):
+                raise Refused("{EpicID} needs the Epic account id")
+            return epic_id
+        if name not in EPIC_VARIABLES:
+            raise Refused(f"unknown Epic location variable {{{m.group(1)}}}")
+        return EPIC_VARIABLES[name]
+    return _EPIC_VARIABLE.sub(variable, location)
+
+
 def _anchor(path, install, prefix):
     """(root, rest) for a path that starts at the install folder or at C:."""
     if path.startswith(INSTALL):
@@ -164,16 +210,27 @@ def _components(rest):
     return parts
 
 
+def _windows_spelling(parent, part):
+    """Windows' spelling of a profile folder (users/<user>/AppData, .../AppData/LocalLow, ...), or
+    part unchanged. Epic writes `{appdata}/../locallow`; created that way before Proton's prefix
+    setup, Proton then adds its own AppData/LocalLow beside it, and the game reads that one."""
+    if os.path.basename(parent).casefold() == "appdata":
+        return APPDATA_FOLDERS.get(part.casefold(), part)
+    if os.path.basename(os.path.dirname(parent)).casefold() == "users":
+        return USER_FOLDERS.get(part.casefold(), part)
+    return part
+
+
 def _match_case(root, parts):
-    """root joined with parts, each level that exists taken in its on-disk case."""
+    """root joined with parts, each level that exists taken in its on-disk case, and a profile
+    folder that does not exist yet in Windows' spelling (_windows_spelling)."""
     path = root
-    for i, part in enumerate(parts):
-        if not os.path.isdir(path):
-            return os.path.join(path, *parts[i:])
+    for part in parts:
         if not os.path.lexists(os.path.join(path, part)):
             folded = part.casefold()
-            same = sorted(n for n in os.listdir(path) if n.casefold() == folded)
-            part = same[0] if same else part
+            same = sorted(n for n in os.listdir(path) if n.casefold() == folded) \
+                if os.path.isdir(path) else []
+            part = same[0] if same else _windows_spelling(path, part)
         path = os.path.join(path, part)
     return path
 
@@ -191,11 +248,20 @@ def _inside(path, roots):
 def resolve(location, install, prefix):
     """The host path of a GOG save location for this install and Proton prefix (the `pfx` dir).
     Returns (path, None), or (None, reason) when the location is refused."""
+    return _resolve(location, install, prefix, lambda loc: loc)
+
+
+def resolve_epic(location, install, prefix, epic_id):
+    """resolve() for an Epic CloudSaveFolder; epic_id is the account id {EpicID} stands for."""
+    return _resolve(location, install, prefix, lambda loc: _expand_epic(loc, epic_id))
+
+
+def _resolve(location, install, prefix, translate):
     if not isinstance(location, str) or not location.strip():
         return None, "empty location"
     tokens, variables = folders(prefix)
     try:
-        path = _expand_variables(_expand_tokens(location.strip(), tokens), variables)
+        path = _expand_variables(_expand_tokens(translate(location.strip()), tokens), variables)
         root, rest = _anchor(path.replace("\\", "/"), install, prefix)
         resolved = _match_case(root, _components(rest))
     except Refused as exc:

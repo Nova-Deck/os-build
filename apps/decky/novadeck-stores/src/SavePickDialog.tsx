@@ -1,9 +1,11 @@
 import { DialogBody, DialogBodyText, DialogButton, DialogHeader, Focusable, ModalRoot, showModal } from "@decky/ui";
 import { useRef } from "react";
 import { answerSavePick, SaveChoice } from "./backend";
+import { STORE_LABELS, type StoreId } from "./types";
 
-// Which saves to keep when a GOG game's changed both on this device and in the GOG cloud since
-// they were last synced (.claude/plans/gog-galaxy-comet.plan.md, phase 3 step 6). game-launch is
+// Which saves to keep when a GOG or Epic game's changed both on this device and in its store's cloud
+// since they were last synced (.claude/plans/gog-galaxy-comet.plan.md, phase 3 step 6;
+// .claude/plans/epic-cloud-saves.plan.md step 6). game-launch is
 // blocked waiting for the answer (novadeck_savesync.ask), so the game has not started yet:
 //
 //   * the cloud's saves: the launch backs this device's save folder up first, then downloads;
@@ -20,6 +22,7 @@ export type SavePick = {
   location: string;
   localTime: number; // Unix seconds, 0 when unknown
   cloudTime: number;
+  store: StoreId; // whose cloud: the dialog names it
 };
 
 type Props = SavePick & {
@@ -31,7 +34,7 @@ function when(seconds: number): string {
   return seconds > 0 ? new Date(seconds * 1000).toLocaleString() : "an unknown time";
 }
 
-function SavePickModal({ appid, index, title, localTime, cloudTime, closeModal }: Props) {
+function SavePickModal({ appid, index, title, localTime, cloudTime, store, closeModal }: Props) {
   // One answer per question: a button press closes the modal, and closing must not then send a
   // second answer (Decide later) behind it.
   const answered = useRef(false);
@@ -46,8 +49,8 @@ function SavePickModal({ appid, index, title, localTime, cloudTime, closeModal }
       <DialogHeader>Which saves?</DialogHeader>
       <DialogBody>
         <DialogBodyText>
-          {title} has saves that changed both on this device and in the GOG cloud since they were
-          last synced.
+          {title} has saves that changed both on this device and in the {STORE_LABELS[store]} cloud
+          since they were last synced.
         </DialogBodyText>
         <Focusable style={{ display: "flex", flexDirection: "column", gap: "8px", margin: "12px 0" }}>
           <DialogButton onClick={() => send("cloud")}>Cloud saves, from {when(cloudTime)}</DialogButton>

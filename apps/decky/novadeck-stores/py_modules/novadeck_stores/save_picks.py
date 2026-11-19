@@ -1,16 +1,18 @@
 """The plugin's half of the cloud-save conflict question (.claude/plans/gog-galaxy-comet.plan.md,
 phase 3 step 6; the launch's half is /usr/lib/novadeck/novadeck_savesync.py ask()).
 
-A GOG game whose saves changed both here and in the cloud since the last sync is waiting in
-game-launch on `<appid>.<index>.<local>.<cloud>.savepick` (install_requests.SAVE_PICK). The name
+A GOG or Epic game whose saves changed both here and in the cloud since the last sync is waiting
+in game-launch on `<appid>.<index>.<local>.<cloud>.savepick` (install_requests.SAVE_PICK). The name
 is all root reads: the game's title comes from the registry and the location's name from
-galaxy.json, both the plugin's own files. The answer is `<appid>.<index>.saveanswer`, written as
+galaxy.json, both the plugin's own files. An Epic game (epic-cloud.json) has one folder, location 0,
+named epic_cloud.LOCATION_NAME, as the launch side names it. The event carries the store, so the
+dialog names that store's cloud. The answer is `<appid>.<index>.saveanswer`, written as
 the store user: `cloud` (the launch backs up the local folder, then downloads), `local` (it
 uploads over the cloud), or empty (nothing is synced; the user is asked again next launch).
 """
 import os
 
-from novadeck_stores import cli, galaxy, install_requests
+from novadeck_stores import cli, epic_cloud, galaxy, install_requests
 
 ANSWER_SUFFIX = ".saveanswer"
 CHOICES = ("cloud", "local")
@@ -31,15 +33,20 @@ def describe(p, token, registry):
     if parsed is None:
         return None
     appid, index, local, cloud = parsed
-    row = galaxy.read(p).get(appid)
+    store, row = "gog", galaxy.read(p).get(appid)
     locations = (row.get("cloud") or {}).get("locations") if isinstance(row, dict) else None
+    if not isinstance(row, dict):
+        store, row = "epic", epic_cloud.read(p).get(appid)
+        locations = ([{"name": epic_cloud.LOCATION_NAME}]
+                     if isinstance(row, dict) and isinstance(row.get("cloud"), dict) else None)
     if not isinstance(locations, list) or index >= len(locations) or not isinstance(locations[index], dict):
         return None
     title = next((r.get("title") for r in registry.values()
                   if isinstance(r, dict) and isinstance(r.get("appid"), int)
                   and r["appid"] & 0xFFFFFFFF == int(appid)), None)
     return {"appid": int(appid), "index": index, "title": title or "This game",
-            "location": str(locations[index].get("name") or ""), "localTime": local, "cloudTime": cloud}
+            "location": str(locations[index].get("name") or ""), "localTime": local, "cloudTime": cloud,
+            "store": store}
 
 
 def answer(p, appid, index, choice):

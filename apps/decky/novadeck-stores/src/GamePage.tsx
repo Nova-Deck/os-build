@@ -421,7 +421,7 @@ function RowBody({ page, size, busy, run, dos, cloud, refresh }: BodyProps) {
             lines={[
               `${store} · installed with NovaDeck`,
               versions ? `Boxtron runs: ${versions.choice ?? "ask every time"}` : null,
-              ...cloudLines(cloud),
+              ...cloudLines(cloud, page.store),
             ]}
           />
         </>

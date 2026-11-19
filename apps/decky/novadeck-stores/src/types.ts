@@ -81,9 +81,9 @@ export type PrefixStatus = { exists: boolean; bytes: number; appid: number } | {
 // remembered (null: ask at launch). No labels → the title has no row and no setting.
 export type DosVersions = { labels: string[]; choice: string | null };
 
-// main.py cloud_saves (cloud_saves.py): an installed GOG game's "Cloud saves" row. "unavailable"
-// says why there is no switch; on/off carry the last sync (seconds, null: never) and what the last
-// run could not do, in words.
+// main.py cloud_saves (cloud_saves.py): an installed GOG or Epic game's "Cloud saves" row.
+// "unavailable" says why there is no switch (worded per store: pageHooks cloudLines); on/off carry
+// the last sync (seconds, null: never) and what the last run could not do, in words.
 export type CloudSaves =
   | { state: "none" }
   | { state: "unavailable"; why: "no-client" | "unknown" | "unsupported" }

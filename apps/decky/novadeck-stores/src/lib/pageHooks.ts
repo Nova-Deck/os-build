@@ -5,7 +5,7 @@ import { toaster } from "@decky/api";
 import { Navigation } from "@decky/ui";
 import { useEffect, useRef, useState } from "react";
 import { getCloudSaves, getDosVersions, getInstallSize } from "../backend";
-import type { CloudSaves, DosVersions, OurPage } from "../types";
+import type { CloudSaves, DosVersions, OurPage, StoreId } from "../types";
 import { refreshPageState } from "./pageState";
 
 const CLOUD_POLL_MS = 10000;
@@ -135,17 +135,27 @@ export function useCloudSaves(appid: number, installed: boolean, version: number
   return cloud;
 }
 
-const NO_CLOUD: Record<"no-client" | "unknown" | "unsupported", string> = {
-  "no-client": "No cloud saves: this install names no GOG Galaxy client",
-  unknown: "Cloud saves: not known yet (GOG could not be reached; checked again at the next library sync)",
-  unsupported: "No cloud saves for this game on GOG",
+// Why a game has no cloud-saves switch, per store. `no-client` is GOG's only (the Galaxy client id
+// cloud saves key on); an Epic game's cloud data is legendary's cached metadata.
+const NO_CLOUD: Record<StoreId, Record<"no-client" | "unknown" | "unsupported", string>> = {
+  gog: {
+    "no-client": "No cloud saves: this install names no GOG Galaxy client",
+    unknown: "Cloud saves: not known yet (GOG could not be reached; checked again at the next library sync)",
+    unsupported: "No cloud saves for this game on GOG",
+  },
+  epic: {
+    "no-client": "No cloud saves for this game on Epic",
+    unknown: "Cloud saves: not known yet (Epic's details for this game are not cached; read again at the next library sync)",
+    unsupported: "No cloud saves for this game on Epic",
+  },
 };
 
 // The cloud-saves words: the switch's state, the last sync, and what the last sync could not do
-// (cloud_saves.py words it). Empty when there is nothing to say.
-export function cloudLines(cloud: CloudSaves | null): string[] {
+// (cloud_saves.py words it). Empty when there is nothing to say. `store` is the page's, for the
+// reason a game has no switch.
+export function cloudLines(cloud: CloudSaves | null, store: StoreId): string[] {
   if (!cloud || cloud.state === "none") return [];
-  if (cloud.state === "unavailable") return [NO_CLOUD[cloud.why]];
+  if (cloud.state === "unavailable") return [NO_CLOUD[store][cloud.why]];
   if (cloud.state === "off") return ["Cloud saves: off, saves stay on this device", ...cloud.notes];
   const last = cloud.lastSync ? `last synced ${new Date(cloud.lastSync * 1000).toLocaleString()}` : "not synced yet";
   return [`Cloud saves: on, ${last}`, ...cloud.notes];

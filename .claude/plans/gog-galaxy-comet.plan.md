@@ -444,10 +444,21 @@ installed), or on the Pocket FIT for the dummy-service title. One commit per ste
      are backed up, then replaced), *This device's saves, from <date>* (the cloud's are
      replaced), *Decide later* or B (nothing synced, asked again next time). `make decky-plugin`
      builds clean.
-   - **HW test to run:** Another World on a card with all of phase 3, its saves changed on both
-     sides since the stored timestamp (or none stored: its first sync, which is a conflict). The
-     dialog shows with both dates; each of the three answers does what it says; the backup exists
-     after *Cloud saves*.
+   - **HW-PASSED 2026-11-19, steps 2 + 4 + 5 + 6 together** (Pocket Max, dev card
+     20261119T074403Z from 516ff8d, Another World, Proton CachyOS 11.0). Fresh card, fresh
+     install: `galaxy.json` carried `install` and `cloud` (`saves` → `<?DOCUMENTS?>/Another
+     World`) from the remote config. First launch, no prefix: `download -> downloaded`, the saves
+     in place before the game read them (the user's progress loaded), stored stamp = gogdl's.
+     Conflict made by playing (local) + a `--force-upload` of a copy of the downloaded files from
+     the device (cloud); `--dry-run` said `conflict` before each launch. The dialog showed both
+     dates, then: *Decide later* → `conflict -> kept-local`, stamp, files and cloud unchanged, no
+     backup, spool empty; *This device's saves* → `conflict -> uploaded`, stamp moved, a
+     `--skip-upload` into a scratch dir returned this device's bytes, no backup; *Cloud saves* →
+     `conflict -> downloaded`, `save-backups/gog:1207658845/saves/20261119T081501Z/` holds the
+     replaced local files (hashes match), local = the cloud's bytes, stamp moved. After an
+     upload, the next `--dry-run` listed nothing as changed in the cloud, so the stored stamp
+     (gogdl's printed one) is right. Any session rewrites `AnotherWorldUserDef.xml` on exit,
+     so every play is a local change: step 7 will have something to upload every time.
    - **No cloud backup (decided 2026-11-19).** *This device's saves* overwrites the cloud with no
      copy of what it replaces. A backup nobody can restore is useless, and restoring one would
      need its own dialog; the local backup before *Cloud saves* stays.

@@ -485,6 +485,44 @@ for sig in (signal.SIGTERM, signal.SIGINT):
     check(w.returncode == 0 and marker.exists() and marker.read_text() == "77 /pfx",
           f"{signal.Signals(sig).name} (a logout stopping the unit) waits for the upload to end ({w.returncode}, {err[-80:]!r})")
 
+print("== what the last sync did, kept for the game page (save-status.json)")
+def last():
+    f = home / "gogdl" / ss.STATUS
+    return json.loads(f.read_text()).get(TOKEN) if f.exists() else None
+aw()
+local({"progression.dat": "x"})
+run(Gogdl({SP: plan("none")}), clock=lambda: 1795090000.0)
+check(last() == {"at": 1795090000.0, "phase": "launch",
+                 "outcomes": [{"name": "saves", "action": "none", "did": "nothing"}]},
+      f"a launch's sync records when, which end, and each location's outcome ({last()})")
+after(Gogdl({SP: plan("upload")}, real_rc=2), clock=lambda: 1795090100.0)
+st = last() or {}
+check(st.get("phase") == "exit" and st.get("at") == 1795090100.0 and st["outcomes"][0]["did"] == "failed"
+      and "exited 2" in st["outcomes"][0].get("reason", ""),
+      f"so does the upload after exit, its failure's REASON kept, not only logged ({st})")
+check(sorted(json.loads((home / "gogdl" / ss.STATUS).read_text())) == [TOKEN], "one record per game, replaced each time")
+h = hold()
+os.environ.pop(ss.STARTED_ENV, None)
+ss.pre_launch("77", paths=paths, prefix=str(prefix), run=Gogdl({SP: plan("none")}), choose=None,
+              lock_wait=0.2, clock=lambda: 1795090200.0)
+h.close()
+st = last() or {}
+check(st.get("phase") == "launch" and st.get("outcomes") == [] and "still running" in st.get("reason", ""),
+      f"a launch that could not get the lock records why it synced nothing ({st})")
+before = last()
+aw(enabled=False)
+run(Gogdl({SP: plan("none")}))
+after(Gogdl({SP: plan("upload")}))
+check(last() == before, "cloud sync off: nothing synced, so nothing recorded")
+aw()
+status_file = home / "gogdl" / ss.STATUS
+status_file.unlink()
+status_file.mkdir()
+res = run(Gogdl({SP: plan("none")}))
+status_file.rmdir()
+check(res and res[0]["did"] == "nothing" and any("status" in m for m in logs),
+      f"a status that cannot be written is logged and changes nothing else ({logs})")
+
 print("== once per launch")
 aw()
 g = Gogdl({SP: plan("none")})

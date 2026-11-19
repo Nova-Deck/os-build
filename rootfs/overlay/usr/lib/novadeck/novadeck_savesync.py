@@ -74,6 +74,9 @@ from novadeck_storeenv import read_json, store_env
 GOGDL = "/usr/bin/gogdl"
 GALAXY_FILE = "galaxy.json"
 TIMESTAMPS = "save-timestamps.json"  # in gogdl's config dir, beside its own state
+# Beside it: what each game's last sync did, {token: {at, phase, outcomes, reason?}}. The game page
+# (novadeck-stores cloud_saves.py) shows it: a reason computed here must reach the screen.
+STATUS = "save-status.json"
 BACKUPS = "save-backups"             # in the store home
 SAVE_BACKUPS_KEPT = 5
 CALL_TIMEOUT = 30   # one gogdl call: a credential fetch, a listing, a few save files
@@ -218,6 +221,7 @@ class Session:
         self.home = pathlib.Path(paths["NOVADECK_STORE_HOME"])
         self.auth = paths["NOVADECK_GOGDL_AUTH"]
         self.stamp_file = pathlib.Path(paths["GOGDL_CONFIG_PATH"]) / TIMESTAMPS
+        self.status_file = pathlib.Path(paths["GOGDL_CONFIG_PATH"]) / STATUS
         self.env = {k: v for k, v in os.environ.items() if k not in DROPPED_ENV}
         self.env["GOGDL_CONFIG_PATH"] = paths["GOGDL_CONFIG_PATH"]
 
@@ -227,6 +231,17 @@ class Session:
 
     def store_stamp(self, key, value):
         _write_json(self.stamp_file, {**self.stamps(), key: value})
+
+    def record(self, phase, outcomes, reason=None):
+        """Keep this run's outcome for the game page; a failure to is logged, nothing more."""
+        entry = {"at": self.clock(), "phase": phase, "outcomes": outcomes,
+                 **({"reason": reason} if reason else {})}
+        current = read_json(self.status_file)
+        try:
+            _write_json(self.status_file,
+                        {**(current if isinstance(current, dict) else {}), self.row["token"]: entry})
+        except OSError as exc:
+            log(f"the sync status for the game page was not written ({exc})")
 
     def gogdl(self, path, name, ts, *flags):
         """(exit status, stdout) of one save-sync call, or (None, why) when it could not run."""
@@ -391,9 +406,13 @@ def pre_launch(appid, paths=None, prefix=None, run=subprocess.run, choose=ASK, c
     s = Session(appid, row, paths, prefix, run, choose, clock)
     with _locked(home, lock_wait) as held:
         if not held:
-            log(f"{row['token']}: an upload from the last exit is still running; saves not synced")
+            why = "an upload from the last exit is still running; saves not synced"
+            log(f"{row['token']}: {why}")
+            s.record("launch", [], why)
             return []
-        return _each_location(s, sync_location, "")
+        outcomes = _each_location(s, sync_location, "")
+        s.record("launch", outcomes)
+        return outcomes
 
 
 def post_exit(appid, prefix, paths=None, run=subprocess.run, clock=time.time, lock_wait=LOCK_WAIT):
@@ -410,10 +429,14 @@ def post_exit(appid, prefix, paths=None, run=subprocess.run, clock=time.time, lo
     s = Session(appid, row, paths, prefix, run, None, clock)
     with _locked(home, lock_wait) as held:
         if not held:
-            log(f"after exit: {row['token']}: the sync lock was not had within {lock_wait}s; "
-                "nothing uploaded (the next exit tries again)")
+            why = (f"the sync lock was not had within {lock_wait}s; nothing uploaded "
+                   "(the next exit tries again)")
+            log(f"after exit: {row['token']}: {why}")
+            s.record("exit", [], why)
             return []
-        return _each_location(s, upload_location, "after exit: ")
+        outcomes = _each_location(s, upload_location, "after exit: ")
+        s.record("exit", outcomes)
+        return outcomes
 
 
 def main(argv):

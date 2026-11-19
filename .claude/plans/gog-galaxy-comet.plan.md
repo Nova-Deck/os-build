@@ -502,6 +502,27 @@ installed), or on the Pocket FIT for the dummy-service title. One commit per ste
      the session unit is gone within seconds of the exit; quit + immediate Play waits for the
      upload. A non-Galaxy cloud game too (the session unit without Comet).
 8. **Game page toggle**: *Cloud saves: on/off*, plus the last sync time.
+   **Done, offline (2026-11-19; HW owed, on the same card as step 7).**
+   - Plugin `cloud_saves.py` + `main.cloud_saves(appid)` / `set_cloud_saves(appid, enabled)`
+     (`tests/test-store-cloudsaves.sh`, 39 checks). Row states: `none` (no galaxy.json row),
+     `unavailable` + why (`no-client`, `unknown` = GOG's config not fetched yet, `unsupported`),
+     `on`/`off` + `lastSync` (newest stored stamp of the game's locations) + `notes`.
+   - **The switch** is stored per TOKEN in `cloud-saves.json` (absent = on; the file galaxy.sync
+     already read), AND the game's galaxy.json row is rewritten at once with attach_cloud's rule:
+     the launch reads galaxy.json, so a switch that waited for the next library sync would sync a
+     game the user just turned off. The next galaxy.sync computes the same row (tested).
+   - **What the last sync could not do reaches the page** (screens-must-say-what-the-code-knows):
+     the launch side now records each run in `$GOGDL_CONFIG_PATH/save-status.json`
+     (`{token: {at, phase: launch|exit, outcomes, reason?}}`, savesync 82 checks), and the page
+     words it: a skipped/failed location with its reason and which end of the launch, a conflict
+     left ("you will be asked at the next launch"), a run that synced nothing and why (the lock).
+   - Frontend: a *Cloud saves: On/Off* button beside Uninstall on an installed game (a press
+     flips it; reversible, so no confirm), and Meta lines. The row re-reads every 10 s while
+     shown, so the upload after an exit shows without reopening the page.
+   - **HW to run (with step 7):** the row shows "on, last synced <time>" for Another World; Off
+     → a launch and an exit sync nothing (no `game-launch: saves:` line, no upload unit), and
+     galaxy.json shows `enabled: false` at once; On again → syncs; a failure (e.g. offline exit)
+     shows its reason on the page.
 9. **HW gate** (Another World, or any cloud-enabled GOG title):
    - play, save, exit → the save is in the cloud (`gogdl save-sync` from the host lists it);
    - drop the prefix from the game page and relaunch → saves restored before the game starts;

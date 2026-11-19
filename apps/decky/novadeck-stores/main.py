@@ -32,7 +32,7 @@ import decky
 
 import base64
 
-from novadeck_stores import (artwork, cdp, cli, compat_map, connect, dos_targets, first_run, game_page,
+from novadeck_stores import (artwork, cdp, cli, cloud_saves, compat_map, connect, dos_targets, first_run, game_page,
                              install_requests, installs, launch, library, library_sync, locations, paths,
                              prefixes, save_picks, settings, shortcuts, status)
 
@@ -744,6 +744,26 @@ class Plugin:
             async with _SHORTCUT_LOCK:
                 return await asyncio.to_thread(dos_targets.set_choice, p, str(int(appid) & 0xFFFFFFFF), label)
         except (OSError, subprocess.SubprocessError, ValueError, TypeError) as exc:
+            return {"error": f"{type(exc).__name__}"}
+
+    async def cloud_saves(self, appid):
+        """The game page's "Cloud saves" row (cloud_saves.page); {"state": "none"} for no row."""
+        try:
+            p = await asyncio.to_thread(paths.store_paths)
+            return await asyncio.to_thread(cloud_saves.page, p, str(int(appid) & 0xFFFFFFFF))
+        except (OSError, subprocess.SubprocessError, ValueError, TypeError, KeyError):
+            return {"state": "none"}
+
+    async def set_cloud_saves(self, appid, enabled):
+        """Turn a game's cloud saves on or off. The row's new state, or {error}."""
+        if not isinstance(enabled, bool):
+            return {"error": "the switch must be on or off"}
+        try:
+            p = await asyncio.to_thread(paths.store_paths)
+            async with _SHORTCUT_LOCK:
+                return await asyncio.to_thread(cloud_saves.set_enabled, p,
+                                               str(int(appid) & 0xFFFFFFFF), enabled)
+        except (OSError, subprocess.SubprocessError, ValueError, TypeError, KeyError) as exc:
             return {"error": f"{type(exc).__name__}"}
 
     async def install_tile(self, store, gid):

@@ -1,6 +1,7 @@
 import { call } from "@decky/api";
 import type {
   AccountResult,
+  CloudSaves,
   ConnectStart,
   DosVersions,
   InstallEvent,
@@ -67,3 +68,7 @@ export const getDosVersions = (appid: number) =>
   call<[number], DosVersions>("dos_versions", appid);
 export const setDosChoice = (appid: number, label: string | null) =>
   call<[number, string | null], { choice: string | null } | { error: string }>("set_dos_choice", appid, label);
+// gog-comet phase 3 step 8: the game page's "Cloud saves" row and its switch.
+export const getCloudSaves = (appid: number) => call<[number], CloudSaves>("cloud_saves", appid);
+export const setCloudSaves = (appid: number, enabled: boolean) =>
+  call<[number, boolean], CloudSaves | { error: string }>("set_cloud_saves", appid, enabled);

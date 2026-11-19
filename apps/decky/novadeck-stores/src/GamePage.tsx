@@ -14,9 +14,18 @@ import {
   showModal,
 } from "@decky/ui";
 import { Component, useEffect, useRef, useState } from "react";
-import { getDosVersions, getGameState, getInstallSize, installTile, stopInstall, uninstallGame } from "./backend";
+import {
+  getCloudSaves,
+  getDosVersions,
+  getGameState,
+  getInstallSize,
+  installTile,
+  setCloudSaves,
+  stopInstall,
+  uninstallGame,
+} from "./backend";
 import { showDosVersionSetting } from "./DosVersionDialog";
-import { STORE_LABELS, type DosVersions, type OurPage, type PageState } from "./types";
+import { STORE_LABELS, type CloudSaves, type DosVersions, type OurPage, type PageState } from "./types";
 import { confirmUninstall } from "./UninstallDialog";
 
 // Milestone 7 revision 2, R1: the install surface is Steam's OWN game page. For one of our
@@ -38,6 +47,7 @@ const ROUTE = "/library/app/:appid";
 // without a backend round trip. A pre-filter only: ours or not is the registry's answer.
 const SHORTCUT_BIT = 0x80000000;
 const POLL_MS = 2000;
+const CLOUD_POLL_MS = 10000;
 const GB = 1024 ** 3;
 
 type Node = { key?: unknown; props?: { className?: unknown; children?: unknown; [k: string]: unknown } };
@@ -358,6 +368,28 @@ function PlayRow({ appid }: { appid: number }) {
     };
   }, [appid, installed, tick]);
 
+  // gog-comet phase 3 step 8: an installed GOG game's "Cloud saves" row, read once per install
+  // state, after every action (`tick`), and every CLOUD_POLL_MS: the upload after a game exits
+  // lands seconds after the page is back, and its time and any failure must show without a reopen.
+  const [cloud, setCloud] = useState<CloudSaves | null>(null);
+  useEffect(() => {
+    if (!installed) {
+      setCloud(null);
+      return;
+    }
+    let live = true;
+    const read = () =>
+      getCloudSaves(appid)
+        .then((c) => live && setCloud(c))
+        .catch(() => live && setCloud(null));
+    read();
+    const timer = window.setInterval(read, CLOUD_POLL_MS);
+    return () => {
+      live = false;
+      window.clearInterval(timer);
+    };
+  }, [appid, installed, tick]);
+
   const hidesPlay = page !== null && page.state !== "installed";
   useFocusOnMount(ref, hidesPlay);
 
@@ -395,6 +427,7 @@ function PlayRow({ appid }: { appid: number }) {
         busy={busy}
         run={run}
         dos={onBoxtron ? dos : null}
+        cloud={cloud}
         refresh={() => setTick((t) => t + 1)}
       />
       {err ? <span className="novadeck-play-note">{`Could not refresh: ${err}`}</span> : null}
@@ -408,8 +441,25 @@ type BodyProps = {
   busy: boolean;
   run: (fn: () => Promise<Outcome>) => void;
   dos: DosVersions | null;
+  cloud: CloudSaves | null;
   refresh: () => void;
 };
+
+const NO_CLOUD: Record<"no-client" | "unknown" | "unsupported", string> = {
+  "no-client": "No cloud saves: this install names no GOG Galaxy client",
+  unknown: "Cloud saves: not known yet (GOG could not be reached; checked again at the next library sync)",
+  unsupported: "No cloud saves for this game on GOG",
+};
+
+// The "Cloud saves" lines under the row: the switch's state, the last sync, and what the last
+// sync could not do (cloud_saves.py words it).
+function cloudLines(cloud: CloudSaves | null): string[] {
+  if (!cloud || cloud.state === "none") return [];
+  if (cloud.state === "unavailable") return [NO_CLOUD[cloud.why]];
+  if (cloud.state === "off") return ["Cloud saves: off, saves stay on this device", ...cloud.notes];
+  const last = cloud.lastSync ? `last synced ${new Date(cloud.lastSync * 1000).toLocaleString()}` : "not synced yet";
+  return [`Cloud saves: on, ${last}`, ...cloud.notes];
+}
 
 function Meta({ lines }: { lines: (string | null | undefined)[] }) {
   return (
@@ -423,7 +473,7 @@ function Meta({ lines }: { lines: (string | null | undefined)[] }) {
   );
 }
 
-function RowBody({ page, size, busy, run, dos, refresh }: BodyProps) {
+function RowBody({ page, size, busy, run, dos, cloud, refresh }: BodyProps) {
   const store = STORE_LABELS[page.store] ?? page.store;
   const waiting = page.busy ? `Waiting: ${page.busy} is installing` : null;
   const needs = size ? `Needs ${gb(size)}` : size === null ? "Size unknown" : "Checking size…";
@@ -506,6 +556,15 @@ function RowBody({ page, size, busy, run, dos, refresh }: BodyProps) {
           toaster.toast({ title: page.title, body: message });
           refresh();
         });
+      // A press flips the switch; the row re-reads after (run bumps the tick). Turning it off is
+      // undone by pressing again, so no confirmation.
+      const switchable = cloud && (cloud.state === "on" || cloud.state === "off") ? cloud : null;
+      const toggleCloud = () =>
+        switchable &&
+        run(async () => {
+          const res = await setCloudSaves(page.appid, switchable.state === "off");
+          return "error" in res ? { error: `Cloud saves: ${res.error}` } : {};
+        });
       return (
         <>
           <DialogButton className="novadeck-play-secondary" disabled={busy} onClick={uninstall}>
@@ -516,10 +575,16 @@ function RowBody({ page, size, busy, run, dos, refresh }: BodyProps) {
               DOSBox version
             </DialogButton>
           )}
+          {switchable && (
+            <DialogButton className="novadeck-play-secondary" disabled={busy} onClick={toggleCloud}>
+              {switchable.state === "on" ? "Cloud saves: On" : "Cloud saves: Off"}
+            </DialogButton>
+          )}
           <Meta
             lines={[
               `${store} · installed with NovaDeck`,
               versions ? `Boxtron runs: ${versions.choice ?? "ask every time"}` : null,
+              ...cloudLines(cloud),
             ]}
           />
         </>

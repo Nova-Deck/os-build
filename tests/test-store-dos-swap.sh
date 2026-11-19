@@ -142,11 +142,14 @@ spool = home / ds.REQUEST_DIR
 req = spool / f"{APPID}{ds.PICK_SUFFIX}"
 ans = spool / f"{APPID}{ds.ANSWER_SUFFIX}"
 fast = dict(take_timeout=0.6, answer_timeout=0.6, poll=0.02)
+# An answered ask returns as soon as the answer lands, so its budgets can be roomy: a loaded CI
+# runner missed 0.6 s once. Only the cases that must time out keep the short ones (cf. savesync).
+roomy = dict(take_timeout=3, answer_timeout=3, poll=0.02)
 
 def backend(answer, take=True, delay=0.05):
     """Play the plugin: take the request (unlink it), then answer — or not."""
     def run():
-        end = time.time() + 2
+        end = time.time() + 5
         while not req.exists() and time.time() < end:
             time.sleep(0.01)
         time.sleep(delay)
@@ -159,13 +162,13 @@ def backend(answer, take=True, delay=0.05):
     return t
 
 t = backend("Master of Magic Community Patch")
-got = ds.ask(home, APPID, **fast)
+got = ds.ask(home, APPID, **roomy)
 t.join()
 check(got == "Master of Magic Community Patch", f"taken and answered → the label ({got!r})")
 check(not ans.exists() and not req.exists(), "the answer is consumed and no request is left behind")
 
 t = backend("")
-got = ds.ask(home, APPID, **fast)
+got = ds.ask(home, APPID, **roomy)
 t.join()
 check(got is ds.CANCEL, f"an empty answer is a cancel ({got!r})")
 
@@ -173,16 +176,17 @@ got = ds.ask(home, APPID, **fast)
 check(got is None and not req.exists(), "not taken in time → None, and the request is WITHDRAWN (plugin down)")
 
 t = backend(None)
-got = ds.ask(home, APPID, **fast)
+got = ds.ask(home, APPID, take_timeout=3, answer_timeout=0.6, poll=0.02)
 t.join()
 check(got is None, "taken but never answered → None (the caller runs the first variant)")
 
 spool.mkdir(exist_ok=True)
 ans.write_text("Master of Magic Official Release")
 t = backend("Master of Magic Community Patch")
-got = ds.ask(home, APPID, **fast)
+got = ds.ask(home, APPID, **roomy)
 t.join()
-check(got == "Master of Magic Community Patch", "a stale answer from an earlier launch is never mistaken for this one")
+check(got == "Master of Magic Community Patch",
+      f"a stale answer from an earlier launch is never mistaken for this one ({got!r})")
 
 print("== game-launch wiring")
 main = (pathlib.Path(sys.argv[1]) / "game-launch").read_text()

@@ -21,6 +21,14 @@
 # upstream; drop it once a legendary release carries --dry-run. check-dry-run.py (a local source)
 # runs from build() against the patched tree, because the overlay build runs makepkg with --nocheck.
 #
+# PATCH 0002 makes a game's CloudIncludeList / CloudExcludeList select the same files for an upload
+# and a download's clean-up, IN ANY CASE, as on the Epic client's case-insensitive file systems. On
+# Linux fnmatch was case-sensitive: Fallout's SAVE.DAT never reached the cloud (HW 2026-11-19). The
+# download also read the lists unstripped, which alone kept a clean-up from deleting MASTER.DAT once
+# "*.dat" matches it, so both are fixed together; and an empty item ("LocalData/,") no longer
+# excludes every file. check-save-filters.py runs legendary's real upload and download against a
+# copy of Fallout's Epic install. Also for upstream, with 0001.
+#
 # Fields (see packages/README.md):
 #   name           pkgname (must match the PKGBUILD); also the work/ build-dir + repo entry
 #   pkgbuild_local path (relative to this dir) to the checked-in PKGBUILD to build
@@ -30,9 +38,9 @@
 #
 # To bump legendary: edit pkgver + sha256sums in packages/legendary/PKGBUILD, re-audit the runtime
 # imports (the depends list below the header is derived from them, not from install_requires — see
-# the PKGBUILD), re-check that patch 0001 still applies (or is upstream), and `make relock`.
+# the PKGBUILD), re-check that patches 0001 and 0002 still apply (or are upstream), and `make relock`.
 name: legendary
 pkgbuild_local: PKGBUILD
 pkgrel_suffix: 1
-patches: 0001-sync-saves-add-dry-run.patch
-local_sources: check-dry-run.py
+patches: 0001-sync-saves-add-dry-run.patch 0002-sync-saves-match-save-filters-in-any-case.patch
+local_sources: check-dry-run.py check-save-filters.py

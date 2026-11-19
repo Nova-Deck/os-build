@@ -1,0 +1,126 @@
+From d7571fc1a8e3a2d0c60c2dec7a8608715d7d4667 Mon Sep 17 00:00:00 2001
+From: Philippe Simons <simons.philippe@gmail.com>
+Date: Thu, 19 Nov 2026 17:47:38 +0100
+Subject: [PATCH] sync-saves: match save filters in any case, and parse them
+ once
+
+A game's CloudIncludeList / CloudExcludeList now select the same files
+for an upload and for a download's clean-up, in any case, as on the
+Epic client's case-insensitive file systems:
+
+- _filename_matches casefolds the name and the patterns. On Linux,
+  fnmatch is case-sensitive, so Fallout's "*.sav, *.dat" missed its
+  SAVE.DAT, V13ENT.SAV and AUTOMAP.SAV. The upload packed nothing,
+  logged "No save files matching", and still exited 0.
+- parse_filter_list() is used by both the upload and the download.
+  The download split the lists without stripping, so " *.dat" and
+  " master.dat" matched nothing. That accident is all that kept a
+  clean-up from deleting MASTER.DAT once "*.dat" matches it, so the
+  case fix needs this one.
+- empty items are dropped: in "LocalData/," the trailing "" was a
+  suffix of every file, so the upload excluded everything.
+---
+ legendary/core.py                  | 16 +++++++---------
+ legendary/utils/savegame_helper.py | 22 +++++++++++++++++-----
+ 2 files changed, 24 insertions(+), 14 deletions(-)
+
+diff --git a/legendary/core.py b/legendary/core.py
+index b842479..f3b27ab 100644
+--- a/legendary/core.py
++++ b/legendary/core.py
+@@ -37,7 +37,7 @@ from legendary.utils.egl_crypt import decrypt_epic_data
+ from legendary.utils.env import is_windows_mac_or_pyi
+ from legendary.lfs.eos import EOSOverlayApp, query_registry_entries
+ from legendary.utils.game_workarounds import is_opt_enabled, update_workarounds, get_exe_override
+-from legendary.utils.savegame_helper import SaveGameHelper
++from legendary.utils.savegame_helper import SaveGameHelper, parse_filter_list
+ from legendary.utils.selective_dl import games as sdl_games
+ from legendary.lfs.wine_helpers import read_registry, get_shell_folders, case_insensitive_path_search
+ 
+@@ -1010,10 +1010,8 @@ class LegendaryCore:
+         include_f = exclude_f = None
+         if not disable_filtering:
+             # get file inclusion and exclusion filters if they exist
+-            if (_include := custom_attr.get('CloudIncludeList', {}).get('value', None)) is not None:
+-                include_f = list(f.strip() for f in _include.split(','))
+-            if (_exclude := custom_attr.get('CloudExcludeList', {}).get('value', None)) is not None:
+-                exclude_f = list(f.strip() for f in _exclude.split(','))
++            include_f = parse_filter_list(custom_attr.get('CloudIncludeList', {}).get('value', None))
++            exclude_f = parse_filter_list(custom_attr.get('CloudExcludeList', {}).get('value', None))
+ 
+         if not save_path and not save_path_mac:
+             raise ValueError('Game does not support cloud saves')
+@@ -1062,10 +1060,10 @@ class LegendaryCore:
+ 
+                 # Make sure to only delete files that match the include/exclude filters.
+                 # This is particularly import for games that store save games in their install dir...
+-                if (_include := custom_attr.get('CloudIncludeList', {}).get('value', None)) is not None:
+-                    include_f = _include.split(',')
+-                if (_exclude := custom_attr.get('CloudExcludeList', {}).get('value', None)) is not None:
+-                    exclude_f = _exclude.split(',')
++                # Parsed exactly as for an upload: unstripped, " master.dat" matched nothing, and
++                # only that kept Fallout's game data out of a clean-up selecting "*.dat".
++                include_f = parse_filter_list(custom_attr.get('CloudIncludeList', {}).get('value', None))
++                exclude_f = parse_filter_list(custom_attr.get('CloudExcludeList', {}).get('value', None))
+ 
+                 sgh = SaveGameHelper()
+                 save_files = sgh.get_deletion_list(_save_dir, include_f, exclude_f)
+diff --git a/legendary/utils/savegame_helper.py b/legendary/utils/savegame_helper.py
+index 04c7e69..ccd8df7 100644
+--- a/legendary/utils/savegame_helper.py
++++ b/legendary/utils/savegame_helper.py
+@@ -2,7 +2,7 @@ import logging
+ import os
+ 
+ from datetime import datetime
+-from fnmatch import fnmatch
++from fnmatch import fnmatchcase
+ from hashlib import sha1
+ from io import BytesIO
+ from tempfile import TemporaryFile
+@@ -14,14 +14,15 @@ from legendary.models.manifest import \
+ 
+ def _filename_matches(filename, patterns):
+     """
+-    Helper to determine if a filename matches the filter patterns
++    Helper to determine if a filename matches the filter patterns, in any case: the Epic client
++    runs on case-insensitive file systems, so a game's "*.sav" also means SAVE.SAV.
+ 
+     :param filename: name of the file
+     :param patterns: list of patterns to match against
+     :return:
+     """
+-
+-    for pattern in patterns:
++    filename = filename.casefold()
++    for pattern in (p.casefold() for p in patterns):
+         # Pattern is a directory, just check if path starts with it
+         if pattern.endswith('/') and filename.startswith(pattern):
+             return True
+@@ -29,7 +30,7 @@ def _filename_matches(filename, patterns):
+         if filename.endswith(pattern):
+             return True
+         # Check if pattern with wildcards ('*') matches
+-        if fnmatch(filename, pattern):
++        if fnmatchcase(filename, pattern):
+             return True
+ 
+     return False
+@@ -188,3 +189,14 @@ class SaveGameHelper:
+                 files.append(_file_path_rel)
+ 
+         return files
++
++
++def parse_filter_list(value):
++    """
++    A CloudIncludeList / CloudExcludeList value as a list of patterns: split on commas, each item
++    stripped, empty items dropped (an empty pattern would match every file). None stays None.
++    """
++    if value is None:
++        return None
++    return [f.strip() for f in value.split(',') if f.strip()]
++
+-- 
+2.56.1
+

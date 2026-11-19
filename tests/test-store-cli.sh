@@ -105,16 +105,21 @@ for pkg in legendary gogdl; do
   sed -n '/^prepare()/,/^}/p' "$pkgbuild" | grep -qE '^\s*cd ' \
     && ok "$pkg: prepare() has the cd build-overlay places the patches after" \
     || bad "$pkg: no cd in prepare() — build-overlay cannot place the patch step"
-  [ "$(pin_field "$pin" local_sources)" = "check-dry-run.py" ] \
-    && ok "$pkg: check-dry-run.py is a declared local source" \
-    || bad "$pkg: source.pin does not declare check-dry-run.py as a local source"
-  sed -n '/^build()/,/^}/p' "$pkgbuild" | grep -q 'check-dry-run.py' \
-    && ok "$pkg: build() runs check-dry-run.py (the overlay build passes --nocheck)" \
-    || bad "$pkg: build() does not run check-dry-run.py — the --dry-run patch would ship unchecked"
-  check_sum="$(sha256sum "$PKGDIR/$pkg/check-dry-run.py" | cut -d' ' -f1)"
-  pkgbuild_array "$pkgbuild" sha256sums | grep -qx "$check_sum" \
-    && ok "$pkg: sha256sums pins check-dry-run.py as it is" \
-    || bad "$pkg: sha256sums does not carry check-dry-run.py's sum ($check_sum)"
+  # Every declared local source is a build-time check: declared, run by build(), and pinned.
+  checks="$(pin_field "$pin" local_sources)"
+  case " $checks " in
+    *" check-dry-run.py "*) ok "$pkg: check-dry-run.py is a declared local source" ;;
+    *) bad "$pkg: source.pin does not declare check-dry-run.py as a local source" ;;
+  esac
+  for check in $checks; do
+    sed -n '/^build()/,/^}/p' "$pkgbuild" | grep -q "$check" \
+      && ok "$pkg: build() runs $check (the overlay build passes --nocheck)" \
+      || bad "$pkg: build() does not run $check — its patch would ship unchecked"
+    check_sum="$(sha256sum "$PKGDIR/$pkg/$check" | cut -d' ' -f1)"
+    pkgbuild_array "$pkgbuild" sha256sums | grep -qx "$check_sum" \
+      && ok "$pkg: sha256sums pins $check as it is" \
+      || bad "$pkg: sha256sums does not carry $check's sum ($check_sum)"
+  done
 
   # Every dependency has to resolve. The lock is the list of what the image actually installs, so a
   # name absent from it is a name pacman could not find — which is how gtk2 was learned.

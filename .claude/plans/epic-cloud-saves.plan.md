@@ -249,6 +249,20 @@ existed. **Fixed:** `frontend_ready` now syncs both, each best-effort under the 
 exists, the next exit uploads it (`local_newer`: nothing at launch, then `--skip-download`).
 
 7. First sync of a game with saves on both sides → asked; each answer does what it says.
+   **PASS for "Decide later" and "Cloud saves", 2026-11-19 (Pocket Max, Guacamelee, FAKED
+   conflict).** With no second PC, the conflict was staged: `installed.json` was backed up,
+   Guacamelee's `save_timestamp` was set back from 16:17:58 to 16:00 (before the 16:17:37 cloud
+   manifest), and `SAVE.DAT` was touched. legendary then calls both sides "changed > 60 s after the
+   last sync", and the dry run said `conflict`.
+   - **Decide later:** `asking which saves to keep` → `conflict -> kept-local`; the game started.
+     After exit: `conflict -> next-launch`, no upload; the cloud was unchanged; the request spool
+     was empty again.
+   - **Cloud saves:** `conflict -> downloaded`. The backup came first,
+     `save-backups/epic:25b902…/saves/20261119T162038Z/SAVE.DAT`, holding the 16:19:52 file the
+     download replaced. After exit: `upload -> uploaded` (manifest `2026.11.19-16.21.05`).
+     legendary's `save_timestamp` was real again, and the dry run said `same_age`.
+   - **This device's saves** (`--force-upload`): not run on HW; covered by
+     `tests/test-store-epicsync.sh`.
 8. Play, quit → uploaded; dry run says `same_age`.
    **PASS 2026-11-19 (Pocket Max, DOOM 64, after the frontend_ready hot patch).** At launch:
    `saves: upload -> nothing`. The watcher started `novadeck-gog-session.service` with no Comet. After

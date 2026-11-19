@@ -119,6 +119,34 @@ Epic tokens. The picker's location name is the game's title.
    (`tests/test-store-cli.sh`) now checks, for both legendary and gogdl, that the declared patch
    exists, that `prepare()` has its `cd`, that build() runs the check, and that the check's sha256
    is pinned.
+   **The account's real data (HW 2026-11-19, Pocket Max, fresh dev card, nothing installed).**
+   29 of the 66 cached metadata files name a `CloudSaveFolder`; `legendary list-saves` shows
+   cloud saves for 11 of them (Guacamelee! STCE and Guacamelee! 2 dated 2026-10/11, the rest
+   2019-2026). What the paths look like, which steps 2 and 4 must handle:
+   - the variable's CASE varies (`{AppData}`, `{appdata}`, `{userdir}`); legendary lowercases;
+   - `{AppData}/../LocalLow/<company>/<game>/` is the most common form (10 games), so `..` from
+     Local AppData into LocalLow must resolve and stay inside drive_c;
+   - `{EpicID}` inside the path (PREY, RUINER, Phoenix Point, Death Stranding, WWZ, Wolfenstein);
+   - `{InstallDir}/` as the WHOLE install folder with only an include list (Fallout, Fallout 2,
+     Fallout Tactics: `*.sav, *.dat`). That settles the Risks item: a backup must copy only what
+     the filters select, never the whole folder;
+   - include lists carry spaces after the commas (`*.sav, *.dat`). legendary strips them for an
+     upload but NOT for the download's deletion list (`core.py:1066-1068`, `split(',')` without
+     `strip()`), so there ` *.dat` matches nothing and those files survive a download.
+   **The HW dry run (DOOM 64, `5b60142e…`, appid 2607617071, freshly installed, never launched,
+   no cloud saves on the account).** As deck, `sync-saves <app> --save-path
+   <compatdata>/pfx/drive_c/users/steamuser/Saved Games/Nightdive Studios/DOOM 64/saves
+   --dry-run`: rc 0, one line, `no_save` ("Got 0 remote save game(s)"). `installed.json` and
+   `user.json` were byte-identical before and after, and `compatdata/2607617071` was still absent.
+   So a pre-launch dry run on a first launch creates nothing, and Proton's prefix setup is not
+   disturbed. **Without `--save-path` it CRASHED**: with no prefix, `{UserSavedGames}` stays
+   unresolved, the path stays relative to the cwd, and `case_insensitive_path_search` lists the
+   cwd (`/root`, unreadable to deck), raising `PermissionError`. An unpatched real sync crashes
+   the same way. The patch now catches the `OSError` and reports `no_save_path`, and
+   `check-dry-run.py` reproduces it from an unlistable cwd (36 checks). Production always passes
+   `--save-path`, so this only mattered for the patch's own promise.
+   `list-saves` did NOT rewrite `user.json` (same mtime and sha256; "re-use existing login
+   session"), but `login()` fetched metadata for 6 apps, which writes `metadata/`.
    **legendary's own rule, seen while writing the check:** the conflict test runs BEFORE same-age.
    Both sides more than 60 s past the last sync is a conflict, even if they are the same save.
    After a real sync this never happens: the upload names its manifest after the newest local file,

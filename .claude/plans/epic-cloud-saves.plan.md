@@ -185,6 +185,33 @@ Epic tokens. The picker's location name is the game's title.
    `user.json` (`account_id`), which it can read as deck, rather than copying it into every row.
 4. **Pre-launch Epic sync** (TDD, legendary stubbed): each status of design §3, the backup before
    every download, a failed backup stops it, timeout → launch proceeds.
+   **Done 2026-11-19** (`/usr/lib/novadeck/novadeck_epicsaves.py`, the glue in
+   `novadeck_savesync.py`, and `tests/test-store-epicsync.sh` with 41 checks, in `make test`; GOG's
+   89 savesync checks are unchanged and pass). `cloud_row` falls back to epic-cloud.json, shaped
+   like a GOG row: one location named `saves`, `store: "epic"`, the filter lists. `Session`
+   dispatches on the store in two places only, the classify step and the transfer. The lock,
+   picker, budget, backups and status (`save-status.json`, keyed by token, so the game page reads
+   Epic too) are shared.
+   - legendary calls: `legendary sync-saves <gid> --save-path P --dry-run`, then
+     `legendary -y sync-saves <gid> --save-path P <flag>`, with `LEGENDARY_CONFIG_PATH` set and the
+     game's `LD_*` dropped. `-y` matters because legendary would otherwise prompt on a terminal it
+     doesn't have. No timestamp is stored: legendary keeps its own.
+   - Status → action: `remote_newer` → download, `local_newer` → upload, `conflict` → conflict,
+     `same_age`/`no_save` → none. `unsupported`/`no_save_path` are skipped with a reason.
+   - `{EpicID}` comes from legendary's `user.json`; if it's missing, the location is skipped and the
+     reason names `{EpicID}`.
+   - **Whole-install refusal:** a folder that IS the install folder, with no include list, is
+     skipped. legendary's download would delete every file in it that isn't excluded, i.e. the
+     game.
+   - **The backup follows the include list** (Fallout: the install folder, `*.sav, *.dat`), and
+     ignores the exclude list, so it is a superset of what a download might delete. It matches in
+     ANY case.
+   - **A backup of nothing is not taken** (only empty folders, or no selected file), for GOG too, so
+     it can't rotate a real backup out of the 5 kept.
+   - Offline reads "Epic could not be reached (no network?)".
+   **Found on the way: legendary's filter matching is case-sensitive on Linux** (`fnmatch` with
+   POSIX normcase). So legendary's `*.sav` misses Fallout's `AGRUN.SAV`: legendary on Linux would
+   neither upload nor delete uppercase save files that a Windows client syncs. See Risks.
 5. **Post-exit upload** through the existing watcher (TDD).
 6. **Game page** for Epic: switch, last sync, reasons.
 
@@ -208,9 +235,18 @@ Epic tokens. The picker's location name is the game's title.
   only sends files that pass `CloudIncludeList`/`CloudExcludeList`. A game that writes a
   non-save file there on every run reads as `local_newer` on every exit. The upload would then
   re-send unchanged saves, which is harmless, but note it if seen.
-- **Games that save in `{InstallDir}`**: the download deletes only files matching the filters, but
-  the backup copies the whole folder. That could be the whole game. Cap the backup to the files
-  the filters match, or refuse install-dir locations without filters; decide in step 4.
+- **Games that save in `{InstallDir}`**: decided in step 4. The backup copies only what the include
+  list selects, and a whole-install folder with no include list is refused.
+- **legendary matches filters case-sensitively on Linux.** The Fallouts' uppercase saves
+  (`SAVE.DAT`, `*.SAV`) don't match `*.sav, *.dat`, so they would never be uploaded. Check on HW
+  with a Fallout before trusting it. If confirmed, the fix is a second legendary patch
+  (case-insensitive `_filename_matches`, which is what Epic's Windows client effectively does),
+  sent upstream with 0001.
+- **CALL_TIMEOUT (30 s) per transfer**, shared with GOG. A large Epic save (Cities: Skylines) over
+  slow Wi-Fi could be cut off mid-download, after legendary has already deleted the local files.
+  The backup holds them, and the next launch downloads again (an empty local side reads
+  `remote_newer`; nothing is uploaded after exit). Restoring the backup automatically after a
+  failed download is a possible follow-up.
 - **Variables the table lacks**: `{UserProfile}` is unset outside Windows in legendary. We map it
   from the prefix, so a game legendary itself cannot resolve may work with us; refuse anything
   else with a reason.

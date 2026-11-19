@@ -1,8 +1,16 @@
-"""GOG cloud-save sync: the cloud's saves down before a game reads them, this device's up after.
+"""GOG and Epic cloud-save sync: the cloud's saves down before a game reads them, this device's up
+after.
 
     pre_launch(appid)           called by game-launch, after the DOS swap and before Comet starts
     post_exit(appid, prefix)    once the game has exited: `novadeck_savesync.py post-exit APPID
                                 PREFIX`, the unit the novadeck_gogsession watcher hands it to
+
+EPIC goes through the same policy, lock, picker, backups, budget and status. What differs lives in
+novadeck_epicsaves: the row (epic-cloud.json, one folder per game, shaped here like a GOG row with
+`store: "epic"`), legendary's calls and verdicts, {EpicID}, and a backup that follows the game's
+include list (.claude/plans/epic-cloud-saves.plan.md design §3). legendary keeps the sync time
+itself (installed.json), so no timestamp is stored for an Epic game. Everything below that says
+gogdl is gogdl's; for an Epic row the same step runs legendary.
 
 For a GOG game with cloud saves on, each save location (galaxy.json's `cloud.locations`, written
 by the novadeck-stores plugin) is resolved inside the game's Proton prefix (novadeck_savepaths)
@@ -69,6 +77,7 @@ import sys
 import tempfile
 import time
 
+import novadeck_epicsaves
 import novadeck_savepaths
 from novadeck_storeenv import read_json, store_env
 
@@ -194,29 +203,30 @@ def _locked(home, timeout, poll=POLL):
         os.close(fd)
 
 
-def failure(stderr):
-    """Why a gogdl call failed, from its stderr, in words the game page can show; "" when it
-    said nothing. gogdl lets a network error escape as a traceback (requests' ConnectionError on
-    its first call), which reads as OFFLINE. Anything else is its last line that is not one of its
-    own log lines, with every URL's query string cut (gogdl's token refresh carries the client
-    secret and the refresh token there) and cut to MAX_REASON."""
+def failure(stderr, offline=OFFLINE):
+    """Why a gogdl (or legendary) call failed, from its stderr, in words the game page can show;
+    "" when it said nothing. Both let a network error escape as a traceback (requests'
+    ConnectionError on their first call), which reads as `offline`. Anything else is the last line
+    that is not one of their own log lines, with every URL's query string cut (gogdl's token
+    refresh carries the client secret and the refresh token there) and cut to MAX_REASON."""
     text = stderr or ""
     if any(marker in text for marker in NETWORK_MARKERS):
-        return OFFLINE
+        return offline
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     last = next((line for line in reversed(lines) if not LOG_LINE.match(line)), "")
     return QUERY.sub("", last)[:MAX_REASON]
 
 
 def cloud_row(home, appid):
-    """This appid's galaxy.json row when its cloud sync is on and names locations, else None."""
+    """This appid's row when its cloud sync is on and names locations, else None: galaxy.json's
+    for a GOG game, epic-cloud.json's (shaped like it, `store: "epic"`) for an Epic one."""
     table = read_json(pathlib.Path(home) / GALAXY_FILE)
     row = table.get(str(appid)) if isinstance(table, dict) else None
     cloud = row.get("cloud") if isinstance(row, dict) else None
     if not (isinstance(cloud, dict) and cloud.get("enabled") is True
             and isinstance(cloud.get("locations"), list) and cloud["locations"]
             and isinstance(row.get("gid"), str) and isinstance(row.get("token"), str)):
-        return None
+        return novadeck_epicsaves.row(read_json(pathlib.Path(home) / novadeck_epicsaves.TABLE), appid)
     return row
 
 
@@ -246,6 +256,11 @@ class Session:
         self.status_file = pathlib.Path(paths["GOGDL_CONFIG_PATH"]) / STATUS
         self.env = {k: v for k, v in os.environ.items() if k not in DROPPED_ENV}
         self.env["GOGDL_CONFIG_PATH"] = paths["GOGDL_CONFIG_PATH"]
+        self.epic = row.get("store") == "epic"
+        self.epic_id = None
+        if self.epic:
+            self.env["LEGENDARY_CONFIG_PATH"] = paths.get("LEGENDARY_CONFIG_PATH", "")
+            self.epic_id = novadeck_epicsaves.account_id(paths.get("LEGENDARY_CONFIG_PATH"))
 
     def stamps(self):
         data = read_json(self.stamp_file)
@@ -265,29 +280,54 @@ class Session:
         except OSError as exc:
             log(f"the sync status for the game page was not written ({exc})")
 
-    def gogdl(self, path, name, ts, *flags):
-        """(exit status, stdout, why it failed) of one save-sync call; (None, why, why) when it
-        could not run. `why` is "" on success, else words the game page can show (failure())."""
-        argv = [GOGDL, "--auth-config-path", self.auth, "save-sync", path, self.row["gid"],
-                "--os", "windows", "--name", name, "--ts", ts, *flags]
+    def call(self, argv, tool, offline):
+        """(exit status, stdout, why it failed) of one gogdl or legendary call; (None, why, why)
+        when it could not run. `why` is "" on success, else words the game page can show."""
         try:
             done = self.run(argv, capture_output=True, text=True, timeout=CALL_TIMEOUT,
                             env=self.env, check=False)
         except subprocess.TimeoutExpired:
-            why = f"gogdl timed out after {CALL_TIMEOUT}s"
+            why = f"{tool} timed out after {CALL_TIMEOUT}s"
             return None, why, why
         except OSError as exc:
-            why = f"gogdl did not run ({exc.strerror})"
+            why = f"{tool} did not run ({exc.strerror})"
             return None, why, why
-        why = "" if done.returncode == 0 else failure(done.stderr)
+        why = "" if done.returncode == 0 else failure(done.stderr, offline)
         return done.returncode, (done.stdout or "").strip(), why
 
-    def backup(self, name, path):
-        """Copy the location's folder aside before a download replaces it. True when done or when
+    def gogdl(self, path, name, ts, *flags):
+        """One gogdl save-sync call (call())."""
+        return self.call([GOGDL, "--auth-config-path", self.auth, "save-sync", path, self.row["gid"],
+                          "--os", "windows", "--name", name, "--ts", ts, *flags], "gogdl", OFFLINE)
+
+    def legendary(self, argv):
+        """One legendary call (call())."""
+        return self.call(argv, "legendary", novadeck_epicsaves.OFFLINE)
+
+    @staticmethod
+    def _has_files(src, include):
+        """Is there a file to keep? Empty folders are not: a backup of nothing would rotate a real
+        one out of the SAVE_BACKUPS_KEPT."""
+        if not src.is_dir():
+            return False
+        for folder, _dirs, names in os.walk(src):
+            rel = pathlib.Path(folder).relative_to(src).as_posix()
+            if any(novadeck_epicsaves.selects(n if rel == "." else f"{rel}/{n}", include) for n in names):
+                return True
+        return False
+
+    def backup(self, name, path, include=None):
+        """Copy the location's folder aside before a download replaces it: all of it, or with an
+        include list only the files it selects (novadeck_epicsaves.selects). True when done or when
         there is nothing to keep."""
         src = pathlib.Path(path)
-        if not src.is_dir() or not any(src.iterdir()):
+        if not self._has_files(src, include):
             return True
+
+        def unselected(folder, names):
+            rel = pathlib.Path(folder).relative_to(src).as_posix()
+            return [n for n in names if not os.path.isdir(os.path.join(folder, n))
+                    and not novadeck_epicsaves.selects(n if rel == "." else f"{rel}/{n}", include)]
         root = self.home / BACKUPS / self.row["token"] / name
         base = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(self.clock()))
         dest, n = root / base, 1
@@ -295,7 +335,7 @@ class Session:
             dest, n = root / f"{base}-{n}", n + 1
         try:
             root.mkdir(parents=True, exist_ok=True)
-            shutil.copytree(src, dest, symlinks=True)
+            shutil.copytree(src, dest, symlinks=True, ignore=unselected if include else None)
         except OSError as exc:
             log(f"{name}: backup failed ({exc}); not downloading over the local save")
             return False
@@ -305,6 +345,8 @@ class Session:
 
 
 def _real_sync(s, key, name, path, ts, flag, did):
+    if s.epic:
+        return _epic_sync(s, path, flag, did)
     rc, out, why = s.gogdl(path, name, ts, flag)
     if rc is None or why == OFFLINE:
         return {"did": "failed", "reason": why}
@@ -319,8 +361,18 @@ def _real_sync(s, key, name, path, ts, flag, did):
     return {"did": did}
 
 
+def _epic_sync(s, path, flag, did):
+    """A real legendary sync. legendary stores the sync time itself, so success is its exit status."""
+    rc, _out, why = s.legendary(novadeck_epicsaves.sync_argv(s.row["gid"], path, flag))
+    if rc is None or why == novadeck_epicsaves.OFFLINE:
+        return {"did": "failed", "reason": why}
+    if rc != 0:
+        return {"did": "failed", "reason": f"sync-saves {flag} exited {rc}{f': {why}' if why else ''}"[:MAX_REASON]}
+    return {"did": did}
+
+
 def _download(s, key, name, path, ts, flag):
-    if not s.backup(name, path):
+    if not s.backup(name, path, s.row["cloud"].get("include")):
         return {"did": "failed", "reason": "the local folder could not be backed up"}
     return _real_sync(s, key, name, path, ts, flag, "downloaded")
 
@@ -342,6 +394,8 @@ def _classify(s, location):
     name = location.get("name") if isinstance(location, dict) else None
     if not isinstance(name, str) or not name:
         return {"name": str(name), "did": "skipped", "reason": "a location with no name"}, None
+    if s.epic:
+        return _epic_classify(s, name, location)
     path, reason = novadeck_savepaths.resolve(location.get("location"), s.row.get("install") or "",
                                               s.prefix)
     if path is None:
@@ -363,6 +417,32 @@ def _classify(s, location):
             reason = "dry run printed no verdict"
         return {"name": name, "did": "skipped", "reason": reason}, None
     return None, (name, path, key, ts, verdict)
+
+
+def _epic_classify(s, name, location):
+    """_classify() for an Epic row: resolve_epic, the whole-install refusal, legendary's dry run."""
+    install = s.row.get("install") or ""
+    path, reason = novadeck_savepaths.resolve_epic(location.get("location"), install, s.prefix,
+                                                   s.epic_id)
+    if path is None:
+        return {"name": name, "did": "skipped", "reason": reason}, None
+    if novadeck_epicsaves.whole_install(path, install, s.row["cloud"].get("include")):
+        return {"name": name, "did": "skipped",
+                "reason": "the save folder is the whole install folder and the game names no "
+                          "include list; a download would delete the game"}, None
+    rc, out, why = s.legendary(novadeck_epicsaves.dry_run_argv(s.row["gid"], path))
+    verdict, said = novadeck_epicsaves.verdict(out, s.row["gid"]) if rc == 0 else (None, None)
+    if verdict is None:
+        if said:
+            reason = said
+        elif rc is None or why == novadeck_epicsaves.OFFLINE:
+            reason = why
+        elif rc:
+            reason = f"dry run exited {rc}{f': {why}' if why else ''}"[:MAX_REASON]
+        else:
+            reason = "dry run printed no verdict"
+        return {"name": name, "did": "skipped", "reason": reason}, None
+    return None, (name, path, None, None, verdict)
 
 
 def sync_location(s, index, location):

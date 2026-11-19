@@ -544,6 +544,7 @@ test: verify-lock ## Run the offline bootctl/post-install/boot-disk/pairingd/pow
 	bash $(TESTS_DIR)/test-store-epic-cloud.sh
 	bash $(TESTS_DIR)/test-store-savepaths.sh
 	bash $(TESTS_DIR)/test-store-savesync.sh
+	bash $(TESTS_DIR)/test-store-epicsync.sh
 	bash $(TESTS_DIR)/test-store-savepick.sh
 	bash $(TESTS_DIR)/test-store-cloudsaves.sh
 	bash $(TESTS_DIR)/test-store-compat-map.sh

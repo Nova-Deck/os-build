@@ -79,6 +79,11 @@ import novadeck_savesync as ss
 check(cloud_saves.TIMESTAMPS == ss.TIMESTAMPS and cloud_saves.STATUS == ss.STATUS,
       f"the page reads the files game-launch writes ({cloud_saves.TIMESTAMPS}, {cloud_saves.STATUS})")
 check(cloud_config.TOGGLES == cloud_saves.TOGGLES, "and the switch is the file galaxy.sync reads")
+import novadeck_epicsaves
+from novadeck_stores import epic_cloud as ec
+check(ec.FILENAME == novadeck_epicsaves.TABLE and ec.LOCATION_NAME == novadeck_epicsaves.LOCATION_NAME,
+      "epic-cloud.json and an Epic game's location name are the same on both sides "
+      f"({ec.FILENAME}, {ec.LOCATION_NAME!r}): the picker names location 0 by it")
 
 print("== which games get a row, and why the others have no switch")
 check(cloud_saves.page(p, "999") == {"state": "none"}, "an appid with no galaxy.json row: no row at all")
@@ -187,6 +192,62 @@ res = cloud_saves.set_enabled(p, AW, True)
 cloud_saves.cli.write_as_user = direct_write
 check("error" in res and galaxy.read(p)[AW]["cloud"]["enabled"] is False,
       f"a switch that cannot be stored says so, and galaxy.json keeps the old state ({res})")
+
+print("== Epic games (epic-cloud.json; epic cloud saves plan step 6)")
+from novadeck_stores import epic_cloud
+cloud_saves.cli.write_as_user = direct_write
+lgd = tmp / "legendary"
+lgd.mkdir()
+p["LEGENDARY_CONFIG_PATH"] = str(lgd)
+DOOM, EUNKNOWN, ENONE = "2607617071", "21", "22"
+DOOM_GID = "5b60142e120c4f2d88027595c21d4a04"
+DOOM_TOKEN = f"epic:{DOOM_GID}"
+def epic_rows(enabled=True):
+    folder = {"location": "{UserSavedGames}/Nightdive Studios/DOOM 64/saves/", "include": None, "exclude": None}
+    return {
+        DOOM: {"token": DOOM_TOKEN, "gid": DOOM_GID, "install": "/g/doom64",
+               "cloud": {"supported": True, "enabled": enabled, **folder}},
+        EUNKNOWN: {"token": "epic:Unknown", "gid": "Unknown", "install": "/g/u", "cloud": None},
+        ENONE: {"token": "epic:NoCloud", "gid": "NoCloud", "install": "/g/n",
+                "cloud": {"supported": False, "enabled": False, "location": None, "include": None,
+                          "exclude": None}}}
+(tmp / epic_cloud.FILENAME).write_text(json.dumps(epic_rows()))
+check(cloud_saves.page(p, DOOM) == {"state": "on", "lastSync": None, "notes": []},
+      f"an Epic game with cloud saves: on, never synced ({cloud_saves.page(p, DOOM)})")
+check(cloud_saves.page(p, EUNKNOWN) == {"state": "unavailable", "why": "unknown"},
+      "no metadata cached for it yet: unavailable, not known yet")
+check(cloud_saves.page(p, ENONE) == {"state": "unavailable", "why": "unsupported"},
+      "no CloudSaveFolder: unavailable, unsupported")
+(lgd / "installed.json").write_text(json.dumps({
+    DOOM_GID: {"app_name": DOOM_GID, "save_timestamp": 1795101476.25},
+    "Other": {"app_name": "Other", "save_timestamp": 1800000000.0}}))
+check(cloud_saves.page(p, DOOM)["lastSync"] == 1795101476.25,
+      "the last sync is legendary's own save_timestamp for THIS game (installed.json)")
+(lgd / "installed.json").write_text(json.dumps({DOOM_GID: {"save_timestamp": "garbage"}}))
+check(cloud_saves.page(p, DOOM)["lastSync"] is None, "a save_timestamp that is not a number: never synced")
+(lgd / "installed.json").write_text("not json")
+check(cloud_saves.page(p, DOOM)["lastSync"] is None, "an unreadable installed.json: never synced, not a crash")
+(tmp / "gogdl" / ss.STATUS).write_text(json.dumps({DOOM_TOKEN: {"at": 1, "phase": "launch", "outcomes": [
+    {"name": "saves", "action": "download", "did": "failed", "reason": "Epic could not be reached (no network?)"}]}}))
+notes = cloud_saves.page(p, DOOM)["notes"]
+check(len(notes) == 1 and "Epic could not be reached" in notes[0] and "launch" in notes[0],
+      f"what the last Epic sync could not do, from the same status file, by token ({notes})")
+(tmp / "gogdl" / ss.STATUS).unlink()
+(tmp / cloud_config.TOGGLES).write_text(json.dumps({TOKEN: False}))
+writes.clear()
+res = cloud_saves.set_enabled(p, DOOM, False)
+check(res["state"] == "off" and json.loads((tmp / cloud_config.TOGGLES).read_text()) == {TOKEN: False, DOOM_TOKEN: False},
+      f"the switch is stored under the Epic token, beside GOG's ({res})")
+check(epic_cloud.read(p)[DOOM]["cloud"]["enabled"] is False,
+      "epic-cloud.json says off AT ONCE: the next launch reads it, not the next library sync")
+check(galaxy.read(p) == json.loads((tmp / galaxy.FILENAME).read_text()) and str(tmp / galaxy.FILENAME) not in writes,
+      "galaxy.json is not touched by an Epic switch")
+check(cloud_saves.set_enabled(p, DOOM, True)["state"] == "on" and epic_cloud.read(p)[DOOM]["cloud"]["enabled"] is True,
+      "and back on")
+for appid, why in ((EUNKNOWN, "no metadata"), (ENONE, "no cloud saves")):
+    writes.clear()
+    res = cloud_saves.set_enabled(p, appid, False)
+    check("error" in res and not writes, f"an Epic game with {why}: refused, nothing written ({res})")
 
 print("== the plugin's calls")
 plugin = main.Plugin()

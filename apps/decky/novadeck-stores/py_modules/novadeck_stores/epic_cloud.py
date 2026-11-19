@@ -25,6 +25,9 @@ import os
 from novadeck_stores import cli, cloud_config, installs, status
 
 FILENAME = "epic-cloud.json"
+# The one folder's name, as the launch side names it (novadeck_epicsaves.LOCATION_NAME): the
+# "Which saves?" question names location 0 of an Epic game by it.
+LOCATION_NAME = "saves"
 
 
 def path(p):

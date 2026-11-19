@@ -224,6 +224,16 @@ Epic tokens. The picker's location name is the game's title.
    upload `novadeck-gog-upload-<pid>`, and the watcher's log lines say "comet:". Renaming touches
    GOG's units and their checks for no behaviour change; do it if the journal confuses anyone.
 6. **Game page** for Epic: switch, last sync, reasons.
+   **Done 2026-11-19.** `cloud_saves.py` reads an Epic row when an appid has no galaxy.json row. Its
+   states: `unknown` (no metadata cached), `unsupported` (no CloudSaveFolder), on/off. The last sync
+   is legendary's `save_timestamp` (installed.json, owner-checked); the notes come from the shared
+   status file by token. The switch writes cloud_config.TOGGLES and rewrites the epic-cloud.json
+   row at once, never galaxy.json. `save_picks.describe` answers an Epic question as location 0,
+   named `saves` (`epic_cloud.LOCATION_NAME`; the cloudsaves suite pins it equal to the launch's
+   `novadeck_epicsaves.LOCATION_NAME`). Every save_pick event now carries `store`, and the dialog
+   says "in the {GOG|Epic} cloud". `cloudLines(cloud, store)` words "no switch" per store. Suites:
+   cloudsaves 58 (up from 44), savepick 31 (up from 29). The one changed GOG check is the event
+   now carrying `store`. tsc clean, rollup builds, all 19 store suites pass.
 
 ### Phase 3 — hardware gates (Pocket Max)
 

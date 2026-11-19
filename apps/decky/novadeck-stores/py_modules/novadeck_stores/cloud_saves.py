@@ -1,15 +1,22 @@
-"""The game page's "Cloud saves" row (.claude/plans/gog-galaxy-comet.plan.md, phase 3 step 8).
+"""The game page's "Cloud saves" row (.claude/plans/gog-galaxy-comet.plan.md, phase 3 step 8;
+.claude/plans/epic-cloud-saves.plan.md step 6).
 
-An installed GOG game's page shows whether its saves sync with GOG's cloud, a switch for it, when
-they last synced, and what the last sync could not do. Its state, from galaxy.json's row:
+An installed GOG or Epic game's page shows whether its saves sync with the store's cloud, a switch
+for it, when they last synced, and what the last sync could not do. Its state, from the game's
+galaxy.json (or epic-cloud.json) row:
 
-  none          no row: not an installed GOG Windows game; the page shows nothing
+  none          no row: not an installed GOG or Epic Windows game; the page shows nothing
   unavailable   no switch, and why: `no-client` (the install names no Galaxy client id, which cloud
                 saves key on), `unknown` (GOG's config not fetched yet; the next library sync
                 retries), `unsupported` (GOG has no cloud saves for the game)
   on / off      the switch, `lastSync` (the newest stored stamp of the game's locations, or None)
                 and `notes`: what the LAST run (before a launch, or after an exit) could not do,
                 in words, from the launch side's record (novadeck_savesync.STATUS)
+
+EPIC rows come from epic-cloud.json (epic_cloud.py), with the same states: `unknown` when
+legendary has cached no metadata for the game, `unsupported` with no CloudSaveFolder (`no-client` is
+GOG's only). The last sync is legendary's own `save_timestamp` (installed.json), because the launch
+stores no timestamp for Epic; the notes come from the same status file, keyed by token.
 
 THE SWITCH is the user's, stored per TOKEN in cloud_config.TOGGLES (absent = on), which galaxy.sync
 reads on every library change. set_enabled also rewrites the game's galaxy.json row at once, with
@@ -19,7 +26,7 @@ game the user just turned off until some later library sync.
 import json
 import os
 
-from novadeck_stores import cli, cloud_config, galaxy, status
+from novadeck_stores import cli, cloud_config, epic_cloud, galaxy, status
 
 TIMESTAMPS = "save-timestamps.json"  # novadeck_savesync.TIMESTAMPS, in GOGDL_CONFIG_PATH
 STATUS = "save-status.json"          # novadeck_savesync.STATUS, beside it
@@ -53,6 +60,14 @@ def last_sync(p, token):
     return newest
 
 
+def epic_last_sync(p, gid):
+    """legendary's save_timestamp for the game (installed.json), or None when it never synced."""
+    path = os.path.join(p.get("LEGENDARY_CONFIG_PATH") or "", "installed.json")
+    entry = _user_json(p, path).get(gid)
+    stamp = entry.get("save_timestamp") if isinstance(entry, dict) else None
+    return float(stamp) if isinstance(stamp, (int, float)) and not isinstance(stamp, bool) else None
+
+
 def _text(value):
     return value[:MAX_REASON] if isinstance(value, str) else ""
 
@@ -81,8 +96,13 @@ def notes(p, token):
 
 
 def _row(p, appid):
-    row = galaxy.read(p).get(str(appid))
-    return row if isinstance(row, dict) and isinstance(row.get("token"), str) else None
+    """(row, store) for the appid: its galaxy.json row ("gog"), else its epic-cloud.json row
+    ("epic"); (None, None) when it has neither."""
+    for store, table in (("gog", galaxy), ("epic", epic_cloud)):
+        row = table.read(p).get(str(appid))
+        if isinstance(row, dict) and isinstance(row.get("token"), str):
+            return row, store
+    return None, None
 
 
 # GOG's DOSBox classics sync `<install>/cloud_saves`, a folder their installer ships and their
@@ -105,9 +125,15 @@ def _only_absent_install_folder(row, cloud):
     return not os.path.isdir(os.path.join(install, "cloud_saves"))
 
 
-def _state(row):
-    """(state, why) from a galaxy.json row."""
+def _state(row, store):
+    """(state, why) from a galaxy.json or epic-cloud.json row."""
     cloud = row.get("cloud")
+    if store == "epic":
+        if not isinstance(cloud, dict):
+            return "unavailable", "unknown"
+        if cloud.get("supported") is not True:
+            return "unavailable", "unsupported"
+        return ("on" if cloud.get("enabled") is True else "off"), None
     if not row.get("clientId"):
         return "unavailable", "no-client"
     if not isinstance(cloud, dict):
@@ -119,33 +145,34 @@ def _state(row):
 
 def page(p, appid):
     """The row for one appid (unsigned, as a string)."""
-    row = _row(p, appid)
+    row, store = _row(p, appid)
     if row is None:
         return {"state": "none"}
-    state, why = _state(row)
+    state, why = _state(row, store)
     if why is not None:
         return {"state": state, "why": why}
-    return {"state": state, "lastSync": last_sync(p, row["token"]), "notes": notes(p, row["token"])}
+    synced = epic_last_sync(p, row.get("gid")) if store == "epic" else last_sync(p, row["token"])
+    return {"state": state, "lastSync": synced, "notes": notes(p, row["token"])}
 
 
 def set_enabled(p, appid, enabled):
-    """Turn the game's cloud saves on or off: the stored switch, then its galaxy.json row. The
-    row's new state, or {error}. The caller holds the plugin's shortcut lock (a registry write
-    rewrites galaxy.json too)."""
+    """Turn the game's cloud saves on or off: the stored switch, then its galaxy.json (or
+    epic-cloud.json) row. The row's new state, or {error}. The caller holds the plugin's shortcut
+    lock (a registry write rewrites both files too)."""
     if not isinstance(enabled, bool):
         return {"error": "the switch must be on or off"}
-    row = _row(p, appid)
+    row, store = _row(p, appid)
     if row is None:
-        return {"error": "not an installed GOG game"}
-    state, why = _state(row)
+        return {"error": "not an installed GOG or Epic game"}
+    state, why = _state(row, store)
     if why is not None:
         return {"error": f"cloud saves are not available for this game ({why})"}
     toggles = {**cloud_config.toggles(p), row["token"]: enabled}
     if cli.write_as_user(p, os.path.join(p["NOVADECK_STORE_HOME"], TOGGLES),
                          json.dumps(toggles, indent=1)) != 0:
         return {"error": "the switch could not be saved"}
-    table = galaxy.read(p)
-    updated = {**table, str(appid): {**row, "cloud": {**row["cloud"], "enabled": enabled}}}
-    if cli.write_as_user(p, galaxy.path(p), json.dumps(updated, indent=1)) != 0:
+    table = galaxy if store == "gog" else epic_cloud
+    updated = {**table.read(p), str(appid): {**row, "cloud": {**row["cloud"], "enabled": enabled}}}
+    if cli.write_as_user(p, table.path(p), json.dumps(updated, indent=1)) != 0:
         return {"error": "the switch is saved, but the launch will only see it after the next library sync"}
     return page(p, appid)

@@ -233,7 +233,8 @@ const CLOUD = (
 function CloudLine({ appid }: { appid: number }) {
   const { page, version } = usePageState(appid);
   const installed = page !== null && page.state === "installed";
-  const lines = cloudLines(useCloudSaves(appid, installed, version));
+  const cloud = useCloudSaves(appid, installed, version);
+  const lines = page ? cloudLines(cloud, page.store) : [];
   if (!installed || lines.length === 0) return null;
   return (
     <div className={pc.CloudStatusRow}>

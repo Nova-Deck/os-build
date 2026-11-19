@@ -65,8 +65,9 @@ plugin = main.Plugin()
 asyncio.run(plugin.take_save_picks(p))
 picks = [pl for ev, pl in emitted if ev == "save_pick"]
 check(picks == [{"appid": APPID, "index": 0, "title": "Another World: 20th Anniversary Edition",
-                 "location": "saves", "localTime": 1795040000, "cloudTime": 1795050000}],
-      f"emitted with the title from the registry, the location's NAME from galaxy.json, both dates ({picks})")
+                 "location": "saves", "localTime": 1795040000, "cloudTime": 1795050000, "store": "gog"}],
+      f"emitted with the title from the registry, the location's NAME from galaxy.json, both dates, "
+      f"and the store, whose cloud the dialog names ({picks})")
 check(not (spool / f"{good}.savepick").exists(), "taking it unlinks it: the launch's signal that it was seen")
 check((spool / "77.dospick").exists(), "a DOSBox question is left for the DOS picker")
 check(not (spool / "evil.0.1.2.savepick").exists() and len(picks) == 1,
@@ -78,6 +79,25 @@ asyncio.run(plugin.take_save_picks(p))
 check(not [e for e in emitted if e[0] == "save_pick"] and not list(spool.glob("*.saveanswer")),
       "an index the game has no location for, or an appid with no row: not asked, not answered "
       "(the launch times out and keeps local)")
+
+print("== an Epic game's question (epic-cloud.json; epic cloud saves plan step 6)")
+from novadeck_stores import epic_cloud
+DOOM = 2607617071
+(tmp / epic_cloud.FILENAME).write_text(json.dumps({str(DOOM): {
+    "token": "epic:5b60142e", "gid": "5b60142e", "install": "/g/doom64", "cloud": {
+        "supported": True, "enabled": True, "location": "{UserSavedGames}/Nightdive Studios/DOOM 64/saves/",
+        "include": None, "exclude": None}}}))
+(tmp / "shortcuts.json").write_text(json.dumps({
+    "gog:1207658845": {"appid": APPID - (1 << 32), "title": "Another World: 20th Anniversary Edition"},
+    "epic:5b60142e": {"appid": DOOM - (1 << 32), "title": "DOOM 64"}}))
+emitted.clear()
+(spool / f"{DOOM}.0.1795040000.1795050000.savepick").write_text("")
+(spool / f"{DOOM}.1.1.2.savepick").write_text("")
+asyncio.run(plugin.take_save_picks(p))
+picks = [pl for ev, pl in emitted if ev == "save_pick"]
+check(picks == [{"appid": DOOM, "index": 0, "title": "DOOM 64", "location": "saves",
+                 "localTime": 1795040000, "cloudTime": 1795050000, "store": "epic"}],
+      f"an Epic game's one folder is location 0, named 'saves', and the store is epic ({picks})")
 
 print("== answering it")
 for choice, text in (("cloud", "cloud"), ("local", "local"), (None, "")):
@@ -110,6 +130,8 @@ for want in ('send("cloud")', 'send("local")', "send(null)}>"):
     check(want in dialog, f"the dialog offers {want}")
 check("answered.current" in dialog, "one answer per question: closing after a pick sends no second answer")
 check("localTime" in dialog and "cloudTime" in dialog, "both dates are shown")
+check("GOG cloud" not in dialog and "STORE_LABELS[store]" in dialog,
+      "the dialog names the game's own store's cloud, not always GOG's")
 PY
 )"
 rc=$?

@@ -22,23 +22,26 @@
 # vendors per-arch at scheds/vmlinux/arch/arm64/ — so the build does NOT need BTF from the host
 # kernel, only from the target kernel at runtime.
 #
-# SOURCE: Valve's SteamOS scx tree, not an upstream release tarball. Upstream's newest tag
-# (v1.1.3) stalls lavd under game load, and its fix (6d31ddd8) is unreleased; Valve's
-# v1.1.3.linux.steamos.2 is upstream main as of 2026-09-16 plus one commit that vendors the crates,
-# so it carries that fix and ~30 later lavd commits. It is what the Steam Frame ships. Valve's
-# repo (gitlab.steamos.cloud/holo/scx) is SSH-only, so we take the published holo-main SOURCE
-# tarball: a PKGBUILD next to a bare clone of that repo. prepare() checks the tarball hash, checks
-# the tag still names the pinned commit, and exports the tree from it. The "1.1.3" in the version
-# is Valve's label only; this is NOT the 1.1.3 release.
+# SOURCE: Valve's SteamOS scx tree, not an upstream release tarball. Valve's tree runs ahead of
+# upstream's releases on lavd: upstream v1.1.3 stalled lavd under game load (fix 6d31ddd8 came
+# later), and upstream v1.1.4 lacks ~20 lavd commits Valve carries and the --dd-max-wait-us flag
+# the shipped flags use. Valve's v1.1.4.linux.steamos.2 is upstream main as of late October 2026
+# with Valve's lavd work on top, plus two commits of Valve's own (lavd as the default in
+# services/scx, crate vendoring). It is what the Steam Frame ships. Valve's repo
+# (gitlab.steamos.cloud/holo/scx) is SSH-only, so we take the published holo-main SOURCE tarball:
+# a PKGBUILD next to a bare clone of that repo. prepare() checks the tarball hash, checks the tag
+# still names the pinned commit, and exports the tree from it. The "1.1.4" in the version is
+# Valve's label only; this is NOT the upstream 1.1.4 release.
 #
 # To bump: take the newest scx-scheds-*.src.tar.gz under
-# steamdeck-packages.steamos.cloud/archlinux-mirror/sources/holo-main/ and set pkgver,
-# sha256sums and _commit together (`git --git-dir=scx-scheds/scx rev-parse v<pkgver>^{commit}`).
+# steamdeck-packages.steamos.cloud/archlinux-mirror/sources/holo-main/ and set pkgver, Valve's
+# pkgrel (the literal -1 in source= and in prepare()'s tarball path), sha256sums and _commit
+# together (`git --git-dir=scx-scheds/scx rev-parse v<pkgver>^{commit}`).
 # Re-check services/scx.service and services/scx still exist, that services/scx still sets the
 # flags package() asserts, and re-read the tree's own kernel.config against kernel/kernel.config.
 
 pkgname=scx-scheds
-pkgver=1.1.3.linux.steamos.2
+pkgver=1.1.4.linux.steamos.2
 pkgrel=1
 pkgdesc="sched_ext userspace schedulers (scx_lavd and fallbacks)"
 url="https://github.com/sched-ext/scx"
@@ -83,10 +86,10 @@ makedepends=(
   pkgconf
 )
 source=("$pkgname-$pkgver-1.src.tar.gz::https://steamdeck-packages.steamos.cloud/archlinux-mirror/sources/holo-main/$pkgname-$pkgver-1.src.tar.gz")
-sha256sums=('dc96077dd20d811554b47c4dff1d64232e01e80b669bc1ce7757f72b39152f90')
+sha256sums=('4231b94c06b903c2aa2540326367524f28af3cca588d0cda15a99a318fb39837')
 # The commit tag v$pkgver names inside that tarball's bare clone. A tag can be moved; a commit
 # cannot, so prepare() refuses to build if the two disagree.
-_commit=09f66735e5b52023a44001d019ca19204cb5760b
+_commit=9ffc8c742d121e871a0ea5195e426e3cfa81d754
 
 # The schedulers to build and install. Kept in one place so the -p flags and the install loop
 # below cannot drift apart.

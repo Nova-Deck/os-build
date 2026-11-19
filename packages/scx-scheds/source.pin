@@ -128,6 +128,24 @@
 # The other kfuncs 1.1.3 migrated to (scx_bpf_task_set_slice/_dsq_vtime, added in 6.19) are
 # __weak ksyms behind bpf_ksym_exists() in scheds/include/scx/compat.bpf.h, so they are safe on
 # an older kernel too.
+#
+# Move to Valve's v1.1.4.linux.steamos.2 (2026-10-31), checked against the tree itself:
+#   - Valve rebased, so 1.1.3.linux.steamos.2's commit is not an ancestor. Of its 34 commits past
+#     upstream main, 30 reappear by subject, three more with only the subject's capitalisation
+#     changed (the cgroup_bw pressure API, its accessor helpers, the wall-clock BTQ blend), and the
+#     load-balancing band sizing was replaced by a revised version (`cap the load-balancing band by
+#     the other domains' share`). Nothing was lost. 6d31ddd8 is in both.
+#   - services/scx.service is byte-identical; services/scx changed only in comments, and its
+#     SCX_FLAGS line is byte-identical, so package()'s assertion still holds.
+#   - kernel.config is byte-identical. No new SEC() attach point in lavd, lib/ or scheds/include.
+#     New calls: bpf_get_func_ret (fexit, long present), scx_bpf_nr_cpu_ids, and compat.bpf.h's
+#     new __weak ksyms behind bpf_ksym_exists() (cid_topo, task_set_lazy_resched, dsq_reenq_task).
+#     Nothing to do in kernel/kernel.config.
+#   - the `disable_rustfmt` sentinel is still at three call sites; scheds/rust/scx_{lavd,bpfland,
+#     rusty}, vendor/, .cargo/config.toml and Cargo.lock are all present.
+#   - Valve's own PKGBUILD added `bpf` to depends, citing a rebuild needed across a kernel bump.
+#     Not taken: nothing in lavd or scx_utils runs bpftool, and the BPF skeletons are embedded at
+#     build time (see the PKGBUILD's depends note).
 
 name: scx-scheds
 pkgbuild_local: PKGBUILD

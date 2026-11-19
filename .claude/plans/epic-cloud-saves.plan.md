@@ -265,7 +265,9 @@ exists, the next exit uploads it (`local_newer`: nothing at launch, then `--skip
    all have the same birth time, 16:14:57.556, and Proton's own `Documents/Music`, `Pictures` etc.
    came at 16:15:00, beside our folder, which it kept. legendary's `save_path` is our resolved one.
    No backup was taken (the local side was empty). The game rewrote `SAVE.DAT` 36 s in, so a dry
-   run now says `local_newer`: the upload is due at exit. Not exercised: the LocalLow spelling
+   run now says `local_newer`: the upload is due at exit. **After the user quit:** `saves: upload ->
+   uploaded` at 16:17:58 (`novadeck-gog-upload-5585`, 5.9 s), a new cloud manifest
+   `2026.11.19-16.17.37` beside the two old ones, and a dry run says `same_age`. Not exercised: the LocalLow spelling
    (Documents is canonical already); a LocalLow game such as Moving Out covers it.
 10. Offline launch → the game starts, and the page says Epic could not be reached.
 

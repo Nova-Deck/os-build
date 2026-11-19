@@ -21,7 +21,6 @@ root (the `gamescope/` checkout inside makepkg's `$srcdir`) by
 0017-color-neutral-virtual-white-keeps-scanout.patch
 0018-drm-sdr-color-management-through-the-dpu-output-luts.patch
 0019-rendervulkan-fragment-shader-composite.patch   (--composite-graphics, passed by default from etc/novadeck/session.conf)
-0020-libliftoff-treat-enodev-as-no-fit.patch        (patches the libliftoff SUBMODULE; only with 0021)
 0021-libliftoff-give-planes-the-layer-zpos.patch    (patches the libliftoff SUBMODULE)
 0023-xdg-titles-are-reported-to-steam.patch          (NOVADECK_ANDROID_APPID root property; ConVar touch_passthrough_xdg_titles)
 0026-drm-offer-an-edid-less-internal-panels-native-modes-as-refresh-rates.patch
@@ -362,17 +361,20 @@ that replaced it. **That `kernel/patches/0062` citation is stale** — renumberi
 SY7758 backlight driver, which has nothing to do with panel size. It was dropped once the incremental overlay build made a gamescope-only
 recompile cheap, and the number was later reused by the `GAMESCOPE_FAKE_OUTPUT_MM` patch above.)
 
-`0020` + `0021` — **libliftoff plane stacking on msm** (sunshineinabox; ROCKNIX PR #3377 gamescope
-`0020` and `0022`, bodies unchanged). libliftoff never writes plane zpos, and our DPU gives one CRTC
-several PRIMARY planes, all at zpos 0, so hardware stacking falls back to plane object id. Stock
-liftoff got it right only by accident: its traversal order matched that id order, and nothing
-backtracked. `0021` writes the layer's zpos into any plane whose zpos is a mutable range. `0020` makes
-msm's `-ENODEV` (no free SSPP, from `dpu_plane_assign_resource_in_stage()`) a "no fit" rather than
-an abort, which means MORE backtracking, so **never carry `0020` without `0021`**. The symptom was
-MangoHud intermittently missing (it sat behind the game). It did not reproduce on Pocket ACE on
-2026-09-17, because there the allocation never backtracked. Both patch the
-**submodule**, so `../PKGBUILD`'s `prepare()` checks the submodules out BEFORE its `cd gamescope`,
-the line build-overlay.sh injects the patch step after.
+`0021` — **libliftoff plane stacking on msm** (sunshineinabox; ROCKNIX PR #3377 gamescope `0022`,
+body unchanged). libliftoff never writes plane zpos, and our DPU gives one CRTC several PRIMARY
+planes, all at zpos 0, so hardware stacking falls back to plane object id. Stock liftoff got it right
+only by accident: its traversal order matched that id order, and nothing backtracked. `0021` writes
+the layer's zpos into any plane whose zpos is a mutable range. The symptom was MangoHud intermittently
+missing (it sat behind the game). It did not reproduce on Pocket ACE on 2026-09-17, because there the
+allocation never backtracked. It patches the **submodule**, so `../PKGBUILD`'s `prepare()` checks the
+submodules out BEFORE its `cd gamescope`, the line build-overlay.sh injects the patch step after.
+
+`0020` — **RETIRED 2026-11-19, and the number stays unused.** It made libliftoff treat msm's `-ENODEV`
+(no free SSPP, from `dpu_plane_assign_resource_in_stage()`) as "no fit" instead of an abort, so
+gamescope cached the layout rather than retrying it every frame. Kernel `0386` fixes the source: the
+DPU now returns `-EINVAL`, which stock libliftoff already treats that way, and no DPU atomic-check
+path returns `-ENODEV` any more. `0021` never depended on it (different files).
 
 `0024` — **RETIRED 2026-10-06, and the number stays unused.** It reserved extra commit lead before
 vblank while the planes rotated (`GAMESCOPE_SCANOUT_ROTATION_TIME_US`, 1 ms on every non-SM8250

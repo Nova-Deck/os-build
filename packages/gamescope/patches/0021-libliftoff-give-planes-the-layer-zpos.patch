@@ -15,8 +15,7 @@ SM8550). Stock libliftoff's ordering checks skip every primary. Until
 now the stacking came out right only because liftoff's traversal order
 (primaries inserted at the list head, descending object id) happened to
 match the hardware tie-break (ascending object id). Any allocation that
-backtracks breaks that -- which is what 0020 makes more likely. The
-symptom is an overlay layer, e.g. MangoHud, intermittently missing
+backtracks breaks that. The symptom is an overlay layer, e.g. MangoHud, intermittently missing
 behind the game.
 
 Patches the libliftoff SUBMODULE: it relies on the PKGBUILD checking the
